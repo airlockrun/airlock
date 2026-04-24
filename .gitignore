@@ -1,0 +1,14 @@
+# Secrets (runtime .env — .env.example is committed)
+.env
+
+# Compiled binaries
+/airlock
+/anchor
+/agent-builder
+
+# Go test outputs
+*.test
+*.out
+
+# Proto codegen deps
+/proto/node_modules/

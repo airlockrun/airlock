@@ -1,0 +1,81 @@
+// Package migrations contains database schema and operational migrations
+// applied at agent startup via goose.
+//
+// SQL migrations: create files like 00002_my_change.sql with
+// -- +goose Up / -- +goose Down sections:
+//
+//	-- +goose Up
+//	CREATE TABLE rooms (id uuid PRIMARY KEY, name text NOT NULL);
+//
+//	-- +goose Down
+//	DROP TABLE rooms;
+//
+// Go migrations: for operational work that can't be expressed in SQL
+// (renaming S3 keys, calling external APIs, backfilling data via the
+// agent's own Go code). Create files like 00003_rename_media.go:
+//
+//	package migrations
+//
+//	import (
+//		"context"
+//		"database/sql"
+//		"path"
+//		"strings"
+//
+//		"github.com/airlockrun/agentsdk"
+//		"github.com/pressly/goose/v3"
+//	)
+//
+//	func init() {
+//		goose.AddMigrationNoTxContext(Up00003, Down00003)
+//	}
+//
+//	// Up00003 renames all files under "old/" to "media/" in agent storage.
+//	// Uses NoTx variant because S3 operations can't participate in a DB tx.
+//	// Retrieve the agent from the migration context to call storage methods.
+//	func Up00003(ctx context.Context, db *sql.DB) error {
+//		// Skip external side effects during build-time validation —
+//		// S3 and Airlock API aren't available. SQL/DB work SHOULD still
+//		// run so subsequent migrations can depend on it.
+//		if agentsdk.IsValidatingMigrations() {
+//			return nil
+//		}
+//
+//		agent := agentsdk.AgentFromMigrationContext(ctx)
+//		files, err := agent.ListFiles(ctx, "old/")
+//		if err != nil {
+//			return err
+//		}
+//		for _, f := range files {
+//			dst := "media/" + path.Base(f.Key)
+//			if err := agent.CopyFile(ctx, f.Key, dst); err != nil {
+//				return err
+//			}
+//			if err := agent.DeleteFile(ctx, f.Key); err != nil {
+//				return err
+//			}
+//		}
+//		return nil
+//	}
+//
+//	func Down00003(ctx context.Context, db *sql.DB) error {
+//		if agentsdk.IsValidatingMigrations() {
+//			return nil
+//		}
+//		agent := agentsdk.AgentFromMigrationContext(ctx)
+//		files, err := agent.ListFiles(ctx, "media/")
+//		if err != nil {
+//			return err
+//		}
+//		for _, f := range files {
+//			src := "old/" + strings.TrimPrefix(f.Key, "media/")
+//			if err := agent.CopyFile(ctx, f.Key, src); err != nil {
+//				return err
+//			}
+//			if err := agent.DeleteFile(ctx, f.Key); err != nil {
+//				return err
+//			}
+//		}
+//		return nil
+//	}
+package migrations

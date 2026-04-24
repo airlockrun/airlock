@@ -1,0 +1,30 @@
+# Dockerfile.airlock — airlock API server container image
+
+# --- Builder ---
+FROM golang:1.24-alpine AS builder
+
+RUN apk add --no-cache git
+
+WORKDIR /src
+COPY go.work go.work
+COPY goai/ goai/
+COPY sol/ sol/
+COPY telescope/ telescope/
+COPY agentsdk/ agentsdk/
+COPY replays/ replays/
+COPY airlock/ airlock/
+
+RUN cd airlock && CGO_ENABLED=0 go build -o /airlock ./cmd/airlock
+
+# --- Runtime ---
+FROM alpine:3.21
+
+# ffmpeg is required by trigger/transcode.go — bridge voice notes are
+# ogg/opus, which OpenAI's gpt-4o-transcribe models reject. We transcode
+# to MP3 before transcription so any STT model works.
+RUN apk add --no-cache ca-certificates ffmpeg
+
+COPY --from=builder /airlock /airlock
+
+EXPOSE 8080
+ENTRYPOINT ["/airlock"]

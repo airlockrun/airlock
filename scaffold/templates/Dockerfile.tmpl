@@ -1,0 +1,42 @@
+FROM golang:{{.GoVersion}} AS builder
+
+WORKDIR /build
+
+# Copy go.mod/go.sum first for layer caching
+COPY go.mod go.sum* ./
+{{- if .DevLibs}}
+
+# Copy libs for replace directives (provided via --build-context libs=...)
+COPY --from=libs agentsdk /libs/agentsdk
+COPY --from=libs goai /libs/goai
+COPY --from=libs sol /libs/sol
+{{- end}}
+
+# Download deps with cache mount — survives layer invalidation across builds
+RUN --mount=type=cache,target=/go/pkg/mod \
+    go mod download
+
+# Agent-specified build dependencies (optional)
+COPY build-deps.sh* /tmp/
+RUN if [ -f /tmp/build-deps.sh ]; then sh /tmp/build-deps.sh; fi
+
+# Copy source
+COPY . .
+
+# `go mod tidy` fills go.sum entries for the `tool` directive's transitive
+# deps (plain `go mod download` skips them as of Go 1.24).
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    go mod tidy && go tool templ generate && go build -mod=mod -o /agent .
+
+# Runtime
+FROM airlock-agent-base
+
+# Agent-specified runtime dependencies (optional)
+COPY runtime-deps.sh* /tmp/
+RUN if [ -f /tmp/runtime-deps.sh ]; then sh /tmp/runtime-deps.sh && rm -rf /var/lib/apt/lists/*; fi
+
+COPY --from=builder /agent /agent
+COPY --from=builder /build/db/migrations /migrations
+
+CMD ["/agent"]

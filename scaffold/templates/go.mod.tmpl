@@ -1,0 +1,18 @@
+module {{.Module}}
+
+go {{.GoVersion}}
+
+require (
+	github.com/a-h/templ v0.3.865
+	github.com/airlockrun/agentsdk {{.AgentSDKVersion}}
+)
+
+tool github.com/a-h/templ/cmd/templ
+{{- if .DevLibs}}
+
+replace (
+	github.com/airlockrun/agentsdk => /libs/agentsdk
+	github.com/airlockrun/goai => /libs/goai
+	github.com/airlockrun/sol => /libs/sol
+)
+{{- end}}

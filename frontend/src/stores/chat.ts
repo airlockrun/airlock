@@ -1,0 +1,604 @@
+import { ref, reactive } from 'vue'
+import { defineStore } from 'pinia'
+import { fromJson } from '@bufbuild/protobuf'
+import api from '@/api/client'
+import { ws } from '@/api/ws'
+import type { AgentMessageInfo } from '@/gen/airlock/v1/types_pb'
+import {
+  ListConversationsResponseSchema,
+  GetConversationResponseSchema,
+  PaginatedMessagesResponseSchema,
+  PromptResponseSchema,
+} from '@/gen/airlock/v1/api_pb'
+
+// Sliding-window pagination keeps the browser's in-memory message list
+// bounded. Scrolling up past the top fetches an older page; if the window
+// grows past WINDOW_CAP the far end is dropped from memory (and re-fetched
+// on demand if the user scrolls back). Scrolling down past the bottom does
+// the mirror operation.
+const INITIAL_LOAD = 100
+const PAGE_SIZE = 100
+const WINDOW_CAP = 300
+import type {
+  RunStartedEvent,
+  TextDeltaEvent,
+  ToolCallEvent,
+  ToolResultEvent,
+  ConfirmationRequiredEvent,
+  RunCompleteEvent,
+  RunErrorEvent,
+  NotificationEvent,
+} from '@/gen/airlock/v1/realtime_pb'
+import {
+  RunStartedEventSchema,
+  TextDeltaEventSchema,
+  ToolCallEventSchema,
+  ToolResultEventSchema,
+  ConfirmationRequiredEventSchema,
+  RunCompleteEventSchema,
+  RunErrorEventSchema,
+  NotificationEventSchema,
+} from '@/gen/airlock/v1/realtime_pb'
+
+export interface ToolCall {
+  toolCallId: string
+  toolName: string
+  input: string
+  output: string
+  error: string
+  status: 'running' | 'done' | 'error' | 'confirmation'
+}
+
+export interface Confirmation {
+  runId: string
+  permission: string
+  patterns: string[]
+  code: string
+  toolCallId: string
+}
+
+export const useChatStore = defineStore('chat', () => {
+  const conversationId = ref<string | null>(null)
+  const messages = ref<AgentMessageInfo[]>([])
+  const streamingText = ref('')
+  const activeToolCalls = reactive(new Map<string, ToolCall>())
+  const pendingConfirmation = ref<Confirmation | null>(null)
+  const currentRunId = ref<string | null>(null)
+  const sending = ref(false)
+
+  // Sliding-window pagination state. hasOlder means messages exist older
+  // than `messages[0]` — enable the top sentinel observer. hasNewer means
+  // the window has been scrolled up past its starting position: new agent
+  // responses can't be appended directly (they'd sit out-of-order above the
+  // evicted tail), so newMessagesPending surfaces a "jump to latest" banner.
+  const hasOlder = ref(false)
+  const hasNewer = ref(false)
+  const newMessagesPending = ref(false)
+  const loadingOlder = ref(false)
+  const loadingNewer = ref(false)
+  // Notifications arriving mid-run are buffered here and flushed at the end
+  // of finalizeMessage — same ordering rule the backend applies in SQL.
+  const pendingNotifications: AgentMessageInfo[] = []
+
+  const unsubscribers: (() => void)[] = []
+
+  function tryFromJson<T>(schema: any, payload: unknown): T | null {
+    if (!payload || typeof payload !== 'object') return null
+    try {
+      return fromJson(schema, payload as any) as T
+    } catch {
+      return null
+    }
+  }
+
+  // Match events by runId, or accept if we're sending (race: WS arrives before HTTP response).
+  function isCurrentRun(evRunId: string): boolean {
+    if (evRunId === currentRunId.value) return true
+    if (sending.value) return true
+    // Silently ignore stale events (e.g., WS replay buffer from previous runs).
+    return false
+  }
+
+  function initListeners() {
+    unsubscribers.push(
+      // Adopt server-initiated runs (e.g., post-upgrade notification) for the current conversation.
+      ws.onMessage('run.started', (payload) => {
+        const ev = tryFromJson<RunStartedEvent>(RunStartedEventSchema, payload)
+        if (!ev) return
+        if (ev.conversationId === conversationId.value && !sending.value && !currentRunId.value) {
+          currentRunId.value = ev.runId
+          streamingText.value = ''
+          activeToolCalls.clear()
+        }
+      }),
+      ws.onMessage('run.text_delta', (payload) => {
+        const ev = tryFromJson<TextDeltaEvent>(TextDeltaEventSchema, payload)
+        if (!ev || !isCurrentRun(ev.runId)) return
+        streamingText.value += ev.text
+      }),
+      ws.onMessage('run.tool_call', (payload) => {
+        const ev = tryFromJson<ToolCallEvent>(ToolCallEventSchema, payload)
+        if (!ev || !isCurrentRun(ev.runId)) return
+        activeToolCalls.set(ev.toolCallId, {
+          toolCallId: ev.toolCallId,
+          toolName: ev.toolName,
+          input: ev.input,
+          output: '',
+          error: '',
+          status: 'running',
+        })
+      }),
+      ws.onMessage('run.tool_result', (payload) => {
+        const ev = tryFromJson<ToolResultEvent>(ToolResultEventSchema, payload)
+        if (!ev || !isCurrentRun(ev.runId)) return
+        const tc = activeToolCalls.get(ev.toolCallId)
+        if (tc) {
+          tc.output = ev.output
+          tc.error = ev.error
+          tc.status = ev.error ? 'error' : 'done'
+        }
+      }),
+      ws.onMessage('run.confirmation_required', (payload) => {
+        const ev = tryFromJson<ConfirmationRequiredEvent>(ConfirmationRequiredEventSchema, payload)
+        if (!ev || !isCurrentRun(ev.runId)) return
+        pendingConfirmation.value = {
+          runId: ev.runId,
+          permission: ev.permission,
+          patterns: [...ev.patterns],
+          code: ev.code,
+          toolCallId: ev.toolCallId,
+        }
+        // Mark the associated tool call as awaiting confirmation.
+        if (ev.toolCallId) {
+          const tc = activeToolCalls.get(ev.toolCallId)
+          if (tc) {
+            tc.status = 'confirmation'
+          }
+        }
+      }),
+      ws.onMessage('run.complete', (payload) => {
+        const ev = tryFromJson<RunCompleteEvent>(RunCompleteEventSchema, payload)
+        if (!ev || !isCurrentRun(ev.runId)) return
+        // Don't finalize if awaiting confirmation — run is suspended, not complete.
+        if (pendingConfirmation.value) return
+        console.log('[chat] run.complete', { runId: ev.runId, textLen: streamingText.value.length })
+        finalizeMessage()
+      }),
+      ws.onMessage('run.error', (payload) => {
+        const ev = tryFromJson<RunErrorEvent>(RunErrorEventSchema, payload)
+        if (!ev || !isCurrentRun(ev.runId)) return
+        console.warn('[chat] run.error', { runId: ev.runId, error: ev.error })
+        // Always surface the error — streamingText may be empty when the
+        // run fails before the LLM emits any text (DNS blip, provider 4xx,
+        // etc). finalizeMessage won't push an empty streamingText, so the
+        // error would otherwise disappear silently.
+        const errText = ev.error || 'Run failed.'
+        if (streamingText.value) {
+          streamingText.value += `\n\n**Error:** ${errText}`
+        } else {
+          streamingText.value = `**Error:** ${errText}`
+        }
+        finalizeMessage()
+      }),
+      ws.onMessage('run.suspended', () => {
+        // Run suspended (e.g., awaiting approval) — keep state as-is.
+      }),
+      ws.onMessage('notification', (payload) => {
+        const ev = tryFromJson<NotificationEvent>(NotificationEventSchema, payload)
+        if (!ev || !ev.conversationId) return
+        if (ev.conversationId !== conversationId.value) return
+        // Don't append while the user is scrolled back into history —
+        // finalizeMessage surfaces the banner and this notification
+        // reappears on jumpToLatest via DB fetch.
+        if (hasNewer.value) {
+          newMessagesPending.value = true
+          return
+        }
+        const msg = buildNotificationMessage(ev.partsJson)
+        // If a run is active, buffer until finalizeMessage pushes the
+        // assistant/tool messages — otherwise the notification lands before
+        // the assistant bubble for the very run that produced it.
+        if (currentRunId.value || sending.value) {
+          pendingNotifications.push(msg)
+        } else {
+          enrichNotification(msg)
+          messages.value.push(msg)
+        }
+      }),
+    )
+  }
+
+  function buildNotificationMessage(partsJson: string): AgentMessageInfo {
+    return {
+      $typeName: 'airlock.v1.AgentMessageInfo',
+      id: `notif-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      role: 'assistant',
+      content: '',
+      parts: partsJson,
+      source: 'notification',
+      tokensIn: 0,
+      tokensOut: 0,
+      costEstimate: 0,
+    } as any
+  }
+
+  function enrichNotification(msg: AgentMessageInfo) {
+    if (!msg.parts) return
+    try {
+      const parsed = typeof msg.parts === 'string' ? JSON.parse(msg.parts) : msg.parts
+      if (Array.isArray(parsed)) {
+        ;(msg as any).displayParts = parsed
+      }
+    } catch { /* leave unparsed — the view falls back to content */ }
+  }
+
+  // Convert a protobuf Timestamp (seconds + nanos) to an RFC3339Nano string
+  // suitable for passing as a `before`/`after` cursor to the backend.
+  function timestampToRFC3339(ts: { seconds: bigint | number; nanos: number }): string {
+    const seconds = typeof ts.seconds === 'bigint' ? Number(ts.seconds) : ts.seconds
+    const ms = seconds * 1000 + Math.floor(ts.nanos / 1e6)
+    return new Date(ms).toISOString()
+  }
+
+  let sendingTimeout: ReturnType<typeof setTimeout> | null = null
+
+  function finalizeMessage() {
+    if (sendingTimeout) { clearTimeout(sendingTimeout); sendingTimeout = null }
+    console.log('[chat] finalizeMessage', { textLen: streamingText.value.length, toolCalls: activeToolCalls.size, sending: sending.value, runId: currentRunId.value })
+
+    // If the window has been scrolled back (hasNewer=true), appending new
+    // messages would place them out-of-order above evicted history. Drop
+    // the just-streamed text/tool output and surface a banner instead; the
+    // user clicks to reset to the newest page and see the full exchange.
+    if (hasNewer.value) {
+      streamingText.value = ''
+      activeToolCalls.clear()
+      pendingNotifications.length = 0
+      newMessagesPending.value = true
+      currentRunId.value = null
+      sending.value = false
+      return
+    }
+
+    // Collect tool calls before clearing.
+    const toolCalls = activeToolCalls.size > 0
+      ? [...activeToolCalls.values()]
+      : undefined
+
+    // Push tool calls as separate messages so they appear in the conversation.
+    if (toolCalls) {
+      for (const tc of toolCalls) {
+        messages.value.push({
+          $typeName: 'airlock.v1.AgentMessageInfo',
+          id: `tool-${tc.toolCallId}`,
+          role: 'tool',
+          content: tc.error ? `Error: ${tc.error}` : (tc.output || ''),
+          tokensIn: 0,
+          tokensOut: 0,
+          costEstimate: 0,
+          toolName: tc.toolName,
+          toolInput: formatToolArgs((() => { try { return JSON.parse(tc.input) } catch { return tc.input } })()),
+        } as any)
+      }
+    }
+
+    if (streamingText.value) {
+      messages.value.push({
+        $typeName: 'airlock.v1.AgentMessageInfo',
+        id: `msg-${Date.now()}`,
+        role: 'assistant',
+        content: streamingText.value,
+        tokensIn: 0,
+        tokensOut: 0,
+        costEstimate: 0,
+      } as AgentMessageInfo)
+    }
+    // Drain notifications buffered during the run — now the assistant/tool
+    // bubbles are in place, so notifications land after them.
+    if (pendingNotifications.length > 0) {
+      for (const n of pendingNotifications) {
+        enrichNotification(n)
+        messages.value.push(n)
+      }
+      pendingNotifications.length = 0
+    }
+    streamingText.value = ''
+    activeToolCalls.clear()
+    currentRunId.value = null
+    sending.value = false
+  }
+
+  // Parse tool call args into a display string.
+  const metaKeys = new Set(['request_confirmation'])
+
+  function formatToolArgs(args: any): string {
+    if (typeof args === 'string') return args
+    if (args && typeof args === 'object') {
+      const keys = Object.keys(args).filter(k => !metaKeys.has(k))
+      if (keys.length === 1) return String(args[keys[0]])
+      const filtered: Record<string, any> = {}
+      for (const k of keys) filtered[k] = args[k]
+      // Pretty-print without JSON.stringify to preserve newlines in string values.
+      return Object.entries(filtered).map(([k, v]) => `${k}: ${typeof v === 'string' ? v : JSON.stringify(v)}`).join('\n')
+    }
+    return ''
+  }
+
+  // Enrich messages with tool call/result info parsed from the `parts` JSON column.
+  function enrichMessages(msgs: AgentMessageInfo[]): AgentMessageInfo[] {
+    // Build a map of toolCallId → { toolName, input } from assistant parts.
+    // Also attach toolCalls array to assistant messages for rendering.
+    const toolCallMap = new Map<string, { toolName: string; input: string }>()
+    for (const msg of msgs) {
+      if (msg.role !== 'assistant' || !msg.parts) continue
+      try {
+        const parts = typeof msg.parts === 'string' ? JSON.parse(msg.parts) : msg.parts
+        if (!Array.isArray(parts)) continue
+        const calls: { toolCallId: string; toolName: string; input: string }[] = []
+        for (const p of parts) {
+          if (p.type === 'tool-call' && p.toolCallId) {
+            const input = formatToolArgs(p.args)
+            toolCallMap.set(p.toolCallId, {
+              toolName: p.toolName || 'tool',
+              input,
+            })
+            calls.push({ toolCallId: p.toolCallId, toolName: p.toolName || 'tool', input })
+          }
+        }
+        if (calls.length > 0) {
+          ;(msg as any).toolCalls = calls
+        }
+      } catch { /* ignore parse errors */ }
+    }
+
+    // Enrich tool-result messages.
+    for (const msg of msgs) {
+      if (msg.role !== 'tool' || !msg.parts) continue
+      try {
+        const parts = typeof msg.parts === 'string' ? JSON.parse(msg.parts) : msg.parts
+        if (!Array.isArray(parts)) continue
+        for (const p of parts) {
+          if (p.type === 'tool-result' && p.toolCallId) {
+            const call = toolCallMap.get(p.toolCallId)
+            if (call) {
+              ;(msg as any).toolName = call.toolName
+              ;(msg as any).toolInput = call.input
+            } else if (p.toolName) {
+              ;(msg as any).toolName = p.toolName
+            }
+          }
+        }
+      } catch { /* ignore parse errors */ }
+    }
+
+    // Attach displayParts to notification messages for rich rendering.
+    for (const msg of msgs) {
+      if (msg.source === 'notification') enrichNotification(msg)
+    }
+
+    return msgs
+  }
+
+  // Restore confirmation state from server-provided pending confirmation.
+  function restorePendingConfirmation(pc: { toolCallId: string; toolName: string; input: string }, msgs: AgentMessageInfo[]) {
+    const input = formatToolArgs((() => { try { return JSON.parse(pc.input) } catch { return pc.input } })())
+    activeToolCalls.set(pc.toolCallId, {
+      toolCallId: pc.toolCallId,
+      toolName: pc.toolName,
+      input,
+      output: '',
+      error: '',
+      status: 'confirmation',
+    })
+    pendingConfirmation.value = {
+      runId: '',
+      permission: pc.toolName,
+      patterns: [],
+      code: input,
+      toolCallId: pc.toolCallId,
+    }
+    // Hide the assistant message that contains this tool call — it's shown via activeToolCalls.
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      if (msgs[i].role === 'assistant' && (msgs[i] as any).toolCalls?.some((c: any) => c.toolCallId === pc.toolCallId)) {
+        ;(msgs[i] as any)._hidden = true
+        break
+      }
+    }
+  }
+
+  async function loadConversation(agentId: string) {
+    const { data } = await api.get(`/api/v1/agents/${agentId}/conversations`)
+    const response = fromJson(ListConversationsResponseSchema, data)
+    // Only surface the web conversation here. Bridge conversations (telegram,
+    // etc.) live alongside it in the same list ordered by updated_at, so
+    // picking [0] would flip the UI to the bridge thread whenever someone
+    // chatted via the bot more recently than via the web.
+    const web = response.conversations.find(c => c.source === 'web')
+    if (web) {
+      conversationId.value = web.id
+      const { data: convData } = await api.get(`/api/v1/conversations/${conversationId.value}`)
+      const convResponse = fromJson(GetConversationResponseSchema, convData)
+      messages.value = enrichMessages(convResponse.messages)
+      hasOlder.value = convResponse.hasOlderMessages
+      hasNewer.value = false
+      newMessagesPending.value = false
+      // Restore pending confirmation from server if present.
+      if (convResponse.pendingConfirmation?.toolCallId) {
+        restorePendingConfirmation(convResponse.pendingConfirmation, messages.value)
+      }
+    } else {
+      conversationId.value = null
+      messages.value = []
+      hasOlder.value = false
+      hasNewer.value = false
+      newMessagesPending.value = false
+    }
+  }
+
+  // Fetch the next older page. Triggered by the chat view's top sentinel
+  // when it enters the viewport. Returns the number of messages prepended
+  // so the caller can preserve scroll offset via scrollHeight delta.
+  async function loadOlder(): Promise<number> {
+    if (!conversationId.value || !hasOlder.value || loadingOlder.value) return 0
+    loadingOlder.value = true
+    try {
+      const oldest = messages.value[0]
+      if (!oldest?.createdAt) return 0
+      const before = timestampToRFC3339(oldest.createdAt)
+      const { data } = await api.get(
+        `/api/v1/conversations/${conversationId.value}/messages`,
+        { params: { before, limit: PAGE_SIZE } })
+      const resp = fromJson(PaginatedMessagesResponseSchema, data)
+      const older = enrichMessages(resp.messages)
+      messages.value = [...older, ...messages.value]
+      hasOlder.value = resp.hasMore
+
+      // Evict from the tail if we've exceeded the window cap.
+      if (messages.value.length > WINDOW_CAP) {
+        const evict = messages.value.length - WINDOW_CAP
+        messages.value = messages.value.slice(0, messages.value.length - evict)
+        hasNewer.value = true
+      }
+      return older.length
+    } finally {
+      loadingOlder.value = false
+    }
+  }
+
+  // Fetch the next newer page. Triggered when the user scrolls back down
+  // into a region we've previously evicted.
+  async function loadNewer(): Promise<number> {
+    if (!conversationId.value || !hasNewer.value || loadingNewer.value) return 0
+    loadingNewer.value = true
+    try {
+      const newest = messages.value[messages.value.length - 1]
+      if (!newest?.createdAt) return 0
+      const after = timestampToRFC3339(newest.createdAt)
+      const { data } = await api.get(
+        `/api/v1/conversations/${conversationId.value}/messages`,
+        { params: { after, limit: PAGE_SIZE } })
+      const resp = fromJson(PaginatedMessagesResponseSchema, data)
+      const newer = enrichMessages(resp.messages)
+      messages.value = [...messages.value, ...newer]
+      hasNewer.value = resp.hasMore
+      if (!hasNewer.value) newMessagesPending.value = false
+
+      // Evict from the head if we've exceeded the window cap.
+      if (messages.value.length > WINDOW_CAP) {
+        const evict = messages.value.length - WINDOW_CAP
+        messages.value = messages.value.slice(evict)
+        hasOlder.value = true
+      }
+      return newer.length
+    } finally {
+      loadingNewer.value = false
+    }
+  }
+
+  // Reset the window to the latest page. Called from the "new messages"
+  // banner — when the user is scrolled up in history and new agent output
+  // arrives, they can click to jump back to live.
+  async function jumpToLatest(agentId: string) {
+    await loadConversation(agentId)
+  }
+
+  async function sendMessage(agentId: string, text: string, approved?: boolean, fileIds?: string[]) {
+    const isResume = approved !== undefined
+    // Slash commands (/clear, /compact, ...) are handled synchronously by
+    // Airlock — no run is created and no optimistic user bubble should appear.
+    const isSlashCommand = !isResume && text.trim().startsWith('/')
+
+    if (!isResume && !isSlashCommand) {
+      // Add optimistic user message for normal sends only. Skip when the
+      // window is scrolled back (hasNewer=true) so we don't insert above
+      // evicted history — the user will see their message after clicking
+      // "jump to latest."
+      if (!hasNewer.value) {
+        messages.value.push({
+          $typeName: 'airlock.v1.AgentMessageInfo',
+          id: `pending-${Date.now()}`,
+          role: 'user',
+          content: text,
+          tokensIn: 0,
+          tokensOut: 0,
+          costEstimate: 0,
+        } as AgentMessageInfo)
+      }
+      // Reset streaming state for new messages.
+      streamingText.value = ''
+      activeToolCalls.clear()
+    }
+
+    sending.value = true
+    pendingConfirmation.value = null
+
+    const payload: Record<string, any> = { message: text }
+    if (approved !== undefined) payload.approved = approved
+    if (fileIds?.length) payload.fileIds = fileIds
+
+    try {
+      const { data } = await api.post(`/api/v1/agents/${agentId}/prompt`, payload)
+      const response = fromJson(PromptResponseSchema, data)
+      console.log('[chat] prompt response', { runId: response.runId, conversationId: response.conversationId, commandReply: response.commandReply })
+
+      // Slash-command path: empty run_id + a command_reply. Reload messages
+      // to pick up any checkpoint markers or other backend-inserted rows.
+      if (!response.runId && response.commandReply) {
+        sending.value = false
+        await loadConversation(agentId)
+        return
+      }
+
+      currentRunId.value = response.runId
+      if (response.conversationId) {
+        conversationId.value = response.conversationId
+      }
+
+      // Safety timeout: if run.complete/run.error never arrives (e.g., WS down),
+      // unblock the input so the user isn't stuck.
+      if (sendingTimeout) clearTimeout(sendingTimeout)
+      sendingTimeout = setTimeout(() => {
+        if (sending.value) finalizeMessage()
+      }, 5 * 60 * 1000)
+    } catch {
+      sending.value = false
+    }
+  }
+
+  function cleanup() {
+    for (const unsub of unsubscribers) unsub()
+    unsubscribers.length = 0
+    conversationId.value = null
+    messages.value = []
+    streamingText.value = ''
+    activeToolCalls.clear()
+    pendingConfirmation.value = null
+    currentRunId.value = null
+    sending.value = false
+    hasOlder.value = false
+    hasNewer.value = false
+    newMessagesPending.value = false
+  }
+
+  return {
+    conversationId,
+    messages,
+    streamingText,
+    activeToolCalls,
+    pendingConfirmation,
+    currentRunId,
+    sending,
+    hasOlder,
+    hasNewer,
+    newMessagesPending,
+    loadingOlder,
+    loadingNewer,
+    initListeners,
+    loadConversation,
+    loadOlder,
+    loadNewer,
+    jumpToLatest,
+    sendMessage,
+    cleanup,
+  }
+})

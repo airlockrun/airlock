@@ -1,0 +1,319 @@
+syntax = "proto3";
+
+package airlock.v1;
+
+option go_package = "github.com/airlockrun/airlock/gen/airlock/v1;airlockv1";
+
+import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
+
+// Field ordering convention within each message (mirrors the DB schema):
+//   1. id + foreign keys (parent refs)
+//   2. unique business key (slug, provider_id, email, ...)
+//   3. identity (name, display_name, title, description)
+//   4. type / status / flags
+//   5. domain-specific data
+//   6. secrets and credentials
+//   7. JSON / struct payloads
+//   8. diagnostics
+//   9. runtime timestamps (last_*_at, started_at, finished_at, expires_at)
+//  10. audit timestamps (created_at, updated_at)
+
+// TenantRole defines the role a user has within a tenant.
+// Hierarchy: admin > manager > user.
+enum TenantRole {
+  TENANT_ROLE_UNSPECIFIED = 0;
+  TENANT_ROLE_ADMIN = 1;
+  TENANT_ROLE_MANAGER = 2;
+  TENANT_ROLE_USER = 3;
+}
+
+// MessageRole maps to LLM message roles.
+enum MessageRole {
+  MESSAGE_ROLE_UNSPECIFIED = 0;
+  MESSAGE_ROLE_USER = 1;
+  MESSAGE_ROLE_ASSISTANT = 2;
+  MESSAGE_ROLE_SYSTEM = 3;
+  MESSAGE_ROLE_TOOL = 4;
+}
+
+// Tenant represents a workspace (organization).
+message Tenant {
+  string id = 1;
+  string slug = 2;
+  string name = 3;
+  google.protobuf.Struct settings = 4;
+  google.protobuf.Timestamp created_at = 5;
+  google.protobuf.Timestamp updated_at = 6;
+}
+
+// User represents an authenticated user.
+message User {
+  string id = 1;
+  string tenant_id = 2;
+  string email = 3;
+  string display_name = 4;
+  TenantRole tenant_role = 5;
+  string oidc_sub = 6;
+  bool must_change_password = 7;
+  google.protobuf.Timestamp created_at = 8;
+  google.protobuf.Timestamp updated_at = 9;
+}
+
+// Provider represents a configured LLM provider with encrypted API key.
+message Provider {
+  string id = 1;
+  string provider_id = 2;
+  string display_name = 3;
+  bool is_enabled = 4;
+  string base_url = 5;
+  string api_key_masked = 6;
+  google.protobuf.Timestamp created_at = 7;
+  google.protobuf.Timestamp updated_at = 8;
+}
+
+// ProviderInfo represents a known LLM provider from the catalog.
+message ProviderInfo {
+  string id = 1;
+  string name = 2;
+}
+
+// ProviderCapabilityInfo describes what capabilities a known provider offers
+// and whether the user has it configured. Returned by
+// GET /api/v1/catalog/capabilities.
+message ProviderCapabilityInfo {
+  string provider_id = 1;
+  string display_name = 2;
+  // Supported capabilities from: "text", "vision", "stt", "tts", "image_gen", "search".
+  repeated string capabilities = 3;
+  // true when the user has an enabled row in the providers table for this provider_id.
+  bool configured = 4;
+  // true when the provider isn't present in models.dev and is only known via our
+  // hand-maintained overlay (e.g. brave, deepgram).
+  bool catalog_only = 5;
+}
+
+// ModelInfo represents a model available from a provider.
+message ModelInfo {
+  string id = 1;
+  string provider_id = 2;
+  string name = 3;
+  bool tool_call = 4;
+  bool reasoning = 5;
+  int32 context_limit = 6;
+  int32 output_limit = 7;
+  double cost_input = 8;
+  double cost_output = 9;
+  // Supported input modalities from models.dev — e.g. "text", "image",
+  // "audio", "pdf", "video". Empty list means unknown (treat as text-only).
+  repeated string input_modalities = 10;
+  // Supported output modalities — e.g. "text", "audio", "image".
+  repeated string output_modalities = 11;
+}
+
+// --- Agents ---
+
+// AgentInfo represents a compiled AI agent.
+message AgentInfo {
+  string id = 1;
+  string slug = 2;
+  string name = 3;
+  string description = 4;
+  string status = 5;           // "draft", "building", "active", "failed", "stopped"
+  string upgrade_status = 6;   // "idle", "queued", "building", "failed"
+  bool auto_fix = 7;
+  string build_model = 8;      // "provider/model" used for code generation
+  string exec_model = 9;       // "provider/model" used at runtime for LLM calls
+  string error_message = 10;
+  google.protobuf.Timestamp created_at = 11;
+  google.protobuf.Timestamp updated_at = 12;
+}
+
+// RunInfo represents a single execution of an agent.
+message RunInfo {
+  string id = 1;
+  string agent_id = 2;
+  string bridge_id = 3;
+  string status = 4;            // "running", "completed", "failed", "timeout"
+  string source_ref = 5;        // agent commit hash at time of run
+  // Only populated in detail responses.
+  google.protobuf.Struct input_payload = 6;
+  google.protobuf.ListValue actions = 7;
+  int32 llm_tokens_in = 8;
+  int32 llm_tokens_out = 9;
+  double llm_cost_estimate = 10;
+  int32 duration_ms = 11;
+  string stdout_log = 12;
+  string error_message = 13;
+  string panic_trace = 14;
+  google.protobuf.Timestamp started_at = 15;
+  google.protobuf.Timestamp finished_at = 16;
+}
+
+// AgentBuildInfo represents a single build or upgrade of an agent.
+message AgentBuildInfo {
+  string id = 1;
+  string agent_id = 2;
+  string type = 3;               // "build" or "upgrade"
+  string status = 4;             // "building", "complete", "failed"
+  string instructions = 5;
+  string source_ref = 6;
+  string image_ref = 7;
+  string sol_log = 8;            // Only populated in detail responses.
+  string docker_log = 9;         // Only populated in detail responses.
+  int64 log_seq = 10;            // Highest log sequence number persisted; used for WS dedup.
+  string error_message = 11;
+  google.protobuf.Timestamp started_at = 12;
+  google.protobuf.Timestamp finished_at = 13;
+}
+
+// ConversationInfo represents an agent conversation.
+message ConversationInfo {
+  string id = 1;
+  string agent_id = 2;
+  string title = 3;
+  string source = 4;            // "web", "telegram", etc.
+  google.protobuf.Timestamp created_at = 5;
+  google.protobuf.Timestamp updated_at = 6;
+}
+
+// AgentMessageInfo represents a single message in a conversation.
+message AgentMessageInfo {
+  string id = 1;
+  string role = 2;               // "user", "assistant", "system", "tool"
+  string source = 3;             // "user" (default), "system" (injected by Airlock), "bridge"
+  string content = 4;
+  string parts = 5;              // JSON-encoded goai Content for rich message display
+  int32 tokens_in = 6;
+  int32 tokens_out = 7;
+  double cost_estimate = 8;
+  google.protobuf.Timestamp created_at = 9;
+}
+
+// WebhookInfo represents a code-synced webhook registration.
+message WebhookInfo {
+  string id = 1;
+  string path = 2;
+  string verify_mode = 3;       // "hmac", "token", "none"
+  string public_url = 4;        // full public URL for external services
+  string description = 5;
+  string secret_masked = 6;     // masked secret (e.g., "abc...xyz")
+  google.protobuf.Timestamp last_received_at = 7;
+  google.protobuf.Timestamp created_at = 8;
+}
+
+// CronInfo represents a code-synced cron registration.
+message CronInfo {
+  string id = 1;
+  string name = 2;
+  string schedule = 3;
+  string description = 4;
+  google.protobuf.Timestamp last_fired_at = 5;
+  google.protobuf.Timestamp created_at = 6;
+}
+
+// RouteInfo represents a code-synced HTTP route registration.
+message RouteInfo {
+  string id = 1;
+  string path = 2;
+  string method = 3;
+  string access = 4;
+  string description = 5;
+}
+
+// --- Connections & Bridges ---
+
+// ConnectionInfo shows a connection definition with credential status.
+message ConnectionInfo {
+  string id = 1;
+  string slug = 2;
+  string name = 3;
+  string description = 4;
+  string auth_mode = 5;     // "oauth2", "api_key"
+  string auth_url = 6;      // Airlock-hosted URL to start auth
+  string setup_instructions = 7;
+  bool authorized = 8;      // whether credentials exist and are valid
+  bool has_oauth_app = 9;   // whether client_id/secret configured (oauth2 only)
+  google.protobuf.Timestamp token_expires_at = 10;
+}
+
+// BridgeInfo represents a chat platform bot instance.
+message BridgeInfo {
+  string id = 1;
+  string agent_id = 2;      // empty = system bridge, set = agent bridge
+  string type = 3;          // "telegram", etc.
+  string name = 4;
+  string bot_username = 5;  // @username from Telegram getMe
+  string status = 6;        // "active", "error"
+  google.protobuf.Timestamp created_at = 7;
+  google.protobuf.Timestamp updated_at = 8;
+}
+
+// PlatformIdentityInfo represents a user's verified external identity.
+message PlatformIdentityInfo {
+  string id = 1;
+  string platform = 2;          // "telegram"
+  string platform_user_id = 3;  // Telegram user ID
+  google.protobuf.Timestamp created_at = 4;
+}
+
+// ToolInfo represents a registered tool on an agent.
+// InputSchema and OutputSchema are JSON-encoded JSON Schemas.
+message ToolInfo {
+  string id = 1;
+  string name = 2;
+  string description = 3;
+  string access = 4;  // "admin", "user", "public"
+  string input_schema = 5;
+  string output_schema = 6;
+}
+
+// --- Build Events ---
+
+// AgentBuildEvent carries build/upgrade lifecycle events.
+message AgentBuildEvent {
+  string agent_id = 1;
+  string build_id = 2;
+  string status = 3;   // "started", "complete", "failed", "cancelled"
+  string error = 4;
+}
+
+// AgentBuildLogEvent carries a single build log line.
+message AgentBuildLogEvent {
+  string agent_id = 1;
+  string build_id = 2;
+  int64  seq = 3;       // monotonic per-build line counter (for frontend dedup)
+  string stream = 4;    // "sol" | "docker"
+  string line = 5;
+}
+
+// FileEntry represents a stored file.
+message FileEntry {
+  string path = 1;
+  int64 size = 2;
+  string last_modified = 3;
+}
+
+// TopicInfo represents a notification topic with subscription status.
+message TopicInfo {
+  string id = 1;
+  string slug = 2;
+  string description = 3;
+  bool subscribed = 4;        // per-conversation subscription status
+}
+
+// SystemSettingsInfo mirrors the system_settings table (single-row, global).
+// Per-capability default models are used wherever the system picks a model
+// for a capability and no agent-specific override is set.
+message SystemSettingsInfo {
+  string public_url = 1;
+  string agent_domain = 2;
+  string default_build_model = 3;
+  string default_exec_model = 4;
+  string default_stt_model = 5;
+  string default_vision_model = 6;
+  string default_tts_model = 7;
+  string default_image_gen_model = 8;
+  string default_search_model = 9;
+  string default_embedding_model = 10;
+}

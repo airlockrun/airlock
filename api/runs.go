@@ -1,0 +1,208 @@
+package api
+
+import (
+	"encoding/json"
+	"net/http"
+	"time"
+
+	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
+	"github.com/airlockrun/airlock/convert"
+	"github.com/airlockrun/airlock/db"
+	"github.com/airlockrun/airlock/db/dbq"
+	"github.com/airlockrun/airlock/storage"
+	"github.com/airlockrun/airlock/trigger"
+	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5/pgtype"
+	"go.uber.org/zap"
+	"google.golang.org/protobuf/types/known/structpb"
+)
+
+type runsHandler struct {
+	db         *db.DB
+	dispatcher *trigger.Dispatcher
+	s3         *storage.S3Client
+	logger     *zap.Logger
+}
+
+// ListRuns handles GET /api/v1/agents/{agentID}/runs.
+func (h *runsHandler) ListRuns(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	agentID, err := parseUUID(chi.URLParam(r, "agentID"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid agent ID")
+		return
+	}
+
+	q := dbq.New(h.db.Pool())
+
+	// Parse cursor (ISO timestamp) and limit.
+	var cursor pgtype.Timestamptz
+	if c := r.URL.Query().Get("cursor"); c != "" {
+		t, err := time.Parse(time.RFC3339Nano, c)
+		if err == nil {
+			cursor = pgtype.Timestamptz{Time: t, Valid: true}
+		}
+	}
+	limit := int32(50)
+	// (could parse ?limit= here, but 50 is a reasonable default)
+
+	runs, err := q.ListRunsByAgent(ctx, dbq.ListRunsByAgentParams{
+		AgentID: toPgUUID(agentID),
+		Cursor:  cursor,
+		Lim:     limit,
+	})
+	if err != nil {
+		h.logger.Error("list runs", zap.Error(err))
+		writeError(w, http.StatusInternalServerError, "failed to list runs")
+		return
+	}
+
+	out := make([]*airlockv1.RunInfo, len(runs))
+	for i, r := range runs {
+		out[i] = runToProto(r, false)
+	}
+
+	var nextCursor string
+	if len(runs) == int(limit) {
+		last := runs[len(runs)-1]
+		nextCursor = last.StartedAt.Time.Format(time.RFC3339Nano)
+	}
+
+	writeProto(w, http.StatusOK, &airlockv1.ListRunsResponse{
+		Runs:       out,
+		NextCursor: nextCursor,
+	})
+}
+
+// GetRun handles GET /api/v1/runs/{runID}.
+func (h *runsHandler) GetRun(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	runID, err := parseUUID(chi.URLParam(r, "runID"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid run ID")
+		return
+	}
+
+	q := dbq.New(h.db.Pool())
+	run, err := q.GetRunByID(ctx, toPgUUID(runID))
+	if err != nil {
+		writeError(w, http.StatusNotFound, "run not found")
+		return
+	}
+
+	// Load messages produced during this run.
+	msgs, _ := q.ListMessagesByRun(ctx, toPgUUID(runID))
+	msgInfos := make([]*airlockv1.AgentMessageInfo, len(msgs))
+	for i, m := range msgs {
+		msgInfos[i] = messageToProto(ctx, h.s3, h.logger, m)
+	}
+
+	writeProto(w, http.StatusOK, &airlockv1.GetRunResponse{
+		Run:      runToProto(run, true),
+		Messages: msgInfos,
+	})
+}
+
+// GetRunLogs handles GET /api/v1/runs/{runID}/logs.
+func (h *runsHandler) GetRunLogs(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	runID, err := parseUUID(chi.URLParam(r, "runID"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid run ID")
+		return
+	}
+
+	q := dbq.New(h.db.Pool())
+	run, err := q.GetRunByID(ctx, toPgUUID(runID))
+	if err != nil {
+		writeError(w, http.StatusNotFound, "run not found")
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/plain")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(run.StdoutLog))
+}
+
+// CancelRun handles DELETE /api/v1/runs/{runID}.
+func (h *runsHandler) CancelRun(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	runID, err := parseUUID(chi.URLParam(r, "runID"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid run ID")
+		return
+	}
+
+	q := dbq.New(h.db.Pool())
+	run, err := q.GetRunByID(ctx, toPgUUID(runID))
+	if err != nil {
+		writeError(w, http.StatusNotFound, "run not found")
+		return
+	}
+
+	if run.Status != "running" {
+		writeError(w, http.StatusConflict, "run is not running")
+		return
+	}
+
+	// Mark as cancelled in DB.
+	_ = q.UpdateRunComplete(ctx, dbq.UpdateRunCompleteParams{
+		ID:           toPgUUID(runID),
+		Status:       "cancelled",
+		ErrorMessage: "cancelled by user",
+	})
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// --- helpers ---
+
+func runToProto(r dbq.Run, detail bool) *airlockv1.RunInfo {
+	info := &airlockv1.RunInfo{
+		Id:              convert.PgUUIDToString(r.ID),
+		AgentId:         convert.PgUUIDToString(r.AgentID),
+		BridgeId:        convert.PgUUIDToString(r.BridgeID),
+		Status:          r.Status,
+		StartedAt:       convert.PgTimestampToProto(r.StartedAt),
+		FinishedAt:      convert.PgTimestampToProto(r.FinishedAt),
+		DurationMs:      r.DurationMs.Int32,
+		ErrorMessage:    r.ErrorMessage,
+		LlmTokensIn:    r.LlmTokensIn,
+		LlmTokensOut:   r.LlmTokensOut,
+		LlmCostEstimate: pgNumericToFloat(r.LlmCostEstimate),
+		SourceRef:       r.SourceRef,
+	}
+
+	if detail {
+		info.InputPayload = jsonToStruct(r.InputPayload)
+		info.Actions = jsonToListValue(r.Actions)
+		info.StdoutLog = r.StdoutLog
+		info.PanicTrace = r.PanicTrace
+	}
+
+	return info
+}
+
+func jsonToStruct(data []byte) *structpb.Struct {
+	if len(data) == 0 || string(data) == "{}" || string(data) == "null" {
+		return nil
+	}
+	return convert.AnyToStruct(data)
+}
+
+func jsonToListValue(data []byte) *structpb.ListValue {
+	if len(data) == 0 || string(data) == "[]" || string(data) == "null" {
+		return nil
+	}
+	var items []any
+	if err := json.Unmarshal(data, &items); err != nil {
+		return nil
+	}
+	lv, _ := structpb.NewList(items)
+	return lv
+}
+
+func pgNumericToFloat(n pgtype.Numeric) float64 {
+	f, _ := n.Float64Value()
+	return f.Float64
+}

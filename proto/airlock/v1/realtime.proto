@@ -1,0 +1,94 @@
+syntax = "proto3";
+
+package airlock.v1;
+
+option go_package = "github.com/airlockrun/airlock/gen/airlock/v1;airlockv1";
+
+import "airlock/v1/types.proto";
+
+// --- Events ---
+
+// ErrorEvent carries a WebSocket error message.
+message ErrorEvent {
+  string error = 1;
+}
+
+// SubscribedEvent confirms a topic subscription.
+message SubscribedEvent {}
+
+// AgentStatusEvent is broadcast when an agent's status changes.
+message AgentStatusEvent {
+  AgentInfo agent = 1;
+}
+
+// --- Run streaming events (published to agent WS topic) ---
+
+// RunStartedEvent signals that a new run has begun.
+message RunStartedEvent {
+  string run_id = 1;
+  string agent_id = 2;
+  string conversation_id = 3;
+}
+
+// TextDeltaEvent carries a chunk of generated text.
+message TextDeltaEvent {
+  string run_id = 1;
+  string text = 2;
+}
+
+// ToolCallEvent signals a tool call is ready for execution.
+message ToolCallEvent {
+  string run_id = 1;
+  string tool_call_id = 2;
+  string tool_name = 3;
+  string input = 4; // JSON string
+}
+
+// ToolResultEvent carries the result (or error) of a tool execution.
+message ToolResultEvent {
+  string run_id = 1;
+  string tool_call_id = 2;
+  string tool_name = 3;
+  string output = 4; // JSON string
+  string error = 5;  // set if tool errored
+}
+
+// ConfirmationRequiredEvent signals the user must approve an action.
+message ConfirmationRequiredEvent {
+  string run_id = 1;
+  string permission = 2;
+  repeated string patterns = 3;
+  string code = 4;
+  string tool_call_id = 5;
+}
+
+// RunSuspendedEvent signals the run is suspended (e.g. awaiting approval).
+message RunSuspendedEvent {
+  string run_id = 1;
+  string reason = 2;
+}
+
+// RunCompleteEvent signals the run has finished.
+message RunCompleteEvent {
+  string run_id = 1;
+  string finish_reason = 2;
+  int32 tokens_in = 3;
+  int32 tokens_out = 4;
+}
+
+// RunErrorEvent signals an error during the run.
+message RunErrorEvent {
+  string run_id = 1;
+  string error = 2;
+}
+
+// --- Notification events ---
+
+// NotificationEvent carries a printToUser or topic publish notification.
+message NotificationEvent {
+  string agent_id = 1;
+  string conversation_id = 2;
+  string topic = 3;           // empty for direct printToUser
+  string parts_json = 4;      // JSON-encoded []DisplayPart
+  string source = 5;          // "notification"
+}

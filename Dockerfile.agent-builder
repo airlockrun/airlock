@@ -1,0 +1,34 @@
+FROM golang:1.25
+
+# Install sqlc + templ
+COPY --from=sqlc/sqlc:latest /workspace/sqlc /usr/local/bin/sqlc
+RUN curl -sSL https://github.com/a-h/templ/releases/download/v0.3.865/templ_Linux_x86_64.tar.gz | tar xz -C /usr/local/bin templ
+
+# Install git, ripgrep, psql (schema inspection), golang-migrate (migration validation)
+RUN apt-get update && apt-get install -y --no-install-recommends git ripgrep postgresql-client && \
+    rm -rf /var/lib/apt/lists/*
+RUN curl -sSL https://github.com/golang-migrate/migrate/releases/download/v4.18.1/migrate.linux-amd64.tar.gz | tar xz -C /usr/local/bin migrate
+
+# Pre-bake agentsdk + goai + sol at /libs/ for go.mod replace directives.
+# In dev (AGENT_LIBS_PATH set) airlock bind-mounts the live source over
+# these paths so iterations don't need an image rebuild. In prod the
+# baked copy is authoritative — the image tag (agent-builder:v${VERSION})
+# pins it to the matching airlock release.
+COPY agentsdk/ /libs/agentsdk/
+COPY goai/ /libs/goai/
+COPY sol/ /libs/sol/
+
+# Build and install Sol binary
+COPY sol/ /tmp/sol-src/
+COPY goai/ /tmp/goai/
+COPY telescope/ /tmp/telescope/
+RUN cd /tmp/sol-src && \
+    go build -o /usr/local/bin/sol ./cmd/sol && \
+    go build -o /usr/local/bin/toolserver ./cmd/toolserver && \
+    rm -rf /tmp/sol-src /tmp/goai /tmp/telescope
+
+# Ensure Go cache dirs exist and are world-writable — Docker volumes
+# mount as root, but the toolserver runs as the host UID.
+RUN mkdir -p /tmp/go-mod /tmp/go-cache && chmod 777 /tmp/go-mod /tmp/go-cache
+
+WORKDIR /workspace

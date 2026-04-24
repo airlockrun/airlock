@@ -1,0 +1,452 @@
+syntax = "proto3";
+
+package airlock.v1;
+
+option go_package = "github.com/airlockrun/airlock/gen/airlock/v1;airlockv1";
+
+import "airlock/v1/types.proto";
+import "google/protobuf/timestamp.proto";
+
+// --- Auth ---
+
+message RegisterRequest {
+  string email = 1;
+  string password = 2;
+  string display_name = 3;
+  string tenant_name = 4;
+  string tenant_slug = 5;
+}
+
+message RegisterResponse {
+  string access_token = 1;
+  string refresh_token = 2;
+  User user = 3;
+  Tenant tenant = 4;
+}
+
+message LoginRequest {
+  string email = 1;
+  string password = 2;
+}
+
+message LoginResponse {
+  string access_token = 1;
+  string refresh_token = 2;
+  User user = 3;
+}
+
+message RefreshRequest {
+  string refresh_token = 1;
+}
+
+message RefreshResponse {
+  string access_token = 1;
+}
+
+// --- Activation (single-tenant setup) ---
+
+message ActivateRequest {
+  string email = 1;
+  string password = 2;
+  string display_name = 3;
+  string activation_code = 4;
+}
+
+// ActivateResponse reuses RegisterResponse shape (tokens + user + tenant).
+
+// --- User Management (admin) ---
+
+message CreateUserRequest {
+  string email = 1;
+  string display_name = 2;
+  string password = 3;
+  string tenant_role = 4;
+}
+
+message CreateUserResponse {
+  User user = 1;
+}
+
+message ChangePasswordRequest {
+  string current_password = 1;
+  string new_password = 2;
+}
+
+message ChangePasswordResponse {
+  string access_token = 1;
+  string refresh_token = 2;
+}
+
+message ListUsersResponse {
+  repeated User users = 1;
+}
+
+message UpdateUserRoleRequest {
+  string tenant_role = 1;
+}
+
+// --- Providers ---
+
+message CreateProviderRequest {
+  string provider_id = 1;
+  string display_name = 2;
+  string api_key = 3;
+  string base_url = 4;
+}
+
+message CreateProviderResponse {
+  Provider provider = 1;
+}
+
+message ListProvidersResponse {
+  repeated Provider providers = 1;
+}
+
+message UpdateProviderRequest {
+  string display_name = 1;
+  string api_key = 2;
+  string base_url = 3;
+  optional bool is_enabled = 4;
+}
+
+message UpdateProviderResponse {
+  Provider provider = 1;
+}
+
+// --- Catalog ---
+
+message ListCatalogProvidersResponse {
+  repeated ProviderInfo providers = 1;
+}
+
+message ListCatalogModelsResponse {
+  repeated ModelInfo models = 1;
+}
+
+// --- Agents ---
+
+message CreateAgentRequest {
+  string name = 1;
+  string slug = 2;
+  string description = 3;
+  string build_model = 4;   // optional: "provider/model" for code generation; empty = inherit system default
+  string exec_model = 5;    // optional: "provider/model" for runtime LLM calls; empty = inherit system default
+  string instructions = 6;  // optional: capabilities/behavior instructions for Sol code generation
+}
+
+message CreateAgentResponse {
+  AgentInfo agent = 1;
+}
+
+message ListAgentsResponse {
+  repeated AgentInfo agents = 1;
+}
+
+// GetAgentDetailResponse returns rich agent detail with connections, webhooks, crons, and routes.
+message GetAgentDetailResponse {
+  AgentInfo agent = 1;
+  repeated ConnectionInfo connections = 2;
+  repeated WebhookInfo webhooks = 3;
+  repeated CronInfo crons = 4;
+  repeated RouteInfo routes = 5;
+}
+
+message UpdateAgentRequest {
+  string description = 1;
+  optional bool auto_fix = 2;
+  // Model overrides moved to the dedicated /api/v1/agents/{id}/models endpoint.
+  // Field numbers 3 and 4 intentionally left reserved to avoid re-use.
+  reserved 3, 4;
+  reserved "build_model", "exec_model";
+}
+
+message UpdateAgentResponse {
+  AgentInfo agent = 1;
+}
+
+message UpgradeAgentRequest {
+  string run_id = 1;      // optional — the failed run to fix
+  string description = 2;  // optional — extra instructions for the upgrade
+}
+
+// --- Per-agent model configuration ---
+//
+// Three-tier resolution:
+//   slot binding → per-agent capability override → system default.
+// Empty strings on any override field mean "inherit the corresponding
+// system default" (live, not snapshot).
+
+message ModelSlotInfo {
+  string slug = 1;            // declared by agent code via RegisterModel
+  string capability = 2;      // "text", "vision", "image", "speech", "transcription", "embedding"
+  string description = 3;     // human-readable hint from the agent author
+  string assigned_model = 4;  // admin-chosen "provider/model"; empty = fall through to capability default
+}
+
+message AgentModelConfig {
+  // Per-agent capability overrides — mirror system_settings.default_*_model 1:1.
+  string build_model = 1;
+  string exec_model = 2;
+  string stt_model = 3;
+  string vision_model = 4;
+  string tts_model = 5;
+  string image_gen_model = 6;
+  string embedding_model = 7;
+  string search_model = 8;
+  repeated ModelSlotInfo slots = 9;
+}
+
+message GetAgentModelConfigResponse {
+  AgentModelConfig config = 1;
+}
+
+message UpdateAgentModelConfigRequest {
+  AgentModelConfig config = 1;
+}
+
+message UpdateAgentModelConfigResponse {
+  AgentModelConfig config = 1;
+}
+
+// --- Builds ---
+
+message ListAgentBuildsResponse {
+  repeated AgentBuildInfo builds = 1;
+}
+
+message GetAgentBuildResponse {
+  AgentBuildInfo build = 1;
+}
+
+// --- Runs ---
+
+message ListRunsResponse {
+  repeated RunInfo runs = 1;
+  string next_cursor = 2;
+}
+
+message GetRunResponse {
+  RunInfo run = 1;
+  repeated AgentMessageInfo messages = 2; // Messages produced during this run.
+}
+
+// --- Conversations ---
+
+message CreateConversationRequest {
+  string title = 1;  // optional
+}
+
+message CreateConversationResponse {
+  ConversationInfo conversation = 1;
+}
+
+message ListConversationsResponse {
+  repeated ConversationInfo conversations = 1;
+}
+
+message GetConversationResponse {
+  ConversationInfo conversation = 1;
+  repeated AgentMessageInfo messages = 2;
+  PendingConfirmation pending_confirmation = 3; // Set when a run is suspended awaiting user approval.
+
+  // has_older_messages is true when the conversation has messages older than
+  // the first message in `messages`. The client uses this to decide whether
+  // to enable scroll-up pagination via ListConversationMessages.
+  bool has_older_messages = 4;
+}
+
+// PaginatedMessagesResponse is the result of GET /api/v1/conversations/{convID}/messages
+// — older or newer page for infinite-scroll chat history.
+message PaginatedMessagesResponse {
+  repeated AgentMessageInfo messages = 1;
+  // has_more is true when additional messages exist past this page in the
+  // direction of the query (older for `before`, newer for `after`).
+  bool has_more = 2;
+}
+
+// PendingConfirmation describes a tool call awaiting user approval.
+message PendingConfirmation {
+  string tool_call_id = 1;
+  string tool_name = 2;
+  string input = 3;  // JSON-encoded tool input
+}
+
+// --- Prompt ---
+
+message PromptRequest {
+  string conversation_id = 1;
+  string message = 2;
+  repeated string file_ids = 3;
+  optional bool approved = 4; // Set by UI when responding to a confirmation request.
+}
+
+message PromptResponse {
+  string run_id = 1;
+  string conversation_id = 2;
+
+  // command_reply is set when the message was a recognized slash command
+  // (e.g. /clear) handled without invoking the agent. run_id is empty in
+  // that case; the client should reload the conversation to pick up any
+  // new system messages (like a checkpoint marker).
+  string command_reply = 3;
+}
+
+// --- Webhooks & Crons ---
+
+message ListWebhooksResponse {
+  repeated WebhookInfo webhooks = 1;
+}
+
+message ListCronsResponse {
+  repeated CronInfo crons = 1;
+}
+
+message ListToolsResponse {
+  repeated ToolInfo tools = 1;
+}
+
+message FireCronResponse {
+  string run_id = 1;
+}
+
+// --- Agent Members ---
+
+message AddAgentMemberRequest {
+  string user_id = 1;
+  string role = 2; // "admin" or "user"
+}
+
+message AgentMemberInfo {
+  string user_id = 1;
+  string email = 2;
+  string display_name = 3;
+  string role = 4;
+  google.protobuf.Timestamp created_at = 5;
+}
+
+message ListAgentMembersResponse {
+  repeated AgentMemberInfo members = 1;
+}
+
+// --- Connections ---
+
+message ListConnectionsResponse {
+  repeated ConnectionInfo connections = 1;
+  string oauth_callback_url = 2;  // redirect URI for OAuth app configuration
+}
+
+// --- Credentials ---
+
+message SetAPIKeyRequest {
+  string api_key = 1;
+}
+
+message SetOAuthAppRequest {
+  string client_id = 1;
+  string client_secret = 2;
+}
+
+message OAuthStartRequest {
+  string agent_id = 1;
+  string slug = 2;
+  string redirect_uri = 3;
+}
+
+message OAuthStartResponse {
+  string authorize_url = 1;
+}
+
+message CredentialStatusResponse {
+  string slug = 1;
+  string name = 2;
+  string auth_mode = 3;
+  bool authorized = 4;
+  google.protobuf.Timestamp token_expires_at = 5;
+}
+
+message TestCredentialResponse {
+  bool success = 1;
+  int32 status_code = 2;
+  string message = 3;
+}
+
+// --- Bridges ---
+
+message CreateBridgeRequest {
+  string agent_id = 1;
+  string name = 2;
+  string token = 3;
+}
+
+// Reassign a bridge to a different agent (or to the system, if empty).
+message UpdateBridgeRequest {
+  string agent_id = 1;
+}
+
+message ListBridgesResponse {
+  repeated BridgeInfo bridges = 1;
+}
+
+// --- Capabilities ---
+
+message ListCapabilitiesResponse {
+  repeated ProviderCapabilityInfo providers = 1;
+}
+
+// --- Platform Identity ---
+
+message ListPlatformIdentitiesResponse {
+  repeated PlatformIdentityInfo identities = 1;
+}
+
+// LinkIdentityPreviewResponse is returned by GET /api/v1/link-identity/preview
+// so the frontend can show a confirmation dialog before linking. All fields
+// are best-effort — display_name / username may be empty if the bridge can't
+// fetch them from the platform.
+message LinkIdentityPreviewResponse {
+  string platform = 1;               // "telegram"
+  string bridge_name = 2;            // Bridge display name from DB
+  string bot_username = 3;           // @botname from bridges.bot_username
+  string platform_user_id = 4;       // Telegram user ID
+  string platform_username = 5;      // @user's telegram username (may be empty)
+  string platform_display_name = 6;  // First/last name (may be empty)
+  string current_user_email = 7;     // Airlock account being linked to
+}
+
+// --- Files ---
+
+message ListFilesResponse {
+  repeated FileEntry files = 1;
+}
+
+message UploadFileResponse {
+  string upload_url = 1;
+  string key = 2;
+}
+
+// --- Topics ---
+
+message ListTopicsResponse {
+  repeated TopicInfo topics = 1;
+}
+
+// --- System Settings ---
+
+message GetSystemSettingsResponse {
+  SystemSettingsInfo settings = 1;
+}
+
+message UpdateSystemSettingsRequest {
+  SystemSettingsInfo settings = 1;
+}
+
+message UpdateSystemSettingsResponse {
+  SystemSettingsInfo settings = 1;
+}
+
+// --- Errors ---
+
+message ErrorResponse {
+  string error = 1;
+  string detail = 2;
+}

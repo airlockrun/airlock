@@ -1,0 +1,101 @@
+// Package prompt provides template rendering for agent system prompts.
+package prompt
+
+import (
+	"bytes"
+	_ "embed"
+	"encoding/json"
+	"text/template"
+
+	"github.com/airlockrun/agentsdk"
+)
+
+//go:embed agent.tmpl
+var agentPromptTmpl string
+
+var agentTmpl = template.Must(template.New("agent").Funcs(template.FuncMap{
+	"renderTools": renderToolsFunc,
+}).Parse(agentPromptTmpl))
+
+// AgentData is the template data for rendering the execution agent system prompt.
+type AgentData struct {
+	AgentDashboardURL string // e.g., "https://airlock.example.com/agents/{id}"
+	AgentRouteURL     string // e.g., "https://myagent.dev.airlock.run" (empty if no agent domain)
+	Tools             []ToolInfo
+	Connections       []ConnInfo
+	Topics            []TopicInfo
+	Webhooks          []WebhookInfo
+	Crons             []CronInfo
+	Routes            []RouteInfo
+	MCPServers        []MCPServerStatus
+}
+
+// ToolInfo carries the hydrated tool record for prompt rendering.
+// InputSchema and OutputSchema are JSON-encoded JSON Schemas.
+type ToolInfo struct {
+	Name         string
+	Description  string
+	InputSchema  json.RawMessage
+	OutputSchema json.RawMessage
+}
+
+// renderToolsFunc is the template helper that turns a []ToolInfo into the
+// TypeScript .d.ts block the LLM reads. Delegates to agentsdk so the same
+// renderer is used by both sides.
+func renderToolsFunc(tools []ToolInfo) string {
+	items := make([]agentsdk.ToolRender, len(tools))
+	for i, t := range tools {
+		items[i] = agentsdk.ToolRender{
+			Name:         t.Name,
+			Description:  t.Description,
+			InputSchema:  t.InputSchema,
+			OutputSchema: t.OutputSchema,
+		}
+	}
+	return agentsdk.RenderToolDecls(items)
+}
+
+type ConnInfo struct {
+	Slug        string
+	Name        string
+	Description string
+	BaseURL     string
+}
+
+type TopicInfo struct {
+	Slug        string
+	Description string
+}
+
+type WebhookInfo struct {
+	Path        string
+	Description string
+}
+
+type CronInfo struct {
+	Name        string
+	Schedule    string
+	Description string
+}
+
+type RouteInfo struct {
+	Method      string
+	Path        string
+	Access      string
+	Description string
+}
+
+type MCPServerStatus struct {
+	Slug   string
+	Name   string
+	Status string // e.g. "connected, 5 tools" or "requires authentication"
+}
+
+// RenderAgentPrompt renders the execution agent system prompt with the given data.
+func RenderAgentPrompt(data AgentData) (string, error) {
+	var buf bytes.Buffer
+	if err := agentTmpl.Execute(&buf, data); err != nil {
+		return "", err
+	}
+	return buf.String(), nil
+}
