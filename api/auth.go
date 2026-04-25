@@ -3,8 +3,11 @@ package api
 import (
 	"net/http"
 	"os"
+	"strconv"
+	"time"
 
 	"github.com/airlockrun/airlock/auth"
+	"github.com/airlockrun/airlock/auth/lockout"
 	"github.com/airlockrun/airlock/convert"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
@@ -17,10 +20,17 @@ type AuthHandler struct {
 	jwtSecret          string
 	activationCodeFile string // set to remove the on-disk activation code after successful activation
 	logger             *zap.Logger
+	lockoutPolicy      lockout.Policy
 }
 
 func NewAuthHandler(database *db.DB, jwtSecret, activationCodeFile string, logger *zap.Logger) *AuthHandler {
-	return &AuthHandler{db: database, jwtSecret: jwtSecret, activationCodeFile: activationCodeFile, logger: logger}
+	return &AuthHandler{
+		db:                 database,
+		jwtSecret:          jwtSecret,
+		activationCodeFile: activationCodeFile,
+		logger:             logger,
+		lockoutPolicy:      lockout.Default,
+	}
 }
 
 // Activate performs one-time setup: creates the tenant and first admin user.
@@ -147,6 +157,9 @@ func (h *AuthHandler) Status(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+	policy := h.lockoutPolicy
+
 	req := &airlockv1.LoginRequest{}
 	if err := decodeProto(r, req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -158,17 +171,54 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	q := dbq.New(h.db.Pool())
+	pool := h.db.Pool()
+	ip := lockout.NormalizeIP(r.RemoteAddr)
+
+	// Per-(email, ip) lockout check before any credential work.
+	if status, err := policy.Check(ctx, pool, req.Email, ip); err != nil {
+		logFor(r).Error("lockout check failed", zap.Error(err))
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	} else if status.Locked {
+		retry := int(time.Until(status.LockedUntil).Seconds())
+		if retry < 1 {
+			retry = 1
+		}
+		w.Header().Set("Retry-After", strconv.Itoa(retry))
+		logFor(r).Warn("login locked out",
+			zap.String("email", req.Email),
+			zap.String("ip", ip),
+			zap.Int("tier", status.Tier))
+		policy.PadResponse(start)
+		writeError(w, http.StatusTooManyRequests, "too many attempts, try again later")
+		return
+	}
+
+	q := dbq.New(pool)
 
 	user, err := q.GetUserByEmail(ctx, req.Email)
 	if err != nil {
+		// Record on unknown-email too — otherwise an attacker probes random
+		// emails to find ones not yet at threshold. Pruner bounds the table.
+		if rfErr := policy.RecordFailure(ctx, pool, req.Email, ip); rfErr != nil {
+			logFor(r).Error("record auth failure failed", zap.Error(rfErr))
+		}
+		policy.PadResponse(start)
 		writeError(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
 
 	if err := auth.CheckPassword(user.PasswordHash, req.Password); err != nil {
+		if rfErr := policy.RecordFailure(ctx, pool, req.Email, ip); rfErr != nil {
+			logFor(r).Error("record auth failure failed", zap.Error(rfErr))
+		}
+		policy.PadResponse(start)
 		writeError(w, http.StatusUnauthorized, "invalid credentials")
 		return
+	}
+
+	if err := policy.ClearOnSuccess(ctx, pool, req.Email, ip); err != nil {
+		logFor(r).Warn("clear auth failures on success failed", zap.Error(err))
 	}
 
 	userID := pgUUID(user.ID)

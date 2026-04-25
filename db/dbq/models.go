@@ -177,6 +177,20 @@ type AgentWebhook struct {
 	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
 }
 
+type AuthFailure struct {
+	Email       string             `json:"email"`
+	Ip          string             `json:"ip"`
+	AttemptedAt pgtype.Timestamptz `json:"attempted_at"`
+}
+
+type AuthLockout struct {
+	Email        string             `json:"email"`
+	Ip           string             `json:"ip"`
+	LockedUntil  pgtype.Timestamptz `json:"locked_until"`
+	Tier         int32              `json:"tier"`
+	LastLockedAt pgtype.Timestamptz `json:"last_locked_at"`
+}
+
 type Bridge struct {
 	ID             pgtype.UUID        `json:"id"`
 	AgentID        pgtype.UUID        `json:"agent_id"`
