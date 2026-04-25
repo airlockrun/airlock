@@ -9,7 +9,6 @@
     "jsx": "preserve",
     "jsxImportSource": "vue",
     "skipLibCheck": true,
-    "baseUrl": ".",
     "paths": {
       "@/*": ["./src/*"]
     },
