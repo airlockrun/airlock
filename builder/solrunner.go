@@ -29,7 +29,7 @@ type solRunOpts struct {
 	Prompt      string            // prompt for the runner
 	LogCallback func(line string) // called for each log line
 	LocalTools  tool.Set          // optional in-process tools (e.g., set_agent_description)
-	TestDBURL    string // test schema DB URL with search_path (for migrate CLI)
+	TestDBURL    string // test schema DB URL with search_path baked in
 	TestDBPSQL   string // test schema DB URL without search_path (for psql)
 	TestDBSchema string // test schema name (for psql SET search_path)
 }

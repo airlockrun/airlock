@@ -280,9 +280,8 @@ func (b *BuildService) doBuild(ctx context.Context, q *dbq.Queries, agent dbq.Ag
 	data := scaffold.ScaffoldData{
 		AgentID:   agentID,
 		Module:    "agent",
-		GoVersion:       "1.25",
+		GoVersion:       "1.26",
 		AgentSDKVersion: "v" + agentsdk.Version,
-		DevLibs:   b.cfg.AgentLibsPath != "",
 	}
 	commitHash, err := CommitScaffold(repoPath, agentID, data)
 	if err != nil {
@@ -361,9 +360,8 @@ func (b *BuildService) doBuild(ctx context.Context, q *dbq.Queries, agent dbq.Ag
 	if err := scaffold.GenerateDockerfile(contextDir, scaffold.ScaffoldData{
 		AgentID:   agentID,
 		Module:    "agent",
-		GoVersion:       "1.25",
+		GoVersion:       "1.26",
 		AgentSDKVersion: "v" + agentsdk.Version,
-		DevLibs:   b.cfg.AgentLibsPath != "",
 	}); err != nil {
 		completeBuild("failed", err.Error(), commitHash, "")
 		return fmt.Errorf("generate Dockerfile: %w", err)

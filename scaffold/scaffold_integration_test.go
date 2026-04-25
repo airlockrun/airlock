@@ -32,9 +32,8 @@ func TestScaffoldBuildsAndStarts(t *testing.T) {
 	data := ScaffoldData{
 		AgentID:         "test-agent-build",
 		Module:          "agent",
-		GoVersion:       "1.25",
+		GoVersion:       "1.26",
 		AgentSDKVersion: "v1.0.0",
-		DevLibs:         true,
 	}
 	if err := Materialize(dir, data); err != nil {
 		t.Fatalf("Materialize: %v", err)
@@ -44,13 +43,13 @@ func TestScaffoldBuildsAndStarts(t *testing.T) {
 	// In workspace mode, go.work resolves all workspace modules without
 	// require directives (adding require v0.0.0 causes Go to hit the
 	// network to verify the version).
-	goMod := "module agent\n\ngo 1.25.0\n\nrequire github.com/a-h/templ v0.3.865\n"
+	goMod := "module agent\n\ngo 1.26.0\n\nrequire github.com/a-h/templ v0.3.865\n"
 	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(goMod), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	// Create go.work pointing to local workspace modules.
-	goWork := fmt.Sprintf("go 1.25.0\n\nuse (\n\t.\n\t%s\n\t%s\n\t%s\n\t%s\n)\n",
+	goWork := fmt.Sprintf("go 1.26.0\n\nuse (\n\t.\n\t%s\n\t%s\n\t%s\n\t%s\n)\n",
 		filepath.Join(repoRoot, "agentsdk"),
 		filepath.Join(repoRoot, "goai"),
 		filepath.Join(repoRoot, "sol"),

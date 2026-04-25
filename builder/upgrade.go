@@ -282,12 +282,18 @@ func (b *BuildService) doUpgrade(ctx context.Context, q *dbq.Queries, input Upgr
 	if err := scaffold.GenerateDockerfile(contextDir, scaffold.ScaffoldData{
 		AgentID:   agentID,
 		Module:    "agent",
-		GoVersion:       "1.25",
+		GoVersion:       "1.26",
 		AgentSDKVersion: "v" + agentsdk.Version,
-		DevLibs:   b.cfg.AgentLibsPath != "",
 	}); err != nil {
 		completeBuild("failed", err.Error(), hash, "")
 		return fmt.Errorf("generate Dockerfile: %w", err)
+	}
+	// Bump the agent's go.mod require line to the current SDK version so
+	// gopls/editor tooling shows what the build is actually linking against
+	// (the replace directive shadows it for compilation).
+	if err := bumpAgentSDKRequire(ctx, contextDir, agentsdk.Version); err != nil {
+		completeBuild("failed", err.Error(), hash, "")
+		return fmt.Errorf("bump agent SDK require: %w", err)
 	}
 	imageTag, err := buildImage(ctx, b.cfg, agentID, contextDir, hash, func(line string) {
 		seq := bl.appendDocker(line)

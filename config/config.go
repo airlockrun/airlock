@@ -61,7 +61,9 @@ type Config struct {
 	AgentBuilderImage string // toolserver sandbox image (default: agent-builder:v${agentsdk.Version})
 	AgentBaseImage    string // agent runtime base image
 	AgentRegistryURL  string // Docker registry for agent images (empty = local only)
-	AgentLibsPath     string // path containing agentsdk/ and goai/ dirs (dev mode only)
+	AgentLibsPath     string // path containing agentsdk/ goai/ sol/ dirs (the libs we own). If unset, airlock extracts /libs/ from AgentBuilderImage at startup into AgentLibsCacheDir.
+	AgentLibsExtPath  string // path containing goose/ templ/ dirs (third-party libs always sourced from the agent-builder image's baked /libs/). Set at startup by EnsureLibs; not read from env.
+	AgentLibsCacheDir string // base dir where extracted /libs/ from agent-builder image is cached. Subdir per image digest.
 
 	// --- Reverse proxy ---
 	ReverseProxyTrustedProxies string // comma-separated CIDRs, "*" = trust all (default: trust none)
@@ -128,6 +130,7 @@ func Load() *Config {
 		AgentBaseImage:    envOr("AGENT_BASE_IMAGE", "airlock-agent-base"),
 		AgentRegistryURL:  os.Getenv("AGENT_REGISTRY_URL"),
 		AgentLibsPath:     os.Getenv("AGENT_LIBS_PATH"),
+		AgentLibsCacheDir: envOr("AGENT_LIBS_CACHE_DIR", "/var/lib/airlock/libs"),
 
 		// Reverse proxy
 		ReverseProxyTrustedProxies: os.Getenv("REVERSE_PROXY_TRUSTED_PROXIES"),

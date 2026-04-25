@@ -1,20 +1,31 @@
-# Dockerfile.airlock — airlock API server container image
+# Dockerfile.airlock — standalone build of the airlock API server.
+#
+# Build context is this repo's root. From a fresh clone:
+#   docker build -f Dockerfile.airlock -t airlock .
+#
+# Cross-module dev (live edits across goai/sol/agentsdk) is done outside
+# Docker via go.work in the meta-repo; this image always pulls the goai/sol/
+# agentsdk versions pinned in go.mod from the public Go module proxy.
+#
+# To temporarily test this image against a local checkout of one of the
+# sibling libs, add a `replace` line to go.mod and use BuildKit's
+# --build-context to expose the source, e.g.:
+#   docker build --build-context goai=../goai -f Dockerfile.airlock -t airlock-dev .
+# (and a matching `replace github.com/airlockrun/goai => /goai` in go.mod).
 
 # --- Builder ---
-FROM golang:1.24-alpine AS builder
+FROM golang:1.26-alpine AS builder
 
 RUN apk add --no-cache git
 
 WORKDIR /src
-COPY go.work go.work
-COPY goai/ goai/
-COPY sol/ sol/
-COPY telescope/ telescope/
-COPY agentsdk/ agentsdk/
-COPY replays/ replays/
-COPY airlock/ airlock/
 
-RUN cd airlock && CGO_ENABLED=0 go build -o /airlock ./cmd/airlock
+# Pre-fetch deps so this layer caches across source-only edits.
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+RUN CGO_ENABLED=0 go build -o /airlock ./cmd/airlock
 
 # --- Runtime ---
 FROM alpine:3.21
@@ -28,3 +39,4 @@ COPY --from=builder /airlock /airlock
 
 EXPOSE 8080
 ENTRYPOINT ["/airlock"]
+CMD ["serve"]

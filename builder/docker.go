@@ -25,11 +25,15 @@ func buildImage(ctx context.Context, cfg *config.Config, agentID, contextDir, co
 		tag = fmt.Sprintf("%s/%s", cfg.AgentRegistryURL, tag)
 	}
 
-	args := []string{"build", "-t", tag}
-	if cfg.AgentLibsPath != "" {
-		args = append(args, "--build-context", "libs="+cfg.AgentLibsPath)
+	if cfg.AgentLibsPath == "" || cfg.AgentLibsExtPath == "" {
+		return "", fmt.Errorf("buildImage: AgentLibsPath/AgentLibsExtPath empty — startup should have populated both via EnsureLibs")
 	}
-	args = append(args, contextDir)
+	args := []string{
+		"build", "-t", tag,
+		"--build-context", "libs-owned=" + cfg.AgentLibsPath,
+		"--build-context", "libs-ext=" + cfg.AgentLibsExtPath,
+		contextDir,
+	}
 
 	cmd := exec.CommandContext(ctx, "docker", args...)
 	cmd.Env = append(cmd.Environ(), "DOCKER_BUILDKIT=1")
@@ -71,9 +75,8 @@ func (b *BuildService) WarmBuildCache(ctx context.Context) {
 	if err := scaffold.Materialize(dir, scaffold.ScaffoldData{
 		AgentID:   "cache-warm",
 		Module:    "agent",
-		GoVersion:       "1.25",
+		GoVersion:       "1.26",
 		AgentSDKVersion: "v" + agentsdk.Version,
-		DevLibs:   b.cfg.AgentLibsPath != "",
 	}); err != nil {
 		b.logger.Warn("warm cache: scaffold", zap.Error(err))
 		return
@@ -83,9 +86,8 @@ func (b *BuildService) WarmBuildCache(ctx context.Context) {
 	if err := scaffold.GenerateDockerfile(dir, scaffold.ScaffoldData{
 		AgentID:   "cache-warm",
 		Module:    "agent",
-		GoVersion:       "1.25",
+		GoVersion:       "1.26",
 		AgentSDKVersion: "v" + agentsdk.Version,
-		DevLibs:   b.cfg.AgentLibsPath != "",
 	}); err != nil {
 		b.logger.Warn("warm cache: generate Dockerfile", zap.Error(err))
 		return
@@ -101,12 +103,17 @@ func (b *BuildService) WarmBuildCache(ctx context.Context) {
 		return
 	}
 
-	tag := "airlock-cache-warm:latest"
-	args := []string{"build", "-t", tag}
-	if b.cfg.AgentLibsPath != "" {
-		args = append(args, "--build-context", "libs="+b.cfg.AgentLibsPath)
+	if b.cfg.AgentLibsPath == "" || b.cfg.AgentLibsExtPath == "" {
+		b.logger.Warn("warm cache: lib paths empty — skipping (startup EnsureLibs must run first)")
+		return
 	}
-	args = append(args, dir)
+	tag := "airlock-cache-warm:latest"
+	args := []string{
+		"build", "-t", tag,
+		"--build-context", "libs-owned=" + b.cfg.AgentLibsPath,
+		"--build-context", "libs-ext=" + b.cfg.AgentLibsExtPath,
+		dir,
+	}
 
 	cmd := exec.CommandContext(ctx, "docker", args...)
 	cmd.Env = append(cmd.Environ(), "DOCKER_BUILDKIT=1")

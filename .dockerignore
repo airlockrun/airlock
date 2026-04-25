@@ -1,0 +1,31 @@
+# Frontend has its own image (Dockerfile.frontend) and isn't needed by the
+# Go build. Excluding it keeps the airlock build context small.
+frontend/
+
+# VCS + IDE
+.git/
+.github/
+.idea/
+.vscode/
+
+# Secrets — never ship runtime config into images.
+.env
+.env.*
+!.env.example
+
+# Local build outputs
+/airlock
+/anchor
+/agent-builder
+*.test
+*.out
+*.coverprofile
+
+# Codegen / tool deps that aren't part of the Go build.
+proto/node_modules/
+
+# Other Dockerfiles — irrelevant to this image and pollute the context.
+Dockerfile.frontend
+Dockerfile.agent-builder
+Dockerfile.agent-base
+.dockerignore

@@ -856,6 +856,12 @@ DROP TABLE rooms;
 
 **Go migrations for operational work:** If you need to do something that can't be expressed in SQL — rename S3 keys, backfill data via HTTP, etc. — create a `.go` file in the same `db/migrations/` package. Retrieve the agent from the migration context via `agentsdk.AgentFromMigrationContext(ctx)` to call storage/API methods.
 
+**Tx vs NoTx — pick the right registration helper:**
+- `goose.AddMigrationContext(up, down)` — wraps your function in a Postgres transaction (signature: `func(ctx, tx *sql.Tx) error`). Default choice for short, DB-focused work; partial failures roll back atomically. The wrapping transaction is harmless even when you do zero SQL (~2ms overhead for an empty BEGIN/COMMIT).
+- `goose.AddMigrationNoTxContext(up, down)` — runs without a wrapping transaction (signature: `func(ctx, db *sql.DB) error`). Use this when you (1) call slow external services like S3 / HTTP — you don't want a Postgres transaction held open for the duration, idle-in-transaction blocks autovacuum and holds locks; or (2) need operations Postgres won't run in a transaction (`CREATE INDEX CONCURRENTLY`, `ALTER TYPE ... ADD VALUE` on older PG, `VACUUM`).
+
+The example below renames S3 keys, so it uses `NoTxContext` — the loop could take minutes on a real bucket and we don't want the DB transaction held that whole time.
+
 ```go
 // db/migrations/00002_rename_media.go
 package migrations
@@ -870,6 +876,7 @@ import (
 )
 
 func init() {
+	// NoTx: this migration calls S3 in a loop; don't hold a Postgres tx open across slow external calls.
 	goose.AddMigrationNoTxContext(Up00002, Down00002)
 }
 
