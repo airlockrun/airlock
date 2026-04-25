@@ -343,12 +343,12 @@ function formatTokens(n: number): string {
               <div style="margin-top: 0.25rem; font-size: 0.85rem">{{ msg.content }}</div>
             </div>
           </div>
-          <!-- Notification messages (printToUser / topic publish) — rich parts -->
+          <!-- Notification messages (printToUser / topic publish / user upload echo) — rich parts -->
           <div
-            v-else-if="msg.source === 'notification'"
-            style="display: flex; justify-content: flex-start"
+            v-else-if="msg.source === 'notification' || msg.source === 'upload'"
+            :style="{ display: 'flex', justifyContent: msg.source === 'upload' ? 'flex-end' : 'flex-start' }"
           >
-            <div class="msg-bubble msg-notification">
+            <div :class="['msg-bubble', msg.source === 'upload' ? 'msg-user' : 'msg-notification']">
               <MessageParts
                 v-if="(msg as any).displayParts && (msg as any).displayParts.length"
                 :parts="(msg as any).displayParts"

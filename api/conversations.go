@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
@@ -404,6 +405,42 @@ func (h *conversationsHandler) Prompt(w http.ResponseWriter, r *http.Request) {
 			ContentType: ct,
 			Size:        info.Size,
 		})
+	}
+
+	// Echo uploaded files back to the conversation as an ephemeral message
+	// so the user can see what they attached after the input chips clear.
+	// Posted before the dispatcher so it sorts ahead of the assistant turn.
+	if len(fileRefs) > 0 {
+		parts := make([]agentsdk.DisplayPart, 0, len(fileRefs))
+		for _, fr := range fileRefs {
+			partType := "file"
+			switch {
+			case strings.HasPrefix(fr.ContentType, "image/"):
+				partType = "image"
+			case strings.HasPrefix(fr.ContentType, "audio/"):
+				partType = "audio"
+			case strings.HasPrefix(fr.ContentType, "video/"):
+				partType = "video"
+			}
+			parts = append(parts, agentsdk.DisplayPart{
+				Type:     partType,
+				Source:   "agents/" + agentID.String() + "/" + fr.ID,
+				Filename: fr.Filename,
+				MimeType: fr.ContentType,
+			})
+		}
+		if err := postToConversation(ctx, postDeps{
+			DB: h.db, PubSub: h.pubsub, BridgeMgr: h.bridgeMgr, S3: h.s3, Logger: h.logger,
+		}, postOpts{
+			AgentID:        agentID,
+			ConversationID: pgUUID(convID),
+			Role:           "user",
+			Parts:          parts,
+			Source:         "upload",
+			Ephemeral:      true,
+		}); err != nil {
+			h.logger.Warn("post upload echo failed", zap.Error(err))
+		}
 	}
 
 	// Look up the agent row once — used for both model modalities and

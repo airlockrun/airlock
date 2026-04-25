@@ -194,11 +194,12 @@ export const useChatStore = defineStore('chat', () => {
           newMessagesPending.value = true
           return
         }
-        const msg = buildNotificationMessage(ev.partsJson)
-        // If a run is active, buffer until finalizeMessage pushes the
-        // assistant/tool messages — otherwise the notification lands before
-        // the assistant bubble for the very run that produced it.
-        if (currentRunId.value || sending.value) {
+        const source = ev.source || 'notification'
+        const msg = buildNotificationMessage(ev.partsJson, source)
+        // Upload echoes belong before the assistant's response (they are the
+        // user's just-attached files), so bypass the buffer that holds
+        // mid-run printToUser notifications until finalizeMessage.
+        if ((currentRunId.value || sending.value) && source !== 'upload') {
           pendingNotifications.push(msg)
         } else {
           enrichNotification(msg)
@@ -208,14 +209,14 @@ export const useChatStore = defineStore('chat', () => {
     )
   }
 
-  function buildNotificationMessage(partsJson: string): AgentMessageInfo {
+  function buildNotificationMessage(partsJson: string, source: string = 'notification'): AgentMessageInfo {
     return {
       $typeName: 'airlock.v1.AgentMessageInfo',
       id: `notif-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      role: 'assistant',
+      role: source === 'upload' ? 'user' : 'assistant',
       content: '',
       parts: partsJson,
-      source: 'notification',
+      source,
       tokensIn: 0,
       tokensOut: 0,
       costEstimate: 0,
@@ -371,9 +372,9 @@ export const useChatStore = defineStore('chat', () => {
       } catch { /* ignore parse errors */ }
     }
 
-    // Attach displayParts to notification messages for rich rendering.
+    // Attach displayParts to notification / upload-echo messages for rich rendering.
     for (const msg of msgs) {
-      if (msg.source === 'notification') enrichNotification(msg)
+      if (msg.source === 'notification' || msg.source === 'upload') enrichNotification(msg)
     }
 
     return msgs
