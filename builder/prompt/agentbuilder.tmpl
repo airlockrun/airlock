@@ -712,6 +712,55 @@ alerts.Publish(ctx, []agentsdk.DisplayPart{
 })
 ```
 
+## RegisterStorage — Scoped file storage zones
+
+Returns `*StorageHandle`. Each zone owns an S3 prefix (`{slug}/...`) and a JS
+binding (`storage_{slug}`). The `Access` field gates the JS binding — the
+LLM only sees zones whose access matches the caller's level. Use
+`AccessInternal` for caches/state the LLM should never touch (no JS
+binding bound at all; only builder Go code can read/write).
+
+The framework reserves a zone called **`tmp`** at `AccessUser` for its own
+scratch area (truncated tool output, generated media). Builders may pass
+`Slug:"tmp"` to `RegisterStorage` — the call returns a working handle to
+the framework's tmp zone but the supplied `Access`/`Description` are
+ignored, so framework and builder code share the same scratch area
+without conflict.
+
+```go
+uploads := agent.RegisterStorage(&agentsdk.Storage{
+    Slug:        "uploads",
+    Access:      agentsdk.AccessUser,
+    Description: "Files the user uploaded in chat.",
+})
+config := agent.RegisterStorage(&agentsdk.Storage{
+    Slug:        "config",
+    Access:      agentsdk.AccessAdmin,
+    Description: "Settings only owners can change.",
+})
+cache := agent.RegisterStorage(&agentsdk.Storage{
+    Slug:        "cache",
+    Access:      agentsdk.AccessInternal, // builder Go only — never bound to JS
+    Description: "Memoized API responses.",
+})
+
+// All keys are RELATIVE to the zone — the prefix is added automatically.
+err := uploads.Put(ctx, "doc.pdf", reader, "application/pdf")
+rc, err := uploads.Get(ctx, "doc.pdf")
+err = uploads.CopyTo(ctx, "doc.pdf", config, "default-doc.pdf") // cross-zone
+
+// Inside run_js the LLM uses:
+//   storage_uploads.put("doc.pdf", buffer, "application/pdf")
+//   storage_uploads.get("doc.pdf")
+//   storage_uploads.list("subfolder/")
+// AccessInternal zones are never bound, so this is enforced at the JS
+// runtime — no `storage_cache` global exists for the LLM to discover.
+```
+
+For `Access: AccessPublic` zones, files are also reachable unauthenticated at
+`{publicURL}/storage/{agentID}/{slug}/{key}` — useful when you need stable
+links the LLM can hand to a user. Builders compose this URL themselves.
+
 ## Agent Methods (ctx-first — call from any handler)
 
 Every handler — RegisterTool (via `Tool.Execute`), RegisterWebhook,
@@ -732,14 +781,17 @@ agent.EmbeddingModel(ctx, slug, agentsdk.ModelOpts{})               // embedding
 // Logging — appended to the current run (visible in the Runs UI);
 // falls through to process zap log if no run is bound.
 agent.Log(ctx, "imported 42 rows")
+agent.Logf(ctx, "imported %d rows", n)                // printf-style sibling of Log
 
-// Storage — agent-scoped S3 bucket, same surface as before
-agent.StoreFile(ctx, key, reader, contentType)
-agent.LoadFile(ctx, key)                              // (io.ReadCloser, error)
-agent.DeleteFile(ctx, key)
-agent.FileInfo(ctx, key)                              // (StoredFile, error)
-agent.CopyFile(ctx, srcKey, dstKey)
-agent.ListFiles(ctx, prefix)
+// Storage — register a zone, then operate via its handle (see RegisterStorage below).
+uploads.Put(ctx, key, reader, contentType)
+uploads.Get(ctx, key)                                 // (io.ReadCloser, error)
+uploads.Delete(ctx, key)
+uploads.Stat(ctx, key)                                // (StoredFile, error)
+uploads.Copy(ctx, srcKey, dstKey)                     // within zone
+uploads.CopyTo(ctx, srcKey, archive, dstKey)          // cross-zone
+uploads.List(ctx, prefix)
+agent.Attachment(ctx, fileID)                         // conversation attachment by opaque ID
 agent.DB()                                            // *sql.DB for agent's schema (nil if AIRLOCK_DB_URL unset)
 ```
 
@@ -859,12 +911,14 @@ These are already registered by agentsdk for every run. Do NOT declare them as t
 - `mcp_{slug}.listTools()` → [{name, description, inputSchema}, ...] — discover MCP tools
 - `queryDB(sql, ...params)` → [{...}, ...]
 - `execDB(sql, ...params)` → {rowsAffected: N}
-- `writeFile(key, data, contentType)`
-- `readFile(key)` → string
-- `removeFile(key)`
-- `fileInfo(key)` → object
-- `copyFile(srcKey, dstKey)`
-- `listFiles(prefix?)` → [{key, size, contentType, lastModified}, ...]
+- `storage_{slug}.put(key, data, contentType)` — write into a registered storage zone
+- `storage_{slug}.get(key)` → string — read from a registered storage zone
+- `storage_{slug}.delete(key)` — remove from a registered storage zone
+- `storage_{slug}.stat(key)` → {key, size, contentType, lastModified}
+- `storage_{slug}.list(prefix?)` → [{key, size, contentType, lastModified}, ...]
+- `storage_{slug}.copy(srcKey, dstKey)` — within zone (cross-zone is a builder Go API)
+- `storage_tmp` — framework-owned scratch zone, always present at AccessUser; used for truncated tool output and generated media
+- `attachToContext("{zone}/{key}")` → string — load a stored image/file into the LLM's visual context for the next turn
 - `printToUser(parts)` — send rich content to user; parts is single object or array of {type, text, source, url, data, filename, mimeType, alt, duration}
 - `topic_{slug}.subscribe()` / `topic_{slug}.unsubscribe()` — subscribe/unsubscribe current conversation to a notification topic
 - `log(message)`
@@ -932,16 +986,17 @@ func Up00002(ctx context.Context, db *sql.DB) error {
 	}
 
 	agent := agentsdk.AgentFromMigrationContext(ctx)
-	files, err := agent.ListFiles(ctx, "old/")
+	old := agent.RegisterStorage(&agentsdk.Storage{Slug: "old", Access: agentsdk.AccessAdmin})
+	media := agent.RegisterStorage(&agentsdk.Storage{Slug: "media", Access: agentsdk.AccessUser})
+	files, err := old.List(ctx, "")
 	if err != nil {
 		return err
 	}
 	for _, f := range files {
-		dst := "media/" + path.Base(f.Key)
-		if err := agent.CopyFile(ctx, f.Key, dst); err != nil {
+		if err := old.CopyTo(ctx, f.Key, media, path.Base(f.Key)); err != nil {
 			return err
 		}
-		if err := agent.DeleteFile(ctx, f.Key); err != nil {
+		if err := old.Delete(ctx, f.Key); err != nil {
 			return err
 		}
 	}

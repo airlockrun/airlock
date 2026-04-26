@@ -7,6 +7,7 @@ import (
 
 	"github.com/airlockrun/agentsdk"
 	"github.com/airlockrun/airlock/auth"
+	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -136,6 +137,47 @@ func (h *agentHandler) GetAttachment(w http.ResponseWriter, r *http.Request) {
 	reader, err := h.s3.GetObject(r.Context(), key)
 	if err != nil {
 		writeJSONError(w, http.StatusNotFound, "file not found")
+		return
+	}
+	defer reader.Close()
+
+	w.Header().Set("Content-Type", "application/octet-stream")
+	io.Copy(w, reader)
+}
+
+// PublicStorage handles GET /storage/{agentID}/{slug}/{key...}.
+// Unauthenticated read access for files in storage zones registered with
+// AccessPublic. Any non-public zone (or unknown agent/zone) returns 404 —
+// we deliberately don't distinguish "not public" from "not found" so
+// guessing URLs leaks no information.
+func (h *agentHandler) PublicStorage(w http.ResponseWriter, r *http.Request) {
+	agentIDStr := chi.URLParam(r, "agentID")
+	zoneSlug := chi.URLParam(r, "slug")
+	key := strings.TrimPrefix(chi.URLParam(r, "*"), "/")
+	if agentIDStr == "" || zoneSlug == "" || key == "" {
+		http.NotFound(w, r)
+		return
+	}
+	agentID, err := uuid.Parse(agentIDStr)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	q := dbq.New(h.db.Pool())
+	zone, err := q.GetStorageZone(r.Context(), dbq.GetStorageZoneParams{
+		AgentID: toPgUUID(agentID),
+		Slug:    zoneSlug,
+	})
+	if err != nil || zone.Access != string(agentsdk.AccessPublic) {
+		http.NotFound(w, r)
+		return
+	}
+
+	s3Key := agentStorageKey(agentID, zoneSlug+"/"+key)
+	reader, err := h.s3.GetObject(r.Context(), s3Key)
+	if err != nil {
+		http.NotFound(w, r)
 		return
 	}
 	defer reader.Close()

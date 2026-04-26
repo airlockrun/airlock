@@ -382,6 +382,30 @@ func (h *agentHandler) Sync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Upsert storage zones, then delete stale.
+	zoneSlugs := make([]string, len(req.Storages))
+	for i, s := range req.Storages {
+		if err := q.UpsertStorageZone(ctx, dbq.UpsertStorageZoneParams{
+			AgentID:     pgAgentID,
+			Slug:        s.Slug,
+			Access:      s.Access,
+			Description: s.Description,
+		}); err != nil {
+			h.logger.Error("upsert storage zone failed", zap.Error(err))
+			writeJSONError(w, http.StatusInternalServerError, "failed to sync storage zones")
+			return
+		}
+		zoneSlugs[i] = s.Slug
+	}
+	if err := q.DeleteStorageZonesByAgentExcept(ctx, dbq.DeleteStorageZonesByAgentExceptParams{
+		AgentID: pgAgentID,
+		Slugs:   zoneSlugs,
+	}); err != nil {
+		h.logger.Error("delete stale storage zones failed", zap.Error(err))
+		writeJSONError(w, http.StatusInternalServerError, "failed to sync storage zones")
+		return
+	}
+
 	// Discover MCP status for servers with credentials. discoverAllMCPStatus
 	// updates the tool_schemas JSONB column on success, so re-fetch the rows
 	// afterwards to read the freshly-cached schemas into the prompt + response.

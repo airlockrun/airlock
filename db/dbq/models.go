@@ -144,6 +144,16 @@ type AgentRoute struct {
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
 }
 
+type AgentStorageZone struct {
+	ID          pgtype.UUID        `json:"id"`
+	AgentID     pgtype.UUID        `json:"agent_id"`
+	Slug        string             `json:"slug"`
+	Access      string             `json:"access"`
+	Description string             `json:"description"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+}
+
 type AgentTool struct {
 	ID           pgtype.UUID        `json:"id"`
 	AgentID      pgtype.UUID        `json:"agent_id"`
