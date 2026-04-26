@@ -160,6 +160,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		oauthClient: cfg.OAuthClient,
 		publicURL:   cfg.PublicURL,
 		logger:      cfg.Logger.Named("credentials"),
+		dispatcher:  cfg.Dispatcher,
 	}
 	brH := &bridgeHandler{
 		db:        cfg.DB,

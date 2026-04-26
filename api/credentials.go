@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,6 +16,7 @@ import (
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/airlockrun/airlock/oauth"
+	"github.com/airlockrun/airlock/trigger"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -29,6 +31,11 @@ type credentialHandler struct {
 	oauthClient *oauth.Client
 	publicURL   string
 	logger      *zap.Logger
+	// dispatcher is used by OAuthCallback to push /refresh into a running
+	// agent container after MCP auth completes so its cached system prompt
+	// + MCP schemas pick up the new tools without a container restart.
+	// May be nil in tests; the OAuth callback then skips the push.
+	dispatcher *trigger.Dispatcher
 }
 
 // --- Task 4a: Set OAuth app credentials ---
@@ -328,6 +335,13 @@ func (h *credentialHandler) OAuthCallback(w http.ResponseWriter, r *http.Request
 			http.Error(w, "failed to store credentials", http.StatusInternalServerError)
 			return
 		}
+		// Now that the server is authorized, immediately discover its tools
+		// and push the running agent to re-sync. Both steps are best-effort:
+		// any failure here just means the agent picks up the new tools on
+		// its next sync (next prompt boots a fresh container, or the
+		// existing one re-syncs at startup after reap). The user shouldn't
+		// be blocked from completing OAuth because of an internal hiccup.
+		h.refreshMCPAfterAuth(ctx, agentID, oauthState.Slug, tokenResp.AccessToken)
 	} else {
 		if err := q.UpdateConnectionCredentials(ctx, dbq.UpdateConnectionCredentialsParams{
 			AgentID:        oauthState.AgentID,
@@ -346,6 +360,46 @@ func (h *credentialHandler) OAuthCallback(w http.ResponseWriter, r *http.Request
 
 	redirectURI := h.defaultRedirectURI(oauthState.RedirectUri, agentID)
 	http.Redirect(w, r, redirectURI, http.StatusFound)
+}
+
+// refreshMCPAfterAuth re-discovers tools for a freshly-authorized MCP server
+// and pushes the running agent container to re-sync. All steps are
+// best-effort: if discovery, persistence, or the /refresh push fails, we log
+// and continue. The agent will pick up the new tools on its next sync (next
+// container boot or scheduled re-sync), so degraded paths self-heal.
+func (h *credentialHandler) refreshMCPAfterAuth(ctx context.Context, agentID uuid.UUID, slug, accessToken string) {
+	q := dbq.New(h.db.Pool())
+	srv, err := q.GetMCPServerBySlug(ctx, dbq.GetMCPServerBySlugParams{
+		AgentID: toPgUUID(agentID),
+		Slug:    slug,
+	})
+	if err != nil {
+		h.logger.Warn("refresh MCP: get server failed", zap.String("slug", slug), zap.Error(err))
+		return
+	}
+
+	tools, err := discoverMCPTools(ctx, srv.Url, accessToken)
+	if err != nil {
+		h.logger.Warn("refresh MCP: discovery failed", zap.String("slug", slug), zap.Error(err))
+		// Don't return — we still want to ping the agent. Sync handler will
+		// try discovery again with the stored credentials.
+	} else {
+		schemasJSON, _ := json.Marshal(tools)
+		if err := q.UpdateMCPServerToolSchemas(ctx, dbq.UpdateMCPServerToolSchemasParams{
+			AgentID:     toPgUUID(agentID),
+			Slug:        slug,
+			ToolSchemas: schemasJSON,
+		}); err != nil {
+			h.logger.Warn("refresh MCP: persist schemas failed", zap.String("slug", slug), zap.Error(err))
+		}
+	}
+
+	if h.dispatcher == nil {
+		return
+	}
+	if err := h.dispatcher.RefreshAgent(ctx, agentID); err != nil {
+		h.logger.Warn("refresh MCP: agent /refresh failed", zap.String("agent", agentID.String()), zap.Error(err))
+	}
 }
 
 // --- Task 4d: API key entry ---

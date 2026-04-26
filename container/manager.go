@@ -37,6 +37,12 @@ type ContainerManager interface {
 	// Returns the existing container if already running and healthy.
 	StartAgent(ctx context.Context, opts AgentOpts) (*Container, error)
 
+	// GetRunning returns the running container for an agent without starting
+	// one if absent. Returns (nil, nil) when no container is up. Used by
+	// out-of-band signals (e.g. /refresh push) where booting a container
+	// just to notify it would defeat the purpose.
+	GetRunning(ctx context.Context, agentID uuid.UUID) (*Container, error)
+
 	// StopAgent stops a specific agent container.
 	StopAgent(ctx context.Context, id string) error
 

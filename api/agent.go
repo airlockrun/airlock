@@ -379,32 +379,73 @@ func (h *agentHandler) Sync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Discover MCP status for servers with credentials.
+	// Discover MCP status for servers with credentials. discoverAllMCPStatus
+	// updates the tool_schemas JSONB column on success, so re-fetch the rows
+	// afterwards to read the freshly-cached schemas into the prompt + response.
 	mcpServers, _ := q.ListMCPServersByAgent(ctx, pgAgentID)
 	mcpStatuses := h.discoverAllMCPStatus(ctx, q, agentID, mcpServers)
+	mcpServers, _ = q.ListMCPServersByAgent(ctx, pgAgentID)
+
+	// Index the (possibly-refreshed) server rows by slug so we can decode
+	// tool_schemas once and reuse for both the prompt template and the
+	// SyncResponse payload.
+	serverBySlug := make(map[string]dbq.AgentMcpServer, len(mcpServers))
+	for _, srv := range mcpServers {
+		serverBySlug[srv.Slug] = srv
+	}
 
 	// Build MCP server status for prompt and auth status for response.
 	var promptMCPServers []promptpkg.MCPServerStatus
 	var mcpAuthStatus []agentsdk.MCPAuthStatus
+	mcpSchemas := make(map[string][]agentsdk.MCPToolSchema)
 	for _, s := range mcpStatuses {
 		mcpAuthStatus = append(mcpAuthStatus, s.MCPAuthStatus)
 		status := "requires authentication"
 		if s.Authorized {
 			status = fmt.Sprintf("connected, %d tools", s.ToolCount)
 		}
-		promptMCPServers = append(promptMCPServers, promptpkg.MCPServerStatus{
-			Slug:   s.Slug,
-			Name:   s.Slug, // use slug as name fallback
-			Status: status,
-		})
-	}
-	// Fill in name from server list.
-	for i := range promptMCPServers {
-		for _, srv := range mcpServers {
-			if srv.Slug == promptMCPServers[i].Slug && srv.Name != "" {
-				promptMCPServers[i].Name = srv.Name
+
+		// Decode cached tool_schemas → ToolInfo for the prompt template
+		// AND MCPToolSchema for the SyncResponse. Both consumers need the
+		// same data; decoding once keeps it consistent.
+		var promptTools []promptpkg.ToolInfo
+		var schemas []agentsdk.MCPToolSchema
+		if srv, ok := serverBySlug[s.Slug]; ok && len(srv.ToolSchemas) > 0 {
+			var stored []mcpToolInfo
+			if err := json.Unmarshal(srv.ToolSchemas, &stored); err == nil {
+				promptTools = make([]promptpkg.ToolInfo, len(stored))
+				schemas = make([]agentsdk.MCPToolSchema, len(stored))
+				for i, t := range stored {
+					promptTools[i] = promptpkg.ToolInfo{
+						Name:        t.Name,
+						Description: t.Description,
+						InputSchema: t.InputSchema,
+					}
+					schemas[i] = agentsdk.MCPToolSchema{
+						ServerSlug:  s.Slug,
+						Name:        t.Name,
+						Description: t.Description,
+						InputSchema: t.InputSchema,
+					}
+				}
+			} else {
+				h.logger.Warn("decode tool_schemas failed", zap.String("slug", s.Slug), zap.Error(err))
 			}
 		}
+		if len(schemas) > 0 {
+			mcpSchemas[s.Slug] = schemas
+		}
+
+		name := s.Slug
+		if srv, ok := serverBySlug[s.Slug]; ok && srv.Name != "" {
+			name = srv.Name
+		}
+		promptMCPServers = append(promptMCPServers, promptpkg.MCPServerStatus{
+			Slug:   s.Slug,
+			Name:   name,
+			Status: status,
+			Tools:  promptTools,
+		})
 	}
 
 	// Render system prompt from template.
@@ -472,5 +513,6 @@ func (h *agentHandler) Sync(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, agentsdk.SyncResponse{
 		SystemPrompt:  rendered,
 		MCPAuthStatus: mcpAuthStatus,
+		MCPSchemas:    mcpSchemas,
 	})
 }
