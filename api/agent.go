@@ -56,7 +56,7 @@ func (h *agentHandler) UpsertConnection(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	var def agentsdk.ConnectionDef
+	var def agentsdk.Connection
 	if err := readJSON(r, &def); err != nil {
 		writeJSONError(w, http.StatusBadRequest, "invalid request body")
 		return

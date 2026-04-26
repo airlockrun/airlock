@@ -30,7 +30,7 @@ func (h *agentHandler) UpsertMCPServer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var def agentsdk.MCPDef
+	var def agentsdk.MCP
 	if err := readJSON(r, &def); err != nil {
 		writeJSONError(w, http.StatusBadRequest, "invalid request body")
 		return

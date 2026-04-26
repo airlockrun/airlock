@@ -156,7 +156,7 @@ func main() {
     })
 
     // RegisterConnection returns a *ConnectionHandle for type-safe API calls.
-    spotifyConn := agent.RegisterConnection("spotify", spotify.Connection())
+    spotifyConn := agent.RegisterConnection(spotify.Connection())
 
     // Store handles in Deps so any package can access them via GetDeps.
     agent.Deps = &spotify.Deps{Spotify: spotifyConn}
@@ -202,18 +202,20 @@ package spotify
 
 import "github.com/airlockrun/agentsdk"
 
-func Connection() agentsdk.ConnectionDef {
-    return agentsdk.ConnectionDef{
-        Name:        "Spotify",
-        Description: "Spotify Web API for music playback and search",
-        AuthMode:    "oauth",
-        AuthURL:     "https://accounts.spotify.com/authorize",
-        TokenURL:    "https://accounts.spotify.com/api/token",
-        BaseURL:     "https://api.spotify.com",
+func Connection() *agentsdk.Connection {
+    return &agentsdk.Connection{
+        Slug:              "spotify",
+        Name:              "Spotify",
+        Description:       "Spotify Web API for music playback and search",
+        AuthMode:          "oauth",
+        AuthURL:           "https://accounts.spotify.com/authorize",
+        TokenURL:          "https://accounts.spotify.com/api/token",
+        BaseURL:           "https://api.spotify.com",
         Scopes:            []string{"user-read-playback-state", "user-modify-playback-state"},
         AuthInjection:     agentsdk.AuthInjection{Type: "bearer"},
         SetupInstructions: "Create a Spotify app at https://developer.spotify.com/dashboard, add the OAuth redirect URI from the connection settings page.",
         LLMHint:           "All Spotify API paths start with /v1/. Use the registered spotify functions instead of raw connection requests.",
+        Access:            agentsdk.AccessUser,
     }
 }
 ```
@@ -361,9 +363,9 @@ type Deps struct {
 
 // In main.go — set after registering handles.
 agent.Deps = &Deps{
-    Gmail:   agent.RegisterConnection("gmail", gmailDef),
-    GitHub:  agent.RegisterMCP("github", githubDef),
-    Reports: agent.RegisterTopic("reports", "Weekly report notifications"),
+    Gmail:   agent.RegisterConnection(&agentsdk.Connection{Slug: "gmail", /* ... */}),
+    GitHub:  agent.RegisterMCP(&agentsdk.MCP{Slug: "github", /* ... */}),
+    Reports: agent.RegisterTopic(&agentsdk.Topic{Slug: "reports", Description: "Weekly report notifications"}),
 }
 
 // In any handler — retrieve typed deps from the run.
@@ -453,18 +455,24 @@ Airlock already renders a rich base system prompt for every run. It covers:
 **Signature:**
 
 ```go
-agent.AddExtraPrompt("You are a concise events assistant for the Berlin meetup. Answer in English.")
-agent.AddExtraPrompt("When an admin asks to reset the attendee list, call resetAttendees() — always confirm first.", agentsdk.AccessAdmin)
-agent.AddExtraPrompt("Public callers: only answer questions about event times and location. Decline anything else politely.", agentsdk.AccessPublic)
+agent.AddExtraPrompt(&agentsdk.ExtraPrompt{Text: "You are a concise events assistant for the Berlin meetup. Answer in English."})
+agent.AddExtraPrompt(&agentsdk.ExtraPrompt{
+    Text:   "When an admin asks to reset the attendee list, call resetAttendees() — always confirm first.",
+    Access: []agentsdk.Access{agentsdk.AccessAdmin},
+})
+agent.AddExtraPrompt(&agentsdk.ExtraPrompt{
+    Text:   "Public callers: only answer questions about event times and location. Decline anything else politely.",
+    Access: []agentsdk.Access{agentsdk.AccessPublic},
+})
 ```
 
-Multiple calls accumulate; fragments appear in registration order. Passing no access args makes the fragment visible to every caller. Access is filtered per-run based on the triggering user's membership — a public caller never sees fragments scoped to `AccessUser` or `AccessAdmin`.
+Multiple calls accumulate; fragments appear in registration order. Empty `Access` slice makes the fragment visible to every caller. Access is filtered per-run based on the triggering user's membership — a public caller never sees fragments scoped to `AccessUser` or `AccessAdmin`.
 
 **Access mapping** — same enum as `RegisterTool`/`RegisterRoute`:
 - `agentsdk.AccessAdmin` — agent owner and admin members
 - `agentsdk.AccessUser` — invited members
 - `agentsdk.AccessPublic` — unauthenticated public callers
-- (no args) — applied for every caller
+- (empty slice) — applied for every caller
 
 **Scope:** extras apply only to chat-style runs (web UI and bridge drivers like Telegram). Webhook and cron triggers invoke your Go handler directly and never build a system prompt, so `AddExtraPrompt` has no effect on them — any LLM call you make from those handlers builds its own prompt in code.
 
@@ -476,23 +484,31 @@ Multiple calls accumulate; fragments appear in registration order. Passing no ac
 ## RegisterWebhook — Handle incoming webhooks
 
 ```go
-agent.RegisterWebhook("github", func(ctx context.Context, data []byte, ew *agentsdk.EventWriter) error {
-    // data is the raw request body
-    return nil
-}, agentsdk.WebhookOpts{
+agent.RegisterWebhook(&agentsdk.Webhook{
+    Path: "github",
+    Handler: func(ctx context.Context, data []byte, ew *agentsdk.EventWriter) error {
+        // data is the raw request body
+        return nil
+    },
     Verify:      "hmac",                   // "hmac", "token", or "none" (default)
     Header:      "X-Hub-Signature-256",    // header for verification
     Description: "GitHub push events",
+    Access:      agentsdk.AccessUser,
 })
 ```
 
 ## RegisterCron — Scheduled jobs
 
 ```go
-agent.RegisterCron("daily-report", "0 9 * * *", func(ctx context.Context, ew *agentsdk.EventWriter) error {
-    // runs at 9am daily
-    return nil
-}, agentsdk.CronOpts{Description: "Generate and send daily report"})
+agent.RegisterCron(&agentsdk.Cron{
+    Name:     "daily-report",
+    Schedule: "0 9 * * *",
+    Handler: func(ctx context.Context, ew *agentsdk.EventWriter) error {
+        // runs at 9am daily
+        return nil
+    },
+    Description: "Generate and send daily report",
+})
 ```
 
 ## RegisterRoute — Custom HTTP routes
@@ -500,14 +516,20 @@ agent.RegisterCron("daily-report", "0 9 * * *", func(ctx context.Context, ew *ag
 Serve API endpoints or HTML pages directly from the agent. Routes are proxied via the agent's subdomain.
 
 ```go
-agent.RegisterRoute("/api/data", "GET", func(ctx context.Context, w http.ResponseWriter, r *http.Request) {
-    json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
-}, agentsdk.RouteOpts{Access: agentsdk.AccessUser, Description: "Get data"})
+agent.RegisterRoute(&agentsdk.Route{
+    Method: "GET",
+    Path:   "/api/data",
+    Handler: func(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+        json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+    },
+    Access:      agentsdk.AccessUser,
+    Description: "Get data",
+})
 ```
 
 **Always provide a Description** for routes — it tells users and the execution agent what each route does.
 
-**Access levels** (set via `RouteOpts.Access`):
+**Access levels** (set via `Route.Access`):
 - `agentsdk.AccessUser` — **default choice.** Any user the agent has been shared with (enforced by Airlock). Use this unless there's a specific reason not to.
 - `agentsdk.AccessAdmin` — agent owner and users with admin role. Use for destructive, sensitive, or admin-context operations (e.g. config, delete, reset).
 - `agentsdk.AccessPublic` — no auth, anyone can reach the route. **Only use when the user explicitly asks for a public-facing page** (e.g. "make a public voting page", "a page anyone can see"). Never default to public.
@@ -526,9 +548,15 @@ import (
     "agent/views"
 )
 
-agent.RegisterRoute("/", "GET", func(ctx context.Context, w http.ResponseWriter, r *http.Request) {
-    templ.Handler(views.Index()).ServeHTTP(w, r)
-}, agentsdk.RouteOpts{Access: agentsdk.AccessPublic, Description: "Homepage"})
+agent.RegisterRoute(&agentsdk.Route{
+    Method: "GET",
+    Path:   "/",
+    Handler: func(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+        templ.Handler(views.Index()).ServeHTTP(w, r)
+    },
+    Access:      agentsdk.AccessPublic,
+    Description: "Homepage",
+})
 ```
 
 **templ component with htmx:**
@@ -558,11 +586,17 @@ templ SearchResults(items []string) {
 **Returning an htmx partial from a route handler:**
 
 ```go
-agent.RegisterRoute("/search", "GET", func(ctx context.Context, w http.ResponseWriter, r *http.Request) {
-    q := r.URL.Query().Get("q")
-    results := doSearch(ctx, q) // your business logic
-    views.SearchResults(results).Render(ctx, w)
-}, agentsdk.RouteOpts{Access: agentsdk.AccessUser, Description: "Search results partial"})
+agent.RegisterRoute(&agentsdk.Route{
+    Method: "GET",
+    Path:   "/search",
+    Handler: func(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+        q := r.URL.Query().Get("q")
+        results := doSearch(ctx, q) // your business logic
+        views.SearchResults(results).Render(ctx, w)
+    },
+    Access:      agentsdk.AccessUser,
+    Description: "Search results partial",
+})
 ```
 
 **Key patterns:**
@@ -577,16 +611,18 @@ agent.RegisterRoute("/search", "GET", func(ctx context.Context, w http.ResponseW
 Returns `*ConnectionHandle` for type-safe proxied API calls.
 
 ```go
-spotify := agent.RegisterConnection("spotify", agentsdk.ConnectionDef{
-    Name:        "Spotify",
-    Description: "Spotify Web API for music playback and search",
-    AuthMode:    "oauth",
-    AuthURL:     "https://accounts.spotify.com/authorize",
-    TokenURL:    "https://accounts.spotify.com/api/token",
-    BaseURL:     "https://api.spotify.com",
-    Scopes:      []string{"user-read-playback-state", "user-modify-playback-state"},
+spotify := agent.RegisterConnection(&agentsdk.Connection{
+    Slug:          "spotify",
+    Name:          "Spotify",
+    Description:   "Spotify Web API for music playback and search",
+    AuthMode:      "oauth",
+    AuthURL:       "https://accounts.spotify.com/authorize",
+    TokenURL:      "https://accounts.spotify.com/api/token",
+    BaseURL:       "https://api.spotify.com",
+    Scopes:        []string{"user-read-playback-state", "user-modify-playback-state"},
     AuthInjection: agentsdk.AuthInjection{Type: "bearer"},
-    LLMHint: "All Spotify API paths start with /v1/.",
+    LLMHint:       "All Spotify API paths start with /v1/.",
+    Access:        agentsdk.AccessUser,
 })
 
 // Use the handle in Go code:
@@ -597,7 +633,7 @@ spotify.Request(ctx, "PUT", "/v1/me/player/pause", nil)                 // no bo
 
 **LLMHint** is injected into the `run_js` tool description so the runtime LLM knows how to use the connection correctly (e.g., required path prefixes). Always set this when the API has non-obvious conventions.
 
-**AuthMode values:** `"oauth"`, `"token"`
+**AuthMode values:** `"oauth"`, `"token"`, `"none"`
 
 **AuthInjection types:**
 - `"bearer"` — Authorization: Bearer {token}
@@ -609,16 +645,17 @@ spotify.Request(ctx, "PUT", "/v1/me/player/pause", nil)                 // no bo
 Returns `*MCPHandle` for calling tools from Go. The runtime LLM accesses MCP tools via JS objects: `mcp_{slug}.listTools()` and `mcp_{slug}.callTool(name, args)`.
 
 ```go
-github := agent.RegisterMCP("github", agentsdk.MCPDef{
+github := agent.RegisterMCP(&agentsdk.MCP{
+    Slug:     "github",
     Name:     "GitHub",
     URL:      "https://api.githubcopilot.com/mcp",
     AuthMode: "oauth_discovery",  // RFC 9728 auto-discovery
+    Access:   agentsdk.AccessUser,
 })
 
 // Use the handle in Go code:
 result, _ := github.CallTool(ctx, "search_repos", map[string]any{"query": "test"})
 tools, _ := github.ListTools(ctx)
-toolSet, _ := github.Tools(ctx)  // returns tool.Set for goai stream calls
 ```
 
 **AuthMode values:** `"oauth_discovery"` (RFC 9728/8414 auto), `"oauth"` (manual URLs), `"token"` (static secret), `"none"` (no auth)
@@ -638,17 +675,18 @@ Undeclared slugs still work — they fall through to the capability default and 
 **Signature:**
 
 ```go
-agent.RegisterModel("summarize", agentsdk.ModelSlotOpts{
+agent.RegisterModel(&agentsdk.ModelSlot{
+    Slug:        "summarize",
     Capability:  agentsdk.CapText,
     Description: "Short summaries for weekly reports",
 })
 // Later, in a handler:
-model := agent.LLM(ctx, "summarize", agentsdk.ModelDef{})
+model := agent.LLM(ctx, "summarize", agentsdk.ModelOpts{})
 ```
 
 Capabilities map to the SDK method and correspond to the admin UI capability rows:
 
-- `CapText` / `CapVision` → `agent.LLM(ctx, slug, agentsdk.ModelDef{Capability: ...})`
+- `CapText` / `CapVision` → `agent.LLM(ctx, slug, agentsdk.ModelOpts{Capability: ...})`
 - `CapImage` → `agent.ImageModel(ctx, slug, ...)`
 - `CapSpeech` → `agent.SpeechModel(ctx, slug, ...)` (TTS)
 - `CapTranscription` → `agent.TranscriptionModel(ctx, slug, ...)` (STT)
@@ -661,7 +699,11 @@ The built-in VM helpers (`transcribeAudio`, `generateImage`, `generateSpeech`, `
 Returns `*TopicHandle` for publishing notifications from Go code (crons, webhooks). Users subscribe via the UI; the runtime LLM can subscribe the current conversation via `topic_{slug}.subscribe()`.
 
 ```go
-alerts := agent.RegisterTopic("alerts", "System alerts and notifications")
+alerts := agent.RegisterTopic(&agentsdk.Topic{
+    Slug:        "alerts",
+    Description: "System alerts and notifications",
+    Access:      agentsdk.AccessUser,
+})
 
 // Publish from a cron or webhook handler:
 alerts.Publish(ctx, []agentsdk.DisplayPart{
@@ -681,11 +723,11 @@ yourself.
 
 ```go
 // LLM + media — all take ctx-first
-model := agent.LLM(ctx, slug, agentsdk.ModelDef{})                  // streaming language model
-agent.ImageModel(ctx, slug, agentsdk.ModelDef{})                    // image generation
-agent.SpeechModel(ctx, slug, agentsdk.ModelDef{})                   // text-to-speech
-agent.TranscriptionModel(ctx, slug, agentsdk.ModelDef{})            // speech-to-text
-agent.EmbeddingModel(ctx, slug, agentsdk.ModelDef{})                // embeddings
+model := agent.LLM(ctx, slug, agentsdk.ModelOpts{})                 // streaming language model
+agent.ImageModel(ctx, slug, agentsdk.ModelOpts{})                   // image generation
+agent.SpeechModel(ctx, slug, agentsdk.ModelOpts{})                  // text-to-speech
+agent.TranscriptionModel(ctx, slug, agentsdk.ModelOpts{})           // speech-to-text
+agent.EmbeddingModel(ctx, slug, agentsdk.ModelOpts{})               // embeddings
 
 // Logging — appended to the current run (visible in the Runs UI);
 // falls through to process zap log if no run is bound.

@@ -151,7 +151,7 @@ func TestUpsertConnection(t *testing.T) {
 	ah := testAgentHandler()
 	agentID := createTestAgent(t)
 
-	def := agentsdk.ConnectionDef{
+	def := agentsdk.Connection{
 		Name:        "GitHub",
 		Description: "GitHub API access",
 		AuthMode:    "oauth",
