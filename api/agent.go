@@ -74,7 +74,7 @@ func (h *agentHandler) UpsertConnection(w http.ResponseWriter, r *http.Request) 
 		Slug:              slug,
 		Name:              def.Name,
 		Description:       def.Description,
-		AuthMode:          def.AuthMode,
+		AuthMode:          string(def.AuthMode),
 		AuthUrl:           def.AuthURL,
 		TokenUrl:          def.TokenURL,
 		BaseUrl:           def.BaseURL,

@@ -38,7 +38,7 @@ func (h *agentHandler) UpsertMCPServer(w http.ResponseWriter, r *http.Request) {
 
 	// For oauth_discovery, resolve auth/token URLs via RFC 9728/8414 discovery.
 	// Errors are non-fatal — store the server anyway; discovery can be retried.
-	if def.AuthMode == "oauth_discovery" && def.AuthURL == "" {
+	if def.AuthMode == agentsdk.MCPAuthOAuthDiscovery && def.AuthURL == "" {
 		result, err := discoverMCPAuth(r.Context(), def.URL)
 		if err != nil {
 			h.logger.Warn("MCP OAuth discovery failed", zap.String("slug", slug), zap.Error(err))
@@ -63,7 +63,7 @@ func (h *agentHandler) UpsertMCPServer(w http.ResponseWriter, r *http.Request) {
 		Slug:     slug,
 		Name:     def.Name,
 		Url:      def.URL,
-		AuthMode: def.AuthMode,
+		AuthMode: string(def.AuthMode),
 		AuthUrl:  def.AuthURL,
 		TokenUrl: def.TokenURL,
 		Scopes:   scopes,
