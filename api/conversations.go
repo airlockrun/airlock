@@ -466,6 +466,7 @@ func (h *conversationsHandler) Prompt(w http.ResponseWriter, r *http.Request) {
 		SupportedModalities: modalities,
 		ExtraSystemPrompt:   extraSystemPrompt,
 		ForceCompact:        forceCompact,
+		CallerAccess:        access,
 	}
 	if forceCompact {
 		// /compact doesn't carry a user-authored text; Sol produces the

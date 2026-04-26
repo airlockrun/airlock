@@ -67,6 +67,7 @@ func (h *agentHandler) UpsertMCPServer(w http.ResponseWriter, r *http.Request) {
 		AuthUrl:  def.AuthURL,
 		TokenUrl: def.TokenURL,
 		Scopes:   scopes,
+		Access:   string(def.Access),
 	}); err != nil {
 		h.logger.Error("upsert MCP server failed", zap.Error(err))
 		writeJSONError(w, http.StatusInternalServerError, "failed to register MCP server")

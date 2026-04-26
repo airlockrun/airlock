@@ -99,6 +99,7 @@ type AgentMcpServer struct {
 	LastSyncedAt   pgtype.Timestamptz `json:"last_synced_at"`
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+	Access         string             `json:"access"`
 }
 
 type AgentMember struct {
@@ -161,6 +162,7 @@ type AgentTopic struct {
 	Description string             `json:"description"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+	Access      string             `json:"access"`
 }
 
 type AgentWebhook struct {
@@ -228,6 +230,7 @@ type Connection struct {
 	TokenExpiresAt    pgtype.Timestamptz `json:"token_expires_at"`
 	CreatedAt         pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
+	Access            string             `json:"access"`
 }
 
 type OauthState struct {

@@ -1,8 +1,9 @@
 -- name: UpsertTopic :exec
-INSERT INTO agent_topics (agent_id, slug, description)
-VALUES (@agent_id, @slug, @description)
+INSERT INTO agent_topics (agent_id, slug, description, access)
+VALUES (@agent_id, @slug, @description, @access)
 ON CONFLICT (agent_id, slug) DO UPDATE SET
     description = EXCLUDED.description,
+    access = EXCLUDED.access,
     updated_at = now();
 
 -- name: ListTopicsByAgent :many

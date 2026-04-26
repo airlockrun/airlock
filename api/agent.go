@@ -82,6 +82,7 @@ func (h *agentHandler) UpsertConnection(w http.ResponseWriter, r *http.Request) 
 		AuthInjection:     authInjection,
 		SetupInstructions: def.SetupInstructions,
 		Config:            []byte("{}"),
+		Access:            string(def.Access),
 	})
 	if err != nil {
 		h.logger.Error("upsert connection failed", zap.Error(err))
@@ -330,6 +331,7 @@ func (h *agentHandler) Sync(w http.ResponseWriter, r *http.Request) {
 			AgentID:     pgAgentID,
 			Slug:        t.Slug,
 			Description: t.Description,
+			Access:      t.Access,
 		}); err != nil {
 			h.logger.Error("upsert topic failed", zap.Error(err))
 			writeJSONError(w, http.StatusInternalServerError, "failed to sync topics")
@@ -363,6 +365,7 @@ func (h *agentHandler) Sync(w http.ResponseWriter, r *http.Request) {
 			AuthUrl:  mcp.AuthURL,
 			TokenUrl: mcp.TokenURL,
 			Scopes:   scopes,
+			Access:   mcp.Access,
 		}); err != nil {
 			h.logger.Error("upsert MCP server failed", zap.Error(err))
 			writeJSONError(w, http.StatusInternalServerError, "failed to sync MCP servers")
