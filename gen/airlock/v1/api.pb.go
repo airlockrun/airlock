@@ -3837,6 +3837,69 @@ func (x *ErrorResponse) GetDetail() string {
 	return ""
 }
 
+// HealthResponse reports the liveness/readiness of the airlock process and its
+// hard dependencies (Postgres, S3). HTTP 200 means status="ok"; HTTP 503 means
+// any dependency is down (per-subsystem booleans show which).
+type HealthResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Status        string                 `protobuf:"bytes,1,opt,name=status,proto3" json:"status,omitempty"` // "ok" | "degraded"
+	Db            bool                   `protobuf:"varint,2,opt,name=db,proto3" json:"db,omitempty"`        // Postgres reachable
+	S3            bool                   `protobuf:"varint,3,opt,name=s3,proto3" json:"s3,omitempty"`        // S3/MinIO reachable
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *HealthResponse) Reset() {
+	*x = HealthResponse{}
+	mi := &file_airlock_v1_api_proto_msgTypes[71]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *HealthResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*HealthResponse) ProtoMessage() {}
+
+func (x *HealthResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_airlock_v1_api_proto_msgTypes[71]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use HealthResponse.ProtoReflect.Descriptor instead.
+func (*HealthResponse) Descriptor() ([]byte, []int) {
+	return file_airlock_v1_api_proto_rawDescGZIP(), []int{71}
+}
+
+func (x *HealthResponse) GetStatus() string {
+	if x != nil {
+		return x.Status
+	}
+	return ""
+}
+
+func (x *HealthResponse) GetDb() bool {
+	if x != nil {
+		return x.Db
+	}
+	return false
+}
+
+func (x *HealthResponse) GetS3() bool {
+	if x != nil {
+		return x.S3
+	}
+	return false
+}
+
 var File_airlock_v1_api_proto protoreflect.FileDescriptor
 
 const file_airlock_v1_api_proto_rawDesc = "" +
@@ -4094,7 +4157,11 @@ const file_airlock_v1_api_proto_rawDesc = "" +
 	"\bsettings\x18\x01 \x01(\v2\x1e.airlock.v1.SystemSettingsInfoR\bsettings\"=\n" +
 	"\rErrorResponse\x12\x14\n" +
 	"\x05error\x18\x01 \x01(\tR\x05error\x12\x16\n" +
-	"\x06detail\x18\x02 \x01(\tR\x06detailB8Z6github.com/airlockrun/airlock/gen/airlock/v1;airlockv1b\x06proto3"
+	"\x06detail\x18\x02 \x01(\tR\x06detail\"H\n" +
+	"\x0eHealthResponse\x12\x16\n" +
+	"\x06status\x18\x01 \x01(\tR\x06status\x12\x0e\n" +
+	"\x02db\x18\x02 \x01(\bR\x02db\x12\x0e\n" +
+	"\x02s3\x18\x03 \x01(\bR\x02s3B8Z6github.com/airlockrun/airlock/gen/airlock/v1;airlockv1b\x06proto3"
 
 var (
 	file_airlock_v1_api_proto_rawDescOnce sync.Once
@@ -4108,7 +4175,7 @@ func file_airlock_v1_api_proto_rawDescGZIP() []byte {
 	return file_airlock_v1_api_proto_rawDescData
 }
 
-var file_airlock_v1_api_proto_msgTypes = make([]protoimpl.MessageInfo, 71)
+var file_airlock_v1_api_proto_msgTypes = make([]protoimpl.MessageInfo, 72)
 var file_airlock_v1_api_proto_goTypes = []any{
 	(*RegisterRequest)(nil),                // 0: airlock.v1.RegisterRequest
 	(*RegisterResponse)(nil),               // 1: airlock.v1.RegisterResponse
@@ -4181,78 +4248,79 @@ var file_airlock_v1_api_proto_goTypes = []any{
 	(*UpdateSystemSettingsRequest)(nil),    // 68: airlock.v1.UpdateSystemSettingsRequest
 	(*UpdateSystemSettingsResponse)(nil),   // 69: airlock.v1.UpdateSystemSettingsResponse
 	(*ErrorResponse)(nil),                  // 70: airlock.v1.ErrorResponse
-	(*User)(nil),                           // 71: airlock.v1.User
-	(*Tenant)(nil),                         // 72: airlock.v1.Tenant
-	(*Provider)(nil),                       // 73: airlock.v1.Provider
-	(*ProviderInfo)(nil),                   // 74: airlock.v1.ProviderInfo
-	(*ModelInfo)(nil),                      // 75: airlock.v1.ModelInfo
-	(*AgentInfo)(nil),                      // 76: airlock.v1.AgentInfo
-	(*ConnectionInfo)(nil),                 // 77: airlock.v1.ConnectionInfo
-	(*WebhookInfo)(nil),                    // 78: airlock.v1.WebhookInfo
-	(*CronInfo)(nil),                       // 79: airlock.v1.CronInfo
-	(*RouteInfo)(nil),                      // 80: airlock.v1.RouteInfo
-	(*AgentBuildInfo)(nil),                 // 81: airlock.v1.AgentBuildInfo
-	(*RunInfo)(nil),                        // 82: airlock.v1.RunInfo
-	(*AgentMessageInfo)(nil),               // 83: airlock.v1.AgentMessageInfo
-	(*ConversationInfo)(nil),               // 84: airlock.v1.ConversationInfo
-	(*ToolInfo)(nil),                       // 85: airlock.v1.ToolInfo
-	(*timestamppb.Timestamp)(nil),          // 86: google.protobuf.Timestamp
-	(*BridgeInfo)(nil),                     // 87: airlock.v1.BridgeInfo
-	(*ProviderCapabilityInfo)(nil),         // 88: airlock.v1.ProviderCapabilityInfo
-	(*PlatformIdentityInfo)(nil),           // 89: airlock.v1.PlatformIdentityInfo
-	(*FileEntry)(nil),                      // 90: airlock.v1.FileEntry
-	(*TopicInfo)(nil),                      // 91: airlock.v1.TopicInfo
-	(*SystemSettingsInfo)(nil),             // 92: airlock.v1.SystemSettingsInfo
+	(*HealthResponse)(nil),                 // 71: airlock.v1.HealthResponse
+	(*User)(nil),                           // 72: airlock.v1.User
+	(*Tenant)(nil),                         // 73: airlock.v1.Tenant
+	(*Provider)(nil),                       // 74: airlock.v1.Provider
+	(*ProviderInfo)(nil),                   // 75: airlock.v1.ProviderInfo
+	(*ModelInfo)(nil),                      // 76: airlock.v1.ModelInfo
+	(*AgentInfo)(nil),                      // 77: airlock.v1.AgentInfo
+	(*ConnectionInfo)(nil),                 // 78: airlock.v1.ConnectionInfo
+	(*WebhookInfo)(nil),                    // 79: airlock.v1.WebhookInfo
+	(*CronInfo)(nil),                       // 80: airlock.v1.CronInfo
+	(*RouteInfo)(nil),                      // 81: airlock.v1.RouteInfo
+	(*AgentBuildInfo)(nil),                 // 82: airlock.v1.AgentBuildInfo
+	(*RunInfo)(nil),                        // 83: airlock.v1.RunInfo
+	(*AgentMessageInfo)(nil),               // 84: airlock.v1.AgentMessageInfo
+	(*ConversationInfo)(nil),               // 85: airlock.v1.ConversationInfo
+	(*ToolInfo)(nil),                       // 86: airlock.v1.ToolInfo
+	(*timestamppb.Timestamp)(nil),          // 87: google.protobuf.Timestamp
+	(*BridgeInfo)(nil),                     // 88: airlock.v1.BridgeInfo
+	(*ProviderCapabilityInfo)(nil),         // 89: airlock.v1.ProviderCapabilityInfo
+	(*PlatformIdentityInfo)(nil),           // 90: airlock.v1.PlatformIdentityInfo
+	(*FileEntry)(nil),                      // 91: airlock.v1.FileEntry
+	(*TopicInfo)(nil),                      // 92: airlock.v1.TopicInfo
+	(*SystemSettingsInfo)(nil),             // 93: airlock.v1.SystemSettingsInfo
 }
 var file_airlock_v1_api_proto_depIdxs = []int32{
-	71, // 0: airlock.v1.RegisterResponse.user:type_name -> airlock.v1.User
-	72, // 1: airlock.v1.RegisterResponse.tenant:type_name -> airlock.v1.Tenant
-	71, // 2: airlock.v1.LoginResponse.user:type_name -> airlock.v1.User
-	71, // 3: airlock.v1.CreateUserResponse.user:type_name -> airlock.v1.User
-	71, // 4: airlock.v1.ListUsersResponse.users:type_name -> airlock.v1.User
-	73, // 5: airlock.v1.CreateProviderResponse.provider:type_name -> airlock.v1.Provider
-	73, // 6: airlock.v1.ListProvidersResponse.providers:type_name -> airlock.v1.Provider
-	73, // 7: airlock.v1.UpdateProviderResponse.provider:type_name -> airlock.v1.Provider
-	74, // 8: airlock.v1.ListCatalogProvidersResponse.providers:type_name -> airlock.v1.ProviderInfo
-	75, // 9: airlock.v1.ListCatalogModelsResponse.models:type_name -> airlock.v1.ModelInfo
-	76, // 10: airlock.v1.CreateAgentResponse.agent:type_name -> airlock.v1.AgentInfo
-	76, // 11: airlock.v1.ListAgentsResponse.agents:type_name -> airlock.v1.AgentInfo
-	76, // 12: airlock.v1.GetAgentDetailResponse.agent:type_name -> airlock.v1.AgentInfo
-	77, // 13: airlock.v1.GetAgentDetailResponse.connections:type_name -> airlock.v1.ConnectionInfo
-	78, // 14: airlock.v1.GetAgentDetailResponse.webhooks:type_name -> airlock.v1.WebhookInfo
-	79, // 15: airlock.v1.GetAgentDetailResponse.crons:type_name -> airlock.v1.CronInfo
-	80, // 16: airlock.v1.GetAgentDetailResponse.routes:type_name -> airlock.v1.RouteInfo
-	76, // 17: airlock.v1.UpdateAgentResponse.agent:type_name -> airlock.v1.AgentInfo
+	72, // 0: airlock.v1.RegisterResponse.user:type_name -> airlock.v1.User
+	73, // 1: airlock.v1.RegisterResponse.tenant:type_name -> airlock.v1.Tenant
+	72, // 2: airlock.v1.LoginResponse.user:type_name -> airlock.v1.User
+	72, // 3: airlock.v1.CreateUserResponse.user:type_name -> airlock.v1.User
+	72, // 4: airlock.v1.ListUsersResponse.users:type_name -> airlock.v1.User
+	74, // 5: airlock.v1.CreateProviderResponse.provider:type_name -> airlock.v1.Provider
+	74, // 6: airlock.v1.ListProvidersResponse.providers:type_name -> airlock.v1.Provider
+	74, // 7: airlock.v1.UpdateProviderResponse.provider:type_name -> airlock.v1.Provider
+	75, // 8: airlock.v1.ListCatalogProvidersResponse.providers:type_name -> airlock.v1.ProviderInfo
+	76, // 9: airlock.v1.ListCatalogModelsResponse.models:type_name -> airlock.v1.ModelInfo
+	77, // 10: airlock.v1.CreateAgentResponse.agent:type_name -> airlock.v1.AgentInfo
+	77, // 11: airlock.v1.ListAgentsResponse.agents:type_name -> airlock.v1.AgentInfo
+	77, // 12: airlock.v1.GetAgentDetailResponse.agent:type_name -> airlock.v1.AgentInfo
+	78, // 13: airlock.v1.GetAgentDetailResponse.connections:type_name -> airlock.v1.ConnectionInfo
+	79, // 14: airlock.v1.GetAgentDetailResponse.webhooks:type_name -> airlock.v1.WebhookInfo
+	80, // 15: airlock.v1.GetAgentDetailResponse.crons:type_name -> airlock.v1.CronInfo
+	81, // 16: airlock.v1.GetAgentDetailResponse.routes:type_name -> airlock.v1.RouteInfo
+	77, // 17: airlock.v1.UpdateAgentResponse.agent:type_name -> airlock.v1.AgentInfo
 	27, // 18: airlock.v1.AgentModelConfig.slots:type_name -> airlock.v1.ModelSlotInfo
 	28, // 19: airlock.v1.GetAgentModelConfigResponse.config:type_name -> airlock.v1.AgentModelConfig
 	28, // 20: airlock.v1.UpdateAgentModelConfigRequest.config:type_name -> airlock.v1.AgentModelConfig
 	28, // 21: airlock.v1.UpdateAgentModelConfigResponse.config:type_name -> airlock.v1.AgentModelConfig
-	81, // 22: airlock.v1.ListAgentBuildsResponse.builds:type_name -> airlock.v1.AgentBuildInfo
-	81, // 23: airlock.v1.GetAgentBuildResponse.build:type_name -> airlock.v1.AgentBuildInfo
-	82, // 24: airlock.v1.ListRunsResponse.runs:type_name -> airlock.v1.RunInfo
-	82, // 25: airlock.v1.GetRunResponse.run:type_name -> airlock.v1.RunInfo
-	83, // 26: airlock.v1.GetRunResponse.messages:type_name -> airlock.v1.AgentMessageInfo
-	84, // 27: airlock.v1.CreateConversationResponse.conversation:type_name -> airlock.v1.ConversationInfo
-	84, // 28: airlock.v1.ListConversationsResponse.conversations:type_name -> airlock.v1.ConversationInfo
-	84, // 29: airlock.v1.GetConversationResponse.conversation:type_name -> airlock.v1.ConversationInfo
-	83, // 30: airlock.v1.GetConversationResponse.messages:type_name -> airlock.v1.AgentMessageInfo
+	82, // 22: airlock.v1.ListAgentBuildsResponse.builds:type_name -> airlock.v1.AgentBuildInfo
+	82, // 23: airlock.v1.GetAgentBuildResponse.build:type_name -> airlock.v1.AgentBuildInfo
+	83, // 24: airlock.v1.ListRunsResponse.runs:type_name -> airlock.v1.RunInfo
+	83, // 25: airlock.v1.GetRunResponse.run:type_name -> airlock.v1.RunInfo
+	84, // 26: airlock.v1.GetRunResponse.messages:type_name -> airlock.v1.AgentMessageInfo
+	85, // 27: airlock.v1.CreateConversationResponse.conversation:type_name -> airlock.v1.ConversationInfo
+	85, // 28: airlock.v1.ListConversationsResponse.conversations:type_name -> airlock.v1.ConversationInfo
+	85, // 29: airlock.v1.GetConversationResponse.conversation:type_name -> airlock.v1.ConversationInfo
+	84, // 30: airlock.v1.GetConversationResponse.messages:type_name -> airlock.v1.AgentMessageInfo
 	41, // 31: airlock.v1.GetConversationResponse.pending_confirmation:type_name -> airlock.v1.PendingConfirmation
-	83, // 32: airlock.v1.PaginatedMessagesResponse.messages:type_name -> airlock.v1.AgentMessageInfo
-	78, // 33: airlock.v1.ListWebhooksResponse.webhooks:type_name -> airlock.v1.WebhookInfo
-	79, // 34: airlock.v1.ListCronsResponse.crons:type_name -> airlock.v1.CronInfo
-	85, // 35: airlock.v1.ListToolsResponse.tools:type_name -> airlock.v1.ToolInfo
-	86, // 36: airlock.v1.AgentMemberInfo.created_at:type_name -> google.protobuf.Timestamp
+	84, // 32: airlock.v1.PaginatedMessagesResponse.messages:type_name -> airlock.v1.AgentMessageInfo
+	79, // 33: airlock.v1.ListWebhooksResponse.webhooks:type_name -> airlock.v1.WebhookInfo
+	80, // 34: airlock.v1.ListCronsResponse.crons:type_name -> airlock.v1.CronInfo
+	86, // 35: airlock.v1.ListToolsResponse.tools:type_name -> airlock.v1.ToolInfo
+	87, // 36: airlock.v1.AgentMemberInfo.created_at:type_name -> google.protobuf.Timestamp
 	49, // 37: airlock.v1.ListAgentMembersResponse.members:type_name -> airlock.v1.AgentMemberInfo
-	77, // 38: airlock.v1.ListConnectionsResponse.connections:type_name -> airlock.v1.ConnectionInfo
-	86, // 39: airlock.v1.CredentialStatusResponse.token_expires_at:type_name -> google.protobuf.Timestamp
-	87, // 40: airlock.v1.ListBridgesResponse.bridges:type_name -> airlock.v1.BridgeInfo
-	88, // 41: airlock.v1.ListCapabilitiesResponse.providers:type_name -> airlock.v1.ProviderCapabilityInfo
-	89, // 42: airlock.v1.ListPlatformIdentitiesResponse.identities:type_name -> airlock.v1.PlatformIdentityInfo
-	90, // 43: airlock.v1.ListFilesResponse.files:type_name -> airlock.v1.FileEntry
-	91, // 44: airlock.v1.ListTopicsResponse.topics:type_name -> airlock.v1.TopicInfo
-	92, // 45: airlock.v1.GetSystemSettingsResponse.settings:type_name -> airlock.v1.SystemSettingsInfo
-	92, // 46: airlock.v1.UpdateSystemSettingsRequest.settings:type_name -> airlock.v1.SystemSettingsInfo
-	92, // 47: airlock.v1.UpdateSystemSettingsResponse.settings:type_name -> airlock.v1.SystemSettingsInfo
+	78, // 38: airlock.v1.ListConnectionsResponse.connections:type_name -> airlock.v1.ConnectionInfo
+	87, // 39: airlock.v1.CredentialStatusResponse.token_expires_at:type_name -> google.protobuf.Timestamp
+	88, // 40: airlock.v1.ListBridgesResponse.bridges:type_name -> airlock.v1.BridgeInfo
+	89, // 41: airlock.v1.ListCapabilitiesResponse.providers:type_name -> airlock.v1.ProviderCapabilityInfo
+	90, // 42: airlock.v1.ListPlatformIdentitiesResponse.identities:type_name -> airlock.v1.PlatformIdentityInfo
+	91, // 43: airlock.v1.ListFilesResponse.files:type_name -> airlock.v1.FileEntry
+	92, // 44: airlock.v1.ListTopicsResponse.topics:type_name -> airlock.v1.TopicInfo
+	93, // 45: airlock.v1.GetSystemSettingsResponse.settings:type_name -> airlock.v1.SystemSettingsInfo
+	93, // 46: airlock.v1.UpdateSystemSettingsRequest.settings:type_name -> airlock.v1.SystemSettingsInfo
+	93, // 47: airlock.v1.UpdateSystemSettingsResponse.settings:type_name -> airlock.v1.SystemSettingsInfo
 	48, // [48:48] is the sub-list for method output_type
 	48, // [48:48] is the sub-list for method input_type
 	48, // [48:48] is the sub-list for extension type_name
@@ -4275,7 +4343,7 @@ func file_airlock_v1_api_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_airlock_v1_api_proto_rawDesc), len(file_airlock_v1_api_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   71,
+			NumMessages:   72,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

@@ -103,6 +103,15 @@ func NewS3ClientFromParams(endpoint, accessKey, secretKey, bucket, region string
 }
 
 // EnsureBucket creates the bucket if it doesn't exist.
+// Ping is a read-only liveness check: HeadBucket on the configured bucket.
+// Returns nil if S3/MinIO is reachable and the bucket exists.
+func (c *S3Client) Ping(ctx context.Context) error {
+	_, err := c.client.HeadBucket(ctx, &s3.HeadBucketInput{
+		Bucket: &c.bucket,
+	})
+	return err
+}
+
 func (c *S3Client) EnsureBucket(ctx context.Context) error {
 	_, err := c.client.HeadBucket(ctx, &s3.HeadBucketInput{
 		Bucket: &c.bucket,

@@ -117,6 +117,11 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	usersHandler := NewUsersHandler(cfg.DB)
 	sysSettingsHandler := &settingsHandler{db: cfg.DB, encryptor: cfg.Encryptor, logger: cfg.Logger.Named("settings")}
 
+	// Health check (public, no auth — reverse proxies and orchestrators need
+	// to hit this without credentials). 200 if DB+S3 reachable, 503 otherwise.
+	healthH := newHealthHandler(cfg.DB, cfg.S3Client, cfg.Logger.Named("health"))
+	r.Get("/health", healthH.Check)
+
 	// WebSocket endpoint (public, auth via query param)
 	wsHandler := NewWSHandler(cfg.DB, cfg.Hub, cfg.Handler, cfg.JWTSecret, cfg.Logger.Named("ws"))
 	r.Get("/ws", wsHandler.Upgrade)
