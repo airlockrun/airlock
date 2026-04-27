@@ -30,7 +30,7 @@ func (h *agentHandler) UpsertMCPServer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var def agentsdk.MCP
+	var def agentsdk.MCPDef
 	if err := readJSON(r, &def); err != nil {
 		writeJSONError(w, http.StatusBadRequest, "invalid request body")
 		return
@@ -220,7 +220,7 @@ func (h *agentHandler) discoverAllMCPStatus(
 			result = append(result, mcpServerStatus{
 				MCPAuthStatus: agentsdk.MCPAuthStatus{
 					Slug:       server.Slug,
-					AuthMode:   server.AuthMode,
+					AuthMode:   agentsdk.MCPAuth(server.AuthMode),
 					Authorized: false,
 					AuthURL:    buildMCPAuthURL(h.publicURL, agentID, server.Slug, server.AuthMode),
 				},
@@ -240,7 +240,7 @@ func (h *agentHandler) discoverAllMCPStatus(
 			result = append(result, mcpServerStatus{
 				MCPAuthStatus: agentsdk.MCPAuthStatus{
 					Slug:       server.Slug,
-					AuthMode:   server.AuthMode,
+					AuthMode:   agentsdk.MCPAuth(server.AuthMode),
 					Authorized: true,
 				},
 			})
@@ -258,7 +258,7 @@ func (h *agentHandler) discoverAllMCPStatus(
 		result = append(result, mcpServerStatus{
 			MCPAuthStatus: agentsdk.MCPAuthStatus{
 				Slug:       server.Slug,
-				AuthMode:   server.AuthMode,
+				AuthMode:   agentsdk.MCPAuth(server.AuthMode),
 				Authorized: true,
 			},
 			ToolCount: len(tools),

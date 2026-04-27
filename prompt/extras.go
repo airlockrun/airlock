@@ -15,7 +15,7 @@ func RenderExtras(raw []byte, access agentsdk.Access) string {
 	if len(raw) == 0 {
 		return ""
 	}
-	var specs []agentsdk.ExtraPromptSpec
+	var specs []agentsdk.ExtraPromptDef
 	if err := json.Unmarshal(raw, &specs); err != nil {
 		return ""
 	}

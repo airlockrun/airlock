@@ -13,6 +13,27 @@ import (
 	"go.uber.org/zap"
 )
 
+// formatRunLogs renders structured log entries into the flat text shape
+// stored in runs.stdout_log. Levels above info get a "[level] " prefix so
+// the run-detail UI can pick them out without a schema migration.
+func formatRunLogs(logs []agentsdk.LogEntry) string {
+	if len(logs) == 0 {
+		return ""
+	}
+	parts := make([]string, len(logs))
+	for i, l := range logs {
+		switch l.Level {
+		case agentsdk.LogLevelWarn:
+			parts[i] = "[warn] " + l.Message
+		case agentsdk.LogLevelError:
+			parts[i] = "[error] " + l.Message
+		default:
+			parts[i] = l.Message
+		}
+	}
+	return strings.Join(parts, "\n")
+}
+
 // RunComplete handles POST /api/agent/run/complete.
 func (h *agentHandler) RunComplete(w http.ResponseWriter, r *http.Request) {
 	agentID := auth.AgentIDFromContext(r.Context())
@@ -36,7 +57,7 @@ func (h *agentHandler) RunComplete(w http.ResponseWriter, r *http.Request) {
 		Status:       req.Status,
 		ErrorMessage: req.Error,
 		Actions:      req.Actions,
-		StdoutLog:    strings.Join(req.Logs, "\n"),
+		StdoutLog:    formatRunLogs(req.Logs),
 		PanicTrace:   req.PanicTrace,
 	}); err != nil {
 		h.logger.Error("upsert run complete failed", zap.Error(err))

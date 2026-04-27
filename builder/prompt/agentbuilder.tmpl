@@ -823,9 +823,12 @@ agent.TranscriptionModel(ctx, slug, agentsdk.ModelOpts{})           // speech-to
 agent.EmbeddingModel(ctx, slug, agentsdk.ModelOpts{})               // embeddings
 
 // Logging — appended to the current run (visible in the Runs UI);
-// falls through to process zap log if no run is bound.
-agent.Log(ctx, "imported 42 rows")
-agent.Logf(ctx, "imported %d rows", n)                // printf-style sibling of Log
+// falls through to process zap log if no run is bound. The level
+// argument controls how the run UI surfaces the entry.
+agent.Log(ctx, agentsdk.LogLevelInfo, "imported 42 rows")
+agent.Log(ctx, agentsdk.LogLevelWarn, "skipping malformed row")
+agent.Log(ctx, agentsdk.LogLevelError, "import failed: " + err.Error())
+agent.Logf(ctx, agentsdk.LogLevelInfo, "imported %d rows", n)   // printf-style sibling
 
 // Storage — register a zone, then operate via its handle (see RegisterStorage below).
 uploads.Put(ctx, key, reader, contentType)

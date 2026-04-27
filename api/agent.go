@@ -56,7 +56,7 @@ func (h *agentHandler) UpsertConnection(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	var def agentsdk.Connection
+	var def agentsdk.ConnectionDef
 	if err := readJSON(r, &def); err != nil {
 		writeJSONError(w, http.StatusBadRequest, "invalid request body")
 		return
@@ -206,7 +206,7 @@ func (h *agentHandler) Sync(w http.ResponseWriter, r *http.Request) {
 			AgentID:      pgAgentID,
 			Name:         t.Name,
 			Description:  t.Description,
-			Access:       t.Access,
+			Access:       string(t.Access),
 			InputSchema:  inSchema,
 			OutputSchema: outSchema,
 		})
@@ -306,7 +306,7 @@ func (h *agentHandler) Sync(w http.ResponseWriter, r *http.Request) {
 			AgentID:     pgAgentID,
 			Path:        rt.Path,
 			Method:      rt.Method,
-			Access:      rt.Access,
+			Access:      string(rt.Access),
 			Description: rt.Description,
 		}); err != nil {
 			h.logger.Error("upsert route failed", zap.Error(err))
@@ -331,7 +331,7 @@ func (h *agentHandler) Sync(w http.ResponseWriter, r *http.Request) {
 			AgentID:     pgAgentID,
 			Slug:        t.Slug,
 			Description: t.Description,
-			Access:      t.Access,
+			Access:      string(t.Access),
 		}); err != nil {
 			h.logger.Error("upsert topic failed", zap.Error(err))
 			writeJSONError(w, http.StatusInternalServerError, "failed to sync topics")
@@ -361,11 +361,11 @@ func (h *agentHandler) Sync(w http.ResponseWriter, r *http.Request) {
 			Slug:     mcp.Slug,
 			Name:     mcp.Name,
 			Url:      mcp.URL,
-			AuthMode: mcp.AuthMode,
+			AuthMode: string(mcp.AuthMode),
 			AuthUrl:  mcp.AuthURL,
 			TokenUrl: mcp.TokenURL,
 			Scopes:   scopes,
-			Access:   mcp.Access,
+			Access:   string(mcp.Access),
 		}); err != nil {
 			h.logger.Error("upsert MCP server failed", zap.Error(err))
 			writeJSONError(w, http.StatusInternalServerError, "failed to sync MCP servers")
@@ -388,8 +388,8 @@ func (h *agentHandler) Sync(w http.ResponseWriter, r *http.Request) {
 		if err := q.UpsertStorageZone(ctx, dbq.UpsertStorageZoneParams{
 			AgentID:     pgAgentID,
 			Slug:        s.Slug,
-			ReadAccess:  s.Read,
-			WriteAccess: s.Write,
+			ReadAccess:  string(s.Read),
+			WriteAccess: string(s.Write),
 			Description: s.Description,
 		}); err != nil {
 			h.logger.Error("upsert storage zone failed", zap.Error(err))
@@ -510,7 +510,7 @@ func (h *agentHandler) Sync(w http.ResponseWriter, r *http.Request) {
 	}
 	promptRoutes := make([]promptpkg.RouteInfo, len(req.Routes))
 	for i, rt := range req.Routes {
-		promptRoutes[i] = promptpkg.RouteInfo{Method: rt.Method, Path: rt.Path, Access: rt.Access, Description: rt.Description}
+		promptRoutes[i] = promptpkg.RouteInfo{Method: rt.Method, Path: rt.Path, Access: string(rt.Access), Description: rt.Description}
 	}
 
 	// Build agent route URL if agent domain is configured.
