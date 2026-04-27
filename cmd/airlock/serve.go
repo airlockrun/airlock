@@ -158,6 +158,10 @@ func runServe(_ []string) {
 
 	// Warm Docker build cache in background — first agent build will be faster.
 	go buildSvc.WarmBuildCache(ctx)
+	// Warm the runtime go-mod / go-build volumes the build-prompt loop's
+	// direct `go build` invocations consume (distinct cache from the one
+	// above, which only seeds BuildKit's cache mount for `docker build`).
+	go buildSvc.WarmRuntimeCaches(ctx)
 
 	// Create Hub and PubSub
 	hub := realtime.NewHub(logger.Named("hub"))

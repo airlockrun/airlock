@@ -129,6 +129,81 @@ func (b *BuildService) WarmBuildCache(ctx context.Context) {
 	b.logger.Info("build cache warmed")
 }
 
+// WarmRuntimeCaches seeds the named volumes that the build-prompt loop's
+// direct `go mod tidy` / `go build` invocations consume — distinct from
+// the BuildKit cache mount that WarmBuildCache populates. The agent-builder
+// container at runtime sets GOMODCACHE=/tmp/go-mod and GOCACHE=/tmp/go-cache
+// (see container/docker.go) backed by the airlock-go-mod-cache and
+// airlock-go-build-cache Docker named volumes. Without this seed, the
+// first build-prompt iteration pays full download cost for ~25 modules
+// in agentsdk+sol's transitive dep tree. The volumes persist across
+// airlock restarts.
+func (b *BuildService) WarmRuntimeCaches(ctx context.Context) {
+	if b.cfg.AgentBuilderImage == "" {
+		b.logger.Warn("warm runtime caches: agent-builder image empty — skipping")
+		return
+	}
+
+	dir, err := os.MkdirTemp("", "airlock-runtime-warm-*")
+	if err != nil {
+		b.logger.Warn("warm runtime caches: create temp dir", zap.Error(err))
+		return
+	}
+	defer os.RemoveAll(dir)
+
+	if err := scaffold.Materialize(dir, scaffold.ScaffoldData{
+		AgentID:         "runtime-warm",
+		Module:          "agent",
+		GoVersion:       "1.26",
+		AgentSDKVersion: "v" + agentsdk.Version,
+	}); err != nil {
+		b.logger.Warn("warm runtime caches: scaffold", zap.Error(err))
+		return
+	}
+
+	// Stub main.go — same rationale as WarmBuildCache. We just want a
+	// successful `go mod tidy && go build` to populate the volumes.
+	stub := []byte("package main\n\nimport _ \"github.com/a-h/templ\"\nimport _ \"github.com/airlockrun/agentsdk\"\n\nfunc main() {}\n")
+	if err := os.WriteFile(filepath.Join(dir, "main.go"), stub, 0o644); err != nil {
+		b.logger.Warn("warm runtime caches: write stub main.go", zap.Error(err))
+		return
+	}
+
+	uid := os.Getuid()
+	gid := os.Getgid()
+
+	args := []string{
+		"run", "--rm",
+		"--user", fmt.Sprintf("%d:%d", uid, gid),
+		"-e", "GOMODCACHE=/tmp/go-mod",
+		"-e", "GOCACHE=/tmp/go-cache",
+		"-e", "GOFLAGS=-buildvcs=false",
+		"-v", "airlock-go-mod-cache:/tmp/go-mod",
+		"-v", "airlock-go-build-cache:/tmp/go-cache",
+		"-v", dir + ":/workspace",
+		"-w", "/workspace",
+	}
+	// Dev: overlay the live owned libs the same way solrunner does so the
+	// go.mod replace directives resolve to the dev tree, not the image's
+	// baked /libs. Prevents tidy from picking up stale baked sources.
+	if b.cfg.AgentLibsPath != "" {
+		for _, sub := range []string{"agentsdk", "goai", "sol"} {
+			args = append(args, "-v", filepath.Join(b.cfg.AgentLibsPath, sub)+":/libs/"+sub+":ro")
+		}
+	}
+	args = append(args, b.cfg.AgentBuilderImage,
+		"sh", "-c", "go mod tidy && go build -o /tmp/agent .")
+
+	cmd := exec.CommandContext(ctx, "docker", args...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		b.logger.Warn("warm runtime caches: docker run failed", zap.String("output", string(out)), zap.Error(err))
+		return
+	}
+
+	b.logger.Info("runtime caches warmed")
+}
+
 // runAndStream runs a command and streams its combined output line by line via logFn.
 // On failure, the error includes the last few lines of output for diagnostics.
 func runAndStream(cmd *exec.Cmd, logFn func(string)) error {
