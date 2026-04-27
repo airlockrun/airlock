@@ -124,7 +124,7 @@ func Load() *Config {
 		ContainerImage:   envOr("CONTAINER_IMAGE", "airlock-toolserver"),
 
 		// Build pipeline
-		AgentMonorepoPath: envOr("AGENT_MONOREPO_PATH", "/var/lib/airlock/agents"),
+		AgentMonorepoPath: envOr("AGENT_MONOREPO_PATH", "/var/lib/airlock/monorepo"),
 		AgentBuilderImage: envOr("AGENT_BUILDER_IMAGE", DefaultAgentBuilderImage),
 		AgentBaseImage:    envOr("AGENT_BASE_IMAGE", "airlock-agent-base"),
 		AgentRegistryURL:  os.Getenv("AGENT_REGISTRY_URL"),
