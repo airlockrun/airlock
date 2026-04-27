@@ -1,0 +1,44 @@
+# Per-Dockerfile ignore for the frontend image build.
+# The default .dockerignore excludes frontend/ entirely (good for the Go
+# backend build, fatal for this build); this file overrides that.
+
+# VCS + IDE
+.git/
+.github/
+.idea/
+.vscode/
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# node_modules — installed fresh inside the image. Excluded everywhere.
+**/node_modules/
+
+# Backend source — not needed for the frontend image.
+api/
+auth/
+builder/
+cmd/
+config/
+container/
+crypto/
+db/
+oauth/
+proto/
+realtime/
+scaffold/
+storage/
+trigger/
+gen/
+go.mod
+go.sum
+*.go
+
+# Other Dockerfiles + this file
+Dockerfile.airlock
+Dockerfile.agent-builder
+Dockerfile.agent-base
+Dockerfile.frontend.dockerignore
+.dockerignore

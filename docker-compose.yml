@@ -1,0 +1,169 @@
+# Airlock self-host. One-command setup:
+#
+#   1. cp .env.example .env
+#   2. Edit .env: set DOMAIN, generate ENCRYPTION_KEY and JWT_SECRET
+#   3. Add wildcard DNS A record: *.${DOMAIN} → <server IP>
+#   4. docker compose up -d
+#
+# First launch builds airlock backend, frontend, agent-builder, and agent-base
+# images (~3-5 min). Subsequent launches start in seconds.
+#
+# Get the first-run activation code:
+#   docker compose exec airlock cat /var/lib/airlock/activation_code.txt
+#
+# Update to a new release:
+#   git fetch --tags && git checkout vX.Y.Z && docker compose up -d --build
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-airlock}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-airlock}
+      POSTGRES_DB: ${POSTGRES_DB:-airlock}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-airlock}"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-airlock}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-changeme-in-production}
+    volumes:
+      - miniodata:/data
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:9000/minio/health/live || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  # Bootstrap services: build agent-builder and agent-base images and exit.
+  # Airlock extracts /libs/ from agent-builder at startup, and the agent
+  # build pipeline launches user agents from agent-base. Both must exist
+  # as tagged images on the host before airlock starts.
+  agent-builder-image:
+    build:
+      context: .
+      dockerfile: Dockerfile.agent-builder
+    image: airlock-agent-builder:v0.1.0
+    command: ["true"]
+    restart: "no"
+
+  agent-base-image:
+    build:
+      context: .
+      dockerfile: Dockerfile.agent-base
+    image: airlock-agent-base:latest
+    command: ["true"]
+    restart: "no"
+
+  airlock:
+    build:
+      context: .
+      dockerfile: Dockerfile.airlock
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      agent-builder-image:
+        condition: service_completed_successfully
+      agent-base-image:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-airlock}:${POSTGRES_PASSWORD:-airlock}@postgres:5432/${POSTGRES_DB:-airlock}?sslmode=disable
+
+      # Per-agent schema connections (agents reach Postgres at the same
+      # hostname inside the network).
+      DB_HOST: postgres
+      DB_HOST_AGENT: postgres
+      DB_PORT: "5432"
+      DB_NAME: ${POSTGRES_DB:-airlock}
+      DB_SSL_MODE: disable
+
+      # S3 (both airlock and agent containers reach MinIO via service name).
+      S3_URL: http://minio:9000
+      S3_URL_AGENT: http://minio:9000
+      S3_ACCESS_KEY: ${MINIO_ROOT_USER:-airlock}
+      S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-changeme-in-production}
+      S3_BUCKET: airlock
+
+      # Auth secrets (required — fail to start if unset).
+      JWT_SECRET: "${JWT_SECRET:?JWT_SECRET is required — generate one with openssl rand -hex 32}"
+      ENCRYPTION_KEY: "${ENCRYPTION_KEY:?ENCRYPTION_KEY is required — generate one with openssl rand -hex 32}"
+      ENCRYPTION_KEY_OLD: ${ENCRYPTION_KEY_OLD:-}
+
+      # Public URL + agent subdomain routing.
+      PUBLIC_URL: "https://${DOMAIN:?DOMAIN is required — your public domain like airlock.example.com}"
+      AGENT_DOMAIN: ${DOMAIN}
+      API_URL_AGENT: http://airlock:8080
+
+      # Container orchestration: agent containers join this network so they
+      # can reach airlock:8080 internally. Must match the network name below.
+      DOCKER_NETWORK: airlock
+      AGENT_BUILDER_IMAGE: airlock-agent-builder:v0.1.0
+      AGENT_BASE_IMAGE: airlock-agent-base
+
+      # Trust the Caddy container that fronts us. Docker's default bridge
+      # CIDR (172.16.0.0/12) covers all compose-created networks.
+      REVERSE_PROXY_TRUSTED_PROXIES: "172.16.0.0/12"
+      REVERSE_PROXY_LIMIT: "1"
+    volumes:
+      # Persistent: activation_code.txt, libs cache extracted from agent-builder.
+      - airlock-data:/var/lib/airlock
+      # Required for launching agent containers. This grants root-equivalent
+      # on the host — standard for any orchestrator that manages containers.
+      - /var/run/docker.sock:/var/run/docker.sock
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/health >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2-alpine
+    depends_on:
+      airlock:
+        condition: service_healthy
+      frontend:
+        condition: service_started
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    restart: unless-stopped
+
+# Single shared network. Agent containers launched by airlock join this
+# network too (DOCKER_NETWORK env var above), so they can reach airlock,
+# postgres, and minio by service name.
+networks:
+  default:
+    name: airlock
+
+volumes:
+  pgdata:
+  miniodata:
+  caddy-data:    # CRITICAL: Let's Encrypt cert cache. Don't delete or you'll re-issue all certs and may hit rate limits.
+  caddy-config:
+  airlock-data:
