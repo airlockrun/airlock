@@ -852,7 +852,7 @@ uploads.Copy(ctx, srcKey, dstKey)                     // within zone
 uploads.CopyTo(ctx, srcKey, archive, dstKey)          // cross-zone
 uploads.List(ctx, prefix)
 agent.Attachment(ctx, fileID)                         // conversation attachment by opaque ID
-agent.DB()                                            // *sql.DB for agent's schema (nil if AIRLOCK_DB_URL unset)
+agent.DB()                                            // *agentsdk.AgentDB — pass to sqlc-generated New() (nil if AIRLOCK_DB_URL unset)
 ```
 
 Inside a tool's `Execute` body you get typed `ctx` and the decoded `In`
