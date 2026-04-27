@@ -538,9 +538,10 @@ func (h *agentHandler) Sync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Public storage base — only available when the agent subdomain is
-	// configured. Empty when not, in which case StorageHandle.PublicURL
-	// returns "" and AccessPublic zones are unreachable from outside.
+	// Public storage base — the prefix StorageHandle.URL appends "/{zone}/{key}"
+	// to. agentRouteURL is empty only in deployments without an agent domain
+	// configured (which means no agent-served routes either); the SDK side
+	// degrades gracefully but in practice this is always populated.
 	publicStorageBase := ""
 	if agentRouteURL != "" {
 		publicStorageBase = agentRouteURL + "/__air/storage"

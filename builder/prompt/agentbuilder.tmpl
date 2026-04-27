@@ -790,9 +790,6 @@ zone's `Read` access:
 - `AccessAdmin` — same, but admin role required.
 - `AccessInternal` — `URL()` returns `""`; the path is never served.
 
-`zone.URL()` also returns `""` when no agent subdomain is configured
-(no externally reachable host).
-
 ```go
 assets := agent.RegisterStorage(&agentsdk.Storage{
     Slug:  "assets", Read: agentsdk.AccessPublic, Write: agentsdk.AccessAdmin,
