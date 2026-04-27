@@ -178,6 +178,11 @@ func (b *BuildService) WarmRuntimeCaches(ctx context.Context) {
 		"-e", "GOMODCACHE=/tmp/go-mod",
 		"-e", "GOCACHE=/tmp/go-cache",
 		"-e", "GOFLAGS=-buildvcs=false",
+		// Sum DB tracking files live at $GOPATH/pkg/sumdb/, which is
+		// root-owned in the image while we run as the host UID. Disable
+		// the lookup entirely — modules come from the public proxy or
+		// the /libs replace targets, neither of which we authenticate.
+		"-e", "GOSUMDB=off",
 		"-v", "airlock-go-mod-cache:/tmp/go-mod",
 		"-v", "airlock-go-build-cache:/tmp/go-cache",
 		"-v", dir + ":/workspace",
