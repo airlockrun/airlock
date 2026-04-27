@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"strconv"
 
@@ -54,7 +55,6 @@ type Config struct {
 	// --- Containers ---
 	ContainerRuntime string // "docker"
 	ContainerImage   string // toolserver image name
-	AnchorImage      string // anchor image name
 
 	// --- Build pipeline ---
 	AgentMonorepoPath string // local path to agent monorepo
@@ -112,7 +112,7 @@ func Load() *Config {
 		// Networking
 		PublicURL:     envOr("PUBLIC_URL", "http://localhost:8080"),
 		APIURLAgent:   envOr("API_URL_AGENT", "http://localhost:8080"),
-		AgentDomain:   os.Getenv("AGENT_DOMAIN"),
+		AgentDomain:   resolveAgentDomain(),
 		DockerNetwork: os.Getenv("DOCKER_NETWORK"),
 
 		// Encryption
@@ -122,7 +122,6 @@ func Load() *Config {
 		// Containers
 		ContainerRuntime: envOr("CONTAINER_RUNTIME", "docker"),
 		ContainerImage:   envOr("CONTAINER_IMAGE", "airlock-toolserver"),
-		AnchorImage:      envOr("ANCHOR_IMAGE", "airlock-anchor"),
 
 		// Build pipeline
 		AgentMonorepoPath: envOr("AGENT_MONOREPO_PATH", "/var/lib/airlock/agents"),
@@ -188,4 +187,26 @@ func envBoolOr(key string, fallback bool) bool {
 		panic(fmt.Sprintf("environment variable %s: invalid bool %q", key, v))
 	}
 	return b
+}
+
+// resolveAgentDomain returns AGENT_DOMAIN when explicitly set, otherwise
+// derives the host portion of PUBLIC_URL. Almost every self-hosted setup
+// runs Airlock on the same hostname its agent subdomains hang off
+// (`*.airlock.example.com`), so the explicit knob exists only for the
+// rare case where they diverge. Port is stripped — AGENT_DOMAIN is a bare
+// host. Falls back to "" if neither is set in a parseable form, which
+// disables subdomain routing without a hard failure.
+func resolveAgentDomain() string {
+	if v := os.Getenv("AGENT_DOMAIN"); v != "" {
+		return v
+	}
+	pu := os.Getenv("PUBLIC_URL")
+	if pu == "" {
+		return ""
+	}
+	u, err := url.Parse(pu)
+	if err != nil {
+		return ""
+	}
+	return u.Hostname()
 }
