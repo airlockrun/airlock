@@ -431,10 +431,6 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		r.Get("/mcp/{slug}/tools", ah.MCPListTools)
 	})
 
-	// Public storage zone reads — no auth. Handler returns 404 for any
-	// zone that isn't AccessPublic, so guessing URLs leaks no information.
-	r.Get("/storage/{agentID}/{slug}/*", ah.PublicStorage)
-
 	// Wrap with subdomain proxy for agent custom routes.
 	if cfg.AgentDomain != "" {
 		return SubdomainProxy(cfg.AgentDomain, cfg.DB, cfg.S3Client, cfg.Dispatcher, cfg.JWTSecret, cfg.PublicURL, cfg.Logger.Named("proxy"), r)

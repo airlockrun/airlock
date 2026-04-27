@@ -147,31 +147,12 @@ func (h *agentHandler) GetAttachment(w http.ResponseWriter, r *http.Request) {
 	io.Copy(w, reader)
 }
 
-// PublicStorage handles GET /storage/{agentID}/{slug}/{key...} on the
-// host-level public router (fallback when no agent subdomain is configured,
-// or for stable URLs that survive slug renames).
-func (h *agentHandler) PublicStorage(w http.ResponseWriter, r *http.Request) {
-	agentIDStr := chi.URLParam(r, "agentID")
-	zoneSlug := chi.URLParam(r, "slug")
-	key := strings.TrimPrefix(chi.URLParam(r, "*"), "/")
-	if agentIDStr == "" {
-		http.NotFound(w, r)
-		return
-	}
-	agentID, err := uuid.Parse(agentIDStr)
-	if err != nil {
-		http.NotFound(w, r)
-		return
-	}
-	servePublicStorageZone(w, r, h.db, h.s3, agentID, zoneSlug, key, h.logger)
-}
-
-// servePublicStorageZone is the shared core for unauthenticated reads of
-// AccessPublic storage zones. Used by both the host-level PublicStorage
-// route (/storage/{agentID}/{slug}/{key...}) and the subdomain proxy's
-// /__air/storage/{slug}/{key...} interceptor. Any non-public zone or
-// unknown agent/zone returns 404 — we deliberately don't distinguish
-// "not public" from "not found" so URL-guessing leaks no information.
+// servePublicStorageZone serves unauthenticated reads of AccessPublic
+// storage zones. Called from the subdomain proxy's /__air/storage/{slug}/{key...}
+// interceptor — public zones are only addressable via the agent's subdomain.
+// Any non-public zone or unknown agent/zone returns 404 — we deliberately
+// don't distinguish "not public" from "not found" so URL-guessing leaks
+// no information.
 func servePublicStorageZone(w http.ResponseWriter, r *http.Request, database *db.DB, s3 *storage.S3Client, agentID uuid.UUID, zoneSlug, key string, logger *zap.Logger) {
 	if zoneSlug == "" || key == "" {
 		http.NotFound(w, r)
