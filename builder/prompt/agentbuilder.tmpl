@@ -777,11 +777,21 @@ err = uploads.CopyTo(ctx, "doc.pdf", docs, "imported.pdf") // cross-zone
 //   storage_cache.*                        // never exists in JS at all
 ```
 
-For zones with `Read: AccessPublic`, files are also reachable unauthenticated at
-`{publicURL}/storage/{agentID}/{slug}/{key}` — useful for static assets the
-LLM can hand to a user via a stable URL. The public route only checks
-`Read`, so `Read: AccessPublic, Write: AccessAdmin` is the typical "public
-CDN, admin-managed" shape.
+For zones with `Read: AccessPublic`, files are also reachable unauthenticated.
+Use `zone.PublicURL(key)` to get the URL — Airlock returns the
+agent-subdomain form when configured (`https://{slug}.{agentDomain}/__air/storage/{zone}/{key}`)
+and the host-level fallback otherwise (`{publicURL}/storage/{agentID}/{zone}/{key}`).
+Returns `""` for non-public zones. The public route only checks `Read`, so
+`Read: AccessPublic, Write: AccessAdmin` is the typical "public CDN,
+admin-managed" shape.
+
+```go
+assets := agent.RegisterStorage(&agentsdk.Storage{
+    Slug:  "assets", Read: agentsdk.AccessPublic, Write: agentsdk.AccessAdmin,
+})
+url := assets.PublicURL("logo.png")
+// url == "https://myagent.airlock.run/__air/storage/assets/logo.png"
+```
 
 ## Agent Methods (ctx-first — call from any handler)
 

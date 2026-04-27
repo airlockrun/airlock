@@ -437,7 +437,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 
 	// Wrap with subdomain proxy for agent custom routes.
 	if cfg.AgentDomain != "" {
-		return SubdomainProxy(cfg.AgentDomain, cfg.DB, cfg.Dispatcher, cfg.JWTSecret, cfg.PublicURL, cfg.Logger.Named("proxy"), r)
+		return SubdomainProxy(cfg.AgentDomain, cfg.DB, cfg.S3Client, cfg.Dispatcher, cfg.JWTSecret, cfg.PublicURL, cfg.Logger.Named("proxy"), r)
 	}
 
 	return r

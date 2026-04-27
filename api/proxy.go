@@ -9,6 +9,7 @@ import (
 	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
+	"github.com/airlockrun/airlock/storage"
 	"github.com/airlockrun/airlock/trigger"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -18,7 +19,7 @@ import (
 // header matches {slug}.{agentDomain}. Matching requests are authenticated
 // according to the route's access level and reverse-proxied to the agent's
 // container. Non-matching requests fall through to inner.
-func SubdomainProxy(agentDomain string, database *db.DB, dispatcher *trigger.Dispatcher, jwtSecret, publicURL string, logger *zap.Logger, inner http.Handler) http.Handler {
+func SubdomainProxy(agentDomain string, database *db.DB, s3 *storage.S3Client, dispatcher *trigger.Dispatcher, jwtSecret, publicURL string, logger *zap.Logger, inner http.Handler) http.Handler {
 	if agentDomain == "" {
 		panic("api: SubdomainProxy called with empty agentDomain")
 	}
@@ -55,7 +56,7 @@ func SubdomainProxy(agentDomain string, database *db.DB, dispatcher *trigger.Dis
 		log := logger.With(zap.String("slug", slug), zap.String("path", r.URL.Path), zap.String("method", r.Method))
 
 		// Auth relay callback — exchange relay code for session cookie.
-		if r.URL.Path == "/__airlock/callback" {
+		if r.URL.Path == "/__air/callback" {
 			handleRelayCallback(w, r, jwtSecret, log)
 			return
 		}
@@ -70,6 +71,17 @@ func SubdomainProxy(agentDomain string, database *db.DB, dispatcher *trigger.Dis
 			return
 		}
 		agentID := pgUUID(agent.ID)
+
+		// Public storage zone reads under the agent's subdomain. Intercepted
+		// before route resolution so a builder's RegisterRoute("/__air/...")
+		// can never claim this prefix. Only zones with read_access="public"
+		// respond; others return 404 (same as the host-level fallback).
+		if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/__air/storage/") {
+			rest := strings.TrimPrefix(r.URL.Path, "/__air/storage/")
+			zoneSlug, key, _ := strings.Cut(rest, "/")
+			servePublicStorageZone(w, r, database, s3, agentID, zoneSlug, key, log)
+			return
+		}
 
 		// Look up the registered route — match exact paths first, then parameterized patterns.
 		routes, err := q.ListRoutesByAgentAndMethod(r.Context(), dbq.ListRoutesByAgentAndMethodParams{
@@ -245,7 +257,7 @@ func matchRoute(routes []dbq.AgentRoute, reqPath string) (dbq.AgentRoute, bool) 
 }
 
 // handleRelayCallback exchanges a relay code for a session cookie.
-// GET /__airlock/callback?code=xxx&return=/path
+// GET /__air/callback?code=xxx&return=/path
 func handleRelayCallback(w http.ResponseWriter, r *http.Request, jwtSecret string, log *zap.Logger) {
 	code := r.URL.Query().Get("code")
 	returnPath := r.URL.Query().Get("return")

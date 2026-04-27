@@ -21,7 +21,7 @@ const (
 	relayCodeTTL    = 30 * time.Second
 	relaySessionTTL = 7 * 24 * time.Hour // JWT inside cookie — long-lived
 	relayCookieMaxAge = 900               // 15 min sliding window
-	relayCookieName   = "__airlock_session"
+	relayCookieName   = "__air_session"
 )
 
 // relayHandler generates and validates HMAC-signed relay codes for
@@ -89,7 +89,7 @@ func (h *relayHandler) GenerateCode(w http.ResponseWriter, r *http.Request) {
 		ExpiresAt:    expiresAt,
 	})
 
-	callbackURL := targetOrigin + "/__airlock/callback?code=" + url.QueryEscape(code) + "&return=" + url.QueryEscape(parsed.RequestURI())
+	callbackURL := targetOrigin + "/__air/callback?code=" + url.QueryEscape(code) + "&return=" + url.QueryEscape(parsed.RequestURI())
 
 	writeJSON(w, http.StatusOK, relayCodeResponse{
 		Code:        code,
@@ -176,7 +176,7 @@ func issueSessionCookie(w http.ResponseWriter, r *http.Request, jwtSecret string
 	return nil
 }
 
-// setSessionCookie writes the __airlock_session cookie with sliding Max-Age.
+// setSessionCookie writes the __air_session cookie with sliding Max-Age.
 func setSessionCookie(w http.ResponseWriter, r *http.Request, token string) {
 	secure := strings.HasPrefix(r.URL.Scheme, "https") || r.TLS != nil ||
 		r.Header.Get("X-Forwarded-Proto") == "https"

@@ -538,9 +538,18 @@ func (h *agentHandler) Sync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Public storage base — prefer the agent subdomain when configured; the
+	// host-level fallback works as a stable URL when the agent slug is
+	// renamed (or when no agent domain is set).
+	publicStorageBase := h.publicURL + "/storage/" + agentID.String()
+	if agentRouteURL != "" {
+		publicStorageBase = agentRouteURL + "/__air/storage"
+	}
+
 	writeJSON(w, http.StatusOK, agentsdk.SyncResponse{
-		SystemPrompt:  rendered,
-		MCPAuthStatus: mcpAuthStatus,
-		MCPSchemas:    mcpSchemas,
+		SystemPrompt:      rendered,
+		MCPAuthStatus:     mcpAuthStatus,
+		MCPSchemas:        mcpSchemas,
+		PublicStorageBase: publicStorageBase,
 	})
 }
