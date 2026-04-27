@@ -1,8 +1,9 @@
 -- name: UpsertStorageZone :exec
-INSERT INTO agent_storage_zones (agent_id, slug, access, description)
-VALUES (@agent_id, @slug, @access, @description)
+INSERT INTO agent_storage_zones (agent_id, slug, read_access, write_access, description)
+VALUES (@agent_id, @slug, @read_access, @write_access, @description)
 ON CONFLICT (agent_id, slug) DO UPDATE SET
-    access = EXCLUDED.access,
+    read_access = EXCLUDED.read_access,
+    write_access = EXCLUDED.write_access,
     description = EXCLUDED.description,
     updated_at = now();
 

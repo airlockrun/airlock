@@ -27,7 +27,7 @@ func (q *Queries) DeleteStorageZonesByAgentExcept(ctx context.Context, arg Delet
 }
 
 const getStorageZone = `-- name: GetStorageZone :one
-SELECT id, agent_id, slug, access, description, created_at, updated_at FROM agent_storage_zones WHERE agent_id = $1 AND slug = $2
+SELECT id, agent_id, slug, description, created_at, updated_at, read_access, write_access FROM agent_storage_zones WHERE agent_id = $1 AND slug = $2
 `
 
 type GetStorageZoneParams struct {
@@ -42,16 +42,17 @@ func (q *Queries) GetStorageZone(ctx context.Context, arg GetStorageZoneParams) 
 		&i.ID,
 		&i.AgentID,
 		&i.Slug,
-		&i.Access,
 		&i.Description,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ReadAccess,
+		&i.WriteAccess,
 	)
 	return i, err
 }
 
 const listStorageZonesByAgent = `-- name: ListStorageZonesByAgent :many
-SELECT id, agent_id, slug, access, description, created_at, updated_at FROM agent_storage_zones WHERE agent_id = $1
+SELECT id, agent_id, slug, description, created_at, updated_at, read_access, write_access FROM agent_storage_zones WHERE agent_id = $1
 `
 
 func (q *Queries) ListStorageZonesByAgent(ctx context.Context, agentID pgtype.UUID) ([]AgentStorageZone, error) {
@@ -67,10 +68,11 @@ func (q *Queries) ListStorageZonesByAgent(ctx context.Context, agentID pgtype.UU
 			&i.ID,
 			&i.AgentID,
 			&i.Slug,
-			&i.Access,
 			&i.Description,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ReadAccess,
+			&i.WriteAccess,
 		); err != nil {
 			return nil, err
 		}
@@ -83,10 +85,11 @@ func (q *Queries) ListStorageZonesByAgent(ctx context.Context, agentID pgtype.UU
 }
 
 const upsertStorageZone = `-- name: UpsertStorageZone :exec
-INSERT INTO agent_storage_zones (agent_id, slug, access, description)
-VALUES ($1, $2, $3, $4)
+INSERT INTO agent_storage_zones (agent_id, slug, read_access, write_access, description)
+VALUES ($1, $2, $3, $4, $5)
 ON CONFLICT (agent_id, slug) DO UPDATE SET
-    access = EXCLUDED.access,
+    read_access = EXCLUDED.read_access,
+    write_access = EXCLUDED.write_access,
     description = EXCLUDED.description,
     updated_at = now()
 `
@@ -94,7 +97,8 @@ ON CONFLICT (agent_id, slug) DO UPDATE SET
 type UpsertStorageZoneParams struct {
 	AgentID     pgtype.UUID `json:"agent_id"`
 	Slug        string      `json:"slug"`
-	Access      string      `json:"access"`
+	ReadAccess  string      `json:"read_access"`
+	WriteAccess string      `json:"write_access"`
 	Description string      `json:"description"`
 }
 
@@ -102,7 +106,8 @@ func (q *Queries) UpsertStorageZone(ctx context.Context, arg UpsertStorageZonePa
 	_, err := q.db.Exec(ctx, upsertStorageZone,
 		arg.AgentID,
 		arg.Slug,
-		arg.Access,
+		arg.ReadAccess,
+		arg.WriteAccess,
 		arg.Description,
 	)
 	return err

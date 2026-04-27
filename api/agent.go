@@ -388,7 +388,8 @@ func (h *agentHandler) Sync(w http.ResponseWriter, r *http.Request) {
 		if err := q.UpsertStorageZone(ctx, dbq.UpsertStorageZoneParams{
 			AgentID:     pgAgentID,
 			Slug:        s.Slug,
-			Access:      s.Access,
+			ReadAccess:  s.Read,
+			WriteAccess: s.Write,
 			Description: s.Description,
 		}); err != nil {
 			h.logger.Error("upsert storage zone failed", zap.Error(err))

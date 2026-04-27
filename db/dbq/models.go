@@ -148,10 +148,11 @@ type AgentStorageZone struct {
 	ID          pgtype.UUID        `json:"id"`
 	AgentID     pgtype.UUID        `json:"agent_id"`
 	Slug        string             `json:"slug"`
-	Access      string             `json:"access"`
 	Description string             `json:"description"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+	ReadAccess  string             `json:"read_access"`
+	WriteAccess string             `json:"write_access"`
 }
 
 type AgentTool struct {

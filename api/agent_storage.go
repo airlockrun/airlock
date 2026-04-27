@@ -169,7 +169,7 @@ func (h *agentHandler) PublicStorage(w http.ResponseWriter, r *http.Request) {
 		AgentID: toPgUUID(agentID),
 		Slug:    zoneSlug,
 	})
-	if err != nil || zone.Access != string(agentsdk.AccessPublic) {
+	if err != nil || zone.ReadAccess != string(agentsdk.AccessPublic) {
 		http.NotFound(w, r)
 		return
 	}

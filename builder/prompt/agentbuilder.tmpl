@@ -715,51 +715,73 @@ alerts.Publish(ctx, []agentsdk.DisplayPart{
 ## RegisterStorage — Scoped file storage zones
 
 Returns `*StorageHandle`. Each zone owns an S3 prefix (`{slug}/...`) and a JS
-binding (`storage_{slug}`). The `Access` field gates the JS binding — the
-LLM only sees zones whose access matches the caller's level. Use
-`AccessInternal` for caches/state the LLM should never touch (no JS
-binding bound at all; only builder Go code can read/write).
+binding (`storage_{slug}`).
 
-The framework reserves a zone called **`tmp`** at `AccessUser` for its own
-scratch area (truncated tool output, generated media). Builders may pass
-`Slug:"tmp"` to `RegisterStorage` — the call returns a working handle to
-the framework's tmp zone but the supplied `Access`/`Description` are
-ignored, so framework and builder code share the same scratch area
+`Read` and `Write` are independent access levels. Reads (`Get`/`Stat`/`List`)
+and writes (`Put`/`Delete`/`Copy`) are gated separately, so a zone can be
+asymmetric — e.g. admin-curated and user-readable. Inside `run_js` the
+`storage_{slug}` object only exposes the methods the caller's access
+satisfies. `AccessInternal` on either axis hides that axis from JS
+entirely (only builder Go can use it).
+
+The framework reserves a zone called **`tmp`** at `Read=Write=AccessUser` for
+its own scratch area (truncated tool output, generated media). Builders
+may pass `Slug:"tmp"` to `RegisterStorage` — the call returns a working
+handle to the framework's tmp zone but the supplied `Read`/`Write`/`Description`
+are ignored, so framework and builder code share the same scratch area
 without conflict.
 
 ```go
+// Symmetric — anyone with user access can read and write.
 uploads := agent.RegisterStorage(&agentsdk.Storage{
     Slug:        "uploads",
-    Access:      agentsdk.AccessUser,
+    Read:        agentsdk.AccessUser,
+    Write:       agentsdk.AccessUser,
     Description: "Files the user uploaded in chat.",
 })
-config := agent.RegisterStorage(&agentsdk.Storage{
-    Slug:        "config",
-    Access:      agentsdk.AccessAdmin,
-    Description: "Settings only owners can change.",
+
+// Asymmetric — admin-curated, user-readable. Useful for knowledge bases,
+// templates, or any reference data only the owner should change.
+docs := agent.RegisterStorage(&agentsdk.Storage{
+    Slug:        "docs",
+    Read:        agentsdk.AccessUser,
+    Write:       agentsdk.AccessAdmin,
+    Description: "Reference docs the assistant cites; only admins update them.",
 })
+
+// Inverse — user-fed inbox processed only by admins.
+inbox := agent.RegisterStorage(&agentsdk.Storage{
+    Slug:        "inbox",
+    Read:        agentsdk.AccessAdmin,
+    Write:       agentsdk.AccessUser,
+    Description: "Support uploads — users drop files, admins review.",
+})
+
+// Builder-only cache — the LLM never sees any binding for this zone.
 cache := agent.RegisterStorage(&agentsdk.Storage{
     Slug:        "cache",
-    Access:      agentsdk.AccessInternal, // builder Go only — never bound to JS
+    Read:        agentsdk.AccessInternal,
+    Write:       agentsdk.AccessInternal,
     Description: "Memoized API responses.",
 })
 
 // All keys are RELATIVE to the zone — the prefix is added automatically.
 err := uploads.Put(ctx, "doc.pdf", reader, "application/pdf")
 rc, err := uploads.Get(ctx, "doc.pdf")
-err = uploads.CopyTo(ctx, "doc.pdf", config, "default-doc.pdf") // cross-zone
+err = uploads.CopyTo(ctx, "doc.pdf", docs, "imported.pdf") // cross-zone
 
 // Inside run_js the LLM uses:
 //   storage_uploads.put("doc.pdf", buffer, "application/pdf")
-//   storage_uploads.get("doc.pdf")
-//   storage_uploads.list("subfolder/")
-// AccessInternal zones are never bound, so this is enforced at the JS
-// runtime — no `storage_cache` global exists for the LLM to discover.
+//   storage_docs.get("manual.pdf")        // works for any user
+//   storage_docs.put("manual.pdf", buf)   // ReferenceError for non-admins
+//   storage_cache.*                        // never exists in JS at all
 ```
 
-For `Access: AccessPublic` zones, files are also reachable unauthenticated at
-`{publicURL}/storage/{agentID}/{slug}/{key}` — useful when you need stable
-links the LLM can hand to a user. Builders compose this URL themselves.
+For zones with `Read: AccessPublic`, files are also reachable unauthenticated at
+`{publicURL}/storage/{agentID}/{slug}/{key}` — useful for static assets the
+LLM can hand to a user via a stable URL. The public route only checks
+`Read`, so `Read: AccessPublic, Write: AccessAdmin` is the typical "public
+CDN, admin-managed" shape.
 
 ## Agent Methods (ctx-first — call from any handler)
 
@@ -986,8 +1008,8 @@ func Up00002(ctx context.Context, db *sql.DB) error {
 	}
 
 	agent := agentsdk.AgentFromMigrationContext(ctx)
-	old := agent.RegisterStorage(&agentsdk.Storage{Slug: "old", Access: agentsdk.AccessAdmin})
-	media := agent.RegisterStorage(&agentsdk.Storage{Slug: "media", Access: agentsdk.AccessUser})
+	old := agent.RegisterStorage(&agentsdk.Storage{Slug: "old", Read: agentsdk.AccessAdmin, Write: agentsdk.AccessAdmin})
+	media := agent.RegisterStorage(&agentsdk.Storage{Slug: "media", Read: agentsdk.AccessUser, Write: agentsdk.AccessUser})
 	files, err := old.List(ctx, "")
 	if err != nil {
 		return err
