@@ -14,9 +14,15 @@ func main() {
 		Description: "New agent — update this description after implementation",
 	})
 
-	agent.RegisterRoute("/", "GET", func(ctx context.Context, w http.ResponseWriter, r *http.Request) {
-		templ.Handler(views.Index()).ServeHTTP(w, r)
-	}, agentsdk.RouteOpts{Access: agentsdk.AccessPublic, Description: "Default placeholder homepage — replace this once the agent has real routes"})
+	agent.RegisterRoute(&agentsdk.Route{
+		Method: "GET",
+		Path:   "/",
+		Handler: func(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+			templ.Handler(views.Index()).ServeHTTP(w, r)
+		},
+		Access:      agentsdk.AccessUser,
+		Description: "Default placeholder homepage — replace this once the agent has real routes",
+	})
 
 	// Sol will add RegisterTool, RegisterWebhook, RegisterCron, RegisterConnection calls here.
 	agent.Serve()
