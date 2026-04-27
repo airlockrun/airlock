@@ -395,6 +395,42 @@ func (q *Queries) UpdateRunComplete(ctx context.Context, arg UpdateRunCompletePa
 	return err
 }
 
+const updateRunLLMStats = `-- name: UpdateRunLLMStats :exec
+UPDATE runs
+SET llm_calls = stats.calls,
+    llm_tokens_in = stats.tokens_in,
+    llm_tokens_out = stats.tokens_out,
+    llm_cost_estimate = (stats.tokens_in * $1::float8 + stats.tokens_out * $2::float8) / 1000000.0
+FROM (
+    SELECT
+        COUNT(*) FILTER (WHERE role = 'assistant' AND tokens_in > 0)::integer AS calls,
+        COALESCE(SUM(tokens_in), 0)::integer  AS tokens_in,
+        COALESCE(SUM(tokens_out), 0)::integer AS tokens_out
+    FROM agent_messages
+    WHERE run_id = $3
+) stats
+WHERE runs.id = $3
+`
+
+type UpdateRunLLMStatsParams struct {
+	CostInput  float64     `json:"cost_input"`
+	CostOutput float64     `json:"cost_output"`
+	RunID      pgtype.UUID `json:"run_id"`
+}
+
+// Aggregates per-message tokens / call count into the run's totals and
+// multiplies tokens by per-million-token rates to produce a cost estimate.
+// Idempotent — safe to invoke after the agent's RunComplete handler and
+// again from the bg stream goroutine (timeout fallback). Source of truth
+// for tokens is agent_messages, which the SessionStore populates per
+// assistant turn. Cost rates come from sol's models.dev catalog ($ per
+// million tokens) — pass 0/0 for models without pricing data and the
+// estimate stays 0.
+func (q *Queries) UpdateRunLLMStats(ctx context.Context, arg UpdateRunLLMStatsParams) error {
+	_, err := q.db.Exec(ctx, updateRunLLMStats, arg.CostInput, arg.CostOutput, arg.RunID)
+	return err
+}
+
 const updateRunStatus = `-- name: UpdateRunStatus :exec
 UPDATE runs SET
     status = $1,

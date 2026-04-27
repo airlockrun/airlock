@@ -509,13 +509,31 @@ func (h *conversationsHandler) Prompt(w http.ResponseWriter, r *http.Request) {
 		bgCtx := context.Background()
 		publishRunEvents(bgCtx, rc, h.pubsub, agentID, runID, convIDStr, h.logger)
 
-		// Mark run as completed (status-only — agent's UpsertRunComplete has the actions).
+		// Fallback status when the agent never wrote its own terminal
+		// status (e.g. stuck in an infinite run_js loop, container died).
+		// UpdateRunStatus has a CAS guard (WHERE status='running'), so the
+		// agent's authoritative success/error/tool_errors write — when it
+		// happens — wins this race. "timeout" is the meaningful value when
+		// nobody else wrote: the stream ended without a terminal event.
 		bgQ := dbq.New(h.db.Pool())
 		if err := bgQ.UpdateRunStatus(bgCtx, dbq.UpdateRunStatusParams{
 			ID:     toPgUUID(runID),
-			Status: "completed",
+			Status: "timeout",
 		}); err != nil {
 			h.logger.Error("update run status", zap.Error(err))
+		}
+		// Aggregate LLM telemetry. Idempotent with the agent-side write in
+		// agent_run.go RunComplete — whichever runs last reflects final state.
+		// Important for the timeout path where the agent never called
+		// RunComplete: any messages persisted before the agent died still
+		// roll up here.
+		costIn, costOut := runLLMCostRates(bgCtx, bgQ, toPgUUID(agentID))
+		if err := bgQ.UpdateRunLLMStats(bgCtx, dbq.UpdateRunLLMStatsParams{
+			RunID:      toPgUUID(runID),
+			CostInput:  costIn,
+			CostOutput: costOut,
+		}); err != nil {
+			h.logger.Error("aggregate run llm stats", zap.Error(err))
 		}
 	}()
 }
