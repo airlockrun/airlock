@@ -326,23 +326,23 @@ async function finish() {
             <form @submit.prevent="nextStep" style="display: flex; flex-direction: column; gap: 1.25rem; padding-top: 1rem">
               <Message v-if="error" severity="error" :closable="false">{{ error }}</Message>
               <FloatLabel v-if="activationCodeRequired">
-                <InputText id="act-code" v-model="activationCode" style="width: 100%" />
+                <InputText id="act-code" v-model="activationCode" autocomplete="one-time-code" style="width: 100%" />
                 <label for="act-code">Activation Code</label>
               </FloatLabel>
               <FloatLabel>
-                <InputText id="act-name" v-model="displayName" style="width: 100%" />
+                <InputText id="act-name" v-model="displayName" autocomplete="name" style="width: 100%" />
                 <label for="act-name">Display Name</label>
               </FloatLabel>
               <FloatLabel>
-                <InputText id="act-email" v-model="email" type="email" style="width: 100%" />
+                <InputText id="act-email" v-model="email" type="email" autocomplete="username" style="width: 100%" />
                 <label for="act-email">Email</label>
               </FloatLabel>
               <FloatLabel>
-                <Password id="act-pass" v-model="password" toggle-mask style="width: 100%" :input-style="{ width: '100%' }" />
+                <Password id="act-pass" v-model="password" toggle-mask :input-props="{ autocomplete: 'new-password' }" style="width: 100%" :input-style="{ width: '100%' }" />
                 <label for="act-pass">Password</label>
               </FloatLabel>
               <FloatLabel>
-                <Password id="act-confirm" v-model="confirmPassword" :feedback="false" toggle-mask style="width: 100%" :input-style="{ width: '100%' }" />
+                <Password id="act-confirm" v-model="confirmPassword" :feedback="false" toggle-mask :input-props="{ autocomplete: 'new-password' }" style="width: 100%" :input-style="{ width: '100%' }" />
                 <label for="act-confirm">Confirm Password</label>
               </FloatLabel>
               <div style="display: flex; justify-content: flex-end">
@@ -379,8 +379,10 @@ async function finish() {
                 </div>
               </div>
 
-              <!-- Add provider form -->
-              <form @submit.prevent="addProvider" style="display: flex; flex-direction: column; gap: 1rem">
+              <!-- Add provider form. autocomplete="off" on the form + each
+                   field stops the browser password manager from offering to
+                   save "Display Name + API Key" as a credential pair. -->
+              <form @submit.prevent="addProvider" autocomplete="off" style="display: flex; flex-direction: column; gap: 1rem">
                 <div style="display: flex; flex-direction: column; gap: 0.25rem">
                   <label for="prov-id">Provider</label>
                   <Select
@@ -411,15 +413,15 @@ async function finish() {
                 </div>
                 <div style="display: flex; flex-direction: column; gap: 0.25rem">
                   <label for="prov-name">Display Name</label>
-                  <InputText id="prov-name" v-model="providerName" style="width: 100%" />
+                  <InputText id="prov-name" v-model="providerName" autocomplete="off" style="width: 100%" />
                 </div>
                 <div style="display: flex; flex-direction: column; gap: 0.25rem">
                   <label for="prov-url">Base URL (optional)</label>
-                  <InputText id="prov-url" v-model="baseURL" style="width: 100%" />
+                  <InputText id="prov-url" v-model="baseURL" autocomplete="off" style="width: 100%" />
                 </div>
                 <div style="display: flex; flex-direction: column; gap: 0.25rem">
                   <label for="prov-key">API Key</label>
-                  <Password id="prov-key" v-model="apiKey" :feedback="false" toggle-mask style="width: 100%" :input-style="{ width: '100%' }" />
+                  <Password id="prov-key" v-model="apiKey" :feedback="false" toggle-mask :input-props="{ autocomplete: 'off' }" style="width: 100%" :input-style="{ width: '100%' }" />
                 </div>
                 <div style="display: flex; justify-content: flex-end">
                   <Button

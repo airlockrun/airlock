@@ -203,9 +203,11 @@ function confirmDelete(provider: { id: string; displayName: string }) {
       </Column>
     </DataTable>
 
-    <!-- Create / Edit dialog -->
+    <!-- Create / Edit dialog. The wrapping <form autocomplete="off"> + per-
+         field autocomplete="off" stops browsers from treating Display Name +
+         API Key like a username/password pair and offering to save it. -->
     <Dialog v-model:visible="dialogVisible" :header="editingId ? 'Edit Provider' : 'Add Provider'" modal style="width: 28rem">
-      <div style="display: flex; flex-direction: column; gap: 1rem; padding-top: 0.5rem">
+      <form autocomplete="off" style="display: flex; flex-direction: column; gap: 1rem; padding-top: 0.5rem" @submit.prevent>
         <Message
           v-if="!editingId && dialogCapabilityFilter"
           severity="info"
@@ -231,21 +233,21 @@ function confirmDelete(provider: { id: string; displayName: string }) {
             style="width: 100%"
             @update:modelValue="onProviderSelect"
           />
-          <InputText v-else id="providerId" v-model="form.providerId" disabled />
+          <InputText v-else id="providerId" v-model="form.providerId" disabled autocomplete="off" />
         </div>
         <div style="display: flex; flex-direction: column; gap: 0.25rem">
           <label for="displayName">Display Name</label>
-          <InputText id="displayName" v-model="form.displayName" placeholder="e.g. OpenAI" />
+          <InputText id="displayName" v-model="form.displayName" autocomplete="off" placeholder="e.g. OpenAI" />
         </div>
         <div style="display: flex; flex-direction: column; gap: 0.25rem">
           <label for="baseUrl">Base URL (optional)</label>
-          <InputText id="baseUrl" v-model="form.baseUrl" placeholder="Leave blank for provider default" />
+          <InputText id="baseUrl" v-model="form.baseUrl" autocomplete="off" placeholder="Leave blank for provider default" />
         </div>
         <div style="display: flex; flex-direction: column; gap: 0.25rem">
           <label for="apiKey">API Key{{ editingId ? ' (leave blank to keep current)' : '' }}</label>
-          <Password id="apiKey" v-model="form.apiKey" :feedback="false" toggleMask />
+          <Password id="apiKey" v-model="form.apiKey" :feedback="false" toggleMask :input-props="{ autocomplete: 'off' }" />
         </div>
-      </div>
+      </form>
       <template #footer>
         <Button label="Cancel" severity="secondary" text @click="dialogVisible = false" />
         <Button :label="editingId ? 'Update' : 'Create'" :disabled="!editingId && !form.providerId" @click="onSubmit" />

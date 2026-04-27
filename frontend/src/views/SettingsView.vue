@@ -285,15 +285,15 @@ async function changePassword() {
       <template #content>
         <form @submit.prevent="changePassword" style="display: flex; flex-direction: column; gap: 1.25rem">
           <FloatLabel>
-            <Password id="set-current" v-model="currentPassword" :feedback="false" toggle-mask style="width: 100%" :input-style="{ width: '100%' }" />
+            <Password id="set-current" v-model="currentPassword" :feedback="false" toggle-mask :input-props="{ autocomplete: 'current-password' }" style="width: 100%" :input-style="{ width: '100%' }" />
             <label for="set-current">Current Password</label>
           </FloatLabel>
           <FloatLabel>
-            <Password id="set-new" v-model="newPassword" toggle-mask style="width: 100%" :input-style="{ width: '100%' }" />
+            <Password id="set-new" v-model="newPassword" toggle-mask :input-props="{ autocomplete: 'new-password' }" style="width: 100%" :input-style="{ width: '100%' }" />
             <label for="set-new">New Password</label>
           </FloatLabel>
           <FloatLabel>
-            <Password id="set-confirm" v-model="confirmPassword" :feedback="false" toggle-mask style="width: 100%" :input-style="{ width: '100%' }" />
+            <Password id="set-confirm" v-model="confirmPassword" :feedback="false" toggle-mask :input-props="{ autocomplete: 'new-password' }" style="width: 100%" :input-style="{ width: '100%' }" />
             <label for="set-confirm">Confirm New Password</label>
           </FloatLabel>
           <Button type="submit" label="Change Password" :loading="loading" style="align-self: flex-start" />
