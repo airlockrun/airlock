@@ -330,10 +330,6 @@ async function finish() {
                 <label for="act-code">Activation Code</label>
               </FloatLabel>
               <FloatLabel>
-                <InputText id="act-name" v-model="displayName" autocomplete="name" style="width: 100%" />
-                <label for="act-name">Display Name</label>
-              </FloatLabel>
-              <FloatLabel>
                 <InputText id="act-email" v-model="email" type="email" autocomplete="username" style="width: 100%" />
                 <label for="act-email">Email</label>
               </FloatLabel>
@@ -344,6 +340,10 @@ async function finish() {
               <FloatLabel>
                 <Password id="act-confirm" v-model="confirmPassword" :feedback="false" toggle-mask :input-props="{ autocomplete: 'new-password' }" style="width: 100%" :input-style="{ width: '100%' }" />
                 <label for="act-confirm">Confirm Password</label>
+              </FloatLabel>
+              <FloatLabel>
+                <InputText id="act-name" v-model="displayName" autocomplete="name" style="width: 100%" />
+                <label for="act-name">Display Name</label>
               </FloatLabel>
               <div style="display: flex; justify-content: flex-end">
                 <Button type="submit" label="Next" icon="pi pi-arrow-right" icon-pos="right" :loading="loading" />
