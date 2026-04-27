@@ -777,19 +777,35 @@ err = uploads.CopyTo(ctx, "doc.pdf", docs, "imported.pdf") // cross-zone
 //   storage_cache.*                        // never exists in JS at all
 ```
 
-For zones with `Read: AccessPublic`, files are reachable unauthenticated
-on the agent's subdomain at `https://{slug}.{agentDomain}/__air/storage/{zone}/{key}`.
-Use `zone.PublicURL(key)` to get the URL — returns `""` for non-public
-zones, or when no agent subdomain is configured. Only the `Read` axis is
-checked, so `Read: AccessPublic, Write: AccessAdmin` is the typical
-"public CDN, admin-managed" shape.
+Storage zones get a stable URL on the agent's subdomain:
+`https://{slug}.{agentDomain}/__air/storage/{zone}/{key}`. Use
+`zone.URL(key)` to construct it. Whether a fetch succeeds depends on the
+zone's `Read` access:
+
+- `AccessPublic` — served unauthenticated. Anyone with the URL.
+- `AccessUser` — requires the user to be logged in with agent
+  membership. The proxy redirects through the relay-login flow when no
+  cookie is set, so a click in chat just prompts sign-in and lands back
+  on the file.
+- `AccessAdmin` — same, but admin role required.
+- `AccessInternal` — `URL()` returns `""`; the path is never served.
+
+`zone.URL()` also returns `""` when no agent subdomain is configured
+(no externally reachable host).
 
 ```go
 assets := agent.RegisterStorage(&agentsdk.Storage{
     Slug:  "assets", Read: agentsdk.AccessPublic, Write: agentsdk.AccessAdmin,
 })
-url := assets.PublicURL("logo.png")
+url := assets.URL("logo.png")
 // url == "https://myagent.airlock.run/__air/storage/assets/logo.png"
+
+reports := agent.RegisterStorage(&agentsdk.Storage{
+    Slug:  "reports", Read: agentsdk.AccessUser, Write: agentsdk.AccessAdmin,
+})
+link := reports.URL("q3.pdf")
+// link is the same shape; clicking prompts sign-in if the user isn't
+// already authenticated on the agent's subdomain.
 ```
 
 ## Agent Methods (ctx-first — call from any handler)

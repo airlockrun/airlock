@@ -147,13 +147,23 @@ func (h *agentHandler) GetAttachment(w http.ResponseWriter, r *http.Request) {
 	io.Copy(w, reader)
 }
 
-// servePublicStorageZone serves unauthenticated reads of AccessPublic
-// storage zones. Called from the subdomain proxy's /__air/storage/{slug}/{key...}
-// interceptor — public zones are only addressable via the agent's subdomain.
-// Any non-public zone or unknown agent/zone returns 404 — we deliberately
-// don't distinguish "not public" from "not found" so URL-guessing leaks
-// no information.
-func servePublicStorageZone(w http.ResponseWriter, r *http.Request, database *db.DB, s3 *storage.S3Client, agentID uuid.UUID, zoneSlug, key string, logger *zap.Logger) {
+// serveStorageZone serves reads from a registered storage zone on the
+// subdomain proxy's /__air/storage/{slug}/{key...} path, gating by the
+// zone's read_access:
+//
+//   - "public" — served unauthenticated (any browser can fetch the URL)
+//   - "user"   — requires a valid __air_session cookie + agent membership
+//   - "admin"  — requires admin role on the agent
+//   - "internal" / unknown — 404
+//
+// Missing cookies on user/admin zones get redirected through the relay
+// flow (rejectOrRedirect) so a click-from-chat triggers login. Once
+// logged in, the user lands back on the same URL with a session cookie
+// set and the file streams.
+//
+// Unknown agent/zone returns 404 — we deliberately don't distinguish
+// "not authorized" from "not found" so URL-guessing leaks no information.
+func serveStorageZone(w http.ResponseWriter, r *http.Request, database *db.DB, s3 *storage.S3Client, agentID uuid.UUID, zoneSlug, key, jwtSecret, publicURL string, logger *zap.Logger) {
 	if zoneSlug == "" || key == "" {
 		http.NotFound(w, r)
 		return
@@ -163,10 +173,58 @@ func servePublicStorageZone(w http.ResponseWriter, r *http.Request, database *db
 		AgentID: toPgUUID(agentID),
 		Slug:    zoneSlug,
 	})
-	if err != nil || zone.ReadAccess != string(agentsdk.AccessPublic) {
+	if err != nil {
 		http.NotFound(w, r)
 		return
 	}
+
+	switch zone.ReadAccess {
+	case string(agentsdk.AccessPublic):
+		// no auth check
+	case string(agentsdk.AccessUser):
+		claims, ok := validateSubdomainAuth(r, jwtSecret)
+		if !ok {
+			rejectOrRedirect(w, r, publicURL)
+			return
+		}
+		uid, err := uuid.Parse(claims.Subject)
+		if err != nil {
+			rejectOrRedirect(w, r, publicURL)
+			return
+		}
+		hasAccess, err := q.HasAgentAccess(r.Context(), dbq.HasAgentAccessParams{
+			AgentID: toPgUUID(agentID),
+			UserID:  toPgUUID(uid),
+		})
+		if err != nil || !hasAccess {
+			http.NotFound(w, r)
+			return
+		}
+	case string(agentsdk.AccessAdmin):
+		claims, ok := validateSubdomainAuth(r, jwtSecret)
+		if !ok {
+			rejectOrRedirect(w, r, publicURL)
+			return
+		}
+		uid, err := uuid.Parse(claims.Subject)
+		if err != nil {
+			rejectOrRedirect(w, r, publicURL)
+			return
+		}
+		member, err := q.GetAgentMember(r.Context(), dbq.GetAgentMemberParams{
+			AgentID: toPgUUID(agentID),
+			UserID:  toPgUUID(uid),
+		})
+		if err != nil || !auth.RoleAtLeast(member.Role, "admin") {
+			http.NotFound(w, r)
+			return
+		}
+	default:
+		// Internal / unknown — never reachable from outside.
+		http.NotFound(w, r)
+		return
+	}
+
 	s3Key := agentStorageKey(agentID, zoneSlug+"/"+key)
 	reader, err := s3.GetObject(r.Context(), s3Key)
 	if err != nil {
@@ -176,7 +234,7 @@ func servePublicStorageZone(w http.ResponseWriter, r *http.Request, database *db
 	defer reader.Close()
 	w.Header().Set("Content-Type", "application/octet-stream")
 	if _, err := io.Copy(w, reader); err != nil {
-		logger.Debug("public storage stream interrupted", zap.Error(err))
+		logger.Debug("storage stream interrupted", zap.Error(err))
 	}
 }
 
