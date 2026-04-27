@@ -27,7 +27,7 @@ func (q *Queries) DeleteStorageZonesByAgentExcept(ctx context.Context, arg Delet
 }
 
 const getStorageZone = `-- name: GetStorageZone :one
-SELECT id, agent_id, slug, description, created_at, updated_at, read_access, write_access FROM agent_storage_zones WHERE agent_id = $1 AND slug = $2
+SELECT id, agent_id, slug, read_access, write_access, description, created_at, updated_at FROM agent_storage_zones WHERE agent_id = $1 AND slug = $2
 `
 
 type GetStorageZoneParams struct {
@@ -42,17 +42,17 @@ func (q *Queries) GetStorageZone(ctx context.Context, arg GetStorageZoneParams) 
 		&i.ID,
 		&i.AgentID,
 		&i.Slug,
+		&i.ReadAccess,
+		&i.WriteAccess,
 		&i.Description,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.ReadAccess,
-		&i.WriteAccess,
 	)
 	return i, err
 }
 
 const listStorageZonesByAgent = `-- name: ListStorageZonesByAgent :many
-SELECT id, agent_id, slug, description, created_at, updated_at, read_access, write_access FROM agent_storage_zones WHERE agent_id = $1
+SELECT id, agent_id, slug, read_access, write_access, description, created_at, updated_at FROM agent_storage_zones WHERE agent_id = $1
 `
 
 func (q *Queries) ListStorageZonesByAgent(ctx context.Context, agentID pgtype.UUID) ([]AgentStorageZone, error) {
@@ -68,11 +68,11 @@ func (q *Queries) ListStorageZonesByAgent(ctx context.Context, agentID pgtype.UU
 			&i.ID,
 			&i.AgentID,
 			&i.Slug,
+			&i.ReadAccess,
+			&i.WriteAccess,
 			&i.Description,
 			&i.CreatedAt,
 			&i.UpdatedAt,
-			&i.ReadAccess,
-			&i.WriteAccess,
 		); err != nil {
 			return nil, err
 		}

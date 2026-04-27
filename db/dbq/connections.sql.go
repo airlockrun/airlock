@@ -32,7 +32,7 @@ func (q *Queries) ClearConnectionCredentials(ctx context.Context, arg ClearConne
 }
 
 const getConnectionBySlug = `-- name: GetConnectionBySlug :one
-SELECT id, agent_id, slug, name, description, auth_mode, auth_url, token_url, base_url, scopes, auth_injection, test_path, setup_instructions, config, client_id, client_secret, credentials, refresh_token, token_expires_at, created_at, updated_at, access FROM connections WHERE agent_id = $1 AND slug = $2
+SELECT id, agent_id, slug, name, description, access, auth_mode, auth_url, token_url, base_url, scopes, auth_injection, test_path, setup_instructions, config, client_id, client_secret, credentials, refresh_token, token_expires_at, created_at, updated_at FROM connections WHERE agent_id = $1 AND slug = $2
 `
 
 type GetConnectionBySlugParams struct {
@@ -49,6 +49,7 @@ func (q *Queries) GetConnectionBySlug(ctx context.Context, arg GetConnectionBySl
 		&i.Slug,
 		&i.Name,
 		&i.Description,
+		&i.Access,
 		&i.AuthMode,
 		&i.AuthUrl,
 		&i.TokenUrl,
@@ -65,7 +66,6 @@ func (q *Queries) GetConnectionBySlug(ctx context.Context, arg GetConnectionBySl
 		&i.TokenExpiresAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.Access,
 	)
 	return i, err
 }
@@ -168,7 +168,7 @@ func (q *Queries) GetConnectionWithCredentialStatus(ctx context.Context, arg Get
 }
 
 const listConnectionsByAgent = `-- name: ListConnectionsByAgent :many
-SELECT id, agent_id, slug, name, description, auth_mode, auth_url, token_url, base_url, scopes, auth_injection, test_path, setup_instructions, config, client_id, client_secret, credentials, refresh_token, token_expires_at, created_at, updated_at, access FROM connections WHERE agent_id = $1
+SELECT id, agent_id, slug, name, description, access, auth_mode, auth_url, token_url, base_url, scopes, auth_injection, test_path, setup_instructions, config, client_id, client_secret, credentials, refresh_token, token_expires_at, created_at, updated_at FROM connections WHERE agent_id = $1
 `
 
 func (q *Queries) ListConnectionsByAgent(ctx context.Context, agentID pgtype.UUID) ([]Connection, error) {
@@ -186,6 +186,7 @@ func (q *Queries) ListConnectionsByAgent(ctx context.Context, agentID pgtype.UUI
 			&i.Slug,
 			&i.Name,
 			&i.Description,
+			&i.Access,
 			&i.AuthMode,
 			&i.AuthUrl,
 			&i.TokenUrl,
@@ -202,7 +203,6 @@ func (q *Queries) ListConnectionsByAgent(ctx context.Context, agentID pgtype.UUI
 			&i.TokenExpiresAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
-			&i.Access,
 		); err != nil {
 			return nil, err
 		}
@@ -416,7 +416,7 @@ ON CONFLICT (agent_id, slug) DO UPDATE SET
     refresh_token = CASE WHEN connections.scopes != EXCLUDED.scopes THEN '' ELSE connections.refresh_token END,
     token_expires_at = CASE WHEN connections.scopes != EXCLUDED.scopes THEN NULL ELSE connections.token_expires_at END,
     updated_at = now()
-RETURNING id, agent_id, slug, name, description, auth_mode, auth_url, token_url, base_url, scopes, auth_injection, test_path, setup_instructions, config, client_id, client_secret, credentials, refresh_token, token_expires_at, created_at, updated_at, access
+RETURNING id, agent_id, slug, name, description, access, auth_mode, auth_url, token_url, base_url, scopes, auth_injection, test_path, setup_instructions, config, client_id, client_secret, credentials, refresh_token, token_expires_at, created_at, updated_at
 `
 
 type UpsertConnectionParams struct {
@@ -461,6 +461,7 @@ func (q *Queries) UpsertConnection(ctx context.Context, arg UpsertConnectionPara
 		&i.Slug,
 		&i.Name,
 		&i.Description,
+		&i.Access,
 		&i.AuthMode,
 		&i.AuthUrl,
 		&i.TokenUrl,
@@ -477,7 +478,6 @@ func (q *Queries) UpsertConnection(ctx context.Context, arg UpsertConnectionPara
 		&i.TokenExpiresAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.Access,
 	)
 	return i, err
 }

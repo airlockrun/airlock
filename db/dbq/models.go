@@ -85,6 +85,7 @@ type AgentMcpServer struct {
 	AgentID        pgtype.UUID        `json:"agent_id"`
 	Slug           string             `json:"slug"`
 	Name           string             `json:"name"`
+	Access         string             `json:"access"`
 	Url            string             `json:"url"`
 	AuthMode       string             `json:"auth_mode"`
 	AuthUrl        string             `json:"auth_url"`
@@ -99,7 +100,6 @@ type AgentMcpServer struct {
 	LastSyncedAt   pgtype.Timestamptz `json:"last_synced_at"`
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
-	Access         string             `json:"access"`
 }
 
 type AgentMember struct {
@@ -148,11 +148,11 @@ type AgentStorageZone struct {
 	ID          pgtype.UUID        `json:"id"`
 	AgentID     pgtype.UUID        `json:"agent_id"`
 	Slug        string             `json:"slug"`
+	ReadAccess  string             `json:"read_access"`
+	WriteAccess string             `json:"write_access"`
 	Description string             `json:"description"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
-	ReadAccess  string             `json:"read_access"`
-	WriteAccess string             `json:"write_access"`
 }
 
 type AgentTool struct {
@@ -171,9 +171,9 @@ type AgentTopic struct {
 	AgentID     pgtype.UUID        `json:"agent_id"`
 	Slug        string             `json:"slug"`
 	Description string             `json:"description"`
+	Access      string             `json:"access"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
-	Access      string             `json:"access"`
 }
 
 type AgentWebhook struct {
@@ -225,6 +225,7 @@ type Connection struct {
 	Slug              string             `json:"slug"`
 	Name              string             `json:"name"`
 	Description       string             `json:"description"`
+	Access            string             `json:"access"`
 	AuthMode          string             `json:"auth_mode"`
 	AuthUrl           string             `json:"auth_url"`
 	TokenUrl          string             `json:"token_url"`
@@ -241,7 +242,6 @@ type Connection struct {
 	TokenExpiresAt    pgtype.Timestamptz `json:"token_expires_at"`
 	CreatedAt         pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
-	Access            string             `json:"access"`
 }
 
 type OauthState struct {

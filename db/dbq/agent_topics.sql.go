@@ -27,7 +27,7 @@ func (q *Queries) DeleteTopicsByAgentExcept(ctx context.Context, arg DeleteTopic
 }
 
 const getTopicBySlug = `-- name: GetTopicBySlug :one
-SELECT id, agent_id, slug, description, created_at, updated_at, access FROM agent_topics WHERE agent_id = $1 AND slug = $2
+SELECT id, agent_id, slug, description, access, created_at, updated_at FROM agent_topics WHERE agent_id = $1 AND slug = $2
 `
 
 type GetTopicBySlugParams struct {
@@ -43,9 +43,9 @@ func (q *Queries) GetTopicBySlug(ctx context.Context, arg GetTopicBySlugParams) 
 		&i.AgentID,
 		&i.Slug,
 		&i.Description,
+		&i.Access,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.Access,
 	)
 	return i, err
 }
@@ -131,7 +131,7 @@ func (q *Queries) ListTopicSubscriptions(ctx context.Context, arg ListTopicSubsc
 }
 
 const listTopicsByAgent = `-- name: ListTopicsByAgent :many
-SELECT id, agent_id, slug, description, created_at, updated_at, access FROM agent_topics WHERE agent_id = $1
+SELECT id, agent_id, slug, description, access, created_at, updated_at FROM agent_topics WHERE agent_id = $1
 `
 
 func (q *Queries) ListTopicsByAgent(ctx context.Context, agentID pgtype.UUID) ([]AgentTopic, error) {
@@ -148,9 +148,9 @@ func (q *Queries) ListTopicsByAgent(ctx context.Context, agentID pgtype.UUID) ([
 			&i.AgentID,
 			&i.Slug,
 			&i.Description,
+			&i.Access,
 			&i.CreatedAt,
 			&i.UpdatedAt,
-			&i.Access,
 		); err != nil {
 			return nil, err
 		}
