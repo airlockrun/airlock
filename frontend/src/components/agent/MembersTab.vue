@@ -31,7 +31,7 @@ const roleOptions = [
 // Users not already members
 const availableUsers = computed(() => {
   const memberIds = new Set(members.value.map(m => m.userId))
-  return usersStore.users
+  return usersStore.selectable
     .filter(u => !memberIds.has(u.id))
     .map(u => ({ id: u.id, email: u.email, displayName: u.displayName, label: u.displayName ? `${u.displayName} (${u.email})` : u.email }))
 })
@@ -57,11 +57,16 @@ async function addMember() {
   const user = availableUsers.value.find(u => u.id === selectedUserId.value)
   if (!user) return
   try {
-    const { data } = await api.post(`/api/v1/agents/${props.agentId}/members`, {
-      email: user.email,
+    await api.post(`/api/v1/agents/${props.agentId}/members`, {
+      userId: user.id,
       role: newRole.value,
     })
-    members.value.push(mapMember(data.member ?? data))
+    members.value.push({
+      userId: user.id,
+      email: user.email,
+      displayName: user.displayName,
+      role: newRole.value,
+    })
     showAddDialog.value = false
     selectedUserId.value = ''
     newRole.value = 'user'
@@ -88,7 +93,7 @@ function confirmRemove(member: Member) {
 }
 
 onMounted(async () => {
-  usersStore.fetchUsers()
+  usersStore.fetchSelectable()
   try {
     const { data } = await api.get(`/api/v1/agents/${props.agentId}/members`)
     members.value = (data.members || []).map(mapMember)

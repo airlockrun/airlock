@@ -381,6 +381,27 @@ func runServe(_ []string) {
 		}
 	}()
 
+	// Attachment URL cache prune — drop rows that expired more than 24h ago.
+	// Stale rows aren't harmful (just unused), so a slow daily sweep is enough.
+	go func() {
+		cleanupLogger := logger.Named("attachment-url-cache-prune")
+		ticker := time.NewTicker(24 * time.Hour)
+		defer ticker.Stop()
+		q := dbq.New(database.Pool())
+		for {
+			select {
+			case <-ticker.C:
+				if n, err := q.PruneExpiredAttachmentURLs(ctx); err != nil {
+					cleanupLogger.Error("prune attachment_url_cache failed", zap.Error(err))
+				} else if n > 0 {
+					cleanupLogger.Info("pruned expired attachment URLs", zap.Int64("rows", n))
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
 	// Wait for shutdown signal
 	<-ctx.Done()
 	logger.Info("shutting down")

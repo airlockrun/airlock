@@ -14,7 +14,7 @@ import (
 const createMessage = `-- name: CreateMessage :one
 INSERT INTO agent_messages (conversation_id, role, content, parts, tokens_in, tokens_out, cost_estimate, run_id, source, ephemeral)
 VALUES ($1, $2, $3, $4, $5, $6, COALESCE($7, 0), $8, COALESCE(NULLIF($9, ''), 'user'), $10)
-RETURNING id, conversation_id, run_id, role, source, content, parts, file_keys, tokens_in, tokens_out, cost_estimate, ephemeral, created_at
+RETURNING id, seq, conversation_id, run_id, role, source, content, parts, file_keys, tokens_in, tokens_out, cost_estimate, ephemeral, created_at
 `
 
 type CreateMessageParams struct {
@@ -46,6 +46,7 @@ func (q *Queries) CreateMessage(ctx context.Context, arg CreateMessageParams) (A
 	var i AgentMessage
 	err := row.Scan(
 		&i.ID,
+		&i.Seq,
 		&i.ConversationID,
 		&i.RunID,
 		&i.Role,
@@ -72,16 +73,33 @@ func (q *Queries) DeleteMessagesByConversation(ctx context.Context, conversation
 	return err
 }
 
-const listAllMessagesByConversation = `-- name: ListAllMessagesByConversation :many
-SELECT id, conversation_id, run_id, role, source, content, parts, file_keys, tokens_in, tokens_out, cost_estimate, ephemeral, created_at FROM agent_messages
-WHERE conversation_id = $1
-ORDER BY
-  COALESCE(MIN(created_at) FILTER (WHERE run_id IS NOT NULL) OVER (PARTITION BY run_id), created_at) ASC,
-  ephemeral ASC,
-  created_at ASC
+const getConversationIDByRun = `-- name: GetConversationIDByRun :one
+SELECT conversation_id FROM agent_messages
+WHERE run_id = $1
+LIMIT 1
 `
 
-// UI loading — includes all messages.
+// Resolves the conversation a run is attached to via any message's run_id.
+// Cron- or webhook-triggered runs that never wrote a message return no rows.
+func (q *Queries) GetConversationIDByRun(ctx context.Context, runID pgtype.UUID) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, getConversationIDByRun, runID)
+	var conversation_id pgtype.UUID
+	err := row.Scan(&conversation_id)
+	return conversation_id, err
+}
+
+const listAllMessagesByConversation = `-- name: ListAllMessagesByConversation :many
+SELECT id, seq, conversation_id, run_id, role, source, content, parts, file_keys, tokens_in, tokens_out, cost_estimate, ephemeral, created_at FROM agent_messages
+WHERE conversation_id = $1
+ORDER BY
+  COALESCE(MIN(seq) FILTER (WHERE run_id IS NOT NULL) OVER (PARTITION BY run_id), seq) ASC,
+  ephemeral ASC,
+  seq ASC
+`
+
+// UI loading — includes all messages. Run-grouped: rows that share a run_id
+// stay together in the slot of the run's first message; tiebreak by ephemeral
+// (non-ephemeral first) then seq.
 func (q *Queries) ListAllMessagesByConversation(ctx context.Context, conversationID pgtype.UUID) ([]AgentMessage, error) {
 	rows, err := q.db.Query(ctx, listAllMessagesByConversation, conversationID)
 	if err != nil {
@@ -93,6 +111,7 @@ func (q *Queries) ListAllMessagesByConversation(ctx context.Context, conversatio
 		var i AgentMessage
 		if err := rows.Scan(
 			&i.ID,
+			&i.Seq,
 			&i.ConversationID,
 			&i.RunID,
 			&i.Role,
@@ -117,24 +136,24 @@ func (q *Queries) ListAllMessagesByConversation(ctx context.Context, conversatio
 }
 
 const listMessagesBackward = `-- name: ListMessagesBackward :many
-SELECT id, conversation_id, run_id, role, source, content, parts, file_keys, tokens_in, tokens_out, cost_estimate, ephemeral, created_at FROM (
-    SELECT id, conversation_id, run_id, role, source, content, parts, file_keys, tokens_in, tokens_out, cost_estimate, ephemeral, created_at FROM agent_messages
+SELECT id, seq, conversation_id, run_id, role, source, content, parts, file_keys, tokens_in, tokens_out, cost_estimate, ephemeral, created_at FROM (
+    SELECT id, seq, conversation_id, run_id, role, source, content, parts, file_keys, tokens_in, tokens_out, cost_estimate, ephemeral, created_at FROM agent_messages
     WHERE conversation_id = $1
-      AND created_at < $2
-    ORDER BY created_at DESC
+      AND seq < $2
+    ORDER BY seq DESC
     LIMIT $3
 ) t
-ORDER BY created_at ASC
+ORDER BY seq ASC
 `
 
 type ListMessagesBackwardParams struct {
-	ConversationID pgtype.UUID        `json:"conversation_id"`
-	Before         pgtype.Timestamptz `json:"before"`
-	Lim            int32              `json:"lim"`
+	ConversationID pgtype.UUID `json:"conversation_id"`
+	Before         int64       `json:"before"`
+	Lim            int32       `json:"lim"`
 }
 
-// Older page for infinite-scroll-up. Returns up to @lim messages strictly
-// older than @before, back in chronological order for easy prepend.
+// Older page for infinite-scroll-up. Returns up to @lim messages with seq
+// strictly less than @before, back in chronological order for easy prepend.
 func (q *Queries) ListMessagesBackward(ctx context.Context, arg ListMessagesBackwardParams) ([]AgentMessage, error) {
 	rows, err := q.db.Query(ctx, listMessagesBackward, arg.ConversationID, arg.Before, arg.Lim)
 	if err != nil {
@@ -146,6 +165,7 @@ func (q *Queries) ListMessagesBackward(ctx context.Context, arg ListMessagesBack
 		var i AgentMessage
 		if err := rows.Scan(
 			&i.ID,
+			&i.Seq,
 			&i.ConversationID,
 			&i.RunID,
 			&i.Role,
@@ -170,19 +190,21 @@ func (q *Queries) ListMessagesBackward(ctx context.Context, arg ListMessagesBack
 }
 
 const listMessagesByConversation = `-- name: ListMessagesByConversation :many
-SELECT id, conversation_id, run_id, role, source, content, parts, file_keys, tokens_in, tokens_out, cost_estimate, ephemeral, created_at FROM (
-    SELECT id, conversation_id, run_id, role, source, content, parts, file_keys, tokens_in, tokens_out, cost_estimate, ephemeral, created_at FROM agent_messages
+SELECT id, seq, conversation_id, run_id, role, source, content, parts, file_keys, tokens_in, tokens_out, cost_estimate, ephemeral, created_at FROM (
+    SELECT id, seq, conversation_id, run_id, role, source, content, parts, file_keys, tokens_in, tokens_out, cost_estimate, ephemeral, created_at FROM agent_messages
     WHERE conversation_id = $1
-    ORDER BY created_at DESC
+    ORDER BY seq DESC
     LIMIT 101
 ) t
-ORDER BY created_at ASC
+ORDER BY seq ASC
 `
 
 // Initial UI page: the 100 most recent messages, returned in chronological
 // order. The handler overfetches by one (LIMIT 101) so it can report
 // has_older_messages without a second COUNT query; the extra row is trimmed
-// before the response is built.
+// before the response is built. Ordering is by seq (monotonic insertion
+// order) — created_at alone ties when multiple rows are inserted in one
+// transaction (assistant + tool batch).
 func (q *Queries) ListMessagesByConversation(ctx context.Context, conversationID pgtype.UUID) ([]AgentMessage, error) {
 	rows, err := q.db.Query(ctx, listMessagesByConversation, conversationID)
 	if err != nil {
@@ -194,6 +216,7 @@ func (q *Queries) ListMessagesByConversation(ctx context.Context, conversationID
 		var i AgentMessage
 		if err := rows.Scan(
 			&i.ID,
+			&i.Seq,
 			&i.ConversationID,
 			&i.RunID,
 			&i.Role,
@@ -218,9 +241,9 @@ func (q *Queries) ListMessagesByConversation(ctx context.Context, conversationID
 }
 
 const listMessagesByRun = `-- name: ListMessagesByRun :many
-SELECT id, conversation_id, run_id, role, source, content, parts, file_keys, tokens_in, tokens_out, cost_estimate, ephemeral, created_at FROM agent_messages
+SELECT id, seq, conversation_id, run_id, role, source, content, parts, file_keys, tokens_in, tokens_out, cost_estimate, ephemeral, created_at FROM agent_messages
 WHERE run_id = $1
-ORDER BY created_at ASC
+ORDER BY seq ASC
 `
 
 func (q *Queries) ListMessagesByRun(ctx context.Context, runID pgtype.UUID) ([]AgentMessage, error) {
@@ -234,6 +257,7 @@ func (q *Queries) ListMessagesByRun(ctx context.Context, runID pgtype.UUID) ([]A
 		var i AgentMessage
 		if err := rows.Scan(
 			&i.ID,
+			&i.Seq,
 			&i.ConversationID,
 			&i.RunID,
 			&i.Role,
@@ -258,21 +282,21 @@ func (q *Queries) ListMessagesByRun(ctx context.Context, runID pgtype.UUID) ([]A
 }
 
 const listMessagesForward = `-- name: ListMessagesForward :many
-SELECT id, conversation_id, run_id, role, source, content, parts, file_keys, tokens_in, tokens_out, cost_estimate, ephemeral, created_at FROM agent_messages
+SELECT id, seq, conversation_id, run_id, role, source, content, parts, file_keys, tokens_in, tokens_out, cost_estimate, ephemeral, created_at FROM agent_messages
 WHERE conversation_id = $1
-  AND created_at > $2
-ORDER BY created_at ASC
+  AND seq > $2
+ORDER BY seq ASC
 LIMIT $3
 `
 
 type ListMessagesForwardParams struct {
-	ConversationID pgtype.UUID        `json:"conversation_id"`
-	After          pgtype.Timestamptz `json:"after"`
-	Lim            int32              `json:"lim"`
+	ConversationID pgtype.UUID `json:"conversation_id"`
+	After          int64       `json:"after"`
+	Lim            int32       `json:"lim"`
 }
 
-// Newer page for scroll-down after eviction. Returns up to @lim messages
-// strictly newer than @after, in chronological order.
+// Newer page for scroll-down after eviction. Returns up to @lim messages with
+// seq strictly greater than @after, in chronological order.
 func (q *Queries) ListMessagesForward(ctx context.Context, arg ListMessagesForwardParams) ([]AgentMessage, error) {
 	rows, err := q.db.Query(ctx, listMessagesForward, arg.ConversationID, arg.After, arg.Lim)
 	if err != nil {
@@ -284,6 +308,7 @@ func (q *Queries) ListMessagesForward(ctx context.Context, arg ListMessagesForwa
 		var i AgentMessage
 		if err := rows.Scan(
 			&i.ID,
+			&i.Seq,
 			&i.ConversationID,
 			&i.RunID,
 			&i.Role,
@@ -308,18 +333,18 @@ func (q *Queries) ListMessagesForward(ctx context.Context, arg ListMessagesForwa
 }
 
 const listSessionMessagesByConversation = `-- name: ListSessionMessagesByConversation :many
-SELECT m.id, m.conversation_id, m.run_id, m.role, m.source, m.content, m.parts, m.file_keys, m.tokens_in, m.tokens_out, m.cost_estimate, m.ephemeral, m.created_at FROM agent_messages m
+SELECT m.id, m.seq, m.conversation_id, m.run_id, m.role, m.source, m.content, m.parts, m.file_keys, m.tokens_in, m.tokens_out, m.cost_estimate, m.ephemeral, m.created_at FROM agent_messages m
 JOIN agent_conversations c ON c.id = m.conversation_id
 WHERE m.conversation_id = $1
   AND NOT m.ephemeral
   AND m.source <> 'checkpoint'
   AND (
     c.context_checkpoint_message_id IS NULL
-    OR m.created_at >= (
-      SELECT created_at FROM agent_messages WHERE id = c.context_checkpoint_message_id
+    OR m.seq >= (
+      SELECT seq FROM agent_messages WHERE id = c.context_checkpoint_message_id
     )
   )
-ORDER BY m.created_at ASC
+ORDER BY m.seq ASC
 `
 
 // Agent context loading — excludes ephemeral messages (printToUser output) and
@@ -337,6 +362,7 @@ func (q *Queries) ListSessionMessagesByConversation(ctx context.Context, convers
 		var i AgentMessage
 		if err := rows.Scan(
 			&i.ID,
+			&i.Seq,
 			&i.ConversationID,
 			&i.RunID,
 			&i.Role,
@@ -386,8 +412,8 @@ WHERE m.conversation_id = $1
   AND m.source <> 'checkpoint'
   AND (
     c.context_checkpoint_message_id IS NULL
-    OR m.created_at >= (
-      SELECT created_at FROM agent_messages WHERE id = c.context_checkpoint_message_id
+    OR m.seq >= (
+      SELECT seq FROM agent_messages WHERE id = c.context_checkpoint_message_id
     )
   )
 `

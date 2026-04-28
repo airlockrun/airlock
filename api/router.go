@@ -195,6 +195,10 @@ func NewRouter(cfg RouterConfig) http.Handler {
 
 		r.Get("/me", authHandler.Me)
 
+		// Slim tenant directory for member-picker dropdowns. Any authenticated
+		// user — agent admins who aren't tenant admins still need this list.
+		r.Get("/users/selectable", usersHandler.ListSelectable)
+
 		// User management (admin only)
 		r.Route("/users", func(r chi.Router) {
 			r.Use(auth.RequireTenantRole("admin"))
@@ -428,7 +432,6 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		r.Delete("/topic/{slug}/subscribe", ah.TopicUnsubscribe)
 		r.Put("/mcp-servers/{slug}", ah.UpsertMCPServer)
 		r.Post("/mcp/{slug}/tools/call", ah.MCPToolCall)
-		r.Get("/mcp/{slug}/tools", ah.MCPListTools)
 	})
 
 	// Wrap with subdomain proxy for agent custom routes.

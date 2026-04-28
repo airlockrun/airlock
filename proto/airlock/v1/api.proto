@@ -81,6 +81,10 @@ message ListUsersResponse {
   repeated User users = 1;
 }
 
+message ListSelectableUsersResponse {
+  repeated UserSummary users = 1;
+}
+
 message UpdateUserRoleRequest {
   string tenant_role = 1;
 }

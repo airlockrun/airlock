@@ -111,6 +111,7 @@ type AgentMember struct {
 
 type AgentMessage struct {
 	ID             pgtype.UUID        `json:"id"`
+	Seq            int64              `json:"seq"`
 	ConversationID pgtype.UUID        `json:"conversation_id"`
 	RunID          pgtype.UUID        `json:"run_id"`
 	Role           string             `json:"role"`
@@ -188,6 +189,12 @@ type AgentWebhook struct {
 	LastReceivedAt pgtype.Timestamptz `json:"last_received_at"`
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+}
+
+type AttachmentUrlCache struct {
+	CanonicalKey string             `json:"canonical_key"`
+	Url          string             `json:"url"`
+	ExpiresAt    pgtype.Timestamptz `json:"expires_at"`
 }
 
 type AuthFailure struct {
@@ -292,6 +299,7 @@ type Run struct {
 	Logs            string             `json:"logs"`
 	StdoutLog       string             `json:"stdout_log"`
 	ErrorMessage    string             `json:"error_message"`
+	ErrorKind       string             `json:"error_kind"`
 	ExitCode        pgtype.Int4        `json:"exit_code"`
 	PanicTrace      string             `json:"panic_trace"`
 	Checkpoint      []byte             `json:"checkpoint"`

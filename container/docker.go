@@ -306,7 +306,10 @@ func (m *DockerManager) RemoveImage(ctx context.Context, imageRef string) error 
 func (m *DockerManager) StartToolserver(ctx context.Context, opts ToolserverOpts) (*Container, error) {
 	name := fmt.Sprintf("airlock-agent-builder-%d", time.Now().UnixNano())
 
-	cmd := []string{"toolserver", "-space-dir", opts.WorkDir}
+	// Set -home-dir so tools that resolve $HOME (e.g. todowrite's XDG path)
+	// have a writable target — the container runs as a non-root UID with no
+	// /etc/passwd entry, so HOME would otherwise default to "/" and fail.
+	cmd := []string{"toolserver", "-space-dir", opts.WorkDir, "-home-dir", "/tmp/sol-home"}
 
 	// Run as the host UID/GID so files written to the bind-mounted workspace
 	// are owned by the same user, preventing permission errors on git operations.

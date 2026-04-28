@@ -70,12 +70,15 @@ func (h *agentHandler) RunComplete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// agentsdk classifies the error structurally (by call-site, not regex)
+	// and sends the kind in req.ErrorKind. We trust it as-is.
 	q := dbq.New(h.db.Pool())
 	if err := q.UpsertRunComplete(r.Context(), dbq.UpsertRunCompleteParams{
 		ID:           toPgUUID(runUUID),
 		AgentID:      toPgUUID(agentID),
 		Status:       req.Status,
 		ErrorMessage: req.Error,
+		ErrorKind:    req.ErrorKind,
 		Actions:      req.Actions,
 		StdoutLog:    formatRunLogs(req.Logs),
 		PanicTrace:   req.PanicTrace,
@@ -83,6 +86,26 @@ func (h *agentHandler) RunComplete(w http.ResponseWriter, r *http.Request) {
 		h.logger.Error("upsert run complete failed", zap.Error(err))
 		writeJSONError(w, http.StatusInternalServerError, "failed to record run completion")
 		return
+	}
+
+	// Persist the error as a synthetic assistant message in the conversation
+	// (if the run is conversation-attached) so the chat surface keeps the
+	// banner after refresh. WS already paints it transiently. Cron- or
+	// webhook-triggered runs that never wrote a message return no rows from
+	// GetConversationIDByRun and we skip silently.
+	if req.Status == "error" && req.Error != "" {
+		convID, lookupErr := q.GetConversationIDByRun(r.Context(), toPgUUID(runUUID))
+		if lookupErr == nil && convID.Valid {
+			if _, err := q.CreateMessage(r.Context(), dbq.CreateMessageParams{
+				ConversationID: convID,
+				Role:           "assistant",
+				Source:         "error",
+				Content:        req.Error,
+				RunID:          toPgUUID(runUUID),
+			}); err != nil {
+				h.logger.Warn("persist error message failed", zap.Error(err))
+			}
+		}
 	}
 
 	// Aggregate per-message LLM telemetry (tokens, cost, call count) onto

@@ -168,17 +168,23 @@ export const useChatStore = defineStore('chat', () => {
         const ev = tryFromJson<RunErrorEvent>(RunErrorEventSchema, payload)
         if (!ev || !isCurrentRun(ev.runId)) return
         console.warn('[chat] run.error', { runId: ev.runId, error: ev.error })
-        // Always surface the error — streamingText may be empty when the
-        // run fails before the LLM emits any text (DNS blip, provider 4xx,
-        // etc). finalizeMessage won't push an empty streamingText, so the
-        // error would otherwise disappear silently.
-        const errText = ev.error || 'Run failed.'
-        if (streamingText.value) {
-          streamingText.value += `\n\n**Error:** ${errText}`
-        } else {
-          streamingText.value = `**Error:** ${errText}`
-        }
+        // Finalize whatever assistant text streamed before the failure (don't
+        // discard partial output) and append a separate source='error' bubble
+        // matching the shape airlock persists to agent_messages on RunComplete.
+        // The persisted row arrives via DB fetch on refresh; this synth makes
+        // the live experience match without waiting.
         finalizeMessage()
+        const errText = ev.error || 'Run failed.'
+        messages.value.push({
+          $typeName: 'airlock.v1.AgentMessageInfo',
+          id: `error-${ev.runId}`,
+          role: 'assistant',
+          source: 'error',
+          content: errText,
+          tokensIn: 0,
+          tokensOut: 0,
+          costEstimate: 0,
+        } as any)
       }),
       ws.onMessage('run.suspended', () => {
         // Run suspended (e.g., awaiting approval) — keep state as-is.
@@ -231,14 +237,6 @@ export const useChatStore = defineStore('chat', () => {
         ;(msg as any).displayParts = parsed
       }
     } catch { /* leave unparsed — the view falls back to content */ }
-  }
-
-  // Convert a protobuf Timestamp (seconds + nanos) to an RFC3339Nano string
-  // suitable for passing as a `before`/`after` cursor to the backend.
-  function timestampToRFC3339(ts: { seconds: bigint | number; nanos: number }): string {
-    const seconds = typeof ts.seconds === 'bigint' ? Number(ts.seconds) : ts.seconds
-    const ms = seconds * 1000 + Math.floor(ts.nanos / 1e6)
-    return new Date(ms).toISOString()
   }
 
   let sendingTimeout: ReturnType<typeof setTimeout> | null = null
@@ -444,11 +442,10 @@ export const useChatStore = defineStore('chat', () => {
     loadingOlder.value = true
     try {
       const oldest = messages.value[0]
-      if (!oldest?.createdAt) return 0
-      const before = timestampToRFC3339(oldest.createdAt)
+      if (!oldest) return 0
       const { data } = await api.get(
         `/api/v1/conversations/${conversationId.value}/messages`,
-        { params: { before, limit: PAGE_SIZE } })
+        { params: { before: oldest.seq.toString(), limit: PAGE_SIZE } })
       const resp = fromJson(PaginatedMessagesResponseSchema, data)
       const older = enrichMessages(resp.messages)
       messages.value = [...older, ...messages.value]
@@ -473,11 +470,10 @@ export const useChatStore = defineStore('chat', () => {
     loadingNewer.value = true
     try {
       const newest = messages.value[messages.value.length - 1]
-      if (!newest?.createdAt) return 0
-      const after = timestampToRFC3339(newest.createdAt)
+      if (!newest) return 0
       const { data } = await api.get(
         `/api/v1/conversations/${conversationId.value}/messages`,
-        { params: { after, limit: PAGE_SIZE } })
+        { params: { after: newest.seq.toString(), limit: PAGE_SIZE } })
       const resp = fromJson(PaginatedMessagesResponseSchema, data)
       const newer = enrichMessages(resp.messages)
       messages.value = [...messages.value, ...newer]

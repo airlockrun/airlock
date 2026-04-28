@@ -7,11 +7,13 @@ import { useToast } from 'primevue/usetoast'
 import { useTheme } from '@/composables/useTheme'
 import {
   useModelCapabilities,
-  supportsText,
-  supportsVision,
-  supportsSTT,
-  supportsTTS,
-  supportsImageGen,
+  isLanguage,
+  isEmbedding,
+  isImageGen,
+  isSpeech,
+  isTranscription,
+  hasCap,
+  type CatalogModel,
 } from '@/composables/useModelCapabilities'
 import api from '@/api/client'
 import {
@@ -87,7 +89,7 @@ const defaultRows = computed<DefaultRow[]>(() => [
     label: 'Build Model',
     icon: 'pi pi-hammer',
     help: 'Used by Sol for agent code generation and upgrades.',
-    options: groupModels(supportsText),
+    options: groupModels(isLanguage),
     placeholder: 'Select default build model',
   },
   {
@@ -95,7 +97,7 @@ const defaultRows = computed<DefaultRow[]>(() => [
     label: 'Execution Model (Text)',
     icon: 'pi pi-align-left',
     help: 'Runtime default when agents make language-model calls.',
-    options: groupModels(supportsText),
+    options: groupModels(isLanguage),
     placeholder: 'Select default execution model',
   },
   {
@@ -103,7 +105,7 @@ const defaultRows = computed<DefaultRow[]>(() => [
     label: 'Vision',
     icon: 'pi pi-image',
     help: 'Default model for image → text tasks.',
-    options: groupModels(supportsVision),
+    options: groupModels((m: CatalogModel) => isLanguage(m) && hasCap(m, 'vision')),
     placeholder: 'Select vision model',
   },
   {
@@ -111,7 +113,7 @@ const defaultRows = computed<DefaultRow[]>(() => [
     label: 'STT',
     icon: 'pi pi-microphone',
     help: 'Telegram voice notes are auto-transcribed with this model before being sent to agents. Leave empty to disable.',
-    options: groupModels(supportsSTT),
+    options: groupModels(isTranscription),
     placeholder: 'Select speech-to-text model',
   },
   {
@@ -119,7 +121,7 @@ const defaultRows = computed<DefaultRow[]>(() => [
     label: 'TTS',
     icon: 'pi pi-volume-up',
     help: 'Default model for text → speech synthesis.',
-    options: groupModels(supportsTTS),
+    options: groupModels(isSpeech),
     placeholder: 'Select text-to-speech model',
   },
   {
@@ -127,7 +129,7 @@ const defaultRows = computed<DefaultRow[]>(() => [
     label: 'Image Gen',
     icon: 'pi pi-palette',
     help: 'Default model for text → image generation.',
-    options: groupModels(supportsImageGen),
+    options: groupModels(isImageGen),
     placeholder: 'Select image-generation model',
   },
   {
@@ -135,7 +137,7 @@ const defaultRows = computed<DefaultRow[]>(() => [
     label: 'Embedding',
     icon: 'pi pi-database',
     help: 'Default model for text → vector embeddings (e.g. OpenAI text-embedding-3-small).',
-    options: groupModels(supportsText),
+    options: groupModels(isEmbedding),
     placeholder: 'Select embedding model',
   },
   {

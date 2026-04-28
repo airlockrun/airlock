@@ -148,57 +148,6 @@ func (h *agentHandler) MCPToolCall(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
-// MCPListTools handles GET /api/agent/mcp/{slug}/tools.
-// Returns discovered tool schemas for a single MCP server.
-func (h *agentHandler) MCPListTools(w http.ResponseWriter, r *http.Request) {
-	agentID := auth.AgentIDFromContext(r.Context())
-	slug := chi.URLParam(r, "slug")
-
-	q := dbq.New(h.db.Pool())
-	server, err := q.GetMCPServerBySlug(r.Context(), dbq.GetMCPServerBySlugParams{
-		AgentID: toPgUUID(agentID),
-		Slug:    slug,
-	})
-	if err != nil {
-		writeJSONError(w, http.StatusNotFound, "MCP server not found")
-		return
-	}
-
-	if server.Credentials == "" {
-		writeJSONError(w, http.StatusForbidden, "MCP server requires authorization")
-		return
-	}
-
-	creds, err := h.encryptor.Decrypt(server.Credentials)
-	if err != nil {
-		h.logger.Error("decrypt MCP credentials failed", zap.String("slug", slug), zap.Error(err))
-		writeJSONError(w, http.StatusInternalServerError, "credential error")
-		return
-	}
-
-	tools, err := discoverMCPTools(r.Context(), server.Url, creds)
-	if err != nil {
-		h.logger.Warn("MCP tool discovery failed", zap.String("slug", slug), zap.Error(err))
-		writeJSONError(w, http.StatusBadGateway, "tool discovery failed: "+err.Error())
-		return
-	}
-
-	// Convert to MCPToolSchema for the response.
-	schemas := make([]agentsdk.MCPToolSchema, len(tools))
-	for i, t := range tools {
-		schemas[i] = agentsdk.MCPToolSchema{
-			ServerSlug:  slug,
-			Name:        t.Name,
-			Description: t.Description,
-			InputSchema: t.InputSchema,
-		}
-	}
-
-	writeJSON(w, http.StatusOK, struct {
-		Tools []agentsdk.MCPToolSchema `json:"tools"`
-	}{Tools: schemas})
-}
-
 // mcpServerStatus holds auth status and tool count for an MCP server.
 type mcpServerStatus struct {
 	agentsdk.MCPAuthStatus

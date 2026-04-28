@@ -30,13 +30,15 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aws/aws-sdk-go-v2/service/s3/types"
-	"github.com/aws/smithy-go"
+	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/airlockrun/airlock/storage"
 	"github.com/airlockrun/goai/message"
 	solprovider "github.com/airlockrun/sol/provider"
 	solsession "github.com/airlockrun/sol/session"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/aws/smithy-go"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // Sentinel is the prefix that marks an Image/Data field as an S3 reference
@@ -44,10 +46,16 @@ import (
 // key (no `agents/<id>/` scope — airlock adds that).
 const Sentinel = "s3ref:"
 
-// urlExpiry is the TTL on presigned URLs handed to LLM providers. Kept
-// short because OpenAI fetches images server-side during the request —
-// they don't need long-lived URLs.
-const urlExpiry = 10 * time.Minute
+// urlExpiry is the TTL on presigned URLs handed to LLM providers. Long
+// enough to span a multi-turn conversation so the same URL string is reused
+// across turns — keeps provider prompt cache stable (a fresh signature on
+// every turn would invalidate the cached prefix at every image part).
+const urlExpiry = 1 * time.Hour
+
+// urlMinRemaining is the threshold below which we mint a fresh URL instead
+// of reusing the cached one. Prevents handing out a URL that'll expire
+// mid-cache-window for a long-running conversation.
+const urlMinRemaining = 15 * time.Minute
 
 // ResolveForStorage canonicalizes s3ref sentinels on session.Messages and
 // writes canonical derived keys into Source. Leaves the sentinel in
@@ -103,8 +111,12 @@ func ResolveForStorage(ctx context.Context, s3 *storage.S3Client, agentID uuid.U
 // per policy. Enforces the request-wide inline cap by evicting oldest
 // parts to text placeholders.
 //
+// URL mode reads/writes attachment_url_cache so the same canonical key
+// returns the same URL string across turns, keeping provider prompt cache
+// stable. Pass q=nil to disable the cache (useful in tests).
+//
 // Mutates msgs in place.
-func ResolveForLLM(ctx context.Context, s3 *storage.S3Client, agentID uuid.UUID, policy solprovider.AttachmentPolicy, msgs []message.Message) error {
+func ResolveForLLM(ctx context.Context, s3 *storage.S3Client, q *dbq.Queries, agentID uuid.UUID, policy solprovider.AttachmentPolicy, msgs []message.Message) error {
 	// Collect every s3ref-bearing image/file part with its position so we
 	// can (a) canonicalize, (b) apply policy, (c) evict if over cap. We
 	// index parts by (message index, part index) because message.Parts
@@ -179,7 +191,7 @@ func ResolveForLLM(ctx context.Context, s3 *storage.S3Client, agentID uuid.UUID,
 				useURL = false
 			}
 			if useURL {
-				url, err := s3.PublicPresignGetURL(ctx, rr.canonicalKey, urlExpiry)
+				url, err := getOrMintURL(ctx, s3, q, rr.canonicalKey)
 				if err != nil {
 					return fmt.Errorf("attachref: presign %q: %w", rr.canonicalKey, err)
 				}
@@ -355,6 +367,41 @@ func evictionPlaceholder(kind, agentKey string) string {
 		"[%s %s was dropped — request exceeded size limit. Call attachToContext(%q) inside run_js if you need to see it again.]",
 		noun, agentKey, agentKey,
 	)
+}
+
+// getOrMintURL returns a presigned URL for the canonical key, reusing a
+// cached URL when one with at least urlMinRemaining left exists. Cache
+// misses (including DB errors and the q=nil "no-cache" path) fall through
+// to a fresh presign with TTL=urlExpiry, which is then UPSERTed back.
+//
+// Replica-safe: concurrent miss-and-mint calls on different replicas just
+// race the UPSERT — last write wins, both URLs are valid until expiry.
+func getOrMintURL(ctx context.Context, s3 *storage.S3Client, q *dbq.Queries, canonicalKey string) (string, error) {
+	if q != nil {
+		row, err := q.GetCachedAttachmentURL(ctx, dbq.GetCachedAttachmentURLParams{
+			CanonicalKey: canonicalKey,
+			MinRemaining: pgtype.Interval{Microseconds: urlMinRemaining.Microseconds(), Valid: true},
+		})
+		if err == nil {
+			return row.Url, nil
+		}
+		// pgx returns ErrNoRows on miss; any other error we treat as miss
+		// too (cache is best-effort — don't fail the LLM call over it).
+	}
+
+	url, err := s3.PublicPresignGetURL(ctx, canonicalKey, urlExpiry)
+	if err != nil {
+		return "", err
+	}
+
+	if q != nil {
+		_ = q.UpsertCachedAttachmentURL(ctx, dbq.UpsertCachedAttachmentURLParams{
+			CanonicalKey: canonicalKey,
+			Url:          url,
+			ExpiresAt:    pgtype.Timestamptz{Time: time.Now().Add(urlExpiry), Valid: true},
+		})
+	}
+	return url, nil
 }
 
 // isNotFound returns true when the S3 error is a 404/NoSuchKey.

@@ -86,6 +86,12 @@ const hasErrors = computed(() => {
   return s === 'tool_errors' || s === 'error' || s === 'failed'
 })
 
+// Hide the Fix-this-error workflow on platform-side errors (provider 4xx,
+// network) — sending the run context to the build agent won't help when the
+// agent's own code wasn't at fault. Empty error_kind keeps the button visible
+// (legacy / unclassified errors).
+const isPlatformError = computed(() => run.value?.errorKind === 'platform')
+
 function formatActionInput(action: Record<string, any>): string {
   if (!action.request) return ''
   if (typeof action.request === 'string') return action.request
@@ -186,6 +192,9 @@ onMounted(async () => {
     <!-- Error panel -->
     <Message v-if="run.errorMessage" severity="error" :closable="false" style="margin-bottom: 1rem">
       <div>{{ run.errorMessage }}</div>
+      <div v-if="isPlatformError" style="font-size: 0.8rem; margin-top: 0.5rem; opacity: 0.85">
+        Platform error — provider, network, or auth failure upstream of the agent. Retrying may help; fixing the agent code won't.
+      </div>
       <pre v-if="run.panicTrace" style="white-space: pre-wrap; font-size: 0.8rem; margin-top: 0.5rem">{{ run.panicTrace }}</pre>
     </Message>
 
@@ -205,8 +214,9 @@ onMounted(async () => {
       </div>
     </div>
 
-    <!-- Fix button — shown when run has errors or any action errored -->
-    <div v-if="hasErrors" style="margin-bottom: 1.5rem">
+    <!-- Fix button — only for agent-code errors. Platform errors get the
+         message panel above explaining why this workflow doesn't help. -->
+    <div v-if="hasErrors && !isPlatformError" style="margin-bottom: 1.5rem">
       <Button label="Fix this error" icon="pi pi-wrench" severity="warn" @click="fixDialogVisible = true" />
     </div>
 

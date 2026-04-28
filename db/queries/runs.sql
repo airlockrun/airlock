@@ -7,6 +7,7 @@ RETURNING *;
 UPDATE runs SET
     status = @status,
     error_message = COALESCE(@error_message, ''),
+    error_kind = COALESCE(@error_kind, ''),
     actions = COALESCE(@actions, '[]'::jsonb),
     stdout_log = COALESCE(@stdout_log, ''),
     panic_trace = COALESCE(@panic_trace, ''),
@@ -15,11 +16,12 @@ UPDATE runs SET
 WHERE id = @id;
 
 -- name: UpsertRunComplete :exec
-INSERT INTO runs (id, agent_id, status, error_message, actions, stdout_log, panic_trace, input_payload, source_ref, trigger_type, trigger_ref, finished_at, duration_ms)
-VALUES (@id, @agent_id, @status, @error_message, @actions, @stdout_log, @panic_trace, '{}', '', 'prompt', '', now(), 0)
+INSERT INTO runs (id, agent_id, status, error_message, error_kind, actions, stdout_log, panic_trace, input_payload, source_ref, trigger_type, trigger_ref, finished_at, duration_ms)
+VALUES (@id, @agent_id, @status, @error_message, @error_kind, @actions, @stdout_log, @panic_trace, '{}', '', 'prompt', '', now(), 0)
 ON CONFLICT (id) DO UPDATE SET
     status = EXCLUDED.status,
     error_message = EXCLUDED.error_message,
+    error_kind = EXCLUDED.error_kind,
     actions = EXCLUDED.actions,
     stdout_log = EXCLUDED.stdout_log,
     panic_trace = EXCLUDED.panic_trace,

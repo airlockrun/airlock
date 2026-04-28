@@ -7,11 +7,13 @@ import { useCatalogStore } from '@/stores/catalog'
 import { useProvidersStore } from '@/stores/providers'
 import {
   useModelCapabilities,
-  supportsText,
-  supportsVision,
-  supportsSTT,
-  supportsTTS,
-  supportsImageGen,
+  isLanguage,
+  isEmbedding,
+  isImageGen,
+  isSpeech,
+  isTranscription,
+  hasCap,
+  type CatalogModel,
 } from '@/composables/useModelCapabilities'
 import { useToast } from 'primevue/usetoast'
 import api from '@/api/client'
@@ -87,16 +89,17 @@ async function nextStep() {
 }
 
 // --- Step 2: LLM Providers
-type Capability = 'text' | 'vision' | 'stt' | 'tts' | 'image_gen' | 'search'
+type Capability = 'text' | 'vision' | 'transcription' | 'speech' | 'image_gen' | 'embedding' | 'search'
 
-const capabilityOrder: Capability[] = ['text', 'vision', 'stt', 'tts', 'image_gen', 'search']
+const capabilityOrder: Capability[] = ['text', 'vision', 'transcription', 'speech', 'image_gen', 'embedding', 'search']
 const capabilityMeta: Record<Capability, { label: string; icon: string }> = {
-  text:      { label: 'Text',       icon: 'pi pi-align-left' },
-  vision:    { label: 'Vision',     icon: 'pi pi-image' },
-  stt:       { label: 'STT',        icon: 'pi pi-microphone' },
-  tts:       { label: 'TTS',        icon: 'pi pi-volume-up' },
-  image_gen: { label: 'Image gen',  icon: 'pi pi-palette' },
-  search:    { label: 'Web search', icon: 'pi pi-search' },
+  text:          { label: 'Text',          icon: 'pi pi-align-left' },
+  vision:        { label: 'Vision',        icon: 'pi pi-image' },
+  transcription: { label: 'Transcription', icon: 'pi pi-microphone' },
+  speech:        { label: 'Speech',        icon: 'pi pi-volume-up' },
+  image_gen:     { label: 'Image gen',     icon: 'pi pi-palette' },
+  embedding:     { label: 'Embedding',     icon: 'pi pi-database' },
+  search:        { label: 'Web search',    icon: 'pi pi-search' },
 }
 
 const providerID = ref('')
@@ -243,14 +246,14 @@ interface DefaultRow {
 }
 
 const defaultRows = computed<DefaultRow[]>(() => [
-  { key: 'defaultBuildModel',     label: 'Build Model',      icon: 'pi pi-hammer',     help: 'Used by Sol to generate agent code.', options: groupModels(supportsText),     grouped: true },
-  { key: 'defaultExecModel',      label: 'Execution (Text)', icon: 'pi pi-align-left', help: 'Runtime default for LLM calls.',      options: groupModels(supportsText),     grouped: true },
-  { key: 'defaultVisionModel',    label: 'Vision',           icon: 'pi pi-image',      help: 'Image → text.',                       options: groupModels(supportsVision),   grouped: true },
-  { key: 'defaultSttModel',       label: 'STT',              icon: 'pi pi-microphone', help: 'Speech-to-text.',                     options: groupModels(supportsSTT),      grouped: true },
-  { key: 'defaultTtsModel',       label: 'TTS',              icon: 'pi pi-volume-up',  help: 'Text-to-speech.',                     options: groupModels(supportsTTS),      grouped: true },
-  { key: 'defaultImageGenModel',  label: 'Image Gen',        icon: 'pi pi-palette',    help: 'Text-to-image generation.',           options: groupModels(supportsImageGen), grouped: true },
-  { key: 'defaultEmbeddingModel', label: 'Embedding',        icon: 'pi pi-database',   help: 'Text → vector embeddings.',           options: groupModels(supportsText),     grouped: true },
-  { key: 'defaultSearchModel',    label: 'Web Search',       icon: 'pi pi-search',     help: 'Search provider (provider ID).',      options: searchProviderOptions.value,    grouped: false },
+  { key: 'defaultBuildModel',     label: 'Build Model',      icon: 'pi pi-hammer',     help: 'Used by Sol to generate agent code.', options: groupModels(isLanguage),                                            grouped: true },
+  { key: 'defaultExecModel',      label: 'Execution (Text)', icon: 'pi pi-align-left', help: 'Runtime default for LLM calls.',      options: groupModels(isLanguage),                                            grouped: true },
+  { key: 'defaultVisionModel',    label: 'Vision',           icon: 'pi pi-image',      help: 'Image → text.',                       options: groupModels((m: CatalogModel) => isLanguage(m) && hasCap(m, 'vision')), grouped: true },
+  { key: 'defaultSttModel',       label: 'STT',              icon: 'pi pi-microphone', help: 'Speech-to-text.',                     options: groupModels(isTranscription),                                       grouped: true },
+  { key: 'defaultTtsModel',       label: 'TTS',              icon: 'pi pi-volume-up',  help: 'Text-to-speech.',                     options: groupModels(isSpeech),                                              grouped: true },
+  { key: 'defaultImageGenModel',  label: 'Image Gen',        icon: 'pi pi-palette',    help: 'Text-to-image generation.',           options: groupModels(isImageGen),                                            grouped: true },
+  { key: 'defaultEmbeddingModel', label: 'Embedding',        icon: 'pi pi-database',   help: 'Text → vector embeddings.',           options: groupModels(isEmbedding),                                           grouped: true },
+  { key: 'defaultSearchModel',    label: 'Web Search',       icon: 'pi pi-search',     help: 'Search provider (provider ID).',      options: searchProviderOptions.value,                                        grouped: false },
 ])
 
 // Don't bother showing a capability row the tenant can't satisfy with any
@@ -421,7 +424,23 @@ async function finish() {
                 </div>
                 <div style="display: flex; flex-direction: column; gap: 0.25rem">
                   <label for="prov-key">API Key</label>
-                  <Password id="prov-key" v-model="apiKey" :feedback="false" toggle-mask :input-props="{ autocomplete: 'off' }" style="width: 100%" :input-style="{ width: '100%' }" />
+                  <!-- type="text" + -webkit-text-security keeps the visual
+                       masking but avoids the password manager entirely —
+                       Chrome's built-in manager fixates on type="password"
+                       and ignores autocomplete tokens. Hidden by CSS in
+                       Chromium/Safari; Firefox shows plain text but never
+                       offers to save. -->
+                  <InputText
+                    id="prov-key"
+                    v-model="apiKey"
+                    type="text"
+                    autocomplete="off"
+                    name="prov-api-key"
+                    data-1p-ignore="true"
+                    data-lpignore="true"
+                    data-bwignore="true"
+                    style="width: 100%; -webkit-text-security: disc;"
+                  />
                 </div>
                 <div style="display: flex; justify-content: flex-end">
                   <Button

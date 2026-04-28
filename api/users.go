@@ -38,6 +38,31 @@ func (h *UsersHandler) List(w http.ResponseWriter, r *http.Request) {
 	writeProto(w, http.StatusOK, &airlockv1.ListUsersResponse{Users: pbUsers})
 }
 
+// ListSelectable returns a slim user directory (id/email/display_name) for
+// member-picker dropdowns. Available to any authenticated user — agent admins
+// who aren't tenant admins (e.g. managers, or users promoted to agent admin)
+// still need to see candidates to invite.
+func (h *UsersHandler) ListSelectable(w http.ResponseWriter, r *http.Request) {
+	q := dbq.New(h.db.Pool())
+	users, err := q.ListUsers(r.Context())
+	if err != nil {
+		logFor(r).Error("list selectable users failed", zap.Error(err))
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+
+	out := make([]*airlockv1.UserSummary, len(users))
+	for i, u := range users {
+		out[i] = &airlockv1.UserSummary{
+			Id:          convert.PgUUIDToString(u.ID),
+			Email:       u.Email,
+			DisplayName: u.DisplayName,
+		}
+	}
+
+	writeProto(w, http.StatusOK, &airlockv1.ListSelectableUsersResponse{Users: out})
+}
+
 // Create creates a new user with a temporary password.
 func (h *UsersHandler) Create(w http.ResponseWriter, r *http.Request) {
 	req := &airlockv1.CreateUserRequest{}

@@ -60,6 +60,15 @@ message User {
   google.protobuf.Timestamp updated_at = 9;
 }
 
+// UserSummary is a slim user view used for member-picker dropdowns.
+// Returned to any authenticated user — no admin gate — so it intentionally
+// omits oidc_sub / must_change_password / role.
+message UserSummary {
+  string id = 1;
+  string email = 2;
+  string display_name = 3;
+}
+
 // Provider represents a configured LLM provider with encrypted API key.
 message Provider {
   string id = 1;
@@ -84,7 +93,8 @@ message ProviderInfo {
 message ProviderCapabilityInfo {
   string provider_id = 1;
   string display_name = 2;
-  // Supported capabilities from: "text", "vision", "stt", "tts", "image_gen", "search".
+  // Supported capabilities from: "text", "vision", "transcription",
+  // "speech", "image_gen", "embedding", "reranking", "search".
   repeated string capabilities = 3;
   // true when the user has an enabled row in the providers table for this provider_id.
   bool configured = 4;
@@ -104,11 +114,20 @@ message ModelInfo {
   int32 output_limit = 7;
   double cost_input = 8;
   double cost_output = 9;
-  // Supported input modalities from models.dev — e.g. "text", "image",
-  // "audio", "pdf", "video". Empty list means unknown (treat as text-only).
-  repeated string input_modalities = 10;
-  // Supported output modalities — e.g. "text", "audio", "image".
-  repeated string output_modalities = 11;
+  // Kind is the model's primary purpose, sourced from goai's typed lists.
+  // One of "language", "embedding", "image", "speech", "transcription",
+  // "reranking", or "" when sol has no goai coverage for the provider —
+  // currently the openai-compat bucket (groq, xai, cerebras, fireworks,
+  // etc.), all of which ship language models, so clients can safely
+  // treat empty as "language" for filtering purposes.
+  string kind = 10;
+  // Per-model capability flags computed by sol's CapabilitiesFromModel
+  // (kind-derived plus modality-derived). The strings match
+  // ProviderCapabilityInfo.capabilities — "text", "vision", "embedding",
+  // "speech", "transcription", "image_gen", "reranking". Used by the
+  // frontend to compose sub-filters within a kind (e.g. vision picker =
+  // language model with vision cap).
+  repeated string caps = 11;
 }
 
 // --- Agents ---
@@ -145,9 +164,13 @@ message RunInfo {
   int32 duration_ms = 11;
   string stdout_log = 12;
   string error_message = 13;
-  string panic_trace = 14;
-  google.protobuf.Timestamp started_at = 15;
-  google.protobuf.Timestamp finished_at = 16;
+  // error_kind classifies error_message: "platform" (provider/network),
+  // "agent" (agent code bug), or "" (no error / unknown). Frontend uses
+  // this to suppress the "Fix this error" workflow on platform errors.
+  string error_kind = 14;
+  string panic_trace = 15;
+  google.protobuf.Timestamp started_at = 16;
+  google.protobuf.Timestamp finished_at = 17;
 }
 
 // AgentBuildInfo represents a single build or upgrade of an agent.
@@ -180,14 +203,18 @@ message ConversationInfo {
 // AgentMessageInfo represents a single message in a conversation.
 message AgentMessageInfo {
   string id = 1;
-  string role = 2;               // "user", "assistant", "system", "tool"
-  string source = 3;             // "user" (default), "system" (injected by Airlock), "bridge"
-  string content = 4;
-  string parts = 5;              // JSON-encoded goai Content for rich message display
-  int32 tokens_in = 6;
-  int32 tokens_out = 7;
-  double cost_estimate = 8;
-  google.protobuf.Timestamp created_at = 9;
+  // seq is the monotonic insertion-order axis on agent_messages. Used as the
+  // pagination cursor instead of created_at because rows persisted in one
+  // transaction (assistant + tool batch) share an identical created_at.
+  int64 seq = 2;
+  string role = 3;               // "user", "assistant", "system", "tool"
+  string source = 4;             // "user" (default), "system" (injected by Airlock), "bridge", "error"
+  string content = 5;
+  string parts = 6;              // JSON-encoded goai Content for rich message display
+  int32 tokens_in = 7;
+  int32 tokens_out = 8;
+  double cost_estimate = 9;
+  google.protobuf.Timestamp created_at = 10;
 }
 
 // WebhookInfo represents a code-synced webhook registration.

@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
 
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 	"github.com/airlockrun/agentsdk"
@@ -23,7 +22,6 @@ import (
 	"github.com/airlockrun/sol/provider"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"
 )
 
@@ -215,14 +213,14 @@ func (h *conversationsHandler) ListConversationMessages(w http.ResponseWriter, r
 	q := dbq.New(h.db.Pool())
 	var msgs []dbq.AgentMessage
 	if before != "" {
-		ts, err := time.Parse(time.RFC3339Nano, before)
+		seq, err := strconv.ParseInt(before, 10, 64)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, "invalid before timestamp")
+			writeError(w, http.StatusBadRequest, "invalid before seq")
 			return
 		}
 		msgs, err = q.ListMessagesBackward(ctx, dbq.ListMessagesBackwardParams{
 			ConversationID: toPgUUID(convID),
-			Before:         pgtype.Timestamptz{Time: ts, Valid: true},
+			Before:         seq,
 			Lim:            limit,
 		})
 		if err != nil {
@@ -231,14 +229,14 @@ func (h *conversationsHandler) ListConversationMessages(w http.ResponseWriter, r
 			return
 		}
 	} else {
-		ts, err := time.Parse(time.RFC3339Nano, after)
+		seq, err := strconv.ParseInt(after, 10, 64)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, "invalid after timestamp")
+			writeError(w, http.StatusBadRequest, "invalid after seq")
 			return
 		}
 		msgs, err = q.ListMessagesForward(ctx, dbq.ListMessagesForwardParams{
 			ConversationID: toPgUUID(convID),
-			After:          pgtype.Timestamptz{Time: ts, Valid: true},
+			After:          seq,
 			Lim:            limit,
 		})
 		if err != nil {
@@ -646,6 +644,7 @@ func conversationToProto(c dbq.AgentConversation) *airlockv1.ConversationInfo {
 func messageToProto(ctx context.Context, s3Client *storage.S3Client, logger *zap.Logger, m dbq.AgentMessage) *airlockv1.AgentMessageInfo {
 	info := &airlockv1.AgentMessageInfo{
 		Id:           convert.PgUUIDToString(m.ID),
+		Seq:          m.Seq,
 		Role:         m.Role,
 		Content:      m.Content,
 		TokensIn:     m.TokensIn,
