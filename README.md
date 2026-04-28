@@ -6,7 +6,8 @@ Each agent runs as a long-lived Docker container with its own Postgres schema, S
 
 If "Heroku for cyborg agents, but I run it myself" lands, that's the shape.
 
-**Status**: pre-1.0. Production self-hosted use works, public APIs may shift between minor versions.
+> [!WARNING]
+> **Alpha software.** Production self-hosted deployments work today, but APIs, database schemas, and config formats may change between 0.x releases. Expect breaking changes through the 0.x series. Plan for `pg_dump` before any upgrade and read the release notes; we don't promise unattended upgrades until 1.0.
 
 ---
 
