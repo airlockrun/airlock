@@ -7,7 +7,7 @@ Each agent runs as a long-lived Docker container with its own Postgres schema, S
 If "Heroku for cyborg agents, but I run it myself" lands, that's the shape.
 
 > [!WARNING]
-> **Alpha software.** Production self-hosted deployments work today, but APIs, database schemas, and config formats may change between 0.x releases. Expect breaking changes through the 0.x series. Plan for `pg_dump` before any upgrade and read the release notes; we don't promise unattended upgrades until 1.0.
+> **Alpha software.** This is early-release code with bugs we haven't found yet. Self-hosting works today and we use it ourselves, but you'll likely hit edge cases nobody else has. Take regular Postgres backups, treat each release as "test it before relying on it," and please [open an issue](https://github.com/airlockrun/airlock/issues) for anything that breaks.
 
 ---
 
