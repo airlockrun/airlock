@@ -53,7 +53,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.agent-builder
-    image: airlock-agent-builder:v0.1.0
+    image: airlock-agent-builder:v0.1.1
     command: ["true"]
     restart: "no"
 
@@ -109,7 +109,7 @@ services:
       # Container orchestration: agent containers join this network so they
       # can reach airlock:8080 internally. Must match the network name below.
       DOCKER_NETWORK: airlock
-      AGENT_BUILDER_IMAGE: airlock-agent-builder:v0.1.0
+      AGENT_BUILDER_IMAGE: airlock-agent-builder:v0.1.1
       AGENT_BASE_IMAGE: airlock-agent-base
 
       # Trust the Caddy container that fronts us. Docker's default bridge
