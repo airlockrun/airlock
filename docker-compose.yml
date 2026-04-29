@@ -23,6 +23,11 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-airlock}
     volumes:
       - pgdata:/var/lib/postgresql/data
+      # First-boot bootstrap: creates the create_agent_role() helper
+      # the airlock builder needs to provision per-agent roles. The
+      # postgres image runs files in /docker-entrypoint-initdb.d/
+      # exactly once when the data dir is empty.
+      - ./db/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-airlock}"]
       interval: 5s
@@ -49,11 +54,26 @@ services:
   # Airlock extracts /libs/ from agent-builder at startup, and the agent
   # build pipeline launches user agents from agent-base. Both must exist
   # as tagged images on the host before airlock starts.
+  #
+  # Image lifecycle:
+  #   docker compose pull            — fetch the published images for
+  #                                    this release tag.
+  #   docker compose up -d           — pulls if missing, then starts.
+  #   docker compose up -d --build   — always builds locally and tags
+  #                                    as the image name (bypasses the
+  #                                    registry — for dev / forks /
+  #                                    air-gapped, or in the brief
+  #                                    window between `git tag` and CI
+  #                                    finishing the publish).
+  #
+  # Image tags are pinned to the airlock release this compose ships
+  # with — no env var to remember. Bumped in lockstep with the airlock
+  # release every PR.
   agent-builder-image:
     build:
       context: .
       dockerfile: Dockerfile.agent-builder
-    image: airlock-agent-builder:v0.1.2
+    image: ghcr.io/airlockrun/airlock-agent-builder:v0.1.5
     command: ["true"]
     restart: "no"
 
@@ -61,6 +81,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.agent-base
+    # Not published — agent-base is debian-slim + 2 apt packages, fast
+    # enough to build locally on every host.
     image: airlock-agent-base:latest
     command: ["true"]
     restart: "no"
@@ -69,6 +91,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.airlock
+    image: ghcr.io/airlockrun/airlock:v0.1.5
     depends_on:
       postgres:
         condition: service_healthy
@@ -109,7 +132,7 @@ services:
       # Container orchestration: agent containers join this network so they
       # can reach airlock:8080 internally. Must match the network name below.
       DOCKER_NETWORK: airlock
-      AGENT_BUILDER_IMAGE: airlock-agent-builder:v0.1.2
+      AGENT_BUILDER_IMAGE: ghcr.io/airlockrun/airlock-agent-builder:v0.1.5
       AGENT_BASE_IMAGE: airlock-agent-base
 
       # Codegen workspace lives inside the airlock-data named volume so
