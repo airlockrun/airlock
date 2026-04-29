@@ -30,15 +30,36 @@ RUN CGO_ENABLED=0 go build -o /airlock ./cmd/airlock
 # --- Runtime ---
 FROM alpine:3.21
 
-# ffmpeg is required by trigger/transcode.go — bridge voice notes are
-# ogg/opus, which OpenAI's gpt-4o-transcribe models reject. We transcode
-# to MP3 before transcription so any STT model works.
+# Runtime tooling airlock shells out to:
+#   ca-certificates — TLS root store for outbound HTTPS
+#   ffmpeg          — trigger/transcode.go converts ogg/opus voice notes from
+#                     bridges into MP3 (gpt-4o-transcribe rejects ogg/opus)
+#   docker-cli +    — orchestrate agent containers and run per-agent
+#   docker-cli-buildx  docker build (--build-context multi-source). The
+#                     container talks to the host docker daemon via the
+#                     mounted socket; binaries here are just the client.
+#   git             — manages the agent monorepo (git init/add/commit per
+#                     agent build). Default user.email/user.name set so
+#                     `git commit` doesn't error out on first use.
+RUN apk add --no-cache ca-certificates ffmpeg docker-cli docker-cli-buildx git wget \
+    && git config --global user.email "airlock@localhost" \
+    && git config --global user.name "Airlock"
+
+# Bake the models.dev catalog into the image so first-boot catalog
+# requests don't depend on outbound network. Sol's provider package looks
+# at $XDG_CACHE_HOME/sol or ~/.cache/sol; running as root, that resolves
+# to /root/.cache/sol. The runtime ticker (StartPeriodicRefresh) does an
+# immediate fresh fetch on startup and then refreshes every 12h, writing
+# back to the same path via copy-on-write — so this baked file is just
+# the offline floor, not the source of truth.
 #
-# docker-cli + buildx are required for orchestrating agent containers and
-# running per-agent docker build (--build-context multi-source builds).
-# The container talks to the host docker daemon via the mounted socket;
-# the binaries here are just the client.
-RUN apk add --no-cache ca-certificates ffmpeg docker-cli docker-cli-buildx
+# `|| true` keeps the build resilient to a transient models.dev outage:
+# without the baked file the image still works, it just falls through to
+# the network fetch (and ultimately to the empty builtin fallback if
+# that also fails — visible in logs).
+RUN mkdir -p /root/.cache/sol \
+    && wget -q -O /root/.cache/sol/models.json https://models.dev/api.json \
+    || true
 
 COPY --from=builder /airlock /airlock
 
