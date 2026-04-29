@@ -247,15 +247,29 @@ func (b *BuildService) doUpgrade(ctx context.Context, q *dbq.Queries, input Upgr
 		return fmt.Errorf("sol upgrade: %w", err)
 	}
 
-	// Step 7: Check result
-	if solResult.Status != sol.RunCompleted {
+	// Step 7: Check result. Same exit-tool mapping as runBuildCodegen —
+	// see that function for the full rationale.
+	if solResult.Status != sol.RunExited {
+		if solResult.Status == sol.RunCompleted {
+			b.logger.Error("sol upgrade did not call exit tool")
+			completeBuild("failed", "agent did not call the exit tool", "", "")
+			return errors.New("upgrade failed: agent did not call the exit tool")
+		}
 		errMsg := "unknown error"
 		if solResult.Error != nil {
 			errMsg = solResult.Error.Error()
 		}
 		b.logger.Error("sol upgrade failed", zap.String("status", string(solResult.Status)), zap.String("error", errMsg))
 		completeBuild("failed", errMsg, "", "")
-		return fmt.Errorf("upgrade failed: %s", errMsg)
+		if solResult.Error != nil {
+			return fmt.Errorf("upgrade failed: %w", solResult.Error)
+		}
+		return errors.New("upgrade failed")
+	}
+	if solResult.ExitStatus != "success" {
+		b.logger.Error("sol upgrade reported error", zap.String("message", solResult.ExitMessage))
+		completeBuild("failed", solResult.ExitMessage, "", "")
+		return fmt.Errorf("upgrade failed: %s", solResult.ExitMessage)
 	}
 
 	// Step 9: Commit and push

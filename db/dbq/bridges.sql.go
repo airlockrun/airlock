@@ -174,19 +174,45 @@ func (q *Queries) ListActiveBridges(ctx context.Context) ([]Bridge, error) {
 	return items, nil
 }
 
-const listBridges = `-- name: ListBridges :many
-SELECT id, agent_id, created_by, type, name, bot_username, status, config, token_encrypted, last_polled_at, created_at, updated_at FROM bridges ORDER BY created_at
+const listBridgesAccessible = `-- name: ListBridgesAccessible :many
+SELECT b.id, b.agent_id, b.created_by, b.type, b.name, b.bot_username, b.status, b.config, b.token_encrypted, b.last_polled_at, b.created_at, b.updated_at, u.email AS owner_email, u.display_name AS owner_display_name
+FROM bridges b
+LEFT JOIN users u ON u.id = b.created_by
+WHERE b.agent_id IS NULL
+   OR b.agent_id IN (SELECT agent_id FROM agent_members WHERE user_id = $1)
+ORDER BY b.created_at
 `
 
-func (q *Queries) ListBridges(ctx context.Context) ([]Bridge, error) {
-	rows, err := q.db.Query(ctx, listBridges)
+type ListBridgesAccessibleRow struct {
+	ID               pgtype.UUID        `json:"id"`
+	AgentID          pgtype.UUID        `json:"agent_id"`
+	CreatedBy        pgtype.UUID        `json:"created_by"`
+	Type             string             `json:"type"`
+	Name             string             `json:"name"`
+	BotUsername      string             `json:"bot_username"`
+	Status           string             `json:"status"`
+	Config           []byte             `json:"config"`
+	TokenEncrypted   string             `json:"token_encrypted"`
+	LastPolledAt     pgtype.Timestamptz `json:"last_polled_at"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
+	OwnerEmail       pgtype.Text        `json:"owner_email"`
+	OwnerDisplayName pgtype.Text        `json:"owner_display_name"`
+}
+
+// Non-admin variant: system bridges (agent_id IS NULL) plus bridges bound
+// to agents the user has access to via agent_members. The agent's creator
+// is auto-added to agent_members at agent-create time, so this also
+// covers "agents I created."
+func (q *Queries) ListBridgesAccessible(ctx context.Context, userID pgtype.UUID) ([]ListBridgesAccessibleRow, error) {
+	rows, err := q.db.Query(ctx, listBridgesAccessible, userID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []Bridge{}
+	items := []ListBridgesAccessibleRow{}
 	for rows.Next() {
-		var i Bridge
+		var i ListBridgesAccessibleRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.AgentID,
@@ -200,6 +226,70 @@ func (q *Queries) ListBridges(ctx context.Context) ([]Bridge, error) {
 			&i.LastPolledAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.OwnerEmail,
+			&i.OwnerDisplayName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listBridgesAdmin = `-- name: ListBridgesAdmin :many
+SELECT b.id, b.agent_id, b.created_by, b.type, b.name, b.bot_username, b.status, b.config, b.token_encrypted, b.last_polled_at, b.created_at, b.updated_at, u.email AS owner_email, u.display_name AS owner_display_name
+FROM bridges b
+LEFT JOIN users u ON u.id = b.created_by
+ORDER BY b.created_at
+`
+
+type ListBridgesAdminRow struct {
+	ID               pgtype.UUID        `json:"id"`
+	AgentID          pgtype.UUID        `json:"agent_id"`
+	CreatedBy        pgtype.UUID        `json:"created_by"`
+	Type             string             `json:"type"`
+	Name             string             `json:"name"`
+	BotUsername      string             `json:"bot_username"`
+	Status           string             `json:"status"`
+	Config           []byte             `json:"config"`
+	TokenEncrypted   string             `json:"token_encrypted"`
+	LastPolledAt     pgtype.Timestamptz `json:"last_polled_at"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
+	OwnerEmail       pgtype.Text        `json:"owner_email"`
+	OwnerDisplayName pgtype.Text        `json:"owner_display_name"`
+}
+
+// Admin variant: every bridge in the tenant with the creator joined for
+// the Owner column in the UI. created_by is NULL for system bridges, so
+// LEFT JOIN keeps those rows.
+func (q *Queries) ListBridgesAdmin(ctx context.Context) ([]ListBridgesAdminRow, error) {
+	rows, err := q.db.Query(ctx, listBridgesAdmin)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListBridgesAdminRow{}
+	for rows.Next() {
+		var i ListBridgesAdminRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.AgentID,
+			&i.CreatedBy,
+			&i.Type,
+			&i.Name,
+			&i.BotUsername,
+			&i.Status,
+			&i.Config,
+			&i.TokenEncrypted,
+			&i.LastPolledAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.OwnerEmail,
+			&i.OwnerDisplayName,
 		); err != nil {
 			return nil, err
 		}

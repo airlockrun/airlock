@@ -478,13 +478,29 @@ func (b *BuildService) runBuildCodegen(ctx context.Context, q *dbq.Queries, agen
 	if err != nil {
 		return "", fmt.Errorf("sol run: %w", err)
 	}
-	if solResult.Status != sol.RunCompleted {
-		errMsg := "unknown error"
-		if solResult.Error != nil {
-			errMsg = solResult.Error.Error()
+	// Outcome mapping. Three success-shaped paths to consider:
+	//   - RunExited + ExitStatus="success": the agent finished cleanly.
+	//   - RunExited + ExitStatus="error":  the agent reported a blocker.
+	//   - RunCompleted (no exit after nudges): treat as failure — agent
+	//     forgot to call exit, we have no signal whether the work is good.
+	// Anything else (RunFailed/RunCancelled/etc.) wraps the underlying
+	// error with %w so the outer Build loop's errors.Is cancellation
+	// check still fires.
+	if solResult.Status != sol.RunExited {
+		if solResult.Status == sol.RunCompleted {
+			logLine("[exit] agent did not call the exit tool after 2 reminders — treating as failure")
+			return "", errors.New("sol codegen failed: agent did not call the exit tool")
 		}
-		return "", fmt.Errorf("sol codegen failed: %s", errMsg)
+		if solResult.Error != nil {
+			return "", fmt.Errorf("sol codegen failed: %w", solResult.Error)
+		}
+		return "", errors.New("sol codegen failed")
 	}
+	if solResult.ExitStatus != "success" {
+		logLine(fmt.Sprintf("[exit] agent reported error: %s", solResult.ExitMessage))
+		return "", fmt.Errorf("sol codegen failed: %s", solResult.ExitMessage)
+	}
+	logLine(fmt.Sprintf("[exit] success: %s", solResult.ExitMessage))
 
 	// Commit and push back to monorepo.
 	hash, err := CommitAndPush(workDir, fmt.Sprintf("codegen agent %s", agentID))

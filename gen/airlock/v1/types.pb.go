@@ -1806,12 +1806,13 @@ type BridgeInfo struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	AgentId       string                 `protobuf:"bytes,2,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"` // empty = system bridge, set = agent bridge
-	Type          string                 `protobuf:"bytes,3,opt,name=type,proto3" json:"type,omitempty"`                      // "telegram", etc.
-	Name          string                 `protobuf:"bytes,4,opt,name=name,proto3" json:"name,omitempty"`
-	BotUsername   string                 `protobuf:"bytes,5,opt,name=bot_username,json=botUsername,proto3" json:"bot_username,omitempty"` // @username from Telegram getMe
-	Status        string                 `protobuf:"bytes,6,opt,name=status,proto3" json:"status,omitempty"`                              // "active", "error"
-	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
-	UpdatedAt     *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
+	Owner         *UserSummary           `protobuf:"bytes,3,opt,name=owner,proto3" json:"owner,omitempty"`                    // unset for system bridges (no creator)
+	Type          string                 `protobuf:"bytes,4,opt,name=type,proto3" json:"type,omitempty"`                      // "telegram", etc.
+	Name          string                 `protobuf:"bytes,5,opt,name=name,proto3" json:"name,omitempty"`
+	BotUsername   string                 `protobuf:"bytes,6,opt,name=bot_username,json=botUsername,proto3" json:"bot_username,omitempty"` // @username from Telegram getMe
+	Status        string                 `protobuf:"bytes,7,opt,name=status,proto3" json:"status,omitempty"`                              // "active", "error"
+	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	UpdatedAt     *timestamppb.Timestamp `protobuf:"bytes,9,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1858,6 +1859,13 @@ func (x *BridgeInfo) GetAgentId() string {
 		return x.AgentId
 	}
 	return ""
+}
+
+func (x *BridgeInfo) GetOwner() *UserSummary {
+	if x != nil {
+		return x.Owner
+	}
+	return nil
 }
 
 func (x *BridgeInfo) GetType() string {
@@ -2650,19 +2658,20 @@ const file_airlock_v1_types_proto_rawDesc = "" +
 	"authorized\x12\"\n" +
 	"\rhas_oauth_app\x18\t \x01(\bR\vhasOauthApp\x12D\n" +
 	"\x10token_expires_at\x18\n" +
-	" \x01(\v2\x1a.google.protobuf.TimestampR\x0etokenExpiresAt\"\x90\x02\n" +
+	" \x01(\v2\x1a.google.protobuf.TimestampR\x0etokenExpiresAt\"\xbf\x02\n" +
 	"\n" +
 	"BridgeInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x19\n" +
-	"\bagent_id\x18\x02 \x01(\tR\aagentId\x12\x12\n" +
-	"\x04type\x18\x03 \x01(\tR\x04type\x12\x12\n" +
-	"\x04name\x18\x04 \x01(\tR\x04name\x12!\n" +
-	"\fbot_username\x18\x05 \x01(\tR\vbotUsername\x12\x16\n" +
-	"\x06status\x18\x06 \x01(\tR\x06status\x129\n" +
+	"\bagent_id\x18\x02 \x01(\tR\aagentId\x12-\n" +
+	"\x05owner\x18\x03 \x01(\v2\x17.airlock.v1.UserSummaryR\x05owner\x12\x12\n" +
+	"\x04type\x18\x04 \x01(\tR\x04type\x12\x12\n" +
+	"\x04name\x18\x05 \x01(\tR\x04name\x12!\n" +
+	"\fbot_username\x18\x06 \x01(\tR\vbotUsername\x12\x16\n" +
+	"\x06status\x18\a \x01(\tR\x06status\x129\n" +
 	"\n" +
-	"created_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x129\n" +
+	"created_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x129\n" +
 	"\n" +
-	"updated_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\"\xa7\x01\n" +
+	"updated_at\x18\t \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\"\xa7\x01\n" +
 	"\x14PlatformIdentityInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1a\n" +
 	"\bplatform\x18\x02 \x01(\tR\bplatform\x12(\n" +
@@ -2794,14 +2803,15 @@ var file_airlock_v1_types_proto_depIdxs = []int32{
 	27, // 21: airlock.v1.CronInfo.last_fired_at:type_name -> google.protobuf.Timestamp
 	27, // 22: airlock.v1.CronInfo.created_at:type_name -> google.protobuf.Timestamp
 	27, // 23: airlock.v1.ConnectionInfo.token_expires_at:type_name -> google.protobuf.Timestamp
-	27, // 24: airlock.v1.BridgeInfo.created_at:type_name -> google.protobuf.Timestamp
-	27, // 25: airlock.v1.BridgeInfo.updated_at:type_name -> google.protobuf.Timestamp
-	27, // 26: airlock.v1.PlatformIdentityInfo.created_at:type_name -> google.protobuf.Timestamp
-	27, // [27:27] is the sub-list for method output_type
-	27, // [27:27] is the sub-list for method input_type
-	27, // [27:27] is the sub-list for extension type_name
-	27, // [27:27] is the sub-list for extension extendee
-	0,  // [0:27] is the sub-list for field type_name
+	4,  // 24: airlock.v1.BridgeInfo.owner:type_name -> airlock.v1.UserSummary
+	27, // 25: airlock.v1.BridgeInfo.created_at:type_name -> google.protobuf.Timestamp
+	27, // 26: airlock.v1.BridgeInfo.updated_at:type_name -> google.protobuf.Timestamp
+	27, // 27: airlock.v1.PlatformIdentityInfo.created_at:type_name -> google.protobuf.Timestamp
+	28, // [28:28] is the sub-list for method output_type
+	28, // [28:28] is the sub-list for method input_type
+	28, // [28:28] is the sub-list for extension type_name
+	28, // [28:28] is the sub-list for extension extendee
+	0,  // [0:28] is the sub-list for field type_name
 }
 
 func init() { file_airlock_v1_types_proto_init() }

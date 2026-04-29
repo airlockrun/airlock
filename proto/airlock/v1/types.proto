@@ -268,12 +268,13 @@ message ConnectionInfo {
 message BridgeInfo {
   string id = 1;
   string agent_id = 2;      // empty = system bridge, set = agent bridge
-  string type = 3;          // "telegram", etc.
-  string name = 4;
-  string bot_username = 5;  // @username from Telegram getMe
-  string status = 6;        // "active", "error"
-  google.protobuf.Timestamp created_at = 7;
-  google.protobuf.Timestamp updated_at = 8;
+  UserSummary owner = 3;    // unset for system bridges (no creator)
+  string type = 4;          // "telegram", etc.
+  string name = 5;
+  string bot_username = 6;  // @username from Telegram getMe
+  string status = 7;        // "active", "error"
+  google.protobuf.Timestamp created_at = 8;
+  google.protobuf.Timestamp updated_at = 9;
 }
 
 // PlatformIdentityInfo represents a user's verified external identity.

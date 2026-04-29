@@ -6,8 +6,26 @@ RETURNING *;
 -- name: GetBridgeByID :one
 SELECT * FROM bridges WHERE id = $1;
 
--- name: ListBridges :many
-SELECT * FROM bridges ORDER BY created_at;
+-- name: ListBridgesAdmin :many
+-- Admin variant: every bridge in the tenant with the creator joined for
+-- the Owner column in the UI. created_by is NULL for system bridges, so
+-- LEFT JOIN keeps those rows.
+SELECT b.*, u.email AS owner_email, u.display_name AS owner_display_name
+FROM bridges b
+LEFT JOIN users u ON u.id = b.created_by
+ORDER BY b.created_at;
+
+-- name: ListBridgesAccessible :many
+-- Non-admin variant: system bridges (agent_id IS NULL) plus bridges bound
+-- to agents the user has access to via agent_members. The agent's creator
+-- is auto-added to agent_members at agent-create time, so this also
+-- covers "agents I created."
+SELECT b.*, u.email AS owner_email, u.display_name AS owner_display_name
+FROM bridges b
+LEFT JOIN users u ON u.id = b.created_by
+WHERE b.agent_id IS NULL
+   OR b.agent_id IN (SELECT agent_id FROM agent_members WHERE user_id = @user_id)
+ORDER BY b.created_at;
 
 -- name: ListBridgesForAgent :many
 -- Bridges relevant to a specific agent: its own bridge + system bridges.

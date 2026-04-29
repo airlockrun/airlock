@@ -26,8 +26,11 @@ import (
 	"go.uber.org/zap"
 )
 
-// promptTimeout is the default timeout for prompt requests.
-const promptTimeout = 5 * time.Minute
+// promptTimeout is the default timeout for prompt requests. Sits 15s above
+// agentsdk's 2-minute internal /prompt timeout so the agent has headroom to
+// interrupt the VM, write the run-complete row, and flush the NDJSON stream
+// before the airlock-side HTTP client gives up.
+const promptTimeout = 2*time.Minute + 15*time.Second
 
 // Dispatcher ensures agent containers are running and forwards HTTP requests to them.
 type Dispatcher struct {
