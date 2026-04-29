@@ -33,7 +33,12 @@ FROM alpine:3.21
 # ffmpeg is required by trigger/transcode.go — bridge voice notes are
 # ogg/opus, which OpenAI's gpt-4o-transcribe models reject. We transcode
 # to MP3 before transcription so any STT model works.
-RUN apk add --no-cache ca-certificates ffmpeg
+#
+# docker-cli + buildx are required for orchestrating agent containers and
+# running per-agent docker build (--build-context multi-source builds).
+# The container talks to the host docker daemon via the mounted socket;
+# the binaries here are just the client.
+RUN apk add --no-cache ca-certificates ffmpeg docker-cli docker-cli-buildx
 
 COPY --from=builder /airlock /airlock
 
