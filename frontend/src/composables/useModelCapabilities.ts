@@ -1,35 +1,48 @@
 import { computed, type ComputedRef } from 'vue'
 import { useCatalogStore } from '@/stores/catalog'
 
-export type ModalityModel = { inputModalities: string[]; outputModalities: string[] }
+// CatalogModel mirrors the airlock ModelInfo proto fields the pickers
+// need. `kind` is sol's goai-aggregated classification; `caps` are the
+// per-model capability flags sol's CapabilitiesFromModel emits.
+export type CatalogModel = {
+  kind?: string
+  caps: string[]
+}
 export type FlatOption = { label: string; value: string }
 export type GroupedOption = { label: string; items: FlatOption[] }
 
-// Modality predicates mirror sol/provider/capabilities.go
-// (CapabilitiesFromModel). A models.dev entry without modality info is
-// treated as text-only so legitimate text models aren't hidden from pickers.
-export function supportsText(m: ModalityModel): boolean {
-  const inOk = m.inputModalities.length === 0 || m.inputModalities.includes('text')
-  const outOk = m.outputModalities.length === 0 || m.outputModalities.includes('text')
-  return inOk && outOk
+// Kind predicates — primary axis for picker filtering. Empty kind means
+// sol has no goai typed-list coverage for the provider (the openai-compat
+// bucket: groq, xai, cerebras, fireworks, etc.). Those providers ship
+// language models exclusively today, so isLanguage treats empty as
+// language; the other predicates require an exact match.
+export function isLanguage(m: CatalogModel): boolean {
+  return !m.kind || m.kind === 'language'
 }
-export function supportsVision(m: ModalityModel): boolean {
-  return m.inputModalities.includes('image') && m.outputModalities.includes('text')
+export function isEmbedding(m: CatalogModel): boolean {
+  return m.kind === 'embedding'
 }
-export function supportsSTT(m: ModalityModel): boolean {
-  return m.inputModalities.includes('audio') && m.outputModalities.includes('text')
+export function isImageGen(m: CatalogModel): boolean {
+  return m.kind === 'image'
 }
-export function supportsTTS(m: ModalityModel): boolean {
-  return m.inputModalities.includes('text') && m.outputModalities.includes('audio')
+export function isSpeech(m: CatalogModel): boolean {
+  return m.kind === 'speech'
 }
-export function supportsImageGen(m: ModalityModel): boolean {
-  return m.inputModalities.includes('text') && m.outputModalities.includes('image')
+export function isTranscription(m: CatalogModel): boolean {
+  return m.kind === 'transcription'
+}
+
+// hasCap checks for a per-model capability flag. Used to compose
+// sub-filters within a kind — e.g. the vision picker is
+// `isLanguage(m) && hasCap(m, 'vision')`.
+export function hasCap(m: CatalogModel, cap: string): boolean {
+  return m.caps.includes(cap)
 }
 
 export function useModelCapabilities() {
   const catalog = useCatalogStore()
 
-  function groupModels(accept: (m: ModalityModel) => boolean): GroupedOption[] {
+  function groupModels(accept: (m: CatalogModel) => boolean): GroupedOption[] {
     const groups: Record<string, FlatOption[]> = {}
     for (const m of catalog.models) {
       if (!accept(m)) continue

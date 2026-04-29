@@ -26,8 +26,11 @@ import (
 	"go.uber.org/zap"
 )
 
-// promptTimeout is the default timeout for prompt requests.
-const promptTimeout = 5 * time.Minute
+// promptTimeout is the default timeout for prompt requests. Sits 15s above
+// agentsdk's 2-minute internal /prompt timeout so the agent has headroom to
+// interrupt the VM, write the run-complete row, and flush the NDJSON stream
+// before the airlock-side HTTP client gives up.
+const promptTimeout = 2*time.Minute + 15*time.Second
 
 // Dispatcher ensures agent containers are running and forwards HTTP requests to them.
 type Dispatcher struct {
@@ -196,6 +199,47 @@ func (d *Dispatcher) createRun(ctx context.Context, agentID uuid.UUID, bridgeID 
 		return uuid.Nil, fmt.Errorf("create run: %w", err)
 	}
 	return pgUUID(run.ID), nil
+}
+
+// RefreshAgent triggers a synchronous re-sync on the agent container. Used
+// after server-side state changes the cached system prompt depends on
+// (typically MCP OAuth completion) so the running agent picks up new tools
+// without a restart. If the container isn't running, returns nil — there's
+// nothing to refresh; the agent will sync fresh on its next startup.
+func (d *Dispatcher) RefreshAgent(ctx context.Context, agentID uuid.UUID) error {
+	c, err := d.containers.GetRunning(ctx, agentID)
+	if err != nil {
+		return fmt.Errorf("look up agent container: %w", err)
+	}
+	if c == nil {
+		return nil
+	}
+	// inspectExisting doesn't populate Token; mint one for this call.
+	token, err := auth.IssueAgentToken(d.cfg.JWTSecret, agentID)
+	if err != nil {
+		return fmt.Errorf("issue agent token: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, "POST", c.Endpoint+"/refresh", nil)
+	if err != nil {
+		return fmt.Errorf("create refresh request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	// Synchronous: the agent runs sync inside its handler and only returns
+	// once a.systemPrompt + a.mcpSchemas are updated. Generous timeout
+	// because the agent's sync round-trips back to Airlock and does MCP
+	// tool discovery server-side.
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("post refresh: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("agent /refresh returned %d: %s", resp.StatusCode, body)
+	}
+	return nil
 }
 
 // forward sends an HTTP request to the agent container and returns the response body.

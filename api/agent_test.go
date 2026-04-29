@@ -154,7 +154,7 @@ func TestUpsertConnection(t *testing.T) {
 	def := agentsdk.ConnectionDef{
 		Name:        "GitHub",
 		Description: "GitHub API access",
-		AuthMode:    "oauth",
+		AuthMode:    agentsdk.ConnectionAuthOAuth,
 		AuthURL:     "https://github.com/login/oauth/authorize",
 		BaseURL:     "https://api.github.com",
 		AuthInjection: agentsdk.AuthInjection{
@@ -195,7 +195,7 @@ func TestSync(t *testing.T) {
 			{Path: "/webhook/github", Verify: "hmac", Header: "X-Hub-Signature-256"},
 			{Path: "/webhook/stripe", Verify: "hmac", Header: "Stripe-Signature"},
 		},
-		Crons: []agentsdk.CronEntry{
+		Crons: []agentsdk.CronDef{
 			{Name: "daily-digest", Schedule: "0 9 * * *"},
 		},
 	}
@@ -246,7 +246,10 @@ func TestRunComplete(t *testing.T) {
 	body := agentsdk.RunCompleteRequest{
 		RunID:  runID.String(),
 		Status: "completed",
-		Logs:   []string{"line 1", "line 2"},
+		Logs: []agentsdk.LogEntry{
+			{Level: agentsdk.LogLevelInfo, Message: "line 1"},
+			{Level: agentsdk.LogLevelWarn, Message: "line 2"},
+		},
 	}
 
 	router := testRouter(ah, func(r chi.Router) {
@@ -270,8 +273,9 @@ func TestRunComplete(t *testing.T) {
 	if run.Status != "completed" {
 		t.Errorf("run.Status = %q, want %q", run.Status, "completed")
 	}
-	if run.StdoutLog != "line 1\nline 2" {
-		t.Errorf("run.StdoutLog = %q, want %q", run.StdoutLog, "line 1\nline 2")
+	want := "line 1\n[warn] line 2"
+	if run.StdoutLog != want {
+		t.Errorf("run.StdoutLog = %q, want %q", run.StdoutLog, want)
 	}
 }
 

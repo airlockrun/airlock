@@ -214,19 +214,38 @@ func CommitAndPush(workDir, message string) (string, error) {
 	return hash, nil
 }
 
-// MergeBranch fast-forward merges branch into main.
+// MergeBranch fast-forward merges branch into main, rebasing the branch
+// onto current main first if a parallel build advanced main while this
+// branch's work was running. Cross-agent rebases never conflict (each
+// agent lives under its own agents/<id>/), and the per-agent build lock
+// prevents same-agent races, so the rebase is safe in practice.
 func MergeBranch(repoPath, branch string) error {
-	// Switch to main
+	mainBranch := "main"
 	if err := git(repoPath, "checkout", "main"); err != nil {
 		if err2 := git(repoPath, "checkout", "master"); err2 != nil {
 			return fmt.Errorf("git checkout main: %w", err)
 		}
+		mainBranch = "master"
 	}
 
+	if err := git(repoPath, "merge", "--ff-only", branch); err == nil {
+		return nil
+	}
+
+	// Diverged from main — replay the branch's commits on top of current
+	// main, then ff-merge. Abort the rebase on conflict so we don't leave
+	// the repo in a half-rebased state.
+	if err := git(repoPath, "rebase", mainBranch, branch); err != nil {
+		_ = git(repoPath, "rebase", "--abort")
+		_ = git(repoPath, "checkout", mainBranch)
+		return fmt.Errorf("git rebase %s onto %s: %w", branch, mainBranch, err)
+	}
+	if err := git(repoPath, "checkout", mainBranch); err != nil {
+		return fmt.Errorf("git checkout %s after rebase: %w", mainBranch, err)
+	}
 	if err := git(repoPath, "merge", "--ff-only", branch); err != nil {
-		return fmt.Errorf("git merge --ff-only %s: %w", branch, err)
+		return fmt.Errorf("git merge --ff-only %s after rebase: %w", branch, err)
 	}
-
 	return nil
 }
 

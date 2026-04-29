@@ -242,6 +242,36 @@ func (m *DockerManager) StartAgent(ctx context.Context, opts AgentOpts) (*Contai
 	return c, nil
 }
 
+// GetRunning implements ContainerManager. Returns (nil, nil) when no
+// container exists for the agent — caller is expected to treat that as
+// "nothing to do" rather than an error. Repopulates the in-memory cache
+// when it finds a running container Airlock didn't previously know about
+// (typical after an Airlock restart).
+func (m *DockerManager) GetRunning(ctx context.Context, agentID uuid.UUID) (*Container, error) {
+	name := agentName(agentID)
+
+	m.mu.Lock()
+	if c, ok := m.active[name]; ok {
+		m.mu.Unlock()
+		return c, nil
+	}
+	m.mu.Unlock()
+
+	c, err := m.inspectExisting(ctx, name)
+	if err != nil {
+		// Container not found OR exists-but-not-running → nothing to refresh.
+		// Distinguishing "not running" from "Docker error" isn't worth a
+		// dedicated error type here; the caller logs and moves on either way.
+		return nil, nil
+	}
+
+	m.mu.Lock()
+	m.active[name] = c
+	m.lastActivity[name] = time.Now()
+	m.mu.Unlock()
+	return c, nil
+}
+
 // StopAgent implements ContainerManager.
 func (m *DockerManager) StopAgent(ctx context.Context, id string) error {
 	timeout := 5
@@ -276,7 +306,10 @@ func (m *DockerManager) RemoveImage(ctx context.Context, imageRef string) error 
 func (m *DockerManager) StartToolserver(ctx context.Context, opts ToolserverOpts) (*Container, error) {
 	name := fmt.Sprintf("airlock-agent-builder-%d", time.Now().UnixNano())
 
-	cmd := []string{"toolserver", "-space-dir", opts.WorkDir}
+	// Set -home-dir so tools that resolve $HOME (e.g. todowrite's XDG path)
+	// have a writable target — the container runs as a non-root UID with no
+	// /etc/passwd entry, so HOME would otherwise default to "/" and fail.
+	cmd := []string{"toolserver", "-space-dir", opts.WorkDir, "-home-dir", "/tmp/sol-home"}
 
 	// Run as the host UID/GID so files written to the bind-mounted workspace
 	// are owned by the same user, preventing permission errors on git operations.

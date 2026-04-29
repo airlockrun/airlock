@@ -1,7 +1,7 @@
 -- name: UpsertConnection :one
 -- When scopes change, clear credentials so the user must re-authorize with the new scopes.
-INSERT INTO connections (agent_id, slug, name, description, auth_mode, auth_url, token_url, base_url, scopes, auth_injection, setup_instructions, test_path, config)
-VALUES (@agent_id, @slug, @name, @description, @auth_mode, @auth_url, @token_url, @base_url, @scopes, @auth_injection, @setup_instructions, @test_path, @config)
+INSERT INTO connections (agent_id, slug, name, description, auth_mode, auth_url, token_url, base_url, scopes, auth_injection, setup_instructions, test_path, config, access)
+VALUES (@agent_id, @slug, @name, @description, @auth_mode, @auth_url, @token_url, @base_url, @scopes, @auth_injection, @setup_instructions, @test_path, @config, @access)
 ON CONFLICT (agent_id, slug) DO UPDATE SET
     name = EXCLUDED.name,
     description = EXCLUDED.description,
@@ -14,6 +14,7 @@ ON CONFLICT (agent_id, slug) DO UPDATE SET
     setup_instructions = EXCLUDED.setup_instructions,
     test_path = EXCLUDED.test_path,
     config = EXCLUDED.config,
+    access = EXCLUDED.access,
     credentials = CASE WHEN connections.scopes != EXCLUDED.scopes THEN '' ELSE connections.credentials END,
     refresh_token = CASE WHEN connections.scopes != EXCLUDED.scopes THEN '' ELSE connections.refresh_token END,
     token_expires_at = CASE WHEN connections.scopes != EXCLUDED.scopes THEN NULL ELSE connections.token_expires_at END,

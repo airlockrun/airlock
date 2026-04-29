@@ -167,6 +167,7 @@ func runToProto(r dbq.Run, detail bool) *airlockv1.RunInfo {
 		FinishedAt:      convert.PgTimestampToProto(r.FinishedAt),
 		DurationMs:      r.DurationMs.Int32,
 		ErrorMessage:    r.ErrorMessage,
+		ErrorKind:       r.ErrorKind,
 		LlmTokensIn:    r.LlmTokensIn,
 		LlmTokensOut:   r.LlmTokensOut,
 		LlmCostEstimate: pgNumericToFloat(r.LlmCostEstimate),

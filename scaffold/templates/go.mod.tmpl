@@ -8,11 +8,21 @@ require (
 )
 
 tool github.com/a-h/templ/cmd/templ
-{{- if .DevLibs}}
 
+// Replace directives are unconditional: the build always resolves
+// agentsdk/goai/sol/goose/templ from /libs/, populated either from the
+// agent-builder image's baked libs (prod) or a dev workspace via
+// AGENT_LIBS_PATH. The goose/templ replaces are no-ops if the agent code
+// doesn't import them — Go ignores unused replaces — and they keep the
+// version sol's intermediate builds use identical to the version the CLI
+// binaries were built from inside the agent-builder image.
+//
+// require versions above are informational — gopls and other editor tooling
+// display them; the actual resolution is via these paths.
 replace (
 	github.com/airlockrun/agentsdk => /libs/agentsdk
 	github.com/airlockrun/goai => /libs/goai
 	github.com/airlockrun/sol => /libs/sol
+	github.com/pressly/goose/v3 => /libs/goose
+	github.com/a-h/templ => /libs/templ
 )
-{{- end}}

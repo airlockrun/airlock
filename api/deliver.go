@@ -135,9 +135,19 @@ func postToConversation(ctx context.Context, deps postDeps, opts postOpts) error
 			publishRunEvents(ctx, rc, deps.PubSub, opts.AgentID, runID, opts.ConversationID.String(), deps.Logger)
 		}
 
+		// Fallback status — same rationale as the web prompt path: the
+		// CAS in UpdateRunStatus means the agent's terminal status wins
+		// when it landed. "timeout" only sticks when the agent never
+		// reported back, which is the actual semantic.
 		_ = q.UpdateRunStatus(ctx, dbq.UpdateRunStatusParams{
 			ID:     toPgUUID(runID),
-			Status: "completed",
+			Status: "timeout",
+		})
+		costIn, costOut := runLLMCostRates(ctx, q, toPgUUID(opts.AgentID))
+		_ = q.UpdateRunLLMStats(ctx, dbq.UpdateRunLLMStatsParams{
+			RunID:      toPgUUID(runID),
+			CostInput:  costIn,
+			CostOutput: costOut,
 		})
 	}
 

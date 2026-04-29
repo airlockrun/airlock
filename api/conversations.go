@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"strconv"
-	"time"
+	"strings"
 
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 	"github.com/airlockrun/agentsdk"
@@ -22,7 +22,6 @@ import (
 	"github.com/airlockrun/sol/provider"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"
 )
 
@@ -214,14 +213,14 @@ func (h *conversationsHandler) ListConversationMessages(w http.ResponseWriter, r
 	q := dbq.New(h.db.Pool())
 	var msgs []dbq.AgentMessage
 	if before != "" {
-		ts, err := time.Parse(time.RFC3339Nano, before)
+		seq, err := strconv.ParseInt(before, 10, 64)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, "invalid before timestamp")
+			writeError(w, http.StatusBadRequest, "invalid before seq")
 			return
 		}
 		msgs, err = q.ListMessagesBackward(ctx, dbq.ListMessagesBackwardParams{
 			ConversationID: toPgUUID(convID),
-			Before:         pgtype.Timestamptz{Time: ts, Valid: true},
+			Before:         seq,
 			Lim:            limit,
 		})
 		if err != nil {
@@ -230,14 +229,14 @@ func (h *conversationsHandler) ListConversationMessages(w http.ResponseWriter, r
 			return
 		}
 	} else {
-		ts, err := time.Parse(time.RFC3339Nano, after)
+		seq, err := strconv.ParseInt(after, 10, 64)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, "invalid after timestamp")
+			writeError(w, http.StatusBadRequest, "invalid after seq")
 			return
 		}
 		msgs, err = q.ListMessagesForward(ctx, dbq.ListMessagesForwardParams{
 			ConversationID: toPgUUID(convID),
-			After:          pgtype.Timestamptz{Time: ts, Valid: true},
+			After:          seq,
 			Lim:            limit,
 		})
 		if err != nil {
@@ -406,6 +405,42 @@ func (h *conversationsHandler) Prompt(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	// Echo uploaded files back to the conversation as an ephemeral message
+	// so the user can see what they attached after the input chips clear.
+	// Posted before the dispatcher so it sorts ahead of the assistant turn.
+	if len(fileRefs) > 0 {
+		parts := make([]agentsdk.DisplayPart, 0, len(fileRefs))
+		for _, fr := range fileRefs {
+			partType := "file"
+			switch {
+			case strings.HasPrefix(fr.ContentType, "image/"):
+				partType = "image"
+			case strings.HasPrefix(fr.ContentType, "audio/"):
+				partType = "audio"
+			case strings.HasPrefix(fr.ContentType, "video/"):
+				partType = "video"
+			}
+			parts = append(parts, agentsdk.DisplayPart{
+				Type:     partType,
+				Source:   "agents/" + agentID.String() + "/" + fr.ID,
+				Filename: fr.Filename,
+				MimeType: fr.ContentType,
+			})
+		}
+		if err := postToConversation(ctx, postDeps{
+			DB: h.db, PubSub: h.pubsub, BridgeMgr: h.bridgeMgr, S3: h.s3, Logger: h.logger,
+		}, postOpts{
+			AgentID:        agentID,
+			ConversationID: pgUUID(convID),
+			Role:           "user",
+			Parts:          parts,
+			Source:         "upload",
+			Ephemeral:      true,
+		}); err != nil {
+			h.logger.Warn("post upload echo failed", zap.Error(err))
+		}
+	}
+
 	// Look up the agent row once — used for both model modalities and
 	// access-filtered extra system prompts.
 	var modalities []string
@@ -429,6 +464,7 @@ func (h *conversationsHandler) Prompt(w http.ResponseWriter, r *http.Request) {
 		SupportedModalities: modalities,
 		ExtraSystemPrompt:   extraSystemPrompt,
 		ForceCompact:        forceCompact,
+		CallerAccess:        access,
 	}
 	if forceCompact {
 		// /compact doesn't carry a user-authored text; Sol produces the
@@ -471,13 +507,31 @@ func (h *conversationsHandler) Prompt(w http.ResponseWriter, r *http.Request) {
 		bgCtx := context.Background()
 		publishRunEvents(bgCtx, rc, h.pubsub, agentID, runID, convIDStr, h.logger)
 
-		// Mark run as completed (status-only — agent's UpsertRunComplete has the actions).
+		// Fallback status when the agent never wrote its own terminal
+		// status (e.g. stuck in an infinite run_js loop, container died).
+		// UpdateRunStatus has a CAS guard (WHERE status='running'), so the
+		// agent's authoritative success/error/tool_errors write — when it
+		// happens — wins this race. "timeout" is the meaningful value when
+		// nobody else wrote: the stream ended without a terminal event.
 		bgQ := dbq.New(h.db.Pool())
 		if err := bgQ.UpdateRunStatus(bgCtx, dbq.UpdateRunStatusParams{
 			ID:     toPgUUID(runID),
-			Status: "completed",
+			Status: "timeout",
 		}); err != nil {
 			h.logger.Error("update run status", zap.Error(err))
+		}
+		// Aggregate LLM telemetry. Idempotent with the agent-side write in
+		// agent_run.go RunComplete — whichever runs last reflects final state.
+		// Important for the timeout path where the agent never called
+		// RunComplete: any messages persisted before the agent died still
+		// roll up here.
+		costIn, costOut := runLLMCostRates(bgCtx, bgQ, toPgUUID(agentID))
+		if err := bgQ.UpdateRunLLMStats(bgCtx, dbq.UpdateRunLLMStatsParams{
+			RunID:      toPgUUID(runID),
+			CostInput:  costIn,
+			CostOutput: costOut,
+		}); err != nil {
+			h.logger.Error("aggregate run llm stats", zap.Error(err))
 		}
 	}()
 }
@@ -590,6 +644,7 @@ func conversationToProto(c dbq.AgentConversation) *airlockv1.ConversationInfo {
 func messageToProto(ctx context.Context, s3Client *storage.S3Client, logger *zap.Logger, m dbq.AgentMessage) *airlockv1.AgentMessageInfo {
 	info := &airlockv1.AgentMessageInfo{
 		Id:           convert.PgUUIDToString(m.ID),
+		Seq:          m.Seq,
 		Role:         m.Role,
 		Content:      m.Content,
 		TokensIn:     m.TokensIn,

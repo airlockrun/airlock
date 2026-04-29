@@ -10,16 +10,17 @@ const catalog = useCatalogStore()
 const toast = useToast()
 const confirm = useConfirm()
 
-type Capability = 'text' | 'vision' | 'stt' | 'tts' | 'image_gen' | 'search'
+type Capability = 'text' | 'vision' | 'transcription' | 'speech' | 'image_gen' | 'embedding' | 'search'
 
-const capabilityOrder: Capability[] = ['text', 'vision', 'stt', 'tts', 'image_gen', 'search']
+const capabilityOrder: Capability[] = ['text', 'vision', 'transcription', 'speech', 'image_gen', 'embedding', 'search']
 const capabilityMeta: Record<Capability, { label: string; icon: string; description: string }> = {
-  text:      { label: 'Text',       icon: 'pi pi-align-left',  description: 'LLMs that take text in and produce text out.' },
-  vision:    { label: 'Vision',     icon: 'pi pi-image',       description: 'Models that can read images.' },
-  stt:       { label: 'STT',        icon: 'pi pi-microphone',  description: 'Speech-to-text (audio in → text out).' },
-  tts:       { label: 'TTS',        icon: 'pi pi-volume-up',   description: 'Text-to-speech (text in → audio out).' },
-  image_gen: { label: 'Image gen',  icon: 'pi pi-palette',     description: 'Text-to-image generation.' },
-  search:    { label: 'Web search', icon: 'pi pi-search',      description: 'Live web search for agents.' },
+  text:          { label: 'Text',          icon: 'pi pi-align-left',  description: 'LLMs that take text in and produce text out.' },
+  vision:        { label: 'Vision',        icon: 'pi pi-image',       description: 'Models that can read images.' },
+  transcription: { label: 'Transcription', icon: 'pi pi-microphone',  description: 'Speech-to-text (audio in → text out).' },
+  speech:        { label: 'Speech',        icon: 'pi pi-volume-up',   description: 'Text-to-speech (text in → audio out).' },
+  image_gen:     { label: 'Image gen',     icon: 'pi pi-palette',     description: 'Text-to-image generation.' },
+  embedding:     { label: 'Embedding',     icon: 'pi pi-database',    description: 'Text → vector embeddings.' },
+  search:        { label: 'Web search',    icon: 'pi pi-search',      description: 'Live web search for agents.' },
 }
 
 const dialogVisible = ref(false)
@@ -203,9 +204,11 @@ function confirmDelete(provider: { id: string; displayName: string }) {
       </Column>
     </DataTable>
 
-    <!-- Create / Edit dialog -->
+    <!-- Create / Edit dialog. The wrapping <form autocomplete="off"> + per-
+         field autocomplete="off" stops browsers from treating Display Name +
+         API Key like a username/password pair and offering to save it. -->
     <Dialog v-model:visible="dialogVisible" :header="editingId ? 'Edit Provider' : 'Add Provider'" modal style="width: 28rem">
-      <div style="display: flex; flex-direction: column; gap: 1rem; padding-top: 0.5rem">
+      <form autocomplete="off" style="display: flex; flex-direction: column; gap: 1rem; padding-top: 0.5rem" @submit.prevent>
         <Message
           v-if="!editingId && dialogCapabilityFilter"
           severity="info"
@@ -231,21 +234,36 @@ function confirmDelete(provider: { id: string; displayName: string }) {
             style="width: 100%"
             @update:modelValue="onProviderSelect"
           />
-          <InputText v-else id="providerId" v-model="form.providerId" disabled />
+          <InputText v-else id="providerId" v-model="form.providerId" disabled autocomplete="off" />
         </div>
         <div style="display: flex; flex-direction: column; gap: 0.25rem">
           <label for="displayName">Display Name</label>
-          <InputText id="displayName" v-model="form.displayName" placeholder="e.g. OpenAI" />
+          <InputText id="displayName" v-model="form.displayName" autocomplete="off" placeholder="e.g. OpenAI" />
         </div>
         <div style="display: flex; flex-direction: column; gap: 0.25rem">
           <label for="baseUrl">Base URL (optional)</label>
-          <InputText id="baseUrl" v-model="form.baseUrl" placeholder="Leave blank for provider default" />
+          <InputText id="baseUrl" v-model="form.baseUrl" autocomplete="off" placeholder="Leave blank for provider default" />
         </div>
         <div style="display: flex; flex-direction: column; gap: 0.25rem">
           <label for="apiKey">API Key{{ editingId ? ' (leave blank to keep current)' : '' }}</label>
-          <Password id="apiKey" v-model="form.apiKey" :feedback="false" toggleMask />
+          <!-- type="text" + -webkit-text-security keeps the visual masking
+               but avoids the password manager entirely — Chrome fixates on
+               type="password" and ignores autocomplete tokens. Hidden by
+               CSS in Chromium/Safari; Firefox shows plain text but never
+               offers to save. -->
+          <InputText
+            id="apiKey"
+            v-model="form.apiKey"
+            type="text"
+            autocomplete="off"
+            name="provider-api-key"
+            data-1p-ignore="true"
+            data-lpignore="true"
+            data-bwignore="true"
+            style="-webkit-text-security: disc;"
+          />
         </div>
-      </div>
+      </form>
       <template #footer>
         <Button label="Cancel" severity="secondary" text @click="dialogVisible = false" />
         <Button :label="editingId ? 'Update' : 'Create'" :disabled="!editingId && !form.providerId" @click="onSubmit" />

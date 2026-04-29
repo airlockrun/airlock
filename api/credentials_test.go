@@ -42,6 +42,12 @@ func userRouter(setup func(r chi.Router)) http.Handler {
 
 // userRequestJSON creates an HTTP request with a user JWT and JSON body.
 func userRequestJSON(t *testing.T, method, path string, userID uuid.UUID, body any) *http.Request {
+	return requestJSONAs(t, method, path, userID, "user", body)
+}
+
+// requestJSONAs creates an HTTP request with a JWT for the given tenant
+// role. Used by tests that need to exercise role-gated handlers.
+func requestJSONAs(t *testing.T, method, path string, userID uuid.UUID, role string, body any) *http.Request {
 	t.Helper()
 	var reqBody string
 	if body != nil {
@@ -51,7 +57,7 @@ func userRequestJSON(t *testing.T, method, path string, userID uuid.UUID, body a
 	req := httptest.NewRequest(method, path, strings.NewReader(reqBody))
 	req.Header.Set("Content-Type", "application/json")
 
-	token, err := auth.IssueToken(testJWTSecret, userID, "test@example.com", "user")
+	token, err := auth.IssueToken(testJWTSecret, userID, "test@example.com", role)
 	if err != nil {
 		t.Fatalf("IssueToken: %v", err)
 	}

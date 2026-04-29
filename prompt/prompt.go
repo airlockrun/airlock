@@ -7,14 +7,15 @@ import (
 	"encoding/json"
 	"text/template"
 
-	"github.com/airlockrun/agentsdk"
+	"github.com/airlockrun/agentsdk/tsrender"
 )
 
 //go:embed agent.tmpl
 var agentPromptTmpl string
 
 var agentTmpl = template.Must(template.New("agent").Funcs(template.FuncMap{
-	"renderTools": renderToolsFunc,
+	"renderTools":        renderToolsFunc,
+	"renderMCPNamespace": renderMCPNamespaceFunc,
 }).Parse(agentPromptTmpl))
 
 // AgentData is the template data for rendering the execution agent system prompt.
@@ -43,16 +44,16 @@ type ToolInfo struct {
 // TypeScript .d.ts block the LLM reads. Delegates to agentsdk so the same
 // renderer is used by both sides.
 func renderToolsFunc(tools []ToolInfo) string {
-	items := make([]agentsdk.ToolRender, len(tools))
+	items := make([]tsrender.ToolRender, len(tools))
 	for i, t := range tools {
-		items[i] = agentsdk.ToolRender{
+		items[i] = tsrender.ToolRender{
 			Name:         t.Name,
 			Description:  t.Description,
 			InputSchema:  t.InputSchema,
 			OutputSchema: t.OutputSchema,
 		}
 	}
-	return agentsdk.RenderToolDecls(items)
+	return tsrender.RenderToolDecls(items)
 }
 
 type ConnInfo struct {
@@ -89,6 +90,29 @@ type MCPServerStatus struct {
 	Slug   string
 	Name   string
 	Status string // e.g. "connected, 5 tools" or "requires authentication"
+	// Tools is empty when the server isn't authorized or discovery hasn't run.
+	// When populated, the template renders a typed `declare const mcp_{slug}: {...}`
+	// block alongside the status line.
+	Tools []ToolInfo
+}
+
+// renderMCPNamespaceFunc adapts a single MCPServerStatus into the typed
+// `declare const mcp_{slug}: {...}` block that the LLM consumes. Returns
+// the empty string for unauthorized / undiscovered servers; the template
+// then falls back to just the status line.
+func renderMCPNamespaceFunc(server MCPServerStatus) string {
+	if len(server.Tools) == 0 {
+		return ""
+	}
+	tools := make([]tsrender.MCPToolRender, len(server.Tools))
+	for i, t := range server.Tools {
+		tools[i] = tsrender.MCPToolRender{
+			Name:        t.Name,
+			Description: t.Description,
+			InputSchema: t.InputSchema,
+		}
+	}
+	return tsrender.RenderMCPNamespace(server.Slug, tools)
 }
 
 // RenderAgentPrompt renders the execution agent system prompt with the given data.

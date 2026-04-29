@@ -74,7 +74,7 @@ func (h *agentHandler) UpsertConnection(w http.ResponseWriter, r *http.Request) 
 		Slug:              slug,
 		Name:              def.Name,
 		Description:       def.Description,
-		AuthMode:          def.AuthMode,
+		AuthMode:          string(def.AuthMode),
 		AuthUrl:           def.AuthURL,
 		TokenUrl:          def.TokenURL,
 		BaseUrl:           def.BaseURL,
@@ -82,6 +82,7 @@ func (h *agentHandler) UpsertConnection(w http.ResponseWriter, r *http.Request) 
 		AuthInjection:     authInjection,
 		SetupInstructions: def.SetupInstructions,
 		Config:            []byte("{}"),
+		Access:            string(def.Access),
 	})
 	if err != nil {
 		h.logger.Error("upsert connection failed", zap.Error(err))
@@ -205,7 +206,7 @@ func (h *agentHandler) Sync(w http.ResponseWriter, r *http.Request) {
 			AgentID:      pgAgentID,
 			Name:         t.Name,
 			Description:  t.Description,
-			Access:       t.Access,
+			Access:       string(t.Access),
 			InputSchema:  inSchema,
 			OutputSchema: outSchema,
 		})
@@ -305,7 +306,7 @@ func (h *agentHandler) Sync(w http.ResponseWriter, r *http.Request) {
 			AgentID:     pgAgentID,
 			Path:        rt.Path,
 			Method:      rt.Method,
-			Access:      rt.Access,
+			Access:      string(rt.Access),
 			Description: rt.Description,
 		}); err != nil {
 			h.logger.Error("upsert route failed", zap.Error(err))
@@ -330,6 +331,7 @@ func (h *agentHandler) Sync(w http.ResponseWriter, r *http.Request) {
 			AgentID:     pgAgentID,
 			Slug:        t.Slug,
 			Description: t.Description,
+			Access:      string(t.Access),
 		}); err != nil {
 			h.logger.Error("upsert topic failed", zap.Error(err))
 			writeJSONError(w, http.StatusInternalServerError, "failed to sync topics")
@@ -359,10 +361,11 @@ func (h *agentHandler) Sync(w http.ResponseWriter, r *http.Request) {
 			Slug:     mcp.Slug,
 			Name:     mcp.Name,
 			Url:      mcp.URL,
-			AuthMode: mcp.AuthMode,
+			AuthMode: string(mcp.AuthMode),
 			AuthUrl:  mcp.AuthURL,
 			TokenUrl: mcp.TokenURL,
 			Scopes:   scopes,
+			Access:   string(mcp.Access),
 		}); err != nil {
 			h.logger.Error("upsert MCP server failed", zap.Error(err))
 			writeJSONError(w, http.StatusInternalServerError, "failed to sync MCP servers")
@@ -379,32 +382,98 @@ func (h *agentHandler) Sync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Discover MCP status for servers with credentials.
+	// Upsert storage zones, then delete stale.
+	zoneSlugs := make([]string, len(req.Storages))
+	for i, s := range req.Storages {
+		if err := q.UpsertStorageZone(ctx, dbq.UpsertStorageZoneParams{
+			AgentID:     pgAgentID,
+			Slug:        s.Slug,
+			ReadAccess:  string(s.Read),
+			WriteAccess: string(s.Write),
+			Description: s.Description,
+		}); err != nil {
+			h.logger.Error("upsert storage zone failed", zap.Error(err))
+			writeJSONError(w, http.StatusInternalServerError, "failed to sync storage zones")
+			return
+		}
+		zoneSlugs[i] = s.Slug
+	}
+	if err := q.DeleteStorageZonesByAgentExcept(ctx, dbq.DeleteStorageZonesByAgentExceptParams{
+		AgentID: pgAgentID,
+		Slugs:   zoneSlugs,
+	}); err != nil {
+		h.logger.Error("delete stale storage zones failed", zap.Error(err))
+		writeJSONError(w, http.StatusInternalServerError, "failed to sync storage zones")
+		return
+	}
+
+	// Discover MCP status for servers with credentials. discoverAllMCPStatus
+	// updates the tool_schemas JSONB column on success, so re-fetch the rows
+	// afterwards to read the freshly-cached schemas into the prompt + response.
 	mcpServers, _ := q.ListMCPServersByAgent(ctx, pgAgentID)
 	mcpStatuses := h.discoverAllMCPStatus(ctx, q, agentID, mcpServers)
+	mcpServers, _ = q.ListMCPServersByAgent(ctx, pgAgentID)
+
+	// Index the (possibly-refreshed) server rows by slug so we can decode
+	// tool_schemas once and reuse for both the prompt template and the
+	// SyncResponse payload.
+	serverBySlug := make(map[string]dbq.AgentMcpServer, len(mcpServers))
+	for _, srv := range mcpServers {
+		serverBySlug[srv.Slug] = srv
+	}
 
 	// Build MCP server status for prompt and auth status for response.
 	var promptMCPServers []promptpkg.MCPServerStatus
 	var mcpAuthStatus []agentsdk.MCPAuthStatus
+	mcpSchemas := make(map[string][]agentsdk.MCPToolSchema)
 	for _, s := range mcpStatuses {
 		mcpAuthStatus = append(mcpAuthStatus, s.MCPAuthStatus)
 		status := "requires authentication"
 		if s.Authorized {
 			status = fmt.Sprintf("connected, %d tools", s.ToolCount)
 		}
-		promptMCPServers = append(promptMCPServers, promptpkg.MCPServerStatus{
-			Slug:   s.Slug,
-			Name:   s.Slug, // use slug as name fallback
-			Status: status,
-		})
-	}
-	// Fill in name from server list.
-	for i := range promptMCPServers {
-		for _, srv := range mcpServers {
-			if srv.Slug == promptMCPServers[i].Slug && srv.Name != "" {
-				promptMCPServers[i].Name = srv.Name
+
+		// Decode cached tool_schemas → ToolInfo for the prompt template
+		// AND MCPToolSchema for the SyncResponse. Both consumers need the
+		// same data; decoding once keeps it consistent.
+		var promptTools []promptpkg.ToolInfo
+		var schemas []agentsdk.MCPToolSchema
+		if srv, ok := serverBySlug[s.Slug]; ok && len(srv.ToolSchemas) > 0 {
+			var stored []mcpToolInfo
+			if err := json.Unmarshal(srv.ToolSchemas, &stored); err == nil {
+				promptTools = make([]promptpkg.ToolInfo, len(stored))
+				schemas = make([]agentsdk.MCPToolSchema, len(stored))
+				for i, t := range stored {
+					promptTools[i] = promptpkg.ToolInfo{
+						Name:        t.Name,
+						Description: t.Description,
+						InputSchema: t.InputSchema,
+					}
+					schemas[i] = agentsdk.MCPToolSchema{
+						ServerSlug:  s.Slug,
+						Name:        t.Name,
+						Description: t.Description,
+						InputSchema: t.InputSchema,
+					}
+				}
+			} else {
+				h.logger.Warn("decode tool_schemas failed", zap.String("slug", s.Slug), zap.Error(err))
 			}
 		}
+		if len(schemas) > 0 {
+			mcpSchemas[s.Slug] = schemas
+		}
+
+		name := s.Slug
+		if srv, ok := serverBySlug[s.Slug]; ok && srv.Name != "" {
+			name = srv.Name
+		}
+		promptMCPServers = append(promptMCPServers, promptpkg.MCPServerStatus{
+			Slug:   s.Slug,
+			Name:   name,
+			Status: status,
+			Tools:  promptTools,
+		})
 	}
 
 	// Render system prompt from template.
@@ -441,7 +510,7 @@ func (h *agentHandler) Sync(w http.ResponseWriter, r *http.Request) {
 	}
 	promptRoutes := make([]promptpkg.RouteInfo, len(req.Routes))
 	for i, rt := range req.Routes {
-		promptRoutes[i] = promptpkg.RouteInfo{Method: rt.Method, Path: rt.Path, Access: rt.Access, Description: rt.Description}
+		promptRoutes[i] = promptpkg.RouteInfo{Method: rt.Method, Path: rt.Path, Access: string(rt.Access), Description: rt.Description}
 	}
 
 	// Build agent route URL if agent domain is configured.
@@ -469,8 +538,19 @@ func (h *agentHandler) Sync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Public storage base — the prefix StorageHandle.URL appends "/{zone}/{key}"
+	// to. agentRouteURL is empty only in deployments without an agent domain
+	// configured (which means no agent-served routes either); the SDK side
+	// degrades gracefully but in practice this is always populated.
+	publicStorageBase := ""
+	if agentRouteURL != "" {
+		publicStorageBase = agentRouteURL + "/__air/storage"
+	}
+
 	writeJSON(w, http.StatusOK, agentsdk.SyncResponse{
-		SystemPrompt:  rendered,
-		MCPAuthStatus: mcpAuthStatus,
+		SystemPrompt:      rendered,
+		MCPAuthStatus:     mcpAuthStatus,
+		MCPSchemas:        mcpSchemas,
+		PublicStorageBase: publicStorageBase,
 	})
 }

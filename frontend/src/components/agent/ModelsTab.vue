@@ -6,11 +6,13 @@ import { useAgentsStore } from '@/stores/agents'
 import { useCatalogStore } from '@/stores/catalog'
 import {
   useModelCapabilities,
-  supportsText,
-  supportsVision,
-  supportsSTT,
-  supportsTTS,
-  supportsImageGen,
+  isLanguage,
+  isEmbedding,
+  isImageGen,
+  isSpeech,
+  isTranscription,
+  hasCap,
+  type CatalogModel,
 } from '@/composables/useModelCapabilities'
 import type { AgentModelConfig, ModelSlotInfo } from '@/gen/airlock/v1/api_pb'
 import { AgentModelConfigSchema, ModelSlotInfoSchema } from '@/gen/airlock/v1/api_pb'
@@ -56,7 +58,7 @@ const overrideRows = computed<ConfigRow[]>(() => [
     label: 'Build Model',
     icon: 'pi pi-hammer',
     help: 'Override the system default build model for this agent.',
-    options: groupModels(supportsText),
+    options: groupModels(isLanguage),
     grouped: true,
   },
   {
@@ -64,7 +66,7 @@ const overrideRows = computed<ConfigRow[]>(() => [
     label: 'Execution Model (Text)',
     icon: 'pi pi-align-left',
     help: 'Runtime default when the agent makes text LLM calls without a specific slug.',
-    options: groupModels(supportsText),
+    options: groupModels(isLanguage),
     grouped: true,
   },
   {
@@ -72,7 +74,7 @@ const overrideRows = computed<ConfigRow[]>(() => [
     label: 'Vision',
     icon: 'pi pi-image',
     help: 'Image → text tasks (VM attachToContext on images, explicit vision capability LLM calls).',
-    options: groupModels(supportsVision),
+    options: groupModels((m: CatalogModel) => isLanguage(m) && hasCap(m, 'vision')),
     grouped: true,
   },
   {
@@ -80,7 +82,7 @@ const overrideRows = computed<ConfigRow[]>(() => [
     label: 'STT',
     icon: 'pi pi-microphone',
     help: 'Speech-to-text — used by agent.TranscriptionModel and the VM transcribeAudio built-in.',
-    options: groupModels(supportsSTT),
+    options: groupModels(isTranscription),
     grouped: true,
   },
   {
@@ -88,7 +90,7 @@ const overrideRows = computed<ConfigRow[]>(() => [
     label: 'TTS',
     icon: 'pi pi-volume-up',
     help: 'Text-to-speech — used by agent.SpeechModel and the VM generateSpeech built-in.',
-    options: groupModels(supportsTTS),
+    options: groupModels(isSpeech),
     grouped: true,
   },
   {
@@ -96,7 +98,7 @@ const overrideRows = computed<ConfigRow[]>(() => [
     label: 'Image Gen',
     icon: 'pi pi-palette',
     help: 'Text-to-image — used by agent.ImageModel and the VM generateImage built-in.',
-    options: groupModels(supportsImageGen),
+    options: groupModels(isImageGen),
     grouped: true,
   },
   {
@@ -104,7 +106,7 @@ const overrideRows = computed<ConfigRow[]>(() => [
     label: 'Embedding',
     icon: 'pi pi-database',
     help: 'Text embeddings — used by agent.EmbeddingModel and the VM embed built-in.',
-    options: groupModels(supportsText),
+    options: groupModels(isEmbedding),
     grouped: true,
   },
   {
@@ -119,12 +121,12 @@ const overrideRows = computed<ConfigRow[]>(() => [
 
 function optionsForCapability(capability: string) {
   switch (capability) {
-    case 'text': return groupModels(supportsText)
-    case 'vision': return groupModels(supportsVision)
-    case 'image': return groupModels(supportsImageGen)
-    case 'speech': return groupModels(supportsTTS)
-    case 'transcription': return groupModels(supportsSTT)
-    case 'embedding': return groupModels(supportsText)
+    case 'text': return groupModels(isLanguage)
+    case 'vision': return groupModels((m: CatalogModel) => isLanguage(m) && hasCap(m, 'vision'))
+    case 'image': return groupModels(isImageGen)
+    case 'speech': return groupModels(isSpeech)
+    case 'transcription': return groupModels(isTranscription)
+    case 'embedding': return groupModels(isEmbedding)
   }
   return []
 }

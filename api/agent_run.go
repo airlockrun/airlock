@@ -10,8 +10,49 @@ import (
 	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/builder"
 	"github.com/airlockrun/airlock/db/dbq"
+	"github.com/airlockrun/sol/provider"
+	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"
 )
+
+// runLLMCostRates returns ($/Mtok input, $/Mtok output) for the agent's
+// configured exec model — read from sol's models.dev catalog. Returns
+// (0, 0) when the model has no pricing data; UpdateRunLLMStats then
+// stores cost_estimate = 0. Used by the run-completion paths to fold
+// pricing into the per-run aggregation.
+func runLLMCostRates(ctx context.Context, q *dbq.Queries, agentID pgtype.UUID) (in, out float64) {
+	ag, err := q.GetAgentByID(ctx, agentID)
+	if err != nil || ag.ExecModel == "" {
+		return 0, 0
+	}
+	provID, modID := provider.ParseModel(ag.ExecModel)
+	info, ok := provider.GetModelInfo(provID, modID)
+	if !ok || info.Cost == nil {
+		return 0, 0
+	}
+	return info.Cost.Input, info.Cost.Output
+}
+
+// formatRunLogs renders structured log entries into the flat text shape
+// stored in runs.stdout_log. Levels above info get a "[level] " prefix so
+// the run-detail UI can pick them out without a schema migration.
+func formatRunLogs(logs []agentsdk.LogEntry) string {
+	if len(logs) == 0 {
+		return ""
+	}
+	parts := make([]string, len(logs))
+	for i, l := range logs {
+		switch l.Level {
+		case agentsdk.LogLevelWarn:
+			parts[i] = "[warn] " + l.Message
+		case agentsdk.LogLevelError:
+			parts[i] = "[error] " + l.Message
+		default:
+			parts[i] = l.Message
+		}
+	}
+	return strings.Join(parts, "\n")
+}
 
 // RunComplete handles POST /api/agent/run/complete.
 func (h *agentHandler) RunComplete(w http.ResponseWriter, r *http.Request) {
@@ -29,19 +70,57 @@ func (h *agentHandler) RunComplete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// agentsdk classifies the error structurally (by call-site, not regex)
+	// and sends the kind in req.ErrorKind. We trust it as-is.
 	q := dbq.New(h.db.Pool())
 	if err := q.UpsertRunComplete(r.Context(), dbq.UpsertRunCompleteParams{
 		ID:           toPgUUID(runUUID),
 		AgentID:      toPgUUID(agentID),
 		Status:       req.Status,
 		ErrorMessage: req.Error,
+		ErrorKind:    req.ErrorKind,
 		Actions:      req.Actions,
-		StdoutLog:    strings.Join(req.Logs, "\n"),
+		StdoutLog:    formatRunLogs(req.Logs),
 		PanicTrace:   req.PanicTrace,
 	}); err != nil {
 		h.logger.Error("upsert run complete failed", zap.Error(err))
 		writeJSONError(w, http.StatusInternalServerError, "failed to record run completion")
 		return
+	}
+
+	// Persist the error as a synthetic assistant message in the conversation
+	// (if the run is conversation-attached) so the chat surface keeps the
+	// banner after refresh. WS already paints it transiently. Cron- or
+	// webhook-triggered runs that never wrote a message return no rows from
+	// GetConversationIDByRun and we skip silently.
+	if req.Status == "error" && req.Error != "" {
+		convID, lookupErr := q.GetConversationIDByRun(r.Context(), toPgUUID(runUUID))
+		if lookupErr == nil && convID.Valid {
+			if _, err := q.CreateMessage(r.Context(), dbq.CreateMessageParams{
+				ConversationID: convID,
+				Role:           "assistant",
+				Source:         "error",
+				Content:        req.Error,
+				RunID:          toPgUUID(runUUID),
+			}); err != nil {
+				h.logger.Warn("persist error message failed", zap.Error(err))
+			}
+		}
+	}
+
+	// Aggregate per-message LLM telemetry (tokens, cost, call count) onto
+	// the run row. Source of truth for tokens is agent_messages, which the
+	// SessionStore populates per assistant turn; cost is computed from
+	// sol's models.dev pricing for the agent's exec model. Non-fatal —
+	// the run is already marked complete; missing aggregates just mean
+	// the run-list shows zeros.
+	costIn, costOut := runLLMCostRates(r.Context(), q, toPgUUID(agentID))
+	if err := q.UpdateRunLLMStats(r.Context(), dbq.UpdateRunLLMStatsParams{
+		RunID:      toPgUUID(runUUID),
+		CostInput:  costIn,
+		CostOutput: costOut,
+	}); err != nil {
+		h.logger.Error("aggregate run llm stats failed", zap.Error(err))
 	}
 
 	// Store checkpoint for suspended runs.

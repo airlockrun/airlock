@@ -1,0 +1,41 @@
+# Airlock self-host Caddy config.
+#
+# TLS strategy: on-demand, validated against airlock's /caddy/ask endpoint.
+# Caddy issues a fresh cert per agent subdomain on first request via Let's
+# Encrypt's HTTP-01 challenge. No DNS provider credentials needed.
+#
+# Tradeoff: Let's Encrypt rate-limits 50 cert issuances per registered domain
+# per week (renewals count). Comfortable for installations with <30 agents;
+# above that, see README "Wildcard DNS-01" section to switch to a single
+# wildcard cert that sidesteps the rate limit entirely.
+{
+	# Let's Encrypt account email — receive cert expiry warnings here.
+	# Uncomment and edit once you have one (or set ACME_EMAIL in .env and
+	# replace the literal address below with {$ACME_EMAIL}).
+	# email you@example.com
+
+	on_demand_tls {
+		ask http://airlock:8080/caddy/ask
+	}
+}
+
+# Apex domain: the dashboard SPA + airlock REST/WebSocket API.
+{$DOMAIN} {
+	@backend path /api/* /auth/* /ws /webhooks/* /health
+	handle @backend {
+		reverse_proxy airlock:8080
+	}
+	handle {
+		reverse_proxy frontend:80
+	}
+}
+
+# Wildcard subdomains: per-agent custom routes ({slug}.{$DOMAIN}).
+# airlock's SubdomainProxy handles routing internally — Caddy just needs
+# to terminate TLS and forward the request.
+*.{$DOMAIN} {
+	tls {
+		on_demand
+	}
+	reverse_proxy airlock:8080
+}

@@ -130,7 +130,7 @@ func TestResolveForLLM_URLModeForOpenAI(t *testing.T) {
 		t.Fatal("openai policy should SupportsURL")
 	}
 
-	if err := attachref.ResolveForLLM(ctx, s3, agentID, policy, msgs); err != nil {
+	if err := attachref.ResolveForLLM(ctx, s3, nil, agentID, policy, msgs); err != nil {
 		t.Fatalf("ResolveForLLM: %v", err)
 	}
 
@@ -168,7 +168,7 @@ func TestResolveForLLM_InlineModeForNonURLProvider(t *testing.T) {
 		t.Fatal("default policy should not SupportsURL")
 	}
 
-	if err := attachref.ResolveForLLM(ctx, s3, agentID, policy, msgs); err != nil {
+	if err := attachref.ResolveForLLM(ctx, s3, nil, agentID, policy, msgs); err != nil {
 		t.Fatalf("ResolveForLLM: %v", err)
 	}
 
@@ -216,7 +216,7 @@ func TestResolveForLLM_FileURLRoutesToFilePartURL(t *testing.T) {
 		t.Fatal("anthropic policy should SupportsFileURL")
 	}
 
-	if err := attachref.ResolveForLLM(ctx, s3, agentID, policy, msgs); err != nil {
+	if err := attachref.ResolveForLLM(ctx, s3, nil, agentID, policy, msgs); err != nil {
 		t.Fatalf("ResolveForLLM: %v", err)
 	}
 
@@ -262,7 +262,7 @@ func TestResolveForLLM_OpenAIFilesStayInline(t *testing.T) {
 		t.Fatal("openai policy should not SupportsFileURL")
 	}
 
-	if err := attachref.ResolveForLLM(ctx, s3, agentID, policy, msgs); err != nil {
+	if err := attachref.ResolveForLLM(ctx, s3, nil, agentID, policy, msgs); err != nil {
 		t.Fatalf("ResolveForLLM: %v", err)
 	}
 
@@ -310,7 +310,7 @@ func TestResolveForLLM_EvictsPastInlineCap(t *testing.T) {
 		SupportsURL:         false,
 	}
 
-	if err := attachref.ResolveForLLM(ctx, s3, agentID, policy, msgs); err != nil {
+	if err := attachref.ResolveForLLM(ctx, s3, nil, agentID, policy, msgs); err != nil {
 		t.Fatalf("ResolveForLLM: %v", err)
 	}
 
@@ -353,7 +353,7 @@ func TestResolveForLLM_CurrentTurnOverCapFailsLoud(t *testing.T) {
 		SupportsURL:         false,
 	}
 
-	err := attachref.ResolveForLLM(ctx, s3, agentID, policy, msgs)
+	err := attachref.ResolveForLLM(ctx, s3, nil, agentID, policy, msgs)
 	if err == nil {
 		t.Fatal("expected error for current-turn overflow, got nil")
 	}

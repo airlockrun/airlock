@@ -17,8 +17,7 @@ type ScaffoldData struct {
 	AgentID         string // UUID
 	Module          string // Go module name for the agent (typically "agent")
 	GoVersion       string // e.g., "1.24"
-	AgentSDKVersion string // airlock's compile-time agentsdk.Version — pinned into the agent's go.mod
-	DevLibs         bool   // true = copy libs from Docker build context + use replace directives
+	AgentSDKVersion string // displayed in the agent's go.mod require line (informational — replace directives are unconditional)
 }
 
 // templateFile maps a template name to its output path relative to the target directory.

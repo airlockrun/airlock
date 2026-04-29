@@ -7,44 +7,48 @@ RETURNING *;
 -- Initial UI page: the 100 most recent messages, returned in chronological
 -- order. The handler overfetches by one (LIMIT 101) so it can report
 -- has_older_messages without a second COUNT query; the extra row is trimmed
--- before the response is built.
+-- before the response is built. Ordering is by seq (monotonic insertion
+-- order) — created_at alone ties when multiple rows are inserted in one
+-- transaction (assistant + tool batch).
 SELECT * FROM (
     SELECT * FROM agent_messages
     WHERE conversation_id = $1
-    ORDER BY created_at DESC
+    ORDER BY seq DESC
     LIMIT 101
 ) t
-ORDER BY created_at ASC;
+ORDER BY seq ASC;
 
 -- name: ListMessagesBackward :many
--- Older page for infinite-scroll-up. Returns up to @lim messages strictly
--- older than @before, back in chronological order for easy prepend.
+-- Older page for infinite-scroll-up. Returns up to @lim messages with seq
+-- strictly less than @before, back in chronological order for easy prepend.
 SELECT * FROM (
     SELECT * FROM agent_messages
     WHERE conversation_id = @conversation_id
-      AND created_at < @before
-    ORDER BY created_at DESC
+      AND seq < @before
+    ORDER BY seq DESC
     LIMIT @lim
 ) t
-ORDER BY created_at ASC;
+ORDER BY seq ASC;
 
 -- name: ListMessagesForward :many
--- Newer page for scroll-down after eviction. Returns up to @lim messages
--- strictly newer than @after, in chronological order.
+-- Newer page for scroll-down after eviction. Returns up to @lim messages with
+-- seq strictly greater than @after, in chronological order.
 SELECT * FROM agent_messages
 WHERE conversation_id = @conversation_id
-  AND created_at > @after
-ORDER BY created_at ASC
+  AND seq > @after
+ORDER BY seq ASC
 LIMIT @lim;
 
 -- name: ListAllMessagesByConversation :many
--- UI loading — includes all messages.
+-- UI loading — includes all messages. Run-grouped: rows that share a run_id
+-- stay together in the slot of the run's first message; tiebreak by ephemeral
+-- (non-ephemeral first) then seq.
 SELECT * FROM agent_messages
 WHERE conversation_id = $1
 ORDER BY
-  COALESCE(MIN(created_at) FILTER (WHERE run_id IS NOT NULL) OVER (PARTITION BY run_id), created_at) ASC,
+  COALESCE(MIN(seq) FILTER (WHERE run_id IS NOT NULL) OVER (PARTITION BY run_id), seq) ASC,
   ephemeral ASC,
-  created_at ASC;
+  seq ASC;
 
 -- name: ListSessionMessagesByConversation :many
 -- Agent context loading — excludes ephemeral messages (printToUser output) and
@@ -58,16 +62,23 @@ WHERE m.conversation_id = $1
   AND m.source <> 'checkpoint'
   AND (
     c.context_checkpoint_message_id IS NULL
-    OR m.created_at >= (
-      SELECT created_at FROM agent_messages WHERE id = c.context_checkpoint_message_id
+    OR m.seq >= (
+      SELECT seq FROM agent_messages WHERE id = c.context_checkpoint_message_id
     )
   )
-ORDER BY m.created_at ASC;
+ORDER BY m.seq ASC;
 
 -- name: ListMessagesByRun :many
 SELECT * FROM agent_messages
 WHERE run_id = $1
-ORDER BY created_at ASC;
+ORDER BY seq ASC;
+
+-- name: GetConversationIDByRun :one
+-- Resolves the conversation a run is attached to via any message's run_id.
+-- Cron- or webhook-triggered runs that never wrote a message return no rows.
+SELECT conversation_id FROM agent_messages
+WHERE run_id = $1
+LIMIT 1;
 
 -- name: SetConversationCheckpoint :exec
 UPDATE agent_conversations
@@ -87,8 +98,8 @@ WHERE m.conversation_id = $1
   AND m.source <> 'checkpoint'
   AND (
     c.context_checkpoint_message_id IS NULL
-    OR m.created_at >= (
-      SELECT created_at FROM agent_messages WHERE id = c.context_checkpoint_message_id
+    OR m.seq >= (
+      SELECT seq FROM agent_messages WHERE id = c.context_checkpoint_message_id
     )
   );
 

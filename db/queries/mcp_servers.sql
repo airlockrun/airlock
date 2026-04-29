@@ -1,7 +1,7 @@
 -- name: UpsertMCPServer :one
 -- When url or scopes change, clear credentials so the user must re-authorize.
-INSERT INTO agent_mcp_servers (agent_id, slug, name, url, auth_mode, auth_url, token_url, scopes)
-VALUES (@agent_id, @slug, @name, @url, @auth_mode, @auth_url, @token_url, @scopes)
+INSERT INTO agent_mcp_servers (agent_id, slug, name, url, auth_mode, auth_url, token_url, scopes, access)
+VALUES (@agent_id, @slug, @name, @url, @auth_mode, @auth_url, @token_url, @scopes, @access)
 ON CONFLICT (agent_id, slug) DO UPDATE SET
     name = EXCLUDED.name,
     url = EXCLUDED.url,
@@ -9,6 +9,7 @@ ON CONFLICT (agent_id, slug) DO UPDATE SET
     auth_url = EXCLUDED.auth_url,
     token_url = EXCLUDED.token_url,
     scopes = EXCLUDED.scopes,
+    access = EXCLUDED.access,
     credentials = CASE
         WHEN agent_mcp_servers.url != EXCLUDED.url OR agent_mcp_servers.scopes != EXCLUDED.scopes
         THEN '' ELSE agent_mcp_servers.credentials END,

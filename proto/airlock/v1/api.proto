@@ -81,6 +81,10 @@ message ListUsersResponse {
   repeated User users = 1;
 }
 
+message ListSelectableUsersResponse {
+  repeated UserSummary users = 1;
+}
+
 message UpdateUserRoleRequest {
   string tenant_role = 1;
 }
@@ -449,4 +453,15 @@ message UpdateSystemSettingsResponse {
 message ErrorResponse {
   string error = 1;
   string detail = 2;
+}
+
+// --- Health ---
+
+// HealthResponse reports the liveness/readiness of the airlock process and its
+// hard dependencies (Postgres, S3). HTTP 200 means status="ok"; HTTP 503 means
+// any dependency is down (per-subsystem booleans show which).
+message HealthResponse {
+  string status = 1;  // "ok" | "degraded"
+  bool db = 2;        // Postgres reachable
+  bool s3 = 3;        // S3/MinIO reachable
 }

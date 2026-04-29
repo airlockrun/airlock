@@ -6,11 +6,13 @@ import { useAgentsStore } from '@/stores/agents'
 import { useCatalogStore } from '@/stores/catalog'
 import {
   useModelCapabilities,
-  supportsText,
-  supportsVision,
-  supportsSTT,
-  supportsTTS,
-  supportsImageGen,
+  isLanguage,
+  isEmbedding,
+  isImageGen,
+  isSpeech,
+  isTranscription,
+  hasCap,
+  type CatalogModel,
 } from '@/composables/useModelCapabilities'
 import { useToast } from 'primevue/usetoast'
 import api from '@/api/client'
@@ -98,7 +100,7 @@ const coreRows = computed<OverrideRow[]>(() => [
     label: 'Build Model',
     icon: 'pi pi-hammer',
     help: 'Used by Sol to generate this agent\'s code. Leave empty to inherit the system default.',
-    options: groupModels(supportsText),
+    options: groupModels(isLanguage),
     grouped: true,
   },
   {
@@ -106,7 +108,7 @@ const coreRows = computed<OverrideRow[]>(() => [
     label: 'Execution Model',
     icon: 'pi pi-align-left',
     help: 'Runtime default for LLM calls. Leave empty to inherit the system default.',
-    options: groupModels(supportsText),
+    options: groupModels(isLanguage),
     grouped: true,
   },
 ])
@@ -117,7 +119,7 @@ const advancedRows = computed<OverrideRow[]>(() => [
     label: 'Vision',
     icon: 'pi pi-image',
     help: 'Image → text tasks.',
-    options: groupModels(supportsVision),
+    options: groupModels((m: CatalogModel) => isLanguage(m) && hasCap(m, 'vision')),
     grouped: true,
   },
   {
@@ -125,7 +127,7 @@ const advancedRows = computed<OverrideRow[]>(() => [
     label: 'STT',
     icon: 'pi pi-microphone',
     help: 'Speech-to-text transcription.',
-    options: groupModels(supportsSTT),
+    options: groupModels(isTranscription),
     grouped: true,
   },
   {
@@ -133,7 +135,7 @@ const advancedRows = computed<OverrideRow[]>(() => [
     label: 'TTS',
     icon: 'pi pi-volume-up',
     help: 'Text-to-speech synthesis.',
-    options: groupModels(supportsTTS),
+    options: groupModels(isSpeech),
     grouped: true,
   },
   {
@@ -141,7 +143,7 @@ const advancedRows = computed<OverrideRow[]>(() => [
     label: 'Image Gen',
     icon: 'pi pi-palette',
     help: 'Text-to-image generation.',
-    options: groupModels(supportsImageGen),
+    options: groupModels(isImageGen),
     grouped: true,
   },
   {
@@ -149,7 +151,7 @@ const advancedRows = computed<OverrideRow[]>(() => [
     label: 'Embedding',
     icon: 'pi pi-database',
     help: 'Text → vector embeddings.',
-    options: groupModels(supportsText),
+    options: groupModels(isEmbedding),
     grouped: true,
   },
   {

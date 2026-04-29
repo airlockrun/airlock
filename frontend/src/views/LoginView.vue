@@ -43,11 +43,11 @@ async function onSubmit() {
       <form @submit.prevent="onSubmit" style="display: flex; flex-direction: column; gap: 1.25rem">
         <Message v-if="error" severity="error" :closable="false">{{ error }}</Message>
         <FloatLabel>
-          <InputText id="email" v-model="email" style="width: 100%" />
+          <InputText id="email" v-model="email" type="email" autocomplete="username" style="width: 100%" />
           <label for="email">Email</label>
         </FloatLabel>
         <FloatLabel>
-          <Password id="password" v-model="password" :feedback="false" toggle-mask style="width: 100%" :input-style="{ width: '100%' }" />
+          <Password id="password" v-model="password" :feedback="false" toggle-mask :input-props="{ autocomplete: 'current-password' }" style="width: 100%" :input-style="{ width: '100%' }" />
           <label for="password">Password</label>
         </FloatLabel>
         <Button type="submit" label="Sign In" :loading="loading" style="width: 100%" />

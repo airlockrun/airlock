@@ -2,11 +2,16 @@ import { ref } from 'vue'
 import { defineStore } from 'pinia'
 import { fromJson } from '@bufbuild/protobuf'
 import api from '@/api/client'
-import type { User } from '@/gen/airlock/v1/types_pb'
-import { ListUsersResponseSchema, CreateUserResponseSchema } from '@/gen/airlock/v1/api_pb'
+import type { User, UserSummary } from '@/gen/airlock/v1/types_pb'
+import {
+  ListUsersResponseSchema,
+  ListSelectableUsersResponseSchema,
+  CreateUserResponseSchema,
+} from '@/gen/airlock/v1/api_pb'
 
 export const useUsersStore = defineStore('users', () => {
   const users = ref<User[]>([])
+  const selectable = ref<UserSummary[]>([])
   const loading = ref(false)
 
   async function fetchUsers() {
@@ -17,6 +22,11 @@ export const useUsersStore = defineStore('users', () => {
     } finally {
       loading.value = false
     }
+  }
+
+  async function fetchSelectable() {
+    const { data } = await api.get('/api/v1/users/selectable')
+    selectable.value = fromJson(ListSelectableUsersResponseSchema, data).users
   }
 
   async function createUser(payload: { email: string; password: string; displayName: string; tenantRole: string }) {
@@ -35,5 +45,5 @@ export const useUsersStore = defineStore('users', () => {
     users.value = users.value.filter((u) => u.id !== id)
   }
 
-  return { users, loading, fetchUsers, createUser, updateUserRole, deleteUser }
+  return { users, selectable, loading, fetchUsers, fetchSelectable, createUser, updateUserRole, deleteUser }
 })

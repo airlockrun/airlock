@@ -63,6 +63,27 @@ CREATE TABLE users (
     updated_at           timestamptz NOT NULL DEFAULT now()
 );
 
+-- Per-account login lockout, keyed on (email, ip).
+-- See airlock/auth/lockout/ for the policy + IP normalization that produces
+-- the `ip` value (IPv6 is collapsed to its /64 prefix; unparseable peers
+-- bucket to the sentinel "unknown").
+CREATE TABLE auth_failures (
+    email         text NOT NULL,
+    ip            text NOT NULL,
+    attempted_at  timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_auth_failures_lookup ON auth_failures (email, ip, attempted_at DESC);
+CREATE INDEX idx_auth_failures_prune  ON auth_failures (attempted_at);
+
+CREATE TABLE auth_lockouts (
+    email           text NOT NULL,
+    ip              text NOT NULL,
+    locked_until    timestamptz NOT NULL,
+    tier            int NOT NULL DEFAULT 0,
+    last_locked_at  timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (email, ip)
+);
+
 CREATE TABLE providers (
     id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     provider_id  text NOT NULL UNIQUE,
@@ -124,6 +145,7 @@ CREATE TABLE connections (
     slug                text NOT NULL,
     name                text NOT NULL,
     description         text NOT NULL,
+    access              text NOT NULL DEFAULT 'user',
     auth_mode           text NOT NULL,
     auth_url            text NOT NULL,
     token_url           text NOT NULL,
@@ -148,6 +170,7 @@ CREATE TABLE agent_mcp_servers (
     agent_id         uuid NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
     slug             text NOT NULL,
     name             text NOT NULL,
+    access           text NOT NULL DEFAULT 'user',
     url              text NOT NULL,
     auth_mode        text NOT NULL,
     auth_url         text NOT NULL DEFAULT '',
@@ -254,6 +277,7 @@ CREATE TABLE agent_topics (
     agent_id    uuid NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
     slug        text NOT NULL,
     description text NOT NULL,
+    access      text NOT NULL DEFAULT 'user',
     created_at  timestamptz NOT NULL DEFAULT now(),
     updated_at  timestamptz NOT NULL DEFAULT now(),
     UNIQUE (agent_id, slug)
@@ -270,6 +294,26 @@ CREATE TABLE agent_tools (
     created_at     timestamptz NOT NULL DEFAULT now(),
     UNIQUE (agent_id, name)
 );
+
+-- agent_storage_zones tracks per-agent S3 zones declared via
+-- agentsdk.RegisterStorage. The slug is also the S3 key prefix
+-- (agents/{agentID}/{slug}/...). read_access / write_access are split so a
+-- builder can declare e.g. read=user, write=admin (admin-curated,
+-- user-readable) or read=admin, write=user (user-fed inbox processed only
+-- by admins). Public read zones get an unauthenticated read route at
+-- /storage/{agentID}/{slug}/{key}.
+CREATE TABLE agent_storage_zones (
+    id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    agent_id     uuid NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    slug         text NOT NULL,
+    read_access  text NOT NULL DEFAULT 'user',
+    write_access text NOT NULL DEFAULT 'user',
+    description  text NOT NULL DEFAULT '',
+    created_at   timestamptz NOT NULL DEFAULT now(),
+    updated_at   timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (agent_id, slug)
+);
+CREATE INDEX idx_agent_storage_zones_agent ON agent_storage_zones(agent_id);
 
 CREATE TABLE agent_model_slots (
     agent_id       uuid NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
@@ -298,6 +342,10 @@ CREATE TABLE runs (
     logs              text NOT NULL DEFAULT '',
     stdout_log        text NOT NULL DEFAULT '',
     error_message     text NOT NULL DEFAULT '',
+    -- error_kind classifies the source of error_message so the UI can
+    -- distinguish platform issues (provider 4xx, network) from agent-code
+    -- bugs. Empty when status != 'error'. Values: 'platform' | 'agent' | ''.
+    error_kind        text NOT NULL DEFAULT '',
     exit_code         integer,
     panic_trace       text NOT NULL DEFAULT '',
     checkpoint        jsonb,
@@ -337,8 +385,16 @@ CREATE TABLE topic_subscriptions (
     UNIQUE (topic_id, conversation_id)
 );
 
+-- seq is a per-row monotonic sequence used as the canonical ordering axis
+-- for messages in a conversation. created_at alone is insufficient: when a
+-- step persists assistant + tool rows in one transaction, all rows share
+-- transaction_timestamp(), and ORDER BY created_at returns ties in arbitrary
+-- order. With Anthropic's strict tool_use → tool_result pairing rule, a
+-- swapped load orphans the tool_result and the request 400s. seq is global
+-- (BIGSERIAL) but we only ever order within a single conversation_id.
 CREATE TABLE agent_messages (
     id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    seq             bigserial NOT NULL,
     conversation_id uuid NOT NULL REFERENCES agent_conversations(id) ON DELETE CASCADE,
     run_id          uuid REFERENCES runs(id) ON DELETE SET NULL,
     role            text NOT NULL,
@@ -352,19 +408,40 @@ CREATE TABLE agent_messages (
     ephemeral       boolean NOT NULL DEFAULT false,
     created_at      timestamptz NOT NULL DEFAULT now()
 );
+CREATE INDEX idx_agent_messages_conv_seq ON agent_messages(conversation_id, seq);
 
 ALTER TABLE agent_conversations
     ADD CONSTRAINT agent_conversations_context_checkpoint_fk
     FOREIGN KEY (context_checkpoint_message_id)
     REFERENCES agent_messages(id) ON DELETE SET NULL;
 
+-- attachment_url_cache stores presigned S3 URLs for canonical LLM-bound
+-- attachment blobs (llm/agents/<id>/K). The point is prompt-cache stability:
+-- presigned URLs include X-Amz-Date in their signature, so minting fresh on
+-- every turn rotates the URL string and invalidates provider prompt cache
+-- at every image. Reusing a URL while it's still valid keeps the prefix
+-- bit-identical across turns within a conversation. Replica-safe — races on
+-- cache miss just UPSERT (last write wins, both URLs valid until expiry).
+CREATE TABLE attachment_url_cache (
+    canonical_key text PRIMARY KEY,
+    url           text NOT NULL,
+    expires_at    timestamptz NOT NULL
+);
+CREATE INDEX idx_attachment_url_cache_expires ON attachment_url_cache(expires_at);
+
 -- +goose Down
+DROP INDEX IF EXISTS idx_attachment_url_cache_expires;
+DROP TABLE IF EXISTS attachment_url_cache;
 ALTER TABLE agent_conversations DROP CONSTRAINT agent_conversations_context_checkpoint_fk;
+DROP INDEX IF EXISTS idx_agent_messages_conv_seq;
 DROP TABLE IF EXISTS agent_messages;
 DROP TABLE IF EXISTS topic_subscriptions;
 DROP INDEX IF EXISTS idx_conversations_lookup;
 DROP TABLE IF EXISTS agent_conversations;
 DROP TABLE IF EXISTS runs;
+DROP TABLE IF EXISTS agent_model_slots;
+DROP INDEX IF EXISTS idx_agent_storage_zones_agent;
+DROP TABLE IF EXISTS agent_storage_zones;
 DROP TABLE IF EXISTS agent_tools;
 DROP TABLE IF EXISTS agent_topics;
 DROP TABLE IF EXISTS agent_routes;
@@ -379,6 +456,10 @@ DROP TABLE IF EXISTS connections;
 DROP TABLE IF EXISTS agent_builds;
 DROP TABLE IF EXISTS agents;
 DROP TABLE IF EXISTS providers;
+DROP TABLE IF EXISTS auth_lockouts;
+DROP INDEX IF EXISTS idx_auth_failures_prune;
+DROP INDEX IF EXISTS idx_auth_failures_lookup;
+DROP TABLE IF EXISTS auth_failures;
 DROP TABLE IF EXISTS users;
 DROP TABLE IF EXISTS system_settings;
 DROP TABLE IF EXISTS tenants;

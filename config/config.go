@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"strconv"
 
@@ -54,14 +55,15 @@ type Config struct {
 	// --- Containers ---
 	ContainerRuntime string // "docker"
 	ContainerImage   string // toolserver image name
-	AnchorImage      string // anchor image name
 
 	// --- Build pipeline ---
 	AgentMonorepoPath string // local path to agent monorepo
 	AgentBuilderImage string // toolserver sandbox image (default: agent-builder:v${agentsdk.Version})
 	AgentBaseImage    string // agent runtime base image
 	AgentRegistryURL  string // Docker registry for agent images (empty = local only)
-	AgentLibsPath     string // path containing agentsdk/ and goai/ dirs (dev mode only)
+	AgentLibsPath     string // path containing agentsdk/ goai/ sol/ dirs (the libs we own). If unset, airlock extracts /libs/ from AgentBuilderImage at startup into AgentLibsCacheDir.
+	AgentLibsExtPath  string // path containing goose/ templ/ dirs (third-party libs always sourced from the agent-builder image's baked /libs/). Set at startup by EnsureLibs; not read from env.
+	AgentLibsCacheDir string // base dir where extracted /libs/ from agent-builder image is cached. Subdir per image digest.
 
 	// --- Reverse proxy ---
 	ReverseProxyTrustedProxies string // comma-separated CIDRs, "*" = trust all (default: trust none)
@@ -110,7 +112,7 @@ func Load() *Config {
 		// Networking
 		PublicURL:     envOr("PUBLIC_URL", "http://localhost:8080"),
 		APIURLAgent:   envOr("API_URL_AGENT", "http://localhost:8080"),
-		AgentDomain:   os.Getenv("AGENT_DOMAIN"),
+		AgentDomain:   resolveAgentDomain(),
 		DockerNetwork: os.Getenv("DOCKER_NETWORK"),
 
 		// Encryption
@@ -120,14 +122,14 @@ func Load() *Config {
 		// Containers
 		ContainerRuntime: envOr("CONTAINER_RUNTIME", "docker"),
 		ContainerImage:   envOr("CONTAINER_IMAGE", "airlock-toolserver"),
-		AnchorImage:      envOr("ANCHOR_IMAGE", "airlock-anchor"),
 
 		// Build pipeline
-		AgentMonorepoPath: envOr("AGENT_MONOREPO_PATH", "/var/lib/airlock/agents"),
+		AgentMonorepoPath: envOr("AGENT_MONOREPO_PATH", "/var/lib/airlock/monorepo"),
 		AgentBuilderImage: envOr("AGENT_BUILDER_IMAGE", DefaultAgentBuilderImage),
 		AgentBaseImage:    envOr("AGENT_BASE_IMAGE", "airlock-agent-base"),
 		AgentRegistryURL:  os.Getenv("AGENT_REGISTRY_URL"),
 		AgentLibsPath:     os.Getenv("AGENT_LIBS_PATH"),
+		AgentLibsCacheDir: envOr("AGENT_LIBS_CACHE_DIR", "/var/lib/airlock/libs"),
 
 		// Reverse proxy
 		ReverseProxyTrustedProxies: os.Getenv("REVERSE_PROXY_TRUSTED_PROXIES"),
@@ -185,4 +187,26 @@ func envBoolOr(key string, fallback bool) bool {
 		panic(fmt.Sprintf("environment variable %s: invalid bool %q", key, v))
 	}
 	return b
+}
+
+// resolveAgentDomain returns AGENT_DOMAIN when explicitly set, otherwise
+// derives the host portion of PUBLIC_URL. Almost every self-hosted setup
+// runs Airlock on the same hostname its agent subdomains hang off
+// (`*.airlock.example.com`), so the explicit knob exists only for the
+// rare case where they diverge. Port is stripped — AGENT_DOMAIN is a bare
+// host. Falls back to "" if neither is set in a parseable form, which
+// disables subdomain routing without a hard failure.
+func resolveAgentDomain() string {
+	if v := os.Getenv("AGENT_DOMAIN"); v != "" {
+		return v
+	}
+	pu := os.Getenv("PUBLIC_URL")
+	if pu == "" {
+		return ""
+	}
+	u, err := url.Parse(pu)
+	if err != nil {
+		return ""
+	}
+	return u.Hostname()
 }

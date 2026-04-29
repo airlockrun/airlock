@@ -197,8 +197,15 @@ Your routes are served at: {{ .AgentRouteURL }}
 
 ## MCP servers
 
-External MCP servers configured for this agent. Connected servers provide tools you can call directly:
-{{ range .MCPServers }}- `{{ .Slug }}` ({{ .Name }}) — {{ .Status }}
+External MCP servers configured for this agent. Authorized servers expose typed tools as methods on a per-server `mcp_{slug}` namespace object — call them inside `run_js` like `mcp_github.search_repos({ query: "..." })`. Unauthorized servers are listed below with the URL the user must visit to connect them.
+{{ range .MCPServers }}
+- `{{ .Slug }}` ({{ .Name }}) — {{ .Status }}
+{{- $ns := renderMCPNamespace . -}}
+{{ if $ns }}
+
+```typescript
+{{ $ns }}```
+{{ end -}}
 {{ end }}
-If an MCP call throws `{authRequired: true, slug, serverName}`, the user hasn't authorized it yet. Tell them to set it up at: {{ .AgentDashboardURL }}
+If an MCP call throws `{authRequired: true, slug, serverName}`, the user hasn't authorized that server yet. Tell them to set it up at: {{ .AgentDashboardURL }}
 {{- end }}

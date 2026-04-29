@@ -4,11 +4,26 @@ import { useToast } from 'primevue/usetoast'
 import { useConfirm } from 'primevue/useconfirm'
 import { useBridgesStore } from '@/stores/bridges'
 import { useAgentsStore } from '@/stores/agents'
+import { useAuthStore } from '@/stores/auth'
 
 const store = useBridgesStore()
 const agentsStore = useAgentsStore()
+const auth = useAuthStore()
 const toast = useToast()
 const confirm = useConfirm()
+
+// True iff the current user owns the bridge — only the owner can change
+// what agent it's bound to. Admin can still delete (escape hatch).
+function canReassign(bridge: { owner?: { id?: string } | null }): boolean {
+  return !!bridge.owner?.id && bridge.owner.id === auth.user?.id
+}
+
+// Anyone allowed to view a bridge can also delete their own; admins can
+// delete any bridge, including system bridges.
+function canDelete(bridge: { owner?: { id?: string } | null }): boolean {
+  if (auth.isAdmin) return true
+  return canReassign(bridge)
+}
 
 const dialogVisible = ref(false)
 const form = ref({ name: '', type: 'telegram', token: '', agentId: '' })
@@ -102,7 +117,7 @@ function confirmDelete(bridge: { id: string; name: string }) {
   <div>
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem">
       <h1 style="margin: 0; font-size: 1.5rem">Bridges</h1>
-      <Button label="Add Bridge" icon="pi pi-plus" @click="openCreate" />
+      <Button v-if="auth.isManagerOrAdmin" label="Add Bridge" icon="pi pi-plus" @click="openCreate" />
     </div>
 
     <!-- Loading skeletons -->
@@ -111,6 +126,7 @@ function confirmDelete(bridge: { id: string; name: string }) {
       <Column header="Type"><template #body><Skeleton width="4rem" /></template></Column>
       <Column header="Bot Username"><template #body><Skeleton width="40%" /></template></Column>
       <Column header="Agent"><template #body><Skeleton width="40%" /></template></Column>
+      <Column header="Owner"><template #body><Skeleton width="40%" /></template></Column>
       <Column header="Status"><template #body><Skeleton width="4rem" /></template></Column>
       <Column header="Actions"><template #body><Skeleton width="3rem" /></template></Column>
     </DataTable>
@@ -134,6 +150,14 @@ function confirmDelete(bridge: { id: string; name: string }) {
           {{ agentsStore.agents.find(a => a.id === data.agentId)?.name || data.agentId || '—' }}
         </template>
       </Column>
+      <Column header="Owner">
+        <template #body="{ data }">
+          <span v-if="data.owner" v-tooltip.top="data.owner.email">
+            {{ data.owner.displayName || data.owner.email }}
+          </span>
+          <span v-else style="color: var(--p-text-muted-color)">System</span>
+        </template>
+      </Column>
       <Column header="Status">
         <template #body="{ data }">
           <Tag :value="data.status || 'unknown'" :severity="data.status === 'active' ? 'success' : 'secondary'" />
@@ -142,8 +166,8 @@ function confirmDelete(bridge: { id: string; name: string }) {
       <Column header="Actions">
         <template #body="{ data }">
           <div style="display: flex; gap: 0.25rem">
-            <Button icon="pi pi-user-edit" severity="secondary" text rounded v-tooltip.top="'Reassign agent'" @click="openReassign(data)" />
-            <Button icon="pi pi-trash" severity="danger" text rounded @click="confirmDelete(data)" />
+            <Button v-if="canReassign(data)" icon="pi pi-user-edit" severity="secondary" text rounded v-tooltip.top="'Reassign agent'" @click="openReassign(data)" />
+            <Button v-if="canDelete(data)" icon="pi pi-trash" severity="danger" text rounded @click="confirmDelete(data)" />
           </div>
         </template>
       </Column>

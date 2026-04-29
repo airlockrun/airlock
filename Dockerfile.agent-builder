@@ -1,34 +1,58 @@
-FROM golang:1.25
+# Dockerfile.agent-builder — standalone build of the toolserver image.
+#
+# Build context is this repo's root. From a fresh airlock/ checkout:
+#   docker build -f Dockerfile.agent-builder -t agent-builder:v0.1.0 .
+#
+# Populates /libs/{agentsdk,goai,sol,goose,templ} from the public Go module
+# proxy at the pinned versions. Override at build time with --build-arg
+# AGENTSDK_VERSION=v0.2.0 (etc.). The CLI binaries (sol, toolserver, goose,
+# templ) are all built from the baked /libs/ source so the lib version sol
+# sees and the CLI version it can shell out to are guaranteed identical.
+#
+# Cross-module dev (live edits) uses hq/Dockerfile.agent-builder instead.
 
-# Install sqlc + templ
+FROM golang:1.26-trixie
+
+ARG AGENTSDK_VERSION=v0.1.0
+ARG GOAI_VERSION=v0.1.0
+ARG SOL_VERSION=v0.1.0
+ARG GOOSE_VERSION=v3.27.1
+ARG TEMPL_VERSION=v0.3.865
+
 COPY --from=sqlc/sqlc:latest /workspace/sqlc /usr/local/bin/sqlc
-RUN curl -sSL https://github.com/a-h/templ/releases/download/v0.3.865/templ_Linux_x86_64.tar.gz | tar xz -C /usr/local/bin templ
-
-# Install git, ripgrep, psql (schema inspection), golang-migrate (migration validation)
 RUN apt-get update && apt-get install -y --no-install-recommends git ripgrep postgresql-client && \
     rm -rf /var/lib/apt/lists/*
-RUN curl -sSL https://github.com/golang-migrate/migrate/releases/download/v4.18.1/migrate.linux-amd64.tar.gz | tar xz -C /usr/local/bin migrate
 
-# Pre-bake agentsdk + goai + sol at /libs/ for go.mod replace directives.
-# In dev (AGENT_LIBS_PATH set) airlock bind-mounts the live source over
-# these paths so iterations don't need an image rebuild. In prod the
-# baked copy is authoritative — the image tag (agent-builder:v${VERSION})
-# pins it to the matching airlock release.
-COPY agentsdk/ /libs/agentsdk/
-COPY goai/ /libs/goai/
-COPY sol/ /libs/sol/
+# Materialize /libs/* from the Go module proxy at pinned versions. Files come
+# out 0444 from the cache; chmod so any tooling that pokes at writability
+# inside /libs/ doesn't blow up. GOMODCACHE is stripped after extraction —
+# subsequent CLI builds repopulate a small cache, which is fine.
+RUN mkdir -p /libs && \
+    mkdir /tmp/libs-fetch && cd /tmp/libs-fetch && \
+    go mod init libs-fetcher && \
+    go mod download -x \
+        github.com/airlockrun/agentsdk@${AGENTSDK_VERSION} \
+        github.com/airlockrun/goai@${GOAI_VERSION} \
+        github.com/airlockrun/sol@${SOL_VERSION} \
+        github.com/pressly/goose/v3@${GOOSE_VERSION} \
+        github.com/a-h/templ@${TEMPL_VERSION} && \
+    cp -r "$(go env GOMODCACHE)/github.com/airlockrun/agentsdk@${AGENTSDK_VERSION}" /libs/agentsdk && \
+    cp -r "$(go env GOMODCACHE)/github.com/airlockrun/goai@${GOAI_VERSION}"         /libs/goai && \
+    cp -r "$(go env GOMODCACHE)/github.com/airlockrun/sol@${SOL_VERSION}"           /libs/sol && \
+    cp -r "$(go env GOMODCACHE)/github.com/pressly/goose/v3@${GOOSE_VERSION}"       /libs/goose && \
+    cp -r "$(go env GOMODCACHE)/github.com/a-h/templ@${TEMPL_VERSION}"              /libs/templ && \
+    chmod -R u+w /libs && \
+    rm -rf /tmp/libs-fetch "$(go env GOMODCACHE)"
 
-# Build and install Sol binary
-COPY sol/ /tmp/sol-src/
-COPY goai/ /tmp/goai/
-COPY telescope/ /tmp/telescope/
-RUN cd /tmp/sol-src && \
-    go build -o /usr/local/bin/sol ./cmd/sol && \
-    go build -o /usr/local/bin/toolserver ./cmd/toolserver && \
-    rm -rf /tmp/sol-src /tmp/goai /tmp/telescope
+# Build the four CLI binaries straight from /libs/ source so the version the
+# CLI is is the version the lib is.
+RUN cd /libs/sol   && go build -o /usr/local/bin/sol        ./cmd/sol && \
+                      go build -o /usr/local/bin/toolserver ./cmd/toolserver
+RUN cd /libs/goose && go build -o /usr/local/bin/goose      ./cmd/goose
+RUN cd /libs/templ && go build -o /usr/local/bin/templ      ./cmd/templ
 
-# Ensure Go cache dirs exist and are world-writable — Docker volumes
-# mount as root, but the toolserver runs as the host UID.
+# Go cache dirs writable by the host UID — Docker volumes mount as root,
+# but the toolserver runs as the host user.
 RUN mkdir -p /tmp/go-mod /tmp/go-cache && chmod 777 /tmp/go-mod /tmp/go-cache
 
 WORKDIR /workspace

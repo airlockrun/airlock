@@ -18,6 +18,13 @@ export const useAuthStore = defineStore('auth', () => {
   const isAdmin = computed(
     () => user.value?.tenantRole === TenantRole.ADMIN,
   )
+  // Manager OR admin — i.e. anyone allowed to create agents and bridges.
+  // Plain users are read-only on those surfaces.
+  const isManagerOrAdmin = computed(
+    () =>
+      user.value?.tenantRole === TenantRole.ADMIN ||
+      user.value?.tenantRole === TenantRole.MANAGER,
+  )
   const mustChangePassword = computed(() => user.value?.mustChangePassword === true)
 
   async function init() {
@@ -92,6 +99,7 @@ export const useAuthStore = defineStore('auth', () => {
     user,
     isAuthenticated,
     isAdmin,
+    isManagerOrAdmin,
     mustChangePassword,
     init,
     login,

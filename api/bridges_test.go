@@ -55,7 +55,8 @@ func TestCreateAgentBridge(t *testing.T) {
 		"token":    "fake-bot-token",
 		"agent_id": agentID.String(),
 	}
-	req := userRequestJSON(t, "POST", "/api/v1/bridges", userID, body)
+	// Manager role — `user` role is now blocked from any bridge create.
+	req := requestJSONAs(t, "POST", "/api/v1/bridges", userID, "manager", body)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
@@ -71,6 +72,32 @@ func TestCreateAgentBridge(t *testing.T) {
 	if resp.AgentId != agentID.String() {
 		t.Errorf("agent_id = %q, want %s", resp.AgentId, agentID)
 	}
+	if resp.Owner == nil {
+		t.Errorf("owner unset; expected creator metadata")
+	}
+}
+
+// TestCreateBridgeUserRoleForbidden confirms that the `user` tenant role can
+// no longer create bridges (managers and admins still can — covered by
+// TestCreateAgentBridge / TestCreateSystemBridgeRequiresAdmin).
+func TestCreateBridgeUserRoleForbidden(t *testing.T) {
+	skipIfNoDB(t)
+
+	bh := testBridgeHandler(nil)
+	agentID, userID := testAgentAndUser(t)
+
+	router := userRouter(func(r chi.Router) {
+		r.Post("/api/v1/bridges", bh.CreateBridge)
+	})
+
+	body := map[string]string{"name": "Nope", "token": "fake", "agent_id": agentID.String()}
+	req := requestJSONAs(t, "POST", "/api/v1/bridges", userID, "user", body)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("create as user role: status = %d, want 403; body: %s", rec.Code, rec.Body.String())
+	}
 }
 
 func TestCreateSystemBridgeRequiresAdmin(t *testing.T) {
@@ -83,20 +110,20 @@ func TestCreateSystemBridgeRequiresAdmin(t *testing.T) {
 	defer telegramSrv.Close()
 
 	bh := testBridgeHandler(telegramSrv)
-	_, userID := testAgentAndUser(t) // member role
+	_, userID := testAgentAndUser(t)
 
 	router := userRouter(func(r chi.Router) {
 		r.Post("/api/v1/bridges", bh.CreateBridge)
 	})
 
-	// System bridge (no agent_id) with member role → should fail.
+	// System bridge (no agent_id) as a manager role → still 403.
 	body := map[string]string{"name": "System Bot", "token": "fake-token"}
-	req := userRequestJSON(t, "POST", "/api/v1/bridges", userID, body)
+	req := requestJSONAs(t, "POST", "/api/v1/bridges", userID, "manager", body)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusForbidden {
-		t.Errorf("system bridge as member: status = %d, want 403", rec.Code)
+		t.Errorf("system bridge as manager: status = %d, want 403", rec.Code)
 	}
 }
 
@@ -118,9 +145,9 @@ func TestListAndDeleteBridge(t *testing.T) {
 		r.Delete("/api/v1/bridges/{bridgeID}", bh.DeleteBridge)
 	})
 
-	// Create bridge.
+	// Create bridge as manager (user role can no longer create).
 	body := map[string]string{"name": "Del Bot", "token": "fake-token", "agent_id": agentID.String()}
-	req := userRequestJSON(t, "POST", "/api/v1/bridges", userID, body)
+	req := requestJSONAs(t, "POST", "/api/v1/bridges", userID, "manager", body)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -129,7 +156,8 @@ func TestListAndDeleteBridge(t *testing.T) {
 	var created airlockv1.BridgeInfo
 	protojson.Unmarshal(rec.Body.Bytes(), &created)
 
-	// List — should contain the bridge.
+	// List — should contain the bridge (user is the agent's creator, so
+	// they're auto-added as a member; ListBridgesAccessible returns it).
 	req = userRequestJSON(t, "GET", "/api/v1/bridges", userID, nil)
 	rec = httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
@@ -142,13 +170,16 @@ func TestListAndDeleteBridge(t *testing.T) {
 	for _, b := range listResp.Bridges {
 		if b.Id == created.Id {
 			found = true
+			if b.Owner == nil {
+				t.Errorf("listed bridge has no owner; expected creator metadata")
+			}
 		}
 	}
 	if !found {
 		t.Error("created bridge not found in list")
 	}
 
-	// Delete.
+	// Delete (creator can delete their own bridges).
 	req = userRequestJSON(t, "DELETE",
 		fmt.Sprintf("/api/v1/bridges/%s", created.Id), userID, nil)
 	rec = httptest.NewRecorder()
@@ -176,11 +207,55 @@ func TestCreateBridgeBadToken(t *testing.T) {
 	})
 
 	body := map[string]string{"name": "Bad Bot", "token": "invalid-token", "agent_id": agentID.String()}
-	req := userRequestJSON(t, "POST", "/api/v1/bridges", userID, body)
+	req := requestJSONAs(t, "POST", "/api/v1/bridges", userID, "manager", body)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("bad token: status = %d, want 400; body: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestUpdateBridgeAdminCannotReassignOthersBridge confirms the new rule:
+// admins can DELETE someone else's bridge but cannot change its agent.
+func TestUpdateBridgeAdminCannotReassignOthersBridge(t *testing.T) {
+	skipIfNoDB(t)
+
+	telegramSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"ok": true, "result": map[string]any{"username": "owned_bot"}})
+	}))
+	defer telegramSrv.Close()
+
+	bh := testBridgeHandler(telegramSrv)
+	agentID, ownerID := testAgentAndUser(t)
+	otherAgentID, adminID := testAgentAndUser(t) // distinct user; we'll act as them as admin
+
+	router := userRouter(func(r chi.Router) {
+		r.Post("/api/v1/bridges", bh.CreateBridge)
+		r.Put("/api/v1/bridges/{bridgeID}", bh.UpdateBridge)
+	})
+
+	// Owner creates a bridge bound to their agent.
+	body := map[string]string{"name": "Owner Bot", "token": "fake-token", "agent_id": agentID.String()}
+	req := requestJSONAs(t, "POST", "/api/v1/bridges", ownerID, "manager", body)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("create: status = %d", rec.Code)
+	}
+	var created airlockv1.BridgeInfo
+	protojson.Unmarshal(rec.Body.Bytes(), &created)
+
+	// Admin (different user) tries to reassign to their own agent → 403.
+	updateBody := map[string]string{"agent_id": otherAgentID.String()}
+	req = requestJSONAs(t, "PUT",
+		fmt.Sprintf("/api/v1/bridges/%s", created.Id), adminID, "admin", updateBody)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("admin reassign someone else's bridge: status = %d, want 403; body: %s",
+			rec.Code, rec.Body.String())
 	}
 }

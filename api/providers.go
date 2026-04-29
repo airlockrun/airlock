@@ -230,6 +230,8 @@ func (h *ProvidersHandler) ListCatalogModels(w http.ResponseWriter, r *http.Requ
 				ProviderId: provID,
 				ToolCall:   model.ToolCall,
 				Reasoning:  model.Reasoning,
+				Kind:       string(model.Kind),
+				Caps:       solprovider.CapabilitiesFromModel(model).List(),
 			}
 			if model.Cost != nil {
 				mi.CostInput = model.Cost.Input
@@ -238,10 +240,6 @@ func (h *ProvidersHandler) ListCatalogModels(w http.ResponseWriter, r *http.Requ
 			if model.Limit != nil {
 				mi.ContextLimit = int32(model.Limit.Context)
 				mi.OutputLimit = int32(model.Limit.Output)
-			}
-			if model.Modalities != nil {
-				mi.InputModalities = append([]string(nil), model.Modalities.Input...)
-				mi.OutputModalities = append([]string(nil), model.Modalities.Output...)
 			}
 			out = append(out, mi)
 		}

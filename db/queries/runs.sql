@@ -7,6 +7,7 @@ RETURNING *;
 UPDATE runs SET
     status = @status,
     error_message = COALESCE(@error_message, ''),
+    error_kind = COALESCE(@error_kind, ''),
     actions = COALESCE(@actions, '[]'::jsonb),
     stdout_log = COALESCE(@stdout_log, ''),
     panic_trace = COALESCE(@panic_trace, ''),
@@ -15,11 +16,12 @@ UPDATE runs SET
 WHERE id = @id;
 
 -- name: UpsertRunComplete :exec
-INSERT INTO runs (id, agent_id, status, error_message, actions, stdout_log, panic_trace, input_payload, source_ref, trigger_type, trigger_ref, finished_at, duration_ms)
-VALUES (@id, @agent_id, @status, @error_message, @actions, @stdout_log, @panic_trace, '{}', '', 'prompt', '', now(), 0)
+INSERT INTO runs (id, agent_id, status, error_message, error_kind, actions, stdout_log, panic_trace, input_payload, source_ref, trigger_type, trigger_ref, finished_at, duration_ms)
+VALUES (@id, @agent_id, @status, @error_message, @error_kind, @actions, @stdout_log, @panic_trace, '{}', '', 'prompt', '', now(), 0)
 ON CONFLICT (id) DO UPDATE SET
     status = EXCLUDED.status,
     error_message = EXCLUDED.error_message,
+    error_kind = EXCLUDED.error_kind,
     actions = EXCLUDED.actions,
     stdout_log = EXCLUDED.stdout_log,
     panic_trace = EXCLUDED.panic_trace,
@@ -56,6 +58,30 @@ SELECT checkpoint FROM runs WHERE id = @id;
 
 -- name: UpdateRunCheckpoint :exec
 UPDATE runs SET checkpoint = @checkpoint WHERE id = @id;
+
+-- name: UpdateRunLLMStats :exec
+-- Aggregates per-message tokens / call count into the run's totals and
+-- multiplies tokens by per-million-token rates to produce a cost estimate.
+-- Idempotent — safe to invoke after the agent's RunComplete handler and
+-- again from the bg stream goroutine (timeout fallback). Source of truth
+-- for tokens is agent_messages, which the SessionStore populates per
+-- assistant turn. Cost rates come from sol's models.dev catalog ($ per
+-- million tokens) — pass 0/0 for models without pricing data and the
+-- estimate stays 0.
+UPDATE runs
+SET llm_calls = stats.calls,
+    llm_tokens_in = stats.tokens_in,
+    llm_tokens_out = stats.tokens_out,
+    llm_cost_estimate = (stats.tokens_in * sqlc.arg(cost_input)::float8 + stats.tokens_out * sqlc.arg(cost_output)::float8) / 1000000.0
+FROM (
+    SELECT
+        COUNT(*) FILTER (WHERE role = 'assistant' AND tokens_in > 0)::integer AS calls,
+        COALESCE(SUM(tokens_in), 0)::integer  AS tokens_in,
+        COALESCE(SUM(tokens_out), 0)::integer AS tokens_out
+    FROM agent_messages
+    WHERE run_id = @run_id
+) stats
+WHERE runs.id = @run_id;
 
 -- name: UpdateRunStatus :exec
 UPDATE runs SET

@@ -264,6 +264,83 @@ func TestSessionLoad_NoCheckpointReturnsAll(t *testing.T) {
 	}
 }
 
+// TestSessionLoad_TiedTimestampOrdersBySeq verifies that messages persisted
+// in a single transaction (which all share transaction_timestamp() for
+// created_at) come back in insertion order. Without the seq tiebreaker on
+// agent_messages this returned arbitrary order, orphaning tool_results from
+// their assistant tool_use parents and 400'ing strict providers like
+// Anthropic.
+func TestSessionLoad_TiedTimestampOrdersBySeq(t *testing.T) {
+	skipIfNoDB(t)
+	agentID, userID := testAgentAndUser(t)
+	convID := testConversation(t, agentID, userID)
+
+	ctx := context.Background()
+	tx, err := testDB.Pool().Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+	defer tx.Rollback(ctx)
+	q := dbq.New(testDB.Pool()).WithTx(tx)
+
+	// Insert assistant(tool_use) + tool(result) + assistant(text) in one tx
+	// so all three rows share an identical created_at.
+	rows := []struct {
+		role  string
+		parts string
+	}{
+		{"assistant", `[{"type":"tool-call","toolCallId":"toolu_TIE","toolName":"run_js","args":{"code":"1"}}]`},
+		{"tool", `[{"type":"tool-result","toolCallId":"toolu_TIE","toolName":"run_js","result":"ok"}]`},
+		{"assistant", ""},
+	}
+	for _, r := range rows {
+		params := dbq.CreateMessageParams{
+			ConversationID: toPgUUID(convID),
+			Role:           r.role,
+			Content:        "",
+			Source:         "user",
+		}
+		if r.parts != "" {
+			params.Parts = []byte(r.parts)
+		} else {
+			params.Content = "done"
+		}
+		if _, err := q.CreateMessage(ctx, params); err != nil {
+			t.Fatalf("CreateMessage(%s): %v", r.role, err)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+
+	q = dbq.New(testDB.Pool())
+	loaded, err := q.ListSessionMessagesByConversation(ctx, toPgUUID(convID))
+	if err != nil {
+		t.Fatalf("ListSessionMessagesByConversation: %v", err)
+	}
+	if len(loaded) != 3 {
+		t.Fatalf("loaded = %d, want 3", len(loaded))
+	}
+
+	// Same created_at across the batch — the tx_timestamp tie we're guarding against.
+	if !loaded[0].CreatedAt.Time.Equal(loaded[1].CreatedAt.Time) || !loaded[1].CreatedAt.Time.Equal(loaded[2].CreatedAt.Time) {
+		t.Fatalf("expected all three rows to share created_at; got %v / %v / %v",
+			loaded[0].CreatedAt.Time, loaded[1].CreatedAt.Time, loaded[2].CreatedAt.Time)
+	}
+
+	// Order must follow seq, which mirrors insertion order.
+	wantRoles := []string{"assistant", "tool", "assistant"}
+	for i, m := range loaded {
+		if m.Role != wantRoles[i] {
+			t.Errorf("loaded[%d].role = %q, want %q", i, m.Role, wantRoles[i])
+		}
+	}
+	if !(loaded[0].Seq < loaded[1].Seq && loaded[1].Seq < loaded[2].Seq) {
+		t.Errorf("seq not strictly increasing: %d, %d, %d",
+			loaded[0].Seq, loaded[1].Seq, loaded[2].Seq)
+	}
+}
+
 // TestExtractCanonicalKeys covers the s3ref parser used by SessionCompact
 // cleanup and the newly-wired DeleteConversation cleanup.
 func TestExtractCanonicalKeys(t *testing.T) {

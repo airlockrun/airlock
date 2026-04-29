@@ -27,6 +27,10 @@ func (m *mockContainerManager) StartAgent(_ context.Context, opts container.Agen
 	return m.container, nil
 }
 
+func (m *mockContainerManager) GetRunning(_ context.Context, _ uuid.UUID) (*container.Container, error) {
+	return m.container, nil
+}
+
 func (m *mockContainerManager) StopAgent(_ context.Context, _ string) error { return nil }
 
 func (m *mockContainerManager) StartToolserver(_ context.Context, _ container.ToolserverOpts) (*container.Container, error) {

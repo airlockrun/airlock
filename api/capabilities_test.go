@@ -89,10 +89,11 @@ func TestListCapabilitiesShape(t *testing.T) {
 	if openai.CatalogOnly {
 		t.Error("openai.CatalogOnly = true, expected false (it exists in models.dev)")
 	}
-	// The overlay contributes STT/TTS models and the Responses API
-	// web_search tool (via ExtraCapabilities + SearchBackend="openai"), so
-	// all three must be present on openai.
-	for _, want := range []string{"stt", "tts", "search"} {
+	// Goai's typed lists supply transcription (whisper-1, gpt-4o-transcribe)
+	// and speech (tts-1, gpt-4o-mini-tts) models, and the overlay contributes
+	// the Responses API web_search tool (ExtraCapabilities + SearchBackend
+	// = "openai"), so all three must be present on openai.
+	for _, want := range []string{"transcription", "speech", "search"} {
 		found := false
 		for _, c := range openai.Capabilities {
 			if c == want {

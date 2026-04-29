@@ -117,6 +117,11 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	usersHandler := NewUsersHandler(cfg.DB)
 	sysSettingsHandler := &settingsHandler{db: cfg.DB, encryptor: cfg.Encryptor, logger: cfg.Logger.Named("settings")}
 
+	// Health check (public, no auth — reverse proxies and orchestrators need
+	// to hit this without credentials). 200 if DB+S3 reachable, 503 otherwise.
+	healthH := newHealthHandler(cfg.DB, cfg.S3Client, cfg.Logger.Named("health"))
+	r.Get("/health", healthH.Check)
+
 	// WebSocket endpoint (public, auth via query param)
 	wsHandler := NewWSHandler(cfg.DB, cfg.Hub, cfg.Handler, cfg.JWTSecret, cfg.Logger.Named("ws"))
 	r.Get("/ws", wsHandler.Upgrade)
@@ -160,6 +165,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		oauthClient: cfg.OAuthClient,
 		publicURL:   cfg.PublicURL,
 		logger:      cfg.Logger.Named("credentials"),
+		dispatcher:  cfg.Dispatcher,
 	}
 	brH := &bridgeHandler{
 		db:        cfg.DB,
@@ -188,6 +194,10 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		r.Use(identityLogger)
 
 		r.Get("/me", authHandler.Me)
+
+		// Slim tenant directory for member-picker dropdowns. Any authenticated
+		// user — agent admins who aren't tenant admins still need this list.
+		r.Get("/users/selectable", usersHandler.ListSelectable)
 
 		// User management (admin only)
 		r.Route("/users", func(r chi.Router) {
@@ -422,12 +432,11 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		r.Delete("/topic/{slug}/subscribe", ah.TopicUnsubscribe)
 		r.Put("/mcp-servers/{slug}", ah.UpsertMCPServer)
 		r.Post("/mcp/{slug}/tools/call", ah.MCPToolCall)
-		r.Get("/mcp/{slug}/tools", ah.MCPListTools)
 	})
 
 	// Wrap with subdomain proxy for agent custom routes.
 	if cfg.AgentDomain != "" {
-		return SubdomainProxy(cfg.AgentDomain, cfg.DB, cfg.Dispatcher, cfg.JWTSecret, cfg.PublicURL, cfg.Logger.Named("proxy"), r)
+		return SubdomainProxy(cfg.AgentDomain, cfg.DB, cfg.S3Client, cfg.Dispatcher, cfg.JWTSecret, cfg.PublicURL, cfg.Logger.Named("proxy"), r)
 	}
 
 	return r

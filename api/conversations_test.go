@@ -4,9 +4,8 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
+	"strconv"
 	"testing"
-	"time"
 
 	"github.com/airlockrun/airlock/db/dbq"
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
@@ -16,25 +15,22 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 )
 
-// seedMessages inserts N plain messages into the conversation with staggered
-// created_at timestamps so cursor-based ordering has something to key on.
-// Returns the timestamps in chronological order for cursor use in assertions.
-func seedMessages(t *testing.T, convID pgtype.UUID, n int) []time.Time {
+// seedMessages inserts N plain messages into the conversation. Returns the
+// seq values in insertion order so tests can use them as cursors.
+func seedMessages(t *testing.T, convID pgtype.UUID, n int) []int64 {
 	t.Helper()
 	ctx := context.Background()
-	ts := make([]time.Time, n)
-	base := time.Now().Add(-time.Duration(n) * time.Minute).Truncate(time.Second)
+	seqs := make([]int64, n)
 	for i := 0; i < n; i++ {
-		ts[i] = base.Add(time.Duration(i) * time.Second)
-		_, err := testDB.Pool().Exec(ctx,
-			`INSERT INTO agent_messages (conversation_id, role, content, tokens_in, tokens_out, cost_estimate, source, created_at)
-			 VALUES ($1, 'user', $2, 0, 0, 0, 'user', $3)`,
-			convID, "msg "+time.Unix(int64(i), 0).Format("04:05"), ts[i])
+		err := testDB.Pool().QueryRow(ctx,
+			`INSERT INTO agent_messages (conversation_id, role, content, tokens_in, tokens_out, cost_estimate, source)
+			 VALUES ($1, 'user', $2, 0, 0, 0, 'user') RETURNING seq`,
+			convID, "msg "+strconv.Itoa(i)).Scan(&seqs[i])
 		if err != nil {
 			t.Fatalf("seed message %d: %v", i, err)
 		}
 	}
-	return ts
+	return seqs
 }
 
 // TestGetConversation_PaginationFlag verifies the initial-load endpoint:
@@ -72,10 +68,10 @@ func TestGetConversation_PaginationFlag(t *testing.T) {
 		t.Error("has_older_messages should be true when >100 messages exist")
 	}
 	// Newest 100 means the first returned message is the 51st seeded (index 50).
-	wantFirstTime := seeded[50]
-	gotFirstTime := resp.Messages[0].CreatedAt.AsTime()
-	if !gotFirstTime.Equal(wantFirstTime) {
-		t.Errorf("messages[0].createdAt = %v, want %v (newest 100 window)", gotFirstTime, wantFirstTime)
+	wantFirstSeq := seeded[50]
+	gotFirstSeq := resp.Messages[0].Seq
+	if gotFirstSeq != wantFirstSeq {
+		t.Errorf("messages[0].seq = %d, want %d (newest 100 window)", gotFirstSeq, wantFirstSeq)
 	}
 }
 
@@ -94,7 +90,7 @@ func TestListConversationMessages_Backward(t *testing.T) {
 	})
 
 	// Fetch 20 older than seeded[30]. Expect [10..29] inclusive = 20 msgs.
-	before := url.QueryEscape(seeded[30].Format(time.RFC3339Nano))
+	before := strconv.FormatInt(seeded[30], 10)
 	req := userRequestJSON(t, "GET",
 		"/api/v1/conversations/"+convID.String()+"/messages?before="+before+"&limit=20",
 		userID, nil)
@@ -114,8 +110,8 @@ func TestListConversationMessages_Backward(t *testing.T) {
 	if !resp.HasMore {
 		t.Error("has_more should be true when messages older than the returned window still exist")
 	}
-	if !resp.Messages[0].CreatedAt.AsTime().Equal(seeded[10]) {
-		t.Errorf("messages[0].createdAt = %v, want %v", resp.Messages[0].CreatedAt.AsTime(), seeded[10])
+	if resp.Messages[0].Seq != seeded[10] {
+		t.Errorf("messages[0].seq = %d, want %d", resp.Messages[0].Seq, seeded[10])
 	}
 }
 
@@ -133,7 +129,7 @@ func TestListConversationMessages_Forward(t *testing.T) {
 	})
 
 	// Fetch messages newer than seeded[5]. Expect [6..19] = 14 msgs, has_more=false.
-	after := url.QueryEscape(seeded[5].Format(time.RFC3339Nano))
+	after := strconv.FormatInt(seeded[5], 10)
 	req := userRequestJSON(t, "GET",
 		"/api/v1/conversations/"+convID.String()+"/messages?after="+after+"&limit=100",
 		userID, nil)

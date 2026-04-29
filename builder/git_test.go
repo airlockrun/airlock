@@ -59,7 +59,7 @@ func TestCommitScaffold(t *testing.T) {
 	data := scaffold.ScaffoldData{
 		AgentID:   agentID,
 		Module:    "agent",
-		GoVersion:       "1.25",
+		GoVersion:       "1.26",
 		AgentSDKVersion: "v1.0.0",
 	}
 
@@ -106,7 +106,7 @@ func TestSparseCheckout(t *testing.T) {
 	data := scaffold.ScaffoldData{
 		AgentID:   agentID,
 		Module:    "agent",
-		GoVersion:       "1.25",
+		GoVersion:       "1.26",
 		AgentSDKVersion: "v1.0.0",
 	}
 
@@ -148,7 +148,7 @@ func TestMergeBranch(t *testing.T) {
 	data := scaffold.ScaffoldData{
 		AgentID:   agentID,
 		Module:    "agent",
-		GoVersion:       "1.25",
+		GoVersion:       "1.26",
 		AgentSDKVersion: "v1.0.0",
 	}
 
@@ -189,7 +189,7 @@ func TestCommitAndPush(t *testing.T) {
 	data := scaffold.ScaffoldData{
 		AgentID:   agentID,
 		Module:    "agent",
-		GoVersion:       "1.25",
+		GoVersion:       "1.26",
 		AgentSDKVersion: "v1.0.0",
 	}
 

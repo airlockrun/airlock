@@ -247,15 +247,29 @@ func (b *BuildService) doUpgrade(ctx context.Context, q *dbq.Queries, input Upgr
 		return fmt.Errorf("sol upgrade: %w", err)
 	}
 
-	// Step 7: Check result
-	if solResult.Status != sol.RunCompleted {
+	// Step 7: Check result. Same exit-tool mapping as runBuildCodegen —
+	// see that function for the full rationale.
+	if solResult.Status != sol.RunExited {
+		if solResult.Status == sol.RunCompleted {
+			b.logger.Error("sol upgrade did not call exit tool")
+			completeBuild("failed", "agent did not call the exit tool", "", "")
+			return errors.New("upgrade failed: agent did not call the exit tool")
+		}
 		errMsg := "unknown error"
 		if solResult.Error != nil {
 			errMsg = solResult.Error.Error()
 		}
 		b.logger.Error("sol upgrade failed", zap.String("status", string(solResult.Status)), zap.String("error", errMsg))
 		completeBuild("failed", errMsg, "", "")
-		return fmt.Errorf("upgrade failed: %s", errMsg)
+		if solResult.Error != nil {
+			return fmt.Errorf("upgrade failed: %w", solResult.Error)
+		}
+		return errors.New("upgrade failed")
+	}
+	if solResult.ExitStatus != "success" {
+		b.logger.Error("sol upgrade reported error", zap.String("message", solResult.ExitMessage))
+		completeBuild("failed", solResult.ExitMessage, "", "")
+		return fmt.Errorf("upgrade failed: %s", solResult.ExitMessage)
 	}
 
 	// Step 9: Commit and push
@@ -282,12 +296,18 @@ func (b *BuildService) doUpgrade(ctx context.Context, q *dbq.Queries, input Upgr
 	if err := scaffold.GenerateDockerfile(contextDir, scaffold.ScaffoldData{
 		AgentID:   agentID,
 		Module:    "agent",
-		GoVersion:       "1.25",
+		GoVersion:       "1.26",
 		AgentSDKVersion: "v" + agentsdk.Version,
-		DevLibs:   b.cfg.AgentLibsPath != "",
 	}); err != nil {
 		completeBuild("failed", err.Error(), hash, "")
 		return fmt.Errorf("generate Dockerfile: %w", err)
+	}
+	// Bump the agent's go.mod require line to the current SDK version so
+	// gopls/editor tooling shows what the build is actually linking against
+	// (the replace directive shadows it for compilation).
+	if err := bumpAgentSDKRequire(ctx, contextDir, agentsdk.Version); err != nil {
+		completeBuild("failed", err.Error(), hash, "")
+		return fmt.Errorf("bump agent SDK require: %w", err)
 	}
 	imageTag, err := buildImage(ctx, b.cfg, agentID, contextDir, hash, func(line string) {
 		seq := bl.appendDocker(line)

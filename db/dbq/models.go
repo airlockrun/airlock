@@ -85,6 +85,7 @@ type AgentMcpServer struct {
 	AgentID        pgtype.UUID        `json:"agent_id"`
 	Slug           string             `json:"slug"`
 	Name           string             `json:"name"`
+	Access         string             `json:"access"`
 	Url            string             `json:"url"`
 	AuthMode       string             `json:"auth_mode"`
 	AuthUrl        string             `json:"auth_url"`
@@ -110,6 +111,7 @@ type AgentMember struct {
 
 type AgentMessage struct {
 	ID             pgtype.UUID        `json:"id"`
+	Seq            int64              `json:"seq"`
 	ConversationID pgtype.UUID        `json:"conversation_id"`
 	RunID          pgtype.UUID        `json:"run_id"`
 	Role           string             `json:"role"`
@@ -143,6 +145,17 @@ type AgentRoute struct {
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
 }
 
+type AgentStorageZone struct {
+	ID          pgtype.UUID        `json:"id"`
+	AgentID     pgtype.UUID        `json:"agent_id"`
+	Slug        string             `json:"slug"`
+	ReadAccess  string             `json:"read_access"`
+	WriteAccess string             `json:"write_access"`
+	Description string             `json:"description"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+}
+
 type AgentTool struct {
 	ID           pgtype.UUID        `json:"id"`
 	AgentID      pgtype.UUID        `json:"agent_id"`
@@ -159,6 +172,7 @@ type AgentTopic struct {
 	AgentID     pgtype.UUID        `json:"agent_id"`
 	Slug        string             `json:"slug"`
 	Description string             `json:"description"`
+	Access      string             `json:"access"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
 }
@@ -175,6 +189,26 @@ type AgentWebhook struct {
 	LastReceivedAt pgtype.Timestamptz `json:"last_received_at"`
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+}
+
+type AttachmentUrlCache struct {
+	CanonicalKey string             `json:"canonical_key"`
+	Url          string             `json:"url"`
+	ExpiresAt    pgtype.Timestamptz `json:"expires_at"`
+}
+
+type AuthFailure struct {
+	Email       string             `json:"email"`
+	Ip          string             `json:"ip"`
+	AttemptedAt pgtype.Timestamptz `json:"attempted_at"`
+}
+
+type AuthLockout struct {
+	Email        string             `json:"email"`
+	Ip           string             `json:"ip"`
+	LockedUntil  pgtype.Timestamptz `json:"locked_until"`
+	Tier         int32              `json:"tier"`
+	LastLockedAt pgtype.Timestamptz `json:"last_locked_at"`
 }
 
 type Bridge struct {
@@ -198,6 +232,7 @@ type Connection struct {
 	Slug              string             `json:"slug"`
 	Name              string             `json:"name"`
 	Description       string             `json:"description"`
+	Access            string             `json:"access"`
 	AuthMode          string             `json:"auth_mode"`
 	AuthUrl           string             `json:"auth_url"`
 	TokenUrl          string             `json:"token_url"`
@@ -264,6 +299,7 @@ type Run struct {
 	Logs            string             `json:"logs"`
 	StdoutLog       string             `json:"stdout_log"`
 	ErrorMessage    string             `json:"error_message"`
+	ErrorKind       string             `json:"error_kind"`
 	ExitCode        pgtype.Int4        `json:"exit_code"`
 	PanicTrace      string             `json:"panic_trace"`
 	Checkpoint      []byte             `json:"checkpoint"`

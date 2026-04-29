@@ -7,15 +7,14 @@ import (
 	"testing"
 )
 
-func TestMaterialize_DevMode(t *testing.T) {
+func TestMaterialize(t *testing.T) {
 	dir := t.TempDir()
 
 	data := ScaffoldData{
 		AgentID:         "550e8400-e29b-41d4-a716-446655440000",
 		Module:          "github.com/airlockrun/agents/550e8400-e29b-41d4-a716-446655440000",
-		GoVersion:       "1.25",
+		GoVersion:       "1.26",
 		AgentSDKVersion: "v1.0.0",
-		DevLibs:         true,
 	}
 
 	if err := Materialize(dir, data); err != nil {
@@ -64,7 +63,10 @@ func TestMaterialize_DevMode(t *testing.T) {
 		t.Error("main.go missing agent.Serve()")
 	}
 
-	// Verify go.mod has replace directives (dev mode)
+	// go.mod must always have the unconditional replace block — replace is
+	// the canonical resolution path for agentsdk/goai/sol regardless of
+	// dev/prod, so the agent build always uses /libs/ from the agent-builder
+	// image (prod) or the dev workspace overlay.
 	goMod, err := os.ReadFile(filepath.Join(dir, "go.mod"))
 	if err != nil {
 		t.Fatalf("read go.mod: %v", err)
@@ -73,17 +75,17 @@ func TestMaterialize_DevMode(t *testing.T) {
 	if !strings.Contains(goModStr, data.Module) {
 		t.Error("go.mod missing module path")
 	}
-	if !strings.Contains(goModStr, "/libs/agentsdk") {
-		t.Error("go.mod missing agentsdk replace directive")
-	}
-	if !strings.Contains(goModStr, "/libs/goai") {
-		t.Error("go.mod missing goai replace directive")
+	for _, want := range []string{"/libs/agentsdk", "/libs/goai", "/libs/sol", "/libs/goose", "/libs/templ"} {
+		if !strings.Contains(goModStr, want) {
+			t.Errorf("go.mod missing %s replace directive", want)
+		}
 	}
 	if !strings.Contains(goModStr, "agentsdk v1.0.0") {
 		t.Errorf("go.mod should pin agentsdk to AgentSDKVersion (v1.0.0); got:\n%s", goModStr)
 	}
 
-	// Verify GenerateDockerfile produces Dockerfile with libs copy (dev mode)
+	// Dockerfile must always have COPY --from=libs (unconditional) and use
+	// the agent-base runtime + dep hooks.
 	if err := GenerateDockerfile(dir, data); err != nil {
 		t.Fatalf("GenerateDockerfile: %v", err)
 	}
@@ -92,71 +94,20 @@ func TestMaterialize_DevMode(t *testing.T) {
 		t.Fatalf("read Dockerfile: %v", err)
 	}
 	dockerfileStr := string(dockerfile)
-	if !strings.Contains(dockerfileStr, "golang:1.25") {
+	if !strings.Contains(dockerfileStr, "golang:1.26") {
 		t.Error("Dockerfile missing golang version")
 	}
 	if !strings.Contains(dockerfileStr, "airlock-agent-base") {
 		t.Error("Dockerfile missing agent base image")
 	}
 	if !strings.Contains(dockerfileStr, "--from=libs") {
-		t.Error("Dockerfile should have --from=libs in dev mode")
+		t.Error("Dockerfile must always have --from=libs")
 	}
 	if !strings.Contains(dockerfileStr, "build-deps.sh") {
 		t.Error("Dockerfile missing build-deps.sh hook")
 	}
 	if !strings.Contains(dockerfileStr, "runtime-deps.sh") {
 		t.Error("Dockerfile missing runtime-deps.sh hook")
-	}
-}
-
-func TestMaterialize_ProdMode(t *testing.T) {
-	dir := t.TempDir()
-
-	data := ScaffoldData{
-		AgentID:         "550e8400-e29b-41d4-a716-446655440000",
-		Module:          "github.com/airlockrun/agents/550e8400-e29b-41d4-a716-446655440000",
-		GoVersion:       "1.25",
-		AgentSDKVersion: "v1.0.0",
-		DevLibs:         false,
-	}
-
-	if err := Materialize(dir, data); err != nil {
-		t.Fatalf("Materialize: %v", err)
-	}
-
-	// Verify go.mod has NO replace directives (prod mode)
-	goMod, err := os.ReadFile(filepath.Join(dir, "go.mod"))
-	if err != nil {
-		t.Fatalf("read go.mod: %v", err)
-	}
-	goModStr := string(goMod)
-	if !strings.Contains(goModStr, data.Module) {
-		t.Error("go.mod missing module path")
-	}
-	if strings.Contains(goModStr, "replace") {
-		t.Error("go.mod should not have replace directives in prod mode")
-	}
-	if !strings.Contains(goModStr, "agentsdk") {
-		t.Error("go.mod missing agentsdk requirement")
-	}
-	if !strings.Contains(goModStr, "agentsdk v1.0.0") {
-		t.Errorf("go.mod should pin agentsdk to AgentSDKVersion (v1.0.0); got:\n%s", goModStr)
-	}
-
-	// Verify GenerateDockerfile produces Dockerfile with NO libs copy (prod mode)
-	if err := GenerateDockerfile(dir, data); err != nil {
-		t.Fatalf("GenerateDockerfile: %v", err)
-	}
-	dockerfile, err := os.ReadFile(filepath.Join(dir, "Dockerfile"))
-	if err != nil {
-		t.Fatalf("read Dockerfile: %v", err)
-	}
-	dockerfileStr := string(dockerfile)
-	if strings.Contains(dockerfileStr, "--from=libs") {
-		t.Error("Dockerfile should not have --from=libs in prod mode")
-	}
-	if !strings.Contains(dockerfileStr, "go mod download") {
-		t.Error("Dockerfile should have go mod download")
 	}
 }
 
@@ -168,7 +119,7 @@ func TestMaterialize_RequiresSDKVersion(t *testing.T) {
 	err := Materialize(dir, ScaffoldData{
 		AgentID:   "550e8400-e29b-41d4-a716-446655440000",
 		Module:    "agent",
-		GoVersion: "1.25",
+		GoVersion: "1.26",
 	})
 	if err == nil {
 		t.Fatal("expected error when AgentSDKVersion is empty")

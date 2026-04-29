@@ -9,9 +9,9 @@ const runsStore = useRunsStore()
 
 function runStatusSeverity(status: string): string {
   switch (status) {
-    case 'done': case 'success': return 'success'
+    case 'done': case 'success': case 'completed': return 'success'
     case 'running': return 'warn'
-    case 'tool_errors': return 'warn'
+    case 'tool_errors': case 'timeout': return 'warn'
     case 'error': case 'failed': return 'danger'
     case 'suspended': return 'info'
     default: return 'secondary'

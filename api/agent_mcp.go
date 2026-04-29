@@ -38,7 +38,7 @@ func (h *agentHandler) UpsertMCPServer(w http.ResponseWriter, r *http.Request) {
 
 	// For oauth_discovery, resolve auth/token URLs via RFC 9728/8414 discovery.
 	// Errors are non-fatal — store the server anyway; discovery can be retried.
-	if def.AuthMode == "oauth_discovery" && def.AuthURL == "" {
+	if def.AuthMode == agentsdk.MCPAuthOAuthDiscovery && def.AuthURL == "" {
 		result, err := discoverMCPAuth(r.Context(), def.URL)
 		if err != nil {
 			h.logger.Warn("MCP OAuth discovery failed", zap.String("slug", slug), zap.Error(err))
@@ -63,10 +63,11 @@ func (h *agentHandler) UpsertMCPServer(w http.ResponseWriter, r *http.Request) {
 		Slug:     slug,
 		Name:     def.Name,
 		Url:      def.URL,
-		AuthMode: def.AuthMode,
+		AuthMode: string(def.AuthMode),
 		AuthUrl:  def.AuthURL,
 		TokenUrl: def.TokenURL,
 		Scopes:   scopes,
+		Access:   string(def.Access),
 	}); err != nil {
 		h.logger.Error("upsert MCP server failed", zap.Error(err))
 		writeJSONError(w, http.StatusInternalServerError, "failed to register MCP server")
@@ -147,57 +148,6 @@ func (h *agentHandler) MCPToolCall(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
-// MCPListTools handles GET /api/agent/mcp/{slug}/tools.
-// Returns discovered tool schemas for a single MCP server.
-func (h *agentHandler) MCPListTools(w http.ResponseWriter, r *http.Request) {
-	agentID := auth.AgentIDFromContext(r.Context())
-	slug := chi.URLParam(r, "slug")
-
-	q := dbq.New(h.db.Pool())
-	server, err := q.GetMCPServerBySlug(r.Context(), dbq.GetMCPServerBySlugParams{
-		AgentID: toPgUUID(agentID),
-		Slug:    slug,
-	})
-	if err != nil {
-		writeJSONError(w, http.StatusNotFound, "MCP server not found")
-		return
-	}
-
-	if server.Credentials == "" {
-		writeJSONError(w, http.StatusForbidden, "MCP server requires authorization")
-		return
-	}
-
-	creds, err := h.encryptor.Decrypt(server.Credentials)
-	if err != nil {
-		h.logger.Error("decrypt MCP credentials failed", zap.String("slug", slug), zap.Error(err))
-		writeJSONError(w, http.StatusInternalServerError, "credential error")
-		return
-	}
-
-	tools, err := discoverMCPTools(r.Context(), server.Url, creds)
-	if err != nil {
-		h.logger.Warn("MCP tool discovery failed", zap.String("slug", slug), zap.Error(err))
-		writeJSONError(w, http.StatusBadGateway, "tool discovery failed: "+err.Error())
-		return
-	}
-
-	// Convert to MCPToolSchema for the response.
-	schemas := make([]agentsdk.MCPToolSchema, len(tools))
-	for i, t := range tools {
-		schemas[i] = agentsdk.MCPToolSchema{
-			ServerSlug:  slug,
-			Name:        t.Name,
-			Description: t.Description,
-			InputSchema: t.InputSchema,
-		}
-	}
-
-	writeJSON(w, http.StatusOK, struct {
-		Tools []agentsdk.MCPToolSchema `json:"tools"`
-	}{Tools: schemas})
-}
-
 // mcpServerStatus holds auth status and tool count for an MCP server.
 type mcpServerStatus struct {
 	agentsdk.MCPAuthStatus
@@ -219,7 +169,7 @@ func (h *agentHandler) discoverAllMCPStatus(
 			result = append(result, mcpServerStatus{
 				MCPAuthStatus: agentsdk.MCPAuthStatus{
 					Slug:       server.Slug,
-					AuthMode:   server.AuthMode,
+					AuthMode:   agentsdk.MCPAuth(server.AuthMode),
 					Authorized: false,
 					AuthURL:    buildMCPAuthURL(h.publicURL, agentID, server.Slug, server.AuthMode),
 				},
@@ -239,7 +189,7 @@ func (h *agentHandler) discoverAllMCPStatus(
 			result = append(result, mcpServerStatus{
 				MCPAuthStatus: agentsdk.MCPAuthStatus{
 					Slug:       server.Slug,
-					AuthMode:   server.AuthMode,
+					AuthMode:   agentsdk.MCPAuth(server.AuthMode),
 					Authorized: true,
 				},
 			})
@@ -257,7 +207,7 @@ func (h *agentHandler) discoverAllMCPStatus(
 		result = append(result, mcpServerStatus{
 			MCPAuthStatus: agentsdk.MCPAuthStatus{
 				Slug:       server.Slug,
-				AuthMode:   server.AuthMode,
+				AuthMode:   agentsdk.MCPAuth(server.AuthMode),
 				Authorized: true,
 			},
 			ToolCount: len(tools),

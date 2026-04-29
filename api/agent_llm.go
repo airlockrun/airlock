@@ -62,7 +62,7 @@ func (h *agentHandler) LLMStream(w http.ResponseWriter, r *http.Request) {
 		policy.SupportsFileURL = false
 		policy.MaxURLImages = 0
 	}
-	if err := attachref.ResolveForLLM(ctx, h.s3, agentID, policy, opts.Messages); err != nil {
+	if err := attachref.ResolveForLLM(ctx, h.s3, dbq.New(h.db.Pool()), agentID, policy, opts.Messages); err != nil {
 		h.logger.Error("attachref resolve for LLM failed", zap.Error(err))
 		writeJSONError(w, http.StatusBadGateway, err.Error())
 		return
@@ -94,7 +94,16 @@ func (h *agentHandler) LLMStream(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// ErrorEvent.Error is an `error` — not JSON-serializable. Convert to string.
+		// Log mid-stream errors so platform-side LLM failures (provider 4xx, network
+		// blips, etc.) show up in airlock logs instead of being silently relayed
+		// to the agent as opaque NDJSON.
 		if ee, ok := event.Data.(stream.ErrorEvent); ok {
+			h.logger.Warn("LLM stream error",
+				zap.String("provider", providerID),
+				zap.String("model", modelID),
+				zap.String("agent", agentID.String()),
+				zap.Error(ee.Error),
+			)
 			nd.Data = map[string]string{"error": ee.Error.Error()}
 		}
 		if ee, ok := event.Data.(stream.ToolErrorEvent); ok {

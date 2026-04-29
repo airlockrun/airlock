@@ -12,7 +12,7 @@ import type { JsonObject, Message } from "@bufbuild/protobuf";
  * Describes the file airlock/v1/types.proto.
  */
 export const file_airlock_v1_types: GenFile = /*@__PURE__*/
-  fileDesc("ChZhaXJsb2NrL3YxL3R5cGVzLnByb3RvEgphaXJsb2NrLnYxIrsBCgZUZW5hbnQSCgoCaWQYASABKAkSDAoEc2x1ZxgCIAEoCRIMCgRuYW1lGAMgASgJEikKCHNldHRpbmdzGAQgASgLMhcuZ29vZ2xlLnByb3RvYnVmLlN0cnVjdBIuCgpjcmVhdGVkX2F0GAUgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIuCgp1cGRhdGVkX2F0GAYgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcCKHAgoEVXNlchIKCgJpZBgBIAEoCRIRCgl0ZW5hbnRfaWQYAiABKAkSDQoFZW1haWwYAyABKAkSFAoMZGlzcGxheV9uYW1lGAQgASgJEisKC3RlbmFudF9yb2xlGAUgASgOMhYuYWlybG9jay52MS5UZW5hbnRSb2xlEhAKCG9pZGNfc3ViGAYgASgJEhwKFG11c3RfY2hhbmdlX3Bhc3N3b3JkGAcgASgIEi4KCmNyZWF0ZWRfYXQYCCABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEi4KCnVwZGF0ZWRfYXQYCSABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wIt8BCghQcm92aWRlchIKCgJpZBgBIAEoCRITCgtwcm92aWRlcl9pZBgCIAEoCRIUCgxkaXNwbGF5X25hbWUYAyABKAkSEgoKaXNfZW5hYmxlZBgEIAEoCBIQCghiYXNlX3VybBgFIAEoCRIWCg5hcGlfa2V5X21hc2tlZBgGIAEoCRIuCgpjcmVhdGVkX2F0GAcgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIuCgp1cGRhdGVkX2F0GAggASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcCIoCgxQcm92aWRlckluZm8SCgoCaWQYASABKAkSDAoEbmFtZRgCIAEoCSKDAQoWUHJvdmlkZXJDYXBhYmlsaXR5SW5mbxITCgtwcm92aWRlcl9pZBgBIAEoCRIUCgxkaXNwbGF5X25hbWUYAiABKAkSFAoMY2FwYWJpbGl0aWVzGAMgAygJEhIKCmNvbmZpZ3VyZWQYBCABKAgSFAoMY2F0YWxvZ19vbmx5GAUgASgIIusBCglNb2RlbEluZm8SCgoCaWQYASABKAkSEwoLcHJvdmlkZXJfaWQYAiABKAkSDAoEbmFtZRgDIAEoCRIRCgl0b29sX2NhbGwYBCABKAgSEQoJcmVhc29uaW5nGAUgASgIEhUKDWNvbnRleHRfbGltaXQYBiABKAUSFAoMb3V0cHV0X2xpbWl0GAcgASgFEhIKCmNvc3RfaW5wdXQYCCABKAESEwoLY29zdF9vdXRwdXQYCSABKAESGAoQaW5wdXRfbW9kYWxpdGllcxgKIAMoCRIZChFvdXRwdXRfbW9kYWxpdGllcxgLIAMoCSKiAgoJQWdlbnRJbmZvEgoKAmlkGAEgASgJEgwKBHNsdWcYAiABKAkSDAoEbmFtZRgDIAEoCRITCgtkZXNjcmlwdGlvbhgEIAEoCRIOCgZzdGF0dXMYBSABKAkSFgoOdXBncmFkZV9zdGF0dXMYBiABKAkSEAoIYXV0b19maXgYByABKAgSEwoLYnVpbGRfbW9kZWwYCCABKAkSEgoKZXhlY19tb2RlbBgJIAEoCRIVCg1lcnJvcl9tZXNzYWdlGAogASgJEi4KCmNyZWF0ZWRfYXQYCyABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEi4KCnVwZGF0ZWRfYXQYDCABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wIrsDCgdSdW5JbmZvEgoKAmlkGAEgASgJEhAKCGFnZW50X2lkGAIgASgJEhEKCWJyaWRnZV9pZBgDIAEoCRIOCgZzdGF0dXMYBCABKAkSEgoKc291cmNlX3JlZhgFIAEoCRIuCg1pbnB1dF9wYXlsb2FkGAYgASgLMhcuZ29vZ2xlLnByb3RvYnVmLlN0cnVjdBIrCgdhY3Rpb25zGAcgASgLMhouZ29vZ2xlLnByb3RvYnVmLkxpc3RWYWx1ZRIVCg1sbG1fdG9rZW5zX2luGAggASgFEhYKDmxsbV90b2tlbnNfb3V0GAkgASgFEhkKEWxsbV9jb3N0X2VzdGltYXRlGAogASgBEhMKC2R1cmF0aW9uX21zGAsgASgFEhIKCnN0ZG91dF9sb2cYDCABKAkSFQoNZXJyb3JfbWVzc2FnZRgNIAEoCRITCgtwYW5pY190cmFjZRgOIAEoCRIuCgpzdGFydGVkX2F0GA8gASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIvCgtmaW5pc2hlZF9hdBgQIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXAitwIKDkFnZW50QnVpbGRJbmZvEgoKAmlkGAEgASgJEhAKCGFnZW50X2lkGAIgASgJEgwKBHR5cGUYAyABKAkSDgoGc3RhdHVzGAQgASgJEhQKDGluc3RydWN0aW9ucxgFIAEoCRISCgpzb3VyY2VfcmVmGAYgASgJEhEKCWltYWdlX3JlZhgHIAEoCRIPCgdzb2xfbG9nGAggASgJEhIKCmRvY2tlcl9sb2cYCSABKAkSDwoHbG9nX3NlcRgKIAEoAxIVCg1lcnJvcl9tZXNzYWdlGAsgASgJEi4KCnN0YXJ0ZWRfYXQYDCABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEi8KC2ZpbmlzaGVkX2F0GA0gASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcCKvAQoQQ29udmVyc2F0aW9uSW5mbxIKCgJpZBgBIAEoCRIQCghhZ2VudF9pZBgCIAEoCRINCgV0aXRsZRgDIAEoCRIOCgZzb3VyY2UYBCABKAkSLgoKY3JlYXRlZF9hdBgFIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASLgoKdXBkYXRlZF9hdBgGIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXAiygEKEEFnZW50TWVzc2FnZUluZm8SCgoCaWQYASABKAkSDAoEcm9sZRgCIAEoCRIOCgZzb3VyY2UYAyABKAkSDwoHY29udGVudBgEIAEoCRINCgVwYXJ0cxgFIAEoCRIRCgl0b2tlbnNfaW4YBiABKAUSEgoKdG9rZW5zX291dBgHIAEoBRIVCg1jb3N0X2VzdGltYXRlGAggASgBEi4KCmNyZWF0ZWRfYXQYCSABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wIuIBCgtXZWJob29rSW5mbxIKCgJpZBgBIAEoCRIMCgRwYXRoGAIgASgJEhMKC3ZlcmlmeV9tb2RlGAMgASgJEhIKCnB1YmxpY191cmwYBCABKAkSEwoLZGVzY3JpcHRpb24YBSABKAkSFQoNc2VjcmV0X21hc2tlZBgGIAEoCRI0ChBsYXN0X3JlY2VpdmVkX2F0GAcgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIuCgpjcmVhdGVkX2F0GAggASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcCKuAQoIQ3JvbkluZm8SCgoCaWQYASABKAkSDAoEbmFtZRgCIAEoCRIQCghzY2hlZHVsZRgDIAEoCRITCgtkZXNjcmlwdGlvbhgEIAEoCRIxCg1sYXN0X2ZpcmVkX2F0GAUgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIuCgpjcmVhdGVkX2F0GAYgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcCJaCglSb3V0ZUluZm8SCgoCaWQYASABKAkSDAoEcGF0aBgCIAEoCRIOCgZtZXRob2QYAyABKAkSDgoGYWNjZXNzGAQgASgJEhMKC2Rlc2NyaXB0aW9uGAUgASgJIu8BCg5Db25uZWN0aW9uSW5mbxIKCgJpZBgBIAEoCRIMCgRzbHVnGAIgASgJEgwKBG5hbWUYAyABKAkSEwoLZGVzY3JpcHRpb24YBCABKAkSEQoJYXV0aF9tb2RlGAUgASgJEhAKCGF1dGhfdXJsGAYgASgJEhoKEnNldHVwX2luc3RydWN0aW9ucxgHIAEoCRISCgphdXRob3JpemVkGAggASgIEhUKDWhhc19vYXV0aF9hcHAYCSABKAgSNAoQdG9rZW5fZXhwaXJlc19hdBgKIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXAizAEKCkJyaWRnZUluZm8SCgoCaWQYASABKAkSEAoIYWdlbnRfaWQYAiABKAkSDAoEdHlwZRgDIAEoCRIMCgRuYW1lGAQgASgJEhQKDGJvdF91c2VybmFtZRgFIAEoCRIOCgZzdGF0dXMYBiABKAkSLgoKY3JlYXRlZF9hdBgHIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASLgoKdXBkYXRlZF9hdBgIIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXAifgoUUGxhdGZvcm1JZGVudGl0eUluZm8SCgoCaWQYASABKAkSEAoIcGxhdGZvcm0YAiABKAkSGAoQcGxhdGZvcm1fdXNlcl9pZBgDIAEoCRIuCgpjcmVhdGVkX2F0GAQgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcCJ2CghUb29sSW5mbxIKCgJpZBgBIAEoCRIMCgRuYW1lGAIgASgJEhMKC2Rlc2NyaXB0aW9uGAMgASgJEg4KBmFjY2VzcxgEIAEoCRIUCgxpbnB1dF9zY2hlbWEYBSABKAkSFQoNb3V0cHV0X3NjaGVtYRgGIAEoCSJUCg9BZ2VudEJ1aWxkRXZlbnQSEAoIYWdlbnRfaWQYASABKAkSEAoIYnVpbGRfaWQYAiABKAkSDgoGc3RhdHVzGAMgASgJEg0KBWVycm9yGAQgASgJImMKEkFnZW50QnVpbGRMb2dFdmVudBIQCghhZ2VudF9pZBgBIAEoCRIQCghidWlsZF9pZBgCIAEoCRILCgNzZXEYAyABKAMSDgoGc3RyZWFtGAQgASgJEgwKBGxpbmUYBSABKAkiPgoJRmlsZUVudHJ5EgwKBHBhdGgYASABKAkSDAoEc2l6ZRgCIAEoAxIVCg1sYXN0X21vZGlmaWVkGAMgASgJIk4KCVRvcGljSW5mbxIKCgJpZBgBIAEoCRIMCgRzbHVnGAIgASgJEhMKC2Rlc2NyaXB0aW9uGAMgASgJEhIKCnN1YnNjcmliZWQYBCABKAgiqwIKElN5c3RlbVNldHRpbmdzSW5mbxISCgpwdWJsaWNfdXJsGAEgASgJEhQKDGFnZW50X2RvbWFpbhgCIAEoCRIbChNkZWZhdWx0X2J1aWxkX21vZGVsGAMgASgJEhoKEmRlZmF1bHRfZXhlY19tb2RlbBgEIAEoCRIZChFkZWZhdWx0X3N0dF9tb2RlbBgFIAEoCRIcChRkZWZhdWx0X3Zpc2lvbl9tb2RlbBgGIAEoCRIZChFkZWZhdWx0X3R0c19tb2RlbBgHIAEoCRIfChdkZWZhdWx0X2ltYWdlX2dlbl9tb2RlbBgIIAEoCRIcChRkZWZhdWx0X3NlYXJjaF9tb2RlbBgJIAEoCRIfChdkZWZhdWx0X2VtYmVkZGluZ19tb2RlbBgKIAEoCSpvCgpUZW5hbnRSb2xlEhsKF1RFTkFOVF9ST0xFX1VOU1BFQ0lGSUVEEAASFQoRVEVOQU5UX1JPTEVfQURNSU4QARIXChNURU5BTlRfUk9MRV9NQU5BR0VSEAISFAoQVEVOQU5UX1JPTEVfVVNFUhADKo4BCgtNZXNzYWdlUm9sZRIcChhNRVNTQUdFX1JPTEVfVU5TUEVDSUZJRUQQABIVChFNRVNTQUdFX1JPTEVfVVNFUhABEhoKFk1FU1NBR0VfUk9MRV9BU1NJU1RBTlQQAhIXChNNRVNTQUdFX1JPTEVfU1lTVEVNEAMSFQoRTUVTU0FHRV9ST0xFX1RPT0wQBEI4WjZnaXRodWIuY29tL2FpcmxvY2tydW4vYWlybG9jay9nZW4vYWlybG9jay92MTthaXJsb2NrdjFiBnByb3RvMw", [file_google_protobuf_struct, file_google_protobuf_timestamp]);
+  fileDesc("ChZhaXJsb2NrL3YxL3R5cGVzLnByb3RvEgphaXJsb2NrLnYxIrsBCgZUZW5hbnQSCgoCaWQYASABKAkSDAoEc2x1ZxgCIAEoCRIMCgRuYW1lGAMgASgJEikKCHNldHRpbmdzGAQgASgLMhcuZ29vZ2xlLnByb3RvYnVmLlN0cnVjdBIuCgpjcmVhdGVkX2F0GAUgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIuCgp1cGRhdGVkX2F0GAYgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcCKHAgoEVXNlchIKCgJpZBgBIAEoCRIRCgl0ZW5hbnRfaWQYAiABKAkSDQoFZW1haWwYAyABKAkSFAoMZGlzcGxheV9uYW1lGAQgASgJEisKC3RlbmFudF9yb2xlGAUgASgOMhYuYWlybG9jay52MS5UZW5hbnRSb2xlEhAKCG9pZGNfc3ViGAYgASgJEhwKFG11c3RfY2hhbmdlX3Bhc3N3b3JkGAcgASgIEi4KCmNyZWF0ZWRfYXQYCCABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEi4KCnVwZGF0ZWRfYXQYCSABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wIj4KC1VzZXJTdW1tYXJ5EgoKAmlkGAEgASgJEg0KBWVtYWlsGAIgASgJEhQKDGRpc3BsYXlfbmFtZRgDIAEoCSLfAQoIUHJvdmlkZXISCgoCaWQYASABKAkSEwoLcHJvdmlkZXJfaWQYAiABKAkSFAoMZGlzcGxheV9uYW1lGAMgASgJEhIKCmlzX2VuYWJsZWQYBCABKAgSEAoIYmFzZV91cmwYBSABKAkSFgoOYXBpX2tleV9tYXNrZWQYBiABKAkSLgoKY3JlYXRlZF9hdBgHIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASLgoKdXBkYXRlZF9hdBgIIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXAiKAoMUHJvdmlkZXJJbmZvEgoKAmlkGAEgASgJEgwKBG5hbWUYAiABKAkigwEKFlByb3ZpZGVyQ2FwYWJpbGl0eUluZm8SEwoLcHJvdmlkZXJfaWQYASABKAkSFAoMZGlzcGxheV9uYW1lGAIgASgJEhQKDGNhcGFiaWxpdGllcxgDIAMoCRISCgpjb25maWd1cmVkGAQgASgIEhQKDGNhdGFsb2dfb25seRgFIAEoCCLSAQoJTW9kZWxJbmZvEgoKAmlkGAEgASgJEhMKC3Byb3ZpZGVyX2lkGAIgASgJEgwKBG5hbWUYAyABKAkSEQoJdG9vbF9jYWxsGAQgASgIEhEKCXJlYXNvbmluZxgFIAEoCBIVCg1jb250ZXh0X2xpbWl0GAYgASgFEhQKDG91dHB1dF9saW1pdBgHIAEoBRISCgpjb3N0X2lucHV0GAggASgBEhMKC2Nvc3Rfb3V0cHV0GAkgASgBEgwKBGtpbmQYCiABKAkSDAoEY2FwcxgLIAMoCSKiAgoJQWdlbnRJbmZvEgoKAmlkGAEgASgJEgwKBHNsdWcYAiABKAkSDAoEbmFtZRgDIAEoCRITCgtkZXNjcmlwdGlvbhgEIAEoCRIOCgZzdGF0dXMYBSABKAkSFgoOdXBncmFkZV9zdGF0dXMYBiABKAkSEAoIYXV0b19maXgYByABKAgSEwoLYnVpbGRfbW9kZWwYCCABKAkSEgoKZXhlY19tb2RlbBgJIAEoCRIVCg1lcnJvcl9tZXNzYWdlGAogASgJEi4KCmNyZWF0ZWRfYXQYCyABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEi4KCnVwZGF0ZWRfYXQYDCABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wIs8DCgdSdW5JbmZvEgoKAmlkGAEgASgJEhAKCGFnZW50X2lkGAIgASgJEhEKCWJyaWRnZV9pZBgDIAEoCRIOCgZzdGF0dXMYBCABKAkSEgoKc291cmNlX3JlZhgFIAEoCRIuCg1pbnB1dF9wYXlsb2FkGAYgASgLMhcuZ29vZ2xlLnByb3RvYnVmLlN0cnVjdBIrCgdhY3Rpb25zGAcgASgLMhouZ29vZ2xlLnByb3RvYnVmLkxpc3RWYWx1ZRIVCg1sbG1fdG9rZW5zX2luGAggASgFEhYKDmxsbV90b2tlbnNfb3V0GAkgASgFEhkKEWxsbV9jb3N0X2VzdGltYXRlGAogASgBEhMKC2R1cmF0aW9uX21zGAsgASgFEhIKCnN0ZG91dF9sb2cYDCABKAkSFQoNZXJyb3JfbWVzc2FnZRgNIAEoCRISCgplcnJvcl9raW5kGA4gASgJEhMKC3BhbmljX3RyYWNlGA8gASgJEi4KCnN0YXJ0ZWRfYXQYECABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEi8KC2ZpbmlzaGVkX2F0GBEgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcCK3AgoOQWdlbnRCdWlsZEluZm8SCgoCaWQYASABKAkSEAoIYWdlbnRfaWQYAiABKAkSDAoEdHlwZRgDIAEoCRIOCgZzdGF0dXMYBCABKAkSFAoMaW5zdHJ1Y3Rpb25zGAUgASgJEhIKCnNvdXJjZV9yZWYYBiABKAkSEQoJaW1hZ2VfcmVmGAcgASgJEg8KB3NvbF9sb2cYCCABKAkSEgoKZG9ja2VyX2xvZxgJIAEoCRIPCgdsb2dfc2VxGAogASgDEhUKDWVycm9yX21lc3NhZ2UYCyABKAkSLgoKc3RhcnRlZF9hdBgMIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASLwoLZmluaXNoZWRfYXQYDSABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wIq8BChBDb252ZXJzYXRpb25JbmZvEgoKAmlkGAEgASgJEhAKCGFnZW50X2lkGAIgASgJEg0KBXRpdGxlGAMgASgJEg4KBnNvdXJjZRgEIAEoCRIuCgpjcmVhdGVkX2F0GAUgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIuCgp1cGRhdGVkX2F0GAYgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcCLXAQoQQWdlbnRNZXNzYWdlSW5mbxIKCgJpZBgBIAEoCRILCgNzZXEYAiABKAMSDAoEcm9sZRgDIAEoCRIOCgZzb3VyY2UYBCABKAkSDwoHY29udGVudBgFIAEoCRINCgVwYXJ0cxgGIAEoCRIRCgl0b2tlbnNfaW4YByABKAUSEgoKdG9rZW5zX291dBgIIAEoBRIVCg1jb3N0X2VzdGltYXRlGAkgASgBEi4KCmNyZWF0ZWRfYXQYCiABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wIuIBCgtXZWJob29rSW5mbxIKCgJpZBgBIAEoCRIMCgRwYXRoGAIgASgJEhMKC3ZlcmlmeV9tb2RlGAMgASgJEhIKCnB1YmxpY191cmwYBCABKAkSEwoLZGVzY3JpcHRpb24YBSABKAkSFQoNc2VjcmV0X21hc2tlZBgGIAEoCRI0ChBsYXN0X3JlY2VpdmVkX2F0GAcgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIuCgpjcmVhdGVkX2F0GAggASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcCKuAQoIQ3JvbkluZm8SCgoCaWQYASABKAkSDAoEbmFtZRgCIAEoCRIQCghzY2hlZHVsZRgDIAEoCRITCgtkZXNjcmlwdGlvbhgEIAEoCRIxCg1sYXN0X2ZpcmVkX2F0GAUgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIuCgpjcmVhdGVkX2F0GAYgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcCJaCglSb3V0ZUluZm8SCgoCaWQYASABKAkSDAoEcGF0aBgCIAEoCRIOCgZtZXRob2QYAyABKAkSDgoGYWNjZXNzGAQgASgJEhMKC2Rlc2NyaXB0aW9uGAUgASgJIu8BCg5Db25uZWN0aW9uSW5mbxIKCgJpZBgBIAEoCRIMCgRzbHVnGAIgASgJEgwKBG5hbWUYAyABKAkSEwoLZGVzY3JpcHRpb24YBCABKAkSEQoJYXV0aF9tb2RlGAUgASgJEhAKCGF1dGhfdXJsGAYgASgJEhoKEnNldHVwX2luc3RydWN0aW9ucxgHIAEoCRISCgphdXRob3JpemVkGAggASgIEhUKDWhhc19vYXV0aF9hcHAYCSABKAgSNAoQdG9rZW5fZXhwaXJlc19hdBgKIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXAi9AEKCkJyaWRnZUluZm8SCgoCaWQYASABKAkSEAoIYWdlbnRfaWQYAiABKAkSJgoFb3duZXIYAyABKAsyFy5haXJsb2NrLnYxLlVzZXJTdW1tYXJ5EgwKBHR5cGUYBCABKAkSDAoEbmFtZRgFIAEoCRIUCgxib3RfdXNlcm5hbWUYBiABKAkSDgoGc3RhdHVzGAcgASgJEi4KCmNyZWF0ZWRfYXQYCCABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEi4KCnVwZGF0ZWRfYXQYCSABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wIn4KFFBsYXRmb3JtSWRlbnRpdHlJbmZvEgoKAmlkGAEgASgJEhAKCHBsYXRmb3JtGAIgASgJEhgKEHBsYXRmb3JtX3VzZXJfaWQYAyABKAkSLgoKY3JlYXRlZF9hdBgEIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXAidgoIVG9vbEluZm8SCgoCaWQYASABKAkSDAoEbmFtZRgCIAEoCRITCgtkZXNjcmlwdGlvbhgDIAEoCRIOCgZhY2Nlc3MYBCABKAkSFAoMaW5wdXRfc2NoZW1hGAUgASgJEhUKDW91dHB1dF9zY2hlbWEYBiABKAkiVAoPQWdlbnRCdWlsZEV2ZW50EhAKCGFnZW50X2lkGAEgASgJEhAKCGJ1aWxkX2lkGAIgASgJEg4KBnN0YXR1cxgDIAEoCRINCgVlcnJvchgEIAEoCSJjChJBZ2VudEJ1aWxkTG9nRXZlbnQSEAoIYWdlbnRfaWQYASABKAkSEAoIYnVpbGRfaWQYAiABKAkSCwoDc2VxGAMgASgDEg4KBnN0cmVhbRgEIAEoCRIMCgRsaW5lGAUgASgJIj4KCUZpbGVFbnRyeRIMCgRwYXRoGAEgASgJEgwKBHNpemUYAiABKAMSFQoNbGFzdF9tb2RpZmllZBgDIAEoCSJOCglUb3BpY0luZm8SCgoCaWQYASABKAkSDAoEc2x1ZxgCIAEoCRITCgtkZXNjcmlwdGlvbhgDIAEoCRISCgpzdWJzY3JpYmVkGAQgASgIIqsCChJTeXN0ZW1TZXR0aW5nc0luZm8SEgoKcHVibGljX3VybBgBIAEoCRIUCgxhZ2VudF9kb21haW4YAiABKAkSGwoTZGVmYXVsdF9idWlsZF9tb2RlbBgDIAEoCRIaChJkZWZhdWx0X2V4ZWNfbW9kZWwYBCABKAkSGQoRZGVmYXVsdF9zdHRfbW9kZWwYBSABKAkSHAoUZGVmYXVsdF92aXNpb25fbW9kZWwYBiABKAkSGQoRZGVmYXVsdF90dHNfbW9kZWwYByABKAkSHwoXZGVmYXVsdF9pbWFnZV9nZW5fbW9kZWwYCCABKAkSHAoUZGVmYXVsdF9zZWFyY2hfbW9kZWwYCSABKAkSHwoXZGVmYXVsdF9lbWJlZGRpbmdfbW9kZWwYCiABKAkqbwoKVGVuYW50Um9sZRIbChdURU5BTlRfUk9MRV9VTlNQRUNJRklFRBAAEhUKEVRFTkFOVF9ST0xFX0FETUlOEAESFwoTVEVOQU5UX1JPTEVfTUFOQUdFUhACEhQKEFRFTkFOVF9ST0xFX1VTRVIQAyqOAQoLTWVzc2FnZVJvbGUSHAoYTUVTU0FHRV9ST0xFX1VOU1BFQ0lGSUVEEAASFQoRTUVTU0FHRV9ST0xFX1VTRVIQARIaChZNRVNTQUdFX1JPTEVfQVNTSVNUQU5UEAISFwoTTUVTU0FHRV9ST0xFX1NZU1RFTRADEhUKEU1FU1NBR0VfUk9MRV9UT09MEARCOFo2Z2l0aHViLmNvbS9haXJsb2NrcnVuL2FpcmxvY2svZ2VuL2FpcmxvY2svdjE7YWlybG9ja3YxYgZwcm90bzM", [file_google_protobuf_struct, file_google_protobuf_timestamp]);
 
 /**
  * Tenant represents a workspace (organization).
@@ -118,6 +118,37 @@ export const UserSchema: GenMessage<User> = /*@__PURE__*/
   messageDesc(file_airlock_v1_types, 1);
 
 /**
+ * UserSummary is a slim user view used for member-picker dropdowns.
+ * Returned to any authenticated user — no admin gate — so it intentionally
+ * omits oidc_sub / must_change_password / role.
+ *
+ * @generated from message airlock.v1.UserSummary
+ */
+export type UserSummary = Message<"airlock.v1.UserSummary"> & {
+  /**
+   * @generated from field: string id = 1;
+   */
+  id: string;
+
+  /**
+   * @generated from field: string email = 2;
+   */
+  email: string;
+
+  /**
+   * @generated from field: string display_name = 3;
+   */
+  displayName: string;
+};
+
+/**
+ * Describes the message airlock.v1.UserSummary.
+ * Use `create(UserSummarySchema)` to create a new message.
+ */
+export const UserSummarySchema: GenMessage<UserSummary> = /*@__PURE__*/
+  messageDesc(file_airlock_v1_types, 2);
+
+/**
  * Provider represents a configured LLM provider with encrypted API key.
  *
  * @generated from message airlock.v1.Provider
@@ -169,7 +200,7 @@ export type Provider = Message<"airlock.v1.Provider"> & {
  * Use `create(ProviderSchema)` to create a new message.
  */
 export const ProviderSchema: GenMessage<Provider> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_types, 2);
+  messageDesc(file_airlock_v1_types, 3);
 
 /**
  * ProviderInfo represents a known LLM provider from the catalog.
@@ -193,7 +224,7 @@ export type ProviderInfo = Message<"airlock.v1.ProviderInfo"> & {
  * Use `create(ProviderInfoSchema)` to create a new message.
  */
 export const ProviderInfoSchema: GenMessage<ProviderInfo> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_types, 3);
+  messageDesc(file_airlock_v1_types, 4);
 
 /**
  * ProviderCapabilityInfo describes what capabilities a known provider offers
@@ -214,7 +245,8 @@ export type ProviderCapabilityInfo = Message<"airlock.v1.ProviderCapabilityInfo"
   displayName: string;
 
   /**
-   * Supported capabilities from: "text", "vision", "stt", "tts", "image_gen", "search".
+   * Supported capabilities from: "text", "vision", "transcription",
+   * "speech", "image_gen", "embedding", "reranking", "search".
    *
    * @generated from field: repeated string capabilities = 3;
    */
@@ -241,7 +273,7 @@ export type ProviderCapabilityInfo = Message<"airlock.v1.ProviderCapabilityInfo"
  * Use `create(ProviderCapabilityInfoSchema)` to create a new message.
  */
 export const ProviderCapabilityInfoSchema: GenMessage<ProviderCapabilityInfo> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_types, 4);
+  messageDesc(file_airlock_v1_types, 5);
 
 /**
  * ModelInfo represents a model available from a provider.
@@ -295,19 +327,28 @@ export type ModelInfo = Message<"airlock.v1.ModelInfo"> & {
   costOutput: number;
 
   /**
-   * Supported input modalities from models.dev — e.g. "text", "image",
-   * "audio", "pdf", "video". Empty list means unknown (treat as text-only).
+   * Kind is the model's primary purpose, sourced from goai's typed lists.
+   * One of "language", "embedding", "image", "speech", "transcription",
+   * "reranking", or "" when sol has no goai coverage for the provider —
+   * currently the openai-compat bucket (groq, xai, cerebras, fireworks,
+   * etc.), all of which ship language models, so clients can safely
+   * treat empty as "language" for filtering purposes.
    *
-   * @generated from field: repeated string input_modalities = 10;
+   * @generated from field: string kind = 10;
    */
-  inputModalities: string[];
+  kind: string;
 
   /**
-   * Supported output modalities — e.g. "text", "audio", "image".
+   * Per-model capability flags computed by sol's CapabilitiesFromModel
+   * (kind-derived plus modality-derived). The strings match
+   * ProviderCapabilityInfo.capabilities — "text", "vision", "embedding",
+   * "speech", "transcription", "image_gen", "reranking". Used by the
+   * frontend to compose sub-filters within a kind (e.g. vision picker =
+   * language model with vision cap).
    *
-   * @generated from field: repeated string output_modalities = 11;
+   * @generated from field: repeated string caps = 11;
    */
-  outputModalities: string[];
+  caps: string[];
 };
 
 /**
@@ -315,7 +356,7 @@ export type ModelInfo = Message<"airlock.v1.ModelInfo"> & {
  * Use `create(ModelInfoSchema)` to create a new message.
  */
 export const ModelInfoSchema: GenMessage<ModelInfo> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_types, 5);
+  messageDesc(file_airlock_v1_types, 6);
 
 /**
  * AgentInfo represents a compiled AI agent.
@@ -397,7 +438,7 @@ export type AgentInfo = Message<"airlock.v1.AgentInfo"> & {
  * Use `create(AgentInfoSchema)` to create a new message.
  */
 export const AgentInfoSchema: GenMessage<AgentInfo> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_types, 6);
+  messageDesc(file_airlock_v1_types, 7);
 
 /**
  * RunInfo represents a single execution of an agent.
@@ -477,17 +518,26 @@ export type RunInfo = Message<"airlock.v1.RunInfo"> & {
   errorMessage: string;
 
   /**
-   * @generated from field: string panic_trace = 14;
+   * error_kind classifies error_message: "platform" (provider/network),
+   * "agent" (agent code bug), or "" (no error / unknown). Frontend uses
+   * this to suppress the "Fix this error" workflow on platform errors.
+   *
+   * @generated from field: string error_kind = 14;
+   */
+  errorKind: string;
+
+  /**
+   * @generated from field: string panic_trace = 15;
    */
   panicTrace: string;
 
   /**
-   * @generated from field: google.protobuf.Timestamp started_at = 15;
+   * @generated from field: google.protobuf.Timestamp started_at = 16;
    */
   startedAt?: Timestamp | undefined;
 
   /**
-   * @generated from field: google.protobuf.Timestamp finished_at = 16;
+   * @generated from field: google.protobuf.Timestamp finished_at = 17;
    */
   finishedAt?: Timestamp | undefined;
 };
@@ -497,7 +547,7 @@ export type RunInfo = Message<"airlock.v1.RunInfo"> & {
  * Use `create(RunInfoSchema)` to create a new message.
  */
 export const RunInfoSchema: GenMessage<RunInfo> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_types, 7);
+  messageDesc(file_airlock_v1_types, 8);
 
 /**
  * AgentBuildInfo represents a single build or upgrade of an agent.
@@ -586,7 +636,7 @@ export type AgentBuildInfo = Message<"airlock.v1.AgentBuildInfo"> & {
  * Use `create(AgentBuildInfoSchema)` to create a new message.
  */
 export const AgentBuildInfoSchema: GenMessage<AgentBuildInfo> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_types, 8);
+  messageDesc(file_airlock_v1_types, 9);
 
 /**
  * ConversationInfo represents an agent conversation.
@@ -632,7 +682,7 @@ export type ConversationInfo = Message<"airlock.v1.ConversationInfo"> & {
  * Use `create(ConversationInfoSchema)` to create a new message.
  */
 export const ConversationInfoSchema: GenMessage<ConversationInfo> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_types, 9);
+  messageDesc(file_airlock_v1_types, 10);
 
 /**
  * AgentMessageInfo represents a single message in a conversation.
@@ -646,48 +696,57 @@ export type AgentMessageInfo = Message<"airlock.v1.AgentMessageInfo"> & {
   id: string;
 
   /**
+   * seq is the monotonic insertion-order axis on agent_messages. Used as the
+   * pagination cursor instead of created_at because rows persisted in one
+   * transaction (assistant + tool batch) share an identical created_at.
+   *
+   * @generated from field: int64 seq = 2;
+   */
+  seq: bigint;
+
+  /**
    * "user", "assistant", "system", "tool"
    *
-   * @generated from field: string role = 2;
+   * @generated from field: string role = 3;
    */
   role: string;
 
   /**
-   * "user" (default), "system" (injected by Airlock), "bridge"
+   * "user" (default), "system" (injected by Airlock), "bridge", "error"
    *
-   * @generated from field: string source = 3;
+   * @generated from field: string source = 4;
    */
   source: string;
 
   /**
-   * @generated from field: string content = 4;
+   * @generated from field: string content = 5;
    */
   content: string;
 
   /**
    * JSON-encoded goai Content for rich message display
    *
-   * @generated from field: string parts = 5;
+   * @generated from field: string parts = 6;
    */
   parts: string;
 
   /**
-   * @generated from field: int32 tokens_in = 6;
+   * @generated from field: int32 tokens_in = 7;
    */
   tokensIn: number;
 
   /**
-   * @generated from field: int32 tokens_out = 7;
+   * @generated from field: int32 tokens_out = 8;
    */
   tokensOut: number;
 
   /**
-   * @generated from field: double cost_estimate = 8;
+   * @generated from field: double cost_estimate = 9;
    */
   costEstimate: number;
 
   /**
-   * @generated from field: google.protobuf.Timestamp created_at = 9;
+   * @generated from field: google.protobuf.Timestamp created_at = 10;
    */
   createdAt?: Timestamp | undefined;
 };
@@ -697,7 +756,7 @@ export type AgentMessageInfo = Message<"airlock.v1.AgentMessageInfo"> & {
  * Use `create(AgentMessageInfoSchema)` to create a new message.
  */
 export const AgentMessageInfoSchema: GenMessage<AgentMessageInfo> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_types, 10);
+  messageDesc(file_airlock_v1_types, 11);
 
 /**
  * WebhookInfo represents a code-synced webhook registration.
@@ -757,7 +816,7 @@ export type WebhookInfo = Message<"airlock.v1.WebhookInfo"> & {
  * Use `create(WebhookInfoSchema)` to create a new message.
  */
 export const WebhookInfoSchema: GenMessage<WebhookInfo> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_types, 11);
+  messageDesc(file_airlock_v1_types, 12);
 
 /**
  * CronInfo represents a code-synced cron registration.
@@ -801,7 +860,7 @@ export type CronInfo = Message<"airlock.v1.CronInfo"> & {
  * Use `create(CronInfoSchema)` to create a new message.
  */
 export const CronInfoSchema: GenMessage<CronInfo> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_types, 12);
+  messageDesc(file_airlock_v1_types, 13);
 
 /**
  * RouteInfo represents a code-synced HTTP route registration.
@@ -840,7 +899,7 @@ export type RouteInfo = Message<"airlock.v1.RouteInfo"> & {
  * Use `create(RouteInfoSchema)` to create a new message.
  */
 export const RouteInfoSchema: GenMessage<RouteInfo> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_types, 13);
+  messageDesc(file_airlock_v1_types, 14);
 
 /**
  * ConnectionInfo shows a connection definition with credential status.
@@ -912,7 +971,7 @@ export type ConnectionInfo = Message<"airlock.v1.ConnectionInfo"> & {
  * Use `create(ConnectionInfoSchema)` to create a new message.
  */
 export const ConnectionInfoSchema: GenMessage<ConnectionInfo> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_types, 14);
+  messageDesc(file_airlock_v1_types, 15);
 
 /**
  * BridgeInfo represents a chat platform bot instance.
@@ -933,38 +992,45 @@ export type BridgeInfo = Message<"airlock.v1.BridgeInfo"> & {
   agentId: string;
 
   /**
+   * unset for system bridges (no creator)
+   *
+   * @generated from field: airlock.v1.UserSummary owner = 3;
+   */
+  owner?: UserSummary | undefined;
+
+  /**
    * "telegram", etc.
    *
-   * @generated from field: string type = 3;
+   * @generated from field: string type = 4;
    */
   type: string;
 
   /**
-   * @generated from field: string name = 4;
+   * @generated from field: string name = 5;
    */
   name: string;
 
   /**
    * @username from Telegram getMe
    *
-   * @generated from field: string bot_username = 5;
+   * @generated from field: string bot_username = 6;
    */
   botUsername: string;
 
   /**
    * "active", "error"
    *
-   * @generated from field: string status = 6;
+   * @generated from field: string status = 7;
    */
   status: string;
 
   /**
-   * @generated from field: google.protobuf.Timestamp created_at = 7;
+   * @generated from field: google.protobuf.Timestamp created_at = 8;
    */
   createdAt?: Timestamp | undefined;
 
   /**
-   * @generated from field: google.protobuf.Timestamp updated_at = 8;
+   * @generated from field: google.protobuf.Timestamp updated_at = 9;
    */
   updatedAt?: Timestamp | undefined;
 };
@@ -974,7 +1040,7 @@ export type BridgeInfo = Message<"airlock.v1.BridgeInfo"> & {
  * Use `create(BridgeInfoSchema)` to create a new message.
  */
 export const BridgeInfoSchema: GenMessage<BridgeInfo> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_types, 15);
+  messageDesc(file_airlock_v1_types, 16);
 
 /**
  * PlatformIdentityInfo represents a user's verified external identity.
@@ -1012,7 +1078,7 @@ export type PlatformIdentityInfo = Message<"airlock.v1.PlatformIdentityInfo"> & 
  * Use `create(PlatformIdentityInfoSchema)` to create a new message.
  */
 export const PlatformIdentityInfoSchema: GenMessage<PlatformIdentityInfo> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_types, 16);
+  messageDesc(file_airlock_v1_types, 17);
 
 /**
  * ToolInfo represents a registered tool on an agent.
@@ -1059,7 +1125,7 @@ export type ToolInfo = Message<"airlock.v1.ToolInfo"> & {
  * Use `create(ToolInfoSchema)` to create a new message.
  */
 export const ToolInfoSchema: GenMessage<ToolInfo> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_types, 17);
+  messageDesc(file_airlock_v1_types, 18);
 
 /**
  * AgentBuildEvent carries build/upgrade lifecycle events.
@@ -1095,7 +1161,7 @@ export type AgentBuildEvent = Message<"airlock.v1.AgentBuildEvent"> & {
  * Use `create(AgentBuildEventSchema)` to create a new message.
  */
 export const AgentBuildEventSchema: GenMessage<AgentBuildEvent> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_types, 18);
+  messageDesc(file_airlock_v1_types, 19);
 
 /**
  * AgentBuildLogEvent carries a single build log line.
@@ -1138,7 +1204,7 @@ export type AgentBuildLogEvent = Message<"airlock.v1.AgentBuildLogEvent"> & {
  * Use `create(AgentBuildLogEventSchema)` to create a new message.
  */
 export const AgentBuildLogEventSchema: GenMessage<AgentBuildLogEvent> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_types, 19);
+  messageDesc(file_airlock_v1_types, 20);
 
 /**
  * FileEntry represents a stored file.
@@ -1167,7 +1233,7 @@ export type FileEntry = Message<"airlock.v1.FileEntry"> & {
  * Use `create(FileEntrySchema)` to create a new message.
  */
 export const FileEntrySchema: GenMessage<FileEntry> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_types, 20);
+  messageDesc(file_airlock_v1_types, 21);
 
 /**
  * TopicInfo represents a notification topic with subscription status.
@@ -1203,7 +1269,7 @@ export type TopicInfo = Message<"airlock.v1.TopicInfo"> & {
  * Use `create(TopicInfoSchema)` to create a new message.
  */
 export const TopicInfoSchema: GenMessage<TopicInfo> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_types, 21);
+  messageDesc(file_airlock_v1_types, 22);
 
 /**
  * SystemSettingsInfo mirrors the system_settings table (single-row, global).
@@ -1269,7 +1335,7 @@ export type SystemSettingsInfo = Message<"airlock.v1.SystemSettingsInfo"> & {
  * Use `create(SystemSettingsInfoSchema)` to create a new message.
  */
 export const SystemSettingsInfoSchema: GenMessage<SystemSettingsInfo> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_types, 22);
+  messageDesc(file_airlock_v1_types, 23);
 
 /**
  * TenantRole defines the role a user has within a tenant.

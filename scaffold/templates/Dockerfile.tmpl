@@ -4,13 +4,21 @@ WORKDIR /build
 
 # Copy go.mod/go.sum first for layer caching
 COPY go.mod go.sum* ./
-{{- if .DevLibs}}
 
-# Copy libs for replace directives (provided via --build-context libs=...)
-COPY --from=libs agentsdk /libs/agentsdk
-COPY --from=libs goai /libs/goai
-COPY --from=libs sol /libs/sol
-{{- end}}
+# Libs come from two BuildKit contexts that airlock provides at build time:
+#   libs-owned: agentsdk/goai/sol — overlay-able from a dev workspace via
+#               AGENT_LIBS_PATH (live edits) or extracted from the
+#               agent-builder image in prod.
+#   libs-ext:   goose/templ — always extracted from the agent-builder image
+#               (devs don't edit these).
+#
+# Splitting the contexts is required because BuildKit doesn't follow symlinks
+# inside a context dir, so we can't merge owned + ext into one path.
+COPY --from=libs-owned agentsdk /libs/agentsdk
+COPY --from=libs-owned goai     /libs/goai
+COPY --from=libs-owned sol      /libs/sol
+COPY --from=libs-ext   goose    /libs/goose
+COPY --from=libs-ext   templ    /libs/templ
 
 # Download deps with cache mount — survives layer invalidation across builds
 RUN --mount=type=cache,target=/go/pkg/mod \

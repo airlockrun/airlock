@@ -343,12 +343,27 @@ function formatTokens(n: number): string {
               <div style="margin-top: 0.25rem; font-size: 0.85rem">{{ msg.content }}</div>
             </div>
           </div>
-          <!-- Notification messages (printToUser / topic publish) — rich parts -->
+          <!-- Run-error messages (synthesized by airlock when a run completes
+               with status=error). Persists across refresh, unlike the
+               transient WS-driven banner that the chat store paints inline. -->
           <div
-            v-else-if="msg.source === 'notification'"
+            v-else-if="msg.source === 'error'"
             style="display: flex; justify-content: flex-start"
           >
-            <div class="msg-bubble msg-notification">
+            <div class="msg-bubble msg-error">
+              <div style="display: flex; align-items: center; gap: 0.5rem">
+                <i class="pi pi-exclamation-triangle" style="font-size: 0.7rem" />
+                <span style="font-size: 0.7rem; text-transform: uppercase">Error</span>
+              </div>
+              <div style="margin-top: 0.25rem; font-size: 0.85rem; white-space: pre-wrap; word-break: break-word">{{ msg.content }}</div>
+            </div>
+          </div>
+          <!-- Notification messages (printToUser / topic publish / user upload echo) — rich parts -->
+          <div
+            v-else-if="msg.source === 'notification' || msg.source === 'upload'"
+            :style="{ display: 'flex', justifyContent: msg.source === 'upload' ? 'flex-end' : 'flex-start' }"
+          >
+            <div :class="['msg-bubble', msg.source === 'upload' ? 'msg-user' : 'msg-notification']">
               <MessageParts
                 v-if="(msg as any).displayParts && (msg as any).displayParts.length"
                 :parts="(msg as any).displayParts"
@@ -592,6 +607,19 @@ function formatTokens(n: number): string {
   background-color: var(--p-content-hover-background);
   color: var(--p-text-color);
   max-width: 80%;
+}
+
+.msg-error {
+  background-color: var(--p-red-50);
+  color: var(--p-red-700);
+  border: 1px solid var(--p-red-200);
+  max-width: 80%;
+}
+
+:root.dark .msg-error {
+  background-color: color-mix(in srgb, var(--p-red-500) 12%, transparent);
+  color: var(--p-red-300);
+  border-color: color-mix(in srgb, var(--p-red-500) 30%, transparent);
 }
 
 .chat-messages {

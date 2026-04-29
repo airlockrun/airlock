@@ -48,6 +48,14 @@ func (h *bridgeHandler) CreateBridge(w http.ResponseWriter, r *http.Request) {
 	}
 	userID := auth.UserIDFromContext(ctx)
 
+	// Bridge creation is a manager+ capability. `user` role is read-only on
+	// bridges (they can view system bridges and bridges to agents they're a
+	// member of, but not create new ones).
+	if !auth.RoleAtLeast(claims.TenantRole, "manager") {
+		writeError(w, http.StatusForbidden, "creating bridges requires manager role")
+		return
+	}
+
 	var agentPgID pgtype.UUID
 	var createdBy pgtype.UUID
 
@@ -121,19 +129,43 @@ func (h *bridgeHandler) CreateBridge(w http.ResponseWriter, r *http.Request) {
 	writeProto(w, http.StatusOK, bridgeToProto(br))
 }
 
-// ListBridges handles GET /api/v1/bridges.
+// ListBridges handles GET /api/v1/bridges. Admins see every bridge; everyone
+// else sees system bridges plus bridges bound to agents they have access to
+// (via agent_members — covers agents they created and agents they were
+// invited to).
 func (h *bridgeHandler) ListBridges(w http.ResponseWriter, r *http.Request) {
-	q := dbq.New(h.db.Pool())
-	bridges, err := q.ListBridges(r.Context())
-	if err != nil {
-		h.logger.Error("list bridges failed", zap.Error(err))
-		writeError(w, http.StatusInternalServerError, "failed to list bridges")
+	ctx := r.Context()
+	claims := auth.ClaimsFromContext(ctx)
+	if claims == nil {
+		writeError(w, http.StatusUnauthorized, "not authenticated")
 		return
 	}
+	q := dbq.New(h.db.Pool())
 
-	out := make([]*airlockv1.BridgeInfo, len(bridges))
-	for i, br := range bridges {
-		out[i] = bridgeToProto(br)
+	var out []*airlockv1.BridgeInfo
+	if auth.RoleAtLeast(claims.TenantRole, "admin") {
+		rows, err := q.ListBridgesAdmin(ctx)
+		if err != nil {
+			h.logger.Error("list bridges failed", zap.Error(err))
+			writeError(w, http.StatusInternalServerError, "failed to list bridges")
+			return
+		}
+		out = make([]*airlockv1.BridgeInfo, len(rows))
+		for i, row := range rows {
+			out[i] = bridgeAdminRowToProto(row)
+		}
+	} else {
+		userID := auth.UserIDFromContext(ctx)
+		rows, err := q.ListBridgesAccessible(ctx, toPgUUID(userID))
+		if err != nil {
+			h.logger.Error("list bridges failed", zap.Error(err))
+			writeError(w, http.StatusInternalServerError, "failed to list bridges")
+			return
+		}
+		out = make([]*airlockv1.BridgeInfo, len(rows))
+		for i, row := range rows {
+			out[i] = bridgeAccessibleRowToProto(row)
+		}
 	}
 	writeProto(w, http.StatusOK, &airlockv1.ListBridgesResponse{Bridges: out})
 }
@@ -174,8 +206,11 @@ func (h *bridgeHandler) UpdateBridge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Source authority — same rules as delete: system bridge → admin,
-	// agent bridge → admin or the creator.
+	// Source authority — only the bridge's owner can change the agent it's
+	// bound to. Admins explicitly cannot reassign someone else's bridge
+	// (they CAN delete it via DELETE — that's the escape hatch). For
+	// system bridges (CreatedBy NULL) the only privileged caller is admin,
+	// since there is no per-bridge owner to defer to.
 	if !br.AgentID.Valid {
 		if !isAdmin {
 			writeError(w, http.StatusForbidden, "system bridges require admin role to modify")
@@ -183,14 +218,18 @@ func (h *bridgeHandler) UpdateBridge(w http.ResponseWriter, r *http.Request) {
 		}
 	} else {
 		isCreator := br.CreatedBy.Valid && pgUUID(br.CreatedBy) == userID
-		if !isAdmin && !isCreator {
-			writeError(w, http.StatusForbidden, "access denied")
+		if !isCreator {
+			writeError(w, http.StatusForbidden, "only the bridge owner can change its agent")
 			return
 		}
 	}
 
-	// Target authority — mirror create: empty agent_id means system (admin),
-	// non-empty requires ownership of the target agent unless caller is admin.
+	// Target authority — caller still has to be allowed to point the bridge
+	// at the new target. Empty agent_id means "make it a system bridge"
+	// which only an admin may do; a non-empty target requires ownership of
+	// that agent. Admin shortcut applies only when the bridge is already
+	// system-level (handled above by isAdmin); for agent→agent reassign,
+	// the source check already pinned us to the creator.
 	var newAgentID pgtype.UUID
 	if req.AgentId == "" {
 		if !isAdmin {
@@ -294,20 +333,67 @@ func (h *bridgeHandler) DeleteBridge(w http.ResponseWriter, r *http.Request) {
 
 // --- helpers ---
 
-func bridgeToProto(br dbq.Bridge) *airlockv1.BridgeInfo {
+// bridgeFieldsToProto is the single mapping from row fields to BridgeInfo,
+// shared by bridgeToProto (single-row Create/Update/Get returns, no JOIN)
+// and the two list variants which carry the owner JOIN.
+func bridgeFieldsToProto(
+	id, agentID, createdBy pgtype.UUID,
+	typ, name, botUsername, status string,
+	createdAt, updatedAt pgtype.Timestamptz,
+	ownerEmail, ownerDisplayName pgtype.Text,
+) *airlockv1.BridgeInfo {
 	info := &airlockv1.BridgeInfo{
-		Id:          pgUUID(br.ID).String(),
-		Name:        br.Name,
-		Type:        br.Type,
-		BotUsername: br.BotUsername,
-		Status:      br.Status,
-		CreatedAt:   timestamppb.New(br.CreatedAt.Time),
-		UpdatedAt:   timestamppb.New(br.UpdatedAt.Time),
+		Id:          pgUUID(id).String(),
+		Name:        name,
+		Type:        typ,
+		BotUsername: botUsername,
+		Status:      status,
+		CreatedAt:   timestamppb.New(createdAt.Time),
+		UpdatedAt:   timestamppb.New(updatedAt.Time),
 	}
-	if br.AgentID.Valid {
-		info.AgentId = pgUUID(br.AgentID).String()
+	if agentID.Valid {
+		info.AgentId = pgUUID(agentID).String()
+	}
+	// Owner is only set when both the creator UUID and the joined user row
+	// are present — system bridges have CreatedBy NULL, and the LEFT JOIN
+	// can produce NULL email/display_name if a user row was deleted.
+	if createdBy.Valid && ownerEmail.Valid {
+		info.Owner = &airlockv1.UserSummary{
+			Id:          pgUUID(createdBy).String(),
+			Email:       ownerEmail.String,
+			DisplayName: ownerDisplayName.String,
+		}
 	}
 	return info
+}
+
+// bridgeToProto maps a bare bridge row (no owner JOIN) — used by Create,
+// Update, and Get returns where the JOIN would just be a wasted lookup.
+func bridgeToProto(br dbq.Bridge) *airlockv1.BridgeInfo {
+	return bridgeFieldsToProto(
+		br.ID, br.AgentID, br.CreatedBy,
+		br.Type, br.Name, br.BotUsername, br.Status,
+		br.CreatedAt, br.UpdatedAt,
+		pgtype.Text{}, pgtype.Text{},
+	)
+}
+
+func bridgeAdminRowToProto(r dbq.ListBridgesAdminRow) *airlockv1.BridgeInfo {
+	return bridgeFieldsToProto(
+		r.ID, r.AgentID, r.CreatedBy,
+		r.Type, r.Name, r.BotUsername, r.Status,
+		r.CreatedAt, r.UpdatedAt,
+		r.OwnerEmail, r.OwnerDisplayName,
+	)
+}
+
+func bridgeAccessibleRowToProto(r dbq.ListBridgesAccessibleRow) *airlockv1.BridgeInfo {
+	return bridgeFieldsToProto(
+		r.ID, r.AgentID, r.CreatedBy,
+		r.Type, r.Name, r.BotUsername, r.Status,
+		r.CreatedAt, r.UpdatedAt,
+		r.OwnerEmail, r.OwnerDisplayName,
+	)
 }
 
 func verifyAgentOwnership(ctx context.Context, database *db.DB, agentID, userID uuid.UUID) error {
