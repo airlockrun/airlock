@@ -536,32 +536,94 @@ func (h *conversationsHandler) Prompt(w http.ResponseWriter, r *http.Request) {
 	}()
 }
 
-// NotifyUpgradeComplete is called by the builder after a successful upgrade.
-// It injects a system message into the originating conversation and triggers
-// a new prompt turn so the upgraded agent can respond.
-func (h *conversationsHandler) NotifyUpgradeComplete(ctx context.Context, agentID uuid.UUID, conversationID, description string) error {
+// NotifyUpgradeComplete is called by the builder after an upgrade
+// finishes. Pushes the result into the conversation as a SINGLE
+// user-role message tagged source="upgrade" or source="error" — the
+// frontend renders by source (regardless of role) so it appears as the
+// special arrow / error bubble; meanwhile the LLM sees a clean user
+// turn it can respond to.
+//
+// We deliberately don't write a separate assistant bubble here. The
+// previous shape (assistant bubble + duplicate user prompt + LLM
+// reply) confused the LLM: it saw "an assistant message I never
+// wrote" and reacted by either re-running requestUpgrade or
+// disclaiming the result ("I can't honestly confirm that"). Sending
+// the result strictly as a user-side notification removes that
+// ambiguity.
+//
+// status: "success" or "error". message: the agent-provided exit
+// summary or the underlying failure reason.
+func (h *conversationsHandler) NotifyUpgradeComplete(ctx context.Context, agentID uuid.UUID, conversationID, status, message string) error {
 	h.convLocks.Lock(conversationID)
-	defer h.convLocks.Unlock(conversationID)
 
-	convUUID, _ := uuid.Parse(conversationID)
-	llmMessage := "[system] Upgrade complete: " + description + "\nBriefly confirm what's new — do not repeat the upgrade description verbatim."
+	source := "upgrade"
+	if status == "error" {
+		source = "error"
+	}
 
-	return postToConversation(ctx, postDeps{
-		DB:         h.db,
-		PubSub:     h.pubsub,
-		BridgeMgr:  h.bridgeMgr,
-		Dispatcher: h.dispatcher,
-		S3:         h.s3,
-		Logger:     h.logger,
-	}, postOpts{
-		AgentID:        agentID,
-		ConversationID: convUUID,
-		Role:           "system",
-		Text:           "Upgrade complete: " + description,
-		Source:         "system",
-		TriggerLLM:     true,
-		LLMMessage:     llmMessage,
-	})
+	// Tag the message so the LLM clearly understands the origin.
+	// Without this prefix the agent reads "Upgraded the Spotify
+	// agent..." as a user statement of fact and tries to verify it;
+	// with the prefix it understands this is a system-injected event.
+	prefix := "[Upgrade succeeded] "
+	if status == "error" {
+		prefix = "[Upgrade failed] "
+	}
+
+	llmText := prefix + message
+	input := agentsdk.PromptInput{
+		Message:        llmText,
+		ConversationID: conversationID,
+		Source:         source,
+	}
+
+	// Publish a NotificationEvent so the bubble renders live in the UI.
+	// SessionAppend writes the corresponding DB row asynchronously when
+	// the agent processes the prompt; on refresh the chat store loads
+	// from DB and the synthesized live row is replaced by the persisted
+	// one (matched by ordering, not ID, so no duplicate).
+	partsJSON, _ := json.Marshal([]agentsdk.DisplayPart{{Type: "text", Text: llmText}})
+	_ = h.pubsub.Publish(context.Background(), agentID, realtime.NewEnvelope("notification", agentID.String(), &airlockv1.NotificationEvent{
+		AgentId:        agentID.String(),
+		ConversationId: conversationID,
+		PartsJson:      string(partsJSON),
+		Source:         source,
+	}))
+
+	// Stream the agent's response in-process. The convLock is held until
+	// the stream drains so a concurrent user prompt waits its turn.
+	rc, runID, err := h.dispatcher.ForwardPrompt(context.Background(), agentID, input, nil)
+	if err != nil {
+		h.convLocks.Unlock(conversationID)
+		return err
+	}
+
+	go func() {
+		defer h.convLocks.Unlock(conversationID)
+		bgCtx := context.Background()
+		publishRunEvents(bgCtx, rc, h.pubsub, agentID, runID, conversationID, h.logger)
+
+		// Same CAS-protected fallback as the user-prompt path: if the
+		// agent never wrote a terminal status (timed out, died), mark
+		// the run "timeout"; the agent's own write — if it lands —
+		// wins via the WHERE status='running' guard.
+		bgQ := dbq.New(h.db.Pool())
+		if err := bgQ.UpdateRunStatus(bgCtx, dbq.UpdateRunStatusParams{
+			ID:     toPgUUID(runID),
+			Status: "timeout",
+		}); err != nil {
+			h.logger.Error("update upgrade run status", zap.Error(err))
+		}
+		costIn, costOut := runLLMCostRates(bgCtx, bgQ, toPgUUID(agentID))
+		if err := bgQ.UpdateRunLLMStats(bgCtx, dbq.UpdateRunLLMStatsParams{
+			RunID:      toPgUUID(runID),
+			CostInput:  costIn,
+			CostOutput: costOut,
+		}); err != nil {
+			h.logger.Error("aggregate upgrade run llm stats", zap.Error(err))
+		}
+	}()
+	return nil
 }
 
 // UploadFile handles POST /api/v1/agents/{agentID}/files — multipart file upload.

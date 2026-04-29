@@ -65,6 +65,26 @@ type Config struct {
 	AgentLibsExtPath  string // path containing goose/ templ/ dirs (third-party libs always sourced from the agent-builder image's baked /libs/). Set at startup by EnsureLibs; not read from env.
 	AgentLibsCacheDir string // base dir where extracted /libs/ from agent-builder image is cached. Subdir per image digest.
 
+	// AgentCodegenPath is where the build pipeline creates per-build temp
+	// directories for sparse checkouts and cache-warming scaffolds.
+	// AgentCodegenVolume is the Docker volume name that contains
+	// AgentCodegenPath and is also mounted into spawned sibling
+	// containers — required for docker-in-docker (airlock-in-container)
+	// deployments where bind-mounts of host paths don't work because
+	// airlock's filesystem is the container overlay, not the host.
+	//
+	// Both unset: dev-on-host behavior (MkdirTemp under /tmp, bind mount
+	// the resulting host path into siblings — daemon and airlock share
+	// the FS, so it just works).
+	//
+	// Both set: docker-compose mode. MkdirTemp goes inside the named
+	// volume, sibling containers mount the same volume by name. The
+	// daemon resolves both ends through the same managed volume so
+	// the absolute path airlock writes is the same path the sibling
+	// reads.
+	AgentCodegenPath   string
+	AgentCodegenVolume string
+
 	// --- Reverse proxy ---
 	ReverseProxyTrustedProxies string // comma-separated CIDRs, "*" = trust all (default: trust none)
 	ReverseProxyLimit          int    // how many proxy hops to trust in X-Forwarded-For (default: 1)
@@ -130,6 +150,13 @@ func Load() *Config {
 		AgentRegistryURL:  os.Getenv("AGENT_REGISTRY_URL"),
 		AgentLibsPath:     os.Getenv("AGENT_LIBS_PATH"),
 		AgentLibsCacheDir: envOr("AGENT_LIBS_CACHE_DIR", "/var/lib/airlock/libs"),
+
+		// Codegen workspace — see field doc above. Both empty by default
+		// so a `go run ./cmd/airlock` dev invocation keeps using /tmp +
+		// bind mounts. docker-compose.yml sets both to enable volume
+		// mode.
+		AgentCodegenPath:   os.Getenv("AGENT_CODEGEN_PATH"),
+		AgentCodegenVolume: os.Getenv("AGENT_CODEGEN_VOLUME"),
 
 		// Reverse proxy
 		ReverseProxyTrustedProxies: os.Getenv("REVERSE_PROXY_TRUSTED_PROXIES"),

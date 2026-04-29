@@ -31,8 +31,12 @@ export default defineConfig({
         target: 'http://localhost:8080',
         changeOrigin: true,
         bypass(req) {
-          // /auth/relay is a frontend SPA route, not a backend endpoint.
-          if (req.url?.startsWith('/auth/relay')) return req.url
+          // /auth/relay is the frontend SPA route; everything else under
+          // /auth (including /auth/relay-code, /auth/login, etc.) must
+          // proxy to the backend. Match the exact path so a string
+          // prefix doesn't swallow sibling endpoints.
+          const path = req.url?.split('?')[0]
+          if (path === '/auth/relay') return req.url
         },
       },
       '/ws': {

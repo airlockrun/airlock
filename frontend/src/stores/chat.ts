@@ -216,11 +216,27 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   function buildNotificationMessage(partsJson: string, source: string = 'notification'): AgentMessageInfo {
+    // Extract a plain-text summary from the parts so source-specific
+    // renderers (upgrade/error/system) that bind to msg.content show
+    // the body live, matching what the persisted DB row will return on
+    // refresh. Without this the live bubble renders empty until reload.
+    let content = ''
+    if (partsJson) {
+      try {
+        const parsed = JSON.parse(partsJson)
+        if (Array.isArray(parsed)) {
+          content = parsed
+            .filter((p: any) => p && p.type === 'text' && typeof p.text === 'string')
+            .map((p: any) => p.text)
+            .join('\n')
+        }
+      } catch { /* leave content empty */ }
+    }
     return {
       $typeName: 'airlock.v1.AgentMessageInfo',
       id: `notif-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       role: source === 'upload' ? 'user' : 'assistant',
-      content: '',
+      content,
       parts: partsJson,
       source,
       tokensIn: 0,

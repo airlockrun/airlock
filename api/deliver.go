@@ -53,16 +53,23 @@ func postToConversation(ctx context.Context, deps postDeps, opts postOpts) error
 		return err
 	}
 
-	// Serialize parts.
-	var partsJSON []byte
-	if len(opts.Parts) > 0 {
-		partsJSON, _ = json.Marshal(opts.Parts)
-	}
-
 	// Build text summary if not provided.
 	text := opts.Text
 	if text == "" && len(opts.Parts) > 0 {
 		text = extractTextSummary(opts.Parts)
+	}
+
+	// Serialize parts. If the caller passed only Text, synthesize a
+	// single text DisplayPart so the WS notification carries the body —
+	// otherwise the live bubble renders blank (only the persisted DB
+	// row has the content) until the page is refreshed.
+	parts := opts.Parts
+	if len(parts) == 0 && text != "" {
+		parts = []agentsdk.DisplayPart{{Type: "text", Text: text}}
+	}
+	var partsJSON []byte
+	if len(parts) > 0 {
+		partsJSON, _ = json.Marshal(parts)
 	}
 
 	// Store message in DB.

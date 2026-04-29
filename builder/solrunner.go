@@ -92,9 +92,34 @@ func (b *BuildService) runSolInProcess(ctx context.Context, opts solRunOpts) (*s
 			"TEST_DB_SCHEMA="+opts.TestDBSchema,
 		)
 	}
-	mounts := []dmount.Mount{
-		{Type: dmount.TypeBind, Source: opts.WorkDir, Target: "/workspace"},
+	// Workspace mount: in compose/docker-in-docker mode (when codegen
+	// volume is configured), mount the named volume that contains
+	// AgentCodegenPath so the daemon resolves both ends through the
+	// same managed volume — the sibling sees opts.WorkDir at the same
+	// absolute path airlock used. In dev/host mode, bind-mount
+	// opts.WorkDir at /workspace as before.
+	//
+	// agentDir is the working directory inside the sibling. Callers
+	// pass it as "/workspace/agents/{id}" expecting bind-mount mode;
+	// in volume mode we rewrite the /workspace prefix to the absolute
+	// workspace path.
+	var workspaceMount dmount.Mount
+	agentDir := opts.AgentDir
+	if b.cfg.AgentCodegenVolume != "" && b.cfg.AgentCodegenPath != "" {
+		workspaceMount = dmount.Mount{
+			Type:   dmount.TypeVolume,
+			Source: b.cfg.AgentCodegenVolume,
+			Target: filepath.Dir(b.cfg.AgentCodegenPath),
+		}
+		// Replace the conventional "/workspace" prefix with the actual
+		// path on the volume. agents/<id> joins to <workDir>/agents/<id>.
+		if strings.HasPrefix(agentDir, "/workspace") {
+			agentDir = opts.WorkDir + strings.TrimPrefix(agentDir, "/workspace")
+		}
+	} else {
+		workspaceMount = dmount.Mount{Type: dmount.TypeBind, Source: opts.WorkDir, Target: "/workspace"}
 	}
+	mounts := []dmount.Mount{workspaceMount}
 	// Dev: overlay the baked /libs with the live source tree so agentsdk
 	// edits are visible without rebuilding the agent-builder image.
 	// Prod (AgentLibsPath empty): the image's pinned /libs is authoritative.
@@ -111,7 +136,7 @@ func (b *BuildService) runSolInProcess(ctx context.Context, opts solRunOpts) (*s
 	tc, err := b.containers.StartToolserver(ctx, container.ToolserverOpts{
 		Image:   b.cfg.AgentBuilderImage,
 		Mounts:  mounts,
-		WorkDir: opts.AgentDir,
+		WorkDir: agentDir,
 		Env:     toolEnv,
 	})
 	if err != nil {
