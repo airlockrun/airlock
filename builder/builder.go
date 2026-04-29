@@ -117,6 +117,22 @@ func (b *BuildService) finishBuild(agentID string) {
 	b.mu.Unlock()
 }
 
+// makeCodegenTempDir creates a per-build scratch directory. In dev mode
+// (AgentCodegenPath empty) it falls back to /tmp like the older code path,
+// so `go run ./cmd/airlock` continues to work without compose. In compose
+// mode it creates the dir inside AgentCodegenPath, which lives inside the
+// shared named volume — this is what makes sibling-container bind mounts
+// resolve correctly under docker-in-docker.
+func (b *BuildService) makeCodegenTempDir(prefix string) (string, error) {
+	if b.cfg.AgentCodegenPath != "" {
+		if err := os.MkdirAll(b.cfg.AgentCodegenPath, 0o755); err != nil {
+			return "", fmt.Errorf("mkdir codegen path: %w", err)
+		}
+		return os.MkdirTemp(b.cfg.AgentCodegenPath, prefix)
+	}
+	return os.MkdirTemp("", prefix)
+}
+
 // CancelBuild cancels a running build/upgrade for the given agent.
 // Returns true if a build was running and cancelled.
 func (b *BuildService) CancelBuild(agentID string) bool {
@@ -442,7 +458,7 @@ func (b *BuildService) runBuildCodegen(ctx context.Context, q *dbq.Queries, agen
 	}
 
 	// Sparse checkout into a temp dir.
-	workDir, err := os.MkdirTemp("", "airlock-codegen-*")
+	workDir, err := b.makeCodegenTempDir("airlock-codegen-*")
 	if err != nil {
 		return "", fmt.Errorf("create temp dir: %w", err)
 	}

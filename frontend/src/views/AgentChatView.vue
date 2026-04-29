@@ -343,6 +343,21 @@ function formatTokens(n: number): string {
               <div style="margin-top: 0.25rem; font-size: 0.85rem">{{ msg.content }}</div>
             </div>
           </div>
+          <!-- Upgrade-success messages (single message synthesized by
+               airlock from the agent-builder's exit-tool summary; no
+               follow-up LLM turn fires). -->
+          <div
+            v-else-if="msg.source === 'upgrade'"
+            style="display: flex; justify-content: flex-start"
+          >
+            <div class="msg-bubble msg-system">
+              <div style="display: flex; align-items: center; gap: 0.5rem">
+                <i class="pi pi-arrow-circle-up" style="font-size: 0.7rem; opacity: 0.7" />
+                <span style="font-size: 0.7rem; text-transform: uppercase; opacity: 0.6">Upgrade</span>
+              </div>
+              <div style="margin-top: 0.25rem; font-size: 0.85rem; white-space: pre-wrap; word-break: break-word">{{ msg.content }}</div>
+            </div>
+          </div>
           <!-- Run-error messages (synthesized by airlock when a run completes
                with status=error). Persists across refresh, unlike the
                transient WS-driven banner that the chat store paints inline. -->

@@ -18,9 +18,17 @@ import (
 	"go.uber.org/zap"
 )
 
-// PostUpgradeNotifier is called after a successful upgrade to notify the originating conversation.
+// PostUpgradeNotifier is called after an upgrade finishes (success or
+// failure) to post a single message into the originating conversation.
+//
+// status is "success" or "error". message is the human-readable text to
+// surface — typically sourced from the agent-builder's exit tool on
+// success, or the underlying failure reason on error. The notifier
+// posts exactly ONE message and does not trigger a follow-up LLM turn —
+// the agent's own exit-tool summary already describes the outcome, so
+// re-prompting just produces redundant text.
 type PostUpgradeNotifier interface {
-	NotifyUpgradeComplete(ctx context.Context, agentID uuid.UUID, conversationID, description string) error
+	NotifyUpgradeComplete(ctx context.Context, agentID uuid.UUID, conversationID, status, message string) error
 }
 
 // UpgradeInput describes an upgrade request.
@@ -112,7 +120,8 @@ func (b *BuildService) RunUpgrade(_ context.Context, input UpgradeInput) {
 
 	b.events.PublishBuildEvent(ctx, agentUUID, buildUUID, "started", "")
 
-	if err := b.doUpgrade(ctx, q, input, build); err != nil {
+	successMsg, err := b.doUpgrade(ctx, q, input, build)
+	if err != nil {
 		event := "failed"
 		errMsg := err.Error()
 		if errors.Is(err, context.Canceled) {
@@ -126,6 +135,15 @@ func (b *BuildService) RunUpgrade(_ context.Context, input UpgradeInput) {
 			ErrorMessage:  errMsg,
 		})
 		b.events.PublishBuildEvent(dbCtx, agentUUID, buildUUID, event, errMsg)
+		// Surface the failure as a single conversation message too —
+		// previously the user only saw "still spinning" then nothing.
+		// Cancellation skips the notification (the cancel button toast
+		// already covered it).
+		if event != "cancelled" && input.ConversationID != "" && b.upgradeNotifier != nil {
+			if nerr := b.upgradeNotifier.NotifyUpgradeComplete(dbCtx, agentUUID, input.ConversationID, "error", errMsg); nerr != nil {
+				b.logger.Error("post-upgrade error notification failed", zap.Error(nerr))
+			}
+		}
 		return
 	}
 
@@ -137,15 +155,29 @@ func (b *BuildService) RunUpgrade(_ context.Context, input UpgradeInput) {
 		ErrorMessage:  "",
 	})
 
-	// Notify the originating conversation so the upgraded agent can respond.
+	// Notify the originating conversation. Single message — the
+	// agent-builder's exit tool already produced the user-facing summary
+	// (successMsg), so no LLM follow-up turn is needed.
 	if input.ConversationID != "" && b.upgradeNotifier != nil {
-		if err := b.upgradeNotifier.NotifyUpgradeComplete(dbCtx, agentUUID, input.ConversationID, input.Description); err != nil {
+		// Fall back to the user's original description if the agent
+		// somehow returned an empty exit message (shouldn't happen with
+		// the nudge loop, but cheap defense).
+		msg := successMsg
+		if msg == "" {
+			msg = "Upgrade complete: " + input.Description
+		}
+		if err := b.upgradeNotifier.NotifyUpgradeComplete(dbCtx, agentUUID, input.ConversationID, "success", msg); err != nil {
 			b.logger.Error("post-upgrade notification failed", zap.Error(err))
 		}
 	}
 }
 
-func (b *BuildService) doUpgrade(ctx context.Context, q *dbq.Queries, input UpgradeInput, build dbq.AgentBuild) error {
+// doUpgrade returns the agent-builder's exit-tool success message
+// alongside the err. Caller plumbs successMsg into the conversation
+// notification so the user sees the agent's own summary of what
+// changed instead of the canned "Upgrade complete: <description>" we
+// used to post.
+func (b *BuildService) doUpgrade(ctx context.Context, q *dbq.Queries, input UpgradeInput, build dbq.AgentBuild) (string, error) {
 	agentPgUUID := mustParseUUID(input.AgentID)
 	agentID := input.AgentID
 	repoPath := b.cfg.AgentMonorepoPath
@@ -154,7 +186,7 @@ func (b *BuildService) doUpgrade(ctx context.Context, q *dbq.Queries, input Upgr
 	// Load full agent record
 	agent, err := q.GetAgentByID(ctx, agentPgUUID)
 	if err != nil {
-		return fmt.Errorf("get agent: %w", err)
+		return "", fmt.Errorf("get agent: %w", err)
 	}
 
 	agentUUID, _ := uuid.Parse(agentID)
@@ -176,7 +208,7 @@ func (b *BuildService) doUpgrade(ctx context.Context, q *dbq.Queries, input Upgr
 	sourceSchema := fmt.Sprintf("agent_%s", sanitizeUUID(agentID))
 	cloneName := fmt.Sprintf("agent_%s_upgrade_%s", sanitizeUUID(agentID), sanitizeUUID(input.RunID))
 	if err := b.cloneSchema(ctx, sourceSchema, cloneName, sourceSchema); err != nil {
-		return fmt.Errorf("clone schema: %w", err)
+		return "", fmt.Errorf("clone schema: %w", err)
 	}
 	defer func() {
 		if err := b.dropSchemaClone(ctx, cloneName); err != nil {
@@ -189,44 +221,42 @@ func (b *BuildService) doUpgrade(ctx context.Context, q *dbq.Queries, input Upgr
 	json.Unmarshal(agent.Config, &agentConfig)
 	dbPassword, err := b.encryptor.Decrypt(agentConfig["db_password"])
 	if err != nil {
-		return fmt.Errorf("decrypt db password: %w", err)
+		return "", fmt.Errorf("decrypt db password: %w", err)
 	}
 	testDBURL := b.agentDBURL(sourceSchema, dbPassword, cloneName)
 
 	// Step 3: Create upgrade branch
 	if err := CreateUpgradeBranch(repoPath, agentID, input.RunID); err != nil {
-		return fmt.Errorf("create upgrade branch: %w", err)
+		return "", fmt.Errorf("create upgrade branch: %w", err)
 	}
 
 	// Step 4: Sparse checkout
-	workDir, err := os.MkdirTemp("", "airlock-upgrade-*")
+	workDir, err := b.makeCodegenTempDir("airlock-upgrade-*")
 	if err != nil {
-		return fmt.Errorf("create temp dir: %w", err)
+		return "", fmt.Errorf("create temp dir: %w", err)
 	}
 	defer os.RemoveAll(workDir)
 
 	branch := fmt.Sprintf("upgrade/%s/%s", agentID, input.RunID)
 	if err := SparseCheckout(repoPath, branch, agentID, workDir); err != nil {
-		return fmt.Errorf("sparse checkout: %w", err)
+		return "", fmt.Errorf("sparse checkout: %w", err)
 	}
 
 	// Step 5: Write upgrade spec
 	agentDir := filepath.Join(workDir, "agents", agentID)
 	if err := b.writeUpgradeSpec(agentDir, agent, input); err != nil {
-		return fmt.Errorf("write upgrade spec: %w", err)
+		return "", fmt.Errorf("write upgrade spec: %w", err)
 	}
 
 	if ctx.Err() != nil {
 		completeBuild("cancelled", "cancelled by user", "", "")
-		return ctx.Err()
+		return "", ctx.Err()
 	}
 
-	// Step 6: Run Sol
-	if agent.BuildModel == "" {
-		completeBuild("failed", "build_model is required", "", "")
-		return errors.New("build_model is required — update the agent's build model before upgrading")
-	}
-
+	// Step 6: Run Sol. Pass the agent's build model verbatim — empty
+	// string is fine, runSolInProcess falls back to the system-wide
+	// default (settings.default_build_model) when no per-agent override
+	// is set.
 	logLine := func(line string) {
 		seq := bl.appendSol(line)
 		b.events.PublishBuildLogLine(ctx, agentUUID, buildUUID, seq, "sol", line)
@@ -244,7 +274,7 @@ func (b *BuildService) doUpgrade(ctx context.Context, q *dbq.Queries, input Upgr
 	})
 	if err != nil {
 		completeBuild("failed", err.Error(), "", "")
-		return fmt.Errorf("sol upgrade: %w", err)
+		return "", fmt.Errorf("sol upgrade: %w", err)
 	}
 
 	// Step 7: Check result. Same exit-tool mapping as runBuildCodegen —
@@ -253,7 +283,7 @@ func (b *BuildService) doUpgrade(ctx context.Context, q *dbq.Queries, input Upgr
 		if solResult.Status == sol.RunCompleted {
 			b.logger.Error("sol upgrade did not call exit tool")
 			completeBuild("failed", "agent did not call the exit tool", "", "")
-			return errors.New("upgrade failed: agent did not call the exit tool")
+			return "", errors.New("upgrade failed: agent did not call the exit tool")
 		}
 		errMsg := "unknown error"
 		if solResult.Error != nil {
@@ -262,33 +292,36 @@ func (b *BuildService) doUpgrade(ctx context.Context, q *dbq.Queries, input Upgr
 		b.logger.Error("sol upgrade failed", zap.String("status", string(solResult.Status)), zap.String("error", errMsg))
 		completeBuild("failed", errMsg, "", "")
 		if solResult.Error != nil {
-			return fmt.Errorf("upgrade failed: %w", solResult.Error)
+			return "", fmt.Errorf("upgrade failed: %w", solResult.Error)
 		}
-		return errors.New("upgrade failed")
+		return "", errors.New("upgrade failed")
 	}
 	if solResult.ExitStatus != "success" {
 		b.logger.Error("sol upgrade reported error", zap.String("message", solResult.ExitMessage))
 		completeBuild("failed", solResult.ExitMessage, "", "")
-		return fmt.Errorf("upgrade failed: %s", solResult.ExitMessage)
+		// Return the exit message verbatim — the conversation
+		// notification reads err.Error() and surfaces it as the
+		// "agent reports it failed because…" line for the user.
+		return "", errors.New(solResult.ExitMessage)
 	}
 
 	// Step 9: Commit and push
 	hash, err := CommitAndPush(workDir, fmt.Sprintf("upgrade agent %s: %s", agentID, input.Reason))
 	if err != nil {
 		completeBuild("failed", err.Error(), "", "")
-		return fmt.Errorf("commit upgrade: %w", err)
+		return "", fmt.Errorf("commit upgrade: %w", err)
 	}
 	b.logger.Info("upgrade committed", zap.String("commit", hash))
 
 	// Step 10: Merge
 	if err := MergeBranch(repoPath, branch); err != nil {
 		completeBuild("failed", err.Error(), "", "")
-		return fmt.Errorf("merge upgrade: %w", err)
+		return "", fmt.Errorf("merge upgrade: %w", err)
 	}
 
 	if ctx.Err() != nil {
 		completeBuild("cancelled", "cancelled by user", hash, "")
-		return ctx.Err()
+		return "", ctx.Err()
 	}
 
 	// Step 11: Build image
@@ -300,14 +333,14 @@ func (b *BuildService) doUpgrade(ctx context.Context, q *dbq.Queries, input Upgr
 		AgentSDKVersion: "v" + agentsdk.Version,
 	}); err != nil {
 		completeBuild("failed", err.Error(), hash, "")
-		return fmt.Errorf("generate Dockerfile: %w", err)
+		return "", fmt.Errorf("generate Dockerfile: %w", err)
 	}
 	// Bump the agent's go.mod require line to the current SDK version so
 	// gopls/editor tooling shows what the build is actually linking against
 	// (the replace directive shadows it for compilation).
 	if err := bumpAgentSDKRequire(ctx, contextDir, agentsdk.Version); err != nil {
 		completeBuild("failed", err.Error(), hash, "")
-		return fmt.Errorf("bump agent SDK require: %w", err)
+		return "", fmt.Errorf("bump agent SDK require: %w", err)
 	}
 	imageTag, err := buildImage(ctx, b.cfg, agentID, contextDir, hash, func(line string) {
 		seq := bl.appendDocker(line)
@@ -315,19 +348,19 @@ func (b *BuildService) doUpgrade(ctx context.Context, q *dbq.Queries, input Upgr
 	})
 	if err != nil {
 		completeBuild("failed", err.Error(), hash, "")
-		return fmt.Errorf("build image: %w", err)
+		return "", fmt.Errorf("build image: %w", err)
 	}
 
 	// Validate migrations against the clone schema by running the new image.
 	upgradeTestDBURL := b.agentDBURL(sourceSchema, dbPassword, cloneName)
 	if err := b.validateMigrations(ctx, imageTag, upgradeTestDBURL, logLine); err != nil {
 		completeBuild("failed", err.Error(), hash, imageTag)
-		return fmt.Errorf("migration validation: %w", err)
+		return "", fmt.Errorf("migration validation: %w", err)
 	}
 
 	if ctx.Err() != nil {
 		completeBuild("cancelled", "cancelled by user", hash, imageTag)
-		return ctx.Err()
+		return "", ctx.Err()
 	}
 
 	// Stop old container
@@ -340,7 +373,7 @@ func (b *BuildService) doUpgrade(ctx context.Context, q *dbq.Queries, input Upgr
 	agentToken, err := auth.IssueAgentToken(b.cfg.JWTSecret, agentUUID)
 	if err != nil {
 		completeBuild("failed", err.Error(), hash, imageTag)
-		return fmt.Errorf("issue agent token: %w", err)
+		return "", fmt.Errorf("issue agent token: %w", err)
 	}
 	agentDBURL := b.agentDBURL(schemaName, dbPassword, schemaName)
 	_, err = b.containers.StartAgent(ctx, container.AgentOpts{
@@ -355,7 +388,7 @@ func (b *BuildService) doUpgrade(ctx context.Context, q *dbq.Queries, input Upgr
 	})
 	if err != nil {
 		completeBuild("failed", err.Error(), hash, imageTag)
-		return fmt.Errorf("start upgraded agent: %w", err)
+		return "", fmt.Errorf("start upgraded agent: %w", err)
 	}
 
 	// Update refs
@@ -364,9 +397,9 @@ func (b *BuildService) doUpgrade(ctx context.Context, q *dbq.Queries, input Upgr
 		SourceRef: hash,
 		ImageRef:  imageTag,
 	}); err != nil {
-		return fmt.Errorf("update refs: %w", err)
+		return "", fmt.Errorf("update refs: %w", err)
 	}
 
 	completeBuild("complete", "", hash, imageTag)
-	return nil
+	return solResult.ExitMessage, nil
 }

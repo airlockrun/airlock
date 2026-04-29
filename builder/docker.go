@@ -64,7 +64,7 @@ func buildImage(ctx context.Context, cfg *config.Config, agentID, contextDir, co
 // docker build (same Dockerfile.tmpl + go.mod.tmpl as real builds), then
 // removes the throwaway image. The cache mounts persist.
 func (b *BuildService) WarmBuildCache(ctx context.Context) {
-	dir, err := os.MkdirTemp("", "airlock-cache-warm-*")
+	dir, err := b.makeCodegenTempDir("airlock-cache-warm-*")
 	if err != nil {
 		b.logger.Warn("warm cache: create temp dir", zap.Error(err))
 		return
@@ -144,7 +144,7 @@ func (b *BuildService) WarmRuntimeCaches(ctx context.Context) {
 		return
 	}
 
-	dir, err := os.MkdirTemp("", "airlock-runtime-warm-*")
+	dir, err := b.makeCodegenTempDir("airlock-runtime-warm-*")
 	if err != nil {
 		b.logger.Warn("warm runtime caches: create temp dir", zap.Error(err))
 		return
@@ -172,6 +172,23 @@ func (b *BuildService) WarmRuntimeCaches(ctx context.Context) {
 	uid := os.Getuid()
 	gid := os.Getgid()
 
+	// Workspace mount: in compose/docker-in-docker mode, mount the named
+	// volume that contains AgentCodegenPath so the daemon resolves both
+	// ends through the same managed volume; the sibling sees `dir` at
+	// the same absolute path airlock used. In dev/host mode, bind-mount
+	// `dir` at /workspace as before.
+	var workspaceMount, workspaceDir string
+	if b.cfg.AgentCodegenVolume != "" && b.cfg.AgentCodegenPath != "" {
+		// Mount the volume at the parent of AgentCodegenPath (i.e.
+		// /var/lib/airlock when path is /var/lib/airlock/codegen) so
+		// the absolute path stays valid.
+		workspaceMount = b.cfg.AgentCodegenVolume + ":" + filepath.Dir(b.cfg.AgentCodegenPath)
+		workspaceDir = dir
+	} else {
+		workspaceMount = dir + ":/workspace"
+		workspaceDir = "/workspace"
+	}
+
 	args := []string{
 		"run", "--rm",
 		"--user", fmt.Sprintf("%d:%d", uid, gid),
@@ -185,8 +202,8 @@ func (b *BuildService) WarmRuntimeCaches(ctx context.Context) {
 		"-e", "GOSUMDB=off",
 		"-v", "airlock-go-mod-cache:/tmp/go-mod",
 		"-v", "airlock-go-build-cache:/tmp/go-cache",
-		"-v", dir + ":/workspace",
-		"-w", "/workspace",
+		"-v", workspaceMount,
+		"-w", workspaceDir,
 	}
 	// Dev: overlay the live owned libs the same way solrunner does so the
 	// go.mod replace directives resolve to the dev tree, not the image's
