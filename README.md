@@ -21,6 +21,35 @@ If "Heroku for cyborg agents, but I run it myself" lands, that's the shape.
 - Ports 80 and 443 reachable from the public internet
 - ~2 GB RAM, ~10 GB disk for a small install (more as agents and conversation history grow)
 
+<details>
+<summary>Don't have these set up yet? Click for install pointers.</summary>
+
+**Docker + Compose v2** — install per [Docker's official guide](https://docs.docker.com/engine/install/) (covers Ubuntu, Debian, RHEL, Fedora, etc.). Compose v2 ships as a plugin alongside Docker Engine since 2022; the install guide includes it. On a fresh Ubuntu/Debian server, the [convenience script](https://docs.docker.com/engine/install/ubuntu/#install-using-the-convenience-script) is the fastest path:
+
+```bash
+curl -fsSL https://get.docker.com | sudo sh
+sudo usermod -aG docker $USER     # then log out/in so the group takes effect
+docker compose version            # verify
+```
+
+Docker Desktop on macOS / Windows works for poking around but isn't suitable for a real self-host — you want a Linux server.
+
+**Firewall (ports 80 + 443)** — on Ubuntu with UFW:
+
+```bash
+sudo ufw allow 80/tcp
+sudo ufw allow 443/tcp
+sudo ufw status
+```
+
+Cloud providers (DigitalOcean, Hetzner, AWS, GCP, etc.) usually have their own firewall layer in addition to the OS — check their dashboard/security-group settings for the same two ports.
+
+**Domain + wildcard DNS** — at your DNS provider (Cloudflare, Namecheap, Route 53, etc.), add an `A` record where the **name** field is `*.airlock` (or `*` if airlock.example.com is the apex) and the **value** is your server's public IP. The wildcard covers per-agent subdomains like `myagent.airlock.example.com` automatically. Cloudflare has a [walkthrough](https://developers.cloudflare.com/dns/manage-dns-records/how-to/create-dns-records/) that maps cleanly to other providers' UIs.
+
+Verify with `dig +short anything.airlock.example.com` once propagation completes (usually 1-5 min).
+
+</details>
+
 **Steps:**
 
 ```bash
