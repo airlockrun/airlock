@@ -2259,30 +2259,33 @@ func (x *AgentSyncedEvent) GetAgentId() string {
 	return ""
 }
 
-// FileEntry represents a stored file.
-type FileEntry struct {
+// FileInfo describes a file in agent storage. Returned by listDir / statFile /
+// writeFile (in run_js) and embedded in PromptRequest for chat uploads.
+type FileInfo struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Path          string                 `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
-	Size          int64                  `protobuf:"varint,2,opt,name=size,proto3" json:"size,omitempty"`
-	LastModified  string                 `protobuf:"bytes,3,opt,name=last_modified,json=lastModified,proto3" json:"last_modified,omitempty"`
+	Path          string                 `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`         // absolute, e.g. "/uploads/foo.png"
+	Filename      string                 `protobuf:"bytes,2,opt,name=filename,proto3" json:"filename,omitempty"` // original upload name; preserved as S3 metadata
+	ContentType   string                 `protobuf:"bytes,3,opt,name=content_type,json=contentType,proto3" json:"content_type,omitempty"`
+	Size          int64                  `protobuf:"varint,4,opt,name=size,proto3" json:"size,omitempty"`
+	LastModified  string                 `protobuf:"bytes,5,opt,name=last_modified,json=lastModified,proto3" json:"last_modified,omitempty"` // RFC3339
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *FileEntry) Reset() {
-	*x = FileEntry{}
+func (x *FileInfo) Reset() {
+	*x = FileInfo{}
 	mi := &file_airlock_v1_types_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *FileEntry) String() string {
+func (x *FileInfo) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*FileEntry) ProtoMessage() {}
+func (*FileInfo) ProtoMessage() {}
 
-func (x *FileEntry) ProtoReflect() protoreflect.Message {
+func (x *FileInfo) ProtoReflect() protoreflect.Message {
 	mi := &file_airlock_v1_types_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -2294,26 +2297,40 @@ func (x *FileEntry) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use FileEntry.ProtoReflect.Descriptor instead.
-func (*FileEntry) Descriptor() ([]byte, []int) {
+// Deprecated: Use FileInfo.ProtoReflect.Descriptor instead.
+func (*FileInfo) Descriptor() ([]byte, []int) {
 	return file_airlock_v1_types_proto_rawDescGZIP(), []int{22}
 }
 
-func (x *FileEntry) GetPath() string {
+func (x *FileInfo) GetPath() string {
 	if x != nil {
 		return x.Path
 	}
 	return ""
 }
 
-func (x *FileEntry) GetSize() int64 {
+func (x *FileInfo) GetFilename() string {
+	if x != nil {
+		return x.Filename
+	}
+	return ""
+}
+
+func (x *FileInfo) GetContentType() string {
+	if x != nil {
+		return x.ContentType
+	}
+	return ""
+}
+
+func (x *FileInfo) GetSize() int64 {
 	if x != nil {
 		return x.Size
 	}
 	return 0
 }
 
-func (x *FileEntry) GetLastModified() string {
+func (x *FileInfo) GetLastModified() string {
 	if x != nil {
 		return x.LastModified
 	}
@@ -2745,11 +2762,13 @@ const file_airlock_v1_types_proto_rawDesc = "" +
 	"\x06stream\x18\x04 \x01(\tR\x06stream\x12\x12\n" +
 	"\x04line\x18\x05 \x01(\tR\x04line\"-\n" +
 	"\x10AgentSyncedEvent\x12\x19\n" +
-	"\bagent_id\x18\x01 \x01(\tR\aagentId\"X\n" +
-	"\tFileEntry\x12\x12\n" +
-	"\x04path\x18\x01 \x01(\tR\x04path\x12\x12\n" +
-	"\x04size\x18\x02 \x01(\x03R\x04size\x12#\n" +
-	"\rlast_modified\x18\x03 \x01(\tR\flastModified\"q\n" +
+	"\bagent_id\x18\x01 \x01(\tR\aagentId\"\x96\x01\n" +
+	"\bFileInfo\x12\x12\n" +
+	"\x04path\x18\x01 \x01(\tR\x04path\x12\x1a\n" +
+	"\bfilename\x18\x02 \x01(\tR\bfilename\x12!\n" +
+	"\fcontent_type\x18\x03 \x01(\tR\vcontentType\x12\x12\n" +
+	"\x04size\x18\x04 \x01(\x03R\x04size\x12#\n" +
+	"\rlast_modified\x18\x05 \x01(\tR\flastModified\"q\n" +
 	"\tTopicInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04slug\x18\x02 \x01(\tR\x04slug\x12 \n" +
@@ -2822,7 +2841,7 @@ var file_airlock_v1_types_proto_goTypes = []any{
 	(*AgentBuildEvent)(nil),        // 21: airlock.v1.AgentBuildEvent
 	(*AgentBuildLogEvent)(nil),     // 22: airlock.v1.AgentBuildLogEvent
 	(*AgentSyncedEvent)(nil),       // 23: airlock.v1.AgentSyncedEvent
-	(*FileEntry)(nil),              // 24: airlock.v1.FileEntry
+	(*FileInfo)(nil),               // 24: airlock.v1.FileInfo
 	(*TopicInfo)(nil),              // 25: airlock.v1.TopicInfo
 	(*SystemSettingsInfo)(nil),     // 26: airlock.v1.SystemSettingsInfo
 	(*structpb.Struct)(nil),        // 27: google.protobuf.Struct

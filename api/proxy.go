@@ -72,15 +72,14 @@ func SubdomainProxy(agentDomain string, database *db.DB, s3 *storage.S3Client, d
 		}
 		agentID := pgUUID(agent.ID)
 
-		// Storage zone reads under the agent's subdomain. Intercepted
-		// before route resolution so a builder's RegisterRoute("/__air/...")
-		// can never claim this prefix. Auth check matches the zone's
+		// Directory reads under the agent's subdomain. Intercepted before
+		// route resolution so a builder's RegisterRoute("/__air/...")
+		// can never claim this prefix. Auth check matches the directory's
 		// read_access — public serves unauth, user/admin require subdomain
 		// session cookie (rejectOrRedirect on miss kicks off login flow).
 		if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/__air/storage/") {
-			rest := strings.TrimPrefix(r.URL.Path, "/__air/storage/")
-			zoneSlug, key, _ := strings.Cut(rest, "/")
-			serveStorageZone(w, r, database, s3, agentID, zoneSlug, key, jwtSecret, publicURL, log)
+			path := strings.TrimPrefix(r.URL.Path, "/__air/storage")
+			serveStoragePath(w, r, database, s3, agentID, path, jwtSecret, publicURL, log)
 			return
 		}
 

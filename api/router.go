@@ -426,7 +426,6 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		r.Post("/run/complete", ah.RunComplete)
 		r.Get("/run/{runID}/checkpoint", ah.GetCheckpoint)
 		r.Post("/upgrade", ah.Upgrade)
-		r.Get("/files/{fileID}", ah.GetAttachment)
 		r.Post("/print", ah.Print)
 		r.Post("/topic/{slug}/subscribe", ah.TopicSubscribe)
 		r.Delete("/topic/{slug}/subscribe", ah.TopicUnsubscribe)

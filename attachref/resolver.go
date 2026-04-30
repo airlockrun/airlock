@@ -258,13 +258,21 @@ func ResolveForLLM(ctx context.Context, s3 *storage.S3Client, q *dbq.Queries, ag
 	return nil
 }
 
-// canonicalize ensures `llm/agents/<agentID>/K` exists in S3 and returns
-// the canonical key. On first miss it fetches the original from
-// `agents/<agentID>/K`, preprocesses (if image), and PUTs the derived blob.
-// Returns the canonical key and the (possibly updated) MIME type.
+// canonicalize ensures `llm/agents/<agentID><path>` exists in S3 and
+// returns the canonical key. On first miss it fetches the original from
+// `agents/<agentID><path>`, preprocesses (if image), and PUTs the derived
+// blob. Returns the canonical key and the (possibly updated) MIME type.
+//
+// `key` is either an absolute agent path (the new shape, e.g.
+// "/tmp/foo.png") or a legacy "tmp/foo.png" form. We normalize by ensuring
+// exactly one '/' between "agents/<id>" and the rest.
 func canonicalize(ctx context.Context, s3 *storage.S3Client, agentID uuid.UUID, key, hintMime string) (string, string, error) {
-	origKey := "agents/" + agentID.String() + "/" + key
-	canonicalKey := "llm/agents/" + agentID.String() + "/" + key
+	rest := key
+	if !strings.HasPrefix(rest, "/") {
+		rest = "/" + rest
+	}
+	origKey := "agents/" + agentID.String() + rest
+	canonicalKey := "llm/agents/" + agentID.String() + rest
 
 	// Fast path: already canonical.
 	if _, mime, err := s3.HeadObject(ctx, canonicalKey); err == nil {

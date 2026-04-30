@@ -2360,7 +2360,7 @@ type PromptRequest struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	ConversationId string                 `protobuf:"bytes,1,opt,name=conversation_id,json=conversationId,proto3" json:"conversation_id,omitempty"`
 	Message        string                 `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"`
-	FileIds        []string               `protobuf:"bytes,3,rep,name=file_ids,json=fileIds,proto3" json:"file_ids,omitempty"`
+	FilePaths      []string               `protobuf:"bytes,3,rep,name=file_paths,json=filePaths,proto3" json:"file_paths,omitempty"`
 	Approved       *bool                  `protobuf:"varint,4,opt,name=approved,proto3,oneof" json:"approved,omitempty"` // Set by UI when responding to a confirmation request.
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
@@ -2410,9 +2410,9 @@ func (x *PromptRequest) GetMessage() string {
 	return ""
 }
 
-func (x *PromptRequest) GetFileIds() []string {
+func (x *PromptRequest) GetFilePaths() []string {
 	if x != nil {
-		return x.FileIds
+		return x.FilePaths
 	}
 	return nil
 }
@@ -3559,7 +3559,7 @@ func (x *LinkIdentityPreviewResponse) GetCurrentUserEmail() string {
 
 type ListFilesResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Files         []*FileEntry           `protobuf:"bytes,1,rep,name=files,proto3" json:"files,omitempty"`
+	Files         []*FileInfo            `protobuf:"bytes,1,rep,name=files,proto3" json:"files,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3594,7 +3594,7 @@ func (*ListFilesResponse) Descriptor() ([]byte, []int) {
 	return file_airlock_v1_api_proto_rawDescGZIP(), []int{65}
 }
 
-func (x *ListFilesResponse) GetFiles() []*FileEntry {
+func (x *ListFilesResponse) GetFiles() []*FileInfo {
 	if x != nil {
 		return x.Files
 	}
@@ -4106,11 +4106,12 @@ const file_airlock_v1_api_proto_rawDesc = "" +
 	"\ftool_call_id\x18\x01 \x01(\tR\n" +
 	"toolCallId\x12\x1b\n" +
 	"\ttool_name\x18\x02 \x01(\tR\btoolName\x12\x14\n" +
-	"\x05input\x18\x03 \x01(\tR\x05input\"\x9b\x01\n" +
+	"\x05input\x18\x03 \x01(\tR\x05input\"\x9f\x01\n" +
 	"\rPromptRequest\x12'\n" +
 	"\x0fconversation_id\x18\x01 \x01(\tR\x0econversationId\x12\x18\n" +
-	"\amessage\x18\x02 \x01(\tR\amessage\x12\x19\n" +
-	"\bfile_ids\x18\x03 \x03(\tR\afileIds\x12\x1f\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\x12\x1d\n" +
+	"\n" +
+	"file_paths\x18\x03 \x03(\tR\tfilePaths\x12\x1f\n" +
 	"\bapproved\x18\x04 \x01(\bH\x00R\bapproved\x88\x01\x01B\v\n" +
 	"\t_approved\"u\n" +
 	"\x0ePromptResponse\x12\x15\n" +
@@ -4186,9 +4187,9 @@ const file_airlock_v1_api_proto_rawDesc = "" +
 	"\x10platform_user_id\x18\x04 \x01(\tR\x0eplatformUserId\x12+\n" +
 	"\x11platform_username\x18\x05 \x01(\tR\x10platformUsername\x122\n" +
 	"\x15platform_display_name\x18\x06 \x01(\tR\x13platformDisplayName\x12,\n" +
-	"\x12current_user_email\x18\a \x01(\tR\x10currentUserEmail\"@\n" +
-	"\x11ListFilesResponse\x12+\n" +
-	"\x05files\x18\x01 \x03(\v2\x15.airlock.v1.FileEntryR\x05files\"E\n" +
+	"\x12current_user_email\x18\a \x01(\tR\x10currentUserEmail\"?\n" +
+	"\x11ListFilesResponse\x12*\n" +
+	"\x05files\x18\x01 \x03(\v2\x14.airlock.v1.FileInfoR\x05files\"E\n" +
 	"\x12UploadFileResponse\x12\x1d\n" +
 	"\n" +
 	"upload_url\x18\x01 \x01(\tR\tuploadUrl\x12\x10\n" +
@@ -4316,7 +4317,7 @@ var file_airlock_v1_api_proto_goTypes = []any{
 	(*BridgeInfo)(nil),                     // 90: airlock.v1.BridgeInfo
 	(*ProviderCapabilityInfo)(nil),         // 91: airlock.v1.ProviderCapabilityInfo
 	(*PlatformIdentityInfo)(nil),           // 92: airlock.v1.PlatformIdentityInfo
-	(*FileEntry)(nil),                      // 93: airlock.v1.FileEntry
+	(*FileInfo)(nil),                       // 93: airlock.v1.FileInfo
 	(*TopicInfo)(nil),                      // 94: airlock.v1.TopicInfo
 	(*SystemSettingsInfo)(nil),             // 95: airlock.v1.SystemSettingsInfo
 }
@@ -4365,7 +4366,7 @@ var file_airlock_v1_api_proto_depIdxs = []int32{
 	90, // 41: airlock.v1.ListBridgesResponse.bridges:type_name -> airlock.v1.BridgeInfo
 	91, // 42: airlock.v1.ListCapabilitiesResponse.providers:type_name -> airlock.v1.ProviderCapabilityInfo
 	92, // 43: airlock.v1.ListPlatformIdentitiesResponse.identities:type_name -> airlock.v1.PlatformIdentityInfo
-	93, // 44: airlock.v1.ListFilesResponse.files:type_name -> airlock.v1.FileEntry
+	93, // 44: airlock.v1.ListFilesResponse.files:type_name -> airlock.v1.FileInfo
 	94, // 45: airlock.v1.ListTopicsResponse.topics:type_name -> airlock.v1.TopicInfo
 	95, // 46: airlock.v1.GetSystemSettingsResponse.settings:type_name -> airlock.v1.SystemSettingsInfo
 	95, // 47: airlock.v1.UpdateSystemSettingsRequest.settings:type_name -> airlock.v1.SystemSettingsInfo

@@ -33,6 +33,7 @@ type ObjectInfo struct {
 	Key          string
 	Size         int64
 	LastModified time.Time
+	Metadata     map[string]string // user-defined S3 metadata (X-Amz-Meta-*)
 }
 
 // NewS3Client creates an S3Client from config. Panics if S3URL is empty.
@@ -128,6 +129,14 @@ func (c *S3Client) EnsureBucket(ctx context.Context) error {
 // PutObject uploads data from a reader to the given key.
 // If the reader is not seekable, it is buffered into memory first.
 func (c *S3Client) PutObject(ctx context.Context, key string, reader io.Reader, size int64) error {
+	return c.PutObjectWithMetadata(ctx, key, reader, size, nil)
+}
+
+// PutObjectWithMetadata is the same as PutObject but persists user-defined
+// metadata (X-Amz-Meta-*) on the stored object. The "filename" key carries
+// the original upload filename — surfaced via HeadObject.Metadata. The
+// "content-type" key, if set, overrides the auto-detected Content-Type.
+func (c *S3Client) PutObjectWithMetadata(ctx context.Context, key string, reader io.Reader, size int64, meta map[string]string) error {
 	// AWS SDK v2 requires seekable bodies for hash computation over plain HTTP.
 	// Buffer non-seekable readers (e.g. HTTP request bodies) into bytes.
 	// We always buffer so we can sniff the content type from the first 512 bytes.
@@ -139,12 +148,29 @@ func (c *S3Client) PutObject(ctx context.Context, key string, reader io.Reader, 
 	body := bytes.NewReader(data)
 
 	ct := http.DetectContentType(data)
+	if override, ok := meta["content-type"]; ok && override != "" {
+		ct = override
+	}
+
+	// Build user-metadata map (excluding "content-type" which goes into
+	// the standard header instead of X-Amz-Meta-*).
+	var userMeta map[string]string
+	if len(meta) > 0 {
+		userMeta = make(map[string]string, len(meta))
+		for k, v := range meta {
+			if k == "content-type" {
+				continue
+			}
+			userMeta[k] = v
+		}
+	}
 
 	input := &s3.PutObjectInput{
 		Bucket:      &c.bucket,
 		Key:         &key,
 		Body:        body,
 		ContentType: &ct,
+		Metadata:    userMeta,
 	}
 	if size >= 0 {
 		input.ContentLength = &size
@@ -186,6 +212,7 @@ func (c *S3Client) HeadObject(ctx context.Context, key string) (ObjectInfo, stri
 		Key:          key,
 		Size:         *out.ContentLength,
 		LastModified: lastMod,
+		Metadata:     out.Metadata,
 	}, contentType, nil
 }
 

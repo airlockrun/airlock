@@ -91,7 +91,6 @@ anchor/            Anchor container support
 - `GET|POST|PUT session/{convID}/messages` — conversation history (SessionStore)
 - `POST run/complete`, `GET run/{runID}/checkpoint` — run lifecycle
 - `POST publish`, `POST|DELETE subscribe` — topic pub/sub
-- `GET files/{fileID}` — download attachment
 
 ### Webhook Ingress: `/webhooks/{agentID}/{path}` (no auth, verified per-webhook)
 

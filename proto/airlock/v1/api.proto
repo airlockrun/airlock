@@ -280,7 +280,7 @@ message PendingConfirmation {
 message PromptRequest {
   string conversation_id = 1;
   string message = 2;
-  repeated string file_ids = 3;
+  repeated string file_paths = 3;
   optional bool approved = 4; // Set by UI when responding to a confirmation request.
 }
 
@@ -420,7 +420,7 @@ message LinkIdentityPreviewResponse {
 // --- Files ---
 
 message ListFilesResponse {
-  repeated FileEntry files = 1;
+  repeated FileInfo files = 1;
 }
 
 message UploadFileResponse {

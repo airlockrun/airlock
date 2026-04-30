@@ -80,6 +80,18 @@ type AgentCron struct {
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
 }
 
+type AgentDirectory struct {
+	ID          pgtype.UUID        `json:"id"`
+	AgentID     pgtype.UUID        `json:"agent_id"`
+	Path        string             `json:"path"`
+	ReadAccess  string             `json:"read_access"`
+	WriteAccess string             `json:"write_access"`
+	ListAccess  string             `json:"list_access"`
+	Description string             `json:"description"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+}
+
 type AgentMcpServer struct {
 	ID             pgtype.UUID        `json:"id"`
 	AgentID        pgtype.UUID        `json:"agent_id"`
@@ -140,17 +152,6 @@ type AgentRoute struct {
 	Path        string             `json:"path"`
 	Method      string             `json:"method"`
 	Access      string             `json:"access"`
-	Description string             `json:"description"`
-	CreatedAt   pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
-}
-
-type AgentStorageZone struct {
-	ID          pgtype.UUID        `json:"id"`
-	AgentID     pgtype.UUID        `json:"agent_id"`
-	Slug        string             `json:"slug"`
-	ReadAccess  string             `json:"read_access"`
-	WriteAccess string             `json:"write_access"`
 	Description string             `json:"description"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`

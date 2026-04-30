@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 	"github.com/airlockrun/agentsdk"
@@ -388,18 +389,24 @@ func (h *conversationsHandler) Prompt(w http.ResponseWriter, r *http.Request) {
 		forceCompact = true
 	}
 
-	// Resolve uploaded file IDs to FileRefs.
-	var fileRefs []agentsdk.FileRef
-	for _, fileKey := range req.FileIds {
-		s3Key := "agents/" + agentID.String() + "/" + fileKey
+	// Resolve uploaded file paths to FileInfo entries. Original filename
+	// rides as S3 metadata (set during upload); fall back to basename when
+	// it isn't there (e.g. files written by run_js).
+	var fileInfos []agentsdk.FileInfo
+	for _, filePath := range req.FilePaths {
+		s3Key := "agents/" + agentID.String() + filePath
 		info, ct, err := h.s3.HeadObject(ctx, s3Key)
 		if err != nil {
-			h.logger.Warn("file not found", zap.String("key", fileKey))
+			h.logger.Warn("file not found", zap.String("path", filePath))
 			continue
 		}
-		fileRefs = append(fileRefs, agentsdk.FileRef{
-			ID:          fileKey,
-			Filename:    filepath.Base(fileKey),
+		filename := filepath.Base(filePath)
+		if origFilename, ok := info.Metadata["filename"]; ok && origFilename != "" {
+			filename = origFilename
+		}
+		fileInfos = append(fileInfos, agentsdk.FileInfo{
+			Path:        filePath,
+			Filename:    filename,
 			ContentType: ct,
 			Size:        info.Size,
 		})
@@ -408,23 +415,23 @@ func (h *conversationsHandler) Prompt(w http.ResponseWriter, r *http.Request) {
 	// Echo uploaded files back to the conversation as an ephemeral message
 	// so the user can see what they attached after the input chips clear.
 	// Posted before the dispatcher so it sorts ahead of the assistant turn.
-	if len(fileRefs) > 0 {
-		parts := make([]agentsdk.DisplayPart, 0, len(fileRefs))
-		for _, fr := range fileRefs {
+	if len(fileInfos) > 0 {
+		parts := make([]agentsdk.DisplayPart, 0, len(fileInfos))
+		for _, fi := range fileInfos {
 			partType := "file"
 			switch {
-			case strings.HasPrefix(fr.ContentType, "image/"):
+			case strings.HasPrefix(fi.ContentType, "image/"):
 				partType = "image"
-			case strings.HasPrefix(fr.ContentType, "audio/"):
+			case strings.HasPrefix(fi.ContentType, "audio/"):
 				partType = "audio"
-			case strings.HasPrefix(fr.ContentType, "video/"):
+			case strings.HasPrefix(fi.ContentType, "video/"):
 				partType = "video"
 			}
 			parts = append(parts, agentsdk.DisplayPart{
 				Type:     partType,
-				Source:   "agents/" + agentID.String() + "/" + fr.ID,
-				Filename: fr.Filename,
-				MimeType: fr.ContentType,
+				Source:   "agents/" + agentID.String() + fi.Path,
+				Filename: fi.Filename,
+				MimeType: fi.ContentType,
 			})
 		}
 		if err := postToConversation(ctx, postDeps{
@@ -460,7 +467,7 @@ func (h *conversationsHandler) Prompt(w http.ResponseWriter, r *http.Request) {
 	input := agentsdk.PromptInput{
 		Message:             req.Message,
 		ConversationID:      convIDStr,
-		Files:               fileRefs,
+		Files:               fileInfos,
 		SupportedModalities: modalities,
 		ExtraSystemPrompt:   extraSystemPrompt,
 		ForceCompact:        forceCompact,
@@ -626,8 +633,11 @@ func (h *conversationsHandler) NotifyUpgradeComplete(ctx context.Context, agentI
 	return nil
 }
 
-// UploadFile handles POST /api/v1/agents/{agentID}/files — multipart file upload.
-// Stores the file in the agent's S3 prefix at tmp/{uuid}-{filename} and returns the key.
+// UploadFile handles POST /api/v1/agents/{agentID}/files — multipart file
+// upload. Stores the file under "/tmp/{uuid}-{filename}" in the agent's
+// path namespace and persists the original filename as S3 metadata so the
+// LLM can refer to "Q1 Report.pdf" while the path uses a UUID-prefixed
+// safe form.
 func (h *conversationsHandler) UploadFile(w http.ResponseWriter, r *http.Request) {
 	agentID, err := parseUUID(chi.URLParam(r, "agentID"))
 	if err != nil {
@@ -649,24 +659,28 @@ func (h *conversationsHandler) UploadFile(w http.ResponseWriter, r *http.Request
 	}
 	defer file.Close()
 
-	key := "tmp/" + uuid.New().String()[:8] + "-" + header.Filename
-	s3Key := "agents/" + agentID.String() + "/" + key
-	if err := h.s3.PutObject(r.Context(), s3Key, file, header.Size); err != nil {
-		h.logger.Error("upload file failed", zap.Error(err))
-		writeError(w, http.StatusInternalServerError, "failed to upload file")
-		return
-	}
-
 	ct := header.Header.Get("Content-Type")
 	if ct == "" {
 		ct = "application/octet-stream"
 	}
 
-	writeJSON(w, http.StatusOK, agentsdk.FileRef{
-		ID:          key,
-		Filename:    header.Filename,
-		ContentType: ct,
-		Size:        header.Size,
+	path := "/tmp/" + uuid.New().String()[:8] + "-" + header.Filename
+	s3Key := "agents/" + agentID.String() + path
+	if err := h.s3.PutObjectWithMetadata(r.Context(), s3Key, file, header.Size, map[string]string{
+		"filename":     header.Filename,
+		"content-type": ct,
+	}); err != nil {
+		h.logger.Error("upload file failed", zap.Error(err))
+		writeError(w, http.StatusInternalServerError, "failed to upload file")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, agentsdk.FileInfo{
+		Path:         path,
+		Filename:     header.Filename,
+		ContentType:  ct,
+		Size:         header.Size,
+		LastModified: time.Now(),
 	})
 }
 

@@ -323,11 +323,14 @@ message AgentSyncedEvent {
   string agent_id = 1;
 }
 
-// FileEntry represents a stored file.
-message FileEntry {
-  string path = 1;
-  int64 size = 2;
-  string last_modified = 3;
+// FileInfo describes a file in agent storage. Returned by listDir / statFile /
+// writeFile (in run_js) and embedded in PromptRequest for chat uploads.
+message FileInfo {
+  string path = 1;            // absolute, e.g. "/uploads/foo.png"
+  string filename = 2;        // original upload name; preserved as S3 metadata
+  string content_type = 3;
+  int64 size = 4;
+  string last_modified = 5;   // RFC3339
 }
 
 // TopicInfo represents a notification topic with subscription status.
