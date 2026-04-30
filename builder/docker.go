@@ -208,7 +208,9 @@ func (b *BuildService) WarmRuntimeCaches(ctx context.Context) {
 	// Dev: overlay the live owned libs the same way solrunner does so the
 	// go.mod replace directives resolve to the dev tree, not the image's
 	// baked /libs. Prevents tidy from picking up stale baked sources.
-	if b.cfg.AgentLibsPath != "" {
+	// Only fires when AGENT_LIBS_PATH was explicitly set — see the
+	// AgentLibsPathExplicit comment in config for why prod skips this.
+	if b.cfg.AgentLibsPathExplicit {
 		for _, sub := range []string{"agentsdk", "goai", "sol"} {
 			args = append(args, "-v", filepath.Join(b.cfg.AgentLibsPath, sub)+":/libs/"+sub+":ro")
 		}
