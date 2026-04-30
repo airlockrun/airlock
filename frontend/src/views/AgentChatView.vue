@@ -18,7 +18,7 @@ const messageInput = ref('')
 const scrollContainer = ref<HTMLElement | null>(null)
 const topSentinel = ref<HTMLElement | null>(null)
 const bottomSentinel = ref<HTMLElement | null>(null)
-const attachedFiles = ref<{ id: string; name: string }[]>([])
+const attachedFiles = ref<{ path: string; filename: string }[]>([])
 const fileInput = ref<HTMLInputElement | null>(null)
 // Explicit collapse state: true=collapsed, false=expanded. Absent=auto (collapsed unless last).
 const toolCollapseState = ref<Record<string, boolean>>({})
@@ -111,10 +111,10 @@ async function send() {
   const text = messageInput.value.trim()
   if (!text || chat.sending) return
   messageInput.value = ''
-  const fileIds = attachedFiles.value.map(f => f.id)
+  const filePaths = attachedFiles.value.map(f => f.path)
   attachedFiles.value = []
   try {
-    await chat.sendMessage(agentId, text, undefined, fileIds.length ? fileIds : undefined)
+    await chat.sendMessage(agentId, text, undefined, filePaths.length ? filePaths : undefined)
   } catch (err: any) {
     toast.add({ severity: 'error', summary: err.response?.data?.error || 'Send failed', life: 5000 })
   }
@@ -132,7 +132,7 @@ async function onFileSelect(e: Event) {
       const { data } = await api.post(`/api/v1/agents/${agentId}/files`, form, {
         headers: { 'Content-Type': 'multipart/form-data' },
       })
-      attachedFiles.value.push({ id: data.id, name: file.name })
+      attachedFiles.value.push({ path: data.path, filename: data.filename || file.name })
     }
   } catch (err: any) {
     toast.add({ severity: 'error', summary: err.response?.data?.error || 'Upload failed', life: 5000 })
@@ -214,6 +214,10 @@ const lastToolId = computed(() => {
 })
 
 function isToolCollapsed(id: string, toolName?: string): boolean {
+  // A tool call awaiting confirmation must show its code — that's exactly
+  // what the user is being asked to approve. Force-expanded regardless of
+  // toolName or explicit user toggle.
+  if (chat.pendingConfirmation?.toolCallId === id) return false
   const explicit = toolCollapseState.value[id]
   if (explicit !== undefined) return explicit
   // run_js bubbles are noisy (full script + full stdout). Collapse by default
@@ -478,8 +482,8 @@ function formatTokens(n: number): string {
     <div v-if="attachedFiles.length" style="display: flex; gap: 0.5rem; flex-wrap: wrap; padding-top: 0.5rem">
       <Chip
         v-for="(file, i) in attachedFiles"
-        :key="file.id"
-        :label="file.name"
+        :key="file.path"
+        :label="file.filename"
         removable
         @remove="removeFile(i)"
       />

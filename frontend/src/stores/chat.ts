@@ -515,7 +515,7 @@ export const useChatStore = defineStore('chat', () => {
     await loadConversation(agentId)
   }
 
-  async function sendMessage(agentId: string, text: string, approved?: boolean, fileIds?: string[]) {
+  async function sendMessage(agentId: string, text: string, approved?: boolean, filePaths?: string[]) {
     const isResume = approved !== undefined
     // Slash commands (/clear, /compact, ...) are handled synchronously by
     // Airlock — no run is created and no optimistic user bubble should appear.
@@ -547,7 +547,7 @@ export const useChatStore = defineStore('chat', () => {
 
     const payload: Record<string, any> = { message: text }
     if (approved !== undefined) payload.approved = approved
-    if (fileIds?.length) payload.fileIds = fileIds
+    if (filePaths?.length) payload.filePaths = filePaths
 
     try {
       const { data } = await api.post(`/api/v1/agents/${agentId}/prompt`, payload)

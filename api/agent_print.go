@@ -56,26 +56,19 @@ func (h *agentHandler) Print(w http.ResponseWriter, r *http.Request) {
 			}
 			p.Source = key
 			p.Data = nil // Don't store bytes in the message
-		} else if p.Source != "" && strings.HasPrefix(p.Source, "tmp/") {
-			// Copy from agent tmp to permanent media location.
-			srcKey := agentStorageKey(agentID, p.Source)
+		} else if p.Source != "" && !strings.HasPrefix(p.Source, "agents/") && !strings.HasPrefix(p.Source, "media/") {
+			// Source is an agent path (e.g. "/tmp/foo.png"); copy to
+			// permanent media location. Tolerate both "/tmp/..." (new
+			// path shape) and bare "tmp/..." (legacy) — agentStorageKey
+			// expects a leading slash, so normalize first.
+			srcPath := p.Source
+			if !strings.HasPrefix(srcPath, "/") {
+				srcPath = "/" + srcPath
+			}
+			srcKey := agentStorageKey(agentID, srcPath)
 			filename := p.Filename
 			if filename == "" {
-				filename = filepath.Base(p.Source)
-			}
-			dstKey := mediaPrefix + filename
-			if err := h.s3.CopyObject(ctx, srcKey, dstKey); err != nil {
-				h.logger.Error("copy tmp file to media", zap.String("src", p.Source), zap.Error(err))
-				writeJSONError(w, http.StatusInternalServerError, "failed to copy file")
-				return
-			}
-			p.Source = dstKey
-		} else if p.Source != "" {
-			// Copy other agent storage files to permanent media.
-			srcKey := agentStorageKey(agentID, p.Source)
-			filename := p.Filename
-			if filename == "" {
-				filename = filepath.Base(p.Source)
+				filename = filepath.Base(srcPath)
 			}
 			dstKey := mediaPrefix + filename
 			if err := h.s3.CopyObject(ctx, srcKey, dstKey); err != nil {

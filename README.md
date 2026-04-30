@@ -1,5 +1,9 @@
 # airlock
 
+<p align="center">
+  <img src="docs/airlock-demo.gif" alt="Airlock demo" width="800">
+</p>
+
 Self-hosted platform for **cyborg agents** — programs that are half code, half AI. Fast and deterministic where they can be, AI-capable where they need to be.
 
 Each agent runs as a long-lived Docker container with its own Postgres schema, S3 storage, web dashboard, custom HTTP routes (`{slug}.your-domain.com`), webhook ingress, cron scheduling, chat platform bridges (Telegram), and proxied access to LLMs and MCP tools. RBAC, real-time event streaming, full audit trail.

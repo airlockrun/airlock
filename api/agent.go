@@ -383,28 +383,29 @@ func (h *agentHandler) Sync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Upsert storage zones, then delete stale.
-	zoneSlugs := make([]string, len(req.Storages))
-	for i, s := range req.Storages {
-		if err := q.UpsertStorageZone(ctx, dbq.UpsertStorageZoneParams{
+	// Upsert directories, then delete stale.
+	dirPaths := make([]string, len(req.Directories))
+	for i, d := range req.Directories {
+		if err := q.UpsertDirectory(ctx, dbq.UpsertDirectoryParams{
 			AgentID:     pgAgentID,
-			Slug:        s.Slug,
-			ReadAccess:  string(s.Read),
-			WriteAccess: string(s.Write),
-			Description: s.Description,
+			Path:        d.Path,
+			ReadAccess:  string(d.Read),
+			WriteAccess: string(d.Write),
+			ListAccess:  string(d.List),
+			Description: d.Description,
 		}); err != nil {
-			h.logger.Error("upsert storage zone failed", zap.Error(err))
-			writeJSONError(w, http.StatusInternalServerError, "failed to sync storage zones")
+			h.logger.Error("upsert directory failed", zap.Error(err))
+			writeJSONError(w, http.StatusInternalServerError, "failed to sync directories")
 			return
 		}
-		zoneSlugs[i] = s.Slug
+		dirPaths[i] = d.Path
 	}
-	if err := q.DeleteStorageZonesByAgentExcept(ctx, dbq.DeleteStorageZonesByAgentExceptParams{
+	if err := q.DeleteDirectoriesByAgentExcept(ctx, dbq.DeleteDirectoriesByAgentExceptParams{
 		AgentID: pgAgentID,
-		Slugs:   zoneSlugs,
+		Paths:   dirPaths,
 	}); err != nil {
-		h.logger.Error("delete stale storage zones failed", zap.Error(err))
-		writeJSONError(w, http.StatusInternalServerError, "failed to sync storage zones")
+		h.logger.Error("delete stale directories failed", zap.Error(err))
+		writeJSONError(w, http.StatusInternalServerError, "failed to sync directories")
 		return
 	}
 

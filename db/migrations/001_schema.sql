@@ -295,25 +295,24 @@ CREATE TABLE agent_tools (
     UNIQUE (agent_id, name)
 );
 
--- agent_storage_zones tracks per-agent S3 zones declared via
--- agentsdk.RegisterStorage. The slug is also the S3 key prefix
--- (agents/{agentID}/{slug}/...). read_access / write_access are split so a
--- builder can declare e.g. read=user, write=admin (admin-curated,
--- user-readable) or read=admin, write=user (user-fed inbox processed only
--- by admins). Public read zones get an unauthenticated read route at
--- /storage/{agentID}/{slug}/{key}.
-CREATE TABLE agent_storage_zones (
+-- agent_directories tracks per-agent S3 directories declared via
+-- agentsdk.RegisterDirectory. The path is absolute (e.g. "/reports") and
+-- is concatenated with "agents/{agentID}" to form the S3 key prefix.
+-- read/write/list access are independent caps. Public read dirs get an
+-- unauthenticated read route at /__air/storage{path}.
+CREATE TABLE agent_directories (
     id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     agent_id     uuid NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
-    slug         text NOT NULL,
+    path         text NOT NULL,
     read_access  text NOT NULL DEFAULT 'user',
     write_access text NOT NULL DEFAULT 'user',
+    list_access  text NOT NULL DEFAULT 'user',
     description  text NOT NULL DEFAULT '',
     created_at   timestamptz NOT NULL DEFAULT now(),
     updated_at   timestamptz NOT NULL DEFAULT now(),
-    UNIQUE (agent_id, slug)
+    UNIQUE (agent_id, path)
 );
-CREATE INDEX idx_agent_storage_zones_agent ON agent_storage_zones(agent_id);
+CREATE INDEX idx_agent_directories_agent ON agent_directories(agent_id);
 
 CREATE TABLE agent_model_slots (
     agent_id       uuid NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
@@ -440,8 +439,8 @@ DROP INDEX IF EXISTS idx_conversations_lookup;
 DROP TABLE IF EXISTS agent_conversations;
 DROP TABLE IF EXISTS runs;
 DROP TABLE IF EXISTS agent_model_slots;
-DROP INDEX IF EXISTS idx_agent_storage_zones_agent;
-DROP TABLE IF EXISTS agent_storage_zones;
+DROP INDEX IF EXISTS idx_agent_directories_agent;
+DROP TABLE IF EXISTS agent_directories;
 DROP TABLE IF EXISTS agent_tools;
 DROP TABLE IF EXISTS agent_topics;
 DROP TABLE IF EXISTS agent_routes;

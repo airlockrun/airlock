@@ -108,26 +108,26 @@ func (p *PromptProxy) HandleMessage(
 	// Pre-allocate agent-facing storage keys for each file so transcription
 	// can tag its output with the same key the file will be uploaded under.
 	// Keeps the transcript ↔ source file link explicit for the LLM.
-	keys := make([]string, len(files))
+	paths := make([]string, len(files))
 	for i := range files {
-		keys[i] = "tmp/" + uuid.New().String()[:8] + "-" + files[i].Filename
+		paths[i] = "/tmp/" + uuid.New().String()[:8] + "-" + files[i].Filename
 	}
 
 	// Auto-transcribe voice notes before forwarding. Transcription failures
 	// fall back to attaching the audio without a transcript — we never drop
 	// the user's message. The original ogg is still uploaded below.
-	userMessage = p.transcribeVoiceNotes(ctx, userMessage, files, keys)
+	userMessage = p.transcribeVoiceNotes(ctx, userMessage, files, paths)
 
-	// Store attached files in agent's S3 prefix and build FileRefs.
-	var fileRefs []agentsdk.FileRef
+	// Store attached files in agent's S3 prefix and build FileInfo entries.
+	var fileInfos []agentsdk.FileInfo
 	for i, f := range files {
-		s3Key := "agents/" + agentID.String() + "/" + keys[i]
+		s3Key := "agents/" + agentID.String() + paths[i]
 		if err := p.s3.PutObject(ctx, s3Key, bytes.NewReader(f.Data), int64(len(f.Data))); err != nil {
-			p.logger.Error("store bridge file failed", zap.String("key", keys[i]), zap.Error(err))
+			p.logger.Error("store bridge file failed", zap.String("path", paths[i]), zap.Error(err))
 			continue
 		}
-		fileRefs = append(fileRefs, agentsdk.FileRef{
-			ID:          keys[i],
+		fileInfos = append(fileInfos, agentsdk.FileInfo{
+			Path:        paths[i],
 			Filename:    f.Filename,
 			ContentType: f.ContentType,
 			Size:        int64(len(f.Data)),
@@ -146,7 +146,7 @@ func (p *PromptProxy) HandleMessage(
 	input := agentsdk.PromptInput{
 		Message:           userMessage,
 		ConversationID:    convert.PgUUIDToString(conversationID),
-		Files:             fileRefs,
+		Files:             fileInfos,
 		ExtraSystemPrompt: extraSystemPrompt,
 		ForceCompact:      forceCompact,
 	}

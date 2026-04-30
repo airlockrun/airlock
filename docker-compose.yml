@@ -73,7 +73,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.agent-builder
-    image: ghcr.io/airlockrun/airlock-agent-builder:v0.1.6
+    image: ghcr.io/airlockrun/airlock-agent-builder:v0.2.0
     command: ["true"]
     restart: "no"
 
@@ -91,7 +91,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.airlock
-    image: ghcr.io/airlockrun/airlock:v0.1.6
+    image: ghcr.io/airlockrun/airlock:v0.2.0
     depends_on:
       postgres:
         condition: service_healthy
@@ -132,7 +132,7 @@ services:
       # Container orchestration: agent containers join this network so they
       # can reach airlock:8080 internally. Must match the network name below.
       DOCKER_NETWORK: airlock
-      AGENT_BUILDER_IMAGE: ghcr.io/airlockrun/airlock-agent-builder:v0.1.6
+      AGENT_BUILDER_IMAGE: ghcr.io/airlockrun/airlock-agent-builder:v0.2.0
       AGENT_BASE_IMAGE: airlock-agent-base
 
       # Codegen workspace lives inside the airlock-data named volume so
