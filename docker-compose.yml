@@ -73,7 +73,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.agent-builder
-    image: ghcr.io/airlockrun/airlock-agent-builder:v0.2.2
+    image: ghcr.io/airlockrun/airlock-agent-builder:v0.2.3
     command: ["true"]
     restart: "no"
 
@@ -91,7 +91,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.airlock
-    image: ghcr.io/airlockrun/airlock:v0.2.2
+    image: ghcr.io/airlockrun/airlock:v0.2.3
     depends_on:
       postgres:
         condition: service_healthy
@@ -112,9 +112,20 @@ services:
       DB_NAME: ${POSTGRES_DB:-airlock}
       DB_SSL_MODE: disable
 
-      # S3 (both airlock and agent containers reach MinIO via service name).
+      # S3 has three audiences:
+      #   S3_URL        — airlock and agents (in-network)
+      #   S3_URL_AGENT  — same for agents (kept distinct in case anchored
+      #                   deployments split them)
+      #   S3_URL_PUBLIC — used when generating presigned URLs that LLM
+      #                   providers (OpenAI, Anthropic, etc.) fetch from
+      #                   the public internet. minio:9000 isn't routable
+      #                   externally, so this points at Caddy's
+      #                   s3.{DOMAIN} subdomain which reverse-proxies to
+      #                   minio:9000 with Host preserved (so the signed
+      #                   URL validates).
       S3_URL: http://minio:9000
       S3_URL_AGENT: http://minio:9000
+      S3_URL_PUBLIC: "https://s3.${DOMAIN}"
       S3_ACCESS_KEY: ${MINIO_ROOT_USER:-airlock}
       S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-changeme-in-production}
       S3_BUCKET: airlock
@@ -132,7 +143,7 @@ services:
       # Container orchestration: agent containers join this network so they
       # can reach airlock:8080 internally. Must match the network name below.
       DOCKER_NETWORK: airlock
-      AGENT_BUILDER_IMAGE: ghcr.io/airlockrun/airlock-agent-builder:v0.2.2
+      AGENT_BUILDER_IMAGE: ghcr.io/airlockrun/airlock-agent-builder:v0.2.3
       AGENT_BASE_IMAGE: airlock-agent-base
 
       # Codegen workspace lives inside the airlock-data named volume so
