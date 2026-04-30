@@ -44,6 +44,11 @@ onMounted(() => {
       @row-select="navigateToBuild"
       class="cursor-pointer"
     >
+      <template #empty>
+        <div style="text-align: center; padding: 2rem; color: var(--p-text-muted-color)">
+          No builds yet.
+        </div>
+      </template>
       <Column header="Type">
         <template #body="{ data: b }">
           {{ b.type }}

@@ -137,7 +137,7 @@ Tenant role does **not** grant agent access. A tenant `admin` with no `agent_mem
 
 Envelope format: `{type, requestId, topicId, payload}`. Topic = agent UUID.
 
-Event types: `subscribe`, `agent.build`, `agent.build.log`, `run.text_delta`, `run.tool_call`, `run.tool_result`, `run.confirmation_required`, `run.complete`, `run.error`.
+Event types: `subscribe`, `agent.build`, `agent.build.log`, `agent.synced`, `run.text_delta`, `run.tool_call`, `run.tool_result`, `run.confirmation_required`, `run.complete`, `run.error`.
 
 Replay buffer (100 messages) per topic for late subscribers.
 

@@ -367,6 +367,18 @@ func (m *DockerManager) StopToolserver(ctx context.Context, name string) error {
 	return m.client.ContainerRemove(ctx, name, dcontainer.RemoveOptions{Force: true})
 }
 
+// KillToolserver force-removes an ephemeral toolserver container without
+// waiting for graceful shutdown. RemoveOptions{Force: true} sends SIGKILL
+// and removes in one call, so any in-flight tool execution dies
+// immediately. Used by the build-cancellation path: graceful shutdown is
+// 5+ seconds of dead air during which the toolserver keeps running its
+// in-flight tool (e.g. a long `bash go build`) and emitting log lines —
+// which makes the cancel feel like it didn't take. Idempotent: returns
+// nil/NotFound if the container is already gone.
+func (m *DockerManager) KillToolserver(ctx context.Context, name string) error {
+	return m.client.ContainerRemove(ctx, name, dcontainer.RemoveOptions{Force: true})
+}
+
 func (m *DockerManager) createAndStart(ctx context.Context, name string, cfg *dcontainer.Config, hostCfg *dcontainer.HostConfig) (*Container, error) {
 	if err := m.client.ContainerRemove(ctx, name, dcontainer.RemoveOptions{Force: true}); err != nil && !cerrdefs.IsNotFound(err) {
 		m.logger.Warn("failed to remove existing container", zap.String("name", name), zap.Error(err))

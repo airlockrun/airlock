@@ -15,6 +15,7 @@ import (
 	"github.com/airlockrun/airlock/crypto"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
+	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 	"github.com/airlockrun/airlock/realtime"
 	"github.com/airlockrun/airlock/storage"
 	"github.com/go-chi/chi/v5"
@@ -545,6 +546,18 @@ func (h *agentHandler) Sync(w http.ResponseWriter, r *http.Request) {
 	publicStorageBase := ""
 	if agentRouteURL != "" {
 		publicStorageBase = agentRouteURL + "/__air/storage"
+	}
+
+	// Notify subscribed clients (agent detail tabs) that the agent's
+	// declared surface — tools, webhooks, crons, routes, MCP servers,
+	// connections, model slots — was just refreshed. Tabs subscribed to
+	// "agent.synced" can refetch instead of waiting for the user to hit
+	// reload after a build/upgrade completes.
+	if h.pubsub != nil {
+		uuidAgentID := uuid.UUID(pgAgentID.Bytes)
+		_ = h.pubsub.Publish(ctx, uuidAgentID, realtime.NewEnvelope("agent.synced", uuidAgentID.String(), &airlockv1.AgentSyncedEvent{
+			AgentId: uuidAgentID.String(),
+		}))
 	}
 
 	writeJSON(w, http.StatusOK, agentsdk.SyncResponse{

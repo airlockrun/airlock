@@ -152,6 +152,29 @@ func (b *BuildService) runSolInProcess(ctx context.Context, opts solRunOpts) (*s
 		b.containers.StopToolserver(stopCtx, tc.Name)
 	}()
 
+	// Eager force-kill on cancel. The defer above handles the normal
+	// exit path with a 5s graceful stop, but on a user-initiated cancel
+	// every second of the toolserver still running means more log spam
+	// streaming into the build view from an in-flight tool the user
+	// already gave up on. Watch ctx and SIGKILL immediately the moment
+	// it's done — KillToolserver's RemoveOptions{Force: true} sends
+	// SIGKILL and removes in one shot. Both this and the defer call
+	// the same docker engine; the second invocation no-ops on a
+	// missing container.
+	killOnCancel := make(chan struct{})
+	defer close(killOnCancel)
+	go func() {
+		select {
+		case <-ctx.Done():
+			killCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if err := b.containers.KillToolserver(killCtx, tc.Name); err != nil {
+				b.logger.Warn("eager kill toolserver on cancel", zap.String("name", tc.Name), zap.Error(err))
+			}
+		case <-killOnCancel:
+		}
+	}()
+
 	b.logger.Info("toolserver ready", zap.String("endpoint", tc.Endpoint))
 
 	// Step 3: Connect to toolserver via WebSocket.

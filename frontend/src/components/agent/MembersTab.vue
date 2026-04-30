@@ -110,6 +110,11 @@ onMounted(async () => {
     </div>
 
     <DataTable v-if="!loading" :value="members" stripedRows>
+      <template #empty>
+        <div style="text-align: center; padding: 2rem; color: var(--p-text-muted-color)">
+          No members.
+        </div>
+      </template>
       <Column field="email" header="Email" />
       <Column field="displayName" header="Display Name" />
       <Column header="Role">

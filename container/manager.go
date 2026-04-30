@@ -53,6 +53,12 @@ type ContainerManager interface {
 	// StopToolserver stops and removes an ephemeral toolserver container.
 	StopToolserver(ctx context.Context, name string) error
 
+	// KillToolserver force-kills (SIGKILL) and removes an ephemeral
+	// toolserver container without waiting for graceful shutdown. Used
+	// on the build-cancel path so an in-flight tool stops emitting logs
+	// the moment cancel hits, instead of after the 5s graceful timeout.
+	KillToolserver(ctx context.Context, name string) error
+
 	// RemoveImage removes a Docker image by reference (e.g., "agentID:hash").
 	RemoveImage(ctx context.Context, imageRef string) error
 }

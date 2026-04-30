@@ -43,6 +43,11 @@ onMounted(async () => {
 <template>
   <div>
     <DataTable v-if="!loading" :value="webhooks" stripedRows>
+      <template #empty>
+        <div style="text-align: center; padding: 2rem; color: var(--p-text-muted-color)">
+          No webhooks registered.
+        </div>
+      </template>
       <Column field="path" header="Path" />
       <Column field="description" header="Description" />
       <Column field="verifyMode" header="Verify Mode" />

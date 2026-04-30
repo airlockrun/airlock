@@ -37,6 +37,12 @@ const loading = ref(true)
 const activeTab = ref(0)
 const activeBuildId = ref<string | undefined>(undefined)
 
+// Bumped on every event that should refresh the data tabs (build
+// terminal, agent sync). Used as a `:key` on the TabPanels container
+// so each tab unmounts/remounts and re-runs its onMounted fetch —
+// avoids wiring a WS subscription into every tab component.
+const tabsKey = ref(0)
+
 const actionItems = computed(() => {
   const items = []
   if (agent.value?.status === 'active') {
@@ -50,6 +56,7 @@ const actionItems = computed(() => {
 })
 
 let unsubBuild: (() => void) | null = null
+let unsubSynced: (() => void) | null = null
 
 onMounted(async () => {
   try {
@@ -88,21 +95,34 @@ onMounted(async () => {
         agent.value.upgradeStatus = 'idle'
       }
       toast.add({ severity: 'success', summary: 'Build complete', life: 3000 })
+      tabsKey.value++
     } else if (payload.status === 'failed') {
       if (agent.value) agent.value.upgradeStatus = 'failed'
       toast.add({ severity: 'error', summary: payload.error || 'Build failed', life: 10000 })
+      tabsKey.value++
     } else if (payload.status === 'cancelled') {
       if (agent.value) {
         agent.value.upgradeStatus = 'failed'
         if (agent.value.status === 'building') agent.value.status = 'failed'
       }
       toast.add({ severity: 'warn', summary: 'Build cancelled', life: 3000 })
+      tabsKey.value++
     }
+  })
+
+  // Agent finished a sync (initial boot after build, restart, upgrade) —
+  // its declared surface (tools, webhooks, crons, routes, MCP, connections,
+  // model slots) just changed. Bump tabsKey so each tab remounts and
+  // refetches; saves wiring a WS listener into every tab component.
+  unsubSynced = ws.onMessage('agent.synced', (payload: any) => {
+    if (payload?.agentId !== agentId) return
+    tabsKey.value++
   })
 })
 
 onUnmounted(() => {
   unsubBuild?.()
+  unsubSynced?.()
 })
 
 function confirmStop() {
@@ -247,7 +267,7 @@ function goToChat() {
         <Tab :value="8">Runs</Tab>
         <Tab :value="9">Builds</Tab>
       </TabList>
-      <TabPanels>
+      <TabPanels :key="tabsKey">
         <TabPanel :value="0"><ConnectionsTab :agent-id="agentId" /></TabPanel>
         <TabPanel :value="1"><MCPServersTab :agent-id="agentId" /></TabPanel>
         <TabPanel :value="2"><ToolsTab :agent-id="agentId" /></TabPanel>

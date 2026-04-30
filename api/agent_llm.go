@@ -90,7 +90,7 @@ func (h *agentHandler) LLMStream(w http.ResponseWriter, r *http.Request) {
 	for event := range events {
 		nd := ndJSONEvent{
 			Type: string(event.Type),
-			Data: event.Data,
+			Data: sanitizeEventData(event.Data),
 		}
 
 		// ErrorEvent.Error is an `error` — not JSON-serializable. Convert to string.
@@ -110,15 +110,21 @@ func (h *agentHandler) LLMStream(w http.ResponseWriter, r *http.Request) {
 			nd.Data = map[string]any{
 				"toolCallId": ee.ToolCallID,
 				"toolName":   ee.ToolName,
-				"input":      ee.Input,
+				"input":      sanitizeRawMessage(ee.Input),
 				"error":      ee.Error.Error(),
 			}
 		}
 
 		line, err := json.Marshal(nd)
 		if err != nil {
-			h.logger.Error("marshal NDJSON event failed", zap.Error(err))
-			return
+			// A single malformed event must not abort the entire stream —
+			// the agent would read EOF and time out (surfaced to the user
+			// as "context deadline exceeded"). Skip this event and keep
+			// going; the run continues with the next one.
+			h.logger.Error("marshal NDJSON event failed — skipping event",
+				zap.String("event_type", string(event.Type)),
+				zap.Error(err))
+			continue
 		}
 		bw.Write(line)
 		bw.WriteByte('\n')
@@ -127,6 +133,32 @@ func (h *agentHandler) LLMStream(w http.ResponseWriter, r *http.Request) {
 			flusher.Flush()
 		}
 	}
+}
+
+// sanitizeEventData replaces empty json.RawMessage fields on stream
+// events with null so encoding/json doesn't fail with "unexpected end
+// of JSON input". Empty RawMessage shows up when a provider streams a
+// tool-call frame before the input has been accumulated, or on partial
+// reasoning/tool-call deltas.
+func sanitizeEventData(data any) any {
+	switch e := data.(type) {
+	case stream.ToolCallEvent:
+		e.Input = sanitizeRawMessage(e.Input)
+		return e
+	case stream.ToolResultEvent:
+		e.Input = sanitizeRawMessage(e.Input)
+		return e
+	}
+	return data
+}
+
+// sanitizeRawMessage normalizes a json.RawMessage to a value the JSON
+// encoder accepts: empty (zero-length but non-nil) becomes null.
+func sanitizeRawMessage(m json.RawMessage) json.RawMessage {
+	if len(m) == 0 {
+		return json.RawMessage("null")
+	}
+	return m
 }
 
 type ndJSONEvent struct {

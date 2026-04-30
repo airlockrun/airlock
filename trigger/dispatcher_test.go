@@ -38,6 +38,7 @@ func (m *mockContainerManager) StartToolserver(_ context.Context, _ container.To
 }
 
 func (m *mockContainerManager) StopToolserver(_ context.Context, _ string) error { return nil }
+func (m *mockContainerManager) KillToolserver(_ context.Context, _ string) error { return nil }
 
 func (m *mockContainerManager) RemoveImage(_ context.Context, _ string) error { return nil }
 

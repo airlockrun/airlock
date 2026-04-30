@@ -165,6 +165,11 @@ func (b *BuildService) Build(_ context.Context, input BuildInput) error {
 	defer cancel()
 	defer b.finishBuild(input.AgentID)
 
+	b.logger.Info("build started",
+		zap.String("agent_id", input.AgentID),
+		zap.String("slug", input.Slug),
+		zap.Bool("has_instructions", input.Instructions != ""))
+
 	q := dbq.New(b.db.Pool())
 
 	var agent dbq.Agent
@@ -233,6 +238,9 @@ func (b *BuildService) Build(_ context.Context, input BuildInput) error {
 			status = "failed"
 			event = "cancelled"
 			errMsg = "cancelled by user"
+			b.logger.Info("build cancelled", zap.String("agent_id", input.AgentID))
+		} else {
+			b.logger.Error("build failed", zap.String("agent_id", input.AgentID), zap.Error(err))
 		}
 		_ = q.UpdateAgentStatus(dbCtx, dbq.UpdateAgentStatusParams{
 			ID:           agent.ID,
@@ -243,6 +251,7 @@ func (b *BuildService) Build(_ context.Context, input BuildInput) error {
 		return err
 	}
 
+	b.logger.Info("build completed", zap.String("agent_id", input.AgentID))
 	b.events.PublishBuildEvent(dbCtx, agentUUID, buildUUID, "complete", "")
 	return nil
 }
