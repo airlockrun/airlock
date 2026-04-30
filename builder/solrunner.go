@@ -121,9 +121,13 @@ func (b *BuildService) runSolInProcess(ctx context.Context, opts solRunOpts) (*s
 	}
 	mounts := []dmount.Mount{workspaceMount}
 	// Dev: overlay the baked /libs with the live source tree so agentsdk
-	// edits are visible without rebuilding the agent-builder image.
-	// Prod (AgentLibsPath empty): the image's pinned /libs is authoritative.
-	if b.cfg.AgentLibsPath != "" {
+	// edits are visible without rebuilding the agent-builder image. Only
+	// when the operator explicitly set AGENT_LIBS_PATH — in prod
+	// AgentLibsPath holds the extracted cache and overlaying it would
+	// just shadow the image's authoritative content with a copy of
+	// itself (and risks masking files mid-extraction or if the docker cp
+	// extraction is partial).
+	if b.cfg.AgentLibsPathExplicit {
 		for _, sub := range []string{"agentsdk", "goai", "sol"} {
 			mounts = append(mounts, dmount.Mount{
 				Type:     dmount.TypeBind,

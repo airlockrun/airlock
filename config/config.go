@@ -61,9 +61,19 @@ type Config struct {
 	AgentBuilderImage string // toolserver sandbox image (default: agent-builder:v${agentsdk.Version})
 	AgentBaseImage    string // agent runtime base image
 	AgentRegistryURL  string // Docker registry for agent images (empty = local only)
-	AgentLibsPath     string // path containing agentsdk/ goai/ sol/ dirs (the libs we own). If unset, airlock extracts /libs/ from AgentBuilderImage at startup into AgentLibsCacheDir.
+	AgentLibsPath     string // path containing agentsdk/ goai/ sol/ dirs (the libs we own). Set after startup either to the user-supplied AGENT_LIBS_PATH (dev) or the extracted cache dir (prod). Always non-empty by the time the build pipeline runs.
 	AgentLibsExtPath  string // path containing goose/ templ/ dirs (third-party libs always sourced from the agent-builder image's baked /libs/). Set at startup by EnsureLibs; not read from env.
 	AgentLibsCacheDir string // base dir where extracted /libs/ from agent-builder image is cached. Subdir per image digest.
+
+	// AgentLibsPathExplicit is true iff the operator set AGENT_LIBS_PATH as
+	// an env var (i.e. dev mode, where AgentLibsPath points at a live source
+	// tree we want overlaid into toolservers). False in prod (where
+	// AgentLibsPath holds the extracted cache dir, used only for the
+	// per-agent docker build's --build-context — overlaying the extracted
+	// cache onto the toolserver's image-baked /libs/ would just mask the
+	// authoritative content with itself, and risks shadowing files if the
+	// extraction is mid-way or partial).
+	AgentLibsPathExplicit bool
 
 	// AgentCodegenPath is where the build pipeline creates per-build temp
 	// directories for sparse checkouts and cache-warming scaffolds.
@@ -148,8 +158,9 @@ func Load() *Config {
 		AgentBuilderImage: envOr("AGENT_BUILDER_IMAGE", DefaultAgentBuilderImage),
 		AgentBaseImage:    envOr("AGENT_BASE_IMAGE", "airlock-agent-base"),
 		AgentRegistryURL:  os.Getenv("AGENT_REGISTRY_URL"),
-		AgentLibsPath:     os.Getenv("AGENT_LIBS_PATH"),
-		AgentLibsCacheDir: envOr("AGENT_LIBS_CACHE_DIR", "/var/lib/airlock/libs"),
+		AgentLibsPath:         os.Getenv("AGENT_LIBS_PATH"),
+		AgentLibsPathExplicit: os.Getenv("AGENT_LIBS_PATH") != "",
+		AgentLibsCacheDir:     envOr("AGENT_LIBS_CACHE_DIR", "/var/lib/airlock/libs"),
 
 		// Codegen workspace — see field doc above. Both empty by default
 		// so a `go run ./cmd/airlock` dev invocation keeps using /tmp +
