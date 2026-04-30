@@ -93,6 +93,11 @@ func (b *BuildService) RunUpgrade(_ context.Context, input UpgradeInput) {
 		input.RunID = uuid.New().String()
 	}
 
+	b.logger.Info("upgrade started",
+		zap.String("agent_id", input.AgentID),
+		zap.String("run_id", input.RunID),
+		zap.String("reason", input.Reason))
+
 	q := dbq.New(b.db.Pool())
 	agentPgUUID := mustParseUUID(input.AgentID)
 	agentUUID, _ := uuid.Parse(input.AgentID)
@@ -127,8 +132,10 @@ func (b *BuildService) RunUpgrade(_ context.Context, input UpgradeInput) {
 		if errors.Is(err, context.Canceled) {
 			event = "cancelled"
 			errMsg = "cancelled by user"
+			b.logger.Info("upgrade cancelled", zap.String("agent_id", input.AgentID))
+		} else {
+			b.logger.Error("upgrade failed", zap.String("agent_id", input.AgentID), zap.Error(err))
 		}
-		b.logger.Error("upgrade failed", zap.String("agent", input.AgentID), zap.Error(err))
 		_ = q.UpdateAgentUpgradeStatus(dbCtx, dbq.UpdateAgentUpgradeStatusParams{
 			ID:            agentPgUUID,
 			UpgradeStatus: "failed",
@@ -147,6 +154,7 @@ func (b *BuildService) RunUpgrade(_ context.Context, input UpgradeInput) {
 		return
 	}
 
+	b.logger.Info("upgrade completed", zap.String("agent_id", input.AgentID))
 	b.events.PublishBuildEvent(dbCtx, agentUUID, buildUUID, "complete", "")
 
 	_ = q.UpdateAgentUpgradeStatus(dbCtx, dbq.UpdateAgentUpgradeStatusParams{

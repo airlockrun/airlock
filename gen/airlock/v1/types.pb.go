@@ -2211,6 +2211,54 @@ func (x *AgentBuildLogEvent) GetLine() string {
 	return ""
 }
 
+// AgentSyncedEvent fires after the agent container completes a sync —
+// frontend tabs that show synced surface (tools, webhooks, crons,
+// routes, MCP servers, connections, model slots) refetch on this event
+// so the user sees the new shape without a page reload.
+type AgentSyncedEvent struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	AgentId       string                 `protobuf:"bytes,1,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AgentSyncedEvent) Reset() {
+	*x = AgentSyncedEvent{}
+	mi := &file_airlock_v1_types_proto_msgTypes[21]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AgentSyncedEvent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AgentSyncedEvent) ProtoMessage() {}
+
+func (x *AgentSyncedEvent) ProtoReflect() protoreflect.Message {
+	mi := &file_airlock_v1_types_proto_msgTypes[21]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AgentSyncedEvent.ProtoReflect.Descriptor instead.
+func (*AgentSyncedEvent) Descriptor() ([]byte, []int) {
+	return file_airlock_v1_types_proto_rawDescGZIP(), []int{21}
+}
+
+func (x *AgentSyncedEvent) GetAgentId() string {
+	if x != nil {
+		return x.AgentId
+	}
+	return ""
+}
+
 // FileEntry represents a stored file.
 type FileEntry struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -2223,7 +2271,7 @@ type FileEntry struct {
 
 func (x *FileEntry) Reset() {
 	*x = FileEntry{}
-	mi := &file_airlock_v1_types_proto_msgTypes[21]
+	mi := &file_airlock_v1_types_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2235,7 +2283,7 @@ func (x *FileEntry) String() string {
 func (*FileEntry) ProtoMessage() {}
 
 func (x *FileEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_airlock_v1_types_proto_msgTypes[21]
+	mi := &file_airlock_v1_types_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2248,7 +2296,7 @@ func (x *FileEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FileEntry.ProtoReflect.Descriptor instead.
 func (*FileEntry) Descriptor() ([]byte, []int) {
-	return file_airlock_v1_types_proto_rawDescGZIP(), []int{21}
+	return file_airlock_v1_types_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *FileEntry) GetPath() string {
@@ -2285,7 +2333,7 @@ type TopicInfo struct {
 
 func (x *TopicInfo) Reset() {
 	*x = TopicInfo{}
-	mi := &file_airlock_v1_types_proto_msgTypes[22]
+	mi := &file_airlock_v1_types_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2297,7 +2345,7 @@ func (x *TopicInfo) String() string {
 func (*TopicInfo) ProtoMessage() {}
 
 func (x *TopicInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_airlock_v1_types_proto_msgTypes[22]
+	mi := &file_airlock_v1_types_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2310,7 +2358,7 @@ func (x *TopicInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TopicInfo.ProtoReflect.Descriptor instead.
 func (*TopicInfo) Descriptor() ([]byte, []int) {
-	return file_airlock_v1_types_proto_rawDescGZIP(), []int{22}
+	return file_airlock_v1_types_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *TopicInfo) GetId() string {
@@ -2362,7 +2410,7 @@ type SystemSettingsInfo struct {
 
 func (x *SystemSettingsInfo) Reset() {
 	*x = SystemSettingsInfo{}
-	mi := &file_airlock_v1_types_proto_msgTypes[23]
+	mi := &file_airlock_v1_types_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2374,7 +2422,7 @@ func (x *SystemSettingsInfo) String() string {
 func (*SystemSettingsInfo) ProtoMessage() {}
 
 func (x *SystemSettingsInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_airlock_v1_types_proto_msgTypes[23]
+	mi := &file_airlock_v1_types_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2387,7 +2435,7 @@ func (x *SystemSettingsInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SystemSettingsInfo.ProtoReflect.Descriptor instead.
 func (*SystemSettingsInfo) Descriptor() ([]byte, []int) {
-	return file_airlock_v1_types_proto_rawDescGZIP(), []int{23}
+	return file_airlock_v1_types_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *SystemSettingsInfo) GetPublicUrl() string {
@@ -2695,7 +2743,9 @@ const file_airlock_v1_types_proto_rawDesc = "" +
 	"\bbuild_id\x18\x02 \x01(\tR\abuildId\x12\x10\n" +
 	"\x03seq\x18\x03 \x01(\x03R\x03seq\x12\x16\n" +
 	"\x06stream\x18\x04 \x01(\tR\x06stream\x12\x12\n" +
-	"\x04line\x18\x05 \x01(\tR\x04line\"X\n" +
+	"\x04line\x18\x05 \x01(\tR\x04line\"-\n" +
+	"\x10AgentSyncedEvent\x12\x19\n" +
+	"\bagent_id\x18\x01 \x01(\tR\aagentId\"X\n" +
 	"\tFileEntry\x12\x12\n" +
 	"\x04path\x18\x01 \x01(\tR\x04path\x12\x12\n" +
 	"\x04size\x18\x02 \x01(\x03R\x04size\x12#\n" +
@@ -2746,7 +2796,7 @@ func file_airlock_v1_types_proto_rawDescGZIP() []byte {
 }
 
 var file_airlock_v1_types_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_airlock_v1_types_proto_msgTypes = make([]protoimpl.MessageInfo, 24)
+var file_airlock_v1_types_proto_msgTypes = make([]protoimpl.MessageInfo, 25)
 var file_airlock_v1_types_proto_goTypes = []any{
 	(TenantRole)(0),                // 0: airlock.v1.TenantRole
 	(MessageRole)(0),               // 1: airlock.v1.MessageRole
@@ -2771,42 +2821,43 @@ var file_airlock_v1_types_proto_goTypes = []any{
 	(*ToolInfo)(nil),               // 20: airlock.v1.ToolInfo
 	(*AgentBuildEvent)(nil),        // 21: airlock.v1.AgentBuildEvent
 	(*AgentBuildLogEvent)(nil),     // 22: airlock.v1.AgentBuildLogEvent
-	(*FileEntry)(nil),              // 23: airlock.v1.FileEntry
-	(*TopicInfo)(nil),              // 24: airlock.v1.TopicInfo
-	(*SystemSettingsInfo)(nil),     // 25: airlock.v1.SystemSettingsInfo
-	(*structpb.Struct)(nil),        // 26: google.protobuf.Struct
-	(*timestamppb.Timestamp)(nil),  // 27: google.protobuf.Timestamp
-	(*structpb.ListValue)(nil),     // 28: google.protobuf.ListValue
+	(*AgentSyncedEvent)(nil),       // 23: airlock.v1.AgentSyncedEvent
+	(*FileEntry)(nil),              // 24: airlock.v1.FileEntry
+	(*TopicInfo)(nil),              // 25: airlock.v1.TopicInfo
+	(*SystemSettingsInfo)(nil),     // 26: airlock.v1.SystemSettingsInfo
+	(*structpb.Struct)(nil),        // 27: google.protobuf.Struct
+	(*timestamppb.Timestamp)(nil),  // 28: google.protobuf.Timestamp
+	(*structpb.ListValue)(nil),     // 29: google.protobuf.ListValue
 }
 var file_airlock_v1_types_proto_depIdxs = []int32{
-	26, // 0: airlock.v1.Tenant.settings:type_name -> google.protobuf.Struct
-	27, // 1: airlock.v1.Tenant.created_at:type_name -> google.protobuf.Timestamp
-	27, // 2: airlock.v1.Tenant.updated_at:type_name -> google.protobuf.Timestamp
+	27, // 0: airlock.v1.Tenant.settings:type_name -> google.protobuf.Struct
+	28, // 1: airlock.v1.Tenant.created_at:type_name -> google.protobuf.Timestamp
+	28, // 2: airlock.v1.Tenant.updated_at:type_name -> google.protobuf.Timestamp
 	0,  // 3: airlock.v1.User.tenant_role:type_name -> airlock.v1.TenantRole
-	27, // 4: airlock.v1.User.created_at:type_name -> google.protobuf.Timestamp
-	27, // 5: airlock.v1.User.updated_at:type_name -> google.protobuf.Timestamp
-	27, // 6: airlock.v1.Provider.created_at:type_name -> google.protobuf.Timestamp
-	27, // 7: airlock.v1.Provider.updated_at:type_name -> google.protobuf.Timestamp
-	27, // 8: airlock.v1.AgentInfo.created_at:type_name -> google.protobuf.Timestamp
-	27, // 9: airlock.v1.AgentInfo.updated_at:type_name -> google.protobuf.Timestamp
-	26, // 10: airlock.v1.RunInfo.input_payload:type_name -> google.protobuf.Struct
-	28, // 11: airlock.v1.RunInfo.actions:type_name -> google.protobuf.ListValue
-	27, // 12: airlock.v1.RunInfo.started_at:type_name -> google.protobuf.Timestamp
-	27, // 13: airlock.v1.RunInfo.finished_at:type_name -> google.protobuf.Timestamp
-	27, // 14: airlock.v1.AgentBuildInfo.started_at:type_name -> google.protobuf.Timestamp
-	27, // 15: airlock.v1.AgentBuildInfo.finished_at:type_name -> google.protobuf.Timestamp
-	27, // 16: airlock.v1.ConversationInfo.created_at:type_name -> google.protobuf.Timestamp
-	27, // 17: airlock.v1.ConversationInfo.updated_at:type_name -> google.protobuf.Timestamp
-	27, // 18: airlock.v1.AgentMessageInfo.created_at:type_name -> google.protobuf.Timestamp
-	27, // 19: airlock.v1.WebhookInfo.last_received_at:type_name -> google.protobuf.Timestamp
-	27, // 20: airlock.v1.WebhookInfo.created_at:type_name -> google.protobuf.Timestamp
-	27, // 21: airlock.v1.CronInfo.last_fired_at:type_name -> google.protobuf.Timestamp
-	27, // 22: airlock.v1.CronInfo.created_at:type_name -> google.protobuf.Timestamp
-	27, // 23: airlock.v1.ConnectionInfo.token_expires_at:type_name -> google.protobuf.Timestamp
+	28, // 4: airlock.v1.User.created_at:type_name -> google.protobuf.Timestamp
+	28, // 5: airlock.v1.User.updated_at:type_name -> google.protobuf.Timestamp
+	28, // 6: airlock.v1.Provider.created_at:type_name -> google.protobuf.Timestamp
+	28, // 7: airlock.v1.Provider.updated_at:type_name -> google.protobuf.Timestamp
+	28, // 8: airlock.v1.AgentInfo.created_at:type_name -> google.protobuf.Timestamp
+	28, // 9: airlock.v1.AgentInfo.updated_at:type_name -> google.protobuf.Timestamp
+	27, // 10: airlock.v1.RunInfo.input_payload:type_name -> google.protobuf.Struct
+	29, // 11: airlock.v1.RunInfo.actions:type_name -> google.protobuf.ListValue
+	28, // 12: airlock.v1.RunInfo.started_at:type_name -> google.protobuf.Timestamp
+	28, // 13: airlock.v1.RunInfo.finished_at:type_name -> google.protobuf.Timestamp
+	28, // 14: airlock.v1.AgentBuildInfo.started_at:type_name -> google.protobuf.Timestamp
+	28, // 15: airlock.v1.AgentBuildInfo.finished_at:type_name -> google.protobuf.Timestamp
+	28, // 16: airlock.v1.ConversationInfo.created_at:type_name -> google.protobuf.Timestamp
+	28, // 17: airlock.v1.ConversationInfo.updated_at:type_name -> google.protobuf.Timestamp
+	28, // 18: airlock.v1.AgentMessageInfo.created_at:type_name -> google.protobuf.Timestamp
+	28, // 19: airlock.v1.WebhookInfo.last_received_at:type_name -> google.protobuf.Timestamp
+	28, // 20: airlock.v1.WebhookInfo.created_at:type_name -> google.protobuf.Timestamp
+	28, // 21: airlock.v1.CronInfo.last_fired_at:type_name -> google.protobuf.Timestamp
+	28, // 22: airlock.v1.CronInfo.created_at:type_name -> google.protobuf.Timestamp
+	28, // 23: airlock.v1.ConnectionInfo.token_expires_at:type_name -> google.protobuf.Timestamp
 	4,  // 24: airlock.v1.BridgeInfo.owner:type_name -> airlock.v1.UserSummary
-	27, // 25: airlock.v1.BridgeInfo.created_at:type_name -> google.protobuf.Timestamp
-	27, // 26: airlock.v1.BridgeInfo.updated_at:type_name -> google.protobuf.Timestamp
-	27, // 27: airlock.v1.PlatformIdentityInfo.created_at:type_name -> google.protobuf.Timestamp
+	28, // 25: airlock.v1.BridgeInfo.created_at:type_name -> google.protobuf.Timestamp
+	28, // 26: airlock.v1.BridgeInfo.updated_at:type_name -> google.protobuf.Timestamp
+	28, // 27: airlock.v1.PlatformIdentityInfo.created_at:type_name -> google.protobuf.Timestamp
 	28, // [28:28] is the sub-list for method output_type
 	28, // [28:28] is the sub-list for method input_type
 	28, // [28:28] is the sub-list for extension type_name
@@ -2825,7 +2876,7 @@ func file_airlock_v1_types_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_airlock_v1_types_proto_rawDesc), len(file_airlock_v1_types_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   24,
+			NumMessages:   25,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

@@ -104,7 +104,12 @@ onMounted(async () => {
 
 <template>
   <div>
-    <DataTable v-if="!loading && servers.length > 0" :value="servers" stripedRows>
+    <DataTable v-if="!loading" :value="servers" stripedRows>
+      <template #empty>
+        <div style="text-align: center; padding: 2rem; color: var(--p-text-muted-color)">
+          No MCP servers registered.
+        </div>
+      </template>
       <Column field="name" header="Name">
         <template #body="{ data: srv }">
           <div>
@@ -142,10 +147,6 @@ onMounted(async () => {
         </template>
       </Column>
     </DataTable>
-
-    <div v-else-if="!loading" style="padding: 2rem; text-align: center; color: var(--p-text-muted-color)">
-      No MCP servers registered. Use <code>agent.RegisterMCP()</code> in agent code.
-    </div>
 
     <DataTable v-else :value="[{}, {}, {}]">
       <Column header="Name"><template #body><Skeleton /></template></Column>

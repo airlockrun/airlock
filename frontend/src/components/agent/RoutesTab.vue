@@ -35,6 +35,11 @@ onMounted(async () => {
 <template>
   <div>
     <DataTable v-if="!loading" :value="routes" stripedRows>
+      <template #empty>
+        <div style="text-align: center; padding: 2rem; color: var(--p-text-muted-color)">
+          No routes registered.
+        </div>
+      </template>
       <Column field="method" header="Method" style="width: 5rem" />
       <Column field="path" header="Path" />
       <Column field="description" header="Description" />

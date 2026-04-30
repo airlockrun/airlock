@@ -208,6 +208,16 @@ function onBuildFailed(error: string) {
   building.value = false
 }
 
+async function onCancelBuild() {
+  if (!buildAgentId.value) return
+  try {
+    await api.post(`/api/v1/agents/${buildAgentId.value}/builds/cancel`)
+    toast.add({ severity: 'info', summary: 'Build cancelled', life: 3000 })
+  } catch (err: any) {
+    toast.add({ severity: 'error', summary: err.response?.data?.error || 'Cancel failed', life: 5000 })
+  }
+}
+
 function stopPolling() {
   if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
 }
@@ -418,7 +428,7 @@ onUnmounted(() => { stopPolling() })
     <div v-if="building" style="margin-top: 1.5rem">
       <p style="margin-bottom: 0.75rem; font-weight: 600">Building {{ name }}...</p>
       <ProgressBar mode="indeterminate" style="height: 0.375rem; margin-bottom: 0.75rem" />
-      <BuildLogPanel :agent-id="buildAgentId" :build-id="activeBuildId" :active="building" />
+      <BuildLogPanel :agent-id="buildAgentId" :build-id="activeBuildId" :active="building" @cancel="onCancelBuild" />
     </div>
 
     <Message v-if="buildError" severity="error" :closable="false" style="margin-top: 1rem">

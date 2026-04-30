@@ -108,18 +108,17 @@ func (h *agentsHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 	agentID := convert.PgUUIDToString(agent.ID)
 
-	// Kick off build pipeline asynchronously.
+	// Kick off build pipeline asynchronously. Build() logs success/failure
+	// internally — no need to log the returned err here.
 	go func() {
-		if err := h.builder.Build(context.Background(), builder.BuildInput{
+		_ = h.builder.Build(context.Background(), builder.BuildInput{
 			AgentID:      agentID,
 			Name:         req.Name,
 			Slug:         req.Slug,
 			UserID:       userID.String(),
 			BuildModel:   req.BuildModel,
 			Instructions: req.Instructions,
-		}); err != nil {
-			h.logger.Error("build failed", zap.String("agent", agentID), zap.Error(err))
-		}
+		})
 	}()
 
 	writeProto(w, http.StatusAccepted, &airlockv1.CreateAgentResponse{
@@ -437,16 +436,14 @@ func (h *agentsHandler) Upgrade(w http.ResponseWriter, r *http.Request) {
 	// pipeline instead of the upgrade pipeline.
 	if agent.ImageRef == "" {
 		go func() {
-			aid := agentID.String()
-			if err := h.builder.Build(context.Background(), builder.BuildInput{
-				AgentID:    aid,
+			// Build() logs success/failure internally.
+			_ = h.builder.Build(context.Background(), builder.BuildInput{
+				AgentID:    agentID.String(),
 				Name:       agent.Name,
 				Slug:       agent.Slug,
 				UserID:     convert.PgUUIDToString(agent.UserID),
 				BuildModel: agent.BuildModel,
-			}); err != nil {
-				h.logger.Error("rebuild failed", zap.String("agent", aid), zap.Error(err))
-			}
+			})
 		}()
 	} else {
 		go func() {

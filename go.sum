@@ -8,8 +8,8 @@ github.com/airlockrun/agentsdk v0.1.2 h1:lN10mD1GPt8VvpAWZZo1a/PypExeQrjddT66zPT
 github.com/airlockrun/agentsdk v0.1.2/go.mod h1:NQqJxhVQiLyaa2rrIZYL3sEUhbnw17G5EgixBsd66X4=
 github.com/airlockrun/goai v0.1.1 h1:589pP7DfR21nJVZ9xP1i2svErfgKGURmSzg9IUxS60s=
 github.com/airlockrun/goai v0.1.1/go.mod h1:bwFi12cS+TAyr8SjW7s48WMnsuKWx8PeNcxbIWJ4drM=
-github.com/airlockrun/sol v0.1.3 h1:WrQJEctNXsIljx4axbfAL806kjCYRvWmqvUOh30UzCQ=
-github.com/airlockrun/sol v0.1.3/go.mod h1:Jf8GSHAdXRTo07cOjgQbI6lmWg3f9P/vcz7nma5Natc=
+github.com/airlockrun/sol v0.1.4 h1:m6wIgOWAZ96umA0b2SM1Qaf+SV01qUf7vk46psCUoSs=
+github.com/airlockrun/sol v0.1.4/go.mod h1:Jf8GSHAdXRTo07cOjgQbI6lmWg3f9P/vcz7nma5Natc=
 github.com/aws/aws-sdk-go-v2 v1.41.1 h1:ABlyEARCDLN034NhxlRUSZr4l71mh+T5KAeGh6cerhU=
 github.com/aws/aws-sdk-go-v2 v1.41.1/go.mod h1:MayyLB8y+buD9hZqkCW3kX1AKq07Y5pXxtgB+rRFhz0=
 github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.4 h1:489krEF9xIGkOaaX3CE/Be2uWjiXrkCH6gUX+bZA/BU=

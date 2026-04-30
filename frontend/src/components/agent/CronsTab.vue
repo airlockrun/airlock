@@ -52,6 +52,11 @@ onMounted(async () => {
 <template>
   <div>
     <DataTable v-if="!loading" :value="crons" stripedRows>
+      <template #empty>
+        <div style="text-align: center; padding: 2rem; color: var(--p-text-muted-color)">
+          No crons registered.
+        </div>
+      </template>
       <Column field="name" header="Name" />
       <Column field="description" header="Description" />
       <Column field="schedule" header="Schedule" />

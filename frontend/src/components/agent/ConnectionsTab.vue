@@ -94,6 +94,11 @@ onMounted(async () => {
 <template>
   <div>
     <DataTable v-if="!loading" :value="connections" stripedRows>
+      <template #empty>
+        <div style="text-align: center; padding: 2rem; color: var(--p-text-muted-color)">
+          No connections registered.
+        </div>
+      </template>
       <Column field="name" header="Name" />
       <Column field="authMode" header="Auth Mode" />
       <Column header="Status">

@@ -315,6 +315,14 @@ message AgentBuildLogEvent {
   string line = 5;
 }
 
+// AgentSyncedEvent fires after the agent container completes a sync —
+// frontend tabs that show synced surface (tools, webhooks, crons,
+// routes, MCP servers, connections, model slots) refetch on this event
+// so the user sees the new shape without a page reload.
+message AgentSyncedEvent {
+  string agent_id = 1;
+}
+
 // FileEntry represents a stored file.
 message FileEntry {
   string path = 1;
