@@ -30,6 +30,23 @@
 	}
 }
 
+# Public S3 — for presigned URLs that LLM providers (OpenAI, Anthropic,
+# etc.) fetch directly. The internal hostname `minio:9000` isn't reachable
+# from the public internet, so any presigned URL airlock generates for
+# LLM-bound content (image inputs, attachments) needs to point here. Cert
+# issued normally (no on_demand) since this hostname is a fixed part of
+# the deployment, not a user-supplied agent slug.
+#
+# header_up Host: airlock signs presigned URLs against host=s3.{$DOMAIN}.
+# Caddy's reverse_proxy default rewrites Host to the upstream's address,
+# which would invalidate the signature when MinIO recomputes it. Preserve
+# the original Host so MinIO sees what airlock signed.
+s3.{$DOMAIN} {
+	reverse_proxy minio:9000 {
+		header_up Host {host}
+	}
+}
+
 # Wildcard subdomains: per-agent custom routes ({slug}.{$DOMAIN}).
 # airlock's SubdomainProxy handles routing internally — Caddy just needs
 # to terminate TLS and forward the request.
