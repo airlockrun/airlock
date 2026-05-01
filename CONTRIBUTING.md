@@ -52,6 +52,12 @@ Test (requires `DATABASE_URL` pointing at a running Postgres):
 
     go test ./...
 
+Enable the version-drift pre-commit hook (one-time per clone):
+
+    git config core.hooksPath .githooks
+
+The hook runs [`scripts/check-versions.sh`](scripts/check-versions.sh) — the same script CI runs on tag push. It catches `Dockerfile.agent-builder` ARGs that have drifted from `go.mod` and inconsistent `:vX.Y.Z` tags in `docker-compose.yml`. Skip a single commit with `git commit --no-verify`.
+
 ## Contributions involving AI
 
 We're not anti-AI — many of us use AI as part of our development workflow, and that's fine. But there's a real difference between "I used AI to help write this" and "I asked an AI to make a PR and submitted whatever came out."

@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Pre-commit hook — runs the same version-invariant check that CI runs
+# on tag push. Catches Dockerfile-vs-go.mod drift and inconsistent
+# compose tags before the commit lands.
+#
+# Enable for this clone (one-time):
+#   git config core.hooksPath .githooks
+#
+# Skip a single commit:
+#   git commit --no-verify
+
+set -e
+
+repo_root=$(git rev-parse --show-toplevel)
+exec "$repo_root/scripts/check-versions.sh"
