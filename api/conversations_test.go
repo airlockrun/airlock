@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/airlockrun/airlock/db/dbq"
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
@@ -217,3 +218,71 @@ func TestDeleteConversation_RemovesRow(t *testing.T) {
 
 // Unused helpers silence go vet on imports that only matter when tests run.
 var _ = dbq.ListMessagesBackwardParams{}
+
+// TestTruncate_RuneAware is a regression for the Postgres
+// "invalid byte sequence for encoding UTF8" crash on conversation
+// creation: the title was being byte-truncated, splitting a multi-byte
+// UTF-8 sequence (e.g. Cyrillic 0xD0/0xD1 + continuation byte) and
+// leaving an invalid lead byte that Postgres rejected outright.
+func TestTruncate_RuneAware(t *testing.T) {
+	cases := []struct {
+		name   string
+		input  string
+		maxLen int
+		want   string
+	}{
+		{
+			name:   "ascii under limit unchanged",
+			input:  "hello",
+			maxLen: 100,
+			want:   "hello",
+		},
+		{
+			name:   "ascii at exact byte limit",
+			input:  "0123456789",
+			maxLen: 5,
+			want:   "01234",
+		},
+		{
+			name: "cuts before cyrillic lead byte",
+			// Each Cyrillic letter ("Ы") is 2 bytes; cutting at byte 5
+			// would land between two bytes of one rune. Result: clip
+			// to the previous rune boundary.
+			input:  "abcЫЫЫ",
+			maxLen: 5,
+			want:   "abcЫ",
+		},
+		{
+			name: "cuts before 4-byte emoji lead byte",
+			// A 4-byte emoji rune (e.g. 🎉 = F0 9F 8E 89) at byte 1
+			// must back off all 3 trailing bytes.
+			input:  "a🎉b",
+			maxLen: 3,
+			want:   "a",
+		},
+		{
+			name:   "all multibyte, every char survives backoff",
+			input:  "Привет",
+			maxLen: 5,
+			want:   "Пр",
+		},
+		{
+			name:   "limit exactly on rune boundary keeps the rune",
+			input:  "abЫcd",
+			maxLen: 4, // "ab" + 2-byte "Ы" = 4 bytes, clean cut
+			want:   "abЫ",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := truncate(tc.input, tc.maxLen)
+			if got != tc.want {
+				t.Fatalf("truncate(%q, %d) = %q (%d bytes), want %q (%d bytes)",
+					tc.input, tc.maxLen, got, len(got), tc.want, len(tc.want))
+			}
+			if !utf8.ValidString(got) {
+				t.Fatalf("truncate(%q, %d) returned invalid UTF-8: %q", tc.input, tc.maxLen, got)
+			}
+		})
+	}
+}

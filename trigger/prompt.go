@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/airlockrun/agentsdk"
 	"github.com/airlockrun/airlock/audio"
@@ -376,11 +377,24 @@ func (p *PromptProxy) buildAgentStatusContext(ctx context.Context, agentID uuid.
 		"\n\nIf the user asks about functionality that depends on these, let them know what needs to be configured."
 }
 
+// truncate clips s to at most maxLen *bytes*, backing off to the
+// previous UTF-8 rune boundary so a multi-byte sequence (e.g. Cyrillic,
+// emoji) is never split. A naive s[:maxLen] would leave a dangling lead
+// byte that Postgres rejects with `invalid byte sequence for encoding
+// "UTF8"` when the result lands in a text column. Mirrors the helper in
+// api/conversations.go — kept in both packages because the call sites
+// are otherwise unrelated and a single shared util isn't worth the
+// import dependency.
 func truncate(s string, maxLen int) string {
 	if len(s) <= maxLen {
 		return s
 	}
-	return s[:maxLen]
+	for end := maxLen; end > 0; end-- {
+		if utf8.RuneStart(s[end]) {
+			return s[:end]
+		}
+	}
+	return ""
 }
 
 // --- NDJSON streaming ---

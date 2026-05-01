@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 	"github.com/airlockrun/agentsdk"
@@ -735,11 +736,22 @@ func messageToProto(ctx context.Context, s3Client *storage.S3Client, logger *zap
 	return info
 }
 
+// truncate returns s clipped to at most maxLen *bytes*, but never cuts in
+// the middle of a UTF-8 sequence. A naive s[:maxLen] would leave a
+// dangling lead byte (e.g. Cyrillic 0xd0 starts a 2-byte rune; slicing
+// between the lead and continuation byte produces invalid UTF-8 that
+// Postgres rejects with `invalid byte sequence for encoding "UTF8"`).
+// Backs off to the previous rune boundary via utf8.RuneStart.
 func truncate(s string, maxLen int) string {
 	if len(s) <= maxLen {
 		return s
 	}
-	return s[:maxLen]
+	for end := maxLen; end > 0; end-- {
+		if utf8.RuneStart(s[end]) {
+			return s[:end]
+		}
+	}
+	return ""
 }
 
 // ListTopics handles GET /api/v1/agents/{agentID}/topics.
