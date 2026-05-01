@@ -314,9 +314,11 @@ function formatTokens(n: number): string {
             </span>
             <span class="chat-checkpoint-line" />
           </div>
-          <!-- Skip empty assistant messages (tool-call-only turns) and tool results -->
+          <!-- Tool-result fallback: persisted tool messages whose parent
+               assistant we couldn't fold into (legacy / orphan rows).
+               Folded rows are marked _hidden by enrichMessages. -->
           <div
-            v-else-if="msg.role === 'tool'"
+            v-else-if="msg.role === 'tool' && !(msg as any)._hidden"
             style="display: flex; justify-content: flex-start"
           >
             <div class="msg-bubble msg-tool">
@@ -390,8 +392,14 @@ function formatTokens(n: number): string {
               <div v-else style="font-size: 0.85rem">{{ msg.content }}</div>
             </div>
           </div>
+          <!-- User / assistant content. Assistant turns may carry a
+               toolCalls[] array (folded by enrichMessages from the
+               separate role=tool rows the backend persists). When
+               present, render them inside the same bubble first so the
+               final layout mirrors the streaming layout: tool calls on
+               top, text answer at the bottom. -->
           <div
-            v-else-if="msg.content && !(msg as any)._hidden"
+            v-else-if="(msg.content || (msg as any).toolCalls?.length) && !(msg as any)._hidden"
             :style="{
               display: 'flex',
               justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start',
@@ -400,7 +408,27 @@ function formatTokens(n: number): string {
             <div
               :class="['msg-bubble', msg.role === 'user' ? 'msg-user' : 'msg-assistant']"
             >
-              <div v-if="msg.content" v-html="useMarkdown(computed(() => msg.content)).html.value" class="chat-bubble" />
+              <div v-if="(msg as any).toolCalls?.length" :style="{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }">
+                <div v-for="tc in (msg as any).toolCalls" :key="tc.toolCallId" style="padding: 0.25rem 0">
+                  <div style="display: flex; align-items: center; justify-content: space-between; cursor: pointer" @click="toggleToolCollapse(tc.toolCallId, tc.toolName)">
+                    <div style="font-size: 0.7rem; text-transform: uppercase; opacity: 0.6">{{ tc.toolName }}</div>
+                    <i :class="isToolCollapsed(tc.toolCallId, tc.toolName) ? 'pi pi-plus' : 'pi pi-minus'" style="font-size: 0.7rem; opacity: 0.4" />
+                  </div>
+                  <template v-if="!isToolCollapsed(tc.toolCallId, tc.toolName)">
+                    <div v-if="tc.input" style="margin-top: 0.25rem; margin-bottom: 0.5rem">
+                      <pre style="white-space: pre-wrap; word-break: break-all; font-size: 0.8rem; margin: 0; opacity: 0.7">{{ tc.input }}</pre>
+                    </div>
+                    <pre v-if="tc.output" style="white-space: pre-wrap; word-break: break-all; font-size: 0.8rem; margin: 0">{{ tc.output }}</pre>
+                    <pre v-if="tc.error" style="white-space: pre-wrap; word-break: break-all; font-size: 0.8rem; margin: 0; color: var(--p-red-500)">{{ tc.error }}</pre>
+                  </template>
+                </div>
+              </div>
+              <div
+                v-if="msg.content"
+                v-html="useMarkdown(computed(() => msg.content)).html.value"
+                class="chat-bubble"
+                :style="{ marginTop: (msg as any).toolCalls?.length ? '0.75rem' : '0' }"
+              />
             </div>
           </div>
         </template>
@@ -414,12 +442,14 @@ function formatTokens(n: number): string {
           </div>
         </div>
 
-        <!-- Streaming response -->
+        <!-- Streaming response. Tool calls render first (chronological:
+             think → call → answer); the assistant's text answer lands at
+             the bottom. The finalized assistant bubble below mirrors this
+             ordering so there's no visual snap when streaming completes. -->
         <div v-if="chat.streamingText || chat.activeToolCalls.size" style="display: flex; justify-content: flex-start">
           <div style="max-width: 70%; min-width: 0; overflow-wrap: break-word; padding: 0.75rem 1rem; border-radius: 0.75rem; background-color: var(--p-content-hover-background); color: var(--p-text-color)">
-            <div v-if="chat.streamingText" v-html="streamingHtml" class="chat-bubble" />
             <!-- Active tool calls -->
-            <div v-if="chat.activeToolCalls.size" :style="{ marginTop: chat.streamingText ? '0.75rem' : '0', display: 'flex', flexDirection: 'column', gap: '0.5rem' }">
+            <div v-if="chat.activeToolCalls.size" :style="{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }">
               <template v-for="[id, tc] in chat.activeToolCalls" :key="id">
                 <!-- Completed/errored tool calls: render like finalized msg-tool -->
                 <div v-if="tc.status === 'done' || tc.status === 'error'" style="padding: 0.25rem 0">
@@ -460,6 +490,7 @@ function formatTokens(n: number): string {
                 </div>
               </template>
             </div>
+            <div v-if="chat.streamingText" v-html="streamingHtml" class="chat-bubble" :style="{ marginTop: chat.activeToolCalls.size ? '0.75rem' : '0' }" />
           </div>
         </div>
 

@@ -10,6 +10,7 @@ import {
   PaginatedMessagesResponseSchema,
   PromptResponseSchema,
 } from '@/gen/airlock/v1/api_pb'
+import { enrichMessages as enrichMessagesShared, formatToolArgs } from '@/utils/messageGroup'
 
 // Sliding-window pagination keeps the browser's in-memory message list
 // bounded. Scrolling up past the top fetches an older page; if the window
@@ -275,38 +276,38 @@ export const useChatStore = defineStore('chat', () => {
       return
     }
 
-    // Collect tool calls before clearing.
+    // Collect tool calls before clearing. Each is normalized to the same
+    // GroupedToolCall shape that enrichMessages produces on persisted rows
+    // so the live and refresh paths render identically.
     const toolCalls = activeToolCalls.size > 0
-      ? [...activeToolCalls.values()]
+      ? [...activeToolCalls.values()].map((tc) => ({
+          toolCallId: tc.toolCallId,
+          toolName: tc.toolName,
+          input: formatToolArgs((() => { try { return JSON.parse(tc.input) } catch { return tc.input } })()),
+          output: tc.output || '',
+          error: tc.error || '',
+        }))
       : undefined
 
-    // Push tool calls as separate messages so they appear in the conversation.
-    if (toolCalls) {
-      for (const tc of toolCalls) {
-        messages.value.push({
-          $typeName: 'airlock.v1.AgentMessageInfo',
-          id: `tool-${tc.toolCallId}`,
-          role: 'tool',
-          content: tc.error ? `Error: ${tc.error}` : (tc.output || ''),
-          tokensIn: 0,
-          tokensOut: 0,
-          costEstimate: 0,
-          toolName: tc.toolName,
-          toolInput: formatToolArgs((() => { try { return JSON.parse(tc.input) } catch { return tc.input } })()),
-        } as any)
-      }
-    }
-
-    if (streamingText.value) {
-      messages.value.push({
+    // Push ONE assistant message carrying both the streamed text and the
+    // tool calls inline. The render template groups them inside a single
+    // bubble (tool calls first, text last) — matches the streaming layout
+    // so finalize doesn't visually snap. Need to push even when there's
+    // no text, since a tool-only assistant turn (typical of run_js loops)
+    // still has to surface its tool calls.
+    if (toolCalls || streamingText.value) {
+      const stamp = currentRunId.value || Date.now().toString()
+      const msg: any = {
         $typeName: 'airlock.v1.AgentMessageInfo',
-        id: `msg-${Date.now()}`,
+        id: `msg-${stamp}`,
         role: 'assistant',
         content: streamingText.value,
         tokensIn: 0,
         tokensOut: 0,
         costEstimate: 0,
-      } as AgentMessageInfo)
+      }
+      if (toolCalls) msg.toolCalls = toolCalls
+      messages.value.push(msg as AgentMessageInfo)
     }
     // Drain notifications buffered during the run — now the assistant/tool
     // bubbles are in place, so notifications land after them.
@@ -323,74 +324,13 @@ export const useChatStore = defineStore('chat', () => {
     sending.value = false
   }
 
-  // Parse tool call args into a display string.
-  const metaKeys = new Set(['request_confirmation'])
-
-  function formatToolArgs(args: any): string {
-    if (typeof args === 'string') return args
-    if (args && typeof args === 'object') {
-      const keys = Object.keys(args).filter(k => !metaKeys.has(k))
-      if (keys.length === 1) return String(args[keys[0]])
-      const filtered: Record<string, any> = {}
-      for (const k of keys) filtered[k] = args[k]
-      // Pretty-print without JSON.stringify to preserve newlines in string values.
-      return Object.entries(filtered).map(([k, v]) => `${k}: ${typeof v === 'string' ? v : JSON.stringify(v)}`).join('\n')
-    }
-    return ''
-  }
-
-  // Enrich messages with tool call/result info parsed from the `parts` JSON column.
+  // Enrich messages with tool call/result info, then layer on the chat-store-
+  // specific notification enrichment that the run views don't need.
   function enrichMessages(msgs: AgentMessageInfo[]): AgentMessageInfo[] {
-    // Build a map of toolCallId → { toolName, input } from assistant parts.
-    // Also attach toolCalls array to assistant messages for rendering.
-    const toolCallMap = new Map<string, { toolName: string; input: string }>()
-    for (const msg of msgs) {
-      if (msg.role !== 'assistant' || !msg.parts) continue
-      try {
-        const parts = typeof msg.parts === 'string' ? JSON.parse(msg.parts) : msg.parts
-        if (!Array.isArray(parts)) continue
-        const calls: { toolCallId: string; toolName: string; input: string }[] = []
-        for (const p of parts) {
-          if (p.type === 'tool-call' && p.toolCallId) {
-            const input = formatToolArgs(p.args)
-            toolCallMap.set(p.toolCallId, {
-              toolName: p.toolName || 'tool',
-              input,
-            })
-            calls.push({ toolCallId: p.toolCallId, toolName: p.toolName || 'tool', input })
-          }
-        }
-        if (calls.length > 0) {
-          ;(msg as any).toolCalls = calls
-        }
-      } catch { /* ignore parse errors */ }
-    }
-
-    // Enrich tool-result messages.
-    for (const msg of msgs) {
-      if (msg.role !== 'tool' || !msg.parts) continue
-      try {
-        const parts = typeof msg.parts === 'string' ? JSON.parse(msg.parts) : msg.parts
-        if (!Array.isArray(parts)) continue
-        for (const p of parts) {
-          if (p.type === 'tool-result' && p.toolCallId) {
-            const call = toolCallMap.get(p.toolCallId)
-            if (call) {
-              ;(msg as any).toolName = call.toolName
-              ;(msg as any).toolInput = call.input
-            } else if (p.toolName) {
-              ;(msg as any).toolName = p.toolName
-            }
-          }
-        }
-      } catch { /* ignore parse errors */ }
-    }
-
-    // Attach displayParts to notification / upload-echo messages for rich rendering.
+    enrichMessagesShared(msgs)
     for (const msg of msgs) {
       if (msg.source === 'notification' || msg.source === 'upload') enrichNotification(msg)
     }
-
     return msgs
   }
 
