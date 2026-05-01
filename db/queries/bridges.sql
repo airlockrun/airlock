@@ -41,6 +41,14 @@ SELECT * FROM bridges WHERE agent_id IS NULL LIMIT 1;
 -- Find the bridge bound to a specific agent
 SELECT * FROM bridges WHERE agent_id = @agent_id;
 
+-- name: ListBridgesByAgentID :many
+-- All bridges bound to a specific agent. The schema doesn't unique-constrain
+-- bridges.agent_id, so use this to enumerate before tearing the agent down —
+-- the agent Delete handler must cancel each poller individually since
+-- CASCADE delete kills only the DB row, leaving the in-memory goroutine
+-- polling forever (and racing on the bot token if the bridge is re-added).
+SELECT id FROM bridges WHERE agent_id = @agent_id;
+
 -- name: UpdateBridgeAgentID :one
 -- Reassign a bridge to a different agent. An empty (NULL) agent_id makes
 -- it a system bridge. The running poller must be reloaded via

@@ -301,6 +301,35 @@ func (q *Queries) ListBridgesAdmin(ctx context.Context) ([]ListBridgesAdminRow, 
 	return items, nil
 }
 
+const listBridgesByAgentID = `-- name: ListBridgesByAgentID :many
+SELECT id FROM bridges WHERE agent_id = $1
+`
+
+// All bridges bound to a specific agent. The schema doesn't unique-constrain
+// bridges.agent_id, so use this to enumerate before tearing the agent down —
+// the agent Delete handler must cancel each poller individually since
+// CASCADE delete kills only the DB row, leaving the in-memory goroutine
+// polling forever (and racing on the bot token if the bridge is re-added).
+func (q *Queries) ListBridgesByAgentID(ctx context.Context, agentID pgtype.UUID) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, listBridgesByAgentID, agentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []pgtype.UUID{}
+	for rows.Next() {
+		var id pgtype.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listBridgesForAgent = `-- name: ListBridgesForAgent :many
 SELECT id, agent_id, created_by, type, name, bot_username, status, config, token_encrypted, last_polled_at, created_at, updated_at FROM bridges
 WHERE agent_id = $1 OR agent_id IS NULL

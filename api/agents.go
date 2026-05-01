@@ -24,6 +24,13 @@ import (
 	"go.uber.org/zap"
 )
 
+// bridgePollerCanceler is the subset of trigger.BridgeManager that the
+// agent Delete handler uses to stop bridge pollers before the bridge row
+// vanishes via FK CASCADE. Defined as an interface so tests can stub it.
+type bridgePollerCanceler interface {
+	RemoveBridge(bridgeID uuid.UUID)
+}
+
 type agentsHandler struct {
 	db          *db.DB
 	builder     *builder.BuildService
@@ -31,6 +38,7 @@ type agentsHandler struct {
 	encryptor   *crypto.Encryptor
 	containers  container.ContainerManager
 	promptProxy *trigger.PromptProxy
+	bridgeMgr   bridgePollerCanceler
 	publicURL   string
 	logger      *zap.Logger
 }
@@ -290,6 +298,25 @@ func (h *agentsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	// agent row is gone).
 	if h.builder != nil {
 		h.builder.CancelBuildAndWait(agentID.String(), 30*time.Second)
+	}
+
+	// Stop bridge pollers bound to this agent before the FK CASCADE
+	// removes their rows. Without this, the in-memory poller goroutine
+	// keeps polling the bot platform forever (it cached the token at
+	// AddBridge time and doesn't re-read DB), which races with any
+	// future bridge re-registration on the same token — Telegram
+	// returns 409 Conflict because two getUpdates loops are competing
+	// for the same bot.
+	if h.bridgeMgr != nil {
+		if bridgeIDs, err := q.ListBridgesByAgentID(ctx, toPgUUID(agentID)); err == nil {
+			for _, bid := range bridgeIDs {
+				bridgeUUID, err := uuid.FromBytes(bid.Bytes[:])
+				if err != nil {
+					continue
+				}
+				h.bridgeMgr.RemoveBridge(bridgeUUID)
+			}
+		}
 	}
 
 	// Stop container (best effort).

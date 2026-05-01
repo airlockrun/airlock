@@ -242,6 +242,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 			encryptor:   cfg.Encryptor,
 			containers:  cfg.Containers,
 			promptProxy: cfg.PromptProxy,
+			bridgeMgr:   cfg.BridgeManager,
 			publicURL:   cfg.PublicURL,
 			logger:      cfg.Logger.Named("agents"),
 		}
