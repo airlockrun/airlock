@@ -103,11 +103,11 @@ func TestMaterialize(t *testing.T) {
 	if !strings.Contains(dockerfileStr, "--from=libs") {
 		t.Error("Dockerfile must always have --from=libs")
 	}
-	if !strings.Contains(dockerfileStr, "build-deps.sh") {
-		t.Error("Dockerfile missing build-deps.sh hook")
+	if !strings.Contains(dockerfileStr, "apt-deps.sh") {
+		t.Error("Dockerfile missing apt-deps.sh hook")
 	}
-	if !strings.Contains(dockerfileStr, "runtime-deps.sh") {
-		t.Error("Dockerfile missing runtime-deps.sh hook")
+	if !strings.Contains(dockerfileStr, "type=cache,target=/var/lib/apt/lists") {
+		t.Error("Dockerfile missing apt cache mount")
 	}
 }
 

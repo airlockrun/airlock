@@ -24,10 +24,6 @@ COPY --from=libs-ext   templ    /libs/templ
 RUN --mount=type=cache,target=/go/pkg/mod \
     go mod download
 
-# Agent-specified build dependencies (optional)
-COPY build-deps.sh* /tmp/
-RUN if [ -f /tmp/build-deps.sh ]; then sh /tmp/build-deps.sh; fi
-
 # Copy source
 COPY . .
 
@@ -40,9 +36,13 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # Runtime
 FROM airlock-agent-base
 
-# Agent-specified runtime dependencies (optional)
-COPY runtime-deps.sh* /tmp/
-RUN if [ -f /tmp/runtime-deps.sh ]; then sh /tmp/runtime-deps.sh && rm -rf /var/lib/apt/lists/*; fi
+# Agent-specified system dependencies (optional). Same script the builder
+# tested against locally. BuildKit cache mounts make repeat installs cheap;
+# neither directory lands in the final image, so no manual cleanup needed.
+COPY apt-deps.sh* /tmp/
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    if [ -f /tmp/apt-deps.sh ]; then bash /tmp/apt-deps.sh; fi
 
 COPY --from=builder /agent /agent
 COPY --from=builder /build/db/migrations /migrations
