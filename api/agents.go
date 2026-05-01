@@ -281,6 +281,17 @@ func (h *agentsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Cancel any in-flight build/upgrade and wait for its toolserver to
+	// die — otherwise the upgrade goroutine keeps writing into the
+	// workspace dir we're about to rm and the agent_builds row we're
+	// about to CASCADE delete, producing FK errors and orphan files.
+	// 30s covers worst-case Docker SIGKILL + last DB write; on timeout
+	// we proceed anyway (the leftover writes are harmless once the
+	// agent row is gone).
+	if h.builder != nil {
+		h.builder.CancelBuildAndWait(agentID.String(), 30*time.Second)
+	}
+
 	// Stop container (best effort).
 	if h.containers != nil {
 		containerName := "airlock-agent-" + agentID.String()[:8]
