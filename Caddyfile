@@ -21,7 +21,7 @@
 
 # Apex domain: the dashboard SPA + airlock REST/WebSocket API.
 {$DOMAIN} {
-	@backend path /api/* /auth/* /ws /webhooks/* /health
+	@backend path /api/* /auth/* /auth-external /ws /webhooks/* /health
 	handle @backend {
 		reverse_proxy airlock:8080
 	}
