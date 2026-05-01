@@ -733,6 +733,21 @@ the LLM uses top-level functions to operate on absolute paths. There is
 no zone slug, no `{zone, key}` shape, no per-directory namespace object —
 everything is just paths.
 
+> **Storage paths are NOT the runtime container's local filesystem.**
+> `agent.ReadFile("/reports/x.csv")` reaches into the platform's object
+> store. `os.ReadFile("/reports/x.csv")` reads from the runtime
+> container's actual disk and finds nothing. The two namespaces share
+> path syntax but are completely separate. If you shell out to a CLI
+> tool that takes a path argument (`ffmpeg -i ... out.mp4`,
+> `pdftotext input.pdf out.txt`), the CLI sees the local container
+> filesystem only — it cannot see the storage namespace. You must stage
+> the input on local disk first, run the tool, then upload the output
+> back into storage. The framework's auto-registered `/tmp` storage
+> directory is a *storage* path too — `agent.WriteFile(ctx, "/tmp/x", ...)`
+> uploads to the platform's `/tmp` namespace; `os.WriteFile("/tmp/x", ...)`
+> writes to the container's local `/tmp`. Use `os.CreateTemp("", ...)`
+> in your Go code to avoid confusing the two.
+
 ```go
 agent.RegisterDirectory("/uploads", agentsdk.DirectoryOpts{
     Read:        agentsdk.AccessUser,
@@ -831,6 +846,106 @@ agent.RegisterTool(&agentsdk.Tool[CropIn, CropOut]{
 `CheckFileAccess` returns `agentsdk.ErrNotFound` for both "denied" and
 "no covering directory" — never distinguish them; the indistinguishable
 response prevents path-guessing from leaking what exists.
+
+### Shelling out to a CLI tool that reads/writes by path
+
+Whenever a tool processes a stored file with an external CLI (ffmpeg,
+pdftotext, imagemagick, libreoffice, …), the shape is always:
+permission-check the LLM-supplied storage path, copy bytes to a local
+temp file the CLI can read, run the CLI on local-only paths, upload the
+local output back into the storage namespace, and clean up the local
+files. Skipping any step either leaks across the security boundary or
+leaves the file invisible to the rest of the agent.
+
+```go
+type TranscodeIn struct {
+    Source  string `json:"source"`             // absolute storage path supplied by the LLM
+    Bitrate string `json:"bitrate,omitempty"`  // e.g. "128k"
+}
+type TranscodeOut struct {
+    Result agentsdk.FileInfo `json:"result"`
+}
+
+agent.RegisterTool(&agentsdk.Tool[TranscodeIn, TranscodeOut]{
+    Name:        "transcode_audio",
+    Description: "Re-encode a stored audio file to MP3 at the given bitrate.",
+    Access:      agentsdk.AccessUser,
+    Execute: func(ctx context.Context, in TranscodeIn) (TranscodeOut, error) {
+        // 1. Untrusted path — permission-check before touching it.
+        if err := agent.CheckFileAccess(ctx, in.Source, agentsdk.OpRead); err != nil {
+            return TranscodeOut{}, err
+        }
+
+        // 2. Stream the stored bytes onto local disk so ffmpeg can read them.
+        //    os.CreateTemp guarantees a unique local path; preserve the source
+        //    extension so ffmpeg's auto-demuxer picks the right decoder.
+        src, err := agent.OpenFile(ctx, in.Source)
+        if err != nil {
+            return TranscodeOut{}, err
+        }
+        defer src.Close()
+
+        localIn, err := os.CreateTemp("", "in-*"+filepath.Ext(in.Source))
+        if err != nil {
+            return TranscodeOut{}, err
+        }
+        defer os.Remove(localIn.Name())  // fires on every exit path
+        if _, err := io.Copy(localIn, src); err != nil {
+            localIn.Close()
+            return TranscodeOut{}, err
+        }
+        localIn.Close()
+
+        // 3. Run the CLI. Both -i and the output path are LOCAL paths;
+        //    ffmpeg cannot reach storage. Capture combined output for errors.
+        localOut, err := os.CreateTemp("", "out-*.mp3")
+        if err != nil {
+            return TranscodeOut{}, err
+        }
+        localOut.Close()
+        defer os.Remove(localOut.Name())
+        bitrate := in.Bitrate
+        if bitrate == "" {
+            bitrate = "128k"
+        }
+        cmd := exec.CommandContext(ctx, "ffmpeg",
+            "-y", "-i", localIn.Name(),
+            "-b:a", bitrate,
+            localOut.Name())
+        if out, err := cmd.CombinedOutput(); err != nil {
+            return TranscodeOut{}, fmt.Errorf("ffmpeg: %w: %s", err, out)
+        }
+
+        // 4. Upload the local result into the storage namespace. Pick a
+        //    storage path inside a directory the agent registered — here
+        //    /transcoded must exist via agent.RegisterDirectory("/transcoded", ...).
+        result, err := os.Open(localOut.Name())
+        if err != nil {
+            return TranscodeOut{}, err
+        }
+        defer result.Close()
+        storagePath := "/transcoded/" + filepath.Base(localOut.Name())
+        info, err := agent.WriteFile(ctx, storagePath, result, "audio/mpeg")
+        if err != nil {
+            return TranscodeOut{}, err
+        }
+        return TranscodeOut{Result: info}, nil
+    },
+})
+```
+
+A few details that bite if you skip them:
+- The two `defer os.Remove` calls fire on every exit path (early return,
+  panic, success). Without them the runtime container's local disk fills
+  up after enough invocations and the agent eventually wedges on ENOSPC.
+- The CLI's output path (`localOut.Name()`) is local. Returning it from
+  the tool would give the LLM a path it cannot fetch — `agent.StatFile`
+  would 404 because nothing in storage corresponds to it. Always upload
+  the bytes back via `agent.WriteFile` and return the resulting `FileInfo`.
+- For tools whose output filename you don't control (some CLIs pick
+  their own name from the input), point the CLI at a local *directory*
+  (`os.MkdirTemp`) and `defer os.RemoveAll` it; then walk the directory
+  and upload whatever the CLI produced.
 
 ### Directories surface as URLs on the agent's subdomain
 
