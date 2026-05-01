@@ -399,7 +399,7 @@ function formatTokens(n: number): string {
                final layout mirrors the streaming layout: tool calls on
                top, text answer at the bottom. -->
           <div
-            v-else-if="(msg.content || (msg as any).toolCalls?.length) && !(msg as any)._hidden"
+            v-else-if="(msg.content || (msg as any).toolCalls?.length || (msg as any)._cancelled) && !(msg as any)._hidden"
             :style="{
               display: 'flex',
               justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start',
@@ -407,6 +407,7 @@ function formatTokens(n: number): string {
           >
             <div
               :class="['msg-bubble', msg.role === 'user' ? 'msg-user' : 'msg-assistant']"
+              :style="(msg as any)._cancelled ? { opacity: 0.6 } : undefined"
             >
               <div v-if="(msg as any).toolCalls?.length" :style="{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }">
                 <div v-for="tc in (msg as any).toolCalls" :key="tc.toolCallId" style="padding: 0.25rem 0">
@@ -429,6 +430,12 @@ function formatTokens(n: number): string {
                 class="chat-bubble"
                 :style="{ marginTop: (msg as any).toolCalls?.length ? '0.75rem' : '0' }"
               />
+              <div
+                v-if="(msg as any)._cancelled"
+                style="font-size: 0.7rem; text-transform: uppercase; opacity: 0.5; margin-top: 0.5rem; font-style: italic"
+              >
+                (cancelled)
+              </div>
             </div>
           </div>
         </template>
@@ -491,6 +498,25 @@ function formatTokens(n: number): string {
               </template>
             </div>
             <div v-if="chat.streamingText" v-html="streamingHtml" class="chat-bubble" :style="{ marginTop: chat.activeToolCalls.size ? '0.75rem' : '0' }" />
+            <!-- Cancel button. Hidden when a confirmation is awaiting the
+                 user (Approve/Reject is the relevant action then). The
+                 button is disabled briefly while the DELETE is in flight
+                 to discourage double-fires. The optimistic flip happens
+                 immediately on click — when the request settles or the
+                 server emits run.complete, the bubble is already moved
+                 into messages and this stream block disappears. -->
+            <div
+              v-if="!chat.pendingConfirmation"
+              :style="{ display: 'flex', justifyContent: 'flex-end', marginTop: '0.5rem' }"
+            >
+              <Button
+                label="Cancel"
+                severity="secondary"
+                size="small"
+                :loading="chat.cancelling"
+                @click="chat.cancelRun"
+              />
+            </div>
           </div>
         </div>
 

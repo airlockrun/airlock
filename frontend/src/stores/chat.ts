@@ -66,6 +66,12 @@ export const useChatStore = defineStore('chat', () => {
   const pendingConfirmation = ref<Confirmation | null>(null)
   const currentRunId = ref<string | null>(null)
   const sending = ref(false)
+  const cancelling = ref(false)
+  // Runs the user cancelled locally — late NDJSON events for these runIDs
+  // are ignored so the optimistically finalized bubble doesn't repaint
+  // with stale tool output. Bounded growth: we only ever add the current
+  // runId, and there's at most one in-flight run per conversation.
+  const cancelledRunIds = new Set<string>()
 
   // Sliding-window pagination state. hasOlder means messages exist older
   // than `messages[0]` — enable the top sentinel observer. hasNewer means
@@ -93,7 +99,11 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   // Match events by runId, or accept if we're sending (race: WS arrives before HTTP response).
+  // Drops events for runs the user cancelled locally so the optimistically
+  // finalized bubble doesn't repaint as the agent's straggling tool output
+  // arrives.
   function isCurrentRun(evRunId: string): boolean {
+    if (cancelledRunIds.has(evRunId)) return false
     if (evRunId === currentRunId.value) return true
     if (sending.value) return true
     // Silently ignore stale events (e.g., WS replay buffer from previous runs).
@@ -258,7 +268,34 @@ export const useChatStore = defineStore('chat', () => {
 
   let sendingTimeout: ReturnType<typeof setTimeout> | null = null
 
-  function finalizeMessage() {
+  // cancelRun — fired by the streaming bubble's Cancel button. Optimistic
+  // UX: finalize the bubble locally with whatever streamed so far and a
+  // "(cancelled)" marker, re-enable input. The DELETE call to airlock
+  // signals the agent through the dispatcher; the agent's terminal POST
+  // and any straggling NDJSON events are ignored client-side via
+  // cancelledRunIds. If the DELETE itself fails (404 because the run
+  // already finalized server-side), we don't surface it — the optimistic
+  // flip already won.
+  async function cancelRun() {
+    const runId = currentRunId.value
+    if (!runId || cancelling.value) return
+    cancelling.value = true
+    cancelledRunIds.add(runId)
+    finalizeMessage({ cancelled: true })
+
+    try {
+      await api.delete(`/api/v1/runs/${runId}`)
+    } catch (err) {
+      // 404 is expected when the run already finalized between the user
+      // clicking and the request landing. Other errors aren't actionable
+      // here — the optimistic UI flip is what the user sees.
+      console.warn('[chat] cancel run failed (ignored)', err)
+    } finally {
+      cancelling.value = false
+    }
+  }
+
+  function finalizeMessage(opts?: { cancelled?: boolean }) {
     if (sendingTimeout) { clearTimeout(sendingTimeout); sendingTimeout = null }
     console.log('[chat] finalizeMessage', { textLen: streamingText.value.length, toolCalls: activeToolCalls.size, sending: sending.value, runId: currentRunId.value })
 
@@ -295,7 +332,7 @@ export const useChatStore = defineStore('chat', () => {
     // so finalize doesn't visually snap. Need to push even when there's
     // no text, since a tool-only assistant turn (typical of run_js loops)
     // still has to surface its tool calls.
-    if (toolCalls || streamingText.value) {
+    if (toolCalls || streamingText.value || opts?.cancelled) {
       const stamp = currentRunId.value || Date.now().toString()
       const msg: any = {
         $typeName: 'airlock.v1.AgentMessageInfo',
@@ -307,6 +344,12 @@ export const useChatStore = defineStore('chat', () => {
         costEstimate: 0,
       }
       if (toolCalls) msg.toolCalls = toolCalls
+      // Marker used by the renderer to fade the bubble + show a small
+      // "(cancelled)" tag. The persisted assistant row from the agent's
+      // r.Complete arrives later and lacks this flag, but by then the
+      // user has moved on; the run history view shows the same details
+      // when they need to audit.
+      if (opts?.cancelled) msg._cancelled = true
       messages.value.push(msg as AgentMessageInfo)
     }
     // Drain notifications buffered during the run — now the assistant/tool
@@ -541,6 +584,7 @@ export const useChatStore = defineStore('chat', () => {
     pendingConfirmation,
     currentRunId,
     sending,
+    cancelling,
     hasOlder,
     hasNewer,
     newMessagesPending,
@@ -552,6 +596,7 @@ export const useChatStore = defineStore('chat', () => {
     loadNewer,
     jumpToLatest,
     sendMessage,
+    cancelRun,
     cleanup,
   }
 })
