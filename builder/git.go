@@ -128,6 +128,11 @@ func CreateBranch(repoPath, branch string) error {
 }
 
 // CreateUpgradeBranch creates branch upgrade/{agentID}/{runID} from main.
+// Uses `-B` (create-or-reset) so retries don't fail on a leftover branch
+// from a prior failed attempt — Fix-this-error reuses the failed run's id
+// as the branch suffix, and successful upgrades currently never delete
+// the branch after merging, so collisions are easy to hit. Whatever was
+// on the old branch was from a failed run and not worth keeping.
 func CreateUpgradeBranch(repoPath, agentID, runID string) error {
 	branch := fmt.Sprintf("upgrade/%s/%s", agentID, runID)
 
@@ -138,8 +143,8 @@ func CreateUpgradeBranch(repoPath, agentID, runID string) error {
 		}
 	}
 
-	if err := git(repoPath, "checkout", "-b", branch); err != nil {
-		return fmt.Errorf("git checkout -b %s: %w", branch, err)
+	if err := git(repoPath, "checkout", "-B", branch); err != nil {
+		return fmt.Errorf("git checkout -B %s: %w", branch, err)
 	}
 
 	return nil
