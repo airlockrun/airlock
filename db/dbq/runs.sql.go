@@ -330,6 +330,40 @@ func (q *Queries) ListRunsByAgent(ctx context.Context, arg ListRunsByAgentParams
 	return items, nil
 }
 
+const listStuckRuns = `-- name: ListStuckRuns :many
+SELECT id, agent_id FROM runs
+WHERE status = 'running' AND started_at < $1
+`
+
+type ListStuckRunsRow struct {
+	ID      pgtype.UUID `json:"id"`
+	AgentID pgtype.UUID `json:"agent_id"`
+}
+
+// Runs presumed dead because they haven't seen a terminal status update
+// past the cutoff (started_at + outer dispatcher timeout + grace).
+// The sweeper marks them error/agent-disconnected, synthesizes orphan
+// tool-results, and publishes a synthetic run.complete WS event.
+func (q *Queries) ListStuckRuns(ctx context.Context, cutoff pgtype.Timestamptz) ([]ListStuckRunsRow, error) {
+	rows, err := q.db.Query(ctx, listStuckRuns, cutoff)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListStuckRunsRow{}
+	for rows.Next() {
+		var i ListStuckRunsRow
+		if err := rows.Scan(&i.ID, &i.AgentID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const resetStuckRuns = `-- name: ResetStuckRuns :exec
 UPDATE runs SET
     status = 'failed',

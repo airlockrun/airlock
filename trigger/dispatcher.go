@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/airlockrun/agentsdk"
@@ -39,6 +40,16 @@ type Dispatcher struct {
 	containers container.ContainerManager
 	encryptor  *crypto.Encryptor
 	logger     *zap.Logger
+
+	// In-flight per-run cancel registry. Populated when ForwardPrompt /
+	// ForwardCron starts streaming from the agent, removed when the
+	// response body is closed (after publishRunEvents drains it).
+	// CancelRun(runID) fires the registered cancel func, which aborts
+	// the outbound HTTP request — the agent's r.Context() then cancels,
+	// vm.Interrupt fires, and the agent finalizes via its detached
+	// /api/agent/run/complete POST.
+	mu       sync.Mutex
+	inFlight map[uuid.UUID]context.CancelFunc
 }
 
 // NewDispatcher creates a Dispatcher.
@@ -49,7 +60,50 @@ func NewDispatcher(cfg *config.Config, db *db.DB, containers container.Container
 		containers: containers,
 		encryptor:  enc,
 		logger:     logger,
+		inFlight:   make(map[uuid.UUID]context.CancelFunc),
 	}
+}
+
+// CancelRun aborts the in-flight outbound request for the given run, if any.
+// Returns true if a cancel was fired. Idempotent — repeat calls and calls
+// for runs that already finished are no-ops.
+func (d *Dispatcher) CancelRun(runID uuid.UUID) bool {
+	d.mu.Lock()
+	cancel, ok := d.inFlight[runID]
+	delete(d.inFlight, runID)
+	d.mu.Unlock()
+	if ok {
+		cancel()
+	}
+	return ok
+}
+
+// registerInFlight stores the cancel func for a run; deregisterInFlight removes
+// it. Both are safe to call multiple times.
+func (d *Dispatcher) registerInFlight(runID uuid.UUID, cancel context.CancelFunc) {
+	d.mu.Lock()
+	d.inFlight[runID] = cancel
+	d.mu.Unlock()
+}
+
+func (d *Dispatcher) deregisterInFlight(runID uuid.UUID) {
+	d.mu.Lock()
+	delete(d.inFlight, runID)
+	d.mu.Unlock()
+}
+
+// runBodyCloser wraps the agent's response body so closing it deregisters
+// the run from the cancel registry. Without this the registry would leak
+// entries for runs that finished naturally (no CancelRun call).
+type runBodyCloser struct {
+	io.ReadCloser
+	dispatcher *Dispatcher
+	runID      uuid.UUID
+}
+
+func (r *runBodyCloser) Close() error {
+	r.dispatcher.deregisterInFlight(r.runID)
+	return r.ReadCloser.Close()
 }
 
 // EnsureRunning looks up the agent, decrypts its DB credentials, and starts
@@ -136,11 +190,16 @@ func (d *Dispatcher) ForwardCron(ctx context.Context, agentID uuid.UUID, cronNam
 		return nil, uuid.Nil, err
 	}
 
-	rc, err := d.forward(ctx, c, "POST", "/cron/"+cronName, nil, runID, nil, timeout)
+	cancelCtx, cancel := context.WithCancel(ctx)
+	d.registerInFlight(runID, cancel)
+
+	rc, err := d.forward(cancelCtx, c, "POST", "/cron/"+cronName, nil, runID, nil, timeout)
 	if err != nil {
+		d.deregisterInFlight(runID)
+		cancel()
 		return nil, uuid.Nil, err
 	}
-	return rc, runID, nil
+	return &runBodyCloser{ReadCloser: rc, dispatcher: d, runID: runID}, runID, nil
 }
 
 // ForwardPrompt ensures the agent is running, creates a run record, and POSTs
@@ -162,11 +221,19 @@ func (d *Dispatcher) ForwardPrompt(ctx context.Context, agentID uuid.UUID, input
 		return nil, uuid.Nil, err
 	}
 
-	rc, err := d.forward(ctx, c, "POST", "/prompt", payload, runID, bridgeID, promptTimeout)
+	// Register a cancel hook for this run before issuing the outbound
+	// request. CancelRun(runID) fires this cancel, the streaming response
+	// body returns EOF, and publishRunEvents exits its read loop.
+	cancelCtx, cancel := context.WithCancel(ctx)
+	d.registerInFlight(runID, cancel)
+
+	rc, err := d.forward(cancelCtx, c, "POST", "/prompt", payload, runID, bridgeID, promptTimeout)
 	if err != nil {
+		d.deregisterInFlight(runID)
+		cancel()
 		return nil, uuid.Nil, err
 	}
-	return rc, runID, nil
+	return &runBodyCloser{ReadCloser: rc, dispatcher: d, runID: runID}, runID, nil
 }
 
 // createRun inserts a new run record and returns its ID.

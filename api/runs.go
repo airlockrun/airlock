@@ -124,7 +124,14 @@ func (h *runsHandler) GetRunLogs(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(run.StdoutLog))
 }
 
-// CancelRun handles DELETE /api/v1/runs/{runID}.
+// CancelRun handles DELETE /api/v1/runs/{runID}. Fires the dispatcher's
+// per-run cancel hook if one is registered (cancels the outbound HTTP
+// request to the agent → run.ctx fires inside the agent → vm.Interrupt
+// aborts run_js → agent's detached r.Complete POST lands the terminal
+// state). Also marks the row cancelled directly here as belt-and-
+// suspenders: if the agent's r.Complete never arrives (crashed mid-tool,
+// network partition), the sweeper or this DB write is what flips the
+// row out of 'running'.
 func (h *runsHandler) CancelRun(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	runID, err := parseUUID(chi.URLParam(r, "runID"))
@@ -145,7 +152,15 @@ func (h *runsHandler) CancelRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Mark as cancelled in DB.
+	// Signal the agent first; the streaming /prompt connection breaks,
+	// publishRunEvents exits, and the conversation mutex releases for
+	// any prompt queued behind this run.
+	if h.dispatcher != nil {
+		h.dispatcher.CancelRun(runID)
+	}
+
+	// Mark as cancelled in DB. Idempotent with the agent's own
+	// r.Complete POST (UpsertRunComplete) — last write wins.
 	_ = q.UpdateRunComplete(ctx, dbq.UpdateRunCompleteParams{
 		ID:           toPgUUID(runID),
 		Status:       "cancelled",

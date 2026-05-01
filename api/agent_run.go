@@ -133,6 +133,21 @@ func (h *agentHandler) RunComplete(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Tool-call/tool-result pairing invariant: provider APIs reject the next
+	// LLM turn if any assistant tool_use isn't followed by a matching
+	// tool_result. Cancel, deadline-exceeded, and panic-mid-tool all leave
+	// orphans. Synthesize them here so the conversation is safe to feed
+	// back to the LLM. SessionLoad has a belt-and-suspenders fallback.
+	if req.Status != "success" && req.Status != "suspended" {
+		SynthesizeOrphanToolResults(r.Context(), q, runUUID, req.Status, h.logger)
+	}
+
+	// Publish terminal WS event so the live UI flips when the streaming
+	// /prompt connection died (cancel, network blip, container restart).
+	// Duplicates publishRunEvents in the happy path; the chat store
+	// idempotently no-ops the second event for an already-finalized run.
+	PublishRunTerminal(r.Context(), h.pubsub, agentID, runUUID, req.Status, req.Error)
+
 	w.WriteHeader(http.StatusOK)
 }
 

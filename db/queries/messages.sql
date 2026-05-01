@@ -106,3 +106,27 @@ WHERE m.conversation_id = $1
 -- name: DeleteMessagesByConversation :exec
 DELETE FROM agent_messages
 WHERE conversation_id = $1;
+
+-- name: ListOrphanToolCallsByRun :many
+-- Returns tool-call parts emitted by this run that don't have a matching
+-- tool-result row in the same conversation. RunComplete and the sweeper
+-- iterate this and INSERT synthetic tool messages so the conversation's
+-- tool_use ↔ tool_result invariant holds for the next LLM turn (provider
+-- APIs 400 on unpaired tool_use). parts JSONB shape is the goai layout:
+-- {"type":"tool-call","toolCallId":...,"toolName":...,"args":...}.
+SELECT
+    m.conversation_id,
+    (p->>'toolCallId')::text AS tool_call_id,
+    COALESCE(p->>'toolName', 'tool')::text AS tool_name
+FROM agent_messages m, jsonb_array_elements(m.parts) p
+WHERE m.run_id = @run_id
+  AND m.role = 'assistant'
+  AND p->>'type' = 'tool-call'
+  AND p->>'toolCallId' IS NOT NULL
+  AND NOT EXISTS (
+    SELECT 1
+    FROM agent_messages m2, jsonb_array_elements(m2.parts) p2
+    WHERE m2.conversation_id = m.conversation_id
+      AND p2->>'type' = 'tool-result'
+      AND p2->>'toolCallId' = p->>'toolCallId'
+  );

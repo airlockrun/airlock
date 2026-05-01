@@ -389,6 +389,55 @@ func runServe(_ []string) {
 		}
 	}()
 
+	// Stuck-run sweeper — runs that have been in 'running' status past the
+	// outer dispatcher timeout (2:15) plus a 15s grace are presumed dead.
+	// Mark them error/agent-disconnected, synthesize orphan tool_results
+	// (so the next LLM turn doesn't 400 on unpaired tool_use), and publish
+	// a synthetic run.complete WS event so any live UI that was watching
+	// this run unblocks. If the agent's r.Complete eventually arrives,
+	// UpsertRunComplete is idempotent and the late truth overwrites with
+	// the actual outcome — frontend re-paints. Tick frequency keeps the
+	// user-visible "stuck" window short without hammering the DB.
+	go func() {
+		sweepLogger := logger.Named("stuck-run-sweeper")
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		q := dbq.New(database.Pool())
+		for {
+			select {
+			case <-ticker.C:
+				cutoff := pgtype.Timestamptz{Time: time.Now().Add(-(2*time.Minute + 30*time.Second)), Valid: true}
+				stuck, err := q.ListStuckRuns(ctx, cutoff)
+				if err != nil {
+					sweepLogger.Error("list stuck runs", zap.Error(err))
+					continue
+				}
+				for _, r := range stuck {
+					runUUID, err := uuid.FromBytes(r.ID.Bytes[:])
+					if err != nil {
+						continue
+					}
+					agentUUID, err := uuid.FromBytes(r.AgentID.Bytes[:])
+					if err != nil {
+						continue
+					}
+					api.SynthesizeOrphanToolResults(ctx, q, runUUID, "timeout", sweepLogger)
+					_ = q.UpdateRunComplete(ctx, dbq.UpdateRunCompleteParams{
+						ID:           r.ID,
+						Status:       "error",
+						ErrorMessage: "agent disconnected",
+					})
+					api.PublishRunTerminal(ctx, pubsub, agentUUID, runUUID, "error", "agent disconnected")
+					sweepLogger.Warn("stuck run reaped",
+						zap.String("run_id", runUUID.String()),
+						zap.String("agent_id", agentUUID.String()))
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
 	// Attachment URL cache prune — drop rows that expired more than 24h ago.
 	// Stale rows aren't harmful (just unused), so a slow daily sweep is enough.
 	go func() {

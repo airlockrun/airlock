@@ -102,6 +102,14 @@ UPDATE runs SET
     duration_ms = EXTRACT(EPOCH FROM (now() - started_at))::integer * 1000
 WHERE status = 'running';
 
+-- name: ListStuckRuns :many
+-- Runs presumed dead because they haven't seen a terminal status update
+-- past the cutoff (started_at + outer dispatcher timeout + grace).
+-- The sweeper marks them error/agent-disconnected, synthesizes orphan
+-- tool-results, and publishes a synthetic run.complete WS event.
+SELECT id, agent_id FROM runs
+WHERE status = 'running' AND started_at < @cutoff;
+
 -- name: CompactOldRuns :execrows
 -- Nullify verbose fields on completed runs older than the cutoff.
 -- Aggregates (token counts, cost, duration, timestamps, status, error) are preserved.

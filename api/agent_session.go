@@ -34,6 +34,21 @@ func (h *agentHandler) SessionLoad(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Belt-and-suspenders: if any assistant tool_use part still lacks a
+	// matching tool_result, synthesize one in-memory and emit a warn log
+	// so we know RunComplete + sweeper missed it. Without this the next
+	// LLM turn 400s at the provider; with it we degrade to a missing-
+	// result string and stay live.
+	if orphans := detectOrphanToolCalls(dbMsgs); len(orphans) > 0 {
+		for _, op := range orphans {
+			h.logger.Warn("unpaired tool_call surfaced at SessionLoad — RunComplete synthesis missed",
+				zap.String("conversation_id", convID.String()),
+				zap.String("tool_call_id", op.ToolCallID),
+				zap.String("tool_name", op.ToolName))
+			dbMsgs = append(dbMsgs, orphanToolResultMessage(toPgUUID(convID), op))
+		}
+	}
+
 	msgs := make([]session.Message, 0, len(dbMsgs))
 	for _, m := range dbMsgs {
 		msgs = append(msgs, dbMessageToSession(m))
