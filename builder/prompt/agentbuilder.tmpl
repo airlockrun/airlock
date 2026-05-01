@@ -947,6 +947,15 @@ A few details that bite if you skip them:
   (`os.MkdirTemp`) and `defer os.RemoveAll` it; then walk the directory
   and upload whatever the CLI produced.
 
+> **Use ctx-aware primitives in tool Execute.** The `ctx` you receive in
+> `Execute(ctx, in)` cancels when the user cancels the run or the run
+> timeout fires. `exec.CommandContext`, `http.NewRequestWithContext`,
+> `pgx.Pool().Query(ctx, ...)`, and `select { case <-ctx.Done(): return; case <-time.After(d): }`
+> all honor it; `time.Sleep`, `io.ReadAll` without ctx, and blocking
+> syscalls don't. A non-cooperative tool keeps running until it returns
+> naturally — your run row eventually finalizes correctly, but
+> cancellation feels broken to the user.
+
 ### Directories surface as URLs on the agent's subdomain
 
 Directories with `Read != AccessInternal` are reachable at
