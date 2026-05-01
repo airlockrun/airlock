@@ -334,10 +334,18 @@ func (m *DockerManager) StartToolserver(ctx context.Context, opts ToolserverOpts
 		},
 	}
 
-	// Persistent volume for Go module + build caches across codegen runs.
+	// Persistent volumes for Go module + build caches across codegen runs.
+	// The apt-* volumes let `sudo apt-get update` (sudoers grants apt-get
+	// /apt-cache NOPASSWD in the agent-builder image) keep its package
+	// index across toolserver lifetimes — first install in a fresh dev
+	// env pays the index download once; subsequent installs are warm.
+	// Volumes are owned by root because apt only writes via sudo; the
+	// host-UID toolserver process never touches them directly.
 	mounts := append(opts.Mounts,
 		dmount.Mount{Type: dmount.TypeVolume, Source: "airlock-go-mod-cache", Target: "/tmp/go-mod"},
 		dmount.Mount{Type: dmount.TypeVolume, Source: "airlock-go-build-cache", Target: "/tmp/go-cache"},
+		dmount.Mount{Type: dmount.TypeVolume, Source: "airlock-apt-lists", Target: "/var/lib/apt/lists"},
+		dmount.Mount{Type: dmount.TypeVolume, Source: "airlock-apt-cache", Target: "/var/cache/apt"},
 	)
 
 	hostCfg := &dcontainer.HostConfig{

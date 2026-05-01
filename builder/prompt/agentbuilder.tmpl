@@ -19,8 +19,7 @@ agents/{agent_id}/
 ├── main.go            # Agent entrypoint — registrations only, no business logic
 ├── go.mod             # Module file with replace directives (usually leave as-is)
 ├── sqlc.yaml          # sqlc config (pre-configured, at project root)
-├── build-deps.sh      # (optional) Build-stage system deps — apt-get packages for compilation
-├── runtime-deps.sh    # (optional) Runtime-stage system deps — apt-get packages for execution
+├── apt-deps.sh        # (optional) System dependencies — apt-get packages installed in both your builder env and the runtime image
 ├── views/
 │   ├── layout.templ   # Base HTML layout with htmx
 │   └── index.templ    # Homepage (edit or replace)
@@ -45,19 +44,25 @@ This ensures you use correct URLs, scopes, and data formats instead of guessing.
 
 # System Dependencies
 
-If the agent needs system packages (e.g., imagemagick, ffmpeg, poppler-utils), create hook scripts instead of modifying the Dockerfile. **Never create or modify a Dockerfile** — Airlock generates it automatically.
+If the agent needs system packages (e.g. `imagemagick`, `ffmpeg`, `poppler-utils`), create an `apt-deps.sh` at the agent root. **Never create or modify a Dockerfile** — Airlock generates it automatically.
 
-Both stages use **Debian bookworm** — use `apt-get` for package installation. Do not clean the apt cache — Airlock handles cleanup.
+The base image is **Debian trixie** — use `apt-get`. Don't clean the apt cache; Airlock handles that via BuildKit cache mounts.
 
-- `build-deps.sh` — packages needed at compile time (C libraries, headers, build tools)
-- `runtime-deps.sh` — packages needed at runtime (CLI tools, shared libraries)
-
-Example `runtime-deps.sh`:
+Example `apt-deps.sh`:
 ```bash
-apt-get update && apt-get install -y --no-install-recommends ffmpeg
+apt-get update && apt-get install -y --no-install-recommends ffmpeg poppler-utils
 ```
 
-Only create these files when the agent genuinely needs system packages not in the base image.
+The script runs in the agent's runtime image. To verify a binary behaves the way you expect (e.g. before writing `exec.Command("ffmpeg", ...)` into the agent), install it into your own builder env first:
+
+```bash
+sudo bash apt-deps.sh
+ffmpeg -version
+```
+
+`sudo` is preconfigured for `apt-get`/`apt-cache` only — no password needed. Once you've verified the binary works, the same `apt-deps.sh` ships into the runtime image automatically.
+
+Only create this file when the agent genuinely needs system packages not in the base image.
 
 # Environment Rules
 
@@ -1150,7 +1155,7 @@ If the build fails, fix the errors and try again.
 9. Keep function descriptions clear and concise — the LLM reads them
 10. Verify compilation before committing
 11. Set a clear Description in agentsdk.Config — it's shown to users in the UI
-12. Never create or modify a Dockerfile — use build-deps.sh / runtime-deps.sh for system dependencies
+12. Never create or modify a Dockerfile — use apt-deps.sh for system dependencies
 13. Only call AddExtraPrompt for agent-specific persona, domain rules, or explicit per-access behavior — Airlock's base prompt already covers run_js, registered functions, MCP tools, and public-caller safety guards
 14. If you need to use the real filesystem (e.g. to exec ffmpeg or similar tools), use it briefly — clean up the files after you use them or upload them to S3. Otherwise the container's FS will keep growing.
 15. Declare a slot with `RegisterModel` for any LLM call the admin should be able to rebind independently (summarization, routing decisions, per-task specialists). Bare `agent.XxxModel(ctx, "", ...)` calls use the per-agent capability default and are fine when no per-task override is needed.

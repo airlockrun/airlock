@@ -20,7 +20,11 @@ ARG GOOSE_VERSION=v3.27.1
 ARG TEMPL_VERSION=v0.3.865
 
 COPY --from=sqlc/sqlc:latest /workspace/sqlc /usr/local/bin/sqlc
-RUN apt-get update && apt-get install -y --no-install-recommends git ripgrep postgresql-client && \
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        git ripgrep postgresql-client sudo && \
+    echo 'ALL ALL=(root) NOPASSWD: /usr/bin/apt-get, /usr/bin/apt-cache' \
+        > /etc/sudoers.d/99-airlock-apt && \
+    chmod 0440 /etc/sudoers.d/99-airlock-apt && \
     rm -rf /var/lib/apt/lists/*
 
 # Materialize /libs/* from the Go module proxy at pinned versions. Files come
