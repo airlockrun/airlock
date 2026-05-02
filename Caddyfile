@@ -21,6 +21,14 @@
 
 # Apex domain: the dashboard SPA + airlock REST/WebSocket API.
 {$DOMAIN} {
+	# /auth/relay is a frontend SPA route — the landing page for the
+	# subdomain relay-login flow. Must be matched BEFORE @backend so it
+	# doesn't get swallowed by the /auth/* matcher. The backend serves
+	# POST /auth/relay-code, which the SPA calls from this page.
+	@spa_relay path /auth/relay
+	handle @spa_relay {
+		reverse_proxy frontend:80
+	}
 	@backend path /api/* /auth/* /auth-external /ws /webhooks/* /health
 	handle @backend {
 		reverse_proxy airlock:8080
