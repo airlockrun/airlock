@@ -27,7 +27,7 @@ func (q *Queries) DeleteStaleAgentTools(ctx context.Context, arg DeleteStaleAgen
 }
 
 const listAgentTools = `-- name: ListAgentTools :many
-SELECT id, agent_id, name, description, access, input_schema, output_schema, created_at FROM agent_tools
+SELECT id, agent_id, name, description, llm_hint, access, input_schema, output_schema, created_at FROM agent_tools
 WHERE agent_id = $1
 ORDER BY name
 `
@@ -46,6 +46,7 @@ func (q *Queries) ListAgentTools(ctx context.Context, agentID pgtype.UUID) ([]Ag
 			&i.AgentID,
 			&i.Name,
 			&i.Description,
+			&i.LlmHint,
 			&i.Access,
 			&i.InputSchema,
 			&i.OutputSchema,
@@ -62,10 +63,11 @@ func (q *Queries) ListAgentTools(ctx context.Context, agentID pgtype.UUID) ([]Ag
 }
 
 const upsertAgentTool = `-- name: UpsertAgentTool :exec
-INSERT INTO agent_tools (agent_id, name, description, access, input_schema, output_schema)
-VALUES ($1, $2, $3, $4, $5, $6)
+INSERT INTO agent_tools (agent_id, name, description, llm_hint, access, input_schema, output_schema)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
 ON CONFLICT (agent_id, name) DO UPDATE SET
     description   = EXCLUDED.description,
+    llm_hint      = EXCLUDED.llm_hint,
     access        = EXCLUDED.access,
     input_schema  = EXCLUDED.input_schema,
     output_schema = EXCLUDED.output_schema
@@ -75,6 +77,7 @@ type UpsertAgentToolParams struct {
 	AgentID      pgtype.UUID `json:"agent_id"`
 	Name         string      `json:"name"`
 	Description  string      `json:"description"`
+	LlmHint      string      `json:"llm_hint"`
 	Access       string      `json:"access"`
 	InputSchema  []byte      `json:"input_schema"`
 	OutputSchema []byte      `json:"output_schema"`
@@ -85,6 +88,7 @@ func (q *Queries) UpsertAgentTool(ctx context.Context, arg UpsertAgentToolParams
 		arg.AgentID,
 		arg.Name,
 		arg.Description,
+		arg.LlmHint,
 		arg.Access,
 		arg.InputSchema,
 		arg.OutputSchema,

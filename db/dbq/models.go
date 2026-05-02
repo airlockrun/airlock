@@ -88,6 +88,7 @@ type AgentDirectory struct {
 	WriteAccess    string             `json:"write_access"`
 	ListAccess     string             `json:"list_access"`
 	Description    string             `json:"description"`
+	LlmHint        string             `json:"llm_hint"`
 	RetentionHours int32              `json:"retention_hours"`
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
@@ -163,6 +164,7 @@ type AgentTool struct {
 	AgentID      pgtype.UUID        `json:"agent_id"`
 	Name         string             `json:"name"`
 	Description  string             `json:"description"`
+	LlmHint      string             `json:"llm_hint"`
 	Access       string             `json:"access"`
 	InputSchema  []byte             `json:"input_schema"`
 	OutputSchema []byte             `json:"output_schema"`
@@ -174,6 +176,7 @@ type AgentTopic struct {
 	AgentID     pgtype.UUID        `json:"agent_id"`
 	Slug        string             `json:"slug"`
 	Description string             `json:"description"`
+	LlmHint     string             `json:"llm_hint"`
 	Access      string             `json:"access"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
@@ -234,6 +237,7 @@ type Connection struct {
 	Slug              string             `json:"slug"`
 	Name              string             `json:"name"`
 	Description       string             `json:"description"`
+	LlmHint           string             `json:"llm_hint"`
 	Access            string             `json:"access"`
 	AuthMode          string             `json:"auth_mode"`
 	AuthUrl           string             `json:"auth_url"`

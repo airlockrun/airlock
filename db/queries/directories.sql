@@ -1,11 +1,12 @@
 -- name: UpsertDirectory :exec
-INSERT INTO agent_directories (agent_id, path, read_access, write_access, list_access, description, retention_hours)
-VALUES (@agent_id, @path, @read_access, @write_access, @list_access, @description, @retention_hours)
+INSERT INTO agent_directories (agent_id, path, read_access, write_access, list_access, description, llm_hint, retention_hours)
+VALUES (@agent_id, @path, @read_access, @write_access, @list_access, @description, @llm_hint, @retention_hours)
 ON CONFLICT (agent_id, path) DO UPDATE SET
     read_access = EXCLUDED.read_access,
     write_access = EXCLUDED.write_access,
     list_access = EXCLUDED.list_access,
     description = EXCLUDED.description,
+    llm_hint = EXCLUDED.llm_hint,
     retention_hours = EXCLUDED.retention_hours,
     updated_at = now();
 

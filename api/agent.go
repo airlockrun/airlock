@@ -75,6 +75,7 @@ func (h *agentHandler) UpsertConnection(w http.ResponseWriter, r *http.Request) 
 		Slug:              slug,
 		Name:              def.Name,
 		Description:       def.Description,
+		LlmHint:           def.LLMHint,
 		AuthMode:          string(def.AuthMode),
 		AuthUrl:           def.AuthURL,
 		TokenUrl:          def.TokenURL,
@@ -207,6 +208,7 @@ func (h *agentHandler) Sync(w http.ResponseWriter, r *http.Request) {
 			AgentID:      pgAgentID,
 			Name:         t.Name,
 			Description:  t.Description,
+			LlmHint:      t.LLMHint,
 			Access:       string(t.Access),
 			InputSchema:  inSchema,
 			OutputSchema: outSchema,
@@ -332,6 +334,7 @@ func (h *agentHandler) Sync(w http.ResponseWriter, r *http.Request) {
 			AgentID:     pgAgentID,
 			Slug:        t.Slug,
 			Description: t.Description,
+			LlmHint:     t.LLMHint,
 			Access:      string(t.Access),
 		}); err != nil {
 			h.logger.Error("upsert topic failed", zap.Error(err))
@@ -393,6 +396,7 @@ func (h *agentHandler) Sync(w http.ResponseWriter, r *http.Request) {
 			WriteAccess:    string(d.Write),
 			ListAccess:     string(d.List),
 			Description:    d.Description,
+			LlmHint:        d.LLMHint,
 			RetentionHours: int32(d.RetentionHours),
 		}); err != nil {
 			h.logger.Error("upsert directory failed", zap.Error(err))
@@ -487,6 +491,7 @@ func (h *agentHandler) Sync(w http.ResponseWriter, r *http.Request) {
 			Slug:        c.Slug,
 			Name:        c.Name,
 			Description: c.Description,
+			LLMHint:     c.LlmHint,
 			BaseURL:     c.BaseUrl,
 		}
 	}
@@ -495,13 +500,14 @@ func (h *agentHandler) Sync(w http.ResponseWriter, r *http.Request) {
 		promptTools[i] = promptpkg.ToolInfo{
 			Name:         t.Name,
 			Description:  t.Description,
+			LLMHint:      t.LLMHint,
 			InputSchema:  t.InputSchema,
 			OutputSchema: t.OutputSchema,
 		}
 	}
 	promptTopics := make([]promptpkg.TopicInfo, len(req.Topics))
 	for i, t := range req.Topics {
-		promptTopics[i] = promptpkg.TopicInfo{Slug: t.Slug, Description: t.Description}
+		promptTopics[i] = promptpkg.TopicInfo{Slug: t.Slug, Description: t.Description, LLMHint: t.LLMHint}
 	}
 	promptWebhooks := make([]promptpkg.WebhookInfo, len(req.Webhooks))
 	for i, wh := range req.Webhooks {

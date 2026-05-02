@@ -33,9 +33,12 @@ type AgentData struct {
 
 // ToolInfo carries the hydrated tool record for prompt rendering.
 // InputSchema and OutputSchema are JSON-encoded JSON Schemas.
+// LLMHint is optional model-only guidance that pairs with Description
+// (which surfaces in the dashboard's Tools tab); see agentsdk.Tool.LLMHint.
 type ToolInfo struct {
 	Name         string
 	Description  string
+	LLMHint      string
 	InputSchema  json.RawMessage
 	OutputSchema json.RawMessage
 }
@@ -49,6 +52,7 @@ func renderToolsFunc(tools []ToolInfo) string {
 		items[i] = tsrender.ToolRender{
 			Name:         t.Name,
 			Description:  t.Description,
+			LLMHint:      t.LLMHint,
 			InputSchema:  t.InputSchema,
 			OutputSchema: t.OutputSchema,
 		}
@@ -60,12 +64,14 @@ type ConnInfo struct {
 	Slug        string
 	Name        string
 	Description string
+	LLMHint     string
 	BaseURL     string
 }
 
 type TopicInfo struct {
 	Slug        string
 	Description string
+	LLMHint     string
 }
 
 type WebhookInfo struct {

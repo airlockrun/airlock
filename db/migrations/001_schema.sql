@@ -145,6 +145,10 @@ CREATE TABLE connections (
     slug                text NOT NULL,
     name                text NOT NULL,
     description         text NOT NULL,
+    -- llm_hint is optional model-only guidance that pairs with description
+    -- (which surfaces in member-facing UIs). Rendered next to the connection
+    -- in the system prompt in [brackets]. Empty = no hint.
+    llm_hint            text NOT NULL,
     access              text NOT NULL,
     auth_mode           text NOT NULL,
     auth_url            text NOT NULL,
@@ -277,6 +281,8 @@ CREATE TABLE agent_topics (
     agent_id    uuid NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
     slug        text NOT NULL,
     description text NOT NULL,
+    -- llm_hint: see connections.llm_hint.
+    llm_hint    text NOT NULL,
     access      text NOT NULL,
     created_at  timestamptz NOT NULL DEFAULT now(),
     updated_at  timestamptz NOT NULL DEFAULT now(),
@@ -288,6 +294,10 @@ CREATE TABLE agent_tools (
     agent_id       uuid NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
     name           text NOT NULL,
     description    text NOT NULL,
+    -- llm_hint: see connections.llm_hint. Appended to the JSDoc block of
+    -- the tool decl in `[brackets]` so the LLM gets the extra steer
+    -- without polluting the dashboard's user-visible Description column.
+    llm_hint       text NOT NULL,
     access         text NOT NULL DEFAULT 'user',
     input_schema   jsonb NOT NULL DEFAULT '{}'::jsonb,
     output_schema  jsonb NOT NULL DEFAULT '{}'::jsonb,
@@ -308,6 +318,9 @@ CREATE TABLE agent_directories (
     write_access    text NOT NULL,
     list_access     text NOT NULL,
     description     text NOT NULL,
+    -- llm_hint: see connections.llm_hint. Rendered next to the directory
+    -- in the system prompt's directory inventory in [brackets].
+    llm_hint        text NOT NULL,
     -- retention_hours > 0 opts the directory into the storage sweeper:
     -- objects under "agents/{agent_id}{path}/" older than this many hours
     -- are deleted on the ~6h sweep. 0 = files stay forever (the default

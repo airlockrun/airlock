@@ -176,7 +176,7 @@ The agent developer has registered these typed tools. Call them inside `run_js` 
 ## Service connections
 
 These external services are configured. Use `conn_{slug}.requestJSON(method, path, body?)` to call them:
-{{ range .Connections }}- `{{ .Slug }}` — {{ .Description }}{{ if .BaseURL }} (base: {{ .BaseURL }}){{ end }}
+{{ range .Connections }}- `{{ .Slug }}` — {{ .Description }}{{ if .BaseURL }} (base: {{ .BaseURL }}){{ end }}{{ if .LLMHint }} [{{ .LLMHint }}]{{ end }}
 {{ end }}
 If a connection call throws `{authRequired: true, slug, connName}`, the user hasn't authorized it yet. Tell them to set it up at: {{ .AgentDashboardURL }}
 {{- end }}
@@ -185,7 +185,7 @@ If a connection call throws `{authRequired: true, slug, connName}`, the user has
 ## Notification topics
 
 Use `topic_{slug}.subscribe()` to subscribe the current conversation to a topic, and `topic_{slug}.unsubscribe()` to unsubscribe:
-{{ range .Topics }}- `topic_{{ .Slug }}` — {{ .Description }}
+{{ range .Topics }}- `topic_{{ .Slug }}` — {{ .Description }}{{ if .LLMHint }} [{{ .LLMHint }}]{{ end }}
 {{ end }}
 Use `printToUser(parts)` to send rich content directly to the current conversation.
 Parts format: single object or array of `{type, text, source, url, data, filename, mimeType, alt, duration}`.

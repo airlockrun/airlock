@@ -1,10 +1,11 @@
 -- name: UpsertConnection :one
 -- When scopes change, clear credentials so the user must re-authorize with the new scopes.
-INSERT INTO connections (agent_id, slug, name, description, auth_mode, auth_url, token_url, base_url, scopes, auth_injection, setup_instructions, test_path, config, access)
-VALUES (@agent_id, @slug, @name, @description, @auth_mode, @auth_url, @token_url, @base_url, @scopes, @auth_injection, @setup_instructions, @test_path, @config, @access)
+INSERT INTO connections (agent_id, slug, name, description, llm_hint, auth_mode, auth_url, token_url, base_url, scopes, auth_injection, setup_instructions, test_path, config, access)
+VALUES (@agent_id, @slug, @name, @description, @llm_hint, @auth_mode, @auth_url, @token_url, @base_url, @scopes, @auth_injection, @setup_instructions, @test_path, @config, @access)
 ON CONFLICT (agent_id, slug) DO UPDATE SET
     name = EXCLUDED.name,
     description = EXCLUDED.description,
+    llm_hint = EXCLUDED.llm_hint,
     auth_mode = EXCLUDED.auth_mode,
     auth_url = EXCLUDED.auth_url,
     token_url = EXCLUDED.token_url,

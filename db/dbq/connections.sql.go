@@ -32,7 +32,7 @@ func (q *Queries) ClearConnectionCredentials(ctx context.Context, arg ClearConne
 }
 
 const getConnectionBySlug = `-- name: GetConnectionBySlug :one
-SELECT id, agent_id, slug, name, description, access, auth_mode, auth_url, token_url, base_url, scopes, auth_injection, test_path, setup_instructions, config, client_id, client_secret, credentials, refresh_token, token_expires_at, created_at, updated_at FROM connections WHERE agent_id = $1 AND slug = $2
+SELECT id, agent_id, slug, name, description, llm_hint, access, auth_mode, auth_url, token_url, base_url, scopes, auth_injection, test_path, setup_instructions, config, client_id, client_secret, credentials, refresh_token, token_expires_at, created_at, updated_at FROM connections WHERE agent_id = $1 AND slug = $2
 `
 
 type GetConnectionBySlugParams struct {
@@ -49,6 +49,7 @@ func (q *Queries) GetConnectionBySlug(ctx context.Context, arg GetConnectionBySl
 		&i.Slug,
 		&i.Name,
 		&i.Description,
+		&i.LlmHint,
 		&i.Access,
 		&i.AuthMode,
 		&i.AuthUrl,
@@ -168,7 +169,7 @@ func (q *Queries) GetConnectionWithCredentialStatus(ctx context.Context, arg Get
 }
 
 const listConnectionsByAgent = `-- name: ListConnectionsByAgent :many
-SELECT id, agent_id, slug, name, description, access, auth_mode, auth_url, token_url, base_url, scopes, auth_injection, test_path, setup_instructions, config, client_id, client_secret, credentials, refresh_token, token_expires_at, created_at, updated_at FROM connections WHERE agent_id = $1
+SELECT id, agent_id, slug, name, description, llm_hint, access, auth_mode, auth_url, token_url, base_url, scopes, auth_injection, test_path, setup_instructions, config, client_id, client_secret, credentials, refresh_token, token_expires_at, created_at, updated_at FROM connections WHERE agent_id = $1
 `
 
 func (q *Queries) ListConnectionsByAgent(ctx context.Context, agentID pgtype.UUID) ([]Connection, error) {
@@ -186,6 +187,7 @@ func (q *Queries) ListConnectionsByAgent(ctx context.Context, agentID pgtype.UUI
 			&i.Slug,
 			&i.Name,
 			&i.Description,
+			&i.LlmHint,
 			&i.Access,
 			&i.AuthMode,
 			&i.AuthUrl,
@@ -397,11 +399,12 @@ func (q *Queries) UpdateConnectionOAuthApp(ctx context.Context, arg UpdateConnec
 }
 
 const upsertConnection = `-- name: UpsertConnection :one
-INSERT INTO connections (agent_id, slug, name, description, auth_mode, auth_url, token_url, base_url, scopes, auth_injection, setup_instructions, test_path, config, access)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+INSERT INTO connections (agent_id, slug, name, description, llm_hint, auth_mode, auth_url, token_url, base_url, scopes, auth_injection, setup_instructions, test_path, config, access)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 ON CONFLICT (agent_id, slug) DO UPDATE SET
     name = EXCLUDED.name,
     description = EXCLUDED.description,
+    llm_hint = EXCLUDED.llm_hint,
     auth_mode = EXCLUDED.auth_mode,
     auth_url = EXCLUDED.auth_url,
     token_url = EXCLUDED.token_url,
@@ -416,7 +419,7 @@ ON CONFLICT (agent_id, slug) DO UPDATE SET
     refresh_token = CASE WHEN connections.scopes != EXCLUDED.scopes THEN '' ELSE connections.refresh_token END,
     token_expires_at = CASE WHEN connections.scopes != EXCLUDED.scopes THEN NULL ELSE connections.token_expires_at END,
     updated_at = now()
-RETURNING id, agent_id, slug, name, description, access, auth_mode, auth_url, token_url, base_url, scopes, auth_injection, test_path, setup_instructions, config, client_id, client_secret, credentials, refresh_token, token_expires_at, created_at, updated_at
+RETURNING id, agent_id, slug, name, description, llm_hint, access, auth_mode, auth_url, token_url, base_url, scopes, auth_injection, test_path, setup_instructions, config, client_id, client_secret, credentials, refresh_token, token_expires_at, created_at, updated_at
 `
 
 type UpsertConnectionParams struct {
@@ -424,6 +427,7 @@ type UpsertConnectionParams struct {
 	Slug              string      `json:"slug"`
 	Name              string      `json:"name"`
 	Description       string      `json:"description"`
+	LlmHint           string      `json:"llm_hint"`
 	AuthMode          string      `json:"auth_mode"`
 	AuthUrl           string      `json:"auth_url"`
 	TokenUrl          string      `json:"token_url"`
@@ -443,6 +447,7 @@ func (q *Queries) UpsertConnection(ctx context.Context, arg UpsertConnectionPara
 		arg.Slug,
 		arg.Name,
 		arg.Description,
+		arg.LlmHint,
 		arg.AuthMode,
 		arg.AuthUrl,
 		arg.TokenUrl,
@@ -461,6 +466,7 @@ func (q *Queries) UpsertConnection(ctx context.Context, arg UpsertConnectionPara
 		&i.Slug,
 		&i.Name,
 		&i.Description,
+		&i.LlmHint,
 		&i.Access,
 		&i.AuthMode,
 		&i.AuthUrl,
