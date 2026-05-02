@@ -27,11 +27,49 @@ import (
 	"go.uber.org/zap"
 )
 
-// promptTimeout is the default timeout for prompt requests. Sits 15s above
-// agentsdk's 2-minute internal /prompt timeout so the agent has headroom to
-// interrupt the VM, write the run-complete row, and flush the NDJSON stream
-// before the airlock-side HTTP client gives up.
-const promptTimeout = 2*time.Minute + 15*time.Second
+// Prompt-run timeout shape:
+//
+//   - PromptBaseDuration: deadline armed when ForwardPrompt registers the
+//     run. A timer fires cancel() at this point unless extended.
+//   - ExtendIncrement / MaxExtensions: ExtendRun adds Increment to the
+//     deadline up to MaxExtensions times. 2 + 5×5 = 27 min absolute cap.
+//   - PromptHTTPCeiling: the http.Client.Timeout on the outbound request.
+//     Has to clear MaxExtensions×ExtendIncrement + base + grace, otherwise
+//     the client kills the connection before the deadline timer fires.
+//
+// Cron and webhook callers pass their own timeout to ForwardCron/Webhook;
+// they don't get the timer-driven extension treatment because no user is
+// watching to click Extend.
+const (
+	PromptBaseDuration = 2 * time.Minute
+	ExtendIncrement    = 5 * time.Minute
+	MaxExtensions      = 5
+	PromptHTTPCeiling  = 35 * time.Minute
+)
+
+// ErrRunNotInFlight is returned by ExtendRun when no live run matches the
+// given ID — finished, never started, or already cancelled.
+var ErrRunNotInFlight = errors.New("run not in flight")
+
+// ErrExtensionCeiling is returned by ExtendRun when the run has already
+// been extended MaxExtensions times.
+var ErrExtensionCeiling = errors.New("max extensions reached")
+
+// runState tracks an in-flight run: its cancel func plus an optional
+// deadline timer for extendable (prompt) runs. Cron/webhook runs register
+// with timer == nil and are cancellable but not extendable.
+type runState struct {
+	cancel context.CancelFunc
+
+	// timer fires cancel() at deadline. nil for non-extendable runs.
+	timer *time.Timer
+
+	// mu guards deadline + extends; held during ExtendRun's timer.Reset
+	// to keep the in-memory deadline consistent with the scheduled fire.
+	mu       sync.Mutex
+	deadline time.Time
+	extends  int
+}
 
 // Dispatcher ensures agent containers are running and forwards HTTP requests to them.
 type Dispatcher struct {
@@ -41,15 +79,16 @@ type Dispatcher struct {
 	encryptor  *crypto.Encryptor
 	logger     *zap.Logger
 
-	// In-flight per-run cancel registry. Populated when ForwardPrompt /
+	// In-flight per-run state registry. Populated when ForwardPrompt /
 	// ForwardCron starts streaming from the agent, removed when the
 	// response body is closed (after publishRunEvents drains it).
 	// CancelRun(runID) fires the registered cancel func, which aborts
 	// the outbound HTTP request — the agent's r.Context() then cancels,
 	// vm.Interrupt fires, and the agent finalizes via its detached
-	// /api/agent/run/complete POST.
+	// /api/agent/run/complete POST. ExtendRun(runID) pushes the deadline
+	// timer for extendable (prompt) runs.
 	mu       sync.Mutex
-	inFlight map[uuid.UUID]context.CancelFunc
+	inFlight map[uuid.UUID]*runState
 }
 
 // NewDispatcher creates a Dispatcher.
@@ -60,7 +99,7 @@ func NewDispatcher(cfg *config.Config, db *db.DB, containers container.Container
 		containers: containers,
 		encryptor:  enc,
 		logger:     logger,
-		inFlight:   make(map[uuid.UUID]context.CancelFunc),
+		inFlight:   make(map[uuid.UUID]*runState),
 	}
 }
 
@@ -69,27 +108,86 @@ func NewDispatcher(cfg *config.Config, db *db.DB, containers container.Container
 // for runs that already finished are no-ops.
 func (d *Dispatcher) CancelRun(runID uuid.UUID) bool {
 	d.mu.Lock()
-	cancel, ok := d.inFlight[runID]
+	state, ok := d.inFlight[runID]
 	delete(d.inFlight, runID)
 	d.mu.Unlock()
 	if ok {
-		cancel()
+		if state.timer != nil {
+			state.timer.Stop()
+		}
+		state.cancel()
 	}
 	return ok
 }
 
-// registerInFlight stores the cancel func for a run; deregisterInFlight removes
-// it. Both are safe to call multiple times.
-func (d *Dispatcher) registerInFlight(runID uuid.UUID, cancel context.CancelFunc) {
+// ExtendRun pushes the deadline of an extendable in-flight run by `by`.
+// Returns the new deadline and the number of extensions still available.
+// Errors with ErrRunNotInFlight if the run finished/cancelled (or is a
+// non-extendable cron/webhook run), or ErrExtensionCeiling if the run has
+// already been extended MaxExtensions times.
+func (d *Dispatcher) ExtendRun(runID uuid.UUID, by time.Duration) (time.Time, int, error) {
 	d.mu.Lock()
-	d.inFlight[runID] = cancel
+	state, ok := d.inFlight[runID]
+	d.mu.Unlock()
+	if !ok || state.timer == nil {
+		return time.Time{}, 0, ErrRunNotInFlight
+	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if state.extends >= MaxExtensions {
+		return state.deadline, 0, ErrExtensionCeiling
+	}
+	// Stop returns false if the timer has already fired (cancel is already
+	// running, request is dying). Treat that as "not in flight" — ignoring
+	// the race window, the user would shortly see the bubble flip cancelled.
+	if !state.timer.Stop() {
+		return time.Time{}, 0, ErrRunNotInFlight
+	}
+	state.extends++
+	state.deadline = state.deadline.Add(by)
+	state.timer.Reset(time.Until(state.deadline))
+	return state.deadline, MaxExtensions - state.extends, nil
+}
+
+// InFlightIDs returns a snapshot of currently-tracked run IDs. Used by the
+// stuck-run sweeper so it doesn't race the dispatcher and prematurely
+// terminate a long (extended) run that's still alive in memory.
+func (d *Dispatcher) InFlightIDs() []uuid.UUID {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	ids := make([]uuid.UUID, 0, len(d.inFlight))
+	for id := range d.inFlight {
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+// registerInFlight stores cancel + (optional) deadline timer for a run.
+// Pass extendable=true for prompt runs (user can click Extend); false for
+// cron/webhook runs that just need the cancel hook for CancelRun.
+func (d *Dispatcher) registerInFlight(runID uuid.UUID, cancel context.CancelFunc, extendable bool) {
+	state := &runState{cancel: cancel}
+	if extendable {
+		state.deadline = time.Now().Add(PromptBaseDuration)
+		state.timer = time.AfterFunc(PromptBaseDuration, cancel)
+	}
+	d.mu.Lock()
+	d.inFlight[runID] = state
 	d.mu.Unlock()
 }
 
 func (d *Dispatcher) deregisterInFlight(runID uuid.UUID) {
 	d.mu.Lock()
+	state, ok := d.inFlight[runID]
 	delete(d.inFlight, runID)
 	d.mu.Unlock()
+	if ok && state.timer != nil {
+		// Drop the deadline timer once the response body closes naturally.
+		// Without this the timer would still fire well after the request
+		// completed — harmless (cancel on a done ctx is a no-op) but a
+		// pointless background goroutine until then.
+		state.timer.Stop()
+	}
 }
 
 // runBodyCloser wraps the agent's response body so closing it deregisters
@@ -191,7 +289,7 @@ func (d *Dispatcher) ForwardCron(ctx context.Context, agentID uuid.UUID, cronNam
 	}
 
 	cancelCtx, cancel := context.WithCancel(ctx)
-	d.registerInFlight(runID, cancel)
+	d.registerInFlight(runID, cancel, false)
 
 	rc, err := d.forward(cancelCtx, c, "POST", "/cron/"+cronName, nil, runID, nil, timeout)
 	if err != nil {
@@ -221,13 +319,17 @@ func (d *Dispatcher) ForwardPrompt(ctx context.Context, agentID uuid.UUID, input
 		return nil, uuid.Nil, err
 	}
 
-	// Register a cancel hook for this run before issuing the outbound
-	// request. CancelRun(runID) fires this cancel, the streaming response
-	// body returns EOF, and publishRunEvents exits its read loop.
+	// Register a cancel hook + deadline timer for this run before issuing
+	// the outbound request. The timer fires cancel() at PromptBaseDuration
+	// unless ExtendRun pushes it. CancelRun(runID) fires the cancel
+	// directly; the streaming response body returns EOF and
+	// publishRunEvents exits its read loop. The HTTP client timeout is set
+	// to the absolute extension ceiling so the client doesn't kill the
+	// connection before the timer-driven deadline does.
 	cancelCtx, cancel := context.WithCancel(ctx)
-	d.registerInFlight(runID, cancel)
+	d.registerInFlight(runID, cancel, true)
 
-	rc, err := d.forward(cancelCtx, c, "POST", "/prompt", payload, runID, bridgeID, promptTimeout)
+	rc, err := d.forward(cancelCtx, c, "POST", "/prompt", payload, runID, bridgeID, PromptHTTPCeiling)
 	if err != nil {
 		d.deregisterInFlight(runID)
 		cancel()

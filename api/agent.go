@@ -387,12 +387,13 @@ func (h *agentHandler) Sync(w http.ResponseWriter, r *http.Request) {
 	dirPaths := make([]string, len(req.Directories))
 	for i, d := range req.Directories {
 		if err := q.UpsertDirectory(ctx, dbq.UpsertDirectoryParams{
-			AgentID:     pgAgentID,
-			Path:        d.Path,
-			ReadAccess:  string(d.Read),
-			WriteAccess: string(d.Write),
-			ListAccess:  string(d.List),
-			Description: d.Description,
+			AgentID:        pgAgentID,
+			Path:           d.Path,
+			ReadAccess:     string(d.Read),
+			WriteAccess:    string(d.Write),
+			ListAccess:     string(d.List),
+			Description:    d.Description,
+			RetentionHours: int32(d.RetentionHours),
 		}); err != nil {
 			h.logger.Error("upsert directory failed", zap.Error(err))
 			writeJSONError(w, http.StatusInternalServerError, "failed to sync directories")

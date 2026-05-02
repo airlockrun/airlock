@@ -1,6 +1,6 @@
 -- name: CreateRun :one
-INSERT INTO runs (agent_id, bridge_id, status, input_payload, source_ref, trigger_type, trigger_ref)
-VALUES (@agent_id, @bridge_id, 'running', @input_payload, @source_ref, @trigger_type, @trigger_ref)
+INSERT INTO runs (agent_id, bridge_id, status, error_kind, input_payload, source_ref, trigger_type, trigger_ref)
+VALUES (@agent_id, @bridge_id, 'running', '', @input_payload, @source_ref, @trigger_type, @trigger_ref)
 RETURNING *;
 
 -- name: UpdateRunComplete :exec

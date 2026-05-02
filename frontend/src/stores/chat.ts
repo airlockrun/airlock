@@ -67,6 +67,16 @@ export const useChatStore = defineStore('chat', () => {
   const currentRunId = ref<string | null>(null)
   const sending = ref(false)
   const cancelling = ref(false)
+  const extending = ref(false)
+  // Live deadline for the current run. Initialized when sendMessage gets
+  // a runId back (now + base 2 min). ExtendRun pushes the deadline and
+  // decrements remaining. Cleared on finalize/cancel/cleanup. The view
+  // derives a per-second countdown from deadlineMs in a separate timer.
+  // remaining = MaxExtensions on first prompt; 0 disables the button.
+  const runDeadlineMs = ref<number | null>(null)
+  const extensionsRemaining = ref(0)
+  const RUN_BASE_MS = 2 * 60 * 1000
+  const RUN_MAX_EXTENSIONS = 5
   // Runs the user cancelled locally — late NDJSON events for these runIDs
   // are ignored so the optimistically finalized bubble doesn't repaint
   // with stale tool output. Bounded growth: we only ever add the current
@@ -295,6 +305,32 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
+  // extendRun — fired by the streaming bubble's "Extend" button. Server
+  // picks the increment (5 min) and caps total extensions; we just call
+  // and update local state from the response. 404 means the run already
+  // finalized between click and request — ignored. 409 means the server
+  // hit the ceiling — sync remaining to 0 so the button greys out.
+  async function extendRun() {
+    const runId = currentRunId.value
+    if (!runId || extending.value || extensionsRemaining.value <= 0) return
+    extending.value = true
+    try {
+      const { data } = await api.post(`/api/v1/runs/${runId}/extend`)
+      runDeadlineMs.value = Number(data.deadlineMs)
+      extensionsRemaining.value = Number(data.extensionsRemaining)
+    } catch (err: any) {
+      const status = err?.response?.status
+      if (status === 409) {
+        // Ceiling reached server-side; sync local state.
+        extensionsRemaining.value = 0
+      } else if (status !== 404) {
+        console.warn('[chat] extend run failed', err)
+      }
+    } finally {
+      extending.value = false
+    }
+  }
+
   function finalizeMessage(opts?: { cancelled?: boolean }) {
     if (sendingTimeout) { clearTimeout(sendingTimeout); sendingTimeout = null }
     console.log('[chat] finalizeMessage', { textLen: streamingText.value.length, toolCalls: activeToolCalls.size, sending: sending.value, runId: currentRunId.value })
@@ -309,6 +345,8 @@ export const useChatStore = defineStore('chat', () => {
       pendingNotifications.length = 0
       newMessagesPending.value = true
       currentRunId.value = null
+      runDeadlineMs.value = null
+      extensionsRemaining.value = 0
       sending.value = false
       return
     }
@@ -364,6 +402,8 @@ export const useChatStore = defineStore('chat', () => {
     streamingText.value = ''
     activeToolCalls.clear()
     currentRunId.value = null
+    runDeadlineMs.value = null
+    extensionsRemaining.value = 0
     sending.value = false
   }
 
@@ -546,6 +586,8 @@ export const useChatStore = defineStore('chat', () => {
       }
 
       currentRunId.value = response.runId
+      runDeadlineMs.value = Date.now() + RUN_BASE_MS
+      extensionsRemaining.value = RUN_MAX_EXTENSIONS
       if (response.conversationId) {
         conversationId.value = response.conversationId
       }
@@ -570,6 +612,8 @@ export const useChatStore = defineStore('chat', () => {
     activeToolCalls.clear()
     pendingConfirmation.value = null
     currentRunId.value = null
+    runDeadlineMs.value = null
+    extensionsRemaining.value = 0
     sending.value = false
     hasOlder.value = false
     hasNewer.value = false
@@ -585,6 +629,9 @@ export const useChatStore = defineStore('chat', () => {
     currentRunId,
     sending,
     cancelling,
+    extending,
+    runDeadlineMs,
+    extensionsRemaining,
     hasOlder,
     hasNewer,
     newMessagesPending,
@@ -597,6 +644,7 @@ export const useChatStore = defineStore('chat', () => {
     jumpToLatest,
     sendMessage,
     cancelRun,
+    extendRun,
     cleanup,
   }
 })

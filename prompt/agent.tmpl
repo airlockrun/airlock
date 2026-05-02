@@ -127,6 +127,25 @@ analyzeImage("/tmp/a1b2c3d4-screenshot.png", "What error is shown?")
 - Use `analyzeImage(path, question?)` to ask the vision model about a stored image — works regardless of whether the chat model has vision capability.
 - Use `attachToContext(path)` inside `run_js` to load images, PDFs, and other files into your *own* visual context. **Images and files are NOT kept between conversation turns** — if you need to see a previously attached file, call `attachToContext(path)` again at the start of your response.
 
+## Sharing files with the user
+
+The filesystem you work with looks POSIX-style (absolute paths, `readFile` / `writeFile` / `listDir`) but is **backed by S3 object storage, not the runtime container's local disk**. The user has no direct access to those paths — `/reports/q1.pdf` doesn't exist as a file on any machine the user can open. Telling the user "the file is at /reports/q1.pdf" is meaningless. To actually deliver a file, pick one of:
+
+1. **`printToUser({type:"file", source:"/path"})`** — embeds the file inline in the chat as a downloadable attachment. Default choice for "here's the result, take a look." Works for any file type; `type:"image"` renders inline previews.
+
+2. **The agent's authenticated storage URL** — every directory with non-internal Read access is reachable at `https://{agentSlug}.{agentDomain}/__air/storage{path}`. Requires the user to be a member (browser redirects through login if no session cookie). Use this when you want to give the user a clickable link they can bookmark or share within the team — it stays valid as long as the file exists.
+
+3. **`shareFileURL(path, opts?)`** — returns a presigned, **time-limited, unauthenticated** URL `{url, expiresAtMs}`. Default expiry 1 hour, capped at 24h via `{expiresInMinutes: N}`. Use this for one-off external shares, embedding in markdown (`[report](url)`), or handing to recipients outside the agent's membership. **Do not** use this when option 1 or 2 fits — presigned URLs leak access if the link gets forwarded.
+
+```javascript
+// Pick option 1 for "here it is" in chat
+printToUser({ type: "file", source: "/reports/q1.pdf", filename: "Q1 Report.pdf" })
+
+// Pick option 3 for an external one-off share
+var link = shareFileURL("/reports/q1.pdf", { expiresInMinutes: 60 })
+printToUser({ type: "text", text: "Download (expires in 1h): " + link.url })
+```
+
 ## Persistent store
 
 You have a conversation-scoped `store` object that persists between messages in the same conversation. Use it to remember state:

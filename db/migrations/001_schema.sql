@@ -79,7 +79,7 @@ CREATE TABLE auth_lockouts (
     email           text NOT NULL,
     ip              text NOT NULL,
     locked_until    timestamptz NOT NULL,
-    tier            int NOT NULL DEFAULT 0,
+    tier            int NOT NULL,
     last_locked_at  timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (email, ip)
 );
@@ -145,7 +145,7 @@ CREATE TABLE connections (
     slug                text NOT NULL,
     name                text NOT NULL,
     description         text NOT NULL,
-    access              text NOT NULL DEFAULT 'user',
+    access              text NOT NULL,
     auth_mode           text NOT NULL,
     auth_url            text NOT NULL,
     token_url           text NOT NULL,
@@ -170,7 +170,7 @@ CREATE TABLE agent_mcp_servers (
     agent_id         uuid NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
     slug             text NOT NULL,
     name             text NOT NULL,
-    access           text NOT NULL DEFAULT 'user',
+    access           text NOT NULL,
     url              text NOT NULL,
     auth_mode        text NOT NULL,
     auth_url         text NOT NULL DEFAULT '',
@@ -277,7 +277,7 @@ CREATE TABLE agent_topics (
     agent_id    uuid NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
     slug        text NOT NULL,
     description text NOT NULL,
-    access      text NOT NULL DEFAULT 'user',
+    access      text NOT NULL,
     created_at  timestamptz NOT NULL DEFAULT now(),
     updated_at  timestamptz NOT NULL DEFAULT now(),
     UNIQUE (agent_id, slug)
@@ -301,15 +301,20 @@ CREATE TABLE agent_tools (
 -- read/write/list access are independent caps. Public read dirs get an
 -- unauthenticated read route at /__air/storage{path}.
 CREATE TABLE agent_directories (
-    id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    agent_id     uuid NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
-    path         text NOT NULL,
-    read_access  text NOT NULL DEFAULT 'user',
-    write_access text NOT NULL DEFAULT 'user',
-    list_access  text NOT NULL DEFAULT 'user',
-    description  text NOT NULL DEFAULT '',
-    created_at   timestamptz NOT NULL DEFAULT now(),
-    updated_at   timestamptz NOT NULL DEFAULT now(),
+    id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    agent_id        uuid NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    path            text NOT NULL,
+    read_access     text NOT NULL,
+    write_access    text NOT NULL,
+    list_access     text NOT NULL,
+    description     text NOT NULL,
+    -- retention_hours > 0 opts the directory into the storage sweeper:
+    -- objects under "agents/{agent_id}{path}/" older than this many hours
+    -- are deleted on the ~6h sweep. 0 = files stay forever (the default
+    -- for normal builder dirs). The framework registers /tmp at 72h.
+    retention_hours int NOT NULL,
+    created_at      timestamptz NOT NULL DEFAULT now(),
+    updated_at      timestamptz NOT NULL DEFAULT now(),
     UNIQUE (agent_id, path)
 );
 CREATE INDEX idx_agent_directories_agent ON agent_directories(agent_id);
@@ -344,7 +349,7 @@ CREATE TABLE runs (
     -- error_kind classifies the source of error_message so the UI can
     -- distinguish platform issues (provider 4xx, network) from agent-code
     -- bugs. Empty when status != 'error'. Values: 'platform' | 'agent' | ''.
-    error_kind        text NOT NULL DEFAULT '',
+    error_kind        text NOT NULL,
     exit_code         integer,
     panic_trace       text NOT NULL DEFAULT '',
     checkpoint        jsonb,

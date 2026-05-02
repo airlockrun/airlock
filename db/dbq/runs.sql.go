@@ -47,8 +47,8 @@ func (q *Queries) CountRunsByAgent(ctx context.Context, agentID pgtype.UUID) (in
 }
 
 const createRun = `-- name: CreateRun :one
-INSERT INTO runs (agent_id, bridge_id, status, input_payload, source_ref, trigger_type, trigger_ref)
-VALUES ($1, $2, 'running', $3, $4, $5, $6)
+INSERT INTO runs (agent_id, bridge_id, status, error_kind, input_payload, source_ref, trigger_type, trigger_ref)
+VALUES ($1, $2, 'running', '', $3, $4, $5, $6)
 RETURNING id, agent_id, bridge_id, status, trigger_type, trigger_ref, source_ref, input_payload, actions, llm_calls, llm_tokens_in, llm_tokens_out, llm_cost_estimate, duration_ms, logs, stdout_log, error_message, error_kind, exit_code, panic_trace, checkpoint, compacted, started_at, finished_at
 `
 

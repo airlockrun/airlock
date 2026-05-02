@@ -577,11 +577,18 @@ agent.RegisterDirectory("/cache", agentsdk.DirectoryOpts{
     Read: agentsdk.AccessInternal, Write: agentsdk.AccessInternal, List: agentsdk.AccessInternal,
     Description: "Memoized responses.",
 })
+agent.RegisterDirectory("/generated-images", agentsdk.DirectoryOpts{
+    Read: agentsdk.AccessInternal, Write: agentsdk.AccessInternal, List: agentsdk.AccessInternal,
+    Description:    "Throwaway AI-generated images served via shareFileURL.",
+    RetentionHours: 24, // sweeper drops files older than 24h
+})
 ```
 
 `Read` / `Write` / `List` are independent caps. `delete` folds into `Write` (POSIX-style). Each can be `AccessAdmin`, `AccessUser`, `AccessPublic`, or `AccessInternal`. **`AccessInternal` directories are unreachable from the LLM and the public HTTP route** — only trusted Go code that constructs the path itself can touch them.
 
-The framework auto-registers `/tmp` at `Read=Write=List=AccessUser`. You may `RegisterDirectory("/tmp", DirectoryOpts{Description: "..."})` to customize the description; the access caps are fixed.
+**`RetentionHours`** opts the directory into Airlock's storage sweeper: any object older than the configured hours is deleted on the ~6h sweep tick. Default `0` means files live forever — that's right for `/uploads`, `/reports`, anything the user expects to find tomorrow. Set a TTL on directories that hold ephemeral artifacts (generated media, transient scratch, presigned-URL targets) so the bucket doesn't grow without bound. Match the TTL to whatever URL expiry you hand out: a `shareFileURL(path, {expiresInMinutes: 60})` link is useless after an hour, so the bytes can go away on roughly the same horizon.
+
+The framework auto-registers `/tmp` at `Read=Write=List=AccessUser` with `RetentionHours: 72`. You may `RegisterDirectory("/tmp", DirectoryOpts{Description: "..."})` to customize the description; the access caps and retention stay at the framework's values.
 
 ### Trusted Go file API — for code that constructs paths
 
@@ -593,9 +600,12 @@ info, err := agent.StatFile(ctx, "/uploads/doc.pdf")          // FileInfo
 files, err := agent.ListDir(ctx, "/uploads/", agentsdk.ListOpts{Recursive: false})
 err := agent.DeleteFile(ctx, "/reports/old.csv")              // idempotent
 err := agent.CopyFile(ctx, "/uploads/in.csv", "/reports/copy.csv")
+share, err := agent.ShareFileURL(ctx, "/reports/q1.csv", time.Hour) // {URL, ExpiresAtMs}
 ```
 
 These do **not** call `CheckFileAccess` — builder Go is trusted with paths it constructs itself. Use freely from cron/webhook handlers, internal caches, anywhere.
+
+`ShareFileURL` returns a presigned, unauthenticated, time-limited URL (default 1h, capped at 24h server-side). Use it from cron/webhook handlers when you need to email/post a one-off external link to a stored file. For chat delivery, prefer `printToUser({type:"file", source:path})` from `run_js`; for member-only access on a stable URL, the agent's `__air/storage{path}` route already handles it.
 
 ### Untrusted paths — when a tool accepts a path from the LLM
 
@@ -808,7 +818,69 @@ The runtime system prompt fully documents JS bindings the LLM can use inside `ru
 - `mcp_{slug}` — for each `RegisterMCP`; one method per discovered MCP tool, e.g. `mcp_github.search_repos({...})`
 - `topic_{slug}` — for each `RegisterTopic` (subscribe, unsubscribe)
 
-Plus framework-provided primitives the runtime prompt describes in detail: file API (`readFile`, `writeFile`, `statFile`, `listDir`, `deleteFile`, `fileExists`, `readBytes`), `printToUser`, `attachToContext`, `httpRequest`, `webSearch`, `log`, media helpers, and DB helpers (admin runs only). Do not re-declare these as registered tools.
+Framework-provided primitives (always present, the runtime prompt describes each in detail):
+
+- **File API** — `readFile`, `readBytes`, `writeFile`, `statFile`, `listDir`, `deleteFile`, `fileExists`, `shareFileURL`. **Operate on the agent's S3-backed storage namespace, NOT the runtime container's local disk.** `readFile("/uploads/x")` fetches from object storage; `os.ReadFile("/uploads/x")` from Go would read from container disk and find nothing. The two namespaces share path syntax but are completely separate — see the storage section above.
+- **AI / media helpers** (resolved via per-agent capability defaults — no slug needed) — `analyzeImage(path, question?)`, `transcribeAudio(path, opts?)`, `generateImage(prompt, opts?)`, `speak(text, opts?)`, `embed(texts)`.
+- **User-facing output** — `printToUser(parts)`, `attachToContext(path)`.
+- **HTTP / web** — `httpRequest(url, opts?)`, `webSearch(query, count?)`.
+- **Logging** — `log(...)`, `console.log/warn/error`.
+- **Database** (admin runs only) — `queryDB(sql, ...params)`, `execDB(sql, ...params)`.
+- **Self-rebuild** (admin runs only) — `requestUpgrade(description)`.
+
+Do not re-declare any of these as `RegisterTool`s.
+
+**Public-caller surface is much narrower.** A run triggered by an `AccessPublic` caller (unauthenticated bot, public route) only sees:
+
+- `printToUser`, `log` / `console` — always present
+- File API: each verb is bound only when at least one registered directory grants `AccessPublic` for the matching cap. `readFile` / `readBytes` / `statFile` / `fileExists` / `shareFileURL` need a public **Read** dir; `writeFile` / `deleteFile` need a public **Write** dir; `listDir` needs a public **List** dir. If you've registered no public dirs, the file API is invisible to public callers entirely.
+- `conn_{slug}` / `mcp_{slug}` / `topic_{slug}` / registered tools — only the ones explicitly marked `Access: AccessPublic`
+
+Bind-time-gated *out* for public callers: `httpRequest`, `webSearch`, AI/media helpers (`analyzeImage`, `transcribeAudio`, `generateImage`, `speak`, `embed`), `attachToContext`, `queryDB` / `execDB`, `requestUpgrade`. These don't exist in the JS runtime for public runs — they can't be coaxed into existence by prompt injection, and they can't drive metered/external resources on a public visitor's behalf.
+
+Plan public flows around this: if a public visitor needs the agent to look up or compute something, register a typed `Tool` with `Access: AccessPublic` that performs the call internally with whatever auth/limits you choose. Don't expect the LLM to reach for a primitive that isn't there.
+
+**For public flows, narrow the surface to single-purpose tools rather than registering a public directory and expecting the LLM to assemble several primitives.** A single `Tool` you control gives you one place to validate the input, sanitize the prompt, and decide what reaches the user — and the LLM only sees the verb you want it to use. Concrete example: an "AI-generated image" feature for public visitors. Don't do this:
+
+```
+RegisterDirectory("/generated", AccessPublic for Read+Write+List)
+// ... then hope the LLM stitches generateImage + writeFile + shareFileURL
+//     correctly on every call, with no rate limit, leaking the storage layout
+```
+
+Do this — one bounded tool, no public storage dir at all:
+
+```go
+type GenImageIn struct {
+    Prompt string `json:"prompt" jsonschema:"description=Image description"`
+}
+type GenImageOut struct {
+    URL string `json:"url" jsonschema:"description=Time-limited URL to the generated image"`
+}
+
+agent.RegisterTool(&agentsdk.Tool[GenImageIn, GenImageOut]{
+    Name:        "generate_public_image",
+    Description: "Generate an image from a prompt and return a 1-hour shareable link.",
+    Access:      agentsdk.AccessPublic, // single verb the public LLM is allowed to call
+    Execute: func(ctx context.Context, in GenImageIn) (GenImageOut, error) {
+        // Validate / sanitize the prompt here before spending tokens.
+        // Generate via agent.ImageModel(...) → write the bytes to an
+        // *internal* directory (AccessInternal — never reachable by LLM
+        // or HTTP) → presign and return the URL.
+        info, err := generateAndStore(ctx, in.Prompt)
+        if err != nil {
+            return GenImageOut{}, err
+        }
+        share, err := agent.ShareFileURL(ctx, info.Path, time.Hour)
+        if err != nil {
+            return GenImageOut{}, err
+        }
+        return GenImageOut{URL: share.URL}, nil
+    },
+})
+```
+
+The public visitor's LLM sees one tool: `generate_public_image({prompt})`. It can't list, read, write, or delete arbitrary paths. It can't call `httpRequest` or `webSearch` to do something else with the prompt. The image lives in an internal directory the LLM can't enumerate; the only way out is the presigned URL the tool returns. That's the model: **shrink the verbs, control the side effects, surface the URL.**
 
 # Database Access
 

@@ -163,6 +163,55 @@ func (h *agentHandler) StorageInfo(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// StorageShare handles POST /api/agent/storage/share. Returns a presigned,
+// unauthenticated, time-limited URL for the given storage path. Used by
+// the agent's shareFileURL JS binding (and ShareFileURL Go method) to
+// hand out a link the user — or a third party — can fetch directly,
+// without going through agent membership / login on the subdomain proxy.
+//
+// The URL is signed for the public S3 endpoint when configured (so
+// browsers, LLM providers, and external tools can resolve it from outside
+// the docker network). Falls back to the internal endpoint otherwise.
+//
+// 404s on missing files via HeadObject pre-check so the LLM gets a clear
+// signal instead of a working URL that 404s when followed.
+func (h *agentHandler) StorageShare(w http.ResponseWriter, r *http.Request) {
+	agentID := auth.AgentIDFromContext(r.Context())
+	var req agentsdk.ShareFileRequest
+	if err := readJSON(r, &req); err != nil || req.Path == "" {
+		writeJSONError(w, http.StatusBadRequest, "path is required")
+		return
+	}
+
+	// Default 1h, cap 24h. Caller has no business asking for a multi-day
+	// URL when they could just call shareFileURL again on demand.
+	expiry := time.Duration(req.ExpiresSeconds) * time.Second
+	if expiry <= 0 {
+		expiry = time.Hour
+	}
+	if expiry > 24*time.Hour {
+		expiry = 24 * time.Hour
+	}
+
+	s3Key := agentStorageKey(agentID, req.Path)
+	if _, _, err := h.s3.HeadObject(r.Context(), s3Key); err != nil {
+		writeJSONError(w, http.StatusNotFound, "object not found")
+		return
+	}
+
+	url, err := h.s3.PublicPresignGetURL(r.Context(), s3Key, expiry)
+	if err != nil {
+		h.logger.Error("presign share URL", zap.String("path", req.Path), zap.Error(err))
+		writeJSONError(w, http.StatusInternalServerError, "presign failed")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, agentsdk.ShareFileResponse{
+		URL:         url,
+		ExpiresAtMs: time.Now().Add(expiry).UnixMilli(),
+	})
+}
+
 // serveStoragePath serves reads from a registered directory on the
 // subdomain proxy's /__air/storage{path} endpoint, gating by the
 // directory's read_access:
