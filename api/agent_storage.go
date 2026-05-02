@@ -219,7 +219,7 @@ func (h *agentHandler) StorageShare(w http.ResponseWriter, r *http.Request) {
 //   - "public" — served unauthenticated (any browser can fetch the URL)
 //   - "user"   — requires a valid __air_session cookie + agent membership
 //   - "admin"  — requires admin role on the agent
-//   - "internal" / unknown — 404
+//   - unknown  — 404
 //
 // Missing cookies on user/admin dirs get redirected through the relay
 // flow (rejectOrRedirect) so a click-from-chat triggers login. Once
@@ -285,7 +285,7 @@ func serveStoragePath(w http.ResponseWriter, r *http.Request, database *db.DB, s
 			return
 		}
 	default:
-		// Internal / unknown — never reachable from outside.
+		// Unknown / unrecognized read_access — fail closed.
 		http.NotFound(w, r)
 		return
 	}
