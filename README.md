@@ -101,7 +101,7 @@ Migrations run automatically on airlock startup. Always `pg_dump` before a major
 - **Agent runtime** — agents are user-written Go programs that import [agentsdk](https://github.com/airlockrun/agentsdk). airlock builds them into Docker images and runs each as a long-lived container, reaped when idle.
 - **Triggers** — webhook ingress (`POST /webhooks/{agent}/...`), cron schedules, chat-platform bridges, custom HTTP routes on `{slug}.your-domain.com`.
 - **LLM proxy** — agents call LLMs through airlock, which injects credentials per-agent and (optionally) routes through [telescope](https://github.com/airlockrun/telescope) for inspection.
-- **Storage** — per-agent S3 buckets (via MinIO) for files; per-agent Postgres schema for relational data.
+- **Storage** — per-agent S3 prefixes (via RustFS) for files; per-agent Postgres schema for relational data.
 - **Tools** — built-in (HTTP, search, web fetch, file ops) plus MCP server integration.
 - **Real-time** — WebSocket stream of build events, tool calls, deltas; replay buffer for reconnects.
 - **RBAC** — tenant roles (admin / manager / user) and per-agent membership (admin / user / public).
@@ -128,13 +128,13 @@ Migrations run automatically on airlock startup. Always `pg_dump` before a major
                               └─┬───────────┬─────────┘    └──────────────────┘
                                 │           │
                        ┌────────▼─────┐  ┌──▼─────────┐
-                       │   Postgres   │  │   MinIO    │
+                       │   Postgres   │  │   RustFS   │
                        │ (per-agent   │  │ (per-agent │
                        │  schemas)    │  │  buckets)  │
                        └──────────────┘  └────────────┘
 ```
 
-Agents launched by airlock join the same Docker network and reach `airlock:8080`, `postgres:5432`, `minio:9000` by service name.
+Agents launched by airlock join the same Docker network and reach `airlock:8080`, `postgres:5432`, `rustfs:9000` by service name.
 
 ## License
 

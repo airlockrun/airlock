@@ -30,7 +30,7 @@ scaffold/          Go project templates (Dockerfile.tmpl, go.mod.tmpl, main.go.t
 container/         Docker container lifecycle (start/stop/health/reap agents + toolservers)
 trigger/           Dispatcher, Scheduler (cron), BridgeManager, PromptProxy
 realtime/          WebSocket Hub + PubSub (in-memory, topic-based with replay buffer)
-storage/           S3/MinIO client (PutObject, GetObject, presigned URLs)
+storage/           S3 client (PutObject, GetObject, presigned URLs) — talks to RustFS
 crypto/            AES-256-GCM encryption with key rotation (provider keys, webhook secrets, tokens)
 convert/           Type conversion helpers
 oauth/             OAuth credential flow management

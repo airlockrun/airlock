@@ -49,7 +49,7 @@ You'll need:
 
 - Go 1.26+
 - Docker
-- Postgres + MinIO (a `docker-compose.yml` brings these up; see [README](README.md))
+- Postgres + RustFS (a `docker-compose.yml` brings these up; see [README](README.md))
 
 Build:
 
