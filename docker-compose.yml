@@ -43,9 +43,16 @@ services:
       RUSTFS_ADDRESS: "0.0.0.0:9000"
       RUSTFS_CONSOLE_ADDRESS: "0.0.0.0:9001"
       RUSTFS_CONSOLE_ENABLE: "true"
-      # Single-node erasure coding: four sub-volumes inside the one
-      # mounted data dir. The shell-glob is expanded by RustFS itself.
-      RUSTFS_VOLUMES: "/data/rustfs{0..3}"
+      # Single-node single-disk mode (one endpoint, no erasure coding).
+      # Self-host airlock puts the data on one docker volume backed by
+      # one host disk; multi-endpoint erasure striping would be theatre
+      # on a single disk and RustFS refuses that config by default.
+      # Real durability comes from whatever backs the host disk (RAID,
+      # cloud block-store replication, backups), not from RustFS
+      # striping. Operators running airlock against a true multi-disk
+      # RustFS cluster should switch this to multi-endpoint mode and
+      # bind-mount each endpoint to a distinct physical disk.
+      RUSTFS_VOLUMES: "/data/rustfs0"
       RUSTFS_ACCESS_KEY: ${S3_ACCESS_KEY:-airlock}
       RUSTFS_SECRET_KEY: ${S3_SECRET_KEY:?S3_SECRET_KEY is required — generate one with openssl rand -hex 32}
     volumes:
