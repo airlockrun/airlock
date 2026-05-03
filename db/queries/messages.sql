@@ -1,6 +1,9 @@
 -- name: CreateMessage :one
-INSERT INTO agent_messages (conversation_id, role, content, parts, tokens_in, tokens_out, cost_estimate, run_id, source, ephemeral)
-VALUES (@conversation_id, @role, @content, @parts, @tokens_in, @tokens_out, COALESCE(@cost_estimate, 0), @run_id, COALESCE(NULLIF(@source, ''), 'user'), @ephemeral)
+-- file_keys starts as an empty text[]; the chat upload path that needs
+-- attached file keys uses a separate UPDATE (or could be added explicitly
+-- via a follow-up insert path).
+INSERT INTO agent_messages (conversation_id, role, content, parts, tokens_in, tokens_out, cost_estimate, run_id, source, ephemeral, file_keys)
+VALUES (@conversation_id, @role, @content, @parts, @tokens_in, @tokens_out, COALESCE(@cost_estimate, 0), @run_id, COALESCE(NULLIF(@source, ''), 'user'), @ephemeral, '{}'::text[])
 RETURNING *;
 
 -- name: ListMessagesByConversation :many

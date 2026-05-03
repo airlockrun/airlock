@@ -2,8 +2,8 @@
 -- Reconciles slot declaration on every sync. capability and description
 -- come from the agent code; assigned_model is admin-controlled and must
 -- survive re-syncs untouched.
-INSERT INTO agent_model_slots (agent_id, slug, capability, description)
-VALUES (@agent_id, @slug, @capability, @description)
+INSERT INTO agent_model_slots (agent_id, slug, capability, description, assigned_model)
+VALUES (@agent_id, @slug, @capability, @description, '')
 ON CONFLICT (agent_id, slug) DO UPDATE SET
     capability  = EXCLUDED.capability,
     description = EXCLUDED.description;

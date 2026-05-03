@@ -79,8 +79,8 @@ func (q *Queries) GetConversationBySource(ctx context.Context, arg GetConversati
 
 const getOrCreateConversation = `-- name: GetOrCreateConversation :one
 WITH ins AS (
-    INSERT INTO agent_conversations (agent_id, user_id, source, title, bridge_id, external_id)
-    VALUES ($1, $2, $3::text, $4, $5, $6)
+    INSERT INTO agent_conversations (agent_id, user_id, source, title, bridge_id, external_id, metadata, settings)
+    VALUES ($1, $2, $3::text, $4, $5, $6, '{}'::jsonb, '{}'::jsonb)
     ON CONFLICT (agent_id, user_id, source) DO UPDATE
         SET updated_at = now(),
             bridge_id = COALESCE(EXCLUDED.bridge_id, agent_conversations.bridge_id),

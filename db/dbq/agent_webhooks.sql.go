@@ -163,8 +163,8 @@ func (q *Queries) UpdateWebhookSecret(ctx context.Context, arg UpdateWebhookSecr
 }
 
 const upsertWebhook = `-- name: UpsertWebhook :exec
-INSERT INTO agent_webhooks (agent_id, path, verify_mode, verify_header, timeout_ms, description)
-VALUES ($1, $2, $3, $4, $5, $6)
+INSERT INTO agent_webhooks (agent_id, path, verify_mode, verify_header, timeout_ms, description, secret)
+VALUES ($1, $2, $3, $4, $5, $6, '')
 ON CONFLICT (agent_id, path) DO UPDATE SET
     verify_mode = EXCLUDED.verify_mode,
     verify_header = EXCLUDED.verify_header,
@@ -182,6 +182,8 @@ type UpsertWebhookParams struct {
 	Description  string      `json:"description"`
 }
 
+// secret is initially ” — populated later by UpdateWebhookSecret when
+// the user generates an HMAC verification secret.
 func (q *Queries) UpsertWebhook(ctx context.Context, arg UpsertWebhookParams) error {
 	_, err := q.db.Exec(ctx, upsertWebhook,
 		arg.AgentID,

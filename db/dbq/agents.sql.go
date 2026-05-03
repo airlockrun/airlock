@@ -12,8 +12,22 @@ import (
 )
 
 const createAgent = `-- name: CreateAgent :one
-INSERT INTO agents (name, slug, user_id, description, config, status)
-VALUES ($1, $2, $3, $4, $5, 'draft')
+INSERT INTO agents (
+    name, slug, user_id, description, config, status,
+    upgrade_status, auto_fix,
+    build_model, exec_model, stt_model, vision_model,
+    tts_model, image_gen_model, embedding_model, search_model,
+    source_ref, image_ref, db_schema, sdk_version,
+    extra_prompts, error_message
+)
+VALUES (
+    $1, $2, $3, $4, $5, 'draft',
+    'idle', true,
+    '', '', '', '',
+    '', '', '', '',
+    '', '', '', '',
+    '[]'::jsonb, ''
+)
 RETURNING id, user_id, slug, name, description, status, upgrade_status, auto_fix, build_model, exec_model, stt_model, vision_model, tts_model, image_gen_model, embedding_model, search_model, source_ref, image_ref, db_schema, sdk_version, config, extra_prompts, error_message, created_at, updated_at
 `
 
@@ -25,6 +39,10 @@ type CreateAgentParams struct {
 	Config      []byte      `json:"config"`
 }
 
+// Initial-row INSERT. All "starts empty" string fields are passed
+// explicitly as ” rather than relying on column defaults (per AGENTS.md
+// "no fake defaults" rule). Status starts 'draft', upgrade_status 'idle',
+// auto_fix true, extra_prompts empty array.
 func (q *Queries) CreateAgent(ctx context.Context, arg CreateAgentParams) (Agent, error) {
 	row := q.db.QueryRow(ctx, createAgent,
 		arg.Name,

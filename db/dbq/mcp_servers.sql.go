@@ -382,8 +382,8 @@ func (q *Queries) UpdateMCPServerToolSchemas(ctx context.Context, arg UpdateMCPS
 }
 
 const upsertMCPServer = `-- name: UpsertMCPServer :one
-INSERT INTO agent_mcp_servers (agent_id, slug, name, url, auth_mode, auth_url, token_url, scopes, access)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+INSERT INTO agent_mcp_servers (agent_id, slug, name, url, auth_mode, auth_url, token_url, scopes, access, tool_schemas, client_id, client_secret, credentials, refresh_token)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, '[]'::jsonb, '', '', '', '')
 ON CONFLICT (agent_id, slug) DO UPDATE SET
     name = EXCLUDED.name,
     url = EXCLUDED.url,
@@ -418,6 +418,8 @@ type UpsertMCPServerParams struct {
 }
 
 // When url or scopes change, clear credentials so the user must re-authorize.
+// Discovery + credential fields are passed explicitly as empty on first
+// insert; ON CONFLICT preserves existing credentials unless invalidated.
 func (q *Queries) UpsertMCPServer(ctx context.Context, arg UpsertMCPServerParams) (AgentMcpServer, error) {
 	row := q.db.QueryRow(ctx, upsertMCPServer,
 		arg.AgentID,

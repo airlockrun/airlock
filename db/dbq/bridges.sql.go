@@ -12,8 +12,8 @@ import (
 )
 
 const createBridge = `-- name: CreateBridge :one
-INSERT INTO bridges (type, name, token_encrypted, bot_username, agent_id, created_by)
-VALUES ($1, $2, $3, $4, $5, $6)
+INSERT INTO bridges (type, name, token_encrypted, bot_username, agent_id, created_by, status, config)
+VALUES ($1, $2, $3, $4, $5, $6, 'active', '{}'::jsonb)
 RETURNING id, agent_id, created_by, type, name, bot_username, status, config, token_encrypted, last_polled_at, created_at, updated_at
 `
 

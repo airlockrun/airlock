@@ -135,8 +135,8 @@ func (q *Queries) UpdateCronLastFired(ctx context.Context, id pgtype.UUID) error
 }
 
 const upsertCron = `-- name: UpsertCron :exec
-INSERT INTO agent_crons (agent_id, name, schedule, timeout_ms, description)
-VALUES ($1, $2, $3, $4, $5)
+INSERT INTO agent_crons (agent_id, name, schedule, timeout_ms, description, enabled)
+VALUES ($1, $2, $3, $4, $5, true)
 ON CONFLICT (agent_id, name) DO UPDATE SET
     schedule = EXCLUDED.schedule,
     timeout_ms = EXCLUDED.timeout_ms,
@@ -152,6 +152,7 @@ type UpsertCronParams struct {
 	Description string      `json:"description"`
 }
 
+// enabled defaults to true on first insert; unchanged on conflict.
 func (q *Queries) UpsertCron(ctx context.Context, arg UpsertCronParams) error {
 	_, err := q.db.Exec(ctx, upsertCron,
 		arg.AgentID,

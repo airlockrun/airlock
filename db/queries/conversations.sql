@@ -1,8 +1,8 @@
 -- name: GetOrCreateConversation :one
 -- DM-only: one conversation per user per agent per source. Upserts on (agent_id, user_id, source).
 WITH ins AS (
-    INSERT INTO agent_conversations (agent_id, user_id, source, title, bridge_id, external_id)
-    VALUES (@agent_id, @user_id, @source::text, @title, @bridge_id, @external_id)
+    INSERT INTO agent_conversations (agent_id, user_id, source, title, bridge_id, external_id, metadata, settings)
+    VALUES (@agent_id, @user_id, @source::text, @title, @bridge_id, @external_id, '{}'::jsonb, '{}'::jsonb)
     ON CONFLICT (agent_id, user_id, source) DO UPDATE
         SET updated_at = now(),
             bridge_id = COALESCE(EXCLUDED.bridge_id, agent_conversations.bridge_id),

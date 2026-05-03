@@ -47,8 +47,18 @@ func (q *Queries) CountRunsByAgent(ctx context.Context, agentID pgtype.UUID) (in
 }
 
 const createRun = `-- name: CreateRun :one
-INSERT INTO runs (agent_id, bridge_id, status, error_kind, input_payload, source_ref, trigger_type, trigger_ref)
-VALUES ($1, $2, 'running', '', $3, $4, $5, $6)
+INSERT INTO runs (
+    agent_id, bridge_id, status, error_kind,
+    input_payload, source_ref, trigger_type, trigger_ref,
+    actions, llm_calls, llm_tokens_in, llm_tokens_out, llm_cost_estimate,
+    logs, stdout_log, error_message, panic_trace, compacted
+)
+VALUES (
+    $1, $2, 'running', '',
+    $3, $4, $5, $6,
+    '[]'::jsonb, 0, 0, 0, 0,
+    '', '', '', '', false
+)
 RETURNING id, agent_id, bridge_id, status, trigger_type, trigger_ref, source_ref, input_payload, actions, llm_calls, llm_tokens_in, llm_tokens_out, llm_cost_estimate, duration_ms, logs, stdout_log, error_message, error_kind, exit_code, panic_trace, checkpoint, compacted, started_at, finished_at
 `
 
@@ -61,6 +71,9 @@ type CreateRunParams struct {
 	TriggerRef   string      `json:"trigger_ref"`
 }
 
+// All "starts at zero/empty" run fields passed explicitly per AGENTS.md
+// "no fake defaults" rule. Counter fields start at 0 (no LLM calls /
+// tokens / cost yet); buffered text fields start ”; actions starts [].
 func (q *Queries) CreateRun(ctx context.Context, arg CreateRunParams) (Run, error) {
 	row := q.db.QueryRow(ctx, createRun,
 		arg.AgentID,
@@ -493,8 +506,20 @@ func (q *Queries) UpdateRunStatus(ctx context.Context, arg UpdateRunStatusParams
 }
 
 const upsertRunComplete = `-- name: UpsertRunComplete :exec
-INSERT INTO runs (id, agent_id, status, error_message, error_kind, actions, stdout_log, panic_trace, input_payload, source_ref, trigger_type, trigger_ref, finished_at, duration_ms)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, '{}', '', 'prompt', '', now(), 0)
+INSERT INTO runs (
+    id, agent_id, status, error_message, error_kind, actions,
+    stdout_log, panic_trace, input_payload, source_ref,
+    trigger_type, trigger_ref, finished_at, duration_ms,
+    llm_calls, llm_tokens_in, llm_tokens_out, llm_cost_estimate,
+    logs, compacted
+)
+VALUES (
+    $1, $2, $3, $4, $5, $6,
+    $7, $8, '{}'::jsonb, '',
+    'prompt', '', now(), 0,
+    0, 0, 0, 0,
+    '', false
+)
 ON CONFLICT (id) DO UPDATE SET
     status = EXCLUDED.status,
     error_message = EXCLUDED.error_message,
@@ -517,6 +542,12 @@ type UpsertRunCompleteParams struct {
 	PanicTrace   string      `json:"panic_trace"`
 }
 
+// Recovery path: row may not exist if CreateRun never landed. All
+// "starts empty" fields (logs, llm counters, compacted) passed
+// explicitly. trigger_type/trigger_ref/source_ref placeholders apply
+// only when the row is brand-new — the agent's r.Complete arrives
+// without trigger context; the dispatcher's CreateRun would have set
+// the real values.
 func (q *Queries) UpsertRunComplete(ctx context.Context, arg UpsertRunCompleteParams) error {
 	_, err := q.db.Exec(ctx, upsertRunComplete,
 		arg.ID,

@@ -12,8 +12,8 @@ import (
 )
 
 const createMessage = `-- name: CreateMessage :one
-INSERT INTO agent_messages (conversation_id, role, content, parts, tokens_in, tokens_out, cost_estimate, run_id, source, ephemeral)
-VALUES ($1, $2, $3, $4, $5, $6, COALESCE($7, 0), $8, COALESCE(NULLIF($9, ''), 'user'), $10)
+INSERT INTO agent_messages (conversation_id, role, content, parts, tokens_in, tokens_out, cost_estimate, run_id, source, ephemeral, file_keys)
+VALUES ($1, $2, $3, $4, $5, $6, COALESCE($7, 0), $8, COALESCE(NULLIF($9, ''), 'user'), $10, '{}'::text[])
 RETURNING id, seq, conversation_id, run_id, role, source, content, parts, file_keys, tokens_in, tokens_out, cost_estimate, ephemeral, created_at
 `
 
@@ -30,6 +30,9 @@ type CreateMessageParams struct {
 	Ephemeral      bool        `json:"ephemeral"`
 }
 
+// file_keys starts as an empty text[]; the chat upload path that needs
+// attached file keys uses a separate UPDATE (or could be added explicitly
+// via a follow-up insert path).
 func (q *Queries) CreateMessage(ctx context.Context, arg CreateMessageParams) (AgentMessage, error) {
 	row := q.db.QueryRow(ctx, createMessage,
 		arg.ConversationID,

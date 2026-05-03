@@ -99,8 +99,8 @@ func (q *Queries) SetAgentModelSlotAssignment(ctx context.Context, arg SetAgentM
 }
 
 const upsertAgentModelSlot = `-- name: UpsertAgentModelSlot :exec
-INSERT INTO agent_model_slots (agent_id, slug, capability, description)
-VALUES ($1, $2, $3, $4)
+INSERT INTO agent_model_slots (agent_id, slug, capability, description, assigned_model)
+VALUES ($1, $2, $3, $4, '')
 ON CONFLICT (agent_id, slug) DO UPDATE SET
     capability  = EXCLUDED.capability,
     description = EXCLUDED.description
