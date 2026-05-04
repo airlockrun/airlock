@@ -110,12 +110,16 @@ func main() {
         Description: "Runs JS snippets via bun; refreshes the binary weekly.",
     })
 
-    // Internal bucket for binaries the LLM should never touch directly.
+    // Admin-only bucket for binaries; the LLMHint steers the model away
+    // even on admin runs while leaving the directory reachable from
+    // trusted Go code (the file API bypasses CheckFileAccess), so
+    // SyncDown/SyncUp work freely.
     agent.RegisterDirectory("state", agentsdk.DirectoryOpts{
-        Read:  agentsdk.AccessInternal,
-        Write: agentsdk.AccessInternal,
-        List:  agentsdk.AccessInternal,
+        Read:  agentsdk.AccessAdmin,
+        Write: agentsdk.AccessAdmin,
+        List:  agentsdk.AccessAdmin,
         Description: "Self-updating binaries persisted across container restarts.",
+        LLMHint:     "framework-managed binary cache; do not read, write, or list",
     })
 
     // Boot: pull the latest bun from S3 (no-op on first boot when S3 is
@@ -678,17 +682,19 @@ agent.RegisterDirectory("reports", agentsdk.DirectoryOpts{
     Description: "Generated reports.",
 })
 agent.RegisterDirectory("cache", agentsdk.DirectoryOpts{
-    Read: agentsdk.AccessInternal, Write: agentsdk.AccessInternal, List: agentsdk.AccessInternal,
+    Read: agentsdk.AccessAdmin, Write: agentsdk.AccessAdmin, List: agentsdk.AccessAdmin,
     Description: "Memoized responses.",
+    LLMHint:     "internal cache; do not read, write, or list",
 })
 agent.RegisterDirectory("generated-images", agentsdk.DirectoryOpts{
-    Read: agentsdk.AccessInternal, Write: agentsdk.AccessInternal, List: agentsdk.AccessInternal,
+    Read: agentsdk.AccessAdmin, Write: agentsdk.AccessAdmin, List: agentsdk.AccessAdmin,
     Description:    "Throwaway AI-generated images served via shareFileURL.",
+    LLMHint:        "served externally via shareFileURL only; do not read or list directly",
     RetentionHours: 24, // sweeper drops files older than 24h
 })
 ```
 
-`Read` / `Write` / `List` are independent caps. `delete` folds into `Write` (write on the parent governs unlink). Each can be `AccessAdmin`, `AccessUser`, `AccessPublic`, or `AccessInternal`. **`AccessInternal` directories are unreachable from the LLM and the public HTTP route** — only trusted Go code that constructs the path itself can touch them.
+`Read` / `Write` / `List` are independent caps. `delete` folds into `Write` (write on the parent governs unlink). Each can be `AccessAdmin`, `AccessUser`, or `AccessPublic`. To hide a directory from the LLM while keeping it reachable from your Go code, set the caps to `AccessAdmin` and add an `LLMHint` like `"internal cache; do not read, write, or list"` — the hint is purely model-facing guidance surfaced in the system prompt, while the trusted Go file API (`agent.OpenFile`/`ReadFile`/...) bypasses `CheckFileAccess` entirely so your code can use the directory freely.
 
 **`RetentionHours`** opts the directory into Airlock's storage sweeper: any object older than the configured hours is deleted on the ~6h sweep tick. Default `0` means files live forever — that's right for `uploads`, `reports`, anything the user expects to find tomorrow. Set a TTL on directories that hold ephemeral artifacts (generated media, transient scratch, presigned-URL targets) so the bucket doesn't grow without bound. Match the TTL to whatever URL expiry you hand out: a `shareFileURL(path, {expiresInMinutes: 60})` link is useless after an hour, so the bytes can go away on roughly the same horizon.
 
@@ -812,12 +818,11 @@ Skipping any step either leaks across the security boundary or leaves the result
 
 ### Public URLs for storage
 
-Directories with `Read != AccessInternal` are reachable at `https://{slug}.{agentDomain}/__air/storage/{path}`:
+Every registered directory is reachable at `https://{slug}.{agentDomain}/__air/storage/{path}`; the proxy enforces the directory's `Read` cap at fetch time:
 
 - `AccessPublic` — unauthenticated, anyone with the URL.
 - `AccessUser` — requires agent membership (proxy redirects through relay-login).
 - `AccessAdmin` — same, admin role.
-- `AccessInternal` — never served (404).
 
 ## Agent Methods (ctx-first)
 
@@ -969,8 +974,9 @@ agent.RegisterTool(&agentsdk.Tool[GenImageIn, GenImageOut]{
     Execute: func(ctx context.Context, in GenImageIn) (GenImageOut, error) {
         // Validate / sanitize the prompt here before spending tokens.
         // Generate via agent.ImageModel(...) → write the bytes to an
-        // *internal* directory (AccessInternal — never reachable by LLM
-        // or HTTP) → presign and return the URL.
+        // admin-only directory with an LLMHint that hides it from the
+        // model (still reachable from this trusted Go code via the file
+        // API, which bypasses CheckFileAccess) → presign and return the URL.
         info, err := generateAndStore(ctx, in.Prompt)
         if err != nil {
             return GenImageOut{}, err
