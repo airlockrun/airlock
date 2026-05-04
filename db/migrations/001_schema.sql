@@ -306,14 +306,14 @@ CREATE TABLE agent_tools (
 );
 
 -- agent_directories tracks per-agent S3 directories declared via
--- agentsdk.RegisterDirectory. The path is absolute (e.g. "/reports") and
--- is concatenated with "agents/{agentID}" to form the S3 key prefix.
--- read/write/list access are independent caps. Public read dirs get an
--- unauthenticated read route at /__air/storage{path}.
+-- agentsdk.RegisterDirectory. The path is S3-style (slashless,
+-- e.g. "reports") and is joined with "agents/{agentID}/" to form the S3
+-- key prefix. read/write/list access are independent caps. Public read
+-- dirs get an unauthenticated read route at /__air/storage/{path}.
 CREATE TABLE agent_directories (
     id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     agent_id        uuid NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
-    path            text NOT NULL,
+    path            text NOT NULL CHECK (path !~ '^/' AND path !~ '/$' AND path <> ''),
     read_access     text NOT NULL,
     write_access    text NOT NULL,
     list_access     text NOT NULL,
@@ -322,9 +322,9 @@ CREATE TABLE agent_directories (
     -- in the system prompt's directory inventory in [brackets].
     llm_hint        text NOT NULL,
     -- retention_hours > 0 opts the directory into the storage sweeper:
-    -- objects under "agents/{agent_id}{path}/" older than this many hours
+    -- objects under "agents/{agent_id}/{path}/" older than this many hours
     -- are deleted on the ~6h sweep. 0 = files stay forever (the default
-    -- for normal builder dirs). The framework registers /tmp at 72h.
+    -- for normal builder dirs). The framework registers "tmp" at 72h.
     retention_hours int NOT NULL,
     created_at      timestamptz NOT NULL DEFAULT now(),
     updated_at      timestamptz NOT NULL DEFAULT now(),

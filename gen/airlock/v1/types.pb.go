@@ -2263,7 +2263,7 @@ func (x *AgentSyncedEvent) GetAgentId() string {
 // writeFile (in run_js) and embedded in PromptRequest for chat uploads.
 type FileInfo struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Path          string                 `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`         // absolute, e.g. "/uploads/foo.png"
+	Path          string                 `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`         // S3-style storage path, e.g. "uploads/foo.png"
 	Filename      string                 `protobuf:"bytes,2,opt,name=filename,proto3" json:"filename,omitempty"` // original upload name; preserved as S3 metadata
 	ContentType   string                 `protobuf:"bytes,3,opt,name=content_type,json=contentType,proto3" json:"content_type,omitempty"`
 	Size          int64                  `protobuf:"varint,4,opt,name=size,proto3" json:"size,omitempty"`

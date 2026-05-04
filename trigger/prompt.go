@@ -111,7 +111,7 @@ func (p *PromptProxy) HandleMessage(
 	// Keeps the transcript ↔ source file link explicit for the LLM.
 	paths := make([]string, len(files))
 	for i := range files {
-		paths[i] = "/tmp/" + uuid.New().String()[:8] + "-" + files[i].Filename
+		paths[i] = "tmp/" + uuid.New().String()[:8] + "-" + files[i].Filename
 	}
 
 	// Auto-transcribe voice notes before forwarding. Transcription failures
@@ -122,7 +122,7 @@ func (p *PromptProxy) HandleMessage(
 	// Store attached files in agent's S3 prefix and build FileInfo entries.
 	var fileInfos []agentsdk.FileInfo
 	for i, f := range files {
-		s3Key := "agents/" + agentID.String() + paths[i]
+		s3Key := "agents/" + agentID.String() + "/" + paths[i]
 		if err := p.s3.PutObject(ctx, s3Key, bytes.NewReader(f.Data), int64(len(f.Data))); err != nil {
 			p.logger.Error("store bridge file failed", zap.String("path", paths[i]), zap.Error(err))
 			continue
@@ -144,12 +144,18 @@ func (p *PromptProxy) HandleMessage(
 	}
 
 	// Forward to agent container — SessionStore handles message loading and persistence.
+	// CallerAccess is required for the agent's bind-time gating (admin-only
+	// JS bindings like requestUpgrade, queryDB, execDB). Web path does the
+	// same in api/conversations.go; without it the agent defaults to
+	// AccessUser and admin-only verbs ReferenceError when called from a
+	// bridge-triggered run.
 	input := agentsdk.PromptInput{
 		Message:           userMessage,
 		ConversationID:    convert.PgUUIDToString(conversationID),
 		Files:             fileInfos,
 		ExtraSystemPrompt: extraSystemPrompt,
 		ForceCompact:      forceCompact,
+		CallerAccess:      access,
 	}
 	if forceCompact {
 		input.Message = ""
@@ -239,10 +245,14 @@ func (p *PromptProxy) HandleCallback(
 	}
 
 	approved := action == "approve"
+	// Same CallerAccess plumbing as HandleMessage above — admin-only
+	// bindings need it to survive the resume turn too.
+	access := ResolveAgentAccess(ctx, q, agentID, userID)
 	input := agentsdk.PromptInput{
 		ConversationID: convert.PgUUIDToString(conv.ID),
 		ResumeRunID:    runIDStr,
 		Approved:       &approved,
+		CallerAccess:   access,
 	}
 	if !approved {
 		// Match the web "reject" flow so the LLM has something to re-reason from.

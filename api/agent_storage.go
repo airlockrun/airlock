@@ -16,23 +16,21 @@ import (
 	"go.uber.org/zap"
 )
 
-// agentStorageKey turns an absolute agent path (e.g. "/uploads/foo.png")
+// agentStorageKey turns an agent storage path (e.g. "uploads/foo.png")
 // into the canonical S3 key under the agent's prefix:
-// "agents/{agentID}/uploads/foo.png" — note no extra slash between
-// agentID and path because path already starts with '/'.
+// "agents/{agentID}/uploads/foo.png".
 func agentStorageKey(agentID uuid.UUID, path string) string {
-	return "agents/" + agentID.String() + path
+	return "agents/" + agentID.String() + "/" + path
 }
 
-// pathFromWildcard pulls "*" from chi and ensures it carries a leading '/'.
-// Empty path returns ("", false) — caller should 400.
+// pathFromWildcard pulls "*" from chi as a slashless storage path. Strips
+// any leading '/' (chi may include or omit it depending on route shape)
+// to keep the canonical form consistent. Empty path returns ("", false).
 func pathFromWildcard(r *http.Request) (string, bool) {
 	rest := chi.URLParam(r, "*")
+	rest = strings.TrimPrefix(rest, "/")
 	if rest == "" {
 		return "", false
-	}
-	if !strings.HasPrefix(rest, "/") {
-		rest = "/" + rest
 	}
 	return rest, true
 }
@@ -229,7 +227,8 @@ func (h *agentHandler) StorageShare(w http.ResponseWriter, r *http.Request) {
 // Unknown agent/path returns 404 — we deliberately don't distinguish
 // "not authorized" from "not found" so URL-guessing leaks no info.
 func serveStoragePath(w http.ResponseWriter, r *http.Request, database *db.DB, s3 *storage.S3Client, agentID uuid.UUID, path, jwtSecret, publicURL string, logger *zap.Logger) {
-	if path == "" || path[0] != '/' {
+	path = strings.TrimPrefix(path, "/")
+	if path == "" {
 		http.NotFound(w, r)
 		return
 	}
@@ -318,21 +317,22 @@ func serveStoragePath(w http.ResponseWriter, r *http.Request, database *db.DB, s
 }
 
 // StorageList handles GET /api/agent/storage. Query params:
-//   - path=/uploads/   → list under this absolute path
+//   - path=uploads/    → list under this storage path (slashless; trailing
+//                        '/' optional)
+//   - path= (empty)    → list the agent root
 //   - recursive=true|false (default false; one level only)
 func (h *agentHandler) StorageList(w http.ResponseWriter, r *http.Request) {
 	agentID := auth.AgentIDFromContext(r.Context())
-	path := r.URL.Query().Get("path")
-	if path == "" {
-		writeJSONError(w, http.StatusBadRequest, "path is required")
-		return
-	}
-	if path[0] != '/' {
-		path = "/" + path
-	}
+	path := strings.TrimPrefix(r.URL.Query().Get("path"), "/")
 	recursive := r.URL.Query().Get("recursive") == "true"
 
-	s3Prefix := agentStorageKey(agentID, path)
+	// agent prefix is "agents/{id}/"; the requested subprefix appends path
+	// (with a trailing '/' to keep listings at directory granularity).
+	agentPrefix := "agents/" + agentID.String() + "/"
+	s3Prefix := agentPrefix
+	if path != "" {
+		s3Prefix = agentPrefix + strings.TrimSuffix(path, "/") + "/"
+	}
 	objects, err := h.s3.ListObjects(r.Context(), s3Prefix)
 	if err != nil {
 		h.logger.Error("storage list failed", zap.Error(err))
@@ -340,20 +340,19 @@ func (h *agentHandler) StorageList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	agentPrefix := agentStorageKey(agentID, "/")
 	files := make([]agentsdk.FileInfo, 0, len(objects))
-	listPrefix := strings.TrimSuffix(path, "/") + "/"
-	if path == "/" {
-		listPrefix = "/"
+	listPrefix := ""
+	if path != "" {
+		listPrefix = strings.TrimSuffix(path, "/") + "/"
 	}
 	for _, obj := range objects {
-		// Strip "agents/{id}" → relative path; that's already absolute (starts with /).
-		filePath := strings.TrimPrefix(obj.Key, agentPrefix[:len(agentPrefix)-1])
+		// Strip "agents/{id}/" → slashless storage path.
+		filePath := strings.TrimPrefix(obj.Key, agentPrefix)
 		if !recursive {
 			// Non-recursive: skip entries that have additional '/' under
 			// the listing prefix.
 			rest := strings.TrimPrefix(filePath, listPrefix)
-			if rest == filePath || strings.Contains(rest, "/") {
+			if strings.Contains(rest, "/") {
 				continue
 			}
 		}

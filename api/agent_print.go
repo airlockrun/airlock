@@ -57,14 +57,10 @@ func (h *agentHandler) Print(w http.ResponseWriter, r *http.Request) {
 			p.Source = key
 			p.Data = nil // Don't store bytes in the message
 		} else if p.Source != "" && !strings.HasPrefix(p.Source, "agents/") && !strings.HasPrefix(p.Source, "media/") {
-			// Source is an agent path (e.g. "/tmp/foo.png"); copy to
-			// permanent media location. Tolerate both "/tmp/..." (new
-			// path shape) and bare "tmp/..." (legacy) — agentStorageKey
-			// expects a leading slash, so normalize first.
-			srcPath := p.Source
-			if !strings.HasPrefix(srcPath, "/") {
-				srcPath = "/" + srcPath
-			}
+			// Source is an agent storage path (e.g. "tmp/foo.png"); copy
+			// to permanent media location. Strip a stray leading '/' so
+			// the LLM-supplied path can't double-slash the S3 key.
+			srcPath := strings.TrimPrefix(p.Source, "/")
 			srcKey := agentStorageKey(agentID, srcPath)
 			filename := p.Filename
 			if filename == "" {

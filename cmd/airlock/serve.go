@@ -297,8 +297,8 @@ func runServe(_ []string) {
 
 	// Storage retention sweeper — delete objects under any directory the
 	// agent registered with retention_hours > 0, once they're older than
-	// the configured TTL. The framework auto-registers /tmp at 72h
-	// (DirectoryOpts.RetentionHours), so the prior hardcoded "/tmp/" sweep
+	// the configured TTL. The framework auto-registers "tmp" at 72h
+	// (DirectoryOpts.RetentionHours), so the prior hardcoded "tmp/" sweep
 	// falls out naturally as a special case of this loop. Builders can
 	// opt arbitrary directories into the sweep by passing
 	// RetentionHours when calling RegisterDirectory.
@@ -326,7 +326,7 @@ func runServe(_ []string) {
 					if err != nil {
 						continue
 					}
-					prefix := "agents/" + agentUUID.String() + d.Path + "/"
+					prefix := "agents/" + agentUUID.String() + "/" + d.Path + "/"
 					objects, err := s3Client.ListObjects(ctx, prefix)
 					if err != nil {
 						cleanupLogger.Error("list prefix failed",

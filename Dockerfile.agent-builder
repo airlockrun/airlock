@@ -21,11 +21,23 @@ ARG TEMPL_VERSION=v0.3.865
 
 COPY --from=sqlc/sqlc:latest /workspace/sqlc /usr/local/bin/sqlc
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        git ripgrep postgresql-client sudo && \
-    echo 'ALL ALL=(root) NOPASSWD: /usr/bin/apt-get, /usr/bin/apt-cache' \
-        > /etc/sudoers.d/99-airlock-apt && \
-    chmod 0440 /etc/sudoers.d/99-airlock-apt && \
+        git ripgrep postgresql-client curl ca-certificates sudo && \
     rm -rf /var/lib/apt/lists/*
+
+# /usr/local/bin/run-setup is a fixed-path wrapper that execs the agent's
+# setup.sh as root. The sudoers entry grants NOPASSWD on this exact path
+# only — the LLM/builder can install anything by editing setup.sh, but
+# cannot run arbitrary `sudo <other-command>` ad-hoc. apt-get/apt-cache
+# stay whitelisted for ad-hoc package lookups without invoking the full
+# setup wrapper.
+RUN printf '#!/bin/bash\nset -euo pipefail\nexec bash /workspace/setup.sh "$@"\n' \
+        > /usr/local/bin/run-setup && \
+    chmod 0755 /usr/local/bin/run-setup && \
+    echo 'ALL ALL=(root) NOPASSWD: /usr/bin/apt-get, /usr/bin/apt-cache, /usr/local/bin/run-setup' \
+        > /etc/sudoers.d/99-airlock-builder && \
+    chmod 0440 /etc/sudoers.d/99-airlock-builder && \
+    mkdir -p /var/agent/bin /var/agent/data && \
+    chmod 0777 /var/agent/bin /var/agent/data
 
 # Materialize /libs/* from the Go module proxy at pinned versions. Files come
 # out 0444 from the cache; chmod so any tooling that pokes at writability

@@ -14,6 +14,9 @@ func setRequiredEnv(t *testing.T) {
 	t.Setenv("S3_URL", "http://localhost:9090")
 	t.Setenv("S3_ACCESS_KEY", "minioadmin")
 	t.Setenv("S3_SECRET_KEY", "minioadmin")
+	// Subdomain routing is load-bearing — resolveAgentDomain panics if
+	// neither AGENT_DOMAIN nor PUBLIC_URL is set, so seed one for tests.
+	t.Setenv("AGENT_DOMAIN", "test.airlock.local")
 }
 
 func TestLoad(t *testing.T) {

@@ -326,7 +326,7 @@ message AgentSyncedEvent {
 // FileInfo describes a file in agent storage. Returned by listDir / statFile /
 // writeFile (in run_js) and embedded in PromptRequest for chat uploads.
 message FileInfo {
-  string path = 1;            // absolute, e.g. "/uploads/foo.png"
+  string path = 1;            // S3-style storage path, e.g. "uploads/foo.png"
   string filename = 2;        // original upload name; preserved as S3 metadata
   string content_type = 3;
   int64 size = 4;

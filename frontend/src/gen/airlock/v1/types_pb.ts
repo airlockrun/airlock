@@ -1236,7 +1236,7 @@ export const AgentSyncedEventSchema: GenMessage<AgentSyncedEvent> = /*@__PURE__*
  */
 export type FileInfo = Message<"airlock.v1.FileInfo"> & {
   /**
-   * absolute, e.g. "/uploads/foo.png"
+   * S3-style storage path, e.g. "uploads/foo.png"
    *
    * @generated from field: string path = 1;
    */

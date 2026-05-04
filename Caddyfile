@@ -39,9 +39,9 @@
 }
 
 # Public S3 — for presigned URLs that LLM providers (OpenAI, Anthropic,
-# etc.) fetch directly. The internal hostname `minio:9000` isn't reachable
-# from the public internet, so any presigned URL airlock generates for
-# LLM-bound content (image inputs, attachments) needs to point here.
+# etc.) fetch directly, plus shareFileURL links handed to end users.
+# The internal hostname `rustfs:9000` isn't reachable from the public
+# internet, so any presigned URL airlock generates needs to point here.
 #
 # Uses on_demand like the wildcard below: Caddy's auto-https eager-issuance
 # logic skips hostnames that overlap with a wildcard block, which means a
@@ -55,13 +55,13 @@
 #
 # header_up Host: airlock signs presigned URLs against host=s3.{$DOMAIN}.
 # Caddy's reverse_proxy default rewrites Host to the upstream's address,
-# which would invalidate the signature when MinIO recomputes it. Preserve
-# the original Host so MinIO sees what airlock signed.
+# which would invalidate the signature when RustFS recomputes it. Preserve
+# the original Host so RustFS sees what airlock signed.
 s3.{$DOMAIN} {
 	tls {
 		on_demand
 	}
-	reverse_proxy minio:9000 {
+	reverse_proxy rustfs:9000 {
 		header_up Host {host}
 	}
 }

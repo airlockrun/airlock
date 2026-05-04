@@ -115,10 +115,17 @@ func postToConversation(ctx context.Context, deps postDeps, opts postOpts) error
 
 	// Optionally trigger an LLM turn.
 	if opts.TriggerLLM && opts.LLMMessage != "" {
+		// Same CallerAccess plumbing as NotifyUpgradeComplete: resolve
+		// from the conversation owner so admin-only JS bindings
+		// (requestUpgrade, queryDB, execDB) survive system-injected
+		// follow-up turns. Without this the agent defaults to AccessUser
+		// and admin verbs ReferenceError on the next turn.
+		access := trigger.ResolveAgentAccess(ctx, q, opts.AgentID, pgUUID(conv.UserID))
 		input := agentsdk.PromptInput{
 			Message:        opts.LLMMessage,
 			ConversationID: opts.ConversationID.String(),
 			Source:         opts.Source,
+			CallerAccess:   access,
 		}
 
 		rc, runID, err := deps.Dispatcher.ForwardPrompt(ctx, opts.AgentID, input, nil)

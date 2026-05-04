@@ -522,13 +522,17 @@ func (h *agentHandler) Sync(w http.ResponseWriter, r *http.Request) {
 		promptRoutes[i] = promptpkg.RouteInfo{Method: rt.Method, Path: rt.Path, Access: string(rt.Access), Description: rt.Description}
 	}
 
-	// Build agent route URL if agent domain is configured.
-	var agentRouteURL string
-	if h.agentDomain != "" {
-		if agentRecord, err := q.GetAgentByID(ctx, pgAgentID); err == nil {
-			agentRouteURL = "https://" + agentRecord.Slug + "." + h.agentDomain
-		}
+	// Build agent route URL. h.agentDomain is required at startup
+	// (config.resolveAgentDomain panics if neither AGENT_DOMAIN nor
+	// PUBLIC_URL is set), and SubdomainProxy panics on empty too — so
+	// it's always populated by the time this handler runs.
+	agentRecord, err := q.GetAgentByID(ctx, pgAgentID)
+	if err != nil {
+		h.logger.Error("load agent for prompt render", zap.Error(err))
+		writeJSONError(w, http.StatusInternalServerError, "failed to load agent")
+		return
 	}
+	agentRouteURL := "https://" + agentRecord.Slug + "." + h.agentDomain
 
 	rendered, err := promptpkg.RenderAgentPrompt(promptpkg.AgentData{
 		AgentDashboardURL: h.publicURL + "/agents/" + agentID.String(),
@@ -547,14 +551,9 @@ func (h *agentHandler) Sync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Public storage base — the prefix StorageHandle.URL appends "/{zone}/{key}"
-	// to. agentRouteURL is empty only in deployments without an agent domain
-	// configured (which means no agent-served routes either); the SDK side
-	// degrades gracefully but in practice this is always populated.
-	publicStorageBase := ""
-	if agentRouteURL != "" {
-		publicStorageBase = agentRouteURL + "/__air/storage"
-	}
+	// Public storage base — the prefix StorageHandle.URL joins with '/'
+	// and the storage path (e.g. "reports/q1.csv") to form a URL.
+	publicStorageBase := agentRouteURL + "/__air/storage"
 
 	// Notify subscribed clients (agent detail tabs) that the agent's
 	// declared surface — tools, webhooks, crons, routes, MCP servers,

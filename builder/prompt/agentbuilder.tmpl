@@ -19,7 +19,7 @@ agents/{agent_id}/
 ├── main.go            # Entrypoint — registrations only, no business logic
 ├── go.mod             # Module file (usually leave as-is)
 ├── sqlc.yaml          # sqlc config (pre-configured)
-├── apt-deps.sh        # (optional) apt packages installed in builder env + runtime image
+├── setup.sh           # (optional) system setup — runs as root in builder env + baked into runtime image
 ├── views/
 │   ├── layout.templ
 │   └── index.templ
@@ -39,22 +39,128 @@ You have a `web_search` tool. **Always search for API docs before implementing c
 
 # System Dependencies
 
-If the agent needs system packages (`imagemagick`, `ffmpeg`, `poppler-utils`, ...), create `apt-deps.sh` at the agent root. **Never create or modify a Dockerfile** — Airlock generates it.
+If the agent needs system packages or third-party binaries (`ffmpeg`, `poppler-utils`, `bun`, `uv`, GitHub releases, pip packages — anything), create `setup.sh` at the agent root. **Never create or modify a Dockerfile** — Airlock generates it.
 
-Base image is **Debian trixie**. Don't clean the apt cache; Airlock handles that via BuildKit cache mounts.
+`setup.sh` runs as **root** at image-build time (and the same script bakes into the runtime image, so what you install there is available to tools at runtime). The base image is **Debian trixie**. Don't clean the apt cache; Airlock handles that via BuildKit cache mounts.
 
 ```bash
-# apt-deps.sh
+# setup.sh — apt is the common case
 apt-get update && apt-get install -y --no-install-recommends ffmpeg poppler-utils
 ```
 
-The same script ships into the runtime image. To verify a binary in your builder env first:
+`setup.sh` is not limited to apt. It can `curl`-bash an installer, `pip install`, drop a release tarball under `/var/agent/bin/`, anything:
 
 ```bash
-sudo bash apt-deps.sh && ffmpeg -version
+# setup.sh — non-apt example: bun (JS runtime, not in apt)
+apt-get update && apt-get install -y --no-install-recommends curl unzip
+mkdir -p /var/agent/bin
+BUN_INSTALL=/var/agent/bin curl -fsSL https://bun.sh/install | bash
 ```
 
-`sudo` is preconfigured for `apt-get`/`apt-cache` only — no password.
+To verify in the builder env before relying on it inside a tool:
+
+```bash
+sudo run-setup && /var/agent/bin/bun --version
+```
+
+`sudo` is preconfigured for `apt-get`, `apt-cache`, and `run-setup` only — no password. `run-setup` is a fixed-path wrapper that execs `setup.sh` as root; you cannot `sudo <other-command>` ad-hoc.
+
+## Persistent runtime state — `agent.SyncDown` / `agent.SyncUp`
+
+`setup.sh` runs **once per image build** — anything it installs is frozen into that image. For tools that *self-update* (`bun upgrade`, `uv self update`) or download data that goes stale (GeoIP DBs, ClamAV signatures, cached ML weights), the update happens at runtime in the container's writable layer and is lost when the container gets reaped.
+
+The fix is `agent.SyncDown` / `agent.SyncUp`: pair them in a cron handler to persist runtime updates to the agent's S3-backed storage, then pull them back at boot. The container's local copy is the working copy; S3 is the durable record.
+
+```go
+// SyncDown(ctx, "state/bin/", "/var/agent/bin/")
+//   ListDir(state/bin/, recursive) → for each remote file newer than
+//   local: download, atomic-rename, chmod 0755, set local mtime to remote.
+// SyncUp(ctx, "/var/agent/bin/", "state/bin/")
+//   filepath.Walk(localDir) → for each local file newer than remote:
+//   WriteFile, set local mtime to the resulting S3 LastModified.
+```
+
+Multi-replica is **last-writer-wins**: two replicas concurrently uploading the same path converge to whichever finished last. That's correct for self-updates (both replicas end up with the same new binary anyway). For shared mutable state with concurrent writers, use the agent's Postgres schema instead — files are for blobs, rows are for shared state.
+
+### Worked example — keeping `bun` self-updating across container restarts
+
+`setup.sh` seeds `/var/agent/bin/bun` into the image. The `bun-refresh` cron fires `bun upgrade` weekly and syncs the new binary up to S3. On any container restart (image rebuild, reap, crash), `SyncDown` pulls the latest bun back down before `Serve` returns. A typed tool exposes the runtime to the LLM as `eval_js`.
+
+```bash
+# setup.sh
+apt-get update && apt-get install -y --no-install-recommends curl unzip
+mkdir -p /var/agent/bin
+BUN_INSTALL=/var/agent/bin curl -fsSL https://bun.sh/install | bash
+```
+
+```go
+// main.go
+package main
+
+import (
+    "context"
+    "os/exec"
+    "strings"
+
+    "github.com/airlockrun/agentsdk"
+)
+
+func main() {
+    agent := agentsdk.New(agentsdk.Config{
+        Description: "Runs JS snippets via bun; refreshes the binary weekly.",
+    })
+
+    // Internal bucket for binaries the LLM should never touch directly.
+    agent.RegisterDirectory("state", agentsdk.DirectoryOpts{
+        Read:  agentsdk.AccessInternal,
+        Write: agentsdk.AccessInternal,
+        List:  agentsdk.AccessInternal,
+        Description: "Self-updating binaries persisted across container restarts.",
+    })
+
+    // Boot: pull the latest bun from S3 (no-op on first boot when S3 is
+    // empty — the image's seeded /var/agent/bin/bun stays in place).
+    must(agent.SyncDown(context.Background(), "state/bin/", "/var/agent/bin/"))
+
+    // Weekly: self-update bun, then push the new binary to S3.
+    agent.RegisterCron(&agentsdk.Cron{
+        Name:     "bun-refresh",
+        Schedule: "0 3 * * 0",
+        Handler: func(ctx context.Context) error {
+            if err := exec.CommandContext(ctx, "/var/agent/bin/bun", "upgrade").Run(); err != nil {
+                return err
+            }
+            return agent.SyncUp(ctx, "/var/agent/bin/", "state/bin/")
+        },
+    })
+
+    type EvalIn struct {
+        Code string `json:"code" jsonschema:"description=JS expression to evaluate"`
+    }
+    type EvalOut struct {
+        Result string `json:"result"`
+    }
+    agent.RegisterTool(&agentsdk.Tool[EvalIn, EvalOut]{
+        Name:        "eval_js",
+        Description: "Evaluate a JS expression with bun and return stdout.",
+        Access:      agentsdk.AccessUser,
+        Execute: func(ctx context.Context, in EvalIn) (EvalOut, error) {
+            cmd := exec.CommandContext(ctx, "/var/agent/bin/bun", "-e", in.Code)
+            out, err := cmd.CombinedOutput()
+            if err != nil {
+                return EvalOut{}, err
+            }
+            return EvalOut{Result: strings.TrimSpace(string(out))}, nil
+        },
+    })
+
+    agent.Serve()
+}
+
+func must(err error) { if err != nil { panic(err) } }
+```
+
+The same shape works for `uv self update`, `freshclam` (ClamAV signature DB into `/var/agent/data/clamav/`), browser binaries for headless scraping, ML model weights, anything that updates at runtime. Pick `state/bin/` for executables, `state/data/` for everything else — it's just a convention so the LLM-facing prompt's directory inventory reads cleanly.
 
 # Environment Rules
 
@@ -550,7 +656,7 @@ alerts := agent.RegisterTopic(&agentsdk.Topic{
 
 alerts.Publish(ctx, []agentsdk.DisplayPart{
     {Type: "text", Text: "Daily report is ready"},
-    {Type: "file", Source: "/reports/daily.pdf", Filename: "report.pdf"},
+    {Type: "file", Source: "reports/daily.pdf", Filename: "report.pdf"},
 })
 ```
 
@@ -558,54 +664,52 @@ The runtime LLM subscribes the current conversation via `topic_{slug}.subscribe(
 
 ## RegisterDirectory — File storage
 
-The platform exposes file storage as a flat unix-like filesystem. The agent registers absolute directories (`/reports`, `/uploads`); the LLM uses top-level functions on absolute paths. No zone slug, no per-directory namespace object.
+The agent has its own **S3-like object storage**. There is no container filesystem you expose to tools or to the LLM — every path you read or write is an S3 key. Paths are slashless: `uploads/x.csv`, `reports/q1.pdf`, `tmp/foo.png`. Leading slashes are rejected by the SDK (the LLM and your Go code share one canonical form).
 
-> **Storage paths are NOT the runtime container's local filesystem.** `agent.ReadFile("/x.csv")` reaches into the platform object store. `os.ReadFile("/x.csv")` reads the runtime container's local disk and finds nothing. Same syntax, separate namespaces. CLI tools (`ffmpeg -i ...`, `pdftotext input.pdf out.txt`) only see local disk — stage input on local disk first, run, upload output back. The framework's auto-registered `/tmp` is a *storage* path; use `os.CreateTemp("", ...)` for local scratch to avoid confusion.
->
-> **Users never see the local filesystem. When a user says "local" they mean the agent's storage directory.** "The local file foo.mp4", "the local copy", "the file saved locally" — all refer to paths inside a registered storage directory (typically `/uploads`, `/downloads`, ...). Don't resolve as a runtime container path; pass through `CheckFileAccess` and use the agent file API. Same for `FileInfo.path` in chat history and paths your tools return — return storage paths only, never `localOut.Name()`.
+**Hard rule for tool authors: tool inputs and outputs are *storage* paths, never container paths.** A `Source string` field on a tool's `In` struct is a storage path the LLM passed in; pass it through `CheckFileAccess` and read it with `agent.OpenFile`. A `Result FileInfo` you return is a storage path the LLM (or chat) will follow back through the same storage namespace. Returning `os.CreateTemp` paths or `localOut.Name()` to the LLM gives it a path it cannot read — the framework will 404. When you need a real on-disk file (CLI tools like `ffmpeg`, `pdftotext`), use `os.CreateTemp` purely as scratch inside the tool body, then upload the result with `agent.WriteFile` and return the resulting `FileInfo`.
 
 ```go
-agent.RegisterDirectory("/uploads", agentsdk.DirectoryOpts{
+agent.RegisterDirectory("uploads", agentsdk.DirectoryOpts{
     Read: agentsdk.AccessUser, Write: agentsdk.AccessUser, List: agentsdk.AccessUser,
     Description: "Files the user uploaded in chat.",
 })
-agent.RegisterDirectory("/reports", agentsdk.DirectoryOpts{
+agent.RegisterDirectory("reports", agentsdk.DirectoryOpts{
     Read: agentsdk.AccessUser, Write: agentsdk.AccessAdmin, List: agentsdk.AccessUser,
     Description: "Generated reports.",
 })
-agent.RegisterDirectory("/cache", agentsdk.DirectoryOpts{
+agent.RegisterDirectory("cache", agentsdk.DirectoryOpts{
     Read: agentsdk.AccessInternal, Write: agentsdk.AccessInternal, List: agentsdk.AccessInternal,
     Description: "Memoized responses.",
 })
-agent.RegisterDirectory("/generated-images", agentsdk.DirectoryOpts{
+agent.RegisterDirectory("generated-images", agentsdk.DirectoryOpts{
     Read: agentsdk.AccessInternal, Write: agentsdk.AccessInternal, List: agentsdk.AccessInternal,
     Description:    "Throwaway AI-generated images served via shareFileURL.",
     RetentionHours: 24, // sweeper drops files older than 24h
 })
 ```
 
-`Read` / `Write` / `List` are independent caps. `delete` folds into `Write` (POSIX-style). Each can be `AccessAdmin`, `AccessUser`, `AccessPublic`, or `AccessInternal`. **`AccessInternal` directories are unreachable from the LLM and the public HTTP route** — only trusted Go code that constructs the path itself can touch them.
+`Read` / `Write` / `List` are independent caps. `delete` folds into `Write` (write on the parent governs unlink). Each can be `AccessAdmin`, `AccessUser`, `AccessPublic`, or `AccessInternal`. **`AccessInternal` directories are unreachable from the LLM and the public HTTP route** — only trusted Go code that constructs the path itself can touch them.
 
-**`RetentionHours`** opts the directory into Airlock's storage sweeper: any object older than the configured hours is deleted on the ~6h sweep tick. Default `0` means files live forever — that's right for `/uploads`, `/reports`, anything the user expects to find tomorrow. Set a TTL on directories that hold ephemeral artifacts (generated media, transient scratch, presigned-URL targets) so the bucket doesn't grow without bound. Match the TTL to whatever URL expiry you hand out: a `shareFileURL(path, {expiresInMinutes: 60})` link is useless after an hour, so the bytes can go away on roughly the same horizon.
+**`RetentionHours`** opts the directory into Airlock's storage sweeper: any object older than the configured hours is deleted on the ~6h sweep tick. Default `0` means files live forever — that's right for `uploads`, `reports`, anything the user expects to find tomorrow. Set a TTL on directories that hold ephemeral artifacts (generated media, transient scratch, presigned-URL targets) so the bucket doesn't grow without bound. Match the TTL to whatever URL expiry you hand out: a `shareFileURL(path, {expiresInMinutes: 60})` link is useless after an hour, so the bytes can go away on roughly the same horizon.
 
-The framework auto-registers `/tmp` at `Read=Write=List=AccessUser` with `RetentionHours: 72`. You may `RegisterDirectory("/tmp", DirectoryOpts{Description: "..."})` to customize the description; the access caps and retention stay at the framework's values.
+The framework auto-registers `tmp` at `Read=Write=List=AccessUser` with `RetentionHours: 72`. You may `RegisterDirectory("tmp", DirectoryOpts{Description: "..."})` to customize the description; the access caps and retention stay at the framework's values.
 
 ### Trusted Go file API — for code that constructs paths
 
 ```go
-src,  err := agent.OpenFile(ctx, "/uploads/doc.pdf")          // io.ReadCloser
-data, err := agent.ReadFile(ctx, "/uploads/notes.txt")        // []byte
-info, err := agent.WriteFile(ctx, "/reports/q1.csv", reader, "text/csv")
-info, err := agent.StatFile(ctx, "/uploads/doc.pdf")          // FileInfo
-files, err := agent.ListDir(ctx, "/uploads/", agentsdk.ListOpts{Recursive: false})
-err := agent.DeleteFile(ctx, "/reports/old.csv")              // idempotent
-err := agent.CopyFile(ctx, "/uploads/in.csv", "/reports/copy.csv")
-share, err := agent.ShareFileURL(ctx, "/reports/q1.csv", time.Hour) // {URL, ExpiresAtMs}
+src,  err := agent.OpenFile(ctx, "uploads/doc.pdf")          // io.ReadCloser
+data, err := agent.ReadFile(ctx, "uploads/notes.txt")        // []byte
+info, err := agent.WriteFile(ctx, "reports/q1.csv", reader, "text/csv")
+info, err := agent.StatFile(ctx, "uploads/doc.pdf")          // FileInfo
+files, err := agent.ListDir(ctx, "uploads/", agentsdk.ListOpts{Recursive: false})
+err := agent.DeleteFile(ctx, "reports/old.csv")              // idempotent
+err := agent.CopyFile(ctx, "uploads/in.csv", "reports/copy.csv")
+share, err := agent.ShareFileURL(ctx, "reports/q1.csv", time.Hour) // {URL, ExpiresAtMs}
 ```
 
 These do **not** call `CheckFileAccess` — builder Go is trusted with paths it constructs itself. Use freely from cron/webhook handlers, internal caches, anywhere.
 
-`ShareFileURL` returns a presigned, unauthenticated, time-limited URL (default 1h, capped at 24h server-side). Use it from cron/webhook handlers when you need to email/post a one-off external link to a stored file. For chat delivery, prefer `printToUser({type:"file", source:path})` from `run_js`; for member-only access on a stable URL, the agent's `__air/storage{path}` route already handles it.
+`ShareFileURL` returns a presigned, unauthenticated, time-limited URL (default 1h, capped at 24h server-side). Use it from cron/webhook handlers when you need to email/post a one-off external link to a stored file. For chat delivery, prefer `printToUser({type:"file", source:path})` from `run_js`; for member-only access on a stable URL, the agent's `__air/storage/{path}` route already handles it.
 
 ### Untrusted paths — when a tool accepts a path from the LLM
 
@@ -634,7 +738,7 @@ agent.RegisterTool(&agentsdk.Tool[CropIn, CropOut]{
         }
         defer src.Close()
         cropped := crop(src, in.X, in.Y, in.W, in.H)
-        info, err := agent.WriteFile(ctx, "/tmp/crop-"+randHex(4)+".png",
+        info, err := agent.WriteFile(ctx, "tmp/crop-"+randHex(4)+".png",
             bytes.NewReader(cropped), "image/png")
         if err != nil {
             return CropOut{}, err
@@ -648,7 +752,7 @@ agent.RegisterTool(&agentsdk.Tool[CropIn, CropOut]{
 
 ### Shelling out to a CLI tool
 
-When a tool processes a stored file with an external CLI (ffmpeg, pdftotext, imagemagick, libreoffice, …), the shape is always: permission-check the LLM-supplied path, copy bytes to local temp, run the CLI on local-only paths, upload the output back, clean up.
+CLI tools (ffmpeg, pdftotext, imagemagick, libreoffice, …) need real on-disk files. The shape is always: permission-check the LLM-supplied storage path, download to a temp file, shell out, upload the result back to storage, clean up. Temp files are scratch internal to the tool — they never appear in inputs or outputs.
 
 ```go
 Execute: func(ctx context.Context, in TranscodeIn) (TranscodeOut, error) {
@@ -656,40 +760,40 @@ Execute: func(ctx context.Context, in TranscodeIn) (TranscodeOut, error) {
         return TranscodeOut{}, err
     }
 
-    // Stage stored bytes on local disk so ffmpeg can read them.
+    // Download the storage object into a scratch temp file.
     src, err := agent.OpenFile(ctx, in.Source)
     if err != nil {
         return TranscodeOut{}, err
     }
     defer src.Close()
-    localIn, err := os.CreateTemp("", "in-*"+filepath.Ext(in.Source))
+    inFile, err := os.CreateTemp("", "in-*"+filepath.Ext(in.Source))
     if err != nil {
         return TranscodeOut{}, err
     }
-    defer os.Remove(localIn.Name())
-    if _, err := io.Copy(localIn, src); err != nil {
-        localIn.Close()
+    defer os.Remove(inFile.Name())
+    if _, err := io.Copy(inFile, src); err != nil {
+        inFile.Close()
         return TranscodeOut{}, err
     }
-    localIn.Close()
+    inFile.Close()
 
-    // Run the CLI on local paths.
-    localOut, _ := os.CreateTemp("", "out-*.mp3")
-    localOut.Close()
-    defer os.Remove(localOut.Name())
-    cmd := exec.CommandContext(ctx, "ffmpeg", "-y", "-i", localIn.Name(),
-        "-b:a", "128k", localOut.Name())
+    // Run the CLI against the scratch files.
+    outFile, _ := os.CreateTemp("", "out-*.mp3")
+    outFile.Close()
+    defer os.Remove(outFile.Name())
+    cmd := exec.CommandContext(ctx, "ffmpeg", "-y", "-i", inFile.Name(),
+        "-b:a", "128k", outFile.Name())
     if out, err := cmd.CombinedOutput(); err != nil {
         return TranscodeOut{}, fmt.Errorf("ffmpeg: %w: %s", err, out)
     }
 
-    // Upload the local result back into storage.
-    result, err := os.Open(localOut.Name())
+    // Upload the result back into storage and return the FileInfo.
+    result, err := os.Open(outFile.Name())
     if err != nil {
         return TranscodeOut{}, err
     }
     defer result.Close()
-    info, err := agent.WriteFile(ctx, "/transcoded/"+filepath.Base(localOut.Name()),
+    info, err := agent.WriteFile(ctx, "transcoded/"+filepath.Base(outFile.Name()),
         result, "audio/mpeg")
     if err != nil {
         return TranscodeOut{}, err
@@ -698,17 +802,17 @@ Execute: func(ctx context.Context, in TranscodeIn) (TranscodeOut, error) {
 },
 ```
 
-Skipping any step either leaks across the security boundary or leaves the file invisible to the rest of the agent. Specifically:
+Skipping any step either leaks across the security boundary or leaves the result invisible to the rest of the agent:
 
-- The two `defer os.Remove` calls fire on every exit path. Without them the runtime container's local disk fills up after enough invocations.
-- The CLI's output path is local. Returning it would give the LLM a path it can't fetch (`agent.StatFile` 404). Always upload via `agent.WriteFile` and return the `FileInfo`.
-- For tools whose output filename you don't control, point the CLI at a local *directory* (`os.MkdirTemp`), `defer os.RemoveAll` it, then walk and upload.
+- The two `defer os.Remove` calls fire on every exit path; without them the container's scratch disk fills up over time.
+- Never return `outFile.Name()` (or any `os.CreateTemp` path) to the LLM. That path doesn't exist in the agent's storage; `agent.StatFile` would 404. Always upload with `agent.WriteFile` and return the `FileInfo`.
+- For tools whose output filename you don't control, point the CLI at a temp *directory* (`os.MkdirTemp`), `defer os.RemoveAll` it, then walk and upload.
 
 > **Use ctx-aware primitives in tool Execute.** The `ctx` in `Execute(ctx, in)` cancels when the user cancels or the run timeout fires. `exec.CommandContext`, `http.NewRequestWithContext`, `pgx.Pool().Query(ctx, ...)`, and `select { case <-ctx.Done(): ...; case <-time.After(d): }` honor it; `time.Sleep`, `io.ReadAll` without ctx, and blocking syscalls don't. A non-cooperative tool keeps running until it returns naturally — the run row finalizes correctly, but cancellation feels broken to the user.
 
 ### Public URLs for storage
 
-Directories with `Read != AccessInternal` are reachable at `https://{slug}.{agentDomain}/__air/storage{path}`:
+Directories with `Read != AccessInternal` are reachable at `https://{slug}.{agentDomain}/__air/storage/{path}`:
 
 - `AccessPublic` — unauthenticated, anyone with the URL.
 - `AccessUser` — requires agent membership (proxy redirects through relay-login).
@@ -820,7 +924,7 @@ The runtime system prompt fully documents JS bindings the LLM can use inside `ru
 
 Framework-provided primitives (always present, the runtime prompt describes each in detail):
 
-- **File API** — `readFile`, `readBytes`, `writeFile`, `statFile`, `listDir`, `deleteFile`, `fileExists`, `shareFileURL`. **Operate on the agent's S3-backed storage namespace, NOT the runtime container's local disk.** `readFile("/uploads/x")` fetches from object storage; `os.ReadFile("/uploads/x")` from Go would read from container disk and find nothing. The two namespaces share path syntax but are completely separate — see the storage section above.
+- **File API** — `readFile`, `readBytes`, `writeFile`, `statFile`, `listDir`, `deleteFile`, `fileExists`, `shareFileURL`. Operate on S3-like storage with slashless paths (`uploads/x`, not `/uploads/x`); see the storage section above.
 - **AI / media helpers** (resolved via per-agent capability defaults — no slug needed) — `analyzeImage(path, question?)`, `transcribeAudio(path, opts?)`, `generateImage(prompt, opts?)`, `speak(text, opts?)`, `embed(texts)`.
 - **User-facing output** — `printToUser(parts)`, `attachToContext(path)`.
 - **HTTP / web** — `httpRequest(url, opts?)`, `webSearch(query, count?)`.
@@ -843,7 +947,7 @@ Plan public flows around this: if a public visitor needs the agent to look up or
 **For public flows, narrow the surface to single-purpose tools rather than registering a public directory and expecting the LLM to assemble several primitives.** A single `Tool` you control gives you one place to validate the input, sanitize the prompt, and decide what reaches the user — and the LLM only sees the verb you want it to use. Concrete example: an "AI-generated image" feature for public visitors. Don't do this:
 
 ```
-RegisterDirectory("/generated", AccessPublic for Read+Write+List)
+RegisterDirectory("generated", AccessPublic for Read+Write+List)
 // ... then hope the LLM stitches generateImage + writeFile + shareFileURL
 //     correctly on every call, with no rate limit, leaking the storage layout
 ```
@@ -1007,7 +1111,7 @@ Run `sqlc generate` only if you created `.sql` files in `db/queries/`.
 9. Function descriptions clear and concise — the LLM reads them
 10. Verify compilation before finishing
 11. Set a clear `Description` in `agentsdk.Config`
-12. Never create or modify a Dockerfile — use `apt-deps.sh`
+12. Never create or modify a Dockerfile — use `setup.sh` (runs as root; can apt-get, curl-bash, pip install, drop binaries under `/var/agent/bin/`, anything)
 13. Only call `AddExtraPrompt` for persona, domain rules, or per-access behavior — Airlock's base prompt covers `run_js`, registered functions, MCP tools, and public-caller safety.
-14. Clean up local FS after shelling out (or upload the bytes back) — the container's disk grows otherwise.
+14. After shelling out, upload results to storage and `defer os.Remove` the scratch temp file. Tool inputs and outputs are storage paths only — never return a local temp path to the LLM.
 15. Declare a slot with `RegisterModel` for any LLM call the admin should be able to rebind. Bare `agent.XxxModel(ctx, "", ...)` uses the per-agent capability default.

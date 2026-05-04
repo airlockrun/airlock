@@ -231,20 +231,26 @@ func envBoolOr(key string, fallback bool) bool {
 // derives the host portion of PUBLIC_URL. Almost every self-hosted setup
 // runs Airlock on the same hostname its agent subdomains hang off
 // (`*.airlock.example.com`), so the explicit knob exists only for the
-// rare case where they diverge. Port is stripped — AGENT_DOMAIN is a bare
-// host. Falls back to "" if neither is set in a parseable form, which
-// disables subdomain routing without a hard failure.
+// rare case where they diverge. Port is stripped — AGENT_DOMAIN is a
+// bare host.
+//
+// Panics if neither env var yields a usable host. Subdomain routing is
+// load-bearing for every agent (per-agent storage URL, registered
+// routes, OAuth callbacks, etc.) so there's no meaningful "no agent
+// domain" mode — SubdomainProxy panics at construction in that case
+// too. Failing here makes the misconfig surface at startup with the
+// obvious error message instead of crashing the router later.
 func resolveAgentDomain() string {
 	if v := os.Getenv("AGENT_DOMAIN"); v != "" {
 		return v
 	}
 	pu := os.Getenv("PUBLIC_URL")
 	if pu == "" {
-		return ""
+		panic("config: AGENT_DOMAIN (or PUBLIC_URL to derive it from) is required")
 	}
 	u, err := url.Parse(pu)
-	if err != nil {
-		return ""
+	if err != nil || u.Hostname() == "" {
+		panic(fmt.Sprintf("config: PUBLIC_URL %q is not a parseable URL with a hostname; set AGENT_DOMAIN explicitly", pu))
 	}
 	return u.Hostname()
 }

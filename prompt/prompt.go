@@ -21,7 +21,7 @@ var agentTmpl = template.Must(template.New("agent").Funcs(template.FuncMap{
 // AgentData is the template data for rendering the execution agent system prompt.
 type AgentData struct {
 	AgentDashboardURL string // e.g., "https://airlock.example.com/agents/{id}"
-	AgentRouteURL     string // e.g., "https://myagent.dev.airlock.run" (empty if no agent domain)
+	AgentRouteURL     string // e.g., "https://myagent.dev.airlock.run"; required (always non-empty)
 	Tools             []ToolInfo
 	Connections       []ConnInfo
 	Topics            []TopicInfo

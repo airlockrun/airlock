@@ -395,7 +395,7 @@ func (h *conversationsHandler) Prompt(w http.ResponseWriter, r *http.Request) {
 	// it isn't there (e.g. files written by run_js).
 	var fileInfos []agentsdk.FileInfo
 	for _, filePath := range req.FilePaths {
-		s3Key := "agents/" + agentID.String() + filePath
+		s3Key := "agents/" + agentID.String() + "/" + filePath
 		info, ct, err := h.s3.HeadObject(ctx, s3Key)
 		if err != nil {
 			h.logger.Warn("file not found", zap.String("path", filePath))
@@ -430,7 +430,7 @@ func (h *conversationsHandler) Prompt(w http.ResponseWriter, r *http.Request) {
 			}
 			parts = append(parts, agentsdk.DisplayPart{
 				Type:     partType,
-				Source:   "agents/" + agentID.String() + fi.Path,
+				Source:   "agents/" + agentID.String() + "/" + fi.Path,
 				Filename: fi.Filename,
 				MimeType: fi.ContentType,
 			})
@@ -579,10 +579,25 @@ func (h *conversationsHandler) NotifyUpgradeComplete(ctx context.Context, agentI
 	}
 
 	llmText := prefix + message
+	// Resolve CallerAccess from the conversation's owning user so the
+	// post-upgrade follow-up turn keeps the same admin/user/public gate
+	// as the original requestUpgrade caller. Without this the agent
+	// defaults to AccessUser and admin-only verbs (requestUpgrade,
+	// queryDB, execDB) silently fall out of the JS runtime — the LLM's
+	// natural "let me try requestUpgrade again to fix X" reaction
+	// crashes with ReferenceError.
+	q := dbq.New(h.db.Pool())
+	access := agentsdk.AccessPublic
+	if convUUID, err := uuid.Parse(conversationID); err == nil {
+		if conv, err := q.GetConversationByID(ctx, toPgUUID(convUUID)); err == nil {
+			access = trigger.ResolveAgentAccess(ctx, q, agentID, pgUUID(conv.UserID))
+		}
+	}
 	input := agentsdk.PromptInput{
 		Message:        llmText,
 		ConversationID: conversationID,
 		Source:         source,
+		CallerAccess:   access,
 	}
 
 	// Publish a NotificationEvent so the bubble renders live in the UI.
@@ -665,8 +680,8 @@ func (h *conversationsHandler) UploadFile(w http.ResponseWriter, r *http.Request
 		ct = "application/octet-stream"
 	}
 
-	path := "/tmp/" + uuid.New().String()[:8] + "-" + header.Filename
-	s3Key := "agents/" + agentID.String() + path
+	path := "tmp/" + uuid.New().String()[:8] + "-" + header.Filename
+	s3Key := "agents/" + agentID.String() + "/" + path
 	if err := h.s3.PutObjectWithMetadata(r.Context(), s3Key, file, header.Size, map[string]string{
 		"filename":     header.Filename,
 		"content-type": ct,
