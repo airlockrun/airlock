@@ -34,6 +34,7 @@ func TestScaffoldBuildsAndStarts(t *testing.T) {
 		Module:          "agent",
 		GoVersion:       "1.26",
 		AgentSDKVersion: "v1.0.0",
+		AgentBaseImage:  "airlock-agent-base",
 	}
 	if err := Materialize(dir, data); err != nil {
 		t.Fatalf("Materialize: %v", err)

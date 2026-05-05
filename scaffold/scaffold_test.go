@@ -15,6 +15,7 @@ func TestMaterialize(t *testing.T) {
 		Module:          "github.com/airlockrun/agents/550e8400-e29b-41d4-a716-446655440000",
 		GoVersion:       "1.26",
 		AgentSDKVersion: "v1.0.0",
+		AgentBaseImage:  "airlock-agent-base",
 	}
 
 	if err := Materialize(dir, data); err != nil {
