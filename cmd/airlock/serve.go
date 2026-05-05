@@ -181,9 +181,6 @@ func runServe(_ []string) {
 	// Create WS handler
 	wsHandler := realtime.NewHandler(database, hub, pubsub, logger.Named("handler"))
 
-	// OIDC — initOIDC returns nil by default; wire in a provider to enable.
-	oidc := initOIDC(ctx, cfg, database, cfg.JWTSecret, logger)
-
 	// Trigger system
 	dispatcher := trigger.NewDispatcher(cfg, database, containers, enc, logger.Named("dispatcher"))
 	transcriptionResolver := trigger.NewTranscriptionResolver(database, enc)
@@ -211,7 +208,6 @@ func runServe(_ []string) {
 	router := api.NewRouter(api.RouterConfig{
 		DB:             database,
 		JWTSecret:      cfg.JWTSecret,
-		OIDC:           oidc,
 		PublicURL:      cfg.PublicURL,
 		OAuthClient:    oauthClient,
 		TelegramDriver: telegramDriver,
