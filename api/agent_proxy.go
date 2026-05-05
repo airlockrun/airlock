@@ -126,15 +126,15 @@ func injectAuth(req *http.Request, authInjectionJSON []byte, creds string) {
 	}
 
 	switch injection.Type {
-	case "bearer":
+	case agentsdk.AuthInjectBearer:
 		req.Header.Set("Authorization", "Bearer "+creds)
-	case "api_key_header":
+	case agentsdk.AuthInjectAPIKey:
 		name := injection.Name
 		if name == "" {
 			name = "X-API-Key"
 		}
 		req.Header.Set(name, creds)
-	case "bot_token_url_prefix":
+	case agentsdk.AuthInjectPathPrefix:
 		req.URL.Path = "/" + creds + req.URL.Path
 	}
 }

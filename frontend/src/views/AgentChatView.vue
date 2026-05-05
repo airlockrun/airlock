@@ -26,6 +26,20 @@ const uploading = ref(false)
 let topObserver: IntersectionObserver | null = null
 let bottomObserver: IntersectionObserver | null = null
 
+// Per-second clock used to derive the streaming-bubble countdown
+// (`chat.runDeadlineMs - now`). Plain ref + setInterval is enough — Vue
+// only re-renders the affected node, not the whole tree.
+const now = ref(Date.now())
+let countdownTimer: ReturnType<typeof setInterval> | null = null
+const runCountdown = computed(() => {
+  if (!chat.runDeadlineMs) return ''
+  const remaining = Math.max(0, chat.runDeadlineMs - now.value)
+  const totalSec = Math.ceil(remaining / 1000)
+  const m = Math.floor(totalSec / 60)
+  const s = totalSec % 60
+  return `${m}:${s.toString().padStart(2, '0')}`
+})
+
 onMounted(async () => {
   // WS subscriptions are server-driven — the socket auto-subscribes to every
   // agent this user is a member of at connect time. No client subscribe call.
@@ -37,11 +51,13 @@ onMounted(async () => {
   }
   scrollToBottom()
   setupSentinelObservers()
+  countdownTimer = setInterval(() => { now.value = Date.now() }, 1000)
 })
 
 onUnmounted(() => {
   topObserver?.disconnect()
   bottomObserver?.disconnect()
+  if (countdownTimer) clearInterval(countdownTimer)
   chat.cleanup()
 })
 
@@ -314,9 +330,11 @@ function formatTokens(n: number): string {
             </span>
             <span class="chat-checkpoint-line" />
           </div>
-          <!-- Skip empty assistant messages (tool-call-only turns) and tool results -->
+          <!-- Tool-result fallback: persisted tool messages whose parent
+               assistant we couldn't fold into (legacy / orphan rows).
+               Folded rows are marked _hidden by enrichMessages. -->
           <div
-            v-else-if="msg.role === 'tool'"
+            v-else-if="msg.role === 'tool' && !(msg as any)._hidden"
             style="display: flex; justify-content: flex-start"
           >
             <div class="msg-bubble msg-tool">
@@ -390,8 +408,14 @@ function formatTokens(n: number): string {
               <div v-else style="font-size: 0.85rem">{{ msg.content }}</div>
             </div>
           </div>
+          <!-- User / assistant content. Assistant turns may carry a
+               toolCalls[] array (folded by enrichMessages from the
+               separate role=tool rows the backend persists). When
+               present, render them inside the same bubble first so the
+               final layout mirrors the streaming layout: tool calls on
+               top, text answer at the bottom. -->
           <div
-            v-else-if="msg.content && !(msg as any)._hidden"
+            v-else-if="(msg.content || (msg as any).toolCalls?.length || (msg as any)._cancelled) && !(msg as any)._hidden"
             :style="{
               display: 'flex',
               justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start',
@@ -399,8 +423,35 @@ function formatTokens(n: number): string {
           >
             <div
               :class="['msg-bubble', msg.role === 'user' ? 'msg-user' : 'msg-assistant']"
+              :style="(msg as any)._cancelled ? { opacity: 0.6 } : undefined"
             >
-              <div v-if="msg.content" v-html="useMarkdown(computed(() => msg.content)).html.value" class="chat-bubble" />
+              <div v-if="(msg as any).toolCalls?.length" :style="{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }">
+                <div v-for="tc in (msg as any).toolCalls" :key="tc.toolCallId" style="padding: 0.25rem 0">
+                  <div style="display: flex; align-items: center; justify-content: space-between; cursor: pointer" @click="toggleToolCollapse(tc.toolCallId, tc.toolName)">
+                    <div style="font-size: 0.7rem; text-transform: uppercase; opacity: 0.6">{{ tc.toolName }}</div>
+                    <i :class="isToolCollapsed(tc.toolCallId, tc.toolName) ? 'pi pi-plus' : 'pi pi-minus'" style="font-size: 0.7rem; opacity: 0.4" />
+                  </div>
+                  <template v-if="!isToolCollapsed(tc.toolCallId, tc.toolName)">
+                    <div v-if="tc.input" style="margin-top: 0.25rem; margin-bottom: 0.5rem">
+                      <pre style="white-space: pre-wrap; word-break: break-all; font-size: 0.8rem; margin: 0; opacity: 0.7">{{ tc.input }}</pre>
+                    </div>
+                    <pre v-if="tc.output" style="white-space: pre-wrap; word-break: break-all; font-size: 0.8rem; margin: 0">{{ tc.output }}</pre>
+                    <pre v-if="tc.error" style="white-space: pre-wrap; word-break: break-all; font-size: 0.8rem; margin: 0; color: var(--p-red-500)">{{ tc.error }}</pre>
+                  </template>
+                </div>
+              </div>
+              <div
+                v-if="msg.content"
+                v-html="useMarkdown(computed(() => msg.content)).html.value"
+                class="chat-bubble"
+                :style="{ marginTop: (msg as any).toolCalls?.length ? '0.75rem' : '0' }"
+              />
+              <div
+                v-if="(msg as any)._cancelled"
+                style="font-size: 0.7rem; text-transform: uppercase; opacity: 0.5; margin-top: 0.5rem; font-style: italic"
+              >
+                (cancelled)
+              </div>
             </div>
           </div>
         </template>
@@ -414,12 +465,14 @@ function formatTokens(n: number): string {
           </div>
         </div>
 
-        <!-- Streaming response -->
+        <!-- Streaming response. Tool calls render first (chronological:
+             think → call → answer); the assistant's text answer lands at
+             the bottom. The finalized assistant bubble below mirrors this
+             ordering so there's no visual snap when streaming completes. -->
         <div v-if="chat.streamingText || chat.activeToolCalls.size" style="display: flex; justify-content: flex-start">
           <div style="max-width: 70%; min-width: 0; overflow-wrap: break-word; padding: 0.75rem 1rem; border-radius: 0.75rem; background-color: var(--p-content-hover-background); color: var(--p-text-color)">
-            <div v-if="chat.streamingText" v-html="streamingHtml" class="chat-bubble" />
             <!-- Active tool calls -->
-            <div v-if="chat.activeToolCalls.size" :style="{ marginTop: chat.streamingText ? '0.75rem' : '0', display: 'flex', flexDirection: 'column', gap: '0.5rem' }">
+            <div v-if="chat.activeToolCalls.size" :style="{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }">
               <template v-for="[id, tc] in chat.activeToolCalls" :key="id">
                 <!-- Completed/errored tool calls: render like finalized msg-tool -->
                 <div v-if="tc.status === 'done' || tc.status === 'error'" style="padding: 0.25rem 0">
@@ -459,6 +512,39 @@ function formatTokens(n: number): string {
                   </div>
                 </div>
               </template>
+            </div>
+            <div v-if="chat.streamingText" v-html="streamingHtml" class="chat-bubble" :style="{ marginTop: chat.activeToolCalls.size ? '0.75rem' : '0' }" />
+            <!-- Cancel + Extend controls. Hidden when a confirmation is
+                 awaiting the user (Approve/Reject is the relevant action
+                 then). Cancel optimistically flips the bubble; Extend
+                 pushes the run's deadline by 5min server-side and updates
+                 the countdown. Button disables when extensions hit 0. -->
+            <div
+              v-if="!chat.pendingConfirmation"
+              :style="{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: '0.5rem', marginTop: '0.5rem' }"
+            >
+              <span
+                v-if="chat.runDeadlineMs"
+                :style="{ fontSize: '0.8rem', color: 'var(--p-text-muted-color)' }"
+              >
+                Auto-cancel in {{ runCountdown }}
+              </span>
+              <Button
+                v-if="chat.runDeadlineMs"
+                :label="`Extend +5min (${chat.extensionsRemaining})`"
+                severity="secondary"
+                size="small"
+                :disabled="chat.extensionsRemaining <= 0"
+                :loading="chat.extending"
+                @click="chat.extendRun"
+              />
+              <Button
+                label="Cancel"
+                severity="secondary"
+                size="small"
+                :loading="chat.cancelling"
+                @click="chat.cancelRun"
+              />
             </div>
           </div>
         </div>

@@ -10,6 +10,7 @@ import {
   PaginatedMessagesResponseSchema,
   PromptResponseSchema,
 } from '@/gen/airlock/v1/api_pb'
+import { enrichMessages as enrichMessagesShared, formatToolArgs } from '@/utils/messageGroup'
 
 // Sliding-window pagination keeps the browser's in-memory message list
 // bounded. Scrolling up past the top fetches an older page; if the window
@@ -65,6 +66,22 @@ export const useChatStore = defineStore('chat', () => {
   const pendingConfirmation = ref<Confirmation | null>(null)
   const currentRunId = ref<string | null>(null)
   const sending = ref(false)
+  const cancelling = ref(false)
+  const extending = ref(false)
+  // Live deadline for the current run. Initialized when sendMessage gets
+  // a runId back (now + base 2 min). ExtendRun pushes the deadline and
+  // decrements remaining. Cleared on finalize/cancel/cleanup. The view
+  // derives a per-second countdown from deadlineMs in a separate timer.
+  // remaining = MaxExtensions on first prompt; 0 disables the button.
+  const runDeadlineMs = ref<number | null>(null)
+  const extensionsRemaining = ref(0)
+  const RUN_BASE_MS = 2 * 60 * 1000
+  const RUN_MAX_EXTENSIONS = 5
+  // Runs the user cancelled locally — late NDJSON events for these runIDs
+  // are ignored so the optimistically finalized bubble doesn't repaint
+  // with stale tool output. Bounded growth: we only ever add the current
+  // runId, and there's at most one in-flight run per conversation.
+  const cancelledRunIds = new Set<string>()
 
   // Sliding-window pagination state. hasOlder means messages exist older
   // than `messages[0]` — enable the top sentinel observer. hasNewer means
@@ -92,7 +109,11 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   // Match events by runId, or accept if we're sending (race: WS arrives before HTTP response).
+  // Drops events for runs the user cancelled locally so the optimistically
+  // finalized bubble doesn't repaint as the agent's straggling tool output
+  // arrives.
   function isCurrentRun(evRunId: string): boolean {
+    if (cancelledRunIds.has(evRunId)) return false
     if (evRunId === currentRunId.value) return true
     if (sending.value) return true
     // Silently ignore stale events (e.g., WS replay buffer from previous runs).
@@ -257,7 +278,60 @@ export const useChatStore = defineStore('chat', () => {
 
   let sendingTimeout: ReturnType<typeof setTimeout> | null = null
 
-  function finalizeMessage() {
+  // cancelRun — fired by the streaming bubble's Cancel button. Optimistic
+  // UX: finalize the bubble locally with whatever streamed so far and a
+  // "(cancelled)" marker, re-enable input. The DELETE call to airlock
+  // signals the agent through the dispatcher; the agent's terminal POST
+  // and any straggling NDJSON events are ignored client-side via
+  // cancelledRunIds. If the DELETE itself fails (404 because the run
+  // already finalized server-side), we don't surface it — the optimistic
+  // flip already won.
+  async function cancelRun() {
+    const runId = currentRunId.value
+    if (!runId || cancelling.value) return
+    cancelling.value = true
+    cancelledRunIds.add(runId)
+    finalizeMessage({ cancelled: true })
+
+    try {
+      await api.delete(`/api/v1/runs/${runId}`)
+    } catch (err) {
+      // 404 is expected when the run already finalized between the user
+      // clicking and the request landing. Other errors aren't actionable
+      // here — the optimistic UI flip is what the user sees.
+      console.warn('[chat] cancel run failed (ignored)', err)
+    } finally {
+      cancelling.value = false
+    }
+  }
+
+  // extendRun — fired by the streaming bubble's "Extend" button. Server
+  // picks the increment (5 min) and caps total extensions; we just call
+  // and update local state from the response. 404 means the run already
+  // finalized between click and request — ignored. 409 means the server
+  // hit the ceiling — sync remaining to 0 so the button greys out.
+  async function extendRun() {
+    const runId = currentRunId.value
+    if (!runId || extending.value || extensionsRemaining.value <= 0) return
+    extending.value = true
+    try {
+      const { data } = await api.post(`/api/v1/runs/${runId}/extend`)
+      runDeadlineMs.value = Number(data.deadlineMs)
+      extensionsRemaining.value = Number(data.extensionsRemaining)
+    } catch (err: any) {
+      const status = err?.response?.status
+      if (status === 409) {
+        // Ceiling reached server-side; sync local state.
+        extensionsRemaining.value = 0
+      } else if (status !== 404) {
+        console.warn('[chat] extend run failed', err)
+      }
+    } finally {
+      extending.value = false
+    }
+  }
+
+  function finalizeMessage(opts?: { cancelled?: boolean }) {
     if (sendingTimeout) { clearTimeout(sendingTimeout); sendingTimeout = null }
     console.log('[chat] finalizeMessage', { textLen: streamingText.value.length, toolCalls: activeToolCalls.size, sending: sending.value, runId: currentRunId.value })
 
@@ -271,42 +345,50 @@ export const useChatStore = defineStore('chat', () => {
       pendingNotifications.length = 0
       newMessagesPending.value = true
       currentRunId.value = null
+      runDeadlineMs.value = null
+      extensionsRemaining.value = 0
       sending.value = false
       return
     }
 
-    // Collect tool calls before clearing.
+    // Collect tool calls before clearing. Each is normalized to the same
+    // GroupedToolCall shape that enrichMessages produces on persisted rows
+    // so the live and refresh paths render identically.
     const toolCalls = activeToolCalls.size > 0
-      ? [...activeToolCalls.values()]
+      ? [...activeToolCalls.values()].map((tc) => ({
+          toolCallId: tc.toolCallId,
+          toolName: tc.toolName,
+          input: formatToolArgs((() => { try { return JSON.parse(tc.input) } catch { return tc.input } })()),
+          output: tc.output || '',
+          error: tc.error || '',
+        }))
       : undefined
 
-    // Push tool calls as separate messages so they appear in the conversation.
-    if (toolCalls) {
-      for (const tc of toolCalls) {
-        messages.value.push({
-          $typeName: 'airlock.v1.AgentMessageInfo',
-          id: `tool-${tc.toolCallId}`,
-          role: 'tool',
-          content: tc.error ? `Error: ${tc.error}` : (tc.output || ''),
-          tokensIn: 0,
-          tokensOut: 0,
-          costEstimate: 0,
-          toolName: tc.toolName,
-          toolInput: formatToolArgs((() => { try { return JSON.parse(tc.input) } catch { return tc.input } })()),
-        } as any)
-      }
-    }
-
-    if (streamingText.value) {
-      messages.value.push({
+    // Push ONE assistant message carrying both the streamed text and the
+    // tool calls inline. The render template groups them inside a single
+    // bubble (tool calls first, text last) — matches the streaming layout
+    // so finalize doesn't visually snap. Need to push even when there's
+    // no text, since a tool-only assistant turn (typical of run_js loops)
+    // still has to surface its tool calls.
+    if (toolCalls || streamingText.value || opts?.cancelled) {
+      const stamp = currentRunId.value || Date.now().toString()
+      const msg: any = {
         $typeName: 'airlock.v1.AgentMessageInfo',
-        id: `msg-${Date.now()}`,
+        id: `msg-${stamp}`,
         role: 'assistant',
         content: streamingText.value,
         tokensIn: 0,
         tokensOut: 0,
         costEstimate: 0,
-      } as AgentMessageInfo)
+      }
+      if (toolCalls) msg.toolCalls = toolCalls
+      // Marker used by the renderer to fade the bubble + show a small
+      // "(cancelled)" tag. The persisted assistant row from the agent's
+      // r.Complete arrives later and lacks this flag, but by then the
+      // user has moved on; the run history view shows the same details
+      // when they need to audit.
+      if (opts?.cancelled) msg._cancelled = true
+      messages.value.push(msg as AgentMessageInfo)
     }
     // Drain notifications buffered during the run — now the assistant/tool
     // bubbles are in place, so notifications land after them.
@@ -320,77 +402,18 @@ export const useChatStore = defineStore('chat', () => {
     streamingText.value = ''
     activeToolCalls.clear()
     currentRunId.value = null
+    runDeadlineMs.value = null
+    extensionsRemaining.value = 0
     sending.value = false
   }
 
-  // Parse tool call args into a display string.
-  const metaKeys = new Set(['request_confirmation'])
-
-  function formatToolArgs(args: any): string {
-    if (typeof args === 'string') return args
-    if (args && typeof args === 'object') {
-      const keys = Object.keys(args).filter(k => !metaKeys.has(k))
-      if (keys.length === 1) return String(args[keys[0]])
-      const filtered: Record<string, any> = {}
-      for (const k of keys) filtered[k] = args[k]
-      // Pretty-print without JSON.stringify to preserve newlines in string values.
-      return Object.entries(filtered).map(([k, v]) => `${k}: ${typeof v === 'string' ? v : JSON.stringify(v)}`).join('\n')
-    }
-    return ''
-  }
-
-  // Enrich messages with tool call/result info parsed from the `parts` JSON column.
+  // Enrich messages with tool call/result info, then layer on the chat-store-
+  // specific notification enrichment that the run views don't need.
   function enrichMessages(msgs: AgentMessageInfo[]): AgentMessageInfo[] {
-    // Build a map of toolCallId → { toolName, input } from assistant parts.
-    // Also attach toolCalls array to assistant messages for rendering.
-    const toolCallMap = new Map<string, { toolName: string; input: string }>()
-    for (const msg of msgs) {
-      if (msg.role !== 'assistant' || !msg.parts) continue
-      try {
-        const parts = typeof msg.parts === 'string' ? JSON.parse(msg.parts) : msg.parts
-        if (!Array.isArray(parts)) continue
-        const calls: { toolCallId: string; toolName: string; input: string }[] = []
-        for (const p of parts) {
-          if (p.type === 'tool-call' && p.toolCallId) {
-            const input = formatToolArgs(p.args)
-            toolCallMap.set(p.toolCallId, {
-              toolName: p.toolName || 'tool',
-              input,
-            })
-            calls.push({ toolCallId: p.toolCallId, toolName: p.toolName || 'tool', input })
-          }
-        }
-        if (calls.length > 0) {
-          ;(msg as any).toolCalls = calls
-        }
-      } catch { /* ignore parse errors */ }
-    }
-
-    // Enrich tool-result messages.
-    for (const msg of msgs) {
-      if (msg.role !== 'tool' || !msg.parts) continue
-      try {
-        const parts = typeof msg.parts === 'string' ? JSON.parse(msg.parts) : msg.parts
-        if (!Array.isArray(parts)) continue
-        for (const p of parts) {
-          if (p.type === 'tool-result' && p.toolCallId) {
-            const call = toolCallMap.get(p.toolCallId)
-            if (call) {
-              ;(msg as any).toolName = call.toolName
-              ;(msg as any).toolInput = call.input
-            } else if (p.toolName) {
-              ;(msg as any).toolName = p.toolName
-            }
-          }
-        }
-      } catch { /* ignore parse errors */ }
-    }
-
-    // Attach displayParts to notification / upload-echo messages for rich rendering.
+    enrichMessagesShared(msgs)
     for (const msg of msgs) {
       if (msg.source === 'notification' || msg.source === 'upload') enrichNotification(msg)
     }
-
     return msgs
   }
 
@@ -563,6 +586,8 @@ export const useChatStore = defineStore('chat', () => {
       }
 
       currentRunId.value = response.runId
+      runDeadlineMs.value = Date.now() + RUN_BASE_MS
+      extensionsRemaining.value = RUN_MAX_EXTENSIONS
       if (response.conversationId) {
         conversationId.value = response.conversationId
       }
@@ -587,6 +612,8 @@ export const useChatStore = defineStore('chat', () => {
     activeToolCalls.clear()
     pendingConfirmation.value = null
     currentRunId.value = null
+    runDeadlineMs.value = null
+    extensionsRemaining.value = 0
     sending.value = false
     hasOlder.value = false
     hasNewer.value = false
@@ -601,6 +628,10 @@ export const useChatStore = defineStore('chat', () => {
     pendingConfirmation,
     currentRunId,
     sending,
+    cancelling,
+    extending,
+    runDeadlineMs,
+    extensionsRemaining,
     hasOlder,
     hasNewer,
     newMessagesPending,
@@ -612,6 +643,8 @@ export const useChatStore = defineStore('chat', () => {
     loadNewer,
     jumpToLatest,
     sendMessage,
+    cancelRun,
+    extendRun,
     cleanup,
   }
 })

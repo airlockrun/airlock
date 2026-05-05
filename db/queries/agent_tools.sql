@@ -1,8 +1,9 @@
 -- name: UpsertAgentTool :exec
-INSERT INTO agent_tools (agent_id, name, description, access, input_schema, output_schema)
-VALUES (@agent_id, @name, @description, @access, @input_schema, @output_schema)
+INSERT INTO agent_tools (agent_id, name, description, llm_hint, access, input_schema, output_schema)
+VALUES (@agent_id, @name, @description, @llm_hint, @access, @input_schema, @output_schema)
 ON CONFLICT (agent_id, name) DO UPDATE SET
     description   = EXCLUDED.description,
+    llm_hint      = EXCLUDED.llm_hint,
     access        = EXCLUDED.access,
     input_schema  = EXCLUDED.input_schema,
     output_schema = EXCLUDED.output_schema;

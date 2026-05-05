@@ -5,8 +5,10 @@
 #   3. Add wildcard DNS A record: *.${DOMAIN} → <server IP>
 #   4. docker compose up -d
 #
-# First launch builds airlock backend, frontend, agent-builder, and agent-base
-# images (~3-5 min). Subsequent launches start in seconds.
+# First launch pulls airlock, frontend, agent-builder, and agent-base
+# images from ghcr.io. No local builds — Subsequent launches start in
+# seconds. The `build:` blocks below are kept as a development fallback
+# for working against this repo.
 #
 # Get the first-run activation code:
 #   docker compose exec airlock cat /var/lib/airlock/activation_code.txt
@@ -35,16 +37,30 @@ services:
       retries: 5
     restart: unless-stopped
 
-  minio:
-    image: minio/minio
+  # RustFS — S3-compatible object store. Airlock auto-creates the bucket
+  # on first connect, so no init sidecar is needed.
+  rustfs:
+    image: rustfs/rustfs:latest
     environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-airlock}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-changeme-in-production}
+      RUSTFS_ADDRESS: "0.0.0.0:9000"
+      RUSTFS_CONSOLE_ADDRESS: "0.0.0.0:9001"
+      RUSTFS_CONSOLE_ENABLE: "true"
+      # Single-node single-disk mode (one endpoint, no erasure coding).
+      # Self-host airlock puts the data on one docker volume backed by
+      # one host disk; multi-endpoint erasure striping would be theatre
+      # on a single disk and RustFS refuses that config by default.
+      # Real durability comes from whatever backs the host disk (RAID,
+      # cloud block-store replication, backups), not from RustFS
+      # striping. Operators running airlock against a true multi-disk
+      # RustFS cluster should switch this to multi-endpoint mode and
+      # bind-mount each endpoint to a distinct physical disk.
+      RUSTFS_VOLUMES: "/data/rustfs0"
+      RUSTFS_ACCESS_KEY: ${S3_ACCESS_KEY:-airlock}
+      RUSTFS_SECRET_KEY: ${S3_SECRET_KEY:?S3_SECRET_KEY is required — generate one with openssl rand -hex 32}
     volumes:
-      - miniodata:/data
-    command: server /data --console-address ":9001"
+      - rustfsdata:/data
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://localhost:9000/minio/health/live || exit 1"]
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:9000/health"]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -73,7 +89,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.agent-builder
-    image: ghcr.io/airlockrun/airlock-agent-builder:v0.2.7
+    image: ghcr.io/airlockrun/airlock-agent-builder:v0.2.8
     command: ["true"]
     restart: "no"
 
@@ -81,9 +97,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.agent-base
-    # Not published — agent-base is debian-slim + 2 apt packages, fast
-    # enough to build locally on every host.
-    image: airlock-agent-base:latest
+    image: ghcr.io/airlockrun/airlock-agent-base:v0.2.8
     command: ["true"]
     restart: "no"
 
@@ -91,11 +105,11 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.airlock
-    image: ghcr.io/airlockrun/airlock:v0.2.7
+    image: ghcr.io/airlockrun/airlock:v0.2.8
     depends_on:
       postgres:
         condition: service_healthy
-      minio:
+      rustfs:
         condition: service_healthy
       agent-builder-image:
         condition: service_completed_successfully
@@ -118,16 +132,16 @@ services:
       #                   deployments split them)
       #   S3_URL_PUBLIC — used when generating presigned URLs that LLM
       #                   providers (OpenAI, Anthropic, etc.) fetch from
-      #                   the public internet. minio:9000 isn't routable
+      #                   the public internet. rustfs:9000 isn't routable
       #                   externally, so this points at Caddy's
       #                   s3.{DOMAIN} subdomain which reverse-proxies to
-      #                   minio:9000 with Host preserved (so the signed
+      #                   rustfs:9000 with Host preserved (so the signed
       #                   URL validates).
-      S3_URL: http://minio:9000
-      S3_URL_AGENT: http://minio:9000
+      S3_URL: http://rustfs:9000
+      S3_URL_AGENT: http://rustfs:9000
       S3_URL_PUBLIC: "https://s3.${DOMAIN}"
-      S3_ACCESS_KEY: ${MINIO_ROOT_USER:-airlock}
-      S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-changeme-in-production}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-airlock}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:?S3_SECRET_KEY is required — generate one with openssl rand -hex 32}
       S3_BUCKET: airlock
 
       # Auth secrets (required — fail to start if unset).
@@ -143,8 +157,8 @@ services:
       # Container orchestration: agent containers join this network so they
       # can reach airlock:8080 internally. Must match the network name below.
       DOCKER_NETWORK: airlock
-      AGENT_BUILDER_IMAGE: ghcr.io/airlockrun/airlock-agent-builder:v0.2.7
-      AGENT_BASE_IMAGE: airlock-agent-base
+      AGENT_BUILDER_IMAGE: ghcr.io/airlockrun/airlock-agent-builder:v0.2.8
+      AGENT_BASE_IMAGE: ghcr.io/airlockrun/airlock-agent-base:v0.2.8
 
       # Codegen workspace lives inside the airlock-data named volume so
       # that scratch dirs airlock writes are visible to sibling
@@ -180,6 +194,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.frontend
+    image: ghcr.io/airlockrun/airlock-frontend:v0.2.8
     restart: unless-stopped
 
   caddy:
@@ -202,14 +217,14 @@ services:
 
 # Single shared network. Agent containers launched by airlock join this
 # network too (DOCKER_NETWORK env var above), so they can reach airlock,
-# postgres, and minio by service name.
+# postgres, and rustfs by service name.
 networks:
   default:
     name: airlock
 
 volumes:
   pgdata:
-  miniodata:
+  rustfsdata:
   caddy-data:    # CRITICAL: Let's Encrypt cert cache. Don't delete or you'll re-issue all certs and may hit rate limits.
   caddy-config:
   airlock-data:

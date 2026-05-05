@@ -16,23 +16,21 @@ import (
 	"go.uber.org/zap"
 )
 
-// agentStorageKey turns an absolute agent path (e.g. "/uploads/foo.png")
+// agentStorageKey turns an agent storage path (e.g. "uploads/foo.png")
 // into the canonical S3 key under the agent's prefix:
-// "agents/{agentID}/uploads/foo.png" — note no extra slash between
-// agentID and path because path already starts with '/'.
+// "agents/{agentID}/uploads/foo.png".
 func agentStorageKey(agentID uuid.UUID, path string) string {
-	return "agents/" + agentID.String() + path
+	return "agents/" + agentID.String() + "/" + path
 }
 
-// pathFromWildcard pulls "*" from chi and ensures it carries a leading '/'.
-// Empty path returns ("", false) — caller should 400.
+// pathFromWildcard pulls "*" from chi as a slashless storage path. Strips
+// any leading '/' (chi may include or omit it depending on route shape)
+// to keep the canonical form consistent. Empty path returns ("", false).
 func pathFromWildcard(r *http.Request) (string, bool) {
 	rest := chi.URLParam(r, "*")
+	rest = strings.TrimPrefix(rest, "/")
 	if rest == "" {
 		return "", false
-	}
-	if !strings.HasPrefix(rest, "/") {
-		rest = "/" + rest
 	}
 	return rest, true
 }
@@ -163,6 +161,55 @@ func (h *agentHandler) StorageInfo(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// StorageShare handles POST /api/agent/storage/share. Returns a presigned,
+// unauthenticated, time-limited URL for the given storage path. Used by
+// the agent's shareFileURL JS binding (and ShareFileURL Go method) to
+// hand out a link the user — or a third party — can fetch directly,
+// without going through agent membership / login on the subdomain proxy.
+//
+// The URL is signed for the public S3 endpoint when configured (so
+// browsers, LLM providers, and external tools can resolve it from outside
+// the docker network). Falls back to the internal endpoint otherwise.
+//
+// 404s on missing files via HeadObject pre-check so the LLM gets a clear
+// signal instead of a working URL that 404s when followed.
+func (h *agentHandler) StorageShare(w http.ResponseWriter, r *http.Request) {
+	agentID := auth.AgentIDFromContext(r.Context())
+	var req agentsdk.ShareFileRequest
+	if err := readJSON(r, &req); err != nil || req.Path == "" {
+		writeJSONError(w, http.StatusBadRequest, "path is required")
+		return
+	}
+
+	// Default 1h, cap 24h. Caller has no business asking for a multi-day
+	// URL when they could just call shareFileURL again on demand.
+	expiry := time.Duration(req.ExpiresSeconds) * time.Second
+	if expiry <= 0 {
+		expiry = time.Hour
+	}
+	if expiry > 24*time.Hour {
+		expiry = 24 * time.Hour
+	}
+
+	s3Key := agentStorageKey(agentID, req.Path)
+	if _, _, err := h.s3.HeadObject(r.Context(), s3Key); err != nil {
+		writeJSONError(w, http.StatusNotFound, "object not found")
+		return
+	}
+
+	url, err := h.s3.PublicPresignGetURL(r.Context(), s3Key, expiry)
+	if err != nil {
+		h.logger.Error("presign share URL", zap.String("path", req.Path), zap.Error(err))
+		writeJSONError(w, http.StatusInternalServerError, "presign failed")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, agentsdk.ShareFileResponse{
+		URL:         url,
+		ExpiresAtMs: time.Now().Add(expiry).UnixMilli(),
+	})
+}
+
 // serveStoragePath serves reads from a registered directory on the
 // subdomain proxy's /__air/storage{path} endpoint, gating by the
 // directory's read_access:
@@ -170,7 +217,7 @@ func (h *agentHandler) StorageInfo(w http.ResponseWriter, r *http.Request) {
 //   - "public" — served unauthenticated (any browser can fetch the URL)
 //   - "user"   — requires a valid __air_session cookie + agent membership
 //   - "admin"  — requires admin role on the agent
-//   - "internal" / unknown — 404
+//   - unknown  — 404
 //
 // Missing cookies on user/admin dirs get redirected through the relay
 // flow (rejectOrRedirect) so a click-from-chat triggers login. Once
@@ -180,7 +227,8 @@ func (h *agentHandler) StorageInfo(w http.ResponseWriter, r *http.Request) {
 // Unknown agent/path returns 404 — we deliberately don't distinguish
 // "not authorized" from "not found" so URL-guessing leaks no info.
 func serveStoragePath(w http.ResponseWriter, r *http.Request, database *db.DB, s3 *storage.S3Client, agentID uuid.UUID, path, jwtSecret, publicURL string, logger *zap.Logger) {
-	if path == "" || path[0] != '/' {
+	path = strings.TrimPrefix(path, "/")
+	if path == "" {
 		http.NotFound(w, r)
 		return
 	}
@@ -236,7 +284,7 @@ func serveStoragePath(w http.ResponseWriter, r *http.Request, database *db.DB, s
 			return
 		}
 	default:
-		// Internal / unknown — never reachable from outside.
+		// Unknown / unrecognized read_access — fail closed.
 		http.NotFound(w, r)
 		return
 	}
@@ -269,21 +317,22 @@ func serveStoragePath(w http.ResponseWriter, r *http.Request, database *db.DB, s
 }
 
 // StorageList handles GET /api/agent/storage. Query params:
-//   - path=/uploads/   → list under this absolute path
+//   - path=uploads/    → list under this storage path (slashless; trailing
+//                        '/' optional)
+//   - path= (empty)    → list the agent root
 //   - recursive=true|false (default false; one level only)
 func (h *agentHandler) StorageList(w http.ResponseWriter, r *http.Request) {
 	agentID := auth.AgentIDFromContext(r.Context())
-	path := r.URL.Query().Get("path")
-	if path == "" {
-		writeJSONError(w, http.StatusBadRequest, "path is required")
-		return
-	}
-	if path[0] != '/' {
-		path = "/" + path
-	}
+	path := strings.TrimPrefix(r.URL.Query().Get("path"), "/")
 	recursive := r.URL.Query().Get("recursive") == "true"
 
-	s3Prefix := agentStorageKey(agentID, path)
+	// agent prefix is "agents/{id}/"; the requested subprefix appends path
+	// (with a trailing '/' to keep listings at directory granularity).
+	agentPrefix := "agents/" + agentID.String() + "/"
+	s3Prefix := agentPrefix
+	if path != "" {
+		s3Prefix = agentPrefix + strings.TrimSuffix(path, "/") + "/"
+	}
 	objects, err := h.s3.ListObjects(r.Context(), s3Prefix)
 	if err != nil {
 		h.logger.Error("storage list failed", zap.Error(err))
@@ -291,20 +340,19 @@ func (h *agentHandler) StorageList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	agentPrefix := agentStorageKey(agentID, "/")
 	files := make([]agentsdk.FileInfo, 0, len(objects))
-	listPrefix := strings.TrimSuffix(path, "/") + "/"
-	if path == "/" {
-		listPrefix = "/"
+	listPrefix := ""
+	if path != "" {
+		listPrefix = strings.TrimSuffix(path, "/") + "/"
 	}
 	for _, obj := range objects {
-		// Strip "agents/{id}" → relative path; that's already absolute (starts with /).
-		filePath := strings.TrimPrefix(obj.Key, agentPrefix[:len(agentPrefix)-1])
+		// Strip "agents/{id}/" → slashless storage path.
+		filePath := strings.TrimPrefix(obj.Key, agentPrefix)
 		if !recursive {
 			// Non-recursive: skip entries that have additional '/' under
 			// the listing prefix.
 			rest := strings.TrimPrefix(filePath, listPrefix)
-			if rest == filePath || strings.Contains(rest, "/") {
+			if strings.Contains(rest, "/") {
 				continue
 			}
 		}

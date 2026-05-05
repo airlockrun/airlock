@@ -1,11 +1,10 @@
-# Publish airlock + agent-builder images to ghcr.io on every v* tag.
+# Publish all four airlock images to ghcr.io on every v* tag:
+# airlock, airlock-agent-builder, airlock-agent-base, airlock-frontend.
 #
-# Frontend and agent-base are intentionally not published — they build
-# in seconds against operator hardware, so the operator-side `--build`
-# fallback in docker-compose.yml is fine for them. agent-builder is
-# the slow one (Go toolchain + 5 modules from the proxy + 4 CLI
-# binaries) — pre-publishing collapses a multi-minute fresh-server
-# bringup into a `docker compose pull`.
+# All four are pre-published so a fresh self-host bringup is a pure
+# `docker compose pull` — no Go toolchain, no Node, no apt install on
+# the operator's VPS. The compose file keeps the `build:` blocks as
+# fallbacks for development against this repo.
 #
 # Tag scheme: every image gets the git tag (e.g. v0.1.5) plus `latest`.
 # Operators pin a specific release with AIRLOCK_VERSION=v0.1.5 in .env;
@@ -34,6 +33,10 @@ jobs:
             dockerfile: Dockerfile.airlock
           - name: airlock-agent-builder
             dockerfile: Dockerfile.agent-builder
+          - name: airlock-agent-base
+            dockerfile: Dockerfile.agent-base
+          - name: airlock-frontend
+            dockerfile: Dockerfile.frontend
     steps:
       - uses: actions/checkout@v4
 

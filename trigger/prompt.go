@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/airlockrun/agentsdk"
@@ -56,16 +57,53 @@ func (p *PromptProxy) HandleMessage(
 	agentID, bridgeID, userID uuid.UUID,
 	externalID string,
 	storeHistory bool,
+	oneShot bool,
 	userMessage string,
 	files []BridgeFile,
+	referenced *BridgeReferencedMessage,
 	events chan<- ResponseEvent,
 ) (string, error) {
 	q := dbq.New(p.db.Pool())
 
 	var conversationID pgtype.UUID
 
-	if storeHistory {
-		// DM-only: one conversation per user per agent per source.
+	switch {
+	case oneShot:
+		// One-shot mode: fresh ephemeral conversation per turn. Delete on
+		// return so no history accumulates. Cascade FK on agent_messages
+		// drops any rows the agent persisted during the run.
+		if externalID == "" {
+			close(events)
+			return "", fmt.Errorf("one-shot bridge conversation requires external_id")
+		}
+		turnExternalID := externalID + ":oneshot:" + uuid.New().String()
+		conv, err := q.GetOrCreateConversationByExternal(ctx, dbq.GetOrCreateConversationByExternalParams{
+			AgentID:    toPgUUID(agentID),
+			Source:     "bridge",
+			Title:      truncate(userMessage, 100),
+			BridgeID:   toPgUUID(bridgeID),
+			ExternalID: pgtype.Text{String: turnExternalID, Valid: true},
+		})
+		if err != nil {
+			close(events)
+			return "", fmt.Errorf("create one-shot conversation: %w", err)
+		}
+		conversationID = conv.ID
+		defer func() {
+			// Best-effort delete with a fresh context — the request ctx
+			// may already be cancelled by the time the streaming finishes.
+			delCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := dbq.New(p.db.Pool()).DeleteConversation(delCtx, conversationID); err != nil {
+				p.logger.Warn("one-shot: delete ephemeral conversation",
+					zap.String("conversation_id", convert.PgUUIDToString(conversationID)),
+					zap.Error(err),
+				)
+			}
+		}()
+
+	case storeHistory && userID != uuid.Nil:
+		// Authenticated bridge user → conversation keyed on (agent, user, source).
 		conv, err := q.GetOrCreateConversation(ctx, dbq.GetOrCreateConversationParams{
 			AgentID:    toPgUUID(agentID),
 			UserID:     toPgUUID(userID),
@@ -79,7 +117,32 @@ func (p *PromptProxy) HandleMessage(
 			return "", fmt.Errorf("get/create conversation: %w", err)
 		}
 		conversationID = conv.ID
+
+	case storeHistory:
+		// Public/anonymous (session mode) → keyed on (agent, source, external_id) with user_id NULL.
+		if externalID == "" {
+			close(events)
+			return "", fmt.Errorf("public bridge conversation requires external_id")
+		}
+		conv, err := q.GetOrCreateConversationByExternal(ctx, dbq.GetOrCreateConversationByExternalParams{
+			AgentID:    toPgUUID(agentID),
+			Source:     "bridge",
+			Title:      truncate(userMessage, 100),
+			BridgeID:   toPgUUID(bridgeID),
+			ExternalID: pgtype.Text{String: externalID, Valid: true},
+		})
+		if err != nil {
+			close(events)
+			return "", fmt.Errorf("get/create public conversation: %w", err)
+		}
+		conversationID = conv.ID
 	}
+
+	// Always wrap a referenced message into the user prompt so the LLM
+	// has the explicit context regardless of mode. In one-shot it's the
+	// only context the model gets; in session mode it strengthens the
+	// signal beyond whatever happens to be in history.
+	userMessage = wrapReferencedMessage(userMessage, referenced)
 
 	// Resolve access once — reused for slash-command gating and for
 	// filtering per-caller extra system prompts. Non-members fall through
@@ -111,7 +174,7 @@ func (p *PromptProxy) HandleMessage(
 	// Keeps the transcript ↔ source file link explicit for the LLM.
 	paths := make([]string, len(files))
 	for i := range files {
-		paths[i] = "/tmp/" + uuid.New().String()[:8] + "-" + files[i].Filename
+		paths[i] = "tmp/" + uuid.New().String()[:8] + "-" + files[i].Filename
 	}
 
 	// Auto-transcribe voice notes before forwarding. Transcription failures
@@ -122,7 +185,7 @@ func (p *PromptProxy) HandleMessage(
 	// Store attached files in agent's S3 prefix and build FileInfo entries.
 	var fileInfos []agentsdk.FileInfo
 	for i, f := range files {
-		s3Key := "agents/" + agentID.String() + paths[i]
+		s3Key := "agents/" + agentID.String() + "/" + paths[i]
 		if err := p.s3.PutObject(ctx, s3Key, bytes.NewReader(f.Data), int64(len(f.Data))); err != nil {
 			p.logger.Error("store bridge file failed", zap.String("path", paths[i]), zap.Error(err))
 			continue
@@ -144,12 +207,18 @@ func (p *PromptProxy) HandleMessage(
 	}
 
 	// Forward to agent container — SessionStore handles message loading and persistence.
+	// CallerAccess is required for the agent's bind-time gating (admin-only
+	// JS bindings like requestUpgrade, queryDB, execDB). Web path does the
+	// same in api/conversations.go; without it the agent defaults to
+	// AccessUser and admin-only verbs ReferenceError when called from a
+	// bridge-triggered run.
 	input := agentsdk.PromptInput{
 		Message:           userMessage,
 		ConversationID:    convert.PgUUIDToString(conversationID),
 		Files:             fileInfos,
 		ExtraSystemPrompt: extraSystemPrompt,
 		ForceCompact:      forceCompact,
+		CallerAccess:      access,
 	}
 	if forceCompact {
 		input.Message = ""
@@ -224,25 +293,49 @@ func (p *PromptProxy) HandleCallback(
 		return false, fmt.Errorf("resolve suspended run: %w", err)
 	}
 
-	// Look up the conversation for this user+agent so SessionStore on the agent
-	// side persists messages into the right thread.
-	conv, err := q.GetOrCreateConversation(ctx, dbq.GetOrCreateConversationParams{
-		AgentID:    toPgUUID(agentID),
-		UserID:     toPgUUID(userID),
-		Source:     "bridge",
-		BridgeID:   toPgUUID(bridgeID),
-		ExternalID: pgtype.Text{String: externalID, Valid: externalID != ""},
-	})
-	if err != nil {
-		close(events)
-		return false, fmt.Errorf("get conversation: %w", err)
+	// Look up the conversation so SessionStore on the agent side persists
+	// messages into the right thread. For unauthenticated public callers
+	// the conversation is keyed on the external chat ID, not on user_id.
+	var convID pgtype.UUID
+	if userID != uuid.Nil {
+		conv, err := q.GetOrCreateConversation(ctx, dbq.GetOrCreateConversationParams{
+			AgentID:    toPgUUID(agentID),
+			UserID:     toPgUUID(userID),
+			Source:     "bridge",
+			BridgeID:   toPgUUID(bridgeID),
+			ExternalID: pgtype.Text{String: externalID, Valid: externalID != ""},
+		})
+		if err != nil {
+			close(events)
+			return false, fmt.Errorf("get conversation: %w", err)
+		}
+		convID = conv.ID
+	} else {
+		if externalID == "" {
+			close(events)
+			return false, fmt.Errorf("public callback requires external_id")
+		}
+		conv, err := q.GetConversationByExternal(ctx, dbq.GetConversationByExternalParams{
+			AgentID:    toPgUUID(agentID),
+			Source:     "bridge",
+			ExternalID: pgtype.Text{String: externalID, Valid: true},
+		})
+		if err != nil {
+			close(events)
+			return false, fmt.Errorf("get public conversation: %w", err)
+		}
+		convID = conv.ID
 	}
 
 	approved := action == "approve"
+	// Same CallerAccess plumbing as HandleMessage above — admin-only
+	// bindings need it to survive the resume turn too.
+	access := ResolveAgentAccess(ctx, q, agentID, userID)
 	input := agentsdk.PromptInput{
-		ConversationID: convert.PgUUIDToString(conv.ID),
+		ConversationID: convert.PgUUIDToString(convID),
 		ResumeRunID:    runIDStr,
 		Approved:       &approved,
+		CallerAccess:   access,
 	}
 	if !approved {
 		// Match the web "reject" flow so the LLM has something to re-reason from.
@@ -385,6 +478,42 @@ func (p *PromptProxy) buildAgentStatusContext(ctx context.Context, agentID uuid.
 // api/conversations.go — kept in both packages because the call sites
 // are otherwise unrelated and a single shared util isn't worth the
 // import dependency.
+// wrapReferencedMessage prepends a tagged context block describing a
+// reply target or forwarded message, so the LLM can distinguish that
+// content from the asker's own prompt. Returns userMessage unchanged
+// when there's nothing to wrap.
+func wrapReferencedMessage(userMessage string, ref *BridgeReferencedMessage) string {
+	if ref == nil || ref.Text == "" {
+		return userMessage
+	}
+	kind := ref.Kind
+	if kind == "" {
+		kind = BridgeReferenceReply
+	}
+	var attrs strings.Builder
+	attrs.WriteString(`kind="`)
+	attrs.WriteString(kind)
+	attrs.WriteString(`"`)
+	if ref.SenderName != "" {
+		attrs.WriteString(` from="`)
+		attrs.WriteString(ref.SenderName)
+		attrs.WriteString(`"`)
+	}
+	if !ref.AuthoredAt.IsZero() {
+		attrs.WriteString(` at="`)
+		attrs.WriteString(ref.AuthoredAt.UTC().Format(time.RFC3339))
+		attrs.WriteString(`"`)
+	}
+	var b strings.Builder
+	b.WriteString("<referenced_message ")
+	b.WriteString(attrs.String())
+	b.WriteString(">\n")
+	b.WriteString(ref.Text)
+	b.WriteString("\n</referenced_message>\n\n")
+	b.WriteString(userMessage)
+	return b.String()
+}
+
 func truncate(s string, maxLen int) string {
 	if len(s) <= maxLen {
 		return s

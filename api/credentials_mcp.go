@@ -210,6 +210,40 @@ func (h *credentialHandler) RevokeMCPCredential(w http.ResponseWriter, r *http.R
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// RevokeMCPOAuthApp handles DELETE /api/v1/agents/{agentID}/mcp-servers/{slug}/credentials/oauth-app.
+// Wipes the OAuth app config (client_id + client_secret) AND the credentials
+// that belong to it (existing tokens are tied to the old client_id at the
+// provider — they'd 401 the moment they're used). Used by:
+//   - "Re-register client" (oauth_discovery): clears the DCR'd client so
+//     the next Authorize call re-DCRs against the registration_endpoint.
+//   - "Edit OAuth app" (oauth): clears the pasted credentials so the
+//     operator can paste new ones without UI ambiguity.
+func (h *credentialHandler) RevokeMCPOAuthApp(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	agentID, slug, err := h.resolveMCPSlug(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	if err := h.verifyAgentOwner(ctx, agentID, r); err != nil {
+		writeError(w, http.StatusForbidden, "access denied")
+		return
+	}
+
+	q := dbq.New(h.db.Pool())
+	if err := q.ClearMCPServerOAuthApp(ctx, dbq.ClearMCPServerOAuthAppParams{
+		AgentID: toPgUUID(agentID),
+		Slug:    slug,
+	}); err != nil {
+		h.logger.Error("revoke MCP OAuth app failed", zap.Error(err))
+		writeError(w, http.StatusInternalServerError, "failed to revoke OAuth app")
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // SetMCPOAuthApp handles PUT /api/v1/agents/{agentID}/mcp-servers/{slug}/credentials/oauth-app.
 func (h *credentialHandler) SetMCPOAuthApp(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
@@ -320,6 +354,108 @@ func (h *credentialHandler) MCPOAuthStart(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, "MCP server is not OAuth")
 		return
 	}
+
+	// Reauthorize semantics: any pre-existing credentials are stale by
+	// the time we redirect to the provider — the new code/refresh-token
+	// pair from this flow is what counts. Clearing here means there's
+	// no window where DB shows authorized=true but the actual tokens
+	// are gone, and it lets a single "Authorize" button work for both
+	// first-time and switch-account flows. No-op when already empty.
+	if err := q.ClearMCPServerCredentials(ctx, dbq.ClearMCPServerCredentialsParams{
+		AgentID: toPgUUID(agentID),
+		Slug:    req.Slug,
+	}); err != nil {
+		h.logger.Error("clear stale MCP credentials failed", zap.Error(err))
+		writeError(w, http.StatusInternalServerError, "failed to clear stale credentials")
+		return
+	}
+
+	// Lazy URL re-discovery (oauth_discovery only): if any of the three
+	// discovery URLs is missing — for instance, a previous sync wrote
+	// empty values back over a populated row — re-run RFC 8414 discovery
+	// before proceeding. Independent of DCR: even agents with a working
+	// client_id need auth_url + token_url to authorize and refresh.
+	needsDiscovery := server.AuthMode == "oauth_discovery" &&
+		(server.AuthUrl == "" || server.TokenUrl == "" ||
+			(server.ClientID == "" && server.RegistrationEndpoint == ""))
+	if needsDiscovery {
+		result, derr := discoverMCPAuth(ctx, server.Url)
+		if derr != nil {
+			h.logger.Warn("MCP discovery retry failed", zap.String("slug", req.Slug), zap.Error(derr))
+			writeError(w, http.StatusBadRequest, "OAuth discovery failed: "+derr.Error()+
+				". The server's RFC 8414 metadata is unreachable or malformed; switch this MCP server's auth_mode to `oauth` and paste credentials manually.")
+			return
+		}
+		// Prefer fresh values; fall back to the existing row value when
+		// discovery returned empty for a particular field (one-off
+		// metadata gaps shouldn't flap a known-good URL).
+		if result.AuthorizationURL != "" {
+			server.AuthUrl = result.AuthorizationURL
+		}
+		if result.TokenURL != "" {
+			server.TokenUrl = result.TokenURL
+		}
+		if result.RegistrationEndpoint != "" {
+			server.RegistrationEndpoint = result.RegistrationEndpoint
+		}
+		if err := q.UpdateMCPServerDiscovery(ctx, dbq.UpdateMCPServerDiscoveryParams{
+			AgentID:              toPgUUID(agentID),
+			Slug:                 req.Slug,
+			AuthUrl:              server.AuthUrl,
+			TokenUrl:             server.TokenUrl,
+			RegistrationEndpoint: server.RegistrationEndpoint,
+		}); err != nil {
+			h.logger.Error("persist re-discovery failed", zap.Error(err))
+			writeError(w, http.StatusInternalServerError, "failed to persist discovery result")
+			return
+		}
+	}
+
+	// Lazy DCR for oauth_discovery: when no client_id is stored, register
+	// one against the server's RFC 7591 endpoint instead of asking the
+	// operator to paste credentials.
+	if server.ClientID == "" && server.AuthMode == "oauth_discovery" {
+		if server.RegistrationEndpoint == "" {
+			writeError(w, http.StatusBadRequest,
+				"server does not advertise an RFC 7591 registration endpoint. Switch this MCP server's auth_mode to `oauth` and paste credentials manually.")
+			return
+		}
+
+		callbackURL := h.publicURL + "/api/v1/credentials/oauth/callback"
+		dcr, derr := oauth.RegisterClient(ctx, mcpHTTPClient, server.RegistrationEndpoint, "airlock:"+server.Name, callbackURL, server.Scopes)
+		if derr != nil {
+			h.logger.Warn("MCP DCR failed", zap.String("slug", req.Slug), zap.Error(derr))
+			writeError(w, http.StatusBadRequest,
+				"dynamic client registration failed: "+derr.Error()+
+					". Switch this MCP server's auth_mode to `oauth` and paste credentials manually.")
+			return
+		}
+
+		encClientID, err := h.encryptor.Encrypt(dcr.ClientID)
+		if err != nil {
+			h.logger.Error("encrypt DCR client_id failed", zap.Error(err))
+			writeError(w, http.StatusInternalServerError, "encryption failed")
+			return
+		}
+		encClientSecret, err := h.encryptor.Encrypt(dcr.ClientSecret)
+		if err != nil {
+			h.logger.Error("encrypt DCR client_secret failed", zap.Error(err))
+			writeError(w, http.StatusInternalServerError, "encryption failed")
+			return
+		}
+		if err := q.UpdateMCPServerOAuthApp(ctx, dbq.UpdateMCPServerOAuthAppParams{
+			AgentID:      toPgUUID(agentID),
+			Slug:         req.Slug,
+			ClientID:     encClientID,
+			ClientSecret: encClientSecret,
+		}); err != nil {
+			h.logger.Error("persist DCR client failed", zap.Error(err))
+			writeError(w, http.StatusInternalServerError, "failed to persist registered client")
+			return
+		}
+		server.ClientID = encClientID
+	}
+
 	if server.ClientID == "" {
 		writeError(w, http.StatusBadRequest, "OAuth app not configured. Set client_id and client_secret first.")
 		return

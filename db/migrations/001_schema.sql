@@ -79,7 +79,7 @@ CREATE TABLE auth_lockouts (
     email           text NOT NULL,
     ip              text NOT NULL,
     locked_until    timestamptz NOT NULL,
-    tier            int NOT NULL DEFAULT 0,
+    tier            int NOT NULL,
     last_locked_at  timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (email, ip)
 );
@@ -102,23 +102,23 @@ CREATE TABLE agents (
     name            text NOT NULL,
     description     text NOT NULL,
     status          text NOT NULL,
-    upgrade_status  text NOT NULL DEFAULT 'idle' CHECK (upgrade_status IN ('idle', 'queued', 'building', 'failed')),
-    auto_fix        boolean NOT NULL DEFAULT true,
-    build_model     text NOT NULL DEFAULT '',
-    exec_model      text NOT NULL DEFAULT '',
-    stt_model       text NOT NULL DEFAULT '',
-    vision_model    text NOT NULL DEFAULT '',
-    tts_model       text NOT NULL DEFAULT '',
-    image_gen_model text NOT NULL DEFAULT '',
-    embedding_model text NOT NULL DEFAULT '',
-    search_model    text NOT NULL DEFAULT '',
-    source_ref      text NOT NULL DEFAULT '',
-    image_ref       text NOT NULL DEFAULT '',
-    db_schema       text NOT NULL DEFAULT '',
-    sdk_version     text NOT NULL DEFAULT '',
+    upgrade_status  text NOT NULL CHECK (upgrade_status IN ('idle', 'queued', 'building', 'failed')),
+    auto_fix        boolean NOT NULL,
+    build_model     text NOT NULL,
+    exec_model      text NOT NULL,
+    stt_model       text NOT NULL,
+    vision_model    text NOT NULL,
+    tts_model       text NOT NULL,
+    image_gen_model text NOT NULL,
+    embedding_model text NOT NULL,
+    search_model    text NOT NULL,
+    source_ref      text NOT NULL,
+    image_ref       text NOT NULL,
+    db_schema       text NOT NULL,
+    sdk_version     text NOT NULL,
     config          jsonb NOT NULL,
-    extra_prompts   jsonb NOT NULL DEFAULT '[]',
-    error_message   text NOT NULL DEFAULT '',
+    extra_prompts   jsonb NOT NULL,
+    error_message   text NOT NULL,
     created_at      timestamptz NOT NULL DEFAULT now(),
     updated_at      timestamptz NOT NULL DEFAULT now()
 );
@@ -127,14 +127,14 @@ CREATE TABLE agent_builds (
     id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     agent_id        uuid NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
     type            text NOT NULL,
-    status          text NOT NULL DEFAULT 'building',
+    status          text NOT NULL,
     instructions    text NOT NULL,
-    source_ref      text NOT NULL DEFAULT '',
-    image_ref       text NOT NULL DEFAULT '',
-    sol_log         text NOT NULL DEFAULT '',
-    docker_log      text NOT NULL DEFAULT '',
-    log_seq         bigint NOT NULL DEFAULT 0,
-    error_message   text NOT NULL DEFAULT '',
+    source_ref      text NOT NULL,
+    image_ref       text NOT NULL,
+    sol_log         text NOT NULL,
+    docker_log      text NOT NULL,
+    log_seq         bigint NOT NULL,
+    error_message   text NOT NULL,
     started_at      timestamptz NOT NULL DEFAULT now(),
     finished_at     timestamptz
 );
@@ -145,7 +145,11 @@ CREATE TABLE connections (
     slug                text NOT NULL,
     name                text NOT NULL,
     description         text NOT NULL,
-    access              text NOT NULL DEFAULT 'user',
+    -- llm_hint is optional model-only guidance that pairs with description
+    -- (which surfaces in member-facing UIs). Rendered next to the connection
+    -- in the system prompt in [brackets]. Empty = no hint.
+    llm_hint            text NOT NULL,
+    access              text NOT NULL,
     auth_mode           text NOT NULL,
     auth_url            text NOT NULL,
     token_url           text NOT NULL,
@@ -155,10 +159,10 @@ CREATE TABLE connections (
     test_path           text NOT NULL,
     setup_instructions  text NOT NULL,
     config              jsonb NOT NULL,
-    client_id           text NOT NULL DEFAULT '',
-    client_secret       text NOT NULL DEFAULT '',
-    credentials         text NOT NULL DEFAULT '',
-    refresh_token       text NOT NULL DEFAULT '',
+    client_id           text NOT NULL,
+    client_secret       text NOT NULL,
+    credentials         text NOT NULL,
+    refresh_token       text NOT NULL,
     token_expires_at    timestamptz,
     created_at          timestamptz NOT NULL DEFAULT now(),
     updated_at          timestamptz NOT NULL DEFAULT now(),
@@ -170,17 +174,23 @@ CREATE TABLE agent_mcp_servers (
     agent_id         uuid NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
     slug             text NOT NULL,
     name             text NOT NULL,
-    access           text NOT NULL DEFAULT 'user',
+    access           text NOT NULL,
     url              text NOT NULL,
     auth_mode        text NOT NULL,
-    auth_url         text NOT NULL DEFAULT '',
-    token_url        text NOT NULL DEFAULT '',
-    scopes           text NOT NULL DEFAULT '',
-    tool_schemas     jsonb NOT NULL DEFAULT '[]',
-    client_id        text NOT NULL DEFAULT '',
-    client_secret    text NOT NULL DEFAULT '',
-    credentials      text NOT NULL DEFAULT '',
-    refresh_token    text NOT NULL DEFAULT '',
+    auth_url         text NOT NULL,
+    token_url        text NOT NULL,
+    -- Discovered RFC 7591 dynamic-client-registration endpoint. Empty
+    -- when the server doesn't advertise one (then auth_mode='oauth' is
+    -- the only option — operator must paste credentials manually).
+    -- Populated lazily: first by RFC 8414 discovery at MCP register, and
+    -- on demand at oauth_discovery start when still missing.
+    registration_endpoint text NOT NULL,
+    scopes           text NOT NULL,
+    tool_schemas     jsonb NOT NULL,
+    client_id        text NOT NULL,
+    client_secret    text NOT NULL,
+    credentials      text NOT NULL,
+    refresh_token    text NOT NULL,
     token_expires_at timestamptz,
     last_synced_at   timestamptz,
     created_at       timestamptz NOT NULL DEFAULT now(),
@@ -190,13 +200,28 @@ CREATE TABLE agent_mcp_servers (
 
 CREATE TABLE bridges (
     id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    agent_id        uuid REFERENCES agents(id) ON DELETE CASCADE,
+    -- ON DELETE SET NULL preserves the bridge row when the agent is deleted.
+    -- Bridges hold platform credentials (tokens, OAuth state) that are
+    -- expensive to re-issue; orphaned rows can be re-bound to a new agent
+    -- by the original creator instead of forcing them through bot setup
+    -- again.
+    agent_id        uuid REFERENCES agents(id) ON DELETE SET NULL,
     created_by      uuid REFERENCES users(id) ON DELETE SET NULL,
-    type            text NOT NULL CHECK (type = 'telegram'),
+    type            text NOT NULL CHECK (type IN ('telegram', 'discord')),
     name            text NOT NULL,
     bot_username    text NOT NULL,
-    status          text NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'error')),
-    config          jsonb NOT NULL DEFAULT '{}',
+    status          text NOT NULL CHECK (status IN ('active', 'error')),
+    -- is_system marks a bridge that's tenant-wide rather than bound to a
+    -- single agent. agent_id is orthogonal: an unbound (orphaned) bridge
+    -- has agent_id NULL but is_system false; a true system bridge has
+    -- is_system true (and typically agent_id NULL).
+    is_system       boolean NOT NULL,
+    config          jsonb NOT NULL,
+    -- settings holds user-tunable knobs surfaced in the bridge edit UI
+    -- (allow_public_dms, public_session_ttl_seconds, ...). Distinct from
+    -- config which carries driver-internal state (poll offset, app id,
+    -- webhook secret).
+    settings        jsonb NOT NULL,
     token_encrypted text NOT NULL,
     last_polled_at  timestamptz,
     created_at      timestamptz NOT NULL DEFAULT now(),
@@ -216,7 +241,7 @@ CREATE TABLE oauth_states (
     state          text PRIMARY KEY,
     agent_id       uuid NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
     slug           text NOT NULL,
-    source_type    text NOT NULL DEFAULT 'connection',
+    source_type    text NOT NULL,
     code_verifier  text NOT NULL,
     redirect_uri   text NOT NULL,
     expires_at     timestamptz NOT NULL,
@@ -231,7 +256,7 @@ CREATE TABLE agent_webhooks (
     verify_header    text NOT NULL,
     timeout_ms       integer NOT NULL,
     description      text NOT NULL,
-    secret           text NOT NULL DEFAULT '',
+    secret           text NOT NULL,
     last_received_at timestamptz,
     created_at       timestamptz NOT NULL DEFAULT now(),
     updated_at       timestamptz NOT NULL DEFAULT now(),
@@ -243,7 +268,7 @@ CREATE TABLE agent_crons (
     agent_id      uuid NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
     name          text NOT NULL,
     schedule      text NOT NULL,
-    enabled       boolean NOT NULL DEFAULT true,
+    enabled       boolean NOT NULL,
     timeout_ms    integer NOT NULL,
     description   text NOT NULL,
     last_fired_at timestamptz,
@@ -277,7 +302,9 @@ CREATE TABLE agent_topics (
     agent_id    uuid NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
     slug        text NOT NULL,
     description text NOT NULL,
-    access      text NOT NULL DEFAULT 'user',
+    -- llm_hint: see connections.llm_hint.
+    llm_hint    text NOT NULL,
+    access      text NOT NULL,
     created_at  timestamptz NOT NULL DEFAULT now(),
     updated_at  timestamptz NOT NULL DEFAULT now(),
     UNIQUE (agent_id, slug)
@@ -288,28 +315,40 @@ CREATE TABLE agent_tools (
     agent_id       uuid NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
     name           text NOT NULL,
     description    text NOT NULL,
-    access         text NOT NULL DEFAULT 'user',
-    input_schema   jsonb NOT NULL DEFAULT '{}'::jsonb,
-    output_schema  jsonb NOT NULL DEFAULT '{}'::jsonb,
+    -- llm_hint: see connections.llm_hint. Appended to the JSDoc block of
+    -- the tool decl in `[brackets]` so the LLM gets the extra steer
+    -- without polluting the dashboard's user-visible Description column.
+    llm_hint       text NOT NULL,
+    access         text NOT NULL,
+    input_schema   jsonb NOT NULL,
+    output_schema  jsonb NOT NULL,
     created_at     timestamptz NOT NULL DEFAULT now(),
     UNIQUE (agent_id, name)
 );
 
 -- agent_directories tracks per-agent S3 directories declared via
--- agentsdk.RegisterDirectory. The path is absolute (e.g. "/reports") and
--- is concatenated with "agents/{agentID}" to form the S3 key prefix.
--- read/write/list access are independent caps. Public read dirs get an
--- unauthenticated read route at /__air/storage{path}.
+-- agentsdk.RegisterDirectory. The path is S3-style (slashless,
+-- e.g. "reports") and is joined with "agents/{agentID}/" to form the S3
+-- key prefix. read/write/list access are independent caps. Public read
+-- dirs get an unauthenticated read route at /__air/storage/{path}.
 CREATE TABLE agent_directories (
-    id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    agent_id     uuid NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
-    path         text NOT NULL,
-    read_access  text NOT NULL DEFAULT 'user',
-    write_access text NOT NULL DEFAULT 'user',
-    list_access  text NOT NULL DEFAULT 'user',
-    description  text NOT NULL DEFAULT '',
-    created_at   timestamptz NOT NULL DEFAULT now(),
-    updated_at   timestamptz NOT NULL DEFAULT now(),
+    id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    agent_id        uuid NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    path            text NOT NULL CHECK (path !~ '^/' AND path !~ '/$' AND path <> ''),
+    read_access     text NOT NULL,
+    write_access    text NOT NULL,
+    list_access     text NOT NULL,
+    description     text NOT NULL,
+    -- llm_hint: see connections.llm_hint. Rendered next to the directory
+    -- in the system prompt's directory inventory in [brackets].
+    llm_hint        text NOT NULL,
+    -- retention_hours > 0 opts the directory into the storage sweeper:
+    -- objects under "agents/{agent_id}/{path}/" older than this many hours
+    -- are deleted on the ~6h sweep. 0 = files stay forever (the default
+    -- for normal builder dirs). The framework registers "tmp" at 72h.
+    retention_hours int NOT NULL,
+    created_at      timestamptz NOT NULL DEFAULT now(),
+    updated_at      timestamptz NOT NULL DEFAULT now(),
     UNIQUE (agent_id, path)
 );
 CREATE INDEX idx_agent_directories_agent ON agent_directories(agent_id);
@@ -318,8 +357,8 @@ CREATE TABLE agent_model_slots (
     agent_id       uuid NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
     slug           text NOT NULL,
     capability     text NOT NULL,
-    description    text NOT NULL DEFAULT '',
-    assigned_model text NOT NULL DEFAULT '',
+    description    text NOT NULL,
+    assigned_model text NOT NULL,
     PRIMARY KEY (agent_id, slug)
 );
 
@@ -328,27 +367,27 @@ CREATE TABLE runs (
     agent_id          uuid NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
     bridge_id         uuid REFERENCES bridges(id) ON DELETE SET NULL,
     status            text NOT NULL,
-    trigger_type      text NOT NULL DEFAULT 'prompt',
-    trigger_ref       text NOT NULL DEFAULT '',
+    trigger_type      text NOT NULL,
+    trigger_ref       text NOT NULL,
     source_ref        text NOT NULL,
     input_payload     jsonb NOT NULL,
-    actions           jsonb NOT NULL DEFAULT '[]',
-    llm_calls         integer NOT NULL DEFAULT 0,
-    llm_tokens_in     integer NOT NULL DEFAULT 0,
-    llm_tokens_out    integer NOT NULL DEFAULT 0,
-    llm_cost_estimate numeric NOT NULL DEFAULT 0,
+    actions           jsonb NOT NULL,
+    llm_calls         integer NOT NULL,
+    llm_tokens_in     integer NOT NULL,
+    llm_tokens_out    integer NOT NULL,
+    llm_cost_estimate numeric NOT NULL,
     duration_ms       integer,
-    logs              text NOT NULL DEFAULT '',
-    stdout_log        text NOT NULL DEFAULT '',
-    error_message     text NOT NULL DEFAULT '',
+    logs              text NOT NULL,
+    stdout_log        text NOT NULL,
+    error_message     text NOT NULL,
     -- error_kind classifies the source of error_message so the UI can
     -- distinguish platform issues (provider 4xx, network) from agent-code
     -- bugs. Empty when status != 'error'. Values: 'platform' | 'agent' | ''.
-    error_kind        text NOT NULL DEFAULT '',
+    error_kind        text NOT NULL,
     exit_code         integer,
-    panic_trace       text NOT NULL DEFAULT '',
+    panic_trace       text NOT NULL,
     checkpoint        jsonb,
-    compacted         boolean NOT NULL DEFAULT false,
+    compacted         boolean NOT NULL,
     started_at        timestamptz NOT NULL DEFAULT now(),
     finished_at       timestamptz
 );
@@ -361,20 +400,33 @@ CREATE TABLE agent_conversations (
     id                            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     agent_id                      uuid NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
     bridge_id                     uuid REFERENCES bridges(id) ON DELETE CASCADE,
-    user_id                       uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    -- user_id is NULL for public bridge conversations (unauthenticated
+    -- bridge users) — those rows are keyed on (agent, source, external_id)
+    -- via the partial index below. Authed conversations always have a
+    -- user_id and are keyed on (agent, user_id, source).
+    user_id                       uuid REFERENCES users(id) ON DELETE CASCADE,
     source                        text NOT NULL,
     external_id                   text,
     title                         text NOT NULL,
-    metadata                      jsonb NOT NULL DEFAULT '{}',
-    settings                      jsonb NOT NULL DEFAULT '{}',
+    metadata                      jsonb NOT NULL,
+    settings                      jsonb NOT NULL,
     context_checkpoint_message_id uuid,
     created_at                    timestamptz NOT NULL DEFAULT now(),
     updated_at                    timestamptz NOT NULL DEFAULT now()
 );
 
--- Separate conversations per source (web vs bridge) so DM history never
--- leaks across transports.
-CREATE UNIQUE INDEX idx_conversations_lookup ON agent_conversations (agent_id, user_id, source);
+-- Authed conversations: one row per (agent, user, source). Web vs bridge
+-- DMs never share history because source segregates them.
+CREATE UNIQUE INDEX idx_conversations_dm
+    ON agent_conversations (agent_id, user_id, source)
+    WHERE user_id IS NOT NULL;
+
+-- Public/anonymous bridge conversations: one row per (agent, source,
+-- external_id) — the platform DM channel id keys the conversation in
+-- lieu of a user.
+CREATE UNIQUE INDEX idx_conversations_external
+    ON agent_conversations (agent_id, source, external_id)
+    WHERE user_id IS NULL AND external_id IS NOT NULL;
 
 CREATE TABLE topic_subscriptions (
     id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -397,14 +449,14 @@ CREATE TABLE agent_messages (
     conversation_id uuid NOT NULL REFERENCES agent_conversations(id) ON DELETE CASCADE,
     run_id          uuid REFERENCES runs(id) ON DELETE SET NULL,
     role            text NOT NULL,
-    source          text NOT NULL DEFAULT 'user',
+    source          text NOT NULL,
     content         text NOT NULL,
     parts           jsonb,
-    file_keys       text[] NOT NULL DEFAULT '{}',
+    file_keys       text[] NOT NULL,
     tokens_in       integer NOT NULL,
     tokens_out      integer NOT NULL,
     cost_estimate   numeric NOT NULL,
-    ephemeral       boolean NOT NULL DEFAULT false,
+    ephemeral       boolean NOT NULL,
     created_at      timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX idx_agent_messages_conv_seq ON agent_messages(conversation_id, seq);

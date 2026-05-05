@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strings"
 	"syscall"
 	"time"
 
@@ -182,16 +181,15 @@ func runServe(_ []string) {
 	// Create WS handler
 	wsHandler := realtime.NewHandler(database, hub, pubsub, logger.Named("handler"))
 
-	// OIDC — initOIDC returns nil by default; wire in a provider to enable.
-	oidc := initOIDC(ctx, cfg, database, cfg.JWTSecret, logger)
-
 	// Trigger system
 	dispatcher := trigger.NewDispatcher(cfg, database, containers, enc, logger.Named("dispatcher"))
 	transcriptionResolver := trigger.NewTranscriptionResolver(database, enc)
 	prompter := trigger.NewPromptProxy(dispatcher, database, s3Client, transcriptionResolver, logger.Named("prompt-proxy"))
 	telegramDriver := trigger.NewTelegramDriver(logger.Named("telegram"))
+	discordDriver := trigger.NewDiscordDriver(logger.Named("discord"))
 	drivers := map[string]trigger.BridgeDriver{
 		"telegram": telegramDriver,
+		"discord":  discordDriver,
 	}
 	bridgeMgr := trigger.NewBridgeManager(drivers, prompter, database, enc, cfg.JWTSecret, cfg.PublicURL, logger.Named("bridges"))
 	scheduler := trigger.NewScheduler(dispatcher, database, logger.Named("scheduler"))
@@ -212,10 +210,10 @@ func runServe(_ []string) {
 	router := api.NewRouter(api.RouterConfig{
 		DB:             database,
 		JWTSecret:      cfg.JWTSecret,
-		OIDC:           oidc,
 		PublicURL:      cfg.PublicURL,
 		OAuthClient:    oauthClient,
 		TelegramDriver: telegramDriver,
+		DiscordDriver:  discordDriver,
 		Encryptor:      enc,
 		S3Client:       s3Client,
 		BuildService:   buildSvc,
@@ -259,6 +257,10 @@ func runServe(_ []string) {
 	}
 	defer bridgeMgr.Stop()
 
+	// Public-bridge session sweeper — finalize and delete public
+	// conversations idle past the per-bridge TTL.
+	trigger.StartPublicSweeper(ctx, database, bridgeMgr, 5*time.Minute, logger.Named("public-sweeper"))
+
 	// Token refresh job
 	refreshJob := oauth.NewRefreshJob(database, enc, oauthClient, logger.Named("oauth-refresh"))
 	go refreshJob.Run(ctx)
@@ -296,38 +298,63 @@ func runServe(_ []string) {
 		}
 	}()
 
-	// Bridge tmp/ cleanup — delete agents/*/tmp/* blobs older than 3 days.
-	// Bridge drivers stage incoming attachments under
-	// agents/{agentID}/tmp/{uuid8}-{filename}; they're not referenced after
-	// the LLM consumes them, so a time-based sweep is sufficient.
+	// Storage retention sweeper — delete objects under any directory the
+	// agent registered with retention_hours > 0, once they're older than
+	// the configured TTL. The framework auto-registers "tmp" at 72h
+	// (DirectoryOpts.RetentionHours), so the prior hardcoded "tmp/" sweep
+	// falls out naturally as a special case of this loop. Builders can
+	// opt arbitrary directories into the sweep by passing
+	// RetentionHours when calling RegisterDirectory.
+	//
+	// We list each opted-in S3 prefix per directory rather than scanning
+	// "agents/" once because per-directory TTLs vary and a single TTL on
+	// the union would either over- or under-keep depending on the
+	// shortest/longest opt-in. Cheap: the prefix lists are bounded by
+	// what the agent actually wrote.
 	go func() {
-		cleanupLogger := logger.Named("tmp-cleanup")
+		cleanupLogger := logger.Named("storage-retention-sweeper")
 		ticker := time.NewTicker(6 * time.Hour)
 		defer ticker.Stop()
+		q := dbq.New(database.Pool())
 		for {
 			select {
 			case <-ticker.C:
-				objects, err := s3Client.ListObjects(ctx, "agents/")
+				dirs, err := q.ListDirectoriesWithRetention(ctx)
 				if err != nil {
-					cleanupLogger.Error("list agents tmp failed", zap.Error(err))
+					cleanupLogger.Error("list directories with retention", zap.Error(err))
 					continue
 				}
-				cutoff := time.Now().Add(-72 * time.Hour)
-				deleted := 0
-				for _, obj := range objects {
-					if !strings.Contains(obj.Key, "/tmp/") {
+				for _, d := range dirs {
+					agentUUID, err := uuid.FromBytes(d.AgentID.Bytes[:])
+					if err != nil {
 						continue
 					}
-					if obj.LastModified.Before(cutoff) {
-						if err := s3Client.DeleteObject(ctx, obj.Key); err != nil {
-							cleanupLogger.Error("delete tmp file failed", zap.String("key", obj.Key), zap.Error(err))
-						} else {
-							deleted++
+					prefix := "agents/" + agentUUID.String() + "/" + d.Path + "/"
+					objects, err := s3Client.ListObjects(ctx, prefix)
+					if err != nil {
+						cleanupLogger.Error("list prefix failed",
+							zap.String("prefix", prefix), zap.Error(err))
+						continue
+					}
+					cutoff := time.Now().Add(-time.Duration(d.RetentionHours) * time.Hour)
+					deleted := 0
+					for _, obj := range objects {
+						if obj.LastModified.Before(cutoff) {
+							if err := s3Client.DeleteObject(ctx, obj.Key); err != nil {
+								cleanupLogger.Error("delete failed",
+									zap.String("key", obj.Key), zap.Error(err))
+							} else {
+								deleted++
+							}
 						}
 					}
-				}
-				if deleted > 0 {
-					cleanupLogger.Info("cleaned up tmp files", zap.Int("deleted", deleted))
+					if deleted > 0 {
+						cleanupLogger.Info("swept directory",
+							zap.String("agent_id", agentUUID.String()),
+							zap.String("path", d.Path),
+							zap.Int32("retention_hours", d.RetentionHours),
+							zap.Int("deleted", deleted))
+					}
 				}
 			case <-ctx.Done():
 				return
@@ -382,6 +409,70 @@ func runServe(_ []string) {
 					cleanupLogger.Error("prune auth_lockouts failed", zap.Error(err))
 				} else if n > 0 {
 					cleanupLogger.Info("pruned stale auth lockouts", zap.Int64("rows", n))
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	// Stuck-run sweeper — runs that have been in 'running' status past the
+	// outer dispatcher timeout (2:15) plus a 15s grace are presumed dead.
+	// Mark them error/agent-disconnected, synthesize orphan tool_results
+	// (so the next LLM turn doesn't 400 on unpaired tool_use), and publish
+	// a synthetic run.complete WS event so any live UI that was watching
+	// this run unblocks. If the agent's r.Complete eventually arrives,
+	// UpsertRunComplete is idempotent and the late truth overwrites with
+	// the actual outcome — frontend re-paints. Tick frequency keeps the
+	// user-visible "stuck" window short without hammering the DB.
+	//
+	// Skip runs the dispatcher still tracks in memory: extended runs can
+	// legitimately live well past the base 2:30 cutoff (up to MaxExtensions
+	// × ExtendIncrement past start). The dispatcher's own deadline timer
+	// will eventually fire and tear them down through the normal cancel
+	// path. Orphan extended runs (airlock restart loses memory state) fall
+	// through the in-memory check and get reaped at the base threshold —
+	// matches "user lost their session anyway."
+	go func() {
+		sweepLogger := logger.Named("stuck-run-sweeper")
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		q := dbq.New(database.Pool())
+		for {
+			select {
+			case <-ticker.C:
+				cutoff := pgtype.Timestamptz{Time: time.Now().Add(-(2*time.Minute + 30*time.Second)), Valid: true}
+				stuck, err := q.ListStuckRuns(ctx, cutoff)
+				if err != nil {
+					sweepLogger.Error("list stuck runs", zap.Error(err))
+					continue
+				}
+				inFlight := make(map[uuid.UUID]struct{})
+				for _, id := range dispatcher.InFlightIDs() {
+					inFlight[id] = struct{}{}
+				}
+				for _, r := range stuck {
+					runUUID, err := uuid.FromBytes(r.ID.Bytes[:])
+					if err != nil {
+						continue
+					}
+					if _, live := inFlight[runUUID]; live {
+						continue
+					}
+					agentUUID, err := uuid.FromBytes(r.AgentID.Bytes[:])
+					if err != nil {
+						continue
+					}
+					api.SynthesizeOrphanToolResults(ctx, q, runUUID, "timeout", sweepLogger)
+					_ = q.UpdateRunComplete(ctx, dbq.UpdateRunCompleteParams{
+						ID:           r.ID,
+						Status:       "error",
+						ErrorMessage: "agent disconnected",
+					})
+					api.PublishRunTerminal(ctx, pubsub, agentUUID, runUUID, "error", "agent disconnected")
+					sweepLogger.Warn("stuck run reaped",
+						zap.String("run_id", runUUID.String()),
+						zap.String("agent_id", agentUUID.String()))
 				}
 			case <-ctx.Done():
 				return

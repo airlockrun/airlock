@@ -11,6 +11,18 @@ import type { AgentMessageInfo } from '@/gen/airlock/v1/types_pb'
 import { unwrapValue } from '@/api/proto'
 import api from '@/api/client'
 import { useMarkdown } from '@/composables/useMarkdown'
+import { enrichMessages } from '@/utils/messageGroup'
+
+// Per-tool-call collapse state. Defaults to expanded (RunDetailView is the
+// audit view — show what happened by default; let the reader collapse if
+// they want a summary).
+const toolCollapseState = ref<Record<string, boolean>>({})
+function toggleToolCollapse(id: string) {
+  toolCollapseState.value[id] = !toolCollapseState.value[id]
+}
+function isToolCollapsed(id: string): boolean {
+  return toolCollapseState.value[id] === true
+}
 
 const route = useRoute()
 const router = useRouter()
@@ -116,7 +128,7 @@ onMounted(async () => {
       }).catch(() => {}),
     ])
     run.value = result.run
-    runMessages.value = result.messages
+    runMessages.value = enrichMessages(result.messages)
   } catch {
     toast.add({ severity: 'error', summary: 'Run not found', life: 3000 })
     router.push(`/agents/${agentId}`)
@@ -173,16 +185,41 @@ onMounted(async () => {
       <h3 style="margin-bottom: 0.75rem">Conversation</h3>
       <div style="display: flex; flex-direction: column; gap: 0.5rem">
         <template v-for="msg in runMessages" :key="msg.id">
-          <!-- Tool result -->
-          <div v-if="msg.role === 'tool' && msg.content" style="display: flex; justify-content: flex-start">
+          <!-- Orphan tool result (no parent assistant we could fold into).
+               Folded rows are marked _hidden by enrichMessages. -->
+          <div v-if="msg.role === 'tool' && !(msg as any)._hidden && msg.content" style="display: flex; justify-content: flex-start">
             <div class="run-msg run-msg-tool">
               <pre style="white-space: pre-wrap; word-break: break-all; font-size: 0.8rem; margin: 0">{{ msg.content }}</pre>
             </div>
           </div>
-          <!-- User / Assistant with content -->
-          <div v-else-if="msg.content" :style="{ display: 'flex', justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start' }">
+          <!-- User / Assistant. Assistant turns may carry toolCalls[]
+               folded from per-tool rows by enrichMessages — render them
+               inside the same bubble first, then the text answer below.
+               Mirrors AgentChatView so the audit view matches what the
+               user saw live. -->
+          <div v-else-if="msg.content || (msg as any).toolCalls?.length" :style="{ display: 'flex', justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start' }">
             <div :class="['run-msg', msg.role === 'user' ? 'run-msg-user' : 'run-msg-assistant']">
-              <div v-html="useMarkdown(computed(() => msg.content)).html.value" class="chat-bubble" />
+              <div v-if="(msg as any).toolCalls?.length" :style="{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }">
+                <div v-for="tc in (msg as any).toolCalls" :key="tc.toolCallId" style="padding: 0.25rem 0">
+                  <div style="display: flex; align-items: center; justify-content: space-between; cursor: pointer" @click="toggleToolCollapse(tc.toolCallId)">
+                    <div style="font-size: 0.7rem; text-transform: uppercase; opacity: 0.6">{{ tc.toolName }}</div>
+                    <i :class="isToolCollapsed(tc.toolCallId) ? 'pi pi-plus' : 'pi pi-minus'" style="font-size: 0.7rem; opacity: 0.4" />
+                  </div>
+                  <template v-if="!isToolCollapsed(tc.toolCallId)">
+                    <div v-if="tc.input" style="margin-top: 0.25rem; margin-bottom: 0.5rem">
+                      <pre style="white-space: pre-wrap; word-break: break-all; font-size: 0.8rem; margin: 0; opacity: 0.7">{{ tc.input }}</pre>
+                    </div>
+                    <pre v-if="tc.output" style="white-space: pre-wrap; word-break: break-all; font-size: 0.8rem; margin: 0">{{ tc.output }}</pre>
+                    <pre v-if="tc.error" style="white-space: pre-wrap; word-break: break-all; font-size: 0.8rem; margin: 0; color: var(--p-red-500)">{{ tc.error }}</pre>
+                  </template>
+                </div>
+              </div>
+              <div
+                v-if="msg.content"
+                v-html="useMarkdown(computed(() => msg.content)).html.value"
+                class="chat-bubble"
+                :style="{ marginTop: (msg as any).toolCalls?.length ? '0.75rem' : '0' }"
+              />
             </div>
           </div>
         </template>

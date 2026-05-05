@@ -1,6 +1,19 @@
 -- name: CreateRun :one
-INSERT INTO runs (agent_id, bridge_id, status, input_payload, source_ref, trigger_type, trigger_ref)
-VALUES (@agent_id, @bridge_id, 'running', @input_payload, @source_ref, @trigger_type, @trigger_ref)
+-- All "starts at zero/empty" run fields passed explicitly per AGENTS.md
+-- "no fake defaults" rule. Counter fields start at 0 (no LLM calls /
+-- tokens / cost yet); buffered text fields start ''; actions starts [].
+INSERT INTO runs (
+    agent_id, bridge_id, status, error_kind,
+    input_payload, source_ref, trigger_type, trigger_ref,
+    actions, llm_calls, llm_tokens_in, llm_tokens_out, llm_cost_estimate,
+    logs, stdout_log, error_message, panic_trace, compacted
+)
+VALUES (
+    @agent_id, @bridge_id, 'running', '',
+    @input_payload, @source_ref, @trigger_type, @trigger_ref,
+    '[]'::jsonb, 0, 0, 0, 0,
+    '', '', '', '', false
+)
 RETURNING *;
 
 -- name: UpdateRunComplete :exec
@@ -16,8 +29,26 @@ UPDATE runs SET
 WHERE id = @id;
 
 -- name: UpsertRunComplete :exec
-INSERT INTO runs (id, agent_id, status, error_message, error_kind, actions, stdout_log, panic_trace, input_payload, source_ref, trigger_type, trigger_ref, finished_at, duration_ms)
-VALUES (@id, @agent_id, @status, @error_message, @error_kind, @actions, @stdout_log, @panic_trace, '{}', '', 'prompt', '', now(), 0)
+-- Recovery path: row may not exist if CreateRun never landed. All
+-- "starts empty" fields (logs, llm counters, compacted) passed
+-- explicitly. trigger_type/trigger_ref/source_ref placeholders apply
+-- only when the row is brand-new — the agent's r.Complete arrives
+-- without trigger context; the dispatcher's CreateRun would have set
+-- the real values.
+INSERT INTO runs (
+    id, agent_id, status, error_message, error_kind, actions,
+    stdout_log, panic_trace, input_payload, source_ref,
+    trigger_type, trigger_ref, finished_at, duration_ms,
+    llm_calls, llm_tokens_in, llm_tokens_out, llm_cost_estimate,
+    logs, compacted
+)
+VALUES (
+    @id, @agent_id, @status, @error_message, @error_kind, @actions,
+    @stdout_log, @panic_trace, '{}'::jsonb, '',
+    'prompt', '', now(), 0,
+    0, 0, 0, 0,
+    '', false
+)
 ON CONFLICT (id) DO UPDATE SET
     status = EXCLUDED.status,
     error_message = EXCLUDED.error_message,
@@ -101,6 +132,14 @@ UPDATE runs SET
     finished_at = now(),
     duration_ms = EXTRACT(EPOCH FROM (now() - started_at))::integer * 1000
 WHERE status = 'running';
+
+-- name: ListStuckRuns :many
+-- Runs presumed dead because they haven't seen a terminal status update
+-- past the cutoff (started_at + outer dispatcher timeout + grace).
+-- The sweeper marks them error/agent-disconnected, synthesizes orphan
+-- tool-results, and publishes a synthetic run.complete WS event.
+SELECT id, agent_id FROM runs
+WHERE status = 'running' AND started_at < @cutoff;
 
 -- name: CompactOldRuns :execrows
 -- Nullify verbose fields on completed runs older than the cutoff.

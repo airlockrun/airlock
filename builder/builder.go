@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/airlockrun/agentsdk"
 	"github.com/airlockrun/airlock/auth"
@@ -53,7 +54,16 @@ type BuildService struct {
 	logger           *zap.Logger
 
 	mu          sync.Mutex
-	cancelFuncs map[string]context.CancelFunc // agentID → cancel running build/upgrade
+	inFlight    map[string]*buildHandle // agentID → handle for cancel + wait
+}
+
+// buildHandle tracks a running build/upgrade so callers can cancel and
+// optionally block until the goroutine has fully torn down its toolserver
+// and DB writes — needed by Delete to avoid racing the workspace rm and
+// agent-row delete against in-flight writes.
+type buildHandle struct {
+	cancel context.CancelFunc
+	done   chan struct{}
 }
 
 // New creates a BuildService. Panics if any dependency is nil.
@@ -80,7 +90,7 @@ func New(cfg *config.Config, database *db.DB, containers container.ContainerMana
 		encryptor:   encryptor,
 		events:      noopPublisher{},
 		logger:      logger,
-		cancelFuncs: make(map[string]context.CancelFunc),
+		inFlight:    make(map[string]*buildHandle),
 	}
 }
 
@@ -105,16 +115,21 @@ func (b *BuildService) SetUpgradeNotifier(n PostUpgradeNotifier) {
 func (b *BuildService) startBuild(agentID string) (context.Context, context.CancelFunc) {
 	ctx, cancel := context.WithCancel(context.Background())
 	b.mu.Lock()
-	b.cancelFuncs[agentID] = cancel
+	b.inFlight[agentID] = &buildHandle{cancel: cancel, done: make(chan struct{})}
 	b.mu.Unlock()
 	return ctx, cancel
 }
 
-// finishBuild removes the cancel func for a completed build.
+// finishBuild removes the handle for a completed build and signals any
+// CancelBuildAndWait callers blocked on its done channel.
 func (b *BuildService) finishBuild(agentID string) {
 	b.mu.Lock()
-	delete(b.cancelFuncs, agentID)
+	h, ok := b.inFlight[agentID]
+	delete(b.inFlight, agentID)
 	b.mu.Unlock()
+	if ok {
+		close(h.done)
+	}
 }
 
 // makeCodegenTempDir creates a per-build scratch directory. In dev mode
@@ -134,16 +149,37 @@ func (b *BuildService) makeCodegenTempDir(prefix string) (string, error) {
 }
 
 // CancelBuild cancels a running build/upgrade for the given agent.
-// Returns true if a build was running and cancelled.
+// Returns true if a build was running and cancelled. Does not block on
+// teardown — use CancelBuildAndWait when the caller needs the toolserver
+// and DB writes to settle before proceeding.
 func (b *BuildService) CancelBuild(agentID string) bool {
 	b.mu.Lock()
-	cancel, ok := b.cancelFuncs[agentID]
-	delete(b.cancelFuncs, agentID)
+	h, ok := b.inFlight[agentID]
 	b.mu.Unlock()
 	if ok {
-		cancel()
+		h.cancel()
 	}
 	return ok
+}
+
+// CancelBuildAndWait cancels a running build/upgrade and blocks until the
+// goroutine has run its deferred cleanup (toolserver SIGKILL, DB status
+// write) or until timeout elapses. Returns true if a build was running.
+// Used by Delete to avoid racing the workspace rm and agent-row delete
+// against the upgrade's in-flight writes.
+func (b *BuildService) CancelBuildAndWait(agentID string, timeout time.Duration) bool {
+	b.mu.Lock()
+	h, ok := b.inFlight[agentID]
+	b.mu.Unlock()
+	if !ok {
+		return false
+	}
+	h.cancel()
+	select {
+	case <-h.done:
+	case <-time.After(timeout):
+	}
+	return true
 }
 
 // BuildInput describes what to build.

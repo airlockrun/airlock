@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, computed } from 'vue'
 import { useToast } from 'primevue/usetoast'
+import { useConfirm } from 'primevue/useconfirm'
 import api from '@/api/client'
 import CredentialDialog from './CredentialDialog.vue'
 
@@ -21,6 +22,7 @@ interface MCPServer {
 const props = defineProps<{ agentId: string }>()
 
 const toast = useToast()
+const confirm = useConfirm()
 const servers = ref<MCPServer[]>([])
 const loading = ref(true)
 const credDialogVisible = ref(false)
@@ -31,14 +33,138 @@ const oauthClientSecret = ref('')
 const oauthSaving = ref(false)
 const callbackUrl = ref('')
 
-function configure(srv: MCPServer) {
+// Per-server PrimeVue Menu refs (overflow ⋮ button). Map keyed by slug
+// so each row owns its own menu instance — sharing one would mis-route
+// clicks since the menu's positioning is anchored to its `toggle()`
+// caller's event target, not to a logical "current row".
+const overflowMenus = ref<Record<string, any>>({})
+function setOverflowMenu(slug: string, el: any) {
+  if (el) overflowMenus.value[slug] = el
+}
+
+// Pulled from each server row at click time so the menu items can
+// branch on the row's authMode/authorized state without rebinding the
+// `model` prop per click.
+const menuTargetServer = ref<MCPServer | null>(null)
+
+const overflowItems = computed(() => {
+  const srv = menuTargetServer.value
+  if (!srv) return []
+  const items: any[] = []
+
+  if (srv.authorized) {
+    items.push({
+      label: 'Disconnect',
+      icon: 'pi pi-sign-out',
+      command: () => disconnect(srv),
+    })
+  }
+
+  // OAuth-app reset: relabels per mode. For oauth_discovery this forces
+  // a fresh DCR on next Authorize; for oauth it lets the operator paste
+  // a new client_id/secret. Either way it wipes the existing OAuth app
+  // config + any credentials tied to it (the old creds would 401 since
+  // they belong to the old client_id at the provider).
+  if (srv.authMode === 'oauth_discovery' && srv.hasOauthApp) {
+    items.push({
+      label: 'Re-register OAuth client',
+      icon: 'pi pi-refresh',
+      command: () => resetOAuthApp(srv),
+    })
+  }
+  if (srv.authMode === 'oauth') {
+    items.push({
+      label: srv.hasOauthApp ? 'Edit OAuth app' : 'Set OAuth app',
+      icon: 'pi pi-pencil',
+      command: () => editOAuthApp(srv),
+    })
+  }
+
+  return items
+})
+
+function primaryAction(srv: MCPServer) {
   selectedServer.value = srv
-  if (srv.authMode === 'oauth' || srv.authMode === 'oauth_discovery') {
+  if (srv.authMode === 'oauth_discovery') {
+    // Backend handles RFC 7591 DCR if no client_id is stored. If DCR
+    // fails we get a 400 with a clear remediation message — surfaced
+    // as a toast by startMCPOAuth.
+    startMCPOAuth()
+  } else if (srv.authMode === 'oauth') {
+    if (srv.hasOauthApp) {
+      // OAuth app already configured — just run the flow.
+      startMCPOAuth()
+    } else {
+      // First-time configuration — paste client_id/secret.
+      oauthClientId.value = ''
+      oauthClientSecret.value = ''
+      oauthAppDialogVisible.value = true
+    }
+  } else {
+    credDialogVisible.value = true
+  }
+}
+
+function openOverflow(event: Event, srv: MCPServer) {
+  menuTargetServer.value = srv
+  overflowMenus.value[srv.slug]?.toggle(event)
+}
+
+async function disconnect(srv: MCPServer) {
+  confirm.require({
+    message: `Sign out of ${srv.name || srv.slug}? Tokens are discarded; OAuth app config stays.`,
+    header: 'Disconnect',
+    icon: 'pi pi-sign-out',
+    rejectProps: { label: 'Cancel', severity: 'secondary', outlined: true },
+    acceptProps: { label: 'Disconnect' },
+    accept: async () => {
+      try {
+        await api.delete(`/api/v1/agents/${props.agentId}/mcp-servers/${srv.slug}/credentials`)
+        srv.authorized = false
+        toast.add({ severity: 'success', summary: `Disconnected from ${srv.name || srv.slug}`, life: 3000 })
+      } catch (err: any) {
+        toast.add({ severity: 'error', summary: err.response?.data?.error || 'Disconnect failed', life: 5000 })
+      }
+    },
+  })
+}
+
+async function resetOAuthApp(srv: MCPServer) {
+  confirm.require({
+    message: `Re-register OAuth client for ${srv.name || srv.slug}? Existing client and tokens will be discarded.`,
+    header: 'Re-register OAuth client',
+    icon: 'pi pi-refresh',
+    rejectProps: { label: 'Cancel', severity: 'secondary', outlined: true },
+    acceptProps: { label: 'Re-register' },
+    accept: async () => {
+      try {
+        await api.delete(`/api/v1/agents/${props.agentId}/mcp-servers/${srv.slug}/credentials/oauth-app`)
+        srv.hasOauthApp = false
+        srv.authorized = false
+        toast.add({ severity: 'success', summary: 'OAuth client cleared. Click Authorize to register a new one.', life: 4000 })
+      } catch (err: any) {
+        toast.add({ severity: 'error', summary: err.response?.data?.error || 'Reset failed', life: 5000 })
+      }
+    },
+  })
+}
+
+async function editOAuthApp(srv: MCPServer) {
+  // For `oauth` (manual) — wipe the old app first so the dialog isn't
+  // ambiguous about whether saving "edits" or "replaces". The backend
+  // path is the same as a fresh Set OAuth app from there.
+  try {
+    if (srv.hasOauthApp) {
+      await api.delete(`/api/v1/agents/${props.agentId}/mcp-servers/${srv.slug}/credentials/oauth-app`)
+      srv.hasOauthApp = false
+      srv.authorized = false
+    }
+    selectedServer.value = srv
     oauthClientId.value = ''
     oauthClientSecret.value = ''
     oauthAppDialogVisible.value = true
-  } else {
-    credDialogVisible.value = true
+  } catch (err: any) {
+    toast.add({ severity: 'error', summary: err.response?.data?.error || 'Failed to reset OAuth app', life: 5000 })
   }
 }
 
@@ -76,11 +202,6 @@ async function startMCPOAuth() {
   }
 }
 
-function reauthorize() {
-  oauthAppDialogVisible.value = false
-  startMCPOAuth()
-}
-
 function authModeLabel(mode: string): string {
   switch (mode) {
     case 'oauth_discovery': return 'OAuth (auto)'
@@ -89,6 +210,23 @@ function authModeLabel(mode: string): string {
     case 'none': return 'None'
     default: return mode
   }
+}
+
+function primaryLabel(srv: MCPServer): string {
+  if (srv.authMode === 'token') return srv.authorized ? 'Update token' : 'Set token'
+  if (srv.authorized) return 'Reauthorize'
+  return 'Authorize'
+}
+
+// Whether this server has any overflow-menu items right now. Used to
+// hide the ⋮ button when it would open an empty dropdown — e.g.
+// oauth_discovery + !hasOauthApp + !authorized has nothing to offer
+// beyond the primary Authorize button.
+function hasOverflow(srv: MCPServer): boolean {
+  if (srv.authorized) return true                                // Disconnect
+  if (srv.authMode === 'oauth_discovery' && srv.hasOauthApp) return true  // Re-register
+  if (srv.authMode === 'oauth') return true                      // Set/Edit OAuth app
+  return false
 }
 
 onMounted(async () => {
@@ -137,13 +275,29 @@ onMounted(async () => {
       </Column>
       <Column header="Actions">
         <template #body="{ data: srv }">
-          <Button
-            v-if="srv.authMode !== 'none'"
-            :label="srv.authorized ? 'Reconfigure' : 'Configure'"
-            size="small"
-            outlined
-            @click="configure(srv)"
-          />
+          <div v-if="srv.authMode !== 'none'" style="display: flex; gap: 0.25rem; align-items: center">
+            <Button
+              :label="primaryLabel(srv)"
+              size="small"
+              outlined
+              @click="primaryAction(srv)"
+            />
+            <Button
+              v-if="hasOverflow(srv)"
+              icon="pi pi-ellipsis-v"
+              size="small"
+              text
+              severity="secondary"
+              aria-label="More actions"
+              @click="(e) => openOverflow(e, srv)"
+            />
+            <Menu
+              v-if="hasOverflow(srv)"
+              :ref="(el) => setOverflowMenu(srv.slug, el)"
+              :model="overflowItems"
+              :popup="true"
+            />
+          </div>
         </template>
       </Column>
     </DataTable>
@@ -166,7 +320,7 @@ onMounted(async () => {
       base-path="mcp-servers"
     />
 
-    <!-- OAuth app dialog -->
+    <!-- OAuth app paste dialog (oauth mode only) -->
     <Dialog v-model:visible="oauthAppDialogVisible" :header="`Configure ${selectedServer?.name ?? 'MCP OAuth'}`" modal style="width: 28rem">
       <div style="display: flex; flex-direction: column; gap: 1.25rem; padding-top: 0.5rem">
         <p style="font-size: 0.85rem; color: var(--p-text-muted-color); margin: 0">
@@ -185,7 +339,6 @@ onMounted(async () => {
           <label for="mcp-oauth-client-secret">Client Secret</label>
         </FloatLabel>
         <div style="display: flex; justify-content: flex-end; gap: 0.5rem">
-          <Button v-if="selectedServer?.hasOauthApp" label="Reauthorize" severity="secondary" @click="reauthorize" />
           <Button label="Save & Authorize" :loading="oauthSaving" @click="saveOAuthApp" :disabled="!oauthClientId || !oauthClientSecret" />
         </div>
       </div>

@@ -26,7 +26,7 @@ func (q *Queries) DeleteDirectoriesByAgentExcept(ctx context.Context, arg Delete
 }
 
 const getDirectoryByPath = `-- name: GetDirectoryByPath :one
-SELECT id, agent_id, path, read_access, write_access, list_access, description, created_at, updated_at FROM agent_directories
+SELECT id, agent_id, path, read_access, write_access, list_access, description, llm_hint, retention_hours, created_at, updated_at FROM agent_directories
 WHERE agent_id = $1 AND $2::text LIKE path || '%'
 ORDER BY length(path) DESC LIMIT 1
 `
@@ -49,6 +49,8 @@ func (q *Queries) GetDirectoryByPath(ctx context.Context, arg GetDirectoryByPath
 		&i.WriteAccess,
 		&i.ListAccess,
 		&i.Description,
+		&i.LlmHint,
+		&i.RetentionHours,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -56,7 +58,7 @@ func (q *Queries) GetDirectoryByPath(ctx context.Context, arg GetDirectoryByPath
 }
 
 const listDirectoriesByAgent = `-- name: ListDirectoriesByAgent :many
-SELECT id, agent_id, path, read_access, write_access, list_access, description, created_at, updated_at FROM agent_directories WHERE agent_id = $1 ORDER BY path
+SELECT id, agent_id, path, read_access, write_access, list_access, description, llm_hint, retention_hours, created_at, updated_at FROM agent_directories WHERE agent_id = $1 ORDER BY path
 `
 
 func (q *Queries) ListDirectoriesByAgent(ctx context.Context, agentID pgtype.UUID) ([]AgentDirectory, error) {
@@ -76,6 +78,8 @@ func (q *Queries) ListDirectoriesByAgent(ctx context.Context, agentID pgtype.UUI
 			&i.WriteAccess,
 			&i.ListAccess,
 			&i.Description,
+			&i.LlmHint,
+			&i.RetentionHours,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 		); err != nil {
@@ -89,24 +93,64 @@ func (q *Queries) ListDirectoriesByAgent(ctx context.Context, agentID pgtype.UUI
 	return items, nil
 }
 
+const listDirectoriesWithRetention = `-- name: ListDirectoriesWithRetention :many
+SELECT agent_id, path, retention_hours
+FROM agent_directories
+WHERE retention_hours > 0
+ORDER BY agent_id, path
+`
+
+type ListDirectoriesWithRetentionRow struct {
+	AgentID        pgtype.UUID `json:"agent_id"`
+	Path           string      `json:"path"`
+	RetentionHours int32       `json:"retention_hours"`
+}
+
+// All directories opted into the storage sweep (retention_hours > 0).
+// Per-agent so the sweeper can build "agents/{agent_id}{path}/" S3 prefixes
+// to scan + delete from. Ordering is purely cosmetic for log readability.
+func (q *Queries) ListDirectoriesWithRetention(ctx context.Context) ([]ListDirectoriesWithRetentionRow, error) {
+	rows, err := q.db.Query(ctx, listDirectoriesWithRetention)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListDirectoriesWithRetentionRow{}
+	for rows.Next() {
+		var i ListDirectoriesWithRetentionRow
+		if err := rows.Scan(&i.AgentID, &i.Path, &i.RetentionHours); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const upsertDirectory = `-- name: UpsertDirectory :exec
-INSERT INTO agent_directories (agent_id, path, read_access, write_access, list_access, description)
-VALUES ($1, $2, $3, $4, $5, $6)
+INSERT INTO agent_directories (agent_id, path, read_access, write_access, list_access, description, llm_hint, retention_hours)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 ON CONFLICT (agent_id, path) DO UPDATE SET
     read_access = EXCLUDED.read_access,
     write_access = EXCLUDED.write_access,
     list_access = EXCLUDED.list_access,
     description = EXCLUDED.description,
+    llm_hint = EXCLUDED.llm_hint,
+    retention_hours = EXCLUDED.retention_hours,
     updated_at = now()
 `
 
 type UpsertDirectoryParams struct {
-	AgentID     pgtype.UUID `json:"agent_id"`
-	Path        string      `json:"path"`
-	ReadAccess  string      `json:"read_access"`
-	WriteAccess string      `json:"write_access"`
-	ListAccess  string      `json:"list_access"`
-	Description string      `json:"description"`
+	AgentID        pgtype.UUID `json:"agent_id"`
+	Path           string      `json:"path"`
+	ReadAccess     string      `json:"read_access"`
+	WriteAccess    string      `json:"write_access"`
+	ListAccess     string      `json:"list_access"`
+	Description    string      `json:"description"`
+	LlmHint        string      `json:"llm_hint"`
+	RetentionHours int32       `json:"retention_hours"`
 }
 
 func (q *Queries) UpsertDirectory(ctx context.Context, arg UpsertDirectoryParams) error {
@@ -117,6 +161,8 @@ func (q *Queries) UpsertDirectory(ctx context.Context, arg UpsertDirectoryParams
 		arg.WriteAccess,
 		arg.ListAccess,
 		arg.Description,
+		arg.LlmHint,
+		arg.RetentionHours,
 	)
 	return err
 }

@@ -27,7 +27,7 @@ func (q *Queries) DeleteTopicsByAgentExcept(ctx context.Context, arg DeleteTopic
 }
 
 const getTopicBySlug = `-- name: GetTopicBySlug :one
-SELECT id, agent_id, slug, description, access, created_at, updated_at FROM agent_topics WHERE agent_id = $1 AND slug = $2
+SELECT id, agent_id, slug, description, llm_hint, access, created_at, updated_at FROM agent_topics WHERE agent_id = $1 AND slug = $2
 `
 
 type GetTopicBySlugParams struct {
@@ -43,6 +43,7 @@ func (q *Queries) GetTopicBySlug(ctx context.Context, arg GetTopicBySlugParams) 
 		&i.AgentID,
 		&i.Slug,
 		&i.Description,
+		&i.LlmHint,
 		&i.Access,
 		&i.CreatedAt,
 		&i.UpdatedAt,
@@ -131,7 +132,7 @@ func (q *Queries) ListTopicSubscriptions(ctx context.Context, arg ListTopicSubsc
 }
 
 const listTopicsByAgent = `-- name: ListTopicsByAgent :many
-SELECT id, agent_id, slug, description, access, created_at, updated_at FROM agent_topics WHERE agent_id = $1
+SELECT id, agent_id, slug, description, llm_hint, access, created_at, updated_at FROM agent_topics WHERE agent_id = $1
 `
 
 func (q *Queries) ListTopicsByAgent(ctx context.Context, agentID pgtype.UUID) ([]AgentTopic, error) {
@@ -148,6 +149,7 @@ func (q *Queries) ListTopicsByAgent(ctx context.Context, agentID pgtype.UUID) ([
 			&i.AgentID,
 			&i.Slug,
 			&i.Description,
+			&i.LlmHint,
 			&i.Access,
 			&i.CreatedAt,
 			&i.UpdatedAt,
@@ -194,10 +196,11 @@ func (q *Queries) UnsubscribeTopic(ctx context.Context, arg UnsubscribeTopicPara
 }
 
 const upsertTopic = `-- name: UpsertTopic :exec
-INSERT INTO agent_topics (agent_id, slug, description, access)
-VALUES ($1, $2, $3, $4)
+INSERT INTO agent_topics (agent_id, slug, description, llm_hint, access)
+VALUES ($1, $2, $3, $4, $5)
 ON CONFLICT (agent_id, slug) DO UPDATE SET
     description = EXCLUDED.description,
+    llm_hint = EXCLUDED.llm_hint,
     access = EXCLUDED.access,
     updated_at = now()
 `
@@ -206,6 +209,7 @@ type UpsertTopicParams struct {
 	AgentID     pgtype.UUID `json:"agent_id"`
 	Slug        string      `json:"slug"`
 	Description string      `json:"description"`
+	LlmHint     string      `json:"llm_hint"`
 	Access      string      `json:"access"`
 }
 
@@ -214,6 +218,7 @@ func (q *Queries) UpsertTopic(ctx context.Context, arg UpsertTopicParams) error 
 		arg.AgentID,
 		arg.Slug,
 		arg.Description,
+		arg.LlmHint,
 		arg.Access,
 	)
 	return err

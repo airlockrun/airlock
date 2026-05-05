@@ -1,6 +1,14 @@
 -- name: CreateAgentBuild :one
-INSERT INTO agent_builds (agent_id, type, instructions)
-VALUES (@agent_id, @type, @instructions)
+-- Initial-row INSERT. Status starts 'building'; output fields start empty
+-- and are filled by UpdateAgentBuildComplete / UpdateAgentBuildLogs.
+INSERT INTO agent_builds (
+    agent_id, type, status, instructions,
+    source_ref, image_ref, sol_log, docker_log, log_seq, error_message
+)
+VALUES (
+    @agent_id, @type, 'building', @instructions,
+    '', '', '', '', 0, ''
+)
 RETURNING *;
 
 -- name: UpdateAgentBuildLogs :exec

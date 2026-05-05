@@ -1,9 +1,11 @@
 -- name: GetOrCreateConversation :one
 -- DM-only: one conversation per user per agent per source. Upserts on (agent_id, user_id, source).
+-- Targets the partial unique index `idx_conversations_dm` — the WHERE clause
+-- on conflict_target is required for Postgres to infer the partial index.
 WITH ins AS (
-    INSERT INTO agent_conversations (agent_id, user_id, source, title, bridge_id, external_id)
-    VALUES (@agent_id, @user_id, @source::text, @title, @bridge_id, @external_id)
-    ON CONFLICT (agent_id, user_id, source) DO UPDATE
+    INSERT INTO agent_conversations (agent_id, user_id, source, title, bridge_id, external_id, metadata, settings)
+    VALUES (@agent_id, @user_id, @source::text, @title, @bridge_id, @external_id, '{}'::jsonb, '{}'::jsonb)
+    ON CONFLICT (agent_id, user_id, source) WHERE user_id IS NOT NULL DO UPDATE
         SET updated_at = now(),
             bridge_id = COALESCE(EXCLUDED.bridge_id, agent_conversations.bridge_id),
             external_id = COALESCE(EXCLUDED.external_id, agent_conversations.external_id)
@@ -11,6 +13,39 @@ WITH ins AS (
 )
 SELECT * FROM ins
 LIMIT 1;
+
+-- name: GetOrCreateConversationByExternal :one
+-- Public bridge conversations: keyed on (agent_id, source, external_id) with
+-- user_id NULL. One conversation per platform DM channel. Targets the
+-- partial unique index `idx_conversations_external`.
+WITH ins AS (
+    INSERT INTO agent_conversations (agent_id, user_id, source, title, bridge_id, external_id, metadata, settings)
+    VALUES (@agent_id, NULL, @source::text, @title, @bridge_id, @external_id, '{}'::jsonb, '{}'::jsonb)
+    ON CONFLICT (agent_id, source, external_id) WHERE user_id IS NULL AND external_id IS NOT NULL DO UPDATE
+        SET updated_at = now(),
+            bridge_id = COALESCE(EXCLUDED.bridge_id, agent_conversations.bridge_id)
+    RETURNING *
+)
+SELECT * FROM ins
+LIMIT 1;
+
+-- name: GetConversationByExternal :one
+-- Non-creating lookup for public bridge conversations. Used by HandleCallback
+-- when a button tap arrives for an unauthenticated user.
+SELECT * FROM agent_conversations
+WHERE agent_id = @agent_id AND source = @source AND external_id = @external_id AND user_id IS NULL;
+
+-- name: ListExpiredPublicConversations :many
+-- Sweeper input: public bridge conversations whose updated_at is older than
+-- the bridge's configured TTL. TTL is `bridges.settings.public_session_ttl_seconds`
+-- — 0 disables sweeping for that bridge, default is 10800s (3 hours).
+SELECT c.id, c.bridge_id, c.external_id, b.type AS bridge_type
+FROM agent_conversations c
+JOIN bridges b ON b.id = c.bridge_id
+WHERE c.user_id IS NULL
+  AND c.source = 'bridge'
+  AND COALESCE((b.settings->>'public_session_ttl_seconds')::int, 10800) > 0
+  AND c.updated_at < NOW() - make_interval(secs => COALESCE((b.settings->>'public_session_ttl_seconds')::int, 10800));
 
 -- name: ListConversationsByAgent :many
 -- Returns conversations for the given agent visible to the given user.

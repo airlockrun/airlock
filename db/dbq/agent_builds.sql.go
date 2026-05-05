@@ -12,8 +12,14 @@ import (
 )
 
 const createAgentBuild = `-- name: CreateAgentBuild :one
-INSERT INTO agent_builds (agent_id, type, instructions)
-VALUES ($1, $2, $3)
+INSERT INTO agent_builds (
+    agent_id, type, status, instructions,
+    source_ref, image_ref, sol_log, docker_log, log_seq, error_message
+)
+VALUES (
+    $1, $2, 'building', $3,
+    '', '', '', '', 0, ''
+)
 RETURNING id, agent_id, type, status, instructions, source_ref, image_ref, sol_log, docker_log, log_seq, error_message, started_at, finished_at
 `
 
@@ -23,6 +29,8 @@ type CreateAgentBuildParams struct {
 	Instructions string      `json:"instructions"`
 }
 
+// Initial-row INSERT. Status starts 'building'; output fields start empty
+// and are filled by UpdateAgentBuildComplete / UpdateAgentBuildLogs.
 func (q *Queries) CreateAgentBuild(ctx context.Context, arg CreateAgentBuildParams) (AgentBuild, error) {
 	row := q.db.QueryRow(ctx, createAgentBuild, arg.AgentID, arg.Type, arg.Instructions)
 	var i AgentBuild

@@ -20,6 +20,39 @@ func (q *Queries) DeleteConversation(ctx context.Context, id pgtype.UUID) error 
 	return err
 }
 
+const getConversationByExternal = `-- name: GetConversationByExternal :one
+SELECT id, agent_id, bridge_id, user_id, source, external_id, title, metadata, settings, context_checkpoint_message_id, created_at, updated_at FROM agent_conversations
+WHERE agent_id = $1 AND source = $2 AND external_id = $3 AND user_id IS NULL
+`
+
+type GetConversationByExternalParams struct {
+	AgentID    pgtype.UUID `json:"agent_id"`
+	Source     string      `json:"source"`
+	ExternalID pgtype.Text `json:"external_id"`
+}
+
+// Non-creating lookup for public bridge conversations. Used by HandleCallback
+// when a button tap arrives for an unauthenticated user.
+func (q *Queries) GetConversationByExternal(ctx context.Context, arg GetConversationByExternalParams) (AgentConversation, error) {
+	row := q.db.QueryRow(ctx, getConversationByExternal, arg.AgentID, arg.Source, arg.ExternalID)
+	var i AgentConversation
+	err := row.Scan(
+		&i.ID,
+		&i.AgentID,
+		&i.BridgeID,
+		&i.UserID,
+		&i.Source,
+		&i.ExternalID,
+		&i.Title,
+		&i.Metadata,
+		&i.Settings,
+		&i.ContextCheckpointMessageID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getConversationByID = `-- name: GetConversationByID :one
 SELECT id, agent_id, bridge_id, user_id, source, external_id, title, metadata, settings, context_checkpoint_message_id, created_at, updated_at FROM agent_conversations WHERE id = $1
 `
@@ -79,9 +112,9 @@ func (q *Queries) GetConversationBySource(ctx context.Context, arg GetConversati
 
 const getOrCreateConversation = `-- name: GetOrCreateConversation :one
 WITH ins AS (
-    INSERT INTO agent_conversations (agent_id, user_id, source, title, bridge_id, external_id)
-    VALUES ($1, $2, $3::text, $4, $5, $6)
-    ON CONFLICT (agent_id, user_id, source) DO UPDATE
+    INSERT INTO agent_conversations (agent_id, user_id, source, title, bridge_id, external_id, metadata, settings)
+    VALUES ($1, $2, $3::text, $4, $5, $6, '{}'::jsonb, '{}'::jsonb)
+    ON CONFLICT (agent_id, user_id, source) WHERE user_id IS NOT NULL DO UPDATE
         SET updated_at = now(),
             bridge_id = COALESCE(EXCLUDED.bridge_id, agent_conversations.bridge_id),
             external_id = COALESCE(EXCLUDED.external_id, agent_conversations.external_id)
@@ -116,6 +149,8 @@ type GetOrCreateConversationRow struct {
 }
 
 // DM-only: one conversation per user per agent per source. Upserts on (agent_id, user_id, source).
+// Targets the partial unique index `idx_conversations_dm` — the WHERE clause
+// on conflict_target is required for Postgres to infer the partial index.
 func (q *Queries) GetOrCreateConversation(ctx context.Context, arg GetOrCreateConversationParams) (GetOrCreateConversationRow, error) {
 	row := q.db.QueryRow(ctx, getOrCreateConversation,
 		arg.AgentID,
@@ -126,6 +161,71 @@ func (q *Queries) GetOrCreateConversation(ctx context.Context, arg GetOrCreateCo
 		arg.ExternalID,
 	)
 	var i GetOrCreateConversationRow
+	err := row.Scan(
+		&i.ID,
+		&i.AgentID,
+		&i.BridgeID,
+		&i.UserID,
+		&i.Source,
+		&i.ExternalID,
+		&i.Title,
+		&i.Metadata,
+		&i.Settings,
+		&i.ContextCheckpointMessageID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getOrCreateConversationByExternal = `-- name: GetOrCreateConversationByExternal :one
+WITH ins AS (
+    INSERT INTO agent_conversations (agent_id, user_id, source, title, bridge_id, external_id, metadata, settings)
+    VALUES ($1, NULL, $2::text, $3, $4, $5, '{}'::jsonb, '{}'::jsonb)
+    ON CONFLICT (agent_id, source, external_id) WHERE user_id IS NULL AND external_id IS NOT NULL DO UPDATE
+        SET updated_at = now(),
+            bridge_id = COALESCE(EXCLUDED.bridge_id, agent_conversations.bridge_id)
+    RETURNING id, agent_id, bridge_id, user_id, source, external_id, title, metadata, settings, context_checkpoint_message_id, created_at, updated_at
+)
+SELECT id, agent_id, bridge_id, user_id, source, external_id, title, metadata, settings, context_checkpoint_message_id, created_at, updated_at FROM ins
+LIMIT 1
+`
+
+type GetOrCreateConversationByExternalParams struct {
+	AgentID    pgtype.UUID `json:"agent_id"`
+	Source     string      `json:"source"`
+	Title      string      `json:"title"`
+	BridgeID   pgtype.UUID `json:"bridge_id"`
+	ExternalID pgtype.Text `json:"external_id"`
+}
+
+type GetOrCreateConversationByExternalRow struct {
+	ID                         pgtype.UUID        `json:"id"`
+	AgentID                    pgtype.UUID        `json:"agent_id"`
+	BridgeID                   pgtype.UUID        `json:"bridge_id"`
+	UserID                     pgtype.UUID        `json:"user_id"`
+	Source                     string             `json:"source"`
+	ExternalID                 pgtype.Text        `json:"external_id"`
+	Title                      string             `json:"title"`
+	Metadata                   []byte             `json:"metadata"`
+	Settings                   []byte             `json:"settings"`
+	ContextCheckpointMessageID pgtype.UUID        `json:"context_checkpoint_message_id"`
+	CreatedAt                  pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt                  pgtype.Timestamptz `json:"updated_at"`
+}
+
+// Public bridge conversations: keyed on (agent_id, source, external_id) with
+// user_id NULL. One conversation per platform DM channel. Targets the
+// partial unique index `idx_conversations_external`.
+func (q *Queries) GetOrCreateConversationByExternal(ctx context.Context, arg GetOrCreateConversationByExternalParams) (GetOrCreateConversationByExternalRow, error) {
+	row := q.db.QueryRow(ctx, getOrCreateConversationByExternal,
+		arg.AgentID,
+		arg.Source,
+		arg.Title,
+		arg.BridgeID,
+		arg.ExternalID,
+	)
+	var i GetOrCreateConversationByExternalRow
 	err := row.Scan(
 		&i.ID,
 		&i.AgentID,
@@ -177,6 +277,51 @@ func (q *Queries) ListConversationsByAgent(ctx context.Context, arg ListConversa
 			&i.ContextCheckpointMessageID,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listExpiredPublicConversations = `-- name: ListExpiredPublicConversations :many
+SELECT c.id, c.bridge_id, c.external_id, b.type AS bridge_type
+FROM agent_conversations c
+JOIN bridges b ON b.id = c.bridge_id
+WHERE c.user_id IS NULL
+  AND c.source = 'bridge'
+  AND COALESCE((b.settings->>'public_session_ttl_seconds')::int, 10800) > 0
+  AND c.updated_at < NOW() - make_interval(secs => COALESCE((b.settings->>'public_session_ttl_seconds')::int, 10800))
+`
+
+type ListExpiredPublicConversationsRow struct {
+	ID         pgtype.UUID `json:"id"`
+	BridgeID   pgtype.UUID `json:"bridge_id"`
+	ExternalID pgtype.Text `json:"external_id"`
+	BridgeType string      `json:"bridge_type"`
+}
+
+// Sweeper input: public bridge conversations whose updated_at is older than
+// the bridge's configured TTL. TTL is `bridges.settings.public_session_ttl_seconds`
+// — 0 disables sweeping for that bridge, default is 10800s (3 hours).
+func (q *Queries) ListExpiredPublicConversations(ctx context.Context) ([]ListExpiredPublicConversationsRow, error) {
+	rows, err := q.db.Query(ctx, listExpiredPublicConversations)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListExpiredPublicConversationsRow{}
+	for rows.Next() {
+		var i ListExpiredPublicConversationsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.BridgeID,
+			&i.ExternalID,
+			&i.BridgeType,
 		); err != nil {
 			return nil, err
 		}

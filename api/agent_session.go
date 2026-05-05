@@ -34,6 +34,21 @@ func (h *agentHandler) SessionLoad(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Belt-and-suspenders: if any assistant tool_use part still lacks a
+	// matching tool_result, synthesize one in-memory and emit a warn log
+	// so we know RunComplete + sweeper missed it. Without this the next
+	// LLM turn 400s at the provider; with it we degrade to a missing-
+	// result string and stay live.
+	if orphans := detectOrphanToolCalls(dbMsgs); len(orphans) > 0 {
+		for _, op := range orphans {
+			h.logger.Warn("unpaired tool_call surfaced at SessionLoad — RunComplete synthesis missed",
+				zap.String("conversation_id", convID.String()),
+				zap.String("tool_call_id", op.ToolCallID),
+				zap.String("tool_name", op.ToolName))
+			dbMsgs = append(dbMsgs, orphanToolResultMessage(toPgUUID(convID), op))
+		}
+	}
+
 	msgs := make([]session.Message, 0, len(dbMsgs))
 	for _, m := range dbMsgs {
 		msgs = append(msgs, dbMessageToSession(m))
@@ -102,11 +117,18 @@ func (h *agentHandler) SessionAppend(w http.ResponseWriter, r *http.Request) {
 
 	q := dbq.New(h.db.Pool()).WithTx(tx)
 	for i, msg := range msgs {
-		// Only apply the source tag to non-assistant messages.
-		// Assistant responses should never inherit "system" or "bridge" source.
-		msgSource := source
-		if msg.Role == "assistant" {
-			msgSource = ""
+		// Only stamp the source tag onto user-role messages — that's the
+		// only role for which "upgrade"/"system"/"bridge" makes sense
+		// (the original injected trigger that kicked off the run).
+		// Assistant responses, tool calls, and tool-result messages
+		// (sol emits those with Role="tool") that follow must never
+		// inherit the tag — otherwise the frontend renders a tool result
+		// as an upgrade/system bubble (e.g. the first run_js result of
+		// the post-upgrade turn appearing as a duplicate "upgrade"
+		// message below the tool-call bubble).
+		msgSource := ""
+		if msg.Role == "user" {
+			msgSource = source
 		}
 		if err := storeSessionMessage(r.Context(), q, toPgUUID(convID), runID, msgSource, msg); err != nil {
 			h.logger.Error("session append: store message failed — whole batch rolling back",

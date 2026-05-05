@@ -18,16 +18,9 @@ import (
 	"go.uber.org/zap"
 )
 
-// OIDCRoutes is the interface for OIDC authentication endpoints.
-type OIDCRoutes interface {
-	Authorize(w http.ResponseWriter, r *http.Request)
-	Callback(w http.ResponseWriter, r *http.Request)
-}
-
 type RouterConfig struct {
 	DB        *db.DB
 	JWTSecret string
-	OIDC      OIDCRoutes // nil if OIDC not configured
 
 	// Real-time
 	Hub     *realtime.Hub
@@ -51,6 +44,9 @@ type RouterConfig struct {
 
 	// Telegram driver (for bridge validation via getMe)
 	TelegramDriver *trigger.TelegramDriver
+
+	// Discord driver (for bridge validation via /users/@me)
+	DiscordDriver *trigger.DiscordDriver
 
 	// Trigger system
 	Dispatcher    *trigger.Dispatcher
@@ -146,16 +142,6 @@ func NewRouter(cfg RouterConfig) http.Handler {
 			r.Post("/change-password", authHandler.ChangePassword)
 			r.Post("/relay-code", relayH.GenerateCode)
 		})
-
-		if cfg.OIDC != nil {
-			r.Get("/oidc/authorize", cfg.OIDC.Authorize)
-			r.Get("/oidc/callback", cfg.OIDC.Callback)
-		} else {
-			// Return 404 when OIDC not configured
-			r.Get("/oidc/*", func(w http.ResponseWriter, r *http.Request) {
-				writeError(w, http.StatusNotFound, "OIDC not configured")
-			})
-		}
 	})
 
 	// Credential, bridge, and identity handlers
@@ -171,6 +157,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		db:        cfg.DB,
 		encryptor: cfg.Encryptor,
 		telegram:  cfg.TelegramDriver,
+		discord:   cfg.DiscordDriver,
 		bridgeMgr: cfg.BridgeManager,
 		logger:    cfg.Logger.Named("bridges"),
 	}
@@ -178,6 +165,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		db:         cfg.DB,
 		encryptor:  cfg.Encryptor,
 		telegram:   cfg.TelegramDriver,
+		discord:    cfg.DiscordDriver,
 		hmacSecret: cfg.JWTSecret, // reuse JWT secret for HMAC
 		publicURL:  cfg.PublicURL,
 		logger:     cfg.Logger.Named("identity"),
@@ -242,6 +230,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 			encryptor:   cfg.Encryptor,
 			containers:  cfg.Containers,
 			promptProxy: cfg.PromptProxy,
+			bridgeMgr:   cfg.BridgeManager,
 			publicURL:   cfg.PublicURL,
 			logger:      cfg.Logger.Named("agents"),
 		}
@@ -333,6 +322,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 					r.Post("/", credH.SetMCPToken)
 					r.Delete("/", credH.RevokeMCPCredential)
 					r.Put("/oauth-app", credH.SetMCPOAuthApp)
+					r.Delete("/oauth-app", credH.RevokeMCPOAuthApp)
 				})
 			})
 		})
@@ -344,6 +334,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		r.Get("/runs/{runID}", rH.GetRun)
 		r.Get("/runs/{runID}/logs", rH.GetRunLogs)
 		r.Delete("/runs/{runID}", rH.CancelRun)
+		r.Post("/runs/{runID}/extend", rH.ExtendRun)
 
 		// Bridge management
 		r.Route("/bridges", func(r chi.Router) {
@@ -415,6 +406,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		r.Post("/http", ah.AgentHTTP)
 		r.Post("/storage/copy", ah.StorageCopy)
 		r.Post("/storage/info", ah.StorageInfo)
+		r.Post("/storage/share", ah.StorageShare)
 		r.Put("/storage/*", ah.StorageStore)
 		r.Get("/storage/*", ah.StorageLoad)
 		r.Delete("/storage/*", ah.StorageDelete)

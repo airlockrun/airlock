@@ -234,6 +234,19 @@ message GetRunResponse {
   repeated AgentMessageInfo messages = 2; // Messages produced during this run.
 }
 
+// ExtendRunResponse is returned by POST /api/v1/runs/{runID}/extend.
+// Server picks the increment (no request body); client just clicks again
+// to extend further until extensions_remaining hits 0.
+message ExtendRunResponse {
+  // deadline_ms is the new wall-clock cancel deadline (ms since epoch).
+  // The frontend uses this to render the countdown.
+  int64 deadline_ms = 1;
+
+  // extensions_remaining is the number of additional extends the user can
+  // still request after this one. Frontend disables the Extend button at 0.
+  int32 extensions_remaining = 2;
+}
+
 // --- Conversations ---
 
 message CreateConversationRequest {
@@ -380,11 +393,15 @@ message CreateBridgeRequest {
   string agent_id = 1;
   string name = 2;
   string token = 3;
+  string type = 4; // "telegram", "discord"
 }
 
-// Reassign a bridge to a different agent (or to the system, if empty).
+// Update fields on an existing bridge. Both fields are independent —
+// callers can rebind the agent, edit settings, or do both in one
+// request. A null/unset field leaves that aspect unchanged.
 message UpdateBridgeRequest {
   string agent_id = 1;
+  BridgeSettings settings = 2;
 }
 
 message ListBridgesResponse {
@@ -408,13 +425,14 @@ message ListPlatformIdentitiesResponse {
 // are best-effort — display_name / username may be empty if the bridge can't
 // fetch them from the platform.
 message LinkIdentityPreviewResponse {
-  string platform = 1;               // "telegram"
+  string platform = 1;               // "telegram", "discord"
   string bridge_name = 2;            // Bridge display name from DB
   string bot_username = 3;           // @botname from bridges.bot_username
-  string platform_user_id = 4;       // Telegram user ID
-  string platform_username = 5;      // @user's telegram username (may be empty)
-  string platform_display_name = 6;  // First/last name (may be empty)
+  string platform_user_id = 4;       // Platform-native user ID (Telegram chat_id, Discord snowflake)
+  string platform_username = 5;      // @handle (may be empty)
+  string platform_display_name = 6;  // Full / display name (may be empty)
   string current_user_email = 7;     // Airlock account being linked to
+  string platform_avatar_url = 8;    // Avatar image URL (may be empty)
 }
 
 // --- Files ---

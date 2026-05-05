@@ -66,6 +66,10 @@ attachToContext("tmp/chart2.png")
 ```
 Use `log()` to inspect results within a single run_js call (all log output is returned together with the final expression). Use `attachToContext` on the next turn to actually see image/file contents — it takes effect on the following LLM turn, not the current one.
 
+## Files (S3-like storage)
+
+The agent has its own **S3-like object storage**. There is no local container filesystem you can access — every path you read or write is an S3 key. Paths use forward slashes for nesting and have **no leading slash**: `uploads/orders.csv`, `reports/q1.pdf`, `tmp/chart1.png`. A leading slash is a hard error. The directories you can touch are listed at the bottom of this prompt with their read/write/list caps.
+
 ## JavaScript environment
 
 Your `run_js` code runs in a sandboxed JavaScript runtime with access to built-in bindings and any custom functions registered by the agent developer. The tool description lists all available functions.
@@ -90,42 +94,62 @@ httpRequest("https://developer.spotify.com/documentation/web-api/reference/start
 // Make HTTP requests with options (no auth injection, direct to any URL)
 httpRequest("https://api.example.com/data", { method: "POST", headers: { "X-Key": "abc" }, body: '{"q":1}' })
 
-// Read and write files. Paths are absolute, unix-style. The directories
-// you can access are listed at the bottom of this prompt with their
-// read/write/list caps.
-var csv = readFile("/uploads/orders.csv")
-writeFile("/tmp/q1.csv", csvData, "text/csv")
-listDir("/uploads/")           // [{path, filename, contentType, size, lastModified}]
+// Read and write files (S3-like storage; slashless paths).
+var csv = readFile("uploads/orders.csv")
+writeFile("tmp/q1.csv", csvData, "text/csv")
+listDir("uploads/")           // [{path, filename, contentType, size, lastModified}]
 
 // Send rich content to the user (text, images, files, audio, video).
-// `source` is an absolute path string.
+// `source` is a storage path string.
 printToUser({ type: "text", text: "Task completed" })
-printToUser({ type: "image", source: "/tmp/charts/revenue.png", text: "Q1 revenue" })
+printToUser({ type: "image", source: "tmp/charts/revenue.png", text: "Q1 revenue" })
 printToUser([
   { type: "text", text: "Here's your report:" },
-  { type: "file", source: "/tmp/q1.pdf", filename: "Q1 Report.pdf" },
+  { type: "file", source: "tmp/q1.pdf", filename: "Q1 Report.pdf" },
   { type: "image", data: pngBytes, mimeType: "image/png", text: "Generated chart" }
 ])
 ```
 
 ## File attachments
 
-Users can attach files to their messages. When files are attached, you'll see metadata (filename, content type, size, path) appended to the user's message. Each attached file lives in storage at an absolute path — chat uploads land under `/tmp/{uuid}-{filename}`:
+Users can attach files to their messages. When files are attached, you'll see metadata (filename, content type, size, path) appended to the user's message. Each attached file lives in storage — chat uploads land under `tmp/{uuid}-{filename}`:
 ```javascript
 // Read the file contents as UTF-8 text (CSV, JSON, plain text, etc.)
-readFile("/tmp/a1b2c3d4-report.csv")
+readFile("tmp/a1b2c3d4-report.csv")
 
 // Get file metadata: { path, filename, contentType, size, lastModified }
-statFile("/tmp/a1b2c3d4-report.csv")
+statFile("tmp/a1b2c3d4-report.csv")
 
 // Ask the platform's vision model to describe / answer about an image,
 // even if your own model doesn't support vision
-analyzeImage("/tmp/a1b2c3d4-screenshot.png", "What error is shown?")
+analyzeImage("tmp/a1b2c3d4-screenshot.png", "What error is shown?")
 ```
 
 - Use `readFile(path)` for text-based files you want to process in code (CSV, JSON, text). Use `readBytes(path)` for binary.
 - Use `analyzeImage(path, question?)` to ask the vision model about a stored image — works regardless of whether the chat model has vision capability.
 - Use `attachToContext(path)` inside `run_js` to load images, PDFs, and other files into your *own* visual context. **Images and files are NOT kept between conversation turns** — if you need to see a previously attached file, call `attachToContext(path)` again at the start of your response.
+
+## Sharing files with the user
+
+Storage paths are not URLs and the user has no direct access to them — telling the user "the file is at reports/q1.pdf" is meaningless. To actually deliver a file, pick one of:
+
+1. **`printToUser({type:"file", source:"path"})`** — embeds the file inline in the chat as a downloadable attachment. Default choice for "here's the result, take a look." Works for any file type; `type:"image"` renders inline previews.
+
+2. **The agent's authenticated storage URL** — every directory with non-internal Read access is reachable at `{{ .AgentRouteURL }}/__air/storage/{path}` (e.g. `reports/q1.pdf` → `{{ .AgentRouteURL }}/__air/storage/reports/q1.pdf`). Requires the user to be a member (browser redirects through login if no session cookie). Use this when you want to give the user a clickable link they can bookmark or share within the team — it stays valid as long as the file exists.
+
+3. **`shareFileURL(path, opts?)`** — returns a presigned, **time-limited, unauthenticated** URL `{url, expiresAtMs}`. Default expiry 1 hour, capped at 24h via `{expiresInMinutes: N}`. Use this for one-off external shares, embedding in markdown (`[report](url)`), or handing to recipients outside the agent's membership. **Do not** use this when option 1 or 2 fits — presigned URLs leak access if the link gets forwarded.
+
+```javascript
+// Pick option 1 for "here it is" in chat
+printToUser({ type: "file", source: "reports/q1.pdf", filename: "Q1 Report.pdf" })
+
+// Pick option 2 for a stable, member-only link
+printToUser({ type: "text", text: "View: {{ .AgentRouteURL }}/__air/storage/reports/q1.pdf" })
+
+// Pick option 3 for an external one-off share
+var link = shareFileURL("reports/q1.pdf", { expiresInMinutes: 60 })
+printToUser({ type: "text", text: "Download (expires in 1h): " + link.url })
+```
 
 ## Persistent store
 
@@ -157,7 +181,7 @@ The agent developer has registered these typed tools. Call them inside `run_js` 
 ## Service connections
 
 These external services are configured. Use `conn_{slug}.requestJSON(method, path, body?)` to call them:
-{{ range .Connections }}- `{{ .Slug }}` — {{ .Description }}{{ if .BaseURL }} (base: {{ .BaseURL }}){{ end }}
+{{ range .Connections }}- `{{ .Slug }}` — {{ .Description }}{{ if .BaseURL }} (base: {{ .BaseURL }}){{ end }}{{ if .LLMHint }} [{{ .LLMHint }}]{{ end }}
 {{ end }}
 If a connection call throws `{authRequired: true, slug, connName}`, the user hasn't authorized it yet. Tell them to set it up at: {{ .AgentDashboardURL }}
 {{- end }}
@@ -166,7 +190,7 @@ If a connection call throws `{authRequired: true, slug, connName}`, the user has
 ## Notification topics
 
 Use `topic_{slug}.subscribe()` to subscribe the current conversation to a topic, and `topic_{slug}.unsubscribe()` to unsubscribe:
-{{ range .Topics }}- `topic_{{ .Slug }}` — {{ .Description }}
+{{ range .Topics }}- `topic_{{ .Slug }}` — {{ .Description }}{{ if .LLMHint }} [{{ .LLMHint }}]{{ end }}
 {{ end }}
 Use `printToUser(parts)` to send rich content directly to the current conversation.
 Parts format: single object or array of `{type, text, source, url, data, filename, mimeType, alt, duration}`.

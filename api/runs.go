@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"time"
 
@@ -12,14 +13,23 @@ import (
 	"github.com/airlockrun/airlock/storage"
 	"github.com/airlockrun/airlock/trigger"
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
+// runDispatcher is the slice of *trigger.Dispatcher that runsHandler
+// actually calls. Pulled out so handler tests can mock without standing
+// up containers, DB, encryptor, etc. The real Dispatcher satisfies it.
+type runDispatcher interface {
+	CancelRun(runID uuid.UUID) bool
+	ExtendRun(runID uuid.UUID, by time.Duration) (time.Time, int, error)
+}
+
 type runsHandler struct {
 	db         *db.DB
-	dispatcher *trigger.Dispatcher
+	dispatcher runDispatcher
 	s3         *storage.S3Client
 	logger     *zap.Logger
 }
@@ -124,7 +134,14 @@ func (h *runsHandler) GetRunLogs(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(run.StdoutLog))
 }
 
-// CancelRun handles DELETE /api/v1/runs/{runID}.
+// CancelRun handles DELETE /api/v1/runs/{runID}. Fires the dispatcher's
+// per-run cancel hook if one is registered (cancels the outbound HTTP
+// request to the agent → run.ctx fires inside the agent → vm.Interrupt
+// aborts run_js → agent's detached r.Complete POST lands the terminal
+// state). Also marks the row cancelled directly here as belt-and-
+// suspenders: if the agent's r.Complete never arrives (crashed mid-tool,
+// network partition), the sweeper or this DB write is what flips the
+// row out of 'running'.
 func (h *runsHandler) CancelRun(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	runID, err := parseUUID(chi.URLParam(r, "runID"))
@@ -145,7 +162,15 @@ func (h *runsHandler) CancelRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Mark as cancelled in DB.
+	// Signal the agent first; the streaming /prompt connection breaks,
+	// publishRunEvents exits, and the conversation mutex releases for
+	// any prompt queued behind this run.
+	if h.dispatcher != nil {
+		h.dispatcher.CancelRun(runID)
+	}
+
+	// Mark as cancelled in DB. Idempotent with the agent's own
+	// r.Complete POST (UpsertRunComplete) — last write wins.
 	_ = q.UpdateRunComplete(ctx, dbq.UpdateRunCompleteParams{
 		ID:           toPgUUID(runID),
 		Status:       "cancelled",
@@ -153,6 +178,43 @@ func (h *runsHandler) CancelRun(w http.ResponseWriter, r *http.Request) {
 	})
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// ExtendRun handles POST /api/v1/runs/{runID}/extend. Pushes the
+// dispatcher's per-run deadline timer by trigger.ExtendIncrement, up to
+// trigger.MaxExtensions times. The server picks the increment so a
+// malicious client can't request multi-hour extensions; clients just call
+// repeatedly until extensions_remaining hits 0.
+func (h *runsHandler) ExtendRun(w http.ResponseWriter, r *http.Request) {
+	runID, err := parseUUID(chi.URLParam(r, "runID"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid run ID")
+		return
+	}
+
+	if h.dispatcher == nil {
+		writeError(w, http.StatusServiceUnavailable, "dispatcher unavailable")
+		return
+	}
+
+	deadline, remaining, err := h.dispatcher.ExtendRun(runID, trigger.ExtendIncrement)
+	switch {
+	case errors.Is(err, trigger.ErrRunNotInFlight):
+		writeError(w, http.StatusNotFound, "run not in flight")
+		return
+	case errors.Is(err, trigger.ErrExtensionCeiling):
+		writeError(w, http.StatusConflict, "max extensions reached")
+		return
+	case err != nil:
+		h.logger.Error("extend run", zap.String("run_id", runID.String()), zap.Error(err))
+		writeError(w, http.StatusInternalServerError, "extend failed")
+		return
+	}
+
+	writeProto(w, http.StatusOK, &airlockv1.ExtendRunResponse{
+		DeadlineMs:          deadline.UnixMilli(),
+		ExtensionsRemaining: int32(remaining),
+	})
 }
 
 // --- helpers ---

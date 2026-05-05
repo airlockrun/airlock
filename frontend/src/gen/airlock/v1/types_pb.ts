@@ -12,7 +12,7 @@ import type { JsonObject, Message } from "@bufbuild/protobuf";
  * Describes the file airlock/v1/types.proto.
  */
 export const file_airlock_v1_types: GenFile = /*@__PURE__*/
-  fileDesc("ChZhaXJsb2NrL3YxL3R5cGVzLnByb3RvEgphaXJsb2NrLnYxIrsBCgZUZW5hbnQSCgoCaWQYASABKAkSDAoEc2x1ZxgCIAEoCRIMCgRuYW1lGAMgASgJEikKCHNldHRpbmdzGAQgASgLMhcuZ29vZ2xlLnByb3RvYnVmLlN0cnVjdBIuCgpjcmVhdGVkX2F0GAUgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIuCgp1cGRhdGVkX2F0GAYgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcCKHAgoEVXNlchIKCgJpZBgBIAEoCRIRCgl0ZW5hbnRfaWQYAiABKAkSDQoFZW1haWwYAyABKAkSFAoMZGlzcGxheV9uYW1lGAQgASgJEisKC3RlbmFudF9yb2xlGAUgASgOMhYuYWlybG9jay52MS5UZW5hbnRSb2xlEhAKCG9pZGNfc3ViGAYgASgJEhwKFG11c3RfY2hhbmdlX3Bhc3N3b3JkGAcgASgIEi4KCmNyZWF0ZWRfYXQYCCABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEi4KCnVwZGF0ZWRfYXQYCSABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wIj4KC1VzZXJTdW1tYXJ5EgoKAmlkGAEgASgJEg0KBWVtYWlsGAIgASgJEhQKDGRpc3BsYXlfbmFtZRgDIAEoCSLfAQoIUHJvdmlkZXISCgoCaWQYASABKAkSEwoLcHJvdmlkZXJfaWQYAiABKAkSFAoMZGlzcGxheV9uYW1lGAMgASgJEhIKCmlzX2VuYWJsZWQYBCABKAgSEAoIYmFzZV91cmwYBSABKAkSFgoOYXBpX2tleV9tYXNrZWQYBiABKAkSLgoKY3JlYXRlZF9hdBgHIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASLgoKdXBkYXRlZF9hdBgIIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXAiKAoMUHJvdmlkZXJJbmZvEgoKAmlkGAEgASgJEgwKBG5hbWUYAiABKAkigwEKFlByb3ZpZGVyQ2FwYWJpbGl0eUluZm8SEwoLcHJvdmlkZXJfaWQYASABKAkSFAoMZGlzcGxheV9uYW1lGAIgASgJEhQKDGNhcGFiaWxpdGllcxgDIAMoCRISCgpjb25maWd1cmVkGAQgASgIEhQKDGNhdGFsb2dfb25seRgFIAEoCCLSAQoJTW9kZWxJbmZvEgoKAmlkGAEgASgJEhMKC3Byb3ZpZGVyX2lkGAIgASgJEgwKBG5hbWUYAyABKAkSEQoJdG9vbF9jYWxsGAQgASgIEhEKCXJlYXNvbmluZxgFIAEoCBIVCg1jb250ZXh0X2xpbWl0GAYgASgFEhQKDG91dHB1dF9saW1pdBgHIAEoBRISCgpjb3N0X2lucHV0GAggASgBEhMKC2Nvc3Rfb3V0cHV0GAkgASgBEgwKBGtpbmQYCiABKAkSDAoEY2FwcxgLIAMoCSKiAgoJQWdlbnRJbmZvEgoKAmlkGAEgASgJEgwKBHNsdWcYAiABKAkSDAoEbmFtZRgDIAEoCRITCgtkZXNjcmlwdGlvbhgEIAEoCRIOCgZzdGF0dXMYBSABKAkSFgoOdXBncmFkZV9zdGF0dXMYBiABKAkSEAoIYXV0b19maXgYByABKAgSEwoLYnVpbGRfbW9kZWwYCCABKAkSEgoKZXhlY19tb2RlbBgJIAEoCRIVCg1lcnJvcl9tZXNzYWdlGAogASgJEi4KCmNyZWF0ZWRfYXQYCyABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEi4KCnVwZGF0ZWRfYXQYDCABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wIs8DCgdSdW5JbmZvEgoKAmlkGAEgASgJEhAKCGFnZW50X2lkGAIgASgJEhEKCWJyaWRnZV9pZBgDIAEoCRIOCgZzdGF0dXMYBCABKAkSEgoKc291cmNlX3JlZhgFIAEoCRIuCg1pbnB1dF9wYXlsb2FkGAYgASgLMhcuZ29vZ2xlLnByb3RvYnVmLlN0cnVjdBIrCgdhY3Rpb25zGAcgASgLMhouZ29vZ2xlLnByb3RvYnVmLkxpc3RWYWx1ZRIVCg1sbG1fdG9rZW5zX2luGAggASgFEhYKDmxsbV90b2tlbnNfb3V0GAkgASgFEhkKEWxsbV9jb3N0X2VzdGltYXRlGAogASgBEhMKC2R1cmF0aW9uX21zGAsgASgFEhIKCnN0ZG91dF9sb2cYDCABKAkSFQoNZXJyb3JfbWVzc2FnZRgNIAEoCRISCgplcnJvcl9raW5kGA4gASgJEhMKC3BhbmljX3RyYWNlGA8gASgJEi4KCnN0YXJ0ZWRfYXQYECABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEi8KC2ZpbmlzaGVkX2F0GBEgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcCK3AgoOQWdlbnRCdWlsZEluZm8SCgoCaWQYASABKAkSEAoIYWdlbnRfaWQYAiABKAkSDAoEdHlwZRgDIAEoCRIOCgZzdGF0dXMYBCABKAkSFAoMaW5zdHJ1Y3Rpb25zGAUgASgJEhIKCnNvdXJjZV9yZWYYBiABKAkSEQoJaW1hZ2VfcmVmGAcgASgJEg8KB3NvbF9sb2cYCCABKAkSEgoKZG9ja2VyX2xvZxgJIAEoCRIPCgdsb2dfc2VxGAogASgDEhUKDWVycm9yX21lc3NhZ2UYCyABKAkSLgoKc3RhcnRlZF9hdBgMIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASLwoLZmluaXNoZWRfYXQYDSABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wIq8BChBDb252ZXJzYXRpb25JbmZvEgoKAmlkGAEgASgJEhAKCGFnZW50X2lkGAIgASgJEg0KBXRpdGxlGAMgASgJEg4KBnNvdXJjZRgEIAEoCRIuCgpjcmVhdGVkX2F0GAUgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIuCgp1cGRhdGVkX2F0GAYgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcCLXAQoQQWdlbnRNZXNzYWdlSW5mbxIKCgJpZBgBIAEoCRILCgNzZXEYAiABKAMSDAoEcm9sZRgDIAEoCRIOCgZzb3VyY2UYBCABKAkSDwoHY29udGVudBgFIAEoCRINCgVwYXJ0cxgGIAEoCRIRCgl0b2tlbnNfaW4YByABKAUSEgoKdG9rZW5zX291dBgIIAEoBRIVCg1jb3N0X2VzdGltYXRlGAkgASgBEi4KCmNyZWF0ZWRfYXQYCiABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wIuIBCgtXZWJob29rSW5mbxIKCgJpZBgBIAEoCRIMCgRwYXRoGAIgASgJEhMKC3ZlcmlmeV9tb2RlGAMgASgJEhIKCnB1YmxpY191cmwYBCABKAkSEwoLZGVzY3JpcHRpb24YBSABKAkSFQoNc2VjcmV0X21hc2tlZBgGIAEoCRI0ChBsYXN0X3JlY2VpdmVkX2F0GAcgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIuCgpjcmVhdGVkX2F0GAggASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcCKuAQoIQ3JvbkluZm8SCgoCaWQYASABKAkSDAoEbmFtZRgCIAEoCRIQCghzY2hlZHVsZRgDIAEoCRITCgtkZXNjcmlwdGlvbhgEIAEoCRIxCg1sYXN0X2ZpcmVkX2F0GAUgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIuCgpjcmVhdGVkX2F0GAYgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcCJaCglSb3V0ZUluZm8SCgoCaWQYASABKAkSDAoEcGF0aBgCIAEoCRIOCgZtZXRob2QYAyABKAkSDgoGYWNjZXNzGAQgASgJEhMKC2Rlc2NyaXB0aW9uGAUgASgJIu8BCg5Db25uZWN0aW9uSW5mbxIKCgJpZBgBIAEoCRIMCgRzbHVnGAIgASgJEgwKBG5hbWUYAyABKAkSEwoLZGVzY3JpcHRpb24YBCABKAkSEQoJYXV0aF9tb2RlGAUgASgJEhAKCGF1dGhfdXJsGAYgASgJEhoKEnNldHVwX2luc3RydWN0aW9ucxgHIAEoCRISCgphdXRob3JpemVkGAggASgIEhUKDWhhc19vYXV0aF9hcHAYCSABKAgSNAoQdG9rZW5fZXhwaXJlc19hdBgKIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXAi9AEKCkJyaWRnZUluZm8SCgoCaWQYASABKAkSEAoIYWdlbnRfaWQYAiABKAkSJgoFb3duZXIYAyABKAsyFy5haXJsb2NrLnYxLlVzZXJTdW1tYXJ5EgwKBHR5cGUYBCABKAkSDAoEbmFtZRgFIAEoCRIUCgxib3RfdXNlcm5hbWUYBiABKAkSDgoGc3RhdHVzGAcgASgJEi4KCmNyZWF0ZWRfYXQYCCABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEi4KCnVwZGF0ZWRfYXQYCSABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wIn4KFFBsYXRmb3JtSWRlbnRpdHlJbmZvEgoKAmlkGAEgASgJEhAKCHBsYXRmb3JtGAIgASgJEhgKEHBsYXRmb3JtX3VzZXJfaWQYAyABKAkSLgoKY3JlYXRlZF9hdBgEIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXAidgoIVG9vbEluZm8SCgoCaWQYASABKAkSDAoEbmFtZRgCIAEoCRITCgtkZXNjcmlwdGlvbhgDIAEoCRIOCgZhY2Nlc3MYBCABKAkSFAoMaW5wdXRfc2NoZW1hGAUgASgJEhUKDW91dHB1dF9zY2hlbWEYBiABKAkiVAoPQWdlbnRCdWlsZEV2ZW50EhAKCGFnZW50X2lkGAEgASgJEhAKCGJ1aWxkX2lkGAIgASgJEg4KBnN0YXR1cxgDIAEoCRINCgVlcnJvchgEIAEoCSJjChJBZ2VudEJ1aWxkTG9nRXZlbnQSEAoIYWdlbnRfaWQYASABKAkSEAoIYnVpbGRfaWQYAiABKAkSCwoDc2VxGAMgASgDEg4KBnN0cmVhbRgEIAEoCRIMCgRsaW5lGAUgASgJIiQKEEFnZW50U3luY2VkRXZlbnQSEAoIYWdlbnRfaWQYASABKAkiZQoIRmlsZUluZm8SDAoEcGF0aBgBIAEoCRIQCghmaWxlbmFtZRgCIAEoCRIUCgxjb250ZW50X3R5cGUYAyABKAkSDAoEc2l6ZRgEIAEoAxIVCg1sYXN0X21vZGlmaWVkGAUgASgJIk4KCVRvcGljSW5mbxIKCgJpZBgBIAEoCRIMCgRzbHVnGAIgASgJEhMKC2Rlc2NyaXB0aW9uGAMgASgJEhIKCnN1YnNjcmliZWQYBCABKAgiqwIKElN5c3RlbVNldHRpbmdzSW5mbxISCgpwdWJsaWNfdXJsGAEgASgJEhQKDGFnZW50X2RvbWFpbhgCIAEoCRIbChNkZWZhdWx0X2J1aWxkX21vZGVsGAMgASgJEhoKEmRlZmF1bHRfZXhlY19tb2RlbBgEIAEoCRIZChFkZWZhdWx0X3N0dF9tb2RlbBgFIAEoCRIcChRkZWZhdWx0X3Zpc2lvbl9tb2RlbBgGIAEoCRIZChFkZWZhdWx0X3R0c19tb2RlbBgHIAEoCRIfChdkZWZhdWx0X2ltYWdlX2dlbl9tb2RlbBgIIAEoCRIcChRkZWZhdWx0X3NlYXJjaF9tb2RlbBgJIAEoCRIfChdkZWZhdWx0X2VtYmVkZGluZ19tb2RlbBgKIAEoCSpvCgpUZW5hbnRSb2xlEhsKF1RFTkFOVF9ST0xFX1VOU1BFQ0lGSUVEEAASFQoRVEVOQU5UX1JPTEVfQURNSU4QARIXChNURU5BTlRfUk9MRV9NQU5BR0VSEAISFAoQVEVOQU5UX1JPTEVfVVNFUhADKo4BCgtNZXNzYWdlUm9sZRIcChhNRVNTQUdFX1JPTEVfVU5TUEVDSUZJRUQQABIVChFNRVNTQUdFX1JPTEVfVVNFUhABEhoKFk1FU1NBR0VfUk9MRV9BU1NJU1RBTlQQAhIXChNNRVNTQUdFX1JPTEVfU1lTVEVNEAMSFQoRTUVTU0FHRV9ST0xFX1RPT0wQBEI4WjZnaXRodWIuY29tL2FpcmxvY2tydW4vYWlybG9jay9nZW4vYWlybG9jay92MTthaXJsb2NrdjFiBnByb3RvMw", [file_google_protobuf_struct, file_google_protobuf_timestamp]);
+  fileDesc("ChZhaXJsb2NrL3YxL3R5cGVzLnByb3RvEgphaXJsb2NrLnYxIrsBCgZUZW5hbnQSCgoCaWQYASABKAkSDAoEc2x1ZxgCIAEoCRIMCgRuYW1lGAMgASgJEikKCHNldHRpbmdzGAQgASgLMhcuZ29vZ2xlLnByb3RvYnVmLlN0cnVjdBIuCgpjcmVhdGVkX2F0GAUgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIuCgp1cGRhdGVkX2F0GAYgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcCKHAgoEVXNlchIKCgJpZBgBIAEoCRIRCgl0ZW5hbnRfaWQYAiABKAkSDQoFZW1haWwYAyABKAkSFAoMZGlzcGxheV9uYW1lGAQgASgJEisKC3RlbmFudF9yb2xlGAUgASgOMhYuYWlybG9jay52MS5UZW5hbnRSb2xlEhAKCG9pZGNfc3ViGAYgASgJEhwKFG11c3RfY2hhbmdlX3Bhc3N3b3JkGAcgASgIEi4KCmNyZWF0ZWRfYXQYCCABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEi4KCnVwZGF0ZWRfYXQYCSABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wIj4KC1VzZXJTdW1tYXJ5EgoKAmlkGAEgASgJEg0KBWVtYWlsGAIgASgJEhQKDGRpc3BsYXlfbmFtZRgDIAEoCSLfAQoIUHJvdmlkZXISCgoCaWQYASABKAkSEwoLcHJvdmlkZXJfaWQYAiABKAkSFAoMZGlzcGxheV9uYW1lGAMgASgJEhIKCmlzX2VuYWJsZWQYBCABKAgSEAoIYmFzZV91cmwYBSABKAkSFgoOYXBpX2tleV9tYXNrZWQYBiABKAkSLgoKY3JlYXRlZF9hdBgHIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASLgoKdXBkYXRlZF9hdBgIIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXAiKAoMUHJvdmlkZXJJbmZvEgoKAmlkGAEgASgJEgwKBG5hbWUYAiABKAkigwEKFlByb3ZpZGVyQ2FwYWJpbGl0eUluZm8SEwoLcHJvdmlkZXJfaWQYASABKAkSFAoMZGlzcGxheV9uYW1lGAIgASgJEhQKDGNhcGFiaWxpdGllcxgDIAMoCRISCgpjb25maWd1cmVkGAQgASgIEhQKDGNhdGFsb2dfb25seRgFIAEoCCLSAQoJTW9kZWxJbmZvEgoKAmlkGAEgASgJEhMKC3Byb3ZpZGVyX2lkGAIgASgJEgwKBG5hbWUYAyABKAkSEQoJdG9vbF9jYWxsGAQgASgIEhEKCXJlYXNvbmluZxgFIAEoCBIVCg1jb250ZXh0X2xpbWl0GAYgASgFEhQKDG91dHB1dF9saW1pdBgHIAEoBRISCgpjb3N0X2lucHV0GAggASgBEhMKC2Nvc3Rfb3V0cHV0GAkgASgBEgwKBGtpbmQYCiABKAkSDAoEY2FwcxgLIAMoCSKiAgoJQWdlbnRJbmZvEgoKAmlkGAEgASgJEgwKBHNsdWcYAiABKAkSDAoEbmFtZRgDIAEoCRITCgtkZXNjcmlwdGlvbhgEIAEoCRIOCgZzdGF0dXMYBSABKAkSFgoOdXBncmFkZV9zdGF0dXMYBiABKAkSEAoIYXV0b19maXgYByABKAgSEwoLYnVpbGRfbW9kZWwYCCABKAkSEgoKZXhlY19tb2RlbBgJIAEoCRIVCg1lcnJvcl9tZXNzYWdlGAogASgJEi4KCmNyZWF0ZWRfYXQYCyABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEi4KCnVwZGF0ZWRfYXQYDCABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wIs8DCgdSdW5JbmZvEgoKAmlkGAEgASgJEhAKCGFnZW50X2lkGAIgASgJEhEKCWJyaWRnZV9pZBgDIAEoCRIOCgZzdGF0dXMYBCABKAkSEgoKc291cmNlX3JlZhgFIAEoCRIuCg1pbnB1dF9wYXlsb2FkGAYgASgLMhcuZ29vZ2xlLnByb3RvYnVmLlN0cnVjdBIrCgdhY3Rpb25zGAcgASgLMhouZ29vZ2xlLnByb3RvYnVmLkxpc3RWYWx1ZRIVCg1sbG1fdG9rZW5zX2luGAggASgFEhYKDmxsbV90b2tlbnNfb3V0GAkgASgFEhkKEWxsbV9jb3N0X2VzdGltYXRlGAogASgBEhMKC2R1cmF0aW9uX21zGAsgASgFEhIKCnN0ZG91dF9sb2cYDCABKAkSFQoNZXJyb3JfbWVzc2FnZRgNIAEoCRISCgplcnJvcl9raW5kGA4gASgJEhMKC3BhbmljX3RyYWNlGA8gASgJEi4KCnN0YXJ0ZWRfYXQYECABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEi8KC2ZpbmlzaGVkX2F0GBEgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcCK3AgoOQWdlbnRCdWlsZEluZm8SCgoCaWQYASABKAkSEAoIYWdlbnRfaWQYAiABKAkSDAoEdHlwZRgDIAEoCRIOCgZzdGF0dXMYBCABKAkSFAoMaW5zdHJ1Y3Rpb25zGAUgASgJEhIKCnNvdXJjZV9yZWYYBiABKAkSEQoJaW1hZ2VfcmVmGAcgASgJEg8KB3NvbF9sb2cYCCABKAkSEgoKZG9ja2VyX2xvZxgJIAEoCRIPCgdsb2dfc2VxGAogASgDEhUKDWVycm9yX21lc3NhZ2UYCyABKAkSLgoKc3RhcnRlZF9hdBgMIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASLwoLZmluaXNoZWRfYXQYDSABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wIq8BChBDb252ZXJzYXRpb25JbmZvEgoKAmlkGAEgASgJEhAKCGFnZW50X2lkGAIgASgJEg0KBXRpdGxlGAMgASgJEg4KBnNvdXJjZRgEIAEoCRIuCgpjcmVhdGVkX2F0GAUgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIuCgp1cGRhdGVkX2F0GAYgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcCLXAQoQQWdlbnRNZXNzYWdlSW5mbxIKCgJpZBgBIAEoCRILCgNzZXEYAiABKAMSDAoEcm9sZRgDIAEoCRIOCgZzb3VyY2UYBCABKAkSDwoHY29udGVudBgFIAEoCRINCgVwYXJ0cxgGIAEoCRIRCgl0b2tlbnNfaW4YByABKAUSEgoKdG9rZW5zX291dBgIIAEoBRIVCg1jb3N0X2VzdGltYXRlGAkgASgBEi4KCmNyZWF0ZWRfYXQYCiABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wIuIBCgtXZWJob29rSW5mbxIKCgJpZBgBIAEoCRIMCgRwYXRoGAIgASgJEhMKC3ZlcmlmeV9tb2RlGAMgASgJEhIKCnB1YmxpY191cmwYBCABKAkSEwoLZGVzY3JpcHRpb24YBSABKAkSFQoNc2VjcmV0X21hc2tlZBgGIAEoCRI0ChBsYXN0X3JlY2VpdmVkX2F0GAcgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIuCgpjcmVhdGVkX2F0GAggASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcCKuAQoIQ3JvbkluZm8SCgoCaWQYASABKAkSDAoEbmFtZRgCIAEoCRIQCghzY2hlZHVsZRgDIAEoCRITCgtkZXNjcmlwdGlvbhgEIAEoCRIxCg1sYXN0X2ZpcmVkX2F0GAUgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIuCgpjcmVhdGVkX2F0GAYgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcCJaCglSb3V0ZUluZm8SCgoCaWQYASABKAkSDAoEcGF0aBgCIAEoCRIOCgZtZXRob2QYAyABKAkSDgoGYWNjZXNzGAQgASgJEhMKC2Rlc2NyaXB0aW9uGAUgASgJIu8BCg5Db25uZWN0aW9uSW5mbxIKCgJpZBgBIAEoCRIMCgRzbHVnGAIgASgJEgwKBG5hbWUYAyABKAkSEwoLZGVzY3JpcHRpb24YBCABKAkSEQoJYXV0aF9tb2RlGAUgASgJEhAKCGF1dGhfdXJsGAYgASgJEhoKEnNldHVwX2luc3RydWN0aW9ucxgHIAEoCRISCgphdXRob3JpemVkGAggASgIEhUKDWhhc19vYXV0aF9hcHAYCSABKAgSNAoQdG9rZW5fZXhwaXJlc19hdBgKIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXAiogIKCkJyaWRnZUluZm8SCgoCaWQYASABKAkSEAoIYWdlbnRfaWQYAiABKAkSJgoFb3duZXIYAyABKAsyFy5haXJsb2NrLnYxLlVzZXJTdW1tYXJ5EgwKBHR5cGUYBCABKAkSDAoEbmFtZRgFIAEoCRIUCgxib3RfdXNlcm5hbWUYBiABKAkSDgoGc3RhdHVzGAcgASgJEi4KCmNyZWF0ZWRfYXQYCCABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEi4KCnVwZGF0ZWRfYXQYCSABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEiwKCHNldHRpbmdzGAogASgLMhouYWlybG9jay52MS5CcmlkZ2VTZXR0aW5ncyJrCg5CcmlkZ2VTZXR0aW5ncxIYChBhbGxvd19wdWJsaWNfZG1zGAEgASgIEiIKGnB1YmxpY19zZXNzaW9uX3R0bF9zZWNvbmRzGAIgASgFEhsKE3B1YmxpY19zZXNzaW9uX21vZGUYAyABKAkifgoUUGxhdGZvcm1JZGVudGl0eUluZm8SCgoCaWQYASABKAkSEAoIcGxhdGZvcm0YAiABKAkSGAoQcGxhdGZvcm1fdXNlcl9pZBgDIAEoCRIuCgpjcmVhdGVkX2F0GAQgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcCJ2CghUb29sSW5mbxIKCgJpZBgBIAEoCRIMCgRuYW1lGAIgASgJEhMKC2Rlc2NyaXB0aW9uGAMgASgJEg4KBmFjY2VzcxgEIAEoCRIUCgxpbnB1dF9zY2hlbWEYBSABKAkSFQoNb3V0cHV0X3NjaGVtYRgGIAEoCSJUCg9BZ2VudEJ1aWxkRXZlbnQSEAoIYWdlbnRfaWQYASABKAkSEAoIYnVpbGRfaWQYAiABKAkSDgoGc3RhdHVzGAMgASgJEg0KBWVycm9yGAQgASgJImMKEkFnZW50QnVpbGRMb2dFdmVudBIQCghhZ2VudF9pZBgBIAEoCRIQCghidWlsZF9pZBgCIAEoCRILCgNzZXEYAyABKAMSDgoGc3RyZWFtGAQgASgJEgwKBGxpbmUYBSABKAkiJAoQQWdlbnRTeW5jZWRFdmVudBIQCghhZ2VudF9pZBgBIAEoCSJlCghGaWxlSW5mbxIMCgRwYXRoGAEgASgJEhAKCGZpbGVuYW1lGAIgASgJEhQKDGNvbnRlbnRfdHlwZRgDIAEoCRIMCgRzaXplGAQgASgDEhUKDWxhc3RfbW9kaWZpZWQYBSABKAkiTgoJVG9waWNJbmZvEgoKAmlkGAEgASgJEgwKBHNsdWcYAiABKAkSEwoLZGVzY3JpcHRpb24YAyABKAkSEgoKc3Vic2NyaWJlZBgEIAEoCCKrAgoSU3lzdGVtU2V0dGluZ3NJbmZvEhIKCnB1YmxpY191cmwYASABKAkSFAoMYWdlbnRfZG9tYWluGAIgASgJEhsKE2RlZmF1bHRfYnVpbGRfbW9kZWwYAyABKAkSGgoSZGVmYXVsdF9leGVjX21vZGVsGAQgASgJEhkKEWRlZmF1bHRfc3R0X21vZGVsGAUgASgJEhwKFGRlZmF1bHRfdmlzaW9uX21vZGVsGAYgASgJEhkKEWRlZmF1bHRfdHRzX21vZGVsGAcgASgJEh8KF2RlZmF1bHRfaW1hZ2VfZ2VuX21vZGVsGAggASgJEhwKFGRlZmF1bHRfc2VhcmNoX21vZGVsGAkgASgJEh8KF2RlZmF1bHRfZW1iZWRkaW5nX21vZGVsGAogASgJKm8KClRlbmFudFJvbGUSGwoXVEVOQU5UX1JPTEVfVU5TUEVDSUZJRUQQABIVChFURU5BTlRfUk9MRV9BRE1JThABEhcKE1RFTkFOVF9ST0xFX01BTkFHRVIQAhIUChBURU5BTlRfUk9MRV9VU0VSEAMqjgEKC01lc3NhZ2VSb2xlEhwKGE1FU1NBR0VfUk9MRV9VTlNQRUNJRklFRBAAEhUKEU1FU1NBR0VfUk9MRV9VU0VSEAESGgoWTUVTU0FHRV9ST0xFX0FTU0lTVEFOVBACEhcKE01FU1NBR0VfUk9MRV9TWVNURU0QAxIVChFNRVNTQUdFX1JPTEVfVE9PTBAEQjhaNmdpdGh1Yi5jb20vYWlybG9ja3J1bi9haXJsb2NrL2dlbi9haXJsb2NrL3YxO2FpcmxvY2t2MWIGcHJvdG8z", [file_google_protobuf_struct, file_google_protobuf_timestamp]);
 
 /**
  * Tenant represents a workspace (organization).
@@ -775,7 +775,7 @@ export type WebhookInfo = Message<"airlock.v1.WebhookInfo"> & {
   path: string;
 
   /**
-   * "hmac", "token", "none"
+   * "none", "hmac", "token", "bearer", "ed25519"
    *
    * @generated from field: string verify_mode = 3;
    */
@@ -985,7 +985,7 @@ export type BridgeInfo = Message<"airlock.v1.BridgeInfo"> & {
   id: string;
 
   /**
-   * empty = system bridge, set = agent bridge
+   * empty = system bridge or orphaned, set = agent bridge
    *
    * @generated from field: string agent_id = 2;
    */
@@ -999,7 +999,7 @@ export type BridgeInfo = Message<"airlock.v1.BridgeInfo"> & {
   owner?: UserSummary | undefined;
 
   /**
-   * "telegram", etc.
+   * "telegram", "discord"
    *
    * @generated from field: string type = 4;
    */
@@ -1011,7 +1011,7 @@ export type BridgeInfo = Message<"airlock.v1.BridgeInfo"> & {
   name: string;
 
   /**
-   * @username from Telegram getMe
+   * @handle from platform
    *
    * @generated from field: string bot_username = 6;
    */
@@ -1033,6 +1033,11 @@ export type BridgeInfo = Message<"airlock.v1.BridgeInfo"> & {
    * @generated from field: google.protobuf.Timestamp updated_at = 9;
    */
   updatedAt?: Timestamp | undefined;
+
+  /**
+   * @generated from field: airlock.v1.BridgeSettings settings = 10;
+   */
+  settings?: BridgeSettings | undefined;
 };
 
 /**
@@ -1041,6 +1046,51 @@ export type BridgeInfo = Message<"airlock.v1.BridgeInfo"> & {
  */
 export const BridgeInfoSchema: GenMessage<BridgeInfo> = /*@__PURE__*/
   messageDesc(file_airlock_v1_types, 16);
+
+/**
+ * BridgeSettings is the user-tunable subset of bridge config exposed in
+ * the dashboard. Stored in bridges.settings JSONB on the backend.
+ *
+ * @generated from message airlock.v1.BridgeSettings
+ */
+export type BridgeSettings = Message<"airlock.v1.BridgeSettings"> & {
+  /**
+   * When true, unauthenticated users can DM the bot at AccessPublic.
+   * When false, unauth DMs are dropped (except /auth, which is the
+   * explicit linking opt-in and always works).
+   *
+   * @generated from field: bool allow_public_dms = 1;
+   */
+  allowPublicDms: boolean;
+
+  /**
+   * Inactivity window after which a public conversation is finalized
+   * and deleted. 0 disables sweeping for this bridge. Only meaningful
+   * when public_session_mode == "session".
+   *
+   * @generated from field: int32 public_session_ttl_seconds = 2;
+   */
+  publicSessionTtlSeconds: number;
+
+  /**
+   * How public conversations carry context across turns:
+   *   "session"  — persistent, per-channel conversation; finalized by
+   *                the sweeper after public_session_ttl_seconds.
+   *   "one_shot" — fresh ephemeral conversation per turn; no history;
+   *                deleted right after the run. The user's referenced
+   *                message (reply / forward) is included as context.
+   *
+   * @generated from field: string public_session_mode = 3;
+   */
+  publicSessionMode: string;
+};
+
+/**
+ * Describes the message airlock.v1.BridgeSettings.
+ * Use `create(BridgeSettingsSchema)` to create a new message.
+ */
+export const BridgeSettingsSchema: GenMessage<BridgeSettings> = /*@__PURE__*/
+  messageDesc(file_airlock_v1_types, 17);
 
 /**
  * PlatformIdentityInfo represents a user's verified external identity.
@@ -1078,7 +1128,7 @@ export type PlatformIdentityInfo = Message<"airlock.v1.PlatformIdentityInfo"> & 
  * Use `create(PlatformIdentityInfoSchema)` to create a new message.
  */
 export const PlatformIdentityInfoSchema: GenMessage<PlatformIdentityInfo> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_types, 17);
+  messageDesc(file_airlock_v1_types, 18);
 
 /**
  * ToolInfo represents a registered tool on an agent.
@@ -1125,7 +1175,7 @@ export type ToolInfo = Message<"airlock.v1.ToolInfo"> & {
  * Use `create(ToolInfoSchema)` to create a new message.
  */
 export const ToolInfoSchema: GenMessage<ToolInfo> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_types, 18);
+  messageDesc(file_airlock_v1_types, 19);
 
 /**
  * AgentBuildEvent carries build/upgrade lifecycle events.
@@ -1161,7 +1211,7 @@ export type AgentBuildEvent = Message<"airlock.v1.AgentBuildEvent"> & {
  * Use `create(AgentBuildEventSchema)` to create a new message.
  */
 export const AgentBuildEventSchema: GenMessage<AgentBuildEvent> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_types, 19);
+  messageDesc(file_airlock_v1_types, 20);
 
 /**
  * AgentBuildLogEvent carries a single build log line.
@@ -1204,7 +1254,7 @@ export type AgentBuildLogEvent = Message<"airlock.v1.AgentBuildLogEvent"> & {
  * Use `create(AgentBuildLogEventSchema)` to create a new message.
  */
 export const AgentBuildLogEventSchema: GenMessage<AgentBuildLogEvent> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_types, 20);
+  messageDesc(file_airlock_v1_types, 21);
 
 /**
  * AgentSyncedEvent fires after the agent container completes a sync —
@@ -1226,7 +1276,7 @@ export type AgentSyncedEvent = Message<"airlock.v1.AgentSyncedEvent"> & {
  * Use `create(AgentSyncedEventSchema)` to create a new message.
  */
 export const AgentSyncedEventSchema: GenMessage<AgentSyncedEvent> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_types, 21);
+  messageDesc(file_airlock_v1_types, 22);
 
 /**
  * FileInfo describes a file in agent storage. Returned by listDir / statFile /
@@ -1236,7 +1286,7 @@ export const AgentSyncedEventSchema: GenMessage<AgentSyncedEvent> = /*@__PURE__*
  */
 export type FileInfo = Message<"airlock.v1.FileInfo"> & {
   /**
-   * absolute, e.g. "/uploads/foo.png"
+   * S3-style storage path, e.g. "uploads/foo.png"
    *
    * @generated from field: string path = 1;
    */
@@ -1272,7 +1322,7 @@ export type FileInfo = Message<"airlock.v1.FileInfo"> & {
  * Use `create(FileInfoSchema)` to create a new message.
  */
 export const FileInfoSchema: GenMessage<FileInfo> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_types, 22);
+  messageDesc(file_airlock_v1_types, 23);
 
 /**
  * TopicInfo represents a notification topic with subscription status.
@@ -1308,7 +1358,7 @@ export type TopicInfo = Message<"airlock.v1.TopicInfo"> & {
  * Use `create(TopicInfoSchema)` to create a new message.
  */
 export const TopicInfoSchema: GenMessage<TopicInfo> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_types, 23);
+  messageDesc(file_airlock_v1_types, 24);
 
 /**
  * SystemSettingsInfo mirrors the system_settings table (single-row, global).
@@ -1374,7 +1424,7 @@ export type SystemSettingsInfo = Message<"airlock.v1.SystemSettingsInfo"> & {
  * Use `create(SystemSettingsInfoSchema)` to create a new message.
  */
 export const SystemSettingsInfoSchema: GenMessage<SystemSettingsInfo> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_types, 24);
+  messageDesc(file_airlock_v1_types, 25);
 
 /**
  * TenantRole defines the role a user has within a tenant.

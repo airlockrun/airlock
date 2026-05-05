@@ -29,12 +29,19 @@ This project follows the [Contributor Covenant Code of Conduct](CODE_OF_CONDUCT.
 
 ## Pull requests
 
-- Fork the repo, branch from `main`, and open the PR against `main`.
+- Fork the repo, branch from `dev`, and open the PR against `dev`. (`main` only ever holds tagged releases — see [Branch model](#branch-model).)
 - Keep PRs focused. One logical change per PR — easier to review, easier to revert.
 - Match existing code style. For Go: `gofmt -s`, `go vet`, and follow patterns already in the codebase.
 - Run tests locally before opening the PR.
 - Write a clear PR description: what changed, why, and how you tested it.
 - Be patient with reviews. A maintainer ping after a week of silence is fine.
+
+## Branch model
+
+- **`dev`** is the active development line and the default branch. PRs land here.
+- **`main`** is the release surface. Each commit on `main` corresponds to a tagged release (`vX.Y.Z`); operators tracking `main` always have the latest stable.
+- Releases are cut by opening a `dev` → `main` PR, merging, then tagging `vX.Y.Z` on the resulting `main` commit. The publish workflow fires on the tag and pushes `ghcr.io/airlockrun/airlock:vX.Y.Z` and `:latest`.
+- Bug fixes that need to ship without waiting for the rest of `dev` to stabilize: cherry-pick the commit onto `main`, tag a patch release. Forward-merge `main` back into `dev` after.
 
 ## Dev setup
 
@@ -42,7 +49,7 @@ You'll need:
 
 - Go 1.26+
 - Docker
-- Postgres + MinIO (a `docker-compose.yml` brings these up; see [README](README.md))
+- Postgres + RustFS (a `docker-compose.yml` brings these up; see [README](README.md))
 
 Build:
 

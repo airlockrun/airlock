@@ -17,7 +17,7 @@ cmd/airlock/       Multi-command binary. Subcommands:
                      - airlock auth unlock <email> [--ip <ip>]
                                                   Clear login lockouts/failures (escape hatch)
 api/               HTTP handlers (chi router) + WebSocket upgrade
-auth/              JWT (HS256), middleware, RBAC (admin/manager/user), OIDC (enterprise tag)
+auth/              JWT (HS256), middleware, RBAC (admin/manager/user)
 auth/lockout/      Per-(email, ip) login throttling — Policy, IP normalization,
                    constant-time response padding for the Login handler.
 db/                Postgres — migrations, sqlc queries, connection pool with RLS cleanup
@@ -30,12 +30,11 @@ scaffold/          Go project templates (Dockerfile.tmpl, go.mod.tmpl, main.go.t
 container/         Docker container lifecycle (start/stop/health/reap agents + toolservers)
 trigger/           Dispatcher, Scheduler (cron), BridgeManager, PromptProxy
 realtime/          WebSocket Hub + PubSub (in-memory, topic-based with replay buffer)
-storage/           S3/MinIO client (PutObject, GetObject, presigned URLs)
+storage/           S3 client (PutObject, GetObject, presigned URLs) — talks to RustFS
 crypto/            AES-256-GCM encryption with key rotation (provider keys, webhook secrets, tokens)
 convert/           Type conversion helpers
 oauth/             OAuth credential flow management
 gen/airlock/v1/    Protobuf-generated Go types (from proto/)
-enterprise/        OIDC support (build tag: enterprise)
 anchor/            Anchor container support
 ```
 
@@ -69,7 +68,7 @@ anchor/            Anchor container support
 ## API Structure
 
 ### Public: `/auth`
-`POST status|activate|login|refresh|change-password`, `GET|POST /oidc/*`
+`POST status|activate|login|refresh|change-password`
 
 ### Authenticated: `/api/v1` (JWT middleware)
 - **Agents**: CRUD + `stop`, `upgrade`, `prompt`, `files`

@@ -75,6 +75,7 @@ func (h *agentHandler) UpsertConnection(w http.ResponseWriter, r *http.Request) 
 		Slug:              slug,
 		Name:              def.Name,
 		Description:       def.Description,
+		LlmHint:           def.LLMHint,
 		AuthMode:          string(def.AuthMode),
 		AuthUrl:           def.AuthURL,
 		TokenUrl:          def.TokenURL,
@@ -207,6 +208,7 @@ func (h *agentHandler) Sync(w http.ResponseWriter, r *http.Request) {
 			AgentID:      pgAgentID,
 			Name:         t.Name,
 			Description:  t.Description,
+			LlmHint:      t.LLMHint,
 			Access:       string(t.Access),
 			InputSchema:  inSchema,
 			OutputSchema: outSchema,
@@ -332,6 +334,7 @@ func (h *agentHandler) Sync(w http.ResponseWriter, r *http.Request) {
 			AgentID:     pgAgentID,
 			Slug:        t.Slug,
 			Description: t.Description,
+			LlmHint:     t.LLMHint,
 			Access:      string(t.Access),
 		}); err != nil {
 			h.logger.Error("upsert topic failed", zap.Error(err))
@@ -387,12 +390,14 @@ func (h *agentHandler) Sync(w http.ResponseWriter, r *http.Request) {
 	dirPaths := make([]string, len(req.Directories))
 	for i, d := range req.Directories {
 		if err := q.UpsertDirectory(ctx, dbq.UpsertDirectoryParams{
-			AgentID:     pgAgentID,
-			Path:        d.Path,
-			ReadAccess:  string(d.Read),
-			WriteAccess: string(d.Write),
-			ListAccess:  string(d.List),
-			Description: d.Description,
+			AgentID:        pgAgentID,
+			Path:           d.Path,
+			ReadAccess:     string(d.Read),
+			WriteAccess:    string(d.Write),
+			ListAccess:     string(d.List),
+			Description:    d.Description,
+			LlmHint:        d.LLMHint,
+			RetentionHours: int32(d.RetentionHours),
 		}); err != nil {
 			h.logger.Error("upsert directory failed", zap.Error(err))
 			writeJSONError(w, http.StatusInternalServerError, "failed to sync directories")
@@ -486,6 +491,7 @@ func (h *agentHandler) Sync(w http.ResponseWriter, r *http.Request) {
 			Slug:        c.Slug,
 			Name:        c.Name,
 			Description: c.Description,
+			LLMHint:     c.LlmHint,
 			BaseURL:     c.BaseUrl,
 		}
 	}
@@ -494,13 +500,14 @@ func (h *agentHandler) Sync(w http.ResponseWriter, r *http.Request) {
 		promptTools[i] = promptpkg.ToolInfo{
 			Name:         t.Name,
 			Description:  t.Description,
+			LLMHint:      t.LLMHint,
 			InputSchema:  t.InputSchema,
 			OutputSchema: t.OutputSchema,
 		}
 	}
 	promptTopics := make([]promptpkg.TopicInfo, len(req.Topics))
 	for i, t := range req.Topics {
-		promptTopics[i] = promptpkg.TopicInfo{Slug: t.Slug, Description: t.Description}
+		promptTopics[i] = promptpkg.TopicInfo{Slug: t.Slug, Description: t.Description, LLMHint: t.LLMHint}
 	}
 	promptWebhooks := make([]promptpkg.WebhookInfo, len(req.Webhooks))
 	for i, wh := range req.Webhooks {
@@ -515,13 +522,17 @@ func (h *agentHandler) Sync(w http.ResponseWriter, r *http.Request) {
 		promptRoutes[i] = promptpkg.RouteInfo{Method: rt.Method, Path: rt.Path, Access: string(rt.Access), Description: rt.Description}
 	}
 
-	// Build agent route URL if agent domain is configured.
-	var agentRouteURL string
-	if h.agentDomain != "" {
-		if agentRecord, err := q.GetAgentByID(ctx, pgAgentID); err == nil {
-			agentRouteURL = "https://" + agentRecord.Slug + "." + h.agentDomain
-		}
+	// Build agent route URL. h.agentDomain is required at startup
+	// (config.resolveAgentDomain panics if neither AGENT_DOMAIN nor
+	// PUBLIC_URL is set), and SubdomainProxy panics on empty too — so
+	// it's always populated by the time this handler runs.
+	agentRecord, err := q.GetAgentByID(ctx, pgAgentID)
+	if err != nil {
+		h.logger.Error("load agent for prompt render", zap.Error(err))
+		writeJSONError(w, http.StatusInternalServerError, "failed to load agent")
+		return
 	}
+	agentRouteURL := "https://" + agentRecord.Slug + "." + h.agentDomain
 
 	rendered, err := promptpkg.RenderAgentPrompt(promptpkg.AgentData{
 		AgentDashboardURL: h.publicURL + "/agents/" + agentID.String(),
@@ -540,14 +551,9 @@ func (h *agentHandler) Sync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Public storage base — the prefix StorageHandle.URL appends "/{zone}/{key}"
-	// to. agentRouteURL is empty only in deployments without an agent domain
-	// configured (which means no agent-served routes either); the SDK side
-	// degrades gracefully but in practice this is always populated.
-	publicStorageBase := ""
-	if agentRouteURL != "" {
-		publicStorageBase = agentRouteURL + "/__air/storage"
-	}
+	// Public storage base — the prefix StorageHandle.URL joins with '/'
+	// and the storage path (e.g. "reports/q1.csv") to form a URL.
+	publicStorageBase := agentRouteURL + "/__air/storage"
 
 	// Notify subscribed clients (agent detail tabs) that the agent's
 	// declared surface — tools, webhooks, crons, routes, MCP servers,

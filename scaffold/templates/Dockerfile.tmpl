@@ -36,13 +36,16 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # Runtime
 FROM airlock-agent-base
 
-# Agent-specified system dependencies (optional). Same script the builder
-# tested against locally. BuildKit cache mounts make repeat installs cheap;
-# neither directory lands in the final image, so no manual cleanup needed.
-COPY apt-deps.sh* /tmp/
+# Agent-specified system setup (optional). Same script the builder tested
+# against locally — runs as root so it can apt-get install, curl-bash an
+# installer, pip install, drop binaries under /var/agent/bin/, whatever.
+# BuildKit cache mounts keep apt repeat-installs cheap; neither directory
+# lands in the final image.
+COPY setup.sh* /tmp/
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
-    if [ -f /tmp/apt-deps.sh ]; then bash /tmp/apt-deps.sh; fi
+    mkdir -p /var/agent/bin /var/agent/data && \
+    if [ -f /tmp/setup.sh ]; then bash /tmp/setup.sh; fi
 
 COPY --from=builder /agent /agent
 COPY --from=builder /build/db/migrations /migrations

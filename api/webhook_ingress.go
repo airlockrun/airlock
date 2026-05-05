@@ -1,12 +1,15 @@
 package api
 
 import (
+	"crypto/ed25519"
 	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
 	"io"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/airlockrun/airlock/crypto"
@@ -58,7 +61,7 @@ func (h *webhookIngressHandler) HandleWebhook(w http.ResponseWriter, r *http.Req
 	r.Body.Close()
 
 	// Verify the request based on the webhook's verify mode.
-	if wh.VerifyMode == "hmac" || wh.VerifyMode == "token" {
+	if wh.VerifyMode != "" && wh.VerifyMode != "none" {
 		if wh.Secret == "" {
 			h.logger.Error("webhook has no secret", zap.String("path", path))
 			writeJSONError(w, http.StatusInternalServerError, "webhook not configured")
@@ -84,6 +87,24 @@ func (h *webhookIngressHandler) HandleWebhook(w http.ResponseWriter, r *http.Req
 				writeJSONError(w, http.StatusUnauthorized, "invalid token")
 				return
 			}
+		case "bearer":
+			if !verifyBearer(secret, r.Header.Get("Authorization")) {
+				writeJSONError(w, http.StatusUnauthorized, "invalid bearer token")
+				return
+			}
+		case "ed25519":
+			sigHeaderName := wh.VerifyHeader
+			if sigHeaderName == "" {
+				sigHeaderName = "X-Signature-Ed25519"
+			}
+			if !verifyEd25519(secret, body, r.Header.Get(sigHeaderName), r.Header.Get("X-Signature-Timestamp"), time.Now()) {
+				writeJSONError(w, http.StatusUnauthorized, "invalid signature")
+				return
+			}
+		default:
+			h.logger.Error("unknown verify mode", zap.String("mode", wh.VerifyMode), zap.String("path", path))
+			writeJSONError(w, http.StatusInternalServerError, "webhook not configured")
+			return
 		}
 	}
 
@@ -138,4 +159,52 @@ func verifyHMAC(secret, body []byte, sigHeader string) bool {
 // against the webhook secret.
 func verifyToken(secret, token string) bool {
 	return subtle.ConstantTimeCompare([]byte(secret), []byte(token)) == 1
+}
+
+// verifyBearer checks an Authorization: Bearer <token> header against the
+// stored secret. Constant-time compare; the "Bearer " prefix is matched
+// case-insensitively (RFC 7235 makes the scheme name case-insensitive
+// even though every real client sends "Bearer").
+func verifyBearer(secret, authHeader string) bool {
+	if len(authHeader) < 7 {
+		return false
+	}
+	if !strings.EqualFold(authHeader[:7], "Bearer ") {
+		return false
+	}
+	got := authHeader[7:]
+	return subtle.ConstantTimeCompare([]byte(secret), []byte(got)) == 1
+}
+
+// verifyEd25519 verifies a Discord-style asymmetric signature: ed25519
+// over (timestamp || body), where the public key is hex-encoded in the
+// secret. Returns false on any decode failure or skew >5 minutes — the
+// timestamp window blocks replay of captured-then-resent webhooks.
+func verifyEd25519(publicKeyHex string, body []byte, sigHex, timestampHeader string, now time.Time) bool {
+	if sigHex == "" || timestampHeader == "" {
+		return false
+	}
+	pub, err := hex.DecodeString(publicKeyHex)
+	if err != nil || len(pub) != ed25519.PublicKeySize {
+		return false
+	}
+	sig, err := hex.DecodeString(sigHex)
+	if err != nil || len(sig) != ed25519.SignatureSize {
+		return false
+	}
+	ts, err := strconv.ParseInt(timestampHeader, 10, 64)
+	if err != nil {
+		return false
+	}
+	skew := now.Unix() - ts
+	if skew < 0 {
+		skew = -skew
+	}
+	if skew > 300 {
+		return false
+	}
+	signed := make([]byte, 0, len(timestampHeader)+len(body))
+	signed = append(signed, timestampHeader...)
+	signed = append(signed, body...)
+	return ed25519.Verify(pub, signed, sig)
 }

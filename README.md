@@ -72,9 +72,9 @@ cp .env.example .env
 #       *.your-domain.com  →  <your server IP>
 #    Caddy will use this to issue TLS certs from Let's Encrypt.
 
-# 4. Bring everything up. First launch builds backend, frontend, and the
-#    agent-builder/agent-base images (~3-5 min). Subsequent launches are
-#    near-instant.
+# 4. Bring everything up. First launch pulls the four prebuilt images
+#    (airlock, frontend, agent-builder, agent-base) from ghcr.io —
+#    nothing builds locally. Subsequent launches are near-instant.
 docker compose up -d
 
 # 5. Get the first-run activation code, then sign in to create the admin user.
@@ -101,7 +101,7 @@ Migrations run automatically on airlock startup. Always `pg_dump` before a major
 - **Agent runtime** — agents are user-written Go programs that import [agentsdk](https://github.com/airlockrun/agentsdk). airlock builds them into Docker images and runs each as a long-lived container, reaped when idle.
 - **Triggers** — webhook ingress (`POST /webhooks/{agent}/...`), cron schedules, chat-platform bridges, custom HTTP routes on `{slug}.your-domain.com`.
 - **LLM proxy** — agents call LLMs through airlock, which injects credentials per-agent and (optionally) routes through [telescope](https://github.com/airlockrun/telescope) for inspection.
-- **Storage** — per-agent S3 buckets (via MinIO) for files; per-agent Postgres schema for relational data.
+- **Storage** — per-agent S3 prefixes (via RustFS) for files; per-agent Postgres schema for relational data.
 - **Tools** — built-in (HTTP, search, web fetch, file ops) plus MCP server integration.
 - **Real-time** — WebSocket stream of build events, tool calls, deltas; replay buffer for reconnects.
 - **RBAC** — tenant roles (admin / manager / user) and per-agent membership (admin / user / public).
@@ -128,20 +128,20 @@ Migrations run automatically on airlock startup. Always `pg_dump` before a major
                               └─┬───────────┬─────────┘    └──────────────────┘
                                 │           │
                        ┌────────▼─────┐  ┌──▼─────────┐
-                       │   Postgres   │  │   MinIO    │
+                       │   Postgres   │  │   RustFS   │
                        │ (per-agent   │  │ (per-agent │
                        │  schemas)    │  │  buckets)  │
                        └──────────────┘  └────────────┘
 ```
 
-Agents launched by airlock join the same Docker network and reach `airlock:8080`, `postgres:5432`, `minio:9000` by service name.
+Agents launched by airlock join the same Docker network and reach `airlock:8080`, `postgres:5432`, `rustfs:9000` by service name.
 
 ## License
 
-[AGPL-3.0](LICENSE). The community edition you're reading is the full product — no feature gating, no telemetry, no "open core" tier with the good parts removed.
+[AGPL-3.0](LICENSE). The community edition is fully usable self-hosted; some operational features (e.g. SSO/OIDC, audit log export) are reserved for the commercial edition. No time-bombed trial.
 
-A separate commercial license is available for organizations that can't ship AGPL software in their distribution. Contact `hello@airlock.run`.
-
+A commercial license is available for those features and for organizations that can't ship AGPL software in their distribution. Contact `hello@airlock.run`.
+  
 Companion libraries are Apache-2.0:
 - [agentsdk](https://github.com/airlockrun/agentsdk) — Go SDK that user agents import
 - [goai](https://github.com/airlockrun/goai) — Go port of [vercel/ai](https://github.com/vercel/ai)

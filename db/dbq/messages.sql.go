@@ -12,8 +12,8 @@ import (
 )
 
 const createMessage = `-- name: CreateMessage :one
-INSERT INTO agent_messages (conversation_id, role, content, parts, tokens_in, tokens_out, cost_estimate, run_id, source, ephemeral)
-VALUES ($1, $2, $3, $4, $5, $6, COALESCE($7, 0), $8, COALESCE(NULLIF($9, ''), 'user'), $10)
+INSERT INTO agent_messages (conversation_id, role, content, parts, tokens_in, tokens_out, cost_estimate, run_id, source, ephemeral, file_keys)
+VALUES ($1, $2, $3, $4, $5, $6, COALESCE($7, 0), $8, COALESCE(NULLIF($9, ''), 'user'), $10, '{}'::text[])
 RETURNING id, seq, conversation_id, run_id, role, source, content, parts, file_keys, tokens_in, tokens_out, cost_estimate, ephemeral, created_at
 `
 
@@ -30,6 +30,9 @@ type CreateMessageParams struct {
 	Ephemeral      bool        `json:"ephemeral"`
 }
 
+// file_keys starts as an empty text[]; the chat upload path that needs
+// attached file keys uses a separate UPDATE (or could be added explicitly
+// via a follow-up insert path).
 func (q *Queries) CreateMessage(ctx context.Context, arg CreateMessageParams) (AgentMessage, error) {
 	row := q.db.QueryRow(ctx, createMessage,
 		arg.ConversationID,
@@ -322,6 +325,57 @@ func (q *Queries) ListMessagesForward(ctx context.Context, arg ListMessagesForwa
 			&i.Ephemeral,
 			&i.CreatedAt,
 		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listOrphanToolCallsByRun = `-- name: ListOrphanToolCallsByRun :many
+SELECT
+    m.conversation_id,
+    (p->>'toolCallId')::text AS tool_call_id,
+    COALESCE(p->>'toolName', 'tool')::text AS tool_name
+FROM agent_messages m, jsonb_array_elements(m.parts) p
+WHERE m.run_id = $1
+  AND m.role = 'assistant'
+  AND p->>'type' = 'tool-call'
+  AND p->>'toolCallId' IS NOT NULL
+  AND NOT EXISTS (
+    SELECT 1
+    FROM agent_messages m2, jsonb_array_elements(m2.parts) p2
+    WHERE m2.conversation_id = m.conversation_id
+      AND p2->>'type' = 'tool-result'
+      AND p2->>'toolCallId' = p->>'toolCallId'
+  )
+`
+
+type ListOrphanToolCallsByRunRow struct {
+	ConversationID pgtype.UUID `json:"conversation_id"`
+	ToolCallID     string      `json:"tool_call_id"`
+	ToolName       string      `json:"tool_name"`
+}
+
+// Returns tool-call parts emitted by this run that don't have a matching
+// tool-result row in the same conversation. RunComplete and the sweeper
+// iterate this and INSERT synthetic tool messages so the conversation's
+// tool_use ↔ tool_result invariant holds for the next LLM turn (provider
+// APIs 400 on unpaired tool_use). parts JSONB shape is the goai layout:
+// {"type":"tool-call","toolCallId":...,"toolName":...,"args":...}.
+func (q *Queries) ListOrphanToolCallsByRun(ctx context.Context, runID pgtype.UUID) ([]ListOrphanToolCallsByRunRow, error) {
+	rows, err := q.db.Query(ctx, listOrphanToolCallsByRun, runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListOrphanToolCallsByRunRow{}
+	for rows.Next() {
+		var i ListOrphanToolCallsByRunRow
+		if err := rows.Scan(&i.ConversationID, &i.ToolCallID, &i.ToolName); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

@@ -1,6 +1,7 @@
 -- name: UpsertCron :exec
-INSERT INTO agent_crons (agent_id, name, schedule, timeout_ms, description)
-VALUES (@agent_id, @name, @schedule, @timeout_ms, @description)
+-- enabled defaults to true on first insert; unchanged on conflict.
+INSERT INTO agent_crons (agent_id, name, schedule, timeout_ms, description, enabled)
+VALUES (@agent_id, @name, @schedule, @timeout_ms, @description, true)
 ON CONFLICT (agent_id, name) DO UPDATE SET
     schedule = EXCLUDED.schedule,
     timeout_ms = EXCLUDED.timeout_ms,

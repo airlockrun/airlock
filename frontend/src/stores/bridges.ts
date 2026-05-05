@@ -25,7 +25,17 @@ export const useBridgesStore = defineStore('bridges', () => {
     bridges.value.unshift(fromJson(ListBridgesResponseSchema, { bridges: [data] }).bridges[0])
   }
 
-  async function updateBridge(id: string, payload: { agentId: string }) {
+  async function updateBridge(
+    id: string,
+    payload: {
+      agentId: string
+      settings?: {
+        allowPublicDms: boolean
+        publicSessionTtlSeconds: number
+        publicSessionMode: 'session' | 'one_shot'
+      }
+    },
+  ) {
     const { data } = await api.put(`/api/v1/bridges/${id}`, payload)
     // Returns a bare BridgeInfo — same ghetto-unwrap trick as createBridge.
     const updated = fromJson(ListBridgesResponseSchema, { bridges: [data] }).bridges[0]

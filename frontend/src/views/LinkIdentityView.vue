@@ -107,13 +107,21 @@ function cancel() {
           </div>
           <div class="preview-row">
             <dt>{{ platformLabel }} user</dt>
-            <dd>
-              <div v-if="preview.platformUsername">@{{ preview.platformUsername }}</div>
-              <div v-if="preview.platformDisplayName" style="color: var(--p-text-muted-color)">
-                {{ preview.platformDisplayName }}
-              </div>
-              <div style="color: var(--p-text-muted-color); font-size: 0.85em">
-                ID: {{ preview.platformUserId }}
+            <dd class="platform-user">
+              <img
+                v-if="preview.platformAvatarUrl"
+                :src="preview.platformAvatarUrl"
+                alt=""
+                class="platform-avatar"
+              />
+              <div>
+                <div v-if="preview.platformDisplayName">{{ preview.platformDisplayName }}</div>
+                <div v-if="preview.platformUsername" style="color: var(--p-text-muted-color)">
+                  @{{ preview.platformUsername }}
+                </div>
+                <div style="color: var(--p-text-muted-color); font-size: 0.85em">
+                  ID: {{ preview.platformUserId }}
+                </div>
               </div>
             </dd>
           </div>
@@ -185,6 +193,17 @@ function cancel() {
 .preview-row dt {
   font-weight: 600;
   color: var(--p-text-muted-color);
+}
+.platform-user {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+.platform-avatar {
+  width: 3rem;
+  height: 3rem;
+  border-radius: 50%;
+  flex-shrink: 0;
 }
 .preview-row dd {
   margin: 0;
