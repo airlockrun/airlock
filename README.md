@@ -138,9 +138,9 @@ Agents launched by airlock join the same Docker network and reach `airlock:8080`
 
 ## License
 
-[AGPL-3.0](LICENSE). The community edition you're reading is the full product — no feature gating, no telemetry, no "open core" tier with the good parts removed.
+[AGPL-3.0](LICENSE). The community edition is fully usable self-hosted; some operational features (e.g. SSO/OIDC, audit log export) are reserved for the commercial edition. No time-bombed trial.
 
-A separate commercial license is available for organizations that can't ship AGPL software in their distribution. Contact `hello@airlock.run`.
+A commercial license is available for those features and for organizations that can't ship AGPL software in their distribution. Contact `hello@airlock.run`.
 
 Companion libraries are Apache-2.0:
 - [agentsdk](https://github.com/airlockrun/agentsdk) — Go SDK that user agents import
