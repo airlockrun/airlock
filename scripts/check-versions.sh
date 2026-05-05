@@ -8,6 +8,11 @@
 #     tag claims the latest version.
 #   - All ghcr image tags in docker-compose.yml are equal to each other.
 #     Catches "bumped one line, forgot the others".
+#   - The set of images published by .github/workflows/publish-images.yml
+#     equals the set of images referenced (by basename) in
+#     docker-compose.yml. Catches "added image to workflow but forgot
+#     compose", and the regression of "removed `image:` from a compose
+#     service so it silently went back to local-build only".
 #
 # Release-only (RELEASE_TAG env set — runs in CI on tag push):
 #   - Compose ghcr image tags equal $RELEASE_TAG. Catches "bumped to
@@ -56,7 +61,24 @@ elif [ "$n" -gt 1 ]; then
 	err "docker-compose.yml: inconsistent ghcr tags: $(printf '%s ' $tags)"
 fi
 
-# --- 3. Release-only: compose tag equals $RELEASE_TAG ---
+# --- 3. Workflow matrix ↔ compose image set ---
+
+published=$(grep -oE '^[[:space:]]+-[[:space:]]name:[[:space:]]airlock[a-z-]*$' \
+	.github/workflows/publish-images.yml | awk '{print $3}' | sort -u)
+referenced=$(grep -oE 'ghcr\.io/airlockrun/airlock[a-z-]*' docker-compose.yml \
+	| sed 's|.*/||' | sort -u)
+
+only_published=$(comm -23 <(printf '%s\n' "$published") <(printf '%s\n' "$referenced"))
+only_referenced=$(comm -13 <(printf '%s\n' "$published") <(printf '%s\n' "$referenced"))
+
+if [ -n "$only_published" ]; then
+	err "publish-images.yml builds these but docker-compose.yml doesn't reference them: $(printf '%s ' $only_published)"
+fi
+if [ -n "$only_referenced" ]; then
+	err "docker-compose.yml references these but publish-images.yml doesn't build them: $(printf '%s ' $only_referenced)"
+fi
+
+# --- 4. Release-only: compose tag equals $RELEASE_TAG ---
 
 if [ -n "${RELEASE_TAG:-}" ]; then
 	if [ "$n" -eq 1 ] && [ "$tags" != "$RELEASE_TAG" ]; then

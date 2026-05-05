@@ -72,9 +72,9 @@ cp .env.example .env
 #       *.your-domain.com  →  <your server IP>
 #    Caddy will use this to issue TLS certs from Let's Encrypt.
 
-# 4. Bring everything up. First launch builds backend, frontend, and the
-#    agent-builder/agent-base images (~3-5 min). Subsequent launches are
-#    near-instant.
+# 4. Bring everything up. First launch pulls the four prebuilt images
+#    (airlock, frontend, agent-builder, agent-base) from ghcr.io —
+#    nothing builds locally. Subsequent launches are near-instant.
 docker compose up -d
 
 # 5. Get the first-run activation code, then sign in to create the admin user.
@@ -141,7 +141,7 @@ Agents launched by airlock join the same Docker network and reach `airlock:8080`
 [AGPL-3.0](LICENSE). The community edition is fully usable self-hosted; some operational features (e.g. SSO/OIDC, audit log export) are reserved for the commercial edition. No time-bombed trial.
 
 A commercial license is available for those features and for organizations that can't ship AGPL software in their distribution. Contact `hello@airlock.run`.
-
+  
 Companion libraries are Apache-2.0:
 - [agentsdk](https://github.com/airlockrun/agentsdk) — Go SDK that user agents import
 - [goai](https://github.com/airlockrun/goai) — Go port of [vercel/ai](https://github.com/vercel/ai)

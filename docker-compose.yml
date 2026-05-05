@@ -5,8 +5,10 @@
 #   3. Add wildcard DNS A record: *.${DOMAIN} → <server IP>
 #   4. docker compose up -d
 #
-# First launch builds airlock backend, frontend, agent-builder, and agent-base
-# images (~3-5 min). Subsequent launches start in seconds.
+# First launch pulls airlock, frontend, agent-builder, and agent-base
+# images from ghcr.io. No local builds — Subsequent launches start in
+# seconds. The `build:` blocks below are kept as a development fallback
+# for working against this repo.
 #
 # Get the first-run activation code:
 #   docker compose exec airlock cat /var/lib/airlock/activation_code.txt
@@ -95,9 +97,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.agent-base
-    # Not published — agent-base is debian-slim + 2 apt packages, fast
-    # enough to build locally on every host.
-    image: airlock-agent-base:latest
+    image: ghcr.io/airlockrun/airlock-agent-base:v0.2.7
     command: ["true"]
     restart: "no"
 
@@ -158,7 +158,7 @@ services:
       # can reach airlock:8080 internally. Must match the network name below.
       DOCKER_NETWORK: airlock
       AGENT_BUILDER_IMAGE: ghcr.io/airlockrun/airlock-agent-builder:v0.2.7
-      AGENT_BASE_IMAGE: airlock-agent-base
+      AGENT_BASE_IMAGE: ghcr.io/airlockrun/airlock-agent-base:v0.2.7
 
       # Codegen workspace lives inside the airlock-data named volume so
       # that scratch dirs airlock writes are visible to sibling
@@ -194,6 +194,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.frontend
+    image: ghcr.io/airlockrun/airlock-frontend:v0.2.7
     restart: unless-stopped
 
   caddy:
