@@ -34,7 +34,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     go mod tidy && go tool templ generate && go build -mod=mod -o /agent .
 
 # Runtime
-FROM airlock-agent-base
+FROM {{.AgentBaseImage}}
 
 # Agent-specified system setup (optional). Same script the builder tested
 # against locally — runs as root so it can apt-get install, curl-bash an

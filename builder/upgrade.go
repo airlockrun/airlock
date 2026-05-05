@@ -335,10 +335,11 @@ func (b *BuildService) doUpgrade(ctx context.Context, q *dbq.Queries, input Upgr
 	// Step 11: Build image
 	contextDir := filepath.Join(repoPath, "agents", agentID)
 	if err := scaffold.GenerateDockerfile(contextDir, scaffold.ScaffoldData{
-		AgentID:   agentID,
-		Module:    "agent",
+		AgentID:         agentID,
+		Module:          "agent",
 		GoVersion:       "1.26",
 		AgentSDKVersion: "v" + agentsdk.Version,
+		AgentBaseImage:  b.cfg.AgentBaseImage,
 	}); err != nil {
 		completeBuild("failed", err.Error(), hash, "")
 		return "", fmt.Errorf("generate Dockerfile: %w", err)

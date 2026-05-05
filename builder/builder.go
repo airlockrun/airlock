@@ -339,10 +339,11 @@ func (b *BuildService) doBuild(ctx context.Context, q *dbq.Queries, agent dbq.Ag
 	// Step 2: Scaffold
 	logLine("Scaffolding agent...")
 	data := scaffold.ScaffoldData{
-		AgentID:   agentID,
-		Module:    "agent",
+		AgentID:         agentID,
+		Module:          "agent",
 		GoVersion:       "1.26",
 		AgentSDKVersion: "v" + agentsdk.Version,
+		AgentBaseImage:  b.cfg.AgentBaseImage,
 	}
 	commitHash, err := CommitScaffold(repoPath, agentID, data)
 	if err != nil {
@@ -419,10 +420,11 @@ func (b *BuildService) doBuild(ctx context.Context, q *dbq.Queries, agent dbq.Ag
 	logLine("Building Docker image...")
 	contextDir := filepath.Join(repoPath, "agents", agentID)
 	if err := scaffold.GenerateDockerfile(contextDir, scaffold.ScaffoldData{
-		AgentID:   agentID,
-		Module:    "agent",
+		AgentID:         agentID,
+		Module:          "agent",
 		GoVersion:       "1.26",
 		AgentSDKVersion: "v" + agentsdk.Version,
+		AgentBaseImage:  b.cfg.AgentBaseImage,
 	}); err != nil {
 		completeBuild("failed", err.Error(), commitHash, "")
 		return fmt.Errorf("generate Dockerfile: %w", err)
