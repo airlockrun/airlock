@@ -116,13 +116,15 @@ func (d *TelegramDriver) Poll(ctx context.Context, br *dbq.Bridge) ([]BridgeEven
 		// Inline-keyboard button tap — route as a BridgeCallback.
 		if u.CallbackQuery != nil {
 			cq := u.CallbackQuery
-			var chatID int64
-			if cq.Message != nil {
-				chatID = cq.Message.Chat.ID
+			// DM-only: drop callbacks from non-private chats. The bot
+			// shouldn't be answering button taps in groups today.
+			if cq.Message == nil || cq.Message.Chat.Type != "private" {
+				advanceOffset(u.UpdateID)
+				continue
 			}
 			events = append(events, BridgeEvent{
 				BridgeID:   pgUUID(br.ID),
-				ExternalID: strconv.FormatInt(chatID, 10),
+				ExternalID: strconv.FormatInt(cq.Message.Chat.ID, 10),
 				SenderID:   strconv.FormatInt(cq.From.ID, 10),
 				SenderName: cq.From.FirstName,
 				Callback:   &BridgeCallback{Data: cq.Data, AckID: cq.ID},
@@ -136,13 +138,19 @@ func (d *TelegramDriver) Poll(ctx context.Context, br *dbq.Bridge) ([]BridgeEven
 			advanceOffset(u.UpdateID)
 			continue
 		}
+		// DM-only: drop messages from groups, supergroups, channels.
+		if u.Message.Chat.Type != "private" {
+			advanceOffset(u.UpdateID)
+			continue
+		}
 		ev := BridgeEvent{
-			BridgeID:   pgUUID(br.ID),
-			ExternalID: strconv.FormatInt(u.Message.Chat.ID, 10),
-			SenderID:   strconv.FormatInt(u.Message.From.ID, 10),
-			SenderName: u.Message.From.FirstName,
-			Text:       u.Message.Text,
-			RawPayload: mustJSON(u),
+			BridgeID:          pgUUID(br.ID),
+			ExternalID:        strconv.FormatInt(u.Message.Chat.ID, 10),
+			SenderID:          strconv.FormatInt(u.Message.From.ID, 10),
+			SenderName:        u.Message.From.FirstName,
+			Text:              u.Message.Text,
+			ReferencedMessage: telegramReferenced(u.Message),
+			RawPayload:        mustJSON(u),
 		}
 
 		// Use caption as text if message has media but no text.
@@ -884,17 +892,81 @@ type telegramCallbackQuery struct {
 }
 
 type telegramMessage struct {
-	MessageID int64               `json:"message_id"`
-	From      telegramUser        `json:"from"`
-	Chat      telegramChat        `json:"chat"`
-	Text      string              `json:"text"`
-	Caption   string              `json:"caption"`
-	Photo     []telegramPhotoSize `json:"photo"`
-	Document  *telegramDocument   `json:"document"`
-	Voice     *telegramVoice      `json:"voice"`
-	Audio     *telegramAudio      `json:"audio"`
-	VideoNote *telegramVideoNote  `json:"video_note"`
-	Video     *telegramVideo      `json:"video"`
+	MessageID      int64                 `json:"message_id"`
+	Date           int64                 `json:"date"` // unix seconds
+	From           telegramUser          `json:"from"`
+	Chat           telegramChat          `json:"chat"`
+	Text           string                `json:"text"`
+	Caption        string                `json:"caption"`
+	Photo          []telegramPhotoSize   `json:"photo"`
+	Document       *telegramDocument     `json:"document"`
+	Voice          *telegramVoice        `json:"voice"`
+	Audio          *telegramAudio        `json:"audio"`
+	VideoNote      *telegramVideoNote    `json:"video_note"`
+	Video          *telegramVideo        `json:"video"`
+	ReplyToMessage *telegramMessage      `json:"reply_to_message"`
+	ForwardOrigin  *telegramForwardInfo  `json:"forward_origin"`
+}
+
+// telegramForwardInfo is the modern (Bot API 7.0+) forward_origin field.
+// We only read the human-readable bits we need to render a forward
+// reference; the legacy forward_from / forward_from_chat fields are
+// ignored — Telegram has been emitting forward_origin alongside the
+// legacy fields for years.
+// telegramReferenced extracts a normalized reference (reply target or
+// forward source) from an inbound message, if any. forward_origin
+// (post-Bot-API-7.0) is preferred over reply_to_message — a forwarded
+// message that's also a reply is rare in practice and we want the
+// forward semantics in that case.
+func telegramReferenced(m *telegramMessage) *BridgeReferencedMessage {
+	if m == nil {
+		return nil
+	}
+	if m.ForwardOrigin != nil {
+		fo := m.ForwardOrigin
+		var name string
+		switch {
+		case fo.SenderUser != nil:
+			name = fo.SenderUser.FirstName
+		case fo.SenderUserName != "":
+			name = fo.SenderUserName
+		case fo.AuthorSignature != "":
+			name = fo.AuthorSignature
+		}
+		text := m.Text
+		if text == "" {
+			text = m.Caption
+		}
+		return &BridgeReferencedMessage{
+			Kind:       BridgeReferenceForward,
+			SenderName: name,
+			Text:       text,
+			AuthoredAt: time.Unix(fo.Date, 0),
+		}
+	}
+	if m.ReplyToMessage != nil {
+		ref := m.ReplyToMessage
+		text := ref.Text
+		if text == "" {
+			text = ref.Caption
+		}
+		return &BridgeReferencedMessage{
+			Kind:       BridgeReferenceReply,
+			SenderName: ref.From.FirstName,
+			Text:       text,
+			AuthoredAt: time.Unix(ref.Date, 0),
+		}
+	}
+	return nil
+}
+
+type telegramForwardInfo struct {
+	Type           string        `json:"type"` // "user" | "hidden_user" | "chat" | "channel"
+	Date           int64         `json:"date"`
+	SenderUser     *telegramUser `json:"sender_user"`
+	SenderUserName string        `json:"sender_user_name"`     // used when Type == "hidden_user"
+	SenderChat     *telegramChat `json:"sender_chat"`
+	AuthorSignature string       `json:"author_signature"`
 }
 
 type telegramPhotoSize struct {

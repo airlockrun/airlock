@@ -3288,6 +3288,7 @@ type CreateBridgeRequest struct {
 	AgentId       string                 `protobuf:"bytes,1,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"`
 	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
 	Token         string                 `protobuf:"bytes,3,opt,name=token,proto3" json:"token,omitempty"`
+	Type          string                 `protobuf:"bytes,4,opt,name=type,proto3" json:"type,omitempty"` // "telegram", "discord"
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3343,10 +3344,20 @@ func (x *CreateBridgeRequest) GetToken() string {
 	return ""
 }
 
-// Reassign a bridge to a different agent (or to the system, if empty).
+func (x *CreateBridgeRequest) GetType() string {
+	if x != nil {
+		return x.Type
+	}
+	return ""
+}
+
+// Update fields on an existing bridge. Both fields are independent —
+// callers can rebind the agent, edit settings, or do both in one
+// request. A null/unset field leaves that aspect unchanged.
 type UpdateBridgeRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	AgentId       string                 `protobuf:"bytes,1,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"`
+	Settings      *BridgeSettings        `protobuf:"bytes,2,opt,name=settings,proto3" json:"settings,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3386,6 +3397,13 @@ func (x *UpdateBridgeRequest) GetAgentId() string {
 		return x.AgentId
 	}
 	return ""
+}
+
+func (x *UpdateBridgeRequest) GetSettings() *BridgeSettings {
+	if x != nil {
+		return x.Settings
+	}
+	return nil
 }
 
 type ListBridgesResponse struct {
@@ -3526,13 +3544,14 @@ func (x *ListPlatformIdentitiesResponse) GetIdentities() []*PlatformIdentityInfo
 // fetch them from the platform.
 type LinkIdentityPreviewResponse struct {
 	state               protoimpl.MessageState `protogen:"open.v1"`
-	Platform            string                 `protobuf:"bytes,1,opt,name=platform,proto3" json:"platform,omitempty"`                                                    // "telegram"
+	Platform            string                 `protobuf:"bytes,1,opt,name=platform,proto3" json:"platform,omitempty"`                                                    // "telegram", "discord"
 	BridgeName          string                 `protobuf:"bytes,2,opt,name=bridge_name,json=bridgeName,proto3" json:"bridge_name,omitempty"`                              // Bridge display name from DB
 	BotUsername         string                 `protobuf:"bytes,3,opt,name=bot_username,json=botUsername,proto3" json:"bot_username,omitempty"`                           // @botname from bridges.bot_username
-	PlatformUserId      string                 `protobuf:"bytes,4,opt,name=platform_user_id,json=platformUserId,proto3" json:"platform_user_id,omitempty"`                // Telegram user ID
-	PlatformUsername    string                 `protobuf:"bytes,5,opt,name=platform_username,json=platformUsername,proto3" json:"platform_username,omitempty"`            // @user's telegram username (may be empty)
-	PlatformDisplayName string                 `protobuf:"bytes,6,opt,name=platform_display_name,json=platformDisplayName,proto3" json:"platform_display_name,omitempty"` // First/last name (may be empty)
+	PlatformUserId      string                 `protobuf:"bytes,4,opt,name=platform_user_id,json=platformUserId,proto3" json:"platform_user_id,omitempty"`                // Platform-native user ID (Telegram chat_id, Discord snowflake)
+	PlatformUsername    string                 `protobuf:"bytes,5,opt,name=platform_username,json=platformUsername,proto3" json:"platform_username,omitempty"`            // @handle (may be empty)
+	PlatformDisplayName string                 `protobuf:"bytes,6,opt,name=platform_display_name,json=platformDisplayName,proto3" json:"platform_display_name,omitempty"` // Full / display name (may be empty)
 	CurrentUserEmail    string                 `protobuf:"bytes,7,opt,name=current_user_email,json=currentUserEmail,proto3" json:"current_user_email,omitempty"`          // Airlock account being linked to
+	PlatformAvatarUrl   string                 `protobuf:"bytes,8,opt,name=platform_avatar_url,json=platformAvatarUrl,proto3" json:"platform_avatar_url,omitempty"`       // Avatar image URL (may be empty)
 	unknownFields       protoimpl.UnknownFields
 	sizeCache           protoimpl.SizeCache
 }
@@ -3612,6 +3631,13 @@ func (x *LinkIdentityPreviewResponse) GetPlatformDisplayName() string {
 func (x *LinkIdentityPreviewResponse) GetCurrentUserEmail() string {
 	if x != nil {
 		return x.CurrentUserEmail
+	}
+	return ""
+}
+
+func (x *LinkIdentityPreviewResponse) GetPlatformAvatarUrl() string {
+	if x != nil {
+		return x.PlatformAvatarUrl
 	}
 	return ""
 }
@@ -4227,13 +4253,15 @@ const file_airlock_v1_api_proto_rawDesc = "" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x1f\n" +
 	"\vstatus_code\x18\x02 \x01(\x05R\n" +
 	"statusCode\x12\x18\n" +
-	"\amessage\x18\x03 \x01(\tR\amessage\"Z\n" +
+	"\amessage\x18\x03 \x01(\tR\amessage\"n\n" +
 	"\x13CreateBridgeRequest\x12\x19\n" +
 	"\bagent_id\x18\x01 \x01(\tR\aagentId\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x14\n" +
-	"\x05token\x18\x03 \x01(\tR\x05token\"0\n" +
+	"\x05token\x18\x03 \x01(\tR\x05token\x12\x12\n" +
+	"\x04type\x18\x04 \x01(\tR\x04type\"h\n" +
 	"\x13UpdateBridgeRequest\x12\x19\n" +
-	"\bagent_id\x18\x01 \x01(\tR\aagentId\"G\n" +
+	"\bagent_id\x18\x01 \x01(\tR\aagentId\x126\n" +
+	"\bsettings\x18\x02 \x01(\v2\x1a.airlock.v1.BridgeSettingsR\bsettings\"G\n" +
 	"\x13ListBridgesResponse\x120\n" +
 	"\abridges\x18\x01 \x03(\v2\x16.airlock.v1.BridgeInfoR\abridges\"\\\n" +
 	"\x18ListCapabilitiesResponse\x12@\n" +
@@ -4241,7 +4269,7 @@ const file_airlock_v1_api_proto_rawDesc = "" +
 	"\x1eListPlatformIdentitiesResponse\x12@\n" +
 	"\n" +
 	"identities\x18\x01 \x03(\v2 .airlock.v1.PlatformIdentityInfoR\n" +
-	"identities\"\xb6\x02\n" +
+	"identities\"\xe6\x02\n" +
 	"\x1bLinkIdentityPreviewResponse\x12\x1a\n" +
 	"\bplatform\x18\x01 \x01(\tR\bplatform\x12\x1f\n" +
 	"\vbridge_name\x18\x02 \x01(\tR\n" +
@@ -4250,7 +4278,8 @@ const file_airlock_v1_api_proto_rawDesc = "" +
 	"\x10platform_user_id\x18\x04 \x01(\tR\x0eplatformUserId\x12+\n" +
 	"\x11platform_username\x18\x05 \x01(\tR\x10platformUsername\x122\n" +
 	"\x15platform_display_name\x18\x06 \x01(\tR\x13platformDisplayName\x12,\n" +
-	"\x12current_user_email\x18\a \x01(\tR\x10currentUserEmail\"?\n" +
+	"\x12current_user_email\x18\a \x01(\tR\x10currentUserEmail\x12.\n" +
+	"\x13platform_avatar_url\x18\b \x01(\tR\x11platformAvatarUrl\"?\n" +
 	"\x11ListFilesResponse\x12*\n" +
 	"\x05files\x18\x01 \x03(\v2\x14.airlock.v1.FileInfoR\x05files\"E\n" +
 	"\x12UploadFileResponse\x12\x1d\n" +
@@ -4378,12 +4407,13 @@ var file_airlock_v1_api_proto_goTypes = []any{
 	(*ConversationInfo)(nil),               // 88: airlock.v1.ConversationInfo
 	(*ToolInfo)(nil),                       // 89: airlock.v1.ToolInfo
 	(*timestamppb.Timestamp)(nil),          // 90: google.protobuf.Timestamp
-	(*BridgeInfo)(nil),                     // 91: airlock.v1.BridgeInfo
-	(*ProviderCapabilityInfo)(nil),         // 92: airlock.v1.ProviderCapabilityInfo
-	(*PlatformIdentityInfo)(nil),           // 93: airlock.v1.PlatformIdentityInfo
-	(*FileInfo)(nil),                       // 94: airlock.v1.FileInfo
-	(*TopicInfo)(nil),                      // 95: airlock.v1.TopicInfo
-	(*SystemSettingsInfo)(nil),             // 96: airlock.v1.SystemSettingsInfo
+	(*BridgeSettings)(nil),                 // 91: airlock.v1.BridgeSettings
+	(*BridgeInfo)(nil),                     // 92: airlock.v1.BridgeInfo
+	(*ProviderCapabilityInfo)(nil),         // 93: airlock.v1.ProviderCapabilityInfo
+	(*PlatformIdentityInfo)(nil),           // 94: airlock.v1.PlatformIdentityInfo
+	(*FileInfo)(nil),                       // 95: airlock.v1.FileInfo
+	(*TopicInfo)(nil),                      // 96: airlock.v1.TopicInfo
+	(*SystemSettingsInfo)(nil),             // 97: airlock.v1.SystemSettingsInfo
 }
 var file_airlock_v1_api_proto_depIdxs = []int32{
 	74, // 0: airlock.v1.RegisterResponse.user:type_name -> airlock.v1.User
@@ -4427,19 +4457,20 @@ var file_airlock_v1_api_proto_depIdxs = []int32{
 	51, // 38: airlock.v1.ListAgentMembersResponse.members:type_name -> airlock.v1.AgentMemberInfo
 	81, // 39: airlock.v1.ListConnectionsResponse.connections:type_name -> airlock.v1.ConnectionInfo
 	90, // 40: airlock.v1.CredentialStatusResponse.token_expires_at:type_name -> google.protobuf.Timestamp
-	91, // 41: airlock.v1.ListBridgesResponse.bridges:type_name -> airlock.v1.BridgeInfo
-	92, // 42: airlock.v1.ListCapabilitiesResponse.providers:type_name -> airlock.v1.ProviderCapabilityInfo
-	93, // 43: airlock.v1.ListPlatformIdentitiesResponse.identities:type_name -> airlock.v1.PlatformIdentityInfo
-	94, // 44: airlock.v1.ListFilesResponse.files:type_name -> airlock.v1.FileInfo
-	95, // 45: airlock.v1.ListTopicsResponse.topics:type_name -> airlock.v1.TopicInfo
-	96, // 46: airlock.v1.GetSystemSettingsResponse.settings:type_name -> airlock.v1.SystemSettingsInfo
-	96, // 47: airlock.v1.UpdateSystemSettingsRequest.settings:type_name -> airlock.v1.SystemSettingsInfo
-	96, // 48: airlock.v1.UpdateSystemSettingsResponse.settings:type_name -> airlock.v1.SystemSettingsInfo
-	49, // [49:49] is the sub-list for method output_type
-	49, // [49:49] is the sub-list for method input_type
-	49, // [49:49] is the sub-list for extension type_name
-	49, // [49:49] is the sub-list for extension extendee
-	0,  // [0:49] is the sub-list for field type_name
+	91, // 41: airlock.v1.UpdateBridgeRequest.settings:type_name -> airlock.v1.BridgeSettings
+	92, // 42: airlock.v1.ListBridgesResponse.bridges:type_name -> airlock.v1.BridgeInfo
+	93, // 43: airlock.v1.ListCapabilitiesResponse.providers:type_name -> airlock.v1.ProviderCapabilityInfo
+	94, // 44: airlock.v1.ListPlatformIdentitiesResponse.identities:type_name -> airlock.v1.PlatformIdentityInfo
+	95, // 45: airlock.v1.ListFilesResponse.files:type_name -> airlock.v1.FileInfo
+	96, // 46: airlock.v1.ListTopicsResponse.topics:type_name -> airlock.v1.TopicInfo
+	97, // 47: airlock.v1.GetSystemSettingsResponse.settings:type_name -> airlock.v1.SystemSettingsInfo
+	97, // 48: airlock.v1.UpdateSystemSettingsRequest.settings:type_name -> airlock.v1.SystemSettingsInfo
+	97, // 49: airlock.v1.UpdateSystemSettingsResponse.settings:type_name -> airlock.v1.SystemSettingsInfo
+	50, // [50:50] is the sub-list for method output_type
+	50, // [50:50] is the sub-list for method input_type
+	50, // [50:50] is the sub-list for extension type_name
+	50, // [50:50] is the sub-list for extension extendee
+	0,  // [0:50] is the sub-list for field type_name
 }
 
 func init() { file_airlock_v1_api_proto_init() }

@@ -95,25 +95,26 @@ type AgentDirectory struct {
 }
 
 type AgentMcpServer struct {
-	ID             pgtype.UUID        `json:"id"`
-	AgentID        pgtype.UUID        `json:"agent_id"`
-	Slug           string             `json:"slug"`
-	Name           string             `json:"name"`
-	Access         string             `json:"access"`
-	Url            string             `json:"url"`
-	AuthMode       string             `json:"auth_mode"`
-	AuthUrl        string             `json:"auth_url"`
-	TokenUrl       string             `json:"token_url"`
-	Scopes         string             `json:"scopes"`
-	ToolSchemas    []byte             `json:"tool_schemas"`
-	ClientID       string             `json:"client_id"`
-	ClientSecret   string             `json:"client_secret"`
-	Credentials    string             `json:"credentials"`
-	RefreshToken   string             `json:"refresh_token"`
-	TokenExpiresAt pgtype.Timestamptz `json:"token_expires_at"`
-	LastSyncedAt   pgtype.Timestamptz `json:"last_synced_at"`
-	CreatedAt      pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+	ID                   pgtype.UUID        `json:"id"`
+	AgentID              pgtype.UUID        `json:"agent_id"`
+	Slug                 string             `json:"slug"`
+	Name                 string             `json:"name"`
+	Access               string             `json:"access"`
+	Url                  string             `json:"url"`
+	AuthMode             string             `json:"auth_mode"`
+	AuthUrl              string             `json:"auth_url"`
+	TokenUrl             string             `json:"token_url"`
+	RegistrationEndpoint string             `json:"registration_endpoint"`
+	Scopes               string             `json:"scopes"`
+	ToolSchemas          []byte             `json:"tool_schemas"`
+	ClientID             string             `json:"client_id"`
+	ClientSecret         string             `json:"client_secret"`
+	Credentials          string             `json:"credentials"`
+	RefreshToken         string             `json:"refresh_token"`
+	TokenExpiresAt       pgtype.Timestamptz `json:"token_expires_at"`
+	LastSyncedAt         pgtype.Timestamptz `json:"last_synced_at"`
+	CreatedAt            pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt            pgtype.Timestamptz `json:"updated_at"`
 }
 
 type AgentMember struct {
@@ -224,7 +225,9 @@ type Bridge struct {
 	Name           string             `json:"name"`
 	BotUsername    string             `json:"bot_username"`
 	Status         string             `json:"status"`
+	IsSystem       bool               `json:"is_system"`
 	Config         []byte             `json:"config"`
+	Settings       []byte             `json:"settings"`
 	TokenEncrypted string             `json:"token_encrypted"`
 	LastPolledAt   pgtype.Timestamptz `json:"last_polled_at"`
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`

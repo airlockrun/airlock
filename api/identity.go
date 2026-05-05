@@ -25,6 +25,7 @@ type identityHandler struct {
 	db         *db.DB
 	encryptor  *crypto.Encryptor
 	telegram   *trigger.TelegramDriver
+	discord    *trigger.DiscordDriver
 	hmacSecret string
 	publicURL  string
 	logger     *zap.Logger
@@ -113,20 +114,31 @@ func (h *identityHandler) LinkIdentityPreview(w http.ResponseWriter, r *http.Req
 	}
 
 	// Best-effort: ask the bridge driver to resolve the platform user's
-	// display info. For Telegram, getChat against the private chat ID
-	// (chat_id == user_id) works for any user who has DM'd the bot, which
-	// includes the sender we're trying to link here.
-	if platform == "telegram" && h.telegram != nil {
-		token, derr := h.encryptor.Decrypt(br.TokenEncrypted)
-		if derr != nil {
-			h.logger.Warn("decrypt bridge token for preview failed", zap.Error(derr))
-		} else {
-			info, cerr := h.telegram.GetChat(ctx, token, uid)
-			if cerr != nil {
-				h.logger.Warn("telegram getChat failed", zap.String("uid", uid), zap.Error(cerr))
-			} else {
-				resp.PlatformUsername = info.Username
-				resp.PlatformDisplayName = joinName(info.FirstName, info.LastName)
+	// display info so the confirm dialog shows the actual account being
+	// linked rather than a bare snowflake / chat ID.
+	token, derr := h.encryptor.Decrypt(br.TokenEncrypted)
+	if derr != nil {
+		h.logger.Warn("decrypt bridge token for preview failed", zap.Error(derr))
+	} else {
+		switch platform {
+		case "telegram":
+			if h.telegram != nil {
+				if info, cerr := h.telegram.GetChat(ctx, token, uid); cerr != nil {
+					h.logger.Warn("telegram getChat failed", zap.String("uid", uid), zap.Error(cerr))
+				} else {
+					resp.PlatformUsername = info.Username
+					resp.PlatformDisplayName = joinName(info.FirstName, info.LastName)
+				}
+			}
+		case "discord":
+			if h.discord != nil {
+				if info, cerr := h.discord.FetchUser(ctx, token, uid); cerr != nil {
+					h.logger.Warn("discord fetchUser failed", zap.String("uid", uid), zap.Error(cerr))
+				} else {
+					resp.PlatformUsername = info.Username
+					resp.PlatformDisplayName = info.GlobalName
+					resp.PlatformAvatarUrl = info.AvatarURL
+				}
 			}
 		}
 	}

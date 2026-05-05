@@ -179,6 +179,12 @@ CREATE TABLE agent_mcp_servers (
     auth_mode        text NOT NULL,
     auth_url         text NOT NULL,
     token_url        text NOT NULL,
+    -- Discovered RFC 7591 dynamic-client-registration endpoint. Empty
+    -- when the server doesn't advertise one (then auth_mode='oauth' is
+    -- the only option — operator must paste credentials manually).
+    -- Populated lazily: first by RFC 8414 discovery at MCP register, and
+    -- on demand at oauth_discovery start when still missing.
+    registration_endpoint text NOT NULL,
     scopes           text NOT NULL,
     tool_schemas     jsonb NOT NULL,
     client_id        text NOT NULL,
@@ -194,13 +200,28 @@ CREATE TABLE agent_mcp_servers (
 
 CREATE TABLE bridges (
     id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    agent_id        uuid REFERENCES agents(id) ON DELETE CASCADE,
+    -- ON DELETE SET NULL preserves the bridge row when the agent is deleted.
+    -- Bridges hold platform credentials (tokens, OAuth state) that are
+    -- expensive to re-issue; orphaned rows can be re-bound to a new agent
+    -- by the original creator instead of forcing them through bot setup
+    -- again.
+    agent_id        uuid REFERENCES agents(id) ON DELETE SET NULL,
     created_by      uuid REFERENCES users(id) ON DELETE SET NULL,
-    type            text NOT NULL CHECK (type = 'telegram'),
+    type            text NOT NULL CHECK (type IN ('telegram', 'discord')),
     name            text NOT NULL,
     bot_username    text NOT NULL,
     status          text NOT NULL CHECK (status IN ('active', 'error')),
+    -- is_system marks a bridge that's tenant-wide rather than bound to a
+    -- single agent. agent_id is orthogonal: an unbound (orphaned) bridge
+    -- has agent_id NULL but is_system false; a true system bridge has
+    -- is_system true (and typically agent_id NULL).
+    is_system       boolean NOT NULL,
     config          jsonb NOT NULL,
+    -- settings holds user-tunable knobs surfaced in the bridge edit UI
+    -- (allow_public_dms, public_session_ttl_seconds, ...). Distinct from
+    -- config which carries driver-internal state (poll offset, app id,
+    -- webhook secret).
+    settings        jsonb NOT NULL,
     token_encrypted text NOT NULL,
     last_polled_at  timestamptz,
     created_at      timestamptz NOT NULL DEFAULT now(),
@@ -379,7 +400,11 @@ CREATE TABLE agent_conversations (
     id                            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     agent_id                      uuid NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
     bridge_id                     uuid REFERENCES bridges(id) ON DELETE CASCADE,
-    user_id                       uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    -- user_id is NULL for public bridge conversations (unauthenticated
+    -- bridge users) — those rows are keyed on (agent, source, external_id)
+    -- via the partial index below. Authed conversations always have a
+    -- user_id and are keyed on (agent, user_id, source).
+    user_id                       uuid REFERENCES users(id) ON DELETE CASCADE,
     source                        text NOT NULL,
     external_id                   text,
     title                         text NOT NULL,
@@ -390,9 +415,18 @@ CREATE TABLE agent_conversations (
     updated_at                    timestamptz NOT NULL DEFAULT now()
 );
 
--- Separate conversations per source (web vs bridge) so DM history never
--- leaks across transports.
-CREATE UNIQUE INDEX idx_conversations_lookup ON agent_conversations (agent_id, user_id, source);
+-- Authed conversations: one row per (agent, user, source). Web vs bridge
+-- DMs never share history because source segregates them.
+CREATE UNIQUE INDEX idx_conversations_dm
+    ON agent_conversations (agent_id, user_id, source)
+    WHERE user_id IS NOT NULL;
+
+-- Public/anonymous bridge conversations: one row per (agent, source,
+-- external_id) — the platform DM channel id keys the conversation in
+-- lieu of a user.
+CREATE UNIQUE INDEX idx_conversations_external
+    ON agent_conversations (agent_id, source, external_id)
+    WHERE user_id IS NULL AND external_id IS NOT NULL;
 
 CREATE TABLE topic_subscriptions (
     id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),

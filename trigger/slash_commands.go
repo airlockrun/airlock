@@ -26,6 +26,7 @@ type SlashCommand struct {
 // Registry is the canonical list of commands. Order is preserved when
 // rendered into platform command menus.
 var Registry = []SlashCommand{
+	{Name: "auth", Description: "Link your Airlock account", Access: agentsdk.AccessPublic},
 	{Name: "clear", Description: "Clear conversation context", Access: agentsdk.AccessUser},
 	{Name: "compact", Description: "Summarize and compact context", Access: agentsdk.AccessUser},
 	{Name: "echo", Description: "Toggle tool output bubbles (on / off / blank=flip)", Access: agentsdk.AccessUser},
@@ -138,6 +139,12 @@ func TrySlashCommand(
 	}
 
 	switch entry.Name {
+	case "auth":
+		// Already-linked path: bridge intercepts /auth above identity
+		// lookup and DMs the link there. If we got here, the caller is
+		// either already linked (bridge path past identity lookup) or
+		// signed in via web — either way nothing to bind.
+		return SlashCommandResult{Handled: true, Reply: "You are already linked."}, nil
 	case "clear":
 		reply, err := handleClearCommand(ctx, q, convID, agentID, logger)
 		if err != nil {

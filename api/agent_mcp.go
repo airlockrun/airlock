@@ -36,8 +36,11 @@ func (h *agentHandler) UpsertMCPServer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// For oauth_discovery, resolve auth/token URLs via RFC 9728/8414 discovery.
-	// Errors are non-fatal — store the server anyway; discovery can be retried.
+	// For oauth_discovery, resolve auth/token URLs + DCR registration
+	// endpoint via RFC 9728/8414 discovery. Errors are non-fatal — store
+	// the server anyway and let MCPOAuthStart re-try discovery lazily
+	// the first time the operator clicks Authorize.
+	registrationEndpoint := ""
 	if def.AuthMode == agentsdk.MCPAuthOAuthDiscovery && def.AuthURL == "" {
 		result, err := discoverMCPAuth(r.Context(), def.URL)
 		if err != nil {
@@ -45,6 +48,7 @@ func (h *agentHandler) UpsertMCPServer(w http.ResponseWriter, r *http.Request) {
 		} else {
 			def.AuthURL = result.AuthorizationURL
 			def.TokenURL = result.TokenURL
+			registrationEndpoint = result.RegistrationEndpoint
 			if len(result.ScopesSupported) > 0 && len(def.Scopes) == 0 {
 				def.Scopes = result.ScopesSupported
 			}
@@ -59,15 +63,16 @@ func (h *agentHandler) UpsertMCPServer(w http.ResponseWriter, r *http.Request) {
 
 	q := dbq.New(h.db.Pool())
 	if _, err := q.UpsertMCPServer(r.Context(), dbq.UpsertMCPServerParams{
-		AgentID:  toPgUUID(agentID),
-		Slug:     slug,
-		Name:     def.Name,
-		Url:      def.URL,
-		AuthMode: string(def.AuthMode),
-		AuthUrl:  def.AuthURL,
-		TokenUrl: def.TokenURL,
-		Scopes:   scopes,
-		Access:   string(def.Access),
+		AgentID:              toPgUUID(agentID),
+		Slug:                 slug,
+		Name:                 def.Name,
+		Url:                  def.URL,
+		AuthMode:             string(def.AuthMode),
+		AuthUrl:              def.AuthURL,
+		TokenUrl:             def.TokenURL,
+		RegistrationEndpoint: registrationEndpoint,
+		Scopes:               scopes,
+		Access:               string(def.Access),
 	}); err != nil {
 		h.logger.Error("upsert MCP server failed", zap.Error(err))
 		writeJSONError(w, http.StatusInternalServerError, "failed to register MCP server")

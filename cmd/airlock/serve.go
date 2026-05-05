@@ -186,8 +186,10 @@ func runServe(_ []string) {
 	transcriptionResolver := trigger.NewTranscriptionResolver(database, enc)
 	prompter := trigger.NewPromptProxy(dispatcher, database, s3Client, transcriptionResolver, logger.Named("prompt-proxy"))
 	telegramDriver := trigger.NewTelegramDriver(logger.Named("telegram"))
+	discordDriver := trigger.NewDiscordDriver(logger.Named("discord"))
 	drivers := map[string]trigger.BridgeDriver{
 		"telegram": telegramDriver,
+		"discord":  discordDriver,
 	}
 	bridgeMgr := trigger.NewBridgeManager(drivers, prompter, database, enc, cfg.JWTSecret, cfg.PublicURL, logger.Named("bridges"))
 	scheduler := trigger.NewScheduler(dispatcher, database, logger.Named("scheduler"))
@@ -211,6 +213,7 @@ func runServe(_ []string) {
 		PublicURL:      cfg.PublicURL,
 		OAuthClient:    oauthClient,
 		TelegramDriver: telegramDriver,
+		DiscordDriver:  discordDriver,
 		Encryptor:      enc,
 		S3Client:       s3Client,
 		BuildService:   buildSvc,
@@ -253,6 +256,10 @@ func runServe(_ []string) {
 		logger.Fatal("bridge manager start failed", zap.Error(err))
 	}
 	defer bridgeMgr.Stop()
+
+	// Public-bridge session sweeper — finalize and delete public
+	// conversations idle past the per-bridge TTL.
+	trigger.StartPublicSweeper(ctx, database, bridgeMgr, 5*time.Minute, logger.Named("public-sweeper"))
 
 	// Token refresh job
 	refreshJob := oauth.NewRefreshJob(database, enc, oauthClient, logger.Named("oauth-refresh"))

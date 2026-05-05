@@ -715,5 +715,5 @@ func (h *credentialHandler) defaultRedirectURI(stateRedirect string, agentID [16
 	if stateRedirect != "" {
 		return stateRedirect
 	}
-	return fmt.Sprintf("%s/agents/%s", h.publicURL, agentID)
+	return fmt.Sprintf("%s/agents/%s", h.publicURL, uuid.UUID(agentID))
 }

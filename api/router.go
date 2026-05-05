@@ -45,6 +45,9 @@ type RouterConfig struct {
 	// Telegram driver (for bridge validation via getMe)
 	TelegramDriver *trigger.TelegramDriver
 
+	// Discord driver (for bridge validation via /users/@me)
+	DiscordDriver *trigger.DiscordDriver
+
 	// Trigger system
 	Dispatcher    *trigger.Dispatcher
 	Scheduler     *trigger.Scheduler
@@ -154,6 +157,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		db:        cfg.DB,
 		encryptor: cfg.Encryptor,
 		telegram:  cfg.TelegramDriver,
+		discord:   cfg.DiscordDriver,
 		bridgeMgr: cfg.BridgeManager,
 		logger:    cfg.Logger.Named("bridges"),
 	}
@@ -161,6 +165,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		db:         cfg.DB,
 		encryptor:  cfg.Encryptor,
 		telegram:   cfg.TelegramDriver,
+		discord:    cfg.DiscordDriver,
 		hmacSecret: cfg.JWTSecret, // reuse JWT secret for HMAC
 		publicURL:  cfg.PublicURL,
 		logger:     cfg.Logger.Named("identity"),

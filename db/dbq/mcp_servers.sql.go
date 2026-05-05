@@ -30,6 +30,32 @@ func (q *Queries) ClearMCPServerCredentials(ctx context.Context, arg ClearMCPSer
 	return err
 }
 
+const clearMCPServerOAuthApp = `-- name: ClearMCPServerOAuthApp :exec
+UPDATE agent_mcp_servers SET
+    client_id = '',
+    client_secret = '',
+    credentials = '',
+    refresh_token = '',
+    token_expires_at = NULL,
+    updated_at = now()
+WHERE agent_id = $1 AND slug = $2
+`
+
+type ClearMCPServerOAuthAppParams struct {
+	AgentID pgtype.UUID `json:"agent_id"`
+	Slug    string      `json:"slug"`
+}
+
+// Wipe the OAuth app config (client_id/secret) AND the credentials that
+// belong to it. Used by "Re-register client" (oauth_discovery, forces a
+// fresh DCR on next authorize) and "Edit OAuth app" (oauth, paste new
+// credentials). Existing tokens MUST go too — they're tied to the old
+// client_id at the OAuth provider and would 401 the moment they're used.
+func (q *Queries) ClearMCPServerOAuthApp(ctx context.Context, arg ClearMCPServerOAuthAppParams) error {
+	_, err := q.db.Exec(ctx, clearMCPServerOAuthApp, arg.AgentID, arg.Slug)
+	return err
+}
+
 const deleteMCPServersByAgentExcept = `-- name: DeleteMCPServersByAgentExcept :exec
 DELETE FROM agent_mcp_servers
 WHERE agent_id = $1 AND slug != ALL($2::text[])
@@ -47,7 +73,7 @@ func (q *Queries) DeleteMCPServersByAgentExcept(ctx context.Context, arg DeleteM
 }
 
 const getMCPServerBySlug = `-- name: GetMCPServerBySlug :one
-SELECT id, agent_id, slug, name, access, url, auth_mode, auth_url, token_url, scopes, tool_schemas, client_id, client_secret, credentials, refresh_token, token_expires_at, last_synced_at, created_at, updated_at FROM agent_mcp_servers WHERE agent_id = $1 AND slug = $2
+SELECT id, agent_id, slug, name, access, url, auth_mode, auth_url, token_url, registration_endpoint, scopes, tool_schemas, client_id, client_secret, credentials, refresh_token, token_expires_at, last_synced_at, created_at, updated_at FROM agent_mcp_servers WHERE agent_id = $1 AND slug = $2
 `
 
 type GetMCPServerBySlugParams struct {
@@ -68,6 +94,7 @@ func (q *Queries) GetMCPServerBySlug(ctx context.Context, arg GetMCPServerBySlug
 		&i.AuthMode,
 		&i.AuthUrl,
 		&i.TokenUrl,
+		&i.RegistrationEndpoint,
 		&i.Scopes,
 		&i.ToolSchemas,
 		&i.ClientID,
@@ -83,8 +110,8 @@ func (q *Queries) GetMCPServerBySlug(ctx context.Context, arg GetMCPServerBySlug
 }
 
 const getMCPServerForOAuth = `-- name: GetMCPServerForOAuth :one
-SELECT id, agent_id, slug, name, auth_mode, auth_url, token_url, scopes,
-       client_id, client_secret
+SELECT id, agent_id, slug, name, url, auth_mode, auth_url, token_url,
+       registration_endpoint, scopes, client_id, client_secret
 FROM agent_mcp_servers WHERE agent_id = $1 AND slug = $2
 `
 
@@ -94,16 +121,18 @@ type GetMCPServerForOAuthParams struct {
 }
 
 type GetMCPServerForOAuthRow struct {
-	ID           pgtype.UUID `json:"id"`
-	AgentID      pgtype.UUID `json:"agent_id"`
-	Slug         string      `json:"slug"`
-	Name         string      `json:"name"`
-	AuthMode     string      `json:"auth_mode"`
-	AuthUrl      string      `json:"auth_url"`
-	TokenUrl     string      `json:"token_url"`
-	Scopes       string      `json:"scopes"`
-	ClientID     string      `json:"client_id"`
-	ClientSecret string      `json:"client_secret"`
+	ID                   pgtype.UUID `json:"id"`
+	AgentID              pgtype.UUID `json:"agent_id"`
+	Slug                 string      `json:"slug"`
+	Name                 string      `json:"name"`
+	Url                  string      `json:"url"`
+	AuthMode             string      `json:"auth_mode"`
+	AuthUrl              string      `json:"auth_url"`
+	TokenUrl             string      `json:"token_url"`
+	RegistrationEndpoint string      `json:"registration_endpoint"`
+	Scopes               string      `json:"scopes"`
+	ClientID             string      `json:"client_id"`
+	ClientSecret         string      `json:"client_secret"`
 }
 
 func (q *Queries) GetMCPServerForOAuth(ctx context.Context, arg GetMCPServerForOAuthParams) (GetMCPServerForOAuthRow, error) {
@@ -114,9 +143,11 @@ func (q *Queries) GetMCPServerForOAuth(ctx context.Context, arg GetMCPServerForO
 		&i.AgentID,
 		&i.Slug,
 		&i.Name,
+		&i.Url,
 		&i.AuthMode,
 		&i.AuthUrl,
 		&i.TokenUrl,
+		&i.RegistrationEndpoint,
 		&i.Scopes,
 		&i.ClientID,
 		&i.ClientSecret,
@@ -207,7 +238,7 @@ func (q *Queries) ListExpiringMCPServers(ctx context.Context, expiryThreshold pg
 }
 
 const listMCPServersByAgent = `-- name: ListMCPServersByAgent :many
-SELECT id, agent_id, slug, name, access, url, auth_mode, auth_url, token_url, scopes, tool_schemas, client_id, client_secret, credentials, refresh_token, token_expires_at, last_synced_at, created_at, updated_at FROM agent_mcp_servers WHERE agent_id = $1 ORDER BY slug
+SELECT id, agent_id, slug, name, access, url, auth_mode, auth_url, token_url, registration_endpoint, scopes, tool_schemas, client_id, client_secret, credentials, refresh_token, token_expires_at, last_synced_at, created_at, updated_at FROM agent_mcp_servers WHERE agent_id = $1 ORDER BY slug
 `
 
 func (q *Queries) ListMCPServersByAgent(ctx context.Context, agentID pgtype.UUID) ([]AgentMcpServer, error) {
@@ -229,6 +260,7 @@ func (q *Queries) ListMCPServersByAgent(ctx context.Context, agentID pgtype.UUID
 			&i.AuthMode,
 			&i.AuthUrl,
 			&i.TokenUrl,
+			&i.RegistrationEndpoint,
 			&i.Scopes,
 			&i.ToolSchemas,
 			&i.ClientID,
@@ -337,6 +369,39 @@ func (q *Queries) UpdateMCPServerCredentials(ctx context.Context, arg UpdateMCPS
 	return err
 }
 
+const updateMCPServerDiscovery = `-- name: UpdateMCPServerDiscovery :exec
+UPDATE agent_mcp_servers SET
+    auth_url = $1,
+    token_url = $2,
+    registration_endpoint = $3,
+    updated_at = now()
+WHERE agent_id = $4 AND slug = $5
+`
+
+type UpdateMCPServerDiscoveryParams struct {
+	AuthUrl              string      `json:"auth_url"`
+	TokenUrl             string      `json:"token_url"`
+	RegistrationEndpoint string      `json:"registration_endpoint"`
+	AgentID              pgtype.UUID `json:"agent_id"`
+	Slug                 string      `json:"slug"`
+}
+
+// Lazy re-discovery: refresh auth_url / token_url / registration_endpoint
+// after a fresh RFC 8414 fetch. Only used by oauth_discovery's MCPOAuthStart
+// when registration_endpoint is missing (the only path forward for DCR).
+// Does NOT touch credentials — re-discovery never invalidates auth state by
+// itself; callers chain it with DCR + UpdateMCPServerOAuthApp when needed.
+func (q *Queries) UpdateMCPServerDiscovery(ctx context.Context, arg UpdateMCPServerDiscoveryParams) error {
+	_, err := q.db.Exec(ctx, updateMCPServerDiscovery,
+		arg.AuthUrl,
+		arg.TokenUrl,
+		arg.RegistrationEndpoint,
+		arg.AgentID,
+		arg.Slug,
+	)
+	return err
+}
+
 const updateMCPServerOAuthApp = `-- name: UpdateMCPServerOAuthApp :exec
 UPDATE agent_mcp_servers SET
     client_id = $1,
@@ -382,14 +447,24 @@ func (q *Queries) UpdateMCPServerToolSchemas(ctx context.Context, arg UpdateMCPS
 }
 
 const upsertMCPServer = `-- name: UpsertMCPServer :one
-INSERT INTO agent_mcp_servers (agent_id, slug, name, url, auth_mode, auth_url, token_url, scopes, access, tool_schemas, client_id, client_secret, credentials, refresh_token)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, '[]'::jsonb, '', '', '', '')
+INSERT INTO agent_mcp_servers (agent_id, slug, name, url, auth_mode, auth_url, token_url, registration_endpoint, scopes, access, tool_schemas, client_id, client_secret, credentials, refresh_token)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, '[]'::jsonb, '', '', '', '')
 ON CONFLICT (agent_id, slug) DO UPDATE SET
     name = EXCLUDED.name,
     url = EXCLUDED.url,
     auth_mode = EXCLUDED.auth_mode,
-    auth_url = EXCLUDED.auth_url,
-    token_url = EXCLUDED.token_url,
+    -- Preserve discovered URLs when a fresh sync turns up empty (transient
+    -- discovery failure shouldn't wipe state we already proved good by
+    -- successfully exchanging tokens against it).
+    auth_url = CASE
+        WHEN EXCLUDED.auth_url != '' THEN EXCLUDED.auth_url
+        ELSE agent_mcp_servers.auth_url END,
+    token_url = CASE
+        WHEN EXCLUDED.token_url != '' THEN EXCLUDED.token_url
+        ELSE agent_mcp_servers.token_url END,
+    registration_endpoint = CASE
+        WHEN EXCLUDED.registration_endpoint != '' THEN EXCLUDED.registration_endpoint
+        ELSE agent_mcp_servers.registration_endpoint END,
     scopes = EXCLUDED.scopes,
     access = EXCLUDED.access,
     credentials = CASE
@@ -402,24 +477,28 @@ ON CONFLICT (agent_id, slug) DO UPDATE SET
         WHEN agent_mcp_servers.url != EXCLUDED.url OR agent_mcp_servers.scopes != EXCLUDED.scopes
         THEN NULL ELSE agent_mcp_servers.token_expires_at END,
     updated_at = now()
-RETURNING id, agent_id, slug, name, access, url, auth_mode, auth_url, token_url, scopes, tool_schemas, client_id, client_secret, credentials, refresh_token, token_expires_at, last_synced_at, created_at, updated_at
+RETURNING id, agent_id, slug, name, access, url, auth_mode, auth_url, token_url, registration_endpoint, scopes, tool_schemas, client_id, client_secret, credentials, refresh_token, token_expires_at, last_synced_at, created_at, updated_at
 `
 
 type UpsertMCPServerParams struct {
-	AgentID  pgtype.UUID `json:"agent_id"`
-	Slug     string      `json:"slug"`
-	Name     string      `json:"name"`
-	Url      string      `json:"url"`
-	AuthMode string      `json:"auth_mode"`
-	AuthUrl  string      `json:"auth_url"`
-	TokenUrl string      `json:"token_url"`
-	Scopes   string      `json:"scopes"`
-	Access   string      `json:"access"`
+	AgentID              pgtype.UUID `json:"agent_id"`
+	Slug                 string      `json:"slug"`
+	Name                 string      `json:"name"`
+	Url                  string      `json:"url"`
+	AuthMode             string      `json:"auth_mode"`
+	AuthUrl              string      `json:"auth_url"`
+	TokenUrl             string      `json:"token_url"`
+	RegistrationEndpoint string      `json:"registration_endpoint"`
+	Scopes               string      `json:"scopes"`
+	Access               string      `json:"access"`
 }
 
 // When url or scopes change, clear credentials so the user must re-authorize.
 // Discovery + credential fields are passed explicitly as empty on first
 // insert; ON CONFLICT preserves existing credentials unless invalidated.
+// registration_endpoint is taken from EXCLUDED only when newly populated —
+// a fresh discovery run that turned up empty doesn't blow away a previously
+// discovered endpoint.
 func (q *Queries) UpsertMCPServer(ctx context.Context, arg UpsertMCPServerParams) (AgentMcpServer, error) {
 	row := q.db.QueryRow(ctx, upsertMCPServer,
 		arg.AgentID,
@@ -429,6 +508,7 @@ func (q *Queries) UpsertMCPServer(ctx context.Context, arg UpsertMCPServerParams
 		arg.AuthMode,
 		arg.AuthUrl,
 		arg.TokenUrl,
+		arg.RegistrationEndpoint,
 		arg.Scopes,
 		arg.Access,
 	)
@@ -443,6 +523,7 @@ func (q *Queries) UpsertMCPServer(ctx context.Context, arg UpsertMCPServerParams
 		&i.AuthMode,
 		&i.AuthUrl,
 		&i.TokenUrl,
+		&i.RegistrationEndpoint,
 		&i.Scopes,
 		&i.ToolSchemas,
 		&i.ClientID,

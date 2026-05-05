@@ -2,8 +2,10 @@ package trigger
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"reflect"
+	"strings"
 	"sync"
 	"time"
 
@@ -19,6 +21,85 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 )
+
+// DefaultPublicSessionTTLSeconds is the inactivity window after which a
+// public bridge conversation is swept and finalized. Three hours covers
+// the "user wandered off" case while keeping public state from
+// accumulating indefinitely.
+const DefaultPublicSessionTTLSeconds = 3 * 60 * 60
+
+// PublicSessionMode controls how public conversations carry context
+// across turns.
+const (
+	// PublicSessionModeSession persists turns in a per-channel conversation
+	// (the default). The sweeper finalizes idle ones.
+	PublicSessionModeSession = "session"
+
+	// PublicSessionModeOneShot creates a fresh ephemeral conversation per
+	// turn — no history loaded, conversation deleted immediately after the
+	// run. If the user's message is a reply, the referenced text is
+	// included as a wrapped context block so the LLM has at least the
+	// thing being replied to.
+	PublicSessionModeOneShot = "one_shot"
+)
+
+// BridgeSettings is the user-tunable subset of bridge config exposed in
+// the dashboard. Stored in bridges.settings JSONB. Distinct from
+// bridges.config which carries driver-internal state.
+type BridgeSettings struct {
+	// AllowPublicDMs lets unauthenticated users DM the bot at AccessPublic.
+	// When false, unauth DMs are dropped (except /auth, which is the
+	// linking opt-in path and always works).
+	AllowPublicDMs bool `json:"allow_public_dms"`
+
+	// PublicSessionTTLSeconds is the inactivity window before a public
+	// conversation is finalized. 0 disables sweeping for that bridge.
+	// Only meaningful when PublicSessionMode == "session".
+	PublicSessionTTLSeconds int `json:"public_session_ttl_seconds"`
+
+	// PublicSessionMode chooses between persistent ("session") and
+	// stateless ("one_shot") public conversations. Defaults to session.
+	PublicSessionMode string `json:"public_session_mode"`
+}
+
+// DefaultBridgeSettings returns the settings a freshly created bridge
+// row should carry. New bridges currently insert `{}` and rely on this
+// function to materialize defaults at read time.
+func DefaultBridgeSettings() BridgeSettings {
+	return BridgeSettings{
+		AllowPublicDMs:          true,
+		PublicSessionTTLSeconds: DefaultPublicSessionTTLSeconds,
+		PublicSessionMode:       PublicSessionModeSession,
+	}
+}
+
+// DecodeBridgeSettings parses a bridges.settings JSON blob, falling back
+// to defaults for any missing keys. Empty / invalid JSON returns the
+// default settings.
+func DecodeBridgeSettings(raw []byte) BridgeSettings {
+	s := DefaultBridgeSettings()
+	if len(raw) == 0 {
+		return s
+	}
+	// Decode into a tolerant map first so missing keys keep their defaults.
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return s
+	}
+	if v, ok := m["allow_public_dms"]; ok {
+		_ = json.Unmarshal(v, &s.AllowPublicDMs)
+	}
+	if v, ok := m["public_session_ttl_seconds"]; ok {
+		_ = json.Unmarshal(v, &s.PublicSessionTTLSeconds)
+	}
+	if v, ok := m["public_session_mode"]; ok {
+		_ = json.Unmarshal(v, &s.PublicSessionMode)
+	}
+	if s.PublicSessionMode != PublicSessionModeOneShot {
+		s.PublicSessionMode = PublicSessionModeSession
+	}
+	return s
+}
 
 // ResponseEvent represents an NDJSON event from the agent response stream,
 // forwarded to the bridge driver for progressive delivery.
@@ -50,14 +131,39 @@ type BridgeCallback struct {
 // BridgeEvent represents a normalized incoming event from any platform.
 // Either Text/Files (new user message) or Callback (button tap) is populated.
 type BridgeEvent struct {
-	BridgeID   uuid.UUID
-	ExternalID string // platform chat_id (Telegram chat ID, etc.)
-	SenderID   string // platform user ID of sender (for identity lookup)
-	SenderName string
+	BridgeID          uuid.UUID
+	ExternalID        string // platform chat_id (Telegram chat ID, etc.)
+	SenderID          string // platform user ID of sender (for identity lookup)
+	SenderName        string
+	Text              string
+	Files             []BridgeFile // attached files (photos, documents)
+	Callback          *BridgeCallback
+	ReferencedMessage *BridgeReferencedMessage // reply target / forward source (driver-populated)
+	RawPayload        []byte
+}
+
+// BridgeReferenceKind distinguishes the platform mechanism that produced
+// the reference so the prompt builder can label it for the LLM.
+const (
+	// BridgeReferenceReply — the user replied to another message (Discord
+	// reply, Telegram reply_to_message, Slack thread parent).
+	BridgeReferenceReply = "reply"
+	// BridgeReferenceForward — the user forwarded a message authored
+	// elsewhere (Discord message snapshot, Telegram forward_origin).
+	BridgeReferenceForward = "forward"
+)
+
+// BridgeReferencedMessage describes a message the current event points
+// at — either a reply target or a forwarded message. Surfaced to the
+// LLM as a wrapped context block regardless of session mode, so the
+// model has the referenced content even when it's outside the active
+// conversation history (or when there is no history at all).
+type BridgeReferencedMessage struct {
+	Kind       string // BridgeReferenceReply | BridgeReferenceForward
+	SenderName string // author of the referenced content
 	Text       string
-	Files      []BridgeFile // attached files (photos, documents)
-	Callback   *BridgeCallback
-	RawPayload []byte
+	AuthoredAt time.Time
+	FromBot    bool // true when the referenced message was authored by our bot (replies only)
 }
 
 // BridgeFile is a file attached to a bridge message.
@@ -133,11 +239,6 @@ type BridgeManager struct {
 	// the token and Telegram returns 409 Conflict on both.
 	pollersMu sync.Mutex
 	pollers   map[uuid.UUID]context.CancelFunc
-
-	// linkSent tracks sender IDs that have already received a linking message
-	// to avoid spamming them on every message. Reset on restart.
-	linkSentMu sync.Mutex
-	linkSent   map[string]time.Time
 }
 
 // NewBridgeManager creates a BridgeManager.
@@ -151,7 +252,6 @@ func NewBridgeManager(drivers map[string]BridgeDriver, prompter *PromptProxy, da
 		publicURL:  publicURL,
 		logger:     logger,
 		pollers:    make(map[uuid.UUID]context.CancelFunc),
-		linkSent:   make(map[string]time.Time),
 	}
 }
 
@@ -304,47 +404,50 @@ func (m *BridgeManager) HandleEvent(ctx context.Context, event BridgeEvent) erro
 
 	driver := m.drivers[br.Type]
 
-	// Resolve user_id from platform identity (DM-only mode). Resolved before
-	// SendStream so we can look up per-conversation settings (echo) and pass
-	// them into the driver before the first event is processed.
-	identity, err := q.GetPlatformIdentity(ctx, dbq.GetPlatformIdentityParams{
+	// /auth runs before identity lookup so unlinked users can opt in
+	// explicitly. We deliberately don't auto-DM the link on every
+	// unrecognized sender — the bridge may serve public-access agents
+	// where most users never need to link, and unsolicited DMs are
+	// noise.
+	if isAuthCommand(event.Text) {
+		return m.handleAuthCommand(ctx, br, driver, event)
+	}
+
+	// Resolve user_id from platform identity. Lookup failure means the
+	// sender hasn't run /auth: if the bridge allows public DMs, we fall
+	// through with userID = uuid.Nil and downstream resolves AccessPublic;
+	// otherwise we silently drop.
+	var userID uuid.UUID
+	identity, idErr := q.GetPlatformIdentity(ctx, dbq.GetPlatformIdentityParams{
 		Platform:       br.Type,
 		PlatformUserID: event.SenderID,
 	})
-	if err != nil {
-		// Send a linking message — but only once per sender per 10 minutes.
-		senderKey := br.Type + ":" + event.SenderID
-		m.linkSentMu.Lock()
-		lastSent, alreadySent := m.linkSent[senderKey]
-		if !alreadySent || time.Since(lastSent) > 10*time.Minute {
-			m.linkSent[senderKey] = time.Now()
-			m.linkSentMu.Unlock()
-
-			if tg, ok := driver.(*TelegramDriver); ok && m.publicURL != "" {
-				chatID, _ := strconv.ParseInt(event.ExternalID, 10, 64)
-				if chatID != 0 {
-					linkURL := buildAuthExternalURL(m.publicURL, m.hmacSecret, br.Type, pgUUID(br.ID).String(), event.SenderID)
-					msg := fmt.Sprintf("To use this bot, please link your Airlock account:\n%s", linkURL)
-					_ = tg.SendMessage(ctx, br.TokenEncrypted, chatID, msg)
-				}
-			}
-		} else {
-			m.linkSentMu.Unlock()
+	if idErr == nil {
+		userID = pgUUID(identity.UserID)
+	} else {
+		settings := DecodeBridgeSettings(br.Settings)
+		if !settings.AllowPublicDMs {
+			m.logger.Debug("public DMs disabled; dropping unlinked sender",
+				zap.String("bridge", br.Name),
+				zap.String("sender_id", event.SenderID),
+			)
+			return nil
 		}
-		return nil
+		// userID stays uuid.Nil — public-access path.
 	}
-	userID := pgUUID(identity.UserID)
 
-	// Resolve effective echo for this conversation. GetConversationBySource
-	// may return no row on the first message — in that case we fall back to
-	// the driver default (Telegram → off).
+	// Resolve effective echo for this conversation. For unlinked (public)
+	// senders we skip the user-keyed lookup and use the driver default —
+	// per-channel echo overrides for public conversations are deferred.
 	echo := driver.DefaultEcho()
-	if conv, err := q.GetConversationBySource(ctx, dbq.GetConversationBySourceParams{
-		AgentID: toPgUUID(agentID),
-		UserID:  toPgUUID(userID),
-		Source:  "bridge",
-	}); err == nil {
-		echo = ResolveEcho(conv.Settings, driver.DefaultEcho())
+	if userID != uuid.Nil {
+		if conv, err := q.GetConversationBySource(ctx, dbq.GetConversationBySourceParams{
+			AgentID: toPgUUID(agentID),
+			UserID:  toPgUUID(userID),
+			Source:  "bridge",
+		}); err == nil {
+			echo = ResolveEcho(conv.Settings, driver.DefaultEcho())
+		}
 	}
 
 	// Create event channel for streaming between PromptProxy and driver.
@@ -380,8 +483,14 @@ func (m *BridgeManager) HandleEvent(ctx context.Context, event BridgeEvent) erro
 		return nil
 	}
 
+	// Resolve session mode: only public (unlinked) senders honor the
+	// per-bridge one-shot toggle. Authenticated users always run in
+	// session mode.
+	settings := DecodeBridgeSettings(br.Settings)
+	oneShot := userID == uuid.Nil && settings.PublicSessionMode == PublicSessionModeOneShot
+
 	// Route to prompt proxy — streams events into the channel.
-	_, err = m.prompter.HandleMessage(ctx, agentID, event.BridgeID, userID, event.ExternalID, true, event.Text, event.Files, respEvents)
+	_, err = m.prompter.HandleMessage(ctx, agentID, event.BridgeID, userID, event.ExternalID, true, oneShot, event.Text, event.Files, event.ReferencedMessage, respEvents)
 	if err != nil {
 		return fmt.Errorf("prompt proxy: %w", err)
 	}
@@ -394,6 +503,39 @@ func (m *BridgeManager) HandleEvent(ctx context.Context, event BridgeEvent) erro
 			zap.Error(driverErr))
 	}
 
+	return nil
+}
+
+// isAuthCommand reports whether text is the /auth slash command,
+// possibly with arguments. Recognized in either DMs or guild channels —
+// /auth is special-cased above identity lookup so unlinked users can
+// invoke it.
+func isAuthCommand(text string) bool {
+	t := strings.ToLower(strings.TrimSpace(text))
+	return t == "/auth" || strings.HasPrefix(t, "/auth ")
+}
+
+// handleAuthCommand replies to /auth with a fresh signed linking URL.
+// The link is always delivered privately — Telegram bots are typically
+// in DMs already, but for Discord we explicitly open a DM channel so
+// the URL is never posted in a public guild channel where it could be
+// scraped to bind someone else's identity.
+func (m *BridgeManager) handleAuthCommand(ctx context.Context, br dbq.Bridge, driver BridgeDriver, event BridgeEvent) error {
+	if m.publicURL == "" {
+		return nil
+	}
+	linkURL := buildAuthExternalURL(m.publicURL, m.hmacSecret, br.Type, pgUUID(br.ID).String(), event.SenderID)
+	msg := fmt.Sprintf("Click to link your Airlock account:\n%s", linkURL)
+	switch dr := driver.(type) {
+	case *TelegramDriver:
+		chatID, _ := strconv.ParseInt(event.ExternalID, 10, 64)
+		if chatID == 0 {
+			return nil
+		}
+		return dr.SendMessage(ctx, br.TokenEncrypted, chatID, msg)
+	case *DiscordDriver:
+		return dr.SendDM(ctx, br.TokenEncrypted, event.SenderID, msg)
+	}
 	return nil
 }
 
@@ -431,12 +573,15 @@ func (m *BridgeManager) SendParts(ctx context.Context, bridgeID uuid.UUID, exter
 		return fmt.Errorf("no driver for type %q", br.Type)
 	}
 
-	if tg, ok := driver.(*TelegramDriver); ok {
+	switch dr := driver.(type) {
+	case *TelegramDriver:
 		chatID, err := strconv.ParseInt(externalID, 10, 64)
 		if err != nil {
 			return fmt.Errorf("invalid chat ID: %w", err)
 		}
-		return tg.SendParts(ctx, token, chatID, parts)
+		return dr.SendParts(ctx, token, chatID, parts)
+	case *DiscordDriver:
+		return dr.SendParts(ctx, token, externalID, parts)
 	}
 
 	return fmt.Errorf("driver %q does not support SendParts", br.Type)

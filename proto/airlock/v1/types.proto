@@ -221,7 +221,7 @@ message AgentMessageInfo {
 message WebhookInfo {
   string id = 1;
   string path = 2;
-  string verify_mode = 3;       // "hmac", "token", "none"
+  string verify_mode = 3;       // "none", "hmac", "token", "bearer", "ed25519"
   string public_url = 4;        // full public URL for external services
   string description = 5;
   string secret_masked = 6;     // masked secret (e.g., "abc...xyz")
@@ -267,14 +267,37 @@ message ConnectionInfo {
 // BridgeInfo represents a chat platform bot instance.
 message BridgeInfo {
   string id = 1;
-  string agent_id = 2;      // empty = system bridge, set = agent bridge
+  string agent_id = 2;      // empty = system bridge or orphaned, set = agent bridge
   UserSummary owner = 3;    // unset for system bridges (no creator)
-  string type = 4;          // "telegram", etc.
+  string type = 4;          // "telegram", "discord"
   string name = 5;
-  string bot_username = 6;  // @username from Telegram getMe
+  string bot_username = 6;  // @handle from platform
   string status = 7;        // "active", "error"
   google.protobuf.Timestamp created_at = 8;
   google.protobuf.Timestamp updated_at = 9;
+  BridgeSettings settings = 10;
+}
+
+// BridgeSettings is the user-tunable subset of bridge config exposed in
+// the dashboard. Stored in bridges.settings JSONB on the backend.
+message BridgeSettings {
+  // When true, unauthenticated users can DM the bot at AccessPublic.
+  // When false, unauth DMs are dropped (except /auth, which is the
+  // explicit linking opt-in and always works).
+  bool allow_public_dms = 1;
+
+  // Inactivity window after which a public conversation is finalized
+  // and deleted. 0 disables sweeping for this bridge. Only meaningful
+  // when public_session_mode == "session".
+  int32 public_session_ttl_seconds = 2;
+
+  // How public conversations carry context across turns:
+  //   "session"  — persistent, per-channel conversation; finalized by
+  //                the sweeper after public_session_ttl_seconds.
+  //   "one_shot" — fresh ephemeral conversation per turn; no history;
+  //                deleted right after the run. The user's referenced
+  //                message (reply / forward) is included as context.
+  string public_session_mode = 3;
 }
 
 // PlatformIdentityInfo represents a user's verified external identity.

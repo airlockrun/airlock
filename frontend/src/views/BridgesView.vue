@@ -28,13 +28,49 @@ function canDelete(bridge: { owner?: { id?: string } | null }): boolean {
 const dialogVisible = ref(false)
 const form = ref({ name: '', type: 'telegram', token: '', agentId: '' })
 
-// Reassign dialog — separate from create to avoid co-mingling state.
-const reassignVisible = ref(false)
-const reassigning = ref<{ id: string; name: string; agentId: string } | null>(null)
-const reassignAgentID = ref('')
+// Edit dialog — covers both reassignment and per-bridge settings.
+const editVisible = ref(false)
+const editing = ref<{ id: string; name: string; agentId: string } | null>(null)
+const editAgentID = ref('')
+const editAllowPublicDMs = ref(true)
+const editSessionMode = ref<'session' | 'one_shot'>('session')
+const editTTLAmount = ref(3)
+const editTTLUnit = ref<'minutes' | 'hours' | 'days'>('hours')
+const editTTLNever = ref(false)
+
+const sessionModes = [
+  { label: 'Persistent session', value: 'session', description: 'Conversation history is preserved per channel until the expiry below.' },
+  { label: 'One-shot (no history)', value: 'one_shot', description: 'Each message is independent. The replied-to / forwarded message is included as context.' },
+]
+
+const ttlUnits = [
+  { label: 'Minutes', value: 'minutes' },
+  { label: 'Hours', value: 'hours' },
+  { label: 'Days', value: 'days' },
+]
+
+// pickTTLDisplay turns seconds into the most natural (amount, unit) pair so
+// "86400" loads as "1 Day" instead of "24 Hours". Falls back to seconds-as-
+// minutes for awkward numbers.
+function pickTTLDisplay(seconds: number): { amount: number; unit: 'minutes' | 'hours' | 'days' } {
+  if (seconds <= 0) return { amount: 3, unit: 'hours' }
+  if (seconds % 86400 === 0) return { amount: seconds / 86400, unit: 'days' }
+  if (seconds % 3600 === 0) return { amount: seconds / 3600, unit: 'hours' }
+  return { amount: Math.round(seconds / 60), unit: 'minutes' }
+}
+
+function ttlToSeconds(amount: number, unit: 'minutes' | 'hours' | 'days'): number {
+  if (amount <= 0) return 0
+  switch (unit) {
+    case 'minutes': return amount * 60
+    case 'hours': return amount * 3600
+    case 'days': return amount * 86400
+  }
+}
 
 const bridgeTypes = [
   { label: 'Telegram', value: 'telegram' },
+  { label: 'Discord', value: 'discord' },
 ]
 
 onMounted(() => {
@@ -70,28 +106,48 @@ function formatType(t: string): string {
 function typeIcon(t: string): string {
   switch (t) {
     case 'telegram': return 'pi pi-send'
+    case 'discord': return 'pi pi-discord'
     default: return 'pi pi-link'
   }
 }
 
-function openReassign(bridge: { id: string; name: string; agentId: string }) {
-  reassigning.value = { id: bridge.id, name: bridge.name, agentId: bridge.agentId || '' }
-  reassignAgentID.value = bridge.agentId || ''
-  reassignVisible.value = true
+function openEdit(bridge: {
+  id: string
+  name: string
+  agentId: string
+  settings?: {
+    allowPublicDms?: boolean
+    publicSessionTtlSeconds?: number
+    publicSessionMode?: string
+  } | null
+}) {
+  editing.value = { id: bridge.id, name: bridge.name, agentId: bridge.agentId || '' }
+  editAgentID.value = bridge.agentId || ''
+  editAllowPublicDMs.value = bridge.settings?.allowPublicDms ?? true
+  editSessionMode.value = bridge.settings?.publicSessionMode === 'one_shot' ? 'one_shot' : 'session'
+  const ttlSecs = bridge.settings?.publicSessionTtlSeconds ?? 10800
+  editTTLNever.value = ttlSecs === 0
+  const display = pickTTLDisplay(ttlSecs === 0 ? 10800 : ttlSecs)
+  editTTLAmount.value = display.amount
+  editTTLUnit.value = display.unit
+  editVisible.value = true
 }
 
-async function onReassign() {
-  if (!reassigning.value) return
-  if (reassignAgentID.value === (reassigning.value.agentId || '')) {
-    reassignVisible.value = false
-    return
-  }
+async function onEdit() {
+  if (!editing.value) return
   try {
-    await store.updateBridge(reassigning.value.id, { agentId: reassignAgentID.value })
-    toast.add({ severity: 'success', summary: 'Bridge reassigned', life: 3000 })
-    reassignVisible.value = false
+    await store.updateBridge(editing.value.id, {
+      agentId: editAgentID.value,
+      settings: {
+        allowPublicDms: editAllowPublicDMs.value,
+        publicSessionTtlSeconds: editTTLNever.value ? 0 : ttlToSeconds(editTTLAmount.value, editTTLUnit.value),
+        publicSessionMode: editSessionMode.value,
+      },
+    })
+    toast.add({ severity: 'success', summary: 'Bridge updated', life: 3000 })
+    editVisible.value = false
   } catch (err: any) {
-    toast.add({ severity: 'error', summary: err.response?.data?.error || 'Reassign failed', life: 5000 })
+    toast.add({ severity: 'error', summary: err.response?.data?.error || 'Update failed', life: 5000 })
   }
 }
 
@@ -166,7 +222,7 @@ function confirmDelete(bridge: { id: string; name: string }) {
       <Column header="Actions">
         <template #body="{ data }">
           <div style="display: flex; gap: 0.25rem">
-            <Button v-if="canReassign(data)" icon="pi pi-user-edit" severity="secondary" text rounded v-tooltip.top="'Reassign agent'" @click="openReassign(data)" />
+            <Button v-if="canReassign(data)" icon="pi pi-pencil" severity="secondary" text rounded v-tooltip.top="'Edit bridge'" @click="openEdit(data)" />
             <Button v-if="canDelete(data)" icon="pi pi-trash" severity="danger" text rounded @click="confirmDelete(data)" />
           </div>
         </template>
@@ -199,17 +255,16 @@ function confirmDelete(bridge: { id: string; name: string }) {
       </template>
     </Dialog>
 
-    <!-- Reassign dialog -->
-    <Dialog v-model:visible="reassignVisible" :header="`Reassign ${reassigning?.name ?? 'bridge'}`" modal style="width: 28rem">
-      <div style="display: flex; flex-direction: column; gap: 1rem; padding-top: 0.5rem">
-        <p style="margin: 0; color: var(--p-text-muted-color); font-size: 0.85rem">
-          Forward incoming messages to a different agent. The running poller reloads immediately.
-        </p>
+    <!-- Edit dialog (agent reassignment + per-bridge settings) -->
+    <Dialog v-model:visible="editVisible" :header="`Edit ${editing?.name ?? 'bridge'}`" modal style="width: 30rem">
+      <div style="display: flex; flex-direction: column; gap: 1.25rem; padding-top: 0.5rem">
+
+        <!-- Agent binding -->
         <div style="display: flex; flex-direction: column; gap: 0.25rem">
-          <label for="reassignAgent">Agent</label>
+          <label for="editAgent">Agent</label>
           <Select
-            id="reassignAgent"
-            v-model="reassignAgentID"
+            id="editAgent"
+            v-model="editAgentID"
             :options="agentsStore.agents"
             optionLabel="name"
             optionValue="id"
@@ -219,12 +274,76 @@ function confirmDelete(bridge: { id: string; name: string }) {
             showClear
             style="width: 100%"
           />
-          <small style="color: var(--p-text-muted-color)">Clearing makes this a system bridge (admin only).</small>
+          <small style="color: var(--p-text-muted-color)">
+            Clearing unbinds this bridge — credentials stay so you can reassign it later.
+          </small>
         </div>
+
+        <!-- Public DMs -->
+        <div style="display: flex; flex-direction: column; gap: 0.5rem; border-top: 1px solid var(--p-surface-200); padding-top: 1rem">
+          <div style="display: flex; align-items: center; justify-content: space-between; gap: 1rem">
+            <div>
+              <div style="font-weight: 600">Allow public DMs</div>
+              <small style="color: var(--p-text-muted-color)">
+                Unauthenticated users can chat with the bot at public access. <code>/auth</code> still works either way.
+              </small>
+            </div>
+            <ToggleSwitch v-model="editAllowPublicDMs" />
+          </div>
+        </div>
+
+        <!-- Public session mode -->
+        <div style="display: flex; flex-direction: column; gap: 0.5rem; border-top: 1px solid var(--p-surface-200); padding-top: 1rem">
+          <div style="font-weight: 600">Public session mode</div>
+          <Select
+            v-model="editSessionMode"
+            :options="sessionModes"
+            optionLabel="label"
+            optionValue="value"
+            style="width: 100%"
+          />
+          <small style="color: var(--p-text-muted-color)">
+            {{ sessionModes.find((m) => m.value === editSessionMode)?.description }}
+          </small>
+        </div>
+
+        <!-- Public session expiry — only meaningful in session mode -->
+        <div v-if="editSessionMode === 'session'" style="display: flex; flex-direction: column; gap: 0.5rem; border-top: 1px solid var(--p-surface-200); padding-top: 1rem">
+          <div style="display: flex; align-items: center; justify-content: space-between; gap: 1rem">
+            <div>
+              <div style="font-weight: 600">Public session expiry</div>
+              <small style="color: var(--p-text-muted-color)">
+                Idle public conversations are finalized and cleared. Authed conversations are unaffected.
+              </small>
+            </div>
+            <div style="display: flex; align-items: center; gap: 0.5rem; white-space: nowrap">
+              <span style="font-size: 0.85rem; color: var(--p-text-muted-color)">Never</span>
+              <ToggleSwitch v-model="editTTLNever" />
+            </div>
+          </div>
+          <div v-if="!editTTLNever" style="display: flex; gap: 0.5rem; align-items: center">
+            <InputNumber
+              v-model="editTTLAmount"
+              :min="1"
+              :max="999"
+              showButtons
+              style="flex: 0 0 8rem"
+              inputStyle="width: 100%"
+            />
+            <Select
+              v-model="editTTLUnit"
+              :options="ttlUnits"
+              optionLabel="label"
+              optionValue="value"
+              style="flex: 1"
+            />
+          </div>
+        </div>
+
       </div>
       <template #footer>
-        <Button label="Cancel" severity="secondary" text @click="reassignVisible = false" />
-        <Button label="Save" @click="onReassign" />
+        <Button label="Cancel" severity="secondary" text @click="editVisible = false" />
+        <Button label="Save" @click="onEdit" />
       </template>
     </Dialog>
   </div>
