@@ -18,6 +18,7 @@ type ScaffoldData struct {
 	Module          string // Go module name for the agent (typically "agent")
 	GoVersion       string // e.g., "1.24"
 	AgentSDKVersion string // displayed in the agent's go.mod require line (informational — replace directives are unconditional)
+	AgentBaseImage  string // runtime base image referenced by the agent's Dockerfile (FROM line). Threaded from cfg.AgentBaseImage so operators can pin it (typically a versioned ghcr ref).
 }
 
 // templateFile maps a template name to its output path relative to the target directory.
@@ -47,6 +48,9 @@ var emptyDirs = []string{
 func GenerateDockerfile(dir string, data ScaffoldData) error {
 	if data.AgentSDKVersion == "" {
 		return fmt.Errorf("scaffold: AgentSDKVersion is required")
+	}
+	if data.AgentBaseImage == "" {
+		return fmt.Errorf("scaffold: AgentBaseImage is required")
 	}
 	tmpl, err := template.New("Dockerfile.tmpl").
 		Option("missingkey=error").

@@ -73,10 +73,11 @@ func (b *BuildService) WarmBuildCache(ctx context.Context) {
 
 	// Materialize a real scaffold — same templates as actual agent builds.
 	if err := scaffold.Materialize(dir, scaffold.ScaffoldData{
-		AgentID:   "cache-warm",
-		Module:    "agent",
+		AgentID:         "cache-warm",
+		Module:          "agent",
 		GoVersion:       "1.26",
 		AgentSDKVersion: "v" + agentsdk.Version,
+		AgentBaseImage:  b.cfg.AgentBaseImage,
 	}); err != nil {
 		b.logger.Warn("warm cache: scaffold", zap.Error(err))
 		return
@@ -84,10 +85,11 @@ func (b *BuildService) WarmBuildCache(ctx context.Context) {
 
 	// Generate Dockerfile from current template (not part of scaffold anymore).
 	if err := scaffold.GenerateDockerfile(dir, scaffold.ScaffoldData{
-		AgentID:   "cache-warm",
-		Module:    "agent",
+		AgentID:         "cache-warm",
+		Module:          "agent",
 		GoVersion:       "1.26",
 		AgentSDKVersion: "v" + agentsdk.Version,
+		AgentBaseImage:  b.cfg.AgentBaseImage,
 	}); err != nil {
 		b.logger.Warn("warm cache: generate Dockerfile", zap.Error(err))
 		return
@@ -156,6 +158,7 @@ func (b *BuildService) WarmRuntimeCaches(ctx context.Context) {
 		Module:          "agent",
 		GoVersion:       "1.26",
 		AgentSDKVersion: "v" + agentsdk.Version,
+		AgentBaseImage:  b.cfg.AgentBaseImage,
 	}); err != nil {
 		b.logger.Warn("warm runtime caches: scaffold", zap.Error(err))
 		return
