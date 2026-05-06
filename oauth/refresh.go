@@ -72,33 +72,36 @@ func (j *RefreshJob) refreshOnce(ctx context.Context) {
 			continue
 		}
 
+		fields := []zap.Field{
+			zap.String("kind", "connection"),
+			zap.String("agent", conn.AgentSlug),
+			zap.String("slug", conn.Slug),
+		}
 		connRef := "connection/" + uuid.UUID(conn.ID.Bytes).String()
 		clientID, err := j.encryptor.Get(ctx, connRef+"/client_id", conn.ClientID)
 		if err != nil {
-			j.logger.Error("decrypt client_id failed", zap.String("agent", conn.AgentSlug), zap.String("slug", conn.Slug), zap.Error(err))
+			j.logger.Error("decrypt client_id failed", append(fields, zap.Error(err))...)
 			continue
 		}
 		clientSecret, err := j.encryptor.Get(ctx, connRef+"/client_secret", conn.ClientSecret)
 		if err != nil {
-			j.logger.Error("decrypt client_secret failed", zap.String("agent", conn.AgentSlug), zap.String("slug", conn.Slug), zap.Error(err))
+			j.logger.Error("decrypt client_secret failed", append(fields, zap.Error(err))...)
 			continue
 		}
 		refreshToken, err := j.encryptor.Get(ctx, connRef+"/refresh_token", conn.RefreshToken)
 		if err != nil {
-			j.logger.Error("decrypt refresh_token failed", zap.String("agent", conn.AgentSlug), zap.String("slug", conn.Slug), zap.Error(err))
+			j.logger.Error("decrypt refresh_token failed", append(fields, zap.Error(err))...)
 			continue
 		}
 
 		tokenResp, err := j.client.RefreshToken(ctx, conn.TokenUrl, refreshToken, clientID, clientSecret)
 		if err != nil {
-			j.logger.Warn("token refresh failed",
-				zap.String("agent", conn.AgentSlug), zap.String("slug", conn.Slug),
-				zap.Error(err))
+			j.logger.Warn("token refresh failed", append(fields, zap.Error(err))...)
 
 			// If provider revoked the refresh token, clear credentials so proxy returns 402.
 			var oauthErr *OAuthError
 			if errors.As(err, &oauthErr) && oauthErr.Code == "invalid_grant" {
-				j.logger.Info("refresh token revoked, clearing credentials", zap.String("agent", conn.AgentSlug), zap.String("slug", conn.Slug))
+				j.logger.Info("refresh token revoked, clearing credentials", fields...)
 				_ = q.ClearConnectionCredentials(ctx, dbq.ClearConnectionCredentialsParams{
 					AgentID: conn.AgentID,
 					Slug:    conn.Slug,
@@ -109,7 +112,7 @@ func (j *RefreshJob) refreshOnce(ctx context.Context) {
 
 		encAccessToken, err := j.encryptor.Put(ctx, connRef+"/access_token", tokenResp.AccessToken)
 		if err != nil {
-			j.logger.Error("encrypt access token failed", zap.String("agent", conn.AgentSlug), zap.String("slug", conn.Slug), zap.Error(err))
+			j.logger.Error("encrypt access token failed", append(fields, zap.Error(err))...)
 			continue
 		}
 
@@ -118,7 +121,7 @@ func (j *RefreshJob) refreshOnce(ctx context.Context) {
 		if tokenResp.RefreshToken != "" {
 			encRefresh, err = j.encryptor.Put(ctx, connRef+"/refresh_token", tokenResp.RefreshToken)
 			if err != nil {
-				j.logger.Error("encrypt refresh token failed", zap.String("agent", conn.AgentSlug), zap.String("slug", conn.Slug), zap.Error(err))
+				j.logger.Error("encrypt refresh token failed", append(fields, zap.Error(err))...)
 				continue
 			}
 		}
@@ -138,11 +141,11 @@ func (j *RefreshJob) refreshOnce(ctx context.Context) {
 			TokenExpiresAt: expiresAt,
 			RefreshToken:   encRefresh,
 		}); err != nil {
-			j.logger.Error("update credentials after refresh failed", zap.String("agent", conn.AgentSlug), zap.String("slug", conn.Slug), zap.Error(err))
+			j.logger.Error("update credentials after refresh failed", append(fields, zap.Error(err))...)
 			continue
 		}
 
-		j.logger.Info("token refreshed", zap.String("agent", conn.AgentSlug), zap.String("slug", conn.Slug))
+		j.logger.Info("token refreshed", fields...)
 	}
 
 	// Refresh expiring MCP server tokens (same logic, different table).
@@ -155,29 +158,34 @@ func (j *RefreshJob) refreshOnce(ctx context.Context) {
 			continue
 		}
 
+		fields := []zap.Field{
+			zap.String("kind", "mcp"),
+			zap.String("agent", srv.AgentSlug),
+			zap.String("slug", srv.Slug),
+		}
 		srvRef := "mcp/" + uuid.UUID(srv.ID.Bytes).String()
 		clientID, err := j.encryptor.Get(ctx, srvRef+"/client_id", srv.ClientID)
 		if err != nil {
-			j.logger.Error("decrypt MCP client_id failed", zap.String("slug", srv.Slug), zap.Error(err))
+			j.logger.Error("decrypt client_id failed", append(fields, zap.Error(err))...)
 			continue
 		}
 		clientSecret, err := j.encryptor.Get(ctx, srvRef+"/client_secret", srv.ClientSecret)
 		if err != nil {
-			j.logger.Error("decrypt MCP client_secret failed", zap.String("slug", srv.Slug), zap.Error(err))
+			j.logger.Error("decrypt client_secret failed", append(fields, zap.Error(err))...)
 			continue
 		}
 		refreshToken, err := j.encryptor.Get(ctx, srvRef+"/refresh_token", srv.RefreshToken)
 		if err != nil {
-			j.logger.Error("decrypt MCP refresh_token failed", zap.String("slug", srv.Slug), zap.Error(err))
+			j.logger.Error("decrypt refresh_token failed", append(fields, zap.Error(err))...)
 			continue
 		}
 
 		tokenResp, err := j.client.RefreshToken(ctx, srv.TokenUrl, refreshToken, clientID, clientSecret)
 		if err != nil {
-			j.logger.Warn("MCP token refresh failed", zap.String("slug", srv.Slug), zap.Error(err))
+			j.logger.Warn("token refresh failed", append(fields, zap.Error(err))...)
 			var oauthErr *OAuthError
 			if errors.As(err, &oauthErr) && oauthErr.Code == "invalid_grant" {
-				j.logger.Info("MCP refresh token revoked, clearing credentials", zap.String("slug", srv.Slug))
+				j.logger.Info("refresh token revoked, clearing credentials", fields...)
 				_ = q.ClearMCPServerCredentials(ctx, dbq.ClearMCPServerCredentialsParams{
 					AgentID: srv.AgentID,
 					Slug:    srv.Slug,
@@ -188,7 +196,7 @@ func (j *RefreshJob) refreshOnce(ctx context.Context) {
 
 		encAccessToken, err := j.encryptor.Put(ctx, srvRef+"/access_token", tokenResp.AccessToken)
 		if err != nil {
-			j.logger.Error("encrypt MCP access token failed", zap.String("slug", srv.Slug), zap.Error(err))
+			j.logger.Error("encrypt access token failed", append(fields, zap.Error(err))...)
 			continue
 		}
 
@@ -196,7 +204,7 @@ func (j *RefreshJob) refreshOnce(ctx context.Context) {
 		if tokenResp.RefreshToken != "" {
 			encRefresh, err = j.encryptor.Put(ctx, srvRef+"/refresh_token", tokenResp.RefreshToken)
 			if err != nil {
-				j.logger.Error("encrypt MCP refresh token failed", zap.String("slug", srv.Slug), zap.Error(err))
+				j.logger.Error("encrypt refresh token failed", append(fields, zap.Error(err))...)
 				continue
 			}
 		}
@@ -216,11 +224,11 @@ func (j *RefreshJob) refreshOnce(ctx context.Context) {
 			TokenExpiresAt: expiresAt,
 			RefreshToken:   encRefresh,
 		}); err != nil {
-			j.logger.Error("update MCP credentials after refresh failed", zap.String("slug", srv.Slug), zap.Error(err))
+			j.logger.Error("update credentials after refresh failed", append(fields, zap.Error(err))...)
 			continue
 		}
 
-		j.logger.Info("MCP token refreshed", zap.String("slug", srv.Slug))
+		j.logger.Info("token refreshed", fields...)
 	}
 
 	// Cleanup expired OAuth states.

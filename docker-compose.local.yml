@@ -1,0 +1,32 @@
+# Laptop-test overlay. Use with:
+#
+#   cp .env.local.example .env
+#   docker compose -f docker-compose.yml -f docker-compose.local.yml up -d
+#
+# Differences from the production stack:
+#   - DOMAIN is fixed to airlock.traefik.me. *.traefik.me resolves to
+#     127.0.0.1 via public DNS, so per-agent subdomains route to your
+#     machine without any DNS or /etc/hosts work.
+#   - Caddy uses its built-in local CA (`tls internal`). No Let's
+#     Encrypt, no rate limits. First visit to a subdomain shows a
+#     browser warning until you trust the local CA — see
+#     .env.local.example for the trust snippet.
+#   - Caddy reads Caddyfile.local instead of Caddyfile (selected via
+#     a command override so we don't have to override the bind mount).
+#
+# Everything else (postgres, rustfs, airlock, frontend, agent-builder,
+# agent-base) is identical to prod.
+
+services:
+  caddy:
+    command: caddy run --config /etc/caddy/Caddyfile.local --adapter caddyfile
+    volumes:
+      - ./Caddyfile.local:/etc/caddy/Caddyfile.local:ro
+
+  airlock:
+    environment:
+      # s3.airlock.traefik.me resolves to 127.0.0.1, so LLM providers
+      # (OpenAI, Anthropic, …) can't reach a presigned URL from the
+      # public internet. Force base64 delivery so attachments flow
+      # inline in the request body instead.
+      FORCE_INLINE_ATTACHMENTS: "true"

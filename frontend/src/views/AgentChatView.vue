@@ -26,20 +26,6 @@ const uploading = ref(false)
 let topObserver: IntersectionObserver | null = null
 let bottomObserver: IntersectionObserver | null = null
 
-// Per-second clock used to derive the streaming-bubble countdown
-// (`chat.runDeadlineMs - now`). Plain ref + setInterval is enough — Vue
-// only re-renders the affected node, not the whole tree.
-const now = ref(Date.now())
-let countdownTimer: ReturnType<typeof setInterval> | null = null
-const runCountdown = computed(() => {
-  if (!chat.runDeadlineMs) return ''
-  const remaining = Math.max(0, chat.runDeadlineMs - now.value)
-  const totalSec = Math.ceil(remaining / 1000)
-  const m = Math.floor(totalSec / 60)
-  const s = totalSec % 60
-  return `${m}:${s.toString().padStart(2, '0')}`
-})
-
 onMounted(async () => {
   // WS subscriptions are server-driven — the socket auto-subscribes to every
   // agent this user is a member of at connect time. No client subscribe call.
@@ -51,13 +37,11 @@ onMounted(async () => {
   }
   scrollToBottom()
   setupSentinelObservers()
-  countdownTimer = setInterval(() => { now.value = Date.now() }, 1000)
 })
 
 onUnmounted(() => {
   topObserver?.disconnect()
   bottomObserver?.disconnect()
-  if (countdownTimer) clearInterval(countdownTimer)
   chat.cleanup()
 })
 
@@ -514,30 +498,14 @@ function formatTokens(n: number): string {
               </template>
             </div>
             <div v-if="chat.streamingText" v-html="streamingHtml" class="chat-bubble" :style="{ marginTop: chat.activeToolCalls.size ? '0.75rem' : '0' }" />
-            <!-- Cancel + Extend controls. Hidden when a confirmation is
-                 awaiting the user (Approve/Reject is the relevant action
-                 then). Cancel optimistically flips the bubble; Extend
-                 pushes the run's deadline by 5min server-side and updates
-                 the countdown. Button disables when extensions hit 0. -->
+            <!-- Cancel button. Hidden when a confirmation is awaiting the
+                 user (Approve/Reject is the relevant action then). The run
+                 has an absolute ceiling on the server (PromptHTTPCeiling);
+                 the user cancels manually if they want to stop earlier. -->
             <div
-              v-if="!chat.pendingConfirmation"
+              v-if="!chat.pendingConfirmation && chat.currentRunId"
               :style="{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: '0.5rem', marginTop: '0.5rem' }"
             >
-              <span
-                v-if="chat.runDeadlineMs"
-                :style="{ fontSize: '0.8rem', color: 'var(--p-text-muted-color)' }"
-              >
-                Auto-cancel in {{ runCountdown }}
-              </span>
-              <Button
-                v-if="chat.runDeadlineMs"
-                :label="`Extend +5min (${chat.extensionsRemaining})`"
-                severity="secondary"
-                size="small"
-                :disabled="chat.extensionsRemaining <= 0"
-                :loading="chat.extending"
-                @click="chat.extendRun"
-              />
               <Button
                 label="Cancel"
                 severity="secondary"

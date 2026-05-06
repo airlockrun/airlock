@@ -417,32 +417,25 @@ func runServe(_ []string) {
 		}
 	}()
 
-	// Stuck-run sweeper — runs that have been in 'running' status past the
-	// outer dispatcher timeout (2:15) plus a 15s grace are presumed dead.
-	// Mark them error/agent-disconnected, synthesize orphan tool_results
-	// (so the next LLM turn doesn't 400 on unpaired tool_use), and publish
-	// a synthetic run.complete WS event so any live UI that was watching
-	// this run unblocks. If the agent's r.Complete eventually arrives,
-	// UpsertRunComplete is idempotent and the late truth overwrites with
-	// the actual outcome — frontend re-paints. Tick frequency keeps the
-	// user-visible "stuck" window short without hammering the DB.
-	//
-	// Skip runs the dispatcher still tracks in memory: extended runs can
-	// legitimately live well past the base 2:30 cutoff (up to MaxExtensions
-	// × ExtendIncrement past start). The dispatcher's own deadline timer
-	// will eventually fire and tear them down through the normal cancel
-	// path. Orphan extended runs (airlock restart loses memory state) fall
-	// through the in-memory check and get reaped at the base threshold —
-	// matches "user lost their session anyway."
+	// Stuck-run sweeper — runs in 'running' status older than the absolute
+	// HTTP ceiling are presumed orphaned (airlock restart, agent crash mid-
+	// stream, network partition). Skip runs the dispatcher still tracks in
+	// memory: those will tear down naturally when the cancel context fires
+	// or the user clicks Cancel. Synthesize orphan tool_results so the next
+	// LLM turn doesn't 400 on unpaired tool_use, and publish a synthetic
+	// run.complete WS event so any live UI that was watching unblocks. If
+	// the agent's r.Complete eventually arrives, UpsertRunComplete is
+	// idempotent and the late truth overwrites — frontend re-paints.
 	go func() {
 		sweepLogger := logger.Named("stuck-run-sweeper")
-		ticker := time.NewTicker(30 * time.Second)
+		ticker := time.NewTicker(time.Minute)
 		defer ticker.Stop()
 		q := dbq.New(database.Pool())
+		stuckCutoff := trigger.PromptHTTPCeiling + 30*time.Second
 		for {
 			select {
 			case <-ticker.C:
-				cutoff := pgtype.Timestamptz{Time: time.Now().Add(-(2*time.Minute + 30*time.Second)), Valid: true}
+				cutoff := pgtype.Timestamptz{Time: time.Now().Add(-stuckCutoff), Valid: true}
 				stuck, err := q.ListStuckRuns(ctx, cutoff)
 				if err != nil {
 					sweepLogger.Error("list stuck runs", zap.Error(err))

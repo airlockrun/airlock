@@ -2,7 +2,6 @@ package api
 
 import (
 	"encoding/json"
-	"errors"
 	"net/http"
 	"time"
 
@@ -11,7 +10,6 @@ import (
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/airlockrun/airlock/storage"
-	"github.com/airlockrun/airlock/trigger"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -24,7 +22,6 @@ import (
 // up containers, DB, encryptor, etc. The real Dispatcher satisfies it.
 type runDispatcher interface {
 	CancelRun(runID uuid.UUID) bool
-	ExtendRun(runID uuid.UUID, by time.Duration) (time.Time, int, error)
 }
 
 type runsHandler struct {
@@ -178,43 +175,6 @@ func (h *runsHandler) CancelRun(w http.ResponseWriter, r *http.Request) {
 	})
 
 	w.WriteHeader(http.StatusNoContent)
-}
-
-// ExtendRun handles POST /api/v1/runs/{runID}/extend. Pushes the
-// dispatcher's per-run deadline timer by trigger.ExtendIncrement, up to
-// trigger.MaxExtensions times. The server picks the increment so a
-// malicious client can't request multi-hour extensions; clients just call
-// repeatedly until extensions_remaining hits 0.
-func (h *runsHandler) ExtendRun(w http.ResponseWriter, r *http.Request) {
-	runID, err := parseUUID(chi.URLParam(r, "runID"))
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid run ID")
-		return
-	}
-
-	if h.dispatcher == nil {
-		writeError(w, http.StatusServiceUnavailable, "dispatcher unavailable")
-		return
-	}
-
-	deadline, remaining, err := h.dispatcher.ExtendRun(runID, trigger.ExtendIncrement)
-	switch {
-	case errors.Is(err, trigger.ErrRunNotInFlight):
-		writeError(w, http.StatusNotFound, "run not in flight")
-		return
-	case errors.Is(err, trigger.ErrExtensionCeiling):
-		writeError(w, http.StatusConflict, "max extensions reached")
-		return
-	case err != nil:
-		h.logger.Error("extend run", zap.String("run_id", runID.String()), zap.Error(err))
-		writeError(w, http.StatusInternalServerError, "extend failed")
-		return
-	}
-
-	writeProto(w, http.StatusOK, &airlockv1.ExtendRunResponse{
-		DeadlineMs:          deadline.UnixMilli(),
-		ExtensionsRemaining: int32(remaining),
-	})
 }
 
 // --- helpers ---

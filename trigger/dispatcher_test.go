@@ -3,7 +3,6 @@ package trigger
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"sort"
@@ -155,17 +154,14 @@ func TestForwardReturnsErrorOnBadStatus(t *testing.T) {
 	}
 }
 
-// --- Cancel / Extend / InFlight registry tests ---
-//
-// These exercise the in-memory state machine directly via the unexported
-// registerInFlight helper, sidestepping container + DB setup.
+// --- Cancel / InFlight registry tests ---
 
 func TestCancelRun_FiresAndDeregisters(t *testing.T) {
 	d := newTestDispatcher()
 	runID := uuid.New()
 
 	ctx, cancel := context.WithCancel(context.Background())
-	d.registerInFlight(runID, cancel, false)
+	d.registerInFlight(runID, cancel)
 
 	if !d.CancelRun(runID) {
 		t.Fatal("CancelRun returned false for registered run")
@@ -189,122 +185,6 @@ func TestCancelRun_UnknownIsNoop(t *testing.T) {
 	}
 }
 
-func TestExtendRun_PushesDeadlineAndDecrementsRemaining(t *testing.T) {
-	d := newTestDispatcher()
-	runID := uuid.New()
-
-	_, cancel := context.WithCancel(context.Background())
-	d.registerInFlight(runID, cancel, true)
-
-	state := d.inFlight[runID]
-	if state.timer == nil {
-		t.Fatal("extendable registration did not arm a timer")
-	}
-	originalDeadline := state.deadline
-
-	deadline, remaining, err := d.ExtendRun(runID, ExtendIncrement)
-	if err != nil {
-		t.Fatalf("ExtendRun: %v", err)
-	}
-	if !deadline.After(originalDeadline) {
-		t.Errorf("deadline did not advance: was %v, got %v", originalDeadline, deadline)
-	}
-	if remaining != MaxExtensions-1 {
-		t.Errorf("remaining = %d, want %d", remaining, MaxExtensions-1)
-	}
-	if state.extends != 1 {
-		t.Errorf("extends = %d, want 1", state.extends)
-	}
-	// Cleanup.
-	d.CancelRun(runID)
-}
-
-func TestExtendRun_HitsCeiling(t *testing.T) {
-	d := newTestDispatcher()
-	runID := uuid.New()
-	_, cancel := context.WithCancel(context.Background())
-	d.registerInFlight(runID, cancel, true)
-
-	for i := 0; i < MaxExtensions; i++ {
-		_, remaining, err := d.ExtendRun(runID, ExtendIncrement)
-		if err != nil {
-			t.Fatalf("extend %d: %v", i, err)
-		}
-		want := MaxExtensions - 1 - i
-		if remaining != want {
-			t.Errorf("after extend %d: remaining = %d, want %d", i, remaining, want)
-		}
-	}
-	// One past ceiling.
-	_, _, err := d.ExtendRun(runID, ExtendIncrement)
-	if !errors.Is(err, ErrExtensionCeiling) {
-		t.Errorf("ceiling extend: err = %v, want ErrExtensionCeiling", err)
-	}
-	// State should be untouched after the ceiling rejection.
-	if got := d.inFlight[runID].extends; got != MaxExtensions {
-		t.Errorf("extends after ceiling = %d, want %d", got, MaxExtensions)
-	}
-	d.CancelRun(runID)
-}
-
-func TestExtendRun_UnknownReturnsNotInFlight(t *testing.T) {
-	d := newTestDispatcher()
-	_, _, err := d.ExtendRun(uuid.New(), ExtendIncrement)
-	if !errors.Is(err, ErrRunNotInFlight) {
-		t.Errorf("err = %v, want ErrRunNotInFlight", err)
-	}
-}
-
-func TestExtendRun_AfterCancelReturnsNotInFlight(t *testing.T) {
-	d := newTestDispatcher()
-	runID := uuid.New()
-	_, cancel := context.WithCancel(context.Background())
-	d.registerInFlight(runID, cancel, true)
-	d.CancelRun(runID)
-
-	_, _, err := d.ExtendRun(runID, ExtendIncrement)
-	if !errors.Is(err, ErrRunNotInFlight) {
-		t.Errorf("err = %v, want ErrRunNotInFlight", err)
-	}
-}
-
-func TestExtendRun_NonExtendableReturnsNotInFlight(t *testing.T) {
-	d := newTestDispatcher()
-	runID := uuid.New()
-	_, cancel := context.WithCancel(context.Background())
-	// extendable=false: cron/webhook path. Cancel works, Extend doesn't.
-	d.registerInFlight(runID, cancel, false)
-
-	_, _, err := d.ExtendRun(runID, ExtendIncrement)
-	if !errors.Is(err, ErrRunNotInFlight) {
-		t.Errorf("err = %v, want ErrRunNotInFlight (no timer = no extend)", err)
-	}
-	d.CancelRun(runID) // cleanup
-}
-
-func TestExtendRun_AfterTimerFiredReturnsNotInFlight(t *testing.T) {
-	// Simulates the race where the deadline timer fires (cancelling the
-	// request) just before the user clicks Extend. timer.Stop returns false,
-	// ExtendRun should fail closed rather than schedule a fresh fire on a
-	// request that's already dying.
-	d := newTestDispatcher()
-	runID := uuid.New()
-
-	ctx, cancel := context.WithCancel(context.Background())
-	d.registerInFlight(runID, cancel, true)
-	state := d.inFlight[runID]
-
-	// Force the timer to fire immediately by resetting it to ~0.
-	state.timer.Reset(1 * time.Millisecond)
-	// Wait for the timer to fire and cancel ctx.
-	<-ctx.Done()
-
-	_, _, err := d.ExtendRun(runID, ExtendIncrement)
-	if !errors.Is(err, ErrRunNotInFlight) {
-		t.Errorf("err = %v, want ErrRunNotInFlight after timer fired", err)
-	}
-}
-
 func TestInFlightIDs_SnapshotsCurrentSet(t *testing.T) {
 	d := newTestDispatcher()
 	if got := d.InFlightIDs(); len(got) != 0 {
@@ -315,9 +195,9 @@ func TestInFlightIDs_SnapshotsCurrentSet(t *testing.T) {
 	_, c1 := context.WithCancel(context.Background())
 	_, c2 := context.WithCancel(context.Background())
 	_, c3 := context.WithCancel(context.Background())
-	d.registerInFlight(id1, c1, true)
-	d.registerInFlight(id2, c2, false)
-	d.registerInFlight(id3, c3, true)
+	d.registerInFlight(id1, c1)
+	d.registerInFlight(id2, c2)
+	d.registerInFlight(id3, c3)
 
 	got := d.InFlightIDs()
 	if len(got) != 3 {
@@ -347,29 +227,14 @@ func TestInFlightIDs_SnapshotsCurrentSet(t *testing.T) {
 	d.CancelRun(id3)
 }
 
-func TestDeregisterInFlight_StopsTimerForExtendableRun(t *testing.T) {
-	// When the response body closes naturally, deregisterInFlight should
-	// stop the deadline timer so it doesn't fire later (harmless but
-	// pointless background goroutine).
+func TestDeregisterInFlight_RemovesEntry(t *testing.T) {
 	d := newTestDispatcher()
 	runID := uuid.New()
-	ctx, cancel := context.WithCancel(context.Background())
-	d.registerInFlight(runID, cancel, true)
-	state := d.inFlight[runID]
+	_, cancel := context.WithCancel(context.Background())
+	d.registerInFlight(runID, cancel)
 
 	d.deregisterInFlight(runID)
 	if _, still := d.inFlight[runID]; still {
 		t.Error("entry still present after deregister")
-	}
-	// Push the timer well into the past; if Stop didn't fire on
-	// deregister, this would have already triggered cancel. Verify ctx
-	// is still alive.
-	state.timer.Reset(10 * time.Millisecond)
-	time.Sleep(30 * time.Millisecond)
-	if ctx.Err() != nil {
-		// Acceptable: Stop already fired so the Reset above re-armed it.
-		// What we actually care about is that the production path's
-		// natural close doesn't leave a live timer pointing at a dead
-		// cancel, which the deregister proves by removing the entry.
 	}
 }

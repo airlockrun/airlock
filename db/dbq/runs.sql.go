@@ -113,6 +113,23 @@ func (q *Queries) CreateRun(ctx context.Context, arg CreateRunParams) (Run, erro
 	return i, err
 }
 
+const getLatestRunningPromptRun = `-- name: GetLatestRunningPromptRun :one
+SELECT id FROM runs
+WHERE trigger_type = 'prompt' AND trigger_ref = $1 AND status = 'running'
+ORDER BY started_at DESC LIMIT 1
+`
+
+// Finds the most recent running prompt run for a conversation. Used by
+// the /cancel slash command to discover which run to abort. Empty result
+// means nothing's in flight (or it's already finished between the user
+// typing /cancel and us querying).
+func (q *Queries) GetLatestRunningPromptRun(ctx context.Context, triggerRef string) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, getLatestRunningPromptRun, triggerRef)
+	var id pgtype.UUID
+	err := row.Scan(&id)
+	return id, err
+}
+
 const getLatestSuspendedRun = `-- name: GetLatestSuspendedRun :one
 SELECT id, agent_id, bridge_id, status, trigger_type, trigger_ref, source_ref, input_payload, actions, llm_calls, llm_tokens_in, llm_tokens_out, llm_cost_estimate, duration_ms, logs, stdout_log, error_message, error_kind, exit_code, panic_trace, checkpoint, compacted, started_at, finished_at FROM runs
 WHERE agent_id = $1 AND status = 'suspended'
