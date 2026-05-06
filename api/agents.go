@@ -14,9 +14,9 @@ import (
 	"github.com/airlockrun/airlock/builder"
 	"github.com/airlockrun/airlock/container"
 	"github.com/airlockrun/airlock/convert"
-	"github.com/airlockrun/airlock/crypto"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
+	"github.com/airlockrun/airlock/secrets"
 	"github.com/airlockrun/airlock/trigger"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -35,7 +35,7 @@ type agentsHandler struct {
 	db          *db.DB
 	builder     *builder.BuildService
 	dispatcher  *trigger.Dispatcher
-	encryptor   *crypto.Encryptor
+	encryptor   secrets.Store
 	containers  container.ContainerManager
 	promptProxy *trigger.PromptProxy
 	bridgeMgr   bridgePollerCanceler
@@ -833,7 +833,7 @@ func agentToProto(a dbq.Agent) *airlockv1.AgentInfo {
 }
 
 func connectionToProto(c dbq.Connection, publicURL, agentID string) *airlockv1.ConnectionInfo {
-	authorized := c.Credentials != ""
+	authorized := c.AccessTokenRef != ""
 	hasOAuthApp := c.ClientID != "" && c.ClientSecret != ""
 
 	var authURL string

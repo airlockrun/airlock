@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/airlockrun/agentsdk"
@@ -61,6 +62,12 @@ func (h *agentHandler) UpsertMCPServer(w http.ResponseWriter, r *http.Request) {
 		scopes = string(b)
 	}
 
+	authInjection, err := json.Marshal(def.AuthInjection)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid auth_injection")
+		return
+	}
+
 	q := dbq.New(h.db.Pool())
 	if _, err := q.UpsertMCPServer(r.Context(), dbq.UpsertMCPServerParams{
 		AgentID:              toPgUUID(agentID),
@@ -73,6 +80,7 @@ func (h *agentHandler) UpsertMCPServer(w http.ResponseWriter, r *http.Request) {
 		RegistrationEndpoint: registrationEndpoint,
 		Scopes:               scopes,
 		Access:               string(def.Access),
+		AuthInjection:        authInjection,
 	}); err != nil {
 		h.logger.Error("upsert MCP server failed", zap.Error(err))
 		writeJSONError(w, http.StatusInternalServerError, "failed to register MCP server")
@@ -110,7 +118,7 @@ func (h *agentHandler) MCPToolCall(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// No credentials → 402.
-	if server.Credentials == "" {
+	if server.AccessTokenRef == "" {
 		writeJSON(w, http.StatusPaymentRequired, map[string]string{
 			"error":   "auth_required",
 			"slug":    server.Slug,
@@ -132,7 +140,7 @@ func (h *agentHandler) MCPToolCall(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Decrypt credentials.
-	creds, err := h.encryptor.Decrypt(server.Credentials)
+	creds, err := h.encryptor.Get(r.Context(), "mcp/"+pgUUID(server.ID).String()+"/access_token", server.AccessTokenRef)
 	if err != nil {
 		h.logger.Error("decrypt MCP credentials failed", zap.Error(err))
 		writeJSONError(w, http.StatusInternalServerError, "failed to decrypt credentials")
@@ -140,7 +148,7 @@ func (h *agentHandler) MCPToolCall(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Stateless MCP call.
-	result, err := callMCPTool(r.Context(), server.Url, creds, req)
+	result, err := callMCPTool(r.Context(), server.Url, server.AuthInjection, creds, req)
 	if err != nil {
 		h.logger.Error("MCP tool call failed", zap.String("slug", slug), zap.String("tool", req.Tool), zap.Error(err))
 		writeJSON(w, http.StatusOK, agentsdk.MCPToolCallResponse{
@@ -170,7 +178,7 @@ func (h *agentHandler) discoverAllMCPStatus(
 	var result []mcpServerStatus
 
 	for _, server := range servers {
-		if server.Credentials == "" {
+		if server.AccessTokenRef == "" {
 			result = append(result, mcpServerStatus{
 				MCPAuthStatus: agentsdk.MCPAuthStatus{
 					Slug:       server.Slug,
@@ -182,13 +190,13 @@ func (h *agentHandler) discoverAllMCPStatus(
 			continue
 		}
 
-		creds, err := h.encryptor.Decrypt(server.Credentials)
+		creds, err := h.encryptor.Get(ctx, "mcp/"+pgUUID(server.ID).String()+"/access_token", server.AccessTokenRef)
 		if err != nil {
 			h.logger.Error("decrypt MCP credentials failed", zap.String("slug", server.Slug), zap.Error(err))
 			continue
 		}
 
-		tools, err := discoverMCPTools(ctx, server.Url, creds)
+		tools, err := discoverMCPTools(ctx, server.Url, server.AuthInjection, creds)
 		if err != nil {
 			h.logger.Warn("MCP tool discovery failed", zap.String("slug", server.Slug), zap.Error(err))
 			result = append(result, mcpServerStatus{
@@ -223,8 +231,11 @@ func (h *agentHandler) discoverAllMCPStatus(
 }
 
 // callMCPTool does a stateless MCP interaction: connect → initialize → tools/call → disconnect.
-func callMCPTool(ctx context.Context, serverURL, creds string, req agentsdk.MCPToolCallRequest) (*agentsdk.MCPToolCallResponse, error) {
-	headers := map[string]string{"Authorization": "Bearer " + creds}
+func callMCPTool(ctx context.Context, serverURL string, authInjection []byte, creds string, req agentsdk.MCPToolCallRequest) (*agentsdk.MCPToolCallResponse, error) {
+	connectURL, headers, err := applyMCPAuth(serverURL, authInjection, creds)
+	if err != nil {
+		return nil, err
+	}
 
 	client := mcp.NewClient()
 	defer client.DisconnectAll()
@@ -232,7 +243,7 @@ func callMCPTool(ctx context.Context, serverURL, creds string, req agentsdk.MCPT
 	if err := client.Connect(ctx, mcp.ServerConfig{
 		Name:      "proxy",
 		Transport: "http",
-		URL:       serverURL,
+		URL:       connectURL,
 		Headers:   headers,
 	}); err != nil {
 		return nil, fmt.Errorf("MCP connect: %w", err)
@@ -272,8 +283,11 @@ func callMCPTool(ctx context.Context, serverURL, creds string, req agentsdk.MCPT
 }
 
 // discoverMCPTools connects to an MCP server, lists tools, and disconnects.
-func discoverMCPTools(ctx context.Context, serverURL, creds string) ([]mcpToolInfo, error) {
-	headers := map[string]string{"Authorization": "Bearer " + creds}
+func discoverMCPTools(ctx context.Context, serverURL string, authInjection []byte, creds string) ([]mcpToolInfo, error) {
+	connectURL, headers, err := applyMCPAuth(serverURL, authInjection, creds)
+	if err != nil {
+		return nil, err
+	}
 
 	client := mcp.NewClient()
 	defer client.DisconnectAll()
@@ -281,7 +295,7 @@ func discoverMCPTools(ctx context.Context, serverURL, creds string) ([]mcpToolIn
 	if err := client.Connect(ctx, mcp.ServerConfig{
 		Name:      "discovery",
 		Transport: "http",
-		URL:       serverURL,
+		URL:       connectURL,
 		Headers:   headers,
 	}); err != nil {
 		return nil, fmt.Errorf("MCP connect for discovery: %w", err)
@@ -314,6 +328,54 @@ type mcpToolInfo struct {
 // discoverMCPAuth runs RFC 9728/8414 discovery on an MCP server URL.
 func discoverMCPAuth(ctx context.Context, serverURL string) (*oauth.DiscoveryResult, error) {
 	return oauth.DiscoverUpstream(ctx, mcpHTTPClient, serverURL)
+}
+
+// applyMCPAuth shapes (url, headers) for an outbound MCP HTTP call given the
+// stored auth_injection config and decrypted credential. Empty creds return
+// the inputs unchanged. Empty / unset Type defaults to bearer-in-header to
+// preserve behavior for MCP servers registered before AuthInjection existed.
+func applyMCPAuth(serverURL string, authInjection []byte, creds string) (string, map[string]string, error) {
+	headers := map[string]string{}
+	if creds == "" {
+		return serverURL, headers, nil
+	}
+
+	var injection agentsdk.AuthInjection
+	if len(authInjection) > 0 {
+		_ = json.Unmarshal(authInjection, &injection)
+	}
+
+	switch injection.Type {
+	case "", agentsdk.AuthInjectBearer:
+		headers["Authorization"] = "Bearer " + creds
+	case agentsdk.AuthInjectAPIKey:
+		name := injection.Name
+		if name == "" {
+			name = "X-API-Key"
+		}
+		headers[name] = creds
+	case agentsdk.AuthInjectQueryParam:
+		u, err := url.Parse(serverURL)
+		if err != nil {
+			return "", nil, fmt.Errorf("parse MCP URL: %w", err)
+		}
+		name := injection.Name
+		if name == "" {
+			name = "token"
+		}
+		q := u.Query()
+		q.Set(name, creds)
+		u.RawQuery = q.Encode()
+		serverURL = u.String()
+	case agentsdk.AuthInjectPathPrefix:
+		u, err := url.Parse(serverURL)
+		if err != nil {
+			return "", nil, fmt.Errorf("parse MCP URL: %w", err)
+		}
+		u.Path = "/" + creds + u.Path
+		serverURL = u.String()
+	}
+	return serverURL, headers, nil
 }
 
 // buildMCPAuthURL returns an Airlock-hosted URL for users to authorize an MCP server.

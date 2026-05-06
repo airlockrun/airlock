@@ -5,9 +5,9 @@ import (
 	"sort"
 
 	"github.com/airlockrun/airlock/convert"
-	"github.com/airlockrun/airlock/crypto"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
+	"github.com/airlockrun/airlock/secrets"
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -17,10 +17,10 @@ import (
 
 type ProvidersHandler struct {
 	db  *db.DB
-	enc *crypto.Encryptor
+	enc secrets.Store
 }
 
-func NewProvidersHandler(database *db.DB, enc *crypto.Encryptor) *ProvidersHandler {
+func NewProvidersHandler(database *db.DB, enc secrets.Store) *ProvidersHandler {
 	return &ProvidersHandler{db: database, enc: enc}
 }
 
@@ -44,7 +44,7 @@ func (h *ProvidersHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	encrypted, err := h.enc.Encrypt(req.ApiKey)
+	encrypted, err := h.enc.Put(r.Context(), "provider/"+req.ProviderId+"/api_key", req.ApiKey)
 	if err != nil {
 		logFor(r).Error("encrypt api key failed", zap.Error(err))
 		writeError(w, http.StatusInternalServerError, "failed to encrypt api key")
@@ -81,7 +81,7 @@ func (h *ProvidersHandler) List(w http.ResponseWriter, r *http.Request) {
 
 	out := make([]*airlockv1.Provider, len(providers))
 	for i, p := range providers {
-		decrypted, err := h.enc.Decrypt(p.ApiKey)
+		decrypted, err := h.enc.Get(r.Context(), "provider/"+p.ProviderID+"/api_key", p.ApiKey)
 		if err != nil {
 			logFor(r).Error("decrypt api key failed", zap.Error(err), zap.String("provider", p.ProviderID))
 			decrypted = "****"
@@ -112,7 +112,7 @@ func (h *ProvidersHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if req.ApiKey != "" {
-		encrypted, err := h.enc.Encrypt(req.ApiKey)
+		encrypted, err := h.enc.Put(r.Context(), "provider/"+id.String()+"/api_key", req.ApiKey)
 		if err != nil {
 			logFor(r).Error("encrypt api key failed", zap.Error(err))
 			writeError(w, http.StatusInternalServerError, "failed to encrypt api key")
@@ -135,7 +135,7 @@ func (h *ProvidersHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	decrypted, err := h.enc.Decrypt(p.ApiKey)
+	decrypted, err := h.enc.Get(r.Context(), "provider/"+p.ProviderID+"/api_key", p.ApiKey)
 	if err != nil {
 		decrypted = "****"
 	}

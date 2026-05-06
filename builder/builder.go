@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -18,10 +17,10 @@ import (
 	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/config"
 	"github.com/airlockrun/airlock/container"
-	"github.com/airlockrun/airlock/crypto"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/airlockrun/airlock/scaffold"
+	"github.com/airlockrun/airlock/secrets"
 	"github.com/airlockrun/goai/tool"
 	sol "github.com/airlockrun/sol"
 	"github.com/google/uuid"
@@ -48,7 +47,7 @@ type BuildService struct {
 	cfg              *config.Config
 	db               *db.DB
 	containers       container.ContainerManager
-	encryptor        *crypto.Encryptor
+	encryptor        secrets.Store
 	events           EventPublisher
 	upgradeNotifier  PostUpgradeNotifier
 	logger           *zap.Logger
@@ -67,7 +66,7 @@ type buildHandle struct {
 }
 
 // New creates a BuildService. Panics if any dependency is nil.
-func New(cfg *config.Config, database *db.DB, containers container.ContainerManager, encryptor *crypto.Encryptor, logger *zap.Logger) *BuildService {
+func New(cfg *config.Config, database *db.DB, containers container.ContainerManager, encryptor secrets.Store, logger *zap.Logger) *BuildService {
 	if cfg == nil {
 		panic("builder: cfg is nil")
 	}
@@ -373,19 +372,18 @@ func (b *BuildService) doBuild(ctx context.Context, q *dbq.Queries, agent dbq.Ag
 		return fmt.Errorf("create schema: %w", err)
 	}
 
-	// Encrypt and store DB password in agent config
-	encPassword, err := b.encryptor.Encrypt(dbPassword)
+	// Encrypt and store DB password in its dedicated column.
+	encPassword, err := b.encryptor.Put(ctx, "agent/"+agentID+"/db_password", dbPassword)
 	if err != nil {
 		completeBuild("failed", err.Error(), "", "")
 		return fmt.Errorf("encrypt db password: %w", err)
 	}
-	agentConfig, _ := json.Marshal(map[string]string{"db_password": encPassword})
-	if err := q.UpdateAgentConfig(ctx, dbq.UpdateAgentConfigParams{
-		ID:     agent.ID,
-		Config: agentConfig,
+	if err := q.UpdateAgentDBPassword(ctx, dbq.UpdateAgentDBPasswordParams{
+		ID:         agent.ID,
+		DbPassword: encPassword,
 	}); err != nil {
 		completeBuild("failed", err.Error(), "", "")
-		return fmt.Errorf("update agent config: %w", err)
+		return fmt.Errorf("update agent db_password: %w", err)
 	}
 
 	// Step 5: Create a test clone for Sol to validate migrations against.

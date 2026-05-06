@@ -8,7 +8,7 @@ INSERT INTO agents (
     upgrade_status, auto_fix,
     build_model, exec_model, stt_model, vision_model,
     tts_model, image_gen_model, embedding_model, search_model,
-    source_ref, image_ref, db_schema, sdk_version,
+    source_ref, image_ref, db_schema, db_password, sdk_version,
     extra_prompts, error_message
 )
 VALUES (
@@ -16,7 +16,7 @@ VALUES (
     'idle', true,
     '', '', '', '',
     '', '', '', '',
-    '', '', '', '',
+    '', '', '', '', '',
     '[]'::jsonb, ''
 )
 RETURNING *;
@@ -52,6 +52,11 @@ WHERE upgrade_status IN ('queued', 'building');
 
 -- name: UpdateAgentConfig :exec
 UPDATE agents SET config = @config, updated_at = now() WHERE id = @id;
+
+-- name: UpdateAgentDBPassword :exec
+-- Set the encrypted DB password for the agent's per-schema role. Called by
+-- the builder once createAgentSchema has provisioned the role.
+UPDATE agents SET db_password = @db_password, updated_at = now() WHERE id = @id;
 
 -- name: ListAgents :many
 SELECT * FROM agents ORDER BY created_at DESC;

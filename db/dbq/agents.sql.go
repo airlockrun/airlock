@@ -17,7 +17,7 @@ INSERT INTO agents (
     upgrade_status, auto_fix,
     build_model, exec_model, stt_model, vision_model,
     tts_model, image_gen_model, embedding_model, search_model,
-    source_ref, image_ref, db_schema, sdk_version,
+    source_ref, image_ref, db_schema, db_password, sdk_version,
     extra_prompts, error_message
 )
 VALUES (
@@ -25,10 +25,10 @@ VALUES (
     'idle', true,
     '', '', '', '',
     '', '', '', '',
-    '', '', '', '',
+    '', '', '', '', '',
     '[]'::jsonb, ''
 )
-RETURNING id, user_id, slug, name, description, status, upgrade_status, auto_fix, build_model, exec_model, stt_model, vision_model, tts_model, image_gen_model, embedding_model, search_model, source_ref, image_ref, db_schema, sdk_version, config, extra_prompts, error_message, created_at, updated_at
+RETURNING id, user_id, slug, name, description, status, upgrade_status, auto_fix, build_model, exec_model, stt_model, vision_model, tts_model, image_gen_model, embedding_model, search_model, source_ref, image_ref, db_schema, db_password, sdk_version, config, extra_prompts, error_message, created_at, updated_at
 `
 
 type CreateAgentParams struct {
@@ -72,6 +72,7 @@ func (q *Queries) CreateAgent(ctx context.Context, arg CreateAgentParams) (Agent
 		&i.SourceRef,
 		&i.ImageRef,
 		&i.DbSchema,
+		&i.DbPassword,
 		&i.SdkVersion,
 		&i.Config,
 		&i.ExtraPrompts,
@@ -92,7 +93,7 @@ func (q *Queries) DeleteAgent(ctx context.Context, id pgtype.UUID) error {
 }
 
 const getAgentByID = `-- name: GetAgentByID :one
-SELECT id, user_id, slug, name, description, status, upgrade_status, auto_fix, build_model, exec_model, stt_model, vision_model, tts_model, image_gen_model, embedding_model, search_model, source_ref, image_ref, db_schema, sdk_version, config, extra_prompts, error_message, created_at, updated_at FROM agents WHERE id = $1
+SELECT id, user_id, slug, name, description, status, upgrade_status, auto_fix, build_model, exec_model, stt_model, vision_model, tts_model, image_gen_model, embedding_model, search_model, source_ref, image_ref, db_schema, db_password, sdk_version, config, extra_prompts, error_message, created_at, updated_at FROM agents WHERE id = $1
 `
 
 func (q *Queries) GetAgentByID(ctx context.Context, id pgtype.UUID) (Agent, error) {
@@ -118,6 +119,7 @@ func (q *Queries) GetAgentByID(ctx context.Context, id pgtype.UUID) (Agent, erro
 		&i.SourceRef,
 		&i.ImageRef,
 		&i.DbSchema,
+		&i.DbPassword,
 		&i.SdkVersion,
 		&i.Config,
 		&i.ExtraPrompts,
@@ -129,7 +131,7 @@ func (q *Queries) GetAgentByID(ctx context.Context, id pgtype.UUID) (Agent, erro
 }
 
 const getAgentBySlug = `-- name: GetAgentBySlug :one
-SELECT id, user_id, slug, name, description, status, upgrade_status, auto_fix, build_model, exec_model, stt_model, vision_model, tts_model, image_gen_model, embedding_model, search_model, source_ref, image_ref, db_schema, sdk_version, config, extra_prompts, error_message, created_at, updated_at FROM agents WHERE slug = $1
+SELECT id, user_id, slug, name, description, status, upgrade_status, auto_fix, build_model, exec_model, stt_model, vision_model, tts_model, image_gen_model, embedding_model, search_model, source_ref, image_ref, db_schema, db_password, sdk_version, config, extra_prompts, error_message, created_at, updated_at FROM agents WHERE slug = $1
 `
 
 func (q *Queries) GetAgentBySlug(ctx context.Context, slug string) (Agent, error) {
@@ -155,6 +157,7 @@ func (q *Queries) GetAgentBySlug(ctx context.Context, slug string) (Agent, error
 		&i.SourceRef,
 		&i.ImageRef,
 		&i.DbSchema,
+		&i.DbPassword,
 		&i.SdkVersion,
 		&i.Config,
 		&i.ExtraPrompts,
@@ -182,7 +185,7 @@ func (q *Queries) GetAgentForUpgrade(ctx context.Context, id pgtype.UUID) (GetAg
 }
 
 const listAgents = `-- name: ListAgents :many
-SELECT id, user_id, slug, name, description, status, upgrade_status, auto_fix, build_model, exec_model, stt_model, vision_model, tts_model, image_gen_model, embedding_model, search_model, source_ref, image_ref, db_schema, sdk_version, config, extra_prompts, error_message, created_at, updated_at FROM agents ORDER BY created_at DESC
+SELECT id, user_id, slug, name, description, status, upgrade_status, auto_fix, build_model, exec_model, stt_model, vision_model, tts_model, image_gen_model, embedding_model, search_model, source_ref, image_ref, db_schema, db_password, sdk_version, config, extra_prompts, error_message, created_at, updated_at FROM agents ORDER BY created_at DESC
 `
 
 func (q *Queries) ListAgents(ctx context.Context) ([]Agent, error) {
@@ -214,6 +217,7 @@ func (q *Queries) ListAgents(ctx context.Context) ([]Agent, error) {
 			&i.SourceRef,
 			&i.ImageRef,
 			&i.DbSchema,
+			&i.DbPassword,
 			&i.SdkVersion,
 			&i.Config,
 			&i.ExtraPrompts,
@@ -232,7 +236,7 @@ func (q *Queries) ListAgents(ctx context.Context) ([]Agent, error) {
 }
 
 const listAgentsByUser = `-- name: ListAgentsByUser :many
-SELECT id, user_id, slug, name, description, status, upgrade_status, auto_fix, build_model, exec_model, stt_model, vision_model, tts_model, image_gen_model, embedding_model, search_model, source_ref, image_ref, db_schema, sdk_version, config, extra_prompts, error_message, created_at, updated_at FROM agents WHERE user_id = $1 ORDER BY created_at DESC
+SELECT id, user_id, slug, name, description, status, upgrade_status, auto_fix, build_model, exec_model, stt_model, vision_model, tts_model, image_gen_model, embedding_model, search_model, source_ref, image_ref, db_schema, db_password, sdk_version, config, extra_prompts, error_message, created_at, updated_at FROM agents WHERE user_id = $1 ORDER BY created_at DESC
 `
 
 func (q *Queries) ListAgentsByUser(ctx context.Context, userID pgtype.UUID) ([]Agent, error) {
@@ -264,6 +268,7 @@ func (q *Queries) ListAgentsByUser(ctx context.Context, userID pgtype.UUID) ([]A
 			&i.SourceRef,
 			&i.ImageRef,
 			&i.DbSchema,
+			&i.DbPassword,
 			&i.SdkVersion,
 			&i.Config,
 			&i.ExtraPrompts,
@@ -282,7 +287,7 @@ func (q *Queries) ListAgentsByUser(ctx context.Context, userID pgtype.UUID) ([]A
 }
 
 const listAgentsByUserID = `-- name: ListAgentsByUserID :many
-SELECT id, user_id, slug, name, description, status, upgrade_status, auto_fix, build_model, exec_model, stt_model, vision_model, tts_model, image_gen_model, embedding_model, search_model, source_ref, image_ref, db_schema, sdk_version, config, extra_prompts, error_message, created_at, updated_at FROM agents WHERE user_id = $1 ORDER BY created_at DESC
+SELECT id, user_id, slug, name, description, status, upgrade_status, auto_fix, build_model, exec_model, stt_model, vision_model, tts_model, image_gen_model, embedding_model, search_model, source_ref, image_ref, db_schema, db_password, sdk_version, config, extra_prompts, error_message, created_at, updated_at FROM agents WHERE user_id = $1 ORDER BY created_at DESC
 `
 
 func (q *Queries) ListAgentsByUserID(ctx context.Context, userID pgtype.UUID) ([]Agent, error) {
@@ -314,6 +319,7 @@ func (q *Queries) ListAgentsByUserID(ctx context.Context, userID pgtype.UUID) ([
 			&i.SourceRef,
 			&i.ImageRef,
 			&i.DbSchema,
+			&i.DbPassword,
 			&i.SdkVersion,
 			&i.Config,
 			&i.ExtraPrompts,
@@ -365,6 +371,22 @@ func (q *Queries) UpdateAgentConfig(ctx context.Context, arg UpdateAgentConfigPa
 	return err
 }
 
+const updateAgentDBPassword = `-- name: UpdateAgentDBPassword :exec
+UPDATE agents SET db_password = $1, updated_at = now() WHERE id = $2
+`
+
+type UpdateAgentDBPasswordParams struct {
+	DbPassword string      `json:"db_password"`
+	ID         pgtype.UUID `json:"id"`
+}
+
+// Set the encrypted DB password for the agent's per-schema role. Called by
+// the builder once createAgentSchema has provisioned the role.
+func (q *Queries) UpdateAgentDBPassword(ctx context.Context, arg UpdateAgentDBPasswordParams) error {
+	_, err := q.db.Exec(ctx, updateAgentDBPassword, arg.DbPassword, arg.ID)
+	return err
+}
+
 const updateAgentDescription = `-- name: UpdateAgentDescription :exec
 UPDATE agents SET description = $1, updated_at = now() WHERE id = $2
 `
@@ -412,7 +434,7 @@ UPDATE agents SET
     auto_fix = $1,
     updated_at = now()
 WHERE id = $2
-RETURNING id, user_id, slug, name, description, status, upgrade_status, auto_fix, build_model, exec_model, stt_model, vision_model, tts_model, image_gen_model, embedding_model, search_model, source_ref, image_ref, db_schema, sdk_version, config, extra_prompts, error_message, created_at, updated_at
+RETURNING id, user_id, slug, name, description, status, upgrade_status, auto_fix, build_model, exec_model, stt_model, vision_model, tts_model, image_gen_model, embedding_model, search_model, source_ref, image_ref, db_schema, db_password, sdk_version, config, extra_prompts, error_message, created_at, updated_at
 `
 
 type UpdateAgentFieldsParams struct {
@@ -443,6 +465,7 @@ func (q *Queries) UpdateAgentFields(ctx context.Context, arg UpdateAgentFieldsPa
 		&i.SourceRef,
 		&i.ImageRef,
 		&i.DbSchema,
+		&i.DbPassword,
 		&i.SdkVersion,
 		&i.Config,
 		&i.ExtraPrompts,

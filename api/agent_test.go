@@ -15,6 +15,7 @@ import (
 	"github.com/airlockrun/airlock/crypto"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
+	"github.com/airlockrun/airlock/secrets"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -47,12 +48,12 @@ func skipIfNoDB(t *testing.T) {
 
 const testJWTSecret = "test-secret-key-for-agent-api"
 
-func testEncryptor() *crypto.Encryptor {
+func testEncryptor() secrets.Store {
 	key := make([]byte, 32)
 	for i := range key {
 		key[i] = byte(i)
 	}
-	return crypto.New(key)
+	return secrets.NewLocal(crypto.New(key))
 }
 
 func testAgentHandler() *agentHandler {
@@ -137,7 +138,7 @@ func createTestBridge(t *testing.T) uuid.UUID {
 	ctx := context.Background()
 	var bridgeID uuid.UUID
 	err := testDB.Pool().QueryRow(ctx,
-		`INSERT INTO bridges (type, name, token_encrypted, bot_username) VALUES ('telegram', $1, '', '') RETURNING id`,
+		`INSERT INTO bridges (type, name, bot_token_ref, bot_username) VALUES ('telegram', $1, '', '') RETURNING id`,
 		"test-"+uuid.New().String()[:8],
 	).Scan(&bridgeID)
 	if err != nil {

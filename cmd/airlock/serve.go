@@ -21,6 +21,7 @@ import (
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/airlockrun/airlock/oauth"
 	"github.com/airlockrun/airlock/realtime"
+	"github.com/airlockrun/airlock/secrets"
 	"github.com/airlockrun/airlock/storage"
 	"github.com/airlockrun/airlock/trigger"
 	solprovider "github.com/airlockrun/sol/provider"
@@ -137,11 +138,11 @@ func runServe(_ []string) {
 		}
 		oldKeys = append(oldKeys, oldKey)
 	}
-	enc := crypto.New(encKey, oldKeys...)
+	secretStore := secrets.NewLocal(crypto.New(encKey, oldKeys...))
 	logger.Info("encryption configured")
 
 	// Build service
-	buildSvc := builder.New(cfg, database, containers, enc, logger.Named("builder"))
+	buildSvc := builder.New(cfg, database, containers, secretStore, logger.Named("builder"))
 	if err := buildSvc.RecoverStuckOperations(ctx); err != nil {
 		logger.Fatal("build service recovery failed", zap.Error(err))
 	}
@@ -182,8 +183,8 @@ func runServe(_ []string) {
 	wsHandler := realtime.NewHandler(database, hub, pubsub, logger.Named("handler"))
 
 	// Trigger system
-	dispatcher := trigger.NewDispatcher(cfg, database, containers, enc, logger.Named("dispatcher"))
-	transcriptionResolver := trigger.NewTranscriptionResolver(database, enc)
+	dispatcher := trigger.NewDispatcher(cfg, database, containers, secretStore, logger.Named("dispatcher"))
+	transcriptionResolver := trigger.NewTranscriptionResolver(database, secretStore)
 	prompter := trigger.NewPromptProxy(dispatcher, database, s3Client, transcriptionResolver, logger.Named("prompt-proxy"))
 	telegramDriver := trigger.NewTelegramDriver(logger.Named("telegram"))
 	discordDriver := trigger.NewDiscordDriver(logger.Named("discord"))
@@ -191,7 +192,7 @@ func runServe(_ []string) {
 		"telegram": telegramDriver,
 		"discord":  discordDriver,
 	}
-	bridgeMgr := trigger.NewBridgeManager(drivers, prompter, database, enc, cfg.JWTSecret, cfg.PublicURL, logger.Named("bridges"))
+	bridgeMgr := trigger.NewBridgeManager(drivers, prompter, database, secretStore, cfg.JWTSecret, cfg.PublicURL, logger.Named("bridges"))
 	scheduler := trigger.NewScheduler(dispatcher, database, logger.Named("scheduler"))
 
 	// OAuth client (used by credential endpoints and refresh job)
@@ -214,7 +215,7 @@ func runServe(_ []string) {
 		OAuthClient:    oauthClient,
 		TelegramDriver: telegramDriver,
 		DiscordDriver:  discordDriver,
-		Encryptor:      enc,
+		Secrets:        secretStore,
 		S3Client:       s3Client,
 		BuildService:   buildSvc,
 		Dispatcher:     dispatcher,
@@ -262,7 +263,7 @@ func runServe(_ []string) {
 	trigger.StartPublicSweeper(ctx, database, bridgeMgr, 5*time.Minute, logger.Named("public-sweeper"))
 
 	// Token refresh job
-	refreshJob := oauth.NewRefreshJob(database, enc, oauthClient, logger.Named("oauth-refresh"))
+	refreshJob := oauth.NewRefreshJob(database, secretStore, oauthClient, logger.Named("oauth-refresh"))
 	go refreshJob.Run(ctx)
 
 	// Event file cleanup — delete events/ prefix files older than 24h.

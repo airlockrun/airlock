@@ -12,26 +12,26 @@ import (
 )
 
 const createBridge = `-- name: CreateBridge :one
-INSERT INTO bridges (type, name, token_encrypted, bot_username, agent_id, created_by, is_system, status, config, settings)
+INSERT INTO bridges (type, name, bot_token_ref, bot_username, agent_id, created_by, is_system, status, config, settings)
 VALUES ($1, $2, $3, $4, $5, $6, $7, 'active', '{}'::jsonb, '{}'::jsonb)
-RETURNING id, agent_id, created_by, type, name, bot_username, status, is_system, config, settings, token_encrypted, last_polled_at, created_at, updated_at
+RETURNING id, agent_id, created_by, type, name, bot_username, status, is_system, config, settings, bot_token_ref, last_polled_at, created_at, updated_at
 `
 
 type CreateBridgeParams struct {
-	Type           string      `json:"type"`
-	Name           string      `json:"name"`
-	TokenEncrypted string      `json:"token_encrypted"`
-	BotUsername    string      `json:"bot_username"`
-	AgentID        pgtype.UUID `json:"agent_id"`
-	CreatedBy      pgtype.UUID `json:"created_by"`
-	IsSystem       bool        `json:"is_system"`
+	Type        string      `json:"type"`
+	Name        string      `json:"name"`
+	BotTokenRef string      `json:"bot_token_ref"`
+	BotUsername string      `json:"bot_username"`
+	AgentID     pgtype.UUID `json:"agent_id"`
+	CreatedBy   pgtype.UUID `json:"created_by"`
+	IsSystem    bool        `json:"is_system"`
 }
 
 func (q *Queries) CreateBridge(ctx context.Context, arg CreateBridgeParams) (Bridge, error) {
 	row := q.db.QueryRow(ctx, createBridge,
 		arg.Type,
 		arg.Name,
-		arg.TokenEncrypted,
+		arg.BotTokenRef,
 		arg.BotUsername,
 		arg.AgentID,
 		arg.CreatedBy,
@@ -49,7 +49,7 @@ func (q *Queries) CreateBridge(ctx context.Context, arg CreateBridgeParams) (Bri
 		&i.IsSystem,
 		&i.Config,
 		&i.Settings,
-		&i.TokenEncrypted,
+		&i.BotTokenRef,
 		&i.LastPolledAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
@@ -67,7 +67,7 @@ func (q *Queries) DeleteBridge(ctx context.Context, id pgtype.UUID) error {
 }
 
 const getBridgeByAgentID = `-- name: GetBridgeByAgentID :one
-SELECT id, agent_id, created_by, type, name, bot_username, status, is_system, config, settings, token_encrypted, last_polled_at, created_at, updated_at FROM bridges WHERE agent_id = $1
+SELECT id, agent_id, created_by, type, name, bot_username, status, is_system, config, settings, bot_token_ref, last_polled_at, created_at, updated_at FROM bridges WHERE agent_id = $1
 `
 
 // Find the bridge bound to a specific agent
@@ -85,7 +85,7 @@ func (q *Queries) GetBridgeByAgentID(ctx context.Context, agentID pgtype.UUID) (
 		&i.IsSystem,
 		&i.Config,
 		&i.Settings,
-		&i.TokenEncrypted,
+		&i.BotTokenRef,
 		&i.LastPolledAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
@@ -94,7 +94,7 @@ func (q *Queries) GetBridgeByAgentID(ctx context.Context, agentID pgtype.UUID) (
 }
 
 const getBridgeByID = `-- name: GetBridgeByID :one
-SELECT id, agent_id, created_by, type, name, bot_username, status, is_system, config, settings, token_encrypted, last_polled_at, created_at, updated_at FROM bridges WHERE id = $1
+SELECT id, agent_id, created_by, type, name, bot_username, status, is_system, config, settings, bot_token_ref, last_polled_at, created_at, updated_at FROM bridges WHERE id = $1
 `
 
 func (q *Queries) GetBridgeByID(ctx context.Context, id pgtype.UUID) (Bridge, error) {
@@ -111,7 +111,7 @@ func (q *Queries) GetBridgeByID(ctx context.Context, id pgtype.UUID) (Bridge, er
 		&i.IsSystem,
 		&i.Config,
 		&i.Settings,
-		&i.TokenEncrypted,
+		&i.BotTokenRef,
 		&i.LastPolledAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
@@ -120,7 +120,7 @@ func (q *Queries) GetBridgeByID(ctx context.Context, id pgtype.UUID) (Bridge, er
 }
 
 const getSystemBridge = `-- name: GetSystemBridge :one
-SELECT id, agent_id, created_by, type, name, bot_username, status, is_system, config, settings, token_encrypted, last_polled_at, created_at, updated_at FROM bridges WHERE is_system LIMIT 1
+SELECT id, agent_id, created_by, type, name, bot_username, status, is_system, config, settings, bot_token_ref, last_polled_at, created_at, updated_at FROM bridges WHERE is_system LIMIT 1
 `
 
 // The system bridge — there should be at most one
@@ -138,7 +138,7 @@ func (q *Queries) GetSystemBridge(ctx context.Context) (Bridge, error) {
 		&i.IsSystem,
 		&i.Config,
 		&i.Settings,
-		&i.TokenEncrypted,
+		&i.BotTokenRef,
 		&i.LastPolledAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
@@ -147,7 +147,7 @@ func (q *Queries) GetSystemBridge(ctx context.Context) (Bridge, error) {
 }
 
 const listActiveBridges = `-- name: ListActiveBridges :many
-SELECT id, agent_id, created_by, type, name, bot_username, status, is_system, config, settings, token_encrypted, last_polled_at, created_at, updated_at FROM bridges WHERE status = 'active'
+SELECT id, agent_id, created_by, type, name, bot_username, status, is_system, config, settings, bot_token_ref, last_polled_at, created_at, updated_at FROM bridges WHERE status = 'active'
 `
 
 // All active bridges (for polling on startup)
@@ -171,7 +171,7 @@ func (q *Queries) ListActiveBridges(ctx context.Context) ([]Bridge, error) {
 			&i.IsSystem,
 			&i.Config,
 			&i.Settings,
-			&i.TokenEncrypted,
+			&i.BotTokenRef,
 			&i.LastPolledAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
@@ -187,7 +187,7 @@ func (q *Queries) ListActiveBridges(ctx context.Context) ([]Bridge, error) {
 }
 
 const listBridgesAccessible = `-- name: ListBridgesAccessible :many
-SELECT b.id, b.agent_id, b.created_by, b.type, b.name, b.bot_username, b.status, b.is_system, b.config, b.settings, b.token_encrypted, b.last_polled_at, b.created_at, b.updated_at, u.email AS owner_email, u.display_name AS owner_display_name
+SELECT b.id, b.agent_id, b.created_by, b.type, b.name, b.bot_username, b.status, b.is_system, b.config, b.settings, b.bot_token_ref, b.last_polled_at, b.created_at, b.updated_at, u.email AS owner_email, u.display_name AS owner_display_name
 FROM bridges b
 LEFT JOIN users u ON u.id = b.created_by
 WHERE b.is_system
@@ -207,7 +207,7 @@ type ListBridgesAccessibleRow struct {
 	IsSystem         bool               `json:"is_system"`
 	Config           []byte             `json:"config"`
 	Settings         []byte             `json:"settings"`
-	TokenEncrypted   string             `json:"token_encrypted"`
+	BotTokenRef      string             `json:"bot_token_ref"`
 	LastPolledAt     pgtype.Timestamptz `json:"last_polled_at"`
 	CreatedAt        pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
@@ -240,7 +240,7 @@ func (q *Queries) ListBridgesAccessible(ctx context.Context, userID pgtype.UUID)
 			&i.IsSystem,
 			&i.Config,
 			&i.Settings,
-			&i.TokenEncrypted,
+			&i.BotTokenRef,
 			&i.LastPolledAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
@@ -258,7 +258,7 @@ func (q *Queries) ListBridgesAccessible(ctx context.Context, userID pgtype.UUID)
 }
 
 const listBridgesAdmin = `-- name: ListBridgesAdmin :many
-SELECT b.id, b.agent_id, b.created_by, b.type, b.name, b.bot_username, b.status, b.is_system, b.config, b.settings, b.token_encrypted, b.last_polled_at, b.created_at, b.updated_at, u.email AS owner_email, u.display_name AS owner_display_name
+SELECT b.id, b.agent_id, b.created_by, b.type, b.name, b.bot_username, b.status, b.is_system, b.config, b.settings, b.bot_token_ref, b.last_polled_at, b.created_at, b.updated_at, u.email AS owner_email, u.display_name AS owner_display_name
 FROM bridges b
 LEFT JOIN users u ON u.id = b.created_by
 ORDER BY b.created_at
@@ -275,7 +275,7 @@ type ListBridgesAdminRow struct {
 	IsSystem         bool               `json:"is_system"`
 	Config           []byte             `json:"config"`
 	Settings         []byte             `json:"settings"`
-	TokenEncrypted   string             `json:"token_encrypted"`
+	BotTokenRef      string             `json:"bot_token_ref"`
 	LastPolledAt     pgtype.Timestamptz `json:"last_polled_at"`
 	CreatedAt        pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
@@ -306,7 +306,7 @@ func (q *Queries) ListBridgesAdmin(ctx context.Context) ([]ListBridgesAdminRow, 
 			&i.IsSystem,
 			&i.Config,
 			&i.Settings,
-			&i.TokenEncrypted,
+			&i.BotTokenRef,
 			&i.LastPolledAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
@@ -353,7 +353,7 @@ func (q *Queries) ListBridgesByAgentID(ctx context.Context, agentID pgtype.UUID)
 }
 
 const listBridgesForAgent = `-- name: ListBridgesForAgent :many
-SELECT id, agent_id, created_by, type, name, bot_username, status, is_system, config, settings, token_encrypted, last_polled_at, created_at, updated_at FROM bridges
+SELECT id, agent_id, created_by, type, name, bot_username, status, is_system, config, settings, bot_token_ref, last_polled_at, created_at, updated_at FROM bridges
 WHERE agent_id = $1 OR is_system
 ORDER BY created_at
 `
@@ -379,7 +379,7 @@ func (q *Queries) ListBridgesForAgent(ctx context.Context, agentID pgtype.UUID) 
 			&i.IsSystem,
 			&i.Config,
 			&i.Settings,
-			&i.TokenEncrypted,
+			&i.BotTokenRef,
 			&i.LastPolledAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
@@ -396,7 +396,7 @@ func (q *Queries) ListBridgesForAgent(ctx context.Context, agentID pgtype.UUID) 
 
 const updateBridgeAgentID = `-- name: UpdateBridgeAgentID :one
 UPDATE bridges SET agent_id = $1, updated_at = now() WHERE id = $2
-RETURNING id, agent_id, created_by, type, name, bot_username, status, is_system, config, settings, token_encrypted, last_polled_at, created_at, updated_at
+RETURNING id, agent_id, created_by, type, name, bot_username, status, is_system, config, settings, bot_token_ref, last_polled_at, created_at, updated_at
 `
 
 type UpdateBridgeAgentIDParams struct {
@@ -421,7 +421,7 @@ func (q *Queries) UpdateBridgeAgentID(ctx context.Context, arg UpdateBridgeAgent
 		&i.IsSystem,
 		&i.Config,
 		&i.Settings,
-		&i.TokenEncrypted,
+		&i.BotTokenRef,
 		&i.LastPolledAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
@@ -445,7 +445,7 @@ func (q *Queries) UpdateBridgeLastPolled(ctx context.Context, arg UpdateBridgeLa
 
 const updateBridgeSettings = `-- name: UpdateBridgeSettings :one
 UPDATE bridges SET settings = $1, updated_at = now() WHERE id = $2
-RETURNING id, agent_id, created_by, type, name, bot_username, status, is_system, config, settings, token_encrypted, last_polled_at, created_at, updated_at
+RETURNING id, agent_id, created_by, type, name, bot_username, status, is_system, config, settings, bot_token_ref, last_polled_at, created_at, updated_at
 `
 
 type UpdateBridgeSettingsParams struct {
@@ -469,7 +469,7 @@ func (q *Queries) UpdateBridgeSettings(ctx context.Context, arg UpdateBridgeSett
 		&i.IsSystem,
 		&i.Config,
 		&i.Settings,
-		&i.TokenEncrypted,
+		&i.BotTokenRef,
 		&i.LastPolledAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,

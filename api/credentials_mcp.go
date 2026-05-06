@@ -115,7 +115,7 @@ func (h *credentialHandler) MCPCredentialStatus(w http.ResponseWriter, r *http.R
 		"slug":       server.Slug,
 		"name":       server.Name,
 		"authMode":   server.AuthMode,
-		"authorized": server.Credentials != "",
+		"authorized": server.AccessTokenRef != "",
 	})
 }
 
@@ -158,7 +158,7 @@ func (h *credentialHandler) SetMCPToken(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	encKey, err := h.encryptor.Encrypt(req.ApiKey)
+	encKey, err := h.encryptor.Put(ctx, "mcp/"+pgUUID(server.ID).String()+"/access_token", req.ApiKey)
 	if err != nil {
 		h.logger.Error("encrypt MCP token failed", zap.Error(err))
 		writeError(w, http.StatusInternalServerError, "encryption failed")
@@ -168,7 +168,7 @@ func (h *credentialHandler) SetMCPToken(w http.ResponseWriter, r *http.Request) 
 	if err := q.UpdateMCPServerCredentials(ctx, dbq.UpdateMCPServerCredentialsParams{
 		AgentID:     toPgUUID(agentID),
 		Slug:        slug,
-		Credentials: encKey,
+		AccessTokenRef: encKey,
 	}); err != nil {
 		h.logger.Error("store MCP token failed", zap.Error(err))
 		writeError(w, http.StatusInternalServerError, "failed to store token")
@@ -283,13 +283,14 @@ func (h *credentialHandler) SetMCPOAuthApp(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	encClientID, err := h.encryptor.Encrypt(req.ClientId)
+	srvRef := "mcp/" + pgUUID(server.ID).String()
+	encClientID, err := h.encryptor.Put(ctx, srvRef+"/client_id", req.ClientId)
 	if err != nil {
 		h.logger.Error("encrypt client_id failed", zap.Error(err))
 		writeError(w, http.StatusInternalServerError, "encryption failed")
 		return
 	}
-	encClientSecret, err := h.encryptor.Encrypt(req.ClientSecret)
+	encClientSecret, err := h.encryptor.Put(ctx, srvRef+"/client_secret", req.ClientSecret)
 	if err != nil {
 		h.logger.Error("encrypt client_secret failed", zap.Error(err))
 		writeError(w, http.StatusInternalServerError, "encryption failed")
@@ -431,13 +432,14 @@ func (h *credentialHandler) MCPOAuthStart(w http.ResponseWriter, r *http.Request
 			return
 		}
 
-		encClientID, err := h.encryptor.Encrypt(dcr.ClientID)
+		srvRef := "mcp/" + pgUUID(server.ID).String()
+		encClientID, err := h.encryptor.Put(ctx, srvRef+"/client_id", dcr.ClientID)
 		if err != nil {
 			h.logger.Error("encrypt DCR client_id failed", zap.Error(err))
 			writeError(w, http.StatusInternalServerError, "encryption failed")
 			return
 		}
-		encClientSecret, err := h.encryptor.Encrypt(dcr.ClientSecret)
+		encClientSecret, err := h.encryptor.Put(ctx, srvRef+"/client_secret", dcr.ClientSecret)
 		if err != nil {
 			h.logger.Error("encrypt DCR client_secret failed", zap.Error(err))
 			writeError(w, http.StatusInternalServerError, "encryption failed")
@@ -461,7 +463,7 @@ func (h *credentialHandler) MCPOAuthStart(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	clientID, err := h.encryptor.Decrypt(server.ClientID)
+	clientID, err := h.encryptor.Get(ctx, "mcp/"+pgUUID(server.ID).String()+"/client_id", server.ClientID)
 	if err != nil {
 		h.logger.Error("decrypt client_id failed", zap.Error(err))
 		writeError(w, http.StatusInternalServerError, "decryption failed")
@@ -482,7 +484,7 @@ func (h *credentialHandler) MCPOAuthStart(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	encVerifier, err := h.encryptor.Encrypt(verifier)
+	encVerifier, err := h.encryptor.Put(ctx, "oauth_state/"+state+"/code_verifier", verifier)
 	if err != nil {
 		h.logger.Error("encrypt verifier failed", zap.Error(err))
 		writeError(w, http.StatusInternalServerError, "encryption failed")

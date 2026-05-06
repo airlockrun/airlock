@@ -1,6 +1,6 @@
 -- name: CreateBridge :one
-INSERT INTO bridges (type, name, token_encrypted, bot_username, agent_id, created_by, is_system, status, config, settings)
-VALUES (@type, @name, @token_encrypted, @bot_username, @agent_id, @created_by, @is_system, 'active', '{}'::jsonb, '{}'::jsonb)
+INSERT INTO bridges (type, name, bot_token_ref, bot_username, agent_id, created_by, is_system, status, config, settings)
+VALUES (@type, @name, @bot_token_ref, @bot_username, @agent_id, @created_by, @is_system, 'active', '{}'::jsonb, '{}'::jsonb)
 RETURNING *;
 
 -- name: GetBridgeByID :one

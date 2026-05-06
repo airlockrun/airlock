@@ -8,9 +8,9 @@ import (
 
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 	"github.com/airlockrun/airlock/auth"
-	"github.com/airlockrun/airlock/crypto"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
+	"github.com/airlockrun/airlock/secrets"
 	"github.com/airlockrun/airlock/trigger"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -22,7 +22,7 @@ import (
 
 type bridgeHandler struct {
 	db        *db.DB
-	encryptor *crypto.Encryptor
+	encryptor secrets.Store
 	telegram  *trigger.TelegramDriver
 	discord   *trigger.DiscordDriver
 	bridgeMgr *trigger.BridgeManager
@@ -109,7 +109,7 @@ func (h *bridgeHandler) CreateBridge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	encToken, err := h.encryptor.Encrypt(req.Token)
+	encToken, err := h.encryptor.Put(ctx, "bridge/new/bot_token", req.Token)
 	if err != nil {
 		h.logger.Error("encrypt token failed", zap.Error(err))
 		writeError(w, http.StatusInternalServerError, "encryption failed")
@@ -120,7 +120,7 @@ func (h *bridgeHandler) CreateBridge(w http.ResponseWriter, r *http.Request) {
 	br, err := q.CreateBridge(ctx, dbq.CreateBridgeParams{
 		Type:           bridgeType,
 		Name:           req.Name,
-		TokenEncrypted: encToken,
+		BotTokenRef: encToken,
 		BotUsername:    botUsername,
 		AgentID:        agentPgID,
 		CreatedBy:      createdBy,
@@ -136,7 +136,7 @@ func (h *bridgeHandler) CreateBridge(w http.ResponseWriter, r *http.Request) {
 	// driver can hit the platform API directly without round-tripping
 	// through the encryptor.
 	initBr := br
-	initBr.TokenEncrypted = req.Token
+	initBr.BotTokenRef = req.Token
 	var initErr error
 	switch bridgeType {
 	case "telegram":

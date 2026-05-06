@@ -11,9 +11,9 @@ import (
 
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 	"github.com/airlockrun/airlock/auth"
-	"github.com/airlockrun/airlock/crypto"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
+	"github.com/airlockrun/airlock/secrets"
 	"github.com/airlockrun/airlock/trigger"
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
@@ -23,7 +23,7 @@ import (
 
 type identityHandler struct {
 	db         *db.DB
-	encryptor  *crypto.Encryptor
+	encryptor  secrets.Store
 	telegram   *trigger.TelegramDriver
 	discord    *trigger.DiscordDriver
 	hmacSecret string
@@ -116,7 +116,7 @@ func (h *identityHandler) LinkIdentityPreview(w http.ResponseWriter, r *http.Req
 	// Best-effort: ask the bridge driver to resolve the platform user's
 	// display info so the confirm dialog shows the actual account being
 	// linked rather than a bare snowflake / chat ID.
-	token, derr := h.encryptor.Decrypt(br.TokenEncrypted)
+	token, derr := h.encryptor.Get(ctx, "bridge/"+pgUUID(br.ID).String()+"/bot_token", br.BotTokenRef)
 	if derr != nil {
 		h.logger.Warn("decrypt bridge token for preview failed", zap.Error(derr))
 	} else {

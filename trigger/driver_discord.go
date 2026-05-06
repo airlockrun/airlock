@@ -142,7 +142,7 @@ func (d *DiscordDriver) Init(ctx context.Context, br *dbq.Bridge) error {
 	// First-time setup. We persist the application_id discovered from
 	// GET /users/@me so RegisterCommands / interaction-respond paths
 	// don't need a fresh round-trip every startup.
-	info, err := d.fetchBotInfo(ctx, br.TokenEncrypted)
+	info, err := d.fetchBotInfo(ctx, br.BotTokenRef)
 	if err != nil {
 		return fmt.Errorf("discord init: %w", err)
 	}
@@ -175,7 +175,7 @@ func (d *DiscordDriver) Activate(ctx context.Context, br dbq.Bridge) error {
 	d.bridges[pgUUID(br.ID)] = conn
 	d.mu.Unlock()
 
-	token := br.TokenEncrypted
+	token := br.BotTokenRef
 	go d.runGateway(connCtx, br, token, conn)
 	return nil
 }
@@ -260,13 +260,13 @@ func (d *DiscordDriver) RegisterCommands(ctx context.Context, br dbq.Bridge, cmd
 		}
 	}
 	url := d.api() + "/applications/" + cfg.ApplicationID + "/commands"
-	return d.callDiscord(ctx, br.TokenEncrypted, http.MethodPut, url, body, nil)
+	return d.callDiscord(ctx, br.BotTokenRef, http.MethodPut, url, body, nil)
 }
 
 // --- SendStream ---
 
 func (d *DiscordDriver) SendStream(ctx context.Context, br dbq.Bridge, externalID string, echo bool, events <-chan ResponseEvent) (string, error) {
-	token := br.TokenEncrypted
+	token := br.BotTokenRef
 	channelID := externalID
 
 	// Discord doesn't expose a "typing…" indicator that survives more
@@ -672,7 +672,7 @@ func (d *DiscordDriver) handleDispatch(ctx context.Context, br dbq.Bridge, conn 
 		// original message visible while the agent processes the
 		// callback. Errors here aren't fatal; if Discord drops the
 		// interaction, the user just sees the spinner timeout.
-		_ = d.respondInteractionDeferred(ctx, br.TokenEncrypted, iv.ID, iv.Token)
+		_ = d.respondInteractionDeferred(ctx, br.BotTokenRef, iv.ID, iv.Token)
 
 		ev := BridgeEvent{
 			BridgeID:   pgUUID(br.ID),
@@ -1020,7 +1020,7 @@ func (d *DiscordDriver) respondInteractionEphemeral(ctx context.Context, token, 
 // if the user isn't linked yet, BridgeManager.HandleEvent sends them
 // the linking URL on that channel, same as a typed message.
 func (d *DiscordDriver) handleSlashInteraction(ctx context.Context, br dbq.Bridge, conn *discordConn, iv discordInteraction, raw json.RawMessage) {
-	if err := d.respondInteractionEphemeral(ctx, br.TokenEncrypted, iv.ID, iv.Token, "✓"); err != nil {
+	if err := d.respondInteractionEphemeral(ctx, br.BotTokenRef, iv.ID, iv.Token, "✓"); err != nil {
 		d.logger.Warn("discord: ack slash interaction failed",
 			zap.String("command", iv.Data.Name),
 			zap.Error(err),

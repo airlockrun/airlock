@@ -28,6 +28,7 @@ type Agent struct {
 	SourceRef      string             `json:"source_ref"`
 	ImageRef       string             `json:"image_ref"`
 	DbSchema       string             `json:"db_schema"`
+	DbPassword     string             `json:"db_password"`
 	SdkVersion     string             `json:"sdk_version"`
 	Config         []byte             `json:"config"`
 	ExtraPrompts   []byte             `json:"extra_prompts"`
@@ -106,10 +107,11 @@ type AgentMcpServer struct {
 	TokenUrl             string             `json:"token_url"`
 	RegistrationEndpoint string             `json:"registration_endpoint"`
 	Scopes               string             `json:"scopes"`
+	AuthInjection        []byte             `json:"auth_injection"`
 	ToolSchemas          []byte             `json:"tool_schemas"`
 	ClientID             string             `json:"client_id"`
 	ClientSecret         string             `json:"client_secret"`
-	Credentials          string             `json:"credentials"`
+	AccessTokenRef       string             `json:"access_token_ref"`
 	RefreshToken         string             `json:"refresh_token"`
 	TokenExpiresAt       pgtype.Timestamptz `json:"token_expires_at"`
 	LastSyncedAt         pgtype.Timestamptz `json:"last_synced_at"`
@@ -218,20 +220,20 @@ type AuthLockout struct {
 }
 
 type Bridge struct {
-	ID             pgtype.UUID        `json:"id"`
-	AgentID        pgtype.UUID        `json:"agent_id"`
-	CreatedBy      pgtype.UUID        `json:"created_by"`
-	Type           string             `json:"type"`
-	Name           string             `json:"name"`
-	BotUsername    string             `json:"bot_username"`
-	Status         string             `json:"status"`
-	IsSystem       bool               `json:"is_system"`
-	Config         []byte             `json:"config"`
-	Settings       []byte             `json:"settings"`
-	TokenEncrypted string             `json:"token_encrypted"`
-	LastPolledAt   pgtype.Timestamptz `json:"last_polled_at"`
-	CreatedAt      pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+	ID           pgtype.UUID        `json:"id"`
+	AgentID      pgtype.UUID        `json:"agent_id"`
+	CreatedBy    pgtype.UUID        `json:"created_by"`
+	Type         string             `json:"type"`
+	Name         string             `json:"name"`
+	BotUsername  string             `json:"bot_username"`
+	Status       string             `json:"status"`
+	IsSystem     bool               `json:"is_system"`
+	Config       []byte             `json:"config"`
+	Settings     []byte             `json:"settings"`
+	BotTokenRef  string             `json:"bot_token_ref"`
+	LastPolledAt pgtype.Timestamptz `json:"last_polled_at"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
 }
 
 type Connection struct {
@@ -253,7 +255,7 @@ type Connection struct {
 	Config            []byte             `json:"config"`
 	ClientID          string             `json:"client_id"`
 	ClientSecret      string             `json:"client_secret"`
-	Credentials       string             `json:"credentials"`
+	AccessTokenRef    string             `json:"access_token_ref"`
 	RefreshToken      string             `json:"refresh_token"`
 	TokenExpiresAt    pgtype.Timestamptz `json:"token_expires_at"`
 	CreatedAt         pgtype.Timestamptz `json:"created_at"`
