@@ -610,6 +610,7 @@ spotify.Request(ctx, "PUT", "/v1/me/player", myStruct)         // struct → JSO
 - `agentsdk.AuthInjectBearer` — sets header `Authorization: Bearer {token}`
 - `agentsdk.AuthInjectAPIKey` — sets header `{Name}: {token}` (`Name` defaults to `X-API-Key`)
 - `agentsdk.AuthInjectPathPrefix` — prepends `/{token}` to the URL path. For example, with `BaseURL: "https://api.telegram.org"` and a stored token `bot123:abc`, a request to `/sendMessage` becomes `https://api.telegram.org/bot123:abc/sendMessage`. Used by APIs that carry credentials in the path (Telegram bot API: store the token as `bot{token}` so the prepended segment is `/bot{token}`).
+- `agentsdk.AuthInjectQueryParam` — appends `?{Name}={token}` (or merges into the existing query string). `Name` is required. Used by APIs that authenticate via a query parameter (e.g. Google APIs with `?key={token}`).
 
 **`LLMHint`** is appended to the runtime system prompt. Set when the API has non-obvious conventions (path prefixes, special headers).
 
@@ -628,6 +629,17 @@ resp, err := github.CallTool(ctx, "search_repos", map[string]any{"query": "test"
 ```
 
 **`AuthMode`:** `MCPAuthOAuthDiscovery` (RFC 9728/8414 auto), `MCPAuthOAuth` (manual URLs), `MCPAuthToken`, `MCPAuthNone`.
+
+**`AuthInjection`** — same shape and options as `RegisterConnection.AuthInjection` (bearer / api_key_header / path_prefix / query_param). Set this when the MCP server expects the stored credential in a non-Bearer position. Defaults to `Authorization: Bearer {token}` when unset, so the standard MCP-over-OAuth case needs no extra config.
+
+```go
+agent.RegisterMCP(&agentsdk.MCP{
+    Slug:          "exa",
+    URL:           "https://mcp.exa.ai",
+    AuthMode:      agentsdk.MCPAuthToken,
+    AuthInjection: agentsdk.AuthInjection{Type: agentsdk.AuthInjectQueryParam, Name: "apiKey"},
+})
+```
 
 Use the `mcp_probe` tool to check what a URL supports before writing this.
 
