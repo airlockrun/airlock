@@ -85,6 +85,20 @@ Open `https://your-domain.com` in a browser, paste the activation code, set up t
 
 The activation code is single-use and the file is removed after a successful activation.
 
+## Try it on your laptop
+
+If you just want to kick the tires before standing up a real server:
+
+```bash
+cp .env.local.example .env
+docker compose -f docker-compose.yml -f docker-compose.local.yml up -d
+docker compose exec airlock cat /var/lib/airlock/activation_code.txt
+```
+
+Open `https://airlock.traefik.me`, accept the browser warning on the first visit, paste the activation code. `*.traefik.me` is a public DNS service that resolves to 127.0.0.1, so per-agent subdomains route to your machine without any DNS or `/etc/hosts` work. Caddy uses its built-in local CA so you don't need a real domain or Let's Encrypt; the file `.env.local.example` shows how to trust the CA permanently if you'd rather skip the warning.
+
+This stack uses dummy secrets baked into the overlay — fine for poking around, **not** for anything you put real data into.
+
 ## Updating
 
 ```bash

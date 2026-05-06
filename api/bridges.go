@@ -296,10 +296,15 @@ func (h *bridgeHandler) UpdateBridge(w http.ResponseWriter, r *http.Request) {
 		if mode != trigger.PublicSessionModeOneShot {
 			mode = trigger.PublicSessionModeSession
 		}
+		timeout := int(req.Settings.PublicPromptTimeoutSeconds)
+		if timeout <= 0 {
+			timeout = trigger.DefaultPublicPromptTimeoutSeconds
+		}
 		settings := trigger.BridgeSettings{
-			AllowPublicDMs:          req.Settings.AllowPublicDms,
-			PublicSessionTTLSeconds: int(req.Settings.PublicSessionTtlSeconds),
-			PublicSessionMode:       mode,
+			AllowPublicDMs:             req.Settings.AllowPublicDms,
+			PublicSessionTTLSeconds:    int(req.Settings.PublicSessionTtlSeconds),
+			PublicSessionMode:          mode,
+			PublicPromptTimeoutSeconds: timeout,
 		}
 		raw, mErr := json.Marshal(settings)
 		if mErr != nil {
@@ -410,9 +415,10 @@ func bridgeFieldsToProto(
 		CreatedAt:   timestamppb.New(createdAt.Time),
 		UpdatedAt:   timestamppb.New(updatedAt.Time),
 		Settings: &airlockv1.BridgeSettings{
-			AllowPublicDms:          settings.AllowPublicDMs,
-			PublicSessionTtlSeconds: int32(settings.PublicSessionTTLSeconds),
-			PublicSessionMode:       settings.PublicSessionMode,
+			AllowPublicDms:             settings.AllowPublicDMs,
+			PublicSessionTtlSeconds:    int32(settings.PublicSessionTTLSeconds),
+			PublicSessionMode:          settings.PublicSessionMode,
+			PublicPromptTimeoutSeconds: int32(settings.PublicPromptTimeoutSeconds),
 		},
 	}
 	if agentID.Valid {

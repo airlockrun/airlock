@@ -335,7 +335,6 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		r.Get("/runs/{runID}", rH.GetRun)
 		r.Get("/runs/{runID}/logs", rH.GetRunLogs)
 		r.Delete("/runs/{runID}", rH.CancelRun)
-		r.Post("/runs/{runID}/extend", rH.ExtendRun)
 
 		// Bridge management
 		r.Route("/bridges", func(r chi.Router) {

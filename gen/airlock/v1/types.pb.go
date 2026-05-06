@@ -1938,8 +1938,12 @@ type BridgeSettings struct {
 	//	             deleted right after the run. The user's referenced
 	//	             message (reply / forward) is included as context.
 	PublicSessionMode string `protobuf:"bytes,3,opt,name=public_session_mode,json=publicSessionMode,proto3" json:"public_session_mode,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// Wall-clock cap for a single public-DM prompt run, in seconds.
+	// Authenticated users are not affected. 0 means "use the default"
+	// (60 seconds).
+	PublicPromptTimeoutSeconds int32 `protobuf:"varint,4,opt,name=public_prompt_timeout_seconds,json=publicPromptTimeoutSeconds,proto3" json:"public_prompt_timeout_seconds,omitempty"`
+	unknownFields              protoimpl.UnknownFields
+	sizeCache                  protoimpl.SizeCache
 }
 
 func (x *BridgeSettings) Reset() {
@@ -1991,6 +1995,13 @@ func (x *BridgeSettings) GetPublicSessionMode() string {
 		return x.PublicSessionMode
 	}
 	return ""
+}
+
+func (x *BridgeSettings) GetPublicPromptTimeoutSeconds() int32 {
+	if x != nil {
+		return x.PublicPromptTimeoutSeconds
+	}
+	return 0
 }
 
 // PlatformIdentityInfo represents a user's verified external identity.
@@ -2821,11 +2832,12 @@ const file_airlock_v1_types_proto_rawDesc = "" +
 	"\n" +
 	"updated_at\x18\t \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x126\n" +
 	"\bsettings\x18\n" +
-	" \x01(\v2\x1a.airlock.v1.BridgeSettingsR\bsettings\"\xa7\x01\n" +
+	" \x01(\v2\x1a.airlock.v1.BridgeSettingsR\bsettings\"\xea\x01\n" +
 	"\x0eBridgeSettings\x12(\n" +
 	"\x10allow_public_dms\x18\x01 \x01(\bR\x0eallowPublicDms\x12;\n" +
 	"\x1apublic_session_ttl_seconds\x18\x02 \x01(\x05R\x17publicSessionTtlSeconds\x12.\n" +
-	"\x13public_session_mode\x18\x03 \x01(\tR\x11publicSessionMode\"\xa7\x01\n" +
+	"\x13public_session_mode\x18\x03 \x01(\tR\x11publicSessionMode\x12A\n" +
+	"\x1dpublic_prompt_timeout_seconds\x18\x04 \x01(\x05R\x1apublicPromptTimeoutSeconds\"\xa7\x01\n" +
 	"\x14PlatformIdentityInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1a\n" +
 	"\bplatform\x18\x02 \x01(\tR\bplatform\x12(\n" +

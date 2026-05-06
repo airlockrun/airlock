@@ -234,19 +234,6 @@ message GetRunResponse {
   repeated AgentMessageInfo messages = 2; // Messages produced during this run.
 }
 
-// ExtendRunResponse is returned by POST /api/v1/runs/{runID}/extend.
-// Server picks the increment (no request body); client just clicks again
-// to extend further until extensions_remaining hits 0.
-message ExtendRunResponse {
-  // deadline_ms is the new wall-clock cancel deadline (ms since epoch).
-  // The frontend uses this to render the countdown.
-  int64 deadline_ms = 1;
-
-  // extensions_remaining is the number of additional extends the user can
-  // still request after this one. Frontend disables the Extend button at 0.
-  int32 extensions_remaining = 2;
-}
-
 // --- Conversations ---
 
 message CreateConversationRequest {

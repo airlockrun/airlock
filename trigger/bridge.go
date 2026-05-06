@@ -28,6 +28,12 @@ import (
 // accumulating indefinitely.
 const DefaultPublicSessionTTLSeconds = 3 * 60 * 60
 
+// DefaultPublicPromptTimeoutSeconds caps how long a single public-DM
+// prompt run can take. Authenticated users get the full PromptHTTPCeiling;
+// public callers are throttled tighter so a noisy abuser can't tie up the
+// agent on long chains.
+const DefaultPublicPromptTimeoutSeconds = 60
+
 // PublicSessionMode controls how public conversations carry context
 // across turns.
 const (
@@ -60,6 +66,12 @@ type BridgeSettings struct {
 	// PublicSessionMode chooses between persistent ("session") and
 	// stateless ("one_shot") public conversations. Defaults to session.
 	PublicSessionMode string `json:"public_session_mode"`
+
+	// PublicPromptTimeoutSeconds caps wall-clock duration of a single
+	// public-DM prompt run. Authenticated users are not affected (they
+	// run under the global PromptHTTPCeiling). 0 means "use the default"
+	// (DefaultPublicPromptTimeoutSeconds).
+	PublicPromptTimeoutSeconds int `json:"public_prompt_timeout_seconds"`
 }
 
 // DefaultBridgeSettings returns the settings a freshly created bridge
@@ -67,9 +79,10 @@ type BridgeSettings struct {
 // function to materialize defaults at read time.
 func DefaultBridgeSettings() BridgeSettings {
 	return BridgeSettings{
-		AllowPublicDMs:          true,
-		PublicSessionTTLSeconds: DefaultPublicSessionTTLSeconds,
-		PublicSessionMode:       PublicSessionModeSession,
+		AllowPublicDMs:             true,
+		PublicSessionTTLSeconds:    DefaultPublicSessionTTLSeconds,
+		PublicSessionMode:          PublicSessionModeSession,
+		PublicPromptTimeoutSeconds: DefaultPublicPromptTimeoutSeconds,
 	}
 }
 
@@ -98,13 +111,19 @@ func DecodeBridgeSettings(raw []byte) BridgeSettings {
 	if s.PublicSessionMode != PublicSessionModeOneShot {
 		s.PublicSessionMode = PublicSessionModeSession
 	}
+	if v, ok := m["public_prompt_timeout_seconds"]; ok {
+		_ = json.Unmarshal(v, &s.PublicPromptTimeoutSeconds)
+	}
+	if s.PublicPromptTimeoutSeconds <= 0 {
+		s.PublicPromptTimeoutSeconds = DefaultPublicPromptTimeoutSeconds
+	}
 	return s
 }
 
 // ResponseEvent represents an NDJSON event from the agent response stream,
 // forwarded to the bridge driver for progressive delivery.
 type ResponseEvent struct {
-	Type       string // "text-delta", "tool-call", "tool-result", "confirmation_required", "info"
+	Type       string // "run_started", "text-delta", "tool-call", "tool-result", "confirmation_required", "info"
 	Text       string // for text-delta / info: the delta text or info message
 	ToolCallID string // for tool_call/tool_result
 	ToolName   string // for tool_call/tool_result
@@ -113,19 +132,26 @@ type ResponseEvent struct {
 	ToolError  string // for tool_result: error message if failed
 	Raw        []byte // full NDJSON line (for non-text events drivers may need)
 
-	// Populated when Type == "confirmation_required":
+	// Populated when Type == "run_started" or "confirmation_required":
 	RunID      string
 	Permission string
 	Patterns   []string
 	Code       string
 }
 
+// CancelButtonAfter is how long a bridge run can stream before the driver
+// posts a "Still working… Tap to stop" message with a cancel button. The
+// message is deleted when the run ends (naturally or via the user tap).
+const CancelButtonAfter = 20 * time.Second
+
 // BridgeCallback represents an interactive UI acknowledgement — a button tap
 // on an inline keyboard or similar platform-native affordance. Drivers that
 // don't support rich UI leave this nil.
 type BridgeCallback struct {
-	Data  string // opaque payload, e.g. "approve:<runID>"
-	AckID string // platform-specific ack handle (Telegram callback_query.id)
+	Data      string // opaque payload, e.g. "approve:<runID>"
+	AckID     string // platform-specific ack handle (Telegram callback_query.id)
+	MessageID string // ID of the message the button is attached to (so we
+	// can edit/strip it once the user has acted on it)
 }
 
 // BridgeEvent represents a normalized incoming event from any platform.
@@ -208,6 +234,12 @@ type BridgeDriver interface {
 	// collapse tool output inline (web) should return true.
 	// Used when a conversation has no explicit settings.echo override.
 	DefaultEcho() bool
+
+	// RemoveButtons strips the inline keyboard / component buttons from a
+	// previously sent message, leaving its text intact. Called after the
+	// user taps an approve/deny button so the resolved confirmation can't
+	// be tapped again. Best-effort: errors are logged but not propagated.
+	RemoveButtons(ctx context.Context, br dbq.Bridge, externalID, messageID string) error
 }
 
 // CommandRegistrar is an optional BridgeDriver capability: platforms with
@@ -404,6 +436,22 @@ func (m *BridgeManager) HandleEvent(ctx context.Context, event BridgeEvent) erro
 
 	driver := m.drivers[br.Type]
 
+	// Cancel button tap (driver posts "Stop" button after CancelButtonAfter).
+	// Distinct from approve/deny callbacks routed through HandleCallback —
+	// those resolve a *suspended* run, this aborts a *running* one.
+	if event.Callback != nil && strings.HasPrefix(event.Callback.Data, "cancel:") {
+		runIDStr := strings.TrimPrefix(event.Callback.Data, "cancel:")
+		if runID, err := uuid.Parse(runIDStr); err == nil {
+			m.prompter.dispatcher.CancelRun(runID)
+		}
+		// Telegram needs an explicit ack to clear the spinner; Discord acked
+		// already via deferred-update at the gateway dispatch handler.
+		if tg, ok := driver.(*TelegramDriver); ok && event.Callback.AckID != "" {
+			_ = tg.AnswerCallbackQuery(ctx, br.BotTokenRef, event.Callback.AckID, "Cancelled")
+		}
+		return nil
+	}
+
 	// /auth runs before identity lookup so unlinked users can opt in
 	// explicitly. We deliberately don't auto-DM the link on every
 	// unrecognized sender — the bridge may serve public-access agents
@@ -464,6 +512,16 @@ func (m *BridgeManager) HandleEvent(ctx context.Context, event BridgeEvent) erro
 
 	// Branch: UI callback (button tap) vs new user message.
 	if event.Callback != nil {
+		// Strip the buttons off the original message so the user can't
+		// re-tap a resolved confirmation. Best-effort, fire-and-forget.
+		if event.Callback.MessageID != "" {
+			if err := driver.RemoveButtons(ctx, br, event.ExternalID, event.Callback.MessageID); err != nil {
+				m.logger.Debug("remove buttons failed",
+					zap.String("bridge", br.Name),
+					zap.String("message_id", event.Callback.MessageID),
+					zap.Error(err))
+			}
+		}
 		_, cbErr := m.prompter.HandleCallback(ctx, agentID, event.BridgeID, userID, event.ExternalID, event.Callback.Data, respEvents)
 		// Wait for driver to finish rendering anything queued before we ack.
 		wg.Wait()
@@ -489,8 +547,18 @@ func (m *BridgeManager) HandleEvent(ctx context.Context, event BridgeEvent) erro
 	settings := DecodeBridgeSettings(br.Settings)
 	oneShot := userID == uuid.Nil && settings.PublicSessionMode == PublicSessionModeOneShot
 
+	// Public callers run under a tighter per-prompt timeout than authenticated
+	// users so a noisy abuser can't tie up the agent. Wrapping ctx with a
+	// deadline propagates through ForwardPrompt → outbound HTTP → agent.
+	promptCtx := ctx
+	if userID == uuid.Nil {
+		var cancel context.CancelFunc
+		promptCtx, cancel = context.WithTimeout(ctx, time.Duration(settings.PublicPromptTimeoutSeconds)*time.Second)
+		defer cancel()
+	}
+
 	// Route to prompt proxy — streams events into the channel.
-	_, err = m.prompter.HandleMessage(ctx, agentID, event.BridgeID, userID, event.ExternalID, true, oneShot, event.Text, event.Files, event.ReferencedMessage, respEvents)
+	_, err = m.prompter.HandleMessage(promptCtx, agentID, event.BridgeID, userID, event.ExternalID, true, oneShot, event.Text, event.Files, event.ReferencedMessage, respEvents)
 	if err != nil {
 		return fmt.Errorf("prompt proxy: %w", err)
 	}

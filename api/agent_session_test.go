@@ -201,7 +201,7 @@ func TestClearCommand_ResolvesSuspendedRun(t *testing.T) {
 	}
 
 	// Dispatch /clear via the shared slash-command helper.
-	res, err := trigger.TrySlashCommand(ctx, q, toPgUUID(convID), agentID, agentsdk.AccessUser, "/clear", zap.NewNop())
+	res, err := trigger.TrySlashCommand(ctx, q, nil, toPgUUID(convID), agentID, agentsdk.AccessUser, "/clear", zap.NewNop())
 	if err != nil {
 		t.Fatalf("TrySlashCommand: %v", err)
 	}

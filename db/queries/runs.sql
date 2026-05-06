@@ -75,6 +75,15 @@ SELECT count(*) FROM runs WHERE agent_id = $1;
 -- name: ListRunningByAgent :many
 SELECT * FROM runs WHERE agent_id = $1 AND status = 'running';
 
+-- name: GetLatestRunningPromptRun :one
+-- Finds the most recent running prompt run for a conversation. Used by
+-- the /cancel slash command to discover which run to abort. Empty result
+-- means nothing's in flight (or it's already finished between the user
+-- typing /cancel and us querying).
+SELECT id FROM runs
+WHERE trigger_type = 'prompt' AND trigger_ref = @trigger_ref AND status = 'running'
+ORDER BY started_at DESC LIMIT 1;
+
 -- name: GetLatestSuspendedRun :one
 SELECT * FROM runs
 WHERE agent_id = @agent_id AND status = 'suspended'
