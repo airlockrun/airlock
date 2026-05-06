@@ -168,7 +168,7 @@ func TestTelegramPollMediaExtraction(t *testing.T) {
 	defer srv.Close()
 
 	td := NewTelegramDriverWithBaseURL(srv.URL, srv.Client())
-	br := &dbq.Bridge{TokenEncrypted: "test-token"}
+	br := &dbq.Bridge{BotTokenRef: "test-token"}
 	events, err := td.Poll(context.Background(), br)
 	if err != nil {
 		t.Fatalf("Poll: %v", err)

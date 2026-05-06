@@ -15,7 +15,7 @@ func seedEnabledProvider(t *testing.T, providerID, displayName, rawKey string) {
 	t.Helper()
 	ctx := context.Background()
 	enc := testEncryptor()
-	cipher, err := enc.Encrypt(rawKey)
+	cipher, err := enc.Put(ctx, "provider/"+providerID+"/api_key", rawKey)
 	if err != nil {
 		t.Fatalf("encrypt: %v", err)
 	}

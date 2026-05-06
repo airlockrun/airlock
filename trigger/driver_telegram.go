@@ -44,7 +44,7 @@ func NewTelegramDriverWithBaseURL(baseURL string, client *http.Client) *Telegram
 }
 
 func (d *TelegramDriver) Init(ctx context.Context, br *dbq.Bridge) error {
-	token := br.TokenEncrypted // caller decrypts before passing to driver
+	token := br.BotTokenRef // caller decrypts before passing to driver
 
 	// Get the latest update offset so the first poll skips stale messages.
 	updates, err := d.getUpdates(ctx, token, -1, 0)
@@ -59,7 +59,7 @@ func (d *TelegramDriver) Init(ctx context.Context, br *dbq.Bridge) error {
 }
 
 func (d *TelegramDriver) Activate(ctx context.Context, br dbq.Bridge) error {
-	token := br.TokenEncrypted // caller decrypts before passing to driver
+	token := br.BotTokenRef // caller decrypts before passing to driver
 	// Delete any existing webhook to ensure clean long-poll state.
 	return d.callTelegram(ctx, token, "deleteWebhook", nil)
 }
@@ -78,7 +78,7 @@ func (d *TelegramDriver) DefaultEcho() bool { return false }
 // global command menu via setMyCommands. Telegram stores names without
 // the leading slash.
 func (d *TelegramDriver) RegisterCommands(ctx context.Context, br dbq.Bridge, cmds []SlashCommand) error {
-	token := br.TokenEncrypted
+	token := br.BotTokenRef
 	tgCmds := make([]map[string]string, len(cmds))
 	for i, c := range cmds {
 		tgCmds[i] = map[string]string{
@@ -92,7 +92,7 @@ func (d *TelegramDriver) RegisterCommands(ctx context.Context, br dbq.Bridge, cm
 }
 
 func (d *TelegramDriver) Poll(ctx context.Context, br *dbq.Bridge) ([]BridgeEvent, error) {
-	token := br.TokenEncrypted // caller decrypts
+	token := br.BotTokenRef // caller decrypts
 
 	// Read offset from bridge config.
 	var cfg telegramConfig
@@ -284,7 +284,7 @@ func (d *TelegramDriver) Poll(ctx context.Context, br *dbq.Bridge) ([]BridgeEven
 }
 
 func (d *TelegramDriver) SendStream(ctx context.Context, br dbq.Bridge, externalID string, echo bool, events <-chan ResponseEvent) (string, error) {
-	token := br.TokenEncrypted
+	token := br.BotTokenRef
 	chatID, err := strconv.ParseInt(externalID, 10, 64)
 	if err != nil {
 		return "", fmt.Errorf("invalid chat ID %q: %w", externalID, err)

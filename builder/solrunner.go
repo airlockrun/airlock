@@ -320,7 +320,7 @@ func (b *BuildService) resolveProvider(ctx context.Context, buildModel string) (
 	if !p.IsEnabled {
 		return nil, fmt.Errorf("provider %q is disabled", providerID)
 	}
-	apiKey, err := b.encryptor.Decrypt(p.ApiKey)
+	apiKey, err := b.encryptor.Get(ctx, "provider/"+p.ProviderID+"/api_key", p.ApiKey)
 	if err != nil {
 		return nil, fmt.Errorf("decrypt API key for %q: %w", providerID, err)
 	}
@@ -381,7 +381,7 @@ func (b *BuildService) resolveSearchTool(ctx context.Context, rp *resolvedProvid
 		return ranked[i].row.ProviderID < ranked[j].row.ProviderID
 	})
 	for _, c := range ranked {
-		apiKey, err := b.encryptor.Decrypt(c.row.ApiKey)
+		apiKey, err := b.encryptor.Get(ctx, "provider/"+c.row.ProviderID+"/api_key", c.row.ApiKey)
 		if err != nil {
 			continue
 		}

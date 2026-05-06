@@ -2,7 +2,6 @@ package builder
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -225,9 +224,7 @@ func (b *BuildService) doUpgrade(ctx context.Context, q *dbq.Queries, input Upgr
 	}()
 
 	// Decrypt DB password (needed for test URL and later for container start).
-	var agentConfig map[string]string
-	json.Unmarshal(agent.Config, &agentConfig)
-	dbPassword, err := b.encryptor.Decrypt(agentConfig["db_password"])
+	dbPassword, err := b.encryptor.Get(ctx, "agent/"+agentID+"/db_password", agent.DbPassword)
 	if err != nil {
 		return "", fmt.Errorf("decrypt db password: %w", err)
 	}

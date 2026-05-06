@@ -150,7 +150,7 @@ func TestResolveModel_Precedence(t *testing.T) {
 	// Seed a provider row so resolveModel can decrypt the API key for the
 	// chosen "provider/model" strings. All assigned model strings below use
 	// this same provider ID.
-	ciphertext, err := ah.encryptor.Encrypt("sk-test")
+	ciphertext, err := ah.encryptor.Put(ctx, "provider/openai/api_key", "sk-test")
 	if err != nil {
 		t.Fatalf("encrypt: %v", err)
 	}

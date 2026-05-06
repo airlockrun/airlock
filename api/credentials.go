@@ -12,10 +12,10 @@ import (
 
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 	"github.com/airlockrun/airlock/auth"
-	"github.com/airlockrun/airlock/crypto"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/airlockrun/airlock/oauth"
+	"github.com/airlockrun/airlock/secrets"
 	"github.com/airlockrun/airlock/trigger"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -27,7 +27,7 @@ import (
 
 type credentialHandler struct {
 	db          *db.DB
-	encryptor   *crypto.Encryptor
+	encryptor   secrets.Store
 	oauthClient *oauth.Client
 	publicURL   string
 	logger      *zap.Logger
@@ -80,13 +80,14 @@ func (h *credentialHandler) SetOAuthApp(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	encClientID, err := h.encryptor.Encrypt(req.ClientId)
+	connRef := "connection/" + pgUUID(conn.ID).String()
+	encClientID, err := h.encryptor.Put(ctx, connRef+"/client_id", req.ClientId)
 	if err != nil {
 		h.logger.Error("encrypt client_id failed", zap.Error(err))
 		writeError(w, http.StatusInternalServerError, "encryption failed")
 		return
 	}
-	encClientSecret, err := h.encryptor.Encrypt(req.ClientSecret)
+	encClientSecret, err := h.encryptor.Put(ctx, connRef+"/client_secret", req.ClientSecret)
 	if err != nil {
 		h.logger.Error("encrypt client_secret failed", zap.Error(err))
 		writeError(w, http.StatusInternalServerError, "encryption failed")
@@ -158,7 +159,8 @@ func (h *credentialHandler) OAuthStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	clientID, err := h.encryptor.Decrypt(conn.ClientID)
+	connRef := "connection/" + pgUUID(conn.ID).String()
+	clientID, err := h.encryptor.Get(ctx, connRef+"/client_id", conn.ClientID)
 	if err != nil {
 		h.logger.Error("decrypt client_id failed", zap.Error(err))
 		writeError(w, http.StatusInternalServerError, "decryption failed")
@@ -179,7 +181,7 @@ func (h *credentialHandler) OAuthStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	encVerifier, err := h.encryptor.Encrypt(verifier)
+	encVerifier, err := h.encryptor.Put(ctx, "oauth_state/"+state+"/code_verifier", verifier)
 	if err != nil {
 		h.logger.Error("encrypt verifier failed", zap.Error(err))
 		writeError(w, http.StatusInternalServerError, "encryption failed")
@@ -241,7 +243,7 @@ func (h *credentialHandler) OAuthCallback(w http.ResponseWriter, r *http.Request
 
 	agentID := pgUUID(oauthState.AgentID)
 
-	verifier, err := h.encryptor.Decrypt(oauthState.CodeVerifier)
+	verifier, err := h.encryptor.Get(ctx, "oauth_state/"+state+"/code_verifier", oauthState.CodeVerifier)
 	if err != nil {
 		h.logger.Error("decrypt verifier failed", zap.Error(err))
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -249,7 +251,7 @@ func (h *credentialHandler) OAuthCallback(w http.ResponseWriter, r *http.Request
 	}
 
 	// Route to the right table based on source_type.
-	var tokenURL, clientIDEnc, clientSecretEnc string
+	var tokenURL, clientIDEnc, clientSecretEnc, sourceRef string
 	if oauthState.SourceType == "mcp" {
 		srv, err := q.GetMCPServerForOAuth(ctx, dbq.GetMCPServerForOAuthParams{
 			AgentID: oauthState.AgentID,
@@ -263,6 +265,7 @@ func (h *credentialHandler) OAuthCallback(w http.ResponseWriter, r *http.Request
 		tokenURL = srv.TokenUrl
 		clientIDEnc = srv.ClientID
 		clientSecretEnc = srv.ClientSecret
+		sourceRef = "mcp/" + pgUUID(srv.ID).String()
 	} else {
 		conn, err := q.GetConnectionForOAuth(ctx, dbq.GetConnectionForOAuthParams{
 			AgentID: oauthState.AgentID,
@@ -276,15 +279,16 @@ func (h *credentialHandler) OAuthCallback(w http.ResponseWriter, r *http.Request
 		tokenURL = conn.TokenUrl
 		clientIDEnc = conn.ClientID
 		clientSecretEnc = conn.ClientSecret
+		sourceRef = "connection/" + pgUUID(conn.ID).String()
 	}
 
-	clientID, err := h.encryptor.Decrypt(clientIDEnc)
+	clientID, err := h.encryptor.Get(ctx, sourceRef+"/client_id", clientIDEnc)
 	if err != nil {
 		h.logger.Error("decrypt client_id failed", zap.Error(err))
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	clientSecret, err := h.encryptor.Decrypt(clientSecretEnc)
+	clientSecret, err := h.encryptor.Get(ctx, sourceRef+"/client_secret", clientSecretEnc)
 	if err != nil {
 		h.logger.Error("decrypt client_secret failed", zap.Error(err))
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -300,7 +304,7 @@ func (h *credentialHandler) OAuthCallback(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	encAccessToken, err := h.encryptor.Encrypt(tokenResp.AccessToken)
+	encAccessToken, err := h.encryptor.Put(ctx, sourceRef+"/access_token", tokenResp.AccessToken)
 	if err != nil {
 		h.logger.Error("encrypt access token failed", zap.Error(err))
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -309,7 +313,7 @@ func (h *credentialHandler) OAuthCallback(w http.ResponseWriter, r *http.Request
 
 	var encRefreshToken string
 	if tokenResp.RefreshToken != "" {
-		encRefreshToken, err = h.encryptor.Encrypt(tokenResp.RefreshToken)
+		encRefreshToken, err = h.encryptor.Put(ctx, sourceRef+"/refresh_token", tokenResp.RefreshToken)
 		if err != nil {
 			h.logger.Error("encrypt refresh token failed", zap.Error(err))
 			http.Error(w, "internal error", http.StatusInternalServerError)
@@ -327,7 +331,7 @@ func (h *credentialHandler) OAuthCallback(w http.ResponseWriter, r *http.Request
 		if err := q.UpdateMCPServerCredentials(ctx, dbq.UpdateMCPServerCredentialsParams{
 			AgentID:        oauthState.AgentID,
 			Slug:           oauthState.Slug,
-			Credentials:    encAccessToken,
+			AccessTokenRef:    encAccessToken,
 			TokenExpiresAt: expiresAt,
 			RefreshToken:   encRefreshToken,
 		}); err != nil {
@@ -346,7 +350,7 @@ func (h *credentialHandler) OAuthCallback(w http.ResponseWriter, r *http.Request
 		if err := q.UpdateConnectionCredentials(ctx, dbq.UpdateConnectionCredentialsParams{
 			AgentID:        oauthState.AgentID,
 			Slug:           oauthState.Slug,
-			Credentials:    encAccessToken,
+			AccessTokenRef:    encAccessToken,
 			TokenExpiresAt: expiresAt,
 			RefreshToken:   encRefreshToken,
 		}); err != nil {
@@ -378,7 +382,7 @@ func (h *credentialHandler) refreshMCPAfterAuth(ctx context.Context, agentID uui
 		return
 	}
 
-	tools, err := discoverMCPTools(ctx, srv.Url, accessToken)
+	tools, err := discoverMCPTools(ctx, srv.Url, srv.AuthInjection, accessToken)
 	if err != nil {
 		h.logger.Warn("refresh MCP: discovery failed", zap.String("slug", slug), zap.Error(err))
 		// Don't return — we still want to ping the agent. Sync handler will
@@ -443,7 +447,7 @@ func (h *credentialHandler) SetAPIKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	encKey, err := h.encryptor.Encrypt(req.ApiKey)
+	encKey, err := h.encryptor.Put(ctx, "connection/"+pgUUID(conn.ID).String()+"/access_token", req.ApiKey)
 	if err != nil {
 		h.logger.Error("encrypt API key failed", zap.Error(err))
 		writeError(w, http.StatusInternalServerError, "encryption failed")
@@ -453,7 +457,7 @@ func (h *credentialHandler) SetAPIKey(w http.ResponseWriter, r *http.Request) {
 	if err := q.UpdateConnectionCredentials(ctx, dbq.UpdateConnectionCredentialsParams{
 		AgentID:     toPgUUID(agentID),
 		Slug:        slug,
-		Credentials: encKey,
+		AccessTokenRef: encKey,
 	}); err != nil {
 		h.logger.Error("store API key failed", zap.Error(err))
 		writeError(w, http.StatusInternalServerError, "failed to store API key")
@@ -621,7 +625,7 @@ func (h *credentialHandler) TestCredential(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	if conn.Credentials == "" {
+	if conn.AccessTokenRef == "" {
 		writeError(w, http.StatusBadRequest, "no credentials configured")
 		return
 	}
@@ -637,7 +641,7 @@ func (h *credentialHandler) TestCredential(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	creds, err := h.encryptor.Decrypt(conn.Credentials)
+	creds, err := h.encryptor.Get(ctx, "connection/"+pgUUID(conn.ID).String()+"/access_token", conn.AccessTokenRef)
 	if err != nil {
 		h.logger.Error("decrypt credentials failed", zap.Error(err))
 		writeError(w, http.StatusInternalServerError, "decryption failed")

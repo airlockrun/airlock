@@ -19,9 +19,9 @@ import (
 	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/config"
 	"github.com/airlockrun/airlock/container"
-	"github.com/airlockrun/airlock/crypto"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
+	"github.com/airlockrun/airlock/secrets"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"
@@ -76,7 +76,7 @@ type Dispatcher struct {
 	cfg        *config.Config
 	db         *db.DB
 	containers container.ContainerManager
-	encryptor  *crypto.Encryptor
+	encryptor  secrets.Store
 	logger     *zap.Logger
 
 	// In-flight per-run state registry. Populated when ForwardPrompt /
@@ -92,7 +92,7 @@ type Dispatcher struct {
 }
 
 // NewDispatcher creates a Dispatcher.
-func NewDispatcher(cfg *config.Config, db *db.DB, containers container.ContainerManager, enc *crypto.Encryptor, logger *zap.Logger) *Dispatcher {
+func NewDispatcher(cfg *config.Config, db *db.DB, containers container.ContainerManager, enc secrets.Store, logger *zap.Logger) *Dispatcher {
 	return &Dispatcher{
 		cfg:        cfg,
 		db:         db,
@@ -216,12 +216,8 @@ func (d *Dispatcher) EnsureRunning(ctx context.Context, agentID uuid.UUID) (*con
 		return nil, errors.New("agent has no image")
 	}
 
-	// Decrypt DB password from agent config JSONB.
-	var agentConfig map[string]string
-	if err := json.Unmarshal(agent.Config, &agentConfig); err != nil {
-		return nil, fmt.Errorf("unmarshal agent config: %w", err)
-	}
-	dbPassword, err := d.encryptor.Decrypt(agentConfig["db_password"])
+	// Decrypt DB password from its dedicated column.
+	dbPassword, err := d.encryptor.Get(ctx, "agent/"+agentID.String()+"/db_password", agent.DbPassword)
 	if err != nil {
 		return nil, fmt.Errorf("decrypt db password: %w", err)
 	}

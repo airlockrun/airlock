@@ -214,7 +214,7 @@ func (h *agentHandler) resolveModel(ctx context.Context, agentID, slug, capabili
 	if !p.IsEnabled {
 		return "", "", "", "", fmt.Errorf("provider %q is disabled", providerID)
 	}
-	decrypted, decErr := h.encryptor.Decrypt(p.ApiKey)
+	decrypted, decErr := h.encryptor.Get(ctx, "provider/"+p.ProviderID+"/api_key", p.ApiKey)
 	if decErr != nil {
 		return "", "", "", "", fmt.Errorf("decrypt API key for %q: %w", providerID, decErr)
 	}

@@ -15,9 +15,9 @@ import (
 	"strconv"
 
 	"github.com/airlockrun/agentsdk"
-	"github.com/airlockrun/airlock/crypto"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
+	"github.com/airlockrun/airlock/secrets"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 )
@@ -223,7 +223,7 @@ type BridgeManager struct {
 	drivers    map[string]BridgeDriver
 	prompter   *PromptProxy
 	db         *db.DB
-	encryptor  *crypto.Encryptor
+	encryptor  secrets.Store
 	logger     *zap.Logger
 	ctx        context.Context
 	cancel     context.CancelFunc
@@ -242,7 +242,7 @@ type BridgeManager struct {
 }
 
 // NewBridgeManager creates a BridgeManager.
-func NewBridgeManager(drivers map[string]BridgeDriver, prompter *PromptProxy, database *db.DB, encryptor *crypto.Encryptor, hmacSecret, publicURL string, logger *zap.Logger) *BridgeManager {
+func NewBridgeManager(drivers map[string]BridgeDriver, prompter *PromptProxy, database *db.DB, encryptor secrets.Store, hmacSecret, publicURL string, logger *zap.Logger) *BridgeManager {
 	return &BridgeManager{
 		drivers:    drivers,
 		prompter:   prompter,
@@ -276,15 +276,15 @@ func (m *BridgeManager) Start(ctx context.Context) error {
 
 		// Decrypt token for driver setup.
 		decrypted := br
-		if br.TokenEncrypted != "" {
-			token, err := m.encryptor.Decrypt(br.TokenEncrypted)
+		if br.BotTokenRef != "" {
+			token, err := m.encryptor.Get(ctx, "bridge/"+pgUUID(br.ID).String()+"/bot_token", br.BotTokenRef)
 			if err != nil {
 				m.logger.Error("decrypt bridge token failed",
 					zap.String("name", br.Name),
 					zap.Error(err))
 				continue
 			}
-			decrypted.TokenEncrypted = token
+			decrypted.BotTokenRef = token
 		}
 
 		if err := driver.Activate(ctx, decrypted); err != nil {
@@ -335,12 +335,12 @@ func (m *BridgeManager) AddBridge(bridgeID uuid.UUID) {
 	if !ok {
 		return
 	}
-	token, err := m.encryptor.Decrypt(br.TokenEncrypted)
+	token, err := m.encryptor.Get(m.ctx, "bridge/"+pgUUID(br.ID).String()+"/bot_token", br.BotTokenRef)
 	if err != nil {
 		m.logger.Error("add bridge: decrypt token", zap.Error(err))
 		return
 	}
-	br.TokenEncrypted = token
+	br.BotTokenRef = token
 	if err := driver.Activate(m.ctx, br); err != nil {
 		m.logger.Error("add bridge: activate", zap.Error(err))
 		return
@@ -394,12 +394,12 @@ func (m *BridgeManager) HandleEvent(ctx context.Context, event BridgeEvent) erro
 	agentID := pgUUID(br.AgentID)
 
 	// Decrypt token for driver.
-	if br.TokenEncrypted != "" {
-		token, err := m.encryptor.Decrypt(br.TokenEncrypted)
+	if br.BotTokenRef != "" {
+		token, err := m.encryptor.Get(ctx, "bridge/"+pgUUID(br.ID).String()+"/bot_token", br.BotTokenRef)
 		if err != nil {
 			return fmt.Errorf("decrypt bridge token: %w", err)
 		}
-		br.TokenEncrypted = token
+		br.BotTokenRef = token
 	}
 
 	driver := m.drivers[br.Type]
@@ -470,7 +470,7 @@ func (m *BridgeManager) HandleEvent(ctx context.Context, event BridgeEvent) erro
 		// Ack the tap so Telegram clears its loading spinner. Failure is
 		// non-fatal — the spinner just expires after ~15s.
 		if tg, ok := driver.(*TelegramDriver); ok && event.Callback.AckID != "" {
-			_ = tg.AnswerCallbackQuery(ctx, br.TokenEncrypted, event.Callback.AckID, "")
+			_ = tg.AnswerCallbackQuery(ctx, br.BotTokenRef, event.Callback.AckID, "")
 		}
 		if driverErr != nil {
 			m.logger.Error("send stream failed",
@@ -532,9 +532,9 @@ func (m *BridgeManager) handleAuthCommand(ctx context.Context, br dbq.Bridge, dr
 		if chatID == 0 {
 			return nil
 		}
-		return dr.SendMessage(ctx, br.TokenEncrypted, chatID, msg)
+		return dr.SendMessage(ctx, br.BotTokenRef, chatID, msg)
 	case *DiscordDriver:
-		return dr.SendDM(ctx, br.TokenEncrypted, event.SenderID, msg)
+		return dr.SendDM(ctx, br.BotTokenRef, event.SenderID, msg)
 	}
 	return nil
 }
@@ -563,7 +563,7 @@ func (m *BridgeManager) SendParts(ctx context.Context, bridgeID uuid.UUID, exter
 		return fmt.Errorf("get bridge: %w", err)
 	}
 
-	token, err := m.encryptor.Decrypt(br.TokenEncrypted)
+	token, err := m.encryptor.Get(ctx, "bridge/"+pgUUID(br.ID).String()+"/bot_token", br.BotTokenRef)
 	if err != nil {
 		return fmt.Errorf("decrypt token: %w", err)
 	}
