@@ -298,6 +298,11 @@ message BridgeSettings {
   //                deleted right after the run. The user's referenced
   //                message (reply / forward) is included as context.
   string public_session_mode = 3;
+
+  // Wall-clock cap for a single public-DM prompt run, in seconds.
+  // Authenticated users are not affected. 0 means "use the default"
+  // (60 seconds).
+  int32 public_prompt_timeout_seconds = 4;
 }
 
 // PlatformIdentityInfo represents a user's verified external identity.

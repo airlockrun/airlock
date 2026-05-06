@@ -9,9 +9,9 @@ import (
 	"strings"
 
 	"github.com/airlockrun/airlock/auth"
-	"github.com/airlockrun/airlock/crypto"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
+	"github.com/airlockrun/airlock/secrets"
 	solprovider "github.com/airlockrun/sol/provider"
 	"github.com/airlockrun/sol/websearch"
 	"go.uber.org/zap"
@@ -68,7 +68,7 @@ func (h *agentHandler) Search(w http.ResponseWriter, r *http.Request) {
 func resolveSearchClient(
 	ctx context.Context,
 	database *db.DB,
-	enc *crypto.Encryptor,
+	enc secrets.Store,
 	logger *zap.Logger,
 	agentID string,
 ) (websearch.Client, error) {
@@ -114,7 +114,7 @@ func resolveSearchClient(
 	})
 
 	for _, c := range ranked {
-		apiKey, err := enc.Decrypt(c.row.ApiKey)
+		apiKey, err := enc.Get(ctx, "provider/"+c.row.ProviderID+"/api_key", c.row.ApiKey)
 		if err != nil {
 			// Fail loud: don't silently skip a misconfigured key.
 			logger.Error("decrypt search provider key failed",
@@ -145,7 +145,7 @@ type searchCandidate struct {
 func tryExecProviderSearch(
 	ctx context.Context,
 	q *dbq.Queries,
-	enc *crypto.Encryptor,
+	enc secrets.Store,
 	agentID string,
 ) (websearch.Client, error) {
 	uid, err := parseUUID(agentID)
@@ -165,7 +165,7 @@ func tryExecProviderSearch(
 	if err != nil || !p.IsEnabled {
 		return nil, nil
 	}
-	apiKey, err := enc.Decrypt(p.ApiKey)
+	apiKey, err := enc.Get(ctx, "provider/"+p.ProviderID+"/api_key", p.ApiKey)
 	if err != nil {
 		return nil, fmt.Errorf("decrypt %q key for exec-model search: %w", providerID, err)
 	}

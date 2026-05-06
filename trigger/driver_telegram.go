@@ -44,7 +44,7 @@ func NewTelegramDriverWithBaseURL(baseURL string, client *http.Client) *Telegram
 }
 
 func (d *TelegramDriver) Init(ctx context.Context, br *dbq.Bridge) error {
-	token := br.TokenEncrypted // caller decrypts before passing to driver
+	token := br.BotTokenRef // caller decrypts before passing to driver
 
 	// Get the latest update offset so the first poll skips stale messages.
 	updates, err := d.getUpdates(ctx, token, -1, 0)
@@ -59,7 +59,7 @@ func (d *TelegramDriver) Init(ctx context.Context, br *dbq.Bridge) error {
 }
 
 func (d *TelegramDriver) Activate(ctx context.Context, br dbq.Bridge) error {
-	token := br.TokenEncrypted // caller decrypts before passing to driver
+	token := br.BotTokenRef // caller decrypts before passing to driver
 	// Delete any existing webhook to ensure clean long-poll state.
 	return d.callTelegram(ctx, token, "deleteWebhook", nil)
 }
@@ -78,7 +78,7 @@ func (d *TelegramDriver) DefaultEcho() bool { return false }
 // global command menu via setMyCommands. Telegram stores names without
 // the leading slash.
 func (d *TelegramDriver) RegisterCommands(ctx context.Context, br dbq.Bridge, cmds []SlashCommand) error {
-	token := br.TokenEncrypted
+	token := br.BotTokenRef
 	tgCmds := make([]map[string]string, len(cmds))
 	for i, c := range cmds {
 		tgCmds[i] = map[string]string{
@@ -92,7 +92,7 @@ func (d *TelegramDriver) RegisterCommands(ctx context.Context, br dbq.Bridge, cm
 }
 
 func (d *TelegramDriver) Poll(ctx context.Context, br *dbq.Bridge) ([]BridgeEvent, error) {
-	token := br.TokenEncrypted // caller decrypts
+	token := br.BotTokenRef // caller decrypts
 
 	// Read offset from bridge config.
 	var cfg telegramConfig
@@ -127,7 +127,11 @@ func (d *TelegramDriver) Poll(ctx context.Context, br *dbq.Bridge) ([]BridgeEven
 				ExternalID: strconv.FormatInt(cq.Message.Chat.ID, 10),
 				SenderID:   strconv.FormatInt(cq.From.ID, 10),
 				SenderName: cq.From.FirstName,
-				Callback:   &BridgeCallback{Data: cq.Data, AckID: cq.ID},
+				Callback: &BridgeCallback{
+					Data:      cq.Data,
+					AckID:     cq.ID,
+					MessageID: strconv.FormatInt(cq.Message.MessageID, 10),
+				},
 				RawPayload: mustJSON(u),
 			})
 			advanceOffset(u.UpdateID)
@@ -284,7 +288,7 @@ func (d *TelegramDriver) Poll(ctx context.Context, br *dbq.Bridge) ([]BridgeEven
 }
 
 func (d *TelegramDriver) SendStream(ctx context.Context, br dbq.Bridge, externalID string, echo bool, events <-chan ResponseEvent) (string, error) {
-	token := br.TokenEncrypted
+	token := br.BotTokenRef
 	chatID, err := strconv.ParseInt(externalID, 10, 64)
 	if err != nil {
 		return "", fmt.Errorf("invalid chat ID %q: %w", externalID, err)
@@ -296,6 +300,11 @@ func (d *TelegramDriver) SendStream(ctx context.Context, br dbq.Bridge, external
 	// makes the indicator appear before the first LLM token lands.
 	stopTyping := d.keepTyping(ctx, token, chatID)
 	defer stopTyping()
+
+	// runEndedCh closes when this SendStream returns. The cancel-button
+	// goroutine watches it to know when to delete its message.
+	runEndedCh := make(chan struct{})
+	defer close(runEndedCh)
 
 	var sb strings.Builder
 
@@ -311,6 +320,9 @@ func (d *TelegramDriver) SendStream(ctx context.Context, br dbq.Bridge, external
 
 	for ev := range events {
 		switch ev.Type {
+		case "run_started":
+			go d.scheduleCancelButton(ctx, token, chatID, ev.RunID, runEndedCh)
+
 		case "text-delta":
 			sb.WriteString(ev.Text)
 
@@ -417,6 +429,40 @@ func approvalKeyboard(runID string) map[string]any {
 	}
 }
 
+// cancelKeyboard builds the single-button keyboard attached to the
+// "Still working…" message posted after CancelButtonAfter elapses.
+func cancelKeyboard(runID string) map[string]any {
+	return map[string]any{
+		"inline_keyboard": [][]map[string]any{
+			{{"text": "🛑 Stop", "callback_data": "cancel:" + runID}},
+		},
+	}
+}
+
+// scheduleCancelButton waits CancelButtonAfter from run start. If the run
+// is still streaming when the timer fires, it posts a "Still working…"
+// message with a cancel button and waits for the run to end so it can
+// delete the message. If the run finishes first, the goroutine just exits.
+func (d *TelegramDriver) scheduleCancelButton(ctx context.Context, token string, chatID int64, runID string, runEndedCh <-chan struct{}) {
+	select {
+	case <-runEndedCh:
+		return
+	case <-ctx.Done():
+		return
+	case <-time.After(CancelButtonAfter):
+	}
+
+	msgID, err := d.sendMessageWithButtons(ctx, token, chatID, "⏳ Still working…", cancelKeyboard(runID))
+	if err != nil {
+		return
+	}
+
+	<-runEndedCh
+	delCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = d.deleteMessage(delCtx, token, chatID, msgID)
+}
+
 // formatToolResult formats a tool result for Telegram display (HTML parse_mode).
 // output is the tool's string output (already unwrapped from tool.Result in prompt.go).
 func formatToolResult(toolName, output, toolError string) string {
@@ -485,6 +531,37 @@ func (d *TelegramDriver) GetChat(ctx context.Context, token, chatID string) (Tel
 func (d *TelegramDriver) SendMessage(ctx context.Context, token string, chatID int64, text string) error {
 	_, err := d.sendMessage(ctx, token, chatID, text)
 	return err
+}
+
+// deleteMessage removes a previously sent message. Used by SendStream to
+// clean up the "Still working…" cancel-button message once the run ends.
+// Errors are logged at debug — best-effort cleanup, not critical.
+func (d *TelegramDriver) deleteMessage(ctx context.Context, token string, chatID, messageID int64) error {
+	return d.callTelegram(ctx, token, "deleteMessage", map[string]any{
+		"chat_id":    chatID,
+		"message_id": messageID,
+	})
+}
+
+// RemoveButtons strips the inline keyboard from a previously sent
+// message via editMessageReplyMarkup. The message text is left intact
+// so the conversation history still shows what was being confirmed.
+func (d *TelegramDriver) RemoveButtons(ctx context.Context, br dbq.Bridge, externalID, messageID string) error {
+	chatID, err := strconv.ParseInt(externalID, 10, 64)
+	if err != nil {
+		return fmt.Errorf("invalid chat ID %q: %w", externalID, err)
+	}
+	msgID, err := strconv.ParseInt(messageID, 10, 64)
+	if err != nil {
+		return fmt.Errorf("invalid message ID %q: %w", messageID, err)
+	}
+	// Empty reply_markup clears the keyboard; omitting the field would
+	// leave the existing keyboard in place.
+	return d.callTelegram(ctx, br.BotTokenRef, "editMessageReplyMarkup", map[string]any{
+		"chat_id":      chatID,
+		"message_id":   msgID,
+		"reply_markup": map[string]any{"inline_keyboard": [][]map[string]any{}},
+	})
 }
 
 // sendChatAction calls sendChatAction — the one-shot "typing…" indicator.

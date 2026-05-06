@@ -6,10 +6,10 @@ import (
 	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/builder"
 	"github.com/airlockrun/airlock/container"
-	"github.com/airlockrun/airlock/crypto"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/oauth"
 	"github.com/airlockrun/airlock/realtime"
+	"github.com/airlockrun/airlock/secrets"
 	"github.com/airlockrun/airlock/storage"
 	"github.com/airlockrun/airlock/trigger"
 	"github.com/go-chi/chi/v5"
@@ -27,8 +27,9 @@ type RouterConfig struct {
 	PubSub  *realtime.PubSub
 	Handler *realtime.Handler
 
-	// Encryption (for provider API keys)
-	Encryptor *crypto.Encryptor
+	// Secrets store. Today wraps a local AES-GCM encryptor; the interface
+	// is forward-compatible with a Vault-backed implementation.
+	Secrets secrets.Store
 
 	// S3 storage
 	S3Client *storage.S3Client
@@ -82,7 +83,7 @@ type RouterConfig struct {
 }
 
 func NewRouter(cfg RouterConfig) http.Handler {
-	if cfg.Encryptor == nil {
+	if cfg.Secrets == nil {
 		panic("api: RouterConfig.Encryptor is required")
 	}
 	if cfg.Hub == nil {
@@ -109,9 +110,9 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	}))
 
 	authHandler := NewAuthHandler(cfg.DB, cfg.JWTSecret, cfg.ActivationCodeFile, cfg.Logger.Named("auth"))
-	providersHandler := NewProvidersHandler(cfg.DB, cfg.Encryptor)
+	providersHandler := NewProvidersHandler(cfg.DB, cfg.Secrets)
 	usersHandler := NewUsersHandler(cfg.DB)
-	sysSettingsHandler := &settingsHandler{db: cfg.DB, encryptor: cfg.Encryptor, logger: cfg.Logger.Named("settings")}
+	sysSettingsHandler := &settingsHandler{db: cfg.DB, encryptor: cfg.Secrets, logger: cfg.Logger.Named("settings")}
 
 	// Health check (public, no auth — reverse proxies and orchestrators need
 	// to hit this without credentials). 200 if DB+S3 reachable, 503 otherwise.
@@ -147,7 +148,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	// Credential, bridge, and identity handlers
 	credH := &credentialHandler{
 		db:          cfg.DB,
-		encryptor:   cfg.Encryptor,
+		encryptor:   cfg.Secrets,
 		oauthClient: cfg.OAuthClient,
 		publicURL:   cfg.PublicURL,
 		logger:      cfg.Logger.Named("credentials"),
@@ -155,7 +156,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	}
 	brH := &bridgeHandler{
 		db:        cfg.DB,
-		encryptor: cfg.Encryptor,
+		encryptor: cfg.Secrets,
 		telegram:  cfg.TelegramDriver,
 		discord:   cfg.DiscordDriver,
 		bridgeMgr: cfg.BridgeManager,
@@ -163,7 +164,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	}
 	idH := &identityHandler{
 		db:         cfg.DB,
-		encryptor:  cfg.Encryptor,
+		encryptor:  cfg.Secrets,
 		telegram:   cfg.TelegramDriver,
 		discord:    cfg.DiscordDriver,
 		hmacSecret: cfg.JWTSecret, // reuse JWT secret for HMAC
@@ -227,7 +228,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 			db:          cfg.DB,
 			builder:     cfg.BuildService,
 			dispatcher:  cfg.Dispatcher,
-			encryptor:   cfg.Encryptor,
+			encryptor:   cfg.Secrets,
 			containers:  cfg.Containers,
 			promptProxy: cfg.PromptProxy,
 			bridgeMgr:   cfg.BridgeManager,
@@ -334,7 +335,6 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		r.Get("/runs/{runID}", rH.GetRun)
 		r.Get("/runs/{runID}/logs", rH.GetRunLogs)
 		r.Delete("/runs/{runID}", rH.CancelRun)
-		r.Post("/runs/{runID}/extend", rH.ExtendRun)
 
 		// Bridge management
 		r.Route("/bridges", func(r chi.Router) {
@@ -368,7 +368,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		wh := &webhookIngressHandler{
 			dispatcher: cfg.Dispatcher,
 			db:         cfg.DB,
-			encryptor:  cfg.Encryptor,
+			encryptor:  cfg.Secrets,
 			logger:     cfg.Logger.Named("webhook-ingress"),
 		}
 		r.Post("/webhooks/{agentID}/{path}", wh.HandleWebhook)
@@ -379,7 +379,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	// Agent API routes (authenticated via agent JWT)
 	ah := &agentHandler{
 		db:                     cfg.DB,
-		encryptor:              cfg.Encryptor,
+		encryptor:              cfg.Secrets,
 		s3:                     cfg.S3Client,
 		builder:                cfg.BuildService,
 		pubsub:                 cfg.PubSub,

@@ -49,13 +49,13 @@ func testIdentityHandlerWithTelegram(srv *httptest.Server) *identityHandler {
 func createTestBridgeWithToken(t *testing.T, rawToken, botUsername string) uuid.UUID {
 	t.Helper()
 	ctx := context.Background()
-	enc, err := testEncryptor().Encrypt(rawToken)
+	enc, err := testEncryptor().Put(ctx, "bridge/new/bot_token", rawToken)
 	if err != nil {
 		t.Fatalf("encrypt token: %v", err)
 	}
 	var bridgeID uuid.UUID
 	err = testDB.Pool().QueryRow(ctx,
-		`INSERT INTO bridges (type, name, token_encrypted, bot_username) VALUES ('telegram', $1, $2, $3) RETURNING id`,
+		`INSERT INTO bridges (type, name, bot_token_ref, bot_username) VALUES ('telegram', $1, $2, $3) RETURNING id`,
 		"preview-"+uuid.New().String()[:8], enc, botUsername,
 	).Scan(&bridgeID)
 	if err != nil {

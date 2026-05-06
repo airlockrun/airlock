@@ -84,7 +84,9 @@ Multi-replica is **last-writer-wins**: two replicas concurrently uploading the s
 
 ### Worked example — keeping `bun` self-updating across container restarts
 
-`setup.sh` seeds `/var/agent/bin/bun` into the image. The `bun-refresh` cron fires `bun upgrade` weekly and syncs the new binary up to S3. On any container restart (image rebuild, reap, crash), `SyncDown` pulls the latest bun back down before `Serve` returns. A typed tool exposes the runtime to the LLM as `eval_js`.
+`setup.sh` seeds `/var/agent/bin/bun` into the image. The `bun-refresh` cron fires `bun upgrade` weekly and syncs the new binary up to S3. On any container restart (image rebuild, reap, crash), `SyncDown` pulls the latest bun back down. A typed tool exposes the runtime to the LLM as `eval_js`.
+
+**Health-check budget:** the platform expects `agent.Serve()` to start within ~15 seconds of container start. Anything slower than a few hundred ms — `SyncDown`, third-party warm-up, model preload — must run in a goroutine *after* you call `Serve`, not synchronously in `main()` before it. The `eval_js` tool first call may have to retry if the goroutine hasn't finished, but that's better than failing the boot health check.
 
 ```bash
 # setup.sh
@@ -122,9 +124,13 @@ func main() {
         LLMHint:     "framework-managed binary cache; do not read, write, or list",
     })
 
-    // Boot: pull the latest bun from S3 (no-op on first boot when S3 is
-    // empty — the image's seeded /var/agent/bin/bun stays in place).
-    must(agent.SyncDown(context.Background(), "state/bin/", "/var/agent/bin/"))
+    // Boot: pull the latest bun from S3 in the background so we don't
+    // block Serve. First boot is a no-op when S3 is empty — the
+    // image's seeded /var/agent/bin/bun stays in place until the
+    // weekly cron lands the first upload.
+    go func() {
+        _ = agent.SyncDown(context.Background(), "state/bin/", "/var/agent/bin/")
+    }()
 
     // Weekly: self-update bun, then push the new binary to S3.
     agent.RegisterCron(&agentsdk.Cron{
@@ -161,7 +167,6 @@ func main() {
     agent.Serve()
 }
 
-func must(err error) { if err != nil { panic(err) } }
 ```
 
 The same shape works for `uv self update`, `freshclam` (ClamAV signature DB into `/var/agent/data/clamav/`), browser binaries for headless scraping, ML model weights, anything that updates at runtime. Pick `state/bin/` for executables, `state/data/` for everything else — it's just a convention so the LLM-facing prompt's directory inventory reads cleanly.

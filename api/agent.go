@@ -12,11 +12,11 @@ import (
 	"github.com/airlockrun/airlock/builder"
 	"github.com/airlockrun/airlock/compat"
 	promptpkg "github.com/airlockrun/airlock/prompt"
-	"github.com/airlockrun/airlock/crypto"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 	"github.com/airlockrun/airlock/realtime"
+	"github.com/airlockrun/airlock/secrets"
 	"github.com/airlockrun/airlock/storage"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -30,7 +30,7 @@ type cronReloader interface {
 
 type agentHandler struct {
 	db        *db.DB
-	encryptor *crypto.Encryptor
+	encryptor secrets.Store
 	s3        *storage.S3Client
 	builder   *builder.BuildService
 	pubsub      *realtime.PubSub
@@ -360,16 +360,22 @@ func (h *agentHandler) Sync(w http.ResponseWriter, r *http.Request) {
 			b, _ := json.Marshal(mcp.Scopes)
 			scopes = string(b)
 		}
+		authInjection, err := json.Marshal(mcp.AuthInjection)
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "invalid auth_injection for MCP "+mcp.Slug)
+			return
+		}
 		if _, err := q.UpsertMCPServer(ctx, dbq.UpsertMCPServerParams{
-			AgentID:  pgAgentID,
-			Slug:     mcp.Slug,
-			Name:     mcp.Name,
-			Url:      mcp.URL,
-			AuthMode: string(mcp.AuthMode),
-			AuthUrl:  mcp.AuthURL,
-			TokenUrl: mcp.TokenURL,
-			Scopes:   scopes,
-			Access:   string(mcp.Access),
+			AgentID:       pgAgentID,
+			Slug:          mcp.Slug,
+			Name:          mcp.Name,
+			Url:           mcp.URL,
+			AuthMode:      string(mcp.AuthMode),
+			AuthUrl:       mcp.AuthURL,
+			TokenUrl:      mcp.TokenURL,
+			Scopes:        scopes,
+			Access:        string(mcp.Access),
+			AuthInjection: authInjection,
 		}); err != nil {
 			h.logger.Error("upsert MCP server failed", zap.Error(err))
 			writeJSONError(w, http.StatusInternalServerError, "failed to sync MCP servers")

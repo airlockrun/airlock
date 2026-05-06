@@ -65,6 +65,13 @@ func (p *PromptProxy) HandleMessage(
 ) (string, error) {
 	q := dbq.New(p.db.Pool())
 
+	// Slash commands operate on whatever conversation already exists —
+	// they never need to create one. Avoiding the create on `/cancel`
+	// from a fresh public DM means the public-session sweeper won't
+	// later send "Conversation completed." for a session the user never
+	// knowingly opened.
+	isSlash := strings.HasPrefix(strings.TrimSpace(userMessage), "/")
+
 	var conversationID pgtype.UUID
 
 	switch {
@@ -102,8 +109,47 @@ func (p *PromptProxy) HandleMessage(
 			}
 		}()
 
+	case isSlash && userID != uuid.Nil:
+		// Slash command from authed user — look up the existing conv but
+		// don't create one. If the user has no conversation yet, the
+		// command runs against an invalid convID and individual handlers
+		// reply with a "Nothing to …" message.
+		if conv, err := q.GetConversationBySource(ctx, dbq.GetConversationBySourceParams{
+			AgentID: toPgUUID(agentID),
+			UserID:  toPgUUID(userID),
+			Source:  "bridge",
+		}); err == nil {
+			conversationID = conv.ID
+		}
+
+	case isSlash && externalID != "":
+		// Slash command from public sender — look up only.
+		if conv, err := q.GetConversationByExternal(ctx, dbq.GetConversationByExternalParams{
+			AgentID:    toPgUUID(agentID),
+			Source:     "bridge",
+			ExternalID: pgtype.Text{String: externalID, Valid: true},
+		}); err == nil {
+			conversationID = conv.ID
+		}
+
 	case storeHistory && userID != uuid.Nil:
 		// Authenticated bridge user → conversation keyed on (agent, user, source).
+		// If the user previously chatted publicly (before /auth), drop the
+		// orphan public row so its history doesn't linger and the sweeper
+		// doesn't later send a confusing "Conversation completed." DM.
+		if externalID != "" {
+			if pubConv, err := q.GetConversationByExternal(ctx, dbq.GetConversationByExternalParams{
+				AgentID:    toPgUUID(agentID),
+				Source:     "bridge",
+				ExternalID: pgtype.Text{String: externalID, Valid: true},
+			}); err == nil {
+				if delErr := q.DeleteConversation(ctx, pubConv.ID); delErr != nil {
+					p.logger.Warn("delete orphan public conversation after auth",
+						zap.String("conversation_id", convert.PgUUIDToString(pubConv.ID)),
+						zap.Error(delErr))
+				}
+			}
+		}
 		conv, err := q.GetOrCreateConversation(ctx, dbq.GetOrCreateConversationParams{
 			AgentID:    toPgUUID(agentID),
 			UserID:     toPgUUID(userID),
@@ -155,18 +201,25 @@ func (p *PromptProxy) HandleMessage(
 	// the agent with ForceCompact=true so Sol's Runner.Compact produces the
 	// reply via its usual streaming path.
 	var forceCompact bool
-	if conversationID.Valid {
-		if cmd, err := TrySlashCommand(ctx, q, conversationID, agentID, access, userMessage, p.logger); err != nil {
+	if cmd, err := TrySlashCommand(ctx, q, p.dispatcher, conversationID, agentID, access, userMessage, p.logger); err != nil {
+		close(events)
+		return "", fmt.Errorf("slash command: %w", err)
+	} else if cmd.Handled {
+		// /compact forwards to the agent — but compacting requires a real
+		// conversation. With no conv yet, the request would forward an
+		// empty ConversationID and the agent's SessionStore would 404.
+		// Reply directly instead.
+		if cmd.ForwardAsCompact && !conversationID.Valid {
+			events <- ResponseEvent{Type: "text-delta", Text: "Nothing to compact."}
 			close(events)
-			return "", fmt.Errorf("slash command: %w", err)
-		} else if cmd.Handled {
-			if !cmd.ForwardAsCompact {
-				events <- ResponseEvent{Type: "text-delta", Text: cmd.Reply}
-				close(events)
-				return cmd.Reply, nil
-			}
-			forceCompact = true
+			return "Nothing to compact.", nil
 		}
+		if !cmd.ForwardAsCompact {
+			events <- ResponseEvent{Type: "text-delta", Text: cmd.Reply}
+			close(events)
+			return cmd.Reply, nil
+		}
+		forceCompact = true
 	}
 
 	// Pre-allocate agent-facing storage keys for each file so transcription
@@ -444,7 +497,7 @@ func (p *PromptProxy) buildAgentStatusContext(ctx context.Context, agentID uuid.
 	// Connections needing setup (no credentials).
 	conns, _ := q.ListConnectionsByAgent(ctx, pgID)
 	for _, c := range conns {
-		if c.Credentials == "" {
+		if c.AccessTokenRef == "" {
 			sections = append(sections, fmt.Sprintf(
 				"- Connection %q needs authorization. The user should visit: %s",
 				c.Name, c.AuthUrl))
@@ -540,6 +593,10 @@ type usageInfo struct {
 // callback-bound UI (e.g. Telegram inline keyboards).
 func StreamNDJSONResponse(body io.Reader, runID string, events chan<- ResponseEvent) (string, []message.Message, *usageInfo, error) {
 	defer close(events)
+
+	// Announce the run before any tokens flow so bridge drivers can wire
+	// up runID-bound UI (e.g. the "Stop" button posted after a stall).
+	events <- ResponseEvent{Type: "run_started", RunID: runID}
 
 	scanner := bufio.NewScanner(body)
 	// A single NDJSON event can embed base64 file content (e.g. image tool

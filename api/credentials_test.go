@@ -325,8 +325,8 @@ func TestOAuthCallbackFlow(t *testing.T) {
 
 	// Set OAuth app credentials.
 	enc := testEncryptor()
-	encClientID, _ := enc.Encrypt("mock-client-id")
-	encClientSecret, _ := enc.Encrypt("mock-client-secret")
+	encClientID, _ := enc.Put(context.Background(), "test/client_id", "mock-client-id")
+	encClientSecret, _ := enc.Put(context.Background(), "test/client_secret", "mock-client-secret")
 	if err := q.UpdateConnectionOAuthApp(context.Background(), dbq.UpdateConnectionOAuthAppParams{
 		AgentID:      toPgUUID(agentID),
 		Slug:         "mock-oauth",

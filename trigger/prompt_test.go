@@ -36,18 +36,22 @@ func TestStreamNDJSONResponse(t *testing.T) {
 		}
 
 		// Verify events were forwarded (channel is closed by StreamNDJSONResponse).
+		// First event is the run_started announcement.
 		var received []ResponseEvent
 		for ev := range events {
 			received = append(received, ev)
 		}
-		if len(received) != 2 {
-			t.Fatalf("received %d events, want 2", len(received))
+		if len(received) != 3 {
+			t.Fatalf("received %d events, want 3", len(received))
 		}
-		if received[0].Type != "text-delta" || received[0].Text != "Hello " {
-			t.Errorf("event[0] = %+v", received[0])
+		if received[0].Type != "run_started" || received[0].RunID != "run-1" {
+			t.Errorf("event[0] = %+v, want run_started for run-1", received[0])
 		}
-		if received[1].Type != "text-delta" || received[1].Text != "world" {
+		if received[1].Type != "text-delta" || received[1].Text != "Hello " {
 			t.Errorf("event[1] = %+v", received[1])
+		}
+		if received[2].Type != "text-delta" || received[2].Text != "world" {
+			t.Errorf("event[2] = %+v", received[2])
 		}
 	})
 
@@ -88,10 +92,13 @@ func TestStreamNDJSONResponse(t *testing.T) {
 		for ev := range events {
 			received = append(received, ev)
 		}
-		if len(received) != 1 {
-			t.Fatalf("received %d events, want 1", len(received))
+		if len(received) != 2 {
+			t.Fatalf("received %d events, want 2", len(received))
 		}
-		cr := received[0]
+		if received[0].Type != "run_started" || received[0].RunID != "run-3" {
+			t.Errorf("event[0] = %+v, want run_started for run-3", received[0])
+		}
+		cr := received[1]
 		if cr.Type != "confirmation_required" {
 			t.Errorf("type = %q, want confirmation_required", cr.Type)
 		}

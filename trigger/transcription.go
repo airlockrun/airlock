@@ -5,9 +5,9 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/airlockrun/airlock/crypto"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
+	"github.com/airlockrun/airlock/secrets"
 	"github.com/airlockrun/goai/model"
 	solprovider "github.com/airlockrun/sol/provider"
 )
@@ -23,7 +23,7 @@ type TranscriptionResolver func(ctx context.Context) (model.TranscriptionModel, 
 // NewTranscriptionResolver returns a resolver that reads
 // system_settings.default_transcription_model and looks up the associated
 // provider credentials.
-func NewTranscriptionResolver(database *db.DB, encryptor *crypto.Encryptor) TranscriptionResolver {
+func NewTranscriptionResolver(database *db.DB, encryptor secrets.Store) TranscriptionResolver {
 	return func(ctx context.Context) (model.TranscriptionModel, error) {
 		q := dbq.New(database.Pool())
 		settings, err := q.GetSystemSettings(ctx)
@@ -41,7 +41,7 @@ func NewTranscriptionResolver(database *db.DB, encryptor *crypto.Encryptor) Tran
 		if !p.IsEnabled {
 			return nil, fmt.Errorf("provider %q is disabled", providerID)
 		}
-		apiKey, err := encryptor.Decrypt(p.ApiKey)
+		apiKey, err := encryptor.Get(ctx, "provider/"+p.ProviderID+"/api_key", p.ApiKey)
 		if err != nil {
 			return nil, fmt.Errorf("decrypt API key for %q: %w", providerID, err)
 		}

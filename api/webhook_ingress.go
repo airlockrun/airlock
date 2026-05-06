@@ -12,9 +12,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/airlockrun/airlock/crypto"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
+	"github.com/airlockrun/airlock/secrets"
 	"github.com/airlockrun/airlock/trigger"
 	"github.com/go-chi/chi/v5"
 	"go.uber.org/zap"
@@ -23,7 +23,7 @@ import (
 type webhookIngressHandler struct {
 	dispatcher *trigger.Dispatcher
 	db         *db.DB
-	encryptor  *crypto.Encryptor
+	encryptor  secrets.Store
 	logger     *zap.Logger
 }
 
@@ -67,7 +67,7 @@ func (h *webhookIngressHandler) HandleWebhook(w http.ResponseWriter, r *http.Req
 			writeJSONError(w, http.StatusInternalServerError, "webhook not configured")
 			return
 		}
-		secret, err := h.encryptor.Decrypt(wh.Secret)
+		secret, err := h.encryptor.Get(r.Context(), "webhook/"+pgUUID(wh.ID).String()+"/secret", wh.Secret)
 		if err != nil {
 			h.logger.Error("failed to decrypt webhook secret", zap.Error(err))
 			writeJSONError(w, http.StatusInternalServerError, "webhook not configured")

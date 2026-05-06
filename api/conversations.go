@@ -375,7 +375,7 @@ func (h *conversationsHandler) Prompt(w http.ResponseWriter, r *http.Request) {
 	// we fall through to the normal forward-to-agent path.
 	access := trigger.ResolveAgentAccess(ctx, q, agentID, userID)
 	var forceCompact bool
-	if cmd, err := trigger.TrySlashCommand(ctx, q, convID, agentID, access, req.Message, h.logger); err != nil {
+	if cmd, err := trigger.TrySlashCommand(ctx, q, h.dispatcher, convID, agentID, access, req.Message, h.logger); err != nil {
 		h.logger.Error("slash command failed", zap.Error(err))
 		writeError(w, http.StatusInternalServerError, "command failed")
 		return
@@ -579,20 +579,26 @@ func (h *conversationsHandler) NotifyUpgradeComplete(ctx context.Context, agentI
 	}
 
 	llmText := prefix + message
-	// Resolve CallerAccess from the conversation's owning user so the
-	// post-upgrade follow-up turn keeps the same admin/user/public gate
-	// as the original requestUpgrade caller. Without this the agent
-	// defaults to AccessUser and admin-only verbs (requestUpgrade,
-	// queryDB, execDB) silently fall out of the JS runtime — the LLM's
-	// natural "let me try requestUpgrade again to fix X" reaction
-	// crashes with ReferenceError.
+
+	// Look up the conversation up front — determines delivery channel
+	// (web pubsub vs bridge SendParts) and resolves CallerAccess.
 	q := dbq.New(h.db.Pool())
 	access := agentsdk.AccessPublic
-	if convUUID, err := uuid.Parse(conversationID); err == nil {
-		if conv, err := q.GetConversationByID(ctx, toPgUUID(convUUID)); err == nil {
+	var conv dbq.AgentConversation
+	convUUID, err := uuid.Parse(conversationID)
+	if err == nil {
+		if loaded, lerr := q.GetConversationByID(ctx, toPgUUID(convUUID)); lerr == nil {
+			conv = loaded
 			access = trigger.ResolveAgentAccess(ctx, q, agentID, pgUUID(conv.UserID))
 		}
 	}
+	isBridge := conv.Source == "bridge" && conv.BridgeID.Valid &&
+		conv.ExternalID.Valid && conv.ExternalID.String != "" && h.bridgeMgr != nil
+
+	// CallerAccess survives the post-upgrade follow-up turn so admin-only
+	// JS bindings (requestUpgrade, queryDB, execDB) keep working — without
+	// it the agent defaults to AccessUser and the LLM's natural "let me
+	// retry requestUpgrade" crashes with ReferenceError.
 	input := agentsdk.PromptInput{
 		Message:        llmText,
 		ConversationID: conversationID,
@@ -600,18 +606,19 @@ func (h *conversationsHandler) NotifyUpgradeComplete(ctx context.Context, agentI
 		CallerAccess:   access,
 	}
 
-	// Publish a NotificationEvent so the bubble renders live in the UI.
-	// SessionAppend writes the corresponding DB row asynchronously when
-	// the agent processes the prompt; on refresh the chat store loads
-	// from DB and the synthesized live row is replaced by the persisted
-	// one (matched by ordering, not ID, so no duplicate).
-	partsJSON, _ := json.Marshal([]agentsdk.DisplayPart{{Type: "text", Text: llmText}})
-	_ = h.pubsub.Publish(context.Background(), agentID, realtime.NewEnvelope("notification", agentID.String(), &airlockv1.NotificationEvent{
-		AgentId:        agentID.String(),
-		ConversationId: conversationID,
-		PartsJson:      string(partsJSON),
-		Source:         source,
-	}))
+	// Web only: publish a NotificationEvent so the user-side bubble
+	// renders live before the agent's reply lands. Bridges don't have a
+	// notification channel — their user already knows they triggered the
+	// upgrade; just streaming the agent's follow-up is enough.
+	if !isBridge {
+		partsJSON, _ := json.Marshal([]agentsdk.DisplayPart{{Type: "text", Text: llmText}})
+		_ = h.pubsub.Publish(context.Background(), agentID, realtime.NewEnvelope("notification", agentID.String(), &airlockv1.NotificationEvent{
+			AgentId:        agentID.String(),
+			ConversationId: conversationID,
+			PartsJson:      string(partsJSON),
+			Source:         source,
+		}))
+	}
 
 	// Stream the agent's response in-process. The convLock is held until
 	// the stream drains so a concurrent user prompt waits its turn.
@@ -624,7 +631,25 @@ func (h *conversationsHandler) NotifyUpgradeComplete(ctx context.Context, agentI
 	go func() {
 		defer h.convLocks.Unlock(conversationID)
 		bgCtx := context.Background()
-		publishRunEvents(bgCtx, rc, h.pubsub, agentID, runID, conversationID, h.logger)
+		if isBridge {
+			// Drain the NDJSON stream, collecting the final assistant
+			// text. Send it as a single bridge message — bridge users
+			// don't need progressive streaming for a short follow-up.
+			respEvents := make(chan trigger.ResponseEvent, 64)
+			go func() {
+				for range respEvents {
+				}
+			}()
+			responseText, _, _, _ := trigger.StreamNDJSONResponse(rc, runID.String(), respEvents)
+			if responseText != "" {
+				parts := []agentsdk.DisplayPart{{Type: "text", Text: responseText}}
+				if err := h.bridgeMgr.SendParts(bgCtx, pgUUID(conv.BridgeID), conv.ExternalID.String, parts); err != nil {
+					h.logger.Warn("post-upgrade bridge delivery failed", zap.Error(err))
+				}
+			}
+		} else {
+			publishRunEvents(bgCtx, rc, h.pubsub, agentID, runID, conversationID, h.logger)
+		}
 
 		// Same CAS-protected fallback as the user-prompt path: if the
 		// agent never wrote a terminal status (timed out, died), mark

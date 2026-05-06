@@ -46,7 +46,7 @@ func (h *agentHandler) ServiceProxy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// No credentials → 402 auth required.
-	if conn.Credentials == "" {
+	if conn.AccessTokenRef == "" {
 		writeJSON(w, http.StatusPaymentRequired, map[string]string{
 			"error":    "auth_required",
 			"slug":     conn.Slug,
@@ -70,7 +70,7 @@ func (h *agentHandler) ServiceProxy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Decrypt credentials.
-	creds, err := h.encryptor.Decrypt(conn.Credentials)
+	creds, err := h.encryptor.Get(r.Context(), "connection/"+pgUUID(conn.ID).String()+"/access_token", conn.AccessTokenRef)
 	if err != nil {
 		h.logger.Error("decrypt credentials failed", zap.Error(err))
 		writeJSONError(w, http.StatusInternalServerError, "failed to decrypt credentials")
@@ -136,6 +136,14 @@ func injectAuth(req *http.Request, authInjectionJSON []byte, creds string) {
 		req.Header.Set(name, creds)
 	case agentsdk.AuthInjectPathPrefix:
 		req.URL.Path = "/" + creds + req.URL.Path
+	case agentsdk.AuthInjectQueryParam:
+		name := injection.Name
+		if name == "" {
+			name = "token"
+		}
+		q := req.URL.Query()
+		q.Set(name, creds)
+		req.URL.RawQuery = q.Encode()
 	}
 }
 

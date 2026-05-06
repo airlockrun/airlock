@@ -27,9 +27,17 @@ type SlashCommand struct {
 // rendered into platform command menus.
 var Registry = []SlashCommand{
 	{Name: "auth", Description: "Link your Airlock account", Access: agentsdk.AccessPublic},
+	{Name: "cancel", Description: "Stop the current run", Access: agentsdk.AccessPublic},
 	{Name: "clear", Description: "Clear conversation context", Access: agentsdk.AccessUser},
 	{Name: "compact", Description: "Summarize and compact context", Access: agentsdk.AccessUser},
 	{Name: "echo", Description: "Toggle tool output bubbles (on / off / blank=flip)", Access: agentsdk.AccessUser},
+}
+
+// RunCanceler is the slice of *Dispatcher that TrySlashCommand uses to
+// fire the /cancel command. Defined as an interface so tests can stub
+// without standing up containers / DB / encryptor.
+type RunCanceler interface {
+	CancelRun(runID uuid.UUID) bool
 }
 
 // findCommand returns the registry entry for name (without leading slash)
@@ -101,6 +109,7 @@ func accessRank(a agentsdk.Access) int {
 func TrySlashCommand(
 	ctx context.Context,
 	q *dbq.Queries,
+	canceler RunCanceler,
 	convID pgtype.UUID,
 	agentID uuid.UUID,
 	access agentsdk.Access,
@@ -145,6 +154,8 @@ func TrySlashCommand(
 		// either already linked (bridge path past identity lookup) or
 		// signed in via web — either way nothing to bind.
 		return SlashCommandResult{Handled: true, Reply: "You are already linked."}, nil
+	case "cancel":
+		return SlashCommandResult{Handled: true, Reply: handleCancelCommand(ctx, q, canceler, convID)}, nil
 	case "clear":
 		reply, err := handleClearCommand(ctx, q, convID, agentID, logger)
 		if err != nil {
@@ -166,6 +177,29 @@ func TrySlashCommand(
 	return SlashCommandResult{Handled: true, Reply: "Unhandled command"}, nil
 }
 
+// handleCancelCommand aborts the most recent in-flight prompt run for this
+// conversation by querying for it and firing the dispatcher's cancel hook.
+// Returns a user-visible reply describing the outcome. The HTTP-request
+// abort is what flips the run row out of 'running' (via the agent's
+// r.Complete or the stuck-run sweeper as a backstop).
+func handleCancelCommand(ctx context.Context, q *dbq.Queries, canceler RunCanceler, convID pgtype.UUID) string {
+	if !convID.Valid {
+		return "Nothing to cancel."
+	}
+	convIDStr := uuid.UUID(convID.Bytes).String()
+	row, err := q.GetLatestRunningPromptRun(ctx, convIDStr)
+	if err != nil {
+		return "Nothing to cancel."
+	}
+	if canceler == nil || !canceler.CancelRun(uuid.UUID(row.Bytes)) {
+		// Either no live in-memory state (airlock restarted) or the run
+		// just finalized between query and dispatch. The HTTP path's own
+		// finalization or the stuck-run sweeper will mark the row.
+		return "Nothing to cancel."
+	}
+	return "Run cancelled."
+}
+
 // handleClearCommand advances the conversation's context checkpoint to a newly
 // inserted marker row — forgetting prior LLM context without deleting history
 // from the DB. The marker is rendered by the UI as a "context cleared" divider
@@ -176,6 +210,9 @@ func TrySlashCommand(
 // and leaving the run suspended would surface a stale confirmation dialog on
 // the next page reload.
 func handleClearCommand(ctx context.Context, q *dbq.Queries, convID pgtype.UUID, agentID uuid.UUID, logger *zap.Logger) (string, error) {
+	if !convID.Valid {
+		return "Nothing to clear.", nil
+	}
 	tokensFreed, err := q.SumPreCheckpointTokens(ctx, convID)
 	if err != nil {
 		return "", fmt.Errorf("sum pre-checkpoint tokens: %w", err)
@@ -257,6 +294,9 @@ func ResolveEcho(settingsJSON []byte, driverDefault bool) bool {
 // explicit value, treating unset as off — so the first `/echo` in a chat
 // that's quiet by default always turns echo on, which matches user intent.
 func handleEchoCommand(ctx context.Context, q *dbq.Queries, convID pgtype.UUID, args string) (string, error) {
+	if !convID.Valid {
+		return "No conversation yet — send a message first, then `/echo`.", nil
+	}
 	arg := strings.ToLower(strings.TrimSpace(args))
 	var next bool
 	switch arg {

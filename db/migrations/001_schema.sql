@@ -115,6 +115,11 @@ CREATE TABLE agents (
     source_ref      text NOT NULL,
     image_ref       text NOT NULL,
     db_schema       text NOT NULL,
+    -- db_password holds the encrypted password for the agent's per-schema DB
+    -- role. Populated by the builder after createAgentSchema; read by the
+    -- dispatcher when starting the agent container and by upgrade flows.
+    -- Stored as a Store-encoded value (today: AES-GCM ciphertext blob).
+    db_password     text NOT NULL,
     sdk_version     text NOT NULL,
     config          jsonb NOT NULL,
     extra_prompts   jsonb NOT NULL,
@@ -161,7 +166,12 @@ CREATE TABLE connections (
     config              jsonb NOT NULL,
     client_id           text NOT NULL,
     client_secret       text NOT NULL,
-    credentials         text NOT NULL,
+    -- access_token_ref holds the secret-store ref for the OAuth access token
+    -- (or the API key, for non-OAuth connections). Empty string means
+    -- "unauthorized" — the (credentials != '') predicate in queries below
+    -- carries that signal forward as authorized=true/false. refresh_token
+    -- holds the rotation token alongside it.
+    access_token_ref    text NOT NULL,
     refresh_token       text NOT NULL,
     token_expires_at    timestamptz,
     created_at          timestamptz NOT NULL DEFAULT now(),
@@ -186,10 +196,17 @@ CREATE TABLE agent_mcp_servers (
     -- on demand at oauth_discovery start when still missing.
     registration_endpoint text NOT NULL,
     scopes           text NOT NULL,
+    -- auth_injection mirrors connections.auth_injection: it shapes how the
+    -- decrypted access token is added to each outbound MCP HTTP call (bearer
+    -- header, custom header, query param, path prefix). Empty / missing
+    -- Type defaults to bearer to preserve pre-column behavior.
+    auth_injection   jsonb NOT NULL,
     tool_schemas     jsonb NOT NULL,
     client_id        text NOT NULL,
     client_secret    text NOT NULL,
-    credentials      text NOT NULL,
+    -- access_token_ref holds the secret-store ref for the MCP server's OAuth
+    -- access token. See connections.access_token_ref for the same shape.
+    access_token_ref text NOT NULL,
     refresh_token    text NOT NULL,
     token_expires_at timestamptz,
     last_synced_at   timestamptz,
@@ -222,7 +239,11 @@ CREATE TABLE bridges (
     -- config which carries driver-internal state (poll offset, app id,
     -- webhook secret).
     settings        jsonb NOT NULL,
-    token_encrypted text NOT NULL,
+    -- bot_token_ref holds the secret-store reference for the bot token. With
+    -- the local AES-GCM store this is a self-contained ciphertext blob; with
+    -- a remote store (e.g. Vault) it would be the path that resolves to the
+    -- token. Caller goes through secrets.Store, never reads this directly.
+    bot_token_ref   text NOT NULL,
     last_polled_at  timestamptz,
     created_at      timestamptz NOT NULL DEFAULT now(),
     updated_at      timestamptz NOT NULL DEFAULT now()

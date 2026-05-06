@@ -3,16 +3,16 @@ package api
 import (
 	"net/http"
 
-	"github.com/airlockrun/airlock/crypto"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
+	"github.com/airlockrun/airlock/secrets"
 	"go.uber.org/zap"
 )
 
 type settingsHandler struct {
 	db        *db.DB
-	encryptor *crypto.Encryptor
+	encryptor secrets.Store
 	logger    *zap.Logger
 }
 

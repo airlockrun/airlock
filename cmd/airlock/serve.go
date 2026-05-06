@@ -21,6 +21,7 @@ import (
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/airlockrun/airlock/oauth"
 	"github.com/airlockrun/airlock/realtime"
+	"github.com/airlockrun/airlock/secrets"
 	"github.com/airlockrun/airlock/storage"
 	"github.com/airlockrun/airlock/trigger"
 	solprovider "github.com/airlockrun/sol/provider"
@@ -137,11 +138,11 @@ func runServe(_ []string) {
 		}
 		oldKeys = append(oldKeys, oldKey)
 	}
-	enc := crypto.New(encKey, oldKeys...)
+	secretStore := secrets.NewLocal(crypto.New(encKey, oldKeys...))
 	logger.Info("encryption configured")
 
 	// Build service
-	buildSvc := builder.New(cfg, database, containers, enc, logger.Named("builder"))
+	buildSvc := builder.New(cfg, database, containers, secretStore, logger.Named("builder"))
 	if err := buildSvc.RecoverStuckOperations(ctx); err != nil {
 		logger.Fatal("build service recovery failed", zap.Error(err))
 	}
@@ -182,8 +183,8 @@ func runServe(_ []string) {
 	wsHandler := realtime.NewHandler(database, hub, pubsub, logger.Named("handler"))
 
 	// Trigger system
-	dispatcher := trigger.NewDispatcher(cfg, database, containers, enc, logger.Named("dispatcher"))
-	transcriptionResolver := trigger.NewTranscriptionResolver(database, enc)
+	dispatcher := trigger.NewDispatcher(cfg, database, containers, secretStore, logger.Named("dispatcher"))
+	transcriptionResolver := trigger.NewTranscriptionResolver(database, secretStore)
 	prompter := trigger.NewPromptProxy(dispatcher, database, s3Client, transcriptionResolver, logger.Named("prompt-proxy"))
 	telegramDriver := trigger.NewTelegramDriver(logger.Named("telegram"))
 	discordDriver := trigger.NewDiscordDriver(logger.Named("discord"))
@@ -191,7 +192,7 @@ func runServe(_ []string) {
 		"telegram": telegramDriver,
 		"discord":  discordDriver,
 	}
-	bridgeMgr := trigger.NewBridgeManager(drivers, prompter, database, enc, cfg.JWTSecret, cfg.PublicURL, logger.Named("bridges"))
+	bridgeMgr := trigger.NewBridgeManager(drivers, prompter, database, secretStore, cfg.JWTSecret, cfg.PublicURL, logger.Named("bridges"))
 	scheduler := trigger.NewScheduler(dispatcher, database, logger.Named("scheduler"))
 
 	// OAuth client (used by credential endpoints and refresh job)
@@ -214,7 +215,7 @@ func runServe(_ []string) {
 		OAuthClient:    oauthClient,
 		TelegramDriver: telegramDriver,
 		DiscordDriver:  discordDriver,
-		Encryptor:      enc,
+		Secrets:        secretStore,
 		S3Client:       s3Client,
 		BuildService:   buildSvc,
 		Dispatcher:     dispatcher,
@@ -262,7 +263,7 @@ func runServe(_ []string) {
 	trigger.StartPublicSweeper(ctx, database, bridgeMgr, 5*time.Minute, logger.Named("public-sweeper"))
 
 	// Token refresh job
-	refreshJob := oauth.NewRefreshJob(database, enc, oauthClient, logger.Named("oauth-refresh"))
+	refreshJob := oauth.NewRefreshJob(database, secretStore, oauthClient, logger.Named("oauth-refresh"))
 	go refreshJob.Run(ctx)
 
 	// Event file cleanup — delete events/ prefix files older than 24h.
@@ -416,32 +417,25 @@ func runServe(_ []string) {
 		}
 	}()
 
-	// Stuck-run sweeper — runs that have been in 'running' status past the
-	// outer dispatcher timeout (2:15) plus a 15s grace are presumed dead.
-	// Mark them error/agent-disconnected, synthesize orphan tool_results
-	// (so the next LLM turn doesn't 400 on unpaired tool_use), and publish
-	// a synthetic run.complete WS event so any live UI that was watching
-	// this run unblocks. If the agent's r.Complete eventually arrives,
-	// UpsertRunComplete is idempotent and the late truth overwrites with
-	// the actual outcome — frontend re-paints. Tick frequency keeps the
-	// user-visible "stuck" window short without hammering the DB.
-	//
-	// Skip runs the dispatcher still tracks in memory: extended runs can
-	// legitimately live well past the base 2:30 cutoff (up to MaxExtensions
-	// × ExtendIncrement past start). The dispatcher's own deadline timer
-	// will eventually fire and tear them down through the normal cancel
-	// path. Orphan extended runs (airlock restart loses memory state) fall
-	// through the in-memory check and get reaped at the base threshold —
-	// matches "user lost their session anyway."
+	// Stuck-run sweeper — runs in 'running' status older than the absolute
+	// HTTP ceiling are presumed orphaned (airlock restart, agent crash mid-
+	// stream, network partition). Skip runs the dispatcher still tracks in
+	// memory: those will tear down naturally when the cancel context fires
+	// or the user clicks Cancel. Synthesize orphan tool_results so the next
+	// LLM turn doesn't 400 on unpaired tool_use, and publish a synthetic
+	// run.complete WS event so any live UI that was watching unblocks. If
+	// the agent's r.Complete eventually arrives, UpsertRunComplete is
+	// idempotent and the late truth overwrites — frontend re-paints.
 	go func() {
 		sweepLogger := logger.Named("stuck-run-sweeper")
-		ticker := time.NewTicker(30 * time.Second)
+		ticker := time.NewTicker(time.Minute)
 		defer ticker.Stop()
 		q := dbq.New(database.Pool())
+		stuckCutoff := trigger.PromptHTTPCeiling + 30*time.Second
 		for {
 			select {
 			case <-ticker.C:
-				cutoff := pgtype.Timestamptz{Time: time.Now().Add(-(2*time.Minute + 30*time.Second)), Valid: true}
+				cutoff := pgtype.Timestamptz{Time: time.Now().Add(-stuckCutoff), Valid: true}
 				stuck, err := q.ListStuckRuns(ctx, cutoff)
 				if err != nil {
 					sweepLogger.Error("list stuck runs", zap.Error(err))

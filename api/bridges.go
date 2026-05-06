@@ -8,9 +8,9 @@ import (
 
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 	"github.com/airlockrun/airlock/auth"
-	"github.com/airlockrun/airlock/crypto"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
+	"github.com/airlockrun/airlock/secrets"
 	"github.com/airlockrun/airlock/trigger"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -22,7 +22,7 @@ import (
 
 type bridgeHandler struct {
 	db        *db.DB
-	encryptor *crypto.Encryptor
+	encryptor secrets.Store
 	telegram  *trigger.TelegramDriver
 	discord   *trigger.DiscordDriver
 	bridgeMgr *trigger.BridgeManager
@@ -109,7 +109,7 @@ func (h *bridgeHandler) CreateBridge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	encToken, err := h.encryptor.Encrypt(req.Token)
+	encToken, err := h.encryptor.Put(ctx, "bridge/new/bot_token", req.Token)
 	if err != nil {
 		h.logger.Error("encrypt token failed", zap.Error(err))
 		writeError(w, http.StatusInternalServerError, "encryption failed")
@@ -120,7 +120,7 @@ func (h *bridgeHandler) CreateBridge(w http.ResponseWriter, r *http.Request) {
 	br, err := q.CreateBridge(ctx, dbq.CreateBridgeParams{
 		Type:           bridgeType,
 		Name:           req.Name,
-		TokenEncrypted: encToken,
+		BotTokenRef: encToken,
 		BotUsername:    botUsername,
 		AgentID:        agentPgID,
 		CreatedBy:      createdBy,
@@ -136,7 +136,7 @@ func (h *bridgeHandler) CreateBridge(w http.ResponseWriter, r *http.Request) {
 	// driver can hit the platform API directly without round-tripping
 	// through the encryptor.
 	initBr := br
-	initBr.TokenEncrypted = req.Token
+	initBr.BotTokenRef = req.Token
 	var initErr error
 	switch bridgeType {
 	case "telegram":
@@ -296,10 +296,15 @@ func (h *bridgeHandler) UpdateBridge(w http.ResponseWriter, r *http.Request) {
 		if mode != trigger.PublicSessionModeOneShot {
 			mode = trigger.PublicSessionModeSession
 		}
+		timeout := int(req.Settings.PublicPromptTimeoutSeconds)
+		if timeout <= 0 {
+			timeout = trigger.DefaultPublicPromptTimeoutSeconds
+		}
 		settings := trigger.BridgeSettings{
-			AllowPublicDMs:          req.Settings.AllowPublicDms,
-			PublicSessionTTLSeconds: int(req.Settings.PublicSessionTtlSeconds),
-			PublicSessionMode:       mode,
+			AllowPublicDMs:             req.Settings.AllowPublicDms,
+			PublicSessionTTLSeconds:    int(req.Settings.PublicSessionTtlSeconds),
+			PublicSessionMode:          mode,
+			PublicPromptTimeoutSeconds: timeout,
 		}
 		raw, mErr := json.Marshal(settings)
 		if mErr != nil {
@@ -410,9 +415,10 @@ func bridgeFieldsToProto(
 		CreatedAt:   timestamppb.New(createdAt.Time),
 		UpdatedAt:   timestamppb.New(updatedAt.Time),
 		Settings: &airlockv1.BridgeSettings{
-			AllowPublicDms:          settings.AllowPublicDMs,
-			PublicSessionTtlSeconds: int32(settings.PublicSessionTTLSeconds),
-			PublicSessionMode:       settings.PublicSessionMode,
+			AllowPublicDms:             settings.AllowPublicDMs,
+			PublicSessionTtlSeconds:    int32(settings.PublicSessionTTLSeconds),
+			PublicSessionMode:          settings.PublicSessionMode,
+			PublicPromptTimeoutSeconds: int32(settings.PublicPromptTimeoutSeconds),
 		},
 	}
 	if agentID.Valid {

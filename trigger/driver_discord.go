@@ -142,7 +142,7 @@ func (d *DiscordDriver) Init(ctx context.Context, br *dbq.Bridge) error {
 	// First-time setup. We persist the application_id discovered from
 	// GET /users/@me so RegisterCommands / interaction-respond paths
 	// don't need a fresh round-trip every startup.
-	info, err := d.fetchBotInfo(ctx, br.TokenEncrypted)
+	info, err := d.fetchBotInfo(ctx, br.BotTokenRef)
 	if err != nil {
 		return fmt.Errorf("discord init: %w", err)
 	}
@@ -175,7 +175,7 @@ func (d *DiscordDriver) Activate(ctx context.Context, br dbq.Bridge) error {
 	d.bridges[pgUUID(br.ID)] = conn
 	d.mu.Unlock()
 
-	token := br.TokenEncrypted
+	token := br.BotTokenRef
 	go d.runGateway(connCtx, br, token, conn)
 	return nil
 }
@@ -260,13 +260,13 @@ func (d *DiscordDriver) RegisterCommands(ctx context.Context, br dbq.Bridge, cmd
 		}
 	}
 	url := d.api() + "/applications/" + cfg.ApplicationID + "/commands"
-	return d.callDiscord(ctx, br.TokenEncrypted, http.MethodPut, url, body, nil)
+	return d.callDiscord(ctx, br.BotTokenRef, http.MethodPut, url, body, nil)
 }
 
 // --- SendStream ---
 
 func (d *DiscordDriver) SendStream(ctx context.Context, br dbq.Bridge, externalID string, echo bool, events <-chan ResponseEvent) (string, error) {
-	token := br.TokenEncrypted
+	token := br.BotTokenRef
 	channelID := externalID
 
 	// Discord doesn't expose a "typing…" indicator that survives more
@@ -274,6 +274,11 @@ func (d *DiscordDriver) SendStream(ctx context.Context, br dbq.Bridge, externalI
 	// loop. Mirrors Telegram's keepTyping.
 	stopTyping := d.keepTyping(ctx, token, channelID)
 	defer stopTyping()
+
+	// runEndedCh closes when this SendStream returns. The cancel-button
+	// goroutine watches it to know when to delete its message.
+	runEndedCh := make(chan struct{})
+	defer close(runEndedCh)
 
 	var sb strings.Builder
 	flushText := func() {
@@ -286,6 +291,9 @@ func (d *DiscordDriver) SendStream(ctx context.Context, br dbq.Bridge, externalI
 
 	for ev := range events {
 		switch ev.Type {
+		case "run_started":
+			go d.scheduleCancelButton(ctx, token, channelID, ev.RunID, runEndedCh)
+
 		case "text-delta":
 			sb.WriteString(ev.Text)
 
@@ -672,14 +680,22 @@ func (d *DiscordDriver) handleDispatch(ctx context.Context, br dbq.Bridge, conn 
 		// original message visible while the agent processes the
 		// callback. Errors here aren't fatal; if Discord drops the
 		// interaction, the user just sees the spinner timeout.
-		_ = d.respondInteractionDeferred(ctx, br.TokenEncrypted, iv.ID, iv.Token)
+		_ = d.respondInteractionDeferred(ctx, br.BotTokenRef, iv.ID, iv.Token)
 
+		var msgID string
+		if iv.Message != nil {
+			msgID = iv.Message.ID
+		}
 		ev := BridgeEvent{
 			BridgeID:   pgUUID(br.ID),
 			ExternalID: iv.ChannelID,
 			SenderID:   iv.UserID(),
 			SenderName: iv.UserName(),
-			Callback:   &BridgeCallback{Data: iv.Data.CustomID, AckID: iv.Token},
+			Callback: &BridgeCallback{
+				Data:      iv.Data.CustomID,
+				AckID:     iv.Token,
+				MessageID: msgID,
+			},
 			RawPayload: p.D,
 		}
 		select {
@@ -897,6 +913,44 @@ func (d *DiscordDriver) gatewayURL(ctx context.Context, token string, conn *disc
 	return resp.URL, nil
 }
 
+// deleteMessage removes a previously sent message. Used by SendStream to
+// clean up the "Still working…" cancel-button message once the run ends.
+func (d *DiscordDriver) deleteMessage(ctx context.Context, token, channelID, messageID string) error {
+	return d.callDiscord(ctx, token, http.MethodDelete, d.api()+"/channels/"+channelID+"/messages/"+messageID, nil, nil)
+}
+
+// RemoveButtons strips the action-row components from a previously sent
+// message via PATCH /channels/{ch}/messages/{msg} with components=[]. The
+// message text is left intact.
+func (d *DiscordDriver) RemoveButtons(ctx context.Context, br dbq.Bridge, externalID, messageID string) error {
+	body := map[string]any{"components": []any{}}
+	return d.callDiscord(ctx, br.BotTokenRef, http.MethodPatch, d.api()+"/channels/"+externalID+"/messages/"+messageID, body, nil)
+}
+
+// scheduleCancelButton waits CancelButtonAfter from run start. If the run
+// is still streaming when the timer fires, it posts a "Still working…"
+// message with a cancel button and waits for the run to end so it can
+// delete the message.
+func (d *DiscordDriver) scheduleCancelButton(ctx context.Context, token, channelID, runID string, runEndedCh <-chan struct{}) {
+	select {
+	case <-runEndedCh:
+		return
+	case <-ctx.Done():
+		return
+	case <-time.After(CancelButtonAfter):
+	}
+
+	msgID, err := d.sendMessage(ctx, token, channelID, "⏳ Still working…", discordCancelButton(runID))
+	if err != nil {
+		return
+	}
+
+	<-runEndedCh
+	delCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = d.deleteMessage(delCtx, token, channelID, msgID)
+}
+
 func (d *DiscordDriver) sendMessage(ctx context.Context, token, channelID, content string, components []map[string]any) (string, error) {
 	body := map[string]any{
 		"content": content,
@@ -1020,7 +1074,7 @@ func (d *DiscordDriver) respondInteractionEphemeral(ctx context.Context, token, 
 // if the user isn't linked yet, BridgeManager.HandleEvent sends them
 // the linking URL on that channel, same as a typed message.
 func (d *DiscordDriver) handleSlashInteraction(ctx context.Context, br dbq.Bridge, conn *discordConn, iv discordInteraction, raw json.RawMessage) {
-	if err := d.respondInteractionEphemeral(ctx, br.TokenEncrypted, iv.ID, iv.Token, "✓"); err != nil {
+	if err := d.respondInteractionEphemeral(ctx, br.BotTokenRef, iv.ID, iv.Token, "✓"); err != nil {
 		d.logger.Warn("discord: ack slash interaction failed",
 			zap.String("command", iv.Data.Name),
 			zap.Error(err),
@@ -1193,6 +1247,24 @@ func discordApprovalButtons(runID string) []map[string]any {
 	}
 }
 
+// discordCancelButton builds the single-button action row attached to the
+// "Still working…" message posted after CancelButtonAfter elapses.
+func discordCancelButton(runID string) []map[string]any {
+	return []map[string]any{
+		{
+			"type": 1,
+			"components": []map[string]any{
+				{
+					"type":      2,
+					"style":     4, // DANGER (red)
+					"label":     "🛑 Stop",
+					"custom_id": "cancel:" + runID,
+				},
+			},
+		},
+	}
+}
+
 // --- Gateway types ---
 
 type gatewayPayload struct {
@@ -1270,6 +1342,11 @@ type discordInteraction struct {
 	Data      discordInteractionData `json:"data"`
 	Member    *discordMember         `json:"member"`
 	User      *discordUser           `json:"user"`
+	Message   *discordInteractionMsg `json:"message"` // populated for component (button) interactions
+}
+
+type discordInteractionMsg struct {
+	ID string `json:"id"`
 }
 
 type discordInteractionData struct {

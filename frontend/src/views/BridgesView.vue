@@ -37,6 +37,7 @@ const editSessionMode = ref<'session' | 'one_shot'>('session')
 const editTTLAmount = ref(3)
 const editTTLUnit = ref<'minutes' | 'hours' | 'days'>('hours')
 const editTTLNever = ref(false)
+const editPublicPromptTimeout = ref(60)
 
 const sessionModes = [
   { label: 'Persistent session', value: 'session', description: 'Conversation history is preserved per channel until the expiry below.' },
@@ -119,6 +120,7 @@ function openEdit(bridge: {
     allowPublicDms?: boolean
     publicSessionTtlSeconds?: number
     publicSessionMode?: string
+    publicPromptTimeoutSeconds?: number
   } | null
 }) {
   editing.value = { id: bridge.id, name: bridge.name, agentId: bridge.agentId || '' }
@@ -130,6 +132,7 @@ function openEdit(bridge: {
   const display = pickTTLDisplay(ttlSecs === 0 ? 10800 : ttlSecs)
   editTTLAmount.value = display.amount
   editTTLUnit.value = display.unit
+  editPublicPromptTimeout.value = bridge.settings?.publicPromptTimeoutSeconds || 60
   editVisible.value = true
 }
 
@@ -142,6 +145,7 @@ async function onEdit() {
         allowPublicDms: editAllowPublicDMs.value,
         publicSessionTtlSeconds: editTTLNever.value ? 0 : ttlToSeconds(editTTLAmount.value, editTTLUnit.value),
         publicSessionMode: editSessionMode.value,
+        publicPromptTimeoutSeconds: editPublicPromptTimeout.value,
       },
     })
     toast.add({ severity: 'success', summary: 'Bridge updated', life: 3000 })
@@ -305,6 +309,25 @@ function confirmDelete(bridge: { id: string; name: string }) {
           <small style="color: var(--p-text-muted-color)">
             {{ sessionModes.find((m) => m.value === editSessionMode)?.description }}
           </small>
+        </div>
+
+        <!-- Public prompt timeout -->
+        <div style="display: flex; flex-direction: column; gap: 0.5rem; border-top: 1px solid var(--p-surface-200); padding-top: 1rem">
+          <div>
+            <div style="font-weight: 600">Public prompt timeout</div>
+            <small style="color: var(--p-text-muted-color)">
+              Wall-clock cap (in seconds) on a single public-DM prompt run. Authed users are unaffected.
+            </small>
+          </div>
+          <InputNumber
+            v-model="editPublicPromptTimeout"
+            :min="1"
+            :max="3600"
+            showButtons
+            suffix=" sec"
+            style="width: 10rem"
+            inputStyle="width: 100%"
+          />
         </div>
 
         <!-- Public session expiry — only meaningful in session mode -->
