@@ -44,8 +44,15 @@ async function test() {
     const testPath = props.basePath === 'credentials'
       ? `/api/v1/agents/${props.agentId}/credentials/${props.slug}/test`
       : `/api/v1/agents/${props.agentId}/${props.basePath}/${props.slug}/credentials/test`
-    await api.post(testPath)
-    toast.add({ severity: 'success', summary: 'Connection test passed', life: 3000 })
+    // Send the typed token if any so the test runs against what the user
+    // is about to save, not the stale stored credential.
+    const body = apiKey.value ? { apiKey: apiKey.value } : undefined
+    const resp = await api.post(testPath, body)
+    if (resp.data?.success === false) {
+      toast.add({ severity: 'error', summary: resp.data.message || 'Connection test failed', life: 5000 })
+    } else {
+      toast.add({ severity: 'success', summary: 'Connection test passed', life: 3000 })
+    }
   } catch (err: any) {
     toast.add({ severity: 'error', summary: err.response?.data?.error || 'Connection test failed', life: 5000 })
   } finally {

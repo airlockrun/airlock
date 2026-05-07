@@ -51,6 +51,14 @@ function isActive(path: string) {
   return route.path.startsWith(path)
 }
 
+// On /agents/:id/chat we hoist the back affordance into the top bar so
+// the chat view itself doesn't need a header row. backTarget is null on
+// every other route — the button doesn't render.
+const backTarget = computed<string | null>(() => {
+  const m = /^\/agents\/([^/]+)\/chat$/.exec(route.path)
+  return m ? `/agents/${m[1]}` : null
+})
+
 function navigateTo(path: string) {
   router.push(path)
   drawerVisible.value = false
@@ -74,6 +82,14 @@ const userInitial = computed(() => {
             severity="secondary"
             class="mobile-menu-btn"
             @click="drawerVisible = true"
+          />
+          <Button
+            v-if="backTarget"
+            icon="pi pi-arrow-left"
+            text
+            severity="secondary"
+            aria-label="Back"
+            @click="router.push(backTarget)"
           />
           <span style="font-size: 1.25rem; font-weight: 700">Airlock</span>
         </div>
@@ -127,7 +143,7 @@ const userInitial = computed(() => {
       </Drawer>
 
       <!-- Content -->
-      <main class="app-content">
+      <main :class="['app-content', { 'app-content-flush': backTarget }]">
         <router-view />
       </main>
     </div>
@@ -191,6 +207,14 @@ const userInitial = computed(() => {
   padding: 1.5rem;
   overflow-y: auto;
   min-height: 0;
+}
+
+/* Chat manages its own internal padding (input row, messages, etc.) and
+   wants to fill the column edge-to-edge so the message list scrolls
+   right up to the top bar. Side padding is kept as a small breathing
+   gutter; top/bottom drop to 0. */
+.app-content-flush {
+  padding: 0 1rem;
 }
 
 /* Hide sidebar on mobile, show hamburger */

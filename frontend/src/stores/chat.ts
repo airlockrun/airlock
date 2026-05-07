@@ -72,6 +72,27 @@ export const useChatStore = defineStore('chat', () => {
   // with stale tool output. Bounded growth: we only ever add the current
   // runId, and there's at most one in-flight run per conversation.
   const cancelledRunIds = new Set<string>()
+  // /compact spawns a real run, but the only meaningful UI output is the
+  // checkpoint divider that the backend inserts into the DB. The streamed
+  // text-delta ("Context compacted. N tokens freed.") would otherwise land
+  // as a regular assistant bubble. When this is set, run.text_delta is
+  // ignored and run.complete refetches from the DB so the divider shows.
+  const compactRunInFlight = ref(false)
+  // Buffers the agent's "Context compacted. N tokens freed." text so we can
+  // extract tokensFreed and push a synthetic divider on run.complete.
+  const compactReplyBuffer = ref('')
+  // Set by tool-call/tool-result; consumed by the next text-delta to insert
+  // a \n separator between text blocks across LLM steps. Mirrors how
+  // enrichMessages joins persisted per-step rows on refetch.
+  let textBlockBoundary = false
+
+  // Extracts the integer N from "Context compacted. N tokens freed." Falls
+  // back to 0 when the agent emits a different shape — the divider still
+  // renders, just without a token count.
+  function extractTokensFreed(text: string): number {
+    const m = text.match(/(\d+)\s+tokens?\s+freed/i)
+    return m ? Number(m[1]) || 0 : 0
+  }
 
   // Sliding-window pagination state. hasOlder means messages exist older
   // than `messages[0]` — enable the top sentinel observer. hasNewer means
@@ -120,16 +141,34 @@ export const useChatStore = defineStore('chat', () => {
           currentRunId.value = ev.runId
           streamingText.value = ''
           activeToolCalls.clear()
+          textBlockBoundary = false
         }
       }),
       ws.onMessage('run.text_delta', (payload) => {
         const ev = tryFromJson<TextDeltaEvent>(TextDeltaEventSchema, payload)
         if (!ev || !isCurrentRun(ev.runId)) return
+        if (compactRunInFlight.value) {
+          // Buffer the agent's "Context compacted. N tokens freed." line so
+          // we can pull tokensFreed out for the synthetic divider, but
+          // don't surface it as a streaming bubble.
+          compactReplyBuffer.value += ev.text
+          return
+        }
+        // Multi-step run_js loops emit text per step with no implicit
+        // separator, so step1 + step2 deltas would concatenate flush against
+        // each other ("…done.next thing…"). Persisted rows are stored per
+        // step and joined with \n on refetch — match that here when a new
+        // text block follows a tool roundtrip.
+        if (textBlockBoundary && streamingText.value && !streamingText.value.endsWith('\n')) {
+          streamingText.value += '\n'
+        }
+        textBlockBoundary = false
         streamingText.value += ev.text
       }),
       ws.onMessage('run.tool_call', (payload) => {
         const ev = tryFromJson<ToolCallEvent>(ToolCallEventSchema, payload)
         if (!ev || !isCurrentRun(ev.runId)) return
+        textBlockBoundary = true
         activeToolCalls.set(ev.toolCallId, {
           toolCallId: ev.toolCallId,
           toolName: ev.toolName,
@@ -142,6 +181,7 @@ export const useChatStore = defineStore('chat', () => {
       ws.onMessage('run.tool_result', (payload) => {
         const ev = tryFromJson<ToolResultEvent>(ToolResultEventSchema, payload)
         if (!ev || !isCurrentRun(ev.runId)) return
+        textBlockBoundary = true
         const tc = activeToolCalls.get(ev.toolCallId)
         if (tc) {
           tc.output = ev.output
@@ -173,6 +213,34 @@ export const useChatStore = defineStore('chat', () => {
         // Don't finalize if awaiting confirmation — run is suspended, not complete.
         if (pendingConfirmation.value) return
         console.log('[chat] run.complete', { runId: ev.runId, textLen: streamingText.value.length })
+        if (compactRunInFlight.value) {
+          // Push a synthetic divider locally that mirrors the row the
+          // backend persisted in SessionCompact. We avoid a full
+          // loadConversation here because it re-runs enrichMessages, which
+          // splits previously-bundled run_js tool bubbles (one persisted
+          // assistant row per LLM step in the loop).
+          const tokensFreed = extractTokensFreed(compactReplyBuffer.value)
+          const stamp = ev.runId || Date.now().toString()
+          messages.value.push({
+            $typeName: 'airlock.v1.AgentMessageInfo',
+            id: `compact-${stamp}`,
+            role: 'system',
+            source: 'checkpoint',
+            content: '',
+            parts: JSON.stringify([{ type: 'checkpoint', kind: 'compact', tokensFreed }]),
+            tokensIn: 0,
+            tokensOut: 0,
+            costEstimate: 0,
+          } as any)
+          compactRunInFlight.value = false
+          compactReplyBuffer.value = ''
+          streamingText.value = ''
+          activeToolCalls.clear()
+          textBlockBoundary = false
+          currentRunId.value = null
+          sending.value = false
+          return
+        }
         finalizeMessage()
       }),
       ws.onMessage('run.error', (payload) => {
@@ -184,6 +252,7 @@ export const useChatStore = defineStore('chat', () => {
         // matching the shape airlock persists to agent_messages on RunComplete.
         // The persisted row arrives via DB fetch on refresh; this synth makes
         // the live experience match without waiting.
+        compactRunInFlight.value = false
         finalizeMessage()
         const errText = ev.error || 'Run failed.'
         messages.value.push({
@@ -306,6 +375,7 @@ export const useChatStore = defineStore('chat', () => {
     if (hasNewer.value) {
       streamingText.value = ''
       activeToolCalls.clear()
+      textBlockBoundary = false
       pendingNotifications.length = 0
       newMessagesPending.value = true
       currentRunId.value = null
@@ -363,6 +433,7 @@ export const useChatStore = defineStore('chat', () => {
     }
     streamingText.value = ''
     activeToolCalls.clear()
+    textBlockBoundary = false
     currentRunId.value = null
     sending.value = false
   }
@@ -503,6 +574,8 @@ export const useChatStore = defineStore('chat', () => {
     // Slash commands (/clear, /compact, ...) are handled synchronously by
     // Airlock — no run is created and no optimistic user bubble should appear.
     const isSlashCommand = !isResume && text.trim().startsWith('/')
+    compactRunInFlight.value = !isResume && /^\/compact(\s|$)/.test(text.trim())
+    if (compactRunInFlight.value) compactReplyBuffer.value = ''
 
     if (!isResume && !isSlashCommand) {
       // Add optimistic user message for normal sends only. Skip when the
@@ -523,6 +596,7 @@ export const useChatStore = defineStore('chat', () => {
       // Reset streaming state for new messages.
       streamingText.value = ''
       activeToolCalls.clear()
+      textBlockBoundary = false
     }
 
     sending.value = true

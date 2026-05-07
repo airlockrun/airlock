@@ -533,7 +533,7 @@ func (h *conversationsHandler) Prompt(w http.ResponseWriter, r *http.Request) {
 		// Important for the timeout path where the agent never called
 		// RunComplete: any messages persisted before the agent died still
 		// roll up here.
-		costIn, costOut := runLLMCostRates(bgCtx, bgQ, toPgUUID(agentID))
+		costIn, costOut := runLLMCostRates(bgCtx, bgQ, h.logger, toPgUUID(agentID))
 		if err := bgQ.UpdateRunLLMStats(bgCtx, dbq.UpdateRunLLMStatsParams{
 			RunID:      toPgUUID(runID),
 			CostInput:  costIn,
@@ -662,7 +662,7 @@ func (h *conversationsHandler) NotifyUpgradeComplete(ctx context.Context, agentI
 		}); err != nil {
 			h.logger.Error("update upgrade run status", zap.Error(err))
 		}
-		costIn, costOut := runLLMCostRates(bgCtx, bgQ, toPgUUID(agentID))
+		costIn, costOut := runLLMCostRates(bgCtx, bgQ, h.logger, toPgUUID(agentID))
 		if err := bgQ.UpdateRunLLMStats(bgCtx, dbq.UpdateRunLLMStatsParams{
 			RunID:      toPgUUID(runID),
 			CostInput:  costIn,
@@ -769,6 +769,7 @@ func messageToProto(ctx context.Context, s3Client *storage.S3Client, logger *zap
 		CostEstimate: pgNumericToFloat(m.CostEstimate),
 		CreatedAt:    convert.PgTimestampToProto(m.CreatedAt),
 		Source:       m.Source,
+		RunId:        convert.PgUUIDToString(m.RunID),
 	}
 	if len(m.Parts) > 0 {
 		info.Parts = string(resolveMediaPartsJSON(ctx, s3Client, logger, m.Parts))

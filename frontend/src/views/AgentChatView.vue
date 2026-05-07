@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, nextTick, watch, computed } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { useRoute } from 'vue-router'
 import { useToast } from 'primevue/usetoast'
 import { useChatStore } from '@/stores/chat'
 import { ws } from '@/api/ws'
@@ -9,7 +9,6 @@ import api from '@/api/client'
 import MessageParts from '@/components/chat/MessageParts.vue'
 
 const route = useRoute()
-const router = useRouter()
 const toast = useToast()
 const chat = useChatStore()
 
@@ -272,11 +271,9 @@ function formatTokens(n: number): string {
 
 <template>
   <div class="chat-root">
-    <!-- Header -->
-    <div style="display: flex; align-items: center; gap: 0.75rem; padding-bottom: 0.75rem; border-bottom: 1px solid var(--p-surface-200)">
-      <Button icon="pi pi-arrow-left" text severity="secondary" @click="router.push(`/agents/${agentId}`)" />
-      <h2 style="margin: 0; font-size: 1.25rem">Chat</h2>
-    </div>
+    <!-- The dedicated chat header was removed; the back affordance lives
+         in the app top bar (AppLayout) for chat routes so we don't burn a
+         row inside the chat view itself. -->
 
     <!-- Jump-to-latest banner: shown when new agent output arrived while the
          user was scrolled into history. Clicking resets the window. -->
@@ -703,7 +700,7 @@ function formatTokens(n: number): string {
   display: flex;
   flex-direction: column;
   gap: 1rem;
-  padding: 1rem 0;
+  padding: 0.5rem 0 1rem;
 }
 
 .chat-checkpoint {

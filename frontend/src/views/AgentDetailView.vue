@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useToast } from 'primevue/usetoast'
 import { useConfirm } from 'primevue/useconfirm'
@@ -15,6 +15,7 @@ import WebhooksTab from '@/components/agent/WebhooksTab.vue'
 import CronsTab from '@/components/agent/CronsTab.vue'
 import RoutesTab from '@/components/agent/RoutesTab.vue'
 import MCPServersTab from '@/components/agent/MCPServersTab.vue'
+import EnvVarsTab from '@/components/agent/EnvVarsTab.vue'
 import ToolsTab from '@/components/agent/ToolsTab.vue'
 import MembersTab from '@/components/agent/MembersTab.vue'
 import ModelsTab from '@/components/agent/ModelsTab.vue'
@@ -55,6 +56,39 @@ const actionItems = computed(() => {
   return items
 })
 
+interface SetupStatus {
+  connections: number
+  mcpServers: number
+  envVars: number
+  total: number
+}
+const setupStatus = ref<SetupStatus | null>(null)
+
+async function loadSetupStatus() {
+  try {
+    const { data } = await api.get(`/api/v1/agents/${agentId}/setup-status`)
+    setupStatus.value = data as SetupStatus
+  } catch {
+    // Non-fatal — header just won't show the badge.
+    setupStatus.value = null
+  }
+}
+
+// Refresh on tab switches — operator just configured something on the
+// previous tab, switching tabs is a natural moment to update the
+// header badge. No emits needed from tabs.
+watch(() => activeTab.value, () => loadSetupStatus())
+
+const setupTooltip = computed(() => {
+  const s = setupStatus.value
+  if (!s || s.total === 0) return ''
+  const parts: string[] = []
+  if (s.connections) parts.push(`${s.connections} connection${s.connections === 1 ? '' : 's'}`)
+  if (s.mcpServers) parts.push(`${s.mcpServers} MCP server${s.mcpServers === 1 ? '' : 's'}`)
+  if (s.envVars) parts.push(`${s.envVars} env var${s.envVars === 1 ? '' : 's'}`)
+  return `${parts.join(', ')} need${s.total === 1 ? 's' : ''} setup`
+})
+
 let unsubBuild: (() => void) | null = null
 let unsubSynced: (() => void) | null = null
 
@@ -70,6 +104,7 @@ onMounted(async () => {
     loading.value = false
   }
   catalog.fetchConfiguredModels()
+  loadSetupStatus()
 
   // If a build is currently in progress, grab its id so BuildLogPanel can
   // fetch the persisted log snapshot and dedupe against live WS messages.
@@ -86,7 +121,17 @@ onMounted(async () => {
     if (payload?.agentId !== agentId) return
     if (payload.buildId) activeBuildId.value = payload.buildId
     if (payload.status === 'started') {
-      // New build kicked off while we were watching; buildId already captured above.
+      // New build kicked off while we were watching; buildId already captured
+      // above. Mirror the server-side state transition so BuildLogPanel
+      // (gated on agent.status/upgradeStatus === 'building') renders
+      // immediately instead of waiting for a page refresh.
+      if (agent.value) {
+        if (agent.value.status === 'draft' || agent.value.status === 'failed') {
+          agent.value.status = 'building'
+        } else {
+          agent.value.upgradeStatus = 'building'
+        }
+      }
       return
     }
     if (payload.status === 'complete') {
@@ -117,6 +162,7 @@ onMounted(async () => {
   unsubSynced = ws.onMessage('agent.synced', (payload: any) => {
     if (payload?.agentId !== agentId) return
     tabsKey.value++
+    loadSetupStatus()
   })
 })
 
@@ -230,6 +276,12 @@ function goToChat() {
           <h1 style="margin: 0; font-size: 1.5rem">{{ agent.name }}</h1>
           <span style="color: var(--p-text-muted-color)">{{ agent.slug }}</span>
           <Tag :value="useAgentStatus(agent.status).label" :severity="useAgentStatus(agent.status).severity" />
+          <Tag
+            v-if="setupStatus && setupStatus.total > 0"
+            :value="`Needs setup (${setupStatus.total})`"
+            severity="warn"
+            v-tooltip.bottom="setupTooltip"
+          />
         </div>
         <p v-if="agent.description" style="margin: 0.25rem 0 0; color: var(--p-text-muted-color); font-size: 0.9rem">{{ agent.description }}</p>
       </div>
@@ -258,26 +310,28 @@ function goToChat() {
       <TabList>
         <Tab :value="0">Connections</Tab>
         <Tab :value="1">MCP Servers</Tab>
-        <Tab :value="2">Tools</Tab>
-        <Tab :value="3">Models</Tab>
-        <Tab :value="4">Routes</Tab>
-        <Tab :value="5">Webhooks</Tab>
-        <Tab :value="6">Crons</Tab>
-        <Tab :value="7">Members</Tab>
-        <Tab :value="8">Runs</Tab>
-        <Tab :value="9">Builds</Tab>
+        <Tab :value="2">Environment</Tab>
+        <Tab :value="3">Tools</Tab>
+        <Tab :value="4">Models</Tab>
+        <Tab :value="5">Routes</Tab>
+        <Tab :value="6">Webhooks</Tab>
+        <Tab :value="7">Crons</Tab>
+        <Tab :value="8">Members</Tab>
+        <Tab :value="9">Runs</Tab>
+        <Tab :value="10">Builds</Tab>
       </TabList>
       <TabPanels :key="tabsKey">
         <TabPanel :value="0"><ConnectionsTab :agent-id="agentId" /></TabPanel>
         <TabPanel :value="1"><MCPServersTab :agent-id="agentId" /></TabPanel>
-        <TabPanel :value="2"><ToolsTab :agent-id="agentId" /></TabPanel>
-        <TabPanel :value="3"><ModelsTab :agent-id="agentId" /></TabPanel>
-        <TabPanel :value="4"><RoutesTab :agent-id="agentId" /></TabPanel>
-        <TabPanel :value="5"><WebhooksTab :agent-id="agentId" /></TabPanel>
-        <TabPanel :value="6"><CronsTab :agent-id="agentId" /></TabPanel>
-        <TabPanel :value="7"><MembersTab :agent-id="agentId" /></TabPanel>
-        <TabPanel :value="8"><RunsTab :agent-id="agentId" /></TabPanel>
-        <TabPanel :value="9"><BuildsTab :agent-id="agentId" /></TabPanel>
+        <TabPanel :value="2"><EnvVarsTab :agent-id="agentId" /></TabPanel>
+        <TabPanel :value="3"><ToolsTab :agent-id="agentId" /></TabPanel>
+        <TabPanel :value="4"><ModelsTab :agent-id="agentId" /></TabPanel>
+        <TabPanel :value="5"><RoutesTab :agent-id="agentId" /></TabPanel>
+        <TabPanel :value="6"><WebhooksTab :agent-id="agentId" /></TabPanel>
+        <TabPanel :value="7"><CronsTab :agent-id="agentId" /></TabPanel>
+        <TabPanel :value="8"><MembersTab :agent-id="agentId" /></TabPanel>
+        <TabPanel :value="9"><RunsTab :agent-id="agentId" /></TabPanel>
+        <TabPanel :value="10"><BuildsTab :agent-id="agentId" /></TabPanel>
       </TabPanels>
     </Tabs>
 
