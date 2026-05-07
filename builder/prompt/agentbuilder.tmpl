@@ -643,6 +643,75 @@ agent.RegisterMCP(&agentsdk.MCP{
 
 Use the `mcp_probe` tool to check what a URL supports before writing this.
 
+## RegisterEnvVar — Operator-configured environment variables
+
+**Use sparingly.** For ordinary configuration, just define values in code — env vars add operator burden for no benefit. For credentials that authenticate proxied HTTP/MCP calls, prefer `RegisterConnection` / `RegisterMCP` with `AuthInjection` — Airlock injects the credential at proxy time and the agent code never touches it.
+
+`RegisterEnvVar` is for the cases those don't cover:
+- The user explicitly asked for a configurable env var.
+- You're shelling out to a CLI that reads its credentials from environment variables and there's no way to inject them server-side.
+
+Two flavours, controlled by the `Secret` flag:
+
+```go
+// Plain config — operator sees and edits the current value in the UI.
+// Default lets the agent ship with a working setting; operator only
+// overrides when needed.
+region := agent.RegisterEnvVar(&agentsdk.EnvVar{
+    Slug:        "aws_region",
+    Description: "Default AWS region",
+    Default:     "us-east-1",
+    Pattern:     `^[a-z]{2}-[a-z]+-\d$`, // optional regex; rejected on save if no match
+})
+
+// Secret — write-only in the UI (no read-back, only rotate). Auto-added
+// to the redact set on first Get(). Default is forbidden for secrets.
+accessKey := agent.RegisterEnvVar(&agentsdk.EnvVar{
+    Slug:        "aws_access_key_id",
+    Description: "AWS IAM access key id",
+    Secret:      true,
+    Pattern:     `^AKIA[0-9A-Z]{16}$`,
+})
+secretKey := agent.RegisterEnvVar(&agentsdk.EnvVar{
+    Slug:        "aws_secret_access_key",
+    Description: "AWS IAM secret access key",
+    Secret:      true,
+    Pattern:     `^.+$`, // require non-empty; no specific shape known
+})
+```
+
+Subprocess CLI example — an `s3_list` tool that wraps `aws s3 ls`:
+
+```go
+agent.RegisterTool(&agentsdk.Tool[S3ListIn, S3ListOut]{
+    Name: "s3_list",
+    Run: func(ctx context.Context, in S3ListIn) (S3ListOut, error) {
+        ak, err := accessKey.Get(ctx)
+        if err != nil { return S3ListOut{}, err } // transport / decrypt
+        sk, _ := secretKey.Get(ctx)
+        rg, _ := region.Get(ctx)
+        if ak == "" || sk == "" {
+            return S3ListOut{}, fmt.Errorf("aws credentials not configured")
+        }
+
+        cmd := exec.CommandContext(ctx, "aws", "s3", "ls", in.Bucket)
+        cmd.Env = append(os.Environ(),
+            "AWS_ACCESS_KEY_ID="+ak,
+            "AWS_SECRET_ACCESS_KEY="+sk,
+            "AWS_DEFAULT_REGION="+rg,
+        )
+        out, err := cmd.CombinedOutput()
+        return S3ListOut{Output: string(out)}, err
+    },
+})
+```
+
+**Get's contract**: `(value, nil)` always — empty string is a valid value. Error fires only on transport/decrypt failure. To distinguish "operator never set this" from "operator deliberately set empty", declare a `Pattern` that rejects `""` at save time (anything but `""` matches). Then runtime empty unambiguously means "unset".
+
+**Pattern** is an optional regex — Airlock rejects operator-supplied values that don't match. Use it for credentials with a known shape (AWS keys, region codes) so typos surface at save time rather than at first run, and use `^.+$` when you just want to require non-empty.
+
+`Default` is forbidden when `Secret: true` (the SDK panics) — secrets must come from the operator.
+
 ## RegisterModel — Named model slots
 
 Declare a named slot for every distinct runtime LLM use case. The admin picks a specific model per slot in the Airlock UI. At runtime the slug resolves: slot binding → per-agent capability override → system default. Undeclared slugs still work (fall through to the capability default), but they're not listed in the admin UI, so you can't rebind them.

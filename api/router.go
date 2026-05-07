@@ -322,9 +322,21 @@ func NewRouter(cfg RouterConfig) http.Handler {
 					r.Get("/", credH.MCPCredentialStatus)
 					r.Post("/", credH.SetMCPToken)
 					r.Delete("/", credH.RevokeMCPCredential)
+					r.Post("/test", credH.TestMCPCredential)
 					r.Put("/oauth-app", credH.SetMCPOAuthApp)
 					r.Delete("/oauth-app", credH.RevokeMCPOAuthApp)
 				})
+
+				// Env vars (operator UI). Slot itself is created by the
+				// agent's syncWithAirlock — operators only set/clear values.
+				r.Get("/env-vars", credH.ListEnvVars)
+				r.Post("/env-vars/{slug}", credH.SetEnvVarValue)
+				r.Delete("/env-vars/{slug}", credH.ClearEnvVarValue)
+
+				// Aggregate setup-completeness signal for the agent
+				// detail header — surfaces unconfigured slots across
+				// connections, MCP servers, and env vars.
+				r.Get("/setup-status", credH.SetupStatus)
 			})
 		})
 
@@ -423,6 +435,8 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		r.Delete("/topic/{slug}/subscribe", ah.TopicUnsubscribe)
 		r.Put("/mcp-servers/{slug}", ah.UpsertMCPServer)
 		r.Post("/mcp/{slug}/tools/call", ah.MCPToolCall)
+		r.Put("/env-vars/{slug}", ah.UpsertEnvVar)
+		r.Get("/env-vars/{slug}", ah.GetEnvVarValue)
 	})
 
 	// Wrap with subdomain proxy for agent custom routes.

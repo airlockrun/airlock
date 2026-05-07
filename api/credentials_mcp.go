@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"time"
@@ -9,6 +10,7 @@ import (
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/airlockrun/airlock/oauth"
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"
@@ -175,6 +177,11 @@ func (h *credentialHandler) SetMCPToken(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// Discover tools + push agent refresh, same as the OAuth callback. Best
+	// effort — the response below still reports success even if discovery
+	// fails, since the agent will retry on next sync.
+	h.refreshMCPAfterAuth(ctx, uuid.UUID(agentID), slug, req.ApiKey)
+
 	writeJSON(w, http.StatusOK, map[string]any{
 		"slug":       server.Slug,
 		"name":       server.Name,
@@ -208,6 +215,75 @@ func (h *credentialHandler) RevokeMCPCredential(w http.ResponseWriter, r *http.R
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// TestMCPCredential handles POST /api/v1/agents/{agentID}/mcp-servers/{slug}/credentials/test.
+// Probes the MCP server with a real tools/list call so we exercise the
+// auth_injection path the runtime will actually use. Body is an optional
+// SetAPIKeyRequest — if api_key is provided, that token is tested; otherwise
+// the stored credential is used. Lets the dialog test before save.
+func (h *credentialHandler) TestMCPCredential(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	agentID, slug, err := h.resolveMCPSlug(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	if err := h.verifyAgentOwner(ctx, agentID, r); err != nil {
+		writeError(w, http.StatusForbidden, "access denied")
+		return
+	}
+
+	q := dbq.New(h.db.Pool())
+	server, err := q.GetMCPServerBySlug(ctx, dbq.GetMCPServerBySlugParams{
+		AgentID: toPgUUID(agentID),
+		Slug:    slug,
+	})
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			writeError(w, http.StatusNotFound, "MCP server not found")
+			return
+		}
+		h.logger.Error("get MCP server failed", zap.Error(err))
+		writeError(w, http.StatusInternalServerError, "failed to get MCP server")
+		return
+	}
+
+	// Optional body lets the UI test a freshly-typed token without saving
+	// first. Empty body falls back to the stored credential.
+	var req airlockv1.SetAPIKeyRequest
+	_ = decodeProto(r, &req)
+
+	creds := req.ApiKey
+	if creds == "" {
+		if server.AccessTokenRef == "" {
+			writeError(w, http.StatusBadRequest, "no credentials configured")
+			return
+		}
+		creds, err = h.encryptor.Get(ctx, "mcp/"+pgUUID(server.ID).String()+"/access_token", server.AccessTokenRef)
+		if err != nil {
+			h.logger.Error("decrypt MCP token failed", zap.Error(err))
+			writeError(w, http.StatusInternalServerError, "decryption failed")
+			return
+		}
+	}
+
+	probeCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	if _, err := discoverMCPTools(probeCtx, server.Url, server.AuthInjection, creds); err != nil {
+		writeProto(w, http.StatusOK, &airlockv1.TestCredentialResponse{
+			Success: false,
+			Message: err.Error(),
+		})
+		return
+	}
+
+	writeProto(w, http.StatusOK, &airlockv1.TestCredentialResponse{
+		Success: true,
+		Message: "tools/list succeeded",
+	})
 }
 
 // RevokeMCPOAuthApp handles DELETE /api/v1/agents/{agentID}/mcp-servers/{slug}/credentials/oauth-app.

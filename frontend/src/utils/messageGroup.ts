@@ -54,25 +54,54 @@ export function enrichMessages(msgs: AgentMessageInfo[]): AgentMessageInfo[] {
   // Pass 1: build toolCalls[] on every assistant message that called tools.
   // Keep references so pass 2 can mutate the same entries when the tool
   // result row arrives later in the stream.
+  //
+  // Multi-step run_js loops persist as one assistant row per LLM step (each
+  // with its own tool-call parts) — folding them into the first row that
+  // shares a runId mirrors the live finalizeMessage layout and keeps the
+  // bubble cohesive on refetch. Rows without a runId or whose runId we
+  // haven't seen yet stand on their own.
   const callEntries = new Map<string, GroupedToolCall>()
+  const runAnchor = new Map<string, AgentMessageInfo>()
   for (const msg of msgs) {
     if (msg.role !== 'assistant') continue
     const parts = parseParts((msg as any).parts)
-    if (!parts) continue
     const calls: GroupedToolCall[] = []
-    for (const p of parts) {
-      if (p.type === 'tool-call' && p.toolCallId) {
-        const entry: GroupedToolCall = {
-          toolCallId: p.toolCallId,
-          toolName: p.toolName || 'tool',
-          input: formatToolArgs(p.args),
-          output: '',
-          error: '',
+    if (parts) {
+      for (const p of parts) {
+        if (p.type === 'tool-call' && p.toolCallId) {
+          const entry: GroupedToolCall = {
+            toolCallId: p.toolCallId,
+            toolName: p.toolName || 'tool',
+            input: formatToolArgs(p.args),
+            output: '',
+            error: '',
+          }
+          callEntries.set(p.toolCallId, entry)
+          calls.push(entry)
         }
-        callEntries.set(p.toolCallId, entry)
-        calls.push(entry)
       }
     }
+
+    const runId = (msg as any).runId as string | undefined
+    if (runId) {
+      const anchor = runAnchor.get(runId)
+      if (anchor) {
+        // Fold this row's text + toolCalls into the anchor and hide it.
+        if (calls.length > 0) {
+          const existing = ((anchor as any).toolCalls as GroupedToolCall[] | undefined) ?? []
+          ;(anchor as any).toolCalls = existing.concat(calls)
+        }
+        if (msg.content) {
+          anchor.content = anchor.content
+            ? `${anchor.content}\n${msg.content}`
+            : msg.content
+        }
+        ;(msg as any)._hidden = true
+        continue
+      }
+      runAnchor.set(runId, msg)
+    }
+
     if (calls.length > 0) (msg as any).toolCalls = calls
   }
 

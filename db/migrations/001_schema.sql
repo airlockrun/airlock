@@ -215,6 +215,41 @@ CREATE TABLE agent_mcp_servers (
     UNIQUE (agent_id, slug)
 );
 
+-- agent_env_vars holds operator-configured environment variables — both
+-- plain config values (region, hostnames, feature flags) and secrets
+-- (API keys, tokens). The is_secret flag controls two things:
+--   1. UI: secret values are write-only; once saved the operator cannot
+--      read them back (only rotate). Plain values are visible+editable.
+--   2. Redaction: secret values are auto-added to the agent's redact set
+--      on first Get(), so they're stripped from LLM input. Plain values
+--      pass through untouched.
+-- Storage is uniformly encrypted at rest regardless of is_secret — the
+-- flag is metadata for UI/runtime, not a storage tier.
+CREATE TABLE agent_env_vars (
+    id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    agent_id    uuid NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    slug        text NOT NULL,
+    description text NOT NULL,
+    is_secret   boolean NOT NULL,
+    -- value_ref holds the secrets.Store ref for the encrypted value.
+    -- Empty string means "registered but not yet configured by an
+    -- operator" — RegisterEnvVar declares the slot from agent code; the
+    -- operator fills it via the UI later.
+    value_ref   text NOT NULL,
+    -- default_value is the agent-declared fallback used when value_ref
+    -- is empty. Stored plaintext (it's compiled into the agent image
+    -- already). Always empty for is_secret=true rows — the agentsdk
+    -- panics on RegisterEnvVar with both Secret=true and Default set.
+    default_value text NOT NULL,
+    -- pattern is an optional Go (RE2) regex the operator-supplied value
+    -- must match. Validated in the SetEnvVarValue handler. Empty
+    -- string disables validation.
+    pattern text NOT NULL,
+    created_at  timestamptz NOT NULL DEFAULT now(),
+    updated_at  timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (agent_id, slug)
+);
+
 CREATE TABLE bridges (
     id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     -- ON DELETE SET NULL preserves the bridge row when the agent is deleted.
@@ -523,6 +558,7 @@ DROP TABLE IF EXISTS agent_webhooks;
 DROP TABLE IF EXISTS oauth_states;
 DROP TABLE IF EXISTS platform_identities;
 DROP TABLE IF EXISTS bridges;
+DROP TABLE IF EXISTS agent_env_vars;
 DROP TABLE IF EXISTS agent_mcp_servers;
 DROP TABLE IF EXISTS connections;
 DROP TABLE IF EXISTS agent_builds;
