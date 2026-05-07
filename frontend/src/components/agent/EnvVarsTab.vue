@@ -59,7 +59,7 @@ function patternMatches(): boolean {
 }
 
 const patternError = computed(() => {
-  if (!selected.value?.pattern || !formValue.value) return ''
+  if (!selected.value?.pattern) return ''
   return patternMatches() ? '' : `Value must match pattern: ${selected.value.pattern}`
 })
 
@@ -215,7 +215,7 @@ onMounted(load)
         </div>
 
         <div style="display: flex; justify-content: flex-end; gap: 0.5rem">
-          <Button label="Save" :loading="saving" :disabled="!formValue || !!patternError" @click="save" />
+          <Button label="Save" :loading="saving" :disabled="!!patternError" @click="save" />
         </div>
       </div>
     </Dialog>

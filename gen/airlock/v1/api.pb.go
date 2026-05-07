@@ -783,11 +783,14 @@ func (x *UpdateUserRoleRequest) GetTenantRole() string {
 }
 
 type CreateProviderRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	ProviderId    string                 `protobuf:"bytes,1,opt,name=provider_id,json=providerId,proto3" json:"provider_id,omitempty"`
-	DisplayName   string                 `protobuf:"bytes,2,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
-	ApiKey        string                 `protobuf:"bytes,3,opt,name=api_key,json=apiKey,proto3" json:"api_key,omitempty"`
-	BaseUrl       string                 `protobuf:"bytes,4,opt,name=base_url,json=baseUrl,proto3" json:"base_url,omitempty"`
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	ProviderId  string                 `protobuf:"bytes,1,opt,name=provider_id,json=providerId,proto3" json:"provider_id,omitempty"`
+	DisplayName string                 `protobuf:"bytes,2,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
+	ApiKey      string                 `protobuf:"bytes,3,opt,name=api_key,json=apiKey,proto3" json:"api_key,omitempty"`
+	BaseUrl     string                 `protobuf:"bytes,4,opt,name=base_url,json=baseUrl,proto3" json:"base_url,omitempty"`
+	// slug — required, kebab-case identifier unique within provider_id.
+	// The frontend auto-derives from display_name; admins can override.
+	Slug          string `protobuf:"bytes,5,opt,name=slug,proto3" json:"slug,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -846,6 +849,13 @@ func (x *CreateProviderRequest) GetApiKey() string {
 func (x *CreateProviderRequest) GetBaseUrl() string {
 	if x != nil {
 		return x.BaseUrl
+	}
+	return ""
+}
+
+func (x *CreateProviderRequest) GetSlug() string {
+	if x != nil {
+		return x.Slug
 	}
 	return ""
 }
@@ -939,11 +949,15 @@ func (x *ListProvidersResponse) GetProviders() []*Provider {
 }
 
 type UpdateProviderRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	DisplayName   string                 `protobuf:"bytes,1,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
-	ApiKey        string                 `protobuf:"bytes,2,opt,name=api_key,json=apiKey,proto3" json:"api_key,omitempty"`
-	BaseUrl       string                 `protobuf:"bytes,3,opt,name=base_url,json=baseUrl,proto3" json:"base_url,omitempty"`
-	IsEnabled     *bool                  `protobuf:"varint,4,opt,name=is_enabled,json=isEnabled,proto3,oneof" json:"is_enabled,omitempty"`
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	DisplayName string                 `protobuf:"bytes,1,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
+	ApiKey      string                 `protobuf:"bytes,2,opt,name=api_key,json=apiKey,proto3" json:"api_key,omitempty"`
+	BaseUrl     string                 `protobuf:"bytes,3,opt,name=base_url,json=baseUrl,proto3" json:"base_url,omitempty"`
+	IsEnabled   *bool                  `protobuf:"varint,4,opt,name=is_enabled,json=isEnabled,proto3,oneof" json:"is_enabled,omitempty"`
+	// slug — empty string means "leave unchanged", any other value
+	// renames the row's slug. Conflicts with another row sharing the
+	// (provider_id, slug) tuple are surfaced as 409.
+	Slug          string `protobuf:"bytes,5,opt,name=slug,proto3" json:"slug,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1004,6 +1018,13 @@ func (x *UpdateProviderRequest) GetIsEnabled() bool {
 		return *x.IsEnabled
 	}
 	return false
+}
+
+func (x *UpdateProviderRequest) GetSlug() string {
+	if x != nil {
+		return x.Slug
+	}
+	return ""
 }
 
 type UpdateProviderResponse struct {
@@ -1139,15 +1160,20 @@ func (x *ListCatalogModelsResponse) GetModels() []*ModelInfo {
 }
 
 type CreateAgentRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	Slug          string                 `protobuf:"bytes,2,opt,name=slug,proto3" json:"slug,omitempty"`
-	Description   string                 `protobuf:"bytes,3,opt,name=description,proto3" json:"description,omitempty"`
-	BuildModel    string                 `protobuf:"bytes,4,opt,name=build_model,json=buildModel,proto3" json:"build_model,omitempty"` // optional: "provider/model" for code generation; empty = inherit system default
-	ExecModel     string                 `protobuf:"bytes,5,opt,name=exec_model,json=execModel,proto3" json:"exec_model,omitempty"`    // optional: "provider/model" for runtime LLM calls; empty = inherit system default
-	Instructions  string                 `protobuf:"bytes,6,opt,name=instructions,proto3" json:"instructions,omitempty"`               // optional: capabilities/behavior instructions for Sol code generation
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	Name        string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Slug        string                 `protobuf:"bytes,2,opt,name=slug,proto3" json:"slug,omitempty"`
+	Description string                 `protobuf:"bytes,3,opt,name=description,proto3" json:"description,omitempty"`
+	// build_model / exec_model carry the bare model name. The
+	// accompanying *_provider_id binds the slot to a specific providers
+	// row (multi-key support). Empty + empty ⇄ inherit system default.
+	BuildModel      string `protobuf:"bytes,4,opt,name=build_model,json=buildModel,proto3" json:"build_model,omitempty"`
+	ExecModel       string `protobuf:"bytes,5,opt,name=exec_model,json=execModel,proto3" json:"exec_model,omitempty"`
+	Instructions    string `protobuf:"bytes,6,opt,name=instructions,proto3" json:"instructions,omitempty"`
+	BuildProviderId string `protobuf:"bytes,7,opt,name=build_provider_id,json=buildProviderId,proto3" json:"build_provider_id,omitempty"`
+	ExecProviderId  string `protobuf:"bytes,8,opt,name=exec_provider_id,json=execProviderId,proto3" json:"exec_provider_id,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *CreateAgentRequest) Reset() {
@@ -1218,6 +1244,20 @@ func (x *CreateAgentRequest) GetExecModel() string {
 func (x *CreateAgentRequest) GetInstructions() string {
 	if x != nil {
 		return x.Instructions
+	}
+	return ""
+}
+
+func (x *CreateAgentRequest) GetBuildProviderId() string {
+	if x != nil {
+		return x.BuildProviderId
+	}
+	return ""
+}
+
+func (x *CreateAgentRequest) GetExecProviderId() string {
+	if x != nil {
+		return x.ExecProviderId
 	}
 	return ""
 }
@@ -1536,13 +1576,17 @@ func (x *UpgradeAgentRequest) GetDescription() string {
 }
 
 type ModelSlotInfo struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Slug          string                 `protobuf:"bytes,1,opt,name=slug,proto3" json:"slug,omitempty"`                                        // declared by agent code via RegisterModel
-	Capability    string                 `protobuf:"bytes,2,opt,name=capability,proto3" json:"capability,omitempty"`                            // "text", "vision", "image", "speech", "transcription", "embedding"
-	Description   string                 `protobuf:"bytes,3,opt,name=description,proto3" json:"description,omitempty"`                          // human-readable hint from the agent author
-	AssignedModel string                 `protobuf:"bytes,4,opt,name=assigned_model,json=assignedModel,proto3" json:"assigned_model,omitempty"` // admin-chosen "provider/model"; empty = fall through to capability default
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	Slug        string                 `protobuf:"bytes,1,opt,name=slug,proto3" json:"slug,omitempty"`               // declared by agent code via RegisterModel
+	Capability  string                 `protobuf:"bytes,2,opt,name=capability,proto3" json:"capability,omitempty"`   // "text", "vision", "image", "speech", "transcription", "embedding"
+	Description string                 `protobuf:"bytes,3,opt,name=description,proto3" json:"description,omitempty"` // human-readable hint from the agent author
+	// assigned_model carries the bare model name; assigned_provider_id
+	// names the providers row to use. Empty + empty ⇄ fall through to
+	// the capability default.
+	AssignedModel      string `protobuf:"bytes,4,opt,name=assigned_model,json=assignedModel,proto3" json:"assigned_model,omitempty"`
+	AssignedProviderId string `protobuf:"bytes,5,opt,name=assigned_provider_id,json=assignedProviderId,proto3" json:"assigned_provider_id,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *ModelSlotInfo) Reset() {
@@ -1603,20 +1647,36 @@ func (x *ModelSlotInfo) GetAssignedModel() string {
 	return ""
 }
 
+func (x *ModelSlotInfo) GetAssignedProviderId() string {
+	if x != nil {
+		return x.AssignedProviderId
+	}
+	return ""
+}
+
 type AgentModelConfig struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Per-agent capability overrides — mirror system_settings.default_*_model 1:1.
-	BuildModel     string           `protobuf:"bytes,1,opt,name=build_model,json=buildModel,proto3" json:"build_model,omitempty"`
-	ExecModel      string           `protobuf:"bytes,2,opt,name=exec_model,json=execModel,proto3" json:"exec_model,omitempty"`
-	SttModel       string           `protobuf:"bytes,3,opt,name=stt_model,json=sttModel,proto3" json:"stt_model,omitempty"`
-	VisionModel    string           `protobuf:"bytes,4,opt,name=vision_model,json=visionModel,proto3" json:"vision_model,omitempty"`
-	TtsModel       string           `protobuf:"bytes,5,opt,name=tts_model,json=ttsModel,proto3" json:"tts_model,omitempty"`
-	ImageGenModel  string           `protobuf:"bytes,6,opt,name=image_gen_model,json=imageGenModel,proto3" json:"image_gen_model,omitempty"`
-	EmbeddingModel string           `protobuf:"bytes,7,opt,name=embedding_model,json=embeddingModel,proto3" json:"embedding_model,omitempty"`
-	SearchModel    string           `protobuf:"bytes,8,opt,name=search_model,json=searchModel,proto3" json:"search_model,omitempty"`
-	Slots          []*ModelSlotInfo `protobuf:"bytes,9,rep,name=slots,proto3" json:"slots,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// Per-agent capability overrides — mirror system_settings.default_*_*
+	// 1:1. Each slot is two fields: bare model name + providers row UUID.
+	BuildModel          string           `protobuf:"bytes,1,opt,name=build_model,json=buildModel,proto3" json:"build_model,omitempty"`
+	ExecModel           string           `protobuf:"bytes,2,opt,name=exec_model,json=execModel,proto3" json:"exec_model,omitempty"`
+	SttModel            string           `protobuf:"bytes,3,opt,name=stt_model,json=sttModel,proto3" json:"stt_model,omitempty"`
+	VisionModel         string           `protobuf:"bytes,4,opt,name=vision_model,json=visionModel,proto3" json:"vision_model,omitempty"`
+	TtsModel            string           `protobuf:"bytes,5,opt,name=tts_model,json=ttsModel,proto3" json:"tts_model,omitempty"`
+	ImageGenModel       string           `protobuf:"bytes,6,opt,name=image_gen_model,json=imageGenModel,proto3" json:"image_gen_model,omitempty"`
+	EmbeddingModel      string           `protobuf:"bytes,7,opt,name=embedding_model,json=embeddingModel,proto3" json:"embedding_model,omitempty"`
+	SearchModel         string           `protobuf:"bytes,8,opt,name=search_model,json=searchModel,proto3" json:"search_model,omitempty"`
+	Slots               []*ModelSlotInfo `protobuf:"bytes,9,rep,name=slots,proto3" json:"slots,omitempty"`
+	BuildProviderId     string           `protobuf:"bytes,10,opt,name=build_provider_id,json=buildProviderId,proto3" json:"build_provider_id,omitempty"`
+	ExecProviderId      string           `protobuf:"bytes,11,opt,name=exec_provider_id,json=execProviderId,proto3" json:"exec_provider_id,omitempty"`
+	SttProviderId       string           `protobuf:"bytes,12,opt,name=stt_provider_id,json=sttProviderId,proto3" json:"stt_provider_id,omitempty"`
+	VisionProviderId    string           `protobuf:"bytes,13,opt,name=vision_provider_id,json=visionProviderId,proto3" json:"vision_provider_id,omitempty"`
+	TtsProviderId       string           `protobuf:"bytes,14,opt,name=tts_provider_id,json=ttsProviderId,proto3" json:"tts_provider_id,omitempty"`
+	ImageGenProviderId  string           `protobuf:"bytes,15,opt,name=image_gen_provider_id,json=imageGenProviderId,proto3" json:"image_gen_provider_id,omitempty"`
+	EmbeddingProviderId string           `protobuf:"bytes,16,opt,name=embedding_provider_id,json=embeddingProviderId,proto3" json:"embedding_provider_id,omitempty"`
+	SearchProviderId    string           `protobuf:"bytes,17,opt,name=search_provider_id,json=searchProviderId,proto3" json:"search_provider_id,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *AgentModelConfig) Reset() {
@@ -1710,6 +1770,62 @@ func (x *AgentModelConfig) GetSlots() []*ModelSlotInfo {
 		return x.Slots
 	}
 	return nil
+}
+
+func (x *AgentModelConfig) GetBuildProviderId() string {
+	if x != nil {
+		return x.BuildProviderId
+	}
+	return ""
+}
+
+func (x *AgentModelConfig) GetExecProviderId() string {
+	if x != nil {
+		return x.ExecProviderId
+	}
+	return ""
+}
+
+func (x *AgentModelConfig) GetSttProviderId() string {
+	if x != nil {
+		return x.SttProviderId
+	}
+	return ""
+}
+
+func (x *AgentModelConfig) GetVisionProviderId() string {
+	if x != nil {
+		return x.VisionProviderId
+	}
+	return ""
+}
+
+func (x *AgentModelConfig) GetTtsProviderId() string {
+	if x != nil {
+		return x.TtsProviderId
+	}
+	return ""
+}
+
+func (x *AgentModelConfig) GetImageGenProviderId() string {
+	if x != nil {
+		return x.ImageGenProviderId
+	}
+	return ""
+}
+
+func (x *AgentModelConfig) GetEmbeddingProviderId() string {
+	if x != nil {
+		return x.EmbeddingProviderId
+	}
+	return ""
+}
+
+func (x *AgentModelConfig) GetSearchProviderId() string {
+	if x != nil {
+		return x.SearchProviderId
+	}
+	return ""
 }
 
 type GetAgentModelConfigResponse struct {
@@ -4025,30 +4141,32 @@ const file_airlock_v1_api_proto_rawDesc = "" +
 	"\x05users\x18\x01 \x03(\v2\x17.airlock.v1.UserSummaryR\x05users\"8\n" +
 	"\x15UpdateUserRoleRequest\x12\x1f\n" +
 	"\vtenant_role\x18\x01 \x01(\tR\n" +
-	"tenantRole\"\x8f\x01\n" +
+	"tenantRole\"\xa3\x01\n" +
 	"\x15CreateProviderRequest\x12\x1f\n" +
 	"\vprovider_id\x18\x01 \x01(\tR\n" +
 	"providerId\x12!\n" +
 	"\fdisplay_name\x18\x02 \x01(\tR\vdisplayName\x12\x17\n" +
 	"\aapi_key\x18\x03 \x01(\tR\x06apiKey\x12\x19\n" +
-	"\bbase_url\x18\x04 \x01(\tR\abaseUrl\"J\n" +
+	"\bbase_url\x18\x04 \x01(\tR\abaseUrl\x12\x12\n" +
+	"\x04slug\x18\x05 \x01(\tR\x04slug\"J\n" +
 	"\x16CreateProviderResponse\x120\n" +
 	"\bprovider\x18\x01 \x01(\v2\x14.airlock.v1.ProviderR\bprovider\"K\n" +
 	"\x15ListProvidersResponse\x122\n" +
-	"\tproviders\x18\x01 \x03(\v2\x14.airlock.v1.ProviderR\tproviders\"\xa1\x01\n" +
+	"\tproviders\x18\x01 \x03(\v2\x14.airlock.v1.ProviderR\tproviders\"\xb5\x01\n" +
 	"\x15UpdateProviderRequest\x12!\n" +
 	"\fdisplay_name\x18\x01 \x01(\tR\vdisplayName\x12\x17\n" +
 	"\aapi_key\x18\x02 \x01(\tR\x06apiKey\x12\x19\n" +
 	"\bbase_url\x18\x03 \x01(\tR\abaseUrl\x12\"\n" +
 	"\n" +
-	"is_enabled\x18\x04 \x01(\bH\x00R\tisEnabled\x88\x01\x01B\r\n" +
+	"is_enabled\x18\x04 \x01(\bH\x00R\tisEnabled\x88\x01\x01\x12\x12\n" +
+	"\x04slug\x18\x05 \x01(\tR\x04slugB\r\n" +
 	"\v_is_enabled\"J\n" +
 	"\x16UpdateProviderResponse\x120\n" +
 	"\bprovider\x18\x01 \x01(\v2\x14.airlock.v1.ProviderR\bprovider\"V\n" +
 	"\x1cListCatalogProvidersResponse\x126\n" +
 	"\tproviders\x18\x01 \x03(\v2\x18.airlock.v1.ProviderInfoR\tproviders\"J\n" +
 	"\x19ListCatalogModelsResponse\x12-\n" +
-	"\x06models\x18\x01 \x03(\v2\x15.airlock.v1.ModelInfoR\x06models\"\xc2\x01\n" +
+	"\x06models\x18\x01 \x03(\v2\x15.airlock.v1.ModelInfoR\x06models\"\x98\x02\n" +
 	"\x12CreateAgentRequest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x12\n" +
 	"\x04slug\x18\x02 \x01(\tR\x04slug\x12 \n" +
@@ -4057,7 +4175,9 @@ const file_airlock_v1_api_proto_rawDesc = "" +
 	"buildModel\x12\x1d\n" +
 	"\n" +
 	"exec_model\x18\x05 \x01(\tR\texecModel\x12\"\n" +
-	"\finstructions\x18\x06 \x01(\tR\finstructions\"B\n" +
+	"\finstructions\x18\x06 \x01(\tR\finstructions\x12*\n" +
+	"\x11build_provider_id\x18\a \x01(\tR\x0fbuildProviderId\x12(\n" +
+	"\x10exec_provider_id\x18\b \x01(\tR\x0eexecProviderId\"B\n" +
 	"\x13CreateAgentResponse\x12+\n" +
 	"\x05agent\x18\x01 \x01(\v2\x15.airlock.v1.AgentInfoR\x05agent\"C\n" +
 	"\x12ListAgentsResponse\x12-\n" +
@@ -4077,14 +4197,15 @@ const file_airlock_v1_api_proto_rawDesc = "" +
 	"\x05agent\x18\x01 \x01(\v2\x15.airlock.v1.AgentInfoR\x05agent\"N\n" +
 	"\x13UpgradeAgentRequest\x12\x15\n" +
 	"\x06run_id\x18\x01 \x01(\tR\x05runId\x12 \n" +
-	"\vdescription\x18\x02 \x01(\tR\vdescription\"\x8c\x01\n" +
+	"\vdescription\x18\x02 \x01(\tR\vdescription\"\xbe\x01\n" +
 	"\rModelSlotInfo\x12\x12\n" +
 	"\x04slug\x18\x01 \x01(\tR\x04slug\x12\x1e\n" +
 	"\n" +
 	"capability\x18\x02 \x01(\tR\n" +
 	"capability\x12 \n" +
 	"\vdescription\x18\x03 \x01(\tR\vdescription\x12%\n" +
-	"\x0eassigned_model\x18\x04 \x01(\tR\rassignedModel\"\xd4\x02\n" +
+	"\x0eassigned_model\x18\x04 \x01(\tR\rassignedModel\x120\n" +
+	"\x14assigned_provider_id\x18\x05 \x01(\tR\x12assignedProviderId\"\xbd\x05\n" +
 	"\x10AgentModelConfig\x12\x1f\n" +
 	"\vbuild_model\x18\x01 \x01(\tR\n" +
 	"buildModel\x12\x1d\n" +
@@ -4096,7 +4217,16 @@ const file_airlock_v1_api_proto_rawDesc = "" +
 	"\x0fimage_gen_model\x18\x06 \x01(\tR\rimageGenModel\x12'\n" +
 	"\x0fembedding_model\x18\a \x01(\tR\x0eembeddingModel\x12!\n" +
 	"\fsearch_model\x18\b \x01(\tR\vsearchModel\x12/\n" +
-	"\x05slots\x18\t \x03(\v2\x19.airlock.v1.ModelSlotInfoR\x05slots\"S\n" +
+	"\x05slots\x18\t \x03(\v2\x19.airlock.v1.ModelSlotInfoR\x05slots\x12*\n" +
+	"\x11build_provider_id\x18\n" +
+	" \x01(\tR\x0fbuildProviderId\x12(\n" +
+	"\x10exec_provider_id\x18\v \x01(\tR\x0eexecProviderId\x12&\n" +
+	"\x0fstt_provider_id\x18\f \x01(\tR\rsttProviderId\x12,\n" +
+	"\x12vision_provider_id\x18\r \x01(\tR\x10visionProviderId\x12&\n" +
+	"\x0ftts_provider_id\x18\x0e \x01(\tR\rttsProviderId\x121\n" +
+	"\x15image_gen_provider_id\x18\x0f \x01(\tR\x12imageGenProviderId\x122\n" +
+	"\x15embedding_provider_id\x18\x10 \x01(\tR\x13embeddingProviderId\x12,\n" +
+	"\x12search_provider_id\x18\x11 \x01(\tR\x10searchProviderId\"S\n" +
 	"\x1bGetAgentModelConfigResponse\x124\n" +
 	"\x06config\x18\x01 \x01(\v2\x1c.airlock.v1.AgentModelConfigR\x06config\"U\n" +
 	"\x1dUpdateAgentModelConfigRequest\x124\n" +

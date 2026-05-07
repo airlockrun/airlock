@@ -26,7 +26,10 @@ const capabilityMeta: Record<Capability, { label: string; icon: string; descript
 const dialogVisible = ref(false)
 const editingId = ref<string | null>(null)
 const dialogCapabilityFilter = ref<Capability | null>(null)
-const form = ref({ providerId: '', displayName: '', baseUrl: '', apiKey: '' })
+const form = ref({ providerId: '', slug: '', displayName: '', baseUrl: '', apiKey: '' })
+// Mirrors the agent-create slug control: slug auto-tracks displayName until
+// the user types into the slug field manually.
+const slugManual = ref(false)
 
 onMounted(() => {
   store.fetchProviders()
@@ -45,13 +48,12 @@ const coverageByCapability = computed<Record<Capability, typeof catalog.capabili
   return out as Record<Capability, typeof catalog.capabilities>
 })
 
-// For the Add Provider dialog: candidates = known providers that aren't
-// already configured. When a capability filter is active, require that
-// capability to be in the candidate's set.
+// For the Add Provider dialog: candidates = the full known provider catalog.
+// Multi-key support: don't filter out already-configured providers — admins
+// can register a second OpenAI row for a different account/billing.
 const dialogCandidates = computed(() => {
   const filter = dialogCapabilityFilter.value
   return catalog.capabilities
-    .filter(p => !p.configured)
     .filter(p => !filter || p.capabilities.includes(filter))
     .map(p => ({
       id: p.providerId,
@@ -61,35 +63,66 @@ const dialogCandidates = computed(() => {
     .sort((a, b) => a.name.localeCompare(b.name))
 })
 
+// Same kebab logic as agent-create: lowercase, non-alphanumerics → "-",
+// trim leading/trailing hyphens. Used to auto-derive slug from displayName
+// until the user types into slug manually.
+function toSlug(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/(^-|-$)/g, '')
+}
+
+function onDisplayNameInput() {
+  if (!slugManual.value) form.value.slug = toSlug(form.value.displayName)
+}
+
+function onSlugInput() {
+  slugManual.value = true
+}
+
 function openCreate(capability?: Capability) {
   editingId.value = null
   dialogCapabilityFilter.value = capability ?? null
-  form.value = { providerId: '', displayName: '', baseUrl: '', apiKey: '' }
+  form.value = { providerId: '', slug: '', displayName: '', baseUrl: '', apiKey: '' }
+  slugManual.value = false
   dialogVisible.value = true
 }
 
-function openEdit(provider: { id: string; providerId: string; displayName: string; baseUrl: string }) {
+function openEdit(provider: { id: string; providerId: string; slug: string; displayName: string; baseUrl: string }) {
   editingId.value = provider.id
   dialogCapabilityFilter.value = null
   form.value = {
     providerId: provider.providerId,
+    slug: provider.slug,
     displayName: provider.displayName,
     baseUrl: provider.baseUrl,
     apiKey: '',
   }
+  // On edit the slug exists already; treat it as user-set so display-name
+  // edits don't clobber it.
+  slugManual.value = true
   dialogVisible.value = true
 }
 
 function onProviderSelect(id: string) {
   const match = dialogCandidates.value.find(c => c.id === id)
-  if (match) form.value.displayName = match.name
+  if (match) {
+    form.value.displayName = match.name
+    if (!slugManual.value) form.value.slug = toSlug(match.name)
+  }
 }
 
 async function onSubmit() {
+  if (!form.value.slug) {
+    toast.add({ severity: 'error', summary: 'Slug is required', life: 3000 })
+    return
+  }
   try {
     if (editingId.value) {
       await store.updateProvider(editingId.value, {
         displayName: form.value.displayName,
+        slug: form.value.slug,
         baseUrl: form.value.baseUrl,
         ...(form.value.apiKey ? { apiKey: form.value.apiKey } : {}),
       })
@@ -188,6 +221,7 @@ function confirmDelete(provider: { id: string; displayName: string }) {
       </template>
       <Column field="displayName" header="Display Name" />
       <Column field="providerId" header="Provider ID" />
+      <Column field="slug" header="Slug" />
       <Column field="baseUrl" header="Base URL" />
       <Column header="Status">
         <template #body="{ data }">
@@ -238,7 +272,26 @@ function confirmDelete(provider: { id: string; displayName: string }) {
         </div>
         <div style="display: flex; flex-direction: column; gap: 0.25rem">
           <label for="displayName">Display Name</label>
-          <InputText id="displayName" v-model="form.displayName" autocomplete="off" placeholder="e.g. OpenAI" />
+          <InputText
+            id="displayName"
+            v-model="form.displayName"
+            autocomplete="off"
+            placeholder="e.g. OpenAI Personal"
+            @input="onDisplayNameInput"
+          />
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 0.25rem">
+          <label for="slug">Slug</label>
+          <InputText
+            id="slug"
+            v-model="form.slug"
+            autocomplete="off"
+            placeholder="e.g. personal"
+            @input="onSlugInput"
+          />
+          <small style="color: var(--p-text-muted-color)">
+            Disambiguates rows for the same provider (e.g. <code>openai/personal</code> vs <code>openai/team-acme</code>).
+          </small>
         </div>
         <div style="display: flex; flex-direction: column; gap: 0.25rem">
           <label for="baseUrl">Base URL (optional)</label>

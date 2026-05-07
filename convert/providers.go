@@ -20,7 +20,8 @@ func MaskAPIKey(key string) string {
 func ProviderToProto(p dbq.Provider, decryptedKey string) *airlockv1.Provider {
 	return &airlockv1.Provider{
 		Id:           PgUUIDToString(p.ID),
-		ProviderId:   p.ProviderID,
+		ProviderId:   p.CatalogID,
+		Slug:         p.Slug,
 		DisplayName:  p.DisplayName,
 		ApiKeyMasked: MaskAPIKey(decryptedKey),
 		BaseUrl:      p.BaseUrl,

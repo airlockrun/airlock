@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { useToast } from 'primevue/usetoast'
+import api from '@/api/client'
 
 const router = useRouter()
 const route = useRoute()
@@ -13,6 +14,16 @@ const email = ref('')
 const password = ref('')
 const loading = ref(false)
 const error = ref('')
+// Default to true so the activation link doesn't flash before /auth/status
+// resolves; flips to false only on a confirmed not-yet-activated install.
+const activated = ref(true)
+
+onMounted(async () => {
+  try {
+    const { data } = await api.get('/auth/status')
+    activated.value = !!data.activated
+  } catch { /* leave activated=true; link stays hidden on transient errors */ }
+})
 
 async function onSubmit() {
   error.value = ''
@@ -54,7 +65,7 @@ async function onSubmit() {
       </form>
     </template>
     <template #footer>
-      <div style="text-align: center">
+      <div v-if="!activated" style="text-align: center">
         <router-link to="/activate" style="color: var(--p-primary-color); text-decoration: none; font-size: 0.875rem">
           First time? Set up Airlock
         </router-link>

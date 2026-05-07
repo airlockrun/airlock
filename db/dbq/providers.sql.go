@@ -12,22 +12,29 @@ import (
 )
 
 const createProvider = `-- name: CreateProvider :one
-INSERT INTO providers (provider_id, display_name, api_key, base_url, is_enabled)
-VALUES ($1, $2, $3, $4, $5)
-RETURNING id, provider_id, display_name, is_enabled, base_url, api_key, created_at, updated_at
+INSERT INTO providers (id, provider_id, slug, display_name, api_key, base_url, is_enabled)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+RETURNING id, provider_id, slug, display_name, is_enabled, base_url, api_key, created_at, updated_at
 `
 
 type CreateProviderParams struct {
-	ProviderID  string `json:"provider_id"`
-	DisplayName string `json:"display_name"`
-	ApiKey      string `json:"api_key"`
-	BaseUrl     string `json:"base_url"`
-	IsEnabled   bool   `json:"is_enabled"`
+	ID          pgtype.UUID `json:"id"`
+	CatalogID   string      `json:"provider_id"`
+	Slug        string      `json:"slug"`
+	DisplayName string      `json:"display_name"`
+	ApiKey      string      `json:"api_key"`
+	BaseUrl     string      `json:"base_url"`
+	IsEnabled   bool        `json:"is_enabled"`
 }
 
+// id is supplied by the caller (uuid.New) so the encryption ref path
+// can be computed before the INSERT — every providers row's api_key
+// ciphertext is bound to its own UUID via AAD.
 func (q *Queries) CreateProvider(ctx context.Context, arg CreateProviderParams) (Provider, error) {
 	row := q.db.QueryRow(ctx, createProvider,
-		arg.ProviderID,
+		arg.ID,
+		arg.CatalogID,
+		arg.Slug,
 		arg.DisplayName,
 		arg.ApiKey,
 		arg.BaseUrl,
@@ -36,7 +43,8 @@ func (q *Queries) CreateProvider(ctx context.Context, arg CreateProviderParams) 
 	var i Provider
 	err := row.Scan(
 		&i.ID,
-		&i.ProviderID,
+		&i.CatalogID,
+		&i.Slug,
 		&i.DisplayName,
 		&i.IsEnabled,
 		&i.BaseUrl,
@@ -57,7 +65,7 @@ func (q *Queries) DeleteProvider(ctx context.Context, id pgtype.UUID) error {
 }
 
 const getProviderByID = `-- name: GetProviderByID :one
-SELECT id, provider_id, display_name, is_enabled, base_url, api_key, created_at, updated_at FROM providers WHERE id = $1
+SELECT id, provider_id, slug, display_name, is_enabled, base_url, api_key, created_at, updated_at FROM providers WHERE id = $1
 `
 
 func (q *Queries) GetProviderByID(ctx context.Context, id pgtype.UUID) (Provider, error) {
@@ -65,27 +73,8 @@ func (q *Queries) GetProviderByID(ctx context.Context, id pgtype.UUID) (Provider
 	var i Provider
 	err := row.Scan(
 		&i.ID,
-		&i.ProviderID,
-		&i.DisplayName,
-		&i.IsEnabled,
-		&i.BaseUrl,
-		&i.ApiKey,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-	)
-	return i, err
-}
-
-const getProviderByProviderID = `-- name: GetProviderByProviderID :one
-SELECT id, provider_id, display_name, is_enabled, base_url, api_key, created_at, updated_at FROM providers WHERE provider_id = $1
-`
-
-func (q *Queries) GetProviderByProviderID(ctx context.Context, providerID string) (Provider, error) {
-	row := q.db.QueryRow(ctx, getProviderByProviderID, providerID)
-	var i Provider
-	err := row.Scan(
-		&i.ID,
-		&i.ProviderID,
+		&i.CatalogID,
+		&i.Slug,
 		&i.DisplayName,
 		&i.IsEnabled,
 		&i.BaseUrl,
@@ -97,7 +86,7 @@ func (q *Queries) GetProviderByProviderID(ctx context.Context, providerID string
 }
 
 const listProviders = `-- name: ListProviders :many
-SELECT id, provider_id, display_name, is_enabled, base_url, api_key, created_at, updated_at FROM providers ORDER BY provider_id
+SELECT id, provider_id, slug, display_name, is_enabled, base_url, api_key, created_at, updated_at FROM providers ORDER BY provider_id, slug
 `
 
 func (q *Queries) ListProviders(ctx context.Context) ([]Provider, error) {
@@ -111,7 +100,44 @@ func (q *Queries) ListProviders(ctx context.Context) ([]Provider, error) {
 		var i Provider
 		if err := rows.Scan(
 			&i.ID,
-			&i.ProviderID,
+			&i.CatalogID,
+			&i.Slug,
+			&i.DisplayName,
+			&i.IsEnabled,
+			&i.BaseUrl,
+			&i.ApiKey,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listProvidersByCatalogID = `-- name: ListProvidersByCatalogID :many
+SELECT id, provider_id, slug, display_name, is_enabled, base_url, api_key, created_at, updated_at FROM providers WHERE provider_id = $1 ORDER BY slug
+`
+
+// All configured rows for a single catalog provider — used by the
+// frontend to fan out picker entries (one per configured row × model).
+func (q *Queries) ListProvidersByCatalogID(ctx context.Context, providerID string) ([]Provider, error) {
+	rows, err := q.db.Query(ctx, listProvidersByCatalogID, providerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Provider{}
+	for rows.Next() {
+		var i Provider
+		if err := rows.Scan(
+			&i.ID,
+			&i.CatalogID,
+			&i.Slug,
 			&i.DisplayName,
 			&i.IsEnabled,
 			&i.BaseUrl,
@@ -132,16 +158,18 @@ func (q *Queries) ListProviders(ctx context.Context) ([]Provider, error) {
 const updateProvider = `-- name: UpdateProvider :one
 UPDATE providers
 SET display_name = COALESCE(NULLIF($1::text, ''), display_name),
-    api_key = CASE WHEN $2::boolean THEN $3 ELSE api_key END,
-    base_url = COALESCE(NULLIF($4::text, ''), base_url),
-    is_enabled = CASE WHEN $5::boolean THEN $6 ELSE is_enabled END,
+    slug = COALESCE(NULLIF($2::text, ''), slug),
+    api_key = CASE WHEN $3::boolean THEN $4 ELSE api_key END,
+    base_url = COALESCE(NULLIF($5::text, ''), base_url),
+    is_enabled = CASE WHEN $6::boolean THEN $7 ELSE is_enabled END,
     updated_at = now()
-WHERE id = $7
-RETURNING id, provider_id, display_name, is_enabled, base_url, api_key, created_at, updated_at
+WHERE id = $8
+RETURNING id, provider_id, slug, display_name, is_enabled, base_url, api_key, created_at, updated_at
 `
 
 type UpdateProviderParams struct {
 	DisplayName     string      `json:"display_name"`
+	Slug            string      `json:"slug"`
 	UpdateApiKey    bool        `json:"update_api_key"`
 	ApiKey          string      `json:"api_key"`
 	BaseUrl         string      `json:"base_url"`
@@ -153,6 +181,7 @@ type UpdateProviderParams struct {
 func (q *Queries) UpdateProvider(ctx context.Context, arg UpdateProviderParams) (Provider, error) {
 	row := q.db.QueryRow(ctx, updateProvider,
 		arg.DisplayName,
+		arg.Slug,
 		arg.UpdateApiKey,
 		arg.ApiKey,
 		arg.BaseUrl,
@@ -163,7 +192,8 @@ func (q *Queries) UpdateProvider(ctx context.Context, arg UpdateProviderParams) 
 	var i Provider
 	err := row.Scan(
 		&i.ID,
-		&i.ProviderID,
+		&i.CatalogID,
+		&i.Slug,
 		&i.DisplayName,
 		&i.IsEnabled,
 		&i.BaseUrl,

@@ -22,6 +22,29 @@ CREATE TABLE tenants (
     updated_at  timestamptz NOT NULL DEFAULT now()
 );
 
+-- Multiple rows per catalog provider (multi-key support): admins can
+-- register a personal OpenAI key + a team OpenAI key as two separate
+-- rows. provider_id holds the catalog ID (e.g. "openai"); slug
+-- disambiguates inside that catalog ID. UNIQUE(provider_id, slug)
+-- replaces the old unique-on-provider-id constraint. display_name is
+-- a free-text human label; slug is the kebab-case stable identifier
+-- the picker shows alongside the model (e.g. "openai/personal/gpt-5").
+--
+-- Defined before system_settings because system_settings.default_*_provider_id
+-- and agents.*_provider_id are FKs to providers(id).
+CREATE TABLE providers (
+    id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    provider_id  text NOT NULL,
+    slug         text NOT NULL,
+    display_name text NOT NULL,
+    is_enabled   boolean NOT NULL,
+    base_url     text NOT NULL,
+    api_key      text NOT NULL,
+    created_at   timestamptz NOT NULL DEFAULT now(),
+    updated_at   timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (provider_id, slug)
+);
+
 -- Single-row system settings. The `default_*` columns intentionally have no
 -- SQL default so fresh inserts must specify values explicitly (per
 -- airlock/CLAUDE.md "no fake defaults on data columns"). The seed INSERT
@@ -31,14 +54,26 @@ CREATE TABLE system_settings (
     id                       boolean PRIMARY KEY DEFAULT true CHECK (id = true),
     public_url               text NOT NULL,
     agent_domain             text NOT NULL,
-    default_build_model      text NOT NULL,
-    default_exec_model       text NOT NULL,
-    default_stt_model        text NOT NULL,
-    default_vision_model     text NOT NULL,
-    default_tts_model        text NOT NULL,
-    default_image_gen_model  text NOT NULL,
-    default_embedding_model  text NOT NULL,
-    default_search_model     text NOT NULL,
+    -- System-wide model defaults. Each carries a provider FK so the
+    -- inherited slot still points at a specific providers row when
+    -- agents leave a slot empty. NULL FK ⇄ empty model name; both move
+    -- together. Mirrors the agents table layout.
+    default_build_provider_id     uuid REFERENCES providers(id),
+    default_build_model           text NOT NULL,
+    default_exec_provider_id      uuid REFERENCES providers(id),
+    default_exec_model            text NOT NULL,
+    default_stt_provider_id       uuid REFERENCES providers(id),
+    default_stt_model             text NOT NULL,
+    default_vision_provider_id    uuid REFERENCES providers(id),
+    default_vision_model          text NOT NULL,
+    default_tts_provider_id       uuid REFERENCES providers(id),
+    default_tts_model             text NOT NULL,
+    default_image_gen_provider_id uuid REFERENCES providers(id),
+    default_image_gen_model       text NOT NULL,
+    default_embedding_provider_id uuid REFERENCES providers(id),
+    default_embedding_model       text NOT NULL,
+    default_search_provider_id    uuid REFERENCES providers(id),
+    default_search_model          text NOT NULL,
     activation_code          text,
     created_at               timestamptz NOT NULL DEFAULT now(),
     updated_at               timestamptz NOT NULL DEFAULT now()
@@ -50,6 +85,9 @@ INSERT INTO system_settings (
     default_stt_model, default_vision_model, default_tts_model,
     default_image_gen_model, default_embedding_model, default_search_model
 ) VALUES (true, '', '', '', '', '', '', '', '', '', '');
+-- The default_*_provider_id columns default to NULL (empty slot, agents
+-- inherit nothing). Admins set them via the Settings UI together with
+-- the corresponding default_*_model after they configure providers.
 
 CREATE TABLE users (
     id                   uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -84,17 +122,6 @@ CREATE TABLE auth_lockouts (
     PRIMARY KEY (email, ip)
 );
 
-CREATE TABLE providers (
-    id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    provider_id  text NOT NULL UNIQUE,
-    display_name text NOT NULL,
-    is_enabled   boolean NOT NULL,
-    base_url     text NOT NULL,
-    api_key      text NOT NULL,
-    created_at   timestamptz NOT NULL DEFAULT now(),
-    updated_at   timestamptz NOT NULL DEFAULT now()
-);
-
 CREATE TABLE agents (
     id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id         uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -104,14 +131,29 @@ CREATE TABLE agents (
     status          text NOT NULL,
     upgrade_status  text NOT NULL CHECK (upgrade_status IN ('idle', 'queued', 'building', 'failed')),
     auto_fix        boolean NOT NULL,
-    build_model     text NOT NULL,
-    exec_model      text NOT NULL,
-    stt_model       text NOT NULL,
-    vision_model    text NOT NULL,
-    tts_model       text NOT NULL,
-    image_gen_model text NOT NULL,
-    embedding_model text NOT NULL,
-    search_model    text NOT NULL,
+    -- Per-slot provider FKs: each model slot binds to a specific
+    -- providers row so the runtime knows which API key to use. The FK
+    -- is NULL exactly when the matching *_model is empty (slot unused
+    -- — agent inherits from system_settings.default_*_*). The
+    -- accompanying *_model column carries just the model name (e.g.
+    -- "gpt-5"); the catalog provider_id is reconstructed by joining
+    -- through the FK at runtime.
+    build_provider_id     uuid REFERENCES providers(id),
+    build_model           text NOT NULL,
+    exec_provider_id      uuid REFERENCES providers(id),
+    exec_model            text NOT NULL,
+    stt_provider_id       uuid REFERENCES providers(id),
+    stt_model             text NOT NULL,
+    vision_provider_id    uuid REFERENCES providers(id),
+    vision_model          text NOT NULL,
+    tts_provider_id       uuid REFERENCES providers(id),
+    tts_model             text NOT NULL,
+    image_gen_provider_id uuid REFERENCES providers(id),
+    image_gen_model       text NOT NULL,
+    embedding_provider_id uuid REFERENCES providers(id),
+    embedding_model       text NOT NULL,
+    search_provider_id    uuid REFERENCES providers(id),
+    search_model          text NOT NULL,
     source_ref      text NOT NULL,
     image_ref       text NOT NULL,
     db_schema       text NOT NULL,
@@ -410,11 +452,15 @@ CREATE TABLE agent_directories (
 CREATE INDEX idx_agent_directories_agent ON agent_directories(agent_id);
 
 CREATE TABLE agent_model_slots (
-    agent_id       uuid NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
-    slug           text NOT NULL,
-    capability     text NOT NULL,
-    description    text NOT NULL,
-    assigned_model text NOT NULL,
+    agent_id              uuid NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    slug                  text NOT NULL,
+    capability            text NOT NULL,
+    description           text NOT NULL,
+    -- assigned_provider_id binds this slot to a specific providers row (so
+    -- multi-key admins can pick which key to use). NULL ⇄ assigned_model
+    -- empty (slot unassigned). Both move together.
+    assigned_provider_id  uuid REFERENCES providers(id),
+    assigned_model        text NOT NULL,
     PRIMARY KEY (agent_id, slug)
 );
 
@@ -563,11 +609,13 @@ DROP TABLE IF EXISTS agent_mcp_servers;
 DROP TABLE IF EXISTS connections;
 DROP TABLE IF EXISTS agent_builds;
 DROP TABLE IF EXISTS agents;
+-- system_settings.default_*_provider_id FKs into providers, so it must
+-- drop before providers (same reason agents drops above).
+DROP TABLE IF EXISTS system_settings;
 DROP TABLE IF EXISTS providers;
 DROP TABLE IF EXISTS auth_lockouts;
 DROP INDEX IF EXISTS idx_auth_failures_prune;
 DROP INDEX IF EXISTS idx_auth_failures_lookup;
 DROP TABLE IF EXISTS auth_failures;
 DROP TABLE IF EXISTS users;
-DROP TABLE IF EXISTS system_settings;
 DROP TABLE IF EXISTS tenants;

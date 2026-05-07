@@ -12,8 +12,10 @@ import {
   isSpeech,
   isTranscription,
   hasCap,
+  splitModelValue,
   type CatalogModel,
 } from '@/composables/useModelCapabilities'
+import { useProvidersStore } from '@/stores/providers'
 import { useToast } from 'primevue/usetoast'
 import api from '@/api/client'
 import { ws } from '@/api/ws'
@@ -27,6 +29,7 @@ import BuildLogPanel from '@/components/agent/BuildLogPanel.vue'
 const router = useRouter()
 const store = useAgentsStore()
 const catalog = useCatalogStore()
+const providers = useProvidersStore()
 const toast = useToast()
 const { groupModels, searchProviderOptions } = useModelCapabilities()
 
@@ -66,6 +69,9 @@ let pollTimer: ReturnType<typeof setInterval> | null = null
 onMounted(async () => {
   catalog.fetchConfiguredModels()
   catalog.fetchCapabilities()
+  // Pickers fan out per (catalog provider × configured row), so we need
+  // the providers list before the model dropdowns render.
+  providers.fetchProviders()
   try {
     const { data } = await api.get('/api/v1/settings')
     const resp = fromJson(GetSystemSettingsResponseSchema, data)
@@ -246,25 +252,46 @@ async function onSubmit() {
 
   loading.value = true
   try {
+    // Picker values are packed "rowUUID|modelName" tuples — split into the
+    // (provider FK, bare model name) pair the backend expects per slot.
+    const build = splitModelValue(overrides.value.buildModel)
+    const exec = splitModelValue(overrides.value.execModel)
+    const stt = splitModelValue(overrides.value.sttModel)
+    const vision = splitModelValue(overrides.value.visionModel)
+    const tts = splitModelValue(overrides.value.ttsModel)
+    const imageGen = splitModelValue(overrides.value.imageGenModel)
+    const embedding = splitModelValue(overrides.value.embeddingModel)
+    const search = splitModelValue(overrides.value.searchModel)
+
     const agent = await store.createAgent(
       name.value,
       slug.value,
-      overrides.value.buildModel,
-      overrides.value.execModel,
+      build.modelName,
+      build.providerRowID,
+      exec.modelName,
+      exec.providerRowID,
       instructions.value,
     )
 
     if (hasAdvancedOverrides.value) {
       const cfg = create(AgentModelConfigSchema, {
-        buildModel:     overrides.value.buildModel,
-        execModel:      overrides.value.execModel,
-        sttModel:       overrides.value.sttModel,
-        visionModel:    overrides.value.visionModel,
-        ttsModel:       overrides.value.ttsModel,
-        imageGenModel:  overrides.value.imageGenModel,
-        embeddingModel: overrides.value.embeddingModel,
-        searchModel:    overrides.value.searchModel,
-        slots:          [],
+        buildModel:          build.modelName,
+        buildProviderId:     build.providerRowID,
+        execModel:           exec.modelName,
+        execProviderId:      exec.providerRowID,
+        sttModel:            stt.modelName,
+        sttProviderId:       stt.providerRowID,
+        visionModel:         vision.modelName,
+        visionProviderId:    vision.providerRowID,
+        ttsModel:            tts.modelName,
+        ttsProviderId:       tts.providerRowID,
+        imageGenModel:       imageGen.modelName,
+        imageGenProviderId:  imageGen.providerRowID,
+        embeddingModel:      embedding.modelName,
+        embeddingProviderId: embedding.providerRowID,
+        searchModel:         search.modelName,
+        searchProviderId:    search.providerRowID,
+        slots:               [],
       })
       try {
         await store.updateModelConfig(agent.id, cfg)

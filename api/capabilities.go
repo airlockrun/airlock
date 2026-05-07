@@ -42,7 +42,7 @@ func (h *capabilitiesHandler) ListCapabilities(w http.ResponseWriter, r *http.Re
 	configured := make(map[string]bool, len(rows))
 	for _, row := range rows {
 		if row.IsEnabled {
-			configured[row.ProviderID] = true
+			configured[row.CatalogID] = true
 		}
 	}
 

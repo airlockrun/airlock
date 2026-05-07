@@ -75,18 +75,27 @@ WHERE id = @id
 RETURNING *;
 
 -- name: UpdateAgentModels :exec
--- Atomic replace of all eight per-agent model override columns.
--- Empty strings mean "inherit the corresponding system default".
+-- Atomic replace of all eight per-agent model overrides. Each slot is
+-- two columns: a provider FK (nullable) and the bare model name string.
+-- Empty/NULL means "inherit the corresponding system default".
 UPDATE agents SET
-    build_model     = @build_model,
-    exec_model      = @exec_model,
-    stt_model       = @stt_model,
-    vision_model    = @vision_model,
-    tts_model       = @tts_model,
-    image_gen_model = @image_gen_model,
-    embedding_model = @embedding_model,
-    search_model    = @search_model,
-    updated_at = now()
+    build_provider_id     = @build_provider_id,
+    build_model           = @build_model,
+    exec_provider_id      = @exec_provider_id,
+    exec_model            = @exec_model,
+    stt_provider_id       = @stt_provider_id,
+    stt_model             = @stt_model,
+    vision_provider_id    = @vision_provider_id,
+    vision_model          = @vision_model,
+    tts_provider_id       = @tts_provider_id,
+    tts_model             = @tts_model,
+    image_gen_provider_id = @image_gen_provider_id,
+    image_gen_model       = @image_gen_model,
+    embedding_provider_id = @embedding_provider_id,
+    embedding_model       = @embedding_model,
+    search_provider_id    = @search_provider_id,
+    search_model          = @search_model,
+    updated_at            = now()
 WHERE id = @id;
 
 -- name: UpdateAgentDescription :exec

@@ -79,6 +79,11 @@ message Provider {
   string api_key_masked = 6;
   google.protobuf.Timestamp created_at = 7;
   google.protobuf.Timestamp updated_at = 8;
+  // slug disambiguates rows that share a provider_id (multi-key
+  // support: "openai/personal" + "openai/team-acme"). Required.
+  // Auto-derived from display_name on the client (kebab-case); user
+  // can override.
+  string slug = 9;
 }
 
 // ProviderInfo represents a known LLM provider from the catalog.
@@ -141,11 +146,17 @@ message AgentInfo {
   string status = 5;           // "draft", "building", "active", "failed", "stopped"
   string upgrade_status = 6;   // "idle", "queued", "building", "failed"
   bool auto_fix = 7;
-  string build_model = 8;      // "provider/model" used for code generation
-  string exec_model = 9;       // "provider/model" used at runtime for LLM calls
+  // build_model / exec_model carry only the bare model name now
+  // (e.g. "gpt-5"). The associated provider row is named via
+  // build_provider_id / exec_provider_id (UUID-as-string). Empty +
+  // empty means "inherit system default for this slot".
+  string build_model = 8;
+  string exec_model = 9;
   string error_message = 10;
   google.protobuf.Timestamp created_at = 11;
   google.protobuf.Timestamp updated_at = 12;
+  string build_provider_id = 13;
+  string exec_provider_id = 14;
 }
 
 // RunInfo represents a single execution of an agent.
@@ -377,7 +388,9 @@ message TopicInfo {
 
 // SystemSettingsInfo mirrors the system_settings table (single-row, global).
 // Per-capability default models are used wherever the system picks a model
-// for a capability and no agent-specific override is set.
+// for a capability and no agent-specific override is set. Each slot pairs
+// a model name with a provider row UUID (multi-key support); empty + empty
+// means "no default configured for this capability".
 message SystemSettingsInfo {
   string public_url = 1;
   string agent_domain = 2;
@@ -389,4 +402,12 @@ message SystemSettingsInfo {
   string default_image_gen_model = 8;
   string default_search_model = 9;
   string default_embedding_model = 10;
+  string default_build_provider_id = 11;
+  string default_exec_provider_id = 12;
+  string default_stt_provider_id = 13;
+  string default_vision_provider_id = 14;
+  string default_tts_provider_id = 15;
+  string default_image_gen_provider_id = 16;
+  string default_search_provider_id = 17;
+  string default_embedding_provider_id = 18;
 }
