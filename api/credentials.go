@@ -625,26 +625,43 @@ func (h *credentialHandler) TestCredential(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	if conn.AccessTokenRef == "" {
-		writeError(w, http.StatusBadRequest, "no credentials configured")
-		return
-	}
+	// Optional body lets the UI test a freshly-typed token without saving
+	// first. Empty body falls back to the stored credential.
+	var keyReq airlockv1.SetAPIKeyRequest
+	_ = decodeProto(r, &keyReq)
 
-	// If no test_path, just verify credentials exist.
-	if conn.TestPath == "" {
-		resp := &airlockv1.TestCredentialResponse{Success: true, Message: "credentials configured"}
-		if conn.AuthMode == "oauth" && conn.TokenExpiresAt.Valid && conn.TokenExpiresAt.Time.Before(time.Now()) {
-			resp.Success = false
-			resp.Message = "OAuth token has expired"
+	var creds string
+	if keyReq.ApiKey != "" {
+		creds = keyReq.ApiKey
+	} else {
+		if conn.AccessTokenRef == "" {
+			writeError(w, http.StatusBadRequest, "no credentials configured")
+			return
 		}
-		writeProto(w, http.StatusOK, resp)
-		return
+		// If no test_path and no body key, just verify stored credentials exist.
+		if conn.TestPath == "" {
+			resp := &airlockv1.TestCredentialResponse{Success: true, Message: "credentials configured"}
+			if conn.AuthMode == "oauth" && conn.TokenExpiresAt.Valid && conn.TokenExpiresAt.Time.Before(time.Now()) {
+				resp.Success = false
+				resp.Message = "OAuth token has expired"
+			}
+			writeProto(w, http.StatusOK, resp)
+			return
+		}
+		creds, err = h.encryptor.Get(ctx, "connection/"+pgUUID(conn.ID).String()+"/access_token", conn.AccessTokenRef)
+		if err != nil {
+			h.logger.Error("decrypt credentials failed", zap.Error(err))
+			writeError(w, http.StatusInternalServerError, "decryption failed")
+			return
+		}
 	}
 
-	creds, err := h.encryptor.Get(ctx, "connection/"+pgUUID(conn.ID).String()+"/access_token", conn.AccessTokenRef)
-	if err != nil {
-		h.logger.Error("decrypt credentials failed", zap.Error(err))
-		writeError(w, http.StatusInternalServerError, "decryption failed")
+	if conn.TestPath == "" {
+		// Body-supplied key with no test_path: nothing to probe.
+		writeProto(w, http.StatusOK, &airlockv1.TestCredentialResponse{
+			Success: true,
+			Message: "no test endpoint configured for this connection",
+		})
 		return
 	}
 

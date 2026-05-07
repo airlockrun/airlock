@@ -769,6 +769,7 @@ func messageToProto(ctx context.Context, s3Client *storage.S3Client, logger *zap
 		CostEstimate: pgNumericToFloat(m.CostEstimate),
 		CreatedAt:    convert.PgTimestampToProto(m.CreatedAt),
 		Source:       m.Source,
+		RunId:        convert.PgUUIDToString(m.RunID),
 	}
 	if len(m.Parts) > 0 {
 		info.Parts = string(resolveMediaPartsJSON(ctx, s3Client, logger, m.Parts))

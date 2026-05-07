@@ -1308,15 +1308,21 @@ type AgentMessageInfo struct {
 	// seq is the monotonic insertion-order axis on agent_messages. Used as the
 	// pagination cursor instead of created_at because rows persisted in one
 	// transaction (assistant + tool batch) share an identical created_at.
-	Seq           int64                  `protobuf:"varint,2,opt,name=seq,proto3" json:"seq,omitempty"`
-	Role          string                 `protobuf:"bytes,3,opt,name=role,proto3" json:"role,omitempty"`     // "user", "assistant", "system", "tool"
-	Source        string                 `protobuf:"bytes,4,opt,name=source,proto3" json:"source,omitempty"` // "user" (default), "system" (injected by Airlock), "bridge", "error"
-	Content       string                 `protobuf:"bytes,5,opt,name=content,proto3" json:"content,omitempty"`
-	Parts         string                 `protobuf:"bytes,6,opt,name=parts,proto3" json:"parts,omitempty"` // JSON-encoded goai Content for rich message display
-	TokensIn      int32                  `protobuf:"varint,7,opt,name=tokens_in,json=tokensIn,proto3" json:"tokens_in,omitempty"`
-	TokensOut     int32                  `protobuf:"varint,8,opt,name=tokens_out,json=tokensOut,proto3" json:"tokens_out,omitempty"`
-	CostEstimate  float64                `protobuf:"fixed64,9,opt,name=cost_estimate,json=costEstimate,proto3" json:"cost_estimate,omitempty"`
-	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,10,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	Seq          int64                  `protobuf:"varint,2,opt,name=seq,proto3" json:"seq,omitempty"`
+	Role         string                 `protobuf:"bytes,3,opt,name=role,proto3" json:"role,omitempty"`     // "user", "assistant", "system", "tool"
+	Source       string                 `protobuf:"bytes,4,opt,name=source,proto3" json:"source,omitempty"` // "user" (default), "system" (injected by Airlock), "bridge", "error"
+	Content      string                 `protobuf:"bytes,5,opt,name=content,proto3" json:"content,omitempty"`
+	Parts        string                 `protobuf:"bytes,6,opt,name=parts,proto3" json:"parts,omitempty"` // JSON-encoded goai Content for rich message display
+	TokensIn     int32                  `protobuf:"varint,7,opt,name=tokens_in,json=tokensIn,proto3" json:"tokens_in,omitempty"`
+	TokensOut    int32                  `protobuf:"varint,8,opt,name=tokens_out,json=tokensOut,proto3" json:"tokens_out,omitempty"`
+	CostEstimate float64                `protobuf:"fixed64,9,opt,name=cost_estimate,json=costEstimate,proto3" json:"cost_estimate,omitempty"`
+	CreatedAt    *timestamppb.Timestamp `protobuf:"bytes,10,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	// run_id groups assistant + tool rows produced by the same run so the UI
+	// can fold a multi-step run_js loop back into a single bubble — the live
+	// streaming path bundles them via finalizeMessage but the persisted shape
+	// is one row per LLM step. Empty for user/system rows that don't belong
+	// to a run.
+	RunId         string `protobuf:"bytes,11,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1419,6 +1425,13 @@ func (x *AgentMessageInfo) GetCreatedAt() *timestamppb.Timestamp {
 		return x.CreatedAt
 	}
 	return nil
+}
+
+func (x *AgentMessageInfo) GetRunId() string {
+	if x != nil {
+		return x.RunId
+	}
+	return ""
 }
 
 // WebhookInfo represents a code-synced webhook registration.
@@ -2763,7 +2776,7 @@ const file_airlock_v1_types_proto_rawDesc = "" +
 	"\n" +
 	"created_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x129\n" +
 	"\n" +
-	"updated_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\"\xac\x02\n" +
+	"updated_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\"\xc3\x02\n" +
 	"\x10AgentMessageInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x10\n" +
 	"\x03seq\x18\x02 \x01(\x03R\x03seq\x12\x12\n" +
@@ -2777,7 +2790,8 @@ const file_airlock_v1_types_proto_rawDesc = "" +
 	"\rcost_estimate\x18\t \x01(\x01R\fcostEstimate\x129\n" +
 	"\n" +
 	"created_at\x18\n" +
-	" \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"\xb9\x02\n" +
+	" \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x12\x15\n" +
+	"\x06run_id\x18\v \x01(\tR\x05runId\"\xb9\x02\n" +
 	"\vWebhookInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04path\x18\x02 \x01(\tR\x04path\x12\x1f\n" +

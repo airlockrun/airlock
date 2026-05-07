@@ -215,6 +215,12 @@ message AgentMessageInfo {
   int32 tokens_out = 8;
   double cost_estimate = 9;
   google.protobuf.Timestamp created_at = 10;
+  // run_id groups assistant + tool rows produced by the same run so the UI
+  // can fold a multi-step run_js loop back into a single bubble — the live
+  // streaming path bundles them via finalizeMessage but the persisted shape
+  // is one row per LLM step. Empty for user/system rows that don't belong
+  // to a run.
+  string run_id = 11;
 }
 
 // WebhookInfo represents a code-synced webhook registration.

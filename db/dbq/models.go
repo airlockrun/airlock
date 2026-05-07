@@ -95,6 +95,19 @@ type AgentDirectory struct {
 	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
 }
 
+type AgentEnvVar struct {
+	ID           pgtype.UUID        `json:"id"`
+	AgentID      pgtype.UUID        `json:"agent_id"`
+	Slug         string             `json:"slug"`
+	Description  string             `json:"description"`
+	IsSecret     bool               `json:"is_secret"`
+	ValueRef     string             `json:"value_ref"`
+	DefaultValue string             `json:"default_value"`
+	Pattern      string             `json:"pattern"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+}
+
 type AgentMcpServer struct {
 	ID                   pgtype.UUID        `json:"id"`
 	AgentID              pgtype.UUID        `json:"agent_id"`
