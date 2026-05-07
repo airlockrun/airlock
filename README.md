@@ -61,7 +61,7 @@ Verify with `dig +short anything.airlock.example.com` once propagation completes
 #    (Tracking `main` between releases is not supported — pin to a tag.)
 git clone https://github.com/airlockrun/airlock
 cd airlock
-git checkout v0.2.16
+git checkout v0.3.0
 
 # 2. Generate secrets and edit configuration.
 cp .env.example .env

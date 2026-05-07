@@ -77,9 +77,14 @@ type BridgeSettings struct {
 // DefaultBridgeSettings returns the settings a freshly created bridge
 // row should carry. New bridges currently insert `{}` and rely on this
 // function to materialize defaults at read time.
+//
+// AllowPublicDMs defaults to false: opening a bot to anonymous users is
+// a deliberate operator choice (it exposes the agent's free-tier surface
+// to the public internet). Operators flip it on from the bridge settings
+// dialog when they actually want public access.
 func DefaultBridgeSettings() BridgeSettings {
 	return BridgeSettings{
-		AllowPublicDMs:             true,
+		AllowPublicDMs:             false,
 		PublicSessionTTLSeconds:    DefaultPublicSessionTTLSeconds,
 		PublicSessionMode:          PublicSessionModeSession,
 		PublicPromptTimeoutSeconds: DefaultPublicPromptTimeoutSeconds,

@@ -19,10 +19,12 @@ export const useBridgesStore = defineStore('bridges', () => {
     }
   }
 
-  async function createBridge(payload: { name: string; type: string; token: string; agentId?: string }) {
+  async function createBridge(payload: { name: string; type: string; token: string; agentId?: string }): Promise<BridgeInfo> {
     const { data } = await api.post('/api/v1/bridges', payload)
     // createBridge returns a single BridgeInfo, not wrapped in a response message
-    bridges.value.unshift(fromJson(ListBridgesResponseSchema, { bridges: [data] }).bridges[0])
+    const created = fromJson(ListBridgesResponseSchema, { bridges: [data] }).bridges[0]
+    bridges.value.unshift(created)
+    return created
   }
 
   async function updateBridge(
@@ -33,6 +35,7 @@ export const useBridgesStore = defineStore('bridges', () => {
         allowPublicDms: boolean
         publicSessionTtlSeconds: number
         publicSessionMode: 'session' | 'one_shot'
+        publicPromptTimeoutSeconds: number
       }
     },
   ) {

@@ -27,6 +27,14 @@ function canDelete(bridge: { owner?: { id?: string } | null }): boolean {
 
 const dialogVisible = ref(false)
 const form = ref({ name: '', type: 'telegram', token: '', agentId: '' })
+// Mirrors the edit dialog so operators see and lock the public-access
+// posture at creation rather than only after a refresh.
+const createAllowPublicDMs = ref(false)
+const createSessionMode = ref<'session' | 'one_shot'>('session')
+const createTTLAmount = ref(3)
+const createTTLUnit = ref<'minutes' | 'hours' | 'days'>('hours')
+const createTTLNever = ref(false)
+const createPublicPromptTimeout = ref(60)
 
 // Edit dialog — covers both reassignment and per-bridge settings.
 const editVisible = ref(false)
@@ -81,17 +89,42 @@ onMounted(() => {
 
 function openCreate() {
   form.value = { name: '', type: 'telegram', token: '', agentId: '' }
+  // Reset to the same defaults the backend would write (DMs off, session
+  // mode, 3h TTL, 60s prompt timeout) so the form reflects what we'll
+  // send if the operator just hits Create.
+  createAllowPublicDMs.value = false
+  createSessionMode.value = 'session'
+  createTTLAmount.value = 3
+  createTTLUnit.value = 'hours'
+  createTTLNever.value = false
+  createPublicPromptTimeout.value = 60
   dialogVisible.value = true
 }
 
 async function onSubmit() {
   try {
-    await store.createBridge({
+    // CreateBridgeRequest doesn't carry settings yet (proto), so we
+    // create-then-update. The brief window between the two requests
+    // doesn't open the bridge to the public because the new default in
+    // DefaultBridgeSettings is allowPublicDms=false — and we re-issue
+    // the explicit choices immediately.
+    const created = await store.createBridge({
       name: form.value.name,
       type: form.value.type,
       token: form.value.token,
       agentId: form.value.agentId,
     })
+    if (created?.id) {
+      await store.updateBridge(created.id, {
+        agentId: form.value.agentId,
+        settings: {
+          allowPublicDms: createAllowPublicDMs.value,
+          publicSessionTtlSeconds: createTTLNever.value ? 0 : ttlToSeconds(createTTLAmount.value, createTTLUnit.value),
+          publicSessionMode: createSessionMode.value,
+          publicPromptTimeoutSeconds: createPublicPromptTimeout.value,
+        },
+      })
+    }
     toast.add({ severity: 'success', summary: 'Bridge created', life: 3000 })
     dialogVisible.value = false
   } catch (err: any) {
@@ -234,7 +267,7 @@ function confirmDelete(bridge: { id: string; name: string }) {
     </DataTable>
 
     <!-- Create dialog -->
-    <Dialog v-model:visible="dialogVisible" header="Add Bridge" modal style="width: 28rem">
+    <Dialog v-model:visible="dialogVisible" header="Add Bridge" modal style="width: 30rem">
       <div style="display: flex; flex-direction: column; gap: 1rem; padding-top: 0.5rem">
         <div style="display: flex; flex-direction: column; gap: 0.25rem">
           <label for="bridgeName">Name</label>
@@ -251,6 +284,86 @@ function confirmDelete(bridge: { id: string; name: string }) {
         <div style="display: flex; flex-direction: column; gap: 0.25rem">
           <label for="bridgeAgentId">Agent</label>
           <Select id="bridgeAgentId" v-model="form.agentId" :options="agentsStore.agents" optionLabel="name" optionValue="id" placeholder="Select an agent" style="width: 100%" />
+        </div>
+
+        <!-- Public DMs -->
+        <div style="display: flex; flex-direction: column; gap: 0.5rem; border-top: 1px solid var(--p-surface-200); padding-top: 1rem">
+          <div style="display: flex; align-items: center; justify-content: space-between; gap: 1rem">
+            <div>
+              <div style="font-weight: 600">Allow public DMs</div>
+              <small style="color: var(--p-text-muted-color)">
+                Off by default — opens the bot to unauthenticated users at public access. <code>/auth</code> still works either way.
+              </small>
+            </div>
+            <ToggleSwitch v-model="createAllowPublicDMs" />
+          </div>
+        </div>
+
+        <!-- Public session mode -->
+        <div style="display: flex; flex-direction: column; gap: 0.5rem; border-top: 1px solid var(--p-surface-200); padding-top: 1rem">
+          <div style="font-weight: 600">Public session mode</div>
+          <Select
+            v-model="createSessionMode"
+            :options="sessionModes"
+            optionLabel="label"
+            optionValue="value"
+            style="width: 100%"
+          />
+          <small style="color: var(--p-text-muted-color)">
+            {{ sessionModes.find((m) => m.value === createSessionMode)?.description }}
+          </small>
+        </div>
+
+        <!-- Public prompt timeout -->
+        <div style="display: flex; flex-direction: column; gap: 0.5rem; border-top: 1px solid var(--p-surface-200); padding-top: 1rem">
+          <div>
+            <div style="font-weight: 600">Public prompt timeout</div>
+            <small style="color: var(--p-text-muted-color)">
+              Wall-clock cap (in seconds) on a single public-DM prompt run. Authed users are unaffected.
+            </small>
+          </div>
+          <InputNumber
+            v-model="createPublicPromptTimeout"
+            :min="1"
+            :max="3600"
+            showButtons
+            suffix=" sec"
+            style="width: 10rem"
+            inputStyle="width: 100%"
+          />
+        </div>
+
+        <!-- Public session expiry — only meaningful in session mode -->
+        <div v-if="createSessionMode === 'session'" style="display: flex; flex-direction: column; gap: 0.5rem; border-top: 1px solid var(--p-surface-200); padding-top: 1rem">
+          <div style="display: flex; align-items: center; justify-content: space-between; gap: 1rem">
+            <div>
+              <div style="font-weight: 600">Public session expiry</div>
+              <small style="color: var(--p-text-muted-color)">
+                Idle public conversations are finalized and cleared. Authed conversations are unaffected.
+              </small>
+            </div>
+            <div style="display: flex; align-items: center; gap: 0.5rem; white-space: nowrap">
+              <span style="font-size: 0.85rem; color: var(--p-text-muted-color)">Never</span>
+              <ToggleSwitch v-model="createTTLNever" />
+            </div>
+          </div>
+          <div v-if="!createTTLNever" style="display: flex; gap: 0.5rem; align-items: center">
+            <InputNumber
+              v-model="createTTLAmount"
+              :min="1"
+              :max="999"
+              showButtons
+              style="flex: 0 0 8rem"
+              inputStyle="width: 100%"
+            />
+            <Select
+              v-model="createTTLUnit"
+              :options="ttlUnits"
+              optionLabel="label"
+              optionValue="value"
+              style="flex: 1"
+            />
+          </div>
         </div>
       </div>
       <template #footer>
