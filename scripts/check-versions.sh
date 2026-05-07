@@ -13,10 +13,15 @@
 #     docker-compose.yml. Catches "added image to workflow but forgot
 #     compose", and the regression of "removed `image:` from a compose
 #     service so it silently went back to local-build only".
+#   - README.md's `git checkout vX.Y.Z` install step matches the
+#     compose ghcr tag. Operators clone + checkout the version the
+#     README documents; if it drifts from compose, they pull a tag
+#     that doesn't exist or whose images don't match the compose file.
 #
 # Release-only (RELEASE_TAG env set — runs in CI on tag push):
 #   - Compose ghcr image tags equal $RELEASE_TAG. Catches "bumped to
 #     wrong number" or "forgot to bump compose entirely before tagging".
+#   - README.md's checkout version equals $RELEASE_TAG. Same idea.
 #
 # Exit status: 0 on pass, 1 on any failure. All failures reported, not
 # fail-fast — one run surfaces every drift.
@@ -78,11 +83,26 @@ if [ -n "$only_referenced" ]; then
 	err "docker-compose.yml references these but publish-images.yml doesn't build them: $(printf '%s ' $only_referenced)"
 fi
 
-# --- 4. Release-only: compose tag equals $RELEASE_TAG ---
+# --- 4. README install checkout version matches compose tag ---
+
+# Pull the version out of the install step, e.g. `git checkout v0.2.16`.
+# Match only inside fenced code blocks to avoid prose hits like
+# `git checkout vX.Y.Z` in the Updating section (placeholder, not literal).
+readme_ver=$(grep -oE '^git checkout v[0-9]+\.[0-9]+\.[0-9]+$' README.md | head -1 | awk '{print $3}')
+if [ -z "$readme_ver" ]; then
+	err "README.md: missing literal 'git checkout vX.Y.Z' install step"
+elif [ "$n" -eq 1 ] && [ "$readme_ver" != "$tags" ]; then
+	err "README.md checkout $readme_ver doesn't match compose tag $tags"
+fi
+
+# --- 5. Release-only: compose + README versions equal $RELEASE_TAG ---
 
 if [ -n "${RELEASE_TAG:-}" ]; then
 	if [ "$n" -eq 1 ] && [ "$tags" != "$RELEASE_TAG" ]; then
 		err "docker-compose.yml: ghcr tag $tags doesn't match release tag $RELEASE_TAG"
+	fi
+	if [ -n "$readme_ver" ] && [ "$readme_ver" != "$RELEASE_TAG" ]; then
+		err "README.md checkout $readme_ver doesn't match release tag $RELEASE_TAG"
 	fi
 fi
 

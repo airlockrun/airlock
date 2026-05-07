@@ -57,9 +57,11 @@ Verify with `dig +short anything.airlock.example.com` once propagation completes
 **Steps:**
 
 ```bash
-# 1. Clone the repository.
+# 1. Clone the repository and check out the latest release tag.
+#    (Tracking `main` between releases is not supported — pin to a tag.)
 git clone https://github.com/airlockrun/airlock
 cd airlock
+git checkout v0.2.15
 
 # 2. Generate secrets and edit configuration.
 cp .env.example .env
@@ -95,7 +97,7 @@ docker compose -f docker-compose.yml -f docker-compose.local.yml up -d
 docker compose exec airlock cat /var/lib/airlock/activation_code.txt
 ```
 
-Open `https://airlock.traefik.me`, accept the browser warning on the first visit, paste the activation code. `*.traefik.me` is a public DNS service that resolves to 127.0.0.1, so per-agent subdomains route to your machine without any DNS or `/etc/hosts` work. Caddy uses its built-in local CA so you don't need a real domain or Let's Encrypt; the file `.env.local.example` shows how to trust the CA permanently if you'd rather skip the warning.
+Open [https://airlock.localhost:24443](https://airlock.localhost:24443), accept the browser warning on the first visit, paste the activation code. `*.localhost` resolves to 127.0.0.1 automatically (RFC 6761) in every modern browser, so per-agent subdomains route to your machine without any DNS or `/etc/hosts` work. The overlay binds Caddy on the rarely-used `:24443` (HTTPS) and `:24080` (HTTP) so it doesn't fight whatever you have on 80/443 — change `HTTP_PORT` / `HTTPS_PORT` (and the matching `:port` in `PUBLIC_URL` / `S3_URL_PUBLIC`) in `.env` if 24xxx is taken too. Caddy uses its built-in local CA so you don't need a real domain or Let's Encrypt; the file `.env.local.example` shows how to trust the CA permanently if you'd rather skip the warning.
 
 This stack uses dummy secrets baked into the overlay — fine for poking around, **not** for anything you put real data into.
 
