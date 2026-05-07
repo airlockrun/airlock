@@ -166,14 +166,17 @@ type ndJSONEvent struct {
 	Data any    `json:"data"`
 }
 
-// resolveModel determines which provider/model to use for a request.
+// resolveModel determines which provider row + model name to use for a
+// request, then loads the row by FK and decrypts its API key.
 //
 // Precedence:
 //  1. slug declared in agent_model_slots with a non-empty assigned_model
-//  2. agent's per-capability override column (empty = fall through)
-//  3. system_settings capability default (empty = error)
+//     (and a non-NULL assigned_provider_id pinning the row)
+//  2. agent's per-capability override pair (*_provider_id + *_model)
+//  3. system_settings capability default pair
 //
 // An undeclared or unbound slug quietly falls through to step 2.
+// Empty + invalid FK at every tier ⇒ "no model configured" error.
 func (h *agentHandler) resolveModel(ctx context.Context, agentID, slug, capability string) (providerID, modelID, apiKey, baseURL string, err error) {
 	q := dbq.New(h.db.Pool())
 
@@ -183,101 +186,106 @@ func (h *agentHandler) resolveModel(ctx context.Context, agentID, slug, capabili
 	}
 	pgAgentID := toPgUUID(agentUUID)
 
-	var modelStr string
+	var (
+		providerRowID pgtype.UUID
+		modelName     string
+	)
 
 	if slug != "" {
 		if slot, slotErr := q.GetAgentModelSlot(ctx, dbq.GetAgentModelSlotParams{
 			AgentID: pgAgentID,
 			Slug:    slug,
-		}); slotErr == nil && slot.AssignedModel != "" {
-			modelStr = slot.AssignedModel
+		}); slotErr == nil && slot.AssignedProviderID.Valid && slot.AssignedModel != "" {
+			providerRowID = slot.AssignedProviderID
+			modelName = slot.AssignedModel
 		}
 	}
 
-	if modelStr == "" {
-		modelStr, err = h.modelForCapability(ctx, q, pgAgentID, capability)
+	if !providerRowID.Valid || modelName == "" {
+		providerRowID, modelName, err = h.modelForCapability(ctx, q, pgAgentID, capability)
 		if err != nil {
 			return "", "", "", "", err
 		}
 	}
-	if modelStr == "" {
+	if !providerRowID.Valid || modelName == "" {
 		return "", "", "", "", fmt.Errorf("no model configured for capability %q — set one in admin Settings or the agent's Models tab", capability)
 	}
 
-	providerID, modelID = solprovider.ParseModel(modelStr)
-
-	// Look up the provider in DB to get API key.
-	p, dbErr := q.GetProviderByProviderID(ctx, providerID)
+	// Load the providers row by FK so we get the catalog provider_id and
+	// API key without parsing strings.
+	p, dbErr := q.GetProviderByID(ctx, providerRowID)
 	if dbErr != nil {
-		return "", "", "", "", fmt.Errorf("provider %q not configured", providerID)
+		return "", "", "", "", fmt.Errorf("provider row not found: %w", dbErr)
 	}
 	if !p.IsEnabled {
-		return "", "", "", "", fmt.Errorf("provider %q is disabled", providerID)
+		return "", "", "", "", fmt.Errorf("provider %q (%s) is disabled", p.CatalogID, p.Slug)
 	}
-	decrypted, decErr := h.encryptor.Get(ctx, "provider/"+p.ProviderID+"/api_key", p.ApiKey)
+	decrypted, decErr := h.encryptor.Get(ctx, "provider/"+p.ID.String()+"/api_key", p.ApiKey)
 	if decErr != nil {
-		return "", "", "", "", fmt.Errorf("decrypt API key for %q: %w", providerID, decErr)
+		return "", "", "", "", fmt.Errorf("decrypt API key for %q (%s): %w", p.CatalogID, p.Slug, decErr)
 	}
-	return providerID, modelID, decrypted, p.BaseUrl, nil
+	return p.CatalogID, modelName, decrypted, p.BaseUrl, nil
 }
 
 // modelForCapability picks the model for a capability using the tier-2 and
-// tier-3 fallbacks: per-agent column, then system default. Returns "" when
-// both are empty so the caller can produce a single clear error.
-func (h *agentHandler) modelForCapability(ctx context.Context, q *dbq.Queries, agentID pgtype.UUID, capability string) (string, error) {
+// tier-3 fallbacks: per-agent override pair, then system default pair.
+// Returns invalid FK + empty name when both tiers are empty so the caller
+// can produce a single clear error.
+func (h *agentHandler) modelForCapability(ctx context.Context, q *dbq.Queries, agentID pgtype.UUID, capability string) (pgtype.UUID, string, error) {
 	agent, dbErr := q.GetAgentByID(ctx, agentID)
 	if dbErr != nil {
-		return "", fmt.Errorf("get agent: %w", dbErr)
+		return pgtype.UUID{}, "", fmt.Errorf("get agent: %w", dbErr)
 	}
-	if override := agentCapabilityOverride(agent, capability); override != "" {
-		return override, nil
+	if fk, name := agentCapabilityOverride(agent, capability); fk.Valid && name != "" {
+		return fk, name, nil
 	}
 	settings, sErr := q.GetSystemSettings(ctx)
 	if sErr != nil {
-		return "", fmt.Errorf("get system settings: %w", sErr)
+		return pgtype.UUID{}, "", fmt.Errorf("get system settings: %w", sErr)
 	}
-	return systemCapabilityDefault(settings, capability), nil
+	fk, name := systemCapabilityDefault(settings, capability)
+	return fk, name, nil
 }
 
-// agentCapabilityOverride returns the agent's per-capability override string
-// from the column matching `capability`. Empty string means "no override —
-// inherit system default". An unknown capability returns "".
-func agentCapabilityOverride(agent dbq.Agent, capability string) string {
+// agentCapabilityOverride returns the agent's per-capability override pair
+// (provider FK + model name). Both empty/invalid ⇄ "no override — inherit
+// system default". Unknown capability returns the zero pair.
+func agentCapabilityOverride(agent dbq.Agent, capability string) (pgtype.UUID, string) {
 	switch capability {
 	case "", "text":
-		return agent.ExecModel
+		return agent.ExecProviderID, agent.ExecModel
 	case "vision":
-		return agent.VisionModel
+		return agent.VisionProviderID, agent.VisionModel
 	case "image":
-		return agent.ImageGenModel
+		return agent.ImageGenProviderID, agent.ImageGenModel
 	case "speech":
-		return agent.TtsModel
+		return agent.TtsProviderID, agent.TtsModel
 	case "transcription":
-		return agent.SttModel
+		return agent.SttProviderID, agent.SttModel
 	case "embedding":
-		return agent.EmbeddingModel
+		return agent.EmbeddingProviderID, agent.EmbeddingModel
 	}
-	return ""
+	return pgtype.UUID{}, ""
 }
 
-// systemCapabilityDefault returns the corresponding default_*_model column
-// from system_settings for the given capability.
-func systemCapabilityDefault(settings dbq.SystemSetting, capability string) string {
+// systemCapabilityDefault returns the (default_*_provider_id, default_*_model)
+// pair from system_settings for the given capability.
+func systemCapabilityDefault(settings dbq.SystemSetting, capability string) (pgtype.UUID, string) {
 	switch capability {
 	case "", "text":
-		return settings.DefaultExecModel
+		return settings.DefaultExecProviderID, settings.DefaultExecModel
 	case "vision":
-		return settings.DefaultVisionModel
+		return settings.DefaultVisionProviderID, settings.DefaultVisionModel
 	case "image":
-		return settings.DefaultImageGenModel
+		return settings.DefaultImageGenProviderID, settings.DefaultImageGenModel
 	case "speech":
-		return settings.DefaultTtsModel
+		return settings.DefaultTtsProviderID, settings.DefaultTtsModel
 	case "transcription":
-		return settings.DefaultSttModel
+		return settings.DefaultSttProviderID, settings.DefaultSttModel
 	case "embedding":
-		return settings.DefaultEmbeddingModel
+		return settings.DefaultEmbeddingProviderID, settings.DefaultEmbeddingModel
 	}
-	return ""
+	return pgtype.UUID{}, ""
 }
 
 // --- Non-language model handlers ---

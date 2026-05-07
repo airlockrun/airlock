@@ -183,12 +183,13 @@ func (b *BuildService) CancelBuildAndWait(agentID string, timeout time.Duration)
 
 // BuildInput describes what to build.
 type BuildInput struct {
-	AgentID      string
-	Name         string
-	Slug         string
-	UserID       string
-	BuildModel   string // stored on agent for future upgrades
-	Instructions string // optional: when non-empty, run Sol code generation after scaffold
+	AgentID         string
+	Name            string
+	Slug            string
+	UserID          string
+	BuildProviderID pgtype.UUID // providers row FK; pairs with BuildModel
+	BuildModel      string      // bare model name; "" + invalid FK ⇄ inherit system default
+	Instructions    string      // optional: when non-empty, run Sol code generation after scaffold
 }
 
 // Build runs the full build pipeline: scaffold → Sol code gen → compile → containerize → deploy.
@@ -232,9 +233,11 @@ func (b *BuildService) Build(_ context.Context, input BuildInput) error {
 		}
 		if input.BuildModel != "" {
 			_ = q.UpdateAgentModels(ctx, dbq.UpdateAgentModelsParams{
-				ID:         agent.ID,
-				BuildModel: input.BuildModel,
+				ID:              agent.ID,
+				BuildProviderID: input.BuildProviderID,
+				BuildModel:      input.BuildModel,
 			})
+			agent.BuildProviderID = input.BuildProviderID
 			agent.BuildModel = input.BuildModel
 		}
 	}
@@ -524,11 +527,12 @@ func (b *BuildService) runBuildCodegen(ctx context.Context, q *dbq.Queries, agen
 	localTools.Add(newMCPProbeTool())
 
 	solResult, err := b.runSolInProcess(ctx, solRunOpts{
-		WorkDir:    workDir,
-		AgentDir:   fmt.Sprintf("/workspace/agents/%s", agentID),
-		BuildModel: agent.BuildModel,
-		Prompt:     "Implement the agent according to the specification. Read AGENT_SPEC.md for details.",
-		LocalTools: localTools,
+		WorkDir:         workDir,
+		AgentDir:        fmt.Sprintf("/workspace/agents/%s", agentID),
+		BuildProviderID: agent.BuildProviderID,
+		BuildModel:      agent.BuildModel,
+		Prompt:          "Implement the agent according to the specification. Read AGENT_SPEC.md for details.",
+		LocalTools:      localTools,
 		TestDBURL:    testDBURL,
 		TestDBPSQL:   testDBPSQL,
 		TestDBSchema: testDBSchema,

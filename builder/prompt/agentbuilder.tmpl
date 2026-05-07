@@ -626,7 +626,15 @@ github := agent.RegisterMCP(&agentsdk.MCP{
 })
 
 resp, err := github.CallTool(ctx, "search_repos", map[string]any{"query": "test"})
+if err != nil {
+    if ae, ok := agentsdk.IsAuthRequired(err); ok {
+        return fmt.Errorf("authorize at %s", ae.AuthURL)
+    }
+    return err
+}
 ```
+
+`MCPHandle.CallTool` returns `*AuthRequiredError` for unauthorized servers, same as `ConnectionHandle.Request` — detect it with the same two-value `agentsdk.IsAuthRequired(err)` pattern.
 
 **`AuthMode`:** `MCPAuthOAuthDiscovery` (RFC 9728/8414 auto), `MCPAuthOAuth` (manual URLs), `MCPAuthToken`, `MCPAuthNone`.
 
@@ -686,13 +694,19 @@ Subprocess CLI example — an `s3_list` tool that wraps `aws s3 ls`:
 agent.RegisterTool(&agentsdk.Tool[S3ListIn, S3ListOut]{
     Name: "s3_list",
     Run: func(ctx context.Context, in S3ListIn) (S3ListOut, error) {
+        // Pattern is declared on every credential here, so Get's error
+        // doubles as the "not configured" check — no separate empty-string
+        // guard needed. Surface the slug so the operator knows what to set.
         ak, err := accessKey.Get(ctx)
-        if err != nil { return S3ListOut{}, err } // transport / decrypt
-        sk, _ := secretKey.Get(ctx)
-        rg, _ := region.Get(ctx)
-        if ak == "" || sk == "" {
-            return S3ListOut{}, fmt.Errorf("aws credentials not configured")
+        if err != nil {
+            return S3ListOut{}, fmt.Errorf("set aws_access_key_id in the agent's Environment tab: %w", err)
         }
+        sk, err := secretKey.Get(ctx)
+        if err != nil {
+            return S3ListOut{}, fmt.Errorf("set aws_secret_access_key in the agent's Environment tab: %w", err)
+        }
+        rg, err := region.Get(ctx)
+        if err != nil { return S3ListOut{}, err }
 
         cmd := exec.CommandContext(ctx, "aws", "s3", "ls", in.Bucket)
         cmd.Env = append(os.Environ(),
@@ -706,9 +720,9 @@ agent.RegisterTool(&agentsdk.Tool[S3ListIn, S3ListOut]{
 })
 ```
 
-**Get's contract**: `(value, nil)` always — empty string is a valid value. Error fires only on transport/decrypt failure. To distinguish "operator never set this" from "operator deliberately set empty", declare a `Pattern` that rejects `""` at save time (anything but `""` matches). Then runtime empty unambiguously means "unset".
+**Get's contract**: returns the stored value (or `Default`, or `""` if neither). The error is non-nil on transport/decrypt failure, **and** when the fetched value doesn't match the declared `Pattern` — including the empty string. So if you declare `Pattern: "^.+$"` (or any tighter regex), `err != nil` is exactly your "operator hasn't configured this yet" signal; no separate `if v == ""` guard is needed. With no `Pattern`, `("", nil)` is a valid successful return and the agent code is responsible for deciding what to do with it.
 
-**Pattern** is an optional regex — Airlock rejects operator-supplied values that don't match. Use it for credentials with a known shape (AWS keys, region codes) so typos surface at save time rather than at first run, and use `^.+$` when you just want to require non-empty.
+**Pattern** is an optional regex — Airlock rejects operator-supplied values that don't match at save time, *and* `Get` re-checks at fetch time. Use it for credentials with a known shape (AWS keys, region codes) so typos surface immediately, or use `^.+$` to require non-empty.
 
 `Default` is forbidden when `Secret: true` (the SDK panics) — secrets must come from the operator.
 
@@ -933,7 +947,17 @@ agent.CheckFileAccess(ctx, llmPath, agentsdk.OpRead) // gate paths from untruste
 agent.DB() // *AgentDB — pass to sqlc-generated New() (nil if AIRLOCK_DB_URL unset)
 ```
 
-`AuthRequiredError` from `ConnectionHandle.Request` means the user must authorize. Use `agentsdk.IsAuthRequired(err)` to detect.
+`AuthRequiredError` from `ConnectionHandle.Request` means the user must authorize. `agentsdk.IsAuthRequired(err)` returns `(*AuthRequiredError, bool)` — call it with two-value assignment, never as a single boolean:
+
+```go
+resp, err := conn.Request(ctx, "GET", "/v1/me/playlists", nil)
+if err != nil {
+    if ae, ok := agentsdk.IsAuthRequired(err); ok {
+        return fmt.Errorf("authorize at %s", ae.AuthURL)
+    }
+    return err
+}
+```
 
 ## LLM from Agent Code (goai)
 

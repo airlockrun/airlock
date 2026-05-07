@@ -211,10 +211,11 @@ const userInitial = computed(() => {
 
 /* Chat manages its own internal padding (input row, messages, etc.) and
    wants to fill the column edge-to-edge so the message list scrolls
-   right up to the top bar. Side padding is kept as a small breathing
-   gutter; top/bottom drop to 0. */
+   right up to the top bar. Top drops to 0 to butt against the bar; the
+   bottom keeps a small gutter so the input row doesn't sit on the
+   viewport edge. */
 .app-content-flush {
-  padding: 0 1rem;
+  padding: 0 1rem 1rem;
 }
 
 /* Hide sidebar on mobile, show hamburger */

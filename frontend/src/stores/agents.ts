@@ -26,8 +26,23 @@ export const useAgentsStore = defineStore('agents', () => {
     }
   }
 
-  async function createAgent(name: string, slug: string, buildModel: string, execModel: string, instructions?: string) {
-    const payload: Record<string, string> = { name, slug, buildModel, execModel }
+  async function createAgent(
+    name: string,
+    slug: string,
+    buildModel: string,
+    buildProviderId: string,
+    execModel: string,
+    execProviderId: string,
+    instructions?: string,
+  ) {
+    const payload: Record<string, string> = {
+      name,
+      slug,
+      buildModel,
+      buildProviderId,
+      execModel,
+      execProviderId,
+    }
     if (instructions) payload.instructions = instructions
     const { data } = await api.post('/api/v1/agents', payload)
     const agent = fromJson(CreateAgentResponseSchema, data).agent!

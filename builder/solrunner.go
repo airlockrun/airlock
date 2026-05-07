@@ -19,17 +19,19 @@ import (
 	"github.com/airlockrun/sol/websearch"
 	"github.com/airlockrun/goai/stream"
 	dmount "github.com/docker/docker/api/types/mount"
+	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"
 )
 
 // solRunOpts configures an in-process Sol run with a remote toolserver.
 type solRunOpts struct {
-	WorkDir     string            // host path to sparse checkout
-	AgentDir    string            // container-side path (e.g., /workspace/agents/{id})
-	BuildModel  string            // "provider/model" string
-	Prompt      string            // prompt for the runner
-	LogCallback func(line string) // called for each log line
-	LocalTools  tool.Set          // optional in-process tools (e.g., set_agent_description)
+	WorkDir          string         // host path to sparse checkout
+	AgentDir         string         // container-side path (e.g., /workspace/agents/{id})
+	BuildProviderID  pgtype.UUID    // providers row FK; pairs with BuildModel
+	BuildModel       string         // bare model name (e.g. "gpt-5"); empty ⇄ FK invalid
+	Prompt           string         // prompt for the runner
+	LogCallback      func(line string)
+	LocalTools       tool.Set       // optional in-process tools (e.g., set_agent_description)
 	TestDBURL    string // test schema DB URL with search_path baked in
 	TestDBPSQL   string // test schema DB URL without search_path (for psql)
 	TestDBSchema string // test schema name (for psql SET search_path)
@@ -55,20 +57,21 @@ type solRunResult struct {
 func (b *BuildService) runSolInProcess(ctx context.Context, opts solRunOpts) (*solRunResult, error) {
 	// Fall back to the system-wide default build model when no per-agent
 	// override has been set. Live inheritance — no snapshot at agent create.
-	if opts.BuildModel == "" {
+	if !opts.BuildProviderID.Valid || opts.BuildModel == "" {
 		q := dbq.New(b.db.Pool())
 		settings, sErr := q.GetSystemSettings(ctx)
 		if sErr != nil {
 			return nil, fmt.Errorf("load system settings: %w", sErr)
 		}
+		opts.BuildProviderID = settings.DefaultBuildProviderID
 		opts.BuildModel = settings.DefaultBuildModel
 	}
-	if opts.BuildModel == "" {
+	if !opts.BuildProviderID.Valid || opts.BuildModel == "" {
 		return nil, fmt.Errorf("no build model configured — set one in admin Settings or on the agent's Models tab")
 	}
 
 	// Step 1: Resolve LLM model (decrypt API key from DB).
-	model, rp, err := b.resolveModel(ctx, opts.BuildModel)
+	model, rp, err := b.resolveModel(ctx, opts.BuildProviderID, opts.BuildModel)
 	if err != nil {
 		return nil, fmt.Errorf("resolve model: %w", err)
 	}
@@ -231,7 +234,9 @@ func (b *BuildService) runSolInProcess(ctx context.Context, opts solRunOpts) (*s
 
 	// Step 7: Create the agent-builder agent with all tools.
 	ag := newAgentBuilderAgent(toolSet, hasWebSearch)
-	ag.Model = opts.BuildModel
+	// sol parses Model as "provider/model" internally; reconstruct from
+	// the resolved row's catalog provider_id + the bare model name.
+	ag.Model = rp.CatalogID + "/" + opts.BuildModel
 
 	// Step 8: Create scoped bus and subscribe for log streaming.
 	runBus := bus.New()
@@ -288,41 +293,45 @@ func (b *BuildService) runSolInProcess(ctx context.Context, opts solRunOpts) (*s
 }
 
 // resolvedProvider holds the result of looking up and decrypting a provider.
+// CatalogID carries the models.dev catalog name (e.g. "openai") — *not*
+// the providers row UUID. The row UUID lives on the agent's *_provider_id
+// FK columns; we don't carry it here because callers already have it.
 type resolvedProvider struct {
-	ProviderID string
-	APIKey     string
-	BaseURL    string
+	CatalogID string
+	APIKey    string
+	BaseURL   string
 }
 
-// resolveModel looks up the provider API key from the DB and creates a stream.Model.
-func (b *BuildService) resolveModel(ctx context.Context, buildModel string) (stream.Model, *resolvedProvider, error) {
-	rp, err := b.resolveProvider(ctx, buildModel)
+// resolveModel loads the providers row by FK, decrypts its API key, and
+// builds a stream.Model from (catalog provider_id, modelName). The FK
+// uniquely identifies which key to use even when multiple rows share a
+// provider_id (multi-key support).
+func (b *BuildService) resolveModel(ctx context.Context, providerRowID pgtype.UUID, modelName string) (stream.Model, *resolvedProvider, error) {
+	rp, err := b.resolveProvider(ctx, providerRowID)
 	if err != nil {
 		return nil, nil, err
 	}
-	_, modelID := solprovider.ParseModel(buildModel)
-	model := solprovider.CreateModel(rp.ProviderID, modelID, solprovider.Options{
+	model := solprovider.CreateModel(rp.CatalogID, modelName, solprovider.Options{
 		APIKey:  rp.APIKey,
 		BaseURL: rp.BaseURL,
 	})
 	return model, rp, nil
 }
 
-// resolveProvider looks up a provider's API key and returns the resolved config.
-func (b *BuildService) resolveProvider(ctx context.Context, buildModel string) (*resolvedProvider, error) {
-	providerID, _ := solprovider.ParseModel(buildModel)
-
+// resolveProvider loads a providers row by FK, decrypts its API key, and
+// applies the LLM-proxy override if one is configured.
+func (b *BuildService) resolveProvider(ctx context.Context, providerRowID pgtype.UUID) (*resolvedProvider, error) {
 	q := dbq.New(b.db.Pool())
-	p, err := q.GetProviderByProviderID(ctx, providerID)
+	p, err := q.GetProviderByID(ctx, providerRowID)
 	if err != nil {
-		return nil, fmt.Errorf("provider %q not configured", providerID)
+		return nil, fmt.Errorf("provider row not found: %w", err)
 	}
 	if !p.IsEnabled {
-		return nil, fmt.Errorf("provider %q is disabled", providerID)
+		return nil, fmt.Errorf("provider %q (%s) is disabled", p.CatalogID, p.Slug)
 	}
-	apiKey, err := b.encryptor.Get(ctx, "provider/"+p.ProviderID+"/api_key", p.ApiKey)
+	apiKey, err := b.encryptor.Get(ctx, "provider/"+p.ID.String()+"/api_key", p.ApiKey)
 	if err != nil {
-		return nil, fmt.Errorf("decrypt API key for %q: %w", providerID, err)
+		return nil, fmt.Errorf("decrypt API key for %q (%s): %w", p.CatalogID, p.Slug, err)
 	}
 
 	baseURL := p.BaseUrl
@@ -331,9 +340,9 @@ func (b *BuildService) resolveProvider(ctx context.Context, buildModel string) (
 	}
 
 	return &resolvedProvider{
-		ProviderID: providerID,
-		APIKey:     apiKey,
-		BaseURL:    baseURL,
+		CatalogID: p.CatalogID,
+		APIKey:    apiKey,
+		BaseURL:   baseURL,
 	}, nil
 }
 
@@ -345,7 +354,7 @@ func (b *BuildService) resolveProvider(ctx context.Context, buildModel string) (
 func (b *BuildService) resolveSearchTool(ctx context.Context, rp *resolvedProvider) (tool.Tool, bool) {
 	// 1. Try the LLM provider cascade — reuses rp's key when the provider
 	//    has a native search backend (soltools.WebSearch reads the overlay).
-	if t, ok := soltools.WebSearch(rp.ProviderID, rp.APIKey); ok {
+	if t, ok := soltools.WebSearch(rp.CatalogID, rp.APIKey); ok {
 		return t, true
 	}
 
@@ -367,21 +376,21 @@ func (b *BuildService) resolveSearchTool(ctx context.Context, rp *resolvedProvid
 		if !p.IsEnabled {
 			continue
 		}
-		ov, ok := solprovider.Overlay[p.ProviderID]
+		ov, ok := solprovider.Overlay[p.CatalogID]
 		if !ok || ov.SearchBackend == "" {
 			continue
 		}
-		_, inBase := base[p.ProviderID]
+		_, inBase := base[p.CatalogID]
 		ranked = append(ranked, cand{row: p, backend: ov.SearchBackend, catalogOnly: !inBase})
 	}
 	sort.Slice(ranked, func(i, j int) bool {
 		if ranked[i].catalogOnly != ranked[j].catalogOnly {
 			return ranked[i].catalogOnly
 		}
-		return ranked[i].row.ProviderID < ranked[j].row.ProviderID
+		return ranked[i].row.CatalogID < ranked[j].row.CatalogID
 	})
 	for _, c := range ranked {
-		apiKey, err := b.encryptor.Get(ctx, "provider/"+c.row.ProviderID+"/api_key", c.row.ApiKey)
+		apiKey, err := b.encryptor.Get(ctx, "provider/"+c.row.ID.String()+"/api_key", c.row.ApiKey)
 		if err != nil {
 			continue
 		}

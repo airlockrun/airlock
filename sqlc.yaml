@@ -10,3 +10,12 @@ sql:
         sql_package: "pgx/v5"
         emit_json_tags: true
         emit_empty_slices: true
+        # Disambiguate the providers.provider_id text column (the
+        # models.dev catalog name like "openai") from agent FK columns
+        # (exec_provider_id, build_provider_id, ...) that hold a
+        # providers row UUID. The DB column stays named provider_id
+        # for sol/goai/models.dev wire-format compatibility; only the
+        # Go field is renamed to CatalogID. FK columns are unaffected
+        # because the rename matches the bare "provider_id" name only.
+        rename:
+          provider_id: "CatalogID"

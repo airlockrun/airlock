@@ -9,28 +9,34 @@ import (
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 	"google.golang.org/protobuf/encoding/protojson"
 )
 
-// seedProvider inserts an enabled providers row for a given provider_id.
+// seedProvider inserts an enabled providers row for a given catalog_id.
 // Cleans itself up via t.Cleanup so tests can share testDB without leaks.
-func seedProvider(t *testing.T, providerID, displayName string) {
+// Uses slug "default" — capability tests don't exercise multi-key per
+// catalog ID, they only check whether the catalog is "configured".
+func seedProvider(t *testing.T, catalogID, displayName string) {
 	t.Helper()
 	ctx := context.Background()
+	rowID := uuid.New()
 	q := dbq.New(testDB.Pool())
 	_, err := q.CreateProvider(ctx, dbq.CreateProviderParams{
-		ProviderID:  providerID,
+		ID:          toPgUUID(rowID),
+		CatalogID:   catalogID,
+		Slug:        "default",
 		DisplayName: displayName,
 		ApiKey:      "test-encrypted",
 		BaseUrl:     "",
 		IsEnabled:   true,
 	})
 	if err != nil {
-		t.Fatalf("seedProvider(%s): %v", providerID, err)
+		t.Fatalf("seedProvider(%s): %v", catalogID, err)
 	}
 	t.Cleanup(func() {
-		_, _ = testDB.Pool().Exec(ctx, `DELETE FROM providers WHERE provider_id = $1`, providerID)
+		_, _ = testDB.Pool().Exec(ctx, `DELETE FROM providers WHERE id = $1`, rowID)
 	})
 }
 

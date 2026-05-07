@@ -55,6 +55,20 @@ func parseUUID(s string) (uuid.UUID, error) {
 	return uuid.Parse(s)
 }
 
+// parseOptionalProviderID accepts an empty string (returns invalid pgtype.UUID,
+// no error) or a parseable UUID (returns valid pgtype.UUID). Used by the
+// model-slot handlers where empty FK ⇄ "no provider bound for this slot".
+func parseOptionalProviderID(s string) (pgtype.UUID, error) {
+	if s == "" {
+		return pgtype.UUID{}, nil
+	}
+	u, err := uuid.Parse(s)
+	if err != nil {
+		return pgtype.UUID{}, err
+	}
+	return toPgUUID(u), nil
+}
+
 // --- JSON helpers for /api/agent routes ---
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
