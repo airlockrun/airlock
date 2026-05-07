@@ -38,10 +38,9 @@ This project follows the [Contributor Covenant Code of Conduct](CODE_OF_CONDUCT.
 
 ## Branch model
 
-- **`dev`** is the active development line and the default branch. PRs land here.
-- **`main`** is the release surface. Each commit on `main` corresponds to a tagged release (`vX.Y.Z`); operators tracking `main` always have the latest stable.
-- Releases are cut by opening a `dev` → `main` PR, merging, then tagging `vX.Y.Z` on the resulting `main` commit. The publish workflow fires on the tag and pushes `ghcr.io/airlockrun/airlock:vX.Y.Z` and `:latest`.
-- Bug fixes that need to ship without waiting for the rest of `dev` to stabilize: cherry-pick the commit onto `main`, tag a patch release. Forward-merge `main` back into `dev` after.
+- **`main`** is the only long-lived branch. PRs target `main`; tags are the releases.
+- Each release is a commit on `main` tagged `vX.Y.Z`. The publish workflow fires on tag push and uploads `ghcr.io/airlockrun/airlock{,-frontend,-agent-builder,-agent-base}:vX.Y.Z` and `:latest`.
+- Operators pin to a specific tag (`git checkout vX.Y.Z`) — `main` between tags is not guaranteed stable.
 
 ## Dev setup
 
