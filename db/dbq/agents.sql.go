@@ -28,7 +28,7 @@ VALUES (
     '', '', '', '', '',
     '[]'::jsonb, ''
 )
-RETURNING id, user_id, slug, name, description, status, upgrade_status, auto_fix, build_model, exec_model, stt_model, vision_model, tts_model, image_gen_model, embedding_model, search_model, source_ref, image_ref, db_schema, db_password, sdk_version, config, extra_prompts, error_message, created_at, updated_at
+RETURNING id, user_id, slug, name, description, status, upgrade_status, auto_fix, build_provider_id, build_model, exec_provider_id, exec_model, stt_provider_id, stt_model, vision_provider_id, vision_model, tts_provider_id, tts_model, image_gen_provider_id, image_gen_model, embedding_provider_id, embedding_model, search_provider_id, search_model, source_ref, image_ref, db_schema, db_password, sdk_version, config, extra_prompts, error_message, created_at, updated_at
 `
 
 type CreateAgentParams struct {
@@ -61,13 +61,21 @@ func (q *Queries) CreateAgent(ctx context.Context, arg CreateAgentParams) (Agent
 		&i.Status,
 		&i.UpgradeStatus,
 		&i.AutoFix,
+		&i.BuildProviderID,
 		&i.BuildModel,
+		&i.ExecProviderID,
 		&i.ExecModel,
+		&i.SttProviderID,
 		&i.SttModel,
+		&i.VisionProviderID,
 		&i.VisionModel,
+		&i.TtsProviderID,
 		&i.TtsModel,
+		&i.ImageGenProviderID,
 		&i.ImageGenModel,
+		&i.EmbeddingProviderID,
 		&i.EmbeddingModel,
+		&i.SearchProviderID,
 		&i.SearchModel,
 		&i.SourceRef,
 		&i.ImageRef,
@@ -93,7 +101,7 @@ func (q *Queries) DeleteAgent(ctx context.Context, id pgtype.UUID) error {
 }
 
 const getAgentByID = `-- name: GetAgentByID :one
-SELECT id, user_id, slug, name, description, status, upgrade_status, auto_fix, build_model, exec_model, stt_model, vision_model, tts_model, image_gen_model, embedding_model, search_model, source_ref, image_ref, db_schema, db_password, sdk_version, config, extra_prompts, error_message, created_at, updated_at FROM agents WHERE id = $1
+SELECT id, user_id, slug, name, description, status, upgrade_status, auto_fix, build_provider_id, build_model, exec_provider_id, exec_model, stt_provider_id, stt_model, vision_provider_id, vision_model, tts_provider_id, tts_model, image_gen_provider_id, image_gen_model, embedding_provider_id, embedding_model, search_provider_id, search_model, source_ref, image_ref, db_schema, db_password, sdk_version, config, extra_prompts, error_message, created_at, updated_at FROM agents WHERE id = $1
 `
 
 func (q *Queries) GetAgentByID(ctx context.Context, id pgtype.UUID) (Agent, error) {
@@ -108,13 +116,21 @@ func (q *Queries) GetAgentByID(ctx context.Context, id pgtype.UUID) (Agent, erro
 		&i.Status,
 		&i.UpgradeStatus,
 		&i.AutoFix,
+		&i.BuildProviderID,
 		&i.BuildModel,
+		&i.ExecProviderID,
 		&i.ExecModel,
+		&i.SttProviderID,
 		&i.SttModel,
+		&i.VisionProviderID,
 		&i.VisionModel,
+		&i.TtsProviderID,
 		&i.TtsModel,
+		&i.ImageGenProviderID,
 		&i.ImageGenModel,
+		&i.EmbeddingProviderID,
 		&i.EmbeddingModel,
+		&i.SearchProviderID,
 		&i.SearchModel,
 		&i.SourceRef,
 		&i.ImageRef,
@@ -131,7 +147,7 @@ func (q *Queries) GetAgentByID(ctx context.Context, id pgtype.UUID) (Agent, erro
 }
 
 const getAgentBySlug = `-- name: GetAgentBySlug :one
-SELECT id, user_id, slug, name, description, status, upgrade_status, auto_fix, build_model, exec_model, stt_model, vision_model, tts_model, image_gen_model, embedding_model, search_model, source_ref, image_ref, db_schema, db_password, sdk_version, config, extra_prompts, error_message, created_at, updated_at FROM agents WHERE slug = $1
+SELECT id, user_id, slug, name, description, status, upgrade_status, auto_fix, build_provider_id, build_model, exec_provider_id, exec_model, stt_provider_id, stt_model, vision_provider_id, vision_model, tts_provider_id, tts_model, image_gen_provider_id, image_gen_model, embedding_provider_id, embedding_model, search_provider_id, search_model, source_ref, image_ref, db_schema, db_password, sdk_version, config, extra_prompts, error_message, created_at, updated_at FROM agents WHERE slug = $1
 `
 
 func (q *Queries) GetAgentBySlug(ctx context.Context, slug string) (Agent, error) {
@@ -146,13 +162,21 @@ func (q *Queries) GetAgentBySlug(ctx context.Context, slug string) (Agent, error
 		&i.Status,
 		&i.UpgradeStatus,
 		&i.AutoFix,
+		&i.BuildProviderID,
 		&i.BuildModel,
+		&i.ExecProviderID,
 		&i.ExecModel,
+		&i.SttProviderID,
 		&i.SttModel,
+		&i.VisionProviderID,
 		&i.VisionModel,
+		&i.TtsProviderID,
 		&i.TtsModel,
+		&i.ImageGenProviderID,
 		&i.ImageGenModel,
+		&i.EmbeddingProviderID,
 		&i.EmbeddingModel,
+		&i.SearchProviderID,
 		&i.SearchModel,
 		&i.SourceRef,
 		&i.ImageRef,
@@ -185,7 +209,7 @@ func (q *Queries) GetAgentForUpgrade(ctx context.Context, id pgtype.UUID) (GetAg
 }
 
 const listAgents = `-- name: ListAgents :many
-SELECT id, user_id, slug, name, description, status, upgrade_status, auto_fix, build_model, exec_model, stt_model, vision_model, tts_model, image_gen_model, embedding_model, search_model, source_ref, image_ref, db_schema, db_password, sdk_version, config, extra_prompts, error_message, created_at, updated_at FROM agents ORDER BY created_at DESC
+SELECT id, user_id, slug, name, description, status, upgrade_status, auto_fix, build_provider_id, build_model, exec_provider_id, exec_model, stt_provider_id, stt_model, vision_provider_id, vision_model, tts_provider_id, tts_model, image_gen_provider_id, image_gen_model, embedding_provider_id, embedding_model, search_provider_id, search_model, source_ref, image_ref, db_schema, db_password, sdk_version, config, extra_prompts, error_message, created_at, updated_at FROM agents ORDER BY created_at DESC
 `
 
 func (q *Queries) ListAgents(ctx context.Context) ([]Agent, error) {
@@ -206,13 +230,21 @@ func (q *Queries) ListAgents(ctx context.Context) ([]Agent, error) {
 			&i.Status,
 			&i.UpgradeStatus,
 			&i.AutoFix,
+			&i.BuildProviderID,
 			&i.BuildModel,
+			&i.ExecProviderID,
 			&i.ExecModel,
+			&i.SttProviderID,
 			&i.SttModel,
+			&i.VisionProviderID,
 			&i.VisionModel,
+			&i.TtsProviderID,
 			&i.TtsModel,
+			&i.ImageGenProviderID,
 			&i.ImageGenModel,
+			&i.EmbeddingProviderID,
 			&i.EmbeddingModel,
+			&i.SearchProviderID,
 			&i.SearchModel,
 			&i.SourceRef,
 			&i.ImageRef,
@@ -236,7 +268,7 @@ func (q *Queries) ListAgents(ctx context.Context) ([]Agent, error) {
 }
 
 const listAgentsByUser = `-- name: ListAgentsByUser :many
-SELECT id, user_id, slug, name, description, status, upgrade_status, auto_fix, build_model, exec_model, stt_model, vision_model, tts_model, image_gen_model, embedding_model, search_model, source_ref, image_ref, db_schema, db_password, sdk_version, config, extra_prompts, error_message, created_at, updated_at FROM agents WHERE user_id = $1 ORDER BY created_at DESC
+SELECT id, user_id, slug, name, description, status, upgrade_status, auto_fix, build_provider_id, build_model, exec_provider_id, exec_model, stt_provider_id, stt_model, vision_provider_id, vision_model, tts_provider_id, tts_model, image_gen_provider_id, image_gen_model, embedding_provider_id, embedding_model, search_provider_id, search_model, source_ref, image_ref, db_schema, db_password, sdk_version, config, extra_prompts, error_message, created_at, updated_at FROM agents WHERE user_id = $1 ORDER BY created_at DESC
 `
 
 func (q *Queries) ListAgentsByUser(ctx context.Context, userID pgtype.UUID) ([]Agent, error) {
@@ -257,13 +289,21 @@ func (q *Queries) ListAgentsByUser(ctx context.Context, userID pgtype.UUID) ([]A
 			&i.Status,
 			&i.UpgradeStatus,
 			&i.AutoFix,
+			&i.BuildProviderID,
 			&i.BuildModel,
+			&i.ExecProviderID,
 			&i.ExecModel,
+			&i.SttProviderID,
 			&i.SttModel,
+			&i.VisionProviderID,
 			&i.VisionModel,
+			&i.TtsProviderID,
 			&i.TtsModel,
+			&i.ImageGenProviderID,
 			&i.ImageGenModel,
+			&i.EmbeddingProviderID,
 			&i.EmbeddingModel,
+			&i.SearchProviderID,
 			&i.SearchModel,
 			&i.SourceRef,
 			&i.ImageRef,
@@ -287,7 +327,7 @@ func (q *Queries) ListAgentsByUser(ctx context.Context, userID pgtype.UUID) ([]A
 }
 
 const listAgentsByUserID = `-- name: ListAgentsByUserID :many
-SELECT id, user_id, slug, name, description, status, upgrade_status, auto_fix, build_model, exec_model, stt_model, vision_model, tts_model, image_gen_model, embedding_model, search_model, source_ref, image_ref, db_schema, db_password, sdk_version, config, extra_prompts, error_message, created_at, updated_at FROM agents WHERE user_id = $1 ORDER BY created_at DESC
+SELECT id, user_id, slug, name, description, status, upgrade_status, auto_fix, build_provider_id, build_model, exec_provider_id, exec_model, stt_provider_id, stt_model, vision_provider_id, vision_model, tts_provider_id, tts_model, image_gen_provider_id, image_gen_model, embedding_provider_id, embedding_model, search_provider_id, search_model, source_ref, image_ref, db_schema, db_password, sdk_version, config, extra_prompts, error_message, created_at, updated_at FROM agents WHERE user_id = $1 ORDER BY created_at DESC
 `
 
 func (q *Queries) ListAgentsByUserID(ctx context.Context, userID pgtype.UUID) ([]Agent, error) {
@@ -308,13 +348,21 @@ func (q *Queries) ListAgentsByUserID(ctx context.Context, userID pgtype.UUID) ([
 			&i.Status,
 			&i.UpgradeStatus,
 			&i.AutoFix,
+			&i.BuildProviderID,
 			&i.BuildModel,
+			&i.ExecProviderID,
 			&i.ExecModel,
+			&i.SttProviderID,
 			&i.SttModel,
+			&i.VisionProviderID,
 			&i.VisionModel,
+			&i.TtsProviderID,
 			&i.TtsModel,
+			&i.ImageGenProviderID,
 			&i.ImageGenModel,
+			&i.EmbeddingProviderID,
 			&i.EmbeddingModel,
+			&i.SearchProviderID,
 			&i.SearchModel,
 			&i.SourceRef,
 			&i.ImageRef,
@@ -434,7 +482,7 @@ UPDATE agents SET
     auto_fix = $1,
     updated_at = now()
 WHERE id = $2
-RETURNING id, user_id, slug, name, description, status, upgrade_status, auto_fix, build_model, exec_model, stt_model, vision_model, tts_model, image_gen_model, embedding_model, search_model, source_ref, image_ref, db_schema, db_password, sdk_version, config, extra_prompts, error_message, created_at, updated_at
+RETURNING id, user_id, slug, name, description, status, upgrade_status, auto_fix, build_provider_id, build_model, exec_provider_id, exec_model, stt_provider_id, stt_model, vision_provider_id, vision_model, tts_provider_id, tts_model, image_gen_provider_id, image_gen_model, embedding_provider_id, embedding_model, search_provider_id, search_model, source_ref, image_ref, db_schema, db_password, sdk_version, config, extra_prompts, error_message, created_at, updated_at
 `
 
 type UpdateAgentFieldsParams struct {
@@ -454,13 +502,21 @@ func (q *Queries) UpdateAgentFields(ctx context.Context, arg UpdateAgentFieldsPa
 		&i.Status,
 		&i.UpgradeStatus,
 		&i.AutoFix,
+		&i.BuildProviderID,
 		&i.BuildModel,
+		&i.ExecProviderID,
 		&i.ExecModel,
+		&i.SttProviderID,
 		&i.SttModel,
+		&i.VisionProviderID,
 		&i.VisionModel,
+		&i.TtsProviderID,
 		&i.TtsModel,
+		&i.ImageGenProviderID,
 		&i.ImageGenModel,
+		&i.EmbeddingProviderID,
 		&i.EmbeddingModel,
+		&i.SearchProviderID,
 		&i.SearchModel,
 		&i.SourceRef,
 		&i.ImageRef,
@@ -478,41 +534,66 @@ func (q *Queries) UpdateAgentFields(ctx context.Context, arg UpdateAgentFieldsPa
 
 const updateAgentModels = `-- name: UpdateAgentModels :exec
 UPDATE agents SET
-    build_model     = $1,
-    exec_model      = $2,
-    stt_model       = $3,
-    vision_model    = $4,
-    tts_model       = $5,
-    image_gen_model = $6,
-    embedding_model = $7,
-    search_model    = $8,
-    updated_at = now()
-WHERE id = $9
+    build_provider_id     = $1,
+    build_model           = $2,
+    exec_provider_id      = $3,
+    exec_model            = $4,
+    stt_provider_id       = $5,
+    stt_model             = $6,
+    vision_provider_id    = $7,
+    vision_model          = $8,
+    tts_provider_id       = $9,
+    tts_model             = $10,
+    image_gen_provider_id = $11,
+    image_gen_model       = $12,
+    embedding_provider_id = $13,
+    embedding_model       = $14,
+    search_provider_id    = $15,
+    search_model          = $16,
+    updated_at            = now()
+WHERE id = $17
 `
 
 type UpdateAgentModelsParams struct {
-	BuildModel     string      `json:"build_model"`
-	ExecModel      string      `json:"exec_model"`
-	SttModel       string      `json:"stt_model"`
-	VisionModel    string      `json:"vision_model"`
-	TtsModel       string      `json:"tts_model"`
-	ImageGenModel  string      `json:"image_gen_model"`
-	EmbeddingModel string      `json:"embedding_model"`
-	SearchModel    string      `json:"search_model"`
-	ID             pgtype.UUID `json:"id"`
+	BuildProviderID     pgtype.UUID `json:"build_provider_id"`
+	BuildModel          string      `json:"build_model"`
+	ExecProviderID      pgtype.UUID `json:"exec_provider_id"`
+	ExecModel           string      `json:"exec_model"`
+	SttProviderID       pgtype.UUID `json:"stt_provider_id"`
+	SttModel            string      `json:"stt_model"`
+	VisionProviderID    pgtype.UUID `json:"vision_provider_id"`
+	VisionModel         string      `json:"vision_model"`
+	TtsProviderID       pgtype.UUID `json:"tts_provider_id"`
+	TtsModel            string      `json:"tts_model"`
+	ImageGenProviderID  pgtype.UUID `json:"image_gen_provider_id"`
+	ImageGenModel       string      `json:"image_gen_model"`
+	EmbeddingProviderID pgtype.UUID `json:"embedding_provider_id"`
+	EmbeddingModel      string      `json:"embedding_model"`
+	SearchProviderID    pgtype.UUID `json:"search_provider_id"`
+	SearchModel         string      `json:"search_model"`
+	ID                  pgtype.UUID `json:"id"`
 }
 
-// Atomic replace of all eight per-agent model override columns.
-// Empty strings mean "inherit the corresponding system default".
+// Atomic replace of all eight per-agent model overrides. Each slot is
+// two columns: a provider FK (nullable) and the bare model name string.
+// Empty/NULL means "inherit the corresponding system default".
 func (q *Queries) UpdateAgentModels(ctx context.Context, arg UpdateAgentModelsParams) error {
 	_, err := q.db.Exec(ctx, updateAgentModels,
+		arg.BuildProviderID,
 		arg.BuildModel,
+		arg.ExecProviderID,
 		arg.ExecModel,
+		arg.SttProviderID,
 		arg.SttModel,
+		arg.VisionProviderID,
 		arg.VisionModel,
+		arg.TtsProviderID,
 		arg.TtsModel,
+		arg.ImageGenProviderID,
 		arg.ImageGenModel,
+		arg.EmbeddingProviderID,
 		arg.EmbeddingModel,
+		arg.SearchProviderID,
 		arg.SearchModel,
 		arg.ID,
 	)

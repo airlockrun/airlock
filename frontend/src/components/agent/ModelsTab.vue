@@ -12,8 +12,11 @@ import {
   isSpeech,
   isTranscription,
   hasCap,
+  packModelValue,
+  splitModelValue,
   type CatalogModel,
 } from '@/composables/useModelCapabilities'
+import { useProvidersStore } from '@/stores/providers'
 import type { AgentModelConfig, ModelSlotInfo } from '@/gen/airlock/v1/api_pb'
 import { AgentModelConfigSchema, ModelSlotInfoSchema } from '@/gen/airlock/v1/api_pb'
 
@@ -21,6 +24,7 @@ const props = defineProps<{ agentId: string }>()
 
 const agents = useAgentsStore()
 const catalog = useCatalogStore()
+const providers = useProvidersStore()
 const toast = useToast()
 const { groupModels, searchProviderOptions } = useModelCapabilities()
 
@@ -28,13 +32,49 @@ const loading = ref(true)
 const saving = ref(false)
 const config = ref<AgentModelConfig>(create(AgentModelConfigSchema))
 
+// pickerValues holds the packed "rowUUID|modelName" strings that the
+// dropdowns v-model against. Kept parallel to `config` so picker writes
+// don't smear the underlying proto. We reload from `config` after every
+// fetch and serialize back into the proto on save.
+const pickerValues = ref<Record<string, string>>({})
+const slotPickerValues = ref<Record<string, string>>({})
+
+const slotProviderField: Record<string, keyof AgentModelConfig> = {
+  buildModel:     'buildProviderId',
+  execModel:      'execProviderId',
+  sttModel:       'sttProviderId',
+  visionModel:    'visionProviderId',
+  ttsModel:       'ttsProviderId',
+  imageGenModel:  'imageGenProviderId',
+  embeddingModel: 'embeddingProviderId',
+  searchModel:    'searchProviderId',
+}
+
+function refreshPickerValues() {
+  for (const [modelKey, providerKey] of Object.entries(slotProviderField)) {
+    const modelName = (config.value as any)[modelKey] || ''
+    const providerRowID = (config.value as any)[providerKey] || ''
+    pickerValues.value[modelKey] = providerRowID || modelName
+      ? packModelValue(providerRowID, modelName)
+      : ''
+  }
+  slotPickerValues.value = {}
+  for (const slot of config.value.slots) {
+    slotPickerValues.value[slot.slug] = slot.assignedProviderId || slot.assignedModel
+      ? packModelValue(slot.assignedProviderId, slot.assignedModel)
+      : ''
+  }
+}
+
 onMounted(async () => {
   try {
     await Promise.all([
       catalog.fetchConfiguredModels(),
       catalog.fetchCapabilities(),
+      providers.fetchProviders(),
     ])
     config.value = await agents.fetchModelConfig(props.agentId)
+    refreshPickerValues()
   } catch (err: any) {
     toast.add({ severity: 'error', summary: err.response?.data?.error || 'Failed to load model config', life: 5000 })
   } finally {
@@ -146,27 +186,48 @@ function capabilitySeverity(capability: string): string {
 async function save() {
   saving.value = true
   try {
-    // create() gives us the typed proto with all required fields; we then
-    // copy current config values onto it to keep the $typeName discriminator.
+    // Picker values are packed "rowUUID|modelName" — split each into the
+    // (provider FK, bare model name) pair the proto expects. Empty-empty
+    // ⇄ inherit; both halves move together.
+    const split = (k: string) => splitModelValue(pickerValues.value[k] || '')
+    const build = split('buildModel')
+    const exec = split('execModel')
+    const stt = split('sttModel')
+    const vision = split('visionModel')
+    const tts = split('ttsModel')
+    const imageGen = split('imageGenModel')
+    const embedding = split('embeddingModel')
+    const search = split('searchModel')
     const next = create(AgentModelConfigSchema, {
-      buildModel: config.value.buildModel,
-      execModel: config.value.execModel,
-      sttModel: config.value.sttModel,
-      visionModel: config.value.visionModel,
-      ttsModel: config.value.ttsModel,
-      imageGenModel: config.value.imageGenModel,
-      embeddingModel: config.value.embeddingModel,
-      searchModel: config.value.searchModel,
-      slots: config.value.slots.map((s: ModelSlotInfo) =>
-        create(ModelSlotInfoSchema, {
-          slug: s.slug,
-          capability: s.capability,
-          description: s.description,
-          assignedModel: s.assignedModel,
-        }),
-      ),
+      buildModel:          build.modelName,
+      buildProviderId:     build.providerRowID,
+      execModel:           exec.modelName,
+      execProviderId:      exec.providerRowID,
+      sttModel:            stt.modelName,
+      sttProviderId:       stt.providerRowID,
+      visionModel:         vision.modelName,
+      visionProviderId:    vision.providerRowID,
+      ttsModel:            tts.modelName,
+      ttsProviderId:       tts.providerRowID,
+      imageGenModel:       imageGen.modelName,
+      imageGenProviderId:  imageGen.providerRowID,
+      embeddingModel:      embedding.modelName,
+      embeddingProviderId: embedding.providerRowID,
+      searchModel:         search.modelName,
+      searchProviderId:    search.providerRowID,
+      slots: config.value.slots.map((s: ModelSlotInfo) => {
+        const slotSplit = splitModelValue(slotPickerValues.value[s.slug] || '')
+        return create(ModelSlotInfoSchema, {
+          slug:               s.slug,
+          capability:         s.capability,
+          description:        s.description,
+          assignedModel:      slotSplit.modelName,
+          assignedProviderId: slotSplit.providerRowID,
+        })
+      }),
     })
     config.value = await agents.updateModelConfig(props.agentId, next)
+    refreshPickerValues()
     toast.add({ severity: 'success', summary: 'Models saved', life: 3000 })
   } catch (err: any) {
     toast.add({ severity: 'error', summary: err.response?.data?.error || 'Save failed', life: 5000 })
@@ -202,7 +263,7 @@ async function save() {
             <Select
               v-if="row.grouped"
               :id="`override-${row.key as string}`"
-              v-model="(config as any)[row.key]"
+              v-model="pickerValues[row.key as string]"
               :options="row.options"
               optionLabel="label"
               optionValue="value"
@@ -218,7 +279,7 @@ async function save() {
             <Select
               v-else
               :id="`override-${row.key as string}`"
-              v-model="(config as any)[row.key]"
+              v-model="pickerValues[row.key as string]"
               :options="row.options"
               optionLabel="label"
               optionValue="value"
@@ -258,7 +319,7 @@ async function save() {
             </div>
             <small v-if="slot.description" style="color: var(--p-text-muted-color)">{{ slot.description }}</small>
             <Select
-              v-model="slot.assignedModel"
+              v-model="slotPickerValues[slot.slug]"
               :options="optionsForCapability(slot.capability)"
               optionLabel="label"
               optionValue="value"

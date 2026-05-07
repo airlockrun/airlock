@@ -1,4 +1,4 @@
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import { fromJson } from '@bufbuild/protobuf'
 import api from '@/api/client'
@@ -13,6 +13,15 @@ export const useProvidersStore = defineStore('providers', () => {
   const providers = ref<Provider[]>([])
   const loading = ref(false)
 
+  // O(1) lookup by row UUID. Used by the model pickers to resolve a slot's
+  // provider FK back to (catalog provider_id, slug) for picker display
+  // without re-walking the providers list per render.
+  const byId = computed<Map<string, Provider>>(() => {
+    const m = new Map<string, Provider>()
+    for (const p of providers.value) m.set(p.id, p)
+    return m
+  })
+
   async function fetchProviders() {
     loading.value = true
     try {
@@ -23,12 +32,12 @@ export const useProvidersStore = defineStore('providers', () => {
     }
   }
 
-  async function createProvider(payload: { providerId: string; displayName: string; baseUrl: string; apiKey: string }) {
+  async function createProvider(payload: { providerId: string; slug: string; displayName: string; baseUrl: string; apiKey: string }) {
     const { data } = await api.post('/api/v1/providers', payload)
     providers.value.unshift(fromJson(CreateProviderResponseSchema, data).provider!)
   }
 
-  async function updateProvider(id: string, payload: { displayName?: string; baseUrl?: string; apiKey?: string }) {
+  async function updateProvider(id: string, payload: { displayName?: string; slug?: string; baseUrl?: string; apiKey?: string }) {
     const { data } = await api.patch(`/api/v1/providers/${id}`, payload)
     const updated = fromJson(UpdateProviderResponseSchema, data).provider!
     const idx = providers.value.findIndex((p) => p.id === id)
@@ -40,5 +49,5 @@ export const useProvidersStore = defineStore('providers', () => {
     providers.value = providers.value.filter((p) => p.id !== id)
   }
 
-  return { providers, loading, fetchProviders, createProvider, updateProvider, deleteProvider }
+  return { providers, loading, byId, fetchProviders, createProvider, updateProvider, deleteProvider }
 })

@@ -34,6 +34,10 @@ func (h *ProvidersHandler) Create(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "provider_id is required")
 		return
 	}
+	if req.Slug == "" {
+		writeError(w, http.StatusBadRequest, "slug is required")
+		return
+	}
 	if req.ApiKey == "" {
 		writeError(w, http.StatusBadRequest, "api_key is required")
 		return
@@ -44,7 +48,12 @@ func (h *ProvidersHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	encrypted, err := h.enc.Put(r.Context(), "provider/"+req.ProviderId+"/api_key", req.ApiKey)
+	// Pre-generate the row UUID so the api_key ciphertext is bound to it
+	// via AAD before we INSERT. Per-row scoping prevents one row's key
+	// from being decrypted under another row's path.
+	id := uuid.New()
+
+	encrypted, err := h.enc.Put(r.Context(), "provider/"+id.String()+"/api_key", req.ApiKey)
 	if err != nil {
 		logFor(r).Error("encrypt api key failed", zap.Error(err))
 		writeError(w, http.StatusInternalServerError, "failed to encrypt api key")
@@ -53,7 +62,9 @@ func (h *ProvidersHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 	q := dbq.New(h.db.Pool())
 	p, err := q.CreateProvider(r.Context(), dbq.CreateProviderParams{
-		ProviderID:  req.ProviderId,
+		ID:          toPgUUID(id),
+		CatalogID:   req.ProviderId,
+		Slug:        req.Slug,
 		DisplayName: req.DisplayName,
 		ApiKey:      encrypted,
 		BaseUrl:     req.BaseUrl,
@@ -81,9 +92,10 @@ func (h *ProvidersHandler) List(w http.ResponseWriter, r *http.Request) {
 
 	out := make([]*airlockv1.Provider, len(providers))
 	for i, p := range providers {
-		decrypted, err := h.enc.Get(r.Context(), "provider/"+p.ProviderID+"/api_key", p.ApiKey)
+		decrypted, err := h.enc.Get(r.Context(), "provider/"+pgUUID(p.ID).String()+"/api_key", p.ApiKey)
 		if err != nil {
-			logFor(r).Error("decrypt api key failed", zap.Error(err), zap.String("provider", p.ProviderID))
+			logFor(r).Error("decrypt api key failed", zap.Error(err),
+				zap.String("provider", p.CatalogID), zap.String("slug", p.Slug))
 			decrypted = "****"
 		}
 		out[i] = convert.ProviderToProto(p, decrypted)
@@ -108,6 +120,7 @@ func (h *ProvidersHandler) Update(w http.ResponseWriter, r *http.Request) {
 	params := dbq.UpdateProviderParams{
 		ID:          toPgUUID(id),
 		DisplayName: req.DisplayName,
+		Slug:        req.Slug,
 		BaseUrl:     req.BaseUrl,
 	}
 
@@ -135,7 +148,7 @@ func (h *ProvidersHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	decrypted, err := h.enc.Get(r.Context(), "provider/"+p.ProviderID+"/api_key", p.ApiKey)
+	decrypted, err := h.enc.Get(r.Context(), "provider/"+pgUUID(p.ID).String()+"/api_key", p.ApiKey)
 	if err != nil {
 		decrypted = "****"
 	}
@@ -198,7 +211,7 @@ func (h *ProvidersHandler) ListCatalogModels(w http.ResponseWriter, r *http.Requ
 		configuredSet = make(map[string]bool, len(dbProviders))
 		for _, p := range dbProviders {
 			if p.IsEnabled {
-				configuredSet[p.ProviderID] = true
+				configuredSet[p.CatalogID] = true
 			}
 		}
 	}

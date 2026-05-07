@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
-	"strings"
 
 	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/db"
@@ -95,11 +94,11 @@ func resolveSearchClient(
 		if !p.IsEnabled {
 			continue
 		}
-		ov, ok := solprovider.Overlay[p.ProviderID]
+		ov, ok := solprovider.Overlay[p.CatalogID]
 		if !ok || ov.SearchBackend == "" {
 			continue
 		}
-		_, inBase := base[p.ProviderID]
+		_, inBase := base[p.CatalogID]
 		ranked = append(ranked, searchCandidate{
 			row:         p,
 			backend:     ov.SearchBackend,
@@ -110,16 +109,18 @@ func resolveSearchClient(
 		if ranked[i].catalogOnly != ranked[j].catalogOnly {
 			return ranked[i].catalogOnly
 		}
-		return ranked[i].row.ProviderID < ranked[j].row.ProviderID
+		return ranked[i].row.CatalogID < ranked[j].row.CatalogID
 	})
 
 	for _, c := range ranked {
-		apiKey, err := enc.Get(ctx, "provider/"+c.row.ProviderID+"/api_key", c.row.ApiKey)
+		apiKey, err := enc.Get(ctx, "provider/"+c.row.ID.String()+"/api_key", c.row.ApiKey)
 		if err != nil {
 			// Fail loud: don't silently skip a misconfigured key.
 			logger.Error("decrypt search provider key failed",
-				zap.String("provider_id", c.row.ProviderID), zap.Error(err))
-			return nil, fmt.Errorf("decrypt %q key: %w", c.row.ProviderID, err)
+				zap.String("provider_id", c.row.CatalogID),
+				zap.String("slug", c.row.Slug),
+				zap.Error(err))
+			return nil, fmt.Errorf("decrypt %q (%s) key: %w", c.row.CatalogID, c.row.Slug, err)
 		}
 		return websearch.NewClient(websearch.Options{
 			Provider: c.backend,
@@ -138,10 +139,10 @@ type searchCandidate struct {
 }
 
 // tryExecProviderSearch returns a client built from the agent's exec-model
-// provider if that provider has native search. Returns (nil, nil) if the
-// agent can't be found, has no exec model, or its provider has no overlay
-// entry with a SearchBackend — those are expected fall-throughs. Only
-// returns a hard error on decrypt failures.
+// provider row if that row's catalog provider has native search. Returns
+// (nil, nil) if the agent can't be found, has no exec model bound, or its
+// provider has no overlay entry with a SearchBackend — those are expected
+// fall-throughs. Only returns a hard error on decrypt failures.
 func tryExecProviderSearch(
 	ctx context.Context,
 	q *dbq.Queries,
@@ -153,21 +154,20 @@ func tryExecProviderSearch(
 		return nil, nil
 	}
 	agent, err := q.GetAgentByID(ctx, toPgUUID(uid))
-	if err != nil || agent.ExecModel == "" {
+	if err != nil || !agent.ExecProviderID.Valid {
 		return nil, nil
 	}
-	providerID, _, _ := strings.Cut(agent.ExecModel, "/")
-	ov, ok := solprovider.Overlay[providerID]
-	if !ok || ov.SearchBackend == "" {
-		return nil, nil
-	}
-	p, err := q.GetProviderByProviderID(ctx, providerID)
+	p, err := q.GetProviderByID(ctx, agent.ExecProviderID)
 	if err != nil || !p.IsEnabled {
 		return nil, nil
 	}
-	apiKey, err := enc.Get(ctx, "provider/"+p.ProviderID+"/api_key", p.ApiKey)
+	ov, ok := solprovider.Overlay[p.CatalogID]
+	if !ok || ov.SearchBackend == "" {
+		return nil, nil
+	}
+	apiKey, err := enc.Get(ctx, "provider/"+p.ID.String()+"/api_key", p.ApiKey)
 	if err != nil {
-		return nil, fmt.Errorf("decrypt %q key for exec-model search: %w", providerID, err)
+		return nil, fmt.Errorf("decrypt %q (%s) key for exec-model search: %w", p.CatalogID, p.Slug, err)
 	}
 	return websearch.NewClient(websearch.Options{
 		Provider: ov.SearchBackend,

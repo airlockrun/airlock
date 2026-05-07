@@ -64,15 +64,25 @@ func (h *agentsHandler) Create(w http.ResponseWriter, r *http.Request) {
 	userID := auth.UserIDFromContext(ctx)
 	q := dbq.New(h.db.Pool())
 
-	// Model overrides are optional at create time — empty strings mean the
-	// agent inherits the current system default live. Validate format only
-	// when a value is actually supplied.
-	if req.BuildModel != "" && !strings.Contains(req.BuildModel, "/") {
-		writeError(w, http.StatusBadRequest, "build_model must be in provider/model format")
+	// Model overrides are optional at create time — empty pair means the
+	// agent inherits the system default live. When supplied, both halves
+	// (provider FK + model name) must be present together.
+	buildProviderFK, err := parseOptionalProviderID(req.BuildProviderId)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid build_provider_id: "+err.Error())
 		return
 	}
-	if req.ExecModel != "" && !strings.Contains(req.ExecModel, "/") {
-		writeError(w, http.StatusBadRequest, "exec_model must be in provider/model format")
+	if (req.BuildModel != "") != buildProviderFK.Valid {
+		writeError(w, http.StatusBadRequest, "build_model and build_provider_id must be set or unset together")
+		return
+	}
+	execProviderFK, err := parseOptionalProviderID(req.ExecProviderId)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid exec_provider_id: "+err.Error())
+		return
+	}
+	if (req.ExecModel != "") != execProviderFK.Valid {
+		writeError(w, http.StatusBadRequest, "exec_model and exec_provider_id must be set or unset together")
 		return
 	}
 
@@ -99,11 +109,15 @@ func (h *agentsHandler) Create(w http.ResponseWriter, r *http.Request) {
 	// Other capability columns stay empty and inherit from system_settings.
 	if req.BuildModel != "" || req.ExecModel != "" {
 		_ = q.UpdateAgentModels(ctx, dbq.UpdateAgentModelsParams{
-			ID:         agent.ID,
-			BuildModel: req.BuildModel,
-			ExecModel:  req.ExecModel,
+			ID:              agent.ID,
+			BuildProviderID: buildProviderFK,
+			BuildModel:      req.BuildModel,
+			ExecProviderID:  execProviderFK,
+			ExecModel:       req.ExecModel,
 		})
+		agent.BuildProviderID = buildProviderFK
 		agent.BuildModel = req.BuildModel
+		agent.ExecProviderID = execProviderFK
 		agent.ExecModel = req.ExecModel
 	}
 
@@ -120,12 +134,13 @@ func (h *agentsHandler) Create(w http.ResponseWriter, r *http.Request) {
 	// internally — no need to log the returned err here.
 	go func() {
 		_ = h.builder.Build(context.Background(), builder.BuildInput{
-			AgentID:      agentID,
-			Name:         req.Name,
-			Slug:         req.Slug,
-			UserID:       userID.String(),
-			BuildModel:   req.BuildModel,
-			Instructions: req.Instructions,
+			AgentID:         agentID,
+			Name:            req.Name,
+			Slug:            req.Slug,
+			UserID:          userID.String(),
+			BuildProviderID: buildProviderFK,
+			BuildModel:      req.BuildModel,
+			Instructions:    req.Instructions,
 		})
 	}()
 
@@ -476,11 +491,12 @@ func (h *agentsHandler) Upgrade(w http.ResponseWriter, r *http.Request) {
 		go func() {
 			// Build() logs success/failure internally.
 			_ = h.builder.Build(context.Background(), builder.BuildInput{
-				AgentID:    agentID.String(),
-				Name:       agent.Name,
-				Slug:       agent.Slug,
-				UserID:     convert.PgUUIDToString(agent.UserID),
-				BuildModel: agent.BuildModel,
+				AgentID:         agentID.String(),
+				Name:            agent.Name,
+				Slug:            agent.Slug,
+				UserID:          convert.PgUUIDToString(agent.UserID),
+				BuildProviderID: agent.BuildProviderID,
+				BuildModel:      agent.BuildModel,
 			})
 		}()
 	} else {
@@ -817,18 +833,20 @@ func (h *agentsHandler) RemoveMember(w http.ResponseWriter, r *http.Request) {
 
 func agentToProto(a dbq.Agent) *airlockv1.AgentInfo {
 	return &airlockv1.AgentInfo{
-		Id:            convert.PgUUIDToString(a.ID),
-		Name:          a.Name,
-		Slug:          a.Slug,
-		Description:   a.Description,
-		Status:        a.Status,
-		UpgradeStatus: a.UpgradeStatus,
-		AutoFix:       a.AutoFix,
-		ErrorMessage:  a.ErrorMessage,
-		CreatedAt:     convert.PgTimestampToProto(a.CreatedAt),
-		UpdatedAt:     convert.PgTimestampToProto(a.UpdatedAt),
-		BuildModel:    a.BuildModel,
-		ExecModel:     a.ExecModel,
+		Id:              convert.PgUUIDToString(a.ID),
+		Name:            a.Name,
+		Slug:            a.Slug,
+		Description:     a.Description,
+		Status:          a.Status,
+		UpgradeStatus:   a.UpgradeStatus,
+		AutoFix:         a.AutoFix,
+		ErrorMessage:    a.ErrorMessage,
+		CreatedAt:       convert.PgTimestampToProto(a.CreatedAt),
+		UpdatedAt:       convert.PgTimestampToProto(a.UpdatedAt),
+		BuildModel:      a.BuildModel,
+		ExecModel:       a.ExecModel,
+		BuildProviderId: convert.PgUUIDToString(a.BuildProviderID),
+		ExecProviderId:  convert.PgUUIDToString(a.ExecProviderID),
 	}
 }
 

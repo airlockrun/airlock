@@ -18,7 +18,13 @@
 
 services:
   postgres:
-    image: postgres:17-alpine
+    # pgvector/pgvector ships official Postgres images with the `vector`
+    # extension preinstalled. Tag tracks the upstream Postgres major
+    # (pg17 ⇒ Postgres 17). Operators who don't want pgvector can
+    # downgrade to `postgres:17-alpine`; the 02-pgvector.sh init script
+    # tolerates a missing extension and the rest of the bootstrap still
+    # succeeds.
+    image: pgvector/pgvector:pg17
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-airlock}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-airlock}
@@ -89,7 +95,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.agent-builder
-    image: ghcr.io/airlockrun/airlock-agent-builder:v0.2.14
+    image: ghcr.io/airlockrun/airlock-agent-builder:v0.2.15
     command: ["true"]
     restart: "no"
 
@@ -97,7 +103,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.agent-base
-    image: ghcr.io/airlockrun/airlock-agent-base:v0.2.14
+    image: ghcr.io/airlockrun/airlock-agent-base:v0.2.15
     command: ["true"]
     restart: "no"
 
@@ -105,7 +111,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.airlock
-    image: ghcr.io/airlockrun/airlock:v0.2.14
+    image: ghcr.io/airlockrun/airlock:v0.2.15
     depends_on:
       postgres:
         condition: service_healthy
@@ -157,8 +163,8 @@ services:
       # Container orchestration: agent containers join this network so they
       # can reach airlock:8080 internally. Must match the network name below.
       DOCKER_NETWORK: airlock
-      AGENT_BUILDER_IMAGE: ghcr.io/airlockrun/airlock-agent-builder:v0.2.14
-      AGENT_BASE_IMAGE: ghcr.io/airlockrun/airlock-agent-base:v0.2.14
+      AGENT_BUILDER_IMAGE: ghcr.io/airlockrun/airlock-agent-builder:v0.2.15
+      AGENT_BASE_IMAGE: ghcr.io/airlockrun/airlock-agent-base:v0.2.15
 
       # Codegen workspace lives inside the airlock-data named volume so
       # that scratch dirs airlock writes are visible to sibling
@@ -194,7 +200,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.frontend
-    image: ghcr.io/airlockrun/airlock-frontend:v0.2.14
+    image: ghcr.io/airlockrun/airlock-frontend:v0.2.15
     restart: unless-stopped
 
   caddy:

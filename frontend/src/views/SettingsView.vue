@@ -13,8 +13,11 @@ import {
   isSpeech,
   isTranscription,
   hasCap,
+  packModelValue,
+  splitModelValue,
   type CatalogModel,
 } from '@/composables/useModelCapabilities'
+import { useProvidersStore } from '@/stores/providers'
 import api from '@/api/client'
 import {
   GetSystemSettingsResponseSchema,
@@ -26,6 +29,7 @@ import { SystemSettingsInfoSchema } from '@/gen/airlock/v1/types_pb'
 
 const auth = useAuthStore()
 const catalog = useCatalogStore()
+const providers = useProvidersStore()
 const toast = useToast()
 const { isDark, toggle: toggleTheme } = useTheme()
 const { groupModels, searchProviderOptions } = useModelCapabilities()
@@ -51,9 +55,28 @@ const publicURL = ref('')
 const agentDomain = ref('')
 const defaultsLoading = ref(false)
 
+// Pairs each picker key with its companion *_provider_id field on the
+// SystemSettingsInfo proto. Read/write paths use this to pack/unpack the
+// (rowUUID, modelName) tuple the picker stores in `defaults`.
+const slotProviderField: Record<keyof typeof defaults.value, keyof SystemSettingsInfo> = {
+  defaultBuildModel:     'defaultBuildProviderId',
+  defaultExecModel:      'defaultExecProviderId',
+  defaultSttModel:       'defaultSttProviderId',
+  defaultVisionModel:    'defaultVisionProviderId',
+  defaultTtsModel:       'defaultTtsProviderId',
+  defaultImageGenModel:  'defaultImageGenProviderId',
+  defaultEmbeddingModel: 'defaultEmbeddingProviderId',
+  defaultSearchModel:    'defaultSearchProviderId',
+}
+
 function applySettings(info: SystemSettingsInfo) {
   for (const k of Object.keys(defaults.value) as (keyof typeof defaults.value)[]) {
-    defaults.value[k] = (info as any)[k] || ''
+    const modelName = (info as any)[k] || ''
+    const providerKey = slotProviderField[k]
+    const providerRowID = (info as any)[providerKey] || ''
+    defaults.value[k] = providerRowID || modelName
+      ? packModelValue(providerRowID, modelName)
+      : ''
   }
   publicURL.value = info.publicUrl || ''
   agentDomain.value = info.agentDomain || ''
@@ -61,6 +84,9 @@ function applySettings(info: SystemSettingsInfo) {
 
 onMounted(async () => {
   if (auth.isAdmin) {
+    // Pickers depend on configured providers — fetch first so the
+    // applySettings packed values match an option in the dropdown.
+    await providers.fetchProviders()
     try {
       const { data } = await api.get('/api/v1/settings')
       const resp = fromJson(GetSystemSettingsResponseSchema, data)
@@ -160,18 +186,35 @@ function isGrouped(opts: DefaultRow['options']): boolean {
 async function saveDefaults() {
   defaultsLoading.value = true
   try {
+    const split = (k: keyof typeof defaults.value) => splitModelValue(defaults.value[k])
+    const build = split('defaultBuildModel')
+    const exec = split('defaultExecModel')
+    const stt = split('defaultSttModel')
+    const vision = split('defaultVisionModel')
+    const tts = split('defaultTtsModel')
+    const imageGen = split('defaultImageGenModel')
+    const embedding = split('defaultEmbeddingModel')
+    const search = split('defaultSearchModel')
     const info: SystemSettingsInfo = {
       $typeName: 'airlock.v1.SystemSettingsInfo',
       publicUrl: publicURL.value,
       agentDomain: agentDomain.value,
-      defaultBuildModel: defaults.value.defaultBuildModel,
-      defaultExecModel: defaults.value.defaultExecModel,
-      defaultSttModel: defaults.value.defaultSttModel,
-      defaultVisionModel: defaults.value.defaultVisionModel,
-      defaultTtsModel: defaults.value.defaultTtsModel,
-      defaultImageGenModel: defaults.value.defaultImageGenModel,
-      defaultEmbeddingModel: defaults.value.defaultEmbeddingModel,
-      defaultSearchModel: defaults.value.defaultSearchModel,
+      defaultBuildModel:          build.modelName,
+      defaultBuildProviderId:     build.providerRowID,
+      defaultExecModel:           exec.modelName,
+      defaultExecProviderId:      exec.providerRowID,
+      defaultSttModel:            stt.modelName,
+      defaultSttProviderId:       stt.providerRowID,
+      defaultVisionModel:         vision.modelName,
+      defaultVisionProviderId:    vision.providerRowID,
+      defaultTtsModel:            tts.modelName,
+      defaultTtsProviderId:       tts.providerRowID,
+      defaultImageGenModel:       imageGen.modelName,
+      defaultImageGenProviderId:  imageGen.providerRowID,
+      defaultEmbeddingModel:      embedding.modelName,
+      defaultEmbeddingProviderId: embedding.providerRowID,
+      defaultSearchModel:         search.modelName,
+      defaultSearchProviderId:    search.providerRowID,
     }
     const req = toJson(UpdateSystemSettingsRequestSchema, {
       $typeName: 'airlock.v1.UpdateSystemSettingsRequest',

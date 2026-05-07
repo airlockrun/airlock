@@ -2,12 +2,13 @@ package api
 
 import (
 	"net/http"
-	"strings"
 
-	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
+	"github.com/airlockrun/airlock/convert"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
+	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"
 )
 
@@ -89,39 +90,60 @@ func (h *modelsHandler) UpdateConfig(w http.ResponseWriter, r *http.Request) {
 
 	cfg := req.Config
 
-	// Validate any non-empty model string matches the "provider/model" format.
-	for _, pair := range [][2]string{
-		{"build_model", cfg.BuildModel},
-		{"exec_model", cfg.ExecModel},
-		{"stt_model", cfg.SttModel},
-		{"vision_model", cfg.VisionModel},
-		{"tts_model", cfg.TtsModel},
-		{"image_gen_model", cfg.ImageGenModel},
-		{"embedding_model", cfg.EmbeddingModel},
-		{"search_model", cfg.SearchModel},
-	} {
-		if pair[1] != "" && !strings.Contains(pair[1], "/") {
-			writeError(w, http.StatusBadRequest, pair[0]+" must be in provider/model format")
-			return
-		}
+	// Each slot is a (provider FK, bare model name) pair. Empty + invalid
+	// FK ⇄ inherit system default; both halves must be present together
+	// or both must be absent.
+	pairs := []struct {
+		name      string
+		modelName string
+		fkRaw     string
+	}{
+		{"build", cfg.BuildModel, cfg.BuildProviderId},
+		{"exec", cfg.ExecModel, cfg.ExecProviderId},
+		{"stt", cfg.SttModel, cfg.SttProviderId},
+		{"vision", cfg.VisionModel, cfg.VisionProviderId},
+		{"tts", cfg.TtsModel, cfg.TtsProviderId},
+		{"image_gen", cfg.ImageGenModel, cfg.ImageGenProviderId},
+		{"embedding", cfg.EmbeddingModel, cfg.EmbeddingProviderId},
+		{"search", cfg.SearchModel, cfg.SearchProviderId},
 	}
-	for _, s := range cfg.Slots {
-		if s.AssignedModel != "" && !strings.Contains(s.AssignedModel, "/") {
-			writeError(w, http.StatusBadRequest, "slot "+s.Slug+" assigned_model must be in provider/model format")
+	parsedFKs := make(map[string]pgtype.UUID, len(pairs))
+	for _, p := range pairs {
+		fk, err := parseOptionalProviderID(p.fkRaw)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid "+p.name+"_provider_id: "+err.Error())
 			return
 		}
+		// Search is provider-scoped, not model-scoped: the runtime picks
+		// the search backend by overlay capability on the provider row,
+		// not by a stored model name. search_model is always empty by
+		// design — only the FK matters. Other slots must move both
+		// halves together.
+		if p.name != "search" && (p.modelName != "") != fk.Valid {
+			writeError(w, http.StatusBadRequest, p.name+"_model and "+p.name+"_provider_id must be set or unset together")
+			return
+		}
+		parsedFKs[p.name] = fk
 	}
 
 	if err := q.UpdateAgentModels(ctx, dbq.UpdateAgentModelsParams{
-		ID:             agent.ID,
-		BuildModel:     cfg.BuildModel,
-		ExecModel:      cfg.ExecModel,
-		SttModel:       cfg.SttModel,
-		VisionModel:    cfg.VisionModel,
-		TtsModel:       cfg.TtsModel,
-		ImageGenModel:  cfg.ImageGenModel,
-		EmbeddingModel: cfg.EmbeddingModel,
-		SearchModel:    cfg.SearchModel,
+		ID:                  agent.ID,
+		BuildProviderID:     parsedFKs["build"],
+		BuildModel:          cfg.BuildModel,
+		ExecProviderID:      parsedFKs["exec"],
+		ExecModel:           cfg.ExecModel,
+		SttProviderID:       parsedFKs["stt"],
+		SttModel:            cfg.SttModel,
+		VisionProviderID:    parsedFKs["vision"],
+		VisionModel:         cfg.VisionModel,
+		TtsProviderID:       parsedFKs["tts"],
+		TtsModel:            cfg.TtsModel,
+		ImageGenProviderID:  parsedFKs["image_gen"],
+		ImageGenModel:       cfg.ImageGenModel,
+		EmbeddingProviderID: parsedFKs["embedding"],
+		EmbeddingModel:      cfg.EmbeddingModel,
+		SearchProviderID:    parsedFKs["search"],
+		SearchModel:         cfg.SearchModel,
 	}); err != nil {
 		h.logger.Error("update agent models", zap.Error(err))
 		writeError(w, http.StatusInternalServerError, "failed to update models")
@@ -144,10 +166,20 @@ func (h *modelsHandler) UpdateConfig(w http.ResponseWriter, r *http.Request) {
 		if _, ok := declared[s.Slug]; !ok {
 			continue
 		}
+		fk, err := parseOptionalProviderID(s.AssignedProviderId)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid slot "+s.Slug+" assigned_provider_id: "+err.Error())
+			return
+		}
+		if (s.AssignedModel != "") != fk.Valid {
+			writeError(w, http.StatusBadRequest, "slot "+s.Slug+" assigned_model and assigned_provider_id must be set or unset together")
+			return
+		}
 		_ = q.SetAgentModelSlotAssignment(ctx, dbq.SetAgentModelSlotAssignmentParams{
-			AgentID:       agent.ID,
-			Slug:          s.Slug,
-			AssignedModel: s.AssignedModel,
+			AgentID:            agent.ID,
+			Slug:               s.Slug,
+			AssignedProviderID: fk,
+			AssignedModel:      s.AssignedModel,
 		})
 	}
 
@@ -161,21 +193,30 @@ func (h *modelsHandler) UpdateConfig(w http.ResponseWriter, r *http.Request) {
 
 func agentModelConfigToProto(agent dbq.Agent, slots []dbq.AgentModelSlot) *airlockv1.AgentModelConfig {
 	out := &airlockv1.AgentModelConfig{
-		BuildModel:     agent.BuildModel,
-		ExecModel:      agent.ExecModel,
-		SttModel:       agent.SttModel,
-		VisionModel:    agent.VisionModel,
-		TtsModel:       agent.TtsModel,
-		ImageGenModel:  agent.ImageGenModel,
-		EmbeddingModel: agent.EmbeddingModel,
-		SearchModel:    agent.SearchModel,
+		BuildModel:          agent.BuildModel,
+		ExecModel:           agent.ExecModel,
+		SttModel:            agent.SttModel,
+		VisionModel:         agent.VisionModel,
+		TtsModel:            agent.TtsModel,
+		ImageGenModel:       agent.ImageGenModel,
+		EmbeddingModel:      agent.EmbeddingModel,
+		SearchModel:         agent.SearchModel,
+		BuildProviderId:     convert.PgUUIDToString(agent.BuildProviderID),
+		ExecProviderId:      convert.PgUUIDToString(agent.ExecProviderID),
+		SttProviderId:       convert.PgUUIDToString(agent.SttProviderID),
+		VisionProviderId:    convert.PgUUIDToString(agent.VisionProviderID),
+		TtsProviderId:       convert.PgUUIDToString(agent.TtsProviderID),
+		ImageGenProviderId:  convert.PgUUIDToString(agent.ImageGenProviderID),
+		EmbeddingProviderId: convert.PgUUIDToString(agent.EmbeddingProviderID),
+		SearchProviderId:    convert.PgUUIDToString(agent.SearchProviderID),
 	}
 	for _, s := range slots {
 		out.Slots = append(out.Slots, &airlockv1.ModelSlotInfo{
-			Slug:          s.Slug,
-			Capability:    s.Capability,
-			Description:   s.Description,
-			AssignedModel: s.AssignedModel,
+			Slug:               s.Slug,
+			Capability:         s.Capability,
+			Description:        s.Description,
+			AssignedModel:      s.AssignedModel,
+			AssignedProviderId: convert.PgUUIDToString(s.AssignedProviderID),
 		})
 	}
 	return out

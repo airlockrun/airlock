@@ -27,7 +27,7 @@ func (q *Queries) DeleteStaleAgentModelSlots(ctx context.Context, arg DeleteStal
 }
 
 const getAgentModelSlot = `-- name: GetAgentModelSlot :one
-SELECT agent_id, slug, capability, description, assigned_model FROM agent_model_slots
+SELECT agent_id, slug, capability, description, assigned_provider_id, assigned_model FROM agent_model_slots
 WHERE agent_id = $1 AND slug = $2
 `
 
@@ -44,13 +44,14 @@ func (q *Queries) GetAgentModelSlot(ctx context.Context, arg GetAgentModelSlotPa
 		&i.Slug,
 		&i.Capability,
 		&i.Description,
+		&i.AssignedProviderID,
 		&i.AssignedModel,
 	)
 	return i, err
 }
 
 const listAgentModelSlots = `-- name: ListAgentModelSlots :many
-SELECT agent_id, slug, capability, description, assigned_model FROM agent_model_slots
+SELECT agent_id, slug, capability, description, assigned_provider_id, assigned_model FROM agent_model_slots
 WHERE agent_id = $1
 ORDER BY slug
 `
@@ -69,6 +70,7 @@ func (q *Queries) ListAgentModelSlots(ctx context.Context, agentID pgtype.UUID) 
 			&i.Slug,
 			&i.Capability,
 			&i.Description,
+			&i.AssignedProviderID,
 			&i.AssignedModel,
 		); err != nil {
 			return nil, err
@@ -83,24 +85,32 @@ func (q *Queries) ListAgentModelSlots(ctx context.Context, agentID pgtype.UUID) 
 
 const setAgentModelSlotAssignment = `-- name: SetAgentModelSlotAssignment :exec
 UPDATE agent_model_slots
-SET assigned_model = $1
-WHERE agent_id = $2 AND slug = $3
+SET assigned_provider_id = $1,
+    assigned_model       = $2
+WHERE agent_id = $3 AND slug = $4
 `
 
 type SetAgentModelSlotAssignmentParams struct {
-	AssignedModel string      `json:"assigned_model"`
-	AgentID       pgtype.UUID `json:"agent_id"`
-	Slug          string      `json:"slug"`
+	AssignedProviderID pgtype.UUID `json:"assigned_provider_id"`
+	AssignedModel      string      `json:"assigned_model"`
+	AgentID            pgtype.UUID `json:"agent_id"`
+	Slug               string      `json:"slug"`
 }
 
+// Both columns move together: empty model name means clear the FK too.
 func (q *Queries) SetAgentModelSlotAssignment(ctx context.Context, arg SetAgentModelSlotAssignmentParams) error {
-	_, err := q.db.Exec(ctx, setAgentModelSlotAssignment, arg.AssignedModel, arg.AgentID, arg.Slug)
+	_, err := q.db.Exec(ctx, setAgentModelSlotAssignment,
+		arg.AssignedProviderID,
+		arg.AssignedModel,
+		arg.AgentID,
+		arg.Slug,
+	)
 	return err
 }
 
 const upsertAgentModelSlot = `-- name: UpsertAgentModelSlot :exec
-INSERT INTO agent_model_slots (agent_id, slug, capability, description, assigned_model)
-VALUES ($1, $2, $3, $4, '')
+INSERT INTO agent_model_slots (agent_id, slug, capability, description, assigned_provider_id, assigned_model)
+VALUES ($1, $2, $3, $4, NULL, '')
 ON CONFLICT (agent_id, slug) DO UPDATE SET
     capability  = EXCLUDED.capability,
     description = EXCLUDED.description
@@ -114,8 +124,9 @@ type UpsertAgentModelSlotParams struct {
 }
 
 // Reconciles slot declaration on every sync. capability and description
-// come from the agent code; assigned_model is admin-controlled and must
-// survive re-syncs untouched.
+// come from the agent code; the assignment (assigned_provider_id +
+// assigned_model) is admin-controlled and must survive re-syncs
+// untouched. NULL provider FK ⇄ empty model name.
 func (q *Queries) UpsertAgentModelSlot(ctx context.Context, arg UpsertAgentModelSlotParams) error {
 	_, err := q.db.Exec(ctx, upsertAgentModelSlot,
 		arg.AgentID,

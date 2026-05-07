@@ -13,6 +13,8 @@ import {
   isSpeech,
   isTranscription,
   hasCap,
+  packModelValue,
+  splitModelValue,
   type CatalogModel,
 } from '@/composables/useModelCapabilities'
 import { useToast } from 'primevue/usetoast'
@@ -104,8 +106,19 @@ const capabilityMeta: Record<Capability, { label: string; icon: string }> = {
 
 const providerID = ref('')
 const providerName = ref('')
+const providerSlug = ref('')
+// Mirrors ProvidersView: slug auto-tracks displayName until the user types
+// into the slug field manually. Same kebab-case rules as agent slugs.
+const slugManual = ref(false)
 const baseURL = ref('')
 const apiKey = ref('')
+
+function toSlug(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/(^-|-$)/g, '')
+}
 
 const providerCandidates = computed(() =>
   catalog.capabilities
@@ -142,12 +155,25 @@ const anyProviderConfigured = computed(() =>
 
 function onProviderSelect(id: string) {
   const p = providerCandidates.value.find(c => c.id === id)
-  if (p) providerName.value = p.name
+  if (p) {
+    providerName.value = p.name
+    if (!slugManual.value) providerSlug.value = toSlug(p.name)
+  }
+}
+
+function onProviderNameInput() {
+  if (!slugManual.value) providerSlug.value = toSlug(providerName.value)
+}
+
+function onSlugInput() {
+  slugManual.value = true
 }
 
 function resetProviderForm() {
   providerID.value = ''
   providerName.value = ''
+  providerSlug.value = ''
+  slugManual.value = false
   baseURL.value = ''
   apiKey.value = ''
 }
@@ -158,11 +184,16 @@ async function addProvider() {
     error.value = 'Provider and API key are required.'
     return
   }
+  if (!providerSlug.value) {
+    error.value = 'Slug is required.'
+    return
+  }
 
   loading.value = true
   try {
     await providersStore.createProvider({
       providerId: providerID.value,
+      slug: providerSlug.value,
       displayName: providerName.value || providerID.value,
       baseUrl: baseURL.value,
       apiKey: apiKey.value,
@@ -179,12 +210,15 @@ async function addProvider() {
 
 async function goToDefaults() {
   error.value = ''
-  // Pull both configured models and any previously-saved settings so the
-  // defaults step can render sensible rows.
+  // Pull configured models, any previously-saved settings, AND the
+  // providers list — the model picker fans out across configured rows
+  // (multi-key support), so groupModels needs the providers store
+  // populated before the dropdowns render.
   loading.value = true
   try {
     await Promise.all([
       catalog.fetchConfiguredModels(),
+      providersStore.fetchProviders(),
       loadExistingDefaults(),
     ])
     activeStep.value = 2
@@ -222,14 +256,22 @@ async function loadExistingDefaults() {
     const { data } = await api.get('/api/v1/settings')
     const resp = fromJson(GetSystemSettingsResponseSchema, data)
     if (resp.settings) {
-      defaults.value.defaultBuildModel     = resp.settings.defaultBuildModel || ''
-      defaults.value.defaultExecModel      = resp.settings.defaultExecModel || ''
-      defaults.value.defaultVisionModel    = resp.settings.defaultVisionModel || ''
-      defaults.value.defaultSttModel       = resp.settings.defaultSttModel || ''
-      defaults.value.defaultTtsModel       = resp.settings.defaultTtsModel || ''
-      defaults.value.defaultImageGenModel  = resp.settings.defaultImageGenModel || ''
-      defaults.value.defaultEmbeddingModel = resp.settings.defaultEmbeddingModel || ''
-      defaults.value.defaultSearchModel    = resp.settings.defaultSearchModel || ''
+      // Pack each (row UUID, model name) pair into the picker-shaped
+      // string so the dropdowns pre-select the right entry. Empty pair
+      // ⇒ empty string, picker shows the placeholder.
+      const pack = (modelKey: keyof SystemSettingsInfo, fkKey: keyof SystemSettingsInfo) => {
+        const modelName = (resp.settings as any)[modelKey] || ''
+        const providerRowID = (resp.settings as any)[fkKey] || ''
+        return providerRowID || modelName ? packModelValue(providerRowID, modelName) : ''
+      }
+      defaults.value.defaultBuildModel     = pack('defaultBuildModel', 'defaultBuildProviderId')
+      defaults.value.defaultExecModel      = pack('defaultExecModel', 'defaultExecProviderId')
+      defaults.value.defaultVisionModel    = pack('defaultVisionModel', 'defaultVisionProviderId')
+      defaults.value.defaultSttModel       = pack('defaultSttModel', 'defaultSttProviderId')
+      defaults.value.defaultTtsModel       = pack('defaultTtsModel', 'defaultTtsProviderId')
+      defaults.value.defaultImageGenModel  = pack('defaultImageGenModel', 'defaultImageGenProviderId')
+      defaults.value.defaultEmbeddingModel = pack('defaultEmbeddingModel', 'defaultEmbeddingProviderId')
+      defaults.value.defaultSearchModel    = pack('defaultSearchModel', 'defaultSearchProviderId')
       publicURL.value  = resp.settings.publicUrl || ''
       agentDomain.value = resp.settings.agentDomain || ''
     }
@@ -271,18 +313,35 @@ async function finish() {
   error.value = ''
   loading.value = true
   try {
+    const split = (k: keyof Defaults) => splitModelValue(defaults.value[k])
+    const build = split('defaultBuildModel')
+    const exec = split('defaultExecModel')
+    const stt = split('defaultSttModel')
+    const vision = split('defaultVisionModel')
+    const tts = split('defaultTtsModel')
+    const imageGen = split('defaultImageGenModel')
+    const embedding = split('defaultEmbeddingModel')
+    const search = split('defaultSearchModel')
     const info: SystemSettingsInfo = {
       $typeName: 'airlock.v1.SystemSettingsInfo',
       publicUrl: publicURL.value,
       agentDomain: agentDomain.value,
-      defaultBuildModel:     defaults.value.defaultBuildModel,
-      defaultExecModel:      defaults.value.defaultExecModel,
-      defaultSttModel:       defaults.value.defaultSttModel,
-      defaultVisionModel:    defaults.value.defaultVisionModel,
-      defaultTtsModel:       defaults.value.defaultTtsModel,
-      defaultImageGenModel:  defaults.value.defaultImageGenModel,
-      defaultEmbeddingModel: defaults.value.defaultEmbeddingModel,
-      defaultSearchModel:    defaults.value.defaultSearchModel,
+      defaultBuildModel:          build.modelName,
+      defaultBuildProviderId:     build.providerRowID,
+      defaultExecModel:           exec.modelName,
+      defaultExecProviderId:      exec.providerRowID,
+      defaultSttModel:            stt.modelName,
+      defaultSttProviderId:       stt.providerRowID,
+      defaultVisionModel:         vision.modelName,
+      defaultVisionProviderId:    vision.providerRowID,
+      defaultTtsModel:            tts.modelName,
+      defaultTtsProviderId:       tts.providerRowID,
+      defaultImageGenModel:       imageGen.modelName,
+      defaultImageGenProviderId:  imageGen.providerRowID,
+      defaultEmbeddingModel:      embedding.modelName,
+      defaultEmbeddingProviderId: embedding.providerRowID,
+      defaultSearchModel:         search.modelName,
+      defaultSearchProviderId:    search.providerRowID,
     }
     const req = toJson(UpdateSystemSettingsRequestSchema, {
       $typeName: 'airlock.v1.UpdateSystemSettingsRequest',
@@ -416,7 +475,27 @@ async function finish() {
                 </div>
                 <div style="display: flex; flex-direction: column; gap: 0.25rem">
                   <label for="prov-name">Display Name</label>
-                  <InputText id="prov-name" v-model="providerName" autocomplete="off" style="width: 100%" />
+                  <InputText
+                    id="prov-name"
+                    v-model="providerName"
+                    autocomplete="off"
+                    style="width: 100%"
+                    @input="onProviderNameInput"
+                  />
+                </div>
+                <div style="display: flex; flex-direction: column; gap: 0.25rem">
+                  <label for="prov-slug">Slug</label>
+                  <InputText
+                    id="prov-slug"
+                    v-model="providerSlug"
+                    autocomplete="off"
+                    style="width: 100%"
+                    placeholder="e.g. personal"
+                    @input="onSlugInput"
+                  />
+                  <small style="color: var(--p-text-muted-color)">
+                    Disambiguates rows for the same provider (multi-key support).
+                  </small>
                 </div>
                 <div style="display: flex; flex-direction: column; gap: 0.25rem">
                   <label for="prov-url">Base URL (optional)</label>
@@ -448,7 +527,7 @@ async function finish() {
                     label="Add provider"
                     icon="pi pi-plus"
                     :loading="loading"
-                    :disabled="!providerID || !apiKey"
+                    :disabled="!providerID || !apiKey || !providerSlug"
                     severity="secondary"
                   />
                 </div>

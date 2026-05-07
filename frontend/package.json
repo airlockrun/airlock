@@ -2,6 +2,7 @@
   "name": "airlock-frontend",
   "private": true,
   "type": "module",
+  "packageManager": "pnpm@10.33.0",
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc --noEmit && vite build",
@@ -21,7 +22,7 @@
     "vue-router": "^4.6.0"
   },
   "pnpm": {
-    "onlyBuiltDependencies": [
+    "ignoredBuiltDependencies": [
       "esbuild"
     ]
   },

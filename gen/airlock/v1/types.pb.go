@@ -392,15 +392,20 @@ func (x *UserSummary) GetDisplayName() string {
 
 // Provider represents a configured LLM provider with encrypted API key.
 type Provider struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	ProviderId    string                 `protobuf:"bytes,2,opt,name=provider_id,json=providerId,proto3" json:"provider_id,omitempty"`
-	DisplayName   string                 `protobuf:"bytes,3,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
-	IsEnabled     bool                   `protobuf:"varint,4,opt,name=is_enabled,json=isEnabled,proto3" json:"is_enabled,omitempty"`
-	BaseUrl       string                 `protobuf:"bytes,5,opt,name=base_url,json=baseUrl,proto3" json:"base_url,omitempty"`
-	ApiKeyMasked  string                 `protobuf:"bytes,6,opt,name=api_key_masked,json=apiKeyMasked,proto3" json:"api_key_masked,omitempty"`
-	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
-	UpdatedAt     *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	Id           string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	ProviderId   string                 `protobuf:"bytes,2,opt,name=provider_id,json=providerId,proto3" json:"provider_id,omitempty"`
+	DisplayName  string                 `protobuf:"bytes,3,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
+	IsEnabled    bool                   `protobuf:"varint,4,opt,name=is_enabled,json=isEnabled,proto3" json:"is_enabled,omitempty"`
+	BaseUrl      string                 `protobuf:"bytes,5,opt,name=base_url,json=baseUrl,proto3" json:"base_url,omitempty"`
+	ApiKeyMasked string                 `protobuf:"bytes,6,opt,name=api_key_masked,json=apiKeyMasked,proto3" json:"api_key_masked,omitempty"`
+	CreatedAt    *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	UpdatedAt    *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
+	// slug disambiguates rows that share a provider_id (multi-key
+	// support: "openai/personal" + "openai/team-acme"). Required.
+	// Auto-derived from display_name on the client (kebab-case); user
+	// can override.
+	Slug          string `protobuf:"bytes,9,opt,name=slug,proto3" json:"slug,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -489,6 +494,13 @@ func (x *Provider) GetUpdatedAt() *timestamppb.Timestamp {
 		return x.UpdatedAt
 	}
 	return nil
+}
+
+func (x *Provider) GetSlug() string {
+	if x != nil {
+		return x.Slug
+	}
+	return ""
 }
 
 // ProviderInfo represents a known LLM provider from the catalog.
@@ -775,13 +787,19 @@ type AgentInfo struct {
 	Status        string                 `protobuf:"bytes,5,opt,name=status,proto3" json:"status,omitempty"`                                    // "draft", "building", "active", "failed", "stopped"
 	UpgradeStatus string                 `protobuf:"bytes,6,opt,name=upgrade_status,json=upgradeStatus,proto3" json:"upgrade_status,omitempty"` // "idle", "queued", "building", "failed"
 	AutoFix       bool                   `protobuf:"varint,7,opt,name=auto_fix,json=autoFix,proto3" json:"auto_fix,omitempty"`
-	BuildModel    string                 `protobuf:"bytes,8,opt,name=build_model,json=buildModel,proto3" json:"build_model,omitempty"` // "provider/model" used for code generation
-	ExecModel     string                 `protobuf:"bytes,9,opt,name=exec_model,json=execModel,proto3" json:"exec_model,omitempty"`    // "provider/model" used at runtime for LLM calls
-	ErrorMessage  string                 `protobuf:"bytes,10,opt,name=error_message,json=errorMessage,proto3" json:"error_message,omitempty"`
-	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,11,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
-	UpdatedAt     *timestamppb.Timestamp `protobuf:"bytes,12,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	// build_model / exec_model carry only the bare model name now
+	// (e.g. "gpt-5"). The associated provider row is named via
+	// build_provider_id / exec_provider_id (UUID-as-string). Empty +
+	// empty means "inherit system default for this slot".
+	BuildModel      string                 `protobuf:"bytes,8,opt,name=build_model,json=buildModel,proto3" json:"build_model,omitempty"`
+	ExecModel       string                 `protobuf:"bytes,9,opt,name=exec_model,json=execModel,proto3" json:"exec_model,omitempty"`
+	ErrorMessage    string                 `protobuf:"bytes,10,opt,name=error_message,json=errorMessage,proto3" json:"error_message,omitempty"`
+	CreatedAt       *timestamppb.Timestamp `protobuf:"bytes,11,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	UpdatedAt       *timestamppb.Timestamp `protobuf:"bytes,12,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
+	BuildProviderId string                 `protobuf:"bytes,13,opt,name=build_provider_id,json=buildProviderId,proto3" json:"build_provider_id,omitempty"`
+	ExecProviderId  string                 `protobuf:"bytes,14,opt,name=exec_provider_id,json=execProviderId,proto3" json:"exec_provider_id,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *AgentInfo) Reset() {
@@ -896,6 +914,20 @@ func (x *AgentInfo) GetUpdatedAt() *timestamppb.Timestamp {
 		return x.UpdatedAt
 	}
 	return nil
+}
+
+func (x *AgentInfo) GetBuildProviderId() string {
+	if x != nil {
+		return x.BuildProviderId
+	}
+	return ""
+}
+
+func (x *AgentInfo) GetExecProviderId() string {
+	if x != nil {
+		return x.ExecProviderId
+	}
+	return ""
 }
 
 // RunInfo represents a single execution of an agent.
@@ -2515,21 +2547,31 @@ func (x *TopicInfo) GetSubscribed() bool {
 
 // SystemSettingsInfo mirrors the system_settings table (single-row, global).
 // Per-capability default models are used wherever the system picks a model
-// for a capability and no agent-specific override is set.
+// for a capability and no agent-specific override is set. Each slot pairs
+// a model name with a provider row UUID (multi-key support); empty + empty
+// means "no default configured for this capability".
 type SystemSettingsInfo struct {
-	state                 protoimpl.MessageState `protogen:"open.v1"`
-	PublicUrl             string                 `protobuf:"bytes,1,opt,name=public_url,json=publicUrl,proto3" json:"public_url,omitempty"`
-	AgentDomain           string                 `protobuf:"bytes,2,opt,name=agent_domain,json=agentDomain,proto3" json:"agent_domain,omitempty"`
-	DefaultBuildModel     string                 `protobuf:"bytes,3,opt,name=default_build_model,json=defaultBuildModel,proto3" json:"default_build_model,omitempty"`
-	DefaultExecModel      string                 `protobuf:"bytes,4,opt,name=default_exec_model,json=defaultExecModel,proto3" json:"default_exec_model,omitempty"`
-	DefaultSttModel       string                 `protobuf:"bytes,5,opt,name=default_stt_model,json=defaultSttModel,proto3" json:"default_stt_model,omitempty"`
-	DefaultVisionModel    string                 `protobuf:"bytes,6,opt,name=default_vision_model,json=defaultVisionModel,proto3" json:"default_vision_model,omitempty"`
-	DefaultTtsModel       string                 `protobuf:"bytes,7,opt,name=default_tts_model,json=defaultTtsModel,proto3" json:"default_tts_model,omitempty"`
-	DefaultImageGenModel  string                 `protobuf:"bytes,8,opt,name=default_image_gen_model,json=defaultImageGenModel,proto3" json:"default_image_gen_model,omitempty"`
-	DefaultSearchModel    string                 `protobuf:"bytes,9,opt,name=default_search_model,json=defaultSearchModel,proto3" json:"default_search_model,omitempty"`
-	DefaultEmbeddingModel string                 `protobuf:"bytes,10,opt,name=default_embedding_model,json=defaultEmbeddingModel,proto3" json:"default_embedding_model,omitempty"`
-	unknownFields         protoimpl.UnknownFields
-	sizeCache             protoimpl.SizeCache
+	state                      protoimpl.MessageState `protogen:"open.v1"`
+	PublicUrl                  string                 `protobuf:"bytes,1,opt,name=public_url,json=publicUrl,proto3" json:"public_url,omitempty"`
+	AgentDomain                string                 `protobuf:"bytes,2,opt,name=agent_domain,json=agentDomain,proto3" json:"agent_domain,omitempty"`
+	DefaultBuildModel          string                 `protobuf:"bytes,3,opt,name=default_build_model,json=defaultBuildModel,proto3" json:"default_build_model,omitempty"`
+	DefaultExecModel           string                 `protobuf:"bytes,4,opt,name=default_exec_model,json=defaultExecModel,proto3" json:"default_exec_model,omitempty"`
+	DefaultSttModel            string                 `protobuf:"bytes,5,opt,name=default_stt_model,json=defaultSttModel,proto3" json:"default_stt_model,omitempty"`
+	DefaultVisionModel         string                 `protobuf:"bytes,6,opt,name=default_vision_model,json=defaultVisionModel,proto3" json:"default_vision_model,omitempty"`
+	DefaultTtsModel            string                 `protobuf:"bytes,7,opt,name=default_tts_model,json=defaultTtsModel,proto3" json:"default_tts_model,omitempty"`
+	DefaultImageGenModel       string                 `protobuf:"bytes,8,opt,name=default_image_gen_model,json=defaultImageGenModel,proto3" json:"default_image_gen_model,omitempty"`
+	DefaultSearchModel         string                 `protobuf:"bytes,9,opt,name=default_search_model,json=defaultSearchModel,proto3" json:"default_search_model,omitempty"`
+	DefaultEmbeddingModel      string                 `protobuf:"bytes,10,opt,name=default_embedding_model,json=defaultEmbeddingModel,proto3" json:"default_embedding_model,omitempty"`
+	DefaultBuildProviderId     string                 `protobuf:"bytes,11,opt,name=default_build_provider_id,json=defaultBuildProviderId,proto3" json:"default_build_provider_id,omitempty"`
+	DefaultExecProviderId      string                 `protobuf:"bytes,12,opt,name=default_exec_provider_id,json=defaultExecProviderId,proto3" json:"default_exec_provider_id,omitempty"`
+	DefaultSttProviderId       string                 `protobuf:"bytes,13,opt,name=default_stt_provider_id,json=defaultSttProviderId,proto3" json:"default_stt_provider_id,omitempty"`
+	DefaultVisionProviderId    string                 `protobuf:"bytes,14,opt,name=default_vision_provider_id,json=defaultVisionProviderId,proto3" json:"default_vision_provider_id,omitempty"`
+	DefaultTtsProviderId       string                 `protobuf:"bytes,15,opt,name=default_tts_provider_id,json=defaultTtsProviderId,proto3" json:"default_tts_provider_id,omitempty"`
+	DefaultImageGenProviderId  string                 `protobuf:"bytes,16,opt,name=default_image_gen_provider_id,json=defaultImageGenProviderId,proto3" json:"default_image_gen_provider_id,omitempty"`
+	DefaultSearchProviderId    string                 `protobuf:"bytes,17,opt,name=default_search_provider_id,json=defaultSearchProviderId,proto3" json:"default_search_provider_id,omitempty"`
+	DefaultEmbeddingProviderId string                 `protobuf:"bytes,18,opt,name=default_embedding_provider_id,json=defaultEmbeddingProviderId,proto3" json:"default_embedding_provider_id,omitempty"`
+	unknownFields              protoimpl.UnknownFields
+	sizeCache                  protoimpl.SizeCache
 }
 
 func (x *SystemSettingsInfo) Reset() {
@@ -2632,6 +2674,62 @@ func (x *SystemSettingsInfo) GetDefaultEmbeddingModel() string {
 	return ""
 }
 
+func (x *SystemSettingsInfo) GetDefaultBuildProviderId() string {
+	if x != nil {
+		return x.DefaultBuildProviderId
+	}
+	return ""
+}
+
+func (x *SystemSettingsInfo) GetDefaultExecProviderId() string {
+	if x != nil {
+		return x.DefaultExecProviderId
+	}
+	return ""
+}
+
+func (x *SystemSettingsInfo) GetDefaultSttProviderId() string {
+	if x != nil {
+		return x.DefaultSttProviderId
+	}
+	return ""
+}
+
+func (x *SystemSettingsInfo) GetDefaultVisionProviderId() string {
+	if x != nil {
+		return x.DefaultVisionProviderId
+	}
+	return ""
+}
+
+func (x *SystemSettingsInfo) GetDefaultTtsProviderId() string {
+	if x != nil {
+		return x.DefaultTtsProviderId
+	}
+	return ""
+}
+
+func (x *SystemSettingsInfo) GetDefaultImageGenProviderId() string {
+	if x != nil {
+		return x.DefaultImageGenProviderId
+	}
+	return ""
+}
+
+func (x *SystemSettingsInfo) GetDefaultSearchProviderId() string {
+	if x != nil {
+		return x.DefaultSearchProviderId
+	}
+	return ""
+}
+
+func (x *SystemSettingsInfo) GetDefaultEmbeddingProviderId() string {
+	if x != nil {
+		return x.DefaultEmbeddingProviderId
+	}
+	return ""
+}
+
 var File_airlock_v1_types_proto protoreflect.FileDescriptor
 
 const file_airlock_v1_types_proto_rawDesc = "" +
@@ -2663,7 +2761,7 @@ const file_airlock_v1_types_proto_rawDesc = "" +
 	"\vUserSummary\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
 	"\x05email\x18\x02 \x01(\tR\x05email\x12!\n" +
-	"\fdisplay_name\x18\x03 \x01(\tR\vdisplayName\"\xb4\x02\n" +
+	"\fdisplay_name\x18\x03 \x01(\tR\vdisplayName\"\xc8\x02\n" +
 	"\bProvider\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1f\n" +
 	"\vprovider_id\x18\x02 \x01(\tR\n" +
@@ -2676,7 +2774,8 @@ const file_airlock_v1_types_proto_rawDesc = "" +
 	"\n" +
 	"created_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x129\n" +
 	"\n" +
-	"updated_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\"2\n" +
+	"updated_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x12\x12\n" +
+	"\x04slug\x18\t \x01(\tR\x04slug\"2\n" +
 	"\fProviderInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\"\xc3\x01\n" +
@@ -2704,7 +2803,7 @@ const file_airlock_v1_types_proto_rawDesc = "" +
 	"costOutput\x12\x12\n" +
 	"\x04kind\x18\n" +
 	" \x01(\tR\x04kind\x12\x12\n" +
-	"\x04caps\x18\v \x03(\tR\x04caps\"\x9a\x03\n" +
+	"\x04caps\x18\v \x03(\tR\x04caps\"\xf0\x03\n" +
 	"\tAgentInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04slug\x18\x02 \x01(\tR\x04slug\x12\x12\n" +
@@ -2722,7 +2821,9 @@ const file_airlock_v1_types_proto_rawDesc = "" +
 	"\n" +
 	"created_at\x18\v \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x129\n" +
 	"\n" +
-	"updated_at\x18\f \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\"\x8f\x05\n" +
+	"updated_at\x18\f \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x12*\n" +
+	"\x11build_provider_id\x18\r \x01(\tR\x0fbuildProviderId\x12(\n" +
+	"\x10exec_provider_id\x18\x0e \x01(\tR\x0eexecProviderId\"\x8f\x05\n" +
 	"\aRunInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x19\n" +
 	"\bagent_id\x18\x02 \x01(\tR\aagentId\x12\x1b\n" +
@@ -2890,7 +2991,7 @@ const file_airlock_v1_types_proto_rawDesc = "" +
 	"\vdescription\x18\x03 \x01(\tR\vdescription\x12\x1e\n" +
 	"\n" +
 	"subscribed\x18\x04 \x01(\bR\n" +
-	"subscribed\"\xdf\x03\n" +
+	"subscribed\"\xc0\a\n" +
 	"\x12SystemSettingsInfo\x12\x1d\n" +
 	"\n" +
 	"public_url\x18\x01 \x01(\tR\tpublicUrl\x12!\n" +
@@ -2903,7 +3004,15 @@ const file_airlock_v1_types_proto_rawDesc = "" +
 	"\x17default_image_gen_model\x18\b \x01(\tR\x14defaultImageGenModel\x120\n" +
 	"\x14default_search_model\x18\t \x01(\tR\x12defaultSearchModel\x126\n" +
 	"\x17default_embedding_model\x18\n" +
-	" \x01(\tR\x15defaultEmbeddingModel*o\n" +
+	" \x01(\tR\x15defaultEmbeddingModel\x129\n" +
+	"\x19default_build_provider_id\x18\v \x01(\tR\x16defaultBuildProviderId\x127\n" +
+	"\x18default_exec_provider_id\x18\f \x01(\tR\x15defaultExecProviderId\x125\n" +
+	"\x17default_stt_provider_id\x18\r \x01(\tR\x14defaultSttProviderId\x12;\n" +
+	"\x1adefault_vision_provider_id\x18\x0e \x01(\tR\x17defaultVisionProviderId\x125\n" +
+	"\x17default_tts_provider_id\x18\x0f \x01(\tR\x14defaultTtsProviderId\x12@\n" +
+	"\x1ddefault_image_gen_provider_id\x18\x10 \x01(\tR\x19defaultImageGenProviderId\x12;\n" +
+	"\x1adefault_search_provider_id\x18\x11 \x01(\tR\x17defaultSearchProviderId\x12A\n" +
+	"\x1ddefault_embedding_provider_id\x18\x12 \x01(\tR\x1adefaultEmbeddingProviderId*o\n" +
 	"\n" +
 	"TenantRole\x12\x1b\n" +
 	"\x17TENANT_ROLE_UNSPECIFIED\x10\x00\x12\x15\n" +

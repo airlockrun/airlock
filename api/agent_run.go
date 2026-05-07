@@ -39,31 +39,39 @@ func runLLMCostRates(ctx context.Context, q *dbq.Queries, logger *zap.Logger, ag
 		logger.Warn("cost rates: agent fetch failed", zap.Error(err))
 		return 0, 0
 	}
-	model := ag.ExecModel
-	if model == "" {
+	providerRowID := ag.ExecProviderID
+	modelName := ag.ExecModel
+	if !providerRowID.Valid || modelName == "" {
 		settings, sErr := q.GetSystemSettings(ctx)
 		if sErr != nil {
 			logger.Warn("cost rates: system settings fetch failed", zap.Error(sErr))
 			return 0, 0
 		}
-		model = settings.DefaultExecModel
+		providerRowID = settings.DefaultExecProviderID
+		modelName = settings.DefaultExecModel
 	}
-	if model == "" {
-		warnOnce(logger, "no-model", "cost rates: no exec_model on agent or in system_settings")
+	if !providerRowID.Valid || modelName == "" {
+		warnOnce(logger, "no-model", "cost rates: no exec model on agent or in system_settings")
 		return 0, 0
 	}
-	provID, modID := provider.ParseModel(model)
-	info, ok := provider.GetModelInfo(provID, modID)
+	p, pErr := q.GetProviderByID(ctx, providerRowID)
+	if pErr != nil {
+		warnOnce(logger, "missing-provider:"+providerRowID.String(),
+			"cost rates: provider row missing",
+			zap.String("provider_row_id", providerRowID.String()), zap.Error(pErr))
+		return 0, 0
+	}
+	info, ok := provider.GetModelInfo(p.CatalogID, modelName)
 	if !ok {
-		warnOnce(logger, "missing:"+provID+"/"+modID,
+		warnOnce(logger, "missing:"+p.CatalogID+"/"+modelName,
 			"cost rates: model not in models.dev catalog",
-			zap.String("provider", provID), zap.String("model", modID))
+			zap.String("provider", p.CatalogID), zap.String("model", modelName))
 		return 0, 0
 	}
 	if info.Cost == nil {
-		warnOnce(logger, "nocost:"+provID+"/"+modID,
+		warnOnce(logger, "nocost:"+p.CatalogID+"/"+modelName,
 			"cost rates: model has no cost data in catalog",
-			zap.String("provider", provID), zap.String("model", modID))
+			zap.String("provider", p.CatalogID), zap.String("model", modelName))
 		return 0, 0
 	}
 	return info.Cost.Input, info.Cost.Output

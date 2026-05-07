@@ -96,6 +96,9 @@ message CreateProviderRequest {
   string display_name = 2;
   string api_key = 3;
   string base_url = 4;
+  // slug — required, kebab-case identifier unique within provider_id.
+  // The frontend auto-derives from display_name; admins can override.
+  string slug = 5;
 }
 
 message CreateProviderResponse {
@@ -111,6 +114,10 @@ message UpdateProviderRequest {
   string api_key = 2;
   string base_url = 3;
   optional bool is_enabled = 4;
+  // slug — empty string means "leave unchanged", any other value
+  // renames the row's slug. Conflicts with another row sharing the
+  // (provider_id, slug) tuple are surfaced as 409.
+  string slug = 5;
 }
 
 message UpdateProviderResponse {
@@ -133,9 +140,14 @@ message CreateAgentRequest {
   string name = 1;
   string slug = 2;
   string description = 3;
-  string build_model = 4;   // optional: "provider/model" for code generation; empty = inherit system default
-  string exec_model = 5;    // optional: "provider/model" for runtime LLM calls; empty = inherit system default
-  string instructions = 6;  // optional: capabilities/behavior instructions for Sol code generation
+  // build_model / exec_model carry the bare model name. The
+  // accompanying *_provider_id binds the slot to a specific providers
+  // row (multi-key support). Empty + empty ⇄ inherit system default.
+  string build_model = 4;
+  string exec_model = 5;
+  string instructions = 6;
+  string build_provider_id = 7;
+  string exec_provider_id = 8;
 }
 
 message CreateAgentResponse {
@@ -181,14 +193,19 @@ message UpgradeAgentRequest {
 // system default" (live, not snapshot).
 
 message ModelSlotInfo {
-  string slug = 1;            // declared by agent code via RegisterModel
-  string capability = 2;      // "text", "vision", "image", "speech", "transcription", "embedding"
-  string description = 3;     // human-readable hint from the agent author
-  string assigned_model = 4;  // admin-chosen "provider/model"; empty = fall through to capability default
+  string slug = 1;                 // declared by agent code via RegisterModel
+  string capability = 2;           // "text", "vision", "image", "speech", "transcription", "embedding"
+  string description = 3;          // human-readable hint from the agent author
+  // assigned_model carries the bare model name; assigned_provider_id
+  // names the providers row to use. Empty + empty ⇄ fall through to
+  // the capability default.
+  string assigned_model = 4;
+  string assigned_provider_id = 5;
 }
 
 message AgentModelConfig {
-  // Per-agent capability overrides — mirror system_settings.default_*_model 1:1.
+  // Per-agent capability overrides — mirror system_settings.default_*_*
+  // 1:1. Each slot is two fields: bare model name + providers row UUID.
   string build_model = 1;
   string exec_model = 2;
   string stt_model = 3;
@@ -198,6 +215,14 @@ message AgentModelConfig {
   string embedding_model = 7;
   string search_model = 8;
   repeated ModelSlotInfo slots = 9;
+  string build_provider_id = 10;
+  string exec_provider_id = 11;
+  string stt_provider_id = 12;
+  string vision_provider_id = 13;
+  string tts_provider_id = 14;
+  string image_gen_provider_id = 15;
+  string embedding_provider_id = 16;
+  string search_provider_id = 17;
 }
 
 message GetAgentModelConfigResponse {

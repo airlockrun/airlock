@@ -1,2 +1,7 @@
-allowBuilds:
-  esbuild: false
+# Security boundary: third-party packages are not allowed to run
+# postinstall / build scripts. esbuild's binary ships via the
+# @esbuild/{platform}-{arch} sibling packages (optionalDependencies)
+# rather than the main package's postinstall, so blocking it here
+# doesn't break Vite at build time.
+ignoredBuiltDependencies:
+  - esbuild

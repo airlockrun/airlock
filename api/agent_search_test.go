@@ -6,42 +6,53 @@ import (
 	"testing"
 
 	"github.com/airlockrun/airlock/db/dbq"
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 )
 
 // seedEnabledProvider inserts a provider row with the given raw key (will
-// be encrypted by testEncryptor). Cleaned up via t.Cleanup.
-func seedEnabledProvider(t *testing.T, providerID, displayName, rawKey string) {
+// be encrypted by testEncryptor). Returns the row's UUID so callers can
+// wire the agent's *_provider_id FK to point at it. Cleaned up via
+// t.Cleanup. slug is "default" — tests don't exercise multi-key per
+// catalog ID.
+func seedEnabledProvider(t *testing.T, catalogID, displayName, rawKey string) uuid.UUID {
 	t.Helper()
 	ctx := context.Background()
+	rowID := uuid.New()
 	enc := testEncryptor()
-	cipher, err := enc.Put(ctx, "provider/"+providerID+"/api_key", rawKey)
+	cipher, err := enc.Put(ctx, "provider/"+rowID.String()+"/api_key", rawKey)
 	if err != nil {
 		t.Fatalf("encrypt: %v", err)
 	}
 	q := dbq.New(testDB.Pool())
 	_, err = q.CreateProvider(ctx, dbq.CreateProviderParams{
-		ProviderID:  providerID,
+		ID:          toPgUUID(rowID),
+		CatalogID:   catalogID,
+		Slug:        "default",
 		DisplayName: displayName,
 		ApiKey:      cipher,
 		BaseUrl:     "",
 		IsEnabled:   true,
 	})
 	if err != nil {
-		t.Fatalf("CreateProvider(%s): %v", providerID, err)
+		t.Fatalf("CreateProvider(%s): %v", catalogID, err)
 	}
 	t.Cleanup(func() {
-		_, _ = testDB.Pool().Exec(ctx, `DELETE FROM providers WHERE provider_id = $1`, providerID)
+		_, _ = testDB.Pool().Exec(ctx, `DELETE FROM providers WHERE id = $1`, rowID)
 	})
+	return rowID
 }
 
-// setAgentExecModel updates the agent row's exec_model column in place.
-func setAgentExecModel(t *testing.T, agentID, model string) {
+// setAgentExecModel binds the agent's exec slot to (providerRowID,
+// modelName). The model column carries the bare name now ("grok-4" vs
+// the old "xai/grok-4"); the FK column points at the providers row.
+func setAgentExecModel(t *testing.T, agentID string, providerRowID uuid.UUID, modelName string) {
 	t.Helper()
 	_, err := testDB.Pool().Exec(context.Background(),
-		`UPDATE agents SET exec_model = $1 WHERE id = $2::uuid`, model, agentID)
+		`UPDATE agents SET exec_provider_id = $1, exec_model = $2 WHERE id = $3::uuid`,
+		providerRowID, modelName, agentID)
 	if err != nil {
-		t.Fatalf("update exec_model: %v", err)
+		t.Fatalf("update exec slot: %v", err)
 	}
 }
 
@@ -52,8 +63,8 @@ func TestResolveSearchTier1_ExecProviderNative(t *testing.T) {
 	skipIfNoDB(t)
 	agentID, _ := testAgentAndUser(t)
 
-	seedEnabledProvider(t, "xai", "xAI", "xai-secret")
-	setAgentExecModel(t, agentID.String(), "xai/grok-4")
+	xaiID := seedEnabledProvider(t, "xai", "xAI", "xai-secret")
+	setAgentExecModel(t, agentID.String(), xaiID, "grok-4")
 
 	client, err := resolveSearchClient(context.Background(), testDB, testEncryptor(), zap.NewNop(), agentID.String())
 	if err != nil {
@@ -72,9 +83,9 @@ func TestResolveSearchTier2_DedicatedBrave(t *testing.T) {
 	skipIfNoDB(t)
 	agentID, _ := testAgentAndUser(t)
 
-	seedEnabledProvider(t, "anthropic", "Anthropic", "ant-secret")
+	anthropicID := seedEnabledProvider(t, "anthropic", "Anthropic", "ant-secret")
 	seedEnabledProvider(t, "brave", "Brave Search", "brave-secret")
-	setAgentExecModel(t, agentID.String(), "anthropic/claude-sonnet-4-6")
+	setAgentExecModel(t, agentID.String(), anthropicID, "claude-sonnet-4-6")
 
 	client, err := resolveSearchClient(context.Background(), testDB, testEncryptor(), zap.NewNop(), agentID.String())
 	if err != nil {
@@ -92,8 +103,8 @@ func TestResolveSearchTier3_None(t *testing.T) {
 	skipIfNoDB(t)
 	agentID, _ := testAgentAndUser(t)
 
-	seedEnabledProvider(t, "anthropic", "Anthropic", "ant-secret")
-	setAgentExecModel(t, agentID.String(), "anthropic/claude-sonnet-4-6")
+	anthropicID := seedEnabledProvider(t, "anthropic", "Anthropic", "ant-secret")
+	setAgentExecModel(t, agentID.String(), anthropicID, "claude-sonnet-4-6")
 
 	_, err := resolveSearchClient(context.Background(), testDB, testEncryptor(), zap.NewNop(), agentID.String())
 	if !errors.Is(err, errNoSearchProvider) {
@@ -110,10 +121,10 @@ func TestResolveSearchTier2_PreferCatalogOnly(t *testing.T) {
 	skipIfNoDB(t)
 	agentID, _ := testAgentAndUser(t)
 
-	seedEnabledProvider(t, "anthropic", "Anthropic", "ant-secret")
+	anthropicID := seedEnabledProvider(t, "anthropic", "Anthropic", "ant-secret")
 	seedEnabledProvider(t, "xai", "xAI", "xai-secret")
 	seedEnabledProvider(t, "brave", "Brave Search", "brave-secret")
-	setAgentExecModel(t, agentID.String(), "anthropic/claude-sonnet-4-6")
+	setAgentExecModel(t, agentID.String(), anthropicID, "claude-sonnet-4-6")
 
 	client, err := resolveSearchClient(context.Background(), testDB, testEncryptor(), zap.NewNop(), agentID.String())
 	if err != nil {

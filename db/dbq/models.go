@@ -9,32 +9,40 @@ import (
 )
 
 type Agent struct {
-	ID             pgtype.UUID        `json:"id"`
-	UserID         pgtype.UUID        `json:"user_id"`
-	Slug           string             `json:"slug"`
-	Name           string             `json:"name"`
-	Description    string             `json:"description"`
-	Status         string             `json:"status"`
-	UpgradeStatus  string             `json:"upgrade_status"`
-	AutoFix        bool               `json:"auto_fix"`
-	BuildModel     string             `json:"build_model"`
-	ExecModel      string             `json:"exec_model"`
-	SttModel       string             `json:"stt_model"`
-	VisionModel    string             `json:"vision_model"`
-	TtsModel       string             `json:"tts_model"`
-	ImageGenModel  string             `json:"image_gen_model"`
-	EmbeddingModel string             `json:"embedding_model"`
-	SearchModel    string             `json:"search_model"`
-	SourceRef      string             `json:"source_ref"`
-	ImageRef       string             `json:"image_ref"`
-	DbSchema       string             `json:"db_schema"`
-	DbPassword     string             `json:"db_password"`
-	SdkVersion     string             `json:"sdk_version"`
-	Config         []byte             `json:"config"`
-	ExtraPrompts   []byte             `json:"extra_prompts"`
-	ErrorMessage   string             `json:"error_message"`
-	CreatedAt      pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+	ID                  pgtype.UUID        `json:"id"`
+	UserID              pgtype.UUID        `json:"user_id"`
+	Slug                string             `json:"slug"`
+	Name                string             `json:"name"`
+	Description         string             `json:"description"`
+	Status              string             `json:"status"`
+	UpgradeStatus       string             `json:"upgrade_status"`
+	AutoFix             bool               `json:"auto_fix"`
+	BuildProviderID     pgtype.UUID        `json:"build_provider_id"`
+	BuildModel          string             `json:"build_model"`
+	ExecProviderID      pgtype.UUID        `json:"exec_provider_id"`
+	ExecModel           string             `json:"exec_model"`
+	SttProviderID       pgtype.UUID        `json:"stt_provider_id"`
+	SttModel            string             `json:"stt_model"`
+	VisionProviderID    pgtype.UUID        `json:"vision_provider_id"`
+	VisionModel         string             `json:"vision_model"`
+	TtsProviderID       pgtype.UUID        `json:"tts_provider_id"`
+	TtsModel            string             `json:"tts_model"`
+	ImageGenProviderID  pgtype.UUID        `json:"image_gen_provider_id"`
+	ImageGenModel       string             `json:"image_gen_model"`
+	EmbeddingProviderID pgtype.UUID        `json:"embedding_provider_id"`
+	EmbeddingModel      string             `json:"embedding_model"`
+	SearchProviderID    pgtype.UUID        `json:"search_provider_id"`
+	SearchModel         string             `json:"search_model"`
+	SourceRef           string             `json:"source_ref"`
+	ImageRef            string             `json:"image_ref"`
+	DbSchema            string             `json:"db_schema"`
+	DbPassword          string             `json:"db_password"`
+	SdkVersion          string             `json:"sdk_version"`
+	Config              []byte             `json:"config"`
+	ExtraPrompts        []byte             `json:"extra_prompts"`
+	ErrorMessage        string             `json:"error_message"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
 }
 
 type AgentBuild struct {
@@ -157,11 +165,12 @@ type AgentMessage struct {
 }
 
 type AgentModelSlot struct {
-	AgentID       pgtype.UUID `json:"agent_id"`
-	Slug          string      `json:"slug"`
-	Capability    string      `json:"capability"`
-	Description   string      `json:"description"`
-	AssignedModel string      `json:"assigned_model"`
+	AgentID            pgtype.UUID `json:"agent_id"`
+	Slug               string      `json:"slug"`
+	Capability         string      `json:"capability"`
+	Description        string      `json:"description"`
+	AssignedProviderID pgtype.UUID `json:"assigned_provider_id"`
+	AssignedModel      string      `json:"assigned_model"`
 }
 
 type AgentRoute struct {
@@ -296,7 +305,8 @@ type PlatformIdentity struct {
 
 type Provider struct {
 	ID          pgtype.UUID        `json:"id"`
-	ProviderID  string             `json:"provider_id"`
+	CatalogID   string             `json:"provider_id"`
+	Slug        string             `json:"slug"`
 	DisplayName string             `json:"display_name"`
 	IsEnabled   bool               `json:"is_enabled"`
 	BaseUrl     string             `json:"base_url"`
@@ -333,20 +343,28 @@ type Run struct {
 }
 
 type SystemSetting struct {
-	ID                    bool               `json:"id"`
-	PublicUrl             string             `json:"public_url"`
-	AgentDomain           string             `json:"agent_domain"`
-	DefaultBuildModel     string             `json:"default_build_model"`
-	DefaultExecModel      string             `json:"default_exec_model"`
-	DefaultSttModel       string             `json:"default_stt_model"`
-	DefaultVisionModel    string             `json:"default_vision_model"`
-	DefaultTtsModel       string             `json:"default_tts_model"`
-	DefaultImageGenModel  string             `json:"default_image_gen_model"`
-	DefaultEmbeddingModel string             `json:"default_embedding_model"`
-	DefaultSearchModel    string             `json:"default_search_model"`
-	ActivationCode        pgtype.Text        `json:"activation_code"`
-	CreatedAt             pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt             pgtype.Timestamptz `json:"updated_at"`
+	ID                         bool               `json:"id"`
+	PublicUrl                  string             `json:"public_url"`
+	AgentDomain                string             `json:"agent_domain"`
+	DefaultBuildProviderID     pgtype.UUID        `json:"default_build_provider_id"`
+	DefaultBuildModel          string             `json:"default_build_model"`
+	DefaultExecProviderID      pgtype.UUID        `json:"default_exec_provider_id"`
+	DefaultExecModel           string             `json:"default_exec_model"`
+	DefaultSttProviderID       pgtype.UUID        `json:"default_stt_provider_id"`
+	DefaultSttModel            string             `json:"default_stt_model"`
+	DefaultVisionProviderID    pgtype.UUID        `json:"default_vision_provider_id"`
+	DefaultVisionModel         string             `json:"default_vision_model"`
+	DefaultTtsProviderID       pgtype.UUID        `json:"default_tts_provider_id"`
+	DefaultTtsModel            string             `json:"default_tts_model"`
+	DefaultImageGenProviderID  pgtype.UUID        `json:"default_image_gen_provider_id"`
+	DefaultImageGenModel       string             `json:"default_image_gen_model"`
+	DefaultEmbeddingProviderID pgtype.UUID        `json:"default_embedding_provider_id"`
+	DefaultEmbeddingModel      string             `json:"default_embedding_model"`
+	DefaultSearchProviderID    pgtype.UUID        `json:"default_search_provider_id"`
+	DefaultSearchModel         string             `json:"default_search_model"`
+	ActivationCode             pgtype.Text        `json:"activation_code"`
+	CreatedAt                  pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt                  pgtype.Timestamptz `json:"updated_at"`
 }
 
 type Tenant struct {
