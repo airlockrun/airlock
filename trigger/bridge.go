@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -268,14 +267,32 @@ type BridgeManager struct {
 	hmacSecret string // for generating identity-linking URLs
 	publicURL  string // base URL for identity-linking URLs
 
-	// pollers tracks the cancel func for each running poller, keyed by
-	// bridge ID. Needed so RemoveBridge can stop exactly one poller on
-	// bridge deletion — without it, a deleted bridge's goroutine would
-	// keep calling getUpdates on the same bot token. If the user then
-	// recreates the bridge with the same token, two pollers race for
-	// the token and Telegram returns 409 Conflict on both.
+	// pollers tracks the running poller for each bridge ID. Needed so
+	// RemoveBridge can stop exactly one poller on bridge deletion —
+	// without it, a deleted bridge's goroutine would keep calling
+	// getUpdates on the same bot token. If the user then recreates the
+	// bridge with the same token, two pollers race for the token and
+	// Telegram returns 409 Conflict on both.
+	//
+	// Value is *pollerHandle (not bare CancelFunc) so the goroutine's
+	// self-cleanup can identify *its own* entry by comparing the unique
+	// pollCtx pointer. Comparing CancelFunc values via reflect.Pointer
+	// returns the closure's code address, which is identical for every
+	// CancelFunc returned by context.WithCancel — so an old goroutine's
+	// defer would falsely match the entry of a *replacement* poller and
+	// delete it from the map, leaking the replacement and stacking
+	// duplicate pollers on every subsequent AddBridge call.
 	pollersMu sync.Mutex
-	pollers   map[uuid.UUID]context.CancelFunc
+	pollers   map[uuid.UUID]*pollerHandle
+}
+
+// pollerHandle pairs a poller goroutine's cancel func with its context.
+// The context pointer is the per-instance identity used by the goroutine's
+// defer block to confirm "this is my entry" before removing it from the
+// map.
+type pollerHandle struct {
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
 // NewBridgeManager creates a BridgeManager.
@@ -288,7 +305,7 @@ func NewBridgeManager(drivers map[string]BridgeDriver, prompter *PromptProxy, da
 		hmacSecret: hmacSecret,
 		publicURL:  publicURL,
 		logger:     logger,
-		pollers:    make(map[uuid.UUID]context.CancelFunc),
+		pollers:    make(map[uuid.UUID]*pollerHandle),
 	}
 }
 
@@ -401,11 +418,11 @@ func (m *BridgeManager) RemoveBridge(bridgeID uuid.UUID) {
 // calls can't race on the map.
 func (m *BridgeManager) cancelPoller(bridgeID uuid.UUID) {
 	m.pollersMu.Lock()
-	cancel, ok := m.pollers[bridgeID]
+	h, ok := m.pollers[bridgeID]
 	delete(m.pollers, bridgeID)
 	m.pollersMu.Unlock()
 	if ok {
-		cancel()
+		h.cancel()
 	}
 }
 
@@ -671,8 +688,9 @@ func (m *BridgeManager) SendMessage(ctx context.Context, bridgeID uuid.UUID, ext
 // others.
 func (m *BridgeManager) startPoller(parent context.Context, br dbq.Bridge) {
 	pollCtx, cancel := context.WithCancel(parent)
+	handle := &pollerHandle{ctx: pollCtx, cancel: cancel}
 	m.pollersMu.Lock()
-	m.pollers[pgUUID(br.ID)] = cancel
+	m.pollers[pgUUID(br.ID)] = handle
 	m.pollersMu.Unlock()
 
 	m.wg.Add(1)
@@ -680,14 +698,13 @@ func (m *BridgeManager) startPoller(parent context.Context, br dbq.Bridge) {
 		defer m.wg.Done()
 		defer func() {
 			// Self-cleanup: ensure the map doesn't hold a stale entry
-			// after the goroutine exits. Only remove our own entry —
-			// if AddBridge replaced us with a new poller mid-flight,
-			// leave its cancel in place. reflect.ValueOf(fn).Pointer
-			// is the idiomatic way to compare func values in Go.
-			ourPtr := reflect.ValueOf(cancel).Pointer()
+			// after the goroutine exits. Compare by pollCtx pointer —
+			// each context.WithCancel returns a unique *cancelCtx, so
+			// "existing.ctx == pollCtx" is true iff this is still our
+			// entry. If AddBridge replaced us mid-flight, the map now
+			// holds a different handle and we leave it alone.
 			m.pollersMu.Lock()
-			if existing, ok := m.pollers[pgUUID(br.ID)]; ok &&
-				reflect.ValueOf(existing).Pointer() == ourPtr {
+			if existing, ok := m.pollers[pgUUID(br.ID)]; ok && existing.ctx == pollCtx {
 				delete(m.pollers, pgUUID(br.ID))
 			}
 			m.pollersMu.Unlock()
