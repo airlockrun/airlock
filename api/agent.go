@@ -480,13 +480,18 @@ func (h *agentHandler) Sync(w http.ResponseWriter, r *http.Request) {
 		}
 
 		name := s.Slug
-		if srv, ok := serverBySlug[s.Slug]; ok && srv.Name != "" {
-			name = srv.Name
+		access := ""
+		if srv, ok := serverBySlug[s.Slug]; ok {
+			if srv.Name != "" {
+				name = srv.Name
+			}
+			access = srv.Access
 		}
 		promptMCPServers = append(promptMCPServers, promptpkg.MCPServerStatus{
 			Slug:   s.Slug,
 			Name:   name,
 			Status: status,
+			Access: access,
 			Tools:  promptTools,
 		})
 	}
@@ -501,6 +506,7 @@ func (h *agentHandler) Sync(w http.ResponseWriter, r *http.Request) {
 			Description: c.Description,
 			LLMHint:     c.LlmHint,
 			BaseURL:     c.BaseUrl,
+			Access:      c.Access,
 		}
 	}
 	promptTools := make([]promptpkg.ToolInfo, len(req.Tools))
@@ -509,13 +515,14 @@ func (h *agentHandler) Sync(w http.ResponseWriter, r *http.Request) {
 			Name:         t.Name,
 			Description:  t.Description,
 			LLMHint:      t.LLMHint,
+			Access:       string(t.Access),
 			InputSchema:  t.InputSchema,
 			OutputSchema: t.OutputSchema,
 		}
 	}
 	promptTopics := make([]promptpkg.TopicInfo, len(req.Topics))
 	for i, t := range req.Topics {
-		promptTopics[i] = promptpkg.TopicInfo{Slug: t.Slug, Description: t.Description, LLMHint: t.LLMHint}
+		promptTopics[i] = promptpkg.TopicInfo{Slug: t.Slug, Description: t.Description, LLMHint: t.LLMHint, Access: string(t.Access)}
 	}
 	promptWebhooks := make([]promptpkg.WebhookInfo, len(req.Webhooks))
 	for i, wh := range req.Webhooks {
@@ -545,7 +552,15 @@ func (h *agentHandler) Sync(w http.ResponseWriter, r *http.Request) {
 		agentRouteURL += ":" + h.agentRoutePort
 	}
 
-	rendered, err := promptpkg.RenderAgentPrompt(promptpkg.AgentData{
+	// Render three variants — admin/user/public — so the agent can pick
+	// the right one per run via run.callerAccess. Filtering at sync time
+	// (rather than per-run) keeps the hot path allocation-free; the agent
+	// caches all three. Public callers must never see admin- or user-tier
+	// connections, MCP servers, tools, or routes listed in the system
+	// prompt — even though the VM blocks the call at runtime, the model
+	// would otherwise know they exist (and could leak slug/schema info to
+	// an anonymous DM caller).
+	promptData := promptpkg.AgentData{
 		AgentDashboardURL: h.publicURL + "/agents/" + agentID.String(),
 		AgentRouteURL:     agentRouteURL,
 		Tools:             promptTools,
@@ -555,9 +570,22 @@ func (h *agentHandler) Sync(w http.ResponseWriter, r *http.Request) {
 		Crons:             promptCrons,
 		Routes:            promptRoutes,
 		MCPServers:        promptMCPServers,
-	})
+	}
+	rendered, err := promptpkg.RenderAgentPrompt(promptData, "admin")
 	if err != nil {
 		h.logger.Error("render agent prompt failed", zap.Error(err))
+		writeJSONError(w, http.StatusInternalServerError, "failed to render prompt")
+		return
+	}
+	renderedUser, err := promptpkg.RenderAgentPrompt(promptData, "user")
+	if err != nil {
+		h.logger.Error("render agent prompt (user) failed", zap.Error(err))
+		writeJSONError(w, http.StatusInternalServerError, "failed to render prompt")
+		return
+	}
+	renderedPublic, err := promptpkg.RenderAgentPrompt(promptData, "public")
+	if err != nil {
+		h.logger.Error("render agent prompt (public) failed", zap.Error(err))
 		writeJSONError(w, http.StatusInternalServerError, "failed to render prompt")
 		return
 	}
@@ -579,9 +607,11 @@ func (h *agentHandler) Sync(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, agentsdk.SyncResponse{
-		SystemPrompt:      rendered,
-		MCPAuthStatus:     mcpAuthStatus,
-		MCPSchemas:        mcpSchemas,
-		PublicStorageBase: publicStorageBase,
+		SystemPrompt:       rendered,
+		SystemPromptUser:   renderedUser,
+		SystemPromptPublic: renderedPublic,
+		MCPAuthStatus:      mcpAuthStatus,
+		MCPSchemas:         mcpSchemas,
+		PublicStorageBase:  publicStorageBase,
 	})
 }

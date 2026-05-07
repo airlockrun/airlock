@@ -158,7 +158,21 @@ func (h *bridgeHandler) CreateBridge(w http.ResponseWriter, r *http.Request) {
 		h.bridgeMgr.AddBridge(pgUUID(br.ID))
 	}
 
-	writeProto(w, http.StatusOK, bridgeToProto(br))
+	// Owner JOIN that ListBridges does is missing on the bare row. Look
+	// the creator up so the response carries the same shape — otherwise
+	// the table cell in the UI shows blank owner until the user reloads.
+	var ownerEmail, ownerDisplayName pgtype.Text
+	if u, uerr := q.GetUserByID(ctx, toPgUUID(userID)); uerr == nil {
+		ownerEmail = pgtype.Text{String: u.Email, Valid: true}
+		ownerDisplayName = pgtype.Text{String: u.DisplayName, Valid: true}
+	}
+	writeProto(w, http.StatusOK, bridgeFieldsToProto(
+		br.ID, br.AgentID, br.CreatedBy,
+		br.Type, br.Name, br.BotUsername, br.Status,
+		br.CreatedAt, br.UpdatedAt,
+		ownerEmail, ownerDisplayName,
+		br.Settings,
+	))
 }
 
 // ListBridges handles GET /api/v1/bridges. Admins see every bridge; everyone
@@ -330,7 +344,22 @@ func (h *bridgeHandler) UpdateBridge(w http.ResponseWriter, r *http.Request) {
 		h.bridgeMgr.AddBridge(bridgeID)
 	}
 
-	writeProto(w, http.StatusOK, bridgeToProto(updated))
+	// Same JOIN-by-hand as CreateBridge so the table cell renders with
+	// owner info without forcing the client to refetch the whole list.
+	var ownerEmail, ownerDisplayName pgtype.Text
+	if updated.CreatedBy.Valid {
+		if u, uerr := q.GetUserByID(ctx, updated.CreatedBy); uerr == nil {
+			ownerEmail = pgtype.Text{String: u.Email, Valid: true}
+			ownerDisplayName = pgtype.Text{String: u.DisplayName, Valid: true}
+		}
+	}
+	writeProto(w, http.StatusOK, bridgeFieldsToProto(
+		updated.ID, updated.AgentID, updated.CreatedBy,
+		updated.Type, updated.Name, updated.BotUsername, updated.Status,
+		updated.CreatedAt, updated.UpdatedAt,
+		ownerEmail, ownerDisplayName,
+		updated.Settings,
+	))
 }
 
 // DeleteBridge handles DELETE /api/v1/bridges/{bridgeID}.
