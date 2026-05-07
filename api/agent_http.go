@@ -69,6 +69,10 @@ func (h *agentHandler) AgentHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Default to a real-browser UA so sites with bot heuristics or
+	// edge protection (Cloudflare, etc.) don't 403 every fetch.
+	// Caller-supplied User-Agent overrides via the Set below.
+	upstream.Header.Set("User-Agent", webfetch.UserAgent)
 	for k, v := range req.Headers {
 		upstream.Header.Set(k, v)
 	}
