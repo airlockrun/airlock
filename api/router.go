@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"net/url"
 
 	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/builder"
@@ -17,6 +18,25 @@ import (
 	"github.com/go-chi/cors"
 	"go.uber.org/zap"
 )
+
+// agentRouteSchemePort returns the scheme + optional explicit port that
+// per-agent {slug}.AGENT_DOMAIN URLs should use. Inherited from PUBLIC_URL
+// so a localhost overlay on `:8443` produces signed URLs that match what
+// Caddy actually serves. Standard 80/443 → empty port (no `:443` cruft
+// in production URLs); anything else is preserved verbatim. Falls back
+// to ("https", "") when PUBLIC_URL is malformed — same effective shape
+// as the historic hard-coded "https://" prefix.
+func agentRouteSchemePort(publicURL string) (scheme, port string) {
+	scheme = "https"
+	if u, err := url.Parse(publicURL); err == nil && u.Host != "" {
+		scheme = u.Scheme
+		p := u.Port()
+		if p != "" && !((scheme == "https" && p == "443") || (scheme == "http" && p == "80")) {
+			port = p
+		}
+	}
+	return
+}
 
 type RouterConfig struct {
 	DB        *db.DB
@@ -389,6 +409,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	// (channel event endpoint removed — bridges use long-polling, not push)
 
 	// Agent API routes (authenticated via agent JWT)
+	agentRouteScheme, agentRoutePort := agentRouteSchemePort(cfg.PublicURL)
 	ah := &agentHandler{
 		db:                     cfg.DB,
 		encryptor:              cfg.Secrets,
@@ -399,6 +420,8 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		scheduler:              cfg.Scheduler,
 		publicURL:              cfg.PublicURL,
 		agentDomain:            cfg.AgentDomain,
+		agentRouteScheme:       agentRouteScheme,
+		agentRoutePort:         agentRoutePort,
 		llmProxyURL:            cfg.LLMProxyURL,
 		forceInlineAttachments: cfg.ForceInlineAttachments,
 		logger:                 cfg.Logger.Named("agent-api"),

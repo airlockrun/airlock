@@ -4,15 +4,20 @@
 #   docker compose -f docker-compose.yml -f docker-compose.local.yml up -d
 #
 # Differences from the production stack:
-#   - DOMAIN is fixed to airlock.traefik.me. *.traefik.me resolves to
-#     127.0.0.1 via public DNS, so per-agent subdomains route to your
-#     machine without any DNS or /etc/hosts work.
+#   - DOMAIN is fixed to airlock.localhost. *.localhost resolves to
+#     127.0.0.1 automatically (RFC 6761) in every modern browser — no
+#     DNS, /etc/hosts, or public-domain setup needed.
 #   - Caddy uses its built-in local CA (`tls internal`). No Let's
 #     Encrypt, no rate limits. First visit to a subdomain shows a
 #     browser warning until you trust the local CA — see
 #     .env.local.example for the trust snippet.
 #   - Caddy reads Caddyfile.local instead of Caddyfile (selected via
 #     a command override so we don't have to override the bind mount).
+#   - Optional HTTP_PORT / HTTPS_PORT env knobs let you front Caddy on
+#     non-default ports when 80/443 are taken (set HTTPS_PORT=8443 in
+#     .env and update PUBLIC_URL to match — the airlock backend reads
+#     the port from PUBLIC_URL when building per-agent route URLs so
+#     signed asset URLs validate).
 #
 # Everything else (postgres, rustfs, airlock, frontend, agent-builder,
 # agent-base) is identical to prod.
@@ -25,7 +30,7 @@ services:
 
   airlock:
     environment:
-      # s3.airlock.traefik.me resolves to 127.0.0.1, so LLM providers
+      # *.airlock.localhost resolves to 127.0.0.1, so LLM providers
       # (OpenAI, Anthropic, …) can't reach a presigned URL from the
       # public internet. Force base64 delivery so attachments flow
       # inline in the request body instead.

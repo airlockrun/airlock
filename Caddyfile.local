@@ -1,15 +1,18 @@
 # Local-laptop Caddy config.
 #
-# Differs from the prod Caddyfile in exactly one thing: TLS comes from
-# Caddy's built-in local CA (`tls internal`) instead of Let's Encrypt.
-# LE refuses to issue for shared playground domains like *.traefik.me;
-# the local CA sidesteps that without any external setup.
+# Differs from the prod Caddyfile in two things:
+#   - DOMAIN is fixed to *.localhost (RFC 6761 — every modern browser
+#     resolves *.localhost to 127.0.0.1 automatically, no DNS or
+#     /etc/hosts work needed).
+#   - TLS comes from Caddy's built-in local CA (`tls internal`) instead
+#     of Let's Encrypt. LE refuses to issue for `localhost`, and the
+#     local CA sidesteps the public-CA dance entirely.
 #
 # First request to any subdomain produces a one-time browser warning
 # unless you've trusted the local CA — see .env.local.example for the
 # `caddy trust` snippet.
 
-airlock.traefik.me {
+airlock.localhost {
 	tls internal
 
 	@spa_relay path /auth/relay
@@ -25,14 +28,14 @@ airlock.traefik.me {
 	}
 }
 
-s3.airlock.traefik.me {
+s3.airlock.localhost {
 	tls internal
 	reverse_proxy rustfs:9000 {
 		header_up Host {host}
 	}
 }
 
-*.airlock.traefik.me {
+*.airlock.localhost {
 	tls internal
 	reverse_proxy airlock:8080
 }

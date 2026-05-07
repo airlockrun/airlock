@@ -38,6 +38,8 @@ type agentHandler struct {
 	scheduler   cronReloader         // nil until trigger system is wired
 	publicURL              string
 	agentDomain            string // e.g. "dev.airlock.run" → {slug}.dev.airlock.run
+	agentRouteScheme       string // "http" or "https" — copied from PUBLIC_URL so dev/local overlays can drop https
+	agentRoutePort         string // empty for the standard 80/443; set when Caddy is fronted on a non-default port so signed /__air/storage URLs include it
 	llmProxyURL            string // optional: route LLM calls through this proxy
 	forceInlineAttachments bool   // dev escape hatch — ignore provider URL capability, send everything as base64
 	logger                 *zap.Logger
@@ -538,7 +540,10 @@ func (h *agentHandler) Sync(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusInternalServerError, "failed to load agent")
 		return
 	}
-	agentRouteURL := "https://" + agentRecord.Slug + "." + h.agentDomain
+	agentRouteURL := h.agentRouteScheme + "://" + agentRecord.Slug + "." + h.agentDomain
+	if h.agentRoutePort != "" {
+		agentRouteURL += ":" + h.agentRoutePort
+	}
 
 	rendered, err := promptpkg.RenderAgentPrompt(promptpkg.AgentData{
 		AgentDashboardURL: h.publicURL + "/agents/" + agentID.String(),
