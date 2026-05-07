@@ -44,6 +44,10 @@ function formatDuration(ms: number): string {
 
 function formatCost(cost: number): string {
   if (!cost) return '—'
+  // Sub-cent costs (typical for nano/mini models) round to $0.00 with
+  // 2 decimals — show 4 decimals below $1 so a 1K-in/500-out gpt-5-nano
+  // call ($0.0003) doesn't read as zero.
+  if (cost < 1) return `$${cost.toFixed(4)}`
   return `$${cost.toFixed(2)}`
 }
 

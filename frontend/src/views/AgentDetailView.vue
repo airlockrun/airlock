@@ -121,7 +121,17 @@ onMounted(async () => {
     if (payload?.agentId !== agentId) return
     if (payload.buildId) activeBuildId.value = payload.buildId
     if (payload.status === 'started') {
-      // New build kicked off while we were watching; buildId already captured above.
+      // New build kicked off while we were watching; buildId already captured
+      // above. Mirror the server-side state transition so BuildLogPanel
+      // (gated on agent.status/upgradeStatus === 'building') renders
+      // immediately instead of waiting for a page refresh.
+      if (agent.value) {
+        if (agent.value.status === 'draft' || agent.value.status === 'failed') {
+          agent.value.status = 'building'
+        } else {
+          agent.value.upgradeStatus = 'building'
+        }
+      }
       return
     }
     if (payload.status === 'complete') {
