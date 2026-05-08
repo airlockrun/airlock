@@ -1103,6 +1103,8 @@ agent.RegisterTool(&agentsdk.Tool[GenImageIn, GenImageOut]{
 The public visitor's LLM sees one tool: `generate_public_image({prompt})`. It can't list, read, write, or delete arbitrary paths. It can't call `httpRequest` or `webSearch` to do something else with the prompt. The image lives in an internal directory the LLM can't enumerate; the only way out is the presigned URL the tool returns. That's the model: **shrink the verbs, control the side effects, surface the URL.**
 
 # Database Access
+You have a full postgres database available (well, a single schema, but you can create as many tables in it as you like)
+Usually database even has pgvector enabled, so you can create vector columns and use them together with agent.EmbeddingModel(ctx, slug, ModelOpts{})
 
 If the agent needs its own database tables:
 

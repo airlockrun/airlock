@@ -673,10 +673,18 @@ func (b *BuildService) createAgentSchema(ctx context.Context, agentID, schemaNam
 
 // agentDBURL builds a Postgres connection URL for an agent's dedicated role.
 // Uses DBHostAgent (Docker network hostname) — for agent containers.
+//
+// search_path is set to "{schema},public": agents create their own tables
+// in the per-agent schema (first entry wins for unqualified DDL), but type
+// lookups and built-ins resolve through public — that's where shared
+// extensions like pgvector live (CREATE EXTENSION is per-database, not
+// per-schema, and lands in the schema current at install time, by default
+// public). Without `public` on the search path, an agent migration that
+// references the `vector` type errors "type vector does not exist".
 func (b *BuildService) agentDBURL(roleName, password, schemaName string) string {
 	return fmt.Sprintf("postgres://%s:%s@%s:%s/%s?search_path=%s&sslmode=%s",
 		roleName, url.QueryEscape(password), b.cfg.DBHostAgent, b.cfg.DBPort,
-		b.cfg.DBName, schemaName, b.cfg.DBSSLMode)
+		b.cfg.DBName, schemaName+",public", b.cfg.DBSSLMode)
 }
 
 // agentDBURLLocal builds a Postgres connection URL using DBHost.
@@ -684,7 +692,7 @@ func (b *BuildService) agentDBURL(roleName, password, schemaName string) string 
 func (b *BuildService) agentDBURLLocal(roleName, password, schemaName string) string {
 	return fmt.Sprintf("postgres://%s:%s@%s:%s/%s?search_path=%s&sslmode=%s",
 		roleName, url.QueryEscape(password), b.cfg.DBHost, b.cfg.DBPort,
-		b.cfg.DBName, schemaName, b.cfg.DBSSLMode)
+		b.cfg.DBName, schemaName+",public", b.cfg.DBSSLMode)
 }
 
 // agentDBURLBase builds a Postgres connection URL without search_path.
