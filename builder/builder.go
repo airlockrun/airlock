@@ -769,12 +769,25 @@ func (b *BuildService) cloneSchema(ctx context.Context, sourceSchema, cloneName,
 		}
 	}
 
-	// Grant agent role access to the clone schema
-	if _, err := conn.Exec(ctx, fmt.Sprintf("GRANT ALL ON SCHEMA %s TO %s", cloneName, roleName)); err != nil {
-		return fmt.Errorf("grant clone access: %w", err)
+	// Transfer ownership to the agent role.
+	//
+	// GRANT ALL covers SELECT/INSERT/UPDATE/DELETE/TRUNCATE/REFERENCES/TRIGGER
+	// but NOT DROP TABLE — DDL on a table is gated on ownership in Postgres,
+	// not privileges. Without these ALTER OWNER calls the agent's migration
+	// validation (up → down → up) fails on the down step with
+	// "must be owner of table X (42501)" because the cloned tables are
+	// still owned by whoever the airlock pool connected as. Owning the
+	// schema also makes subsequent CREATE TABLE during the migration up
+	// inherit the agent role as owner, so newly-created and cloned tables
+	// are uniformly droppable on the way down.
+	if _, err := conn.Exec(ctx, fmt.Sprintf("ALTER SCHEMA %s OWNER TO %s", cloneName, roleName)); err != nil {
+		return fmt.Errorf("alter schema owner: %w", err)
 	}
-	if _, err := conn.Exec(ctx, fmt.Sprintf("GRANT ALL ON ALL TABLES IN SCHEMA %s TO %s", cloneName, roleName)); err != nil {
-		return fmt.Errorf("grant clone table access: %w", err)
+	for _, t := range tables {
+		if _, err := conn.Exec(ctx, fmt.Sprintf(
+			"ALTER TABLE %s.%s OWNER TO %s", cloneName, t, roleName)); err != nil {
+			return fmt.Errorf("alter table owner %s: %w", t, err)
+		}
 	}
 
 	return nil
