@@ -25,6 +25,7 @@ func main() {
 		fmt.Fprint(os.Stderr, usage)
 		os.Exit(2)
 	}
+
 	cmd, rest := os.Args[1], os.Args[2:]
 	switch cmd {
 	case "serve":
