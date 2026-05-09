@@ -8,15 +8,16 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
+	"github.com/airlockrun/airlock/config"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
-	"github.com/airlockrun/airlock/config"
 	"github.com/google/uuid"
 )
 
@@ -233,7 +234,52 @@ func (c *S3Client) DeleteObject(ctx context.Context, key string) error {
 		Bucket: &c.bucket,
 		Key:    &key,
 	})
+
 	return err
+}
+
+// DeleteObjects deletes listed keys.
+func (c *S3Client) DeleteObjects(ctx context.Context, keys ...string) (int, error) {
+	const batchsize = 1_000 // Max objects to delete per request.
+
+	var quiet = true
+
+	deleted := 0
+
+	for chunk := range slices.Chunk(keys, batchsize) {
+		objects := getObjectIdentifiers(chunk)
+
+		out, err := c.client.DeleteObjects(ctx, &s3.DeleteObjectsInput{
+			Bucket: &c.bucket,
+			Delete: &types.Delete{
+				Objects: objects,
+				Quiet:   &quiet,
+			},
+		})
+		if err != nil {
+			return deleted, fmt.Errorf("could not invoke delete operation: %w", err)
+		}
+
+		deleted += len(out.Deleted)
+
+		if len(out.Errors) != 0 {
+			return deleted, fmt.Errorf("deletion failed for %d keys", len(out.Errors))
+		}
+	}
+
+	return deleted, nil
+}
+
+func getObjectIdentifiers(keys []string) []types.ObjectIdentifier {
+	result := make([]types.ObjectIdentifier, 0, len(keys))
+
+	for _, key := range keys {
+		result = append(result, types.ObjectIdentifier{
+			Key: aws.String(key),
+		})
+	}
+
+	return result
 }
 
 // ListObjects lists objects under the given prefix.
@@ -306,6 +352,7 @@ func (c *S3Client) DeletePrefix(ctx context.Context, prefix string) error {
 	if err != nil {
 		return err
 	}
+
 	if len(objects) == 0 {
 		return nil
 	}
