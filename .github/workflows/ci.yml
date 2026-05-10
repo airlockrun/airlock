@@ -1,0 +1,44 @@
+# Pre-merge / pre-tag CI: vet + test on every push to main and every PR.
+#
+# Catches the bugs that publish-images.yml — which only runs on tag push
+# and only does docker build — would notice too late. Specifically:
+#   - go vet drift (unreachable code, shadowed vars, struct-tag typos)
+#   - test failures from refactors that weren't reflected in tests
+#   - drift check (Dockerfile ARG ↔ go.mod ↔ compose tag ↔ README pin)
+#
+# These are all things release-airlock.sh runs locally as preflight, but
+# we want the same gate on every push and every external contributor's
+# PR — not just at tag time.
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Drift check has no toolchain dependency; bash + awk only.
+      - name: check-versions
+        run: ./scripts/check-versions.sh
+
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: go vet
+        run: go vet ./...
+      - name: go test
+        run: go test ./...

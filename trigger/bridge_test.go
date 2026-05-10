@@ -1,7 +1,6 @@
 package trigger
 
 import (
-	"context"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -16,12 +15,12 @@ import (
 // the same Telegram getUpdates session and both get 409 Conflict.
 func TestRemoveBridge_CancelsRegisteredPoller(t *testing.T) {
 	m := &BridgeManager{
-		pollers: make(map[uuid.UUID]context.CancelFunc),
+		pollers: make(map[uuid.UUID]*pollerHandle),
 	}
 
 	bridgeID := uuid.New()
 	var called atomic.Int32
-	m.pollers[bridgeID] = func() { called.Add(1) }
+	m.pollers[bridgeID] = &pollerHandle{cancel: func() { called.Add(1) }}
 
 	m.RemoveBridge(bridgeID)
 
@@ -35,7 +34,7 @@ func TestRemoveBridge_CancelsRegisteredPoller(t *testing.T) {
 
 func TestRemoveBridge_UnknownIDIsNoOp(t *testing.T) {
 	m := &BridgeManager{
-		pollers: make(map[uuid.UUID]context.CancelFunc),
+		pollers: make(map[uuid.UUID]*pollerHandle),
 	}
 
 	// Should not panic on an ID that was never registered.
@@ -44,7 +43,7 @@ func TestRemoveBridge_UnknownIDIsNoOp(t *testing.T) {
 
 func TestCancelPoller_ConcurrentSafe(t *testing.T) {
 	m := &BridgeManager{
-		pollers: make(map[uuid.UUID]context.CancelFunc),
+		pollers: make(map[uuid.UUID]*pollerHandle),
 	}
 
 	// Many concurrent AddBridge-style registrations and RemoveBridge calls
@@ -54,7 +53,7 @@ func TestCancelPoller_ConcurrentSafe(t *testing.T) {
 	go func() {
 		for i := 0; i < 100; i++ {
 			m.pollersMu.Lock()
-			m.pollers[bridgeID] = func() {}
+			m.pollers[bridgeID] = &pollerHandle{cancel: func() {}}
 			m.pollersMu.Unlock()
 		}
 		close(done)
