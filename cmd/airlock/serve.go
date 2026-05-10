@@ -437,7 +437,6 @@ func pruneMonorepo(repoPath string, validAgents map[string]string, logger *zap.L
 	}
 }
 
-// TODO(max): handle S3 failure properly: retry with backoff/reset timer.
 func cleanS3Objects(
 	ctx context.Context,
 	lgr *zap.Logger,
@@ -563,7 +562,7 @@ func cleanupAgentsObjects(
 }
 
 func collectObjectsToDelete(objects []storage.ObjectInfo, cutoff time.Time) []string {
-	result := make([]string, 0, min(len(objects), 100)) // TODO(max): do we need that prealloc?
+	result := make([]string, 0, min(len(objects), 100))
 
 	for _, object := range objects {
 		if object.LastModified.Before(cutoff) {
@@ -613,7 +612,9 @@ func compacter(
 			continue
 		}
 
-		lgr.Info("compacted old runs", zap.Int64("rows.count", n))
+		if n > 0 {
+			lgr.Info("compacted old runs", zap.Int64("rows.count", n))
+		}
 	}
 }
 
@@ -621,10 +622,6 @@ func compacter(
 // rows that have been quiet for 24h (so a subsequent first failure resets the
 // escalation tier to 0). Hourly is fine: the failures table is small and the
 // queries are pure DELETEs.
-//
-// TODO(max): What is auth_failures?
-// TODO(max): What is auth_lockouts?
-// TODO(max): cutoff resides inside queries? maybe factor out?
 func authPruner(
 	ctx context.Context,
 	lgr *zap.Logger,
@@ -650,14 +647,18 @@ func authPruner(
 		n, err := queries.PruneAuthFailures(ctx)
 		if err != nil {
 			lgr.Error("prune auth_failures failed", zap.Error(err))
-		} else {
+		}
+
+		if n > 0 {
 			lgr.Info("pruned auth_failures", zap.Int64("rows.count", n))
 		}
 
 		n, err = queries.PruneStaleAuthLockouts(ctx)
 		if err != nil {
 			lgr.Error("prune auth_lockouts failed", zap.Error(err))
-		} else {
+		}
+
+		if n > 0 {
 			lgr.Info("pruned auth_lockouts", zap.Int64("rows.count", n))
 		}
 	}
@@ -741,16 +742,19 @@ func sweeper(
 				continue
 			}
 
-			// TODO(max): what happens here? weeeird
 			api.SynthesizeOrphanToolResults(ctx, queries, runUUID, "timeout", lgr)
 
-			queries.UpdateRunComplete(ctx, dbq.UpdateRunCompleteParams{
+			err = queries.UpdateRunComplete(ctx, dbq.UpdateRunCompleteParams{
 				ID:           run.ID,
 				Status:       "error",
 				ErrorMessage: "agent disconnected",
 			})
+			if err != nil {
+				lgr.Error("failed to update run completed", zap.Error(err))
 
-			// TODO(max): again, what happens here? why it's called like this?
+				continue
+			}
+
 			api.PublishRunTerminal(ctx, pubsub, agentUUID, runUUID, "error", "agent disconnected")
 
 			lgr.Warn(
@@ -773,8 +777,6 @@ func cachePruner(
 	ticker := time.NewTicker(period)
 	defer ticker.Stop()
 
-	const stuckCutoff = trigger.PromptHTTPCeiling + 30*time.Second
-
 	if queries == nil {
 		return errors.New("expected *dbq.Queries but got nil")
 	}
@@ -795,6 +797,8 @@ func cachePruner(
 			continue
 		}
 
-		lgr.Info("pruned attachment_url_cache", zap.Int64("rows.count", n))
+		if n > 0 {
+			lgr.Info("pruned attachment_url_cache", zap.Int64("rows.count", n))
+		}
 	}
 }
