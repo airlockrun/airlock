@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -28,6 +29,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"
+	"golang.org/x/sync/errgroup"
 	"golang.org/x/term"
 )
 
@@ -209,23 +211,23 @@ func runServe(_ []string) {
 
 	// Build router
 	router := api.NewRouter(api.RouterConfig{
-		DB:             database,
-		JWTSecret:      cfg.JWTSecret,
-		PublicURL:      cfg.PublicURL,
-		OAuthClient:    oauthClient,
-		TelegramDriver: telegramDriver,
-		DiscordDriver:  discordDriver,
-		Secrets:        secretStore,
-		S3Client:       s3Client,
-		BuildService:   buildSvc,
-		Dispatcher:     dispatcher,
-		Scheduler:      scheduler,
-		BridgeManager:  bridgeMgr,
-		Containers:     containers,
-		PromptProxy:    prompter,
-		Hub:            hub,
-		PubSub:         pubsub,
-		Handler:        wsHandler,
+		DB:                     database,
+		JWTSecret:              cfg.JWTSecret,
+		PublicURL:              cfg.PublicURL,
+		OAuthClient:            oauthClient,
+		TelegramDriver:         telegramDriver,
+		DiscordDriver:          discordDriver,
+		Secrets:                secretStore,
+		S3Client:               s3Client,
+		BuildService:           buildSvc,
+		Dispatcher:             dispatcher,
+		Scheduler:              scheduler,
+		BridgeManager:          bridgeMgr,
+		Containers:             containers,
+		PromptProxy:            prompter,
+		Hub:                    hub,
+		PubSub:                 pubsub,
+		Handler:                wsHandler,
 		AgentDomain:            cfg.AgentDomain,
 		LLMProxyURL:            cfg.LLMProxyURL,
 		ForceInlineAttachments: cfg.ForceInlineAttachments,
@@ -239,273 +241,108 @@ func runServe(_ []string) {
 		Addr:    cfg.ServerAddr,
 		Handler: router,
 	}
+	defer srv.Close()
 
-	go func() {
+	group, gctx := errgroup.WithContext(ctx)
+
+	group.Go(func() error {
 		logger.Info("server listening", zap.String("addr", cfg.ServerAddr))
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			logger.Fatal("server error", zap.Error(err))
+		if err := srv.ListenAndServe(); err != nil {
+			if !errors.Is(err, context.Canceled) && !errors.Is(err, http.ErrServerClosed) {
+				return fmt.Errorf("could not run server: %w", err)
+			}
+
+			return nil
 		}
-	}()
+
+		return nil
+	})
 
 	// Start background trigger services
-	if err := scheduler.Start(ctx); err != nil {
+	if err := scheduler.Start(gctx); err != nil {
 		logger.Fatal("scheduler start failed", zap.Error(err))
 	}
 	defer scheduler.Stop()
 
-	if err := bridgeMgr.Start(ctx); err != nil {
+	if err := bridgeMgr.Start(gctx); err != nil {
 		logger.Fatal("bridge manager start failed", zap.Error(err))
 	}
 	defer bridgeMgr.Stop()
 
 	// Public-bridge session sweeper — finalize and delete public
 	// conversations idle past the per-bridge TTL.
-	trigger.StartPublicSweeper(ctx, database, bridgeMgr, 5*time.Minute, logger.Named("public-sweeper"))
+	trigger.StartPublicSweeper(gctx, database, bridgeMgr, 5*time.Minute, logger.Named("public-sweeper"))
 
 	// Token refresh job
 	refreshJob := oauth.NewRefreshJob(database, secretStore, oauthClient, logger.Named("oauth-refresh"))
-	go refreshJob.Run(ctx)
+	go refreshJob.Run(gctx)
 
-	// Event file cleanup — delete events/ prefix files older than 24h.
-	go func() {
-		cleanupLogger := logger.Named("event-cleanup")
-		ticker := time.NewTicker(6 * time.Hour)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ticker.C:
-				objects, err := s3Client.ListObjects(ctx, "events/")
-				if err != nil {
-					cleanupLogger.Error("list events failed", zap.Error(err))
-					continue
-				}
-				cutoff := time.Now().Add(-24 * time.Hour)
-				deleted := 0
-				for _, obj := range objects {
-					if obj.LastModified.Before(cutoff) {
-						if err := s3Client.DeleteObject(ctx, obj.Key); err != nil {
-							cleanupLogger.Error("delete event file failed", zap.String("key", obj.Key), zap.Error(err))
-						} else {
-							deleted++
-						}
-					}
-				}
-				if deleted > 0 {
-					cleanupLogger.Info("cleaned up event files", zap.Int("deleted", deleted))
-				}
-			case <-ctx.Done():
-				return
-			}
+	queries := dbq.New(database.Pool())
+
+	group.Go(func() error {
+		const period = time.Hour * 6
+
+		return cleanS3Objects(gctx, logger, s3Client, period)
+	})
+
+	group.Go(func() error {
+		const period = time.Hour * 6
+
+		return cleanupAgentsObjects(gctx, logger, s3Client, queries, period)
+	})
+
+	group.Go(func() error {
+		const period = time.Hour * 24
+
+		return compacter(gctx, logger, queries, period)
+	})
+
+	group.Go(func() error {
+		const period = time.Hour
+
+		return authPruner(gctx, logger, queries, period)
+	})
+
+	group.Go(func() error {
+		const period = time.Minute
+
+		return sweeper(
+			gctx,
+			logger,
+			queries,
+			dispatcher,
+			pubsub,
+			period,
+		)
+	})
+
+	group.Go(func() error {
+		const period = time.Hour * 24
+
+		return cachePruner(gctx, logger, queries, period)
+	})
+
+	group.Go(func() error {
+		select {
+		case <-ctx.Done():
+		case <-gctx.Done():
 		}
-	}()
 
-	// Storage retention sweeper — delete objects under any directory the
-	// agent registered with retention_hours > 0, once they're older than
-	// the configured TTL. The framework auto-registers "tmp" at 72h
-	// (DirectoryOpts.RetentionHours), so the prior hardcoded "tmp/" sweep
-	// falls out naturally as a special case of this loop. Builders can
-	// opt arbitrary directories into the sweep by passing
-	// RetentionHours when calling RegisterDirectory.
-	//
-	// We list each opted-in S3 prefix per directory rather than scanning
-	// "agents/" once because per-directory TTLs vary and a single TTL on
-	// the union would either over- or under-keep depending on the
-	// shortest/longest opt-in. Cheap: the prefix lists are bounded by
-	// what the agent actually wrote.
-	go func() {
-		cleanupLogger := logger.Named("storage-retention-sweeper")
-		ticker := time.NewTicker(6 * time.Hour)
-		defer ticker.Stop()
-		q := dbq.New(database.Pool())
-		for {
-			select {
-			case <-ticker.C:
-				dirs, err := q.ListDirectoriesWithRetention(ctx)
-				if err != nil {
-					cleanupLogger.Error("list directories with retention", zap.Error(err))
-					continue
-				}
-				for _, d := range dirs {
-					agentUUID, err := uuid.FromBytes(d.AgentID.Bytes[:])
-					if err != nil {
-						continue
-					}
-					prefix := "agents/" + agentUUID.String() + "/" + d.Path + "/"
-					objects, err := s3Client.ListObjects(ctx, prefix)
-					if err != nil {
-						cleanupLogger.Error("list prefix failed",
-							zap.String("prefix", prefix), zap.Error(err))
-						continue
-					}
-					cutoff := time.Now().Add(-time.Duration(d.RetentionHours) * time.Hour)
-					deleted := 0
-					for _, obj := range objects {
-						if obj.LastModified.Before(cutoff) {
-							if err := s3Client.DeleteObject(ctx, obj.Key); err != nil {
-								cleanupLogger.Error("delete failed",
-									zap.String("key", obj.Key), zap.Error(err))
-							} else {
-								deleted++
-							}
-						}
-					}
-					if deleted > 0 {
-						cleanupLogger.Info("swept directory",
-							zap.String("agent_id", agentUUID.String()),
-							zap.String("path", d.Path),
-							zap.Int32("retention_hours", d.RetentionHours),
-							zap.Int("deleted", deleted))
-					}
-				}
-			case <-ctx.Done():
-				return
-			}
+		sctx, scancel := context.WithTimeout(context.Background(), time.Second*10)
+		defer scancel()
+
+		if err := srv.Shutdown(sctx); err != nil {
+			logger.Warn("server graceful shutdown failed", zap.Error(err))
 		}
-	}()
 
-	// Runs compaction — nullify verbose JSONB/text on runs older than 30 days.
-	// Aggregates (token counts, cost, duration, timestamps, status, error)
-	// stay intact; verbose payload/actions/checkpoint/logs are dropped.
-	go func() {
-		cleanupLogger := logger.Named("runs-compact")
-		ticker := time.NewTicker(24 * time.Hour)
-		defer ticker.Stop()
-		q := dbq.New(database.Pool())
-		for {
-			select {
-			case <-ticker.C:
-				cutoff := pgtype.Timestamptz{Time: time.Now().Add(-30 * 24 * time.Hour), Valid: true}
-				n, err := q.CompactOldRuns(ctx, cutoff)
-				if err != nil {
-					cleanupLogger.Error("compact old runs failed", zap.Error(err))
-					continue
-				}
-				if n > 0 {
-					cleanupLogger.Info("compacted old runs", zap.Int64("rows", n))
-				}
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
+		return nil
+	})
 
-	// Auth-lockout prune — drop failure rows older than 24h plus expired
-	// lockout rows that have been quiet for 24h (so a subsequent first
-	// failure resets the escalation tier to 0). Hourly is fine: the
-	// failures table is small and the queries are pure DELETEs.
-	go func() {
-		cleanupLogger := logger.Named("auth-lockout-prune")
-		ticker := time.NewTicker(1 * time.Hour)
-		defer ticker.Stop()
-		q := dbq.New(database.Pool())
-		for {
-			select {
-			case <-ticker.C:
-				if n, err := q.PruneAuthFailures(ctx); err != nil {
-					cleanupLogger.Error("prune auth_failures failed", zap.Error(err))
-				} else if n > 0 {
-					cleanupLogger.Info("pruned auth failures", zap.Int64("rows", n))
-				}
-				if n, err := q.PruneStaleAuthLockouts(ctx); err != nil {
-					cleanupLogger.Error("prune auth_lockouts failed", zap.Error(err))
-				} else if n > 0 {
-					cleanupLogger.Info("pruned stale auth lockouts", zap.Int64("rows", n))
-				}
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
-
-	// Stuck-run sweeper — runs in 'running' status older than the absolute
-	// HTTP ceiling are presumed orphaned (airlock restart, agent crash mid-
-	// stream, network partition). Skip runs the dispatcher still tracks in
-	// memory: those will tear down naturally when the cancel context fires
-	// or the user clicks Cancel. Synthesize orphan tool_results so the next
-	// LLM turn doesn't 400 on unpaired tool_use, and publish a synthetic
-	// run.complete WS event so any live UI that was watching unblocks. If
-	// the agent's r.Complete eventually arrives, UpsertRunComplete is
-	// idempotent and the late truth overwrites — frontend re-paints.
-	go func() {
-		sweepLogger := logger.Named("stuck-run-sweeper")
-		ticker := time.NewTicker(time.Minute)
-		defer ticker.Stop()
-		q := dbq.New(database.Pool())
-		stuckCutoff := trigger.PromptHTTPCeiling + 30*time.Second
-		for {
-			select {
-			case <-ticker.C:
-				cutoff := pgtype.Timestamptz{Time: time.Now().Add(-stuckCutoff), Valid: true}
-				stuck, err := q.ListStuckRuns(ctx, cutoff)
-				if err != nil {
-					sweepLogger.Error("list stuck runs", zap.Error(err))
-					continue
-				}
-				inFlight := make(map[uuid.UUID]struct{})
-				for _, id := range dispatcher.InFlightIDs() {
-					inFlight[id] = struct{}{}
-				}
-				for _, r := range stuck {
-					runUUID, err := uuid.FromBytes(r.ID.Bytes[:])
-					if err != nil {
-						continue
-					}
-					if _, live := inFlight[runUUID]; live {
-						continue
-					}
-					agentUUID, err := uuid.FromBytes(r.AgentID.Bytes[:])
-					if err != nil {
-						continue
-					}
-					api.SynthesizeOrphanToolResults(ctx, q, runUUID, "timeout", sweepLogger)
-					_ = q.UpdateRunComplete(ctx, dbq.UpdateRunCompleteParams{
-						ID:           r.ID,
-						Status:       "error",
-						ErrorMessage: "agent disconnected",
-					})
-					api.PublishRunTerminal(ctx, pubsub, agentUUID, runUUID, "error", "agent disconnected")
-					sweepLogger.Warn("stuck run reaped",
-						zap.String("run_id", runUUID.String()),
-						zap.String("agent_id", agentUUID.String()))
-				}
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
-
-	// Attachment URL cache prune — drop rows that expired more than 24h ago.
-	// Stale rows aren't harmful (just unused), so a slow daily sweep is enough.
-	go func() {
-		cleanupLogger := logger.Named("attachment-url-cache-prune")
-		ticker := time.NewTicker(24 * time.Hour)
-		defer ticker.Stop()
-		q := dbq.New(database.Pool())
-		for {
-			select {
-			case <-ticker.C:
-				if n, err := q.PruneExpiredAttachmentURLs(ctx); err != nil {
-					cleanupLogger.Error("prune attachment_url_cache failed", zap.Error(err))
-				} else if n > 0 {
-					cleanupLogger.Info("pruned expired attachment URLs", zap.Int64("rows", n))
-				}
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
-
-	// Wait for shutdown signal
-	<-ctx.Done()
-	logger.Info("shutting down")
-
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	if err := srv.Shutdown(shutdownCtx); err != nil {
-		logger.Fatal("server shutdown failed", zap.Error(err))
+	if err := group.Wait(); err != nil {
+		logger.Fatal("failed to run service", zap.Error(err))
 	}
-	logger.Info("server stopped")
+
+	logger.Info("stopping server")
 }
 
 // ensureActivationCode runs on startup. If the system isn't activated yet,
@@ -600,3 +437,368 @@ func pruneMonorepo(repoPath string, validAgents map[string]string, logger *zap.L
 	}
 }
 
+func cleanS3Objects(
+	ctx context.Context,
+	lgr *zap.Logger,
+	s3client *storage.S3Client,
+	period time.Duration,
+) error {
+	if s3client == nil {
+		return errors.New("expected *S3Client but got nil")
+	}
+
+	lgr = lgr.Named("event-cleanup")
+
+	ticker := time.NewTicker(period)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+		}
+
+		objects, err := s3client.ListObjects(ctx, "events/")
+		if err != nil {
+			lgr.Error("list events failed", zap.Error(err))
+			continue
+		}
+
+		cutoff := time.Now().Add(-24 * time.Hour)
+		todelete := collectObjectsToDelete(objects, cutoff)
+
+		deleted, err := s3client.DeleteObjects(ctx, todelete...)
+		if err != nil {
+			lgr.Error("deletion failed", zap.Int("deleted.count", deleted), zap.Error(err))
+			continue
+		}
+
+		lgr.Info("deleted events", zap.Int("deleted.count", deleted))
+	}
+}
+
+// Storage retention sweeper — delete objects under any directory the
+// agent registered with retention_hours > 0, once they're older than
+// the configured TTL. The framework auto-registers "tmp" at 72h
+// (DirectoryOpts.RetentionHours), so the prior hardcoded "tmp/" sweep
+// falls out naturally as a special case of this loop. Builders can
+// opt arbitrary directories into the sweep by passing
+// RetentionHours when calling RegisterDirectory.
+//
+// We list each opted-in S3 prefix per directory rather than scanning
+// "agents/" once because per-directory TTLs vary and a single TTL on
+// the union would either over- or under-keep depending on the
+// shortest/longest opt-in. Cheap: the prefix lists are bounded by
+// what the agent actually wrote.
+func cleanupAgentsObjects(
+	ctx context.Context,
+	lgr *zap.Logger,
+	s3client *storage.S3Client,
+	queries *dbq.Queries,
+	period time.Duration,
+) error {
+	if s3client == nil {
+		return errors.New("expected *S3Client but got nil")
+	}
+
+	if queries == nil {
+		return errors.New("expected *dbq.Queries but got nil")
+	}
+
+	lgr = lgr.Named("storage-retention-sweeper")
+
+	ticker := time.NewTicker(period)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+		}
+
+		dirs, err := queries.ListDirectoriesWithRetention(ctx)
+		if err != nil {
+			lgr.Error("list directories with retention", zap.Error(err))
+
+			continue
+		}
+
+		for _, dir := range dirs {
+			agentUUID, err := uuid.FromBytes(dir.AgentID.Bytes[:])
+			if err != nil {
+				continue
+			}
+
+			prefix := "agents/" + agentUUID.String() + "/" + dir.Path + "/"
+
+			objects, err := s3client.ListObjects(ctx, prefix)
+			if err != nil {
+				lgr.Error("list prefix failed", zap.String("prefix", prefix), zap.Error(err))
+
+				continue
+			}
+
+			retention := time.Duration(dir.RetentionHours) * time.Hour
+			cutoff := time.Now().Add(-retention)
+			todelete := collectObjectsToDelete(objects, cutoff)
+
+			deleted, err := s3client.DeleteObjects(ctx, todelete...)
+			if err != nil {
+				lgr.Error("deletion failed", zap.Int("deleted.count", deleted), zap.Error(err))
+				continue
+			}
+
+			lgr.Info(
+				"deleted events",
+				zap.Int("deleted.count", deleted),
+				zap.String("agent_id", dir.AgentID.String()),
+				zap.String("path", dir.Path),
+				zap.Duration("retention", retention),
+			)
+		}
+	}
+}
+
+func collectObjectsToDelete(objects []storage.ObjectInfo, cutoff time.Time) []string {
+	result := make([]string, 0, min(len(objects), 100))
+
+	for _, object := range objects {
+		if object.LastModified.Before(cutoff) {
+			result = append(result, object.Key)
+		}
+	}
+
+	return result
+}
+
+// Runs compaction — nullify verbose JSONB/text on runs older than 30 days.
+// Aggregates (token counts, cost, duration, timestamps, status, error)
+// stay intact; verbose payload/actions/checkpoint/logs are dropped.
+func compacter(
+	ctx context.Context,
+	lgr *zap.Logger,
+	queries *dbq.Queries,
+	period time.Duration,
+) error {
+	const days30 = 30 * 24 * time.Hour
+
+	ticker := time.NewTicker(period)
+	defer ticker.Stop()
+
+	if queries == nil {
+		return errors.New("expected *dbq.Queries but got nil")
+	}
+
+	lgr = lgr.Named("runs-compact")
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+		}
+
+		cutoff := pgtype.Timestamptz{
+			Time:  time.Now().Add(-days30),
+			Valid: true,
+		}
+
+		n, err := queries.CompactOldRuns(ctx, cutoff)
+		if err != nil {
+			lgr.Error("compact old runs failed", zap.Error(err))
+
+			continue
+		}
+
+		if n > 0 {
+			lgr.Info("compacted old runs", zap.Int64("rows.count", n))
+		}
+	}
+}
+
+// Auth-lockout prune — drop failure rows older than 24h plus expired lockout
+// rows that have been quiet for 24h (so a subsequent first failure resets the
+// escalation tier to 0). Hourly is fine: the failures table is small and the
+// queries are pure DELETEs.
+func authPruner(
+	ctx context.Context,
+	lgr *zap.Logger,
+	queries *dbq.Queries,
+	period time.Duration,
+) error {
+	ticker := time.NewTicker(period)
+	defer ticker.Stop()
+
+	if queries == nil {
+		return errors.New("expected *dbq.Queries but got nil")
+	}
+
+	lgr = lgr.Named("auth-lockout-prune")
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+		}
+
+		n, err := queries.PruneAuthFailures(ctx)
+		if err != nil {
+			lgr.Error("prune auth_failures failed", zap.Error(err))
+		}
+
+		if n > 0 {
+			lgr.Info("pruned auth_failures", zap.Int64("rows.count", n))
+		}
+
+		n, err = queries.PruneStaleAuthLockouts(ctx)
+		if err != nil {
+			lgr.Error("prune auth_lockouts failed", zap.Error(err))
+		}
+
+		if n > 0 {
+			lgr.Info("pruned auth_lockouts", zap.Int64("rows.count", n))
+		}
+	}
+}
+
+// Stuck-run sweeper — runs in 'running' status older than the absolute HTTP
+// ceiling are presumed orphaned (airlock restart, agent crash mid- stream,
+// network partition). Skip runs the dispatcher still tracks in memory: those
+// will tear down naturally when the cancel context fires or the user clicks
+// Cancel. Synthesize orphan tool_results so the next LLM turn doesn't 400 on
+// unpaired tool_use, and publish a synthetic run.complete WS event so any live
+// UI that was watching unblocks. If the agent's r.Complete eventually arrives,
+// UpsertRunComplete is idempotent and the late truth overwrites — frontend
+// re-paints.
+func sweeper(
+	ctx context.Context,
+	lgr *zap.Logger,
+	queries *dbq.Queries,
+	dispatcher *trigger.Dispatcher,
+	pubsub *realtime.PubSub,
+	period time.Duration,
+) error {
+	ticker := time.NewTicker(period)
+	defer ticker.Stop()
+
+	const stuckCutoff = trigger.PromptHTTPCeiling + 30*time.Second
+
+	if queries == nil {
+		return errors.New("expected *dbq.Queries but got nil")
+	}
+
+	if dispatcher == nil {
+		return errors.New("expected *trigger.Dispatcher but got nil")
+	}
+
+	if pubsub == nil {
+		return errors.New("expected *realtime.PubSub but got nil")
+	}
+
+	lgr = lgr.Named("stuck-run-sweeper")
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+		}
+
+		cutoff := pgtype.Timestamptz{
+			Time:  time.Now().Add(-stuckCutoff),
+			Valid: true,
+		}
+
+		stuck, err := queries.ListStuckRuns(ctx, cutoff)
+		if err != nil {
+			lgr.Error("list stuck runs", zap.Error(err))
+			continue
+		}
+
+		if len(stuck) == 0 {
+			continue
+		}
+
+		inFlight := make(map[uuid.UUID]struct{})
+		for _, id := range dispatcher.InFlightIDs() {
+			inFlight[id] = struct{}{}
+		}
+
+		for _, run := range stuck {
+			runUUID, err := uuid.FromBytes(run.ID.Bytes[:])
+			if err != nil {
+				continue
+			}
+
+			if _, live := inFlight[runUUID]; live {
+				continue
+			}
+
+			agentUUID, err := uuid.FromBytes(run.AgentID.Bytes[:])
+			if err != nil {
+				continue
+			}
+
+			api.SynthesizeOrphanToolResults(ctx, queries, runUUID, "timeout", lgr)
+
+			err = queries.UpdateRunComplete(ctx, dbq.UpdateRunCompleteParams{
+				ID:           run.ID,
+				Status:       "error",
+				ErrorMessage: "agent disconnected",
+			})
+			if err != nil {
+				lgr.Error("failed to update run completed", zap.Error(err))
+
+				continue
+			}
+
+			api.PublishRunTerminal(ctx, pubsub, agentUUID, runUUID, "error", "agent disconnected")
+
+			lgr.Warn(
+				"stuck run reaped",
+				zap.String("run_id", runUUID.String()),
+				zap.String("agent_id", agentUUID.String()),
+			)
+		}
+	}
+}
+
+// Attachment URL cache prune — drop rows that expired more than 24h ago.
+// Stale rows aren't harmful (just unused), so a slow daily sweep is enough.
+func cachePruner(
+	ctx context.Context,
+	lgr *zap.Logger,
+	queries *dbq.Queries,
+	period time.Duration,
+) error {
+	ticker := time.NewTicker(period)
+	defer ticker.Stop()
+
+	if queries == nil {
+		return errors.New("expected *dbq.Queries but got nil")
+	}
+
+	lgr = lgr.Named("attachment-url-cache-prune")
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+		}
+
+		n, err := queries.PruneExpiredAttachmentURLs(ctx)
+		if err != nil {
+			lgr.Error("prune attachment_url_cache failed", zap.Error(err))
+
+			continue
+		}
+
+		if n > 0 {
+			lgr.Info("pruned attachment_url_cache", zap.Int64("rows.count", n))
+		}
+	}
+}
