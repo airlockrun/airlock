@@ -38,6 +38,11 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      # The scaffold integration test shells out to `templ generate` on
+       # the materialized template, so the templ CLI must be on PATH at
+       # the same version the test's synthesized go.mod pins.
+      - name: install templ
+        run: go install github.com/a-h/templ/cmd/templ@v0.3.865
       - name: go vet
         run: go vet ./...
       - name: go test
