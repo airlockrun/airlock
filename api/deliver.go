@@ -128,7 +128,12 @@ func postToConversation(ctx context.Context, deps postDeps, opts postOpts) error
 			CallerAccess:   access,
 		}
 
-		rc, runID, err := deps.Dispatcher.ForwardPrompt(ctx, opts.AgentID, input, nil)
+		var userIDPtr *uuid.UUID
+		if conv.UserID.Valid {
+			u := pgUUID(conv.UserID)
+			userIDPtr = &u
+		}
+		rc, runID, err := deps.Dispatcher.ForwardPrompt(ctx, opts.AgentID, input, nil, userIDPtr)
 		if err != nil {
 			return err
 		}
@@ -146,7 +151,11 @@ func postToConversation(ctx context.Context, deps postDeps, opts postOpts) error
 				_ = deps.BridgeMgr.SendParts(ctx, pgUUID(conv.BridgeID), conv.ExternalID.String, parts)
 			}
 		} else {
-			publishRunEvents(ctx, rc, deps.PubSub, opts.AgentID, runID, opts.ConversationID.String(), deps.Logger)
+			var convUserID string
+			if conv.UserID.Valid {
+				convUserID = pgUUID(conv.UserID).String()
+			}
+			publishRunEvents(ctx, rc, deps.PubSub, opts.AgentID, runID, opts.ConversationID.String(), convUserID, nil, deps.Logger)
 		}
 
 		// Fallback status — same rationale as the web prompt path: the

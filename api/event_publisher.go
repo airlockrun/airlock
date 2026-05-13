@@ -12,29 +12,74 @@ import (
 	"github.com/airlockrun/goai/message"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
+	"google.golang.org/protobuf/proto"
 )
+
+// ParentRunInfo carries the parent run's coordinates when an A2A
+// child run's events should mirror onto the parent's WS topic with
+// a SubagentInfo tag, so the parent's chat UI can render sub-run
+// progress under its active tool-call card. nil for top-level runs.
+type ParentRunInfo struct {
+	AgentID        uuid.UUID
+	ConvID         string
+	UserID         string
+	ChildAgentID   uuid.UUID
+	ChildRunID     uuid.UUID
+	ChildAgentSlug string
+}
 
 // publishRunEvents reads NDJSON from body, publishes typed proto events to WS,
 // accumulates the assistant response text, and returns it along with token usage.
 // This runs in a goroutine after the HTTP response has been sent.
+//
+// userID is the conversation owner — applied to every emitted envelope
+// for user-id-based delivery gating. Pass empty for system-level
+// (no-conversation) runs; an empty UserID delivers to every subscriber
+// on the topic (legacy behaviour).
+//
+// parentInfo, when non-nil, causes every typed event to be mirrored
+// onto the parent agent's topic with a Subagent tag — the chat UI
+// uses this to attach live sub-run progress to the parent's
+// tool-call card.
 func publishRunEvents(
 	ctx context.Context,
 	body io.ReadCloser,
 	pubsub *realtime.PubSub,
 	agentID, runID uuid.UUID,
 	conversationID string,
+	userID string,
+	parentInfo *ParentRunInfo,
 	logger *zap.Logger,
 ) (responseText string, newMessages []message.Message, tokensIn, tokensOut int32) {
 	defer body.Close()
 
 	topicID := agentID.String()
 
+	// mirror publishes a run event to (a) this run's agent topic with
+	// the original user as the gate principal, and (b) if parentInfo
+	// is set, the parent agent's topic tagged as a sub-run event so
+	// the parent's chat UI can render it under the active tool-call
+	// card.
+	mirror := func(eventType string, payload proto.Message) {
+		env := realtime.NewEnvelopeForUser(eventType, topicID, userID, conversationID, payload)
+		_ = pubsub.Publish(ctx, agentID, env)
+		if parentInfo != nil {
+			parentEnv := realtime.NewEnvelopeForUser(eventType, parentInfo.AgentID.String(), parentInfo.UserID, parentInfo.ConvID, payload).
+				WithSubagent(realtime.SubagentInfo{
+					AgentID: parentInfo.ChildAgentID.String(),
+					RunID:   parentInfo.ChildRunID.String(),
+					Slug:    parentInfo.ChildAgentSlug,
+				})
+			_ = pubsub.Publish(ctx, parentInfo.AgentID, parentEnv)
+		}
+	}
+
 	// Emit run started.
-	_ = pubsub.Publish(ctx, agentID, realtime.NewEnvelope("run.started", topicID, &airlockv1.RunStartedEvent{
+	mirror("run.started", &airlockv1.RunStartedEvent{
 		RunId:          runID.String(),
 		AgentId:        agentID.String(),
 		ConversationId: conversationID,
-	}))
+	})
 
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024) // 10MB max line for base64 file content
@@ -62,10 +107,10 @@ func publishRunEvents(
 			}
 			json.Unmarshal(event.Data, &delta)
 			sb.WriteString(delta.Text)
-			_ = pubsub.Publish(ctx, agentID, realtime.NewEnvelope("run.text_delta", topicID, &airlockv1.TextDeltaEvent{
+			mirror("run.text_delta", &airlockv1.TextDeltaEvent{
 				RunId: runID.String(),
 				Text:  delta.Text,
-			}))
+			})
 
 		case "tool-call":
 			var tc struct {
@@ -74,12 +119,12 @@ func publishRunEvents(
 				Input      json.RawMessage `json:"input"`
 			}
 			json.Unmarshal(event.Data, &tc)
-			_ = pubsub.Publish(ctx, agentID, realtime.NewEnvelope("run.tool_call", topicID, &airlockv1.ToolCallEvent{
+			mirror("run.tool_call", &airlockv1.ToolCallEvent{
 				RunId:      runID.String(),
 				ToolCallId: tc.ToolCallID,
 				ToolName:   tc.ToolName,
 				Input:      string(tc.Input),
-			}))
+			})
 
 		case "tool-result":
 			var tr struct {
@@ -100,12 +145,12 @@ func publishRunEvents(
 					output = string(tr.Output)
 				}
 			}
-			_ = pubsub.Publish(ctx, agentID, realtime.NewEnvelope("run.tool_result", topicID, &airlockv1.ToolResultEvent{
+			mirror("run.tool_result", &airlockv1.ToolResultEvent{
 				RunId:      runID.String(),
 				ToolCallId: tr.ToolCallID,
 				ToolName:   tr.ToolName,
 				Output:     output,
-			}))
+			})
 
 		case "tool-error":
 			var te struct {
@@ -114,12 +159,12 @@ func publishRunEvents(
 				Error      string `json:"error"`
 			}
 			json.Unmarshal(event.Data, &te)
-			_ = pubsub.Publish(ctx, agentID, realtime.NewEnvelope("run.tool_result", topicID, &airlockv1.ToolResultEvent{
+			mirror("run.tool_result", &airlockv1.ToolResultEvent{
 				RunId:      runID.String(),
 				ToolCallId: te.ToolCallID,
 				ToolName:   te.ToolName,
 				Error:      te.Error,
-			}))
+			})
 
 		case "confirmation_required":
 			var cr struct {
@@ -129,13 +174,13 @@ func publishRunEvents(
 				ToolCallID string   `json:"toolCallId"`
 			}
 			json.Unmarshal(event.Data, &cr)
-			_ = pubsub.Publish(ctx, agentID, realtime.NewEnvelope("run.confirmation_required", topicID, &airlockv1.ConfirmationRequiredEvent{
+			mirror("run.confirmation_required", &airlockv1.ConfirmationRequiredEvent{
 				RunId:      runID.String(),
 				Permission: cr.Permission,
 				Patterns:   cr.Patterns,
 				Code:       cr.Code,
 				ToolCallId: cr.ToolCallID,
-			}))
+			})
 
 		case "suspended":
 			sawSuspended = true
@@ -143,10 +188,10 @@ func publishRunEvents(
 				Reason string `json:"reason"`
 			}
 			json.Unmarshal(event.Data, &s)
-			_ = pubsub.Publish(ctx, agentID, realtime.NewEnvelope("run.suspended", topicID, &airlockv1.RunSuspendedEvent{
+			mirror("run.suspended", &airlockv1.RunSuspendedEvent{
 				RunId:  runID.String(),
 				Reason: s.Reason,
-			}))
+			})
 
 		case "finish":
 			sawFinish = true
@@ -171,12 +216,12 @@ func publishRunEvents(
 			if t := finish.Usage.OutputTokens.Total; t != nil {
 				tokensOut = int32(*t)
 			}
-			_ = pubsub.Publish(ctx, agentID, realtime.NewEnvelope("run.complete", topicID, &airlockv1.RunCompleteEvent{
+			mirror("run.complete", &airlockv1.RunCompleteEvent{
 				RunId:        runID.String(),
 				FinishReason: finish.FinishReason,
 				TokensIn:     tokensIn,
 				TokensOut:    tokensOut,
-			}))
+			})
 
 		case "messages":
 			var msgs []message.Message
@@ -200,10 +245,10 @@ func publishRunEvents(
 			if errMsg == "" {
 				errMsg = errEvent.Message
 			}
-			_ = pubsub.Publish(ctx, agentID, realtime.NewEnvelope("run.error", topicID, &airlockv1.RunErrorEvent{
+			mirror("run.error", &airlockv1.RunErrorEvent{
 				RunId: runID.String(),
 				Error: errMsg,
-			}))
+			})
 		}
 	}
 
@@ -219,10 +264,10 @@ func publishRunEvents(
 	if !sawFinish && !sawSuspended && !sawError {
 		logger.Warn("agent stream ended without terminal event — emitting run.complete fallback",
 			zap.String("runId", runID.String()), zap.String("agentId", agentID.String()))
-		_ = pubsub.Publish(ctx, agentID, realtime.NewEnvelope("run.complete", topicID, &airlockv1.RunCompleteEvent{
+		mirror("run.complete", &airlockv1.RunCompleteEvent{
 			RunId:        runID.String(),
 			FinishReason: "stop",
-		}))
+		})
 	}
 
 	// Clear the replay buffer after terminal events so reconnecting clients

@@ -76,6 +76,13 @@ func NewDispatcher(cfg *config.Config, db *db.DB, containers container.Container
 // CancelRun aborts the in-flight outbound request for the given run, if any.
 // Returns true if a cancel was fired. Idempotent — repeat calls and calls
 // for runs that already finished are no-ops.
+//
+// A2A cascade: the cancel also walks runs.parent_run_id downward and
+// fires the cancel hook on every still-in-flight descendant. The HTTP
+// disconnect chain already cascades cancels (parent's outbound HTTP
+// closing → child's ctx.Done() → child's CancelRun), but this gives an
+// explicit best-effort kick for runs on the same replica when the user
+// cancels mid-chain.
 func (d *Dispatcher) CancelRun(runID uuid.UUID) bool {
 	d.mu.Lock()
 	state, ok := d.inFlight[runID]
@@ -84,7 +91,40 @@ func (d *Dispatcher) CancelRun(runID uuid.UUID) bool {
 	if ok {
 		state.cancel()
 	}
+	d.cancelDescendants(context.Background(), runID)
 	return ok
+}
+
+// cancelDescendants fires cancel on every descendant run reachable from
+// rootRunID via parent_run_id. Best-effort: descendants on a different
+// replica won't have an in-flight entry here and will only cancel when
+// their parent's HTTP request closes from above. Cross-replica
+// propagation is the same pre-existing gap CancelRun already has.
+//
+// Safe to call when the dispatcher has no DB (some unit tests construct
+// a bare Dispatcher with only the inFlight registry); skip the
+// descendant walk in that case.
+func (d *Dispatcher) cancelDescendants(ctx context.Context, rootRunID uuid.UUID) {
+	if d.db == nil {
+		return
+	}
+	q := dbq.New(d.db.Pool())
+	rows, err := q.GetDescendantRuns(ctx, toPgUUID(rootRunID))
+	if err != nil {
+		d.logger.Warn("cancelDescendants: lookup failed",
+			zap.String("root_run_id", rootRunID.String()), zap.Error(err))
+		return
+	}
+	for _, r := range rows {
+		childID := pgUUID(r.ID)
+		d.mu.Lock()
+		state, ok := d.inFlight[childID]
+		delete(d.inFlight, childID)
+		d.mu.Unlock()
+		if ok {
+			state.cancel()
+		}
+	}
 }
 
 // InFlightIDs returns a snapshot of currently-tracked run IDs. Used by the
@@ -181,7 +221,7 @@ func (d *Dispatcher) ForwardWebhook(ctx context.Context, agentID uuid.UUID, path
 		return nil, uuid.Nil, err
 	}
 
-	runID, err := d.createRun(ctx, agentID, bridgeID, body, "webhook", path)
+	runID, err := d.createRun(ctx, agentID, bridgeID, nil, body, "webhook", path)
 	if err != nil {
 		return nil, uuid.Nil, err
 	}
@@ -202,7 +242,7 @@ func (d *Dispatcher) ForwardCron(ctx context.Context, agentID uuid.UUID, cronNam
 		return nil, uuid.Nil, err
 	}
 
-	runID, err := d.createRun(ctx, agentID, nil, nil, "cron", cronName)
+	runID, err := d.createRun(ctx, agentID, nil, nil, nil, "cron", cronName)
 	if err != nil {
 		return nil, uuid.Nil, err
 	}
@@ -221,19 +261,29 @@ func (d *Dispatcher) ForwardCron(ctx context.Context, agentID uuid.UUID, cronNam
 
 // ForwardPrompt ensures the agent is running, creates a run record, and POSTs
 // the prompt input to the agent container. Returns the response body stream
-// (NDJSON) and the run ID.
-func (d *Dispatcher) ForwardPrompt(ctx context.Context, agentID uuid.UUID, input agentsdk.PromptInput, bridgeID *uuid.UUID) (io.ReadCloser, uuid.UUID, error) {
+// (NDJSON) and the run ID. userID is the prompting user (anchor for A2A
+// VisibleSiblings); pass nil for anonymous/system runs.
+func (d *Dispatcher) ForwardPrompt(ctx context.Context, agentID uuid.UUID, input agentsdk.PromptInput, bridgeID *uuid.UUID, userID *uuid.UUID) (io.ReadCloser, uuid.UUID, error) {
 	c, err := d.EnsureRunning(ctx, agentID)
 	if err != nil {
 		return nil, uuid.Nil, err
 	}
+
+	// Populate VisibleSiblings: every sibling the user could call directly
+	// via MCP. The LLM's prompt and the VM bindings render against the
+	// same set so the model never sees a binding it can't actually invoke.
+	visible, err := d.computeVisibleSiblings(ctx, agentID, userID)
+	if err != nil {
+		return nil, uuid.Nil, fmt.Errorf("compute visible siblings: %w", err)
+	}
+	input.VisibleSiblings = visible
 
 	payload, err := json.Marshal(input)
 	if err != nil {
 		return nil, uuid.Nil, fmt.Errorf("marshal prompt input: %w", err)
 	}
 
-	runID, err := d.createRun(ctx, agentID, bridgeID, payload, "prompt", input.ConversationID)
+	runID, err := d.createRun(ctx, agentID, bridgeID, nil, payload, "prompt", input.ConversationID)
 	if err != nil {
 		return nil, uuid.Nil, err
 	}
@@ -254,13 +304,87 @@ func (d *Dispatcher) ForwardPrompt(ctx context.Context, agentID uuid.UUID, input
 	return &runBodyCloser{ReadCloser: rc, dispatcher: d, runID: runID}, runID, nil
 }
 
+// ForwardA2APrompt is ForwardPrompt for the sibling-agent code path:
+// the caller is another agent's run, parentRunID is its run.id, and the
+// new run's parent_run_id and trigger_type/_ref are wired accordingly.
+// callerAccess is the access level Airlock pre-resolved against the
+// target agent (see api/access.computeA2ACallerAccess). userID is the
+// original user (the human at the top of the chain — propagated through
+// every A2A hop via the conversation's user_id), used for both the new
+// run's VisibleSiblings computation and audit.
+func (d *Dispatcher) ForwardA2APrompt(ctx context.Context, agentID uuid.UUID, parentRunID uuid.UUID, callerAccess agentsdk.Access, userID *uuid.UUID, input agentsdk.PromptInput) (io.ReadCloser, uuid.UUID, error) {
+	c, err := d.EnsureRunning(ctx, agentID)
+	if err != nil {
+		return nil, uuid.Nil, err
+	}
+
+	visible, err := d.computeVisibleSiblings(ctx, agentID, userID)
+	if err != nil {
+		return nil, uuid.Nil, fmt.Errorf("compute visible siblings: %w", err)
+	}
+	input.VisibleSiblings = visible
+	input.CallerAccess = callerAccess
+
+	payload, err := json.Marshal(input)
+	if err != nil {
+		return nil, uuid.Nil, fmt.Errorf("marshal prompt input: %w", err)
+	}
+
+	runID, err := d.createRun(ctx, agentID, nil, &parentRunID, payload, "a2a", parentRunID.String())
+	if err != nil {
+		return nil, uuid.Nil, err
+	}
+
+	cancelCtx, cancel := context.WithCancel(ctx)
+	d.registerInFlight(runID, cancel)
+
+	rc, err := d.forward(cancelCtx, c, "POST", "/prompt", payload, runID, nil, PromptHTTPCeiling)
+	if err != nil {
+		d.deregisterInFlight(runID)
+		cancel()
+		return nil, uuid.Nil, err
+	}
+	return &runBodyCloser{ReadCloser: rc, dispatcher: d, runID: runID}, runID, nil
+}
+
+// computeVisibleSiblings returns the set of agent IDs this run's user
+// is permitted to A2A-call from the prompting agent. Anonymous runs
+// (userID == nil) get only siblings with allow_non_member_mcp = true.
+// Cron/webhook runs (also userID == nil) get the same set — they
+// can't A2A in v1; agentsdk rejects A2A binding attempts when no
+// original user is on the run, but the visible set returned here is
+// harmless either way.
+func (d *Dispatcher) computeVisibleSiblings(ctx context.Context, agentID uuid.UUID, userID *uuid.UUID) ([]uuid.UUID, error) {
+	q := dbq.New(d.db.Pool())
+	var userPg pgtype.UUID
+	if userID != nil {
+		userPg = toPgUUID(*userID)
+	}
+	rows, err := q.ListVisibleSiblings(ctx, dbq.ListVisibleSiblingsParams{
+		ParentAgentID: toPgUUID(agentID),
+		UserID:        userPg,
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]uuid.UUID, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, pgUUID(r))
+	}
+	return out, nil
+}
+
 // createRun inserts a new run record and returns its ID.
-func (d *Dispatcher) createRun(ctx context.Context, agentID uuid.UUID, bridgeID *uuid.UUID, inputPayload []byte, triggerType, triggerRef string) (uuid.UUID, error) {
+func (d *Dispatcher) createRun(ctx context.Context, agentID uuid.UUID, bridgeID *uuid.UUID, parentRunID *uuid.UUID, inputPayload []byte, triggerType, triggerRef string) (uuid.UUID, error) {
 	q := dbq.New(d.db.Pool())
 
 	var pgBridgeID pgtype.UUID
 	if bridgeID != nil {
 		pgBridgeID = toPgUUID(*bridgeID)
+	}
+	var pgParentRunID pgtype.UUID
+	if parentRunID != nil {
+		pgParentRunID = toPgUUID(*parentRunID)
 	}
 	if inputPayload == nil {
 		inputPayload = []byte("{}")
@@ -275,6 +399,7 @@ func (d *Dispatcher) createRun(ctx context.Context, agentID uuid.UUID, bridgeID 
 	run, err := q.CreateRun(ctx, dbq.CreateRunParams{
 		AgentID:      toPgUUID(agentID),
 		BridgeID:     pgBridgeID,
+		ParentRunID:  pgParentRunID,
 		InputPayload: inputPayload,
 		SourceRef:    sourceRef,
 		TriggerType:  triggerType,

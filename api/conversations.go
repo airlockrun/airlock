@@ -493,7 +493,7 @@ func (h *conversationsHandler) Prompt(w http.ResponseWriter, r *http.Request) {
 	// Forward to agent container — no bridge_id for web.
 	// Use background context: the response body must outlive this HTTP request
 	// since we stream it in a goroutine after returning 200 to the client.
-	rc, runID, err := h.dispatcher.ForwardPrompt(context.Background(), agentID, input, nil)
+	rc, runID, err := h.dispatcher.ForwardPrompt(context.Background(), agentID, input, nil, &userID)
 	if err != nil {
 		h.convLocks.Unlock(convIDStr)
 		h.logger.Error("forward prompt", zap.Error(err))
@@ -513,7 +513,7 @@ func (h *conversationsHandler) Prompt(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		defer h.convLocks.Unlock(convIDStr)
 		bgCtx := context.Background()
-		publishRunEvents(bgCtx, rc, h.pubsub, agentID, runID, convIDStr, h.logger)
+		publishRunEvents(bgCtx, rc, h.pubsub, agentID, runID, convIDStr, userID.String(), nil, h.logger)
 
 		// Fallback status when the agent never wrote its own terminal
 		// status (e.g. stuck in an infinite run_js loop, container died).
@@ -622,7 +622,12 @@ func (h *conversationsHandler) NotifyUpgradeComplete(ctx context.Context, agentI
 
 	// Stream the agent's response in-process. The convLock is held until
 	// the stream drains so a concurrent user prompt waits its turn.
-	rc, runID, err := h.dispatcher.ForwardPrompt(context.Background(), agentID, input, nil)
+	var userIDPtr *uuid.UUID
+	if conv.UserID.Valid {
+		u := pgUUID(conv.UserID)
+		userIDPtr = &u
+	}
+	rc, runID, err := h.dispatcher.ForwardPrompt(context.Background(), agentID, input, nil, userIDPtr)
 	if err != nil {
 		h.convLocks.Unlock(conversationID)
 		return err
@@ -648,7 +653,11 @@ func (h *conversationsHandler) NotifyUpgradeComplete(ctx context.Context, agentI
 				}
 			}
 		} else {
-			publishRunEvents(bgCtx, rc, h.pubsub, agentID, runID, conversationID, h.logger)
+			var convUserID string
+			if conv.UserID.Valid {
+				convUserID = pgUUID(conv.UserID).String()
+			}
+			publishRunEvents(bgCtx, rc, h.pubsub, agentID, runID, conversationID, convUserID, nil, h.logger)
 		}
 
 		// Same CAS-protected fallback as the user-prompt path: if the

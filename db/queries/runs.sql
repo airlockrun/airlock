@@ -2,19 +2,37 @@
 -- All "starts at zero/empty" run fields passed explicitly per AGENTS.md
 -- "no fake defaults" rule. Counter fields start at 0 (no LLM calls /
 -- tokens / cost yet); buffered text fields start ''; actions starts [].
+-- parent_run_id is NULL for top-level (web/bridge/cron/webhook) runs
+-- and the caller's run id for A2A child runs.
 INSERT INTO runs (
-    agent_id, bridge_id, status, error_kind,
+    agent_id, bridge_id, parent_run_id, status, error_kind,
     input_payload, source_ref, trigger_type, trigger_ref,
     actions, llm_calls, llm_tokens_in, llm_tokens_out, llm_cost_estimate,
     logs, stdout_log, error_message, panic_trace, compacted
 )
 VALUES (
-    @agent_id, @bridge_id, 'running', '',
+    @agent_id, @bridge_id, @parent_run_id, 'running', '',
     @input_payload, @source_ref, @trigger_type, @trigger_ref,
     '[]'::jsonb, 0, 0, 0, 0,
     '', '', '', '', false
 )
 RETURNING *;
+
+-- name: GetDescendantRuns :many
+-- Recursive descent through parent_run_id for cancel cascade. Returns
+-- every run reachable from @root_run_id via parent_run_id (excluding
+-- the root itself). Order is unspecified; callers fire cancel funcs
+-- independently per row.
+WITH RECURSIVE descendants AS (
+    SELECT id, agent_id, parent_run_id, status
+    FROM runs
+    WHERE runs.parent_run_id = @root_run_id
+    UNION ALL
+    SELECT r.id, r.agent_id, r.parent_run_id, r.status
+    FROM runs r
+    JOIN descendants d ON r.parent_run_id = d.id
+)
+SELECT id, agent_id, status FROM descendants;
 
 -- name: UpdateRunComplete :exec
 UPDATE runs SET

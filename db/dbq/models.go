@@ -43,6 +43,8 @@ type Agent struct {
 	ErrorMessage        string             `json:"error_message"`
 	CreatedAt           pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
+	AllowNonMemberMcp   bool               `json:"allow_non_member_mcp"`
+	AllowPublicMcp      bool               `json:"allow_public_mcp"`
 }
 
 type AgentBuild struct {
@@ -182,6 +184,12 @@ type AgentRoute struct {
 	Description string             `json:"description"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+}
+
+type AgentSibling struct {
+	ParentAgentID  pgtype.UUID        `json:"parent_agent_id"`
+	SiblingAgentID pgtype.UUID        `json:"sibling_agent_id"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 }
 
 type AgentTool struct {
@@ -340,6 +348,7 @@ type Run struct {
 	Compacted       bool               `json:"compacted"`
 	StartedAt       pgtype.Timestamptz `json:"started_at"`
 	FinishedAt      pgtype.Timestamptz `json:"finished_at"`
+	ParentRunID     pgtype.UUID        `json:"parent_run_id"`
 }
 
 type SystemSetting struct {

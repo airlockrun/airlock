@@ -287,7 +287,11 @@ func (p *PromptProxy) HandleMessage(
 		_ = q.ResolveSuspendedRun(ctx, suspendedRun.ID)
 	}
 
-	rc, runID, err := p.dispatcher.ForwardPrompt(ctx, agentID, input, &bridgeID)
+	var userIDPtr *uuid.UUID
+	if userID != uuid.Nil {
+		userIDPtr = &userID
+	}
+	rc, runID, err := p.dispatcher.ForwardPrompt(ctx, agentID, input, &bridgeID, userIDPtr)
 	if err != nil {
 		close(events)
 		return "", fmt.Errorf("forward prompt: %w", err)
@@ -395,7 +399,11 @@ func (p *PromptProxy) HandleCallback(
 		input.Message = "Rejected by user."
 	}
 
-	rc, newRunID, err := p.dispatcher.ForwardPrompt(ctx, agentID, input, &bridgeID)
+	var userIDPtr *uuid.UUID
+	if userID != uuid.Nil {
+		userIDPtr = &userID
+	}
+	rc, newRunID, err := p.dispatcher.ForwardPrompt(ctx, agentID, input, &bridgeID, userIDPtr)
 	if err != nil {
 		close(events)
 		return false, fmt.Errorf("forward prompt: %w", err)

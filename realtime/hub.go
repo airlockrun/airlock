@@ -10,6 +10,15 @@ import (
 
 const topicBufferMaxSize = 100
 
+// bufferedEvent pairs a marshaled envelope with the user_id it was
+// published for. Replay applies the same env.UserID == conn.UserID
+// gate that live broadcast does, so a late subscriber doesn't pick up
+// events from another user's run that happened before they joined.
+type bufferedEvent struct {
+	data   []byte
+	userID string
+}
+
 // Hub manages WebSocket connections and topic subscriptions. A single
 // connection can be subscribed to many topics at once — typically every
 // agent the user is a member of, wired up at WS-accept time.
@@ -24,7 +33,7 @@ type Hub struct {
 	connTopics map[string]map[uuid.UUID]struct{}
 
 	// replay buffer: recent messages per topic, replayed on subscribe
-	topicBuffers map[uuid.UUID][][]byte
+	topicBuffers map[uuid.UUID][]bufferedEvent
 
 	mu sync.RWMutex
 
@@ -41,7 +50,7 @@ func NewHub(logger *zap.Logger) *Hub {
 		conns:        make(map[string]*Conn),
 		topics:       make(map[uuid.UUID]map[string]*Conn),
 		connTopics:   make(map[string]map[uuid.UUID]struct{}),
-		topicBuffers: make(map[uuid.UUID][][]byte),
+		topicBuffers: make(map[uuid.UUID][]bufferedEvent),
 		logger:       logger,
 	}
 }
@@ -119,17 +128,22 @@ func (h *Hub) Subscribe(conn *Conn, topicID uuid.UUID) {
 	h.connTopics[conn.ID][topicID] = struct{}{}
 
 	// Copy buffered events for replay.
-	var replay [][]byte
+	var replay []bufferedEvent
 	if buf := h.topicBuffers[topicID]; len(buf) > 0 {
-		replay = make([][]byte, len(buf))
+		replay = make([]bufferedEvent, len(buf))
 		copy(replay, buf)
 	}
 
 	onFirst := h.onFirstSubscribe
 	h.mu.Unlock()
 
-	for _, msg := range replay {
-		conn.Send(msg)
+	// Same user_id gate as live broadcast — see BroadcastToTopic.
+	connUserID := conn.UserID.String()
+	for _, ev := range replay {
+		if ev.userID != "" && ev.userID != connUserID {
+			continue
+		}
+		conn.Send(ev.data)
 	}
 
 	if isFirst && onFirst != nil {
@@ -138,7 +152,17 @@ func (h *Hub) Subscribe(conn *Conn, topicID uuid.UUID) {
 }
 
 // BroadcastToTopic sends an envelope to all connections subscribed to a topic.
-// Events are also buffered per topic so late subscribers can replay missed events.
+//
+// User-id gating: if env.UserID is set, only connections whose
+// authenticated user matches receive the event. Empty env.UserID
+// falls through to the historical "deliver to every subscriber"
+// behaviour (used for tenant-wide / system broadcasts:
+// agent.synced, build events, etc).
+//
+// The replay buffer stores (bytes, userID) pairs so a late
+// subscriber gets the same gate applied on replay — without it,
+// joining late would leak events from other users' runs that
+// happened before the join.
 func (h *Hub) BroadcastToTopic(topicID uuid.UUID, env Envelope) {
 	data, err := json.Marshal(env)
 	if err != nil {
@@ -152,7 +176,7 @@ func (h *Hub) BroadcastToTopic(topicID uuid.UUID, env Envelope) {
 	if len(buf) >= topicBufferMaxSize {
 		buf = buf[1:]
 	}
-	h.topicBuffers[topicID] = append(buf, data)
+	h.topicBuffers[topicID] = append(buf, bufferedEvent{data: data, userID: env.UserID})
 
 	conns := h.topics[topicID]
 	targets := make([]*Conn, 0, len(conns))
@@ -162,6 +186,9 @@ func (h *Hub) BroadcastToTopic(topicID uuid.UUID, env Envelope) {
 	h.mu.Unlock()
 
 	for _, c := range targets {
+		if env.UserID != "" && env.UserID != c.UserID.String() {
+			continue
+		}
 		c.Send(data)
 	}
 }

@@ -8,14 +8,30 @@
  * WS reconnect.
  */
 
-interface RawEnvelope {
+export interface SubagentInfo {
+  agentId: string
+  runId: string
+  slug?: string
+}
+
+export interface RawEnvelope {
   type: string
   requestId?: string
   topicId?: string
+  // userId / conversationId are set by the backend for run events so
+  // the frontend can route by chat card and so server-side user-id
+  // gating is observable here (the server already filtered; this is
+  // for client-side card routing).
+  userId?: string
+  conversationId?: string
+  // subagent tags the envelope as a sub-run event mirrored from an
+  // A2A child run; chat store routes these into the parent's active
+  // tool-call card instead of the main message stream.
+  subagent?: SubagentInfo
   payload?: unknown
 }
 
-type Handler = (payload: unknown) => void
+type Handler = (payload: unknown, envelope?: RawEnvelope) => void
 
 export class AirlockWS {
   private socket: WebSocket | null = null
@@ -131,7 +147,7 @@ export class AirlockWS {
     this.socket.onmessage = (event) => {
       try {
         const envelope: RawEnvelope = JSON.parse(event.data)
-        this.emit(envelope.type, envelope.payload)
+        this.emit(envelope.type, envelope.payload, envelope)
       } catch {
         // Ignore malformed messages.
       }
@@ -154,11 +170,11 @@ export class AirlockWS {
     }
   }
 
-  private emit(type: string, payload: unknown) {
+  private emit(type: string, payload: unknown, envelope?: RawEnvelope) {
     const handlers = this.handlers.get(type)
     if (handlers) {
       for (const handler of handlers) {
-        handler(payload)
+        handler(payload, envelope)
       }
     }
   }

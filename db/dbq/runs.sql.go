@@ -48,23 +48,24 @@ func (q *Queries) CountRunsByAgent(ctx context.Context, agentID pgtype.UUID) (in
 
 const createRun = `-- name: CreateRun :one
 INSERT INTO runs (
-    agent_id, bridge_id, status, error_kind,
+    agent_id, bridge_id, parent_run_id, status, error_kind,
     input_payload, source_ref, trigger_type, trigger_ref,
     actions, llm_calls, llm_tokens_in, llm_tokens_out, llm_cost_estimate,
     logs, stdout_log, error_message, panic_trace, compacted
 )
 VALUES (
-    $1, $2, 'running', '',
-    $3, $4, $5, $6,
+    $1, $2, $3, 'running', '',
+    $4, $5, $6, $7,
     '[]'::jsonb, 0, 0, 0, 0,
     '', '', '', '', false
 )
-RETURNING id, agent_id, bridge_id, status, trigger_type, trigger_ref, source_ref, input_payload, actions, llm_calls, llm_tokens_in, llm_tokens_out, llm_cost_estimate, duration_ms, logs, stdout_log, error_message, error_kind, exit_code, panic_trace, checkpoint, compacted, started_at, finished_at
+RETURNING id, agent_id, bridge_id, status, trigger_type, trigger_ref, source_ref, input_payload, actions, llm_calls, llm_tokens_in, llm_tokens_out, llm_cost_estimate, duration_ms, logs, stdout_log, error_message, error_kind, exit_code, panic_trace, checkpoint, compacted, started_at, finished_at, parent_run_id
 `
 
 type CreateRunParams struct {
 	AgentID      pgtype.UUID `json:"agent_id"`
 	BridgeID     pgtype.UUID `json:"bridge_id"`
+	ParentRunID  pgtype.UUID `json:"parent_run_id"`
 	InputPayload []byte      `json:"input_payload"`
 	SourceRef    string      `json:"source_ref"`
 	TriggerType  string      `json:"trigger_type"`
@@ -74,10 +75,13 @@ type CreateRunParams struct {
 // All "starts at zero/empty" run fields passed explicitly per AGENTS.md
 // "no fake defaults" rule. Counter fields start at 0 (no LLM calls /
 // tokens / cost yet); buffered text fields start ”; actions starts [].
+// parent_run_id is NULL for top-level (web/bridge/cron/webhook) runs
+// and the caller's run id for A2A child runs.
 func (q *Queries) CreateRun(ctx context.Context, arg CreateRunParams) (Run, error) {
 	row := q.db.QueryRow(ctx, createRun,
 		arg.AgentID,
 		arg.BridgeID,
+		arg.ParentRunID,
 		arg.InputPayload,
 		arg.SourceRef,
 		arg.TriggerType,
@@ -109,8 +113,52 @@ func (q *Queries) CreateRun(ctx context.Context, arg CreateRunParams) (Run, erro
 		&i.Compacted,
 		&i.StartedAt,
 		&i.FinishedAt,
+		&i.ParentRunID,
 	)
 	return i, err
+}
+
+const getDescendantRuns = `-- name: GetDescendantRuns :many
+WITH RECURSIVE descendants AS (
+    SELECT id, agent_id, parent_run_id, status
+    FROM runs
+    WHERE runs.parent_run_id = $1
+    UNION ALL
+    SELECT r.id, r.agent_id, r.parent_run_id, r.status
+    FROM runs r
+    JOIN descendants d ON r.parent_run_id = d.id
+)
+SELECT id, agent_id, status FROM descendants
+`
+
+type GetDescendantRunsRow struct {
+	ID      pgtype.UUID `json:"id"`
+	AgentID pgtype.UUID `json:"agent_id"`
+	Status  string      `json:"status"`
+}
+
+// Recursive descent through parent_run_id for cancel cascade. Returns
+// every run reachable from @root_run_id via parent_run_id (excluding
+// the root itself). Order is unspecified; callers fire cancel funcs
+// independently per row.
+func (q *Queries) GetDescendantRuns(ctx context.Context, rootRunID pgtype.UUID) ([]GetDescendantRunsRow, error) {
+	rows, err := q.db.Query(ctx, getDescendantRuns, rootRunID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []GetDescendantRunsRow{}
+	for rows.Next() {
+		var i GetDescendantRunsRow
+		if err := rows.Scan(&i.ID, &i.AgentID, &i.Status); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const getLatestRunningPromptRun = `-- name: GetLatestRunningPromptRun :one
@@ -131,7 +179,7 @@ func (q *Queries) GetLatestRunningPromptRun(ctx context.Context, triggerRef stri
 }
 
 const getLatestSuspendedRun = `-- name: GetLatestSuspendedRun :one
-SELECT id, agent_id, bridge_id, status, trigger_type, trigger_ref, source_ref, input_payload, actions, llm_calls, llm_tokens_in, llm_tokens_out, llm_cost_estimate, duration_ms, logs, stdout_log, error_message, error_kind, exit_code, panic_trace, checkpoint, compacted, started_at, finished_at FROM runs
+SELECT id, agent_id, bridge_id, status, trigger_type, trigger_ref, source_ref, input_payload, actions, llm_calls, llm_tokens_in, llm_tokens_out, llm_cost_estimate, duration_ms, logs, stdout_log, error_message, error_kind, exit_code, panic_trace, checkpoint, compacted, started_at, finished_at, parent_run_id FROM runs
 WHERE agent_id = $1 AND status = 'suspended'
 ORDER BY started_at DESC
 LIMIT 1
@@ -165,12 +213,13 @@ func (q *Queries) GetLatestSuspendedRun(ctx context.Context, agentID pgtype.UUID
 		&i.Compacted,
 		&i.StartedAt,
 		&i.FinishedAt,
+		&i.ParentRunID,
 	)
 	return i, err
 }
 
 const getRunByID = `-- name: GetRunByID :one
-SELECT id, agent_id, bridge_id, status, trigger_type, trigger_ref, source_ref, input_payload, actions, llm_calls, llm_tokens_in, llm_tokens_out, llm_cost_estimate, duration_ms, logs, stdout_log, error_message, error_kind, exit_code, panic_trace, checkpoint, compacted, started_at, finished_at FROM runs WHERE id = $1
+SELECT id, agent_id, bridge_id, status, trigger_type, trigger_ref, source_ref, input_payload, actions, llm_calls, llm_tokens_in, llm_tokens_out, llm_cost_estimate, duration_ms, logs, stdout_log, error_message, error_kind, exit_code, panic_trace, checkpoint, compacted, started_at, finished_at, parent_run_id FROM runs WHERE id = $1
 `
 
 func (q *Queries) GetRunByID(ctx context.Context, id pgtype.UUID) (Run, error) {
@@ -201,6 +250,7 @@ func (q *Queries) GetRunByID(ctx context.Context, id pgtype.UUID) (Run, error) {
 		&i.Compacted,
 		&i.StartedAt,
 		&i.FinishedAt,
+		&i.ParentRunID,
 	)
 	return i, err
 }
@@ -217,7 +267,7 @@ func (q *Queries) GetRunCheckpoint(ctx context.Context, id pgtype.UUID) ([]byte,
 }
 
 const getSuspendedRunByID = `-- name: GetSuspendedRunByID :one
-SELECT id, agent_id, bridge_id, status, trigger_type, trigger_ref, source_ref, input_payload, actions, llm_calls, llm_tokens_in, llm_tokens_out, llm_cost_estimate, duration_ms, logs, stdout_log, error_message, error_kind, exit_code, panic_trace, checkpoint, compacted, started_at, finished_at FROM runs WHERE id = $1 AND status = 'suspended'
+SELECT id, agent_id, bridge_id, status, trigger_type, trigger_ref, source_ref, input_payload, actions, llm_calls, llm_tokens_in, llm_tokens_out, llm_cost_estimate, duration_ms, logs, stdout_log, error_message, error_kind, exit_code, panic_trace, checkpoint, compacted, started_at, finished_at, parent_run_id FROM runs WHERE id = $1 AND status = 'suspended'
 `
 
 func (q *Queries) GetSuspendedRunByID(ctx context.Context, id pgtype.UUID) (Run, error) {
@@ -248,12 +298,13 @@ func (q *Queries) GetSuspendedRunByID(ctx context.Context, id pgtype.UUID) (Run,
 		&i.Compacted,
 		&i.StartedAt,
 		&i.FinishedAt,
+		&i.ParentRunID,
 	)
 	return i, err
 }
 
 const listRunningByAgent = `-- name: ListRunningByAgent :many
-SELECT id, agent_id, bridge_id, status, trigger_type, trigger_ref, source_ref, input_payload, actions, llm_calls, llm_tokens_in, llm_tokens_out, llm_cost_estimate, duration_ms, logs, stdout_log, error_message, error_kind, exit_code, panic_trace, checkpoint, compacted, started_at, finished_at FROM runs WHERE agent_id = $1 AND status = 'running'
+SELECT id, agent_id, bridge_id, status, trigger_type, trigger_ref, source_ref, input_payload, actions, llm_calls, llm_tokens_in, llm_tokens_out, llm_cost_estimate, duration_ms, logs, stdout_log, error_message, error_kind, exit_code, panic_trace, checkpoint, compacted, started_at, finished_at, parent_run_id FROM runs WHERE agent_id = $1 AND status = 'running'
 `
 
 func (q *Queries) ListRunningByAgent(ctx context.Context, agentID pgtype.UUID) ([]Run, error) {
@@ -290,6 +341,7 @@ func (q *Queries) ListRunningByAgent(ctx context.Context, agentID pgtype.UUID) (
 			&i.Compacted,
 			&i.StartedAt,
 			&i.FinishedAt,
+			&i.ParentRunID,
 		); err != nil {
 			return nil, err
 		}
@@ -302,7 +354,7 @@ func (q *Queries) ListRunningByAgent(ctx context.Context, agentID pgtype.UUID) (
 }
 
 const listRunsByAgent = `-- name: ListRunsByAgent :many
-SELECT id, agent_id, bridge_id, status, trigger_type, trigger_ref, source_ref, input_payload, actions, llm_calls, llm_tokens_in, llm_tokens_out, llm_cost_estimate, duration_ms, logs, stdout_log, error_message, error_kind, exit_code, panic_trace, checkpoint, compacted, started_at, finished_at FROM runs
+SELECT id, agent_id, bridge_id, status, trigger_type, trigger_ref, source_ref, input_payload, actions, llm_calls, llm_tokens_in, llm_tokens_out, llm_cost_estimate, duration_ms, logs, stdout_log, error_message, error_kind, exit_code, panic_trace, checkpoint, compacted, started_at, finished_at, parent_run_id FROM runs
 WHERE agent_id = $1
     AND ($2::timestamptz IS NULL OR started_at < $2)
 ORDER BY started_at DESC
@@ -349,6 +401,7 @@ func (q *Queries) ListRunsByAgent(ctx context.Context, arg ListRunsByAgentParams
 			&i.Compacted,
 			&i.StartedAt,
 			&i.FinishedAt,
+			&i.ParentRunID,
 		); err != nil {
 			return nil, err
 		}

@@ -11,15 +11,16 @@ import (
 	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/builder"
 	"github.com/airlockrun/airlock/compat"
-	promptpkg "github.com/airlockrun/airlock/prompt"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 	"github.com/airlockrun/airlock/realtime"
 	"github.com/airlockrun/airlock/secrets"
 	"github.com/airlockrun/airlock/storage"
+	"github.com/airlockrun/airlock/trigger"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"
 )
 
@@ -42,6 +43,8 @@ type agentHandler struct {
 	agentRoutePort         string // empty for the standard 80/443; set when Caddy is fronted on a non-default port so signed /__air/storage URLs include it
 	llmProxyURL            string // optional: route LLM calls through this proxy
 	forceInlineAttachments bool   // dev escape hatch — ignore provider URL capability, send everything as base64
+	jwtSecret              string // shared with auth middleware; read by mcp_server.go to validate incoming A2A JWTs
+	dispatcher             *trigger.Dispatcher // forward-prompt + ensure-running for A2A
 	logger                 *zap.Logger
 }
 
@@ -437,33 +440,20 @@ func (h *agentHandler) Sync(w http.ResponseWriter, r *http.Request) {
 		serverBySlug[srv.Slug] = srv
 	}
 
-	// Build MCP server status for prompt and auth status for response.
-	var promptMCPServers []promptpkg.MCPServerStatus
+	// Decode discovered MCP tool schemas + per-server auth status for the
+	// SyncResponse. Prompt rendering moved into agentsdk so we no longer
+	// build a parallel promptpkg.MCPServerStatus list here — the agent
+	// composes its own MCP status lines from MCPAuthStatus + MCPSchemas.
+	_ = serverBySlug // retained for readability of the loop below
 	var mcpAuthStatus []agentsdk.MCPAuthStatus
 	mcpSchemas := make(map[string][]agentsdk.MCPToolSchema)
 	for _, s := range mcpStatuses {
 		mcpAuthStatus = append(mcpAuthStatus, s.MCPAuthStatus)
-		status := "requires authentication"
-		if s.Authorized {
-			status = fmt.Sprintf("connected, %d tools", s.ToolCount)
-		}
-
-		// Decode cached tool_schemas → ToolInfo for the prompt template
-		// AND MCPToolSchema for the SyncResponse. Both consumers need the
-		// same data; decoding once keeps it consistent.
-		var promptTools []promptpkg.ToolInfo
-		var schemas []agentsdk.MCPToolSchema
 		if srv, ok := serverBySlug[s.Slug]; ok && len(srv.ToolSchemas) > 0 {
 			var stored []mcpToolInfo
 			if err := json.Unmarshal(srv.ToolSchemas, &stored); err == nil {
-				promptTools = make([]promptpkg.ToolInfo, len(stored))
-				schemas = make([]agentsdk.MCPToolSchema, len(stored))
+				schemas := make([]agentsdk.MCPToolSchema, len(stored))
 				for i, t := range stored {
-					promptTools[i] = promptpkg.ToolInfo{
-						Name:        t.Name,
-						Description: t.Description,
-						InputSchema: t.InputSchema,
-					}
 					schemas[i] = agentsdk.MCPToolSchema{
 						ServerSlug:  s.Slug,
 						Name:        t.Name,
@@ -471,70 +461,13 @@ func (h *agentHandler) Sync(w http.ResponseWriter, r *http.Request) {
 						InputSchema: t.InputSchema,
 					}
 				}
+				if len(schemas) > 0 {
+					mcpSchemas[s.Slug] = schemas
+				}
 			} else {
 				h.logger.Warn("decode tool_schemas failed", zap.String("slug", s.Slug), zap.Error(err))
 			}
 		}
-		if len(schemas) > 0 {
-			mcpSchemas[s.Slug] = schemas
-		}
-
-		name := s.Slug
-		access := ""
-		if srv, ok := serverBySlug[s.Slug]; ok {
-			if srv.Name != "" {
-				name = srv.Name
-			}
-			access = srv.Access
-		}
-		promptMCPServers = append(promptMCPServers, promptpkg.MCPServerStatus{
-			Slug:   s.Slug,
-			Name:   name,
-			Status: status,
-			Access: access,
-			Tools:  promptTools,
-		})
-	}
-
-	// Render system prompt from template.
-	conns, _ := q.ListConnectionsByAgent(ctx, pgAgentID)
-	promptConns := make([]promptpkg.ConnInfo, len(conns))
-	for i, c := range conns {
-		promptConns[i] = promptpkg.ConnInfo{
-			Slug:        c.Slug,
-			Name:        c.Name,
-			Description: c.Description,
-			LLMHint:     c.LlmHint,
-			BaseURL:     c.BaseUrl,
-			Access:      c.Access,
-		}
-	}
-	promptTools := make([]promptpkg.ToolInfo, len(req.Tools))
-	for i, t := range req.Tools {
-		promptTools[i] = promptpkg.ToolInfo{
-			Name:         t.Name,
-			Description:  t.Description,
-			LLMHint:      t.LLMHint,
-			Access:       string(t.Access),
-			InputSchema:  t.InputSchema,
-			OutputSchema: t.OutputSchema,
-		}
-	}
-	promptTopics := make([]promptpkg.TopicInfo, len(req.Topics))
-	for i, t := range req.Topics {
-		promptTopics[i] = promptpkg.TopicInfo{Slug: t.Slug, Description: t.Description, LLMHint: t.LLMHint, Access: string(t.Access)}
-	}
-	promptWebhooks := make([]promptpkg.WebhookInfo, len(req.Webhooks))
-	for i, wh := range req.Webhooks {
-		promptWebhooks[i] = promptpkg.WebhookInfo{Path: wh.Path, Description: wh.Description}
-	}
-	promptCrons := make([]promptpkg.CronInfo, len(req.Crons))
-	for i, c := range req.Crons {
-		promptCrons[i] = promptpkg.CronInfo{Name: c.Name, Schedule: c.Schedule, Description: c.Description}
-	}
-	promptRoutes := make([]promptpkg.RouteInfo, len(req.Routes))
-	for i, rt := range req.Routes {
-		promptRoutes[i] = promptpkg.RouteInfo{Method: rt.Method, Path: rt.Path, Access: string(rt.Access), Description: rt.Description}
 	}
 
 	// Build agent route URL. h.agentDomain is required at startup
@@ -543,7 +476,7 @@ func (h *agentHandler) Sync(w http.ResponseWriter, r *http.Request) {
 	// it's always populated by the time this handler runs.
 	agentRecord, err := q.GetAgentByID(ctx, pgAgentID)
 	if err != nil {
-		h.logger.Error("load agent for prompt render", zap.Error(err))
+		h.logger.Error("load agent for prompt data", zap.Error(err))
 		writeJSONError(w, http.StatusInternalServerError, "failed to load agent")
 		return
 	}
@@ -552,41 +485,15 @@ func (h *agentHandler) Sync(w http.ResponseWriter, r *http.Request) {
 		agentRouteURL += ":" + h.agentRoutePort
 	}
 
-	// Render three variants — admin/user/public — so the agent can pick
-	// the right one per run via run.callerAccess. Filtering at sync time
-	// (rather than per-run) keeps the hot path allocation-free; the agent
-	// caches all three. Public callers must never see admin- or user-tier
-	// connections, MCP servers, tools, or routes listed in the system
-	// prompt — even though the VM blocks the call at runtime, the model
-	// would otherwise know they exist (and could leak slug/schema info to
-	// an anonymous DM caller).
-	promptData := promptpkg.AgentData{
-		AgentDashboardURL: h.publicURL + "/agents/" + agentID.String(),
-		AgentRouteURL:     agentRouteURL,
-		Tools:             promptTools,
-		Connections:       promptConns,
-		Topics:            promptTopics,
-		Webhooks:          promptWebhooks,
-		Crons:             promptCrons,
-		Routes:            promptRoutes,
-		MCPServers:        promptMCPServers,
-	}
-	rendered, err := promptpkg.RenderAgentPrompt(promptData, "admin")
+	// Sibling address book: pre-rendered Tools list per sibling so the
+	// agent can install agent_<slug> bindings + render the prompt
+	// without per-turn lookups. Visibility-by-user is layered on at
+	// dispatch (PromptInput.VisibleSiblings); the SiblingInfo list
+	// itself is unfiltered.
+	siblings, err := h.buildSiblingInfos(ctx, q, pgAgentID)
 	if err != nil {
-		h.logger.Error("render agent prompt failed", zap.Error(err))
-		writeJSONError(w, http.StatusInternalServerError, "failed to render prompt")
-		return
-	}
-	renderedUser, err := promptpkg.RenderAgentPrompt(promptData, "user")
-	if err != nil {
-		h.logger.Error("render agent prompt (user) failed", zap.Error(err))
-		writeJSONError(w, http.StatusInternalServerError, "failed to render prompt")
-		return
-	}
-	renderedPublic, err := promptpkg.RenderAgentPrompt(promptData, "public")
-	if err != nil {
-		h.logger.Error("render agent prompt (public) failed", zap.Error(err))
-		writeJSONError(w, http.StatusInternalServerError, "failed to render prompt")
+		h.logger.Error("load sibling info", zap.Error(err))
+		writeJSONError(w, http.StatusInternalServerError, "failed to load siblings")
 		return
 	}
 
@@ -607,11 +514,53 @@ func (h *agentHandler) Sync(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, agentsdk.SyncResponse{
-		SystemPrompt:       rendered,
-		SystemPromptUser:   renderedUser,
-		SystemPromptPublic: renderedPublic,
-		MCPAuthStatus:      mcpAuthStatus,
-		MCPSchemas:         mcpSchemas,
-		PublicStorageBase:  publicStorageBase,
+		PromptData: agentsdk.PromptData{
+			AgentDashboardURL: h.publicURL + "/agents/" + agentID.String(),
+			AgentRouteURL:     agentRouteURL,
+			Siblings:          siblings,
+		},
+		MCPAuthStatus:     mcpAuthStatus,
+		MCPSchemas:        mcpSchemas,
+		PublicStorageBase: publicStorageBase,
 	})
+}
+
+// buildSiblingInfos hydrates the parent agent's sibling address book
+// into the wire shape: id + slug + name + description + tool
+// schemas. Tool schemas come from the sibling's agent_tools rows
+// (synced from the sibling agentsdk's own RegisterTool calls). The
+// built-in `prompt` meta-tool is added by the agent-side renderer
+// (it's the same shape for every sibling, no per-row data).
+func (h *agentHandler) buildSiblingInfos(ctx context.Context, q *dbq.Queries, parentAgentID pgtype.UUID) ([]agentsdk.SiblingInfo, error) {
+	rows, err := q.ListSiblings(ctx, parentAgentID)
+	if err != nil {
+		return nil, fmt.Errorf("list siblings: %w", err)
+	}
+	if len(rows) == 0 {
+		return nil, nil
+	}
+	out := make([]agentsdk.SiblingInfo, 0, len(rows))
+	for _, r := range rows {
+		toolRows, err := q.ListAgentTools(ctx, r.ID)
+		if err != nil {
+			return nil, fmt.Errorf("list tools for sibling %s: %w", r.Slug, err)
+		}
+		tools := make([]agentsdk.MCPToolSchema, len(toolRows))
+		for i, t := range toolRows {
+			tools[i] = agentsdk.MCPToolSchema{
+				ServerSlug:  r.Slug,
+				Name:        t.Name,
+				Description: t.Description,
+				InputSchema: t.InputSchema,
+			}
+		}
+		out = append(out, agentsdk.SiblingInfo{
+			ID:          uuid.UUID(r.ID.Bytes),
+			Slug:        r.Slug,
+			Name:        r.Name,
+			Description: r.Description,
+			Tools:       tools,
+		})
+	}
+	return out, nil
 }

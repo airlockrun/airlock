@@ -276,6 +276,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 			logger: cfg.Logger.Named("models"),
 			agents: agH,
 		}
+		siblingsH := newSiblingsHandler(cfg.DB, cfg.Logger.Named("siblings"))
 
 		// Wire post-upgrade notifications to conversations handler.
 		cfg.BuildService.SetUpgradeNotifier(cH)
@@ -320,6 +321,16 @@ func NewRouter(cfg RouterConfig) http.Handler {
 				r.Get("/members", agH.ListMembers)
 				r.Post("/members", agH.AddMember)
 				r.Delete("/members/{userID}", agH.RemoveMember)
+
+				// A2A: sibling address book + MCP access toggles. All
+				// admin-gated (siblingsH.requireParentAdmin); user JWT is
+				// already in ctx via the /api/v1 group middleware.
+				r.Get("/siblings", siblingsH.List)
+				r.Get("/siblings/addable", siblingsH.ListAddable)
+				r.Post("/siblings", siblingsH.Add)
+				r.Delete("/siblings/{siblingID}", siblingsH.Remove)
+				r.Get("/a2a-settings", siblingsH.GetA2ASettings)
+				r.Put("/a2a-settings", siblingsH.UpdateA2ASettings)
 
 				// Credentials & Connections
 				r.Get("/connections", credH.ListConnections)
@@ -424,8 +435,20 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		agentRoutePort:         agentRoutePort,
 		llmProxyURL:            cfg.LLMProxyURL,
 		forceInlineAttachments: cfg.ForceInlineAttachments,
+		jwtSecret:              cfg.JWTSecret,
+		dispatcher:             cfg.Dispatcher,
 		logger:                 cfg.Logger.Named("agent-api"),
 	}
+
+	// MCP server endpoint — A2A entry point. Mounted at top level
+	// (outside the /api/agent agent-JWT route group) because its
+	// auth model is dual-principal (anon / user JWT / agent JWT)
+	// rather than agent-JWT-only.
+	mcp := NewMCPServer(cfg.Dispatcher, cfg.PubSub, cfg.Logger.Named("mcp"))
+	r.Post("/api/agent/{identifier}/mcp", func(w http.ResponseWriter, req *http.Request) {
+		mcp.ServeHTTP(w, req, ah)
+	})
+
 	r.Route("/api/agent", func(r chi.Router) {
 		r.Use(auth.AgentMiddleware(cfg.JWTSecret))
 		r.Put("/connections/{slug}", ah.UpsertConnection)
