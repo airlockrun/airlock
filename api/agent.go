@@ -18,6 +18,7 @@ import (
 	"github.com/airlockrun/airlock/secrets"
 	"github.com/airlockrun/airlock/storage"
 	"github.com/airlockrun/airlock/trigger"
+	solprovider "github.com/airlockrun/sol/provider"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -513,16 +514,85 @@ func (h *agentHandler) Sync(w http.ResponseWriter, r *http.Request) {
 		}))
 	}
 
+	// Resolve the agent's effective model slots (agent override →
+	// system default) so the prompt template can branch on which
+	// builtins are actually available at runtime.
+	caps, modalities, err := h.resolveAgentCapabilities(ctx, q, agentRecord)
+	if err != nil {
+		h.logger.Warn("resolve agent capabilities", zap.Error(err))
+		// Non-fatal — fall through with zero-value caps (everything
+		// false). The template will emit a minimal prompt.
+	}
+
 	writeJSON(w, http.StatusOK, agentsdk.SyncResponse{
 		PromptData: agentsdk.PromptData{
-			AgentDashboardURL: h.publicURL + "/agents/" + agentID.String(),
-			AgentRouteURL:     agentRouteURL,
-			Siblings:          siblings,
+			AgentDashboardURL:   h.publicURL + "/agents/" + agentID.String(),
+			AgentRouteURL:       agentRouteURL,
+			Siblings:            siblings,
+			Capabilities:        caps,
+			SupportedModalities: modalities,
 		},
 		MCPAuthStatus:     mcpAuthStatus,
 		MCPSchemas:        mcpSchemas,
 		PublicStorageBase: publicStorageBase,
 	})
+}
+
+// resolveAgentCapabilities walks the agent's six optional model
+// slots (vision/stt/tts/image_gen/embedding/search) plus the
+// system-settings defaults and emits a Capabilities matrix + the
+// chat model's input modality list. Each slot is "bound" iff
+// (agent has provider+model) OR (system default has provider+model).
+//
+// Errors from GetSystemSettings are returned for logging; the
+// returned Capabilities is still meaningful (slots that ONLY rely
+// on agent overrides will resolve correctly).
+func (h *agentHandler) resolveAgentCapabilities(ctx context.Context, q *dbq.Queries, ag dbq.Agent) (agentsdk.Capabilities, []string, error) {
+	settings, sErr := q.GetSystemSettings(ctx)
+	hasDefault := sErr == nil
+
+	bound := func(agentPID pgtype.UUID, agentModel string, defaultPID pgtype.UUID, defaultModel string) bool {
+		if agentPID.Valid && agentModel != "" {
+			return true
+		}
+		if hasDefault && defaultPID.Valid && defaultModel != "" {
+			return true
+		}
+		return false
+	}
+
+	caps := agentsdk.Capabilities{
+		Vision:        bound(ag.VisionProviderID, ag.VisionModel, settings.DefaultVisionProviderID, settings.DefaultVisionModel),
+		Transcription: bound(ag.SttProviderID, ag.SttModel, settings.DefaultSttProviderID, settings.DefaultSttModel),
+		Speech:        bound(ag.TtsProviderID, ag.TtsModel, settings.DefaultTtsProviderID, settings.DefaultTtsModel),
+		Embedding:     bound(ag.EmbeddingProviderID, ag.EmbeddingModel, settings.DefaultEmbeddingProviderID, settings.DefaultEmbeddingModel),
+		Image:         bound(ag.ImageGenProviderID, ag.ImageGenModel, settings.DefaultImageGenProviderID, settings.DefaultImageGenModel),
+		Search:        bound(ag.SearchProviderID, ag.SearchModel, settings.DefaultSearchProviderID, settings.DefaultSearchModel),
+	}
+
+	// Chat-model modalities: same agent → default fallback for the
+	// exec slot, then look up the model in the models.dev catalog.
+	execModel := ag.ExecModel
+	var execProvider pgtype.UUID = ag.ExecProviderID
+	if execModel == "" || !execProvider.Valid {
+		if hasDefault {
+			execModel = settings.DefaultExecModel
+			execProvider = settings.DefaultExecProviderID
+		}
+	}
+	var modalities []string
+	if execModel != "" && execProvider.Valid {
+		if prov, err := q.GetProviderByID(ctx, execProvider); err == nil {
+			if m := solprovider.GetModalities(prov.CatalogID, execModel); m != nil {
+				modalities = m.Input
+			}
+		}
+	}
+
+	if sErr != nil {
+		return caps, modalities, sErr
+	}
+	return caps, modalities, nil
 }
 
 // buildSiblingInfos hydrates the parent agent's sibling address book
