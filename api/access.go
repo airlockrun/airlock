@@ -18,12 +18,20 @@ type MCPPrincipalKind int
 const (
 	// MCPPrincipalAnon means no JWT was presented.
 	MCPPrincipalAnon MCPPrincipalKind = iota
-	// MCPPrincipalUser means a user JWT was presented. UserID is set.
+	// MCPPrincipalUser means a user JWT was presented (web SPA path).
+	// UserID is set.
 	MCPPrincipalUser
 	// MCPPrincipalAgent means an agent JWT was presented (sibling A2A
 	// caller). CallerAgentID + ParentRunID are set; UserID is derived
 	// from the parent run's conversation and also populated.
 	MCPPrincipalAgent
+	// MCPPrincipalOAuthClient means an OAuth-issued access token was
+	// presented (external MCP client — Claude Desktop, Codex CLI,
+	// etc.). UserID + ClientID are set. The audience binding (token
+	// `aud` matches the target agent's canonical resource URL) is
+	// verified upstream in resolvePrincipal, so this principal is
+	// treated identically to MCPPrincipalUser for the access ladder.
+	MCPPrincipalOAuthClient
 )
 
 // MCPPrincipal carries the caller identity for the MCP server endpoint.
@@ -31,9 +39,10 @@ const (
 // computeA2ACallerAccess.
 type MCPPrincipal struct {
 	Kind          MCPPrincipalKind
-	UserID        uuid.UUID // anon: uuid.Nil; user/agent: original user
+	UserID        uuid.UUID // anon: uuid.Nil; user/agent/oauth: original user
 	CallerAgentID uuid.UUID // agent only
 	ParentRunID   uuid.UUID // agent only
+	ClientID      string    // oauth only — for audit / logging
 }
 
 // ErrMCPUnauthenticated means the caller presented no credentials and
@@ -64,7 +73,7 @@ func computeA2ACallerAccess(ctx context.Context, q *dbq.Queries, target dbq.Agen
 		}
 		return agentsdk.AccessPublic, nil
 
-	case MCPPrincipalUser, MCPPrincipalAgent:
+	case MCPPrincipalUser, MCPPrincipalAgent, MCPPrincipalOAuthClient:
 		// Both apply the same user-side ladder against the target. Agent
 		// callers were already verified upstream: the caller's JWT
 		// matches ParentRunID's agent_id, and the principal.UserID was

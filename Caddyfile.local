@@ -19,7 +19,7 @@ airlock.localhost {
 	handle @spa_relay {
 		reverse_proxy frontend:80
 	}
-	@backend path /api/* /auth/* /auth-external /ws /webhooks/* /health
+	@backend path /api/* /auth/* /auth-external /ws /webhooks/* /health /.well-known/* /oauth/*
 	handle @backend {
 		reverse_proxy airlock:8080
 	}

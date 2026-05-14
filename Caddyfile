@@ -29,7 +29,11 @@
 	handle @spa_relay {
 		reverse_proxy frontend:80
 	}
-	@backend path /api/* /auth/* /auth-external /ws /webhooks/* /health
+	# /.well-known/* and /oauth/* are the MCP-server-side OAuth 2.1
+	# surface (RFC 9728 discovery + RFC 7591 DCR + the authorization /
+	# token endpoints). They must route to airlock at the apex —
+	# discovery docs always advertise the apex `issuer`.
+	@backend path /api/* /auth/* /auth-external /ws /webhooks/* /health /.well-known/* /oauth/*
 	handle @backend {
 		reverse_proxy airlock:8080
 	}

@@ -197,12 +197,24 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	r.Get("/api/v1/catalog/providers", providersHandler.ListCatalogProviders)
 	r.Get("/auth-external", idH.AuthExternal)
 
+	// OAuth Authorization Server handler — built once and reused by
+	// both the top-level unauthenticated routes (/.well-known, /oauth/*)
+	// and the /api/v1/oauth/* routes that require a user JWT.
+	oauthH := newOAuthServerHandler(cfg.DB, cfg.JWTSecret, cfg.PublicURL, cfg.Logger.Named("oauth"))
+
 	// Authenticated API routes
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Use(auth.Middleware(cfg.JWTSecret))
 		r.Use(identityLogger)
 
 		r.Get("/me", authHandler.Me)
+
+		// OAuth consent + grant management. The SPA hits /oauth/consent
+		// (POST) to approve or deny a pending /oauth/authorize request;
+		// /api/v1/oauth/grants lists and revokes existing consents.
+		r.Post("/oauth/consent", oauthH.Consent)
+		r.Get("/oauth/grants", oauthH.ListGrants)
+		r.Delete("/oauth/grants/{clientID}/{agentID}", oauthH.RevokeGrant)
 
 		// Slim tenant directory for member-picker dropdowns. Any authenticated
 		// user — agent admins who aren't tenant admins still need this list.
@@ -440,14 +452,31 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		logger:                 cfg.Logger.Named("agent-api"),
 	}
 
-	// MCP server endpoint — A2A entry point. Mounted at top level
-	// (outside the /api/agent agent-JWT route group) because its
-	// auth model is dual-principal (anon / user JWT / agent JWT)
-	// rather than agent-JWT-only.
+	// MCP server endpoint — A2A entry point + external MCP client
+	// entry point. Mounted at top level (outside the /api/agent
+	// agent-JWT route group) because its auth model is multi-principal
+	// (user JWT / agent JWT / OAuth-issued access token). The
+	// /public-mcp route serves the same JSON-RPC interface anonymously,
+	// gated by `agent.allow_public_mcp`.
 	mcp := NewMCPServer(cfg.Dispatcher, cfg.PubSub, cfg.Logger.Named("mcp"))
 	r.Post("/api/agent/{identifier}/mcp", func(w http.ResponseWriter, req *http.Request) {
 		mcp.ServeHTTP(w, req, ah)
 	})
+	r.Post("/api/agent/{identifier}/public-mcp", func(w http.ResponseWriter, req *http.Request) {
+		mcp.ServePublicHTTP(w, req, ah)
+	})
+
+	// Server-side OAuth 2.1 — Authorization Server endpoints used by
+	// external MCP clients (Claude Desktop, VSCode, Codex CLI) to
+	// self-register, obtain audience-bound access tokens, and rotate
+	// refresh tokens against airlock's MCP endpoints. The /.well-known
+	// discovery docs are unauthenticated. oauthH is built earlier (before
+	// /api/v1) so both route groups share one instance.
+	r.Get("/.well-known/oauth-authorization-server", oauthH.ASMetadata)
+	r.Get("/.well-known/oauth-protected-resource/api/agent/{identifier}/mcp", oauthH.ResourceMetadata)
+	r.Post("/oauth/register", oauthH.Register)
+	r.Get("/oauth/authorize", oauthH.Authorize)
+	r.Post("/oauth/token", oauthH.Token)
 
 	r.Route("/api/agent", func(r chi.Router) {
 		r.Use(auth.AgentMiddleware(cfg.JWTSecret))

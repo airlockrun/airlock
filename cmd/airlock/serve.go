@@ -277,6 +277,11 @@ func runServe(_ []string) {
 	refreshJob := oauth.NewRefreshJob(database, secretStore, oauthClient, logger.Named("oauth-refresh"))
 	go refreshJob.Run(gctx)
 
+	// Inbound-OAuth GC: sweeps expired authz codes, long-consumed
+	// refresh tokens, and ancient grants every 5 minutes.
+	inboundOAuthGC := api.NewInboundOAuthGC(database, logger.Named("oauth-inbound-gc"))
+	go inboundOAuthGC.Run(gctx)
+
 	queries := dbq.New(database.Pool())
 
 	group.Go(func() error {

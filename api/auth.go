@@ -236,10 +236,36 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Mirror the access token into an HttpOnly cookie so top-level
+	// browser navigations to /oauth/authorize can authenticate the
+	// user without the SPA having to inject the bearer. The SPA still
+	// reads from localStorage; the cookie is dead weight on its
+	// fetch calls. SameSite=Lax is required so the cross-site redirect
+	// from a Claude Desktop loopback page back to /oauth/authorize
+	// still carries the cookie; Strict would block the flow.
+	setAirlockSessionCookie(w, accessToken)
+
 	writeProto(w, http.StatusOK, &airlockv1.LoginResponse{
 		AccessToken:  accessToken,
 		RefreshToken: refreshToken,
 		User:         convert.UserToProto(user),
+	})
+}
+
+// setAirlockSessionCookie writes the airlock_session cookie used by
+// the /oauth/authorize browser flow. Same lifetime as the access
+// token (15min); the cookie expires and the user re-logs in if
+// /authorize is hit after expiry. Distinct from the __air_session
+// cookie in relay.go (agent subdomain proxy).
+func setAirlockSessionCookie(w http.ResponseWriter, accessToken string) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     "airlock_session",
+		Value:    accessToken,
+		Path:     "/",
+		MaxAge:   int(auth.AccessTokenDuration.Seconds()),
+		HttpOnly: true,
+		Secure:   true,
+		SameSite: http.SameSiteLaxMode,
 	})
 }
 

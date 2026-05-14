@@ -53,6 +53,10 @@ const router = createRouter({
         { path: 'users', name: 'users', component: () => import('@/views/UsersView.vue'), meta: { requiresAdmin: true } },
         { path: 'settings', name: 'settings', component: () => import('@/views/SettingsView.vue') },
         { path: 'link-identity', name: 'link-identity', component: () => import('@/views/LinkIdentityView.vue') },
+        // OAuth consent — landing page for /oauth/authorize when the
+        // user is logged in and a fresh grant is required. Auth guard
+        // bounces unauthed users to /login?redirect=...
+        { path: 'oauth/consent', name: 'oauth-consent', component: () => import('@/views/ConsentView.vue') },
       ],
     },
 

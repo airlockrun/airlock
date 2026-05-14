@@ -39,6 +39,52 @@ const newPassword = ref('')
 const confirmPassword = ref('')
 const loading = ref(false)
 
+// Connected apps (OAuth grants) — apps the user has authorized to
+// reach their agents via the MCP server-side OAuth flow. The list +
+// revoke buttons let the user yank consent without an admin doing it.
+interface GrantDTO {
+  clientId: string
+  clientName: string
+  agentId: string
+  agentSlug: string
+  agentName: string
+  scope: string
+  grantedAt: string
+  expiresAt: string
+}
+const grants = ref<GrantDTO[]>([])
+const grantsLoading = ref(false)
+
+async function loadGrants() {
+  grantsLoading.value = true
+  try {
+    const { data } = await api.get('/api/v1/oauth/grants')
+    grants.value = data || []
+  } catch {
+    grants.value = []
+  } finally {
+    grantsLoading.value = false
+  }
+}
+
+async function revokeGrant(g: GrantDTO) {
+  try {
+    await api.delete(`/api/v1/oauth/grants/${encodeURIComponent(g.clientId)}/${encodeURIComponent(g.agentId)}`)
+    grants.value = grants.value.filter(x => !(x.clientId === g.clientId && x.agentId === g.agentId))
+    toast.add({ severity: 'success', summary: 'Access revoked', life: 2000 })
+  } catch (err: any) {
+    toast.add({ severity: 'error', summary: err?.response?.data?.error || 'revoke failed', life: 5000 })
+  }
+}
+
+function formatDate(iso: string): string {
+  try {
+    return new Date(iso).toLocaleDateString()
+  } catch {
+    return iso
+  }
+}
+
 // Default models (admin only). Keyed by the SystemSettingsInfo field key
 // (camelCase) so assignment back to the proto payload is trivial.
 const defaults = ref<Record<keyof SystemSettingsInfo & string, string>>({
@@ -83,6 +129,7 @@ function applySettings(info: SystemSettingsInfo) {
 }
 
 onMounted(async () => {
+  loadGrants()
   if (auth.isAdmin) {
     // Pickers depend on configured providers — fetch first so the
     // applySettings packed values match an option in the dropdown.
@@ -321,6 +368,51 @@ async function changePassword() {
           </div>
           <Button label="Save" :loading="defaultsLoading" @click="saveDefaults" style="align-self: flex-start" />
         </div>
+      </template>
+    </Card>
+
+    <!-- Connected apps (OAuth grants) -->
+    <Card style="margin-bottom: 1.5rem">
+      <template #title>Connected apps</template>
+      <template #subtitle>
+        External MCP clients (Claude Desktop, VSCode, Codex, …) that you've authorized to talk to your agents.
+        Revoking immediately stops future requests; tokens already issued may keep working for up to 15 minutes
+        until their access token naturally expires.
+      </template>
+      <template #content>
+        <div v-if="grantsLoading" style="color: var(--p-text-muted-color)">Loading…</div>
+        <div v-else-if="grants.length === 0" style="color: var(--p-text-muted-color)">
+          No external apps are connected.
+        </div>
+        <DataTable v-else :value="grants" stripedRows size="small">
+          <Column field="clientName" header="App" />
+          <Column header="Agent">
+            <template #body="{ data }">
+              <RouterLink :to="`/agents/${data.agentId}`">{{ data.agentName }}</RouterLink>
+              <span style="color: var(--p-text-muted-color); margin-left: 0.5rem">
+                ({{ data.agentSlug }})
+              </span>
+            </template>
+          </Column>
+          <Column header="Granted">
+            <template #body="{ data }">{{ formatDate(data.grantedAt) }}</template>
+          </Column>
+          <Column header="Expires">
+            <template #body="{ data }">{{ formatDate(data.expiresAt) }}</template>
+          </Column>
+          <Column header="">
+            <template #body="{ data }">
+              <Button
+                icon="pi pi-trash"
+                size="small"
+                severity="danger"
+                text
+                @click="revokeGrant(data)"
+                v-tooltip.left="'Revoke access'"
+              />
+            </template>
+          </Column>
+        </DataTable>
       </template>
     </Card>
 

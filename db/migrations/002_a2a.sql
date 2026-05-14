@@ -1,5 +1,5 @@
 -- +goose Up
--- A2A (agent-to-agent) calling.
+-- A2A (agent-to-agent) calling + server-side OAuth 2.1 for MCP.
 --
 -- One Airlock agent calls another over MCP at /api/agent/{id}/mcp. We
 -- defer Google's A2A wire format and stand on MCP, which every tool-use
@@ -9,6 +9,15 @@
 -- New task in same context = new run in same conversation. New context
 -- = new conversation. Child runs carry parent_run_id back to the
 -- caller's run so the lifecycle / cancel tree is a real DB graph.
+--
+-- The second half of this migration is the Authorization Server overlay
+-- that lets external MCP clients (Claude Desktop, VSCode, Codex CLI)
+-- talk to those same /api/agent/{id}/mcp endpoints via RFC 8414 / RFC
+-- 9728 / RFC 7591 + OAuth 2.1 PKCE. Airlock is both AS and RS; the
+-- existing HS256 JWT_SECRET signs OAuth access tokens (discriminated
+-- from web-login JWTs by the `client_id` claim and the `aud` claim
+-- bound to a specific agent's MCP URL). Refresh tokens are opaque,
+-- rotating, family-tracked.
 
 -- runs.parent_run_id — nullable. Pre-A2A runs and non-A2A trigger paths
 -- (web/bridge/cron/webhook) leave it NULL: the absence of a parent IS
@@ -68,7 +77,123 @@ CREATE TABLE agent_siblings (
 );
 CREATE INDEX agent_siblings_sibling_idx ON agent_siblings (sibling_agent_id);
 
+-- ============================================================
+-- Server-side OAuth 2.1 Authorization Server tables.
+-- ============================================================
+
+-- oauth_clients — RFC 7591 registered clients.
+--
+-- v1 is public-clients-only (`token_endpoint_auth_method=none`); the
+-- column stays in case we ever support confidential clients. Scope is
+-- always "mcp" today but the column is denormalized so a future split
+-- (`mcp:tools`, `mcp:prompt`) is additive.
+--
+-- redirect_uris is validated at registration time by the API layer:
+-- each URI must be `http://127.0.0.1[:port][/path]`,
+-- `http://[::1][:port][/path]`, `http://localhost[:port][/path]`,
+-- or `https://...`. Max 5 entries; client_name capped at 128 chars.
+CREATE TABLE oauth_clients (
+    client_id                  text PRIMARY KEY,
+    client_name                text NOT NULL,
+    redirect_uris              text[] NOT NULL,
+    grant_types                text[] NOT NULL,
+    response_types             text[] NOT NULL,
+    token_endpoint_auth_method text NOT NULL,
+    scope                      text NOT NULL,
+    created_at                 timestamptz NOT NULL DEFAULT now(),
+    last_used_at               timestamptz
+);
+CREATE INDEX oauth_clients_last_used_idx ON oauth_clients(last_used_at);
+
+-- oauth_authz_codes — short-lived (60s) authorization codes.
+--
+-- The /token exchange consumes a code by SELECT ... FOR UPDATE followed
+-- by DELETE in one transaction — the PRIMARY KEY is the code itself
+-- (32 random bytes, url-safe base64) so the locked-row branch is a
+-- single index probe. Expired rows are GC'd by InboundOAuthGC.
+--
+-- resource is the canonical URL ("{PUBLIC_URL}/api/agent/<uuid>/mcp").
+-- The /authorize handler accepts either the slug or UUID form in its
+-- `resource` query param and normalizes before insertion, so a slug
+-- rename doesn't invalidate codes mid-flight (the agent_id FK is the
+-- real identity binding).
+CREATE TABLE oauth_authz_codes (
+    code           text PRIMARY KEY,
+    user_id        uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    client_id      text NOT NULL REFERENCES oauth_clients(client_id) ON DELETE CASCADE,
+    agent_id       uuid NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    redirect_uri   text NOT NULL,
+    code_challenge text NOT NULL,
+    scope          text NOT NULL,
+    resource       text NOT NULL,
+    expires_at     timestamptz NOT NULL,
+    created_at     timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX oauth_authz_codes_expires_idx ON oauth_authz_codes(expires_at);
+
+-- oauth_refresh_tokens — rotating refresh tokens with reuse detection.
+--
+-- token_hash is SHA-256 of the actual refresh token (which never lives
+-- in the DB). family_id is shared across every rotation of one logical
+-- session; if a refresh arrives for a token whose consumed_at IS NOT
+-- NULL, the entire family is revoked (RFC 6819 §5.2.2.3 / OAuth 2.1
+-- §6.1) — catches stolen-token races where the legit client and the
+-- attacker both try to spend the same token.
+--
+-- expires_at is NOT slid on rotation; the 30-day lifetime starts at the
+-- initial mint, so a long-running rotation chain doesn't extend
+-- forever. consumed_at is set when a token is spent; the row stays for
+-- 7 days afterward for reuse-detection forensics, then GC'd.
+CREATE TABLE oauth_refresh_tokens (
+    token_hash        bytea PRIMARY KEY,
+    user_id           uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    client_id         text NOT NULL REFERENCES oauth_clients(client_id) ON DELETE CASCADE,
+    agent_id          uuid NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    scope             text NOT NULL,
+    family_id         uuid NOT NULL,
+    parent_token_hash bytea,
+    expires_at        timestamptz NOT NULL,
+    consumed_at       timestamptz,
+    created_at        timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX oauth_refresh_family_idx ON oauth_refresh_tokens(family_id);
+CREATE INDEX oauth_refresh_expires_idx ON oauth_refresh_tokens(expires_at);
+CREATE INDEX oauth_refresh_user_client_agent_idx
+    ON oauth_refresh_tokens(user_id, client_id, agent_id);
+
+-- oauth_grants — consent records.
+--
+-- The (user, client, agent) PRIMARY KEY enforces one row per triple;
+-- repeated /authorize hits UPSERT to refresh granted_at + expires_at.
+-- expires_at = granted_at + 90 days; after that the user has to
+-- re-consent. revoked_at = NULL means active. Revoking flips revoked_at
+-- AND deletes matching oauth_refresh_tokens so the next /token refresh
+-- fails immediately (already-issued access tokens survive until their
+-- 15-min expiry — surfaced in the Settings UI tooltip).
+CREATE TABLE oauth_grants (
+    user_id    uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    client_id  text NOT NULL REFERENCES oauth_clients(client_id) ON DELETE CASCADE,
+    agent_id   uuid NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    scope      text NOT NULL,
+    granted_at timestamptz NOT NULL DEFAULT now(),
+    expires_at timestamptz NOT NULL,
+    revoked_at timestamptz,
+    PRIMARY KEY (user_id, client_id, agent_id)
+);
+CREATE INDEX oauth_grants_expires_idx
+    ON oauth_grants(expires_at) WHERE revoked_at IS NULL;
+
 -- +goose Down
+DROP INDEX IF EXISTS oauth_grants_expires_idx;
+DROP TABLE IF EXISTS oauth_grants;
+DROP INDEX IF EXISTS oauth_refresh_user_client_agent_idx;
+DROP INDEX IF EXISTS oauth_refresh_expires_idx;
+DROP INDEX IF EXISTS oauth_refresh_family_idx;
+DROP TABLE IF EXISTS oauth_refresh_tokens;
+DROP INDEX IF EXISTS oauth_authz_codes_expires_idx;
+DROP TABLE IF EXISTS oauth_authz_codes;
+DROP INDEX IF EXISTS oauth_clients_last_used_idx;
+DROP TABLE IF EXISTS oauth_clients;
 DROP INDEX IF EXISTS agent_siblings_sibling_idx;
 DROP TABLE IF EXISTS agent_siblings;
 ALTER TABLE agents DROP CONSTRAINT IF EXISTS agents_public_implies_non_member;

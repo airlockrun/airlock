@@ -103,10 +103,19 @@ func (s *MCPServer) ServeHTTP(w http.ResponseWriter, r *http.Request, h *agentHa
 	}
 
 	// Resolve the caller principal from headers BEFORE access checks
-	// so we can return the right HTTP status (401 vs 403).
-	principal, principalErr := resolvePrincipal(ctx, r, q, h.jwtSecret)
+	// so we can return the right HTTP status (401 vs 403) and emit the
+	// MCP-spec WWW-Authenticate handshake on missing/bad credentials.
+	principal, principalErr := resolvePrincipal(ctx, r, q, h.jwtSecret, uuid.UUID(target.ID.Bytes), h.publicURL)
 	if principalErr != nil {
-		writeJSONRPCError(w, nil, rpcErrInvalidParams, principalErr.Error())
+		writeMCPAuthError(w, h.publicURL, identifier, principalErr)
+		return
+	}
+
+	// The protected /mcp endpoint never serves anon — public access
+	// has its own /public-mcp route. An anon principal here means
+	// "no bearer presented"; convert to the OAuth-spec 401 handshake.
+	if principal.Kind == MCPPrincipalAnon {
+		writeMCPAuthError(w, h.publicURL, identifier, errInvalidToken)
 		return
 	}
 
@@ -114,7 +123,7 @@ func (s *MCPServer) ServeHTTP(w http.ResponseWriter, r *http.Request, h *agentHa
 	if err != nil {
 		switch {
 		case errors.Is(err, ErrMCPUnauthenticated):
-			http.Error(w, `{"error":"unauthenticated"}`, http.StatusUnauthorized)
+			writeMCPAuthError(w, h.publicURL, identifier, errInvalidToken)
 		case errors.Is(err, ErrMCPForbidden):
 			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 		default:
@@ -124,7 +133,16 @@ func (s *MCPServer) ServeHTTP(w http.ResponseWriter, r *http.Request, h *agentHa
 		return
 	}
 
-	// Decode the JSON-RPC envelope. Reject malformed bodies up front.
+	s.serveDispatch(w, r, h, q, target, access, principal)
+}
+
+// serveDispatch is the JSON-RPC parse + method dispatch loop shared
+// between the protected /mcp route (ServeHTTP) and the no-auth
+// /public-mcp route (ServePublicHTTP). By this point the caller has
+// already been resolved to a principal and access tier.
+func (s *MCPServer) serveDispatch(w http.ResponseWriter, r *http.Request, h *agentHandler, q *dbq.Queries, target dbq.Agent, access agentsdk.Access, principal MCPPrincipal) {
+	ctx := r.Context()
+
 	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20)) // 1 MiB
 	if err != nil {
 		writeJSONRPCError(w, nil, rpcErrParse, "read body")
@@ -142,9 +160,6 @@ func (s *MCPServer) ServeHTTP(w http.ResponseWriter, r *http.Request, h *agentHa
 	case "notifications/initialized":
 		w.WriteHeader(http.StatusAccepted)
 	case "notifications/cancelled":
-		// Best-effort: caller asked to cancel without disconnecting.
-		// If the body carries a runId we can map it to an in-flight
-		// run; otherwise it's an ack-only path.
 		s.handleCancelled(msg)
 		w.WriteHeader(http.StatusAccepted)
 	case "tools/list":
@@ -168,12 +183,21 @@ func resolveAgent(ctx context.Context, q *dbq.Queries, identifier string) (dbq.A
 }
 
 // resolvePrincipal classifies the request by the Authorization header.
-// No header → anon. User JWT → user principal. Agent JWT → agent
-// principal, but we additionally verify X-Run-ID belongs to the
-// claimed agent and pull the original user_id off its conversation —
-// the original user is the authorization principal, the agent's own
-// identity is just for audit / accounting.
-func resolvePrincipal(ctx context.Context, r *http.Request, q *dbq.Queries, jwtSecret string) (MCPPrincipal, error) {
+// Returns:
+//   - Anon (no header) — the protected /mcp handler converts this to a
+//     401 + WWW-Authenticate handshake; the /public-mcp handler accepts
+//     it as-is.
+//   - Agent JWT → MCPPrincipalAgent (A2A path; X-Run-ID required).
+//   - OAuth access token (JWT with client_id claim) → MCPPrincipalOAuthClient.
+//     Audience binding (aud == this agent's canonical resource URL) is
+//     verified here so the MCP handler's access-ladder code stays
+//     unchanged. Mandatory `mcp` scope check.
+//   - Plain user JWT → MCPPrincipalUser (web SPA path, unchanged).
+//
+// targetAgentID is the agent the request is hitting; needed for the
+// OAuth audience check. publicURL is the canonical origin used to
+// build the audience.
+func resolvePrincipal(ctx context.Context, r *http.Request, q *dbq.Queries, jwtSecret string, targetAgentID uuid.UUID, publicURL string) (MCPPrincipal, error) {
 	authHeader := r.Header.Get("Authorization")
 	if authHeader == "" {
 		return MCPPrincipal{Kind: MCPPrincipalAnon}, nil
@@ -183,10 +207,8 @@ func resolvePrincipal(ctx context.Context, r *http.Request, q *dbq.Queries, jwtS
 		return MCPPrincipal{}, errors.New("invalid Authorization header")
 	}
 
-	// Try agent token first — agent JWTs are routed through A2A; user
-	// JWTs go through this same endpoint for external Claude Desktop
-	// callers and the like. ValidateAgentToken is strict about
-	// requiring the agent_id claim, so a user JWT falls through.
+	// Try agent token first — agent JWTs carry an agent_id claim and
+	// ValidateAgentToken is strict; anything else falls through.
 	if claims, err := auth.ValidateAgentToken(jwtSecret, token); err == nil {
 		callerAgentID, err := uuid.Parse(claims.AgentID)
 		if err != nil {
@@ -200,18 +222,10 @@ func resolvePrincipal(ctx context.Context, r *http.Request, q *dbq.Queries, jwtS
 		if err != nil {
 			return MCPPrincipal{}, errors.New("invalid X-Run-ID")
 		}
-		// Look up the parent run + its conversation. We merge "not
-		// found" with "wrong agent" into one error to avoid leaking
-		// existence of run ids.
 		run, err := q.GetRunByID(ctx, pgtype.UUID{Bytes: parentRunID, Valid: true})
 		if err != nil || uuid.UUID(run.AgentID.Bytes) != callerAgentID {
 			return MCPPrincipal{}, errors.New("X-Run-ID not accessible")
 		}
-		// Derive the original user from the parent run's conversation.
-		// trigger_ref carries the conversation ID for prompt runs; A2A
-		// child runs carry parent_run_id, so we have to chase up the
-		// chain. For top-level prompt runs we read the conversation
-		// directly.
 		userID, err := chaseOriginalUser(ctx, q, run)
 		if err != nil {
 			return MCPPrincipal{}, errors.New("X-Run-ID not accessible")
@@ -224,16 +238,116 @@ func resolvePrincipal(ctx context.Context, r *http.Request, q *dbq.Queries, jwtS
 		}, nil
 	}
 
-	// User JWT.
+	// Parse as a user/OAuth JWT — the wire shape is the same; the
+	// presence of the ClientID claim picks OAuth, absence picks the
+	// legacy web-login path. See auth/jwt.go for the invariant.
 	claims, err := auth.ValidateToken(jwtSecret, token)
 	if err != nil {
-		return MCPPrincipal{}, errors.New("invalid token")
+		return MCPPrincipal{}, errInvalidToken
 	}
 	userID, err := uuid.Parse(claims.Subject)
 	if err != nil {
 		return MCPPrincipal{}, errors.New("invalid user claim")
 	}
+
+	if claims.ClientID != "" {
+		// OAuth access token. Audience MUST be the canonical URL for
+		// THIS agent — `aud` reflects the agent the token was issued
+		// for. Scope must include `mcp`.
+		canonAud := fmt.Sprintf("%s/api/agent/%s/mcp", strings.TrimRight(publicURL, "/"), targetAgentID.String())
+		if !auth.AudienceContains(claims.Audience, canonAud) {
+			return MCPPrincipal{}, errAudienceMismatch
+		}
+		if !auth.ScopeContains(claims.Scope, "mcp") {
+			return MCPPrincipal{}, errInsufficientScope
+		}
+		// Client must still exist; a revoked-from-the-table client
+		// fails closed.
+		if _, err := q.GetOAuthClient(ctx, claims.ClientID); err != nil {
+			return MCPPrincipal{}, errClientRevoked
+		}
+		return MCPPrincipal{
+			Kind:     MCPPrincipalOAuthClient,
+			UserID:   userID,
+			ClientID: claims.ClientID,
+		}, nil
+	}
+
+	// Plain user JWT (web SPA).
 	return MCPPrincipal{Kind: MCPPrincipalUser, UserID: userID}, nil
+}
+
+// Sentinel errors so the MCP handler can map each one to the
+// appropriate WWW-Authenticate response (invalid_token vs.
+// insufficient_scope) for OAuth-aware MCP clients.
+var (
+	errInvalidToken      = errors.New("invalid token")
+	errAudienceMismatch  = errors.New("audience mismatch")
+	errInsufficientScope = errors.New("insufficient scope")
+	errClientRevoked     = errors.New("client revoked")
+)
+
+// writeMCPAuthError emits the RFC 9728 + OAuth 2.1 401 handshake an
+// MCP client expects when its bearer is missing, invalid, or
+// audience-/scope-mismatched. The `resource_metadata` URL echoes the
+// identifier the client typed (slug or UUID) so the discovery flow
+// keeps working through slug renames.
+//
+// errInsufficientScope is the only branch that returns 403; everything
+// else is 401 so the client triggers the OAuth dance.
+func writeMCPAuthError(w http.ResponseWriter, publicURL, identifier string, cause error) {
+	publicURL = strings.TrimRight(publicURL, "/")
+	resourceMeta := fmt.Sprintf("%s/.well-known/oauth-protected-resource/api/agent/%s/mcp", publicURL, identifier)
+	errCode, errDesc, status := "invalid_token", "", http.StatusUnauthorized
+	switch {
+	case errors.Is(cause, errAudienceMismatch):
+		errDesc = "audience mismatch"
+	case errors.Is(cause, errInsufficientScope):
+		errCode, errDesc, status = "insufficient_scope", "scope `mcp` required", http.StatusForbidden
+	case errors.Is(cause, errClientRevoked):
+		errDesc = "oauth client revoked"
+	case cause != nil && cause != errInvalidToken:
+		errDesc = cause.Error()
+	}
+	header := fmt.Sprintf(`Bearer realm="MCP", resource_metadata="%s", error="%s"`, resourceMeta, errCode)
+	if errDesc != "" {
+		header += fmt.Sprintf(`, error_description="%s"`, errDesc)
+	}
+	w.Header().Set("WWW-Authenticate", header)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_, _ = w.Write([]byte(`{"error":"` + errCode + `"}`))
+}
+
+// ServePublicHTTP is the no-auth /public-mcp route. Mounted always;
+// 404s unless the target agent has allow_public_mcp = true. Skips
+// principal resolution entirely — every caller is Anon, which the
+// access ladder maps to AccessPublic on agents that opted in.
+func (s *MCPServer) ServePublicHTTP(w http.ResponseWriter, r *http.Request, h *agentHandler) {
+	ctx := r.Context()
+	q := dbq.New(h.db.Pool())
+
+	identifier := chi.URLParam(r, "identifier")
+	target, err := resolveAgent(ctx, q, identifier)
+	if err != nil {
+		writeJSONRPCError(w, nil, rpcErrInvalidParams, "agent not found")
+		return
+	}
+	if !target.AllowPublicMcp {
+		http.NotFound(w, r)
+		return
+	}
+
+	principal := MCPPrincipal{Kind: MCPPrincipalAnon}
+	access, err := computeA2ACallerAccess(ctx, q, target, principal)
+	if err != nil {
+		// Should be unreachable given AllowPublicMcp above, but
+		// fail closed if the access ladder rejects.
+		http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+		return
+	}
+
+	s.serveDispatch(w, r, h, q, target, access, principal)
 }
 
 // chaseOriginalUser walks up the parent_run_id chain to find the

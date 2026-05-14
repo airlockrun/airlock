@@ -292,6 +292,54 @@ type Connection struct {
 	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
 }
 
+type OauthAuthzCode struct {
+	Code          string             `json:"code"`
+	UserID        pgtype.UUID        `json:"user_id"`
+	ClientID      string             `json:"client_id"`
+	AgentID       pgtype.UUID        `json:"agent_id"`
+	RedirectUri   string             `json:"redirect_uri"`
+	CodeChallenge string             `json:"code_challenge"`
+	Scope         string             `json:"scope"`
+	Resource      string             `json:"resource"`
+	ExpiresAt     pgtype.Timestamptz `json:"expires_at"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+}
+
+type OauthClient struct {
+	ClientID                string             `json:"client_id"`
+	ClientName              string             `json:"client_name"`
+	RedirectUris            []string           `json:"redirect_uris"`
+	GrantTypes              []string           `json:"grant_types"`
+	ResponseTypes           []string           `json:"response_types"`
+	TokenEndpointAuthMethod string             `json:"token_endpoint_auth_method"`
+	Scope                   string             `json:"scope"`
+	CreatedAt               pgtype.Timestamptz `json:"created_at"`
+	LastUsedAt              pgtype.Timestamptz `json:"last_used_at"`
+}
+
+type OauthGrant struct {
+	UserID    pgtype.UUID        `json:"user_id"`
+	ClientID  string             `json:"client_id"`
+	AgentID   pgtype.UUID        `json:"agent_id"`
+	Scope     string             `json:"scope"`
+	GrantedAt pgtype.Timestamptz `json:"granted_at"`
+	ExpiresAt pgtype.Timestamptz `json:"expires_at"`
+	RevokedAt pgtype.Timestamptz `json:"revoked_at"`
+}
+
+type OauthRefreshToken struct {
+	TokenHash       []byte             `json:"token_hash"`
+	UserID          pgtype.UUID        `json:"user_id"`
+	ClientID        string             `json:"client_id"`
+	AgentID         pgtype.UUID        `json:"agent_id"`
+	Scope           string             `json:"scope"`
+	FamilyID        pgtype.UUID        `json:"family_id"`
+	ParentTokenHash []byte             `json:"parent_token_hash"`
+	ExpiresAt       pgtype.Timestamptz `json:"expires_at"`
+	ConsumedAt      pgtype.Timestamptz `json:"consumed_at"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+}
+
 type OauthState struct {
 	State        string             `json:"state"`
 	AgentID      pgtype.UUID        `json:"agent_id"`
