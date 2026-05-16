@@ -639,14 +639,19 @@ func (s *MCPServer) handlePromptCall(ctx context.Context, w http.ResponseWriter,
 	}()
 
 	// mirror is the WS-publish twin of the SSE-translate path below.
-	// Each agent NDJSON event we surface to the caller also publishes
-	// to the child agent's topic (gated by the original user) and, if
-	// this is an A2A child of another agent's run, to the parent
-	// agent's topic with a SubagentInfo tag.
+	//
+	// A2A child run (parentInfo != nil): publish ONLY to the caller's
+	// topic, tagged as a sub-run. Also publishing to the child agent's
+	// own topic would double every delta for a user who is a member of
+	// both agents — the socket auto-subscribes to every member agent and
+	// the chat store isn't topic-scoped — and an A2A invocation isn't a
+	// conversation in the sibling, so it has no business surfacing in
+	// the sibling's own chat.
+	//
+	// Non-A2A (external MCP / user / anon prompt, parentInfo == nil):
+	// the child agent's own topic is the only audience.
 	childTopic := uuid.UUID(target.ID.Bytes)
 	mirror := func(eventType string, payload proto.Message) {
-		env := realtime.NewEnvelopeForUser(eventType, childTopic.String(), childUserID, promptArgs.ConversationID, payload)
-		_ = s.pubsub.Publish(cctx, childTopic, env)
 		if parentInfo != nil {
 			parentEnv := realtime.NewEnvelopeForUser(eventType, parentInfo.AgentID.String(), parentInfo.UserID, parentInfo.ConvID, payload).
 				WithSubagent(realtime.SubagentInfo{
@@ -655,7 +660,10 @@ func (s *MCPServer) handlePromptCall(ctx context.Context, w http.ResponseWriter,
 					Slug:    parentInfo.ChildAgentSlug,
 				})
 			_ = s.pubsub.Publish(cctx, parentInfo.AgentID, parentEnv)
+			return
 		}
+		env := realtime.NewEnvelopeForUser(eventType, childTopic.String(), childUserID, promptArgs.ConversationID, payload)
+		_ = s.pubsub.Publish(cctx, childTopic, env)
 	}
 
 	// run.started — emitted up-front so the parent's chat UI can show
@@ -723,6 +731,19 @@ func (s *MCPServer) handlePromptCall(ctx context.Context, w http.ResponseWriter,
 				Output     json.RawMessage `json:"output"`
 			}
 			_ = json.Unmarshal(evt.Data, &tr)
+			// tr.Output is the serialized tool.Result
+			// ({"output":"...","attachments":[...]}). Unwrap the inner
+			// string so the UI sees just the tool's text — and so
+			// JSON-encoded newlines are decoded back to real newlines
+			// (matches trigger/prompt.go's normal-path handling; without
+			// this the sub-run's run_js output renders with literal \n).
+			output := string(tr.Output)
+			var unwrapped struct {
+				Output string `json:"output"`
+			}
+			if json.Unmarshal(tr.Output, &unwrapped) == nil {
+				output = unwrapped.Output
+			}
 			sendSSE(w, flusher, "notifications/progress", map[string]any{
 				"progressToken": progressToken,
 				"event":         raw,
@@ -731,7 +752,7 @@ func (s *MCPServer) handlePromptCall(ctx context.Context, w http.ResponseWriter,
 				RunId:      runID.String(),
 				ToolCallId: tr.ToolCallID,
 				ToolName:   tr.ToolName,
-				Output:     string(tr.Output),
+				Output:     output,
 			})
 		case "error":
 			var e struct {
