@@ -14,6 +14,7 @@ import (
 	"github.com/airlockrun/airlock/scaffold"
 	sol "github.com/airlockrun/sol"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"
 )
 
@@ -209,6 +210,15 @@ func (b *BuildService) doUpgrade(ctx context.Context, q *dbq.Queries, input Upgr
 			SourceRef:    sourceRef,
 			ImageRef:     imageRef,
 		})
+	}
+
+	// Bare rebuild: re-image the CURRENT source against the current
+	// /libs agentsdk. No schema clone, no checkout, no Sol, no
+	// commit/merge — no code touched. SDK drift that breaks
+	// compilation surfaces as a build error directing the user to
+	// Upgrade with a description (no auto-codegen on rebuild).
+	if isRebuild(input) {
+		return b.rebuildImage(ctx, q, agent, agentID, agentPgUUID, agentUUID, buildUUID, bl, completeBuild)
 	}
 
 	// Step 2: Clone schema for safe upgrade testing + migration validation.
@@ -411,4 +421,99 @@ func (b *BuildService) doUpgrade(ctx context.Context, q *dbq.Queries, input Upgr
 
 	completeBuild("complete", "", hash, imageTag)
 	return solResult.ExitMessage, nil
+}
+
+// rebuildImage re-images the agent's CURRENT source against the current
+// /libs agentsdk and swaps the running container to it. No code is
+// touched: it builds from the agent's recorded source_ref via the
+// monorepo working tree (only this agent's subtree, unchanged since
+// that ref), regenerating only the build-mechanics files (Dockerfile,
+// go.mod require line) that every build regenerates anyway.
+//
+// If the source no longer compiles against the current agentsdk (a
+// fleet-wide, operator-visible SDK API break), the docker build fails
+// and we surface that verbatim with a pointer to Upgrade-with-a-
+// description. There is deliberately no automatic codegen fallback on
+// the rebuild path — adapting code is a deliberate Upgrade, not a
+// silent side effect of a bulk rebuild.
+func (b *BuildService) rebuildImage(ctx context.Context, q *dbq.Queries, agent dbq.Agent, agentID string, agentPgUUID pgtype.UUID, agentUUID, buildUUID uuid.UUID, bl *buildLog, completeBuild func(status, errMsg, sourceRef, imageRef string)) (string, error) {
+	hash := agent.SourceRef
+	if hash == "" {
+		completeBuild("failed", "agent has no source ref to rebuild from", "", "")
+		return "", errors.New("rebuild: agent has no source ref")
+	}
+
+	dbPassword, err := b.encryptor.Get(ctx, "agent/"+agentID+"/db_password", agent.DbPassword)
+	if err != nil {
+		return "", fmt.Errorf("decrypt db password: %w", err)
+	}
+
+	contextDir := filepath.Join(b.cfg.AgentMonorepoPath, "agents", agentID)
+	if err := scaffold.GenerateDockerfile(contextDir, scaffold.ScaffoldData{
+		AgentID:         agentID,
+		Module:          "agent",
+		GoVersion:       "1.26",
+		AgentSDKVersion: "v" + agentsdk.Version,
+		AgentBaseImage:  b.cfg.AgentBaseImage,
+	}); err != nil {
+		completeBuild("failed", err.Error(), hash, "")
+		return "", fmt.Errorf("generate Dockerfile: %w", err)
+	}
+	if err := bumpAgentSDKRequire(ctx, contextDir, agentsdk.Version); err != nil {
+		completeBuild("failed", err.Error(), hash, "")
+		return "", fmt.Errorf("bump agent SDK require: %w", err)
+	}
+
+	imageTag, err := buildImage(ctx, b.cfg, agentID, contextDir, hash, func(line string) {
+		seq := bl.appendDocker(line)
+		b.events.PublishBuildLogLine(ctx, agentUUID, buildUUID, seq, "docker", line)
+	})
+	if err != nil {
+		msg := fmt.Sprintf("rebuild failed to compile against the current agentsdk. "+
+			"If the SDK API changed, re-run Upgrade with a short description so the "+
+			"builder can adapt the code.\n\n%s", err.Error())
+		completeBuild("failed", msg, hash, "")
+		return "", errors.New(msg)
+	}
+
+	if ctx.Err() != nil {
+		completeBuild("cancelled", "cancelled by user", hash, imageTag)
+		return "", ctx.Err()
+	}
+
+	// Swap the running container to the freshly built image.
+	if agent.ImageRef != "" {
+		_ = b.containers.StopAgent(ctx, "airlock-agent-"+agentUUID.String()[:8])
+	}
+	schemaName := fmt.Sprintf("agent_%s", sanitizeUUID(agentID))
+	agentToken, err := auth.IssueAgentToken(b.cfg.JWTSecret, agentUUID)
+	if err != nil {
+		completeBuild("failed", err.Error(), hash, imageTag)
+		return "", fmt.Errorf("issue agent token: %w", err)
+	}
+	agentDBURL := b.agentDBURL(schemaName, dbPassword, schemaName)
+	if _, err := b.containers.StartAgent(ctx, container.AgentOpts{
+		AgentID: agentUUID,
+		Image:   imageTag,
+		Env: map[string]string{
+			"AIRLOCK_AGENT_ID":    agentID,
+			"AIRLOCK_API_URL":     b.cfg.APIURLAgent,
+			"AIRLOCK_DB_URL":      agentDBURL,
+			"AIRLOCK_AGENT_TOKEN": agentToken,
+		},
+	}); err != nil {
+		completeBuild("failed", err.Error(), hash, imageTag)
+		return "", fmt.Errorf("start rebuilt agent: %w", err)
+	}
+
+	if err := q.UpdateAgentRefs(ctx, dbq.UpdateAgentRefsParams{
+		ID:        agentPgUUID,
+		SourceRef: hash,
+		ImageRef:  imageTag,
+	}); err != nil {
+		return "", fmt.Errorf("update refs: %w", err)
+	}
+
+	completeBuild("complete", "", hash, imageTag)
+	return "Rebuilt against the current agentsdk (no code changes).", nil
 }

@@ -592,26 +592,45 @@ What it should do:
 %s`, agent.Name, agent.Slug, uuidString(agent.ID), instructions)
 }
 
-// buildUpgradePrompt is the user-turn message for an upgrade. It frames
-// the work as an incremental change to an already-working codebase so
-// the model preserves everything unrelated to the request, rather than
-// treating the message as a full specification to make the tree match.
-// hasDiagnostics is true when writeUpgradeDiagnostics wrote DIAGNOSTICS.md.
+// isRebuild reports whether an upgrade is the bare-recompile intent: a
+// manual upgrade with no description. It never carries diagnostics (only
+// the auto_fix path sets error context) and llm_request always has a
+// description, so reason==manual && empty description uniquely
+// identifies "re-image the current source against the current /libs,
+// change no code". doUpgrade branches on this before any checkout/Sol.
+func isRebuild(input UpgradeInput) bool {
+	return input.Reason == "manual" && strings.TrimSpace(input.Description) == ""
+}
+
+// buildUpgradePrompt is the user-turn message for a codegen upgrade.
+// Rebuilds never reach here (doUpgrade branches earlier), so there are
+// exactly two intents: a failure-fix (diagnostics present — diagnose
+// and repair a crashing agent) or a feature change. Both frame the work
+// as incremental against an already-working tree so the model preserves
+// everything unrelated. The internal Reason enum is deliberately NOT
+// surfaced — it means nothing to the model.
 func buildUpgradePrompt(agent dbq.Agent, input UpgradeInput, hasDiagnostics bool) string {
+	name := fmt.Sprintf("%s (slug: %s, id: %s)", agent.Name, agent.Slug, uuidString(agent.ID))
 	desc := strings.TrimSpace(input.Description)
-	if desc == "" {
-		desc = "(no description provided)"
-	}
-	p := fmt.Sprintf(`You are upgrading the EXISTING agent %s (slug: %s, id: %s). Its workspace already contains a working codebase. This is an incremental change request — preserve everything not related to it. Do not remove tools, connections, routes, or files the request doesn't mention.
-
-Requested change (reason: %s):
-
-%s`, agent.Name, agent.Slug, uuidString(agent.ID), input.Reason, desc)
 
 	if hasDiagnostics {
-		p += "\n\nThe agent is currently failing. Read DIAGNOSTICS.md in the workspace for the failure context (error message, panic trace, failed input, recorded actions, conversation) before changing code."
+		p := fmt.Sprintf(`The EXISTING agent %s is failing. Diagnose and fix the failure described in DIAGNOSTICS.md in the workspace. Make the minimal change that fixes it and preserve everything not involved in the fix — do not remove tools, connections, routes, or files unrelated to the failure.`, name)
+		if desc != "" {
+			p += "\n\nAdditional context from the requester:\n\n" + desc
+		}
+		return p
 	}
-	return p
+
+	if desc == "" {
+		// Degenerate: an auto_fix whose run carried no error context and
+		// no description. Don't invent work — just keep it building.
+		desc = "(no description provided — make no behavioral changes; only ensure the agent still builds.)"
+	}
+	return fmt.Sprintf(`You are upgrading the EXISTING agent %s. Its workspace already contains a working codebase. This is an incremental change request — implement it and preserve everything not related to it. Do not remove tools, connections, routes, or files the request doesn't mention.
+
+Requested change:
+
+%s`, name, desc)
 }
 
 // writeUpgradeDiagnostics writes DIAGNOSTICS.md only when the upgrade

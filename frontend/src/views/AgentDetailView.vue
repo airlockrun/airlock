@@ -226,6 +226,9 @@ function confirmDelete() {
 
 const showUpgradeDialog = ref(false)
 const upgradeDescription = ref('')
+// Empty description = bare rebuild (re-image current source against the
+// latest agentsdk, no code changes). Any text = a codegen upgrade.
+const rebuildMode = computed(() => upgradeDescription.value.trim() === '')
 
 function doUpgrade() {
   upgradeDescription.value = ''
@@ -235,9 +238,10 @@ function doUpgrade() {
 async function submitUpgrade() {
   showUpgradeDialog.value = false
   try {
+    const wasRebuild = rebuildMode.value
     await api.post(`/api/v1/agents/${agentId}/upgrade`, { description: upgradeDescription.value })
     if (agent.value) agent.value.upgradeStatus = 'queued'
-    toast.add({ severity: 'info', summary: 'Upgrade queued', life: 3000 })
+    toast.add({ severity: 'info', summary: wasRebuild ? 'Rebuild queued' : 'Upgrade queued', life: 3000 })
   } catch (err: any) {
     toast.add({ severity: 'error', summary: err.response?.data?.error || 'Upgrade failed', life: 5000 })
   }
@@ -345,12 +349,15 @@ function goToChat() {
     </Tabs>
 
     <!-- Upgrade dialog -->
-    <Dialog v-model:visible="showUpgradeDialog" header="Upgrade Agent" modal style="width: 30rem">
+    <Dialog v-model:visible="showUpgradeDialog" :header="rebuildMode ? 'Rebuild Agent' : 'Upgrade Agent'" modal style="width: 30rem">
       <p style="margin-top: 0">Describe what to change or fix:</p>
       <Textarea v-model="upgradeDescription" rows="4" style="width: 100%" placeholder="e.g. Add a /history page that shows past voting rounds" autofocus />
+      <small style="display: block; margin-top: 0.5rem; color: var(--p-text-muted-color)">
+        Leave empty to <strong>rebuild</strong> against the latest agentsdk — no code changes. If the SDK API changed and the code no longer compiles, the rebuild fails; add a description so the builder can adapt it.
+      </small>
       <template #footer>
         <Button label="Cancel" severity="secondary" text @click="showUpgradeDialog = false" />
-        <Button label="Upgrade" icon="pi pi-arrow-up" @click="submitUpgrade" />
+        <Button :label="rebuildMode ? 'Rebuild' : 'Upgrade'" :icon="rebuildMode ? 'pi pi-refresh' : 'pi pi-arrow-up'" @click="submitUpgrade" />
       </template>
     </Dialog>
   </div>

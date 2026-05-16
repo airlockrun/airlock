@@ -485,8 +485,11 @@ func (h *agentsHandler) Upgrade(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "agent not found")
 		return
 	}
-	if err := h.requireAccess(ctx, agent); err != nil {
-		writeError(w, http.StatusForbidden, "access denied")
+	// Upgrade rewrites the agent's code — agent-admin only, matching the
+	// admin-runs-only requestUpgrade JS path and the config-ops model
+	// (members/webhooks/crons are all agent-admin).
+	if err := h.requireAgentAdmin(ctx, agent.ID); err != nil {
+		writeError(w, http.StatusForbidden, "agent admin access required")
 		return
 	}
 
@@ -516,11 +519,22 @@ func (h *agentsHandler) Upgrade(w http.ResponseWriter, r *http.Request) {
 				Reason:      "manual",
 				Description: req.Description,
 			}
-			// If a run ID was provided, load full error context from that run.
+			// If a run ID was provided, load full error context from that
+			// run. A supplied-but-unresolvable run_id degrades to a manual
+			// upgrade with no diagnostics — log loudly so a "fix this run"
+			// click that lost its context isn't silently a no-op brief.
 			if req.RunId != "" {
-				if runUUID, err := parseUUID(req.RunId); err == nil {
+				runUUID, perr := parseUUID(req.RunId)
+				if perr != nil {
+					h.logger.Warn("upgrade: invalid run_id; proceeding as manual upgrade without diagnostics",
+						zap.String("agent", agentID.String()), zap.String("run_id", req.RunId), zap.Error(perr))
+				} else {
 					pgRunID := toPgUUID(runUUID)
-					if failedRun, err := q.GetRunByID(context.Background(), pgRunID); err == nil {
+					failedRun, gerr := q.GetRunByID(context.Background(), pgRunID)
+					if gerr != nil {
+						h.logger.Warn("upgrade: run not found; proceeding as manual upgrade without diagnostics",
+							zap.String("agent", agentID.String()), zap.String("run_id", req.RunId), zap.Error(gerr))
+					} else {
 						input.Reason = "auto_fix"
 						input.ErrorMessage = failedRun.ErrorMessage
 						input.PanicTrace = failedRun.PanicTrace
