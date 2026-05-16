@@ -48,11 +48,11 @@ func TestNormalizeForSTT_PassThrough(t *testing.T) {
 
 func TestStripExt(t *testing.T) {
 	cases := map[string]string{
-		"voice.ogg":  "voice",
+		"voice.ogg":   "voice",
 		"clip.tar.gz": "clip.tar",
-		"noext":      "noext",
-		".hidden":    ".hidden",
-		"":           "",
+		"noext":       "noext",
+		".hidden":     ".hidden",
+		"":            "",
 	}
 	for in, want := range cases {
 		if got := stripExt(in); got != want {

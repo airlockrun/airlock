@@ -183,6 +183,26 @@ CREATE TABLE oauth_grants (
 CREATE INDEX oauth_grants_expires_idx
     ON oauth_grants(expires_at) WHERE revoked_at IS NULL;
 
+-- agents.tools_hash — change-detection for sibling-update broadcast.
+-- Sync updates the hash; the API handler compares before/after to
+-- decide whether to broadcast a /refresh to other running agents.
+-- Nullable so legacy rows don't trip a NOT NULL constraint; treated
+-- as "changed" on first sync.
+ALTER TABLE agents
+    ADD COLUMN tools_hash bytea;
+
+-- agent_directories.scope — opts the directory into per-context path
+-- scoping. Empty string preserves the legacy unscoped behaviour
+-- (everything pre-dating this column). "run"/"conv"/"user" pick the
+-- scope kind WriteFile injects on writes; the read-side overlay
+-- accepts any kind in the path. NOT NULL DEFAULT '' so legacy rows
+-- are valid; once written this column is stable per-directory
+-- (the sync upsert overwrites it whenever the builder re-syncs).
+ALTER TABLE agent_directories
+    ADD COLUMN scope text NOT NULL DEFAULT '';
+ALTER TABLE agent_directories
+    ALTER COLUMN scope DROP DEFAULT;
+
 -- +goose Down
 DROP INDEX IF EXISTS oauth_grants_expires_idx;
 DROP TABLE IF EXISTS oauth_grants;
@@ -199,5 +219,7 @@ DROP TABLE IF EXISTS agent_siblings;
 ALTER TABLE agents DROP CONSTRAINT IF EXISTS agents_public_implies_non_member;
 ALTER TABLE agents DROP COLUMN IF EXISTS allow_public_mcp;
 ALTER TABLE agents DROP COLUMN IF EXISTS allow_non_member_mcp;
+ALTER TABLE agent_directories DROP COLUMN IF EXISTS scope;
+ALTER TABLE agents DROP COLUMN IF EXISTS tools_hash;
 DROP INDEX IF EXISTS runs_parent_run_id_idx;
 ALTER TABLE runs DROP COLUMN IF EXISTS parent_run_id;

@@ -186,4 +186,3 @@ func loadBaseOnce() map[string]*solprovider.ModelsDevProvider {
 	}
 	return m
 }
-

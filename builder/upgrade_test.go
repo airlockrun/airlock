@@ -9,8 +9,8 @@ import (
 )
 
 type mockNotifier struct {
-	mu             sync.Mutex
-	calls          []notifyCall
+	mu    sync.Mutex
+	calls []notifyCall
 }
 
 type notifyCall struct {

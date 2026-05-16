@@ -6,14 +6,17 @@ import (
 	"os"
 	"strconv"
 
-	"github.com/airlockrun/agentsdk"
+	"github.com/airlockrun/airlock"
 )
 
-// DefaultAgentBuilderImage is the image tag airlock uses for the toolserver
-// sandbox when AGENT_BUILDER_IMAGE is unset. Tag-pinning against
-// agentsdk.Version ensures every airlock release references the matching
-// toolserver build — drift between the two becomes impossible in prod.
-const DefaultAgentBuilderImage = "agent-builder:v" + agentsdk.Version
+// Default toolserver/runtime images. Pinned to airlock.Version so every airlock
+// release references the matched pair built+published by the same release tag —
+// drift becomes impossible in prod. Self-host operators can still override via
+// AGENT_BUILDER_IMAGE / AGENT_BASE_IMAGE if they need a custom build.
+const (
+	DefaultAgentBuilderImage = "ghcr.io/airlockrun/airlock-agent-builder:v" + airlock.Version
+	DefaultAgentBaseImage    = "ghcr.io/airlockrun/airlock-agent-base:v" + airlock.Version
+)
 
 type Config struct {
 	// --- Core ---
@@ -58,7 +61,7 @@ type Config struct {
 
 	// --- Build pipeline ---
 	AgentMonorepoPath string // local path to agent monorepo
-	AgentBuilderImage string // toolserver sandbox image (default: agent-builder:v${agentsdk.Version})
+	AgentBuilderImage string // toolserver sandbox image (default: DefaultAgentBuilderImage)
 	AgentBaseImage    string // agent runtime base image
 	AgentRegistryURL  string // Docker registry for agent images (empty = local only)
 	AgentLibsPath     string // path containing agentsdk/ goai/ sol/ dirs (the libs we own). Set after startup either to the user-supplied AGENT_LIBS_PATH (dev) or the extracted cache dir (prod). Always non-empty by the time the build pipeline runs.
@@ -154,10 +157,10 @@ func Load() *Config {
 		ContainerImage:   envOr("CONTAINER_IMAGE", "airlock-toolserver"),
 
 		// Build pipeline
-		AgentMonorepoPath: envOr("AGENT_MONOREPO_PATH", "/var/lib/airlock/monorepo"),
-		AgentBuilderImage: envOr("AGENT_BUILDER_IMAGE", DefaultAgentBuilderImage),
-		AgentBaseImage:    envOr("AGENT_BASE_IMAGE", "airlock-agent-base"),
-		AgentRegistryURL:  os.Getenv("AGENT_REGISTRY_URL"),
+		AgentMonorepoPath:     envOr("AGENT_MONOREPO_PATH", "/var/lib/airlock/monorepo"),
+		AgentBuilderImage:     envOr("AGENT_BUILDER_IMAGE", DefaultAgentBuilderImage),
+		AgentBaseImage:        envOr("AGENT_BASE_IMAGE", DefaultAgentBaseImage),
+		AgentRegistryURL:      os.Getenv("AGENT_REGISTRY_URL"),
 		AgentLibsPath:         os.Getenv("AGENT_LIBS_PATH"),
 		AgentLibsPathExplicit: os.Getenv("AGENT_LIBS_PATH") != "",
 		AgentLibsCacheDir:     envOr("AGENT_LIBS_CACHE_DIR", "/var/lib/airlock/libs"),

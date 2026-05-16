@@ -47,54 +47,54 @@ func TestResolveModel(t *testing.T) {
 		wantErrSubs      string
 	}{
 		{
-			name: "transcription resolves to default_stt_*",
+			name:             "transcription resolves to default_stt_*",
 			capability:       "transcription",
 			capabilitySuffix: "stt", modelName: "whisper-1",
 			wantProv: "openai", wantModel: "whisper-1",
 		},
 		{
-			name: "speech resolves to default_tts_*",
+			name:             "speech resolves to default_tts_*",
 			capability:       "speech",
 			capabilitySuffix: "tts", modelName: "tts-1",
 			wantProv: "openai", wantModel: "tts-1",
 		},
 		{
-			name: "image resolves to default_image_gen_*",
+			name:             "image resolves to default_image_gen_*",
 			capability:       "image",
 			capabilitySuffix: "image_gen", modelName: "dall-e-3",
 			wantProv: "openai", wantModel: "dall-e-3",
 		},
 		{
-			name: "embedding resolves to default_embedding_*",
+			name:             "embedding resolves to default_embedding_*",
 			capability:       "embedding",
 			capabilitySuffix: "embedding", modelName: "text-embedding-3-small",
 			wantProv: "openai", wantModel: "text-embedding-3-small",
 		},
 		{
-			name: "vision resolves to default_vision_*",
+			name:             "vision resolves to default_vision_*",
 			capability:       "vision",
 			capabilitySuffix: "vision", modelName: "gpt-4o",
 			wantProv: "openai", wantModel: "gpt-4o",
 		},
 		{
-			name: "empty capability falls back to agent exec_*",
+			name:       "empty capability falls back to agent exec_*",
 			capability: "",
 			execModel:  "gpt-4o-mini",
 			wantProv:   "openai", wantModel: "gpt-4o-mini",
 		},
 		{
-			name: "text capability falls back to agent exec_*",
+			name:       "text capability falls back to agent exec_*",
 			capability: "text",
 			execModel:  "gpt-4o",
 			wantProv:   "openai", wantModel: "gpt-4o",
 		},
 		{
-			name: "missing capability default returns clear error",
+			name:        "missing capability default returns clear error",
 			capability:  "transcription",
 			wantErrSubs: "no model configured for capability",
 		},
 		{
-			name: "missing exec_model returns clear error",
+			name:        "missing exec_model returns clear error",
 			capability:  "text",
 			wantErrSubs: "no model configured for capability",
 		},

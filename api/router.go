@@ -288,7 +288,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 			logger: cfg.Logger.Named("models"),
 			agents: agH,
 		}
-		siblingsH := newSiblingsHandler(cfg.DB, cfg.Logger.Named("siblings"))
+		siblingsH := newSiblingsHandler(cfg.DB, cfg.Dispatcher, cfg.Logger.Named("siblings"))
 
 		// Wire post-upgrade notifications to conversations handler.
 		cfg.BuildService.SetUpgradeNotifier(cH)

@@ -221,4 +221,3 @@ func agentModelConfigToProto(agent dbq.Agent, slots []dbq.AgentModelSlot) *airlo
 	}
 	return out
 }
-

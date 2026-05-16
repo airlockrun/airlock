@@ -7,11 +7,11 @@ import (
 	"github.com/airlockrun/airlock/convert"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
-	"github.com/airlockrun/airlock/secrets"
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
+	"github.com/airlockrun/airlock/secrets"
+	solprovider "github.com/airlockrun/sol/provider"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
-	solprovider "github.com/airlockrun/sol/provider"
 	"go.uber.org/zap"
 )
 

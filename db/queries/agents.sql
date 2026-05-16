@@ -122,3 +122,13 @@ UPDATE agents SET
     allow_public_mcp     = @allow_public_mcp,
     updated_at           = now()
 WHERE id = @id;
+
+-- name: ListActiveAgentIDs :many
+-- All agents in 'active' status. Used by the sibling-update broadcaster
+-- to fan a /refresh out to every running agent (cold containers no-op).
+SELECT id FROM agents WHERE status = 'active';
+
+-- name: UpdateAgentToolsHash :exec
+-- Stamp the synced tool-set hash on the agent. Sync handler compares
+-- before/after to decide whether to broadcast a sibling-update refresh.
+UPDATE agents SET tools_hash = @tools_hash WHERE id = @id;

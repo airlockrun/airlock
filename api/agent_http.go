@@ -98,7 +98,11 @@ func (h *agentHandler) AgentHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Explicit saveAs — stream directly to S3 (binary-safe, unbounded size).
 	if req.SaveAs != "" {
-		s3Key := agentStorageKey(agentID, req.SaveAs)
+		s3Key, err := agentStorageKey(agentID, req.SaveAs)
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "invalid saveAs: "+err.Error())
+			return
+		}
 		if err := h.s3.PutObject(r.Context(), s3Key, resp.Body, resp.ContentLength); err != nil {
 			h.logger.Error("saveAs: S3 put failed", zap.String("key", s3Key), zap.Error(err))
 			writeJSONError(w, http.StatusInternalServerError, "failed to save response")
@@ -118,7 +122,12 @@ func (h *agentHandler) AgentHTTP(w http.ResponseWriter, r *http.Request) {
 	// loading into memory so multi-MB downloads don't blow up the agent.
 	if binary {
 		key := generateAutoSaveKey(req.URL, ct, resp.Header.Get("Content-Disposition"))
-		s3Key := agentStorageKey(agentID, key)
+		s3Key, err := agentStorageKey(agentID, key)
+		if err != nil {
+			h.logger.Error("auto-save: invalid generated key", zap.String("key", key), zap.Error(err))
+			writeJSONError(w, http.StatusInternalServerError, "failed to save response")
+			return
+		}
 		if err := h.s3.PutObject(r.Context(), s3Key, resp.Body, resp.ContentLength); err != nil {
 			h.logger.Error("auto-save: S3 put failed", zap.String("key", s3Key), zap.Error(err))
 			writeJSONError(w, http.StatusInternalServerError, "failed to save response")
@@ -154,7 +163,12 @@ func (h *agentHandler) AgentHTTP(w http.ResponseWriter, r *http.Request) {
 			// Still too big — save the markdown to S3 rather than forcing
 			// the LLM to chew through it.
 			key := generateAutoSaveKey(req.URL, "text/markdown", resp.Header.Get("Content-Disposition"))
-			s3Key := agentStorageKey(agentID, key)
+			s3Key, err := agentStorageKey(agentID, key)
+			if err != nil {
+				h.logger.Error("auto-save: invalid generated key", zap.String("key", key), zap.Error(err))
+				writeJSONError(w, http.StatusInternalServerError, "failed to save response")
+				return
+			}
 			if err := h.s3.PutObject(r.Context(), s3Key, strings.NewReader(markdown), int64(len(markdown))); err != nil {
 				h.logger.Error("auto-save: S3 put failed", zap.String("key", s3Key), zap.Error(err))
 				writeJSONError(w, http.StatusInternalServerError, "failed to save response")
@@ -193,7 +207,12 @@ func (h *agentHandler) AgentHTTP(w http.ResponseWriter, r *http.Request) {
 		// Too big to inline — stitch peek + remaining stream into S3.
 		// No size cap: matches the explicit saveAs path.
 		key := generateAutoSaveKey(req.URL, ct, resp.Header.Get("Content-Disposition"))
-		s3Key := agentStorageKey(agentID, key)
+		s3Key, err := agentStorageKey(agentID, key)
+		if err != nil {
+			h.logger.Error("auto-save: invalid generated key", zap.String("key", key), zap.Error(err))
+			writeJSONError(w, http.StatusInternalServerError, "failed to save response")
+			return
+		}
 		combined := io.MultiReader(strings.NewReader(string(peek)), resp.Body)
 		if err := h.s3.PutObject(r.Context(), s3Key, combined, -1); err != nil {
 			h.logger.Error("auto-save: S3 put failed", zap.String("key", s3Key), zap.Error(err))

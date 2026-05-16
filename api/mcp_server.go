@@ -143,7 +143,12 @@ func (s *MCPServer) ServeHTTP(w http.ResponseWriter, r *http.Request, h *agentHa
 func (s *MCPServer) serveDispatch(w http.ResponseWriter, r *http.Request, h *agentHandler, q *dbq.Queries, target dbq.Agent, access agentsdk.Access, principal MCPPrincipal) {
 	ctx := r.Context()
 
-	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20)) // 1 MiB
+	// 16 MiB ceiling: large enough for `tools/call` requests that carry
+	// inline base64 file uploads (capped at maxInlineResourceBytes = 10
+	// MiB raw, ~13.4 MiB after b64) plus envelope overhead. Other
+	// JSON-RPC methods are tiny — a uniform cap is simpler than peeking
+	// at `method` to decide.
+	body, err := io.ReadAll(io.LimitReader(r.Body, 16<<20))
 	if err != nil {
 		writeJSONRPCError(w, nil, rpcErrParse, "read body")
 		return
@@ -166,6 +171,12 @@ func (s *MCPServer) serveDispatch(w http.ResponseWriter, r *http.Request, h *age
 		s.handleToolsList(ctx, w, q, target, access, msg)
 	case "tools/call":
 		s.handleToolsCall(ctx, w, r, h, q, target, access, principal, msg)
+	case "resources/list":
+		s.handleResourcesList(ctx, w, h, q, target, access, msg)
+	case "resources/read":
+		s.handleResourcesRead(ctx, w, h, q, target, access, msg)
+	case "resources/templates/list":
+		s.handleResourcesTemplatesList(ctx, w, q, target, access, msg)
 	default:
 		writeJSONRPCError(w, msg.ID, rpcErrMethodNotFound, "unknown method: "+msg.Method)
 	}
@@ -387,7 +398,8 @@ func (s *MCPServer) handleInitialize(w http.ResponseWriter, msg jsonrpcMessage) 
 	result, _ := json.Marshal(map[string]any{
 		"protocolVersion": mcp.LatestProtocolVersion,
 		"capabilities": map[string]any{
-			"tools": map[string]any{"listChanged": false},
+			"tools":     map[string]any{"listChanged": false},
+			"resources": map[string]any{"subscribe": false, "listChanged": false},
 		},
 		"serverInfo": map[string]any{
 			"name":    "airlock",
@@ -407,6 +419,7 @@ func (s *MCPServer) handleCancelled(_ jsonrpcMessage) {
 func (s *MCPServer) handleToolsList(ctx context.Context, w http.ResponseWriter, q *dbq.Queries, target dbq.Agent, access agentsdk.Access, msg jsonrpcMessage) {
 	rows, err := q.ListAgentTools(ctx, target.ID)
 	if err != nil {
+		s.logger.Error("mcp: list agent tools", zap.Error(err), zap.String("agent_id", uuid.UUID(target.ID.Bytes).String()))
 		writeJSONRPCError(w, msg.ID, rpcErrInternal, "list tools")
 		return
 	}
@@ -455,7 +468,7 @@ func (s *MCPServer) handleToolsCall(ctx context.Context, w http.ResponseWriter, 
 	case "prompt":
 		s.handlePromptCall(ctx, w, r, h, q, target, access, principal, msg, params.Arguments)
 	default:
-		s.handleUserToolCall(ctx, w, h, target, access, msg, params.Name, params.Arguments)
+		s.handleUserToolCall(ctx, w, h, q, target, access, principal, msg, params.Name, params.Arguments)
 	}
 }
 
@@ -464,10 +477,13 @@ func (s *MCPServer) handleToolsCall(ctx context.Context, w http.ResponseWriter, 
 // notifications/progress messages. A final response (or error) lands
 // on the same SSE channel when the run terminates.
 func (s *MCPServer) handlePromptCall(ctx context.Context, w http.ResponseWriter, r *http.Request, h *agentHandler, q *dbq.Queries, target dbq.Agent, access agentsdk.Access, principal MCPPrincipal, msg jsonrpcMessage, args json.RawMessage) {
+	// files: accept either legacy {path, filename, contentType, size}
+	// (A2A caller / web-uploaded refs) or new inline {filename, mimeType,
+	// data} (external MCP uploads). Discriminate by presence of `data`.
 	var promptArgs struct {
-		Message        string              `json:"message"`
-		ConversationID string              `json:"conversationId,omitempty"`
-		Files          []agentsdk.FileInfo `json:"files,omitempty"`
+		Message        string            `json:"message"`
+		ConversationID string            `json:"conversationId,omitempty"`
+		Files          []json.RawMessage `json:"files,omitempty"`
 	}
 	if err := json.Unmarshal(args, &promptArgs); err != nil {
 		writeJSONRPCError(w, msg.ID, rpcErrInvalidParams, "decode prompt args")
@@ -477,6 +493,11 @@ func (s *MCPServer) handlePromptCall(ctx context.Context, w http.ResponseWriter,
 		writeJSONRPCError(w, msg.ID, rpcErrInvalidParams, "message is required")
 		return
 	}
+
+	// Materialization happens after conversation validation below so we
+	// can scope inbound files by conv-{id} when a valid conversation is
+	// in play. Files placeholder for the post-validation call site.
+	var files []agentsdk.FileInfo
 
 	// Cron / webhook agents can't A2A in v1 — no original user.
 	if principal.Kind == MCPPrincipalAgent && principal.UserID == uuid.Nil {
@@ -510,12 +531,27 @@ func (s *MCPServer) handlePromptCall(ctx context.Context, w http.ResponseWriter,
 		}
 	}
 
+	// Pick the inbound-file scope: conv-<id> when a validated
+	// conversation is in play (prompt continuity across A2A turns),
+	// else fall through to caller-run scope. Materialize now that we
+	// know which scope key to use.
+	scopeKey := scopeKeyForCaller(principal)
+	if promptArgs.ConversationID != "" {
+		scopeKey = scopeKeyForConversation(promptArgs.ConversationID)
+	}
+	var mErr *materializeError
+	files, mErr = s.materializePromptFiles(ctx, h, q, target, principal, scopeKey, promptArgs.Files)
+	if mErr != nil {
+		writeJSONRPCError(w, msg.ID, mErr.Code, mErr.Message)
+		return
+	}
+
 	// Build PromptInput. CallerAccess and VisibleSiblings are filled
 	// by ForwardA2APrompt; we just supply the message + files.
 	input := agentsdk.PromptInput{
 		Message:        promptArgs.Message,
 		ConversationID: promptArgs.ConversationID,
-		Files:          promptArgs.Files,
+		Files:          files,
 	}
 
 	// parentRunID is the caller's X-Run-ID for agent principals; for
@@ -540,6 +576,12 @@ func (s *MCPServer) handlePromptCall(ctx context.Context, w http.ResponseWriter,
 
 	rc, runID, err := s.dispatcher.ForwardA2APrompt(cctx, uuid.UUID(target.ID.Bytes), parentRunID, access, userID, input)
 	if err != nil {
+		s.logger.Error("mcp: forward prompt",
+			zap.Error(err),
+			zap.String("agent_id", uuid.UUID(target.ID.Bytes).String()),
+			zap.String("agent_slug", target.Slug),
+			zap.Int("principal_kind", int(principal.Kind)),
+		)
 		writeJSONRPCError(w, msg.ID, rpcErrServerError, "forward prompt: "+err.Error())
 		return
 	}
@@ -732,24 +774,81 @@ func (s *MCPServer) handlePromptCall(ctx context.Context, w http.ResponseWriter,
 // handleUserToolCall forwards a user-registered tool call to the
 // agent container's /__air/tool/{name} endpoint. Single inline JSON
 // response, no SSE — user tools are short-running by design.
-func (s *MCPServer) handleUserToolCall(ctx context.Context, w http.ResponseWriter, h *agentHandler, target dbq.Agent, access agentsdk.Access, msg jsonrpcMessage, name string, args json.RawMessage) {
+//
+// Boundary materializer runs before forwarding (rewriting FilePath
+// args: cross-bucket copy for A2A, base64-to-S3 for external) and
+// after the agent responds (rewriting FilePath results: cross-bucket
+// copy for A2A, resource_link content blocks for external).
+func (s *MCPServer) handleUserToolCall(ctx context.Context, w http.ResponseWriter, h *agentHandler, q *dbq.Queries, target dbq.Agent, access agentsdk.Access, principal MCPPrincipal, msg jsonrpcMessage, name string, args json.RawMessage) {
+	// Load this tool's input/output schemas + the caller's slug (for
+	// A2A outbound a2a/{slug}/ destinations). We could cache these per
+	// (agentID, toolName) but per-call DB hits are cheap and the freshness
+	// guarantees something is genuinely loaded.
+	var inSchema, outSchema []byte
+	var callerSlug string
+	tools, terr := q.ListAgentTools(ctx, target.ID)
+	if terr == nil {
+		for _, t := range tools {
+			if t.Name == name {
+				inSchema = t.InputSchema
+				outSchema = t.OutputSchema
+				break
+			}
+		}
+	}
+	if principal.Kind == MCPPrincipalAgent && principal.CallerAgentID != uuid.Nil {
+		if caller, err := q.GetAgentByID(ctx, toPgUUID(principal.CallerAgentID)); err == nil {
+			callerSlug = caller.Slug
+		}
+	}
+	// Non-prompt tool calls scope inbound files by the caller's run ID
+	// (the run on whose behalf this tool fires). prompt() picks
+	// conv-scope when a conversation is in play — see handlePromptCall.
+	scopeKey := scopeKeyForCaller(principal)
+	rc := newRewriterCtx(ctx, h.s3, s.logger, target, principal, callerSlug, scopeKey)
+
+	// Inbound: rewrite agent-file args for cross-bucket / inline upload.
+	if rew, mErr := materializeInbound(rc, args, inSchema); mErr != nil {
+		writeJSONRPCError(w, msg.ID, mErr.Code, mErr.Message)
+		return
+	} else {
+		args = rew
+	}
+
 	c, err := s.dispatcher.EnsureRunning(ctx, uuid.UUID(target.ID.Bytes))
 	if err != nil {
+		s.logger.Error("mcp: ensure running",
+			zap.Error(err),
+			zap.String("agent_id", uuid.UUID(target.ID.Bytes).String()),
+			zap.String("tool", name),
+		)
 		writeJSONRPCError(w, msg.ID, rpcErrServerError, "ensure running: "+err.Error())
 		return
 	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST", c.Endpoint+"/__air/tool/"+name, bytes.NewReader(args))
 	if err != nil {
+		s.logger.Error("mcp: build tool request", zap.Error(err), zap.String("tool", name))
 		writeJSONRPCError(w, msg.ID, rpcErrInternal, "build tool request")
 		return
 	}
 	req.Header.Set("Authorization", "Bearer "+c.Token)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Caller-Access", string(access))
+	if principal.ParentRunID != uuid.Nil {
+		req.Header.Set("X-Parent-Run-ID", principal.ParentRunID.String())
+	}
+	if principal.UserID != uuid.Nil {
+		req.Header.Set("X-User-ID", principal.UserID.String())
+	}
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
+		s.logger.Error("mcp: tool dispatch",
+			zap.Error(err),
+			zap.String("agent_id", uuid.UUID(target.ID.Bytes).String()),
+			zap.String("tool", name),
+		)
 		writeJSONRPCError(w, msg.ID, rpcErrServerError, "tool dispatch: "+err.Error())
 		return
 	}
@@ -760,14 +859,33 @@ func (s *MCPServer) handleUserToolCall(ctx context.Context, w http.ResponseWrite
 		return
 	}
 	if resp.StatusCode >= 400 {
+		// Agent itself returned 4xx/5xx (e.g. tool panicked, access
+		// denied at the agent layer). Warn — it's not airlock that's
+		// broken, but operators want visibility into agent-side failures.
+		s.logger.Warn("mcp: agent tool error",
+			zap.Int("status", resp.StatusCode),
+			zap.String("agent_id", uuid.UUID(target.ID.Bytes).String()),
+			zap.String("tool", name),
+			zap.ByteString("body", body),
+		)
 		writeJSONRPCError(w, msg.ID, rpcErrServerError, fmt.Sprintf("agent returned %d: %s", resp.StatusCode, body))
 		return
 	}
+
+	// Outbound: rewrite agent-file results. For A2A, paths are rewritten
+	// in-place in the JSON body. For external, the path stays but
+	// rc.extraContent gains a resource_link block per FilePath.
+	if rew, mErr := materializeOutbound(rc, body, outSchema); mErr != nil {
+		writeJSONRPCError(w, msg.ID, mErr.Code, mErr.Message)
+		return
+	} else {
+		body = rew
+	}
+
+	contentBlocks := []map[string]any{{"type": "text", "text": string(body)}}
+	contentBlocks = append(contentBlocks, rc.extraContent...)
 	resultPayload, _ := json.Marshal(map[string]any{
-		"content": []map[string]any{{
-			"type": "text",
-			"text": string(body),
-		}},
+		"content": contentBlocks,
 		"isError": false,
 	})
 	writeJSONRPCResult(w, msg.ID, resultPayload)

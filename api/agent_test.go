@@ -279,4 +279,3 @@ func TestRunComplete(t *testing.T) {
 		t.Errorf("run.StdoutLog = %q, want %q", run.StdoutLog, want)
 	}
 }
-

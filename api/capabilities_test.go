@@ -6,8 +6,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 	"github.com/airlockrun/airlock/db/dbq"
+	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"go.uber.org/zap"

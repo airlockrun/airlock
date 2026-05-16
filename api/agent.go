@@ -31,20 +31,20 @@ type cronReloader interface {
 }
 
 type agentHandler struct {
-	db        *db.DB
-	encryptor secrets.Store
-	s3        *storage.S3Client
-	builder   *builder.BuildService
-	pubsub      *realtime.PubSub
-	bridgeMgr   bridgePartsDeliverer // for printToUser/topic bridge delivery
-	scheduler   cronReloader         // nil until trigger system is wired
+	db                     *db.DB
+	encryptor              secrets.Store
+	s3                     *storage.S3Client
+	builder                *builder.BuildService
+	pubsub                 *realtime.PubSub
+	bridgeMgr              bridgePartsDeliverer // for printToUser/topic bridge delivery
+	scheduler              cronReloader         // nil until trigger system is wired
 	publicURL              string
-	agentDomain            string // e.g. "dev.airlock.run" → {slug}.dev.airlock.run
-	agentRouteScheme       string // "http" or "https" — copied from PUBLIC_URL so dev/local overlays can drop https
-	agentRoutePort         string // empty for the standard 80/443; set when Caddy is fronted on a non-default port so signed /__air/storage URLs include it
-	llmProxyURL            string // optional: route LLM calls through this proxy
-	forceInlineAttachments bool   // dev escape hatch — ignore provider URL capability, send everything as base64
-	jwtSecret              string // shared with auth middleware; read by mcp_server.go to validate incoming A2A JWTs
+	agentDomain            string              // e.g. "dev.airlock.run" → {slug}.dev.airlock.run
+	agentRouteScheme       string              // "http" or "https" — copied from PUBLIC_URL so dev/local overlays can drop https
+	agentRoutePort         string              // empty for the standard 80/443; set when Caddy is fronted on a non-default port so signed /__air/storage URLs include it
+	llmProxyURL            string              // optional: route LLM calls through this proxy
+	forceInlineAttachments bool                // dev escape hatch — ignore provider URL capability, send everything as base64
+	jwtSecret              string              // shared with auth middleware; read by mcp_server.go to validate incoming A2A JWTs
 	dispatcher             *trigger.Dispatcher // forward-prompt + ensure-running for A2A
 	logger                 *zap.Logger
 }
@@ -224,6 +224,25 @@ func (h *agentHandler) Sync(w http.ResponseWriter, r *http.Request) {
 		AgentID: pgAgentID,
 		Names:   toolNames,
 	})
+
+	// Tool-set change detection: hash the current set, compare to the
+	// stored hash, and trigger a sibling-update broadcast on mismatch.
+	// Avoids fan-out churn when an agent re-syncs unchanged state on
+	// container restart (the common case).
+	currentTools, terr := q.ListAgentTools(ctx, pgAgentID)
+	if terr == nil {
+		newHash := computeToolsHash(currentTools)
+		// Lazy fetch agent to compare prior hash. Cheap — single PK lookup.
+		if prior, perr := q.GetAgentByID(ctx, pgAgentID); perr == nil {
+			if !bytesEqual(prior.ToolsHash, newHash) {
+				_ = q.UpdateAgentToolsHash(ctx, dbq.UpdateAgentToolsHashParams{
+					ID:        pgAgentID,
+					ToolsHash: newHash,
+				})
+				go broadcastSiblingChange(context.Background(), dbq.New(h.db.Pool()), h.dispatcher, h.logger, agentID)
+			}
+		}
+	}
 
 	// Upsert model slots, then delete stale. Upsert preserves the admin's
 	// assigned_model across syncs — only the declaration fields update.
@@ -410,6 +429,7 @@ func (h *agentHandler) Sync(w http.ResponseWriter, r *http.Request) {
 			Description:    d.Description,
 			LlmHint:        d.LLMHint,
 			RetentionHours: int32(d.RetentionHours),
+			Scope:          string(d.Scope),
 		}); err != nil {
 			h.logger.Error("upsert directory failed", zap.Error(err))
 			writeJSONError(w, http.StatusInternalServerError, "failed to sync directories")

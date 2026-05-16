@@ -18,9 +18,9 @@ import (
 )
 
 const (
-	relayCodeTTL    = 30 * time.Second
-	relaySessionTTL = 7 * 24 * time.Hour // JWT inside cookie — long-lived
-	relayCookieMaxAge = 900               // 15 min sliding window
+	relayCodeTTL      = 30 * time.Second
+	relaySessionTTL   = 7 * 24 * time.Hour // JWT inside cookie — long-lived
+	relayCookieMaxAge = 900                // 15 min sliding window
 	relayCookieName   = "__air_session"
 )
 

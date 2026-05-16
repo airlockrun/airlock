@@ -9,13 +9,13 @@ import (
 	"strings"
 	"time"
 
-	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/builder"
 	"github.com/airlockrun/airlock/container"
 	"github.com/airlockrun/airlock/convert"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
+	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 	"github.com/airlockrun/airlock/secrets"
 	"github.com/airlockrun/airlock/trigger"
 	"github.com/go-chi/chi/v5"
@@ -367,6 +367,11 @@ func (h *agentsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to delete agent")
 		return
 	}
+
+	// Tell every other running agent to drop its agent_<slug> binding
+	// for this one. Best-effort; cold containers will see the change on
+	// their next startup sync.
+	go broadcastSiblingChange(context.Background(), dbq.New(h.db.Pool()), h.dispatcher, h.logger, agentID)
 
 	w.WriteHeader(http.StatusNoContent)
 }

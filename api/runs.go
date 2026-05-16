@@ -5,10 +5,10 @@ import (
 	"net/http"
 	"time"
 
-	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 	"github.com/airlockrun/airlock/convert"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
+	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 	"github.com/airlockrun/airlock/storage"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -190,8 +190,8 @@ func runToProto(r dbq.Run, detail bool) *airlockv1.RunInfo {
 		DurationMs:      r.DurationMs.Int32,
 		ErrorMessage:    r.ErrorMessage,
 		ErrorKind:       r.ErrorKind,
-		LlmTokensIn:    r.LlmTokensIn,
-		LlmTokensOut:   r.LlmTokensOut,
+		LlmTokensIn:     r.LlmTokensIn,
+		LlmTokensOut:    r.LlmTokensOut,
 		LlmCostEstimate: pgNumericToFloat(r.LlmCostEstimate),
 		SourceRef:       r.SourceRef,
 	}

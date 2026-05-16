@@ -226,7 +226,7 @@ func (d *Dispatcher) ForwardWebhook(ctx context.Context, agentID uuid.UUID, path
 		return nil, uuid.Nil, err
 	}
 
-	rc, err := d.forward(ctx, c, "POST", "/webhook/"+path, body, runID, bridgeID, timeout)
+	rc, err := d.forward(ctx, c, "POST", "/webhook/"+path, body, runID, bridgeID, nil, nil, timeout)
 	if err != nil {
 		return nil, uuid.Nil, err
 	}
@@ -250,7 +250,7 @@ func (d *Dispatcher) ForwardCron(ctx context.Context, agentID uuid.UUID, cronNam
 	cancelCtx, cancel := context.WithCancel(ctx)
 	d.registerInFlight(runID, cancel)
 
-	rc, err := d.forward(cancelCtx, c, "POST", "/cron/"+cronName, nil, runID, nil, timeout)
+	rc, err := d.forward(cancelCtx, c, "POST", "/cron/"+cronName, nil, runID, nil, nil, nil, timeout)
 	if err != nil {
 		d.deregisterInFlight(runID)
 		cancel()
@@ -295,7 +295,7 @@ func (d *Dispatcher) ForwardPrompt(ctx context.Context, agentID uuid.UUID, input
 	cancelCtx, cancel := context.WithCancel(ctx)
 	d.registerInFlight(runID, cancel)
 
-	rc, err := d.forward(cancelCtx, c, "POST", "/prompt", payload, runID, bridgeID, PromptHTTPCeiling)
+	rc, err := d.forward(cancelCtx, c, "POST", "/prompt", payload, runID, bridgeID, nil, userID, PromptHTTPCeiling)
 	if err != nil {
 		d.deregisterInFlight(runID)
 		cancel()
@@ -330,7 +330,20 @@ func (d *Dispatcher) ForwardA2APrompt(ctx context.Context, agentID uuid.UUID, pa
 		return nil, uuid.Nil, fmt.Errorf("marshal prompt input: %w", err)
 	}
 
-	runID, err := d.createRun(ctx, agentID, nil, &parentRunID, payload, "a2a", parentRunID.String())
+	// Anon and user MCP callers reach this path with parentRunID = uuid.Nil
+	// — they aren't a sibling A2A child, just an external prompt that
+	// happens to enter via the MCP endpoint. Translate Nil → nil so we
+	// insert NULL parent_run_id (instead of an all-zero FK that trips
+	// runs_parent_run_id_fkey). trigger_type stays "a2a" so analytics
+	// can still distinguish these from web /prompt runs; trigger_ref
+	// is empty when there's no parent.
+	var parentRunIDPtr *uuid.UUID
+	var triggerRef string
+	if parentRunID != uuid.Nil {
+		parentRunIDPtr = &parentRunID
+		triggerRef = parentRunID.String()
+	}
+	runID, err := d.createRun(ctx, agentID, nil, parentRunIDPtr, payload, "a2a", triggerRef)
 	if err != nil {
 		return nil, uuid.Nil, err
 	}
@@ -338,7 +351,7 @@ func (d *Dispatcher) ForwardA2APrompt(ctx context.Context, agentID uuid.UUID, pa
 	cancelCtx, cancel := context.WithCancel(ctx)
 	d.registerInFlight(runID, cancel)
 
-	rc, err := d.forward(cancelCtx, c, "POST", "/prompt", payload, runID, nil, PromptHTTPCeiling)
+	rc, err := d.forward(cancelCtx, c, "POST", "/prompt", payload, runID, nil, parentRunIDPtr, userID, PromptHTTPCeiling)
 	if err != nil {
 		d.deregisterInFlight(runID)
 		cancel()
@@ -453,7 +466,15 @@ func (d *Dispatcher) RefreshAgent(ctx context.Context, agentID uuid.UUID) error 
 }
 
 // forward sends an HTTP request to the agent container and returns the response body.
-func (d *Dispatcher) forward(ctx context.Context, c *container.Container, method, path string, body []byte, runID uuid.UUID, bridgeID *uuid.UUID, timeout time.Duration) (io.ReadCloser, error) {
+//
+// parentRunID, when non-nil, becomes the X-Parent-Run-ID header so the
+// callee's agentsdk can scope reads on __incoming/run-<parent>/ paths
+// to this specific A2A call. userID, when non-nil, becomes X-User-ID
+// — the originating user, used by the callee for ScopeUser-scoped
+// directories. Both are nil for the web / bridge / cron / webhook
+// flows that pre-existed scoping (those handlers pass principal via
+// PromptInput / conversation lookups).
+func (d *Dispatcher) forward(ctx context.Context, c *container.Container, method, path string, body []byte, runID uuid.UUID, bridgeID, parentRunID, userID *uuid.UUID, timeout time.Duration) (io.ReadCloser, error) {
 	var bodyReader io.Reader
 	if body != nil {
 		bodyReader = bytes.NewReader(body)
@@ -468,6 +489,12 @@ func (d *Dispatcher) forward(ctx context.Context, c *container.Container, method
 	req.Header.Set("Content-Type", "application/json")
 	if bridgeID != nil {
 		req.Header.Set("X-Bridge-ID", bridgeID.String())
+	}
+	if parentRunID != nil && *parentRunID != uuid.Nil {
+		req.Header.Set("X-Parent-Run-ID", parentRunID.String())
+	}
+	if userID != nil && *userID != uuid.Nil {
+		req.Header.Set("X-User-ID", userID.String())
 	}
 
 	client := &http.Client{Timeout: timeout}

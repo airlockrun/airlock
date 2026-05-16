@@ -10,13 +10,13 @@ import (
 	"time"
 	"unicode/utf8"
 
-	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 	"github.com/airlockrun/agentsdk"
 	"github.com/airlockrun/airlock/attachref"
 	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/convert"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
+	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 	promptpkg "github.com/airlockrun/airlock/prompt"
 	"github.com/airlockrun/airlock/realtime"
 	"github.com/airlockrun/airlock/storage"
@@ -149,9 +149,9 @@ func (h *conversationsHandler) GetConversation(w http.ResponseWriter, r *http.Re
 	}
 
 	resp := &airlockv1.GetConversationResponse{
-		Conversation:       conversationToProto(conv),
-		Messages:           msgInfos,
-		HasOlderMessages:   hasOlder,
+		Conversation:     conversationToProto(conv),
+		Messages:         msgInfos,
+		HasOlderMessages: hasOlder,
 	}
 
 	// Check for a suspended run with pending tool calls.
@@ -983,4 +983,3 @@ func (h *conversationsHandler) UnsubscribeTopic(w http.ResponseWriter, r *http.R
 
 	w.WriteHeader(http.StatusNoContent)
 }
-

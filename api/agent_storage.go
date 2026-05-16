@@ -18,9 +18,15 @@ import (
 
 // agentStorageKey turns an agent storage path (e.g. "uploads/foo.png")
 // into the canonical S3 key under the agent's prefix:
-// "agents/{agentID}/uploads/foo.png".
-func agentStorageKey(agentID uuid.UUID, path string) string {
-	return "agents/" + agentID.String() + "/" + path
+// "agents/{agentID}/uploads/foo.png". The path is validated via
+// storage.CleanAgentPath — traversal, absolute paths, NUL bytes, and
+// other malformed inputs return an error instead of reaching S3.
+func agentStorageKey(agentID uuid.UUID, path string) (string, error) {
+	cleaned, err := storage.CleanAgentPath(path)
+	if err != nil {
+		return "", err
+	}
+	return "agents/" + agentID.String() + "/" + cleaned, nil
 }
 
 // pathFromWildcard pulls "*" from chi as a slashless storage path. Strips
@@ -46,7 +52,11 @@ func (h *agentHandler) StorageStore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s3Key := agentStorageKey(agentID, path)
+	s3Key, err := agentStorageKey(agentID, path)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid path: "+err.Error())
+		return
+	}
 	meta := map[string]string{}
 	if filename := r.Header.Get("X-Filename"); filename != "" {
 		meta["filename"] = filename
@@ -72,7 +82,11 @@ func (h *agentHandler) StorageLoad(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s3Key := agentStorageKey(agentID, path)
+	s3Key, err := agentStorageKey(agentID, path)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid path: "+err.Error())
+		return
+	}
 	reader, err := h.s3.GetObject(r.Context(), s3Key)
 	if err != nil {
 		writeJSONError(w, http.StatusNotFound, "object not found")
@@ -93,7 +107,11 @@ func (h *agentHandler) StorageDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s3Key := agentStorageKey(agentID, path)
+	s3Key, err := agentStorageKey(agentID, path)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid path: "+err.Error())
+		return
+	}
 	if err := h.s3.DeleteObject(r.Context(), s3Key); err != nil {
 		h.logger.Error("storage delete failed", zap.Error(err))
 		writeJSONError(w, http.StatusInternalServerError, "storage delete failed")
@@ -116,8 +134,16 @@ func (h *agentHandler) StorageCopy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	srcKey := agentStorageKey(agentID, req.Src)
-	dstKey := agentStorageKey(agentID, req.Dst)
+	srcKey, err := agentStorageKey(agentID, req.Src)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid src: "+err.Error())
+		return
+	}
+	dstKey, err := agentStorageKey(agentID, req.Dst)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid dst: "+err.Error())
+		return
+	}
 	if err := h.s3.CopyObject(r.Context(), srcKey, dstKey); err != nil {
 		h.logger.Error("storage copy failed", zap.Error(err))
 		writeJSONError(w, http.StatusInternalServerError, "storage copy failed")
@@ -140,7 +166,11 @@ func (h *agentHandler) StorageInfo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s3Key := agentStorageKey(agentID, req.Path)
+	s3Key, err := agentStorageKey(agentID, req.Path)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid path: "+err.Error())
+		return
+	}
 	info, ct, err := h.s3.HeadObject(r.Context(), s3Key)
 	if err != nil {
 		writeJSONError(w, http.StatusNotFound, "object not found")
@@ -191,7 +221,11 @@ func (h *agentHandler) StorageShare(w http.ResponseWriter, r *http.Request) {
 		expiry = 24 * time.Hour
 	}
 
-	s3Key := agentStorageKey(agentID, req.Path)
+	s3Key, err := agentStorageKey(agentID, req.Path)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid path: "+err.Error())
+		return
+	}
 	if _, _, err := h.s3.HeadObject(r.Context(), s3Key); err != nil {
 		writeJSONError(w, http.StatusNotFound, "object not found")
 		return
@@ -289,7 +323,11 @@ func serveStoragePath(w http.ResponseWriter, r *http.Request, database *db.DB, s
 		return
 	}
 
-	s3Key := agentStorageKey(agentID, path)
+	s3Key, err := agentStorageKey(agentID, path)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
 	reader, err := s3.GetObject(r.Context(), s3Key)
 	if err != nil {
 		http.NotFound(w, r)
@@ -318,7 +356,7 @@ func serveStoragePath(w http.ResponseWriter, r *http.Request, database *db.DB, s
 
 // StorageList handles GET /api/agent/storage. Query params:
 //   - path=uploads/    → list under this storage path (slashless; trailing
-//                        '/' optional)
+//     '/' optional)
 //   - path= (empty)    → list the agent root
 //   - recursive=true|false (default false; one level only)
 func (h *agentHandler) StorageList(w http.ResponseWriter, r *http.Request) {

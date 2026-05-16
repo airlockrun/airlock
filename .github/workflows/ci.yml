@@ -30,6 +30,24 @@ jobs:
       - name: check-versions
         run: ./scripts/check-versions.sh
 
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          # gofmt doesn't compile or fetch deps — skip the module cache.
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "::error::these files are not gofmt-formatted:"
+            echo "$unformatted"
+            echo "run: gofmt -w ."
+            exit 1
+          fi
+
   go:
     runs-on: ubuntu-latest
     steps:

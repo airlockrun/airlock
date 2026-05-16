@@ -103,7 +103,6 @@ func (d *TelegramDriver) Poll(ctx context.Context, br *dbq.Bridge) ([]BridgeEven
 		return nil, err
 	}
 
-
 	var events []BridgeEvent
 	// advanceOffset must be called for EVERY update we observe — even ones we
 	// can't act on — or getUpdates will keep re-delivering them forever.
@@ -670,7 +669,6 @@ func (d *TelegramDriver) getUpdates(ctx context.Context, token string, offset in
 	return result.Result, nil
 }
 
-
 // sendMessageDraft streams a partial message to the user (Bot API 9.3+).
 func (d *TelegramDriver) sendMessageDraft(ctx context.Context, token string, chatID int64, draftID, text string) error {
 	body := map[string]any{
@@ -969,20 +967,20 @@ type telegramCallbackQuery struct {
 }
 
 type telegramMessage struct {
-	MessageID      int64                 `json:"message_id"`
-	Date           int64                 `json:"date"` // unix seconds
-	From           telegramUser          `json:"from"`
-	Chat           telegramChat          `json:"chat"`
-	Text           string                `json:"text"`
-	Caption        string                `json:"caption"`
-	Photo          []telegramPhotoSize   `json:"photo"`
-	Document       *telegramDocument     `json:"document"`
-	Voice          *telegramVoice        `json:"voice"`
-	Audio          *telegramAudio        `json:"audio"`
-	VideoNote      *telegramVideoNote    `json:"video_note"`
-	Video          *telegramVideo        `json:"video"`
-	ReplyToMessage *telegramMessage      `json:"reply_to_message"`
-	ForwardOrigin  *telegramForwardInfo  `json:"forward_origin"`
+	MessageID      int64                `json:"message_id"`
+	Date           int64                `json:"date"` // unix seconds
+	From           telegramUser         `json:"from"`
+	Chat           telegramChat         `json:"chat"`
+	Text           string               `json:"text"`
+	Caption        string               `json:"caption"`
+	Photo          []telegramPhotoSize  `json:"photo"`
+	Document       *telegramDocument    `json:"document"`
+	Voice          *telegramVoice       `json:"voice"`
+	Audio          *telegramAudio       `json:"audio"`
+	VideoNote      *telegramVideoNote   `json:"video_note"`
+	Video          *telegramVideo       `json:"video"`
+	ReplyToMessage *telegramMessage     `json:"reply_to_message"`
+	ForwardOrigin  *telegramForwardInfo `json:"forward_origin"`
 }
 
 // telegramForwardInfo is the modern (Bot API 7.0+) forward_origin field.
@@ -1038,12 +1036,12 @@ func telegramReferenced(m *telegramMessage) *BridgeReferencedMessage {
 }
 
 type telegramForwardInfo struct {
-	Type           string        `json:"type"` // "user" | "hidden_user" | "chat" | "channel"
-	Date           int64         `json:"date"`
-	SenderUser     *telegramUser `json:"sender_user"`
-	SenderUserName string        `json:"sender_user_name"`     // used when Type == "hidden_user"
-	SenderChat     *telegramChat `json:"sender_chat"`
-	AuthorSignature string       `json:"author_signature"`
+	Type            string        `json:"type"` // "user" | "hidden_user" | "chat" | "channel"
+	Date            int64         `json:"date"`
+	SenderUser      *telegramUser `json:"sender_user"`
+	SenderUserName  string        `json:"sender_user_name"` // used when Type == "hidden_user"
+	SenderChat      *telegramChat `json:"sender_chat"`
+	AuthorSignature string        `json:"author_signature"`
 }
 
 type telegramPhotoSize struct {

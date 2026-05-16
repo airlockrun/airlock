@@ -164,6 +164,12 @@ onMounted(async () => {
     if (payload?.agentId !== agentId) return
     tabsKey.value++
     loadSetupStatus()
+    toast.add({
+      severity: 'success',
+      summary: 'Synced',
+      detail: `${agent.value?.slug ?? 'Agent'} synced`,
+      life: 2500,
+    })
   })
 })
 

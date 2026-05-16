@@ -30,7 +30,7 @@ VALUES (
     '', '', '', '', '',
     '[]'::jsonb, ''
 )
-RETURNING id, user_id, slug, name, description, status, upgrade_status, auto_fix, build_provider_id, build_model, exec_provider_id, exec_model, stt_provider_id, stt_model, vision_provider_id, vision_model, tts_provider_id, tts_model, image_gen_provider_id, image_gen_model, embedding_provider_id, embedding_model, search_provider_id, search_model, source_ref, image_ref, db_schema, db_password, sdk_version, config, extra_prompts, error_message, created_at, updated_at, allow_non_member_mcp, allow_public_mcp
+RETURNING id, user_id, slug, name, description, status, upgrade_status, auto_fix, build_provider_id, build_model, exec_provider_id, exec_model, stt_provider_id, stt_model, vision_provider_id, vision_model, tts_provider_id, tts_model, image_gen_provider_id, image_gen_model, embedding_provider_id, embedding_model, search_provider_id, search_model, source_ref, image_ref, db_schema, db_password, sdk_version, config, extra_prompts, error_message, created_at, updated_at, allow_non_member_mcp, allow_public_mcp, tools_hash
 `
 
 type CreateAgentParams struct {
@@ -91,6 +91,7 @@ func (q *Queries) CreateAgent(ctx context.Context, arg CreateAgentParams) (Agent
 		&i.UpdatedAt,
 		&i.AllowNonMemberMcp,
 		&i.AllowPublicMcp,
+		&i.ToolsHash,
 	)
 	return i, err
 }
@@ -105,7 +106,7 @@ func (q *Queries) DeleteAgent(ctx context.Context, id pgtype.UUID) error {
 }
 
 const getAgentByID = `-- name: GetAgentByID :one
-SELECT id, user_id, slug, name, description, status, upgrade_status, auto_fix, build_provider_id, build_model, exec_provider_id, exec_model, stt_provider_id, stt_model, vision_provider_id, vision_model, tts_provider_id, tts_model, image_gen_provider_id, image_gen_model, embedding_provider_id, embedding_model, search_provider_id, search_model, source_ref, image_ref, db_schema, db_password, sdk_version, config, extra_prompts, error_message, created_at, updated_at, allow_non_member_mcp, allow_public_mcp FROM agents WHERE id = $1
+SELECT id, user_id, slug, name, description, status, upgrade_status, auto_fix, build_provider_id, build_model, exec_provider_id, exec_model, stt_provider_id, stt_model, vision_provider_id, vision_model, tts_provider_id, tts_model, image_gen_provider_id, image_gen_model, embedding_provider_id, embedding_model, search_provider_id, search_model, source_ref, image_ref, db_schema, db_password, sdk_version, config, extra_prompts, error_message, created_at, updated_at, allow_non_member_mcp, allow_public_mcp, tools_hash FROM agents WHERE id = $1
 `
 
 func (q *Queries) GetAgentByID(ctx context.Context, id pgtype.UUID) (Agent, error) {
@@ -148,12 +149,13 @@ func (q *Queries) GetAgentByID(ctx context.Context, id pgtype.UUID) (Agent, erro
 		&i.UpdatedAt,
 		&i.AllowNonMemberMcp,
 		&i.AllowPublicMcp,
+		&i.ToolsHash,
 	)
 	return i, err
 }
 
 const getAgentBySlug = `-- name: GetAgentBySlug :one
-SELECT id, user_id, slug, name, description, status, upgrade_status, auto_fix, build_provider_id, build_model, exec_provider_id, exec_model, stt_provider_id, stt_model, vision_provider_id, vision_model, tts_provider_id, tts_model, image_gen_provider_id, image_gen_model, embedding_provider_id, embedding_model, search_provider_id, search_model, source_ref, image_ref, db_schema, db_password, sdk_version, config, extra_prompts, error_message, created_at, updated_at, allow_non_member_mcp, allow_public_mcp FROM agents WHERE slug = $1
+SELECT id, user_id, slug, name, description, status, upgrade_status, auto_fix, build_provider_id, build_model, exec_provider_id, exec_model, stt_provider_id, stt_model, vision_provider_id, vision_model, tts_provider_id, tts_model, image_gen_provider_id, image_gen_model, embedding_provider_id, embedding_model, search_provider_id, search_model, source_ref, image_ref, db_schema, db_password, sdk_version, config, extra_prompts, error_message, created_at, updated_at, allow_non_member_mcp, allow_public_mcp, tools_hash FROM agents WHERE slug = $1
 `
 
 func (q *Queries) GetAgentBySlug(ctx context.Context, slug string) (Agent, error) {
@@ -196,6 +198,7 @@ func (q *Queries) GetAgentBySlug(ctx context.Context, slug string) (Agent, error
 		&i.UpdatedAt,
 		&i.AllowNonMemberMcp,
 		&i.AllowPublicMcp,
+		&i.ToolsHash,
 	)
 	return i, err
 }
@@ -216,8 +219,34 @@ func (q *Queries) GetAgentForUpgrade(ctx context.Context, id pgtype.UUID) (GetAg
 	return i, err
 }
 
+const listActiveAgentIDs = `-- name: ListActiveAgentIDs :many
+SELECT id FROM agents WHERE status = 'active'
+`
+
+// All agents in 'active' status. Used by the sibling-update broadcaster
+// to fan a /refresh out to every running agent (cold containers no-op).
+func (q *Queries) ListActiveAgentIDs(ctx context.Context) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, listActiveAgentIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []pgtype.UUID{}
+	for rows.Next() {
+		var id pgtype.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listAgents = `-- name: ListAgents :many
-SELECT id, user_id, slug, name, description, status, upgrade_status, auto_fix, build_provider_id, build_model, exec_provider_id, exec_model, stt_provider_id, stt_model, vision_provider_id, vision_model, tts_provider_id, tts_model, image_gen_provider_id, image_gen_model, embedding_provider_id, embedding_model, search_provider_id, search_model, source_ref, image_ref, db_schema, db_password, sdk_version, config, extra_prompts, error_message, created_at, updated_at, allow_non_member_mcp, allow_public_mcp FROM agents ORDER BY created_at DESC
+SELECT id, user_id, slug, name, description, status, upgrade_status, auto_fix, build_provider_id, build_model, exec_provider_id, exec_model, stt_provider_id, stt_model, vision_provider_id, vision_model, tts_provider_id, tts_model, image_gen_provider_id, image_gen_model, embedding_provider_id, embedding_model, search_provider_id, search_model, source_ref, image_ref, db_schema, db_password, sdk_version, config, extra_prompts, error_message, created_at, updated_at, allow_non_member_mcp, allow_public_mcp, tools_hash FROM agents ORDER BY created_at DESC
 `
 
 func (q *Queries) ListAgents(ctx context.Context) ([]Agent, error) {
@@ -266,6 +295,7 @@ func (q *Queries) ListAgents(ctx context.Context) ([]Agent, error) {
 			&i.UpdatedAt,
 			&i.AllowNonMemberMcp,
 			&i.AllowPublicMcp,
+			&i.ToolsHash,
 		); err != nil {
 			return nil, err
 		}
@@ -278,7 +308,7 @@ func (q *Queries) ListAgents(ctx context.Context) ([]Agent, error) {
 }
 
 const listAgentsByUser = `-- name: ListAgentsByUser :many
-SELECT id, user_id, slug, name, description, status, upgrade_status, auto_fix, build_provider_id, build_model, exec_provider_id, exec_model, stt_provider_id, stt_model, vision_provider_id, vision_model, tts_provider_id, tts_model, image_gen_provider_id, image_gen_model, embedding_provider_id, embedding_model, search_provider_id, search_model, source_ref, image_ref, db_schema, db_password, sdk_version, config, extra_prompts, error_message, created_at, updated_at, allow_non_member_mcp, allow_public_mcp FROM agents WHERE user_id = $1 ORDER BY created_at DESC
+SELECT id, user_id, slug, name, description, status, upgrade_status, auto_fix, build_provider_id, build_model, exec_provider_id, exec_model, stt_provider_id, stt_model, vision_provider_id, vision_model, tts_provider_id, tts_model, image_gen_provider_id, image_gen_model, embedding_provider_id, embedding_model, search_provider_id, search_model, source_ref, image_ref, db_schema, db_password, sdk_version, config, extra_prompts, error_message, created_at, updated_at, allow_non_member_mcp, allow_public_mcp, tools_hash FROM agents WHERE user_id = $1 ORDER BY created_at DESC
 `
 
 func (q *Queries) ListAgentsByUser(ctx context.Context, userID pgtype.UUID) ([]Agent, error) {
@@ -327,6 +357,7 @@ func (q *Queries) ListAgentsByUser(ctx context.Context, userID pgtype.UUID) ([]A
 			&i.UpdatedAt,
 			&i.AllowNonMemberMcp,
 			&i.AllowPublicMcp,
+			&i.ToolsHash,
 		); err != nil {
 			return nil, err
 		}
@@ -339,7 +370,7 @@ func (q *Queries) ListAgentsByUser(ctx context.Context, userID pgtype.UUID) ([]A
 }
 
 const listAgentsByUserID = `-- name: ListAgentsByUserID :many
-SELECT id, user_id, slug, name, description, status, upgrade_status, auto_fix, build_provider_id, build_model, exec_provider_id, exec_model, stt_provider_id, stt_model, vision_provider_id, vision_model, tts_provider_id, tts_model, image_gen_provider_id, image_gen_model, embedding_provider_id, embedding_model, search_provider_id, search_model, source_ref, image_ref, db_schema, db_password, sdk_version, config, extra_prompts, error_message, created_at, updated_at, allow_non_member_mcp, allow_public_mcp FROM agents WHERE user_id = $1 ORDER BY created_at DESC
+SELECT id, user_id, slug, name, description, status, upgrade_status, auto_fix, build_provider_id, build_model, exec_provider_id, exec_model, stt_provider_id, stt_model, vision_provider_id, vision_model, tts_provider_id, tts_model, image_gen_provider_id, image_gen_model, embedding_provider_id, embedding_model, search_provider_id, search_model, source_ref, image_ref, db_schema, db_password, sdk_version, config, extra_prompts, error_message, created_at, updated_at, allow_non_member_mcp, allow_public_mcp, tools_hash FROM agents WHERE user_id = $1 ORDER BY created_at DESC
 `
 
 func (q *Queries) ListAgentsByUserID(ctx context.Context, userID pgtype.UUID) ([]Agent, error) {
@@ -388,6 +419,7 @@ func (q *Queries) ListAgentsByUserID(ctx context.Context, userID pgtype.UUID) ([
 			&i.UpdatedAt,
 			&i.AllowNonMemberMcp,
 			&i.AllowPublicMcp,
+			&i.ToolsHash,
 		); err != nil {
 			return nil, err
 		}
@@ -519,7 +551,7 @@ UPDATE agents SET
     auto_fix = $1,
     updated_at = now()
 WHERE id = $2
-RETURNING id, user_id, slug, name, description, status, upgrade_status, auto_fix, build_provider_id, build_model, exec_provider_id, exec_model, stt_provider_id, stt_model, vision_provider_id, vision_model, tts_provider_id, tts_model, image_gen_provider_id, image_gen_model, embedding_provider_id, embedding_model, search_provider_id, search_model, source_ref, image_ref, db_schema, db_password, sdk_version, config, extra_prompts, error_message, created_at, updated_at, allow_non_member_mcp, allow_public_mcp
+RETURNING id, user_id, slug, name, description, status, upgrade_status, auto_fix, build_provider_id, build_model, exec_provider_id, exec_model, stt_provider_id, stt_model, vision_provider_id, vision_model, tts_provider_id, tts_model, image_gen_provider_id, image_gen_model, embedding_provider_id, embedding_model, search_provider_id, search_model, source_ref, image_ref, db_schema, db_password, sdk_version, config, extra_prompts, error_message, created_at, updated_at, allow_non_member_mcp, allow_public_mcp, tools_hash
 `
 
 type UpdateAgentFieldsParams struct {
@@ -567,6 +599,7 @@ func (q *Queries) UpdateAgentFields(ctx context.Context, arg UpdateAgentFieldsPa
 		&i.UpdatedAt,
 		&i.AllowNonMemberMcp,
 		&i.AllowPublicMcp,
+		&i.ToolsHash,
 	)
 	return i, err
 }
@@ -680,6 +713,22 @@ type UpdateAgentStatusParams struct {
 
 func (q *Queries) UpdateAgentStatus(ctx context.Context, arg UpdateAgentStatusParams) error {
 	_, err := q.db.Exec(ctx, updateAgentStatus, arg.Status, arg.ErrorMessage, arg.ID)
+	return err
+}
+
+const updateAgentToolsHash = `-- name: UpdateAgentToolsHash :exec
+UPDATE agents SET tools_hash = $1 WHERE id = $2
+`
+
+type UpdateAgentToolsHashParams struct {
+	ToolsHash []byte      `json:"tools_hash"`
+	ID        pgtype.UUID `json:"id"`
+}
+
+// Stamp the synced tool-set hash on the agent. Sync handler compares
+// before/after to decide whether to broadcast a sibling-update refresh.
+func (q *Queries) UpdateAgentToolsHash(ctx context.Context, arg UpdateAgentToolsHashParams) error {
+	_, err := q.db.Exec(ctx, updateAgentToolsHash, arg.ToolsHash, arg.ID)
 	return err
 }
 

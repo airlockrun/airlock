@@ -95,7 +95,20 @@ elif [ "$n" -eq 1 ] && [ "$readme_ver" != "$tags" ]; then
 	err "README.md checkout $readme_ver doesn't match compose tag $tags"
 fi
 
-# --- 5. Release-only: compose + README versions equal $RELEASE_TAG ---
+# --- 5. version.go constant matches compose tag ---
+
+# The Version constant in version.go is the source of truth that the in-code
+# DefaultAgentBuilderImage / DefaultAgentBaseImage interpolate. Drift here
+# means a `go run` from this commit would default to a different agent-builder
+# than the released compose pins.
+version_go=$(awk -F'"' '/^const Version =/ {print $2; exit}' version.go)
+if [ -z "$version_go" ]; then
+	err "version.go: missing 'const Version = \"X.Y.Z\"'"
+elif [ "$n" -eq 1 ] && [ "v$version_go" != "$tags" ]; then
+	err "version.go Version=v$version_go doesn't match compose tag $tags"
+fi
+
+# --- 6. Release-only: compose + README + version.go equal $RELEASE_TAG ---
 
 if [ -n "${RELEASE_TAG:-}" ]; then
 	if [ "$n" -eq 1 ] && [ "$tags" != "$RELEASE_TAG" ]; then
@@ -103,6 +116,9 @@ if [ -n "${RELEASE_TAG:-}" ]; then
 	fi
 	if [ -n "$readme_ver" ] && [ "$readme_ver" != "$RELEASE_TAG" ]; then
 		err "README.md checkout $readme_ver doesn't match release tag $RELEASE_TAG"
+	fi
+	if [ -n "$version_go" ] && [ "v$version_go" != "$RELEASE_TAG" ]; then
+		err "version.go Version=v$version_go doesn't match release tag $RELEASE_TAG"
 	fi
 fi
 

@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -44,16 +45,16 @@ func (noopPublisher) PublishBuildLogLine(context.Context, uuid.UUID, uuid.UUID, 
 
 // BuildService orchestrates the agent build and upgrade pipeline.
 type BuildService struct {
-	cfg              *config.Config
-	db               *db.DB
-	containers       container.ContainerManager
-	encryptor        secrets.Store
-	events           EventPublisher
-	upgradeNotifier  PostUpgradeNotifier
-	logger           *zap.Logger
+	cfg             *config.Config
+	db              *db.DB
+	containers      container.ContainerManager
+	encryptor       secrets.Store
+	events          EventPublisher
+	upgradeNotifier PostUpgradeNotifier
+	logger          *zap.Logger
 
-	mu          sync.Mutex
-	inFlight    map[string]*buildHandle // agentID → handle for cancel + wait
+	mu       sync.Mutex
+	inFlight map[string]*buildHandle // agentID → handle for cancel + wait
 }
 
 // buildHandle tracks a running build/upgrade so callers can cancel and
@@ -83,13 +84,13 @@ func New(cfg *config.Config, database *db.DB, containers container.ContainerMana
 		panic("builder: logger is nil")
 	}
 	return &BuildService{
-		cfg:         cfg,
-		db:          database,
-		containers:  containers,
-		encryptor:   encryptor,
-		events:      noopPublisher{},
-		logger:      logger,
-		inFlight:    make(map[string]*buildHandle),
+		cfg:        cfg,
+		db:         database,
+		containers: containers,
+		encryptor:  encryptor,
+		events:     noopPublisher{},
+		logger:     logger,
+		inFlight:   make(map[string]*buildHandle),
 	}
 }
 
@@ -494,8 +495,9 @@ func (b *BuildService) doBuild(ctx context.Context, q *dbq.Queries, agent dbq.Ag
 }
 
 // runBuildCodegen runs Sol code generation on a freshly scaffolded agent.
-// Creates a branch, sparse checkouts the agent dir, writes AGENT_SPEC.md,
-// runs Sol, commits, merges back to main. Returns the new commit hash.
+// Creates a branch, sparse checkouts the agent dir, runs Sol with the
+// build request as its user turn, commits, merges back to main. Returns
+// the new commit hash.
 func (b *BuildService) runBuildCodegen(ctx context.Context, q *dbq.Queries, agent dbq.Agent, agentID string, agentUUID uuid.UUID, instructions string, testDBURL, testDBPSQL, testDBSchema string, logLine func(string)) (string, error) {
 	repoPath := b.cfg.AgentMonorepoPath
 
@@ -516,12 +518,6 @@ func (b *BuildService) runBuildCodegen(ctx context.Context, q *dbq.Queries, agen
 		return "", fmt.Errorf("sparse checkout: %w", err)
 	}
 
-	// Write AGENT_SPEC.md with build instructions.
-	agentDir := filepath.Join(workDir, "agents", agentID)
-	if err := b.writeBuildSpec(agentDir, agent, instructions); err != nil {
-		return "", fmt.Errorf("write build spec: %w", err)
-	}
-
 	// Run Sol in-process.
 	localTools := tool.Set{}
 	localTools.Add(newMCPProbeTool())
@@ -531,11 +527,11 @@ func (b *BuildService) runBuildCodegen(ctx context.Context, q *dbq.Queries, agen
 		AgentDir:        fmt.Sprintf("/workspace/agents/%s", agentID),
 		BuildProviderID: agent.BuildProviderID,
 		BuildModel:      agent.BuildModel,
-		Prompt:          "Implement the agent according to the specification. Read AGENT_SPEC.md for details.",
+		Prompt:          buildCodegenPrompt(agent, instructions),
 		LocalTools:      localTools,
-		TestDBURL:    testDBURL,
-		TestDBPSQL:   testDBPSQL,
-		TestDBSchema: testDBSchema,
+		TestDBURL:       testDBURL,
+		TestDBPSQL:      testDBPSQL,
+		TestDBSchema:    testDBSchema,
 		LogCallback: func(line string) {
 			logLine(line)
 		},
@@ -581,61 +577,73 @@ func (b *BuildService) runBuildCodegen(ctx context.Context, q *dbq.Queries, agen
 	return hash, nil
 }
 
-// writeBuildSpec writes AGENT_SPEC.md for initial code generation.
-func (b *BuildService) writeBuildSpec(dir string, agent dbq.Agent, instructions string) error {
-	content := fmt.Sprintf(`# Agent Specification
+// buildCodegenPrompt is the user-turn message for a fresh build. The
+// scaffold is empty, so this is a from-scratch implementation request —
+// not a spec the model should reconcile a tree against. The agentsdk
+// reference lives at /libs/agentsdk/llms.md and is pulled in by the
+// system prompt's First Step; this message is just the task.
+func buildCodegenPrompt(agent dbq.Agent, instructions string) string {
+	return fmt.Sprintf(`Build a new agent from scratch in the scaffolded workspace.
 
-## Identity
+Agent: %s (slug: %s, id: %s)
 
-- **Name:** %s
-- **Slug:** %s
-- **ID:** %s
+What it should do:
 
-## Instructions
-
-%s
-`, agent.Name, agent.Slug, uuidString(agent.ID), instructions)
-
-	return os.WriteFile(filepath.Join(dir, "AGENT_SPEC.md"), []byte(content), 0o644)
+%s`, agent.Name, agent.Slug, uuidString(agent.ID), instructions)
 }
 
-// writeUpgradeSpec writes AGENT_SPEC.md for an upgrade to the agent workspace directory.
-func (b *BuildService) writeUpgradeSpec(dir string, agent dbq.Agent, input UpgradeInput) error {
-	content := fmt.Sprintf(`# Agent Specification
+// buildUpgradePrompt is the user-turn message for an upgrade. It frames
+// the work as an incremental change to an already-working codebase so
+// the model preserves everything unrelated to the request, rather than
+// treating the message as a full specification to make the tree match.
+// hasDiagnostics is true when writeUpgradeDiagnostics wrote DIAGNOSTICS.md.
+func buildUpgradePrompt(agent dbq.Agent, input UpgradeInput, hasDiagnostics bool) string {
+	desc := strings.TrimSpace(input.Description)
+	if desc == "" {
+		desc = "(no description provided)"
+	}
+	p := fmt.Sprintf(`You are upgrading the EXISTING agent %s (slug: %s, id: %s). Its workspace already contains a working codebase. This is an incremental change request — preserve everything not related to it. Do not remove tools, connections, routes, or files the request doesn't mention.
 
-## Identity
+Requested change (reason: %s):
 
-- **Name:** %s
-- **Slug:** %s
-- **ID:** %s
+%s`, agent.Name, agent.Slug, uuidString(agent.ID), input.Reason, desc)
 
-## Description
+	if hasDiagnostics {
+		p += "\n\nThe agent is currently failing. Read DIAGNOSTICS.md in the workspace for the failure context (error message, panic trace, failed input, recorded actions, conversation) before changing code."
+	}
+	return p
+}
 
-%s
-
-## Upgrade Context
-
-- **Reason:** %s
-- **Description:** %s
-`, agent.Name, agent.Slug, uuidString(agent.ID), agent.Description, input.Reason, input.Description)
-
+// writeUpgradeDiagnostics writes DIAGNOSTICS.md only when the upgrade
+// carries failure context (auto_fix path). Returns true when a file was
+// written. Pure "manual"/"llm_request" upgrades carry no error context
+// and get no file — the request message alone is the brief.
+func writeUpgradeDiagnostics(dir string, input UpgradeInput) (bool, error) {
+	var content string
 	if input.ErrorMessage != "" {
-		content += fmt.Sprintf("\n### Error Message\n\n```\n%s\n```\n", input.ErrorMessage)
+		content += fmt.Sprintf("## Error Message\n\n```\n%s\n```\n", input.ErrorMessage)
 	}
 	if input.PanicTrace != "" {
-		content += fmt.Sprintf("\n### Panic Trace\n\n```\n%s\n```\n", input.PanicTrace)
+		content += fmt.Sprintf("\n## Panic Trace\n\n```\n%s\n```\n", input.PanicTrace)
 	}
 	if input.InputPayload != "" {
-		content += fmt.Sprintf("\n### Failed Input\n\n```json\n%s\n```\n", input.InputPayload)
+		content += fmt.Sprintf("\n## Failed Input\n\n```json\n%s\n```\n", input.InputPayload)
 	}
 	if input.Actions != "" {
-		content += fmt.Sprintf("\n### Recorded Actions\n\n```json\n%s\n```\n", input.Actions)
+		content += fmt.Sprintf("\n## Recorded Actions\n\n```json\n%s\n```\n", input.Actions)
 	}
 	if input.Messages != "" {
-		content += fmt.Sprintf("\n### Conversation Messages\n\n```\n%s\n```\n", input.Messages)
+		content += fmt.Sprintf("\n## Conversation Messages\n\n```\n%s\n```\n", input.Messages)
 	}
-
-	return os.WriteFile(filepath.Join(dir, "AGENT_SPEC.md"), []byte(content), 0o644)
+	if content == "" {
+		return false, nil
+	}
+	runRef := "the failed run"
+	if input.RunID != "" {
+		runRef = "run " + input.RunID
+	}
+	header := fmt.Sprintf("# Failure diagnostics (%s)\n\nContext from the run that triggered this upgrade.\n\n", runRef)
+	return true, os.WriteFile(filepath.Join(dir, "DIAGNOSTICS.md"), []byte(header+content), 0o644)
 }
 
 // createAgentSchema creates a dedicated Postgres role and schema for the agent.

@@ -28,11 +28,11 @@ import (
 
 // PromptProxy manages conversation history and forwards prompts to agent containers.
 type PromptProxy struct {
-	dispatcher            *Dispatcher
-	db                    *db.DB
-	s3                    *storage.S3Client
-	logger                *zap.Logger
-	resolveTranscription  TranscriptionResolver
+	dispatcher           *Dispatcher
+	db                   *db.DB
+	s3                   *storage.S3Client
+	logger               *zap.Logger
+	resolveTranscription TranscriptionResolver
 }
 
 // NewPromptProxy creates a PromptProxy. The resolver is invoked to obtain the

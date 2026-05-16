@@ -173,8 +173,11 @@ services:
       # Container orchestration: agent containers join this network so they
       # can reach airlock:8080 internally. Must match the network name below.
       DOCKER_NETWORK: airlock
-      AGENT_BUILDER_IMAGE: ghcr.io/airlockrun/airlock-agent-builder:v0.3.4
-      AGENT_BASE_IMAGE: ghcr.io/airlockrun/airlock-agent-base:v0.3.4
+      # Opt-in toolserver/runtime image overrides. Empty default = airlock
+      # uses config.DefaultAgent{Builder,Base}Image (pinned to airlock.Version,
+      # matched to this release). Set in .env to point at a custom build.
+      AGENT_BUILDER_IMAGE: ${AGENT_BUILDER_IMAGE:-}
+      AGENT_BASE_IMAGE: ${AGENT_BASE_IMAGE:-}
 
       # Codegen workspace lives inside the airlock-data named volume so
       # that scratch dirs airlock writes are visible to sibling

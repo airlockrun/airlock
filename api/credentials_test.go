@@ -10,9 +10,9 @@ import (
 	"strings"
 	"testing"
 
-	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/db/dbq"
+	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 	"github.com/airlockrun/airlock/oauth"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"

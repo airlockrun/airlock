@@ -837,10 +837,10 @@ func (d *DiscordDriver) GetMe(ctx context.Context, token string) (string, error)
 // linking. AvatarURL is the resolved CDN URL ("" if the user has no
 // avatar set) so callers don't have to know the snowflake-hash format.
 type DiscordUserInfo struct {
-	ID          string
-	Username    string // legacy @handle (no discriminator)
-	GlobalName  string // newer "display name" (Discord rolled out 2023)
-	AvatarURL   string
+	ID         string
+	Username   string // legacy @handle (no discriminator)
+	GlobalName string // newer "display name" (Discord rolled out 2023)
+	AvatarURL  string
 }
 
 // FetchUser hits GET /users/{id} for a snowflake. Bot tokens have
@@ -1312,8 +1312,8 @@ type discordMessage struct {
 // returns inline on MESSAGE_CREATE for forward-type messages.
 type discordSnapshot struct {
 	Message struct {
-		Content   string `json:"content"`
-		Timestamp string `json:"timestamp"`
+		Content   string       `json:"content"`
+		Timestamp string       `json:"timestamp"`
 		Author    *discordUser `json:"author"`
 	} `json:"message"`
 }

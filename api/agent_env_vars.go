@@ -131,7 +131,7 @@ func (h *agentHandler) GetEnvVarValue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	value, err := h.encryptor.Get(r.Context(), envVarRef(pgUUID(row.ID).String(),slug), row.ValueRef)
+	value, err := h.encryptor.Get(r.Context(), envVarRef(pgUUID(row.ID).String(), slug), row.ValueRef)
 	if err != nil {
 		h.logger.Error("decrypt env var failed", zap.Error(err))
 		writeJSONError(w, http.StatusInternalServerError, "decryption failed")
@@ -192,7 +192,7 @@ func (h *credentialHandler) ListEnvVars(w http.ResponseWriter, r *http.Request) 
 		if row.Configured && !row.IsSecret {
 			// Decrypt and surface the current value for plain config so
 			// operators can see+edit. Secrets stay write-only.
-			value, derr := h.encryptor.Get(ctx, envVarRef(pgUUID(row.ID).String(),row.Slug), envVarValueRef(ctx, q, agentID, row.Slug))
+			value, derr := h.encryptor.Get(ctx, envVarRef(pgUUID(row.ID).String(), row.Slug), envVarValueRef(ctx, q, agentID, row.Slug))
 			if derr != nil {
 				h.logger.Error("decrypt env var for list failed",
 					zap.String("slug", row.Slug), zap.Error(derr))

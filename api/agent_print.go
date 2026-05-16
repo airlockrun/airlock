@@ -61,7 +61,11 @@ func (h *agentHandler) Print(w http.ResponseWriter, r *http.Request) {
 			// to permanent media location. Strip a stray leading '/' so
 			// the LLM-supplied path can't double-slash the S3 key.
 			srcPath := strings.TrimPrefix(p.Source, "/")
-			srcKey := agentStorageKey(agentID, srcPath)
+			srcKey, err := agentStorageKey(agentID, srcPath)
+			if err != nil {
+				writeJSONError(w, http.StatusBadRequest, "invalid source path: "+err.Error())
+				return
+			}
 			filename := p.Filename
 			if filename == "" {
 				filename = filepath.Base(srcPath)

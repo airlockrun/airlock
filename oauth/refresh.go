@@ -137,7 +137,7 @@ func (j *RefreshJob) refreshOnce(ctx context.Context) {
 		if err := q.UpdateConnectionCredentials(ctx, dbq.UpdateConnectionCredentialsParams{
 			AgentID:        conn.AgentID,
 			Slug:           conn.Slug,
-			AccessTokenRef:    encAccessToken,
+			AccessTokenRef: encAccessToken,
 			TokenExpiresAt: expiresAt,
 			RefreshToken:   encRefresh,
 		}); err != nil {
@@ -220,7 +220,7 @@ func (j *RefreshJob) refreshOnce(ctx context.Context) {
 		if err := q.UpdateMCPServerCredentials(ctx, dbq.UpdateMCPServerCredentialsParams{
 			AgentID:        srv.AgentID,
 			Slug:           srv.Slug,
-			AccessTokenRef:    encAccessToken,
+			AccessTokenRef: encAccessToken,
 			TokenExpiresAt: expiresAt,
 			RefreshToken:   encRefresh,
 		}); err != nil {

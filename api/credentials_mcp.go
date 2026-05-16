@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"time"
 
-	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 	"github.com/airlockrun/airlock/db/dbq"
+	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 	"github.com/airlockrun/airlock/oauth"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -168,8 +168,8 @@ func (h *credentialHandler) SetMCPToken(w http.ResponseWriter, r *http.Request) 
 	}
 
 	if err := q.UpdateMCPServerCredentials(ctx, dbq.UpdateMCPServerCredentialsParams{
-		AgentID:     toPgUUID(agentID),
-		Slug:        slug,
+		AgentID:        toPgUUID(agentID),
+		Slug:           slug,
 		AccessTokenRef: encKey,
 	}); err != nil {
 		h.logger.Error("store MCP token failed", zap.Error(err))

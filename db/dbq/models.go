@@ -45,6 +45,7 @@ type Agent struct {
 	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
 	AllowNonMemberMcp   bool               `json:"allow_non_member_mcp"`
 	AllowPublicMcp      bool               `json:"allow_public_mcp"`
+	ToolsHash           []byte             `json:"tools_hash"`
 }
 
 type AgentBuild struct {
@@ -103,6 +104,7 @@ type AgentDirectory struct {
 	RetentionHours int32              `json:"retention_hours"`
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+	Scope          string             `json:"scope"`
 }
 
 type AgentEnvVar struct {

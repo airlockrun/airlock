@@ -23,12 +23,32 @@ import (
 // in this list is a discovery aid only; authorization at call time is
 // always evaluated fresh against the target's allow_*_mcp settings.
 type siblingsHandler struct {
-	db     *db.DB
-	logger *zap.Logger
+	db         *db.DB
+	dispatcher *trigger.Dispatcher
+	logger     *zap.Logger
 }
 
-func newSiblingsHandler(d *db.DB, logger *zap.Logger) *siblingsHandler {
-	return &siblingsHandler{db: d, logger: logger}
+func newSiblingsHandler(d *db.DB, dispatcher *trigger.Dispatcher, logger *zap.Logger) *siblingsHandler {
+	return &siblingsHandler{db: d, dispatcher: dispatcher, logger: logger}
+}
+
+// refreshParent triggers a synchronous re-sync on the parent agent's
+// container so a sibling add/remove is reflected in its agent_<slug>
+// bindings without waiting for a restart. Only the parent's address
+// book changed — no need to broadcast to every agent. Best-effort and
+// run inline-async: RefreshAgent no-ops for cold containers.
+func (h *siblingsHandler) refreshParent(parentID uuid.UUID) {
+	if h.dispatcher == nil {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := h.dispatcher.RefreshAgent(ctx, parentID); err != nil {
+			h.logger.Warn("siblings: refresh parent after change",
+				zap.String("agent_id", parentID.String()), zap.Error(err))
+		}
+	}()
 }
 
 type siblingDTO struct {
@@ -158,6 +178,7 @@ func (h *siblingsHandler) Add(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusForbidden, "you are not allowed to add this agent as a sibling")
 		return
 	}
+	h.refreshParent(parentID)
 	w.WriteHeader(http.StatusCreated)
 }
 
@@ -181,6 +202,7 @@ func (h *siblingsHandler) Remove(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusInternalServerError, "remove sibling")
 		return
 	}
+	h.refreshParent(parentID)
 	w.WriteHeader(http.StatusNoContent)
 }
 

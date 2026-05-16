@@ -247,10 +247,13 @@ func (b *BuildService) doUpgrade(ctx context.Context, q *dbq.Queries, input Upgr
 		return "", fmt.Errorf("sparse checkout: %w", err)
 	}
 
-	// Step 5: Write upgrade spec
+	// Step 5: Write failure diagnostics (only when the upgrade carries
+	// error context — auto_fix path). The change request itself is
+	// delivered as the Sol user turn below, not as a spec file.
 	agentDir := filepath.Join(workDir, "agents", agentID)
-	if err := b.writeUpgradeSpec(agentDir, agent, input); err != nil {
-		return "", fmt.Errorf("write upgrade spec: %w", err)
+	hasDiagnostics, err := writeUpgradeDiagnostics(agentDir, input)
+	if err != nil {
+		return "", fmt.Errorf("write upgrade diagnostics: %w", err)
 	}
 
 	if ctx.Err() != nil {
@@ -268,10 +271,10 @@ func (b *BuildService) doUpgrade(ctx context.Context, q *dbq.Queries, input Upgr
 	}
 
 	solResult, err := b.runSolInProcess(ctx, solRunOpts{
-		WorkDir:    workDir,
-		AgentDir:   fmt.Sprintf("/workspace/agents/%s", agentID),
-		BuildModel: agent.BuildModel,
-		Prompt:     "Fix/upgrade the agent. Read AGENT_SPEC.md for the specification and error context.",
+		WorkDir:      workDir,
+		AgentDir:     fmt.Sprintf("/workspace/agents/%s", agentID),
+		BuildModel:   agent.BuildModel,
+		Prompt:       buildUpgradePrompt(agent, input, hasDiagnostics),
 		TestDBURL:    testDBURL,
 		TestDBPSQL:   b.agentDBURLBase(b.cfg.DBHostAgent, sourceSchema, dbPassword),
 		TestDBSchema: cloneName,

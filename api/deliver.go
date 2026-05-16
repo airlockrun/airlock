@@ -7,9 +7,9 @@ import (
 	"time"
 
 	"github.com/airlockrun/agentsdk"
-	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
+	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 	"github.com/airlockrun/airlock/realtime"
 	"github.com/airlockrun/airlock/storage"
 	"github.com/airlockrun/airlock/trigger"
@@ -32,14 +32,14 @@ type postDeps struct {
 type postOpts struct {
 	AgentID        uuid.UUID
 	ConversationID uuid.UUID
-	RunID          uuid.UUID           // zero = no run linkage
-	Role           string              // "assistant", "system"
-	Text           string              // plain text content
+	RunID          uuid.UUID              // zero = no run linkage
+	Role           string                 // "assistant", "system"
+	Text           string                 // plain text content
 	Parts          []agentsdk.DisplayPart // rich content (optional)
-	Source         string              // "notification", "system", etc.
-	Ephemeral      bool                // stored for UI but excluded from LLM context
-	TriggerLLM     bool                // forward to agent for a response turn
-	LLMMessage     string              // message text for the LLM turn (if TriggerLLM)
+	Source         string                 // "notification", "system", etc.
+	Ephemeral      bool                   // stored for UI but excluded from LLM context
+	TriggerLLM     bool                   // forward to agent for a response turn
+	LLMMessage     string                 // message text for the LLM turn (if TriggerLLM)
 }
 
 // postToConversation stores a message, delivers it via the appropriate channel

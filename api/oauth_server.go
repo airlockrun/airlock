@@ -105,11 +105,11 @@ func (h *oauthServerHandler) ASMetadata(w http.ResponseWriter, r *http.Request) 
 // renames. Server-side canonicalization to UUID only happens at
 // /oauth/token mint time.
 type resourceMetadata struct {
-	Resource              string   `json:"resource"`
-	AuthorizationServers  []string `json:"authorization_servers"`
-	ScopesSupported       []string `json:"scopes_supported"`
+	Resource               string   `json:"resource"`
+	AuthorizationServers   []string `json:"authorization_servers"`
+	ScopesSupported        []string `json:"scopes_supported"`
 	BearerMethodsSupported []string `json:"bearer_methods_supported"`
-	ResourceDocumentation string   `json:"resource_documentation,omitempty"`
+	ResourceDocumentation  string   `json:"resource_documentation,omitempty"`
 }
 
 func (h *oauthServerHandler) ResourceMetadata(w http.ResponseWriter, r *http.Request) {

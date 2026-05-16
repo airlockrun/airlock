@@ -51,4 +51,3 @@ func TestRunMigrations(t *testing.T) {
 		t.Fatalf("RunMigrations() failed: %v", err)
 	}
 }
-

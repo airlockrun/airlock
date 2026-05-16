@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
-# Pre-commit hook — runs the same version-invariant check that CI runs
-# on tag push. Catches Dockerfile-vs-go.mod drift and inconsistent
-# compose tags before the commit lands.
+# Pre-commit hook — two gates, both also enforced in CI:
+#
+#   1. Version-invariant check (Dockerfile↔go.mod drift, compose tags,
+#      README pin, version.go). Same script CI runs on tag push.
+#   2. gofmt on the Go files staged for this commit. Blocks the commit
+#      if any need formatting; does NOT auto-rewrite (explicit, no
+#      surprise edits to your working tree).
 #
 # Enable for this clone (one-time):
 #   git config core.hooksPath .githooks
@@ -12,4 +16,21 @@
 set -e
 
 repo_root=$(git rev-parse --show-toplevel)
-exec "$repo_root/scripts/check-versions.sh"
+
+"$repo_root/scripts/check-versions.sh"
+
+# Only the .go files staged in this commit (Added/Copied/Modified/Renamed),
+# so an unrelated unformatted file elsewhere in the tree doesn't block you.
+staged_go=$(git diff --cached --name-only --diff-filter=ACMR -- '*.go')
+if [ -n "$staged_go" ]; then
+	unformatted=$(gofmt -l $staged_go)
+	if [ -n "$unformatted" ]; then
+		echo "ERROR: these staged Go files are not gofmt-formatted:" >&2
+		echo "$unformatted" | sed 's/^/  /' >&2
+		echo >&2
+		echo "Fix with:" >&2
+		echo "  gofmt -w $unformatted" >&2
+		echo "then re-stage and commit." >&2
+		exit 1
+	fi
+fi

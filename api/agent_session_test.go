@@ -37,13 +37,13 @@ func testConversation(t *testing.T, agentID, userID uuid.UUID) uuid.UUID {
 
 // TestSessionCompact_InsertsMarkerAndAdvancesCheckpoint verifies that after
 // SessionCompact:
-// 1. A checkpoint-marker message exists with source='checkpoint'.
-// 2. Summary messages are inserted.
-// 3. The conversation's context_checkpoint_message_id points at the first
-//    summary row.
-// 4. Pre-existing messages remain in the DB.
-// 5. ListSessionMessagesByConversation returns only post-checkpoint summary
-//    messages (filtering out both pre-checkpoint history and the marker row).
+//  1. A checkpoint-marker message exists with source='checkpoint'.
+//  2. Summary messages are inserted.
+//  3. The conversation's context_checkpoint_message_id points at the first
+//     summary row.
+//  4. Pre-existing messages remain in the DB.
+//  5. ListSessionMessagesByConversation returns only post-checkpoint summary
+//     messages (filtering out both pre-checkpoint history and the marker row).
 func TestSessionCompact_InsertsMarkerAndAdvancesCheckpoint(t *testing.T) {
 	skipIfNoDB(t)
 	ah := testAgentHandler()
@@ -187,11 +187,11 @@ func TestClearCommand_ResolvesSuspendedRun(t *testing.T) {
 
 	// Insert a suspended run for this agent — the state /clear should resolve.
 	run, err := q.CreateRun(ctx, dbq.CreateRunParams{
-		AgentID:       toPgUUID(agentID),
-		InputPayload:  []byte("{}"),
-		SourceRef:     "",
-		TriggerType:   "prompt",
-		TriggerRef:    "",
+		AgentID:      toPgUUID(agentID),
+		InputPayload: []byte("{}"),
+		SourceRef:    "",
+		TriggerType:  "prompt",
+		TriggerRef:   "",
 	})
 	if err != nil {
 		t.Fatalf("CreateRun: %v", err)

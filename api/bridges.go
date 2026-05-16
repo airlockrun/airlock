@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"net/http"
 
-	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
+	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 	"github.com/airlockrun/airlock/secrets"
 	"github.com/airlockrun/airlock/trigger"
 	"github.com/go-chi/chi/v5"
@@ -118,13 +118,13 @@ func (h *bridgeHandler) CreateBridge(w http.ResponseWriter, r *http.Request) {
 
 	q := dbq.New(h.db.Pool())
 	br, err := q.CreateBridge(ctx, dbq.CreateBridgeParams{
-		Type:           bridgeType,
-		Name:           req.Name,
+		Type:        bridgeType,
+		Name:        req.Name,
 		BotTokenRef: encToken,
-		BotUsername:    botUsername,
-		AgentID:        agentPgID,
-		CreatedBy:      createdBy,
-		IsSystem:       isSystem,
+		BotUsername: botUsername,
+		AgentID:     agentPgID,
+		CreatedBy:   createdBy,
+		IsSystem:    isSystem,
 	})
 	if err != nil {
 		h.logger.Error("create bridge failed", zap.Error(err))

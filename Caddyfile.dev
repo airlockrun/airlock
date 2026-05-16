@@ -1,0 +1,49 @@
+# Develop-against-source Caddy config.
+#
+# Pairs with docker-compose.dev.yml: postgres + rustfs + caddy run in
+# containers, but airlock and the frontend run natively from source on
+# the host (so you get fast iteration, debugger attach, and live-reload).
+# Caddy proxies through to the host binary via host.docker.internal.
+#
+# Differs from Caddyfile.local in two things:
+#   - Upstreams reach the host (host.docker.internal) instead of
+#     in-container service names. Overridable via env so you can point
+#     at a different host/port if you're tunneling.
+#   - Domain is env-driven (`{$DOMAIN}`) so it works for laptops on
+#     *.localhost and for shared dev servers using public-DNS wildcards
+#     (nip.io / sslip.io / etc.). No hardcoded hostname.
+#
+# TLS uses Caddy's built-in local CA (`tls internal`). Fine when you're
+# only hitting this from the dev box itself; if you access the dev
+# server from another machine you'll either need to import Caddy's root
+# CA on each accessing machine OR drop a docker-compose.override.yml
+# next to docker-compose.yml that swaps `tls internal` for mkcert /
+# Let's Encrypt — Compose auto-loads override.yml without an extra -f.
+
+{$DOMAIN} {
+	tls internal
+
+	@spa_relay path /auth/relay
+	handle @spa_relay {
+		reverse_proxy {$FRONTEND_UPSTREAM}
+	}
+	@backend path /api/* /auth/* /auth-external /ws /webhooks/* /health /.well-known/* /oauth/*
+	handle @backend {
+		reverse_proxy {$AIRLOCK_UPSTREAM}
+	}
+	handle {
+		reverse_proxy {$FRONTEND_UPSTREAM}
+	}
+}
+
+s3.{$DOMAIN} {
+	tls internal
+	reverse_proxy rustfs:9000 {
+		header_up Host {host}
+	}
+}
+
+*.{$DOMAIN} {
+	tls internal
+	reverse_proxy {$AIRLOCK_UPSTREAM}
+}

@@ -101,6 +101,24 @@ Open [https://airlock.localhost:24443](https://airlock.localhost:24443), accept 
 
 This stack uses dummy secrets baked into the overlay — fine for poking around, **not** for anything you put real data into.
 
+## Develop against airlock from source
+
+If you're hacking on airlock itself (Go backend, Vue frontend, agent build pipeline) and want fast iteration without rebuilding images on every save:
+
+```bash
+cp .env.dev.example .env
+# Edit .env: set DOMAIN to suit your setup (airlock.localhost for laptop-only;
+# 1.2.3.4.nip.io for a shared dev server reachable from other machines).
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+# In separate terminals:
+go run ./cmd/airlock serve
+cd frontend && pnpm dev
+```
+
+This overlay runs postgres + rustfs + caddy in containers and exposes the DB / S3 ports on `127.0.0.1` so the natively-running airlock binary can connect. The in-container `airlock` and `frontend` services are profile-disabled — your `go run` and `pnpm dev` own those ports instead. Caddy proxies through `host.docker.internal` to reach them.
+
+For cross-machine access (you SSH into a box and hit it from a laptop), drop a `docker-compose.override.yml` next to the compose files to swap Caddy's `tls internal` for mkcert or a Let's Encrypt setup — Compose auto-loads override.yml so it doesn't change the up command.
+
 ## Updating
 
 ```bash

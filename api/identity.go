@@ -9,10 +9,10 @@ import (
 	"strconv"
 	"time"
 
-	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
+	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 	"github.com/airlockrun/airlock/secrets"
 	"github.com/airlockrun/airlock/trigger"
 	"github.com/go-chi/chi/v5"
@@ -196,7 +196,6 @@ func joinName(first, last string) string {
 	}
 }
 
-
 // ListIdentities handles GET /api/v1/identities.
 func (h *identityHandler) ListIdentities(w http.ResponseWriter, r *http.Request) {
 	userID := auth.UserIDFromContext(r.Context())
@@ -248,4 +247,3 @@ func (h *identityHandler) UnlinkIdentity(w http.ResponseWriter, r *http.Request)
 
 	w.WriteHeader(http.StatusNoContent)
 }
-

@@ -10,6 +10,7 @@ import (
 
 	"github.com/airlockrun/airlock/container"
 	"github.com/airlockrun/airlock/db/dbq"
+	"github.com/airlockrun/goai/stream"
 	"github.com/airlockrun/goai/tool"
 	sol "github.com/airlockrun/sol"
 	"github.com/airlockrun/sol/bus"
@@ -17,7 +18,6 @@ import (
 	solprovider "github.com/airlockrun/sol/provider"
 	soltools "github.com/airlockrun/sol/tools"
 	"github.com/airlockrun/sol/websearch"
-	"github.com/airlockrun/goai/stream"
 	dmount "github.com/docker/docker/api/types/mount"
 	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"
@@ -25,16 +25,16 @@ import (
 
 // solRunOpts configures an in-process Sol run with a remote toolserver.
 type solRunOpts struct {
-	WorkDir          string         // host path to sparse checkout
-	AgentDir         string         // container-side path (e.g., /workspace/agents/{id})
-	BuildProviderID  pgtype.UUID    // providers row FK; pairs with BuildModel
-	BuildModel       string         // bare model name (e.g. "gpt-5"); empty ⇄ FK invalid
-	Prompt           string         // prompt for the runner
-	LogCallback      func(line string)
-	LocalTools       tool.Set       // optional in-process tools (e.g., set_agent_description)
-	TestDBURL    string // test schema DB URL with search_path baked in
-	TestDBPSQL   string // test schema DB URL without search_path (for psql)
-	TestDBSchema string // test schema name (for psql SET search_path)
+	WorkDir         string      // host path to sparse checkout
+	AgentDir        string      // container-side path (e.g., /workspace/agents/{id})
+	BuildProviderID pgtype.UUID // providers row FK; pairs with BuildModel
+	BuildModel      string      // bare model name (e.g. "gpt-5"); empty ⇄ FK invalid
+	Prompt          string      // prompt for the runner
+	LogCallback     func(line string)
+	LocalTools      tool.Set // optional in-process tools (e.g., set_agent_description)
+	TestDBURL       string   // test schema DB URL with search_path baked in
+	TestDBPSQL      string   // test schema DB URL without search_path (for psql)
+	TestDBSchema    string   // test schema name (for psql SET search_path)
 }
 
 // solRunResult captures the outcome of an in-process Sol run. ExitStatus
