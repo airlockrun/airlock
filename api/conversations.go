@@ -447,6 +447,14 @@ func (h *conversationsHandler) Prompt(w http.ResponseWriter, r *http.Request) {
 		}); err != nil {
 			h.logger.Warn("post upload echo failed", zap.Error(err))
 		}
+
+		// Attached-files manifest — the single canonical producer. Lands
+		// pre-dispatch so it sorts right before the user's turn; sol's
+		// same-role coalescer folds the two user messages for providers
+		// that reject consecutive user turns.
+		if err := trigger.PostFilesManifest(ctx, q, convID, fileInfos); err != nil {
+			h.logger.Warn("post files manifest failed", zap.Error(err))
+		}
 	}
 
 	// Look up the agent row once — used for both model modalities and
@@ -487,6 +495,16 @@ func (h *conversationsHandler) Prompt(w http.ResponseWriter, r *http.Request) {
 	if suspendedRun, err := q.GetLatestSuspendedRun(ctx, toPgUUID(agentID)); err == nil {
 		input.ResumeRunID = convert.PgUUIDToString(suspendedRun.ID)
 		input.Approved = req.Approved
+		// On deny, sol persists the re-reason nudge ("Rejected by user.")
+		// as a user message. Tag it source="control" so the UI renders a
+		// muted label instead of a fake user bubble (it's a control
+		// signal for the model, not something the human typed). It's the
+		// only role=user message this resume run writes, so a run-scoped
+		// source is exact. Approve sends an empty prompt — no user
+		// message — so this only matters for deny.
+		if req.Approved != nil && !*req.Approved {
+			input.Source = "control"
+		}
 		_ = q.ResolveSuspendedRun(ctx, suspendedRun.ID)
 	}
 

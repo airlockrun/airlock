@@ -251,6 +251,14 @@ func (p *PromptProxy) HandleMessage(
 		})
 	}
 
+	// Attached-files manifest — same canonical producer as the web path.
+	// Pre-dispatch so it's in history when the agent's SessionStore loads.
+	if err := PostFilesManifest(ctx, q, conversationID, fileInfos); err != nil {
+		p.logger.Warn("post files manifest failed",
+			zap.String("conversation_id", convert.PgUUIDToString(conversationID)),
+			zap.Error(err))
+	}
+
 	// Resolve access-filtered extra system prompt fragments. Failure to load
 	// the agent row is non-fatal — we just skip extras rather than blocking
 	// the whole prompt.

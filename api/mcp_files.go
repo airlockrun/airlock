@@ -566,3 +566,79 @@ func safeFilename(name string) string {
 	}
 	return name
 }
+
+// a2aArtifact is one file a sibling produced (via printToUser) during a
+// prompt() task, surfaced back to the caller. For an agent caller Path
+// is in the caller's own storage (siblings/<slug>/...); for an external
+// client it's the sibling's path (fetched via resources/read).
+type a2aArtifact struct {
+	Path        string `json:"path"`
+	Filename    string `json:"filename,omitempty"`
+	ContentType string `json:"contentType,omitempty"`
+}
+
+// collectPromptArtifacts gathers file/media parts the sibling persisted
+// during the task. printToUser writes message rows tagged with the
+// child run id, so ListMessagesByRun(child) is exactly that run's
+// user-facing output; we keep file/image/audio/video parts (final text
+// still comes from the NDJSON stream) and, for an agent caller,
+// cross-bucket-copy each into the caller's siblings/<slug>/ namespace —
+// the same outbound convention as FilePath tool results.
+// attachToContext parts are context injection, not output, so they are
+// not persisted as display parts and never collected here. Best-effort:
+// a copy failure drops that one artifact, never fails the task.
+func collectPromptArtifacts(ctx context.Context, s3 *storage.S3Client, logger *zap.Logger, q *dbq.Queries, target dbq.Agent, principal MCPPrincipal, runID uuid.UUID) []a2aArtifact {
+	msgs, err := q.ListMessagesByRun(ctx, toPgUUID(runID))
+	if err != nil || len(msgs) == 0 {
+		return nil
+	}
+	targetID := uuid.UUID(target.ID.Bytes)
+	seen := make(map[string]struct{})
+	var out []a2aArtifact
+	for _, m := range msgs {
+		if len(m.Parts) == 0 {
+			continue
+		}
+		var parts []struct {
+			Type     string `json:"type"`
+			Source   string `json:"source"`
+			Filename string `json:"filename"`
+			MimeType string `json:"mimeType"`
+		}
+		if json.Unmarshal(m.Parts, &parts) != nil {
+			continue
+		}
+		for _, p := range parts {
+			switch p.Type {
+			case "file", "image", "audio", "video":
+			default:
+				continue
+			}
+			if p.Source == "" {
+				continue
+			}
+			cleaned, cerr := storage.CleanAgentPath(p.Source)
+			if cerr != nil {
+				continue
+			}
+			if _, dup := seen[cleaned]; dup {
+				continue
+			}
+			seen[cleaned] = struct{}{}
+			if principal.Kind == MCPPrincipalAgent && principal.CallerAgentID != uuid.Nil {
+				srcKey := "agents/" + targetID.String() + "/" + cleaned
+				dstPath := siblingsDir + "/" + target.Slug + "/" + cleaned
+				dstKey := "agents/" + principal.CallerAgentID.String() + "/" + dstPath
+				if copyErr := s3.CopyObject(ctx, srcKey, dstKey); copyErr != nil {
+					logger.Warn("a2a: copy prompt artifact",
+						zap.String("src", srcKey), zap.Error(copyErr))
+					continue
+				}
+				out = append(out, a2aArtifact{Path: dstPath, Filename: p.Filename, ContentType: p.MimeType})
+			} else {
+				out = append(out, a2aArtifact{Path: cleaned, Filename: p.Filename, ContentType: p.MimeType})
+			}
+		}
+	}
+	return out
+}

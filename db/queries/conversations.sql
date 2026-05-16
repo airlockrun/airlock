@@ -1,11 +1,13 @@
 -- name: GetOrCreateConversation :one
 -- DM-only: one conversation per user per agent per source. Upserts on (agent_id, user_id, source).
--- Targets the partial unique index `idx_conversations_dm` — the WHERE clause
--- on conflict_target is required for Postgres to infer the partial index.
+-- Targets the partial unique index `idx_conversations_dm` — the conflict_target
+-- WHERE clause must match the index predicate so Postgres can infer it.
+-- Never called with source='a2a' (A2A uses CreateA2AConversation); the
+-- `source <> 'a2a'` clause is here only to mirror the partial index.
 WITH ins AS (
     INSERT INTO agent_conversations (agent_id, user_id, source, title, bridge_id, external_id, metadata, settings)
     VALUES (@agent_id, @user_id, @source::text, @title, @bridge_id, @external_id, '{}'::jsonb, '{}'::jsonb)
-    ON CONFLICT (agent_id, user_id, source) WHERE user_id IS NOT NULL DO UPDATE
+    ON CONFLICT (agent_id, user_id, source) WHERE user_id IS NOT NULL AND source <> 'a2a' DO UPDATE
         SET updated_at = now(),
             bridge_id = COALESCE(EXCLUDED.bridge_id, agent_conversations.bridge_id),
             external_id = COALESCE(EXCLUDED.external_id, agent_conversations.external_id)
@@ -13,6 +15,16 @@ WITH ins AS (
 )
 SELECT * FROM ins
 LIMIT 1;
+
+-- name: CreateA2AConversation :one
+-- A2A: each new context (caller passed no contextId) is its own
+-- conversation on the *called* agent, owned by the original user
+-- (user_id may be NULL for anonymous external-MCP callers). source is
+-- always 'a2a' so the partial DM index never collapses these. Plain
+-- INSERT — no upsert, every call without a contextId is a fresh thread.
+INSERT INTO agent_conversations (agent_id, user_id, source, title, metadata, settings)
+VALUES (@agent_id, @user_id, 'a2a', @title, '{}'::jsonb, '{}'::jsonb)
+RETURNING *;
 
 -- name: GetOrCreateConversationByExternal :one
 -- Public bridge conversations: keyed on (agent_id, source, external_id) with
@@ -46,6 +58,18 @@ WHERE c.user_id IS NULL
   AND c.source = 'bridge'
   AND COALESCE((b.settings->>'public_session_ttl_seconds')::int, 10800) > 0
   AND c.updated_at < NOW() - make_interval(secs => COALESCE((b.settings->>'public_session_ttl_seconds')::int, 10800));
+
+-- name: DeleteExpiredAnonA2AConversations :execrows
+-- Sweeper: anonymous A2A conversations (no owning user, minted for
+-- unauthenticated external-MCP callers) have no UI to resume them and
+-- would otherwise grow unbounded. Drop any idle past the TTL; the row
+-- delete cascades to agent_messages via FK. (user_id IS NULL AND
+-- source='a2a') is the precise anon-A2A key — authed A2A convs and
+-- bridge convs are untouched.
+DELETE FROM agent_conversations
+WHERE user_id IS NULL
+  AND source = 'a2a'
+  AND updated_at < NOW() - make_interval(secs => @ttl_seconds::int);
 
 -- name: ListConversationsByAgent :many
 -- Returns conversations for the given agent visible to the given user.

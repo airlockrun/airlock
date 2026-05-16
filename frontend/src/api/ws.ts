@@ -23,6 +23,10 @@ export interface RawEnvelope {
   // gating is observable here (the server already filtered; this is
   // for client-side card routing).
   userId?: string
+  // Hub-global monotonic publish sequence. We keep the max seen and
+  // present it as ?since= on reconnect so the server replays only the
+  // delta (or sends `resync`) instead of the whole per-topic buffer.
+  seq?: number
   conversationId?: string
   // subagent tags the envelope as a sub-run event mirrored from an
   // A2A child run; chat store routes these into the parent's active
@@ -39,6 +43,10 @@ export class AirlockWS {
   private reconnectDelay = 1000
   private maxReconnectDelay = 30000
   private shouldReconnect = false
+  // Max Envelope.seq processed; sent as ?since= on (re)connect for
+  // delta replay. Resets to 0 on full page reload (new instance) — a
+  // fresh load DB-loads anyway, so no replay is correct there.
+  private lastSeq = 0
   // Single in-flight refresh promise so concurrent reconnect attempts and
   // axios interceptor refreshes don't both POST /auth/refresh. The axios
   // interceptor manages its own promise; we don't share it (keeps ws.ts
@@ -135,7 +143,8 @@ export class AirlockWS {
     }
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const url = `${protocol}//${window.location.host}/ws?token=${token}`
+    const since = this.lastSeq > 0 ? `&since=${this.lastSeq}` : ''
+    const url = `${protocol}//${window.location.host}/ws?token=${token}${since}`
     this.socket = new WebSocket(url)
 
     this.socket.onopen = () => {
@@ -147,6 +156,9 @@ export class AirlockWS {
     this.socket.onmessage = (event) => {
       try {
         const envelope: RawEnvelope = JSON.parse(event.data)
+        if (typeof envelope.seq === 'number' && envelope.seq > this.lastSeq) {
+          this.lastSeq = envelope.seq
+        }
         this.emit(envelope.type, envelope.payload, envelope)
       } catch {
         // Ignore malformed messages.

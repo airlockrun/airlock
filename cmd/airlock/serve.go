@@ -309,6 +309,12 @@ func runServe(_ []string) {
 	})
 
 	group.Go(func() error {
+		const period = time.Hour
+
+		return anonConvPruner(gctx, logger, queries, period)
+	})
+
+	group.Go(func() error {
 		const period = time.Minute
 
 		return sweeper(
@@ -665,6 +671,49 @@ func authPruner(
 
 		if n > 0 {
 			lgr.Info("pruned auth_lockouts", zap.Int64("rows.count", n))
+		}
+	}
+}
+
+// anonA2AConversationTTL bounds how long an anonymous A2A conversation
+// (user_id NULL, source='a2a' — minted for an unauthenticated
+// external-MCP caller) survives idle. These have no resume UI and no
+// owning user, so without a sweep they accumulate forever.
+const anonA2AConversationTTL = 12 * time.Hour
+
+// anonConvPruner deletes anonymous A2A conversations idle past
+// anonA2AConversationTTL every period. The row delete cascades to
+// agent_messages via FK. Authed-A2A and bridge conversations are
+// untouched (the query keys on user_id IS NULL AND source='a2a').
+func anonConvPruner(
+	ctx context.Context,
+	lgr *zap.Logger,
+	queries *dbq.Queries,
+	period time.Duration,
+) error {
+	ticker := time.NewTicker(period)
+	defer ticker.Stop()
+
+	if queries == nil {
+		return errors.New("expected *dbq.Queries but got nil")
+	}
+
+	lgr = lgr.Named("anon-a2a-conv-prune")
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+		}
+
+		n, err := queries.DeleteExpiredAnonA2AConversations(ctx, int32(anonA2AConversationTTL.Seconds()))
+		if err != nil {
+			lgr.Error("delete expired anon a2a conversations failed", zap.Error(err))
+		}
+
+		if n > 0 {
+			lgr.Info("pruned anon a2a conversations", zap.Int64("rows.count", n))
 		}
 	}
 }

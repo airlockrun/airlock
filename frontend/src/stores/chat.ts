@@ -65,6 +65,11 @@ export const useChatStore = defineStore('chat', () => {
   const activeToolCalls = reactive(new Map<string, ToolCall>())
   const pendingConfirmation = ref<Confirmation | null>(null)
   const currentRunId = ref<string | null>(null)
+  // The agent this store is bound to (its WS topic == this agent's UUID).
+  // Every run/notification envelope is addressed by topicId+conversationId;
+  // events not matching this binding belong to a different agent (e.g. an
+  // A2A sibling's own run) and are rejected at the edge — no runId guessing.
+  const boundAgentId = ref<string | null>(null)
   const sending = ref(false)
   const cancelling = ref(false)
   // Runs the user cancelled locally — late NDJSON events for these runIDs
@@ -123,30 +128,64 @@ export const useChatStore = defineStore('chat', () => {
   // Drops events for runs the user cancelled locally so the optimistically
   // finalized bubble doesn't repaint as the agent's straggling tool output
   // arrives.
-  function isCurrentRun(evRunId: string): boolean {
+  // The run we're tracking in this (agent, conversation). The address
+  // gate already guarantees the event is for the bound agent+conversation,
+  // so the only remaining ambiguity is run *sequencing* within this
+  // conversation (a delayed event from a previous run, or a duplicate
+  // terminal after currentRunId was cleared). runId === currentRunId
+  // resolves that precisely — no `sending ⇒ accept any` heuristic.
+  function isActiveRun(evRunId: string): boolean {
     if (cancelledRunIds.has(evRunId)) return false
-    if (evRunId === currentRunId.value) return true
-    if (sending.value) return true
-    // Silently ignore stale events (e.g., WS replay buffer from previous runs).
-    return false
+    return evRunId === currentRunId.value
+  }
+
+  // Address gate: a run/notification envelope is for this store iff it
+  // is on this agent's topic and this conversation. Subagent (A2A
+  // sub-run) envelopes carry the parent topic+conversation but a foreign
+  // run; until a sub-run UI exists they're dropped here (their data
+  // still reaches run_js via the tool return). A foreign agent's events
+  // (e.g. an A2A sibling reporting its own run on its own topic) have a
+  // different topicId and never reach the handler. This replaces the
+  // whole isCurrentRun/cancelledRunIds cross-scope guessing layer.
+  // Forward-compat: when envelope.scope lands (user/tenant/system
+  // events), also require scope === 'agent' here.
+  function onRunMessage(type: string, handler: (payload: unknown) => void) {
+    return ws.onMessage(type, (payload, env) => {
+      if (!env || env.subagent) return
+      if (!boundAgentId.value || env.topicId !== boundAgentId.value) return
+      if (conversationId.value) {
+        // Known conversation: reject other conversations on this agent.
+        // Some terminal events carry no conversationId — allow them; the
+        // handler's isActiveRun(runId) check scopes them to our run.
+        if (env.conversationId && env.conversationId !== conversationId.value) return
+      } else if (env.conversationId && sending.value) {
+        // Brand-new web conversation, first prompt in flight: adopt the
+        // id the server assigned (HTTP response will also set it).
+        conversationId.value = env.conversationId
+      } else {
+        return
+      }
+      handler(payload)
+    })
   }
 
   function initListeners() {
     unsubscribers.push(
-      // Adopt server-initiated runs (e.g., post-upgrade notification) for the current conversation.
-      ws.onMessage('run.started', (payload) => {
+      // The address gate guarantees this is our agent+conversation; adopt
+      // the run and reset stream state (run.started is a run's first
+      // event). Covers both user-initiated (HTTP response also sets the
+      // id) and server-initiated runs (post-upgrade notification).
+      onRunMessage('run.started', (payload) => {
         const ev = tryFromJson<RunStartedEvent>(RunStartedEventSchema, payload)
-        if (!ev) return
-        if (ev.conversationId === conversationId.value && !sending.value && !currentRunId.value) {
-          currentRunId.value = ev.runId
-          streamingText.value = ''
-          activeToolCalls.clear()
-          textBlockBoundary = false
-        }
+        if (!ev || cancelledRunIds.has(ev.runId)) return
+        currentRunId.value = ev.runId
+        streamingText.value = ''
+        activeToolCalls.clear()
+        textBlockBoundary = false
       }),
-      ws.onMessage('run.text_delta', (payload) => {
+      onRunMessage('run.text_delta', (payload) => {
         const ev = tryFromJson<TextDeltaEvent>(TextDeltaEventSchema, payload)
-        if (!ev || !isCurrentRun(ev.runId)) return
+        if (!ev || !isActiveRun(ev.runId)) return
         if (compactRunInFlight.value) {
           // Buffer the agent's "Context compacted. N tokens freed." line so
           // we can pull tokensFreed out for the synthetic divider, but
@@ -165,9 +204,9 @@ export const useChatStore = defineStore('chat', () => {
         textBlockBoundary = false
         streamingText.value += ev.text
       }),
-      ws.onMessage('run.tool_call', (payload) => {
+      onRunMessage('run.tool_call', (payload) => {
         const ev = tryFromJson<ToolCallEvent>(ToolCallEventSchema, payload)
-        if (!ev || !isCurrentRun(ev.runId)) return
+        if (!ev || !isActiveRun(ev.runId)) return
         textBlockBoundary = true
         activeToolCalls.set(ev.toolCallId, {
           toolCallId: ev.toolCallId,
@@ -178,9 +217,9 @@ export const useChatStore = defineStore('chat', () => {
           status: 'running',
         })
       }),
-      ws.onMessage('run.tool_result', (payload) => {
+      onRunMessage('run.tool_result', (payload) => {
         const ev = tryFromJson<ToolResultEvent>(ToolResultEventSchema, payload)
-        if (!ev || !isCurrentRun(ev.runId)) return
+        if (!ev || !isActiveRun(ev.runId)) return
         textBlockBoundary = true
         const tc = activeToolCalls.get(ev.toolCallId)
         if (tc) {
@@ -189,9 +228,9 @@ export const useChatStore = defineStore('chat', () => {
           tc.status = ev.error ? 'error' : 'done'
         }
       }),
-      ws.onMessage('run.confirmation_required', (payload) => {
+      onRunMessage('run.confirmation_required', (payload) => {
         const ev = tryFromJson<ConfirmationRequiredEvent>(ConfirmationRequiredEventSchema, payload)
-        if (!ev || !isCurrentRun(ev.runId)) return
+        if (!ev || !isActiveRun(ev.runId)) return
         pendingConfirmation.value = {
           runId: ev.runId,
           permission: ev.permission,
@@ -207,9 +246,9 @@ export const useChatStore = defineStore('chat', () => {
           }
         }
       }),
-      ws.onMessage('run.complete', (payload) => {
+      onRunMessage('run.complete', (payload) => {
         const ev = tryFromJson<RunCompleteEvent>(RunCompleteEventSchema, payload)
-        if (!ev || !isCurrentRun(ev.runId)) return
+        if (!ev || !isActiveRun(ev.runId)) return
         // Don't finalize if awaiting confirmation — run is suspended, not complete.
         if (pendingConfirmation.value) return
         console.log('[chat] run.complete', { runId: ev.runId, textLen: streamingText.value.length })
@@ -243,9 +282,9 @@ export const useChatStore = defineStore('chat', () => {
         }
         finalizeMessage()
       }),
-      ws.onMessage('run.error', (payload) => {
+      onRunMessage('run.error', (payload) => {
         const ev = tryFromJson<RunErrorEvent>(RunErrorEventSchema, payload)
-        if (!ev || !isCurrentRun(ev.runId)) return
+        if (!ev || !isActiveRun(ev.runId)) return
         console.warn('[chat] run.error', { runId: ev.runId, error: ev.error })
         // Finalize whatever assistant text streamed before the failure (don't
         // discard partial output) and append a separate source='error' bubble
@@ -266,10 +305,10 @@ export const useChatStore = defineStore('chat', () => {
           costEstimate: 0,
         } as any)
       }),
-      ws.onMessage('run.suspended', () => {
+      onRunMessage('run.suspended', () => {
         // Run suspended (e.g., awaiting approval) — keep state as-is.
       }),
-      ws.onMessage('notification', (payload) => {
+      onRunMessage('notification', (payload) => {
         const ev = tryFromJson<NotificationEvent>(NotificationEventSchema, payload)
         if (!ev || !ev.conversationId) return
         if (ev.conversationId !== conversationId.value) return
@@ -291,6 +330,15 @@ export const useChatStore = defineStore('chat', () => {
           enrichNotification(msg)
           messages.value.push(msg)
         }
+      }),
+      // Replay gap: the server couldn't serve the delta since our cursor
+      // (buffer rolled or was cleared during a disconnect). Refetch
+      // authoritative state from the DB for the bound agent. Topic-scoped
+      // only — not run/conversation — so handled directly, not via the
+      // address-gated onRunMessage.
+      ws.onMessage('resync', (_payload, env) => {
+        if (!boundAgentId.value || env?.topicId !== boundAgentId.value) return
+        void loadConversation(boundAgentId.value)
       }),
     )
   }
@@ -476,6 +524,7 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   async function loadConversation(agentId: string) {
+    boundAgentId.value = agentId
     const { data } = await api.get(`/api/v1/agents/${agentId}/conversations`)
     const response = fromJson(ListConversationsResponseSchema, data)
     // Only surface the web conversation here. Bridge conversations (telegram,
@@ -570,6 +619,7 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   async function sendMessage(agentId: string, text: string, approved?: boolean, filePaths?: string[]) {
+    boundAgentId.value = agentId
     const isResume = approved !== undefined
     // Slash commands (/clear, /compact, ...) are handled synchronously by
     // Airlock — no run is created and no optimistic user bubble should appear.
@@ -638,6 +688,7 @@ export const useChatStore = defineStore('chat', () => {
   function cleanup() {
     for (const unsub of unsubscribers) unsub()
     unsubscribers.length = 0
+    boundAgentId.value = null
     conversationId.value = null
     messages.value = []
     streamingText.value = ''

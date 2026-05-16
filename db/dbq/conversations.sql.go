@@ -11,6 +11,43 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const createA2AConversation = `-- name: CreateA2AConversation :one
+INSERT INTO agent_conversations (agent_id, user_id, source, title, metadata, settings)
+VALUES ($1, $2, 'a2a', $3, '{}'::jsonb, '{}'::jsonb)
+RETURNING id, agent_id, bridge_id, user_id, source, external_id, title, metadata, settings, context_checkpoint_message_id, created_at, updated_at
+`
+
+type CreateA2AConversationParams struct {
+	AgentID pgtype.UUID `json:"agent_id"`
+	UserID  pgtype.UUID `json:"user_id"`
+	Title   string      `json:"title"`
+}
+
+// A2A: each new context (caller passed no contextId) is its own
+// conversation on the *called* agent, owned by the original user
+// (user_id may be NULL for anonymous external-MCP callers). source is
+// always 'a2a' so the partial DM index never collapses these. Plain
+// INSERT — no upsert, every call without a contextId is a fresh thread.
+func (q *Queries) CreateA2AConversation(ctx context.Context, arg CreateA2AConversationParams) (AgentConversation, error) {
+	row := q.db.QueryRow(ctx, createA2AConversation, arg.AgentID, arg.UserID, arg.Title)
+	var i AgentConversation
+	err := row.Scan(
+		&i.ID,
+		&i.AgentID,
+		&i.BridgeID,
+		&i.UserID,
+		&i.Source,
+		&i.ExternalID,
+		&i.Title,
+		&i.Metadata,
+		&i.Settings,
+		&i.ContextCheckpointMessageID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const deleteConversation = `-- name: DeleteConversation :exec
 DELETE FROM agent_conversations WHERE id = $1
 `
@@ -18,6 +55,27 @@ DELETE FROM agent_conversations WHERE id = $1
 func (q *Queries) DeleteConversation(ctx context.Context, id pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, deleteConversation, id)
 	return err
+}
+
+const deleteExpiredAnonA2AConversations = `-- name: DeleteExpiredAnonA2AConversations :execrows
+DELETE FROM agent_conversations
+WHERE user_id IS NULL
+  AND source = 'a2a'
+  AND updated_at < NOW() - make_interval(secs => $1::int)
+`
+
+// Sweeper: anonymous A2A conversations (no owning user, minted for
+// unauthenticated external-MCP callers) have no UI to resume them and
+// would otherwise grow unbounded. Drop any idle past the TTL; the row
+// delete cascades to agent_messages via FK. (user_id IS NULL AND
+// source='a2a') is the precise anon-A2A key — authed A2A convs and
+// bridge convs are untouched.
+func (q *Queries) DeleteExpiredAnonA2AConversations(ctx context.Context, ttlSeconds int32) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteExpiredAnonA2AConversations, ttlSeconds)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const getConversationByExternal = `-- name: GetConversationByExternal :one
@@ -114,7 +172,7 @@ const getOrCreateConversation = `-- name: GetOrCreateConversation :one
 WITH ins AS (
     INSERT INTO agent_conversations (agent_id, user_id, source, title, bridge_id, external_id, metadata, settings)
     VALUES ($1, $2, $3::text, $4, $5, $6, '{}'::jsonb, '{}'::jsonb)
-    ON CONFLICT (agent_id, user_id, source) WHERE user_id IS NOT NULL DO UPDATE
+    ON CONFLICT (agent_id, user_id, source) WHERE user_id IS NOT NULL AND source <> 'a2a' DO UPDATE
         SET updated_at = now(),
             bridge_id = COALESCE(EXCLUDED.bridge_id, agent_conversations.bridge_id),
             external_id = COALESCE(EXCLUDED.external_id, agent_conversations.external_id)
@@ -149,8 +207,10 @@ type GetOrCreateConversationRow struct {
 }
 
 // DM-only: one conversation per user per agent per source. Upserts on (agent_id, user_id, source).
-// Targets the partial unique index `idx_conversations_dm` — the WHERE clause
-// on conflict_target is required for Postgres to infer the partial index.
+// Targets the partial unique index `idx_conversations_dm` — the conflict_target
+// WHERE clause must match the index predicate so Postgres can infer it.
+// Never called with source='a2a' (A2A uses CreateA2AConversation); the
+// `source <> 'a2a'` clause is here only to mirror the partial index.
 func (q *Queries) GetOrCreateConversation(ctx context.Context, arg GetOrCreateConversationParams) (GetOrCreateConversationRow, error) {
 	row := q.db.QueryRow(ctx, getOrCreateConversation,
 		arg.AgentID,

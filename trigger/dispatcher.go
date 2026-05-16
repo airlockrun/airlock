@@ -335,15 +335,16 @@ func (d *Dispatcher) ForwardA2APrompt(ctx context.Context, agentID uuid.UUID, pa
 	// happens to enter via the MCP endpoint. Translate Nil → nil so we
 	// insert NULL parent_run_id (instead of an all-zero FK that trips
 	// runs_parent_run_id_fkey). trigger_type stays "a2a" so analytics
-	// can still distinguish these from web /prompt runs; trigger_ref
-	// is empty when there's no parent.
+	// can still distinguish these from web /prompt runs. trigger_ref is
+	// the conversation this turn runs in (resolved/minted by the MCP
+	// handler) — same convention as prompt runs, so contextId round-trips
+	// and parent-conversation lookups resolve correctly. The caller is
+	// linked via parent_run_id, not trigger_ref.
 	var parentRunIDPtr *uuid.UUID
-	var triggerRef string
 	if parentRunID != uuid.Nil {
 		parentRunIDPtr = &parentRunID
-		triggerRef = parentRunID.String()
 	}
-	runID, err := d.createRun(ctx, agentID, nil, parentRunIDPtr, payload, "a2a", triggerRef)
+	runID, err := d.createRun(ctx, agentID, nil, parentRunIDPtr, payload, "a2a", input.ConversationID)
 	if err != nil {
 		return nil, uuid.Nil, err
 	}

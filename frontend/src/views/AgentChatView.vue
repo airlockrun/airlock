@@ -376,6 +376,21 @@ function formatTokens(n: number): string {
               <div style="margin-top: 0.25rem; font-size: 0.85rem; white-space: pre-wrap; word-break: break-word">{{ msg.content }}</div>
             </div>
           </div>
+          <!-- Control messages (e.g. the "Rejected by user." re-reason
+               nudge sol persists on deny). It's a signal for the model,
+               not something the human typed — render a muted inline
+               label, not a user bubble. -->
+          <div
+            v-else-if="msg.source === 'control'"
+            style="display: flex; justify-content: center"
+          >
+            <div
+              style="display: flex; align-items: center; gap: 0.4rem; font-size: 0.72rem; opacity: 0.5; padding: 0.15rem 0.5rem"
+            >
+              <i class="pi pi-ban" style="font-size: 0.7rem" />
+              <span>{{ msg.content }}</span>
+            </div>
+          </div>
           <!-- Notification messages (printToUser / topic publish / user upload echo) — rich parts -->
           <div
             v-else-if="msg.source === 'notification' || msg.source === 'upload'"

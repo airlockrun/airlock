@@ -110,6 +110,21 @@ WHERE m.conversation_id = $1
 DELETE FROM agent_messages
 WHERE conversation_id = $1;
 
+-- name: ConversationHasToolCall :one
+-- True if any assistant message in the conversation already carries a
+-- tool-call part with this id. SessionAppend uses it to tell a genuinely
+-- dangling tool-result (originating assistant turn never persisted) from
+-- the normal case where the call landed in a prior committed batch (e.g.
+-- the permission/question resume path) — only the former gets a
+-- synthetic assistant tool-call written ahead of it.
+SELECT COUNT(*) > 0 AS has_call
+FROM agent_messages m
+WHERE m.conversation_id = @conversation_id
+  AND m.role = 'assistant'
+  AND m.parts @> jsonb_build_array(
+        jsonb_build_object('type', 'tool-call', 'toolCallId', @tool_call_id::text)
+      );
+
 -- name: ListOrphanToolCallsByRun :many
 -- Returns tool-call parts emitted by this run that don't have a matching
 -- tool-result row in the same conversation. RunComplete and the sweeper

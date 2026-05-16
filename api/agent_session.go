@@ -34,11 +34,26 @@ func (h *agentHandler) SessionLoad(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Belt-and-suspenders: if any assistant tool_use part still lacks a
-	// matching tool_result, synthesize one in-memory and emit a warn log
-	// so we know RunComplete + sweeper missed it. Without this the next
-	// LLM turn 400s at the provider; with it we degrade to a missing-
-	// result string and stay live.
+	// Belt-and-suspenders, BOTH orphan directions. Either shape makes the
+	// next LLM turn 400 at the provider and, because the conversation is
+	// permanent, poisons every subsequent prompt until repaired. We
+	// degrade in-memory and stay live; the warn logs surface that a
+	// durable write-path invariant was missed.
+	//
+	// 1. tool-result with no preceding tool-call → insert a synthetic
+	//    assistant tool-call before it. Runs first so the synthesized
+	//    calls are visible to the forward pass below.
+	if fixed, repaired := reconcileDanglingToolResults(toPgUUID(convID), dbMsgs); len(repaired) > 0 {
+		for _, op := range repaired {
+			h.logger.Warn("dangling tool_result surfaced at SessionLoad — assistant tool_call was never persisted",
+				zap.String("conversation_id", convID.String()),
+				zap.String("tool_call_id", op.ToolCallID),
+				zap.String("tool_name", op.ToolName))
+		}
+		dbMsgs = fixed
+	}
+
+	// 2. tool-call with no matching tool-result → synthesize the result.
 	if orphans := detectOrphanToolCalls(dbMsgs); len(orphans) > 0 {
 		for _, op := range orphans {
 			h.logger.Warn("unpaired tool_call surfaced at SessionLoad — RunComplete synthesis missed",
@@ -116,7 +131,77 @@ func (h *agentHandler) SessionAppend(w http.ResponseWriter, r *http.Request) {
 	}
 
 	q := dbq.New(h.db.Pool()).WithTx(tx)
+
+	// Write-time tool-pairing invariant. A role=tool message whose
+	// originating assistant tool-call was never persisted (e.g. the
+	// delegated-suspension path appends only the result) is an orphan
+	// that 400s every subsequent LLM turn and, because conversations are
+	// permanent, bricks the whole thread. Enforce the invariant durably
+	// here — the txn already exists for exactly this class of bug — by
+	// writing a synthetic assistant tool-call ahead of any dangling
+	// result, plus one user-visible recovery notice (red error bubble).
+	batchCalls := map[string]struct{}{}
+	for _, m := range msgs {
+		if m.Role != "assistant" {
+			continue
+		}
+		for _, p := range m.Parts {
+			if p.Type == "tool" && p.Tool != nil && p.Tool.CallID != "" {
+				batchCalls[p.Tool.CallID] = struct{}{}
+			}
+		}
+	}
+	covered := map[string]struct{}{}
+	recoveryNeeded := false
+
 	for i, msg := range msgs {
+		if msg.Role == "tool" {
+			var missing []session.Part
+			for _, p := range msg.Parts {
+				if p.Type != "tool" || p.Tool == nil || p.Tool.CallID == "" {
+					continue
+				}
+				id := p.Tool.CallID
+				if _, ok := batchCalls[id]; ok {
+					continue
+				}
+				if _, ok := covered[id]; ok {
+					continue
+				}
+				has, herr := q.ConversationHasToolCall(r.Context(), dbq.ConversationHasToolCallParams{
+					ConversationID: toPgUUID(convID),
+					ToolCallID:     id,
+				})
+				if herr != nil {
+					h.logger.Error("session append: tool-call existence check failed — batch rolling back",
+						append(logFields, zap.Error(herr), zap.String("tool_call_id", id))...)
+					writeJSONError(w, http.StatusInternalServerError, "failed to verify tool pairing")
+					return
+				}
+				if has {
+					continue
+				}
+				missing = append(missing, session.Part{
+					Type: "tool",
+					Tool: &session.ToolPart{CallID: id, Name: p.Tool.Name, Input: "{}", Status: "completed"},
+				})
+				covered[id] = struct{}{}
+			}
+			if len(missing) > 0 {
+				for _, mp := range missing {
+					h.logger.Warn("dangling tool_result at SessionAppend — synthesizing missing assistant tool_call",
+						append(logFields, zap.String("tool_call_id", mp.Tool.CallID), zap.String("tool_name", mp.Tool.Name))...)
+				}
+				synthCall := session.Message{Role: "assistant", Parts: missing}
+				if err := storeSessionMessage(r.Context(), q, toPgUUID(convID), runID, "synthetic", synthCall); err != nil {
+					h.logger.Error("session append: store synthetic tool_call failed — batch rolling back",
+						append(logFields, zap.Error(err))...)
+					writeJSONError(w, http.StatusInternalServerError, "failed to store message")
+					return
+				}
+				recoveryNeeded = true
+			}
+		}
 		// Only stamp the source tag onto user-role messages — that's the
 		// only role for which "upgrade"/"system"/"bridge" makes sense
 		// (the original injected trigger that kicked off the run).
@@ -139,6 +224,23 @@ func (h *agentHandler) SessionAppend(w http.ResponseWriter, r *http.Request) {
 					zap.Int("parts", len(msg.Parts)),
 					zap.Bool("ctxCancelled", r.Context().Err() != nil),
 				)...)
+			writeJSONError(w, http.StatusInternalServerError, "failed to store message")
+			return
+		}
+	}
+
+	// One user-visible notice per batch that needed repair. source="error"
+	// renders as the red bubble the frontend already uses for run errors —
+	// the user learns the conversation hit an inconsistency and was
+	// auto-recovered, rather than it failing silently or 400ing forever.
+	if recoveryNeeded {
+		notice := session.Message{
+			Role:    "assistant",
+			Content: "⚠️ An earlier tool interaction in this conversation was incomplete (its originating step was never recorded) and has been automatically recovered so the conversation stays usable. Some prior context may be missing.",
+		}
+		if err := storeSessionMessage(r.Context(), q, toPgUUID(convID), runID, "error", notice); err != nil {
+			h.logger.Error("session append: store recovery notice failed — batch rolling back",
+				append(logFields, zap.Error(err))...)
 			writeJSONError(w, http.StatusInternalServerError, "failed to store message")
 			return
 		}

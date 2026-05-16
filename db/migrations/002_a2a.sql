@@ -203,7 +203,26 @@ ALTER TABLE agent_directories
 ALTER TABLE agent_directories
     ALTER COLUMN scope DROP DEFAULT;
 
+-- A2A conversations are per-thread, not DM-singletons: each new context
+-- (caller passes no contextId) mints a fresh agent_conversations row on
+-- the *called* agent, owned by the original user. The 001 DM index
+-- (agent_id, user_id, source) would collapse every A2A call from one
+-- user into a single conversation, so exclude source='a2a' from it.
+-- Web/bridge stay single-thread (the index still binds source='web' /
+-- 'bridge'); the multi-conversation-for-web work is deferred. The
+-- GetOrCreateConversation upsert's ON CONFLICT predicate is updated in
+-- lockstep (it's never called with source='a2a', so this is inert for
+-- web/bridge — it only keeps Postgres able to infer the partial index).
+DROP INDEX IF EXISTS idx_conversations_dm;
+CREATE UNIQUE INDEX idx_conversations_dm
+    ON agent_conversations (agent_id, user_id, source)
+    WHERE user_id IS NOT NULL AND source <> 'a2a';
+
 -- +goose Down
+DROP INDEX IF EXISTS idx_conversations_dm;
+CREATE UNIQUE INDEX idx_conversations_dm
+    ON agent_conversations (agent_id, user_id, source)
+    WHERE user_id IS NOT NULL;
 DROP INDEX IF EXISTS oauth_grants_expires_idx;
 DROP TABLE IF EXISTS oauth_grants;
 DROP INDEX IF EXISTS oauth_refresh_user_client_agent_idx;

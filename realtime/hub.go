@@ -15,6 +15,7 @@ const topicBufferMaxSize = 100
 // gate that live broadcast does, so a late subscriber doesn't pick up
 // events from another user's run that happened before they joined.
 type bufferedEvent struct {
+	seq    uint64
 	data   []byte
 	userID string
 }
@@ -35,6 +36,20 @@ type Hub struct {
 	// replay buffer: recent messages per topic, replayed on subscribe
 	topicBuffers map[uuid.UUID][]bufferedEvent
 
+	// seq is the hub-global monotonic publish counter (stamped into
+	// every Envelope under mu so buffer order == seq order).
+	seq uint64
+
+	// topicHighSeq[t] = max seq ever published to t; survives buffer
+	// clear so a caught-up client short-circuits instead of resyncing.
+	topicHighSeq map[uuid.UUID]uint64
+
+	// topicDroppedUpTo[t] = highest seq no longer replayable for t
+	// (evicted by the ring, or invalidated by ClearTopicBuffer). A
+	// client whose cursor is below this missed an unrecoverable event
+	// and must resync rather than receive a partial replay.
+	topicDroppedUpTo map[uuid.UUID]uint64
+
 	mu sync.RWMutex
 
 	logger *zap.Logger
@@ -47,11 +62,13 @@ type Hub struct {
 // NewHub creates a new Hub.
 func NewHub(logger *zap.Logger) *Hub {
 	return &Hub{
-		conns:        make(map[string]*Conn),
-		topics:       make(map[uuid.UUID]map[string]*Conn),
-		connTopics:   make(map[string]map[uuid.UUID]struct{}),
-		topicBuffers: make(map[uuid.UUID][]bufferedEvent),
-		logger:       logger,
+		conns:            make(map[string]*Conn),
+		topics:           make(map[uuid.UUID]map[string]*Conn),
+		connTopics:       make(map[string]map[uuid.UUID]struct{}),
+		topicBuffers:     make(map[uuid.UUID][]bufferedEvent),
+		topicHighSeq:     make(map[uuid.UUID]uint64),
+		topicDroppedUpTo: make(map[uuid.UUID]uint64),
+		logger:           logger,
 	}
 }
 
@@ -127,23 +144,47 @@ func (h *Hub) Subscribe(conn *Conn, topicID uuid.UUID) {
 	}
 	h.connTopics[conn.ID][topicID] = struct{}{}
 
-	// Copy buffered events for replay.
+	// Cursor replay. since == conn.SinceSeq is the max seq the client
+	// has already processed (0 on a fresh connect / page reload).
+	//   - fresh, or topic silent, or client caught up → nothing (the
+	//     client's normal initial DB load is the source of truth).
+	//   - cursor below what's still replayable (ring evicted it, or
+	//     ClearTopicBuffer invalidated it) → resync: the client
+	//     refetches authoritative state from the DB for this topic.
+	//   - otherwise → replay exactly the buffered tail seq>since.
+	// Never a partial replay across a gap; never the old 100×N flood.
+	since := conn.SinceSeq
+	hi := h.topicHighSeq[topicID]
+	dropped := h.topicDroppedUpTo[topicID]
 	var replay []bufferedEvent
-	if buf := h.topicBuffers[topicID]; len(buf) > 0 {
-		replay = make([]bufferedEvent, len(buf))
-		copy(replay, buf)
+	resync := false
+	switch {
+	case since == 0 || hi == 0 || since >= hi:
+		// nothing to do
+	case since < dropped || len(h.topicBuffers[topicID]) == 0:
+		resync = true
+	default:
+		for _, ev := range h.topicBuffers[topicID] {
+			if ev.seq > since {
+				replay = append(replay, ev)
+			}
+		}
 	}
 
 	onFirst := h.onFirstSubscribe
 	h.mu.Unlock()
 
-	// Same user_id gate as live broadcast — see BroadcastToTopic.
-	connUserID := conn.UserID.String()
-	for _, ev := range replay {
-		if ev.userID != "" && ev.userID != connUserID {
-			continue
+	if resync {
+		conn.SendEnvelope(Envelope{Type: "resync", TopicID: topicID.String()})
+	} else {
+		// Same user_id gate as live broadcast — see BroadcastToTopic.
+		connUserID := conn.UserID.String()
+		for _, ev := range replay {
+			if ev.userID != "" && ev.userID != connUserID {
+				continue
+			}
+			conn.Send(ev.data)
 		}
-		conn.Send(ev.data)
 	}
 
 	if isFirst && onFirst != nil {
@@ -164,19 +205,29 @@ func (h *Hub) Subscribe(conn *Conn, topicID uuid.UUID) {
 // joining late would leak events from other users' runs that
 // happened before the join.
 func (h *Hub) BroadcastToTopic(topicID uuid.UUID, env Envelope) {
+	h.mu.Lock()
+	// Stamp the hub-global seq and marshal under the same lock as the
+	// buffer append, so buffer order == seq order with no torn races.
+	h.seq++
+	s := h.seq
+	env.Seq = s
 	data, err := json.Marshal(env)
 	if err != nil {
+		h.mu.Unlock()
 		h.logger.Error("failed to marshal envelope", zap.Error(err))
 		return
 	}
+	h.topicHighSeq[topicID] = s
 
-	h.mu.Lock()
-	// Buffer the event for replay on late subscribe.
+	// Buffer the event for cursor replay on late/reconnecting subscribe.
 	buf := h.topicBuffers[topicID]
 	if len(buf) >= topicBufferMaxSize {
+		// The evicted event is no longer replayable; a client whose
+		// cursor is below it must resync rather than get a partial tail.
+		h.topicDroppedUpTo[topicID] = buf[0].seq
 		buf = buf[1:]
 	}
-	h.topicBuffers[topicID] = append(buf, bufferedEvent{data: data, userID: env.UserID})
+	h.topicBuffers[topicID] = append(buf, bufferedEvent{seq: s, data: data, userID: env.UserID})
 
 	conns := h.topics[topicID]
 	targets := make([]*Conn, 0, len(conns))
@@ -197,6 +248,12 @@ func (h *Hub) BroadcastToTopic(topicID uuid.UUID, env Envelope) {
 // Called after a terminal event (build complete/failed) since replay is no longer needed.
 func (h *Hub) ClearTopicBuffer(topicID uuid.UUID) {
 	h.mu.Lock()
+	// Everything up to the current high-water is no longer replayable;
+	// a client behind it resyncs, a caught-up client (since>=hi) still
+	// short-circuits. Keep topicHighSeq so that short-circuit holds.
+	if hi := h.topicHighSeq[topicID]; hi > 0 {
+		h.topicDroppedUpTo[topicID] = hi
+	}
 	delete(h.topicBuffers, topicID)
 	h.mu.Unlock()
 }

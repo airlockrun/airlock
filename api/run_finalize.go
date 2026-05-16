@@ -164,6 +164,88 @@ func detectOrphanToolCalls(parts []dbq.AgentMessage) []orphanPair {
 	return orphans
 }
 
+// reconcileDanglingToolResults is the inverse of detectOrphanToolCalls:
+// it repairs tool-result parts whose toolCallId has NO preceding
+// tool-call. That orphan shape is produced when a tool-result is
+// persisted without its originating assistant tool-call message (e.g. a
+// run that yielded mid-tool before the assistant turn was written — the
+// delegated-suspension defect). Providers reject a role=tool message
+// with no matching tool_use, so it poisons every subsequent turn exactly
+// like the forward orphan.
+//
+// The repair inserts a synthetic assistant message carrying the missing
+// tool-call(s) immediately BEFORE the offending tool message, restoring
+// a provider-valid assistant→tool pair without dropping the result's
+// content. Returns the corrected slice (input untouched) plus one
+// orphanPair per repair for logging/surfacing. In-memory only on the
+// load path, same contract as orphanToolResultMessage.
+func reconcileDanglingToolResults(convID pgtype.UUID, msgs []dbq.AgentMessage) ([]dbq.AgentMessage, []orphanPair) {
+	seenCalls := map[string]struct{}{}
+	out := make([]dbq.AgentMessage, 0, len(msgs))
+	var repaired []orphanPair
+
+	for _, m := range msgs {
+		var arr []map[string]any
+		if len(m.Parts) > 0 {
+			_ = json.Unmarshal(m.Parts, &arr)
+		}
+
+		var missing []orphanPair
+		for _, p := range arr {
+			t, _ := p["type"].(string)
+			id, _ := p["toolCallId"].(string)
+			if id == "" {
+				continue
+			}
+			switch t {
+			case "tool-call":
+				seenCalls[id] = struct{}{}
+			case "tool-result":
+				if _, ok := seenCalls[id]; !ok {
+					name, _ := p["toolName"].(string)
+					missing = append(missing, orphanPair{ToolCallID: id, ToolName: name})
+					// Mark satisfied: the synthetic call below covers it,
+					// and a later duplicate result mustn't re-trigger.
+					seenCalls[id] = struct{}{}
+				}
+			}
+		}
+
+		if len(missing) > 0 {
+			out = append(out, synthAssistantToolCallMessage(convID, missing))
+			repaired = append(repaired, missing...)
+		}
+		out = append(out, m)
+	}
+	return out, repaired
+}
+
+// synthAssistantToolCallMessage returns a synthetic assistant message
+// carrying the tool-call(s) a dangling tool-result lost. Placed
+// immediately before the orphaned result it restores a provider-valid
+// assistant→tool pair without dropping the result's content. In-memory
+// only on the load path, same as orphanToolResultMessage; the durable
+// invariant is enforced at write time (SessionAppend).
+func synthAssistantToolCallMessage(convID pgtype.UUID, ops []orphanPair) dbq.AgentMessage {
+	arr := make([]map[string]any, 0, len(ops))
+	for _, op := range ops {
+		arr = append(arr, map[string]any{
+			"type":       "tool-call",
+			"toolCallId": op.ToolCallID,
+			"toolName":   op.ToolName,
+			"input":      map[string]any{},
+		})
+	}
+	parts, _ := json.Marshal(arr)
+	return dbq.AgentMessage{
+		ConversationID: convID,
+		Role:           "assistant",
+		Content:        "",
+		Parts:          parts,
+		Source:         "synthetic",
+	}
+}
+
 // orphanToolResultMessage returns a synthetic dbq.AgentMessage in the shape
 // SessionLoad will convert via dbMessageToSession. In-memory only — never
 // persisted on the load path; the persistent path is RunComplete +

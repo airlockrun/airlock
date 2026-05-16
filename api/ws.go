@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"net/http"
+	"strconv"
 
 	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/db"
@@ -69,6 +70,10 @@ func (h *WSHandler) Upgrade(w http.ResponseWriter, r *http.Request) {
 	}
 
 	conn := realtime.NewConn(ws, userID, claims.Email, h.logger)
+	// Replay cursor: max Envelope.Seq the client already processed.
+	// Absent/garbage → 0 → fresh connect, no replay (the client's
+	// normal initial DB load covers it). Must be set before Subscribe.
+	conn.SinceSeq, _ = strconv.ParseUint(r.URL.Query().Get("since"), 10, 64)
 	h.hub.Register(conn)
 	for _, pgID := range memberAgents {
 		agentID, err := uuid.FromBytes(pgID.Bytes[:])

@@ -11,6 +11,34 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const conversationHasToolCall = `-- name: ConversationHasToolCall :one
+SELECT COUNT(*) > 0 AS has_call
+FROM agent_messages m
+WHERE m.conversation_id = $1
+  AND m.role = 'assistant'
+  AND m.parts @> jsonb_build_array(
+        jsonb_build_object('type', 'tool-call', 'toolCallId', $2::text)
+      )
+`
+
+type ConversationHasToolCallParams struct {
+	ConversationID pgtype.UUID `json:"conversation_id"`
+	ToolCallID     string      `json:"tool_call_id"`
+}
+
+// True if any assistant message in the conversation already carries a
+// tool-call part with this id. SessionAppend uses it to tell a genuinely
+// dangling tool-result (originating assistant turn never persisted) from
+// the normal case where the call landed in a prior committed batch (e.g.
+// the permission/question resume path) — only the former gets a
+// synthetic assistant tool-call written ahead of it.
+func (q *Queries) ConversationHasToolCall(ctx context.Context, arg ConversationHasToolCallParams) (bool, error) {
+	row := q.db.QueryRow(ctx, conversationHasToolCall, arg.ConversationID, arg.ToolCallID)
+	var has_call bool
+	err := row.Scan(&has_call)
+	return has_call, err
+}
+
 const createMessage = `-- name: CreateMessage :one
 INSERT INTO agent_messages (conversation_id, role, content, parts, tokens_in, tokens_out, cost_estimate, run_id, source, ephemeral, file_keys)
 VALUES ($1, $2, $3, $4, $5, $6, COALESCE($7, 0), $8, COALESCE(NULLIF($9, ''), 'user'), $10, '{}'::text[])

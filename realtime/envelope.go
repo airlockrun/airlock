@@ -27,10 +27,17 @@ var protoMarshal = protojson.MarshalOptions{
 // underneath the parent run's tool-call instead of as a top-level
 // message.
 type Envelope struct {
-	Type           string          `json:"type"`
-	RequestID      string          `json:"requestId,omitempty"`
-	TopicID        string          `json:"topicId,omitempty"`
-	UserID         string          `json:"userId,omitempty"`
+	Type      string `json:"type"`
+	RequestID string `json:"requestId,omitempty"`
+	TopicID   string `json:"topicId,omitempty"`
+	UserID    string `json:"userId,omitempty"`
+	// Seq is a hub-global monotonic sequence stamped at publish. The
+	// client keeps the max seq it has processed and presents it as
+	// ?since= on (re)connect; the hub replays only seq>since per topic,
+	// or sends a `resync` when the gap is wider than the buffer. Opaque
+	// to the client ("bigger = newer"); when realtime moves to a shared
+	// bus the source changes without touching the wire contract.
+	Seq            uint64          `json:"seq,omitempty"`
 	ConversationID string          `json:"conversationId,omitempty"`
 	Subagent       *SubagentInfo   `json:"subagent,omitempty"`
 	Payload        json.RawMessage `json:"payload,omitempty"`

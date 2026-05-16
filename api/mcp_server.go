@@ -447,8 +447,8 @@ func (s *MCPServer) handleToolsList(ctx context.Context, w http.ResponseWriter, 
 	// which re-applies access on its own surface.
 	tools = append(tools, toolEntry{
 		Name:        "prompt",
-		Description: "Send a natural-language prompt to this agent. The agent runs its own LLM loop and returns the final assistant message. Streams progress via notifications/progress over SSE.",
-		InputSchema: json.RawMessage(`{"type":"object","properties":{"message":{"type":"string","description":"User-facing message"},"conversationId":{"type":"string","description":"Optional: continue an existing conversation"},"files":{"type":"array","items":{"type":"object","properties":{"path":{"type":"string"},"filename":{"type":"string"},"contentType":{"type":"string"},"size":{"type":"integer"}}}}},"required":["message"]}`),
+		Description: "Delegate a natural-language task to this agent. It runs its own LLM loop and returns {text, taskId, contextId, state, artifacts}. Progress streams via notifications/progress over SSE.",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"message":{"type":"string","description":"The message / task to send"},"contextId":{"type":"string","description":"Optional: continue an existing conversation thread"},"taskId":{"type":"string","description":"Optional: resume a task that returned state=input-required; put the answer in message"},"files":{"type":"array","description":"Optional files to send","items":{"type":"object","properties":{"path":{"type":"string"},"filename":{"type":"string"},"contentType":{"type":"string"},"size":{"type":"integer"},"data":{"type":"string","description":"base64 (external clients only)"},"mimeType":{"type":"string"}}}}},"required":["message"]}`),
 	})
 	result, _ := json.Marshal(map[string]any{"tools": tools})
 	writeJSONRPCResult(w, msg.ID, result)
@@ -481,9 +481,11 @@ func (s *MCPServer) handlePromptCall(ctx context.Context, w http.ResponseWriter,
 	// (A2A caller / web-uploaded refs) or new inline {filename, mimeType,
 	// data} (external MCP uploads). Discriminate by presence of `data`.
 	var promptArgs struct {
-		Message        string            `json:"message"`
-		ConversationID string            `json:"conversationId,omitempty"`
-		Files          []json.RawMessage `json:"files,omitempty"`
+		Message   string            `json:"message"`
+		ContextID string            `json:"contextId,omitempty"`
+		TaskID    string            `json:"taskId,omitempty"`
+		Decision  string            `json:"decision,omitempty"` // "approve"|"deny" — resumes a taskId that was input-required
+		Files     []json.RawMessage `json:"files,omitempty"`
 	}
 	if err := json.Unmarshal(args, &promptArgs); err != nil {
 		writeJSONRPCError(w, msg.ID, rpcErrInvalidParams, "decode prompt args")
@@ -493,7 +495,6 @@ func (s *MCPServer) handlePromptCall(ctx context.Context, w http.ResponseWriter,
 		writeJSONRPCError(w, msg.ID, rpcErrInvalidParams, "message is required")
 		return
 	}
-
 	// Materialization happens after conversation validation below so we
 	// can scope inbound files by conv-{id} when a valid conversation is
 	// in play. Files placeholder for the post-validation call site.
@@ -508,37 +509,87 @@ func (s *MCPServer) handlePromptCall(ctx context.Context, w http.ResponseWriter,
 	// If the caller continues an existing conversation, verify access
 	// to it. Merge "doesn't exist" and "not accessible" into one
 	// error (don't leak existence).
-	if promptArgs.ConversationID != "" {
-		convID, err := uuid.Parse(promptArgs.ConversationID)
+	if promptArgs.ContextID != "" {
+		convID, err := uuid.Parse(promptArgs.ContextID)
 		if err != nil {
-			writeJSONRPCError(w, msg.ID, rpcErrInvalidParams, "invalid conversationId format")
+			writeJSONRPCError(w, msg.ID, rpcErrInvalidParams, "invalid contextId format")
 			return
 		}
 		conv, err := q.GetConversationByID(ctx, pgtype.UUID{Bytes: convID, Valid: true})
 		if err != nil || uuid.UUID(conv.AgentID.Bytes) != uuid.UUID(target.ID.Bytes) {
-			writeJSONRPCError(w, msg.ID, rpcErrInvalidParams, "conversationId not accessible")
+			writeJSONRPCError(w, msg.ID, rpcErrInvalidParams, "contextId not accessible — it must be a contextId this agent returned to you from a prior call. Do not pass your own run/conversation id or a fabricated value. Retry with contextId omitted to start a fresh thread.")
 			return
 		}
-		// Conversation user must match the principal's user (or be
-		// non-member-open). We piggy-back on the access decision: if
-		// the conv owner != caller, the caller would need member
-		// access to the agent to peek — which is what `access` checks.
-		if conv.UserID.Valid && principal.UserID != uuid.Nil && uuid.UUID(conv.UserID.Bytes) != principal.UserID {
-			if access != agentsdk.AccessAdmin && access != agentsdk.AccessUser {
-				writeJSONRPCError(w, msg.ID, rpcErrInvalidParams, "conversationId not accessible")
+		// The conversation must belong to the same principal that is
+		// continuing it — no cross-user (or user↔anon) A2A thread
+		// resumption. Owned conv → caller must be that exact user.
+		// Anonymous conv (no owner) → only an anonymous caller may
+		// continue it. Per-anon-identity gating for bridge callers
+		// (external_user_id, possibly a group-chat id) is deferred —
+		// see todo/a2a-anon-conversation-gating.md; today all anon
+		// callers are one tier.
+		if conv.UserID.Valid {
+			if principal.UserID == uuid.Nil || uuid.UUID(conv.UserID.Bytes) != principal.UserID {
+				writeJSONRPCError(w, msg.ID, rpcErrInvalidParams, "contextId not accessible — it must be a contextId this agent returned to you from a prior call. Do not pass your own run/conversation id or a fabricated value. Retry with contextId omitted to start a fresh thread.")
 				return
 			}
+		} else if principal.UserID != uuid.Nil {
+			writeJSONRPCError(w, msg.ID, rpcErrInvalidParams, "contextId not accessible — it must be a contextId this agent returned to you from a prior call. Do not pass your own run/conversation id or a fabricated value. Retry with contextId omitted to start a fresh thread.")
+			return
 		}
 	}
 
-	// Pick the inbound-file scope: conv-<id> when a validated
-	// conversation is in play (prompt continuity across A2A turns),
-	// else fall through to caller-run scope. Materialize now that we
-	// know which scope key to use.
-	scopeKey := scopeKeyForCaller(principal)
-	if promptArgs.ConversationID != "" {
-		scopeKey = scopeKeyForConversation(promptArgs.ConversationID)
+	// taskId resumes a specific prior run (one that returned
+	// state=input-required / suspended). Validate it belongs to this
+	// agent before handing it to the resume path; merge not-found and
+	// not-yours into one error (don't leak existence).
+	var taskRun dbq.Run
+	if promptArgs.TaskID != "" {
+		taskUUID, err := uuid.Parse(promptArgs.TaskID)
+		if err != nil {
+			writeJSONRPCError(w, msg.ID, rpcErrInvalidParams, "invalid taskId format")
+			return
+		}
+		tr, err := q.GetRunByID(ctx, pgtype.UUID{Bytes: taskUUID, Valid: true})
+		if err != nil || uuid.UUID(tr.AgentID.Bytes) != uuid.UUID(target.ID.Bytes) {
+			writeJSONRPCError(w, msg.ID, rpcErrInvalidParams, "taskId not accessible — it must be a taskId this agent returned to you with state=input-required. Do not invent one; omit taskId unless you are resuming such a task.")
+			return
+		}
+		taskRun = tr
 	}
+
+	// Resolve the conversation this A2A turn runs in. contextId ≡
+	// agent_conversations.id on the *called* agent (validated above to
+	// belong to target). No contextId → mint a fresh thread owned by
+	// the original user (NULL user for anonymous external-MCP callers).
+	// taskId-resume continues that task's own conversation — its
+	// run.trigger_ref, which for a2a/prompt runs is the conv id.
+	var convID string
+	switch {
+	case promptArgs.ContextID != "":
+		convID = promptArgs.ContextID
+	case promptArgs.TaskID != "":
+		convID = taskRun.TriggerRef
+	default:
+		var convUser pgtype.UUID
+		if principal.UserID != uuid.Nil {
+			convUser = pgtype.UUID{Bytes: principal.UserID, Valid: true}
+		}
+		conv, cerr := q.CreateA2AConversation(ctx, dbq.CreateA2AConversationParams{
+			AgentID: pgtype.UUID{Bytes: uuid.UUID(target.ID.Bytes), Valid: true},
+			UserID:  convUser,
+			Title:   truncate(promptArgs.Message, 100),
+		})
+		if cerr != nil {
+			writeJSONRPCError(w, msg.ID, rpcErrServerError, "create a2a conversation: "+cerr.Error())
+			return
+		}
+		convID = convert.PgUUIDToString(conv.ID)
+	}
+
+	// Inbound files scope to the resolved conversation so they persist
+	// with the thread across A2A turns.
+	scopeKey := scopeKeyForConversation(convID)
 	var mErr *materializeError
 	files, mErr = s.materializePromptFiles(ctx, h, q, target, principal, scopeKey, promptArgs.Files)
 	if mErr != nil {
@@ -546,12 +597,30 @@ func (s *MCPServer) handlePromptCall(ctx context.Context, w http.ResponseWriter,
 		return
 	}
 
+	// Attached-files manifest — same canonical producer as web/bridge.
+	// Pre-dispatch so it's in the called agent's history when its
+	// SessionStore loads.
+	if cu, perr := uuid.Parse(convID); perr == nil {
+		if err := trigger.PostFilesManifest(ctx, q, pgtype.UUID{Bytes: cu, Valid: true}, files); err != nil {
+			s.logger.Warn("post files manifest failed", zap.String("conversation_id", convID), zap.Error(err))
+		}
+	}
+
 	// Build PromptInput. CallerAccess and VisibleSiblings are filled
 	// by ForwardA2APrompt; we just supply the message + files.
 	input := agentsdk.PromptInput{
 		Message:        promptArgs.Message,
-		ConversationID: promptArgs.ConversationID,
+		ConversationID: convID,
+		ResumeRunID:    promptArgs.TaskID,
 		Files:          files,
+	}
+	// decision resumes a taskId that returned input-required: map to
+	// the agentsdk approve/deny resume contract (same as web/bridge
+	// confirmations). On deny the message rides along so the agent's
+	// LLM can re-reason. Only meaningful with taskId.
+	if promptArgs.TaskID != "" && promptArgs.Decision != "" {
+		approved := promptArgs.Decision == "approve"
+		input.Approved = &approved
 	}
 
 	// parentRunID is the caller's X-Run-ID for agent principals; for
@@ -662,7 +731,7 @@ func (s *MCPServer) handlePromptCall(ctx context.Context, w http.ResponseWriter,
 			_ = s.pubsub.Publish(cctx, parentInfo.AgentID, parentEnv)
 			return
 		}
-		env := realtime.NewEnvelopeForUser(eventType, childTopic.String(), childUserID, promptArgs.ConversationID, payload)
+		env := realtime.NewEnvelopeForUser(eventType, childTopic.String(), childUserID, promptArgs.ContextID, payload)
 		_ = s.pubsub.Publish(cctx, childTopic, env)
 	}
 
@@ -671,7 +740,7 @@ func (s *MCPServer) handlePromptCall(ctx context.Context, w http.ResponseWriter,
 	mirror("run.started", &airlockv1.RunStartedEvent{
 		RunId:          runID.String(),
 		AgentId:        uuid.UUID(target.ID.Bytes).String(),
-		ConversationId: promptArgs.ConversationID,
+		ConversationId: promptArgs.ContextID,
 	})
 
 	progressToken := msg.ID
@@ -679,6 +748,8 @@ func (s *MCPServer) handlePromptCall(ctx context.Context, w http.ResponseWriter,
 	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
 	var finalText strings.Builder
 	var finalErr string
+	var suspended bool
+	var confirmation map[string]any // leaf gate detail for human-facing attribution up the chain
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
@@ -764,6 +835,28 @@ func (s *MCPServer) handlePromptCall(ctx context.Context, w http.ResponseWriter,
 				RunId: runID.String(),
 				Error: e.Error,
 			})
+		case "confirmation_required":
+			// Capture the leaf gate detail so it can ride up the
+			// delegated-suspension chain — the human at the root needs
+			// to see WHAT the sibling wants to do, not a blank gate.
+			var c struct {
+				Permission string   `json:"permission"`
+				Patterns   []string `json:"patterns"`
+				Code       string   `json:"code"`
+				ToolCallID string   `json:"toolCallId"`
+			}
+			if json.Unmarshal(evt.Data, &c) == nil {
+				confirmation = map[string]any{
+					"agent":      target.Slug,
+					"permission": c.Permission,
+					"patterns":   c.Patterns,
+					"code":       c.Code,
+				}
+			}
+		case "suspended":
+			// The child run paused for input (tool confirmation / auth).
+			// Not an error — the task is resumable via taskId.
+			suspended = true
 		case "complete", "finish", "run.complete":
 			mirror("run.complete", &airlockv1.RunCompleteEvent{
 				RunId: runID.String(),
@@ -778,16 +871,66 @@ func (s *MCPServer) handlePromptCall(ctx context.Context, w http.ResponseWriter,
 		finalErr = "task exceeded sync timeout; cancelled"
 	}
 
+	// Hard failure / cancel stays on the JSON-RPC error channel — that
+	// surfaces as a thrown error in the caller's run_js (A2A states
+	// failed/canceled map onto the transport error; the message names
+	// the cause). Suspension is NOT an error: it returns a normal
+	// result with state=input-required and the taskId so the caller can
+	// resume.
 	if finalErr != "" {
 		writeSSEJSONRPCError(w, flusher, msg.ID, rpcErrServerError, finalErr)
 		return
 	}
+
+	state := "completed"
+	if suspended {
+		state = "input-required"
+	}
+
+	// contextId is the conversation thread the caller continues with —
+	// the conversation resolved/minted above. The caller echoes this
+	// back as contextId next turn to continue this same thread.
+	contextID := convID
+
+	artifacts := collectPromptArtifacts(ctx, h.s3, s.logger, q, target, principal, runID)
+
+	content := []map[string]any{{"type": "text", "text": finalText.String()}}
+	// External (non-agent) clients can't read the caller-bucket copy —
+	// expose artifacts as resource_link blocks they fetch via
+	// resources/read. Agent callers read them straight from siblings/.
+	if principal.Kind != MCPPrincipalAgent {
+		for _, a := range artifacts {
+			content = append(content, map[string]any{
+				"type":     "resource_link",
+				"uri":      "agent://" + a.Path,
+				"name":     a.Filename,
+				"mimeType": a.ContentType,
+			})
+		}
+	}
+	if artifacts == nil {
+		artifacts = []a2aArtifact{}
+	}
+	a2aMeta := map[string]any{
+		"taskId":    runID.String(),
+		"contextId": contextID,
+		"state":     state,
+		"artifacts": artifacts,
+	}
+	// On input-required, carry the leaf gate detail (which sibling
+	// wants to do what) so the caller's promptAgent tool can stamp it
+	// into ErrDelegatedSuspend — it then rides up the chain to the
+	// root run's confirmation card so the human approves something
+	// meaningful, not a blank "delegated" gate.
+	if state == "input-required" && confirmation != nil {
+		a2aMeta["confirmation"] = confirmation
+	}
 	resultPayload, _ := json.Marshal(map[string]any{
-		"content": []map[string]any{{
-			"type": "text",
-			"text": finalText.String(),
-		}},
+		"content": content,
 		"isError": false,
+		"_meta": map[string]any{
+			"airlock.run/a2a": a2aMeta,
+		},
 	})
 	writeSSEJSONRPCResult(w, flusher, msg.ID, resultPayload)
 }

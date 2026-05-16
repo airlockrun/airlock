@@ -24,9 +24,14 @@ type Conn struct {
 	ID     string
 	UserID uuid.UUID
 	Email  string
-	ws     *websocket.Conn
-	send   chan []byte
-	logger *zap.Logger
+	// SinceSeq is the client's replay cursor from the ?since= connect
+	// param: the max Envelope.Seq it has already processed. Set once by
+	// the WS accept handler before the Subscribe loop; the hub replays
+	// only seq>SinceSeq per topic (0 = fresh connect, no replay).
+	SinceSeq uint64
+	ws       *websocket.Conn
+	send     chan []byte
+	logger   *zap.Logger
 }
 
 // NewConn creates a new Conn for the given WebSocket and user.

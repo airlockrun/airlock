@@ -51,6 +51,14 @@ function parseParts(parts: unknown): any[] | null {
 }
 
 export function enrichMessages(msgs: AgentMessageInfo[]): AgentMessageInfo[] {
+  // source="llm": model-only context (e.g. the attached-files manifest)
+  // persisted into the conversation but never meant for the human. Hide
+  // it everywhere a transcript renders — same _hidden affordance folded
+  // rows use.
+  for (const msg of msgs) {
+    if (msg.source === 'llm') (msg as any)._hidden = true
+  }
+
   // Pass 1: build toolCalls[] on every assistant message that called tools.
   // Keep references so pass 2 can mutate the same entries when the tool
   // result row arrives later in the stream.
