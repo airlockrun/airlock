@@ -133,30 +133,35 @@ func (p *PromptProxy) HandleMessage(
 		}
 
 	case storeHistory && userID != uuid.Nil:
-		// Authenticated bridge user → conversation keyed on (agent, user, source).
+		// Authenticated bridge user → one thread per (agent, user,
+		// external_id): the same user in a different chat/bot is a
+		// different conversation. external_id (the platform chat id) is
+		// required — fail loud rather than collapse every chat into one
+		// NULL-keyed row.
+		if externalID == "" {
+			close(events)
+			return "", fmt.Errorf("authed bridge conversation requires external_id")
+		}
 		// If the user previously chatted publicly (before /auth), drop the
 		// orphan public row so its history doesn't linger and the sweeper
 		// doesn't later send a confusing "Conversation completed." DM.
-		if externalID != "" {
-			if pubConv, err := q.GetConversationByExternal(ctx, dbq.GetConversationByExternalParams{
-				AgentID:    toPgUUID(agentID),
-				Source:     "bridge",
-				ExternalID: pgtype.Text{String: externalID, Valid: true},
-			}); err == nil {
-				if delErr := q.DeleteConversation(ctx, pubConv.ID); delErr != nil {
-					p.logger.Warn("delete orphan public conversation after auth",
-						zap.String("conversation_id", convert.PgUUIDToString(pubConv.ID)),
-						zap.Error(delErr))
-				}
+		if pubConv, err := q.GetConversationByExternal(ctx, dbq.GetConversationByExternalParams{
+			AgentID:    toPgUUID(agentID),
+			Source:     "bridge",
+			ExternalID: pgtype.Text{String: externalID, Valid: true},
+		}); err == nil {
+			if delErr := q.DeleteConversation(ctx, pubConv.ID); delErr != nil {
+				p.logger.Warn("delete orphan public conversation after auth",
+					zap.String("conversation_id", convert.PgUUIDToString(pubConv.ID)),
+					zap.Error(delErr))
 			}
 		}
-		conv, err := q.GetOrCreateConversation(ctx, dbq.GetOrCreateConversationParams{
+		conv, err := q.GetOrCreateBridgeAuthedConversation(ctx, dbq.GetOrCreateBridgeAuthedConversationParams{
 			AgentID:    toPgUUID(agentID),
 			UserID:     toPgUUID(userID),
-			Source:     "bridge",
 			Title:      truncate(userMessage, 100),
 			BridgeID:   toPgUUID(bridgeID),
-			ExternalID: pgtype.Text{String: externalID, Valid: externalID != ""},
+			ExternalID: pgtype.Text{String: externalID, Valid: true},
 		})
 		if err != nil {
 			close(events)
@@ -201,7 +206,7 @@ func (p *PromptProxy) HandleMessage(
 	// the agent with ForceCompact=true so Sol's Runner.Compact produces the
 	// reply via its usual streaming path.
 	var forceCompact bool
-	if cmd, err := TrySlashCommand(ctx, q, p.dispatcher, conversationID, agentID, access, userMessage, p.logger); err != nil {
+	if cmd, err := TrySlashCommand(ctx, q, p.dispatcher, conversationID, access, userMessage, p.logger); err != nil {
 		close(events)
 		return "", fmt.Errorf("slash command: %w", err)
 	} else if cmd.Handled {
@@ -288,7 +293,9 @@ func (p *PromptProxy) HandleMessage(
 	// Parity with the web path ([api/conversations.go:396-400]): if there's a
 	// suspended run (pending permission check), free-text messages resolve it
 	// as denied and the new message is re-reasoned in the same run.
-	if suspendedRun, err := q.GetLatestSuspendedRun(ctx, toPgUUID(agentID)); err == nil {
+	// Conversation-scoped so a bridge message never resolves a sibling-
+	// delegated (source='a2a') suspension that belongs to another surface.
+	if suspendedRun, err := q.GetLatestSuspendedRunByConversation(ctx, convert.PgUUIDToString(conversationID)); err == nil {
 		input.ResumeRunID = convert.PgUUIDToString(suspendedRun.ID)
 		approved := false
 		input.Approved = &approved
@@ -363,12 +370,15 @@ func (p *PromptProxy) HandleCallback(
 	// the conversation is keyed on the external chat ID, not on user_id.
 	var convID pgtype.UUID
 	if userID != uuid.Nil {
-		conv, err := q.GetOrCreateConversation(ctx, dbq.GetOrCreateConversationParams{
+		if externalID == "" {
+			close(events)
+			return false, fmt.Errorf("authed bridge conversation requires external_id")
+		}
+		conv, err := q.GetOrCreateBridgeAuthedConversation(ctx, dbq.GetOrCreateBridgeAuthedConversationParams{
 			AgentID:    toPgUUID(agentID),
 			UserID:     toPgUUID(userID),
-			Source:     "bridge",
 			BridgeID:   toPgUUID(bridgeID),
-			ExternalID: pgtype.Text{String: externalID, Valid: externalID != ""},
+			ExternalID: pgtype.Text{String: externalID, Valid: true},
 		})
 		if err != nil {
 			close(events)

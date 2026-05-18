@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/airlockrun/agentsdk"
 	"github.com/airlockrun/airlock/attachref"
@@ -22,6 +23,7 @@ import (
 // LLMStream handles POST /api/agent/llm/stream.
 func (h *agentHandler) LLMStream(w http.ResponseWriter, r *http.Request) {
 	agentID := auth.AgentIDFromContext(r.Context())
+	runIDHdr := r.Header.Get("X-Airlock-Run-ID")
 	ctx := r.Context()
 
 	var req agentsdk.LLMProxyRequest
@@ -73,9 +75,22 @@ func (h *agentHandler) LLMStream(w http.ResponseWriter, r *http.Request) {
 		BaseURL: baseURL,
 	})
 
+	capture := llmUsageCapture{
+		providerCatalogID: providerID,
+		model:             modelID,
+		capability:        normalizeCapability(req.Capability),
+		slug:              req.Slug,
+	}
+	var usageAcc stream.Usage
+	started := time.Now()
+
 	events, err := model.Stream(ctx, &opts)
 	if err != nil {
 		h.logger.Error("LLM stream failed", zap.Error(err))
+		capture.errored = true
+		capture.finishReason = "stream-init-error"
+		capture.latency = time.Since(started)
+		h.recordLLMUsage(agentID, runIDHdr, capture)
 		writeJSONError(w, http.StatusBadGateway, "LLM stream failed")
 		return
 	}
@@ -105,6 +120,14 @@ func (h *agentHandler) LLMStream(w http.ResponseWriter, r *http.Request) {
 				zap.Error(ee.Error),
 			)
 			nd.Data = map[string]string{"error": ee.Error.Error()}
+			capture.errored = true
+		}
+		// Usage rides the terminal FinishEvent (one per provider
+		// round-trip). Accumulate defensively in case a provider emits
+		// more than one before the stream closes.
+		if fe, ok := event.Data.(stream.FinishEvent); ok {
+			usageAcc.Add(fe.Usage)
+			capture.finishReason = string(fe.FinishReason)
 		}
 		if ee, ok := event.Data.(stream.ToolErrorEvent); ok {
 			nd.Data = map[string]any{
@@ -133,6 +156,10 @@ func (h *agentHandler) LLMStream(w http.ResponseWriter, r *http.Request) {
 			flusher.Flush()
 		}
 	}
+
+	capture.fromStreamUsage(usageAcc)
+	capture.latency = time.Since(started)
+	h.recordLLMUsage(agentID, runIDHdr, capture)
 }
 
 // sanitizeEventData replaces empty json.RawMessage fields on stream
@@ -293,6 +320,7 @@ func systemCapabilityDefault(settings dbq.SystemSetting, capability string) (pgt
 // ImageGenerate handles POST /api/agent/llm/image.
 func (h *agentHandler) ImageGenerate(w http.ResponseWriter, r *http.Request) {
 	agentID := auth.AgentIDFromContext(r.Context())
+	runIDHdr := r.Header.Get("X-Airlock-Run-ID")
 	ctx := r.Context()
 
 	var req agentsdk.ModelProxyRequest
@@ -320,12 +348,27 @@ func (h *agentHandler) ImageGenerate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	capture := llmUsageCapture{providerCatalogID: providerID, model: modelID, capability: "image", slug: req.Slug}
+	started := time.Now()
 	result, err := m.Generate(ctx, opts)
+	capture.latency = time.Since(started)
 	if err != nil {
 		h.logger.Error("image generation failed", zap.Error(err))
+		capture.errored = true
+		h.recordLLMUsage(agentID, runIDHdr, capture)
 		writeJSONError(w, http.StatusBadGateway, "image generation failed: "+err.Error())
 		return
 	}
+
+	// Token-priced image models (e.g. gpt-image-1) report TotalTokens —
+	// route those through the catalog. Diffusion models report none; the
+	// unit ledger prices them per image via llm_unit_rates.
+	capture.unitKind = "image"
+	capture.units = float64(len(result.Images))
+	if result.Usage != nil {
+		capture.tokensIn = int64(result.Usage.TotalTokens)
+	}
+	h.recordLLMUsage(agentID, runIDHdr, capture)
 
 	writeJSON(w, http.StatusOK, result)
 }
@@ -333,6 +376,7 @@ func (h *agentHandler) ImageGenerate(w http.ResponseWriter, r *http.Request) {
 // Embed handles POST /api/agent/llm/embedding.
 func (h *agentHandler) Embed(w http.ResponseWriter, r *http.Request) {
 	agentID := auth.AgentIDFromContext(r.Context())
+	runIDHdr := r.Header.Get("X-Airlock-Run-ID")
 	ctx := r.Context()
 
 	var req agentsdk.ModelProxyRequest
@@ -360,12 +404,20 @@ func (h *agentHandler) Embed(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	capture := llmUsageCapture{providerCatalogID: providerID, model: modelID, capability: "embedding", slug: req.Slug}
+	started := time.Now()
 	result, err := m.Embed(ctx, opts)
+	capture.latency = time.Since(started)
 	if err != nil {
 		h.logger.Error("embedding failed", zap.Error(err))
+		capture.errored = true
+		h.recordLLMUsage(agentID, runIDHdr, capture)
 		writeJSONError(w, http.StatusBadGateway, "embedding failed: "+err.Error())
 		return
 	}
+
+	capture.tokensIn = int64(result.Usage.Tokens)
+	h.recordLLMUsage(agentID, runIDHdr, capture)
 
 	writeJSON(w, http.StatusOK, result)
 }
@@ -373,6 +425,7 @@ func (h *agentHandler) Embed(w http.ResponseWriter, r *http.Request) {
 // SpeechGenerate handles POST /api/agent/llm/speech.
 func (h *agentHandler) SpeechGenerate(w http.ResponseWriter, r *http.Request) {
 	agentID := auth.AgentIDFromContext(r.Context())
+	runIDHdr := r.Header.Get("X-Airlock-Run-ID")
 	ctx := r.Context()
 
 	var req agentsdk.ModelProxyRequest
@@ -400,12 +453,25 @@ func (h *agentHandler) SpeechGenerate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	capture := llmUsageCapture{providerCatalogID: providerID, model: modelID, capability: "speech", slug: req.Slug}
+	started := time.Now()
 	result, err := m.Generate(ctx, opts)
+	capture.latency = time.Since(started)
 	if err != nil {
 		h.logger.Error("speech generation failed", zap.Error(err))
+		capture.errored = true
+		h.recordLLMUsage(agentID, runIDHdr, capture)
 		writeJSONError(w, http.StatusBadGateway, "speech generation failed: "+err.Error())
 		return
 	}
+
+	// TTS bills per character; the catalog has no per-char rate, so this
+	// goes through llm_unit_rates (cost 0 until an operator sets one).
+	capture.unitKind = "character"
+	if result.Usage != nil {
+		capture.units = float64(result.Usage.Characters)
+	}
+	h.recordLLMUsage(agentID, runIDHdr, capture)
 
 	writeJSON(w, http.StatusOK, result)
 }
@@ -413,6 +479,7 @@ func (h *agentHandler) SpeechGenerate(w http.ResponseWriter, r *http.Request) {
 // Transcribe handles POST /api/agent/llm/transcription.
 func (h *agentHandler) Transcribe(w http.ResponseWriter, r *http.Request) {
 	agentID := auth.AgentIDFromContext(r.Context())
+	runIDHdr := r.Header.Get("X-Airlock-Run-ID")
 	ctx := r.Context()
 
 	var req agentsdk.ModelProxyRequest
@@ -451,12 +518,24 @@ func (h *agentHandler) Transcribe(w http.ResponseWriter, r *http.Request) {
 		h.logger.Warn("transcription transcode failed — sending original bytes", zap.Error(tErr))
 	}
 
+	capture := llmUsageCapture{providerCatalogID: providerID, model: modelID, capability: "transcription", slug: req.Slug}
+	started := time.Now()
 	result, err := m.Transcribe(ctx, opts)
+	capture.latency = time.Since(started)
 	if err != nil {
 		h.logger.Error("transcription failed", zap.Error(err))
+		capture.errored = true
+		h.recordLLMUsage(agentID, runIDHdr, capture)
 		writeJSONError(w, http.StatusBadGateway, "transcription failed: "+err.Error())
 		return
 	}
+
+	// STT bills per audio-second; no catalog rate, so via llm_unit_rates.
+	capture.unitKind = "second"
+	if result.Usage != nil {
+		capture.units = result.Usage.DurationSeconds
+	}
+	h.recordLLMUsage(agentID, runIDHdr, capture)
 
 	writeJSON(w, http.StatusOK, result)
 }

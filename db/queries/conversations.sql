@@ -1,20 +1,23 @@
--- name: GetOrCreateConversation :one
--- DM-only: one conversation per user per agent per source. Upserts on (agent_id, user_id, source).
--- Targets the partial unique index `idx_conversations_dm` — the conflict_target
--- WHERE clause must match the index predicate so Postgres can infer it.
--- Never called with source='a2a' (A2A uses CreateA2AConversation); the
--- `source <> 'a2a'` clause is here only to mirror the partial index.
-WITH ins AS (
-    INSERT INTO agent_conversations (agent_id, user_id, source, title, bridge_id, external_id, metadata, settings)
-    VALUES (@agent_id, @user_id, @source::text, @title, @bridge_id, @external_id, '{}'::jsonb, '{}'::jsonb)
-    ON CONFLICT (agent_id, user_id, source) WHERE user_id IS NOT NULL AND source <> 'a2a' DO UPDATE
-        SET updated_at = now(),
-            bridge_id = COALESCE(EXCLUDED.bridge_id, agent_conversations.bridge_id),
-            external_id = COALESCE(EXCLUDED.external_id, agent_conversations.external_id)
-    RETURNING *
-)
-SELECT * FROM ins
-LIMIT 1;
+-- name: CreateWebConversation :one
+-- Web is multi-conversation: every call is a fresh thread owned by the
+-- user. Plain INSERT, no upsert — the row UUID is the identity and the
+-- client addresses one by id on each prompt.
+INSERT INTO agent_conversations (agent_id, user_id, source, title, metadata, settings)
+VALUES (@agent_id, @user_id, 'web', @title, '{}'::jsonb, '{}'::jsonb)
+RETURNING *;
+
+-- name: GetOrCreateBridgeAuthedConversation :one
+-- Authed bridge: one thread per (agent, user, external_id) — the same
+-- user in a different chat/bot is a different conversation. Upserts on
+-- idx_conversations_bridge_authed; the conflict_target WHERE clause must
+-- match that partial index's predicate so Postgres can infer it.
+-- external_id is required (callers reject empty before this).
+INSERT INTO agent_conversations (agent_id, user_id, source, title, bridge_id, external_id, metadata, settings)
+VALUES (@agent_id, @user_id, 'bridge', @title, @bridge_id, @external_id, '{}'::jsonb, '{}'::jsonb)
+ON CONFLICT (agent_id, user_id, source, external_id) WHERE user_id IS NOT NULL AND external_id IS NOT NULL DO UPDATE
+    SET updated_at = now(),
+        bridge_id = COALESCE(EXCLUDED.bridge_id, agent_conversations.bridge_id)
+RETURNING *;
 
 -- name: CreateA2AConversation :one
 -- A2A: each new context (caller passed no contextId) is its own
@@ -72,9 +75,21 @@ WHERE user_id IS NULL
   AND updated_at < NOW() - make_interval(secs => @ttl_seconds::int);
 
 -- name: ListConversationsByAgent :many
--- Returns conversations for the given agent visible to the given user.
+-- Returns conversations for the given agent visible to the given user in
+-- the web UI. source='a2a' rows are a sibling-call transport detail (the
+-- called agent never "chats" them) and are excluded — surfacing them
+-- would also expose a delegated suspension as an actionable card here.
 SELECT * FROM agent_conversations
-WHERE agent_id = @agent_id AND user_id = @user_id
+WHERE agent_id = @agent_id AND user_id = @user_id AND source <> 'a2a'
+ORDER BY updated_at DESC;
+
+-- name: ListAllWebConversationsByUser :many
+-- Every web conversation the user owns, across all agents — backs the
+-- global sidebar list. Only source='web' (bridge is delivered over the
+-- bridge, a2a is sibling transport); the row carries agent_id so the UI
+-- can label each entry with its agent's name.
+SELECT * FROM agent_conversations
+WHERE user_id = @user_id AND source = 'web'
 ORDER BY updated_at DESC;
 
 -- name: GetConversationByID :one

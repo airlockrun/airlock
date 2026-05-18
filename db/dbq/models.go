@@ -46,22 +46,27 @@ type Agent struct {
 	AllowNonMemberMcp   bool               `json:"allow_non_member_mcp"`
 	AllowPublicMcp      bool               `json:"allow_public_mcp"`
 	ToolsHash           []byte             `json:"tools_hash"`
+	Emoji               string             `json:"emoji"`
 }
 
 type AgentBuild struct {
-	ID           pgtype.UUID        `json:"id"`
-	AgentID      pgtype.UUID        `json:"agent_id"`
-	Type         string             `json:"type"`
-	Status       string             `json:"status"`
-	Instructions string             `json:"instructions"`
-	SourceRef    string             `json:"source_ref"`
-	ImageRef     string             `json:"image_ref"`
-	SolLog       string             `json:"sol_log"`
-	DockerLog    string             `json:"docker_log"`
-	LogSeq       int64              `json:"log_seq"`
-	ErrorMessage string             `json:"error_message"`
-	StartedAt    pgtype.Timestamptz `json:"started_at"`
-	FinishedAt   pgtype.Timestamptz `json:"finished_at"`
+	ID              pgtype.UUID        `json:"id"`
+	AgentID         pgtype.UUID        `json:"agent_id"`
+	Type            string             `json:"type"`
+	Status          string             `json:"status"`
+	Instructions    string             `json:"instructions"`
+	SourceRef       string             `json:"source_ref"`
+	ImageRef        string             `json:"image_ref"`
+	SolLog          string             `json:"sol_log"`
+	DockerLog       string             `json:"docker_log"`
+	LogSeq          int64              `json:"log_seq"`
+	ErrorMessage    string             `json:"error_message"`
+	StartedAt       pgtype.Timestamptz `json:"started_at"`
+	FinishedAt      pgtype.Timestamptz `json:"finished_at"`
+	LlmCalls        int32              `json:"llm_calls"`
+	LlmTokensIn     int32              `json:"llm_tokens_in"`
+	LlmTokensOut    int32              `json:"llm_tokens_out"`
+	LlmCostEstimate float64            `json:"llm_cost_estimate"`
 }
 
 type AgentConversation struct {
@@ -161,8 +166,6 @@ type AgentMessage struct {
 	Content        string             `json:"content"`
 	Parts          []byte             `json:"parts"`
 	FileKeys       []string           `json:"file_keys"`
-	TokensIn       int32              `json:"tokens_in"`
-	TokensOut      int32              `json:"tokens_out"`
 	CostEstimate   pgtype.Numeric     `json:"cost_estimate"`
 	Ephemeral      bool               `json:"ephemeral"`
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
@@ -292,6 +295,41 @@ type Connection struct {
 	TokenExpiresAt    pgtype.Timestamptz `json:"token_expires_at"`
 	CreatedAt         pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
+}
+
+type LlmUnitRate struct {
+	ProviderCatalogID string             `json:"provider_catalog_id"`
+	Model             string             `json:"model"`
+	UnitKind          string             `json:"unit_kind"`
+	Rate              float64            `json:"rate"`
+	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
+}
+
+type LlmUsage struct {
+	ID                pgtype.UUID        `json:"id"`
+	AgentID           pgtype.UUID        `json:"agent_id"`
+	RunID             pgtype.UUID        `json:"run_id"`
+	BuildID           pgtype.UUID        `json:"build_id"`
+	UserID            pgtype.UUID        `json:"user_id"`
+	ConversationID    pgtype.UUID        `json:"conversation_id"`
+	ProviderCatalogID string             `json:"provider_catalog_id"`
+	Model             string             `json:"model"`
+	Capability        string             `json:"capability"`
+	CallKind          string             `json:"call_kind"`
+	Slug              string             `json:"slug"`
+	TokensIn          int64              `json:"tokens_in"`
+	TokensOut         int64              `json:"tokens_out"`
+	TokensCached      int64              `json:"tokens_cached"`
+	TokensReasoning   int64              `json:"tokens_reasoning"`
+	Units             float64            `json:"units"`
+	UnitKind          string             `json:"unit_kind"`
+	CostInput         float64            `json:"cost_input"`
+	CostOutput        float64            `json:"cost_output"`
+	CostTotal         float64            `json:"cost_total"`
+	FinishReason      string             `json:"finish_reason"`
+	Errored           bool               `json:"errored"`
+	LatencyMs         int32              `json:"latency_ms"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
 }
 
 type OauthAuthzCode struct {

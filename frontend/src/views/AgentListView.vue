@@ -53,7 +53,8 @@ function goToAgent(id: string) {
       >
         <template #title>
           <div style="display: flex; align-items: center; gap: 0.5rem; font-size: 1.1rem">
-            <i class="pi pi-box" />
+            <span v-if="agent.emoji" style="font-size: 1.3rem; line-height: 1">{{ agent.emoji }}</span>
+            <i v-else class="pi pi-box" />
             {{ agent.name }}
           </div>
         </template>

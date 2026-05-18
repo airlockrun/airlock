@@ -7,6 +7,7 @@ import { fromJson } from '@bufbuild/protobuf'
 import api from '@/api/client'
 import { ws } from '@/api/ws'
 import { useCatalogStore } from '@/stores/catalog'
+import { useAgentsStore } from '@/stores/agents'
 import { useAgentStatus } from '@/composables/useAgentStatus'
 import type { AgentInfo } from '@/gen/airlock/v1/types_pb'
 import { GetAgentDetailResponseSchema } from '@/gen/airlock/v1/api_pb'
@@ -32,6 +33,70 @@ const confirm = useConfirm()
 
 const catalog = useCatalogStore()
 const buildsStore = useBuildsStore()
+const agentsStore = useAgentsStore()
+
+// --- Rename (name + slug) ---
+const renameOpen = ref(false)
+const renameName = ref('')
+const renameSlug = ref('')
+const renaming = ref(false)
+const slugChanged = computed(
+  () => !!agent.value && renameSlug.value.trim() !== agent.value.slug,
+)
+
+function openRename() {
+  if (!agent.value) return
+  renameName.value = agent.value.name
+  renameSlug.value = agent.value.slug
+  renameOpen.value = true
+}
+
+async function saveRename() {
+  if (!agent.value) return
+  const name = renameName.value.trim()
+  const slug = renameSlug.value.trim()
+  if (!name) {
+    toast.add({ severity: 'warn', summary: 'Name is required', life: 3000 })
+    return
+  }
+  if (slug.length < 2 || slug.length > 63 || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) {
+    toast.add({
+      severity: 'warn',
+      summary: 'Invalid slug',
+      detail: '2–63 chars: lowercase letters/digits, single dashes between.',
+      life: 4000,
+    })
+    return
+  }
+  renaming.value = true
+  try {
+    const updated = await agentsStore.renameAgent(agent.value.id, name, slug)
+    agent.value = updated
+    renameOpen.value = false
+    toast.add({ severity: 'success', summary: 'Agent renamed', life: 2500 })
+    // Repaint the address bar to the new slug (same cosmetic mechanism
+    // as the router's vanity-URL afterEach; route.params.id stays UUID).
+    const parts = window.location.pathname.split('/')
+    if (parts[1] === 'agents' && parts[2]) {
+      parts[2] = updated.slug
+      history.replaceState(
+        history.state,
+        '',
+        parts.join('/') + window.location.search + window.location.hash,
+      )
+    }
+  } catch (e: any) {
+    const status = e?.response?.status
+    toast.add({
+      severity: 'error',
+      summary: status === 409 ? 'Slug already taken' : 'Rename failed',
+      detail: e?.response?.data?.error,
+      life: 5000,
+    })
+  } finally {
+    renaming.value = false
+  }
+}
 
 const agentId = route.params.id as string
 const agent = ref<AgentInfo | null>(null)
@@ -47,10 +112,18 @@ const tabsKey = ref(0)
 
 const actionItems = computed(() => {
   const items = []
-  if (agent.value?.status === 'active') {
-    items.push({ label: 'Stop', icon: 'pi pi-stop', command: () => confirmStop() })
-  } else if (agent.value?.status === 'stopped' || agent.value?.status === 'failed') {
-    items.push({ label: 'Start', icon: 'pi pi-play', command: () => doStart() })
+  // Drive Stop/Start off the *live* container state, not the lifecycle
+  // status, so a container Docker killed out-of-band (status still
+  // 'active', nothing running) still offers Start instead of trapping
+  // the user with a Stop that no-ops. Stop is idempotent server-side
+  // and also flips the lifecycle to 'stopped'.
+  const built = ['active', 'stopped', 'failed'].includes(agent.value?.status ?? '')
+  if (built) {
+    if (agent.value?.running) {
+      items.push({ label: 'Stop', icon: 'pi pi-stop', command: () => confirmStop() })
+    } else {
+      items.push({ label: 'Start', icon: 'pi pi-play', command: () => doStart() })
+    }
   }
   items.push({ label: 'Upgrade', icon: 'pi pi-arrow-up', command: () => doUpgrade() })
   items.push({ label: 'Delete', icon: 'pi pi-trash', command: () => confirmDelete() })
@@ -284,9 +357,30 @@ function goToChat() {
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; flex-wrap: wrap; gap: 0.75rem">
       <div>
         <div style="display: flex; align-items: center; gap: 0.75rem">
-          <h1 style="margin: 0; font-size: 1.5rem">{{ agent.name }}</h1>
+          <h1 style="margin: 0; font-size: 1.5rem">
+            <span v-if="agent.emoji" style="margin-right: 0.4rem">{{ agent.emoji }}</span>{{ agent.name }}
+          </h1>
           <span style="color: var(--p-text-muted-color)">{{ agent.slug }}</span>
+          <Button
+            icon="pi pi-pencil"
+            text
+            rounded
+            size="small"
+            severity="secondary"
+            aria-label="Rename agent"
+            v-tooltip.bottom="'Rename'"
+            @click="openRename"
+          />
           <Tag :value="useAgentStatus(agent.status).label" :severity="useAgentStatus(agent.status).severity" />
+          <!-- Runtime container state, separate from lifecycle status.
+               Only meaningful once the agent is built; an idle 'active'
+               agent legitimately shows 'Idle' (it auto-starts on use). -->
+          <Tag
+            v-if="['active', 'stopped', 'failed'].includes(agent.status)"
+            :value="agent.running ? 'Running' : 'Idle'"
+            :severity="agent.running ? 'success' : 'secondary'"
+            v-tooltip.bottom="agent.running ? 'A container is live' : 'No container running — starts automatically on next use'"
+          />
           <Tag
             v-if="setupStatus && setupStatus.total > 0"
             :value="`Needs setup (${setupStatus.total})`"
@@ -358,6 +452,31 @@ function goToChat() {
       <template #footer>
         <Button label="Cancel" severity="secondary" text @click="showUpgradeDialog = false" />
         <Button :label="rebuildMode ? 'Rebuild' : 'Upgrade'" :icon="rebuildMode ? 'pi pi-refresh' : 'pi pi-arrow-up'" @click="submitUpgrade" />
+      </template>
+    </Dialog>
+
+    <Dialog v-model:visible="renameOpen" header="Rename agent" modal style="width: 28rem">
+      <div style="display: flex; flex-direction: column; gap: 1rem; margin-top: 0.25rem">
+        <div>
+          <label style="display: block; margin-bottom: 0.35rem; font-size: 0.85rem">Name</label>
+          <InputText v-model="renameName" style="width: 100%" autofocus />
+        </div>
+        <div>
+          <label style="display: block; margin-bottom: 0.35rem; font-size: 0.85rem">Slug</label>
+          <InputText v-model="renameSlug" style="width: 100%" />
+          <small style="display: block; margin-top: 0.35rem; color: var(--p-text-muted-color)">
+            Lowercase letters, digits and single dashes (2–63 chars).
+          </small>
+        </div>
+        <Message v-if="slugChanged" severity="warn" :closable="false">
+          Changing the slug re-points sibling <code>agent_&lt;slug&gt;</code> bindings and
+          breaks any externally-configured MCP URL using the old slug. In-app
+          links keep working.
+        </Message>
+      </div>
+      <template #footer>
+        <Button label="Cancel" severity="secondary" text :disabled="renaming" @click="renameOpen = false" />
+        <Button label="Save" icon="pi pi-check" :loading="renaming" @click="saveRename" />
       </template>
     </Dialog>
   </div>

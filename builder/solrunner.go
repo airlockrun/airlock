@@ -10,6 +10,7 @@ import (
 
 	"github.com/airlockrun/airlock/container"
 	"github.com/airlockrun/airlock/db/dbq"
+	"github.com/airlockrun/airlock/llmledger"
 	"github.com/airlockrun/goai/stream"
 	"github.com/airlockrun/goai/tool"
 	sol "github.com/airlockrun/sol"
@@ -27,6 +28,9 @@ import (
 type solRunOpts struct {
 	WorkDir         string      // host path to sparse checkout
 	AgentDir        string      // container-side path (e.g., /workspace/agents/{id})
+	AgentID         pgtype.UUID // owning agent — for the llm_usage row
+	BuildID         pgtype.UUID // agent_builds row this codegen attributes to
+	BuildType       string      // "build" | "upgrade" — llm_usage.call_kind
 	BuildProviderID pgtype.UUID // providers row FK; pairs with BuildModel
 	BuildModel      string      // bare model name (e.g. "gpt-5"); empty ⇄ FK invalid
 	Prompt          string      // prompt for the runner
@@ -261,7 +265,14 @@ func (b *BuildService) runSolInProcess(ctx context.Context, opts solRunOpts) (*s
 		{Permission: "*", Pattern: "*", Action: "allow"},
 	})
 
+	codegenStart := time.Now()
 	exitedResult, err := runner.RunUntilExit(ctx, opts.Prompt, sol.RunUntilExitOptions{MaxNudges: 2})
+	// Codegen LLM spend bypasses the runtime proxy (in-process runner,
+	// direct provider model), so record it straight into the ledger here
+	// — both the success and error paths, since a failed codegen still
+	// burned tokens. resolveModel filled opts.BuildModel from the default
+	// when the agent had no override, so it's the effective model now.
+	b.recordBuildUsage(opts, rp.CatalogID, exitedResult, err, time.Since(codegenStart))
 	if err != nil {
 		// Preserve the runner's status when it filled one in (RunCancelled
 		// on ctx cancel) — overwriting to RunFailed unconditionally would
@@ -290,6 +301,42 @@ func (b *BuildService) runSolInProcess(ctx context.Context, opts solRunOpts) (*s
 		out.ExitStatus, out.ExitMessage = exitState.Result()
 	}
 	return out, nil
+}
+
+// recordBuildUsage writes the codegen run's LLM spend to the shared
+// llm_usage ledger (attributed to the build) and refreshes the
+// agent_builds aggregate. Best-effort and on a fresh bounded context so
+// a cancelled/failed build still records the tokens it already burned.
+// exited may be nil (runner returned before producing a result).
+func (b *BuildService) recordBuildUsage(opts solRunOpts, providerCatalogID string, exited *sol.ExitedRunResult, runErr error, latency time.Duration) {
+	if !opts.BuildID.Valid {
+		return // nothing to attribute to (defensive — callers set it)
+	}
+
+	c := llmledger.Capture{
+		AgentID:           opts.AgentID,
+		BuildID:           opts.BuildID,
+		ProviderCatalogID: providerCatalogID,
+		Model:             opts.BuildModel,
+		Capability:        "text",
+		CallKind:          opts.BuildType, // "build" | "upgrade"
+		Slug:              "codegen",
+		FinishReason:      "error",
+		Errored:           runErr != nil,
+		Latency:           latency,
+	}
+	if exited != nil && exited.RunResult != nil {
+		c.TokensFromStreamUsage(exited.RunResult.Usage)
+		c.FinishReason = string(exited.RunResult.Status)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	q := dbq.New(b.db.Pool())
+	llmledger.Record(ctx, q, b.logger, c)
+	if err := q.UpdateBuildLLMStats(ctx, opts.BuildID); err != nil {
+		b.logger.Error("aggregate build llm stats", zap.Error(err))
+	}
 }
 
 // resolvedProvider holds the result of looking up and decrypting a provider.

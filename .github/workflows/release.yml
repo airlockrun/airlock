@@ -1,0 +1,106 @@
+# Cut a release. The ONLY path that creates a v* tag.
+#
+# workflow_dispatch(version) → gate → tag → publish.
+#
+#   gate    All pre-tag checks. Mirrors release-airlock.sh's old local
+#           preflight: version format, tag-not-exists, drift (with
+#           RELEASE_TAG), migration immutability, vet, test, build.
+#           Anything wrong fails HERE — before the tag exists. A pushed
+#           tag is immutable (proxy.golang.org caches vX.Y.Z forever; a
+#           force-retag is a checksum mismatch for every `go get`), so
+#           post-push detection is useless for this class.
+#   tag     Creates + pushes the annotated tag (GITHUB_TOKEN). A tag
+#           ruleset restricts refs/tags/v* creation to this workflow's
+#           identity, so this is the only way a release tag exists.
+#   publish Calls publish-images.yml (reusable). GITHUB_TOKEN tag pushes
+#           don't fan out to push triggers — that's why publish is an
+#           explicit `needs: tag` call, not a tag-push reaction.
+#
+# Same cycle for everyone: nobody tags locally. release-airlock.sh just
+# dispatches this.
+
+name: release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (vX.Y.Z)'
+        required: true
+        type: string
+
+permissions:
+  contents: write   # tag job pushes the tag
+  packages: write   # publish job (reusable) pushes images
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      # Full history + tags: check-migrations compares against the latest
+      # final release tag. Shallow checkout has none and passes vacuously.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Validate version + tag does not exist
+        run: |
+          V='${{ inputs.version }}'
+          if ! [[ "$V" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::version must look like vX.Y.Z (got: $V)"; exit 1
+          fi
+          if git rev-parse "$V" >/dev/null 2>&1; then
+            echo "::error::tag $V already exists — bump to a new version"; exit 1
+          fi
+
+      - name: Drift check
+        env:
+          RELEASE_TAG: ${{ inputs.version }}
+        run: ./scripts/check-versions.sh
+
+      - name: Migration immutability
+        run: ./scripts/check-migrations.sh
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # The scaffold integration test shells out to `templ generate`.
+      - name: install templ
+        run: go install github.com/a-h/templ/cmd/templ@v0.3.865
+
+      # No GOWORK=off needed: a single-repo checkout has no go.work, so
+      # this already resolves through the public proxy — the exact view
+      # the local script forces with GOWORK=off against the hq workspace.
+      - name: go vet
+        run: go vet ./...
+      - name: go test
+        run: go test ./...
+      - name: go build
+        run: go build ./...
+
+  tag:
+    needs: gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Create + push tag
+        run: |
+          V='${{ inputs.version }}'
+          git config user.name  'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git tag -a "$V" -m "$V"
+          git push origin "$V"
+
+  publish:
+    needs: tag
+    uses: ./.github/workflows/publish-images.yml
+    with:
+      version: ${{ inputs.version }}
+    permissions:
+      contents: read
+      packages: write

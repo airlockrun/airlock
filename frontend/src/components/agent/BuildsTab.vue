@@ -16,6 +16,14 @@ function statusSeverity(status: string): string {
   }
 }
 
+function formatCost(cost: number): string {
+  if (!cost) return '—'
+  // Match RunsTab: 4 decimals below $1 so sub-cent codegen spend
+  // doesn't read as zero.
+  if (cost < 1) return `$${cost.toFixed(4)}`
+  return `$${cost.toFixed(2)}`
+}
+
 function formatTimestamp(ts: any): string {
   if (!ts) return '—'
   if (ts.seconds !== undefined) {
@@ -64,6 +72,11 @@ onMounted(() => {
           {{ formatTimestamp(b.startedAt) }}
         </template>
       </Column>
+      <Column header="Cost">
+        <template #body="{ data: b }">
+          {{ formatCost(b.llmCostEstimate) }}
+        </template>
+      </Column>
       <Column header="Finished">
         <template #body="{ data: b }">
           {{ formatTimestamp(b.finishedAt) }}
@@ -75,6 +88,7 @@ onMounted(() => {
       <Column header="Type"><template #body><Skeleton width="4rem" /></template></Column>
       <Column header="Status"><template #body><Skeleton width="5rem" /></template></Column>
       <Column header="Started"><template #body><Skeleton /></template></Column>
+      <Column header="Cost"><template #body><Skeleton width="4rem" /></template></Column>
       <Column header="Finished"><template #body><Skeleton /></template></Column>
     </DataTable>
   </div>

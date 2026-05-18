@@ -183,6 +183,16 @@ func (h *agentHandler) Sync(w http.ResponseWriter, r *http.Request) {
 			Description: req.Description,
 		})
 	}
+	// Emoji is cosmetic: persist a sane value, otherwise drop it (never
+	// fail the whole sync over decoration). cleanAgentEmoji bounds
+	// length and strips control chars without enforcing a single rune
+	// (ZWJ / skin-tone / flag emoji are multi-codepoint).
+	if e, ok := cleanAgentEmoji(req.Emoji); ok {
+		_ = q.UpdateAgentEmoji(ctx, dbq.UpdateAgentEmojiParams{
+			ID:    pgAgentID,
+			Emoji: e,
+		})
+	}
 
 	// Sync is authoritative for extra_prompts — absent field resets to
 	// empty so removing an AddExtraPrompt call and resyncing wipes stale
@@ -653,4 +663,23 @@ func (h *agentHandler) buildSiblingInfos(ctx context.Context, q *dbq.Queries, pa
 		})
 	}
 	return out, nil
+}
+
+// cleanAgentEmoji bounds and sanitizes a synced agent emoji. It is
+// deliberately NOT "one rune" — valid emoji are routinely multi-codepoint
+// (ZWJ sequences like 👨‍💻, skin-tone modifiers, two-regional-indicator
+// flags). It only trims, caps the byte length, and rejects control
+// characters / newlines. Returns ok=false for empty or rejected input so
+// the caller skips the update rather than failing the sync over cosmetics.
+func cleanAgentEmoji(s string) (string, bool) {
+	s = strings.TrimSpace(s)
+	if s == "" || len(s) > 16 {
+		return "", false
+	}
+	for _, r := range s {
+		if r < 0x20 || r == 0x7f {
+			return "", false
+		}
+	}
+	return s, true
 }

@@ -39,7 +39,8 @@ type conversationsHandler struct {
 }
 
 // CreateConversation handles POST /api/v1/agents/{agentID}/conversations.
-// DM-only: upserts on (agent_id, user_id).
+// Web is multi-conversation: every call mints a fresh thread the client
+// then addresses by id.
 func (h *conversationsHandler) CreateConversation(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	agentID, err := parseUUID(chi.URLParam(r, "agentID"))
@@ -61,10 +62,9 @@ func (h *conversationsHandler) CreateConversation(w http.ResponseWriter, r *http
 	}
 
 	q := dbq.New(h.db.Pool())
-	conv, err := q.GetOrCreateConversation(ctx, dbq.GetOrCreateConversationParams{
+	conv, err := q.CreateWebConversation(ctx, dbq.CreateWebConversationParams{
 		AgentID: toPgUUID(agentID),
 		UserID:  toPgUUID(userID),
-		Source:  "web",
 		Title:   req.Title,
 	})
 	if err != nil {
@@ -74,7 +74,7 @@ func (h *conversationsHandler) CreateConversation(w http.ResponseWriter, r *http
 	}
 
 	writeProto(w, http.StatusCreated, &airlockv1.CreateConversationResponse{
-		Conversation: conversationToProto(rowToConversation(conv)),
+		Conversation: conversationToProto(conv),
 	})
 }
 
@@ -112,6 +112,32 @@ func (h *conversationsHandler) ListConversations(w http.ResponseWriter, r *http.
 	writeProto(w, http.StatusOK, &airlockv1.ListConversationsResponse{Conversations: out})
 }
 
+// ListAllConversations handles GET /api/v1/conversations — every web
+// conversation the user owns across all agents, newest first. Backs the
+// global sidebar list; each ConversationInfo carries agent_id so the UI
+// labels rows with the agent's name.
+func (h *conversationsHandler) ListAllConversations(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	userID := auth.UserIDFromContext(ctx)
+	if userID == uuid.Nil {
+		writeError(w, http.StatusUnauthorized, "missing user identity")
+		return
+	}
+
+	convs, err := dbq.New(h.db.Pool()).ListAllWebConversationsByUser(ctx, toPgUUID(userID))
+	if err != nil {
+		h.logger.Error("list all conversations", zap.Error(err))
+		writeError(w, http.StatusInternalServerError, "failed to list conversations")
+		return
+	}
+
+	out := make([]*airlockv1.ConversationInfo, len(convs))
+	for i, c := range convs {
+		out[i] = conversationToProto(c)
+	}
+	writeProto(w, http.StatusOK, &airlockv1.ListConversationsResponse{Conversations: out})
+}
+
 // GetConversation handles GET /api/v1/conversations/{convID}.
 func (h *conversationsHandler) GetConversation(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
@@ -121,9 +147,23 @@ func (h *conversationsHandler) GetConversation(w http.ResponseWriter, r *http.Re
 		return
 	}
 
+	userID := auth.UserIDFromContext(ctx)
+	if userID == uuid.Nil {
+		writeError(w, http.StatusUnauthorized, "missing user identity")
+		return
+	}
+
 	q := dbq.New(h.db.Pool())
 	conv, err := q.GetConversationByID(ctx, toPgUUID(convID))
-	if err != nil {
+	// Ownership + surface gate. This endpoint is reachable by
+	// conversation id alone; without the owner check any authed user
+	// could read any conversation (IDOR). a2a rows are a sibling-call
+	// transport detail, never linked from the web UI — reject by id too.
+	// Merge all three into one 404 (don't leak which conversations
+	// exist on which surface).
+	if err != nil ||
+		!conv.UserID.Valid || uuid.UUID(conv.UserID.Bytes) != userID ||
+		conv.Source == "a2a" {
 		writeError(w, http.StatusNotFound, "conversation not found")
 		return
 	}
@@ -154,8 +194,11 @@ func (h *conversationsHandler) GetConversation(w http.ResponseWriter, r *http.Re
 		HasOlderMessages: hasOlder,
 	}
 
-	// Check for a suspended run with pending tool calls.
-	if suspendedRun, err := q.GetLatestSuspendedRun(ctx, conv.AgentID); err == nil {
+	// Check for a suspended run with pending tool calls — scoped to THIS
+	// conversation. Agent-wide lookup would surface a sibling-delegated
+	// (source='a2a') suspension as an actionable card in an unrelated web
+	// chat on the same agent.
+	if suspendedRun, err := q.GetLatestSuspendedRunByConversation(ctx, convID.String()); err == nil {
 		var checkpoint struct {
 			SuspensionContext struct {
 				PendingToolCalls []struct {
@@ -282,12 +325,22 @@ func (h *conversationsHandler) DeleteConversation(w http.ResponseWriter, r *http
 		return
 	}
 
+	userID := auth.UserIDFromContext(ctx)
+	if userID == uuid.Nil {
+		writeError(w, http.StatusUnauthorized, "missing user identity")
+		return
+	}
+
 	q := dbq.New(h.db.Pool())
 
-	// Resolve agent_id so we can reconstruct canonical S3 keys. Missing row
-	// is a real 404 — the subsequent DB delete would fail anyway.
+	// Resolve agent_id so we can reconstruct canonical S3 keys. Owner +
+	// surface gate (same as GetConversation): without it any authed user
+	// could delete any conversation by id (IDOR); a2a transport rows are
+	// never user-deletable from the web UI. Missing/!owned/a2a all 404.
 	conv, err := q.GetConversationByID(ctx, toPgUUID(convID))
-	if err != nil {
+	if err != nil ||
+		!conv.UserID.Valid || uuid.UUID(conv.UserID.Bytes) != userID ||
+		conv.Source == "a2a" {
 		writeError(w, http.StatusNotFound, "conversation not found")
 		return
 	}
@@ -353,17 +406,39 @@ func (h *conversationsHandler) Prompt(w http.ResponseWriter, r *http.Request) {
 
 	q := dbq.New(h.db.Pool())
 
-	// Resolve or create conversation — DM-only: one per (agent, user).
-	conv, err := q.GetOrCreateConversation(ctx, dbq.GetOrCreateConversationParams{
-		AgentID: toPgUUID(agentID),
-		UserID:  toPgUUID(userID),
-		Source:  "web",
-		Title:   truncate(req.Message, 100),
-	})
-	if err != nil {
-		h.logger.Error("create conversation", zap.Error(err))
-		writeError(w, http.StatusInternalServerError, "failed to create conversation")
-		return
+	// Resolve the target conversation. A conversation_id addresses an
+	// existing web thread (multi-conversation); it must belong to this
+	// agent, be owned by this user, and be a web thread — never a
+	// bridge/a2a row reachable by id. Empty conversation_id starts a new
+	// web thread (the "new chat" affordance / first message).
+	var conv dbq.AgentConversation
+	if req.ConversationId != "" {
+		cid, perr := parseUUID(req.ConversationId)
+		if perr != nil {
+			writeError(w, http.StatusBadRequest, "invalid conversation ID")
+			return
+		}
+		existing, gerr := q.GetConversationByID(ctx, toPgUUID(cid))
+		if gerr != nil ||
+			uuid.UUID(existing.AgentID.Bytes) != agentID ||
+			!existing.UserID.Valid || uuid.UUID(existing.UserID.Bytes) != userID ||
+			existing.Source != "web" {
+			writeError(w, http.StatusNotFound, "conversation not found")
+			return
+		}
+		conv = existing
+	} else {
+		created, cerr := q.CreateWebConversation(ctx, dbq.CreateWebConversationParams{
+			AgentID: toPgUUID(agentID),
+			UserID:  toPgUUID(userID),
+			Title:   truncate(req.Message, 100),
+		})
+		if cerr != nil {
+			h.logger.Error("create conversation", zap.Error(cerr))
+			writeError(w, http.StatusInternalServerError, "failed to create conversation")
+			return
+		}
+		conv = created
 	}
 	convID := conv.ID
 	convIDStr := convert.PgUUIDToString(convID)
@@ -375,7 +450,7 @@ func (h *conversationsHandler) Prompt(w http.ResponseWriter, r *http.Request) {
 	// we fall through to the normal forward-to-agent path.
 	access := trigger.ResolveAgentAccess(ctx, q, agentID, userID)
 	var forceCompact bool
-	if cmd, err := trigger.TrySlashCommand(ctx, q, h.dispatcher, convID, agentID, access, req.Message, h.logger); err != nil {
+	if cmd, err := trigger.TrySlashCommand(ctx, q, h.dispatcher, convID, access, req.Message, h.logger); err != nil {
 		h.logger.Error("slash command failed", zap.Error(err))
 		writeError(w, http.StatusInternalServerError, "command failed")
 		return
@@ -491,8 +566,11 @@ func (h *conversationsHandler) Prompt(w http.ResponseWriter, r *http.Request) {
 	h.convLocks.Lock(convIDStr)
 
 	// Check for suspended run inside the lock to prevent races where two
-	// concurrent requests both find the same suspended run.
-	if suspendedRun, err := q.GetLatestSuspendedRun(ctx, toPgUUID(agentID)); err == nil {
+	// concurrent requests both find the same suspended run. Conversation-
+	// scoped: a web prompt must only ever resolve the suspension of its
+	// own thread, never a sibling-delegated (source='a2a') suspension on
+	// the same agent.
+	if suspendedRun, err := q.GetLatestSuspendedRunByConversation(ctx, convIDStr); err == nil {
 		input.ResumeRunID = convert.PgUUIDToString(suspendedRun.ID)
 		input.Approved = req.Approved
 		// On deny, sol persists the re-reason nudge ("Rejected by user.")
@@ -546,17 +624,12 @@ func (h *conversationsHandler) Prompt(w http.ResponseWriter, r *http.Request) {
 		}); err != nil {
 			h.logger.Error("update run status", zap.Error(err))
 		}
-		// Aggregate LLM telemetry. Idempotent with the agent-side write in
-		// agent_run.go RunComplete — whichever runs last reflects final state.
-		// Important for the timeout path where the agent never called
-		// RunComplete: any messages persisted before the agent died still
-		// roll up here.
-		costIn, costOut := runLLMCostRates(bgCtx, bgQ, h.logger, toPgUUID(agentID))
-		if err := bgQ.UpdateRunLLMStats(bgCtx, dbq.UpdateRunLLMStatsParams{
-			RunID:      toPgUUID(runID),
-			CostInput:  costIn,
-			CostOutput: costOut,
-		}); err != nil {
+		// Aggregate LLM telemetry from the llm_usage ledger. Idempotent
+		// with the agent-side write in agent_run.go RunComplete — whichever
+		// runs last reflects final state. Important for the timeout path
+		// where the agent never called RunComplete: ledger rows the proxy
+		// wrote before the agent died still roll up here.
+		if err := bgQ.UpdateRunLLMStats(bgCtx, toPgUUID(runID)); err != nil {
 			h.logger.Error("aggregate run llm stats", zap.Error(err))
 		}
 	}()
@@ -689,12 +762,7 @@ func (h *conversationsHandler) NotifyUpgradeComplete(ctx context.Context, agentI
 		}); err != nil {
 			h.logger.Error("update upgrade run status", zap.Error(err))
 		}
-		costIn, costOut := runLLMCostRates(bgCtx, bgQ, h.logger, toPgUUID(agentID))
-		if err := bgQ.UpdateRunLLMStats(bgCtx, dbq.UpdateRunLLMStatsParams{
-			RunID:      toPgUUID(runID),
-			CostInput:  costIn,
-			CostOutput: costOut,
-		}); err != nil {
+		if err := bgQ.UpdateRunLLMStats(bgCtx, toPgUUID(runID)); err != nil {
 			h.logger.Error("aggregate upgrade run llm stats", zap.Error(err))
 		}
 	}()
@@ -754,20 +822,30 @@ func (h *conversationsHandler) UploadFile(w http.ResponseWriter, r *http.Request
 
 // --- helpers ---
 
-// rowToConversation converts a GetOrCreateConversationRow to AgentConversation.
-func rowToConversation(r dbq.GetOrCreateConversationRow) dbq.AgentConversation {
-	return dbq.AgentConversation{
-		ID:         r.ID,
-		AgentID:    r.AgentID,
-		Source:     r.Source,
-		ExternalID: r.ExternalID,
-		Title:      r.Title,
-		Metadata:   r.Metadata,
-		CreatedAt:  r.CreatedAt,
-		UpdatedAt:  r.UpdatedAt,
-		BridgeID:   r.BridgeID,
-		UserID:     r.UserID,
+// ownedConversation loads the {convID} route param and enforces the
+// same owner + surface gate as GetConversation/DeleteConversation: the
+// caller must own it and it must not be an a2a transport row. On any
+// failure it writes the response and returns ok=false so the handler
+// just returns. Used by the conversation-scoped topic endpoints.
+func (h *conversationsHandler) ownedConversation(ctx context.Context, w http.ResponseWriter, r *http.Request) (dbq.AgentConversation, bool) {
+	convID, err := parseUUID(chi.URLParam(r, "convID"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid conversation ID")
+		return dbq.AgentConversation{}, false
 	}
+	userID := auth.UserIDFromContext(ctx)
+	if userID == uuid.Nil {
+		writeError(w, http.StatusUnauthorized, "missing user identity")
+		return dbq.AgentConversation{}, false
+	}
+	conv, err := dbq.New(h.db.Pool()).GetConversationByID(ctx, toPgUUID(convID))
+	if err != nil ||
+		!conv.UserID.Valid || uuid.UUID(conv.UserID.Bytes) != userID ||
+		conv.Source == "a2a" {
+		writeError(w, http.StatusNotFound, "conversation not found")
+		return dbq.AgentConversation{}, false
+	}
+	return conv, true
 }
 
 func conversationToProto(c dbq.AgentConversation) *airlockv1.ConversationInfo {
@@ -791,8 +869,6 @@ func messageToProto(ctx context.Context, s3Client *storage.S3Client, logger *zap
 		Seq:          m.Seq,
 		Role:         m.Role,
 		Content:      m.Content,
-		TokensIn:     m.TokensIn,
-		TokensOut:    m.TokensOut,
 		CostEstimate: pgNumericToFloat(m.CostEstimate),
 		CreatedAt:    convert.PgTimestampToProto(m.CreatedAt),
 		Source:       m.Source,
@@ -822,47 +898,29 @@ func truncate(s string, maxLen int) string {
 	return ""
 }
 
-// ListTopics handles GET /api/v1/agents/{agentID}/topics.
-// Returns all registered topics with subscription status for the user's conversation.
+// ListTopics handles GET /api/v1/conversations/{convID}/topics.
+// Returns the agent's topics with THIS conversation's subscription
+// state — the conversation that subscribes is the one that receives.
 func (h *conversationsHandler) ListTopics(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	agentID, err := parseUUID(chi.URLParam(r, "agentID"))
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid agent ID")
-		return
-	}
-
-	userID := auth.UserIDFromContext(ctx)
-	if userID == uuid.Nil {
-		writeError(w, http.StatusUnauthorized, "missing user identity")
+	conv, ok := h.ownedConversation(ctx, w, r)
+	if !ok {
 		return
 	}
 
 	q := dbq.New(h.db.Pool())
 
-	// Get all topics for this agent.
-	topics, err := q.ListTopicsByAgent(ctx, toPgUUID(agentID))
+	// Get all topics for this conversation's agent.
+	topics, err := q.ListTopicsByAgent(ctx, conv.AgentID)
 	if err != nil {
 		h.logger.Error("list topics", zap.Error(err))
 		writeError(w, http.StatusInternalServerError, "failed to list topics")
 		return
 	}
 
-	// Get user's conversation to check subscriptions.
-	conv, err := q.GetOrCreateConversation(ctx, dbq.GetOrCreateConversationParams{
-		AgentID: toPgUUID(agentID),
-		UserID:  toPgUUID(userID),
-		Source:  "web",
-	})
-	if err != nil {
-		h.logger.Error("get conversation for topics", zap.Error(err))
-		writeError(w, http.StatusInternalServerError, "failed to resolve conversation")
-		return
-	}
-
-	// Get current subscriptions.
+	// Get this conversation's subscriptions.
 	subs, err := q.ListTopicSubscriptions(ctx, dbq.ListTopicSubscriptionsParams{
-		AgentID:        toPgUUID(agentID),
+		AgentID:        conv.AgentID,
 		ConversationID: conv.ID,
 	})
 	if err != nil {
@@ -890,12 +948,11 @@ func (h *conversationsHandler) ListTopics(w http.ResponseWriter, r *http.Request
 	writeProto(w, http.StatusOK, &airlockv1.ListTopicsResponse{Topics: out})
 }
 
-// SubscribeTopic handles POST /api/v1/agents/{agentID}/topics/{slug}/subscribe.
+// SubscribeTopic handles POST /api/v1/conversations/{convID}/topics/{slug}/subscribe.
 func (h *conversationsHandler) SubscribeTopic(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	agentID, err := parseUUID(chi.URLParam(r, "agentID"))
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid agent ID")
+	conv, ok := h.ownedConversation(ctx, w, r)
+	if !ok {
 		return
 	}
 	slug := chi.URLParam(r, "slug")
@@ -904,33 +961,14 @@ func (h *conversationsHandler) SubscribeTopic(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	userID := auth.UserIDFromContext(ctx)
-	if userID == uuid.Nil {
-		writeError(w, http.StatusUnauthorized, "missing user identity")
-		return
-	}
-
 	q := dbq.New(h.db.Pool())
 
-	// Look up topic.
 	topic, err := q.GetTopicBySlug(ctx, dbq.GetTopicBySlugParams{
-		AgentID: toPgUUID(agentID),
+		AgentID: conv.AgentID,
 		Slug:    slug,
 	})
 	if err != nil {
 		writeError(w, http.StatusNotFound, "topic not found")
-		return
-	}
-
-	// Get or create conversation.
-	conv, err := q.GetOrCreateConversation(ctx, dbq.GetOrCreateConversationParams{
-		AgentID: toPgUUID(agentID),
-		UserID:  toPgUUID(userID),
-		Source:  "web",
-	})
-	if err != nil {
-		h.logger.Error("get conversation for subscribe", zap.Error(err))
-		writeError(w, http.StatusInternalServerError, "failed to resolve conversation")
 		return
 	}
 
@@ -946,12 +984,11 @@ func (h *conversationsHandler) SubscribeTopic(w http.ResponseWriter, r *http.Req
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// UnsubscribeTopic handles DELETE /api/v1/agents/{agentID}/topics/{slug}/subscribe.
+// UnsubscribeTopic handles DELETE /api/v1/conversations/{convID}/topics/{slug}/subscribe.
 func (h *conversationsHandler) UnsubscribeTopic(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	agentID, err := parseUUID(chi.URLParam(r, "agentID"))
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid agent ID")
+	conv, ok := h.ownedConversation(ctx, w, r)
+	if !ok {
 		return
 	}
 	slug := chi.URLParam(r, "slug")
@@ -960,33 +997,14 @@ func (h *conversationsHandler) UnsubscribeTopic(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	userID := auth.UserIDFromContext(ctx)
-	if userID == uuid.Nil {
-		writeError(w, http.StatusUnauthorized, "missing user identity")
-		return
-	}
-
 	q := dbq.New(h.db.Pool())
 
-	// Look up topic.
 	topic, err := q.GetTopicBySlug(ctx, dbq.GetTopicBySlugParams{
-		AgentID: toPgUUID(agentID),
+		AgentID: conv.AgentID,
 		Slug:    slug,
 	})
 	if err != nil {
 		writeError(w, http.StatusNotFound, "topic not found")
-		return
-	}
-
-	// Get conversation.
-	conv, err := q.GetOrCreateConversation(ctx, dbq.GetOrCreateConversationParams{
-		AgentID: toPgUUID(agentID),
-		UserID:  toPgUUID(userID),
-		Source:  "web",
-	})
-	if err != nil {
-		h.logger.Error("get conversation for unsubscribe", zap.Error(err))
-		writeError(w, http.StatusInternalServerError, "failed to resolve conversation")
 		return
 	}
 

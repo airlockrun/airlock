@@ -23,10 +23,9 @@ func testConversation(t *testing.T, agentID, userID uuid.UUID) uuid.UUID {
 	ctx := context.Background()
 	q := dbq.New(testDB.Pool())
 
-	conv, err := q.GetOrCreateConversation(ctx, dbq.GetOrCreateConversationParams{
+	conv, err := q.CreateWebConversation(ctx, dbq.CreateWebConversationParams{
 		AgentID: toPgUUID(agentID),
 		UserID:  toPgUUID(userID),
-		Source:  "web",
 		Title:   "test",
 	})
 	if err != nil {
@@ -201,7 +200,7 @@ func TestClearCommand_ResolvesSuspendedRun(t *testing.T) {
 	}
 
 	// Dispatch /clear via the shared slash-command helper.
-	res, err := trigger.TrySlashCommand(ctx, q, nil, toPgUUID(convID), agentID, agentsdk.AccessUser, "/clear", zap.NewNop())
+	res, err := trigger.TrySlashCommand(ctx, q, nil, toPgUUID(convID), agentsdk.AccessUser, "/clear", zap.NewNop())
 	if err != nil {
 		t.Fatalf("TrySlashCommand: %v", err)
 	}

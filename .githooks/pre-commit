@@ -3,7 +3,10 @@
 #
 #   1. Version-invariant check (Dockerfile↔go.mod drift, compose tags,
 #      README pin, version.go). Same script CI runs on tag push.
-#   2. gofmt on the Go files staged for this commit. Blocks the commit
+#   2. Migration immutability — a migration shipped in a release tag
+#      cannot be changed or deleted (goose has no checksum; a silent
+#      diverge otherwise). New/in-dev migrations are unrestricted.
+#   3. gofmt on the Go files staged for this commit. Blocks the commit
 #      if any need formatting; does NOT auto-rewrite (explicit, no
 #      surprise edits to your working tree).
 #
@@ -18,6 +21,7 @@ set -e
 repo_root=$(git rev-parse --show-toplevel)
 
 "$repo_root/scripts/check-versions.sh"
+"$repo_root/scripts/check-migrations.sh"
 
 # Only the .go files staged in this commit (Added/Copied/Modified/Renamed),
 # so an unrelated unformatted file elsewhere in the tree doesn't block you.

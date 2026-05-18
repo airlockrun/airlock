@@ -283,6 +283,9 @@ func (b *BuildService) doUpgrade(ctx context.Context, q *dbq.Queries, input Upgr
 	solResult, err := b.runSolInProcess(ctx, solRunOpts{
 		WorkDir:      workDir,
 		AgentDir:     fmt.Sprintf("/workspace/agents/%s", agentID),
+		AgentID:      agent.ID,
+		BuildID:      build.ID,
+		BuildType:    "upgrade",
 		BuildModel:   agent.BuildModel,
 		Prompt:       buildUpgradePrompt(agent, input, hasDiagnostics),
 		TestDBURL:    testDBURL,

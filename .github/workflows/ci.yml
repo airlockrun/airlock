@@ -30,6 +30,19 @@ jobs:
       - name: check-versions
         run: ./scripts/check-versions.sh
 
+  migrations:
+    runs-on: ubuntu-latest
+    steps:
+      # Full history + tags: the immutability check compares migrations
+      # against the latest final release tag. Default shallow checkout
+      # has no tags and the check would pass vacuously.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - name: check-migrations
+        run: ./scripts/check-migrations.sh
+
   fmt:
     runs-on: ubuntu-latest
     steps:

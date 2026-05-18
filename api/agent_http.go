@@ -1,6 +1,8 @@
 package api
 
 import (
+	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"mime"
@@ -12,6 +14,7 @@ import (
 
 	"github.com/airlockrun/agentsdk"
 	"github.com/airlockrun/airlock/auth"
+	"github.com/airlockrun/airlock/storage"
 	"github.com/airlockrun/sol/webfetch"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -86,11 +89,10 @@ func (h *agentHandler) AgentHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	defer resp.Body.Close()
 
-	// Collect response headers (first value only).
-	headers := make(map[string]string, len(resp.Header))
-	for k := range resp.Header {
-		headers[k] = resp.Header.Get(k)
-	}
+	// Curated headers by default — the handful an agent reasons about.
+	// Full set only on explicit opt-in (raw passthrough is mostly CSP /
+	// Via / Alt-Svc / telemetry noise that burns the model's context).
+	headers := curateHeaders(resp.Header, req.AllHeaders)
 
 	ct := resp.Header.Get("Content-Type")
 	binary := isBinaryContentType(ct)
@@ -103,7 +105,8 @@ func (h *agentHandler) AgentHTTP(w http.ResponseWriter, r *http.Request) {
 			writeJSONError(w, http.StatusBadRequest, "invalid saveAs: "+err.Error())
 			return
 		}
-		if err := h.s3.PutObject(r.Context(), s3Key, resp.Body, resp.ContentLength); err != nil {
+		size, preview, err := streamSaveToS3(r.Context(), h.s3, s3Key, resp.Body, binary)
+		if err != nil {
 			h.logger.Error("saveAs: S3 put failed", zap.String("key", s3Key), zap.Error(err))
 			writeJSONError(w, http.StatusInternalServerError, "failed to save response")
 			return
@@ -112,8 +115,10 @@ func (h *agentHandler) AgentHTTP(w http.ResponseWriter, r *http.Request) {
 			Status:      resp.StatusCode,
 			Headers:     headers,
 			ContentType: ct,
-			Size:        contentLengthInt(resp.ContentLength),
+			Size:        size,
+			BodyPreview: preview,
 			SavedTo:     req.SaveAs,
+			Note:        fmt.Sprintf("%d bytes saved to %s.", size, req.SaveAs),
 		})
 		return
 	}
@@ -128,7 +133,8 @@ func (h *agentHandler) AgentHTTP(w http.ResponseWriter, r *http.Request) {
 			writeJSONError(w, http.StatusInternalServerError, "failed to save response")
 			return
 		}
-		if err := h.s3.PutObject(r.Context(), s3Key, resp.Body, resp.ContentLength); err != nil {
+		size, _, err := streamSaveToS3(r.Context(), h.s3, s3Key, resp.Body, true)
+		if err != nil {
 			h.logger.Error("auto-save: S3 put failed", zap.String("key", s3Key), zap.Error(err))
 			writeJSONError(w, http.StatusInternalServerError, "failed to save response")
 			return
@@ -137,8 +143,9 @@ func (h *agentHandler) AgentHTTP(w http.ResponseWriter, r *http.Request) {
 			Status:      resp.StatusCode,
 			Headers:     headers,
 			ContentType: ct,
-			Size:        contentLengthInt(resp.ContentLength),
+			Size:        size,
 			SavedTo:     key,
+			Note:        fmt.Sprintf("%d bytes of binary %s saved to %s.", size, ct, key),
 		})
 		return
 	}
@@ -178,8 +185,10 @@ func (h *agentHandler) AgentHTTP(w http.ResponseWriter, r *http.Request) {
 				Status:      resp.StatusCode,
 				Headers:     headers,
 				ContentType: ct,
+				Size:        len(markdown),
+				BodyPreview: previewText([]byte(markdown)),
 				SavedTo:     key,
-				Note:        note + " Saved as markdown to " + key + ".",
+				Note:        fmt.Sprintf("%s %d bytes saved as markdown to %s; bodyPreview holds the head.", note, len(markdown), key),
 			})
 			return
 		}
@@ -213,8 +222,8 @@ func (h *agentHandler) AgentHTTP(w http.ResponseWriter, r *http.Request) {
 			writeJSONError(w, http.StatusInternalServerError, "failed to save response")
 			return
 		}
-		combined := io.MultiReader(strings.NewReader(string(peek)), resp.Body)
-		if err := h.s3.PutObject(r.Context(), s3Key, combined, -1); err != nil {
+		cr := &countingReader{r: io.MultiReader(strings.NewReader(string(peek)), resp.Body)}
+		if err := h.s3.PutObject(r.Context(), s3Key, cr, -1); err != nil {
 			h.logger.Error("auto-save: S3 put failed", zap.String("key", s3Key), zap.Error(err))
 			writeJSONError(w, http.StatusInternalServerError, "failed to save response")
 			return
@@ -223,7 +232,10 @@ func (h *agentHandler) AgentHTTP(w http.ResponseWriter, r *http.Request) {
 			Status:      resp.StatusCode,
 			Headers:     headers,
 			ContentType: ct,
+			Size:        cr.n,
+			BodyPreview: previewText(peek),
 			SavedTo:     key,
+			Note:        fmt.Sprintf("%d bytes saved to %s; bodyPreview holds the head.", cr.n, key),
 		})
 		return
 	}
@@ -237,13 +249,84 @@ func (h *agentHandler) AgentHTTP(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// contentLengthInt converts http.Response.ContentLength to int. Returns 0
-// for unknown length (-1) or values that would overflow.
-func contentLengthInt(n int64) int {
-	if n <= 0 {
-		return 0
+// previewMaxBytes is the head size kept as BodyPreview for saved text
+// bodies — enough to identify the content without burning context.
+const previewMaxBytes = 1024
+
+// curateHeaders returns response headers. Default: only the few an agent
+// reasons about (content negotiation, redirects, caching, pagination,
+// rate limits). all=true returns every header verbatim.
+func curateHeaders(h http.Header, all bool) map[string]string {
+	if all {
+		m := make(map[string]string, len(h))
+		for k := range h {
+			m[k] = h.Get(k)
+		}
+		return m
 	}
-	return int(n)
+	keep := []string{
+		"Content-Type", "Content-Length", "Content-Disposition",
+		"Location", "Retry-After", "ETag", "Last-Modified", "Link",
+	}
+	m := make(map[string]string, len(keep))
+	for _, k := range keep {
+		if v := h.Get(k); v != "" {
+			m[k] = v
+		}
+	}
+	// Rate-limit families vary in prefix/casing across providers.
+	for k := range h {
+		lk := strings.ToLower(k)
+		if strings.HasPrefix(lk, "x-ratelimit-") || strings.HasPrefix(lk, "ratelimit-") {
+			m[k] = h.Get(k)
+		}
+	}
+	return m
+}
+
+// countingReader tallies bytes read so a streamed-to-S3 body can report
+// an exact Size even when the upstream Content-Length is unknown
+// (chunked transfer).
+type countingReader struct {
+	r io.Reader
+	n int
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	m, err := c.r.Read(p)
+	c.n += m
+	return m, err
+}
+
+// previewText returns a valid-UTF-8 head of b, capped at previewMaxBytes,
+// for use as HTTPResponse.BodyPreview.
+func previewText(b []byte) string {
+	if len(b) > previewMaxBytes {
+		b = b[:previewMaxBytes]
+	}
+	return strings.ToValidUTF8(string(b), "")
+}
+
+// streamSaveToS3 streams r into S3 at s3Key, returning the exact number
+// of bytes written and — unless binary — a short UTF-8 preview of the
+// head. The head is buffered once and re-prepended so the upload is
+// still a single pass with no full-body buffering.
+func streamSaveToS3(ctx context.Context, s3 *storage.S3Client, s3Key string, r io.Reader, binary bool) (int, string, error) {
+	head := make([]byte, previewMaxBytes)
+	hn, rerr := io.ReadFull(r, head)
+	if rerr != nil && rerr != io.EOF && rerr != io.ErrUnexpectedEOF {
+		return 0, "", rerr
+	}
+	head = head[:hn]
+	cr := &countingReader{r: io.MultiReader(bytes.NewReader(head), r)}
+	if err := s3.PutObject(ctx, s3Key, cr, -1); err != nil {
+		return 0, "", err
+	}
+	preview := ""
+	if !binary {
+		preview = previewText(head)
+	}
+	return cr.n, preview, nil
 }
 
 // isHTMLContentType matches text/html and application/xhtml+xml (ignoring charset/params).

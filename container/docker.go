@@ -272,13 +272,20 @@ func (m *DockerManager) GetRunning(ctx context.Context, agentID uuid.UUID) (*Con
 	return c, nil
 }
 
-// StopAgent implements ContainerManager.
+// StopAgent implements ContainerManager. Idempotent: if Docker stopped
+// or removed the container out-of-band (crash, OOM, daemon restart, the
+// idle reaper), the desired post-condition — container not running — is
+// already met, so a not-found error is success. Without this a
+// dead-but-status='active' agent could never be stopped and so never
+// restarted (the UI only offers Stop while active).
 func (m *DockerManager) StopAgent(ctx context.Context, id string) error {
 	timeout := 5
 	err := m.client.ContainerStop(ctx, id, dcontainer.StopOptions{Timeout: &timeout})
-	if err != nil {
+	if err != nil && !cerrdefs.IsNotFound(err) {
 		return err
 	}
+	// Best-effort remove (unchanged): a not-found / already-removing
+	// container is fine — the goal state is reached either way.
 	m.client.ContainerRemove(ctx, id, dcontainer.RemoveOptions{})
 
 	m.mu.Lock()

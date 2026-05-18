@@ -798,8 +798,17 @@ type AgentInfo struct {
 	UpdatedAt       *timestamppb.Timestamp `protobuf:"bytes,12,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
 	BuildProviderId string                 `protobuf:"bytes,13,opt,name=build_provider_id,json=buildProviderId,proto3" json:"build_provider_id,omitempty"`
 	ExecProviderId  string                 `protobuf:"bytes,14,opt,name=exec_provider_id,json=execProviderId,proto3" json:"exec_provider_id,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// running reflects live container state (a container is actually up),
+	// distinct from status (lifecycle: draft/building/active/failed/
+	// stopped). An 'active' agent with running=false is normal — idle
+	// containers are reaped and lazily restarted on the next trigger.
+	// Populated only on the agent-detail endpoint.
+	Running bool `protobuf:"varint,15,opt,name=running,proto3" json:"running,omitempty"`
+	// emoji is an optional decorative glyph (agentsdk.Config.Emoji) shown
+	// next to the agent in the UI. Empty = none.
+	Emoji         string `protobuf:"bytes,16,opt,name=emoji,proto3" json:"emoji,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *AgentInfo) Reset() {
@@ -926,6 +935,20 @@ func (x *AgentInfo) GetBuildProviderId() string {
 func (x *AgentInfo) GetExecProviderId() string {
 	if x != nil {
 		return x.ExecProviderId
+	}
+	return ""
+}
+
+func (x *AgentInfo) GetRunning() bool {
+	if x != nil {
+		return x.Running
+	}
+	return false
+}
+
+func (x *AgentInfo) GetEmoji() string {
+	if x != nil {
+		return x.Emoji
 	}
 	return ""
 }
@@ -1109,22 +1132,29 @@ func (x *RunInfo) GetFinishedAt() *timestamppb.Timestamp {
 
 // AgentBuildInfo represents a single build or upgrade of an agent.
 type AgentBuildInfo struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	AgentId       string                 `protobuf:"bytes,2,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"`
-	Type          string                 `protobuf:"bytes,3,opt,name=type,proto3" json:"type,omitempty"`     // "build" or "upgrade"
-	Status        string                 `protobuf:"bytes,4,opt,name=status,proto3" json:"status,omitempty"` // "building", "complete", "failed"
-	Instructions  string                 `protobuf:"bytes,5,opt,name=instructions,proto3" json:"instructions,omitempty"`
-	SourceRef     string                 `protobuf:"bytes,6,opt,name=source_ref,json=sourceRef,proto3" json:"source_ref,omitempty"`
-	ImageRef      string                 `protobuf:"bytes,7,opt,name=image_ref,json=imageRef,proto3" json:"image_ref,omitempty"`
-	SolLog        string                 `protobuf:"bytes,8,opt,name=sol_log,json=solLog,proto3" json:"sol_log,omitempty"`          // Only populated in detail responses.
-	DockerLog     string                 `protobuf:"bytes,9,opt,name=docker_log,json=dockerLog,proto3" json:"docker_log,omitempty"` // Only populated in detail responses.
-	LogSeq        int64                  `protobuf:"varint,10,opt,name=log_seq,json=logSeq,proto3" json:"log_seq,omitempty"`        // Highest log sequence number persisted; used for WS dedup.
-	ErrorMessage  string                 `protobuf:"bytes,11,opt,name=error_message,json=errorMessage,proto3" json:"error_message,omitempty"`
-	StartedAt     *timestamppb.Timestamp `protobuf:"bytes,12,opt,name=started_at,json=startedAt,proto3" json:"started_at,omitempty"`
-	FinishedAt    *timestamppb.Timestamp `protobuf:"bytes,13,opt,name=finished_at,json=finishedAt,proto3" json:"finished_at,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	Id           string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	AgentId      string                 `protobuf:"bytes,2,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"`
+	Type         string                 `protobuf:"bytes,3,opt,name=type,proto3" json:"type,omitempty"`     // "build" or "upgrade"
+	Status       string                 `protobuf:"bytes,4,opt,name=status,proto3" json:"status,omitempty"` // "building", "complete", "failed"
+	Instructions string                 `protobuf:"bytes,5,opt,name=instructions,proto3" json:"instructions,omitempty"`
+	SourceRef    string                 `protobuf:"bytes,6,opt,name=source_ref,json=sourceRef,proto3" json:"source_ref,omitempty"`
+	ImageRef     string                 `protobuf:"bytes,7,opt,name=image_ref,json=imageRef,proto3" json:"image_ref,omitempty"`
+	SolLog       string                 `protobuf:"bytes,8,opt,name=sol_log,json=solLog,proto3" json:"sol_log,omitempty"`          // Only populated in detail responses.
+	DockerLog    string                 `protobuf:"bytes,9,opt,name=docker_log,json=dockerLog,proto3" json:"docker_log,omitempty"` // Only populated in detail responses.
+	LogSeq       int64                  `protobuf:"varint,10,opt,name=log_seq,json=logSeq,proto3" json:"log_seq,omitempty"`        // Highest log sequence number persisted; used for WS dedup.
+	ErrorMessage string                 `protobuf:"bytes,11,opt,name=error_message,json=errorMessage,proto3" json:"error_message,omitempty"`
+	StartedAt    *timestamppb.Timestamp `protobuf:"bytes,12,opt,name=started_at,json=startedAt,proto3" json:"started_at,omitempty"`
+	FinishedAt   *timestamppb.Timestamp `protobuf:"bytes,13,opt,name=finished_at,json=finishedAt,proto3" json:"finished_at,omitempty"`
+	// Codegen LLM telemetry, aggregated from the llm_usage ledger
+	// (parity with RunInfo.llm_*). Zero for image-only rebuilds that ran
+	// no codegen.
+	LlmCalls        int32   `protobuf:"varint,14,opt,name=llm_calls,json=llmCalls,proto3" json:"llm_calls,omitempty"`
+	LlmTokensIn     int32   `protobuf:"varint,15,opt,name=llm_tokens_in,json=llmTokensIn,proto3" json:"llm_tokens_in,omitempty"`
+	LlmTokensOut    int32   `protobuf:"varint,16,opt,name=llm_tokens_out,json=llmTokensOut,proto3" json:"llm_tokens_out,omitempty"`
+	LlmCostEstimate float64 `protobuf:"fixed64,17,opt,name=llm_cost_estimate,json=llmCostEstimate,proto3" json:"llm_cost_estimate,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *AgentBuildInfo) Reset() {
@@ -1248,6 +1278,34 @@ func (x *AgentBuildInfo) GetFinishedAt() *timestamppb.Timestamp {
 	return nil
 }
 
+func (x *AgentBuildInfo) GetLlmCalls() int32 {
+	if x != nil {
+		return x.LlmCalls
+	}
+	return 0
+}
+
+func (x *AgentBuildInfo) GetLlmTokensIn() int32 {
+	if x != nil {
+		return x.LlmTokensIn
+	}
+	return 0
+}
+
+func (x *AgentBuildInfo) GetLlmTokensOut() int32 {
+	if x != nil {
+		return x.LlmTokensOut
+	}
+	return 0
+}
+
+func (x *AgentBuildInfo) GetLlmCostEstimate() float64 {
+	if x != nil {
+		return x.LlmCostEstimate
+	}
+	return 0
+}
+
 // ConversationInfo represents an agent conversation.
 type ConversationInfo struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -1345,16 +1403,14 @@ type AgentMessageInfo struct {
 	Source       string                 `protobuf:"bytes,4,opt,name=source,proto3" json:"source,omitempty"` // "user" (default), "system" (injected by Airlock), "bridge", "error"
 	Content      string                 `protobuf:"bytes,5,opt,name=content,proto3" json:"content,omitempty"`
 	Parts        string                 `protobuf:"bytes,6,opt,name=parts,proto3" json:"parts,omitempty"` // JSON-encoded goai Content for rich message display
-	TokensIn     int32                  `protobuf:"varint,7,opt,name=tokens_in,json=tokensIn,proto3" json:"tokens_in,omitempty"`
-	TokensOut    int32                  `protobuf:"varint,8,opt,name=tokens_out,json=tokensOut,proto3" json:"tokens_out,omitempty"`
-	CostEstimate float64                `protobuf:"fixed64,9,opt,name=cost_estimate,json=costEstimate,proto3" json:"cost_estimate,omitempty"`
-	CreatedAt    *timestamppb.Timestamp `protobuf:"bytes,10,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	CostEstimate float64                `protobuf:"fixed64,7,opt,name=cost_estimate,json=costEstimate,proto3" json:"cost_estimate,omitempty"`
+	CreatedAt    *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
 	// run_id groups assistant + tool rows produced by the same run so the UI
 	// can fold a multi-step run_js loop back into a single bubble — the live
 	// streaming path bundles them via finalizeMessage but the persisted shape
 	// is one row per LLM step. Empty for user/system rows that don't belong
 	// to a run.
-	RunId         string `protobuf:"bytes,11,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
+	RunId         string `protobuf:"bytes,9,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1429,20 +1485,6 @@ func (x *AgentMessageInfo) GetParts() string {
 		return x.Parts
 	}
 	return ""
-}
-
-func (x *AgentMessageInfo) GetTokensIn() int32 {
-	if x != nil {
-		return x.TokensIn
-	}
-	return 0
-}
-
-func (x *AgentMessageInfo) GetTokensOut() int32 {
-	if x != nil {
-		return x.TokensOut
-	}
-	return 0
 }
 
 func (x *AgentMessageInfo) GetCostEstimate() float64 {
@@ -2803,7 +2845,7 @@ const file_airlock_v1_types_proto_rawDesc = "" +
 	"costOutput\x12\x12\n" +
 	"\x04kind\x18\n" +
 	" \x01(\tR\x04kind\x12\x12\n" +
-	"\x04caps\x18\v \x03(\tR\x04caps\"\xf0\x03\n" +
+	"\x04caps\x18\v \x03(\tR\x04caps\"\xa0\x04\n" +
 	"\tAgentInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04slug\x18\x02 \x01(\tR\x04slug\x12\x12\n" +
@@ -2823,7 +2865,9 @@ const file_airlock_v1_types_proto_rawDesc = "" +
 	"\n" +
 	"updated_at\x18\f \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x12*\n" +
 	"\x11build_provider_id\x18\r \x01(\tR\x0fbuildProviderId\x12(\n" +
-	"\x10exec_provider_id\x18\x0e \x01(\tR\x0eexecProviderId\"\x8f\x05\n" +
+	"\x10exec_provider_id\x18\x0e \x01(\tR\x0eexecProviderId\x12\x18\n" +
+	"\arunning\x18\x0f \x01(\bR\arunning\x12\x14\n" +
+	"\x05emoji\x18\x10 \x01(\tR\x05emoji\"\x8f\x05\n" +
 	"\aRunInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x19\n" +
 	"\bagent_id\x18\x02 \x01(\tR\aagentId\x12\x1b\n" +
@@ -2849,7 +2893,7 @@ const file_airlock_v1_types_proto_rawDesc = "" +
 	"\n" +
 	"started_at\x18\x10 \x01(\v2\x1a.google.protobuf.TimestampR\tstartedAt\x12;\n" +
 	"\vfinished_at\x18\x11 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
-	"finishedAt\"\xb5\x03\n" +
+	"finishedAt\"\xc8\x04\n" +
 	"\x0eAgentBuildInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x19\n" +
 	"\bagent_id\x18\x02 \x01(\tR\aagentId\x12\x12\n" +
@@ -2868,7 +2912,11 @@ const file_airlock_v1_types_proto_rawDesc = "" +
 	"\n" +
 	"started_at\x18\f \x01(\v2\x1a.google.protobuf.TimestampR\tstartedAt\x12;\n" +
 	"\vfinished_at\x18\r \x01(\v2\x1a.google.protobuf.TimestampR\n" +
-	"finishedAt\"\xe1\x01\n" +
+	"finishedAt\x12\x1b\n" +
+	"\tllm_calls\x18\x0e \x01(\x05R\bllmCalls\x12\"\n" +
+	"\rllm_tokens_in\x18\x0f \x01(\x05R\vllmTokensIn\x12$\n" +
+	"\x0ellm_tokens_out\x18\x10 \x01(\x05R\fllmTokensOut\x12*\n" +
+	"\x11llm_cost_estimate\x18\x11 \x01(\x01R\x0fllmCostEstimate\"\xe1\x01\n" +
 	"\x10ConversationInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x19\n" +
 	"\bagent_id\x18\x02 \x01(\tR\aagentId\x12\x14\n" +
@@ -2877,22 +2925,18 @@ const file_airlock_v1_types_proto_rawDesc = "" +
 	"\n" +
 	"created_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x129\n" +
 	"\n" +
-	"updated_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\"\xc3\x02\n" +
+	"updated_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\"\x87\x02\n" +
 	"\x10AgentMessageInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x10\n" +
 	"\x03seq\x18\x02 \x01(\x03R\x03seq\x12\x12\n" +
 	"\x04role\x18\x03 \x01(\tR\x04role\x12\x16\n" +
 	"\x06source\x18\x04 \x01(\tR\x06source\x12\x18\n" +
 	"\acontent\x18\x05 \x01(\tR\acontent\x12\x14\n" +
-	"\x05parts\x18\x06 \x01(\tR\x05parts\x12\x1b\n" +
-	"\ttokens_in\x18\a \x01(\x05R\btokensIn\x12\x1d\n" +
+	"\x05parts\x18\x06 \x01(\tR\x05parts\x12#\n" +
+	"\rcost_estimate\x18\a \x01(\x01R\fcostEstimate\x129\n" +
 	"\n" +
-	"tokens_out\x18\b \x01(\x05R\ttokensOut\x12#\n" +
-	"\rcost_estimate\x18\t \x01(\x01R\fcostEstimate\x129\n" +
-	"\n" +
-	"created_at\x18\n" +
-	" \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x12\x15\n" +
-	"\x06run_id\x18\v \x01(\tR\x05runId\"\xb9\x02\n" +
+	"created_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x12\x15\n" +
+	"\x06run_id\x18\t \x01(\tR\x05runId\"\xb9\x02\n" +
 	"\vWebhookInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04path\x18\x02 \x01(\tR\x04path\x12\x1f\n" +

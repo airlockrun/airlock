@@ -203,23 +203,138 @@ ALTER TABLE agent_directories
 ALTER TABLE agent_directories
     ALTER COLUMN scope DROP DEFAULT;
 
--- A2A conversations are per-thread, not DM-singletons: each new context
--- (caller passes no contextId) mints a fresh agent_conversations row on
--- the *called* agent, owned by the original user. The 001 DM index
--- (agent_id, user_id, source) would collapse every A2A call from one
--- user into a single conversation, so exclude source='a2a' from it.
--- Web/bridge stay single-thread (the index still binds source='web' /
--- 'bridge'); the multi-conversation-for-web work is deferred. The
--- GetOrCreateConversation upsert's ON CONFLICT predicate is updated in
--- lockstep (it's never called with source='a2a', so this is inert for
--- web/bridge — it only keeps Postgres able to infer the partial index).
+-- agents.emoji — optional decorative glyph (agentsdk.Config.Emoji),
+-- synced like description. Empty = none (a legitimate value, so the
+-- DEFAULT '' is a real backfill, not a fake placeholder); dropped
+-- immediately so new rows must set it explicitly.
+ALTER TABLE agents
+    ADD COLUMN emoji text NOT NULL DEFAULT '';
+ALTER TABLE agents
+    ALTER COLUMN emoji DROP DEFAULT;
+
+-- agent_messages.{tokens_in,tokens_out} removed: the llm_usage ledger
+-- (one row per proxied model round-trip, written below) is now the
+-- single source of truth for token/cost accounting. Sol still tracks
+-- per-step usage for its own CLI; airlock no longer stores or reads it.
+ALTER TABLE agent_messages
+    DROP COLUMN tokens_in,
+    DROP COLUMN tokens_out;
+
+-- Multi-conversation model. Conversations are per-thread for every
+-- source; the 001 DM index (agent_id, user_id, source) — which pinned
+-- exactly one conversation per (agent, user, source) — is dropped.
+--
+--   web   — multiple threads per (agent, user). Created explicitly
+--           (CreateWebConversation); the client addresses one by id on
+--           every prompt. No natural-key uniqueness — the row UUID is
+--           the identity.
+--   bridge (authed) — one thread per (agent, user, external_id): the
+--           same user in a different chat/bot is a different thread.
+--           idx_conversations_bridge_authed makes that key upsertable.
+--   bridge (public/anon) — unchanged, keyed by idx_conversations_external
+--           (agent, source, external_id) WHERE user_id IS NULL (in 001).
+--   a2a    — unchanged, plain INSERT per context, no constraint.
+--
+-- Topic subscriptions and post-upgrade notices stay anchored to a
+-- primary (oldest) web conversation per (agent, user) via a
+-- select-or-insert helper — per-conversation topic UX is a deferred
+-- follow-up, so this is a zero-behaviour-change anchor today.
 DROP INDEX IF EXISTS idx_conversations_dm;
-CREATE UNIQUE INDEX idx_conversations_dm
-    ON agent_conversations (agent_id, user_id, source)
-    WHERE user_id IS NOT NULL AND source <> 'a2a';
+CREATE UNIQUE INDEX idx_conversations_bridge_authed
+    ON agent_conversations (agent_id, user_id, source, external_id)
+    WHERE user_id IS NOT NULL AND external_id IS NOT NULL;
+
+-- llm_usage — append-only ledger: one row per model HTTP round-trip
+-- through the proxy (POST /api/agent/llm/*). The single source of truth
+-- for run-level token/cost accounting; runs.llm_* aggregates from here
+-- (agent_messages no longer carries token columns). run_id is nullable:
+-- a legacy agent (pre run-attribution header) or any call we can't tie
+-- to a run still gets a row so the spend is recorded, just unattributed.
+-- user_id / conversation_id / call_kind are denormalized from the run at
+-- capture so a future per-user/agent billing rollup needs no backfill.
+-- run_id and build_id are mutually exclusive: runtime model calls set
+-- run_id, build/upgrade codegen sets build_id (call_kind disambiguates),
+-- and a call tied to neither stays unattributed. Every column is written
+-- explicitly on each INSERT — append-only, so NOT NULL without a backfill
+-- DEFAULT is correct (no existing rows). Multi-replica safe: pure INSERT.
+CREATE TABLE llm_usage (
+    id                   uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    agent_id             uuid NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    run_id               uuid REFERENCES runs(id) ON DELETE SET NULL,
+    build_id             uuid REFERENCES agent_builds(id) ON DELETE SET NULL,
+    user_id              uuid REFERENCES users(id) ON DELETE SET NULL,
+    conversation_id      uuid REFERENCES agent_conversations(id) ON DELETE SET NULL,
+    provider_catalog_id  text NOT NULL,
+    model                text NOT NULL,
+    capability           text NOT NULL,
+    call_kind            text NOT NULL,
+    slug                 text NOT NULL,
+    tokens_in            bigint NOT NULL,
+    tokens_out           bigint NOT NULL,
+    tokens_cached        bigint NOT NULL,
+    tokens_reasoning     bigint NOT NULL,
+    units                double precision NOT NULL,
+    unit_kind            text NOT NULL,
+    cost_input           double precision NOT NULL,
+    cost_output          double precision NOT NULL,
+    cost_total           double precision NOT NULL,
+    finish_reason        text NOT NULL,
+    errored              boolean NOT NULL,
+    latency_ms           integer NOT NULL,
+    created_at           timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX llm_usage_run_idx ON llm_usage(run_id) WHERE run_id IS NOT NULL;
+CREATE INDEX llm_usage_build_idx ON llm_usage(build_id) WHERE build_id IS NOT NULL;
+CREATE INDEX llm_usage_agent_created_idx ON llm_usage(agent_id, created_at);
+
+-- agent_builds LLM telemetry — parity with runs.llm_*. Aggregated from
+-- llm_usage WHERE build_id by UpdateBuildLLMStats. DEFAULT 0 backfills
+-- existing build rows (a real "no spend recorded" value, not a fake
+-- placeholder); dropped immediately so CreateAgentBuild must set them
+-- explicitly, mirroring CreateRun.
+ALTER TABLE agent_builds
+    ADD COLUMN llm_calls         integer NOT NULL DEFAULT 0,
+    ADD COLUMN llm_tokens_in     integer NOT NULL DEFAULT 0,
+    ADD COLUMN llm_tokens_out    integer NOT NULL DEFAULT 0,
+    ADD COLUMN llm_cost_estimate double precision NOT NULL DEFAULT 0;
+ALTER TABLE agent_builds
+    ALTER COLUMN llm_calls         DROP DEFAULT,
+    ALTER COLUMN llm_tokens_in     DROP DEFAULT,
+    ALTER COLUMN llm_tokens_out    DROP DEFAULT,
+    ALTER COLUMN llm_cost_estimate DROP DEFAULT;
+
+-- llm_unit_rates — operator-set pricing for calls the token catalog
+-- (models.dev via sol/provider) cannot price: per-image, per-second,
+-- per-character. Empty by default; a missing rate means the llm_usage
+-- row records its units with cost 0 — honest and visible, never a
+-- silently fabricated price. Token-priced models ignore this table.
+CREATE TABLE llm_unit_rates (
+    provider_catalog_id  text NOT NULL,
+    model                text NOT NULL,
+    unit_kind            text NOT NULL,
+    rate                 double precision NOT NULL,
+    updated_at           timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (provider_catalog_id, model, unit_kind)
+);
 
 -- +goose Down
-DROP INDEX IF EXISTS idx_conversations_dm;
+ALTER TABLE agent_builds
+    DROP COLUMN IF EXISTS llm_calls,
+    DROP COLUMN IF EXISTS llm_tokens_in,
+    DROP COLUMN IF EXISTS llm_tokens_out,
+    DROP COLUMN IF EXISTS llm_cost_estimate;
+DROP TABLE IF EXISTS llm_unit_rates;
+DROP INDEX IF EXISTS llm_usage_agent_created_idx;
+DROP INDEX IF EXISTS llm_usage_build_idx;
+DROP INDEX IF EXISTS llm_usage_run_idx;
+DROP TABLE IF EXISTS llm_usage;
+ALTER TABLE agent_messages
+    ADD COLUMN tokens_in  integer NOT NULL DEFAULT 0,
+    ADD COLUMN tokens_out integer NOT NULL DEFAULT 0;
+ALTER TABLE agent_messages
+    ALTER COLUMN tokens_in  DROP DEFAULT,
+    ALTER COLUMN tokens_out DROP DEFAULT;
+DROP INDEX IF EXISTS idx_conversations_bridge_authed;
 CREATE UNIQUE INDEX idx_conversations_dm
     ON agent_conversations (agent_id, user_id, source)
     WHERE user_id IS NOT NULL;
@@ -239,6 +354,7 @@ ALTER TABLE agents DROP CONSTRAINT IF EXISTS agents_public_implies_non_member;
 ALTER TABLE agents DROP COLUMN IF EXISTS allow_public_mcp;
 ALTER TABLE agents DROP COLUMN IF EXISTS allow_non_member_mcp;
 ALTER TABLE agent_directories DROP COLUMN IF EXISTS scope;
+ALTER TABLE agents DROP COLUMN IF EXISTS emoji;
 ALTER TABLE agents DROP COLUMN IF EXISTS tools_hash;
 DROP INDEX IF EXISTS runs_parent_run_id_idx;
 ALTER TABLE runs DROP COLUMN IF EXISTS parent_run_id;

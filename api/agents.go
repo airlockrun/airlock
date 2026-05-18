@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -227,8 +228,19 @@ func (h *agentsHandler) Get(w http.ResponseWriter, r *http.Request) {
 		routeInfos[i] = routeToProto(r)
 	}
 
+	// Live container state — the detail page's Stop/Start affordance and
+	// the runtime badge key off this, not the lifecycle status. Cheap:
+	// in-memory cache hit, or one inspect for a cold container. A nil
+	// container (idle/reaped/crashed) is the normal not-running case.
+	agentProto := agentToProto(agent)
+	if h.containers != nil {
+		if c, gerr := h.containers.GetRunning(ctx, agentID); gerr == nil && c != nil {
+			agentProto.Running = true
+		}
+	}
+
 	writeProto(w, http.StatusOK, &airlockv1.GetAgentDetailResponse{
-		Agent:       agentToProto(agent),
+		Agent:       agentProto,
 		Connections: connInfos,
 		Webhooks:    whInfos,
 		Crons:       cronInfos,
@@ -263,24 +275,78 @@ func (h *agentsHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Resolve auto_fix: if not provided in request, keep existing value.
+	// Each field: nil in the request → keep existing value.
 	autoFix := agent.AutoFix
 	if req.AutoFix != nil {
 		autoFix = *req.AutoFix
 	}
+
+	name := agent.Name
+	if req.Name != nil {
+		name = strings.TrimSpace(*req.Name)
+		if name == "" {
+			writeError(w, http.StatusBadRequest, "name cannot be empty")
+			return
+		}
+		if len(name) > 100 {
+			writeError(w, http.StatusBadRequest, "name too long (max 100)")
+			return
+		}
+	}
+
+	slug := agent.Slug
+	if req.Slug != nil && *req.Slug != agent.Slug {
+		slug = *req.Slug
+		if !validAgentSlug(slug) {
+			writeError(w, http.StatusBadRequest, "slug must be 2–63 chars, lowercase letters/digits separated by single dashes")
+			return
+		}
+	}
+
+	nameChanged := name != agent.Name
+	slugChanged := slug != agent.Slug
+
 	updated, err := q.UpdateAgentFields(ctx, dbq.UpdateAgentFieldsParams{
 		ID:      toPgUUID(agentID),
+		Name:    name,
+		Slug:    slug,
 		AutoFix: autoFix,
 	})
 	if err != nil {
+		// Mirror CreateAgent's collision mapping — the agents.slug UNIQUE
+		// constraint is the single source of truth for slug conflicts.
+		if strings.Contains(err.Error(), "duplicate key") {
+			writeError(w, http.StatusConflict, "agent slug already exists")
+			return
+		}
 		h.logger.Error("update agent", zap.Error(err))
 		writeError(w, http.StatusInternalServerError, "failed to update agent")
 		return
 	}
 
+	// Siblings bind callable handles as agent_<slug> and the prompt lists
+	// peers by name/slug — a rename must reach other running agents or
+	// they keep stale bindings until their next restart. Same hook used
+	// on agent create / tool-sync. Best-effort, off the request path.
+	if nameChanged || slugChanged {
+		go broadcastSiblingChange(context.Background(), dbq.New(h.db.Pool()), h.dispatcher, h.logger, agentID)
+	}
+
 	writeProto(w, http.StatusOK, &airlockv1.UpdateAgentResponse{
 		Agent: agentToProto(updated),
 	})
+}
+
+// validAgentSlug enforces a kebab-case identifier safe for URLs, sibling
+// bindings, and MCP endpoint paths: 2–63 chars, lowercase alphanumerics
+// in single-dash-separated groups, no leading/trailing/double dash.
+var agentSlugRe = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
+
+func validAgentSlug(s string) bool {
+	if len(s) < 2 || len(s) > 63 {
+		return false
+	}
+	return agentSlugRe.MatchString(s)
 }
 
 // Delete handles DELETE /api/v1/agents/{agentID}.
@@ -856,6 +922,7 @@ func agentToProto(a dbq.Agent) *airlockv1.AgentInfo {
 		Name:            a.Name,
 		Slug:            a.Slug,
 		Description:     a.Description,
+		Emoji:           a.Emoji,
 		Status:          a.Status,
 		UpgradeStatus:   a.UpgradeStatus,
 		AutoFix:         a.AutoFix,
@@ -957,16 +1024,20 @@ func (h *agentsHandler) ListBuilds(w http.ResponseWriter, r *http.Request) {
 	out := make([]*airlockv1.AgentBuildInfo, len(builds))
 	for i, b := range builds {
 		out[i] = &airlockv1.AgentBuildInfo{
-			Id:           convert.PgUUIDToString(b.ID),
-			AgentId:      convert.PgUUIDToString(b.AgentID),
-			Type:         b.Type,
-			Status:       b.Status,
-			Instructions: b.Instructions,
-			ErrorMessage: b.ErrorMessage,
-			SourceRef:    b.SourceRef,
-			ImageRef:     b.ImageRef,
-			StartedAt:    convert.PgTimestampToProto(b.StartedAt),
-			FinishedAt:   convert.PgTimestampToProto(b.FinishedAt),
+			Id:              convert.PgUUIDToString(b.ID),
+			AgentId:         convert.PgUUIDToString(b.AgentID),
+			Type:            b.Type,
+			Status:          b.Status,
+			Instructions:    b.Instructions,
+			ErrorMessage:    b.ErrorMessage,
+			SourceRef:       b.SourceRef,
+			ImageRef:        b.ImageRef,
+			StartedAt:       convert.PgTimestampToProto(b.StartedAt),
+			FinishedAt:      convert.PgTimestampToProto(b.FinishedAt),
+			LlmCalls:        b.LlmCalls,
+			LlmTokensIn:     b.LlmTokensIn,
+			LlmTokensOut:    b.LlmTokensOut,
+			LlmCostEstimate: b.LlmCostEstimate,
 		}
 	}
 
@@ -991,19 +1062,23 @@ func (h *agentsHandler) GetBuild(w http.ResponseWriter, r *http.Request) {
 
 	writeProto(w, http.StatusOK, &airlockv1.GetAgentBuildResponse{
 		Build: &airlockv1.AgentBuildInfo{
-			Id:           convert.PgUUIDToString(b.ID),
-			AgentId:      convert.PgUUIDToString(b.AgentID),
-			Type:         b.Type,
-			Status:       b.Status,
-			Instructions: b.Instructions,
-			SolLog:       b.SolLog,
-			DockerLog:    b.DockerLog,
-			ErrorMessage: b.ErrorMessage,
-			SourceRef:    b.SourceRef,
-			ImageRef:     b.ImageRef,
-			StartedAt:    convert.PgTimestampToProto(b.StartedAt),
-			FinishedAt:   convert.PgTimestampToProto(b.FinishedAt),
-			LogSeq:       b.LogSeq,
+			Id:              convert.PgUUIDToString(b.ID),
+			AgentId:         convert.PgUUIDToString(b.AgentID),
+			Type:            b.Type,
+			Status:          b.Status,
+			Instructions:    b.Instructions,
+			SolLog:          b.SolLog,
+			DockerLog:       b.DockerLog,
+			ErrorMessage:    b.ErrorMessage,
+			SourceRef:       b.SourceRef,
+			ImageRef:        b.ImageRef,
+			StartedAt:       convert.PgTimestampToProto(b.StartedAt),
+			FinishedAt:      convert.PgTimestampToProto(b.FinishedAt),
+			LogSeq:          b.LogSeq,
+			LlmCalls:        b.LlmCalls,
+			LlmTokensIn:     b.LlmTokensIn,
+			LlmTokensOut:    b.LlmTokensOut,
+			LlmCostEstimate: b.LlmCostEstimate,
 		},
 	})
 }

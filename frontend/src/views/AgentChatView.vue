@@ -1,18 +1,30 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, nextTick, watch, computed } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { useToast } from 'primevue/usetoast'
 import { useChatStore } from '@/stores/chat'
+import { useAgentsStore } from '@/stores/agents'
 import { ws } from '@/api/ws'
-import { useMarkdown } from '@/composables/useMarkdown'
+import { useMarkdown, renderMarkdown } from '@/composables/useMarkdown'
+import { promptAgentText } from '@/utils/messageGroup'
 import api from '@/api/client'
 import MessageParts from '@/components/chat/MessageParts.vue'
 
 const route = useRoute()
+const router = useRouter()
 const toast = useToast()
 const chat = useChatStore()
+const agentsStore = useAgentsStore()
 
-const agentId = route.params.id as string
+// Reactive: the sidebar can navigate between agents/conversations without
+// remounting this view (same route record), so read the param live.
+const agentId = computed(() => route.params.id as string)
+const routeConvId = computed(() => (route.query.c as string) || undefined)
+const agentName = computed(
+  () => agentsStore.agents.find(a => a.id === agentId.value)?.name || '',
+)
+// No active conversation id yet — the next message mints the thread.
+const isNewConversation = computed(() => !chat.conversationId)
 const messageInput = ref('')
 const scrollContainer = ref<HTMLElement | null>(null)
 const topSentinel = ref<HTMLElement | null>(null)
@@ -25,18 +37,48 @@ const uploading = ref(false)
 let topObserver: IntersectionObserver | null = null
 let bottomObserver: IntersectionObserver | null = null
 
+async function reload() {
+  try {
+    await chat.loadConversation(agentId.value, routeConvId.value)
+  } catch {
+    // No conversation yet — empty state is fine.
+  }
+  await nextTick()
+  scrollToBottom()
+}
+
 onMounted(async () => {
   // WS subscriptions are server-driven — the socket auto-subscribes to every
   // agent this user is a member of at connect time. No client subscribe call.
   chat.initListeners()
-  try {
-    await chat.loadConversation(agentId)
-  } catch {
-    // No conversation yet — empty state is fine.
-  }
-  scrollToBottom()
+  // The sidebar (AppLayout) usually has these loaded already; fetch on a
+  // deep-link/hard-refresh so the empty-state can name the agent.
+  if (agentsStore.agents.length === 0) agentsStore.fetchAgents().catch(() => {})
+  await reload()
   setupSentinelObservers()
 })
+
+// Sidebar navigation reuses this view: reload when the agent or the
+// selected conversation (?c=) changes.
+watch(
+  () => [agentId.value, routeConvId.value],
+  (cur, prev) => {
+    if (cur[0] === prev[0] && cur[1] === prev[1]) return
+    reload()
+  },
+)
+
+// Keep the URL in sync with the active thread so refresh/back and the
+// sidebar highlight track it — especially after the first message of a
+// brand-new conversation mints an id.
+watch(
+  () => chat.conversationId,
+  (id) => {
+    if (id && id !== routeConvId.value) {
+      router.replace({ query: { ...route.query, c: id } })
+    }
+  },
+)
 
 onUnmounted(() => {
   topObserver?.disconnect()
@@ -83,7 +125,7 @@ watch(
 )
 
 async function jumpToLatest() {
-  await chat.jumpToLatest(agentId)
+  await chat.jumpToLatest(agentId.value)
   await nextTick()
   scrollToBottom()
 }
@@ -113,7 +155,7 @@ async function send() {
   const filePaths = attachedFiles.value.map(f => f.path)
   attachedFiles.value = []
   try {
-    await chat.sendMessage(agentId, text, undefined, filePaths.length ? filePaths : undefined)
+    await chat.sendMessage(agentId.value, text, undefined, filePaths.length ? filePaths : undefined)
   } catch (err: any) {
     toast.add({ severity: 'error', summary: err.response?.data?.error || 'Send failed', life: 5000 })
   }
@@ -128,7 +170,7 @@ async function onFileSelect(e: Event) {
     for (const file of files) {
       const form = new FormData()
       form.append('file', file)
-      const { data } = await api.post(`/api/v1/agents/${agentId}/files`, form, {
+      const { data } = await api.post(`/api/v1/agents/${agentId.value}/files`, form, {
         headers: { 'Content-Type': 'multipart/form-data' },
       })
       attachedFiles.value.push({ path: data.path, filename: data.filename || file.name })
@@ -147,7 +189,7 @@ function removeFile(index: number) {
 
 async function approve() {
   try {
-    await chat.sendMessage(agentId, '', true)
+    await chat.sendMessage(agentId.value, '', true)
   } catch (err: any) {
     toast.add({ severity: 'error', summary: 'Approval failed', life: 5000 })
   }
@@ -156,7 +198,7 @@ async function approve() {
 async function reject() {
   chat.pendingConfirmation = null
   try {
-    await chat.sendMessage(agentId, 'Rejected by user.', false)
+    await chat.sendMessage(agentId.value, 'Rejected by user.', false)
   } catch (err: any) {
     toast.add({ severity: 'error', summary: 'Rejection failed', life: 5000 })
   }
@@ -275,6 +317,9 @@ function formatTokens(n: number): string {
          in the app top bar (AppLayout) for chat routes so we don't burn a
          row inside the chat view itself. -->
 
+    <!-- Conversation selection (list, new, delete) lives in the app
+         sidebar now — this view is just the active thread. -->
+
     <!-- Jump-to-latest banner: shown when new agent output arrived while the
          user was scrolled into history. Clicking resets the window. -->
     <div v-if="chat.newMessagesPending" class="chat-jump-banner" @click="jumpToLatest">
@@ -284,10 +329,18 @@ function formatTokens(n: number): string {
 
     <!-- Message area -->
     <div ref="scrollContainer" class="chat-messages">
-        <!-- Empty state -->
-        <div v-if="chat.messages.length === 0 && !chat.streamingText" style="text-align: center; padding: 3rem; color: var(--p-text-muted-color)">
-          <i class="pi pi-comments" style="font-size: 3rem; margin-bottom: 1rem" />
-          <p>Send a message to start a conversation.</p>
+        <!-- Empty state — name the agent so the user knows which one this
+             not-yet-saved thread will belong to (the row appears in the
+             sidebar only once the first message is sent). -->
+        <div v-if="chat.messages.length === 0 && !chat.streamingText" class="chat-empty">
+          <i class="pi pi-comments" />
+          <p class="chat-empty-title">
+            {{ isNewConversation ? 'New conversation' : 'Conversation' }}
+            with <strong>{{ agentName || 'this agent' }}</strong>
+          </p>
+          <p class="chat-empty-sub">
+            Send a message to begin — it's saved as a new conversation once you do.
+          </p>
         </div>
 
         <!-- Top sentinel — when visible, fetch older page via IntersectionObserver. -->
@@ -382,7 +435,7 @@ function formatTokens(n: number): string {
                label, not a user bubble. -->
           <div
             v-else-if="msg.source === 'control'"
-            style="display: flex; justify-content: center"
+            style="display: flex; justify-content: flex-start"
           >
             <div
               style="display: flex; align-items: center; gap: 0.4rem; font-size: 0.72rem; opacity: 0.5; padding: 0.15rem 0.5rem"
@@ -431,7 +484,13 @@ function formatTokens(n: number): string {
                     <div v-if="tc.input" style="margin-top: 0.25rem; margin-bottom: 0.5rem">
                       <pre style="white-space: pre-wrap; word-break: break-all; font-size: 0.8rem; margin: 0; opacity: 0.7">{{ tc.input }}</pre>
                     </div>
-                    <pre v-if="tc.output" style="white-space: pre-wrap; word-break: break-all; font-size: 0.8rem; margin: 0">{{ tc.output }}</pre>
+                    <div
+                      v-if="tc.output && promptAgentText(tc.toolName, tc.output) !== null"
+                      v-html="renderMarkdown(promptAgentText(tc.toolName, tc.output) || '')"
+                      class="chat-bubble"
+                      style="font-size: 0.85rem"
+                    />
+                    <pre v-else-if="tc.output" style="white-space: pre-wrap; word-break: break-all; font-size: 0.8rem; margin: 0">{{ tc.output }}</pre>
                     <pre v-if="tc.error" style="white-space: pre-wrap; word-break: break-all; font-size: 0.8rem; margin: 0; color: var(--p-red-500)">{{ tc.error }}</pre>
                   </template>
                 </div>
@@ -480,7 +539,13 @@ function formatTokens(n: number): string {
                     <div v-if="tc.input" style="margin-top: 0.25rem; margin-bottom: 0.5rem">
                       <pre style="white-space: pre-wrap; word-break: break-all; font-size: 0.8rem; margin: 0; opacity: 0.7">{{ formatToolInput(tc.input) }}</pre>
                     </div>
-                    <pre v-if="tc.output" style="white-space: pre-wrap; word-break: break-all; font-size: 0.8rem; margin: 0">{{ tc.output }}</pre>
+                    <div
+                      v-if="tc.output && promptAgentText(tc.toolName, tc.output) !== null"
+                      v-html="renderMarkdown(promptAgentText(tc.toolName, tc.output) || '')"
+                      class="chat-bubble"
+                      style="font-size: 0.85rem"
+                    />
+                    <pre v-else-if="tc.output" style="white-space: pre-wrap; word-break: break-all; font-size: 0.8rem; margin: 0">{{ tc.output }}</pre>
                     <pre v-if="tc.error" style="white-space: pre-wrap; word-break: break-all; font-size: 0.8rem; margin: 0; color: var(--p-red-500)">{{ tc.error }}</pre>
                   </template>
                 </div>
@@ -645,6 +710,29 @@ function formatTokens(n: number): string {
   height: 100%;
   min-height: 0;
   overflow: hidden;
+}
+
+.chat-empty {
+  text-align: center;
+  padding: 3rem 1.5rem;
+  color: var(--p-text-muted-color);
+}
+
+.chat-empty .pi-comments {
+  font-size: 2.5rem;
+  margin-bottom: 1rem;
+  opacity: 0.6;
+}
+
+.chat-empty-title {
+  font-size: 1.1rem;
+  color: var(--p-text-color);
+  margin: 0 0 0.35rem;
+}
+
+.chat-empty-sub {
+  font-size: 0.875rem;
+  margin: 0;
 }
 
 .msg-bubble {

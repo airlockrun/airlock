@@ -70,7 +70,13 @@ SELECT * FROM agents WHERE user_id = $1 ORDER BY created_at DESC;
 DELETE FROM agents WHERE id = $1;
 
 -- name: UpdateAgentFields :one
+-- Caller resolves each value (keep-existing when the request omits it)
+-- before calling, so this is an unconditional set. slug uniqueness is
+-- enforced by the agents.slug UNIQUE constraint — a collision surfaces
+-- as a duplicate-key error the handler maps to 409.
 UPDATE agents SET
+    name = @name,
+    slug = @slug,
     auto_fix = @auto_fix,
     updated_at = now()
 WHERE id = @id
@@ -102,6 +108,9 @@ WHERE id = @id;
 
 -- name: UpdateAgentDescription :exec
 UPDATE agents SET description = @description, updated_at = now() WHERE id = @id;
+
+-- name: UpdateAgentEmoji :exec
+UPDATE agents SET emoji = @emoji, updated_at = now() WHERE id = @id;
 
 -- name: UpdateAgentExtraPrompts :exec
 UPDATE agents SET extra_prompts = @extra_prompts, updated_at = now() WHERE id = @id;

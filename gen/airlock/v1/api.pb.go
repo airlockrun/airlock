@@ -1428,9 +1428,14 @@ func (x *GetAgentDetailResponse) GetRoutes() []*RouteInfo {
 }
 
 type UpdateAgentRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Description   string                 `protobuf:"bytes,1,opt,name=description,proto3" json:"description,omitempty"`
-	AutoFix       *bool                  `protobuf:"varint,2,opt,name=auto_fix,json=autoFix,proto3,oneof" json:"auto_fix,omitempty"`
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	Description string                 `protobuf:"bytes,1,opt,name=description,proto3" json:"description,omitempty"`
+	AutoFix     *bool                  `protobuf:"varint,2,opt,name=auto_fix,json=autoFix,proto3,oneof" json:"auto_fix,omitempty"`
+	// Rename: omitted (null) leaves the field unchanged. slug must stay
+	// unique and kebab-shaped; changing it re-points sibling agent_<slug>
+	// bindings and any externally-configured MCP URL.
+	Name          *string `protobuf:"bytes,5,opt,name=name,proto3,oneof" json:"name,omitempty"`
+	Slug          *string `protobuf:"bytes,6,opt,name=slug,proto3,oneof" json:"slug,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1477,6 +1482,20 @@ func (x *UpdateAgentRequest) GetAutoFix() bool {
 		return *x.AutoFix
 	}
 	return false
+}
+
+func (x *UpdateAgentRequest) GetName() string {
+	if x != nil && x.Name != nil {
+		return *x.Name
+	}
+	return ""
+}
+
+func (x *UpdateAgentRequest) GetSlug() string {
+	if x != nil && x.Slug != nil {
+		return *x.Slug
+	}
+	return ""
 }
 
 type UpdateAgentResponse struct {
@@ -4187,11 +4206,15 @@ const file_airlock_v1_api_proto_rawDesc = "" +
 	"\vconnections\x18\x02 \x03(\v2\x1a.airlock.v1.ConnectionInfoR\vconnections\x123\n" +
 	"\bwebhooks\x18\x03 \x03(\v2\x17.airlock.v1.WebhookInfoR\bwebhooks\x12*\n" +
 	"\x05crons\x18\x04 \x03(\v2\x14.airlock.v1.CronInfoR\x05crons\x12-\n" +
-	"\x06routes\x18\x05 \x03(\v2\x15.airlock.v1.RouteInfoR\x06routes\"\x88\x01\n" +
+	"\x06routes\x18\x05 \x03(\v2\x15.airlock.v1.RouteInfoR\x06routes\"\xcc\x01\n" +
 	"\x12UpdateAgentRequest\x12 \n" +
 	"\vdescription\x18\x01 \x01(\tR\vdescription\x12\x1e\n" +
-	"\bauto_fix\x18\x02 \x01(\bH\x00R\aautoFix\x88\x01\x01B\v\n" +
-	"\t_auto_fixJ\x04\b\x03\x10\x04J\x04\b\x04\x10\x05R\vbuild_modelR\n" +
+	"\bauto_fix\x18\x02 \x01(\bH\x00R\aautoFix\x88\x01\x01\x12\x17\n" +
+	"\x04name\x18\x05 \x01(\tH\x01R\x04name\x88\x01\x01\x12\x17\n" +
+	"\x04slug\x18\x06 \x01(\tH\x02R\x04slug\x88\x01\x01B\v\n" +
+	"\t_auto_fixB\a\n" +
+	"\x05_nameB\a\n" +
+	"\x05_slugJ\x04\b\x03\x10\x04J\x04\b\x04\x10\x05R\vbuild_modelR\n" +
 	"exec_model\"B\n" +
 	"\x13UpdateAgentResponse\x12+\n" +
 	"\x05agent\x18\x01 \x01(\v2\x15.airlock.v1.AgentInfoR\x05agent\"N\n" +

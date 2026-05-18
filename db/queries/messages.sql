@@ -2,8 +2,8 @@
 -- file_keys starts as an empty text[]; the chat upload path that needs
 -- attached file keys uses a separate UPDATE (or could be added explicitly
 -- via a follow-up insert path).
-INSERT INTO agent_messages (conversation_id, role, content, parts, tokens_in, tokens_out, cost_estimate, run_id, source, ephemeral, file_keys)
-VALUES (@conversation_id, @role, @content, @parts, @tokens_in, @tokens_out, COALESCE(@cost_estimate, 0), @run_id, COALESCE(NULLIF(@source, ''), 'user'), @ephemeral, '{}'::text[])
+INSERT INTO agent_messages (conversation_id, role, content, parts, cost_estimate, run_id, source, ephemeral, file_keys)
+VALUES (@conversation_id, @role, @content, @parts, COALESCE(@cost_estimate, 0), @run_id, COALESCE(NULLIF(@source, ''), 'user'), @ephemeral, '{}'::text[])
 RETURNING *;
 
 -- name: ListMessagesByConversation :many
@@ -88,23 +88,6 @@ UPDATE agent_conversations
 SET context_checkpoint_message_id = @checkpoint_message_id,
     updated_at = now()
 WHERE id = @conversation_id;
-
--- name: SumPreCheckpointTokens :one
--- Sum of input+output tokens for messages before the current checkpoint
--- (or all messages if no checkpoint is set). Used when a new checkpoint is
--- being created to compute how many tokens are being freed.
-SELECT COALESCE(SUM(m.tokens_in + m.tokens_out), 0)::bigint AS total
-FROM agent_messages m
-JOIN agent_conversations c ON c.id = m.conversation_id
-WHERE m.conversation_id = $1
-  AND NOT m.ephemeral
-  AND m.source <> 'checkpoint'
-  AND (
-    c.context_checkpoint_message_id IS NULL
-    OR m.seq >= (
-      SELECT seq FROM agent_messages WHERE id = c.context_checkpoint_message_id
-    )
-  );
 
 -- name: DeleteMessagesByConversation :exec
 DELETE FROM agent_messages

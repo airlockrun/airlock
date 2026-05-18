@@ -157,6 +157,15 @@ message AgentInfo {
   google.protobuf.Timestamp updated_at = 12;
   string build_provider_id = 13;
   string exec_provider_id = 14;
+  // running reflects live container state (a container is actually up),
+  // distinct from status (lifecycle: draft/building/active/failed/
+  // stopped). An 'active' agent with running=false is normal — idle
+  // containers are reaped and lazily restarted on the next trigger.
+  // Populated only on the agent-detail endpoint.
+  bool running = 15;
+  // emoji is an optional decorative glyph (agentsdk.Config.Emoji) shown
+  // next to the agent in the UI. Empty = none.
+  string emoji = 16;
 }
 
 // RunInfo represents a single execution of an agent.
@@ -199,6 +208,13 @@ message AgentBuildInfo {
   string error_message = 11;
   google.protobuf.Timestamp started_at = 12;
   google.protobuf.Timestamp finished_at = 13;
+  // Codegen LLM telemetry, aggregated from the llm_usage ledger
+  // (parity with RunInfo.llm_*). Zero for image-only rebuilds that ran
+  // no codegen.
+  int32 llm_calls = 14;
+  int32 llm_tokens_in = 15;
+  int32 llm_tokens_out = 16;
+  double llm_cost_estimate = 17;
 }
 
 // ConversationInfo represents an agent conversation.
@@ -222,16 +238,14 @@ message AgentMessageInfo {
   string source = 4;             // "user" (default), "system" (injected by Airlock), "bridge", "error"
   string content = 5;
   string parts = 6;              // JSON-encoded goai Content for rich message display
-  int32 tokens_in = 7;
-  int32 tokens_out = 8;
-  double cost_estimate = 9;
-  google.protobuf.Timestamp created_at = 10;
+  double cost_estimate = 7;
+  google.protobuf.Timestamp created_at = 8;
   // run_id groups assistant + tool rows produced by the same run so the UI
   // can fold a multi-step run_js loop back into a single bubble — the live
   // streaming path bundles them via finalizeMessage but the persisted shape
   // is one row per LLM step. Empty for user/system rows that don't belong
   // to a run.
-  string run_id = 11;
+  string run_id = 9;
 }
 
 // WebhookInfo represents a code-synced webhook registration.

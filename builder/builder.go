@@ -405,7 +405,7 @@ func (b *BuildService) doBuild(ctx context.Context, q *dbq.Queries, agent dbq.Ag
 	// Step 6 (optional): Run Sol code generation if instructions are provided.
 	if instructions != "" {
 		logLine("Running Sol code generation...")
-		solHash, err := b.runBuildCodegen(ctx, q, agent, agentID, agentUUID, instructions, testDBURL, testDBPSQL, testDBSchema, solLog)
+		solHash, err := b.runBuildCodegen(ctx, q, agent, build.ID, agentID, agentUUID, instructions, testDBURL, testDBPSQL, testDBSchema, solLog)
 		if err != nil {
 			completeBuild("failed", err.Error(), "", "")
 			return fmt.Errorf("sol codegen: %w", err)
@@ -498,7 +498,7 @@ func (b *BuildService) doBuild(ctx context.Context, q *dbq.Queries, agent dbq.Ag
 // Creates a branch, sparse checkouts the agent dir, runs Sol with the
 // build request as its user turn, commits, merges back to main. Returns
 // the new commit hash.
-func (b *BuildService) runBuildCodegen(ctx context.Context, q *dbq.Queries, agent dbq.Agent, agentID string, agentUUID uuid.UUID, instructions string, testDBURL, testDBPSQL, testDBSchema string, logLine func(string)) (string, error) {
+func (b *BuildService) runBuildCodegen(ctx context.Context, q *dbq.Queries, agent dbq.Agent, buildID pgtype.UUID, agentID string, agentUUID uuid.UUID, instructions string, testDBURL, testDBPSQL, testDBSchema string, logLine func(string)) (string, error) {
 	repoPath := b.cfg.AgentMonorepoPath
 
 	// Create a codegen branch from main.
@@ -525,6 +525,9 @@ func (b *BuildService) runBuildCodegen(ctx context.Context, q *dbq.Queries, agen
 	solResult, err := b.runSolInProcess(ctx, solRunOpts{
 		WorkDir:         workDir,
 		AgentDir:        fmt.Sprintf("/workspace/agents/%s", agentID),
+		AgentID:         agent.ID,
+		BuildID:         buildID,
+		BuildType:       "build",
 		BuildProviderID: agent.BuildProviderID,
 		BuildModel:      agent.BuildModel,
 		Prompt:          buildCodegenPrompt(agent, instructions),

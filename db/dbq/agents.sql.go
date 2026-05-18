@@ -30,7 +30,7 @@ VALUES (
     '', '', '', '', '',
     '[]'::jsonb, ''
 )
-RETURNING id, user_id, slug, name, description, status, upgrade_status, auto_fix, build_provider_id, build_model, exec_provider_id, exec_model, stt_provider_id, stt_model, vision_provider_id, vision_model, tts_provider_id, tts_model, image_gen_provider_id, image_gen_model, embedding_provider_id, embedding_model, search_provider_id, search_model, source_ref, image_ref, db_schema, db_password, sdk_version, config, extra_prompts, error_message, created_at, updated_at, allow_non_member_mcp, allow_public_mcp, tools_hash
+RETURNING id, user_id, slug, name, description, status, upgrade_status, auto_fix, build_provider_id, build_model, exec_provider_id, exec_model, stt_provider_id, stt_model, vision_provider_id, vision_model, tts_provider_id, tts_model, image_gen_provider_id, image_gen_model, embedding_provider_id, embedding_model, search_provider_id, search_model, source_ref, image_ref, db_schema, db_password, sdk_version, config, extra_prompts, error_message, created_at, updated_at, allow_non_member_mcp, allow_public_mcp, tools_hash, emoji
 `
 
 type CreateAgentParams struct {
@@ -92,6 +92,7 @@ func (q *Queries) CreateAgent(ctx context.Context, arg CreateAgentParams) (Agent
 		&i.AllowNonMemberMcp,
 		&i.AllowPublicMcp,
 		&i.ToolsHash,
+		&i.Emoji,
 	)
 	return i, err
 }
@@ -106,7 +107,7 @@ func (q *Queries) DeleteAgent(ctx context.Context, id pgtype.UUID) error {
 }
 
 const getAgentByID = `-- name: GetAgentByID :one
-SELECT id, user_id, slug, name, description, status, upgrade_status, auto_fix, build_provider_id, build_model, exec_provider_id, exec_model, stt_provider_id, stt_model, vision_provider_id, vision_model, tts_provider_id, tts_model, image_gen_provider_id, image_gen_model, embedding_provider_id, embedding_model, search_provider_id, search_model, source_ref, image_ref, db_schema, db_password, sdk_version, config, extra_prompts, error_message, created_at, updated_at, allow_non_member_mcp, allow_public_mcp, tools_hash FROM agents WHERE id = $1
+SELECT id, user_id, slug, name, description, status, upgrade_status, auto_fix, build_provider_id, build_model, exec_provider_id, exec_model, stt_provider_id, stt_model, vision_provider_id, vision_model, tts_provider_id, tts_model, image_gen_provider_id, image_gen_model, embedding_provider_id, embedding_model, search_provider_id, search_model, source_ref, image_ref, db_schema, db_password, sdk_version, config, extra_prompts, error_message, created_at, updated_at, allow_non_member_mcp, allow_public_mcp, tools_hash, emoji FROM agents WHERE id = $1
 `
 
 func (q *Queries) GetAgentByID(ctx context.Context, id pgtype.UUID) (Agent, error) {
@@ -150,12 +151,13 @@ func (q *Queries) GetAgentByID(ctx context.Context, id pgtype.UUID) (Agent, erro
 		&i.AllowNonMemberMcp,
 		&i.AllowPublicMcp,
 		&i.ToolsHash,
+		&i.Emoji,
 	)
 	return i, err
 }
 
 const getAgentBySlug = `-- name: GetAgentBySlug :one
-SELECT id, user_id, slug, name, description, status, upgrade_status, auto_fix, build_provider_id, build_model, exec_provider_id, exec_model, stt_provider_id, stt_model, vision_provider_id, vision_model, tts_provider_id, tts_model, image_gen_provider_id, image_gen_model, embedding_provider_id, embedding_model, search_provider_id, search_model, source_ref, image_ref, db_schema, db_password, sdk_version, config, extra_prompts, error_message, created_at, updated_at, allow_non_member_mcp, allow_public_mcp, tools_hash FROM agents WHERE slug = $1
+SELECT id, user_id, slug, name, description, status, upgrade_status, auto_fix, build_provider_id, build_model, exec_provider_id, exec_model, stt_provider_id, stt_model, vision_provider_id, vision_model, tts_provider_id, tts_model, image_gen_provider_id, image_gen_model, embedding_provider_id, embedding_model, search_provider_id, search_model, source_ref, image_ref, db_schema, db_password, sdk_version, config, extra_prompts, error_message, created_at, updated_at, allow_non_member_mcp, allow_public_mcp, tools_hash, emoji FROM agents WHERE slug = $1
 `
 
 func (q *Queries) GetAgentBySlug(ctx context.Context, slug string) (Agent, error) {
@@ -199,6 +201,7 @@ func (q *Queries) GetAgentBySlug(ctx context.Context, slug string) (Agent, error
 		&i.AllowNonMemberMcp,
 		&i.AllowPublicMcp,
 		&i.ToolsHash,
+		&i.Emoji,
 	)
 	return i, err
 }
@@ -246,7 +249,7 @@ func (q *Queries) ListActiveAgentIDs(ctx context.Context) ([]pgtype.UUID, error)
 }
 
 const listAgents = `-- name: ListAgents :many
-SELECT id, user_id, slug, name, description, status, upgrade_status, auto_fix, build_provider_id, build_model, exec_provider_id, exec_model, stt_provider_id, stt_model, vision_provider_id, vision_model, tts_provider_id, tts_model, image_gen_provider_id, image_gen_model, embedding_provider_id, embedding_model, search_provider_id, search_model, source_ref, image_ref, db_schema, db_password, sdk_version, config, extra_prompts, error_message, created_at, updated_at, allow_non_member_mcp, allow_public_mcp, tools_hash FROM agents ORDER BY created_at DESC
+SELECT id, user_id, slug, name, description, status, upgrade_status, auto_fix, build_provider_id, build_model, exec_provider_id, exec_model, stt_provider_id, stt_model, vision_provider_id, vision_model, tts_provider_id, tts_model, image_gen_provider_id, image_gen_model, embedding_provider_id, embedding_model, search_provider_id, search_model, source_ref, image_ref, db_schema, db_password, sdk_version, config, extra_prompts, error_message, created_at, updated_at, allow_non_member_mcp, allow_public_mcp, tools_hash, emoji FROM agents ORDER BY created_at DESC
 `
 
 func (q *Queries) ListAgents(ctx context.Context) ([]Agent, error) {
@@ -296,6 +299,7 @@ func (q *Queries) ListAgents(ctx context.Context) ([]Agent, error) {
 			&i.AllowNonMemberMcp,
 			&i.AllowPublicMcp,
 			&i.ToolsHash,
+			&i.Emoji,
 		); err != nil {
 			return nil, err
 		}
@@ -308,7 +312,7 @@ func (q *Queries) ListAgents(ctx context.Context) ([]Agent, error) {
 }
 
 const listAgentsByUser = `-- name: ListAgentsByUser :many
-SELECT id, user_id, slug, name, description, status, upgrade_status, auto_fix, build_provider_id, build_model, exec_provider_id, exec_model, stt_provider_id, stt_model, vision_provider_id, vision_model, tts_provider_id, tts_model, image_gen_provider_id, image_gen_model, embedding_provider_id, embedding_model, search_provider_id, search_model, source_ref, image_ref, db_schema, db_password, sdk_version, config, extra_prompts, error_message, created_at, updated_at, allow_non_member_mcp, allow_public_mcp, tools_hash FROM agents WHERE user_id = $1 ORDER BY created_at DESC
+SELECT id, user_id, slug, name, description, status, upgrade_status, auto_fix, build_provider_id, build_model, exec_provider_id, exec_model, stt_provider_id, stt_model, vision_provider_id, vision_model, tts_provider_id, tts_model, image_gen_provider_id, image_gen_model, embedding_provider_id, embedding_model, search_provider_id, search_model, source_ref, image_ref, db_schema, db_password, sdk_version, config, extra_prompts, error_message, created_at, updated_at, allow_non_member_mcp, allow_public_mcp, tools_hash, emoji FROM agents WHERE user_id = $1 ORDER BY created_at DESC
 `
 
 func (q *Queries) ListAgentsByUser(ctx context.Context, userID pgtype.UUID) ([]Agent, error) {
@@ -358,6 +362,7 @@ func (q *Queries) ListAgentsByUser(ctx context.Context, userID pgtype.UUID) ([]A
 			&i.AllowNonMemberMcp,
 			&i.AllowPublicMcp,
 			&i.ToolsHash,
+			&i.Emoji,
 		); err != nil {
 			return nil, err
 		}
@@ -370,7 +375,7 @@ func (q *Queries) ListAgentsByUser(ctx context.Context, userID pgtype.UUID) ([]A
 }
 
 const listAgentsByUserID = `-- name: ListAgentsByUserID :many
-SELECT id, user_id, slug, name, description, status, upgrade_status, auto_fix, build_provider_id, build_model, exec_provider_id, exec_model, stt_provider_id, stt_model, vision_provider_id, vision_model, tts_provider_id, tts_model, image_gen_provider_id, image_gen_model, embedding_provider_id, embedding_model, search_provider_id, search_model, source_ref, image_ref, db_schema, db_password, sdk_version, config, extra_prompts, error_message, created_at, updated_at, allow_non_member_mcp, allow_public_mcp, tools_hash FROM agents WHERE user_id = $1 ORDER BY created_at DESC
+SELECT id, user_id, slug, name, description, status, upgrade_status, auto_fix, build_provider_id, build_model, exec_provider_id, exec_model, stt_provider_id, stt_model, vision_provider_id, vision_model, tts_provider_id, tts_model, image_gen_provider_id, image_gen_model, embedding_provider_id, embedding_model, search_provider_id, search_model, source_ref, image_ref, db_schema, db_password, sdk_version, config, extra_prompts, error_message, created_at, updated_at, allow_non_member_mcp, allow_public_mcp, tools_hash, emoji FROM agents WHERE user_id = $1 ORDER BY created_at DESC
 `
 
 func (q *Queries) ListAgentsByUserID(ctx context.Context, userID pgtype.UUID) ([]Agent, error) {
@@ -420,6 +425,7 @@ func (q *Queries) ListAgentsByUserID(ctx context.Context, userID pgtype.UUID) ([
 			&i.AllowNonMemberMcp,
 			&i.AllowPublicMcp,
 			&i.ToolsHash,
+			&i.Emoji,
 		); err != nil {
 			return nil, err
 		}
@@ -518,6 +524,20 @@ func (q *Queries) UpdateAgentDescription(ctx context.Context, arg UpdateAgentDes
 	return err
 }
 
+const updateAgentEmoji = `-- name: UpdateAgentEmoji :exec
+UPDATE agents SET emoji = $1, updated_at = now() WHERE id = $2
+`
+
+type UpdateAgentEmojiParams struct {
+	Emoji string      `json:"emoji"`
+	ID    pgtype.UUID `json:"id"`
+}
+
+func (q *Queries) UpdateAgentEmoji(ctx context.Context, arg UpdateAgentEmojiParams) error {
+	_, err := q.db.Exec(ctx, updateAgentEmoji, arg.Emoji, arg.ID)
+	return err
+}
+
 const updateAgentErrorMessage = `-- name: UpdateAgentErrorMessage :exec
 UPDATE agents SET error_message = $1, updated_at = now() WHERE id = $2
 `
@@ -548,19 +568,32 @@ func (q *Queries) UpdateAgentExtraPrompts(ctx context.Context, arg UpdateAgentEx
 
 const updateAgentFields = `-- name: UpdateAgentFields :one
 UPDATE agents SET
-    auto_fix = $1,
+    name = $1,
+    slug = $2,
+    auto_fix = $3,
     updated_at = now()
-WHERE id = $2
-RETURNING id, user_id, slug, name, description, status, upgrade_status, auto_fix, build_provider_id, build_model, exec_provider_id, exec_model, stt_provider_id, stt_model, vision_provider_id, vision_model, tts_provider_id, tts_model, image_gen_provider_id, image_gen_model, embedding_provider_id, embedding_model, search_provider_id, search_model, source_ref, image_ref, db_schema, db_password, sdk_version, config, extra_prompts, error_message, created_at, updated_at, allow_non_member_mcp, allow_public_mcp, tools_hash
+WHERE id = $4
+RETURNING id, user_id, slug, name, description, status, upgrade_status, auto_fix, build_provider_id, build_model, exec_provider_id, exec_model, stt_provider_id, stt_model, vision_provider_id, vision_model, tts_provider_id, tts_model, image_gen_provider_id, image_gen_model, embedding_provider_id, embedding_model, search_provider_id, search_model, source_ref, image_ref, db_schema, db_password, sdk_version, config, extra_prompts, error_message, created_at, updated_at, allow_non_member_mcp, allow_public_mcp, tools_hash, emoji
 `
 
 type UpdateAgentFieldsParams struct {
+	Name    string      `json:"name"`
+	Slug    string      `json:"slug"`
 	AutoFix bool        `json:"auto_fix"`
 	ID      pgtype.UUID `json:"id"`
 }
 
+// Caller resolves each value (keep-existing when the request omits it)
+// before calling, so this is an unconditional set. slug uniqueness is
+// enforced by the agents.slug UNIQUE constraint — a collision surfaces
+// as a duplicate-key error the handler maps to 409.
 func (q *Queries) UpdateAgentFields(ctx context.Context, arg UpdateAgentFieldsParams) (Agent, error) {
-	row := q.db.QueryRow(ctx, updateAgentFields, arg.AutoFix, arg.ID)
+	row := q.db.QueryRow(ctx, updateAgentFields,
+		arg.Name,
+		arg.Slug,
+		arg.AutoFix,
+		arg.ID,
+	)
 	var i Agent
 	err := row.Scan(
 		&i.ID,
@@ -600,6 +633,7 @@ func (q *Queries) UpdateAgentFields(ctx context.Context, arg UpdateAgentFieldsPa
 		&i.AllowNonMemberMcp,
 		&i.AllowPublicMcp,
 		&i.ToolsHash,
+		&i.Emoji,
 	)
 	return i, err
 }

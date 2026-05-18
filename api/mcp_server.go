@@ -491,7 +491,11 @@ func (s *MCPServer) handlePromptCall(ctx context.Context, w http.ResponseWriter,
 		writeJSONRPCError(w, msg.ID, rpcErrInvalidParams, "decode prompt args")
 		return
 	}
-	if promptArgs.Message == "" {
+	// A taskId+decision call is a resume control action, not a fresh
+	// prompt: approve carries no message, deny may carry a re-reason.
+	// Only a genuinely new turn needs message text.
+	isDecisionResume := promptArgs.TaskID != "" && promptArgs.Decision != ""
+	if promptArgs.Message == "" && !isDecisionResume {
 		writeJSONRPCError(w, msg.ID, rpcErrInvalidParams, "message is required")
 		return
 	}
@@ -516,7 +520,14 @@ func (s *MCPServer) handlePromptCall(ctx context.Context, w http.ResponseWriter,
 			return
 		}
 		conv, err := q.GetConversationByID(ctx, pgtype.UUID{Bytes: convID, Valid: true})
-		if err != nil || uuid.UUID(conv.AgentID.Bytes) != uuid.UUID(target.ID.Bytes) {
+		// Source gate: A2A may only ever continue an A2A thread. A
+		// contextId pointing at this agent's web or bridge conversation
+		// (even one the same user owns) must NOT be resumable over A2A —
+		// that would let a sibling agent read and inject turns into the
+		// human's real web/bridge chat. Merge wrong-agent and
+		// wrong-surface into the one not-accessible error (don't leak
+		// which conversations exist on which surface).
+		if err != nil || uuid.UUID(conv.AgentID.Bytes) != uuid.UUID(target.ID.Bytes) || conv.Source != "a2a" {
 			writeJSONRPCError(w, msg.ID, rpcErrInvalidParams, "contextId not accessible — it must be a contextId this agent returned to you from a prior call. Do not pass your own run/conversation id or a fabricated value. Retry with contextId omitted to start a fresh thread.")
 			return
 		}
@@ -551,7 +562,13 @@ func (s *MCPServer) handlePromptCall(ctx context.Context, w http.ResponseWriter,
 			return
 		}
 		tr, err := q.GetRunByID(ctx, pgtype.UUID{Bytes: taskUUID, Valid: true})
-		if err != nil || uuid.UUID(tr.AgentID.Bytes) != uuid.UUID(target.ID.Bytes) {
+		// Surface gate: a taskId must reference an A2A run on this agent.
+		// A web/bridge run's trigger_ref is its own web/bridge
+		// conversation id; without this check, `convID =
+		// taskRun.TriggerRef` below would resume the human's real
+		// web/bridge thread over A2A. Merge wrong-agent and
+		// wrong-surface into the one not-accessible error.
+		if err != nil || uuid.UUID(tr.AgentID.Bytes) != uuid.UUID(target.ID.Bytes) || tr.TriggerType != "a2a" {
 			writeJSONRPCError(w, msg.ID, rpcErrInvalidParams, "taskId not accessible — it must be a taskId this agent returned to you with state=input-required. Do not invent one; omit taskId unless you are resuming such a task.")
 			return
 		}

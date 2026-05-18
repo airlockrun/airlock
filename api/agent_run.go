@@ -5,87 +5,13 @@ import (
 	"errors"
 	"net/http"
 	"strings"
-	"sync"
 
 	"github.com/airlockrun/agentsdk"
 	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/builder"
 	"github.com/airlockrun/airlock/db/dbq"
-	"github.com/airlockrun/sol/provider"
-	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"
 )
-
-// costRatesWarned dedups the silent-zero warnings in runLLMCostRates so a
-// busy installation with a model missing from the catalog doesn't spam
-// the log on every run. Keyed by a stable string per condition (e.g.
-// "missing:openai/gpt-X"); first occurrence logs, subsequent stay silent
-// for the lifetime of the process.
-var costRatesWarned sync.Map
-
-// runLLMCostRates returns ($/Mtok input, $/Mtok output) for the agent's
-// effective exec model — per-agent override wins, falling through to
-// system_settings.default_exec_model. Mirrors agentHandler.modelForCapability's
-// tier resolution. Returns (0, 0) when no model is resolvable or the
-// catalog has no cost data; UpdateRunLLMStats then stores cost = 0.
-//
-// Logs at warn so an agent sitting at $0/run forever surfaces in
-// operator logs instead of disappearing.
-func runLLMCostRates(ctx context.Context, q *dbq.Queries, logger *zap.Logger, agentID pgtype.UUID) (in, out float64) {
-	ag, err := q.GetAgentByID(ctx, agentID)
-	if err != nil {
-		// Real DB error — log every time; not deduped because the
-		// underlying condition is transient.
-		logger.Warn("cost rates: agent fetch failed", zap.Error(err))
-		return 0, 0
-	}
-	providerRowID := ag.ExecProviderID
-	modelName := ag.ExecModel
-	if !providerRowID.Valid || modelName == "" {
-		settings, sErr := q.GetSystemSettings(ctx)
-		if sErr != nil {
-			logger.Warn("cost rates: system settings fetch failed", zap.Error(sErr))
-			return 0, 0
-		}
-		providerRowID = settings.DefaultExecProviderID
-		modelName = settings.DefaultExecModel
-	}
-	if !providerRowID.Valid || modelName == "" {
-		warnOnce(logger, "no-model", "cost rates: no exec model on agent or in system_settings")
-		return 0, 0
-	}
-	p, pErr := q.GetProviderByID(ctx, providerRowID)
-	if pErr != nil {
-		warnOnce(logger, "missing-provider:"+providerRowID.String(),
-			"cost rates: provider row missing",
-			zap.String("provider_row_id", providerRowID.String()), zap.Error(pErr))
-		return 0, 0
-	}
-	info, ok := provider.GetModelInfo(p.CatalogID, modelName)
-	if !ok {
-		warnOnce(logger, "missing:"+p.CatalogID+"/"+modelName,
-			"cost rates: model not in models.dev catalog",
-			zap.String("provider", p.CatalogID), zap.String("model", modelName))
-		return 0, 0
-	}
-	if info.Cost == nil {
-		warnOnce(logger, "nocost:"+p.CatalogID+"/"+modelName,
-			"cost rates: model has no cost data in catalog",
-			zap.String("provider", p.CatalogID), zap.String("model", modelName))
-		return 0, 0
-	}
-	return info.Cost.Input, info.Cost.Output
-}
-
-// warnOnce logs at warn the first time a key is seen and stays silent
-// afterward. Used to surface a misconfiguration once without spamming
-// every run.
-func warnOnce(logger *zap.Logger, key, msg string, fields ...zap.Field) {
-	if _, loaded := costRatesWarned.LoadOrStore(key, struct{}{}); loaded {
-		return
-	}
-	logger.Warn(msg, fields...)
-}
 
 // formatRunLogs renders structured log entries into the flat text shape
 // stored in runs.stdout_log. Levels above info get a "[level] " prefix so
@@ -162,18 +88,12 @@ func (h *agentHandler) RunComplete(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Aggregate per-message LLM telemetry (tokens, cost, call count) onto
-	// the run row. Source of truth for tokens is agent_messages, which the
-	// SessionStore populates per assistant turn; cost is computed from
-	// sol's models.dev pricing for the agent's exec model. Non-fatal —
-	// the run is already marked complete; missing aggregates just mean
-	// the run-list shows zeros.
-	costIn, costOut := runLLMCostRates(r.Context(), q, h.logger, toPgUUID(agentID))
-	if err := q.UpdateRunLLMStats(r.Context(), dbq.UpdateRunLLMStatsParams{
-		RunID:      toPgUUID(runUUID),
-		CostInput:  costIn,
-		CostOutput: costOut,
-	}); err != nil {
+	// Aggregate LLM telemetry (tokens, cost, call count) onto the run row
+	// from the llm_usage ledger (the proxy writes one row per model
+	// round-trip with cost already computed). Non-fatal — the run is
+	// already marked complete; a failed rollup just means the run-list
+	// shows zeros until the next idempotent recompute.
+	if err := q.UpdateRunLLMStats(r.Context(), toPgUUID(runUUID)); err != nil {
 		h.logger.Error("aggregate run llm stats failed", zap.Error(err))
 	}
 

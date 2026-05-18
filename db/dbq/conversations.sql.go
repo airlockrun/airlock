@@ -48,6 +48,41 @@ func (q *Queries) CreateA2AConversation(ctx context.Context, arg CreateA2AConver
 	return i, err
 }
 
+const createWebConversation = `-- name: CreateWebConversation :one
+INSERT INTO agent_conversations (agent_id, user_id, source, title, metadata, settings)
+VALUES ($1, $2, 'web', $3, '{}'::jsonb, '{}'::jsonb)
+RETURNING id, agent_id, bridge_id, user_id, source, external_id, title, metadata, settings, context_checkpoint_message_id, created_at, updated_at
+`
+
+type CreateWebConversationParams struct {
+	AgentID pgtype.UUID `json:"agent_id"`
+	UserID  pgtype.UUID `json:"user_id"`
+	Title   string      `json:"title"`
+}
+
+// Web is multi-conversation: every call is a fresh thread owned by the
+// user. Plain INSERT, no upsert — the row UUID is the identity and the
+// client addresses one by id on each prompt.
+func (q *Queries) CreateWebConversation(ctx context.Context, arg CreateWebConversationParams) (AgentConversation, error) {
+	row := q.db.QueryRow(ctx, createWebConversation, arg.AgentID, arg.UserID, arg.Title)
+	var i AgentConversation
+	err := row.Scan(
+		&i.ID,
+		&i.AgentID,
+		&i.BridgeID,
+		&i.UserID,
+		&i.Source,
+		&i.ExternalID,
+		&i.Title,
+		&i.Metadata,
+		&i.Settings,
+		&i.ContextCheckpointMessageID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const deleteConversation = `-- name: DeleteConversation :exec
 DELETE FROM agent_conversations WHERE id = $1
 `
@@ -168,59 +203,37 @@ func (q *Queries) GetConversationBySource(ctx context.Context, arg GetConversati
 	return i, err
 }
 
-const getOrCreateConversation = `-- name: GetOrCreateConversation :one
-WITH ins AS (
-    INSERT INTO agent_conversations (agent_id, user_id, source, title, bridge_id, external_id, metadata, settings)
-    VALUES ($1, $2, $3::text, $4, $5, $6, '{}'::jsonb, '{}'::jsonb)
-    ON CONFLICT (agent_id, user_id, source) WHERE user_id IS NOT NULL AND source <> 'a2a' DO UPDATE
-        SET updated_at = now(),
-            bridge_id = COALESCE(EXCLUDED.bridge_id, agent_conversations.bridge_id),
-            external_id = COALESCE(EXCLUDED.external_id, agent_conversations.external_id)
-    RETURNING id, agent_id, bridge_id, user_id, source, external_id, title, metadata, settings, context_checkpoint_message_id, created_at, updated_at
-)
-SELECT id, agent_id, bridge_id, user_id, source, external_id, title, metadata, settings, context_checkpoint_message_id, created_at, updated_at FROM ins
-LIMIT 1
+const getOrCreateBridgeAuthedConversation = `-- name: GetOrCreateBridgeAuthedConversation :one
+INSERT INTO agent_conversations (agent_id, user_id, source, title, bridge_id, external_id, metadata, settings)
+VALUES ($1, $2, 'bridge', $3, $4, $5, '{}'::jsonb, '{}'::jsonb)
+ON CONFLICT (agent_id, user_id, source, external_id) WHERE user_id IS NOT NULL AND external_id IS NOT NULL DO UPDATE
+    SET updated_at = now(),
+        bridge_id = COALESCE(EXCLUDED.bridge_id, agent_conversations.bridge_id)
+RETURNING id, agent_id, bridge_id, user_id, source, external_id, title, metadata, settings, context_checkpoint_message_id, created_at, updated_at
 `
 
-type GetOrCreateConversationParams struct {
+type GetOrCreateBridgeAuthedConversationParams struct {
 	AgentID    pgtype.UUID `json:"agent_id"`
 	UserID     pgtype.UUID `json:"user_id"`
-	Source     string      `json:"source"`
 	Title      string      `json:"title"`
 	BridgeID   pgtype.UUID `json:"bridge_id"`
 	ExternalID pgtype.Text `json:"external_id"`
 }
 
-type GetOrCreateConversationRow struct {
-	ID                         pgtype.UUID        `json:"id"`
-	AgentID                    pgtype.UUID        `json:"agent_id"`
-	BridgeID                   pgtype.UUID        `json:"bridge_id"`
-	UserID                     pgtype.UUID        `json:"user_id"`
-	Source                     string             `json:"source"`
-	ExternalID                 pgtype.Text        `json:"external_id"`
-	Title                      string             `json:"title"`
-	Metadata                   []byte             `json:"metadata"`
-	Settings                   []byte             `json:"settings"`
-	ContextCheckpointMessageID pgtype.UUID        `json:"context_checkpoint_message_id"`
-	CreatedAt                  pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt                  pgtype.Timestamptz `json:"updated_at"`
-}
-
-// DM-only: one conversation per user per agent per source. Upserts on (agent_id, user_id, source).
-// Targets the partial unique index `idx_conversations_dm` — the conflict_target
-// WHERE clause must match the index predicate so Postgres can infer it.
-// Never called with source='a2a' (A2A uses CreateA2AConversation); the
-// `source <> 'a2a'` clause is here only to mirror the partial index.
-func (q *Queries) GetOrCreateConversation(ctx context.Context, arg GetOrCreateConversationParams) (GetOrCreateConversationRow, error) {
-	row := q.db.QueryRow(ctx, getOrCreateConversation,
+// Authed bridge: one thread per (agent, user, external_id) — the same
+// user in a different chat/bot is a different conversation. Upserts on
+// idx_conversations_bridge_authed; the conflict_target WHERE clause must
+// match that partial index's predicate so Postgres can infer it.
+// external_id is required (callers reject empty before this).
+func (q *Queries) GetOrCreateBridgeAuthedConversation(ctx context.Context, arg GetOrCreateBridgeAuthedConversationParams) (AgentConversation, error) {
+	row := q.db.QueryRow(ctx, getOrCreateBridgeAuthedConversation,
 		arg.AgentID,
 		arg.UserID,
-		arg.Source,
 		arg.Title,
 		arg.BridgeID,
 		arg.ExternalID,
 	)
-	var i GetOrCreateConversationRow
+	var i AgentConversation
 	err := row.Scan(
 		&i.ID,
 		&i.AgentID,
@@ -303,9 +316,52 @@ func (q *Queries) GetOrCreateConversationByExternal(ctx context.Context, arg Get
 	return i, err
 }
 
+const listAllWebConversationsByUser = `-- name: ListAllWebConversationsByUser :many
+SELECT id, agent_id, bridge_id, user_id, source, external_id, title, metadata, settings, context_checkpoint_message_id, created_at, updated_at FROM agent_conversations
+WHERE user_id = $1 AND source = 'web'
+ORDER BY updated_at DESC
+`
+
+// Every web conversation the user owns, across all agents — backs the
+// global sidebar list. Only source='web' (bridge is delivered over the
+// bridge, a2a is sibling transport); the row carries agent_id so the UI
+// can label each entry with its agent's name.
+func (q *Queries) ListAllWebConversationsByUser(ctx context.Context, userID pgtype.UUID) ([]AgentConversation, error) {
+	rows, err := q.db.Query(ctx, listAllWebConversationsByUser, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []AgentConversation{}
+	for rows.Next() {
+		var i AgentConversation
+		if err := rows.Scan(
+			&i.ID,
+			&i.AgentID,
+			&i.BridgeID,
+			&i.UserID,
+			&i.Source,
+			&i.ExternalID,
+			&i.Title,
+			&i.Metadata,
+			&i.Settings,
+			&i.ContextCheckpointMessageID,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listConversationsByAgent = `-- name: ListConversationsByAgent :many
 SELECT id, agent_id, bridge_id, user_id, source, external_id, title, metadata, settings, context_checkpoint_message_id, created_at, updated_at FROM agent_conversations
-WHERE agent_id = $1 AND user_id = $2
+WHERE agent_id = $1 AND user_id = $2 AND source <> 'a2a'
 ORDER BY updated_at DESC
 `
 
@@ -314,7 +370,10 @@ type ListConversationsByAgentParams struct {
 	UserID  pgtype.UUID `json:"user_id"`
 }
 
-// Returns conversations for the given agent visible to the given user.
+// Returns conversations for the given agent visible to the given user in
+// the web UI. source='a2a' rows are a sibling-call transport detail (the
+// called agent never "chats" them) and are excluded — surfacing them
+// would also expose a delegated suspension as an actionable card here.
 func (q *Queries) ListConversationsByAgent(ctx context.Context, arg ListConversationsByAgentParams) ([]AgentConversation, error) {
 	rows, err := q.db.Query(ctx, listConversationsByAgent, arg.AgentID, arg.UserID)
 	if err != nil {

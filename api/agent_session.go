@@ -526,20 +526,17 @@ func storeSessionMessage(ctx context.Context, q *dbq.Queries, convID pgtype.UUID
 // DB rows when its parts contain tool calls + results — callers needing the
 // checkpoint anchor use the first row.
 func storeSessionMessageReturningID(ctx context.Context, q *dbq.Queries, convID pgtype.UUID, runID pgtype.UUID, source string, msg session.Message) (pgtype.UUID, error) {
-	// Tokens attribute to the assistant row only — tool / user / system rows
-	// have no LLM cost. Sol sets msg.Tokens on the assistant session.Message
-	// at step-complete time.
-	tokensIn := int32(msg.Tokens.Input)
-	tokensOut := int32(msg.Tokens.Output)
-
+	// Per-message token counts are no longer persisted here — the
+	// llm_usage ledger (written by the proxy per model round-trip) is the
+	// single source of truth for token/cost accounting. msg.Tokens still
+	// rides the session.Message for sol's own CLI accounting; airlock
+	// just doesn't store it.
 	goaiMsgs := session.MessageToGoAI(msg)
 	if len(goaiMsgs) == 0 {
 		row, err := q.CreateMessage(ctx, dbq.CreateMessageParams{
 			ConversationID: convID,
 			Role:           msg.Role,
 			Content:        msg.Content,
-			TokensIn:       tokensIn,
-			TokensOut:      tokensOut,
 			RunID:          runID,
 			Source:         source,
 		})
@@ -557,20 +554,11 @@ func storeSessionMessageReturningID(ctx context.Context, q *dbq.Queries, convID 
 			partsJSON, _ = json.Marshal(goaiMsg.Content)
 		}
 
-		// Only the assistant row in an expanded batch carries token totals;
-		// tool-result rows get zero.
-		rowTokensIn, rowTokensOut := int32(0), int32(0)
-		if goaiMsg.Role == "assistant" {
-			rowTokensIn, rowTokensOut = tokensIn, tokensOut
-		}
-
 		row, err := q.CreateMessage(ctx, dbq.CreateMessageParams{
 			ConversationID: convID,
 			Role:           string(goaiMsg.Role),
 			Content:        displayText,
 			Parts:          partsJSON,
-			TokensIn:       rowTokensIn,
-			TokensOut:      rowTokensOut,
 			RunID:          runID,
 			Source:         source,
 		})

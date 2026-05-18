@@ -166,12 +166,7 @@ func postToConversation(ctx context.Context, deps postDeps, opts postOpts) error
 			ID:     toPgUUID(runID),
 			Status: "timeout",
 		})
-		costIn, costOut := runLLMCostRates(ctx, q, deps.Logger, toPgUUID(opts.AgentID))
-		_ = q.UpdateRunLLMStats(ctx, dbq.UpdateRunLLMStatsParams{
-			RunID:      toPgUUID(runID),
-			CostInput:  costIn,
-			CostOutput: costOut,
-		})
+		_ = q.UpdateRunLLMStats(ctx, toPgUUID(runID))
 	}
 
 	return nil

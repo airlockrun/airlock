@@ -103,15 +103,14 @@ func accessRank(a agentsdk.Access) int {
 // (PromptProxy) paths call this before forwarding to the agent.
 //
 // access is the caller's resolved agent access (see ResolveAgentAccess) and is
-// compared against the command's required level. agentID is used by /clear to
-// resolve any pending suspended run so the pending-confirmation dialog doesn't
-// linger after context clear.
+// compared against the command's required level. /clear resolves any pending
+// suspended run for this conversation so the pending-confirmation dialog
+// doesn't linger after context clear.
 func TrySlashCommand(
 	ctx context.Context,
 	q *dbq.Queries,
 	canceler RunCanceler,
 	convID pgtype.UUID,
-	agentID uuid.UUID,
 	access agentsdk.Access,
 	message string,
 	logger *zap.Logger,
@@ -157,7 +156,7 @@ func TrySlashCommand(
 	case "cancel":
 		return SlashCommandResult{Handled: true, Reply: handleCancelCommand(ctx, q, canceler, convID)}, nil
 	case "clear":
-		reply, err := handleClearCommand(ctx, q, convID, agentID, logger)
+		reply, err := handleClearCommand(ctx, q, convID, logger)
 		if err != nil {
 			return SlashCommandResult{Handled: true, Reply: "Failed to clear context: " + err.Error()}, err
 		}
@@ -209,19 +208,13 @@ func handleCancelCommand(ctx context.Context, q *dbq.Queries, canceler RunCancel
 // pending tool confirmation against the now-forgotten context is not useful,
 // and leaving the run suspended would surface a stale confirmation dialog on
 // the next page reload.
-func handleClearCommand(ctx context.Context, q *dbq.Queries, convID pgtype.UUID, agentID uuid.UUID, logger *zap.Logger) (string, error) {
+func handleClearCommand(ctx context.Context, q *dbq.Queries, convID pgtype.UUID, logger *zap.Logger) (string, error) {
 	if !convID.Valid {
 		return "Nothing to clear.", nil
 	}
-	tokensFreed, err := q.SumPreCheckpointTokens(ctx, convID)
-	if err != nil {
-		return "", fmt.Errorf("sum pre-checkpoint tokens: %w", err)
-	}
-
 	markerParts, err := json.Marshal([]map[string]any{{
-		"type":        "checkpoint",
-		"kind":        "clear",
-		"tokensFreed": tokensFreed,
+		"type": "checkpoint",
+		"kind": "clear",
 	}})
 	if err != nil {
 		return "", fmt.Errorf("marshal marker parts: %w", err)
@@ -250,7 +243,10 @@ func handleClearCommand(ctx context.Context, q *dbq.Queries, convID pgtype.UUID,
 	// a warning but doesn't fail the /clear — the checkpoint has already
 	// advanced, and the caller gets the normal confirmation.
 	suspensionCleared := false
-	if sus, err := q.GetLatestSuspendedRun(ctx, pgtype.UUID{Bytes: agentID, Valid: true}); err == nil {
+	// Conversation-scoped: /clear must only cancel a pending confirmation
+	// belonging to THIS thread, never a sibling-delegated (source='a2a')
+	// suspension that happens to be the agent's latest.
+	if sus, err := q.GetLatestSuspendedRunByConversation(ctx, uuid.UUID(convID.Bytes).String()); err == nil {
 		if rerr := q.ResolveSuspendedRun(ctx, sus.ID); rerr != nil {
 			if logger != nil {
 				logger.Warn("resolve suspended run during /clear", zap.Error(rerr))
@@ -260,7 +256,7 @@ func handleClearCommand(ctx context.Context, q *dbq.Queries, convID pgtype.UUID,
 		}
 	}
 
-	reply := fmt.Sprintf("Context cleared. %d tokens freed.", tokensFreed)
+	reply := "Context cleared."
 	if suspensionCleared {
 		reply += " Pending confirmation cancelled."
 	}

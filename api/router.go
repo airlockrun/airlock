@@ -354,11 +354,6 @@ func NewRouter(cfg RouterConfig) http.Handler {
 					r.Put("/oauth-app", credH.SetOAuthApp)
 				})
 
-				// Topics
-				r.Get("/topics", cH.ListTopics)
-				r.Post("/topics/{slug}/subscribe", cH.SubscribeTopic)
-				r.Delete("/topics/{slug}/subscribe", cH.UnsubscribeTopic)
-
 				// MCP Servers
 				r.Get("/mcp-servers", credH.ListMCPServers)
 				r.Route("/mcp-servers/{slug}/credentials", func(r chi.Router) {
@@ -383,10 +378,16 @@ func NewRouter(cfg RouterConfig) http.Handler {
 			})
 		})
 
-		// Top-level conversation and run routes (not nested under agent)
+		// Top-level conversation and run routes (not nested under agent).
+		// Topic subscription is conversation-scoped: the conversation that
+		// subscribes is the one that receives the topic's notifications.
+		r.Get("/conversations", cH.ListAllConversations)
 		r.Get("/conversations/{convID}", cH.GetConversation)
 		r.Get("/conversations/{convID}/messages", cH.ListConversationMessages)
 		r.Delete("/conversations/{convID}", cH.DeleteConversation)
+		r.Get("/conversations/{convID}/topics", cH.ListTopics)
+		r.Post("/conversations/{convID}/topics/{slug}/subscribe", cH.SubscribeTopic)
+		r.Delete("/conversations/{convID}/topics/{slug}/subscribe", cH.UnsubscribeTopic)
 		r.Get("/runs/{runID}", rH.GetRun)
 		r.Get("/runs/{runID}/logs", rH.GetRunLogs)
 		r.Delete("/runs/{runID}", rH.CancelRun)

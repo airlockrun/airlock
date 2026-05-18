@@ -26,6 +26,23 @@ export interface GroupedToolCall {
 const metaKeys = new Set(['request_confirmation'])
 
 /** Stringify tool args for display, dropping framework-only keys. */
+// promptAgentText pulls the human-facing `text` out of a promptAgent
+// tool result. The wire/LLM form is the full A2A envelope
+// {text,taskId,contextId,state,artifacts} — the model needs the ids for
+// thread continuity, but the human should only ever see `text`. Returns
+// null for non-promptAgent tools or unparseable output so callers fall
+// back to the raw `<pre>` render.
+export function promptAgentText(toolName: string, output: string): string | null {
+  if (toolName !== 'promptAgent' || !output) return null
+  try {
+    const o = JSON.parse(output)
+    if (o && typeof o.text === 'string') return o.text
+  } catch {
+    /* not the envelope (e.g. an "Error: ..." string) — show as-is */
+  }
+  return null
+}
+
 export function formatToolArgs(args: any): string {
   if (typeof args === 'string') return args
   if (args && typeof args === 'object') {

@@ -108,6 +108,19 @@ WHERE agent_id = @agent_id AND status = 'suspended'
 ORDER BY started_at DESC
 LIMIT 1;
 
+-- name: GetLatestSuspendedRunByConversation :one
+-- Conversation-scoped suspended-run lookup. trigger_ref holds the
+-- conversation id for both web (trigger_type='prompt') and sibling
+-- (trigger_type='a2a') runs, and those live on distinct conversation
+-- rows — so scoping by trigger_ref keeps a web/bridge resume, the
+-- conversation view, and /clear from ever picking up an A2A
+-- delegated suspension that belongs to a different surface (the
+-- agent-wide GetLatestSuspendedRun cannot distinguish them).
+SELECT * FROM runs
+WHERE trigger_ref = @conversation_id AND status = 'suspended'
+ORDER BY started_at DESC
+LIMIT 1;
+
 -- name: GetSuspendedRunByID :one
 SELECT * FROM runs WHERE id = @id AND status = 'suspended';
 
@@ -118,25 +131,24 @@ SELECT checkpoint FROM runs WHERE id = @id;
 UPDATE runs SET checkpoint = @checkpoint WHERE id = @id;
 
 -- name: UpdateRunLLMStats :exec
--- Aggregates per-message tokens / call count into the run's totals and
--- multiplies tokens by per-million-token rates to produce a cost estimate.
--- Idempotent — safe to invoke after the agent's RunComplete handler and
--- again from the bg stream goroutine (timeout fallback). Source of truth
--- for tokens is agent_messages, which the SessionStore populates per
--- assistant turn. Cost rates come from sol's models.dev catalog ($ per
--- million tokens) — pass 0/0 for models without pricing data and the
--- estimate stays 0.
+-- Aggregates the run's token/call/cost totals from the llm_usage ledger
+-- (the single source of truth — one row per proxied model round-trip,
+-- cost already computed per-row at capture). Idempotent: safe to invoke
+-- from the agent's RunComplete handler and again from any bg fallback;
+-- it recomputes the SUM each time. A run with no ledger rows zeroes out
+-- (correct — no model spend recorded).
 UPDATE runs
 SET llm_calls = stats.calls,
     llm_tokens_in = stats.tokens_in,
     llm_tokens_out = stats.tokens_out,
-    llm_cost_estimate = (stats.tokens_in * sqlc.arg(cost_input)::float8 + stats.tokens_out * sqlc.arg(cost_output)::float8) / 1000000.0
+    llm_cost_estimate = stats.cost
 FROM (
     SELECT
-        COUNT(*) FILTER (WHERE role = 'assistant' AND tokens_in > 0)::integer AS calls,
+        COUNT(*)::integer                     AS calls,
         COALESCE(SUM(tokens_in), 0)::integer  AS tokens_in,
-        COALESCE(SUM(tokens_out), 0)::integer AS tokens_out
-    FROM agent_messages
+        COALESCE(SUM(tokens_out), 0)::integer AS tokens_out,
+        COALESCE(SUM(cost_total), 0)::float8  AS cost
+    FROM llm_usage
     WHERE run_id = @run_id
 ) stats
 WHERE runs.id = @run_id;

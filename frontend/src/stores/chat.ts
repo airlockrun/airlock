@@ -3,7 +3,7 @@ import { defineStore } from 'pinia'
 import { fromJson } from '@bufbuild/protobuf'
 import api from '@/api/client'
 import { ws } from '@/api/ws'
-import type { AgentMessageInfo } from '@/gen/airlock/v1/types_pb'
+import type { AgentMessageInfo, ConversationInfo } from '@/gen/airlock/v1/types_pb'
 import {
   ListConversationsResponseSchema,
   GetConversationResponseSchema,
@@ -11,6 +11,7 @@ import {
   PromptResponseSchema,
 } from '@/gen/airlock/v1/api_pb'
 import { enrichMessages as enrichMessagesShared, formatToolArgs } from '@/utils/messageGroup'
+import { useConversationsStore } from '@/stores/conversations'
 
 // Sliding-window pagination keeps the browser's in-memory message list
 // bounded. Scrolling up past the top fetches an older page; if the window
@@ -60,6 +61,9 @@ export interface Confirmation {
 
 export const useChatStore = defineStore('chat', () => {
   const conversationId = ref<string | null>(null)
+  // Web conversations for this agent, newest first — the switcher list.
+  // Bridge/a2a threads are excluded server-side (ListConversationsByAgent).
+  const conversations = ref<ConversationInfo[]>([])
   const messages = ref<AgentMessageInfo[]>([])
   const streamingText = ref('')
   const activeToolCalls = reactive(new Map<string, ToolCall>())
@@ -226,6 +230,24 @@ export const useChatStore = defineStore('chat', () => {
           tc.output = ev.output
           tc.error = ev.error
           tc.status = ev.error ? 'error' : 'done'
+          return
+        }
+        // No live entry: the call was already finalized into messages[]
+        // (e.g. a resume — the promptAgent call bubble was committed and
+        // activeToolCalls cleared on run.started, then the sibling's
+        // reply arrives as this result). Patch the finalized bubble so
+        // the output renders live, matching what enrichMessages folds in
+        // on refresh.
+        for (let i = messages.value.length - 1; i >= 0; i--) {
+          const calls = (messages.value[i] as any).toolCalls as
+            | { toolCallId: string; output: string; error: string }[]
+            | undefined
+          const hit = calls?.find((c) => c.toolCallId === ev.toolCallId)
+          if (hit) {
+            hit.output = ev.output
+            hit.error = ev.error
+            break
+          }
         }
       }),
       onRunMessage('run.confirmation_required', (payload) => {
@@ -267,8 +289,6 @@ export const useChatStore = defineStore('chat', () => {
             source: 'checkpoint',
             content: '',
             parts: JSON.stringify([{ type: 'checkpoint', kind: 'compact', tokensFreed }]),
-            tokensIn: 0,
-            tokensOut: 0,
             costEstimate: 0,
           } as any)
           compactRunInFlight.value = false
@@ -300,8 +320,6 @@ export const useChatStore = defineStore('chat', () => {
           role: 'assistant',
           source: 'error',
           content: errText,
-          tokensIn: 0,
-          tokensOut: 0,
           costEstimate: 0,
         } as any)
       }),
@@ -367,8 +385,6 @@ export const useChatStore = defineStore('chat', () => {
       content,
       parts: partsJson,
       source,
-      tokensIn: 0,
-      tokensOut: 0,
       costEstimate: 0,
     } as any
   }
@@ -457,8 +473,6 @@ export const useChatStore = defineStore('chat', () => {
         id: `msg-${stamp}`,
         role: 'assistant',
         content: streamingText.value,
-        tokensIn: 0,
-        tokensOut: 0,
         costEstimate: 0,
       }
       if (toolCalls) msg.toolCalls = toolCalls
@@ -523,33 +537,74 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
-  async function loadConversation(agentId: string) {
-    boundAgentId.value = agentId
+  // Clear all ephemeral run state. Without this a deleted/!switched
+  // thread leaves its streaming text, active tool-call bubbles and
+  // pending confirmation on screen — e.g. after deleting the open
+  // conversation the empty-state text and a stale permission card
+  // render at the same time.
+  function resetTransient() {
+    streamingText.value = ''
+    activeToolCalls.clear()
+    pendingConfirmation.value = null
+    currentRunId.value = null
+    sending.value = false
+    cancelling.value = false
+  }
+
+  // Reset the message view to an empty "new conversation" state without
+  // touching the conversation list. The next sendMessage with no
+  // conversation_id mints a fresh thread server-side.
+  function resetThreadView() {
+    messages.value = []
+    hasOlder.value = false
+    hasNewer.value = false
+    newMessagesPending.value = false
+    resetTransient()
+  }
+
+  // Fetch and render one conversation's messages. Assumes the id belongs
+  // to a web thread the user owns (the server enforces this).
+  async function loadConversationById(convId: string) {
+    // Drop the previous thread's in-flight/streaming state before
+    // swapping in the new history (restorePendingConfirmation below
+    // re-establishes a gate if this thread has a suspended run).
+    resetTransient()
+    conversationId.value = convId
+    const { data: convData } = await api.get(`/api/v1/conversations/${convId}`)
+    const convResponse = fromJson(GetConversationResponseSchema, convData)
+    messages.value = enrichMessages(convResponse.messages)
+    hasOlder.value = convResponse.hasOlderMessages
+    hasNewer.value = false
+    newMessagesPending.value = false
+    if (convResponse.pendingConfirmation?.toolCallId) {
+      restorePendingConfirmation(convResponse.pendingConfirmation, messages.value)
+    }
+  }
+
+  // Refresh the switcher list (web threads only — bridge/a2a are excluded
+  // server-side). Newest first so [0] is the natural default.
+  async function refreshConversations(agentId: string): Promise<ConversationInfo[]> {
     const { data } = await api.get(`/api/v1/agents/${agentId}/conversations`)
     const response = fromJson(ListConversationsResponseSchema, data)
-    // Only surface the web conversation here. Bridge conversations (telegram,
-    // etc.) live alongside it in the same list ordered by updated_at, so
-    // picking [0] would flip the UI to the bridge thread whenever someone
-    // chatted via the bot more recently than via the web.
-    const web = response.conversations.find(c => c.source === 'web')
-    if (web) {
-      conversationId.value = web.id
-      const { data: convData } = await api.get(`/api/v1/conversations/${conversationId.value}`)
-      const convResponse = fromJson(GetConversationResponseSchema, convData)
-      messages.value = enrichMessages(convResponse.messages)
-      hasOlder.value = convResponse.hasOlderMessages
-      hasNewer.value = false
-      newMessagesPending.value = false
-      // Restore pending confirmation from server if present.
-      if (convResponse.pendingConfirmation?.toolCallId) {
-        restorePendingConfirmation(convResponse.pendingConfirmation, messages.value)
-      }
+    conversations.value = response.conversations
+      .filter(c => c.source === 'web')
+      .sort((a, b) => Number(b.updatedAt?.seconds ?? 0n) - Number(a.updatedAt?.seconds ?? 0n))
+    return conversations.value
+  }
+
+  // convId pins a specific thread (sidebar click / ?c= in the URL).
+  // Omitted → most-recent web thread for this agent, or an empty
+  // "new conversation" view if the agent has none.
+  async function loadConversation(agentId: string, convId?: string) {
+    boundAgentId.value = agentId
+    const web = await refreshConversations(agentId)
+    if (convId && web.some(c => c.id === convId)) {
+      await loadConversationById(convId)
+    } else if (!convId && web.length > 0) {
+      await loadConversationById(web[0].id)
     } else {
       conversationId.value = null
-      messages.value = []
-      hasOlder.value = false
-      hasNewer.value = false
-      newMessagesPending.value = false
+      resetThreadView()
     }
   }
 
@@ -627,6 +682,34 @@ export const useChatStore = defineStore('chat', () => {
     compactRunInFlight.value = !isResume && /^\/compact(\s|$)/.test(text.trim())
     if (compactRunInFlight.value) compactReplyBuffer.value = ''
 
+    if (isResume) {
+      // The suspended run's partial turn (assistant text + the tool call
+      // that requested confirmation) lives only in transient streaming
+      // state: run.complete is skipped while a confirmation is pending,
+      // so it was never finalized. The resume's run.started clears
+      // activeToolCalls — commit the bubble to messages first or it
+      // vanishes until a refresh repopulates it from the DB.
+      finalizeMessage()
+
+      // If the user hit Stop on this run before approving/denying, its id
+      // is in cancelledRunIds and isActiveRun() filters out every event
+      // the resumed run emits (run.started/text_delta/complete) — the
+      // backend resumes and finishes but the UI stays stuck on
+      // "(cancelled)". Approving/denying is an explicit decision to
+      // continue, so drop the cancel guard. Clearing the whole set is
+      // safe: event scoping still goes through the currentRunId check in
+      // isActiveRun, and a different old run's id can't equal the new
+      // resume run's id.
+      cancelledRunIds.clear()
+      cancelling.value = false
+      // Drop the optimistic "(cancelled)" tag cancelRun() stamped on the
+      // turn we're now resuming — it's no longer true. (Refresh wouldn't
+      // show it either; the DB never had it.)
+      for (const m of messages.value) {
+        if ((m as any)._cancelled) delete (m as any)._cancelled
+      }
+    }
+
     if (!isResume && !isSlashCommand) {
       // Add optimistic user message for normal sends only. Skip when the
       // window is scrolled back (hasNewer=true) so we don't insert above
@@ -638,8 +721,6 @@ export const useChatStore = defineStore('chat', () => {
           id: `pending-${Date.now()}`,
           role: 'user',
           content: text,
-          tokensIn: 0,
-          tokensOut: 0,
           costEstimate: 0,
         } as AgentMessageInfo)
       }
@@ -647,12 +728,31 @@ export const useChatStore = defineStore('chat', () => {
       streamingText.value = ''
       activeToolCalls.clear()
       textBlockBoundary = false
+    } else if (approved === false && text && !hasNewer.value) {
+      // Deny resume: airlock persists `text` as a source="control"
+      // message, but run.complete doesn't reload, so without an
+      // optimistic row the confirmation card just vanishes until a
+      // refresh. Mirror what the backend will store so the muted label
+      // shows immediately; loadConversation later replaces the array
+      // wholesale (no dedup needed).
+      messages.value.push({
+        $typeName: 'airlock.v1.AgentMessageInfo',
+        id: `pending-control-${Date.now()}`,
+        role: 'user',
+        source: 'control',
+        content: text,
+        costEstimate: 0,
+      } as AgentMessageInfo)
     }
 
     sending.value = true
     pendingConfirmation.value = null
 
+    // Empty/absent conversation_id starts a fresh web thread server-side;
+    // an explicit id continues that thread (multi-conversation).
+    const wasNew = !conversationId.value
     const payload: Record<string, any> = { message: text }
+    if (conversationId.value) payload.conversationId = conversationId.value
     if (approved !== undefined) payload.approved = approved
     if (filePaths?.length) payload.filePaths = filePaths
 
@@ -672,6 +772,13 @@ export const useChatStore = defineStore('chat', () => {
       currentRunId.value = response.runId
       if (response.conversationId) {
         conversationId.value = response.conversationId
+        // First message of a new thread — pull the freshly-created row
+        // (with its server-assigned title) into both the per-agent list
+        // and the global sidebar.
+        if (wasNew) {
+          await refreshConversations(agentId)
+          void useConversationsStore().refresh()
+        }
       }
 
       // Safety timeout: if run.complete/run.error never arrives (e.g., WS down),
@@ -690,6 +797,7 @@ export const useChatStore = defineStore('chat', () => {
     unsubscribers.length = 0
     boundAgentId.value = null
     conversationId.value = null
+    conversations.value = []
     messages.value = []
     streamingText.value = ''
     activeToolCalls.clear()

@@ -209,6 +209,21 @@ func (d *Dispatcher) EnsureRunning(ctx context.Context, agentID uuid.UUID) (*con
 	if err != nil {
 		return nil, fmt.Errorf("start agent: %w", err)
 	}
+
+	// A user-stopped agent that the dispatcher auto-starts (A2A call,
+	// webhook, cron, prompt resume) now has a running container — but the
+	// Stop handler set status="stopped" and only the manual Start handler
+	// flips it back, so the UI would keep showing "Stopped". This is the
+	// single chokepoint every auto-start funnels through; reconcile the
+	// status here. Only stopped→active: never clobber draft/building/
+	// failed (EnsureRunning shouldn't have reached a running container in
+	// those states anyway). Best-effort, mirroring the handlers.
+	if agent.Status == "stopped" {
+		_ = q.UpdateAgentStatus(ctx, dbq.UpdateAgentStatusParams{
+			ID:     toPgUUID(agentID),
+			Status: "active",
+		})
+	}
 	return c, nil
 }
 

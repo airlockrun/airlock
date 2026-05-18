@@ -7,6 +7,7 @@ import type { AgentModelConfig } from '@/gen/airlock/v1/api_pb'
 import {
   ListAgentsResponseSchema,
   CreateAgentResponseSchema,
+  UpdateAgentResponseSchema,
   GetAgentModelConfigResponseSchema,
   UpdateAgentModelConfigRequestSchema,
   UpdateAgentModelConfigResponseSchema,
@@ -55,6 +56,17 @@ export const useAgentsStore = defineStore('agents', () => {
     agents.value = agents.value.filter((a) => a.id !== id)
   }
 
+  // Rename name and/or slug. Only the changed fields need be passed
+  // (UpdateAgentRequest treats them as optional). Replaces the cached
+  // row so the sidebar / vanity-URL layer pick up the new slug at once.
+  async function renameAgent(id: string, name: string, slug: string) {
+    const { data } = await api.patch(`/api/v1/agents/${id}`, { name, slug })
+    const updated = fromJson(UpdateAgentResponseSchema, data).agent!
+    const i = agents.value.findIndex((a) => a.id === id)
+    if (i !== -1) agents.value[i] = updated
+    return updated
+  }
+
   async function stopAgent(id: string) {
     await api.post(`/api/v1/agents/${id}/stop`, {})
     const agent = agents.value.find((a) => a.id === id)
@@ -86,6 +98,7 @@ export const useAgentsStore = defineStore('agents', () => {
     fetchAgents,
     createAgent,
     deleteAgent,
+    renameAgent,
     stopAgent,
     upgradeAgent,
     fetchModelConfig,
