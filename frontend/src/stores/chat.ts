@@ -10,7 +10,7 @@ import {
   PaginatedMessagesResponseSchema,
   PromptResponseSchema,
 } from '@/gen/airlock/v1/api_pb'
-import { enrichMessages as enrichMessagesShared, formatToolArgs } from '@/utils/messageGroup'
+import { enrichMessages as enrichMessagesShared, formatToolArgs, toolLabel, type MsgBlock } from '@/utils/messageGroup'
 import { useConversationsStore } from '@/stores/conversations'
 
 // Sliding-window pagination keeps the browser's in-memory message list
@@ -67,6 +67,13 @@ export const useChatStore = defineStore('chat', () => {
   const messages = ref<AgentMessageInfo[]>([])
   const streamingText = ref('')
   const activeToolCalls = reactive(new Map<string, ToolCall>())
+  // Ordered live render list for the in-flight assistant turn: text and
+  // tool entries in true emission order (mirrors the persisted blocks[]
+  // enrichMessages builds). Text entries hold their own text; tool
+  // entries reference activeToolCalls by id for live status/output. The
+  // streaming bubble iterates this so the live view interleaves exactly
+  // like the finalized/refetched one — no reordering, no finalize snap.
+  const streamingBlocks = ref<Array<{ kind: 'text'; text: string } | { kind: 'tool'; toolCallId: string }>>([])
   const pendingConfirmation = ref<Confirmation | null>(null)
   const currentRunId = ref<string | null>(null)
   // The agent this store is bound to (its WS topic == this agent's UUID).
@@ -185,6 +192,7 @@ export const useChatStore = defineStore('chat', () => {
         currentRunId.value = ev.runId
         streamingText.value = ''
         activeToolCalls.clear()
+        streamingBlocks.value = []
         textBlockBoundary = false
       }),
       onRunMessage('run.text_delta', (payload) => {
@@ -197,14 +205,18 @@ export const useChatStore = defineStore('chat', () => {
           compactReplyBuffer.value += ev.text
           return
         }
-        // Multi-step run_js loops emit text per step with no implicit
-        // separator, so step1 + step2 deltas would concatenate flush against
-        // each other ("…done.next thing…"). Persisted rows are stored per
-        // step and joined with \n on refetch — match that here when a new
-        // text block follows a tool roundtrip.
-        if (textBlockBoundary && streamingText.value && !streamingText.value.endsWith('\n')) {
-          streamingText.value += '\n'
+        // Ordered live blocks: a tool roundtrip (textBlockBoundary) or a
+        // non-text tail starts a new text block; otherwise the delta
+        // extends the current one. This is what the streaming bubble
+        // renders, so the live order matches the persisted blocks[].
+        const tail = streamingBlocks.value[streamingBlocks.value.length - 1]
+        if (textBlockBoundary || !tail || tail.kind !== 'text') {
+          streamingBlocks.value.push({ kind: 'text', text: ev.text })
+        } else {
+          tail.text += ev.text
         }
+        // streamingText is kept only for empty-state / watcher truthiness
+        // now; the bubble renders from streamingBlocks.
         textBlockBoundary = false
         streamingText.value += ev.text
       }),
@@ -220,6 +232,7 @@ export const useChatStore = defineStore('chat', () => {
           error: '',
           status: 'running',
         })
+        streamingBlocks.value.push({ kind: 'tool', toolCallId: ev.toolCallId })
       }),
       onRunMessage('run.tool_result', (payload) => {
         const ev = tryFromJson<ToolResultEvent>(ToolResultEventSchema, payload)
@@ -239,10 +252,11 @@ export const useChatStore = defineStore('chat', () => {
         // the output renders live, matching what enrichMessages folds in
         // on refresh.
         for (let i = messages.value.length - 1; i >= 0; i--) {
-          const calls = (messages.value[i] as any).toolCalls as
-            | { toolCallId: string; output: string; error: string }[]
-            | undefined
-          const hit = calls?.find((c) => c.toolCallId === ev.toolCallId)
+          const blocks = (messages.value[i] as any).blocks as MsgBlock[] | undefined
+          const hit = blocks?.find(
+            (b): b is Extract<MsgBlock, { kind: 'tool' }> =>
+              b.kind === 'tool' && b.toolCallId === ev.toolCallId,
+          )
           if (hit) {
             hit.output = ev.output
             hit.error = ev.error
@@ -295,6 +309,7 @@ export const useChatStore = defineStore('chat', () => {
           compactReplyBuffer.value = ''
           streamingText.value = ''
           activeToolCalls.clear()
+          streamingBlocks.value = []
           textBlockBoundary = false
           currentRunId.value = null
           sending.value = false
@@ -439,6 +454,7 @@ export const useChatStore = defineStore('chat', () => {
     if (hasNewer.value) {
       streamingText.value = ''
       activeToolCalls.clear()
+      streamingBlocks.value = []
       textBlockBoundary = false
       pendingNotifications.length = 0
       newMessagesPending.value = true
@@ -447,26 +463,30 @@ export const useChatStore = defineStore('chat', () => {
       return
     }
 
-    // Collect tool calls before clearing. Each is normalized to the same
-    // GroupedToolCall shape that enrichMessages produces on persisted rows
-    // so the live and refresh paths render identically.
-    const toolCalls = activeToolCalls.size > 0
-      ? [...activeToolCalls.values()].map((tc) => ({
-          toolCallId: tc.toolCallId,
-          toolName: tc.toolName,
-          input: formatToolArgs((() => { try { return JSON.parse(tc.input) } catch { return tc.input } })()),
-          output: tc.output || '',
-          error: tc.error || '',
-        }))
-      : undefined
+    // Freeze the ordered live blocks into the same MsgBlock[] shape
+    // enrichMessages produces on persisted rows, resolving each tool
+    // entry's details from activeToolCalls. Live and refetch paths then
+    // render identically and in the same order — no finalize snap.
+    const blocks: MsgBlock[] = streamingBlocks.value.map((b) => {
+      if (b.kind === 'text') return { kind: 'text', text: b.text }
+      const tc = activeToolCalls.get(b.toolCallId)
+      const rawArgs = (() => { try { return JSON.parse(tc?.input ?? '') } catch { return tc?.input ?? '' } })()
+      return {
+        kind: 'tool',
+        toolCallId: b.toolCallId,
+        toolName: tc?.toolName || 'tool',
+        label: toolLabel(tc?.toolName || 'tool', rawArgs),
+        input: formatToolArgs(rawArgs),
+        output: tc?.output || '',
+        error: tc?.error || '',
+      }
+    })
 
-    // Push ONE assistant message carrying both the streamed text and the
-    // tool calls inline. The render template groups them inside a single
-    // bubble (tool calls first, text last) — matches the streaming layout
-    // so finalize doesn't visually snap. Need to push even when there's
-    // no text, since a tool-only assistant turn (typical of run_js loops)
-    // still has to surface its tool calls.
-    if (toolCalls || streamingText.value || opts?.cancelled) {
+    // Push ONE assistant message carrying the ordered blocks. content is
+    // still set (plain-text fallback / non-block consumers) but the
+    // renderer prefers blocks. Push even with no text, since a tool-only
+    // turn (typical of run_js loops) still has to surface its tools.
+    if (blocks.length || streamingText.value || opts?.cancelled) {
       const stamp = currentRunId.value || Date.now().toString()
       const msg: any = {
         $typeName: 'airlock.v1.AgentMessageInfo',
@@ -475,7 +495,7 @@ export const useChatStore = defineStore('chat', () => {
         content: streamingText.value,
         costEstimate: 0,
       }
-      if (toolCalls) msg.toolCalls = toolCalls
+      if (blocks.length) msg.blocks = blocks
       // Marker used by the renderer to fade the bubble + show a small
       // "(cancelled)" tag. The persisted assistant row from the agent's
       // r.Complete arrives later and lacks this flag, but by then the
@@ -495,6 +515,7 @@ export const useChatStore = defineStore('chat', () => {
     }
     streamingText.value = ''
     activeToolCalls.clear()
+    streamingBlocks.value = []
     textBlockBoundary = false
     currentRunId.value = null
     sending.value = false
@@ -530,7 +551,7 @@ export const useChatStore = defineStore('chat', () => {
     }
     // Hide the assistant message that contains this tool call — it's shown via activeToolCalls.
     for (let i = msgs.length - 1; i >= 0; i--) {
-      if (msgs[i].role === 'assistant' && (msgs[i] as any).toolCalls?.some((c: any) => c.toolCallId === pc.toolCallId)) {
+      if (msgs[i].role === 'assistant' && (msgs[i] as any).blocks?.some((b: any) => b.kind === 'tool' && b.toolCallId === pc.toolCallId)) {
         ;(msgs[i] as any)._hidden = true
         break
       }
@@ -545,6 +566,7 @@ export const useChatStore = defineStore('chat', () => {
   function resetTransient() {
     streamingText.value = ''
     activeToolCalls.clear()
+    streamingBlocks.value = []
     pendingConfirmation.value = null
     currentRunId.value = null
     sending.value = false
@@ -727,6 +749,7 @@ export const useChatStore = defineStore('chat', () => {
       // Reset streaming state for new messages.
       streamingText.value = ''
       activeToolCalls.clear()
+      streamingBlocks.value = []
       textBlockBoundary = false
     } else if (approved === false && text && !hasNewer.value) {
       // Deny resume: airlock persists `text` as a source="control"
@@ -801,6 +824,7 @@ export const useChatStore = defineStore('chat', () => {
     messages.value = []
     streamingText.value = ''
     activeToolCalls.clear()
+    streamingBlocks.value = []
     pendingConfirmation.value = null
     currentRunId.value = null
     sending.value = false
@@ -813,6 +837,7 @@ export const useChatStore = defineStore('chat', () => {
     conversationId,
     messages,
     streamingText,
+    streamingBlocks,
     activeToolCalls,
     pendingConfirmation,
     currentRunId,

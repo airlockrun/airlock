@@ -6,9 +6,10 @@ import { useChatStore } from '@/stores/chat'
 import { useAgentsStore } from '@/stores/agents'
 import { ws } from '@/api/ws'
 import { useMarkdown, renderMarkdown } from '@/composables/useMarkdown'
-import { promptAgentText } from '@/utils/messageGroup'
+import { toolLabel } from '@/utils/messageGroup'
 import api from '@/api/client'
 import MessageParts from '@/components/chat/MessageParts.vue'
+import ToolBadge from '@/components/chat/ToolBadge.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -31,8 +32,6 @@ const topSentinel = ref<HTMLElement | null>(null)
 const bottomSentinel = ref<HTMLElement | null>(null)
 const attachedFiles = ref<{ path: string; filename: string }[]>([])
 const fileInput = ref<HTMLInputElement | null>(null)
-// Explicit collapse state: true=collapsed, false=expanded. Absent=auto (collapsed unless last).
-const toolCollapseState = ref<Record<string, boolean>>({})
 const uploading = ref(false)
 let topObserver: IntersectionObserver | null = null
 let bottomObserver: IntersectionObserver | null = null
@@ -135,7 +134,7 @@ async function jumpToLatest() {
 // actively loading older messages. Otherwise prepend/eviction would yank
 // their viewport to the bottom.
 watch(
-  () => [chat.messages.length, chat.streamingText, chat.activeToolCalls.size, chat.pendingConfirmation],
+  () => [chat.messages.length, chat.streamingText, chat.streamingBlocks.length, chat.activeToolCalls.size, chat.pendingConfirmation],
   () => nextTick(() => {
     if (chat.hasNewer || chat.loadingOlder) return
     scrollToBottom()
@@ -239,46 +238,22 @@ function prettyArgs(obj: any): string {
   return entries.map(([k, v]) => `${k}: ${typeof v === 'string' ? v : JSON.stringify(v)}`).join('\n')
 }
 
-// Compute the ID of the last tool element (message or active tool call) for auto-collapse.
-const lastToolId = computed(() => {
-  // Check active tool calls first (streaming).
-  if (chat.activeToolCalls.size) {
-    let last = ''
-    for (const [id] of chat.activeToolCalls) last = id
-    return last
-  }
-  // Fall back to last tool message in history.
-  for (let i = chat.messages.length - 1; i >= 0; i--) {
-    if (chat.messages[i].role === 'tool') return chat.messages[i].id
-  }
-  return ''
-})
-
-function isToolCollapsed(id: string, toolName?: string): boolean {
-  // A tool call awaiting confirmation must show its code — that's exactly
-  // what the user is being asked to approve. Force-expanded regardless of
-  // toolName or explicit user toggle.
-  if (chat.pendingConfirmation?.toolCallId === id) return false
-  const explicit = toolCollapseState.value[id]
-  if (explicit !== undefined) return explicit
-  // run_js bubbles are noisy (full script + full stdout). Collapse by default
-  // even when the bubble is the latest one — user can still click to expand.
-  if (toolName === 'run_js') return true
-  // Other tools: collapsed unless it's the last one in the transcript.
-  return id !== lastToolId.value
-}
-
-function toggleToolCollapse(id: string, toolName?: string) {
-  const current = isToolCollapsed(id, toolName)
-  toolCollapseState.value = { ...toolCollapseState.value, [id]: !current }
-}
-
-// Markdown helper for streaming text.
-const streamingHtml = computed(() => {
-  if (!chat.streamingText) return ''
-  const { html } = useMarkdown(computed(() => chat.streamingText))
-  return html.value
-})
+// Ordered live render units for the in-flight turn: text blocks carry
+// their markdown source; tool blocks resolve their live ToolCall (status,
+// output) from the reactive activeToolCalls map by id. Iterating this in
+// the template renders the streaming turn in true emission order, the
+// same as the persisted/finalized blocks[].
+const streamingRender = computed(() =>
+  chat.streamingBlocks.map((b) => {
+    if (b.kind === 'text') return { kind: 'text' as const, text: b.text }
+    const tc = chat.activeToolCalls.get(b.toolCallId)
+    return {
+      kind: 'tool' as const,
+      tc,
+      label: tc ? toolLabel(tc.toolName, tc.input) : 'tool',
+    }
+  }),
+)
 
 // Checkpoint markers (source === 'checkpoint') are rendered as a horizontal
 // divider instead of a message bubble. Each marker carries a single part
@@ -369,22 +344,14 @@ function formatTokens(n: number): string {
                Folded rows are marked _hidden by enrichMessages. -->
           <div
             v-else-if="msg.role === 'tool' && !(msg as any)._hidden"
-            style="display: flex; justify-content: flex-start"
+            class="msg-response"
           >
-            <div class="msg-bubble msg-tool">
-              <div style="display: flex; align-items: center; justify-content: space-between; gap: 1rem; cursor: pointer" @click="toggleToolCollapse(msg.id, (msg as any).toolName)">
-                <div style="font-size: 0.7rem; text-transform: uppercase; opacity: 0.6">
-                  {{ (msg as any).toolName || 'Tool' }}
-                </div>
-                <i :class="isToolCollapsed(msg.id, (msg as any).toolName) ? 'pi pi-plus' : 'pi pi-minus'" style="font-size: 0.7rem; opacity: 0.4" />
-              </div>
-              <template v-if="!isToolCollapsed(msg.id, (msg as any).toolName)">
-                <div v-if="(msg as any).toolInput" style="margin-top: 0.25rem; margin-bottom: 0.5rem">
-                  <pre style="white-space: pre-wrap; word-break: break-all; font-size: 0.8rem; margin: 0; opacity: 0.7">{{ (msg as any).toolInput }}</pre>
-                </div>
-                <pre v-if="msg.content" style="white-space: pre-wrap; word-break: break-all; font-size: 0.8rem; margin: 0">{{ msg.content }}</pre>
-              </template>
-            </div>
+            <ToolBadge
+              :label="toolLabel((msg as any).toolName || 'tool')"
+              :tool-name="(msg as any).toolName"
+              :input="(msg as any).toolInput"
+              :output="msg.content"
+            />
           </div>
           <!-- System messages (upgrade notifications, etc.) -->
           <div
@@ -457,49 +424,44 @@ function formatTokens(n: number): string {
               <div v-else style="font-size: 0.85rem">{{ msg.content }}</div>
             </div>
           </div>
-          <!-- User / assistant content. Assistant turns may carry a
-               toolCalls[] array (folded by enrichMessages from the
-               separate role=tool rows the backend persists). When
-               present, render them inside the same bubble first so the
-               final layout mirrors the streaming layout: tool calls on
-               top, text answer at the bottom. -->
+          <!-- User / assistant content. Assistant turns carry an ordered
+               blocks[] (text / tool, interleaved exactly as the model
+               emitted them — built by enrichMessages from the persisted
+               rows' parts, or by finalizeMessage from the live stream).
+               Render blocks in order; no tools-first reordering. Plain
+               user/text rows without blocks fall back to content. -->
           <div
-            v-else-if="(msg.content || (msg as any).toolCalls?.length || (msg as any)._cancelled) && !(msg as any)._hidden"
+            v-else-if="(msg.content || (msg as any).blocks?.length || (msg as any)._cancelled) && !(msg as any)._hidden"
             :style="{
               display: 'flex',
               justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start',
             }"
           >
             <div
-              :class="['msg-bubble', msg.role === 'user' ? 'msg-user' : 'msg-assistant']"
+              :class="msg.role === 'user' ? ['msg-bubble', 'msg-user'] : ['msg-response']"
               :style="(msg as any)._cancelled ? { opacity: 0.6 } : undefined"
             >
-              <div v-if="(msg as any).toolCalls?.length" :style="{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }">
-                <div v-for="tc in (msg as any).toolCalls" :key="tc.toolCallId" style="padding: 0.25rem 0">
-                  <div style="display: flex; align-items: center; justify-content: space-between; cursor: pointer" @click="toggleToolCollapse(tc.toolCallId, tc.toolName)">
-                    <div style="font-size: 0.7rem; text-transform: uppercase; opacity: 0.6">{{ tc.toolName }}</div>
-                    <i :class="isToolCollapsed(tc.toolCallId, tc.toolName) ? 'pi pi-plus' : 'pi pi-minus'" style="font-size: 0.7rem; opacity: 0.4" />
-                  </div>
-                  <template v-if="!isToolCollapsed(tc.toolCallId, tc.toolName)">
-                    <div v-if="tc.input" style="margin-top: 0.25rem; margin-bottom: 0.5rem">
-                      <pre style="white-space: pre-wrap; word-break: break-all; font-size: 0.8rem; margin: 0; opacity: 0.7">{{ tc.input }}</pre>
-                    </div>
-                    <div
-                      v-if="tc.output && promptAgentText(tc.toolName, tc.output) !== null"
-                      v-html="renderMarkdown(promptAgentText(tc.toolName, tc.output) || '')"
-                      class="chat-bubble"
-                      style="font-size: 0.85rem"
-                    />
-                    <pre v-else-if="tc.output" style="white-space: pre-wrap; word-break: break-all; font-size: 0.8rem; margin: 0">{{ tc.output }}</pre>
-                    <pre v-if="tc.error" style="white-space: pre-wrap; word-break: break-all; font-size: 0.8rem; margin: 0; color: var(--p-red-500)">{{ tc.error }}</pre>
-                  </template>
-                </div>
+              <div v-if="(msg as any).blocks?.length" :style="{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }">
+                <template v-for="(b, bi) in (msg as any).blocks" :key="bi">
+                  <div
+                    v-if="b.kind === 'text' && b.text"
+                    v-html="renderMarkdown(b.text)"
+                    class="chat-bubble"
+                  />
+                  <ToolBadge
+                    v-else-if="b.kind === 'tool'"
+                    :label="b.label"
+                    :tool-name="b.toolName"
+                    :input="b.input"
+                    :output="b.output"
+                    :error="b.error"
+                  />
+                </template>
               </div>
               <div
-                v-if="msg.content"
+                v-else-if="msg.content"
                 v-html="useMarkdown(computed(() => msg.content)).html.value"
                 class="chat-bubble"
-                :style="{ marginTop: (msg as any).toolCalls?.length ? '0.75rem' : '0' }"
               />
               <div
                 v-if="(msg as any)._cancelled"
@@ -520,49 +482,32 @@ function formatTokens(n: number): string {
           </div>
         </div>
 
-        <!-- Streaming response. Tool calls render first (chronological:
-             think → call → answer); the assistant's text answer lands at
-             the bottom. The finalized assistant bubble below mirrors this
-             ordering so there's no visual snap when streaming completes. -->
-        <div v-if="chat.streamingText || chat.activeToolCalls.size" style="display: flex; justify-content: flex-start">
-          <div style="max-width: 70%; min-width: 0; overflow-wrap: break-word; padding: 0.75rem 1rem; border-radius: 0.75rem; background-color: var(--p-content-hover-background); color: var(--p-text-color)">
-            <!-- Active tool calls -->
-            <div v-if="chat.activeToolCalls.size" :style="{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }">
-              <template v-for="[id, tc] in chat.activeToolCalls" :key="id">
-                <!-- Completed/errored tool calls: render like finalized msg-tool -->
-                <div v-if="tc.status === 'done' || tc.status === 'error'" style="padding: 0.25rem 0">
-                  <div style="display: flex; align-items: center; justify-content: space-between; cursor: pointer" @click="toggleToolCollapse(id, tc.toolName)">
-                    <div style="font-size: 0.7rem; text-transform: uppercase; opacity: 0.6">{{ tc.toolName }}</div>
-                    <i :class="isToolCollapsed(id, tc.toolName) ? 'pi pi-plus' : 'pi pi-minus'" style="font-size: 0.7rem; opacity: 0.4" />
-                  </div>
-                  <template v-if="!isToolCollapsed(id, tc.toolName)">
-                    <div v-if="tc.input" style="margin-top: 0.25rem; margin-bottom: 0.5rem">
-                      <pre style="white-space: pre-wrap; word-break: break-all; font-size: 0.8rem; margin: 0; opacity: 0.7">{{ formatToolInput(tc.input) }}</pre>
-                    </div>
-                    <div
-                      v-if="tc.output && promptAgentText(tc.toolName, tc.output) !== null"
-                      v-html="renderMarkdown(promptAgentText(tc.toolName, tc.output) || '')"
-                      class="chat-bubble"
-                      style="font-size: 0.85rem"
-                    />
-                    <pre v-else-if="tc.output" style="white-space: pre-wrap; word-break: break-all; font-size: 0.8rem; margin: 0">{{ tc.output }}</pre>
-                    <pre v-if="tc.error" style="white-space: pre-wrap; word-break: break-all; font-size: 0.8rem; margin: 0; color: var(--p-red-500)">{{ tc.error }}</pre>
-                  </template>
-                </div>
-                <!-- Running/confirmation -->
-                <div v-else style="padding: 0.25rem 0">
-                  <div style="display: flex; align-items: center; justify-content: space-between; cursor: pointer" @click="toggleToolCollapse(id, tc.toolName)">
-                    <div style="display: flex; align-items: center; gap: 0.5rem">
-                      <div style="font-size: 0.7rem; text-transform: uppercase; opacity: 0.6">{{ tc.toolName }}</div>
-                      <Tag :value="tc.status" :severity="tc.status === 'running' ? 'warn' : 'info'" style="font-size: 0.65rem" />
-                    </div>
-                    <i :class="isToolCollapsed(id, tc.toolName) ? 'pi pi-plus' : 'pi pi-minus'" style="font-size: 0.7rem; opacity: 0.4" />
-                  </div>
-                  <template v-if="!isToolCollapsed(id, tc.toolName)">
-                    <pre v-if="tc.input" style="white-space: pre-wrap; word-break: break-all; font-size: 0.8rem; margin: 0.25rem 0 0; opacity: 0.7">{{ formatToolInput(tc.input) }}</pre>
-                  </template>
-                  <!-- Inline confirmation (always visible, even when collapsed) -->
-                  <div v-if="chat.pendingConfirmation && chat.pendingConfirmation.toolCallId === id" class="confirmation-box">
+        <!-- Streaming response. Rendered strictly in emission order from
+             streamingBlocks (text / tool interleaved) — same shape as the
+             finalized/persisted blocks[], so there's no reordering and no
+             visual snap when the run completes. -->
+        <div v-if="streamingRender.length" style="display: flex; justify-content: flex-start">
+          <div class="msg-response">
+            <div :style="{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }">
+              <template v-for="(entry, ei) in streamingRender" :key="ei">
+                <div
+                  v-if="entry.kind === 'text' && entry.text"
+                  v-html="renderMarkdown(entry.text)"
+                  class="chat-bubble"
+                />
+                <template v-else-if="entry.kind === 'tool' && entry.tc">
+                  <ToolBadge
+                    :label="entry.label"
+                    :tool-name="entry.tc.toolName"
+                    :input="formatToolInput(entry.tc.input)"
+                    :output="entry.tc.output"
+                    :error="entry.tc.error"
+                    :status="entry.tc.status"
+                    :force-expanded="!!(chat.pendingConfirmation && chat.pendingConfirmation.toolCallId === entry.tc.toolCallId)"
+                  />
+                  <!-- Inline confirmation — the user is being asked to
+                       approve THIS tool call; keep it always visible. -->
+                  <div v-if="chat.pendingConfirmation && chat.pendingConfirmation.toolCallId === entry.tc.toolCallId" class="confirmation-box">
                     <div style="display: flex; align-items: center; justify-content: space-between">
                       <span style="font-size: 0.8rem; font-weight: 500">Allow this action?</span>
                       <div style="display: flex; gap: 0.5rem">
@@ -571,10 +516,9 @@ function formatTokens(n: number): string {
                       </div>
                     </div>
                   </div>
-                </div>
+                </template>
               </template>
             </div>
-            <div v-if="chat.streamingText" v-html="streamingHtml" class="chat-bubble" :style="{ marginTop: chat.activeToolCalls.size ? '0.75rem' : '0' }" />
             <!-- Cancel button. Hidden when a confirmation is awaiting the
                  user (Approve/Reject is the relevant action then). The run
                  has an absolute ceiling on the server (PromptHTTPCeiling);
@@ -748,21 +692,24 @@ function formatTokens(n: number): string {
   color: var(--p-primary-contrast-color);
 }
 
-.msg-assistant {
-  background-color: var(--p-content-hover-background);
-  color: var(--p-text-color);
+/* Links in the user bubble sit on the primary-colour background. Default
+   link / :visited colours (esp. the purple visited state in dark mode)
+   blend into the dark-blue bubble — force the bubble's contrast colour
+   and underline so they stay readable regardless of visited state. */
+.msg-user :deep(a),
+.msg-user :deep(a:visited) {
+  color: var(--p-primary-contrast-color);
+  text-decoration: underline;
 }
 
-.msg-tool {
-  background-color: var(--p-surface-100);
-  color: var(--p-text-color);
-  font-size: 0.85rem;
-  border: 1px solid var(--p-surface-200);
-}
-
-:root.dark .msg-tool {
-  background-color: var(--p-surface-800);
-  border-color: var(--p-surface-700);
+/* Assistant replies render bare — no bubble, flat transcript. width:100%
+   (not shrink-to-fit) so the response column is a stable width: tool
+   badges and text are sized by the chat area, never stretched to match a
+   long sibling message in the same turn. */
+.msg-response {
+  width: 100%;
+  min-width: 0;
+  overflow-wrap: break-word;
 }
 
 .msg-system {
@@ -803,7 +750,7 @@ function formatTokens(n: number): string {
   display: flex;
   flex-direction: column;
   gap: 1rem;
-  padding: 0.5rem 0 1rem;
+  padding: 0.5rem 2.25rem 1rem;
 }
 
 .chat-checkpoint {
