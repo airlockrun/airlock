@@ -297,14 +297,6 @@ type Connection struct {
 	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
 }
 
-type LlmUnitRate struct {
-	ProviderCatalogID string             `json:"provider_catalog_id"`
-	Model             string             `json:"model"`
-	UnitKind          string             `json:"unit_kind"`
-	Rate              float64            `json:"rate"`
-	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
-}
-
 type LlmUsage struct {
 	ID                pgtype.UUID        `json:"id"`
 	AgentID           pgtype.UUID        `json:"agent_id"`
@@ -441,8 +433,6 @@ type Run struct {
 
 type SystemSetting struct {
 	ID                         bool               `json:"id"`
-	PublicUrl                  string             `json:"public_url"`
-	AgentDomain                string             `json:"agent_domain"`
 	DefaultBuildProviderID     pgtype.UUID        `json:"default_build_provider_id"`
 	DefaultBuildModel          string             `json:"default_build_model"`
 	DefaultExecProviderID      pgtype.UUID        `json:"default_exec_provider_id"`

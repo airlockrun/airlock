@@ -15,6 +15,28 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+// decodeToolOutput resolves a stream tool-result/error "output" payload
+// (the discriminated ToolResultOutput union) to (display text, outcome,
+// error text). outcome is "success" | "error" | "denied". A nil/empty
+// output is treated as an empty success; a malformed one yields the raw
+// bytes as text with a success outcome (no legacy-shape handling — the
+// data migration converts all history to the new shape).
+func decodeToolOutput(raw json.RawMessage) (text, outcome, errText string) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return "", "success", ""
+	}
+	o, err := message.UnmarshalOutput(raw)
+	if err != nil {
+		return string(raw), "success", ""
+	}
+	text = message.ToolOutputText(o)
+	outcome = message.ToolOutcome(o)
+	if outcome == "error" {
+		errText = text
+	}
+	return text, outcome, errText
+}
+
 // ParentRunInfo carries the parent run's coordinates when an A2A
 // child run's events should mirror onto the parent's WS topic with
 // a SubagentInfo tag, so the parent's chat UI can render sub-run
@@ -126,44 +148,40 @@ func publishRunEvents(
 				Input:      string(tc.Input),
 			})
 
-		case "tool-result":
+		case "tool-result", "tool-error":
 			var tr struct {
 				ToolCallID string          `json:"toolCallId"`
 				ToolName   string          `json:"toolName"`
 				Output     json.RawMessage `json:"output"`
 			}
 			json.Unmarshal(event.Data, &tr)
-			// Output may be a JSON string or a ToolOutput object with an "output" field.
-			var output string
-			if json.Unmarshal(tr.Output, &output) != nil {
-				var toolOutput struct {
-					Output string `json:"output"`
-				}
-				if json.Unmarshal(tr.Output, &toolOutput) == nil {
-					output = toolOutput.Output
-				} else {
-					output = string(tr.Output)
-				}
-			}
+			out, outcome, errText := decodeToolOutput(tr.Output)
 			mirror("run.tool_result", &airlockv1.ToolResultEvent{
 				RunId:      runID.String(),
 				ToolCallId: tr.ToolCallID,
 				ToolName:   tr.ToolName,
-				Output:     output,
+				Output:     out,
+				Error:      errText,
+				Outcome:    outcome,
 			})
 
-		case "tool-error":
-			var te struct {
+		case "tool-output-denied":
+			var td struct {
 				ToolCallID string `json:"toolCallId"`
 				ToolName   string `json:"toolName"`
-				Error      string `json:"error"`
+				Reason     string `json:"reason"`
 			}
-			json.Unmarshal(event.Data, &te)
+			json.Unmarshal(event.Data, &td)
+			out := td.Reason
+			if out == "" {
+				out = "Tool call execution denied."
+			}
 			mirror("run.tool_result", &airlockv1.ToolResultEvent{
 				RunId:      runID.String(),
-				ToolCallId: te.ToolCallID,
-				ToolName:   te.ToolName,
-				Error:      te.Error,
+				ToolCallId: td.ToolCallID,
+				ToolName:   td.ToolName,
+				Output:     out,
+				Outcome:    "denied",
 			})
 
 		case "confirmation_required":

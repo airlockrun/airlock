@@ -2,7 +2,6 @@ package api
 
 import (
 	"net/http"
-	"net/url"
 
 	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/builder"
@@ -18,25 +17,6 @@ import (
 	"github.com/go-chi/cors"
 	"go.uber.org/zap"
 )
-
-// agentRouteSchemePort returns the scheme + optional explicit port that
-// per-agent {slug}.AGENT_DOMAIN URLs should use. Inherited from PUBLIC_URL
-// so a localhost overlay on `:8443` produces signed URLs that match what
-// Caddy actually serves. Standard 80/443 → empty port (no `:443` cruft
-// in production URLs); anything else is preserved verbatim. Falls back
-// to ("https", "") when PUBLIC_URL is malformed — same effective shape
-// as the historic hard-coded "https://" prefix.
-func agentRouteSchemePort(publicURL string) (scheme, port string) {
-	scheme = "https"
-	if u, err := url.Parse(publicURL); err == nil && u.Host != "" {
-		scheme = u.Scheme
-		p := u.Port()
-		if p != "" && !((scheme == "https" && p == "443") || (scheme == "http" && p == "80")) {
-			port = p
-		}
-	}
-	return
-}
 
 type RouterConfig struct {
 	DB        *db.DB
@@ -82,6 +62,11 @@ type RouterConfig struct {
 
 	// Agent subdomain routing (e.g. "airlock.host" → {slug}.airlock.host)
 	AgentDomain string
+
+	// AgentBaseURL builds an agent's external route base
+	// ({scheme}://{slug}.{domain}[:port]). Sourced from config.Config —
+	// the single place that derives it; handlers never re-derive.
+	AgentBaseURL func(slug string) string
 
 	// LLM debugging proxy (e.g. telescope -watch)
 	LLMProxyURL string
@@ -257,15 +242,16 @@ func NewRouter(cfg RouterConfig) http.Handler {
 
 		// Agent management (Phase 6)
 		agH := &agentsHandler{
-			db:          cfg.DB,
-			builder:     cfg.BuildService,
-			dispatcher:  cfg.Dispatcher,
-			encryptor:   cfg.Secrets,
-			containers:  cfg.Containers,
-			promptProxy: cfg.PromptProxy,
-			bridgeMgr:   cfg.BridgeManager,
-			publicURL:   cfg.PublicURL,
-			logger:      cfg.Logger.Named("agents"),
+			db:           cfg.DB,
+			builder:      cfg.BuildService,
+			dispatcher:   cfg.Dispatcher,
+			encryptor:    cfg.Secrets,
+			containers:   cfg.Containers,
+			promptProxy:  cfg.PromptProxy,
+			bridgeMgr:    cfg.BridgeManager,
+			publicURL:    cfg.PublicURL,
+			agentBaseURL: cfg.AgentBaseURL,
+			logger:       cfg.Logger.Named("agents"),
 		}
 		rH := &runsHandler{
 			db:         cfg.DB,
@@ -433,7 +419,6 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	// (channel event endpoint removed — bridges use long-polling, not push)
 
 	// Agent API routes (authenticated via agent JWT)
-	agentRouteScheme, agentRoutePort := agentRouteSchemePort(cfg.PublicURL)
 	ah := &agentHandler{
 		db:                     cfg.DB,
 		encryptor:              cfg.Secrets,
@@ -443,9 +428,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		bridgeMgr:              cfg.BridgeManager,
 		scheduler:              cfg.Scheduler,
 		publicURL:              cfg.PublicURL,
-		agentDomain:            cfg.AgentDomain,
-		agentRouteScheme:       agentRouteScheme,
-		agentRoutePort:         agentRoutePort,
+		agentBaseURL:           cfg.AgentBaseURL,
 		llmProxyURL:            cfg.LLMProxyURL,
 		forceInlineAttachments: cfg.ForceInlineAttachments,
 		jwtSecret:              cfg.JWTSecret,

@@ -39,13 +39,11 @@ type agentHandler struct {
 	bridgeMgr              bridgePartsDeliverer // for printToUser/topic bridge delivery
 	scheduler              cronReloader         // nil until trigger system is wired
 	publicURL              string
-	agentDomain            string              // e.g. "dev.airlock.run" → {slug}.dev.airlock.run
-	agentRouteScheme       string              // "http" or "https" — copied from PUBLIC_URL so dev/local overlays can drop https
-	agentRoutePort         string              // empty for the standard 80/443; set when Caddy is fronted on a non-default port so signed /__air/storage URLs include it
-	llmProxyURL            string              // optional: route LLM calls through this proxy
-	forceInlineAttachments bool                // dev escape hatch — ignore provider URL capability, send everything as base64
-	jwtSecret              string              // shared with auth middleware; read by mcp_server.go to validate incoming A2A JWTs
-	dispatcher             *trigger.Dispatcher // forward-prompt + ensure-running for A2A
+	agentBaseURL           func(slug string) string // {scheme}://{slug}.{domain}[:port] — from config.Config (single source)
+	llmProxyURL            string                   // optional: route LLM calls through this proxy
+	forceInlineAttachments bool                     // dev escape hatch — ignore provider URL capability, send everything as base64
+	jwtSecret              string                   // shared with auth middleware; read by mcp_server.go to validate incoming A2A JWTs
+	dispatcher             *trigger.Dispatcher      // forward-prompt + ensure-running for A2A
 	logger                 *zap.Logger
 }
 
@@ -511,10 +509,7 @@ func (h *agentHandler) Sync(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusInternalServerError, "failed to load agent")
 		return
 	}
-	agentRouteURL := h.agentRouteScheme + "://" + agentRecord.Slug + "." + h.agentDomain
-	if h.agentRoutePort != "" {
-		agentRouteURL += ":" + h.agentRoutePort
-	}
+	routeURL := h.agentBaseURL(agentRecord.Slug)
 
 	// Sibling address book: pre-rendered Tools list per sibling so the
 	// agent can install agent_<slug> bindings + render the prompt
@@ -530,7 +525,7 @@ func (h *agentHandler) Sync(w http.ResponseWriter, r *http.Request) {
 
 	// Public storage base — the prefix StorageHandle.URL joins with '/'
 	// and the storage path (e.g. "reports/q1.csv") to form a URL.
-	publicStorageBase := agentRouteURL + "/__air/storage"
+	publicStorageBase := routeURL + "/__air/storage"
 
 	// Notify subscribed clients (agent detail tabs) that the agent's
 	// declared surface — tools, webhooks, crons, routes, MCP servers,
@@ -557,7 +552,7 @@ func (h *agentHandler) Sync(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, agentsdk.SyncResponse{
 		PromptData: agentsdk.PromptData{
 			AgentDashboardURL:   h.publicURL + "/agents/" + agentID.String(),
-			AgentRouteURL:       agentRouteURL,
+			AgentRouteURL:       routeURL,
 			Siblings:            siblings,
 			Capabilities:        caps,
 			SupportedModalities: modalities,

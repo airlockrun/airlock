@@ -676,43 +676,42 @@ func StreamNDJSONResponse(body io.Reader, runID string, events chan<- ResponseEv
 				ToolInput:  string(tc.Input),
 			}
 
-		case "tool-result":
+		case "tool-result", "tool-error":
 			var tr struct {
 				ToolCallID string          `json:"toolCallId"`
 				ToolName   string          `json:"toolName"`
 				Output     json.RawMessage `json:"output"`
 			}
 			json.Unmarshal(event.Data, &tr)
-			// tr.Output is the serialized tool.Result ({"output": "...",
-			// "attachments": [...], ...}). Unwrap the inner string so bridges
-			// see just the tool's text output — and so JSON-encoded newlines
-			// (\n) are restored to real newlines by the decoder.
-			output := string(tr.Output)
-			var unwrapped struct {
-				Output string `json:"output"`
+			re := ResponseEvent{ToolCallID: tr.ToolCallID, ToolName: tr.ToolName}
+			if o, err := message.UnmarshalOutput(tr.Output); err == nil {
+				txt := message.ToolOutputText(o)
+				if message.ToolOutcome(o) == "error" {
+					re.Type, re.ToolError = "tool-error", txt
+				} else {
+					re.Type, re.ToolOutput = "tool-result", txt
+				}
+			} else {
+				re.Type, re.ToolOutput = "tool-result", string(tr.Output)
 			}
-			if json.Unmarshal(tr.Output, &unwrapped) == nil {
-				output = unwrapped.Output
+			events <- re
+
+		case "tool-output-denied":
+			var td struct {
+				ToolCallID string `json:"toolCallId"`
+				ToolName   string `json:"toolName"`
+				Reason     string `json:"reason"`
+			}
+			json.Unmarshal(event.Data, &td)
+			reason := td.Reason
+			if reason == "" {
+				reason = "Tool call execution denied."
 			}
 			events <- ResponseEvent{
 				Type:       "tool-result",
-				ToolCallID: tr.ToolCallID,
-				ToolName:   tr.ToolName,
-				ToolOutput: output,
-			}
-
-		case "tool-error":
-			var te struct {
-				ToolCallID string `json:"toolCallId"`
-				ToolName   string `json:"toolName"`
-				Error      string `json:"error"`
-			}
-			json.Unmarshal(event.Data, &te)
-			events <- ResponseEvent{
-				Type:       "tool-error",
-				ToolCallID: te.ToolCallID,
-				ToolName:   te.ToolName,
-				ToolError:  te.Error,
+				ToolCallID: td.ToolCallID,
+				ToolName:   td.ToolName,
+				ToolOutput: reason,
 			}
 
 		case "confirmation_required":

@@ -49,8 +49,11 @@ message ToolResultEvent {
   string run_id = 1;
   string tool_call_id = 2;
   string tool_name = 3;
-  string output = 4; // JSON string
-  string error = 5;  // set if tool errored
+  string output = 4; // human-facing text of the result
+  string error = 5;  // set if tool errored (error text)
+  // outcome is the structured, persisted tool status derived from the
+  // discriminated tool-result output: "success" | "error" | "denied".
+  string outcome = 6;
 }
 
 // ConfirmationRequiredEvent signals the user must approve an action.

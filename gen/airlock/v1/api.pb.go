@@ -1352,12 +1352,17 @@ func (x *ListAgentsResponse) GetAgents() []*AgentInfo {
 
 // GetAgentDetailResponse returns rich agent detail with connections, webhooks, crons, and routes.
 type GetAgentDetailResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Agent         *AgentInfo             `protobuf:"bytes,1,opt,name=agent,proto3" json:"agent,omitempty"`
-	Connections   []*ConnectionInfo      `protobuf:"bytes,2,rep,name=connections,proto3" json:"connections,omitempty"`
-	Webhooks      []*WebhookInfo         `protobuf:"bytes,3,rep,name=webhooks,proto3" json:"webhooks,omitempty"`
-	Crons         []*CronInfo            `protobuf:"bytes,4,rep,name=crons,proto3" json:"crons,omitempty"`
-	Routes        []*RouteInfo           `protobuf:"bytes,5,rep,name=routes,proto3" json:"routes,omitempty"`
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	Agent       *AgentInfo             `protobuf:"bytes,1,opt,name=agent,proto3" json:"agent,omitempty"`
+	Connections []*ConnectionInfo      `protobuf:"bytes,2,rep,name=connections,proto3" json:"connections,omitempty"`
+	Webhooks    []*WebhookInfo         `protobuf:"bytes,3,rep,name=webhooks,proto3" json:"webhooks,omitempty"`
+	Crons       []*CronInfo            `protobuf:"bytes,4,rep,name=crons,proto3" json:"crons,omitempty"`
+	Routes      []*RouteInfo           `protobuf:"bytes,5,rep,name=routes,proto3" json:"routes,omitempty"`
+	// External base URL for the agent's registered routes
+	// ({scheme}://{slug}.{agentDomain}[:port], no trailing slash). The UI
+	// links GET routes to route_base_url + path. Server-built from env —
+	// agent_domain is not client-derivable.
+	RouteBaseUrl  string `protobuf:"bytes,6,opt,name=route_base_url,json=routeBaseUrl,proto3" json:"route_base_url,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1425,6 +1430,13 @@ func (x *GetAgentDetailResponse) GetRoutes() []*RouteInfo {
 		return x.Routes
 	}
 	return nil
+}
+
+func (x *GetAgentDetailResponse) GetRouteBaseUrl() string {
+	if x != nil {
+		return x.RouteBaseUrl
+	}
+	return ""
 }
 
 type UpdateAgentRequest struct {
@@ -4200,13 +4212,14 @@ const file_airlock_v1_api_proto_rawDesc = "" +
 	"\x13CreateAgentResponse\x12+\n" +
 	"\x05agent\x18\x01 \x01(\v2\x15.airlock.v1.AgentInfoR\x05agent\"C\n" +
 	"\x12ListAgentsResponse\x12-\n" +
-	"\x06agents\x18\x01 \x03(\v2\x15.airlock.v1.AgentInfoR\x06agents\"\x93\x02\n" +
+	"\x06agents\x18\x01 \x03(\v2\x15.airlock.v1.AgentInfoR\x06agents\"\xb9\x02\n" +
 	"\x16GetAgentDetailResponse\x12+\n" +
 	"\x05agent\x18\x01 \x01(\v2\x15.airlock.v1.AgentInfoR\x05agent\x12<\n" +
 	"\vconnections\x18\x02 \x03(\v2\x1a.airlock.v1.ConnectionInfoR\vconnections\x123\n" +
 	"\bwebhooks\x18\x03 \x03(\v2\x17.airlock.v1.WebhookInfoR\bwebhooks\x12*\n" +
 	"\x05crons\x18\x04 \x03(\v2\x14.airlock.v1.CronInfoR\x05crons\x12-\n" +
-	"\x06routes\x18\x05 \x03(\v2\x15.airlock.v1.RouteInfoR\x06routes\"\xcc\x01\n" +
+	"\x06routes\x18\x05 \x03(\v2\x15.airlock.v1.RouteInfoR\x06routes\x12$\n" +
+	"\x0eroute_base_url\x18\x06 \x01(\tR\frouteBaseUrl\"\xcc\x01\n" +
 	"\x12UpdateAgentRequest\x12 \n" +
 	"\vdescription\x18\x01 \x01(\tR\vdescription\x12\x1e\n" +
 	"\bauto_fix\x18\x02 \x01(\bH\x00R\aautoFix\x88\x01\x01\x12\x17\n" +

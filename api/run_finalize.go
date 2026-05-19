@@ -255,7 +255,10 @@ func orphanToolResultMessage(convID pgtype.UUID, op orphanPair) dbq.AgentMessage
 		"type":       "tool-result",
 		"toolCallId": op.ToolCallID,
 		"toolName":   op.ToolName,
-		"result":     "Tool result missing — likely an interrupted earlier run.",
+		"output": map[string]any{
+			"type":  "text",
+			"value": "Tool result missing — likely an interrupted earlier run.",
+		},
 	}})
 	return dbq.AgentMessage{
 		ConversationID: convID,

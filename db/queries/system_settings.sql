@@ -17,9 +17,7 @@ WHERE id = true;
 -- Each system default is a pair: a providers row FK (nullable) and the
 -- bare model name. NULL/empty ⇄ no default configured for that slot.
 UPDATE system_settings
-SET public_url = @public_url,
-    agent_domain = @agent_domain,
-    default_build_provider_id     = @default_build_provider_id,
+SET default_build_provider_id     = @default_build_provider_id,
     default_build_model           = @default_build_model,
     default_exec_provider_id      = @default_exec_provider_id,
     default_exec_model            = @default_exec_model,

@@ -41,7 +41,11 @@ type agentsHandler struct {
 	promptProxy *trigger.PromptProxy
 	bridgeMgr   bridgePollerCanceler
 	publicURL   string
-	logger      *zap.Logger
+	// agentBaseURL builds an agent's external route base
+	// ({scheme}://{slug}.{domain}[:port]) for GetAgentDetail. Sourced
+	// from config.Config — the single place that derives it.
+	agentBaseURL func(slug string) string
+	logger       *zap.Logger
 }
 
 // Create handles POST /api/v1/agents.
@@ -240,11 +244,12 @@ func (h *agentsHandler) Get(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeProto(w, http.StatusOK, &airlockv1.GetAgentDetailResponse{
-		Agent:       agentProto,
-		Connections: connInfos,
-		Webhooks:    whInfos,
-		Crons:       cronInfos,
-		Routes:      routeInfos,
+		Agent:        agentProto,
+		RouteBaseUrl: h.agentBaseURL(agent.Slug),
+		Connections:  connInfos,
+		Webhooks:     whInfos,
+		Crons:        cronInfos,
+		Routes:       routeInfos,
 	})
 }
 

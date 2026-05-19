@@ -2592,26 +2592,27 @@ func (x *TopicInfo) GetSubscribed() bool {
 // for a capability and no agent-specific override is set. Each slot pairs
 // a model name with a provider row UUID (multi-key support); empty + empty
 // means "no default configured for this capability".
+// public_url / agent_domain are deliberately absent: they are env-only
+// (PUBLIC_URL / AGENT_DOMAIN), shared with the bundled Caddy via .env, and
+// never DB/UI-editable.
 type SystemSettingsInfo struct {
 	state                      protoimpl.MessageState `protogen:"open.v1"`
-	PublicUrl                  string                 `protobuf:"bytes,1,opt,name=public_url,json=publicUrl,proto3" json:"public_url,omitempty"`
-	AgentDomain                string                 `protobuf:"bytes,2,opt,name=agent_domain,json=agentDomain,proto3" json:"agent_domain,omitempty"`
-	DefaultBuildModel          string                 `protobuf:"bytes,3,opt,name=default_build_model,json=defaultBuildModel,proto3" json:"default_build_model,omitempty"`
-	DefaultExecModel           string                 `protobuf:"bytes,4,opt,name=default_exec_model,json=defaultExecModel,proto3" json:"default_exec_model,omitempty"`
-	DefaultSttModel            string                 `protobuf:"bytes,5,opt,name=default_stt_model,json=defaultSttModel,proto3" json:"default_stt_model,omitempty"`
-	DefaultVisionModel         string                 `protobuf:"bytes,6,opt,name=default_vision_model,json=defaultVisionModel,proto3" json:"default_vision_model,omitempty"`
-	DefaultTtsModel            string                 `protobuf:"bytes,7,opt,name=default_tts_model,json=defaultTtsModel,proto3" json:"default_tts_model,omitempty"`
-	DefaultImageGenModel       string                 `protobuf:"bytes,8,opt,name=default_image_gen_model,json=defaultImageGenModel,proto3" json:"default_image_gen_model,omitempty"`
-	DefaultSearchModel         string                 `protobuf:"bytes,9,opt,name=default_search_model,json=defaultSearchModel,proto3" json:"default_search_model,omitempty"`
-	DefaultEmbeddingModel      string                 `protobuf:"bytes,10,opt,name=default_embedding_model,json=defaultEmbeddingModel,proto3" json:"default_embedding_model,omitempty"`
-	DefaultBuildProviderId     string                 `protobuf:"bytes,11,opt,name=default_build_provider_id,json=defaultBuildProviderId,proto3" json:"default_build_provider_id,omitempty"`
-	DefaultExecProviderId      string                 `protobuf:"bytes,12,opt,name=default_exec_provider_id,json=defaultExecProviderId,proto3" json:"default_exec_provider_id,omitempty"`
-	DefaultSttProviderId       string                 `protobuf:"bytes,13,opt,name=default_stt_provider_id,json=defaultSttProviderId,proto3" json:"default_stt_provider_id,omitempty"`
-	DefaultVisionProviderId    string                 `protobuf:"bytes,14,opt,name=default_vision_provider_id,json=defaultVisionProviderId,proto3" json:"default_vision_provider_id,omitempty"`
-	DefaultTtsProviderId       string                 `protobuf:"bytes,15,opt,name=default_tts_provider_id,json=defaultTtsProviderId,proto3" json:"default_tts_provider_id,omitempty"`
-	DefaultImageGenProviderId  string                 `protobuf:"bytes,16,opt,name=default_image_gen_provider_id,json=defaultImageGenProviderId,proto3" json:"default_image_gen_provider_id,omitempty"`
-	DefaultSearchProviderId    string                 `protobuf:"bytes,17,opt,name=default_search_provider_id,json=defaultSearchProviderId,proto3" json:"default_search_provider_id,omitempty"`
-	DefaultEmbeddingProviderId string                 `protobuf:"bytes,18,opt,name=default_embedding_provider_id,json=defaultEmbeddingProviderId,proto3" json:"default_embedding_provider_id,omitempty"`
+	DefaultBuildModel          string                 `protobuf:"bytes,1,opt,name=default_build_model,json=defaultBuildModel,proto3" json:"default_build_model,omitempty"`
+	DefaultExecModel           string                 `protobuf:"bytes,2,opt,name=default_exec_model,json=defaultExecModel,proto3" json:"default_exec_model,omitempty"`
+	DefaultSttModel            string                 `protobuf:"bytes,3,opt,name=default_stt_model,json=defaultSttModel,proto3" json:"default_stt_model,omitempty"`
+	DefaultVisionModel         string                 `protobuf:"bytes,4,opt,name=default_vision_model,json=defaultVisionModel,proto3" json:"default_vision_model,omitempty"`
+	DefaultTtsModel            string                 `protobuf:"bytes,5,opt,name=default_tts_model,json=defaultTtsModel,proto3" json:"default_tts_model,omitempty"`
+	DefaultImageGenModel       string                 `protobuf:"bytes,6,opt,name=default_image_gen_model,json=defaultImageGenModel,proto3" json:"default_image_gen_model,omitempty"`
+	DefaultSearchModel         string                 `protobuf:"bytes,7,opt,name=default_search_model,json=defaultSearchModel,proto3" json:"default_search_model,omitempty"`
+	DefaultEmbeddingModel      string                 `protobuf:"bytes,8,opt,name=default_embedding_model,json=defaultEmbeddingModel,proto3" json:"default_embedding_model,omitempty"`
+	DefaultBuildProviderId     string                 `protobuf:"bytes,9,opt,name=default_build_provider_id,json=defaultBuildProviderId,proto3" json:"default_build_provider_id,omitempty"`
+	DefaultExecProviderId      string                 `protobuf:"bytes,10,opt,name=default_exec_provider_id,json=defaultExecProviderId,proto3" json:"default_exec_provider_id,omitempty"`
+	DefaultSttProviderId       string                 `protobuf:"bytes,11,opt,name=default_stt_provider_id,json=defaultSttProviderId,proto3" json:"default_stt_provider_id,omitempty"`
+	DefaultVisionProviderId    string                 `protobuf:"bytes,12,opt,name=default_vision_provider_id,json=defaultVisionProviderId,proto3" json:"default_vision_provider_id,omitempty"`
+	DefaultTtsProviderId       string                 `protobuf:"bytes,13,opt,name=default_tts_provider_id,json=defaultTtsProviderId,proto3" json:"default_tts_provider_id,omitempty"`
+	DefaultImageGenProviderId  string                 `protobuf:"bytes,14,opt,name=default_image_gen_provider_id,json=defaultImageGenProviderId,proto3" json:"default_image_gen_provider_id,omitempty"`
+	DefaultSearchProviderId    string                 `protobuf:"bytes,15,opt,name=default_search_provider_id,json=defaultSearchProviderId,proto3" json:"default_search_provider_id,omitempty"`
+	DefaultEmbeddingProviderId string                 `protobuf:"bytes,16,opt,name=default_embedding_provider_id,json=defaultEmbeddingProviderId,proto3" json:"default_embedding_provider_id,omitempty"`
 	unknownFields              protoimpl.UnknownFields
 	sizeCache                  protoimpl.SizeCache
 }
@@ -2644,20 +2645,6 @@ func (x *SystemSettingsInfo) ProtoReflect() protoreflect.Message {
 // Deprecated: Use SystemSettingsInfo.ProtoReflect.Descriptor instead.
 func (*SystemSettingsInfo) Descriptor() ([]byte, []int) {
 	return file_airlock_v1_types_proto_rawDescGZIP(), []int{25}
-}
-
-func (x *SystemSettingsInfo) GetPublicUrl() string {
-	if x != nil {
-		return x.PublicUrl
-	}
-	return ""
-}
-
-func (x *SystemSettingsInfo) GetAgentDomain() string {
-	if x != nil {
-		return x.AgentDomain
-	}
-	return ""
 }
 
 func (x *SystemSettingsInfo) GetDefaultBuildModel() string {
@@ -3035,28 +3022,25 @@ const file_airlock_v1_types_proto_rawDesc = "" +
 	"\vdescription\x18\x03 \x01(\tR\vdescription\x12\x1e\n" +
 	"\n" +
 	"subscribed\x18\x04 \x01(\bR\n" +
-	"subscribed\"\xc0\a\n" +
-	"\x12SystemSettingsInfo\x12\x1d\n" +
-	"\n" +
-	"public_url\x18\x01 \x01(\tR\tpublicUrl\x12!\n" +
-	"\fagent_domain\x18\x02 \x01(\tR\vagentDomain\x12.\n" +
-	"\x13default_build_model\x18\x03 \x01(\tR\x11defaultBuildModel\x12,\n" +
-	"\x12default_exec_model\x18\x04 \x01(\tR\x10defaultExecModel\x12*\n" +
-	"\x11default_stt_model\x18\x05 \x01(\tR\x0fdefaultSttModel\x120\n" +
-	"\x14default_vision_model\x18\x06 \x01(\tR\x12defaultVisionModel\x12*\n" +
-	"\x11default_tts_model\x18\a \x01(\tR\x0fdefaultTtsModel\x125\n" +
-	"\x17default_image_gen_model\x18\b \x01(\tR\x14defaultImageGenModel\x120\n" +
-	"\x14default_search_model\x18\t \x01(\tR\x12defaultSearchModel\x126\n" +
-	"\x17default_embedding_model\x18\n" +
-	" \x01(\tR\x15defaultEmbeddingModel\x129\n" +
-	"\x19default_build_provider_id\x18\v \x01(\tR\x16defaultBuildProviderId\x127\n" +
-	"\x18default_exec_provider_id\x18\f \x01(\tR\x15defaultExecProviderId\x125\n" +
-	"\x17default_stt_provider_id\x18\r \x01(\tR\x14defaultSttProviderId\x12;\n" +
-	"\x1adefault_vision_provider_id\x18\x0e \x01(\tR\x17defaultVisionProviderId\x125\n" +
-	"\x17default_tts_provider_id\x18\x0f \x01(\tR\x14defaultTtsProviderId\x12@\n" +
-	"\x1ddefault_image_gen_provider_id\x18\x10 \x01(\tR\x19defaultImageGenProviderId\x12;\n" +
-	"\x1adefault_search_provider_id\x18\x11 \x01(\tR\x17defaultSearchProviderId\x12A\n" +
-	"\x1ddefault_embedding_provider_id\x18\x12 \x01(\tR\x1adefaultEmbeddingProviderId*o\n" +
+	"subscribed\"\xfe\x06\n" +
+	"\x12SystemSettingsInfo\x12.\n" +
+	"\x13default_build_model\x18\x01 \x01(\tR\x11defaultBuildModel\x12,\n" +
+	"\x12default_exec_model\x18\x02 \x01(\tR\x10defaultExecModel\x12*\n" +
+	"\x11default_stt_model\x18\x03 \x01(\tR\x0fdefaultSttModel\x120\n" +
+	"\x14default_vision_model\x18\x04 \x01(\tR\x12defaultVisionModel\x12*\n" +
+	"\x11default_tts_model\x18\x05 \x01(\tR\x0fdefaultTtsModel\x125\n" +
+	"\x17default_image_gen_model\x18\x06 \x01(\tR\x14defaultImageGenModel\x120\n" +
+	"\x14default_search_model\x18\a \x01(\tR\x12defaultSearchModel\x126\n" +
+	"\x17default_embedding_model\x18\b \x01(\tR\x15defaultEmbeddingModel\x129\n" +
+	"\x19default_build_provider_id\x18\t \x01(\tR\x16defaultBuildProviderId\x127\n" +
+	"\x18default_exec_provider_id\x18\n" +
+	" \x01(\tR\x15defaultExecProviderId\x125\n" +
+	"\x17default_stt_provider_id\x18\v \x01(\tR\x14defaultSttProviderId\x12;\n" +
+	"\x1adefault_vision_provider_id\x18\f \x01(\tR\x17defaultVisionProviderId\x125\n" +
+	"\x17default_tts_provider_id\x18\r \x01(\tR\x14defaultTtsProviderId\x12@\n" +
+	"\x1ddefault_image_gen_provider_id\x18\x0e \x01(\tR\x19defaultImageGenProviderId\x12;\n" +
+	"\x1adefault_search_provider_id\x18\x0f \x01(\tR\x17defaultSearchProviderId\x12A\n" +
+	"\x1ddefault_embedding_provider_id\x18\x10 \x01(\tR\x1adefaultEmbeddingProviderId*o\n" +
 	"\n" +
 	"TenantRole\x12\x1b\n" +
 	"\x17TENANT_ROLE_UNSPECIFIED\x10\x00\x12\x15\n" +

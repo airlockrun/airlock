@@ -23,7 +23,7 @@ func (q *Queries) ClearActivationCode(ctx context.Context) error {
 }
 
 const getSystemSettings = `-- name: GetSystemSettings :one
-SELECT id, public_url, agent_domain, default_build_provider_id, default_build_model, default_exec_provider_id, default_exec_model, default_stt_provider_id, default_stt_model, default_vision_provider_id, default_vision_model, default_tts_provider_id, default_tts_model, default_image_gen_provider_id, default_image_gen_model, default_embedding_provider_id, default_embedding_model, default_search_provider_id, default_search_model, activation_code, created_at, updated_at FROM system_settings WHERE id = true
+SELECT id, default_build_provider_id, default_build_model, default_exec_provider_id, default_exec_model, default_stt_provider_id, default_stt_model, default_vision_provider_id, default_vision_model, default_tts_provider_id, default_tts_model, default_image_gen_provider_id, default_image_gen_model, default_embedding_provider_id, default_embedding_model, default_search_provider_id, default_search_model, activation_code, created_at, updated_at FROM system_settings WHERE id = true
 `
 
 func (q *Queries) GetSystemSettings(ctx context.Context) (SystemSetting, error) {
@@ -31,8 +31,6 @@ func (q *Queries) GetSystemSettings(ctx context.Context) (SystemSetting, error) 
 	var i SystemSetting
 	err := row.Scan(
 		&i.ID,
-		&i.PublicUrl,
-		&i.AgentDomain,
 		&i.DefaultBuildProviderID,
 		&i.DefaultBuildModel,
 		&i.DefaultExecProviderID,
@@ -74,32 +72,28 @@ func (q *Queries) SetActivationCode(ctx context.Context, activationCode pgtype.T
 
 const updateSystemSettings = `-- name: UpdateSystemSettings :one
 UPDATE system_settings
-SET public_url = $1,
-    agent_domain = $2,
-    default_build_provider_id     = $3,
-    default_build_model           = $4,
-    default_exec_provider_id      = $5,
-    default_exec_model            = $6,
-    default_stt_provider_id       = $7,
-    default_stt_model             = $8,
-    default_vision_provider_id    = $9,
-    default_vision_model          = $10,
-    default_tts_provider_id       = $11,
-    default_tts_model             = $12,
-    default_image_gen_provider_id = $13,
-    default_image_gen_model       = $14,
-    default_embedding_provider_id = $15,
-    default_embedding_model       = $16,
-    default_search_provider_id    = $17,
-    default_search_model          = $18,
+SET default_build_provider_id     = $1,
+    default_build_model           = $2,
+    default_exec_provider_id      = $3,
+    default_exec_model            = $4,
+    default_stt_provider_id       = $5,
+    default_stt_model             = $6,
+    default_vision_provider_id    = $7,
+    default_vision_model          = $8,
+    default_tts_provider_id       = $9,
+    default_tts_model             = $10,
+    default_image_gen_provider_id = $11,
+    default_image_gen_model       = $12,
+    default_embedding_provider_id = $13,
+    default_embedding_model       = $14,
+    default_search_provider_id    = $15,
+    default_search_model          = $16,
     updated_at = now()
 WHERE id = true
-RETURNING id, public_url, agent_domain, default_build_provider_id, default_build_model, default_exec_provider_id, default_exec_model, default_stt_provider_id, default_stt_model, default_vision_provider_id, default_vision_model, default_tts_provider_id, default_tts_model, default_image_gen_provider_id, default_image_gen_model, default_embedding_provider_id, default_embedding_model, default_search_provider_id, default_search_model, activation_code, created_at, updated_at
+RETURNING id, default_build_provider_id, default_build_model, default_exec_provider_id, default_exec_model, default_stt_provider_id, default_stt_model, default_vision_provider_id, default_vision_model, default_tts_provider_id, default_tts_model, default_image_gen_provider_id, default_image_gen_model, default_embedding_provider_id, default_embedding_model, default_search_provider_id, default_search_model, activation_code, created_at, updated_at
 `
 
 type UpdateSystemSettingsParams struct {
-	PublicUrl                  string      `json:"public_url"`
-	AgentDomain                string      `json:"agent_domain"`
 	DefaultBuildProviderID     pgtype.UUID `json:"default_build_provider_id"`
 	DefaultBuildModel          string      `json:"default_build_model"`
 	DefaultExecProviderID      pgtype.UUID `json:"default_exec_provider_id"`
@@ -122,8 +116,6 @@ type UpdateSystemSettingsParams struct {
 // bare model name. NULL/empty ⇄ no default configured for that slot.
 func (q *Queries) UpdateSystemSettings(ctx context.Context, arg UpdateSystemSettingsParams) (SystemSetting, error) {
 	row := q.db.QueryRow(ctx, updateSystemSettings,
-		arg.PublicUrl,
-		arg.AgentDomain,
 		arg.DefaultBuildProviderID,
 		arg.DefaultBuildModel,
 		arg.DefaultExecProviderID,
@@ -144,8 +136,6 @@ func (q *Queries) UpdateSystemSettings(ctx context.Context, arg UpdateSystemSett
 	var i SystemSetting
 	err := row.Scan(
 		&i.ID,
-		&i.PublicUrl,
-		&i.AgentDomain,
 		&i.DefaultBuildProviderID,
 		&i.DefaultBuildModel,
 		&i.DefaultExecProviderID,

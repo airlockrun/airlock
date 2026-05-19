@@ -72,27 +72,8 @@ func runServe(_ []string) {
 	}
 	logger.Info("migrations up to date")
 
-	// Seed system settings from INIT_ env vars (one-time: only writes if DB value is empty).
-	{
-		q := dbq.New(database.Pool())
-		settings, err := q.GetSystemSettings(ctx)
-		if err != nil {
-			logger.Fatal("read system settings failed", zap.Error(err))
-		}
-		initPublicURL := os.Getenv("INIT_PUBLIC_URL")
-		initAgentDomain := os.Getenv("INIT_AGENT_DOMAIN")
-		if settings.PublicUrl == "" && initPublicURL != "" {
-			if _, err := q.UpdateSystemSettings(ctx, dbq.UpdateSystemSettingsParams{
-				PublicUrl:   initPublicURL,
-				AgentDomain: initAgentDomain,
-			}); err != nil {
-				logger.Fatal("seed system settings failed", zap.Error(err))
-			}
-			logger.Info("system settings seeded from env",
-				zap.String("public_url", initPublicURL),
-				zap.String("agent_domain", initAgentDomain))
-		}
-	}
+	// public_url / agent_domain are env-only (PUBLIC_URL / AGENT_DOMAIN in
+	// config.go), shared with the bundled Caddy via .env — no DB seeding.
 
 	// Ensure an activation code exists on first run — generate if missing,
 	// log it, and write to a file for docker-compose users to `cat`.
@@ -229,6 +210,7 @@ func runServe(_ []string) {
 		PubSub:                 pubsub,
 		Handler:                wsHandler,
 		AgentDomain:            cfg.AgentDomain,
+		AgentBaseURL:           cfg.AgentBaseURL,
 		LLMProxyURL:            cfg.LLMProxyURL,
 		ForceInlineAttachments: cfg.ForceInlineAttachments,
 		ActivationCodeFile:     cfg.ActivationCodeFile,

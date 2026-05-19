@@ -819,19 +819,10 @@ func (s *MCPServer) handlePromptCall(ctx context.Context, w http.ResponseWriter,
 				Output     json.RawMessage `json:"output"`
 			}
 			_ = json.Unmarshal(evt.Data, &tr)
-			// tr.Output is the serialized tool.Result
-			// ({"output":"...","attachments":[...]}). Unwrap the inner
-			// string so the UI sees just the tool's text — and so
-			// JSON-encoded newlines are decoded back to real newlines
-			// (matches trigger/prompt.go's normal-path handling; without
-			// this the sub-run's run_js output renders with literal \n).
-			output := string(tr.Output)
-			var unwrapped struct {
-				Output string `json:"output"`
-			}
-			if json.Unmarshal(tr.Output, &unwrapped) == nil {
-				output = unwrapped.Output
-			}
+			// tr.Output is the discriminated ToolResultOutput; resolve it
+			// to display text + structured outcome (legacy shapes still
+			// decode during the migration window).
+			out, outcome, errText := decodeToolOutput(tr.Output)
 			sendSSE(w, flusher, "notifications/progress", map[string]any{
 				"progressToken": progressToken,
 				"event":         raw,
@@ -840,7 +831,9 @@ func (s *MCPServer) handlePromptCall(ctx context.Context, w http.ResponseWriter,
 				RunId:      runID.String(),
 				ToolCallId: tr.ToolCallID,
 				ToolName:   tr.ToolName,
-				Output:     output,
+				Output:     out,
+				Error:      errText,
+				Outcome:    outcome,
 			})
 		case "error":
 			var e struct {

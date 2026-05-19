@@ -203,6 +203,7 @@ onMounted(async () => {
                     :input="b.input"
                     :output="b.output"
                     :error="b.error"
+                    :outcome="b.outcome"
                   />
                 </template>
               </div>

@@ -13,7 +13,11 @@ const props = defineProps<{
   input?: string
   output?: string
   error?: string
-  status?: string // live only: running | confirmation | done | error
+  status?: string // live only: running | confirmation | done | error | denied
+  // Structured, persisted tool outcome from the discriminated tool-result
+  // output: '' (unknown) | 'success' | 'error' | 'denied'. Authoritative
+  // for the dot — no text heuristics.
+  outcome?: string
   // Force the full view open (and keep it open) regardless of the user's
   // toggle — used while this tool call is awaiting a confirmation so the
   // user sees exactly what they're approving before deciding.
@@ -67,20 +71,18 @@ const mdOutput = computed(() => {
 const showStatus = computed(() => !!props.status && props.status !== 'done')
 const statusSeverity = computed(() => (props.status === 'running' ? 'warn' : 'info'))
 
-// Outcome dot. Persisted tool errors aren't structured — the runner
-// prefixes the output with "Error: " — so sniff that too, not just the
-// explicit error field / live status.
-// Dot reflects the structured live tool status only — no text sniffing.
-// When there's no status (a persisted row reloaded from the DB) the
-// outcome genuinely isn't recorded per-tool yet, so stay neutral rather
-// than guess. props.error is the live ToolErrorEvent error (also
-// structured), so it's allowed here.
+// Outcome dot. Driven by the structured tool outcome (persisted from the
+// discriminated tool-result output, and set live from the WS event's
+// `outcome`) plus the transient live `status`. Zero text heuristics:
+// error → red, denied → slate, success → green, awaiting confirmation →
+// blue, running → amber, otherwise neutral (genuinely unknown).
 const dotColor = computed(() => {
-  if (props.error || props.status === 'error') return 'var(--p-red-500)'
+  if (props.outcome === 'error' || props.status === 'error') return 'var(--p-red-500)'
+  if (props.outcome === 'denied' || props.status === 'denied') return 'var(--p-surface-500)'
   if (props.status === 'confirmation') return 'var(--p-blue-500)'
   if (props.status === 'running') return 'var(--p-yellow-500)'
-  if (props.status === 'done') return 'var(--p-green-500)'
-  return 'var(--p-surface-400)' // unknown (persisted) — not recorded
+  if (props.outcome === 'success' || props.status === 'done') return 'var(--p-green-500)'
+  return 'var(--p-surface-400)' // unknown — not recorded
 })
 </script>
 

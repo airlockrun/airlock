@@ -165,6 +165,11 @@ message GetAgentDetailResponse {
   repeated WebhookInfo webhooks = 3;
   repeated CronInfo crons = 4;
   repeated RouteInfo routes = 5;
+  // External base URL for the agent's registered routes
+  // ({scheme}://{slug}.{agentDomain}[:port], no trailing slash). The UI
+  // links GET routes to route_base_url + path. Server-built from env —
+  // agent_domain is not client-derivable.
+  string route_base_url = 6;
 }
 
 message UpdateAgentRequest {

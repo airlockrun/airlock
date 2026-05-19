@@ -455,6 +455,7 @@ function formatTokens(n: number): string {
                     :input="b.input"
                     :output="b.output"
                     :error="b.error"
+                    :outcome="b.outcome"
                   />
                 </template>
               </div>

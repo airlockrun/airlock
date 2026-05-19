@@ -19,6 +19,11 @@
 
 import type { AgentMessageInfo } from '@/gen/airlock/v1/types_pb'
 
+// Outcome is the structured, persisted tool status derived from the
+// discriminated tool-result output (no text heuristics). '' = unknown
+// (e.g. a still-running live call before its result arrives).
+export type ToolOutcome = '' | 'success' | 'error' | 'denied'
+
 export interface ToolBlock {
   kind: 'tool'
   toolCallId: string
@@ -27,6 +32,35 @@ export interface ToolBlock {
   input: string
   output: string
   error: string
+  outcome: ToolOutcome
+}
+
+// toolOutputInfo resolves a discriminated ToolResultOutput (the persisted
+// `output` object) to its display text + structured outcome.
+export function toolOutputInfo(out: any): { text: string; outcome: ToolOutcome } {
+  if (!out || typeof out !== 'object') return { text: '', outcome: 'success' }
+  switch (out.type) {
+    case 'execution-denied':
+      return { text: out.reason || 'Tool call execution denied.', outcome: 'denied' }
+    case 'error-text':
+      return { text: String(out.value ?? ''), outcome: 'error' }
+    case 'error-json':
+      return { text: JSON.stringify(out.value), outcome: 'error' }
+    case 'text':
+      return { text: String(out.value ?? ''), outcome: 'success' }
+    case 'json':
+      return { text: JSON.stringify(out.value), outcome: 'success' }
+    case 'content': {
+      const items = Array.isArray(out.value) ? out.value : []
+      const text = items
+        .filter((i: any) => i && i.type === 'text')
+        .map((i: any) => i.text)
+        .join('')
+      return { text, outcome: 'success' }
+    }
+    default:
+      return { text: '', outcome: 'success' }
+  }
 }
 
 // toolLabel maps a raw tool name (+ its call args) to the human label
@@ -134,6 +168,7 @@ export function enrichMessages(msgs: AgentMessageInfo[]): AgentMessageInfo[] {
             input: formatToolArgs(p.args),
             output: '',
             error: '',
+            outcome: '',
           }
           callEntries.set(p.toolCallId, tb)
           rowBlocks.push(tb)
@@ -186,11 +221,13 @@ export function enrichMessages(msgs: AgentMessageInfo[]): AgentMessageInfo[] {
     const parts = parseParts((msg as any).parts)
     let toolCallId = ''
     let toolName = ''
+    let resultOut: any
     if (parts) {
       for (const p of parts) {
         if ((p.type === 'tool-result' || p.type === 'tool') && p.toolCallId) {
           toolCallId = p.toolCallId
           toolName = p.toolName || ''
+          resultOut = p.output
           break
         }
       }
@@ -198,7 +235,17 @@ export function enrichMessages(msgs: AgentMessageInfo[]): AgentMessageInfo[] {
     if (!toolCallId) continue
     const entry = callEntries.get(toolCallId)
     if (entry) {
-      if (msg.content) entry.output = msg.content
+      // The discriminated `output` is authoritative for both display text
+      // and the structured outcome (no text sniffing). Fall back to the
+      // row content only when a part carries no output object.
+      if (resultOut && typeof resultOut === 'object') {
+        const info = toolOutputInfo(resultOut)
+        entry.outcome = info.outcome
+        if (info.outcome === 'error') entry.error = info.text
+        else entry.output = info.text
+      } else if (msg.content) {
+        entry.output = msg.content
+      }
       ;(msg as any)._hidden = true
     } else {
       // No parent assistant — render as a standalone tool bubble (legacy

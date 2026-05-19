@@ -11,29 +11,6 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const getLLMUnitRate = `-- name: GetLLMUnitRate :one
-SELECT rate FROM llm_unit_rates
-WHERE provider_catalog_id = $1
-  AND model = $2
-  AND unit_kind = $3
-`
-
-type GetLLMUnitRateParams struct {
-	ProviderCatalogID string `json:"provider_catalog_id"`
-	Model             string `json:"model"`
-	UnitKind          string `json:"unit_kind"`
-}
-
-// Operator-set per-unit price for a model the token catalog can't price.
-// No row ⇒ caller records units with cost 0 (honest, not a fabricated
-// price). pgx returns pgx.ErrNoRows which the caller treats as "no rate".
-func (q *Queries) GetLLMUnitRate(ctx context.Context, arg GetLLMUnitRateParams) (float64, error) {
-	row := q.db.QueryRow(ctx, getLLMUnitRate, arg.ProviderCatalogID, arg.Model, arg.UnitKind)
-	var rate float64
-	err := row.Scan(&rate)
-	return rate, err
-}
-
 const insertLLMUsage = `-- name: InsertLLMUsage :exec
 INSERT INTO llm_usage (
     agent_id, run_id, build_id, user_id, conversation_id,
@@ -79,10 +56,10 @@ type InsertLLMUsageParams struct {
 }
 
 // One append-only row per proxied model HTTP round-trip. Cost is computed
-// at capture (token rate from the sol/provider catalog, or llm_unit_rates
-// for image/audio units) so this is a plain INSERT with no rate math here.
-// run_id/user_id/conversation_id are nullable — an unattributed call still
-// records its spend. id/created_at use column defaults.
+// at capture from the sol/provider token catalog; non-token units
+// (image/audio/character) are recorded with cost 0 (not priced). Plain
+// INSERT, no rate math here. run_id/user_id/conversation_id are nullable —
+// an unattributed call still records its spend. id/created_at use defaults.
 func (q *Queries) InsertLLMUsage(ctx context.Context, arg InsertLLMUsageParams) error {
 	_, err := q.db.Exec(ctx, insertLLMUsage,
 		arg.AgentID,

@@ -44,9 +44,15 @@ type Config struct {
 	DBSSLMode   string // "disable" for dev, "require" for prod
 
 	// --- Networking ---
-	PublicURL     string // Public base URL (OAuth callbacks, auth links, e.g. "https://dev.airlock.run")
-	APIURLAgent   string // Agent containers → Airlock API (e.g. "http://host.docker.internal:8080")
-	AgentDomain   string // Subdomain routing (e.g. "dev.airlock.run" → {slug}.dev.airlock.run)
+	PublicURL   string // Public base URL (OAuth callbacks, auth links, e.g. "https://dev.airlock.run")
+	APIURLAgent string // Agent containers → Airlock API (e.g. "http://host.docker.internal:8080"). Intentionally independent of PublicURL/AgentDomain — it's the internal container→airlock callback, not a public URL.
+	AgentDomain string // Subdomain routing (e.g. "dev.airlock.run" → {slug}.dev.airlock.run)
+	// AgentScheme/AgentPort are derived once from PublicURL (see Load).
+	// Together with AgentDomain they form the single source of truth for
+	// per-agent external route URLs — use AgentBaseURL(slug), never
+	// re-derive these elsewhere.
+	AgentScheme   string // "http" | "https"
+	AgentPort     string // explicit non-default port, else ""
 	DockerNetwork string // Docker network for agent containers (e.g. "airlock-dev")
 
 	// --- Encryption ---
@@ -188,7 +194,39 @@ func Load() *Config {
 		OIDCClientSecret: os.Getenv("OIDC_CLIENT_SECRET"),
 		OIDCRedirectURL:  os.Getenv("OIDC_REDIRECT_URL"),
 	}
+	c.AgentScheme, c.AgentPort = agentSchemePort(c.PublicURL)
 	return c
+}
+
+// agentSchemePort returns the scheme + optional explicit port that
+// per-agent {slug}.AGENT_DOMAIN URLs should use. Inherited from PublicURL
+// so a localhost overlay on `:8443` produces URLs that match what Caddy
+// actually serves. Standard 80/443 → empty port (no `:443` cruft in
+// production URLs); anything else is preserved verbatim. Falls back to
+// ("https", "") when PublicURL is malformed — same effective shape as the
+// historic hard-coded "https://" prefix.
+func agentSchemePort(publicURL string) (scheme, port string) {
+	scheme = "https"
+	if u, err := url.Parse(publicURL); err == nil && u.Host != "" {
+		scheme = u.Scheme
+		p := u.Port()
+		if p != "" && !((scheme == "https" && p == "443") || (scheme == "http" && p == "80")) {
+			port = p
+		}
+	}
+	return
+}
+
+// AgentBaseURL is the external base URL for an agent's registered HTTP
+// routes: {scheme}://{slug}.{AgentDomain}[:port], no trailing slash. The
+// one place that assembles it — handlers and the container-env builder
+// read this, never re-derive scheme/domain/port.
+func (c *Config) AgentBaseURL(slug string) string {
+	u := c.AgentScheme + "://" + slug + "." + c.AgentDomain
+	if c.AgentPort != "" {
+		u += ":" + c.AgentPort
+	}
+	return u
 }
 
 func requireEnv(key string) string {

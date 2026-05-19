@@ -11,6 +11,7 @@ import (
 	"github.com/airlockrun/airlock/container"
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/airlockrun/airlock/llmledger"
+	"github.com/airlockrun/goai/message"
 	"github.com/airlockrun/goai/stream"
 	"github.com/airlockrun/goai/tool"
 	sol "github.com/airlockrun/sol"
@@ -506,7 +507,7 @@ func subscribeForLogs(b *bus.Bus, cb func(string)) {
 		if !ok {
 			return
 		}
-		output := tr.Output.Output
+		output := message.ToolOutputText(tr.Output)
 		if len(output) > 500 {
 			output = output[:500] + "..."
 		}

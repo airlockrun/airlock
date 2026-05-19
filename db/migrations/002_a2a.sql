@@ -303,27 +303,88 @@ ALTER TABLE agent_builds
     ALTER COLUMN llm_tokens_out    DROP DEFAULT,
     ALTER COLUMN llm_cost_estimate DROP DEFAULT;
 
--- llm_unit_rates — operator-set pricing for calls the token catalog
--- (models.dev via sol/provider) cannot price: per-image, per-second,
--- per-character. Empty by default; a missing rate means the llm_usage
--- row records its units with cost 0 — honest and visible, never a
--- silently fabricated price. Token-priced models ignore this table.
-CREATE TABLE llm_unit_rates (
-    provider_catalog_id  text NOT NULL,
-    model                text NOT NULL,
-    unit_kind            text NOT NULL,
-    rate                 double precision NOT NULL,
-    updated_at           timestamptz NOT NULL DEFAULT now(),
-    PRIMARY KEY (provider_catalog_id, model, unit_kind)
-);
+-- One-time history rewrite: migrate persisted tool-result parts from the
+-- legacy flat {result, isError} shape to ai-sdk's discriminated
+-- {output:{type,value}} union. isError=true → error-text, else text;
+-- a JSON-string result keeps its text, anything else is JSON-encoded.
+-- Idempotent: elements already carrying `output` (or non-tool-result
+-- parts) pass through untouched.
+UPDATE agent_messages m
+SET parts = sub.new_parts
+FROM (
+    SELECT m2.id,
+           jsonb_agg(
+               CASE
+                   WHEN elem->>'type' = 'tool-result' AND (elem ? 'result') AND NOT (elem ? 'output')
+                   THEN (elem - 'result' - 'isError') || jsonb_build_object(
+                            'output', jsonb_build_object(
+                                'type',  CASE WHEN COALESCE((elem->>'isError')::boolean, false)
+                                              THEN 'error-text' ELSE 'text' END,
+                                'value', CASE WHEN jsonb_typeof(elem->'result') = 'string'
+                                              THEN elem->>'result'
+                                              ELSE (elem->'result')::text END
+                            ))
+                   ELSE elem
+               END
+               ORDER BY ord
+           ) AS new_parts
+    FROM agent_messages m2,
+         jsonb_array_elements(m2.parts) WITH ORDINALITY AS t(elem, ord)
+    WHERE jsonb_typeof(m2.parts) = 'array'
+    GROUP BY m2.id
+) sub
+WHERE m.id = sub.id
+  AND jsonb_typeof(m.parts) = 'array';
+
+-- public_url / agent_domain leave the DB entirely: they must be
+-- byte-identical with the bundled Caddy, which only reads .env, so
+-- PUBLIC_URL / AGENT_DOMAIN are the single source of truth (config.go).
+-- A DB/UI copy was inert and a drift hazard. Done here (not by editing
+-- the frozen 001) so goose stays append-only.
+ALTER TABLE system_settings
+    DROP COLUMN IF EXISTS public_url,
+    DROP COLUMN IF EXISTS agent_domain;
 
 -- +goose Down
+-- Best-effort inverse: re-add the columns (NOT NULL via transient
+-- default, then drop it per the no-fake-defaults rule). The values are
+-- not recoverable — they now live only in env.
+ALTER TABLE system_settings
+    ADD COLUMN IF NOT EXISTS public_url   text NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS agent_domain text NOT NULL DEFAULT '';
+ALTER TABLE system_settings
+    ALTER COLUMN public_url   DROP DEFAULT,
+    ALTER COLUMN agent_domain DROP DEFAULT;
+-- Best-effort inverse of the tool-result shape migration: collapse
+-- {output:{type,value}} back to {result, isError}. content/denied
+-- variants lose fidelity (value carried as-is) — acceptable for a down.
+UPDATE agent_messages m
+SET parts = sub.new_parts
+FROM (
+    SELECT m2.id,
+           jsonb_agg(
+               CASE
+                   WHEN elem->>'type' = 'tool-result' AND (elem ? 'output')
+                   THEN (elem - 'output') || jsonb_build_object(
+                            'result',  elem #> '{output,value}',
+                            'isError', (elem #>> '{output,type}') IN ('error-text', 'error-json')
+                        )
+                   ELSE elem
+               END
+               ORDER BY ord
+           ) AS new_parts
+    FROM agent_messages m2,
+         jsonb_array_elements(m2.parts) WITH ORDINALITY AS t(elem, ord)
+    WHERE jsonb_typeof(m2.parts) = 'array'
+    GROUP BY m2.id
+) sub
+WHERE m.id = sub.id
+  AND jsonb_typeof(m.parts) = 'array';
 ALTER TABLE agent_builds
     DROP COLUMN IF EXISTS llm_calls,
     DROP COLUMN IF EXISTS llm_tokens_in,
     DROP COLUMN IF EXISTS llm_tokens_out,
     DROP COLUMN IF EXISTS llm_cost_estimate;
-DROP TABLE IF EXISTS llm_unit_rates;
 DROP INDEX IF EXISTS llm_usage_agent_created_idx;
 DROP INDEX IF EXISTS llm_usage_build_idx;
 DROP INDEX IF EXISTS llm_usage_run_idx;

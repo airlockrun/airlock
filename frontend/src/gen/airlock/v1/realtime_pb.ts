@@ -12,7 +12,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file airlock/v1/realtime.proto.
  */
 export const file_airlock_v1_realtime: GenFile = /*@__PURE__*/
-  fileDesc("ChlhaXJsb2NrL3YxL3JlYWx0aW1lLnByb3RvEgphaXJsb2NrLnYxIhsKCkVycm9yRXZlbnQSDQoFZXJyb3IYASABKAkiEQoPU3Vic2NyaWJlZEV2ZW50IjgKEEFnZW50U3RhdHVzRXZlbnQSJAoFYWdlbnQYASABKAsyFS5haXJsb2NrLnYxLkFnZW50SW5mbyJMCg9SdW5TdGFydGVkRXZlbnQSDgoGcnVuX2lkGAEgASgJEhAKCGFnZW50X2lkGAIgASgJEhcKD2NvbnZlcnNhdGlvbl9pZBgDIAEoCSIuCg5UZXh0RGVsdGFFdmVudBIOCgZydW5faWQYASABKAkSDAoEdGV4dBgCIAEoCSJXCg1Ub29sQ2FsbEV2ZW50Eg4KBnJ1bl9pZBgBIAEoCRIUCgx0b29sX2NhbGxfaWQYAiABKAkSEQoJdG9vbF9uYW1lGAMgASgJEg0KBWlucHV0GAQgASgJImkKD1Rvb2xSZXN1bHRFdmVudBIOCgZydW5faWQYASABKAkSFAoMdG9vbF9jYWxsX2lkGAIgASgJEhEKCXRvb2xfbmFtZRgDIAEoCRIOCgZvdXRwdXQYBCABKAkSDQoFZXJyb3IYBSABKAkidQoZQ29uZmlybWF0aW9uUmVxdWlyZWRFdmVudBIOCgZydW5faWQYASABKAkSEgoKcGVybWlzc2lvbhgCIAEoCRIQCghwYXR0ZXJucxgDIAMoCRIMCgRjb2RlGAQgASgJEhQKDHRvb2xfY2FsbF9pZBgFIAEoCSIzChFSdW5TdXNwZW5kZWRFdmVudBIOCgZydW5faWQYASABKAkSDgoGcmVhc29uGAIgASgJImAKEFJ1bkNvbXBsZXRlRXZlbnQSDgoGcnVuX2lkGAEgASgJEhUKDWZpbmlzaF9yZWFzb24YAiABKAkSEQoJdG9rZW5zX2luGAMgASgFEhIKCnRva2Vuc19vdXQYBCABKAUiLgoNUnVuRXJyb3JFdmVudBIOCgZydW5faWQYASABKAkSDQoFZXJyb3IYAiABKAkicQoRTm90aWZpY2F0aW9uRXZlbnQSEAoIYWdlbnRfaWQYASABKAkSFwoPY29udmVyc2F0aW9uX2lkGAIgASgJEg0KBXRvcGljGAMgASgJEhIKCnBhcnRzX2pzb24YBCABKAkSDgoGc291cmNlGAUgASgJQjhaNmdpdGh1Yi5jb20vYWlybG9ja3J1bi9haXJsb2NrL2dlbi9haXJsb2NrL3YxO2FpcmxvY2t2MWIGcHJvdG8z", [file_airlock_v1_types]);
+  fileDesc("ChlhaXJsb2NrL3YxL3JlYWx0aW1lLnByb3RvEgphaXJsb2NrLnYxIhsKCkVycm9yRXZlbnQSDQoFZXJyb3IYASABKAkiEQoPU3Vic2NyaWJlZEV2ZW50IjgKEEFnZW50U3RhdHVzRXZlbnQSJAoFYWdlbnQYASABKAsyFS5haXJsb2NrLnYxLkFnZW50SW5mbyJMCg9SdW5TdGFydGVkRXZlbnQSDgoGcnVuX2lkGAEgASgJEhAKCGFnZW50X2lkGAIgASgJEhcKD2NvbnZlcnNhdGlvbl9pZBgDIAEoCSIuCg5UZXh0RGVsdGFFdmVudBIOCgZydW5faWQYASABKAkSDAoEdGV4dBgCIAEoCSJXCg1Ub29sQ2FsbEV2ZW50Eg4KBnJ1bl9pZBgBIAEoCRIUCgx0b29sX2NhbGxfaWQYAiABKAkSEQoJdG9vbF9uYW1lGAMgASgJEg0KBWlucHV0GAQgASgJInoKD1Rvb2xSZXN1bHRFdmVudBIOCgZydW5faWQYASABKAkSFAoMdG9vbF9jYWxsX2lkGAIgASgJEhEKCXRvb2xfbmFtZRgDIAEoCRIOCgZvdXRwdXQYBCABKAkSDQoFZXJyb3IYBSABKAkSDwoHb3V0Y29tZRgGIAEoCSJ1ChlDb25maXJtYXRpb25SZXF1aXJlZEV2ZW50Eg4KBnJ1bl9pZBgBIAEoCRISCgpwZXJtaXNzaW9uGAIgASgJEhAKCHBhdHRlcm5zGAMgAygJEgwKBGNvZGUYBCABKAkSFAoMdG9vbF9jYWxsX2lkGAUgASgJIjMKEVJ1blN1c3BlbmRlZEV2ZW50Eg4KBnJ1bl9pZBgBIAEoCRIOCgZyZWFzb24YAiABKAkiYAoQUnVuQ29tcGxldGVFdmVudBIOCgZydW5faWQYASABKAkSFQoNZmluaXNoX3JlYXNvbhgCIAEoCRIRCgl0b2tlbnNfaW4YAyABKAUSEgoKdG9rZW5zX291dBgEIAEoBSIuCg1SdW5FcnJvckV2ZW50Eg4KBnJ1bl9pZBgBIAEoCRINCgVlcnJvchgCIAEoCSJxChFOb3RpZmljYXRpb25FdmVudBIQCghhZ2VudF9pZBgBIAEoCRIXCg9jb252ZXJzYXRpb25faWQYAiABKAkSDQoFdG9waWMYAyABKAkSEgoKcGFydHNfanNvbhgEIAEoCRIOCgZzb3VyY2UYBSABKAlCOFo2Z2l0aHViLmNvbS9haXJsb2NrcnVuL2FpcmxvY2svZ2VuL2FpcmxvY2svdjE7YWlybG9ja3YxYgZwcm90bzM", [file_airlock_v1_types]);
 
 /**
  * ErrorEvent carries a WebSocket error message.
@@ -178,18 +178,26 @@ export type ToolResultEvent = Message<"airlock.v1.ToolResultEvent"> & {
   toolName: string;
 
   /**
-   * JSON string
+   * human-facing text of the result
    *
    * @generated from field: string output = 4;
    */
   output: string;
 
   /**
-   * set if tool errored
+   * set if tool errored (error text)
    *
    * @generated from field: string error = 5;
    */
   error: string;
+
+  /**
+   * outcome is the structured, persisted tool status derived from the
+   * discriminated tool-result output: "success" | "error" | "denied".
+   *
+   * @generated from field: string outcome = 6;
+   */
+  outcome: string;
 };
 
 /**

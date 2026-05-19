@@ -97,8 +97,6 @@ const defaults = ref<Record<keyof SystemSettingsInfo & string, string>>({
   defaultEmbeddingModel: '',
   defaultSearchModel: '',
 } as Record<keyof SystemSettingsInfo & string, string>)
-const publicURL = ref('')
-const agentDomain = ref('')
 const defaultsLoading = ref(false)
 
 // Pairs each picker key with its companion *_provider_id field on the
@@ -124,8 +122,6 @@ function applySettings(info: SystemSettingsInfo) {
       ? packModelValue(providerRowID, modelName)
       : ''
   }
-  publicURL.value = info.publicUrl || ''
-  agentDomain.value = info.agentDomain || ''
 }
 
 onMounted(async () => {
@@ -244,8 +240,6 @@ async function saveDefaults() {
     const search = split('defaultSearchModel')
     const info: SystemSettingsInfo = {
       $typeName: 'airlock.v1.SystemSettingsInfo',
-      publicUrl: publicURL.value,
-      agentDomain: agentDomain.value,
       defaultBuildModel:          build.modelName,
       defaultBuildProviderId:     build.providerRowID,
       defaultExecModel:           exec.modelName,

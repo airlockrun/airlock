@@ -84,8 +84,6 @@ func (h *settingsHandler) Update(w http.ResponseWriter, r *http.Request) {
 
 	q := dbq.New(h.db.Pool())
 	settings, err := q.UpdateSystemSettings(r.Context(), dbq.UpdateSystemSettingsParams{
-		PublicUrl:                  in.PublicUrl,
-		AgentDomain:                in.AgentDomain,
 		DefaultBuildProviderID:     parsedFKs["default_build"],
 		DefaultBuildModel:          in.DefaultBuildModel,
 		DefaultExecProviderID:      parsedFKs["default_exec"],
@@ -116,8 +114,6 @@ func (h *settingsHandler) Update(w http.ResponseWriter, r *http.Request) {
 
 func settingsInfo(s dbq.SystemSetting) *airlockv1.SystemSettingsInfo {
 	return &airlockv1.SystemSettingsInfo{
-		PublicUrl:                  s.PublicUrl,
-		AgentDomain:                s.AgentDomain,
 		DefaultBuildModel:          s.DefaultBuildModel,
 		DefaultExecModel:           s.DefaultExecModel,
 		DefaultSttModel:            s.DefaultSttModel,

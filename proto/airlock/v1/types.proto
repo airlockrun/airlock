@@ -405,23 +405,24 @@ message TopicInfo {
 // for a capability and no agent-specific override is set. Each slot pairs
 // a model name with a provider row UUID (multi-key support); empty + empty
 // means "no default configured for this capability".
+// public_url / agent_domain are deliberately absent: they are env-only
+// (PUBLIC_URL / AGENT_DOMAIN), shared with the bundled Caddy via .env, and
+// never DB/UI-editable.
 message SystemSettingsInfo {
-  string public_url = 1;
-  string agent_domain = 2;
-  string default_build_model = 3;
-  string default_exec_model = 4;
-  string default_stt_model = 5;
-  string default_vision_model = 6;
-  string default_tts_model = 7;
-  string default_image_gen_model = 8;
-  string default_search_model = 9;
-  string default_embedding_model = 10;
-  string default_build_provider_id = 11;
-  string default_exec_provider_id = 12;
-  string default_stt_provider_id = 13;
-  string default_vision_provider_id = 14;
-  string default_tts_provider_id = 15;
-  string default_image_gen_provider_id = 16;
-  string default_search_provider_id = 17;
-  string default_embedding_provider_id = 18;
+  string default_build_model = 1;
+  string default_exec_model = 2;
+  string default_stt_model = 3;
+  string default_vision_model = 4;
+  string default_tts_model = 5;
+  string default_image_gen_model = 6;
+  string default_search_model = 7;
+  string default_embedding_model = 8;
+  string default_build_provider_id = 9;
+  string default_exec_provider_id = 10;
+  string default_stt_provider_id = 11;
+  string default_vision_provider_id = 12;
+  string default_tts_provider_id = 13;
+  string default_image_gen_provider_id = 14;
+  string default_search_provider_id = 15;
+  string default_embedding_provider_id = 16;
 }

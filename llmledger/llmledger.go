@@ -8,14 +8,12 @@ package llmledger
 
 import (
 	"context"
-	"errors"
 	"sync"
 	"time"
 
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/airlockrun/goai/stream"
 	solprovider "github.com/airlockrun/sol/provider"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"
 )
@@ -87,7 +85,7 @@ func (c *Capture) TokensFromStreamUsage(u stream.Usage) {
 // Callers pass their own ctx; use a fresh bounded one if the request
 // context may already be cancelled (e.g. client disconnected mid-stream).
 func Record(ctx context.Context, q *dbq.Queries, logger *zap.Logger, c Capture) {
-	costIn, costOut := cost(ctx, q, logger, c)
+	costIn, costOut := cost(logger, c)
 
 	if err := q.InsertLLMUsage(ctx, dbq.InsertLLMUsageParams{
 		AgentID:           c.AgentID,
@@ -118,11 +116,12 @@ func Record(ctx context.Context, q *dbq.Queries, logger *zap.Logger, c Capture) 
 }
 
 // cost returns (cost_input, cost_output) in dollars. Token-priced models
-// use the sol/provider (models.dev) catalog. Image/audio calls the
-// catalog can't price fall back to the operator-set llm_unit_rates table;
-// a missing rate yields 0 (visible, never fabricated). Unit-priced cost
-// lands entirely in cost_input (cost_output 0).
-func cost(ctx context.Context, q *dbq.Queries, logger *zap.Logger, c Capture) (costIn, costOut float64) {
+// use the sol/provider (models.dev) catalog. Non-token units (image /
+// audio-second / character) are deliberately not priced — there is no
+// catalog rate and a hand-maintained rate table proved to be worse than
+// none (an empty table silently yields 0 anyway); they are recorded with
+// cost 0 but the usage (units) is still tracked.
+func cost(logger *zap.Logger, c Capture) (costIn, costOut float64) {
 	info, ok := solprovider.GetModelInfo(c.ProviderCatalogID, c.Model)
 	tokenPriced := ok && info.Cost != nil && (c.TokensIn > 0 || c.TokensOut > 0)
 
@@ -144,25 +143,9 @@ func cost(ctx context.Context, q *dbq.Queries, logger *zap.Logger, c Capture) (c
 		return costIn, costOut
 	}
 
+	// Non-token units: tracked, not priced.
 	if c.UnitKind != "" && c.Units > 0 {
-		rate, err := q.GetLLMUnitRate(ctx, dbq.GetLLMUnitRateParams{
-			ProviderCatalogID: c.ProviderCatalogID,
-			Model:             c.Model,
-			UnitKind:          c.UnitKind,
-		})
-		if err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				warnOnce(logger, "nounitrate:"+c.ProviderCatalogID+"/"+c.Model+"/"+c.UnitKind,
-					"llm usage: no unit rate configured — recording units with cost 0",
-					zap.String("provider", c.ProviderCatalogID),
-					zap.String("model", c.Model),
-					zap.String("unit_kind", c.UnitKind))
-			} else {
-				logger.Warn("llm usage: unit-rate lookup failed", zap.Error(err))
-			}
-			return 0, 0
-		}
-		return c.Units * rate, 0
+		return 0, 0
 	}
 
 	// Token model with no catalog cost data: record the row with cost 0,

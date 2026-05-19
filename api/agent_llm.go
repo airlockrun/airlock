@@ -129,14 +129,6 @@ func (h *agentHandler) LLMStream(w http.ResponseWriter, r *http.Request) {
 			usageAcc.Add(fe.Usage)
 			capture.finishReason = string(fe.FinishReason)
 		}
-		if ee, ok := event.Data.(stream.ToolErrorEvent); ok {
-			nd.Data = map[string]any{
-				"toolCallId": ee.ToolCallID,
-				"toolName":   ee.ToolName,
-				"input":      sanitizeRawMessage(ee.Input),
-				"error":      ee.Error.Error(),
-			}
-		}
 
 		line, err := json.Marshal(nd)
 		if err != nil {
@@ -173,6 +165,12 @@ func sanitizeEventData(data any) any {
 		e.Input = sanitizeRawMessage(e.Input)
 		return e
 	case stream.ToolResultEvent:
+		e.Input = sanitizeRawMessage(e.Input)
+		return e
+	case stream.ToolErrorEvent:
+		e.Input = sanitizeRawMessage(e.Input)
+		return e
+	case stream.ToolOutputDeniedEvent:
 		e.Input = sanitizeRawMessage(e.Input)
 		return e
 	}
@@ -361,8 +359,8 @@ func (h *agentHandler) ImageGenerate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Token-priced image models (e.g. gpt-image-1) report TotalTokens —
-	// route those through the catalog. Diffusion models report none; the
-	// unit ledger prices them per image via llm_unit_rates.
+	// route those through the catalog. Diffusion models report none; image
+	// units are tracked but not priced (recorded with cost 0).
 	capture.unitKind = "image"
 	capture.units = float64(len(result.Images))
 	if result.Usage != nil {
@@ -465,8 +463,8 @@ func (h *agentHandler) SpeechGenerate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TTS bills per character; the catalog has no per-char rate, so this
-	// goes through llm_unit_rates (cost 0 until an operator sets one).
+	// TTS bills per character; the catalog has no per-char rate, so
+	// characters are tracked but not priced (recorded with cost 0).
 	capture.unitKind = "character"
 	if result.Usage != nil {
 		capture.units = float64(result.Usage.Characters)
@@ -530,7 +528,8 @@ func (h *agentHandler) Transcribe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// STT bills per audio-second; no catalog rate, so via llm_unit_rates.
+	// STT bills per audio-second; no catalog rate, so seconds are tracked
+	// but not priced (recorded with cost 0).
 	capture.unitKind = "second"
 	if result.Usage != nil {
 		capture.units = result.Usage.DurationSeconds

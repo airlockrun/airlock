@@ -10,7 +10,7 @@ import {
   PaginatedMessagesResponseSchema,
   PromptResponseSchema,
 } from '@/gen/airlock/v1/api_pb'
-import { enrichMessages as enrichMessagesShared, formatToolArgs, toolLabel, type MsgBlock } from '@/utils/messageGroup'
+import { enrichMessages as enrichMessagesShared, formatToolArgs, toolLabel, type MsgBlock, type ToolBlock } from '@/utils/messageGroup'
 import { useConversationsStore } from '@/stores/conversations'
 
 // Sliding-window pagination keeps the browser's in-memory message list
@@ -48,7 +48,7 @@ export interface ToolCall {
   input: string
   output: string
   error: string
-  status: 'running' | 'done' | 'error' | 'confirmation'
+  status: 'running' | 'done' | 'error' | 'denied' | 'confirmation'
 }
 
 export interface Confirmation {
@@ -238,11 +238,15 @@ export const useChatStore = defineStore('chat', () => {
         const ev = tryFromJson<ToolResultEvent>(ToolResultEventSchema, payload)
         if (!ev || !isActiveRun(ev.runId)) return
         textBlockBoundary = true
+        // outcome is the structured tool status (success|error|denied)
+        // straight from the discriminated output — no text sniffing.
+        const status =
+          ev.outcome === 'error' ? 'error' : ev.outcome === 'denied' ? 'denied' : 'done'
         const tc = activeToolCalls.get(ev.toolCallId)
         if (tc) {
           tc.output = ev.output
           tc.error = ev.error
-          tc.status = ev.error ? 'error' : 'done'
+          tc.status = status
           return
         }
         // No live entry: the call was already finalized into messages[]
@@ -260,6 +264,7 @@ export const useChatStore = defineStore('chat', () => {
           if (hit) {
             hit.output = ev.output
             hit.error = ev.error
+            hit.outcome = (ev.outcome as ToolBlock['outcome']) || ''
             break
           }
         }
@@ -471,6 +476,14 @@ export const useChatStore = defineStore('chat', () => {
       if (b.kind === 'text') return { kind: 'text', text: b.text }
       const tc = activeToolCalls.get(b.toolCallId)
       const rawArgs = (() => { try { return JSON.parse(tc?.input ?? '') } catch { return tc?.input ?? '' } })()
+      const outcome: ToolBlock['outcome'] =
+        tc?.status === 'error'
+          ? 'error'
+          : tc?.status === 'denied'
+            ? 'denied'
+            : tc?.status === 'done'
+              ? 'success'
+              : ''
       return {
         kind: 'tool',
         toolCallId: b.toolCallId,
@@ -479,6 +492,7 @@ export const useChatStore = defineStore('chat', () => {
         input: formatToolArgs(rawArgs),
         output: tc?.output || '',
         error: tc?.error || '',
+        outcome,
       }
     })
 
