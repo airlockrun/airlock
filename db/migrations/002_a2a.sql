@@ -356,6 +356,29 @@ ALTER TABLE agent_mcp_servers
 ALTER TABLE agent_mcp_servers
     ALTER COLUMN server_instructions DROP DEFAULT;
 
+-- agents.allow_{oauth,public}_mcp_prompt — per-agent gates for the
+-- built-in `prompt` meta-tool when called from EXTERNAL MCP clients.
+--
+-- The two callers always allowed to invoke prompt are the web SPA
+-- (MCPPrincipalUser) and sibling agents over A2A (MCPPrincipalAgent) —
+-- both are first-party surfaces airlock's own UX depends on.
+--
+-- The other two — OAuth-issued external clients (Claude Desktop, Cursor;
+-- MCPPrincipalOAuthClient) and anonymous /public-mcp callers
+-- (MCPPrincipalAnon) — are gated. Default false on both: open prompt()
+-- delegation to whoever finds the URL is metered LLM work on the
+-- operator's tokens with weak auditing; the operator opts in
+-- explicitly per surface.
+--
+-- DROP DEFAULT after the backfill so new rows must set the values
+-- explicitly (CreateAgent passes false, false).
+ALTER TABLE agents
+    ADD COLUMN allow_oauth_mcp_prompt  boolean NOT NULL DEFAULT false,
+    ADD COLUMN allow_public_mcp_prompt boolean NOT NULL DEFAULT false;
+ALTER TABLE agents
+    ALTER COLUMN allow_oauth_mcp_prompt  DROP DEFAULT,
+    ALTER COLUMN allow_public_mcp_prompt DROP DEFAULT;
+
 -- +goose Down
 -- Best-effort inverse: re-add the columns (NOT NULL via transient
 -- default, then drop it per the no-fake-defaults rule). The values are
@@ -422,6 +445,8 @@ DROP INDEX IF EXISTS oauth_clients_last_used_idx;
 DROP TABLE IF EXISTS oauth_clients;
 DROP INDEX IF EXISTS agent_siblings_sibling_idx;
 DROP TABLE IF EXISTS agent_siblings;
+ALTER TABLE agents DROP COLUMN IF EXISTS allow_public_mcp_prompt;
+ALTER TABLE agents DROP COLUMN IF EXISTS allow_oauth_mcp_prompt;
 ALTER TABLE agents DROP CONSTRAINT IF EXISTS agents_public_implies_non_member;
 ALTER TABLE agents DROP COLUMN IF EXISTS allow_public_mcp;
 ALTER TABLE agents DROP COLUMN IF EXISTS allow_non_member_mcp;

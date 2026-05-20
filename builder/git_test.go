@@ -2,7 +2,6 @@ package builder
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -10,20 +9,20 @@ import (
 	"github.com/airlockrun/airlock/scaffold"
 )
 
-func TestInitMonorepo(t *testing.T) {
-	dir := t.TempDir()
-	repoPath := filepath.Join(dir, "repo")
+func TestInitAgentRepo(t *testing.T) {
+	base := t.TempDir()
+	agentID := "agent-x"
 
-	if err := InitMonorepo(repoPath); err != nil {
-		t.Fatalf("InitMonorepo: %v", err)
+	if err := InitAgentRepo(base, agentID); err != nil {
+		t.Fatalf("InitAgentRepo: %v", err)
 	}
 
-	// Verify .git exists
+	repoPath := AgentRepoPath(base, agentID)
 	if _, err := os.Stat(filepath.Join(repoPath, ".git")); err != nil {
 		t.Fatal(".git directory not found")
 	}
 
-	// Verify we're on main (or master)
+	// Verify HEAD is main (or master) so subsequent checkouts find it.
 	branch, err := gitOutput(repoPath, "branch", "--show-current")
 	if err != nil {
 		t.Fatalf("get branch: %v", err)
@@ -32,7 +31,6 @@ func TestInitMonorepo(t *testing.T) {
 		t.Fatalf("expected main or master, got %q", branch)
 	}
 
-	// Verify initial commit exists
 	log, err := gitOutput(repoPath, "log", "--oneline")
 	if err != nil {
 		t.Fatalf("git log: %v", err)
@@ -41,191 +39,173 @@ func TestInitMonorepo(t *testing.T) {
 		t.Fatalf("expected init commit, got %q", log)
 	}
 
-	// Idempotent — should not error on second call
-	if err := InitMonorepo(repoPath); err != nil {
-		t.Fatalf("InitMonorepo (idempotent): %v", err)
+	// Idempotent — second call must not error or wipe state.
+	if err := InitAgentRepo(base, agentID); err != nil {
+		t.Fatalf("InitAgentRepo (idempotent): %v", err)
 	}
 }
 
 func TestCommitScaffold(t *testing.T) {
-	dir := t.TempDir()
-	repoPath := filepath.Join(dir, "repo")
-
-	if err := InitMonorepo(repoPath); err != nil {
-		t.Fatalf("InitMonorepo: %v", err)
+	base := t.TempDir()
+	agentID := "scaffold-agent"
+	if err := InitAgentRepo(base, agentID); err != nil {
+		t.Fatalf("InitAgentRepo: %v", err)
 	}
+	repoPath := AgentRepoPath(base, agentID)
 
-	agentID := "test-agent-id"
 	data := scaffold.ScaffoldData{
 		AgentID:         agentID,
 		Module:          "agent",
 		GoVersion:       "1.26",
 		AgentSDKVersion: "v1.0.0",
 	}
-
-	hash, err := CommitScaffold(repoPath, agentID, data)
+	hash, err := CommitScaffold(repoPath, data)
 	if err != nil {
 		t.Fatalf("CommitScaffold: %v", err)
 	}
-
 	if hash == "" {
 		t.Fatal("expected non-empty commit hash")
 	}
 
-	// Verify branch exists
-	branch := "build/" + agentID + "/init"
 	branches, err := gitOutput(repoPath, "branch")
 	if err != nil {
 		t.Fatalf("git branch: %v", err)
 	}
-	if !strings.Contains(branches, branch) {
-		t.Fatalf("branch %q not found in: %s", branch, branches)
+	if !strings.Contains(branches, "build/init") {
+		t.Fatalf("branch build/init not found in: %s", branches)
 	}
 
-	// Verify files exist
-	mainGo := filepath.Join(repoPath, "agents", agentID, "main.go")
-	if _, err := os.Stat(mainGo); err != nil {
-		t.Fatal("main.go not found after scaffold")
+	// Per-agent layout: files at the repo root, no agents/<id>/ nesting.
+	if _, err := os.Stat(filepath.Join(repoPath, "main.go")); err != nil {
+		t.Fatal("main.go not found at repo root after scaffold")
 	}
 }
 
-func TestSparseCheckout(t *testing.T) {
-	// Skip if git version doesn't support sparse-checkout
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("git not in PATH")
+func TestCloneAgentRepo(t *testing.T) {
+	base := t.TempDir()
+	agentID := "clone-agent"
+	if err := InitAgentRepo(base, agentID); err != nil {
+		t.Fatalf("InitAgentRepo: %v", err)
 	}
+	repoPath := AgentRepoPath(base, agentID)
 
-	dir := t.TempDir()
-	repoPath := filepath.Join(dir, "repo")
-
-	if err := InitMonorepo(repoPath); err != nil {
-		t.Fatalf("InitMonorepo: %v", err)
-	}
-
-	agentID := "sparse-test-agent"
 	data := scaffold.ScaffoldData{
 		AgentID:         agentID,
 		Module:          "agent",
 		GoVersion:       "1.26",
 		AgentSDKVersion: "v1.0.0",
 	}
-
-	_, err := CommitScaffold(repoPath, agentID, data)
-	if err != nil {
+	if _, err := CommitScaffold(repoPath, data); err != nil {
 		t.Fatalf("CommitScaffold: %v", err)
 	}
-
-	// Merge to main so sparse checkout can use it
-	if err := MergeBranch(repoPath, "build/"+agentID+"/init"); err != nil {
+	if err := MergeBranch(repoPath, "build/init"); err != nil {
 		t.Fatalf("MergeBranch: %v", err)
 	}
 
-	// Sparse checkout into a new directory
-	checkoutDir := filepath.Join(dir, "checkout")
-	if err := SparseCheckout(repoPath, "main", agentID, checkoutDir); err != nil {
-		// Try master if main fails
-		if err2 := SparseCheckout(repoPath, "master", agentID, checkoutDir); err2 != nil {
-			t.Fatalf("SparseCheckout: main=%v, master=%v", err, err2)
+	checkoutDir := filepath.Join(t.TempDir(), "checkout")
+	mainBranch := "main"
+	if err := CloneAgentRepo(repoPath, mainBranch, checkoutDir); err != nil {
+		mainBranch = "master"
+		if err2 := CloneAgentRepo(repoPath, mainBranch, checkoutDir); err2 != nil {
+			t.Fatalf("CloneAgentRepo: main=%v, master=%v", err, err2)
 		}
 	}
 
-	// Verify agent files exist in checkout
-	mainGo := filepath.Join(checkoutDir, "agents", agentID, "main.go")
-	if _, err := os.Stat(mainGo); err != nil {
-		t.Fatal("main.go not found in sparse checkout")
+	if _, err := os.Stat(filepath.Join(checkoutDir, "main.go")); err != nil {
+		t.Fatal("main.go not found at clone root")
 	}
 }
 
 func TestMergeBranch(t *testing.T) {
-	dir := t.TempDir()
-	repoPath := filepath.Join(dir, "repo")
-
-	if err := InitMonorepo(repoPath); err != nil {
-		t.Fatalf("InitMonorepo: %v", err)
+	base := t.TempDir()
+	agentID := "merge-agent"
+	if err := InitAgentRepo(base, agentID); err != nil {
+		t.Fatalf("InitAgentRepo: %v", err)
 	}
+	repoPath := AgentRepoPath(base, agentID)
 
-	agentID := "merge-test-agent"
 	data := scaffold.ScaffoldData{
 		AgentID:         agentID,
 		Module:          "agent",
 		GoVersion:       "1.26",
 		AgentSDKVersion: "v1.0.0",
 	}
-
-	_, err := CommitScaffold(repoPath, agentID, data)
-	if err != nil {
+	if _, err := CommitScaffold(repoPath, data); err != nil {
 		t.Fatalf("CommitScaffold: %v", err)
 	}
-
-	branch := "build/" + agentID + "/init"
-	if err := MergeBranch(repoPath, branch); err != nil {
+	if err := MergeBranch(repoPath, "build/init"); err != nil {
 		t.Fatalf("MergeBranch: %v", err)
 	}
 
-	// Verify we're on main and files exist
-	currentBranch, err := gitOutput(repoPath, "branch", "--show-current")
+	curr, err := gitOutput(repoPath, "branch", "--show-current")
 	if err != nil {
 		t.Fatalf("get branch: %v", err)
 	}
-	if currentBranch != "main" && currentBranch != "master" {
-		t.Fatalf("expected main or master after merge, got %q", currentBranch)
+	if curr != "main" && curr != "master" {
+		t.Fatalf("expected main or master after merge, got %q", curr)
 	}
-
-	mainGo := filepath.Join(repoPath, "agents", agentID, "main.go")
-	if _, err := os.Stat(mainGo); err != nil {
-		t.Fatal("main.go not found on main after merge")
+	if _, err := os.Stat(filepath.Join(repoPath, "main.go")); err != nil {
+		t.Fatal("main.go not found at repo root after merge")
 	}
 }
 
 func TestCommitAndPush(t *testing.T) {
-	dir := t.TempDir()
-	repoPath := filepath.Join(dir, "repo")
-
-	if err := InitMonorepo(repoPath); err != nil {
-		t.Fatalf("InitMonorepo: %v", err)
+	base := t.TempDir()
+	agentID := "push-agent"
+	if err := InitAgentRepo(base, agentID); err != nil {
+		t.Fatalf("InitAgentRepo: %v", err)
 	}
+	repoPath := AgentRepoPath(base, agentID)
 
-	agentID := "push-test-agent"
 	data := scaffold.ScaffoldData{
 		AgentID:         agentID,
 		Module:          "agent",
 		GoVersion:       "1.26",
 		AgentSDKVersion: "v1.0.0",
 	}
-
-	_, err := CommitScaffold(repoPath, agentID, data)
-	if err != nil {
+	if _, err := CommitScaffold(repoPath, data); err != nil {
 		t.Fatalf("CommitScaffold: %v", err)
 	}
-
-	// Merge so main has the scaffold
-	if err := MergeBranch(repoPath, "build/"+agentID+"/init"); err != nil {
+	if err := MergeBranch(repoPath, "build/init"); err != nil {
 		t.Fatalf("MergeBranch: %v", err)
 	}
 
-	// Sparse checkout
-	checkoutDir := filepath.Join(dir, "checkout")
+	checkoutDir := filepath.Join(t.TempDir(), "checkout")
 	branch := "main"
-	if err := SparseCheckout(repoPath, branch, agentID, checkoutDir); err != nil {
+	if err := CloneAgentRepo(repoPath, branch, checkoutDir); err != nil {
 		branch = "master"
-		if err2 := SparseCheckout(repoPath, branch, agentID, checkoutDir); err2 != nil {
-			t.Fatalf("SparseCheckout: %v", err2)
+		if err2 := CloneAgentRepo(repoPath, branch, checkoutDir); err2 != nil {
+			t.Fatalf("CloneAgentRepo: %v", err2)
 		}
 	}
 
-	// Make a change
-	testFile := filepath.Join(checkoutDir, "agents", agentID, "test.txt")
-	if err := os.WriteFile(testFile, []byte("test content"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(checkoutDir, "test.txt"), []byte("test content"), 0o644); err != nil {
 		t.Fatalf("write test file: %v", err)
 	}
 
-	// Commit and push
 	hash, err := CommitAndPush(checkoutDir, "add test file")
 	if err != nil {
 		t.Fatalf("CommitAndPush: %v", err)
 	}
-
 	if hash == "" {
 		t.Fatal("expected non-empty commit hash")
+	}
+}
+
+func TestRemoveAgentRepo(t *testing.T) {
+	base := t.TempDir()
+	agentID := "rm-agent"
+	if err := InitAgentRepo(base, agentID); err != nil {
+		t.Fatalf("InitAgentRepo: %v", err)
+	}
+	if err := RemoveAgentRepo(base, agentID); err != nil {
+		t.Fatalf("RemoveAgentRepo: %v", err)
+	}
+	if _, err := os.Stat(AgentRepoPath(base, agentID)); !os.IsNotExist(err) {
+		t.Fatalf("repo dir should be gone, stat: %v", err)
+	}
+	// Idempotent
+	if err := RemoveAgentRepo(base, agentID); err != nil {
+		t.Fatalf("RemoveAgentRepo (idempotent): %v", err)
 	}
 }

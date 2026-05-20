@@ -144,7 +144,7 @@ func runServe(_ []string) {
 			validAgents[id] = a.ImageRef
 		}
 		containers.PruneAgentResources(ctx, validAgents)
-		pruneMonorepo(buildSvc.MonorepoPath(), validAgents, logger.Named("prune"))
+		pruneAgentRepos(buildSvc.ReposPath(), validAgents, logger.Named("prune"))
 	}
 
 	// Warm Docker build cache in background — first agent build will be faster.
@@ -401,31 +401,40 @@ func ensureActivationCode(ctx context.Context, database *db.DB, filePath string,
 	return nil
 }
 
-// pruneMonorepo removes agent directories from the monorepo that don't
-// correspond to any agent in the database. Uses builder.RemoveAgentCode
-// so the deletion is properly committed to git.
-func pruneMonorepo(repoPath string, validAgents map[string]string, logger *zap.Logger) {
-	if repoPath == "" {
+// pruneAgentRepos removes per-agent repo directories under basePath
+// that don't correspond to any agent in the database. With the
+// per-agent-repo layout each agent's source lives at basePath/<agentID>/,
+// so orphan cleanup is a single rm of that directory. The
+// _monorepo_archive/ folder (left in place by 003_split_monorepo for
+// disaster-recovery) is preserved by skipping non-UUID-shaped names.
+func pruneAgentRepos(basePath string, validAgents map[string]string, logger *zap.Logger) {
+	if basePath == "" {
 		return
 	}
-	agentsDir := filepath.Join(repoPath, "agents")
-	entries, err := os.ReadDir(agentsDir)
+	entries, err := os.ReadDir(basePath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return
 		}
-		logger.Warn("failed to read agents dir", zap.Error(err))
+		logger.Warn("failed to read agent repos dir", zap.Error(err))
 		return
 	}
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
 		}
-		if _, ok := validAgents[e.Name()]; !ok {
-			logger.Info("removing orphaned agent code", zap.String("agent", e.Name()))
-			if err := builder.RemoveAgentCode(repoPath, e.Name()); err != nil {
-				logger.Warn("failed to remove agent code", zap.String("agent", e.Name()), zap.Error(err))
-			}
+		name := e.Name()
+		// Skip anything that isn't a UUID: archive dirs, vendor caches,
+		// half-written tempdirs, etc. Only delete what we know we own.
+		if _, err := uuid.Parse(name); err != nil {
+			continue
+		}
+		if _, ok := validAgents[name]; ok {
+			continue
+		}
+		logger.Info("removing orphaned agent repo", zap.String("agent", name))
+		if err := builder.RemoveAgentRepo(basePath, name); err != nil {
+			logger.Warn("failed to remove agent repo", zap.String("agent", name), zap.Error(err))
 		}
 	}
 }

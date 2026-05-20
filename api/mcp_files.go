@@ -370,9 +370,19 @@ func (rc *rewriterCtx) outboundRewriter(format string, val any, ptr string) (any
 	}
 
 	// External (user/anon/oauth): build a resource_link content block so
-	// the client knows the result file exists and can resources/read it.
-	// Leave the original path string in the result body — clients see
-	// both: the inline path (parseable by app code) and the link (for UI).
+	// the client knows the result file exists and can fetch it. Leave
+	// the original path string in the result body — clients see both:
+	// the inline path (parseable by app code) and the link (for UI).
+	//
+	// The uri is a presigned HTTPS URL, not "agent://<path>". The
+	// agent:// scheme is reserved for files reachable through
+	// resources/read, which only resolves under a registered
+	// agent_directories row whose read_access the caller satisfies.
+	// Tool authors often write FilePath results into framework dirs
+	// (media/) or admin-only dirs that don't match those rules — the
+	// agent:// link 404s for the caller in that case. A presigned URL
+	// works regardless of registration / ACL and lets the client fetch
+	// the file in one hop. URL expiry == presignedURLTTL (1h).
 	info, ct, err := rc.s3.HeadObject(rc.ctx, srcKey)
 	if err != nil {
 		rc.logger.Warn("mcp: head returned file",
@@ -383,27 +393,24 @@ func (rc *rewriterCtx) outboundRewriter(format string, val any, ptr string) (any
 	if name == "" {
 		name = filepath.Base(cleaned)
 	}
-	meta := map[string]any{
-		"airlock.run/size": info.Size,
-	}
-	// For files exceeding the inline cap, attach a presigned URL so
-	// clients that can't slurp 10MB+ blobs via resources/read still have
-	// a way to fetch the bytes.
-	if info.Size > int64(maxInlineResourceBytes) {
-		url, perr := rc.s3.PublicPresignGetURL(rc.ctx, srcKey, presignedURLTTL)
-		if perr == nil {
-			meta["airlock.run/downloadUrl"] = url
-			meta["airlock.run/downloadExpiresAt"] = time.Now().Add(presignedURLTTL).UTC().Format(time.RFC3339)
-		} else {
-			rc.logger.Warn("mcp: presign download URL", zap.Error(perr))
-		}
+	url, perr := rc.s3.PublicPresignGetURL(rc.ctx, srcKey, presignedURLTTL)
+	if perr != nil {
+		// Skip rather than emit a broken link — clients still get the
+		// path string in the result body and can call back through the
+		// caller's chosen channel if they need the bytes.
+		rc.logger.Warn("mcp: presign returned file",
+			zap.String("key", srcKey), zap.Error(perr))
+		return val, nil
 	}
 	block := map[string]any{
 		"type":     "resource_link",
-		"uri":      "agent://" + cleaned,
+		"uri":      url,
 		"name":     name,
 		"mimeType": ct,
-		"_meta":    meta,
+		"_meta": map[string]any{
+			"airlock.run/size":              info.Size,
+			"airlock.run/downloadExpiresAt": time.Now().Add(presignedURLTTL).UTC().Format(time.RFC3339),
+		},
 	}
 	rc.extraContent = append(rc.extraContent, block)
 	return val, nil

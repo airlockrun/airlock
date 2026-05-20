@@ -9,6 +9,13 @@ import (
 	"github.com/jackc/pgx/v5"
 	_ "github.com/lib/pq"
 	"github.com/pressly/goose/v3"
+
+	// Blank import so each migration .go file's init() runs at startup
+	// and registers itself with goose before RunMigrations calls UpContext.
+	// SQL migrations are picked up by the embed.FS below; Go migrations
+	// have to be code-resident, which means they need to be in a package
+	// somebody imports.
+	_ "github.com/airlockrun/airlock/db/migrations"
 )
 
 //go:embed migrations/*.sql

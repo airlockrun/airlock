@@ -425,10 +425,10 @@ func (h *agentsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		conn.Release()
 	}
 
-	// Remove agent code from monorepo (best effort).
+	// Remove the agent's per-agent git repo (best effort).
 	if h.builder != nil {
-		if err := builder.RemoveAgentCode(h.builder.MonorepoPath(), agentID.String()); err != nil {
-			h.logger.Warn("remove agent code", zap.Error(err))
+		if err := builder.RemoveAgentRepo(h.builder.ReposPath(), agentID.String()); err != nil {
+			h.logger.Warn("remove agent repo", zap.Error(err))
 		}
 	}
 

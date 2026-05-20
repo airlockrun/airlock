@@ -94,9 +94,15 @@ func New(cfg *config.Config, database *db.DB, containers container.ContainerMana
 	}
 }
 
-// MonorepoPath returns the agent monorepo path.
-func (b *BuildService) MonorepoPath() string {
-	return b.cfg.AgentMonorepoPath
+// ReposPath returns the base directory holding per-agent git repos.
+// Each agent's source lives at <ReposPath>/<agentID>/.
+func (b *BuildService) ReposPath() string {
+	return b.cfg.AgentReposPath
+}
+
+// AgentRepoPath returns the on-disk path for a single agent's repo.
+func (b *BuildService) AgentRepoPath(agentID string) string {
+	return AgentRepoPath(b.cfg.AgentReposPath, agentID)
 }
 
 // SetEventPublisher sets the event publisher for build/upgrade lifecycle events.
@@ -298,8 +304,8 @@ func (b *BuildService) Build(_ context.Context, input BuildInput) error {
 // doBuild runs the build steps after the agent record is created.
 // If instructions are provided, runs Sol code generation after scaffolding.
 func (b *BuildService) doBuild(ctx context.Context, q *dbq.Queries, agent dbq.Agent, build dbq.AgentBuild, instructions string) error {
-	repoPath := b.cfg.AgentMonorepoPath
 	agentID := uuidString(agent.ID)
+	repoPath := b.AgentRepoPath(agentID)
 	agentUUID := uuid.UUID(agent.ID.Bytes)
 	buildUUID := uuid.UUID(build.ID.Bytes)
 
@@ -327,11 +333,11 @@ func (b *BuildService) doBuild(ctx context.Context, q *dbq.Queries, agent dbq.Ag
 		})
 	}
 
-	// Step 1: Init monorepo
-	logLine("Initializing monorepo...")
-	if err := InitMonorepo(repoPath); err != nil {
+	// Step 1: Init per-agent repo
+	logLine("Initializing agent repo...")
+	if err := InitAgentRepo(b.cfg.AgentReposPath, agentID); err != nil {
 		completeBuild("failed", err.Error(), "", "")
-		return fmt.Errorf("init monorepo: %w", err)
+		return fmt.Errorf("init agent repo: %w", err)
 	}
 
 	if ctx.Err() != nil {
@@ -348,7 +354,7 @@ func (b *BuildService) doBuild(ctx context.Context, q *dbq.Queries, agent dbq.Ag
 		AgentSDKVersion: "v" + agentsdk.Version,
 		AgentBaseImage:  b.cfg.AgentBaseImage,
 	}
-	commitHash, err := CommitScaffold(repoPath, agentID, data)
+	commitHash, err := CommitScaffold(repoPath, data)
 	if err != nil {
 		completeBuild("failed", err.Error(), "", "")
 		return fmt.Errorf("commit scaffold: %w", err)
@@ -357,8 +363,7 @@ func (b *BuildService) doBuild(ctx context.Context, q *dbq.Queries, agent dbq.Ag
 
 	// Step 3: Merge scaffold branch to main
 	logLine("Merging scaffold to main...")
-	branch := fmt.Sprintf("build/%s/init", agentID)
-	if err := MergeBranch(repoPath, branch); err != nil {
+	if err := MergeBranch(repoPath, "build/init"); err != nil {
 		completeBuild("failed", err.Error(), "", "")
 		return fmt.Errorf("merge to main: %w", err)
 	}
@@ -418,9 +423,10 @@ func (b *BuildService) doBuild(ctx context.Context, q *dbq.Queries, agent dbq.Ag
 		return ctx.Err()
 	}
 
-	// Step 7: Build Docker image
+	// Step 7: Build Docker image. With per-agent repos the agent's
+	// source IS the repo root, so contextDir = repoPath.
 	logLine("Building Docker image...")
-	contextDir := filepath.Join(repoPath, "agents", agentID)
+	contextDir := repoPath
 	if err := scaffold.GenerateDockerfile(contextDir, scaffold.ScaffoldData{
 		AgentID:         agentID,
 		Module:          "agent",
@@ -495,27 +501,25 @@ func (b *BuildService) doBuild(ctx context.Context, q *dbq.Queries, agent dbq.Ag
 }
 
 // runBuildCodegen runs Sol code generation on a freshly scaffolded agent.
-// Creates a branch, sparse checkouts the agent dir, runs Sol with the
-// build request as its user turn, commits, merges back to main. Returns
-// the new commit hash.
+// Creates a codegen branch in the per-agent repo, clones it to a temp
+// workspace, runs Sol with the build request as its user turn, commits,
+// merges back to main. Returns the new commit hash.
 func (b *BuildService) runBuildCodegen(ctx context.Context, q *dbq.Queries, agent dbq.Agent, buildID pgtype.UUID, agentID string, agentUUID uuid.UUID, instructions string, testDBURL, testDBPSQL, testDBSchema string, logLine func(string)) (string, error) {
-	repoPath := b.cfg.AgentMonorepoPath
+	repoPath := b.AgentRepoPath(agentID)
+	const codegenBranch = "build/codegen"
 
-	// Create a codegen branch from main.
-	codegenBranch := fmt.Sprintf("build/%s/codegen", agentID)
 	if err := CreateBranch(repoPath, codegenBranch); err != nil {
 		return "", fmt.Errorf("create codegen branch: %w", err)
 	}
 
-	// Sparse checkout into a temp dir.
 	workDir, err := b.makeCodegenTempDir("airlock-codegen-*")
 	if err != nil {
 		return "", fmt.Errorf("create temp dir: %w", err)
 	}
 	defer os.RemoveAll(workDir)
 
-	if err := SparseCheckout(repoPath, codegenBranch, agentID, workDir); err != nil {
-		return "", fmt.Errorf("sparse checkout: %w", err)
+	if err := CloneAgentRepo(repoPath, codegenBranch, workDir); err != nil {
+		return "", fmt.Errorf("clone agent repo: %w", err)
 	}
 
 	// Run Sol in-process.
@@ -524,7 +528,7 @@ func (b *BuildService) runBuildCodegen(ctx context.Context, q *dbq.Queries, agen
 
 	solResult, err := b.runSolInProcess(ctx, solRunOpts{
 		WorkDir:         workDir,
-		AgentDir:        fmt.Sprintf("/workspace/agents/%s", agentID),
+		AgentDir:        "/workspace",
 		AgentID:         agent.ID,
 		BuildID:         buildID,
 		BuildType:       "build",
@@ -566,13 +570,12 @@ func (b *BuildService) runBuildCodegen(ctx context.Context, q *dbq.Queries, agen
 	}
 	logLine(fmt.Sprintf("[exit] success: %s", solResult.ExitMessage))
 
-	// Commit and push back to monorepo.
+	// Commit and push back to the agent's repo.
 	hash, err := CommitAndPush(workDir, fmt.Sprintf("codegen agent %s", agentID))
 	if err != nil {
 		return "", fmt.Errorf("commit codegen: %w", err)
 	}
 
-	// Merge codegen branch to main.
 	if err := MergeBranch(repoPath, codegenBranch); err != nil {
 		return "", fmt.Errorf("merge codegen: %w", err)
 	}

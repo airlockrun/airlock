@@ -7,6 +7,7 @@ INSERT INTO agents (
     name, slug, user_id, description, config, status,
     upgrade_status, auto_fix,
     allow_non_member_mcp, allow_public_mcp,
+    allow_oauth_mcp_prompt, allow_public_mcp_prompt,
     build_model, exec_model, stt_model, vision_model,
     tts_model, image_gen_model, embedding_model, search_model,
     source_ref, image_ref, db_schema, db_password, sdk_version,
@@ -15,6 +16,7 @@ INSERT INTO agents (
 VALUES (
     @name, @slug, @user_id, @description, @config, 'draft',
     'idle', true,
+    false, false,
     false, false,
     '', '', '', '',
     '', '', '', '',

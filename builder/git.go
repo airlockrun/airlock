@@ -11,8 +11,31 @@ import (
 	"github.com/airlockrun/airlock/scaffold"
 )
 
-// InitMonorepo initializes a bare git repo at path if it doesn't exist.
-func InitMonorepo(path string) error {
+// Per-agent repo layout:
+//
+//	<basePath>/                     ← AgentReposPath
+//	├── <agentID-1>/                ← per-agent repo working tree
+//	│   ├── .git/
+//	│   ├── main.go
+//	│   ├── go.mod
+//	│   ├── ...
+//	├── <agentID-2>/
+//	│   └── ...
+//
+// AgentRepoPath returns the working-tree path for a single agent's repo.
+func AgentRepoPath(basePath, agentID string) string {
+	return filepath.Join(basePath, agentID)
+}
+
+// InitAgentRepo initializes a per-agent git repo at <basePath>/<agentID>/
+// if it doesn't already exist. Idempotent.
+//
+// Sets receive.denyCurrentBranch=updateInstead so the per-upgrade clone
+// can push back into the checked-out branch of this repo. The initial
+// commit (with .gitignore) gives the repo a HEAD so subsequent
+// `git checkout main` works without complaints.
+func InitAgentRepo(basePath, agentID string) error {
+	path := AgentRepoPath(basePath, agentID)
 	if _, err := os.Stat(filepath.Join(path, ".git")); err == nil {
 		return nil // already initialized
 	}
@@ -21,11 +44,10 @@ func InitMonorepo(path string) error {
 		return fmt.Errorf("mkdir %s: %w", path, err)
 	}
 
-	if err := git(path, "init"); err != nil {
+	if err := git(path, "init", "-b", "main"); err != nil {
 		return fmt.Errorf("git init: %w", err)
 	}
 
-	// Configure git user for commits
 	if err := git(path, "config", "user.email", "airlock@localhost"); err != nil {
 		return fmt.Errorf("git config email: %w", err)
 	}
@@ -33,7 +55,8 @@ func InitMonorepo(path string) error {
 		return fmt.Errorf("git config name: %w", err)
 	}
 
-	// Allow pushes into checked-out branch (sparse checkouts push back here)
+	// Allow pushes from the per-upgrade clone back into this repo's
+	// currently-checked-out branch (the upgrade branch).
 	if err := git(path, "config", "receive.denyCurrentBranch", "updateInstead"); err != nil {
 		return fmt.Errorf("git config receive: %w", err)
 	}
@@ -43,11 +66,9 @@ func InitMonorepo(path string) error {
 	if err := os.WriteFile(filepath.Join(path, ".gitignore"), []byte("DIAGNOSTICS.md\nDockerfile\n"), 0o644); err != nil {
 		return fmt.Errorf("write .gitignore: %w", err)
 	}
-
 	if err := git(path, "add", ".gitignore"); err != nil {
 		return fmt.Errorf("git add .gitignore: %w", err)
 	}
-
 	if err := git(path, "commit", "-m", "init"); err != nil {
 		return fmt.Errorf("git initial commit: %w", err)
 	}
@@ -55,36 +76,35 @@ func InitMonorepo(path string) error {
 	return nil
 }
 
-// CommitScaffold creates branch build/{agentID}/init, materializes scaffold, commits.
-// Returns the commit hash. Safe to call on retry — deletes a stale branch if it exists.
-func CommitScaffold(repoPath, agentID string, data scaffold.ScaffoldData) (string, error) {
-	branch := fmt.Sprintf("build/%s/init", agentID)
+// CommitScaffold creates branch build/init in the agent's repo,
+// materializes scaffold files at the repo root, and commits. Returns the
+// commit hash. Safe to call on retry — deletes a stale branch first.
+func CommitScaffold(repoPath string, data scaffold.ScaffoldData) (string, error) {
+	const branch = "build/init"
 
 	// Clean up stale branch from a previous failed build attempt.
 	// Must switch away from it first — can't delete the checked-out branch.
-	_ = git(repoPath, "checkout", "master")
+	_ = git(repoPath, "checkout", "main")
 	_ = git(repoPath, "branch", "-D", branch)
 
 	if err := git(repoPath, "checkout", "-b", branch); err != nil {
 		return "", fmt.Errorf("git checkout -b %s: %w", branch, err)
 	}
 
-	// Materialize scaffold into the agent directory
-	agentDir := filepath.Join(repoPath, "agents", agentID)
-	if err := scaffold.Materialize(agentDir, data); err != nil {
+	// Materialize scaffold at the repo root (no agents/<id>/ nesting).
+	if err := scaffold.Materialize(repoPath, data); err != nil {
 		return "", fmt.Errorf("materialize scaffold: %w", err)
 	}
 
-	// Stage and commit
-	if err := git(repoPath, "add", "agents/"+agentID); err != nil {
+	if err := git(repoPath, "add", "-A"); err != nil {
 		return "", fmt.Errorf("git add: %w", err)
 	}
 
 	// Retry safety: a previous build may have already merged the same
-	// scaffold to master. Since we just re-created the build branch from
-	// master, the materialized files match what's already committed and
-	// there's nothing to stage. Treat that as success and return current
-	// HEAD — MergeBranch is a no-op when the branch is already merged.
+	// scaffold to main. Since we just re-created the build branch from
+	// main, the materialized files match what's already committed and
+	// there's nothing to stage. Treat that as success — MergeBranch is a
+	// no-op when the branch is already merged.
 	status, err := gitOutput(repoPath, "status", "--porcelain")
 	if err != nil {
 		return "", fmt.Errorf("git status: %w", err)
@@ -97,7 +117,7 @@ func CommitScaffold(repoPath, agentID string, data scaffold.ScaffoldData) (strin
 		return hash, nil
 	}
 
-	if err := git(repoPath, "commit", "-m", fmt.Sprintf("scaffold agent %s", agentID)); err != nil {
+	if err := git(repoPath, "commit", "-m", "scaffold"); err != nil {
 		return "", fmt.Errorf("git commit: %w", err)
 	}
 
@@ -105,64 +125,65 @@ func CommitScaffold(repoPath, agentID string, data scaffold.ScaffoldData) (strin
 	if err != nil {
 		return "", fmt.Errorf("git rev-parse: %w", err)
 	}
-
 	return hash, nil
 }
 
-// CreateBranch creates a new branch from main/master.
+// CreateBranch creates a new branch from main in repoPath.
 func CreateBranch(repoPath, branch string) error {
 	if err := git(repoPath, "checkout", "main"); err != nil {
 		if err2 := git(repoPath, "checkout", "master"); err2 != nil {
 			return fmt.Errorf("git checkout main: %w", err)
 		}
 	}
-
-	// Clean up stale branch from a previous failed attempt.
 	_ = git(repoPath, "branch", "-D", branch)
-
 	if err := git(repoPath, "checkout", "-b", branch); err != nil {
 		return fmt.Errorf("git checkout -b %s: %w", branch, err)
 	}
-
 	return nil
 }
 
-// CreateUpgradeBranch creates branch upgrade/{agentID}/{runID} from main.
-// Uses `-B` (create-or-reset) so retries don't fail on a leftover branch
-// from a prior failed attempt — Fix-this-error reuses the failed run's id
-// as the branch suffix, and successful upgrades currently never delete
-// the branch after merging, so collisions are easy to hit. Whatever was
-// on the old branch was from a failed run and not worth keeping.
-func CreateUpgradeBranch(repoPath, agentID, runID string) error {
-	branch := fmt.Sprintf("upgrade/%s/%s", agentID, runID)
+// CreateUpgradeBranch creates branch upgrade/{runID} in the agent's repo
+// off main. Uses `-B` (create-or-reset) so retries don't fail on a
+// leftover branch from a prior failed attempt — Fix-this-error reuses
+// the failed run's id as the branch suffix, and successful upgrades
+// currently never delete the branch after merging, so collisions are
+// easy to hit. Whatever was on the old branch was from a failed run and
+// not worth keeping.
+func CreateUpgradeBranch(repoPath, runID string) error {
+	branch := upgradeBranchName(runID)
 
 	if err := git(repoPath, "checkout", "main"); err != nil {
-		// Try master if main doesn't exist
 		if err2 := git(repoPath, "checkout", "master"); err2 != nil {
 			return fmt.Errorf("git checkout main: %w", err)
 		}
 	}
-
 	if err := git(repoPath, "checkout", "-B", branch); err != nil {
 		return fmt.Errorf("git checkout -B %s: %w", branch, err)
 	}
-
 	return nil
 }
 
-// SparseCheckout clones the repo into targetDir with only agents/{agentID}/ checked out.
-func SparseCheckout(repoPath, branch, agentID, targetDir string) error {
+// UpgradeBranchName returns the branch name an upgrade run lives on
+// inside the agent's repo. Exposed so callers can hand the same name to
+// CloneAgentRepo and MergeBranch.
+func UpgradeBranchName(runID string) string { return upgradeBranchName(runID) }
+
+func upgradeBranchName(runID string) string { return "upgrade/" + runID }
+
+// CloneAgentRepo clones the agent's repo into targetDir on the given
+// branch. The full source tree lives at the targetDir root (no
+// agents/<id>/ subdir) — the per-agent repo's scaffold and codegen
+// commits put files at the repo root.
+//
+// Replaces the pre-multirepo SparseCheckout, which had to narrow a
+// monorepo clone down to one agent's subtree.
+func CloneAgentRepo(repoPath, branch, targetDir string) error {
 	if err := os.MkdirAll(targetDir, 0o755); err != nil {
 		return fmt.Errorf("mkdir %s: %w", targetDir, err)
 	}
 
-	if err := runGit(targetDir, "clone", "--filter=blob:none", "--sparse", "--branch", branch, repoPath, "."); err != nil {
-		return fmt.Errorf("git clone --sparse: %w", err)
-	}
-
-	agentPath := fmt.Sprintf("agents/%s", agentID)
-	if err := git(targetDir, "sparse-checkout", "set", agentPath); err != nil {
-		return fmt.Errorf("git sparse-checkout set: %w", err)
+	if err := runGit(targetDir, "clone", "--filter=blob:none", "--branch", branch, repoPath, "."); err != nil {
+		return fmt.Errorf("git clone: %w", err)
 	}
 
 	// Mark the workspace as safe for both host path and container mount path.
@@ -172,7 +193,6 @@ func SparseCheckout(repoPath, branch, agentID, targetDir string) error {
 	// The toolserver container mounts this dir at /workspace.
 	_ = git(targetDir, "config", "--add", "safe.directory", "/workspace")
 
-	// Configure git user for commits in the clone
 	if err := git(targetDir, "config", "user.email", "airlock@localhost"); err != nil {
 		return fmt.Errorf("git config email: %w", err)
 	}
@@ -184,13 +204,13 @@ func SparseCheckout(repoPath, branch, agentID, targetDir string) error {
 }
 
 // CommitAndPush commits all changes on the current branch in workDir,
-// pushes to origin. Returns commit hash.
+// pushes to origin. Returns commit hash. No-op + current HEAD when the
+// tree is clean.
 func CommitAndPush(workDir, message string) (string, error) {
 	if err := git(workDir, "add", "-A"); err != nil {
 		return "", fmt.Errorf("git add: %w", err)
 	}
 
-	// If there are no changes, skip commit + push and return current HEAD.
 	status, err := gitOutput(workDir, "status", "--porcelain")
 	if err != nil {
 		return "", fmt.Errorf("git status: %w", err)
@@ -220,10 +240,11 @@ func CommitAndPush(workDir, message string) (string, error) {
 }
 
 // MergeBranch fast-forward merges branch into main, rebasing the branch
-// onto current main first if a parallel build advanced main while this
-// branch's work was running. Cross-agent rebases never conflict (each
-// agent lives under its own agents/<id>/), and the per-agent build lock
-// prevents same-agent races, so the rebase is safe in practice.
+// onto current main first if a parallel commit advanced main while this
+// branch's work was running. With per-agent repos each agent's history
+// is isolated, so the rebase trivially fast-forwards in the common case;
+// the fallback path handles the rare case of a manual commit landing on
+// main (e.g. an operator hot-fix) in parallel with a build.
 func MergeBranch(repoPath, branch string) error {
 	mainBranch := "main"
 	if err := git(repoPath, "checkout", "main"); err != nil {
@@ -237,9 +258,6 @@ func MergeBranch(repoPath, branch string) error {
 		return nil
 	}
 
-	// Diverged from main — replay the branch's commits on top of current
-	// main, then ff-merge. Abort the rebase on conflict so we don't leave
-	// the repo in a half-rebased state.
 	if err := git(repoPath, "rebase", mainBranch, branch); err != nil {
 		_ = git(repoPath, "rebase", "--abort")
 		_ = git(repoPath, "checkout", mainBranch)
@@ -254,31 +272,16 @@ func MergeBranch(repoPath, branch string) error {
 	return nil
 }
 
-// RemoveAgentCode deletes the agent directory from the monorepo and commits.
-func RemoveAgentCode(repoPath, agentID string) error {
-	agentDir := filepath.Join(repoPath, "agents", agentID)
-	if _, err := os.Stat(agentDir); os.IsNotExist(err) {
-		return nil // nothing to remove
-	}
-
-	if err := os.RemoveAll(agentDir); err != nil {
-		return fmt.Errorf("remove agent dir: %w", err)
-	}
-
-	// Checkout main before committing.
-	if err := git(repoPath, "checkout", "main"); err != nil {
-		_ = git(repoPath, "checkout", "master")
-	}
-
-	if err := git(repoPath, "add", "-A"); err != nil {
-		return fmt.Errorf("git add: %w", err)
-	}
-
-	if err := git(repoPath, "commit", "-m", fmt.Sprintf("remove agent %s", agentID)); err != nil {
-		// Nothing to commit (already removed) is fine.
+// RemoveAgentRepo deletes the per-agent repo directory entirely.
+// Idempotent — missing dir is not an error.
+func RemoveAgentRepo(basePath, agentID string) error {
+	path := AgentRepoPath(basePath, agentID)
+	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return nil
 	}
-
+	if err := os.RemoveAll(path); err != nil {
+		return fmt.Errorf("remove agent repo %s: %w", path, err)
+	}
 	return nil
 }
 

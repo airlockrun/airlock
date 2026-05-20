@@ -27,8 +27,8 @@ import (
 
 // solRunOpts configures an in-process Sol run with a remote toolserver.
 type solRunOpts struct {
-	WorkDir         string      // host path to sparse checkout
-	AgentDir        string      // container-side path (e.g., /workspace/agents/{id})
+	WorkDir         string      // host path to the cloned per-agent repo
+	AgentDir        string      // container-side path (typically "/workspace")
 	AgentID         pgtype.UUID // owning agent — for the llm_usage row
 	BuildID         pgtype.UUID // agent_builds row this codegen attributes to
 	BuildType       string      // "build" | "upgrade" — llm_usage.call_kind
@@ -107,10 +107,10 @@ func (b *BuildService) runSolInProcess(ctx context.Context, opts solRunOpts) (*s
 	// absolute path airlock used. In dev/host mode, bind-mount
 	// opts.WorkDir at /workspace as before.
 	//
-	// agentDir is the working directory inside the sibling. Callers
-	// pass it as "/workspace/agents/{id}" expecting bind-mount mode;
-	// in volume mode we rewrite the /workspace prefix to the absolute
-	// workspace path.
+	// agentDir is the working directory inside the sibling. With
+	// per-agent repos callers pass "/workspace" (the cloned repo's
+	// root); in volume mode the /workspace prefix is rewritten to the
+	// absolute workspace path on the host volume.
 	var workspaceMount dmount.Mount
 	agentDir := opts.AgentDir
 	if b.cfg.AgentCodegenVolume != "" && b.cfg.AgentCodegenPath != "" {

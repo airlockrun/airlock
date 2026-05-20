@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 
 	"github.com/airlockrun/agentsdk"
 	"github.com/airlockrun/airlock/auth"
@@ -188,7 +187,7 @@ func (b *BuildService) RunUpgrade(_ context.Context, input UpgradeInput) {
 func (b *BuildService) doUpgrade(ctx context.Context, q *dbq.Queries, input UpgradeInput, build dbq.AgentBuild) (string, error) {
 	agentPgUUID := mustParseUUID(input.AgentID)
 	agentID := input.AgentID
-	repoPath := b.cfg.AgentMonorepoPath
+	repoPath := b.AgentRepoPath(agentID)
 	buildUUID := uuid.UUID(build.ID.Bytes)
 
 	// Load full agent record
@@ -240,28 +239,28 @@ func (b *BuildService) doUpgrade(ctx context.Context, q *dbq.Queries, input Upgr
 	}
 	testDBURL := b.agentDBURL(sourceSchema, dbPassword, cloneName)
 
-	// Step 3: Create upgrade branch
-	if err := CreateUpgradeBranch(repoPath, agentID, input.RunID); err != nil {
+	// Step 3: Create upgrade branch in the agent's repo
+	if err := CreateUpgradeBranch(repoPath, input.RunID); err != nil {
 		return "", fmt.Errorf("create upgrade branch: %w", err)
 	}
 
-	// Step 4: Sparse checkout
+	// Step 4: Clone agent repo into per-upgrade workspace
 	workDir, err := b.makeCodegenTempDir("airlock-upgrade-*")
 	if err != nil {
 		return "", fmt.Errorf("create temp dir: %w", err)
 	}
 	defer os.RemoveAll(workDir)
 
-	branch := fmt.Sprintf("upgrade/%s/%s", agentID, input.RunID)
-	if err := SparseCheckout(repoPath, branch, agentID, workDir); err != nil {
-		return "", fmt.Errorf("sparse checkout: %w", err)
+	branch := UpgradeBranchName(input.RunID)
+	if err := CloneAgentRepo(repoPath, branch, workDir); err != nil {
+		return "", fmt.Errorf("clone agent repo: %w", err)
 	}
 
 	// Step 5: Write failure diagnostics (only when the upgrade carries
 	// error context — auto_fix path). The change request itself is
-	// delivered as the Sol user turn below, not as a spec file.
-	agentDir := filepath.Join(workDir, "agents", agentID)
-	hasDiagnostics, err := writeUpgradeDiagnostics(agentDir, input)
+	// delivered as the Sol user turn below, not as a spec file. With
+	// per-agent repos the agent source IS the workDir root.
+	hasDiagnostics, err := writeUpgradeDiagnostics(workDir, input)
 	if err != nil {
 		return "", fmt.Errorf("write upgrade diagnostics: %w", err)
 	}
@@ -282,7 +281,7 @@ func (b *BuildService) doUpgrade(ctx context.Context, q *dbq.Queries, input Upgr
 
 	solResult, err := b.runSolInProcess(ctx, solRunOpts{
 		WorkDir:      workDir,
-		AgentDir:     fmt.Sprintf("/workspace/agents/%s", agentID),
+		AgentDir:     "/workspace",
 		AgentID:      agent.ID,
 		BuildID:      build.ID,
 		BuildType:    "upgrade",
@@ -345,8 +344,8 @@ func (b *BuildService) doUpgrade(ctx context.Context, q *dbq.Queries, input Upgr
 		return "", ctx.Err()
 	}
 
-	// Step 11: Build image
-	contextDir := filepath.Join(repoPath, "agents", agentID)
+	// Step 11: Build image. Per-agent repo → contextDir = repoPath.
+	contextDir := repoPath
 	if err := scaffold.GenerateDockerfile(contextDir, scaffold.ScaffoldData{
 		AgentID:         agentID,
 		Module:          "agent",
@@ -451,7 +450,7 @@ func (b *BuildService) rebuildImage(ctx context.Context, q *dbq.Queries, agent d
 		return "", fmt.Errorf("decrypt db password: %w", err)
 	}
 
-	contextDir := filepath.Join(b.cfg.AgentMonorepoPath, "agents", agentID)
+	contextDir := b.AgentRepoPath(agentID)
 	if err := scaffold.GenerateDockerfile(contextDir, scaffold.ScaffoldData{
 		AgentID:         agentID,
 		Module:          "agent",

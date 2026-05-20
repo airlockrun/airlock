@@ -66,7 +66,13 @@ type Config struct {
 	ContainerImage   string // toolserver image name
 
 	// --- Build pipeline ---
-	AgentMonorepoPath string // local path to agent monorepo
+	// AgentReposPath is the base directory holding per-agent git repos.
+	// Each agent's source lives at <AgentReposPath>/<agentID>/ with its
+	// own .git/. The 003_split_monorepo migration moves any pre-multirepo
+	// install (single monorepo with agents/{id}/ subdirs) from the legacy
+	// AGENT_MONOREPO_PATH location into this layout on first startup
+	// after upgrade.
+	AgentReposPath    string
 	AgentBuilderImage string // toolserver sandbox image (default: DefaultAgentBuilderImage)
 	AgentBaseImage    string // agent runtime base image
 	AgentRegistryURL  string // Docker registry for agent images (empty = local only)
@@ -163,7 +169,7 @@ func Load() *Config {
 		ContainerImage:   envOr("CONTAINER_IMAGE", "airlock-toolserver"),
 
 		// Build pipeline
-		AgentMonorepoPath:     envOr("AGENT_MONOREPO_PATH", "/var/lib/airlock/monorepo"),
+		AgentReposPath:        envOr("AGENT_REPOS_PATH", "/var/lib/airlock/agents"),
 		AgentBuilderImage:     envOr("AGENT_BUILDER_IMAGE", DefaultAgentBuilderImage),
 		AgentBaseImage:        envOr("AGENT_BASE_IMAGE", DefaultAgentBaseImage),
 		AgentRegistryURL:      os.Getenv("AGENT_REGISTRY_URL"),

@@ -168,7 +168,7 @@ func (s *MCPServer) serveDispatch(w http.ResponseWriter, r *http.Request, h *age
 		s.handleCancelled(msg)
 		w.WriteHeader(http.StatusAccepted)
 	case "tools/list":
-		s.handleToolsList(ctx, w, q, target, access, msg)
+		s.handleToolsList(ctx, w, q, target, access, principal, msg)
 	case "tools/call":
 		s.handleToolsCall(ctx, w, r, h, q, target, access, principal, msg)
 	case "resources/list":
@@ -431,7 +431,7 @@ func (s *MCPServer) handleCancelled(_ jsonrpcMessage) {
 	// notification is purely advisory.
 }
 
-func (s *MCPServer) handleToolsList(ctx context.Context, w http.ResponseWriter, q *dbq.Queries, target dbq.Agent, access agentsdk.Access, msg jsonrpcMessage) {
+func (s *MCPServer) handleToolsList(ctx context.Context, w http.ResponseWriter, q *dbq.Queries, target dbq.Agent, access agentsdk.Access, principal MCPPrincipal, msg jsonrpcMessage) {
 	rows, err := q.ListAgentTools(ctx, target.ID)
 	if err != nil {
 		s.logger.Error("mcp: list agent tools", zap.Error(err), zap.String("agent_id", uuid.UUID(target.ID.Bytes).String()))
@@ -457,22 +457,55 @@ func (s *MCPServer) handleToolsList(ctx context.Context, w http.ResponseWriter, 
 			InputSchema: t.InputSchema,
 		})
 	}
-	// Built-in `prompt` meta-tool. Available at every access level —
-	// invoking it just funnels into the agent's normal prompt path,
-	// which re-applies access on its own surface.
-	tools = append(tools, toolEntry{
-		Name:        "prompt",
-		Description: "Delegate a natural-language task to this agent. It runs its own LLM loop and returns {text, taskId, contextId, state, artifacts}. Progress streams via notifications/progress over SSE.",
-		// Files schema is inline-upload-only on purpose: external MCP
-		// clients have no agent storage to reference a path in, and A2A
-		// callers bypass this schema (they use agentsdk's
-		// promptAgentInput, which carries []FilePath). The materializer
-		// still accepts {path}-shape on the wire for A2A — that path is
-		// just never advertised here.
-		InputSchema: json.RawMessage(`{"type":"object","properties":{"message":{"type":"string","description":"The message / task to send"},"contextId":{"type":"string","description":"Optional: continue an existing conversation thread"},"taskId":{"type":"string","description":"Optional: resume a task that returned state=input-required; put the answer in message"},"files":{"type":"array","description":"Files to attach (base64 inline upload).","items":{"type":"object","additionalProperties":false,"required":["filename","mimeType","data"],"properties":{"filename":{"type":"string"},"mimeType":{"type":"string"},"data":{"type":"string","description":"base64-encoded file bytes (max 10 MiB)"}}}}},"required":["message"]}`),
-	})
+	// Built-in `prompt` meta-tool. First-party surfaces (web SPA users,
+	// sibling agents over A2A) always see it. External surfaces (OAuth
+	// clients, /public-mcp anon) are gated by per-agent flags that
+	// default off — see promptAllowed.
+	if promptAllowed(target, principal) {
+		tools = append(tools, toolEntry{
+			Name:        "prompt",
+			Description: "Delegate a natural-language task to this agent. It runs its own LLM loop and returns {text, taskId, contextId, state, artifacts}. Progress streams via notifications/progress over SSE.",
+			// Files schema is inline-upload-only on purpose: external MCP
+			// clients have no agent storage to reference a path in, and A2A
+			// callers bypass this schema (they use agentsdk's
+			// promptAgentInput, which carries []FilePath). The materializer
+			// still accepts {path}-shape on the wire for A2A — that path is
+			// just never advertised here.
+			InputSchema: json.RawMessage(`{"type":"object","properties":{"message":{"type":"string","description":"The message / task to send"},"contextId":{"type":"string","description":"Optional: continue an existing conversation thread"},"taskId":{"type":"string","description":"Optional: resume a task that returned state=input-required; put the answer in message"},"files":{"type":"array","description":"Files to attach (base64 inline upload).","items":{"type":"object","additionalProperties":false,"required":["filename","mimeType","data"],"properties":{"filename":{"type":"string"},"mimeType":{"type":"string"},"data":{"type":"string","description":"base64-encoded file bytes (max 10 MiB)"}}}}},"required":["message"]}`),
+		})
+	}
 	result, _ := json.Marshal(map[string]any{"tools": tools})
 	writeJSONRPCResult(w, msg.ID, result)
+}
+
+// promptAllowed gates the built-in `prompt` meta-tool per (target, caller).
+//
+// Always allowed:
+//   - MCPPrincipalUser  — the web SPA; airlock's own UX depends on it.
+//   - MCPPrincipalAgent — sibling agent over A2A; prompt() IS the A2A
+//     surface, no point exposing this knob there.
+//
+// Gated (default off, per-agent opt-in):
+//   - MCPPrincipalOAuthClient — Claude Desktop, Cursor, and other
+//     external MCP clients that authenticated via this agent's OAuth
+//     flow. Gated by agents.allow_oauth_mcp_prompt.
+//   - MCPPrincipalAnon — unauthenticated /public-mcp callers. Gated by
+//     agents.allow_public_mcp_prompt.
+//
+// Open prompt() delegation to external callers is metered LLM work on
+// the operator's tokens with weak attribution; the operator opts in
+// explicitly per surface (no UI yet — flip via psql).
+func promptAllowed(target dbq.Agent, principal MCPPrincipal) bool {
+	switch principal.Kind {
+	case MCPPrincipalUser, MCPPrincipalAgent:
+		return true
+	case MCPPrincipalOAuthClient:
+		return target.AllowOauthMcpPrompt
+	case MCPPrincipalAnon:
+		return target.AllowPublicMcpPrompt
+	default:
+		return false
+	}
 }
 
 func (s *MCPServer) handleToolsCall(ctx context.Context, w http.ResponseWriter, r *http.Request, h *agentHandler, q *dbq.Queries, target dbq.Agent, access agentsdk.Access, principal MCPPrincipal, msg jsonrpcMessage) {
@@ -487,6 +520,14 @@ func (s *MCPServer) handleToolsCall(ctx context.Context, w http.ResponseWriter, 
 
 	switch params.Name {
 	case "prompt":
+		// Same gate as handleToolsList — a client that cached an older
+		// tools/list (or guessed the name) must not bypass the per-
+		// surface opt-in. -32601 (method-not-found) matches what they'd
+		// see for any other unadvertised tool.
+		if !promptAllowed(target, principal) {
+			writeJSONRPCError(w, msg.ID, rpcErrMethodNotFound, "tool not available: prompt")
+			return
+		}
 		s.handlePromptCall(ctx, w, r, h, q, target, access, principal, msg, params.Arguments)
 	default:
 		s.handleUserToolCall(ctx, w, h, q, target, access, principal, msg, params.Name, params.Arguments)
@@ -926,14 +967,29 @@ func (s *MCPServer) handlePromptCall(ctx context.Context, w http.ResponseWriter,
 	artifacts := collectPromptArtifacts(ctx, h.s3, s.logger, q, target, principal, runID)
 
 	content := []map[string]any{{"type": "text", "text": finalText.String()}}
-	// External (non-agent) clients can't read the caller-bucket copy —
-	// expose artifacts as resource_link blocks they fetch via
-	// resources/read. Agent callers read them straight from siblings/.
+	// External (non-agent) clients get a resource_link per artifact with
+	// a public presigned URL as the uri. The agent:// scheme would force
+	// the client through resources/read, which only resolves files under
+	// a registered agent_directories row — printToUser writes into a raw
+	// media/{mediaID}/ S3 prefix that nothing registers, so the agent://
+	// link 404s. A presigned URL sidesteps that entirely: the client
+	// (Claude Desktop, Cursor, etc.) treats the link as a direct fetch.
+	// Agent callers don't get resource_links — they read the artifact
+	// from siblings/<slug>/... in their own bucket, copied during
+	// collectPromptArtifacts.
 	if principal.Kind != MCPPrincipalAgent {
+		targetID := uuid.UUID(target.ID.Bytes)
 		for _, a := range artifacts {
+			s3Key := "agents/" + targetID.String() + "/" + a.Path
+			url, perr := h.s3.PublicPresignGetURL(ctx, s3Key, presignedURLTTL)
+			if perr != nil {
+				s.logger.Warn("mcp prompt: presign artifact",
+					zap.String("path", a.Path), zap.Error(perr))
+				continue
+			}
 			content = append(content, map[string]any{
 				"type":     "resource_link",
-				"uri":      "agent://" + a.Path,
+				"uri":      url,
 				"name":     a.Filename,
 				"mimeType": a.ContentType,
 			})
