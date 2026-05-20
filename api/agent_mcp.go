@@ -196,7 +196,7 @@ func (h *agentHandler) discoverAllMCPStatus(
 			continue
 		}
 
-		tools, err := discoverMCPTools(ctx, server.Url, server.AuthInjection, creds)
+		tools, instructions, err := discoverMCPTools(ctx, server.Url, server.AuthInjection, creds)
 		if err != nil {
 			h.logger.Warn("MCP tool discovery failed", zap.String("slug", server.Slug), zap.Error(err))
 			result = append(result, mcpServerStatus{
@@ -209,19 +209,22 @@ func (h *agentHandler) discoverAllMCPStatus(
 			continue
 		}
 
-		// Store discovered schemas in DB for caching.
+		// Store discovered schemas + server-level instructions in DB for
+		// caching (durable across syncs without a re-handshake).
 		schemasJSON, _ := json.Marshal(tools)
 		_ = q.UpdateMCPServerToolSchemas(ctx, dbq.UpdateMCPServerToolSchemasParams{
-			AgentID:     toPgUUID(agentID),
-			Slug:        server.Slug,
-			ToolSchemas: schemasJSON,
+			AgentID:            toPgUUID(agentID),
+			Slug:               server.Slug,
+			ToolSchemas:        schemasJSON,
+			ServerInstructions: instructions,
 		})
 
 		result = append(result, mcpServerStatus{
 			MCPAuthStatus: agentsdk.MCPAuthStatus{
-				Slug:       server.Slug,
-				AuthMode:   agentsdk.MCPAuth(server.AuthMode),
-				Authorized: true,
+				Slug:         server.Slug,
+				AuthMode:     agentsdk.MCPAuth(server.AuthMode),
+				Authorized:   true,
+				Instructions: instructions,
 			},
 			ToolCount: len(tools),
 		})
@@ -283,10 +286,13 @@ func callMCPTool(ctx context.Context, serverURL string, authInjection []byte, cr
 }
 
 // discoverMCPTools connects to an MCP server, lists tools, and disconnects.
-func discoverMCPTools(ctx context.Context, serverURL string, authInjection []byte, creds string) ([]mcpToolInfo, error) {
+// discoverMCPTools connects to a remote MCP server and returns its tool
+// schemas plus the server-level `instructions` it advertised in the
+// initialize result (empty when the server set none).
+func discoverMCPTools(ctx context.Context, serverURL string, authInjection []byte, creds string) ([]mcpToolInfo, string, error) {
 	connectURL, headers, err := applyMCPAuth(serverURL, authInjection, creds)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
 	client := mcp.NewClient()
@@ -298,7 +304,7 @@ func discoverMCPTools(ctx context.Context, serverURL string, authInjection []byt
 		URL:       connectURL,
 		Headers:   headers,
 	}); err != nil {
-		return nil, fmt.Errorf("MCP connect for discovery: %w", err)
+		return nil, "", fmt.Errorf("MCP connect for discovery: %w", err)
 	}
 
 	tools := client.GetTools()
@@ -315,7 +321,7 @@ func discoverMCPTools(ctx context.Context, serverURL string, authInjection []byt
 			InputSchema: t.InputSchema,
 		})
 	}
-	return result, nil
+	return result, client.GetServerInstructions("discovery"), nil
 }
 
 // mcpToolInfo is the internal representation of a discovered MCP tool.

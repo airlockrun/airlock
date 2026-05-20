@@ -19,6 +19,9 @@ func testAgentsHandler() *agentsHandler {
 		encryptor: testEncryptor(),
 		publicURL: "http://localhost:8080",
 		logger:    zap.NewNop(),
+		// GetAgentDetail calls this unconditionally; a nil func field
+		// panics. Mirrors config.Config.AgentBaseURL's shape.
+		agentBaseURL: func(slug string) string { return "http://" + slug + ".localhost" },
 	}
 }
 

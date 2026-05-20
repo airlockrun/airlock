@@ -615,6 +615,16 @@ export const useChatStore = defineStore('chat', () => {
     if (convResponse.pendingConfirmation?.toolCallId) {
       restorePendingConfirmation(convResponse.pendingConfirmation, messages.value)
     }
+    // Adopt an already-in-flight run so subsequent WS deltas
+    // (run.text_delta / run.tool_call / run.complete) survive the
+    // isActiveRun gate, and so the Cancel button is enabled. The
+    // pre-join text won't be visible (no replay of streamed deltas) —
+    // run.complete will refetch the conversation and the persisted
+    // assistant message fills in the gap.
+    if (convResponse.inFlightRunId) {
+      currentRunId.value = convResponse.inFlightRunId
+      sending.value = true
+    }
   }
 
   // Refresh the switcher list (web threads only — bridge/a2a are excluded

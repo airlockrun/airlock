@@ -19,7 +19,7 @@ INSERT INTO agents (
     build_model, exec_model, stt_model, vision_model,
     tts_model, image_gen_model, embedding_model, search_model,
     source_ref, image_ref, db_schema, db_password, sdk_version,
-    extra_prompts, error_message
+    extra_prompts, error_message, emoji
 )
 VALUES (
     $1, $2, $3, $4, $5, 'draft',
@@ -28,7 +28,7 @@ VALUES (
     '', '', '', '',
     '', '', '', '',
     '', '', '', '', '',
-    '[]'::jsonb, ''
+    '[]'::jsonb, '', ''
 )
 RETURNING id, user_id, slug, name, description, status, upgrade_status, auto_fix, build_provider_id, build_model, exec_provider_id, exec_model, stt_provider_id, stt_model, vision_provider_id, vision_model, tts_provider_id, tts_model, image_gen_provider_id, image_gen_model, embedding_provider_id, embedding_model, search_provider_id, search_model, source_ref, image_ref, db_schema, db_password, sdk_version, config, extra_prompts, error_message, created_at, updated_at, allow_non_member_mcp, allow_public_mcp, tools_hash, emoji
 `

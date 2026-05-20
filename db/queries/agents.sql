@@ -10,7 +10,7 @@ INSERT INTO agents (
     build_model, exec_model, stt_model, vision_model,
     tts_model, image_gen_model, embedding_model, search_model,
     source_ref, image_ref, db_schema, db_password, sdk_version,
-    extra_prompts, error_message
+    extra_prompts, error_message, emoji
 )
 VALUES (
     @name, @slug, @user_id, @description, @config, 'draft',
@@ -19,7 +19,7 @@ VALUES (
     '', '', '', '',
     '', '', '', '',
     '', '', '', '', '',
-    '[]'::jsonb, ''
+    '[]'::jsonb, '', ''
 )
 RETURNING *;
 

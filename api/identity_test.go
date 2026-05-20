@@ -55,7 +55,8 @@ func createTestBridgeWithToken(t *testing.T, rawToken, botUsername string) uuid.
 	}
 	var bridgeID uuid.UUID
 	err = testDB.Pool().QueryRow(ctx,
-		`INSERT INTO bridges (type, name, bot_token_ref, bot_username) VALUES ('telegram', $1, $2, $3) RETURNING id`,
+		`INSERT INTO bridges (type, name, bot_token_ref, bot_username, status, is_system, config, settings)
+		 VALUES ('telegram', $1, $2, $3, 'active', false, '{}'::jsonb, '{}'::jsonb) RETURNING id`,
 		"preview-"+uuid.New().String()[:8], enc, botUsername,
 	).Scan(&bridgeID)
 	if err != nil {

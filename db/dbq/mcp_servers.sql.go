@@ -73,7 +73,7 @@ func (q *Queries) DeleteMCPServersByAgentExcept(ctx context.Context, arg DeleteM
 }
 
 const getMCPServerBySlug = `-- name: GetMCPServerBySlug :one
-SELECT id, agent_id, slug, name, access, url, auth_mode, auth_url, token_url, registration_endpoint, scopes, auth_injection, tool_schemas, client_id, client_secret, access_token_ref, refresh_token, token_expires_at, last_synced_at, created_at, updated_at FROM agent_mcp_servers WHERE agent_id = $1 AND slug = $2
+SELECT id, agent_id, slug, name, access, url, auth_mode, auth_url, token_url, registration_endpoint, scopes, auth_injection, tool_schemas, client_id, client_secret, access_token_ref, refresh_token, token_expires_at, last_synced_at, created_at, updated_at, server_instructions FROM agent_mcp_servers WHERE agent_id = $1 AND slug = $2
 `
 
 type GetMCPServerBySlugParams struct {
@@ -106,6 +106,7 @@ func (q *Queries) GetMCPServerBySlug(ctx context.Context, arg GetMCPServerBySlug
 		&i.LastSyncedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ServerInstructions,
 	)
 	return i, err
 }
@@ -239,7 +240,7 @@ func (q *Queries) ListExpiringMCPServers(ctx context.Context, expiryThreshold pg
 }
 
 const listMCPServersByAgent = `-- name: ListMCPServersByAgent :many
-SELECT id, agent_id, slug, name, access, url, auth_mode, auth_url, token_url, registration_endpoint, scopes, auth_injection, tool_schemas, client_id, client_secret, access_token_ref, refresh_token, token_expires_at, last_synced_at, created_at, updated_at FROM agent_mcp_servers WHERE agent_id = $1 ORDER BY slug
+SELECT id, agent_id, slug, name, access, url, auth_mode, auth_url, token_url, registration_endpoint, scopes, auth_injection, tool_schemas, client_id, client_secret, access_token_ref, refresh_token, token_expires_at, last_synced_at, created_at, updated_at, server_instructions FROM agent_mcp_servers WHERE agent_id = $1 ORDER BY slug
 `
 
 func (q *Queries) ListMCPServersByAgent(ctx context.Context, agentID pgtype.UUID) ([]AgentMcpServer, error) {
@@ -273,6 +274,7 @@ func (q *Queries) ListMCPServersByAgent(ctx context.Context, agentID pgtype.UUID
 			&i.LastSyncedAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ServerInstructions,
 		); err != nil {
 			return nil, err
 		}
@@ -432,19 +434,26 @@ func (q *Queries) UpdateMCPServerOAuthApp(ctx context.Context, arg UpdateMCPServ
 const updateMCPServerToolSchemas = `-- name: UpdateMCPServerToolSchemas :exec
 UPDATE agent_mcp_servers SET
     tool_schemas = $1,
+    server_instructions = $2,
     last_synced_at = now(),
     updated_at = now()
-WHERE agent_id = $2 AND slug = $3
+WHERE agent_id = $3 AND slug = $4
 `
 
 type UpdateMCPServerToolSchemasParams struct {
-	ToolSchemas []byte      `json:"tool_schemas"`
-	AgentID     pgtype.UUID `json:"agent_id"`
-	Slug        string      `json:"slug"`
+	ToolSchemas        []byte      `json:"tool_schemas"`
+	ServerInstructions string      `json:"server_instructions"`
+	AgentID            pgtype.UUID `json:"agent_id"`
+	Slug               string      `json:"slug"`
 }
 
 func (q *Queries) UpdateMCPServerToolSchemas(ctx context.Context, arg UpdateMCPServerToolSchemasParams) error {
-	_, err := q.db.Exec(ctx, updateMCPServerToolSchemas, arg.ToolSchemas, arg.AgentID, arg.Slug)
+	_, err := q.db.Exec(ctx, updateMCPServerToolSchemas,
+		arg.ToolSchemas,
+		arg.ServerInstructions,
+		arg.AgentID,
+		arg.Slug,
+	)
 	return err
 }
 
@@ -480,7 +489,7 @@ ON CONFLICT (agent_id, slug) DO UPDATE SET
         WHEN agent_mcp_servers.url != EXCLUDED.url OR agent_mcp_servers.scopes != EXCLUDED.scopes
         THEN NULL ELSE agent_mcp_servers.token_expires_at END,
     updated_at = now()
-RETURNING id, agent_id, slug, name, access, url, auth_mode, auth_url, token_url, registration_endpoint, scopes, auth_injection, tool_schemas, client_id, client_secret, access_token_ref, refresh_token, token_expires_at, last_synced_at, created_at, updated_at
+RETURNING id, agent_id, slug, name, access, url, auth_mode, auth_url, token_url, registration_endpoint, scopes, auth_injection, tool_schemas, client_id, client_secret, access_token_ref, refresh_token, token_expires_at, last_synced_at, created_at, updated_at, server_instructions
 `
 
 type UpsertMCPServerParams struct {
@@ -540,6 +549,7 @@ func (q *Queries) UpsertMCPServer(ctx context.Context, arg UpsertMCPServerParams
 		&i.LastSyncedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ServerInstructions,
 	)
 	return i, err
 }

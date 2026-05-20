@@ -194,6 +194,17 @@ func (h *conversationsHandler) GetConversation(w http.ResponseWriter, r *http.Re
 		HasOlderMessages: hasOlder,
 	}
 
+	// Mid-flight run discovery — lets the chat store adopt the run id
+	// when the user joins a conversation that already has a run going
+	// (WS missed run.started). Without this, every subsequent WS delta is
+	// filtered out by the chat store's isActiveRun check, and the Cancel
+	// button stays disabled until a page refresh after the run completes.
+	// pgx returns sql.ErrNoRows when nothing's in flight — that's the
+	// common case, not an error worth logging.
+	if runID, err := q.GetLatestRunningPromptRun(ctx, convID.String()); err == nil {
+		resp.InFlightRunId = uuid.UUID(runID.Bytes).String()
+	}
+
 	// Check for a suspended run with pending tool calls — scoped to THIS
 	// conversation. Agent-wide lookup would surface a sibling-delegated
 	// (source='a2a') suspension as an actionable card in an unrelated web
@@ -481,7 +492,7 @@ func (h *conversationsHandler) Prompt(w http.ResponseWriter, r *http.Request) {
 			filename = origFilename
 		}
 		fileInfos = append(fileInfos, agentsdk.FileInfo{
-			Path:        filePath,
+			Path:        agentsdk.FilePath(filePath),
 			Filename:    filename,
 			ContentType: ct,
 			Size:        info.Size,
@@ -505,7 +516,7 @@ func (h *conversationsHandler) Prompt(w http.ResponseWriter, r *http.Request) {
 			}
 			parts = append(parts, agentsdk.DisplayPart{
 				Type:     partType,
-				Source:   "agents/" + agentID.String() + "/" + fi.Path,
+				Source:   "agents/" + agentID.String() + "/" + string(fi.Path),
 				Filename: fi.Filename,
 				MimeType: fi.ContentType,
 			})
@@ -812,7 +823,7 @@ func (h *conversationsHandler) UploadFile(w http.ResponseWriter, r *http.Request
 	}
 
 	writeJSON(w, http.StatusOK, agentsdk.FileInfo{
-		Path:         path,
+		Path:         agentsdk.FilePath(path),
 		Filename:     header.Filename,
 		ContentType:  ct,
 		Size:         header.Size,

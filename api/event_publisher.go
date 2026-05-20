@@ -32,9 +32,13 @@ func decodeToolOutput(raw json.RawMessage) (text, outcome, errText string) {
 	text = message.ToolOutputText(o)
 	outcome = message.ToolOutcome(o)
 	if outcome == "error" {
-		errText = text
+		// Error goes solely in errText so the WS event leaves Output
+		// empty — mirrors the persisted-refresh path (messageGroup.ts),
+		// where an error sets only the block's `error`. Populating both
+		// makes ToolBadge render the message twice (black + red).
+		return "", "error", text
 	}
-	return text, outcome, errText
+	return text, outcome, ""
 }
 
 // ParentRunInfo carries the parent run's coordinates when an A2A

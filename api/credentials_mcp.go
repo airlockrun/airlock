@@ -272,7 +272,7 @@ func (h *credentialHandler) TestMCPCredential(w http.ResponseWriter, r *http.Req
 	probeCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 
-	if _, err := discoverMCPTools(probeCtx, server.Url, server.AuthInjection, creds); err != nil {
+	if _, _, err := discoverMCPTools(probeCtx, server.Url, server.AuthInjection, creds); err != nil {
 		writeProto(w, http.StatusOK, &airlockv1.TestCredentialResponse{
 			Success: false,
 			Message: err.Error(),

@@ -646,6 +646,41 @@ function formatTokens(n: number): string {
 .chat-bubble p {
   margin: 0.25rem 0;
 }
+
+/* GFM tables: marked emits a real <table>; without these the browser
+   default (no border-collapse, no padding) renders cramped/misaligned. */
+.chat-bubble table {
+  border-collapse: collapse;
+  margin: 0.5rem 0;
+  font-size: 0.85rem;
+  /* size to content but never overflow the bubble — scroll instead. */
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.chat-bubble th,
+.chat-bubble td {
+  border: 1px solid var(--p-surface-300);
+  padding: 0.35rem 0.6rem;
+  text-align: left;
+  vertical-align: top;
+}
+
+.chat-bubble th {
+  font-weight: 600;
+  background: rgba(0, 0, 0, 0.04);
+}
+
+:root.dark .chat-bubble th,
+:root.dark .chat-bubble td {
+  border-color: var(--p-surface-600);
+}
+
+:root.dark .chat-bubble th {
+  background: rgba(255, 255, 255, 0.06);
+}
 </style>
 
 <style scoped>

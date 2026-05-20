@@ -102,6 +102,7 @@ func TestResolveModel(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			skipIfNoDB(t) // per-subtest snapshot restore — each case seeds "openai"
 			ah := testAgentHandler()
 			agentID, _ := testAgentAndUser(t)
 

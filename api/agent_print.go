@@ -56,10 +56,18 @@ func (h *agentHandler) Print(w http.ResponseWriter, r *http.Request) {
 			}
 			p.Source = key
 			p.Data = nil // Don't store bytes in the message
-		} else if p.Source != "" && !strings.HasPrefix(p.Source, "agents/") && !strings.HasPrefix(p.Source, "media/") {
-			// Source is an agent storage path (e.g. "tmp/foo.png"); copy
-			// to permanent media location. Strip a stray leading '/' so
-			// the LLM-supplied path can't double-slash the S3 key.
+		} else if p.Source != "" && !strings.HasPrefix(p.Source, "agents/") {
+			// Source is an agent-relative storage path (e.g. "tmp/foo.png"
+			// or a path in an agent-registered directory like "media/foo");
+			// copy to permanent media location. The previous bare "media/"
+			// shortcut was unsafe — it conflated airlock-managed permanent
+			// tails with paths inside an agent-registered "media/"
+			// directory, leaving p.Source as the bare "media/<file>" that
+			// the URL signer then treated as a bucket-root key (broken
+			// link). Routing media/ through the same copy path as tmp/
+			// produces a proper absolute agents/{id}/media/<mediaID>/...
+			// key. Strip a stray leading '/' so the LLM-supplied path
+			// can't double-slash the S3 key.
 			srcPath := strings.TrimPrefix(p.Source, "/")
 			srcKey, err := agentStorageKey(agentID, srcPath)
 			if err != nil {
@@ -77,6 +85,24 @@ func (h *agentHandler) Print(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			p.Source = dstKey
+		} else if p.Source != "" {
+			// Absolute "agents/..." key — already-permanent re-share, no
+			// copy. Two guards: (1) require it to be THIS agent's key
+			// (defence in depth — there's no legitimate cross-agent
+			// re-share via printToUser, and it would bypass the other
+			// agent's directory access controls). (2) HeadObject so a
+			// hallucinated or swept-out key fails loud here instead of
+			// being persisted as a broken link the URL signer happily
+			// emits.
+			expected := "agents/" + agentID.String() + "/"
+			if !strings.HasPrefix(p.Source, expected) {
+				writeJSONError(w, http.StatusBadRequest, "file source must be in this agent's namespace: "+p.Source)
+				return
+			}
+			if _, _, err := h.s3.HeadObject(ctx, p.Source); err != nil {
+				writeJSONError(w, http.StatusBadRequest, "file source does not exist: "+p.Source)
+				return
+			}
 		}
 	}
 

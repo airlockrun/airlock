@@ -183,7 +183,7 @@ func (h *agentHandler) StorageInfo(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, agentsdk.FileInfo{
-		Path:         req.Path,
+		Path:         agentsdk.FilePath(req.Path),
 		Filename:     filename,
 		ContentType:  ct,
 		Size:         info.Size,
@@ -395,7 +395,7 @@ func (h *agentHandler) StorageList(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		files = append(files, agentsdk.FileInfo{
-			Path:         filePath,
+			Path:         agentsdk.FilePath(filePath),
 			Filename:     pathBase(filePath),
 			Size:         obj.Size,
 			LastModified: obj.LastModified,

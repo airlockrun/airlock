@@ -2324,8 +2324,14 @@ type GetConversationResponse struct {
 	// the first message in `messages`. The client uses this to decide whether
 	// to enable scroll-up pagination via ListConversationMessages.
 	HasOlderMessages bool `protobuf:"varint,4,opt,name=has_older_messages,json=hasOlderMessages,proto3" json:"has_older_messages,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// in_flight_run_id is set when a prompt run is currently in flight for
+	// this conversation (status=running). Lets the client adopt the run id
+	// even when it joined after the run.started WS event already fired —
+	// without it, mid-flight WS deltas / completion events get filtered
+	// out and the Cancel button stays disabled until a page refresh.
+	InFlightRunId string `protobuf:"bytes,5,opt,name=in_flight_run_id,json=inFlightRunId,proto3" json:"in_flight_run_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *GetConversationResponse) Reset() {
@@ -2384,6 +2390,13 @@ func (x *GetConversationResponse) GetHasOlderMessages() bool {
 		return x.HasOlderMessages
 	}
 	return false
+}
+
+func (x *GetConversationResponse) GetInFlightRunId() string {
+	if x != nil {
+		return x.InFlightRunId
+	}
+	return ""
 }
 
 // PaginatedMessagesResponse is the result of GET /api/v1/conversations/{convID}/messages
@@ -4285,12 +4298,13 @@ const file_airlock_v1_api_proto_rawDesc = "" +
 	"\x1aCreateConversationResponse\x12@\n" +
 	"\fconversation\x18\x01 \x01(\v2\x1c.airlock.v1.ConversationInfoR\fconversation\"_\n" +
 	"\x19ListConversationsResponse\x12B\n" +
-	"\rconversations\x18\x01 \x03(\v2\x1c.airlock.v1.ConversationInfoR\rconversations\"\x97\x02\n" +
+	"\rconversations\x18\x01 \x03(\v2\x1c.airlock.v1.ConversationInfoR\rconversations\"\xc0\x02\n" +
 	"\x17GetConversationResponse\x12@\n" +
 	"\fconversation\x18\x01 \x01(\v2\x1c.airlock.v1.ConversationInfoR\fconversation\x128\n" +
 	"\bmessages\x18\x02 \x03(\v2\x1c.airlock.v1.AgentMessageInfoR\bmessages\x12R\n" +
 	"\x14pending_confirmation\x18\x03 \x01(\v2\x1f.airlock.v1.PendingConfirmationR\x13pendingConfirmation\x12,\n" +
-	"\x12has_older_messages\x18\x04 \x01(\bR\x10hasOlderMessages\"p\n" +
+	"\x12has_older_messages\x18\x04 \x01(\bR\x10hasOlderMessages\x12'\n" +
+	"\x10in_flight_run_id\x18\x05 \x01(\tR\rinFlightRunId\"p\n" +
 	"\x19PaginatedMessagesResponse\x128\n" +
 	"\bmessages\x18\x01 \x03(\v2\x1c.airlock.v1.AgentMessageInfoR\bmessages\x12\x19\n" +
 	"\bhas_more\x18\x02 \x01(\bR\ahasMore\"j\n" +

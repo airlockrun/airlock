@@ -457,99 +457,138 @@ func schemaHasAgentMarker(schema map[string]any) bool {
 }
 
 // materializePromptFiles handles the `prompt` meta-tool's `files`
-// field. The schema-driven walker doesn't apply here because FileInfo
-// isn't a FilePath — it's a struct with explicit metadata fields. Two
-// shapes accepted:
+// field. Two wire shapes, strictly per principal:
 //
-//   - Legacy {path, filename, contentType, size} — caller already
-//     uploaded the file. For A2A, copy from caller's bucket to callee's
-//     __incoming/<scope>/ and rewrite path; for external, leave as-is
-//     (the caller is the chat user and the path was uploaded via the
-//     web upload endpoint).
-//   - New inline {filename, mimeType, data} (base64) — external MCP
-//     upload. Decode, S3 PUT to callee's __incoming/<scope>/, build
-//     FileInfo with the new path.
+//   - {path}        — A2A only. The caller agent references a file in
+//     its own bucket. Airlock HEADs the source for
+//     metadata, server-side-copies to the callee's
+//     __incoming/<scope>/, builds a FileInfo with
+//     content-type/size/filename derived from S3 truth.
+//   - {filename, mimeType, data (base64)} — external MCP clients only.
+//     They have no agent storage to reference, so they
+//     inline-upload bytes. We base64-decode, S3 PUT into
+//     __incoming/<scope>/, build FileInfo.
 //
 // scopeKey is the sub-path inside __incoming/: "conv-<uuid>" when the
 // caller supplied (and we validated) a conversation, or
 // "run-<callerRunID>" otherwise. CheckFileAccess on the callee gates
 // reads against this scope, isolating files across callers.
 //
-// Rejected for agent principal: inline shape (an agent calling a
-// sibling should pass an existing path, not embed bytes — round-tripping
-// through base64 wastes the cross-bucket copy fast-path).
+// Each branch rejects the other principal's shape with a steering
+// message — defence in depth in case a confused caller picks the wrong
+// shape. The MCP `tools/list` schema only advertises inline-upload (see
+// handleToolsList); agent callers use agentsdk's promptAgentInput which
+// only emits {path}-shape.
 func (s *MCPServer) materializePromptFiles(ctx context.Context, h *agentHandler, q *dbq.Queries, target dbq.Agent, principal MCPPrincipal, scopeKey string, raws []json.RawMessage) ([]agentsdk.FileInfo, *materializeError) {
 	if len(raws) == 0 {
 		return nil, nil
 	}
 	out := make([]agentsdk.FileInfo, 0, len(raws))
 	targetID := uuid.UUID(target.ID.Bytes)
+	isAgent := principal.Kind == MCPPrincipalAgent && principal.CallerAgentID != uuid.Nil
 	for i, raw := range raws {
 		var probe map[string]any
 		if err := json.Unmarshal(raw, &probe); err != nil {
 			return nil, &materializeError{Code: rpcErrInvalidParams, Message: fmt.Sprintf("files[%d]: decode: %s", i, err)}
 		}
-		// Inline shape: presence of `data` (base64) wins.
-		if dataStr, ok := probe["data"].(string); ok && dataStr != "" {
-			if principal.Kind == MCPPrincipalAgent {
-				return nil, &materializeError{Code: rpcErrInvalidParams, Message: fmt.Sprintf("files[%d]: agent callers must pass {path, ...}, not inline {data, ...}", i)}
+		_, hasData := probe["data"].(string)
+		pathStr, hasPath := probe["path"].(string)
+
+		switch {
+		case hasData:
+			if isAgent {
+				return nil, &materializeError{Code: rpcErrInvalidParams, Message: fmt.Sprintf("files[%d]: agent callers must reference a path in your own storage ({path: \"...\"}), not inline {data, ...}", i)}
 			}
-			filename, _ := probe["filename"].(string)
-			if filename == "" {
-				filename = "upload.bin"
+			fi, mErr := s.uploadInlineFile(ctx, h, targetID, scopeKey, i, probe)
+			if mErr != nil {
+				return nil, mErr
 			}
-			mimeType, _ := probe["mimeType"].(string)
-			rawBytes, err := base64.StdEncoding.DecodeString(dataStr)
-			if err != nil {
-				return nil, &materializeError{Code: rpcErrInvalidParams, Message: fmt.Sprintf("files[%d]: invalid base64: %s", i, err)}
+			out = append(out, fi)
+
+		case hasPath:
+			if !isAgent {
+				return nil, &materializeError{Code: rpcErrInvalidParams, Message: fmt.Sprintf("files[%d]: external clients must inline-upload ({filename, mimeType, data}); you have no agent storage to reference", i)}
 			}
-			if len(rawBytes) > maxInlineResourceBytes {
-				return nil, &materializeError{Code: rpcErrInvalidParams, Message: fmt.Sprintf("files[%d] exceeds %d-byte inline cap", i, maxInlineResourceBytes)}
+			fi, mErr := s.copyAgentFile(ctx, h, targetID, principal.CallerAgentID, scopeKey, i, pathStr)
+			if mErr != nil {
+				return nil, mErr
 			}
-			dstPath := incomingDir + "/" + scopeKey + "/" + uuid.NewString() + "-" + safeFilename(filename)
-			dstKey := "agents/" + targetID.String() + "/" + dstPath
-			meta := map[string]string{"filename": filename}
-			if mimeType != "" {
-				meta["content-type"] = mimeType
+			out = append(out, fi)
+
+		default:
+			if isAgent {
+				return nil, &materializeError{Code: rpcErrInvalidParams, Message: fmt.Sprintf("files[%d]: missing required field `path`", i)}
 			}
-			if err := h.s3.PutObjectWithMetadata(ctx, dstKey, bytes.NewReader(rawBytes), int64(len(rawBytes)), meta); err != nil {
-				return nil, &materializeError{Code: rpcErrServerError, Message: fmt.Sprintf("files[%d]: upload: %s", i, err)}
-			}
-			out = append(out, agentsdk.FileInfo{
-				Path:        dstPath,
-				Filename:    filename,
-				ContentType: mimeType,
-				Size:        int64(len(rawBytes)),
-			})
-			continue
+			return nil, &materializeError{Code: rpcErrInvalidParams, Message: fmt.Sprintf("files[%d]: missing required fields {filename, mimeType, data}", i)}
 		}
-		// Legacy path-bearing shape.
-		var fi agentsdk.FileInfo
-		if err := json.Unmarshal(raw, &fi); err != nil {
-			return nil, &materializeError{Code: rpcErrInvalidParams, Message: fmt.Sprintf("files[%d]: decode FileInfo: %s", i, err)}
-		}
-		if fi.Path == "" {
-			return nil, &materializeError{Code: rpcErrInvalidParams, Message: fmt.Sprintf("files[%d]: path is required (or send inline {filename, mimeType, data})", i)}
-		}
-		cleaned, err := storage.CleanAgentPath(fi.Path)
-		if err != nil {
-			return nil, &materializeError{Code: rpcErrInvalidParams, Message: fmt.Sprintf("files[%d]: invalid path: %s", i, err)}
-		}
-		if principal.Kind == MCPPrincipalAgent && principal.CallerAgentID != uuid.Nil {
-			// A2A: copy from caller's bucket to callee's __incoming/<scope>/.
-			srcKey := "agents/" + principal.CallerAgentID.String() + "/" + cleaned
-			dstPath := incomingDir + "/" + scopeKey + "/" + uuid.NewString() + "-" + filepath.Base(cleaned)
-			dstKey := "agents/" + targetID.String() + "/" + dstPath
-			if err := h.s3.CopyObject(ctx, srcKey, dstKey); err != nil {
-				return nil, &materializeError{Code: rpcErrServerError, Message: fmt.Sprintf("files[%d]: cross-agent copy: %s", i, err)}
-			}
-			fi.Path = dstPath
-		} else {
-			fi.Path = cleaned
-		}
-		out = append(out, fi)
 	}
 	return out, nil
+}
+
+// uploadInlineFile decodes base64 bytes from an external MCP client and
+// PUTs them into agents/{target}/__incoming/<scope>/. Returns the
+// FileInfo to surface in PromptInput.Files.
+func (s *MCPServer) uploadInlineFile(ctx context.Context, h *agentHandler, targetID uuid.UUID, scopeKey string, i int, probe map[string]any) (agentsdk.FileInfo, *materializeError) {
+	filename, _ := probe["filename"].(string)
+	if filename == "" {
+		filename = "upload.bin"
+	}
+	mimeType, _ := probe["mimeType"].(string)
+	dataStr, _ := probe["data"].(string)
+	rawBytes, err := base64.StdEncoding.DecodeString(dataStr)
+	if err != nil {
+		return agentsdk.FileInfo{}, &materializeError{Code: rpcErrInvalidParams, Message: fmt.Sprintf("files[%d]: invalid base64: %s", i, err)}
+	}
+	if len(rawBytes) > maxInlineResourceBytes {
+		return agentsdk.FileInfo{}, &materializeError{Code: rpcErrInvalidParams, Message: fmt.Sprintf("files[%d] exceeds %d-byte inline cap", i, maxInlineResourceBytes)}
+	}
+	dstPath := incomingDir + "/" + scopeKey + "/" + uuid.NewString() + "-" + safeFilename(filename)
+	dstKey := "agents/" + targetID.String() + "/" + dstPath
+	meta := map[string]string{"filename": filename}
+	if mimeType != "" {
+		meta["content-type"] = mimeType
+	}
+	if err := h.s3.PutObjectWithMetadata(ctx, dstKey, bytes.NewReader(rawBytes), int64(len(rawBytes)), meta); err != nil {
+		return agentsdk.FileInfo{}, &materializeError{Code: rpcErrServerError, Message: fmt.Sprintf("files[%d]: upload: %s", i, err)}
+	}
+	return agentsdk.FileInfo{
+		Path:        agentsdk.FilePath(dstPath),
+		Filename:    filename,
+		ContentType: mimeType,
+		Size:        int64(len(rawBytes)),
+	}, nil
+}
+
+// copyAgentFile HEADs a path in the caller's bucket, server-side-copies
+// it into agents/{target}/__incoming/<scope>/, and builds a FileInfo
+// from S3 truth. Caller LLM only supplies path — every other field is
+// derived here.
+func (s *MCPServer) copyAgentFile(ctx context.Context, h *agentHandler, targetID, callerAgentID uuid.UUID, scopeKey string, i int, pathStr string) (agentsdk.FileInfo, *materializeError) {
+	cleaned, err := storage.CleanAgentPath(pathStr)
+	if err != nil {
+		return agentsdk.FileInfo{}, &materializeError{Code: rpcErrInvalidParams, Message: fmt.Sprintf("files[%d]: invalid path: %s", i, err)}
+	}
+	srcKey := "agents/" + callerAgentID.String() + "/" + cleaned
+	info, contentType, headErr := h.s3.HeadObject(ctx, srcKey)
+	if headErr != nil {
+		return agentsdk.FileInfo{}, &materializeError{Code: rpcErrInvalidParams, Message: fmt.Sprintf("files[%d]: source not found in your bucket: %s", i, cleaned)}
+	}
+	filename := info.Metadata["filename"]
+	if filename == "" {
+		filename = filepath.Base(cleaned)
+	}
+	dstPath := incomingDir + "/" + scopeKey + "/" + uuid.NewString() + "-" + filename
+	dstKey := "agents/" + targetID.String() + "/" + dstPath
+	if err := h.s3.CopyObject(ctx, srcKey, dstKey); err != nil {
+		return agentsdk.FileInfo{}, &materializeError{Code: rpcErrServerError, Message: fmt.Sprintf("files[%d]: cross-agent copy: %s", i, err)}
+	}
+	return agentsdk.FileInfo{
+		Path:         agentsdk.FilePath(dstPath),
+		Filename:     filename,
+		ContentType:  contentType,
+		Size:         info.Size,
+		LastModified: info.LastModified,
+	}, nil
 }
 
 // safeFilename strips path separators + a few hostile characters so a
@@ -593,6 +632,7 @@ func collectPromptArtifacts(ctx context.Context, s3 *storage.S3Client, logger *z
 		return nil
 	}
 	targetID := uuid.UUID(target.ID.Bytes)
+	fullPrefix := "agents/" + targetID.String() + "/"
 	seen := make(map[string]struct{})
 	var out []a2aArtifact
 	for _, m := range msgs {
@@ -621,13 +661,26 @@ func collectPromptArtifacts(ctx context.Context, s3 *storage.S3Client, logger *z
 			if cerr != nil {
 				continue
 			}
-			if _, dup := seen[cleaned]; dup {
+			// printToUser persists parts.source as the absolute S3 key
+			// (agents/{id}/media/{mediaID}/file) so URL signing can hand
+			// it to S3 directly. Reduce to a target-relative path before
+			// re-prefixing; skip cross-agent keys (defence in depth — a
+			// sibling-bucket key here would mean the message was forged
+			// or printToUser's namespace guard regressed).
+			rel := cleaned
+			if strings.HasPrefix(cleaned, "agents/") {
+				if !strings.HasPrefix(cleaned, fullPrefix) {
+					continue
+				}
+				rel = strings.TrimPrefix(cleaned, fullPrefix)
+			}
+			if _, dup := seen[rel]; dup {
 				continue
 			}
-			seen[cleaned] = struct{}{}
+			seen[rel] = struct{}{}
 			if principal.Kind == MCPPrincipalAgent && principal.CallerAgentID != uuid.Nil {
-				srcKey := "agents/" + targetID.String() + "/" + cleaned
-				dstPath := siblingsDir + "/" + target.Slug + "/" + cleaned
+				srcKey := fullPrefix + rel
+				dstPath := siblingsDir + "/" + target.Slug + "/" + rel
 				dstKey := "agents/" + principal.CallerAgentID.String() + "/" + dstPath
 				if copyErr := s3.CopyObject(ctx, srcKey, dstKey); copyErr != nil {
 					logger.Warn("a2a: copy prompt artifact",
@@ -636,7 +689,7 @@ func collectPromptArtifacts(ctx context.Context, s3 *storage.S3Client, logger *z
 				}
 				out = append(out, a2aArtifact{Path: dstPath, Filename: p.Filename, ContentType: p.MimeType})
 			} else {
-				out = append(out, a2aArtifact{Path: cleaned, Filename: p.Filename, ContentType: p.MimeType})
+				out = append(out, a2aArtifact{Path: rel, Filename: p.Filename, ContentType: p.MimeType})
 			}
 		}
 	}

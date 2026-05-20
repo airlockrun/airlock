@@ -33,8 +33,8 @@ func insertRunRaw(t *testing.T, agentID uuid.UUID, finishedAt *time.Time, verbos
 		checkpoint = []byte(`{"state":"x"}`)
 	}
 	_, err := testDB.Pool().Exec(context.Background(),
-		`INSERT INTO runs (id, agent_id, status, input_payload, actions, logs, stdout_log, panic_trace, checkpoint, llm_tokens_in, llm_tokens_out, llm_cost_estimate, source_ref, trigger_type, trigger_ref, compacted, finished_at)
-		 VALUES ($1, $2, 'success', $3, $4, $5, $6, $7, $8, 100, 200, 0.003, '', 'prompt', '', $9, $10)`,
+		`INSERT INTO runs (id, agent_id, status, input_payload, actions, logs, stdout_log, error_message, error_kind, panic_trace, checkpoint, llm_calls, llm_tokens_in, llm_tokens_out, llm_cost_estimate, source_ref, trigger_type, trigger_ref, compacted, finished_at)
+		 VALUES ($1, $2, 'success', $3, $4, $5, $6, '', '', $7, $8, 1, 100, 200, 0.003, '', 'prompt', '', $9, $10)`,
 		toPgUUID(runID), toPgUUID(agentID), inputPayload, actions, logs, stdout, panic, checkpoint, compacted, finished,
 	)
 	if err != nil {

@@ -161,7 +161,7 @@ func (s *MCPServer) serveDispatch(w http.ResponseWriter, r *http.Request, h *age
 
 	switch msg.Method {
 	case "initialize":
-		s.handleInitialize(w, msg)
+		s.handleInitialize(w, target, msg)
 	case "notifications/initialized":
 		w.WriteHeader(http.StatusAccepted)
 	case "notifications/cancelled":
@@ -394,18 +394,33 @@ func chaseOriginalUser(ctx context.Context, q *dbq.Queries, run dbq.Run) (uuid.U
 	return uuid.Nil, errors.New("parent chain too deep")
 }
 
-func (s *MCPServer) handleInitialize(w http.ResponseWriter, msg jsonrpcMessage) {
-	result, _ := json.Marshal(map[string]any{
+func (s *MCPServer) handleInitialize(w http.ResponseWriter, target dbq.Agent, msg jsonrpcMessage) {
+	// This MCP server fronts a specific agent, so advertise that agent's
+	// identity (not a generic "airlock"). serverInfo.name is the stable
+	// machine id (slug); title is the human display name, emoji-prefixed
+	// when set. instructions is the spec's server-level usage hint — we
+	// surface the agent's own description so connecting clients/siblings
+	// understand what this server is for. Omitted when empty.
+	title := target.Name
+	if target.Emoji != "" {
+		title = target.Emoji + " " + target.Name
+	}
+	resultMap := map[string]any{
 		"protocolVersion": mcp.LatestProtocolVersion,
 		"capabilities": map[string]any{
 			"tools":     map[string]any{"listChanged": false},
 			"resources": map[string]any{"subscribe": false, "listChanged": false},
 		},
 		"serverInfo": map[string]any{
-			"name":    "airlock",
+			"name":    target.Slug,
+			"title":   title,
 			"version": "1.0",
 		},
-	})
+	}
+	if target.Description != "" {
+		resultMap["instructions"] = target.Description
+	}
+	result, _ := json.Marshal(resultMap)
 	writeJSONRPCResult(w, msg.ID, result)
 }
 
@@ -448,7 +463,13 @@ func (s *MCPServer) handleToolsList(ctx context.Context, w http.ResponseWriter, 
 	tools = append(tools, toolEntry{
 		Name:        "prompt",
 		Description: "Delegate a natural-language task to this agent. It runs its own LLM loop and returns {text, taskId, contextId, state, artifacts}. Progress streams via notifications/progress over SSE.",
-		InputSchema: json.RawMessage(`{"type":"object","properties":{"message":{"type":"string","description":"The message / task to send"},"contextId":{"type":"string","description":"Optional: continue an existing conversation thread"},"taskId":{"type":"string","description":"Optional: resume a task that returned state=input-required; put the answer in message"},"files":{"type":"array","description":"Optional files to send","items":{"type":"object","properties":{"path":{"type":"string"},"filename":{"type":"string"},"contentType":{"type":"string"},"size":{"type":"integer"},"data":{"type":"string","description":"base64 (external clients only)"},"mimeType":{"type":"string"}}}}},"required":["message"]}`),
+		// Files schema is inline-upload-only on purpose: external MCP
+		// clients have no agent storage to reference a path in, and A2A
+		// callers bypass this schema (they use agentsdk's
+		// promptAgentInput, which carries []FilePath). The materializer
+		// still accepts {path}-shape on the wire for A2A — that path is
+		// just never advertised here.
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"message":{"type":"string","description":"The message / task to send"},"contextId":{"type":"string","description":"Optional: continue an existing conversation thread"},"taskId":{"type":"string","description":"Optional: resume a task that returned state=input-required; put the answer in message"},"files":{"type":"array","description":"Files to attach (base64 inline upload).","items":{"type":"object","additionalProperties":false,"required":["filename","mimeType","data"],"properties":{"filename":{"type":"string"},"mimeType":{"type":"string"},"data":{"type":"string","description":"base64-encoded file bytes (max 10 MiB)"}}}}},"required":["message"]}`),
 	})
 	result, _ := json.Marshal(map[string]any{"tools": tools})
 	writeJSONRPCResult(w, msg.ID, result)

@@ -65,6 +65,12 @@ const overrides = ref<ModelOverrides>(emptyOverrides())
 const systemDefaults = ref<ModelOverrides>(emptyOverrides())
 
 let pollTimer: ReturnType<typeof setInterval> | null = null
+// Unsubscribe handle for the agent.build listener registered when this
+// view kicks off a new build. Cleaned up in onUnmounted — otherwise the
+// listener (closing over the just-created agent's id) lingers for the
+// rest of the session and re-fires router.push every time that agent
+// later completes any build/upgrade, including from unrelated views.
+let unsubBuild: (() => void) | null = null
 
 onMounted(async () => {
   catalog.fetchConfiguredModels()
@@ -312,7 +318,8 @@ async function onSubmit() {
     loading.value = false
 
     ws.reconnect()
-    ws.onMessage('agent.build', (payload: any) => {
+    unsubBuild?.()
+    unsubBuild = ws.onMessage('agent.build', (payload: any) => {
       if (payload?.agentId !== agent.id) return
       if (payload.buildId) activeBuildId.value = payload.buildId
       if (payload.status === 'complete' || payload.status === 'active' || payload.status === 'done') {
@@ -328,7 +335,11 @@ async function onSubmit() {
   }
 }
 
-onUnmounted(() => { stopPolling() })
+onUnmounted(() => {
+  stopPolling()
+  unsubBuild?.()
+  unsubBuild = null
+})
 </script>
 
 <template>

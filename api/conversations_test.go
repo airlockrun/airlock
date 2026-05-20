@@ -24,8 +24,8 @@ func seedMessages(t *testing.T, convID pgtype.UUID, n int) []int64 {
 	seqs := make([]int64, n)
 	for i := 0; i < n; i++ {
 		err := testDB.Pool().QueryRow(ctx,
-			`INSERT INTO agent_messages (conversation_id, role, content, tokens_in, tokens_out, cost_estimate, source)
-			 VALUES ($1, 'user', $2, 0, 0, 0, 'user') RETURNING seq`,
+			`INSERT INTO agent_messages (conversation_id, role, content, cost_estimate, source, file_keys, ephemeral)
+			 VALUES ($1, 'user', $2, 0, 'user', '{}', false) RETURNING seq`,
 			convID, "msg "+strconv.Itoa(i)).Scan(&seqs[i])
 		if err != nil {
 			t.Fatalf("seed message %d: %v", i, err)

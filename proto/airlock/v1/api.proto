@@ -292,6 +292,13 @@ message GetConversationResponse {
   // the first message in `messages`. The client uses this to decide whether
   // to enable scroll-up pagination via ListConversationMessages.
   bool has_older_messages = 4;
+
+  // in_flight_run_id is set when a prompt run is currently in flight for
+  // this conversation (status=running). Lets the client adopt the run id
+  // even when it joined after the run.started WS event already fired —
+  // without it, mid-flight WS deltas / completion events get filtered
+  // out and the Cancel button stays disabled until a page refresh.
+  string in_flight_run_id = 5;
 }
 
 // PaginatedMessagesResponse is the result of GET /api/v1/conversations/{convID}/messages

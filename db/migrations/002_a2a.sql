@@ -345,6 +345,17 @@ ALTER TABLE system_settings
     DROP COLUMN IF EXISTS public_url,
     DROP COLUMN IF EXISTS agent_domain;
 
+-- agent_mcp_servers.server_instructions — the server-level usage hint
+-- the remote MCP server advertised via its initialize `instructions`
+-- field; cached here and rendered next to mcp_<slug> in the agent
+-- prompt. Empty = none (a legitimate value, so DEFAULT '' is a real
+-- backfill, not a fake placeholder); dropped immediately so new rows
+-- must set it explicitly.
+ALTER TABLE agent_mcp_servers
+    ADD COLUMN server_instructions text NOT NULL DEFAULT '';
+ALTER TABLE agent_mcp_servers
+    ALTER COLUMN server_instructions DROP DEFAULT;
+
 -- +goose Down
 -- Best-effort inverse: re-add the columns (NOT NULL via transient
 -- default, then drop it per the no-fake-defaults rule). The values are
@@ -417,5 +428,6 @@ ALTER TABLE agents DROP COLUMN IF EXISTS allow_non_member_mcp;
 ALTER TABLE agent_directories DROP COLUMN IF EXISTS scope;
 ALTER TABLE agents DROP COLUMN IF EXISTS emoji;
 ALTER TABLE agents DROP COLUMN IF EXISTS tools_hash;
+ALTER TABLE agent_mcp_servers DROP COLUMN IF EXISTS server_instructions;
 DROP INDEX IF EXISTS runs_parent_run_id_idx;
 ALTER TABLE runs DROP COLUMN IF EXISTS parent_run_id;

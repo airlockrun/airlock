@@ -382,7 +382,7 @@ func (h *credentialHandler) refreshMCPAfterAuth(ctx context.Context, agentID uui
 		return
 	}
 
-	tools, err := discoverMCPTools(ctx, srv.Url, srv.AuthInjection, accessToken)
+	tools, instructions, err := discoverMCPTools(ctx, srv.Url, srv.AuthInjection, accessToken)
 	if err != nil {
 		h.logger.Warn("refresh MCP: discovery failed", zap.String("slug", slug), zap.Error(err))
 		// Don't return — we still want to ping the agent. Sync handler will
@@ -390,9 +390,10 @@ func (h *credentialHandler) refreshMCPAfterAuth(ctx context.Context, agentID uui
 	} else {
 		schemasJSON, _ := json.Marshal(tools)
 		if err := q.UpdateMCPServerToolSchemas(ctx, dbq.UpdateMCPServerToolSchemasParams{
-			AgentID:     toPgUUID(agentID),
-			Slug:        slug,
-			ToolSchemas: schemasJSON,
+			AgentID:            toPgUUID(agentID),
+			Slug:               slug,
+			ToolSchemas:        schemasJSON,
+			ServerInstructions: instructions,
 		}); err != nil {
 			h.logger.Warn("refresh MCP: persist schemas failed", zap.String("slug", slug), zap.Error(err))
 		}

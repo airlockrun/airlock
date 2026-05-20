@@ -308,7 +308,16 @@ onMounted(() => {
 
       <!-- Content -->
       <main :class="['app-content', { 'app-content-flush': backTarget }]">
-        <router-view />
+        <!-- Key on $route.path forces a fresh component instance whenever a
+             path param changes (/agents/:id, .../runs/:runId, .../builds/
+             :buildId). Views that capture route.params in setup() — like
+             AgentDetailView's `const agentId = route.params.id` — would
+             otherwise hold the previous agent's id when the user navigates
+             between siblings, breaking WS handler filters and refetches.
+             Keyed on path (not fullPath) so query-string-only navigations
+             (chat's ?c=convId switcher) still hit each view's in-place
+             watcher and don't pay the remount cost. Pinia stores survive. -->
+        <router-view :key="$route.path" />
       </main>
     </div>
   </div>

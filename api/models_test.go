@@ -154,25 +154,26 @@ func TestResolveModel_Precedence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encrypt: %v", err)
 	}
-	if _, err := testDB.Pool().Exec(ctx,
-		`INSERT INTO providers (provider_id, display_name, api_key, base_url, is_enabled)
-		 VALUES ('openai', 'OpenAI', $1, 'https://api.openai.com', true)`,
+	var provUUID uuid.UUID
+	if err := testDB.Pool().QueryRow(ctx,
+		`INSERT INTO providers (provider_id, slug, display_name, api_key, base_url, is_enabled)
+		 VALUES ('openai', 'openai', 'OpenAI', $1, 'https://api.openai.com', true) RETURNING id`,
 		ciphertext,
-	); err != nil {
+	).Scan(&provUUID); err != nil {
 		t.Fatalf("insert provider: %v", err)
 	}
+	provFK := toPgUUID(provUUID)
 
-	// Start with a bare system_settings row so tier-3 is reachable.
+	// Model resolution is provider-FK + bare model name (no legacy
+	// "provider/model" strings) — resolveModel returns the model name
+	// verbatim and requires a valid provider FK. The singleton
+	// system_settings row is migration-seeded; point its exec slot at
+	// our provider for the tier-3 default.
 	if _, err := testDB.Pool().Exec(ctx,
-		`INSERT INTO system_settings (id, public_url, agent_domain, default_build_model,
-		                              default_exec_model, default_stt_model, default_vision_model,
-		                              default_tts_model, default_image_gen_model,
-		                              default_embedding_model, default_search_model)
-		 VALUES (true, 'http://localhost:8080', 'agent.localhost', '',
-		         'openai/system-exec', '', '', '', '', '', '')
-		 ON CONFLICT (id) DO UPDATE SET default_exec_model = EXCLUDED.default_exec_model`,
+		`UPDATE system_settings SET default_exec_provider_id=$1, default_exec_model='system-exec' WHERE id=true`,
+		provFK,
 	); err != nil {
-		t.Fatalf("seed system_settings: %v", err)
+		t.Fatalf("set system default exec model: %v", err)
 	}
 
 	// Tier 3: empty slug, no per-agent override → system default.
@@ -186,8 +187,9 @@ func TestResolveModel_Precedence(t *testing.T) {
 
 	// Tier 2: set per-agent exec_model override → used over system default.
 	if err := q.UpdateAgentModels(ctx, dbq.UpdateAgentModelsParams{
-		ID:        toPgUUID(agentID),
-		ExecModel: "openai/agent-exec",
+		ID:             toPgUUID(agentID),
+		ExecProviderID: provFK,
+		ExecModel:      "agent-exec",
 	}); err != nil {
 		t.Fatalf("UpdateAgentModels: %v", err)
 	}
@@ -226,9 +228,10 @@ func TestResolveModel_Precedence(t *testing.T) {
 
 	// Tier 1: bind summarize → use the bound model, skipping lower tiers.
 	if err := q.SetAgentModelSlotAssignment(ctx, dbq.SetAgentModelSlotAssignmentParams{
-		AgentID:       toPgUUID(agentID),
-		Slug:          "summarize",
-		AssignedModel: "openai/slot-bound",
+		AgentID:            toPgUUID(agentID),
+		Slug:               "summarize",
+		AssignedProviderID: provFK,
+		AssignedModel:      "slot-bound",
 	}); err != nil {
 		t.Fatalf("SetAgentModelSlotAssignment: %v", err)
 	}
@@ -256,6 +259,17 @@ func TestUpdateModelConfig_AtomicReplaceAndSlotAssignment(t *testing.T) {
 	agentID, userID := testAgentAndUser(t)
 	q := dbq.New(testDB.Pool())
 
+	// Model config is provider-FK + bare model name; each *_model must be
+	// accompanied by a valid *_provider_id. Seed a provider to point at.
+	var provUUID uuid.UUID
+	if err := testDB.Pool().QueryRow(ctx,
+		`INSERT INTO providers (provider_id, slug, display_name, api_key, base_url, is_enabled)
+		 VALUES ('openai', 'openai', 'OpenAI', '', '', true) RETURNING id`,
+	).Scan(&provUUID); err != nil {
+		t.Fatalf("insert provider: %v", err)
+	}
+	prov := provUUID.String()
+
 	// Declare a slot so the PUT has a known slug to bind.
 	if err := q.UpsertAgentModelSlot(ctx, dbq.UpsertAgentModelSlotParams{
 		AgentID:    toPgUUID(agentID),
@@ -272,11 +286,13 @@ func TestUpdateModelConfig_AtomicReplaceAndSlotAssignment(t *testing.T) {
 
 	body := &airlockv1.UpdateAgentModelConfigRequest{
 		Config: &airlockv1.AgentModelConfig{
-			ExecModel:   "openai/gpt-4o",
-			VisionModel: "anthropic/claude-vision",
+			ExecModel:        "gpt-4o",
+			ExecProviderId:   prov,
+			VisionModel:      "claude-vision",
+			VisionProviderId: prov,
 			Slots: []*airlockv1.ModelSlotInfo{
-				{Slug: "summarize", AssignedModel: "openai/gpt-4o-mini"},
-				{Slug: "never-declared", AssignedModel: "openai/ghost"}, // silently ignored
+				{Slug: "summarize", AssignedModel: "gpt-4o-mini", AssignedProviderId: prov},
+				{Slug: "never-declared", AssignedModel: "ghost", AssignedProviderId: prov}, // silently ignored
 			},
 		},
 	}
@@ -292,8 +308,11 @@ func TestUpdateModelConfig_AtomicReplaceAndSlotAssignment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetAgentByID: %v", err)
 	}
-	if agent.ExecModel != "openai/gpt-4o" || agent.VisionModel != "anthropic/claude-vision" {
+	if agent.ExecModel != "gpt-4o" || agent.VisionModel != "claude-vision" {
 		t.Errorf("agent columns not updated: exec=%q vision=%q", agent.ExecModel, agent.VisionModel)
+	}
+	if agent.ExecProviderID != toPgUUID(provUUID) || agent.VisionProviderID != toPgUUID(provUUID) {
+		t.Errorf("provider FKs not set: exec=%v vision=%v", agent.ExecProviderID, agent.VisionProviderID)
 	}
 	// Untouched columns stayed empty.
 	if agent.BuildModel != "" || agent.SttModel != "" {
@@ -307,8 +326,8 @@ func TestUpdateModelConfig_AtomicReplaceAndSlotAssignment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetAgentModelSlot: %v", err)
 	}
-	if slot.AssignedModel != "openai/gpt-4o-mini" {
-		t.Errorf("summarize.assigned_model = %q, want %q", slot.AssignedModel, "openai/gpt-4o-mini")
+	if slot.AssignedModel != "gpt-4o-mini" {
+		t.Errorf("summarize.assigned_model = %q, want %q", slot.AssignedModel, "gpt-4o-mini")
 	}
 
 	// never-declared assignment was ignored — no new row inserted.

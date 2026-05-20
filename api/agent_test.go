@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -15,23 +14,25 @@ import (
 	"github.com/airlockrun/airlock/crypto"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
+	"github.com/airlockrun/airlock/db/dbtest"
 	"github.com/airlockrun/airlock/secrets"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 )
 
-var testDB *db.DB
+var (
+	testDB    *db.DB
+	testURL   string
+	testReset func() error // nil on the external TEST_DATABASE_URL path
+)
 
 func TestMain(m *testing.M) {
-	url := os.Getenv("DATABASE_URL")
-	if url == "" {
-		os.Exit(m.Run())
+	url, reset, release, ok := dbtest.Setup(context.Background(), db.RunMigrations, db.TestLockAndReset)
+	if !ok {
+		os.Exit(m.Run()) // no DB available; integration tests skip individually
 	}
-	release, err := db.TestLockAndReset(url)
-	if err != nil {
-		log.Fatal(err)
-	}
+	testURL, testReset = url, reset
 	testDB = db.New(context.Background(), url)
 	code := m.Run()
 	testDB.Close()
@@ -42,8 +43,27 @@ func TestMain(m *testing.M) {
 func skipIfNoDB(t *testing.T) {
 	t.Helper()
 	if testDB == nil {
-		t.Skip("DATABASE_URL not set, skipping integration test")
+		t.Skip("no test database (Docker unavailable and TEST_DATABASE_URL unset)")
 	}
+	resetTestData(t)
+}
+
+// resetTestData restores the post-migration snapshot so each test starts
+// from the exact migrated state — including migration-seeded singleton
+// rows like system_settings — making the serial api suite (no
+// t.Parallel) fully order-independent. Restore drops and recreates the
+// database, so the shared testDB pool must be closed and rebuilt around
+// it. No-op on the external TEST_DATABASE_URL path (no snapshot).
+func resetTestData(t *testing.T) {
+	t.Helper()
+	if testReset == nil {
+		return
+	}
+	testDB.Close()
+	if err := testReset(); err != nil {
+		t.Fatalf("resetTestData: restore snapshot: %v", err)
+	}
+	testDB = db.New(context.Background(), testURL)
 }
 
 const testJWTSecret = "test-secret-key-for-agent-api"
@@ -61,6 +81,10 @@ func testAgentHandler() *agentHandler {
 		db:        testDB,
 		encryptor: testEncryptor(),
 		logger:    zap.NewNop(),
+		// Mirrors config.Config.AgentBaseURL's shape. Required: the
+		// prompt-data path (agent.go) calls this unconditionally and a
+		// nil func field panics.
+		agentBaseURL: func(slug string) string { return "http://" + slug + ".localhost" },
 	}
 }
 
@@ -138,7 +162,8 @@ func createTestBridge(t *testing.T) uuid.UUID {
 	ctx := context.Background()
 	var bridgeID uuid.UUID
 	err := testDB.Pool().QueryRow(ctx,
-		`INSERT INTO bridges (type, name, bot_token_ref, bot_username) VALUES ('telegram', $1, '', '') RETURNING id`,
+		`INSERT INTO bridges (type, name, bot_token_ref, bot_username, status, is_system, config, settings)
+		 VALUES ('telegram', $1, '', '', 'active', false, '{}'::jsonb, '{}'::jsonb) RETURNING id`,
 		"test-"+uuid.New().String()[:8],
 	).Scan(&bridgeID)
 	if err != nil {

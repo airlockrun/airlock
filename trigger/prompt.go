@@ -249,7 +249,7 @@ func (p *PromptProxy) HandleMessage(
 			continue
 		}
 		fileInfos = append(fileInfos, agentsdk.FileInfo{
-			Path:        paths[i],
+			Path:        agentsdk.FilePath(paths[i]),
 			Filename:    f.Filename,
 			ContentType: f.ContentType,
 			Size:        int64(len(f.Data)),
