@@ -25,6 +25,7 @@ agents/{agent_id}/
 ├── go.mod             # Module file (usually leave as-is)
 ├── sqlc.yaml          # sqlc config (pre-configured)
 ├── setup.sh           # (optional) system setup — you create if needed
+├── NOTES.md           # design log — decisions + integration references; you create/maintain
 ├── views/             # templ templates (layout.templ, index.templ scaffolded)
 ├── db/
 │   ├── migrations/    # goose migrations (you create; doc.go pre-scaffolded)
@@ -33,12 +34,21 @@ agents/{agent_id}/
 ```
 
 The agentsdk / goai / sol library sources live read-only under `/libs/`. `go.mod` already `replace`s them to `/libs/...`; don't edit those replaces.
+
+# NOTES.md — the agent's design log
+
+`NOTES.md` at the agent root is the only memory a future upgrade has of *why* the code is shaped the way it is. Keep it short and current — record as you go, don't dump:
+
+- **Decisions** — non-obvious choices and the reasoning behind them (data model, tool boundaries, trade-offs you weighed).
+- **Integrations** — for each connection / MCP / external API: the spec or docs URL, base URL, auth mode, and the specific endpoints or tools you actually wired.
+
+On an upgrade, read it before changing code, and update it for anything you change.
 {{- if .HasWebSearch }}
 
 # Web search
 
 You have a `web_search` tool. **Always search for API docs before implementing connections or MCP integrations** — endpoints, headers, auth, MCP server URLs, available tools.
-Download openapi spec / documentation for any service you integrate, and add it to the agent's `/docs` directory
+Don't download spec files into the repo — record the spec URL and the facts you used (base URL, auth, endpoints/tools wired) in `NOTES.md` (see above).
 {{- end }}
 
 # Build environment rules
@@ -90,4 +100,5 @@ If migrations were created/changed and `$TEST_DB_URL` is set, validate them (see
 11. `AddExtraPrompt` only for persona, domain rules, or per-access behavior.
 12. After shelling out, upload results to storage and `defer os.Remove` scratch temp files. Tool inputs/outputs are storage paths only.
 13. Declare a slot with `RegisterModel` for any LLM call the admin should be able to rebind.
-14. Verify compilation before finishing. Then `exit` exactly once.
+14. Keep `NOTES.md` current — design decisions and integration references (spec URLs, auth). On upgrades, read it first and update what you change.
+15. Verify compilation before finishing. Then `exit` exactly once.
