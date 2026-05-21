@@ -178,6 +178,13 @@ func (d *Dispatcher) EnsureRunning(ctx context.Context, agentID uuid.UUID) (*con
 	if agent.ImageRef == "" {
 		return nil, errors.New("agent has no image")
 	}
+	// Stopped means the operator (or a failed rebuild) parked this agent
+	// and doesn't want it auto-restarted. Any trigger path that hits this
+	// gate while the agent is stopped must surface a clear error, not
+	// silently bring it back up. Manual Start is the only way out.
+	if agent.Status == "stopped" {
+		return nil, errors.New("agent is stopped")
+	}
 
 	// Decrypt DB password from its dedicated column.
 	dbPassword, err := d.encryptor.Get(ctx, "agent/"+agentID.String()+"/db_password", agent.DbPassword)
@@ -210,20 +217,6 @@ func (d *Dispatcher) EnsureRunning(ctx context.Context, agentID uuid.UUID) (*con
 		return nil, fmt.Errorf("start agent: %w", err)
 	}
 
-	// A user-stopped agent that the dispatcher auto-starts (A2A call,
-	// webhook, cron, prompt resume) now has a running container — but the
-	// Stop handler set status="stopped" and only the manual Start handler
-	// flips it back, so the UI would keep showing "Stopped". This is the
-	// single chokepoint every auto-start funnels through; reconcile the
-	// status here. Only stopped→active: never clobber draft/building/
-	// failed (EnsureRunning shouldn't have reached a running container in
-	// those states anyway). Best-effort, mirroring the handlers.
-	if agent.Status == "stopped" {
-		_ = q.UpdateAgentStatus(ctx, dbq.UpdateAgentStatusParams{
-			ID:     toPgUUID(agentID),
-			Status: "active",
-		})
-	}
 	return c, nil
 }
 

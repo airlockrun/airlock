@@ -54,6 +54,21 @@ anchor/            Anchor container support
 - Per-agent DB schema: `agent_{uuid}`
 - Libs (`agentsdk/`, `goai/`, `sol/`) injected via `--build-context libs=` from `AGENT_LIBS_PATH`
 
+### Agent Lifecycle States
+Runtime state surfaced to the operator is the `(agents.status, container running)` tuple — see `frontend/src/composables/useAgentStatus.ts`:
+- **Running**: `status=active` + container up.
+- **Suspended**: `status=active` + container down (reaped after idle OR explicitly via `/suspend`). Next trigger auto-resumes via `EnsureRunning`.
+- **Stopped**: `status=stopped`. `EnsureRunning` refuses; manual `/start` required.
+- **Failed**: `status=failed`. Terminal — needs Upgrade or Rollback.
+
+`/stop` sets status=stopped (no auto-resume); `/suspend` kills the container but leaves status=active (auto-resume on next trigger); `/start` flips stopped→active and starts the container.
+
+### Build Concurrency
+All build paths (initial build, manual upgrade, rollback, mass-rebuild) acquire a single shared semaphore inside `builder.Execute`. Default size `max(1, NumCPU/2)`; override via `AIRLOCK_BUILD_PARALLELISM`. The `agent_builds` row is created before the semaphore wait, so a queued build is visible as `status=building` immediately; cancellation while queued is honored via the same ctx that drives the cancel button.
+
+### SDK Bump Mass Rebuild
+On startup `builder.RebuildAllOnSDKChange` compares the airlock-bundled `agentsdk.Version` to `system_settings.last_seen_sdk_version`. On drift it iterates every `image_ref != ''` agent (status in active/stopped) and fans out one goroutine per agent calling `Execute(BuildPlan{Kind:upgrade, Instruction:""})` — the shared build semaphore (above) caps concurrency. Failures park the agent: `status=stopped` + `error_message` + container killed. `last_seen_sdk_version` is stamped only after the whole batch completes.
+
 ### Message Flow (Web)
 1. `POST /agents/{id}/prompt` → upload files to S3 → start container → forward to agent
 2. Agent streams NDJSON events (text_delta, tool_call, tool_result, finish)

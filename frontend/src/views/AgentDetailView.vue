@@ -112,22 +112,38 @@ const tabsKey = ref(0)
 
 const actionItems = computed(() => {
   const items = []
-  // Drive Stop/Start off the *live* container state, not the lifecycle
-  // status, so a container Docker killed out-of-band (status still
-  // 'active', nothing running) still offers Start instead of trapping
-  // the user with a Stop that no-ops. Stop is idempotent server-side
-  // and also flips the lifecycle to 'stopped'.
-  const built = ['active', 'stopped', 'failed'].includes(agent.value?.status ?? '')
-  if (built) {
-    if (agent.value?.running) {
+  // Three-state lifecycle:
+  //   Running   = status=active + running → offer Suspend + Stop
+  //   Suspended = status=active + !running → offer Start (kicks container)
+  //                                          + Stop (parks it)
+  //   Stopped   = status=stopped → offer Start (resumes)
+  // 'failed' agents still offer Start in case the operator wants to
+  // try the existing image; status flips to active on success.
+  const status = agent.value?.status ?? ''
+  const running = !!agent.value?.running
+  if (status === 'active') {
+    if (running) {
+      items.push({ label: 'Suspend', icon: 'pi pi-pause', command: () => doSuspend() })
       items.push({ label: 'Stop', icon: 'pi pi-stop', command: () => confirmStop() })
     } else {
       items.push({ label: 'Start', icon: 'pi pi-play', command: () => doStart() })
+      items.push({ label: 'Stop', icon: 'pi pi-stop', command: () => confirmStop() })
     }
+  } else if (status === 'stopped' || status === 'failed') {
+    items.push({ label: 'Start', icon: 'pi pi-play', command: () => doStart() })
   }
   items.push({ label: 'Upgrade', icon: 'pi pi-arrow-up', command: () => doUpgrade() })
   items.push({ label: 'Delete', icon: 'pi pi-trash', command: () => confirmDelete() })
   return items
+})
+
+const statusTooltip = computed(() => {
+  const status = agent.value?.status ?? ''
+  const running = !!agent.value?.running
+  if (status === 'active' && running) return 'A container is live'
+  if (status === 'active' && !running) return 'No container running — starts automatically on next use'
+  if (status === 'stopped') return 'Stopped — will not auto-resume; click Start'
+  return ''
 })
 
 interface SetupStatus {
@@ -253,20 +269,40 @@ onUnmounted(() => {
 
 function confirmStop() {
   confirm.require({
-    message: `Stop agent "${agent.value?.name}"?`,
+    message:
+      `Stop agent "${agent.value?.name}"? It will not auto-resume on the ` +
+      'next trigger — you\'ll have to click Start to bring it back.',
     header: 'Confirm Stop',
     icon: 'pi pi-exclamation-triangle',
     acceptClass: 'p-button-warning',
     accept: async () => {
       try {
         await api.post(`/api/v1/agents/${agentId}/stop`, {})
-        if (agent.value) agent.value.status = 'stopped'
+        if (agent.value) {
+          agent.value.status = 'stopped'
+          agent.value.running = false
+        }
         toast.add({ severity: 'success', summary: 'Agent stopped', life: 3000 })
       } catch (err: any) {
         toast.add({ severity: 'error', summary: err.response?.data?.error || 'Stop failed', life: 5000 })
       }
     },
   })
+}
+
+async function doSuspend() {
+  try {
+    await api.post(`/api/v1/agents/${agentId}/suspend`, {})
+    if (agent.value) agent.value.running = false
+    toast.add({
+      severity: 'info',
+      summary: 'Agent suspended',
+      detail: 'Auto-resumes on the next trigger.',
+      life: 3000,
+    })
+  } catch (err: any) {
+    toast.add({ severity: 'error', summary: err.response?.data?.error || 'Suspend failed', life: 5000 })
+  }
 }
 
 async function doStart() {
@@ -371,15 +407,13 @@ function goToChat() {
             v-tooltip.bottom="'Rename'"
             @click="openRename"
           />
-          <Tag :value="useAgentStatus(agent.status).label" :severity="useAgentStatus(agent.status).severity" />
-          <!-- Runtime container state, separate from lifecycle status.
-               Only meaningful once the agent is built; an idle 'active'
-               agent legitimately shows 'Idle' (it auto-starts on use). -->
+          <!-- Single badge that folds container state into the lifecycle:
+               Running/Suspended/Stopped/Building/Error/Draft. See
+               useAgentStatus for the (status, running) → label map. -->
           <Tag
-            v-if="['active', 'stopped', 'failed'].includes(agent.status)"
-            :value="agent.running ? 'Running' : 'Idle'"
-            :severity="agent.running ? 'success' : 'secondary'"
-            v-tooltip.bottom="agent.running ? 'A container is live' : 'No container running — starts automatically on next use'"
+            :value="useAgentStatus(agent.status, agent.running).label"
+            :severity="useAgentStatus(agent.status, agent.running).severity"
+            v-tooltip.bottom="statusTooltip"
           />
           <Tag
             v-if="setupStatus && setupStatus.total > 0"

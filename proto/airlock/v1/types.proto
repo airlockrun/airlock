@@ -197,7 +197,7 @@ message RunInfo {
 message AgentBuildInfo {
   string id = 1;
   string agent_id = 2;
-  string type = 3;               // "build" or "upgrade"
+  string type = 3;               // "build", "upgrade", or "rollback"
   string status = 4;             // "building", "complete", "failed"
   string instructions = 5;
   string source_ref = 6;
@@ -215,6 +215,20 @@ message AgentBuildInfo {
   int32 llm_tokens_in = 15;
   int32 llm_tokens_out = 16;
   double llm_cost_estimate = 17;
+  // rollback_target_id is set only on type='rollback' rows — points at
+  // the build we rolled back to so the UI can render "Rolled back to {X}".
+  // Empty for build/upgrade rows.
+  string rollback_target_id = 18;
+  // rollback_target_source_ref is a denormalized convenience for the
+  // builds list: the source_ref of the target build, when one is set.
+  // Lets the row render the short commit hash without needing a second
+  // fetch.
+  string rollback_target_source_ref = 19;
+  // sdk_version is the agentsdk version embedded at the moment this
+  // build/upgrade/rollback completed. Empty for in-progress and failed
+  // rows; rollback uses it to decide whether the target's code needs
+  // an SDK migration pass.
+  string sdk_version = 20;
 }
 
 // ConversationInfo represents an agent conversation.

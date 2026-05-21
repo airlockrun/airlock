@@ -153,6 +153,11 @@ func runServe(_ []string) {
 	// direct `go build` invocations consume (distinct cache from the one
 	// above, which only seeds BuildKit's cache mount for `docker build`).
 	go buildSvc.WarmRuntimeCaches(ctx)
+	// If the bundled agentsdk version moved since the last airlock boot,
+	// re-image every agent against the new SDK. Failures park the agent
+	// (status=stopped + error_message) so the operator sees the breakage
+	// instead of finding a silently incompatible agent days later.
+	go buildSvc.RebuildAllOnSDKChange(context.Background())
 
 	// Create Hub and PubSub
 	hub := realtime.NewHub(logger.Named("hub"))

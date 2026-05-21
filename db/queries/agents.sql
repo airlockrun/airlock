@@ -65,6 +65,18 @@ UPDATE agents SET db_password = @db_password, updated_at = now() WHERE id = @id;
 -- name: ListAgents :many
 SELECT * FROM agents ORDER BY created_at DESC;
 
+-- name: ListRebuildableAgents :many
+-- Agents the SDK-bump mass rebuild iterates over. An empty image_ref
+-- means no successful build yet (draft / failed initial build) —
+-- nothing to re-image. Status='stopped' agents are included: a fleet
+-- SDK bump should re-image them so they're ready when the operator
+-- starts them again. Order by created_at ASC for deterministic
+-- iteration order across replicas (advisory-locked single-runner per
+-- agent prevents real races, but predictable order eases debugging).
+SELECT * FROM agents
+WHERE image_ref <> '' AND status IN ('active', 'stopped')
+ORDER BY created_at ASC;
+
 -- name: ListAgentsByUserID :many
 SELECT * FROM agents WHERE user_id = $1 ORDER BY created_at DESC;
 

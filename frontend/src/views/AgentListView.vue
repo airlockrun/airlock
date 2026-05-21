@@ -63,8 +63,8 @@ function goToAgent(id: string) {
         </template>
         <template #content>
           <Tag
-            :value="useAgentStatus(agent.status).label"
-            :severity="useAgentStatus(agent.status).severity"
+            :value="useAgentStatus(agent.status, agent.running).label"
+            :severity="useAgentStatus(agent.status, agent.running).severity"
             style="margin-bottom: 0.5rem"
           />
           <Message v-if="agent.errorMessage" severity="error" :closable="false" style="margin-top: 0.5rem; font-size: 0.8rem">

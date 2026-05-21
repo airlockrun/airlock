@@ -7,12 +7,14 @@
 INSERT INTO agent_builds (
     agent_id, type, status, instructions,
     source_ref, image_ref, sol_log, docker_log, log_seq, error_message,
-    llm_calls, llm_tokens_in, llm_tokens_out, llm_cost_estimate
+    llm_calls, llm_tokens_in, llm_tokens_out, llm_cost_estimate,
+    rollback_target_id, sdk_version
 )
 VALUES (
     @agent_id, @type, 'building', @instructions,
     '', '', '', '', 0, '',
-    0, 0, 0, 0
+    0, 0, 0, 0,
+    sqlc.narg('rollback_target_id'), ''
 )
 RETURNING *;
 
@@ -25,6 +27,7 @@ UPDATE agent_builds SET
     error_message = COALESCE(@error_message, ''),
     source_ref = COALESCE(@source_ref, ''),
     image_ref = COALESCE(@image_ref, ''),
+    sdk_version = COALESCE(@sdk_version, ''),
     finished_at = now()
 WHERE id = @id;
 
@@ -55,7 +58,8 @@ SELECT * FROM agent_builds WHERE id = $1;
 
 -- name: ListAgentBuildsByAgent :many
 SELECT id, agent_id, type, status, instructions, error_message, source_ref, image_ref, started_at, finished_at,
-       llm_calls, llm_tokens_in, llm_tokens_out, llm_cost_estimate
+       llm_calls, llm_tokens_in, llm_tokens_out, llm_cost_estimate,
+       rollback_target_id, sdk_version
 FROM agent_builds
 WHERE agent_id = @agent_id
 ORDER BY started_at DESC

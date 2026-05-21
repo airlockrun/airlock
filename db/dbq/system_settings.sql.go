@@ -23,7 +23,7 @@ func (q *Queries) ClearActivationCode(ctx context.Context) error {
 }
 
 const getSystemSettings = `-- name: GetSystemSettings :one
-SELECT id, default_build_provider_id, default_build_model, default_exec_provider_id, default_exec_model, default_stt_provider_id, default_stt_model, default_vision_provider_id, default_vision_model, default_tts_provider_id, default_tts_model, default_image_gen_provider_id, default_image_gen_model, default_embedding_provider_id, default_embedding_model, default_search_provider_id, default_search_model, activation_code, created_at, updated_at FROM system_settings WHERE id = true
+SELECT id, default_build_provider_id, default_build_model, default_exec_provider_id, default_exec_model, default_stt_provider_id, default_stt_model, default_vision_provider_id, default_vision_model, default_tts_provider_id, default_tts_model, default_image_gen_provider_id, default_image_gen_model, default_embedding_provider_id, default_embedding_model, default_search_provider_id, default_search_model, activation_code, created_at, updated_at, last_seen_sdk_version FROM system_settings WHERE id = true
 `
 
 func (q *Queries) GetSystemSettings(ctx context.Context) (SystemSetting, error) {
@@ -50,6 +50,7 @@ func (q *Queries) GetSystemSettings(ctx context.Context) (SystemSetting, error) 
 		&i.ActivationCode,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.LastSeenSdkVersion,
 	)
 	return i, err
 }
@@ -68,6 +69,20 @@ func (q *Queries) SetActivationCode(ctx context.Context, activationCode pgtype.T
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const updateLastSeenSDKVersion = `-- name: UpdateLastSeenSDKVersion :exec
+UPDATE system_settings
+SET last_seen_sdk_version = $1, updated_at = now()
+WHERE id = true
+`
+
+// Stamp the bundled agentsdk version after a successful mass rebuild
+// (or on first boot when there's nothing to rebuild). Compared against
+// agentsdk.Version on the next airlock startup to detect SDK drift.
+func (q *Queries) UpdateLastSeenSDKVersion(ctx context.Context, lastSeenSdkVersion string) error {
+	_, err := q.db.Exec(ctx, updateLastSeenSDKVersion, lastSeenSdkVersion)
+	return err
 }
 
 const updateSystemSettings = `-- name: UpdateSystemSettings :one
@@ -90,7 +105,7 @@ SET default_build_provider_id     = $1,
     default_search_model          = $16,
     updated_at = now()
 WHERE id = true
-RETURNING id, default_build_provider_id, default_build_model, default_exec_provider_id, default_exec_model, default_stt_provider_id, default_stt_model, default_vision_provider_id, default_vision_model, default_tts_provider_id, default_tts_model, default_image_gen_provider_id, default_image_gen_model, default_embedding_provider_id, default_embedding_model, default_search_provider_id, default_search_model, activation_code, created_at, updated_at
+RETURNING id, default_build_provider_id, default_build_model, default_exec_provider_id, default_exec_model, default_stt_provider_id, default_stt_model, default_vision_provider_id, default_vision_model, default_tts_provider_id, default_tts_model, default_image_gen_provider_id, default_image_gen_model, default_embedding_provider_id, default_embedding_model, default_search_provider_id, default_search_model, activation_code, created_at, updated_at, last_seen_sdk_version
 `
 
 type UpdateSystemSettingsParams struct {
@@ -155,6 +170,7 @@ func (q *Queries) UpdateSystemSettings(ctx context.Context, arg UpdateSystemSett
 		&i.ActivationCode,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.LastSeenSdkVersion,
 	)
 	return i, err
 }

@@ -13,6 +13,14 @@ UPDATE system_settings
 SET activation_code = NULL, updated_at = now()
 WHERE id = true;
 
+-- name: UpdateLastSeenSDKVersion :exec
+-- Stamp the bundled agentsdk version after a successful mass rebuild
+-- (or on first boot when there's nothing to rebuild). Compared against
+-- agentsdk.Version on the next airlock startup to detect SDK drift.
+UPDATE system_settings
+SET last_seen_sdk_version = @last_seen_sdk_version, updated_at = now()
+WHERE id = true;
+
 -- name: UpdateSystemSettings :one
 -- Each system default is a pair: a providers row FK (nullable) and the
 -- bare model name. NULL/empty ⇄ no default configured for that slot.

@@ -451,6 +451,80 @@ func (q *Queries) ListAgentsByUserID(ctx context.Context, userID pgtype.UUID) ([
 	return items, nil
 }
 
+const listRebuildableAgents = `-- name: ListRebuildableAgents :many
+SELECT id, user_id, slug, name, description, status, upgrade_status, auto_fix, build_provider_id, build_model, exec_provider_id, exec_model, stt_provider_id, stt_model, vision_provider_id, vision_model, tts_provider_id, tts_model, image_gen_provider_id, image_gen_model, embedding_provider_id, embedding_model, search_provider_id, search_model, source_ref, image_ref, db_schema, db_password, sdk_version, config, extra_prompts, error_message, created_at, updated_at, allow_non_member_mcp, allow_public_mcp, tools_hash, emoji, allow_oauth_mcp_prompt, allow_public_mcp_prompt FROM agents
+WHERE image_ref <> '' AND status IN ('active', 'stopped')
+ORDER BY created_at ASC
+`
+
+// Agents the SDK-bump mass rebuild iterates over. An empty image_ref
+// means no successful build yet (draft / failed initial build) —
+// nothing to re-image. Status='stopped' agents are included: a fleet
+// SDK bump should re-image them so they're ready when the operator
+// starts them again. Order by created_at ASC for deterministic
+// iteration order across replicas (advisory-locked single-runner per
+// agent prevents real races, but predictable order eases debugging).
+func (q *Queries) ListRebuildableAgents(ctx context.Context) ([]Agent, error) {
+	rows, err := q.db.Query(ctx, listRebuildableAgents)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Agent{}
+	for rows.Next() {
+		var i Agent
+		if err := rows.Scan(
+			&i.ID,
+			&i.UserID,
+			&i.Slug,
+			&i.Name,
+			&i.Description,
+			&i.Status,
+			&i.UpgradeStatus,
+			&i.AutoFix,
+			&i.BuildProviderID,
+			&i.BuildModel,
+			&i.ExecProviderID,
+			&i.ExecModel,
+			&i.SttProviderID,
+			&i.SttModel,
+			&i.VisionProviderID,
+			&i.VisionModel,
+			&i.TtsProviderID,
+			&i.TtsModel,
+			&i.ImageGenProviderID,
+			&i.ImageGenModel,
+			&i.EmbeddingProviderID,
+			&i.EmbeddingModel,
+			&i.SearchProviderID,
+			&i.SearchModel,
+			&i.SourceRef,
+			&i.ImageRef,
+			&i.DbSchema,
+			&i.DbPassword,
+			&i.SdkVersion,
+			&i.Config,
+			&i.ExtraPrompts,
+			&i.ErrorMessage,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.AllowNonMemberMcp,
+			&i.AllowPublicMcp,
+			&i.ToolsHash,
+			&i.Emoji,
+			&i.AllowOauthMcpPrompt,
+			&i.AllowPublicMcpPrompt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const resetStuckBuilds = `-- name: ResetStuckBuilds :exec
 UPDATE agents SET status = 'failed', error_message = $1, updated_at = now()
 WHERE status = 'building'

@@ -272,6 +272,70 @@ func MergeBranch(repoPath, branch string) error {
 	return nil
 }
 
+// SaveRef creates a branch ref pointing at the given commit. Fails loud
+// if the ref already exists — callers pick unique names (typically
+// pre-rollback/{timestamp}) so a collision implies a bug, not a
+// retry-safe noop.
+func SaveRef(repoPath, refName, commit string) error {
+	return git(repoPath, "branch", refName, commit)
+}
+
+// ResetHard moves the current branch HEAD to commit and forces the
+// working tree to match. Caller is responsible for saving any forward
+// commits with SaveRef first — they'll be unreachable from any branch
+// after this returns (recoverable via reflog for the default 90-day
+// window). Checks out main first so reset hits the right ref.
+func ResetHard(repoPath, commit string) error {
+	if err := git(repoPath, "checkout", "main"); err != nil {
+		if err2 := git(repoPath, "checkout", "master"); err2 != nil {
+			return fmt.Errorf("git checkout main: %w", err)
+		}
+	}
+	if err := git(repoPath, "reset", "--hard", commit); err != nil {
+		return fmt.Errorf("git reset --hard %s: %w", commit, err)
+	}
+	return nil
+}
+
+// MigrationVersionAt returns the highest goose version number among
+// files in migrations/ at the given commit. Goose's contract is "all
+// migrations get applied to head", so this is the version a deployed
+// container ends up at — the answer rollback needs to give goose as
+// its down-to target. Returns 0 when migrations/ is empty or absent.
+//
+// Parses the leading NNNN_ prefix from each filename (goose's required
+// naming convention). Non-numeric files (README, etc.) are skipped.
+func MigrationVersionAt(repoPath, commit string) (int, error) {
+	out, err := gitOutput(repoPath, "ls-tree", "-r", "--name-only", commit, "--", "migrations/")
+	if err != nil {
+		return 0, fmt.Errorf("git ls-tree migrations/ at %s: %w", commit, err)
+	}
+	max := 0
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		base := filepath.Base(line)
+		us := strings.IndexByte(base, '_')
+		if us <= 0 {
+			continue
+		}
+		n := 0
+		for _, c := range base[:us] {
+			if c < '0' || c > '9' {
+				n = -1
+				break
+			}
+			n = n*10 + int(c-'0')
+		}
+		if n > max {
+			max = n
+		}
+	}
+	return max, nil
+}
+
 // RemoveAgentRepo deletes the per-agent repo directory entirely.
 // Idempotent — missing dir is not an error.
 func RemoveAgentRepo(basePath, agentID string) error {

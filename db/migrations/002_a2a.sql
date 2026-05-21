@@ -379,6 +379,38 @@ ALTER TABLE agents
     ALTER COLUMN allow_oauth_mcp_prompt  DROP DEFAULT,
     ALTER COLUMN allow_public_mcp_prompt DROP DEFAULT;
 
+-- agent_builds.rollback_target_id — for rows with type='rollback',
+-- points at the agent_builds row we rolled back to. NULL for build /
+-- upgrade rows. ON DELETE SET NULL so deleting an old build doesn't
+-- cascade-delete the rollback history that referenced it; UI must
+-- tolerate a null target (renders as "rollback (target deleted)").
+ALTER TABLE agent_builds
+    ADD COLUMN rollback_target_id uuid REFERENCES agent_builds(id) ON DELETE SET NULL;
+
+-- system_settings.last_seen_sdk_version — the airlock-bundled
+-- agentsdk version observed at the last successful startup. Used by
+-- the boot path to decide whether to kick off a mass rebuild
+-- (bundled agentsdk.Version != last_seen → SDK changed since the
+-- last airlock run → every agent needs to be re-imaged so its
+-- compiled code links the new libs). Empty string is the legitimate
+-- pre-rollout value; DEFAULT '' backfills then drops.
+ALTER TABLE system_settings
+    ADD COLUMN last_seen_sdk_version text NOT NULL DEFAULT '';
+ALTER TABLE system_settings
+    ALTER COLUMN last_seen_sdk_version DROP DEFAULT;
+
+-- agent_builds.sdk_version — the agentsdk version embedded at the
+-- moment the build/upgrade completed. Lets rollback decide whether
+-- the target's code needs an SDK migration pass before it can compile
+-- against the airlock-bundled SDK we'd deploy it with today. Empty
+-- string is a legitimate "unknown" value (legacy rows, pre-column);
+-- DEFAULT '' backfills those then drops immediately so new rows
+-- record it explicitly.
+ALTER TABLE agent_builds
+    ADD COLUMN sdk_version text NOT NULL DEFAULT '';
+ALTER TABLE agent_builds
+    ALTER COLUMN sdk_version DROP DEFAULT;
+
 -- +goose Down
 -- Best-effort inverse: re-add the columns (NOT NULL via transient
 -- default, then drop it per the no-fake-defaults rule). The values are
@@ -445,6 +477,9 @@ DROP INDEX IF EXISTS oauth_clients_last_used_idx;
 DROP TABLE IF EXISTS oauth_clients;
 DROP INDEX IF EXISTS agent_siblings_sibling_idx;
 DROP TABLE IF EXISTS agent_siblings;
+ALTER TABLE agent_builds DROP COLUMN IF EXISTS rollback_target_id;
+ALTER TABLE agent_builds DROP COLUMN IF EXISTS sdk_version;
+ALTER TABLE system_settings DROP COLUMN IF EXISTS last_seen_sdk_version;
 ALTER TABLE agents DROP COLUMN IF EXISTS allow_public_mcp_prompt;
 ALTER TABLE agents DROP COLUMN IF EXISTS allow_oauth_mcp_prompt;
 ALTER TABLE agents DROP CONSTRAINT IF EXISTS agents_public_implies_non_member;

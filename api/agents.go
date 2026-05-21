@@ -482,7 +482,11 @@ func (h *agentsHandler) Stop(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// Start handles POST /api/v1/agents/{agentID}/start.
+// Start handles POST /api/v1/agents/{agentID}/start. Resumes an agent
+// from stopped (or just kicks an already-active agent's container).
+// Flips status to active BEFORE EnsureRunning because EnsureRunning
+// now refuses to start a stopped agent — the lifecycle gate is on
+// status, not on the request path.
 func (h *agentsHandler) Start(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	agentID, err := parseUUID(chi.URLParam(r, "agentID"))
@@ -506,18 +510,58 @@ func (h *agentsHandler) Start(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Start the container eagerly.
+	if agent.Status == "stopped" {
+		if err := q.UpdateAgentStatus(ctx, dbq.UpdateAgentStatusParams{
+			ID:     toPgUUID(agentID),
+			Status: "active",
+		}); err != nil {
+			h.logger.Error("flip status to active", zap.Error(err))
+			writeError(w, http.StatusInternalServerError, "failed to start agent")
+			return
+		}
+	}
+
 	if _, err := h.dispatcher.EnsureRunning(ctx, agentID); err != nil {
 		h.logger.Error("start agent", zap.Error(err))
 		writeError(w, http.StatusInternalServerError, "failed to start agent")
 		return
 	}
 
-	_ = q.UpdateAgentStatus(ctx, dbq.UpdateAgentStatusParams{
-		ID:     toPgUUID(agentID),
-		Status: "active",
-	})
+	w.WriteHeader(http.StatusNoContent)
+}
 
+// Suspend handles POST /api/v1/agents/{agentID}/suspend. Kills the
+// running container but leaves agents.status=active, so the next
+// trigger (chat, webhook, cron, A2A) restarts it via EnsureRunning.
+// This makes the reaper's silent kill an explicit, surfaceable
+// operator action — and frees compute immediately without removing
+// the agent from service.
+func (h *agentsHandler) Suspend(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	agentID, err := parseUUID(chi.URLParam(r, "agentID"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid agent ID")
+		return
+	}
+
+	q := dbq.New(h.db.Pool())
+	agent, err := q.GetAgentByID(ctx, toPgUUID(agentID))
+	if err != nil {
+		writeError(w, http.StatusNotFound, "agent not found")
+		return
+	}
+	if err := h.requireAccess(ctx, agent); err != nil {
+		writeError(w, http.StatusForbidden, "access denied")
+		return
+	}
+
+	containerName := "airlock-agent-" + agentID.String()[:8]
+	if err := h.containers.StopAgent(ctx, containerName); err != nil {
+		h.logger.Error("suspend agent", zap.Error(err))
+		writeError(w, http.StatusInternalServerError, "failed to suspend agent")
+		return
+	}
+	// Status stays active — that's the whole point of suspend vs stop.
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -631,6 +675,89 @@ func (h *agentsHandler) Upgrade(w http.ResponseWriter, r *http.Request) {
 			h.builder.RunUpgrade(context.Background(), input)
 		}()
 	}
+
+	w.WriteHeader(http.StatusAccepted)
+}
+
+// Rollback handles POST /api/v1/agents/{agentID}/rollback. Reverses
+// the agent to a previous build's source_ref. Same agent-admin gate
+// and async 202 shape as Upgrade. Validation that's cheap to do
+// synchronously (target exists, belongs to agent, status=complete,
+// not the current build) happens here; deeper checks (migration
+// reversibility) are part of the rollback pipeline itself.
+func (h *agentsHandler) Rollback(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	agentID, err := parseUUID(chi.URLParam(r, "agentID"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid agent ID")
+		return
+	}
+
+	var req airlockv1.RollbackBuildRequest
+	if err := decodeProto(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.BuildId == "" {
+		writeError(w, http.StatusBadRequest, "build_id is required")
+		return
+	}
+	buildID, err := parseUUID(req.BuildId)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid build_id")
+		return
+	}
+
+	q := dbq.New(h.db.Pool())
+	agent, err := q.GetAgentByID(ctx, toPgUUID(agentID))
+	if err != nil {
+		writeError(w, http.StatusNotFound, "agent not found")
+		return
+	}
+	if err := h.requireAgentAdmin(ctx, agent.ID); err != nil {
+		writeError(w, http.StatusForbidden, "agent admin access required")
+		return
+	}
+	if agent.ImageRef == "" {
+		writeError(w, http.StatusConflict, "agent has no current build to roll back from")
+		return
+	}
+
+	target, err := q.GetAgentBuild(ctx, toPgUUID(buildID))
+	if err != nil {
+		writeError(w, http.StatusNotFound, "target build not found")
+		return
+	}
+	if uuid.UUID(target.AgentID.Bytes) != agentID {
+		writeError(w, http.StatusBadRequest, "target build does not belong to this agent")
+		return
+	}
+	if target.Status != "complete" {
+		writeError(w, http.StatusConflict, "can only roll back to a completed build")
+		return
+	}
+	if target.SourceRef == "" {
+		writeError(w, http.StatusConflict, "target build has no source_ref")
+		return
+	}
+	if target.SourceRef == agent.SourceRef {
+		writeError(w, http.StatusConflict, "target build is the current build")
+		return
+	}
+
+	go func() {
+		if err := h.builder.AcquireUpgradeLock(context.Background(), agentID.String()); err != nil {
+			if !errors.Is(err, builder.ErrUpgradeInProgress) {
+				h.logger.Error("rollback lock failed", zap.String("agent", agentID.String()), zap.Error(err))
+			}
+			return
+		}
+		h.builder.Rollback(context.Background(), builder.RollbackInput{
+			AgentID:        agentID.String(),
+			BuildID:        buildID.String(),
+			ConversationID: req.ConversationId,
+		})
+	}()
 
 	w.WriteHeader(http.StatusAccepted)
 }
@@ -1026,23 +1153,41 @@ func (h *agentsHandler) ListBuilds(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// In-memory join for rollback_target_source_ref: any rollback row
+	// whose target also appears in the latest-50 window gets its target's
+	// source_ref denormalized so the UI can render the short hash without
+	// a second fetch. Targets older than the window stay empty (UI falls
+	// back to the bare id).
+	sourceRefByID := make(map[string]string, len(builds))
+	for _, b := range builds {
+		sourceRefByID[convert.PgUUIDToString(b.ID)] = b.SourceRef
+	}
+
 	out := make([]*airlockv1.AgentBuildInfo, len(builds))
 	for i, b := range builds {
+		var rollbackTargetID, rollbackTargetSourceRef string
+		if b.RollbackTargetID.Valid {
+			rollbackTargetID = convert.PgUUIDToString(b.RollbackTargetID)
+			rollbackTargetSourceRef = sourceRefByID[rollbackTargetID]
+		}
 		out[i] = &airlockv1.AgentBuildInfo{
-			Id:              convert.PgUUIDToString(b.ID),
-			AgentId:         convert.PgUUIDToString(b.AgentID),
-			Type:            b.Type,
-			Status:          b.Status,
-			Instructions:    b.Instructions,
-			ErrorMessage:    b.ErrorMessage,
-			SourceRef:       b.SourceRef,
-			ImageRef:        b.ImageRef,
-			StartedAt:       convert.PgTimestampToProto(b.StartedAt),
-			FinishedAt:      convert.PgTimestampToProto(b.FinishedAt),
-			LlmCalls:        b.LlmCalls,
-			LlmTokensIn:     b.LlmTokensIn,
-			LlmTokensOut:    b.LlmTokensOut,
-			LlmCostEstimate: b.LlmCostEstimate,
+			Id:                      convert.PgUUIDToString(b.ID),
+			AgentId:                 convert.PgUUIDToString(b.AgentID),
+			Type:                    b.Type,
+			Status:                  b.Status,
+			Instructions:            b.Instructions,
+			ErrorMessage:            b.ErrorMessage,
+			SourceRef:               b.SourceRef,
+			ImageRef:                b.ImageRef,
+			StartedAt:               convert.PgTimestampToProto(b.StartedAt),
+			FinishedAt:              convert.PgTimestampToProto(b.FinishedAt),
+			LlmCalls:                b.LlmCalls,
+			LlmTokensIn:             b.LlmTokensIn,
+			LlmTokensOut:            b.LlmTokensOut,
+			LlmCostEstimate:         b.LlmCostEstimate,
+			RollbackTargetId:        rollbackTargetID,
+			RollbackTargetSourceRef: rollbackTargetSourceRef,
+			SdkVersion:              b.SdkVersion,
 		}
 	}
 
@@ -1065,25 +1210,38 @@ func (h *agentsHandler) GetBuild(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var rollbackTargetID, rollbackTargetSourceRef string
+	if b.RollbackTargetID.Valid {
+		rollbackTargetID = convert.PgUUIDToString(b.RollbackTargetID)
+		// Detail view fetches the target separately so it works for
+		// targets outside the latest-50 ListBuilds window.
+		if target, err := q.GetAgentBuild(ctx, b.RollbackTargetID); err == nil {
+			rollbackTargetSourceRef = target.SourceRef
+		}
+	}
+
 	writeProto(w, http.StatusOK, &airlockv1.GetAgentBuildResponse{
 		Build: &airlockv1.AgentBuildInfo{
-			Id:              convert.PgUUIDToString(b.ID),
-			AgentId:         convert.PgUUIDToString(b.AgentID),
-			Type:            b.Type,
-			Status:          b.Status,
-			Instructions:    b.Instructions,
-			SolLog:          b.SolLog,
-			DockerLog:       b.DockerLog,
-			ErrorMessage:    b.ErrorMessage,
-			SourceRef:       b.SourceRef,
-			ImageRef:        b.ImageRef,
-			StartedAt:       convert.PgTimestampToProto(b.StartedAt),
-			FinishedAt:      convert.PgTimestampToProto(b.FinishedAt),
-			LogSeq:          b.LogSeq,
-			LlmCalls:        b.LlmCalls,
-			LlmTokensIn:     b.LlmTokensIn,
-			LlmTokensOut:    b.LlmTokensOut,
-			LlmCostEstimate: b.LlmCostEstimate,
+			Id:                      convert.PgUUIDToString(b.ID),
+			AgentId:                 convert.PgUUIDToString(b.AgentID),
+			Type:                    b.Type,
+			Status:                  b.Status,
+			Instructions:            b.Instructions,
+			SolLog:                  b.SolLog,
+			DockerLog:               b.DockerLog,
+			ErrorMessage:            b.ErrorMessage,
+			SourceRef:               b.SourceRef,
+			ImageRef:                b.ImageRef,
+			StartedAt:               convert.PgTimestampToProto(b.StartedAt),
+			FinishedAt:              convert.PgTimestampToProto(b.FinishedAt),
+			LogSeq:                  b.LogSeq,
+			LlmCalls:                b.LlmCalls,
+			LlmTokensIn:             b.LlmTokensIn,
+			LlmTokensOut:            b.LlmTokensOut,
+			LlmCostEstimate:         b.LlmCostEstimate,
+			RollbackTargetId:        rollbackTargetID,
+			RollbackTargetSourceRef: rollbackTargetSourceRef,
+			SdkVersion:              b.SdkVersion,
 		},
 	})
 }

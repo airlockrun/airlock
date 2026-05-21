@@ -1135,7 +1135,7 @@ type AgentBuildInfo struct {
 	state        protoimpl.MessageState `protogen:"open.v1"`
 	Id           string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	AgentId      string                 `protobuf:"bytes,2,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"`
-	Type         string                 `protobuf:"bytes,3,opt,name=type,proto3" json:"type,omitempty"`     // "build" or "upgrade"
+	Type         string                 `protobuf:"bytes,3,opt,name=type,proto3" json:"type,omitempty"`     // "build", "upgrade", or "rollback"
 	Status       string                 `protobuf:"bytes,4,opt,name=status,proto3" json:"status,omitempty"` // "building", "complete", "failed"
 	Instructions string                 `protobuf:"bytes,5,opt,name=instructions,proto3" json:"instructions,omitempty"`
 	SourceRef    string                 `protobuf:"bytes,6,opt,name=source_ref,json=sourceRef,proto3" json:"source_ref,omitempty"`
@@ -1153,8 +1153,22 @@ type AgentBuildInfo struct {
 	LlmTokensIn     int32   `protobuf:"varint,15,opt,name=llm_tokens_in,json=llmTokensIn,proto3" json:"llm_tokens_in,omitempty"`
 	LlmTokensOut    int32   `protobuf:"varint,16,opt,name=llm_tokens_out,json=llmTokensOut,proto3" json:"llm_tokens_out,omitempty"`
 	LlmCostEstimate float64 `protobuf:"fixed64,17,opt,name=llm_cost_estimate,json=llmCostEstimate,proto3" json:"llm_cost_estimate,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// rollback_target_id is set only on type='rollback' rows — points at
+	// the build we rolled back to so the UI can render "Rolled back to {X}".
+	// Empty for build/upgrade rows.
+	RollbackTargetId string `protobuf:"bytes,18,opt,name=rollback_target_id,json=rollbackTargetId,proto3" json:"rollback_target_id,omitempty"`
+	// rollback_target_source_ref is a denormalized convenience for the
+	// builds list: the source_ref of the target build, when one is set.
+	// Lets the row render the short commit hash without needing a second
+	// fetch.
+	RollbackTargetSourceRef string `protobuf:"bytes,19,opt,name=rollback_target_source_ref,json=rollbackTargetSourceRef,proto3" json:"rollback_target_source_ref,omitempty"`
+	// sdk_version is the agentsdk version embedded at the moment this
+	// build/upgrade/rollback completed. Empty for in-progress and failed
+	// rows; rollback uses it to decide whether the target's code needs
+	// an SDK migration pass.
+	SdkVersion    string `protobuf:"bytes,20,opt,name=sdk_version,json=sdkVersion,proto3" json:"sdk_version,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *AgentBuildInfo) Reset() {
@@ -1304,6 +1318,27 @@ func (x *AgentBuildInfo) GetLlmCostEstimate() float64 {
 		return x.LlmCostEstimate
 	}
 	return 0
+}
+
+func (x *AgentBuildInfo) GetRollbackTargetId() string {
+	if x != nil {
+		return x.RollbackTargetId
+	}
+	return ""
+}
+
+func (x *AgentBuildInfo) GetRollbackTargetSourceRef() string {
+	if x != nil {
+		return x.RollbackTargetSourceRef
+	}
+	return ""
+}
+
+func (x *AgentBuildInfo) GetSdkVersion() string {
+	if x != nil {
+		return x.SdkVersion
+	}
+	return ""
 }
 
 // ConversationInfo represents an agent conversation.
@@ -2880,7 +2915,7 @@ const file_airlock_v1_types_proto_rawDesc = "" +
 	"\n" +
 	"started_at\x18\x10 \x01(\v2\x1a.google.protobuf.TimestampR\tstartedAt\x12;\n" +
 	"\vfinished_at\x18\x11 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
-	"finishedAt\"\xc8\x04\n" +
+	"finishedAt\"\xd4\x05\n" +
 	"\x0eAgentBuildInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x19\n" +
 	"\bagent_id\x18\x02 \x01(\tR\aagentId\x12\x12\n" +
@@ -2903,7 +2938,11 @@ const file_airlock_v1_types_proto_rawDesc = "" +
 	"\tllm_calls\x18\x0e \x01(\x05R\bllmCalls\x12\"\n" +
 	"\rllm_tokens_in\x18\x0f \x01(\x05R\vllmTokensIn\x12$\n" +
 	"\x0ellm_tokens_out\x18\x10 \x01(\x05R\fllmTokensOut\x12*\n" +
-	"\x11llm_cost_estimate\x18\x11 \x01(\x01R\x0fllmCostEstimate\"\xe1\x01\n" +
+	"\x11llm_cost_estimate\x18\x11 \x01(\x01R\x0fllmCostEstimate\x12,\n" +
+	"\x12rollback_target_id\x18\x12 \x01(\tR\x10rollbackTargetId\x12;\n" +
+	"\x1arollback_target_source_ref\x18\x13 \x01(\tR\x17rollbackTargetSourceRef\x12\x1f\n" +
+	"\vsdk_version\x18\x14 \x01(\tR\n" +
+	"sdkVersion\"\xe1\x01\n" +
 	"\x10ConversationInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x19\n" +
 	"\bagent_id\x18\x02 \x01(\tR\aagentId\x12\x14\n" +

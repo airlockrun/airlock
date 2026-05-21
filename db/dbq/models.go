@@ -52,23 +52,25 @@ type Agent struct {
 }
 
 type AgentBuild struct {
-	ID              pgtype.UUID        `json:"id"`
-	AgentID         pgtype.UUID        `json:"agent_id"`
-	Type            string             `json:"type"`
-	Status          string             `json:"status"`
-	Instructions    string             `json:"instructions"`
-	SourceRef       string             `json:"source_ref"`
-	ImageRef        string             `json:"image_ref"`
-	SolLog          string             `json:"sol_log"`
-	DockerLog       string             `json:"docker_log"`
-	LogSeq          int64              `json:"log_seq"`
-	ErrorMessage    string             `json:"error_message"`
-	StartedAt       pgtype.Timestamptz `json:"started_at"`
-	FinishedAt      pgtype.Timestamptz `json:"finished_at"`
-	LlmCalls        int32              `json:"llm_calls"`
-	LlmTokensIn     int32              `json:"llm_tokens_in"`
-	LlmTokensOut    int32              `json:"llm_tokens_out"`
-	LlmCostEstimate float64            `json:"llm_cost_estimate"`
+	ID               pgtype.UUID        `json:"id"`
+	AgentID          pgtype.UUID        `json:"agent_id"`
+	Type             string             `json:"type"`
+	Status           string             `json:"status"`
+	Instructions     string             `json:"instructions"`
+	SourceRef        string             `json:"source_ref"`
+	ImageRef         string             `json:"image_ref"`
+	SolLog           string             `json:"sol_log"`
+	DockerLog        string             `json:"docker_log"`
+	LogSeq           int64              `json:"log_seq"`
+	ErrorMessage     string             `json:"error_message"`
+	StartedAt        pgtype.Timestamptz `json:"started_at"`
+	FinishedAt       pgtype.Timestamptz `json:"finished_at"`
+	LlmCalls         int32              `json:"llm_calls"`
+	LlmTokensIn      int32              `json:"llm_tokens_in"`
+	LlmTokensOut     int32              `json:"llm_tokens_out"`
+	LlmCostEstimate  float64            `json:"llm_cost_estimate"`
+	RollbackTargetID pgtype.UUID        `json:"rollback_target_id"`
+	SdkVersion       string             `json:"sdk_version"`
 }
 
 type AgentConversation struct {
@@ -455,6 +457,7 @@ type SystemSetting struct {
 	ActivationCode             pgtype.Text        `json:"activation_code"`
 	CreatedAt                  pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt                  pgtype.Timestamptz `json:"updated_at"`
+	LastSeenSdkVersion         string             `json:"last_seen_sdk_version"`
 }
 
 type Tenant struct {

@@ -195,6 +195,15 @@ message UpgradeAgentRequest {
   string description = 2;  // optional — extra instructions for the upgrade
 }
 
+// RollbackBuildRequest targets a specific past build to roll back to.
+// build_id must reference a completed build belonging to the agent.
+// conversation_id is optional; when set, a single post-rollback message
+// is posted into that conversation (mirroring upgrade's notifier).
+message RollbackBuildRequest {
+  string build_id = 1;
+  string conversation_id = 2;
+}
+
 // --- Per-agent model configuration ---
 //
 // Three-tier resolution:

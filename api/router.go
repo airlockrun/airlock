@@ -289,7 +289,9 @@ func NewRouter(cfg RouterConfig) http.Handler {
 				r.Delete("/", agH.Delete)
 				r.Post("/stop", agH.Stop)
 				r.Post("/start", agH.Start)
+				r.Post("/suspend", agH.Suspend)
 				r.Post("/upgrade", agH.Upgrade)
+				r.Post("/rollback", agH.Rollback)
 				r.Post("/prompt", cH.Prompt)
 				r.Post("/files", cH.UploadFile)
 

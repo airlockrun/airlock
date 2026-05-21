@@ -1606,6 +1606,62 @@ func (x *UpgradeAgentRequest) GetDescription() string {
 	return ""
 }
 
+// RollbackBuildRequest targets a specific past build to roll back to.
+// build_id must reference a completed build belonging to the agent.
+// conversation_id is optional; when set, a single post-rollback message
+// is posted into that conversation (mirroring upgrade's notifier).
+type RollbackBuildRequest struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	BuildId        string                 `protobuf:"bytes,1,opt,name=build_id,json=buildId,proto3" json:"build_id,omitempty"`
+	ConversationId string                 `protobuf:"bytes,2,opt,name=conversation_id,json=conversationId,proto3" json:"conversation_id,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *RollbackBuildRequest) Reset() {
+	*x = RollbackBuildRequest{}
+	mi := &file_airlock_v1_api_proto_msgTypes[28]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RollbackBuildRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RollbackBuildRequest) ProtoMessage() {}
+
+func (x *RollbackBuildRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_airlock_v1_api_proto_msgTypes[28]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RollbackBuildRequest.ProtoReflect.Descriptor instead.
+func (*RollbackBuildRequest) Descriptor() ([]byte, []int) {
+	return file_airlock_v1_api_proto_rawDescGZIP(), []int{28}
+}
+
+func (x *RollbackBuildRequest) GetBuildId() string {
+	if x != nil {
+		return x.BuildId
+	}
+	return ""
+}
+
+func (x *RollbackBuildRequest) GetConversationId() string {
+	if x != nil {
+		return x.ConversationId
+	}
+	return ""
+}
+
 type ModelSlotInfo struct {
 	state       protoimpl.MessageState `protogen:"open.v1"`
 	Slug        string                 `protobuf:"bytes,1,opt,name=slug,proto3" json:"slug,omitempty"`               // declared by agent code via RegisterModel
@@ -1622,7 +1678,7 @@ type ModelSlotInfo struct {
 
 func (x *ModelSlotInfo) Reset() {
 	*x = ModelSlotInfo{}
-	mi := &file_airlock_v1_api_proto_msgTypes[28]
+	mi := &file_airlock_v1_api_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1634,7 +1690,7 @@ func (x *ModelSlotInfo) String() string {
 func (*ModelSlotInfo) ProtoMessage() {}
 
 func (x *ModelSlotInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_airlock_v1_api_proto_msgTypes[28]
+	mi := &file_airlock_v1_api_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1647,7 +1703,7 @@ func (x *ModelSlotInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ModelSlotInfo.ProtoReflect.Descriptor instead.
 func (*ModelSlotInfo) Descriptor() ([]byte, []int) {
-	return file_airlock_v1_api_proto_rawDescGZIP(), []int{28}
+	return file_airlock_v1_api_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *ModelSlotInfo) GetSlug() string {
@@ -1712,7 +1768,7 @@ type AgentModelConfig struct {
 
 func (x *AgentModelConfig) Reset() {
 	*x = AgentModelConfig{}
-	mi := &file_airlock_v1_api_proto_msgTypes[29]
+	mi := &file_airlock_v1_api_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1724,7 +1780,7 @@ func (x *AgentModelConfig) String() string {
 func (*AgentModelConfig) ProtoMessage() {}
 
 func (x *AgentModelConfig) ProtoReflect() protoreflect.Message {
-	mi := &file_airlock_v1_api_proto_msgTypes[29]
+	mi := &file_airlock_v1_api_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1737,7 +1793,7 @@ func (x *AgentModelConfig) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentModelConfig.ProtoReflect.Descriptor instead.
 func (*AgentModelConfig) Descriptor() ([]byte, []int) {
-	return file_airlock_v1_api_proto_rawDescGZIP(), []int{29}
+	return file_airlock_v1_api_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *AgentModelConfig) GetBuildModel() string {
@@ -1868,7 +1924,7 @@ type GetAgentModelConfigResponse struct {
 
 func (x *GetAgentModelConfigResponse) Reset() {
 	*x = GetAgentModelConfigResponse{}
-	mi := &file_airlock_v1_api_proto_msgTypes[30]
+	mi := &file_airlock_v1_api_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1880,7 +1936,7 @@ func (x *GetAgentModelConfigResponse) String() string {
 func (*GetAgentModelConfigResponse) ProtoMessage() {}
 
 func (x *GetAgentModelConfigResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_airlock_v1_api_proto_msgTypes[30]
+	mi := &file_airlock_v1_api_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1893,7 +1949,7 @@ func (x *GetAgentModelConfigResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetAgentModelConfigResponse.ProtoReflect.Descriptor instead.
 func (*GetAgentModelConfigResponse) Descriptor() ([]byte, []int) {
-	return file_airlock_v1_api_proto_rawDescGZIP(), []int{30}
+	return file_airlock_v1_api_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *GetAgentModelConfigResponse) GetConfig() *AgentModelConfig {
@@ -1912,7 +1968,7 @@ type UpdateAgentModelConfigRequest struct {
 
 func (x *UpdateAgentModelConfigRequest) Reset() {
 	*x = UpdateAgentModelConfigRequest{}
-	mi := &file_airlock_v1_api_proto_msgTypes[31]
+	mi := &file_airlock_v1_api_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1924,7 +1980,7 @@ func (x *UpdateAgentModelConfigRequest) String() string {
 func (*UpdateAgentModelConfigRequest) ProtoMessage() {}
 
 func (x *UpdateAgentModelConfigRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_airlock_v1_api_proto_msgTypes[31]
+	mi := &file_airlock_v1_api_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1937,7 +1993,7 @@ func (x *UpdateAgentModelConfigRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateAgentModelConfigRequest.ProtoReflect.Descriptor instead.
 func (*UpdateAgentModelConfigRequest) Descriptor() ([]byte, []int) {
-	return file_airlock_v1_api_proto_rawDescGZIP(), []int{31}
+	return file_airlock_v1_api_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *UpdateAgentModelConfigRequest) GetConfig() *AgentModelConfig {
@@ -1956,7 +2012,7 @@ type UpdateAgentModelConfigResponse struct {
 
 func (x *UpdateAgentModelConfigResponse) Reset() {
 	*x = UpdateAgentModelConfigResponse{}
-	mi := &file_airlock_v1_api_proto_msgTypes[32]
+	mi := &file_airlock_v1_api_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1968,7 +2024,7 @@ func (x *UpdateAgentModelConfigResponse) String() string {
 func (*UpdateAgentModelConfigResponse) ProtoMessage() {}
 
 func (x *UpdateAgentModelConfigResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_airlock_v1_api_proto_msgTypes[32]
+	mi := &file_airlock_v1_api_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1981,7 +2037,7 @@ func (x *UpdateAgentModelConfigResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateAgentModelConfigResponse.ProtoReflect.Descriptor instead.
 func (*UpdateAgentModelConfigResponse) Descriptor() ([]byte, []int) {
-	return file_airlock_v1_api_proto_rawDescGZIP(), []int{32}
+	return file_airlock_v1_api_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *UpdateAgentModelConfigResponse) GetConfig() *AgentModelConfig {
@@ -2000,7 +2056,7 @@ type ListAgentBuildsResponse struct {
 
 func (x *ListAgentBuildsResponse) Reset() {
 	*x = ListAgentBuildsResponse{}
-	mi := &file_airlock_v1_api_proto_msgTypes[33]
+	mi := &file_airlock_v1_api_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2012,7 +2068,7 @@ func (x *ListAgentBuildsResponse) String() string {
 func (*ListAgentBuildsResponse) ProtoMessage() {}
 
 func (x *ListAgentBuildsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_airlock_v1_api_proto_msgTypes[33]
+	mi := &file_airlock_v1_api_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2025,7 +2081,7 @@ func (x *ListAgentBuildsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListAgentBuildsResponse.ProtoReflect.Descriptor instead.
 func (*ListAgentBuildsResponse) Descriptor() ([]byte, []int) {
-	return file_airlock_v1_api_proto_rawDescGZIP(), []int{33}
+	return file_airlock_v1_api_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *ListAgentBuildsResponse) GetBuilds() []*AgentBuildInfo {
@@ -2044,7 +2100,7 @@ type GetAgentBuildResponse struct {
 
 func (x *GetAgentBuildResponse) Reset() {
 	*x = GetAgentBuildResponse{}
-	mi := &file_airlock_v1_api_proto_msgTypes[34]
+	mi := &file_airlock_v1_api_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2056,7 +2112,7 @@ func (x *GetAgentBuildResponse) String() string {
 func (*GetAgentBuildResponse) ProtoMessage() {}
 
 func (x *GetAgentBuildResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_airlock_v1_api_proto_msgTypes[34]
+	mi := &file_airlock_v1_api_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2069,7 +2125,7 @@ func (x *GetAgentBuildResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetAgentBuildResponse.ProtoReflect.Descriptor instead.
 func (*GetAgentBuildResponse) Descriptor() ([]byte, []int) {
-	return file_airlock_v1_api_proto_rawDescGZIP(), []int{34}
+	return file_airlock_v1_api_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *GetAgentBuildResponse) GetBuild() *AgentBuildInfo {
@@ -2089,7 +2145,7 @@ type ListRunsResponse struct {
 
 func (x *ListRunsResponse) Reset() {
 	*x = ListRunsResponse{}
-	mi := &file_airlock_v1_api_proto_msgTypes[35]
+	mi := &file_airlock_v1_api_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2101,7 +2157,7 @@ func (x *ListRunsResponse) String() string {
 func (*ListRunsResponse) ProtoMessage() {}
 
 func (x *ListRunsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_airlock_v1_api_proto_msgTypes[35]
+	mi := &file_airlock_v1_api_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2114,7 +2170,7 @@ func (x *ListRunsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListRunsResponse.ProtoReflect.Descriptor instead.
 func (*ListRunsResponse) Descriptor() ([]byte, []int) {
-	return file_airlock_v1_api_proto_rawDescGZIP(), []int{35}
+	return file_airlock_v1_api_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *ListRunsResponse) GetRuns() []*RunInfo {
@@ -2141,7 +2197,7 @@ type GetRunResponse struct {
 
 func (x *GetRunResponse) Reset() {
 	*x = GetRunResponse{}
-	mi := &file_airlock_v1_api_proto_msgTypes[36]
+	mi := &file_airlock_v1_api_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2153,7 +2209,7 @@ func (x *GetRunResponse) String() string {
 func (*GetRunResponse) ProtoMessage() {}
 
 func (x *GetRunResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_airlock_v1_api_proto_msgTypes[36]
+	mi := &file_airlock_v1_api_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2166,7 +2222,7 @@ func (x *GetRunResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetRunResponse.ProtoReflect.Descriptor instead.
 func (*GetRunResponse) Descriptor() ([]byte, []int) {
-	return file_airlock_v1_api_proto_rawDescGZIP(), []int{36}
+	return file_airlock_v1_api_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *GetRunResponse) GetRun() *RunInfo {
@@ -2192,7 +2248,7 @@ type CreateConversationRequest struct {
 
 func (x *CreateConversationRequest) Reset() {
 	*x = CreateConversationRequest{}
-	mi := &file_airlock_v1_api_proto_msgTypes[37]
+	mi := &file_airlock_v1_api_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2204,7 +2260,7 @@ func (x *CreateConversationRequest) String() string {
 func (*CreateConversationRequest) ProtoMessage() {}
 
 func (x *CreateConversationRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_airlock_v1_api_proto_msgTypes[37]
+	mi := &file_airlock_v1_api_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2217,7 +2273,7 @@ func (x *CreateConversationRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateConversationRequest.ProtoReflect.Descriptor instead.
 func (*CreateConversationRequest) Descriptor() ([]byte, []int) {
-	return file_airlock_v1_api_proto_rawDescGZIP(), []int{37}
+	return file_airlock_v1_api_proto_rawDescGZIP(), []int{38}
 }
 
 func (x *CreateConversationRequest) GetTitle() string {
@@ -2236,7 +2292,7 @@ type CreateConversationResponse struct {
 
 func (x *CreateConversationResponse) Reset() {
 	*x = CreateConversationResponse{}
-	mi := &file_airlock_v1_api_proto_msgTypes[38]
+	mi := &file_airlock_v1_api_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2248,7 +2304,7 @@ func (x *CreateConversationResponse) String() string {
 func (*CreateConversationResponse) ProtoMessage() {}
 
 func (x *CreateConversationResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_airlock_v1_api_proto_msgTypes[38]
+	mi := &file_airlock_v1_api_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2261,7 +2317,7 @@ func (x *CreateConversationResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateConversationResponse.ProtoReflect.Descriptor instead.
 func (*CreateConversationResponse) Descriptor() ([]byte, []int) {
-	return file_airlock_v1_api_proto_rawDescGZIP(), []int{38}
+	return file_airlock_v1_api_proto_rawDescGZIP(), []int{39}
 }
 
 func (x *CreateConversationResponse) GetConversation() *ConversationInfo {
@@ -2280,7 +2336,7 @@ type ListConversationsResponse struct {
 
 func (x *ListConversationsResponse) Reset() {
 	*x = ListConversationsResponse{}
-	mi := &file_airlock_v1_api_proto_msgTypes[39]
+	mi := &file_airlock_v1_api_proto_msgTypes[40]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2292,7 +2348,7 @@ func (x *ListConversationsResponse) String() string {
 func (*ListConversationsResponse) ProtoMessage() {}
 
 func (x *ListConversationsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_airlock_v1_api_proto_msgTypes[39]
+	mi := &file_airlock_v1_api_proto_msgTypes[40]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2305,7 +2361,7 @@ func (x *ListConversationsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListConversationsResponse.ProtoReflect.Descriptor instead.
 func (*ListConversationsResponse) Descriptor() ([]byte, []int) {
-	return file_airlock_v1_api_proto_rawDescGZIP(), []int{39}
+	return file_airlock_v1_api_proto_rawDescGZIP(), []int{40}
 }
 
 func (x *ListConversationsResponse) GetConversations() []*ConversationInfo {
@@ -2336,7 +2392,7 @@ type GetConversationResponse struct {
 
 func (x *GetConversationResponse) Reset() {
 	*x = GetConversationResponse{}
-	mi := &file_airlock_v1_api_proto_msgTypes[40]
+	mi := &file_airlock_v1_api_proto_msgTypes[41]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2348,7 +2404,7 @@ func (x *GetConversationResponse) String() string {
 func (*GetConversationResponse) ProtoMessage() {}
 
 func (x *GetConversationResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_airlock_v1_api_proto_msgTypes[40]
+	mi := &file_airlock_v1_api_proto_msgTypes[41]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2361,7 +2417,7 @@ func (x *GetConversationResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetConversationResponse.ProtoReflect.Descriptor instead.
 func (*GetConversationResponse) Descriptor() ([]byte, []int) {
-	return file_airlock_v1_api_proto_rawDescGZIP(), []int{40}
+	return file_airlock_v1_api_proto_rawDescGZIP(), []int{41}
 }
 
 func (x *GetConversationResponse) GetConversation() *ConversationInfo {
@@ -2413,7 +2469,7 @@ type PaginatedMessagesResponse struct {
 
 func (x *PaginatedMessagesResponse) Reset() {
 	*x = PaginatedMessagesResponse{}
-	mi := &file_airlock_v1_api_proto_msgTypes[41]
+	mi := &file_airlock_v1_api_proto_msgTypes[42]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2425,7 +2481,7 @@ func (x *PaginatedMessagesResponse) String() string {
 func (*PaginatedMessagesResponse) ProtoMessage() {}
 
 func (x *PaginatedMessagesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_airlock_v1_api_proto_msgTypes[41]
+	mi := &file_airlock_v1_api_proto_msgTypes[42]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2438,7 +2494,7 @@ func (x *PaginatedMessagesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PaginatedMessagesResponse.ProtoReflect.Descriptor instead.
 func (*PaginatedMessagesResponse) Descriptor() ([]byte, []int) {
-	return file_airlock_v1_api_proto_rawDescGZIP(), []int{41}
+	return file_airlock_v1_api_proto_rawDescGZIP(), []int{42}
 }
 
 func (x *PaginatedMessagesResponse) GetMessages() []*AgentMessageInfo {
@@ -2467,7 +2523,7 @@ type PendingConfirmation struct {
 
 func (x *PendingConfirmation) Reset() {
 	*x = PendingConfirmation{}
-	mi := &file_airlock_v1_api_proto_msgTypes[42]
+	mi := &file_airlock_v1_api_proto_msgTypes[43]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2479,7 +2535,7 @@ func (x *PendingConfirmation) String() string {
 func (*PendingConfirmation) ProtoMessage() {}
 
 func (x *PendingConfirmation) ProtoReflect() protoreflect.Message {
-	mi := &file_airlock_v1_api_proto_msgTypes[42]
+	mi := &file_airlock_v1_api_proto_msgTypes[43]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2492,7 +2548,7 @@ func (x *PendingConfirmation) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PendingConfirmation.ProtoReflect.Descriptor instead.
 func (*PendingConfirmation) Descriptor() ([]byte, []int) {
-	return file_airlock_v1_api_proto_rawDescGZIP(), []int{42}
+	return file_airlock_v1_api_proto_rawDescGZIP(), []int{43}
 }
 
 func (x *PendingConfirmation) GetToolCallId() string {
@@ -2528,7 +2584,7 @@ type PromptRequest struct {
 
 func (x *PromptRequest) Reset() {
 	*x = PromptRequest{}
-	mi := &file_airlock_v1_api_proto_msgTypes[43]
+	mi := &file_airlock_v1_api_proto_msgTypes[44]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2540,7 +2596,7 @@ func (x *PromptRequest) String() string {
 func (*PromptRequest) ProtoMessage() {}
 
 func (x *PromptRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_airlock_v1_api_proto_msgTypes[43]
+	mi := &file_airlock_v1_api_proto_msgTypes[44]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2553,7 +2609,7 @@ func (x *PromptRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PromptRequest.ProtoReflect.Descriptor instead.
 func (*PromptRequest) Descriptor() ([]byte, []int) {
-	return file_airlock_v1_api_proto_rawDescGZIP(), []int{43}
+	return file_airlock_v1_api_proto_rawDescGZIP(), []int{44}
 }
 
 func (x *PromptRequest) GetConversationId() string {
@@ -2599,7 +2655,7 @@ type PromptResponse struct {
 
 func (x *PromptResponse) Reset() {
 	*x = PromptResponse{}
-	mi := &file_airlock_v1_api_proto_msgTypes[44]
+	mi := &file_airlock_v1_api_proto_msgTypes[45]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2611,7 +2667,7 @@ func (x *PromptResponse) String() string {
 func (*PromptResponse) ProtoMessage() {}
 
 func (x *PromptResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_airlock_v1_api_proto_msgTypes[44]
+	mi := &file_airlock_v1_api_proto_msgTypes[45]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2624,7 +2680,7 @@ func (x *PromptResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PromptResponse.ProtoReflect.Descriptor instead.
 func (*PromptResponse) Descriptor() ([]byte, []int) {
-	return file_airlock_v1_api_proto_rawDescGZIP(), []int{44}
+	return file_airlock_v1_api_proto_rawDescGZIP(), []int{45}
 }
 
 func (x *PromptResponse) GetRunId() string {
@@ -2657,7 +2713,7 @@ type ListWebhooksResponse struct {
 
 func (x *ListWebhooksResponse) Reset() {
 	*x = ListWebhooksResponse{}
-	mi := &file_airlock_v1_api_proto_msgTypes[45]
+	mi := &file_airlock_v1_api_proto_msgTypes[46]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2669,7 +2725,7 @@ func (x *ListWebhooksResponse) String() string {
 func (*ListWebhooksResponse) ProtoMessage() {}
 
 func (x *ListWebhooksResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_airlock_v1_api_proto_msgTypes[45]
+	mi := &file_airlock_v1_api_proto_msgTypes[46]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2682,7 +2738,7 @@ func (x *ListWebhooksResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListWebhooksResponse.ProtoReflect.Descriptor instead.
 func (*ListWebhooksResponse) Descriptor() ([]byte, []int) {
-	return file_airlock_v1_api_proto_rawDescGZIP(), []int{45}
+	return file_airlock_v1_api_proto_rawDescGZIP(), []int{46}
 }
 
 func (x *ListWebhooksResponse) GetWebhooks() []*WebhookInfo {
@@ -2701,7 +2757,7 @@ type ListCronsResponse struct {
 
 func (x *ListCronsResponse) Reset() {
 	*x = ListCronsResponse{}
-	mi := &file_airlock_v1_api_proto_msgTypes[46]
+	mi := &file_airlock_v1_api_proto_msgTypes[47]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2713,7 +2769,7 @@ func (x *ListCronsResponse) String() string {
 func (*ListCronsResponse) ProtoMessage() {}
 
 func (x *ListCronsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_airlock_v1_api_proto_msgTypes[46]
+	mi := &file_airlock_v1_api_proto_msgTypes[47]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2726,7 +2782,7 @@ func (x *ListCronsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListCronsResponse.ProtoReflect.Descriptor instead.
 func (*ListCronsResponse) Descriptor() ([]byte, []int) {
-	return file_airlock_v1_api_proto_rawDescGZIP(), []int{46}
+	return file_airlock_v1_api_proto_rawDescGZIP(), []int{47}
 }
 
 func (x *ListCronsResponse) GetCrons() []*CronInfo {
@@ -2745,7 +2801,7 @@ type ListToolsResponse struct {
 
 func (x *ListToolsResponse) Reset() {
 	*x = ListToolsResponse{}
-	mi := &file_airlock_v1_api_proto_msgTypes[47]
+	mi := &file_airlock_v1_api_proto_msgTypes[48]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2757,7 +2813,7 @@ func (x *ListToolsResponse) String() string {
 func (*ListToolsResponse) ProtoMessage() {}
 
 func (x *ListToolsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_airlock_v1_api_proto_msgTypes[47]
+	mi := &file_airlock_v1_api_proto_msgTypes[48]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2770,7 +2826,7 @@ func (x *ListToolsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListToolsResponse.ProtoReflect.Descriptor instead.
 func (*ListToolsResponse) Descriptor() ([]byte, []int) {
-	return file_airlock_v1_api_proto_rawDescGZIP(), []int{47}
+	return file_airlock_v1_api_proto_rawDescGZIP(), []int{48}
 }
 
 func (x *ListToolsResponse) GetTools() []*ToolInfo {
@@ -2789,7 +2845,7 @@ type FireCronResponse struct {
 
 func (x *FireCronResponse) Reset() {
 	*x = FireCronResponse{}
-	mi := &file_airlock_v1_api_proto_msgTypes[48]
+	mi := &file_airlock_v1_api_proto_msgTypes[49]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2801,7 +2857,7 @@ func (x *FireCronResponse) String() string {
 func (*FireCronResponse) ProtoMessage() {}
 
 func (x *FireCronResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_airlock_v1_api_proto_msgTypes[48]
+	mi := &file_airlock_v1_api_proto_msgTypes[49]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2814,7 +2870,7 @@ func (x *FireCronResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FireCronResponse.ProtoReflect.Descriptor instead.
 func (*FireCronResponse) Descriptor() ([]byte, []int) {
-	return file_airlock_v1_api_proto_rawDescGZIP(), []int{48}
+	return file_airlock_v1_api_proto_rawDescGZIP(), []int{49}
 }
 
 func (x *FireCronResponse) GetRunId() string {
@@ -2834,7 +2890,7 @@ type AddAgentMemberRequest struct {
 
 func (x *AddAgentMemberRequest) Reset() {
 	*x = AddAgentMemberRequest{}
-	mi := &file_airlock_v1_api_proto_msgTypes[49]
+	mi := &file_airlock_v1_api_proto_msgTypes[50]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2846,7 +2902,7 @@ func (x *AddAgentMemberRequest) String() string {
 func (*AddAgentMemberRequest) ProtoMessage() {}
 
 func (x *AddAgentMemberRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_airlock_v1_api_proto_msgTypes[49]
+	mi := &file_airlock_v1_api_proto_msgTypes[50]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2859,7 +2915,7 @@ func (x *AddAgentMemberRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AddAgentMemberRequest.ProtoReflect.Descriptor instead.
 func (*AddAgentMemberRequest) Descriptor() ([]byte, []int) {
-	return file_airlock_v1_api_proto_rawDescGZIP(), []int{49}
+	return file_airlock_v1_api_proto_rawDescGZIP(), []int{50}
 }
 
 func (x *AddAgentMemberRequest) GetUserId() string {
@@ -2889,7 +2945,7 @@ type AgentMemberInfo struct {
 
 func (x *AgentMemberInfo) Reset() {
 	*x = AgentMemberInfo{}
-	mi := &file_airlock_v1_api_proto_msgTypes[50]
+	mi := &file_airlock_v1_api_proto_msgTypes[51]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2901,7 +2957,7 @@ func (x *AgentMemberInfo) String() string {
 func (*AgentMemberInfo) ProtoMessage() {}
 
 func (x *AgentMemberInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_airlock_v1_api_proto_msgTypes[50]
+	mi := &file_airlock_v1_api_proto_msgTypes[51]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2914,7 +2970,7 @@ func (x *AgentMemberInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentMemberInfo.ProtoReflect.Descriptor instead.
 func (*AgentMemberInfo) Descriptor() ([]byte, []int) {
-	return file_airlock_v1_api_proto_rawDescGZIP(), []int{50}
+	return file_airlock_v1_api_proto_rawDescGZIP(), []int{51}
 }
 
 func (x *AgentMemberInfo) GetUserId() string {
@@ -2961,7 +3017,7 @@ type ListAgentMembersResponse struct {
 
 func (x *ListAgentMembersResponse) Reset() {
 	*x = ListAgentMembersResponse{}
-	mi := &file_airlock_v1_api_proto_msgTypes[51]
+	mi := &file_airlock_v1_api_proto_msgTypes[52]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2973,7 +3029,7 @@ func (x *ListAgentMembersResponse) String() string {
 func (*ListAgentMembersResponse) ProtoMessage() {}
 
 func (x *ListAgentMembersResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_airlock_v1_api_proto_msgTypes[51]
+	mi := &file_airlock_v1_api_proto_msgTypes[52]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2986,7 +3042,7 @@ func (x *ListAgentMembersResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListAgentMembersResponse.ProtoReflect.Descriptor instead.
 func (*ListAgentMembersResponse) Descriptor() ([]byte, []int) {
-	return file_airlock_v1_api_proto_rawDescGZIP(), []int{51}
+	return file_airlock_v1_api_proto_rawDescGZIP(), []int{52}
 }
 
 func (x *ListAgentMembersResponse) GetMembers() []*AgentMemberInfo {
@@ -3006,7 +3062,7 @@ type ListConnectionsResponse struct {
 
 func (x *ListConnectionsResponse) Reset() {
 	*x = ListConnectionsResponse{}
-	mi := &file_airlock_v1_api_proto_msgTypes[52]
+	mi := &file_airlock_v1_api_proto_msgTypes[53]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3018,7 +3074,7 @@ func (x *ListConnectionsResponse) String() string {
 func (*ListConnectionsResponse) ProtoMessage() {}
 
 func (x *ListConnectionsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_airlock_v1_api_proto_msgTypes[52]
+	mi := &file_airlock_v1_api_proto_msgTypes[53]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3031,7 +3087,7 @@ func (x *ListConnectionsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListConnectionsResponse.ProtoReflect.Descriptor instead.
 func (*ListConnectionsResponse) Descriptor() ([]byte, []int) {
-	return file_airlock_v1_api_proto_rawDescGZIP(), []int{52}
+	return file_airlock_v1_api_proto_rawDescGZIP(), []int{53}
 }
 
 func (x *ListConnectionsResponse) GetConnections() []*ConnectionInfo {
@@ -3057,7 +3113,7 @@ type SetAPIKeyRequest struct {
 
 func (x *SetAPIKeyRequest) Reset() {
 	*x = SetAPIKeyRequest{}
-	mi := &file_airlock_v1_api_proto_msgTypes[53]
+	mi := &file_airlock_v1_api_proto_msgTypes[54]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3069,7 +3125,7 @@ func (x *SetAPIKeyRequest) String() string {
 func (*SetAPIKeyRequest) ProtoMessage() {}
 
 func (x *SetAPIKeyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_airlock_v1_api_proto_msgTypes[53]
+	mi := &file_airlock_v1_api_proto_msgTypes[54]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3082,7 +3138,7 @@ func (x *SetAPIKeyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetAPIKeyRequest.ProtoReflect.Descriptor instead.
 func (*SetAPIKeyRequest) Descriptor() ([]byte, []int) {
-	return file_airlock_v1_api_proto_rawDescGZIP(), []int{53}
+	return file_airlock_v1_api_proto_rawDescGZIP(), []int{54}
 }
 
 func (x *SetAPIKeyRequest) GetApiKey() string {
@@ -3102,7 +3158,7 @@ type SetOAuthAppRequest struct {
 
 func (x *SetOAuthAppRequest) Reset() {
 	*x = SetOAuthAppRequest{}
-	mi := &file_airlock_v1_api_proto_msgTypes[54]
+	mi := &file_airlock_v1_api_proto_msgTypes[55]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3114,7 +3170,7 @@ func (x *SetOAuthAppRequest) String() string {
 func (*SetOAuthAppRequest) ProtoMessage() {}
 
 func (x *SetOAuthAppRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_airlock_v1_api_proto_msgTypes[54]
+	mi := &file_airlock_v1_api_proto_msgTypes[55]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3127,7 +3183,7 @@ func (x *SetOAuthAppRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetOAuthAppRequest.ProtoReflect.Descriptor instead.
 func (*SetOAuthAppRequest) Descriptor() ([]byte, []int) {
-	return file_airlock_v1_api_proto_rawDescGZIP(), []int{54}
+	return file_airlock_v1_api_proto_rawDescGZIP(), []int{55}
 }
 
 func (x *SetOAuthAppRequest) GetClientId() string {
@@ -3155,7 +3211,7 @@ type OAuthStartRequest struct {
 
 func (x *OAuthStartRequest) Reset() {
 	*x = OAuthStartRequest{}
-	mi := &file_airlock_v1_api_proto_msgTypes[55]
+	mi := &file_airlock_v1_api_proto_msgTypes[56]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3167,7 +3223,7 @@ func (x *OAuthStartRequest) String() string {
 func (*OAuthStartRequest) ProtoMessage() {}
 
 func (x *OAuthStartRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_airlock_v1_api_proto_msgTypes[55]
+	mi := &file_airlock_v1_api_proto_msgTypes[56]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3180,7 +3236,7 @@ func (x *OAuthStartRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OAuthStartRequest.ProtoReflect.Descriptor instead.
 func (*OAuthStartRequest) Descriptor() ([]byte, []int) {
-	return file_airlock_v1_api_proto_rawDescGZIP(), []int{55}
+	return file_airlock_v1_api_proto_rawDescGZIP(), []int{56}
 }
 
 func (x *OAuthStartRequest) GetAgentId() string {
@@ -3213,7 +3269,7 @@ type OAuthStartResponse struct {
 
 func (x *OAuthStartResponse) Reset() {
 	*x = OAuthStartResponse{}
-	mi := &file_airlock_v1_api_proto_msgTypes[56]
+	mi := &file_airlock_v1_api_proto_msgTypes[57]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3225,7 +3281,7 @@ func (x *OAuthStartResponse) String() string {
 func (*OAuthStartResponse) ProtoMessage() {}
 
 func (x *OAuthStartResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_airlock_v1_api_proto_msgTypes[56]
+	mi := &file_airlock_v1_api_proto_msgTypes[57]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3238,7 +3294,7 @@ func (x *OAuthStartResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OAuthStartResponse.ProtoReflect.Descriptor instead.
 func (*OAuthStartResponse) Descriptor() ([]byte, []int) {
-	return file_airlock_v1_api_proto_rawDescGZIP(), []int{56}
+	return file_airlock_v1_api_proto_rawDescGZIP(), []int{57}
 }
 
 func (x *OAuthStartResponse) GetAuthorizeUrl() string {
@@ -3261,7 +3317,7 @@ type CredentialStatusResponse struct {
 
 func (x *CredentialStatusResponse) Reset() {
 	*x = CredentialStatusResponse{}
-	mi := &file_airlock_v1_api_proto_msgTypes[57]
+	mi := &file_airlock_v1_api_proto_msgTypes[58]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3273,7 +3329,7 @@ func (x *CredentialStatusResponse) String() string {
 func (*CredentialStatusResponse) ProtoMessage() {}
 
 func (x *CredentialStatusResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_airlock_v1_api_proto_msgTypes[57]
+	mi := &file_airlock_v1_api_proto_msgTypes[58]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3286,7 +3342,7 @@ func (x *CredentialStatusResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CredentialStatusResponse.ProtoReflect.Descriptor instead.
 func (*CredentialStatusResponse) Descriptor() ([]byte, []int) {
-	return file_airlock_v1_api_proto_rawDescGZIP(), []int{57}
+	return file_airlock_v1_api_proto_rawDescGZIP(), []int{58}
 }
 
 func (x *CredentialStatusResponse) GetSlug() string {
@@ -3335,7 +3391,7 @@ type TestCredentialResponse struct {
 
 func (x *TestCredentialResponse) Reset() {
 	*x = TestCredentialResponse{}
-	mi := &file_airlock_v1_api_proto_msgTypes[58]
+	mi := &file_airlock_v1_api_proto_msgTypes[59]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3347,7 +3403,7 @@ func (x *TestCredentialResponse) String() string {
 func (*TestCredentialResponse) ProtoMessage() {}
 
 func (x *TestCredentialResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_airlock_v1_api_proto_msgTypes[58]
+	mi := &file_airlock_v1_api_proto_msgTypes[59]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3360,7 +3416,7 @@ func (x *TestCredentialResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TestCredentialResponse.ProtoReflect.Descriptor instead.
 func (*TestCredentialResponse) Descriptor() ([]byte, []int) {
-	return file_airlock_v1_api_proto_rawDescGZIP(), []int{58}
+	return file_airlock_v1_api_proto_rawDescGZIP(), []int{59}
 }
 
 func (x *TestCredentialResponse) GetSuccess() bool {
@@ -3396,7 +3452,7 @@ type CreateBridgeRequest struct {
 
 func (x *CreateBridgeRequest) Reset() {
 	*x = CreateBridgeRequest{}
-	mi := &file_airlock_v1_api_proto_msgTypes[59]
+	mi := &file_airlock_v1_api_proto_msgTypes[60]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3408,7 +3464,7 @@ func (x *CreateBridgeRequest) String() string {
 func (*CreateBridgeRequest) ProtoMessage() {}
 
 func (x *CreateBridgeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_airlock_v1_api_proto_msgTypes[59]
+	mi := &file_airlock_v1_api_proto_msgTypes[60]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3421,7 +3477,7 @@ func (x *CreateBridgeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateBridgeRequest.ProtoReflect.Descriptor instead.
 func (*CreateBridgeRequest) Descriptor() ([]byte, []int) {
-	return file_airlock_v1_api_proto_rawDescGZIP(), []int{59}
+	return file_airlock_v1_api_proto_rawDescGZIP(), []int{60}
 }
 
 func (x *CreateBridgeRequest) GetAgentId() string {
@@ -3465,7 +3521,7 @@ type UpdateBridgeRequest struct {
 
 func (x *UpdateBridgeRequest) Reset() {
 	*x = UpdateBridgeRequest{}
-	mi := &file_airlock_v1_api_proto_msgTypes[60]
+	mi := &file_airlock_v1_api_proto_msgTypes[61]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3477,7 +3533,7 @@ func (x *UpdateBridgeRequest) String() string {
 func (*UpdateBridgeRequest) ProtoMessage() {}
 
 func (x *UpdateBridgeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_airlock_v1_api_proto_msgTypes[60]
+	mi := &file_airlock_v1_api_proto_msgTypes[61]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3490,7 +3546,7 @@ func (x *UpdateBridgeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateBridgeRequest.ProtoReflect.Descriptor instead.
 func (*UpdateBridgeRequest) Descriptor() ([]byte, []int) {
-	return file_airlock_v1_api_proto_rawDescGZIP(), []int{60}
+	return file_airlock_v1_api_proto_rawDescGZIP(), []int{61}
 }
 
 func (x *UpdateBridgeRequest) GetAgentId() string {
@@ -3516,7 +3572,7 @@ type ListBridgesResponse struct {
 
 func (x *ListBridgesResponse) Reset() {
 	*x = ListBridgesResponse{}
-	mi := &file_airlock_v1_api_proto_msgTypes[61]
+	mi := &file_airlock_v1_api_proto_msgTypes[62]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3528,7 +3584,7 @@ func (x *ListBridgesResponse) String() string {
 func (*ListBridgesResponse) ProtoMessage() {}
 
 func (x *ListBridgesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_airlock_v1_api_proto_msgTypes[61]
+	mi := &file_airlock_v1_api_proto_msgTypes[62]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3541,7 +3597,7 @@ func (x *ListBridgesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListBridgesResponse.ProtoReflect.Descriptor instead.
 func (*ListBridgesResponse) Descriptor() ([]byte, []int) {
-	return file_airlock_v1_api_proto_rawDescGZIP(), []int{61}
+	return file_airlock_v1_api_proto_rawDescGZIP(), []int{62}
 }
 
 func (x *ListBridgesResponse) GetBridges() []*BridgeInfo {
@@ -3560,7 +3616,7 @@ type ListCapabilitiesResponse struct {
 
 func (x *ListCapabilitiesResponse) Reset() {
 	*x = ListCapabilitiesResponse{}
-	mi := &file_airlock_v1_api_proto_msgTypes[62]
+	mi := &file_airlock_v1_api_proto_msgTypes[63]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3572,7 +3628,7 @@ func (x *ListCapabilitiesResponse) String() string {
 func (*ListCapabilitiesResponse) ProtoMessage() {}
 
 func (x *ListCapabilitiesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_airlock_v1_api_proto_msgTypes[62]
+	mi := &file_airlock_v1_api_proto_msgTypes[63]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3585,7 +3641,7 @@ func (x *ListCapabilitiesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListCapabilitiesResponse.ProtoReflect.Descriptor instead.
 func (*ListCapabilitiesResponse) Descriptor() ([]byte, []int) {
-	return file_airlock_v1_api_proto_rawDescGZIP(), []int{62}
+	return file_airlock_v1_api_proto_rawDescGZIP(), []int{63}
 }
 
 func (x *ListCapabilitiesResponse) GetProviders() []*ProviderCapabilityInfo {
@@ -3604,7 +3660,7 @@ type ListPlatformIdentitiesResponse struct {
 
 func (x *ListPlatformIdentitiesResponse) Reset() {
 	*x = ListPlatformIdentitiesResponse{}
-	mi := &file_airlock_v1_api_proto_msgTypes[63]
+	mi := &file_airlock_v1_api_proto_msgTypes[64]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3616,7 +3672,7 @@ func (x *ListPlatformIdentitiesResponse) String() string {
 func (*ListPlatformIdentitiesResponse) ProtoMessage() {}
 
 func (x *ListPlatformIdentitiesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_airlock_v1_api_proto_msgTypes[63]
+	mi := &file_airlock_v1_api_proto_msgTypes[64]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3629,7 +3685,7 @@ func (x *ListPlatformIdentitiesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListPlatformIdentitiesResponse.ProtoReflect.Descriptor instead.
 func (*ListPlatformIdentitiesResponse) Descriptor() ([]byte, []int) {
-	return file_airlock_v1_api_proto_rawDescGZIP(), []int{63}
+	return file_airlock_v1_api_proto_rawDescGZIP(), []int{64}
 }
 
 func (x *ListPlatformIdentitiesResponse) GetIdentities() []*PlatformIdentityInfo {
@@ -3659,7 +3715,7 @@ type LinkIdentityPreviewResponse struct {
 
 func (x *LinkIdentityPreviewResponse) Reset() {
 	*x = LinkIdentityPreviewResponse{}
-	mi := &file_airlock_v1_api_proto_msgTypes[64]
+	mi := &file_airlock_v1_api_proto_msgTypes[65]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3671,7 +3727,7 @@ func (x *LinkIdentityPreviewResponse) String() string {
 func (*LinkIdentityPreviewResponse) ProtoMessage() {}
 
 func (x *LinkIdentityPreviewResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_airlock_v1_api_proto_msgTypes[64]
+	mi := &file_airlock_v1_api_proto_msgTypes[65]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3684,7 +3740,7 @@ func (x *LinkIdentityPreviewResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LinkIdentityPreviewResponse.ProtoReflect.Descriptor instead.
 func (*LinkIdentityPreviewResponse) Descriptor() ([]byte, []int) {
-	return file_airlock_v1_api_proto_rawDescGZIP(), []int{64}
+	return file_airlock_v1_api_proto_rawDescGZIP(), []int{65}
 }
 
 func (x *LinkIdentityPreviewResponse) GetPlatform() string {
@@ -3752,7 +3808,7 @@ type ListFilesResponse struct {
 
 func (x *ListFilesResponse) Reset() {
 	*x = ListFilesResponse{}
-	mi := &file_airlock_v1_api_proto_msgTypes[65]
+	mi := &file_airlock_v1_api_proto_msgTypes[66]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3764,7 +3820,7 @@ func (x *ListFilesResponse) String() string {
 func (*ListFilesResponse) ProtoMessage() {}
 
 func (x *ListFilesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_airlock_v1_api_proto_msgTypes[65]
+	mi := &file_airlock_v1_api_proto_msgTypes[66]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3777,7 +3833,7 @@ func (x *ListFilesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListFilesResponse.ProtoReflect.Descriptor instead.
 func (*ListFilesResponse) Descriptor() ([]byte, []int) {
-	return file_airlock_v1_api_proto_rawDescGZIP(), []int{65}
+	return file_airlock_v1_api_proto_rawDescGZIP(), []int{66}
 }
 
 func (x *ListFilesResponse) GetFiles() []*FileInfo {
@@ -3797,7 +3853,7 @@ type UploadFileResponse struct {
 
 func (x *UploadFileResponse) Reset() {
 	*x = UploadFileResponse{}
-	mi := &file_airlock_v1_api_proto_msgTypes[66]
+	mi := &file_airlock_v1_api_proto_msgTypes[67]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3809,7 +3865,7 @@ func (x *UploadFileResponse) String() string {
 func (*UploadFileResponse) ProtoMessage() {}
 
 func (x *UploadFileResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_airlock_v1_api_proto_msgTypes[66]
+	mi := &file_airlock_v1_api_proto_msgTypes[67]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3822,7 +3878,7 @@ func (x *UploadFileResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UploadFileResponse.ProtoReflect.Descriptor instead.
 func (*UploadFileResponse) Descriptor() ([]byte, []int) {
-	return file_airlock_v1_api_proto_rawDescGZIP(), []int{66}
+	return file_airlock_v1_api_proto_rawDescGZIP(), []int{67}
 }
 
 func (x *UploadFileResponse) GetUploadUrl() string {
@@ -3848,7 +3904,7 @@ type ListTopicsResponse struct {
 
 func (x *ListTopicsResponse) Reset() {
 	*x = ListTopicsResponse{}
-	mi := &file_airlock_v1_api_proto_msgTypes[67]
+	mi := &file_airlock_v1_api_proto_msgTypes[68]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3860,7 +3916,7 @@ func (x *ListTopicsResponse) String() string {
 func (*ListTopicsResponse) ProtoMessage() {}
 
 func (x *ListTopicsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_airlock_v1_api_proto_msgTypes[67]
+	mi := &file_airlock_v1_api_proto_msgTypes[68]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3873,7 +3929,7 @@ func (x *ListTopicsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListTopicsResponse.ProtoReflect.Descriptor instead.
 func (*ListTopicsResponse) Descriptor() ([]byte, []int) {
-	return file_airlock_v1_api_proto_rawDescGZIP(), []int{67}
+	return file_airlock_v1_api_proto_rawDescGZIP(), []int{68}
 }
 
 func (x *ListTopicsResponse) GetTopics() []*TopicInfo {
@@ -3892,7 +3948,7 @@ type GetSystemSettingsResponse struct {
 
 func (x *GetSystemSettingsResponse) Reset() {
 	*x = GetSystemSettingsResponse{}
-	mi := &file_airlock_v1_api_proto_msgTypes[68]
+	mi := &file_airlock_v1_api_proto_msgTypes[69]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3904,7 +3960,7 @@ func (x *GetSystemSettingsResponse) String() string {
 func (*GetSystemSettingsResponse) ProtoMessage() {}
 
 func (x *GetSystemSettingsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_airlock_v1_api_proto_msgTypes[68]
+	mi := &file_airlock_v1_api_proto_msgTypes[69]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3917,7 +3973,7 @@ func (x *GetSystemSettingsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetSystemSettingsResponse.ProtoReflect.Descriptor instead.
 func (*GetSystemSettingsResponse) Descriptor() ([]byte, []int) {
-	return file_airlock_v1_api_proto_rawDescGZIP(), []int{68}
+	return file_airlock_v1_api_proto_rawDescGZIP(), []int{69}
 }
 
 func (x *GetSystemSettingsResponse) GetSettings() *SystemSettingsInfo {
@@ -3936,7 +3992,7 @@ type UpdateSystemSettingsRequest struct {
 
 func (x *UpdateSystemSettingsRequest) Reset() {
 	*x = UpdateSystemSettingsRequest{}
-	mi := &file_airlock_v1_api_proto_msgTypes[69]
+	mi := &file_airlock_v1_api_proto_msgTypes[70]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3948,7 +4004,7 @@ func (x *UpdateSystemSettingsRequest) String() string {
 func (*UpdateSystemSettingsRequest) ProtoMessage() {}
 
 func (x *UpdateSystemSettingsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_airlock_v1_api_proto_msgTypes[69]
+	mi := &file_airlock_v1_api_proto_msgTypes[70]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3961,7 +4017,7 @@ func (x *UpdateSystemSettingsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateSystemSettingsRequest.ProtoReflect.Descriptor instead.
 func (*UpdateSystemSettingsRequest) Descriptor() ([]byte, []int) {
-	return file_airlock_v1_api_proto_rawDescGZIP(), []int{69}
+	return file_airlock_v1_api_proto_rawDescGZIP(), []int{70}
 }
 
 func (x *UpdateSystemSettingsRequest) GetSettings() *SystemSettingsInfo {
@@ -3980,7 +4036,7 @@ type UpdateSystemSettingsResponse struct {
 
 func (x *UpdateSystemSettingsResponse) Reset() {
 	*x = UpdateSystemSettingsResponse{}
-	mi := &file_airlock_v1_api_proto_msgTypes[70]
+	mi := &file_airlock_v1_api_proto_msgTypes[71]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3992,7 +4048,7 @@ func (x *UpdateSystemSettingsResponse) String() string {
 func (*UpdateSystemSettingsResponse) ProtoMessage() {}
 
 func (x *UpdateSystemSettingsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_airlock_v1_api_proto_msgTypes[70]
+	mi := &file_airlock_v1_api_proto_msgTypes[71]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4005,7 +4061,7 @@ func (x *UpdateSystemSettingsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateSystemSettingsResponse.ProtoReflect.Descriptor instead.
 func (*UpdateSystemSettingsResponse) Descriptor() ([]byte, []int) {
-	return file_airlock_v1_api_proto_rawDescGZIP(), []int{70}
+	return file_airlock_v1_api_proto_rawDescGZIP(), []int{71}
 }
 
 func (x *UpdateSystemSettingsResponse) GetSettings() *SystemSettingsInfo {
@@ -4025,7 +4081,7 @@ type ErrorResponse struct {
 
 func (x *ErrorResponse) Reset() {
 	*x = ErrorResponse{}
-	mi := &file_airlock_v1_api_proto_msgTypes[71]
+	mi := &file_airlock_v1_api_proto_msgTypes[72]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4037,7 +4093,7 @@ func (x *ErrorResponse) String() string {
 func (*ErrorResponse) ProtoMessage() {}
 
 func (x *ErrorResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_airlock_v1_api_proto_msgTypes[71]
+	mi := &file_airlock_v1_api_proto_msgTypes[72]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4050,7 +4106,7 @@ func (x *ErrorResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ErrorResponse.ProtoReflect.Descriptor instead.
 func (*ErrorResponse) Descriptor() ([]byte, []int) {
-	return file_airlock_v1_api_proto_rawDescGZIP(), []int{71}
+	return file_airlock_v1_api_proto_rawDescGZIP(), []int{72}
 }
 
 func (x *ErrorResponse) GetError() string {
@@ -4081,7 +4137,7 @@ type HealthResponse struct {
 
 func (x *HealthResponse) Reset() {
 	*x = HealthResponse{}
-	mi := &file_airlock_v1_api_proto_msgTypes[72]
+	mi := &file_airlock_v1_api_proto_msgTypes[73]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4093,7 +4149,7 @@ func (x *HealthResponse) String() string {
 func (*HealthResponse) ProtoMessage() {}
 
 func (x *HealthResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_airlock_v1_api_proto_msgTypes[72]
+	mi := &file_airlock_v1_api_proto_msgTypes[73]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4106,7 +4162,7 @@ func (x *HealthResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HealthResponse.ProtoReflect.Descriptor instead.
 func (*HealthResponse) Descriptor() ([]byte, []int) {
-	return file_airlock_v1_api_proto_rawDescGZIP(), []int{72}
+	return file_airlock_v1_api_proto_rawDescGZIP(), []int{73}
 }
 
 func (x *HealthResponse) GetStatus() string {
@@ -4246,7 +4302,10 @@ const file_airlock_v1_api_proto_rawDesc = "" +
 	"\x05agent\x18\x01 \x01(\v2\x15.airlock.v1.AgentInfoR\x05agent\"N\n" +
 	"\x13UpgradeAgentRequest\x12\x15\n" +
 	"\x06run_id\x18\x01 \x01(\tR\x05runId\x12 \n" +
-	"\vdescription\x18\x02 \x01(\tR\vdescription\"\xbe\x01\n" +
+	"\vdescription\x18\x02 \x01(\tR\vdescription\"Z\n" +
+	"\x14RollbackBuildRequest\x12\x19\n" +
+	"\bbuild_id\x18\x01 \x01(\tR\abuildId\x12'\n" +
+	"\x0fconversation_id\x18\x02 \x01(\tR\x0econversationId\"\xbe\x01\n" +
 	"\rModelSlotInfo\x12\x12\n" +
 	"\x04slug\x18\x01 \x01(\tR\x04slug\x12\x1e\n" +
 	"\n" +
@@ -4431,7 +4490,7 @@ func file_airlock_v1_api_proto_rawDescGZIP() []byte {
 	return file_airlock_v1_api_proto_rawDescData
 }
 
-var file_airlock_v1_api_proto_msgTypes = make([]protoimpl.MessageInfo, 73)
+var file_airlock_v1_api_proto_msgTypes = make([]protoimpl.MessageInfo, 74)
 var file_airlock_v1_api_proto_goTypes = []any{
 	(*RegisterRequest)(nil),                // 0: airlock.v1.RegisterRequest
 	(*RegisterResponse)(nil),               // 1: airlock.v1.RegisterResponse
@@ -4461,127 +4520,128 @@ var file_airlock_v1_api_proto_goTypes = []any{
 	(*UpdateAgentRequest)(nil),             // 25: airlock.v1.UpdateAgentRequest
 	(*UpdateAgentResponse)(nil),            // 26: airlock.v1.UpdateAgentResponse
 	(*UpgradeAgentRequest)(nil),            // 27: airlock.v1.UpgradeAgentRequest
-	(*ModelSlotInfo)(nil),                  // 28: airlock.v1.ModelSlotInfo
-	(*AgentModelConfig)(nil),               // 29: airlock.v1.AgentModelConfig
-	(*GetAgentModelConfigResponse)(nil),    // 30: airlock.v1.GetAgentModelConfigResponse
-	(*UpdateAgentModelConfigRequest)(nil),  // 31: airlock.v1.UpdateAgentModelConfigRequest
-	(*UpdateAgentModelConfigResponse)(nil), // 32: airlock.v1.UpdateAgentModelConfigResponse
-	(*ListAgentBuildsResponse)(nil),        // 33: airlock.v1.ListAgentBuildsResponse
-	(*GetAgentBuildResponse)(nil),          // 34: airlock.v1.GetAgentBuildResponse
-	(*ListRunsResponse)(nil),               // 35: airlock.v1.ListRunsResponse
-	(*GetRunResponse)(nil),                 // 36: airlock.v1.GetRunResponse
-	(*CreateConversationRequest)(nil),      // 37: airlock.v1.CreateConversationRequest
-	(*CreateConversationResponse)(nil),     // 38: airlock.v1.CreateConversationResponse
-	(*ListConversationsResponse)(nil),      // 39: airlock.v1.ListConversationsResponse
-	(*GetConversationResponse)(nil),        // 40: airlock.v1.GetConversationResponse
-	(*PaginatedMessagesResponse)(nil),      // 41: airlock.v1.PaginatedMessagesResponse
-	(*PendingConfirmation)(nil),            // 42: airlock.v1.PendingConfirmation
-	(*PromptRequest)(nil),                  // 43: airlock.v1.PromptRequest
-	(*PromptResponse)(nil),                 // 44: airlock.v1.PromptResponse
-	(*ListWebhooksResponse)(nil),           // 45: airlock.v1.ListWebhooksResponse
-	(*ListCronsResponse)(nil),              // 46: airlock.v1.ListCronsResponse
-	(*ListToolsResponse)(nil),              // 47: airlock.v1.ListToolsResponse
-	(*FireCronResponse)(nil),               // 48: airlock.v1.FireCronResponse
-	(*AddAgentMemberRequest)(nil),          // 49: airlock.v1.AddAgentMemberRequest
-	(*AgentMemberInfo)(nil),                // 50: airlock.v1.AgentMemberInfo
-	(*ListAgentMembersResponse)(nil),       // 51: airlock.v1.ListAgentMembersResponse
-	(*ListConnectionsResponse)(nil),        // 52: airlock.v1.ListConnectionsResponse
-	(*SetAPIKeyRequest)(nil),               // 53: airlock.v1.SetAPIKeyRequest
-	(*SetOAuthAppRequest)(nil),             // 54: airlock.v1.SetOAuthAppRequest
-	(*OAuthStartRequest)(nil),              // 55: airlock.v1.OAuthStartRequest
-	(*OAuthStartResponse)(nil),             // 56: airlock.v1.OAuthStartResponse
-	(*CredentialStatusResponse)(nil),       // 57: airlock.v1.CredentialStatusResponse
-	(*TestCredentialResponse)(nil),         // 58: airlock.v1.TestCredentialResponse
-	(*CreateBridgeRequest)(nil),            // 59: airlock.v1.CreateBridgeRequest
-	(*UpdateBridgeRequest)(nil),            // 60: airlock.v1.UpdateBridgeRequest
-	(*ListBridgesResponse)(nil),            // 61: airlock.v1.ListBridgesResponse
-	(*ListCapabilitiesResponse)(nil),       // 62: airlock.v1.ListCapabilitiesResponse
-	(*ListPlatformIdentitiesResponse)(nil), // 63: airlock.v1.ListPlatformIdentitiesResponse
-	(*LinkIdentityPreviewResponse)(nil),    // 64: airlock.v1.LinkIdentityPreviewResponse
-	(*ListFilesResponse)(nil),              // 65: airlock.v1.ListFilesResponse
-	(*UploadFileResponse)(nil),             // 66: airlock.v1.UploadFileResponse
-	(*ListTopicsResponse)(nil),             // 67: airlock.v1.ListTopicsResponse
-	(*GetSystemSettingsResponse)(nil),      // 68: airlock.v1.GetSystemSettingsResponse
-	(*UpdateSystemSettingsRequest)(nil),    // 69: airlock.v1.UpdateSystemSettingsRequest
-	(*UpdateSystemSettingsResponse)(nil),   // 70: airlock.v1.UpdateSystemSettingsResponse
-	(*ErrorResponse)(nil),                  // 71: airlock.v1.ErrorResponse
-	(*HealthResponse)(nil),                 // 72: airlock.v1.HealthResponse
-	(*User)(nil),                           // 73: airlock.v1.User
-	(*Tenant)(nil),                         // 74: airlock.v1.Tenant
-	(*UserSummary)(nil),                    // 75: airlock.v1.UserSummary
-	(*Provider)(nil),                       // 76: airlock.v1.Provider
-	(*ProviderInfo)(nil),                   // 77: airlock.v1.ProviderInfo
-	(*ModelInfo)(nil),                      // 78: airlock.v1.ModelInfo
-	(*AgentInfo)(nil),                      // 79: airlock.v1.AgentInfo
-	(*ConnectionInfo)(nil),                 // 80: airlock.v1.ConnectionInfo
-	(*WebhookInfo)(nil),                    // 81: airlock.v1.WebhookInfo
-	(*CronInfo)(nil),                       // 82: airlock.v1.CronInfo
-	(*RouteInfo)(nil),                      // 83: airlock.v1.RouteInfo
-	(*AgentBuildInfo)(nil),                 // 84: airlock.v1.AgentBuildInfo
-	(*RunInfo)(nil),                        // 85: airlock.v1.RunInfo
-	(*AgentMessageInfo)(nil),               // 86: airlock.v1.AgentMessageInfo
-	(*ConversationInfo)(nil),               // 87: airlock.v1.ConversationInfo
-	(*ToolInfo)(nil),                       // 88: airlock.v1.ToolInfo
-	(*timestamppb.Timestamp)(nil),          // 89: google.protobuf.Timestamp
-	(*BridgeSettings)(nil),                 // 90: airlock.v1.BridgeSettings
-	(*BridgeInfo)(nil),                     // 91: airlock.v1.BridgeInfo
-	(*ProviderCapabilityInfo)(nil),         // 92: airlock.v1.ProviderCapabilityInfo
-	(*PlatformIdentityInfo)(nil),           // 93: airlock.v1.PlatformIdentityInfo
-	(*FileInfo)(nil),                       // 94: airlock.v1.FileInfo
-	(*TopicInfo)(nil),                      // 95: airlock.v1.TopicInfo
-	(*SystemSettingsInfo)(nil),             // 96: airlock.v1.SystemSettingsInfo
+	(*RollbackBuildRequest)(nil),           // 28: airlock.v1.RollbackBuildRequest
+	(*ModelSlotInfo)(nil),                  // 29: airlock.v1.ModelSlotInfo
+	(*AgentModelConfig)(nil),               // 30: airlock.v1.AgentModelConfig
+	(*GetAgentModelConfigResponse)(nil),    // 31: airlock.v1.GetAgentModelConfigResponse
+	(*UpdateAgentModelConfigRequest)(nil),  // 32: airlock.v1.UpdateAgentModelConfigRequest
+	(*UpdateAgentModelConfigResponse)(nil), // 33: airlock.v1.UpdateAgentModelConfigResponse
+	(*ListAgentBuildsResponse)(nil),        // 34: airlock.v1.ListAgentBuildsResponse
+	(*GetAgentBuildResponse)(nil),          // 35: airlock.v1.GetAgentBuildResponse
+	(*ListRunsResponse)(nil),               // 36: airlock.v1.ListRunsResponse
+	(*GetRunResponse)(nil),                 // 37: airlock.v1.GetRunResponse
+	(*CreateConversationRequest)(nil),      // 38: airlock.v1.CreateConversationRequest
+	(*CreateConversationResponse)(nil),     // 39: airlock.v1.CreateConversationResponse
+	(*ListConversationsResponse)(nil),      // 40: airlock.v1.ListConversationsResponse
+	(*GetConversationResponse)(nil),        // 41: airlock.v1.GetConversationResponse
+	(*PaginatedMessagesResponse)(nil),      // 42: airlock.v1.PaginatedMessagesResponse
+	(*PendingConfirmation)(nil),            // 43: airlock.v1.PendingConfirmation
+	(*PromptRequest)(nil),                  // 44: airlock.v1.PromptRequest
+	(*PromptResponse)(nil),                 // 45: airlock.v1.PromptResponse
+	(*ListWebhooksResponse)(nil),           // 46: airlock.v1.ListWebhooksResponse
+	(*ListCronsResponse)(nil),              // 47: airlock.v1.ListCronsResponse
+	(*ListToolsResponse)(nil),              // 48: airlock.v1.ListToolsResponse
+	(*FireCronResponse)(nil),               // 49: airlock.v1.FireCronResponse
+	(*AddAgentMemberRequest)(nil),          // 50: airlock.v1.AddAgentMemberRequest
+	(*AgentMemberInfo)(nil),                // 51: airlock.v1.AgentMemberInfo
+	(*ListAgentMembersResponse)(nil),       // 52: airlock.v1.ListAgentMembersResponse
+	(*ListConnectionsResponse)(nil),        // 53: airlock.v1.ListConnectionsResponse
+	(*SetAPIKeyRequest)(nil),               // 54: airlock.v1.SetAPIKeyRequest
+	(*SetOAuthAppRequest)(nil),             // 55: airlock.v1.SetOAuthAppRequest
+	(*OAuthStartRequest)(nil),              // 56: airlock.v1.OAuthStartRequest
+	(*OAuthStartResponse)(nil),             // 57: airlock.v1.OAuthStartResponse
+	(*CredentialStatusResponse)(nil),       // 58: airlock.v1.CredentialStatusResponse
+	(*TestCredentialResponse)(nil),         // 59: airlock.v1.TestCredentialResponse
+	(*CreateBridgeRequest)(nil),            // 60: airlock.v1.CreateBridgeRequest
+	(*UpdateBridgeRequest)(nil),            // 61: airlock.v1.UpdateBridgeRequest
+	(*ListBridgesResponse)(nil),            // 62: airlock.v1.ListBridgesResponse
+	(*ListCapabilitiesResponse)(nil),       // 63: airlock.v1.ListCapabilitiesResponse
+	(*ListPlatformIdentitiesResponse)(nil), // 64: airlock.v1.ListPlatformIdentitiesResponse
+	(*LinkIdentityPreviewResponse)(nil),    // 65: airlock.v1.LinkIdentityPreviewResponse
+	(*ListFilesResponse)(nil),              // 66: airlock.v1.ListFilesResponse
+	(*UploadFileResponse)(nil),             // 67: airlock.v1.UploadFileResponse
+	(*ListTopicsResponse)(nil),             // 68: airlock.v1.ListTopicsResponse
+	(*GetSystemSettingsResponse)(nil),      // 69: airlock.v1.GetSystemSettingsResponse
+	(*UpdateSystemSettingsRequest)(nil),    // 70: airlock.v1.UpdateSystemSettingsRequest
+	(*UpdateSystemSettingsResponse)(nil),   // 71: airlock.v1.UpdateSystemSettingsResponse
+	(*ErrorResponse)(nil),                  // 72: airlock.v1.ErrorResponse
+	(*HealthResponse)(nil),                 // 73: airlock.v1.HealthResponse
+	(*User)(nil),                           // 74: airlock.v1.User
+	(*Tenant)(nil),                         // 75: airlock.v1.Tenant
+	(*UserSummary)(nil),                    // 76: airlock.v1.UserSummary
+	(*Provider)(nil),                       // 77: airlock.v1.Provider
+	(*ProviderInfo)(nil),                   // 78: airlock.v1.ProviderInfo
+	(*ModelInfo)(nil),                      // 79: airlock.v1.ModelInfo
+	(*AgentInfo)(nil),                      // 80: airlock.v1.AgentInfo
+	(*ConnectionInfo)(nil),                 // 81: airlock.v1.ConnectionInfo
+	(*WebhookInfo)(nil),                    // 82: airlock.v1.WebhookInfo
+	(*CronInfo)(nil),                       // 83: airlock.v1.CronInfo
+	(*RouteInfo)(nil),                      // 84: airlock.v1.RouteInfo
+	(*AgentBuildInfo)(nil),                 // 85: airlock.v1.AgentBuildInfo
+	(*RunInfo)(nil),                        // 86: airlock.v1.RunInfo
+	(*AgentMessageInfo)(nil),               // 87: airlock.v1.AgentMessageInfo
+	(*ConversationInfo)(nil),               // 88: airlock.v1.ConversationInfo
+	(*ToolInfo)(nil),                       // 89: airlock.v1.ToolInfo
+	(*timestamppb.Timestamp)(nil),          // 90: google.protobuf.Timestamp
+	(*BridgeSettings)(nil),                 // 91: airlock.v1.BridgeSettings
+	(*BridgeInfo)(nil),                     // 92: airlock.v1.BridgeInfo
+	(*ProviderCapabilityInfo)(nil),         // 93: airlock.v1.ProviderCapabilityInfo
+	(*PlatformIdentityInfo)(nil),           // 94: airlock.v1.PlatformIdentityInfo
+	(*FileInfo)(nil),                       // 95: airlock.v1.FileInfo
+	(*TopicInfo)(nil),                      // 96: airlock.v1.TopicInfo
+	(*SystemSettingsInfo)(nil),             // 97: airlock.v1.SystemSettingsInfo
 }
 var file_airlock_v1_api_proto_depIdxs = []int32{
-	73, // 0: airlock.v1.RegisterResponse.user:type_name -> airlock.v1.User
-	74, // 1: airlock.v1.RegisterResponse.tenant:type_name -> airlock.v1.Tenant
-	73, // 2: airlock.v1.LoginResponse.user:type_name -> airlock.v1.User
-	73, // 3: airlock.v1.CreateUserResponse.user:type_name -> airlock.v1.User
-	73, // 4: airlock.v1.ListUsersResponse.users:type_name -> airlock.v1.User
-	75, // 5: airlock.v1.ListSelectableUsersResponse.users:type_name -> airlock.v1.UserSummary
-	76, // 6: airlock.v1.CreateProviderResponse.provider:type_name -> airlock.v1.Provider
-	76, // 7: airlock.v1.ListProvidersResponse.providers:type_name -> airlock.v1.Provider
-	76, // 8: airlock.v1.UpdateProviderResponse.provider:type_name -> airlock.v1.Provider
-	77, // 9: airlock.v1.ListCatalogProvidersResponse.providers:type_name -> airlock.v1.ProviderInfo
-	78, // 10: airlock.v1.ListCatalogModelsResponse.models:type_name -> airlock.v1.ModelInfo
-	79, // 11: airlock.v1.CreateAgentResponse.agent:type_name -> airlock.v1.AgentInfo
-	79, // 12: airlock.v1.ListAgentsResponse.agents:type_name -> airlock.v1.AgentInfo
-	79, // 13: airlock.v1.GetAgentDetailResponse.agent:type_name -> airlock.v1.AgentInfo
-	80, // 14: airlock.v1.GetAgentDetailResponse.connections:type_name -> airlock.v1.ConnectionInfo
-	81, // 15: airlock.v1.GetAgentDetailResponse.webhooks:type_name -> airlock.v1.WebhookInfo
-	82, // 16: airlock.v1.GetAgentDetailResponse.crons:type_name -> airlock.v1.CronInfo
-	83, // 17: airlock.v1.GetAgentDetailResponse.routes:type_name -> airlock.v1.RouteInfo
-	79, // 18: airlock.v1.UpdateAgentResponse.agent:type_name -> airlock.v1.AgentInfo
-	28, // 19: airlock.v1.AgentModelConfig.slots:type_name -> airlock.v1.ModelSlotInfo
-	29, // 20: airlock.v1.GetAgentModelConfigResponse.config:type_name -> airlock.v1.AgentModelConfig
-	29, // 21: airlock.v1.UpdateAgentModelConfigRequest.config:type_name -> airlock.v1.AgentModelConfig
-	29, // 22: airlock.v1.UpdateAgentModelConfigResponse.config:type_name -> airlock.v1.AgentModelConfig
-	84, // 23: airlock.v1.ListAgentBuildsResponse.builds:type_name -> airlock.v1.AgentBuildInfo
-	84, // 24: airlock.v1.GetAgentBuildResponse.build:type_name -> airlock.v1.AgentBuildInfo
-	85, // 25: airlock.v1.ListRunsResponse.runs:type_name -> airlock.v1.RunInfo
-	85, // 26: airlock.v1.GetRunResponse.run:type_name -> airlock.v1.RunInfo
-	86, // 27: airlock.v1.GetRunResponse.messages:type_name -> airlock.v1.AgentMessageInfo
-	87, // 28: airlock.v1.CreateConversationResponse.conversation:type_name -> airlock.v1.ConversationInfo
-	87, // 29: airlock.v1.ListConversationsResponse.conversations:type_name -> airlock.v1.ConversationInfo
-	87, // 30: airlock.v1.GetConversationResponse.conversation:type_name -> airlock.v1.ConversationInfo
-	86, // 31: airlock.v1.GetConversationResponse.messages:type_name -> airlock.v1.AgentMessageInfo
-	42, // 32: airlock.v1.GetConversationResponse.pending_confirmation:type_name -> airlock.v1.PendingConfirmation
-	86, // 33: airlock.v1.PaginatedMessagesResponse.messages:type_name -> airlock.v1.AgentMessageInfo
-	81, // 34: airlock.v1.ListWebhooksResponse.webhooks:type_name -> airlock.v1.WebhookInfo
-	82, // 35: airlock.v1.ListCronsResponse.crons:type_name -> airlock.v1.CronInfo
-	88, // 36: airlock.v1.ListToolsResponse.tools:type_name -> airlock.v1.ToolInfo
-	89, // 37: airlock.v1.AgentMemberInfo.created_at:type_name -> google.protobuf.Timestamp
-	50, // 38: airlock.v1.ListAgentMembersResponse.members:type_name -> airlock.v1.AgentMemberInfo
-	80, // 39: airlock.v1.ListConnectionsResponse.connections:type_name -> airlock.v1.ConnectionInfo
-	89, // 40: airlock.v1.CredentialStatusResponse.token_expires_at:type_name -> google.protobuf.Timestamp
-	90, // 41: airlock.v1.UpdateBridgeRequest.settings:type_name -> airlock.v1.BridgeSettings
-	91, // 42: airlock.v1.ListBridgesResponse.bridges:type_name -> airlock.v1.BridgeInfo
-	92, // 43: airlock.v1.ListCapabilitiesResponse.providers:type_name -> airlock.v1.ProviderCapabilityInfo
-	93, // 44: airlock.v1.ListPlatformIdentitiesResponse.identities:type_name -> airlock.v1.PlatformIdentityInfo
-	94, // 45: airlock.v1.ListFilesResponse.files:type_name -> airlock.v1.FileInfo
-	95, // 46: airlock.v1.ListTopicsResponse.topics:type_name -> airlock.v1.TopicInfo
-	96, // 47: airlock.v1.GetSystemSettingsResponse.settings:type_name -> airlock.v1.SystemSettingsInfo
-	96, // 48: airlock.v1.UpdateSystemSettingsRequest.settings:type_name -> airlock.v1.SystemSettingsInfo
-	96, // 49: airlock.v1.UpdateSystemSettingsResponse.settings:type_name -> airlock.v1.SystemSettingsInfo
+	74, // 0: airlock.v1.RegisterResponse.user:type_name -> airlock.v1.User
+	75, // 1: airlock.v1.RegisterResponse.tenant:type_name -> airlock.v1.Tenant
+	74, // 2: airlock.v1.LoginResponse.user:type_name -> airlock.v1.User
+	74, // 3: airlock.v1.CreateUserResponse.user:type_name -> airlock.v1.User
+	74, // 4: airlock.v1.ListUsersResponse.users:type_name -> airlock.v1.User
+	76, // 5: airlock.v1.ListSelectableUsersResponse.users:type_name -> airlock.v1.UserSummary
+	77, // 6: airlock.v1.CreateProviderResponse.provider:type_name -> airlock.v1.Provider
+	77, // 7: airlock.v1.ListProvidersResponse.providers:type_name -> airlock.v1.Provider
+	77, // 8: airlock.v1.UpdateProviderResponse.provider:type_name -> airlock.v1.Provider
+	78, // 9: airlock.v1.ListCatalogProvidersResponse.providers:type_name -> airlock.v1.ProviderInfo
+	79, // 10: airlock.v1.ListCatalogModelsResponse.models:type_name -> airlock.v1.ModelInfo
+	80, // 11: airlock.v1.CreateAgentResponse.agent:type_name -> airlock.v1.AgentInfo
+	80, // 12: airlock.v1.ListAgentsResponse.agents:type_name -> airlock.v1.AgentInfo
+	80, // 13: airlock.v1.GetAgentDetailResponse.agent:type_name -> airlock.v1.AgentInfo
+	81, // 14: airlock.v1.GetAgentDetailResponse.connections:type_name -> airlock.v1.ConnectionInfo
+	82, // 15: airlock.v1.GetAgentDetailResponse.webhooks:type_name -> airlock.v1.WebhookInfo
+	83, // 16: airlock.v1.GetAgentDetailResponse.crons:type_name -> airlock.v1.CronInfo
+	84, // 17: airlock.v1.GetAgentDetailResponse.routes:type_name -> airlock.v1.RouteInfo
+	80, // 18: airlock.v1.UpdateAgentResponse.agent:type_name -> airlock.v1.AgentInfo
+	29, // 19: airlock.v1.AgentModelConfig.slots:type_name -> airlock.v1.ModelSlotInfo
+	30, // 20: airlock.v1.GetAgentModelConfigResponse.config:type_name -> airlock.v1.AgentModelConfig
+	30, // 21: airlock.v1.UpdateAgentModelConfigRequest.config:type_name -> airlock.v1.AgentModelConfig
+	30, // 22: airlock.v1.UpdateAgentModelConfigResponse.config:type_name -> airlock.v1.AgentModelConfig
+	85, // 23: airlock.v1.ListAgentBuildsResponse.builds:type_name -> airlock.v1.AgentBuildInfo
+	85, // 24: airlock.v1.GetAgentBuildResponse.build:type_name -> airlock.v1.AgentBuildInfo
+	86, // 25: airlock.v1.ListRunsResponse.runs:type_name -> airlock.v1.RunInfo
+	86, // 26: airlock.v1.GetRunResponse.run:type_name -> airlock.v1.RunInfo
+	87, // 27: airlock.v1.GetRunResponse.messages:type_name -> airlock.v1.AgentMessageInfo
+	88, // 28: airlock.v1.CreateConversationResponse.conversation:type_name -> airlock.v1.ConversationInfo
+	88, // 29: airlock.v1.ListConversationsResponse.conversations:type_name -> airlock.v1.ConversationInfo
+	88, // 30: airlock.v1.GetConversationResponse.conversation:type_name -> airlock.v1.ConversationInfo
+	87, // 31: airlock.v1.GetConversationResponse.messages:type_name -> airlock.v1.AgentMessageInfo
+	43, // 32: airlock.v1.GetConversationResponse.pending_confirmation:type_name -> airlock.v1.PendingConfirmation
+	87, // 33: airlock.v1.PaginatedMessagesResponse.messages:type_name -> airlock.v1.AgentMessageInfo
+	82, // 34: airlock.v1.ListWebhooksResponse.webhooks:type_name -> airlock.v1.WebhookInfo
+	83, // 35: airlock.v1.ListCronsResponse.crons:type_name -> airlock.v1.CronInfo
+	89, // 36: airlock.v1.ListToolsResponse.tools:type_name -> airlock.v1.ToolInfo
+	90, // 37: airlock.v1.AgentMemberInfo.created_at:type_name -> google.protobuf.Timestamp
+	51, // 38: airlock.v1.ListAgentMembersResponse.members:type_name -> airlock.v1.AgentMemberInfo
+	81, // 39: airlock.v1.ListConnectionsResponse.connections:type_name -> airlock.v1.ConnectionInfo
+	90, // 40: airlock.v1.CredentialStatusResponse.token_expires_at:type_name -> google.protobuf.Timestamp
+	91, // 41: airlock.v1.UpdateBridgeRequest.settings:type_name -> airlock.v1.BridgeSettings
+	92, // 42: airlock.v1.ListBridgesResponse.bridges:type_name -> airlock.v1.BridgeInfo
+	93, // 43: airlock.v1.ListCapabilitiesResponse.providers:type_name -> airlock.v1.ProviderCapabilityInfo
+	94, // 44: airlock.v1.ListPlatformIdentitiesResponse.identities:type_name -> airlock.v1.PlatformIdentityInfo
+	95, // 45: airlock.v1.ListFilesResponse.files:type_name -> airlock.v1.FileInfo
+	96, // 46: airlock.v1.ListTopicsResponse.topics:type_name -> airlock.v1.TopicInfo
+	97, // 47: airlock.v1.GetSystemSettingsResponse.settings:type_name -> airlock.v1.SystemSettingsInfo
+	97, // 48: airlock.v1.UpdateSystemSettingsRequest.settings:type_name -> airlock.v1.SystemSettingsInfo
+	97, // 49: airlock.v1.UpdateSystemSettingsResponse.settings:type_name -> airlock.v1.SystemSettingsInfo
 	50, // [50:50] is the sub-list for method output_type
 	50, // [50:50] is the sub-list for method input_type
 	50, // [50:50] is the sub-list for extension type_name
@@ -4597,14 +4657,14 @@ func file_airlock_v1_api_proto_init() {
 	file_airlock_v1_types_proto_init()
 	file_airlock_v1_api_proto_msgTypes[17].OneofWrappers = []any{}
 	file_airlock_v1_api_proto_msgTypes[25].OneofWrappers = []any{}
-	file_airlock_v1_api_proto_msgTypes[43].OneofWrappers = []any{}
+	file_airlock_v1_api_proto_msgTypes[44].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_airlock_v1_api_proto_rawDesc), len(file_airlock_v1_api_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   73,
+			NumMessages:   74,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

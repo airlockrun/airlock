@@ -192,6 +192,126 @@ func TestCommitAndPush(t *testing.T) {
 	}
 }
 
+func TestSaveRefAndResetHard(t *testing.T) {
+	base := t.TempDir()
+	agentID := "ref-agent"
+	if err := InitAgentRepo(base, agentID); err != nil {
+		t.Fatalf("InitAgentRepo: %v", err)
+	}
+	repoPath := AgentRepoPath(base, agentID)
+
+	data := scaffold.ScaffoldData{
+		AgentID:         agentID,
+		Module:          "agent",
+		GoVersion:       "1.26",
+		AgentSDKVersion: "v1.0.0",
+	}
+	firstHash, err := CommitScaffold(repoPath, data)
+	if err != nil {
+		t.Fatalf("CommitScaffold: %v", err)
+	}
+	if err := MergeBranch(repoPath, "build/init"); err != nil {
+		t.Fatalf("MergeBranch: %v", err)
+	}
+
+	// Add a second commit on main to roll back from.
+	if err := os.WriteFile(filepath.Join(repoPath, "feature.txt"), []byte("forward work"), 0o644); err != nil {
+		t.Fatalf("write feature: %v", err)
+	}
+	if err := git(repoPath, "add", "feature.txt"); err != nil {
+		t.Fatalf("git add: %v", err)
+	}
+	if err := git(repoPath, "commit", "-m", "feature"); err != nil {
+		t.Fatalf("git commit: %v", err)
+	}
+	secondHash, err := gitOutput(repoPath, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatalf("rev-parse: %v", err)
+	}
+
+	// Save current HEAD as a recovery ref, then reset main to the first
+	// commit. Verify both are reachable from the right places.
+	if err := SaveRef(repoPath, "pre-rollback/test", "HEAD"); err != nil {
+		t.Fatalf("SaveRef: %v", err)
+	}
+	// Saving the same ref again must fail — caller must pick a unique name.
+	if err := SaveRef(repoPath, "pre-rollback/test", "HEAD"); err == nil {
+		t.Fatal("SaveRef should fail on existing ref")
+	}
+
+	if err := ResetHard(repoPath, firstHash); err != nil {
+		t.Fatalf("ResetHard: %v", err)
+	}
+	head, err := gitOutput(repoPath, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatalf("rev-parse HEAD: %v", err)
+	}
+	if head != firstHash {
+		t.Fatalf("HEAD = %s, want %s after reset", head, firstHash)
+	}
+
+	// The forward commit must still be reachable via the saved ref.
+	savedHead, err := gitOutput(repoPath, "rev-parse", "pre-rollback/test")
+	if err != nil {
+		t.Fatalf("rev-parse saved ref: %v", err)
+	}
+	if savedHead != secondHash {
+		t.Fatalf("pre-rollback/test = %s, want %s", savedHead, secondHash)
+	}
+
+	// Working tree should be back to the first commit's state.
+	if _, err := os.Stat(filepath.Join(repoPath, "feature.txt")); !os.IsNotExist(err) {
+		t.Fatalf("feature.txt should be gone after reset, stat: %v", err)
+	}
+}
+
+func TestMigrationVersionAt(t *testing.T) {
+	base := t.TempDir()
+	agentID := "mig-agent"
+	if err := InitAgentRepo(base, agentID); err != nil {
+		t.Fatalf("InitAgentRepo: %v", err)
+	}
+	repoPath := AgentRepoPath(base, agentID)
+
+	// Commit A: no migrations dir at all.
+	commitA, err := gitOutput(repoPath, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatalf("rev-parse: %v", err)
+	}
+	if v, err := MigrationVersionAt(repoPath, commitA); err != nil || v != 0 {
+		t.Fatalf("commit A: got v=%d err=%v, want 0,nil", v, err)
+	}
+
+	// Commit B: add 0001 + 0003 migrations and a README (skip non-numeric).
+	mig := filepath.Join(repoPath, "migrations")
+	if err := os.MkdirAll(mig, 0o755); err != nil {
+		t.Fatalf("mkdir migrations: %v", err)
+	}
+	for _, name := range []string{"0001_init.sql", "0003_users.go", "README.md"} {
+		if err := os.WriteFile(filepath.Join(mig, name), []byte("-- "+name), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	if err := git(repoPath, "add", "migrations"); err != nil {
+		t.Fatalf("git add migrations: %v", err)
+	}
+	if err := git(repoPath, "commit", "-m", "add migrations"); err != nil {
+		t.Fatalf("git commit: %v", err)
+	}
+	commitB, err := gitOutput(repoPath, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatalf("rev-parse: %v", err)
+	}
+	if v, err := MigrationVersionAt(repoPath, commitB); err != nil || v != 3 {
+		t.Fatalf("commit B: got v=%d err=%v, want 3,nil", v, err)
+	}
+
+	// Commit A still resolves to 0 even though commit B has migrations.
+	if v, err := MigrationVersionAt(repoPath, commitA); err != nil || v != 0 {
+		t.Fatalf("commit A re-check: got v=%d err=%v, want 0,nil", v, err)
+	}
+}
+
 func TestRemoveAgentRepo(t *testing.T) {
 	base := t.TempDir()
 	agentID := "rm-agent"

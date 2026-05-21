@@ -4,16 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
+	"strings"
 
-	"github.com/airlockrun/agentsdk"
-	"github.com/airlockrun/airlock/auth"
-	"github.com/airlockrun/airlock/container"
 	"github.com/airlockrun/airlock/db/dbq"
-	"github.com/airlockrun/airlock/scaffold"
-	sol "github.com/airlockrun/sol"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"
 )
 
@@ -81,8 +75,11 @@ func (b *BuildService) AcquireUpgradeLock(ctx context.Context, agentID string) e
 	return tx.Commit(ctx)
 }
 
-// RunUpgrade executes the upgrade pipeline for an agent that already has
-// its upgrade_status set to "building" via AcquireUpgradeLock.
+// RunUpgrade executes the upgrade pipeline for an agent whose
+// upgrade_status was set to "building" via AcquireUpgradeLock. Thin
+// wrapper over Execute that handles the upgrade-specific outer
+// lifecycle: route Execute's outcome into agents.upgrade_status and
+// post the single conversation message describing the result.
 func (b *BuildService) RunUpgrade(_ context.Context, input UpgradeInput) {
 	ctx, cancel := b.startBuild(input.AgentID)
 	defer cancel()
@@ -100,52 +97,47 @@ func (b *BuildService) RunUpgrade(_ context.Context, input UpgradeInput) {
 	q := dbq.New(b.db.Pool())
 	agentPgUUID := mustParseUUID(input.AgentID)
 	agentUUID, _ := uuid.Parse(input.AgentID)
-	dbCtx := context.Background() // for DB updates after cancellation
+	dbCtx := context.Background()
 
-	// Create the agent_builds record up-front so the "started" event can
-	// carry its ID (frontend uses it to fetch the REST snapshot).
-	upgradeInstructions := fmt.Sprintf("Reason: %s\nDescription: %s", input.Reason, input.Description)
-	if input.ErrorMessage != "" {
-		upgradeInstructions += fmt.Sprintf("\nError: %s", input.ErrorMessage)
-	}
-	if input.Messages != "" {
-		upgradeInstructions += fmt.Sprintf("\nMessages:\n%s", input.Messages)
-	}
-	build, err := q.CreateAgentBuild(ctx, dbq.CreateAgentBuildParams{
-		AgentID:      agentPgUUID,
-		Type:         "upgrade",
-		Instructions: upgradeInstructions,
-	})
+	agent, err := q.GetAgentByID(ctx, agentPgUUID)
 	if err != nil {
-		b.logger.Error("create upgrade build record", zap.Error(err))
+		b.logger.Error("load agent for upgrade", zap.Error(err))
+		_ = q.UpdateAgentUpgradeStatus(dbCtx, dbq.UpdateAgentUpgradeStatusParams{
+			ID:            agentPgUUID,
+			UpgradeStatus: "failed",
+			ErrorMessage:  err.Error(),
+		})
 		return
 	}
-	buildUUID := uuid.UUID(build.ID.Bytes)
 
-	b.events.PublishBuildEvent(ctx, agentUUID, buildUUID, "started", "")
+	plan := BuildPlan{
+		Agent:          agent,
+		Kind:           BuildKindUpgrade,
+		Instruction:    strings.TrimSpace(input.Description),
+		Reason:         input.Reason,
+		RunID:          input.RunID,
+		ConversationID: input.ConversationID,
+		Diagnostics:    autoFixContextFromInput(input),
+	}
 
-	successMsg, err := b.doUpgrade(ctx, q, input, build)
-	if err != nil {
-		event := "failed"
-		errMsg := err.Error()
-		if errors.Is(err, context.Canceled) {
-			event = "cancelled"
+	successMsg, runErr := b.Execute(ctx, plan)
+	if runErr != nil {
+		errMsg := runErr.Error()
+		if errors.Is(runErr, context.Canceled) {
 			errMsg = "cancelled by user"
 			b.logger.Info("upgrade cancelled", zap.String("agent_id", input.AgentID))
 		} else {
-			b.logger.Error("upgrade failed", zap.String("agent_id", input.AgentID), zap.Error(err))
+			b.logger.Error("upgrade failed", zap.String("agent_id", input.AgentID), zap.Error(runErr))
 		}
 		_ = q.UpdateAgentUpgradeStatus(dbCtx, dbq.UpdateAgentUpgradeStatusParams{
 			ID:            agentPgUUID,
 			UpgradeStatus: "failed",
 			ErrorMessage:  errMsg,
 		})
-		b.events.PublishBuildEvent(dbCtx, agentUUID, buildUUID, event, errMsg)
-		// Surface the failure as a single conversation message too —
-		// previously the user only saw "still spinning" then nothing.
-		// Cancellation skips the notification (the cancel button toast
-		// already covered it).
-		if event != "cancelled" && input.ConversationID != "" && b.upgradeNotifier != nil {
+		// Surface the failure as a single conversation message — without
+		// it the user only sees "still spinning" then nothing.
+		// Cancellation skips the notification (the toast already covered it).
+		if !errors.Is(runErr, context.Canceled) && input.ConversationID != "" && b.upgradeNotifier != nil {
 			if nerr := b.upgradeNotifier.NotifyUpgradeComplete(dbCtx, agentUUID, input.ConversationID, "error", errMsg); nerr != nil {
 				b.logger.Error("post-upgrade error notification failed", zap.Error(nerr))
 			}
@@ -154,8 +146,6 @@ func (b *BuildService) RunUpgrade(_ context.Context, input UpgradeInput) {
 	}
 
 	b.logger.Info("upgrade completed", zap.String("agent_id", input.AgentID))
-	b.events.PublishBuildEvent(dbCtx, agentUUID, buildUUID, "complete", "")
-
 	_ = q.UpdateAgentUpgradeStatus(dbCtx, dbq.UpdateAgentUpgradeStatusParams{
 		ID:            agentPgUUID,
 		UpgradeStatus: "idle",
@@ -166,9 +156,6 @@ func (b *BuildService) RunUpgrade(_ context.Context, input UpgradeInput) {
 	// agent-builder's exit tool already produced the user-facing summary
 	// (successMsg), so no LLM follow-up turn is needed.
 	if input.ConversationID != "" && b.upgradeNotifier != nil {
-		// Fall back to the user's original description if the agent
-		// somehow returned an empty exit message (shouldn't happen with
-		// the nudge loop, but cheap defense).
 		msg := successMsg
 		if msg == "" {
 			msg = "Upgrade complete: " + input.Description
@@ -179,343 +166,19 @@ func (b *BuildService) RunUpgrade(_ context.Context, input UpgradeInput) {
 	}
 }
 
-// doUpgrade returns the agent-builder's exit-tool success message
-// alongside the err. Caller plumbs successMsg into the conversation
-// notification so the user sees the agent's own summary of what
-// changed instead of the canned "Upgrade complete: <description>" we
-// used to post.
-func (b *BuildService) doUpgrade(ctx context.Context, q *dbq.Queries, input UpgradeInput, build dbq.AgentBuild) (string, error) {
-	agentPgUUID := mustParseUUID(input.AgentID)
-	agentID := input.AgentID
-	repoPath := b.AgentRepoPath(agentID)
-	buildUUID := uuid.UUID(build.ID.Bytes)
-
-	// Load full agent record
-	agent, err := q.GetAgentByID(ctx, agentPgUUID)
-	if err != nil {
-		return "", fmt.Errorf("get agent: %w", err)
+// autoFixContextFromInput returns a populated AutoFixContext when the
+// UpgradeInput carries any failure context (auto_fix path), otherwise
+// nil. Execute uses the nil/non-nil distinction to decide whether to
+// write DIAGNOSTICS.md before invoking Sol.
+func autoFixContextFromInput(input UpgradeInput) *AutoFixContext {
+	if input.ErrorMessage == "" && input.PanicTrace == "" && input.InputPayload == "" && input.Actions == "" && input.Messages == "" {
+		return nil
 	}
-
-	agentUUID, _ := uuid.Parse(agentID)
-
-	bl := newBuildLog(q, build.ID, b.logger)
-	defer bl.close()
-
-	completeBuild := func(status, errMsg, sourceRef, imageRef string) {
-		_ = q.UpdateAgentBuildComplete(context.Background(), dbq.UpdateAgentBuildCompleteParams{
-			ID:           build.ID,
-			Status:       status,
-			ErrorMessage: errMsg,
-			SourceRef:    sourceRef,
-			ImageRef:     imageRef,
-		})
+	return &AutoFixContext{
+		ErrorMessage: input.ErrorMessage,
+		PanicTrace:   input.PanicTrace,
+		InputPayload: input.InputPayload,
+		Actions:      input.Actions,
+		Messages:     input.Messages,
 	}
-
-	// Bare rebuild: re-image the CURRENT source against the current
-	// /libs agentsdk. No schema clone, no checkout, no Sol, no
-	// commit/merge — no code touched. SDK drift that breaks
-	// compilation surfaces as a build error directing the user to
-	// Upgrade with a description (no auto-codegen on rebuild).
-	if isRebuild(input) {
-		return b.rebuildImage(ctx, q, agent, agentID, agentPgUUID, agentUUID, buildUUID, bl, completeBuild)
-	}
-
-	// Step 2: Clone schema for safe upgrade testing + migration validation.
-	sourceSchema := fmt.Sprintf("agent_%s", sanitizeUUID(agentID))
-	cloneName := fmt.Sprintf("agent_%s_upgrade_%s", sanitizeUUID(agentID), sanitizeUUID(input.RunID))
-	if err := b.cloneSchema(ctx, sourceSchema, cloneName, sourceSchema); err != nil {
-		return "", fmt.Errorf("clone schema: %w", err)
-	}
-	defer func() {
-		if err := b.dropSchemaClone(ctx, cloneName); err != nil {
-			b.logger.Warn("failed to drop clone schema", zap.Error(err))
-		}
-	}()
-
-	// Decrypt DB password (needed for test URL and later for container start).
-	dbPassword, err := b.encryptor.Get(ctx, "agent/"+agentID+"/db_password", agent.DbPassword)
-	if err != nil {
-		return "", fmt.Errorf("decrypt db password: %w", err)
-	}
-	testDBURL := b.agentDBURL(sourceSchema, dbPassword, cloneName)
-
-	// Step 3: Create upgrade branch in the agent's repo
-	if err := CreateUpgradeBranch(repoPath, input.RunID); err != nil {
-		return "", fmt.Errorf("create upgrade branch: %w", err)
-	}
-
-	// Step 4: Clone agent repo into per-upgrade workspace
-	workDir, err := b.makeCodegenTempDir("airlock-upgrade-*")
-	if err != nil {
-		return "", fmt.Errorf("create temp dir: %w", err)
-	}
-	defer os.RemoveAll(workDir)
-
-	branch := UpgradeBranchName(input.RunID)
-	if err := CloneAgentRepo(repoPath, branch, workDir); err != nil {
-		return "", fmt.Errorf("clone agent repo: %w", err)
-	}
-
-	// Step 5: Write failure diagnostics (only when the upgrade carries
-	// error context — auto_fix path). The change request itself is
-	// delivered as the Sol user turn below, not as a spec file. With
-	// per-agent repos the agent source IS the workDir root.
-	hasDiagnostics, err := writeUpgradeDiagnostics(workDir, input)
-	if err != nil {
-		return "", fmt.Errorf("write upgrade diagnostics: %w", err)
-	}
-
-	if ctx.Err() != nil {
-		completeBuild("cancelled", "cancelled by user", "", "")
-		return "", ctx.Err()
-	}
-
-	// Step 6: Run Sol. Pass the agent's build model verbatim — empty
-	// string is fine, runSolInProcess falls back to the system-wide
-	// default (settings.default_build_model) when no per-agent override
-	// is set.
-	logLine := func(line string) {
-		seq := bl.appendSol(line)
-		b.events.PublishBuildLogLine(ctx, agentUUID, buildUUID, seq, "sol", line)
-	}
-
-	solResult, err := b.runSolInProcess(ctx, solRunOpts{
-		WorkDir:      workDir,
-		AgentDir:     "/workspace",
-		AgentID:      agent.ID,
-		BuildID:      build.ID,
-		BuildType:    "upgrade",
-		BuildModel:   agent.BuildModel,
-		Prompt:       buildUpgradePrompt(agent, input, hasDiagnostics),
-		TestDBURL:    testDBURL,
-		TestDBPSQL:   b.agentDBURLBase(b.cfg.DBHostAgent, sourceSchema, dbPassword),
-		TestDBSchema: cloneName,
-		LogCallback:  logLine,
-	})
-	if err != nil {
-		completeBuild("failed", err.Error(), "", "")
-		return "", fmt.Errorf("sol upgrade: %w", err)
-	}
-
-	// Step 7: Check result. Same exit-tool mapping as runBuildCodegen —
-	// see that function for the full rationale.
-	if solResult.Status != sol.RunExited {
-		if solResult.Status == sol.RunCompleted {
-			b.logger.Error("sol upgrade did not call exit tool")
-			completeBuild("failed", "agent did not call the exit tool", "", "")
-			return "", errors.New("upgrade failed: agent did not call the exit tool")
-		}
-		errMsg := "unknown error"
-		if solResult.Error != nil {
-			errMsg = solResult.Error.Error()
-		}
-		b.logger.Error("sol upgrade failed", zap.String("status", string(solResult.Status)), zap.String("error", errMsg))
-		completeBuild("failed", errMsg, "", "")
-		if solResult.Error != nil {
-			return "", fmt.Errorf("upgrade failed: %w", solResult.Error)
-		}
-		return "", errors.New("upgrade failed")
-	}
-	if solResult.ExitStatus != "success" {
-		b.logger.Error("sol upgrade reported error", zap.String("message", solResult.ExitMessage))
-		completeBuild("failed", solResult.ExitMessage, "", "")
-		// Return the exit message verbatim — the conversation
-		// notification reads err.Error() and surfaces it as the
-		// "agent reports it failed because…" line for the user.
-		return "", errors.New(solResult.ExitMessage)
-	}
-
-	// Step 9: Commit and push
-	hash, err := CommitAndPush(workDir, fmt.Sprintf("upgrade agent %s: %s", agentID, input.Reason))
-	if err != nil {
-		completeBuild("failed", err.Error(), "", "")
-		return "", fmt.Errorf("commit upgrade: %w", err)
-	}
-	b.logger.Info("upgrade committed", zap.String("commit", hash))
-
-	// Step 10: Merge
-	if err := MergeBranch(repoPath, branch); err != nil {
-		completeBuild("failed", err.Error(), "", "")
-		return "", fmt.Errorf("merge upgrade: %w", err)
-	}
-
-	if ctx.Err() != nil {
-		completeBuild("cancelled", "cancelled by user", hash, "")
-		return "", ctx.Err()
-	}
-
-	// Step 11: Build image. Per-agent repo → contextDir = repoPath.
-	contextDir := repoPath
-	if err := scaffold.GenerateDockerfile(contextDir, scaffold.ScaffoldData{
-		AgentID:         agentID,
-		Module:          "agent",
-		GoVersion:       "1.26",
-		AgentSDKVersion: "v" + agentsdk.Version,
-		AgentBaseImage:  b.cfg.AgentBaseImage,
-	}); err != nil {
-		completeBuild("failed", err.Error(), hash, "")
-		return "", fmt.Errorf("generate Dockerfile: %w", err)
-	}
-	// Bump the agent's go.mod require line to the current SDK version so
-	// gopls/editor tooling shows what the build is actually linking against
-	// (the replace directive shadows it for compilation).
-	if err := bumpAgentSDKRequire(ctx, contextDir, agentsdk.Version); err != nil {
-		completeBuild("failed", err.Error(), hash, "")
-		return "", fmt.Errorf("bump agent SDK require: %w", err)
-	}
-	imageTag, err := buildImage(ctx, b.cfg, agentID, contextDir, hash, func(line string) {
-		seq := bl.appendDocker(line)
-		b.events.PublishBuildLogLine(ctx, agentUUID, buildUUID, seq, "docker", line)
-	})
-	if err != nil {
-		completeBuild("failed", err.Error(), hash, "")
-		return "", fmt.Errorf("build image: %w", err)
-	}
-
-	// Validate migrations against the clone schema by running the new image.
-	upgradeTestDBURL := b.agentDBURL(sourceSchema, dbPassword, cloneName)
-	if err := b.validateMigrations(ctx, imageTag, upgradeTestDBURL, logLine); err != nil {
-		completeBuild("failed", err.Error(), hash, imageTag)
-		return "", fmt.Errorf("migration validation: %w", err)
-	}
-
-	if ctx.Err() != nil {
-		completeBuild("cancelled", "cancelled by user", hash, imageTag)
-		return "", ctx.Err()
-	}
-
-	// Stop old container
-	if agent.ImageRef != "" {
-		_ = b.containers.StopAgent(ctx, "airlock-agent-"+agentUUID.String()[:8])
-	}
-
-	// Start new container (dbPassword already decrypted above).
-	schemaName := fmt.Sprintf("agent_%s", sanitizeUUID(agentID))
-	agentToken, err := auth.IssueAgentToken(b.cfg.JWTSecret, agentUUID)
-	if err != nil {
-		completeBuild("failed", err.Error(), hash, imageTag)
-		return "", fmt.Errorf("issue agent token: %w", err)
-	}
-	agentDBURL := b.agentDBURL(schemaName, dbPassword, schemaName)
-	_, err = b.containers.StartAgent(ctx, container.AgentOpts{
-		AgentID: agentUUID,
-		Image:   imageTag,
-		Env: map[string]string{
-			"AIRLOCK_AGENT_ID":    agentID,
-			"AIRLOCK_API_URL":     b.cfg.APIURLAgent,
-			"AIRLOCK_DB_URL":      agentDBURL,
-			"AIRLOCK_AGENT_TOKEN": agentToken,
-		},
-	})
-	if err != nil {
-		completeBuild("failed", err.Error(), hash, imageTag)
-		return "", fmt.Errorf("start upgraded agent: %w", err)
-	}
-
-	// Update refs
-	if err := q.UpdateAgentRefs(ctx, dbq.UpdateAgentRefsParams{
-		ID:        agentPgUUID,
-		SourceRef: hash,
-		ImageRef:  imageTag,
-	}); err != nil {
-		return "", fmt.Errorf("update refs: %w", err)
-	}
-
-	completeBuild("complete", "", hash, imageTag)
-	return solResult.ExitMessage, nil
-}
-
-// rebuildImage re-images the agent's CURRENT source against the current
-// /libs agentsdk and swaps the running container to it. No code is
-// touched: it builds from the agent's recorded source_ref via the
-// monorepo working tree (only this agent's subtree, unchanged since
-// that ref), regenerating only the build-mechanics files (Dockerfile,
-// go.mod require line) that every build regenerates anyway.
-//
-// If the source no longer compiles against the current agentsdk (a
-// fleet-wide, operator-visible SDK API break), the docker build fails
-// and we surface that verbatim with a pointer to Upgrade-with-a-
-// description. There is deliberately no automatic codegen fallback on
-// the rebuild path — adapting code is a deliberate Upgrade, not a
-// silent side effect of a bulk rebuild.
-func (b *BuildService) rebuildImage(ctx context.Context, q *dbq.Queries, agent dbq.Agent, agentID string, agentPgUUID pgtype.UUID, agentUUID, buildUUID uuid.UUID, bl *buildLog, completeBuild func(status, errMsg, sourceRef, imageRef string)) (string, error) {
-	hash := agent.SourceRef
-	if hash == "" {
-		completeBuild("failed", "agent has no source ref to rebuild from", "", "")
-		return "", errors.New("rebuild: agent has no source ref")
-	}
-
-	dbPassword, err := b.encryptor.Get(ctx, "agent/"+agentID+"/db_password", agent.DbPassword)
-	if err != nil {
-		return "", fmt.Errorf("decrypt db password: %w", err)
-	}
-
-	contextDir := b.AgentRepoPath(agentID)
-	if err := scaffold.GenerateDockerfile(contextDir, scaffold.ScaffoldData{
-		AgentID:         agentID,
-		Module:          "agent",
-		GoVersion:       "1.26",
-		AgentSDKVersion: "v" + agentsdk.Version,
-		AgentBaseImage:  b.cfg.AgentBaseImage,
-	}); err != nil {
-		completeBuild("failed", err.Error(), hash, "")
-		return "", fmt.Errorf("generate Dockerfile: %w", err)
-	}
-	if err := bumpAgentSDKRequire(ctx, contextDir, agentsdk.Version); err != nil {
-		completeBuild("failed", err.Error(), hash, "")
-		return "", fmt.Errorf("bump agent SDK require: %w", err)
-	}
-
-	imageTag, err := buildImage(ctx, b.cfg, agentID, contextDir, hash, func(line string) {
-		seq := bl.appendDocker(line)
-		b.events.PublishBuildLogLine(ctx, agentUUID, buildUUID, seq, "docker", line)
-	})
-	if err != nil {
-		msg := fmt.Sprintf("rebuild failed to compile against the current agentsdk. "+
-			"If the SDK API changed, re-run Upgrade with a short description so the "+
-			"builder can adapt the code.\n\n%s", err.Error())
-		completeBuild("failed", msg, hash, "")
-		return "", errors.New(msg)
-	}
-
-	if ctx.Err() != nil {
-		completeBuild("cancelled", "cancelled by user", hash, imageTag)
-		return "", ctx.Err()
-	}
-
-	// Swap the running container to the freshly built image.
-	if agent.ImageRef != "" {
-		_ = b.containers.StopAgent(ctx, "airlock-agent-"+agentUUID.String()[:8])
-	}
-	schemaName := fmt.Sprintf("agent_%s", sanitizeUUID(agentID))
-	agentToken, err := auth.IssueAgentToken(b.cfg.JWTSecret, agentUUID)
-	if err != nil {
-		completeBuild("failed", err.Error(), hash, imageTag)
-		return "", fmt.Errorf("issue agent token: %w", err)
-	}
-	agentDBURL := b.agentDBURL(schemaName, dbPassword, schemaName)
-	if _, err := b.containers.StartAgent(ctx, container.AgentOpts{
-		AgentID: agentUUID,
-		Image:   imageTag,
-		Env: map[string]string{
-			"AIRLOCK_AGENT_ID":    agentID,
-			"AIRLOCK_API_URL":     b.cfg.APIURLAgent,
-			"AIRLOCK_DB_URL":      agentDBURL,
-			"AIRLOCK_AGENT_TOKEN": agentToken,
-		},
-	}); err != nil {
-		completeBuild("failed", err.Error(), hash, imageTag)
-		return "", fmt.Errorf("start rebuilt agent: %w", err)
-	}
-
-	if err := q.UpdateAgentRefs(ctx, dbq.UpdateAgentRefsParams{
-		ID:        agentPgUUID,
-		SourceRef: hash,
-		ImageRef:  imageTag,
-	}); err != nil {
-		return "", fmt.Errorf("update refs: %w", err)
-	}
-
-	completeBuild("complete", "", hash, imageTag)
-	return "Rebuilt against the current agentsdk (no code changes).", nil
 }
