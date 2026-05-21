@@ -655,8 +655,8 @@ func (h *agentsHandler) Upgrade(w http.ResponseWriter, r *http.Request) {
 						input.PanicTrace = failedRun.PanicTrace
 						input.InputPayload = string(failedRun.InputPayload)
 						input.Actions = string(failedRun.Actions)
-						// Logs the failed run captured before it died — kept
-						// in stdout_log for non-success runs (see RunComplete).
+						// Logs the failed run captured before it died —
+						// RunComplete stores every run's logs in stdout_log.
 						input.Logs = failedRun.StdoutLog
 						// Load conversation messages for this run.
 						if msgs, err := q.ListMessagesByRun(context.Background(), pgRunID); err == nil {
