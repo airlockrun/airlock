@@ -36,6 +36,7 @@ type UpgradeInput struct {
 	InputPayload   string // JSON of failed run input (auto_fix)
 	Actions        string // JSON of recorded actions before failure (auto_fix)
 	Messages       string // conversation messages from the failed run
+	Logs           string // captured log lines from the failed run (auto_fix)
 }
 
 // Upgrade runs the upgrade pipeline for an existing agent.
@@ -171,7 +172,7 @@ func (b *BuildService) RunUpgrade(_ context.Context, input UpgradeInput) {
 // nil. Execute uses the nil/non-nil distinction to decide whether to
 // write DIAGNOSTICS.md before invoking Sol.
 func autoFixContextFromInput(input UpgradeInput) *AutoFixContext {
-	if input.ErrorMessage == "" && input.PanicTrace == "" && input.InputPayload == "" && input.Actions == "" && input.Messages == "" {
+	if input.ErrorMessage == "" && input.PanicTrace == "" && input.InputPayload == "" && input.Actions == "" && input.Messages == "" && input.Logs == "" {
 		return nil
 	}
 	return &AutoFixContext{
@@ -180,5 +181,6 @@ func autoFixContextFromInput(input UpgradeInput) *AutoFixContext {
 		InputPayload: input.InputPayload,
 		Actions:      input.Actions,
 		Messages:     input.Messages,
+		Logs:         input.Logs,
 	}
 }

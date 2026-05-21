@@ -387,6 +387,15 @@ ALTER TABLE agents
 ALTER TABLE agent_builds
     ADD COLUMN rollback_target_id uuid REFERENCES agent_builds(id) ON DELETE SET NULL;
 
+-- runs.logs — vestigial. It was the original diagnostics log column;
+-- the run-complete path was long ago rewired to write the formatted
+-- log text into stdout_log instead, and `logs` was left behind —
+-- initialized '' on insert, '' on compaction, never populated, never
+-- read. Drop it. Run logs now: structured JSON to container stdout
+-- (the agent's zap logger), with airlock keeping a capped snapshot in
+-- stdout_log only for FAILED runs (the Fix-this-error input).
+ALTER TABLE runs DROP COLUMN IF EXISTS logs;
+
 -- system_settings.last_seen_sdk_version — the airlock-bundled
 -- agentsdk version observed at the last successful startup. Used by
 -- the boot path to decide whether to kick off a mass rebuild
@@ -480,6 +489,10 @@ DROP TABLE IF EXISTS agent_siblings;
 ALTER TABLE agent_builds DROP COLUMN IF EXISTS rollback_target_id;
 ALTER TABLE agent_builds DROP COLUMN IF EXISTS sdk_version;
 ALTER TABLE system_settings DROP COLUMN IF EXISTS last_seen_sdk_version;
+-- Re-add the vestigial runs.logs (NOT NULL via transient default, then
+-- drop it per the no-fake-defaults rule). Content is not recoverable.
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS logs text NOT NULL DEFAULT '';
+ALTER TABLE runs ALTER COLUMN logs DROP DEFAULT;
 ALTER TABLE agents DROP COLUMN IF EXISTS allow_public_mcp_prompt;
 ALTER TABLE agents DROP COLUMN IF EXISTS allow_oauth_mcp_prompt;
 ALTER TABLE agents DROP CONSTRAINT IF EXISTS agents_public_implies_non_member;

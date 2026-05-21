@@ -360,6 +360,9 @@ func writeUpgradeDiagnostics(dir string, input UpgradeInput) (bool, error) {
 	if input.Messages != "" {
 		content += fmt.Sprintf("\n## Conversation Messages\n\n```\n%s\n```\n", input.Messages)
 	}
+	if input.Logs != "" {
+		content += fmt.Sprintf("\n## Run Logs\n\n```\n%s\n```\n", input.Logs)
+	}
 	if content == "" {
 		return false, nil
 	}

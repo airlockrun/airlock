@@ -267,40 +267,38 @@ func TestRunComplete(t *testing.T) {
 	skipIfNoDB(t)
 	ah := testAgentHandler()
 	agentID := createTestAgent(t)
-	runID := uuid.New()
-
-	body := agentsdk.RunCompleteRequest{
-		RunID:  runID.String(),
-		Status: "completed",
-		Logs: []agentsdk.LogEntry{
-			{Level: agentsdk.LogLevelInfo, Message: "line 1"},
-			{Level: agentsdk.LogLevelWarn, Message: "line 2"},
-		},
-	}
-
 	router := testRouter(ah, func(r chi.Router) {
 		r.Post("/api/agent/run/complete", ah.RunComplete)
 	})
-
-	req := agentRequest(t, "POST", "/api/agent/run/complete", agentID, body)
-	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Errorf("status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
-	}
-
-	// Verify: run was recorded.
 	q := dbq.New(testDB.Pool())
-	run, err := q.GetRunByID(context.Background(), toPgUUID(runID))
-	if err != nil {
-		t.Fatalf("GetRunByID: %v", err)
+
+	logs := []agentsdk.LogEntry{
+		{Level: agentsdk.LogLevelInfo, Message: "line 1"},
+		{Level: agentsdk.LogLevelWarn, Message: "line 2"},
 	}
-	if run.Status != "completed" {
-		t.Errorf("run.Status = %q, want %q", run.Status, "completed")
+
+	check := func(status string) {
+		runID := uuid.New()
+		body := agentsdk.RunCompleteRequest{RunID: runID.String(), Status: status, Logs: logs}
+		req := agentRequest(t, "POST", "/api/agent/run/complete", agentID, body)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status %s: code = %d, want 200; body: %s", status, rec.Code, rec.Body.String())
+		}
+		run, err := q.GetRunByID(context.Background(), toPgUUID(runID))
+		if err != nil {
+			t.Fatalf("GetRunByID(%s): %v", status, err)
+		}
+		if run.Status != status {
+			t.Errorf("status %s: run.Status = %q", status, run.Status)
+		}
+		// Logs are kept for every run, success and failure alike.
+		if want := "line 1\n[warn] line 2"; run.StdoutLog != want {
+			t.Errorf("status %s: StdoutLog = %q, want %q", status, run.StdoutLog, want)
+		}
 	}
-	want := "line 1\n[warn] line 2"
-	if run.StdoutLog != want {
-		t.Errorf("run.StdoutLog = %q, want %q", run.StdoutLog, want)
-	}
+
+	check("success")
+	check("error")
 }

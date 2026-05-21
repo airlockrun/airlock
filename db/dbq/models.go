@@ -423,7 +423,6 @@ type Run struct {
 	LlmTokensOut    int32              `json:"llm_tokens_out"`
 	LlmCostEstimate pgtype.Numeric     `json:"llm_cost_estimate"`
 	DurationMs      pgtype.Int4        `json:"duration_ms"`
-	Logs            string             `json:"logs"`
 	StdoutLog       string             `json:"stdout_log"`
 	ErrorMessage    string             `json:"error_message"`
 	ErrorKind       string             `json:"error_kind"`

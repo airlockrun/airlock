@@ -172,6 +172,7 @@ func writePlanDiagnostics(workDir string, plan BuildPlan) error {
 		InputPayload: d.InputPayload,
 		Actions:      d.Actions,
 		Messages:     d.Messages,
+		Logs:         d.Logs,
 	}
 	_, err := writeUpgradeDiagnostics(workDir, input)
 	return err

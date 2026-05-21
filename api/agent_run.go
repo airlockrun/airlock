@@ -23,6 +23,8 @@ func formatRunLogs(logs []agentsdk.LogEntry) string {
 	parts := make([]string, len(logs))
 	for i, l := range logs {
 		switch l.Level {
+		case agentsdk.LogLevelDebug:
+			parts[i] = "[debug] " + l.Message
 		case agentsdk.LogLevelWarn:
 			parts[i] = "[warn] " + l.Message
 		case agentsdk.LogLevelError:
@@ -50,6 +52,11 @@ func (h *agentHandler) RunComplete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Run logs are kept for every run (success and failure alike) and
+	// rendered in the run-detail UI. agentsdk caps the buffer it sends
+	// (~64 KiB) so the row stays bounded; CompactOldRuns nulls stdout_log
+	// along with the other verbose fields once the run ages out.
+	//
 	// agentsdk classifies the error structurally (by call-site, not regex)
 	// and sends the kind in req.ErrorKind. We trust it as-is.
 	q := dbq.New(h.db.Pool())

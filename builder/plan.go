@@ -72,4 +72,5 @@ type AutoFixContext struct {
 	InputPayload string
 	Actions      string
 	Messages     string
+	Logs         string // captured log lines from the failed run
 }

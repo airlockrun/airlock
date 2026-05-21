@@ -8,13 +8,13 @@ INSERT INTO runs (
     agent_id, bridge_id, parent_run_id, status, error_kind,
     input_payload, source_ref, trigger_type, trigger_ref,
     actions, llm_calls, llm_tokens_in, llm_tokens_out, llm_cost_estimate,
-    logs, stdout_log, error_message, panic_trace, compacted
+    stdout_log, error_message, panic_trace, compacted
 )
 VALUES (
     @agent_id, @bridge_id, @parent_run_id, 'running', '',
     @input_payload, @source_ref, @trigger_type, @trigger_ref,
     '[]'::jsonb, 0, 0, 0, 0,
-    '', '', '', '', false
+    '', '', '', false
 )
 RETURNING *;
 
@@ -48,24 +48,23 @@ WHERE id = @id;
 
 -- name: UpsertRunComplete :exec
 -- Recovery path: row may not exist if CreateRun never landed. All
--- "starts empty" fields (logs, llm counters, compacted) passed
--- explicitly. trigger_type/trigger_ref/source_ref placeholders apply
--- only when the row is brand-new — the agent's r.Complete arrives
--- without trigger context; the dispatcher's CreateRun would have set
--- the real values.
+-- "starts empty" fields (llm counters, compacted) passed explicitly.
+-- trigger_type/trigger_ref/source_ref placeholders apply only when the
+-- row is brand-new — the agent's r.Complete arrives without trigger
+-- context; the dispatcher's CreateRun would have set the real values.
 INSERT INTO runs (
     id, agent_id, status, error_message, error_kind, actions,
     stdout_log, panic_trace, input_payload, source_ref,
     trigger_type, trigger_ref, finished_at, duration_ms,
     llm_calls, llm_tokens_in, llm_tokens_out, llm_cost_estimate,
-    logs, compacted
+    compacted
 )
 VALUES (
     @id, @agent_id, @status, @error_message, @error_kind, @actions,
     @stdout_log, @panic_trace, '{}'::jsonb, '',
     'prompt', '', now(), 0,
     0, 0, 0, 0,
-    '', false
+    false
 )
 ON CONFLICT (id) DO UPDATE SET
     status = EXCLUDED.status,
@@ -187,7 +186,6 @@ UPDATE runs SET
     input_payload = '{}'::jsonb,
     actions       = '[]'::jsonb,
     checkpoint    = NULL,
-    logs          = '',
     stdout_log    = '',
     panic_trace   = '',
     compacted     = true
