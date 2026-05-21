@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -29,6 +30,7 @@ type DockerManager struct {
 	mu           sync.Mutex
 	active       map[string]*Container // container name → Container
 	lastActivity map[string]time.Time  // container name → last use
+	inFlight     map[string]int        // container name → in-flight request count
 	idleTimeout  time.Duration
 	stopOnce     sync.Once
 	done         chan struct{}
@@ -47,6 +49,7 @@ func NewDockerManager(cfg *config.Config, logger *zap.Logger) *DockerManager {
 		logger:       logger,
 		active:       make(map[string]*Container),
 		lastActivity: make(map[string]time.Time),
+		inFlight:     make(map[string]int),
 		idleTimeout:  10 * time.Minute,
 		done:         make(chan struct{}),
 	}
@@ -272,6 +275,33 @@ func (m *DockerManager) GetRunning(ctx context.Context, agentID uuid.UUID) (*Con
 	return c, nil
 }
 
+// RunningAgents implements ContainerManager. One ContainerList call,
+// filtered to agent container names, then matched back to the requested
+// IDs via agentName. Builder/toolserver containers ("airlock-agent-
+// builder-*") also match the name filter but never equal an
+// agentName(id), so they fall out of the lookup harmlessly.
+func (m *DockerManager) RunningAgents(ctx context.Context, agentIDs []uuid.UUID) (map[uuid.UUID]bool, error) {
+	list, err := m.client.ContainerList(ctx, dcontainer.ListOptions{
+		Filters: filters.NewArgs(filters.Arg("name", "airlock-agent-")),
+	})
+	if err != nil {
+		return nil, err
+	}
+	// ContainerList without All:true returns only running containers.
+	running := make(map[string]struct{}, len(list))
+	for _, c := range list {
+		for _, n := range c.Names {
+			running[strings.TrimPrefix(n, "/")] = struct{}{}
+		}
+	}
+	out := make(map[uuid.UUID]bool, len(agentIDs))
+	for _, id := range agentIDs {
+		_, ok := running[agentName(id)]
+		out[id] = ok
+	}
+	return out, nil
+}
+
 // StopAgent implements ContainerManager. Idempotent: if Docker stopped
 // or removed the container out-of-band (crash, OOM, daemon restart, the
 // idle reaper), the desired post-condition — container not running — is
@@ -486,6 +516,56 @@ func (m *DockerManager) waitHealthy(ctx context.Context, c *Container, timeout t
 	return fmt.Errorf("container %s did not become healthy within %v", c.Name, timeout)
 }
 
+// MarkBusy records the start of an in-flight request to an agent
+// container. While the in-flight count is above zero the idle reaper
+// skips the container, so a run that outlasts idleTimeout is not
+// stopped mid-execution. Pair every MarkBusy with exactly one MarkIdle.
+func (m *DockerManager) MarkBusy(agentID uuid.UUID) {
+	name := agentName(agentID)
+	m.mu.Lock()
+	m.inFlight[name]++
+	m.lastActivity[name] = time.Now()
+	m.mu.Unlock()
+}
+
+// MarkIdle records the end of an in-flight request. It also refreshes
+// the idle clock so the timeout is measured from the end of the last
+// request rather than its start.
+func (m *DockerManager) MarkIdle(agentID uuid.UUID) {
+	name := agentName(agentID)
+	m.mu.Lock()
+	if m.inFlight[name] > 0 {
+		m.inFlight[name]--
+	}
+	if m.inFlight[name] == 0 {
+		delete(m.inFlight, name)
+	}
+	m.lastActivity[name] = time.Now()
+	m.mu.Unlock()
+}
+
+type stopTarget struct {
+	name string
+	id   string
+}
+
+// idleContainersToStop selects agent containers whose idle window has
+// elapsed and that have no in-flight request. Caller must hold m.mu.
+func (m *DockerManager) idleContainersToStop(now time.Time) []stopTarget {
+	var toStop []stopTarget
+	for name, lastUse := range m.lastActivity {
+		if m.inFlight[name] > 0 {
+			continue
+		}
+		if now.Sub(lastUse) > m.idleTimeout {
+			if c, ok := m.active[name]; ok {
+				toStop = append(toStop, stopTarget{name: name, id: c.ID})
+			}
+		}
+	}
+	return toStop
+}
+
 func (m *DockerManager) reapIdleContainers() {
 	ticker := time.NewTicker(1 * time.Minute)
 	defer ticker.Stop()
@@ -496,21 +576,7 @@ func (m *DockerManager) reapIdleContainers() {
 			return
 		case <-ticker.C:
 			m.mu.Lock()
-			now := time.Now()
-			var toStop []struct {
-				name string
-				id   string
-			}
-			for name, lastUse := range m.lastActivity {
-				if now.Sub(lastUse) > m.idleTimeout {
-					if c, ok := m.active[name]; ok {
-						toStop = append(toStop, struct {
-							name string
-							id   string
-						}{name, c.ID})
-					}
-				}
-			}
+			toStop := m.idleContainersToStop(time.Now())
 			for _, s := range toStop {
 				delete(m.active, s.name)
 				delete(m.lastActivity, s.name)

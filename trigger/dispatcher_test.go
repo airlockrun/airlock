@@ -40,7 +40,18 @@ func (m *mockContainerManager) GetRunning(_ context.Context, _ uuid.UUID) (*cont
 	return m.container, nil
 }
 
+func (m *mockContainerManager) RunningAgents(_ context.Context, ids []uuid.UUID) (map[uuid.UUID]bool, error) {
+	out := make(map[uuid.UUID]bool, len(ids))
+	for _, id := range ids {
+		out[id] = m.container != nil
+	}
+	return out, nil
+}
+
 func (m *mockContainerManager) StopAgent(_ context.Context, _ string) error { return nil }
+
+func (m *mockContainerManager) MarkBusy(_ uuid.UUID) {}
+func (m *mockContainerManager) MarkIdle(_ uuid.UUID) {}
 
 func (m *mockContainerManager) StartToolserver(_ context.Context, _ container.ToolserverOpts) (*container.Container, error) {
 	return &container.Container{}, nil
@@ -82,7 +93,7 @@ func TestForwardWebhook(t *testing.T) {
 	}
 
 	body := []byte(`{"event":"push"}`)
-	rc, err := d.forward(context.Background(), cm.container, "POST", "/webhook/github", body, uuid.New(), nil, nil, nil, 2*time.Minute)
+	rc, err := d.forward(context.Background(), uuid.New(), cm.container, "POST", "/webhook/github", body, uuid.New(), nil, nil, nil, 2*time.Minute)
 	if err != nil {
 		t.Fatalf("forward: %v", err)
 	}
@@ -119,7 +130,7 @@ func TestForwardSetsBridgeIDHeader(t *testing.T) {
 	}
 
 	bridgeID := uuid.New()
-	rc, err := d.forward(context.Background(), cm.container, "POST", "/prompt", nil, uuid.New(), &bridgeID, nil, nil, 5*time.Minute)
+	rc, err := d.forward(context.Background(), uuid.New(), cm.container, "POST", "/prompt", nil, uuid.New(), &bridgeID, nil, nil, 5*time.Minute)
 	if err != nil {
 		t.Fatalf("forward: %v", err)
 	}
@@ -148,7 +159,7 @@ func TestForwardReturnsErrorOnBadStatus(t *testing.T) {
 		containers: cm,
 	}
 
-	_, err := d.forward(context.Background(), cm.container, "POST", "/cron/daily", nil, uuid.New(), nil, nil, nil, 2*time.Minute)
+	_, err := d.forward(context.Background(), uuid.New(), cm.container, "POST", "/cron/daily", nil, uuid.New(), nil, nil, nil, 2*time.Minute)
 	if err == nil {
 		t.Fatal("expected error for 500 response")
 	}

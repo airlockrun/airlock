@@ -43,8 +43,24 @@ type ContainerManager interface {
 	// just to notify it would defeat the purpose.
 	GetRunning(ctx context.Context, agentID uuid.UUID) (*Container, error)
 
+	// RunningAgents reports, per requested agent ID, whether a running
+	// container currently exists for it. One Docker query regardless of
+	// how many agents are asked about — for list/grid views that would
+	// otherwise fan out into one inspect per agent.
+	RunningAgents(ctx context.Context, agentIDs []uuid.UUID) (map[uuid.UUID]bool, error)
+
 	// StopAgent stops a specific agent container.
 	StopAgent(ctx context.Context, id string) error
+
+	// MarkBusy / MarkIdle bracket an in-flight request to an agent
+	// container. While the in-flight count is above zero the idle
+	// reaper leaves the container alone, even past the idle timeout —
+	// so a run that runs longer than the timeout is not killed
+	// mid-execution. MarkIdle also refreshes the idle clock, so the
+	// timeout is measured from the end of the last request. Pair every
+	// MarkBusy with exactly one MarkIdle.
+	MarkBusy(agentID uuid.UUID)
+	MarkIdle(agentID uuid.UUID)
 
 	// StartToolserver starts an ephemeral toolserver container for build operations.
 	// Returns the container with a WebSocket endpoint for tool execution.

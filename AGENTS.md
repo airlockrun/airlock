@@ -49,7 +49,7 @@ anchor/            Anchor container support
 ### Agent Execution
 - Agent containers are long-running Docker containers (one per agent, reused if healthy)
 - Started on demand via `dispatcher.EnsureRunning()`
-- Health checked (3s initial, 15s reuse), reaped after 10min idle
+- Health checked (3s initial, 15s reuse), reaped after 10min idle — a container with an in-flight request is exempt (the dispatcher brackets every forwarded request with `MarkBusy`/`MarkIdle`), so a run longer than the timeout is never killed mid-execution
 - Environment: `AIRLOCK_AGENT_ID`, `AIRLOCK_API_URL`, `AIRLOCK_AGENT_TOKEN`, `AIRLOCK_DB_URL`
 - Per-agent DB schema: `agent_{uuid}`
 - Libs (`agentsdk/`, `goai/`, `sol/`) injected via `--build-context libs=` from `AGENT_LIBS_PATH`

@@ -175,9 +175,27 @@ func (h *agentsHandler) List(w http.ResponseWriter, r *http.Request) {
 	}
 
 	out := make([]*airlockv1.AgentInfo, len(agents))
+	ids := make([]uuid.UUID, len(agents))
 	for i, a := range agents {
 		out[i] = agentToProto(a)
+		ids[i] = uuid.UUID(a.ID.Bytes)
 	}
+
+	// Populate the runtime Running flag. The frontend status badge renders
+	// status=active + !running as "Suspended"; without this every agent in
+	// the grid would show Suspended. One bulk container query for the whole
+	// page rather than an inspect per agent. A lookup failure degrades to
+	// Running=false (Suspended) rather than failing the list.
+	if h.containers != nil && len(ids) > 0 {
+		if running, err := h.containers.RunningAgents(ctx, ids); err != nil {
+			h.logger.Warn("list agents: running-state lookup failed", zap.Error(err))
+		} else {
+			for i := range out {
+				out[i].Running = running[ids[i]]
+			}
+		}
+	}
+
 	writeProto(w, http.StatusOK, &airlockv1.ListAgentsResponse{Agents: out})
 }
 

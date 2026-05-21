@@ -167,6 +167,21 @@ func (r *runBodyCloser) Close() error {
 	return r.ReadCloser.Close()
 }
 
+// busyCloser wraps the agent's response body so closing it marks the
+// agent container idle. Paired with the MarkBusy call in forward: the
+// container is held busy — exempt from idle reaping — for the whole
+// life of the streamed response, however long the run takes.
+type busyCloser struct {
+	io.ReadCloser
+	containers container.ContainerManager
+	agentID    uuid.UUID
+}
+
+func (b *busyCloser) Close() error {
+	b.containers.MarkIdle(b.agentID)
+	return b.ReadCloser.Close()
+}
+
 // EnsureRunning looks up the agent, decrypts its DB credentials, and starts
 // (or reconnects to) the agent container. Returns the running container.
 func (d *Dispatcher) EnsureRunning(ctx context.Context, agentID uuid.UUID) (*container.Container, error) {
@@ -234,7 +249,7 @@ func (d *Dispatcher) ForwardWebhook(ctx context.Context, agentID uuid.UUID, path
 		return nil, uuid.Nil, err
 	}
 
-	rc, err := d.forward(ctx, c, "POST", "/webhook/"+path, body, runID, bridgeID, nil, nil, timeout)
+	rc, err := d.forward(ctx, agentID, c, "POST", "/webhook/"+path, body, runID, bridgeID, nil, nil, timeout)
 	if err != nil {
 		return nil, uuid.Nil, err
 	}
@@ -258,7 +273,7 @@ func (d *Dispatcher) ForwardCron(ctx context.Context, agentID uuid.UUID, cronNam
 	cancelCtx, cancel := context.WithCancel(ctx)
 	d.registerInFlight(runID, cancel)
 
-	rc, err := d.forward(cancelCtx, c, "POST", "/cron/"+cronName, nil, runID, nil, nil, nil, timeout)
+	rc, err := d.forward(cancelCtx, agentID, c, "POST", "/cron/"+cronName, nil, runID, nil, nil, nil, timeout)
 	if err != nil {
 		d.deregisterInFlight(runID)
 		cancel()
@@ -303,7 +318,7 @@ func (d *Dispatcher) ForwardPrompt(ctx context.Context, agentID uuid.UUID, input
 	cancelCtx, cancel := context.WithCancel(ctx)
 	d.registerInFlight(runID, cancel)
 
-	rc, err := d.forward(cancelCtx, c, "POST", "/prompt", payload, runID, bridgeID, nil, userID, PromptHTTPCeiling)
+	rc, err := d.forward(cancelCtx, agentID, c, "POST", "/prompt", payload, runID, bridgeID, nil, userID, PromptHTTPCeiling)
 	if err != nil {
 		d.deregisterInFlight(runID)
 		cancel()
@@ -360,7 +375,7 @@ func (d *Dispatcher) ForwardA2APrompt(ctx context.Context, agentID uuid.UUID, pa
 	cancelCtx, cancel := context.WithCancel(ctx)
 	d.registerInFlight(runID, cancel)
 
-	rc, err := d.forward(cancelCtx, c, "POST", "/prompt", payload, runID, nil, parentRunIDPtr, userID, PromptHTTPCeiling)
+	rc, err := d.forward(cancelCtx, agentID, c, "POST", "/prompt", payload, runID, nil, parentRunIDPtr, userID, PromptHTTPCeiling)
 	if err != nil {
 		d.deregisterInFlight(runID)
 		cancel()
@@ -483,7 +498,7 @@ func (d *Dispatcher) RefreshAgent(ctx context.Context, agentID uuid.UUID) error 
 // directories. Both are nil for the web / bridge / cron / webhook
 // flows that pre-existed scoping (those handlers pass principal via
 // PromptInput / conversation lookups).
-func (d *Dispatcher) forward(ctx context.Context, c *container.Container, method, path string, body []byte, runID uuid.UUID, bridgeID, parentRunID, userID *uuid.UUID, timeout time.Duration) (io.ReadCloser, error) {
+func (d *Dispatcher) forward(ctx context.Context, agentID uuid.UUID, c *container.Container, method, path string, body []byte, runID uuid.UUID, bridgeID, parentRunID, userID *uuid.UUID, timeout time.Duration) (io.ReadCloser, error) {
 	var bodyReader io.Reader
 	if body != nil {
 		bodyReader = bytes.NewReader(body)
@@ -506,17 +521,23 @@ func (d *Dispatcher) forward(ctx context.Context, c *container.Container, method
 		req.Header.Set("X-User-ID", userID.String())
 	}
 
+	// Hold the container busy for the whole life of this request so the
+	// idle reaper cannot stop it mid-run. MarkIdle fires on every exit
+	// path: a transport error, a 4xx/5xx, or the streamed body's Close.
 	client := &http.Client{Timeout: timeout}
+	d.containers.MarkBusy(agentID)
 	resp, err := client.Do(req)
 	if err != nil {
+		d.containers.MarkIdle(agentID)
 		return nil, fmt.Errorf("forward to agent: %w", err)
 	}
 	if resp.StatusCode >= 400 {
+		d.containers.MarkIdle(agentID)
 		defer resp.Body.Close()
 		respBody, _ := io.ReadAll(resp.Body)
 		return nil, fmt.Errorf("agent returned %d: %s", resp.StatusCode, respBody)
 	}
-	return resp.Body, nil
+	return &busyCloser{ReadCloser: resp.Body, containers: d.containers, agentID: agentID}, nil
 }
 
 // --- helpers ---
