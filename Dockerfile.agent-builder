@@ -24,16 +24,30 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         git ripgrep postgresql-client curl ca-certificates sudo && \
     rm -rf /var/lib/apt/lists/*
 
-# /usr/local/bin/run-setup is a fixed-path wrapper that execs the agent's
-# setup.sh as root. The sudoers entry grants NOPASSWD on this exact path
-# only — the LLM/builder can install anything by editing setup.sh, but
-# cannot run arbitrary `sudo <other-command>` ad-hoc. apt-get/apt-cache
-# stay whitelisted for ad-hoc package lookups without invoking the full
-# setup wrapper.
-RUN printf '#!/bin/bash\nset -euo pipefail\nexec bash /workspace/setup.sh "$@"\n' \
+# Toolserver UID resolution + sudo.
+#
+# The toolserver runs as the airlock host UID so files it writes into
+# the bind-mounted workspace are host-owned. That UID has no entry in
+# the image's account databases; the entrypoint self-registers it into
+# /etc/passwd + /etc/shadow on container start (both made world-writable
+# below so the non-root entrypoint can append).
+#
+# sudo is unrestricted (NOPASSWD: ALL) and that is the honest config —
+# it is NOT a privilege boundary. run-setup execs an LLM-authored
+# /workspace/setup.sh as root, so the codegen agent has root in this
+# container by design (it must, to install build dependencies). The
+# real boundary is the container itself: ephemeral, one per build, no
+# --privileged, no docker socket, no host mounts. World-writable
+# account files change nothing — the agent already has effective root
+# here, and the base image's /etc/shadow holds no real password
+# hashes. run-setup stays as a fixed-path convenience the build prompt
+# points at for applying setup.sh.
+COPY --chmod=0755 scripts/agent-builder-entrypoint.sh /usr/local/bin/agent-builder-entrypoint
+RUN chmod 0666 /etc/passwd /etc/shadow && \
+    printf '#!/bin/bash\nset -euo pipefail\nexec bash /workspace/setup.sh "$@"\n' \
         > /usr/local/bin/run-setup && \
     chmod 0755 /usr/local/bin/run-setup && \
-    echo 'ALL ALL=(root) NOPASSWD: /usr/bin/apt-get, /usr/bin/apt-cache, /usr/local/bin/run-setup' \
+    echo 'ALL ALL=(root) NOPASSWD: ALL' \
         > /etc/sudoers.d/99-airlock-builder && \
     chmod 0440 /etc/sudoers.d/99-airlock-builder && \
     mkdir -p /var/agent/bin /var/agent/data && \
@@ -72,3 +86,7 @@ RUN cd /libs/templ && go build -o /usr/local/bin/templ      ./cmd/templ
 RUN mkdir -p /tmp/go-mod /tmp/go-cache && chmod 777 /tmp/go-mod /tmp/go-cache
 
 WORKDIR /workspace
+
+# Self-register the runtime UID into /etc/passwd before exec'ing the
+# toolserver (or whatever Cmd airlock supplies). See the sudo block above.
+ENTRYPOINT ["/usr/local/bin/agent-builder-entrypoint"]

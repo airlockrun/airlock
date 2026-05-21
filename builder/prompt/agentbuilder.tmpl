@@ -46,7 +46,7 @@ Download openapi spec / documentation for any service you integrate, and add it 
 The build environment is pre-configured (Go toolchain, GOCACHE, sqlc, templ). If a build command fails on permissions, missing tools, or broken cache — **do not attempt to fix the environment**. Report and stop. Environment problems are infrastructure issues, not code issues.
 
 - **`mcp_probe` tool** — before writing a `RegisterMCP` block, probe the URL to see what it supports (auth mode, available tools).
-- **`setup.sh` verification** — after writing `setup.sh`, verify an installed binary works with `sudo run-setup && <binary> --version`. `sudo` is preconfigured for `apt-get`, `apt-cache`, and `run-setup` only — no password; no ad-hoc `sudo <other-command>`.
+- **`setup.sh` verification** — after writing `setup.sh`, verify an installed binary works with `sudo run-setup && <binary> --version`. `sudo` is passwordless; `run-setup` execs `setup.sh` as root. System dependencies belong in `setup.sh`, not ad-hoc shell — `setup.sh` is the reproducible record that the generated Dockerfile replays.
 - **Never create or modify a Dockerfile** — Airlock generates it. System dependencies go in `setup.sh` (see llms.md).
 
 # Essentials (full detail in `/libs/agentsdk/llms.md`)

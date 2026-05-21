@@ -314,8 +314,10 @@ func (m *DockerManager) StartToolserver(ctx context.Context, opts ToolserverOpts
 	name := fmt.Sprintf("airlock-agent-builder-%d", time.Now().UnixNano())
 
 	// Set -home-dir so tools that resolve $HOME (e.g. todowrite's XDG path)
-	// have a writable target — the container runs as a non-root UID with no
-	// /etc/passwd entry, so HOME would otherwise default to "/" and fail.
+	// have a writable target — the container runs as the host UID, which
+	// HOME would otherwise resolve to "/" for. The agent-builder image's
+	// entrypoint self-registers that UID into /etc/passwd so sudo works
+	// (it refuses to run for an unknown UID).
 	cmd := []string{"toolserver", "-space-dir", opts.WorkDir, "-home-dir", "/tmp/sol-home"}
 
 	// Run as the host UID/GID so files written to the bind-mounted workspace
