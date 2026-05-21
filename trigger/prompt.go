@@ -285,6 +285,11 @@ func (p *PromptProxy) HandleMessage(
 		ExtraSystemPrompt: extraSystemPrompt,
 		ForceCompact:      forceCompact,
 		CallerAccess:      access,
+		// One-shot is single-turn: there is no second turn to answer a
+		// confirmation, so run_js confirmations are auto-accepted in the
+		// agent. A residual suspension (e.g. A2A-delegated) is auto-denied
+		// after streaming, below.
+		AutoConfirm: oneShot,
 	}
 	if forceCompact {
 		input.Message = ""
@@ -315,12 +320,66 @@ func (p *PromptProxy) HandleMessage(
 
 	// Stream NDJSON response — forwards events to driver and collects text.
 	// Message persistence is handled by the SessionStore in the agent container.
-	responseText, _, _, err := StreamNDJSONResponse(rc, runID.String(), events)
+	// In one-shot mode confirmation events are suppressed (no dead buttons —
+	// the ephemeral conversation can't survive to a second turn); any
+	// residual suspension is auto-denied below.
+	responseText, _, _, err := StreamNDJSONResponse(rc, runID.String(), events, oneShot)
 	if err != nil {
 		return "", fmt.Errorf("stream response: %w", err)
 	}
 
+	if oneShot {
+		p.autoDenyResidualSuspension(agentID, bridgeID, conversationID, runID, access, userIDPtr)
+	}
+
 	return responseText, nil
+}
+
+// autoDenyResidualSuspension resolves a one-shot run that came back
+// suspended. One-shot (public, single-turn) sessions have no interactive
+// second turn, so a confirmation that reached the bridge instead of being
+// auto-accepted in the agent (agentsdk.AutoConfirm covers run_js — the
+// common case) is denied: the run is resumed with Approved=false and the
+// resulting stream drained so the agent finalizes via its detached
+// /run/complete instead of dangling suspended. Best-effort on a fresh
+// context — the request ctx may already be at its public-prompt deadline,
+// and the run's conversation must outlive this call (HandleMessage's
+// deferred delete runs only after this returns). The post-denial reply is
+// intentionally not surfaced; a residual suspension is a rare fallback.
+func (p *PromptProxy) autoDenyResidualSuspension(agentID, bridgeID uuid.UUID, conversationID pgtype.UUID, runID uuid.UUID, access agentsdk.Access, userIDPtr *uuid.UUID) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	q := dbq.New(p.db.Pool())
+
+	susp, err := q.GetSuspendedRunByID(ctx, toPgUUID(runID))
+	if err != nil {
+		return // run did not suspend — nothing to do
+	}
+	if err := q.ResolveSuspendedRun(ctx, susp.ID); err != nil {
+		p.logger.Warn("one-shot auto-deny: resolve suspended run",
+			zap.String("run_id", runID.String()), zap.Error(err))
+		return
+	}
+
+	denied := false
+	denyInput := agentsdk.PromptInput{
+		ConversationID: convert.PgUUIDToString(conversationID),
+		ResumeRunID:    runID.String(),
+		Approved:       &denied,
+		Message:        "Confirmation is unavailable in a single-turn session; treat as declined.",
+		CallerAccess:   access,
+		AutoConfirm:    true,
+	}
+	rc, _, err := p.dispatcher.ForwardPrompt(ctx, agentID, denyInput, &bridgeID, userIDPtr)
+	if err != nil {
+		p.logger.Warn("one-shot auto-deny: forward denial",
+			zap.String("run_id", runID.String()), zap.Error(err))
+		return
+	}
+	defer rc.Close()
+	// Drain so the agent runs the denial turn to completion. Output is
+	// intentionally discarded — one-shot shows no follow-up message.
+	_, _ = io.Copy(io.Discard, rc)
 }
 
 // HandleCallback resolves a suspended run based on a bridge UI callback
@@ -428,7 +487,7 @@ func (p *PromptProxy) HandleCallback(
 	}
 	defer rc.Close()
 
-	if _, _, _, err := StreamNDJSONResponse(rc, newRunID.String(), events); err != nil {
+	if _, _, _, err := StreamNDJSONResponse(rc, newRunID.String(), events, false); err != nil {
 		return false, fmt.Errorf("stream response: %w", err)
 	}
 	return false, nil
@@ -617,7 +676,13 @@ type usageInfo struct {
 // the full text response. Closes the events channel when done. runID is
 // stamped onto confirmation_required events so drivers can build
 // callback-bound UI (e.g. Telegram inline keyboards).
-func StreamNDJSONResponse(body io.Reader, runID string, events chan<- ResponseEvent) (string, []message.Message, *usageInfo, error) {
+//
+// suppressConfirmation drops confirmation_required events instead of
+// forwarding them: a one-shot (public, single-turn) session has no second
+// turn in which to answer, so rendering approve/deny buttons would only
+// produce dead UI. The caller detects the resulting suspended run and
+// auto-denies it.
+func StreamNDJSONResponse(body io.Reader, runID string, events chan<- ResponseEvent, suppressConfirmation bool) (string, []message.Message, *usageInfo, error) {
 	defer close(events)
 
 	// Announce the run before any tokens flow so bridge drivers can wire
@@ -715,6 +780,9 @@ func StreamNDJSONResponse(body io.Reader, runID string, events chan<- ResponseEv
 			}
 
 		case "confirmation_required":
+			if suppressConfirmation {
+				continue
+			}
 			var cr struct {
 				Permission string   `json:"permission"`
 				Patterns   []string `json:"patterns"`

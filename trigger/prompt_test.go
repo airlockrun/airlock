@@ -18,7 +18,7 @@ func TestStreamNDJSONResponse(t *testing.T) {
 {"type":"finish","data":{"usage":{"inputTokens":{"total":10},"outputTokens":{"total":5}}}}
 `
 		events := make(chan ResponseEvent, 16)
-		text, _, usage, err := StreamNDJSONResponse(strings.NewReader(ndjson), "run-1", events)
+		text, _, usage, err := StreamNDJSONResponse(strings.NewReader(ndjson), "run-1", events, false)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -60,7 +60,7 @@ func TestStreamNDJSONResponse(t *testing.T) {
 {"type":"error","data":{"error":"model overloaded"}}
 `
 		events := make(chan ResponseEvent, 16)
-		_, _, _, err := StreamNDJSONResponse(strings.NewReader(ndjson), "run-2", events)
+		_, _, _, err := StreamNDJSONResponse(strings.NewReader(ndjson), "run-2", events, false)
 		if err == nil {
 			t.Fatal("expected error")
 		}
@@ -72,7 +72,7 @@ func TestStreamNDJSONResponse(t *testing.T) {
 	t.Run("error event with legacy `message` key still works", func(t *testing.T) {
 		ndjson := `{"type":"error","data":{"message":"legacy msg"}}` + "\n"
 		events := make(chan ResponseEvent, 16)
-		_, _, _, err := StreamNDJSONResponse(strings.NewReader(ndjson), "run-2b", events)
+		_, _, _, err := StreamNDJSONResponse(strings.NewReader(ndjson), "run-2b", events, false)
 		if err == nil || !strings.Contains(err.Error(), "legacy msg") {
 			t.Fatalf("err = %v, want to contain 'legacy msg'", err)
 		}
@@ -83,7 +83,7 @@ func TestStreamNDJSONResponse(t *testing.T) {
 {"type":"finish","data":{}}
 `
 		events := make(chan ResponseEvent, 16)
-		_, _, _, err := StreamNDJSONResponse(strings.NewReader(ndjson), "run-3", events)
+		_, _, _, err := StreamNDJSONResponse(strings.NewReader(ndjson), "run-3", events, false)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -110,9 +110,26 @@ func TestStreamNDJSONResponse(t *testing.T) {
 		}
 	})
 
+	t.Run("confirmation_required suppressed when flagged", func(t *testing.T) {
+		ndjson := `{"type":"text-delta","data":{"text":"hi"}}
+{"type":"confirmation_required","data":{"permission":"run_js","code":"foo()","toolCallId":"tc-1"}}
+{"type":"finish","data":{}}
+`
+		events := make(chan ResponseEvent, 16)
+		_, _, _, err := StreamNDJSONResponse(strings.NewReader(ndjson), "run-5", events, true)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		for ev := range events {
+			if ev.Type == "confirmation_required" {
+				t.Fatalf("confirmation_required should be suppressed, got %+v", ev)
+			}
+		}
+	})
+
 	t.Run("empty stream", func(t *testing.T) {
 		events := make(chan ResponseEvent, 16)
-		text, _, usage, err := StreamNDJSONResponse(strings.NewReader(""), "run-4", events)
+		text, _, usage, err := StreamNDJSONResponse(strings.NewReader(""), "run-4", events, false)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}

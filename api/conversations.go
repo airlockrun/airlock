@@ -747,7 +747,7 @@ func (h *conversationsHandler) NotifyUpgradeComplete(ctx context.Context, agentI
 				for range respEvents {
 				}
 			}()
-			responseText, _, _, _ := trigger.StreamNDJSONResponse(rc, runID.String(), respEvents)
+			responseText, _, _, _ := trigger.StreamNDJSONResponse(rc, runID.String(), respEvents, false)
 			if responseText != "" {
 				parts := []agentsdk.DisplayPart{{Type: "text", Text: responseText}}
 				if err := h.bridgeMgr.SendParts(bgCtx, pgUUID(conv.BridgeID), conv.ExternalID.String, parts); err != nil {

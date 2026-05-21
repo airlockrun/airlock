@@ -145,7 +145,7 @@ func postToConversation(ctx context.Context, deps postDeps, opts postOpts) error
 				for range respEvents {
 				}
 			}()
-			responseText, _, _, _ := trigger.StreamNDJSONResponse(rc, runID.String(), respEvents)
+			responseText, _, _, _ := trigger.StreamNDJSONResponse(rc, runID.String(), respEvents, false)
 			if responseText != "" {
 				parts := []agentsdk.DisplayPart{{Type: "text", Text: responseText}}
 				_ = deps.BridgeMgr.SendParts(ctx, pgUUID(conv.BridgeID), conv.ExternalID.String, parts)
