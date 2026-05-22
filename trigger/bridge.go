@@ -434,6 +434,13 @@ func (m *BridgeManager) Stop() {
 	m.wg.Wait()
 }
 
+// isCancelTap reports whether a bridge event is a "Stop" button tap.
+// These are routed past the serial event worker (see startPoller) so a
+// cancel can reach a run that is still in flight.
+func isCancelTap(e BridgeEvent) bool {
+	return e.Callback != nil && strings.HasPrefix(e.Callback.Data, "cancel:")
+}
+
 // HandleEvent processes a parsed BridgeEvent — routes to agent via PromptProxy.
 func (m *BridgeManager) HandleEvent(ctx context.Context, event BridgeEvent) error {
 	q := dbq.New(m.db.Pool())
@@ -461,7 +468,7 @@ func (m *BridgeManager) HandleEvent(ctx context.Context, event BridgeEvent) erro
 	// Cancel button tap (driver posts "Stop" button after CancelButtonAfter).
 	// Distinct from approve/deny callbacks routed through HandleCallback —
 	// those resolve a *suspended* run, this aborts a *running* one.
-	if event.Callback != nil && strings.HasPrefix(event.Callback.Data, "cancel:") {
+	if isCancelTap(event) {
 		runIDStr := strings.TrimPrefix(event.Callback.Data, "cancel:")
 		if runID, err := uuid.Parse(runIDStr); err == nil {
 			m.prompter.dispatcher.CancelRun(runID)
@@ -713,6 +720,30 @@ func (m *BridgeManager) startPoller(parent context.Context, br dbq.Bridge) {
 		ctx := pollCtx
 		driver := m.drivers[br.Type]
 
+		// Run-starting events (messages, approve/deny taps) are handled one
+		// at a time by this worker — concurrent runs in a single
+		// conversation aren't validated yet. Cancel taps bypass the worker
+		// (see the poll loop) so a cancel can reach a run that is still in
+		// flight. The buffer sits above getUpdates' 100-update max batch so
+		// a single poll never blocks the loop — which keeps cancel taps
+		// getting fetched promptly even while the worker is busy.
+		msgEvents := make(chan BridgeEvent, 128)
+		m.wg.Add(1)
+		go func() {
+			defer m.wg.Done()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case ev := <-msgEvents:
+					if err := m.HandleEvent(ctx, ev); err != nil {
+						m.logger.Error("handle event failed",
+							zap.String("bridge", br.Name), zap.Error(err))
+					}
+				}
+			}
+		}()
+
 		for {
 			select {
 			case <-ctx.Done():
@@ -742,11 +773,28 @@ func (m *BridgeManager) startPoller(parent context.Context, br dbq.Bridge) {
 				continue
 			}
 
+			// A cancel tap must reach its run while the run is still in
+			// flight — it can't wait behind the serial worker, since the
+			// worker is busy running the very thing being cancelled. It
+			// starts no run (just fires CancelRun), so handling it
+			// concurrently introduces no parallel run. Every other event
+			// goes through the worker, one at a time.
 			for _, event := range events {
-				if err := m.HandleEvent(ctx, event); err != nil {
-					m.logger.Error("handle event failed",
-						zap.String("bridge", br.Name),
-						zap.Error(err))
+				if isCancelTap(event) {
+					m.wg.Add(1)
+					go func(ev BridgeEvent) {
+						defer m.wg.Done()
+						if err := m.HandleEvent(ctx, ev); err != nil {
+							m.logger.Error("handle event failed",
+								zap.String("bridge", br.Name), zap.Error(err))
+						}
+					}(event)
+					continue
+				}
+				select {
+				case msgEvents <- event:
+				case <-ctx.Done():
+					return
 				}
 			}
 

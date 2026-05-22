@@ -706,9 +706,34 @@ func (d *TelegramDriver) sendMessageWithButtons(ctx context.Context, token strin
 	return d.sendMessageInner(ctx, token, chatID, text, keyboard)
 }
 
-// sendMessageInner is the shared HTML-first, plain-text-fallback sender.
-// Keyboard is attached via reply_markup when non-nil.
+// sendMessageInner splits text into chunks within Telegram's per-message
+// length limit and sends each. A keyboard is attached to the final chunk
+// only. Returns the last chunk's message ID — the one callers edit or
+// remove buttons from. Blank text sends nothing.
 func (d *TelegramDriver) sendMessageInner(ctx context.Context, token string, chatID int64, text string, keyboard map[string]any) (int64, error) {
+	chunks := splitForTelegram(text)
+	if len(chunks) == 0 {
+		return 0, nil
+	}
+	var lastID int64
+	for i, chunk := range chunks {
+		var kb map[string]any
+		if i == len(chunks)-1 {
+			kb = keyboard
+		}
+		id, err := d.sendOne(ctx, token, chatID, chunk, kb)
+		if err != nil {
+			return lastID, err
+		}
+		lastID = id
+	}
+	return lastID, nil
+}
+
+// sendOne sends a single message already within Telegram's length limit.
+// HTML-first; on a parse failure retries the same text as plain text so
+// the user still sees the content. Errors are logged.
+func (d *TelegramDriver) sendOne(ctx context.Context, token string, chatID int64, text string, keyboard map[string]any) (int64, error) {
 	body := map[string]any{
 		"chat_id":    chatID,
 		"text":       text,

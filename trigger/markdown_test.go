@@ -70,3 +70,59 @@ func TestMarkdownToTelegramHTML_PreservesCodeNewlines(t *testing.T) {
 		t.Errorf("expected real newlines in code block, got %q", got)
 	}
 }
+
+func TestMarkdownToTelegramHTML_Table(t *testing.T) {
+	// Telegram has no table markup — a GFM table renders as a column-
+	// aligned monospace <pre> block, not raw pipes.
+	in := "| Name | Score |\n|------|-------|\n| Alice | 10 |\n| Bob | 5 |"
+	got := markdownToTelegramHTML(in)
+	want := "<pre>Name   Score\n─────  ─────\nAlice  10\nBob    5\n</pre>"
+	if got != want {
+		t.Errorf("got:\n%q\nwant:\n%q", got, want)
+	}
+	if strings.Contains(got, "|") {
+		t.Errorf("table rendered as raw pipes: %q", got)
+	}
+}
+
+func TestSplitForTelegram(t *testing.T) {
+	t.Run("blank returns nil", func(t *testing.T) {
+		if got := splitForTelegram("  \n  "); got != nil {
+			t.Errorf("got %v, want nil", got)
+		}
+	})
+
+	t.Run("short text is one unchanged chunk", func(t *testing.T) {
+		got := splitForTelegram("hello <b>world</b>")
+		if len(got) != 1 || got[0] != "hello <b>world</b>" {
+			t.Errorf("got %v", got)
+		}
+	})
+
+	t.Run("long text splits into within-limit chunks", func(t *testing.T) {
+		got := splitForTelegram(strings.Repeat("word ", 2000)) // ~10k chars
+		if len(got) < 2 {
+			t.Fatalf("expected multiple chunks, got %d", len(got))
+		}
+		for i, c := range got {
+			if utf16Len(c) > telegramTextLimit {
+				t.Errorf("chunk %d is %d UTF-16 units, over the limit", i, utf16Len(c))
+			}
+		}
+	})
+
+	t.Run("open tag is balanced across the split", func(t *testing.T) {
+		got := splitForTelegram("<b>" + strings.Repeat("x ", 3000) + "</b>")
+		if len(got) < 2 {
+			t.Fatalf("expected multiple chunks, got %d", len(got))
+		}
+		for i, c := range got {
+			if strings.Count(c, "<b>") != strings.Count(c, "</b>") {
+				t.Errorf("chunk %d has unbalanced <b> tags", i)
+			}
+			if utf16Len(c) > telegramTextLimit {
+				t.Errorf("chunk %d is %d UTF-16 units, over the limit", i, utf16Len(c))
+			}
+		}
+	})
+}
