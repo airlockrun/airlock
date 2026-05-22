@@ -376,7 +376,7 @@ export const useChatStore = defineStore('chat', () => {
       // address-gated onRunMessage.
       ws.onMessage('resync', (_payload, env) => {
         if (!boundAgentId.value || env?.topicId !== boundAgentId.value) return
-        void loadConversation(boundAgentId.value)
+        void reloadCurrentThread()
       }),
     )
   }
@@ -545,8 +545,14 @@ export const useChatStore = defineStore('chat', () => {
     return msgs
   }
 
-  // Restore confirmation state from server-provided pending confirmation.
-  function restorePendingConfirmation(pc: { toolCallId: string; toolName: string; input: string }, msgs: AgentMessageInfo[]) {
+  // Restore confirmation state from a server-provided pending confirmation
+  // (conversation load after a refresh). A delegated A2A confirmation
+  // (permission/patterns/code populated) carries its own detail; a direct
+  // run_js confirmation describes the call via toolName/input.
+  function restorePendingConfirmation(
+    pc: { toolCallId: string; toolName: string; input: string; permission?: string; patterns?: string[]; code?: string },
+    msgs: AgentMessageInfo[],
+  ) {
     const input = formatToolArgs((() => { try { return JSON.parse(pc.input) } catch { return pc.input } })())
     activeToolCalls.set(pc.toolCallId, {
       toolCallId: pc.toolCallId,
@@ -556,19 +562,27 @@ export const useChatStore = defineStore('chat', () => {
       error: '',
       status: 'confirmation',
     })
-    pendingConfirmation.value = {
-      runId: '',
-      permission: pc.toolName,
-      patterns: [],
-      code: input,
-      toolCallId: pc.toolCallId,
-    }
-    // Hide the assistant message that contains this tool call — it's shown via activeToolCalls.
+    // Anchor the inline confirmation box to the assistant message bearing
+    // this tool call, if the thread has one — and hide that message, since
+    // it renders via activeToolCalls instead.
+    let anchored = false
     for (let i = msgs.length - 1; i >= 0; i--) {
       if (msgs[i].role === 'assistant' && (msgs[i] as any).blocks?.some((b: any) => b.kind === 'tool' && b.toolCallId === pc.toolCallId)) {
         ;(msgs[i] as any)._hidden = true
+        anchored = true
         break
       }
+    }
+    pendingConfirmation.value = {
+      runId: '',
+      permission: pc.permission || pc.toolName,
+      patterns: pc.patterns ? [...pc.patterns] : [],
+      code: pc.code || input,
+      // Keep toolCallId only when an assistant message anchors it (drives
+      // the inline box). A delegated A2A confirmation's suspending turn is
+      // not persisted to the thread, so there's no anchor — blank it and
+      // the standalone confirmation card renders instead of nothing.
+      toolCallId: anchored ? pc.toolCallId : '',
     }
   }
 
@@ -612,7 +626,7 @@ export const useChatStore = defineStore('chat', () => {
     hasOlder.value = convResponse.hasOlderMessages
     hasNewer.value = false
     newMessagesPending.value = false
-    if (convResponse.pendingConfirmation?.toolCallId) {
+    if (convResponse.pendingConfirmation) {
       restorePendingConfirmation(convResponse.pendingConfirmation, messages.value)
     }
     // Adopt an already-in-flight run so subsequent WS deltas
@@ -639,17 +653,30 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   // convId pins a specific thread (sidebar click / ?c= in the URL).
-  // Omitted → most-recent web thread for this agent, or an empty
-  // "new conversation" view if the agent has none.
+  // Omitted — or naming a thread that no longer exists — opens an empty
+  // "new conversation" view rather than resuming the most recent thread,
+  // so "New chat" and an agent's Chat button always start fresh. Past
+  // threads are reached through the sidebar.
   async function loadConversation(agentId: string, convId?: string) {
     boundAgentId.value = agentId
     const web = await refreshConversations(agentId)
     if (convId && web.some(c => c.id === convId)) {
       await loadConversationById(convId)
-    } else if (!convId && web.length > 0) {
-      await loadConversationById(web[0].id)
     } else {
       conversationId.value = null
+      resetThreadView()
+    }
+  }
+
+  // Re-fetch the active thread (and refresh the switcher list) without
+  // switching threads — for a resync, a jump-to-latest, or a slash
+  // command that inserted backend rows. Stays on the empty view when no
+  // thread is active.
+  async function reloadCurrentThread() {
+    if (boundAgentId.value) await refreshConversations(boundAgentId.value)
+    if (conversationId.value) {
+      await loadConversationById(conversationId.value)
+    } else {
       resetThreadView()
     }
   }
@@ -716,7 +743,8 @@ export const useChatStore = defineStore('chat', () => {
   // banner — when the user is scrolled up in history and new agent output
   // arrives, they can click to jump back to live.
   async function jumpToLatest(agentId: string) {
-    await loadConversation(agentId)
+    boundAgentId.value = agentId
+    await reloadCurrentThread()
   }
 
   async function sendMessage(agentId: string, text: string, approved?: boolean, filePaths?: string[]) {
@@ -812,7 +840,7 @@ export const useChatStore = defineStore('chat', () => {
       // to pick up any checkpoint markers or other backend-inserted rows.
       if (!response.runId && response.commandReply) {
         sending.value = false
-        await loadConversation(agentId)
+        await reloadCurrentThread()
         return
       }
 

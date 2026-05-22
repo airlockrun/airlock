@@ -319,11 +319,19 @@ message PaginatedMessagesResponse {
   bool has_more = 2;
 }
 
-// PendingConfirmation describes a tool call awaiting user approval.
+// PendingConfirmation describes a tool call awaiting user approval,
+// reconstructed from a suspended run's checkpoint on conversation load.
 message PendingConfirmation {
   string tool_call_id = 1;
   string tool_name = 2;
-  string input = 3;  // JSON-encoded tool input
+  string input = 3;  // JSON-encoded tool input (direct run_js confirmation)
+  // permission/patterns/code carry the confirmation detail for a
+  // delegated (A2A) suspension — a sub-agent's request_confirmation that
+  // surfaced through promptAgent. Mirrors ConfirmationRequiredEvent so
+  // the UI renders it the same as a live confirmation.
+  string permission = 4;
+  repeated string patterns = 5;
+  string code = 6;
 }
 
 // --- Prompt ---

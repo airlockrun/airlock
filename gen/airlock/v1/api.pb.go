@@ -2511,12 +2511,20 @@ func (x *PaginatedMessagesResponse) GetHasMore() bool {
 	return false
 }
 
-// PendingConfirmation describes a tool call awaiting user approval.
+// PendingConfirmation describes a tool call awaiting user approval,
+// reconstructed from a suspended run's checkpoint on conversation load.
 type PendingConfirmation struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	ToolCallId    string                 `protobuf:"bytes,1,opt,name=tool_call_id,json=toolCallId,proto3" json:"tool_call_id,omitempty"`
-	ToolName      string                 `protobuf:"bytes,2,opt,name=tool_name,json=toolName,proto3" json:"tool_name,omitempty"`
-	Input         string                 `protobuf:"bytes,3,opt,name=input,proto3" json:"input,omitempty"` // JSON-encoded tool input
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	ToolCallId string                 `protobuf:"bytes,1,opt,name=tool_call_id,json=toolCallId,proto3" json:"tool_call_id,omitempty"`
+	ToolName   string                 `protobuf:"bytes,2,opt,name=tool_name,json=toolName,proto3" json:"tool_name,omitempty"`
+	Input      string                 `protobuf:"bytes,3,opt,name=input,proto3" json:"input,omitempty"` // JSON-encoded tool input (direct run_js confirmation)
+	// permission/patterns/code carry the confirmation detail for a
+	// delegated (A2A) suspension — a sub-agent's request_confirmation that
+	// surfaced through promptAgent. Mirrors ConfirmationRequiredEvent so
+	// the UI renders it the same as a live confirmation.
+	Permission    string   `protobuf:"bytes,4,opt,name=permission,proto3" json:"permission,omitempty"`
+	Patterns      []string `protobuf:"bytes,5,rep,name=patterns,proto3" json:"patterns,omitempty"`
+	Code          string   `protobuf:"bytes,6,opt,name=code,proto3" json:"code,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2568,6 +2576,27 @@ func (x *PendingConfirmation) GetToolName() string {
 func (x *PendingConfirmation) GetInput() string {
 	if x != nil {
 		return x.Input
+	}
+	return ""
+}
+
+func (x *PendingConfirmation) GetPermission() string {
+	if x != nil {
+		return x.Permission
+	}
+	return ""
+}
+
+func (x *PendingConfirmation) GetPatterns() []string {
+	if x != nil {
+		return x.Patterns
+	}
+	return nil
+}
+
+func (x *PendingConfirmation) GetCode() string {
+	if x != nil {
+		return x.Code
 	}
 	return ""
 }
@@ -4366,12 +4395,17 @@ const file_airlock_v1_api_proto_rawDesc = "" +
 	"\x10in_flight_run_id\x18\x05 \x01(\tR\rinFlightRunId\"p\n" +
 	"\x19PaginatedMessagesResponse\x128\n" +
 	"\bmessages\x18\x01 \x03(\v2\x1c.airlock.v1.AgentMessageInfoR\bmessages\x12\x19\n" +
-	"\bhas_more\x18\x02 \x01(\bR\ahasMore\"j\n" +
+	"\bhas_more\x18\x02 \x01(\bR\ahasMore\"\xba\x01\n" +
 	"\x13PendingConfirmation\x12 \n" +
 	"\ftool_call_id\x18\x01 \x01(\tR\n" +
 	"toolCallId\x12\x1b\n" +
 	"\ttool_name\x18\x02 \x01(\tR\btoolName\x12\x14\n" +
-	"\x05input\x18\x03 \x01(\tR\x05input\"\x9f\x01\n" +
+	"\x05input\x18\x03 \x01(\tR\x05input\x12\x1e\n" +
+	"\n" +
+	"permission\x18\x04 \x01(\tR\n" +
+	"permission\x12\x1a\n" +
+	"\bpatterns\x18\x05 \x03(\tR\bpatterns\x12\x12\n" +
+	"\x04code\x18\x06 \x01(\tR\x04code\"\x9f\x01\n" +
 	"\rPromptRequest\x12'\n" +
 	"\x0fconversation_id\x18\x01 \x01(\tR\x0econversationId\x12\x18\n" +
 	"\amessage\x18\x02 \x01(\tR\amessage\x12\x1d\n" +

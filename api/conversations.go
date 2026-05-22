@@ -212,22 +212,48 @@ func (h *conversationsHandler) GetConversation(w http.ResponseWriter, r *http.Re
 	if suspendedRun, err := q.GetLatestSuspendedRunByConversation(ctx, convID.String()); err == nil {
 		var checkpoint struct {
 			SuspensionContext struct {
+				Reason           string `json:"reason"`
 				PendingToolCalls []struct {
 					ID    string          `json:"id"`
 					Name  string          `json:"name"`
 					Input json.RawMessage `json:"input"`
 				} `json:"pendingToolCalls"`
+				// Populated when Reason == "delegated": a sub-agent's
+				// request_confirmation that bubbled up through promptAgent.
+				Data struct {
+					ToolCallID string `json:"toolCallID"`
+					Child      struct {
+						Confirmation struct {
+							Permission string   `json:"permission"`
+							Patterns   []string `json:"patterns"`
+							Code       string   `json:"code"`
+						} `json:"confirmation"`
+					} `json:"child"`
+				} `json:"data"`
 			} `json:"suspensionContext"`
 		}
-		if suspendedRun.Checkpoint != nil {
-			if err := json.Unmarshal(suspendedRun.Checkpoint, &checkpoint); err == nil {
-				if pcs := checkpoint.SuspensionContext.PendingToolCalls; len(pcs) > 0 {
-					pc := pcs[0]
-					resp.PendingConfirmation = &airlockv1.PendingConfirmation{
-						ToolCallId: pc.ID,
-						ToolName:   pc.Name,
-						Input:      string(pc.Input),
-					}
+		if suspendedRun.Checkpoint != nil && json.Unmarshal(suspendedRun.Checkpoint, &checkpoint) == nil {
+			sc := checkpoint.SuspensionContext
+			switch {
+			case sc.Reason == "delegated" && sc.Data.Child.Confirmation.Code != "":
+				// The actionable detail (code, permission) lives in the
+				// delegated child's confirmation — the promptAgent tool
+				// call in PendingToolCalls only carries the delegation
+				// message, not what the user is actually approving.
+				conf := sc.Data.Child.Confirmation
+				resp.PendingConfirmation = &airlockv1.PendingConfirmation{
+					ToolCallId: sc.Data.ToolCallID,
+					ToolName:   conf.Permission,
+					Permission: conf.Permission,
+					Patterns:   conf.Patterns,
+					Code:       conf.Code,
+				}
+			case len(sc.PendingToolCalls) > 0:
+				pc := sc.PendingToolCalls[0]
+				resp.PendingConfirmation = &airlockv1.PendingConfirmation{
+					ToolCallId: pc.ID,
+					ToolName:   pc.Name,
+					Input:      string(pc.Input),
 				}
 			}
 		}
@@ -661,13 +687,14 @@ func (h *conversationsHandler) Prompt(w http.ResponseWriter, r *http.Request) {
 // the result strictly as a user-side notification removes that
 // ambiguity.
 //
-// status: "success" or "error". message: the agent-provided exit
-// summary or the underlying failure reason.
+// status: "success", "error", or "refused". message: the agent-provided
+// exit summary, the underlying failure reason, or the out-of-scope
+// explanation.
 func (h *conversationsHandler) NotifyUpgradeComplete(ctx context.Context, agentID uuid.UUID, conversationID, status, message string) error {
 	h.convLocks.Lock(conversationID)
 
 	source := "upgrade"
-	if status == "error" {
+	if status == "error" || status == "refused" {
 		source = "error"
 	}
 
@@ -676,8 +703,11 @@ func (h *conversationsHandler) NotifyUpgradeComplete(ctx context.Context, agentI
 	// agent..." as a user statement of fact and tries to verify it;
 	// with the prefix it understands this is a system-injected event.
 	prefix := "[Upgrade succeeded] "
-	if status == "error" {
+	switch status {
+	case "error":
 		prefix = "[Upgrade failed] "
+	case "refused":
+		prefix = "[Request declined] "
 	}
 
 	llmText := prefix + message
