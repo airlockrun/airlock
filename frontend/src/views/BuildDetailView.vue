@@ -25,6 +25,8 @@ const statusSeverity = computed(() => {
     case 'complete': return 'success'
     case 'building': return 'warn'
     case 'failed': return 'danger'
+    // refused: the request was out of scope — not an error, so not red.
+    case 'refused': return 'warn'
     default: return 'secondary'
   }
 })

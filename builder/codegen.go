@@ -88,12 +88,14 @@ func (b *BuildService) runCodegen(
 		return "", "", fmt.Errorf("sol run: %w", err)
 	}
 
-	// Exit-tool mapping mirrors the pre-refactor doBuild/doUpgrade logic:
-	// RunExited + ExitStatus=="success" → success path. RunCompleted (no
-	// exit after nudges) → treat as failure (agent forgot to call exit;
-	// we have no signal whether the work is good). Anything else wraps
-	// the underlying error with %w so the outer cancellation check still
-	// fires via errors.Is.
+	// Exit-tool mapping. RunExited + ExitStatus=="success" → success
+	// path. ExitStatus=="refused" → RefusedError, which Execute records
+	// as a "refused" build (the request was out of scope, not a
+	// failure). Any other exit status → plain error → failed build.
+	// RunCompleted (no exit after nudges) → treat as failure (agent
+	// forgot to call exit; we have no signal whether the work is good).
+	// Anything else wraps the underlying error with %w so the outer
+	// cancellation check still fires via errors.Is.
 	if solResult.Status != sol.RunExited {
 		if solResult.Status == sol.RunCompleted {
 			logLine("[exit] agent did not call the exit tool after 2 reminders — treating as failure")
@@ -104,7 +106,11 @@ func (b *BuildService) runCodegen(
 		}
 		return "", "", errors.New("sol codegen failed")
 	}
-	if solResult.ExitStatus != "success" {
+	if solResult.ExitStatus != exitStatusSuccess {
+		if solResult.ExitStatus == exitStatusRefused {
+			logLine(fmt.Sprintf("[exit] agent declined the request as out of scope: %s", solResult.ExitMessage))
+			return "", "", &RefusedError{Message: solResult.ExitMessage}
+		}
 		logLine(fmt.Sprintf("[exit] agent reported error: %s", solResult.ExitMessage))
 		// Return the exit message verbatim — the conversation notifier
 		// surfaces err.Error() as the "agent reports it failed because…"

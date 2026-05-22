@@ -190,7 +190,16 @@ func (b *BuildService) Execute(ctx context.Context, plan BuildPlan) (string, err
 	// ── Phase C: codegen (Sol) if Instruction is non-empty ─────────────
 	commitHash, exitMessage, codegenErr := b.runCodegen(ctx, plan, agent, build, agentID, agentUUID, testDBURL, testDBPSQL, cloneName, solLog)
 	if codegenErr != nil {
-		completeBuild("failed", codegenErr.Error(), commitHash, "")
+		// A "refused" exit is recorded distinctly: the request was out
+		// of scope, the existing agent is untouched — not a build that
+		// failed. Callers (RunUpgrade/Rollback) likewise unwrap
+		// RefusedError to report a declined request, not a failure.
+		buildStatus := "failed"
+		var refErr *RefusedError
+		if errors.As(codegenErr, &refErr) {
+			buildStatus = "refused"
+		}
+		completeBuild(buildStatus, codegenErr.Error(), commitHash, "")
 		return "", codegenErr
 	}
 	if commitHash == "" {

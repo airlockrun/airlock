@@ -11,12 +11,14 @@ import (
 	"go.uber.org/zap"
 )
 
-// PostUpgradeNotifier is called after an upgrade finishes (success or
-// failure) to post a single message into the originating conversation.
+// PostUpgradeNotifier is called after an upgrade finishes (success,
+// failure, or refusal) to post a single message into the originating
+// conversation.
 //
-// status is "success" or "error". message is the human-readable text to
-// surface — typically sourced from the agent-builder's exit tool on
-// success, or the underlying failure reason on error. The notifier
+// status is "success", "error", or "refused". message is the
+// human-readable text to surface — typically sourced from the
+// agent-builder's exit tool on success, the underlying failure reason
+// on error, or the out-of-scope explanation on refused. The notifier
 // posts exactly ONE message and does not trigger a follow-up LLM turn —
 // the agent's own exit-tool summary already describes the outcome, so
 // re-prompting just produces redundant text.
@@ -123,6 +125,25 @@ func (b *BuildService) RunUpgrade(_ context.Context, input UpgradeInput) {
 
 	successMsg, runErr := b.Execute(ctx, plan)
 	if runErr != nil {
+		// A refused request is not an upgrade failure — the agent is
+		// untouched and healthy. Release the upgrade lock back to idle
+		// and tell the user the request was declined, not that the
+		// upgrade broke.
+		var refErr *RefusedError
+		if errors.As(runErr, &refErr) {
+			b.logger.Info("upgrade request declined as out of scope", zap.String("agent_id", input.AgentID))
+			_ = q.UpdateAgentUpgradeStatus(dbCtx, dbq.UpdateAgentUpgradeStatusParams{
+				ID:            agentPgUUID,
+				UpgradeStatus: "idle",
+				ErrorMessage:  "",
+			})
+			if input.ConversationID != "" && b.upgradeNotifier != nil {
+				if nerr := b.upgradeNotifier.NotifyUpgradeComplete(dbCtx, agentUUID, input.ConversationID, "refused", refErr.Message); nerr != nil {
+					b.logger.Error("post-upgrade refusal notification failed", zap.Error(nerr))
+				}
+			}
+			return
+		}
 		errMsg := runErr.Error()
 		if errors.Is(runErr, context.Canceled) {
 			errMsg = "cancelled by user"

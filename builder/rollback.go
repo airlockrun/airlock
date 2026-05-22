@@ -136,6 +136,23 @@ func (b *BuildService) Rollback(_ context.Context, in RollbackInput) {
 
 func (b *BuildService) failRollback(dbCtx context.Context, agentPgUUID pgtype.UUID, agentUUID uuid.UUID, conversationID string, runErr error) {
 	q := dbq.New(b.db.Pool())
+	// A refused request is not a rollback failure — the agent is
+	// untouched. Release the lock back to idle and report it declined.
+	var refErr *RefusedError
+	if errors.As(runErr, &refErr) {
+		b.logger.Info("rollback request declined as out of scope", zap.String("agent_id", agentUUID.String()))
+		_ = q.UpdateAgentUpgradeStatus(dbCtx, dbq.UpdateAgentUpgradeStatusParams{
+			ID:            agentPgUUID,
+			UpgradeStatus: "idle",
+			ErrorMessage:  "",
+		})
+		if conversationID != "" && b.upgradeNotifier != nil {
+			if nerr := b.upgradeNotifier.NotifyUpgradeComplete(dbCtx, agentUUID, conversationID, "refused", refErr.Message); nerr != nil {
+				b.logger.Error("post-rollback refusal notification failed", zap.Error(nerr))
+			}
+		}
+		return
+	}
 	errMsg := runErr.Error()
 	if errors.Is(runErr, context.Canceled) {
 		errMsg = "cancelled by user"

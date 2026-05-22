@@ -242,6 +242,21 @@ onMounted(async () => {
       }
       toast.add({ severity: 'warn', summary: 'Build cancelled', life: 3000 })
       tabsKey.value++
+    } else if (payload.status === 'refused') {
+      // The request was out of scope — the agent itself is untouched.
+      // An initial build still has no image, so it lands on 'failed';
+      // an upgrade just returns to idle.
+      if (agent.value) {
+        agent.value.upgradeStatus = 'idle'
+        if (agent.value.status === 'building') agent.value.status = 'failed'
+      }
+      toast.add({
+        severity: 'warn',
+        summary: 'Request declined',
+        detail: payload.error || "Outside the agent builder's scope",
+        life: 8000,
+      })
+      tabsKey.value++
     }
   })
 

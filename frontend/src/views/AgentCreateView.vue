@@ -324,7 +324,9 @@ async function onSubmit() {
       if (payload.buildId) activeBuildId.value = payload.buildId
       if (payload.status === 'complete' || payload.status === 'active' || payload.status === 'done') {
         onBuildDone(agent.id)
-      } else if (payload.status === 'failed' || payload.status === 'error') {
+      } else if (payload.status === 'failed' || payload.status === 'error' || payload.status === 'refused') {
+        // refused: the request was out of scope — payload.error carries
+        // the agent-builder's explanation of what it couldn't build.
         onBuildFailed(payload.error)
       }
     })

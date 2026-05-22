@@ -44,14 +44,14 @@ type solRunOpts struct {
 
 // solRunResult captures the outcome of an in-process Sol run. ExitStatus
 // and ExitMessage are populated when the agent invoked the exit tool —
-// callers map ExitStatus="error" onto a failed build and "success" onto
-// the next pipeline step.
+// callers map ExitStatus="success" onto the next pipeline step and any
+// other status ("error" or "refused") onto a halted pipeline.
 type solRunResult struct {
 	Status      sol.RunStatus
 	TotalText   string
 	Error       error
 	ExitCalled  bool
-	ExitStatus  string // "success" or "error" when ExitCalled
+	ExitStatus  string // "success", "error", or "refused" when ExitCalled
 	ExitMessage string
 	Nudges      int
 }
@@ -210,18 +210,19 @@ func (b *BuildService) runSolInProcess(ctx context.Context, opts solRunOpts) (*s
 
 	remoteExec := executor.NewRemoteExecutor(transport, remoteTools)
 
-	// Step 5: Register the exit tool as a LOCAL tool. Sol's NewRunner can
-	// auto-inject it into the agent's tool set, but execution still flows
-	// through the caller-provided executor — and our compositeExecutor
-	// routes anything not in `local.Tools()` to the remote toolserver,
-	// which does not implement `exit`. Adding it here ensures the
-	// composite keeps `exit` local; sol's auto-injection then sees it
-	// already in the tool set and skips its own copy.
+	// Step 5: Register the agent-builder's exit tool (sol's exit plus a
+	// "refused" status) as a LOCAL tool. Sol's NewRunner can auto-inject
+	// its own exit tool, but execution still flows through the
+	// caller-provided executor — and our compositeExecutor routes
+	// anything not in `local.Tools()` to the remote toolserver, which
+	// does not implement `exit`. Adding it here ensures the composite
+	// keeps `exit` local; sol's auto-injection then sees `exit` already
+	// in the tool set and skips its own copy.
 	exitState := &soltools.ExitState{}
 	if opts.LocalTools == nil {
 		opts.LocalTools = tool.Set{}
 	}
-	opts.LocalTools["exit"] = soltools.ExitTool(exitState)
+	opts.LocalTools["exit"] = newExitTool(exitState)
 
 	// Step 6: Build tool.Set and executor, merging local tools if present.
 	toolSet := remoteToolsToSet(remoteTools)
