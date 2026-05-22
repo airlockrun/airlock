@@ -12,6 +12,7 @@ interface Connection {
   authorized: boolean
   hasOauthApp: boolean
   setupInstructions: string
+  warnings: string[]
 }
 
 const props = defineProps<{ agentId: string }>()
@@ -26,6 +27,14 @@ const oauthClientId = ref('')
 const oauthClientSecret = ref('')
 const oauthSaving = ref(false)
 const callbackUrl = ref('')
+
+// Connection health warnings, shown behind a (!) indicator in the table.
+const warnPopover = ref()
+const activeWarnings = ref<string[]>([])
+function showWarnings(event: Event, warnings: string[]) {
+  activeWarnings.value = warnings
+  warnPopover.value?.toggle(event)
+}
 
 function configure(conn: Connection) {
   if (conn.authMode === 'oauth') {
@@ -87,6 +96,7 @@ function mapConnection(raw: Record<string, any>): Connection {
     authorized: raw.authorized ?? false,
     hasOauthApp: raw.hasOauthApp ?? raw.has_oauth_app ?? false,
     setupInstructions: raw.setupInstructions ?? raw.setup_instructions ?? '',
+    warnings: raw.warnings ?? [],
   }
 }
 
@@ -113,10 +123,19 @@ onMounted(async () => {
       <Column field="authMode" header="Auth Mode" />
       <Column header="Status">
         <template #body="{ data: conn }">
-          <Tag
-            :value="conn.authorized ? 'Authorized' : 'Needs Setup'"
-            :severity="conn.authorized ? 'success' : 'warn'"
-          />
+          <span style="display: inline-flex; align-items: center; gap: 0.4rem">
+            <Tag
+              :value="conn.authorized ? 'Authorized' : 'Needs Setup'"
+              :severity="conn.authorized ? 'success' : 'warn'"
+            />
+            <i
+              v-if="conn.warnings.length"
+              class="pi pi-exclamation-circle"
+              style="color: var(--p-orange-500); cursor: pointer"
+              v-tooltip.top="'This connection has issues — click for details'"
+              @click="showWarnings($event, conn.warnings)"
+            />
+          </span>
         </template>
       </Column>
       <Column header="Actions">
@@ -140,6 +159,12 @@ onMounted(async () => {
         <template #body><Skeleton width="6rem" /></template>
       </Column>
     </DataTable>
+
+    <Popover ref="warnPopover">
+      <ul style="margin: 0; padding-left: 1.1rem; max-width: 24rem; font-size: 0.85rem">
+        <li v-for="(w, i) in activeWarnings" :key="i" style="margin: 0.2rem 0">{{ w }}</li>
+      </ul>
+    </Popover>
 
     <CredentialDialog
       v-if="selectedConn"

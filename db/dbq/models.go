@@ -300,6 +300,7 @@ type Connection struct {
 	TokenExpiresAt    pgtype.Timestamptz `json:"token_expires_at"`
 	CreatedAt         pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
+	AuthParams        []byte             `json:"auth_params"`
 }
 
 type LlmUsage struct {

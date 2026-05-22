@@ -45,13 +45,15 @@ func (h *agentHandler) ServiceProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// No credentials → 402 auth required.
+	// No credentials → 402 auth required. The agent's system prompt
+	// already tells it to direct the user to the agent settings page, so
+	// the response carries only slug/connName — not a raw OAuth URL,
+	// which would otherwise surface verbatim in the agent's reply.
 	if conn.AccessTokenRef == "" {
 		writeJSON(w, http.StatusPaymentRequired, map[string]string{
 			"error":    "auth_required",
 			"slug":     conn.Slug,
 			"connName": conn.Name,
-			"authUrl":  buildCredentialAuthURL(h.publicURL, agentID, slug, conn.AuthMode),
 			"message":  fmt.Sprintf("%s needs authorization", conn.Name),
 		})
 		return
@@ -63,7 +65,6 @@ func (h *agentHandler) ServiceProxy(w http.ResponseWriter, r *http.Request) {
 			"error":    "auth_required",
 			"slug":     conn.Slug,
 			"connName": conn.Name,
-			"authUrl":  buildCredentialAuthURL(h.publicURL, agentID, slug, conn.AuthMode),
 			"message":  fmt.Sprintf("%s authorization has expired", conn.Name),
 		})
 		return

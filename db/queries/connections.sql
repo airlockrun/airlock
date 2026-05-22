@@ -3,8 +3,8 @@
 -- Credential fields (client_id, client_secret, access_token_ref, refresh_token)
 -- are passed explicitly as '' on first insert; the ON CONFLICT clause
 -- preserves existing access_token_ref unless scopes changed.
-INSERT INTO connections (agent_id, slug, name, description, llm_hint, auth_mode, auth_url, token_url, base_url, scopes, auth_injection, setup_instructions, test_path, config, access, client_id, client_secret, access_token_ref, refresh_token)
-VALUES (@agent_id, @slug, @name, @description, @llm_hint, @auth_mode, @auth_url, @token_url, @base_url, @scopes, @auth_injection, @setup_instructions, @test_path, @config, @access, '', '', '', '')
+INSERT INTO connections (agent_id, slug, name, description, llm_hint, auth_mode, auth_url, token_url, base_url, scopes, auth_injection, setup_instructions, test_path, config, auth_params, access, client_id, client_secret, access_token_ref, refresh_token)
+VALUES (@agent_id, @slug, @name, @description, @llm_hint, @auth_mode, @auth_url, @token_url, @base_url, @scopes, @auth_injection, @setup_instructions, @test_path, @config, @auth_params, @access, '', '', '', '')
 ON CONFLICT (agent_id, slug) DO UPDATE SET
     name = EXCLUDED.name,
     description = EXCLUDED.description,
@@ -18,6 +18,7 @@ ON CONFLICT (agent_id, slug) DO UPDATE SET
     setup_instructions = EXCLUDED.setup_instructions,
     test_path = EXCLUDED.test_path,
     config = EXCLUDED.config,
+    auth_params = EXCLUDED.auth_params,
     access = EXCLUDED.access,
     access_token_ref = CASE WHEN connections.scopes != EXCLUDED.scopes THEN '' ELSE connections.access_token_ref END,
     refresh_token = CASE WHEN connections.scopes != EXCLUDED.scopes THEN '' ELSE connections.refresh_token END,
@@ -54,6 +55,7 @@ SELECT id, agent_id, slug, name, description, auth_mode, auth_url, base_url,
        scopes, setup_instructions, test_path,
        (access_token_ref != '') AS authorized,
        (client_id != '') AS has_oauth_app,
+       (refresh_token != '') AS has_refresh_token,
        token_expires_at
 FROM connections WHERE agent_id = @agent_id ORDER BY slug;
 
@@ -66,9 +68,10 @@ UPDATE connections SET
 WHERE agent_id = @agent_id AND slug = @slug;
 
 -- name: GetConnectionForOAuth :one
--- For OAuth flow: need auth_url, token_url, scopes, client_id, client_secret
+-- For OAuth flow: need auth_url, token_url, scopes, client_id, client_secret,
+-- and auth_params (extra authorize-request params overriding the defaults).
 SELECT id, agent_id, slug, name, auth_mode, auth_url, token_url, scopes,
-       client_id, client_secret
+       client_id, client_secret, auth_params
 FROM connections WHERE agent_id = @agent_id AND slug = @slug;
 
 -- name: ClearConnectionCredentials :exec

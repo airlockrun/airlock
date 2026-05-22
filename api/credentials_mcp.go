@@ -582,7 +582,7 @@ func (h *credentialHandler) MCPOAuthStart(w http.ResponseWriter, r *http.Request
 	}
 
 	callbackURL := h.publicURL + "/api/v1/credentials/oauth/callback"
-	authURL, err := h.oauthClient.BuildAuthURL(server.AuthUrl, clientID, callbackURL, state, challenge, server.Scopes)
+	authURL, err := h.oauthClient.BuildAuthURL(server.AuthUrl, clientID, callbackURL, state, challenge, server.Scopes, nil)
 	if err != nil {
 		h.logger.Error("build auth URL failed", zap.Error(err))
 		writeError(w, http.StatusInternalServerError, "failed to build authorization URL")

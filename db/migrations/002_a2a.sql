@@ -420,7 +420,18 @@ ALTER TABLE agent_builds
 ALTER TABLE agent_builds
     ALTER COLUMN sdk_version DROP DEFAULT;
 
+-- connections.auth_params — extra OAuth authorization-request query
+-- params declared by the agent (agentsdk Connection.AuthParams), merged
+-- over the platform defaults per key at authorize time. An empty object
+-- is the real "no overrides" value; DEFAULT '{}' backfills existing
+-- rows then drops so every synced upsert records it explicitly.
+ALTER TABLE connections
+    ADD COLUMN auth_params jsonb NOT NULL DEFAULT '{}';
+ALTER TABLE connections
+    ALTER COLUMN auth_params DROP DEFAULT;
+
 -- +goose Down
+ALTER TABLE connections DROP COLUMN IF EXISTS auth_params;
 -- Best-effort inverse: re-add the columns (NOT NULL via transient
 -- default, then drop it per the no-fake-defaults rule). The values are
 -- not recoverable — they now live only in env.

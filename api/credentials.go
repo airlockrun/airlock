@@ -203,7 +203,22 @@ func (h *credentialHandler) OAuthStart(w http.ResponseWriter, r *http.Request) {
 	}
 
 	callbackURL := h.publicURL + "/api/v1/credentials/oauth/callback"
-	authURL, err := h.oauthClient.BuildAuthURL(conn.AuthUrl, clientID, callbackURL, state, challenge, conn.Scopes)
+	// Defaults that get a refresh token from Google (the common case):
+	// access_type=offline issues one, prompt=consent re-issues it on
+	// re-auth. Without a refresh token the connection dies when the
+	// access token expires (~1h) — the refresh job has nothing to renew.
+	// A connection's AuthParams override these per key for providers
+	// whose handshake differs.
+	authParams := map[string]string{"access_type": "offline", "prompt": "consent"}
+	if len(conn.AuthParams) > 0 {
+		var override map[string]string
+		if jsonErr := json.Unmarshal(conn.AuthParams, &override); jsonErr == nil {
+			for k, v := range override {
+				authParams[k] = v
+			}
+		}
+	}
+	authURL, err := h.oauthClient.BuildAuthURL(conn.AuthUrl, clientID, callbackURL, state, challenge, conn.Scopes, authParams)
 	if err != nil {
 		h.logger.Error("build auth URL failed", zap.Error(err))
 		writeError(w, http.StatusInternalServerError, "failed to build authorization URL")
@@ -509,6 +524,7 @@ func (h *credentialHandler) ListConnections(w http.ResponseWriter, r *http.Reque
 			HasOauthApp:       c.HasOauthApp,
 			SetupInstructions: c.SetupInstructions,
 			AuthUrl:           buildCredentialAuthURL(h.publicURL, agentID, c.Slug, c.AuthMode),
+			Warnings:          connectionWarnings(c.AuthMode, c.Authorized, c.HasRefreshToken, c.TokenExpiresAt),
 		}
 		if c.TokenExpiresAt.Valid {
 			ci.TokenExpiresAt = timestamppb.New(c.TokenExpiresAt.Time)

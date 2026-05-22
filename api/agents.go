@@ -1111,7 +1111,26 @@ func connectionToProto(c dbq.Connection, publicURL, agentID string) *airlockv1.C
 		SetupInstructions: c.SetupInstructions,
 		AuthUrl:           authURL,
 		TokenExpiresAt:    convert.PgTimestampToProto(c.TokenExpiresAt),
+		Warnings:          connectionWarnings(c.AuthMode, authorized, c.RefreshToken != "", c.TokenExpiresAt),
 	}
+}
+
+// connectionWarnings returns human-readable health warnings for an OAuth
+// connection, surfaced behind a (!) indicator in the UI. A connection
+// with no refresh token can't be renewed by the refresh job — once its
+// access token expires it's dead until the user re-authorizes.
+func connectionWarnings(authMode string, authorized, hasRefreshToken bool, tokenExpiresAt pgtype.Timestamptz) []string {
+	if authMode != "oauth" || !authorized {
+		return nil
+	}
+	var warnings []string
+	if !hasRefreshToken {
+		warnings = append(warnings, "No refresh token — this connection will stop working once its access token expires. Re-authorize to fix.")
+	}
+	if tokenExpiresAt.Valid && tokenExpiresAt.Time.Before(time.Now()) {
+		warnings = append(warnings, "Authorization has expired — re-authorize.")
+	}
+	return warnings
 }
 
 func webhookToProto(wh dbq.ListWebhooksByAgentWithStatusRow, publicURL, agentID string) *airlockv1.WebhookInfo {

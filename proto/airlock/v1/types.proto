@@ -307,6 +307,10 @@ message ConnectionInfo {
   bool authorized = 8;      // whether credentials exist and are valid
   bool has_oauth_app = 9;   // whether client_id/secret configured (oauth2 only)
   google.protobuf.Timestamp token_expires_at = 10;
+  // Human-readable health warnings for an authorized-but-fragile
+  // connection (e.g. no refresh token, or an expired token). Empty when
+  // healthy; the UI shows a (!) indicator when non-empty.
+  repeated string warnings = 11;
 }
 
 // BridgeInfo represents a chat platform bot instance.

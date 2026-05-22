@@ -73,6 +73,17 @@ func (h *agentHandler) UpsertConnection(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// auth_params is NOT NULL jsonb — a nil map marshals to "null", so
+	// default an empty object when the agent declared none.
+	authParams := []byte("{}")
+	if len(def.AuthParams) > 0 {
+		authParams, err = json.Marshal(def.AuthParams)
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "invalid auth_params")
+			return
+		}
+	}
+
 	q := dbq.New(h.db.Pool())
 	_, err = q.UpsertConnection(r.Context(), dbq.UpsertConnectionParams{
 		AgentID:           toPgUUID(agentID),
@@ -88,6 +99,7 @@ func (h *agentHandler) UpsertConnection(w http.ResponseWriter, r *http.Request) 
 		AuthInjection:     authInjection,
 		SetupInstructions: def.SetupInstructions,
 		Config:            []byte("{}"),
+		AuthParams:        authParams,
 		Access:            string(def.Access),
 	})
 	if err != nil {

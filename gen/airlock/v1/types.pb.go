@@ -1819,8 +1819,12 @@ type ConnectionInfo struct {
 	Authorized        bool                   `protobuf:"varint,8,opt,name=authorized,proto3" json:"authorized,omitempty"`                        // whether credentials exist and are valid
 	HasOauthApp       bool                   `protobuf:"varint,9,opt,name=has_oauth_app,json=hasOauthApp,proto3" json:"has_oauth_app,omitempty"` // whether client_id/secret configured (oauth2 only)
 	TokenExpiresAt    *timestamppb.Timestamp `protobuf:"bytes,10,opt,name=token_expires_at,json=tokenExpiresAt,proto3" json:"token_expires_at,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// Human-readable health warnings for an authorized-but-fragile
+	// connection (e.g. no refresh token, or an expired token). Empty when
+	// healthy; the UI shows a (!) indicator when non-empty.
+	Warnings      []string `protobuf:"bytes,11,rep,name=warnings,proto3" json:"warnings,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ConnectionInfo) Reset() {
@@ -1919,6 +1923,13 @@ func (x *ConnectionInfo) GetHasOauthApp() bool {
 func (x *ConnectionInfo) GetTokenExpiresAt() *timestamppb.Timestamp {
 	if x != nil {
 		return x.TokenExpiresAt
+	}
+	return nil
+}
+
+func (x *ConnectionInfo) GetWarnings() []string {
+	if x != nil {
+		return x.Warnings
 	}
 	return nil
 }
@@ -2988,7 +2999,7 @@ const file_airlock_v1_types_proto_rawDesc = "" +
 	"\x04path\x18\x02 \x01(\tR\x04path\x12\x16\n" +
 	"\x06method\x18\x03 \x01(\tR\x06method\x12\x16\n" +
 	"\x06access\x18\x04 \x01(\tR\x06access\x12 \n" +
-	"\vdescription\x18\x05 \x01(\tR\vdescription\"\xdb\x02\n" +
+	"\vdescription\x18\x05 \x01(\tR\vdescription\"\xf7\x02\n" +
 	"\x0eConnectionInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04slug\x18\x02 \x01(\tR\x04slug\x12\x12\n" +
@@ -3002,7 +3013,8 @@ const file_airlock_v1_types_proto_rawDesc = "" +
 	"authorized\x12\"\n" +
 	"\rhas_oauth_app\x18\t \x01(\bR\vhasOauthApp\x12D\n" +
 	"\x10token_expires_at\x18\n" +
-	" \x01(\v2\x1a.google.protobuf.TimestampR\x0etokenExpiresAt\"\xf7\x02\n" +
+	" \x01(\v2\x1a.google.protobuf.TimestampR\x0etokenExpiresAt\x12\x1a\n" +
+	"\bwarnings\x18\v \x03(\tR\bwarnings\"\xf7\x02\n" +
 	"\n" +
 	"BridgeInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x19\n" +

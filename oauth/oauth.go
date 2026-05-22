@@ -59,7 +59,9 @@ func GenerateState() (string, error) {
 }
 
 // BuildAuthURL constructs an OAuth 2.0 authorization URL with PKCE.
-func (c *Client) BuildAuthURL(authURL, clientID, redirectURI, state, codeChallenge, scopes string) (string, error) {
+// extraParams are provider-specific query parameters merged in last —
+// e.g. access_type=offline to request a refresh token.
+func (c *Client) BuildAuthURL(authURL, clientID, redirectURI, state, codeChallenge, scopes string, extraParams map[string]string) (string, error) {
 	u, err := url.Parse(authURL)
 	if err != nil {
 		return "", fmt.Errorf("parse authorization url: %w", err)
@@ -75,6 +77,9 @@ func (c *Client) BuildAuthURL(authURL, clientID, redirectURI, state, codeChallen
 
 	if scopes != "" {
 		q.Set("scope", scopes)
+	}
+	for k, v := range extraParams {
+		q.Set(k, v)
 	}
 
 	u.RawQuery = q.Encode()
