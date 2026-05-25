@@ -970,7 +970,7 @@ func (s *MCPServer) handlePromptCall(ctx context.Context, w http.ResponseWriter,
 	// External (non-agent) clients get a resource_link per artifact with
 	// a public presigned URL as the uri. The agent:// scheme would force
 	// the client through resources/read, which only resolves files under
-	// a registered agent_directories row — printToUser writes into a raw
+	// a registered agent_directories row — output() writes into a raw
 	// media/{mediaID}/ S3 prefix that nothing registers, so the agent://
 	// link 404s. A presigned URL sidesteps that entirely: the client
 	// (Claude Desktop, Cursor, etc.) treats the link as a direct fetch.

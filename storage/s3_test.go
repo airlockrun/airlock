@@ -127,6 +127,63 @@ func TestCopyObject(t *testing.T) {
 	}
 }
 
+// escapeS3Key is internal; test it via the exported wrapper used by
+// CopyObject. Slashes must be preserved (S3 keys are flat strings but
+// the SDK treats path-shaped keys segment-by-segment); non-ASCII must
+// be percent-encoded so x-amz-copy-source can carry them.
+func TestEscapeS3Key(t *testing.T) {
+	cases := []struct {
+		in, want string
+	}{
+		{"plain/path.txt", "plain/path.txt"},
+		{"agents/abc/tmp/файл.png", "agents/abc/tmp/%D1%84%D0%B0%D0%B9%D0%BB.png"},
+		{"a/b c/d.txt", "a/b%20c/d.txt"},
+		{"中文/テスト.bin", "%E4%B8%AD%E6%96%87/%E3%83%86%E3%82%B9%E3%83%88.bin"},
+	}
+	for _, c := range cases {
+		got := storage.EscapeS3KeyForTest(c.in)
+		if got != c.want {
+			t.Errorf("escapeS3Key(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+// Regression: a key with non-Latin codepoints used to make CopyObject
+// fail with "failed to copy file" because the raw key landed in the
+// x-amz-copy-source HTTP header (ASCII-only). CopyObject must now
+// percent-encode the source before the SDK signs the request.
+func TestCopyObject_NonLatinKey(t *testing.T) {
+	client := newTestClient(t)
+	ctx := context.Background()
+	suffix := uuid.New().String()[:8]
+	srcKey := "test/копия-" + suffix + "-файл.txt"
+	dstKey := "test/копия-" + suffix + "-результат.txt"
+	content := "non-latin copy"
+
+	if err := client.PutObject(ctx, srcKey, bytes.NewReader([]byte(content)), int64(len(content))); err != nil {
+		t.Fatalf("PutObject: %v", err)
+	}
+	defer client.DeleteObject(ctx, srcKey)
+	defer client.DeleteObject(ctx, dstKey)
+
+	if err := client.CopyObject(ctx, srcKey, dstKey); err != nil {
+		t.Fatalf("CopyObject with non-Latin key: %v", err)
+	}
+
+	reader, err := client.GetObject(ctx, dstKey)
+	if err != nil {
+		t.Fatalf("GetObject dst: %v", err)
+	}
+	got, err := io.ReadAll(reader)
+	reader.Close()
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	if string(got) != content {
+		t.Fatalf("content mismatch: got %q, want %q", string(got), content)
+	}
+}
+
 func TestPresignURLs(t *testing.T) {
 	client := newTestClient(t)
 	ctx := context.Background()

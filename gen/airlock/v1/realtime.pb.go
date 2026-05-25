@@ -670,12 +670,12 @@ func (x *RunErrorEvent) GetError() string {
 	return ""
 }
 
-// NotificationEvent carries a printToUser or topic publish notification.
+// NotificationEvent carries an output() or topic publish notification.
 type NotificationEvent struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	AgentId        string                 `protobuf:"bytes,1,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"`
 	ConversationId string                 `protobuf:"bytes,2,opt,name=conversation_id,json=conversationId,proto3" json:"conversation_id,omitempty"`
-	Topic          string                 `protobuf:"bytes,3,opt,name=topic,proto3" json:"topic,omitempty"`                          // empty for direct printToUser
+	Topic          string                 `protobuf:"bytes,3,opt,name=topic,proto3" json:"topic,omitempty"`                          // empty for direct output()
 	PartsJson      string                 `protobuf:"bytes,4,opt,name=parts_json,json=partsJson,proto3" json:"parts_json,omitempty"` // JSON-encoded []DisplayPart
 	Source         string                 `protobuf:"bytes,5,opt,name=source,proto3" json:"source,omitempty"`                        // "notification"
 	unknownFields  protoimpl.UnknownFields

@@ -329,7 +329,7 @@ export const RunErrorEventSchema: GenMessage<RunErrorEvent> = /*@__PURE__*/
   messageDesc(file_airlock_v1_realtime, 10);
 
 /**
- * NotificationEvent carries a printToUser or topic publish notification.
+ * NotificationEvent carries an output() or topic publish notification.
  *
  * @generated from message airlock.v1.NotificationEvent
  */
@@ -345,7 +345,7 @@ export type NotificationEvent = Message<"airlock.v1.NotificationEvent"> & {
   conversationId: string;
 
   /**
-   * empty for direct printToUser
+   * empty for direct output()
    *
    * @generated from field: string topic = 3;
    */

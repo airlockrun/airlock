@@ -413,7 +413,7 @@ WHERE m.conversation_id = $1
 ORDER BY m.seq ASC
 `
 
-// Agent context loading — excludes ephemeral messages (printToUser output) and
+// Agent context loading — excludes ephemeral messages (output() / topic publish) and
 // messages before the active context checkpoint. When no checkpoint is set,
 // returns all non-ephemeral messages. Checkpoint-marker rows (source='checkpoint')
 // are UI-only metadata and are never sent to the LLM.

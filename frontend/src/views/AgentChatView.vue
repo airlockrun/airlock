@@ -59,10 +59,25 @@ onMounted(async () => {
 
 // Sidebar navigation reuses this view: reload when the agent or the
 // selected conversation (?c=) changes.
+//
+// One exception: when the first message of a brand-new thread lands,
+// the chat.conversationId watcher below stamps that id into the URL
+// (?c=newId). That stamp changes routeConvId here and would otherwise
+// fire reload() mid-stream — loadConversationById runs resetTransient,
+// which wipes streamingText/currentRunId/sending, killing the live
+// bubble and dropping every text_delta that's already in flight. The
+// run resumes (loadConversationById restores currentRunId from
+// inFlightRunId) but streamingText is empty, so the bubble only ever
+// shows the second half until the next refresh.
+//
+// Skip the reload when the new routeConvId already matches the store's
+// conversation — that case is always our own URL echo, never a user
+// navigation.
 watch(
   () => [agentId.value, routeConvId.value],
   (cur, prev) => {
     if (cur[0] === prev[0] && cur[1] === prev[1]) return
+    if (cur[0] === prev[0] && cur[1] && cur[1] === chat.conversationId) return
     reload()
   },
 )

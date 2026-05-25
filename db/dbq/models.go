@@ -301,6 +301,7 @@ type Connection struct {
 	CreatedAt         pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
 	AuthParams        []byte             `json:"auth_params"`
+	Headers           []byte             `json:"headers"`
 }
 
 type LlmUsage struct {

@@ -32,7 +32,7 @@ func (q *Queries) ClearConnectionCredentials(ctx context.Context, arg ClearConne
 }
 
 const getConnectionBySlug = `-- name: GetConnectionBySlug :one
-SELECT id, agent_id, slug, name, description, llm_hint, access, auth_mode, auth_url, token_url, base_url, scopes, auth_injection, test_path, setup_instructions, config, client_id, client_secret, access_token_ref, refresh_token, token_expires_at, created_at, updated_at, auth_params FROM connections WHERE agent_id = $1 AND slug = $2
+SELECT id, agent_id, slug, name, description, llm_hint, access, auth_mode, auth_url, token_url, base_url, scopes, auth_injection, test_path, setup_instructions, config, client_id, client_secret, access_token_ref, refresh_token, token_expires_at, created_at, updated_at, auth_params, headers FROM connections WHERE agent_id = $1 AND slug = $2
 `
 
 type GetConnectionBySlugParams struct {
@@ -68,6 +68,7 @@ func (q *Queries) GetConnectionBySlug(ctx context.Context, arg GetConnectionBySl
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.AuthParams,
+		&i.Headers,
 	)
 	return i, err
 }
@@ -121,7 +122,7 @@ func (q *Queries) GetConnectionForOAuth(ctx context.Context, arg GetConnectionFo
 const getConnectionWithCredentialStatus = `-- name: GetConnectionWithCredentialStatus :one
 SELECT id, agent_id, slug, name, description, auth_mode, auth_url, base_url,
        scopes, setup_instructions, test_path,
-       (access_token_ref != '') AS authorized,
+       (COALESCE(auth_mode = 'none' OR access_token_ref != '', false))::boolean AS authorized,
        (client_id != '') AS has_oauth_app,
        token_expires_at
 FROM connections WHERE agent_id = $1 AND slug = $2
@@ -149,7 +150,9 @@ type GetConnectionWithCredentialStatusRow struct {
 	TokenExpiresAt    pgtype.Timestamptz `json:"token_expires_at"`
 }
 
-// Returns connection with enough info to determine if authorized
+// Returns connection with enough info to determine if authorized.
+// auth_mode='none' connections need no credentials, so they're always
+// considered authorized; oauth/token connections require a stored token.
 func (q *Queries) GetConnectionWithCredentialStatus(ctx context.Context, arg GetConnectionWithCredentialStatusParams) (GetConnectionWithCredentialStatusRow, error) {
 	row := q.db.QueryRow(ctx, getConnectionWithCredentialStatus, arg.AgentID, arg.Slug)
 	var i GetConnectionWithCredentialStatusRow
@@ -173,7 +176,7 @@ func (q *Queries) GetConnectionWithCredentialStatus(ctx context.Context, arg Get
 }
 
 const listConnectionsByAgent = `-- name: ListConnectionsByAgent :many
-SELECT id, agent_id, slug, name, description, llm_hint, access, auth_mode, auth_url, token_url, base_url, scopes, auth_injection, test_path, setup_instructions, config, client_id, client_secret, access_token_ref, refresh_token, token_expires_at, created_at, updated_at, auth_params FROM connections WHERE agent_id = $1
+SELECT id, agent_id, slug, name, description, llm_hint, access, auth_mode, auth_url, token_url, base_url, scopes, auth_injection, test_path, setup_instructions, config, client_id, client_secret, access_token_ref, refresh_token, token_expires_at, created_at, updated_at, auth_params, headers FROM connections WHERE agent_id = $1
 `
 
 func (q *Queries) ListConnectionsByAgent(ctx context.Context, agentID pgtype.UUID) ([]Connection, error) {
@@ -210,6 +213,7 @@ func (q *Queries) ListConnectionsByAgent(ctx context.Context, agentID pgtype.UUI
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.AuthParams,
+			&i.Headers,
 		); err != nil {
 			return nil, err
 		}
@@ -224,7 +228,7 @@ func (q *Queries) ListConnectionsByAgent(ctx context.Context, agentID pgtype.UUI
 const listConnectionsWithStatus = `-- name: ListConnectionsWithStatus :many
 SELECT id, agent_id, slug, name, description, auth_mode, auth_url, base_url,
        scopes, setup_instructions, test_path,
-       (access_token_ref != '') AS authorized,
+       (COALESCE(auth_mode = 'none' OR access_token_ref != '', false))::boolean AS authorized,
        (client_id != '') AS has_oauth_app,
        (refresh_token != '') AS has_refresh_token,
        token_expires_at
@@ -249,7 +253,8 @@ type ListConnectionsWithStatusRow struct {
 	TokenExpiresAt    pgtype.Timestamptz `json:"token_expires_at"`
 }
 
-// For GET /api/v1/agents/{agentID}/connections
+// For GET /api/v1/agents/{agentID}/connections.
+// See GetConnectionWithCredentialStatus for the auth_mode='none' rule.
 func (q *Queries) ListConnectionsWithStatus(ctx context.Context, agentID pgtype.UUID) ([]ListConnectionsWithStatusRow, error) {
 	rows, err := q.db.Query(ctx, listConnectionsWithStatus, agentID)
 	if err != nil {
@@ -407,8 +412,8 @@ func (q *Queries) UpdateConnectionOAuthApp(ctx context.Context, arg UpdateConnec
 }
 
 const upsertConnection = `-- name: UpsertConnection :one
-INSERT INTO connections (agent_id, slug, name, description, llm_hint, auth_mode, auth_url, token_url, base_url, scopes, auth_injection, setup_instructions, test_path, config, auth_params, access, client_id, client_secret, access_token_ref, refresh_token)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, '', '', '', '')
+INSERT INTO connections (agent_id, slug, name, description, llm_hint, auth_mode, auth_url, token_url, base_url, scopes, auth_injection, setup_instructions, test_path, config, auth_params, headers, access, client_id, client_secret, access_token_ref, refresh_token)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, '', '', '', '')
 ON CONFLICT (agent_id, slug) DO UPDATE SET
     name = EXCLUDED.name,
     description = EXCLUDED.description,
@@ -423,12 +428,13 @@ ON CONFLICT (agent_id, slug) DO UPDATE SET
     test_path = EXCLUDED.test_path,
     config = EXCLUDED.config,
     auth_params = EXCLUDED.auth_params,
+    headers = EXCLUDED.headers,
     access = EXCLUDED.access,
     access_token_ref = CASE WHEN connections.scopes != EXCLUDED.scopes THEN '' ELSE connections.access_token_ref END,
     refresh_token = CASE WHEN connections.scopes != EXCLUDED.scopes THEN '' ELSE connections.refresh_token END,
     token_expires_at = CASE WHEN connections.scopes != EXCLUDED.scopes THEN NULL ELSE connections.token_expires_at END,
     updated_at = now()
-RETURNING id, agent_id, slug, name, description, llm_hint, access, auth_mode, auth_url, token_url, base_url, scopes, auth_injection, test_path, setup_instructions, config, client_id, client_secret, access_token_ref, refresh_token, token_expires_at, created_at, updated_at, auth_params
+RETURNING id, agent_id, slug, name, description, llm_hint, access, auth_mode, auth_url, token_url, base_url, scopes, auth_injection, test_path, setup_instructions, config, client_id, client_secret, access_token_ref, refresh_token, token_expires_at, created_at, updated_at, auth_params, headers
 `
 
 type UpsertConnectionParams struct {
@@ -447,6 +453,7 @@ type UpsertConnectionParams struct {
 	TestPath          string      `json:"test_path"`
 	Config            []byte      `json:"config"`
 	AuthParams        []byte      `json:"auth_params"`
+	Headers           []byte      `json:"headers"`
 	Access            string      `json:"access"`
 }
 
@@ -471,6 +478,7 @@ func (q *Queries) UpsertConnection(ctx context.Context, arg UpsertConnectionPara
 		arg.TestPath,
 		arg.Config,
 		arg.AuthParams,
+		arg.Headers,
 		arg.Access,
 	)
 	var i Connection
@@ -499,6 +507,7 @@ func (q *Queries) UpsertConnection(ctx context.Context, arg UpsertConnectionPara
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.AuthParams,
+		&i.Headers,
 	)
 	return i, err
 }

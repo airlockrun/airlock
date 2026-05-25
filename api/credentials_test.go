@@ -81,6 +81,7 @@ func registerTestConnection(t *testing.T, agentID uuid.UUID, slug, authMode stri
 		AuthInjection: []byte(`{"type":"bearer"}`),
 		Config:        []byte("{}"),
 		AuthParams:    []byte("{}"),
+		Headers:       []byte("{}"),
 	})
 	if err != nil {
 		t.Fatalf("upsert connection: %v", err)
@@ -320,6 +321,7 @@ func TestOAuthCallbackFlow(t *testing.T) {
 		AuthInjection: []byte(`{"type":"bearer"}`),
 		Config:        []byte("{}"),
 		AuthParams:    []byte("{}"),
+		Headers:       []byte("{}"),
 	})
 	if err != nil {
 		t.Fatalf("upsert connection: %v", err)

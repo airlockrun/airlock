@@ -646,7 +646,7 @@ func (h *conversationsHandler) Prompt(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		defer h.convLocks.Unlock(convIDStr)
 		bgCtx := context.Background()
-		publishRunEvents(bgCtx, rc, h.pubsub, agentID, runID, convIDStr, userID.String(), nil, h.logger)
+		publishRunEvents(bgCtx, rc, h.pubsub, h.db.Pool(), agentID, runID, convIDStr, userID.String(), nil, h.logger)
 
 		// Fallback status when the agent never wrote its own terminal
 		// status (e.g. stuck in an infinite run_js loop, container died).
@@ -789,7 +789,7 @@ func (h *conversationsHandler) NotifyUpgradeComplete(ctx context.Context, agentI
 			if conv.UserID.Valid {
 				convUserID = pgUUID(conv.UserID).String()
 			}
-			publishRunEvents(bgCtx, rc, h.pubsub, agentID, runID, conversationID, convUserID, nil, h.logger)
+			publishRunEvents(bgCtx, rc, h.pubsub, h.db.Pool(), agentID, runID, conversationID, convUserID, nil, h.logger)
 		}
 
 		// Same CAS-protected fallback as the user-prompt path: if the

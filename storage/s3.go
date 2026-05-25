@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -218,14 +219,31 @@ func (c *S3Client) HeadObject(ctx context.Context, key string) (ObjectInfo, stri
 }
 
 // CopyObject performs a server-side copy from srcKey to dstKey within the same bucket.
+//
+// CopySource rides as the `x-amz-copy-source` HTTP header, which is
+// ASCII-only — a raw key with non-Latin codepoints (e.g.
+// "tmp/файл.png") makes the SDK or upstream reject the request and the
+// caller gets a 500 ("failed to copy file"). Percent-encode the key per
+// segment with `/` preserved so non-Latin filenames round-trip cleanly.
+// dstKey doesn't need this — the SDK URL-encodes path segments itself
+// when building the PUT URL.
 func (c *S3Client) CopyObject(ctx context.Context, srcKey, dstKey string) error {
-	copySource := c.bucket + "/" + srcKey
+	copySource := c.bucket + "/" + escapeS3Key(srcKey)
 	_, err := c.client.CopyObject(ctx, &s3.CopyObjectInput{
 		Bucket:     &c.bucket,
 		CopySource: &copySource,
 		Key:        &dstKey,
 	})
 	return err
+}
+
+// escapeS3Key percent-encodes each `/`-separated segment of an S3 key.
+// (&url.URL{Path: ...}).EscapedPath() handles segment-by-segment encoding
+// correctly (non-ASCII → %XX, reserved chars escaped, slashes preserved),
+// which is exactly the contract `x-amz-copy-source` needs.
+func escapeS3Key(key string) string {
+	u := url.URL{Path: key}
+	return u.EscapedPath()
 }
 
 // DeleteObject deletes the object at the given key.

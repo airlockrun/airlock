@@ -3,8 +3,8 @@
 -- Credential fields (client_id, client_secret, access_token_ref, refresh_token)
 -- are passed explicitly as '' on first insert; the ON CONFLICT clause
 -- preserves existing access_token_ref unless scopes changed.
-INSERT INTO connections (agent_id, slug, name, description, llm_hint, auth_mode, auth_url, token_url, base_url, scopes, auth_injection, setup_instructions, test_path, config, auth_params, access, client_id, client_secret, access_token_ref, refresh_token)
-VALUES (@agent_id, @slug, @name, @description, @llm_hint, @auth_mode, @auth_url, @token_url, @base_url, @scopes, @auth_injection, @setup_instructions, @test_path, @config, @auth_params, @access, '', '', '', '')
+INSERT INTO connections (agent_id, slug, name, description, llm_hint, auth_mode, auth_url, token_url, base_url, scopes, auth_injection, setup_instructions, test_path, config, auth_params, headers, access, client_id, client_secret, access_token_ref, refresh_token)
+VALUES (@agent_id, @slug, @name, @description, @llm_hint, @auth_mode, @auth_url, @token_url, @base_url, @scopes, @auth_injection, @setup_instructions, @test_path, @config, @auth_params, @headers, @access, '', '', '', '')
 ON CONFLICT (agent_id, slug) DO UPDATE SET
     name = EXCLUDED.name,
     description = EXCLUDED.description,
@@ -19,6 +19,7 @@ ON CONFLICT (agent_id, slug) DO UPDATE SET
     test_path = EXCLUDED.test_path,
     config = EXCLUDED.config,
     auth_params = EXCLUDED.auth_params,
+    headers = EXCLUDED.headers,
     access = EXCLUDED.access,
     access_token_ref = CASE WHEN connections.scopes != EXCLUDED.scopes THEN '' ELSE connections.access_token_ref END,
     refresh_token = CASE WHEN connections.scopes != EXCLUDED.scopes THEN '' ELSE connections.refresh_token END,
@@ -41,19 +42,22 @@ UPDATE connections SET
 WHERE agent_id = @agent_id AND slug = @slug;
 
 -- name: GetConnectionWithCredentialStatus :one
--- Returns connection with enough info to determine if authorized
+-- Returns connection with enough info to determine if authorized.
+-- auth_mode='none' connections need no credentials, so they're always
+-- considered authorized; oauth/token connections require a stored token.
 SELECT id, agent_id, slug, name, description, auth_mode, auth_url, base_url,
        scopes, setup_instructions, test_path,
-       (access_token_ref != '') AS authorized,
+       (COALESCE(auth_mode = 'none' OR access_token_ref != '', false))::boolean AS authorized,
        (client_id != '') AS has_oauth_app,
        token_expires_at
 FROM connections WHERE agent_id = @agent_id AND slug = @slug;
 
 -- name: ListConnectionsWithStatus :many
--- For GET /api/v1/agents/{agentID}/connections
+-- For GET /api/v1/agents/{agentID}/connections.
+-- See GetConnectionWithCredentialStatus for the auth_mode='none' rule.
 SELECT id, agent_id, slug, name, description, auth_mode, auth_url, base_url,
        scopes, setup_instructions, test_path,
-       (access_token_ref != '') AS authorized,
+       (COALESCE(auth_mode = 'none' OR access_token_ref != '', false))::boolean AS authorized,
        (client_id != '') AS has_oauth_app,
        (refresh_token != '') AS has_refresh_token,
        token_expires_at

@@ -7,10 +7,12 @@ import (
 	"io"
 	"strings"
 
+	"github.com/airlockrun/airlock/db/dbq"
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 	"github.com/airlockrun/airlock/realtime"
 	"github.com/airlockrun/goai/message"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
 	"google.golang.org/protobuf/proto"
 )
@@ -39,6 +41,23 @@ func decodeToolOutput(raw json.RawMessage) (text, outcome, errText string) {
 		return "", "error", text
 	}
 	return text, outcome, ""
+}
+
+// runStatusForFallback returns the runs row's current status string, or
+// "" if it can't be read. Used to decide whether publishRunEvents should
+// emit a fallback run.complete after the agent stream ends mid-flight.
+// db may be nil in tests that don't wire a pool; treat that as "unknown"
+// and let the caller fall back to the conservative emit-anyway path.
+func runStatusForFallback(ctx context.Context, db *pgxpool.Pool, runID uuid.UUID) string {
+	if db == nil {
+		return ""
+	}
+	q := dbq.New(db)
+	run, err := q.GetRunByID(ctx, toPgUUID(runID))
+	if err != nil {
+		return ""
+	}
+	return run.Status
 }
 
 // ParentRunInfo carries the parent run's coordinates when an A2A
@@ -71,6 +90,7 @@ func publishRunEvents(
 	ctx context.Context,
 	body io.ReadCloser,
 	pubsub *realtime.PubSub,
+	db *pgxpool.Pool,
 	agentID, runID uuid.UUID,
 	conversationID string,
 	userID string,
@@ -278,18 +298,36 @@ func publishRunEvents(
 		logger.Error("NDJSON scan error", zap.Error(err))
 	}
 
-	// If the stream ended without a terminal event (finish / error / suspend),
-	// emit a run.complete fallback so the frontend unblocks. Errors and
-	// suspensions already deliver their own terminal events — firing a
-	// second run.complete on top would confuse the chat store into
-	// double-finalizing.
+	// If the stream ended without a terminal event (finish / error /
+	// suspend), the run may still be alive (agent crashed without calling
+	// RunComplete → frontend would hang), OR it may already be finalized
+	// by a parallel path (CancelRun handler wrote status='cancelled',
+	// agent's detached RunComplete POST landed first, etc.) — those paths
+	// publish their own WS terminal event via PublishRunTerminal, so a
+	// second one from here is double-emission and a misleading WARN.
+	//
+	// Resolve the ambiguity by reading the run's current status. Anything
+	// non-'running' means somebody else owns the terminal event; emit
+	// nothing and log at INFO. 'running' is the genuine "agent died
+	// silently" case — keep the fallback so the UI unblocks.
 	if !sawFinish && !sawSuspended && !sawError {
-		logger.Warn("agent stream ended without terminal event — emitting run.complete fallback",
-			zap.String("runId", runID.String()), zap.String("agentId", agentID.String()))
-		mirror("run.complete", &airlockv1.RunCompleteEvent{
-			RunId:        runID.String(),
-			FinishReason: "stop",
-		})
+		status := runStatusForFallback(ctx, db, runID)
+		switch status {
+		case "", "running":
+			logger.Warn("agent stream ended without terminal event — emitting run.complete fallback",
+				zap.String("runId", runID.String()),
+				zap.String("agentId", agentID.String()),
+				zap.String("dbStatus", status))
+			mirror("run.complete", &airlockv1.RunCompleteEvent{
+				RunId:        runID.String(),
+				FinishReason: "stop",
+			})
+		default:
+			logger.Info("agent stream ended without terminal event; run already finalized — skipping WS fallback",
+				zap.String("runId", runID.String()),
+				zap.String("agentId", agentID.String()),
+				zap.String("dbStatus", status))
+		}
 	}
 
 	// Clear the replay buffer after terminal events so reconnecting clients

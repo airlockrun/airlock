@@ -208,12 +208,18 @@ func (h *credentialHandler) OAuthStart(w http.ResponseWriter, r *http.Request) {
 	// re-auth. Without a refresh token the connection dies when the
 	// access token expires (~1h) — the refresh job has nothing to renew.
 	// A connection's AuthParams override these per key for providers
-	// whose handshake differs.
+	// whose handshake differs. An explicit empty-string value drops the
+	// baseline key (e.g. AuthParams: {"prompt": ""} suppresses
+	// prompt=consent).
 	authParams := map[string]string{"access_type": "offline", "prompt": "consent"}
 	if len(conn.AuthParams) > 0 {
 		var override map[string]string
 		if jsonErr := json.Unmarshal(conn.AuthParams, &override); jsonErr == nil {
 			for k, v := range override {
+				if v == "" {
+					delete(authParams, k)
+					continue
+				}
 				authParams[k] = v
 			}
 		}

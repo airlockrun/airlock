@@ -48,6 +48,13 @@ function configure(conn: Connection) {
   }
 }
 
+// auth_mode='none' connections don't need credentials — the backend always
+// flags them authorized, but we also hide the Configure button and use a
+// different status label so the operator isn't nudged into a no-op dialog.
+function isNoAuth(conn: Connection) {
+  return conn.authMode === 'none'
+}
+
 async function saveOAuthApp() {
   if (!selectedConn.value || !oauthClientId.value || !oauthClientSecret.value) return
   oauthSaving.value = true
@@ -125,8 +132,8 @@ onMounted(async () => {
         <template #body="{ data: conn }">
           <span style="display: inline-flex; align-items: center; gap: 0.4rem">
             <Tag
-              :value="conn.authorized ? 'Authorized' : 'Needs Setup'"
-              :severity="conn.authorized ? 'success' : 'warn'"
+              :value="isNoAuth(conn) ? 'No auth required' : (conn.authorized ? 'Authorized' : 'Needs Setup')"
+              :severity="isNoAuth(conn) ? 'info' : (conn.authorized ? 'success' : 'warn')"
             />
             <i
               v-if="conn.warnings.length"
@@ -140,7 +147,8 @@ onMounted(async () => {
       </Column>
       <Column header="Actions">
         <template #body="{ data: conn }">
-          <Button :label="conn.authorized ? 'Reconfigure' : 'Configure'" size="small" outlined @click="configure(conn)" />
+          <span v-if="isNoAuth(conn)" style="color: var(--p-text-muted-color); font-size: 0.85rem">—</span>
+          <Button v-else :label="conn.authorized ? 'Reconfigure' : 'Configure'" size="small" outlined @click="configure(conn)" />
         </template>
       </Column>
     </DataTable>

@@ -36,7 +36,7 @@ type agentHandler struct {
 	s3                     *storage.S3Client
 	builder                *builder.BuildService
 	pubsub                 *realtime.PubSub
-	bridgeMgr              bridgePartsDeliverer // for printToUser/topic bridge delivery
+	bridgeMgr              bridgePartsDeliverer // for output()/topic bridge delivery
 	scheduler              cronReloader         // nil until trigger system is wired
 	publicURL              string
 	agentBaseURL           func(slug string) string // {scheme}://{slug}.{domain}[:port] — from config.Config (single source)
@@ -73,13 +73,21 @@ func (h *agentHandler) UpsertConnection(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// auth_params is NOT NULL jsonb — a nil map marshals to "null", so
-	// default an empty object when the agent declared none.
+	// auth_params and headers are NOT NULL jsonb — a nil map marshals to
+	// "null", so default an empty object when the agent declared none.
 	authParams := []byte("{}")
 	if len(def.AuthParams) > 0 {
 		authParams, err = json.Marshal(def.AuthParams)
 		if err != nil {
 			writeJSONError(w, http.StatusBadRequest, "invalid auth_params")
+			return
+		}
+	}
+	headers := []byte("{}")
+	if len(def.Headers) > 0 {
+		headers, err = json.Marshal(def.Headers)
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "invalid headers")
 			return
 		}
 	}
@@ -100,6 +108,7 @@ func (h *agentHandler) UpsertConnection(w http.ResponseWriter, r *http.Request) 
 		SetupInstructions: def.SetupInstructions,
 		Config:            []byte("{}"),
 		AuthParams:        authParams,
+		Headers:           headers,
 		Access:            string(def.Access),
 	})
 	if err != nil {

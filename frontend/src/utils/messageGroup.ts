@@ -155,6 +155,15 @@ export function enrichMessages(msgs: AgentMessageInfo[]): AgentMessageInfo[] {
   const runAnchor = new Map<string, AgentMessageInfo>()
   for (const msg of msgs) {
     if (msg.role !== 'assistant') continue
+    // System-injected assistant rows (printToUser notifications, error
+    // banners, upgrade results) are role=assistant but render via their
+    // own source-specific bubble — they must not anchor or absorb the
+    // real LLM turn's blocks. Without this guard, a printToUser that
+    // fires mid-tool gets a lower seq than the agent's RunComplete-
+    // persisted assistant rows, claims the runId anchor slot, and the
+    // text+tool turn is folded into a notification bubble that has no
+    // blocks renderer — i.e. it silently disappears from the chat.
+    if (msg.source && msg.source !== 'user') continue
     const parts = parseParts((msg as any).parts)
     const rowBlocks: MsgBlock[] = []
     if (parts) {

@@ -155,7 +155,7 @@ func postToConversation(ctx context.Context, deps postDeps, opts postOpts) error
 			if conv.UserID.Valid {
 				convUserID = pgUUID(conv.UserID).String()
 			}
-			publishRunEvents(ctx, rc, deps.PubSub, opts.AgentID, runID, opts.ConversationID.String(), convUserID, nil, deps.Logger)
+			publishRunEvents(ctx, rc, deps.PubSub, deps.DB.Pool(), opts.AgentID, runID, opts.ConversationID.String(), convUserID, nil, deps.Logger)
 		}
 
 		// Fallback status — same rationale as the web prompt path: the

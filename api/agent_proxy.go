@@ -11,6 +11,7 @@ import (
 	"github.com/airlockrun/agentsdk"
 	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/db/dbq"
+	"github.com/airlockrun/sol/webfetch"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -45,37 +46,50 @@ func (h *agentHandler) ServiceProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// No credentials → 402 auth required. The agent's system prompt
-	// already tells it to direct the user to the agent settings page, so
-	// the response carries only slug/connName — not a raw OAuth URL,
-	// which would otherwise surface verbatim in the agent's reply.
-	if conn.AccessTokenRef == "" {
-		writeJSON(w, http.StatusPaymentRequired, map[string]string{
-			"error":    "auth_required",
-			"slug":     conn.Slug,
-			"connName": conn.Name,
-			"message":  fmt.Sprintf("%s needs authorization", conn.Name),
-		})
-		return
+	// auth_mode='none' connections proxy without credentials — no token
+	// lookup, no decrypt, no injection. Public APIs (MediaWiki, etc.)
+	// declared with ConnectionAuthNone land here.
+	noAuth := conn.AuthMode == string(agentsdk.ConnectionAuthNone)
+
+	if !noAuth {
+		// No credentials → 402 auth required. The agent's system prompt
+		// already tells it to direct the user to the agent settings page,
+		// so the response carries only slug/connName — not a raw OAuth
+		// URL, which would otherwise surface verbatim in the agent's
+		// reply.
+		if conn.AccessTokenRef == "" {
+			writeJSON(w, http.StatusPaymentRequired, map[string]string{
+				"error":    "auth_required",
+				"slug":     conn.Slug,
+				"connName": conn.Name,
+				"message":  fmt.Sprintf("%s needs authorization", conn.Name),
+			})
+			return
+		}
+
+		// Token expired → 402, refresh job should have caught this.
+		if conn.TokenExpiresAt.Valid && conn.TokenExpiresAt.Time.Before(time.Now()) {
+			writeJSON(w, http.StatusPaymentRequired, map[string]string{
+				"error":    "auth_required",
+				"slug":     conn.Slug,
+				"connName": conn.Name,
+				"message":  fmt.Sprintf("%s authorization has expired", conn.Name),
+			})
+			return
+		}
 	}
 
-	// Token expired → 402, refresh job should have caught this.
-	if conn.TokenExpiresAt.Valid && conn.TokenExpiresAt.Time.Before(time.Now()) {
-		writeJSON(w, http.StatusPaymentRequired, map[string]string{
-			"error":    "auth_required",
-			"slug":     conn.Slug,
-			"connName": conn.Name,
-			"message":  fmt.Sprintf("%s authorization has expired", conn.Name),
-		})
-		return
-	}
-
-	// Decrypt credentials.
-	creds, err := h.encryptor.Get(r.Context(), "connection/"+pgUUID(conn.ID).String()+"/access_token", conn.AccessTokenRef)
-	if err != nil {
-		h.logger.Error("decrypt credentials failed", zap.Error(err))
-		writeJSONError(w, http.StatusInternalServerError, "failed to decrypt credentials")
-		return
+	// Decrypt credentials (skipped for auth_mode='none' — nothing to
+	// decrypt and nothing to inject downstream).
+	var creds string
+	if !noAuth {
+		c, err := h.encryptor.Get(r.Context(), "connection/"+pgUUID(conn.ID).String()+"/access_token", conn.AccessTokenRef)
+		if err != nil {
+			h.logger.Error("decrypt credentials failed", zap.Error(err))
+			writeJSONError(w, http.StatusInternalServerError, "failed to decrypt credentials")
+			return
+		}
+		creds = c
 	}
 
 	// Build upstream request.
@@ -98,8 +112,21 @@ func (h *agentHandler) ServiceProxy(w http.ResponseWriter, r *http.Request) {
 		upstream.Header.Set("Content-Type", "application/json")
 	}
 
-	// Inject auth.
-	injectAuth(upstream, conn.AuthInjection, creds)
+	// Header layering: platform baseline → connection-declared Headers →
+	// per-call ProxyRequest.Headers. Each layer merges per-key on top of
+	// the previous; an explicit empty-string value at any layer removes
+	// the key entirely. Auth injection runs last so it always wins —
+	// otherwise a sloppy `Authorization` in per-call headers would
+	// silently bypass the credential proxy.
+	upstream.Header.Set("User-Agent", webfetch.UserAgent)
+	applyHeaderMap(upstream.Header, decodeConnHeaders(conn.Headers))
+	applyHeaderMap(upstream.Header, req.Headers)
+
+	// Inject auth (no-op for auth_mode='none' — `creds` is empty and the
+	// injection config is irrelevant).
+	if !noAuth {
+		injectAuth(upstream, conn.AuthInjection, creds)
+	}
 
 	resp, err := proxyHTTPClient.Do(upstream)
 	if err != nil {
@@ -117,6 +144,34 @@ func (h *agentHandler) ServiceProxy(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(resp.StatusCode)
 	io.Copy(w, resp.Body)
+}
+
+// applyHeaderMap merges m into h, using the empty-string-as-delete rule:
+// a key whose value is "" removes any header of that name set by a lower
+// layer. Non-empty values overwrite per-key.
+func applyHeaderMap(h http.Header, m map[string]string) {
+	for k, v := range m {
+		if v == "" {
+			h.Del(k)
+			continue
+		}
+		h.Set(k, v)
+	}
+}
+
+// decodeConnHeaders unmarshals the connection's headers jsonb column.
+// A malformed value is treated as "no overrides" — the platform
+// baseline and per-call layers still apply — and logged at the call
+// site rather than here so we don't pull a logger into a pure helper.
+func decodeConnHeaders(raw []byte) map[string]string {
+	if len(raw) == 0 {
+		return nil
+	}
+	var m map[string]string
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return nil
+	}
+	return m
 }
 
 // injectAuth adds credentials to the upstream request based on the auth injection config.

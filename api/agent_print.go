@@ -16,8 +16,8 @@ import (
 
 // Print handles POST /api/agent/print.
 // Processes display parts (upload bytes, copy tmp files to permanent media),
-// then routes to the target conversation(s) — either direct (printToUser)
-// or via topic subscriptions.
+// then routes to the target conversation(s) — either direct (the `output`
+// JS binding) or via topic subscriptions (TopicHandle.Publish).
 func (h *agentHandler) Print(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	agentID := auth.AgentIDFromContext(ctx)
@@ -89,7 +89,7 @@ func (h *agentHandler) Print(w http.ResponseWriter, r *http.Request) {
 			// Absolute "agents/..." key — already-permanent re-share, no
 			// copy. Two guards: (1) require it to be THIS agent's key
 			// (defence in depth — there's no legitimate cross-agent
-			// re-share via printToUser, and it would bypass the other
+			// re-share via output, and it would bypass the other
 			// agent's directory access controls). (2) HeadObject so a
 			// hallucinated or swept-out key fails loud here instead of
 			// being persisted as a broken link the URL signer happily
@@ -162,7 +162,7 @@ func (h *agentHandler) Print(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	} else if req.ConversationID != "" {
-		// Direct printToUser — single conversation, ephemeral.
+		// Direct output() — single conversation, ephemeral.
 		convID, err := parseUUID(req.ConversationID)
 		if err != nil {
 			writeJSONError(w, http.StatusBadRequest, "invalid conversationId")
@@ -178,7 +178,7 @@ func (h *agentHandler) Print(w http.ResponseWriter, r *http.Request) {
 			Source:         "notification",
 			Ephemeral:      true,
 		}); err != nil {
-			h.logger.Error("printToUser failed", zap.Error(err))
+			h.logger.Error("output failed", zap.Error(err))
 			writeJSONError(w, http.StatusInternalServerError, "failed to deliver message")
 			return
 		}

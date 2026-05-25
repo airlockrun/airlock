@@ -613,7 +613,7 @@ func safeFilename(name string) string {
 	return name
 }
 
-// a2aArtifact is one file a sibling produced (via printToUser) during a
+// a2aArtifact is one file a sibling produced (via output()) during a
 // prompt() task, surfaced back to the caller. For an agent caller Path
 // is in the caller's own storage (siblings/<slug>/...); for an external
 // client it's the sibling's path (fetched via resources/read).
@@ -624,7 +624,7 @@ type a2aArtifact struct {
 }
 
 // collectPromptArtifacts gathers file/media parts the sibling persisted
-// during the task. printToUser writes message rows tagged with the
+// during the task. output() writes message rows tagged with the
 // child run id, so ListMessagesByRun(child) is exactly that run's
 // user-facing output; we keep file/image/audio/video parts (final text
 // still comes from the NDJSON stream) and, for an agent caller,
@@ -668,12 +668,12 @@ func collectPromptArtifacts(ctx context.Context, s3 *storage.S3Client, logger *z
 			if cerr != nil {
 				continue
 			}
-			// printToUser persists parts.source as the absolute S3 key
+			// output() persists parts.source as the absolute S3 key
 			// (agents/{id}/media/{mediaID}/file) so URL signing can hand
 			// it to S3 directly. Reduce to a target-relative path before
 			// re-prefixing; skip cross-agent keys (defence in depth — a
 			// sibling-bucket key here would mean the message was forged
-			// or printToUser's namespace guard regressed).
+			// or output()'s namespace guard regressed).
 			rel := cleaned
 			if strings.HasPrefix(cleaned, "agents/") {
 				if !strings.HasPrefix(cleaned, fullPrefix) {

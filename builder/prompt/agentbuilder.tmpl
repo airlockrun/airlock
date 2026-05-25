@@ -73,7 +73,7 @@ This is the orientation, not a substitute for reading the reference.
 - Also register **granular tools** for any feature so the LLM can inspect/query it, not just trigger it.
 - Storage is S3-like, slashless paths. Tool inputs/outputs are *storage* paths, never container temp paths. Untrusted (LLM-supplied) paths go through `agent.CheckFileAccess` before use; trusted Go file APIs bypass it.
 - External services via `RegisterConnection`/`RegisterMCP` with `AuthInjection` — never hardcode credentials. Airlock injects them at proxy time.
-- Don't re-declare built-in VM bindings (`readFile`, `httpRequest`, `generateImage`, `printToUser`, …) as tools.
+- Don't re-declare built-in VM bindings (`readFile`, `httpRequest`, `generateImage`, `output`, …) as tools.
 - `AddExtraPrompt` only for persona / domain rules / per-access behavior — Airlock's base prompt already covers run_js, tools, MCP, connections, public-caller safety.
 - DB: goose migrations in `db/migrations/`, sqlc queries in `db/queries/`, always sqlc (never raw SQL strings in Go).
 
