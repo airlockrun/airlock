@@ -16,10 +16,10 @@
 # Cross-machine access (server you SSH into and hit from a laptop):
 #   - Set DOMAIN to something like 1.2.3.4.nip.io that resolves to the
 #     dev box from any browser.
-#   - Replace `tls internal` with mkcert / Let's Encrypt by dropping a
-#     docker-compose.override.yml next to this file. Compose auto-loads
-#     override.yml without an extra -f. Example: bind a cert dir into
-#     caddy + override Caddyfile.dev's tls directive.
+#   - Pick a TLS mode via the TLS env var (see .env.dev.example for the
+#     three supported shapes: `internal`, an email for Let's Encrypt, or
+#     a /etc/caddy/certs/cert.pem /etc/caddy/certs/key.pem path pair for
+#     mkcert / bring-your-own).
 
 services:
   caddy:
@@ -36,6 +36,16 @@ services:
       DOMAIN: ${DOMAIN}
       AIRLOCK_UPSTREAM: ${AIRLOCK_UPSTREAM:-host.docker.internal:8080}
       FRONTEND_UPSTREAM: ${FRONTEND_UPSTREAM:-host.docker.internal:5173}
+      # Caddyfile.dev's global block has both of these lines; exactly one
+      # is a real directive per .env state, the other is a comment that
+      # no-ops. Comment-trick avoids needing a shell-level "set→empty"
+      # inversion (which POSIX doesn't have a clean form for).
+      #   ACME_EMAIL set   → ACME_EMAIL_LINE  = "email <addr>"   (LE)
+      #                      LOCAL_CERTS_LINE = "# <addr>"       (comment)
+      #   ACME_EMAIL unset → ACME_EMAIL_LINE  = ""                (empty line)
+      #                      LOCAL_CERTS_LINE = "local_certs"    (Caddy local CA)
+      ACME_EMAIL_LINE: ${ACME_EMAIL:+email ${ACME_EMAIL}}
+      LOCAL_CERTS_LINE: ${ACME_EMAIL:+# }${ACME_EMAIL:-local_certs}
     # Drop the default depends_on (which waits for in-container airlock +
     # frontend services); those are profile-disabled below. !reset is a
     # Compose v2.20+ extension — older Compose will error and you'll need

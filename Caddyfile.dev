@@ -2,27 +2,41 @@
 #
 # Pairs with docker-compose.dev.yml: postgres + rustfs + caddy run in
 # containers, but airlock and the frontend run natively from source on
-# the host (so you get fast iteration, debugger attach, and live-reload).
-# Caddy proxies through to the host binary via host.docker.internal.
+# the host. Caddy proxies through to the host binary via
+# host.docker.internal.
 #
-# Differs from Caddyfile.local in two things:
-#   - Upstreams reach the host (host.docker.internal) instead of
-#     in-container service names. Overridable via env so you can point
-#     at a different host/port if you're tunneling.
-#   - Domain is env-driven (`{$DOMAIN}`) so it works for laptops on
-#     *.localhost and for shared dev servers using public-DNS wildcards
-#     (nip.io / sslip.io / etc.). No hardcoded hostname.
+# TLS strategy mirrors the prod Caddyfile: on-demand, validated against
+# airlock's /caddy/ask endpoint. Each per-agent subdomain
+# (spotify.${DOMAIN}, slackbot.${DOMAIN}, …) gets its own real cert on
+# first request via Let's Encrypt's HTTP-01 challenge. No wildcard, no
+# DNS provider plugin.
 #
-# TLS uses Caddy's built-in local CA (`tls internal`). Fine when you're
-# only hitting this from the dev box itself; if you access the dev
-# server from another machine you'll either need to import Caddy's root
-# CA on each accessing machine OR drop a docker-compose.override.yml
-# next to docker-compose.yml that swaps `tls internal` for mkcert /
-# Let's Encrypt — Compose auto-loads override.yml without an extra -f.
+# Env knobs:
+#   DOMAIN              public hostname (airlock.localhost / your-domain)
+#   AIRLOCK_UPSTREAM    Caddy → airlock binary (default host.docker.internal:8080)
+#   FRONTEND_UPSTREAM   Caddy → vite (default host.docker.internal:5173)
+#   ACME_EMAIL          set → LE issuance with this contact; unset → Caddy's
+#                       local CA (no internet/laptop dev, browsers warn).
+#                       The compose file expands this to the two lines
+#                       below — exactly one is a real directive per state;
+#                       the other is a Caddyfile comment (#) that no-ops.
 
+{
+	{$ACME_EMAIL_LINE}
+	{$LOCAL_CERTS_LINE}
+
+	on_demand_tls {
+		# Same callback shape as prod (api/caddy.go). The dev /caddy/ask
+		# is the natively-running airlock binary, reached through the
+		# host gateway.
+		ask http://{$AIRLOCK_UPSTREAM}/caddy/ask
+	}
+}
+
+# Apex domain: SPA + REST/WebSocket API. No on_demand — apex is a single
+# hostname and gets its cert eagerly at startup (real LE if ACME_EMAIL is
+# set, local CA otherwise).
 {$DOMAIN} {
-	tls internal
-
 	@spa_relay path /auth/relay
 	handle @spa_relay {
 		reverse_proxy {$FRONTEND_UPSTREAM}
@@ -36,14 +50,26 @@
 	}
 }
 
+# Public S3 — uses on_demand for the same reason prod does: a wildcard
+# block below makes Caddy skip eager issuance for s3.${DOMAIN} due to
+# overlap. on_demand sidesteps that; cert issues lazily on first request.
+# header_up Host preserves the original Host so RustFS's presigned URL
+# signature stays valid.
 s3.{$DOMAIN} {
-	tls internal
+	tls {
+		on_demand
+	}
 	reverse_proxy rustfs:9000 {
 		header_up Host {host}
 	}
 }
 
+# Wildcard subdomains: per-agent custom routes ({slug}.${DOMAIN}).
+# Caddy terminates TLS via on-demand issuance per subdomain; airlock's
+# SubdomainProxy handles routing internally.
 *.{$DOMAIN} {
-	tls internal
+	tls {
+		on_demand
+	}
 	reverse_proxy {$AIRLOCK_UPSTREAM}
 }

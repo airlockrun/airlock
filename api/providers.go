@@ -43,7 +43,16 @@ func (h *ProvidersHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, ok := solprovider.GetProviderInfo(req.ProviderId); !ok {
+	// Validate against the overlay-merged catalog — the same one ListCapabilities
+	// and ListCatalogModels use — so overlay-only providers (e.g. brave) that the
+	// frontend offers are also accepted here.
+	catalog, err := solprovider.AllProviders()
+	if err != nil {
+		logFor(r).Error("load provider catalog failed", zap.Error(err))
+		writeError(w, http.StatusInternalServerError, "failed to load provider catalog")
+		return
+	}
+	if _, ok := catalog[req.ProviderId]; !ok {
 		writeError(w, http.StatusBadRequest, "unknown provider_id: "+req.ProviderId)
 		return
 	}
