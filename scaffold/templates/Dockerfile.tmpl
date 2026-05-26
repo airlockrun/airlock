@@ -35,7 +35,7 @@ COPY . .
 # deps (plain `go mod download` skips them as of Go 1.24).
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    go mod tidy && go tool templ generate && go build -mod=mod -o /agent .
+    go mod tidy && go tool templ generate && go build -o /agent .
 
 # Runtime
 FROM {{.AgentBaseImage}}
