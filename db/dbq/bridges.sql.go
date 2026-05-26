@@ -147,10 +147,12 @@ func (q *Queries) GetSystemBridge(ctx context.Context) (Bridge, error) {
 }
 
 const listActiveBridges = `-- name: ListActiveBridges :many
-SELECT id, agent_id, created_by, type, name, bot_username, status, is_system, config, settings, bot_token_ref, last_polled_at, created_at, updated_at FROM bridges WHERE status = 'active'
+SELECT id, agent_id, created_by, type, name, bot_username, status, is_system, config, settings, bot_token_ref, last_polled_at, created_at, updated_at FROM bridges WHERE status IN ('active', 'error')
 `
 
-// All active bridges (for polling on startup)
+// All bridges to start polling on startup. Includes 'error' so a bridge that
+// crashed during the previous run gets a fresh poll attempt — the next
+// successful poll flips it back to 'active' via UpdateBridgeLastPolled.
 func (q *Queries) ListActiveBridges(ctx context.Context) ([]Bridge, error) {
 	rows, err := q.db.Query(ctx, listActiveBridges)
 	if err != nil {
@@ -430,7 +432,7 @@ func (q *Queries) UpdateBridgeAgentID(ctx context.Context, arg UpdateBridgeAgent
 }
 
 const updateBridgeLastPolled = `-- name: UpdateBridgeLastPolled :exec
-UPDATE bridges SET last_polled_at = now(), config = $1, updated_at = now() WHERE id = $2
+UPDATE bridges SET last_polled_at = now(), config = $1, status = 'active', updated_at = now() WHERE id = $2
 `
 
 type UpdateBridgeLastPolledParams struct {
@@ -438,6 +440,9 @@ type UpdateBridgeLastPolledParams struct {
 	ID     pgtype.UUID `json:"id"`
 }
 
+// Status flips back to 'active' on every successful poll so a past transient
+// failure (network blip, brief upstream hiccup) doesn't leave the row stuck
+// at 'error' once the poller recovers.
 func (q *Queries) UpdateBridgeLastPolled(ctx context.Context, arg UpdateBridgeLastPolledParams) error {
 	_, err := q.db.Exec(ctx, updateBridgeLastPolled, arg.Config, arg.ID)
 	return err

@@ -68,11 +68,16 @@ RETURNING *;
 UPDATE bridges SET status = @status, updated_at = now() WHERE id = @id;
 
 -- name: UpdateBridgeLastPolled :exec
-UPDATE bridges SET last_polled_at = now(), config = @config, updated_at = now() WHERE id = @id;
+-- Status flips back to 'active' on every successful poll so a past transient
+-- failure (network blip, brief upstream hiccup) doesn't leave the row stuck
+-- at 'error' once the poller recovers.
+UPDATE bridges SET last_polled_at = now(), config = @config, status = 'active', updated_at = now() WHERE id = @id;
 
 -- name: ListActiveBridges :many
--- All active bridges (for polling on startup)
-SELECT * FROM bridges WHERE status = 'active';
+-- All bridges to start polling on startup. Includes 'error' so a bridge that
+-- crashed during the previous run gets a fresh poll attempt — the next
+-- successful poll flips it back to 'active' via UpdateBridgeLastPolled.
+SELECT * FROM bridges WHERE status IN ('active', 'error');
 
 -- name: DeleteBridge :exec
 DELETE FROM bridges WHERE id = @id;
