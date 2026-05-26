@@ -444,3 +444,29 @@ message SystemSettingsInfo {
   string default_search_provider_id = 15;
   string default_embedding_provider_id = 16;
 }
+
+// GitCredential is a per-user credential for accessing external git
+// remotes (GitHub/GitLab/Bitbucket/self-hosted). The token itself is
+// never returned from the API after creation — only metadata.
+message GitCredential {
+  string id = 1;
+  string user_id = 2;
+  string type = 3;                 // "pat" | (v2) "github_app"
+  string name = 4;
+  string github_install_id = 5;    // empty for type="pat"
+  google.protobuf.Timestamp created_at = 6;
+  google.protobuf.Timestamp last_used_at = 7;
+}
+
+// AgentGitConfig describes an agent's external git remote connection.
+// All string fields are empty when the agent is in internal-only mode.
+message AgentGitConfig {
+  string agent_id = 1;
+  string git_remote_url = 2;
+  string git_credential_id = 3;
+  string git_credential_name = 4;  // resolved from git_credentials.name for UI
+  string default_branch = 5;
+  string webhook_url = 6;          // fully-qualified URL the user pastes into their git provider
+  string webhook_secret = 7;       // shown so the user can paste it into their provider settings
+  string last_synced_ref = 8;
+}

@@ -148,6 +148,12 @@ message CreateAgentRequest {
   string instructions = 6;
   string build_provider_id = 7;
   string exec_provider_id = 8;
+  // Optional external git connection. When git_remote_url is set the
+  // agent is attached to the remote on create and the scaffold +
+  // codegen are pushed to it via the build pipeline.
+  string git_remote_url = 9;
+  string git_credential_id = 10;
+  string git_default_branch = 11;  // empty → "main"
 }
 
 message CreateAgentResponse {
@@ -517,6 +523,38 @@ message UpdateSystemSettingsResponse {
 message ErrorResponse {
   string error = 1;
   string detail = 2;
+}
+
+// --- Git credentials ---
+
+message CreateGitCredentialRequest {
+  string type = 1;   // "pat" (v1)
+  string name = 2;   // user-chosen label, unique per user
+  string token = 3;  // plaintext PAT; encrypted on the backend
+}
+
+message CreateGitCredentialResponse {
+  GitCredential credential = 1;
+}
+
+message ListGitCredentialsResponse {
+  repeated GitCredential credentials = 1;
+}
+
+// --- Agent git connection ---
+
+message ConnectAgentGitRequest {
+  string git_remote_url = 1;
+  string git_credential_id = 2;
+  string default_branch = 3;       // empty → "main"
+}
+
+message ConnectAgentGitResponse {
+  AgentGitConfig config = 1;
+}
+
+message GetAgentGitConfigResponse {
+  AgentGitConfig config = 1;
 }
 
 // --- Health ---

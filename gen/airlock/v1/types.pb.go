@@ -2805,6 +2805,203 @@ func (x *SystemSettingsInfo) GetDefaultEmbeddingProviderId() string {
 	return ""
 }
 
+// GitCredential is a per-user credential for accessing external git
+// remotes (GitHub/GitLab/Bitbucket/self-hosted). The token itself is
+// never returned from the API after creation — only metadata.
+type GitCredential struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	Id              string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	UserId          string                 `protobuf:"bytes,2,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	Type            string                 `protobuf:"bytes,3,opt,name=type,proto3" json:"type,omitempty"` // "pat" | (v2) "github_app"
+	Name            string                 `protobuf:"bytes,4,opt,name=name,proto3" json:"name,omitempty"`
+	GithubInstallId string                 `protobuf:"bytes,5,opt,name=github_install_id,json=githubInstallId,proto3" json:"github_install_id,omitempty"` // empty for type="pat"
+	CreatedAt       *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	LastUsedAt      *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=last_used_at,json=lastUsedAt,proto3" json:"last_used_at,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *GitCredential) Reset() {
+	*x = GitCredential{}
+	mi := &file_airlock_v1_types_proto_msgTypes[26]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GitCredential) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GitCredential) ProtoMessage() {}
+
+func (x *GitCredential) ProtoReflect() protoreflect.Message {
+	mi := &file_airlock_v1_types_proto_msgTypes[26]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GitCredential.ProtoReflect.Descriptor instead.
+func (*GitCredential) Descriptor() ([]byte, []int) {
+	return file_airlock_v1_types_proto_rawDescGZIP(), []int{26}
+}
+
+func (x *GitCredential) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *GitCredential) GetUserId() string {
+	if x != nil {
+		return x.UserId
+	}
+	return ""
+}
+
+func (x *GitCredential) GetType() string {
+	if x != nil {
+		return x.Type
+	}
+	return ""
+}
+
+func (x *GitCredential) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *GitCredential) GetGithubInstallId() string {
+	if x != nil {
+		return x.GithubInstallId
+	}
+	return ""
+}
+
+func (x *GitCredential) GetCreatedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.CreatedAt
+	}
+	return nil
+}
+
+func (x *GitCredential) GetLastUsedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.LastUsedAt
+	}
+	return nil
+}
+
+// AgentGitConfig describes an agent's external git remote connection.
+// All string fields are empty when the agent is in internal-only mode.
+type AgentGitConfig struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	AgentId           string                 `protobuf:"bytes,1,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"`
+	GitRemoteUrl      string                 `protobuf:"bytes,2,opt,name=git_remote_url,json=gitRemoteUrl,proto3" json:"git_remote_url,omitempty"`
+	GitCredentialId   string                 `protobuf:"bytes,3,opt,name=git_credential_id,json=gitCredentialId,proto3" json:"git_credential_id,omitempty"`
+	GitCredentialName string                 `protobuf:"bytes,4,opt,name=git_credential_name,json=gitCredentialName,proto3" json:"git_credential_name,omitempty"` // resolved from git_credentials.name for UI
+	DefaultBranch     string                 `protobuf:"bytes,5,opt,name=default_branch,json=defaultBranch,proto3" json:"default_branch,omitempty"`
+	WebhookUrl        string                 `protobuf:"bytes,6,opt,name=webhook_url,json=webhookUrl,proto3" json:"webhook_url,omitempty"`          // fully-qualified URL the user pastes into their git provider
+	WebhookSecret     string                 `protobuf:"bytes,7,opt,name=webhook_secret,json=webhookSecret,proto3" json:"webhook_secret,omitempty"` // shown so the user can paste it into their provider settings
+	LastSyncedRef     string                 `protobuf:"bytes,8,opt,name=last_synced_ref,json=lastSyncedRef,proto3" json:"last_synced_ref,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *AgentGitConfig) Reset() {
+	*x = AgentGitConfig{}
+	mi := &file_airlock_v1_types_proto_msgTypes[27]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AgentGitConfig) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AgentGitConfig) ProtoMessage() {}
+
+func (x *AgentGitConfig) ProtoReflect() protoreflect.Message {
+	mi := &file_airlock_v1_types_proto_msgTypes[27]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AgentGitConfig.ProtoReflect.Descriptor instead.
+func (*AgentGitConfig) Descriptor() ([]byte, []int) {
+	return file_airlock_v1_types_proto_rawDescGZIP(), []int{27}
+}
+
+func (x *AgentGitConfig) GetAgentId() string {
+	if x != nil {
+		return x.AgentId
+	}
+	return ""
+}
+
+func (x *AgentGitConfig) GetGitRemoteUrl() string {
+	if x != nil {
+		return x.GitRemoteUrl
+	}
+	return ""
+}
+
+func (x *AgentGitConfig) GetGitCredentialId() string {
+	if x != nil {
+		return x.GitCredentialId
+	}
+	return ""
+}
+
+func (x *AgentGitConfig) GetGitCredentialName() string {
+	if x != nil {
+		return x.GitCredentialName
+	}
+	return ""
+}
+
+func (x *AgentGitConfig) GetDefaultBranch() string {
+	if x != nil {
+		return x.DefaultBranch
+	}
+	return ""
+}
+
+func (x *AgentGitConfig) GetWebhookUrl() string {
+	if x != nil {
+		return x.WebhookUrl
+	}
+	return ""
+}
+
+func (x *AgentGitConfig) GetWebhookSecret() string {
+	if x != nil {
+		return x.WebhookSecret
+	}
+	return ""
+}
+
+func (x *AgentGitConfig) GetLastSyncedRef() string {
+	if x != nil {
+		return x.LastSyncedRef
+	}
+	return ""
+}
+
 var File_airlock_v1_types_proto protoreflect.FileDescriptor
 
 const file_airlock_v1_types_proto_rawDesc = "" +
@@ -3091,7 +3288,27 @@ const file_airlock_v1_types_proto_rawDesc = "" +
 	"\x17default_tts_provider_id\x18\r \x01(\tR\x14defaultTtsProviderId\x12@\n" +
 	"\x1ddefault_image_gen_provider_id\x18\x0e \x01(\tR\x19defaultImageGenProviderId\x12;\n" +
 	"\x1adefault_search_provider_id\x18\x0f \x01(\tR\x17defaultSearchProviderId\x12A\n" +
-	"\x1ddefault_embedding_provider_id\x18\x10 \x01(\tR\x1adefaultEmbeddingProviderId*o\n" +
+	"\x1ddefault_embedding_provider_id\x18\x10 \x01(\tR\x1adefaultEmbeddingProviderId\"\x85\x02\n" +
+	"\rGitCredential\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x17\n" +
+	"\auser_id\x18\x02 \x01(\tR\x06userId\x12\x12\n" +
+	"\x04type\x18\x03 \x01(\tR\x04type\x12\x12\n" +
+	"\x04name\x18\x04 \x01(\tR\x04name\x12*\n" +
+	"\x11github_install_id\x18\x05 \x01(\tR\x0fgithubInstallId\x129\n" +
+	"\n" +
+	"created_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x12<\n" +
+	"\flast_used_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\n" +
+	"lastUsedAt\"\xc4\x02\n" +
+	"\x0eAgentGitConfig\x12\x19\n" +
+	"\bagent_id\x18\x01 \x01(\tR\aagentId\x12$\n" +
+	"\x0egit_remote_url\x18\x02 \x01(\tR\fgitRemoteUrl\x12*\n" +
+	"\x11git_credential_id\x18\x03 \x01(\tR\x0fgitCredentialId\x12.\n" +
+	"\x13git_credential_name\x18\x04 \x01(\tR\x11gitCredentialName\x12%\n" +
+	"\x0edefault_branch\x18\x05 \x01(\tR\rdefaultBranch\x12\x1f\n" +
+	"\vwebhook_url\x18\x06 \x01(\tR\n" +
+	"webhookUrl\x12%\n" +
+	"\x0ewebhook_secret\x18\a \x01(\tR\rwebhookSecret\x12&\n" +
+	"\x0flast_synced_ref\x18\b \x01(\tR\rlastSyncedRef*o\n" +
 	"\n" +
 	"TenantRole\x12\x1b\n" +
 	"\x17TENANT_ROLE_UNSPECIFIED\x10\x00\x12\x15\n" +
@@ -3118,7 +3335,7 @@ func file_airlock_v1_types_proto_rawDescGZIP() []byte {
 }
 
 var file_airlock_v1_types_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_airlock_v1_types_proto_msgTypes = make([]protoimpl.MessageInfo, 26)
+var file_airlock_v1_types_proto_msgTypes = make([]protoimpl.MessageInfo, 28)
 var file_airlock_v1_types_proto_goTypes = []any{
 	(TenantRole)(0),                // 0: airlock.v1.TenantRole
 	(MessageRole)(0),               // 1: airlock.v1.MessageRole
@@ -3148,45 +3365,49 @@ var file_airlock_v1_types_proto_goTypes = []any{
 	(*FileInfo)(nil),               // 25: airlock.v1.FileInfo
 	(*TopicInfo)(nil),              // 26: airlock.v1.TopicInfo
 	(*SystemSettingsInfo)(nil),     // 27: airlock.v1.SystemSettingsInfo
-	(*structpb.Struct)(nil),        // 28: google.protobuf.Struct
-	(*timestamppb.Timestamp)(nil),  // 29: google.protobuf.Timestamp
-	(*structpb.ListValue)(nil),     // 30: google.protobuf.ListValue
+	(*GitCredential)(nil),          // 28: airlock.v1.GitCredential
+	(*AgentGitConfig)(nil),         // 29: airlock.v1.AgentGitConfig
+	(*structpb.Struct)(nil),        // 30: google.protobuf.Struct
+	(*timestamppb.Timestamp)(nil),  // 31: google.protobuf.Timestamp
+	(*structpb.ListValue)(nil),     // 32: google.protobuf.ListValue
 }
 var file_airlock_v1_types_proto_depIdxs = []int32{
-	28, // 0: airlock.v1.Tenant.settings:type_name -> google.protobuf.Struct
-	29, // 1: airlock.v1.Tenant.created_at:type_name -> google.protobuf.Timestamp
-	29, // 2: airlock.v1.Tenant.updated_at:type_name -> google.protobuf.Timestamp
+	30, // 0: airlock.v1.Tenant.settings:type_name -> google.protobuf.Struct
+	31, // 1: airlock.v1.Tenant.created_at:type_name -> google.protobuf.Timestamp
+	31, // 2: airlock.v1.Tenant.updated_at:type_name -> google.protobuf.Timestamp
 	0,  // 3: airlock.v1.User.tenant_role:type_name -> airlock.v1.TenantRole
-	29, // 4: airlock.v1.User.created_at:type_name -> google.protobuf.Timestamp
-	29, // 5: airlock.v1.User.updated_at:type_name -> google.protobuf.Timestamp
-	29, // 6: airlock.v1.Provider.created_at:type_name -> google.protobuf.Timestamp
-	29, // 7: airlock.v1.Provider.updated_at:type_name -> google.protobuf.Timestamp
-	29, // 8: airlock.v1.AgentInfo.created_at:type_name -> google.protobuf.Timestamp
-	29, // 9: airlock.v1.AgentInfo.updated_at:type_name -> google.protobuf.Timestamp
-	28, // 10: airlock.v1.RunInfo.input_payload:type_name -> google.protobuf.Struct
-	30, // 11: airlock.v1.RunInfo.actions:type_name -> google.protobuf.ListValue
-	29, // 12: airlock.v1.RunInfo.started_at:type_name -> google.protobuf.Timestamp
-	29, // 13: airlock.v1.RunInfo.finished_at:type_name -> google.protobuf.Timestamp
-	29, // 14: airlock.v1.AgentBuildInfo.started_at:type_name -> google.protobuf.Timestamp
-	29, // 15: airlock.v1.AgentBuildInfo.finished_at:type_name -> google.protobuf.Timestamp
-	29, // 16: airlock.v1.ConversationInfo.created_at:type_name -> google.protobuf.Timestamp
-	29, // 17: airlock.v1.ConversationInfo.updated_at:type_name -> google.protobuf.Timestamp
-	29, // 18: airlock.v1.AgentMessageInfo.created_at:type_name -> google.protobuf.Timestamp
-	29, // 19: airlock.v1.WebhookInfo.last_received_at:type_name -> google.protobuf.Timestamp
-	29, // 20: airlock.v1.WebhookInfo.created_at:type_name -> google.protobuf.Timestamp
-	29, // 21: airlock.v1.CronInfo.last_fired_at:type_name -> google.protobuf.Timestamp
-	29, // 22: airlock.v1.CronInfo.created_at:type_name -> google.protobuf.Timestamp
-	29, // 23: airlock.v1.ConnectionInfo.token_expires_at:type_name -> google.protobuf.Timestamp
+	31, // 4: airlock.v1.User.created_at:type_name -> google.protobuf.Timestamp
+	31, // 5: airlock.v1.User.updated_at:type_name -> google.protobuf.Timestamp
+	31, // 6: airlock.v1.Provider.created_at:type_name -> google.protobuf.Timestamp
+	31, // 7: airlock.v1.Provider.updated_at:type_name -> google.protobuf.Timestamp
+	31, // 8: airlock.v1.AgentInfo.created_at:type_name -> google.protobuf.Timestamp
+	31, // 9: airlock.v1.AgentInfo.updated_at:type_name -> google.protobuf.Timestamp
+	30, // 10: airlock.v1.RunInfo.input_payload:type_name -> google.protobuf.Struct
+	32, // 11: airlock.v1.RunInfo.actions:type_name -> google.protobuf.ListValue
+	31, // 12: airlock.v1.RunInfo.started_at:type_name -> google.protobuf.Timestamp
+	31, // 13: airlock.v1.RunInfo.finished_at:type_name -> google.protobuf.Timestamp
+	31, // 14: airlock.v1.AgentBuildInfo.started_at:type_name -> google.protobuf.Timestamp
+	31, // 15: airlock.v1.AgentBuildInfo.finished_at:type_name -> google.protobuf.Timestamp
+	31, // 16: airlock.v1.ConversationInfo.created_at:type_name -> google.protobuf.Timestamp
+	31, // 17: airlock.v1.ConversationInfo.updated_at:type_name -> google.protobuf.Timestamp
+	31, // 18: airlock.v1.AgentMessageInfo.created_at:type_name -> google.protobuf.Timestamp
+	31, // 19: airlock.v1.WebhookInfo.last_received_at:type_name -> google.protobuf.Timestamp
+	31, // 20: airlock.v1.WebhookInfo.created_at:type_name -> google.protobuf.Timestamp
+	31, // 21: airlock.v1.CronInfo.last_fired_at:type_name -> google.protobuf.Timestamp
+	31, // 22: airlock.v1.CronInfo.created_at:type_name -> google.protobuf.Timestamp
+	31, // 23: airlock.v1.ConnectionInfo.token_expires_at:type_name -> google.protobuf.Timestamp
 	4,  // 24: airlock.v1.BridgeInfo.owner:type_name -> airlock.v1.UserSummary
-	29, // 25: airlock.v1.BridgeInfo.created_at:type_name -> google.protobuf.Timestamp
-	29, // 26: airlock.v1.BridgeInfo.updated_at:type_name -> google.protobuf.Timestamp
+	31, // 25: airlock.v1.BridgeInfo.created_at:type_name -> google.protobuf.Timestamp
+	31, // 26: airlock.v1.BridgeInfo.updated_at:type_name -> google.protobuf.Timestamp
 	19, // 27: airlock.v1.BridgeInfo.settings:type_name -> airlock.v1.BridgeSettings
-	29, // 28: airlock.v1.PlatformIdentityInfo.created_at:type_name -> google.protobuf.Timestamp
-	29, // [29:29] is the sub-list for method output_type
-	29, // [29:29] is the sub-list for method input_type
-	29, // [29:29] is the sub-list for extension type_name
-	29, // [29:29] is the sub-list for extension extendee
-	0,  // [0:29] is the sub-list for field type_name
+	31, // 28: airlock.v1.PlatformIdentityInfo.created_at:type_name -> google.protobuf.Timestamp
+	31, // 29: airlock.v1.GitCredential.created_at:type_name -> google.protobuf.Timestamp
+	31, // 30: airlock.v1.GitCredential.last_used_at:type_name -> google.protobuf.Timestamp
+	31, // [31:31] is the sub-list for method output_type
+	31, // [31:31] is the sub-list for method input_type
+	31, // [31:31] is the sub-list for extension type_name
+	31, // [31:31] is the sub-list for extension extendee
+	0,  // [0:31] is the sub-list for field type_name
 }
 
 func init() { file_airlock_v1_types_proto_init() }
@@ -3200,7 +3421,7 @@ func file_airlock_v1_types_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_airlock_v1_types_proto_rawDesc), len(file_airlock_v1_types_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   26,
+			NumMessages:   28,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

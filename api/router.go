@@ -116,6 +116,8 @@ func NewRouter(cfg RouterConfig) http.Handler {
 
 	authHandler := NewAuthHandler(cfg.DB, cfg.JWTSecret, cfg.ActivationCodeFile, cfg.Logger.Named("auth"))
 	providersHandler := NewProvidersHandler(cfg.DB, cfg.Secrets)
+	gitCredsHandler := NewGitCredentialsHandler(cfg.DB, cfg.Secrets)
+	gitWebhookHandler := NewGitWebhookHandler(cfg.DB, cfg.BuildService, cfg.Logger.Named("git-webhook"))
 	usersHandler := NewUsersHandler(cfg.DB)
 	sysSettingsHandler := &settingsHandler{db: cfg.DB, encryptor: cfg.Secrets, logger: cfg.Logger.Named("settings")}
 
@@ -193,6 +195,15 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		r.Use(identityLogger)
 
 		r.Get("/me", authHandler.Me)
+
+		// Per-user git credentials (PATs for accessing external git
+		// remotes attached to agents). Self-service: any authenticated
+		// user can manage their own credentials; not admin-gated.
+		r.Route("/me/git/credentials", func(r chi.Router) {
+			r.Get("/", gitCredsHandler.List)
+			r.Post("/", gitCredsHandler.Create)
+			r.Delete("/{id}", gitCredsHandler.Delete)
+		})
 
 		// OAuth consent + grant management. The SPA hits /oauth/consent
 		// (POST) to approve or deny a pending /oauth/authorize request;
@@ -308,6 +319,11 @@ func NewRouter(cfg RouterConfig) http.Handler {
 				r.Get("/builds/{buildID}", agH.GetBuild)
 				r.Post("/builds/cancel", agH.CancelBuild)
 
+				// External git remote (optional, per agent)
+				r.Get("/git", agH.GetGitConfig)
+				r.Post("/git/connect", agH.ConnectGit)
+				r.Post("/git/disconnect", agH.DisconnectGit)
+
 				// Runs
 				r.Get("/runs", rH.ListRuns)
 
@@ -416,6 +432,9 @@ func NewRouter(cfg RouterConfig) http.Handler {
 			logger:     cfg.Logger.Named("webhook-ingress"),
 		}
 		r.Post("/webhooks/{agentID}/{path}", wh.HandleWebhook)
+		// External git push notifications (GitHub, GitLab). Signature
+		// verification gated by the per-agent git_webhook_secret.
+		r.Post("/webhooks/git/{agentID}", gitWebhookHandler.Handle)
 	}
 
 	// (channel event endpoint removed — bridges use long-polling, not push)

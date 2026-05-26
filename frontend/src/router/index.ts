@@ -53,6 +53,7 @@ const router = createRouter({
         { path: 'bridges', name: 'bridges', component: () => import('@/views/BridgesView.vue'), meta: { requiresAdmin: true } },
         { path: 'users', name: 'users', component: () => import('@/views/UsersView.vue'), meta: { requiresAdmin: true } },
         { path: 'settings', name: 'settings', component: () => import('@/views/SettingsView.vue') },
+        { path: 'settings/git-credentials', name: 'git-credentials', component: () => import('@/views/GitCredentialsView.vue') },
         { path: 'link-identity', name: 'link-identity', component: () => import('@/views/LinkIdentityView.vue') },
         // OAuth consent — landing page for /oauth/authorize when the
         // user is logged in and a fresh grant is required. Auth guard

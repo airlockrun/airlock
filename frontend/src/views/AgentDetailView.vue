@@ -23,6 +23,7 @@ import SiblingsTab from '@/components/agent/SiblingsTab.vue'
 import ModelsTab from '@/components/agent/ModelsTab.vue'
 import RunsTab from '@/components/agent/RunsTab.vue'
 import BuildsTab from '@/components/agent/BuildsTab.vue'
+import SourceTab from '@/components/agent/SourceTab.vue'
 import BuildLogPanel from '@/components/agent/BuildLogPanel.vue'
 import { useBuildsStore } from '@/stores/builds'
 
@@ -474,6 +475,7 @@ function goToChat() {
         <Tab :value="9">Siblings</Tab>
         <Tab :value="10">Runs</Tab>
         <Tab :value="11">Builds</Tab>
+        <Tab :value="12">Source</Tab>
       </TabList>
       <TabPanels :key="tabsKey">
         <TabPanel :value="0"><ConnectionsTab :agent-id="agentId" /></TabPanel>
@@ -488,6 +490,7 @@ function goToChat() {
         <TabPanel :value="9"><SiblingsTab :agent-id="agentId" /></TabPanel>
         <TabPanel :value="10"><RunsTab :agent-id="agentId" /></TabPanel>
         <TabPanel :value="11"><BuildsTab :agent-id="agentId" /></TabPanel>
+        <TabPanel :value="12"><SourceTab :agent-id="agentId" /></TabPanel>
       </TabPanels>
     </Tabs>
 
