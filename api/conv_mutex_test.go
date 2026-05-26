@@ -15,25 +15,26 @@ func TestConvMutexMap(t *testing.T) {
 		var seq atomic.Int32
 		var wg sync.WaitGroup
 		wg.Add(2)
+		// ready closes once the first goroutine holds the lock — the
+		// second goroutine only starts trying to acquire after that, so
+		// the test no longer relies on a wall-clock sleep for ordering.
+		ready := make(chan struct{})
 
-		// First goroutine acquires lock and holds it briefly.
 		go func() {
 			defer wg.Done()
 			m.Lock("c1")
+			close(ready)
 			seq.Add(1) // seq = 1
 			time.Sleep(50 * time.Millisecond)
 			m.Unlock("c1")
 		}()
 
-		// Give the first goroutine time to acquire.
-		time.Sleep(10 * time.Millisecond)
+		<-ready
 
-		// Second goroutine blocks until first releases.
 		go func() {
 			defer wg.Done()
 			m.Lock("c1")
-			got := seq.Load()
-			if got != 1 {
+			if got := seq.Load(); got != 1 {
 				t.Errorf("second goroutine ran before first completed: seq=%d", got)
 			}
 			seq.Add(1) // seq = 2
@@ -41,8 +42,8 @@ func TestConvMutexMap(t *testing.T) {
 		}()
 
 		wg.Wait()
-		if seq.Load() != 2 {
-			t.Fatalf("expected seq=2, got %d", seq.Load())
+		if got := seq.Load(); got != 2 {
+			t.Fatalf("expected seq=2, got %d", got)
 		}
 	})
 

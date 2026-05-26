@@ -164,11 +164,10 @@ func TestResolveModel_Precedence(t *testing.T) {
 	}
 	provFK := toPgUUID(provUUID)
 
-	// Model resolution is provider-FK + bare model name (no legacy
-	// "provider/model" strings) — resolveModel returns the model name
-	// verbatim and requires a valid provider FK. The singleton
-	// system_settings row is migration-seeded; point its exec slot at
-	// our provider for the tier-3 default.
+	// Model resolution is provider-FK + bare model name: resolveModel
+	// returns the model verbatim and requires a valid provider FK. The
+	// singleton system_settings row is migration-seeded; point its exec
+	// slot at our provider for the tier-3 default.
 	if _, err := testDB.Pool().Exec(ctx,
 		`UPDATE system_settings SET default_exec_provider_id=$1, default_exec_model='system-exec' WHERE id=true`,
 		provFK,
@@ -176,77 +175,72 @@ func TestResolveModel_Precedence(t *testing.T) {
 		t.Fatalf("set system default exec model: %v", err)
 	}
 
-	// Tier 3: empty slug, no per-agent override → system default.
-	_, modelID, _, _, err := ah.resolveModel(ctx, agentID.String(), "", "text")
-	if err != nil {
-		t.Fatalf("tier-3 resolveModel: %v", err)
-	}
-	if modelID != "system-exec" {
-		t.Errorf("tier-3 modelID = %q, want %q", modelID, "system-exec")
-	}
-
-	// Tier 2: set per-agent exec_model override → used over system default.
-	if err := q.UpdateAgentModels(ctx, dbq.UpdateAgentModelsParams{
-		ID:             toPgUUID(agentID),
-		ExecProviderID: provFK,
-		ExecModel:      "agent-exec",
-	}); err != nil {
-		t.Fatalf("UpdateAgentModels: %v", err)
-	}
-	_, modelID, _, _, err = ah.resolveModel(ctx, agentID.String(), "", "text")
-	if err != nil {
-		t.Fatalf("tier-2 resolveModel: %v", err)
-	}
-	if modelID != "agent-exec" {
-		t.Errorf("tier-2 modelID = %q, want %q", modelID, "agent-exec")
+	resolveTextModel := func(t *testing.T, slug string) string {
+		t.Helper()
+		_, modelID, _, _, err := ah.resolveModel(ctx, agentID.String(), slug, "text")
+		if err != nil {
+			t.Fatalf("resolveModel(slug=%q): %v", slug, err)
+		}
+		return modelID
 	}
 
-	// Declared-but-unbound slug → falls through to tier 2.
-	if err := q.UpsertAgentModelSlot(ctx, dbq.UpsertAgentModelSlotParams{
-		AgentID:    toPgUUID(agentID),
-		Slug:       "summarize",
-		Capability: "text",
-	}); err != nil {
-		t.Fatalf("UpsertAgentModelSlot: %v", err)
-	}
-	_, modelID, _, _, err = ah.resolveModel(ctx, agentID.String(), "summarize", "text")
-	if err != nil {
-		t.Fatalf("unbound-slot resolveModel: %v", err)
-	}
-	if modelID != "agent-exec" {
-		t.Errorf("unbound-slot modelID = %q, want %q (tier-2 fallback)", modelID, "agent-exec")
-	}
+	t.Run("tier-3 system default", func(t *testing.T) {
+		if got := resolveTextModel(t, ""); got != "system-exec" {
+			t.Errorf("modelID = %q, want %q", got, "system-exec")
+		}
+	})
 
-	// Undeclared slug → also falls through to tier 2 (advisory, never fatal).
-	_, modelID, _, _, err = ah.resolveModel(ctx, agentID.String(), "brand-new-slug", "text")
-	if err != nil {
-		t.Fatalf("undeclared-slug resolveModel: %v", err)
-	}
-	if modelID != "agent-exec" {
-		t.Errorf("undeclared-slug modelID = %q, want %q (tier-2 fallback)", modelID, "agent-exec")
-	}
+	t.Run("tier-2 per-agent override", func(t *testing.T) {
+		if err := q.UpdateAgentModels(ctx, dbq.UpdateAgentModelsParams{
+			ID:             toPgUUID(agentID),
+			ExecProviderID: provFK,
+			ExecModel:      "agent-exec",
+		}); err != nil {
+			t.Fatalf("UpdateAgentModels: %v", err)
+		}
+		if got := resolveTextModel(t, ""); got != "agent-exec" {
+			t.Errorf("modelID = %q, want %q", got, "agent-exec")
+		}
+	})
 
-	// Tier 1: bind summarize → use the bound model, skipping lower tiers.
-	if err := q.SetAgentModelSlotAssignment(ctx, dbq.SetAgentModelSlotAssignmentParams{
-		AgentID:            toPgUUID(agentID),
-		Slug:               "summarize",
-		AssignedProviderID: provFK,
-		AssignedModel:      "slot-bound",
-	}); err != nil {
-		t.Fatalf("SetAgentModelSlotAssignment: %v", err)
-	}
-	_, modelID, _, _, err = ah.resolveModel(ctx, agentID.String(), "summarize", "text")
-	if err != nil {
-		t.Fatalf("tier-1 resolveModel: %v", err)
-	}
-	if modelID != "slot-bound" {
-		t.Errorf("tier-1 modelID = %q, want %q", modelID, "slot-bound")
-	}
+	t.Run("declared-but-unbound slug falls back to tier 2", func(t *testing.T) {
+		if err := q.UpsertAgentModelSlot(ctx, dbq.UpsertAgentModelSlotParams{
+			AgentID:    toPgUUID(agentID),
+			Slug:       "summarize",
+			Capability: "text",
+		}); err != nil {
+			t.Fatalf("UpsertAgentModelSlot: %v", err)
+		}
+		if got := resolveTextModel(t, "summarize"); got != "agent-exec" {
+			t.Errorf("modelID = %q, want %q (tier-2 fallback)", got, "agent-exec")
+		}
+	})
 
-	// All-empty for a capability → clear error.
-	if _, _, _, _, err = ah.resolveModel(ctx, agentID.String(), "", "image"); err == nil {
-		t.Error("expected error when all tiers empty for image capability")
-	}
+	t.Run("undeclared slug falls back to tier 2", func(t *testing.T) {
+		if got := resolveTextModel(t, "brand-new-slug"); got != "agent-exec" {
+			t.Errorf("modelID = %q, want %q (tier-2 fallback)", got, "agent-exec")
+		}
+	})
+
+	t.Run("tier-1 slot binding wins", func(t *testing.T) {
+		if err := q.SetAgentModelSlotAssignment(ctx, dbq.SetAgentModelSlotAssignmentParams{
+			AgentID:            toPgUUID(agentID),
+			Slug:               "summarize",
+			AssignedProviderID: provFK,
+			AssignedModel:      "slot-bound",
+		}); err != nil {
+			t.Fatalf("SetAgentModelSlotAssignment: %v", err)
+		}
+		if got := resolveTextModel(t, "summarize"); got != "slot-bound" {
+			t.Errorf("modelID = %q, want %q", got, "slot-bound")
+		}
+	})
+
+	t.Run("all-empty capability errors", func(t *testing.T) {
+		if _, _, _, _, err := ah.resolveModel(ctx, agentID.String(), "", "image"); err == nil {
+			t.Error("expected error when all tiers empty for image capability")
+		}
+	})
 }
 
 // TestUpdateModelConfig_AtomicReplaceAndSlotAssignment verifies PUT

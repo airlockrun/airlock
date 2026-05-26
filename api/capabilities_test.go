@@ -140,5 +140,7 @@ func TestListCapabilitiesShape(t *testing.T) {
 			sawNonConfigured = true
 		}
 	}
-	_ = sawConfigured
+	if !sawConfigured {
+		t.Error("expected at least one configured provider in response")
+	}
 }

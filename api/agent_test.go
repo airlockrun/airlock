@@ -100,7 +100,9 @@ func agentRequest(t *testing.T, method, path string, agentID uuid.UUID, body any
 	t.Helper()
 	var buf bytes.Buffer
 	if body != nil {
-		json.NewEncoder(&buf).Encode(body)
+		if err := json.NewEncoder(&buf).Encode(body); err != nil {
+			t.Fatalf("encode request body: %v", err)
+		}
 	}
 	req := httptest.NewRequest(method, path, &buf)
 	req.Header.Set("Content-Type", "application/json")
@@ -139,12 +141,14 @@ func testAgentAndUser(t *testing.T) (agentID, userID uuid.UUID) {
 		t.Fatalf("CreateAgent: %v", err)
 	}
 
-	// Add creator as agent admin (matches Create handler behavior).
-	_ = q.AddAgentMember(ctx, dbq.AddAgentMemberParams{
+	// Owner becomes agent admin — mirrors the Create handler.
+	if err := q.AddAgentMember(ctx, dbq.AddAgentMemberParams{
 		AgentID: agent.ID,
 		UserID:  user.ID,
 		Role:    "admin",
-	})
+	}); err != nil {
+		t.Fatalf("AddAgentMember: %v", err)
+	}
 
 	return pgUUID(agent.ID), pgUUID(user.ID)
 }

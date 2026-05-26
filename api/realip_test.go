@@ -105,14 +105,9 @@ func TestRealIPMiddleware(t *testing.T) {
 		got := run(cfg, "10.42.0.5:5678", map[string]string{
 			"X-Forwarded-For": "203.0.113.50, 10.42.0.1",
 		})
-		// Limit=1: walk 1 hop from right. 10.42.0.1 is trusted, skip.
-		// Only walked 1 hop, so we stop — but 10.42.0.1 is trusted so we
-		// continue to 203.0.113.50 which is untrusted = client.
-		// Actually with limit=1, we walk at most 1 entry. Let me re-think.
-		// Limit means how many hops. With limit=1: we check rightmost (10.42.0.1),
-		// it's trusted so we skip; hops=1 which equals limit, so we stop.
-		// Result: no client IP found, RemoteAddr unchanged.
-		// For this chain to work we need limit=2.
+		// Limit=1 walks one rightmost entry: 10.42.0.1 is trusted, so
+		// hops==limit and we stop without surfacing 203.0.113.50.
+		// RemoteAddr stays at the direct peer.
 		if got != "10.42.0.5:5678" {
 			t.Fatalf("expected original (limit exhausted), got %s", got)
 		}

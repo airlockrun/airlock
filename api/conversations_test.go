@@ -216,9 +216,6 @@ func TestDeleteConversation_RemovesRow(t *testing.T) {
 	}
 }
 
-// Unused helpers silence go vet on imports that only matter when tests run.
-var _ = dbq.ListMessagesBackwardParams{}
-
 // TestTruncate_RuneAware is a regression for the Postgres
 // "invalid byte sequence for encoding UTF8" crash on conversation
 // creation: the title was being byte-truncated, splitting a multi-byte
