@@ -16,6 +16,7 @@ import {
   type CatalogModel,
 } from '@/composables/useModelCapabilities'
 import { useProvidersStore } from '@/stores/providers'
+import { useGitCredentialsStore } from '@/stores/gitCredentials'
 import { useToast } from 'primevue/usetoast'
 import api from '@/api/client'
 import { ws } from '@/api/ws'
@@ -30,6 +31,7 @@ const router = useRouter()
 const store = useAgentsStore()
 const catalog = useCatalogStore()
 const providers = useProvidersStore()
+const gitCredsStore = useGitCredentialsStore()
 const toast = useToast()
 const { groupModels, searchProviderOptions } = useModelCapabilities()
 
@@ -37,6 +39,12 @@ const name = ref('')
 const slug = ref('')
 const slugManual = ref(false)
 const instructions = ref('')
+
+// Optional external git remote attached on create. When gitRemoteUrl
+// is non-empty, gitCredentialId must also be set.
+const gitRemoteUrl = ref('')
+const gitCredentialId = ref('')
+const gitDefaultBranch = ref('main')
 const loading = ref(false)
 const building = ref(false)
 const buildError = ref('')
@@ -78,6 +86,7 @@ onMounted(async () => {
   // Pickers fan out per (catalog provider × configured row), so we need
   // the providers list before the model dropdowns render.
   providers.fetchProviders()
+  gitCredsStore.fetchCredentials()
   try {
     const { data } = await api.get('/api/v1/settings')
     const resp = fromJson(GetSystemSettingsResponseSchema, data)
@@ -277,6 +286,13 @@ async function onSubmit() {
       exec.modelName,
       exec.providerRowID,
       instructions.value,
+      gitRemoteUrl.value.trim()
+        ? {
+            remoteUrl: gitRemoteUrl.value.trim(),
+            credentialId: gitCredentialId.value,
+            defaultBranch: gitDefaultBranch.value.trim() || 'main',
+          }
+        : undefined,
     )
 
     if (hasAdvancedOverrides.value) {
@@ -452,6 +468,43 @@ onUnmounted(() => {
           style="width: 100%"
         />
       </div>
+
+      <Fieldset legend="Connect a git repo (optional)" :toggleable="true" :collapsed="true">
+        <div style="display: flex; flex-direction: column; gap: 1rem">
+          <small style="color: var(--p-text-muted-color)">
+            Attach an empty external git repo to this agent. Airlock pushes the scaffold and codegen there, and pulls user pushes back. You can also do this later from the agent's <strong>Source</strong> tab.
+          </small>
+          <div>
+            <label style="display: block; margin-bottom: 0.35rem; font-size: 0.85rem">Repo URL</label>
+            <InputText
+              v-model="gitRemoteUrl"
+              placeholder="https://github.com/you/your-agent.git"
+              :disabled="building"
+              autocomplete="off"
+              style="width: 100%"
+            />
+          </div>
+          <div v-if="gitRemoteUrl.trim()">
+            <label style="display: block; margin-bottom: 0.35rem; font-size: 0.85rem">Credential</label>
+            <Select
+              v-model="gitCredentialId"
+              :options="gitCredsStore.credentials"
+              option-label="name"
+              option-value="id"
+              placeholder="Choose a PAT"
+              :disabled="building"
+              style="width: 100%"
+            />
+            <small v-if="gitCredsStore.credentials.length === 0" style="color: var(--p-text-muted-color)">
+              No credentials yet — <router-link to="/settings/git-credentials">add a PAT in Settings</router-link>.
+            </small>
+          </div>
+          <div v-if="gitRemoteUrl.trim()">
+            <label style="display: block; margin-bottom: 0.35rem; font-size: 0.85rem">Default branch</label>
+            <InputText v-model="gitDefaultBranch" :disabled="building" style="width: 100%" />
+          </div>
+        </div>
+      </Fieldset>
 
       <Button
         v-if="!building"

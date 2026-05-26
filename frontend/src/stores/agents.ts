@@ -35,6 +35,7 @@ export const useAgentsStore = defineStore('agents', () => {
     execModel: string,
     execProviderId: string,
     instructions?: string,
+    git?: { remoteUrl: string; credentialId: string; defaultBranch?: string },
   ) {
     const payload: Record<string, string> = {
       name,
@@ -45,6 +46,11 @@ export const useAgentsStore = defineStore('agents', () => {
       execProviderId,
     }
     if (instructions) payload.instructions = instructions
+    if (git?.remoteUrl) {
+      payload.gitRemoteUrl = git.remoteUrl
+      payload.gitCredentialId = git.credentialId
+      if (git.defaultBranch) payload.gitDefaultBranch = git.defaultBranch
+    }
     const { data } = await api.post('/api/v1/agents', payload)
     const agent = fromJson(CreateAgentResponseSchema, data).agent!
     agents.value.unshift(agent)

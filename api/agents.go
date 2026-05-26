@@ -91,6 +91,31 @@ func (h *agentsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Optional external git remote. Both URL and credential must be
+	// present together; the credential must belong to the calling user.
+	var gitCredFK pgtype.UUID
+	if req.GitRemoteUrl != "" {
+		if req.GitCredentialId == "" {
+			writeError(w, http.StatusBadRequest, "git_credential_id is required when git_remote_url is set")
+			return
+		}
+		credID, err := parseUUID(req.GitCredentialId)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid git_credential_id")
+			return
+		}
+		cred, err := q.GetGitCredential(ctx, toPgUUID(credID))
+		if err != nil {
+			writeError(w, http.StatusNotFound, "git credential not found")
+			return
+		}
+		if pgUUID(cred.UserID) != userID {
+			writeError(w, http.StatusForbidden, "git credential does not belong to you")
+			return
+		}
+		gitCredFK = pgtype.UUID{Bytes: toPgUUID(credID).Bytes, Valid: true}
+	}
+
 	// Create the agent record (status=draft) so we can return it immediately.
 	// All model override columns default to '' (live inheritance).
 	agent, err := q.CreateAgent(ctx, dbq.CreateAgentParams{
@@ -139,13 +164,16 @@ func (h *agentsHandler) Create(w http.ResponseWriter, r *http.Request) {
 	// internally — no need to log the returned err here.
 	go func() {
 		_ = h.builder.Build(context.Background(), builder.BuildInput{
-			AgentID:         agentID,
-			Name:            req.Name,
-			Slug:            req.Slug,
-			UserID:          userID.String(),
-			BuildProviderID: buildProviderFK,
-			BuildModel:      req.BuildModel,
-			Instructions:    req.Instructions,
+			AgentID:          agentID,
+			Name:             req.Name,
+			Slug:             req.Slug,
+			UserID:           userID.String(),
+			BuildProviderID:  buildProviderFK,
+			BuildModel:       req.BuildModel,
+			Instructions:     req.Instructions,
+			GitRemoteURL:     req.GitRemoteUrl,
+			GitCredentialID:  gitCredFK,
+			GitDefaultBranch: req.GitDefaultBranch,
 		})
 	}()
 

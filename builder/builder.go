@@ -204,6 +204,15 @@ type BuildInput struct {
 	BuildProviderID pgtype.UUID // providers row FK; pairs with BuildModel
 	BuildModel      string      // bare model name; "" + invalid FK ⇄ inherit system default
 	Instructions    string      // optional: when non-empty, run Sol code generation after scaffold
+
+	// Optional external-git connection. When GitRemoteURL is non-empty,
+	// the agent is connected to the remote during Build and the first
+	// push happens via Execute's post-merge push (Phase C2). The API
+	// handler enforces that GitCredentialID belongs to UserID before
+	// calling Build.
+	GitRemoteURL     string
+	GitCredentialID  pgtype.UUID
+	GitDefaultBranch string // defaults to "main" when empty
 }
 
 // Build runs the initial-build pipeline: scaffold → Sol codegen (if
@@ -259,6 +268,34 @@ func (b *BuildService) Build(_ context.Context, input BuildInput) error {
 		Status: "building",
 	}); err != nil {
 		return fmt.Errorf("update status to building: %w", err)
+	}
+
+	// Attach the optional external git remote BEFORE Execute runs, so
+	// Phase C2 (post-merge push) sees it and pushes the scaffold +
+	// codegen to the remote in one shot.
+	if input.GitRemoteURL != "" {
+		branch := input.GitDefaultBranch
+		if branch == "" {
+			branch = "main"
+		}
+		secret, err := randomHexBytes(32)
+		if err != nil {
+			return fmt.Errorf("generate webhook secret: %w", err)
+		}
+		if err := q.ConnectAgentGit(ctx, dbq.ConnectAgentGitParams{
+			ID:               agent.ID,
+			GitRemoteUrl:     input.GitRemoteURL,
+			GitCredentialID:  input.GitCredentialID,
+			GitDefaultBranch: branch,
+			GitWebhookSecret: secret,
+		}); err != nil {
+			return fmt.Errorf("connect agent git: %w", err)
+		}
+		// Re-read so plan.Agent below carries the new fields.
+		agent, err = q.GetAgentByID(ctx, agent.ID)
+		if err != nil {
+			return fmt.Errorf("reload agent after git connect: %w", err)
+		}
 	}
 
 	plan := BuildPlan{
