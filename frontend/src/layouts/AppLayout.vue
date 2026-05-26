@@ -320,7 +320,7 @@ onMounted(() => {
              Keyed on path (not fullPath) so query-string-only navigations
              (chat's ?c=convId switcher) still hit each view's in-place
              watcher and don't pay the remount cost. Pinia stores survive. -->
-        <router-view :key="$route.path" />
+        <router-view :key="$route.params.id ?? $route.name" />
       </main>
     </div>
   </div>
