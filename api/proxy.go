@@ -19,7 +19,7 @@ import (
 // header matches {slug}.{agentDomain}. Matching requests are authenticated
 // according to the route's access level and reverse-proxied to the agent's
 // container. Non-matching requests fall through to inner.
-func SubdomainProxy(agentDomain string, database *db.DB, s3 *storage.S3Client, dispatcher *trigger.Dispatcher, jwtSecret, publicURL string, logger *zap.Logger, inner http.Handler) http.Handler {
+func SubdomainProxy(agentDomain string, database *db.DB, s3 *storage.S3Client, dispatcher *trigger.Dispatcher, jwtSecret, publicURL string, inner http.Handler) http.Handler {
 	if agentDomain == "" {
 		panic("api: SubdomainProxy called with empty agentDomain")
 	}
@@ -53,7 +53,7 @@ func SubdomainProxy(agentDomain string, database *db.DB, s3 *storage.S3Client, d
 			return
 		}
 
-		log := logger.With(zap.String("slug", slug), zap.String("path", r.URL.Path), zap.String("method", r.Method))
+		log := logFor(r).Named("proxy").With(zap.String("slug", slug))
 
 		// Auth relay callback — exchange relay code for session cookie.
 		if r.URL.Path == "/__air/callback" {
@@ -95,7 +95,7 @@ func SubdomainProxy(agentDomain string, database *db.DB, s3 *storage.S3Client, d
 		}
 		route, ok := matchRoute(routes, r.URL.Path)
 		if !ok {
-			log.Debug("no route matched", zap.String("path", r.URL.Path))
+			log.Debug("no route matched")
 			writeError(w, http.StatusNotFound, "route not found")
 			return
 		}

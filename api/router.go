@@ -100,11 +100,9 @@ func NewRouter(cfg RouterConfig) http.Handler {
 
 	r := chi.NewRouter()
 
-	// Standard middleware
-	r.Use(chimw.RequestID)
-	r.Use(chimw.Recoverer)
-	r.Use(RealIP(cfg.RealIP))
-	r.Use(requestLogger(cfg.Logger))
+	// Cross-cutting middleware (RequestID, RealIP, requestLogger, recoverers)
+	// is applied on the outer wrapper below, so it covers both the chi-routed
+	// platform API and the SubdomainProxy-intercepted agent traffic.
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   []string{"*"},
 		AllowedMethods:   []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
@@ -519,10 +517,24 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		r.Get("/env-vars/{slug}", ah.GetEnvVarValue)
 	})
 
-	// Wrap with subdomain proxy for agent custom routes.
+	// Cross-cutting middleware wraps the entire handler tree (chi router and,
+	// when configured, the SubdomainProxy) so agent subdomain traffic gets the
+	// same request_id / real client IP / access log as the platform API.
+	//
+	// Order, outermost first:
+	//   chimw.Recoverer   last-resort net for panics in middleware below
+	//   chimw.RequestID   generates the per-request ID requestLogger reads
+	//   RealIP            normalizes r.RemoteAddr from trusted-proxy headers
+	//   requestLogger     stores the per-request zap logger in ctx; access log
+	//   zapRecoverer      catches handler panics with full request context
+	var handler http.Handler = r
 	if cfg.AgentDomain != "" {
-		return SubdomainProxy(cfg.AgentDomain, cfg.DB, cfg.S3Client, cfg.Dispatcher, cfg.JWTSecret, cfg.PublicURL, cfg.Logger.Named("proxy"), r)
+		handler = SubdomainProxy(cfg.AgentDomain, cfg.DB, cfg.S3Client, cfg.Dispatcher, cfg.JWTSecret, cfg.PublicURL, r)
 	}
-
-	return r
+	handler = zapRecoverer(handler)
+	handler = requestLogger(cfg.Logger)(handler)
+	handler = RealIP(cfg.RealIP)(handler)
+	handler = chimw.RequestID(handler)
+	handler = chimw.Recoverer(handler)
+	return handler
 }
