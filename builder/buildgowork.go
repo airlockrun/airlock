@@ -7,9 +7,11 @@ import (
 )
 
 // buildGoVersion is the Go toolchain version baked into the agent-builder
-// image. Mirrored in scaffold's go.mod template via ScaffoldData.GoVersion
-// at call sites — bump both together.
-const buildGoVersion = "1.26"
+// image. Used both as the go.mod `go` directive (via ScaffoldData.GoVersion)
+// and as the go.work `go` directive. The 3-component form matches what
+// `go mod tidy` rewrites the go.mod directive to on Go 1.21+; using
+// 2-component here causes go.work to fail the >= constraint after tidy.
+const buildGoVersion = "1.26.0"
 
 // buildGoWorkContent is the go.work file airlock injects into every
 // codegen workspace and every docker build context. It overrides the

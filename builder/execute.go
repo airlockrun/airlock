@@ -259,7 +259,7 @@ func (b *BuildService) Execute(ctx context.Context, plan BuildPlan) (string, err
 	if err := scaffold.GenerateDockerfile(dockerfileDir, scaffold.ScaffoldData{
 		AgentID:         agentID,
 		Module:          "agent",
-		GoVersion:       "1.26",
+		GoVersion:       buildGoVersion,
 		AgentSDKVersion: "v" + agentsdk.Version,
 		AgentBaseImage:  b.cfg.AgentBaseImage,
 	}); err != nil {
@@ -404,7 +404,7 @@ func (b *BuildService) prepareNewAgent(ctx context.Context, q *dbq.Queries, agen
 	data := scaffold.ScaffoldData{
 		AgentID:         agentID,
 		Module:          "agent",
-		GoVersion:       "1.26",
+		GoVersion:       buildGoVersion,
 		AgentSDKVersion: "v" + agentsdk.Version,
 		AgentBaseImage:  b.cfg.AgentBaseImage,
 	}

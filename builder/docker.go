@@ -83,7 +83,7 @@ func (b *BuildService) WarmBuildCache(ctx context.Context) {
 	if err := scaffold.Materialize(dir, scaffold.ScaffoldData{
 		AgentID:         "cache-warm",
 		Module:          "agent",
-		GoVersion:       "1.26",
+		GoVersion:       buildGoVersion,
 		AgentSDKVersion: "v" + agentsdk.Version,
 		AgentBaseImage:  b.cfg.AgentBaseImage,
 	}); err != nil {
@@ -159,7 +159,7 @@ func (b *BuildService) WarmRuntimeCaches(ctx context.Context) {
 	if err := scaffold.Materialize(dir, scaffold.ScaffoldData{
 		AgentID:         "runtime-warm",
 		Module:          "agent",
-		GoVersion:       "1.26",
+		GoVersion:       buildGoVersion,
 		AgentSDKVersion: "v" + agentsdk.Version,
 		AgentBaseImage:  b.cfg.AgentBaseImage,
 	}); err != nil {
