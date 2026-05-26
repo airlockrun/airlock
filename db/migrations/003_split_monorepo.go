@@ -22,10 +22,26 @@ import (
 
 func init() {
 	// NoTx: this migration performs filesystem work (git operations,
-	// directory renames). Holding a Postgres transaction across multi-
-	// second git invocations is a footgun; nothing in this migration
-	// touches the DB anyway.
-	goose.AddMigrationNoTxContext(upSplitMonorepo, downSplitMonorepo)
+	// directory renames, go.mod rewrites). Holding a Postgres transaction
+	// across multi-second git invocations is a footgun; nothing in this
+	// migration touches the DB anyway.
+	goose.AddMigrationNoTxContext(upMigrate003, downMigrate003)
+}
+
+// upMigrate003 runs the two filesystem operations historically split
+// across versions 3 and 5: convert any legacy monorepo into per-agent
+// repos, then strip the airlock-managed /libs/... replace directives
+// from each agent's committed go.mod. Both are idempotent — re-running
+// is a no-op once everything is in the target shape.
+func upMigrate003(ctx context.Context, db *sql.DB) error {
+	if err := upSplitMonorepo(ctx, db); err != nil {
+		return err
+	}
+	return upStripLibsReplaces(ctx, db)
+}
+
+func downMigrate003(ctx context.Context, db *sql.DB) error {
+	return downSplitMonorepo(ctx, db)
 }
 
 // upSplitMonorepo converts the legacy single-monorepo layout
@@ -269,4 +285,185 @@ func gitCleanEnv() []string {
 		out = append(out, kv)
 	}
 	return out
+}
+
+// upStripLibsReplaces walks every per-agent repo under AgentReposPath
+// and strips the `replace github.com/airlockrun/... => /libs/...` block
+// from each agent's committed `go.mod`, plus writes a `.gitignore` that
+// covers airlock-managed files (Dockerfile, go.work, go.work.sum). Any
+// changes are committed as a single per-agent chore commit. Pushes are
+// NOT performed — the next user-or-codegen-triggered upgrade picks up
+// these commits via the normal push path.
+//
+// Why: airlock injects a build-time `go.work` carrying the /libs/...
+// replaces. Leaving them in the committed go.mod confuses user clones
+// (`go build` fails locally because /libs/... doesn't exist on their
+// laptop). The build-time go.work still works without these — it
+// overrides go.mod replaces.
+//
+// Idempotent: an already-stripped repo produces no changes and no
+// commit. Fresh install (no AgentReposPath) is a no-op. An agent with
+// a dirty working tree is skipped with a warning rather than risk
+// committing unrelated user changes.
+func upStripLibsReplaces(ctx context.Context, _ *sql.DB) error {
+	base := agentReposPath()
+	entries, err := os.ReadDir(base)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil // fresh install
+		}
+		return fmt.Errorf("read agent repos dir: %w", err)
+	}
+
+	var stripped, skippedDirty, skippedNonAgent []string
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if _, err := uuid.Parse(name); err != nil {
+			continue // not an agent dir (e.g. _monorepo_archive)
+		}
+		dir := filepath.Join(base, name)
+		if _, err := os.Stat(filepath.Join(dir, ".git")); err != nil {
+			skippedNonAgent = append(skippedNonAgent, name)
+			continue
+		}
+
+		// Bail rather than risk committing in-flight user state. Allow
+		// uncommitted airlock-managed files (Dockerfile, go.work,
+		// go.work.sum) since the pre-cleanup build pipeline writes
+		// those to the working tree without committing — cleanAgentRepo
+		// will commit Dockerfile and gitignore go.work*.
+		status, err := gitOutput(ctx, dir, "status", "--porcelain")
+		if err != nil {
+			return fmt.Errorf("git status %s: %w", name, err)
+		}
+		if dirtyBeyondManaged(status) {
+			skippedDirty = append(skippedDirty, name)
+			continue
+		}
+
+		changed, err := cleanAgentRepo(ctx, dir)
+		if err != nil {
+			return fmt.Errorf("clean %s: %w", name, err)
+		}
+		if changed {
+			stripped = append(stripped, name)
+		}
+	}
+
+	fmt.Fprintf(os.Stderr, "[migration 003] cleaned %d agent repo(s) under %s\n", len(stripped), base)
+	if len(skippedDirty) > 0 {
+		fmt.Fprintf(os.Stderr, "[migration 003] skipped dirty repos (uncommitted changes): %v\n", skippedDirty)
+	}
+	if len(skippedNonAgent) > 0 {
+		fmt.Fprintf(os.Stderr, "[migration 003] skipped non-repo agent dirs: %v\n", skippedNonAgent)
+	}
+	return nil
+}
+
+// libsReplacedModules are the modules whose replace directives airlock
+// historically wrote into the committed go.mod and now provides via
+// build-time go.work instead.
+var libsReplacedModules = []string{
+	"github.com/airlockrun/agentsdk",
+	"github.com/airlockrun/goai",
+	"github.com/airlockrun/sol",
+	"github.com/pressly/goose/v3",
+	"github.com/a-h/templ",
+}
+
+// gitignoreContent mirrors scaffold/templates/gitignore.tmpl.
+const gitignoreContent = `# Airlock-managed files — generated into the build context every build.
+# Don't commit these; airlock will silently overwrite anything you do.
+Dockerfile
+go.work
+go.work.sum
+`
+
+// cleanAgentRepo strips the /libs/... replaces from dir/go.mod, writes
+// the canonical .gitignore, and stages any uncommitted Dockerfile from
+// prior builds (Dockerfile is now committed so users can `docker build .`
+// locally). Returns whether anything was committed.
+func cleanAgentRepo(ctx context.Context, dir string) (bool, error) {
+	goModPath := filepath.Join(dir, "go.mod")
+	if _, err := os.Stat(goModPath); err != nil {
+		return false, nil // not a Go module; nothing to do
+	}
+
+	// `go mod edit -dropreplace` is the official, format-preserving way
+	// to remove a single replace; idempotent for missing entries.
+	for _, mod := range libsReplacedModules {
+		if err := runCmd(ctx, dir, "go", "mod", "edit", "-dropreplace="+mod); err != nil {
+			return false, fmt.Errorf("go mod edit -dropreplace=%s: %w", mod, err)
+		}
+	}
+
+	if err := os.WriteFile(filepath.Join(dir, ".gitignore"), []byte(gitignoreContent), 0o644); err != nil {
+		return false, fmt.Errorf("write .gitignore: %w", err)
+	}
+
+	status, err := gitOutput(ctx, dir, "status", "--porcelain")
+	if err != nil {
+		return false, fmt.Errorf("git status: %w", err)
+	}
+	if strings.TrimSpace(status) == "" {
+		return false, nil // already clean
+	}
+
+	toStage := []string{"go.mod", ".gitignore"}
+	if _, err := os.Stat(filepath.Join(dir, "Dockerfile")); err == nil {
+		toStage = append(toStage, "Dockerfile")
+	}
+	if err := gitRun(ctx, dir, append([]string{"add"}, toStage...)...); err != nil {
+		return false, fmt.Errorf("git add: %w", err)
+	}
+	if err := gitRun(ctx, dir, "commit",
+		"--author=Airlock <airlock@localhost>",
+		"-m", "chore: commit Dockerfile, drop /libs replaces, add .gitignore"); err != nil {
+		return false, fmt.Errorf("git commit: %w", err)
+	}
+	return true, nil
+}
+
+// dirtyBeyondManaged returns true if `git status --porcelain` reports
+// any file other than the airlock-managed Dockerfile/go.work/go.work.sum.
+// Those three are expected to appear dirty on pre-migration repos —
+// the migration commits Dockerfile and writes a .gitignore covering
+// the go.work pair.
+func dirtyBeyondManaged(status string) bool {
+	managed := map[string]struct{}{
+		"Dockerfile":  {},
+		"go.work":     {},
+		"go.work.sum": {},
+	}
+	for _, line := range strings.Split(status, "\n") {
+		if len(line) < 3 {
+			continue
+		}
+		// Porcelain format: "XY <path>" where X+Y are two status chars,
+		// space, then the path. For untracked files X='?', Y='?'.
+		path := strings.TrimSpace(line[3:])
+		if path == "" {
+			continue
+		}
+		if _, ok := managed[path]; !ok {
+			return true
+		}
+	}
+	return false
+}
+
+// runCmd runs a command with a clean git environment, returning a
+// useful error on non-zero exit.
+func runCmd(ctx context.Context, dir, name string, args ...string) error {
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Dir = dir
+	cmd.Env = gitCleanEnv()
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%s: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }

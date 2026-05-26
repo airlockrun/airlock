@@ -49,6 +49,11 @@ type Agent struct {
 	Emoji                string             `json:"emoji"`
 	AllowOauthMcpPrompt  bool               `json:"allow_oauth_mcp_prompt"`
 	AllowPublicMcpPrompt bool               `json:"allow_public_mcp_prompt"`
+	GitRemoteUrl         string             `json:"git_remote_url"`
+	GitCredentialID      pgtype.UUID        `json:"git_credential_id"`
+	GitDefaultBranch     string             `json:"git_default_branch"`
+	GitWebhookSecret     string             `json:"git_webhook_secret"`
+	GitLastSyncedRef     string             `json:"git_last_synced_ref"`
 }
 
 type AgentBuild struct {
@@ -302,6 +307,17 @@ type Connection struct {
 	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
 	AuthParams        []byte             `json:"auth_params"`
 	Headers           []byte             `json:"headers"`
+}
+
+type GitCredential struct {
+	ID              pgtype.UUID        `json:"id"`
+	UserID          pgtype.UUID        `json:"user_id"`
+	Type            string             `json:"type"`
+	Name            string             `json:"name"`
+	TokenRef        string             `json:"token_ref"`
+	GithubInstallID string             `json:"github_install_id"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	LastUsedAt      pgtype.Timestamptz `json:"last_used_at"`
 }
 
 type LlmUsage struct {

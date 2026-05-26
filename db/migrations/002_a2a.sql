@@ -430,7 +430,79 @@ ALTER TABLE connections
 ALTER TABLE connections
     ALTER COLUMN auth_params DROP DEFAULT;
 
+-- connections.headers — static request headers declared by the agent
+-- (agentsdk Connection.Headers), merged per-key on top of the proxy's
+-- platform baseline (real-browser User-Agent) at request time. The
+-- ProxyRequest.Headers per-call map merges on top of these. An empty
+-- object is the natural "no overrides" value; DEFAULT '{}' backfills
+-- existing rows then drops so every synced upsert records it explicitly.
+ALTER TABLE connections
+    ADD COLUMN headers jsonb NOT NULL DEFAULT '{}';
+ALTER TABLE connections
+    ALTER COLUMN headers DROP DEFAULT;
+
+-- git_credentials — per-user credentials for pushing/pulling agent
+-- repos against external git remotes (GitHub, GitLab, Bitbucket,
+-- self-hosted). Owned by a user; multiple agents under that user can
+-- attach the same credential by FK from agents.git_credential_id.
+--
+-- type discriminates the credential variant:
+--   'pat'         — token_ref holds the encrypted personal access token;
+--                   github_install_id is empty.
+--   'github_app'  — (v2) github_install_id is the App installation id;
+--                   token_ref is empty, short-lived tokens are minted
+--                   on demand against the App's private key.
+--
+-- id is supplied by the caller (uuid.New) so token_ref ciphertext is
+-- bound to it via AAD, mirroring the providers/connections pattern.
+CREATE TABLE git_credentials (
+    id                  uuid PRIMARY KEY,
+    user_id             uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    type                text NOT NULL,
+    name                text NOT NULL,
+    token_ref           text NOT NULL,
+    github_install_id   text NOT NULL,
+    created_at          timestamptz NOT NULL DEFAULT now(),
+    last_used_at        timestamptz,
+    UNIQUE (user_id, name)
+);
+CREATE INDEX idx_git_credentials_user_id ON git_credentials(user_id);
+
+-- agents.git_*: per-agent external git remote configuration. An agent
+-- with git_remote_url='' is in internal-only mode (today's behavior);
+-- a non-empty git_remote_url makes the external remote the source of
+-- truth. git_credential_id is the per-user credential used to authenticate
+-- against the remote. git_webhook_secret is a per-agent secret used to
+-- verify incoming push webhooks. git_last_synced_ref is the most recent
+-- remote SHA we observed (for polling-fallback drift detection).
+--
+-- Empty string is the genuine "not connected" sentinel for the text
+-- columns; the transient DEFAULT '' backfills existing rows then drops
+-- so future inserts must be explicit per the no-fake-defaults rule.
+ALTER TABLE agents
+    ADD COLUMN git_remote_url       text NOT NULL DEFAULT '',
+    ADD COLUMN git_credential_id    uuid     NULL REFERENCES git_credentials(id) ON DELETE SET NULL,
+    ADD COLUMN git_default_branch   text NOT NULL DEFAULT '',
+    ADD COLUMN git_webhook_secret   text NOT NULL DEFAULT '',
+    ADD COLUMN git_last_synced_ref  text NOT NULL DEFAULT '';
+ALTER TABLE agents
+    ALTER COLUMN git_remote_url      DROP DEFAULT,
+    ALTER COLUMN git_default_branch  DROP DEFAULT,
+    ALTER COLUMN git_webhook_secret  DROP DEFAULT,
+    ALTER COLUMN git_last_synced_ref DROP DEFAULT;
+CREATE INDEX idx_agents_git_credential ON agents(git_credential_id) WHERE git_credential_id IS NOT NULL;
+
 -- +goose Down
+DROP INDEX IF EXISTS idx_agents_git_credential;
+ALTER TABLE agents
+    DROP COLUMN IF EXISTS git_last_synced_ref,
+    DROP COLUMN IF EXISTS git_webhook_secret,
+    DROP COLUMN IF EXISTS git_default_branch,
+    DROP COLUMN IF EXISTS git_credential_id,
+    DROP COLUMN IF EXISTS git_remote_url;
+DROP INDEX IF EXISTS idx_git_credentials_user_id;
+DROP TABLE IF EXISTS git_credentials;
+ALTER TABLE connections DROP COLUMN IF EXISTS headers;
 ALTER TABLE connections DROP COLUMN IF EXISTS auth_params;
 -- Best-effort inverse: re-add the columns (NOT NULL via transient
 -- default, then drop it per the no-fake-defaults rule). The values are
