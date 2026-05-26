@@ -264,6 +264,12 @@ func runServe(_ []string) {
 	refreshJob := oauth.NewRefreshJob(database, secretStore, oauthClient, logger.Named("oauth-refresh"))
 	go refreshJob.Run(gctx)
 
+	// External-git polling fallback (5-min ls-remote per connected
+	// agent). Catches pushes from providers without webhook support
+	// configured (Bitbucket/Gitea in v1) and from users behind
+	// firewalls that block inbound webhooks.
+	go buildSvc.RunGitPoll(gctx)
+
 	// Inbound-OAuth GC: sweeps expired authz codes, long-consumed
 	// refresh tokens, and ancient grants every 5 minutes.
 	inboundOAuthGC := api.NewInboundOAuthGC(database, logger.Named("oauth-inbound-gc"))

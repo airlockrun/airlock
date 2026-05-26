@@ -50,6 +50,13 @@ func (b *BuildService) runCodegen(
 		return "", "", fmt.Errorf("clone agent repo: %w", err)
 	}
 
+	// Inject the build-time go.work — overrides the agent's (now-clean)
+	// go.mod with /libs/... replaces so codegen's go-tool calls resolve
+	// against the airlock-bundled SDK source.
+	if err := writeBuildGoWork(workDir); err != nil {
+		return "", "", err
+	}
+
 	// Auto-fix diagnostics file lands in the workspace before Sol runs.
 	if plan.Diagnostics != nil {
 		if err := writePlanDiagnostics(workDir, plan); err != nil {

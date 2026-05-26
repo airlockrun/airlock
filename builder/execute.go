@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 
 	"github.com/airlockrun/agentsdk"
 	"github.com/airlockrun/airlock/auth"
@@ -219,10 +221,42 @@ func (b *BuildService) Execute(ctx context.Context, plan BuildPlan) (string, err
 		return "", ctx.Err()
 	}
 
+	// ── Phase C2: push codegen commits back to the external remote ─────
+	//
+	// Optional — only for agents with a connected remote. Happens BEFORE
+	// the image build so a rebase conflict fails fast without burning
+	// docker build time. A conflict preserves the codegen commit on a
+	// side branch (airlock/upgrade/{runID}) on the remote and resets
+	// main locally, so the agent stays on its previous image.
+	if agent.GitRemoteUrl != "" {
+		logLine(fmt.Sprintf("Pushing to %s...", agent.GitRemoteUrl))
+		if err := b.pushAgentRepo(ctx, agent, plan.RunID); err != nil {
+			completeBuild("failed", err.Error(), commitHash, "")
+			return "", err
+		}
+		if uerr := q.UpdateAgentGitLastSyncedRef(ctx, dbq.UpdateAgentGitLastSyncedRefParams{
+			ID:               agent.ID,
+			GitLastSyncedRef: commitHash,
+		}); uerr != nil {
+			b.logger.Warn("update git_last_synced_ref", zap.Error(uerr))
+		}
+	}
+
 	// ── Phase D: build the image at current HEAD ───────────────────────
 	logLine("Building Docker image...")
 	contextDir := repoPath
-	if err := scaffold.GenerateDockerfile(contextDir, scaffold.ScaffoldData{
+	// Regenerate the Dockerfile into a TEMP directory (not contextDir)
+	// so airlock's current template is used without overwriting the
+	// user-committed Dockerfile sitting in the agent repo. `docker
+	// build -f` points the build at our generated copy while keeping
+	// contextDir as the build context.
+	dockerfileDir, err := os.MkdirTemp("", "airlock-dockerfile-*")
+	if err != nil {
+		completeBuild("failed", err.Error(), commitHash, "")
+		return "", fmt.Errorf("create dockerfile temp dir: %w", err)
+	}
+	defer os.RemoveAll(dockerfileDir)
+	if err := scaffold.GenerateDockerfile(dockerfileDir, scaffold.ScaffoldData{
 		AgentID:         agentID,
 		Module:          "agent",
 		GoVersion:       "1.26",
@@ -231,6 +265,14 @@ func (b *BuildService) Execute(ctx context.Context, plan BuildPlan) (string, err
 	}); err != nil {
 		completeBuild("failed", err.Error(), commitHash, "")
 		return "", fmt.Errorf("generate Dockerfile: %w", err)
+	}
+	// Inject the build-time go.work into the docker build context.
+	// Sibling of go.mod; provides the /libs/... replace directives the
+	// committed go.mod no longer carries. Overwrites any user-pushed
+	// go.work in the working tree.
+	if err := writeBuildGoWork(contextDir); err != nil {
+		completeBuild("failed", err.Error(), commitHash, "")
+		return "", fmt.Errorf("write go.work: %w", err)
 	}
 	// Bump the agent's go.mod require line to the current SDK version so
 	// gopls/editor tooling shows what the build is actually linking
@@ -242,7 +284,7 @@ func (b *BuildService) Execute(ctx context.Context, plan BuildPlan) (string, err
 			return "", fmt.Errorf("bump agent SDK require: %w", err)
 		}
 	}
-	imageTag, err := buildImage(ctx, b.cfg, agentID, contextDir, commitHash, dockerLog)
+	imageTag, err := buildImage(ctx, b.cfg, agentID, contextDir, commitHash, filepath.Join(dockerfileDir, "Dockerfile"), dockerLog)
 	if err != nil {
 		// Bare rebuild (upgrade with no instructions and no source change)
 		// against a newer SDK is the canonical case where compile breakage

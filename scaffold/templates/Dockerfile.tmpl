@@ -2,8 +2,12 @@ FROM golang:{{.GoVersion}} AS builder
 
 WORKDIR /build
 
-# Copy go.mod/go.sum first for layer caching
-COPY go.mod go.sum* ./
+# Copy go.mod/go.sum + go.work first for layer caching. go.work is
+# airlock-generated (gitignored in the agent repo) and carries the
+# /libs/... replace directives that the build relies on; without it
+# `go mod download` would try to fetch agentsdk/goai/sol from the public
+# module proxy.
+COPY go.mod go.sum* go.work* ./
 
 # Libs come from two BuildKit contexts that airlock provides at build time:
 #   libs-owned: agentsdk/goai/sol — overlay-able from a dev workspace via

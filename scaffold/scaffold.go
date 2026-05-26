@@ -35,6 +35,14 @@ var templateFiles = []templateFile{
 	{"templates/layout.templ.tmpl", "views/layout.templ"},
 	{"templates/index.templ.tmpl", "views/index.templ"},
 	{"templates/db_migrations_doc.go.tmpl", "db/migrations/doc.go"},
+	// Dockerfile is committed so users can `docker build .` locally
+	// after cloning. Airlock-side builds regenerate it into a temp dir
+	// and use `docker build -f` so the committed copy never drifts due
+	// to airlock-template changes mid-build.
+	{"templates/Dockerfile.tmpl", "Dockerfile"},
+	// Template is named without a leading dot because go:embed glob
+	// patterns skip dotfiles; the output file is .gitignore.
+	{"templates/gitignore.tmpl", ".gitignore"},
 }
 
 // emptyDirs are created with a .gitkeep file so they survive git operations.

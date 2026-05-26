@@ -17,9 +17,14 @@ import (
 )
 
 // buildImage builds a Docker image from the agent's directory.
+// dockerfilePath, when non-empty, is passed via `docker build -f` so the
+// build uses an out-of-context Dockerfile (lets airlock always build
+// against its current template without overwriting the user-committed
+// Dockerfile in contextDir). When empty, docker looks for Dockerfile
+// inside contextDir as usual.
 // If logFn is non-nil, Docker build output is streamed line by line.
 // Returns the image tag.
-func buildImage(ctx context.Context, cfg *config.Config, agentID, contextDir, commitHash string, logFn func(string)) (string, error) {
+func buildImage(ctx context.Context, cfg *config.Config, agentID, contextDir, commitHash, dockerfilePath string, logFn func(string)) (string, error) {
 	tag := fmt.Sprintf("%s:%s", agentID, commitHash[:12])
 	if cfg.AgentRegistryURL != "" {
 		tag = fmt.Sprintf("%s/%s", cfg.AgentRegistryURL, tag)
@@ -32,8 +37,11 @@ func buildImage(ctx context.Context, cfg *config.Config, agentID, contextDir, co
 		"build", "-t", tag,
 		"--build-context", "libs-owned=" + cfg.AgentLibsPath,
 		"--build-context", "libs-ext=" + cfg.AgentLibsExtPath,
-		contextDir,
 	}
+	if dockerfilePath != "" {
+		args = append(args, "-f", dockerfilePath)
+	}
+	args = append(args, contextDir)
 
 	cmd := exec.CommandContext(ctx, "docker", args...)
 	cmd.Env = append(cmd.Environ(), "DOCKER_BUILDKIT=1")
@@ -83,15 +91,10 @@ func (b *BuildService) WarmBuildCache(ctx context.Context) {
 		return
 	}
 
-	// Generate Dockerfile from current template (not part of scaffold anymore).
-	if err := scaffold.GenerateDockerfile(dir, scaffold.ScaffoldData{
-		AgentID:         "cache-warm",
-		Module:          "agent",
-		GoVersion:       "1.26",
-		AgentSDKVersion: "v" + agentsdk.Version,
-		AgentBaseImage:  b.cfg.AgentBaseImage,
-	}); err != nil {
-		b.logger.Warn("warm cache: generate Dockerfile", zap.Error(err))
+	// Inject go.work so go mod tidy resolves agentsdk/goai/sol/etc. from
+	// /libs/ (committed go.mod no longer carries those replaces).
+	if err := writeBuildGoWork(dir); err != nil {
+		b.logger.Warn("warm cache: write go.work", zap.Error(err))
 		return
 	}
 
