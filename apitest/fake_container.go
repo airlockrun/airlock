@@ -62,10 +62,16 @@ func (m *FakeContainerManager) RegisterAgent(agentID uuid.UUID, h http.Handler, 
 
 // Close shuts every registered httptest.Server down. Called from the
 // harness teardown via t.Cleanup.
+//
+// CloseClientConnections runs first so handlers parked on r.Context()
+// unblock as soon as the underlying TCP socket goes away — otherwise
+// srv.Close() blocks waiting for the handler to return and a failing
+// test can hang the package until `go test -timeout` SIGQUITs it.
 func (m *FakeContainerManager) Close() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, s := range m.servers {
+		s.CloseClientConnections()
 		s.Close()
 	}
 	m.servers = nil

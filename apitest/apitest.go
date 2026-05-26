@@ -208,6 +208,15 @@ func Setup(t *testing.T) *Harness {
 	srv := httptest.NewServer(router)
 
 	t.Cleanup(func() {
+		// CloseClientConnections before Close: srv.Close() blocks until
+		// active connections drain, and our integration tests can leave
+		// handlers wedged (e.g. a fake upstream parked on r.Context() that
+		// never fires under the test's failure mode). Force-closing
+		// connections first unblocks those handlers in milliseconds rather
+		// than waiting for the `go test -timeout` to SIGQUIT the whole
+		// binary 10 minutes later. Same reason FakeContainerManager.Close
+		// nukes its per-agent servers the same way.
+		srv.CloseClientConnections()
 		srv.Close()
 		fakeContainers.Close()
 		pubsub.Close()
