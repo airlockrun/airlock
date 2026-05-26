@@ -1,3 +1,16 @@
+# Default placeholder stages for the libs-owned / libs-ext build contexts
+# airlock supplies via `docker build --build-context libs-owned=…` in its
+# own pipeline. On a user clone (`docker build .`) those flags aren't
+# present, so the COPY lines below would fail to resolve the named
+# contexts; pointing them at an empty stage by default makes the COPY
+# land empty dirs, and the build then resolves agentsdk/goai/sol/goose/templ
+# from the public Go module proxy via the committed go.mod (which carries
+# no /libs/... replaces — those live in airlock's build-time go.work only).
+FROM busybox:1.36 AS libs-default
+RUN mkdir -p /agentsdk /goai /sol /goose /templ
+FROM libs-default AS libs-owned
+FROM libs-default AS libs-ext
+
 FROM golang:{{.GoVersion}} AS builder
 
 WORKDIR /build

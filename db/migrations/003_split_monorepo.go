@@ -404,6 +404,10 @@ func cleanAgentRepo(ctx context.Context, dir string) (bool, error) {
 		return false, fmt.Errorf("write .gitignore: %w", err)
 	}
 
+	if err := patchDockerfileLibsFallback(filepath.Join(dir, "Dockerfile")); err != nil {
+		return false, fmt.Errorf("patch Dockerfile: %w", err)
+	}
+
 	status, err := gitOutput(ctx, dir, "status", "--porcelain")
 	if err != nil {
 		return false, fmt.Errorf("git status: %w", err)
@@ -425,6 +429,54 @@ func cleanAgentRepo(ctx context.Context, dir string) (bool, error) {
 		return false, fmt.Errorf("git commit: %w", err)
 	}
 	return true, nil
+}
+
+// dockerfileLibsFallback is the placeholder-stage block injected into a
+// committed Dockerfile so `docker build .` from a user clone works
+// without airlock's `--build-context libs-owned=…` flags. Kept in sync
+// with scaffold/templates/Dockerfile.tmpl by eye — both must declare
+// the same stage names, the same image, and the same /agentsdk /goai
+// /sol /goose /templ dirs the COPY lines downstream reference.
+const dockerfileLibsFallback = "# Default placeholder stages for the libs-owned / libs-ext build contexts\n" +
+	"# airlock supplies via `docker build --build-context libs-owned=…` in its\n" +
+	"# own pipeline. On a user clone (`docker build .`) those flags aren't\n" +
+	"# present, so the COPY lines below would fail to resolve the named\n" +
+	"# contexts; pointing them at an empty stage by default makes the COPY\n" +
+	"# land empty dirs, and the build then resolves agentsdk/goai/sol/goose/templ\n" +
+	"# from the public Go module proxy via the committed go.mod (which carries\n" +
+	"# no /libs/... replaces — those live in airlock's build-time go.work only).\n" +
+	"FROM busybox:1.36 AS libs-default\n" +
+	"RUN mkdir -p /agentsdk /goai /sol /goose /templ\n" +
+	"FROM libs-default AS libs-owned\n" +
+	"FROM libs-default AS libs-ext\n" +
+	"\n"
+
+// patchDockerfileLibsFallback injects the fallback stage block above the
+// existing `FROM golang:` line so a user clone of the agent repo can run
+// `docker build .` without airlock's --build-context flags.
+//
+// Idempotent: detects the fallback by stage name and skips if present.
+// Defensive: if the Dockerfile is missing or has been customized past
+// recognition (no `FROM golang:` line), the file is left untouched
+// rather than risk corrupting a user-edited build.
+func patchDockerfileLibsFallback(path string) error {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	content := string(raw)
+	if strings.Contains(content, "AS libs-owned") {
+		return nil
+	}
+	idx := strings.Index(content, "FROM golang:")
+	if idx == -1 {
+		return nil
+	}
+	patched := content[:idx] + dockerfileLibsFallback + content[idx:]
+	return os.WriteFile(path, []byte(patched), 0o644)
 }
 
 // dirtyBeyondManaged returns true if `git status --porcelain` reports
