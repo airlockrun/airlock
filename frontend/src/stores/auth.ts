@@ -1,7 +1,7 @@
 import { ref, computed } from 'vue'
 import { defineStore } from 'pinia'
 import { fromJson } from '@bufbuild/protobuf'
-import api from '@/api/client'
+import api, { isAuthRejection } from '@/api/client'
 import { ws } from '@/api/ws'
 import type { User } from '@/gen/airlock/v1/types_pb'
 import { TenantRole, UserSchema } from '@/gen/airlock/v1/types_pb'
@@ -34,9 +34,16 @@ export const useAuthStore = defineStore('auth', () => {
       await refresh()
       await fetchMe()
       connectWS()
-    } catch {
-      localStorage.removeItem('access_token')
-      localStorage.removeItem('refresh_token')
+    } catch (err) {
+      // Only evict credentials when the server actively rejected the
+      // refresh token (401/403). A transport error or 5xx is a server
+      // restart / Caddy upstream-down — keep the tokens so the next
+      // page action after recovery just works, instead of bouncing the
+      // user to /login on every reload during a deploy.
+      if (isAuthRejection(err)) {
+        localStorage.removeItem('access_token')
+        localStorage.removeItem('refresh_token')
+      }
     }
   }
 

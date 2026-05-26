@@ -131,13 +131,24 @@ export class AirlockWS {
         await this.ensureFreshToken()
         token = localStorage.getItem('access_token')
         if (!token) return
-      } catch {
-        // Refresh failed — refresh token is also dead. Stop the reconnect
-        // loop, clear creds, and let the next user action trigger /login
-        // through the REST interceptor.
-        this.shouldReconnect = false
-        localStorage.removeItem('access_token')
-        localStorage.removeItem('refresh_token')
+      } catch (err) {
+        // Only treat a 401/403 from the server as "refresh token is
+        // dead." A transport error or 5xx (Caddy 502/503 while airlock
+        // is restarting) is transient — keep the reconnect loop alive
+        // with backoff so the WS comes back as soon as the server does,
+        // and keep credentials so a subsequent REST call works too.
+        if (refreshIsAuthRejection(err)) {
+          this.shouldReconnect = false
+          localStorage.removeItem('access_token')
+          localStorage.removeItem('refresh_token')
+          return
+        }
+        // Transient: fall through into the reconnect-with-backoff path
+        // below by faking an onclose-style retry.
+        if (this.shouldReconnect) {
+          setTimeout(() => void this.doConnect(), this.reconnectDelay)
+          this.reconnectDelay = Math.min(this.reconnectDelay * 2, this.maxReconnectDelay)
+        }
         return
       }
     }
@@ -215,21 +226,23 @@ export class AirlockWS {
    * POST /auth/refresh and overwrite localStorage.access_token. Coalesces
    * concurrent calls onto a single in-flight promise so two reconnect
    * attempts (or a reconnect racing the REST interceptor) don't double-fire.
-   * Throws if the refresh token is missing or the server rejects it.
+   * Throws RefreshError carrying the HTTP status (or undefined for transport
+   * errors) so the caller can distinguish auth rejection from transient
+   * outage.
    */
   private ensureFreshToken(): Promise<void> {
     if (this.refreshPromise) return this.refreshPromise
     const refreshToken = localStorage.getItem('refresh_token')
-    if (!refreshToken) return Promise.reject(new Error('no refresh token'))
+    if (!refreshToken) return Promise.reject(new RefreshError('no refresh token'))
     this.refreshPromise = fetch('/auth/refresh', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ refreshToken }),
     })
       .then(async (res) => {
-        if (!res.ok) throw new Error(`refresh failed: ${res.status}`)
+        if (!res.ok) throw new RefreshError(`refresh failed: ${res.status}`, res.status)
         const data = (await res.json()) as { accessToken?: string }
-        if (!data.accessToken) throw new Error('refresh response missing accessToken')
+        if (!data.accessToken) throw new RefreshError('refresh response missing accessToken')
         localStorage.setItem('access_token', data.accessToken)
       })
       .finally(() => {
@@ -237,6 +250,16 @@ export class AirlockWS {
       })
     return this.refreshPromise
   }
+}
+
+class RefreshError extends Error {
+  constructor(message: string, public status?: number) {
+    super(message)
+  }
+}
+
+function refreshIsAuthRejection(err: unknown): boolean {
+  return err instanceof RefreshError && (err.status === 401 || err.status === 403)
 }
 
 /** Singleton WebSocket instance. */
