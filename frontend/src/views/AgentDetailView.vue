@@ -12,6 +12,7 @@ import { useAgentStatus } from '@/composables/useAgentStatus'
 import type { AgentInfo } from '@/gen/airlock/v1/types_pb'
 import { GetAgentDetailResponseSchema } from '@/gen/airlock/v1/api_pb'
 import ConnectionsTab from '@/components/agent/ConnectionsTab.vue'
+import ExecEndpointsTab from '@/components/agent/ExecEndpointsTab.vue'
 import WebhooksTab from '@/components/agent/WebhooksTab.vue'
 import CronsTab from '@/components/agent/CronsTab.vue'
 import RoutesTab from '@/components/agent/RoutesTab.vue'
@@ -464,33 +465,35 @@ function goToChat() {
     <Tabs v-model:value="activeTab">
       <TabList>
         <Tab :value="0">Connections</Tab>
-        <Tab :value="1">MCP Servers</Tab>
-        <Tab :value="2">Environment</Tab>
-        <Tab :value="3">Tools</Tab>
-        <Tab :value="4">Models</Tab>
-        <Tab :value="5">Routes</Tab>
-        <Tab :value="6">Webhooks</Tab>
-        <Tab :value="7">Crons</Tab>
-        <Tab :value="8">Members</Tab>
-        <Tab :value="9">Siblings</Tab>
-        <Tab :value="10">Runs</Tab>
-        <Tab :value="11">Builds</Tab>
-        <Tab :value="12">Source</Tab>
+        <Tab :value="1">Exec Endpoints</Tab>
+        <Tab :value="2">MCP Servers</Tab>
+        <Tab :value="3">Environment</Tab>
+        <Tab :value="4">Tools</Tab>
+        <Tab :value="5">Models</Tab>
+        <Tab :value="6">Routes</Tab>
+        <Tab :value="7">Webhooks</Tab>
+        <Tab :value="8">Crons</Tab>
+        <Tab :value="9">Members</Tab>
+        <Tab :value="10">Siblings</Tab>
+        <Tab :value="11">Runs</Tab>
+        <Tab :value="12">Builds</Tab>
+        <Tab :value="13">Source</Tab>
       </TabList>
       <TabPanels :key="tabsKey">
         <TabPanel :value="0"><ConnectionsTab :agent-id="agentId" /></TabPanel>
-        <TabPanel :value="1"><MCPServersTab :agent-id="agentId" /></TabPanel>
-        <TabPanel :value="2"><EnvVarsTab :agent-id="agentId" /></TabPanel>
-        <TabPanel :value="3"><ToolsTab :agent-id="agentId" /></TabPanel>
-        <TabPanel :value="4"><ModelsTab :agent-id="agentId" /></TabPanel>
-        <TabPanel :value="5"><RoutesTab :agent-id="agentId" /></TabPanel>
-        <TabPanel :value="6"><WebhooksTab :agent-id="agentId" /></TabPanel>
-        <TabPanel :value="7"><CronsTab :agent-id="agentId" /></TabPanel>
-        <TabPanel :value="8"><MembersTab :agent-id="agentId" /></TabPanel>
-        <TabPanel :value="9"><SiblingsTab :agent-id="agentId" /></TabPanel>
-        <TabPanel :value="10"><RunsTab :agent-id="agentId" /></TabPanel>
-        <TabPanel :value="11"><BuildsTab :agent-id="agentId" /></TabPanel>
-        <TabPanel :value="12"><SourceTab :agent-id="agentId" /></TabPanel>
+        <TabPanel :value="1"><ExecEndpointsTab :agent-id="agentId" /></TabPanel>
+        <TabPanel :value="2"><MCPServersTab :agent-id="agentId" /></TabPanel>
+        <TabPanel :value="3"><EnvVarsTab :agent-id="agentId" /></TabPanel>
+        <TabPanel :value="4"><ToolsTab :agent-id="agentId" /></TabPanel>
+        <TabPanel :value="5"><ModelsTab :agent-id="agentId" /></TabPanel>
+        <TabPanel :value="6"><RoutesTab :agent-id="agentId" /></TabPanel>
+        <TabPanel :value="7"><WebhooksTab :agent-id="agentId" /></TabPanel>
+        <TabPanel :value="8"><CronsTab :agent-id="agentId" /></TabPanel>
+        <TabPanel :value="9"><MembersTab :agent-id="agentId" /></TabPanel>
+        <TabPanel :value="10"><SiblingsTab :agent-id="agentId" /></TabPanel>
+        <TabPanel :value="11"><RunsTab :agent-id="agentId" /></TabPanel>
+        <TabPanel :value="12"><BuildsTab :agent-id="agentId" /></TabPanel>
+        <TabPanel :value="13"><SourceTab :agent-id="agentId" /></TabPanel>
       </TabPanels>
     </Tabs>
 

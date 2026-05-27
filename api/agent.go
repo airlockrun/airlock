@@ -13,6 +13,7 @@ import (
 	"github.com/airlockrun/airlock/compat"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
+	"github.com/airlockrun/airlock/execproxy"
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 	"github.com/airlockrun/airlock/realtime"
 	"github.com/airlockrun/airlock/secrets"
@@ -44,7 +45,16 @@ type agentHandler struct {
 	forceInlineAttachments bool                     // dev escape hatch — ignore provider URL capability, send everything as base64
 	jwtSecret              string                   // shared with auth middleware; read by mcp_server.go to validate incoming A2A JWTs
 	dispatcher             *trigger.Dispatcher      // forward-prompt + ensure-running for A2A
+	execDialer             execDialerService        // SSH dialer for RegisterExecEndpoint; nil-safe via implements-or-stub adapter
 	logger                 *zap.Logger
+}
+
+// execDialerService is the subset of *execproxy.SSHDialer the agent
+// exec handler needs. Defined here so tests can stub it without
+// dragging in golang.org/x/crypto/ssh.
+type execDialerService interface {
+	Exec(ctx context.Context, ep *dbq.AgentExecEndpoint, req execproxy.ExecRequest, w http.ResponseWriter) error
+	EvictCache(id uuid.UUID)
 }
 
 // bridgePartsDeliverer is the subset of trigger.BridgeManager needed for message delivery.

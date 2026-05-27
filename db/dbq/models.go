@@ -134,6 +134,27 @@ type AgentEnvVar struct {
 	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
 }
 
+type AgentExecEndpoint struct {
+	ID               pgtype.UUID        `json:"id"`
+	AgentID          pgtype.UUID        `json:"agent_id"`
+	Slug             string             `json:"slug"`
+	Description      string             `json:"description"`
+	LlmHint          string             `json:"llm_hint"`
+	Access           string             `json:"access"`
+	Transport        pgtype.Text        `json:"transport"`
+	Host             pgtype.Text        `json:"host"`
+	Port             pgtype.Int4        `json:"port"`
+	SshUser          pgtype.Text        `json:"ssh_user"`
+	PrivateKeyRef    pgtype.Text        `json:"private_key_ref"`
+	PublicKeyOpenssh pgtype.Text        `json:"public_key_openssh"`
+	PublicKeyComment pgtype.Text        `json:"public_key_comment"`
+	HostKeyOpenssh   pgtype.Text        `json:"host_key_openssh"`
+	HostKeyPinnedAt  pgtype.Timestamptz `json:"host_key_pinned_at"`
+	LastUsedAt       pgtype.Timestamptz `json:"last_used_at"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
+}
+
 type AgentMcpServer struct {
 	ID                   pgtype.UUID        `json:"id"`
 	AgentID              pgtype.UUID        `json:"agent_id"`

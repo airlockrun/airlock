@@ -143,7 +143,26 @@ func (h *agentHandler) ServiceProxy(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	w.WriteHeader(resp.StatusCode)
-	io.Copy(w, resp.Body)
+
+	// Cap the proxied response at MaxBufferedResponseBytes — same ceiling
+	// the agent SDK applies to conn.Request. Defense in depth: without
+	// this, a runaway upstream can OOM the agent process (which does
+	// io.ReadAll on its end). The +1 sentinel detects overflow so we can
+	// log loudly; the early close lets the agent's reader surface a
+	// short-read as a clean "upstream truncated" error.
+	written, err := io.Copy(w, io.LimitReader(resp.Body, int64(MaxBufferedResponseBytes)+1))
+	if err != nil {
+		h.logger.Warn("connection proxy stream copy",
+			zap.String("slug", conn.Slug),
+			zap.Int64("bytes_written", written),
+			zap.Error(err))
+		return
+	}
+	if written > int64(MaxBufferedResponseBytes) {
+		h.logger.Warn("connection proxy hit hard cap",
+			zap.String("slug", conn.Slug),
+			zap.Int64("max_bytes", int64(MaxBufferedResponseBytes)))
+	}
 }
 
 // applyHeaderMap merges m into h, using the empty-string-as-delete rule:

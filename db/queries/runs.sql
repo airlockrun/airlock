@@ -192,3 +192,4 @@ UPDATE runs SET
 WHERE finished_at IS NOT NULL
     AND finished_at < @cutoff
     AND compacted = false;
+

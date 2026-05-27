@@ -28,6 +28,10 @@ config/            Environment-based config (DATABASE_URL, JWT_SECRET, S3_*, ENC
 builder/           Build pipeline: scaffold → Sol codegen → docker build → deploy
 scaffold/          Go project templates (Dockerfile.tmpl, go.mod.tmpl, main.go.tmpl)
 container/         Docker container lifecycle (start/stop/health/reap agents + toolservers)
+execproxy/         SSH dialer for agentsdk.RegisterExecEndpoint — opens sessions,
+                   streams stdout/stderr/exit envelopes back to the agent as
+                   NDJSON over chunked transfer encoding. Owns the per-endpoint
+                   *ssh.Client cache + host-key TOFU + ED25519 keygen.
 trigger/           Dispatcher, Scheduler (cron), BridgeManager, PromptProxy
 realtime/          WebSocket Hub + PubSub (in-memory, topic-based with replay buffer)
 storage/           S3 client (PutObject, GetObject, presigned URLs) — talks to RustFS
@@ -98,7 +102,8 @@ On startup `builder.RebuildAllOnSDKChange` compares the airlock-bundled `agentsd
 - **Catalog**: Available providers and models
 
 ### Agent Internal: `/api/agent` (agent JWT middleware)
-- `PUT connections/{slug}`, `PUT sync` — agent self-registration
+- `PUT connections/{slug}`, `PUT exec-endpoints/{slug}`, `PUT sync` — agent self-registration
+- `POST exec/{slug}` — run a command on a registered exec endpoint; airlock streams stdout/stderr/exit envelopes back as NDJSON
 - `POST llm/stream` — LLM proxy (optional telescope)
 - `POST proxy/{slug}` — credential-injected HTTP proxy
 - `PUT|GET|DELETE storage/*` — agent object storage
@@ -121,6 +126,7 @@ Postgres with sqlc. Key tables:
 - `agent_webhooks`, `agent_crons`, `agent_routes`, `agent_topics` — trigger definitions
 - `agent_members` — sharing/permissions
 - `connections` — OAuth/API integrations (encrypted credentials)
+- `agent_exec_endpoints` — remote command targets (SSH today; transport pluggable). Operator-configured host/port/user + airlock-generated ED25519 keypair (private key in secrets store) + TOFU-pinned host key. Declared by the agent via `RegisterExecEndpoint`.
 - `bridges`, `platform_identities` — chat platform integrations (Telegram)
 - `runs` — execution history (trigger, status, input/output, timeline)
 - `oauth_states` — OAuth flow state tokens

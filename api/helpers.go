@@ -85,3 +85,15 @@ func readJSON(r *http.Request, v any) error {
 func writeJSONError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
 }
+
+// pgText wraps a string in a pgtype.Text marked Valid. Use for INSERTs
+// or UPDATEs against NULLABLE text columns where empty-string is
+// meaningful (e.g. a key with no comment).
+func pgText(s string) pgtype.Text {
+	return pgtype.Text{String: s, Valid: true}
+}
+
+// pgInt4 wraps an int32 as a Valid pgtype.Int4.
+func pgInt4(n int32) pgtype.Int4 {
+	return pgtype.Int4{Int32: n, Valid: true}
+}

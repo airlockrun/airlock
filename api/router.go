@@ -7,6 +7,8 @@ import (
 	"github.com/airlockrun/airlock/builder"
 	"github.com/airlockrun/airlock/container"
 	"github.com/airlockrun/airlock/db"
+	"github.com/airlockrun/airlock/db/dbq"
+	"github.com/airlockrun/airlock/execproxy"
 	"github.com/airlockrun/airlock/oauth"
 	"github.com/airlockrun/airlock/realtime"
 	"github.com/airlockrun/airlock/secrets"
@@ -111,6 +113,16 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		AllowCredentials: true,
 		MaxAge:           300,
 	}))
+
+	// SSH dialer for RegisterExecEndpoint. Owns a per-process *ssh.Client
+	// cache + background reaper; lives for the lifetime of the server.
+	// Shared by the agent-internal /api/agent/exec handler and the
+	// operator-facing /api/v1/agents/{id}/exec-endpoints handlers.
+	execDialer := execproxy.NewSSHDialer(
+		cfg.Secrets,
+		newTOFUPinner(cfg.DB.Pool()),
+		cfg.Logger,
+	)
 
 	authHandler := NewAuthHandler(cfg.DB, cfg.JWTSecret, cfg.ActivationCodeFile, cfg.Logger.Named("auth"))
 	providersHandler := NewProvidersHandler(cfg.DB, cfg.Secrets)
@@ -356,6 +368,17 @@ func NewRouter(cfg RouterConfig) http.Handler {
 					r.Put("/oauth-app", credH.SetOAuthApp)
 				})
 
+				// Exec endpoints (operator-configured SSH targets the agent's
+				// RegisterExecEndpoint declares).
+				execEpH := newExecEndpointsHandler(cfg.DB.Pool(), cfg.Secrets, execDialer, cfg.Logger)
+				r.Get("/exec-endpoints", execEpH.List)
+				r.Route("/exec-endpoints/{slug}", func(r chi.Router) {
+					r.Put("/", execEpH.Configure)
+					r.Post("/rotate-keypair", execEpH.RotateKeypair)
+					r.Post("/unpin-host-key", execEpH.UnpinHostKey)
+					r.Post("/test", execEpH.Test)
+				})
+
 				// MCP Servers
 				r.Get("/mcp-servers", credH.ListMCPServers)
 				r.Route("/mcp-servers/{slug}/credentials", func(r chi.Router) {
@@ -452,8 +475,11 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		forceInlineAttachments: cfg.ForceInlineAttachments,
 		jwtSecret:              cfg.JWTSecret,
 		dispatcher:             cfg.Dispatcher,
+		execDialer:             execDialer,
 		logger:                 cfg.Logger.Named("agent-api"),
 	}
+	// Silence "unused" if dbq import only used by helper newTOFUPinner.
+	_ = dbq.New
 
 	// MCP server endpoint — A2A entry point + external MCP client
 	// entry point. Mounted at top level (outside the /api/agent
@@ -484,6 +510,8 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	r.Route("/api/agent", func(r chi.Router) {
 		r.Use(auth.AgentMiddleware(cfg.JWTSecret))
 		r.Put("/connections/{slug}", ah.UpsertConnection)
+		r.Put("/exec-endpoints/{slug}", ah.UpsertExecEndpoint)
+		r.Post("/exec/{slug}", ah.AgentExec)
 		r.Put("/sync", ah.Sync)
 		r.Post("/llm/stream", ah.LLMStream)
 		r.Post("/llm/image", ah.ImageGenerate)

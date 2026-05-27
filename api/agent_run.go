@@ -60,13 +60,18 @@ func (h *agentHandler) RunComplete(w http.ResponseWriter, r *http.Request) {
 	// agentsdk classifies the error structurally (by call-site, not regex)
 	// and sends the kind in req.ErrorKind. We trust it as-is.
 	q := dbq.New(h.db.Pool())
+	// Authoritative cap on per-action stdout/stderr in the audit log.
+	// The SDK already truncates on its side; we re-enforce here so
+	// the runs.actions JSONB invariant holds regardless of SDK
+	// version or bypass path.
+	actions := truncateActionsJSON(req.Actions)
 	if err := q.UpsertRunComplete(r.Context(), dbq.UpsertRunCompleteParams{
 		ID:           toPgUUID(runUUID),
 		AgentID:      toPgUUID(agentID),
 		Status:       req.Status,
 		ErrorMessage: req.Error,
 		ErrorKind:    req.ErrorKind,
-		Actions:      req.Actions,
+		Actions:      actions,
 		StdoutLog:    formatRunLogs(req.Logs),
 		PanicTrace:   req.PanicTrace,
 	}); err != nil {
