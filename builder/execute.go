@@ -51,6 +51,17 @@ func (b *BuildService) Execute(ctx context.Context, plan BuildPlan) (string, err
 	agentUUID := uuid.UUID(agent.ID.Bytes)
 	repoPath := b.AgentRepoPath(agentID)
 
+	// Unwind any half-finished git state from a prior build that was
+	// killed mid-operation (e.g. agent-builder container stopped between
+	// `git add` and `git commit`). Without this the next build refuses
+	// the "dirty" repo even though every staged file is airlock-owned.
+	if recovered, err := RecoverAgentRepo(repoPath); err != nil {
+		return "", fmt.Errorf("recover agent repo: %w", err)
+	} else if recovered {
+		b.logger.Warn("recovered half-finished git state in agent repo",
+			zap.String("agent_id", agentID), zap.String("repo", repoPath))
+	}
+
 	// ── Phase A: per-flow setup ────────────────────────────────────────
 	//
 	// For initial builds we still need to create the per-agent repo,
@@ -164,6 +175,37 @@ func (b *BuildService) Execute(ctx context.Context, plan BuildPlan) (string, err
 		}
 	}
 
+	// ── Phase B2: airlock housekeeping ─────────────────────────────────
+	//
+	// Regenerate airlock-managed files (Dockerfile from scaffold template,
+	// .gitignore required entries, go.mod require lines for agentsdk/
+	// goai/sol) so the agent repo carries airlock's current canonical
+	// state before Sol clones it for codegen. Idempotent: a no-op for an
+	// already-current repo. Commits ONCE if anything changed, so the
+	// chore lands on top of any Phase B rollback reset and is visible to
+	// Sol's workdir clone in Phase C. Skipped for BuildKindBuild because
+	// prepareNewAgent's scaffold already wrote canonical state.
+	if plan.Kind != BuildKindBuild {
+		hk, err := runHousekeeping(ctx, repoPath, scaffold.ScaffoldData{
+			AgentID:         agentID,
+			Module:          "agent",
+			GoVersion:       buildGoVersion,
+			AgentSDKVersion: "v" + agentsdk.Version,
+			AgentBaseImage:  b.cfg.AgentBaseImage,
+		})
+		if err != nil {
+			completeBuild("failed", err.Error(), "", "")
+			return "", fmt.Errorf("housekeeping: %w", err)
+		}
+		if hk.Changed() {
+			if err := commitHousekeeping(repoPath, hk); err != nil {
+				completeBuild("failed", err.Error(), "", "")
+				return "", fmt.Errorf("commit housekeeping: %w", err)
+			}
+			logLine("Airlock housekeeping: refreshed managed files (Dockerfile/.gitignore/go.mod)")
+		}
+	}
+
 	// ── Schema clone for codegen test DB + later validation ────────────
 	//
 	// Naming mirrors what the per-flow code used to pick. The build flow
@@ -230,15 +272,35 @@ func (b *BuildService) Execute(ctx context.Context, plan BuildPlan) (string, err
 	// main locally, so the agent stays on its previous image.
 	if agent.GitRemoteUrl != "" {
 		logLine(fmt.Sprintf("Pushing to %s...", agent.GitRemoteUrl))
-		if err := b.pushAgentRepo(ctx, agent, plan.RunID); err != nil {
-			completeBuild("failed", err.Error(), commitHash, "")
-			return "", err
-		}
-		if uerr := q.UpdateAgentGitLastSyncedRef(ctx, dbq.UpdateAgentGitLastSyncedRefParams{
-			ID:               agent.ID,
-			GitLastSyncedRef: commitHash,
-		}); uerr != nil {
-			b.logger.Warn("update git_last_synced_ref", zap.Error(uerr))
+		pushErr := b.pushAgentRepo(ctx, agent, plan.RunID)
+		switch {
+		case pushErr == nil:
+			if uerr := q.UpdateAgentGitLastSyncedRef(ctx, dbq.UpdateAgentGitLastSyncedRefParams{
+				ID:               agent.ID,
+				GitLastSyncedRef: commitHash,
+			}); uerr != nil {
+				b.logger.Warn("update git_last_synced_ref", zap.Error(uerr))
+			}
+		case errors.As(pushErr, new(*PushConflictError)):
+			// Content conflict — the codegen commit is preserved on a
+			// side branch on the remote and main is reset locally. The
+			// user needs to know, so fail the build rather than silently
+			// keep going. pushAgentRepo already surfaces the side-branch
+			// name in the error message.
+			completeBuild("failed", pushErr.Error(), commitHash, "")
+			return "", pushErr
+		default:
+			// Transport / auth / 5xx / rate-limit / anything else
+			// non-conflict: the local merge succeeded, the image will
+			// build, the agent will run. Log loud and continue so a
+			// flaky remote doesn't block deployment. The next build
+			// after recovery picks up the same commit and retries the
+			// push automatically.
+			b.logger.Warn("push to remote failed; continuing with local-only build",
+				zap.String("agent_id", agentID),
+				zap.String("remote", agent.GitRemoteUrl),
+				zap.Error(pushErr))
+			logLine(fmt.Sprintf("Push to %s failed (%s); continuing with local-only build. Next build retries.", agent.GitRemoteUrl, pushErr))
 		}
 	}
 

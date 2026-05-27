@@ -110,26 +110,36 @@ func (b *BuildService) pushAgentRepo(ctx context.Context, agent dbq.Agent, runID
 	if branch == "" {
 		branch = "main"
 	}
-	remote := agent.GitRemoteUrl
 
+	if err := pushBranch(ctx, repoPath, agent.GitRemoteUrl, branch, header, runID); err != nil {
+		return err
+	}
+	return touchGitCredentialUsage(ctx, q, agent.GitCredentialID)
+}
+
+// pushBranch runs the credentialed git-push pipeline against a remote:
+// try a fast-forward push; on rejection, fetch + rebase + retry; on
+// unresolvable rebase conflict, preserve the local commit on a side
+// branch (push to a new ref always fast-forwards, fall back to a local
+// branch if the remote push also fails) and reset main to the remote
+// tip, returning *PushConflictError.
+//
+// Split out from pushAgentRepo so the credential-free pipeline can be
+// exercised against a local bare repo in tests without a DB or encryptor.
+// header may be empty — gitAuthed will then omit the http.extraheader
+// flag, which is fine for unauthenticated remotes (file://, ssh).
+func pushBranch(ctx context.Context, repoPath, remote, branch, header, runID string) error {
 	if err := gitAuthed(ctx, repoPath, header, "push", remote, branch+":"+branch); err == nil {
-		return touchGitCredentialUsage(ctx, q, agent.GitCredentialID)
+		return nil
 	} else if !isNonFastForward(err) {
 		return fmt.Errorf("git push: %w", err)
 	}
-
-	// Non-fast-forward: rebase + retry once.
 	if err := gitAuthed(ctx, repoPath, header, "fetch", remote, branch); err != nil {
 		return fmt.Errorf("git fetch for rebase: %w", err)
 	}
 	if rebaseErr := git(repoPath, "rebase", "FETCH_HEAD"); rebaseErr != nil {
-		// Unresolvable conflict: preserve the codegen commit on a side
-		// branch (push to a new ref always fast-forwards), reset main
-		// to the remote tip, return a typed error.
 		_ = git(repoPath, "rebase", "--abort")
 		preserveBranch := "airlock/upgrade/" + runID
-		// Try preserving on the remote first; fall back to a local ref
-		// so the commit isn't GC'd even if the remote push fails.
 		if err := gitAuthed(ctx, repoPath, header, "push", remote, "HEAD:refs/heads/"+preserveBranch); err != nil {
 			_ = git(repoPath, "branch", preserveBranch)
 		}
@@ -139,7 +149,7 @@ func (b *BuildService) pushAgentRepo(ctx context.Context, agent dbq.Agent, runID
 	if err := gitAuthed(ctx, repoPath, header, "push", remote, branch+":"+branch); err != nil {
 		return fmt.Errorf("git push after rebase: %w", err)
 	}
-	return touchGitCredentialUsage(ctx, q, agent.GitCredentialID)
+	return nil
 }
 
 // PullAgentRepo fetches the configured remote branch and fast-forwards
@@ -188,15 +198,27 @@ func (b *BuildService) PullAgentRepo(ctx context.Context, agent dbq.Agent) (stri
 // the credential is passed via the Authorization HTTP header instead of
 // being embedded in the URL (where it would land in .git/config).
 func gitAuthed(_ context.Context, dir, header string, args ...string) error {
-	full := append([]string{"-c", "http.extraheader=" + header}, args...)
+	full := args
+	// Skip the -c flag entirely when no header is supplied — covers
+	// unauthenticated transports (file://, ssh-with-agent) and keeps
+	// tests against local bare repos from setting an empty config that
+	// older git releases reject.
+	if header != "" {
+		full = append([]string{"-c", "http.extraheader=" + header}, args...)
+	}
 	cmd := exec.Command("git", full...)
 	cmd.Dir = dir
 	cmd.Env = append(gitCleanEnv(), "GIT_TERMINAL_PROMPT=0")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
+		msg := strings.TrimSpace(string(out))
 		// Strip any echoed header content from error output as a belt-
 		// and-suspenders against accidental token leakage in logs.
-		msg := strings.ReplaceAll(strings.TrimSpace(string(out)), header, "[redacted]")
+		// Skip when header is empty — strings.ReplaceAll with old=""
+		// splices the replacement between every character.
+		if header != "" {
+			msg = strings.ReplaceAll(msg, header, "[redacted]")
+		}
 		return fmt.Errorf("%s: %s", err, msg)
 	}
 	return nil

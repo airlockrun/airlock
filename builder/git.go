@@ -349,6 +349,49 @@ func RemoveAgentRepo(basePath, agentID string) error {
 	return nil
 }
 
+// RecoverAgentRepo unwinds any half-finished state in an agent repo left
+// by a previous build that was interrupted between git operations —
+// typically the airlock-builder container killed after `git add` but
+// before `git commit`, leaving the index populated with airlock-managed
+// content (.gitignore, go.mod with replaces stripped, Dockerfile) that
+// never made it to a commit. The next build then sees a "dirty" repo
+// and refuses to touch it, even though every staged file is something
+// airlock itself owns.
+//
+// Recovery: abort any in-progress merge/rebase/cherry-pick (those leave
+// the index in conflicted states `git reset` won't fully clear), then
+// `git reset HEAD` to unstage everything. The working tree is left
+// alone — the build pipeline rewrites the relevant files anyway, and
+// preserving working-tree state matters if a user push happened to
+// touch the same files concurrently.
+//
+// No-op on a fresh path with no .git/ (initial build hasn't run
+// `git init` yet) or a clean repo (nothing staged, no in-progress op).
+// Returns true iff anything actually needed cleaning up so the caller
+// can log loud — silent recovery means we never notice the underlying
+// crash pattern.
+func RecoverAgentRepo(repoPath string) (recovered bool, err error) {
+	if _, statErr := os.Stat(filepath.Join(repoPath, ".git")); statErr != nil {
+		return false, nil
+	}
+	for _, op := range []string{"merge", "rebase", "cherry-pick"} {
+		// git reports "no <op> in progress" with a non-zero exit; the
+		// failure is the no-op case, not a real error.
+		if err := runGit(repoPath, op, "--abort"); err == nil {
+			recovered = true
+		}
+	}
+	// `git diff --cached --quiet` exits 0 iff the index matches HEAD.
+	// Any non-nil error means there's staged content to unstage.
+	if err := runGit(repoPath, "diff", "--cached", "--quiet"); err != nil {
+		if err := runGit(repoPath, "reset", "HEAD"); err != nil {
+			return recovered, fmt.Errorf("reset HEAD: %w", err)
+		}
+		recovered = true
+	}
+	return recovered, nil
+}
+
 // git runs a git command in the given directory.
 func git(dir string, args ...string) error {
 	return runGit(dir, args...)
