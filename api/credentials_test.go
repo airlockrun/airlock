@@ -14,6 +14,7 @@ import (
 	"github.com/airlockrun/airlock/db/dbq"
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 	"github.com/airlockrun/airlock/oauth"
+	connsvc "github.com/airlockrun/airlock/service/connections"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -22,13 +23,23 @@ import (
 // --- test helpers for user-authenticated routes ---
 
 func testCredentialHandler() *credentialHandler {
-	return &credentialHandler{
-		db:          testDB,
-		encryptor:   testEncryptor(),
-		oauthClient: oauth.NewClient(),
-		publicURL:   "http://localhost:8080",
-		logger:      zap.NewNop(),
+	disc := func(ctx context.Context, serverURL string, authInjection []byte, creds string) ([]connsvc.ToolInfo, string, error) {
+		tools, instructions, err := discoverMCPTools(ctx, serverURL, authInjection, creds)
+		if err != nil {
+			return nil, "", err
+		}
+		out := make([]connsvc.ToolInfo, len(tools))
+		for i, t := range tools {
+			out[i] = connsvc.ToolInfo{Name: t.Name, Description: t.Description, InputSchema: t.InputSchema}
+		}
+		return out, instructions, nil
 	}
+	noopRefresh := func(ctx context.Context, agentID uuid.UUID) error { return nil }
+	return newCredentialHandler(connsvc.New(
+		testDB, testEncryptor(), oauth.NewClient(),
+		"http://localhost:8080", noopRefresh, zap.NewNop(),
+		disc, discoverMCPAuth, injectAuth, mcpHTTPClient,
+	))
 }
 
 // userRouter creates a chi router with JWT user auth middleware.

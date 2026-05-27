@@ -11,6 +11,7 @@ import (
 	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/db/dbq"
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
+	modelssvc "github.com/airlockrun/airlock/service/models"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -43,12 +44,7 @@ func userRequestProto(t *testing.T, method, path string, userID uuid.UUID, msg p
 
 // testModelsHandler wires a modelsHandler against the shared test DB.
 func testModelsHandler() *modelsHandler {
-	agents := &agentsHandler{db: testDB, logger: zap.NewNop()}
-	return &modelsHandler{
-		db:     testDB,
-		logger: zap.NewNop(),
-		agents: agents,
-	}
+	return newModelsHandler(modelssvc.New(testDB, zap.NewNop()))
 }
 
 // TestSync_ModelSlotsReconciliation verifies the sync handler upserts new

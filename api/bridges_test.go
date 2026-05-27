@@ -8,22 +8,29 @@ import (
 	"testing"
 
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
+	bridgessvc "github.com/airlockrun/airlock/service/bridges"
 	"github.com/airlockrun/airlock/trigger"
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 )
+
+// testNoopBridgeMgr satisfies bridgessvc.BridgeManager without spinning
+// up a real poller — the test only cares that lifecycle methods exist.
+type testNoopBridgeMgr struct{}
+
+func (testNoopBridgeMgr) AddBridge(uuid.UUID)    {}
+func (testNoopBridgeMgr) RemoveBridge(uuid.UUID) {}
 
 func testBridgeHandler(telegramSrv *httptest.Server) *bridgeHandler {
 	td := trigger.NewTelegramDriver(zap.NewNop())
 	if telegramSrv != nil {
 		td = trigger.NewTelegramDriverWithBaseURL(telegramSrv.URL, telegramSrv.Client())
 	}
-	return &bridgeHandler{
-		db:        testDB,
-		encryptor: testEncryptor(),
-		telegram:  td,
-		logger:    zap.NewNop(),
-	}
+	dd := trigger.NewDiscordDriver(zap.NewNop())
+	return newBridgeHandler(bridgessvc.New(
+		testDB, testEncryptor(), td, dd, testNoopBridgeMgr{}, zap.NewNop(),
+	))
 }
 
 func TestCreateAgentBridge(t *testing.T) {

@@ -1,54 +1,30 @@
 package api
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"time"
 
 	"github.com/airlockrun/airlock/auth"
-	"github.com/airlockrun/airlock/db"
-	"github.com/airlockrun/airlock/db/dbq"
-	"github.com/airlockrun/airlock/trigger"
+	"github.com/airlockrun/airlock/service"
+	"github.com/airlockrun/airlock/service/siblings"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgtype"
-	"go.uber.org/zap"
 )
 
-// siblingsHandler exposes the per-agent sibling address book — the
-// list of OTHER agents the editing user (admin of this agent) wants
-// the LLM to be able to call via the new A2A MCP endpoint. Membership
-// in this list is a discovery aid only; authorization at call time is
-// always evaluated fresh against the target's allow_*_mcp settings.
+// siblingsHandler is the thin HTTP wrapper around siblings.Service:
+// parse URL/body, delegate, render. Authorization and DB work live in
+// the service.
 type siblingsHandler struct {
-	db         *db.DB
-	dispatcher *trigger.Dispatcher
-	logger     *zap.Logger
+	svc *siblings.Service
 }
 
-func newSiblingsHandler(d *db.DB, dispatcher *trigger.Dispatcher, logger *zap.Logger) *siblingsHandler {
-	return &siblingsHandler{db: d, dispatcher: dispatcher, logger: logger}
-}
-
-// refreshParent triggers a synchronous re-sync on the parent agent's
-// container so a sibling add/remove is reflected in its agent_<slug>
-// bindings without waiting for a restart. Only the parent's address
-// book changed — no need to broadcast to every agent. Best-effort and
-// run inline-async: RefreshAgent no-ops for cold containers.
-func (h *siblingsHandler) refreshParent(parentID uuid.UUID) {
-	if h.dispatcher == nil {
-		return
+func newSiblingsHandler(svc *siblings.Service) *siblingsHandler {
+	if svc == nil {
+		panic("api: siblings.Service is required")
 	}
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		if err := h.dispatcher.RefreshAgent(ctx, parentID); err != nil {
-			h.logger.Warn("siblings: refresh parent after change",
-				zap.String("agent_id", parentID.String()), zap.Error(err))
-		}
-	}()
+	return &siblingsHandler{svc: svc}
 }
 
 type siblingDTO struct {
@@ -70,79 +46,95 @@ type addableSiblingDTO struct {
 	IsMember          bool   `json:"isMember"`
 }
 
-// List GET /api/v1/agents/{agentID}/siblings — current address book.
-// Requires agent-admin on the parent (we read the parent's siblings;
-// only an admin can edit them, so List is also admin-gated for
-// consistency).
+// parentAgentID extracts and parses {agentID} from the URL. On a bad
+// UUID it writes a 400 and returns ok=false; callers should return.
+func parentAgentID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
+	id, err := uuid.Parse(chi.URLParam(r, "agentID"))
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid agent ID")
+		return uuid.Nil, false
+	}
+	return id, true
+}
+
+// writeSiblingsError renders a service error using per-sentinel strings
+// for siblings endpoints. fallback is the generic 500 message.
+func writeSiblingsError(w http.ResponseWriter, err error, fallback string) {
+	status := service.HTTPStatus(err)
+	var msg string
+	switch {
+	case errors.Is(err, service.ErrUnauthorized):
+		msg = "unauthorized"
+	case errors.Is(err, service.ErrForbidden):
+		msg = "agent admin access required"
+	case errors.Is(err, service.ErrNotFound):
+		msg = "agent not found"
+	case errors.Is(err, service.ErrInvalidInput):
+		msg = "invalid input"
+	case errors.Is(err, service.ErrConflict):
+		msg = "already in list"
+	default:
+		msg = fallback
+	}
+	writeJSONError(w, status, msg)
+}
+
+// List GET /api/v1/agents/{agentID}/siblings.
 func (h *siblingsHandler) List(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	parentID, ok := h.requireParentAdmin(ctx, w, r)
+	parentID, ok := parentAgentID(w, r)
 	if !ok {
 		return
 	}
-	q := dbq.New(h.db.Pool())
-	rows, err := q.ListSiblings(ctx, pgtype.UUID{Bytes: parentID, Valid: true})
+	userID := auth.UserIDFromContext(r.Context())
+	rows, err := h.svc.List(r.Context(), userID, parentID)
 	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, "list siblings")
+		writeSiblingsError(w, err, "list siblings")
 		return
 	}
 	out := make([]siblingDTO, 0, len(rows))
-	for _, r := range rows {
+	for _, s := range rows {
 		out = append(out, siblingDTO{
-			ID:                uuid.UUID(r.ID.Bytes).String(),
-			Slug:              r.Slug,
-			Name:              r.Name,
-			Description:       r.Description,
-			AllowNonMemberMcp: r.AllowNonMemberMcp,
-			AllowPublicMcp:    r.AllowPublicMcp,
-			CreatedAt:         r.CreatedAt.Time.Format(time.RFC3339),
+			ID:                s.ID.String(),
+			Slug:              s.Slug,
+			Name:              s.Name,
+			Description:       s.Description,
+			AllowNonMemberMcp: s.AllowNonMemberMcp,
+			AllowPublicMcp:    s.AllowPublicMcp,
+			CreatedAt:         s.CreatedAt.Format(time.RFC3339),
 		})
 	}
 	writeJSON(w, http.StatusOK, out)
 }
 
-// ListAddable GET /api/v1/agents/{agentID}/siblings/addable — drives
-// the "pick another agent to add" picker on the settings page.
-// Returns the agents the EDITING user (not the parent agent's owner)
-// is allowed to add as a sibling, modulo what's already in the list
-// or the parent itself.
+// ListAddable GET /api/v1/agents/{agentID}/siblings/addable.
 func (h *siblingsHandler) ListAddable(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	parentID, ok := h.requireParentAdmin(ctx, w, r)
+	parentID, ok := parentAgentID(w, r)
 	if !ok {
 		return
 	}
-	userID := auth.UserIDFromContext(ctx)
-	q := dbq.New(h.db.Pool())
-	rows, err := q.ListAddableSiblings(ctx, dbq.ListAddableSiblingsParams{
-		ParentAgentID: pgtype.UUID{Bytes: parentID, Valid: true},
-		UserID:        pgtype.UUID{Bytes: userID, Valid: true},
-	})
+	userID := auth.UserIDFromContext(r.Context())
+	rows, err := h.svc.ListAddable(r.Context(), userID, parentID)
 	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, "list addable siblings")
+		writeSiblingsError(w, err, "list addable siblings")
 		return
 	}
 	out := make([]addableSiblingDTO, 0, len(rows))
-	for _, r := range rows {
+	for _, s := range rows {
 		out = append(out, addableSiblingDTO{
-			ID:                uuid.UUID(r.ID.Bytes).String(),
-			Slug:              r.Slug,
-			Name:              r.Name,
-			Description:       r.Description,
-			AllowNonMemberMcp: r.AllowNonMemberMcp,
-			IsMember:          r.IsMember,
+			ID:                s.ID.String(),
+			Slug:              s.Slug,
+			Name:              s.Name,
+			Description:       s.Description,
+			AllowNonMemberMcp: s.AllowNonMemberMcp,
+			IsMember:          s.IsMember,
 		})
 	}
 	writeJSON(w, http.StatusOK, out)
 }
 
 // Add POST /api/v1/agents/{agentID}/siblings — body: {"siblingId": "..."}.
-// Atomic per the AddSiblingIfAllowed query: the row only lands if the
-// editing user is a member of the sibling OR sibling has
-// allow_non_member_mcp=true. RowsAffected = 0 maps to 403.
 func (h *siblingsHandler) Add(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	parentID, ok := h.requireParentAdmin(ctx, w, r)
+	parentID, ok := parentAgentID(w, r)
 	if !ok {
 		return
 	}
@@ -158,34 +150,28 @@ func (h *siblingsHandler) Add(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusBadRequest, "invalid siblingId")
 		return
 	}
-	if siblingID == parentID {
-		writeJSONError(w, http.StatusBadRequest, "agent cannot be its own sibling")
+	userID := auth.UserIDFromContext(r.Context())
+	if err := h.svc.Add(r.Context(), userID, parentID, siblingID); err != nil {
+		switch {
+		case errors.Is(err, service.ErrInvalidInput):
+			writeJSONError(w, http.StatusBadRequest, "agent cannot be its own sibling")
+		case errors.Is(err, service.ErrUnauthorized):
+			writeJSONError(w, http.StatusUnauthorized, "unauthorized")
+		case errors.Is(err, service.ErrForbidden):
+			writeJSONError(w, http.StatusForbidden, "you are not allowed to add this agent as a sibling")
+		case errors.Is(err, service.ErrConflict):
+			writeJSONError(w, http.StatusConflict, "already in list")
+		default:
+			writeJSONError(w, http.StatusInternalServerError, "add sibling")
+		}
 		return
 	}
-	userID := auth.UserIDFromContext(ctx)
-	q := dbq.New(h.db.Pool())
-	rows, err := q.AddSiblingIfAllowed(ctx, dbq.AddSiblingIfAllowedParams{
-		ParentAgentID:  pgtype.UUID{Bytes: parentID, Valid: true},
-		SiblingAgentID: pgtype.UUID{Bytes: siblingID, Valid: true},
-		UserID:         pgtype.UUID{Bytes: userID, Valid: true},
-	})
-	if err != nil {
-		// Unique-violation = already in list. Surface as 409.
-		writeJSONError(w, http.StatusConflict, "already in list")
-		return
-	}
-	if rows == 0 {
-		writeJSONError(w, http.StatusForbidden, "you are not allowed to add this agent as a sibling")
-		return
-	}
-	h.refreshParent(parentID)
 	w.WriteHeader(http.StatusCreated)
 }
 
 // Remove DELETE /api/v1/agents/{agentID}/siblings/{siblingID}.
 func (h *siblingsHandler) Remove(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	parentID, ok := h.requireParentAdmin(ctx, w, r)
+	parentID, ok := parentAgentID(w, r)
 	if !ok {
 		return
 	}
@@ -194,67 +180,36 @@ func (h *siblingsHandler) Remove(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusBadRequest, "invalid sibling ID")
 		return
 	}
-	q := dbq.New(h.db.Pool())
-	if err := q.RemoveSibling(ctx, dbq.RemoveSiblingParams{
-		ParentAgentID:  pgtype.UUID{Bytes: parentID, Valid: true},
-		SiblingAgentID: pgtype.UUID{Bytes: siblingID, Valid: true},
-	}); err != nil {
-		writeJSONError(w, http.StatusInternalServerError, "remove sibling")
+	userID := auth.UserIDFromContext(r.Context())
+	if err := h.svc.Remove(r.Context(), userID, parentID, siblingID); err != nil {
+		writeSiblingsError(w, err, "remove sibling")
 		return
 	}
-	h.refreshParent(parentID)
 	w.WriteHeader(http.StatusNoContent)
-}
-
-// requireParentAdmin checks the caller is an admin of the parent
-// agent; returns the parent agent's UUID and ok=true when so.
-func (h *siblingsHandler) requireParentAdmin(ctx context.Context, w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
-	parentID, err := uuid.Parse(chi.URLParam(r, "agentID"))
-	if err != nil {
-		writeJSONError(w, http.StatusBadRequest, "invalid agent ID")
-		return uuid.Nil, false
-	}
-	userID := auth.UserIDFromContext(ctx)
-	if userID == uuid.Nil {
-		writeJSONError(w, http.StatusUnauthorized, "unauthorized")
-		return uuid.Nil, false
-	}
-	q := dbq.New(h.db.Pool())
-	access := trigger.ResolveAgentAccess(ctx, q, parentID, userID)
-	if access != "admin" {
-		writeJSONError(w, http.StatusForbidden, "agent admin access required")
-		return uuid.Nil, false
-	}
-	return parentID, true
 }
 
 // GetA2ASettings GET /api/v1/agents/{agentID}/a2a-settings.
 func (h *siblingsHandler) GetA2ASettings(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	parentID, ok := h.requireParentAdmin(ctx, w, r)
+	parentID, ok := parentAgentID(w, r)
 	if !ok {
 		return
 	}
-	q := dbq.New(h.db.Pool())
-	a, err := q.GetAgentByID(ctx, pgtype.UUID{Bytes: parentID, Valid: true})
+	userID := auth.UserIDFromContext(r.Context())
+	s, err := h.svc.GetSettings(r.Context(), userID, parentID)
 	if err != nil {
-		writeJSONError(w, http.StatusNotFound, "agent not found")
+		writeSiblingsError(w, err, "get settings")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{
-		"allowNonMemberMcp": a.AllowNonMemberMcp,
-		"allowPublicMcp":    a.AllowPublicMcp,
+		"allowNonMemberMcp": s.AllowNonMemberMcp,
+		"allowPublicMcp":    s.AllowPublicMcp,
 	})
 }
 
 // UpdateA2ASettings PUT /api/v1/agents/{agentID}/a2a-settings —
-// body: {"allowNonMemberMcp": bool, "allowPublicMcp": bool}. The
-// CHECK constraint rejects (public ∧ ¬non-member); we silently flip
-// non-member on whenever public is true so the UI's "make public"
-// toggle is a one-click affordance.
+// body: {"allowNonMemberMcp": bool, "allowPublicMcp": bool}.
 func (h *siblingsHandler) UpdateA2ASettings(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	parentID, ok := h.requireParentAdmin(ctx, w, r)
+	parentID, ok := parentAgentID(w, r)
 	if !ok {
 		return
 	}
@@ -266,21 +221,17 @@ func (h *siblingsHandler) UpdateA2ASettings(w http.ResponseWriter, r *http.Reque
 		writeJSONError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
-	if body.AllowPublicMcp {
-		body.AllowNonMemberMcp = true
-	}
-	q := dbq.New(h.db.Pool())
-	if err := q.UpdateAgentA2ASettings(ctx, dbq.UpdateAgentA2ASettingsParams{
-		ID:                pgtype.UUID{Bytes: parentID, Valid: true},
+	userID := auth.UserIDFromContext(r.Context())
+	out, err := h.svc.UpdateSettings(r.Context(), userID, parentID, siblings.A2ASettings{
 		AllowNonMemberMcp: body.AllowNonMemberMcp,
 		AllowPublicMcp:    body.AllowPublicMcp,
-	}); err != nil {
-		h.logger.Error("update a2a settings", zap.Error(err))
-		writeJSONError(w, http.StatusInternalServerError, "update settings")
+	})
+	if err != nil {
+		writeSiblingsError(w, err, "update settings")
 		return
 	}
-	writeJSON(w, http.StatusOK, body)
+	writeJSON(w, http.StatusOK, map[string]bool{
+		"allowNonMemberMcp": out.AllowNonMemberMcp,
+		"allowPublicMcp":    out.AllowPublicMcp,
+	})
 }
-
-// Compile-time guard against import-removal regressions.
-var _ = errors.New

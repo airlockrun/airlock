@@ -18,6 +18,7 @@ import (
 	"github.com/airlockrun/airlock/db/dbq"
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 	"github.com/airlockrun/airlock/realtime"
+	"github.com/airlockrun/airlock/service"
 	"github.com/airlockrun/airlock/trigger"
 	"github.com/airlockrun/goai/mcp"
 	"github.com/go-chi/chi/v5"
@@ -182,15 +183,11 @@ func (s *MCPServer) serveDispatch(w http.ResponseWriter, r *http.Request, h *age
 	}
 }
 
-// resolveAgent accepts the identifier as a UUID or a slug. Internal
-// callers (sibling agents) use the UUID — rename-safe. External
-// clients pasting a config URL typically use the slug. Either form
-// resolves to the same dbq.Agent row.
+// resolveAgent is kept as a package-local thin alias for readability at
+// the call sites — delegates to service.ResolveAgent, the canonical
+// slug-or-UUID resolver shared with the OAuth server handler.
 func resolveAgent(ctx context.Context, q *dbq.Queries, identifier string) (dbq.Agent, error) {
-	if id, err := uuid.Parse(identifier); err == nil {
-		return q.GetAgentByID(ctx, pgtype.UUID{Bytes: id, Valid: true})
-	}
-	return q.GetAgentBySlug(ctx, identifier)
+	return service.ResolveAgent(ctx, q, identifier)
 }
 
 // resolvePrincipal classifies the request by the Authorization header.

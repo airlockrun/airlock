@@ -17,6 +17,7 @@ import (
 	"github.com/airlockrun/airlock/auth/lockout"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
+	"github.com/airlockrun/airlock/service"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -866,14 +867,11 @@ func (h *oauthServerHandler) lookupUserClaims(ctx context.Context, userID uuid.U
 	return u.Email, u.TenantRole
 }
 
-// lookupAgentByIdentifier resolves a {identifier} path param to an
-// agents row, accepting either the slug or a UUID string. Mirrors the
-// behaviour mcp_server.go uses for the same route.
+// lookupAgentByIdentifier is a thin alias for service.ResolveAgent at
+// the OAuth-server call sites; the {identifier} path param accepts the
+// agent's slug or its UUID.
 func lookupAgentByIdentifier(ctx context.Context, q *dbq.Queries, identifier string) (dbq.Agent, error) {
-	if id, err := uuid.Parse(identifier); err == nil {
-		return q.GetAgentByID(ctx, toPgUUID(id))
-	}
-	return q.GetAgentBySlug(ctx, identifier)
+	return service.ResolveAgent(ctx, q, identifier)
 }
 
 // ============================================================

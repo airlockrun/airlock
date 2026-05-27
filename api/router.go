@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/airlockrun/airlock/auth"
@@ -12,6 +13,15 @@ import (
 	"github.com/airlockrun/airlock/oauth"
 	"github.com/airlockrun/airlock/realtime"
 	"github.com/airlockrun/airlock/secrets"
+	agentssvc "github.com/airlockrun/airlock/service/agents"
+	bridgessvc "github.com/airlockrun/airlock/service/bridges"
+	connsvc "github.com/airlockrun/airlock/service/connections"
+	convsvc "github.com/airlockrun/airlock/service/conversations"
+	execsvc "github.com/airlockrun/airlock/service/execendpoints"
+	memberssvc "github.com/airlockrun/airlock/service/members"
+	modelssvc "github.com/airlockrun/airlock/service/models"
+	runssvc "github.com/airlockrun/airlock/service/runs"
+	siblingssvc "github.com/airlockrun/airlock/service/siblings"
 	"github.com/airlockrun/airlock/storage"
 	"github.com/airlockrun/airlock/trigger"
 	"github.com/go-chi/chi/v5"
@@ -162,23 +172,36 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		})
 	})
 
-	// Credential, bridge, and identity handlers
-	credH := &credentialHandler{
-		db:          cfg.DB,
-		encryptor:   cfg.Secrets,
-		oauthClient: cfg.OAuthClient,
-		publicURL:   cfg.PublicURL,
-		logger:      cfg.Logger.Named("credentials"),
-		dispatcher:  cfg.Dispatcher,
+	// Credential, bridge, and identity handlers. The connections service
+	// takes function-typed deps for MCP discovery + auth injection so it
+	// doesn't have to depend on the goai/mcp client directly.
+	credSvcDiscovery := func(ctx context.Context, serverURL string, authInjection []byte, creds string) ([]connsvc.ToolInfo, string, error) {
+		tools, instructions, err := discoverMCPTools(ctx, serverURL, authInjection, creds)
+		if err != nil {
+			return nil, "", err
+		}
+		out := make([]connsvc.ToolInfo, len(tools))
+		for i, t := range tools {
+			out[i] = connsvc.ToolInfo{Name: t.Name, Description: t.Description, InputSchema: t.InputSchema}
+		}
+		return out, instructions, nil
 	}
-	brH := &bridgeHandler{
-		db:        cfg.DB,
-		encryptor: cfg.Secrets,
-		telegram:  cfg.TelegramDriver,
-		discord:   cfg.DiscordDriver,
-		bridgeMgr: cfg.BridgeManager,
-		logger:    cfg.Logger.Named("bridges"),
-	}
+	credH := newCredentialHandler(connsvc.New(
+		cfg.DB,
+		cfg.Secrets,
+		cfg.OAuthClient,
+		cfg.PublicURL,
+		cfg.Dispatcher.RefreshAgent,
+		cfg.Logger.Named("credentials"),
+		credSvcDiscovery,
+		discoverMCPAuth,
+		injectAuth,
+		mcpHTTPClient,
+	))
+	brH := newBridgeHandler(bridgessvc.New(
+		cfg.DB, cfg.Secrets, cfg.TelegramDriver, cfg.DiscordDriver,
+		cfg.BridgeManager, cfg.Logger.Named("bridges"),
+	))
 	idH := &identityHandler{
 		db:         cfg.DB,
 		encryptor:  cfg.Secrets,
@@ -262,25 +285,26 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		r.Post("/credentials/mcp/oauth/start", credH.MCPOAuthStart)
 
 		// Agent management (Phase 6)
-		agH := &agentsHandler{
-			db:           cfg.DB,
-			builder:      cfg.BuildService,
-			dispatcher:   cfg.Dispatcher,
-			encryptor:    cfg.Secrets,
-			containers:   cfg.Containers,
-			promptProxy:  cfg.PromptProxy,
-			bridgeMgr:    cfg.BridgeManager,
-			publicURL:    cfg.PublicURL,
-			agentBaseURL: cfg.AgentBaseURL,
-			logger:       cfg.Logger.Named("agents"),
-		}
-		rH := &runsHandler{
-			db:         cfg.DB,
-			dispatcher: cfg.Dispatcher,
-			s3:         cfg.S3Client,
-			logger:     cfg.Logger.Named("runs"),
-		}
+		agH := newAgentsHandler(
+			agentssvc.New(
+				cfg.DB, cfg.BuildService, cfg.Dispatcher,
+				cfg.Containers, cfg.BridgeManager,
+				cfg.Logger.Named("agents"),
+			),
+			memberssvc.New(cfg.DB, cfg.Logger.Named("members")),
+			cfg.PublicURL,
+			cfg.AgentBaseURL,
+		)
+		rH := newRunsHandler(
+			runssvc.New(cfg.DB, cfg.Dispatcher, cfg.Logger.Named("runs")),
+			cfg.S3Client,
+			cfg.Logger.Named("runs"),
+		)
 		cH := &conversationsHandler{
+			svc: convsvc.New(cfg.DB, cfg.S3Client, cfg.Logger.Named("conversations"),
+				func(parts []byte, agentID string) []string {
+					return ExtractCanonicalKeys(parts, agentID)
+				}),
 			db:          cfg.DB,
 			dispatcher:  cfg.Dispatcher,
 			promptProxy: cfg.PromptProxy,
@@ -290,12 +314,8 @@ func NewRouter(cfg RouterConfig) http.Handler {
 			convLocks:   newConvMutexMap(),
 			logger:      cfg.Logger.Named("conversations"),
 		}
-		mH := &modelsHandler{
-			db:     cfg.DB,
-			logger: cfg.Logger.Named("models"),
-			agents: agH,
-		}
-		siblingsH := newSiblingsHandler(cfg.DB, cfg.Dispatcher, cfg.Logger.Named("siblings"))
+		mH := newModelsHandler(modelssvc.New(cfg.DB, cfg.Logger.Named("models")))
+		siblingsH := newSiblingsHandler(siblingssvc.New(cfg.DB, cfg.Dispatcher, cfg.Logger.Named("siblings")))
 
 		// Wire post-upgrade notifications to conversations handler.
 		cfg.BuildService.SetUpgradeNotifier(cH)
@@ -370,7 +390,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 
 				// Exec endpoints (operator-configured SSH targets the agent's
 				// RegisterExecEndpoint declares).
-				execEpH := newExecEndpointsHandler(cfg.DB.Pool(), cfg.Secrets, execDialer, cfg.Logger)
+				execEpH := newExecEndpointsHandler(execsvc.New(cfg.DB.Pool(), cfg.Secrets, execDialer, cfg.Logger))
 				r.Get("/exec-endpoints", execEpH.List)
 				r.Route("/exec-endpoints/{slug}", func(r chi.Router) {
 					r.Put("/", execEpH.Configure)

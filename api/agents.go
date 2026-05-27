@@ -1,182 +1,106 @@
 package api
 
 import (
-	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
-	"regexp"
-	"strings"
 	"time"
 
 	"github.com/airlockrun/airlock/auth"
-	"github.com/airlockrun/airlock/builder"
-	"github.com/airlockrun/airlock/container"
 	"github.com/airlockrun/airlock/convert"
-	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
-	"github.com/airlockrun/airlock/secrets"
-	"github.com/airlockrun/airlock/trigger"
+	"github.com/airlockrun/airlock/service"
+	agentssvc "github.com/airlockrun/airlock/service/agents"
+	memberssvc "github.com/airlockrun/airlock/service/members"
 	"github.com/go-chi/chi/v5"
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
-	"go.uber.org/zap"
 )
 
-// bridgePollerCanceler is the subset of trigger.BridgeManager that the
-// agent Delete handler uses to stop bridge pollers before the bridge row
-// vanishes via FK CASCADE. Defined as an interface so tests can stub it.
-type bridgePollerCanceler interface {
-	RemoveBridge(bridgeID uuid.UUID)
+// agentsHandler is the thin HTTP wrapper around agents.Service (plus
+// members.Service for the /members sub-routes that still live on the
+// same chi mount point).
+type agentsHandler struct {
+	svc          *agentssvc.Service
+	members      *memberssvc.Service
+	publicURL    string
+	agentBaseURL func(slug string) string
 }
 
-type agentsHandler struct {
-	db          *db.DB
-	builder     *builder.BuildService
-	dispatcher  *trigger.Dispatcher
-	encryptor   secrets.Store
-	containers  container.ContainerManager
-	promptProxy *trigger.PromptProxy
-	bridgeMgr   bridgePollerCanceler
-	publicURL   string
-	// agentBaseURL builds an agent's external route base
-	// ({scheme}://{slug}.{domain}[:port]) for GetAgentDetail. Sourced
-	// from config.Config — the single place that derives it.
-	agentBaseURL func(slug string) string
-	logger       *zap.Logger
+func newAgentsHandler(svc *agentssvc.Service, members *memberssvc.Service, publicURL string, agentBaseURL func(slug string) string) *agentsHandler {
+	if svc == nil {
+		panic("api: agents.Service is required")
+	}
+	if members == nil {
+		panic("api: members.Service is required")
+	}
+	if agentBaseURL == nil {
+		panic("api: agentBaseURL func is required")
+	}
+	return &agentsHandler{svc: svc, members: members, publicURL: publicURL, agentBaseURL: agentBaseURL}
+}
+
+// writeAgentsError renders a service error using per-sentinel strings
+// for the agent endpoints. Detail-wrapped errors surface their message
+// via err.Error().
+func writeAgentsError(w http.ResponseWriter, err error, fallback string) {
+	status := service.HTTPStatus(err)
+	var msg string
+	switch {
+	case errors.Is(err, service.ErrInvalidInput), errors.Is(err, service.ErrConflict):
+		if m := err.Error(); m != "invalid input" && m != "conflict" {
+			msg = m
+		} else if errors.Is(err, service.ErrConflict) {
+			msg = "conflict"
+		} else {
+			msg = "invalid input"
+		}
+	case errors.Is(err, service.ErrUnauthorized):
+		msg = "unauthorized"
+	case errors.Is(err, service.ErrForbidden):
+		// Detail wrap (e.g. "git credential does not belong to you") wins.
+		if m := err.Error(); m != "forbidden" {
+			msg = m
+		} else {
+			msg = "access denied"
+		}
+	case errors.Is(err, service.ErrNotFound):
+		if m := err.Error(); m != "not found" {
+			msg = m
+		} else {
+			msg = "agent not found"
+		}
+	default:
+		msg = fallback
+	}
+	writeError(w, status, msg)
 }
 
 // Create handles POST /api/v1/agents.
 func (h *agentsHandler) Create(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-
 	var req airlockv1.CreateAgentRequest
 	if err := decodeProto(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if req.Name == "" {
-		writeError(w, http.StatusBadRequest, "name is required")
-		return
-	}
-	if req.Slug == "" {
-		writeError(w, http.StatusBadRequest, "slug is required")
-		return
-	}
-
-	userID := auth.UserIDFromContext(ctx)
-	q := dbq.New(h.db.Pool())
-
-	// Model overrides are optional at create time — empty pair means the
-	// agent inherits the system default live. When supplied, both halves
-	// (provider FK + model name) must be present together.
-	buildProviderFK, err := parseOptionalProviderID(req.BuildProviderId)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid build_provider_id: "+err.Error())
-		return
-	}
-	if (req.BuildModel != "") != buildProviderFK.Valid {
-		writeError(w, http.StatusBadRequest, "build_model and build_provider_id must be set or unset together")
-		return
-	}
-	execProviderFK, err := parseOptionalProviderID(req.ExecProviderId)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid exec_provider_id: "+err.Error())
-		return
-	}
-	if (req.ExecModel != "") != execProviderFK.Valid {
-		writeError(w, http.StatusBadRequest, "exec_model and exec_provider_id must be set or unset together")
-		return
-	}
-
-	// Optional external git remote. Both URL and credential must be
-	// present together; the credential must belong to the calling user.
-	var gitCredFK pgtype.UUID
-	if req.GitRemoteUrl != "" {
-		if req.GitCredentialId == "" {
-			writeError(w, http.StatusBadRequest, "git_credential_id is required when git_remote_url is set")
-			return
-		}
-		credID, err := parseUUID(req.GitCredentialId)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, "invalid git_credential_id")
-			return
-		}
-		cred, err := q.GetGitCredential(ctx, toPgUUID(credID))
-		if err != nil {
-			writeError(w, http.StatusNotFound, "git credential not found")
-			return
-		}
-		if pgUUID(cred.UserID) != userID {
-			writeError(w, http.StatusForbidden, "git credential does not belong to you")
-			return
-		}
-		gitCredFK = pgtype.UUID{Bytes: toPgUUID(credID).Bytes, Valid: true}
-	}
-
-	// Create the agent record (status=draft) so we can return it immediately.
-	// All model override columns default to '' (live inheritance).
-	agent, err := q.CreateAgent(ctx, dbq.CreateAgentParams{
-		Name:        req.Name,
-		Slug:        req.Slug,
-		UserID:      toPgUUID(userID),
-		Description: req.Description,
-		Config:      []byte("{}"),
+	userID := auth.UserIDFromContext(r.Context())
+	agent, err := h.svc.Create(r.Context(), userID, agentssvc.CreateRequest{
+		Name:             req.Name,
+		Slug:             req.Slug,
+		Description:      req.Description,
+		BuildModel:       req.BuildModel,
+		BuildProviderID:  req.BuildProviderId,
+		ExecModel:        req.ExecModel,
+		ExecProviderID:   req.ExecProviderId,
+		Instructions:     req.Instructions,
+		GitRemoteURL:     req.GitRemoteUrl,
+		GitCredentialID:  req.GitCredentialId,
+		GitDefaultBranch: req.GitDefaultBranch,
 	})
 	if err != nil {
-		if strings.Contains(err.Error(), "duplicate key") {
-			writeError(w, http.StatusConflict, "agent slug already exists")
-			return
-		}
-		h.logger.Error("create agent", zap.Error(err))
-		writeError(w, http.StatusInternalServerError, "failed to create agent")
+		writeAgentsError(w, err, "failed to create agent")
 		return
 	}
-
-	// Persist explicit per-agent model overrides if the client supplied any.
-	// Other capability columns stay empty and inherit from system_settings.
-	if req.BuildModel != "" || req.ExecModel != "" {
-		_ = q.UpdateAgentModels(ctx, dbq.UpdateAgentModelsParams{
-			ID:              agent.ID,
-			BuildProviderID: buildProviderFK,
-			BuildModel:      req.BuildModel,
-			ExecProviderID:  execProviderFK,
-			ExecModel:       req.ExecModel,
-		})
-		agent.BuildProviderID = buildProviderFK
-		agent.BuildModel = req.BuildModel
-		agent.ExecProviderID = execProviderFK
-		agent.ExecModel = req.ExecModel
-	}
-
-	// Auto-add creator as agent admin.
-	_ = q.AddAgentMember(ctx, dbq.AddAgentMemberParams{
-		AgentID: agent.ID,
-		UserID:  toPgUUID(userID),
-		Role:    "admin",
-	})
-
-	agentID := convert.PgUUIDToString(agent.ID)
-
-	// Kick off build pipeline asynchronously. Build() logs success/failure
-	// internally — no need to log the returned err here.
-	go func() {
-		_ = h.builder.Build(context.Background(), builder.BuildInput{
-			AgentID:          agentID,
-			Name:             req.Name,
-			Slug:             req.Slug,
-			UserID:           userID.String(),
-			BuildProviderID:  buildProviderFK,
-			BuildModel:       req.BuildModel,
-			Instructions:     req.Instructions,
-			GitRemoteURL:     req.GitRemoteUrl,
-			GitCredentialID:  gitCredFK,
-			GitDefaultBranch: req.GitDefaultBranch,
-		})
-	}()
-
 	writeProto(w, http.StatusAccepted, &airlockv1.CreateAgentResponse{
 		Agent: agentToProto(agent),
 	})
@@ -184,114 +108,60 @@ func (h *agentsHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 // List handles GET /api/v1/agents.
 func (h *agentsHandler) List(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	claims := auth.ClaimsFromContext(ctx)
-	q := dbq.New(h.db.Pool())
-
-	var agents []dbq.Agent
-	var err error
-
-	if auth.RoleAtLeast(claims.TenantRole, "admin") {
-		agents, err = q.ListAgents(ctx)
-	} else {
-		agents, err = q.ListAgentsByUserID(ctx, toPgUUID(auth.UserIDFromContext(ctx)))
+	claims := auth.ClaimsFromContext(r.Context())
+	tenantRole := ""
+	if claims != nil {
+		tenantRole = claims.TenantRole
 	}
+	userID := auth.UserIDFromContext(r.Context())
+	items, err := h.svc.List(r.Context(), userID, tenantRole)
 	if err != nil {
-		h.logger.Error("list agents", zap.Error(err))
 		writeError(w, http.StatusInternalServerError, "failed to list agents")
 		return
 	}
-
-	out := make([]*airlockv1.AgentInfo, len(agents))
-	ids := make([]uuid.UUID, len(agents))
-	for i, a := range agents {
-		out[i] = agentToProto(a)
-		ids[i] = uuid.UUID(a.ID.Bytes)
+	out := make([]*airlockv1.AgentInfo, len(items))
+	for i, it := range items {
+		p := agentToProto(it.Agent)
+		p.Running = it.Running
+		out[i] = p
 	}
-
-	// Populate the runtime Running flag. The frontend status badge renders
-	// status=active + !running as "Suspended"; without this every agent in
-	// the grid would show Suspended. One bulk container query for the whole
-	// page rather than an inspect per agent. A lookup failure degrades to
-	// Running=false (Suspended) rather than failing the list.
-	if h.containers != nil && len(ids) > 0 {
-		if running, err := h.containers.RunningAgents(ctx, ids); err != nil {
-			h.logger.Warn("list agents: running-state lookup failed", zap.Error(err))
-		} else {
-			for i := range out {
-				out[i].Running = running[ids[i]]
-			}
-		}
-	}
-
 	writeProto(w, http.StatusOK, &airlockv1.ListAgentsResponse{Agents: out})
 }
 
-// Get handles GET /api/v1/agents/{agentID} — rich detail.
+// Get handles GET /api/v1/agents/{agentID}.
 func (h *agentsHandler) Get(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
 	agentID, err := parseUUID(chi.URLParam(r, "agentID"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid agent ID")
 		return
 	}
-
-	q := dbq.New(h.db.Pool())
-	pgID := toPgUUID(agentID)
-
-	agent, err := q.GetAgentByID(ctx, pgID)
+	userID := auth.UserIDFromContext(r.Context())
+	d, err := h.svc.Get(r.Context(), userID, agentID)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "agent not found")
+		writeAgentsError(w, err, "failed to load agent")
 		return
 	}
-
-	if err := h.requireAccess(ctx, agent); err != nil {
-		writeError(w, http.StatusForbidden, "access denied")
-		return
-	}
-
-	// Load connections with credential status.
-	conns, _ := q.ListConnectionsByAgent(ctx, pgID)
-	connInfos := make([]*airlockv1.ConnectionInfo, len(conns))
-	for i, c := range conns {
+	connInfos := make([]*airlockv1.ConnectionInfo, len(d.Connections))
+	for i, c := range d.Connections {
 		connInfos[i] = connectionToProto(c, h.publicURL, agentID.String())
 	}
-
-	// Load webhooks.
-	webhooks, _ := q.ListWebhooksByAgentWithStatus(ctx, pgID)
-	whInfos := make([]*airlockv1.WebhookInfo, len(webhooks))
-	for i, wh := range webhooks {
+	whInfos := make([]*airlockv1.WebhookInfo, len(d.Webhooks))
+	for i, wh := range d.Webhooks {
 		whInfos[i] = webhookToProto(wh, h.publicURL, agentID.String())
 	}
-
-	// Load crons.
-	crons, _ := q.ListCronsByAgent(ctx, pgID)
-	cronInfos := make([]*airlockv1.CronInfo, len(crons))
-	for i, c := range crons {
+	cronInfos := make([]*airlockv1.CronInfo, len(d.Crons))
+	for i, c := range d.Crons {
 		cronInfos[i] = cronToProto(c)
 	}
-
-	// Load routes.
-	routes, _ := q.ListRoutesByAgent(ctx, pgID)
-	routeInfos := make([]*airlockv1.RouteInfo, len(routes))
-	for i, r := range routes {
-		routeInfos[i] = routeToProto(r)
+	routeInfos := make([]*airlockv1.RouteInfo, len(d.Routes))
+	for i, route := range d.Routes {
+		routeInfos[i] = routeToProto(route)
 	}
-
-	// Live container state — the detail page's Stop/Start affordance and
-	// the runtime badge key off this, not the lifecycle status. Cheap:
-	// in-memory cache hit, or one inspect for a cold container. A nil
-	// container (idle/reaped/crashed) is the normal not-running case.
-	agentProto := agentToProto(agent)
-	if h.containers != nil {
-		if c, gerr := h.containers.GetRunning(ctx, agentID); gerr == nil && c != nil {
-			agentProto.Running = true
-		}
-	}
-
+	agentProto := agentToProto(d.Agent)
+	agentProto.Running = d.Running
 	writeProto(w, http.StatusOK, &airlockv1.GetAgentDetailResponse{
 		Agent:        agentProto,
-		RouteBaseUrl: h.agentBaseURL(agent.Slug),
+		RouteBaseUrl: h.agentBaseURL(d.Agent.Slug),
 		Connections:  connInfos,
 		Webhooks:     whInfos,
 		Crons:        cronInfos,
@@ -301,313 +171,88 @@ func (h *agentsHandler) Get(w http.ResponseWriter, r *http.Request) {
 
 // Update handles PATCH /api/v1/agents/{agentID}.
 func (h *agentsHandler) Update(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
 	agentID, err := parseUUID(chi.URLParam(r, "agentID"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid agent ID")
 		return
 	}
-
 	var req airlockv1.UpdateAgentRequest
 	if err := decodeProto(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-
-	q := dbq.New(h.db.Pool())
-
-	agent, err := q.GetAgentByID(ctx, toPgUUID(agentID))
-	if err != nil {
-		writeError(w, http.StatusNotFound, "agent not found")
-		return
-	}
-	if err := h.requireAccess(ctx, agent); err != nil {
-		writeError(w, http.StatusForbidden, "access denied")
-		return
-	}
-
-	// Each field: nil in the request → keep existing value.
-	autoFix := agent.AutoFix
-	if req.AutoFix != nil {
-		autoFix = *req.AutoFix
-	}
-
-	name := agent.Name
-	if req.Name != nil {
-		name = strings.TrimSpace(*req.Name)
-		if name == "" {
-			writeError(w, http.StatusBadRequest, "name cannot be empty")
-			return
-		}
-		if len(name) > 100 {
-			writeError(w, http.StatusBadRequest, "name too long (max 100)")
-			return
-		}
-	}
-
-	slug := agent.Slug
-	if req.Slug != nil && *req.Slug != agent.Slug {
-		slug = *req.Slug
-		if !validAgentSlug(slug) {
-			writeError(w, http.StatusBadRequest, "slug must be 2–63 chars, lowercase letters/digits separated by single dashes")
-			return
-		}
-	}
-
-	nameChanged := name != agent.Name
-	slugChanged := slug != agent.Slug
-
-	updated, err := q.UpdateAgentFields(ctx, dbq.UpdateAgentFieldsParams{
-		ID:      toPgUUID(agentID),
-		Name:    name,
-		Slug:    slug,
-		AutoFix: autoFix,
+	userID := auth.UserIDFromContext(r.Context())
+	updated, err := h.svc.Update(r.Context(), userID, agentID, agentssvc.UpdateRequest{
+		Name:    req.Name,
+		Slug:    req.Slug,
+		AutoFix: req.AutoFix,
 	})
 	if err != nil {
-		// Mirror CreateAgent's collision mapping — the agents.slug UNIQUE
-		// constraint is the single source of truth for slug conflicts.
-		if strings.Contains(err.Error(), "duplicate key") {
-			writeError(w, http.StatusConflict, "agent slug already exists")
-			return
-		}
-		h.logger.Error("update agent", zap.Error(err))
-		writeError(w, http.StatusInternalServerError, "failed to update agent")
+		writeAgentsError(w, err, "failed to update agent")
 		return
 	}
-
-	// Siblings bind callable handles as agent_<slug> and the prompt lists
-	// peers by name/slug — a rename must reach other running agents or
-	// they keep stale bindings until their next restart. Same hook used
-	// on agent create / tool-sync. Best-effort, off the request path.
-	if nameChanged || slugChanged {
-		go broadcastSiblingChange(context.Background(), dbq.New(h.db.Pool()), h.dispatcher, h.logger, agentID)
-	}
-
 	writeProto(w, http.StatusOK, &airlockv1.UpdateAgentResponse{
 		Agent: agentToProto(updated),
 	})
 }
 
-// validAgentSlug enforces a kebab-case identifier safe for URLs, sibling
-// bindings, and MCP endpoint paths: 2–63 chars, lowercase alphanumerics
-// in single-dash-separated groups, no leading/trailing/double dash.
-var agentSlugRe = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
-
-func validAgentSlug(s string) bool {
-	if len(s) < 2 || len(s) > 63 {
-		return false
-	}
-	return agentSlugRe.MatchString(s)
-}
-
 // Delete handles DELETE /api/v1/agents/{agentID}.
 func (h *agentsHandler) Delete(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
 	agentID, err := parseUUID(chi.URLParam(r, "agentID"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid agent ID")
 		return
 	}
-
-	q := dbq.New(h.db.Pool())
-
-	agent, err := q.GetAgentByID(ctx, toPgUUID(agentID))
-	if err != nil {
-		writeError(w, http.StatusNotFound, "agent not found")
+	userID := auth.UserIDFromContext(r.Context())
+	if err := h.svc.Delete(r.Context(), userID, agentID); err != nil {
+		writeAgentsError(w, err, "failed to delete agent")
 		return
 	}
-	if err := h.requireAccess(ctx, agent); err != nil {
-		writeError(w, http.StatusForbidden, "access denied")
-		return
-	}
-
-	// Cancel any in-flight build/upgrade and wait for its toolserver to
-	// die — otherwise the upgrade goroutine keeps writing into the
-	// workspace dir we're about to rm and the agent_builds row we're
-	// about to CASCADE delete, producing FK errors and orphan files.
-	// 30s covers worst-case Docker SIGKILL + last DB write; on timeout
-	// we proceed anyway (the leftover writes are harmless once the
-	// agent row is gone).
-	if h.builder != nil {
-		h.builder.CancelBuildAndWait(agentID.String(), 30*time.Second)
-	}
-
-	// Stop bridge pollers bound to this agent before the FK CASCADE
-	// removes their rows. Without this, the in-memory poller goroutine
-	// keeps polling the bot platform forever (it cached the token at
-	// AddBridge time and doesn't re-read DB), which races with any
-	// future bridge re-registration on the same token — Telegram
-	// returns 409 Conflict because two getUpdates loops are competing
-	// for the same bot.
-	if h.bridgeMgr != nil {
-		if bridgeIDs, err := q.ListBridgesByAgentID(ctx, toPgUUID(agentID)); err == nil {
-			for _, bid := range bridgeIDs {
-				bridgeUUID, err := uuid.FromBytes(bid.Bytes[:])
-				if err != nil {
-					continue
-				}
-				h.bridgeMgr.RemoveBridge(bridgeUUID)
-			}
-		}
-	}
-
-	// Stop container (best effort).
-	if h.containers != nil {
-		containerName := "airlock-agent-" + agentID.String()[:8]
-		_ = h.containers.StopAgent(ctx, containerName)
-	}
-
-	// Remove Docker image (best effort).
-	if h.containers != nil && agent.ImageRef != "" {
-		_ = h.containers.RemoveImage(ctx, agent.ImageRef)
-	}
-
-	// Drop agent schema and role (best effort).
-	schemaName := "agent_" + strings.ReplaceAll(agentID.String(), "-", "")
-	conn, err := h.db.Pool().Acquire(ctx)
-	if err == nil {
-		conn.Exec(ctx, fmt.Sprintf("DROP SCHEMA IF EXISTS %s CASCADE", schemaName))
-		conn.Exec(ctx, fmt.Sprintf("DROP ROLE IF EXISTS %s", schemaName))
-		conn.Release()
-	}
-
-	// Remove the agent's per-agent git repo (best effort).
-	if h.builder != nil {
-		if err := builder.RemoveAgentRepo(h.builder.ReposPath(), agentID.String()); err != nil {
-			h.logger.Warn("remove agent repo", zap.Error(err))
-		}
-	}
-
-	// Delete agent record (CASCADE handles connections, webhooks, crons, runs, conversations).
-	if err := q.DeleteAgent(ctx, toPgUUID(agentID)); err != nil {
-		h.logger.Error("delete agent", zap.Error(err))
-		writeError(w, http.StatusInternalServerError, "failed to delete agent")
-		return
-	}
-
-	// Tell every other running agent to drop its agent_<slug> binding
-	// for this one. Best-effort; cold containers will see the change on
-	// their next startup sync.
-	go broadcastSiblingChange(context.Background(), dbq.New(h.db.Pool()), h.dispatcher, h.logger, agentID)
-
 	w.WriteHeader(http.StatusNoContent)
 }
 
 // Stop handles POST /api/v1/agents/{agentID}/stop.
 func (h *agentsHandler) Stop(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
 	agentID, err := parseUUID(chi.URLParam(r, "agentID"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid agent ID")
 		return
 	}
-
-	q := dbq.New(h.db.Pool())
-	agent, err := q.GetAgentByID(ctx, toPgUUID(agentID))
-	if err != nil {
-		writeError(w, http.StatusNotFound, "agent not found")
+	userID := auth.UserIDFromContext(r.Context())
+	if err := h.svc.Stop(r.Context(), userID, agentID); err != nil {
+		writeAgentsError(w, err, "failed to stop agent")
 		return
 	}
-	if err := h.requireAccess(ctx, agent); err != nil {
-		writeError(w, http.StatusForbidden, "access denied")
-		return
-	}
-
-	containerName := "airlock-agent-" + agentID.String()[:8]
-	if err := h.containers.StopAgent(ctx, containerName); err != nil {
-		h.logger.Error("stop agent", zap.Error(err))
-		writeError(w, http.StatusInternalServerError, "failed to stop agent")
-		return
-	}
-
-	_ = q.UpdateAgentStatus(ctx, dbq.UpdateAgentStatusParams{
-		ID:     toPgUUID(agentID),
-		Status: "stopped",
-	})
-
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// Start handles POST /api/v1/agents/{agentID}/start. Resumes an agent
-// from stopped (or just kicks an already-active agent's container).
-// Flips status to active BEFORE EnsureRunning because EnsureRunning
-// now refuses to start a stopped agent — the lifecycle gate is on
-// status, not on the request path.
+// Start handles POST /api/v1/agents/{agentID}/start.
 func (h *agentsHandler) Start(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
 	agentID, err := parseUUID(chi.URLParam(r, "agentID"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid agent ID")
 		return
 	}
-
-	q := dbq.New(h.db.Pool())
-	agent, err := q.GetAgentByID(ctx, toPgUUID(agentID))
-	if err != nil {
-		writeError(w, http.StatusNotFound, "agent not found")
+	userID := auth.UserIDFromContext(r.Context())
+	if err := h.svc.Start(r.Context(), userID, agentID); err != nil {
+		writeAgentsError(w, err, "failed to start agent")
 		return
 	}
-	if err := h.requireAccess(ctx, agent); err != nil {
-		writeError(w, http.StatusForbidden, "access denied")
-		return
-	}
-	if agent.ImageRef == "" {
-		writeError(w, http.StatusBadRequest, "agent has no image — build it first")
-		return
-	}
-
-	if agent.Status == "stopped" {
-		if err := q.UpdateAgentStatus(ctx, dbq.UpdateAgentStatusParams{
-			ID:     toPgUUID(agentID),
-			Status: "active",
-		}); err != nil {
-			h.logger.Error("flip status to active", zap.Error(err))
-			writeError(w, http.StatusInternalServerError, "failed to start agent")
-			return
-		}
-	}
-
-	if _, err := h.dispatcher.EnsureRunning(ctx, agentID); err != nil {
-		h.logger.Error("start agent", zap.Error(err))
-		writeError(w, http.StatusInternalServerError, "failed to start agent")
-		return
-	}
-
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// Suspend handles POST /api/v1/agents/{agentID}/suspend. Kills the
-// running container but leaves agents.status=active, so the next
-// trigger (chat, webhook, cron, A2A) restarts it via EnsureRunning.
-// This makes the reaper's silent kill an explicit, surfaceable
-// operator action — and frees compute immediately without removing
-// the agent from service.
+// Suspend handles POST /api/v1/agents/{agentID}/suspend.
 func (h *agentsHandler) Suspend(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
 	agentID, err := parseUUID(chi.URLParam(r, "agentID"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid agent ID")
 		return
 	}
-
-	q := dbq.New(h.db.Pool())
-	agent, err := q.GetAgentByID(ctx, toPgUUID(agentID))
-	if err != nil {
-		writeError(w, http.StatusNotFound, "agent not found")
+	userID := auth.UserIDFromContext(r.Context())
+	if err := h.svc.Suspend(r.Context(), userID, agentID); err != nil {
+		writeAgentsError(w, err, "failed to suspend agent")
 		return
 	}
-	if err := h.requireAccess(ctx, agent); err != nil {
-		writeError(w, http.StatusForbidden, "access denied")
-		return
-	}
-
-	containerName := "airlock-agent-" + agentID.String()[:8]
-	if err := h.containers.StopAgent(ctx, containerName); err != nil {
-		h.logger.Error("suspend agent", zap.Error(err))
-		writeError(w, http.StatusInternalServerError, "failed to suspend agent")
-		return
-	}
-	// Status stays active — that's the whole point of suspend vs stop.
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -618,8 +263,8 @@ func (h *agentsHandler) CancelBuild(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid agent ID")
 		return
 	}
-	if !h.builder.CancelBuild(agentID.String()) {
-		writeError(w, http.StatusConflict, "no build in progress")
+	if err := h.svc.CancelBuild(agentID); err != nil {
+		writeAgentsError(w, err, "failed to cancel build")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -627,209 +272,64 @@ func (h *agentsHandler) CancelBuild(w http.ResponseWriter, r *http.Request) {
 
 // Upgrade handles POST /api/v1/agents/{agentID}/upgrade.
 func (h *agentsHandler) Upgrade(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
 	agentID, err := parseUUID(chi.URLParam(r, "agentID"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid agent ID")
 		return
 	}
-
 	var req airlockv1.UpgradeAgentRequest
 	if err := decodeProto(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-
-	q := dbq.New(h.db.Pool())
-	agent, err := q.GetAgentByID(ctx, toPgUUID(agentID))
-	if err != nil {
-		writeError(w, http.StatusNotFound, "agent not found")
+	userID := auth.UserIDFromContext(r.Context())
+	if err := h.svc.Upgrade(r.Context(), userID, agentID, agentssvc.UpgradeRequest{
+		RunID:       req.RunId,
+		Description: req.Description,
+	}); err != nil {
+		writeAgentsError(w, err, "failed to upgrade agent")
 		return
 	}
-	// Upgrade rewrites the agent's code — agent-admin only, matching the
-	// admin-runs-only requestUpgrade JS path and the config-ops model
-	// (members/webhooks/crons are all agent-admin).
-	if err := h.requireAgentAdmin(ctx, agent.ID); err != nil {
-		writeError(w, http.StatusForbidden, "agent admin access required")
-		return
-	}
-
-	// If the agent was never successfully built (no image), retry the full build
-	// pipeline instead of the upgrade pipeline.
-	if agent.ImageRef == "" {
-		go func() {
-			// Build() logs success/failure internally.
-			_ = h.builder.Build(context.Background(), builder.BuildInput{
-				AgentID:         agentID.String(),
-				Name:            agent.Name,
-				Slug:            agent.Slug,
-				UserID:          convert.PgUUIDToString(agent.UserID),
-				BuildProviderID: agent.BuildProviderID,
-				BuildModel:      agent.BuildModel,
-			})
-		}()
-	} else {
-		go func() {
-			runID := req.RunId
-			if runID == "" {
-				runID = uuid.New().String()
-			}
-			input := builder.UpgradeInput{
-				AgentID:     agentID.String(),
-				RunID:       runID,
-				Reason:      "manual",
-				Description: req.Description,
-			}
-			// If a run ID was provided, load full error context from that
-			// run. A supplied-but-unresolvable run_id degrades to a manual
-			// upgrade with no diagnostics — log loudly so a "fix this run"
-			// click that lost its context isn't silently a no-op brief.
-			if req.RunId != "" {
-				runUUID, perr := parseUUID(req.RunId)
-				if perr != nil {
-					h.logger.Warn("upgrade: invalid run_id; proceeding as manual upgrade without diagnostics",
-						zap.String("agent", agentID.String()), zap.String("run_id", req.RunId), zap.Error(perr))
-				} else {
-					pgRunID := toPgUUID(runUUID)
-					failedRun, gerr := q.GetRunByID(context.Background(), pgRunID)
-					if gerr != nil {
-						h.logger.Warn("upgrade: run not found; proceeding as manual upgrade without diagnostics",
-							zap.String("agent", agentID.String()), zap.String("run_id", req.RunId), zap.Error(gerr))
-					} else {
-						input.Reason = "auto_fix"
-						input.ErrorMessage = failedRun.ErrorMessage
-						input.PanicTrace = failedRun.PanicTrace
-						input.InputPayload = string(failedRun.InputPayload)
-						input.Actions = string(failedRun.Actions)
-						// Logs the failed run captured before it died —
-						// RunComplete stores every run's logs in stdout_log.
-						input.Logs = failedRun.StdoutLog
-						// Load conversation messages for this run.
-						if msgs, err := q.ListMessagesByRun(context.Background(), pgRunID); err == nil {
-							var msgSummaries []string
-							for _, m := range msgs {
-								msgSummaries = append(msgSummaries, fmt.Sprintf("[%s] %s", m.Role, m.Content))
-							}
-							input.Messages = strings.Join(msgSummaries, "\n")
-						}
-					}
-				}
-			}
-			if err := h.builder.AcquireUpgradeLock(context.Background(), agentID.String()); err != nil {
-				if !errors.Is(err, builder.ErrUpgradeInProgress) {
-					h.logger.Error("upgrade lock failed", zap.String("agent", agentID.String()), zap.Error(err))
-				}
-				return
-			}
-			h.builder.RunUpgrade(context.Background(), input)
-		}()
-	}
-
 	w.WriteHeader(http.StatusAccepted)
 }
 
-// Rollback handles POST /api/v1/agents/{agentID}/rollback. Reverses
-// the agent to a previous build's source_ref. Same agent-admin gate
-// and async 202 shape as Upgrade. Validation that's cheap to do
-// synchronously (target exists, belongs to agent, status=complete,
-// not the current build) happens here; deeper checks (migration
-// reversibility) are part of the rollback pipeline itself.
+// Rollback handles POST /api/v1/agents/{agentID}/rollback.
 func (h *agentsHandler) Rollback(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
 	agentID, err := parseUUID(chi.URLParam(r, "agentID"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid agent ID")
 		return
 	}
-
 	var req airlockv1.RollbackBuildRequest
 	if err := decodeProto(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if req.BuildId == "" {
-		writeError(w, http.StatusBadRequest, "build_id is required")
+	userID := auth.UserIDFromContext(r.Context())
+	if err := h.svc.Rollback(r.Context(), userID, agentID, agentssvc.RollbackRequest{
+		BuildID:        req.BuildId,
+		ConversationID: req.ConversationId,
+	}); err != nil {
+		writeAgentsError(w, err, "failed to rollback agent")
 		return
 	}
-	buildID, err := parseUUID(req.BuildId)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid build_id")
-		return
-	}
-
-	q := dbq.New(h.db.Pool())
-	agent, err := q.GetAgentByID(ctx, toPgUUID(agentID))
-	if err != nil {
-		writeError(w, http.StatusNotFound, "agent not found")
-		return
-	}
-	if err := h.requireAgentAdmin(ctx, agent.ID); err != nil {
-		writeError(w, http.StatusForbidden, "agent admin access required")
-		return
-	}
-	if agent.ImageRef == "" {
-		writeError(w, http.StatusConflict, "agent has no current build to roll back from")
-		return
-	}
-
-	target, err := q.GetAgentBuild(ctx, toPgUUID(buildID))
-	if err != nil {
-		writeError(w, http.StatusNotFound, "target build not found")
-		return
-	}
-	if uuid.UUID(target.AgentID.Bytes) != agentID {
-		writeError(w, http.StatusBadRequest, "target build does not belong to this agent")
-		return
-	}
-	if target.Status != "complete" {
-		writeError(w, http.StatusConflict, "can only roll back to a completed build")
-		return
-	}
-	if target.SourceRef == "" {
-		writeError(w, http.StatusConflict, "target build has no source_ref")
-		return
-	}
-	if target.SourceRef == agent.SourceRef {
-		writeError(w, http.StatusConflict, "target build is the current build")
-		return
-	}
-
-	go func() {
-		if err := h.builder.AcquireUpgradeLock(context.Background(), agentID.String()); err != nil {
-			if !errors.Is(err, builder.ErrUpgradeInProgress) {
-				h.logger.Error("rollback lock failed", zap.String("agent", agentID.String()), zap.Error(err))
-			}
-			return
-		}
-		h.builder.Rollback(context.Background(), builder.RollbackInput{
-			AgentID:        agentID.String(),
-			BuildID:        buildID.String(),
-			ConversationID: req.ConversationId,
-		})
-	}()
-
 	w.WriteHeader(http.StatusAccepted)
 }
 
 // ListWebhooks handles GET /api/v1/agents/{agentID}/webhooks.
 func (h *agentsHandler) ListWebhooks(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
 	agentID, err := parseUUID(chi.URLParam(r, "agentID"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid agent ID")
 		return
 	}
-
-	q := dbq.New(h.db.Pool())
-	webhooks, err := q.ListWebhooksByAgentWithStatus(ctx, toPgUUID(agentID))
+	rows, err := h.svc.ListWebhooks(r.Context(), agentID)
 	if err != nil {
-		h.logger.Error("list webhooks", zap.Error(err))
 		writeError(w, http.StatusInternalServerError, "failed to list webhooks")
 		return
 	}
-
-	out := make([]*airlockv1.WebhookInfo, len(webhooks))
-	for i, wh := range webhooks {
+	out := make([]*airlockv1.WebhookInfo, len(rows))
+	for i, wh := range rows {
 		out[i] = webhookToProto(wh, h.publicURL, agentID.String())
 	}
 	writeProto(w, http.StatusOK, &airlockv1.ListWebhooksResponse{Webhooks: out})
@@ -837,23 +337,18 @@ func (h *agentsHandler) ListWebhooks(w http.ResponseWriter, r *http.Request) {
 
 // ListCrons handles GET /api/v1/agents/{agentID}/crons.
 func (h *agentsHandler) ListCrons(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
 	agentID, err := parseUUID(chi.URLParam(r, "agentID"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid agent ID")
 		return
 	}
-
-	q := dbq.New(h.db.Pool())
-	crons, err := q.ListCronsByAgent(ctx, toPgUUID(agentID))
+	rows, err := h.svc.ListCrons(r.Context(), agentID)
 	if err != nil {
-		h.logger.Error("list crons", zap.Error(err))
 		writeError(w, http.StatusInternalServerError, "failed to list crons")
 		return
 	}
-
-	out := make([]*airlockv1.CronInfo, len(crons))
-	for i, c := range crons {
+	out := make([]*airlockv1.CronInfo, len(rows))
+	for i, c := range rows {
 		out[i] = cronToProto(c)
 	}
 	writeProto(w, http.StatusOK, &airlockv1.ListCronsResponse{Crons: out})
@@ -861,21 +356,16 @@ func (h *agentsHandler) ListCrons(w http.ResponseWriter, r *http.Request) {
 
 // ListTools handles GET /api/v1/agents/{agentID}/tools.
 func (h *agentsHandler) ListTools(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
 	agentID, err := parseUUID(chi.URLParam(r, "agentID"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid agent ID")
 		return
 	}
-
-	q := dbq.New(h.db.Pool())
-	tools, err := q.ListAgentTools(ctx, toPgUUID(agentID))
+	tools, err := h.svc.ListTools(r.Context(), agentID)
 	if err != nil {
-		h.logger.Error("list tools", zap.Error(err))
 		writeError(w, http.StatusInternalServerError, "failed to list tools")
 		return
 	}
-
 	out := make([]*airlockv1.ToolInfo, len(tools))
 	for i, t := range tools {
 		out[i] = &airlockv1.ToolInfo{
@@ -892,77 +382,131 @@ func (h *agentsHandler) ListTools(w http.ResponseWriter, r *http.Request) {
 
 // FireCron handles POST /api/v1/agents/{agentID}/crons/{name}/fire.
 func (h *agentsHandler) FireCron(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
 	agentID, err := parseUUID(chi.URLParam(r, "agentID"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid agent ID")
 		return
 	}
-	cronName := chi.URLParam(r, "name")
-
-	// Look up cron timeout.
-	q := dbq.New(h.db.Pool())
-	cron, err := q.GetCronByAgentAndName(ctx, dbq.GetCronByAgentAndNameParams{
-		AgentID: toPgUUID(agentID),
-		Name:    cronName,
-	})
+	res, err := h.svc.FireCron(r.Context(), agentID, chi.URLParam(r, "name"))
 	if err != nil {
-		writeError(w, http.StatusNotFound, "cron not found")
+		writeAgentsError(w, err, "failed to fire cron")
 		return
 	}
-	timeout := time.Duration(cron.TimeoutMs) * time.Millisecond
-	if timeout == 0 {
-		timeout = 2 * time.Minute
-	}
+	writeProto(w, http.StatusOK, &airlockv1.FireCronResponse{RunId: res.RunID.String()})
+}
 
-	rc, runID, err := h.dispatcher.ForwardCron(ctx, agentID, cronName, timeout)
+// ListBuilds handles GET /api/v1/agents/{agentID}/builds.
+func (h *agentsHandler) ListBuilds(w http.ResponseWriter, r *http.Request) {
+	agentID, err := parseUUID(chi.URLParam(r, "agentID"))
 	if err != nil {
-		h.logger.Error("fire cron", zap.Error(err))
-		writeError(w, http.StatusInternalServerError, "failed to fire cron")
+		writeError(w, http.StatusBadRequest, "invalid agent ID")
 		return
 	}
-	io.Copy(io.Discard, rc)
-	rc.Close()
+	builds, err := h.svc.ListBuilds(r.Context(), agentID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list builds")
+		return
+	}
+	sourceRefByID := make(map[string]string, len(builds))
+	for _, b := range builds {
+		sourceRefByID[convert.PgUUIDToString(b.ID)] = b.SourceRef
+	}
+	out := make([]*airlockv1.AgentBuildInfo, len(builds))
+	for i, b := range builds {
+		var rollbackTargetID, rollbackTargetSourceRef string
+		if b.RollbackTargetID.Valid {
+			rollbackTargetID = convert.PgUUIDToString(b.RollbackTargetID)
+			rollbackTargetSourceRef = sourceRefByID[rollbackTargetID]
+		}
+		out[i] = &airlockv1.AgentBuildInfo{
+			Id:                      convert.PgUUIDToString(b.ID),
+			AgentId:                 convert.PgUUIDToString(b.AgentID),
+			Type:                    b.Type,
+			Status:                  b.Status,
+			Instructions:            b.Instructions,
+			ErrorMessage:            b.ErrorMessage,
+			SourceRef:               b.SourceRef,
+			ImageRef:                b.ImageRef,
+			StartedAt:               convert.PgTimestampToProto(b.StartedAt),
+			FinishedAt:              convert.PgTimestampToProto(b.FinishedAt),
+			LlmCalls:                b.LlmCalls,
+			LlmTokensIn:             b.LlmTokensIn,
+			LlmTokensOut:            b.LlmTokensOut,
+			LlmCostEstimate:         b.LlmCostEstimate,
+			RollbackTargetId:        rollbackTargetID,
+			RollbackTargetSourceRef: rollbackTargetSourceRef,
+			SdkVersion:              b.SdkVersion,
+		}
+	}
+	writeProto(w, http.StatusOK, &airlockv1.ListAgentBuildsResponse{Builds: out})
+}
 
-	writeProto(w, http.StatusOK, &airlockv1.FireCronResponse{
-		RunId: runID.String(),
+// GetBuild handles GET /api/v1/agents/{agentID}/builds/{buildID}.
+func (h *agentsHandler) GetBuild(w http.ResponseWriter, r *http.Request) {
+	buildID, err := parseUUID(chi.URLParam(r, "buildID"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid build ID")
+		return
+	}
+	res, err := h.svc.GetBuild(r.Context(), buildID)
+	if err != nil {
+		writeAgentsError(w, err, "failed to load build")
+		return
+	}
+	b := res.Build
+	var rollbackTargetID, rollbackTargetSourceRef string
+	if b.RollbackTargetID.Valid {
+		rollbackTargetID = convert.PgUUIDToString(b.RollbackTargetID)
+		if res.Target != nil {
+			rollbackTargetSourceRef = res.Target.SourceRef
+		}
+	}
+	writeProto(w, http.StatusOK, &airlockv1.GetAgentBuildResponse{
+		Build: &airlockv1.AgentBuildInfo{
+			Id:                      convert.PgUUIDToString(b.ID),
+			AgentId:                 convert.PgUUIDToString(b.AgentID),
+			Type:                    b.Type,
+			Status:                  b.Status,
+			Instructions:            b.Instructions,
+			SolLog:                  b.SolLog,
+			DockerLog:               b.DockerLog,
+			ErrorMessage:            b.ErrorMessage,
+			SourceRef:               b.SourceRef,
+			ImageRef:                b.ImageRef,
+			StartedAt:               convert.PgTimestampToProto(b.StartedAt),
+			FinishedAt:              convert.PgTimestampToProto(b.FinishedAt),
+			LogSeq:                  b.LogSeq,
+			LlmCalls:                b.LlmCalls,
+			LlmTokensIn:             b.LlmTokensIn,
+			LlmTokensOut:            b.LlmTokensOut,
+			LlmCostEstimate:         b.LlmCostEstimate,
+			RollbackTargetId:        rollbackTargetID,
+			RollbackTargetSourceRef: rollbackTargetSourceRef,
+			SdkVersion:              b.SdkVersion,
+		},
 	})
 }
 
-// --- helpers ---
+// --- members sub-routes (delegate to members.Service) ---
 
-// requireAccess checks if the current user has access to the agent via agent_members.
-func (h *agentsHandler) requireAccess(ctx context.Context, agent dbq.Agent) error {
-	userID := auth.UserIDFromContext(ctx)
-	q := dbq.New(h.db.Pool())
-	has, err := q.HasAgentAccess(ctx, dbq.HasAgentAccessParams{
-		AgentID: agent.ID,
-		UserID:  toPgUUID(userID),
-	})
-	if err != nil {
-		return fmt.Errorf("check access: %w", err)
+func writeMembersError(w http.ResponseWriter, err error, fallback string) {
+	status := service.HTTPStatus(err)
+	var msg string
+	switch {
+	case memberssvc.IsCannotRemoveOwner(err):
+		msg = "cannot remove the agent owner"
+	case errors.Is(err, service.ErrUnauthorized):
+		msg = "unauthorized"
+	case errors.Is(err, service.ErrForbidden):
+		msg = "agent admin access required"
+	case errors.Is(err, service.ErrNotFound):
+		msg = "agent not found"
+	case errors.Is(err, service.ErrInvalidInput):
+		msg = "invalid input"
+	default:
+		msg = fallback
 	}
-	if !has {
-		return fmt.Errorf("access denied")
-	}
-	return nil
-}
-
-// requireAgentAdmin checks if the current user has admin role on the agent.
-func (h *agentsHandler) requireAgentAdmin(ctx context.Context, agentID pgtype.UUID) error {
-	userID := auth.UserIDFromContext(ctx)
-	q := dbq.New(h.db.Pool())
-	member, err := q.GetAgentMember(ctx, dbq.GetAgentMemberParams{
-		AgentID: agentID,
-		UserID:  toPgUUID(userID),
-	})
-	if err != nil {
-		return fmt.Errorf("access denied")
-	}
-	if member.Role != "admin" {
-		return fmt.Errorf("admin access required")
-	}
-	return nil
+	writeError(w, status, msg)
 }
 
 // AddMember handles POST /api/v1/agents/{agentID}/members.
@@ -973,7 +517,6 @@ func (h *agentsHandler) AddMember(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid agent ID")
 		return
 	}
-
 	var req airlockv1.AddAgentMemberRequest
 	if err := decodeProto(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -983,71 +526,48 @@ func (h *agentsHandler) AddMember(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "user_id is required")
 		return
 	}
-	if req.Role != "admin" && req.Role != "user" {
-		writeError(w, http.StatusBadRequest, "role must be 'admin' or 'user'")
-		return
-	}
-
-	pgAgentID := toPgUUID(agentID)
-
-	// System admins can add themselves to any agent. Agent admins can add anyone.
-	claims := auth.ClaimsFromContext(ctx)
-	callerID := auth.UserIDFromContext(ctx)
 	targetID, err := parseUUID(req.UserId)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid user_id")
 		return
 	}
-
-	isSysAdmin := auth.RoleAtLeast(claims.TenantRole, "admin")
-	isSelfAdd := callerID == targetID
-
-	if isSysAdmin && isSelfAdd {
-		// System admin adding themselves — always allowed
-	} else if err := h.requireAgentAdmin(ctx, pgAgentID); err != nil {
-		writeError(w, http.StatusForbidden, "agent admin access required")
+	claims := auth.ClaimsFromContext(ctx)
+	callerID := auth.UserIDFromContext(ctx)
+	tenantRole := ""
+	if claims != nil {
+		tenantRole = claims.TenantRole
+	}
+	if err := h.members.Add(ctx, callerID, tenantRole, agentID, targetID, req.Role); err != nil {
+		if errors.Is(err, service.ErrInvalidInput) {
+			writeError(w, http.StatusBadRequest, "role must be 'admin' or 'user'")
+			return
+		}
+		writeMembersError(w, err, "failed to add member")
 		return
 	}
-
-	q := dbq.New(h.db.Pool())
-	if err := q.AddAgentMember(ctx, dbq.AddAgentMemberParams{
-		AgentID: pgAgentID,
-		UserID:  toPgUUID(targetID),
-		Role:    req.Role,
-	}); err != nil {
-		h.logger.Error("add agent member", zap.Error(err))
-		writeError(w, http.StatusInternalServerError, "failed to add member")
-		return
-	}
-
 	w.WriteHeader(http.StatusNoContent)
 }
 
 // ListMembers handles GET /api/v1/agents/{agentID}/members.
 func (h *agentsHandler) ListMembers(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
 	agentID, err := parseUUID(chi.URLParam(r, "agentID"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid agent ID")
 		return
 	}
-
-	q := dbq.New(h.db.Pool())
-	members, err := q.ListAgentMembers(ctx, toPgUUID(agentID))
+	rows, err := h.members.List(r.Context(), agentID)
 	if err != nil {
-		h.logger.Error("list agent members", zap.Error(err))
 		writeError(w, http.StatusInternalServerError, "failed to list members")
 		return
 	}
-
-	out := make([]*airlockv1.AgentMemberInfo, len(members))
-	for i, m := range members {
+	out := make([]*airlockv1.AgentMemberInfo, len(rows))
+	for i, m := range rows {
 		out[i] = &airlockv1.AgentMemberInfo{
-			UserId:      convert.PgUUIDToString(m.UserID),
+			UserId:      m.UserID.String(),
 			Email:       m.Email,
 			DisplayName: m.DisplayName,
 			Role:        m.Role,
-			CreatedAt:   convert.PgTimestampToProto(m.CreatedAt),
+			CreatedAt:   convert.PgTimestampToProto(pgtype.Timestamptz{Time: m.CreatedAt, Valid: !m.CreatedAt.IsZero()}),
 		}
 	}
 	writeProto(w, http.StatusOK, &airlockv1.ListAgentMembersResponse{Members: out})
@@ -1066,36 +586,15 @@ func (h *agentsHandler) RemoveMember(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid user ID")
 		return
 	}
-
-	pgAgentID := toPgUUID(agentID)
-	if err := h.requireAgentAdmin(ctx, pgAgentID); err != nil {
-		writeError(w, http.StatusForbidden, "agent admin access required")
+	callerID := auth.UserIDFromContext(ctx)
+	if err := h.members.Remove(ctx, callerID, agentID, targetID); err != nil {
+		writeMembersError(w, err, "failed to remove member")
 		return
 	}
-
-	// Prevent removing the agent owner.
-	q := dbq.New(h.db.Pool())
-	agent, err := q.GetAgentByID(ctx, pgAgentID)
-	if err != nil {
-		writeError(w, http.StatusNotFound, "agent not found")
-		return
-	}
-	if pgUUID(agent.UserID) == targetID {
-		writeError(w, http.StatusBadRequest, "cannot remove the agent owner")
-		return
-	}
-
-	if err := q.RemoveAgentMember(ctx, dbq.RemoveAgentMemberParams{
-		AgentID: pgAgentID,
-		UserID:  toPgUUID(targetID),
-	}); err != nil {
-		h.logger.Error("remove agent member", zap.Error(err))
-		writeError(w, http.StatusInternalServerError, "failed to remove member")
-		return
-	}
-
 	w.WriteHeader(http.StatusNoContent)
 }
+
+// --- proto helpers (still used by other handlers in the api package) ---
 
 func agentToProto(a dbq.Agent) *airlockv1.AgentInfo {
 	return &airlockv1.AgentInfo{
@@ -1143,10 +642,6 @@ func connectionToProto(c dbq.Connection, publicURL, agentID string) *airlockv1.C
 	}
 }
 
-// connectionWarnings returns human-readable health warnings for an OAuth
-// connection, surfaced behind a (!) indicator in the UI. A connection
-// with no refresh token can't be renewed by the refresh job — once its
-// access token expires it's dead until the user re-authorizes.
 func connectionWarnings(authMode string, authorized, hasRefreshToken bool, tokenExpiresAt pgtype.Timestamptz) []string {
 	if authMode != "oauth" || !authorized {
 		return nil
@@ -1202,114 +697,4 @@ func routeToProto(r dbq.AgentRoute) *airlockv1.RouteInfo {
 		Access:      r.Access,
 		Description: r.Description,
 	}
-}
-
-// ListBuilds handles GET /api/v1/agents/{agentID}/builds.
-func (h *agentsHandler) ListBuilds(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	agentID, err := parseUUID(chi.URLParam(r, "agentID"))
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid agent ID")
-		return
-	}
-
-	q := dbq.New(h.db.Pool())
-	builds, err := q.ListAgentBuildsByAgent(ctx, toPgUUID(agentID))
-	if err != nil {
-		h.logger.Error("list builds", zap.Error(err))
-		writeError(w, http.StatusInternalServerError, "failed to list builds")
-		return
-	}
-
-	// In-memory join for rollback_target_source_ref: any rollback row
-	// whose target also appears in the latest-50 window gets its target's
-	// source_ref denormalized so the UI can render the short hash without
-	// a second fetch. Targets older than the window stay empty (UI falls
-	// back to the bare id).
-	sourceRefByID := make(map[string]string, len(builds))
-	for _, b := range builds {
-		sourceRefByID[convert.PgUUIDToString(b.ID)] = b.SourceRef
-	}
-
-	out := make([]*airlockv1.AgentBuildInfo, len(builds))
-	for i, b := range builds {
-		var rollbackTargetID, rollbackTargetSourceRef string
-		if b.RollbackTargetID.Valid {
-			rollbackTargetID = convert.PgUUIDToString(b.RollbackTargetID)
-			rollbackTargetSourceRef = sourceRefByID[rollbackTargetID]
-		}
-		out[i] = &airlockv1.AgentBuildInfo{
-			Id:                      convert.PgUUIDToString(b.ID),
-			AgentId:                 convert.PgUUIDToString(b.AgentID),
-			Type:                    b.Type,
-			Status:                  b.Status,
-			Instructions:            b.Instructions,
-			ErrorMessage:            b.ErrorMessage,
-			SourceRef:               b.SourceRef,
-			ImageRef:                b.ImageRef,
-			StartedAt:               convert.PgTimestampToProto(b.StartedAt),
-			FinishedAt:              convert.PgTimestampToProto(b.FinishedAt),
-			LlmCalls:                b.LlmCalls,
-			LlmTokensIn:             b.LlmTokensIn,
-			LlmTokensOut:            b.LlmTokensOut,
-			LlmCostEstimate:         b.LlmCostEstimate,
-			RollbackTargetId:        rollbackTargetID,
-			RollbackTargetSourceRef: rollbackTargetSourceRef,
-			SdkVersion:              b.SdkVersion,
-		}
-	}
-
-	writeProto(w, http.StatusOK, &airlockv1.ListAgentBuildsResponse{Builds: out})
-}
-
-// GetBuild handles GET /api/v1/agents/{agentID}/builds/{buildID}.
-func (h *agentsHandler) GetBuild(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	buildID, err := parseUUID(chi.URLParam(r, "buildID"))
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid build ID")
-		return
-	}
-
-	q := dbq.New(h.db.Pool())
-	b, err := q.GetAgentBuild(ctx, toPgUUID(buildID))
-	if err != nil {
-		writeError(w, http.StatusNotFound, "build not found")
-		return
-	}
-
-	var rollbackTargetID, rollbackTargetSourceRef string
-	if b.RollbackTargetID.Valid {
-		rollbackTargetID = convert.PgUUIDToString(b.RollbackTargetID)
-		// Detail view fetches the target separately so it works for
-		// targets outside the latest-50 ListBuilds window.
-		if target, err := q.GetAgentBuild(ctx, b.RollbackTargetID); err == nil {
-			rollbackTargetSourceRef = target.SourceRef
-		}
-	}
-
-	writeProto(w, http.StatusOK, &airlockv1.GetAgentBuildResponse{
-		Build: &airlockv1.AgentBuildInfo{
-			Id:                      convert.PgUUIDToString(b.ID),
-			AgentId:                 convert.PgUUIDToString(b.AgentID),
-			Type:                    b.Type,
-			Status:                  b.Status,
-			Instructions:            b.Instructions,
-			SolLog:                  b.SolLog,
-			DockerLog:               b.DockerLog,
-			ErrorMessage:            b.ErrorMessage,
-			SourceRef:               b.SourceRef,
-			ImageRef:                b.ImageRef,
-			StartedAt:               convert.PgTimestampToProto(b.StartedAt),
-			FinishedAt:              convert.PgTimestampToProto(b.FinishedAt),
-			LogSeq:                  b.LogSeq,
-			LlmCalls:                b.LlmCalls,
-			LlmTokensIn:             b.LlmTokensIn,
-			LlmTokensOut:            b.LlmTokensOut,
-			LlmCostEstimate:         b.LlmCostEstimate,
-			RollbackTargetId:        rollbackTargetID,
-			RollbackTargetSourceRef: rollbackTargetSourceRef,
-			SdkVersion:              b.SdkVersion,
-		},
-	})
 }
