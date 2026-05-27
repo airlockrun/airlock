@@ -57,8 +57,10 @@ done
 
 # --- 2. docker-compose.yml ghcr tags are internally consistent ---
 
-# Match any ghcr.io/airlockrun/airlock(-something):vX.Y.Z occurrence.
-tags=$(grep -oE 'ghcr\.io/airlockrun/airlock[a-z-]*:v[0-9.]+' docker-compose.yml | sed 's/.*://' | sort -u || true)
+# Match any ghcr.io/airlockrun/airlock(-something):vX.Y.Z[-pre] occurrence.
+# Pre-release suffix (e.g. -rc.1, -alpha.2) is required during the rc cycle
+# leading up to a stable tag.
+tags=$(grep -oE 'ghcr\.io/airlockrun/airlock[a-z-]*:v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?' docker-compose.yml | sed 's/.*://' | sort -u || true)
 n=$(printf '%s\n' "$tags" | grep -c . || true)
 if [ "$n" -eq 0 ]; then
 	err "docker-compose.yml: no ghcr image tags found (expected at least one)"
@@ -85,10 +87,11 @@ fi
 
 # --- 4. README install checkout version matches compose tag ---
 
-# Pull the version out of the install step, e.g. `git checkout v0.2.16`.
-# Match only inside fenced code blocks to avoid prose hits like
-# `git checkout vX.Y.Z` in the Updating section (placeholder, not literal).
-readme_ver=$(grep -oE '^git checkout v[0-9]+\.[0-9]+\.[0-9]+$' README.md | head -1 | awk '{print $3}')
+# Pull the version out of the install step, e.g. `git checkout v0.2.16` or
+# `git checkout v0.4.0-rc.1`. Match only inside fenced code blocks to avoid
+# prose hits like `git checkout vX.Y.Z` in the Updating section (placeholder,
+# not literal). Pre-release suffix optional.
+readme_ver=$(grep -oE '^git checkout v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$' README.md | head -1 | awk '{print $3}')
 if [ -z "$readme_ver" ]; then
 	err "README.md: missing literal 'git checkout vX.Y.Z' install step"
 elif [ "$n" -eq 1 ] && [ "$readme_ver" != "$tags" ]; then
