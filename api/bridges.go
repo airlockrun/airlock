@@ -1,12 +1,10 @@
 package api
 
 import (
-	"context"
 	"errors"
 	"net/http"
 
 	"github.com/airlockrun/airlock/auth"
-	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 	"github.com/airlockrun/airlock/service"
@@ -244,23 +242,3 @@ func bridgeToProto(br dbq.Bridge) *airlockv1.BridgeInfo {
 		br.Settings,
 	)
 }
-
-// verifyAgentOwnership remains in the api package because credentials.go
-// uses it from its own handler. The bridges service has its own copy
-// since it's part of the gating boundary now.
-func verifyAgentOwnership(ctx context.Context, database *db.DB, agentID, userID uuid.UUID) error {
-	q := dbq.New(database.Pool())
-	agent, err := q.GetAgentByID(ctx, pgtype.UUID{Bytes: agentID, Valid: true})
-	if err != nil {
-		return errAgentNotFound
-	}
-	if pgUUID(agent.UserID) != userID {
-		return errAgentNotOwner
-	}
-	return nil
-}
-
-var (
-	errAgentNotFound = errors.New("agent not found")
-	errAgentNotOwner = errors.New("not owner")
-)

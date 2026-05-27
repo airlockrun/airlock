@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 
+	"github.com/airlockrun/agentsdk"
 	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
@@ -154,8 +155,8 @@ func (s *Service) Create(ctx context.Context, callerID uuid.UUID, tenantRole str
 		if err != nil {
 			return Result{}, service.Detail(service.ErrInvalidInput, "invalid agent_id")
 		}
-		if err := verifyAgentOwnership(ctx, q, agentID, callerID); err != nil {
-			return Result{}, service.ErrForbidden
+		if err := service.RequireAgentAccess(ctx, q, callerID, agentID, agentsdk.AccessAdmin); err != nil {
+			return Result{}, err
 		}
 		agentPgID = pgtype.UUID{Bytes: agentID, Valid: true}
 	}
@@ -293,8 +294,8 @@ func (s *Service) Update(ctx context.Context, callerID uuid.UUID, tenantRole str
 			return Result{}, service.Detail(service.ErrInvalidInput, "invalid agent_id")
 		}
 		if !isAdmin {
-			if err := verifyAgentOwnership(ctx, q, agentID, callerID); err != nil {
-				return Result{}, service.ErrForbidden
+			if err := service.RequireAgentAccess(ctx, q, callerID, agentID, agentsdk.AccessAdmin); err != nil {
+				return Result{}, err
 			}
 		}
 		newAgentID = pgtype.UUID{Bytes: agentID, Valid: true}
@@ -381,17 +382,4 @@ func ownerFromJoin(createdBy pgtype.UUID, email, name pgtype.Text) *OwnerInfo {
 		Email:       email.String,
 		DisplayName: name.String,
 	}
-}
-
-// verifyAgentOwnership preserves the original handler-local helper:
-// the caller is the agent's owner (users.id == agent.user_id).
-func verifyAgentOwnership(ctx context.Context, q *dbq.Queries, agentID, userID uuid.UUID) error {
-	agent, err := q.GetAgentByID(ctx, pgtype.UUID{Bytes: agentID, Valid: true})
-	if err != nil {
-		return service.ErrNotFound
-	}
-	if uuid.UUID(agent.UserID.Bytes) != userID {
-		return service.ErrForbidden
-	}
-	return nil
 }
