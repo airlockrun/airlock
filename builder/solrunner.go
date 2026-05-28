@@ -40,6 +40,7 @@ type solRunOpts struct {
 	TestDBURL       string   // test schema DB URL with search_path baked in
 	TestDBPSQL      string   // test schema DB URL without search_path (for psql)
 	TestDBSchema    string   // test schema name (for psql SET search_path)
+	GoProxyDir      string   // dev: host path to the generated lib proxy; empty in prod
 }
 
 // solRunResult captures the outcome of an in-process Sol run. ExitStatus
@@ -128,14 +129,14 @@ func (b *BuildService) runSolInProcess(ctx context.Context, opts solRunOpts) (*s
 		workspaceMount = dmount.Mount{Type: dmount.TypeBind, Source: opts.WorkDir, Target: "/workspace"}
 	}
 	mounts := []dmount.Mount{workspaceMount}
-	// Dev: overlay the baked /libs with the live source tree so agentsdk
-	// edits are visible without rebuilding the agent-builder image. Only
-	// when the operator explicitly set AGENT_LIBS_PATH — in prod
-	// AgentLibsPath holds the extracted cache and overlaying it would
-	// just shadow the image's authoritative content with a copy of
-	// itself (and risks masking files mid-extraction or if the docker cp
-	// extraction is partial).
+	var preCmd string
 	if b.cfg.AgentLibsPathExplicit {
+		// Dev: overlay the live lib trees read-only at /libs so the codegen
+		// LLM reads the current agentsdk/goai/sol source + llms.md guide
+		// (the prompt instructs it to). This is docs/reference only — go
+		// resolution goes through the proxy below, not /libs (the committed
+		// go.mod has no replaces pointing here). Prod uses the agent-builder
+		// image's baked /libs for the same docs.
 		for _, sub := range []string{"agentsdk", "goai", "sol"} {
 			mounts = append(mounts, dmount.Mount{
 				Type:     dmount.TypeBind,
@@ -145,11 +146,26 @@ func (b *BuildService) runSolInProcess(ctx context.Context, opts solRunOpts) (*s
 			})
 		}
 	}
+	// Dev: mount the generated lib proxy and point GOPROXY at it so the owned
+	// libs resolve from live source. Evict those libs from the shared
+	// module-cache volume at startup (PreCmd) since the proxy serves changing
+	// content under a stable version. Prod: GoProxyDir empty → public proxy.
+	if opts.GoProxyDir != "" {
+		mounts = append(mounts, dmount.Mount{
+			Type:     dmount.TypeBind,
+			Source:   opts.GoProxyDir,
+			Target:   "/goproxy",
+			ReadOnly: true,
+		})
+		toolEnv = append(toolEnv, "GOPROXY=file:///goproxy,https://proxy.golang.org")
+		preCmd = bustLibCacheShell("/tmp/go-mod")
+	}
 	tc, err := b.containers.StartToolserver(ctx, container.ToolserverOpts{
 		Image:   b.cfg.AgentBuilderImage,
 		Mounts:  mounts,
 		WorkDir: agentDir,
 		Env:     toolEnv,
+		PreCmd:  preCmd,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("start toolserver: %w", err)

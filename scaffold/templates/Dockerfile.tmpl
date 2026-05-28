@@ -1,53 +1,39 @@
-# Default placeholder stages for the libs-owned / libs-ext build contexts
-# airlock supplies via `docker build --build-context libs-owned=…` in its
-# own pipeline. On a user clone (`docker build .`) those flags aren't
-# present, so the COPY lines below would fail to resolve the named
-# contexts; pointing them at an empty stage by default makes the COPY
-# land empty dirs, and the build then resolves agentsdk/goai/sol/goose/templ
-# from the public Go module proxy via the committed go.mod (which carries
-# no /libs/... replaces — those live in airlock's build-time go.work only).
-FROM busybox:1.36 AS libs-default
-RUN mkdir -p /agentsdk /goai /sol /goose /templ
-FROM libs-default AS libs-owned
-FROM libs-default AS libs-ext
+# Default empty module proxy. Airlock's dev builds override this stage with
+# `docker build --build-context goproxy=<dir>`, where <dir> is a generated
+# file:// module proxy serving the airlock-owned libs (agentsdk/goai/sol) at
+# their pinned versions from live source. On a prod build or a user clone
+# (`docker build .`) the stage stays empty: GOPROXY's file:// entry returns
+# 404 for every module and the build falls through to the public proxy. So
+# the committed go.mod — which pins published versions and carries no
+# replace directives — resolves normally.
+FROM scratch AS goproxy
 
 FROM golang:{{.GoVersion}} AS builder
 
 WORKDIR /build
 
-# Copy go.mod/go.sum + go.work first for layer caching. go.work is
-# airlock-generated (gitignored in the agent repo) and carries the
-# /libs/... replace directives that the build relies on; without it
-# `go mod download` would try to fetch agentsdk/goai/sol from the public
-# module proxy.
-COPY go.mod go.sum* go.work* ./
-
-# Libs come from two BuildKit contexts that airlock provides at build time:
-#   libs-owned: agentsdk/goai/sol — overlay-able from a dev workspace via
-#               AGENT_LIBS_PATH (live edits) or extracted from the
-#               agent-builder image in prod.
-#   libs-ext:   goose/templ — always extracted from the agent-builder image
-#               (devs don't edit these).
-#
-# Splitting the contexts is required because BuildKit doesn't follow symlinks
-# inside a context dir, so we can't merge owned + ext into one path.
-COPY --from=libs-owned agentsdk /libs/agentsdk
-COPY --from=libs-owned goai     /libs/goai
-COPY --from=libs-owned sol      /libs/sol
-COPY --from=libs-ext   goose    /libs/goose
-COPY --from=libs-ext   templ    /libs/templ
-
-# Download deps with cache mount — survives layer invalidation across builds
-RUN --mount=type=cache,target=/go/pkg/mod \
-    go mod download
-
-# Copy source
+COPY go.mod go.sum* ./
 COPY . .
 
-# `go mod tidy` fills go.sum entries for the `tool` directive's transitive
-# deps (plain `go mod download` skips them as of Go 1.24).
-RUN --mount=type=cache,target=/go/pkg/mod \
+# Resolve modules via the bind-mounted goproxy first, public proxy second.
+# The goproxy bind is build-time only (not baked into a layer). The dev
+# proxy serves the owned libs at versions that change content under a stable
+# version string across builds, so evict those three from the module cache
+# first — the cache keys by version and would otherwise serve stale source.
+# Third-party modules stay cached. GONOSUMDB=* skips the checksum DB for the
+# unpublished local versions. `go mod tidy` fills go.sum for the templ tool
+# directive's transitive deps that `go mod download` skips as of Go 1.24.
+RUN --mount=type=bind,from=goproxy,target=/goproxy \
+    --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
+    chmod -R u+w /go/pkg/mod/cache/download/github.com/airlockrun /go/pkg/mod/github.com/airlockrun 2>/dev/null || true; \
+    rm -rf /go/pkg/mod/cache/download/github.com/airlockrun/agentsdk \
+           /go/pkg/mod/cache/download/github.com/airlockrun/goai \
+           /go/pkg/mod/cache/download/github.com/airlockrun/sol \
+           /go/pkg/mod/github.com/airlockrun/agentsdk@* \
+           /go/pkg/mod/github.com/airlockrun/goai@* \
+           /go/pkg/mod/github.com/airlockrun/sol@* 2>/dev/null || true; \
+    GOPROXY="file:///goproxy,https://proxy.golang.org" GONOSUMDB="*" GOSUMDB=off \
     go mod tidy && go tool templ generate && go build -o /agent .
 
 # Runtime

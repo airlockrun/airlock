@@ -62,6 +62,16 @@ func (b *BuildService) Execute(ctx context.Context, plan BuildPlan) (string, err
 			zap.String("agent_id", agentID), zap.String("repo", repoPath))
 	}
 
+	// Dev: generate the local lib proxy once for this build — shared by
+	// codegen's toolserver and the image build, both of which point GOPROXY
+	// at it so agentsdk/goai/sol resolve from live source. Prod: empty dir,
+	// builds resolve published versions from the public proxy.
+	goProxyDir, proxyCleanup, err := b.ensureLibProxy()
+	if err != nil {
+		return "", fmt.Errorf("generate lib proxy: %w", err)
+	}
+	defer proxyCleanup()
+
 	// ── Phase A: per-flow setup ────────────────────────────────────────
 	//
 	// For initial builds we still need to create the per-agent repo,
@@ -232,7 +242,7 @@ func (b *BuildService) Execute(ctx context.Context, plan BuildPlan) (string, err
 	testDBPSQL := b.agentDBURLBase(b.cfg.DBHostAgent, schemaName, dbPassword)
 
 	// ── Phase C: codegen (Sol) if Instruction is non-empty ─────────────
-	commitHash, exitMessage, codegenErr := b.runCodegen(ctx, plan, agent, build, agentID, agentUUID, testDBURL, testDBPSQL, cloneName, solLog)
+	commitHash, exitMessage, codegenErr := b.runCodegen(ctx, plan, agent, build, agentID, agentUUID, testDBURL, testDBPSQL, cloneName, goProxyDir, solLog)
 	if codegenErr != nil {
 		// A "refused" exit is recorded distinctly: the request was out
 		// of scope, the existing agent is untouched — not a build that
@@ -328,25 +338,7 @@ func (b *BuildService) Execute(ctx context.Context, plan BuildPlan) (string, err
 		completeBuild("failed", err.Error(), commitHash, "")
 		return "", fmt.Errorf("generate Dockerfile: %w", err)
 	}
-	// Inject the build-time go.work into the docker build context.
-	// Sibling of go.mod; provides the /libs/... replace directives the
-	// committed go.mod no longer carries. Overwrites any user-pushed
-	// go.work in the working tree.
-	if err := writeBuildGoWork(contextDir); err != nil {
-		completeBuild("failed", err.Error(), commitHash, "")
-		return "", fmt.Errorf("write go.work: %w", err)
-	}
-	// Bump the agent's go.mod require line to the current SDK version so
-	// gopls/editor tooling shows what the build is actually linking
-	// against (the replace directive shadows it for compilation). Skipped
-	// on the very first build (scaffold already wrote the right version).
-	if plan.Kind != BuildKindBuild {
-		if err := bumpAgentSDKRequire(ctx, contextDir, agentsdk.Version); err != nil {
-			completeBuild("failed", err.Error(), commitHash, "")
-			return "", fmt.Errorf("bump agent SDK require: %w", err)
-		}
-	}
-	imageTag, err := buildImage(ctx, b.cfg, agentID, contextDir, commitHash, filepath.Join(dockerfileDir, "Dockerfile"), dockerLog)
+	imageTag, err := buildImage(ctx, b.cfg, agentID, contextDir, commitHash, filepath.Join(dockerfileDir, "Dockerfile"), goProxyDir, dockerLog)
 	if err != nil {
 		// Bare rebuild (upgrade with no instructions and no source change)
 		// against a newer SDK is the canonical case where compile breakage

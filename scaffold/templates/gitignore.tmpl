@@ -1,4 +1,5 @@
-# Build-time files airlock generates into the build context — your own
-# copy is fine, but airlock silently overwrites these every build.
+# A local go.work you create for your own multi-module editing is ignored
+# so it never lands in a push. Airlock's builds resolve libs via GOPROXY,
+# not go.work, so committing one wouldn't affect them anyway.
 go.work
 go.work.sum

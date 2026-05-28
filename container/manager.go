@@ -29,6 +29,11 @@ type ToolserverOpts struct {
 	Mounts  []mount.Mount // workspace bind mounts
 	WorkDir string        // -space-dir value inside the container
 	Env     []string      // additional environment variables
+	// PreCmd, when non-empty, is a shell snippet run once at container
+	// startup before the toolserver binary (e.g. evicting stale lib
+	// versions from the shared module-cache volume in dev). The toolserver
+	// is then exec'd so it remains PID 1's foreground process.
+	PreCmd string
 }
 
 // ContainerManager manages the lifecycle of agent containers.

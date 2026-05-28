@@ -6,14 +6,11 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
 	"github.com/airlockrun/agentsdk"
 	"github.com/airlockrun/airlock/scaffold"
-	"github.com/airlockrun/goai"
-	"github.com/airlockrun/sol"
 )
 
 // HousekeepingResult reports what runHousekeeping changed in the agent repo
@@ -29,30 +26,21 @@ func (r HousekeepingResult) Changed() bool {
 	return r.DockerfileChanged || r.GitignoreChanged || r.GoModChanged
 }
 
-// gitignoreManagedLines are the entries airlock requires in every agent's
-// .gitignore so its build-time go.work pair (written into the working tree
-// per build) doesn't get accidentally committed.
+// gitignoreManagedLines are the entries airlock keeps in every agent's
+// .gitignore. A dev cloning the repo may create a local go.work for their
+// own multi-module setup; keeping it ignored stops it leaking into a push.
 var gitignoreManagedLines = []string{"go.work", "go.work.sum"}
-
-// libRequires maps the airlock-managed module path to its currently-compiled
-// version. These are the only require lines airlock touches in an agent's
-// go.mod — everything else is user-owned. Read from the lib's compiled-in
-// const so airlock and the agent always agree on what version is shipping.
-func libRequires() map[string]string {
-	return map[string]string{
-		"github.com/airlockrun/agentsdk": "v" + agentsdk.Version,
-		"github.com/airlockrun/goai":     "v" + goai.Version,
-		"github.com/airlockrun/sol":      "v" + sol.Version,
-	}
-}
 
 // runHousekeeping rewrites the airlock-managed files in repoPath to match
 // the current airlock binary's idea of canonical state:
 //   - Dockerfile: regenerated from scaffold/templates/Dockerfile.tmpl
-//   - .gitignore: airlock-required entries (go.work, go.work.sum) appended
-//     if absent; user's other entries untouched
-//   - go.mod: require lines for agentsdk/goai/sol pinned to the const
-//     versions IFF they're already listed (don't add to non-importing agents)
+//   - .gitignore: airlock-kept entries appended if absent; user's other
+//     entries untouched
+//   - go.mod: the agentsdk `require` pinned to the current const version
+//     (regex edit — agentsdk is the only owned lib the agent requires
+//     directly; goai/sol are indirect and resolved by `go mod tidy` via the
+//     build's module proxy). No `go mod edit` shell-out, so this works in
+//     the prod airlock container which has no Go toolchain.
 //
 // The working tree is mutated in place. The caller is responsible for
 // committing the changes (read HousekeepingResult.Changed and run a chore
@@ -72,23 +60,41 @@ func runHousekeeping(ctx context.Context, repoPath string, data scaffold.Scaffol
 		return res, fmt.Errorf("stat go.mod: %w", err)
 	}
 
+	// Remove any stale go.work from the working tree. It's gitignored, so
+	// it never gets committed — but the Dockerfile's `COPY . .` would copy
+	// it into the build context, and `go mod tidy` honors its /libs
+	// replaces (which no longer exist), failing the build. Airlock doesn't
+	// write go.work anymore; this clears leftovers from older builds.
+	for _, f := range []string{"go.work", "go.work.sum"} {
+		if err := os.Remove(filepath.Join(repoPath, f)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return res, fmt.Errorf("remove stale %s: %w", f, err)
+		}
+	}
+
 	dockerfileChanged, err := rewriteDockerfile(repoPath, data)
 	if err != nil {
 		return res, fmt.Errorf("rewrite Dockerfile: %w", err)
 	}
 	res.DockerfileChanged = dockerfileChanged
 
-	gitignoreChanged, err := ensureGitignoreEntries(repoPath, gitignoreManagedLines)
+	gitignoreChanged, err := reconcileGitignore(repoPath, gitignoreManagedLines, gitignoreRemoveLines)
 	if err != nil {
 		return res, fmt.Errorf("update .gitignore: %w", err)
 	}
 	res.GitignoreChanged = gitignoreChanged
 
-	goModChanged, err := refreshLibRequires(ctx, repoPath, libRequires())
+	before, err := os.ReadFile(goModPath)
 	if err != nil {
-		return res, fmt.Errorf("refresh go.mod requires: %w", err)
+		return res, fmt.Errorf("read go.mod: %w", err)
 	}
-	res.GoModChanged = goModChanged
+	if err := bumpAgentSDKRequire(ctx, repoPath, agentsdk.Version); err != nil {
+		return res, fmt.Errorf("bump agentsdk require: %w", err)
+	}
+	after, err := os.ReadFile(goModPath)
+	if err != nil {
+		return res, fmt.Errorf("read go.mod: %w", err)
+	}
+	res.GoModChanged = string(before) != string(after)
 
 	return res, nil
 }
@@ -111,75 +117,59 @@ func rewriteDockerfile(repoPath string, data scaffold.ScaffoldData) (bool, error
 	return string(before) != string(after), nil
 }
 
-// ensureGitignoreEntries appends any of `lines` that aren't already present
-// in repoPath/.gitignore. Comparison is line-equality (whitespace-trimmed)
-// so a re-ordered file or surrounding comments don't trigger spurious
-// rewrites. Creates the file if missing.
-func ensureGitignoreEntries(repoPath string, lines []string) (bool, error) {
+// gitignoreRemoveLines are entries airlock must strip from .gitignore.
+// Dockerfile is committed (so users can `docker build .` locally); an old
+// .gitignore listing it would block airlock from committing the
+// regenerated Dockerfile (`git add` refuses an ignored path).
+var gitignoreRemoveLines = []string{"Dockerfile"}
+
+// reconcileGitignore makes .gitignore carry airlock's managed entries and
+// none of its forbidden ones: appends `add` lines that are absent, drops any
+// line matching `remove`. User-authored lines are preserved in place.
+// Comparison is whitespace-trimmed. Creates the file if missing. Returns
+// whether the file changed.
+func reconcileGitignore(repoPath string, add, remove []string) (bool, error) {
 	target := filepath.Join(repoPath, ".gitignore")
 	raw, err := os.ReadFile(target)
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return false, err
 	}
-	existing := map[string]struct{}{}
-	for _, l := range strings.Split(string(raw), "\n") {
-		existing[strings.TrimSpace(l)] = struct{}{}
+	removeSet := map[string]struct{}{}
+	for _, l := range remove {
+		removeSet[l] = struct{}{}
 	}
-	var toAppend []string
+
+	// Preserve the original line structure minus a trailing empty element
+	// from a final newline (re-added on write). Drop forbidden lines.
+	lines := strings.Split(string(raw), "\n")
+	if n := len(lines); n > 0 && lines[n-1] == "" {
+		lines = lines[:n-1]
+	}
+	present := map[string]struct{}{}
+	kept := make([]string, 0, len(lines))
+	changed := false
 	for _, l := range lines {
-		if _, ok := existing[l]; !ok {
-			toAppend = append(toAppend, l)
+		if _, drop := removeSet[strings.TrimSpace(l)]; drop {
+			changed = true
+			continue
+		}
+		kept = append(kept, l)
+		present[strings.TrimSpace(l)] = struct{}{}
+	}
+	for _, l := range add {
+		if _, ok := present[l]; !ok {
+			kept = append(kept, l)
+			changed = true
 		}
 	}
-	if len(toAppend) == 0 {
+	if !changed {
 		return false, nil
 	}
-	var b strings.Builder
-	b.Write(raw)
-	// Make sure the existing content ends with a newline before our
-	// appended block so the new entries land on their own lines.
-	if len(raw) > 0 && raw[len(raw)-1] != '\n' {
-		b.WriteByte('\n')
-	}
-	for _, l := range toAppend {
-		b.WriteString(l)
-		b.WriteByte('\n')
-	}
-	if err := os.WriteFile(target, []byte(b.String()), 0o644); err != nil {
+	out := strings.Join(kept, "\n") + "\n"
+	if err := os.WriteFile(target, []byte(out), 0o644); err != nil {
 		return false, err
 	}
 	return true, nil
-}
-
-// refreshLibRequires pins each managed module to the given version IFF that
-// module already appears in go.mod's require list. New modules are never
-// added — an agent that doesn't import a lib must not gain a dangling
-// require for it. Returns whether go.mod changed.
-//
-// Uses `go mod edit -require=mod@ver`, which is format-preserving and
-// idempotent (already-correct version → no change).
-func refreshLibRequires(ctx context.Context, repoPath string, want map[string]string) (bool, error) {
-	goModPath := filepath.Join(repoPath, "go.mod")
-	before, err := os.ReadFile(goModPath)
-	if err != nil {
-		return false, err
-	}
-	beforeStr := string(before)
-	for mod, ver := range want {
-		// Match the module path as a whole token to avoid a partial
-		// prefix match (e.g. agentsdk-foo containing agentsdk).
-		if !strings.Contains(beforeStr, mod+" ") && !strings.Contains(beforeStr, "\t"+mod+" ") {
-			continue
-		}
-		if err := runGoMod(ctx, repoPath, "edit", "-require="+mod+"@"+ver); err != nil {
-			return false, fmt.Errorf("go mod edit -require=%s@%s: %w", mod, ver, err)
-		}
-	}
-	after, err := os.ReadFile(goModPath)
-	if err != nil {
-		return false, err
-	}
-	return string(before) != string(after), nil
 }
 
 // commitHousekeeping stages the airlock-managed files that runHousekeeping
@@ -211,21 +201,6 @@ func commitHousekeeping(repoPath string, r HousekeepingResult) error {
 		"--author=Airlock <airlock@localhost>",
 		"-m", msg); err != nil {
 		return fmt.Errorf("git commit: %w", err)
-	}
-	return nil
-}
-
-// runGoMod runs `go mod <args...>` in dir with a clean git environment
-// (otherwise a parent-shell GIT_INDEX_FILE poisons any git invocations
-// `go mod` makes — same gotcha as runGit). Non-zero exit returns the
-// combined output as the error message so callers can surface it.
-func runGoMod(ctx context.Context, dir string, args ...string) error {
-	cmd := exec.CommandContext(ctx, "go", append([]string{"mod"}, args...)...)
-	cmd.Dir = dir
-	cmd.Env = gitCleanEnv()
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("%s: %s", err, strings.TrimSpace(string(out)))
 	}
 	return nil
 }

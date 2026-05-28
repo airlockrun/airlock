@@ -114,9 +114,15 @@ func TestUpStripLibsReplaces(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read dirty .gitignore: %v", err)
 	}
-	for _, want := range []string{"Dockerfile", "go.work", "go.work.sum"} {
+	for _, want := range []string{"go.work", "go.work.sum"} {
 		if !strings.Contains(string(gi), want) {
 			t.Errorf("dirty .gitignore missing %q", want)
+		}
+	}
+	// Dockerfile is committed (not ignored) so users can `docker build .`.
+	for _, line := range strings.Split(string(gi), "\n") {
+		if strings.TrimSpace(line) == "Dockerfile" {
+			t.Errorf("dirty .gitignore must not ignore Dockerfile:\n%s", gi)
 		}
 	}
 
@@ -139,5 +145,52 @@ func TestUpStripLibsReplaces_NoBaseDir(t *testing.T) {
 	t.Setenv("AGENT_REPOS_PATH", filepath.Join(t.TempDir(), "does-not-exist"))
 	if err := upStripLibsReplaces(context.Background(), nil); err != nil {
 		t.Fatalf("fresh install (missing base) should be no-op, got: %v", err)
+	}
+}
+
+// TestUpStripLibsReplaces_ResetsStaleBranch mirrors the prod failure: an
+// agent left checked out on a stale upgrade/* branch with uncommitted
+// working-tree scratch, whose main still carries the /libs replaces. The
+// migration must reset to main, strip the replaces, and commit — not skip
+// it for "dirtiness" (which left the replaces alive and broke builds).
+func TestUpStripLibsReplaces_ResetsStaleBranch(t *testing.T) {
+	base := t.TempDir()
+	t.Setenv("AGENT_REPOS_PATH", base)
+	ctx := context.Background()
+
+	dir := initAgentRepo(t, base, "33333333-3333-3333-3333-333333333333", true)
+
+	// Leave it on a stale upgrade branch with an uncommitted go.mod edit.
+	if err := gitRun(ctx, dir, "checkout", "-b", "upgrade/stale"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"),
+		[]byte("module agent\n\ngo 1.26\n\nrequire github.com/airlockrun/agentsdk v0.9.9\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := upStripLibsReplaces(ctx, nil); err != nil {
+		t.Fatalf("upStripLibsReplaces: %v", err)
+	}
+
+	branch, _ := gitOutput(ctx, dir, "branch", "--show-current")
+	if strings.TrimSpace(branch) != "main" {
+		t.Errorf("expected repo on main after migration, got %q", branch)
+	}
+	goMod, _ := os.ReadFile(filepath.Join(dir, "go.mod"))
+	for _, unwanted := range []string{"/libs/agentsdk", "/libs/templ", "/libs/goose"} {
+		if strings.Contains(string(goMod), unwanted) {
+			t.Errorf("go.mod still contains %q after migration:\n%s", unwanted, goMod)
+		}
+	}
+	// The strip is committed on main, not left in the working tree.
+	status, _ := gitOutput(ctx, dir, "status", "--porcelain")
+	if strings.TrimSpace(status) != "" {
+		t.Errorf("expected clean tree after migration, got:\n%s", status)
+	}
+	// Stale branch preserved for manual recovery.
+	branches, _ := gitOutput(ctx, dir, "branch", "--format=%(refname:short)")
+	if !strings.Contains(branches, "upgrade/stale") {
+		t.Errorf("stale branch should be preserved; got:\n%s", branches)
 	}
 }

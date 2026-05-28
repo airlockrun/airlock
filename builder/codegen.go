@@ -27,6 +27,7 @@ func (b *BuildService) runCodegen(
 	agentID string,
 	agentUUID uuid.UUID,
 	testDBURL, testDBPSQL, testDBSchema string,
+	goProxyDir string,
 	logLine func(string),
 ) (string, string, error) {
 	if plan.Instruction == "" {
@@ -49,13 +50,10 @@ func (b *BuildService) runCodegen(
 	if err := CloneAgentRepo(repoPath, branch, workDir); err != nil {
 		return "", "", fmt.Errorf("clone agent repo: %w", err)
 	}
-
-	// Inject the build-time go.work — overrides the agent's (now-clean)
-	// go.mod with /libs/... replaces so codegen's go-tool calls resolve
-	// against the airlock-bundled SDK source.
-	if err := writeBuildGoWork(workDir); err != nil {
-		return "", "", err
-	}
+	// Lib resolution: the toolserver gets GOPROXY pointed at the dev lib
+	// proxy (when goProxyDir is set) so codegen's go-tool calls resolve
+	// agentsdk/goai/sol from live source. The committed go.mod stays clean
+	// (published versions, no replaces) — see solRunOpts.GoProxyDir.
 
 	// Auto-fix diagnostics file lands in the workspace before Sol runs.
 	if plan.Diagnostics != nil {
@@ -89,6 +87,7 @@ func (b *BuildService) runCodegen(
 		TestDBURL:       testDBURL,
 		TestDBPSQL:      testDBPSQL,
 		TestDBSchema:    testDBSchema,
+		GoProxyDir:      goProxyDir,
 		LogCallback:     logLine,
 	})
 	if err != nil {

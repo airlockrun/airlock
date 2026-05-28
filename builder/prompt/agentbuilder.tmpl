@@ -37,7 +37,7 @@ agents/{agent_id}/
 └── internal/db/       # sqlc-generated code
 ```
 
-The agentsdk / goai / sol library sources live read-only under `/libs/`. `go.mod` already `replace`s them to `/libs/...`; don't edit those replaces.
+The agentsdk / goai / sol library sources live read-only under `/libs/` for reference — read them to understand the APIs. Airlock resolves these dependencies automatically at build time; the agent's `go.mod` pins their versions and needs no `replace` directives. Don't add `replace` lines or edit the require versions for agentsdk/goai/sol.
 
 # NOTES.md — the agent's design log
 

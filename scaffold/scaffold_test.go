@@ -104,7 +104,8 @@ func TestMaterialize(t *testing.T) {
 		t.Error(".gitignore must not list Dockerfile (committed for local-build support)")
 	}
 
-	// Dockerfile must always have COPY --from=libs (unconditional) and use
+	// Dockerfile uses the goproxy build-context stage for lib resolution
+	// (airlock overrides it in dev; empty by default → public proxy) and
 	// the agent-base runtime + dep hooks.
 	if err := GenerateDockerfile(dir, data); err != nil {
 		t.Fatalf("GenerateDockerfile: %v", err)
@@ -120,8 +121,14 @@ func TestMaterialize(t *testing.T) {
 	if !strings.Contains(dockerfileStr, "airlock-agent-base") {
 		t.Error("Dockerfile missing agent base image")
 	}
-	if !strings.Contains(dockerfileStr, "--from=libs") {
-		t.Error("Dockerfile must always have --from=libs")
+	if !strings.Contains(dockerfileStr, "FROM scratch AS goproxy") {
+		t.Error("Dockerfile missing the goproxy build-context stage")
+	}
+	if !strings.Contains(dockerfileStr, "GOPROXY=") {
+		t.Error("Dockerfile missing GOPROXY in the build RUN")
+	}
+	if strings.Contains(dockerfileStr, "--from=libs") {
+		t.Error("Dockerfile must not reference the old libs-owned/libs-ext contexts")
 	}
 	if !strings.Contains(dockerfileStr, "setup.sh") {
 		t.Error("Dockerfile missing setup.sh hook")

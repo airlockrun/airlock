@@ -329,3 +329,64 @@ func TestRemoveAgentRepo(t *testing.T) {
 		t.Fatalf("RemoveAgentRepo (idempotent): %v", err)
 	}
 }
+
+func TestRecoverAgentRepo_ResetsToCleanMain(t *testing.T) {
+	base := t.TempDir()
+	agentID := "recover-x"
+	if err := InitAgentRepo(base, agentID); err != nil {
+		t.Fatalf("InitAgentRepo: %v", err)
+	}
+	repo := AgentRepoPath(base, agentID)
+
+	// Commit a go.mod on main so the later edit is a tracked modification
+	// (mirrors real agent repos; `checkout -f` resets tracked changes).
+	if err := os.WriteFile(filepath.Join(repo, "go.mod"), []byte("module agent\n\ngo 1.26.0\n\nrequire github.com/airlockrun/agentsdk v0.2.0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := runGit(repo, "add", "go.mod"); err != nil {
+		t.Fatal(err)
+	}
+	if err := runGit(repo, "commit", "-m", "add go.mod"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate a failed build's residue: a stale upgrade branch checked
+	// out, plus an uncommitted (tracked) edit to go.mod.
+	if err := runGit(repo, "checkout", "-b", "upgrade/stale"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "go.mod"), []byte("module agent\n\ngo 1.26.0\n\nrequire github.com/airlockrun/agentsdk v0.3.0-rc.1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	recovered, err := RecoverAgentRepo(repo)
+	if err != nil {
+		t.Fatalf("RecoverAgentRepo: %v", err)
+	}
+	if !recovered {
+		t.Error("expected recovered=true for stale-branch + dirty tree")
+	}
+
+	branch, _ := gitOutput(repo, "branch", "--show-current")
+	if branch != "main" && branch != "master" {
+		t.Errorf("expected to be on main after recovery, got %q", branch)
+	}
+	status, _ := gitOutput(repo, "status", "--porcelain")
+	if strings.TrimSpace(status) != "" {
+		t.Errorf("expected clean tree after recovery, got:\n%s", status)
+	}
+	// The stale branch is preserved for manual recovery, not deleted.
+	branches, _ := gitOutput(repo, "branch", "--format=%(refname:short)")
+	if !strings.Contains(branches, "upgrade/stale") {
+		t.Errorf("stale upgrade branch should be preserved; branches:\n%s", branches)
+	}
+
+	// Clean repo on main → no-op.
+	recovered2, err := RecoverAgentRepo(repo)
+	if err != nil {
+		t.Fatalf("RecoverAgentRepo (clean): %v", err)
+	}
+	if recovered2 {
+		t.Error("expected recovered=false on an already-clean main repo")
+	}
+}

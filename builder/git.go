@@ -349,27 +349,27 @@ func RemoveAgentRepo(basePath, agentID string) error {
 	return nil
 }
 
-// RecoverAgentRepo unwinds any half-finished state in an agent repo left
-// by a previous build that was interrupted between git operations —
-// typically the airlock-builder container killed after `git add` but
-// before `git commit`, leaving the index populated with airlock-managed
-// content (.gitignore, go.mod with replaces stripped, Dockerfile) that
-// never made it to a commit. The next build then sees a "dirty" repo
-// and refuses to touch it, even though every staged file is something
-// airlock itself owns.
+// RecoverAgentRepo resets an agent repo to a clean default branch before a
+// build, undoing whatever state a previous (possibly failed) build left
+// behind: an in-progress merge/rebase, a stale `upgrade/*` branch left
+// checked out, and uncommitted working-tree edits (airlock's own scratch —
+// regenerated Dockerfile, a go.mod bump that never got committed, etc.).
 //
-// Recovery: abort any in-progress merge/rebase/cherry-pick (those leave
-// the index in conflicted states `git reset` won't fully clear), then
-// `git reset HEAD` to unstage everything. The working tree is left
-// alone — the build pipeline rewrites the relevant files anyway, and
-// preserving working-tree state matters if a user push happened to
-// touch the same files concurrently.
+// Without this, housekeeping (which runs before codegen's own checkout-main)
+// operates on whatever branch was left checked out and commits there, so its
+// go.mod bump never lands on main and the codegen clone takes main's stale
+// committed go.mod.
 //
-// No-op on a fresh path with no .git/ (initial build hasn't run
-// `git init` yet) or a clean repo (nothing staged, no in-progress op).
-// Returns true iff anything actually needed cleaning up so the caller
-// can log loud — silent recovery means we never notice the underlying
-// crash pattern.
+// `git checkout -f main` switches to main AND discards working-tree changes
+// in one shot. The failed `upgrade/*` branches are NOT deleted — they're
+// kept for manual recovery; we just stop being checked out on one. The
+// working-tree edits we discard are never user work: user/codegen changes
+// reach the repo as commits (the external remote → PullAgentRepo → main, or
+// codegen's push-back), never as uncommitted edits in this tree.
+//
+// No-op on a fresh path with no .git/ (initial build hasn't run `git init`
+// yet). Returns true iff anything actually needed cleaning up, so the caller
+// can log it — silent recovery hides the underlying crash/abandon pattern.
 func RecoverAgentRepo(repoPath string) (recovered bool, err error) {
 	if _, statErr := os.Stat(filepath.Join(repoPath, ".git")); statErr != nil {
 		return false, nil
@@ -381,13 +381,20 @@ func RecoverAgentRepo(repoPath string) (recovered bool, err error) {
 			recovered = true
 		}
 	}
-	// `git diff --cached --quiet` exits 0 iff the index matches HEAD.
-	// Any non-nil error means there's staged content to unstage.
-	if err := runGit(repoPath, "diff", "--cached", "--quiet"); err != nil {
-		if err := runGit(repoPath, "reset", "HEAD"); err != nil {
-			return recovered, fmt.Errorf("reset HEAD: %w", err)
-		}
+
+	// Determine whether we're already on a clean default branch; if not,
+	// a force-checkout is the recovery and we flag it.
+	branch, _ := gitOutput(repoPath, "branch", "--show-current")
+	status, _ := gitOutput(repoPath, "status", "--porcelain")
+	onDefault := branch == "main" || branch == "master"
+	if !onDefault || strings.TrimSpace(status) != "" {
 		recovered = true
+	}
+
+	if err := runGit(repoPath, "checkout", "-f", "main"); err != nil {
+		if err2 := runGit(repoPath, "checkout", "-f", "master"); err2 != nil {
+			return recovered, fmt.Errorf("checkout -f main: %w", err)
+		}
 	}
 	return recovered, nil
 }

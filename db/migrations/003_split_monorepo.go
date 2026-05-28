@@ -315,7 +315,7 @@ func upStripLibsReplaces(ctx context.Context, _ *sql.DB) error {
 		return fmt.Errorf("read agent repos dir: %w", err)
 	}
 
-	var stripped, skippedDirty, skippedNonAgent []string
+	var stripped, skippedNonAgent []string
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
@@ -330,18 +330,17 @@ func upStripLibsReplaces(ctx context.Context, _ *sql.DB) error {
 			continue
 		}
 
-		// Bail rather than risk committing in-flight user state. Allow
-		// uncommitted airlock-managed files (Dockerfile, go.work,
-		// go.work.sum) since the pre-cleanup build pipeline writes
-		// those to the working tree without committing — cleanAgentRepo
-		// will commit Dockerfile and gitignore go.work*.
-		status, err := gitOutput(ctx, dir, "status", "--porcelain")
-		if err != nil {
-			return fmt.Errorf("git status %s: %w", name, err)
-		}
-		if dirtyBeyondManaged(status) {
-			skippedDirty = append(skippedDirty, name)
-			continue
+		// Reset to a clean default branch first. A previous build may have
+		// left the repo on a stale upgrade/* branch with uncommitted
+		// airlock scratch (a regenerated Dockerfile, a half-applied go.mod
+		// bump). Without this, the strip would run on the wrong branch — or
+		// be skipped for "dirtiness" — and the /libs replaces would survive
+		// on main, breaking every subsequent build. Agent working trees
+		// never hold user work (it arrives as commits via codegen / the
+		// external remote), so discarding scratch with `checkout -f` is
+		// safe. Preserved upgrade/* branches are left intact.
+		if err := resetAgentRepoToMain(ctx, dir); err != nil {
+			return fmt.Errorf("reset %s: %w", name, err)
 		}
 
 		changed, err := cleanAgentRepo(ctx, dir)
@@ -354,11 +353,20 @@ func upStripLibsReplaces(ctx context.Context, _ *sql.DB) error {
 	}
 
 	fmt.Fprintf(os.Stderr, "[migration 003] cleaned %d agent repo(s) under %s\n", len(stripped), base)
-	if len(skippedDirty) > 0 {
-		fmt.Fprintf(os.Stderr, "[migration 003] skipped dirty repos (uncommitted changes): %v\n", skippedDirty)
-	}
 	if len(skippedNonAgent) > 0 {
 		fmt.Fprintf(os.Stderr, "[migration 003] skipped non-repo agent dirs: %v\n", skippedNonAgent)
+	}
+	return nil
+}
+
+// resetAgentRepoToMain force-switches the repo to a clean main (or master),
+// discarding uncommitted working-tree scratch and abandoning any stale
+// branch left checked out. Branches themselves are preserved.
+func resetAgentRepoToMain(ctx context.Context, dir string) error {
+	if err := gitRun(ctx, dir, "checkout", "-f", "main"); err != nil {
+		if err2 := gitRun(ctx, dir, "checkout", "-f", "master"); err2 != nil {
+			return fmt.Errorf("checkout -f main: %w", err)
+		}
 	}
 	return nil
 }
@@ -374,10 +382,12 @@ var libsReplacedModules = []string{
 	"github.com/a-h/templ",
 }
 
-// gitignoreContent mirrors scaffold/templates/gitignore.tmpl.
-const gitignoreContent = `# Airlock-managed files — generated into the build context every build.
-# Don't commit these; airlock will silently overwrite anything you do.
-Dockerfile
+// gitignoreContent mirrors scaffold/templates/gitignore.tmpl. Dockerfile is
+// NOT listed — it's committed so users can `docker build .` locally, and
+// ignoring it would block airlock from committing the regenerated copy.
+const gitignoreContent = `# A local go.work you create for your own multi-module editing is ignored
+# so it never lands in a push. Airlock resolves libs via GOPROXY, not
+# go.work, so committing one wouldn't affect its builds anyway.
 go.work
 go.work.sum
 `
@@ -404,6 +414,16 @@ func cleanAgentRepo(ctx context.Context, dir string) (bool, error) {
 		return false, fmt.Errorf("write .gitignore: %w", err)
 	}
 
+	// Drop any leftover go.work from the old build mechanism. It's
+	// gitignored (so this doesn't show in git status), but the agent
+	// build's `COPY . .` would pull it into the build context where its
+	// /libs replaces break `go mod tidy`. Airlock no longer writes one.
+	for _, f := range []string{"go.work", "go.work.sum"} {
+		if err := os.Remove(filepath.Join(dir, f)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return false, fmt.Errorf("remove stale %s: %w", f, err)
+		}
+	}
+
 	status, err := gitOutput(ctx, dir, "status", "--porcelain")
 	if err != nil {
 		return false, fmt.Errorf("git status: %w", err)
@@ -425,34 +445,6 @@ func cleanAgentRepo(ctx context.Context, dir string) (bool, error) {
 		return false, fmt.Errorf("git commit: %w", err)
 	}
 	return true, nil
-}
-
-// dirtyBeyondManaged returns true if `git status --porcelain` reports
-// any file other than the airlock-managed Dockerfile/go.work/go.work.sum.
-// Those three are expected to appear dirty on pre-migration repos —
-// the migration commits Dockerfile and writes a .gitignore covering
-// the go.work pair.
-func dirtyBeyondManaged(status string) bool {
-	managed := map[string]struct{}{
-		"Dockerfile":  {},
-		"go.work":     {},
-		"go.work.sum": {},
-	}
-	for _, line := range strings.Split(status, "\n") {
-		if len(line) < 3 {
-			continue
-		}
-		// Porcelain format: "XY <path>" where X+Y are two status chars,
-		// space, then the path. For untracked files X='?', Y='?'.
-		path := strings.TrimSpace(line[3:])
-		if path == "" {
-			continue
-		}
-		if _, ok := managed[path]; !ok {
-			return true
-		}
-	}
-	return false
 }
 
 // runCmd runs a command with a clean git environment, returning a

@@ -128,67 +128,94 @@ func TestRunHousekeeping_GitignoreNoopWhenAlreadyHasManagedLines(t *testing.T) {
 	}
 }
 
-func TestRefreshLibRequires_UpdatesPresentModule(t *testing.T) {
+func TestRunHousekeeping_StripsDockerfileFromGitignore(t *testing.T) {
 	ctx := context.Background()
-	repoPath, _ := scaffoldHousekeepingFixture(t)
+	repoPath, data := scaffoldHousekeepingFixture(t)
 
-	want := map[string]string{
-		// Pin to a deliberately-different version so we can assert
-		// edit happened. The version doesn't need to exist on the
-		// public proxy — `go mod edit` is a textual rewrite, no I/O.
-		"github.com/airlockrun/agentsdk": "v9.9.9",
+	// Old InitAgentRepo wrote a .gitignore listing Dockerfile; that blocks
+	// committing the now-committed Dockerfile. Housekeeping must drop it.
+	if err := os.WriteFile(filepath.Join(repoPath, ".gitignore"),
+		[]byte("DIAGNOSTICS.md\nDockerfile\ngo.work\n"), 0o644); err != nil {
+		t.Fatal(err)
 	}
-	changed, err := refreshLibRequires(ctx, repoPath, want)
+
+	res, err := runHousekeeping(ctx, repoPath, data)
 	if err != nil {
-		t.Fatalf("refreshLibRequires: %v", err)
+		t.Fatalf("runHousekeeping: %v", err)
 	}
-	if !changed {
-		t.Fatal("expected change; got false")
+	if !res.GitignoreChanged {
+		t.Error("expected GitignoreChanged=true after stale Dockerfile entry")
 	}
-	body, _ := os.ReadFile(filepath.Join(repoPath, "go.mod"))
-	if !strings.Contains(string(body), "agentsdk v9.9.9") {
-		t.Errorf("agentsdk version not updated:\n%s", body)
+	body, _ := os.ReadFile(filepath.Join(repoPath, ".gitignore"))
+	s := string(body)
+	for _, line := range strings.Split(s, "\n") {
+		if strings.TrimSpace(line) == "Dockerfile" {
+			t.Errorf("Dockerfile still ignored:\n%s", s)
+		}
+	}
+	// User-authored + managed entries preserved.
+	for _, want := range []string{"DIAGNOSTICS.md", "go.work", "go.work.sum"} {
+		if !strings.Contains(s, want) {
+			t.Errorf(".gitignore missing %q:\n%s", want, s)
+		}
+	}
+	// And `git add Dockerfile` now works (the original failure).
+	if err := os.WriteFile(filepath.Join(repoPath, "Dockerfile"), []byte("FROM scratch\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := git(repoPath, "add", "--", "Dockerfile"); err != nil {
+		t.Errorf("git add Dockerfile failed after gitignore reconcile: %v", err)
 	}
 }
 
-func TestRefreshLibRequires_SkipsAbsentModule(t *testing.T) {
+func TestRunHousekeeping_RemovesStaleGoWork(t *testing.T) {
 	ctx := context.Background()
-	repoPath, _ := scaffoldHousekeepingFixture(t)
+	repoPath, data := scaffoldHousekeepingFixture(t)
 
-	// Pin a module that the scaffold doesn't import. Housekeeping must
-	// NOT add it (airlock never injects a dangling require for an
-	// unused module).
-	want := map[string]string{
-		"github.com/airlockrun/not-a-thing": "v1.0.0",
+	// A leftover go.work (gitignored) from an older build would otherwise
+	// ride into the build context via `COPY . .` and break `go mod tidy`.
+	for _, f := range []string{"go.work", "go.work.sum"} {
+		if err := os.WriteFile(filepath.Join(repoPath, f), []byte("go 1.26.0\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
-	changed, err := refreshLibRequires(ctx, repoPath, want)
-	if err != nil {
-		t.Fatalf("refreshLibRequires: %v", err)
+
+	if _, err := runHousekeeping(ctx, repoPath, data); err != nil {
+		t.Fatalf("runHousekeeping: %v", err)
 	}
-	if changed {
-		t.Error("expected no change for absent module; got rewrite")
-	}
-	body, _ := os.ReadFile(filepath.Join(repoPath, "go.mod"))
-	if strings.Contains(string(body), "not-a-thing") {
-		t.Errorf("dangling require added:\n%s", body)
+	for _, f := range []string{"go.work", "go.work.sum"} {
+		if _, err := os.Stat(filepath.Join(repoPath, f)); !os.IsNotExist(err) {
+			t.Errorf("%s still present after housekeeping (err=%v)", f, err)
+		}
 	}
 }
 
-func TestRefreshLibRequires_IdempotentOnSameVersion(t *testing.T) {
+func TestRunHousekeeping_BumpsStaleAgentSDKRequire(t *testing.T) {
 	ctx := context.Background()
-	repoPath, _ := scaffoldHousekeepingFixture(t)
+	repoPath, data := scaffoldHousekeepingFixture(t)
 
-	// Scaffold pins agentsdk at "v"+agentsdk.Version. Asking for the
-	// same value must be a no-op.
-	want := map[string]string{
-		"github.com/airlockrun/agentsdk": "v" + agentsdk.Version,
+	// Rewrite the agentsdk require to an old version so housekeeping has
+	// something to correct back to the current const.
+	gomod := filepath.Join(repoPath, "go.mod")
+	body, _ := os.ReadFile(gomod)
+	stale := strings.Replace(string(body), "agentsdk v"+agentsdk.Version, "agentsdk v0.0.1", 1)
+	if stale == string(body) {
+		t.Fatalf("fixture go.mod didn't contain agentsdk v%s:\n%s", agentsdk.Version, body)
 	}
-	changed, err := refreshLibRequires(ctx, repoPath, want)
+	if err := os.WriteFile(gomod, []byte(stale), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := runHousekeeping(ctx, repoPath, data)
 	if err != nil {
-		t.Fatalf("refreshLibRequires: %v", err)
+		t.Fatalf("runHousekeeping: %v", err)
 	}
-	if changed {
-		t.Error("expected no change when version already matches")
+	if !res.GoModChanged {
+		t.Error("expected GoModChanged=true after staling the agentsdk require")
+	}
+	after, _ := os.ReadFile(gomod)
+	if !strings.Contains(string(after), "agentsdk v"+agentsdk.Version) {
+		t.Errorf("agentsdk require not bumped back to const v%s:\n%s", agentsdk.Version, after)
 	}
 }
 
