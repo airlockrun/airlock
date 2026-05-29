@@ -3,9 +3,12 @@ package trigger
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -247,5 +250,34 @@ func TestDeregisterInFlight_RemovesEntry(t *testing.T) {
 	d.deregisterInFlight(runID)
 	if _, still := d.inFlight[runID]; still {
 		t.Error("entry still present after deregister")
+	}
+}
+
+func TestNotRunnableBridgeReply(t *testing.T) {
+	tests := []struct {
+		name    string
+		err     error
+		wantOK  bool
+		wantSub string
+	}{
+		{"stopped", ErrAgentStopped, true, "stopped"},
+		{"no image", ErrAgentNoImage, true, "building"},
+		{"wrapped stopped", fmt.Errorf("forward: %w", ErrAgentStopped), true, "stopped"},
+		{"unrelated", errors.New("boom"), false, ""},
+		{"nil", nil, false, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reply, ok := notRunnableBridgeReply(tt.err)
+			if ok != tt.wantOK {
+				t.Fatalf("ok = %v, want %v", ok, tt.wantOK)
+			}
+			if tt.wantOK && !strings.Contains(strings.ToLower(reply), tt.wantSub) {
+				t.Errorf("reply %q should contain %q", reply, tt.wantSub)
+			}
+			if !tt.wantOK && reply != "" {
+				t.Errorf("reply = %q, want empty", reply)
+			}
+		})
 	}
 }

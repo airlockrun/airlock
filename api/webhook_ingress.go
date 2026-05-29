@@ -115,6 +115,10 @@ func (h *webhookIngressHandler) HandleWebhook(w http.ResponseWriter, r *http.Req
 	}
 	rc, _, err := h.dispatcher.ForwardWebhook(r.Context(), agentID, path, body, nil, timeout)
 	if err != nil {
+		if status, msg, ok := notRunnableResponse(err); ok {
+			writeJSONError(w, status, msg)
+			return
+		}
 		h.logger.Error("forward webhook failed", zap.Error(err))
 		writeJSONError(w, http.StatusBadGateway, "failed to forward webhook")
 		return

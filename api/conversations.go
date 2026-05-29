@@ -421,6 +421,10 @@ func (h *conversationsHandler) Prompt(w http.ResponseWriter, r *http.Request) {
 	rc, runID, err := h.dispatcher.ForwardPrompt(context.Background(), agentID, input, nil, &userID)
 	if err != nil {
 		h.convLocks.Unlock(convIDStr)
+		if status, msg, ok := notRunnableResponse(err); ok {
+			writeError(w, status, msg)
+			return
+		}
 		h.logger.Error("forward prompt", zap.Error(err))
 		writeError(w, http.StatusInternalServerError, "failed to forward to agent")
 		return

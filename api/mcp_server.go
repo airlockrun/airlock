@@ -721,6 +721,10 @@ func (s *MCPServer) handlePromptCall(ctx context.Context, w http.ResponseWriter,
 
 	rc, runID, err := s.dispatcher.ForwardA2APrompt(cctx, uuid.UUID(target.ID.Bytes), parentRunID, access, userID, input)
 	if err != nil {
+		if m, notRunnable := notRunnableMCPMessage(err, target.Slug); notRunnable {
+			writeJSONRPCError(w, msg.ID, rpcErrServerError, m)
+			return
+		}
 		s.logger.Error("mcp: forward prompt",
 			zap.Error(err),
 			zap.String("agent_id", uuid.UUID(target.ID.Bytes).String()),
@@ -1065,6 +1069,10 @@ func (s *MCPServer) handleUserToolCall(ctx context.Context, w http.ResponseWrite
 
 	c, err := s.dispatcher.EnsureRunning(ctx, uuid.UUID(target.ID.Bytes))
 	if err != nil {
+		if m, notRunnable := notRunnableMCPMessage(err, target.Slug); notRunnable {
+			writeJSONRPCError(w, msg.ID, rpcErrServerError, m)
+			return
+		}
 		s.logger.Error("mcp: ensure running",
 			zap.Error(err),
 			zap.String("agent_id", uuid.UUID(target.ID.Bytes).String()),

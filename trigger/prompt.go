@@ -313,6 +313,11 @@ func (p *PromptProxy) HandleMessage(
 	}
 	rc, runID, err := p.dispatcher.ForwardPrompt(ctx, agentID, input, &bridgeID, userIDPtr)
 	if err != nil {
+		if msg, ok := notRunnableBridgeReply(err); ok {
+			events <- ResponseEvent{Type: "text-delta", Text: msg}
+			close(events)
+			return msg, nil
+		}
 		close(events)
 		return "", fmt.Errorf("forward prompt: %w", err)
 	}
@@ -482,6 +487,11 @@ func (p *PromptProxy) HandleCallback(
 	}
 	rc, newRunID, err := p.dispatcher.ForwardPrompt(ctx, agentID, input, &bridgeID, userIDPtr)
 	if err != nil {
+		if msg, ok := notRunnableBridgeReply(err); ok {
+			events <- ResponseEvent{Type: "text-delta", Text: msg}
+			close(events)
+			return true, nil
+		}
 		close(events)
 		return false, fmt.Errorf("forward prompt: %w", err)
 	}

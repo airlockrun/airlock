@@ -35,6 +35,34 @@ import (
 // ForwardCron/Webhook.
 const PromptHTTPCeiling = 30 * time.Minute
 
+// Sentinel errors from EnsureRunning for agents that exist but aren't in a
+// runnable state. Callers map these to a surface-appropriate response
+// (409 on HTTP, an in-chat notice on bridges, a JSON-RPC error on A2A)
+// instead of a generic 500. Both are expected operator states, not faults.
+var (
+	// ErrAgentStopped — the agent is parked via /stop and only a manual
+	// /start resumes it; EnsureRunning refuses to auto-start it.
+	ErrAgentStopped = errors.New("agent is stopped")
+	// ErrAgentNoImage — the agent has never finished a build, so there is
+	// no container image to run.
+	ErrAgentNoImage = errors.New("agent has no image")
+)
+
+// notRunnableBridgeReply maps a not-runnable sentinel to a chat-friendly
+// reply for bridge surfaces. ok is false for any other error, so callers
+// fall through to their normal error return. The reply is plain prose —
+// a bridge user can't /start an agent, so it points them at an admin.
+func notRunnableBridgeReply(err error) (reply string, ok bool) {
+	switch {
+	case errors.Is(err, ErrAgentStopped):
+		return "This agent is stopped. An admin needs to start it before it can reply.", true
+	case errors.Is(err, ErrAgentNoImage):
+		return "This agent hasn't finished building yet. Try again once it's ready.", true
+	default:
+		return "", false
+	}
+}
+
 // runState tracks an in-flight run for cancellation. Cron, webhook, and
 // prompt runs all register their cancel func here so DELETE /runs/{id}
 // can abort them.
@@ -191,14 +219,14 @@ func (d *Dispatcher) EnsureRunning(ctx context.Context, agentID uuid.UUID) (*con
 		return nil, fmt.Errorf("get agent: %w", err)
 	}
 	if agent.ImageRef == "" {
-		return nil, errors.New("agent has no image")
+		return nil, ErrAgentNoImage
 	}
 	// Stopped means the operator (or a failed rebuild) parked this agent
 	// and doesn't want it auto-restarted. Any trigger path that hits this
 	// gate while the agent is stopped must surface a clear error, not
 	// silently bring it back up. Manual Start is the only way out.
 	if agent.Status == "stopped" {
-		return nil, errors.New("agent is stopped")
+		return nil, ErrAgentStopped
 	}
 
 	// Decrypt DB password from its dedicated column.

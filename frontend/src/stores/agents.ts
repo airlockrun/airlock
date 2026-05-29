@@ -79,6 +79,12 @@ export const useAgentsStore = defineStore('agents', () => {
     if (agent) agent.status = 'stopped'
   }
 
+  async function startAgent(id: string) {
+    await api.post(`/api/v1/agents/${id}/start`, {})
+    const agent = agents.value.find((a) => a.id === id)
+    if (agent) agent.status = 'active'
+  }
+
   async function upgradeAgent(id: string) {
     await api.post(`/api/v1/agents/${id}/upgrade`, {})
     const agent = agents.value.find((a) => a.id === id)
@@ -106,6 +112,7 @@ export const useAgentsStore = defineStore('agents', () => {
     deleteAgent,
     renameAgent,
     stopAgent,
+    startAgent,
     upgradeAgent,
     fetchModelConfig,
     updateModelConfig,

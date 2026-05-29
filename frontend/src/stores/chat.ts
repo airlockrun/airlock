@@ -784,15 +784,19 @@ export const useChatStore = defineStore('chat', () => {
       }
     }
 
+    // id of the optimistic user row, so the catch below can roll it back
+    // if the prompt POST fails (e.g. 409 on a stopped agent).
+    let optimisticID = ''
     if (!isResume && !isSlashCommand) {
       // Add optimistic user message for normal sends only. Skip when the
       // window is scrolled back (hasNewer=true) so we don't insert above
       // evicted history — the user will see their message after clicking
       // "jump to latest."
       if (!hasNewer.value) {
+        optimisticID = `pending-${Date.now()}`
         messages.value.push({
           $typeName: 'airlock.v1.AgentMessageInfo',
-          id: `pending-${Date.now()}`,
+          id: optimisticID,
           role: 'user',
           content: text,
           costEstimate: 0,
@@ -862,8 +866,15 @@ export const useChatStore = defineStore('chat', () => {
       sendingTimeout = setTimeout(() => {
         if (sending.value) finalizeMessage()
       }, 5 * 60 * 1000)
-    } catch {
+    } catch (err) {
+      // Roll back the optimistic user row and re-throw so the view can
+      // toast the backend's message (e.g. the 409 "agent is stopped"
+      // notice) and restore the composer text.
       sending.value = false
+      if (optimisticID) {
+        messages.value = messages.value.filter(m => m.id !== optimisticID)
+      }
+      throw err
     }
   }
 

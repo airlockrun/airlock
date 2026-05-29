@@ -24,6 +24,22 @@ const routeConvId = computed(() => (route.query.c as string) || undefined)
 const agentName = computed(
   () => agentsStore.agents.find(a => a.id === agentId.value)?.name || '',
 )
+// A stopped agent won't auto-resume; prompting it 409s server-side. Gate
+// the composer up front and offer a Start affordance instead.
+const agentStopped = computed(
+  () => agentsStore.agents.find(a => a.id === agentId.value)?.status === 'stopped',
+)
+const starting = ref(false)
+async function startAgent() {
+  starting.value = true
+  try {
+    await agentsStore.startAgent(agentId.value)
+  } catch (err: any) {
+    toast.add({ severity: 'error', summary: err.response?.data?.error || 'Start failed', life: 5000 })
+  } finally {
+    starting.value = false
+  }
+}
 // No active conversation id yet — the next message mints the thread.
 const isNewConversation = computed(() => !chat.conversationId)
 const messageInput = ref('')
@@ -165,12 +181,17 @@ function scrollToBottom() {
 async function send() {
   const text = messageInput.value.trim()
   if (!text || chat.sending) return
+  const sentFiles = attachedFiles.value.slice()
+  const filePaths = sentFiles.map(f => f.path)
   messageInput.value = ''
-  const filePaths = attachedFiles.value.map(f => f.path)
   attachedFiles.value = []
   try {
     await chat.sendMessage(agentId.value, text, undefined, filePaths.length ? filePaths : undefined)
   } catch (err: any) {
+    // Restore the composer so the user doesn't lose their text/attachments
+    // on a rejected send (e.g. 409 when the agent is stopped).
+    messageInput.value = text
+    attachedFiles.value = sentFiles
     toast.add({ severity: 'error', summary: err.response?.data?.error || 'Send failed', life: 5000 })
   }
 }
@@ -580,6 +601,21 @@ function formatTokens(n: number): string {
       />
     </div>
 
+    <!-- Stopped-agent banner: chatting is blocked until an admin starts it -->
+    <div
+      v-if="agentStopped"
+      style="display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; padding: 0.5rem 0.75rem; margin-top: 0.5rem; border: 1px solid var(--p-surface-300); border-radius: 6px; background: var(--p-surface-100)"
+    >
+      <span style="font-size: 0.875rem">This agent is stopped. Start it to chat.</span>
+      <Button
+        label="Start"
+        icon="pi pi-play"
+        size="small"
+        :loading="starting"
+        @click="startAgent"
+      />
+    </div>
+
     <!-- Input area -->
     <div style="display: flex; gap: 0.5rem; padding-top: 0.75rem; border-top: 1px solid var(--p-surface-200)">
       <input ref="fileInput" type="file" multiple hidden @change="onFileSelect" />
@@ -587,22 +623,22 @@ function formatTokens(n: number): string {
         icon="pi pi-paperclip"
         severity="secondary"
         text
-        :disabled="chat.sending || uploading"
+        :disabled="chat.sending || uploading || agentStopped"
         :loading="uploading"
         @click="fileInput?.click()"
       />
       <Textarea
         v-model="messageInput"
-        placeholder="Type a message..."
+        :placeholder="agentStopped ? 'Agent is stopped' : 'Type a message...'"
         :auto-resize="true"
         rows="1"
         style="flex: 1"
-        :disabled="chat.sending"
+        :disabled="chat.sending || agentStopped"
         @keydown="onKeydown"
       />
       <Button
         icon="pi pi-send"
-        :disabled="!messageInput.trim() || chat.sending"
+        :disabled="!messageInput.trim() || chat.sending || agentStopped"
         @click="send"
       />
     </div>

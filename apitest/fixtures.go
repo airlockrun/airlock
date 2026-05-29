@@ -21,6 +21,9 @@ type AgentOpts struct {
 	AllowPublicMCP  bool
 	AllowNonMember  bool
 	AllowPublicChat bool
+	// Stopped parks the agent at status='stopped' (image_ref still set) so
+	// EnsureRunning refuses it — used to exercise the not-runnable paths.
+	Stopped bool
 }
 
 // CreateUser inserts a user with a unique email derived from name +
@@ -86,18 +89,22 @@ func CreateAgent(t *testing.T, h *Harness, opts AgentOpts) uuid.UUID {
 		t.Fatalf("apitest: encrypt db_password: %v", err)
 	}
 
+	status := "active"
+	if opts.Stopped {
+		status = "stopped"
+	}
 	if _, err := h.DB.Pool().Exec(ctx,
 		`UPDATE agents
-		    SET status='active',
+		    SET status=$2,
 		        image_ref='apitest:stub',
-		        db_password=$2,
-		        allow_non_member_mcp=$3,
-		        allow_public_mcp=$4,
-		        allow_public_mcp_prompt=$5
+		        db_password=$3,
+		        allow_non_member_mcp=$4,
+		        allow_public_mcp=$5,
+		        allow_public_mcp_prompt=$6
 		  WHERE id=$1`,
-		row.ID, encryptedPW, opts.AllowNonMember, opts.AllowPublicMCP, opts.AllowPublicChat,
+		row.ID, status, encryptedPW, opts.AllowNonMember, opts.AllowPublicMCP, opts.AllowPublicChat,
 	); err != nil {
-		t.Fatalf("apitest: stamp agent active: %v", err)
+		t.Fatalf("apitest: stamp agent status: %v", err)
 	}
 
 	return agentID
