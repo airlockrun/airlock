@@ -107,6 +107,7 @@ On startup `builder.RebuildAllOnSDKChange` compares the airlock-bundled `agentsd
 - `POST llm/stream` — LLM proxy (optional telescope)
 - `POST proxy/{slug}` — credential-injected HTTP proxy
 - `PUT|GET|DELETE storage/*` — agent object storage
+- `POST seal`, `POST unseal` — encrypt/decrypt on the agent's behalf (the key stays in Airlock). The agent stores the returned ciphertext in its OWN DB, keyed however its domain needs (agent-wide, per-user). Bound to the agent via AAD = agent ID from the JWT, so one agent can't unseal another's. For runtime-generated secrets (e.g. session tokens); plaintext never persists in Airlock.
 - `GET|POST|PUT session/{convID}/messages` — conversation history (SessionStore)
 - `POST run/complete`, `GET run/{runID}/checkpoint` — run lifecycle
 - `POST publish`, `POST|DELETE subscribe` — topic pub/sub

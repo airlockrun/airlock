@@ -563,6 +563,11 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		r.Post("/mcp/{slug}/tools/call", ah.MCPToolCall)
 		r.Put("/env-vars/{slug}", ah.UpsertEnvVar)
 		r.Get("/env-vars/{slug}", ah.GetEnvVarValue)
+		// Seal/unseal: airlock encrypts/decrypts on the agent's behalf, bound
+		// to the agent's identity (AAD) so the agent can persist secrets it
+		// generates (e.g. session tokens) in its own DB as ciphertext.
+		r.Post("/seal", ah.Seal)
+		r.Post("/unseal", ah.Unseal)
 	})
 
 	// Cross-cutting middleware wraps the entire handler tree (chi router and,
