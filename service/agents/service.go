@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/airlockrun/agentsdk"
 	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/builder"
 	"github.com/airlockrun/airlock/container"
@@ -163,44 +164,6 @@ func randomHex(n int) (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
-// requireAccess fails-with-ErrForbidden when caller isn't a member,
-// fails-with-ErrUnauthorized when no userID is in ctx. Used by the
-// "any member can do this" endpoints.
-func (s *Service) requireAccess(ctx context.Context, q *dbq.Queries, userID, agentID uuid.UUID) error {
-	if userID == uuid.Nil {
-		return service.ErrUnauthorized
-	}
-	has, err := q.HasAgentAccess(ctx, dbq.HasAgentAccessParams{
-		AgentID: pgtype.UUID{Bytes: agentID, Valid: true},
-		UserID:  pgtype.UUID{Bytes: userID, Valid: true},
-	})
-	if err != nil {
-		return fmt.Errorf("check access: %w", err)
-	}
-	if !has {
-		return service.ErrForbidden
-	}
-	return nil
-}
-
-// requireAdmin matches the agents.go gate exactly: agent_members.role == "admin".
-func (s *Service) requireAdmin(ctx context.Context, q *dbq.Queries, userID, agentID uuid.UUID) error {
-	if userID == uuid.Nil {
-		return service.ErrUnauthorized
-	}
-	member, err := q.GetAgentMember(ctx, dbq.GetAgentMemberParams{
-		AgentID: pgtype.UUID{Bytes: agentID, Valid: true},
-		UserID:  pgtype.UUID{Bytes: userID, Valid: true},
-	})
-	if err != nil {
-		return service.ErrForbidden
-	}
-	if member.Role != "admin" {
-		return service.ErrForbidden
-	}
-	return nil
-}
-
 // broadcastSiblingChange triggers a /refresh on every active agent
 // except changedAgentID — used after create/update/delete so peer agents
 // pick up the new agent_<slug> binding without restarting.
@@ -334,11 +297,11 @@ func (s *Service) Create(ctx context.Context, userID uuid.UUID, req CreateReques
 // List returns the agents visible to the caller — every agent for
 // tenant admins, agent_members-joined for everyone else — annotated
 // with the live container-running flag.
-func (s *Service) List(ctx context.Context, userID uuid.UUID, tenantRole string) ([]ListItem, error) {
+func (s *Service) List(ctx context.Context, userID uuid.UUID, tenantRole auth.Role) ([]ListItem, error) {
 	q := dbq.New(s.db.Pool())
 	var agents []dbq.Agent
 	var err error
-	if auth.RoleAtLeast(tenantRole, "admin") {
+	if tenantRole.AtLeast(auth.RoleAdmin) {
 		agents, err = q.ListAgents(ctx)
 	} else {
 		agents, err = q.ListAgentsByUserID(ctx, pgtype.UUID{Bytes: userID, Valid: true})
@@ -374,7 +337,7 @@ func (s *Service) Get(ctx context.Context, userID, agentID uuid.UUID) (Detail, e
 	if err != nil {
 		return Detail{}, service.ErrNotFound
 	}
-	if err := s.requireAccess(ctx, q, userID, agentID); err != nil {
+	if err := service.RequireAgentAccess(ctx, q, userID, agentID, agentsdk.AccessUser); err != nil {
 		return Detail{}, err
 	}
 	conns, _ := q.ListConnectionsByAgent(ctx, pgID)
@@ -397,7 +360,7 @@ func (s *Service) Update(ctx context.Context, userID, agentID uuid.UUID, req Upd
 	if err != nil {
 		return dbq.Agent{}, service.ErrNotFound
 	}
-	if err := s.requireAccess(ctx, q, userID, agentID); err != nil {
+	if err := service.RequireAgentAccess(ctx, q, userID, agentID, agentsdk.AccessUser); err != nil {
 		return dbq.Agent{}, err
 	}
 	autoFix := agent.AutoFix
@@ -452,7 +415,7 @@ func (s *Service) Delete(ctx context.Context, userID, agentID uuid.UUID) error {
 	if err != nil {
 		return service.ErrNotFound
 	}
-	if err := s.requireAccess(ctx, q, userID, agentID); err != nil {
+	if err := service.RequireAgentAccess(ctx, q, userID, agentID, agentsdk.AccessUser); err != nil {
 		return err
 	}
 	s.builder.CancelBuildAndWait(agentID.String(), 30*time.Second)
@@ -493,7 +456,7 @@ func (s *Service) Stop(ctx context.Context, userID, agentID uuid.UUID) error {
 	if _, err := q.GetAgentByID(ctx, pgtype.UUID{Bytes: agentID, Valid: true}); err != nil {
 		return service.ErrNotFound
 	}
-	if err := s.requireAccess(ctx, q, userID, agentID); err != nil {
+	if err := service.RequireAgentAccess(ctx, q, userID, agentID, agentsdk.AccessUser); err != nil {
 		return err
 	}
 	containerName := "airlock-agent-" + agentID.String()[:8]
@@ -516,7 +479,7 @@ func (s *Service) Start(ctx context.Context, userID, agentID uuid.UUID) error {
 	if err != nil {
 		return service.ErrNotFound
 	}
-	if err := s.requireAccess(ctx, q, userID, agentID); err != nil {
+	if err := service.RequireAgentAccess(ctx, q, userID, agentID, agentsdk.AccessUser); err != nil {
 		return err
 	}
 	if agent.ImageRef == "" {
@@ -544,7 +507,7 @@ func (s *Service) Suspend(ctx context.Context, userID, agentID uuid.UUID) error 
 	if _, err := q.GetAgentByID(ctx, pgtype.UUID{Bytes: agentID, Valid: true}); err != nil {
 		return service.ErrNotFound
 	}
-	if err := s.requireAccess(ctx, q, userID, agentID); err != nil {
+	if err := service.RequireAgentAccess(ctx, q, userID, agentID, agentsdk.AccessUser); err != nil {
 		return err
 	}
 	containerName := "airlock-agent-" + agentID.String()[:8]
@@ -555,9 +518,12 @@ func (s *Service) Suspend(ctx context.Context, userID, agentID uuid.UUID) error 
 	return nil
 }
 
-// CancelBuild is a thin wrapper around builder.CancelBuild — no
-// per-agent gate today; preserved.
-func (s *Service) CancelBuild(agentID uuid.UUID) error {
+// CancelBuild cancels the agent's in-progress build. Requires agent-admin.
+func (s *Service) CancelBuild(ctx context.Context, userID, agentID uuid.UUID) error {
+	q := dbq.New(s.db.Pool())
+	if err := service.RequireAgentAccess(ctx, q, userID, agentID, agentsdk.AccessAdmin); err != nil {
+		return err
+	}
 	if !s.builder.CancelBuild(agentID.String()) {
 		return service.Detail(service.ErrConflict, "no build in progress")
 	}
@@ -581,7 +547,7 @@ func (s *Service) Upgrade(ctx context.Context, userID, agentID uuid.UUID, req Up
 	if err != nil {
 		return service.ErrNotFound
 	}
-	if err := s.requireAdmin(ctx, q, userID, agentID); err != nil {
+	if err := service.RequireAgentAccess(ctx, q, userID, agentID, agentsdk.AccessAdmin); err != nil {
 		return err
 	}
 	if agent.ImageRef == "" {
@@ -667,7 +633,7 @@ func (s *Service) Rollback(ctx context.Context, userID, agentID uuid.UUID, req R
 	if err != nil {
 		return service.ErrNotFound
 	}
-	if err := s.requireAdmin(ctx, q, userID, agentID); err != nil {
+	if err := service.RequireAgentAccess(ctx, q, userID, agentID, agentsdk.AccessAdmin); err != nil {
 		return err
 	}
 	if agent.ImageRef == "" {
@@ -705,9 +671,13 @@ func (s *Service) Rollback(ctx context.Context, userID, agentID uuid.UUID, req R
 	return nil
 }
 
-// ListWebhooks returns webhook rows with last-received status. No per-agent gate today.
-func (s *Service) ListWebhooks(ctx context.Context, agentID uuid.UUID) ([]dbq.ListWebhooksByAgentWithStatusRow, error) {
+// ListWebhooks returns webhook rows with last-received status. Requires
+// agent-admin (webhook config is owner-only).
+func (s *Service) ListWebhooks(ctx context.Context, userID, agentID uuid.UUID) ([]dbq.ListWebhooksByAgentWithStatusRow, error) {
 	q := dbq.New(s.db.Pool())
+	if err := service.RequireAgentAccess(ctx, q, userID, agentID, agentsdk.AccessAdmin); err != nil {
+		return nil, err
+	}
 	rows, err := q.ListWebhooksByAgentWithStatus(ctx, pgtype.UUID{Bytes: agentID, Valid: true})
 	if err != nil {
 		s.logger.Error("list webhooks", zap.Error(err))
@@ -716,9 +686,13 @@ func (s *Service) ListWebhooks(ctx context.Context, agentID uuid.UUID) ([]dbq.Li
 	return rows, nil
 }
 
-// ListCrons returns the agent's cron rows.
-func (s *Service) ListCrons(ctx context.Context, agentID uuid.UUID) ([]dbq.AgentCron, error) {
+// ListCrons returns the agent's cron rows. Requires agent-admin (cron
+// config is owner-only).
+func (s *Service) ListCrons(ctx context.Context, userID, agentID uuid.UUID) ([]dbq.AgentCron, error) {
 	q := dbq.New(s.db.Pool())
+	if err := service.RequireAgentAccess(ctx, q, userID, agentID, agentsdk.AccessAdmin); err != nil {
+		return nil, err
+	}
 	rows, err := q.ListCronsByAgent(ctx, pgtype.UUID{Bytes: agentID, Valid: true})
 	if err != nil {
 		s.logger.Error("list crons", zap.Error(err))
@@ -727,9 +701,13 @@ func (s *Service) ListCrons(ctx context.Context, agentID uuid.UUID) ([]dbq.Agent
 	return rows, nil
 }
 
-// ListTools returns the agent's registered tool catalog.
-func (s *Service) ListTools(ctx context.Context, agentID uuid.UUID) ([]dbq.AgentTool, error) {
+// ListTools returns the agent's registered tool catalog. Requires agent
+// membership (AccessUser).
+func (s *Service) ListTools(ctx context.Context, userID, agentID uuid.UUID) ([]dbq.AgentTool, error) {
 	q := dbq.New(s.db.Pool())
+	if err := service.RequireAgentAccess(ctx, q, userID, agentID, agentsdk.AccessUser); err != nil {
+		return nil, err
+	}
 	rows, err := q.ListAgentTools(ctx, pgtype.UUID{Bytes: agentID, Valid: true})
 	if err != nil {
 		s.logger.Error("list tools", zap.Error(err))
@@ -739,9 +717,12 @@ func (s *Service) ListTools(ctx context.Context, agentID uuid.UUID) ([]dbq.Agent
 }
 
 // FireCron triggers a cron run synchronously and returns the run ID
-// after draining the response body.
-func (s *Service) FireCron(ctx context.Context, agentID uuid.UUID, name string) (FireCronResult, error) {
+// after draining the response body. Requires agent-admin.
+func (s *Service) FireCron(ctx context.Context, userID, agentID uuid.UUID, name string) (FireCronResult, error) {
 	q := dbq.New(s.db.Pool())
+	if err := service.RequireAgentAccess(ctx, q, userID, agentID, agentsdk.AccessAdmin); err != nil {
+		return FireCronResult{}, err
+	}
 	cron, err := q.GetCronByAgentAndName(ctx, dbq.GetCronByAgentAndNameParams{
 		AgentID: pgtype.UUID{Bytes: agentID, Valid: true},
 		Name:    name,
@@ -763,9 +744,13 @@ func (s *Service) FireCron(ctx context.Context, agentID uuid.UUID, name string) 
 	return FireCronResult{RunID: runID}, nil
 }
 
-// ListBuilds returns the agent's build history (latest 50).
-func (s *Service) ListBuilds(ctx context.Context, agentID uuid.UUID) ([]dbq.ListAgentBuildsByAgentRow, error) {
+// ListBuilds returns the agent's build history (latest 50). Requires
+// agent membership (AccessUser).
+func (s *Service) ListBuilds(ctx context.Context, userID, agentID uuid.UUID) ([]dbq.ListAgentBuildsByAgentRow, error) {
 	q := dbq.New(s.db.Pool())
+	if err := service.RequireAgentAccess(ctx, q, userID, agentID, agentsdk.AccessUser); err != nil {
+		return nil, err
+	}
 	rows, err := q.ListAgentBuildsByAgent(ctx, pgtype.UUID{Bytes: agentID, Valid: true})
 	if err != nil {
 		s.logger.Error("list builds", zap.Error(err))
@@ -783,11 +768,14 @@ type BuildWithTarget struct {
 	Target *dbq.AgentBuild
 }
 
-func (s *Service) GetBuild(ctx context.Context, buildID uuid.UUID) (BuildWithTarget, error) {
+func (s *Service) GetBuild(ctx context.Context, userID, buildID uuid.UUID) (BuildWithTarget, error) {
 	q := dbq.New(s.db.Pool())
 	b, err := q.GetAgentBuild(ctx, pgtype.UUID{Bytes: buildID, Valid: true})
 	if err != nil {
 		return BuildWithTarget{}, service.ErrNotFound
+	}
+	if err := service.RequireAgentAccess(ctx, q, userID, uuid.UUID(b.AgentID.Bytes), agentsdk.AccessUser); err != nil {
+		return BuildWithTarget{}, err
 	}
 	out := BuildWithTarget{Build: b}
 	if b.RollbackTargetID.Valid {
@@ -828,7 +816,7 @@ func (s *Service) ConnectGit(ctx context.Context, userID, agentID uuid.UUID, req
 	if _, err := q.GetAgentByID(ctx, pgtype.UUID{Bytes: agentID, Valid: true}); err != nil {
 		return GitConfig{}, service.ErrNotFound
 	}
-	if err := s.requireAccess(ctx, q, userID, agentID); err != nil {
+	if err := service.RequireAgentAccess(ctx, q, userID, agentID, agentsdk.AccessUser); err != nil {
 		return GitConfig{}, err
 	}
 	cred, err := q.GetGitCredential(ctx, pgtype.UUID{Bytes: credID, Valid: true})
@@ -868,7 +856,7 @@ func (s *Service) DisconnectGit(ctx context.Context, userID, agentID uuid.UUID) 
 	if _, err := q.GetAgentByID(ctx, pgtype.UUID{Bytes: agentID, Valid: true}); err != nil {
 		return service.ErrNotFound
 	}
-	if err := s.requireAccess(ctx, q, userID, agentID); err != nil {
+	if err := service.RequireAgentAccess(ctx, q, userID, agentID, agentsdk.AccessUser); err != nil {
 		return err
 	}
 	if err := q.DisconnectAgentGit(ctx, pgtype.UUID{Bytes: agentID, Valid: true}); err != nil {
@@ -885,7 +873,7 @@ func (s *Service) GetGitConfig(ctx context.Context, userID, agentID uuid.UUID) (
 	if _, err := q.GetAgentByID(ctx, pgtype.UUID{Bytes: agentID, Valid: true}); err != nil {
 		return GitConfig{}, service.ErrNotFound
 	}
-	if err := s.requireAccess(ctx, q, userID, agentID); err != nil {
+	if err := service.RequireAgentAccess(ctx, q, userID, agentID, agentsdk.AccessUser); err != nil {
 		return GitConfig{}, err
 	}
 	cfg, err := q.GetAgentGitConfig(ctx, pgtype.UUID{Bytes: agentID, Valid: true})

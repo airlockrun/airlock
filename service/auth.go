@@ -11,20 +11,6 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-// accessRank totally orders the three access levels so RequireAgentAccess
-// can answer "is the caller's level high enough?" with one comparison.
-func accessRank(a agentsdk.Access) int {
-	switch a {
-	case agentsdk.AccessAdmin:
-		return 3
-	case agentsdk.AccessUser:
-		return 2
-	case agentsdk.AccessPublic:
-		return 1
-	}
-	return 0
-}
-
 // RequireAgentAccess gates a service call against the caller's per-agent
 // access ladder. Returns:
 //   - ErrUnauthorized when userID is the zero UUID (no JWT).
@@ -41,7 +27,7 @@ func RequireAgentAccess(ctx context.Context, q *dbq.Queries, userID, agentID uui
 	if userID == uuid.Nil {
 		return ErrUnauthorized
 	}
-	if accessRank(trigger.ResolveAgentAccess(ctx, q, agentID, userID)) < accessRank(min) {
+	if !trigger.AccessAtLeast(trigger.ResolveAgentAccess(ctx, q, agentID, userID), min) {
 		return ErrForbidden
 	}
 	return nil
@@ -59,7 +45,7 @@ func RequireAgentLevel(ctx context.Context, q *dbq.Queries, userID, agentID uuid
 	if err != nil {
 		return dbq.Agent{}, ErrNotFound
 	}
-	if accessRank(trigger.ResolveAgentAccess(ctx, q, agentID, userID)) < accessRank(min) {
+	if !trigger.AccessAtLeast(trigger.ResolveAgentAccess(ctx, q, agentID, userID), min) {
 		return dbq.Agent{}, ErrForbidden
 	}
 	return agent, nil
@@ -78,18 +64,16 @@ func ResolveAgent(ctx context.Context, q *dbq.Queries, identifier string) (dbq.A
 	return q.GetAgentBySlug(ctx, identifier)
 }
 
-// RequireTenantManager passes when the user's tenant role is manager or
-// admin. Returns ErrUnauthorized for a zero userID and ErrForbidden for
-// any role below manager (including "user" and the empty string).
-func RequireTenantManager(ctx context.Context, q *dbq.Queries, userID uuid.UUID) error {
-	if userID == uuid.Nil {
+// RequireTenantAccess gates a service call against the caller's tenant
+// role, the platform-wide axis (admin/manager/user). The role is taken
+// from the JWT claim the caller already carries — no DB read. Returns:
+//   - ErrUnauthorized when role is the empty string (no claim).
+//   - ErrForbidden when the role ranks below `min`.
+func RequireTenantAccess(role, min auth.Role) error {
+	if role == "" {
 		return ErrUnauthorized
 	}
-	u, err := q.GetUserByID(ctx, pgtype.UUID{Bytes: userID, Valid: true})
-	if err != nil {
-		return ErrUnauthorized
-	}
-	if !auth.RoleAtLeast(u.TenantRole, "manager") {
+	if !role.AtLeast(min) {
 		return ErrForbidden
 	}
 	return nil

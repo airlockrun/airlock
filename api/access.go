@@ -9,7 +9,6 @@ import (
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/airlockrun/airlock/trigger"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // MCPPrincipalKind discriminates how a caller hit the A2A MCP endpoint.
@@ -86,30 +85,18 @@ func computeA2ACallerAccess(ctx context.Context, q *dbq.Queries, target dbq.Agen
 			// belt-and-suspenders here.
 			return "", fmt.Errorf("%w: no original user for caller", ErrMCPForbidden)
 		}
-		member, err := q.GetAgentMember(ctx, dbq.GetAgentMemberParams{
-			AgentID: target.ID,
-			UserID:  pgtype.UUID{Bytes: userID, Valid: true},
-		})
-		if err == nil {
-			if member.Role == "admin" {
-				return agentsdk.AccessAdmin, nil
-			}
-			return agentsdk.AccessUser, nil
+		// One ladder for every surface: trigger.ResolveAgentAccess maps
+		// (user, agent) → admin/user/public off agent_members. A member
+		// resolves to AccessUser/AccessAdmin; a non-member resolves to
+		// AccessPublic, which here is only honored if the target opens
+		// itself to non-members — otherwise it's a 403.
+		access := trigger.ResolveAgentAccess(ctx, q, uuid.UUID(target.ID.Bytes), userID)
+		if access == agentsdk.AccessPublic && !target.AllowNonMemberMcp {
+			return "", ErrMCPForbidden
 		}
-		// Non-member: only allowed if the target opens itself to non-members.
-		if target.AllowNonMemberMcp {
-			return agentsdk.AccessPublic, nil
-		}
-		return "", ErrMCPForbidden
+		return access, nil
 
 	default:
 		return "", fmt.Errorf("%w: unknown principal kind", ErrMCPForbidden)
 	}
 }
-
-// Compile-time guard: keep this file's reference to the trigger package
-// honest. computeA2ACallerAccess intentionally does NOT call
-// trigger.ResolveAgentAccess — it inlines the agent_members check so
-// the non-member fallthrough can branch on target.AllowNonMemberMcp.
-// Without this guard the import would dangle on any refactor.
-var _ = trigger.ResolveAgentAccess

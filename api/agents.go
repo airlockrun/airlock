@@ -109,9 +109,9 @@ func (h *agentsHandler) Create(w http.ResponseWriter, r *http.Request) {
 // List handles GET /api/v1/agents.
 func (h *agentsHandler) List(w http.ResponseWriter, r *http.Request) {
 	claims := auth.ClaimsFromContext(r.Context())
-	tenantRole := ""
+	var tenantRole auth.Role
 	if claims != nil {
-		tenantRole = claims.TenantRole
+		tenantRole = auth.Role(claims.TenantRole)
 	}
 	userID := auth.UserIDFromContext(r.Context())
 	items, err := h.svc.List(r.Context(), userID, tenantRole)
@@ -263,7 +263,8 @@ func (h *agentsHandler) CancelBuild(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid agent ID")
 		return
 	}
-	if err := h.svc.CancelBuild(agentID); err != nil {
+	userID := auth.UserIDFromContext(r.Context())
+	if err := h.svc.CancelBuild(r.Context(), userID, agentID); err != nil {
 		writeAgentsError(w, err, "failed to cancel build")
 		return
 	}
@@ -323,9 +324,10 @@ func (h *agentsHandler) ListWebhooks(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid agent ID")
 		return
 	}
-	rows, err := h.svc.ListWebhooks(r.Context(), agentID)
+	userID := auth.UserIDFromContext(r.Context())
+	rows, err := h.svc.ListWebhooks(r.Context(), userID, agentID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to list webhooks")
+		writeAgentsError(w, err, "failed to list webhooks")
 		return
 	}
 	out := make([]*airlockv1.WebhookInfo, len(rows))
@@ -342,9 +344,10 @@ func (h *agentsHandler) ListCrons(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid agent ID")
 		return
 	}
-	rows, err := h.svc.ListCrons(r.Context(), agentID)
+	userID := auth.UserIDFromContext(r.Context())
+	rows, err := h.svc.ListCrons(r.Context(), userID, agentID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to list crons")
+		writeAgentsError(w, err, "failed to list crons")
 		return
 	}
 	out := make([]*airlockv1.CronInfo, len(rows))
@@ -361,9 +364,10 @@ func (h *agentsHandler) ListTools(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid agent ID")
 		return
 	}
-	tools, err := h.svc.ListTools(r.Context(), agentID)
+	userID := auth.UserIDFromContext(r.Context())
+	tools, err := h.svc.ListTools(r.Context(), userID, agentID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to list tools")
+		writeAgentsError(w, err, "failed to list tools")
 		return
 	}
 	out := make([]*airlockv1.ToolInfo, len(tools))
@@ -387,7 +391,8 @@ func (h *agentsHandler) FireCron(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid agent ID")
 		return
 	}
-	res, err := h.svc.FireCron(r.Context(), agentID, chi.URLParam(r, "name"))
+	userID := auth.UserIDFromContext(r.Context())
+	res, err := h.svc.FireCron(r.Context(), userID, agentID, chi.URLParam(r, "name"))
 	if err != nil {
 		writeAgentsError(w, err, "failed to fire cron")
 		return
@@ -402,9 +407,10 @@ func (h *agentsHandler) ListBuilds(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid agent ID")
 		return
 	}
-	builds, err := h.svc.ListBuilds(r.Context(), agentID)
+	userID := auth.UserIDFromContext(r.Context())
+	builds, err := h.svc.ListBuilds(r.Context(), userID, agentID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to list builds")
+		writeAgentsError(w, err, "failed to list builds")
 		return
 	}
 	sourceRefByID := make(map[string]string, len(builds))
@@ -448,7 +454,8 @@ func (h *agentsHandler) GetBuild(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid build ID")
 		return
 	}
-	res, err := h.svc.GetBuild(r.Context(), buildID)
+	userID := auth.UserIDFromContext(r.Context())
+	res, err := h.svc.GetBuild(r.Context(), userID, buildID)
 	if err != nil {
 		writeAgentsError(w, err, "failed to load build")
 		return
@@ -533,9 +540,9 @@ func (h *agentsHandler) AddMember(w http.ResponseWriter, r *http.Request) {
 	}
 	claims := auth.ClaimsFromContext(ctx)
 	callerID := auth.UserIDFromContext(ctx)
-	tenantRole := ""
+	var tenantRole auth.Role
 	if claims != nil {
-		tenantRole = claims.TenantRole
+		tenantRole = auth.Role(claims.TenantRole)
 	}
 	if err := h.members.Add(ctx, callerID, tenantRole, agentID, targetID, req.Role); err != nil {
 		if errors.Is(err, service.ErrInvalidInput) {
@@ -555,9 +562,10 @@ func (h *agentsHandler) ListMembers(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid agent ID")
 		return
 	}
-	rows, err := h.members.List(r.Context(), agentID)
+	userID := auth.UserIDFromContext(r.Context())
+	rows, err := h.members.List(r.Context(), userID, agentID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to list members")
+		writeMembersError(w, err, "failed to list members")
 		return
 	}
 	out := make([]*airlockv1.AgentMemberInfo, len(rows))

@@ -1,12 +1,14 @@
 // Package runs owns the list / get / log / cancel operations for the
-// runs table. Today no per-run authorization gate is applied — runs
-// are addressable by ID for any authenticated user. Preserved.
+// runs table. Every operation gates on the caller's access to the run's
+// agent: reads require agent membership (AccessUser); cancel requires
+// agent-admin or ownership of the run's conversation (web prompt runs).
 package runs
 
 import (
 	"context"
 	"time"
 
+	"github.com/airlockrun/agentsdk"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/airlockrun/airlock/service"
@@ -48,9 +50,12 @@ type ListResult struct {
 }
 
 // List returns up to `limit` runs for the agent, paginated by started_at.
-// A zero cursor returns the newest page.
-func (s *Service) List(ctx context.Context, agentID uuid.UUID, cursor time.Time, limit int32) (ListResult, error) {
+// A zero cursor returns the newest page. Requires agent membership.
+func (s *Service) List(ctx context.Context, userID, agentID uuid.UUID, cursor time.Time, limit int32) (ListResult, error) {
 	q := dbq.New(s.db.Pool())
+	if err := service.RequireAgentAccess(ctx, q, userID, agentID, agentsdk.AccessUser); err != nil {
+		return ListResult{}, err
+	}
 	var cur pgtype.Timestamptz
 	if !cursor.IsZero() {
 		cur = pgtype.Timestamptz{Time: cursor, Valid: true}
@@ -79,24 +84,31 @@ type GetResult struct {
 }
 
 // Get returns one run and the messages produced during it. ErrNotFound
-// when the run row is missing. Best-effort messages load: a query
-// failure there returns an empty slice (matching today).
-func (s *Service) Get(ctx context.Context, runID uuid.UUID) (GetResult, error) {
+// when the run row is missing. Requires membership of the run's agent.
+// Best-effort messages load: a query failure there returns an empty slice.
+func (s *Service) Get(ctx context.Context, userID, runID uuid.UUID) (GetResult, error) {
 	q := dbq.New(s.db.Pool())
 	run, err := q.GetRunByID(ctx, pgtype.UUID{Bytes: runID, Valid: true})
 	if err != nil {
 		return GetResult{}, service.ErrNotFound
 	}
+	if err := service.RequireAgentAccess(ctx, q, userID, uuid.UUID(run.AgentID.Bytes), agentsdk.AccessUser); err != nil {
+		return GetResult{}, err
+	}
 	msgs, _ := q.ListMessagesByRun(ctx, pgtype.UUID{Bytes: runID, Valid: true})
 	return GetResult{Run: run, Messages: msgs}, nil
 }
 
-// Logs returns the captured stdout for a run. ErrNotFound for a missing run.
-func (s *Service) Logs(ctx context.Context, runID uuid.UUID) (string, error) {
+// Logs returns the captured stdout for a run. ErrNotFound for a missing
+// run. Requires membership of the run's agent.
+func (s *Service) Logs(ctx context.Context, userID, runID uuid.UUID) (string, error) {
 	q := dbq.New(s.db.Pool())
 	run, err := q.GetRunByID(ctx, pgtype.UUID{Bytes: runID, Valid: true})
 	if err != nil {
 		return "", service.ErrNotFound
+	}
+	if err := service.RequireAgentAccess(ctx, q, userID, uuid.UUID(run.AgentID.Bytes), agentsdk.AccessUser); err != nil {
+		return "", err
 	}
 	return run.StdoutLog, nil
 }
@@ -105,11 +117,16 @@ func (s *Service) Logs(ctx context.Context, runID uuid.UUID) (string, error) {
 // streaming response) and then marks the row cancelled in the DB,
 // idempotent with the agent's own r.Complete write. ErrNotFound for a
 // missing run; ErrConflict if the run is already in a terminal state.
-func (s *Service) Cancel(ctx context.Context, runID uuid.UUID) error {
+// Authorized for agent admins, or the owner of the run's conversation
+// when the run was a web prompt (so a user can stop their own run).
+func (s *Service) Cancel(ctx context.Context, userID, runID uuid.UUID) error {
 	q := dbq.New(s.db.Pool())
 	run, err := q.GetRunByID(ctx, pgtype.UUID{Bytes: runID, Valid: true})
 	if err != nil {
 		return service.ErrNotFound
+	}
+	if err := s.authorizeCancel(ctx, q, userID, run); err != nil {
+		return err
 	}
 	if run.Status != "running" {
 		return service.ErrConflict
@@ -121,4 +138,28 @@ func (s *Service) Cancel(ctx context.Context, runID uuid.UUID) error {
 		ErrorMessage: "cancelled by user",
 	})
 	return nil
+}
+
+// authorizeCancel permits agent admins, plus the owner of the run's
+// conversation when the run was a web prompt. Web prompt runs store the
+// conversation ID in trigger_ref; the dispatcher's in-memory cancel
+// registry carries no caller identity, so ownership is resolved from the
+// run row here. Cron/webhook/bridge runs have no user owner and stay
+// admin-only.
+func (s *Service) authorizeCancel(ctx context.Context, q *dbq.Queries, userID uuid.UUID, run dbq.Run) error {
+	if userID == uuid.Nil {
+		return service.ErrUnauthorized
+	}
+	if service.RequireAgentAccess(ctx, q, userID, uuid.UUID(run.AgentID.Bytes), agentsdk.AccessAdmin) == nil {
+		return nil
+	}
+	if run.TriggerType == "prompt" {
+		if convID, err := uuid.Parse(run.TriggerRef); err == nil {
+			conv, err := q.GetConversationByID(ctx, pgtype.UUID{Bytes: convID, Valid: true})
+			if err == nil && conv.UserID.Valid && uuid.UUID(conv.UserID.Bytes) == userID {
+				return nil
+			}
+		}
+	}
+	return service.ErrForbidden
 }

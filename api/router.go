@@ -251,7 +251,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 
 		// User management (admin only)
 		r.Route("/users", func(r chi.Router) {
-			r.Use(auth.RequireTenantRole("admin"))
+			r.Use(auth.RequireTenantRole(auth.RoleAdmin))
 			r.Get("/", usersHandler.List)
 			r.Post("/", usersHandler.Create)
 			r.Patch("/{userID}", usersHandler.UpdateRole)
@@ -261,11 +261,11 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		// System settings. GET is readable by any authenticated user so the
 		// Agent Create flow can prefill system defaults; PUT stays admin-only.
 		r.Get("/settings", sysSettingsHandler.Get)
-		r.With(auth.RequireTenantRole("admin")).Put("/settings", sysSettingsHandler.Update)
+		r.With(auth.RequireTenantRole(auth.RoleAdmin)).Put("/settings", sysSettingsHandler.Update)
 
 		// Provider management (admin/owner only)
 		r.Route("/providers", func(r chi.Router) {
-			r.Use(auth.RequireTenantRole("admin"))
+			r.Use(auth.RequireTenantRole(auth.RoleAdmin))
 			r.Get("/", providersHandler.List)
 			r.Post("/", providersHandler.Create)
 			r.Route("/{id}", func(r chi.Router) {

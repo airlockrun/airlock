@@ -416,13 +416,15 @@ func (p *PromptProxy) HandleCallback(
 	}
 
 	run, err := q.GetSuspendedRunByID(ctx, toPgUUID(runID))
-	if err != nil {
-		// Stale button — the run was already resolved (e.g. via web or another tap).
+	if err != nil || uuid.UUID(run.AgentID.Bytes) != agentID {
+		// Stale button — the run was already resolved (web / another tap),
+		// or the callback names a run that doesn't belong to this bridge's
+		// agent. Either way there's nothing for this agent to resolve, and
+		// we must not resolve/resume another agent's run.
 		events <- ResponseEvent{Type: "info", Text: "This confirmation has already been resolved."}
 		close(events)
 		return true, nil
 	}
-	_ = run // status check is already implicit in GetSuspendedRunByID
 
 	if err := q.ResolveSuspendedRun(ctx, toPgUUID(runID)); err != nil {
 		close(events)

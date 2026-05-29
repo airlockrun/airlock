@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/airlockrun/agentsdk"
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/airlockrun/airlock/execproxy"
 	"github.com/airlockrun/airlock/secrets"
@@ -81,7 +82,10 @@ type TestResult struct {
 }
 
 // List returns every exec endpoint declared by the agent.
-func (s *Service) List(ctx context.Context, agentID uuid.UUID) ([]dbq.AgentExecEndpoint, error) {
+func (s *Service) List(ctx context.Context, userID, agentID uuid.UUID) ([]dbq.AgentExecEndpoint, error) {
+	if err := service.RequireAgentAccess(ctx, s.queries, userID, agentID, agentsdk.AccessAdmin); err != nil {
+		return nil, err
+	}
 	rows, err := s.queries.ListExecEndpointsByAgent(ctx, pgtype.UUID{Bytes: agentID, Valid: true})
 	if err != nil {
 		s.logger.Error("list exec endpoints failed", zap.Error(err))
@@ -94,7 +98,10 @@ func (s *Service) List(ctx context.Context, agentID uuid.UUID) ([]dbq.AgentExecE
 // and generates a keypair on first configure. ErrInvalidInput for bad
 // input, ErrNotFound when the endpoint slug wasn't declared by the
 // agent.
-func (s *Service) Configure(ctx context.Context, agentID uuid.UUID, slug string, req ConfigureRequest) (dbq.AgentExecEndpoint, error) {
+func (s *Service) Configure(ctx context.Context, userID, agentID uuid.UUID, slug string, req ConfigureRequest) (dbq.AgentExecEndpoint, error) {
+	if err := service.RequireAgentAccess(ctx, s.queries, userID, agentID, agentsdk.AccessAdmin); err != nil {
+		return dbq.AgentExecEndpoint{}, err
+	}
 	if strings.TrimSpace(req.Host) == "" {
 		return dbq.AgentExecEndpoint{}, service.Detail(service.ErrInvalidInput, "host is required")
 	}
@@ -143,7 +150,10 @@ func (s *Service) Configure(ctx context.Context, agentID uuid.UUID, slug string,
 
 // RotateKeypair mints a new ED25519 keypair, replaces the secrets-store
 // ref, and evicts the cached SSH client.
-func (s *Service) RotateKeypair(ctx context.Context, agentID uuid.UUID, slug string) (dbq.AgentExecEndpoint, error) {
+func (s *Service) RotateKeypair(ctx context.Context, userID, agentID uuid.UUID, slug string) (dbq.AgentExecEndpoint, error) {
+	if err := service.RequireAgentAccess(ctx, s.queries, userID, agentID, agentsdk.AccessAdmin); err != nil {
+		return dbq.AgentExecEndpoint{}, err
+	}
 	ep, err := s.queries.GetExecEndpointBySlug(ctx, dbq.GetExecEndpointBySlugParams{
 		AgentID: pgtype.UUID{Bytes: agentID, Valid: true},
 		Slug:    slug,
@@ -169,7 +179,10 @@ func (s *Service) RotateKeypair(ctx context.Context, agentID uuid.UUID, slug str
 
 // UnpinHostKey clears the TOFU-pinned host key on this endpoint; the
 // next successful connect re-pins whatever the remote presents.
-func (s *Service) UnpinHostKey(ctx context.Context, agentID uuid.UUID, slug string) error {
+func (s *Service) UnpinHostKey(ctx context.Context, userID, agentID uuid.UUID, slug string) error {
+	if err := service.RequireAgentAccess(ctx, s.queries, userID, agentID, agentsdk.AccessAdmin); err != nil {
+		return err
+	}
 	ep, err := s.queries.GetExecEndpointBySlug(ctx, dbq.GetExecEndpointBySlugParams{
 		AgentID: pgtype.UUID{Bytes: agentID, Valid: true},
 		Slug:    slug,
@@ -194,7 +207,10 @@ func (s *Service) UnpinHostKey(ctx context.Context, agentID uuid.UUID, slug stri
 
 // Test runs `whoami` through the dialer and parses the buffered NDJSON
 // stream into a one-shot TestResult. Caps each captured stream at 4 KiB.
-func (s *Service) Test(ctx context.Context, agentID uuid.UUID, slug string) (TestResult, error) {
+func (s *Service) Test(ctx context.Context, userID, agentID uuid.UUID, slug string) (TestResult, error) {
+	if err := service.RequireAgentAccess(ctx, s.queries, userID, agentID, agentsdk.AccessAdmin); err != nil {
+		return TestResult{}, err
+	}
 	ep, err := s.queries.GetExecEndpointBySlug(ctx, dbq.GetExecEndpointBySlugParams{
 		AgentID: pgtype.UUID{Bytes: agentID, Valid: true},
 		Slug:    slug,

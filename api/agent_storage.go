@@ -313,7 +313,7 @@ func serveStoragePath(w http.ResponseWriter, r *http.Request, database *db.DB, s
 			AgentID: toPgUUID(agentID),
 			UserID:  toPgUUID(uid),
 		})
-		if err != nil || !auth.RoleAtLeast(member.Role, "admin") {
+		if err != nil || !auth.Role(member.Role).AtLeast(auth.RoleAdmin) {
 			http.NotFound(w, r)
 			return
 		}

@@ -97,6 +97,15 @@ func accessRank(a agentsdk.Access) int {
 	}
 }
 
+// AccessAtLeast reports whether a ranks at or above min on the per-agent
+// access ladder (AccessAdmin > AccessUser > AccessPublic). It is the
+// single source of truth for that comparison — the chat slash-command
+// gate, the service-layer RequireAgentAccess gate, and the MCP access
+// path all rank through here so the ladder can't drift between surfaces.
+func AccessAtLeast(a, min agentsdk.Access) bool {
+	return accessRank(a) >= accessRank(min)
+}
+
 // TrySlashCommand parses message for a leading slash command and, if recognized,
 // executes it against the conversation. Returns Handled=false when the message
 // is a plain user prompt. Both web (api.conversationsHandler.Prompt) and bridge
@@ -139,7 +148,7 @@ func TrySlashCommand(
 		}, nil
 	}
 
-	if accessRank(access) < accessRank(entry.Access) {
+	if !AccessAtLeast(access, entry.Access) {
 		return SlashCommandResult{
 			Handled: true,
 			Reply:   fmt.Sprintf("/%s requires %s access.", entry.Name, entry.Access),

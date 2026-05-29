@@ -133,22 +133,22 @@ func (s *Service) validateBot(ctx context.Context, bridgeType, token string) (st
 // Create validates, persists, initialises driver state, and starts the
 // poller. Gating: manager+ for any bridge; admin for system bridges;
 // agent ownership for agent-bound bridges.
-func (s *Service) Create(ctx context.Context, callerID uuid.UUID, tenantRole string, req CreateRequest) (Result, error) {
+func (s *Service) Create(ctx context.Context, callerID uuid.UUID, tenantRole auth.Role, req CreateRequest) (Result, error) {
 	if req.Token == "" {
 		return Result{}, service.Detail(service.ErrInvalidInput, "token is required")
 	}
 	if callerID == uuid.Nil {
 		return Result{}, service.ErrUnauthorized
 	}
-	if !auth.RoleAtLeast(tenantRole, "manager") {
-		return Result{}, service.Detail(service.ErrForbidden, "creating bridges requires manager role")
+	if err := service.RequireTenantAccess(tenantRole, auth.RoleManager); err != nil {
+		return Result{}, service.Detail(err, "creating bridges requires manager role")
 	}
 	q := dbq.New(s.db.Pool())
 	var agentPgID pgtype.UUID
 	isSystem := req.AgentID == ""
 	if isSystem {
-		if !auth.RoleAtLeast(tenantRole, "admin") {
-			return Result{}, service.Detail(service.ErrForbidden, "system bridges require admin role")
+		if err := service.RequireTenantAccess(tenantRole, auth.RoleAdmin); err != nil {
+			return Result{}, service.Detail(err, "system bridges require admin role")
 		}
 	} else {
 		agentID, err := uuid.Parse(req.AgentID)
@@ -217,12 +217,12 @@ func (s *Service) Create(ctx context.Context, callerID uuid.UUID, tenantRole str
 // List returns all bridges visible to the caller. Admins see every
 // bridge; everyone else sees system bridges plus bridges bound to
 // agents they're a member of.
-func (s *Service) List(ctx context.Context, callerID uuid.UUID, tenantRole string) ([]ListItem, error) {
+func (s *Service) List(ctx context.Context, callerID uuid.UUID, tenantRole auth.Role) ([]ListItem, error) {
 	if callerID == uuid.Nil {
 		return nil, service.ErrUnauthorized
 	}
 	q := dbq.New(s.db.Pool())
-	if auth.RoleAtLeast(tenantRole, "admin") {
+	if tenantRole.AtLeast(auth.RoleAdmin) {
 		rows, err := q.ListBridgesAdmin(ctx)
 		if err != nil {
 			s.logger.Error("list bridges failed", zap.Error(err))
@@ -264,11 +264,11 @@ func (s *Service) List(ctx context.Context, callerID uuid.UUID, tenantRole strin
 // require admin; non-system bridges require the bridge's creator (or
 // admin via Delete, not here). A non-empty new agent_id requires
 // ownership of that agent unless the caller is admin.
-func (s *Service) Update(ctx context.Context, callerID uuid.UUID, tenantRole string, bridgeID uuid.UUID, req UpdateRequest) (Result, error) {
+func (s *Service) Update(ctx context.Context, callerID uuid.UUID, tenantRole auth.Role, bridgeID uuid.UUID, req UpdateRequest) (Result, error) {
 	if callerID == uuid.Nil {
 		return Result{}, service.ErrUnauthorized
 	}
-	isAdmin := auth.RoleAtLeast(tenantRole, "admin")
+	isAdmin := tenantRole.AtLeast(auth.RoleAdmin)
 	q := dbq.New(s.db.Pool())
 	br, err := q.GetBridgeByID(ctx, pgtype.UUID{Bytes: bridgeID, Valid: true})
 	if err != nil {
@@ -343,11 +343,11 @@ func (s *Service) Update(ctx context.Context, callerID uuid.UUID, tenantRole str
 
 // Delete removes a bridge. Same owner/admin gate as Update; admin can
 // also delete someone else's bridge (the explicit escape hatch).
-func (s *Service) Delete(ctx context.Context, callerID uuid.UUID, tenantRole string, bridgeID uuid.UUID) error {
+func (s *Service) Delete(ctx context.Context, callerID uuid.UUID, tenantRole auth.Role, bridgeID uuid.UUID) error {
 	if callerID == uuid.Nil {
 		return service.ErrUnauthorized
 	}
-	isAdmin := auth.RoleAtLeast(tenantRole, "admin")
+	isAdmin := tenantRole.AtLeast(auth.RoleAdmin)
 	q := dbq.New(s.db.Pool())
 	br, err := q.GetBridgeByID(ctx, pgtype.UUID{Bytes: bridgeID, Valid: true})
 	if err != nil {

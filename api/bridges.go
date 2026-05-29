@@ -29,13 +29,13 @@ func newBridgeHandler(svc *bridgessvc.Service) *bridgeHandler {
 
 // tenantClaims extracts (userID, tenantRole) from the request ctx;
 // returns ok=false and writes 401 if no auth claims are present.
-func tenantClaims(w http.ResponseWriter, r *http.Request) (uuid.UUID, string, bool) {
+func tenantClaims(w http.ResponseWriter, r *http.Request) (uuid.UUID, auth.Role, bool) {
 	claims := auth.ClaimsFromContext(r.Context())
 	if claims == nil {
 		writeError(w, http.StatusUnauthorized, "not authenticated")
 		return uuid.Nil, "", false
 	}
-	return auth.UserIDFromContext(r.Context()), claims.TenantRole, true
+	return auth.UserIDFromContext(r.Context()), auth.Role(claims.TenantRole), true
 }
 
 // writeBridgesError renders sentinels with the original fallback strings.

@@ -151,7 +151,7 @@ func SubdomainProxy(agentDomain string, database *db.DB, s3 *storage.S3Client, d
 				writeError(w, http.StatusForbidden, "forbidden")
 				return
 			}
-			if !auth.RoleAtLeast(member.Role, "admin") {
+			if !auth.Role(member.Role).AtLeast(auth.RoleAdmin) {
 				log.Warn("user is not agent admin", zap.String("user_id", uid.String()), zap.String("role", member.Role))
 				writeError(w, http.StatusForbidden, "forbidden")
 				return

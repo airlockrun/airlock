@@ -11,6 +11,7 @@ import (
 	"errors"
 	"strconv"
 
+	"github.com/airlockrun/agentsdk"
 	"github.com/airlockrun/airlock/attachref"
 	"github.com/airlockrun/airlock/convert"
 	"github.com/airlockrun/airlock/db"
@@ -49,12 +50,13 @@ func New(d *db.DB, s3 *storage.S3Client, logger *zap.Logger, extractKeys KeyExtr
 
 func toPg(id uuid.UUID) pgtype.UUID { return pgtype.UUID{Bytes: id, Valid: true} }
 
-// Create makes a new web conversation thread.
+// Create makes a new web conversation thread. Requires membership of the
+// agent (AccessUser).
 func (s *Service) Create(ctx context.Context, userID, agentID uuid.UUID, title string) (dbq.AgentConversation, error) {
-	if userID == uuid.Nil {
-		return dbq.AgentConversation{}, service.ErrUnauthorized
-	}
 	q := dbq.New(s.db.Pool())
+	if err := service.RequireAgentAccess(ctx, q, userID, agentID, agentsdk.AccessUser); err != nil {
+		return dbq.AgentConversation{}, err
+	}
 	conv, err := q.CreateWebConversation(ctx, dbq.CreateWebConversationParams{
 		AgentID: toPg(agentID), UserID: toPg(userID), Title: title,
 	})
@@ -66,12 +68,13 @@ func (s *Service) Create(ctx context.Context, userID, agentID uuid.UUID, title s
 }
 
 // ListByAgent returns web conversations owned by the user for the given
-// agent (DM-only — there is at most one).
+// agent (DM-only — there is at most one). Requires membership of the
+// agent (AccessUser).
 func (s *Service) ListByAgent(ctx context.Context, userID, agentID uuid.UUID) ([]dbq.AgentConversation, error) {
-	if userID == uuid.Nil {
-		return nil, service.ErrUnauthorized
-	}
 	q := dbq.New(s.db.Pool())
+	if err := service.RequireAgentAccess(ctx, q, userID, agentID, agentsdk.AccessUser); err != nil {
+		return nil, err
+	}
 	rows, err := q.ListConversationsByAgent(ctx, dbq.ListConversationsByAgentParams{
 		AgentID: toPg(agentID), UserID: toPg(userID),
 	})

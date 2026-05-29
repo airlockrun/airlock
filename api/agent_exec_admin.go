@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/airlockrun/airlock/execproxy"
 	"github.com/airlockrun/airlock/service"
@@ -107,9 +108,10 @@ func (h *execEndpointsHandler) List(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusBadRequest, "invalid agent id")
 		return
 	}
-	rows, err := h.svc.List(r.Context(), agentID)
+	userID := auth.UserIDFromContext(r.Context())
+	rows, err := h.svc.List(r.Context(), userID, agentID)
 	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, "failed to list exec endpoints")
+		writeExecError(w, err, "failed to list exec endpoints")
 		return
 	}
 	out := make([]execEndpointDTO, 0, len(rows))
@@ -134,7 +136,8 @@ func (h *execEndpointsHandler) Configure(w http.ResponseWriter, r *http.Request)
 		writeJSONError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	ep, err := h.svc.Configure(r.Context(), agentID, slug, execsvc.ConfigureRequest{
+	userID := auth.UserIDFromContext(r.Context())
+	ep, err := h.svc.Configure(r.Context(), userID, agentID, slug, execsvc.ConfigureRequest{
 		Host: req.Host, Port: req.Port, SSHUser: req.SSHUser,
 	})
 	if err != nil {
@@ -150,14 +153,10 @@ func (h *execEndpointsHandler) RotateKeypair(w http.ResponseWriter, r *http.Requ
 	if !ok {
 		return
 	}
-	ep, err := h.svc.RotateKeypair(r.Context(), agentID, slug)
+	userID := auth.UserIDFromContext(r.Context())
+	ep, err := h.svc.RotateKeypair(r.Context(), userID, agentID, slug)
 	if err != nil {
-		switch {
-		case errors.Is(err, service.ErrNotFound):
-			writeJSONError(w, http.StatusNotFound, "exec endpoint not found")
-		default:
-			writeJSONError(w, http.StatusInternalServerError, "failed to rotate keypair")
-		}
+		writeExecError(w, err, "failed to rotate keypair")
 		return
 	}
 	writeJSON(w, http.StatusOK, rowToDTO(ep))
@@ -169,13 +168,9 @@ func (h *execEndpointsHandler) UnpinHostKey(w http.ResponseWriter, r *http.Reque
 	if !ok {
 		return
 	}
-	if err := h.svc.UnpinHostKey(r.Context(), agentID, slug); err != nil {
-		switch {
-		case errors.Is(err, service.ErrNotFound):
-			writeJSONError(w, http.StatusNotFound, "exec endpoint not found")
-		default:
-			writeJSONError(w, http.StatusInternalServerError, "failed to clear host key")
-		}
+	userID := auth.UserIDFromContext(r.Context())
+	if err := h.svc.UnpinHostKey(r.Context(), userID, agentID, slug); err != nil {
+		writeExecError(w, err, "failed to clear host key")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -187,14 +182,10 @@ func (h *execEndpointsHandler) Test(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	res, err := h.svc.Test(r.Context(), agentID, slug)
+	userID := auth.UserIDFromContext(r.Context())
+	res, err := h.svc.Test(r.Context(), userID, agentID, slug)
 	if err != nil {
-		switch {
-		case errors.Is(err, service.ErrNotFound):
-			writeJSONError(w, http.StatusNotFound, "exec endpoint not found")
-		default:
-			writeJSONError(w, http.StatusInternalServerError, "failed to load exec endpoint")
-		}
+		writeExecError(w, err, "failed to load exec endpoint")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{

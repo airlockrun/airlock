@@ -42,11 +42,14 @@ type Member struct {
 	CreatedAt   time.Time
 }
 
-// List returns the membership list for an agent. Today no per-agent
-// gate is applied (the JWT middleware on /api/v1 is the only check);
-// preserving that to keep the contract identical.
-func (s *Service) List(ctx context.Context, agentID uuid.UUID) ([]Member, error) {
+// List returns the membership list for an agent. Requires the caller to
+// be a member of the agent (AccessUser) — co-members are visible to each
+// other.
+func (s *Service) List(ctx context.Context, userID, agentID uuid.UUID) ([]Member, error) {
 	q := dbq.New(s.db.Pool())
+	if err := service.RequireAgentAccess(ctx, q, userID, agentID, agentsdk.AccessUser); err != nil {
+		return nil, err
+	}
 	rows, err := q.ListAgentMembers(ctx, pgtype.UUID{Bytes: agentID, Valid: true})
 	if err != nil {
 		s.logger.Error("list agent members", zap.Error(err))
@@ -72,7 +75,7 @@ func (s *Service) List(ctx context.Context, agentID uuid.UUID) ([]Member, error)
 //
 // Returns ErrInvalidInput for an unknown role; ErrForbidden when the
 // caller is neither a sysadmin self-adder nor an agent admin.
-func (s *Service) Add(ctx context.Context, callerID uuid.UUID, callerTenantRole string, agentID, targetID uuid.UUID, role string) error {
+func (s *Service) Add(ctx context.Context, callerID uuid.UUID, callerTenantRole auth.Role, agentID, targetID uuid.UUID, role string) error {
 	if role != "admin" && role != "user" {
 		return service.ErrInvalidInput
 	}
@@ -80,7 +83,7 @@ func (s *Service) Add(ctx context.Context, callerID uuid.UUID, callerTenantRole 
 		return service.ErrUnauthorized
 	}
 	q := dbq.New(s.db.Pool())
-	isSysAdmin := auth.RoleAtLeast(callerTenantRole, "admin")
+	isSysAdmin := callerTenantRole.AtLeast(auth.RoleAdmin)
 	if !(isSysAdmin && callerID == targetID) {
 		if err := service.RequireAgentAccess(ctx, q, callerID, agentID, agentsdk.AccessAdmin); err != nil {
 			return err
