@@ -30,14 +30,14 @@ type agentEnvVarValueResponse struct {
 // (UpsertEnvVar / GetEnvVarValue) keeps writing to the same ref shape.
 func envVarRef(id, slug string) string { return "agent/env-var/" + id + "/" + slug }
 
-// envVarUpsertRequest mirrors agentsdk.EnvVarDef. We don't import the SDK
-// type here because the SDK is consumed by the agent (build dependency);
-// the API server only sees the wire shape.
+// envVarUpsertRequest is the body agentsdk sends for
+// PUT /api/agent/env-vars/{slug}. JSON tags match agentsdk.EnvVarDef's wire
+// shape exactly (secret, default). The slug is authoritative from the URL —
+// not the body — mirroring the exec-endpoint and connection handlers.
 type envVarUpsertRequest struct {
-	Slug         string `json:"slug"`
 	Description  string `json:"description,omitempty"`
-	IsSecret     bool   `json:"isSecret"`
-	DefaultValue string `json:"defaultValue,omitempty"`
+	Secret       bool   `json:"secret"`
+	DefaultValue string `json:"default,omitempty"`
 	Pattern      string `json:"pattern,omitempty"`
 }
 
@@ -66,9 +66,9 @@ func (h *agentHandler) UpsertEnvVar(w http.ResponseWriter, r *http.Request) {
 	q := dbq.New(h.db.Pool())
 	if _, err := q.UpsertAgentEnvVar(r.Context(), dbq.UpsertAgentEnvVarParams{
 		AgentID:      toPgUUID(agentID),
-		Slug:         req.Slug,
+		Slug:         slug,
 		Description:  req.Description,
-		IsSecret:     req.IsSecret,
+		IsSecret:     req.Secret,
 		DefaultValue: req.DefaultValue,
 		Pattern:      req.Pattern,
 	}); err != nil {
