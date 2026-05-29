@@ -189,8 +189,6 @@ onMounted(() => {
       <Column header="Finished"><template #body><Skeleton /></template></Column>
       <Column header=""><template #body><Skeleton width="5rem" /></template></Column>
     </DataTable>
-
-    <ConfirmDialog />
   </div>
 </template>
 

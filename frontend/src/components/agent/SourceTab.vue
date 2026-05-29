@@ -231,8 +231,6 @@ onMounted(async () => {
         </div>
       </div>
     </Dialog>
-
-    <ConfirmDialog />
   </div>
   <div v-else style="padding: 1rem">
     <Skeleton width="60%" height="1.5rem" />
