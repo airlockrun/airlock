@@ -26,6 +26,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 )
@@ -55,12 +56,28 @@ func Setup(
 	migrate func(dsn string) error,
 	lockReset func(dsn string) (func(), error),
 ) (dsn string, reset func() error, release func(), ok bool) {
+	// Isolate the migrations' filesystem side effects into a throwaway
+	// dir. Migration 003 rewrites per-agent git repos under
+	// AGENT_REPOS_PATH; pointed at an empty tree it no-ops, so the
+	// schema-provisioning run can't race parallel test packages on the
+	// shared host path (separate testcontainer DBs, one filesystem) or
+	// mutate the real /var/lib/airlock agent repos. Each test process
+	// gets its own dir.
+	agentsDir, err := os.MkdirTemp("", "airlock-dbtest-agents-*")
+	if err != nil {
+		panic(fmt.Sprintf("dbtest: temp agents dir: %v", err))
+	}
+	os.Setenv("AGENT_REPOS_PATH", agentsDir)
+	os.Setenv("AGENT_MONOREPO_PATH", filepath.Join(agentsDir, "monorepo"))
+	cleanupAgents := func() { _ = os.RemoveAll(agentsDir) }
+
 	if ext := os.Getenv("TEST_DATABASE_URL"); ext != "" {
 		rel, err := lockReset(ext)
 		if err != nil {
+			cleanupAgents()
 			panic(fmt.Sprintf("dbtest: TEST_DATABASE_URL setup: %v", err))
 		}
-		return ext, nil, rel, true
+		return ext, nil, func() { rel(); cleanupAgents() }, true
 	}
 
 	ctr, err := postgres.Run(ctx, postgresImage,
@@ -75,10 +92,14 @@ func Setup(
 		if ctr != nil {
 			_ = ctr.Terminate(context.Background())
 		}
+		cleanupAgents()
 		return "", nil, func() {}, false
 	}
 
-	terminate := func() { _ = ctr.Terminate(context.Background()) }
+	terminate := func() {
+		_ = ctr.Terminate(context.Background())
+		cleanupAgents()
+	}
 
 	d, err := ctr.ConnectionString(ctx, "sslmode=disable")
 	if err != nil {
