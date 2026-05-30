@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, watch } from 'vue'
 import { fromJson } from '@bufbuild/protobuf'
 import api from '@/api/client'
 import { GetAgentDetailResponseSchema } from '@/gen/airlock/v1/api_pb'
@@ -12,8 +12,10 @@ interface Route {
 }
 
 const props = defineProps<{ agentId: string }>()
+const emit = defineEmits<{ populated: [count: number] }>()
 
 const routes = ref<Route[]>([])
+watch(routes, (v) => emit('populated', v.length), { immediate: true })
 const routeBaseUrl = ref('')
 const loading = ref(true)
 

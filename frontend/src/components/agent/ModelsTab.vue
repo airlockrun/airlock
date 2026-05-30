@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { create } from '@bufbuild/protobuf'
 import { useToast } from 'primevue/usetoast'
 import { useAgentsStore } from '@/stores/agents'
@@ -21,6 +21,7 @@ import type { AgentModelConfig, ModelSlotInfo } from '@/gen/airlock/v1/api_pb'
 import { AgentModelConfigSchema, ModelSlotInfoSchema } from '@/gen/airlock/v1/api_pb'
 
 const props = defineProps<{ agentId: string }>()
+const emit = defineEmits<{ populated: [count: number] }>()
 
 const agents = useAgentsStore()
 const catalog = useCatalogStore()
@@ -31,6 +32,10 @@ const { groupModels, searchProviderOptions } = useModelCapabilities()
 const loading = ref(true)
 const saving = ref(false)
 const config = ref<AgentModelConfig>(create(AgentModelConfigSchema))
+// Models is "populated" once the config loads — every LLM-powered agent
+// needs at least the chat model wired, so hiding it on the empty initial
+// state would be misleading and re-show would jitter after a fast fetch.
+watch(loading, (v) => emit('populated', v ? 0 : 1), { immediate: true })
 
 // pickerValues holds the packed "rowUUID|modelName" strings that the
 // dropdowns v-model against. Kept parallel to `config` so picker writes
@@ -242,103 +247,108 @@ async function save() {
     <Skeleton height="2rem" style="margin-bottom: 1rem" />
     <Skeleton height="12rem" />
   </div>
-  <div v-else style="display: flex; flex-direction: column; gap: 1.5rem">
+  <div v-else style="display: flex; flex-direction: column; gap: 1.75rem">
     <!-- Per-agent capability overrides -->
-    <Card>
-      <template #title>Capability Overrides</template>
-      <template #subtitle>
+    <div>
+      <h3 class="models-subhead">Capability overrides</h3>
+      <p class="models-sub">
         Override system defaults for this agent. Leave empty to inherit the system default for that capability.
-      </template>
-      <template #content>
-        <div style="display: flex; flex-direction: column; gap: 1.25rem">
-          <div
-            v-for="row in overrideRows"
-            :key="row.key as string"
-            style="display: flex; flex-direction: column; gap: 0.5rem"
-          >
-            <label :for="`override-${row.key as string}`" style="font-weight: 500; display: flex; align-items: center; gap: 0.5rem">
-              <i :class="row.icon" />
-              <span>{{ row.label }}</span>
-            </label>
-            <Select
-              v-if="row.grouped"
-              :id="`override-${row.key as string}`"
-              v-model="pickerValues[row.key as string]"
-              :options="row.options"
-              optionLabel="label"
-              optionValue="value"
-              optionGroupLabel="label"
-              optionGroupChildren="items"
-              filter
-              autoFilterFocus
-              showClear
-              placeholder="Inherit system default"
-              :loading="catalog.loading"
-              style="width: 100%"
-            />
-            <Select
-              v-else
-              :id="`override-${row.key as string}`"
-              v-model="pickerValues[row.key as string]"
-              :options="row.options"
-              optionLabel="label"
-              optionValue="value"
-              filter
-              autoFilterFocus
-              showClear
-              placeholder="Inherit system default"
-              :loading="catalog.loading"
-              style="width: 100%"
-            />
-            <small style="color: var(--p-text-muted-color)">{{ row.help }}</small>
-          </div>
+      </p>
+      <div style="display: flex; flex-direction: column; gap: 1.25rem">
+        <div
+          v-for="row in overrideRows"
+          :key="row.key as string"
+          style="display: flex; flex-direction: column; gap: 0.5rem"
+        >
+          <label :for="`override-${row.key as string}`" style="font-weight: 500; display: flex; align-items: center; gap: 0.5rem">
+            <i :class="row.icon" />
+            <span>{{ row.label }}</span>
+          </label>
+          <Select
+            v-if="row.grouped"
+            :id="`override-${row.key as string}`"
+            v-model="pickerValues[row.key as string]"
+            :options="row.options"
+            optionLabel="label"
+            optionValue="value"
+            optionGroupLabel="label"
+            optionGroupChildren="items"
+            filter
+            autoFilterFocus
+            showClear
+            placeholder="Inherit system default"
+            :loading="catalog.loading"
+            style="width: 100%"
+          />
+          <Select
+            v-else
+            :id="`override-${row.key as string}`"
+            v-model="pickerValues[row.key as string]"
+            :options="row.options"
+            optionLabel="label"
+            optionValue="value"
+            filter
+            autoFilterFocus
+            showClear
+            placeholder="Inherit system default"
+            :loading="catalog.loading"
+            style="width: 100%"
+          />
+          <small style="color: var(--p-text-muted-color)">{{ row.help }}</small>
         </div>
-      </template>
-    </Card>
+      </div>
+    </div>
 
-    <!-- Declared slots -->
-    <Card>
-      <template #title>Model Slots</template>
-      <template #subtitle>
+    <!-- Declared slots — only renders when the agent declared any -->
+    <div v-if="config.slots.length > 0">
+      <h3 class="models-subhead">Model slots</h3>
+      <p class="models-sub">
         Named slots the agent declared via <code>RegisterModel</code>. Assigning a model binds the slot directly; empty falls through to the capability override above, then the system default.
-      </template>
-      <template #content>
-        <div v-if="config.slots.length === 0" style="color: var(--p-text-muted-color); padding: 0.5rem 0">
-          This agent hasn't declared any model slots. Add
-          <code>agent.RegisterModel(slug, agentsdk.ModelSlotOpts{...})</code> in the agent code to expose a slot here.
-        </div>
-        <div v-else style="display: flex; flex-direction: column; gap: 1rem">
-          <div
-            v-for="slot in config.slots"
-            :key="slot.slug"
-            style="display: flex; flex-direction: column; gap: 0.5rem; padding: 0.75rem; border: 1px solid var(--p-surface-border); border-radius: var(--p-border-radius)"
-          >
-            <div style="display: flex; align-items: center; gap: 0.5rem">
-              <span style="font-family: var(--p-font-family-monospace, monospace); font-weight: 600">{{ slot.slug }}</span>
-              <Tag :value="slot.capability" :severity="capabilitySeverity(slot.capability)" />
-            </div>
-            <small v-if="slot.description" style="color: var(--p-text-muted-color)">{{ slot.description }}</small>
-            <Select
-              v-model="slotPickerValues[slot.slug]"
-              :options="optionsForCapability(slot.capability)"
-              optionLabel="label"
-              optionValue="value"
-              optionGroupLabel="label"
-              optionGroupChildren="items"
-              filter
-              autoFilterFocus
-              showClear
-              placeholder="Inherit capability default"
-              :loading="catalog.loading"
-              style="width: 100%"
-            />
+      </p>
+      <div style="display: flex; flex-direction: column; gap: 1rem">
+        <div
+          v-for="slot in config.slots"
+          :key="slot.slug"
+          style="display: flex; flex-direction: column; gap: 0.5rem; padding: 0.75rem; border: 1px solid var(--p-content-border-color); border-radius: var(--p-border-radius)"
+        >
+          <div style="display: flex; align-items: center; gap: 0.5rem">
+            <span style="font-family: var(--p-font-family-monospace, monospace); font-weight: 600">{{ slot.slug }}</span>
+            <Tag :value="slot.capability" :severity="capabilitySeverity(slot.capability)" />
           </div>
+          <small v-if="slot.description" style="color: var(--p-text-muted-color)">{{ slot.description }}</small>
+          <Select
+            v-model="slotPickerValues[slot.slug]"
+            :options="optionsForCapability(slot.capability)"
+            optionLabel="label"
+            optionValue="value"
+            optionGroupLabel="label"
+            optionGroupChildren="items"
+            filter
+            autoFilterFocus
+            showClear
+            placeholder="Inherit capability default"
+            :loading="catalog.loading"
+            style="width: 100%"
+          />
         </div>
-      </template>
-    </Card>
+      </div>
+    </div>
 
     <div>
       <Button label="Save" :loading="saving" @click="save" />
     </div>
   </div>
 </template>
+
+<style scoped>
+.models-subhead {
+  margin: 0 0 0.35rem;
+  font-size: 1rem;
+  font-weight: 500;
+}
+.models-sub {
+  margin: 0 0 1rem;
+  color: var(--p-text-muted-color);
+  font-size: 0.85rem;
+}
+</style>

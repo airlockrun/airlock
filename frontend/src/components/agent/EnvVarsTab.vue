@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useToast } from 'primevue/usetoast'
 import { useConfirm } from 'primevue/useconfirm'
 import api from '@/api/client'
@@ -16,10 +16,12 @@ interface EnvVar {
 }
 
 const props = defineProps<{ agentId: string }>()
+const emit = defineEmits<{ populated: [count: number] }>()
 
 const toast = useToast()
 const confirm = useConfirm()
 const envVars = ref<EnvVar[]>([])
+watch(envVars, (v) => emit('populated', v.length), { immediate: true })
 const loading = ref(true)
 
 const dialogVisible = ref(false)

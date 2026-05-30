@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { fromJson, toJson, create } from '@bufbuild/protobuf'
 import { useConfirm } from 'primevue/useconfirm'
 import { useToast } from 'primevue/usetoast'
@@ -13,12 +13,16 @@ import {
 import type { AgentGitConfig } from '@/gen/airlock/v1/types_pb'
 
 const props = defineProps<{ agentId: string }>()
+const emit = defineEmits<{ populated: [count: number] }>()
 
 const credsStore = useGitCredentialsStore()
 const confirm = useConfirm()
 const toast = useToast()
 
 const cfg = ref<AgentGitConfig | null>(null)
+// Source counts as populated only when a remote is actually connected;
+// internal-only agents hide the section. Reconnecting comes from elsewhere.
+watch(cfg, (v) => emit('populated', v?.gitRemoteUrl ? 1 : 0), { immediate: true })
 const loading = ref(true)
 const connecting = ref(false)
 const dialogVisible = ref(false)

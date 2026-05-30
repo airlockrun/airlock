@@ -8,7 +8,7 @@
 //     against each target's settings; this list is only a discovery
 //     aid that produces `agent_<slug>` bindings in the LLM's
 //     run_js sandbox.
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, watch } from 'vue'
 import api from '@/api/client'
 import { useConfirm } from 'primevue/useconfirm'
 import { useToast } from 'primevue/usetoast'
@@ -32,10 +32,12 @@ interface A2ASettings {
 }
 
 const props = defineProps<{ agentId: string }>()
+const emit = defineEmits<{ populated: [count: number] }>()
 const toast = useToast()
 const confirm = useConfirm()
 
 const siblings = ref<Sibling[]>([])
+watch(siblings, (v) => emit('populated', v.length), { immediate: true })
 const addable = ref<AddableSibling[]>([])
 const loading = ref(true)
 const settings = ref<A2ASettings>({ allowNonMemberMcp: false, allowPublicMcp: false })
@@ -148,16 +150,15 @@ onMounted(loadAll)
       here may still return 403 if the original user lacks access.
     </p>
 
-    <div class="flex justify-end mb-3">
-      <Button label="Add sibling" icon="pi pi-plus" size="small" :disabled="addable.length === 0" @click="showAddDialog = true" />
-    </div>
+    <DataTable v-if="loading" :value="[{}, {}, {}]">
+      <Column header="Slug"><template #body><Skeleton /></template></Column>
+      <Column header="Name"><template #body><Skeleton /></template></Column>
+      <Column header="Description"><template #body><Skeleton /></template></Column>
+      <Column header="MCP access"><template #body><Skeleton width="4rem" /></template></Column>
+      <Column header=""><template #body><Skeleton width="2rem" /></template></Column>
+    </DataTable>
 
-    <DataTable v-if="!loading" :value="siblings" stripedRows>
-      <template #empty>
-        <div style="text-align: center; padding: 2rem; color: var(--p-text-muted-color)">
-          No siblings configured. This agent's LLM has no A2A bindings.
-        </div>
-      </template>
+    <DataTable v-else-if="siblings.length > 0" :value="siblings" stripedRows>
       <Column field="slug" header="Slug" />
       <Column field="name" header="Name" />
       <Column field="description" header="Description" />
@@ -175,13 +176,9 @@ onMounted(loadAll)
       </Column>
     </DataTable>
 
-    <DataTable v-else :value="[{}, {}, {}]">
-      <Column header="Slug"><template #body><Skeleton /></template></Column>
-      <Column header="Name"><template #body><Skeleton /></template></Column>
-      <Column header="Description"><template #body><Skeleton /></template></Column>
-      <Column header="MCP access"><template #body><Skeleton width="4rem" /></template></Column>
-      <Column header=""><template #body><Skeleton width="2rem" /></template></Column>
-    </DataTable>
+    <div style="margin-top: 1rem">
+      <Button label="Add sibling" icon="pi pi-plus" size="small" :disabled="addable.length === 0" @click="showAddDialog = true" />
+    </div>
 
     <Dialog v-model:visible="showAddDialog" header="Add sibling" modal :style="{ width: '32rem' }">
       <p style="margin-top: 0; color: var(--p-text-muted-color)">

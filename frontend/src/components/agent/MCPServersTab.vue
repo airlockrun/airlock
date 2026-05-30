@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, computed, watch } from 'vue'
 import { useToast } from 'primevue/usetoast'
 import { useConfirm } from 'primevue/useconfirm'
 import api from '@/api/client'
@@ -20,10 +20,12 @@ interface MCPServer {
 }
 
 const props = defineProps<{ agentId: string }>()
+const emit = defineEmits<{ populated: [count: number] }>()
 
 const toast = useToast()
 const confirm = useConfirm()
 const servers = ref<MCPServer[]>([])
+watch(servers, (v) => emit('populated', v.length), { immediate: true })
 const loading = ref(true)
 const credDialogVisible = ref(false)
 const oauthAppDialogVisible = ref(false)

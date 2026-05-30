@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, watch } from 'vue'
 import { useToast } from 'primevue/usetoast'
 import api from '@/api/client'
 
@@ -30,9 +30,11 @@ interface TestResult {
 }
 
 const props = defineProps<{ agentId: string }>()
+const emit = defineEmits<{ populated: [count: number] }>()
 
 const toast = useToast()
 const endpoints = ref<ExecEndpoint[]>([])
+watch(endpoints, (v) => emit('populated', v.length), { immediate: true })
 const loading = ref(true)
 
 // Per-row config form state. Keyed by slug so multiple rows can be
@@ -43,6 +45,25 @@ const formUser = ref<Record<string, string>>({})
 const saving = ref<Record<string, boolean>>({})
 const testing = ref<Record<string, boolean>>({})
 const lastTest = ref<Record<string, TestResult | null>>({})
+
+// Per-endpoint collapse. Endpoints start collapsed and show a header
+// preview (slug + description + status + user@host:port summary) — the
+// full configuration form is vertically heavy and most agents have one or
+// two endpoints, so the section's overview reads better as a compact list.
+const collapsed = ref<Record<string, boolean>>({})
+function toggleCollapse(slug: string) {
+  collapsed.value[slug] = !(collapsed.value[slug] ?? true)
+}
+function isCollapsed(slug: string): boolean {
+  return collapsed.value[slug] ?? true
+}
+function endpointPreview(ep: ExecEndpoint): string {
+  const user = ep.sshUser || formUser.value[ep.slug] || ''
+  const host = ep.host || formHost.value[ep.slug] || ''
+  const port = ep.port || formPort.value[ep.slug] || 22
+  if (!host) return 'not configured'
+  return `${user ? user + '@' : ''}${host}${port && port !== 22 ? ':' + port : ''}`
+}
 
 async function refresh() {
   const { data } = await api.get(`/api/v1/agents/${props.agentId}/exec-endpoints`)
@@ -147,10 +168,20 @@ onMounted(async () => {
     </div>
 
     <div v-for="ep in endpoints" :key="ep.slug" class="exec-endpoint-card">
-      <div class="exec-header">
-        <div>
+      <div class="exec-header" @click="toggleCollapse(ep.slug)">
+        <i
+          class="pi exec-chevron"
+          :class="isCollapsed(ep.slug) ? 'pi-chevron-right' : 'pi-chevron-down'"
+        />
+        <div style="flex: 1; min-width: 0">
           <h3 style="margin: 0">{{ ep.slug }}</h3>
           <p style="margin: 0.25rem 0; color: var(--p-text-muted-color); font-size: 0.85rem">{{ ep.description }}</p>
+          <p
+            v-if="isCollapsed(ep.slug)"
+            style="margin: 0.25rem 0 0; font-size: 0.8rem; color: var(--p-text-muted-color)"
+          >
+            <code>{{ endpointPreview(ep) }}</code>
+          </p>
         </div>
         <div style="display: flex; align-items: center; gap: 0.75rem">
           <Tag :value="statusFor(ep).label" :severity="statusFor(ep).severity" />
@@ -158,7 +189,7 @@ onMounted(async () => {
         </div>
       </div>
 
-      <div class="exec-form">
+      <div v-show="!isCollapsed(ep.slug)" class="exec-form">
         <div class="form-row">
           <label>Transport</label>
           <span style="font-size: 0.85rem">SSH (only supported transport)</span>
@@ -181,7 +212,7 @@ onMounted(async () => {
         </div>
       </div>
 
-      <div v-if="ep.publicKeyOpenssh" class="exec-section">
+      <div v-if="ep.publicKeyOpenssh" v-show="!isCollapsed(ep.slug)" class="exec-section">
         <h4 style="margin: 0 0 0.5rem 0">Public key (paste into target's <code>~/.ssh/authorized_keys</code>)</h4>
         <p style="margin: 0 0 0.5rem 0; font-size: 0.75rem; color: var(--p-text-muted-color)">
           Comment: <code>{{ ep.publicKeyComment }}</code> — useful for grepping
@@ -196,7 +227,7 @@ onMounted(async () => {
         </div>
       </div>
 
-      <div v-if="ep.hostKeyFingerprint" class="exec-section">
+      <div v-if="ep.hostKeyFingerprint" v-show="!isCollapsed(ep.slug)" class="exec-section">
         <h4 style="margin: 0 0 0.5rem 0">Host key</h4>
         <p style="margin: 0; font-size: 0.85rem">
           Fingerprint: <code>{{ ep.hostKeyFingerprint }}</code>
@@ -209,7 +240,7 @@ onMounted(async () => {
         </div>
       </div>
 
-      <div v-if="lastTest[ep.slug]" class="exec-section">
+      <div v-if="lastTest[ep.slug]" v-show="!isCollapsed(ep.slug)" class="exec-section">
         <h4 style="margin: 0 0 0.5rem 0">Last test result</h4>
         <pre style="margin: 0; padding: 0.75rem; background: var(--p-surface-100); border-radius: 0.3rem; font-size: 0.8rem; white-space: pre-wrap">{{ JSON.stringify(lastTest[ep.slug], null, 2) }}</pre>
       </div>
@@ -237,7 +268,15 @@ onMounted(async () => {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
+  gap: 0.75rem;
   margin-bottom: 1rem;
+  cursor: pointer;
+  user-select: none;
+}
+.exec-chevron {
+  font-size: 0.75rem;
+  color: var(--p-text-muted-color);
+  margin-top: 0.35rem;
 }
 .exec-form {
   display: flex;

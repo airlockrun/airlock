@@ -26,7 +26,9 @@ import RunsTab from '@/components/agent/RunsTab.vue'
 import BuildsTab from '@/components/agent/BuildsTab.vue'
 import SourceTab from '@/components/agent/SourceTab.vue'
 import BuildLogPanel from '@/components/agent/BuildLogPanel.vue'
+import SectionCard from '@/components/agent/SectionCard.vue'
 import { useBuildsStore } from '@/stores/builds'
+import { markRaw } from 'vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -103,8 +105,72 @@ async function saveRename() {
 const agentId = route.params.id as string
 const agent = ref<AgentInfo | null>(null)
 const loading = ref(true)
-const activeTab = ref(0)
 const activeBuildId = ref<string | undefined>(undefined)
+
+// Per-section item counts emitted by each *Tab component via @populated.
+// Sections (and their right-rail entries) only render when count > 0, so the
+// page shows just what's actually relevant to this agent. Activity below is
+// driven by the runs + builds counts together.
+const counts = ref<Record<string, number>>({})
+function onPopulated(id: string, n: number) {
+  counts.value[id] = n
+}
+
+// Inner tab inside the Activity section: 0 = Runs, 1 = Builds.
+const activityTab = ref(0)
+
+// Active section in the scroll viewport — drives the highlight in the
+// right-rail jump nav. Set by an IntersectionObserver in onMounted.
+const activeSectionId = ref<string>('')
+
+// Configuration sections rendered inline inside the Configure tab, in the
+// order users typically walk through them: integrations → triggers →
+// sharing → source → registered surfaces. Exec Endpoints defaults collapsed
+// because its content (host/keys/pinning) is vertically heavy and most
+// agents have at most one. needsSetupKey ties a section to the field on
+// setupStatus that flags an unconfigured slot (see badgeFor below).
+// markRaw skips deep reactivity on the component refs — they're constants.
+const configSections = [
+  { id: 'members',        label: 'Members',        component: markRaw(MembersTab) },
+  { id: 'connections',    label: 'Connections',    component: markRaw(ConnectionsTab),   needsSetupKey: 'connections' as const },
+  { id: 'mcp-servers',    label: 'MCP Servers',    component: markRaw(MCPServersTab),    needsSetupKey: 'mcpServers' as const },
+  { id: 'env-vars',       label: 'Environment',    component: markRaw(EnvVarsTab),       needsSetupKey: 'envVars' as const },
+  { id: 'exec-endpoints', label: 'Exec Endpoints', component: markRaw(ExecEndpointsTab) },
+  { id: 'webhooks',       label: 'Webhooks',       component: markRaw(WebhooksTab) },
+  { id: 'crons',          label: 'Crons',          component: markRaw(CronsTab) },
+  { id: 'siblings',       label: 'Siblings',       component: markRaw(SiblingsTab), alwaysShow: true },
+  { id: 'source',         label: 'Source',         component: markRaw(SourceTab) },
+  { id: 'routes',         label: 'Routes',         component: markRaw(RoutesTab) },
+  { id: 'tools',          label: 'Tools',          component: markRaw(ToolsTab) },
+  { id: 'models',         label: 'Models',         component: markRaw(ModelsTab) },
+] as const
+type ConfigSection = (typeof configSections)[number]
+
+// Activity (Runs + Builds) renders as the final section, but uses the same
+// counts machinery — visible when at least one of its inner lists has items.
+const activityVisible = computed(() => (counts.value.runs ?? 0) > 0 || (counts.value.builds ?? 0) > 0)
+
+// Right-rail entries — only sections with content. Hides empty-but-mounted
+// sections from the rail (which itself still mounts so it can emit a count).
+// Sections marked alwaysShow stay visible even at count 0 (e.g. Siblings,
+// where the "add your first sibling" affordance is a meaningful entry point).
+const visibleSections = computed(() =>
+  configSections.filter((s) => (s as any).alwaysShow || (counts.value[s.id] ?? 0) > 0),
+)
+
+// badgeFor surfaces the existing setup-status counts on the three sections
+// the backend tracks. Returns undefined when the section is not tracked or
+// has zero unconfigured items. Visible both on the section header (warn tag)
+// and in the jump rail (right-aligned mini-tag).
+function badgeFor(section: ConfigSection): string | undefined {
+  const s = setupStatus.value
+  if (!s || !('needsSetupKey' in section)) return undefined
+  const key = (section as { needsSetupKey?: keyof SetupStatus }).needsSetupKey
+  if (!key) return undefined
+  const n = s[key]
+  if (typeof n !== 'number' || n <= 0) return undefined
+  return `${n} need${n === 1 ? 's' : ''} setup`
+}
 
 // Bumped on every event that should refresh the data tabs (build
 // terminal, agent sync). Used as a `:key` on the TabPanels container
@@ -166,10 +232,48 @@ async function loadSetupStatus() {
   }
 }
 
-// Refresh on tab switches — operator just configured something on the
-// previous tab, switching tabs is a natural moment to update the
-// header badge. No emits needed from tabs.
-watch(() => activeTab.value, () => loadSetupStatus())
+// Refresh setup-status when the page regains visibility — operator switched
+// to another tab/window and may have changed something. The single-scroll
+// layout removed the tab-switch refresh point this watch used to hook into.
+function onVisibilityChange() {
+  if (document.visibilityState === 'visible') loadSetupStatus()
+}
+
+// Scrollspy: highlight the section currently dominant in the viewport. The
+// rootMargin tilts the "active" band toward the top quarter of the viewport,
+// so the highlight tracks the section the user is reading rather than the
+// one that's just scrolled into view at the bottom.
+let scrollObserver: IntersectionObserver | null = null
+function setupScrollSpy() {
+  scrollObserver?.disconnect()
+  scrollObserver = new IntersectionObserver(
+    (entries) => {
+      const visible = entries
+        .filter((e) => e.isIntersecting)
+        .map((e) => e.target as HTMLElement)
+        .sort((a, b) => a.offsetTop - b.offsetTop)
+      if (visible.length > 0) activeSectionId.value = visible[0].id
+    },
+    { rootMargin: '-15% 0px -70% 0px', threshold: 0 },
+  )
+  const ids = [...configSections.map((s) => s.id), 'activity']
+  for (const id of ids) {
+    const el = document.getElementById(id)
+    if (el) scrollObserver.observe(el)
+  }
+}
+
+// Smooth-scroll on rail click; the URL still gets the hash (so middle-click
+// / copy-link still produces a permalink), but we suppress the default
+// hash-jump so the scroll is animated.
+function scrollToSection(id: string, e: Event) {
+  e.preventDefault()
+  const el = document.getElementById(id)
+  if (el) {
+    el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    history.replaceState(null, '', `#${id}`)
+  }
+}
 
 const setupTooltip = computed(() => {
   const s = setupStatus.value
@@ -185,6 +289,10 @@ let unsubBuild: (() => void) | null = null
 let unsubSynced: (() => void) | null = null
 
 onMounted(async () => {
+  document.addEventListener('visibilitychange', onVisibilityChange)
+  // Scrollspy needs the section <section> elements in the DOM; wait one
+  // microtask after agent load so v-for has emitted them.
+  setTimeout(setupScrollSpy, 0)
   try {
     const { data } = await api.get(`/api/v1/agents/${agentId}`)
     agent.value = fromJson(GetAgentDetailResponseSchema, data).agent ?? null
@@ -282,7 +390,14 @@ onMounted(async () => {
 onUnmounted(() => {
   unsubBuild?.()
   unsubSynced?.()
+  scrollObserver?.disconnect()
+  document.removeEventListener('visibilitychange', onVisibilityChange)
 })
+
+// Re-observe sections when their v-show flips (counts change can reveal a
+// previously hidden section). Watching visibleSections in a nextTick-safe
+// way keeps the rail's active-section highlight working as the page fills in.
+watch(visibleSections, () => setTimeout(setupScrollSpy, 0))
 
 function confirmStop() {
   confirm.require({
@@ -410,7 +525,7 @@ function goToChat() {
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; flex-wrap: wrap; gap: 0.75rem">
       <div>
         <div style="display: flex; align-items: center; gap: 0.75rem">
-          <h1 style="margin: 0; font-size: 1.5rem">
+          <h1 style="margin: 0; font-size: 1.875rem; font-weight: 700; line-height: 1.2">
             <span v-if="agent.emoji" style="margin-right: 0.4rem">{{ agent.emoji }}</span>{{ agent.name }}
           </h1>
           <span style="color: var(--p-text-muted-color)">{{ agent.slug }}</span>
@@ -461,41 +576,70 @@ function goToChat() {
       <pre style="margin: 0; white-space: pre-wrap; word-break: break-word; font-size: 0.8rem; max-height: 20rem; overflow-y: auto">{{ agent.errorMessage }}</pre>
     </Message>
 
-    <!-- Tabs -->
-    <Tabs v-model:value="activeTab">
-      <TabList>
-        <Tab :value="0">Connections</Tab>
-        <Tab :value="1">Exec Endpoints</Tab>
-        <Tab :value="2">MCP Servers</Tab>
-        <Tab :value="3">Environment</Tab>
-        <Tab :value="4">Tools</Tab>
-        <Tab :value="5">Models</Tab>
-        <Tab :value="6">Routes</Tab>
-        <Tab :value="7">Webhooks</Tab>
-        <Tab :value="8">Crons</Tab>
-        <Tab :value="9">Members</Tab>
-        <Tab :value="10">Siblings</Tab>
-        <Tab :value="11">Runs</Tab>
-        <Tab :value="12">Builds</Tab>
-        <Tab :value="13">Source</Tab>
-      </TabList>
-      <TabPanels :key="tabsKey">
-        <TabPanel :value="0"><ConnectionsTab :agent-id="agentId" /></TabPanel>
-        <TabPanel :value="1"><ExecEndpointsTab :agent-id="agentId" /></TabPanel>
-        <TabPanel :value="2"><MCPServersTab :agent-id="agentId" /></TabPanel>
-        <TabPanel :value="3"><EnvVarsTab :agent-id="agentId" /></TabPanel>
-        <TabPanel :value="4"><ToolsTab :agent-id="agentId" /></TabPanel>
-        <TabPanel :value="5"><ModelsTab :agent-id="agentId" /></TabPanel>
-        <TabPanel :value="6"><RoutesTab :agent-id="agentId" /></TabPanel>
-        <TabPanel :value="7"><WebhooksTab :agent-id="agentId" /></TabPanel>
-        <TabPanel :value="8"><CronsTab :agent-id="agentId" /></TabPanel>
-        <TabPanel :value="9"><MembersTab :agent-id="agentId" /></TabPanel>
-        <TabPanel :value="10"><SiblingsTab :agent-id="agentId" /></TabPanel>
-        <TabPanel :value="11"><RunsTab :agent-id="agentId" /></TabPanel>
-        <TabPanel :value="12"><BuildsTab :agent-id="agentId" /></TabPanel>
-        <TabPanel :value="13"><SourceTab :agent-id="agentId" /></TabPanel>
-      </TabPanels>
-    </Tabs>
+    <!-- Sticky horizontal jump nav, placed after the action buttons so it
+         sits above the sections and stays visible as the user scrolls
+         through them. Only populated sections appear; the section currently
+         in view (per scrollspy) gets the underline. -->
+    <nav class="agent-page-nav" aria-label="Section navigation">
+      <ul>
+        <li
+          v-for="s in visibleSections"
+          :key="s.id"
+          :class="{ active: activeSectionId === s.id }"
+        >
+          <a :href="`#${s.id}`" @click="scrollToSection(s.id, $event)">
+            <span class="nav-label">{{ s.label }}</span>
+            <Tag
+              v-if="badgeFor(s)"
+              :value="String(setupStatus?.[(s as any).needsSetupKey] ?? '')"
+              severity="warn"
+            />
+          </a>
+        </li>
+        <li v-if="activityVisible" :class="{ active: activeSectionId === 'activity' }">
+          <a href="#activity" @click="scrollToSection('activity', $event)">
+            <span class="nav-label">Activity</span>
+          </a>
+        </li>
+      </ul>
+    </nav>
+
+    <!-- Single inline scroll: each configuration domain is a SectionCard;
+         Activity (Runs + Builds) is the final section. Sections hide
+         themselves when their tab reports zero items via @populated. -->
+    <div class="agent-page-main" :key="tabsKey">
+      <SectionCard
+        v-for="s in configSections"
+        v-show="(s as any).alwaysShow || (counts[s.id] ?? 0) > 0"
+        :key="s.id"
+        :id="s.id"
+        :title="s.label"
+        :badge="badgeFor(s)"
+      >
+        <component :is="s.component" :agent-id="agentId" @populated="onPopulated(s.id, $event)" />
+      </SectionCard>
+
+      <SectionCard
+        v-show="activityVisible"
+        id="activity"
+        title="Activity"
+      >
+        <Tabs v-model:value="activityTab">
+          <TabList>
+            <Tab :value="0">Runs</Tab>
+            <Tab :value="1">Builds</Tab>
+          </TabList>
+          <TabPanels>
+            <TabPanel :value="0">
+              <RunsTab :agent-id="agentId" @populated="onPopulated('runs', $event)" />
+            </TabPanel>
+            <TabPanel :value="1">
+              <BuildsTab :agent-id="agentId" @populated="onPopulated('builds', $event)" />
+            </TabPanel>
+          </TabPanels>
+        </Tabs>
+      </SectionCard>
+    </div>
 
     <!-- Upgrade dialog -->
     <Dialog v-model:visible="showUpgradeDialog" :header="rebuildMode ? 'Rebuild Agent' : 'Upgrade Agent'" modal style="width: 30rem">
@@ -536,3 +680,86 @@ function goToChat() {
     </Dialog>
   </div>
 </template>
+
+<style scoped>
+/* Sticky horizontal section nav. Sits above the sections and stays at the
+ * top of the scroll viewport as the user scrolls through them. The
+ * negative horizontal margins let it span the full inner width of the
+ * agent page (offsetting the page's own 1.5rem padding) so the bottom
+ * border reads as a true page divider. */
+.agent-page-nav {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: var(--p-content-background);
+  margin: 0 0 1.25rem;
+  padding: 0;
+  overflow-x: auto;
+  /* Setting overflow-x alone implicitly auto-s overflow-y in most engines —
+   * pin overflow-y so a phantom vertical scrollbar can't appear. */
+  overflow-y: hidden;
+}
+.agent-page-nav ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  gap: 0;
+  white-space: nowrap;
+  align-items: stretch;
+}
+.agent-page-nav li {
+  display: flex;
+}
+.agent-page-nav li a {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0 0.85rem;
+  height: 2.5rem; /* fixed so badged items don't push the underline lower */
+  box-sizing: border-box;
+  color: var(--p-text-muted-color);
+  text-decoration: none;
+  font-size: 0.875rem;
+  border-bottom: 2px solid transparent;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+.agent-page-nav li a:hover {
+  color: var(--p-text-color);
+}
+.agent-page-nav li.active a {
+  color: var(--p-text-color);
+  border-bottom-color: var(--p-primary-color);
+  font-weight: 500;
+}
+.agent-page-nav .nav-label {
+  white-space: nowrap;
+}
+
+.agent-page-main {
+  min-width: 0;
+}
+
+/* Tabs use their own <h3> for inner subheadings (e.g. SiblingsTab's
+ * "Who can call this agent"). Browser/PrimeVue h3 defaults can rival or
+ * exceed the section title — normalize so subheadings stay clearly
+ * smaller and the colored section title remains the dominant heading. */
+.agent-page-main :deep(h3) {
+  font-size: 1rem;
+  font-weight: 500;
+  margin-top: 0;
+}
+
+/* PrimeVue's TabPanels apply default padding around inner content, which
+ * makes the DataTables inside Activity (Runs / Builds) look inset relative
+ * to the other section tables. Zero it so they share the full section
+ * width; the TabList keeps its own styling. */
+.agent-page-main :deep(.p-tabpanels) {
+  padding: 0;
+  background: transparent;
+}
+.agent-page-main :deep(.p-tabpanel) {
+  padding: 0;
+}
+
+</style>

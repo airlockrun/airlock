@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref, computed } from 'vue'
+import { onMounted, ref, computed, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useConfirm } from 'primevue/useconfirm'
 import { useToast } from 'primevue/usetoast'
@@ -8,11 +8,13 @@ import { useAgentsStore } from '@/stores/agents'
 import type { AgentBuildInfo } from '@/gen/airlock/v1/types_pb'
 
 const props = defineProps<{ agentId: string }>()
+const emit = defineEmits<{ populated: [count: number] }>()
 const router = useRouter()
 const confirm = useConfirm()
 const toast = useToast()
 const store = useBuildsStore()
 const agentsStore = useAgentsStore()
+watch(() => store.builds.length, (n) => emit('populated', n), { immediate: true })
 
 const rollingBack = ref<string | null>(null)
 

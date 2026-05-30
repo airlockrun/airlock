@@ -163,6 +163,13 @@ const backTarget = computed<string | null>(() => {
   return m ? `/agents/${m[1]}` : null
 })
 
+// AgentDetailView (/agents/:id) renders a sticky section nav at the top.
+// Drop the main scroll container's top padding so the nav sits flush
+// against the page top once it sticks, instead of leaving a 1.5rem gap.
+const isAgentDetail = computed<boolean>(() =>
+  /^\/agents\/[^/]+$/.test(route.path),
+)
+
 function navigateTo(path: string) {
   router.push(path)
   drawerVisible.value = false
@@ -310,7 +317,7 @@ onMounted(() => {
       </Drawer>
 
       <!-- Content -->
-      <main :class="['app-content', { 'app-content-flush': backTarget }]">
+      <main :class="['app-content', { 'app-content-flush': backTarget, 'app-content-flush-top': isAgentDetail }]">
         <!-- Key on $route.path forces a fresh component instance whenever a
              path param changes (/agents/:id, .../runs/:runId, .../builds/
              :buildId). Views that capture route.params in setup() — like
@@ -536,6 +543,13 @@ onMounted(() => {
    viewport edge. */
 .app-content-flush {
   padding: 0 1rem 1rem;
+}
+
+/* AgentDetailView's sticky section nav wants top: 0 to actually be at the
+ * top of the visible scroll area. Drop just the top padding; the side
+ * padding stays standard. */
+.app-content-flush-top {
+  padding-top: 0;
 }
 
 /* Hide sidebar on mobile, show hamburger */

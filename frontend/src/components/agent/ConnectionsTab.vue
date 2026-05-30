@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, watch } from 'vue'
 import { useToast } from 'primevue/usetoast'
 import api from '@/api/client'
 import { startOAuth } from '@/composables/useOAuth'
@@ -16,9 +16,11 @@ interface Connection {
 }
 
 const props = defineProps<{ agentId: string }>()
+const emit = defineEmits<{ populated: [count: number] }>()
 
 const toast = useToast()
 const connections = ref<Connection[]>([])
+watch(connections, (v) => emit('populated', v.length), { immediate: true })
 const loading = ref(true)
 const credDialogVisible = ref(false)
 const oauthAppDialogVisible = ref(false)
