@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/convert"
 	"github.com/airlockrun/airlock/db/dbq"
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
@@ -83,8 +82,8 @@ func (h *agentsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	userID := auth.UserIDFromContext(r.Context())
-	agent, err := h.svc.Create(r.Context(), userID, agentssvc.CreateRequest{
+	p := principalFromRequest(r)
+	agent, err := h.svc.Create(r.Context(), p, agentssvc.CreateRequest{
 		Name:             req.Name,
 		Slug:             req.Slug,
 		Description:      req.Description,
@@ -108,13 +107,8 @@ func (h *agentsHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 // List handles GET /api/v1/agents.
 func (h *agentsHandler) List(w http.ResponseWriter, r *http.Request) {
-	claims := auth.ClaimsFromContext(r.Context())
-	var tenantRole auth.Role
-	if claims != nil {
-		tenantRole = auth.Role(claims.TenantRole)
-	}
-	userID := auth.UserIDFromContext(r.Context())
-	items, err := h.svc.List(r.Context(), userID, tenantRole)
+	p := principalFromRequest(r)
+	items, err := h.svc.List(r.Context(), p)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list agents")
 		return
@@ -135,8 +129,8 @@ func (h *agentsHandler) Get(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid agent ID")
 		return
 	}
-	userID := auth.UserIDFromContext(r.Context())
-	d, err := h.svc.Get(r.Context(), userID, agentID)
+	p := principalFromRequest(r)
+	d, err := h.svc.Get(r.Context(), p, agentID)
 	if err != nil {
 		writeAgentsError(w, err, "failed to load agent")
 		return
@@ -181,8 +175,8 @@ func (h *agentsHandler) Update(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	userID := auth.UserIDFromContext(r.Context())
-	updated, err := h.svc.Update(r.Context(), userID, agentID, agentssvc.UpdateRequest{
+	p := principalFromRequest(r)
+	updated, err := h.svc.Update(r.Context(), p, agentID, agentssvc.UpdateRequest{
 		Name:    req.Name,
 		Slug:    req.Slug,
 		AutoFix: req.AutoFix,
@@ -203,8 +197,8 @@ func (h *agentsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid agent ID")
 		return
 	}
-	userID := auth.UserIDFromContext(r.Context())
-	if err := h.svc.Delete(r.Context(), userID, agentID); err != nil {
+	p := principalFromRequest(r)
+	if err := h.svc.Delete(r.Context(), p, agentID); err != nil {
 		writeAgentsError(w, err, "failed to delete agent")
 		return
 	}
@@ -218,8 +212,8 @@ func (h *agentsHandler) Stop(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid agent ID")
 		return
 	}
-	userID := auth.UserIDFromContext(r.Context())
-	if err := h.svc.Stop(r.Context(), userID, agentID); err != nil {
+	p := principalFromRequest(r)
+	if err := h.svc.Stop(r.Context(), p, agentID); err != nil {
 		writeAgentsError(w, err, "failed to stop agent")
 		return
 	}
@@ -233,8 +227,8 @@ func (h *agentsHandler) Start(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid agent ID")
 		return
 	}
-	userID := auth.UserIDFromContext(r.Context())
-	if err := h.svc.Start(r.Context(), userID, agentID); err != nil {
+	p := principalFromRequest(r)
+	if err := h.svc.Start(r.Context(), p, agentID); err != nil {
 		writeAgentsError(w, err, "failed to start agent")
 		return
 	}
@@ -248,8 +242,8 @@ func (h *agentsHandler) Suspend(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid agent ID")
 		return
 	}
-	userID := auth.UserIDFromContext(r.Context())
-	if err := h.svc.Suspend(r.Context(), userID, agentID); err != nil {
+	p := principalFromRequest(r)
+	if err := h.svc.Suspend(r.Context(), p, agentID); err != nil {
 		writeAgentsError(w, err, "failed to suspend agent")
 		return
 	}
@@ -263,8 +257,8 @@ func (h *agentsHandler) CancelBuild(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid agent ID")
 		return
 	}
-	userID := auth.UserIDFromContext(r.Context())
-	if err := h.svc.CancelBuild(r.Context(), userID, agentID); err != nil {
+	p := principalFromRequest(r)
+	if err := h.svc.CancelBuild(r.Context(), p, agentID); err != nil {
 		writeAgentsError(w, err, "failed to cancel build")
 		return
 	}
@@ -283,8 +277,8 @@ func (h *agentsHandler) Upgrade(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	userID := auth.UserIDFromContext(r.Context())
-	if err := h.svc.Upgrade(r.Context(), userID, agentID, agentssvc.UpgradeRequest{
+	p := principalFromRequest(r)
+	if err := h.svc.Upgrade(r.Context(), p, agentID, agentssvc.UpgradeRequest{
 		RunID:       req.RunId,
 		Description: req.Description,
 	}); err != nil {
@@ -306,8 +300,8 @@ func (h *agentsHandler) Rollback(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	userID := auth.UserIDFromContext(r.Context())
-	if err := h.svc.Rollback(r.Context(), userID, agentID, agentssvc.RollbackRequest{
+	p := principalFromRequest(r)
+	if err := h.svc.Rollback(r.Context(), p, agentID, agentssvc.RollbackRequest{
 		BuildID:        req.BuildId,
 		ConversationID: req.ConversationId,
 	}); err != nil {
@@ -324,8 +318,8 @@ func (h *agentsHandler) ListWebhooks(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid agent ID")
 		return
 	}
-	userID := auth.UserIDFromContext(r.Context())
-	rows, err := h.svc.ListWebhooks(r.Context(), userID, agentID)
+	p := principalFromRequest(r)
+	rows, err := h.svc.ListWebhooks(r.Context(), p, agentID)
 	if err != nil {
 		writeAgentsError(w, err, "failed to list webhooks")
 		return
@@ -344,8 +338,8 @@ func (h *agentsHandler) ListCrons(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid agent ID")
 		return
 	}
-	userID := auth.UserIDFromContext(r.Context())
-	rows, err := h.svc.ListCrons(r.Context(), userID, agentID)
+	p := principalFromRequest(r)
+	rows, err := h.svc.ListCrons(r.Context(), p, agentID)
 	if err != nil {
 		writeAgentsError(w, err, "failed to list crons")
 		return
@@ -364,8 +358,8 @@ func (h *agentsHandler) ListTools(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid agent ID")
 		return
 	}
-	userID := auth.UserIDFromContext(r.Context())
-	tools, err := h.svc.ListTools(r.Context(), userID, agentID)
+	p := principalFromRequest(r)
+	tools, err := h.svc.ListTools(r.Context(), p, agentID)
 	if err != nil {
 		writeAgentsError(w, err, "failed to list tools")
 		return
@@ -391,8 +385,8 @@ func (h *agentsHandler) FireCron(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid agent ID")
 		return
 	}
-	userID := auth.UserIDFromContext(r.Context())
-	res, err := h.svc.FireCron(r.Context(), userID, agentID, chi.URLParam(r, "name"))
+	p := principalFromRequest(r)
+	res, err := h.svc.FireCron(r.Context(), p, agentID, chi.URLParam(r, "name"))
 	if err != nil {
 		writeAgentsError(w, err, "failed to fire cron")
 		return
@@ -407,8 +401,8 @@ func (h *agentsHandler) ListBuilds(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid agent ID")
 		return
 	}
-	userID := auth.UserIDFromContext(r.Context())
-	builds, err := h.svc.ListBuilds(r.Context(), userID, agentID)
+	p := principalFromRequest(r)
+	builds, err := h.svc.ListBuilds(r.Context(), p, agentID)
 	if err != nil {
 		writeAgentsError(w, err, "failed to list builds")
 		return
@@ -454,8 +448,8 @@ func (h *agentsHandler) GetBuild(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid build ID")
 		return
 	}
-	userID := auth.UserIDFromContext(r.Context())
-	res, err := h.svc.GetBuild(r.Context(), userID, buildID)
+	p := principalFromRequest(r)
+	res, err := h.svc.GetBuild(r.Context(), p, buildID)
 	if err != nil {
 		writeAgentsError(w, err, "failed to load build")
 		return
@@ -538,13 +532,7 @@ func (h *agentsHandler) AddMember(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid user_id")
 		return
 	}
-	claims := auth.ClaimsFromContext(ctx)
-	callerID := auth.UserIDFromContext(ctx)
-	var tenantRole auth.Role
-	if claims != nil {
-		tenantRole = auth.Role(claims.TenantRole)
-	}
-	if err := h.members.Add(ctx, callerID, tenantRole, agentID, targetID, req.Role); err != nil {
+	if err := h.members.Add(ctx, principalFromRequest(r), agentID, targetID, req.Role); err != nil {
 		if errors.Is(err, service.ErrInvalidInput) {
 			writeError(w, http.StatusBadRequest, "role must be 'admin' or 'user'")
 			return
@@ -562,8 +550,8 @@ func (h *agentsHandler) ListMembers(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid agent ID")
 		return
 	}
-	userID := auth.UserIDFromContext(r.Context())
-	rows, err := h.members.List(r.Context(), userID, agentID)
+	p := principalFromRequest(r)
+	rows, err := h.members.List(r.Context(), p, agentID)
 	if err != nil {
 		writeMembersError(w, err, "failed to list members")
 		return
@@ -594,8 +582,7 @@ func (h *agentsHandler) RemoveMember(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid user ID")
 		return
 	}
-	callerID := auth.UserIDFromContext(ctx)
-	if err := h.members.Remove(ctx, callerID, agentID, targetID); err != nil {
+	if err := h.members.Remove(ctx, principalFromRequest(r), agentID, targetID); err != nil {
 		writeMembersError(w, err, "failed to remove member")
 		return
 	}

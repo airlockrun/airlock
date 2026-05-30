@@ -20,6 +20,16 @@ api/               HTTP handlers (chi router) + WebSocket upgrade
 auth/              JWT (HS256), middleware, RBAC (admin/manager/user)
 auth/lockout/      Per-(email, ip) login throttling — Policy, IP normalization,
                    constant-time response padding for the Login handler.
+authz/             The single authorization layer. Principal (registered /
+                   anonymous / trigger), EffectiveAgentAccess (the one
+                   agent_members resolver), AccessAtLeast (the one ladder
+                   ranking), a central Action→Requirement policy map, and
+                   Authorize. Every surface (HTTP handlers, bridges, A2A/MCP)
+                   builds a Principal and gates through here — no second place
+                   decides "what level does this action need".
+apperr/            Leaf package: the sentinel errors (ErrForbidden, …), Detail
+                   wrapper, and HTTPStatus mapping. service.ErrX are aliases of
+                   these so authz can return them without an import cycle.
 db/                Postgres — migrations, sqlc queries, connection pool with RLS cleanup
   migrations/      SQL migration files (001_schema.up.sql)
   queries/         sqlc SQL files (agents.sql, messages.sql, etc.)

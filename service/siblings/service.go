@@ -8,7 +8,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/airlockrun/agentsdk"
+	"github.com/airlockrun/airlock/authz"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/airlockrun/airlock/service"
@@ -87,9 +87,9 @@ func (s *Service) refreshParent(parentID uuid.UUID) {
 
 // List returns the parent agent's current sibling address book. Admin-gated
 // (only an admin can edit, so we admin-gate the read too for consistency).
-func (s *Service) List(ctx context.Context, userID, parentID uuid.UUID) ([]Sibling, error) {
+func (s *Service) List(ctx context.Context, p authz.Principal, parentID uuid.UUID) ([]Sibling, error) {
 	q := dbq.New(s.db.Pool())
-	if err := service.RequireAgentAccess(ctx, q, userID, parentID, agentsdk.AccessAdmin); err != nil {
+	if err := authz.Authorize(ctx, q, p, authz.AgentSiblings, parentID); err != nil {
 		return nil, err
 	}
 	rows, err := q.ListSiblings(ctx, pgtype.UUID{Bytes: parentID, Valid: true})
@@ -113,14 +113,14 @@ func (s *Service) List(ctx context.Context, userID, parentID uuid.UUID) ([]Sibli
 
 // ListAddable returns the agents the editing user is allowed to add as
 // a sibling, less anything already in the list or the parent itself.
-func (s *Service) ListAddable(ctx context.Context, userID, parentID uuid.UUID) ([]Addable, error) {
+func (s *Service) ListAddable(ctx context.Context, p authz.Principal, parentID uuid.UUID) ([]Addable, error) {
 	q := dbq.New(s.db.Pool())
-	if err := service.RequireAgentAccess(ctx, q, userID, parentID, agentsdk.AccessAdmin); err != nil {
+	if err := authz.Authorize(ctx, q, p, authz.AgentSiblings, parentID); err != nil {
 		return nil, err
 	}
 	rows, err := q.ListAddableSiblings(ctx, dbq.ListAddableSiblingsParams{
 		ParentAgentID: pgtype.UUID{Bytes: parentID, Valid: true},
-		UserID:        pgtype.UUID{Bytes: userID, Valid: true},
+		UserID:        pgtype.UUID{Bytes: p.UserID, Valid: true},
 	})
 	if err != nil {
 		return nil, err
@@ -146,18 +146,18 @@ func (s *Service) ListAddable(ctx context.Context, userID, parentID uuid.UUID) (
 // attempt, ErrConflict on a write failure (typically the unique
 // violation = already in list), and ErrForbidden when the gate rejects
 // the pair.
-func (s *Service) Add(ctx context.Context, userID, parentID, siblingID uuid.UUID) error {
+func (s *Service) Add(ctx context.Context, p authz.Principal, parentID, siblingID uuid.UUID) error {
 	if siblingID == parentID {
 		return service.ErrInvalidInput
 	}
 	q := dbq.New(s.db.Pool())
-	if err := service.RequireAgentAccess(ctx, q, userID, parentID, agentsdk.AccessAdmin); err != nil {
+	if err := authz.Authorize(ctx, q, p, authz.AgentSiblings, parentID); err != nil {
 		return err
 	}
 	rows, err := q.AddSiblingIfAllowed(ctx, dbq.AddSiblingIfAllowedParams{
 		ParentAgentID:  pgtype.UUID{Bytes: parentID, Valid: true},
 		SiblingAgentID: pgtype.UUID{Bytes: siblingID, Valid: true},
-		UserID:         pgtype.UUID{Bytes: userID, Valid: true},
+		UserID:         pgtype.UUID{Bytes: p.UserID, Valid: true},
 	})
 	if err != nil {
 		return service.ErrConflict
@@ -170,9 +170,9 @@ func (s *Service) Add(ctx context.Context, userID, parentID, siblingID uuid.UUID
 }
 
 // Remove drops siblingID from the parent's address book.
-func (s *Service) Remove(ctx context.Context, userID, parentID, siblingID uuid.UUID) error {
+func (s *Service) Remove(ctx context.Context, p authz.Principal, parentID, siblingID uuid.UUID) error {
 	q := dbq.New(s.db.Pool())
-	if err := service.RequireAgentAccess(ctx, q, userID, parentID, agentsdk.AccessAdmin); err != nil {
+	if err := authz.Authorize(ctx, q, p, authz.AgentSiblings, parentID); err != nil {
 		return err
 	}
 	if err := q.RemoveSibling(ctx, dbq.RemoveSiblingParams{
@@ -186,9 +186,9 @@ func (s *Service) Remove(ctx context.Context, userID, parentID, siblingID uuid.U
 }
 
 // GetSettings returns the parent agent's A2A MCP exposure settings.
-func (s *Service) GetSettings(ctx context.Context, userID, parentID uuid.UUID) (A2ASettings, error) {
+func (s *Service) GetSettings(ctx context.Context, p authz.Principal, parentID uuid.UUID) (A2ASettings, error) {
 	q := dbq.New(s.db.Pool())
-	if err := service.RequireAgentAccess(ctx, q, userID, parentID, agentsdk.AccessAdmin); err != nil {
+	if err := authz.Authorize(ctx, q, p, authz.AgentSiblings, parentID); err != nil {
 		return A2ASettings{}, err
 	}
 	a, err := q.GetAgentByID(ctx, pgtype.UUID{Bytes: parentID, Valid: true})
@@ -206,9 +206,9 @@ func (s *Service) GetSettings(ctx context.Context, userID, parentID uuid.UUID) (
 // non-member on whenever public is true so the UI's "make public"
 // toggle is a one-click affordance. Returned settings reflect that
 // normalization.
-func (s *Service) UpdateSettings(ctx context.Context, userID, parentID uuid.UUID, in A2ASettings) (A2ASettings, error) {
+func (s *Service) UpdateSettings(ctx context.Context, p authz.Principal, parentID uuid.UUID, in A2ASettings) (A2ASettings, error) {
 	q := dbq.New(s.db.Pool())
-	if err := service.RequireAgentAccess(ctx, q, userID, parentID, agentsdk.AccessAdmin); err != nil {
+	if err := authz.Authorize(ctx, q, p, authz.AgentSiblings, parentID); err != nil {
 		return A2ASettings{}, err
 	}
 	if in.AllowPublicMcp {

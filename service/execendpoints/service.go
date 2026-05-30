@@ -12,7 +12,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/airlockrun/agentsdk"
+	"github.com/airlockrun/airlock/authz"
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/airlockrun/airlock/execproxy"
 	"github.com/airlockrun/airlock/secrets"
@@ -82,8 +82,8 @@ type TestResult struct {
 }
 
 // List returns every exec endpoint declared by the agent.
-func (s *Service) List(ctx context.Context, userID, agentID uuid.UUID) ([]dbq.AgentExecEndpoint, error) {
-	if err := service.RequireAgentAccess(ctx, s.queries, userID, agentID, agentsdk.AccessAdmin); err != nil {
+func (s *Service) List(ctx context.Context, p authz.Principal, agentID uuid.UUID) ([]dbq.AgentExecEndpoint, error) {
+	if err := authz.Authorize(ctx, s.queries, p, authz.AgentExecEndpoints, agentID); err != nil {
 		return nil, err
 	}
 	rows, err := s.queries.ListExecEndpointsByAgent(ctx, pgtype.UUID{Bytes: agentID, Valid: true})
@@ -98,8 +98,8 @@ func (s *Service) List(ctx context.Context, userID, agentID uuid.UUID) ([]dbq.Ag
 // and generates a keypair on first configure. ErrInvalidInput for bad
 // input, ErrNotFound when the endpoint slug wasn't declared by the
 // agent.
-func (s *Service) Configure(ctx context.Context, userID, agentID uuid.UUID, slug string, req ConfigureRequest) (dbq.AgentExecEndpoint, error) {
-	if err := service.RequireAgentAccess(ctx, s.queries, userID, agentID, agentsdk.AccessAdmin); err != nil {
+func (s *Service) Configure(ctx context.Context, p authz.Principal, agentID uuid.UUID, slug string, req ConfigureRequest) (dbq.AgentExecEndpoint, error) {
+	if err := authz.Authorize(ctx, s.queries, p, authz.AgentExecEndpoints, agentID); err != nil {
 		return dbq.AgentExecEndpoint{}, err
 	}
 	if strings.TrimSpace(req.Host) == "" {
@@ -150,8 +150,8 @@ func (s *Service) Configure(ctx context.Context, userID, agentID uuid.UUID, slug
 
 // RotateKeypair mints a new ED25519 keypair, replaces the secrets-store
 // ref, and evicts the cached SSH client.
-func (s *Service) RotateKeypair(ctx context.Context, userID, agentID uuid.UUID, slug string) (dbq.AgentExecEndpoint, error) {
-	if err := service.RequireAgentAccess(ctx, s.queries, userID, agentID, agentsdk.AccessAdmin); err != nil {
+func (s *Service) RotateKeypair(ctx context.Context, p authz.Principal, agentID uuid.UUID, slug string) (dbq.AgentExecEndpoint, error) {
+	if err := authz.Authorize(ctx, s.queries, p, authz.AgentExecEndpoints, agentID); err != nil {
 		return dbq.AgentExecEndpoint{}, err
 	}
 	ep, err := s.queries.GetExecEndpointBySlug(ctx, dbq.GetExecEndpointBySlugParams{
@@ -179,8 +179,8 @@ func (s *Service) RotateKeypair(ctx context.Context, userID, agentID uuid.UUID, 
 
 // UnpinHostKey clears the TOFU-pinned host key on this endpoint; the
 // next successful connect re-pins whatever the remote presents.
-func (s *Service) UnpinHostKey(ctx context.Context, userID, agentID uuid.UUID, slug string) error {
-	if err := service.RequireAgentAccess(ctx, s.queries, userID, agentID, agentsdk.AccessAdmin); err != nil {
+func (s *Service) UnpinHostKey(ctx context.Context, p authz.Principal, agentID uuid.UUID, slug string) error {
+	if err := authz.Authorize(ctx, s.queries, p, authz.AgentExecEndpoints, agentID); err != nil {
 		return err
 	}
 	ep, err := s.queries.GetExecEndpointBySlug(ctx, dbq.GetExecEndpointBySlugParams{
@@ -207,8 +207,8 @@ func (s *Service) UnpinHostKey(ctx context.Context, userID, agentID uuid.UUID, s
 
 // Test runs `whoami` through the dialer and parses the buffered NDJSON
 // stream into a one-shot TestResult. Caps each captured stream at 4 KiB.
-func (s *Service) Test(ctx context.Context, userID, agentID uuid.UUID, slug string) (TestResult, error) {
-	if err := service.RequireAgentAccess(ctx, s.queries, userID, agentID, agentsdk.AccessAdmin); err != nil {
+func (s *Service) Test(ctx context.Context, p authz.Principal, agentID uuid.UUID, slug string) (TestResult, error) {
+	if err := authz.Authorize(ctx, s.queries, p, authz.AgentExecEndpoints, agentID); err != nil {
 		return TestResult{}, err
 	}
 	ep, err := s.queries.GetExecEndpointBySlug(ctx, dbq.GetExecEndpointBySlugParams{

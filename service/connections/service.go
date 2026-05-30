@@ -4,8 +4,7 @@
 //
 // Authorization uses the standard agent-admin gate (agent_members.role
 // = 'admin'), the same ladder used by members, siblings, and agent
-// configuration ops. The owner is always an admin so the historical
-// owner-only behavior is a subset of this.
+// configuration ops.
 package connections
 
 import (
@@ -19,7 +18,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/airlockrun/agentsdk"
+	"github.com/airlockrun/airlock/authz"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/airlockrun/airlock/oauth"
@@ -200,9 +199,9 @@ type SetupCounts struct {
 // --- connections ---
 
 // SetOAuthApp persists encrypted client_id/client_secret for a connection.
-func (s *Service) SetOAuthApp(ctx context.Context, userID, agentID uuid.UUID, slug, clientID, clientSecret string) (Status, error) {
+func (s *Service) SetOAuthApp(ctx context.Context, p authz.Principal, agentID uuid.UUID, slug, clientID, clientSecret string) (Status, error) {
 	q := dbq.New(s.db.Pool())
-	if err := service.RequireAgentAccess(ctx, q, userID, agentID, agentsdk.AccessAdmin); err != nil {
+	if err := authz.Authorize(ctx, q, p, authz.AgentConnections, agentID); err != nil {
 		return Status{}, err
 	}
 	conn, err := q.GetConnectionForOAuth(ctx, dbq.GetConnectionForOAuthParams{AgentID: toPg(agentID), Slug: slug})
@@ -238,9 +237,9 @@ func (s *Service) SetOAuthApp(ctx context.Context, userID, agentID uuid.UUID, sl
 
 // OAuthStart generates a PKCE pair + state row and returns the
 // authorize URL the user should redirect to.
-func (s *Service) OAuthStart(ctx context.Context, userID, agentID uuid.UUID, slug, redirectURI string) (string, error) {
+func (s *Service) OAuthStart(ctx context.Context, p authz.Principal, agentID uuid.UUID, slug, redirectURI string) (string, error) {
 	q := dbq.New(s.db.Pool())
-	if err := service.RequireAgentAccess(ctx, q, userID, agentID, agentsdk.AccessAdmin); err != nil {
+	if err := authz.Authorize(ctx, q, p, authz.AgentConnections, agentID); err != nil {
 		return "", err
 	}
 	conn, err := q.GetConnectionForOAuth(ctx, dbq.GetConnectionForOAuthParams{AgentID: toPg(agentID), Slug: slug})
@@ -447,9 +446,9 @@ func (s *Service) refreshMCPAfterAuth(ctx context.Context, agentID uuid.UUID, sl
 }
 
 // SetAPIKey stores an encrypted API key for a non-OAuth connection.
-func (s *Service) SetAPIKey(ctx context.Context, userID, agentID uuid.UUID, slug, apiKey string) (Status, error) {
+func (s *Service) SetAPIKey(ctx context.Context, p authz.Principal, agentID uuid.UUID, slug, apiKey string) (Status, error) {
 	q := dbq.New(s.db.Pool())
-	if err := service.RequireAgentAccess(ctx, q, userID, agentID, agentsdk.AccessAdmin); err != nil {
+	if err := authz.Authorize(ctx, q, p, authz.AgentConnections, agentID); err != nil {
 		return Status{}, err
 	}
 	conn, err := q.GetConnectionBySlug(ctx, dbq.GetConnectionBySlugParams{AgentID: toPg(agentID), Slug: slug})
@@ -478,9 +477,9 @@ func (s *Service) SetAPIKey(ctx context.Context, userID, agentID uuid.UUID, slug
 }
 
 // ListConnections returns every connection registered against the agent.
-func (s *Service) ListConnections(ctx context.Context, userID, agentID uuid.UUID) (ConnectionsList, error) {
+func (s *Service) ListConnections(ctx context.Context, p authz.Principal, agentID uuid.UUID) (ConnectionsList, error) {
 	q := dbq.New(s.db.Pool())
-	if err := service.RequireAgentAccess(ctx, q, userID, agentID, agentsdk.AccessAdmin); err != nil {
+	if err := authz.Authorize(ctx, q, p, authz.AgentConnections, agentID); err != nil {
 		return ConnectionsList{}, err
 	}
 	rows, err := q.ListConnectionsWithStatus(ctx, toPg(agentID))
@@ -510,9 +509,9 @@ func (s *Service) ListConnections(ctx context.Context, userID, agentID uuid.UUID
 }
 
 // CredentialStatus returns the current authorization state of one slug.
-func (s *Service) CredentialStatus(ctx context.Context, userID, agentID uuid.UUID, slug string) (Status, error) {
+func (s *Service) CredentialStatus(ctx context.Context, p authz.Principal, agentID uuid.UUID, slug string) (Status, error) {
 	q := dbq.New(s.db.Pool())
-	if err := service.RequireAgentAccess(ctx, q, userID, agentID, agentsdk.AccessAdmin); err != nil {
+	if err := authz.Authorize(ctx, q, p, authz.AgentConnections, agentID); err != nil {
 		return Status{}, err
 	}
 	conn, err := q.GetConnectionWithCredentialStatus(ctx, dbq.GetConnectionWithCredentialStatusParams{
@@ -533,9 +532,9 @@ func (s *Service) CredentialStatus(ctx context.Context, userID, agentID uuid.UUI
 }
 
 // RevokeCredential clears the access token + refresh token for a slug.
-func (s *Service) RevokeCredential(ctx context.Context, userID, agentID uuid.UUID, slug string) error {
+func (s *Service) RevokeCredential(ctx context.Context, p authz.Principal, agentID uuid.UUID, slug string) error {
 	q := dbq.New(s.db.Pool())
-	if err := service.RequireAgentAccess(ctx, q, userID, agentID, agentsdk.AccessAdmin); err != nil {
+	if err := authz.Authorize(ctx, q, p, authz.AgentConnections, agentID); err != nil {
 		return err
 	}
 	if err := q.ClearConnectionCredentials(ctx, dbq.ClearConnectionCredentialsParams{
@@ -549,9 +548,9 @@ func (s *Service) RevokeCredential(ctx context.Context, userID, agentID uuid.UUI
 
 // TestCredential probes the connection's test_path with stored or
 // override credentials. Empty override falls back to stored.
-func (s *Service) TestCredential(ctx context.Context, userID, agentID uuid.UUID, slug, overrideKey string) (TestResult, error) {
+func (s *Service) TestCredential(ctx context.Context, p authz.Principal, agentID uuid.UUID, slug, overrideKey string) (TestResult, error) {
 	q := dbq.New(s.db.Pool())
-	if err := service.RequireAgentAccess(ctx, q, userID, agentID, agentsdk.AccessAdmin); err != nil {
+	if err := authz.Authorize(ctx, q, p, authz.AgentConnections, agentID); err != nil {
 		return TestResult{}, err
 	}
 	conn, err := q.GetConnectionBySlug(ctx, dbq.GetConnectionBySlugParams{AgentID: toPg(agentID), Slug: slug})
@@ -615,9 +614,9 @@ func (s *Service) TestCredential(ctx context.Context, userID, agentID uuid.UUID,
 // --- MCP servers ---
 
 // ListMCPServers returns all MCP servers + tool counts for the agent.
-func (s *Service) ListMCPServers(ctx context.Context, userID, agentID uuid.UUID) ([]MCPServer, error) {
+func (s *Service) ListMCPServers(ctx context.Context, p authz.Principal, agentID uuid.UUID) ([]MCPServer, error) {
 	q := dbq.New(s.db.Pool())
-	if err := service.RequireAgentAccess(ctx, q, userID, agentID, agentsdk.AccessAdmin); err != nil {
+	if err := authz.Authorize(ctx, q, p, authz.AgentConnections, agentID); err != nil {
 		return nil, err
 	}
 	rows, err := q.ListMCPServersWithStatus(ctx, toPg(agentID))
@@ -654,9 +653,9 @@ func (s *Service) ListMCPServers(ctx context.Context, userID, agentID uuid.UUID)
 }
 
 // MCPCredentialStatus returns the auth state for an MCP server.
-func (s *Service) MCPCredentialStatus(ctx context.Context, userID, agentID uuid.UUID, slug string) (MCPStatus, error) {
+func (s *Service) MCPCredentialStatus(ctx context.Context, p authz.Principal, agentID uuid.UUID, slug string) (MCPStatus, error) {
 	q := dbq.New(s.db.Pool())
-	if err := service.RequireAgentAccess(ctx, q, userID, agentID, agentsdk.AccessAdmin); err != nil {
+	if err := authz.Authorize(ctx, q, p, authz.AgentConnections, agentID); err != nil {
 		return MCPStatus{}, err
 	}
 	srv, err := q.GetMCPServerBySlug(ctx, dbq.GetMCPServerBySlugParams{AgentID: toPg(agentID), Slug: slug})
@@ -674,9 +673,9 @@ func (s *Service) MCPCredentialStatus(ctx context.Context, userID, agentID uuid.
 }
 
 // SetMCPToken stores an encrypted token and re-discovers tools.
-func (s *Service) SetMCPToken(ctx context.Context, userID, agentID uuid.UUID, slug, apiKey string) (MCPStatus, error) {
+func (s *Service) SetMCPToken(ctx context.Context, p authz.Principal, agentID uuid.UUID, slug, apiKey string) (MCPStatus, error) {
 	q := dbq.New(s.db.Pool())
-	if err := service.RequireAgentAccess(ctx, q, userID, agentID, agentsdk.AccessAdmin); err != nil {
+	if err := authz.Authorize(ctx, q, p, authz.AgentConnections, agentID); err != nil {
 		return MCPStatus{}, err
 	}
 	srv, err := q.GetMCPServerBySlug(ctx, dbq.GetMCPServerBySlugParams{AgentID: toPg(agentID), Slug: slug})
@@ -706,9 +705,9 @@ func (s *Service) SetMCPToken(ctx context.Context, userID, agentID uuid.UUID, sl
 }
 
 // RevokeMCPCredential clears the access token for an MCP server.
-func (s *Service) RevokeMCPCredential(ctx context.Context, userID, agentID uuid.UUID, slug string) error {
+func (s *Service) RevokeMCPCredential(ctx context.Context, p authz.Principal, agentID uuid.UUID, slug string) error {
 	q := dbq.New(s.db.Pool())
-	if err := service.RequireAgentAccess(ctx, q, userID, agentID, agentsdk.AccessAdmin); err != nil {
+	if err := authz.Authorize(ctx, q, p, authz.AgentConnections, agentID); err != nil {
 		return err
 	}
 	if err := q.ClearMCPServerCredentials(ctx, dbq.ClearMCPServerCredentialsParams{AgentID: toPg(agentID), Slug: slug}); err != nil {
@@ -719,9 +718,9 @@ func (s *Service) RevokeMCPCredential(ctx context.Context, userID, agentID uuid.
 }
 
 // TestMCPCredential probes the MCP server with tools/list.
-func (s *Service) TestMCPCredential(ctx context.Context, userID, agentID uuid.UUID, slug, overrideKey string) (TestResult, error) {
+func (s *Service) TestMCPCredential(ctx context.Context, p authz.Principal, agentID uuid.UUID, slug, overrideKey string) (TestResult, error) {
 	q := dbq.New(s.db.Pool())
-	if err := service.RequireAgentAccess(ctx, q, userID, agentID, agentsdk.AccessAdmin); err != nil {
+	if err := authz.Authorize(ctx, q, p, authz.AgentConnections, agentID); err != nil {
 		return TestResult{}, err
 	}
 	srv, err := q.GetMCPServerBySlug(ctx, dbq.GetMCPServerBySlugParams{AgentID: toPg(agentID), Slug: slug})
@@ -753,9 +752,9 @@ func (s *Service) TestMCPCredential(ctx context.Context, userID, agentID uuid.UU
 }
 
 // RevokeMCPOAuthApp clears OAuth app config and any credentials tied to it.
-func (s *Service) RevokeMCPOAuthApp(ctx context.Context, userID, agentID uuid.UUID, slug string) error {
+func (s *Service) RevokeMCPOAuthApp(ctx context.Context, p authz.Principal, agentID uuid.UUID, slug string) error {
 	q := dbq.New(s.db.Pool())
-	if err := service.RequireAgentAccess(ctx, q, userID, agentID, agentsdk.AccessAdmin); err != nil {
+	if err := authz.Authorize(ctx, q, p, authz.AgentConnections, agentID); err != nil {
 		return err
 	}
 	if err := q.ClearMCPServerOAuthApp(ctx, dbq.ClearMCPServerOAuthAppParams{AgentID: toPg(agentID), Slug: slug}); err != nil {
@@ -766,9 +765,9 @@ func (s *Service) RevokeMCPOAuthApp(ctx context.Context, userID, agentID uuid.UU
 }
 
 // SetMCPOAuthApp stores encrypted client_id/client_secret for an MCP server.
-func (s *Service) SetMCPOAuthApp(ctx context.Context, userID, agentID uuid.UUID, slug, clientID, clientSecret string) (MCPStatus, error) {
+func (s *Service) SetMCPOAuthApp(ctx context.Context, p authz.Principal, agentID uuid.UUID, slug, clientID, clientSecret string) (MCPStatus, error) {
 	q := dbq.New(s.db.Pool())
-	if err := service.RequireAgentAccess(ctx, q, userID, agentID, agentsdk.AccessAdmin); err != nil {
+	if err := authz.Authorize(ctx, q, p, authz.AgentConnections, agentID); err != nil {
 		return MCPStatus{}, err
 	}
 	srv, err := q.GetMCPServerForOAuth(ctx, dbq.GetMCPServerForOAuthParams{AgentID: toPg(agentID), Slug: slug})
@@ -804,9 +803,9 @@ func (s *Service) SetMCPOAuthApp(ctx context.Context, userID, agentID uuid.UUID,
 
 // MCPOAuthStart kicks off the OAuth dance for an MCP server. Includes
 // lazy URL re-discovery and lazy DCR for oauth_discovery mode.
-func (s *Service) MCPOAuthStart(ctx context.Context, userID, agentID uuid.UUID, slug, redirectURI string) (string, error) {
+func (s *Service) MCPOAuthStart(ctx context.Context, p authz.Principal, agentID uuid.UUID, slug, redirectURI string) (string, error) {
 	q := dbq.New(s.db.Pool())
-	if err := service.RequireAgentAccess(ctx, q, userID, agentID, agentsdk.AccessAdmin); err != nil {
+	if err := authz.Authorize(ctx, q, p, authz.AgentConnections, agentID); err != nil {
 		return "", err
 	}
 	srv, err := q.GetMCPServerForOAuth(ctx, dbq.GetMCPServerForOAuthParams{AgentID: toPg(agentID), Slug: slug})
@@ -921,9 +920,9 @@ func envVarRef(id, slug string) string { return "agent/env-var/" + id + "/" + sl
 
 // ListEnvVars returns registered env vars with decrypted plain values
 // (secrets stay write-only and return Value="").
-func (s *Service) ListEnvVars(ctx context.Context, userID, agentID uuid.UUID) ([]EnvVar, error) {
+func (s *Service) ListEnvVars(ctx context.Context, p authz.Principal, agentID uuid.UUID) ([]EnvVar, error) {
 	q := dbq.New(s.db.Pool())
-	if err := service.RequireAgentAccess(ctx, q, userID, agentID, agentsdk.AccessAdmin); err != nil {
+	if err := authz.Authorize(ctx, q, p, authz.AgentConnections, agentID); err != nil {
 		return nil, err
 	}
 	rows, err := q.ListAgentEnvVars(ctx, toPg(agentID))
@@ -959,9 +958,9 @@ func (s *Service) ListEnvVars(ctx context.Context, userID, agentID uuid.UUID) ([
 
 // SetEnvVarValue validates against the slot's regex pattern (if any),
 // encrypts, and persists.
-func (s *Service) SetEnvVarValue(ctx context.Context, userID, agentID uuid.UUID, slug, value string) error {
+func (s *Service) SetEnvVarValue(ctx context.Context, p authz.Principal, agentID uuid.UUID, slug, value string) error {
 	q := dbq.New(s.db.Pool())
-	if err := service.RequireAgentAccess(ctx, q, userID, agentID, agentsdk.AccessAdmin); err != nil {
+	if err := authz.Authorize(ctx, q, p, authz.AgentConnections, agentID); err != nil {
 		return err
 	}
 	row, err := q.GetAgentEnvVarBySlug(ctx, dbq.GetAgentEnvVarBySlugParams{AgentID: toPg(agentID), Slug: slug})
@@ -997,9 +996,9 @@ func (s *Service) SetEnvVarValue(ctx context.Context, userID, agentID uuid.UUID,
 }
 
 // ClearEnvVarValue clears the configured value (slot stays registered).
-func (s *Service) ClearEnvVarValue(ctx context.Context, userID, agentID uuid.UUID, slug string) error {
+func (s *Service) ClearEnvVarValue(ctx context.Context, p authz.Principal, agentID uuid.UUID, slug string) error {
 	q := dbq.New(s.db.Pool())
-	if err := service.RequireAgentAccess(ctx, q, userID, agentID, agentsdk.AccessAdmin); err != nil {
+	if err := authz.Authorize(ctx, q, p, authz.AgentConnections, agentID); err != nil {
 		return err
 	}
 	if err := q.ClearAgentEnvVarValue(ctx, dbq.ClearAgentEnvVarValueParams{AgentID: toPg(agentID), Slug: slug}); err != nil {
@@ -1010,9 +1009,9 @@ func (s *Service) ClearEnvVarValue(ctx context.Context, userID, agentID uuid.UUI
 }
 
 // SetupStatus returns aggregate "needs operator action" counts.
-func (s *Service) SetupStatus(ctx context.Context, userID, agentID uuid.UUID) (SetupCounts, error) {
+func (s *Service) SetupStatus(ctx context.Context, p authz.Principal, agentID uuid.UUID) (SetupCounts, error) {
 	q := dbq.New(s.db.Pool())
-	if err := service.RequireAgentAccess(ctx, q, userID, agentID, agentsdk.AccessAdmin); err != nil {
+	if err := authz.Authorize(ctx, q, p, authz.AgentConnections, agentID); err != nil {
 		return SetupCounts{}, err
 	}
 	row, err := q.AgentSetupStatus(ctx, toPg(agentID))

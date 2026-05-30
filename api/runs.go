@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/convert"
 	"github.com/airlockrun/airlock/db/dbq"
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
@@ -65,8 +64,8 @@ func (h *runsHandler) ListRuns(w http.ResponseWriter, r *http.Request) {
 			cursor = t
 		}
 	}
-	userID := auth.UserIDFromContext(r.Context())
-	res, err := h.svc.List(r.Context(), userID, agentID, cursor, 50)
+	p := principalFromRequest(r)
+	res, err := h.svc.List(r.Context(), p, agentID, cursor, 50)
 	if err != nil {
 		writeRunsError(w, err, "failed to list runs")
 		return
@@ -93,8 +92,8 @@ func (h *runsHandler) GetRun(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid run ID")
 		return
 	}
-	userID := auth.UserIDFromContext(ctx)
-	res, err := h.svc.Get(ctx, userID, runID)
+	p := principalFromRequest(r)
+	res, err := h.svc.Get(ctx, p, runID)
 	if err != nil {
 		writeRunsError(w, err, "failed to load run")
 		return
@@ -116,8 +115,8 @@ func (h *runsHandler) GetRunLogs(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid run ID")
 		return
 	}
-	userID := auth.UserIDFromContext(r.Context())
-	logs, err := h.svc.Logs(r.Context(), userID, runID)
+	p := principalFromRequest(r)
+	logs, err := h.svc.Logs(r.Context(), p, runID)
 	if err != nil {
 		writeRunsError(w, err, "failed to load logs")
 		return
@@ -134,8 +133,8 @@ func (h *runsHandler) CancelRun(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid run ID")
 		return
 	}
-	userID := auth.UserIDFromContext(r.Context())
-	if err := h.svc.Cancel(r.Context(), userID, runID); err != nil {
+	p := principalFromRequest(r)
+	if err := h.svc.Cancel(r.Context(), p, runID); err != nil {
 		writeRunsError(w, err, "failed to cancel run")
 		return
 	}

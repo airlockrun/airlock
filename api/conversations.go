@@ -12,6 +12,7 @@ import (
 
 	"github.com/airlockrun/agentsdk"
 	"github.com/airlockrun/airlock/auth"
+	"github.com/airlockrun/airlock/authz"
 	"github.com/airlockrun/airlock/convert"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
@@ -72,8 +73,8 @@ func (h *conversationsHandler) CreateConversation(w http.ResponseWriter, r *http
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	userID := auth.UserIDFromContext(r.Context())
-	conv, err := h.svc.Create(r.Context(), userID, agentID, req.Title)
+	p := principalFromRequest(r)
+	conv, err := h.svc.Create(r.Context(), p, agentID, req.Title)
 	if err != nil {
 		writeConvError(w, err, "failed to create conversation")
 		return
@@ -91,8 +92,8 @@ func (h *conversationsHandler) ListConversations(w http.ResponseWriter, r *http.
 		writeError(w, http.StatusBadRequest, "invalid agent ID")
 		return
 	}
-	userID := auth.UserIDFromContext(r.Context())
-	convs, err := h.svc.ListByAgent(r.Context(), userID, agentID)
+	p := principalFromRequest(r)
+	convs, err := h.svc.ListByAgent(r.Context(), p, agentID)
 	if err != nil {
 		writeConvError(w, err, "failed to list conversations")
 		return
@@ -109,8 +110,8 @@ func (h *conversationsHandler) ListConversations(w http.ResponseWriter, r *http.
 // global sidebar list; each ConversationInfo carries agent_id so the UI
 // labels rows with the agent's name.
 func (h *conversationsHandler) ListAllConversations(w http.ResponseWriter, r *http.Request) {
-	userID := auth.UserIDFromContext(r.Context())
-	convs, err := h.svc.ListAll(r.Context(), userID)
+	p := principalFromRequest(r)
+	convs, err := h.svc.ListAll(r.Context(), p)
 	if err != nil {
 		writeConvError(w, err, "failed to list conversations")
 		return
@@ -130,8 +131,7 @@ func (h *conversationsHandler) GetConversation(w http.ResponseWriter, r *http.Re
 		writeError(w, http.StatusBadRequest, "invalid conversation ID")
 		return
 	}
-	userID := auth.UserIDFromContext(ctx)
-	det, err := h.svc.Get(ctx, userID, convID)
+	det, err := h.svc.Get(ctx, principalFromRequest(r), convID)
 	if err != nil {
 		writeConvError(w, err, "failed to load conversation")
 		return
@@ -200,8 +200,8 @@ func (h *conversationsHandler) DeleteConversation(w http.ResponseWriter, r *http
 		writeError(w, http.StatusBadRequest, "invalid conversation ID")
 		return
 	}
-	userID := auth.UserIDFromContext(r.Context())
-	if err := h.svc.Delete(r.Context(), userID, convID); err != nil {
+	p := principalFromRequest(r)
+	if err := h.svc.Delete(r.Context(), p, convID); err != nil {
 		writeConvError(w, err, "failed to delete conversation")
 		return
 	}
@@ -277,7 +277,7 @@ func (h *conversationsHandler) Prompt(w http.ResponseWriter, r *http.Request) {
 	// and the client learns about it via a populated command_reply.
 	// `/compact` still triggers an agent run but with ForceCompact=true, so
 	// we fall through to the normal forward-to-agent path.
-	access := trigger.ResolveAgentAccess(ctx, q, agentID, userID)
+	access := principalFromRequest(r).EffectiveAgentAccess(ctx, q, agentID)
 	var forceCompact bool
 	if cmd, err := trigger.TrySlashCommand(ctx, q, h.dispatcher, convID, access, req.Message, h.logger); err != nil {
 		h.logger.Error("slash command failed", zap.Error(err))
@@ -517,7 +517,7 @@ func (h *conversationsHandler) NotifyUpgradeComplete(ctx context.Context, agentI
 	if err == nil {
 		if loaded, lerr := q.GetConversationByID(ctx, toPgUUID(convUUID)); lerr == nil {
 			conv = loaded
-			access = trigger.ResolveAgentAccess(ctx, q, agentID, pgUUID(conv.UserID))
+			access = authz.UserPrincipal(pgUUID(conv.UserID), "").EffectiveAgentAccess(ctx, q, agentID)
 		}
 	}
 	isBridge := conv.Source == "bridge" && conv.BridgeID.Valid &&
@@ -670,8 +670,7 @@ func (h *conversationsHandler) ownedConversation(ctx context.Context, w http.Res
 		writeError(w, http.StatusBadRequest, "invalid conversation ID")
 		return dbq.AgentConversation{}, false
 	}
-	userID := auth.UserIDFromContext(ctx)
-	conv, err := h.svc.OwnedConversation(ctx, userID, convID)
+	conv, err := h.svc.OwnedConversation(ctx, principalFromRequest(r), convID)
 	if err != nil {
 		writeConvError(w, err, "failed to load conversation")
 		return dbq.AgentConversation{}, false

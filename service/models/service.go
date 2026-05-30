@@ -7,7 +7,7 @@ package models
 import (
 	"context"
 
-	"github.com/airlockrun/agentsdk"
+	"github.com/airlockrun/airlock/authz"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/airlockrun/airlock/service"
@@ -74,10 +74,13 @@ type State struct {
 // Get returns the agent and its declared model slots. Any agent member
 // can read. ErrNotFound for a missing agent; ErrForbidden for a
 // non-member caller.
-func (s *Service) Get(ctx context.Context, userID, agentID uuid.UUID) (State, error) {
+func (s *Service) Get(ctx context.Context, p authz.Principal, agentID uuid.UUID) (State, error) {
 	q := dbq.New(s.db.Pool())
-	agent, err := service.RequireAgentLevel(ctx, q, userID, agentID, agentsdk.AccessUser)
+	agent, err := q.GetAgentByID(ctx, pgtype.UUID{Bytes: agentID, Valid: true})
 	if err != nil {
+		return State{}, service.ErrNotFound
+	}
+	if err := authz.Authorize(ctx, q, p, authz.AgentModelsView, agentID); err != nil {
 		return State{}, err
 	}
 	slots, err := q.ListAgentModelSlots(ctx, agent.ID)
@@ -115,10 +118,13 @@ func parsePair(name string, p Pair) (pgtype.UUID, error) {
 // the authoritative state. Admin-gated. ErrNotFound for a missing
 // agent; ErrForbidden for a non-admin caller; ErrInvalidInput (wrapped
 // with detail) for any pair-coherence violation.
-func (s *Service) Update(ctx context.Context, userID, agentID uuid.UUID, req UpdateRequest) (State, error) {
+func (s *Service) Update(ctx context.Context, p authz.Principal, agentID uuid.UUID, req UpdateRequest) (State, error) {
 	q := dbq.New(s.db.Pool())
-	agent, err := service.RequireAgentLevel(ctx, q, userID, agentID, agentsdk.AccessAdmin)
+	agent, err := q.GetAgentByID(ctx, pgtype.UUID{Bytes: agentID, Valid: true})
 	if err != nil {
+		return State{}, service.ErrNotFound
+	}
+	if err := authz.Authorize(ctx, q, p, authz.AgentModelsUpdate, agentID); err != nil {
 		return State{}, err
 	}
 	pairs := []struct {

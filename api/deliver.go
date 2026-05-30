@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/airlockrun/agentsdk"
+	"github.com/airlockrun/airlock/authz"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
@@ -120,7 +121,7 @@ func postToConversation(ctx context.Context, deps postDeps, opts postOpts) error
 		// (requestUpgrade, queryDB, execDB) survive system-injected
 		// follow-up turns. Without this the agent defaults to AccessUser
 		// and admin verbs ReferenceError on the next turn.
-		access := trigger.ResolveAgentAccess(ctx, q, opts.AgentID, pgUUID(conv.UserID))
+		access := authz.UserPrincipal(pgUUID(conv.UserID), "").EffectiveAgentAccess(ctx, q, opts.AgentID)
 		input := agentsdk.PromptInput{
 			Message:        opts.LLMMessage,
 			ConversationID: opts.ConversationID.String(),

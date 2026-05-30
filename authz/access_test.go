@@ -1,4 +1,4 @@
-package trigger
+package authz
 
 import (
 	"testing"
@@ -22,7 +22,7 @@ func TestAccessAtLeast(t *testing.T) {
 		{"public >= public", agentsdk.AccessPublic, agentsdk.AccessPublic, true},
 		{"public < user", agentsdk.AccessPublic, agentsdk.AccessUser, false},
 		{"public < admin", agentsdk.AccessPublic, agentsdk.AccessAdmin, false},
-		{"empty < public", agentsdk.Access(""), agentsdk.AccessPublic, true}, // both rank 0
+		{"empty == public floor", agentsdk.Access(""), agentsdk.AccessPublic, true},
 		{"empty < user", agentsdk.Access(""), agentsdk.AccessUser, false},
 	}
 	for _, tt := range tests {

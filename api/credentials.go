@@ -4,7 +4,6 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/airlockrun/airlock/auth"
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 	"github.com/airlockrun/airlock/service"
 	connsvc "github.com/airlockrun/airlock/service/connections"
@@ -75,8 +74,8 @@ func (h *credentialHandler) SetOAuthApp(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	userID := auth.UserIDFromContext(r.Context())
-	st, err := h.svc.SetOAuthApp(r.Context(), userID, agentID, slug, req.ClientId, req.ClientSecret)
+	p := principalFromRequest(r)
+	st, err := h.svc.SetOAuthApp(r.Context(), p, agentID, slug, req.ClientId, req.ClientSecret)
 	if err != nil {
 		writeConnError(w, err, "failed to update OAuth app")
 		return
@@ -96,8 +95,8 @@ func (h *credentialHandler) OAuthStart(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid agent_id")
 		return
 	}
-	userID := auth.UserIDFromContext(r.Context())
-	authURL, err := h.svc.OAuthStart(r.Context(), userID, agentID, req.Slug, req.RedirectUri)
+	p := principalFromRequest(r)
+	authURL, err := h.svc.OAuthStart(r.Context(), p, agentID, req.Slug, req.RedirectUri)
 	if err != nil {
 		writeConnError(w, err, "failed to start OAuth flow")
 		return
@@ -138,8 +137,8 @@ func (h *credentialHandler) SetAPIKey(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	userID := auth.UserIDFromContext(r.Context())
-	st, err := h.svc.SetAPIKey(r.Context(), userID, agentID, slug, req.ApiKey)
+	p := principalFromRequest(r)
+	st, err := h.svc.SetAPIKey(r.Context(), p, agentID, slug, req.ApiKey)
 	if err != nil {
 		writeConnError(w, err, "failed to store API key")
 		return
@@ -154,8 +153,8 @@ func (h *credentialHandler) ListConnections(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusBadRequest, "invalid agentID")
 		return
 	}
-	userID := auth.UserIDFromContext(r.Context())
-	out, err := h.svc.ListConnections(r.Context(), userID, agentID)
+	p := principalFromRequest(r)
+	out, err := h.svc.ListConnections(r.Context(), p, agentID)
 	if err != nil {
 		writeConnError(w, err, "failed to list connections")
 		return
@@ -192,8 +191,8 @@ func (h *credentialHandler) CredentialStatus(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	userID := auth.UserIDFromContext(r.Context())
-	st, err := h.svc.CredentialStatus(r.Context(), userID, agentID, slug)
+	p := principalFromRequest(r)
+	st, err := h.svc.CredentialStatus(r.Context(), p, agentID, slug)
 	if err != nil {
 		writeConnError(w, err, "failed to get credential status")
 		return
@@ -208,8 +207,8 @@ func (h *credentialHandler) RevokeCredential(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	userID := auth.UserIDFromContext(r.Context())
-	if err := h.svc.RevokeCredential(r.Context(), userID, agentID, slug); err != nil {
+	p := principalFromRequest(r)
+	if err := h.svc.RevokeCredential(r.Context(), p, agentID, slug); err != nil {
 		writeConnError(w, err, "failed to revoke credential")
 		return
 	}
@@ -225,8 +224,8 @@ func (h *credentialHandler) TestCredential(w http.ResponseWriter, r *http.Reques
 	}
 	var keyReq airlockv1.SetAPIKeyRequest
 	_ = decodeProto(r, &keyReq)
-	userID := auth.UserIDFromContext(r.Context())
-	res, err := h.svc.TestCredential(r.Context(), userID, agentID, slug, keyReq.ApiKey)
+	p := principalFromRequest(r)
+	res, err := h.svc.TestCredential(r.Context(), p, agentID, slug, keyReq.ApiKey)
 	if err != nil {
 		writeConnError(w, err, "failed to test credential")
 		return

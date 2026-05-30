@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/airlockrun/agentsdk"
+	"github.com/airlockrun/airlock/authz"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/airlockrun/airlock/service"
@@ -51,9 +52,9 @@ type ListResult struct {
 
 // List returns up to `limit` runs for the agent, paginated by started_at.
 // A zero cursor returns the newest page. Requires agent membership.
-func (s *Service) List(ctx context.Context, userID, agentID uuid.UUID, cursor time.Time, limit int32) (ListResult, error) {
+func (s *Service) List(ctx context.Context, p authz.Principal, agentID uuid.UUID, cursor time.Time, limit int32) (ListResult, error) {
 	q := dbq.New(s.db.Pool())
-	if err := service.RequireAgentAccess(ctx, q, userID, agentID, agentsdk.AccessUser); err != nil {
+	if err := authz.Authorize(ctx, q, p, authz.AgentRunView, agentID); err != nil {
 		return ListResult{}, err
 	}
 	var cur pgtype.Timestamptz
@@ -86,13 +87,13 @@ type GetResult struct {
 // Get returns one run and the messages produced during it. ErrNotFound
 // when the run row is missing. Requires membership of the run's agent.
 // Best-effort messages load: a query failure there returns an empty slice.
-func (s *Service) Get(ctx context.Context, userID, runID uuid.UUID) (GetResult, error) {
+func (s *Service) Get(ctx context.Context, p authz.Principal, runID uuid.UUID) (GetResult, error) {
 	q := dbq.New(s.db.Pool())
 	run, err := q.GetRunByID(ctx, pgtype.UUID{Bytes: runID, Valid: true})
 	if err != nil {
 		return GetResult{}, service.ErrNotFound
 	}
-	if err := service.RequireAgentAccess(ctx, q, userID, uuid.UUID(run.AgentID.Bytes), agentsdk.AccessUser); err != nil {
+	if err := authz.Authorize(ctx, q, p, authz.AgentRunView, uuid.UUID(run.AgentID.Bytes)); err != nil {
 		return GetResult{}, err
 	}
 	msgs, _ := q.ListMessagesByRun(ctx, pgtype.UUID{Bytes: runID, Valid: true})
@@ -101,13 +102,13 @@ func (s *Service) Get(ctx context.Context, userID, runID uuid.UUID) (GetResult, 
 
 // Logs returns the captured stdout for a run. ErrNotFound for a missing
 // run. Requires membership of the run's agent.
-func (s *Service) Logs(ctx context.Context, userID, runID uuid.UUID) (string, error) {
+func (s *Service) Logs(ctx context.Context, p authz.Principal, runID uuid.UUID) (string, error) {
 	q := dbq.New(s.db.Pool())
 	run, err := q.GetRunByID(ctx, pgtype.UUID{Bytes: runID, Valid: true})
 	if err != nil {
 		return "", service.ErrNotFound
 	}
-	if err := service.RequireAgentAccess(ctx, q, userID, uuid.UUID(run.AgentID.Bytes), agentsdk.AccessUser); err != nil {
+	if err := authz.Authorize(ctx, q, p, authz.AgentRunView, uuid.UUID(run.AgentID.Bytes)); err != nil {
 		return "", err
 	}
 	return run.StdoutLog, nil
@@ -119,13 +120,13 @@ func (s *Service) Logs(ctx context.Context, userID, runID uuid.UUID) (string, er
 // missing run; ErrConflict if the run is already in a terminal state.
 // Authorized for agent admins, or the owner of the run's conversation
 // when the run was a web prompt (so a user can stop their own run).
-func (s *Service) Cancel(ctx context.Context, userID, runID uuid.UUID) error {
+func (s *Service) Cancel(ctx context.Context, p authz.Principal, runID uuid.UUID) error {
 	q := dbq.New(s.db.Pool())
 	run, err := q.GetRunByID(ctx, pgtype.UUID{Bytes: runID, Valid: true})
 	if err != nil {
 		return service.ErrNotFound
 	}
-	if err := s.authorizeCancel(ctx, q, userID, run); err != nil {
+	if err := s.authorizeCancel(ctx, q, p, run); err != nil {
 		return err
 	}
 	if run.Status != "running" {
@@ -146,17 +147,18 @@ func (s *Service) Cancel(ctx context.Context, userID, runID uuid.UUID) error {
 // registry carries no caller identity, so ownership is resolved from the
 // run row here. Cron/webhook/bridge runs have no user owner and stay
 // admin-only.
-func (s *Service) authorizeCancel(ctx context.Context, q *dbq.Queries, userID uuid.UUID, run dbq.Run) error {
-	if userID == uuid.Nil {
+func (s *Service) authorizeCancel(ctx context.Context, q *dbq.Queries, p authz.Principal, run dbq.Run) error {
+	if !p.IsAuthenticatedUser() {
 		return service.ErrUnauthorized
 	}
-	if service.RequireAgentAccess(ctx, q, userID, uuid.UUID(run.AgentID.Bytes), agentsdk.AccessAdmin) == nil {
+	agentID := uuid.UUID(run.AgentID.Bytes)
+	if authz.AccessAtLeast(p.EffectiveAgentAccess(ctx, q, agentID), agentsdk.AccessAdmin) {
 		return nil
 	}
 	if run.TriggerType == "prompt" {
 		if convID, err := uuid.Parse(run.TriggerRef); err == nil {
 			conv, err := q.GetConversationByID(ctx, pgtype.UUID{Bytes: convID, Valid: true})
-			if err == nil && conv.UserID.Valid && uuid.UUID(conv.UserID.Bytes) == userID {
+			if err == nil && conv.UserID.Valid && uuid.UUID(conv.UserID.Bytes) == p.UserID {
 				return nil
 			}
 		}

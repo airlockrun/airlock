@@ -4,7 +4,6 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/airlockrun/airlock/auth"
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 	agentssvc "github.com/airlockrun/airlock/service/agents"
 	"github.com/go-chi/chi/v5"
@@ -22,8 +21,8 @@ func (h *agentsHandler) ConnectGit(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	userID := auth.UserIDFromContext(r.Context())
-	cfg, err := h.svc.ConnectGit(r.Context(), userID, agentID, agentssvc.ConnectGitRequest{
+	p := principalFromRequest(r)
+	cfg, err := h.svc.ConnectGit(r.Context(), p, agentID, agentssvc.ConnectGitRequest{
 		RemoteURL:     req.GitRemoteUrl,
 		CredentialID:  req.GitCredentialId,
 		DefaultBranch: req.DefaultBranch,
@@ -44,8 +43,8 @@ func (h *agentsHandler) DisconnectGit(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid agent ID")
 		return
 	}
-	userID := auth.UserIDFromContext(r.Context())
-	if err := h.svc.DisconnectGit(r.Context(), userID, agentID); err != nil {
+	p := principalFromRequest(r)
+	if err := h.svc.DisconnectGit(r.Context(), p, agentID); err != nil {
 		writeAgentsError(w, err, "failed to disconnect git remote")
 		return
 	}
@@ -59,8 +58,8 @@ func (h *agentsHandler) GetGitConfig(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid agent ID")
 		return
 	}
-	userID := auth.UserIDFromContext(r.Context())
-	cfg, err := h.svc.GetGitConfig(r.Context(), userID, agentID)
+	p := principalFromRequest(r)
+	cfg, err := h.svc.GetGitConfig(r.Context(), p, agentID)
 	if err != nil {
 		writeAgentsError(w, err, "failed to load git config")
 		return

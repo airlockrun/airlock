@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/airlockrun/airlock/execproxy"
 	"github.com/airlockrun/airlock/service"
@@ -108,8 +107,8 @@ func (h *execEndpointsHandler) List(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusBadRequest, "invalid agent id")
 		return
 	}
-	userID := auth.UserIDFromContext(r.Context())
-	rows, err := h.svc.List(r.Context(), userID, agentID)
+	p := principalFromRequest(r)
+	rows, err := h.svc.List(r.Context(), p, agentID)
 	if err != nil {
 		writeExecError(w, err, "failed to list exec endpoints")
 		return
@@ -136,8 +135,8 @@ func (h *execEndpointsHandler) Configure(w http.ResponseWriter, r *http.Request)
 		writeJSONError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	userID := auth.UserIDFromContext(r.Context())
-	ep, err := h.svc.Configure(r.Context(), userID, agentID, slug, execsvc.ConfigureRequest{
+	p := principalFromRequest(r)
+	ep, err := h.svc.Configure(r.Context(), p, agentID, slug, execsvc.ConfigureRequest{
 		Host: req.Host, Port: req.Port, SSHUser: req.SSHUser,
 	})
 	if err != nil {
@@ -153,8 +152,8 @@ func (h *execEndpointsHandler) RotateKeypair(w http.ResponseWriter, r *http.Requ
 	if !ok {
 		return
 	}
-	userID := auth.UserIDFromContext(r.Context())
-	ep, err := h.svc.RotateKeypair(r.Context(), userID, agentID, slug)
+	p := principalFromRequest(r)
+	ep, err := h.svc.RotateKeypair(r.Context(), p, agentID, slug)
 	if err != nil {
 		writeExecError(w, err, "failed to rotate keypair")
 		return
@@ -168,8 +167,8 @@ func (h *execEndpointsHandler) UnpinHostKey(w http.ResponseWriter, r *http.Reque
 	if !ok {
 		return
 	}
-	userID := auth.UserIDFromContext(r.Context())
-	if err := h.svc.UnpinHostKey(r.Context(), userID, agentID, slug); err != nil {
+	p := principalFromRequest(r)
+	if err := h.svc.UnpinHostKey(r.Context(), p, agentID, slug); err != nil {
 		writeExecError(w, err, "failed to clear host key")
 		return
 	}
@@ -182,8 +181,8 @@ func (h *execEndpointsHandler) Test(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	userID := auth.UserIDFromContext(r.Context())
-	res, err := h.svc.Test(r.Context(), userID, agentID, slug)
+	p := principalFromRequest(r)
+	res, err := h.svc.Test(r.Context(), p, agentID, slug)
 	if err != nil {
 		writeExecError(w, err, "failed to load exec endpoint")
 		return

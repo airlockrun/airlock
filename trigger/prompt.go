@@ -198,7 +198,7 @@ func (p *PromptProxy) HandleMessage(
 	// Resolve access once — reused for slash-command gating and for
 	// filtering per-caller extra system prompts. Non-members fall through
 	// to AccessPublic, which is correct for anonymous public-channel users.
-	access := ResolveAgentAccess(ctx, q, agentID, userID)
+	access := bridgePrincipal(userID).EffectiveAgentAccess(ctx, q, agentID)
 
 	// Intercept slash commands (/clear, /compact, ...) before forwarding.
 	// `/clear` and unknown commands return a reply directly so the bridge
@@ -471,7 +471,7 @@ func (p *PromptProxy) HandleCallback(
 	approved := action == "approve"
 	// Same CallerAccess plumbing as HandleMessage above — admin-only
 	// bindings need it to survive the resume turn too.
-	access := ResolveAgentAccess(ctx, q, agentID, userID)
+	access := bridgePrincipal(userID).EffectiveAgentAccess(ctx, q, agentID)
 	input := agentsdk.PromptInput{
 		ConversationID: convert.PgUUIDToString(convID),
 		ResumeRunID:    runIDStr,

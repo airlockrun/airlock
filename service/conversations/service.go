@@ -11,8 +11,8 @@ import (
 	"errors"
 	"strconv"
 
-	"github.com/airlockrun/agentsdk"
 	"github.com/airlockrun/airlock/attachref"
+	"github.com/airlockrun/airlock/authz"
 	"github.com/airlockrun/airlock/convert"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
@@ -52,13 +52,13 @@ func toPg(id uuid.UUID) pgtype.UUID { return pgtype.UUID{Bytes: id, Valid: true}
 
 // Create makes a new web conversation thread. Requires membership of the
 // agent (AccessUser).
-func (s *Service) Create(ctx context.Context, userID, agentID uuid.UUID, title string) (dbq.AgentConversation, error) {
+func (s *Service) Create(ctx context.Context, p authz.Principal, agentID uuid.UUID, title string) (dbq.AgentConversation, error) {
 	q := dbq.New(s.db.Pool())
-	if err := service.RequireAgentAccess(ctx, q, userID, agentID, agentsdk.AccessUser); err != nil {
+	if err := authz.Authorize(ctx, q, p, authz.AgentConversation, agentID); err != nil {
 		return dbq.AgentConversation{}, err
 	}
 	conv, err := q.CreateWebConversation(ctx, dbq.CreateWebConversationParams{
-		AgentID: toPg(agentID), UserID: toPg(userID), Title: title,
+		AgentID: toPg(agentID), UserID: toPg(p.UserID), Title: title,
 	})
 	if err != nil {
 		s.logger.Error("create conversation", zap.Error(err))
@@ -70,13 +70,13 @@ func (s *Service) Create(ctx context.Context, userID, agentID uuid.UUID, title s
 // ListByAgent returns web conversations owned by the user for the given
 // agent (DM-only — there is at most one). Requires membership of the
 // agent (AccessUser).
-func (s *Service) ListByAgent(ctx context.Context, userID, agentID uuid.UUID) ([]dbq.AgentConversation, error) {
+func (s *Service) ListByAgent(ctx context.Context, p authz.Principal, agentID uuid.UUID) ([]dbq.AgentConversation, error) {
 	q := dbq.New(s.db.Pool())
-	if err := service.RequireAgentAccess(ctx, q, userID, agentID, agentsdk.AccessUser); err != nil {
+	if err := authz.Authorize(ctx, q, p, authz.AgentConversation, agentID); err != nil {
 		return nil, err
 	}
 	rows, err := q.ListConversationsByAgent(ctx, dbq.ListConversationsByAgentParams{
-		AgentID: toPg(agentID), UserID: toPg(userID),
+		AgentID: toPg(agentID), UserID: toPg(p.UserID),
 	})
 	if err != nil {
 		s.logger.Error("list conversations", zap.Error(err))
@@ -87,11 +87,11 @@ func (s *Service) ListByAgent(ctx context.Context, userID, agentID uuid.UUID) ([
 
 // ListAll returns every web conversation the user owns, across all
 // agents (newest first).
-func (s *Service) ListAll(ctx context.Context, userID uuid.UUID) ([]dbq.AgentConversation, error) {
-	if userID == uuid.Nil {
+func (s *Service) ListAll(ctx context.Context, p authz.Principal) ([]dbq.AgentConversation, error) {
+	if !p.IsAuthenticatedUser() {
 		return nil, service.ErrUnauthorized
 	}
-	rows, err := dbq.New(s.db.Pool()).ListAllWebConversationsByUser(ctx, toPg(userID))
+	rows, err := dbq.New(s.db.Pool()).ListAllWebConversationsByUser(ctx, toPg(p.UserID))
 	if err != nil {
 		s.logger.Error("list all conversations", zap.Error(err))
 		return nil, err
@@ -124,14 +124,14 @@ type Detail struct {
 // Owner + surface gate: caller must own it; a2a transport rows are
 // invisible from the web. Both fail with ErrNotFound (don't leak which
 // conversations exist on which surface).
-func (s *Service) Get(ctx context.Context, userID, convID uuid.UUID) (Detail, error) {
-	if userID == uuid.Nil {
+func (s *Service) Get(ctx context.Context, p authz.Principal, convID uuid.UUID) (Detail, error) {
+	if !p.IsAuthenticatedUser() {
 		return Detail{}, service.ErrUnauthorized
 	}
 	q := dbq.New(s.db.Pool())
 	conv, err := q.GetConversationByID(ctx, toPg(convID))
 	if err != nil ||
-		!conv.UserID.Valid || uuid.UUID(conv.UserID.Bytes) != userID ||
+		!conv.UserID.Valid || uuid.UUID(conv.UserID.Bytes) != p.UserID ||
 		conv.Source == "a2a" {
 		return Detail{}, service.ErrNotFound
 	}
@@ -270,14 +270,14 @@ func (s *Service) ListMessages(ctx context.Context, convID uuid.UUID, before, af
 // Delete removes a conversation and schedules S3 cleanup for any
 // attachment blobs its messages referenced. Owner + surface gated like
 // Get; the S3 cleanup is best-effort.
-func (s *Service) Delete(ctx context.Context, userID, convID uuid.UUID) error {
-	if userID == uuid.Nil {
+func (s *Service) Delete(ctx context.Context, p authz.Principal, convID uuid.UUID) error {
+	if !p.IsAuthenticatedUser() {
 		return service.ErrUnauthorized
 	}
 	q := dbq.New(s.db.Pool())
 	conv, err := q.GetConversationByID(ctx, toPg(convID))
 	if err != nil ||
-		!conv.UserID.Valid || uuid.UUID(conv.UserID.Bytes) != userID ||
+		!conv.UserID.Valid || uuid.UUID(conv.UserID.Bytes) != p.UserID ||
 		conv.Source == "a2a" {
 		return service.ErrNotFound
 	}
@@ -314,13 +314,13 @@ func (s *Service) Delete(ctx context.Context, userID, convID uuid.UUID) error {
 // OwnedConversation enforces the same owner + surface gate as Get /
 // Delete and returns the conversation row for the caller to use.
 // Centralizes the gate used by the topic endpoints.
-func (s *Service) OwnedConversation(ctx context.Context, userID, convID uuid.UUID) (dbq.AgentConversation, error) {
-	if userID == uuid.Nil {
+func (s *Service) OwnedConversation(ctx context.Context, p authz.Principal, convID uuid.UUID) (dbq.AgentConversation, error) {
+	if !p.IsAuthenticatedUser() {
 		return dbq.AgentConversation{}, service.ErrUnauthorized
 	}
 	conv, err := dbq.New(s.db.Pool()).GetConversationByID(ctx, toPg(convID))
 	if err != nil ||
-		!conv.UserID.Valid || uuid.UUID(conv.UserID.Bytes) != userID ||
+		!conv.UserID.Valid || uuid.UUID(conv.UserID.Bytes) != p.UserID ||
 		conv.Source == "a2a" {
 		return dbq.AgentConversation{}, service.ErrNotFound
 	}

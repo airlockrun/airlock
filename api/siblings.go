@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/service"
 	"github.com/airlockrun/airlock/service/siblings"
 	"github.com/go-chi/chi/v5"
@@ -85,8 +84,8 @@ func (h *siblingsHandler) List(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	userID := auth.UserIDFromContext(r.Context())
-	rows, err := h.svc.List(r.Context(), userID, parentID)
+	p := principalFromRequest(r)
+	rows, err := h.svc.List(r.Context(), p, parentID)
 	if err != nil {
 		writeSiblingsError(w, err, "list siblings")
 		return
@@ -112,8 +111,8 @@ func (h *siblingsHandler) ListAddable(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	userID := auth.UserIDFromContext(r.Context())
-	rows, err := h.svc.ListAddable(r.Context(), userID, parentID)
+	p := principalFromRequest(r)
+	rows, err := h.svc.ListAddable(r.Context(), p, parentID)
 	if err != nil {
 		writeSiblingsError(w, err, "list addable siblings")
 		return
@@ -150,8 +149,8 @@ func (h *siblingsHandler) Add(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusBadRequest, "invalid siblingId")
 		return
 	}
-	userID := auth.UserIDFromContext(r.Context())
-	if err := h.svc.Add(r.Context(), userID, parentID, siblingID); err != nil {
+	p := principalFromRequest(r)
+	if err := h.svc.Add(r.Context(), p, parentID, siblingID); err != nil {
 		switch {
 		case errors.Is(err, service.ErrInvalidInput):
 			writeJSONError(w, http.StatusBadRequest, "agent cannot be its own sibling")
@@ -180,8 +179,8 @@ func (h *siblingsHandler) Remove(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusBadRequest, "invalid sibling ID")
 		return
 	}
-	userID := auth.UserIDFromContext(r.Context())
-	if err := h.svc.Remove(r.Context(), userID, parentID, siblingID); err != nil {
+	p := principalFromRequest(r)
+	if err := h.svc.Remove(r.Context(), p, parentID, siblingID); err != nil {
 		writeSiblingsError(w, err, "remove sibling")
 		return
 	}
@@ -194,8 +193,8 @@ func (h *siblingsHandler) GetA2ASettings(w http.ResponseWriter, r *http.Request)
 	if !ok {
 		return
 	}
-	userID := auth.UserIDFromContext(r.Context())
-	s, err := h.svc.GetSettings(r.Context(), userID, parentID)
+	p := principalFromRequest(r)
+	s, err := h.svc.GetSettings(r.Context(), p, parentID)
 	if err != nil {
 		writeSiblingsError(w, err, "get settings")
 		return
@@ -221,8 +220,8 @@ func (h *siblingsHandler) UpdateA2ASettings(w http.ResponseWriter, r *http.Reque
 		writeJSONError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
-	userID := auth.UserIDFromContext(r.Context())
-	out, err := h.svc.UpdateSettings(r.Context(), userID, parentID, siblings.A2ASettings{
+	p := principalFromRequest(r)
+	out, err := h.svc.UpdateSettings(r.Context(), p, parentID, siblings.A2ASettings{
 		AllowNonMemberMcp: body.AllowNonMemberMcp,
 		AllowPublicMcp:    body.AllowPublicMcp,
 	})

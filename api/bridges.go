@@ -5,13 +5,13 @@ import (
 	"net/http"
 
 	"github.com/airlockrun/airlock/auth"
+	"github.com/airlockrun/airlock/authz"
 	"github.com/airlockrun/airlock/db/dbq"
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 	"github.com/airlockrun/airlock/service"
 	bridgessvc "github.com/airlockrun/airlock/service/bridges"
 	"github.com/airlockrun/airlock/trigger"
 	"github.com/go-chi/chi/v5"
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -27,15 +27,14 @@ func newBridgeHandler(svc *bridgessvc.Service) *bridgeHandler {
 	return &bridgeHandler{svc: svc}
 }
 
-// tenantClaims extracts (userID, tenantRole) from the request ctx;
+// tenantClaims builds the caller's authz.Principal from the request ctx;
 // returns ok=false and writes 401 if no auth claims are present.
-func tenantClaims(w http.ResponseWriter, r *http.Request) (uuid.UUID, auth.Role, bool) {
-	claims := auth.ClaimsFromContext(r.Context())
-	if claims == nil {
+func tenantClaims(w http.ResponseWriter, r *http.Request) (authz.Principal, bool) {
+	if auth.ClaimsFromContext(r.Context()) == nil {
 		writeError(w, http.StatusUnauthorized, "not authenticated")
-		return uuid.Nil, "", false
+		return authz.Principal{}, false
 	}
-	return auth.UserIDFromContext(r.Context()), auth.Role(claims.TenantRole), true
+	return principalFromRequest(r), true
 }
 
 // writeBridgesError renders sentinels with the original fallback strings.
@@ -72,11 +71,11 @@ func (h *bridgeHandler) CreateBridge(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	userID, tenantRole, ok := tenantClaims(w, r)
+	p, ok := tenantClaims(w, r)
 	if !ok {
 		return
 	}
-	res, err := h.svc.Create(r.Context(), userID, tenantRole, bridgessvc.CreateRequest{
+	res, err := h.svc.Create(r.Context(), p, bridgessvc.CreateRequest{
 		Type:    req.Type,
 		Name:    req.Name,
 		Token:   req.Token,
@@ -91,11 +90,11 @@ func (h *bridgeHandler) CreateBridge(w http.ResponseWriter, r *http.Request) {
 
 // ListBridges handles GET /api/v1/bridges.
 func (h *bridgeHandler) ListBridges(w http.ResponseWriter, r *http.Request) {
-	userID, tenantRole, ok := tenantClaims(w, r)
+	p, ok := tenantClaims(w, r)
 	if !ok {
 		return
 	}
-	items, err := h.svc.List(r.Context(), userID, tenantRole)
+	items, err := h.svc.List(r.Context(), p)
 	if err != nil {
 		writeBridgesError(w, err, "failed to list bridges")
 		return
@@ -119,7 +118,7 @@ func (h *bridgeHandler) UpdateBridge(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	userID, tenantRole, ok := tenantClaims(w, r)
+	p, ok := tenantClaims(w, r)
 	if !ok {
 		return
 	}
@@ -132,7 +131,7 @@ func (h *bridgeHandler) UpdateBridge(w http.ResponseWriter, r *http.Request) {
 			PublicPromptTimeoutSeconds: req.Settings.PublicPromptTimeoutSeconds,
 		}
 	}
-	res, err := h.svc.Update(r.Context(), userID, tenantRole, bridgeID, upd)
+	res, err := h.svc.Update(r.Context(), p, bridgeID, upd)
 	if err != nil {
 		writeBridgesError(w, err, "failed to update bridge")
 		return
@@ -147,11 +146,11 @@ func (h *bridgeHandler) DeleteBridge(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid bridgeID")
 		return
 	}
-	userID, tenantRole, ok := tenantClaims(w, r)
+	p, ok := tenantClaims(w, r)
 	if !ok {
 		return
 	}
-	if err := h.svc.Delete(r.Context(), userID, tenantRole, bridgeID); err != nil {
+	if err := h.svc.Delete(r.Context(), p, bridgeID); err != nil {
 		writeBridgesError(w, err, "failed to delete bridge")
 		return
 	}

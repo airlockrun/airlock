@@ -4,7 +4,6 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/convert"
 	"github.com/airlockrun/airlock/db/dbq"
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
@@ -51,8 +50,8 @@ func (h *modelsHandler) GetConfig(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid agent ID")
 		return
 	}
-	userID := auth.UserIDFromContext(r.Context())
-	state, err := h.svc.Get(r.Context(), userID, agentID)
+	p := principalFromRequest(r)
+	state, err := h.svc.Get(r.Context(), p, agentID)
 	if err != nil {
 		writeModelsError(w, err, "failed to load model slots")
 		return
@@ -79,7 +78,7 @@ func (h *modelsHandler) UpdateConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cfg := req.Config
-	userID := auth.UserIDFromContext(r.Context())
+	p := principalFromRequest(r)
 	slots := make([]modelssvc.SlotAssignment, 0, len(cfg.Slots))
 	for _, s := range cfg.Slots {
 		slots = append(slots, modelssvc.SlotAssignment{
@@ -88,7 +87,7 @@ func (h *modelsHandler) UpdateConfig(w http.ResponseWriter, r *http.Request) {
 			Model:      s.AssignedModel,
 		})
 	}
-	state, err := h.svc.Update(r.Context(), userID, agentID, modelssvc.UpdateRequest{
+	state, err := h.svc.Update(r.Context(), p, agentID, modelssvc.UpdateRequest{
 		Build:     modelssvc.Pair{ProviderID: cfg.BuildProviderId, Model: cfg.BuildModel},
 		Exec:      modelssvc.Pair{ProviderID: cfg.ExecProviderId, Model: cfg.ExecModel},
 		STT:       modelssvc.Pair{ProviderID: cfg.SttProviderId, Model: cfg.SttModel},

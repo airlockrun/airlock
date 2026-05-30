@@ -4,7 +4,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/airlockrun/airlock/auth"
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 	"github.com/go-chi/chi/v5"
 )
@@ -31,8 +30,8 @@ func (h *credentialHandler) ListMCPServers(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusBadRequest, "invalid agentID")
 		return
 	}
-	userID := auth.UserIDFromContext(r.Context())
-	rows, err := h.svc.ListMCPServers(r.Context(), userID, agentID)
+	p := principalFromRequest(r)
+	rows, err := h.svc.ListMCPServers(r.Context(), p, agentID)
 	if err != nil {
 		writeConnError(w, err, "failed to list MCP servers")
 		return
@@ -66,8 +65,8 @@ func (h *credentialHandler) MCPCredentialStatus(w http.ResponseWriter, r *http.R
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	userID := auth.UserIDFromContext(r.Context())
-	st, err := h.svc.MCPCredentialStatus(r.Context(), userID, agentID, slug)
+	p := principalFromRequest(r)
+	st, err := h.svc.MCPCredentialStatus(r.Context(), p, agentID, slug)
 	if err != nil {
 		writeConnError(w, err, "failed to get MCP server")
 		return
@@ -89,8 +88,8 @@ func (h *credentialHandler) SetMCPToken(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	userID := auth.UserIDFromContext(r.Context())
-	st, err := h.svc.SetMCPToken(r.Context(), userID, agentID, slug, req.ApiKey)
+	p := principalFromRequest(r)
+	st, err := h.svc.SetMCPToken(r.Context(), p, agentID, slug, req.ApiKey)
 	if err != nil {
 		writeConnError(w, err, "failed to store token")
 		return
@@ -107,8 +106,8 @@ func (h *credentialHandler) RevokeMCPCredential(w http.ResponseWriter, r *http.R
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	userID := auth.UserIDFromContext(r.Context())
-	if err := h.svc.RevokeMCPCredential(r.Context(), userID, agentID, slug); err != nil {
+	p := principalFromRequest(r)
+	if err := h.svc.RevokeMCPCredential(r.Context(), p, agentID, slug); err != nil {
 		writeConnError(w, err, "failed to revoke credential")
 		return
 	}
@@ -124,8 +123,8 @@ func (h *credentialHandler) TestMCPCredential(w http.ResponseWriter, r *http.Req
 	}
 	var req airlockv1.SetAPIKeyRequest
 	_ = decodeProto(r, &req)
-	userID := auth.UserIDFromContext(r.Context())
-	res, err := h.svc.TestMCPCredential(r.Context(), userID, agentID, slug, req.ApiKey)
+	p := principalFromRequest(r)
+	res, err := h.svc.TestMCPCredential(r.Context(), p, agentID, slug, req.ApiKey)
 	if err != nil {
 		writeConnError(w, err, "failed to test credential")
 		return
@@ -142,8 +141,8 @@ func (h *credentialHandler) RevokeMCPOAuthApp(w http.ResponseWriter, r *http.Req
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	userID := auth.UserIDFromContext(r.Context())
-	if err := h.svc.RevokeMCPOAuthApp(r.Context(), userID, agentID, slug); err != nil {
+	p := principalFromRequest(r)
+	if err := h.svc.RevokeMCPOAuthApp(r.Context(), p, agentID, slug); err != nil {
 		writeConnError(w, err, "failed to revoke OAuth app")
 		return
 	}
@@ -162,8 +161,8 @@ func (h *credentialHandler) SetMCPOAuthApp(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	userID := auth.UserIDFromContext(r.Context())
-	st, err := h.svc.SetMCPOAuthApp(r.Context(), userID, agentID, slug, req.ClientId, req.ClientSecret)
+	p := principalFromRequest(r)
+	st, err := h.svc.SetMCPOAuthApp(r.Context(), p, agentID, slug, req.ClientId, req.ClientSecret)
 	if err != nil {
 		writeConnError(w, err, "failed to update OAuth app")
 		return
@@ -185,8 +184,8 @@ func (h *credentialHandler) MCPOAuthStart(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, "invalid agent_id")
 		return
 	}
-	userID := auth.UserIDFromContext(r.Context())
-	authURL, err := h.svc.MCPOAuthStart(r.Context(), userID, agentID, req.Slug, req.RedirectUri)
+	p := principalFromRequest(r)
+	authURL, err := h.svc.MCPOAuthStart(r.Context(), p, agentID, req.Slug, req.RedirectUri)
 	if err != nil {
 		writeConnError(w, err, "failed to start OAuth flow")
 		return

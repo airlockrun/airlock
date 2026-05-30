@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/airlockrun/agentsdk"
+	"github.com/airlockrun/airlock/authz"
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -64,46 +65,16 @@ type SlashCommandResult struct {
 	ForwardAsCompact bool
 }
 
-// ResolveAgentAccess returns the caller's effective per-agent access level
-// from agent_members. Non-members get AccessPublic, members map straight
-// to AccessUser or AccessAdmin. Tenant role is deliberately not consulted —
-// see airlock/CLAUDE.md "Permission Model" for why these axes are separate.
-func ResolveAgentAccess(ctx context.Context, q *dbq.Queries, agentID, userID uuid.UUID) agentsdk.Access {
+// bridgePrincipal maps a resolved bridge user to an authz.Principal: an
+// anonymous public-channel caller (uuid.Nil) becomes AnonymousPrincipal,
+// a linked user becomes a registered-user principal. Tenant role is not
+// consulted on the per-agent axis, so it's left empty. The prompt path
+// uses this to resolve CallerAccess through the one authz resolver.
+func bridgePrincipal(userID uuid.UUID) authz.Principal {
 	if userID == uuid.Nil {
-		return agentsdk.AccessPublic
+		return authz.AnonymousPrincipal()
 	}
-	member, err := q.GetAgentMember(ctx, dbq.GetAgentMemberParams{
-		AgentID: pgtype.UUID{Bytes: agentID, Valid: true},
-		UserID:  pgtype.UUID{Bytes: userID, Valid: true},
-	})
-	if err != nil {
-		return agentsdk.AccessPublic
-	}
-	if member.Role == "admin" {
-		return agentsdk.AccessAdmin
-	}
-	return agentsdk.AccessUser
-}
-
-// accessRank orders access levels for comparison. AccessAdmin > AccessUser > AccessPublic.
-func accessRank(a agentsdk.Access) int {
-	switch a {
-	case agentsdk.AccessAdmin:
-		return 2
-	case agentsdk.AccessUser:
-		return 1
-	default:
-		return 0
-	}
-}
-
-// AccessAtLeast reports whether a ranks at or above min on the per-agent
-// access ladder (AccessAdmin > AccessUser > AccessPublic). It is the
-// single source of truth for that comparison — the chat slash-command
-// gate, the service-layer RequireAgentAccess gate, and the MCP access
-// path all rank through here so the ladder can't drift between surfaces.
-func AccessAtLeast(a, min agentsdk.Access) bool {
-	return accessRank(a) >= accessRank(min)
+	return authz.UserPrincipal(userID, "")
 }
 
 // TrySlashCommand parses message for a leading slash command and, if recognized,
@@ -111,7 +82,7 @@ func AccessAtLeast(a, min agentsdk.Access) bool {
 // is a plain user prompt. Both web (api.conversationsHandler.Prompt) and bridge
 // (PromptProxy) paths call this before forwarding to the agent.
 //
-// access is the caller's resolved agent access (see ResolveAgentAccess) and is
+// access is the caller's resolved agent access (see authz.EffectiveAgentAccess) and is
 // compared against the command's required level. /clear resolves any pending
 // suspended run for this conversation so the pending-confirmation dialog
 // doesn't linger after context clear.
@@ -148,7 +119,7 @@ func TrySlashCommand(
 		}, nil
 	}
 
-	if !AccessAtLeast(access, entry.Access) {
+	if !authz.AccessAtLeast(access, entry.Access) {
 		return SlashCommandResult{
 			Handled: true,
 			Reply:   fmt.Sprintf("/%s requires %s access.", entry.Name, entry.Access),

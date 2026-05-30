@@ -138,8 +138,8 @@ func (h *credentialHandler) ListEnvVars(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, "invalid agentID")
 		return
 	}
-	userID := auth.UserIDFromContext(r.Context())
-	rows, err := h.svc.ListEnvVars(r.Context(), userID, agentID)
+	p := principalFromRequest(r)
+	rows, err := h.svc.ListEnvVars(r.Context(), p, agentID)
 	if err != nil {
 		writeConnError(w, err, "failed to list env vars")
 		return
@@ -175,8 +175,8 @@ func (h *credentialHandler) SetEnvVarValue(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	userID := auth.UserIDFromContext(r.Context())
-	if err := h.svc.SetEnvVarValue(r.Context(), userID, agentID, slug, req.Value); err != nil {
+	p := principalFromRequest(r)
+	if err := h.svc.SetEnvVarValue(r.Context(), p, agentID, slug, req.Value); err != nil {
 		writeConnError(w, err, "failed to store value")
 		return
 	}
@@ -190,8 +190,8 @@ func (h *credentialHandler) ClearEnvVarValue(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	userID := auth.UserIDFromContext(r.Context())
-	if err := h.svc.ClearEnvVarValue(r.Context(), userID, agentID, slug); err != nil {
+	p := principalFromRequest(r)
+	if err := h.svc.ClearEnvVarValue(r.Context(), p, agentID, slug); err != nil {
 		writeConnError(w, err, "failed to clear value")
 		return
 	}
@@ -205,8 +205,8 @@ func (h *credentialHandler) SetupStatus(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, "invalid agentID")
 		return
 	}
-	userID := auth.UserIDFromContext(r.Context())
-	c, err := h.svc.SetupStatus(r.Context(), userID, agentID)
+	p := principalFromRequest(r)
+	c, err := h.svc.SetupStatus(r.Context(), p, agentID)
 	if err != nil {
 		writeConnError(w, err, "failed to load setup status")
 		return

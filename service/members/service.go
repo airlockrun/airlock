@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/airlockrun/agentsdk"
 	"github.com/airlockrun/airlock/auth"
+	"github.com/airlockrun/airlock/authz"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/airlockrun/airlock/service"
@@ -45,9 +45,9 @@ type Member struct {
 // List returns the membership list for an agent. Requires the caller to
 // be a member of the agent (AccessUser) — co-members are visible to each
 // other.
-func (s *Service) List(ctx context.Context, userID, agentID uuid.UUID) ([]Member, error) {
+func (s *Service) List(ctx context.Context, p authz.Principal, agentID uuid.UUID) ([]Member, error) {
 	q := dbq.New(s.db.Pool())
-	if err := service.RequireAgentAccess(ctx, q, userID, agentID, agentsdk.AccessUser); err != nil {
+	if err := authz.Authorize(ctx, q, p, authz.AgentMembersView, agentID); err != nil {
 		return nil, err
 	}
 	rows, err := q.ListAgentMembers(ctx, pgtype.UUID{Bytes: agentID, Valid: true})
@@ -75,17 +75,17 @@ func (s *Service) List(ctx context.Context, userID, agentID uuid.UUID) ([]Member
 //
 // Returns ErrInvalidInput for an unknown role; ErrForbidden when the
 // caller is neither a sysadmin self-adder nor an agent admin.
-func (s *Service) Add(ctx context.Context, callerID uuid.UUID, callerTenantRole auth.Role, agentID, targetID uuid.UUID, role string) error {
+func (s *Service) Add(ctx context.Context, p authz.Principal, agentID, targetID uuid.UUID, role string) error {
 	if role != "admin" && role != "user" {
 		return service.ErrInvalidInput
 	}
-	if callerID == uuid.Nil {
+	if !p.IsAuthenticatedUser() {
 		return service.ErrUnauthorized
 	}
 	q := dbq.New(s.db.Pool())
-	isSysAdmin := callerTenantRole.AtLeast(auth.RoleAdmin)
-	if !(isSysAdmin && callerID == targetID) {
-		if err := service.RequireAgentAccess(ctx, q, callerID, agentID, agentsdk.AccessAdmin); err != nil {
+	isSysAdmin := p.TenantRole.AtLeast(auth.RoleAdmin)
+	if !(isSysAdmin && p.UserID == targetID) {
+		if err := authz.Authorize(ctx, q, p, authz.AgentMembersManage, agentID); err != nil {
 			return err
 		}
 	}
@@ -108,9 +108,9 @@ var ErrCannotRemoveOwner = fmt.Errorf("cannot remove agent owner: %w", service.E
 // Remove deletes an agent_members row. Admin-gated; rejects removal of
 // the agent's owner (the original creator) to keep at least one admin
 // in place.
-func (s *Service) Remove(ctx context.Context, callerID, agentID, targetID uuid.UUID) error {
+func (s *Service) Remove(ctx context.Context, p authz.Principal, agentID, targetID uuid.UUID) error {
 	q := dbq.New(s.db.Pool())
-	if err := service.RequireAgentAccess(ctx, q, callerID, agentID, agentsdk.AccessAdmin); err != nil {
+	if err := authz.Authorize(ctx, q, p, authz.AgentMembersManage, agentID); err != nil {
 		return err
 	}
 	agent, err := q.GetAgentByID(ctx, pgtype.UUID{Bytes: agentID, Valid: true})

@@ -6,8 +6,8 @@ import (
 	"fmt"
 
 	"github.com/airlockrun/agentsdk"
+	"github.com/airlockrun/airlock/authz"
 	"github.com/airlockrun/airlock/db/dbq"
-	"github.com/airlockrun/airlock/trigger"
 	"github.com/google/uuid"
 )
 
@@ -85,12 +85,14 @@ func computeA2ACallerAccess(ctx context.Context, q *dbq.Queries, target dbq.Agen
 			// belt-and-suspenders here.
 			return "", fmt.Errorf("%w: no original user for caller", ErrMCPForbidden)
 		}
-		// One ladder for every surface: trigger.ResolveAgentAccess maps
+		// One ladder for every surface: authz.EffectiveAgentAccess maps
 		// (user, agent) → admin/user/public off agent_members. A member
 		// resolves to AccessUser/AccessAdmin; a non-member resolves to
 		// AccessPublic, which here is only honored if the target opens
-		// itself to non-members — otherwise it's a 403.
-		access := trigger.ResolveAgentAccess(ctx, q, uuid.UUID(target.ID.Bytes), userID)
+		// itself to non-members — otherwise it's a 403. The non-member /
+		// public-MCP flags are MCP-surface policy and stay here, not in
+		// the shared ladder.
+		access := authz.UserPrincipal(userID, "").EffectiveAgentAccess(ctx, q, uuid.UUID(target.ID.Bytes))
 		if access == agentsdk.AccessPublic && !target.AllowNonMemberMcp {
 			return "", ErrMCPForbidden
 		}
