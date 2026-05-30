@@ -21,6 +21,8 @@ func TestAuthorize_TenantAxis(t *testing.T) {
 		action  Action
 		wantErr error
 	}{
+		{"manager meets agent-create", UserPrincipal(uid, auth.RoleManager), TenantAgentCreate, nil},
+		{"user below agent-create", UserPrincipal(uid, auth.RoleUser), TenantAgentCreate, apperr.ErrForbidden},
 		{"admin meets user-manage", UserPrincipal(uid, auth.RoleAdmin), TenantUserManage, nil},
 		{"manager below user-manage", UserPrincipal(uid, auth.RoleManager), TenantUserManage, apperr.ErrForbidden},
 		{"manager meets bridge-create", UserPrincipal(uid, auth.RoleManager), TenantBridgeCreate, nil},

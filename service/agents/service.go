@@ -202,8 +202,9 @@ func (s *Service) broadcastSiblingChange(ctx context.Context, changedAgentID uui
 // the build runs in a background goroutine and reports state via
 // agent_builds + the runtime WebSocket.
 func (s *Service) Create(ctx context.Context, p authz.Principal, req CreateRequest) (dbq.Agent, error) {
-	if !p.IsAuthenticatedUser() {
-		return dbq.Agent{}, service.ErrUnauthorized
+	q := dbq.New(s.db.Pool())
+	if err := authz.Authorize(ctx, q, p, authz.TenantAgentCreate, uuid.Nil); err != nil {
+		return dbq.Agent{}, service.Detail(err, "creating agents requires manager role")
 	}
 	if req.Name == "" {
 		return dbq.Agent{}, service.Detail(service.ErrInvalidInput, "name is required")
@@ -211,7 +212,6 @@ func (s *Service) Create(ctx context.Context, p authz.Principal, req CreateReque
 	if req.Slug == "" {
 		return dbq.Agent{}, service.Detail(service.ErrInvalidInput, "slug is required")
 	}
-	q := dbq.New(s.db.Pool())
 	buildProviderFK, err := parseOptionalProviderID(req.BuildProviderID)
 	if err != nil {
 		return dbq.Agent{}, service.Detail(service.ErrInvalidInput, "invalid build_provider_id: %s", err.Error())

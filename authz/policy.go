@@ -55,6 +55,7 @@ const (
 	AgentModelsUpdate  Action = "agent.models.update"
 
 	// Tenant axis.
+	TenantAgentCreate    Action = "tenant.agent.create"  // create an agent: manager+
 	TenantBridgeCreate   Action = "tenant.bridge.create" // any bridge: manager+
 	TenantBridgeSystem   Action = "tenant.bridge.system" // system (agent-less) bridge: admin
 	TenantUserManage     Action = "tenant.user.manage"
@@ -87,6 +88,7 @@ var policy = map[Action]Requirement{
 	AgentSiblings:      {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
 	AgentModelsUpdate:  {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
 
+	TenantAgentCreate:    {Axis: AxisTenant, Tenant: auth.RoleManager},
 	TenantBridgeCreate:   {Axis: AxisTenant, Tenant: auth.RoleManager},
 	TenantBridgeSystem:   {Axis: AxisTenant, Tenant: auth.RoleAdmin},
 	TenantUserManage:     {Axis: AxisTenant, Tenant: auth.RoleAdmin},
