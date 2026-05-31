@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/airlockrun/agentsdk"
 	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/authz"
 	"github.com/airlockrun/airlock/builder"
@@ -94,21 +95,30 @@ type UpdateRequest struct {
 	AutoFix *bool
 }
 
-// ListItem is one row from List plus the live container-running flag.
+// ListItem is one row from List plus the live container-running flag
+// and the caller's effective access on this agent.
+//
+// YourAccess is "admin" / "user" / "public" (see agentsdk.Access),
+// resolved from agent_members at list time. It exists so any caller —
+// web UI, A2A, the in-airlock system agent — can decide locally which
+// per-agent actions to offer without re-authorizing each one.
 type ListItem struct {
-	Agent   dbq.Agent
-	Running bool
+	Agent      dbq.Agent       `json:"agent"`
+	Running    bool            `json:"running"`
+	YourAccess agentsdk.Access `json:"your_access"`
 }
 
 // Detail is the Get response payload — the agent plus the per-agent
-// resource lists the agent-detail page renders.
+// resource lists the agent-detail page renders. YourAccess mirrors
+// ListItem.YourAccess so callers don't need a second lookup.
 type Detail struct {
-	Agent       dbq.Agent
-	Running     bool
-	Connections []dbq.Connection
-	Webhooks    []dbq.ListWebhooksByAgentWithStatusRow
-	Crons       []dbq.AgentCron
-	Routes      []dbq.AgentRoute
+	Agent       dbq.Agent                              `json:"agent"`
+	Running     bool                                   `json:"running"`
+	YourAccess  agentsdk.Access                        `json:"your_access"`
+	Connections []dbq.Connection                       `json:"connections"`
+	Webhooks    []dbq.ListWebhooksByAgentWithStatusRow `json:"webhooks"`
+	Crons       []dbq.AgentCron                        `json:"crons"`
+	Routes      []dbq.AgentRoute                       `json:"routes"`
 }
 
 // FireCronResult is the output of FireCron — the run ID for the SPA to
@@ -313,7 +323,10 @@ func (s *Service) List(ctx context.Context, p authz.Principal) ([]ListItem, erro
 	out := make([]ListItem, len(agents))
 	ids := make([]uuid.UUID, len(agents))
 	for i, a := range agents {
-		out[i] = ListItem{Agent: a}
+		out[i] = ListItem{
+			Agent:      a,
+			YourAccess: p.EffectiveAgentAccess(ctx, q, uuid.UUID(a.ID.Bytes)),
+		}
 		ids[i] = uuid.UUID(a.ID.Bytes)
 	}
 	if len(ids) > 0 {
@@ -344,7 +357,14 @@ func (s *Service) Get(ctx context.Context, p authz.Principal, agentID uuid.UUID)
 	webhooks, _ := q.ListWebhooksByAgentWithStatus(ctx, pgID)
 	crons, _ := q.ListCronsByAgent(ctx, pgID)
 	routes, _ := q.ListRoutesByAgent(ctx, pgID)
-	d := Detail{Agent: agent, Connections: conns, Webhooks: webhooks, Crons: crons, Routes: routes}
+	d := Detail{
+		Agent:       agent,
+		YourAccess:  p.EffectiveAgentAccess(ctx, q, agentID),
+		Connections: conns,
+		Webhooks:    webhooks,
+		Crons:       crons,
+		Routes:      routes,
+	}
 	if c, gerr := s.containers.GetRunning(ctx, agentID); gerr == nil && c != nil {
 		d.Running = true
 	}
@@ -536,6 +556,12 @@ func (s *Service) CancelBuild(ctx context.Context, p authz.Principal, agentID uu
 type UpgradeRequest struct {
 	RunID       string
 	Description string
+	// SystemConversationID is set when the upgrade was triggered from a
+	// system-agent conversation (sysagent tool). The builder routes the
+	// post-build notification to that conversation instead of an agent
+	// conversation. Mutually exclusive with the ConversationID path
+	// agents take via /api/agent/upgrade.
+	SystemConversationID string
 }
 
 // Upgrade kicks off the upgrade pipeline. Admin-gated. Async — returns
@@ -569,10 +595,11 @@ func (s *Service) Upgrade(ctx context.Context, p authz.Principal, agentID uuid.U
 			runID = uuid.New().String()
 		}
 		input := builder.UpgradeInput{
-			AgentID:     agentID.String(),
-			RunID:       runID,
-			Reason:      "manual",
-			Description: req.Description,
+			AgentID:              agentID.String(),
+			RunID:                runID,
+			Reason:               "manual",
+			Description:          req.Description,
+			SystemConversationID: req.SystemConversationID,
 		}
 		if req.RunID != "" {
 			if runUUID, perr := uuid.Parse(req.RunID); perr != nil {
@@ -616,6 +643,10 @@ func (s *Service) Upgrade(ctx context.Context, p authz.Principal, agentID uuid.U
 type RollbackRequest struct {
 	BuildID        string
 	ConversationID string
+	// SystemConversationID is set when the rollback was triggered from a
+	// system-agent conversation. Mutually exclusive with ConversationID; the
+	// builder routes the post-build notification to whichever is set.
+	SystemConversationID string
 }
 
 // Rollback reverses the agent to a previous completed build's source_ref.
@@ -663,9 +694,10 @@ func (s *Service) Rollback(ctx context.Context, p authz.Principal, agentID uuid.
 			return
 		}
 		s.builder.Rollback(context.Background(), builder.RollbackInput{
-			AgentID:        agentID.String(),
-			BuildID:        buildID.String(),
-			ConversationID: req.ConversationID,
+			AgentID:              agentID.String(),
+			BuildID:              buildID.String(),
+			ConversationID:       req.ConversationID,
+			SystemConversationID: req.SystemConversationID,
 		})
 	}()
 	return nil

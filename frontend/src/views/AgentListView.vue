@@ -43,8 +43,26 @@ function goToAgent(id: string) {
       </template>
     </Card>
 
-    <!-- Agent grid -->
+    <!-- Agent grid — system agent is pinned first as a special tile. -->
     <div v-else style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 1rem">
+      <Card
+        style="cursor: pointer; border: 1px solid var(--p-primary-200)"
+        @click="router.push('/system')"
+      >
+        <template #title>
+          <div style="display: flex; align-items: center; gap: 0.5rem; font-size: 1.1rem">
+            <span style="font-size: 1.3rem; line-height: 1">⚙️</span>
+            System Agent
+          </div>
+        </template>
+        <template #subtitle>operator</template>
+        <template #content>
+          <Tag value="Operator" severity="info" style="margin-bottom: 0.5rem" />
+          <p style="font-size: 0.875rem; color: var(--p-text-muted-color); margin-top: 0.5rem">
+            Manage agents, bridges, connections, members and runs through chat — with your own permissions.
+          </p>
+        </template>
+      </Card>
       <Card
         v-for="agent in store.agents"
         :key="agent.id"

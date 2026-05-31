@@ -33,7 +33,6 @@ const (
 	// Agent axis — member (AccessUser) suffices.
 	AgentGet          Action = "agent.get"
 	AgentUpdate       Action = "agent.update"
-	AgentDelete       Action = "agent.delete"
 	AgentLifecycle    Action = "agent.lifecycle" // stop / start / suspend
 	AgentGit          Action = "agent.git"       // connect / disconnect / read git binding
 	AgentRunView      Action = "agent.run.view"  // runs list / get / logs
@@ -44,6 +43,7 @@ const (
 	AgentModelsView   Action = "agent.models.view"
 
 	// Agent axis — owner (AccessAdmin) required.
+	AgentDelete        Action = "agent.delete"
 	AgentBuildManage   Action = "agent.build.manage" // upgrade / rollback / cancel build
 	AgentMembersManage Action = "agent.members.manage"
 	AgentWebhooksView  Action = "agent.webhooks.view"
@@ -55,6 +55,8 @@ const (
 	AgentModelsUpdate  Action = "agent.models.update"
 
 	// Tenant axis.
+	TenantCatalogView    Action = "tenant.catalog.view"  // read providers/models/capabilities catalog: user+
+	TenantUserView       Action = "tenant.user.view"     // read tenant user directory (id/email/display_name): user+
 	TenantAgentCreate    Action = "tenant.agent.create"  // create an agent: manager+
 	TenantBridgeCreate   Action = "tenant.bridge.create" // any bridge: manager+
 	TenantBridgeSystem   Action = "tenant.bridge.system" // system (agent-less) bridge: admin
@@ -68,7 +70,6 @@ const (
 var policy = map[Action]Requirement{
 	AgentGet:          {Axis: AxisAgent, Agent: agentsdk.AccessUser},
 	AgentUpdate:       {Axis: AxisAgent, Agent: agentsdk.AccessUser},
-	AgentDelete:       {Axis: AxisAgent, Agent: agentsdk.AccessUser},
 	AgentLifecycle:    {Axis: AxisAgent, Agent: agentsdk.AccessUser},
 	AgentGit:          {Axis: AxisAgent, Agent: agentsdk.AccessUser},
 	AgentRunView:      {Axis: AxisAgent, Agent: agentsdk.AccessUser},
@@ -78,6 +79,7 @@ var policy = map[Action]Requirement{
 	AgentConversation: {Axis: AxisAgent, Agent: agentsdk.AccessUser},
 	AgentModelsView:   {Axis: AxisAgent, Agent: agentsdk.AccessUser},
 
+	AgentDelete:        {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
 	AgentBuildManage:   {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
 	AgentMembersManage: {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
 	AgentWebhooksView:  {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
@@ -88,6 +90,8 @@ var policy = map[Action]Requirement{
 	AgentSiblings:      {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
 	AgentModelsUpdate:  {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
 
+	TenantCatalogView:    {Axis: AxisTenant, Tenant: auth.RoleUser},
+	TenantUserView:       {Axis: AxisTenant, Tenant: auth.RoleUser},
 	TenantAgentCreate:    {Axis: AxisTenant, Tenant: auth.RoleManager},
 	TenantBridgeCreate:   {Axis: AxisTenant, Tenant: auth.RoleManager},
 	TenantBridgeSystem:   {Axis: AxisTenant, Tenant: auth.RoleAdmin},

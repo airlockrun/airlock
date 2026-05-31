@@ -3,56 +3,70 @@ package api
 import (
 	"errors"
 	"net/http"
-	"strings"
 
-	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/convert"
-	"github.com/airlockrun/airlock/db"
-	"github.com/airlockrun/airlock/db/dbq"
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
-	"github.com/airlockrun/airlock/secrets"
+	"github.com/airlockrun/airlock/service"
+	gitcredssvc "github.com/airlockrun/airlock/service/gitcredentials"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgconn"
-	"go.uber.org/zap"
 )
 
-// GitCredentialsHandler owns the per-user PAT-based credential surface
-// at /api/v1/me/git/credentials. The token is encrypted at rest under
-// the ref "git_credential/{id}/token" — same shape as provider api_key
-// storage; the id is caller-supplied so AAD binding is stable across
-// retries.
+// GitCredentialsHandler owns the per-user PAT credential surface at
+// /api/v1/me/git/credentials. Thin wrapper over service/gitcredentials:
+// parse + auth principal here; gating, encryption, and DB inside the
+// service.
 type GitCredentialsHandler struct {
-	db  *db.DB
-	enc secrets.Store
+	svc *gitcredssvc.Service
 }
 
-func NewGitCredentialsHandler(database *db.DB, enc secrets.Store) *GitCredentialsHandler {
-	return &GitCredentialsHandler{db: database, enc: enc}
+func NewGitCredentialsHandler(svc *gitcredssvc.Service) *GitCredentialsHandler {
+	if svc == nil {
+		panic("api: git credentials service is required")
+	}
+	return &GitCredentialsHandler{svc: svc}
+}
+
+// writeGitCredsError maps service sentinels to HTTP statuses with the
+// per-endpoint fallback strings. Detail-wrapped messages survive intact.
+func writeGitCredsError(w http.ResponseWriter, err error, fallback string) {
+	status := service.HTTPStatus(err)
+	switch {
+	case errors.Is(err, service.ErrInvalidInput), errors.Is(err, service.ErrConflict):
+		writeError(w, status, err.Error())
+	case errors.Is(err, service.ErrUnauthorized):
+		writeError(w, status, "not authenticated")
+	case errors.Is(err, service.ErrForbidden):
+		writeError(w, status, "access denied")
+	default:
+		writeError(w, status, fallback)
+	}
+}
+
+func gitCredToProto(c gitcredssvc.Credential) *airlockv1.GitCredential {
+	return &airlockv1.GitCredential{
+		Id:              c.ID.String(),
+		UserId:          c.UserID.String(),
+		Type:            c.Type,
+		Name:            c.Name,
+		GithubInstallId: c.GithubInstallID,
+		CreatedAt:       convert.PgTimestampToProto(c.CreatedAt),
+		LastUsedAt:      convert.PgTimestampToProto(c.LastUsedAt),
+	}
 }
 
 func (h *GitCredentialsHandler) List(w http.ResponseWriter, r *http.Request) {
-	userID := auth.UserIDFromContext(r.Context())
-	q := dbq.New(h.db.Pool())
-	rows, err := q.ListGitCredentialsByUser(r.Context(), toPgUUID(userID))
+	p := principalFromRequest(r)
+	creds, err := h.svc.List(r.Context(), p)
 	if err != nil {
-		logFor(r).Error("list git credentials failed", zap.Error(err))
-		writeError(w, http.StatusInternalServerError, "failed to list credentials")
+		writeGitCredsError(w, err, "failed to list credentials")
 		return
 	}
-	creds := make([]*airlockv1.GitCredential, 0, len(rows))
-	for _, row := range rows {
-		creds = append(creds, &airlockv1.GitCredential{
-			Id:              pgUUID(row.ID).String(),
-			UserId:          pgUUID(row.UserID).String(),
-			Type:            row.Type,
-			Name:            row.Name,
-			GithubInstallId: row.GithubInstallID,
-			CreatedAt:       convert.PgTimestampToProto(row.CreatedAt),
-			LastUsedAt:      convert.PgTimestampToProto(row.LastUsedAt),
-		})
+	out := make([]*airlockv1.GitCredential, len(creds))
+	for i, c := range creds {
+		out[i] = gitCredToProto(c)
 	}
-	writeProto(w, http.StatusOK, &airlockv1.ListGitCredentialsResponse{Credentials: creds})
+	writeProto(w, http.StatusOK, &airlockv1.ListGitCredentialsResponse{Credentials: out})
 }
 
 func (h *GitCredentialsHandler) Create(w http.ResponseWriter, r *http.Request) {
@@ -61,84 +75,30 @@ func (h *GitCredentialsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	name := strings.TrimSpace(req.Name)
-	if name == "" {
-		writeError(w, http.StatusBadRequest, "name is required")
-		return
-	}
-	token := strings.TrimSpace(req.Token)
-	if token == "" {
-		writeError(w, http.StatusBadRequest, "token is required")
-		return
-	}
-	// v1 only supports PAT; github_app is a v2 type. Reject explicitly
-	// instead of silently accepting an unknown type — failing loud per
-	// the airlock CLAUDE.md.
-	if req.Type != "" && req.Type != "pat" {
-		writeError(w, http.StatusBadRequest, "type must be \"pat\" (v1)")
-		return
-	}
-
-	userID := auth.UserIDFromContext(r.Context())
-
-	// Pre-generate the id so the token ciphertext is bound to it via
-	// AAD before INSERT — mirrors the providers / connections pattern.
-	id := uuid.New()
-	encrypted, err := h.enc.Put(r.Context(), "git_credential/"+id.String()+"/token", token)
-	if err != nil {
-		logFor(r).Error("encrypt git credential token failed", zap.Error(err))
-		writeError(w, http.StatusInternalServerError, "failed to encrypt token")
-		return
-	}
-
-	q := dbq.New(h.db.Pool())
-	row, err := q.CreateGitCredential(r.Context(), dbq.CreateGitCredentialParams{
-		ID:              toPgUUID(id),
-		UserID:          toPgUUID(userID),
-		Type:            "pat",
-		Name:            name,
-		TokenRef:        encrypted,
-		GithubInstallID: "",
+	p := principalFromRequest(r)
+	c, err := h.svc.Create(r.Context(), p, gitcredssvc.CreateRequest{
+		Name:  req.Name,
+		Token: req.Token,
+		Type:  req.Type,
 	})
 	if err != nil {
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-			writeError(w, http.StatusConflict, "a credential with that name already exists")
-			return
-		}
-		logFor(r).Error("create git credential failed", zap.Error(err))
-		writeError(w, http.StatusInternalServerError, "failed to create credential")
+		writeGitCredsError(w, err, "failed to create credential")
 		return
 	}
-
 	writeProto(w, http.StatusCreated, &airlockv1.CreateGitCredentialResponse{
-		Credential: &airlockv1.GitCredential{
-			Id:              pgUUID(row.ID).String(),
-			UserId:          pgUUID(row.UserID).String(),
-			Type:            row.Type,
-			Name:            row.Name,
-			GithubInstallId: row.GithubInstallID,
-			CreatedAt:       convert.PgTimestampToProto(row.CreatedAt),
-			LastUsedAt:      convert.PgTimestampToProto(row.LastUsedAt),
-		},
+		Credential: gitCredToProto(c),
 	})
 }
 
 func (h *GitCredentialsHandler) Delete(w http.ResponseWriter, r *http.Request) {
-	idStr := chi.URLParam(r, "id")
-	id, err := uuid.Parse(idStr)
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid id")
 		return
 	}
-	userID := auth.UserIDFromContext(r.Context())
-	q := dbq.New(h.db.Pool())
-	if err := q.DeleteGitCredential(r.Context(), dbq.DeleteGitCredentialParams{
-		ID:     toPgUUID(id),
-		UserID: toPgUUID(userID),
-	}); err != nil {
-		logFor(r).Error("delete git credential failed", zap.Error(err))
-		writeError(w, http.StatusInternalServerError, "failed to delete credential")
+	p := principalFromRequest(r)
+	if err := h.svc.Delete(r.Context(), p, id); err != nil {
+		writeGitCredsError(w, err, "failed to delete credential")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

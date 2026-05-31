@@ -2,7 +2,6 @@ package api
 
 import (
 	"net/http"
-	"sort"
 
 	"github.com/airlockrun/airlock/convert"
 	"github.com/airlockrun/airlock/db"
@@ -182,96 +181,4 @@ func (h *ProvidersHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusNoContent)
-}
-
-func (h *ProvidersHandler) ListCatalogProviders(w http.ResponseWriter, r *http.Request) {
-	providers, err := solprovider.LoadProviders()
-	if err != nil {
-		logFor(r).Error("load catalog providers failed", zap.Error(err))
-		writeError(w, http.StatusInternalServerError, "failed to load providers")
-		return
-	}
-
-	out := make([]*airlockv1.ProviderInfo, 0, len(providers))
-	for _, p := range providers {
-		out = append(out, &airlockv1.ProviderInfo{
-			Id:   p.ID,
-			Name: p.Name,
-		})
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Id < out[j].Id })
-
-	writeProto(w, http.StatusOK, &airlockv1.ListCatalogProvidersResponse{Providers: out})
-}
-
-func (h *ProvidersHandler) ListCatalogModels(w http.ResponseWriter, r *http.Request) {
-	providerFilter := r.URL.Query().Get("provider")
-
-	// When ?configured=true, only return models from enabled providers in the DB.
-	var configuredSet map[string]bool
-	if r.URL.Query().Get("configured") == "true" {
-		q := dbq.New(h.db.Pool())
-		dbProviders, err := q.ListProviders(r.Context())
-		if err != nil {
-			logFor(r).Error("list configured providers failed", zap.Error(err))
-			writeError(w, http.StatusInternalServerError, "failed to list providers")
-			return
-		}
-		configuredSet = make(map[string]bool, len(dbProviders))
-		for _, p := range dbProviders {
-			if p.IsEnabled {
-				configuredSet[p.CatalogID] = true
-			}
-		}
-	}
-
-	// AllProviders merges models.dev with the hand-maintained overlay so
-	// entries like OpenAI's Whisper / TTS-1 (not in models.dev) are visible
-	// to pickers. Keeping this in sync with ListCapabilities — which also
-	// uses AllProviders — is what makes the STT/TTS cells in the capability
-	// matrix actually populate the Settings dropdowns.
-	providers, err := solprovider.AllProviders()
-	if err != nil {
-		logFor(r).Error("load catalog providers failed", zap.Error(err))
-		writeError(w, http.StatusInternalServerError, "failed to load providers")
-		return
-	}
-
-	var out []*airlockv1.ModelInfo
-	for provID, prov := range providers {
-		if providerFilter != "" && provID != providerFilter {
-			continue
-		}
-		if configuredSet != nil && !configuredSet[provID] {
-			continue
-		}
-		for modelID, model := range prov.Models {
-			mi := &airlockv1.ModelInfo{
-				Id:         modelID,
-				Name:       model.Name,
-				ProviderId: provID,
-				ToolCall:   model.ToolCall,
-				Reasoning:  model.Reasoning,
-				Kind:       string(model.Kind),
-				Caps:       solprovider.CapabilitiesFromModel(model).List(),
-			}
-			if model.Cost != nil {
-				mi.CostInput = model.Cost.Input
-				mi.CostOutput = model.Cost.Output
-			}
-			if model.Limit != nil {
-				mi.ContextLimit = int32(model.Limit.Context)
-				mi.OutputLimit = int32(model.Limit.Output)
-			}
-			out = append(out, mi)
-		}
-	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].ProviderId != out[j].ProviderId {
-			return out[i].ProviderId < out[j].ProviderId
-		}
-		return out[i].Id < out[j].Id
-	})
-
-	writeProto(w, http.StatusOK, &airlockv1.ListCatalogModelsResponse{Models: out})
 }

@@ -45,6 +45,8 @@ const router = createRouter({
         { path: '', redirect: '/agents' },
         { path: 'agents', name: 'agents', component: () => import('@/views/AgentListView.vue') },
         { path: 'agents/create', name: 'agent-create', component: () => import('@/views/AgentCreateView.vue') },
+        { path: 'system', name: 'system-agent', component: () => import('@/views/SystemAgentView.vue') },
+        { path: 'system/chat/:conversationId', name: 'system-chat', component: () => import('@/views/SystemChatView.vue') },
         { path: 'agents/:id', name: 'agent-detail', component: () => import('@/views/AgentDetailView.vue') },
         { path: 'agents/:id/chat', name: 'agent-chat', component: () => import('@/views/AgentChatView.vue') },
         { path: 'agents/:id/runs/:runId', name: 'run-detail', component: () => import('@/views/RunDetailView.vue') },

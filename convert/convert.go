@@ -76,7 +76,11 @@ func TenantToProto(t dbq.Tenant) *airlockv1.Tenant {
 	}
 }
 
-func tenantRoleToProto(s string) airlockv1.TenantRole {
+// TenantRoleStringToProto maps the storage form ("admin"/"manager"/
+// "user") to the wire enum. Exported so handlers that build proto
+// shapes from service DTOs (not dbq.User rows) can use it without
+// reaching for UserToProto.
+func TenantRoleStringToProto(s string) airlockv1.TenantRole {
 	switch s {
 	case "admin":
 		return airlockv1.TenantRole_TENANT_ROLE_ADMIN
@@ -94,7 +98,7 @@ func UserToProto(u dbq.User) *airlockv1.User {
 		Id:                 PgUUIDToString(u.ID),
 		Email:              u.Email,
 		DisplayName:        u.DisplayName,
-		TenantRole:         tenantRoleToProto(u.TenantRole),
+		TenantRole:         TenantRoleStringToProto(u.TenantRole),
 		OidcSub:            u.OidcSub,
 		CreatedAt:          PgTimestampToProto(u.CreatedAt),
 		UpdatedAt:          PgTimestampToProto(u.UpdatedAt),

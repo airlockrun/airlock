@@ -23,6 +23,17 @@ SELECT EXISTS(
     WHERE agent_id = @agent_id AND user_id = @user_id
 ) AS has_access;
 
+-- name: ListUserAgentMemberships :many
+-- For sysagent's whoami tool: one row per agent the user is a member
+-- of, with role + the agent's slug/name. Lets the LLM ground itself
+-- on what the user can do across agents in one call rather than
+-- per-agent lookups.
+SELECT a.id, a.slug, a.name, am.role, am.created_at
+FROM agent_members am
+JOIN agents a ON a.id = am.agent_id
+WHERE am.user_id = @user_id
+ORDER BY a.slug;
+
 -- name: ListAgentIDsByMember :many
 -- Used by the WS upgrade handler to auto-subscribe a fresh connection to
 -- every agent the user has access to. The WS connection receives events

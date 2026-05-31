@@ -541,7 +541,123 @@ CREATE TABLE agent_exec_endpoints (
 );
 CREATE INDEX agent_exec_endpoints_agent_id_idx ON agent_exec_endpoints(agent_id);
 
+
+-- System agent: an in-airlock chat surface that lets operators manage
+-- agents, bridges, connections, members, A2A, runs, etc. through tool
+-- calls. No JS VM, no connections of its own — every tool wraps an
+-- existing service.{domain} method. One agent per Airlock instance,
+-- per-user multi-conversation chat history.
+--
+-- Three tables: system_conversations, system_messages, system_audit.
+
+-- status='awaiting_confirmation' means the LLM emitted a destructive
+-- tool call and we're waiting for the user to approve/deny in the UI;
+-- checkpoint carries the sol SuspensionContext (pending tool calls +
+-- completed results) so the resume path can re-execute the exact
+-- gated calls without trusting the LLM to regenerate them.
+--
+-- context_checkpoint_message_id points at the first summary message
+-- after a compaction (mirrors agent_conversations) — sol's
+-- SessionStore.Load filters to messages with seq >= this row's seq,
+-- so pre-checkpoint history stays in the DB for UI display but
+-- doesn't reach the LLM context window. Self-FK is deferred because
+-- system_messages references this table; we add it after the
+-- system_messages CREATE.
+CREATE TABLE system_conversations (
+    id                            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id                       uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    title                         text NOT NULL DEFAULT 'New chat',
+    status                        text NOT NULL DEFAULT 'active'
+                                  CHECK (status IN ('active', 'awaiting_confirmation')),
+    checkpoint                    jsonb,
+    context_checkpoint_message_id uuid,
+    settings                      jsonb NOT NULL DEFAULT '{}'::jsonb,
+    created_at                    timestamptz NOT NULL DEFAULT now(),
+    updated_at                    timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX system_conversations_user_updated_idx
+    ON system_conversations(user_id, updated_at DESC);
+
+-- parts JSONB mirrors agent_messages' goai layout so frontend
+-- MessageParts.vue / ToolBadge.vue render both unchanged. seq is the
+-- canonical ordering inside a conversation (created_at collides on
+-- single-turn multi-part rows). role='user' rows are either operator
+-- prompts OR system-injected events (build completions, etc.); the
+-- latter carry source='upgrade'/'error' inside parts, same tag
+-- agent_messages uses.
+CREATE TABLE system_messages (
+    id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    seq             bigserial NOT NULL,
+    conversation_id uuid NOT NULL REFERENCES system_conversations(id) ON DELETE CASCADE,
+    role            text NOT NULL CHECK (role IN ('user', 'assistant', 'tool')),
+    parts           jsonb NOT NULL,
+    tokens_in       integer NOT NULL DEFAULT 0,
+    tokens_out      integer NOT NULL DEFAULT 0,
+    cost_estimate   numeric(10, 6) NOT NULL DEFAULT 0,
+    created_at      timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX system_messages_conversation_seq_idx
+    ON system_messages(conversation_id, seq);
+
+-- Deferred self-reference: system_conversations.context_checkpoint_message_id
+-- FKs into system_messages now that the latter exists. ON DELETE SET
+-- NULL so deleting an old summary row doesn't dangle the pointer.
+ALTER TABLE system_conversations
+    ADD CONSTRAINT system_conversations_checkpoint_fk
+    FOREIGN KEY (context_checkpoint_message_id)
+    REFERENCES system_messages(id) ON DELETE SET NULL;
+
+-- system_runs is a lightweight per-turn record so events carry a
+-- stable run_id the frontend can group by, mirroring how agent chat
+-- events scope to runs.id. We don't reuse runs (it carries
+-- container/agent-specific columns); a separate slim table keeps
+-- sysagent's run lifecycle clean.
+--
+-- status: 'running' while the chat loop is active, 'suspended' when
+-- awaiting a confirmation reply, 'complete' on natural finish, 'error'
+-- on unrecoverable failure, 'cancelled' on operator cancellation.
+CREATE TABLE system_runs (
+    id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    conversation_id uuid NOT NULL REFERENCES system_conversations(id) ON DELETE CASCADE,
+    user_id         uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    status          text NOT NULL DEFAULT 'running'
+                    CHECK (status IN ('running', 'suspended', 'complete', 'error', 'cancelled')),
+    error_message   text NOT NULL DEFAULT '',
+    started_at      timestamptz NOT NULL DEFAULT now(),
+    finished_at     timestamptz
+);
+CREATE INDEX system_runs_conversation_idx ON system_runs(conversation_id, started_at DESC);
+
+-- Append-only. Insert with ok=false / summary='pending' before
+-- invoking a tool body; UPDATE to ok=true and a real summary on
+-- success. A panic mid-tool leaves the 'pending' row behind — exactly
+-- what we want for forensics. conversation_id is nullable + ON DELETE
+-- SET NULL so deleting a conversation doesn't erase audit history of
+-- what was done from it.
+CREATE TABLE system_audit (
+    id              bigserial PRIMARY KEY,
+    user_id         uuid NOT NULL REFERENCES users(id),
+    conversation_id uuid REFERENCES system_conversations(id) ON DELETE SET NULL,
+    tool            text NOT NULL,
+    args            jsonb NOT NULL,
+    result_summary  text NOT NULL,
+    ok              boolean NOT NULL,
+    created_at      timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX system_audit_user_time_idx ON system_audit(user_id, created_at DESC);
+CREATE INDEX system_audit_tool_time_idx ON system_audit(tool, created_at DESC);
+
 -- +goose Down
+DROP INDEX IF EXISTS system_runs_conversation_idx;
+DROP TABLE IF EXISTS system_runs;
+ALTER TABLE system_conversations DROP CONSTRAINT IF EXISTS system_conversations_checkpoint_fk;
+DROP INDEX IF EXISTS system_audit_tool_time_idx;
+DROP INDEX IF EXISTS system_audit_user_time_idx;
+DROP TABLE IF EXISTS system_audit;
+DROP INDEX IF EXISTS system_messages_conversation_seq_idx;
+DROP TABLE IF EXISTS system_messages;
+DROP INDEX IF EXISTS system_conversations_user_updated_idx;
+DROP TABLE IF EXISTS system_conversations;
 DROP TABLE IF EXISTS agent_exec_endpoints;
 DROP INDEX IF EXISTS idx_agents_git_credential;
 ALTER TABLE agents

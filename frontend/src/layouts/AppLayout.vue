@@ -6,6 +6,7 @@ import { useAuthStore } from '@/stores/auth'
 import { useAgentsStore } from '@/stores/agents'
 import { useConversationsStore } from '@/stores/conversations'
 import { useChatStore } from '@/stores/chat'
+import { useSystemChatStore } from '@/stores/systemChat'
 import { useConfirm } from 'primevue/useconfirm'
 import { useTheme } from '@/composables/useTheme'
 import type { ConversationInfo } from '@/gen/airlock/v1/types_pb'
@@ -16,6 +17,7 @@ const auth = useAuthStore()
 const agentsStore = useAgentsStore()
 const conversationsStore = useConversationsStore()
 const chat = useChatStore()
+const systemChat = useSystemChatStore()
 const confirm = useConfirm()
 const toast = useToast()
 const { isDark, toggle: toggleTheme } = useTheme()
@@ -87,20 +89,43 @@ function isActive(path: string) {
 
 // "New chat" picks an agent first (a conversation always belongs to one).
 // The freshly-opened chat starts in its empty "new thread" state; the row
-// appears in the sidebar once the first message is sent.
+// appears in the sidebar once the first message is sent. The system
+// agent is pinned at the top — its "chat" path mints a fresh sysagent
+// thread server-side and routes to it.
 const newMenuRef = ref()
-const agentMenuItems = computed(() => {
-  if (agentsStore.agents.length === 0) {
-    return [{ label: 'No agents yet', disabled: true }]
+async function startSystemChat() {
+  try {
+    const t = await systemChat.createConversation()
+    router.push(`/system/chat/${t.id}`)
+    drawerVisible.value = false
+  } catch (err: any) {
+    toast.add({ severity: 'error', summary: 'Failed to start chat', detail: err?.message, life: 5000 })
   }
-  return agentsStore.agents.map(a => ({
-    label: a.name,
-    icon: 'pi pi-box',
-    command: () => {
-      router.push({ path: `/agents/${a.id}/chat` })
-      drawerVisible.value = false
+}
+const agentMenuItems = computed(() => {
+  const items: any[] = [
+    {
+      label: 'System Agent',
+      icon: 'pi pi-cog',
+      command: startSystemChat,
     },
-  }))
+    { separator: true },
+  ]
+  if (agentsStore.agents.length === 0) {
+    items.push({ label: 'No agents yet', disabled: true })
+    return items
+  }
+  for (const a of agentsStore.agents) {
+    items.push({
+      label: a.name,
+      icon: 'pi pi-box',
+      command: () => {
+        router.push({ path: `/agents/${a.id}/chat` })
+        drawerVisible.value = false
+      },
+    })
+  }
+  return items
 })
 function openNewMenu(event: Event) {
   newMenuRef.value.toggle(event)

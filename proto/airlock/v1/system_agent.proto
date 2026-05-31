@@ -1,0 +1,80 @@
+syntax = "proto3";
+
+package airlock.v1;
+
+option go_package = "github.com/airlockrun/airlock/gen/airlock/v1;airlockv1";
+
+import "google/protobuf/timestamp.proto";
+
+// System agent: an in-airlock chat surface that lets operators manage
+// agents, bridges, connections, members, A2A, runs, etc. through tool
+// calls. Per-user multi-conversation chat history; no JS VM; tools
+// wrap existing service.{domain} methods. See airlock/sysagent.
+
+// SystemConversationInfo is one chat conversation (per user). status is
+// "active" or "awaiting_confirmation"; when the latter, pending_tool
+// carries the LLM's gated tool call awaiting Approve/Deny in the UI.
+message SystemConversationInfo {
+  string id = 1;
+  string user_id = 2;
+  string title = 3;
+  string status = 4;                            // "active" | "awaiting_confirmation"
+  PendingSystemTool pending_tool = 5;           // set iff status == "awaiting_confirmation"
+  google.protobuf.Timestamp created_at = 6;
+  google.protobuf.Timestamp updated_at = 7;
+}
+
+// PendingSystemTool describes a destructive tool call the LLM emitted
+// that needs user approval before running. UI renders Approve/Deny;
+// resolution POSTs to /system/conversations/{id}/prompt with {approved}.
+message PendingSystemTool {
+  string call_id = 1;
+  string tool_name = 2;
+  string args_json = 3;
+}
+
+// SystemMessageInfo mirrors AgentMessageInfo so the existing frontend
+// MessageParts.vue / ToolBadge.vue render both unchanged. parts is the
+// goai JSONB layout (text + tool-call + tool-result blocks). seq is
+// the cursor (created_at collides on multi-part rows from one turn).
+// source = "user" (operator-typed) | "system" (e.g. injected
+// "[Upgrade succeeded] ..." from a background build).
+message SystemMessageInfo {
+  string id = 1;
+  int64 seq = 2;
+  string role = 3;                              // "user" | "assistant" | "tool"
+  string source = 4;
+  string parts = 5;                             // JSON-encoded goai Content
+  int32 tokens_in = 6;
+  int32 tokens_out = 7;
+  double cost_estimate = 8;
+  google.protobuf.Timestamp created_at = 9;
+}
+
+// --- Requests / Responses ---
+
+message CreateSystemConversationRequest {
+  string title = 1;                             // optional; server defaults to "New chat"
+}
+
+message CreateSystemConversationResponse {
+  SystemConversationInfo conversation = 1;
+}
+
+message ListSystemConversationsResponse {
+  repeated SystemConversationInfo conversations = 1;
+}
+
+message GetSystemConversationResponse {
+  SystemConversationInfo conversation = 1;
+  repeated SystemMessageInfo messages = 2;
+}
+
+// SystemPromptRequest carries either a new operator turn (message set)
+// or a pending-confirmation resolution (approved set). When both
+// message and approved are present, approved wins — the server
+// resumes/cancels the gated tool and discards the typed text.
+message SystemPromptRequest {
+  string message = 1;
+  optional bool approved = 2;
+}

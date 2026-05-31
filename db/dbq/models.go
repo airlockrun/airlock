@@ -474,6 +474,51 @@ type Run struct {
 	ParentRunID     pgtype.UUID        `json:"parent_run_id"`
 }
 
+type SystemAudit struct {
+	ID             int64              `json:"id"`
+	UserID         pgtype.UUID        `json:"user_id"`
+	ConversationID pgtype.UUID        `json:"conversation_id"`
+	Tool           string             `json:"tool"`
+	Args           []byte             `json:"args"`
+	ResultSummary  string             `json:"result_summary"`
+	Ok             bool               `json:"ok"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+}
+
+type SystemConversation struct {
+	ID                         pgtype.UUID        `json:"id"`
+	UserID                     pgtype.UUID        `json:"user_id"`
+	Title                      string             `json:"title"`
+	Status                     string             `json:"status"`
+	Checkpoint                 []byte             `json:"checkpoint"`
+	ContextCheckpointMessageID pgtype.UUID        `json:"context_checkpoint_message_id"`
+	Settings                   []byte             `json:"settings"`
+	CreatedAt                  pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt                  pgtype.Timestamptz `json:"updated_at"`
+}
+
+type SystemMessage struct {
+	ID             pgtype.UUID        `json:"id"`
+	Seq            int64              `json:"seq"`
+	ConversationID pgtype.UUID        `json:"conversation_id"`
+	Role           string             `json:"role"`
+	Parts          []byte             `json:"parts"`
+	TokensIn       int32              `json:"tokens_in"`
+	TokensOut      int32              `json:"tokens_out"`
+	CostEstimate   pgtype.Numeric     `json:"cost_estimate"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+}
+
+type SystemRun struct {
+	ID             pgtype.UUID        `json:"id"`
+	ConversationID pgtype.UUID        `json:"conversation_id"`
+	UserID         pgtype.UUID        `json:"user_id"`
+	Status         string             `json:"status"`
+	ErrorMessage   string             `json:"error_message"`
+	StartedAt      pgtype.Timestamptz `json:"started_at"`
+	FinishedAt     pgtype.Timestamptz `json:"finished_at"`
+}
+
 type SystemSetting struct {
 	ID                         bool               `json:"id"`
 	DefaultBuildProviderID     pgtype.UUID        `json:"default_build_provider_id"`

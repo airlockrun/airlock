@@ -82,12 +82,18 @@ func (h *WSHandler) Upgrade(w http.ResponseWriter, r *http.Request) {
 		}
 		h.hub.Subscribe(conn, agentID)
 	}
+	// Also subscribe the connection to the user's own UUID as a topic
+	// — sysagent publishes thread events here (one user topic carries
+	// every thread's events, with the thread id on envelope.ConversationID
+	// for client-side per-thread routing). This avoids a dynamic
+	// subscribe roundtrip when the user creates a fresh thread mid-session.
+	h.hub.Subscribe(conn, userID)
 	h.logger.Info("ws connected",
 		zap.String("conn", conn.ID),
 		zap.String("uid", userID.String()),
 		zap.String("email", claims.Email),
 		zap.String("ip", r.RemoteAddr),
-		zap.Int("topics", len(memberAgents)),
+		zap.Int("topics", len(memberAgents)+1),
 	)
 
 	// Use background context — r.Context() is cancelled when the handler returns,

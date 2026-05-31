@@ -40,13 +40,14 @@ func (noopPublisher) PublishBuildLogLine(context.Context, uuid.UUID, uuid.UUID, 
 
 // BuildService orchestrates the agent build and upgrade pipeline.
 type BuildService struct {
-	cfg             *config.Config
-	db              *db.DB
-	containers      container.ContainerManager
-	encryptor       secrets.Store
-	events          EventPublisher
-	upgradeNotifier PostUpgradeNotifier
-	logger          *zap.Logger
+	cfg                   *config.Config
+	db                    *db.DB
+	containers            container.ContainerManager
+	encryptor             secrets.Store
+	events                EventPublisher
+	upgradeNotifier       PostUpgradeNotifier
+	upgradeSystemNotifier PostUpgradeSystemNotifier
+	logger                *zap.Logger
 
 	mu       sync.Mutex
 	inFlight map[string]*buildHandle // agentID → handle for cancel + wait
@@ -117,10 +118,19 @@ func (b *BuildService) SetEventPublisher(ep EventPublisher) {
 	b.events = ep
 }
 
-// SetUpgradeNotifier sets the notifier called after successful upgrades
-// to notify the originating conversation.
+// SetUpgradeNotifier sets the notifier called after an upgrade
+// initiated from an agent's web/bridge/A2A conversation finishes.
 func (b *BuildService) SetUpgradeNotifier(n PostUpgradeNotifier) {
 	b.upgradeNotifier = n
+}
+
+// SetUpgradeSystemNotifier sets the notifier called after an upgrade
+// initiated from a system-agent conversation finishes. Mirrors
+// SetUpgradeNotifier; the builder routes by UpgradeInput's
+// SystemConversationID vs ConversationID (mutually exclusive — see
+// notifyUpgradeOutcome).
+func (b *BuildService) SetUpgradeSystemNotifier(n PostUpgradeSystemNotifier) {
+	b.upgradeSystemNotifier = n
 }
 
 // startBuild registers a cancellable context for a build/upgrade.

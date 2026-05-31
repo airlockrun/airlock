@@ -8,6 +8,7 @@ import (
 
 	"github.com/airlockrun/airlock/db/dbq"
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
+	catalogsvc "github.com/airlockrun/airlock/service/catalog"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -40,8 +41,8 @@ func seedProvider(t *testing.T, catalogID, displayName string) {
 	})
 }
 
-func testCapabilitiesHandler() *capabilitiesHandler {
-	return &capabilitiesHandler{db: testDB, logger: zap.NewNop()}
+func testCatalogHandler() *catalogHandler {
+	return newCatalogHandler(catalogsvc.New(testDB, zap.NewNop()))
 }
 
 // TestListCapabilitiesShape runs the real handler against the in-process
@@ -57,7 +58,7 @@ func TestListCapabilitiesShape(t *testing.T) {
 	// Seed one configured LLM provider (openai) — we know it's in models.dev.
 	seedProvider(t, "openai", "OpenAI")
 
-	h := testCapabilitiesHandler()
+	h := testCatalogHandler()
 	router := userRouter(func(r chi.Router) {
 		r.Get("/api/v1/catalog/capabilities", h.ListCapabilities)
 	})

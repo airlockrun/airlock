@@ -16,14 +16,18 @@ import (
 	"github.com/airlockrun/airlock/secrets"
 	agentssvc "github.com/airlockrun/airlock/service/agents"
 	bridgessvc "github.com/airlockrun/airlock/service/bridges"
+	catalogsvc "github.com/airlockrun/airlock/service/catalog"
 	connsvc "github.com/airlockrun/airlock/service/connections"
 	convsvc "github.com/airlockrun/airlock/service/conversations"
 	execsvc "github.com/airlockrun/airlock/service/execendpoints"
+	gitcredssvc "github.com/airlockrun/airlock/service/gitcredentials"
 	memberssvc "github.com/airlockrun/airlock/service/members"
 	modelssvc "github.com/airlockrun/airlock/service/models"
 	runssvc "github.com/airlockrun/airlock/service/runs"
 	siblingssvc "github.com/airlockrun/airlock/service/siblings"
+	userssvc "github.com/airlockrun/airlock/service/users"
 	"github.com/airlockrun/airlock/storage"
+	"github.com/airlockrun/airlock/sysagent"
 	"github.com/airlockrun/airlock/trigger"
 	"github.com/go-chi/chi/v5"
 	chimw "github.com/go-chi/chi/v5/middleware"
@@ -137,9 +141,9 @@ func NewRouter(cfg RouterConfig) http.Handler {
 
 	authHandler := NewAuthHandler(cfg.DB, cfg.JWTSecret, cfg.ActivationCodeFile, cfg.Logger.Named("auth"))
 	providersHandler := NewProvidersHandler(cfg.DB, cfg.Secrets)
-	gitCredsHandler := NewGitCredentialsHandler(cfg.DB, cfg.Secrets)
+	gitCredsHandler := NewGitCredentialsHandler(gitcredssvc.New(cfg.DB, cfg.Secrets, cfg.Logger.Named("gitcredentials")))
 	gitWebhookHandler := NewGitWebhookHandler(cfg.DB, cfg.BuildService, cfg.Logger.Named("git-webhook"))
-	usersHandler := NewUsersHandler(cfg.DB)
+	usersHandler := NewUsersHandler(cfg.DB, userssvc.New(cfg.DB, cfg.Logger.Named("users")))
 	sysSettingsHandler := &settingsHandler{db: cfg.DB, encryptor: cfg.Secrets, logger: cfg.Logger.Named("settings")}
 
 	// Health check (public, no auth — reverse proxies and orchestrators need
@@ -213,9 +217,10 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		logger:     cfg.Logger.Named("identity"),
 	}
 
+	catalogH := newCatalogHandler(catalogsvc.New(cfg.DB, cfg.Logger.Named("catalog")))
+
 	// Public endpoints (no JWT required)
 	r.Get("/api/v1/credentials/oauth/callback", credH.OAuthCallback)
-	r.Get("/api/v1/catalog/providers", providersHandler.ListCatalogProviders)
 	r.Get("/auth-external", idH.AuthExternal)
 
 	// OAuth Authorization Server handler — built once and reused by
@@ -276,10 +281,9 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		})
 
 		// Catalog (read-only, any authenticated user)
-		r.Get("/catalog/providers", providersHandler.ListCatalogProviders)
-		r.Get("/catalog/models", providersHandler.ListCatalogModels)
-		capH := &capabilitiesHandler{db: cfg.DB, logger: cfg.Logger.Named("capabilities")}
-		r.Get("/catalog/capabilities", capH.ListCapabilities)
+		r.Get("/catalog/providers", catalogH.ListProviders)
+		r.Get("/catalog/models", catalogH.ListModels)
+		r.Get("/catalog/capabilities", catalogH.ListCapabilities)
 
 		// Credential management
 		r.Post("/credentials/oauth/start", credH.OAuthStart)
@@ -320,6 +324,47 @@ func NewRouter(cfg RouterConfig) http.Handler {
 
 		// Wire post-upgrade notifications to conversations handler.
 		cfg.BuildService.SetUpgradeNotifier(cH)
+
+		// In-airlock system agent: operator-facing chat that wraps
+		// every per-domain service in typed Go tools. Per-domain
+		// services are fresh instances (stateless wrappers; identical
+		// to the handler-owned ones above modulo logger name).
+		sysagentSvc := sysagent.New(sysagent.Deps{
+			DB:        cfg.DB,
+			Encryptor: cfg.Secrets,
+			PubSub:    cfg.PubSub,
+			PublicURL: cfg.PublicURL,
+			Logger:    cfg.Logger.Named("sysagent"),
+			Agents: agentssvc.New(
+				cfg.DB, cfg.BuildService, cfg.Dispatcher,
+				cfg.Containers, cfg.BridgeManager,
+				cfg.Logger.Named("sysagent-agents"),
+			),
+			Bridges: bridgessvc.New(
+				cfg.DB, cfg.Secrets, cfg.TelegramDriver, cfg.DiscordDriver,
+				cfg.BridgeManager, cfg.Logger.Named("sysagent-bridges"),
+			),
+			Catalog: catalogsvc.New(cfg.DB, cfg.Logger.Named("sysagent-catalog")),
+			Conns: connsvc.New(
+				cfg.DB, cfg.Secrets, cfg.OAuthClient, cfg.PublicURL,
+				cfg.Dispatcher.RefreshAgent, cfg.Logger.Named("sysagent-conns"),
+				credSvcDiscovery, discoverMCPAuth, injectAuth, mcpHTTPClient,
+			),
+			Execs:    execsvc.New(cfg.DB.Pool(), cfg.Secrets, execDialer, cfg.Logger.Named("sysagent-execs")),
+			GitCreds: gitcredssvc.New(cfg.DB, cfg.Secrets, cfg.Logger.Named("sysagent-gitcreds")),
+			Members:  memberssvc.New(cfg.DB, cfg.Logger.Named("sysagent-members")),
+			Models:   modelssvc.New(cfg.DB, cfg.Logger.Named("sysagent-models")),
+			Runs:     runssvc.New(cfg.DB, cfg.Dispatcher, cfg.Logger.Named("sysagent-runs")),
+			Siblings: siblingssvc.New(cfg.DB, cfg.Dispatcher, cfg.Logger.Named("sysagent-siblings")),
+			Users:    userssvc.New(cfg.DB, cfg.Logger.Named("sysagent-users")),
+		})
+		// Route post-upgrade notifications triggered from sysagent
+		// conversations back to the conversation (NotifyUpgradeComplete injects
+		// the [Upgrade succeeded] event + auto-resumes the LLM).
+		// Conversation-origin upgrades still flow through the
+		// cH-side notifier above.
+		cfg.BuildService.SetUpgradeSystemNotifier(sysagentSvc)
+		sysagentH := newSysagentHandler(sysagentSvc)
 
 		r.Route("/agents", func(r chi.Router) {
 			r.Get("/", agH.List)
@@ -422,6 +467,17 @@ func NewRouter(cfg RouterConfig) http.Handler {
 				// connections, MCP servers, and env vars.
 				r.Get("/setup-status", credH.SetupStatus)
 			})
+		})
+
+		// System-agent conversations: operator chat surface, per-user.
+		// Conversations are not shared; the service enforces ownership at
+		// every entry point.
+		r.Route("/system/conversations", func(r chi.Router) {
+			r.Get("/", sysagentH.ListConversations)
+			r.Post("/", sysagentH.CreateConversation)
+			r.Get("/{conversationID}", sysagentH.GetConversation)
+			r.Delete("/{conversationID}", sysagentH.DeleteConversation)
+			r.Post("/{conversationID}/prompt", sysagentH.Prompt)
 		})
 
 		// Top-level conversation and run routes (not nested under agent).

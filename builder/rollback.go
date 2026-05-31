@@ -16,13 +16,16 @@ import (
 // want to move backwards, and the agent_builds row that defines the
 // target (its source_ref becomes main; its image_ref is rebuilt).
 //
-// ConversationID is optional — when set, the post-rollback notifier
-// posts a single message describing the outcome, mirroring how upgrade
-// closes the loop with the user.
+// ConversationID and SystemConversationID are mutually exclusive: a rollback
+// triggered from a web/bridge/A2A agent conversation sets the former;
+// one triggered from a system-agent conversation sets the latter. The
+// post-build outcome routes to whichever was set — see
+// BuildService.notifyUpgradeOutcome.
 type RollbackInput struct {
-	AgentID        string
-	BuildID        string
-	ConversationID string
+	AgentID              string
+	BuildID              string
+	ConversationID       string
+	SystemConversationID string
 }
 
 // Rollback reverses an agent to a previous build's source_ref. Wraps
@@ -67,23 +70,23 @@ func (b *BuildService) Rollback(_ context.Context, in RollbackInput) {
 	targetID := mustParseUUID(in.BuildID)
 	target, err := q.GetAgentBuild(ctx, targetID)
 	if err != nil {
-		b.failRollback(dbCtx, agentPgUUID, agentUUID, in.ConversationID, fmt.Errorf("load target build: %w", err))
+		b.failRollback(dbCtx, agentPgUUID, agentUUID, in.ConversationID, in.SystemConversationID, fmt.Errorf("load target build: %w", err))
 		return
 	}
 	if uuid.UUID(target.AgentID.Bytes) != agentUUID {
-		b.failRollback(dbCtx, agentPgUUID, agentUUID, in.ConversationID, errors.New("target build does not belong to this agent"))
+		b.failRollback(dbCtx, agentPgUUID, agentUUID, in.ConversationID, in.SystemConversationID, errors.New("target build does not belong to this agent"))
 		return
 	}
 	if target.Status != "complete" {
-		b.failRollback(dbCtx, agentPgUUID, agentUUID, in.ConversationID, errors.New("can only roll back to a completed build"))
+		b.failRollback(dbCtx, agentPgUUID, agentUUID, in.ConversationID, in.SystemConversationID, errors.New("can only roll back to a completed build"))
 		return
 	}
 	if target.SourceRef == "" {
-		b.failRollback(dbCtx, agentPgUUID, agentUUID, in.ConversationID, errors.New("target build has no source_ref"))
+		b.failRollback(dbCtx, agentPgUUID, agentUUID, in.ConversationID, in.SystemConversationID, errors.New("target build has no source_ref"))
 		return
 	}
 	if target.SourceRef == agent.SourceRef {
-		b.failRollback(dbCtx, agentPgUUID, agentUUID, in.ConversationID, errors.New("target build is the current build"))
+		b.failRollback(dbCtx, agentPgUUID, agentUUID, in.ConversationID, in.SystemConversationID, errors.New("target build is the current build"))
 		return
 	}
 
@@ -112,7 +115,7 @@ func (b *BuildService) Rollback(_ context.Context, in RollbackInput) {
 
 	successMsg, runErr := b.Execute(ctx, plan)
 	if runErr != nil {
-		b.failRollback(dbCtx, agentPgUUID, agentUUID, in.ConversationID, runErr)
+		b.failRollback(dbCtx, agentPgUUID, agentUUID, in.ConversationID, in.SystemConversationID, runErr)
 		return
 	}
 
@@ -123,18 +126,14 @@ func (b *BuildService) Rollback(_ context.Context, in RollbackInput) {
 		ErrorMessage:  "",
 	})
 
-	if in.ConversationID != "" && b.upgradeNotifier != nil {
-		msg := successMsg
-		if msg == "" {
-			msg = fmt.Sprintf("Rolled back to build %s.", target.SourceRef[:min(12, len(target.SourceRef))])
-		}
-		if err := b.upgradeNotifier.NotifyUpgradeComplete(dbCtx, agentUUID, in.ConversationID, "success", msg); err != nil {
-			b.logger.Error("post-rollback notification failed", zap.Error(err))
-		}
+	msg := successMsg
+	if msg == "" {
+		msg = fmt.Sprintf("Rolled back to build %s.", target.SourceRef[:min(12, len(target.SourceRef))])
 	}
+	b.notifyUpgradeOutcome(dbCtx, agentUUID, in.ConversationID, in.SystemConversationID, "success", msg)
 }
 
-func (b *BuildService) failRollback(dbCtx context.Context, agentPgUUID pgtype.UUID, agentUUID uuid.UUID, conversationID string, runErr error) {
+func (b *BuildService) failRollback(dbCtx context.Context, agentPgUUID pgtype.UUID, agentUUID uuid.UUID, conversationID, systemConversationID string, runErr error) {
 	q := dbq.New(b.db.Pool())
 	// A refused request is not a rollback failure — the agent is
 	// untouched. Release the lock back to idle and report it declined.
@@ -146,11 +145,7 @@ func (b *BuildService) failRollback(dbCtx context.Context, agentPgUUID pgtype.UU
 			UpgradeStatus: "idle",
 			ErrorMessage:  "",
 		})
-		if conversationID != "" && b.upgradeNotifier != nil {
-			if nerr := b.upgradeNotifier.NotifyUpgradeComplete(dbCtx, agentUUID, conversationID, "refused", refErr.Message); nerr != nil {
-				b.logger.Error("post-rollback refusal notification failed", zap.Error(nerr))
-			}
-		}
+		b.notifyUpgradeOutcome(dbCtx, agentUUID, conversationID, systemConversationID, "refused", refErr.Message)
 		return
 	}
 	errMsg := runErr.Error()
@@ -165,9 +160,7 @@ func (b *BuildService) failRollback(dbCtx context.Context, agentPgUUID pgtype.UU
 		UpgradeStatus: "failed",
 		ErrorMessage:  errMsg,
 	})
-	if !errors.Is(runErr, context.Canceled) && conversationID != "" && b.upgradeNotifier != nil {
-		if nerr := b.upgradeNotifier.NotifyUpgradeComplete(dbCtx, agentUUID, conversationID, "error", errMsg); nerr != nil {
-			b.logger.Error("post-rollback error notification failed", zap.Error(nerr))
-		}
+	if !errors.Is(runErr, context.Canceled) {
+		b.notifyUpgradeOutcome(dbCtx, agentUUID, conversationID, systemConversationID, "error", errMsg)
 	}
 }

@@ -3,203 +3,151 @@ package api
 import (
 	"net/http"
 
-	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/convert"
 	"github.com/airlockrun/airlock/db"
-	"github.com/airlockrun/airlock/db/dbq"
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
+	"github.com/airlockrun/airlock/service"
+	userssvc "github.com/airlockrun/airlock/service/users"
 	"github.com/go-chi/chi/v5"
 	"go.uber.org/zap"
 )
 
 type UsersHandler struct {
-	db *db.DB
+	db    *db.DB
+	users *userssvc.Service
 }
 
-func NewUsersHandler(database *db.DB) *UsersHandler {
-	return &UsersHandler{db: database}
+func NewUsersHandler(database *db.DB, usersSvc *userssvc.Service) *UsersHandler {
+	if database == nil {
+		panic("api: users handler db is required")
+	}
+	if usersSvc == nil {
+		panic("api: users handler users service is required")
+	}
+	return &UsersHandler{db: database, users: usersSvc}
 }
 
-// List returns all users.
+// detailToProto packs a service.users.Detail into the wire User proto.
+// Centralized here so List + Create share one mapping.
+func detailToProto(d userssvc.Detail) *airlockv1.User {
+	return &airlockv1.User{
+		Id:                 d.ID.String(),
+		Email:              d.Email,
+		DisplayName:        d.DisplayName,
+		TenantRole:         convert.TenantRoleStringToProto(d.TenantRole),
+		OidcSub:            d.OIDCSub,
+		CreatedAt:          convert.PgTimestampToProto(d.CreatedAt),
+		UpdatedAt:          convert.PgTimestampToProto(d.UpdatedAt),
+		MustChangePassword: d.MustChangePassword,
+	}
+}
+
+// List returns all users (admin-only — service gates on TenantUserManage).
 func (h *UsersHandler) List(w http.ResponseWriter, r *http.Request) {
-	q := dbq.New(h.db.Pool())
-	users, err := q.ListUsers(r.Context())
+	p := principalFromRequest(r)
+	details, err := h.users.ListDetail(r.Context(), p)
 	if err != nil {
 		logFor(r).Error("list users failed", zap.Error(err))
-		writeError(w, http.StatusInternalServerError, "internal error")
+		writeUsersError(w, err, "list users")
 		return
 	}
-
-	pbUsers := make([]*airlockv1.User, len(users))
-	for i, u := range users {
-		pbUsers[i] = convert.UserToProto(u)
+	pbUsers := make([]*airlockv1.User, len(details))
+	for i, d := range details {
+		pbUsers[i] = detailToProto(d)
 	}
-
 	writeProto(w, http.StatusOK, &airlockv1.ListUsersResponse{Users: pbUsers})
 }
 
 // ListSelectable returns a slim user directory (id/email/display_name) for
-// member-picker dropdowns. Available to any authenticated user — agent admins
-// who aren't tenant admins (e.g. managers, or users promoted to agent admin)
-// still need to see candidates to invite.
+// member-picker dropdowns. Service gates on TenantUserView so any
+// authenticated user can read it — agent admins who aren't tenant
+// admins still need this list to invite members.
 func (h *UsersHandler) ListSelectable(w http.ResponseWriter, r *http.Request) {
-	q := dbq.New(h.db.Pool())
-	users, err := q.ListUsers(r.Context())
+	p := principalFromRequest(r)
+	users, err := h.users.List(r.Context(), p)
 	if err != nil {
 		logFor(r).Error("list selectable users failed", zap.Error(err))
-		writeError(w, http.StatusInternalServerError, "internal error")
+		writeUsersError(w, err, "list selectable users")
 		return
 	}
-
 	out := make([]*airlockv1.UserSummary, len(users))
 	for i, u := range users {
 		out[i] = &airlockv1.UserSummary{
-			Id:          convert.PgUUIDToString(u.ID),
+			Id:          u.ID.String(),
 			Email:       u.Email,
 			DisplayName: u.DisplayName,
 		}
 	}
-
 	writeProto(w, http.StatusOK, &airlockv1.ListSelectableUsersResponse{Users: out})
 }
 
-// Create creates a new user with a temporary password.
+// Create provisions a user with a temporary password (must_change_password
+// is set by the service). Admin-gated via the service.
 func (h *UsersHandler) Create(w http.ResponseWriter, r *http.Request) {
 	req := &airlockv1.CreateUserRequest{}
 	if err := decodeProto(r, req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if req.Email == "" || req.Password == "" {
-		writeError(w, http.StatusBadRequest, "email and password are required")
-		return
-	}
-
-	role := req.TenantRole
-	if role == "" {
-		role = "user"
-	}
-	if role != "user" && role != "manager" && role != "admin" {
-		writeError(w, http.StatusBadRequest, "tenant_role must be 'user', 'manager', or 'admin'")
-		return
-	}
-
-	hash, err := auth.HashPassword(req.Password)
-	if err != nil {
-		logFor(r).Error("hash password failed", zap.Error(err))
-		writeError(w, http.StatusInternalServerError, "internal error")
-		return
-	}
-
-	q := dbq.New(h.db.Pool())
-	user, err := q.CreateUser(r.Context(), dbq.CreateUserParams{
-		Email:              req.Email,
-		DisplayName:        req.DisplayName,
-		PasswordHash:       hash,
-		TenantRole:         role,
-		MustChangePassword: true,
+	p := principalFromRequest(r)
+	detail, err := h.users.Create(r.Context(), p, userssvc.CreateRequest{
+		Email:       req.Email,
+		DisplayName: req.DisplayName,
+		Password:    req.Password,
+		TenantRole:  req.TenantRole,
 	})
 	if err != nil {
-		writeError(w, http.StatusConflict, "user already exists")
+		logFor(r).Error("create user failed", zap.Error(err))
+		writeUsersError(w, err, "create user")
 		return
 	}
-
-	writeProto(w, http.StatusCreated, &airlockv1.CreateUserResponse{
-		User: convert.UserToProto(user),
-	})
+	writeProto(w, http.StatusCreated, &airlockv1.CreateUserResponse{User: detailToProto(detail)})
 }
 
 // UpdateRole changes a user's tenant role.
 func (h *UsersHandler) UpdateRole(w http.ResponseWriter, r *http.Request) {
-	claims := auth.ClaimsFromContext(r.Context())
-
 	targetID, err := parseUUID(chi.URLParam(r, "userID"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid user ID")
 		return
 	}
-
-	// Cannot change own role
-	callerID, _ := parseUUID(claims.Subject)
-	if callerID == targetID {
-		writeError(w, http.StatusBadRequest, "cannot change your own role")
-		return
-	}
-
 	req := &airlockv1.UpdateUserRoleRequest{}
 	if err := decodeProto(r, req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-
-	role := req.TenantRole
-	if role != "user" && role != "manager" && role != "admin" {
-		writeError(w, http.StatusBadRequest, "tenant_role must be 'user', 'manager', or 'admin'")
-		return
-	}
-
-	q := dbq.New(h.db.Pool())
-	if err := q.UpdateUserRole(r.Context(), dbq.UpdateUserRoleParams{
-		ID:         toPgUUID(targetID),
-		TenantRole: role,
-	}); err != nil {
+	p := principalFromRequest(r)
+	if err := h.users.UpdateRole(r.Context(), p, targetID, req.TenantRole); err != nil {
 		logFor(r).Error("update user role failed", zap.Error(err))
-		writeError(w, http.StatusInternalServerError, "internal error")
+		writeUsersError(w, err, "update user role")
 		return
 	}
-
 	w.WriteHeader(http.StatusNoContent)
 }
 
 // Delete removes a user.
 func (h *UsersHandler) Delete(w http.ResponseWriter, r *http.Request) {
-	claims := auth.ClaimsFromContext(r.Context())
-
 	targetID, err := parseUUID(chi.URLParam(r, "userID"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid user ID")
 		return
 	}
-
-	// Cannot delete self
-	callerID, _ := parseUUID(claims.Subject)
-	if callerID == targetID {
-		writeError(w, http.StatusBadRequest, "cannot delete yourself")
-		return
-	}
-
-	q := dbq.New(h.db.Pool())
-
-	// Check target user exists and isn't the last owner
-	target, err := q.GetUserByID(r.Context(), toPgUUID(targetID))
-	if err != nil {
-		writeError(w, http.StatusNotFound, "user not found")
-		return
-	}
-	if target.TenantRole == "admin" {
-		users, err := q.ListUsers(r.Context())
-		if err != nil {
-			logFor(r).Error("list users failed", zap.Error(err))
-			writeError(w, http.StatusInternalServerError, "internal error")
-			return
-		}
-		adminCount := 0
-		for _, u := range users {
-			if u.TenantRole == "admin" {
-				adminCount++
-			}
-		}
-		if adminCount <= 1 {
-			writeError(w, http.StatusBadRequest, "cannot delete the last admin")
-			return
-		}
-	}
-
-	if err := q.DeleteUser(r.Context(), toPgUUID(targetID)); err != nil {
+	p := principalFromRequest(r)
+	if err := h.users.Delete(r.Context(), p, targetID); err != nil {
 		logFor(r).Error("delete user failed", zap.Error(err))
-		writeError(w, http.StatusInternalServerError, "internal error")
+		writeUsersError(w, err, "delete user")
 		return
 	}
-
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// writeUsersError maps service sentinels to HTTP status codes, mirroring
+// the other handlers' error writers.
+func writeUsersError(w http.ResponseWriter, err error, fallback string) {
+	status := service.HTTPStatus(err)
+	if status == http.StatusInternalServerError {
+		writeError(w, status, fallback)
+		return
+	}
+	writeError(w, status, err.Error())
 }
