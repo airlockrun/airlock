@@ -15,6 +15,7 @@ import (
 	"time"
 
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
+	identitysvc "github.com/airlockrun/airlock/service/identity"
 	"github.com/airlockrun/airlock/trigger"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -24,24 +25,32 @@ import (
 
 const testHMACSecret = "test-hmac-secret"
 
+func testIdentityService(td *trigger.TelegramDriver) *identitysvc.Service {
+	return identitysvc.New(
+		testDB, testEncryptor(),
+		telegramIdentityAdapter{d: td},
+		discordIdentityAdapter{d: trigger.NewDiscordDriver(zap.NewNop())},
+		zap.NewNop(),
+	)
+}
+
 func testIdentityHandler() *identityHandler {
-	return &identityHandler{
-		db:         testDB,
-		encryptor:  testEncryptor(),
-		telegram:   trigger.NewTelegramDriver(zap.NewNop()),
-		hmacSecret: testHMACSecret,
-		publicURL:  "http://localhost:8080",
-		logger:     zap.NewNop(),
-	}
+	return newIdentityHandler(
+		testIdentityService(trigger.NewTelegramDriver(zap.NewNop())),
+		testHMACSecret,
+		"http://localhost:8080",
+	)
 }
 
 // testIdentityHandlerWithTelegram builds an identityHandler wired to a mock
 // Telegram server so the preview endpoint can resolve display info without
 // hitting api.telegram.org.
 func testIdentityHandlerWithTelegram(srv *httptest.Server) *identityHandler {
-	ih := testIdentityHandler()
-	ih.telegram = trigger.NewTelegramDriverWithBaseURL(srv.URL, srv.Client())
-	return ih
+	return newIdentityHandler(
+		testIdentityService(trigger.NewTelegramDriverWithBaseURL(srv.URL, srv.Client())),
+		testHMACSecret,
+		"http://localhost:8080",
+	)
 }
 
 // createTestBridgeWithToken inserts a bridge with the given raw token (will

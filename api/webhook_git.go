@@ -45,26 +45,36 @@ type gitPushPayload struct {
 	Ref string `json:"ref"`
 }
 
+// Handle accepts an external git provider's push notification. The wire
+// shape — request bodies, response error envelopes, signature headers —
+// is dictated by GitHub / GitLab, so this endpoint stays on raw JSON
+// (no Principal, no proto): airlockvet:allow-writejson and allow-dbq
+// reasons below point at this contract.
 func (h *GitWebhookHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	agentID, err := parseUUID(chi.URLParam(r, "agentID"))
 	if err != nil {
+		// airlockvet:allow-writejson reason: external git provider expects JSON error body
 		writeJSONError(w, http.StatusBadRequest, "invalid agent ID")
 		return
 	}
 
 	q := dbq.New(h.db.Pool())
+	// airlockvet:allow-dbq reason: public webhook ingress — agent row is needed to fetch the webhook secret for signature verification before any authz could apply
 	agent, err := q.GetAgentByID(r.Context(), toPgUUID(agentID))
 	if err != nil {
+		// airlockvet:allow-writejson reason: external git provider expects JSON error body
 		writeJSONError(w, http.StatusNotFound, "agent not found")
 		return
 	}
 	if agent.GitRemoteUrl == "" || agent.GitWebhookSecret == "" {
+		// airlockvet:allow-writejson reason: external git provider expects JSON error body
 		writeJSONError(w, http.StatusNotFound, "agent has no git remote configured")
 		return
 	}
 
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 5<<20))
 	if err != nil {
+		// airlockvet:allow-writejson reason: external git provider expects JSON error body
 		writeJSONError(w, http.StatusBadRequest, "failed to read request body")
 		return
 	}
@@ -76,6 +86,7 @@ func (h *GitWebhookHandler) Handle(w http.ResponseWriter, r *http.Request) {
 		if err := verifyGitHubSignature(body, r.Header.Get("X-Hub-Signature-256"), agent.GitWebhookSecret); err != nil {
 			h.logger.Warn("github webhook signature verify failed",
 				zap.String("agent", agentID.String()), zap.Error(err))
+			// airlockvet:allow-writejson reason: external git provider expects JSON error body
 			writeJSONError(w, http.StatusUnauthorized, "invalid signature")
 			return
 		}
@@ -87,6 +98,7 @@ func (h *GitWebhookHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	case r.Header.Get("X-Gitlab-Token") != "" || r.Header.Get("X-Gitlab-Event") != "":
 		if subtle.ConstantTimeCompare([]byte(r.Header.Get("X-Gitlab-Token")), []byte(agent.GitWebhookSecret)) != 1 {
 			h.logger.Warn("gitlab webhook token mismatch", zap.String("agent", agentID.String()))
+			// airlockvet:allow-writejson reason: external git provider expects JSON error body
 			writeJSONError(w, http.StatusUnauthorized, "invalid token")
 			return
 		}
@@ -97,12 +109,14 @@ func (h *GitWebhookHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	default:
 		// Unknown provider — return 501 without trusting any signature
 		// header. Polling fallback handles such pushes once it's wired.
+		// airlockvet:allow-writejson reason: external git provider expects JSON error body
 		writeJSONError(w, http.StatusNotImplemented, "unsupported git provider; configure polling instead")
 		return
 	}
 
 	var payload gitPushPayload
 	if err := json.Unmarshal(body, &payload); err != nil {
+		// airlockvet:allow-writejson reason: external git provider expects JSON error body
 		writeJSONError(w, http.StatusBadRequest, "invalid push payload")
 		return
 	}

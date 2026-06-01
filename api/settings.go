@@ -4,36 +4,32 @@ import (
 	"net/http"
 
 	"github.com/airlockrun/airlock/convert"
-	"github.com/airlockrun/airlock/db"
-	"github.com/airlockrun/airlock/db/dbq"
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
-	"github.com/airlockrun/airlock/secrets"
-	"github.com/jackc/pgx/v5/pgtype"
-	"go.uber.org/zap"
+	settingssvc "github.com/airlockrun/airlock/service/settings"
 )
 
 type settingsHandler struct {
-	db        *db.DB
-	encryptor secrets.Store
-	logger    *zap.Logger
+	svc *settingssvc.Service
 }
 
-// Get returns the current system settings (admin only).
+func newSettingsHandler(svc *settingssvc.Service) *settingsHandler {
+	if svc == nil {
+		panic("settingsHandler: svc is required")
+	}
+	return &settingsHandler{svc: svc}
+}
+
 func (h *settingsHandler) Get(w http.ResponseWriter, r *http.Request) {
-	q := dbq.New(h.db.Pool())
-	settings, err := q.GetSystemSettings(r.Context())
+	row, err := h.svc.Get(r.Context(), principalFromRequest(r))
 	if err != nil {
-		h.logger.Error("get system settings failed", zap.Error(err))
-		writeError(w, http.StatusInternalServerError, "internal error")
+		writeServiceError(w, err, "failed to load system settings")
 		return
 	}
-
 	writeProto(w, http.StatusOK, &airlockv1.GetSystemSettingsResponse{
-		Settings: settingsInfo(settings),
+		Settings: convert.SystemSettingsToProto(row),
 	})
 }
 
-// Update modifies system settings (admin only).
 func (h *settingsHandler) Update(w http.ResponseWriter, r *http.Request) {
 	var req airlockv1.UpdateSystemSettingsRequest
 	if err := decodeProto(r, &req); err != nil {
@@ -45,90 +41,26 @@ func (h *settingsHandler) Update(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "settings is required")
 		return
 	}
-
-	// Each default slot is a (provider FK, bare model name) pair. Both
-	// halves must be present together or both absent — empty + invalid
-	// FK ⇄ no default configured for this capability.
-	pairs := []struct {
-		name      string
-		modelName string
-		fkRaw     string
-	}{
-		{"default_build", in.DefaultBuildModel, in.DefaultBuildProviderId},
-		{"default_exec", in.DefaultExecModel, in.DefaultExecProviderId},
-		{"default_stt", in.DefaultSttModel, in.DefaultSttProviderId},
-		{"default_vision", in.DefaultVisionModel, in.DefaultVisionProviderId},
-		{"default_tts", in.DefaultTtsModel, in.DefaultTtsProviderId},
-		{"default_image_gen", in.DefaultImageGenModel, in.DefaultImageGenProviderId},
-		{"default_embedding", in.DefaultEmbeddingModel, in.DefaultEmbeddingProviderId},
-		{"default_search", in.DefaultSearchModel, in.DefaultSearchProviderId},
+	// Search's model field is empty by design — the runtime selects the
+	// search backend from the provider row's overlay capability, not from
+	// a stored model name. Every other slot must set or unset both halves
+	// together; the service enforces that via SlotUpdate.ModelRequired.
+	slots := []settingssvc.SlotUpdate{
+		{Name: "default_build", Model: in.DefaultBuildModel, ProviderIDRaw: in.DefaultBuildProviderId, ModelRequired: true},
+		{Name: "default_exec", Model: in.DefaultExecModel, ProviderIDRaw: in.DefaultExecProviderId, ModelRequired: true},
+		{Name: "default_stt", Model: in.DefaultSttModel, ProviderIDRaw: in.DefaultSttProviderId, ModelRequired: true},
+		{Name: "default_vision", Model: in.DefaultVisionModel, ProviderIDRaw: in.DefaultVisionProviderId, ModelRequired: true},
+		{Name: "default_tts", Model: in.DefaultTtsModel, ProviderIDRaw: in.DefaultTtsProviderId, ModelRequired: true},
+		{Name: "default_image_gen", Model: in.DefaultImageGenModel, ProviderIDRaw: in.DefaultImageGenProviderId, ModelRequired: true},
+		{Name: "default_embedding", Model: in.DefaultEmbeddingModel, ProviderIDRaw: in.DefaultEmbeddingProviderId, ModelRequired: true},
+		{Name: "default_search", Model: in.DefaultSearchModel, ProviderIDRaw: in.DefaultSearchProviderId, ModelRequired: false},
 	}
-	parsedFKs := make(map[string]pgtype.UUID, len(pairs))
-	for _, p := range pairs {
-		fk, err := parseOptionalProviderID(p.fkRaw)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, "invalid "+p.name+"_provider_id: "+err.Error())
-			return
-		}
-		// Search is provider-scoped, not model-scoped: the runtime picks
-		// the search backend by overlay capability on the provider row,
-		// not by a stored model name. So default_search_model is always
-		// empty by design — only the FK matters. Other slots must move
-		// both halves together (set or unset).
-		if p.name != "default_search" && (p.modelName != "") != fk.Valid {
-			writeError(w, http.StatusBadRequest, p.name+"_model and "+p.name+"_provider_id must be set or unset together")
-			return
-		}
-		parsedFKs[p.name] = fk
-	}
-
-	q := dbq.New(h.db.Pool())
-	settings, err := q.UpdateSystemSettings(r.Context(), dbq.UpdateSystemSettingsParams{
-		DefaultBuildProviderID:     parsedFKs["default_build"],
-		DefaultBuildModel:          in.DefaultBuildModel,
-		DefaultExecProviderID:      parsedFKs["default_exec"],
-		DefaultExecModel:           in.DefaultExecModel,
-		DefaultSttProviderID:       parsedFKs["default_stt"],
-		DefaultSttModel:            in.DefaultSttModel,
-		DefaultVisionProviderID:    parsedFKs["default_vision"],
-		DefaultVisionModel:         in.DefaultVisionModel,
-		DefaultTtsProviderID:       parsedFKs["default_tts"],
-		DefaultTtsModel:            in.DefaultTtsModel,
-		DefaultImageGenProviderID:  parsedFKs["default_image_gen"],
-		DefaultImageGenModel:       in.DefaultImageGenModel,
-		DefaultEmbeddingProviderID: parsedFKs["default_embedding"],
-		DefaultEmbeddingModel:      in.DefaultEmbeddingModel,
-		DefaultSearchProviderID:    parsedFKs["default_search"],
-		DefaultSearchModel:         in.DefaultSearchModel,
-	})
+	row, err := h.svc.Update(r.Context(), principalFromRequest(r), settingssvc.UpdateRequest{Slots: slots})
 	if err != nil {
-		h.logger.Error("update system settings failed", zap.Error(err))
-		writeError(w, http.StatusInternalServerError, "internal error")
+		writeServiceError(w, err, "failed to update system settings")
 		return
 	}
-
 	writeProto(w, http.StatusOK, &airlockv1.UpdateSystemSettingsResponse{
-		Settings: settingsInfo(settings),
+		Settings: convert.SystemSettingsToProto(row),
 	})
-}
-
-func settingsInfo(s dbq.SystemSetting) *airlockv1.SystemSettingsInfo {
-	return &airlockv1.SystemSettingsInfo{
-		DefaultBuildModel:          s.DefaultBuildModel,
-		DefaultExecModel:           s.DefaultExecModel,
-		DefaultSttModel:            s.DefaultSttModel,
-		DefaultVisionModel:         s.DefaultVisionModel,
-		DefaultTtsModel:            s.DefaultTtsModel,
-		DefaultImageGenModel:       s.DefaultImageGenModel,
-		DefaultEmbeddingModel:      s.DefaultEmbeddingModel,
-		DefaultSearchModel:         s.DefaultSearchModel,
-		DefaultBuildProviderId:     convert.PgUUIDToString(s.DefaultBuildProviderID),
-		DefaultExecProviderId:      convert.PgUUIDToString(s.DefaultExecProviderID),
-		DefaultSttProviderId:       convert.PgUUIDToString(s.DefaultSttProviderID),
-		DefaultVisionProviderId:    convert.PgUUIDToString(s.DefaultVisionProviderID),
-		DefaultTtsProviderId:       convert.PgUUIDToString(s.DefaultTtsProviderID),
-		DefaultImageGenProviderId:  convert.PgUUIDToString(s.DefaultImageGenProviderID),
-		DefaultEmbeddingProviderId: convert.PgUUIDToString(s.DefaultEmbeddingProviderID),
-		DefaultSearchProviderId:    convert.PgUUIDToString(s.DefaultSearchProviderID),
-	}
 }

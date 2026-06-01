@@ -4,7 +4,6 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -14,6 +13,7 @@ import (
 	"time"
 
 	"github.com/airlockrun/airlock/auth"
+	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 	"go.uber.org/zap"
 )
 
@@ -44,23 +44,14 @@ type relayClaims struct {
 
 // --- Relay code generation (POST /auth/relay-code) ---
 
-type relayCodeRequest struct {
-	ReturnURL string `json:"returnUrl"`
-}
-
-type relayCodeResponse struct {
-	Code        string `json:"code"`
-	CallbackURL string `json:"callbackUrl"`
-}
-
 func (h *relayHandler) GenerateCode(w http.ResponseWriter, r *http.Request) {
-	var req relayCodeRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	req := &airlockv1.GenerateRelayCodeRequest{}
+	if err := decodeProto(r, req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
-	parsed, err := url.Parse(req.ReturnURL)
+	parsed, err := url.Parse(req.ReturnUrl)
 	if err != nil || parsed.Host == "" {
 		writeError(w, http.StatusBadRequest, "invalid returnUrl")
 		return
@@ -91,9 +82,9 @@ func (h *relayHandler) GenerateCode(w http.ResponseWriter, r *http.Request) {
 
 	callbackURL := targetOrigin + "/__air/callback?code=" + url.QueryEscape(code) + "&return=" + url.QueryEscape(parsed.RequestURI())
 
-	writeJSON(w, http.StatusOK, relayCodeResponse{
+	writeProto(w, http.StatusOK, &airlockv1.GenerateRelayCodeResponse{
 		Code:        code,
-		CallbackURL: callbackURL,
+		CallbackUrl: callbackURL,
 	})
 }
 

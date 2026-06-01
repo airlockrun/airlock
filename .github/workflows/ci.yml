@@ -76,5 +76,11 @@ jobs:
         run: go install github.com/a-h/templ/cmd/templ@v0.3.865
       - name: go vet
         run: go vet ./...
+      # airlockvet runs the airlock-specific static checks (nodbq +
+      # writeproto in api/). multichecker exits non-zero whenever any
+      # analyzer reports a diagnostic, so a single un-annotated dbq or
+      # writeJSON site is enough to fail the build.
+      - name: airlockvet
+        run: go run ./cmd/airlockvet ./api/...
       - name: go test
         run: go test ./...

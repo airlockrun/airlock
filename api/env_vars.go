@@ -32,11 +32,6 @@ func (h *credentialHandler) ListEnvVars(w http.ResponseWriter, r *http.Request) 
 	writeProto(w, http.StatusOK, &airlockv1.ListEnvVarsResponse{EnvVars: out})
 }
 
-// setEnvVarValueRequest is the body for POST /api/v1/agents/{agentID}/env-vars/{slug}.
-type setEnvVarValueRequest struct {
-	Value string `json:"value"`
-}
-
 // SetEnvVarValue handles POST /api/v1/agents/{agentID}/env-vars/{slug} (operator).
 func (h *credentialHandler) SetEnvVarValue(w http.ResponseWriter, r *http.Request) {
 	agentID, slug, err := h.resolveAgentSlug(r)
@@ -44,8 +39,8 @@ func (h *credentialHandler) SetEnvVarValue(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	var req setEnvVarValueRequest
-	if err := readJSON(r, &req); err != nil {
+	req := &airlockv1.SetEnvVarValueRequest{}
+	if err := decodeProto(r, req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}

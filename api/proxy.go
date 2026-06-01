@@ -6,10 +6,13 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/airlockrun/agentsdk"
 	"github.com/airlockrun/airlock/agentapi"
 	"github.com/airlockrun/airlock/auth"
+	"github.com/airlockrun/airlock/authz"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
+	"github.com/airlockrun/airlock/service"
 	"github.com/airlockrun/airlock/storage"
 	"github.com/airlockrun/airlock/trigger"
 	"github.com/google/uuid"
@@ -64,8 +67,7 @@ func SubdomainProxy(agentDomain string, database *db.DB, s3 *storage.S3Client, d
 
 		q := dbq.New(database.Pool())
 
-		// Look up agent by slug.
-		agent, err := q.GetAgentBySlug(r.Context(), slug)
+		agent, err := service.ResolveAgent(r.Context(), q, slug)
 		if err != nil {
 			log.Warn("agent not found for slug", zap.Error(err))
 			writeError(w, http.StatusNotFound, "agent not found")
@@ -85,6 +87,7 @@ func SubdomainProxy(agentDomain string, database *db.DB, s3 *storage.S3Client, d
 		}
 
 		// Look up the registered route — match exact paths first, then parameterized patterns.
+		// airlockvet:allow-dbq reason: pure routing-table plumbing; authorization happens below per route.Access
 		routes, err := q.ListRoutesByAgentAndMethod(r.Context(), dbq.ListRoutesByAgentAndMethodParams{
 			AgentID: agent.ID,
 			Method:  r.Method,
@@ -109,7 +112,7 @@ func SubdomainProxy(agentDomain string, database *db.DB, s3 *storage.S3Client, d
 		case "public":
 			// No auth required.
 
-		case "user":
+		case "user", "admin":
 			claims, ok := validateSubdomainAuth(r, jwtSecret)
 			if !ok {
 				rejectOrRedirect(w, r, publicURL)
@@ -120,40 +123,13 @@ func SubdomainProxy(agentDomain string, database *db.DB, s3 *storage.S3Client, d
 				rejectOrRedirect(w, r, publicURL)
 				return
 			}
-			hasAccess, err := q.HasAgentAccess(r.Context(), dbq.HasAgentAccessParams{
-				AgentID: agent.ID,
-				UserID:  toPgUUID(uid),
-			})
-			if err != nil || !hasAccess {
-				log.Warn("user lacks agent access", zap.String("user_id", uid.String()), zap.Error(err))
-				writeError(w, http.StatusForbidden, "forbidden")
-				return
+			required := agentsdk.AccessUser
+			if route.Access == "admin" {
+				required = agentsdk.AccessAdmin
 			}
-			userID = uid
-			userEmail = claims.Email
-
-		case "admin":
-			claims, ok := validateSubdomainAuth(r, jwtSecret)
-			if !ok {
-				rejectOrRedirect(w, r, publicURL)
-				return
-			}
-			uid, err := uuid.Parse(claims.Subject)
-			if err != nil {
-				rejectOrRedirect(w, r, publicURL)
-				return
-			}
-			member, err := q.GetAgentMember(r.Context(), dbq.GetAgentMemberParams{
-				AgentID: agent.ID,
-				UserID:  toPgUUID(uid),
-			})
-			if err != nil {
-				log.Warn("user is not an agent member", zap.String("user_id", uid.String()), zap.Error(err))
-				writeError(w, http.StatusForbidden, "forbidden")
-				return
-			}
-			if !auth.Role(member.Role).AtLeast(auth.RoleAdmin) {
-				log.Warn("user is not agent admin", zap.String("user_id", uid.String()), zap.String("role", member.Role))
+			p := authz.UserPrincipal(uid, auth.Role(claims.TenantRole))
+			if !authz.AccessAtLeast(p.EffectiveAgentAccess(r.Context(), q, uuid.UUID(agent.ID.Bytes)), required) {
+				log.Warn("user lacks required agent access", zap.String("user_id", uid.String()), zap.String("required", string(required)))
 				writeError(w, http.StatusForbidden, "forbidden")
 				return
 			}

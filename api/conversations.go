@@ -21,6 +21,7 @@ import (
 	"github.com/airlockrun/airlock/realtime"
 	"github.com/airlockrun/airlock/service"
 	convsvc "github.com/airlockrun/airlock/service/conversations"
+	runssvc "github.com/airlockrun/airlock/service/runs"
 	"github.com/airlockrun/airlock/storage"
 	"github.com/airlockrun/airlock/trigger"
 	"github.com/airlockrun/sol/provider"
@@ -31,6 +32,7 @@ import (
 
 type conversationsHandler struct {
 	svc         *convsvc.Service
+	runsSvc     *runssvc.Service
 	db          *db.DB
 	dispatcher  *trigger.Dispatcher
 	promptProxy *trigger.PromptProxy
@@ -232,6 +234,7 @@ func (h *conversationsHandler) awaitSuspendedRun(ctx context.Context, q *dbq.Que
 	convIDStr := convert.PgUUIDToString(conv.ID)
 	deadline := time.Now().Add(resumeWaitTimeout)
 	for {
+		// airlockvet:allow-dbq reason: polling lookup inside Prompt's resume flow; caller already verified conversation ownership via h.ownedConversation
 		run, err := q.GetRunByID(ctx, toPgUUID(runID))
 		if err != nil {
 			return dbq.Run{}, errors.New("run not found")
@@ -299,6 +302,7 @@ func (h *conversationsHandler) Prompt(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "invalid conversation ID")
 			return
 		}
+		// airlockvet:allow-dbq reason: ownership enforced inline below (agent+user+source=web) before returning the row
 		existing, gerr := q.GetConversationByID(ctx, toPgUUID(cid))
 		if gerr != nil ||
 			uuid.UUID(existing.AgentID.Bytes) != agentID ||
@@ -309,6 +313,7 @@ func (h *conversationsHandler) Prompt(w http.ResponseWriter, r *http.Request) {
 		}
 		conv = existing
 	} else {
+		// airlockvet:allow-dbq reason: new-thread create on a Prompt the caller already has access to (resolved upstream)
 		created, cerr := q.CreateWebConversation(ctx, dbq.CreateWebConversationParams{
 			AgentID: toPgUUID(agentID),
 			UserID:  toPgUUID(userID),
@@ -417,6 +422,7 @@ func (h *conversationsHandler) Prompt(w http.ResponseWriter, r *http.Request) {
 	// access-filtered extra system prompts.
 	var modalities []string
 	var extraSystemPrompt string
+	// airlockvet:allow-dbq reason: agent row read for modality + prompt rendering; access is gated by ownedConversation upstream
 	if ag, err := q.GetAgentByID(ctx, toPgUUID(agentID)); err == nil {
 		if ag.ExecModel != "" {
 			provID, modID := provider.ParseModel(ag.ExecModel)
@@ -469,6 +475,7 @@ func (h *conversationsHandler) Prompt(w http.ResponseWriter, r *http.Request) {
 		if req.Approved != nil && !*req.Approved {
 			input.Source = "control"
 		}
+		// airlockvet:allow-dbq reason: marks the awaited suspended run resolved; caller already proven owner of the conversation
 		_ = q.ResolveSuspendedRun(ctx, run.ID)
 	} else if req.Approved != nil {
 		h.convLocks.Unlock(convIDStr)
@@ -505,26 +512,12 @@ func (h *conversationsHandler) Prompt(w http.ResponseWriter, r *http.Request) {
 		bgCtx := context.Background()
 		agentapi.PublishRunEvents(bgCtx, rc, h.pubsub, h.db.Pool(), agentID, runID, convIDStr, userID.String(), nil, h.logger)
 
-		// Fallback status when the agent never wrote its own terminal
-		// status (e.g. stuck in an infinite run_js loop, container died).
-		// UpdateRunStatus has a CAS guard (WHERE status='running'), so the
-		// agent's authoritative success/error/tool_errors write — when it
-		// happens — wins this race. "timeout" is the meaningful value when
-		// nobody else wrote: the stream ended without a terminal event.
-		bgQ := dbq.New(h.db.Pool())
-		if err := bgQ.UpdateRunStatus(bgCtx, dbq.UpdateRunStatusParams{
-			ID:     toPgUUID(runID),
-			Status: "timeout",
-		}); err != nil {
-			h.logger.Error("update run status", zap.Error(err))
-		}
-		// Aggregate LLM telemetry from the llm_usage ledger. Idempotent
-		// with the agent-side write in agent_run.go RunComplete — whichever
-		// runs last reflects final state. Important for the timeout path
-		// where the agent never called RunComplete: ledger rows the proxy
-		// wrote before the agent died still roll up here.
-		if err := bgQ.UpdateRunLLMStats(bgCtx, toPgUUID(runID)); err != nil {
-			h.logger.Error("aggregate run llm stats", zap.Error(err))
+		// Fallback when the agent never wrote its own terminal status
+		// (stuck in an infinite run_js loop, container died, etc.). The
+		// CAS guard inside MarkTimedOut means the agent's authoritative
+		// success/error write — if it lands — wins this race.
+		if err := h.runsSvc.MarkTimedOut(bgCtx, runID); err != nil {
+			h.logger.Error("finalize run timeout", zap.Error(err))
 		}
 	}()
 }
@@ -576,6 +569,7 @@ func (h *conversationsHandler) NotifyUpgradeComplete(ctx context.Context, agentI
 	var conv dbq.AgentConversation
 	convUUID, err := uuid.Parse(conversationID)
 	if err == nil {
+		// airlockvet:allow-dbq reason: NotifyUpgradeComplete is builder→airlock-internal — no user request to authorize; the conversation row is read solely to pick the delivery channel
 		if loaded, lerr := q.GetConversationByID(ctx, toPgUUID(convUUID)); lerr == nil {
 			conv = loaded
 			access = authz.UserPrincipal(pgUUID(conv.UserID), "").EffectiveAgentAccess(ctx, q, agentID)
@@ -649,19 +643,9 @@ func (h *conversationsHandler) NotifyUpgradeComplete(ctx context.Context, agentI
 			agentapi.PublishRunEvents(bgCtx, rc, h.pubsub, h.db.Pool(), agentID, runID, conversationID, convUserID, nil, h.logger)
 		}
 
-		// Same CAS-protected fallback as the user-prompt path: if the
-		// agent never wrote a terminal status (timed out, died), mark
-		// the run "timeout"; the agent's own write — if it lands —
-		// wins via the WHERE status='running' guard.
-		bgQ := dbq.New(h.db.Pool())
-		if err := bgQ.UpdateRunStatus(bgCtx, dbq.UpdateRunStatusParams{
-			ID:     toPgUUID(runID),
-			Status: "timeout",
-		}); err != nil {
-			h.logger.Error("update upgrade run status", zap.Error(err))
-		}
-		if err := bgQ.UpdateRunLLMStats(bgCtx, toPgUUID(runID)); err != nil {
-			h.logger.Error("aggregate upgrade run llm stats", zap.Error(err))
+		// Same CAS-protected fallback as the user-prompt path.
+		if err := h.runsSvc.MarkTimedOut(bgCtx, runID); err != nil {
+			h.logger.Error("finalize upgrade run timeout", zap.Error(err))
 		}
 	}()
 	return nil
@@ -709,6 +693,7 @@ func (h *conversationsHandler) UploadFile(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	// airlockvet:allow-writejson reason: multipart upload receipt is the agentsdk.FileInfo shape; the agent client and chat UI both consume this exact JSON, not a proto envelope
 	writeJSON(w, http.StatusOK, agentsdk.FileInfo{
 		Path:         agentsdk.FilePath(path),
 		Filename:     header.Filename,

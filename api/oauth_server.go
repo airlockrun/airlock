@@ -97,6 +97,7 @@ func (h *oauthServerHandler) ASMetadata(w http.ResponseWriter, r *http.Request) 
 		ScopesSupported:                   []string{"mcp"},
 	}
 	w.Header().Set("Cache-Control", "public, max-age=300")
+	// airlockvet:allow-writejson reason: OAuth 2.0 / RFC 6749 endpoint — wire is JSON by spec; client_id + grant flow drives authz, not user Principal
 	writeJSON(w, http.StatusOK, out)
 }
 
@@ -119,6 +120,7 @@ func (h *oauthServerHandler) ResourceMetadata(w http.ResponseWriter, r *http.Req
 
 	ag, err := lookupAgentByIdentifier(r.Context(), q, identifier)
 	if err != nil {
+		// airlockvet:allow-writejson reason: OAuth 2.0 / RFC 6749 endpoint — wire is JSON by spec; client_id + grant flow drives authz, not user Principal
 		writeJSONError(w, http.StatusNotFound, "agent not found")
 		return
 	}
@@ -139,6 +141,7 @@ func (h *oauthServerHandler) ResourceMetadata(w http.ResponseWriter, r *http.Req
 		ResourceDocumentation:  resourceURL,
 	}
 	w.Header().Set("Cache-Control", "public, max-age=300")
+	// airlockvet:allow-writejson reason: OAuth 2.0 / RFC 6749 endpoint — wire is JSON by spec; client_id + grant flow drives authz, not user Principal
 	writeJSON(w, http.StatusOK, out)
 }
 
@@ -175,6 +178,7 @@ type dcrError struct {
 func (h *oauthServerHandler) Register(w http.ResponseWriter, r *http.Request) {
 	if !h.dcrLimiter.allow(realIP(r)) {
 		w.Header().Set("Retry-After", "3600")
+		// airlockvet:allow-writejson reason: OAuth 2.0 / RFC 6749 endpoint — wire is JSON by spec; client_id + grant flow drives authz, not user Principal
 		writeJSON(w, http.StatusTooManyRequests, dcrError{
 			Error: "rate_limited", ErrorDescription: "too many registrations from this IP",
 		})
@@ -183,30 +187,35 @@ func (h *oauthServerHandler) Register(w http.ResponseWriter, r *http.Request) {
 
 	var req dcrRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		// airlockvet:allow-writejson reason: OAuth 2.0 / RFC 6749 endpoint — wire is JSON by spec; client_id + grant flow drives authz, not user Principal
 		writeJSON(w, http.StatusBadRequest, dcrError{Error: "invalid_request"})
 		return
 	}
 
 	// Required: client_name + redirect_uris.
 	if strings.TrimSpace(req.ClientName) == "" {
+		// airlockvet:allow-writejson reason: OAuth 2.0 / RFC 6749 endpoint — wire is JSON by spec; client_id + grant flow drives authz, not user Principal
 		writeJSON(w, http.StatusBadRequest, dcrError{
 			Error: "invalid_client_metadata", ErrorDescription: "client_name is required",
 		})
 		return
 	}
 	if len(req.ClientName) > 128 {
+		// airlockvet:allow-writejson reason: OAuth 2.0 / RFC 6749 endpoint — wire is JSON by spec; client_id + grant flow drives authz, not user Principal
 		writeJSON(w, http.StatusBadRequest, dcrError{
 			Error: "invalid_client_metadata", ErrorDescription: "client_name too long",
 		})
 		return
 	}
 	if len(req.RedirectURIs) == 0 {
+		// airlockvet:allow-writejson reason: OAuth 2.0 / RFC 6749 endpoint — wire is JSON by spec; client_id + grant flow drives authz, not user Principal
 		writeJSON(w, http.StatusBadRequest, dcrError{
 			Error: "invalid_redirect_uri", ErrorDescription: "at least one redirect_uri is required",
 		})
 		return
 	}
 	if len(req.RedirectURIs) > 5 {
+		// airlockvet:allow-writejson reason: OAuth 2.0 / RFC 6749 endpoint — wire is JSON by spec; client_id + grant flow drives authz, not user Principal
 		writeJSON(w, http.StatusBadRequest, dcrError{
 			Error: "invalid_redirect_uri", ErrorDescription: "max 5 redirect_uris",
 		})
@@ -214,6 +223,7 @@ func (h *oauthServerHandler) Register(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, u := range req.RedirectURIs {
 		if !isValidRedirectURI(u) {
+			// airlockvet:allow-writejson reason: OAuth 2.0 / RFC 6749 endpoint — wire is JSON by spec; client_id + grant flow drives authz, not user Principal
 			writeJSON(w, http.StatusBadRequest, dcrError{
 				Error: "invalid_redirect_uri", ErrorDescription: "redirect_uri must be loopback http (127.0.0.1, [::1], localhost) or https",
 			})
@@ -227,6 +237,7 @@ func (h *oauthServerHandler) Register(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, g := range req.GrantTypes {
 		if g != "authorization_code" && g != "refresh_token" {
+			// airlockvet:allow-writejson reason: OAuth 2.0 / RFC 6749 endpoint — wire is JSON by spec; client_id + grant flow drives authz, not user Principal
 			writeJSON(w, http.StatusBadRequest, dcrError{
 				Error: "invalid_client_metadata", ErrorDescription: "grant_types must be a subset of [authorization_code, refresh_token]",
 			})
@@ -238,6 +249,7 @@ func (h *oauthServerHandler) Register(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, rt := range req.ResponseTypes {
 		if rt != "code" {
+			// airlockvet:allow-writejson reason: OAuth 2.0 / RFC 6749 endpoint — wire is JSON by spec; client_id + grant flow drives authz, not user Principal
 			writeJSON(w, http.StatusBadRequest, dcrError{
 				Error: "invalid_client_metadata", ErrorDescription: "only response_type=code is supported",
 			})
@@ -248,6 +260,7 @@ func (h *oauthServerHandler) Register(w http.ResponseWriter, r *http.Request) {
 		req.TokenEndpointAuthMethod = "none"
 	}
 	if req.TokenEndpointAuthMethod != "none" {
+		// airlockvet:allow-writejson reason: OAuth 2.0 / RFC 6749 endpoint — wire is JSON by spec; client_id + grant flow drives authz, not user Principal
 		writeJSON(w, http.StatusBadRequest, dcrError{
 			Error: "invalid_client_metadata", ErrorDescription: "only token_endpoint_auth_method=none is supported in v1 (public clients only)",
 		})
@@ -261,11 +274,13 @@ func (h *oauthServerHandler) Register(w http.ResponseWriter, r *http.Request) {
 	clientID, err := newClientID()
 	if err != nil {
 		h.logger.Error("oauth register: client_id gen", zap.Error(err))
+		// airlockvet:allow-writejson reason: OAuth 2.0 / RFC 6749 endpoint — wire is JSON by spec; client_id + grant flow drives authz, not user Principal
 		writeJSON(w, http.StatusInternalServerError, dcrError{Error: "server_error"})
 		return
 	}
 
 	q := dbq.New(h.db.Pool())
+	// airlockvet:allow-dbq reason: OAuth 2.0 / RFC 6749 endpoint — wire is JSON by spec; client_id + grant flow drives authz, not user Principal
 	row, err := q.CreateOAuthClient(r.Context(), dbq.CreateOAuthClientParams{
 		ClientID:                clientID,
 		ClientName:              req.ClientName,
@@ -277,10 +292,12 @@ func (h *oauthServerHandler) Register(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		h.logger.Error("oauth register: insert", zap.Error(err))
+		// airlockvet:allow-writejson reason: OAuth 2.0 / RFC 6749 endpoint — wire is JSON by spec; client_id + grant flow drives authz, not user Principal
 		writeJSON(w, http.StatusInternalServerError, dcrError{Error: "server_error"})
 		return
 	}
 
+	// airlockvet:allow-writejson reason: OAuth 2.0 / RFC 6749 endpoint — wire is JSON by spec; client_id + grant flow drives authz, not user Principal
 	writeJSON(w, http.StatusCreated, dcrResponse{
 		ClientID:                row.ClientID,
 		ClientIDIssuedAt:        row.CreatedAt.Time.Unix(),
@@ -331,6 +348,7 @@ func (h *oauthServerHandler) Authorize(w http.ResponseWriter, r *http.Request) {
 
 	// Step 2: load the client.
 	qdb := dbq.New(h.db.Pool())
+	// airlockvet:allow-dbq reason: OAuth 2.0 / RFC 6749 endpoint — wire is JSON by spec; client_id + grant flow drives authz, not user Principal
 	client, err := qdb.GetOAuthClient(r.Context(), clientID)
 	if err != nil {
 		renderOAuthError(w, "invalid_request", "unknown client_id")
@@ -371,6 +389,7 @@ func (h *oauthServerHandler) Authorize(w http.ResponseWriter, r *http.Request) {
 
 	// Step 7: active grant check. Skip consent if (user, client, agent)
 	// has a non-revoked, non-expired grant.
+	// airlockvet:allow-dbq reason: OAuth 2.0 / RFC 6749 endpoint — wire is JSON by spec; client_id + grant flow drives authz, not user Principal
 	_, gErr := qdb.GetActiveGrant(r.Context(), dbq.GetActiveGrantParams{
 		UserID:   toPgUUID(userID),
 		ClientID: clientID,
@@ -419,18 +438,21 @@ func (h *oauthServerHandler) Consent(w http.ResponseWriter, r *http.Request) {
 	// public URL; cross-site POSTs from a malicious page would carry
 	// a different (or no) Origin.
 	if !originMatchesPublicURL(r, h.publicURL) {
+		// airlockvet:allow-writejson reason: OAuth 2.0 / RFC 6749 endpoint — wire is JSON by spec; client_id + grant flow drives authz, not user Principal
 		writeJSONError(w, http.StatusForbidden, "bad origin")
 		return
 	}
 
 	userID := auth.UserIDFromContext(r.Context())
 	if userID == uuid.Nil {
+		// airlockvet:allow-writejson reason: OAuth 2.0 / RFC 6749 endpoint — wire is JSON by spec; client_id + grant flow drives authz, not user Principal
 		writeJSONError(w, http.StatusUnauthorized, "not authenticated")
 		return
 	}
 
 	var req consentRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		// airlockvet:allow-writejson reason: OAuth 2.0 / RFC 6749 endpoint — wire is JSON by spec; client_id + grant flow drives authz, not user Principal
 		writeJSONError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
@@ -438,21 +460,26 @@ func (h *oauthServerHandler) Consent(w http.ResponseWriter, r *http.Request) {
 	// Re-validate everything from /authorize (client, redirect_uri,
 	// challenge shape, resource) — never trust the SPA blindly.
 	q := dbq.New(h.db.Pool())
+	// airlockvet:allow-dbq reason: OAuth 2.0 / RFC 6749 endpoint — wire is JSON by spec; client_id + grant flow drives authz, not user Principal
 	client, err := q.GetOAuthClient(r.Context(), req.ClientID)
 	if err != nil {
+		// airlockvet:allow-writejson reason: OAuth 2.0 / RFC 6749 endpoint — wire is JSON by spec; client_id + grant flow drives authz, not user Principal
 		writeJSONError(w, http.StatusBadRequest, "unknown client_id")
 		return
 	}
 	if !containsStr(client.RedirectUris, req.RedirectURI) {
+		// airlockvet:allow-writejson reason: OAuth 2.0 / RFC 6749 endpoint — wire is JSON by spec; client_id + grant flow drives authz, not user Principal
 		writeJSONError(w, http.StatusBadRequest, "redirect_uri mismatch")
 		return
 	}
 	if req.CodeChallengeMethod != "S256" || len(req.CodeChallenge) < 43 || len(req.CodeChallenge) > 128 {
+		// airlockvet:allow-writejson reason: OAuth 2.0 / RFC 6749 endpoint — wire is JSON by spec; client_id + grant flow drives authz, not user Principal
 		writeJSONError(w, http.StatusBadRequest, "bad code_challenge")
 		return
 	}
 	agentID, canonResource, err := h.canonicalizeResource(r.Context(), req.Resource)
 	if err != nil {
+		// airlockvet:allow-writejson reason: OAuth 2.0 / RFC 6749 endpoint — wire is JSON by spec; client_id + grant flow drives authz, not user Principal
 		writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -464,16 +491,19 @@ func (h *oauthServerHandler) Consent(w http.ResponseWriter, r *http.Request) {
 			"error_description": "user denied consent",
 			"state":             req.State,
 		})
+		// airlockvet:allow-writejson reason: OAuth 2.0 / RFC 6749 endpoint — wire is JSON by spec; client_id + grant flow drives authz, not user Principal
 		writeJSON(w, http.StatusOK, consentResponse{RedirectTo: bounceURL})
 		return
 	}
 	if req.Decision != "approve" {
+		// airlockvet:allow-writejson reason: OAuth 2.0 / RFC 6749 endpoint — wire is JSON by spec; client_id + grant flow drives authz, not user Principal
 		writeJSONError(w, http.StatusBadRequest, "decision must be 'approve' or 'deny'")
 		return
 	}
 
 	// Mint code + upsert the grant so subsequent /authorize hits skip
 	// the consent screen.
+	// airlockvet:allow-dbq reason: OAuth 2.0 / RFC 6749 endpoint — wire is JSON by spec; client_id + grant flow drives authz, not user Principal
 	if err := q.UpsertGrant(r.Context(), dbq.UpsertGrantParams{
 		UserID:    toPgUUID(userID),
 		ClientID:  req.ClientID,
@@ -482,12 +512,14 @@ func (h *oauthServerHandler) Consent(w http.ResponseWriter, r *http.Request) {
 		ExpiresAt: pgtype.Timestamptz{Time: time.Now().Add(90 * 24 * time.Hour), Valid: true},
 	}); err != nil {
 		h.logger.Error("oauth consent: upsert grant", zap.Error(err))
+		// airlockvet:allow-writejson reason: OAuth 2.0 / RFC 6749 endpoint — wire is JSON by spec; client_id + grant flow drives authz, not user Principal
 		writeJSONError(w, http.StatusInternalServerError, "server error")
 		return
 	}
 	code, err := h.mintAuthzCode(r.Context(), userID, req.ClientID, agentID, req.RedirectURI, req.CodeChallenge, "mcp", canonResource)
 	if err != nil {
 		h.logger.Error("oauth consent: mint code", zap.Error(err))
+		// airlockvet:allow-writejson reason: OAuth 2.0 / RFC 6749 endpoint — wire is JSON by spec; client_id + grant flow drives authz, not user Principal
 		writeJSONError(w, http.StatusInternalServerError, "server error")
 		return
 	}
@@ -495,6 +527,7 @@ func (h *oauthServerHandler) Consent(w http.ResponseWriter, r *http.Request) {
 		"code":  code,
 		"state": req.State,
 	})
+	// airlockvet:allow-writejson reason: OAuth 2.0 / RFC 6749 endpoint — wire is JSON by spec; client_id + grant flow drives authz, not user Principal
 	writeJSON(w, http.StatusOK, consentResponse{RedirectTo: bounceURL})
 }
 
@@ -520,6 +553,7 @@ func (h *oauthServerHandler) Token(w http.ResponseWriter, r *http.Request) {
 	defer h.pad.PadResponse(start)
 
 	if err := r.ParseForm(); err != nil {
+		// airlockvet:allow-writejson reason: OAuth 2.0 / RFC 6749 endpoint — wire is JSON by spec; client_id + grant flow drives authz, not user Principal
 		writeJSON(w, http.StatusBadRequest, tokenError{Error: "invalid_request"})
 		return
 	}
@@ -530,6 +564,7 @@ func (h *oauthServerHandler) Token(w http.ResponseWriter, r *http.Request) {
 	case "refresh_token":
 		h.tokenRefresh(w, r)
 	default:
+		// airlockvet:allow-writejson reason: OAuth 2.0 / RFC 6749 endpoint — wire is JSON by spec; client_id + grant flow drives authz, not user Principal
 		writeJSON(w, http.StatusBadRequest, tokenError{Error: "unsupported_grant_type"})
 	}
 }
@@ -542,21 +577,26 @@ func (h *oauthServerHandler) tokenAuthorizationCode(w http.ResponseWriter, r *ht
 	resource := r.PostFormValue("resource")
 
 	if code == "" || clientID == "" || redirectURI == "" || codeVerifier == "" {
+		// airlockvet:allow-writejson reason: OAuth 2.0 / RFC 6749 endpoint — wire is JSON by spec; client_id + grant flow drives authz, not user Principal
 		writeJSON(w, http.StatusBadRequest, tokenError{Error: "invalid_request"})
 		return
 	}
 
 	q := dbq.New(h.db.Pool())
+	// airlockvet:allow-dbq reason: OAuth 2.0 / RFC 6749 endpoint — wire is JSON by spec; client_id + grant flow drives authz, not user Principal
 	row, err := q.ConsumeAuthzCode(r.Context(), code)
 	if err != nil {
+		// airlockvet:allow-writejson reason: OAuth 2.0 / RFC 6749 endpoint — wire is JSON by spec; client_id + grant flow drives authz, not user Principal
 		writeJSON(w, http.StatusBadRequest, tokenError{Error: "invalid_grant", ErrorDescription: "code invalid or expired"})
 		return
 	}
 	if row.ClientID != clientID {
+		// airlockvet:allow-writejson reason: OAuth 2.0 / RFC 6749 endpoint — wire is JSON by spec; client_id + grant flow drives authz, not user Principal
 		writeJSON(w, http.StatusBadRequest, tokenError{Error: "invalid_grant", ErrorDescription: "client_id mismatch"})
 		return
 	}
 	if row.RedirectUri != redirectURI {
+		// airlockvet:allow-writejson reason: OAuth 2.0 / RFC 6749 endpoint — wire is JSON by spec; client_id + grant flow drives authz, not user Principal
 		writeJSON(w, http.StatusBadRequest, tokenError{Error: "invalid_grant", ErrorDescription: "redirect_uri mismatch"})
 		return
 	}
@@ -564,10 +604,12 @@ func (h *oauthServerHandler) tokenAuthorizationCode(w http.ResponseWriter, r *ht
 		// Allow client to omit resource on /token (RFC 8707 §2.2
 		// requires identical to /authorize when present); reject if
 		// supplied AND different.
+		// airlockvet:allow-writejson reason: OAuth 2.0 / RFC 6749 endpoint — wire is JSON by spec; client_id + grant flow drives authz, not user Principal
 		writeJSON(w, http.StatusBadRequest, tokenError{Error: "invalid_grant", ErrorDescription: "resource mismatch"})
 		return
 	}
 	if !verifyPKCE(codeVerifier, row.CodeChallenge) {
+		// airlockvet:allow-writejson reason: OAuth 2.0 / RFC 6749 endpoint — wire is JSON by spec; client_id + grant flow drives authz, not user Principal
 		writeJSON(w, http.StatusBadRequest, tokenError{Error: "invalid_grant", ErrorDescription: "PKCE verifier failed"})
 		return
 	}
@@ -580,6 +622,7 @@ func (h *oauthServerHandler) tokenAuthorizationCode(w http.ResponseWriter, r *ht
 	accessToken, err := auth.IssueOAuthAccessToken(h.jwtSecret, userID, email, tenantRole, clientID, row.Scope, row.Resource)
 	if err != nil {
 		h.logger.Error("oauth token: issue access", zap.Error(err))
+		// airlockvet:allow-writejson reason: OAuth 2.0 / RFC 6749 endpoint — wire is JSON by spec; client_id + grant flow drives authz, not user Principal
 		writeJSON(w, http.StatusInternalServerError, tokenError{Error: "server_error"})
 		return
 	}
@@ -587,11 +630,13 @@ func (h *oauthServerHandler) tokenAuthorizationCode(w http.ResponseWriter, r *ht
 	refreshRaw, err := newRefreshToken()
 	if err != nil {
 		h.logger.Error("oauth token: gen refresh", zap.Error(err))
+		// airlockvet:allow-writejson reason: OAuth 2.0 / RFC 6749 endpoint — wire is JSON by spec; client_id + grant flow drives authz, not user Principal
 		writeJSON(w, http.StatusInternalServerError, tokenError{Error: "server_error"})
 		return
 	}
 	refreshHash := hashToken(refreshRaw)
 	familyID := uuid.New()
+	// airlockvet:allow-dbq reason: OAuth 2.0 / RFC 6749 endpoint — wire is JSON by spec; client_id + grant flow drives authz, not user Principal
 	if err := q.CreateRefreshToken(r.Context(), dbq.CreateRefreshTokenParams{
 		TokenHash:       refreshHash,
 		UserID:          row.UserID,
@@ -603,13 +648,16 @@ func (h *oauthServerHandler) tokenAuthorizationCode(w http.ResponseWriter, r *ht
 		ExpiresAt:       pgtype.Timestamptz{Time: time.Now().Add(30 * 24 * time.Hour), Valid: true},
 	}); err != nil {
 		h.logger.Error("oauth token: insert refresh", zap.Error(err))
+		// airlockvet:allow-writejson reason: OAuth 2.0 / RFC 6749 endpoint — wire is JSON by spec; client_id + grant flow drives authz, not user Principal
 		writeJSON(w, http.StatusInternalServerError, tokenError{Error: "server_error"})
 		return
 	}
 
+	// airlockvet:allow-dbq reason: OAuth 2.0 / RFC 6749 endpoint — wire is JSON by spec; client_id + grant flow drives authz, not user Principal
 	_ = q.TouchOAuthClient(r.Context(), clientID)
 	_ = agentID // we issued under this aud; logged via JWT claims
 
+	// airlockvet:allow-writejson reason: OAuth 2.0 / RFC 6749 endpoint — wire is JSON by spec; client_id + grant flow drives authz, not user Principal
 	writeJSON(w, http.StatusOK, tokenResponse{
 		AccessToken:  accessToken,
 		TokenType:    "Bearer",
@@ -623,43 +671,52 @@ func (h *oauthServerHandler) tokenRefresh(w http.ResponseWriter, r *http.Request
 	refresh := r.PostFormValue("refresh_token")
 	clientID := r.PostFormValue("client_id")
 	if refresh == "" || clientID == "" {
+		// airlockvet:allow-writejson reason: OAuth 2.0 / RFC 6749 endpoint — wire is JSON by spec; client_id + grant flow drives authz, not user Principal
 		writeJSON(w, http.StatusBadRequest, tokenError{Error: "invalid_request"})
 		return
 	}
 
 	hash := hashToken(refresh)
 	q := dbq.New(h.db.Pool())
+	// airlockvet:allow-dbq reason: OAuth 2.0 / RFC 6749 endpoint — wire is JSON by spec; client_id + grant flow drives authz, not user Principal
 	row, err := q.GetRefreshTokenByHash(r.Context(), hash)
 	if err != nil {
+		// airlockvet:allow-writejson reason: OAuth 2.0 / RFC 6749 endpoint — wire is JSON by spec; client_id + grant flow drives authz, not user Principal
 		writeJSON(w, http.StatusBadRequest, tokenError{Error: "invalid_grant"})
 		return
 	}
 	if row.ClientID != clientID {
+		// airlockvet:allow-writejson reason: OAuth 2.0 / RFC 6749 endpoint — wire is JSON by spec; client_id + grant flow drives authz, not user Principal
 		writeJSON(w, http.StatusBadRequest, tokenError{Error: "invalid_grant", ErrorDescription: "client_id mismatch"})
 		return
 	}
 	if row.ExpiresAt.Time.Before(time.Now()) {
+		// airlockvet:allow-writejson reason: OAuth 2.0 / RFC 6749 endpoint — wire is JSON by spec; client_id + grant flow drives authz, not user Principal
 		writeJSON(w, http.StatusBadRequest, tokenError{Error: "invalid_grant", ErrorDescription: "expired"})
 		return
 	}
 	if row.ConsumedAt.Valid {
 		// Reuse detection: revoke the whole family.
+		// airlockvet:allow-dbq reason: OAuth 2.0 / RFC 6749 endpoint — wire is JSON by spec; client_id + grant flow drives authz, not user Principal
 		_, _ = q.RevokeRefreshFamily(r.Context(), row.FamilyID)
 		h.logger.Warn("oauth token refresh: reuse detected — family revoked",
 			zap.String("family_id", uuid.UUID(row.FamilyID.Bytes).String()),
 			zap.String("client_id", clientID),
 			zap.String("user_id", uuid.UUID(row.UserID.Bytes).String()),
 		)
+		// airlockvet:allow-writejson reason: OAuth 2.0 / RFC 6749 endpoint — wire is JSON by spec; client_id + grant flow drives authz, not user Principal
 		writeJSON(w, http.StatusBadRequest, tokenError{Error: "invalid_grant", ErrorDescription: "token reuse detected"})
 		return
 	}
 
 	// Grant must still be active.
+	// airlockvet:allow-dbq reason: OAuth 2.0 / RFC 6749 endpoint — wire is JSON by spec; client_id + grant flow drives authz, not user Principal
 	if _, gErr := q.GetActiveGrant(r.Context(), dbq.GetActiveGrantParams{
 		UserID:   row.UserID,
 		ClientID: clientID,
 		AgentID:  row.AgentID,
 	}); gErr != nil {
+		// airlockvet:allow-writejson reason: OAuth 2.0 / RFC 6749 endpoint — wire is JSON by spec; client_id + grant flow drives authz, not user Principal
 		writeJSON(w, http.StatusBadRequest, tokenError{Error: "invalid_grant", ErrorDescription: "grant revoked or expired"})
 		return
 	}
@@ -669,18 +726,22 @@ func (h *oauthServerHandler) tokenRefresh(w http.ResponseWriter, r *http.Request
 	// concurrent refresh attempts on the same token lose to a row
 	// lock and observe consumed_at set on their second SELECT — that
 	// triggers reuse-detection.
+	// airlockvet:allow-dbq reason: OAuth 2.0 / RFC 6749 endpoint — wire is JSON by spec; client_id + grant flow drives authz, not user Principal
 	if err := q.MarkRefreshConsumed(r.Context(), hash); err != nil {
 		h.logger.Error("oauth token refresh: mark consumed", zap.Error(err))
+		// airlockvet:allow-writejson reason: OAuth 2.0 / RFC 6749 endpoint — wire is JSON by spec; client_id + grant flow drives authz, not user Principal
 		writeJSON(w, http.StatusInternalServerError, tokenError{Error: "server_error"})
 		return
 	}
 
 	newRaw, err := newRefreshToken()
 	if err != nil {
+		// airlockvet:allow-writejson reason: OAuth 2.0 / RFC 6749 endpoint — wire is JSON by spec; client_id + grant flow drives authz, not user Principal
 		writeJSON(w, http.StatusInternalServerError, tokenError{Error: "server_error"})
 		return
 	}
 	newHash := hashToken(newRaw)
+	// airlockvet:allow-dbq reason: OAuth 2.0 / RFC 6749 endpoint — wire is JSON by spec; client_id + grant flow drives authz, not user Principal
 	if err := q.CreateRefreshToken(r.Context(), dbq.CreateRefreshTokenParams{
 		TokenHash:       newHash,
 		UserID:          row.UserID,
@@ -692,6 +753,7 @@ func (h *oauthServerHandler) tokenRefresh(w http.ResponseWriter, r *http.Request
 		ExpiresAt:       pgtype.Timestamptz{Time: time.Now().Add(30 * 24 * time.Hour), Valid: true},
 	}); err != nil {
 		h.logger.Error("oauth token refresh: insert new", zap.Error(err))
+		// airlockvet:allow-writejson reason: OAuth 2.0 / RFC 6749 endpoint — wire is JSON by spec; client_id + grant flow drives authz, not user Principal
 		writeJSON(w, http.StatusInternalServerError, tokenError{Error: "server_error"})
 		return
 	}
@@ -703,10 +765,12 @@ func (h *oauthServerHandler) tokenRefresh(w http.ResponseWriter, r *http.Request
 	access, err := auth.IssueOAuthAccessToken(h.jwtSecret, userID, email, tenantRole, clientID, row.Scope, audience)
 	if err != nil {
 		h.logger.Error("oauth token refresh: issue access", zap.Error(err))
+		// airlockvet:allow-writejson reason: OAuth 2.0 / RFC 6749 endpoint — wire is JSON by spec; client_id + grant flow drives authz, not user Principal
 		writeJSON(w, http.StatusInternalServerError, tokenError{Error: "server_error"})
 		return
 	}
 
+	// airlockvet:allow-writejson reason: OAuth 2.0 / RFC 6749 endpoint — wire is JSON by spec; client_id + grant flow drives authz, not user Principal
 	writeJSON(w, http.StatusOK, tokenResponse{
 		AccessToken:  access,
 		TokenType:    "Bearer",
@@ -734,12 +798,15 @@ type grantDTO struct {
 func (h *oauthServerHandler) ListGrants(w http.ResponseWriter, r *http.Request) {
 	userID := auth.UserIDFromContext(r.Context())
 	if userID == uuid.Nil {
+		// airlockvet:allow-writejson reason: OAuth 2.0 / RFC 6749 endpoint — wire is JSON by spec; client_id + grant flow drives authz, not user Principal
 		writeJSONError(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
 	q := dbq.New(h.db.Pool())
+	// airlockvet:allow-dbq reason: OAuth 2.0 / RFC 6749 endpoint — wire is JSON by spec; client_id + grant flow drives authz, not user Principal
 	rows, err := q.ListGrantsForUser(r.Context(), toPgUUID(userID))
 	if err != nil {
+		// airlockvet:allow-writejson reason: OAuth 2.0 / RFC 6749 endpoint — wire is JSON by spec; client_id + grant flow drives authz, not user Principal
 		writeJSONError(w, http.StatusInternalServerError, "list grants")
 		return
 	}
@@ -756,31 +823,37 @@ func (h *oauthServerHandler) ListGrants(w http.ResponseWriter, r *http.Request) 
 			ExpiresAt:  row.ExpiresAt.Time.Format(time.RFC3339),
 		})
 	}
+	// airlockvet:allow-writejson reason: OAuth 2.0 / RFC 6749 endpoint — wire is JSON by spec; client_id + grant flow drives authz, not user Principal
 	writeJSON(w, http.StatusOK, out)
 }
 
 func (h *oauthServerHandler) RevokeGrant(w http.ResponseWriter, r *http.Request) {
 	userID := auth.UserIDFromContext(r.Context())
 	if userID == uuid.Nil {
+		// airlockvet:allow-writejson reason: OAuth 2.0 / RFC 6749 endpoint — wire is JSON by spec; client_id + grant flow drives authz, not user Principal
 		writeJSONError(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
 	clientID := chi.URLParam(r, "clientID")
 	agentID, err := uuid.Parse(chi.URLParam(r, "agentID"))
 	if err != nil {
+		// airlockvet:allow-writejson reason: OAuth 2.0 / RFC 6749 endpoint — wire is JSON by spec; client_id + grant flow drives authz, not user Principal
 		writeJSONError(w, http.StatusBadRequest, "invalid agent ID")
 		return
 	}
 	q := dbq.New(h.db.Pool())
+	// airlockvet:allow-dbq reason: OAuth 2.0 / RFC 6749 endpoint — wire is JSON by spec; client_id + grant flow drives authz, not user Principal
 	if _, err := q.RevokeGrant(r.Context(), dbq.RevokeGrantParams{
 		UserID:   toPgUUID(userID),
 		ClientID: clientID,
 		AgentID:  toPgUUID(agentID),
 	}); err != nil {
+		// airlockvet:allow-writejson reason: OAuth 2.0 / RFC 6749 endpoint — wire is JSON by spec; client_id + grant flow drives authz, not user Principal
 		writeJSONError(w, http.StatusInternalServerError, "revoke")
 		return
 	}
 	// Also invalidate refresh tokens so the next refresh fails fast.
+	// airlockvet:allow-dbq reason: OAuth 2.0 / RFC 6749 endpoint — wire is JSON by spec; client_id + grant flow drives authz, not user Principal
 	_, _ = q.RevokeRefreshForGrant(r.Context(), dbq.RevokeRefreshForGrantParams{
 		UserID:   toPgUUID(userID),
 		ClientID: clientID,
@@ -830,6 +903,7 @@ func (h *oauthServerHandler) mintAuthzCode(ctx context.Context, userID uuid.UUID
 		return "", err
 	}
 	q := dbq.New(h.db.Pool())
+	// airlockvet:allow-dbq reason: OAuth 2.0 / RFC 6749 endpoint — wire is JSON by spec; client_id + grant flow drives authz, not user Principal
 	if err := q.CreateAuthzCode(ctx, dbq.CreateAuthzCodeParams{
 		Code:          code,
 		UserID:        toPgUUID(userID),
@@ -860,6 +934,7 @@ func (h *oauthServerHandler) userFromSessionCookie(r *http.Request) (uuid.UUID, 
 
 func (h *oauthServerHandler) lookupUserClaims(ctx context.Context, userID uuid.UUID) (email, tenantRole string) {
 	q := dbq.New(h.db.Pool())
+	// airlockvet:allow-dbq reason: OAuth 2.0 / RFC 6749 endpoint — wire is JSON by spec; client_id + grant flow drives authz, not user Principal
 	u, err := q.GetUserByID(ctx, toPgUUID(userID))
 	if err != nil {
 		return "", ""

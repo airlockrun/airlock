@@ -578,6 +578,21 @@ message ListEnvVarsResponse {
   repeated EnvVarInfo env_vars = 1;
 }
 
+message SetEnvVarValueRequest {
+  string value = 1;
+}
+
+// --- Relay codes (short-lived auth handoff to agent subdomains) ---
+
+message GenerateRelayCodeRequest {
+  string return_url = 1;
+}
+
+message GenerateRelayCodeResponse {
+  string code = 1;
+  string callback_url = 2;
+}
+
 // --- Siblings (A2A) ---
 
 message ListSiblingsResponse {

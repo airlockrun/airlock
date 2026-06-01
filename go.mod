@@ -17,7 +17,7 @@ require (
 	github.com/jackc/pgx/v5 v5.9.2
 	github.com/testcontainers/testcontainers-go/modules/minio v0.42.0
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.42.0
-	golang.org/x/crypto v0.48.0
+	golang.org/x/crypto v0.51.0
 	google.golang.org/protobuf v1.36.11
 )
 
@@ -56,8 +56,9 @@ require (
 	github.com/tklauser/numcpus v0.11.0 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
 	golang.org/x/mod v0.36.0 // indirect
-	golang.org/x/net v0.50.0 // indirect
+	golang.org/x/net v0.54.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
+	golang.org/x/tools v0.45.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
@@ -114,7 +115,7 @@ require (
 	go.uber.org/zap v1.27.1
 	golang.org/x/image v0.39.0
 	golang.org/x/sync v0.20.0
-	golang.org/x/sys v0.42.0 // indirect
-	golang.org/x/term v0.40.0
-	golang.org/x/text v0.36.0 // indirect
+	golang.org/x/sys v0.44.0 // indirect
+	golang.org/x/term v0.43.0
+	golang.org/x/text v0.37.0 // indirect
 )

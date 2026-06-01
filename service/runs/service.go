@@ -165,3 +165,32 @@ func (s *Service) authorizeCancel(ctx context.Context, q *dbq.Queries, p authz.P
 	}
 	return service.ErrForbidden
 }
+
+// MarkTimedOut force-completes a run with status=timeout when a
+// streaming-response finalizer ends without the agent writing a
+// terminal status itself. The UPDATE is CAS-guarded by
+// `WHERE status='running'`, so the agent's authoritative terminal
+// write — if it lands — wins this race; otherwise the row reflects
+// that nobody closed it. Also rolls up llm_usage ledger rows
+// (idempotent with the agent-side aggregation).
+//
+// Internal-only: invoked by airlock's request-finalizer goroutines
+// after the HTTP response has returned. No Principal because the
+// operation has no user-facing access decision — the CAS is the
+// sole correctness guard.
+func (s *Service) MarkTimedOut(ctx context.Context, runID uuid.UUID) error {
+	q := dbq.New(s.db.Pool())
+	pgID := pgtype.UUID{Bytes: runID, Valid: true}
+	if err := q.UpdateRunStatus(ctx, dbq.UpdateRunStatusParams{
+		ID:     pgID,
+		Status: "timeout",
+	}); err != nil {
+		s.logger.Error("update run status to timeout", zap.Error(err))
+		return err
+	}
+	if err := q.UpdateRunLLMStats(ctx, pgID); err != nil {
+		s.logger.Error("aggregate run llm stats", zap.Error(err))
+		return err
+	}
+	return nil
+}

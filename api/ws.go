@@ -54,6 +54,7 @@ func (h *WSHandler) Upgrade(w http.ResponseWriter, r *http.Request) {
 	// Resolve the user's member agents BEFORE the upgrade so a DB error can
 	// return a real HTTP status instead of a half-open socket.
 	q := dbq.New(h.db.Pool())
+	// airlockvet:allow-dbq reason: pure read of caller's own membership rows; no authz decision to gate (you can always see what you're a member of)
 	memberAgents, err := q.ListAgentIDsByMember(r.Context(), toPgUUID(userID))
 	if err != nil {
 		h.logger.Error("list member agents for ws", zap.Error(err))

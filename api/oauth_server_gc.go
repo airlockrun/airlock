@@ -58,16 +58,19 @@ func (j *InboundOAuthGC) Run(ctx context.Context) {
 
 func (j *InboundOAuthGC) sweep(ctx context.Context) {
 	q := dbq.New(j.db.Pool())
+	// airlockvet:allow-dbq reason: startup garbage-collection sweep — no caller Principal, runs as airlock-internal housekeeping
 	if n, err := q.CleanupExpiredAuthzCodes(ctx); err != nil {
 		j.logger.Warn("gc: authz codes", zap.Error(err))
 	} else if n > 0 {
 		j.logger.Debug("gc: authz codes", zap.Int64("deleted", n))
 	}
+	// airlockvet:allow-dbq reason: startup garbage-collection sweep — no caller Principal, runs as airlock-internal housekeeping
 	if n, err := q.CleanupExpiredRefreshTokens(ctx); err != nil {
 		j.logger.Warn("gc: refresh tokens", zap.Error(err))
 	} else if n > 0 {
 		j.logger.Debug("gc: refresh tokens", zap.Int64("deleted", n))
 	}
+	// airlockvet:allow-dbq reason: startup garbage-collection sweep — no caller Principal, runs as airlock-internal housekeeping
 	if n, err := q.CleanupExpiredGrants(ctx); err != nil {
 		j.logger.Warn("gc: grants", zap.Error(err))
 	} else if n > 0 {

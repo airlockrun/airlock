@@ -4,23 +4,21 @@ import (
 	"net/http"
 
 	"github.com/airlockrun/airlock/convert"
-	"github.com/airlockrun/airlock/db"
-	"github.com/airlockrun/airlock/db/dbq"
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
-	"github.com/airlockrun/airlock/secrets"
-	solprovider "github.com/airlockrun/sol/provider"
+	providerssvc "github.com/airlockrun/airlock/service/providers"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
-	"go.uber.org/zap"
 )
 
 type ProvidersHandler struct {
-	db  *db.DB
-	enc secrets.Store
+	svc *providerssvc.Service
 }
 
-func NewProvidersHandler(database *db.DB, enc secrets.Store) *ProvidersHandler {
-	return &ProvidersHandler{db: database, enc: enc}
+func NewProvidersHandler(svc *providerssvc.Service) *ProvidersHandler {
+	if svc == nil {
+		panic("ProvidersHandler: svc is required")
+	}
+	return &ProvidersHandler{svc: svc}
 }
 
 func (h *ProvidersHandler) Create(w http.ResponseWriter, r *http.Request) {
@@ -29,86 +27,32 @@ func (h *ProvidersHandler) Create(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if req.ProviderId == "" {
-		writeError(w, http.StatusBadRequest, "provider_id is required")
-		return
-	}
-	if req.Slug == "" {
-		writeError(w, http.StatusBadRequest, "slug is required")
-		return
-	}
-	if req.ApiKey == "" {
-		writeError(w, http.StatusBadRequest, "api_key is required")
-		return
-	}
-
-	// Validate against the overlay-merged catalog — the same one ListCapabilities
-	// and ListCatalogModels use — so overlay-only providers (e.g. brave) that the
-	// frontend offers are also accepted here.
-	catalog, err := solprovider.AllProviders()
-	if err != nil {
-		logFor(r).Error("load provider catalog failed", zap.Error(err))
-		writeError(w, http.StatusInternalServerError, "failed to load provider catalog")
-		return
-	}
-	if _, ok := catalog[req.ProviderId]; !ok {
-		writeError(w, http.StatusBadRequest, "unknown provider_id: "+req.ProviderId)
-		return
-	}
-
-	// Pre-generate the row UUID so the api_key ciphertext is bound to it
-	// via AAD before we INSERT. Per-row scoping prevents one row's key
-	// from being decrypted under another row's path.
-	id := uuid.New()
-
-	encrypted, err := h.enc.Put(r.Context(), "provider/"+id.String()+"/api_key", req.ApiKey)
-	if err != nil {
-		logFor(r).Error("encrypt api key failed", zap.Error(err))
-		writeError(w, http.StatusInternalServerError, "failed to encrypt api key")
-		return
-	}
-
-	q := dbq.New(h.db.Pool())
-	p, err := q.CreateProvider(r.Context(), dbq.CreateProviderParams{
-		ID:          toPgUUID(id),
-		CatalogID:   req.ProviderId,
+	res, err := h.svc.Create(r.Context(), principalFromRequest(r), providerssvc.CreateRequest{
+		ProviderID:  req.ProviderId,
 		Slug:        req.Slug,
 		DisplayName: req.DisplayName,
-		ApiKey:      encrypted,
-		BaseUrl:     req.BaseUrl,
-		IsEnabled:   true,
+		APIKey:      req.ApiKey,
+		BaseURL:     req.BaseUrl,
 	})
 	if err != nil {
-		logFor(r).Error("create provider failed", zap.Error(err))
-		writeError(w, http.StatusInternalServerError, "failed to create provider")
+		writeServiceError(w, err, "failed to create provider")
 		return
 	}
-
 	writeProto(w, http.StatusCreated, &airlockv1.CreateProviderResponse{
-		Provider: convert.ProviderToProto(p, req.ApiKey),
+		Provider: convert.ProviderToProto(res.Row, res.APIKey),
 	})
 }
 
 func (h *ProvidersHandler) List(w http.ResponseWriter, r *http.Request) {
-	q := dbq.New(h.db.Pool())
-	providers, err := q.ListProviders(r.Context())
+	results, err := h.svc.List(r.Context(), principalFromRequest(r))
 	if err != nil {
-		logFor(r).Error("list providers failed", zap.Error(err))
-		writeError(w, http.StatusInternalServerError, "failed to list providers")
+		writeServiceError(w, err, "failed to list providers")
 		return
 	}
-
-	out := make([]*airlockv1.Provider, len(providers))
-	for i, p := range providers {
-		decrypted, err := h.enc.Get(r.Context(), "provider/"+pgUUID(p.ID).String()+"/api_key", p.ApiKey)
-		if err != nil {
-			logFor(r).Error("decrypt api key failed", zap.Error(err),
-				zap.String("provider", p.CatalogID), zap.String("slug", p.Slug))
-			decrypted = "****"
-		}
-		out[i] = convert.ProviderToProto(p, decrypted)
+	out := make([]*airlockv1.Provider, len(results))
+	for i, res := range results {
+		out[i] = convert.ProviderToProto(res.Row, res.APIKey)
 	}
-
 	writeProto(w, http.StatusOK, &airlockv1.ListProvidersResponse{Providers: out})
 }
 
@@ -118,51 +62,24 @@ func (h *ProvidersHandler) Update(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid provider ID")
 		return
 	}
-
 	req := &airlockv1.UpdateProviderRequest{}
 	if err := decodeProto(r, req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-
-	params := dbq.UpdateProviderParams{
-		ID:          toPgUUID(id),
-		DisplayName: req.DisplayName,
+	res, err := h.svc.Update(r.Context(), principalFromRequest(r), id, providerssvc.UpdateRequest{
 		Slug:        req.Slug,
-		BaseUrl:     req.BaseUrl,
-	}
-
-	if req.ApiKey != "" {
-		encrypted, err := h.enc.Put(r.Context(), "provider/"+id.String()+"/api_key", req.ApiKey)
-		if err != nil {
-			logFor(r).Error("encrypt api key failed", zap.Error(err))
-			writeError(w, http.StatusInternalServerError, "failed to encrypt api key")
-			return
-		}
-		params.UpdateApiKey = true
-		params.ApiKey = encrypted
-	}
-
-	if req.IsEnabled != nil {
-		params.UpdateIsEnabled = true
-		params.IsEnabled = *req.IsEnabled
-	}
-
-	q := dbq.New(h.db.Pool())
-	p, err := q.UpdateProvider(r.Context(), params)
+		DisplayName: req.DisplayName,
+		BaseURL:     req.BaseUrl,
+		APIKey:      req.ApiKey,
+		IsEnabled:   req.IsEnabled,
+	})
 	if err != nil {
-		logFor(r).Error("update provider failed", zap.Error(err))
-		writeError(w, http.StatusInternalServerError, "failed to update provider")
+		writeServiceError(w, err, "failed to update provider")
 		return
 	}
-
-	decrypted, err := h.enc.Get(r.Context(), "provider/"+pgUUID(p.ID).String()+"/api_key", p.ApiKey)
-	if err != nil {
-		decrypted = "****"
-	}
-
 	writeProto(w, http.StatusOK, &airlockv1.UpdateProviderResponse{
-		Provider: convert.ProviderToProto(p, decrypted),
+		Provider: convert.ProviderToProto(res.Row, res.APIKey),
 	})
 }
 
@@ -172,13 +89,9 @@ func (h *ProvidersHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid provider ID")
 		return
 	}
-
-	q := dbq.New(h.db.Pool())
-	if err := q.DeleteProvider(r.Context(), toPgUUID(id)); err != nil {
-		logFor(r).Error("delete provider failed", zap.Error(err))
-		writeError(w, http.StatusInternalServerError, "failed to delete provider")
+	if err := h.svc.Delete(r.Context(), principalFromRequest(r), id); err != nil {
+		writeServiceError(w, err, "failed to delete provider")
 		return
 	}
-
 	w.WriteHeader(http.StatusNoContent)
 }

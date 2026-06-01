@@ -22,9 +22,12 @@ import (
 	convsvc "github.com/airlockrun/airlock/service/conversations"
 	execsvc "github.com/airlockrun/airlock/service/execendpoints"
 	gitcredssvc "github.com/airlockrun/airlock/service/gitcredentials"
+	identitysvc "github.com/airlockrun/airlock/service/identity"
 	memberssvc "github.com/airlockrun/airlock/service/members"
 	modelssvc "github.com/airlockrun/airlock/service/models"
+	providerssvc "github.com/airlockrun/airlock/service/providers"
 	runssvc "github.com/airlockrun/airlock/service/runs"
+	settingssvc "github.com/airlockrun/airlock/service/settings"
 	siblingssvc "github.com/airlockrun/airlock/service/siblings"
 	userssvc "github.com/airlockrun/airlock/service/users"
 	"github.com/airlockrun/airlock/storage"
@@ -141,11 +144,11 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	)
 
 	authHandler := NewAuthHandler(cfg.DB, cfg.JWTSecret, cfg.ActivationCodeFile, cfg.Logger.Named("auth"))
-	providersHandler := NewProvidersHandler(cfg.DB, cfg.Secrets)
+	providersHandler := NewProvidersHandler(providerssvc.New(cfg.DB, cfg.Secrets, cfg.Logger.Named("providers")))
 	gitCredsHandler := NewGitCredentialsHandler(gitcredssvc.New(cfg.DB, cfg.Secrets, cfg.Logger.Named("gitcredentials")))
 	gitWebhookHandler := NewGitWebhookHandler(cfg.DB, cfg.BuildService, cfg.Logger.Named("git-webhook"))
 	usersHandler := NewUsersHandler(cfg.DB, userssvc.New(cfg.DB, cfg.Logger.Named("users")))
-	sysSettingsHandler := &settingsHandler{db: cfg.DB, encryptor: cfg.Secrets, logger: cfg.Logger.Named("settings")}
+	sysSettingsHandler := newSettingsHandler(settingssvc.New(cfg.DB, cfg.Logger.Named("settings")))
 
 	// Health check (public, no auth — reverse proxies and orchestrators need
 	// to hit this without credentials). 200 if DB+S3 reachable, 503 otherwise.
@@ -208,15 +211,16 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		cfg.DB, cfg.Secrets, cfg.TelegramDriver, cfg.DiscordDriver,
 		cfg.BridgeManager, cfg.Logger.Named("bridges"),
 	))
-	idH := &identityHandler{
-		db:         cfg.DB,
-		encryptor:  cfg.Secrets,
-		telegram:   cfg.TelegramDriver,
-		discord:    cfg.DiscordDriver,
-		hmacSecret: cfg.JWTSecret, // reuse JWT secret for HMAC
-		publicURL:  cfg.PublicURL,
-		logger:     cfg.Logger.Named("identity"),
-	}
+	idH := newIdentityHandler(
+		identitysvc.New(
+			cfg.DB, cfg.Secrets,
+			telegramIdentityAdapter{d: cfg.TelegramDriver},
+			discordIdentityAdapter{d: cfg.DiscordDriver},
+			cfg.Logger.Named("identity"),
+		),
+		cfg.JWTSecret, // reuse JWT secret for HMAC
+		cfg.PublicURL,
+	)
 
 	catalogH := newCatalogHandler(catalogsvc.New(cfg.DB, cfg.Logger.Named("catalog")))
 
@@ -301,16 +305,14 @@ func NewRouter(cfg RouterConfig) http.Handler {
 			cfg.PublicURL,
 			cfg.AgentBaseURL,
 		)
-		rH := newRunsHandler(
-			runssvc.New(cfg.DB, cfg.Dispatcher, cfg.Logger.Named("runs")),
-			cfg.S3Client,
-			cfg.Logger.Named("runs"),
-		)
+		runsService := runssvc.New(cfg.DB, cfg.Dispatcher, cfg.Logger.Named("runs"))
+		rH := newRunsHandler(runsService, cfg.S3Client, cfg.Logger.Named("runs"))
 		cH := &conversationsHandler{
 			svc: convsvc.New(cfg.DB, cfg.S3Client, cfg.Logger.Named("conversations"),
 				func(parts []byte, agentID string) []string {
 					return agentapi.ExtractCanonicalKeys(parts, agentID)
 				}),
+			runsSvc:     runsService,
 			db:          cfg.DB,
 			dispatcher:  cfg.Dispatcher,
 			promptProxy: cfg.PromptProxy,

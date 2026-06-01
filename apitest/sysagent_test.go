@@ -41,7 +41,7 @@ func TestIntegration_SystemConversations_CRUD(t *testing.T) {
 	var created airlockv1.CreateSystemConversationResponse
 	h.DecodeProto(resp, &created)
 	if created.Conversation == nil || created.Conversation.Id == "" {
-		t.Fatalf("create returned no conversation: %+v", created)
+		t.Fatalf("create returned no conversation: %+v", &created)
 	}
 	if created.Conversation.Title != "New chat" {
 		t.Errorf("default title = %q, want %q", created.Conversation.Title, "New chat")

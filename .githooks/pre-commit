@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Pre-commit hook — two gates, both also enforced in CI:
+# Pre-commit hook — four gates, all also enforced in CI:
 #
 #   1. Version-invariant check (Dockerfile↔go.mod drift, compose tags,
 #      README pin, version.go). Same script CI runs on tag push.
@@ -9,6 +9,10 @@
 #   3. gofmt on the Go files staged for this commit. Blocks the commit
 #      if any need formatting; does NOT auto-rewrite (explicit, no
 #      surprise edits to your working tree).
+#   4. airlockvet on api/ — nodbq (handlers route through service/) +
+#      writeproto (handlers emit proto, not JSON). Skipped when no api/
+#      file is staged; otherwise a single un-annotated violation blocks
+#      the commit.
 #
 # Enable for this clone (one-time):
 #   git config core.hooksPath .githooks
@@ -35,6 +39,23 @@ if [ -n "$staged_go" ]; then
 		echo "Fix with:" >&2
 		echo "  gofmt -w $unformatted" >&2
 		echo "then re-stage and commit." >&2
+		exit 1
+	fi
+fi
+
+# airlockvet only matters when this commit touches api/. The analyzer
+# operates package-wide (any single file change can shift line numbers
+# the annotations sit next to), so scope by "did the commit touch api/?"
+# rather than passing individual file paths.
+staged_api=$(git diff --cached --name-only --diff-filter=ACMR -- 'api/*.go')
+if [ -n "$staged_api" ]; then
+	if ! go run "$repo_root/cmd/airlockvet" ./api/...; then
+		echo >&2
+		echo "ERROR: airlockvet rejected the commit." >&2
+		echo "Route the call through service/{domain} (and authz.Authorize)," >&2
+		echo "switch JSON for proto, or annotate the line with a reason:" >&2
+		echo "  // airlockvet:allow-dbq reason: ..." >&2
+		echo "  // airlockvet:allow-writejson reason: ..." >&2
 		exit 1
 	fi
 fi

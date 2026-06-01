@@ -62,7 +62,9 @@ const (
 	TenantBridgeSystem   Action = "tenant.bridge.system" // system (agent-less) bridge: admin
 	TenantUserManage     Action = "tenant.user.manage"
 	TenantProviderManage Action = "tenant.provider.manage"
+	TenantSettingsView   Action = "tenant.settings.view" // read system defaults (agent-create prefill): user+
 	TenantSettingsUpdate Action = "tenant.settings.update"
+	TenantIdentityManage Action = "tenant.identity.manage" // link / list / unlink caller's own platform identities: user+
 )
 
 // policy is the whole permission matrix. Authorize panics on a missing
@@ -97,7 +99,9 @@ var policy = map[Action]Requirement{
 	TenantBridgeSystem:   {Axis: AxisTenant, Tenant: auth.RoleAdmin},
 	TenantUserManage:     {Axis: AxisTenant, Tenant: auth.RoleAdmin},
 	TenantProviderManage: {Axis: AxisTenant, Tenant: auth.RoleAdmin},
+	TenantSettingsView:   {Axis: AxisTenant, Tenant: auth.RoleUser},
 	TenantSettingsUpdate: {Axis: AxisTenant, Tenant: auth.RoleAdmin},
+	TenantIdentityManage: {Axis: AxisTenant, Tenant: auth.RoleUser},
 }
 
 // RequiredTenantRole returns the minimum tenant role for a tenant-axis
