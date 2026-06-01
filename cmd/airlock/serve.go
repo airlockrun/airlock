@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/airlockrun/airlock/agentapi"
 	"github.com/airlockrun/airlock/api"
 	"github.com/airlockrun/airlock/builder"
 	"github.com/airlockrun/airlock/config"
@@ -798,7 +799,7 @@ func sweeper(
 				continue
 			}
 
-			api.SynthesizeOrphanToolResults(ctx, queries, runUUID, "timeout", lgr)
+			agentapi.SynthesizeOrphanToolResults(ctx, queries, runUUID, "timeout", lgr)
 
 			err = queries.UpdateRunComplete(ctx, dbq.UpdateRunCompleteParams{
 				ID:           run.ID,
@@ -811,7 +812,7 @@ func sweeper(
 				continue
 			}
 
-			api.PublishRunTerminal(ctx, pubsub, agentUUID, runUUID, "error", "agent disconnected")
+			agentapi.PublishRunTerminal(ctx, pubsub, agentUUID, runUUID, "error", "agent disconnected")
 
 			lgr.Warn(
 				"stuck run reaped",

@@ -8,9 +8,9 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/airlockrun/agentsdk"
+	"github.com/airlockrun/airlock/agentapi"
 	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/authz"
 	"github.com/airlockrun/airlock/convert"
@@ -391,9 +391,9 @@ func (h *conversationsHandler) Prompt(w http.ResponseWriter, r *http.Request) {
 				MimeType: fi.ContentType,
 			})
 		}
-		if err := postToConversation(ctx, postDeps{
+		if err := agentapi.PostToConversation(ctx, agentapi.PostDeps{
 			DB: h.db, PubSub: h.pubsub, BridgeMgr: h.bridgeMgr, S3: h.s3, Logger: h.logger,
-		}, postOpts{
+		}, agentapi.PostOpts{
 			AgentID:        agentID,
 			ConversationID: pgUUID(convID),
 			Role:           "user",
@@ -503,7 +503,7 @@ func (h *conversationsHandler) Prompt(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		defer h.convLocks.Unlock(convIDStr)
 		bgCtx := context.Background()
-		publishRunEvents(bgCtx, rc, h.pubsub, h.db.Pool(), agentID, runID, convIDStr, userID.String(), nil, h.logger)
+		agentapi.PublishRunEvents(bgCtx, rc, h.pubsub, h.db.Pool(), agentID, runID, convIDStr, userID.String(), nil, h.logger)
 
 		// Fallback status when the agent never wrote its own terminal
 		// status (e.g. stuck in an infinite run_js loop, container died).
@@ -646,7 +646,7 @@ func (h *conversationsHandler) NotifyUpgradeComplete(ctx context.Context, agentI
 			if conv.UserID.Valid {
 				convUserID = pgUUID(conv.UserID).String()
 			}
-			publishRunEvents(bgCtx, rc, h.pubsub, h.db.Pool(), agentID, runID, conversationID, convUserID, nil, h.logger)
+			agentapi.PublishRunEvents(bgCtx, rc, h.pubsub, h.db.Pool(), agentID, runID, conversationID, convUserID, nil, h.logger)
 		}
 
 		// Same CAS-protected fallback as the user-prompt path: if the
@@ -755,27 +755,9 @@ func messageToProto(ctx context.Context, s3Client *storage.S3Client, logger *zap
 		RunId:        convert.PgUUIDToString(m.RunID),
 	}
 	if len(m.Parts) > 0 {
-		info.Parts = string(resolveMediaPartsJSON(ctx, s3Client, logger, m.Parts))
+		info.Parts = string(agentapi.ResolveMediaPartsJSON(ctx, s3Client, logger, m.Parts))
 	}
 	return info
-}
-
-// truncate returns s clipped to at most maxLen *bytes*, but never cuts in
-// the middle of a UTF-8 sequence. A naive s[:maxLen] would leave a
-// dangling lead byte (e.g. Cyrillic 0xd0 starts a 2-byte rune; slicing
-// between the lead and continuation byte produces invalid UTF-8 that
-// Postgres rejects with `invalid byte sequence for encoding "UTF8"`).
-// Backs off to the previous rune boundary via utf8.RuneStart.
-func truncate(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	for end := maxLen; end > 0; end-- {
-		if utf8.RuneStart(s[end]) {
-			return s[:end]
-		}
-	}
-	return ""
 }
 
 // ListTopics handles GET /api/v1/conversations/{convID}/topics.

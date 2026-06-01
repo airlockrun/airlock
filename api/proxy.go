@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/airlockrun/airlock/agentapi"
 	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
@@ -79,7 +80,7 @@ func SubdomainProxy(agentDomain string, database *db.DB, s3 *storage.S3Client, d
 		// session cookie (rejectOrRedirect on miss kicks off login flow).
 		if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/__air/storage/") {
 			path := strings.TrimPrefix(r.URL.Path, "/__air/storage")
-			serveStoragePath(w, r, database, s3, agentID, path, jwtSecret, publicURL, log)
+			agentapi.ServeStoragePath(w, r, database, s3, agentID, path, jwtSecret, publicURL, log)
 			return
 		}
 

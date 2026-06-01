@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"github.com/airlockrun/airlock/agentapi"
 	"net/http"
 
 	"github.com/airlockrun/airlock/auth"
@@ -135,7 +136,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	// operator-facing /api/v1/agents/{id}/exec-endpoints handlers.
 	execDialer := execproxy.NewSSHDialer(
 		cfg.Secrets,
-		newTOFUPinner(cfg.DB.Pool()),
+		agentapi.NewTOFUPinner(cfg.DB.Pool()),
 		cfg.Logger,
 	)
 
@@ -181,7 +182,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	// takes function-typed deps for MCP discovery + auth injection so it
 	// doesn't have to depend on the goai/mcp client directly.
 	credSvcDiscovery := func(ctx context.Context, serverURL string, authInjection []byte, creds string) ([]connsvc.ToolInfo, string, error) {
-		tools, instructions, err := discoverMCPTools(ctx, serverURL, authInjection, creds)
+		tools, instructions, err := agentapi.DiscoverMCPTools(ctx, serverURL, authInjection, creds)
 		if err != nil {
 			return nil, "", err
 		}
@@ -199,9 +200,9 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		cfg.Dispatcher.RefreshAgent,
 		cfg.Logger.Named("credentials"),
 		credSvcDiscovery,
-		discoverMCPAuth,
-		injectAuth,
-		mcpHTTPClient,
+		agentapi.DiscoverMCPAuth,
+		agentapi.InjectAuth,
+		agentapi.MCPHTTPClient,
 	))
 	brH := newBridgeHandler(bridgessvc.New(
 		cfg.DB, cfg.Secrets, cfg.TelegramDriver, cfg.DiscordDriver,
@@ -308,7 +309,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		cH := &conversationsHandler{
 			svc: convsvc.New(cfg.DB, cfg.S3Client, cfg.Logger.Named("conversations"),
 				func(parts []byte, agentID string) []string {
-					return ExtractCanonicalKeys(parts, agentID)
+					return agentapi.ExtractCanonicalKeys(parts, agentID)
 				}),
 			db:          cfg.DB,
 			dispatcher:  cfg.Dispatcher,
@@ -348,7 +349,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 			Conns: connsvc.New(
 				cfg.DB, cfg.Secrets, cfg.OAuthClient, cfg.PublicURL,
 				cfg.Dispatcher.RefreshAgent, cfg.Logger.Named("sysagent-conns"),
-				credSvcDiscovery, discoverMCPAuth, injectAuth, mcpHTTPClient,
+				credSvcDiscovery, agentapi.DiscoverMCPAuth, agentapi.InjectAuth, agentapi.MCPHTTPClient,
 			),
 			Execs:    execsvc.New(cfg.DB.Pool(), cfg.Secrets, execDialer, cfg.Logger.Named("sysagent-execs")),
 			GitCreds: gitcredssvc.New(cfg.DB, cfg.Secrets, cfg.Logger.Named("sysagent-gitcreds")),
@@ -541,24 +542,24 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	// (channel event endpoint removed — bridges use long-polling, not push)
 
 	// Agent API routes (authenticated via agent JWT)
-	ah := &agentHandler{
-		db:                     cfg.DB,
-		encryptor:              cfg.Secrets,
-		s3:                     cfg.S3Client,
-		builder:                cfg.BuildService,
-		pubsub:                 cfg.PubSub,
-		bridgeMgr:              cfg.BridgeManager,
-		scheduler:              cfg.Scheduler,
-		publicURL:              cfg.PublicURL,
-		agentBaseURL:           cfg.AgentBaseURL,
-		llmProxyURL:            cfg.LLMProxyURL,
-		forceInlineAttachments: cfg.ForceInlineAttachments,
-		jwtSecret:              cfg.JWTSecret,
-		dispatcher:             cfg.Dispatcher,
-		execDialer:             execDialer,
-		logger:                 cfg.Logger.Named("agent-api"),
-	}
-	// Silence "unused" if dbq import only used by helper newTOFUPinner.
+	ah := agentapi.New(agentapi.Config{
+		DB:                     cfg.DB,
+		Encryptor:              cfg.Secrets,
+		S3:                     cfg.S3Client,
+		Builder:                cfg.BuildService,
+		PubSub:                 cfg.PubSub,
+		BridgeMgr:              cfg.BridgeManager,
+		Scheduler:              cfg.Scheduler,
+		PublicURL:              cfg.PublicURL,
+		AgentBaseURL:           cfg.AgentBaseURL,
+		LLMProxyURL:            cfg.LLMProxyURL,
+		ForceInlineAttachments: cfg.ForceInlineAttachments,
+		JWTSecret:              cfg.JWTSecret,
+		Dispatcher:             cfg.Dispatcher,
+		ExecDialer:             execDialer,
+		Logger:                 cfg.Logger.Named("agent-api"),
+	})
+	// Silence "unused" if dbq import only used by helper agentapi.NewTOFUPinner.
 	_ = dbq.New
 
 	// MCP server endpoint — A2A entry point + external MCP client
@@ -567,7 +568,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	// (user JWT / agent JWT / OAuth-issued access token). The
 	// /public-mcp route serves the same JSON-RPC interface anonymously,
 	// gated by `agent.allow_public_mcp`.
-	mcp := NewMCPServer(cfg.Dispatcher, cfg.PubSub, cfg.Logger.Named("mcp"))
+	mcp := agentapi.NewMCPServer(cfg.Dispatcher, cfg.PubSub, cfg.Logger.Named("mcp"))
 	r.Post("/api/agent/{identifier}/mcp", func(w http.ResponseWriter, req *http.Request) {
 		mcp.ServeHTTP(w, req, ah)
 	})

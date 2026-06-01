@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/airlockrun/airlock/agentapi"
 	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/db/dbq"
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
@@ -24,7 +25,7 @@ import (
 
 func testCredentialHandler() *credentialHandler {
 	disc := func(ctx context.Context, serverURL string, authInjection []byte, creds string) ([]connsvc.ToolInfo, string, error) {
-		tools, instructions, err := discoverMCPTools(ctx, serverURL, authInjection, creds)
+		tools, instructions, err := agentapi.DiscoverMCPTools(ctx, serverURL, authInjection, creds)
 		if err != nil {
 			return nil, "", err
 		}
@@ -38,7 +39,7 @@ func testCredentialHandler() *credentialHandler {
 	return newCredentialHandler(connsvc.New(
 		testDB, testEncryptor(), oauth.NewClient(),
 		"http://localhost:8080", noopRefresh, zap.NewNop(),
-		disc, discoverMCPAuth, injectAuth, mcpHTTPClient,
+		disc, agentapi.DiscoverMCPAuth, agentapi.InjectAuth, agentapi.MCPHTTPClient,
 	))
 }
 
