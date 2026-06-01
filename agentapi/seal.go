@@ -3,6 +3,7 @@ package agentapi
 import (
 	"net/http"
 
+	"github.com/airlockrun/agentsdk"
 	"github.com/airlockrun/airlock/auth"
 	"go.uber.org/zap"
 )
@@ -18,26 +19,10 @@ import (
 // unseal another agent's sealed value even if the ciphertext leaks. See
 // crypto.EncryptWithAAD.
 
-type sealRequest struct {
-	Plaintext string `json:"plaintext"`
-}
-
-type sealResponse struct {
-	Sealed string `json:"sealed"`
-}
-
-type unsealRequest struct {
-	Sealed string `json:"sealed"`
-}
-
-type unsealResponse struct {
-	Plaintext string `json:"plaintext"`
-}
-
 // Seal handles POST /api/agent/seal.
 func (h *Handler) Seal(w http.ResponseWriter, r *http.Request) {
 	agentID := auth.AgentIDFromContext(r.Context())
-	var req sealRequest
+	var req agentsdk.SealRequest
 	if err := readJSON(r, &req); err != nil {
 		writeJSONError(w, http.StatusBadRequest, "invalid request body")
 		return
@@ -52,7 +37,7 @@ func (h *Handler) Seal(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusInternalServerError, "seal failed")
 		return
 	}
-	writeJSON(w, http.StatusOK, sealResponse{Sealed: sealed})
+	writeJSON(w, http.StatusOK, agentsdk.SealResponse{Sealed: sealed})
 }
 
 // Unseal handles POST /api/agent/unseal. A decrypt failure is a 400, not a
@@ -60,7 +45,7 @@ func (h *Handler) Seal(w http.ResponseWriter, r *http.Request) {
 // corrupted blob — a bad request, not a server fault.
 func (h *Handler) Unseal(w http.ResponseWriter, r *http.Request) {
 	agentID := auth.AgentIDFromContext(r.Context())
-	var req unsealRequest
+	var req agentsdk.UnsealRequest
 	if err := readJSON(r, &req); err != nil {
 		writeJSONError(w, http.StatusBadRequest, "invalid request body")
 		return
@@ -74,5 +59,5 @@ func (h *Handler) Unseal(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusBadRequest, "unseal failed: value is not sealed for this agent or is corrupt")
 		return
 	}
-	writeJSON(w, http.StatusOK, unsealResponse{Plaintext: plaintext})
+	writeJSON(w, http.StatusOK, agentsdk.UnsealResponse{Plaintext: plaintext})
 }

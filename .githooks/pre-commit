@@ -43,19 +43,22 @@ if [ -n "$staged_go" ]; then
 	fi
 fi
 
-# airlockvet only matters when this commit touches api/. The analyzer
-# operates package-wide (any single file change can shift line numbers
-# the annotations sit next to), so scope by "did the commit touch api/?"
-# rather than passing individual file paths.
-staged_api=$(git diff --cached --name-only --diff-filter=ACMR -- 'api/*.go')
-if [ -n "$staged_api" ]; then
-	if ! go run "$repo_root/cmd/airlockvet" ./api/...; then
+# airlockvet only matters when this commit touches api/ or agentapi/.
+# The analyzer operates package-wide (any single file change can shift
+# line numbers the annotations sit next to), so scope by "did the commit
+# touch one of those packages?" rather than passing individual file
+# paths.
+staged_vet=$(git diff --cached --name-only --diff-filter=ACMR -- 'api/*.go' 'agentapi/*.go')
+if [ -n "$staged_vet" ]; then
+	if ! go run "$repo_root/cmd/airlockvet" ./api/... ./agentapi/...; then
 		echo >&2
 		echo "ERROR: airlockvet rejected the commit." >&2
 		echo "Route the call through service/{domain} (and authz.Authorize)," >&2
-		echo "switch JSON for proto, or annotate the line with a reason:" >&2
+		echo "switch JSON for proto, move the wire type to agentsdk," >&2
+		echo "or annotate the line with a reason:" >&2
 		echo "  // airlockvet:allow-dbq reason: ..." >&2
 		echo "  // airlockvet:allow-writejson reason: ..." >&2
+		echo "  // airlockvet:allow-agentwire reason: ..." >&2
 		exit 1
 	fi
 fi

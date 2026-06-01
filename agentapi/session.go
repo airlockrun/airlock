@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/airlockrun/agentsdk"
 	"github.com/airlockrun/airlock/attachref"
 	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/convert"
@@ -256,12 +257,6 @@ func (h *Handler) SessionAppend(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// sessionCompactRequest is the wire body for POST /api/agent/session/{convID}/compact.
-type sessionCompactRequest struct {
-	Summary     []session.Message `json:"summary"`
-	TokensFreed int               `json:"tokensFreed"`
-}
-
 // SessionCompact handles POST /api/agent/session/{convID}/compact.
 // Non-destructive compaction: inserts a checkpoint marker row + the summary
 // messages, then advances agent_conversations.context_checkpoint_message_id
@@ -274,7 +269,7 @@ func (h *Handler) SessionCompact(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req sessionCompactRequest
+	var req agentsdk.SessionCompactRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSONError(w, http.StatusBadRequest, "invalid request body")
 		return

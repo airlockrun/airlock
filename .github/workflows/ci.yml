@@ -77,10 +77,10 @@ jobs:
       - name: go vet
         run: go vet ./...
       # airlockvet runs the airlock-specific static checks (nodbq +
-      # writeproto in api/). multichecker exits non-zero whenever any
-      # analyzer reports a diagnostic, so a single un-annotated dbq or
-      # writeJSON site is enough to fail the build.
+      # writeproto in api/, agentwire in agentapi/). multichecker exits
+      # non-zero whenever any analyzer reports a diagnostic, so a single
+      # un-annotated violation is enough to fail the build.
       - name: airlockvet
-        run: go run ./cmd/airlockvet ./api/...
+        run: go run ./cmd/airlockvet ./api/... ./agentapi/...
       - name: go test
         run: go test ./...

@@ -11,5 +11,6 @@ func main() {
 	multichecker.Main(
 		airlockvet.NoDBQ,
 		airlockvet.WriteProto,
+		airlockvet.AgentWire,
 	)
 }

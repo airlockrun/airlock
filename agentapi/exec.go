@@ -77,7 +77,7 @@ func (h *Handler) AgentExec(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req agentExecRequest
+	var req agentsdk.ExecRequest
 	if err := readJSON(r, &req); err != nil {
 		writeJSONError(w, http.StatusBadRequest, "invalid request body")
 		return
@@ -138,15 +138,6 @@ func (h *Handler) AgentExec(w http.ResponseWriter, r *http.Request) {
 	// Background ctx so we don't lose the write if the agent disconnects
 	// the moment the stream finishes.
 	_ = q.TouchExecEndpointLastUsed(context.Background(), ep.ID)
-}
-
-// agentExecRequest is the JSON body of POST /api/agent/exec/{slug}.
-// Field shape mirrors agentsdk.execRequestWire.
-type agentExecRequest struct {
-	Command   string   `json:"command"`
-	Args      []string `json:"args,omitempty"`
-	StdinB64  string   `json:"stdinB64,omitempty"`
-	TimeoutMs int64    `json:"timeoutMs,omitempty"`
 }
 
 // dbqTOFUPinner adapts the sqlc queries into the execproxy.TOFUPinner

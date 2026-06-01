@@ -28,3 +28,14 @@ func TestWriteProto(t *testing.T) {
 	t.Cleanup(func() { apiPkgPath = prev })
 	analysistest.Run(t, dir, WriteProto, "jsonapi")
 }
+
+func TestAgentWire(t *testing.T) {
+	dir, err := filepath.Abs("testdata")
+	if err != nil {
+		t.Fatalf("abs testdata: %v", err)
+	}
+	prev := agentapiPkgPath
+	agentapiPkgPath = "agentapi"
+	t.Cleanup(func() { agentapiPkgPath = prev })
+	analysistest.Run(t, dir, AgentWire, "agentapi")
+}
