@@ -349,14 +349,6 @@ func (m *DockerManager) StartToolserver(ctx context.Context, opts ToolserverOpts
 	// entrypoint self-registers that UID into /etc/passwd so sudo works
 	// (it refuses to run for an unknown UID).
 	cmd := []string{"toolserver", "-space-dir", opts.WorkDir, "-home-dir", "/tmp/sol-home"}
-	// A PreCmd (dev: stale-lib cache eviction) runs once before the
-	// toolserver, which is then exec'd so it stays the container's
-	// foreground process. WorkDir is shell-quoted defensively.
-	if opts.PreCmd != "" {
-		cmd = []string{"sh", "-c", fmt.Sprintf(
-			"%s ; exec toolserver -space-dir %q -home-dir /tmp/sol-home",
-			opts.PreCmd, opts.WorkDir)}
-	}
 
 	// Run as the host UID/GID so files written to the bind-mounted workspace
 	// are owned by the same user, preventing permission errors on git operations.

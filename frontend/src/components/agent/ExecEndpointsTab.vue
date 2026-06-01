@@ -67,7 +67,7 @@ function endpointPreview(ep: ExecEndpoint): string {
 
 async function refresh() {
   const { data } = await api.get(`/api/v1/agents/${props.agentId}/exec-endpoints`)
-  endpoints.value = (data || []) as ExecEndpoint[]
+  endpoints.value = (data?.endpoints || []) as ExecEndpoint[]
   // Seed per-row form values from current row state.
   for (const ep of endpoints.value) {
     if (!(ep.slug in formHost.value)) {
@@ -120,13 +120,14 @@ async function testConnection(ep: ExecEndpoint) {
   lastTest.value[ep.slug] = null
   try {
     const { data } = await api.post(`/api/v1/agents/${props.agentId}/exec-endpoints/${ep.slug}/test`)
-    lastTest.value[ep.slug] = data as TestResult
-    if (data.ok) {
-      toast.add({ severity: 'success', summary: `Connection OK (${data.durationMs}ms)`, life: 3000 })
-    } else if (data.error) {
-      toast.add({ severity: 'error', summary: data.error, life: 6000 })
+    const result = (data?.result ?? {}) as TestResult
+    lastTest.value[ep.slug] = result
+    if (result.ok) {
+      toast.add({ severity: 'success', summary: `Connection OK (${result.durationMs}ms)`, life: 3000 })
+    } else if (result.error) {
+      toast.add({ severity: 'error', summary: result.error, life: 6000 })
     } else {
-      toast.add({ severity: 'warn', summary: `Exit ${data.exitCode}`, life: 4000 })
+      toast.add({ severity: 'warn', summary: `Exit ${result.exitCode}`, life: 4000 })
     }
     await refresh() // host-key may have been pinned on first success
   } catch (err: any) {

@@ -166,6 +166,13 @@ message AgentInfo {
   // emoji is an optional decorative glyph (agentsdk.Config.Emoji) shown
   // next to the agent in the UI. Empty = none.
   string emoji = 16;
+  // your_access is the caller's effective access level on this agent —
+  // "admin", "user", or "public" (matches agentsdk.Access). Populated
+  // by the operator-facing list/detail endpoints so the UI and the
+  // in-airlock system agent can locally decide which per-agent actions
+  // to offer without re-authorizing each one. Empty when the caller
+  // axis is not user-scoped (e.g. agent-internal lookups).
+  string your_access = 17;
 }
 
 // RunInfo represents a single execution of an agent.
@@ -469,4 +476,120 @@ message AgentGitConfig {
   string webhook_url = 6;          // fully-qualified URL the user pastes into their git provider
   string webhook_secret = 7;       // shown so the user can paste it into their provider settings
   string last_synced_ref = 8;
+}
+
+// MCPServerInfo is one row from ListMCPServers — agent-declared MCP
+// servers with their authorization status and live tool count.
+message MCPServerInfo {
+  string id = 1;
+  string slug = 2;
+  string name = 3;
+  string url = 4;
+  string auth_mode = 5;
+  bool authorized = 6;
+  bool has_oauth_app = 7;
+  int32 tool_count = 8;
+  string auth_url = 9;                                 // airlock-hosted URL the operator visits to authorize; empty for non-interactive auth modes
+  google.protobuf.Timestamp token_expires_at = 10;
+  google.protobuf.Timestamp last_synced_at = 11;
+}
+
+// MCPStatusInfo is the lighter shape used by status-only endpoints
+// (set/revoke/oauth-app) — no URL / sync metadata, just whether
+// the MCP credential is currently configured.
+message MCPStatusInfo {
+  string slug = 1;
+  string name = 2;
+  string auth_mode = 3;
+  bool authorized = 4;
+}
+
+// EnvVarInfo is one row from ListEnvVars. Value is populated only
+// when !is_secret AND configured; secret values are never returned
+// through any read endpoint.
+message EnvVarInfo {
+  string slug = 1;
+  string description = 2;
+  bool is_secret = 3;
+  bool configured = 4;
+  string default_value = 5;
+  string pattern = 6;
+  string value = 7;
+  google.protobuf.Timestamp updated_at = 8;
+}
+
+// SiblingInfo is one entry in an agent's A2A address book.
+message SiblingInfo {
+  string id = 1;
+  string slug = 2;
+  string name = 3;
+  string description = 4;
+  bool allow_non_member_mcp = 5;
+  bool allow_public_mcp = 6;
+  google.protobuf.Timestamp created_at = 7;
+}
+
+// AddableSiblingInfo is a candidate the editing user can add to an
+// agent's A2A address book. is_member tells the UI whether the
+// editing user is already a member of the target (vs picking it
+// purely because allow_non_member_mcp=true).
+message AddableSiblingInfo {
+  string id = 1;
+  string slug = 2;
+  string name = 3;
+  string description = 4;
+  bool allow_non_member_mcp = 5;
+  bool is_member = 6;
+}
+
+// A2ASettings is the per-agent MCP-exposure toggles configured from
+// the A2A settings page. Wire shape for get_agent_sharing /
+// set_agent_sharing.
+message A2ASettings {
+  bool allow_non_member_mcp = 1;
+  bool allow_public_mcp = 2;
+}
+
+// ExecEndpointInfo is one row from ListExecEndpoints — the
+// operator-visible projection that strips the secrets-store
+// private-key reference and surfaces only the host-key SHA256
+// fingerprint (not the full blob).
+message ExecEndpointInfo {
+  string id = 1;
+  string slug = 2;
+  string description = 3;
+  string llm_hint = 4;
+  string access = 5;
+  string transport = 6;
+  string host = 7;
+  int32 port = 8;
+  string ssh_user = 9;
+  string public_key_openssh = 10;
+  string public_key_comment = 11;
+  string host_key_fingerprint = 12;
+  google.protobuf.Timestamp host_key_pinned_at = 13;
+  google.protobuf.Timestamp last_used_at = 14;
+}
+
+// ExecEndpointTestResult is the parsed outcome of running `whoami`
+// over the configured SSH transport. ok signals success at the
+// transport+auth+host-key layer; non-zero exit_code with ok=true
+// means the connection worked but the command failed.
+message ExecEndpointTestResult {
+  bool ok = 1;
+  int32 exit_code = 2;
+  int64 duration_ms = 3;
+  string stdout = 4;
+  string stderr = 5;
+  string error = 6;
+}
+
+// SetupCountsInfo aggregates the setup-completeness counters
+// across an agent's connections, MCP servers, and env vars. Used
+// by the agent-card progress bar to flag agents whose operator
+// hasn't finished setup.
+message SetupCountsInfo {
+  int32 connections = 1;
+  int32 mcp_servers = 2;
+  int32 env_vars = 3;
 }

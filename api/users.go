@@ -27,21 +27,6 @@ func NewUsersHandler(database *db.DB, usersSvc *userssvc.Service) *UsersHandler 
 	return &UsersHandler{db: database, users: usersSvc}
 }
 
-// detailToProto packs a service.users.Detail into the wire User proto.
-// Centralized here so List + Create share one mapping.
-func detailToProto(d userssvc.Detail) *airlockv1.User {
-	return &airlockv1.User{
-		Id:                 d.ID.String(),
-		Email:              d.Email,
-		DisplayName:        d.DisplayName,
-		TenantRole:         convert.TenantRoleStringToProto(d.TenantRole),
-		OidcSub:            d.OIDCSub,
-		CreatedAt:          convert.PgTimestampToProto(d.CreatedAt),
-		UpdatedAt:          convert.PgTimestampToProto(d.UpdatedAt),
-		MustChangePassword: d.MustChangePassword,
-	}
-}
-
 // List returns all users (admin-only — service gates on TenantUserManage).
 func (h *UsersHandler) List(w http.ResponseWriter, r *http.Request) {
 	p := principalFromRequest(r)
@@ -53,7 +38,7 @@ func (h *UsersHandler) List(w http.ResponseWriter, r *http.Request) {
 	}
 	pbUsers := make([]*airlockv1.User, len(details))
 	for i, d := range details {
-		pbUsers[i] = detailToProto(d)
+		pbUsers[i] = convert.UserDetailToProto(d)
 	}
 	writeProto(w, http.StatusOK, &airlockv1.ListUsersResponse{Users: pbUsers})
 }
@@ -101,7 +86,7 @@ func (h *UsersHandler) Create(w http.ResponseWriter, r *http.Request) {
 		writeUsersError(w, err, "create user")
 		return
 	}
-	writeProto(w, http.StatusCreated, &airlockv1.CreateUserResponse{User: detailToProto(detail)})
+	writeProto(w, http.StatusCreated, &airlockv1.CreateUserResponse{User: convert.UserDetailToProto(detail)})
 }
 
 // UpdateRole changes a user's tenant role.

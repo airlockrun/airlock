@@ -72,6 +72,15 @@ func (b *BuildService) Execute(ctx context.Context, plan BuildPlan) (string, err
 	}
 	defer proxyCleanup()
 
+	// The version the agent's go.mod pins for agentsdk and that the proxy
+	// serves it at — content-addressed (v<const>-dev<hash>) in dev so live lib
+	// edits resolve fresh, published v<const> in prod. Shared by housekeeping
+	// and scaffold below so the agent's go.mod and the proxy always agree.
+	sdkVer, err := b.agentSDKVersion()
+	if err != nil {
+		return "", fmt.Errorf("resolve agent sdk version: %w", err)
+	}
+
 	// ── Phase A: per-flow setup ────────────────────────────────────────
 	//
 	// For initial builds we still need to create the per-agent repo,
@@ -200,7 +209,7 @@ func (b *BuildService) Execute(ctx context.Context, plan BuildPlan) (string, err
 			AgentID:         agentID,
 			Module:          "agent",
 			GoVersion:       buildGoVersion,
-			AgentSDKVersion: "v" + agentsdk.Version,
+			AgentSDKVersion: sdkVer,
 			AgentBaseImage:  b.cfg.AgentBaseImage,
 		})
 		if err != nil {
@@ -332,7 +341,7 @@ func (b *BuildService) Execute(ctx context.Context, plan BuildPlan) (string, err
 		AgentID:         agentID,
 		Module:          "agent",
 		GoVersion:       buildGoVersion,
-		AgentSDKVersion: "v" + agentsdk.Version,
+		AgentSDKVersion: sdkVer,
 		AgentBaseImage:  b.cfg.AgentBaseImage,
 	}); err != nil {
 		completeBuild("failed", err.Error(), commitHash, "")
@@ -455,11 +464,15 @@ func (b *BuildService) prepareNewAgent(ctx context.Context, q *dbq.Queries, agen
 		return "", "", fmt.Errorf("init agent repo: %w", err)
 	}
 
+	sdkVer, err := b.agentSDKVersion()
+	if err != nil {
+		return "", "", fmt.Errorf("resolve agent sdk version: %w", err)
+	}
 	data := scaffold.ScaffoldData{
 		AgentID:         agentID,
 		Module:          "agent",
 		GoVersion:       buildGoVersion,
-		AgentSDKVersion: "v" + agentsdk.Version,
+		AgentSDKVersion: sdkVer,
 		AgentBaseImage:  b.cfg.AgentBaseImage,
 	}
 	if _, err := CommitScaffold(repoPath, data); err != nil {

@@ -1,17 +1,18 @@
 package api
 
 import (
-	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
+	"time"
 
 	"github.com/airlockrun/airlock/convert"
-	"github.com/airlockrun/airlock/db/dbq"
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 	"github.com/airlockrun/airlock/service"
 	"github.com/airlockrun/airlock/sysagent"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // sysagentHandler owns the per-user system-agent chat surface at
@@ -47,72 +48,6 @@ func writeSysagentError(w http.ResponseWriter, err error, fallback string) {
 	}
 }
 
-// --- proto converters ---
-
-// sysConversationToProto maps a dbq.SystemConversation to its wire shape. The
-// pending_tool field is populated only when status is
-// 'awaiting_confirmation' (a checkpoint exists), pulling the first
-// pending tool call out of the saved SuspensionContext for the
-// confirmation UI.
-func sysConversationToProto(t dbq.SystemConversation) *airlockv1.SystemConversationInfo {
-	info := &airlockv1.SystemConversationInfo{
-		Id:        uuid.UUID(t.ID.Bytes).String(),
-		UserId:    uuid.UUID(t.UserID.Bytes).String(),
-		Title:     t.Title,
-		Status:    t.Status,
-		CreatedAt: convert.PgTimestampToProto(t.CreatedAt),
-		UpdatedAt: convert.PgTimestampToProto(t.UpdatedAt),
-	}
-	if t.Status == "awaiting_confirmation" && len(t.Checkpoint) > 0 {
-		info.PendingTool = pendingFromCheckpoint(t.Checkpoint)
-	}
-	return info
-}
-
-// pendingFromCheckpoint pulls the first pending tool call out of the
-// stored sol.SuspensionContext JSON blob. Today the confirmation UI
-// is one-call-at-a-time (matches agent chat); if a gate ever surfaces
-// multiple calls at once we'd extend PendingSystemTool to carry a
-// list.
-func pendingFromCheckpoint(blob []byte) *airlockv1.PendingSystemTool {
-	var sc struct {
-		PendingToolCalls []struct {
-			ID    string          `json:"id"`
-			Name  string          `json:"name"`
-			Input json.RawMessage `json:"input"`
-		} `json:"pendingToolCalls"`
-	}
-	if err := json.Unmarshal(blob, &sc); err != nil || len(sc.PendingToolCalls) == 0 {
-		return nil
-	}
-	first := sc.PendingToolCalls[0]
-	return &airlockv1.PendingSystemTool{
-		CallId:   first.ID,
-		ToolName: first.Name,
-		ArgsJson: string(first.Input),
-	}
-}
-
-// sysMessageToProto maps one dbq.SystemMessage row to its wire
-// shape. parts is passed through verbatim (JSONB bytes → string) so
-// MessageParts.vue renders the goai content layout the same way it
-// does for agent chat. system_messages has no separate source column
-// today (source rides inside parts as a per-block field), so Source
-// is left empty here.
-func sysMessageToProto(m dbq.SystemMessage) *airlockv1.SystemMessageInfo {
-	cost, _ := m.CostEstimate.Float64Value()
-	return &airlockv1.SystemMessageInfo{
-		Id:           uuid.UUID(m.ID.Bytes).String(),
-		Seq:          m.Seq,
-		Role:         m.Role,
-		Parts:        string(m.Parts),
-		TokensIn:     m.TokensIn,
-		TokensOut:    m.TokensOut,
-		CostEstimate: cost.Float64,
-		CreatedAt:    convert.PgTimestampToProto(m.CreatedAt),
-	}
-}
-
 // --- handlers ---
 
 func (h *sysagentHandler) ListConversations(w http.ResponseWriter, r *http.Request) {
@@ -124,7 +59,7 @@ func (h *sysagentHandler) ListConversations(w http.ResponseWriter, r *http.Reque
 	}
 	out := make([]*airlockv1.SystemConversationInfo, len(rows))
 	for i, row := range rows {
-		out[i] = sysConversationToProto(row)
+		out[i] = convert.SysConversationToProto(row)
 	}
 	writeProto(w, http.StatusOK, &airlockv1.ListSystemConversationsResponse{Conversations: out})
 }
@@ -142,7 +77,7 @@ func (h *sysagentHandler) CreateConversation(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	writeProto(w, http.StatusCreated, &airlockv1.CreateSystemConversationResponse{
-		Conversation: sysConversationToProto(row),
+		Conversation: convert.SysConversationToProto(row),
 	})
 }
 
@@ -160,12 +95,58 @@ func (h *sysagentHandler) GetConversation(w http.ResponseWriter, r *http.Request
 	}
 	msgs := make([]*airlockv1.SystemMessageInfo, len(detail.Messages))
 	for i, m := range detail.Messages {
-		msgs[i] = sysMessageToProto(m)
+		msgs[i] = convert.SysMessageToProto(m)
 	}
 	writeProto(w, http.StatusOK, &airlockv1.GetSystemConversationResponse{
-		Conversation: sysConversationToProto(detail.Conversation),
+		Conversation: convert.SysConversationToProto(detail.Conversation),
 		Messages:     msgs,
 	})
+}
+
+// ListRuns serves GET /api/v1/system/runs?cursor=<rfc3339>&limit=<n>.
+// Owner-scoped — the service filters by the caller's principal.
+func (h *sysagentHandler) ListRuns(w http.ResponseWriter, r *http.Request) {
+	var cursor time.Time
+	if raw := r.URL.Query().Get("cursor"); raw != "" {
+		t, err := time.Parse(time.RFC3339Nano, raw)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid cursor; expected RFC3339")
+			return
+		}
+		cursor = t
+	}
+	var limit int32 = 25
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil {
+			limit = int32(n)
+		}
+	}
+	p := principalFromRequest(r)
+	result, err := h.svc.ListRuns(r.Context(), p, cursor, limit)
+	if err != nil {
+		writeSysagentError(w, err, "failed to list runs")
+		return
+	}
+	out := make([]*airlockv1.SystemRunInfo, len(result.Runs))
+	for i, run := range result.Runs {
+		info := &airlockv1.SystemRunInfo{
+			Id:                run.ID.String(),
+			ConversationId:    run.ConversationID.String(),
+			ConversationTitle: run.ConversationTitle,
+			Status:            run.Status,
+			ErrorMessage:      run.ErrorMessage,
+			StartedAt:         timestamppb.New(run.StartedAt),
+		}
+		if run.FinishedAt != nil {
+			info.FinishedAt = timestamppb.New(*run.FinishedAt)
+		}
+		out[i] = info
+	}
+	resp := &airlockv1.ListSystemRunsResponse{Runs: out}
+	if !result.NextCursor.IsZero() {
+		resp.NextCursor = result.NextCursor.Format(time.RFC3339Nano)
+	}
+	writeProto(w, http.StatusOK, resp)
 }
 
 func (h *sysagentHandler) DeleteConversation(w http.ResponseWriter, r *http.Request) {
@@ -199,7 +180,7 @@ func (h *sysagentHandler) Prompt(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	input := sysagent.PromptInput{Message: req.Message}
+	input := sysagent.PromptInput{Message: req.Message, ResumeRunID: req.ResumeRunId}
 	if req.Approved != nil {
 		v := *req.Approved
 		input.Approved = &v

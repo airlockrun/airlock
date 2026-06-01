@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 
+	"github.com/airlockrun/airlock/convert"
 	"github.com/airlockrun/airlock/db/dbq"
+	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 	"github.com/airlockrun/airlock/service"
 	"github.com/airlockrun/goai/tool"
 	"github.com/google/uuid"
@@ -19,7 +21,7 @@ func (s *Service) selfTools() []tool.Tool {
 
 func (s *Service) toolListUsers() tool.Tool {
 	return tool.New("list_users").
-		Description(`List all users in this airlock tenant (id, email, display_name, tenant_role). Use this to look up a user before add_agent_member / remove_agent_member when the operator gave you a name instead of an email.`).
+		Description(`List all users in this airlock tenant (id, email, display_name). Use this to look up a user before add_agent_member / remove_agent_member when the operator gave you a name instead of an email.`).
 		SchemaFromStruct(struct{}{}).
 		Execute(func(ctx context.Context, _ json.RawMessage, _ tool.CallOptions) (tool.Result, error) {
 			p := principalFromCtx(ctx)
@@ -27,7 +29,11 @@ func (s *Service) toolListUsers() tool.Tool {
 			if err != nil {
 				return errResult(err), nil
 			}
-			return okResult(rows)
+			out := make([]*airlockv1.UserSummary, len(rows))
+			for i, u := range rows {
+				out[i] = convert.UserSummaryToProto(u)
+			}
+			return okResult(out)
 		}).
 		Build()
 }

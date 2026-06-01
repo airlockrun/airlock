@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 
+	"github.com/airlockrun/airlock/convert"
+	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 	"github.com/airlockrun/goai/tool"
 	"github.com/google/uuid"
 )
@@ -49,11 +51,19 @@ func (s *Service) toolListConnections() tool.Tool {
 			if err != nil {
 				return errResult(err), nil
 			}
-			out, err := s.conns.ListConnections(ctx, p, uuid.UUID(a.ID.Bytes))
+			agentID := uuid.UUID(a.ID.Bytes)
+			out, err := s.conns.ListConnections(ctx, p, agentID)
 			if err != nil {
 				return errResult(err), nil
 			}
-			return okResult(out)
+			conns := make([]*airlockv1.ConnectionInfo, len(out.Connections))
+			for i, c := range out.Connections {
+				conns[i] = convert.ConnectionDTOToProto(c, s.publicURL, agentID.String())
+			}
+			return okResult(&airlockv1.ListConnectionsResponse{
+				Connections:      conns,
+				OauthCallbackUrl: out.OAuthCallbackURL,
+			})
 		}).
 		Build()
 }
@@ -78,7 +88,7 @@ func (s *Service) toolGetConnectionStatus() tool.Tool {
 			if err != nil {
 				return errResult(err), nil
 			}
-			return okResult(out)
+			return okResult(convert.CredentialStatusToProto(out))
 		}).
 		Build()
 }
@@ -103,7 +113,7 @@ func (s *Service) toolConnectionSetupStatus() tool.Tool {
 			if err != nil {
 				return errResult(err), nil
 			}
-			return okResult(out)
+			return okResult(convert.SetupCountsToProto(out))
 		}).
 		Build()
 }
@@ -152,7 +162,7 @@ func (s *Service) toolTestConnection() tool.Tool {
 			if err != nil {
 				return errResult(err), nil
 			}
-			return okResult(out)
+			return okResult(convert.TestCredentialResultToProto(out))
 		}).
 		Build()
 }
@@ -173,9 +183,13 @@ func (s *Service) toolListMCPServers() tool.Tool {
 			if err != nil {
 				return errResult(err), nil
 			}
-			out, err := s.conns.ListMCPServers(ctx, p, uuid.UUID(a.ID.Bytes))
+			rows, err := s.conns.ListMCPServers(ctx, p, uuid.UUID(a.ID.Bytes))
 			if err != nil {
 				return errResult(err), nil
+			}
+			out := make([]*airlockv1.MCPServerInfo, len(rows))
+			for i, m := range rows {
+				out[i] = convert.MCPServerToProto(m, s.publicURL, uuid.UUID(a.ID.Bytes).String())
 			}
 			return okResult(out)
 		}).
@@ -202,7 +216,7 @@ func (s *Service) toolGetMCPCredentialStatus() tool.Tool {
 			if err != nil {
 				return errResult(err), nil
 			}
-			return okResult(out)
+			return okResult(convert.MCPStatusToProto(out))
 		}).
 		Build()
 }
@@ -251,7 +265,7 @@ func (s *Service) toolTestMCPCredential() tool.Tool {
 			if err != nil {
 				return errResult(err), nil
 			}
-			return okResult(out)
+			return okResult(convert.TestCredentialResultToProto(out))
 		}).
 		Build()
 }

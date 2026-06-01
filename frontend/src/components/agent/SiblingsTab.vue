@@ -52,11 +52,11 @@ async function loadAll() {
       api.get(`/api/v1/agents/${props.agentId}/siblings/addable`),
       api.get(`/api/v1/agents/${props.agentId}/a2a-settings`),
     ])
-    siblings.value = sList.data || []
-    addable.value = aList.data || []
+    siblings.value = sList.data?.siblings || []
+    addable.value = aList.data?.agents || []
     settings.value = {
-      allowNonMemberMcp: !!sCfg.data?.allowNonMemberMcp,
-      allowPublicMcp: !!sCfg.data?.allowPublicMcp,
+      allowNonMemberMcp: !!sCfg.data?.settings?.allowNonMemberMcp,
+      allowPublicMcp: !!sCfg.data?.settings?.allowPublicMcp,
     }
   } finally {
     loading.value = false
@@ -71,7 +71,7 @@ async function saveSettings() {
     settings.value.allowNonMemberMcp = true
   }
   try {
-    await api.put(`/api/v1/agents/${props.agentId}/a2a-settings`, settings.value)
+    await api.put(`/api/v1/agents/${props.agentId}/a2a-settings`, { settings: settings.value })
     toast.add({ severity: 'success', summary: 'MCP settings saved', life: 2000 })
     await loadAll() // addable list changes when non-member-mcp flips
   } catch (err: any) {

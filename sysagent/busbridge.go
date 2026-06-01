@@ -6,6 +6,7 @@ import (
 
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 	"github.com/airlockrun/airlock/realtime"
+	"github.com/airlockrun/goai/message"
 	"github.com/airlockrun/goai/stream"
 	"github.com/airlockrun/sol"
 	"github.com/airlockrun/sol/bus"
@@ -91,16 +92,28 @@ func (s *pubsubSink) OnToolCall(e stream.ToolCallEvent) {
 }
 
 func (s *pubsubSink) OnToolResult(e stream.ToolResultEvent) {
-	// stream.ToolResultEvent.Output is a discriminated outcome union.
-	// Marshal to its JSON wire form so the frontend's ToolBadge can
-	// decode it the same way it does for agent chat (see
-	// api/event_publisher.go::decodeToolOutput for the parser).
-	outputJSON, _ := json.Marshal(e.Output)
+	// Unwrap the discriminated ToolResultOutput into plain
+	// (text, outcome, errText) — same shape api/event_publisher.go's
+	// decodeToolOutput sends for agent chat, so the frontend's WS
+	// handler can assign tc.output = ev.output directly without
+	// re-parsing an envelope. Error text rides in `Error` (not
+	// `Output`) to match the persisted-refresh path; otherwise
+	// ToolBadge renders the message twice.
+	text := message.ToolOutputText(e.Output)
+	outcome := message.ToolOutcome(e.Output)
+	out := text
+	var errText string
+	if outcome == "error" {
+		errText = text
+		out = ""
+	}
 	s.publish("run.tool_result", &airlockv1.ToolResultEvent{
 		RunId:      s.runID,
 		ToolCallId: e.ToolCallID,
 		ToolName:   e.ToolName,
-		Output:     string(outputJSON),
+		Output:     out,
+		Error:      errText,
+		Outcome:    outcome,
 	})
 }
 

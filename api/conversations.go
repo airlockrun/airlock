@@ -80,7 +80,7 @@ func (h *conversationsHandler) CreateConversation(w http.ResponseWriter, r *http
 		return
 	}
 	writeProto(w, http.StatusCreated, &airlockv1.CreateConversationResponse{
-		Conversation: conversationToProto(conv),
+		Conversation: convert.ConversationToProto(conv),
 	})
 }
 
@@ -100,7 +100,7 @@ func (h *conversationsHandler) ListConversations(w http.ResponseWriter, r *http.
 	}
 	out := make([]*airlockv1.ConversationInfo, len(convs))
 	for i, c := range convs {
-		out[i] = conversationToProto(c)
+		out[i] = convert.ConversationToProto(c)
 	}
 	writeProto(w, http.StatusOK, &airlockv1.ListConversationsResponse{Conversations: out})
 }
@@ -118,7 +118,7 @@ func (h *conversationsHandler) ListAllConversations(w http.ResponseWriter, r *ht
 	}
 	out := make([]*airlockv1.ConversationInfo, len(convs))
 	for i, c := range convs {
-		out[i] = conversationToProto(c)
+		out[i] = convert.ConversationToProto(c)
 	}
 	writeProto(w, http.StatusOK, &airlockv1.ListConversationsResponse{Conversations: out})
 }
@@ -141,7 +141,7 @@ func (h *conversationsHandler) GetConversation(w http.ResponseWriter, r *http.Re
 		msgInfos[i] = messageToProto(ctx, h.s3, h.logger, m)
 	}
 	resp := &airlockv1.GetConversationResponse{
-		Conversation:     conversationToProto(det.Conversation),
+		Conversation:     convert.ConversationToProto(det.Conversation),
 		Messages:         msgInfos,
 		HasOlderMessages: det.HasOlderMessages,
 		InFlightRunId:    det.InFlightRunID,
@@ -206,6 +206,58 @@ func (h *conversationsHandler) DeleteConversation(w http.ResponseWriter, r *http
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+const (
+	// resumeWaitTimeout bounds how long a confirmation resume waits for the
+	// agent's async /run/complete to mark the run suspended. The run streams
+	// its confirmation event to the UI before that write lands, so an approval
+	// can arrive a few ms ahead of the status flip — wait it out rather than
+	// dropping the grant and orphaning the run.
+	resumeWaitTimeout  = 10 * time.Second
+	resumeWaitInterval = 100 * time.Millisecond
+)
+
+// awaitSuspendedRun resolves the run a confirmation response names, scoped to
+// this conversation, tolerating the race where the approval beats the agent's
+// suspend write. Returns an error (surfaced as 409 → a UI toast) if the run
+// belongs elsewhere, has already finished, or never suspends before the
+// deadline. Validating trigger_ref == this web conversation also rejects
+// resuming a sibling-delegated (source='a2a') suspension on the same agent.
+func (h *conversationsHandler) awaitSuspendedRun(ctx context.Context, q *dbq.Queries, runIDStr string, conv dbq.AgentConversation, agentID uuid.UUID) (dbq.Run, error) {
+	runID, err := parseUUID(runIDStr)
+	if err != nil {
+		return dbq.Run{}, errors.New("invalid resume_run_id")
+	}
+	convIDStr := convert.PgUUIDToString(conv.ID)
+	deadline := time.Now().Add(resumeWaitTimeout)
+	for {
+		run, err := q.GetRunByID(ctx, toPgUUID(runID))
+		if err != nil {
+			return dbq.Run{}, errors.New("run not found")
+		}
+		if uuid.UUID(run.AgentID.Bytes) != agentID || run.TriggerType != "prompt" || run.TriggerRef != convIDStr {
+			return dbq.Run{}, errors.New("run does not belong to this conversation")
+		}
+		switch run.Status {
+		case "suspended":
+			return run, nil
+		case "running":
+			// Still in flight — the suspend write hasn't landed yet (or it
+			// won't). Wait until the deadline, then give up.
+			if time.Now().After(deadline) {
+				return dbq.Run{}, errors.New("run did not suspend in time; try again")
+			}
+			select {
+			case <-ctx.Done():
+				return dbq.Run{}, ctx.Err()
+			case <-time.After(resumeWaitInterval):
+			}
+		default:
+			// success / error / failed / cancelled — already terminal.
+			return dbq.Run{}, errors.New("run already finished; nothing to confirm")
+		}
+	}
 }
 
 // Prompt handles POST /api/v1/agents/{agentID}/prompt — streams NDJSON.
@@ -394,25 +446,34 @@ func (h *conversationsHandler) Prompt(w http.ResponseWriter, r *http.Request) {
 	// Serialize prompts per conversation — second prompt blocks until first completes.
 	h.convLocks.Lock(convIDStr)
 
-	// Check for suspended run inside the lock to prevent races where two
-	// concurrent requests both find the same suspended run. Conversation-
-	// scoped: a web prompt must only ever resolve the suspension of its
-	// own thread, never a sibling-delegated (source='a2a') suspension on
-	// the same agent.
-	if suspendedRun, err := q.GetLatestSuspendedRunByConversation(ctx, convIDStr); err == nil {
-		input.ResumeRunID = convert.PgUUIDToString(suspendedRun.ID)
+	// A confirmation response — or a free-text message typed while a
+	// confirmation is pending — carries the exact run it resolves: the UI
+	// took the id from the confirmation event. Resume THAT run rather than
+	// guessing the conversation's latest suspended one. awaitSuspendedRun
+	// also tolerates the race where the approval beats the agent's async
+	// suspend write. An explicit approve/deny must name its run.
+	if req.ResumeRunId != "" {
+		run, werr := h.awaitSuspendedRun(ctx, q, req.ResumeRunId, conv, agentID)
+		if werr != nil {
+			h.convLocks.Unlock(convIDStr)
+			writeError(w, http.StatusConflict, werr.Error())
+			return
+		}
+		input.ResumeRunID = req.ResumeRunId
 		input.Approved = req.Approved
 		// On deny, sol persists the re-reason nudge ("Rejected by user.")
 		// as a user message. Tag it source="control" so the UI renders a
-		// muted label instead of a fake user bubble (it's a control
-		// signal for the model, not something the human typed). It's the
-		// only role=user message this resume run writes, so a run-scoped
-		// source is exact. Approve sends an empty prompt — no user
-		// message — so this only matters for deny.
+		// muted label instead of a fake user bubble (a control signal for
+		// the model, not something the human typed). Only the deny path
+		// writes a role=user message, so a run-scoped source is exact.
 		if req.Approved != nil && !*req.Approved {
 			input.Source = "control"
 		}
-		_ = q.ResolveSuspendedRun(ctx, suspendedRun.ID)
+		_ = q.ResolveSuspendedRun(ctx, run.ID)
+	} else if req.Approved != nil {
+		h.convLocks.Unlock(convIDStr)
+		writeError(w, http.StatusBadRequest, "resume_run_id is required for a confirmation response")
+		return
 	}
 
 	// Forward to agent container — no bridge_id for web.
@@ -678,28 +739,17 @@ func (h *conversationsHandler) ownedConversation(ctx context.Context, w http.Res
 	return conv, true
 }
 
-func conversationToProto(c dbq.AgentConversation) *airlockv1.ConversationInfo {
-	source := c.Source
-	if source == "" {
-		source = "web"
-	}
-	return &airlockv1.ConversationInfo{
-		Id:        convert.PgUUIDToString(c.ID),
-		AgentId:   convert.PgUUIDToString(c.AgentID),
-		Title:     c.Title,
-		Source:    source,
-		CreatedAt: convert.PgTimestampToProto(c.CreatedAt),
-		UpdatedAt: convert.PgTimestampToProto(c.UpdatedAt),
-	}
-}
-
+// messageToProto resolves S3-keyed media parts to presigned URLs
+// before serializing. Stays in api/ because of those runtime deps
+// (S3 client + logger); the pure dbq→proto converter for
+// AgentConversation lives in convert.ConversationToProto.
 func messageToProto(ctx context.Context, s3Client *storage.S3Client, logger *zap.Logger, m dbq.AgentMessage) *airlockv1.AgentMessageInfo {
 	info := &airlockv1.AgentMessageInfo{
 		Id:           convert.PgUUIDToString(m.ID),
 		Seq:          m.Seq,
 		Role:         m.Role,
 		Content:      m.Content,
-		CostEstimate: pgNumericToFloat(m.CostEstimate),
+		CostEstimate: convert.PgNumericToFloat(m.CostEstimate),
 		CreatedAt:    convert.PgTimestampToProto(m.CreatedAt),
 		Source:       m.Source,
 		RunId:        convert.PgUUIDToString(m.RunID),

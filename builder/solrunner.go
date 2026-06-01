@@ -129,7 +129,6 @@ func (b *BuildService) runSolInProcess(ctx context.Context, opts solRunOpts) (*s
 		workspaceMount = dmount.Mount{Type: dmount.TypeBind, Source: opts.WorkDir, Target: "/workspace"}
 	}
 	mounts := []dmount.Mount{workspaceMount}
-	var preCmd string
 	if b.cfg.AgentLibsPathExplicit {
 		// Dev: overlay the live lib trees read-only at /libs so the codegen
 		// LLM reads the current agentsdk/goai/sol source + llms.md guide
@@ -147,9 +146,9 @@ func (b *BuildService) runSolInProcess(ctx context.Context, opts solRunOpts) (*s
 		}
 	}
 	// Dev: mount the generated lib proxy and point GOPROXY at it so the owned
-	// libs resolve from live source. Evict those libs from the shared
-	// module-cache volume at startup (PreCmd) since the proxy serves changing
-	// content under a stable version. Prod: GoProxyDir empty → public proxy.
+	// libs resolve from live source. The proxy serves each lib at a content-
+	// addressed version, so changed source is a new version Go fetches fresh
+	// — no shared-cache eviction needed. Prod: GoProxyDir empty → public proxy.
 	if opts.GoProxyDir != "" {
 		mounts = append(mounts, dmount.Mount{
 			Type:     dmount.TypeBind,
@@ -158,14 +157,12 @@ func (b *BuildService) runSolInProcess(ctx context.Context, opts solRunOpts) (*s
 			ReadOnly: true,
 		})
 		toolEnv = append(toolEnv, "GOPROXY=file:///goproxy,https://proxy.golang.org")
-		preCmd = bustLibCacheShell("/tmp/go-mod")
 	}
 	tc, err := b.containers.StartToolserver(ctx, container.ToolserverOpts{
 		Image:   b.cfg.AgentBuilderImage,
 		Mounts:  mounts,
 		WorkDir: agentDir,
 		Env:     toolEnv,
-		PreCmd:  preCmd,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("start toolserver: %w", err)

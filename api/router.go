@@ -479,6 +479,9 @@ func NewRouter(cfg RouterConfig) http.Handler {
 			r.Delete("/{conversationID}", sysagentH.DeleteConversation)
 			r.Post("/{conversationID}/prompt", sysagentH.Prompt)
 		})
+		// Activity view across the operator's own sysagent runs (all
+		// conversations). Owner-scoped query inside the service.
+		r.Get("/system/runs", sysagentH.ListRuns)
 
 		// Top-level conversation and run routes (not nested under agent).
 		// Topic subscription is conversation-scoped: the conversation that

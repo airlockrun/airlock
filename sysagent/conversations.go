@@ -2,6 +2,7 @@ package sysagent
 
 import (
 	"context"
+	"unicode/utf8"
 
 	"github.com/airlockrun/airlock/authz"
 	"github.com/airlockrun/airlock/db/dbq"
@@ -9,6 +10,29 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 )
+
+// defaultConversationTitle is the placeholder a freshly created
+// conversation carries until the operator's first message lands.
+// RunPrompt detects this string to know it's safe to overwrite —
+// matches the DB default and CreateConversation's empty-input
+// fallback.
+const defaultConversationTitle = "New chat"
+
+// truncate clips s to at most maxLen *bytes*, never cutting in the
+// middle of a UTF-8 sequence. Mirrors api/conversations.go's helper
+// (Postgres rejects partial sequences with `invalid byte sequence
+// for encoding "UTF8"`).
+func truncate(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	for end := maxLen; end > 0; end-- {
+		if utf8.RuneStart(s[end]) {
+			return s[:end]
+		}
+	}
+	return ""
+}
 
 // Conversation + ConversationDetail are the wire shapes the HTTP handler hands to
 // the frontend. They live here (not in proto) so the service stays
@@ -46,7 +70,7 @@ func (s *Service) CreateConversation(ctx context.Context, p authz.Principal, tit
 		return dbq.SystemConversation{}, service.ErrUnauthorized
 	}
 	if title == "" {
-		title = "New chat"
+		title = defaultConversationTitle
 	}
 	q := dbq.New(s.db.Pool())
 	return q.CreateSystemConversation(ctx, dbq.CreateSystemConversationParams{

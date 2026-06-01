@@ -12,21 +12,31 @@ import (
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/airlockrun/airlock/service"
-	"github.com/airlockrun/airlock/trigger"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"
 )
 
+// Dispatcher is the subset of *trigger.Dispatcher this service uses
+// to push a fresh agent_<slug> snapshot down to the running parent
+// container after a sibling add/remove. Exposed as an interface so
+// trigger.Dispatcher satisfies it implicitly — same pattern the
+// bridges service uses for its Driver dependency — and so this
+// package can be imported by convert/ without an import cycle
+// (trigger imports convert, so convert can't import trigger).
+type Dispatcher interface {
+	RefreshAgent(ctx context.Context, agentID uuid.UUID) error
+}
+
 // Service exposes the sibling/A2A-settings operations. Construction
 // panics on nil deps (airlock fail-loud rule).
 type Service struct {
 	db         *db.DB
-	dispatcher *trigger.Dispatcher
+	dispatcher Dispatcher
 	logger     *zap.Logger
 }
 
-func New(d *db.DB, dispatcher *trigger.Dispatcher, logger *zap.Logger) *Service {
+func New(d *db.DB, dispatcher Dispatcher, logger *zap.Logger) *Service {
 	if d == nil {
 		panic("siblings: db is required")
 	}

@@ -1,21 +1,17 @@
 package api
 
 import (
-	"encoding/json"
 	"errors"
 	"net/http"
 	"time"
 
 	"github.com/airlockrun/airlock/convert"
-	"github.com/airlockrun/airlock/db/dbq"
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 	"github.com/airlockrun/airlock/service"
 	runssvc "github.com/airlockrun/airlock/service/runs"
 	"github.com/airlockrun/airlock/storage"
 	"github.com/go-chi/chi/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"
-	"google.golang.org/protobuf/types/known/structpb"
 )
 
 type runsHandler struct {
@@ -72,7 +68,7 @@ func (h *runsHandler) ListRuns(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]*airlockv1.RunInfo, len(res.Runs))
 	for i, run := range res.Runs {
-		out[i] = runToProto(run, false)
+		out[i] = convert.RunToProto(run, false)
 	}
 	var nextCursor string
 	if !res.NextCursor.IsZero() {
@@ -103,7 +99,7 @@ func (h *runsHandler) GetRun(w http.ResponseWriter, r *http.Request) {
 		msgInfos[i] = messageToProto(ctx, h.s3, h.logger, m)
 	}
 	writeProto(w, http.StatusOK, &airlockv1.GetRunResponse{
-		Run:      runToProto(res.Run, true),
+		Run:      convert.RunToProto(res.Run, true),
 		Messages: msgInfos,
 	})
 }
@@ -139,55 +135,4 @@ func (h *runsHandler) CancelRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
-}
-
-// --- shared proto helpers (still used by conversations.go etc) ---
-
-func runToProto(r dbq.Run, detail bool) *airlockv1.RunInfo {
-	info := &airlockv1.RunInfo{
-		Id:              convert.PgUUIDToString(r.ID),
-		AgentId:         convert.PgUUIDToString(r.AgentID),
-		BridgeId:        convert.PgUUIDToString(r.BridgeID),
-		Status:          r.Status,
-		StartedAt:       convert.PgTimestampToProto(r.StartedAt),
-		FinishedAt:      convert.PgTimestampToProto(r.FinishedAt),
-		DurationMs:      r.DurationMs.Int32,
-		ErrorMessage:    r.ErrorMessage,
-		ErrorKind:       r.ErrorKind,
-		LlmTokensIn:     r.LlmTokensIn,
-		LlmTokensOut:    r.LlmTokensOut,
-		LlmCostEstimate: pgNumericToFloat(r.LlmCostEstimate),
-		SourceRef:       r.SourceRef,
-	}
-	if detail {
-		info.InputPayload = jsonToStruct(r.InputPayload)
-		info.Actions = jsonToListValue(r.Actions)
-		info.StdoutLog = r.StdoutLog
-		info.PanicTrace = r.PanicTrace
-	}
-	return info
-}
-
-func jsonToStruct(data []byte) *structpb.Struct {
-	if len(data) == 0 || string(data) == "{}" || string(data) == "null" {
-		return nil
-	}
-	return convert.AnyToStruct(data)
-}
-
-func jsonToListValue(data []byte) *structpb.ListValue {
-	if len(data) == 0 || string(data) == "[]" || string(data) == "null" {
-		return nil
-	}
-	var items []any
-	if err := json.Unmarshal(data, &items); err != nil {
-		return nil
-	}
-	lv, _ := structpb.NewList(items)
-	return lv
-}
-
-func pgNumericToFloat(n pgtype.Numeric) float64 {
-	f, _ := n.Float64Value()
-	return f.Float64
 }

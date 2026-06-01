@@ -218,14 +218,13 @@ interface SetupStatus {
   connections: number
   mcpServers: number
   envVars: number
-  total: number
 }
 const setupStatus = ref<SetupStatus | null>(null)
 
 async function loadSetupStatus() {
   try {
     const { data } = await api.get(`/api/v1/agents/${agentId}/setup-status`)
-    setupStatus.value = data as SetupStatus
+    setupStatus.value = (data?.counts ?? null) as SetupStatus | null
   } catch {
     // Non-fatal — header just won't show the badge.
     setupStatus.value = null
@@ -275,14 +274,21 @@ function scrollToSection(id: string, e: Event) {
   }
 }
 
+const setupTotal = computed(() => {
+  const s = setupStatus.value
+  if (!s) return 0
+  return (s.connections ?? 0) + (s.mcpServers ?? 0) + (s.envVars ?? 0)
+})
+
 const setupTooltip = computed(() => {
   const s = setupStatus.value
-  if (!s || s.total === 0) return ''
+  const total = setupTotal.value
+  if (!s || total === 0) return ''
   const parts: string[] = []
   if (s.connections) parts.push(`${s.connections} connection${s.connections === 1 ? '' : 's'}`)
   if (s.mcpServers) parts.push(`${s.mcpServers} MCP server${s.mcpServers === 1 ? '' : 's'}`)
   if (s.envVars) parts.push(`${s.envVars} env var${s.envVars === 1 ? '' : 's'}`)
-  return `${parts.join(', ')} need${s.total === 1 ? 's' : ''} setup`
+  return `${parts.join(', ')} need${total === 1 ? 's' : ''} setup`
 })
 
 let unsubBuild: (() => void) | null = null
@@ -548,8 +554,8 @@ function goToChat() {
             v-tooltip.bottom="statusTooltip"
           />
           <Tag
-            v-if="setupStatus && setupStatus.total > 0"
-            :value="`Needs setup (${setupStatus.total})`"
+            v-if="setupTotal > 0"
+            :value="`Needs setup (${setupTotal})`"
             severity="warn"
             v-tooltip.bottom="setupTooltip"
           />

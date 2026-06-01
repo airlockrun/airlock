@@ -13,7 +13,6 @@ import (
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/airlockrun/sol/webfetch"
 	"github.com/go-chi/chi/v5"
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"go.uber.org/zap"
 )
@@ -219,19 +218,5 @@ func injectAuth(req *http.Request, authInjectionJSON []byte, creds string) {
 		q := req.URL.Query()
 		q.Set(name, creds)
 		req.URL.RawQuery = q.Encode()
-	}
-}
-
-// buildCredentialAuthURL returns an Airlock-hosted URL for users to authorize a connection.
-func buildCredentialAuthURL(publicURL string, agentID uuid.UUID, slug, authMode string) string {
-	switch authMode {
-	case "oauth":
-		return fmt.Sprintf("%s/api/v1/credentials/oauth/start?agent_id=%s&slug=%s",
-			publicURL, agentID, slug)
-	case "token":
-		return fmt.Sprintf("%s/ui/credentials/new?agent_id=%s&slug=%s",
-			publicURL, agentID, slug)
-	default:
-		return ""
 	}
 }

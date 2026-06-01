@@ -226,16 +226,17 @@ async function approve() {
   try {
     await chat.sendMessage(agentId.value, '', true)
   } catch (err: any) {
-    toast.add({ severity: 'error', summary: 'Approval failed', life: 5000 })
+    toast.add({ severity: 'error', summary: 'Approval failed', detail: err.response?.data?.error, life: 5000 })
   }
 }
 
 async function reject() {
-  chat.pendingConfirmation = null
+  // Don't clear pendingConfirmation here — sendMessage reads its runId to tell
+  // the backend which run to resume, then clears it itself.
   try {
     await chat.sendMessage(agentId.value, 'Rejected by user.', false)
   } catch (err: any) {
-    toast.add({ severity: 'error', summary: 'Rejection failed', life: 5000 })
+    toast.add({ severity: 'error', summary: 'Rejection failed', detail: err.response?.data?.error, life: 5000 })
   }
 }
 

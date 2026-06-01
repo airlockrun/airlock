@@ -42,13 +42,14 @@ message PendingSystemTool {
 message SystemMessageInfo {
   string id = 1;
   int64 seq = 2;
-  string role = 3;                              // "user" | "assistant" | "tool"
-  string source = 4;
-  string parts = 5;                             // JSON-encoded goai Content
-  int32 tokens_in = 6;
-  int32 tokens_out = 7;
-  double cost_estimate = 8;
-  google.protobuf.Timestamp created_at = 9;
+  string role = 3;                              // "user" | "assistant" | "tool" | "system"
+  string source = 4;                            // "" (user-typed) | "upgrade" | "error" | ...
+  string content = 5;                           // plain-text display string (always populated)
+  string parts = 6;                             // JSON-encoded goai multi-part Content; empty when content is the whole message
+  int32 tokens_in = 7;
+  int32 tokens_out = 8;
+  double cost_estimate = 9;
+  google.protobuf.Timestamp created_at = 10;
 }
 
 // --- Requests / Responses ---
@@ -70,6 +71,27 @@ message GetSystemConversationResponse {
   repeated SystemMessageInfo messages = 2;
 }
 
+// SystemRunInfo is one entry in the operator's sysagent activity view —
+// run lifecycle + the parent conversation title (denormalized server-side
+// so the UI can render without a per-row conversation fetch).
+message SystemRunInfo {
+  string id = 1;
+  string conversation_id = 2;
+  string conversation_title = 3;
+  string status = 4;              // 'running' | 'suspended' | 'complete' | 'error' | 'cancelled'
+  string error_message = 5;
+  google.protobuf.Timestamp started_at = 6;
+  google.protobuf.Timestamp finished_at = 7;
+}
+
+// ListSystemRunsResponse is the activity view's page shape. next_cursor
+// is the RFC3339 started_at of the last row when more pages exist;
+// empty when the page is the tail.
+message ListSystemRunsResponse {
+  repeated SystemRunInfo runs = 1;
+  string next_cursor = 2;
+}
+
 // SystemPromptRequest carries either a new operator turn (message set)
 // or a pending-confirmation resolution (approved set). When both
 // message and approved are present, approved wins — the server
@@ -77,4 +99,9 @@ message GetSystemConversationResponse {
 message SystemPromptRequest {
   string message = 1;
   optional bool approved = 2;
+  // The run this confirmation response resolves — carried from the
+  // confirmation event so the resume waits for THAT run to suspend rather
+  // than racing the conversation's awaiting_confirmation flip. Empty on the
+  // refresh-restore path (the conversation is already awaiting_confirmation).
+  string resume_run_id = 3;
 }

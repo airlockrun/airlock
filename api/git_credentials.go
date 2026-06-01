@@ -43,18 +43,6 @@ func writeGitCredsError(w http.ResponseWriter, err error, fallback string) {
 	}
 }
 
-func gitCredToProto(c gitcredssvc.Credential) *airlockv1.GitCredential {
-	return &airlockv1.GitCredential{
-		Id:              c.ID.String(),
-		UserId:          c.UserID.String(),
-		Type:            c.Type,
-		Name:            c.Name,
-		GithubInstallId: c.GithubInstallID,
-		CreatedAt:       convert.PgTimestampToProto(c.CreatedAt),
-		LastUsedAt:      convert.PgTimestampToProto(c.LastUsedAt),
-	}
-}
-
 func (h *GitCredentialsHandler) List(w http.ResponseWriter, r *http.Request) {
 	p := principalFromRequest(r)
 	creds, err := h.svc.List(r.Context(), p)
@@ -64,7 +52,7 @@ func (h *GitCredentialsHandler) List(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]*airlockv1.GitCredential, len(creds))
 	for i, c := range creds {
-		out[i] = gitCredToProto(c)
+		out[i] = convert.GitCredToProto(c)
 	}
 	writeProto(w, http.StatusOK, &airlockv1.ListGitCredentialsResponse{Credentials: out})
 }
@@ -86,7 +74,7 @@ func (h *GitCredentialsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeProto(w, http.StatusCreated, &airlockv1.CreateGitCredentialResponse{
-		Credential: gitCredToProto(c),
+		Credential: convert.GitCredToProto(c),
 	})
 }
 

@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/airlockrun/airlock/convert"
+	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 	"github.com/airlockrun/airlock/service"
 	"github.com/airlockrun/goai/tool"
 	"github.com/google/uuid"
@@ -56,9 +58,17 @@ func (s *Service) toolListRuns() tool.Tool {
 			if limit > 100 {
 				limit = 100
 			}
-			out, err := s.runs.List(ctx, p, uuid.UUID(a.ID.Bytes), cursor, limit)
+			res, err := s.runs.List(ctx, p, uuid.UUID(a.ID.Bytes), cursor, limit)
 			if err != nil {
 				return errResult(err), nil
+			}
+			runs := make([]*airlockv1.RunInfo, len(res.Runs))
+			for i, r := range res.Runs {
+				runs[i] = convert.RunToProto(r, false)
+			}
+			out := map[string]any{"runs": runs}
+			if !res.NextCursor.IsZero() {
+				out["next_cursor"] = res.NextCursor.Format(time.RFC3339Nano)
 			}
 			return okResult(out)
 		}).
@@ -85,11 +95,32 @@ func (s *Service) toolGetRun() tool.Tool {
 				return errResult(err), nil
 			}
 			p := principalFromCtx(ctx)
-			out, err := s.runs.Get(ctx, p, id)
+			res, err := s.runs.Get(ctx, p, id)
 			if err != nil {
 				return errResult(err), nil
 			}
-			return okResult(out)
+			// Messages carry the goai parts JSON verbatim (no S3 presign
+			// step — the LLM doesn't dereference media URLs through tool
+			// output). Source + role + content text + parts is the same
+			// shape the web UI hands its message renderer.
+			msgs := make([]map[string]any, len(res.Messages))
+			for i, m := range res.Messages {
+				row := map[string]any{
+					"id":      convert.PgUUIDToString(m.ID),
+					"seq":     m.Seq,
+					"role":    m.Role,
+					"source":  m.Source,
+					"content": m.Content,
+				}
+				if len(m.Parts) > 0 {
+					row["parts"] = string(m.Parts)
+				}
+				msgs[i] = row
+			}
+			return okResult(map[string]any{
+				"run":      convert.RunToProto(res.Run, true),
+				"messages": msgs,
+			})
 		}).
 		Build()
 }

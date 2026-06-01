@@ -20,16 +20,23 @@ const MaxToolOutputBytes = 8 * 1024
 // LLM can decide whether to paginate.
 const truncationSuffixFormat = "\n… [truncated: total=%d bytes; refine query or paginate]"
 
-// okResult JSON-marshals v and returns a tool.Result capped at
-// MaxToolOutputBytes. Service return structs (with json tags) ARE the
-// schema-of-record — new fields appear in tool output automatically;
-// no hand-written renderer to keep in sync.
+// okResult JSON-marshals v with 2-space indentation and returns a
+// tool.Result capped at MaxToolOutputBytes. Service return structs
+// (with json tags) ARE the schema-of-record — new fields appear in
+// tool output automatically; no hand-written renderer to keep in
+// sync.
+//
+// Indented form matches the shape agent chat returns from run_js, so
+// ToolBadge's collapsed-preview line-clipping behaves the same on
+// both surfaces and the LLM sees a uniformly readable layout when it
+// quotes JSON back. Costs a few extra tokens per call (whitespace)
+// but well within the 8 KiB cap.
 //
 // On marshal failure (shouldn't happen for service return types) the
 // error path runs through errResult, so the LLM still sees structured
 // "Error: …" text rather than empty output.
 func okResult(v any) (tool.Result, error) {
-	b, err := json.Marshal(v)
+	b, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
 		return errResult(fmt.Errorf("marshal tool result: %w", err)), nil
 	}

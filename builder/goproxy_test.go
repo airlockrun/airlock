@@ -6,9 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/airlockrun/agentsdk"
-	"github.com/airlockrun/goai"
-	"github.com/airlockrun/sol"
+	"golang.org/x/mod/semver"
 )
 
 // hqRoot resolves the monorepo root (parent of airlock/) so the generator
@@ -36,9 +34,15 @@ func TestGenerateLibProxy(t *testing.T) {
 		t.Fatalf("generateLibProxy: %v", err)
 	}
 
-	for _, m := range libProxyMods() {
+	versions, err := computeDevVersions(root)
+	if err != nil {
+		t.Fatalf("computeDevVersions: %v", err)
+	}
+
+	for _, m := range proxiedLibs() {
+		ver := versions[m.path]
 		base := filepath.Join(proxy, filepath.FromSlash(m.path), "@v")
-		for _, f := range []string{"list", m.version + ".info", m.version + ".mod", m.version + ".zip"} {
+		for _, f := range []string{"list", ver + ".info", ver + ".mod", ver + ".zip"} {
 			fi, err := os.Stat(filepath.Join(base, f))
 			if err != nil {
 				t.Errorf("%s/%s: %v", m.path, f, err)
@@ -50,17 +54,17 @@ func TestGenerateLibProxy(t *testing.T) {
 		}
 	}
 
-	// The served agentsdk .mod must carry the inter-lib requires REWRITTEN
-	// to the const versions (not the lib repo's lagging published pins), so
-	// the module graph selects the proxy's local goai/sol.
-	agentsdkMod := filepath.Join(proxy, "github.com/airlockrun/agentsdk", "@v", "v"+agentsdk.Version+".mod")
+	// The served agentsdk .mod must carry the inter-lib requires REWRITTEN to
+	// the proxy's content-addressed dev versions (not the lib repo's lagging
+	// published pins), so the module graph selects the proxy's local goai/sol.
+	agentsdkMod := filepath.Join(proxy, "github.com/airlockrun/agentsdk", "@v", versions["github.com/airlockrun/agentsdk"]+".mod")
 	body, err := os.ReadFile(agentsdkMod)
 	if err != nil {
 		t.Fatalf("read served agentsdk .mod: %v", err)
 	}
 	for _, want := range []string{
-		"github.com/airlockrun/goai v" + goai.Version,
-		"github.com/airlockrun/sol v" + sol.Version,
+		"github.com/airlockrun/goai " + versions["github.com/airlockrun/goai"],
+		"github.com/airlockrun/sol " + versions["github.com/airlockrun/sol"],
 	} {
 		if !strings.Contains(string(body), want) {
 			t.Errorf("served agentsdk .mod missing rewritten require %q:\n%s", want, body)
@@ -78,10 +82,14 @@ func TestGenerateLibProxy_ZipExcludesGit(t *testing.T) {
 	if err := generateLibProxy(proxy, root); err != nil {
 		t.Fatalf("generateLibProxy: %v", err)
 	}
+	versions, err := computeDevVersions(root)
+	if err != nil {
+		t.Fatalf("computeDevVersions: %v", err)
+	}
 	// A module zip including .git would balloon well past the source size;
 	// assert the agentsdk zip is comfortably small (source is well under
 	// the module-zip 500MB cap and .git would dominate if included).
-	zip := filepath.Join(proxy, "github.com/airlockrun/agentsdk", "@v", "v"+agentsdk.Version+".zip")
+	zip := filepath.Join(proxy, "github.com/airlockrun/agentsdk", "@v", versions["github.com/airlockrun/agentsdk"]+".zip")
 	fi, err := os.Stat(zip)
 	if err != nil {
 		t.Fatal(err)
@@ -91,16 +99,35 @@ func TestGenerateLibProxy_ZipExcludesGit(t *testing.T) {
 	}
 }
 
-func TestBustLibCacheShell(t *testing.T) {
-	got := bustLibCacheShell("/tmp/go-mod")
-	for _, want := range []string{
-		"chmod -R u+w",
-		"/tmp/go-mod/cache/download/github.com/airlockrun/agentsdk",
-		"/tmp/go-mod/github.com/airlockrun/sol@*",
-		"|| true",
-	} {
-		if !strings.Contains(got, want) {
-			t.Errorf("bust shell missing %q:\n%s", want, got)
+func TestComputeDevVersions(t *testing.T) {
+	root := hqRoot(t)
+	v1, err := computeDevVersions(root)
+	if err != nil {
+		t.Fatalf("computeDevVersions: %v", err)
+	}
+	v2, err := computeDevVersions(root)
+	if err != nil {
+		t.Fatalf("computeDevVersions (second): %v", err)
+	}
+	for _, m := range proxiedLibs() {
+		ver := v1[m.path]
+		if ver == "" {
+			t.Errorf("%s: no version computed", m.path)
+			continue
+		}
+		// Deterministic: identical source → identical version, so concurrent
+		// builds agree and a cache entry is immutable per version.
+		if ver != v2[m.path] {
+			t.Errorf("%s: non-deterministic version %q vs %q", m.path, ver, v2[m.path])
+		}
+		// Valid semver carrying a -dev<hash> segment. The "-dev"+hex segment is
+		// always alphanumeric, so the version stays valid even when the const
+		// already has a prerelease (e.g. v0.3.0-rc.1-dev<hash>).
+		if !semver.IsValid(ver) {
+			t.Errorf("%s: invalid semver %q", m.path, ver)
+		}
+		if !strings.Contains(ver, "-dev") {
+			t.Errorf("%s: expected a -dev segment, got %q", m.path, ver)
 		}
 	}
 }

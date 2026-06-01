@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/airlockrun/agentsdk"
 	"github.com/airlockrun/airlock/scaffold"
 )
 
@@ -36,8 +35,9 @@ var gitignoreManagedLines = []string{"go.work", "go.work.sum"}
 //   - Dockerfile: regenerated from scaffold/templates/Dockerfile.tmpl
 //   - .gitignore: airlock-kept entries appended if absent; user's other
 //     entries untouched
-//   - go.mod: the agentsdk `require` pinned to the current const version
-//     (regex edit — agentsdk is the only owned lib the agent requires
+//   - go.mod: the agentsdk `require` pinned to data.AgentSDKVersion — the
+//     published v<const> in prod, the content-addressed v<const>-dev<hash>
+//     in dev (regex edit — agentsdk is the only owned lib the agent requires
 //     directly; goai/sol are indirect and resolved by `go mod tidy` via the
 //     build's module proxy). No `go mod edit` shell-out, so this works in
 //     the prod airlock container which has no Go toolchain.
@@ -87,7 +87,7 @@ func runHousekeeping(ctx context.Context, repoPath string, data scaffold.Scaffol
 	if err != nil {
 		return res, fmt.Errorf("read go.mod: %w", err)
 	}
-	if err := bumpAgentSDKRequire(ctx, repoPath, agentsdk.Version); err != nil {
+	if err := bumpAgentSDKRequire(ctx, repoPath, data.AgentSDKVersion); err != nil {
 		return res, fmt.Errorf("bump agentsdk require: %w", err)
 	}
 	after, err := os.ReadFile(goModPath)

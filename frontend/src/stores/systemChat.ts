@@ -29,7 +29,7 @@ import {
   type RunErrorEvent,
   type NotificationEvent,
 } from '@/gen/airlock/v1/realtime_pb'
-import { formatToolArgs, toolLabel, type MsgBlock, type ToolBlock } from '@/utils/messageGroup'
+import { formatToolArgs, toolLabel, toolOutputInfo, type MsgBlock, type ToolBlock } from '@/utils/messageGroup'
 
 // Trimmed sysagent equivalent of stores/chat.ts. Sysagent conversations stay
 // short (operator chats), so this store skips the agent-chat machinery
@@ -67,72 +67,115 @@ export interface DisplayMessage {
   blocks?: MsgBlock[]
   costEstimate: number
   _cancelled?: boolean
+  _hidden?: boolean
 }
 
-function enrichMessage(m: SystemMessageInfo): DisplayMessage {
-  // parts is the goai content JSON (same shape as agent_messages.parts).
-  // We pass it through verbatim — MessageParts.vue handles the goai
-  // content layout for both surfaces.
-  let blocks: MsgBlock[] | undefined
-  let content = ''
-  if (m.parts) {
-    try {
-      const parsed = JSON.parse(m.parts)
-      if (Array.isArray(parsed)) {
-        // Pull plain text out for the text fallback / search.
-        content = parsed
-          .filter((p: any) => p && p.type === 'text' && typeof p.text === 'string')
-          .map((p: any) => p.text)
-          .join('\n')
-        // Map goai parts → MsgBlock shape for the renderer.
-        blocks = parsed
-          .map((p: any): MsgBlock | null => {
-            if (!p) return null
-            if (p.type === 'text') return { kind: 'text', text: p.text || '' }
-            if (p.type === 'tool_call' || p.type === 'tool_use') {
-              const rawArgs = (() => { try { return typeof p.input === 'string' ? JSON.parse(p.input) : p.input } catch { return p.input ?? '' } })()
-              return {
-                kind: 'tool',
-                toolCallId: p.tool_call_id || p.id || '',
-                toolName: p.tool_name || p.name || 'tool',
-                label: toolLabel(p.tool_name || p.name || 'tool', rawArgs),
-                input: formatToolArgs(rawArgs),
-                output: '',
-                error: '',
-                outcome: '' as ToolBlock['outcome'],
-              }
-            }
-            if (p.type === 'tool_result') {
-              return null // tool_result entries are folded into their sibling tool_call below
-            }
-            return null
-          })
-          .filter((b: any): b is MsgBlock => b !== null)
-        // Second pass — fold tool_result entries into their matching tool block.
-        for (const part of parsed) {
-          if (!part || part.type !== 'tool_result') continue
-          const tcid = part.tool_call_id || part.id
-          const hit = blocks?.find((b): b is Extract<MsgBlock, { kind: 'tool' }> =>
-            b.kind === 'tool' && b.toolCallId === tcid)
-          if (!hit) continue
-          hit.output = typeof part.output === 'string' ? part.output : JSON.stringify(part.output ?? '')
-          hit.error = part.error || ''
-          hit.outcome = (part.outcome as ToolBlock['outcome']) || (part.error ? 'error' : 'success')
-        }
-      }
-    } catch {
-      // parts wasn't JSON — fall back to displaying parts as raw content.
-      content = m.parts
-    }
-  }
-  return {
+// Mirrors @/utils/messageGroup::enrichMessages adapted to the sysagent
+// row shape (no run-anchor folding — sysagent doesn't have a runId
+// column on its messages; one row per goai sub-message, in seq order).
+//
+// Storage contract matches agent_messages:
+//   * content = plain-text display string (always populated server-side
+//     via extractDisplayText in sysagent/sessionstore.go).
+//   * parts   = goai multi-part Content JSON (typed array with
+//     hyphenated discriminators: text / tool-call / tool-result), set
+//     ONLY when goai's Content.IsMultiPart(). Plain text answers
+//     leave parts empty so the renderer's "no blocks → render
+//     content" fast path lights up the same way agent chat does.
+//
+// Tool results from sol's MessageToGoAI expansion land on their own
+// role=tool row; we fold each into the matching tool-call block from
+// a prior row, then hide the tool row from the bubble list.
+function enrichMessages(rows: SystemMessageInfo[]): DisplayMessage[] {
+  const out: DisplayMessage[] = rows.map((m) => ({
     id: m.id,
     role: m.role,
     source: m.source || '',
     parts: m.parts,
-    content,
-    blocks,
+    content: m.content,
     costEstimate: m.costEstimate,
+  }))
+
+  // Pass 1: parse parts on each row, build per-row blocks, register
+  // every tool-call so pass 2 can fold its result.
+  const callEntries = new Map<string, ToolBlock>()
+  for (let i = 0; i < out.length; i++) {
+    const msg = out[i]
+    if (msg.role !== 'assistant') continue
+    const parts = parseParts(rows[i].parts)
+    if (!parts) continue
+    const rowBlocks: MsgBlock[] = []
+    for (const p of parts) {
+      if (!p) continue
+      if (p.type === 'text' && typeof p.text === 'string' && p.text) {
+        const last = rowBlocks[rowBlocks.length - 1]
+        if (last && last.kind === 'text') last.text += p.text
+        else rowBlocks.push({ kind: 'text', text: p.text })
+      } else if (p.type === 'tool-call' && p.toolCallId) {
+        const rawArgs = (() => {
+          try {
+            return typeof p.args === 'string' ? JSON.parse(p.args) : p.args
+          } catch {
+            return p.args ?? ''
+          }
+        })()
+        const tb: ToolBlock = {
+          kind: 'tool',
+          toolCallId: p.toolCallId,
+          toolName: p.toolName || 'tool',
+          label: toolLabel(p.toolName || 'tool', rawArgs),
+          input: formatToolArgs(rawArgs),
+          output: '',
+          error: '',
+          outcome: '' as ToolBlock['outcome'],
+        }
+        callEntries.set(tb.toolCallId, tb)
+        rowBlocks.push(tb)
+      }
+    }
+    if (rowBlocks.some((b) => b.kind === 'tool')) {
+      msg.blocks = rowBlocks
+    }
+  }
+
+  // Pass 2: fold each tool-result row's output into its matching
+  // tool-call block (by toolCallId). The persisted `output` is the
+  // discriminated goai ToolResultOutput — toolOutputInfo extracts the
+  // displayable text + outcome the same way agent chat does.
+  for (let i = 0; i < out.length; i++) {
+    const msg = out[i]
+    if (msg.role !== 'tool') continue
+    const parts = parseParts(rows[i].parts)
+    if (!parts) continue
+    for (const p of parts) {
+      if (p?.type !== 'tool-result' || !p.toolCallId) continue
+      const entry = callEntries.get(p.toolCallId)
+      if (!entry) continue
+      if (p.output && typeof p.output === 'object') {
+        const info = toolOutputInfo(p.output)
+        entry.outcome = info.outcome
+        if (info.outcome === 'error') entry.error = info.text
+        else entry.output = info.text
+      } else if (msg.content) {
+        entry.output = msg.content
+      }
+      msg._hidden = true
+    }
+  }
+
+  return out.filter((m) => !m._hidden)
+}
+
+// parseParts mirrors the agent-chat helper: JSON-parse a string into
+// an array, return null when it's not an array (text-only goai content
+// marshals as a bare JSON string — the renderer uses .content instead).
+function parseParts(parts: unknown): any[] | null {
+  if (!parts) return null
+  try {
+    const parsed = typeof parts === 'string' ? JSON.parse(parts) : parts
+    return Array.isArray(parsed) ? parsed : null
+  } catch {
+    return null
   }
 }
 
@@ -396,7 +439,7 @@ export const useSystemChatStore = defineStore('systemChat', () => {
       const { data } = await api.get(`/api/v1/system/conversations/${id}`)
       const resp = fromJson(GetSystemConversationResponseSchema, data)
       conversation.value = resp.conversation || null
-      messages.value = resp.messages.map(enrichMessage)
+      messages.value = enrichMessages(resp.messages)
       if (conversation.value?.status === 'awaiting_confirmation' && conversation.value.pendingTool) {
         const pt = conversation.value.pendingTool
         pendingConfirmation.value = {
@@ -415,13 +458,43 @@ export const useSystemChatStore = defineStore('systemChat', () => {
     }
   }
 
+  // Reset the messages view to a clean "no active conversation" state.
+  // Called by SystemChatView when it lands on /system/chat with no
+  // route param — the row appears in the sidebar only after the first
+  // message is sent (mirrors agent chat's wasNew flow).
+  function resetConversationView() {
+    conversationId.value = null
+    conversation.value = null
+    messages.value = []
+    resetTransient()
+  }
+
   // Submit operator input. text is the prompt body (empty on approve/
   // deny resume). approved is set when responding to a pending
   // confirmation — sysagent's executor resolves the prior gated call
-  // before continuing the run.
-  async function sendPrompt(text: string, approved?: boolean) {
-    if (!conversationId.value) throw new Error('no active conversation')
+  // before continuing the run. Returns the conversation id the prompt
+  // landed on so the caller (view) can route to /system/chat/:id once
+  // the server-side conversation has been minted on first send.
+  async function sendPrompt(text: string, approved?: boolean): Promise<string> {
     const isResume = approved !== undefined
+    const wasNew = !conversationId.value
+    if (wasNew && isResume) throw new Error('cannot resume without an active conversation')
+    if (wasNew) {
+      // Mint the conversation server-side now that there's a first
+      // message to anchor it. Title defaults to "New chat" on the
+      // server; later turns can rename. The HTTP POST blocks the
+      // optimistic-message render briefly — minor — but keeps the
+      // "no row until first send" contract intact.
+      const created = await createConversation()
+      conversationId.value = created.id
+      conversation.value = created
+    }
+    if (!conversationId.value) throw new Error('no active conversation')
+    // The run this confirmation belongs to (from the run.confirmation_required
+    // event). Sent so the backend waits for THIS run to suspend rather than
+    // racing the conversation's awaiting_confirmation flip. Empty on the
+    // refresh-restore path — fine, the conversation is already suspended.
+    const resumeRunId = pendingConfirmation.value?.runId
 
     if (isResume) {
       // The suspended turn's partial assistant text + the gated tool
@@ -453,12 +526,14 @@ export const useSystemChatStore = defineStore('systemChat', () => {
 
     const payload: Record<string, any> = { message: text }
     if (approved !== undefined) payload.approved = approved
+    if (resumeRunId) payload.resumeRunId = resumeRunId
 
     try {
       const { data } = await api.post(`/api/v1/system/conversations/${conversationId.value}/prompt`, payload)
       const response = fromJson(PromptResponseSchema, data)
       currentRunId.value = response.runId
       void refreshConversations() // bubble updated_at to top
+      return conversationId.value!
     } catch (err) {
       sending.value = false
       // Roll back optimistic user row on send failure.
@@ -494,6 +569,7 @@ export const useSystemChatStore = defineStore('systemChat', () => {
     createConversation,
     deleteConversation,
     loadConversation,
+    resetConversationView,
     sendPrompt,
     cleanup,
   }

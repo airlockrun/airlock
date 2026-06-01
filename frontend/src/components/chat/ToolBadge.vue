@@ -205,8 +205,18 @@ const dotColor = computed(() => {
   margin: 0;
 }
 
+/* Cap the collapsed output at MAX_OUTPUT_LINES visual lines regardless
+   of newline count — sysagent tools return indented JSON which still
+   wraps; agent chat's run_js can return a multi-paragraph blob. Both
+   should preview at ~5 lines and rely on the click-to-expand affordance
+   for the rest. A small fade mask hints at clipped content. */
 .tool-pre-clamped {
   opacity: 0.75;
+  line-height: 1.4;
+  max-height: calc(1.4em * 5);
+  overflow: hidden;
+  mask-image: linear-gradient(to bottom, black calc(100% - 1.2em), transparent);
+  -webkit-mask-image: linear-gradient(to bottom, black calc(100% - 1.2em), transparent);
 }
 
 .tool-pre-in {

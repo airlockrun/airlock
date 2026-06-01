@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/airlockrun/agentsdk"
 	"github.com/airlockrun/airlock/config"
 	"github.com/airlockrun/airlock/scaffold"
 	"go.uber.org/zap"
@@ -79,12 +78,18 @@ func (b *BuildService) WarmBuildCache(ctx context.Context) {
 	}
 	defer os.RemoveAll(dir)
 
+	sdkVer, verErr := b.agentSDKVersion()
+	if verErr != nil {
+		b.logger.Warn("warm cache: agent sdk version", zap.Error(verErr))
+		return
+	}
+
 	// Materialize a real scaffold — same templates as actual agent builds.
 	if err := scaffold.Materialize(dir, scaffold.ScaffoldData{
 		AgentID:         "cache-warm",
 		Module:          "agent",
 		GoVersion:       buildGoVersion,
-		AgentSDKVersion: "v" + agentsdk.Version,
+		AgentSDKVersion: sdkVer,
 		AgentBaseImage:  b.cfg.AgentBaseImage,
 	}); err != nil {
 		b.logger.Warn("warm cache: scaffold", zap.Error(err))
@@ -154,11 +159,17 @@ func (b *BuildService) WarmRuntimeCaches(ctx context.Context) {
 	}
 	defer os.RemoveAll(dir)
 
+	sdkVer, verErr := b.agentSDKVersion()
+	if verErr != nil {
+		b.logger.Warn("warm runtime caches: agent sdk version", zap.Error(verErr))
+		return
+	}
+
 	if err := scaffold.Materialize(dir, scaffold.ScaffoldData{
 		AgentID:         "runtime-warm",
 		Module:          "agent",
 		GoVersion:       buildGoVersion,
-		AgentSDKVersion: "v" + agentsdk.Version,
+		AgentSDKVersion: sdkVer,
 		AgentBaseImage:  b.cfg.AgentBaseImage,
 	}); err != nil {
 		b.logger.Warn("warm runtime caches: scaffold", zap.Error(err))
@@ -219,13 +230,12 @@ func (b *BuildService) WarmRuntimeCaches(ctx context.Context) {
 	}
 	cmd := "go mod tidy && go build -o /tmp/agent ."
 	// Dev: mount the local lib proxy and point GOPROXY at it (public proxy
-	// second). Evict the owned libs from the persistent module-cache volume
-	// first — the proxy serves changing content under a stable version
-	// string, and the cache keys by version.
+	// second). The proxy serves each owned lib at a content-addressed
+	// version, so changed source is a new version — Go fetches it fresh with
+	// no cache eviction needed.
 	if proxyDir != "" {
 		args = append(args, "-v", proxyDir+":/goproxy:ro",
 			"-e", "GOPROXY=file:///goproxy,https://proxy.golang.org")
-		cmd = bustLibCacheShell("/tmp/go-mod") + " ; " + cmd
 	}
 	args = append(args, b.cfg.AgentBuilderImage, "sh", "-c", cmd)
 

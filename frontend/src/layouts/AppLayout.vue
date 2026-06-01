@@ -88,19 +88,14 @@ function isActive(path: string) {
 }
 
 // "New chat" picks an agent first (a conversation always belongs to one).
-// The freshly-opened chat starts in its empty "new thread" state; the row
-// appears in the sidebar once the first message is sent. The system
-// agent is pinned at the top — its "chat" path mints a fresh sysagent
-// thread server-side and routes to it.
+// The freshly-opened chat starts in its empty "new thread" state; the
+// row appears in the sidebar only once the first message is sent.
+// Same shape for the system agent — /system/chat opens an empty
+// conversation view that's persisted server-side on first send.
 const newMenuRef = ref()
-async function startSystemChat() {
-  try {
-    const t = await systemChat.createConversation()
-    router.push(`/system/chat/${t.id}`)
-    drawerVisible.value = false
-  } catch (err: any) {
-    toast.add({ severity: 'error', summary: 'Failed to start chat', detail: err?.message, life: 5000 })
-  }
+function startSystemChat() {
+  router.push('/system/chat')
+  drawerVisible.value = false
 }
 const agentMenuItems = computed(() => {
   const items: any[] = [
@@ -180,12 +175,84 @@ function deleteConversation(c: ConversationInfo, event: Event) {
   })
 }
 
-// On /agents/:id/chat we hoist the back affordance into the top bar so
-// the chat view itself doesn't need a header row. backTarget is null on
-// every other route — the button doesn't render.
+// Unified sidebar: agent web conversations + sysagent conversations
+// share one list, sorted by recency. Each entry carries its kind so
+// click + delete dispatch correctly without per-row branching in the
+// template.
+interface SidebarItem {
+  kind: 'agent' | 'system'
+  id: string
+  agentId?: string                // 'agent' only
+  title: string
+  updatedAtSec: number
+  status?: string                 // 'system': 'active' | 'awaiting_confirmation'
+}
+const sidebarItems = computed<SidebarItem[]>(() => {
+  const agentItems: SidebarItem[] = conversationsStore.list.map(c => ({
+    kind: 'agent',
+    id: c.id,
+    agentId: c.agentId,
+    title: c.title || 'Untitled conversation',
+    updatedAtSec: Number(c.updatedAt?.seconds ?? 0n),
+  }))
+  const sysItems: SidebarItem[] = systemChat.conversations.map(c => ({
+    kind: 'system',
+    id: c.id,
+    title: c.title || 'New chat',
+    updatedAtSec: Number(c.updatedAt?.seconds ?? 0n),
+    status: c.status,
+  }))
+  return [...agentItems, ...sysItems].sort((a, b) => b.updatedAtSec - a.updatedAtSec)
+})
+
+function isActiveItem(item: SidebarItem): boolean {
+  if (item.kind === 'agent') {
+    return route.path === `/agents/${item.agentId}/chat` && chat.conversationId === item.id
+  }
+  return route.path === `/system/chat/${item.id}`
+}
+
+function openSidebarItem(item: SidebarItem) {
+  if (item.kind === 'agent') {
+    router.push({ path: `/agents/${item.agentId}/chat`, query: { c: item.id } })
+  } else {
+    router.push(`/system/chat/${item.id}`)
+  }
+  drawerVisible.value = false
+}
+
+function deleteSidebarItem(item: SidebarItem, event: Event) {
+  event.stopPropagation()
+  if (item.kind === 'agent') {
+    deleteConversation({ id: item.id, agentId: item.agentId!, title: item.title } as ConversationInfo, event)
+    return
+  }
+  confirm.require({
+    message: `Delete "${item.title}"? This removes its history permanently.`,
+    header: 'Delete conversation',
+    icon: 'pi pi-exclamation-triangle',
+    acceptProps: { severity: 'danger', label: 'Delete' },
+    accept: async () => {
+      const wasActive = isActiveItem(item)
+      try {
+        await systemChat.deleteConversation(item.id)
+      } catch {
+        return
+      }
+      if (wasActive) router.replace('/system')
+    },
+  })
+}
+
+// On /agents/:id/chat (and the sysagent equivalent /system/chat/:id) we
+// hoist the back affordance into the top bar so the chat view itself
+// doesn't need a header row. backTarget is null on every other route —
+// the button doesn't render.
 const backTarget = computed<string | null>(() => {
   const m = /^\/agents\/([^/]+)\/chat$/.exec(route.path)
-  return m ? `/agents/${m[1]}` : null
+  if (m) return `/agents/${m[1]}`
+  if (/^\/system\/chat(?:\/[^/]+)?$/.test(route.path)) return '/system'
+  return null
 })
 
 // AgentDetailView (/agents/:id) renders a sticky section nav at the top.
@@ -206,10 +273,11 @@ const userInitial = computed(() => {
 })
 
 onMounted(() => {
-  // Both back the sidebar; failures are non-fatal (empty list / 'Agent'
-  // fallback) and self-heal on the next navigation.
+  // All three back the sidebar; failures are non-fatal (empty list /
+  // 'Agent' fallback) and self-heal on the next navigation.
   agentsStore.fetchAgents().catch(() => {})
   conversationsStore.load().catch(() => {})
+  systemChat.refreshConversations().catch(() => {})
 })
 </script>
 
@@ -264,24 +332,32 @@ onMounted(() => {
 
           <div class="conv-list">
             <div
-              v-for="c in conversationsStore.list"
-              :key="c.id"
-              :class="['conv-item', { active: isActiveConv(c) }]"
-              @click="openConversation(c)"
+              v-for="item in sidebarItems"
+              :key="`${item.kind}-${item.id}`"
+              :class="['conv-item', { active: isActiveItem(item) }]"
+              @click="openSidebarItem(item)"
             >
               <div class="conv-text">
-                <span class="conv-agent"><span v-if="agentEmoji(c.agentId)">{{ agentEmoji(c.agentId) }} </span>{{ agentName(c.agentId) }}</span>
-                <span class="conv-title">{{ c.title || 'Untitled conversation' }}</span>
+                <span class="conv-agent">
+                  <template v-if="item.kind === 'agent'">
+                    <span v-if="agentEmoji(item.agentId!)">{{ agentEmoji(item.agentId!) }} </span>{{ agentName(item.agentId!) }}
+                  </template>
+                  <template v-else>
+                    <span>⚙️ System Agent</span>
+                    <i v-if="item.status === 'awaiting_confirmation'" class="pi pi-exclamation-circle" style="color: var(--p-yellow-500); margin-left: 0.25rem" />
+                  </template>
+                </span>
+                <span class="conv-title">{{ item.title }}</span>
               </div>
               <button
                 class="conv-del"
                 aria-label="Delete conversation"
-                @click="deleteConversation(c, $event)"
+                @click="deleteSidebarItem(item, $event)"
               >
                 <span class="pi pi-trash" />
               </button>
             </div>
-            <p v-if="conversationsStore.list.length === 0" class="conv-empty">
+            <p v-if="sidebarItems.length === 0" class="conv-empty">
               No conversations yet
             </p>
           </div>
@@ -309,19 +385,27 @@ onMounted(() => {
           </button>
           <div class="conv-list">
             <div
-              v-for="c in conversationsStore.list"
-              :key="c.id"
-              :class="['conv-item', { active: isActiveConv(c) }]"
-              @click="openConversation(c)"
+              v-for="item in sidebarItems"
+              :key="`${item.kind}-${item.id}`"
+              :class="['conv-item', { active: isActiveItem(item) }]"
+              @click="openSidebarItem(item)"
             >
               <div class="conv-text">
-                <span class="conv-agent"><span v-if="agentEmoji(c.agentId)">{{ agentEmoji(c.agentId) }} </span>{{ agentName(c.agentId) }}</span>
-                <span class="conv-title">{{ c.title || 'Untitled conversation' }}</span>
+                <span class="conv-agent">
+                  <template v-if="item.kind === 'agent'">
+                    <span v-if="agentEmoji(item.agentId!)">{{ agentEmoji(item.agentId!) }} </span>{{ agentName(item.agentId!) }}
+                  </template>
+                  <template v-else>
+                    <span>⚙️ System Agent</span>
+                    <i v-if="item.status === 'awaiting_confirmation'" class="pi pi-exclamation-circle" style="color: var(--p-yellow-500); margin-left: 0.25rem" />
+                  </template>
+                </span>
+                <span class="conv-title">{{ item.title }}</span>
               </div>
               <button
                 class="conv-del"
                 aria-label="Delete conversation"
-                @click="deleteConversation(c, $event)"
+                @click="deleteSidebarItem(item, $event)"
               >
                 <span class="pi pi-trash" />
               </button>

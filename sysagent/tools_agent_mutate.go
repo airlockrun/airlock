@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 
+	"github.com/airlockrun/airlock/convert"
+	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 	"github.com/airlockrun/airlock/service"
 	agentssvc "github.com/airlockrun/airlock/service/agents"
 	"github.com/airlockrun/goai/tool"
@@ -73,7 +75,7 @@ func (s *Service) toolCreateAgent() tool.Tool {
 			if err != nil {
 				return errResult(err), nil
 			}
-			return okResult(out)
+			return okResult(convert.AgentToProto(out))
 		}).
 		Build()
 }
@@ -109,7 +111,7 @@ func (s *Service) toolUpdateAgent() tool.Tool {
 			if err != nil {
 				return errResult(err), nil
 			}
-			return okResult(out)
+			return okResult(convert.AgentToProto(out))
 		}).
 		Build()
 }
@@ -304,7 +306,7 @@ func (s *Service) toolFireCron() tool.Tool {
 			if err != nil {
 				return errResult(err), nil
 			}
-			return okResult(out)
+			return okResult(&airlockv1.FireCronResponse{RunId: out.RunID.String()})
 		}).
 		Build()
 }
@@ -318,9 +320,29 @@ type connectGitInput struct {
 	DefaultBranch string `json:"default_branch,omitempty" jsonschema:"description=Optional default branch (defaults to main)."`
 }
 
+// gitConfigToProto projects an agents.GitConfig into the wire
+// AgentGitConfig with webhook_secret CLEARED. The proto field
+// exists for the web UI (operator pastes it into GitHub from the
+// agent details page); sysagent never displays it to the LLM, so
+// we surface a hint pointing the operator at open_agent_details
+// in the credential_name field's vacated slot when relevant.
+func gitConfigToProto(agentID string, cfg agentssvc.GitConfig) *airlockv1.AgentGitConfig {
+	return &airlockv1.AgentGitConfig{
+		AgentId:           agentID,
+		GitRemoteUrl:      cfg.RemoteURL,
+		GitCredentialId:   cfg.CredentialID,
+		GitCredentialName: cfg.CredentialName,
+		DefaultBranch:     cfg.DefaultBranch,
+		LastSyncedRef:     cfg.LastSyncedRef,
+		// webhook_url + webhook_secret deliberately left blank —
+		// operator copies the secret from the agent details page,
+		// not through chat.
+	}
+}
+
 func (s *Service) toolConnectGit() tool.Tool {
 	return tool.New("connect_git").
-		Description(`Bind an external HTTPS git remote to the agent using an existing git credential. Returns the resulting git config (including the webhook secret). Requires agent-admin.`).
+		Description(`Bind an external HTTPS git remote to the agent using an existing git credential. Returns the resulting git config (without the webhook secret — operator must copy that from the agent details page). Requires agent-admin.`).
 		SchemaFromStruct(connectGitInput{}).
 		Execute(func(ctx context.Context, raw json.RawMessage, _ tool.CallOptions) (tool.Result, error) {
 			var in connectGitInput
@@ -332,7 +354,8 @@ func (s *Service) toolConnectGit() tool.Tool {
 			if err != nil {
 				return errResult(err), nil
 			}
-			out, err := s.agents.ConnectGit(ctx, p, uuid.UUID(a.ID.Bytes), agentssvc.ConnectGitRequest{
+			agentID := uuid.UUID(a.ID.Bytes)
+			out, err := s.agents.ConnectGit(ctx, p, agentID, agentssvc.ConnectGitRequest{
 				RemoteURL:     in.RemoteURL,
 				CredentialID:  in.CredentialID,
 				DefaultBranch: in.DefaultBranch,
@@ -340,7 +363,7 @@ func (s *Service) toolConnectGit() tool.Tool {
 			if err != nil {
 				return errResult(err), nil
 			}
-			return okResult(out)
+			return okResult(gitConfigToProto(agentID.String(), out))
 		}).
 		Build()
 }

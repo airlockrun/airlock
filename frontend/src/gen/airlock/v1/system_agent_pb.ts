@@ -12,7 +12,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file airlock/v1/system_agent.proto.
  */
 export const file_airlock_v1_system_agent: GenFile = /*@__PURE__*/
-  fileDesc("Ch1haXJsb2NrL3YxL3N5c3RlbV9hZ2VudC5wcm90bxIKYWlybG9jay52MSLpAQoWU3lzdGVtQ29udmVyc2F0aW9uSW5mbxIKCgJpZBgBIAEoCRIPCgd1c2VyX2lkGAIgASgJEg0KBXRpdGxlGAMgASgJEg4KBnN0YXR1cxgEIAEoCRIzCgxwZW5kaW5nX3Rvb2wYBSABKAsyHS5haXJsb2NrLnYxLlBlbmRpbmdTeXN0ZW1Ub29sEi4KCmNyZWF0ZWRfYXQYBiABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEi4KCnVwZGF0ZWRfYXQYByABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wIkoKEVBlbmRpbmdTeXN0ZW1Ub29sEg8KB2NhbGxfaWQYASABKAkSEQoJdG9vbF9uYW1lGAIgASgJEhEKCWFyZ3NfanNvbhgDIAEoCSLHAQoRU3lzdGVtTWVzc2FnZUluZm8SCgoCaWQYASABKAkSCwoDc2VxGAIgASgDEgwKBHJvbGUYAyABKAkSDgoGc291cmNlGAQgASgJEg0KBXBhcnRzGAUgASgJEhEKCXRva2Vuc19pbhgGIAEoBRISCgp0b2tlbnNfb3V0GAcgASgFEhUKDWNvc3RfZXN0aW1hdGUYCCABKAESLgoKY3JlYXRlZF9hdBgJIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXAiMAofQ3JlYXRlU3lzdGVtQ29udmVyc2F0aW9uUmVxdWVzdBINCgV0aXRsZRgBIAEoCSJcCiBDcmVhdGVTeXN0ZW1Db252ZXJzYXRpb25SZXNwb25zZRI4Cgxjb252ZXJzYXRpb24YASABKAsyIi5haXJsb2NrLnYxLlN5c3RlbUNvbnZlcnNhdGlvbkluZm8iXAofTGlzdFN5c3RlbUNvbnZlcnNhdGlvbnNSZXNwb25zZRI5Cg1jb252ZXJzYXRpb25zGAEgAygLMiIuYWlybG9jay52MS5TeXN0ZW1Db252ZXJzYXRpb25JbmZvIooBCh1HZXRTeXN0ZW1Db252ZXJzYXRpb25SZXNwb25zZRI4Cgxjb252ZXJzYXRpb24YASABKAsyIi5haXJsb2NrLnYxLlN5c3RlbUNvbnZlcnNhdGlvbkluZm8SLwoIbWVzc2FnZXMYAiADKAsyHS5haXJsb2NrLnYxLlN5c3RlbU1lc3NhZ2VJbmZvIkoKE1N5c3RlbVByb21wdFJlcXVlc3QSDwoHbWVzc2FnZRgBIAEoCRIVCghhcHByb3ZlZBgCIAEoCEgAiAEBQgsKCV9hcHByb3ZlZEI4WjZnaXRodWIuY29tL2FpcmxvY2tydW4vYWlybG9jay9nZW4vYWlybG9jay92MTthaXJsb2NrdjFiBnByb3RvMw", [file_google_protobuf_timestamp]);
+  fileDesc("Ch1haXJsb2NrL3YxL3N5c3RlbV9hZ2VudC5wcm90bxIKYWlybG9jay52MSLpAQoWU3lzdGVtQ29udmVyc2F0aW9uSW5mbxIKCgJpZBgBIAEoCRIPCgd1c2VyX2lkGAIgASgJEg0KBXRpdGxlGAMgASgJEg4KBnN0YXR1cxgEIAEoCRIzCgxwZW5kaW5nX3Rvb2wYBSABKAsyHS5haXJsb2NrLnYxLlBlbmRpbmdTeXN0ZW1Ub29sEi4KCmNyZWF0ZWRfYXQYBiABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEi4KCnVwZGF0ZWRfYXQYByABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wIkoKEVBlbmRpbmdTeXN0ZW1Ub29sEg8KB2NhbGxfaWQYASABKAkSEQoJdG9vbF9uYW1lGAIgASgJEhEKCWFyZ3NfanNvbhgDIAEoCSLYAQoRU3lzdGVtTWVzc2FnZUluZm8SCgoCaWQYASABKAkSCwoDc2VxGAIgASgDEgwKBHJvbGUYAyABKAkSDgoGc291cmNlGAQgASgJEg8KB2NvbnRlbnQYBSABKAkSDQoFcGFydHMYBiABKAkSEQoJdG9rZW5zX2luGAcgASgFEhIKCnRva2Vuc19vdXQYCCABKAUSFQoNY29zdF9lc3RpbWF0ZRgJIAEoARIuCgpjcmVhdGVkX2F0GAogASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcCIwCh9DcmVhdGVTeXN0ZW1Db252ZXJzYXRpb25SZXF1ZXN0Eg0KBXRpdGxlGAEgASgJIlwKIENyZWF0ZVN5c3RlbUNvbnZlcnNhdGlvblJlc3BvbnNlEjgKDGNvbnZlcnNhdGlvbhgBIAEoCzIiLmFpcmxvY2sudjEuU3lzdGVtQ29udmVyc2F0aW9uSW5mbyJcCh9MaXN0U3lzdGVtQ29udmVyc2F0aW9uc1Jlc3BvbnNlEjkKDWNvbnZlcnNhdGlvbnMYASADKAsyIi5haXJsb2NrLnYxLlN5c3RlbUNvbnZlcnNhdGlvbkluZm8iigEKHUdldFN5c3RlbUNvbnZlcnNhdGlvblJlc3BvbnNlEjgKDGNvbnZlcnNhdGlvbhgBIAEoCzIiLmFpcmxvY2sudjEuU3lzdGVtQ29udmVyc2F0aW9uSW5mbxIvCghtZXNzYWdlcxgCIAMoCzIdLmFpcmxvY2sudjEuU3lzdGVtTWVzc2FnZUluZm8i2AEKDVN5c3RlbVJ1bkluZm8SCgoCaWQYASABKAkSFwoPY29udmVyc2F0aW9uX2lkGAIgASgJEhoKEmNvbnZlcnNhdGlvbl90aXRsZRgDIAEoCRIOCgZzdGF0dXMYBCABKAkSFQoNZXJyb3JfbWVzc2FnZRgFIAEoCRIuCgpzdGFydGVkX2F0GAYgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIvCgtmaW5pc2hlZF9hdBgHIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXAiVgoWTGlzdFN5c3RlbVJ1bnNSZXNwb25zZRInCgRydW5zGAEgAygLMhkuYWlybG9jay52MS5TeXN0ZW1SdW5JbmZvEhMKC25leHRfY3Vyc29yGAIgASgJImEKE1N5c3RlbVByb21wdFJlcXVlc3QSDwoHbWVzc2FnZRgBIAEoCRIVCghhcHByb3ZlZBgCIAEoCEgAiAEBEhUKDXJlc3VtZV9ydW5faWQYAyABKAlCCwoJX2FwcHJvdmVkQjhaNmdpdGh1Yi5jb20vYWlybG9ja3J1bi9haXJsb2NrL2dlbi9haXJsb2NrL3YxO2FpcmxvY2t2MWIGcHJvdG8z", [file_google_protobuf_timestamp]);
 
 /**
  * SystemConversationInfo is one chat conversation (per user). status is
@@ -122,41 +122,50 @@ export type SystemMessageInfo = Message<"airlock.v1.SystemMessageInfo"> & {
   seq: bigint;
 
   /**
-   * "user" | "assistant" | "tool"
+   * "user" | "assistant" | "tool" | "system"
    *
    * @generated from field: string role = 3;
    */
   role: string;
 
   /**
+   * "" (user-typed) | "upgrade" | "error" | ...
+   *
    * @generated from field: string source = 4;
    */
   source: string;
 
   /**
-   * JSON-encoded goai Content
+   * plain-text display string (always populated)
    *
-   * @generated from field: string parts = 5;
+   * @generated from field: string content = 5;
+   */
+  content: string;
+
+  /**
+   * JSON-encoded goai multi-part Content; empty when content is the whole message
+   *
+   * @generated from field: string parts = 6;
    */
   parts: string;
 
   /**
-   * @generated from field: int32 tokens_in = 6;
+   * @generated from field: int32 tokens_in = 7;
    */
   tokensIn: number;
 
   /**
-   * @generated from field: int32 tokens_out = 7;
+   * @generated from field: int32 tokens_out = 8;
    */
   tokensOut: number;
 
   /**
-   * @generated from field: double cost_estimate = 8;
+   * @generated from field: double cost_estimate = 9;
    */
   costEstimate: number;
 
   /**
-   * @generated from field: google.protobuf.Timestamp created_at = 9;
+   * @generated from field: google.protobuf.Timestamp created_at = 10;
    */
   createdAt?: Timestamp | undefined;
 };
@@ -244,6 +253,85 @@ export const GetSystemConversationResponseSchema: GenMessage<GetSystemConversati
   messageDesc(file_airlock_v1_system_agent, 6);
 
 /**
+ * SystemRunInfo is one entry in the operator's sysagent activity view —
+ * run lifecycle + the parent conversation title (denormalized server-side
+ * so the UI can render without a per-row conversation fetch).
+ *
+ * @generated from message airlock.v1.SystemRunInfo
+ */
+export type SystemRunInfo = Message<"airlock.v1.SystemRunInfo"> & {
+  /**
+   * @generated from field: string id = 1;
+   */
+  id: string;
+
+  /**
+   * @generated from field: string conversation_id = 2;
+   */
+  conversationId: string;
+
+  /**
+   * @generated from field: string conversation_title = 3;
+   */
+  conversationTitle: string;
+
+  /**
+   * 'running' | 'suspended' | 'complete' | 'error' | 'cancelled'
+   *
+   * @generated from field: string status = 4;
+   */
+  status: string;
+
+  /**
+   * @generated from field: string error_message = 5;
+   */
+  errorMessage: string;
+
+  /**
+   * @generated from field: google.protobuf.Timestamp started_at = 6;
+   */
+  startedAt?: Timestamp | undefined;
+
+  /**
+   * @generated from field: google.protobuf.Timestamp finished_at = 7;
+   */
+  finishedAt?: Timestamp | undefined;
+};
+
+/**
+ * Describes the message airlock.v1.SystemRunInfo.
+ * Use `create(SystemRunInfoSchema)` to create a new message.
+ */
+export const SystemRunInfoSchema: GenMessage<SystemRunInfo> = /*@__PURE__*/
+  messageDesc(file_airlock_v1_system_agent, 7);
+
+/**
+ * ListSystemRunsResponse is the activity view's page shape. next_cursor
+ * is the RFC3339 started_at of the last row when more pages exist;
+ * empty when the page is the tail.
+ *
+ * @generated from message airlock.v1.ListSystemRunsResponse
+ */
+export type ListSystemRunsResponse = Message<"airlock.v1.ListSystemRunsResponse"> & {
+  /**
+   * @generated from field: repeated airlock.v1.SystemRunInfo runs = 1;
+   */
+  runs: SystemRunInfo[];
+
+  /**
+   * @generated from field: string next_cursor = 2;
+   */
+  nextCursor: string;
+};
+
+/**
+ * Describes the message airlock.v1.ListSystemRunsResponse.
+ * Use `create(ListSystemRunsResponseSchema)` to create a new message.
+ */
+export const ListSystemRunsResponseSchema: GenMessage<ListSystemRunsResponse> = /*@__PURE__*/
+  messageDesc(file_airlock_v1_system_agent, 8);
+
+/**
  * SystemPromptRequest carries either a new operator turn (message set)
  * or a pending-confirmation resolution (approved set). When both
  * message and approved are present, approved wins — the server
@@ -261,6 +349,16 @@ export type SystemPromptRequest = Message<"airlock.v1.SystemPromptRequest"> & {
    * @generated from field: optional bool approved = 2;
    */
   approved?: boolean | undefined;
+
+  /**
+   * The run this confirmation response resolves — carried from the
+   * confirmation event so the resume waits for THAT run to suspend rather
+   * than racing the conversation's awaiting_confirmation flip. Empty on the
+   * refresh-restore path (the conversation is already awaiting_confirmation).
+   *
+   * @generated from field: string resume_run_id = 3;
+   */
+  resumeRunId: string;
 };
 
 /**
@@ -268,5 +366,5 @@ export type SystemPromptRequest = Message<"airlock.v1.SystemPromptRequest"> & {
  * Use `create(SystemPromptRequestSchema)` to create a new message.
  */
 export const SystemPromptRequestSchema: GenMessage<SystemPromptRequest> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_system_agent, 7);
+  messageDesc(file_airlock_v1_system_agent, 9);
 

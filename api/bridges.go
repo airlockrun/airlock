@@ -6,14 +6,11 @@ import (
 
 	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/authz"
-	"github.com/airlockrun/airlock/db/dbq"
+	"github.com/airlockrun/airlock/convert"
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 	"github.com/airlockrun/airlock/service"
 	bridgessvc "github.com/airlockrun/airlock/service/bridges"
-	"github.com/airlockrun/airlock/trigger"
 	"github.com/go-chi/chi/v5"
-	"github.com/jackc/pgx/v5/pgtype"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type bridgeHandler struct {
@@ -85,7 +82,7 @@ func (h *bridgeHandler) CreateBridge(w http.ResponseWriter, r *http.Request) {
 		writeBridgesError(w, err, "failed to create bridge")
 		return
 	}
-	writeProto(w, http.StatusOK, bridgeResultToProto(res))
+	writeProto(w, http.StatusOK, convert.BridgeResultToProto(res))
 }
 
 // ListBridges handles GET /api/v1/bridges.
@@ -101,7 +98,7 @@ func (h *bridgeHandler) ListBridges(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]*airlockv1.BridgeInfo, len(items))
 	for i, item := range items {
-		out[i] = bridgeListItemToProto(item)
+		out[i] = convert.BridgeListItemToProto(item)
 	}
 	writeProto(w, http.StatusOK, &airlockv1.ListBridgesResponse{Bridges: out})
 }
@@ -136,7 +133,7 @@ func (h *bridgeHandler) UpdateBridge(w http.ResponseWriter, r *http.Request) {
 		writeBridgesError(w, err, "failed to update bridge")
 		return
 	}
-	writeProto(w, http.StatusOK, bridgeResultToProto(res))
+	writeProto(w, http.StatusOK, convert.BridgeResultToProto(res))
 }
 
 // DeleteBridge handles DELETE /api/v1/bridges/{bridgeID}.
@@ -155,89 +152,4 @@ func (h *bridgeHandler) DeleteBridge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
-}
-
-// --- proto helpers ---
-
-func bridgeResultToProto(res bridgessvc.Result) *airlockv1.BridgeInfo {
-	var ownerEmail, ownerName pgtype.Text
-	var createdBy pgtype.UUID
-	if res.Owner != nil {
-		ownerEmail = pgtype.Text{String: res.Owner.Email, Valid: true}
-		ownerName = pgtype.Text{String: res.Owner.DisplayName, Valid: true}
-		createdBy = pgtype.UUID{Bytes: res.Owner.ID, Valid: true}
-	} else {
-		createdBy = res.Bridge.CreatedBy
-	}
-	return bridgeFieldsToProto(
-		res.Bridge.ID, res.Bridge.AgentID, createdBy,
-		res.Bridge.Type, res.Bridge.Name, res.Bridge.BotUsername, res.Bridge.Status,
-		res.Bridge.CreatedAt, res.Bridge.UpdatedAt,
-		ownerEmail, ownerName,
-		res.Bridge.Settings,
-	)
-}
-
-func bridgeListItemToProto(item bridgessvc.ListItem) *airlockv1.BridgeInfo {
-	var ownerEmail, ownerName pgtype.Text
-	if item.Owner != nil {
-		ownerEmail = pgtype.Text{String: item.Owner.Email, Valid: true}
-		ownerName = pgtype.Text{String: item.Owner.DisplayName, Valid: true}
-	}
-	return bridgeFieldsToProto(
-		item.Bridge.ID, item.Bridge.AgentID, item.Bridge.CreatedBy,
-		item.Bridge.Type, item.Bridge.Name, item.Bridge.BotUsername, item.Bridge.Status,
-		item.Bridge.CreatedAt, item.Bridge.UpdatedAt,
-		ownerEmail, ownerName,
-		item.Bridge.Settings,
-	)
-}
-
-func bridgeFieldsToProto(
-	id, agentID, createdBy pgtype.UUID,
-	typ, name, botUsername, status string,
-	createdAt, updatedAt pgtype.Timestamptz,
-	ownerEmail, ownerDisplayName pgtype.Text,
-	settingsJSON []byte,
-) *airlockv1.BridgeInfo {
-	settings := trigger.DecodeBridgeSettings(settingsJSON)
-	info := &airlockv1.BridgeInfo{
-		Id:          pgUUID(id).String(),
-		Name:        name,
-		Type:        typ,
-		BotUsername: botUsername,
-		Status:      status,
-		CreatedAt:   timestamppb.New(createdAt.Time),
-		UpdatedAt:   timestamppb.New(updatedAt.Time),
-		Settings: &airlockv1.BridgeSettings{
-			AllowPublicDms:             settings.AllowPublicDMs,
-			PublicSessionTtlSeconds:    int32(settings.PublicSessionTTLSeconds),
-			PublicSessionMode:          settings.PublicSessionMode,
-			PublicPromptTimeoutSeconds: int32(settings.PublicPromptTimeoutSeconds),
-		},
-	}
-	if agentID.Valid {
-		info.AgentId = pgUUID(agentID).String()
-	}
-	if createdBy.Valid && ownerEmail.Valid {
-		info.Owner = &airlockv1.UserSummary{
-			Id:          pgUUID(createdBy).String(),
-			Email:       ownerEmail.String,
-			DisplayName: ownerDisplayName.String,
-		}
-	}
-	return info
-}
-
-// bridgeToProto: bare row → BridgeInfo (no owner JOIN), used by other
-// callers in the api package that synthesize a BridgeInfo from a fresh
-// row.
-func bridgeToProto(br dbq.Bridge) *airlockv1.BridgeInfo {
-	return bridgeFieldsToProto(
-		br.ID, br.AgentID, br.CreatedBy,
-		br.Type, br.Name, br.BotUsername, br.Status,
-		br.CreatedAt, br.UpdatedAt,
-		pgtype.Text{}, pgtype.Text{},
-		br.Settings,
-	)
 }

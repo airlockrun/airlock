@@ -750,6 +750,11 @@ export const useChatStore = defineStore('chat', () => {
   async function sendMessage(agentId: string, text: string, approved?: boolean, filePaths?: string[]) {
     boundAgentId.value = agentId
     const isResume = approved !== undefined
+    // The run this confirmation belongs to (from the run.confirmation_required
+    // event). Sent so the backend resumes THIS exact run rather than guessing
+    // the conversation's latest suspended one — present for approve/deny and
+    // for free-text typed while a confirmation is still pending.
+    const resumeRunId = pendingConfirmation.value?.runId
     // Slash commands (/clear, /compact, ...) are handled synchronously by
     // Airlock — no run is created and no optimistic user bubble should appear.
     const isSlashCommand = !isResume && text.trim().startsWith('/')
@@ -833,6 +838,7 @@ export const useChatStore = defineStore('chat', () => {
     const payload: Record<string, any> = { message: text }
     if (conversationId.value) payload.conversationId = conversationId.value
     if (approved !== undefined) payload.approved = approved
+    if (resumeRunId) payload.resumeRunId = resumeRunId
     if (filePaths?.length) payload.filePaths = filePaths
 
     try {

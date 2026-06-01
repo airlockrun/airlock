@@ -21,11 +21,10 @@ import (
 var agentSDKRequireLine = regexp.MustCompile(`(?m)^([\t ]*(?:require[\t ]+)?github\.com/airlockrun/agentsdk[\t ]+)v[^\s]+`)
 
 // bumpAgentSDKRequire rewrites the agent's go.mod `require` line for
-// github.com/airlockrun/agentsdk to the given version. The version is
-// informational only — replace directives in the agent's go.mod always
-// resolve agentsdk/goai/sol from /libs/ — but keeping the require line in
-// sync with the agent-builder's baked SDK gives editor tooling (gopls,
-// jump-to-definition, version display) something accurate to show.
+// github.com/airlockrun/agentsdk to the given version. This is the version
+// the build resolves: the published v<const> in prod, the content-addressed
+// v<const>-dev<hash> the dev proxy serves in dev. Keeping the require line in
+// sync also gives editor tooling (gopls, jump-to-definition) an accurate pin.
 //
 // Implemented as a regex edit on go.mod rather than shelling out to
 // `go mod edit`: the airlock container that runs the upgrade flow ships

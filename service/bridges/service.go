@@ -15,7 +15,6 @@ import (
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/airlockrun/airlock/secrets"
 	"github.com/airlockrun/airlock/service"
-	"github.com/airlockrun/airlock/trigger"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -32,13 +31,13 @@ type BridgeManager interface {
 type Service struct {
 	db        *db.DB
 	encryptor secrets.Store
-	telegram  *trigger.TelegramDriver
-	discord   *trigger.DiscordDriver
+	telegram  Driver
+	discord   Driver
 	bridgeMgr BridgeManager
 	logger    *zap.Logger
 }
 
-func New(d *db.DB, enc secrets.Store, telegram *trigger.TelegramDriver, discord *trigger.DiscordDriver, bridgeMgr BridgeManager, logger *zap.Logger) *Service {
+func New(d *db.DB, enc secrets.Store, telegram Driver, discord Driver, bridgeMgr BridgeManager, logger *zap.Logger) *Service {
 	if d == nil {
 		panic("bridges: db is required")
 	}
@@ -311,14 +310,14 @@ func (s *Service) Update(ctx context.Context, p authz.Principal, bridgeID uuid.U
 	}
 	if req.Settings != nil {
 		mode := req.Settings.PublicSessionMode
-		if mode != trigger.PublicSessionModeOneShot {
-			mode = trigger.PublicSessionModeSession
+		if mode != PublicSessionModeOneShot {
+			mode = PublicSessionModeSession
 		}
 		timeout := int(req.Settings.PublicPromptTimeoutSeconds)
 		if timeout <= 0 {
-			timeout = trigger.DefaultPublicPromptTimeoutSeconds
+			timeout = DefaultPublicPromptTimeoutSeconds
 		}
-		settings := trigger.BridgeSettings{
+		settings := Settings{
 			AllowPublicDMs:             req.Settings.AllowPublicDMs,
 			PublicSessionTTLSeconds:    int(req.Settings.PublicSessionTTLSeconds),
 			PublicSessionMode:          mode,

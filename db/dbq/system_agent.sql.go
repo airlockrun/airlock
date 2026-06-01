@@ -13,26 +13,35 @@ import (
 
 const appendSystemMessage = `-- name: AppendSystemMessage :one
 INSERT INTO system_messages (
-    conversation_id, role, parts, tokens_in, tokens_out, cost_estimate
+    conversation_id, role, source, content, parts, tokens_in, tokens_out, cost_estimate
 ) VALUES (
-    $1, $2, $3, $4, $5, $6
+    $1, $2, $3, $4, $5, $6, $7, $8
 )
-RETURNING id, seq, conversation_id, role, parts, tokens_in, tokens_out, cost_estimate, created_at
+RETURNING id, seq, conversation_id, role, source, content, parts, tokens_in, tokens_out, cost_estimate, created_at
 `
 
 type AppendSystemMessageParams struct {
 	ConversationID pgtype.UUID    `json:"conversation_id"`
 	Role           string         `json:"role"`
+	Source         string         `json:"source"`
+	Content        string         `json:"content"`
 	Parts          []byte         `json:"parts"`
 	TokensIn       int32          `json:"tokens_in"`
 	TokensOut      int32          `json:"tokens_out"`
 	CostEstimate   pgtype.Numeric `json:"cost_estimate"`
 }
 
+// Mirrors agent_messages' (content, parts) split: content is the
+// plain-text display string; parts carries the goai multi-part Content
+// shape only when there are tool calls / results / images / etc.
+// (left NULL for plain text answers). source distinguishes operator
+// prompts ("") from system-injected events ("upgrade", "error", ...).
 func (q *Queries) AppendSystemMessage(ctx context.Context, arg AppendSystemMessageParams) (SystemMessage, error) {
 	row := q.db.QueryRow(ctx, appendSystemMessage,
 		arg.ConversationID,
 		arg.Role,
+		arg.Source,
+		arg.Content,
 		arg.Parts,
 		arg.TokensIn,
 		arg.TokensOut,
@@ -44,6 +53,8 @@ func (q *Queries) AppendSystemMessage(ctx context.Context, arg AppendSystemMessa
 		&i.Seq,
 		&i.ConversationID,
 		&i.Role,
+		&i.Source,
+		&i.Content,
 		&i.Parts,
 		&i.TokensIn,
 		&i.TokensOut,
@@ -253,7 +264,7 @@ func (q *Queries) ListSystemConversationsByUser(ctx context.Context, userID pgty
 }
 
 const listSystemMessagesByConversation = `-- name: ListSystemMessagesByConversation :many
-SELECT m.id, m.seq, m.conversation_id, m.role, m.parts, m.tokens_in, m.tokens_out, m.cost_estimate, m.created_at FROM system_messages m
+SELECT m.id, m.seq, m.conversation_id, m.role, m.source, m.content, m.parts, m.tokens_in, m.tokens_out, m.cost_estimate, m.created_at FROM system_messages m
 JOIN system_conversations c ON c.id = m.conversation_id
 WHERE m.conversation_id = $1
   AND (m.parts -> 0 ->> 'type') IS DISTINCT FROM 'checkpoint'
@@ -284,6 +295,8 @@ func (q *Queries) ListSystemMessagesByConversation(ctx context.Context, conversa
 			&i.Seq,
 			&i.ConversationID,
 			&i.Role,
+			&i.Source,
+			&i.Content,
 			&i.Parts,
 			&i.TokensIn,
 			&i.TokensOut,
@@ -301,7 +314,7 @@ func (q *Queries) ListSystemMessagesByConversation(ctx context.Context, conversa
 }
 
 const listSystemMessagesByConversationAfter = `-- name: ListSystemMessagesByConversationAfter :many
-SELECT id, seq, conversation_id, role, parts, tokens_in, tokens_out, cost_estimate, created_at FROM system_messages
+SELECT id, seq, conversation_id, role, source, content, parts, tokens_in, tokens_out, cost_estimate, created_at FROM system_messages
 WHERE conversation_id = $1 AND seq > $2
 ORDER BY seq ASC
 LIMIT $3
@@ -329,6 +342,8 @@ func (q *Queries) ListSystemMessagesByConversationAfter(ctx context.Context, arg
 			&i.Seq,
 			&i.ConversationID,
 			&i.Role,
+			&i.Source,
+			&i.Content,
 			&i.Parts,
 			&i.TokensIn,
 			&i.TokensOut,
@@ -346,7 +361,7 @@ func (q *Queries) ListSystemMessagesByConversationAfter(ctx context.Context, arg
 }
 
 const listSystemMessagesByConversationAll = `-- name: ListSystemMessagesByConversationAll :many
-SELECT id, seq, conversation_id, role, parts, tokens_in, tokens_out, cost_estimate, created_at FROM system_messages
+SELECT id, seq, conversation_id, role, source, content, parts, tokens_in, tokens_out, cost_estimate, created_at FROM system_messages
 WHERE conversation_id = $1
 ORDER BY seq ASC
 `
@@ -369,11 +384,73 @@ func (q *Queries) ListSystemMessagesByConversationAll(ctx context.Context, conve
 			&i.Seq,
 			&i.ConversationID,
 			&i.Role,
+			&i.Source,
+			&i.Content,
 			&i.Parts,
 			&i.TokensIn,
 			&i.TokensOut,
 			&i.CostEstimate,
 			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSystemRunsByUser = `-- name: ListSystemRunsByUser :many
+SELECT r.id, r.conversation_id, r.user_id, r.status, r.error_message,
+       r.started_at, r.finished_at, c.title AS conversation_title
+FROM system_runs r
+JOIN system_conversations c ON c.id = r.conversation_id
+WHERE r.user_id = $1
+  AND ($2::timestamptz IS NULL OR r.started_at < $2)
+ORDER BY r.started_at DESC
+LIMIT $3
+`
+
+type ListSystemRunsByUserParams struct {
+	UserID pgtype.UUID        `json:"user_id"`
+	Cursor pgtype.Timestamptz `json:"cursor"`
+	Lim    int32              `json:"lim"`
+}
+
+type ListSystemRunsByUserRow struct {
+	ID                pgtype.UUID        `json:"id"`
+	ConversationID    pgtype.UUID        `json:"conversation_id"`
+	UserID            pgtype.UUID        `json:"user_id"`
+	Status            string             `json:"status"`
+	ErrorMessage      string             `json:"error_message"`
+	StartedAt         pgtype.Timestamptz `json:"started_at"`
+	FinishedAt        pgtype.Timestamptz `json:"finished_at"`
+	ConversationTitle string             `json:"conversation_title"`
+}
+
+// Caller's runs across all their conversations, paginated by started_at.
+// JOINs system_conversations for the conversation title so the operator's
+// activity view doesn't need a second per-row fetch.
+func (q *Queries) ListSystemRunsByUser(ctx context.Context, arg ListSystemRunsByUserParams) ([]ListSystemRunsByUserRow, error) {
+	rows, err := q.db.Query(ctx, listSystemRunsByUser, arg.UserID, arg.Cursor, arg.Lim)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListSystemRunsByUserRow{}
+	for rows.Next() {
+		var i ListSystemRunsByUserRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.ConversationID,
+			&i.UserID,
+			&i.Status,
+			&i.ErrorMessage,
+			&i.StartedAt,
+			&i.FinishedAt,
+			&i.ConversationTitle,
 		); err != nil {
 			return nil, err
 		}

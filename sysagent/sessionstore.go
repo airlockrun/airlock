@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"strconv"
+	"strings"
 
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
@@ -103,6 +104,8 @@ func (s *sessionStore) Compact(ctx context.Context, summary []session.Message, t
 	if _, err := q.AppendSystemMessage(ctx, dbq.AppendSystemMessageParams{
 		ConversationID: pgtype.UUID{Bytes: s.conversationID, Valid: true},
 		Role:           "system",
+		Source:         "checkpoint",
+		Content:        "",
 		Parts:          markerParts,
 		CostEstimate:   pgNumericFromFloat(0),
 	}); err != nil {
@@ -114,13 +117,15 @@ func (s *sessionStore) Compact(ctx context.Context, summary []session.Message, t
 	var firstSummaryID pgtype.UUID
 	for i, msg := range summary {
 		goaiMsgs := session.MessageToGoAI(msg)
+		summaryText := extractDisplayText(msg)
 		if len(goaiMsgs) == 0 {
 			// Role-only edge case; we still need a real row so the
 			// pointer has something to FK onto.
 			row, ierr := q.AppendSystemMessage(ctx, dbq.AppendSystemMessageParams{
 				ConversationID: pgtype.UUID{Bytes: s.conversationID, Valid: true},
 				Role:           msg.Role,
-				Parts:          json.RawMessage("[]"),
+				Content:        summaryText,
+				Parts:          nil,
 				CostEstimate:   pgNumericFromFloat(0),
 			})
 			if ierr != nil {
@@ -132,10 +137,14 @@ func (s *sessionStore) Compact(ctx context.Context, summary []session.Message, t
 			continue
 		}
 		for j, gm := range goaiMsgs {
-			partsJSON, _ := json.Marshal(gm.Content)
+			var partsJSON []byte
+			if gm.Content.IsMultiPart() {
+				partsJSON, _ = json.Marshal(gm.Content)
+			}
 			row, ierr := q.AppendSystemMessage(ctx, dbq.AppendSystemMessageParams{
 				ConversationID: pgtype.UUID{Bytes: s.conversationID, Valid: true},
 				Role:           string(gm.Role),
+				Content:        summaryText,
 				Parts:          partsJSON,
 				CostEstimate:   pgNumericFromFloat(0),
 			})
@@ -186,20 +195,31 @@ func rowToSessionMessage(r dbq.SystemMessage) session.Message {
 	return session.Message{Role: r.Role}
 }
 
-// appendSessionMessage persists one session.Message, expanding it
-// into one or more system_messages rows. A session.Message that
-// carries text + tool calls + tool results becomes N rows so the UI
-// renders each as its own bubble; collapsing them into a single
-// jsonb blob would block the existing per-part rendering pipeline.
+// appendSessionMessage persists one session.Message, expanding it into
+// one or more system_messages rows. Mirrors agent chat's
+// api/agent_session.go::storeSessionMessageReturningID:
+//
+//   - content = plain-text display string (always populated, even when
+//     parts is set — drives the bubble's text fallback).
+//   - parts   = goai multi-part Content JSON, ONLY when goai's
+//     Content.IsMultiPart() — left NULL for plain text answers so the
+//     frontend's "no blocks → render content" fast path lights up the
+//     same way it does for agent chat.
+//
+// A session.Message that carries text + tool calls + tool results
+// expands into multiple rows (one per goai message slice element) so
+// the per-row role + parts reflect the canonical bubble layout.
 func appendSessionMessage(ctx context.Context, q *dbq.Queries, conversationID uuid.UUID, msg session.Message) error {
 	goaiMsgs := session.MessageToGoAI(msg)
+	displayText := extractDisplayText(msg)
 	if len(goaiMsgs) == 0 {
-		// Plain content-only message with no goai expansion — persist
-		// it as a single role-only row with an empty parts blob.
+		// No goai expansion (role-only / unknown shape). Persist
+		// the display text in content; parts stays NULL.
 		_, err := q.AppendSystemMessage(ctx, dbq.AppendSystemMessageParams{
 			ConversationID: pgtype.UUID{Bytes: conversationID, Valid: true},
 			Role:           msg.Role,
-			Parts:          json.RawMessage("[]"),
+			Content:        displayText,
+			Parts:          nil,
 			TokensIn:       int32(msg.Tokens.Input),
 			TokensOut:      int32(msg.Tokens.Output),
 			CostEstimate:   pgNumericFromFloat(0),
@@ -210,14 +230,11 @@ func appendSessionMessage(ctx context.Context, q *dbq.Queries, conversationID uu
 		var partsJSON []byte
 		if gm.Content.IsMultiPart() {
 			partsJSON, _ = json.Marshal(gm.Content)
-		} else {
-			// Even a single-part message: wrap as the goai Content
-			// shape so Load can roundtrip it back uniformly.
-			partsJSON, _ = json.Marshal(gm.Content)
 		}
 		if _, err := q.AppendSystemMessage(ctx, dbq.AppendSystemMessageParams{
 			ConversationID: pgtype.UUID{Bytes: conversationID, Valid: true},
 			Role:           string(gm.Role),
+			Content:        displayText,
 			Parts:          partsJSON,
 			TokensIn:       int32(msg.Tokens.Input),
 			TokensOut:      int32(msg.Tokens.Output),
@@ -227,6 +244,29 @@ func appendSessionMessage(ctx context.Context, q *dbq.Queries, conversationID uu
 		}
 	}
 	return nil
+}
+
+// extractDisplayText mirrors api/agent_session.go::extractSessionDisplayText —
+// pull the human-readable string out of a session.Message for the
+// system_messages.content column.
+func extractDisplayText(msg session.Message) string {
+	if msg.Content != "" {
+		return msg.Content
+	}
+	var parts []string
+	for _, p := range msg.Parts {
+		switch p.Type {
+		case "text":
+			if p.Text != "" {
+				parts = append(parts, p.Text)
+			}
+		case "tool":
+			if p.Tool != nil && p.Tool.Output != "" {
+				parts = append(parts, p.Tool.Output)
+			}
+		}
+	}
+	return strings.Join(parts, "")
 }
 
 // pgNumericFromFloat wraps a float64 into a pgtype.Numeric. Cost is

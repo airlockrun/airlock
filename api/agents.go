@@ -2,18 +2,14 @@ package api
 
 import (
 	"errors"
-	"fmt"
 	"net/http"
-	"time"
 
 	"github.com/airlockrun/airlock/convert"
-	"github.com/airlockrun/airlock/db/dbq"
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 	"github.com/airlockrun/airlock/service"
 	agentssvc "github.com/airlockrun/airlock/service/agents"
 	memberssvc "github.com/airlockrun/airlock/service/members"
 	"github.com/go-chi/chi/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // agentsHandler is the thin HTTP wrapper around agents.Service (plus
@@ -101,7 +97,7 @@ func (h *agentsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeProto(w, http.StatusAccepted, &airlockv1.CreateAgentResponse{
-		Agent: agentToProto(agent),
+		Agent: convert.AgentToProto(agent),
 	})
 }
 
@@ -115,8 +111,9 @@ func (h *agentsHandler) List(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]*airlockv1.AgentInfo, len(items))
 	for i, it := range items {
-		p := agentToProto(it.Agent)
+		p := convert.AgentToProto(it.Agent)
 		p.Running = it.Running
+		p.YourAccess = string(it.YourAccess)
 		out[i] = p
 	}
 	writeProto(w, http.StatusOK, &airlockv1.ListAgentsResponse{Agents: out})
@@ -137,22 +134,23 @@ func (h *agentsHandler) Get(w http.ResponseWriter, r *http.Request) {
 	}
 	connInfos := make([]*airlockv1.ConnectionInfo, len(d.Connections))
 	for i, c := range d.Connections {
-		connInfos[i] = connectionToProto(c, h.publicURL, agentID.String())
+		connInfos[i] = convert.ConnectionToProto(c, h.publicURL, agentID.String())
 	}
 	whInfos := make([]*airlockv1.WebhookInfo, len(d.Webhooks))
 	for i, wh := range d.Webhooks {
-		whInfos[i] = webhookToProto(wh, h.publicURL, agentID.String())
+		whInfos[i] = convert.WebhookToProto(wh, h.publicURL, agentID.String())
 	}
 	cronInfos := make([]*airlockv1.CronInfo, len(d.Crons))
 	for i, c := range d.Crons {
-		cronInfos[i] = cronToProto(c)
+		cronInfos[i] = convert.CronToProto(c)
 	}
 	routeInfos := make([]*airlockv1.RouteInfo, len(d.Routes))
 	for i, route := range d.Routes {
-		routeInfos[i] = routeToProto(route)
+		routeInfos[i] = convert.RouteToProto(route)
 	}
-	agentProto := agentToProto(d.Agent)
+	agentProto := convert.AgentToProto(d.Agent)
 	agentProto.Running = d.Running
+	agentProto.YourAccess = string(d.YourAccess)
 	writeProto(w, http.StatusOK, &airlockv1.GetAgentDetailResponse{
 		Agent:        agentProto,
 		RouteBaseUrl: h.agentBaseURL(d.Agent.Slug),
@@ -186,7 +184,7 @@ func (h *agentsHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeProto(w, http.StatusOK, &airlockv1.UpdateAgentResponse{
-		Agent: agentToProto(updated),
+		Agent: convert.AgentToProto(updated),
 	})
 }
 
@@ -326,7 +324,7 @@ func (h *agentsHandler) ListWebhooks(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]*airlockv1.WebhookInfo, len(rows))
 	for i, wh := range rows {
-		out[i] = webhookToProto(wh, h.publicURL, agentID.String())
+		out[i] = convert.WebhookToProto(wh, h.publicURL, agentID.String())
 	}
 	writeProto(w, http.StatusOK, &airlockv1.ListWebhooksResponse{Webhooks: out})
 }
@@ -346,7 +344,7 @@ func (h *agentsHandler) ListCrons(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]*airlockv1.CronInfo, len(rows))
 	for i, c := range rows {
-		out[i] = cronToProto(c)
+		out[i] = convert.CronToProto(c)
 	}
 	writeProto(w, http.StatusOK, &airlockv1.ListCronsResponse{Crons: out})
 }
@@ -366,14 +364,7 @@ func (h *agentsHandler) ListTools(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]*airlockv1.ToolInfo, len(tools))
 	for i, t := range tools {
-		out[i] = &airlockv1.ToolInfo{
-			Id:           pgUUID(t.ID).String(),
-			Name:         t.Name,
-			Description:  t.Description,
-			Access:       t.Access,
-			InputSchema:  string(t.InputSchema),
-			OutputSchema: string(t.OutputSchema),
-		}
+		out[i] = convert.AgentToolToProto(t)
 	}
 	writeProto(w, http.StatusOK, &airlockv1.ListToolsResponse{Tools: out})
 }
@@ -413,30 +404,11 @@ func (h *agentsHandler) ListBuilds(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]*airlockv1.AgentBuildInfo, len(builds))
 	for i, b := range builds {
-		var rollbackTargetID, rollbackTargetSourceRef string
+		var rollbackTargetSourceRef string
 		if b.RollbackTargetID.Valid {
-			rollbackTargetID = convert.PgUUIDToString(b.RollbackTargetID)
-			rollbackTargetSourceRef = sourceRefByID[rollbackTargetID]
+			rollbackTargetSourceRef = sourceRefByID[convert.PgUUIDToString(b.RollbackTargetID)]
 		}
-		out[i] = &airlockv1.AgentBuildInfo{
-			Id:                      convert.PgUUIDToString(b.ID),
-			AgentId:                 convert.PgUUIDToString(b.AgentID),
-			Type:                    b.Type,
-			Status:                  b.Status,
-			Instructions:            b.Instructions,
-			ErrorMessage:            b.ErrorMessage,
-			SourceRef:               b.SourceRef,
-			ImageRef:                b.ImageRef,
-			StartedAt:               convert.PgTimestampToProto(b.StartedAt),
-			FinishedAt:              convert.PgTimestampToProto(b.FinishedAt),
-			LlmCalls:                b.LlmCalls,
-			LlmTokensIn:             b.LlmTokensIn,
-			LlmTokensOut:            b.LlmTokensOut,
-			LlmCostEstimate:         b.LlmCostEstimate,
-			RollbackTargetId:        rollbackTargetID,
-			RollbackTargetSourceRef: rollbackTargetSourceRef,
-			SdkVersion:              b.SdkVersion,
-		}
+		out[i] = convert.AgentBuildListItemToProto(b, rollbackTargetSourceRef)
 	}
 	writeProto(w, http.StatusOK, &airlockv1.ListAgentBuildsResponse{Builds: out})
 }
@@ -454,37 +426,12 @@ func (h *agentsHandler) GetBuild(w http.ResponseWriter, r *http.Request) {
 		writeAgentsError(w, err, "failed to load build")
 		return
 	}
-	b := res.Build
-	var rollbackTargetID, rollbackTargetSourceRef string
-	if b.RollbackTargetID.Valid {
-		rollbackTargetID = convert.PgUUIDToString(b.RollbackTargetID)
-		if res.Target != nil {
-			rollbackTargetSourceRef = res.Target.SourceRef
-		}
+	var rollbackTargetSourceRef string
+	if res.Target != nil {
+		rollbackTargetSourceRef = res.Target.SourceRef
 	}
 	writeProto(w, http.StatusOK, &airlockv1.GetAgentBuildResponse{
-		Build: &airlockv1.AgentBuildInfo{
-			Id:                      convert.PgUUIDToString(b.ID),
-			AgentId:                 convert.PgUUIDToString(b.AgentID),
-			Type:                    b.Type,
-			Status:                  b.Status,
-			Instructions:            b.Instructions,
-			SolLog:                  b.SolLog,
-			DockerLog:               b.DockerLog,
-			ErrorMessage:            b.ErrorMessage,
-			SourceRef:               b.SourceRef,
-			ImageRef:                b.ImageRef,
-			StartedAt:               convert.PgTimestampToProto(b.StartedAt),
-			FinishedAt:              convert.PgTimestampToProto(b.FinishedAt),
-			LogSeq:                  b.LogSeq,
-			LlmCalls:                b.LlmCalls,
-			LlmTokensIn:             b.LlmTokensIn,
-			LlmTokensOut:            b.LlmTokensOut,
-			LlmCostEstimate:         b.LlmCostEstimate,
-			RollbackTargetId:        rollbackTargetID,
-			RollbackTargetSourceRef: rollbackTargetSourceRef,
-			SdkVersion:              b.SdkVersion,
-		},
+		Build: convert.AgentBuildDetailToProto(res.Build, rollbackTargetSourceRef),
 	})
 }
 
@@ -558,13 +505,7 @@ func (h *agentsHandler) ListMembers(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]*airlockv1.AgentMemberInfo, len(rows))
 	for i, m := range rows {
-		out[i] = &airlockv1.AgentMemberInfo{
-			UserId:      m.UserID.String(),
-			Email:       m.Email,
-			DisplayName: m.DisplayName,
-			Role:        m.Role,
-			CreatedAt:   convert.PgTimestampToProto(pgtype.Timestamptz{Time: m.CreatedAt, Valid: !m.CreatedAt.IsZero()}),
-		}
+		out[i] = convert.MemberToProto(m)
 	}
 	writeProto(w, http.StatusOK, &airlockv1.ListAgentMembersResponse{Members: out})
 }
@@ -587,109 +528,4 @@ func (h *agentsHandler) RemoveMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
-}
-
-// --- proto helpers (still used by other handlers in the api package) ---
-
-func agentToProto(a dbq.Agent) *airlockv1.AgentInfo {
-	return &airlockv1.AgentInfo{
-		Id:              convert.PgUUIDToString(a.ID),
-		Name:            a.Name,
-		Slug:            a.Slug,
-		Description:     a.Description,
-		Emoji:           a.Emoji,
-		Status:          a.Status,
-		UpgradeStatus:   a.UpgradeStatus,
-		AutoFix:         a.AutoFix,
-		ErrorMessage:    a.ErrorMessage,
-		CreatedAt:       convert.PgTimestampToProto(a.CreatedAt),
-		UpdatedAt:       convert.PgTimestampToProto(a.UpdatedAt),
-		BuildModel:      a.BuildModel,
-		ExecModel:       a.ExecModel,
-		BuildProviderId: convert.PgUUIDToString(a.BuildProviderID),
-		ExecProviderId:  convert.PgUUIDToString(a.ExecProviderID),
-	}
-}
-
-func connectionToProto(c dbq.Connection, publicURL, agentID string) *airlockv1.ConnectionInfo {
-	authorized := c.AccessTokenRef != ""
-	hasOAuthApp := c.ClientID != "" && c.ClientSecret != ""
-
-	var authURL string
-	if c.AuthMode == "oauth" {
-		authURL = fmt.Sprintf("%s/api/v1/credentials/oauth/start?agent_id=%s&slug=%s", publicURL, agentID, c.Slug)
-	} else if c.AuthMode == "token" {
-		authURL = fmt.Sprintf("%s/ui/credentials/new?agent_id=%s&slug=%s", publicURL, agentID, c.Slug)
-	}
-
-	return &airlockv1.ConnectionInfo{
-		Id:                convert.PgUUIDToString(c.ID),
-		Slug:              c.Slug,
-		Name:              c.Name,
-		Description:       c.Description,
-		AuthMode:          c.AuthMode,
-		Authorized:        authorized,
-		HasOauthApp:       hasOAuthApp,
-		SetupInstructions: c.SetupInstructions,
-		AuthUrl:           authURL,
-		TokenExpiresAt:    convert.PgTimestampToProto(c.TokenExpiresAt),
-		Warnings:          connectionWarnings(c.AuthMode, authorized, c.RefreshToken != "", c.TokenExpiresAt),
-	}
-}
-
-func connectionWarnings(authMode string, authorized, hasRefreshToken bool, tokenExpiresAt pgtype.Timestamptz) []string {
-	if authMode != "oauth" || !authorized {
-		return nil
-	}
-	var warnings []string
-	if !hasRefreshToken {
-		warnings = append(warnings, "No refresh token — this connection will stop working once its access token expires. Re-authorize to fix.")
-	}
-	if tokenExpiresAt.Valid && tokenExpiresAt.Time.Before(time.Now()) {
-		warnings = append(warnings, "Authorization has expired — re-authorize.")
-	}
-	return warnings
-}
-
-func webhookToProto(wh dbq.ListWebhooksByAgentWithStatusRow, publicURL, agentID string) *airlockv1.WebhookInfo {
-	publicURLFull := fmt.Sprintf("%s/webhooks/%s/%s", publicURL, agentID, wh.Path)
-
-	var secretMasked string
-	if wh.Secret != "" && len(wh.Secret) > 8 {
-		secretMasked = wh.Secret[:4] + "..." + wh.Secret[len(wh.Secret)-4:]
-	} else if wh.Secret != "" {
-		secretMasked = "***"
-	}
-
-	return &airlockv1.WebhookInfo{
-		Id:             convert.PgUUIDToString(wh.ID),
-		Path:           wh.Path,
-		VerifyMode:     wh.VerifyMode,
-		PublicUrl:      publicURLFull,
-		SecretMasked:   secretMasked,
-		LastReceivedAt: convert.PgTimestampToProto(wh.LastReceivedAt),
-		CreatedAt:      convert.PgTimestampToProto(wh.CreatedAt),
-		Description:    wh.Description,
-	}
-}
-
-func cronToProto(c dbq.AgentCron) *airlockv1.CronInfo {
-	return &airlockv1.CronInfo{
-		Id:          convert.PgUUIDToString(c.ID),
-		Name:        c.Name,
-		Schedule:    c.Schedule,
-		LastFiredAt: convert.PgTimestampToProto(c.LastFiredAt),
-		CreatedAt:   convert.PgTimestampToProto(c.CreatedAt),
-		Description: c.Description,
-	}
-}
-
-func routeToProto(r dbq.AgentRoute) *airlockv1.RouteInfo {
-	return &airlockv1.RouteInfo{
-		Id:          convert.PgUUIDToString(r.ID),
-		Path:        r.Path,
-		Method:      r.Method,
-		Access:      r.Access,
-		Description: r.Description,
-	}
 }

@@ -60,10 +60,15 @@ DELETE FROM system_conversations WHERE id = @id AND user_id = @user_id;
 
 
 -- name: AppendSystemMessage :one
+-- Mirrors agent_messages' (content, parts) split: content is the
+-- plain-text display string; parts carries the goai multi-part Content
+-- shape only when there are tool calls / results / images / etc.
+-- (left NULL for plain text answers). source distinguishes operator
+-- prompts ("") from system-injected events ("upgrade", "error", ...).
 INSERT INTO system_messages (
-    conversation_id, role, parts, tokens_in, tokens_out, cost_estimate
+    conversation_id, role, source, content, parts, tokens_in, tokens_out, cost_estimate
 ) VALUES (
-    @conversation_id, @role, @parts, @tokens_in, @tokens_out, @cost_estimate
+    @conversation_id, @role, @source, @content, @parts, @tokens_in, @tokens_out, @cost_estimate
 )
 RETURNING *;
 
@@ -113,6 +118,19 @@ RETURNING *;
 
 -- name: GetSystemRunByID :one
 SELECT * FROM system_runs WHERE id = @id;
+
+-- name: ListSystemRunsByUser :many
+-- Caller's runs across all their conversations, paginated by started_at.
+-- JOINs system_conversations for the conversation title so the operator's
+-- activity view doesn't need a second per-row fetch.
+SELECT r.id, r.conversation_id, r.user_id, r.status, r.error_message,
+       r.started_at, r.finished_at, c.title AS conversation_title
+FROM system_runs r
+JOIN system_conversations c ON c.id = r.conversation_id
+WHERE r.user_id = @user_id
+  AND (@cursor::timestamptz IS NULL OR r.started_at < @cursor)
+ORDER BY r.started_at DESC
+LIMIT @lim;
 
 -- name: UpdateSystemRunStatus :exec
 UPDATE system_runs

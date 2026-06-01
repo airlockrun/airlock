@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 
+	"github.com/airlockrun/airlock/convert"
+	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 	"github.com/airlockrun/goai/tool"
 	"github.com/google/uuid"
 )
@@ -38,7 +40,14 @@ func (s *Service) toolListAgents() tool.Tool {
 			if err != nil {
 				return errResult(err), nil
 			}
-			return okResult(rows)
+			agents := make([]*airlockv1.AgentInfo, len(rows))
+			for i, it := range rows {
+				ap := convert.AgentToProto(it.Agent)
+				ap.Running = it.Running
+				ap.YourAccess = string(it.YourAccess)
+				agents[i] = ap
+			}
+			return okResult(&airlockv1.ListAgentsResponse{Agents: agents})
 		}).
 		Build()
 }
@@ -59,11 +68,34 @@ func (s *Service) toolGetAgent() tool.Tool {
 			if err != nil {
 				return errResult(err), nil
 			}
-			out, err := s.agents.Get(ctx, p, uuid.UUID(a.ID.Bytes))
+			agentID := uuid.UUID(a.ID.Bytes)
+			d, err := s.agents.Get(ctx, p, agentID)
 			if err != nil {
 				return errResult(err), nil
 			}
-			return okResult(out)
+			ap := convert.AgentToProto(d.Agent)
+			ap.Running = d.Running
+			ap.YourAccess = string(d.YourAccess)
+			resp := &airlockv1.GetAgentDetailResponse{
+				Agent:       ap,
+				Connections: make([]*airlockv1.ConnectionInfo, len(d.Connections)),
+				Webhooks:    make([]*airlockv1.WebhookInfo, len(d.Webhooks)),
+				Crons:       make([]*airlockv1.CronInfo, len(d.Crons)),
+				Routes:      make([]*airlockv1.RouteInfo, len(d.Routes)),
+			}
+			for i, c := range d.Connections {
+				resp.Connections[i] = convert.ConnectionToProto(c, s.publicURL, agentID.String())
+			}
+			for i, w := range d.Webhooks {
+				resp.Webhooks[i] = convert.WebhookToProto(w, s.publicURL, agentID.String())
+			}
+			for i, c := range d.Crons {
+				resp.Crons[i] = convert.CronToProto(c)
+			}
+			for i, r := range d.Routes {
+				resp.Routes[i] = convert.RouteToProto(r)
+			}
+			return okResult(resp)
 		}).
 		Build()
 }
@@ -84,9 +116,14 @@ func (s *Service) toolListWebhooks() tool.Tool {
 			if err != nil {
 				return errResult(err), nil
 			}
-			out, err := s.agents.ListWebhooks(ctx, p, uuid.UUID(a.ID.Bytes))
+			agentID := uuid.UUID(a.ID.Bytes)
+			rows, err := s.agents.ListWebhooks(ctx, p, agentID)
 			if err != nil {
 				return errResult(err), nil
+			}
+			out := make([]*airlockv1.WebhookInfo, len(rows))
+			for i, w := range rows {
+				out[i] = convert.WebhookToProto(w, s.publicURL, agentID.String())
 			}
 			return okResult(out)
 		}).
@@ -109,9 +146,13 @@ func (s *Service) toolListCrons() tool.Tool {
 			if err != nil {
 				return errResult(err), nil
 			}
-			out, err := s.agents.ListCrons(ctx, p, uuid.UUID(a.ID.Bytes))
+			rows, err := s.agents.ListCrons(ctx, p, uuid.UUID(a.ID.Bytes))
 			if err != nil {
 				return errResult(err), nil
+			}
+			out := make([]*airlockv1.CronInfo, len(rows))
+			for i, c := range rows {
+				out[i] = convert.CronToProto(c)
 			}
 			return okResult(out)
 		}).
@@ -134,9 +175,13 @@ func (s *Service) toolListAgentDeclaredTools() tool.Tool {
 			if err != nil {
 				return errResult(err), nil
 			}
-			out, err := s.agents.ListTools(ctx, p, uuid.UUID(a.ID.Bytes))
+			rows, err := s.agents.ListTools(ctx, p, uuid.UUID(a.ID.Bytes))
 			if err != nil {
 				return errResult(err), nil
+			}
+			out := make([]*airlockv1.ToolInfo, len(rows))
+			for i, t := range rows {
+				out[i] = convert.AgentToolToProto(t)
 			}
 			return okResult(out)
 		}).
@@ -159,9 +204,21 @@ func (s *Service) toolListBuilds() tool.Tool {
 			if err != nil {
 				return errResult(err), nil
 			}
-			out, err := s.agents.ListBuilds(ctx, p, uuid.UUID(a.ID.Bytes))
+			builds, err := s.agents.ListBuilds(ctx, p, uuid.UUID(a.ID.Bytes))
 			if err != nil {
 				return errResult(err), nil
+			}
+			sourceRefByID := make(map[string]string, len(builds))
+			for _, b := range builds {
+				sourceRefByID[convert.PgUUIDToString(b.ID)] = b.SourceRef
+			}
+			out := make([]*airlockv1.AgentBuildInfo, len(builds))
+			for i, b := range builds {
+				var rollbackTargetSourceRef string
+				if b.RollbackTargetID.Valid {
+					rollbackTargetSourceRef = sourceRefByID[convert.PgUUIDToString(b.RollbackTargetID)]
+				}
+				out[i] = convert.AgentBuildListItemToProto(b, rollbackTargetSourceRef)
 			}
 			return okResult(out)
 		}).
@@ -188,11 +245,15 @@ func (s *Service) toolGetBuild() tool.Tool {
 				return errResult(err), nil
 			}
 			p := principalFromCtx(ctx)
-			out, err := s.agents.GetBuild(ctx, p, id)
+			res, err := s.agents.GetBuild(ctx, p, id)
 			if err != nil {
 				return errResult(err), nil
 			}
-			return okResult(out)
+			var rollbackTargetSourceRef string
+			if res.Target != nil {
+				rollbackTargetSourceRef = res.Target.SourceRef
+			}
+			return okResult(convert.AgentBuildDetailToProto(res.Build, rollbackTargetSourceRef))
 		}).
 		Build()
 }
@@ -201,7 +262,7 @@ func (s *Service) toolGetBuild() tool.Tool {
 
 func (s *Service) toolGetGitConfig() tool.Tool {
 	return tool.New("get_git_config").
-		Description(`Return the agent's external git binding (remote URL, credential name, default branch, last-synced ref). Empty when not connected.`).
+		Description(`Return the agent's external git binding (remote URL, credential name, default branch, last-synced ref). Webhook secret is never returned — the operator copies it from the agent details page. Empty when not connected.`).
 		SchemaFromStruct(agentSlugInput{}).
 		Execute(func(ctx context.Context, raw json.RawMessage, _ tool.CallOptions) (tool.Result, error) {
 			var in agentSlugInput
@@ -213,11 +274,12 @@ func (s *Service) toolGetGitConfig() tool.Tool {
 			if err != nil {
 				return errResult(err), nil
 			}
-			out, err := s.agents.GetGitConfig(ctx, p, uuid.UUID(a.ID.Bytes))
+			agentID := uuid.UUID(a.ID.Bytes)
+			out, err := s.agents.GetGitConfig(ctx, p, agentID)
 			if err != nil {
 				return errResult(err), nil
 			}
-			return okResult(out)
+			return okResult(gitConfigToProto(agentID.String(), out))
 		}).
 		Build()
 }
@@ -230,9 +292,13 @@ func (s *Service) toolListGitCredentials() tool.Tool {
 		SchemaFromStruct(struct{}{}).
 		Execute(func(ctx context.Context, _ json.RawMessage, _ tool.CallOptions) (tool.Result, error) {
 			p := principalFromCtx(ctx)
-			out, err := s.gitcreds.List(ctx, p)
+			rows, err := s.gitcreds.List(ctx, p)
 			if err != nil {
 				return errResult(err), nil
+			}
+			out := make([]*airlockv1.GitCredential, len(rows))
+			for i, c := range rows {
+				out[i] = convert.GitCredToProto(c)
 			}
 			return okResult(out)
 		}).

@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 
+	"github.com/airlockrun/airlock/convert"
+	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 	"github.com/airlockrun/goai/tool"
 	"github.com/google/uuid"
 )
@@ -38,9 +40,13 @@ func (s *Service) toolListEnvVars() tool.Tool {
 			if err != nil {
 				return errResult(err), nil
 			}
-			out, err := s.conns.ListEnvVars(ctx, p, uuid.UUID(a.ID.Bytes))
+			rows, err := s.conns.ListEnvVars(ctx, p, uuid.UUID(a.ID.Bytes))
 			if err != nil {
 				return errResult(err), nil
+			}
+			out := make([]*airlockv1.EnvVarInfo, len(rows))
+			for i, e := range rows {
+				out[i] = convert.EnvVarToProto(e)
 			}
 			return okResult(out)
 		}).
@@ -87,9 +93,13 @@ func (s *Service) toolListExecEndpoints() tool.Tool {
 			if err != nil {
 				return errResult(err), nil
 			}
-			out, err := s.execs.List(ctx, p, uuid.UUID(a.ID.Bytes))
+			rows, err := s.execs.List(ctx, p, uuid.UUID(a.ID.Bytes))
 			if err != nil {
 				return errResult(err), nil
+			}
+			out := make([]*airlockv1.ExecEndpointInfo, len(rows))
+			for i, ep := range rows {
+				out[i] = convert.ExecEndpointRowToProto(ep)
 			}
 			return okResult(out)
 		}).
@@ -112,11 +122,11 @@ func (s *Service) toolRotateExecKeypair() tool.Tool {
 			if err != nil {
 				return errResult(err), nil
 			}
-			out, err := s.execs.RotateKeypair(ctx, p, uuid.UUID(a.ID.Bytes), in.Slug)
+			ep, err := s.execs.RotateKeypair(ctx, p, uuid.UUID(a.ID.Bytes), in.Slug)
 			if err != nil {
 				return errResult(err), nil
 			}
-			return okResult(out)
+			return okResult(convert.ExecEndpointRowToProto(ep))
 		}).
 		Build()
 }
@@ -165,7 +175,7 @@ func (s *Service) toolTestExecEndpoint() tool.Tool {
 			if err != nil {
 				return errResult(err), nil
 			}
-			return okResult(out)
+			return okResult(convert.ExecEndpointTestToProto(out))
 		}).
 		Build()
 }

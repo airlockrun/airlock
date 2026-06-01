@@ -347,6 +347,10 @@ message PromptRequest {
   string message = 2;
   repeated string file_paths = 3;
   optional bool approved = 4; // Set by UI when responding to a confirmation request.
+  // The exact run the UI is approving/denying — carried from the
+  // confirmation event so the backend resumes that run instead of guessing
+  // the conversation's latest suspended run. Required when `approved` is set.
+  string resume_run_id = 5;
 }
 
 message PromptResponse {
@@ -555,6 +559,75 @@ message ConnectAgentGitResponse {
 
 message GetAgentGitConfigResponse {
   AgentGitConfig config = 1;
+}
+
+// --- MCP servers ---
+
+message ListMCPServersResponse {
+  repeated MCPServerInfo mcp_servers = 1;
+  string oauth_callback_url = 2;
+}
+
+message MCPCredentialStatusResponse {
+  MCPStatusInfo status = 1;
+}
+
+// --- Env vars ---
+
+message ListEnvVarsResponse {
+  repeated EnvVarInfo env_vars = 1;
+}
+
+// --- Siblings (A2A) ---
+
+message ListSiblingsResponse {
+  repeated SiblingInfo siblings = 1;
+}
+
+message ListAddableSiblingsResponse {
+  repeated AddableSiblingInfo agents = 1;
+}
+
+message GetAgentSharingResponse {
+  A2ASettings settings = 1;
+}
+
+message UpdateAgentSharingRequest {
+  A2ASettings settings = 1;
+}
+
+message UpdateAgentSharingResponse {
+  A2ASettings settings = 1;
+}
+
+// --- Exec endpoints ---
+
+message ListExecEndpointsResponse {
+  repeated ExecEndpointInfo endpoints = 1;
+}
+
+message ConfigureExecEndpointRequest {
+  string host = 1;
+  int32 port = 2;
+  string ssh_user = 3;
+}
+
+message ConfigureExecEndpointResponse {
+  ExecEndpointInfo endpoint = 1;
+}
+
+message RotateExecKeypairResponse {
+  ExecEndpointInfo endpoint = 1;
+}
+
+message TestExecEndpointResponse {
+  ExecEndpointTestResult result = 1;
+}
+
+// --- Connection setup status ---
+
+message ConnectionSetupStatusResponse {
+  SetupCountsInfo counts = 1;
 }
 
 // --- Health ---

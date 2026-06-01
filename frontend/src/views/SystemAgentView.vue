@@ -2,70 +2,103 @@
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useToast } from 'primevue/usetoast'
-import { useConfirm } from 'primevue/useconfirm'
+import { fromJson } from '@bufbuild/protobuf'
+import api from '@/api/client'
 import { useSystemChatStore } from '@/stores/systemChat'
-import type { SystemConversationInfo } from '@/gen/airlock/v1/system_agent_pb'
+import {
+  type SystemRunInfo,
+  ListSystemRunsResponseSchema,
+} from '@/gen/airlock/v1/system_agent_pb'
 
 const router = useRouter()
 const toast = useToast()
-const confirm = useConfirm()
 const sys = useSystemChatStore()
-const loading = ref(false)
 
-onMounted(async () => {
+const runs = ref<SystemRunInfo[]>([])
+const nextCursor = ref<string>('')
+const loading = ref(false)
+const loadingMore = ref(false)
+
+async function fetchRuns(cursor?: string) {
+  const params = cursor ? { cursor } : {}
+  const { data } = await api.get('/api/v1/system/runs', { params })
+  return fromJson(ListSystemRunsResponseSchema, data)
+}
+
+async function load() {
   loading.value = true
   try {
+    // Conversations back the sidebar; refresh them so the unified left
+    // pane reflects whatever the operator did since they last opened
+    // the system view.
     await sys.refreshConversations()
+    const resp = await fetchRuns()
+    runs.value = [...resp.runs]
+    nextCursor.value = resp.nextCursor
   } catch (err: any) {
-    toast.add({ severity: 'error', summary: 'Failed to load chats', detail: err?.message, life: 5000 })
+    toast.add({ severity: 'error', summary: 'Failed to load runs', detail: err?.message, life: 5000 })
   } finally {
     loading.value = false
   }
-})
+}
 
-async function openNewChat() {
+async function loadMore() {
+  if (!nextCursor.value || loadingMore.value) return
+  loadingMore.value = true
   try {
-    const t = await sys.createConversation()
-    router.push(`/system/chat/${t.id}`)
+    const resp = await fetchRuns(nextCursor.value)
+    runs.value.push(...resp.runs)
+    nextCursor.value = resp.nextCursor
   } catch (err: any) {
-    toast.add({ severity: 'error', summary: 'Failed to start chat', detail: err?.message, life: 5000 })
+    toast.add({ severity: 'error', summary: 'Failed to load more', detail: err?.message, life: 5000 })
+  } finally {
+    loadingMore.value = false
   }
 }
 
-function openConversation(t: SystemConversationInfo) {
-  router.push(`/system/chat/${t.id}`)
+function openNewChat() {
+  // Route to the empty-conversation view; the row is minted server-side
+  // on the first send (mirrors agent chat).
+  router.push('/system/chat')
 }
 
-function confirmDelete(t: SystemConversationInfo, e: Event) {
-  e.stopPropagation()
-  confirm.require({
-    target: e.currentTarget as HTMLElement,
-    message: `Delete "${t.title}"? This can't be undone.`,
-    icon: 'pi pi-exclamation-triangle',
-    acceptClass: 'p-button-danger p-button-sm',
-    rejectClass: 'p-button-text p-button-sm',
-    accept: async () => {
-      try {
-        await sys.deleteConversation(t.id)
-      } catch (err: any) {
-        toast.add({ severity: 'error', summary: 'Delete failed', detail: err?.message, life: 5000 })
-      }
-    },
-  })
+function openRun(r: SystemRunInfo) {
+  router.push(`/system/chat/${r.conversationId}`)
 }
 
-function timeAgo(seconds?: bigint): string {
-  if (!seconds) return ''
-  const ms = Number(seconds) * 1000
-  const diff = Date.now() - ms
-  const m = Math.floor(diff / 60000)
-  if (m < 1) return 'just now'
-  if (m < 60) return `${m}m ago`
-  const h = Math.floor(m / 60)
-  if (h < 24) return `${h}h ago`
-  const d = Math.floor(h / 24)
-  return `${d}d ago`
+function fmtTime(ts?: { seconds?: bigint }): string {
+  if (!ts?.seconds) return ''
+  return new Date(Number(ts.seconds) * 1000).toLocaleString()
 }
+
+function duration(r: SystemRunInfo): string {
+  if (!r.startedAt?.seconds) return ''
+  const startMs = Number(r.startedAt.seconds) * 1000
+  const endMs = r.finishedAt?.seconds ? Number(r.finishedAt.seconds) * 1000 : Date.now()
+  const sec = Math.max(0, Math.floor((endMs - startMs) / 1000))
+  if (sec < 60) return `${sec}s`
+  const m = Math.floor(sec / 60)
+  const s = sec % 60
+  return `${m}m ${s}s`
+}
+
+function statusSeverity(status: string): string {
+  switch (status) {
+    case 'running':
+    case 'suspended':
+      return 'info'
+    case 'complete':
+      return 'success'
+    case 'error':
+      return 'danger'
+    case 'cancelled':
+      return 'warn'
+    default:
+      return 'secondary'
+  }
+}
+
+onMounted(load)
 </script>
 
 <template>
@@ -92,68 +125,67 @@ function timeAgo(seconds?: bigint): string {
         </p>
       </div>
       <div style="display: flex; gap: 0.5rem">
-        <Button label="New chat" icon="pi pi-plus" @click="openNewChat" />
+        <Button label="Chat" icon="pi pi-comments" @click="openNewChat" />
       </div>
     </div>
 
     <Card>
       <template #title>
         <div style="display: flex; align-items: center; gap: 0.5rem">
-          <i class="pi pi-comments" />
-          <span>Your chats</span>
+          <i class="pi pi-history" />
+          <span>Runs</span>
         </div>
       </template>
       <template #content>
         <div v-if="loading" style="display: flex; flex-direction: column; gap: 0.5rem">
-          <Skeleton v-for="i in 3" :key="i" width="100%" height="2.5rem" />
+          <Skeleton v-for="i in 4" :key="i" width="100%" height="2.5rem" />
         </div>
 
-        <div v-else-if="sys.conversations.length === 0" style="text-align: center; padding: 1.5rem 0">
-          <i class="pi pi-comment" style="font-size: 2rem; color: var(--p-surface-400); margin-bottom: 0.5rem" />
-          <p style="color: var(--p-text-muted-color); margin: 0.5rem 0 1rem">No chats yet. Start your first conversation.</p>
-          <Button label="New chat" icon="pi pi-plus" @click="openNewChat" />
+        <div v-else-if="runs.length === 0" style="text-align: center; padding: 1.5rem 0">
+          <i class="pi pi-history" style="font-size: 2rem; color: var(--p-surface-400); margin-bottom: 0.5rem" />
+          <p style="color: var(--p-text-muted-color); margin: 0.5rem 0 1rem">No runs yet. Start a chat to do something.</p>
+          <Button label="Chat" icon="pi pi-comments" @click="openNewChat" />
         </div>
 
-        <DataTable
-          v-else
-          :value="sys.conversations"
-          dataKey="id"
-          rowHover
-          @row-click="(e: any) => openConversation(e.data)"
-          tableStyle="cursor: pointer"
-        >
-          <Column field="title" header="Title">
-            <template #body="{ data }">
-              <span style="font-weight: 500">{{ data.title }}</span>
-              <Tag
-                v-if="data.status === 'awaiting_confirmation'"
-                value="Needs approval"
-                severity="warn"
-                style="margin-left: 0.5rem"
-              />
-            </template>
-          </Column>
-          <Column field="updatedAt" header="Last activity" style="width: 12rem">
-            <template #body="{ data }">
-              <span style="color: var(--p-text-muted-color); font-size: 0.875rem">
-                {{ timeAgo(data.updatedAt?.seconds) }}
-              </span>
-            </template>
-          </Column>
-          <Column header="" style="width: 5rem; text-align: right">
-            <template #body="{ data }">
-              <Button
-                icon="pi pi-trash"
-                text
-                rounded
-                size="small"
-                severity="secondary"
-                aria-label="Delete chat"
-                @click="(e: Event) => confirmDelete(data, e)"
-              />
-            </template>
-          </Column>
-        </DataTable>
+        <div v-else>
+          <DataTable
+            :value="runs"
+            dataKey="id"
+            rowHover
+            @row-click="(e: any) => openRun(e.data)"
+            tableStyle="cursor: pointer"
+          >
+            <Column field="conversationTitle" header="Conversation">
+              <template #body="{ data }">
+                <span style="font-weight: 500">{{ data.conversationTitle }}</span>
+              </template>
+            </Column>
+            <Column field="status" header="Status" style="width: 8rem">
+              <template #body="{ data }">
+                <Tag :value="data.status" :severity="statusSeverity(data.status)" />
+              </template>
+            </Column>
+            <Column field="startedAt" header="Started" style="width: 14rem">
+              <template #body="{ data }">
+                <span style="color: var(--p-text-muted-color); font-size: 0.875rem">{{ fmtTime(data.startedAt) }}</span>
+              </template>
+            </Column>
+            <Column header="Duration" style="width: 7rem">
+              <template #body="{ data }">
+                <span style="color: var(--p-text-muted-color); font-size: 0.875rem">{{ duration(data) }}</span>
+              </template>
+            </Column>
+            <Column field="errorMessage" header="">
+              <template #body="{ data }">
+                <span v-if="data.errorMessage" style="font-size: 0.8rem; color: var(--p-red-500)">{{ data.errorMessage }}</span>
+              </template>
+            </Column>
+          </DataTable>
+
+          <div v-if="nextCursor" style="display: flex; justify-content: center; margin-top: 1rem">
+            <Button label="Load more" :loading="loadingMore" outlined @click="loadMore" />
+          </div>
+        </div>
       </template>
     </Card>
   </div>

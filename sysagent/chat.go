@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/airlockrun/airlock/authz"
 	"github.com/airlockrun/airlock/db/dbq"
@@ -35,6 +36,67 @@ import (
 type PromptInput struct {
 	Message  string
 	Approved *bool
+	// ResumeRunID, when set on an approve/deny, names the run whose
+	// confirmation is being resolved. RunPrompt waits for that run to suspend
+	// before dispatching the resume, so an approval that beats the async
+	// suspend write isn't rejected as a state mismatch. Empty is allowed: the
+	// refresh-restore path resolves a conversation that's already
+	// awaiting_confirmation, where there's no race to wait out.
+	ResumeRunID string
+}
+
+const (
+	// resumeWaitTimeout bounds how long a confirmation resume waits for the
+	// named run to suspend (the conversation flips to awaiting_confirmation
+	// just before). The run streams its confirmation event to the UI before
+	// that write lands, so an approval can arrive a few ms early — wait it out
+	// rather than rejecting it as a state mismatch.
+	resumeWaitTimeout  = 10 * time.Second
+	resumeWaitInterval = 100 * time.Millisecond
+)
+
+// awaitSuspendedSystemRun waits for the run a confirmation response names to
+// reach status='suspended', validating it belongs to this conversation, then
+// returns the conversation re-fetched (now awaiting_confirmation). Errors —
+// surfaced to the HTTP caller as 409/400 → a UI toast — if the run belongs
+// elsewhere, has already finished, or never suspends before the deadline.
+func (s *Service) awaitSuspendedSystemRun(ctx context.Context, q *dbq.Queries, runIDStr string, conv dbq.SystemConversation) (dbq.SystemConversation, error) {
+	runID, err := uuid.Parse(runIDStr)
+	if err != nil {
+		return conv, service.Detail(service.ErrInvalidInput, "invalid resume_run_id")
+	}
+	deadline := time.Now().Add(resumeWaitTimeout)
+	for {
+		run, err := q.GetSystemRunByID(ctx, pgtype.UUID{Bytes: runID, Valid: true})
+		if err != nil {
+			return conv, service.ErrNotFound
+		}
+		if uuid.UUID(run.ConversationID.Bytes) != uuid.UUID(conv.ID.Bytes) {
+			return conv, service.Detail(service.ErrInvalidInput, "run does not belong to this conversation")
+		}
+		switch run.Status {
+		case "suspended":
+			// persistSuspension flips the conversation status just before the
+			// run's status write, so it's awaiting_confirmation by now.
+			fresh, ferr := q.GetSystemConversationByID(ctx, conv.ID)
+			if ferr != nil {
+				return conv, service.ErrNotFound
+			}
+			return fresh, nil
+		case "running":
+			if time.Now().After(deadline) {
+				return conv, service.Detail(service.ErrConflict, "run did not suspend in time; try again")
+			}
+			select {
+			case <-ctx.Done():
+				return conv, ctx.Err()
+			case <-time.After(resumeWaitInterval):
+			}
+		default:
+			// complete / error / cancelled — already terminal.
+			return conv, service.Detail(service.ErrConflict, "run already finished; nothing to confirm")
+		}
+	}
 }
 
 // RunPrompt creates the run row, hands off the chat to a background
@@ -62,6 +124,46 @@ func (s *Service) RunPrompt(ctx context.Context, p authz.Principal, conversation
 	}
 	if uuid.UUID(conversation.UserID.Bytes) != p.UserID {
 		return uuid.Nil, service.ErrNotFound
+	}
+
+	// Resume race fix: a confirmation response (approved set) that names its
+	// run waits for that run to suspend — its conversation flips to
+	// awaiting_confirmation just before the run's status write — so an
+	// approval arriving ahead of the async suspend write isn't rejected by
+	// runChat's default case as a state mismatch. ResumeRunID is empty on the
+	// refresh-restore path, where the conversation is already suspended.
+	if input.Approved != nil && input.ResumeRunID != "" {
+		fresh, werr := s.awaitSuspendedSystemRun(ctx, q, input.ResumeRunID, conversation)
+		if werr != nil {
+			return uuid.Nil, werr
+		}
+		conversation = fresh
+	}
+
+	// First-message title: a freshly created conversation carries the
+	// default "New chat" until the operator's first message lands. Rename
+	// to a truncated copy of the message so the sidebar shows something
+	// recognizable. Done synchronously here (not in the runChat goroutine)
+	// so the title is persisted before the HTTP response returns and the
+	// frontend's post-send refreshConversations() picks it up. Mirrors
+	// agent chat's title-on-create behavior.
+	if input.Message != "" && conversation.Title == defaultConversationTitle {
+		newTitle := truncate(input.Message, 100)
+		if newTitle != "" && newTitle != conversation.Title {
+			if err := q.RenameSystemConversation(ctx, dbq.RenameSystemConversationParams{
+				ID:     conversation.ID,
+				UserID: pgtype.UUID{Bytes: p.UserID, Valid: true},
+				Title:  newTitle,
+			}); err != nil {
+				// Non-fatal — the conversation stays under "New chat" and
+				// the operator can rename it manually. Log and proceed.
+				s.logger.Warn("sysagent: rename conversation on first message failed",
+					zap.Stringer("conversation", uuid.UUID(conversation.ID.Bytes)),
+					zap.Error(err))
+			} else {
+				conversation.Title = newTitle
+			}
+		}
 	}
 
 	run, err := q.CreateSystemRun(ctx, dbq.CreateSystemRunParams{

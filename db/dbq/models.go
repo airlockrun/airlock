@@ -502,6 +502,8 @@ type SystemMessage struct {
 	Seq            int64              `json:"seq"`
 	ConversationID pgtype.UUID        `json:"conversation_id"`
 	Role           string             `json:"role"`
+	Source         string             `json:"source"`
+	Content        string             `json:"content"`
 	Parts          []byte             `json:"parts"`
 	TokensIn       int32              `json:"tokens_in"`
 	TokensOut      int32              `json:"tokens_out"`

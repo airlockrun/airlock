@@ -4,12 +4,12 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/airlockrun/airlock/convert"
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 	"github.com/airlockrun/airlock/service"
 	connsvc "github.com/airlockrun/airlock/service/connections"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // credentialHandler is the thin HTTP wrapper around connections.Service.
@@ -80,7 +80,7 @@ func (h *credentialHandler) SetOAuthApp(w http.ResponseWriter, r *http.Request) 
 		writeConnError(w, err, "failed to update OAuth app")
 		return
 	}
-	writeProto(w, http.StatusOK, statusToProto(st))
+	writeProto(w, http.StatusOK, convert.CredentialStatusToProto(st))
 }
 
 // OAuthStart handles POST /api/v1/credentials/oauth/start.
@@ -143,7 +143,7 @@ func (h *credentialHandler) SetAPIKey(w http.ResponseWriter, r *http.Request) {
 		writeConnError(w, err, "failed to store API key")
 		return
 	}
-	writeProto(w, http.StatusOK, statusToProto(st))
+	writeProto(w, http.StatusOK, convert.CredentialStatusToProto(st))
 }
 
 // ListConnections handles GET /api/v1/agents/{agentID}/connections.
@@ -161,22 +161,7 @@ func (h *credentialHandler) ListConnections(w http.ResponseWriter, r *http.Reque
 	}
 	conns := make([]*airlockv1.ConnectionInfo, len(out.Connections))
 	for i, c := range out.Connections {
-		ci := &airlockv1.ConnectionInfo{
-			Id:                c.ID.String(),
-			Slug:              c.Slug,
-			Name:              c.Name,
-			Description:       c.Description,
-			AuthMode:          c.AuthMode,
-			Authorized:        c.Authorized,
-			HasOauthApp:       c.HasOAuthApp,
-			SetupInstructions: c.SetupInstructions,
-			AuthUrl:           buildCredentialAuthURL(h.svc.PublicURL(), agentID, c.Slug, c.AuthMode),
-			Warnings:          connectionWarnings(c.AuthMode, c.Authorized, c.HasRefreshToken, c.TokenExpiresAt),
-		}
-		if c.TokenExpiresAt.Valid {
-			ci.TokenExpiresAt = timestamppb.New(c.TokenExpiresAt.Time)
-		}
-		conns[i] = ci
+		conns[i] = convert.ConnectionDTOToProto(c, h.svc.PublicURL(), agentID.String())
 	}
 	writeProto(w, http.StatusOK, &airlockv1.ListConnectionsResponse{
 		Connections:      conns,
@@ -197,7 +182,7 @@ func (h *credentialHandler) CredentialStatus(w http.ResponseWriter, r *http.Requ
 		writeConnError(w, err, "failed to get credential status")
 		return
 	}
-	writeProto(w, http.StatusOK, statusToProto(st))
+	writeProto(w, http.StatusOK, convert.CredentialStatusToProto(st))
 }
 
 // RevokeCredential handles DELETE /api/v1/agents/{agentID}/credentials/{slug}.
@@ -233,18 +218,4 @@ func (h *credentialHandler) TestCredential(w http.ResponseWriter, r *http.Reques
 	writeProto(w, http.StatusOK, &airlockv1.TestCredentialResponse{
 		Success: res.Success, StatusCode: res.StatusCode, Message: res.Message,
 	})
-}
-
-// statusToProto adapts a service.Status to the CredentialStatusResponse.
-func statusToProto(st connsvc.Status) *airlockv1.CredentialStatusResponse {
-	resp := &airlockv1.CredentialStatusResponse{
-		Slug:       st.Slug,
-		Name:       st.Name,
-		AuthMode:   st.AuthMode,
-		Authorized: st.Authorized,
-	}
-	if !st.TokenExpiresAt.IsZero() {
-		resp.TokenExpiresAt = timestamppb.New(st.TokenExpiresAt)
-	}
-	return resp
 }

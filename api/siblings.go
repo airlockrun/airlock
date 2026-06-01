@@ -4,8 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"time"
 
+	"github.com/airlockrun/airlock/convert"
+	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 	"github.com/airlockrun/airlock/service"
 	"github.com/airlockrun/airlock/service/siblings"
 	"github.com/go-chi/chi/v5"
@@ -26,31 +27,12 @@ func newSiblingsHandler(svc *siblings.Service) *siblingsHandler {
 	return &siblingsHandler{svc: svc}
 }
 
-type siblingDTO struct {
-	ID                string `json:"id"`
-	Slug              string `json:"slug"`
-	Name              string `json:"name"`
-	Description       string `json:"description,omitempty"`
-	AllowNonMemberMcp bool   `json:"allowNonMemberMcp"`
-	AllowPublicMcp    bool   `json:"allowPublicMcp,omitempty"`
-	CreatedAt         string `json:"createdAt,omitempty"`
-}
-
-type addableSiblingDTO struct {
-	ID                string `json:"id"`
-	Slug              string `json:"slug"`
-	Name              string `json:"name"`
-	Description       string `json:"description,omitempty"`
-	AllowNonMemberMcp bool   `json:"allowNonMemberMcp"`
-	IsMember          bool   `json:"isMember"`
-}
-
 // parentAgentID extracts and parses {agentID} from the URL. On a bad
 // UUID it writes a 400 and returns ok=false; callers should return.
 func parentAgentID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 	id, err := uuid.Parse(chi.URLParam(r, "agentID"))
 	if err != nil {
-		writeJSONError(w, http.StatusBadRequest, "invalid agent ID")
+		writeError(w, http.StatusBadRequest, "invalid agent ID")
 		return uuid.Nil, false
 	}
 	return id, true
@@ -75,7 +57,7 @@ func writeSiblingsError(w http.ResponseWriter, err error, fallback string) {
 	default:
 		msg = fallback
 	}
-	writeJSONError(w, status, msg)
+	writeError(w, status, msg)
 }
 
 // List GET /api/v1/agents/{agentID}/siblings.
@@ -90,19 +72,11 @@ func (h *siblingsHandler) List(w http.ResponseWriter, r *http.Request) {
 		writeSiblingsError(w, err, "list siblings")
 		return
 	}
-	out := make([]siblingDTO, 0, len(rows))
+	out := make([]*airlockv1.SiblingInfo, 0, len(rows))
 	for _, s := range rows {
-		out = append(out, siblingDTO{
-			ID:                s.ID.String(),
-			Slug:              s.Slug,
-			Name:              s.Name,
-			Description:       s.Description,
-			AllowNonMemberMcp: s.AllowNonMemberMcp,
-			AllowPublicMcp:    s.AllowPublicMcp,
-			CreatedAt:         s.CreatedAt.Format(time.RFC3339),
-		})
+		out = append(out, convert.SiblingToProto(s))
 	}
-	writeJSON(w, http.StatusOK, out)
+	writeProto(w, http.StatusOK, &airlockv1.ListSiblingsResponse{Siblings: out})
 }
 
 // ListAddable GET /api/v1/agents/{agentID}/siblings/addable.
@@ -117,18 +91,11 @@ func (h *siblingsHandler) ListAddable(w http.ResponseWriter, r *http.Request) {
 		writeSiblingsError(w, err, "list addable siblings")
 		return
 	}
-	out := make([]addableSiblingDTO, 0, len(rows))
+	out := make([]*airlockv1.AddableSiblingInfo, 0, len(rows))
 	for _, s := range rows {
-		out = append(out, addableSiblingDTO{
-			ID:                s.ID.String(),
-			Slug:              s.Slug,
-			Name:              s.Name,
-			Description:       s.Description,
-			AllowNonMemberMcp: s.AllowNonMemberMcp,
-			IsMember:          s.IsMember,
-		})
+		out = append(out, convert.AddableSiblingToProto(s))
 	}
-	writeJSON(w, http.StatusOK, out)
+	writeProto(w, http.StatusOK, &airlockv1.ListAddableSiblingsResponse{Agents: out})
 }
 
 // Add POST /api/v1/agents/{agentID}/siblings — body: {"siblingId": "..."}.
@@ -141,27 +108,27 @@ func (h *siblingsHandler) Add(w http.ResponseWriter, r *http.Request) {
 		SiblingID string `json:"siblingId"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeJSONError(w, http.StatusBadRequest, "invalid body")
+		writeError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
 	siblingID, err := uuid.Parse(body.SiblingID)
 	if err != nil {
-		writeJSONError(w, http.StatusBadRequest, "invalid siblingId")
+		writeError(w, http.StatusBadRequest, "invalid siblingId")
 		return
 	}
 	p := principalFromRequest(r)
 	if err := h.svc.Add(r.Context(), p, parentID, siblingID); err != nil {
 		switch {
 		case errors.Is(err, service.ErrInvalidInput):
-			writeJSONError(w, http.StatusBadRequest, "agent cannot be its own sibling")
+			writeError(w, http.StatusBadRequest, "agent cannot be its own sibling")
 		case errors.Is(err, service.ErrUnauthorized):
-			writeJSONError(w, http.StatusUnauthorized, "unauthorized")
+			writeError(w, http.StatusUnauthorized, "unauthorized")
 		case errors.Is(err, service.ErrForbidden):
-			writeJSONError(w, http.StatusForbidden, "you are not allowed to add this agent as a sibling")
+			writeError(w, http.StatusForbidden, "you are not allowed to add this agent as a sibling")
 		case errors.Is(err, service.ErrConflict):
-			writeJSONError(w, http.StatusConflict, "already in list")
+			writeError(w, http.StatusConflict, "already in list")
 		default:
-			writeJSONError(w, http.StatusInternalServerError, "add sibling")
+			writeError(w, http.StatusInternalServerError, "add sibling")
 		}
 		return
 	}
@@ -176,7 +143,7 @@ func (h *siblingsHandler) Remove(w http.ResponseWriter, r *http.Request) {
 	}
 	siblingID, err := uuid.Parse(chi.URLParam(r, "siblingID"))
 	if err != nil {
-		writeJSONError(w, http.StatusBadRequest, "invalid sibling ID")
+		writeError(w, http.StatusBadRequest, "invalid sibling ID")
 		return
 	}
 	p := principalFromRequest(r)
@@ -199,38 +166,35 @@ func (h *siblingsHandler) GetA2ASettings(w http.ResponseWriter, r *http.Request)
 		writeSiblingsError(w, err, "get settings")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]bool{
-		"allowNonMemberMcp": s.AllowNonMemberMcp,
-		"allowPublicMcp":    s.AllowPublicMcp,
+	writeProto(w, http.StatusOK, &airlockv1.GetAgentSharingResponse{
+		Settings: convert.A2ASettingsToProto(s),
 	})
 }
 
 // UpdateA2ASettings PUT /api/v1/agents/{agentID}/a2a-settings —
-// body: {"allowNonMemberMcp": bool, "allowPublicMcp": bool}.
+// body: UpdateAgentSharingRequest proto.
 func (h *siblingsHandler) UpdateA2ASettings(w http.ResponseWriter, r *http.Request) {
 	parentID, ok := parentAgentID(w, r)
 	if !ok {
 		return
 	}
-	var body struct {
-		AllowNonMemberMcp bool `json:"allowNonMemberMcp"`
-		AllowPublicMcp    bool `json:"allowPublicMcp"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeJSONError(w, http.StatusBadRequest, "invalid body")
+	var req airlockv1.UpdateAgentSharingRequest
+	if err := decodeProto(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
+	in := siblings.A2ASettings{}
+	if req.Settings != nil {
+		in.AllowNonMemberMcp = req.Settings.AllowNonMemberMcp
+		in.AllowPublicMcp = req.Settings.AllowPublicMcp
+	}
 	p := principalFromRequest(r)
-	out, err := h.svc.UpdateSettings(r.Context(), p, parentID, siblings.A2ASettings{
-		AllowNonMemberMcp: body.AllowNonMemberMcp,
-		AllowPublicMcp:    body.AllowPublicMcp,
-	})
+	out, err := h.svc.UpdateSettings(r.Context(), p, parentID, in)
 	if err != nil {
 		writeSiblingsError(w, err, "update settings")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]bool{
-		"allowNonMemberMcp": out.AllowNonMemberMcp,
-		"allowPublicMcp":    out.AllowPublicMcp,
+	writeProto(w, http.StatusOK, &airlockv1.UpdateAgentSharingResponse{
+		Settings: convert.A2ASettingsToProto(out),
 	})
 }

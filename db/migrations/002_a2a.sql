@@ -585,12 +585,20 @@ CREATE INDEX system_conversations_user_updated_idx
 -- prompts OR system-injected events (build completions, etc.); the
 -- latter carry source='upgrade'/'error' inside parts, same tag
 -- agent_messages uses.
+-- Mirrors agent_messages' content + parts split (api/agent_session.go
+-- ::storeSessionMessageReturningID). content is the plain-text display
+-- string; parts is set only when goai content is multi-part
+-- (tool-call / tool-result / image / etc.). Plain text answers leave
+-- parts NULL so the renderer's "no blocks → render content" fast path
+-- works identically across the two surfaces.
 CREATE TABLE system_messages (
     id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     seq             bigserial NOT NULL,
     conversation_id uuid NOT NULL REFERENCES system_conversations(id) ON DELETE CASCADE,
-    role            text NOT NULL CHECK (role IN ('user', 'assistant', 'tool')),
-    parts           jsonb NOT NULL,
+    role            text NOT NULL CHECK (role IN ('user', 'assistant', 'tool', 'system')),
+    source          text NOT NULL DEFAULT '',
+    content         text NOT NULL DEFAULT '',
+    parts           jsonb,
     tokens_in       integer NOT NULL DEFAULT 0,
     tokens_out      integer NOT NULL DEFAULT 0,
     cost_estimate   numeric(10, 6) NOT NULL DEFAULT 0,

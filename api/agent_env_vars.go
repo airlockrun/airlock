@@ -1,20 +1,17 @@
 package api
 
 import (
-	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"regexp"
-	"time"
 
 	"github.com/airlockrun/airlock/auth"
+	"github.com/airlockrun/airlock/convert"
 	"github.com/airlockrun/airlock/db/dbq"
-	"github.com/airlockrun/airlock/secrets"
+	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"
 )
 
@@ -119,18 +116,6 @@ func (h *agentHandler) GetEnvVarValue(w http.ResponseWriter, r *http.Request) {
 
 // --- operator (user JWT) env var endpoints — now thin wrappers around connections.Service ---
 
-// envVarInfo is the wire shape ListEnvVars returns.
-type envVarInfo struct {
-	Slug         string     `json:"slug"`
-	Description  string     `json:"description,omitempty"`
-	IsSecret     bool       `json:"isSecret"`
-	Configured   bool       `json:"configured"`
-	DefaultValue string     `json:"defaultValue,omitempty"`
-	Pattern      string     `json:"pattern,omitempty"`
-	Value        string     `json:"value,omitempty"`
-	UpdatedAt    *time.Time `json:"updatedAt,omitempty"`
-}
-
 // ListEnvVars handles GET /api/v1/agents/{agentID}/env-vars (operator).
 func (h *credentialHandler) ListEnvVars(w http.ResponseWriter, r *http.Request) {
 	agentID, err := parseUUID(chi.URLParam(r, "agentID"))
@@ -144,18 +129,11 @@ func (h *credentialHandler) ListEnvVars(w http.ResponseWriter, r *http.Request) 
 		writeConnError(w, err, "failed to list env vars")
 		return
 	}
-	out := make([]envVarInfo, 0, len(rows))
+	out := make([]*airlockv1.EnvVarInfo, 0, len(rows))
 	for _, ev := range rows {
-		info := envVarInfo{
-			Slug: ev.Slug, Description: ev.Description, IsSecret: ev.IsSecret,
-			Configured: ev.Configured, Pattern: ev.Pattern,
-			DefaultValue: ev.DefaultValue, Value: ev.Value,
-		}
-		t := ev.UpdatedAt
-		info.UpdatedAt = &t
-		out = append(out, info)
+		out = append(out, convert.EnvVarToProto(ev))
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"envVars": out})
+	writeProto(w, http.StatusOK, &airlockv1.ListEnvVarsResponse{EnvVars: out})
 }
 
 // setEnvVarValueRequest is the body for POST /api/v1/agents/{agentID}/env-vars/{slug}.
@@ -211,17 +189,7 @@ func (h *credentialHandler) SetupStatus(w http.ResponseWriter, r *http.Request) 
 		writeConnError(w, err, "failed to load setup status")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"connections": c.Connections,
-		"mcpServers":  c.MCPServers,
-		"envVars":     c.EnvVars,
-		"total":       c.Connections + c.MCPServers + c.EnvVars,
+	writeProto(w, http.StatusOK, &airlockv1.ConnectionSetupStatusResponse{
+		Counts: convert.SetupCountsToProto(c),
 	})
 }
-
-// suppress unused-import warning for secrets when the agent-side
-// endpoints temporarily change shape during refactors.
-var _ secrets.Store
-var _ context.Context
-var _ pgtype.UUID
-var _ json.RawMessage

@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 
+	"github.com/airlockrun/airlock/convert"
+	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 	bridgessvc "github.com/airlockrun/airlock/service/bridges"
 	"github.com/airlockrun/goai/tool"
 )
@@ -35,9 +37,13 @@ func (s *Service) toolListBridges() tool.Tool {
 		SchemaFromStruct(struct{}{}).
 		Execute(func(ctx context.Context, _ json.RawMessage, _ tool.CallOptions) (tool.Result, error) {
 			p := principalFromCtx(ctx)
-			out, err := s.bridges.List(ctx, p)
+			rows, err := s.bridges.List(ctx, p)
 			if err != nil {
 				return errResult(err), nil
+			}
+			out := make([]*airlockv1.BridgeInfo, len(rows))
+			for i, item := range rows {
+				out[i] = convert.BridgeListItemToProto(item)
 			}
 			return okResult(out)
 		}).
@@ -85,14 +91,14 @@ func (s *Service) toolUpdateBridge() tool.Tool {
 				settings = &su
 			}
 			p := principalFromCtx(ctx)
-			out, err := s.bridges.Update(ctx, p, bridgeID, bridgessvc.UpdateRequest{
+			res, err := s.bridges.Update(ctx, p, bridgeID, bridgessvc.UpdateRequest{
 				AgentID:  in.AgentID,
 				Settings: settings,
 			})
 			if err != nil {
 				return errResult(err), nil
 			}
-			return okResult(out)
+			return okResult(convert.BridgeResultToProto(res))
 		}).
 		Build()
 }

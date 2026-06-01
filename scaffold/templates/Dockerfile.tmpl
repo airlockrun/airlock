@@ -16,23 +16,16 @@ COPY go.mod go.sum* ./
 COPY . .
 
 # Resolve modules via the bind-mounted goproxy first, public proxy second.
-# The goproxy bind is build-time only (not baked into a layer). The dev
-# proxy serves the owned libs at versions that change content under a stable
-# version string across builds, so evict those three from the module cache
-# first — the cache keys by version and would otherwise serve stale source.
-# Third-party modules stay cached. GONOSUMDB=* skips the checksum DB for the
-# unpublished local versions. `go mod tidy` fills go.sum for the templ tool
-# directive's transitive deps that `go mod download` skips as of Go 1.24.
+# The goproxy bind is build-time only (not baked into a layer). The dev proxy
+# serves the owned libs at content-addressed versions (v<const>-dev<hash>), so
+# changed source is a new version Go fetches fresh — no cache eviction needed,
+# and the shared module-cache mount is safe under concurrent builds.
+# GONOSUMDB=* skips the checksum DB for the unpublished local versions.
+# `go mod tidy` fills go.sum for the templ tool directive's transitive deps
+# that `go mod download` skips as of Go 1.24.
 RUN --mount=type=bind,from=goproxy,target=/goproxy \
     --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    chmod -R u+w /go/pkg/mod/cache/download/github.com/airlockrun /go/pkg/mod/github.com/airlockrun 2>/dev/null || true; \
-    rm -rf /go/pkg/mod/cache/download/github.com/airlockrun/agentsdk \
-           /go/pkg/mod/cache/download/github.com/airlockrun/goai \
-           /go/pkg/mod/cache/download/github.com/airlockrun/sol \
-           /go/pkg/mod/github.com/airlockrun/agentsdk@* \
-           /go/pkg/mod/github.com/airlockrun/goai@* \
-           /go/pkg/mod/github.com/airlockrun/sol@* 2>/dev/null || true; \
     GOPROXY="file:///goproxy,https://proxy.golang.org" GONOSUMDB="*" GOSUMDB=off \
     go mod tidy && go tool templ generate && go build -o /agent .
 

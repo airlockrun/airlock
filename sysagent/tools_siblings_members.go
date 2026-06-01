@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 
 	"github.com/airlockrun/airlock/authz"
+	"github.com/airlockrun/airlock/convert"
+	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 	siblingssvc "github.com/airlockrun/airlock/service/siblings"
 	"github.com/airlockrun/goai/tool"
 	"github.com/google/uuid"
@@ -43,9 +45,13 @@ func (s *Service) toolListSiblings() tool.Tool {
 			if err != nil {
 				return errResult(err), nil
 			}
-			out, err := s.siblings.List(ctx, p, uuid.UUID(a.ID.Bytes))
+			rows, err := s.siblings.List(ctx, p, uuid.UUID(a.ID.Bytes))
 			if err != nil {
 				return errResult(err), nil
+			}
+			out := make([]*airlockv1.SiblingInfo, len(rows))
+			for i, sb := range rows {
+				out[i] = convert.SiblingToProto(sb)
 			}
 			return okResult(out)
 		}).
@@ -68,9 +74,13 @@ func (s *Service) toolListAddableSiblings() tool.Tool {
 			if err != nil {
 				return errResult(err), nil
 			}
-			out, err := s.siblings.ListAddable(ctx, p, uuid.UUID(a.ID.Bytes))
+			rows, err := s.siblings.ListAddable(ctx, p, uuid.UUID(a.ID.Bytes))
 			if err != nil {
 				return errResult(err), nil
+			}
+			out := make([]*airlockv1.AddableSiblingInfo, len(rows))
+			for i, ad := range rows {
+				out[i] = convert.AddableSiblingToProto(ad)
 			}
 			return okResult(out)
 		}).
@@ -158,7 +168,7 @@ func (s *Service) toolGetAgentSharing() tool.Tool {
 			if err != nil {
 				return errResult(err), nil
 			}
-			return okResult(out)
+			return okResult(convert.A2ASettingsToProto(out))
 		}).
 		Build()
 }
@@ -192,7 +202,7 @@ func (s *Service) toolSetAgentSharing() tool.Tool {
 			if err != nil {
 				return errResult(err), nil
 			}
-			return okResult(out)
+			return okResult(convert.A2ASettingsToProto(out))
 		}).
 		Build()
 }
@@ -213,9 +223,13 @@ func (s *Service) toolListAgentMembers() tool.Tool {
 			if err != nil {
 				return errResult(err), nil
 			}
-			out, err := s.members.List(ctx, p, uuid.UUID(a.ID.Bytes))
+			rows, err := s.members.List(ctx, p, uuid.UUID(a.ID.Bytes))
 			if err != nil {
 				return errResult(err), nil
+			}
+			out := make([]*airlockv1.AgentMemberInfo, len(rows))
+			for i, m := range rows {
+				out[i] = convert.MemberToProto(m)
 			}
 			return okResult(out)
 		}).

@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 
+	"github.com/airlockrun/airlock/convert"
+	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 	catalogsvc "github.com/airlockrun/airlock/service/catalog"
 	modelssvc "github.com/airlockrun/airlock/service/models"
 	"github.com/airlockrun/goai/tool"
@@ -37,11 +39,11 @@ func (s *Service) toolGetAgentModels() tool.Tool {
 			if err != nil {
 				return errResult(err), nil
 			}
-			out, err := s.models.Get(ctx, p, uuid.UUID(a.ID.Bytes))
+			state, err := s.models.Get(ctx, p, uuid.UUID(a.ID.Bytes))
 			if err != nil {
 				return errResult(err), nil
 			}
-			return okResult(out)
+			return okResult(convert.AgentModelConfigToProto(state.Agent, state.Slots))
 		}).
 		Build()
 }
@@ -63,12 +65,16 @@ func (s *Service) toolListAvailableModels() tool.Tool {
 				return errResult(err), nil
 			}
 			p := principalFromCtx(ctx)
-			out, err := s.catalog.ListModels(ctx, p, catalogsvc.ListModelsOptions{
+			rows, err := s.catalog.ListModels(ctx, p, catalogsvc.ListModelsOptions{
 				ProviderFilter: in.ProviderID,
 				ConfiguredOnly: in.ConfiguredOnly,
 			})
 			if err != nil {
 				return errResult(err), nil
+			}
+			out := make([]*airlockv1.ModelInfo, len(rows))
+			for i, m := range rows {
+				out[i] = convert.CatalogModelToProto(m)
 			}
 			return okResult(out)
 		}).
@@ -130,7 +136,7 @@ func (s *Service) toolUpdateAgentModels() tool.Tool {
 					Model:      sl.Model,
 				}
 			}
-			out, err := s.models.Update(ctx, p, uuid.UUID(a.ID.Bytes), modelssvc.UpdateRequest{
+			state, err := s.models.Update(ctx, p, uuid.UUID(a.ID.Bytes), modelssvc.UpdateRequest{
 				Build:     toServicePair(in.Build),
 				Exec:      toServicePair(in.Exec),
 				STT:       toServicePair(in.STT),
@@ -144,7 +150,7 @@ func (s *Service) toolUpdateAgentModels() tool.Tool {
 			if err != nil {
 				return errResult(err), nil
 			}
-			return okResult(out)
+			return okResult(convert.AgentModelConfigToProto(state.Agent, state.Slots))
 		}).
 		Build()
 }

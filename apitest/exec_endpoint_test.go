@@ -115,16 +115,19 @@ func TestExecEndpoint_ConfigureGeneratesKeypair(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("configure: status %d, body %s", resp.StatusCode, h.ReadBody(resp))
 	}
-	var dto struct {
-		PublicKeyOpenSSH string `json:"publicKeyOpenssh"`
-		PublicKeyComment string `json:"publicKeyComment"`
-		Transport        string `json:"transport"`
-		Host             string `json:"host"`
-		Port             int    `json:"port"`
+	var wrap struct {
+		Endpoint struct {
+			PublicKeyOpenSSH string `json:"publicKeyOpenssh"`
+			PublicKeyComment string `json:"publicKeyComment"`
+			Transport        string `json:"transport"`
+			Host             string `json:"host"`
+			Port             int    `json:"port"`
+		} `json:"endpoint"`
 	}
-	if err := json.Unmarshal(h.ReadBody(resp), &dto); err != nil {
+	if err := json.Unmarshal(h.ReadBody(resp), &wrap); err != nil {
 		t.Fatalf("decode dto: %v", err)
 	}
+	dto := wrap.Endpoint
 
 	if dto.Transport != "ssh" || dto.Host != "127.0.0.1" || dto.Port != 2222 {
 		t.Errorf("configure response %+v has unexpected transport/host/port", dto)
@@ -184,13 +187,15 @@ func TestExecEndpoint_EndToEnd(t *testing.T) {
 	if configResp.StatusCode != http.StatusOK {
 		t.Fatalf("configure: status %d, body %s", configResp.StatusCode, h.ReadBody(configResp))
 	}
-	var dto struct {
-		PublicKeyOpenSSH string `json:"publicKeyOpenssh"`
+	var wrap struct {
+		Endpoint struct {
+			PublicKeyOpenSSH string `json:"publicKeyOpenssh"`
+		} `json:"endpoint"`
 	}
-	if err := json.Unmarshal(h.ReadBody(configResp), &dto); err != nil {
+	if err := json.Unmarshal(h.ReadBody(configResp), &wrap); err != nil {
 		t.Fatalf("decode dto: %v", err)
 	}
-	sshSrv.Authorize(dto.PublicKeyOpenSSH)
+	sshSrv.Authorize(wrap.Endpoint.PublicKeyOpenSSH)
 
 	// 1. Successful call — verify NDJSON stdout + exit envelope.
 	res := agentExec(t, h, agentToken, "vps", "echo hi", nil)
@@ -306,13 +311,15 @@ func TestExecEndpoint_TestConnection(t *testing.T) {
 	if configResp.StatusCode != http.StatusOK {
 		t.Fatalf("configure: %d %s", configResp.StatusCode, h.ReadBody(configResp))
 	}
-	var dto struct {
-		PublicKeyOpenSSH string `json:"publicKeyOpenssh"`
+	var wrap struct {
+		Endpoint struct {
+			PublicKeyOpenSSH string `json:"publicKeyOpenssh"`
+		} `json:"endpoint"`
 	}
-	if err := json.Unmarshal(h.ReadBody(configResp), &dto); err != nil {
+	if err := json.Unmarshal(h.ReadBody(configResp), &wrap); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	sshSrv.Authorize(dto.PublicKeyOpenSSH)
+	sshSrv.Authorize(wrap.Endpoint.PublicKeyOpenSSH)
 
 	resp := h.Do(h.NewRequest(http.MethodPost,
 		"/api/v1/agents/"+agentID.String()+"/exec-endpoints/vps/test",
@@ -320,15 +327,18 @@ func TestExecEndpoint_TestConnection(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("test: %d %s", resp.StatusCode, h.ReadBody(resp))
 	}
-	var out struct {
-		OK       bool   `json:"ok"`
-		ExitCode int    `json:"exitCode"`
-		Stdout   string `json:"stdout"`
-		Error    string `json:"error"`
+	var testResp struct {
+		Result struct {
+			OK       bool   `json:"ok"`
+			ExitCode int    `json:"exitCode"`
+			Stdout   string `json:"stdout"`
+			Error    string `json:"error"`
+		} `json:"result"`
 	}
-	if err := json.Unmarshal(h.ReadBody(resp), &out); err != nil {
+	if err := json.Unmarshal(h.ReadBody(resp), &testResp); err != nil {
 		t.Fatalf("decode test result: %v", err)
 	}
+	out := testResp.Result
 	if !out.OK || out.ExitCode != 0 {
 		t.Errorf("test result: ok=%v exit=%d error=%q", out.OK, out.ExitCode, out.Error)
 	}

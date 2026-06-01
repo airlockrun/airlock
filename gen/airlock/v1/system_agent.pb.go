@@ -190,13 +190,14 @@ type SystemMessageInfo struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	Seq           int64                  `protobuf:"varint,2,opt,name=seq,proto3" json:"seq,omitempty"`
-	Role          string                 `protobuf:"bytes,3,opt,name=role,proto3" json:"role,omitempty"` // "user" | "assistant" | "tool"
-	Source        string                 `protobuf:"bytes,4,opt,name=source,proto3" json:"source,omitempty"`
-	Parts         string                 `protobuf:"bytes,5,opt,name=parts,proto3" json:"parts,omitempty"` // JSON-encoded goai Content
-	TokensIn      int32                  `protobuf:"varint,6,opt,name=tokens_in,json=tokensIn,proto3" json:"tokens_in,omitempty"`
-	TokensOut     int32                  `protobuf:"varint,7,opt,name=tokens_out,json=tokensOut,proto3" json:"tokens_out,omitempty"`
-	CostEstimate  float64                `protobuf:"fixed64,8,opt,name=cost_estimate,json=costEstimate,proto3" json:"cost_estimate,omitempty"`
-	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,9,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	Role          string                 `protobuf:"bytes,3,opt,name=role,proto3" json:"role,omitempty"`       // "user" | "assistant" | "tool" | "system"
+	Source        string                 `protobuf:"bytes,4,opt,name=source,proto3" json:"source,omitempty"`   // "" (user-typed) | "upgrade" | "error" | ...
+	Content       string                 `protobuf:"bytes,5,opt,name=content,proto3" json:"content,omitempty"` // plain-text display string (always populated)
+	Parts         string                 `protobuf:"bytes,6,opt,name=parts,proto3" json:"parts,omitempty"`     // JSON-encoded goai multi-part Content; empty when content is the whole message
+	TokensIn      int32                  `protobuf:"varint,7,opt,name=tokens_in,json=tokensIn,proto3" json:"tokens_in,omitempty"`
+	TokensOut     int32                  `protobuf:"varint,8,opt,name=tokens_out,json=tokensOut,proto3" json:"tokens_out,omitempty"`
+	CostEstimate  float64                `protobuf:"fixed64,9,opt,name=cost_estimate,json=costEstimate,proto3" json:"cost_estimate,omitempty"`
+	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,10,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -255,6 +256,13 @@ func (x *SystemMessageInfo) GetRole() string {
 func (x *SystemMessageInfo) GetSource() string {
 	if x != nil {
 		return x.Source
+	}
+	return ""
+}
+
+func (x *SystemMessageInfo) GetContent() string {
+	if x != nil {
+		return x.Content
 	}
 	return ""
 }
@@ -478,21 +486,176 @@ func (x *GetSystemConversationResponse) GetMessages() []*SystemMessageInfo {
 	return nil
 }
 
+// SystemRunInfo is one entry in the operator's sysagent activity view —
+// run lifecycle + the parent conversation title (denormalized server-side
+// so the UI can render without a per-row conversation fetch).
+type SystemRunInfo struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	Id                string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	ConversationId    string                 `protobuf:"bytes,2,opt,name=conversation_id,json=conversationId,proto3" json:"conversation_id,omitempty"`
+	ConversationTitle string                 `protobuf:"bytes,3,opt,name=conversation_title,json=conversationTitle,proto3" json:"conversation_title,omitempty"`
+	Status            string                 `protobuf:"bytes,4,opt,name=status,proto3" json:"status,omitempty"` // 'running' | 'suspended' | 'complete' | 'error' | 'cancelled'
+	ErrorMessage      string                 `protobuf:"bytes,5,opt,name=error_message,json=errorMessage,proto3" json:"error_message,omitempty"`
+	StartedAt         *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=started_at,json=startedAt,proto3" json:"started_at,omitempty"`
+	FinishedAt        *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=finished_at,json=finishedAt,proto3" json:"finished_at,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *SystemRunInfo) Reset() {
+	*x = SystemRunInfo{}
+	mi := &file_airlock_v1_system_agent_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SystemRunInfo) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SystemRunInfo) ProtoMessage() {}
+
+func (x *SystemRunInfo) ProtoReflect() protoreflect.Message {
+	mi := &file_airlock_v1_system_agent_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SystemRunInfo.ProtoReflect.Descriptor instead.
+func (*SystemRunInfo) Descriptor() ([]byte, []int) {
+	return file_airlock_v1_system_agent_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *SystemRunInfo) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *SystemRunInfo) GetConversationId() string {
+	if x != nil {
+		return x.ConversationId
+	}
+	return ""
+}
+
+func (x *SystemRunInfo) GetConversationTitle() string {
+	if x != nil {
+		return x.ConversationTitle
+	}
+	return ""
+}
+
+func (x *SystemRunInfo) GetStatus() string {
+	if x != nil {
+		return x.Status
+	}
+	return ""
+}
+
+func (x *SystemRunInfo) GetErrorMessage() string {
+	if x != nil {
+		return x.ErrorMessage
+	}
+	return ""
+}
+
+func (x *SystemRunInfo) GetStartedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.StartedAt
+	}
+	return nil
+}
+
+func (x *SystemRunInfo) GetFinishedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.FinishedAt
+	}
+	return nil
+}
+
+// ListSystemRunsResponse is the activity view's page shape. next_cursor
+// is the RFC3339 started_at of the last row when more pages exist;
+// empty when the page is the tail.
+type ListSystemRunsResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Runs          []*SystemRunInfo       `protobuf:"bytes,1,rep,name=runs,proto3" json:"runs,omitempty"`
+	NextCursor    string                 `protobuf:"bytes,2,opt,name=next_cursor,json=nextCursor,proto3" json:"next_cursor,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListSystemRunsResponse) Reset() {
+	*x = ListSystemRunsResponse{}
+	mi := &file_airlock_v1_system_agent_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListSystemRunsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListSystemRunsResponse) ProtoMessage() {}
+
+func (x *ListSystemRunsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_airlock_v1_system_agent_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListSystemRunsResponse.ProtoReflect.Descriptor instead.
+func (*ListSystemRunsResponse) Descriptor() ([]byte, []int) {
+	return file_airlock_v1_system_agent_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *ListSystemRunsResponse) GetRuns() []*SystemRunInfo {
+	if x != nil {
+		return x.Runs
+	}
+	return nil
+}
+
+func (x *ListSystemRunsResponse) GetNextCursor() string {
+	if x != nil {
+		return x.NextCursor
+	}
+	return ""
+}
+
 // SystemPromptRequest carries either a new operator turn (message set)
 // or a pending-confirmation resolution (approved set). When both
 // message and approved are present, approved wins — the server
 // resumes/cancels the gated tool and discards the typed text.
 type SystemPromptRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Message       string                 `protobuf:"bytes,1,opt,name=message,proto3" json:"message,omitempty"`
-	Approved      *bool                  `protobuf:"varint,2,opt,name=approved,proto3,oneof" json:"approved,omitempty"`
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	Message  string                 `protobuf:"bytes,1,opt,name=message,proto3" json:"message,omitempty"`
+	Approved *bool                  `protobuf:"varint,2,opt,name=approved,proto3,oneof" json:"approved,omitempty"`
+	// The run this confirmation response resolves — carried from the
+	// confirmation event so the resume waits for THAT run to suspend rather
+	// than racing the conversation's awaiting_confirmation flip. Empty on the
+	// refresh-restore path (the conversation is already awaiting_confirmation).
+	ResumeRunId   string `protobuf:"bytes,3,opt,name=resume_run_id,json=resumeRunId,proto3" json:"resume_run_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *SystemPromptRequest) Reset() {
 	*x = SystemPromptRequest{}
-	mi := &file_airlock_v1_system_agent_proto_msgTypes[7]
+	mi := &file_airlock_v1_system_agent_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -504,7 +667,7 @@ func (x *SystemPromptRequest) String() string {
 func (*SystemPromptRequest) ProtoMessage() {}
 
 func (x *SystemPromptRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_airlock_v1_system_agent_proto_msgTypes[7]
+	mi := &file_airlock_v1_system_agent_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -517,7 +680,7 @@ func (x *SystemPromptRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SystemPromptRequest.ProtoReflect.Descriptor instead.
 func (*SystemPromptRequest) Descriptor() ([]byte, []int) {
-	return file_airlock_v1_system_agent_proto_rawDescGZIP(), []int{7}
+	return file_airlock_v1_system_agent_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *SystemPromptRequest) GetMessage() string {
@@ -532,6 +695,13 @@ func (x *SystemPromptRequest) GetApproved() bool {
 		return *x.Approved
 	}
 	return false
+}
+
+func (x *SystemPromptRequest) GetResumeRunId() string {
+	if x != nil {
+		return x.ResumeRunId
+	}
+	return ""
 }
 
 var File_airlock_v1_system_agent_proto protoreflect.FileDescriptor
@@ -553,19 +723,21 @@ const file_airlock_v1_system_agent_proto_rawDesc = "" +
 	"\x11PendingSystemTool\x12\x17\n" +
 	"\acall_id\x18\x01 \x01(\tR\x06callId\x12\x1b\n" +
 	"\ttool_name\x18\x02 \x01(\tR\btoolName\x12\x1b\n" +
-	"\targs_json\x18\x03 \x01(\tR\bargsJson\"\x93\x02\n" +
+	"\targs_json\x18\x03 \x01(\tR\bargsJson\"\xad\x02\n" +
 	"\x11SystemMessageInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x10\n" +
 	"\x03seq\x18\x02 \x01(\x03R\x03seq\x12\x12\n" +
 	"\x04role\x18\x03 \x01(\tR\x04role\x12\x16\n" +
-	"\x06source\x18\x04 \x01(\tR\x06source\x12\x14\n" +
-	"\x05parts\x18\x05 \x01(\tR\x05parts\x12\x1b\n" +
-	"\ttokens_in\x18\x06 \x01(\x05R\btokensIn\x12\x1d\n" +
+	"\x06source\x18\x04 \x01(\tR\x06source\x12\x18\n" +
+	"\acontent\x18\x05 \x01(\tR\acontent\x12\x14\n" +
+	"\x05parts\x18\x06 \x01(\tR\x05parts\x12\x1b\n" +
+	"\ttokens_in\x18\a \x01(\x05R\btokensIn\x12\x1d\n" +
 	"\n" +
-	"tokens_out\x18\a \x01(\x05R\ttokensOut\x12#\n" +
-	"\rcost_estimate\x18\b \x01(\x01R\fcostEstimate\x129\n" +
+	"tokens_out\x18\b \x01(\x05R\ttokensOut\x12#\n" +
+	"\rcost_estimate\x18\t \x01(\x01R\fcostEstimate\x129\n" +
 	"\n" +
-	"created_at\x18\t \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"7\n" +
+	"created_at\x18\n" +
+	" \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"7\n" +
 	"\x1fCreateSystemConversationRequest\x12\x14\n" +
 	"\x05title\x18\x01 \x01(\tR\x05title\"j\n" +
 	" CreateSystemConversationResponse\x12F\n" +
@@ -574,10 +746,25 @@ const file_airlock_v1_system_agent_proto_rawDesc = "" +
 	"\rconversations\x18\x01 \x03(\v2\".airlock.v1.SystemConversationInfoR\rconversations\"\xa2\x01\n" +
 	"\x1dGetSystemConversationResponse\x12F\n" +
 	"\fconversation\x18\x01 \x01(\v2\".airlock.v1.SystemConversationInfoR\fconversation\x129\n" +
-	"\bmessages\x18\x02 \x03(\v2\x1d.airlock.v1.SystemMessageInfoR\bmessages\"]\n" +
+	"\bmessages\x18\x02 \x03(\v2\x1d.airlock.v1.SystemMessageInfoR\bmessages\"\xac\x02\n" +
+	"\rSystemRunInfo\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12'\n" +
+	"\x0fconversation_id\x18\x02 \x01(\tR\x0econversationId\x12-\n" +
+	"\x12conversation_title\x18\x03 \x01(\tR\x11conversationTitle\x12\x16\n" +
+	"\x06status\x18\x04 \x01(\tR\x06status\x12#\n" +
+	"\rerror_message\x18\x05 \x01(\tR\ferrorMessage\x129\n" +
+	"\n" +
+	"started_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\tstartedAt\x12;\n" +
+	"\vfinished_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\n" +
+	"finishedAt\"h\n" +
+	"\x16ListSystemRunsResponse\x12-\n" +
+	"\x04runs\x18\x01 \x03(\v2\x19.airlock.v1.SystemRunInfoR\x04runs\x12\x1f\n" +
+	"\vnext_cursor\x18\x02 \x01(\tR\n" +
+	"nextCursor\"\x81\x01\n" +
 	"\x13SystemPromptRequest\x12\x18\n" +
 	"\amessage\x18\x01 \x01(\tR\amessage\x12\x1f\n" +
-	"\bapproved\x18\x02 \x01(\bH\x00R\bapproved\x88\x01\x01B\v\n" +
+	"\bapproved\x18\x02 \x01(\bH\x00R\bapproved\x88\x01\x01\x12\"\n" +
+	"\rresume_run_id\x18\x03 \x01(\tR\vresumeRunIdB\v\n" +
 	"\t_approvedB8Z6github.com/airlockrun/airlock/gen/airlock/v1;airlockv1b\x06proto3"
 
 var (
@@ -592,7 +779,7 @@ func file_airlock_v1_system_agent_proto_rawDescGZIP() []byte {
 	return file_airlock_v1_system_agent_proto_rawDescData
 }
 
-var file_airlock_v1_system_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
+var file_airlock_v1_system_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
 var file_airlock_v1_system_agent_proto_goTypes = []any{
 	(*SystemConversationInfo)(nil),           // 0: airlock.v1.SystemConversationInfo
 	(*PendingSystemTool)(nil),                // 1: airlock.v1.PendingSystemTool
@@ -601,23 +788,28 @@ var file_airlock_v1_system_agent_proto_goTypes = []any{
 	(*CreateSystemConversationResponse)(nil), // 4: airlock.v1.CreateSystemConversationResponse
 	(*ListSystemConversationsResponse)(nil),  // 5: airlock.v1.ListSystemConversationsResponse
 	(*GetSystemConversationResponse)(nil),    // 6: airlock.v1.GetSystemConversationResponse
-	(*SystemPromptRequest)(nil),              // 7: airlock.v1.SystemPromptRequest
-	(*timestamppb.Timestamp)(nil),            // 8: google.protobuf.Timestamp
+	(*SystemRunInfo)(nil),                    // 7: airlock.v1.SystemRunInfo
+	(*ListSystemRunsResponse)(nil),           // 8: airlock.v1.ListSystemRunsResponse
+	(*SystemPromptRequest)(nil),              // 9: airlock.v1.SystemPromptRequest
+	(*timestamppb.Timestamp)(nil),            // 10: google.protobuf.Timestamp
 }
 var file_airlock_v1_system_agent_proto_depIdxs = []int32{
-	1, // 0: airlock.v1.SystemConversationInfo.pending_tool:type_name -> airlock.v1.PendingSystemTool
-	8, // 1: airlock.v1.SystemConversationInfo.created_at:type_name -> google.protobuf.Timestamp
-	8, // 2: airlock.v1.SystemConversationInfo.updated_at:type_name -> google.protobuf.Timestamp
-	8, // 3: airlock.v1.SystemMessageInfo.created_at:type_name -> google.protobuf.Timestamp
-	0, // 4: airlock.v1.CreateSystemConversationResponse.conversation:type_name -> airlock.v1.SystemConversationInfo
-	0, // 5: airlock.v1.ListSystemConversationsResponse.conversations:type_name -> airlock.v1.SystemConversationInfo
-	0, // 6: airlock.v1.GetSystemConversationResponse.conversation:type_name -> airlock.v1.SystemConversationInfo
-	2, // 7: airlock.v1.GetSystemConversationResponse.messages:type_name -> airlock.v1.SystemMessageInfo
-	8, // [8:8] is the sub-list for method output_type
-	8, // [8:8] is the sub-list for method input_type
-	8, // [8:8] is the sub-list for extension type_name
-	8, // [8:8] is the sub-list for extension extendee
-	0, // [0:8] is the sub-list for field type_name
+	1,  // 0: airlock.v1.SystemConversationInfo.pending_tool:type_name -> airlock.v1.PendingSystemTool
+	10, // 1: airlock.v1.SystemConversationInfo.created_at:type_name -> google.protobuf.Timestamp
+	10, // 2: airlock.v1.SystemConversationInfo.updated_at:type_name -> google.protobuf.Timestamp
+	10, // 3: airlock.v1.SystemMessageInfo.created_at:type_name -> google.protobuf.Timestamp
+	0,  // 4: airlock.v1.CreateSystemConversationResponse.conversation:type_name -> airlock.v1.SystemConversationInfo
+	0,  // 5: airlock.v1.ListSystemConversationsResponse.conversations:type_name -> airlock.v1.SystemConversationInfo
+	0,  // 6: airlock.v1.GetSystemConversationResponse.conversation:type_name -> airlock.v1.SystemConversationInfo
+	2,  // 7: airlock.v1.GetSystemConversationResponse.messages:type_name -> airlock.v1.SystemMessageInfo
+	10, // 8: airlock.v1.SystemRunInfo.started_at:type_name -> google.protobuf.Timestamp
+	10, // 9: airlock.v1.SystemRunInfo.finished_at:type_name -> google.protobuf.Timestamp
+	7,  // 10: airlock.v1.ListSystemRunsResponse.runs:type_name -> airlock.v1.SystemRunInfo
+	11, // [11:11] is the sub-list for method output_type
+	11, // [11:11] is the sub-list for method input_type
+	11, // [11:11] is the sub-list for extension type_name
+	11, // [11:11] is the sub-list for extension extendee
+	0,  // [0:11] is the sub-list for field type_name
 }
 
 func init() { file_airlock_v1_system_agent_proto_init() }
@@ -625,14 +817,14 @@ func file_airlock_v1_system_agent_proto_init() {
 	if File_airlock_v1_system_agent_proto != nil {
 		return
 	}
-	file_airlock_v1_system_agent_proto_msgTypes[7].OneofWrappers = []any{}
+	file_airlock_v1_system_agent_proto_msgTypes[9].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_airlock_v1_system_agent_proto_rawDesc), len(file_airlock_v1_system_agent_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   8,
+			NumMessages:   10,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

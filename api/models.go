@@ -5,7 +5,6 @@ import (
 	"net/http"
 
 	"github.com/airlockrun/airlock/convert"
-	"github.com/airlockrun/airlock/db/dbq"
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 	"github.com/airlockrun/airlock/service"
 	modelssvc "github.com/airlockrun/airlock/service/models"
@@ -57,7 +56,7 @@ func (h *modelsHandler) GetConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeProto(w, http.StatusOK, &airlockv1.GetAgentModelConfigResponse{
-		Config: agentModelConfigToProto(state.Agent, state.Slots),
+		Config: convert.AgentModelConfigToProto(state.Agent, state.Slots),
 	})
 }
 
@@ -103,37 +102,6 @@ func (h *modelsHandler) UpdateConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeProto(w, http.StatusOK, &airlockv1.UpdateAgentModelConfigResponse{
-		Config: agentModelConfigToProto(state.Agent, state.Slots),
+		Config: convert.AgentModelConfigToProto(state.Agent, state.Slots),
 	})
-}
-
-func agentModelConfigToProto(agent dbq.Agent, slots []dbq.AgentModelSlot) *airlockv1.AgentModelConfig {
-	out := &airlockv1.AgentModelConfig{
-		BuildModel:          agent.BuildModel,
-		ExecModel:           agent.ExecModel,
-		SttModel:            agent.SttModel,
-		VisionModel:         agent.VisionModel,
-		TtsModel:            agent.TtsModel,
-		ImageGenModel:       agent.ImageGenModel,
-		EmbeddingModel:      agent.EmbeddingModel,
-		SearchModel:         agent.SearchModel,
-		BuildProviderId:     convert.PgUUIDToString(agent.BuildProviderID),
-		ExecProviderId:      convert.PgUUIDToString(agent.ExecProviderID),
-		SttProviderId:       convert.PgUUIDToString(agent.SttProviderID),
-		VisionProviderId:    convert.PgUUIDToString(agent.VisionProviderID),
-		TtsProviderId:       convert.PgUUIDToString(agent.TtsProviderID),
-		ImageGenProviderId:  convert.PgUUIDToString(agent.ImageGenProviderID),
-		EmbeddingProviderId: convert.PgUUIDToString(agent.EmbeddingProviderID),
-		SearchProviderId:    convert.PgUUIDToString(agent.SearchProviderID),
-	}
-	for _, s := range slots {
-		out.Slots = append(out.Slots, &airlockv1.ModelSlotInfo{
-			Slug:               s.Slug,
-			Capability:         s.Capability,
-			Description:        s.Description,
-			AssignedModel:      s.AssignedModel,
-			AssignedProviderId: convert.PgUUIDToString(s.AssignedProviderID),
-		})
-	}
-	return out
 }

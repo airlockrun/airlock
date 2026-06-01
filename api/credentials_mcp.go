@@ -2,26 +2,11 @@ package api
 
 import (
 	"net/http"
-	"time"
 
+	"github.com/airlockrun/airlock/convert"
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 	"github.com/go-chi/chi/v5"
 )
-
-// mcpServerInfo is the wire shape ListMCPServers returns.
-type mcpServerInfo struct {
-	ID             string     `json:"id"`
-	Slug           string     `json:"slug"`
-	Name           string     `json:"name"`
-	URL            string     `json:"url"`
-	AuthMode       string     `json:"authMode"`
-	Authorized     bool       `json:"authorized"`
-	HasOAuthApp    bool       `json:"hasOauthApp"`
-	ToolCount      int        `json:"toolCount"`
-	AuthURL        string     `json:"authUrl,omitempty"`
-	TokenExpiresAt *time.Time `json:"tokenExpiresAt,omitempty"`
-	LastSyncedAt   *time.Time `json:"lastSyncedAt,omitempty"`
-}
 
 // ListMCPServers handles GET /api/v1/agents/{agentID}/mcp-servers.
 func (h *credentialHandler) ListMCPServers(w http.ResponseWriter, r *http.Request) {
@@ -36,25 +21,13 @@ func (h *credentialHandler) ListMCPServers(w http.ResponseWriter, r *http.Reques
 		writeConnError(w, err, "failed to list MCP servers")
 		return
 	}
-	out := make([]mcpServerInfo, len(rows))
+	out := make([]*airlockv1.MCPServerInfo, len(rows))
 	for i, m := range rows {
-		out[i] = mcpServerInfo{
-			ID:             m.ID.String(),
-			Slug:           m.Slug,
-			Name:           m.Name,
-			URL:            m.URL,
-			AuthMode:       m.AuthMode,
-			Authorized:     m.Authorized,
-			HasOAuthApp:    m.HasOAuthApp,
-			ToolCount:      m.ToolCount,
-			AuthURL:        buildMCPAuthURL(h.svc.PublicURL(), agentID, m.Slug, m.AuthMode),
-			TokenExpiresAt: m.TokenExpiresAt,
-			LastSyncedAt:   m.LastSyncedAt,
-		}
+		out[i] = convert.MCPServerToProto(m, h.svc.PublicURL(), agentID.String())
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"mcpServers":       out,
-		"oauthCallbackUrl": h.svc.PublicURL() + "/api/v1/credentials/oauth/callback",
+	writeProto(w, http.StatusOK, &airlockv1.ListMCPServersResponse{
+		McpServers:       out,
+		OauthCallbackUrl: h.svc.PublicURL() + "/api/v1/credentials/oauth/callback",
 	})
 }
 
@@ -71,8 +44,8 @@ func (h *credentialHandler) MCPCredentialStatus(w http.ResponseWriter, r *http.R
 		writeConnError(w, err, "failed to get MCP server")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"slug": st.Slug, "name": st.Name, "authMode": st.AuthMode, "authorized": st.Authorized,
+	writeProto(w, http.StatusOK, &airlockv1.MCPCredentialStatusResponse{
+		Status: convert.MCPStatusToProto(st),
 	})
 }
 
@@ -94,8 +67,8 @@ func (h *credentialHandler) SetMCPToken(w http.ResponseWriter, r *http.Request) 
 		writeConnError(w, err, "failed to store token")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"slug": st.Slug, "name": st.Name, "authMode": st.AuthMode, "authorized": st.Authorized,
+	writeProto(w, http.StatusOK, &airlockv1.MCPCredentialStatusResponse{
+		Status: convert.MCPStatusToProto(st),
 	})
 }
 
@@ -129,9 +102,7 @@ func (h *credentialHandler) TestMCPCredential(w http.ResponseWriter, r *http.Req
 		writeConnError(w, err, "failed to test credential")
 		return
 	}
-	writeProto(w, http.StatusOK, &airlockv1.TestCredentialResponse{
-		Success: res.Success, Message: res.Message,
-	})
+	writeProto(w, http.StatusOK, convert.TestCredentialResultToProto(res))
 }
 
 // RevokeMCPOAuthApp handles DELETE /api/v1/agents/{agentID}/mcp-servers/{slug}/credentials/oauth-app.
@@ -167,8 +138,8 @@ func (h *credentialHandler) SetMCPOAuthApp(w http.ResponseWriter, r *http.Reques
 		writeConnError(w, err, "failed to update OAuth app")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"slug": st.Slug, "name": st.Name, "authMode": st.AuthMode, "authorized": st.Authorized,
+	writeProto(w, http.StatusOK, &airlockv1.MCPCredentialStatusResponse{
+		Status: convert.MCPStatusToProto(st),
 	})
 }
 

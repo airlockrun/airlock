@@ -46,6 +46,11 @@ const router = createRouter({
         { path: 'agents', name: 'agents', component: () => import('@/views/AgentListView.vue') },
         { path: 'agents/create', name: 'agent-create', component: () => import('@/views/AgentCreateView.vue') },
         { path: 'system', name: 'system-agent', component: () => import('@/views/SystemAgentView.vue') },
+        // /system/chat: empty "new conversation" state — the row appears
+        // in the sidebar only once the first message is sent (mirrors
+        // agent chat's wasNew flow). /system/chat/:conversationId opens
+        // an existing conversation.
+        { path: 'system/chat', name: 'system-chat-new', component: () => import('@/views/SystemChatView.vue') },
         { path: 'system/chat/:conversationId', name: 'system-chat', component: () => import('@/views/SystemChatView.vue') },
         { path: 'agents/:id', name: 'agent-detail', component: () => import('@/views/AgentDetailView.vue') },
         { path: 'agents/:id/chat', name: 'agent-chat', component: () => import('@/views/AgentChatView.vue') },

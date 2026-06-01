@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/airlockrun/airlock/convert"
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 	"github.com/airlockrun/airlock/service"
 	catalogsvc "github.com/airlockrun/airlock/service/catalog"
@@ -50,7 +51,7 @@ func (h *catalogHandler) ListProviders(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]*airlockv1.ProviderInfo, len(providers))
 	for i, p := range providers {
-		out[i] = &airlockv1.ProviderInfo{Id: p.ID, Name: p.Name}
+		out[i] = convert.CatalogProviderToProto(p)
 	}
 	writeProto(w, http.StatusOK, &airlockv1.ListCatalogProvidersResponse{Providers: out})
 }
@@ -67,19 +68,7 @@ func (h *catalogHandler) ListModels(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]*airlockv1.ModelInfo, len(models))
 	for i, m := range models {
-		out[i] = &airlockv1.ModelInfo{
-			Id:           m.ID,
-			Name:         m.Name,
-			ProviderId:   m.ProviderID,
-			Kind:         m.Kind,
-			ToolCall:     m.ToolCall,
-			Reasoning:    m.Reasoning,
-			Caps:         m.Caps,
-			CostInput:    m.CostInput,
-			CostOutput:   m.CostOutput,
-			ContextLimit: m.ContextLimit,
-			OutputLimit:  m.OutputLimit,
-		}
+		out[i] = convert.CatalogModelToProto(m)
 	}
 	writeProto(w, http.StatusOK, &airlockv1.ListCatalogModelsResponse{Models: out})
 }
@@ -92,13 +81,7 @@ func (h *catalogHandler) ListCapabilities(w http.ResponseWriter, r *http.Request
 	}
 	out := make([]*airlockv1.ProviderCapabilityInfo, len(caps))
 	for i, c := range caps {
-		out[i] = &airlockv1.ProviderCapabilityInfo{
-			ProviderId:   c.ProviderID,
-			DisplayName:  c.DisplayName,
-			Capabilities: c.Capabilities,
-			Configured:   c.Configured,
-			CatalogOnly:  c.CatalogOnly,
-		}
+		out[i] = convert.ProviderCapabilityToProto(c)
 	}
 	writeProto(w, http.StatusOK, &airlockv1.ListCapabilitiesResponse{Providers: out})
 }

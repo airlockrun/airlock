@@ -36,20 +36,22 @@ func (s *Service) NotifyUpgradeComplete(ctx context.Context, agentID, conversati
 	prefix, source := upgradeOutcomeRendering(status)
 	body := prefix + message
 
-	// 1. Persist the user-role injection. parts is the goai display
-	//    shape so MessageParts.vue renders it as a regular bubble;
-	//    source="upgrade"/"error" lets the frontend style the bubble
-	//    distinctly if desired (same convention agent chat uses).
-	parts, err := json.Marshal([]map[string]any{{
+	// 1. Persist the user-role injection. content is the plain-text
+	//    display string; parts stays NULL — same shape agent_messages
+	//    uses for a single-text payload. source="upgrade"/"error"
+	//    drives bubble styling. For the WS broadcast we still build a
+	//    goai-shape parts blob so the existing NotificationEvent
+	//    renderer (shared with agent chat) lights up immediately.
+	if err := s.appendInjectedMessage(ctx, conversationID, "user", source, body, nil); err != nil {
+		return fmt.Errorf("append upgrade-notify message: %w", err)
+	}
+	partsForWS, err := json.Marshal([]map[string]any{{
 		"type":   "text",
 		"text":   body,
 		"source": source,
 	}})
 	if err != nil {
 		return fmt.Errorf("marshal upgrade-notify parts: %w", err)
-	}
-	if err := s.appendInjectedMessage(ctx, conversationID, "user", parts); err != nil {
-		return fmt.Errorf("append upgrade-notify message: %w", err)
 	}
 
 	// 2. Publish a notification event on the conversation owner's WS topic so
@@ -68,7 +70,7 @@ func (s *Service) NotifyUpgradeComplete(ctx context.Context, agentID, conversati
 		&airlockv1.NotificationEvent{
 			AgentId:        agentID.String(), // agent that was upgraded, not the sysagent itself
 			ConversationId: conversationID.String(),
-			PartsJson:      string(parts),
+			PartsJson:      string(partsForWS),
 			Source:         source,
 		})
 	if pserr := s.pubsub.Publish(ctx, userID, env); pserr != nil {
@@ -119,11 +121,13 @@ func upgradeOutcomeRendering(status string) (prefix, source string) {
 // outside any turn. The next chat-loop Load will pick this up via
 // ListSystemMessagesByConversation the same way operator-typed messages
 // are loaded.
-func (s *Service) appendInjectedMessage(ctx context.Context, conversationID uuid.UUID, role string, partsJSON []byte) error {
+func (s *Service) appendInjectedMessage(ctx context.Context, conversationID uuid.UUID, role, source, content string, partsJSON []byte) error {
 	q := dbq.New(s.db.Pool())
 	_, err := q.AppendSystemMessage(ctx, dbq.AppendSystemMessageParams{
 		ConversationID: pgtype.UUID{Bytes: conversationID, Valid: true},
 		Role:           role,
+		Source:         source,
+		Content:        content,
 		Parts:          partsJSON,
 		CostEstimate:   pgNumericFromFloat(0),
 	})
