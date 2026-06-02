@@ -11,22 +11,16 @@
 //     row + returns deep_link
 //     https://t.me/newbot/<manager_username>/<suggested_username>?name=<...>.
 //  2. User opens the link in Telegram. Telegram's native bot-creation
-//     UI walks them through; the manager bot doesn't render any
-//     keyboard or receive a /start.
-//  3. On completion Telegram fires both ManagedBotCreated{bot} and
-//     ManagedBotUpdated{user, bot} to the manager bot — the token is
-//     intentionally omitted from both payloads.
-//  4. Handlers correlate to a session two ways and converge on the
-//     same create path:
-//     - Created: match bot.username against session.nonce
-//     (suggested_username we set; only works if the user kept it).
-//     - Updated: match user.id via platform_identities → airlock
-//     owner → latest open session for that owner.
-//     Whichever lands first fetches the token via
-//     getManagedBotToken{user_id: bot.id}, calls bridges.Service.Create,
-//     and stamps bridges.telegram_bot_user_id. The other event sees
-//     the existing bot.id and no-ops (Created) or rotates the token
-//     in place (Updated).
+//     UI walks them through.
+//  3. On completion Telegram delivers a ManagedBotCreated{bot} service
+//     message into the manager-bot's chat with the creator. We match
+//     bot.username against the session nonce (the suggested_username
+//     we set on the deeplink — Telegram preserves it through the
+//     flow), fetch the token via getManagedBotToken{user_id: bot.id},
+//     call bridges.Service.CreateFromManagedSession, and delete the
+//     session. The complementary ManagedBotUpdated event isn't
+//     consumed: rotation/owner-change is rare for managed bots in
+//     v1, and the Created path is sufficient for creation.
 package trigger
 
 import (
@@ -265,9 +259,6 @@ func (mb *ManagerBot) run(ctx context.Context, token string) {
 			continue
 		}
 		backoff = time.Second
-		if len(raws) > 0 {
-			mb.logger.Info("manager bot: getUpdates", zap.Int("count", len(raws)))
-		}
 		for _, raw := range raws {
 			var u telegramUpdateRaw
 			if perr := json.Unmarshal(raw, &u); perr != nil {
@@ -275,9 +266,6 @@ func (mb *ManagerBot) run(ctx context.Context, token string) {
 					zap.String("raw", string(raw)), zap.Error(perr))
 				continue
 			}
-			mb.logger.Info("manager bot: update received",
-				zap.Int64("update_id", u.UpdateID),
-				zap.String("raw", string(raw)))
 			mb.dispatchUpdate(ctx, token, u)
 			if u.UpdateID >= mb.offset {
 				mb.offset = u.UpdateID + 1
@@ -286,156 +274,48 @@ func (mb *ManagerBot) run(ctx context.Context, token string) {
 	}
 }
 
-// dispatchUpdate routes a single Update to the right handler. Bot
-// API 9.6 fires both ManagedBotCreated and ManagedBotUpdated on
-// initial creation; either handler can land first, so each is
-// idempotent via the bridges.telegram_bot_user_id key.
-//
-// There's no /start handshake — the deeplink
-// https://t.me/newbot/<manager>/<suggested>?name=<name> takes the
-// user straight into Telegram's bot-creation UI; we learn about the
-// new bot through these callbacks.
+// dispatchUpdate routes a Bot API 9.6 update. We only consume the
+// nested ManagedBotCreated service message on creation; everything
+// else (ordinary chat messages, ManagedBotUpdated rotation events,
+// unknown types) is ignored.
 func (mb *ManagerBot) dispatchUpdate(ctx context.Context, token string, u telegramUpdateRaw) {
-	switch {
-	case u.Message != nil && u.Message.ManagedBotCreated != nil:
+	if u.Message != nil && u.Message.ManagedBotCreated != nil {
 		mb.onManagedBotCreated(ctx, token, *u.Message.ManagedBotCreated)
-	case u.ManagedBot != nil:
-		mb.onManagedBotUpdated(ctx, token, *u.ManagedBot)
-	default:
-		mb.logger.Info("manager bot: unhandled update type",
-			zap.Int64("update_id", u.UpdateID))
 	}
 }
 
-// onManagedBotCreated handles the Bot API 9.6 ManagedBotCreated
-// callback. Since the event carries no user, we correlate by
-// matching bot.username against an open session's nonce — which
-// works only when the user kept the suggested_username unchanged.
-// If no session matches we drop and wait for the matching
-// ManagedBotUpdated to land (it carries the user id and can resolve
-// via platform_identities). If a bridge already exists for this
-// bot.id, no-op.
+// onManagedBotCreated turns a freshly created managed bot into a
+// bridge. Correlation is by bot.username == session.nonce — the
+// suggested_username we embedded in the deeplink, which Telegram
+// preserves through the create flow. Idempotency is the
+// bridges.telegram_bot_user_id key (a duplicate Created for the
+// same bot.id no-ops).
 func (mb *ManagerBot) onManagedBotCreated(ctx context.Context, mbToken string, evt managedBotCreatedRaw) {
-	mb.logger.Info("ManagedBotCreated",
-		zap.Int64("bot_id", evt.Bot.ID),
-		zap.String("bot_username", evt.Bot.Username))
 	if evt.Bot.ID == 0 || evt.Bot.Username == "" {
 		mb.logger.Warn("ManagedBotCreated missing bot.id or bot.username")
 		return
 	}
 	q := dbq.New(mb.db.Pool())
-
-	// Idempotency: bridge already created (Updated handler beat us
-	// to it).
 	if _, gerr := q.GetBridgeByTelegramBotUserID(ctx, pgtype.Int8{Int64: evt.Bot.ID, Valid: true}); gerr == nil {
 		return
 	}
-
 	session, serr := q.GetManagedBotSessionByNonce(ctx, evt.Bot.Username)
 	if serr != nil {
-		mb.logger.Debug("ManagedBotCreated: no session with bot.username — waiting for ManagedBotUpdated",
+		mb.logger.Warn("ManagedBotCreated: no session matches bot.username",
 			zap.String("bot_username", evt.Bot.Username))
 		return
 	}
-	mb.createBridgeFromSession(ctx, mbToken, session, evt.Bot)
-}
 
-// onManagedBotUpdated handles the unified create / token-rotate /
-// owner-change callback. Flow:
-//
-//  1. Fetch the new bot's token via getManagedBotToken{user_id:
-//     bot.id}. The Update payload deliberately omits the token; the
-//     dedicated endpoint is the only way to read it.
-//  2. If a bridge already exists with this bot.id → token rotation.
-//     Re-encrypt + persist the new token; the per-bridge poller
-//     picks it up on next reload via AddBridge.
-//  3. Otherwise → creation. Resolve the airlock user via
-//     platform_identities(telegram, user.id) → look up the latest
-//     open session for that user → create the bridge against the
-//     session's agent_id/is_system → stamp telegram_bot_user_id
-//     for future rotation correlation → delete the session.
-func (mb *ManagerBot) onManagedBotUpdated(ctx context.Context, mbToken string, evt managedBotUpdatedRaw) {
-	mb.logger.Info("ManagedBotUpdated",
-		zap.Int64("user_id", evt.User.ID),
-		zap.Int64("bot_id", evt.Bot.ID),
-		zap.String("bot_username", evt.Bot.Username))
-	if evt.Bot.ID == 0 {
-		mb.logger.Warn("ManagedBotUpdated missing bot.id; cannot proceed")
-		return
-	}
-	q := dbq.New(mb.db.Pool())
-
-	// Rotation path: a bridge already exists for this bot.id. Fetch
-	// the new token and replace the ciphertext on the row.
-	if existing, gerr := q.GetBridgeByTelegramBotUserID(ctx, pgtype.Int8{Int64: evt.Bot.ID, Valid: true}); gerr == nil {
-		bridgeID := uuid.UUID(existing.ID.Bytes)
-		newToken, terr := telegramGetManagedBotToken(ctx, mbToken, evt.Bot.ID)
-		if terr != nil {
-			mb.logger.Error("getManagedBotToken (rotation) failed",
-				zap.Int64("bot_user_id", evt.Bot.ID), zap.Error(terr))
-			return
-		}
-		encToken, eerr := mb.encryptor.Put(ctx, "bridge/"+bridgeID.String()+"/bot_token", newToken)
-		if eerr != nil {
-			mb.logger.Error("encrypt rotated managed bot token failed",
-				zap.Stringer("bridge", bridgeID), zap.Error(eerr))
-			return
-		}
-		if uerr := q.UpdateBridgeBotTokenRef(ctx, dbq.UpdateBridgeBotTokenRefParams{
-			ID:          existing.ID,
-			BotTokenRef: encToken,
-		}); uerr != nil {
-			mb.logger.Error("persist rotated managed bot token failed",
-				zap.Stringer("bridge", bridgeID), zap.Error(uerr))
-			return
-		}
-		mb.bridgeMgr.RemoveBridge(bridgeID)
-		mb.bridgeMgr.AddBridge(bridgeID)
-		mb.logger.Info("managed bot token rotated",
-			zap.Stringer("bridge", bridgeID), zap.String("bot_username", evt.Bot.Username))
-		return
-	}
-
-	// Creation path: resolve the airlock user from the Telegram user
-	// who created the bot.
-	identity, ierr := q.GetPlatformIdentity(ctx, dbq.GetPlatformIdentityParams{
-		Platform:       "telegram",
-		PlatformUserID: fmt.Sprintf("%d", evt.User.ID),
-	})
-	if ierr != nil {
-		mb.logger.Warn("ManagedBotUpdated: Telegram user not linked to airlock",
-			zap.Int64("user_id", evt.User.ID),
-			zap.Int64("bot_user_id", evt.Bot.ID))
-		return
-	}
-	ownerID := uuid.UUID(identity.UserID.Bytes)
-	session, serr := q.GetLatestOpenManagedBotSessionByOwner(ctx, pgtype.UUID{Bytes: ownerID, Valid: true})
-	if serr != nil {
-		mb.logger.Warn("ManagedBotUpdated: no open session for owner",
-			zap.Stringer("owner", ownerID),
-			zap.Error(serr))
-		return
-	}
-	mb.createBridgeFromSession(ctx, mbToken, session, evt.Bot)
-}
-
-// createBridgeFromSession is the shared "fetch token + create bridge
-// + stamp bot.id + delete session" path that both onManagedBotCreated
-// and onManagedBotUpdated land in once they've identified the right
-// session. The bot.id idempotency check the callers run first means
-// the second event for the same bot no-ops here.
-func (mb *ManagerBot) createBridgeFromSession(ctx context.Context, mbToken string, session dbq.ManagedBotSession, bot telegramUserRaw) {
-	q := dbq.New(mb.db.Pool())
-	newToken, err := telegramGetManagedBotToken(ctx, mbToken, bot.ID)
-	if err != nil {
+	newToken, terr := telegramGetManagedBotToken(ctx, mbToken, evt.Bot.ID)
+	if terr != nil {
 		mb.logger.Error("getManagedBotToken failed",
-			zap.Int64("bot_user_id", bot.ID), zap.Error(err))
+			zap.Int64("bot_user_id", evt.Bot.ID), zap.Error(terr))
 		return
 	}
 	result, cerr := mb.bridges.CreateFromManagedSession(ctx, bridgessvc.ManagedSessionCreate{
 		Session:           session,
-		BotUsername:       bot.Username,
-		TelegramBotUserID: bot.ID,
+		BotUsername:       evt.Bot.Username,
+		TelegramBotUserID: evt.Bot.ID,
 		RawToken:          newToken,
 	})
 	if cerr != nil {
@@ -448,7 +328,7 @@ func (mb *ManagerBot) createBridgeFromSession(ctx context.Context, mbToken strin
 	}
 	mb.logger.Info("managed bot bridge created",
 		zap.Stringer("bridge", uuid.UUID(result.Bridge.ID.Bytes)),
-		zap.String("bot_username", bot.Username))
+		zap.String("bot_username", evt.Bot.Username))
 }
 
 // telegramGetManagedBotToken fetches the token for a managed bot
@@ -479,32 +359,18 @@ func telegramGetManagedBotToken(ctx context.Context, managerToken string, botUse
 // different reply-markup shape on the keyboard. Reusing the driver
 // would muddy its responsibility.
 
-// telegramUpdateRaw is the manager-bot-specific Update shape. Bot
-// API 9.6 emits two distinct managed-bot signals on initial creation:
-//
-//   - update.message.managed_bot_created = {bot} — a *service
-//     message* delivered into the manager-bot's chat with the
-//     creator. Carries only the bot identity; correlation is via
-//     bot.username == session.nonce (works when the user keeps the
-//     suggested username unchanged).
-//   - update.managed_bot = {user, bot} — a *top-level* update for
-//     the manager bot. Carries the creator/owner. Correlation is
-//     via user.id → platform_identities → airlock owner → latest
-//     open session.
-//
-// Both fire on initial creation; bridges.telegram_bot_user_id is the
-// idempotency key. The Update field name is `managed_bot` (no
-// `_updated` suffix on the wire, even though the documented type is
-// "ManagedBotUpdated").
+// telegramUpdateRaw is the manager-bot-specific Update shape. We
+// only consume the nested ManagedBotCreated service message; the
+// top-level `managed_bot` (ManagedBotUpdated) rotation event is
+// intentionally not handled in v1.
 type telegramUpdateRaw struct {
-	UpdateID   int64                 `json:"update_id"`
-	Message    *telegramMessageRaw   `json:"message,omitempty"`
-	ManagedBot *managedBotUpdatedRaw `json:"managed_bot,omitempty"`
+	UpdateID int64               `json:"update_id"`
+	Message  *telegramMessageRaw `json:"message,omitempty"`
 }
 
 // telegramMessageRaw is the Message subset the manager-bot poller
-// cares about. We only inspect managed-bot service-message fields;
-// ordinary text messages reach us too but we ignore them.
+// cares about. Ordinary text messages reach us by accident if a user
+// DMs the manager bot directly, and we ignore them.
 type telegramMessageRaw struct {
 	ManagedBotCreated *managedBotCreatedRaw `json:"managed_bot_created,omitempty"`
 }
@@ -514,15 +380,6 @@ type telegramMessageRaw struct {
 // getManagedBotToken{user_id: bot.id}.
 type managedBotCreatedRaw struct {
 	Bot telegramUserRaw `json:"bot"`
-}
-
-// managedBotUpdatedRaw — Bot API 9.6 unified create/rotate/owner
-// event, delivered as the top-level `managed_bot` Update field.
-// `user` is the bot's creator/owner; `bot` is the managed bot as a
-// User. Token is NOT in the payload.
-type managedBotUpdatedRaw struct {
-	User telegramUserRaw `json:"user"`
-	Bot  telegramUserRaw `json:"bot"`
 }
 
 type telegramUserRaw struct {

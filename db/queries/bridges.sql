@@ -32,24 +32,10 @@ ORDER BY b.created_at;
 
 -- name: GetBridgeByTelegramBotUserID :one
 -- Lookup a Telegram bridge by the bot's stable Telegram user_id.
--- Used by the Managed Bots poller to detect a token-rotation event
--- vs. a fresh creation: if the bot id already has a bridge, rotate;
--- else create a new one from the originating session.
+-- The manager-bot poller uses this for idempotency: a duplicate
+-- ManagedBotCreated for the same bot.id (paranoid backstop) no-ops
+-- instead of inserting a second row.
 SELECT * FROM bridges WHERE telegram_bot_user_id = @telegram_bot_user_id LIMIT 1;
-
--- name: SetBridgeTelegramBotUserID :exec
--- Backfill / set the stable Telegram user_id on a bridge row after
--- bridge creation. The bridges.Service.Create path doesn't know the
--- user_id (getMe only returns username); the manager-bot poller has
--- it from the ManagedBotUpdated event and writes it here.
-UPDATE bridges SET telegram_bot_user_id = @telegram_bot_user_id, updated_at = now() WHERE id = @id;
-
--- name: UpdateBridgeBotTokenRef :exec
--- Replace the encrypted bot-token reference (Telegram managed-bot
--- token rotation). The poller decrypts the new token via
--- getManagedBotToken, re-encrypts under the per-bridge scope, and
--- writes the new ref here.
-UPDATE bridges SET bot_token_ref = @bot_token_ref, updated_at = now() WHERE id = @id;
 
 -- name: ListBridgesByOwner :many
 -- All bridges owned by a specific user. Used by service/users.Delete to

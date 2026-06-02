@@ -13,17 +13,18 @@ import (
 
 const createManagedBotSession = `-- name: CreateManagedBotSession :one
 
-INSERT INTO managed_bot_sessions (owner_id, agent_id, is_system, nonce, expires_at)
-VALUES ($1, $2, $3, $4, $5)
-RETURNING id, owner_id, agent_id, is_system, nonce, expires_at, created_at
+INSERT INTO managed_bot_sessions (owner_id, agent_id, is_system, nonce, bridge_name, expires_at)
+VALUES ($1, $2, $3, $4, $5, $6)
+RETURNING id, owner_id, agent_id, is_system, nonce, bridge_name, expires_at, created_at
 `
 
 type CreateManagedBotSessionParams struct {
-	OwnerID   pgtype.UUID        `json:"owner_id"`
-	AgentID   pgtype.UUID        `json:"agent_id"`
-	IsSystem  bool               `json:"is_system"`
-	Nonce     string             `json:"nonce"`
-	ExpiresAt pgtype.Timestamptz `json:"expires_at"`
+	OwnerID    pgtype.UUID        `json:"owner_id"`
+	AgentID    pgtype.UUID        `json:"agent_id"`
+	IsSystem   bool               `json:"is_system"`
+	Nonce      string             `json:"nonce"`
+	BridgeName string             `json:"bridge_name"`
+	ExpiresAt  pgtype.Timestamptz `json:"expires_at"`
 }
 
 // managed_bot_sessions: per-create-flow correlation rows tying an
@@ -35,6 +36,7 @@ func (q *Queries) CreateManagedBotSession(ctx context.Context, arg CreateManaged
 		arg.AgentID,
 		arg.IsSystem,
 		arg.Nonce,
+		arg.BridgeName,
 		arg.ExpiresAt,
 	)
 	var i ManagedBotSession
@@ -44,19 +46,11 @@ func (q *Queries) CreateManagedBotSession(ctx context.Context, arg CreateManaged
 		&i.AgentID,
 		&i.IsSystem,
 		&i.Nonce,
+		&i.BridgeName,
 		&i.ExpiresAt,
 		&i.CreatedAt,
 	)
 	return i, err
-}
-
-const deleteManagedBotSession = `-- name: DeleteManagedBotSession :exec
-DELETE FROM managed_bot_sessions WHERE id = $1
-`
-
-func (q *Queries) DeleteManagedBotSession(ctx context.Context, id pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, deleteManagedBotSession, id)
-	return err
 }
 
 const deleteManagedBotSessionByNonce = `-- name: DeleteManagedBotSessionByNonce :exec
@@ -68,36 +62,8 @@ func (q *Queries) DeleteManagedBotSessionByNonce(ctx context.Context, nonce stri
 	return err
 }
 
-const getLatestOpenManagedBotSessionByOwner = `-- name: GetLatestOpenManagedBotSessionByOwner :one
-SELECT id, owner_id, agent_id, is_system, nonce, expires_at, created_at FROM managed_bot_sessions
-WHERE owner_id = $1
-  AND expires_at > now()
-ORDER BY created_at DESC
-LIMIT 1
-`
-
-// The owner's most recent non-expired session. Used by the manager-bot
-// poller to correlate a ManagedBotUpdated callback to its airlock
-// session (the Bot API 9.6 event carries only {user, bot} — no nonce
-// echo — so we match by user.id → platform_identities → owner_id
-// → most recent open session).
-func (q *Queries) GetLatestOpenManagedBotSessionByOwner(ctx context.Context, ownerID pgtype.UUID) (ManagedBotSession, error) {
-	row := q.db.QueryRow(ctx, getLatestOpenManagedBotSessionByOwner, ownerID)
-	var i ManagedBotSession
-	err := row.Scan(
-		&i.ID,
-		&i.OwnerID,
-		&i.AgentID,
-		&i.IsSystem,
-		&i.Nonce,
-		&i.ExpiresAt,
-		&i.CreatedAt,
-	)
-	return i, err
-}
-
 const getManagedBotSessionByNonce = `-- name: GetManagedBotSessionByNonce :one
-SELECT id, owner_id, agent_id, is_system, nonce, expires_at, created_at FROM managed_bot_sessions WHERE nonce = $1
+SELECT id, owner_id, agent_id, is_system, nonce, bridge_name, expires_at, created_at FROM managed_bot_sessions WHERE nonce = $1
 `
 
 func (q *Queries) GetManagedBotSessionByNonce(ctx context.Context, nonce string) (ManagedBotSession, error) {
@@ -109,6 +75,7 @@ func (q *Queries) GetManagedBotSessionByNonce(ctx context.Context, nonce string)
 		&i.AgentID,
 		&i.IsSystem,
 		&i.Nonce,
+		&i.BridgeName,
 		&i.ExpiresAt,
 		&i.CreatedAt,
 	)

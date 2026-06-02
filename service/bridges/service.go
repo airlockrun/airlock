@@ -267,7 +267,13 @@ func (s *Service) CreateFromManagedSession(ctx context.Context, in ManagedSessio
 		return Result{}, err
 	}
 
-	name := "@" + verifiedUsername
+	// Bridge display name: the user-entered label persisted on the
+	// session row at session-create time. Fall back to @bot_username
+	// only for sessions predating the column (defensive).
+	name := in.Session.BridgeName
+	if name == "" {
+		name = "@" + verifiedUsername
+	}
 	if in.BotUsername != "" && in.BotUsername != verifiedUsername {
 		// Log the mismatch — Telegram event vs. live getMe diverged.
 		// Trust getMe; the event may have raced an in-flight rename.

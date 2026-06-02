@@ -143,21 +143,28 @@ func (s *Service) CreateSession(ctx context.Context, p authz.Principal, req Crea
 		agentPg = pgtype.UUID{Bytes: req.AgentID, Valid: true}
 	}
 
+	// Name is what the user typed into the create dialog. We persist
+	// it on the session row so the eventual bridge inherits the same
+	// label (instead of falling back to @bot_username), and pass it
+	// through to Telegram via the deep-link ?name= so the bot's
+	// initial display name pre-fills.
+	name := strings.TrimSpace(req.SuggestedName)
+	if name == "" {
+		name = "Airlock bot"
+	}
+
 	if _, err := q.CreateManagedBotSession(ctx, dbq.CreateManagedBotSessionParams{
-		OwnerID:   pgtype.UUID{Bytes: p.UserID, Valid: true},
-		AgentID:   agentPg,
-		IsSystem:  req.IsSystem,
-		Nonce:     nonce,
-		ExpiresAt: pgtype.Timestamptz{Time: expires, Valid: true},
+		OwnerID:    pgtype.UUID{Bytes: p.UserID, Valid: true},
+		AgentID:    agentPg,
+		IsSystem:   req.IsSystem,
+		Nonce:      nonce,
+		BridgeName: name,
+		ExpiresAt:  pgtype.Timestamptz{Time: expires, Valid: true},
 	}); err != nil {
 		s.logger.Error("create managed bot session failed", zap.Error(err))
 		return SessionCreated{}, err
 	}
 
-	name := strings.TrimSpace(req.SuggestedName)
-	if name == "" {
-		name = "Airlock bot"
-	}
 	deepLink := fmt.Sprintf(
 		"https://t.me/newbot/%s/%s?name=%s",
 		managerBotUsername,
@@ -171,15 +178,18 @@ func (s *Service) CreateSession(ctx context.Context, p authz.Principal, req Crea
 	}, nil
 }
 
-// generateNonce returns a valid Telegram bot username that doubles as
-// the session correlation key. Telegram requires bot usernames to
-// match `[A-Za-z][A-Za-z0-9_]{4,31}` and end in `bot`; the eventual
-// ManagedBotCreated callback echoes this back as suggested_username
-// so we can find the originating session.
+// generateNonce returns a valid Telegram bot username that doubles
+// as the session correlation key. Telegram bot usernames are
+// globally unique, so collision with a third-party bot would block
+// creation; we use 48 bits of entropy and a generic `mb_` prefix
+// (rather than a branded "airlock_") to make both accidental
+// collision and intentional pre-registration impractical. The
+// pattern still satisfies Telegram's rule (`[A-Za-z][A-Za-z0-9_]{4,31}`
+// ending in `bot`): `mb_<12 hex>_bot` = 19 chars.
 func generateNonce() (string, error) {
 	b := make([]byte, 6)
 	if _, err := rand.Read(b); err != nil {
 		return "", err
 	}
-	return "airlock_" + hex.EncodeToString(b) + "_bot", nil
+	return "mb_" + hex.EncodeToString(b) + "_bot", nil
 }

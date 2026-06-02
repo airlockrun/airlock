@@ -134,9 +134,9 @@ SELECT id, agent_id, owner_id, type, name, bot_username, status, is_system, conf
 `
 
 // Lookup a Telegram bridge by the bot's stable Telegram user_id.
-// Used by the Managed Bots poller to detect a token-rotation event
-// vs. a fresh creation: if the bot id already has a bridge, rotate;
-// else create a new one from the originating session.
+// The manager-bot poller uses this for idempotency: a duplicate
+// ManagedBotCreated for the same bot.id (paranoid backstop) no-ops
+// instead of inserting a second row.
 func (q *Queries) GetBridgeByTelegramBotUserID(ctx context.Context, telegramBotUserID pgtype.Int8) (Bridge, error) {
 	row := q.db.QueryRow(ctx, getBridgeByTelegramBotUserID, telegramBotUserID)
 	var i Bridge
@@ -481,24 +481,6 @@ func (q *Queries) ListBridgesForAgent(ctx context.Context, agentID pgtype.UUID) 
 	return items, nil
 }
 
-const setBridgeTelegramBotUserID = `-- name: SetBridgeTelegramBotUserID :exec
-UPDATE bridges SET telegram_bot_user_id = $1, updated_at = now() WHERE id = $2
-`
-
-type SetBridgeTelegramBotUserIDParams struct {
-	TelegramBotUserID pgtype.Int8 `json:"telegram_bot_user_id"`
-	ID                pgtype.UUID `json:"id"`
-}
-
-// Backfill / set the stable Telegram user_id on a bridge row after
-// bridge creation. The bridges.Service.Create path doesn't know the
-// user_id (getMe only returns username); the manager-bot poller has
-// it from the ManagedBotUpdated event and writes it here.
-func (q *Queries) SetBridgeTelegramBotUserID(ctx context.Context, arg SetBridgeTelegramBotUserIDParams) error {
-	_, err := q.db.Exec(ctx, setBridgeTelegramBotUserID, arg.TelegramBotUserID, arg.ID)
-	return err
-}
-
 const updateBridgeAgentID = `-- name: UpdateBridgeAgentID :one
 UPDATE bridges SET agent_id = $1, updated_at = now() WHERE id = $2
 RETURNING id, agent_id, owner_id, type, name, bot_username, status, is_system, config, settings, bot_token_ref, last_polled_at, created_at, updated_at, managed, telegram_bot_user_id
@@ -534,24 +516,6 @@ func (q *Queries) UpdateBridgeAgentID(ctx context.Context, arg UpdateBridgeAgent
 		&i.TelegramBotUserID,
 	)
 	return i, err
-}
-
-const updateBridgeBotTokenRef = `-- name: UpdateBridgeBotTokenRef :exec
-UPDATE bridges SET bot_token_ref = $1, updated_at = now() WHERE id = $2
-`
-
-type UpdateBridgeBotTokenRefParams struct {
-	BotTokenRef string      `json:"bot_token_ref"`
-	ID          pgtype.UUID `json:"id"`
-}
-
-// Replace the encrypted bot-token reference (Telegram managed-bot
-// token rotation). The poller decrypts the new token via
-// getManagedBotToken, re-encrypts under the per-bridge scope, and
-// writes the new ref here.
-func (q *Queries) UpdateBridgeBotTokenRef(ctx context.Context, arg UpdateBridgeBotTokenRefParams) error {
-	_, err := q.db.Exec(ctx, updateBridgeBotTokenRef, arg.BotTokenRef, arg.ID)
-	return err
 }
 
 const updateBridgeLastPolled = `-- name: UpdateBridgeLastPolled :exec

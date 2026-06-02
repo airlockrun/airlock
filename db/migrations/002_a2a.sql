@@ -731,13 +731,14 @@ CREATE UNIQUE INDEX idx_conversations_bridge_authed
 -- so ManagedBotCreated only ever fires for the right user — no
 -- orphaned-token recovery path needed.
 CREATE TABLE managed_bot_sessions (
-    id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    owner_id   uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    agent_id   uuid REFERENCES agents(id) ON DELETE CASCADE,
-    is_system  boolean NOT NULL,
-    nonce      text NOT NULL UNIQUE,
-    expires_at timestamptz NOT NULL,
-    created_at timestamptz NOT NULL DEFAULT now(),
+    id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    owner_id    uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    agent_id    uuid REFERENCES agents(id) ON DELETE CASCADE,
+    is_system   boolean NOT NULL,
+    nonce       text NOT NULL UNIQUE,
+    bridge_name text NOT NULL,
+    expires_at  timestamptz NOT NULL,
+    created_at  timestamptz NOT NULL DEFAULT now(),
     CHECK ((is_system AND agent_id IS NULL) OR (NOT is_system AND agent_id IS NOT NULL))
 );
 CREATE INDEX managed_bot_sessions_owner_idx ON managed_bot_sessions(owner_id);

@@ -371,13 +371,14 @@ type LlmUsage struct {
 }
 
 type ManagedBotSession struct {
-	ID        pgtype.UUID        `json:"id"`
-	OwnerID   pgtype.UUID        `json:"owner_id"`
-	AgentID   pgtype.UUID        `json:"agent_id"`
-	IsSystem  bool               `json:"is_system"`
-	Nonce     string             `json:"nonce"`
-	ExpiresAt pgtype.Timestamptz `json:"expires_at"`
-	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	ID         pgtype.UUID        `json:"id"`
+	OwnerID    pgtype.UUID        `json:"owner_id"`
+	AgentID    pgtype.UUID        `json:"agent_id"`
+	IsSystem   bool               `json:"is_system"`
+	Nonce      string             `json:"nonce"`
+	BridgeName string             `json:"bridge_name"`
+	ExpiresAt  pgtype.Timestamptz `json:"expires_at"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
 }
 
 type OauthAuthzCode struct {
