@@ -18,6 +18,7 @@ import (
 	"github.com/airlockrun/sol"
 	"github.com/airlockrun/sol/agent"
 	"github.com/airlockrun/sol/bus"
+	"github.com/airlockrun/sol/eventstream"
 	"github.com/airlockrun/sol/session"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -110,43 +111,77 @@ func (s *Service) awaitSuspendedSystemRun(ctx context.Context, q *dbq.Queries, r
 // suspension handling, persistence — runs in the goroutine so a slow
 // LLM doesn't tie up the HTTP request.
 func (s *Service) RunPrompt(ctx context.Context, p authz.Principal, conversationID uuid.UUID, input PromptInput) (uuid.UUID, error) {
+	runID, conversation, err := s.startRun(ctx, p, conversationID, input)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	// Background context: the goroutine outlives the HTTP request.
+	// Cancellation comes from CancelRun (the /cancel slash command, or
+	// an admin abort) — not the request's ctx. The cancel func is
+	// stashed in activeRuns so /cancel can find it by run id.
+	runCtx, cancel := context.WithCancel(context.Background())
+	s.registerActiveRun(runID, cancel)
+	go func() {
+		defer s.unregisterActiveRun(runID)
+		defer cancel()
+		s.runChat(runCtx, p, conversation, runID, input, nil)
+	}()
+	return runID, nil
+}
+
+// RunPromptInline is RunPrompt's synchronous sibling: the chat loop
+// runs on the caller's goroutine, and an additional eventstream.Sink
+// is fanned every bus event alongside the WS pubsubSink. Used by the
+// bridge path so a system-bridge poller can block on a turn (its
+// poller is single-threaded per bridge → natural per-thread
+// serialization) and translate sysagent events into bridge
+// ResponseEvents.
+//
+// Takes a full PromptInput so the bridge path can resolve pending
+// confirmations (Approve/Reject button taps) the same way the web
+// UI does — set Approved + ResumeRunID. A plain user message
+// leaves both nil/empty. When extraSink is non-nil the WS pubsub
+// is bypassed entirely; only the bridge sees events. Returns once
+// the chat loop exits — RunCompleted / RunFailed / RunSuspended /
+// RunCancelled all reach this.
+func (s *Service) RunPromptInline(ctx context.Context, p authz.Principal, conversationID uuid.UUID, text string, approved *bool, resumeRunID string, extraSink eventstream.Sink) (uuid.UUID, error) {
+	input := PromptInput{Message: text, Approved: approved, ResumeRunID: resumeRunID}
+	runID, conversation, err := s.startRun(ctx, p, conversationID, input)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	runCtx, cancel := context.WithCancel(ctx)
+	s.registerActiveRun(runID, cancel)
+	defer s.unregisterActiveRun(runID)
+	defer cancel()
+	s.runChat(runCtx, p, conversation, runID, input, extraSink)
+	return runID, nil
+}
+
+// startRun is the shared prep used by RunPrompt and RunPromptInline:
+// load + ownership-check the conversation, do the resume-race wait if
+// this is a confirmation reply, rename a first-message conversation,
+// and insert the system_runs row. The actual chat goroutine /
+// inline loop is up to the caller.
+func (s *Service) startRun(ctx context.Context, p authz.Principal, conversationID uuid.UUID, input PromptInput) (uuid.UUID, dbq.SystemConversation, error) {
 	if !p.IsAuthenticatedUser() {
-		return uuid.Nil, service.ErrUnauthorized
+		return uuid.Nil, dbq.SystemConversation{}, service.ErrUnauthorized
 	}
 	q := dbq.New(s.db.Pool())
-
-	// Verify the conversation exists + belongs to the caller. Sysagent
-	// conversations are per-user, so a conversation that isn't yours is 404 (not
-	// 403 — exposing existence to non-owners would leak metadata).
 	conversation, err := q.GetSystemConversationByID(ctx, pgtype.UUID{Bytes: conversationID, Valid: true})
 	if err != nil {
-		return uuid.Nil, service.ErrNotFound
+		return uuid.Nil, dbq.SystemConversation{}, service.ErrNotFound
 	}
 	if uuid.UUID(conversation.UserID.Bytes) != p.UserID {
-		return uuid.Nil, service.ErrNotFound
+		return uuid.Nil, dbq.SystemConversation{}, service.ErrNotFound
 	}
-
-	// Resume race fix: a confirmation response (approved set) that names its
-	// run waits for that run to suspend — its conversation flips to
-	// awaiting_confirmation just before the run's status write — so an
-	// approval arriving ahead of the async suspend write isn't rejected by
-	// runChat's default case as a state mismatch. ResumeRunID is empty on the
-	// refresh-restore path, where the conversation is already suspended.
 	if input.Approved != nil && input.ResumeRunID != "" {
 		fresh, werr := s.awaitSuspendedSystemRun(ctx, q, input.ResumeRunID, conversation)
 		if werr != nil {
-			return uuid.Nil, werr
+			return uuid.Nil, dbq.SystemConversation{}, werr
 		}
 		conversation = fresh
 	}
-
-	// First-message title: a freshly created conversation carries the
-	// default "New chat" until the operator's first message lands. Rename
-	// to a truncated copy of the message so the sidebar shows something
-	// recognizable. Done synchronously here (not in the runChat goroutine)
-	// so the title is persisted before the HTTP response returns and the
-	// frontend's post-send refreshConversations() picks it up. Mirrors
-	// agent chat's title-on-create behavior.
 	if input.Message != "" && conversation.Title == defaultConversationTitle {
 		newTitle := truncate(input.Message, 100)
 		if newTitle != "" && newTitle != conversation.Title {
@@ -155,8 +190,6 @@ func (s *Service) RunPrompt(ctx context.Context, p authz.Principal, conversation
 				UserID: pgtype.UUID{Bytes: p.UserID, Valid: true},
 				Title:  newTitle,
 			}); err != nil {
-				// Non-fatal — the conversation stays under "New chat" and
-				// the operator can rename it manually. Log and proceed.
 				s.logger.Warn("sysagent: rename conversation on first message failed",
 					zap.Stringer("conversation", uuid.UUID(conversation.ID.Bytes)),
 					zap.Error(err))
@@ -165,22 +198,14 @@ func (s *Service) RunPrompt(ctx context.Context, p authz.Principal, conversation
 			}
 		}
 	}
-
 	run, err := q.CreateSystemRun(ctx, dbq.CreateSystemRunParams{
 		ConversationID: conversation.ID,
 		UserID:         pgtype.UUID{Bytes: p.UserID, Valid: true},
 	})
 	if err != nil {
-		return uuid.Nil, fmt.Errorf("create system run: %w", err)
+		return uuid.Nil, dbq.SystemConversation{}, fmt.Errorf("create system run: %w", err)
 	}
-	runID := uuid.UUID(run.ID.Bytes)
-
-	// Background context: the goroutine outlives the HTTP request.
-	// Cancellation of the chat turn comes from explicit cancel_run
-	// (UpdateSystemRunStatus to 'cancelled' + a dispatcher hook
-	// later) or process shutdown — not the request's ctx.
-	go s.runChat(context.Background(), p, conversation, runID, input)
-	return runID, nil
+	return uuid.UUID(run.ID.Bytes), conversation, nil
 }
 
 // runChat is the chat-loop goroutine RunPrompt kicks off. Owns the
@@ -191,15 +216,32 @@ func (s *Service) RunPrompt(ctx context.Context, p authz.Principal, conversation
 // All errors are logged + reflected in the run row's status (running
 // → error). The HTTP caller already got its runID back; the frontend
 // learns the outcome through the WS event stream.
-func (s *Service) runChat(ctx context.Context, p authz.Principal, conversation dbq.SystemConversation, runID uuid.UUID, input PromptInput) {
+//
+// When extraSink is set the run is bridge-originated (Telegram DM).
+// In that mode the WS pubsubSink is NOT attached — every event flows
+// to the bridge driver only. A user chatting via Telegram doesn't
+// have a web tab open on this conversation (per-bridge thread, not
+// the web 'web'-source thread), so publishing on the WS topic is
+// pure noise to other devices and risks leaking a tool-call/result
+// stream to anyone else subscribed to the user's topic.
+func (s *Service) runChat(ctx context.Context, p authz.Principal, conversation dbq.SystemConversation, runID uuid.UUID, input PromptInput, extraSink eventstream.Sink) {
 	conversationID := uuid.UUID(conversation.ID.Bytes)
+	bridgeMode := extraSink != nil
 
 	// Bus is per-run — sink subscribes for this run's lifetime so
 	// stale subscribers from earlier runs can't cross-pollinate.
 	runBus := bus.New()
-	sink := newPubSubSink(s.pubsub, conversationID, runID, p.UserID, s.logger)
-	unsub := sink.Forward(runBus)
-	defer unsub()
+	var sink *pubsubSink
+	if !bridgeMode {
+		sink = newPubSubSink(s.pubsub, conversationID, runID, p.UserID, s.logger)
+		unsub := sink.Forward(runBus)
+		defer unsub()
+	}
+
+	if extraSink != nil {
+		extraUnsub := eventstream.Forward(runBus, extraSink)
+		defer extraUnsub()
+	}
 
 	// Resolve the LLM. system_settings.default_exec_* drives the
 	// "text" capability for sysagent — there's no per-agent override
@@ -246,12 +288,22 @@ func (s *Service) runChat(ctx context.Context, p authz.Principal, conversation d
 	// builder so the post-build notification routes back here.
 	turnCtx := withConversationID(withPrincipal(ctx, p), conversationID)
 
+	// Pick the sink the resume path fans tool-result events into:
+	// the bridge translator when this is a bridge-originated turn,
+	// otherwise the WS pubsub sink. Same shape, different consumer.
+	var resumeSink eventstream.Sink
+	if bridgeMode {
+		resumeSink = extraSink
+	} else {
+		resumeSink = sink
+	}
+
 	var result *sol.RunResult
 	switch {
 	case input.Approved != nil && conversation.Status == "awaiting_confirmation":
 		// Approve/deny path. Resolve the previously-gated tool calls
 		// per the checkpoint, persist their results, then Continue.
-		result, err = s.dispatchResume(turnCtx, runner, tools, store, conversation, *input.Approved, sink)
+		result, err = s.dispatchResume(turnCtx, runner, tools, store, conversation, *input.Approved, resumeSink)
 
 	case input.Message != "" && conversation.Status == "active":
 		// Fresh operator turn.
@@ -279,7 +331,9 @@ func (s *Service) runChat(ctx context.Context, p authz.Principal, conversation d
 			zap.Stringer("run", runID),
 			zap.Error(err))
 		s.finishRun(ctx, runID, "error", err.Error())
-		s.publishRunError(conversationID, runID, p.UserID, err.Error())
+		if !bridgeMode {
+			s.publishRunError(conversationID, runID, p.UserID, err.Error())
+		}
 		return
 	}
 
@@ -288,7 +342,12 @@ func (s *Service) runChat(ctx context.Context, p authz.Principal, conversation d
 	switch result.Status {
 	case sol.RunSuspended:
 		s.persistSuspension(ctx, conversationID, result.SuspensionContext)
-		sink.OnSuspension(result.SuspensionContext)
+		if sink != nil {
+			sink.OnSuspension(result.SuspensionContext)
+		}
+		if extraSink != nil {
+			extraSink.OnSuspension(result.SuspensionContext)
+		}
 		s.finishRun(ctx, runID, "suspended", "")
 
 	case sol.RunCompleted, sol.RunExited:
@@ -298,7 +357,9 @@ func (s *Service) runChat(ctx context.Context, p authz.Principal, conversation d
 		// might if we add a sysagent-side "done" tool).
 		s.clearSuspension(ctx, conversationID)
 		s.finishRun(ctx, runID, "complete", "")
-		s.publishRunComplete(conversationID, runID, p.UserID, result.Usage)
+		if !bridgeMode {
+			s.publishRunComplete(conversationID, runID, p.UserID, result.Usage)
+		}
 
 	case sol.RunFailed:
 		errMsg := ""
@@ -306,11 +367,15 @@ func (s *Service) runChat(ctx context.Context, p authz.Principal, conversation d
 			errMsg = result.Error.Error()
 		}
 		s.finishRun(ctx, runID, "error", errMsg)
-		s.publishRunError(conversationID, runID, p.UserID, errMsg)
+		if !bridgeMode {
+			s.publishRunError(conversationID, runID, p.UserID, errMsg)
+		}
 
 	case sol.RunCancelled:
 		s.finishRun(ctx, runID, "cancelled", "")
-		s.publishRunComplete(conversationID, runID, p.UserID, result.Usage)
+		if !bridgeMode {
+			s.publishRunComplete(conversationID, runID, p.UserID, result.Usage)
+		}
 	}
 }
 
@@ -324,7 +389,7 @@ func (s *Service) runChat(ctx context.Context, p authz.Principal, conversation d
 // The gate happens at the executor wrapper layer (tool name driven),
 // so a narrow rule is exactly the right escape hatch — no risk of
 // authorising something the user didn't approve.
-func (s *Service) dispatchResume(ctx context.Context, runner *sol.Runner, tools tool.Set, store session.SessionStore, conversation dbq.SystemConversation, approved bool, sink *pubsubSink) (*sol.RunResult, error) {
+func (s *Service) dispatchResume(ctx context.Context, runner *sol.Runner, tools tool.Set, store session.SessionStore, conversation dbq.SystemConversation, approved bool, sink eventstream.Sink) (*sol.RunResult, error) {
 	var sc sol.SuspensionContext
 	if len(conversation.Checkpoint) == 0 {
 		return nil, service.Detail(service.ErrConflict,
@@ -358,7 +423,7 @@ func (s *Service) dispatchResume(ctx context.Context, runner *sol.Runner, tools 
 // Sol's PermissionManager is owned by the Runner. We use a SEPARATE
 // permBus here so resolve-time permission events don't leak onto the
 // runner's bus and stream out as extra confirmation events.
-func (s *Service) resolvePendingToolCalls(ctx context.Context, tools tool.Set, store session.SessionStore, pending []stream.ToolCall, approved bool, sink *pubsubSink) error {
+func (s *Service) resolvePendingToolCalls(ctx context.Context, tools tool.Set, store session.SessionStore, pending []stream.ToolCall, approved bool, sink eventstream.Sink) error {
 	permBus := bus.New()
 	pm := bus.NewPermissionManager(permBus)
 	for _, tc := range pending {
@@ -393,11 +458,13 @@ func (s *Service) resolvePendingToolCalls(ctx context.Context, tools tool.Set, s
 			}
 		}
 
-		sink.OnToolResult(stream.ToolResultEvent{
-			ToolCallID: tc.ID,
-			ToolName:   tc.Name,
-			Output:     toolOut,
-		})
+		if sink != nil {
+			sink.OnToolResult(stream.ToolResultEvent{
+				ToolCallID: tc.ID,
+				ToolName:   tc.Name,
+				Output:     toolOut,
+			})
+		}
 
 		resultMsgs = append(resultMsgs, session.Message{
 			Role: "tool",

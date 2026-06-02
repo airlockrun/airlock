@@ -21,6 +21,20 @@ UPDATE system_settings
 SET last_seen_sdk_version = @last_seen_sdk_version, updated_at = now()
 WHERE id = true;
 
+-- name: UpdateTelegramManagerBotToken :one
+-- Replace the encrypted manager-bot token ref + last-error string. The
+-- settings handler validates the raw token via getMe before writing,
+-- and the manager-bot poller reloads on the new value.
+UPDATE system_settings
+SET telegram_manager_bot_token_ref = @token_ref,
+    telegram_manager_bot_error     = @error_text,
+    updated_at = now()
+WHERE id = true
+RETURNING telegram_manager_bot_token_ref, telegram_manager_bot_error;
+
+-- name: GetTelegramManagerBotStatus :one
+SELECT telegram_manager_bot_token_ref, telegram_manager_bot_error FROM system_settings WHERE id = true;
+
 -- name: UpdateSystemSettings :one
 -- Each system default is a pair: a providers row FK (nullable) and the
 -- bare model name. NULL/empty ⇄ no default configured for that slot.

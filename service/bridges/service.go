@@ -176,15 +176,17 @@ func (s *Service) Create(ctx context.Context, p authz.Principal, req CreateReque
 		s.logger.Error("encrypt token failed", zap.Error(err))
 		return Result{}, err
 	}
-	createdBy := pgtype.UUID{Bytes: p.UserID, Valid: true}
+	ownerID := pgtype.UUID{Bytes: p.UserID, Valid: true}
 	br, err := q.CreateBridge(ctx, dbq.CreateBridgeParams{
-		Type:        bridgeType,
-		Name:        req.Name,
-		BotTokenRef: encToken,
-		BotUsername: botUsername,
-		AgentID:     agentPgID,
-		CreatedBy:   createdBy,
-		IsSystem:    isSystem,
+		Type:              bridgeType,
+		Name:              req.Name,
+		BotTokenRef:       encToken,
+		BotUsername:       botUsername,
+		AgentID:           agentPgID,
+		OwnerID:           ownerID,
+		IsSystem:          isSystem,
+		Managed:           false,
+		TelegramBotUserID: pgtype.Int8{},
 	})
 	if err != nil {
 		s.logger.Error("create bridge failed", zap.Error(err))
@@ -211,7 +213,104 @@ func (s *Service) Create(ctx context.Context, p authz.Principal, req CreateReque
 		})
 	}
 	s.bridgeMgr.AddBridge(uuid.UUID(br.ID.Bytes))
-	return Result{Bridge: br, Owner: s.fetchOwner(ctx, q, createdBy)}, nil
+	return Result{Bridge: br, Owner: s.fetchOwner(ctx, q, ownerID)}, nil
+}
+
+// ManagedSessionCreate is the payload for CreateFromManagedSession.
+// Carries the originating session row + the bot identity Telegram
+// returned on ManagedBotCreated/Updated + the raw token fetched via
+// getManagedBotToken. The manager-bot poller is the only caller.
+type ManagedSessionCreate struct {
+	Session           dbq.ManagedBotSession
+	BotUsername       string
+	TelegramBotUserID int64
+	RawToken          string
+}
+
+// CreateFromManagedSession materializes a bridge for a managed-bot
+// session whose Telegram-side bot creation Telegram has already
+// confirmed. The session row itself is the authorization proof: it
+// was inserted under managedbots.Service.CreateSession which gates
+// TenantBridgeCreate (plus TenantBridgeSystem / agent-admin) against
+// the airlock user who clicked Create. By the time we get here the
+// Telegram callback has already happened — re-running the tenant-role
+// gate against an arbitrary "principal" reconstructed from the
+// session would be a category error (the manager-bot poller isn't
+// any user, and we don't want to grant authority based on the deep
+// link). Instead we trust the session + verify the token still
+// resolves to the expected bot username via getMe, then write
+// directly.
+//
+// The bridge is flagged managed=true and stamped with the Telegram
+// bot.id so the rotation path (a subsequent ManagedBotUpdated for
+// the same bot.id) can find it.
+func (s *Service) CreateFromManagedSession(ctx context.Context, in ManagedSessionCreate) (Result, error) {
+	if in.RawToken == "" {
+		return Result{}, service.Detail(service.ErrInvalidInput, "token is required")
+	}
+	if !in.Session.OwnerID.Valid {
+		return Result{}, service.Detail(service.ErrInvalidInput, "session owner_id is required")
+	}
+	q := dbq.New(s.db.Pool())
+
+	// Sanity-check the token against getMe so a corrupted/replaced
+	// token from the manager-bot callback can't poison a fresh bridge
+	// row. The username we persist comes from this round-trip, not
+	// from the event payload — Telegram is the source of truth.
+	verifiedUsername, err := s.validateBot(ctx, "telegram", in.RawToken)
+	if err != nil {
+		return Result{}, service.Detail(service.ErrInvalidInput, "invalid bot token: %v", err)
+	}
+	encToken, err := s.encryptor.Put(ctx, "bridge/new/bot_token", in.RawToken)
+	if err != nil {
+		s.logger.Error("encrypt managed bot token failed", zap.Error(err))
+		return Result{}, err
+	}
+
+	name := "@" + verifiedUsername
+	if in.BotUsername != "" && in.BotUsername != verifiedUsername {
+		// Log the mismatch — Telegram event vs. live getMe diverged.
+		// Trust getMe; the event may have raced an in-flight rename.
+		s.logger.Warn("managed bot username mismatch event vs getMe",
+			zap.String("event_username", in.BotUsername),
+			zap.String("getme_username", verifiedUsername))
+	}
+
+	var telegramBotUserID pgtype.Int8
+	if in.TelegramBotUserID != 0 {
+		telegramBotUserID = pgtype.Int8{Int64: in.TelegramBotUserID, Valid: true}
+	}
+
+	br, err := q.CreateBridge(ctx, dbq.CreateBridgeParams{
+		Type:              "telegram",
+		Name:              name,
+		BotTokenRef:       encToken,
+		BotUsername:       verifiedUsername,
+		AgentID:           in.Session.AgentID,
+		OwnerID:           in.Session.OwnerID,
+		IsSystem:          in.Session.IsSystem,
+		Managed:           true,
+		TelegramBotUserID: telegramBotUserID,
+	})
+	if err != nil {
+		s.logger.Error("create managed bridge failed", zap.Error(err))
+		return Result{}, err
+	}
+
+	// Driver init wants the decrypted token; round-trip via a shallow
+	// copy so the persisted encrypted ref stays untouched.
+	initBr := br
+	initBr.BotTokenRef = in.RawToken
+	if initErr := s.telegram.Init(ctx, &initBr); initErr != nil {
+		s.logger.Warn("managed bridge init failed", zap.Error(initErr))
+	} else if len(initBr.Config) > 0 {
+		_ = q.UpdateBridgeLastPolled(ctx, dbq.UpdateBridgeLastPolledParams{
+			Config: initBr.Config,
+			ID:     br.ID,
+		})
+	}
+	s.bridgeMgr.AddBridge(uuid.UUID(br.ID.Bytes))
+	return Result{Bridge: br, Owner: s.fetchOwner(ctx, q, br.OwnerID)}, nil
 }
 
 // List returns all bridges visible to the caller. Admins see every
@@ -233,10 +332,10 @@ func (s *Service) List(ctx context.Context, p authz.Principal) ([]ListItem, erro
 			out[i] = ListItem{
 				Bridge: dbq.Bridge{
 					ID: r.ID, Type: r.Type, Name: r.Name, BotUsername: r.BotUsername,
-					Status: r.Status, AgentID: r.AgentID, CreatedBy: r.CreatedBy,
+					Status: r.Status, AgentID: r.AgentID, OwnerID: r.OwnerID,
 					CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt, Settings: r.Settings,
 				},
-				Owner: ownerFromJoin(r.CreatedBy, r.OwnerEmail, r.OwnerDisplayName),
+				Owner: ownerFromJoin(r.OwnerID, r.OwnerEmail, r.OwnerDisplayName),
 			}
 		}
 		return out, nil
@@ -251,10 +350,10 @@ func (s *Service) List(ctx context.Context, p authz.Principal) ([]ListItem, erro
 		out[i] = ListItem{
 			Bridge: dbq.Bridge{
 				ID: r.ID, Type: r.Type, Name: r.Name, BotUsername: r.BotUsername,
-				Status: r.Status, AgentID: r.AgentID, CreatedBy: r.CreatedBy,
+				Status: r.Status, AgentID: r.AgentID, OwnerID: r.OwnerID,
 				CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt, Settings: r.Settings,
 			},
-			Owner: ownerFromJoin(r.CreatedBy, r.OwnerEmail, r.OwnerDisplayName),
+			Owner: ownerFromJoin(r.OwnerID, r.OwnerEmail, r.OwnerDisplayName),
 		}
 	}
 	return out, nil
@@ -278,13 +377,13 @@ func (s *Service) Update(ctx context.Context, p authz.Principal, bridgeID uuid.U
 		s.logger.Error("get bridge failed", zap.Error(err))
 		return Result{}, err
 	}
-	isCreator := br.CreatedBy.Valid && uuid.UUID(br.CreatedBy.Bytes) == p.UserID
+	isOwner := br.OwnerID.Valid && uuid.UUID(br.OwnerID.Bytes) == p.UserID
 	switch {
 	case br.IsSystem:
 		if !isAdmin {
 			return Result{}, service.Detail(service.ErrForbidden, "system bridges require admin role to modify")
 		}
-	case !isCreator:
+	case !isOwner:
 		return Result{}, service.Detail(service.ErrForbidden, "only the bridge owner can change its agent")
 	}
 	var newAgentID pgtype.UUID
@@ -317,8 +416,19 @@ func (s *Service) Update(ctx context.Context, p authz.Principal, bridgeID uuid.U
 		if timeout <= 0 {
 			timeout = DefaultPublicPromptTimeoutSeconds
 		}
+		allowPublicDMs := req.Settings.AllowPublicDMs
+		if br.IsSystem {
+			// System bridges route to the in-airlock sysagent, which
+			// runs every tool with the caller's tenant permissions —
+			// an unauthenticated DM has nothing to act with. The
+			// runtime path in trigger/bridge_sysagent.go already
+			// hard-rejects un-linked senders; force the persisted
+			// flag to match so the UI never advertises a setting
+			// that has no effect.
+			allowPublicDMs = false
+		}
 		settings := Settings{
-			AllowPublicDMs:             req.Settings.AllowPublicDMs,
+			AllowPublicDMs:             allowPublicDMs,
 			PublicSessionTTLSeconds:    int(req.Settings.PublicSessionTTLSeconds),
 			PublicSessionMode:          mode,
 			PublicPromptTimeoutSeconds: timeout,
@@ -338,7 +448,7 @@ func (s *Service) Update(ctx context.Context, p authz.Principal, bridgeID uuid.U
 		}
 	}
 	s.bridgeMgr.AddBridge(bridgeID)
-	return Result{Bridge: updated, Owner: s.fetchOwner(ctx, q, updated.CreatedBy)}, nil
+	return Result{Bridge: updated, Owner: s.fetchOwner(ctx, q, updated.OwnerID)}, nil
 }
 
 // Delete removes a bridge. Same owner/admin gate as Update; admin can
@@ -357,12 +467,12 @@ func (s *Service) Delete(ctx context.Context, p authz.Principal, bridgeID uuid.U
 		s.logger.Error("get bridge failed", zap.Error(err))
 		return err
 	}
-	isCreator := br.CreatedBy.Valid && uuid.UUID(br.CreatedBy.Bytes) == p.UserID
+	isOwner := br.OwnerID.Valid && uuid.UUID(br.OwnerID.Bytes) == p.UserID
 	if br.IsSystem {
 		if !isAdmin {
 			return service.Detail(service.ErrForbidden, "system bridges require admin role to delete")
 		}
-	} else if !isAdmin && !isCreator {
+	} else if !isAdmin && !isOwner {
 		return service.ErrForbidden
 	}
 	if err := q.DeleteBridge(ctx, pgtype.UUID{Bytes: bridgeID, Valid: true}); err != nil {

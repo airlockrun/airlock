@@ -29,19 +29,31 @@ func (s *Service) authorizeRead(ctx context.Context, p authz.Principal) error {
 	return authz.Authorize(ctx, q, p, authz.TenantUserView, uuid.Nil)
 }
 
-type Service struct {
-	db     *db.DB
-	logger *zap.Logger
+// BridgeStopper is the narrow surface Delete uses to pre-cancel the
+// BridgeManager pollers for a user's bridges before the DB CASCADE
+// removes the rows. Defined as an interface to avoid importing
+// trigger (cycle risk) and to keep the users service testable.
+type BridgeStopper interface {
+	RemoveBridgesByOwner(ctx context.Context, ownerID uuid.UUID) error
 }
 
-func New(d *db.DB, logger *zap.Logger) *Service {
+type Service struct {
+	db      *db.DB
+	bridges BridgeStopper
+	logger  *zap.Logger
+}
+
+// New wires the users service. bridges may be nil for tests that
+// don't exercise the Delete cascade path; production wires it to the
+// BridgeManager.
+func New(d *db.DB, bridges BridgeStopper, logger *zap.Logger) *Service {
 	if d == nil {
 		panic("users: db is required")
 	}
 	if logger == nil {
 		panic("users: logger is required")
 	}
-	return &Service{db: d, logger: logger}
+	return &Service{db: d, bridges: bridges, logger: logger}
 }
 
 // Summary is the slim user shape every caller needs — id, identity
@@ -262,6 +274,18 @@ func (s *Service) Delete(ctx context.Context, p authz.Principal, targetID uuid.U
 		}
 		if count <= 1 {
 			return service.Detail(ErrLastAdmin, "cannot delete the last admin")
+		}
+	}
+	// Pre-stop the user's bridge pollers. The DB CASCADE on
+	// bridges.owner_id removes the rows during DeleteUser; if we don't
+	// cancel the goroutines first, they keep polling getUpdates on the
+	// (now-deleted) row until next transient failure, racing on the
+	// bot token with any replacement bridge that happens to reuse the
+	// same id.
+	if s.bridges != nil {
+		if err := s.bridges.RemoveBridgesByOwner(ctx, targetID); err != nil {
+			s.logger.Warn("users: stop bridges-by-owner failed; proceeding with delete",
+				zap.String("user_id", targetID.String()), zap.Error(err))
 		}
 	}
 	if err := q.DeleteUser(ctx, pgtype.UUID{Bytes: targetID, Valid: true}); err != nil {

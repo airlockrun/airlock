@@ -81,7 +81,7 @@ const createSystemConversation = `-- name: CreateSystemConversation :one
 
 INSERT INTO system_conversations (user_id, title)
 VALUES ($1, $2)
-RETURNING id, user_id, title, status, checkpoint, context_checkpoint_message_id, settings, created_at, updated_at
+RETURNING id, user_id, title, status, checkpoint, context_checkpoint_message_id, settings, created_at, updated_at, source, bridge_id
 `
 
 type CreateSystemConversationParams struct {
@@ -105,6 +105,8 @@ func (q *Queries) CreateSystemConversation(ctx context.Context, arg CreateSystem
 		&i.Settings,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Source,
+		&i.BridgeID,
 	)
 	return i, err
 }
@@ -153,8 +155,84 @@ func (q *Queries) DeleteSystemConversation(ctx context.Context, arg DeleteSystem
 	return err
 }
 
+const ensureSystemConversationForBridge = `-- name: EnsureSystemConversationForBridge :one
+INSERT INTO system_conversations (user_id, bridge_id, source, title)
+VALUES ($1, $2, 'bridge', $3)
+ON CONFLICT (user_id, bridge_id) WHERE bridge_id IS NOT NULL
+DO UPDATE SET bridge_id = EXCLUDED.bridge_id
+RETURNING id, user_id, title, status, checkpoint, context_checkpoint_message_id, settings, created_at, updated_at, source, bridge_id
+`
+
+type EnsureSystemConversationForBridgeParams struct {
+	UserID   pgtype.UUID `json:"user_id"`
+	BridgeID pgtype.UUID `json:"bridge_id"`
+	Title    string      `json:"title"`
+}
+
+// Upsert one sticky thread per (user, bridge) on the partial unique
+// index (user_id, bridge_id) WHERE bridge_id IS NOT NULL — every system
+// bridge funnels that user's inbound DMs into the same row. The first
+// INSERT for a pair returns the new row; subsequent calls hit the
+// conflict and return the existing one via the no-op ON CONFLICT
+// update of bridge_id (which leaves the value unchanged).
+func (q *Queries) EnsureSystemConversationForBridge(ctx context.Context, arg EnsureSystemConversationForBridgeParams) (SystemConversation, error) {
+	row := q.db.QueryRow(ctx, ensureSystemConversationForBridge, arg.UserID, arg.BridgeID, arg.Title)
+	var i SystemConversation
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.Title,
+		&i.Status,
+		&i.Checkpoint,
+		&i.ContextCheckpointMessageID,
+		&i.Settings,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Source,
+		&i.BridgeID,
+	)
+	return i, err
+}
+
+const getLatestRunningSystemRun = `-- name: GetLatestRunningSystemRun :one
+SELECT id FROM system_runs
+WHERE conversation_id = $1
+  AND status IN ('running', 'suspended')
+ORDER BY started_at DESC
+LIMIT 1
+`
+
+// /cancel target: the most recent run on this conversation that hasn't
+// terminated yet. Both 'running' and 'suspended' are cancellable —
+// suspended runs that the user cancels via /cancel rather than via the
+// confirmation dialog still need to be torn down.
+func (q *Queries) GetLatestRunningSystemRun(ctx context.Context, conversationID pgtype.UUID) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, getLatestRunningSystemRun, conversationID)
+	var id pgtype.UUID
+	err := row.Scan(&id)
+	return id, err
+}
+
+const getLatestSuspendedSystemRun = `-- name: GetLatestSuspendedSystemRun :one
+SELECT id FROM system_runs
+WHERE conversation_id = $1
+  AND status = 'suspended'
+ORDER BY started_at DESC
+LIMIT 1
+`
+
+// /clear target: a suspended run on this conversation belongs to the
+// pending-confirmation UI; once the context is cleared the dialog is
+// meaningless, so we cancel the run alongside the checkpoint advance.
+func (q *Queries) GetLatestSuspendedSystemRun(ctx context.Context, conversationID pgtype.UUID) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, getLatestSuspendedSystemRun, conversationID)
+	var id pgtype.UUID
+	err := row.Scan(&id)
+	return id, err
+}
+
 const getSystemConversationByID = `-- name: GetSystemConversationByID :one
-SELECT id, user_id, title, status, checkpoint, context_checkpoint_message_id, settings, created_at, updated_at FROM system_conversations WHERE id = $1
+SELECT id, user_id, title, status, checkpoint, context_checkpoint_message_id, settings, created_at, updated_at, source, bridge_id FROM system_conversations WHERE id = $1
 `
 
 func (q *Queries) GetSystemConversationByID(ctx context.Context, id pgtype.UUID) (SystemConversation, error) {
@@ -170,6 +248,8 @@ func (q *Queries) GetSystemConversationByID(ctx context.Context, id pgtype.UUID)
 		&i.Settings,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Source,
+		&i.BridgeID,
 	)
 	return i, err
 }
@@ -226,7 +306,7 @@ func (q *Queries) InsertSystemAuditPending(ctx context.Context, arg InsertSystem
 }
 
 const listSystemConversationsByUser = `-- name: ListSystemConversationsByUser :many
-SELECT id, user_id, title, status, checkpoint, context_checkpoint_message_id, settings, created_at, updated_at FROM system_conversations
+SELECT id, user_id, title, status, checkpoint, context_checkpoint_message_id, settings, created_at, updated_at, source, bridge_id FROM system_conversations
 WHERE user_id = $1
 ORDER BY updated_at DESC
 `
@@ -252,6 +332,8 @@ func (q *Queries) ListSystemConversationsByUser(ctx context.Context, userID pgty
 			&i.Settings,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.Source,
+			&i.BridgeID,
 		); err != nil {
 			return nil, err
 		}
@@ -547,6 +629,26 @@ type UpdateSystemAuditResultParams struct {
 
 func (q *Queries) UpdateSystemAuditResult(ctx context.Context, arg UpdateSystemAuditResultParams) error {
 	_, err := q.db.Exec(ctx, updateSystemAuditResult, arg.ResultSummary, arg.Ok, arg.ID)
+	return err
+}
+
+const updateSystemConversationSettings = `-- name: UpdateSystemConversationSettings :exec
+UPDATE system_conversations
+SET settings = settings || $1::jsonb,
+    updated_at = now()
+WHERE id = $2
+`
+
+type UpdateSystemConversationSettingsParams struct {
+	Patch []byte      `json:"patch"`
+	ID    pgtype.UUID `json:"id"`
+}
+
+// JSONB shallow merge: caller passes a patch with only the keys to
+// overwrite; existing keys not in the patch survive. Used by /echo to
+// flip the echo setting without touching anything else.
+func (q *Queries) UpdateSystemConversationSettings(ctx context.Context, arg UpdateSystemConversationSettingsParams) error {
+	_, err := q.db.Exec(ctx, updateSystemConversationSettings, arg.Patch, arg.ID)
 	return err
 }
 

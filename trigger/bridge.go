@@ -18,6 +18,7 @@ import (
 	"github.com/airlockrun/airlock/secrets"
 	bridgessvc "github.com/airlockrun/airlock/service/bridges"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"
 )
 
@@ -181,6 +182,23 @@ type BridgeManager struct {
 	// duplicate pollers on every subsequent AddBridge call.
 	pollersMu sync.Mutex
 	pollers   map[uuid.UUID]*pollerHandle
+
+	// sysagent is the in-airlock system-agent runtime. Routes inbound
+	// DMs on system bridges (br.IsSystem) into a per-bridge sysagent
+	// thread. Nil until AttachSysagent wires it after sysagent.New
+	// completes (constructor order: BridgeManager precedes the router,
+	// the router builds sysagent). System bridges receiving an event
+	// before AttachSysagent runs will silently drop, which is fine —
+	// inbound DMs can't arrive until the bridge poller is running, and
+	// pollers only start after airlock.Start which is well past
+	// AttachSysagent.
+	sysagent SysagentRuntime
+}
+
+// AttachSysagent wires the sysagent runtime after the router has built
+// it. Idempotent; the last set wins.
+func (m *BridgeManager) AttachSysagent(s SysagentRuntime) {
+	m.sysagent = s
 }
 
 // pollerHandle pairs a poller goroutine's cancel func with its context.
@@ -310,6 +328,24 @@ func (m *BridgeManager) RemoveBridge(bridgeID uuid.UUID) {
 	m.cancelPoller(bridgeID)
 }
 
+// RemoveBridgesByOwner stops every poller for bridges owned by a
+// specific user. Called from service/users.Delete BEFORE the DB
+// CASCADE removes the bridge rows — otherwise the poller goroutines
+// would keep calling getUpdates against now-deleted bridges until
+// their next transient failure, racing on the bot token with any
+// replacement bridge that happened to land on the same row id.
+func (m *BridgeManager) RemoveBridgesByOwner(ctx context.Context, ownerID uuid.UUID) error {
+	q := dbq.New(m.db.Pool())
+	rows, err := q.ListBridgesByOwner(ctx, pgtype.UUID{Bytes: ownerID, Valid: true})
+	if err != nil {
+		return fmt.Errorf("list bridges by owner: %w", err)
+	}
+	for _, id := range rows {
+		m.cancelPoller(uuid.UUID(id.Bytes))
+	}
+	return nil
+}
+
 // cancelPoller stops the poller goroutine for a specific bridge ID, if any.
 // Holds pollersMu while swapping/deleting so concurrent AddBridge+RemoveBridge
 // calls can't race on the map.
@@ -346,19 +382,24 @@ func (m *BridgeManager) HandleEvent(ctx context.Context, event BridgeEvent) erro
 		return fmt.Errorf("get bridge: %w", err)
 	}
 
-	if !br.AgentID.Valid {
-		return nil // system bridge with no agent bound — drop event for now
-	}
-	agentID := pgUUID(br.AgentID)
-
-	// Decrypt token for driver.
+	// Decrypt token once up front — needed by both system-bridge and
+	// agent-bridge paths for SendText / SendStream / AnswerCallback.
 	if br.BotTokenRef != "" {
-		token, err := m.encryptor.Get(ctx, "bridge/"+pgUUID(br.ID).String()+"/bot_token", br.BotTokenRef)
-		if err != nil {
-			return fmt.Errorf("decrypt bridge token: %w", err)
+		token, derr := m.encryptor.Get(ctx, "bridge/"+pgUUID(br.ID).String()+"/bot_token", br.BotTokenRef)
+		if derr != nil {
+			return fmt.Errorf("decrypt bridge token: %w", derr)
 		}
 		br.BotTokenRef = token
 	}
+
+	if br.IsSystem {
+		return m.handleSystemBridgeEvent(ctx, br, event)
+	}
+
+	if !br.AgentID.Valid {
+		return nil // orphan bridge (agent deleted, not system) — drop until rebinding
+	}
+	agentID := pgUUID(br.AgentID)
 
 	driver := m.drivers[br.Type]
 

@@ -206,9 +206,8 @@ func (q *Queries) GetConversationBySource(ctx context.Context, arg GetConversati
 const getOrCreateBridgeAuthedConversation = `-- name: GetOrCreateBridgeAuthedConversation :one
 INSERT INTO agent_conversations (agent_id, user_id, source, title, bridge_id, external_id, metadata, settings)
 VALUES ($1, $2, 'bridge', $3, $4, $5, '{}'::jsonb, '{}'::jsonb)
-ON CONFLICT (agent_id, user_id, source, external_id) WHERE user_id IS NOT NULL AND external_id IS NOT NULL DO UPDATE
-    SET updated_at = now(),
-        bridge_id = COALESCE(EXCLUDED.bridge_id, agent_conversations.bridge_id)
+ON CONFLICT (agent_id, user_id, source, external_id, bridge_id) WHERE user_id IS NOT NULL AND external_id IS NOT NULL DO UPDATE
+    SET updated_at = now()
 RETURNING id, agent_id, bridge_id, user_id, source, external_id, title, metadata, settings, context_checkpoint_message_id, created_at, updated_at
 `
 
@@ -220,11 +219,12 @@ type GetOrCreateBridgeAuthedConversationParams struct {
 	ExternalID pgtype.Text `json:"external_id"`
 }
 
-// Authed bridge: one thread per (agent, user, external_id) — the same
-// user in a different chat/bot is a different conversation. Upserts on
-// idx_conversations_bridge_authed; the conflict_target WHERE clause must
-// match that partial index's predicate so Postgres can infer it.
-// external_id is required (callers reject empty before this).
+// Authed bridge: one thread per (agent, user, bridge, external_id) —
+// the same user reaching the same agent through a different bridge is
+// a different conversation, and the same user in a different chat is
+// also a different conversation (external_id covers that axis).
+// Upserts on idx_conversations_bridge_authed; conflict target must
+// match the partial index's keys + predicate so Postgres infers it.
 func (q *Queries) GetOrCreateBridgeAuthedConversation(ctx context.Context, arg GetOrCreateBridgeAuthedConversationParams) (AgentConversation, error) {
 	row := q.db.QueryRow(ctx, getOrCreateBridgeAuthedConversation,
 		arg.AgentID,

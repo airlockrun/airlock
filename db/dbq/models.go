@@ -286,20 +286,22 @@ type AuthLockout struct {
 }
 
 type Bridge struct {
-	ID           pgtype.UUID        `json:"id"`
-	AgentID      pgtype.UUID        `json:"agent_id"`
-	CreatedBy    pgtype.UUID        `json:"created_by"`
-	Type         string             `json:"type"`
-	Name         string             `json:"name"`
-	BotUsername  string             `json:"bot_username"`
-	Status       string             `json:"status"`
-	IsSystem     bool               `json:"is_system"`
-	Config       []byte             `json:"config"`
-	Settings     []byte             `json:"settings"`
-	BotTokenRef  string             `json:"bot_token_ref"`
-	LastPolledAt pgtype.Timestamptz `json:"last_polled_at"`
-	CreatedAt    pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+	ID                pgtype.UUID        `json:"id"`
+	AgentID           pgtype.UUID        `json:"agent_id"`
+	OwnerID           pgtype.UUID        `json:"owner_id"`
+	Type              string             `json:"type"`
+	Name              string             `json:"name"`
+	BotUsername       string             `json:"bot_username"`
+	Status            string             `json:"status"`
+	IsSystem          bool               `json:"is_system"`
+	Config            []byte             `json:"config"`
+	Settings          []byte             `json:"settings"`
+	BotTokenRef       string             `json:"bot_token_ref"`
+	LastPolledAt      pgtype.Timestamptz `json:"last_polled_at"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
+	Managed           bool               `json:"managed"`
+	TelegramBotUserID pgtype.Int8        `json:"telegram_bot_user_id"`
 }
 
 type Connection struct {
@@ -366,6 +368,16 @@ type LlmUsage struct {
 	Errored           bool               `json:"errored"`
 	LatencyMs         int32              `json:"latency_ms"`
 	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+}
+
+type ManagedBotSession struct {
+	ID        pgtype.UUID        `json:"id"`
+	OwnerID   pgtype.UUID        `json:"owner_id"`
+	AgentID   pgtype.UUID        `json:"agent_id"`
+	IsSystem  bool               `json:"is_system"`
+	Nonce     string             `json:"nonce"`
+	ExpiresAt pgtype.Timestamptz `json:"expires_at"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
 }
 
 type OauthAuthzCode struct {
@@ -495,6 +507,8 @@ type SystemConversation struct {
 	Settings                   []byte             `json:"settings"`
 	CreatedAt                  pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt                  pgtype.Timestamptz `json:"updated_at"`
+	Source                     string             `json:"source"`
+	BridgeID                   pgtype.UUID        `json:"bridge_id"`
 }
 
 type SystemMessage struct {
@@ -543,6 +557,8 @@ type SystemSetting struct {
 	CreatedAt                  pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt                  pgtype.Timestamptz `json:"updated_at"`
 	LastSeenSdkVersion         string             `json:"last_seen_sdk_version"`
+	TelegramManagerBotTokenRef string             `json:"telegram_manager_bot_token_ref"`
+	TelegramManagerBotError    string             `json:"telegram_manager_bot_error"`
 }
 
 type Tenant struct {

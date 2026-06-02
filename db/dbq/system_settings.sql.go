@@ -23,7 +23,7 @@ func (q *Queries) ClearActivationCode(ctx context.Context) error {
 }
 
 const getSystemSettings = `-- name: GetSystemSettings :one
-SELECT id, default_build_provider_id, default_build_model, default_exec_provider_id, default_exec_model, default_stt_provider_id, default_stt_model, default_vision_provider_id, default_vision_model, default_tts_provider_id, default_tts_model, default_image_gen_provider_id, default_image_gen_model, default_embedding_provider_id, default_embedding_model, default_search_provider_id, default_search_model, activation_code, created_at, updated_at, last_seen_sdk_version FROM system_settings WHERE id = true
+SELECT id, default_build_provider_id, default_build_model, default_exec_provider_id, default_exec_model, default_stt_provider_id, default_stt_model, default_vision_provider_id, default_vision_model, default_tts_provider_id, default_tts_model, default_image_gen_provider_id, default_image_gen_model, default_embedding_provider_id, default_embedding_model, default_search_provider_id, default_search_model, activation_code, created_at, updated_at, last_seen_sdk_version, telegram_manager_bot_token_ref, telegram_manager_bot_error FROM system_settings WHERE id = true
 `
 
 func (q *Queries) GetSystemSettings(ctx context.Context) (SystemSetting, error) {
@@ -51,7 +51,25 @@ func (q *Queries) GetSystemSettings(ctx context.Context) (SystemSetting, error) 
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.LastSeenSdkVersion,
+		&i.TelegramManagerBotTokenRef,
+		&i.TelegramManagerBotError,
 	)
+	return i, err
+}
+
+const getTelegramManagerBotStatus = `-- name: GetTelegramManagerBotStatus :one
+SELECT telegram_manager_bot_token_ref, telegram_manager_bot_error FROM system_settings WHERE id = true
+`
+
+type GetTelegramManagerBotStatusRow struct {
+	TelegramManagerBotTokenRef string `json:"telegram_manager_bot_token_ref"`
+	TelegramManagerBotError    string `json:"telegram_manager_bot_error"`
+}
+
+func (q *Queries) GetTelegramManagerBotStatus(ctx context.Context) (GetTelegramManagerBotStatusRow, error) {
+	row := q.db.QueryRow(ctx, getTelegramManagerBotStatus)
+	var i GetTelegramManagerBotStatusRow
+	err := row.Scan(&i.TelegramManagerBotTokenRef, &i.TelegramManagerBotError)
 	return i, err
 }
 
@@ -105,7 +123,7 @@ SET default_build_provider_id     = $1,
     default_search_model          = $16,
     updated_at = now()
 WHERE id = true
-RETURNING id, default_build_provider_id, default_build_model, default_exec_provider_id, default_exec_model, default_stt_provider_id, default_stt_model, default_vision_provider_id, default_vision_model, default_tts_provider_id, default_tts_model, default_image_gen_provider_id, default_image_gen_model, default_embedding_provider_id, default_embedding_model, default_search_provider_id, default_search_model, activation_code, created_at, updated_at, last_seen_sdk_version
+RETURNING id, default_build_provider_id, default_build_model, default_exec_provider_id, default_exec_model, default_stt_provider_id, default_stt_model, default_vision_provider_id, default_vision_model, default_tts_provider_id, default_tts_model, default_image_gen_provider_id, default_image_gen_model, default_embedding_provider_id, default_embedding_model, default_search_provider_id, default_search_model, activation_code, created_at, updated_at, last_seen_sdk_version, telegram_manager_bot_token_ref, telegram_manager_bot_error
 `
 
 type UpdateSystemSettingsParams struct {
@@ -171,6 +189,37 @@ func (q *Queries) UpdateSystemSettings(ctx context.Context, arg UpdateSystemSett
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.LastSeenSdkVersion,
+		&i.TelegramManagerBotTokenRef,
+		&i.TelegramManagerBotError,
 	)
+	return i, err
+}
+
+const updateTelegramManagerBotToken = `-- name: UpdateTelegramManagerBotToken :one
+UPDATE system_settings
+SET telegram_manager_bot_token_ref = $1,
+    telegram_manager_bot_error     = $2,
+    updated_at = now()
+WHERE id = true
+RETURNING telegram_manager_bot_token_ref, telegram_manager_bot_error
+`
+
+type UpdateTelegramManagerBotTokenParams struct {
+	TokenRef  string `json:"token_ref"`
+	ErrorText string `json:"error_text"`
+}
+
+type UpdateTelegramManagerBotTokenRow struct {
+	TelegramManagerBotTokenRef string `json:"telegram_manager_bot_token_ref"`
+	TelegramManagerBotError    string `json:"telegram_manager_bot_error"`
+}
+
+// Replace the encrypted manager-bot token ref + last-error string. The
+// settings handler validates the raw token via getMe before writing,
+// and the manager-bot poller reloads on the new value.
+func (q *Queries) UpdateTelegramManagerBotToken(ctx context.Context, arg UpdateTelegramManagerBotTokenParams) (UpdateTelegramManagerBotTokenRow, error) {
+	row := q.db.QueryRow(ctx, updateTelegramManagerBotToken, arg.TokenRef, arg.ErrorText)
+	var i UpdateTelegramManagerBotTokenRow
+	err := row.Scan(&i.TelegramManagerBotTokenRef, &i.TelegramManagerBotError)
 	return i, err
 }

@@ -206,7 +206,8 @@ func (p *PromptProxy) HandleMessage(
 	// the agent with ForceCompact=true so Sol's Runner.Compact produces the
 	// reply via its usual streaming path.
 	var forceCompact bool
-	if cmd, err := TrySlashCommand(ctx, q, p.dispatcher, conversationID, access, userMessage, p.logger); err != nil {
+	slashConv := NewAgentSlashConv(q, p.dispatcher, p.logger)
+	if cmd, err := TrySlashCommand(ctx, slashConv, conversationID, access, userMessage); err != nil {
 		close(events)
 		return "", fmt.Errorf("slash command: %w", err)
 	} else if cmd.Handled {
@@ -235,10 +236,15 @@ func (p *PromptProxy) HandleMessage(
 		paths[i] = "tmp/" + uuid.New().String()[:8] + "-" + files[i].Filename
 	}
 
-	// Auto-transcribe voice notes before forwarding. Transcription failures
-	// fall back to attaching the audio without a transcript — we never drop
-	// the user's message. The original ogg is still uploaded below.
-	userMessage = p.transcribeVoiceNotes(ctx, userMessage, files, paths)
+	// Auto-transcribe voice notes before forwarding. Authed users only:
+	// transcription consumes the configured STT model's budget and we
+	// don't want public-DM senders to run it up (the audio still uploads
+	// raw; the agent can choose to handle it). Transcription failures
+	// fall back to attaching the audio without a transcript — we never
+	// drop the user's message.
+	if userID != uuid.Nil {
+		userMessage = p.transcribeVoiceNotes(ctx, userMessage, files, paths)
+	}
 
 	// Store attached files in agent's S3 prefix and build FileInfo entries.
 	var fileInfos []agentsdk.FileInfo
@@ -581,6 +587,63 @@ func (p *PromptProxy) transcribeVoiceNotes(ctx context.Context, userMessage stri
 		return joined
 	}
 	return userMessage + "\n" + joined
+}
+
+// TranscribeVoicePlain runs each voice-note file through the
+// configured transcription model and returns the concatenated plain
+// text — used by the sysagent-bridge path where there's no agent
+// container, no per-file S3 key, and tagging transcripts with source
+// keys would be meaningless. hasNonVoice signals that at least one
+// non-voice file was attached so the caller can reject with a
+// "files not supported" reply. Transcription failures degrade
+// gracefully: the bool stays true if any voice file existed, the
+// returned text just omits the failing entries.
+func (p *PromptProxy) TranscribeVoicePlain(ctx context.Context, files []BridgeFile) (text string, hasVoice bool, hasNonVoice bool) {
+	if len(files) == 0 {
+		return "", false, false
+	}
+	for i := range files {
+		if files[i].IsVoiceNote {
+			hasVoice = true
+		} else {
+			hasNonVoice = true
+		}
+	}
+	if !hasVoice || p.resolveTranscription == nil {
+		return "", hasVoice, hasNonVoice
+	}
+	tm, err := p.resolveTranscription(ctx)
+	if err != nil {
+		if !errors.Is(err, ErrTranscriptionNotConfigured) {
+			p.logger.Warn("system bridge transcription resolve failed", zap.Error(err))
+		}
+		return "", hasVoice, hasNonVoice
+	}
+	var transcripts []string
+	for i := range files {
+		if !files[i].IsVoiceNote {
+			continue
+		}
+		audioBytes, filename, mime, tErr := audio.NormalizeForSTT(ctx, files[i].Data, files[i].Filename, files[i].ContentType)
+		if tErr != nil {
+			p.logger.Warn("system bridge voice transcode failed",
+				zap.String("filename", files[i].Filename), zap.Error(tErr))
+		}
+		result, err := tm.Transcribe(ctx, model.TranscribeCallOptions{
+			Audio:    audioBytes,
+			MimeType: mime,
+			Filename: filename,
+		})
+		if err != nil {
+			p.logger.Warn("system bridge transcription failed",
+				zap.String("filename", files[i].Filename), zap.Error(err))
+			continue
+		}
+		if result != nil && result.Text != "" {
+			transcripts = append(transcripts, result.Text)
+		}
+	}
+	return strings.Join(transcripts, "\n"), hasVoice, hasNonVoice
 }
 
 // buildAgentStatusContext queries agent connections and webhooks,

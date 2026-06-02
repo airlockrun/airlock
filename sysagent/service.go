@@ -1,6 +1,9 @@
 package sysagent
 
 import (
+	"context"
+	"sync"
+
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/realtime"
 	"github.com/airlockrun/airlock/secrets"
@@ -15,6 +18,7 @@ import (
 	runssvc "github.com/airlockrun/airlock/service/runs"
 	siblingssvc "github.com/airlockrun/airlock/service/siblings"
 	userssvc "github.com/airlockrun/airlock/service/users"
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 )
 
@@ -45,6 +49,14 @@ type Service struct {
 	runs     *runssvc.Service
 	siblings *siblingssvc.Service
 	users    *userssvc.Service
+
+	// activeRuns is the in-process registry of cancellable chat
+	// goroutines, keyed by run id. /cancel and operator-initiated
+	// shutdowns look up the cancel func here. The map only carries
+	// in-process state — a multi-replica deployment would need a DB
+	// signal too, but airlock is single-instance today.
+	activeMu   sync.Mutex
+	activeRuns map[uuid.UUID]context.CancelFunc
 }
 
 // Deps bundles the dependencies New requires. Pulled out as a struct
@@ -93,23 +105,40 @@ func New(d Deps) *Service {
 		panic("sysagent: every per-domain service is required")
 	}
 	return &Service{
-		db:        d.DB,
-		encryptor: d.Encryptor,
-		pubsub:    d.PubSub,
-		publicURL: d.PublicURL,
-		logger:    d.Logger,
-		agents:    d.Agents,
-		bridges:   d.Bridges,
-		catalog:   d.Catalog,
-		conns:     d.Conns,
-		execs:     d.Execs,
-		gitcreds:  d.GitCreds,
-		members:   d.Members,
-		models:    d.Models,
-		runs:      d.Runs,
-		siblings:  d.Siblings,
-		users:     d.Users,
+		db:         d.DB,
+		encryptor:  d.Encryptor,
+		pubsub:     d.PubSub,
+		publicURL:  d.PublicURL,
+		logger:     d.Logger,
+		agents:     d.Agents,
+		bridges:    d.Bridges,
+		catalog:    d.Catalog,
+		conns:      d.Conns,
+		execs:      d.Execs,
+		gitcreds:   d.GitCreds,
+		members:    d.Members,
+		models:     d.Models,
+		runs:       d.Runs,
+		siblings:   d.Siblings,
+		users:      d.Users,
+		activeRuns: make(map[uuid.UUID]context.CancelFunc),
 	}
+}
+
+// registerActiveRun stores the cancel func for an in-flight chat
+// goroutine. CancelRun looks up here.
+func (s *Service) registerActiveRun(runID uuid.UUID, cancel context.CancelFunc) {
+	s.activeMu.Lock()
+	s.activeRuns[runID] = cancel
+	s.activeMu.Unlock()
+}
+
+// unregisterActiveRun drops the cancel func once the chat goroutine
+// returns. Safe to call even if CancelRun raced ahead.
+func (s *Service) unregisterActiveRun(runID uuid.UUID) {
+	s.activeMu.Lock()
+	delete(s.activeRuns, runID)
+	s.activeMu.Unlock()
 }
 
 // Logger exposes the package logger for callers that want to surface

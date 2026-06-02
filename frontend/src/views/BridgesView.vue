@@ -1,10 +1,13 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
+import { fromJson } from '@bufbuild/protobuf'
 import { useToast } from 'primevue/usetoast'
 import { useConfirm } from 'primevue/useconfirm'
+import api from '@/api/client'
 import { useBridgesStore } from '@/stores/bridges'
 import { useAgentsStore } from '@/stores/agents'
 import { useAuthStore } from '@/stores/auth'
+import { GetSystemSettingsResponseSchema } from '@/gen/airlock/v1/api_pb'
 
 const store = useBridgesStore()
 const agentsStore = useAgentsStore()
@@ -27,6 +30,25 @@ function canDelete(bridge: { owner?: { id?: string } | null }): boolean {
 
 const dialogVisible = ref(false)
 const form = ref({ name: '', type: 'telegram', token: '', agentId: '' })
+// "System bridge" toggle: admin-only. When on, the backend persists
+// the bridge with is_system=true and agentId is forced empty. Mirrors
+// the backend's authz.TenantBridgeSystem gate.
+const createIsSystem = ref(false)
+// Token-source mode: paste an existing bot token, or initiate the
+// Telegram Managed Bots create-flow (requires the manager bot to be
+// configured in System Settings). The create-new path opens the
+// manager-bot deep link in a new tab; the resulting bridge appears
+// after the next bridges refresh.
+const createTokenSource = ref<'paste' | 'create_new'>('paste')
+// Deep link returned by the Managed Bots session-create endpoint.
+// Surfaced in the dialog after submit so users on iOS browsers that
+// block window.open still have a tappable / copyable fallback.
+const pendingDeepLink = ref<string | null>(null)
+const deepLinkCopied = ref(false)
+// True iff an admin has configured the Telegram manager bot. Without
+// it, the Managed Bots create-flow has no bot to dispatch to, so the
+// "Create new bot via Telegram" radio stays hidden.
+const managerBotConfigured = ref(false)
 // Mirrors the edit dialog so operators see and lock the public-access
 // posture at creation rather than only after a refresh.
 const createAllowPublicDMs = ref(false)
@@ -82,13 +104,22 @@ const bridgeTypes = [
   { label: 'Discord', value: 'discord' },
 ]
 
-onMounted(() => {
+onMounted(async () => {
   store.fetchBridges()
   agentsStore.fetchAgents()
+  try {
+    const { data } = await api.get('/api/v1/settings')
+    const resp = fromJson(GetSystemSettingsResponseSchema, data)
+    managerBotConfigured.value = !!resp.settings?.telegramManagerBotConfigured
+  } catch {
+    managerBotConfigured.value = false
+  }
 })
 
 function openCreate() {
   form.value = { name: '', type: 'telegram', token: '', agentId: '' }
+  pendingDeepLink.value = null
+  deepLinkCopied.value = false
   // Reset to the same defaults the backend would write (DMs off, session
   // mode, 3h TTL, 60s prompt timeout) so the form reflects what we'll
   // send if the operator just hits Create.
@@ -98,25 +129,44 @@ function openCreate() {
   createTTLUnit.value = 'hours'
   createTTLNever.value = false
   createPublicPromptTimeout.value = 60
+  createIsSystem.value = false
+  createTokenSource.value = 'paste'
   dialogVisible.value = true
 }
 
 async function onSubmit() {
   try {
+    // Managed Bots flow: server issues a session + Telegram deep link
+    // the user opens to create a new bot. The new bridge lands on the
+    // next refresh after the manager-bot poller sees the event. We
+    // surface the link inside the dialog (instead of just window.open)
+    // so iOS browsers that block popups still have a tappable
+    // fallback — and we attempt window.open opportunistically.
+    if (createTokenSource.value === 'create_new') {
+      const deepLink = await store.createManagedBotSession({
+        agentId: createIsSystem.value ? undefined : form.value.agentId,
+        isSystem: createIsSystem.value,
+        suggestedName: form.value.name,
+      })
+      pendingDeepLink.value = deepLink
+      window.open(deepLink, '_blank', 'noopener')
+      return
+    }
     // CreateBridgeRequest doesn't carry settings yet (proto), so we
     // create-then-update. The brief window between the two requests
     // doesn't open the bridge to the public because the new default in
     // DefaultBridgeSettings is allowPublicDms=false — and we re-issue
     // the explicit choices immediately.
+    const agentIdField = createIsSystem.value ? '' : form.value.agentId
     const created = await store.createBridge({
       name: form.value.name,
       type: form.value.type,
       token: form.value.token,
-      agentId: form.value.agentId,
+      agentId: agentIdField,
     })
     if (created?.id) {
       await store.updateBridge(created.id, {
-        agentId: form.value.agentId,
+        agentId: agentIdField,
         settings: {
           allowPublicDms: createAllowPublicDMs.value,
           publicSessionTtlSeconds: createTTLNever.value ? 0 : ttlToSeconds(createTTLAmount.value, createTTLUnit.value),
@@ -129,6 +179,17 @@ async function onSubmit() {
     dialogVisible.value = false
   } catch (err: any) {
     toast.add({ severity: 'error', summary: err.response?.data?.error || 'Create failed', life: 5000 })
+  }
+}
+
+async function copyDeepLink() {
+  if (!pendingDeepLink.value) return
+  try {
+    await navigator.clipboard.writeText(pendingDeepLink.value)
+    deepLinkCopied.value = true
+    setTimeout(() => { deepLinkCopied.value = false }, 2000)
+  } catch {
+    toast.add({ severity: 'error', summary: 'Copy failed — long-press the link to copy manually', life: 4000 })
   }
 }
 
@@ -268,7 +329,37 @@ function confirmDelete(bridge: { id: string; name: string }) {
 
     <!-- Create dialog -->
     <Dialog v-model:visible="dialogVisible" header="Add Bridge" modal style="width: 30rem">
-      <div style="display: flex; flex-direction: column; gap: 1rem; padding-top: 0.5rem">
+      <!-- Deep-link panel: shown after the Managed Bots session is
+           created. Big tappable link is the iOS browser fallback for
+           window.open being blocked. -->
+      <div v-if="pendingDeepLink" style="display: flex; flex-direction: column; gap: 1rem; padding-top: 0.5rem">
+        <div style="display: flex; align-items: center; gap: 0.5rem">
+          <i class="pi pi-info-circle" style="color: var(--p-blue-500)" />
+          <span style="font-weight: 600">Open Telegram to finish creating your bot</span>
+        </div>
+        <small style="color: var(--p-text-muted-color)">
+          We tried to open Telegram in a new tab. If that didn't work, tap the link below. The new bridge will appear in the list once the bot is created.
+        </small>
+        <a
+          :href="pendingDeepLink"
+          target="_blank"
+          rel="noopener"
+          style="display: flex; align-items: center; justify-content: center; gap: 0.5rem; padding: 0.75rem 1rem; background: var(--p-primary-color); color: var(--p-primary-contrast-color); border-radius: 6px; text-decoration: none; font-weight: 600"
+        >
+          <i class="pi pi-send" />
+          <span>Open in Telegram</span>
+        </a>
+        <div style="display: flex; gap: 0.5rem; align-items: center">
+          <InputText :value="pendingDeepLink" readonly style="flex: 1; font-size: 0.8rem" />
+          <Button
+            :icon="deepLinkCopied ? 'pi pi-check' : 'pi pi-copy'"
+            :label="deepLinkCopied ? 'Copied' : 'Copy'"
+            severity="secondary"
+            @click="copyDeepLink"
+          />
+        </div>
+      </div>
+      <div v-else style="display: flex; flex-direction: column; gap: 1rem; padding-top: 0.5rem">
         <div style="display: flex; flex-direction: column; gap: 0.25rem">
           <label for="bridgeName">Name</label>
           <InputText id="bridgeName" v-model="form.name" placeholder="My Telegram Bot" />
@@ -277,15 +368,51 @@ function confirmDelete(bridge: { id: string; name: string }) {
           <label for="bridgeType">Type</label>
           <Select id="bridgeType" v-model="form.type" :options="bridgeTypes" optionLabel="label" optionValue="value" style="width: 100%" />
         </div>
-        <div style="display: flex; flex-direction: column; gap: 0.25rem">
+        <!-- Token source: paste an existing bot's token, or kick off
+             the Telegram Managed Bots flow that creates a new bot.
+             Hidden when the manager bot isn't configured — the
+             create-new path has nothing to dispatch to. -->
+        <div v-if="form.type === 'telegram' && managerBotConfigured" style="display: flex; flex-direction: column; gap: 0.5rem">
+          <label>Bot</label>
+          <div style="display: flex; gap: 1rem">
+            <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer">
+              <input type="radio" v-model="createTokenSource" value="paste" />
+              <span>Paste existing token</span>
+            </label>
+            <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer">
+              <input type="radio" v-model="createTokenSource" value="create_new" />
+              <span>Create new bot via Telegram</span>
+            </label>
+          </div>
+          <small style="color: var(--p-text-muted-color)">
+            Create-new opens Telegram with the airlock manager bot to walk through bot creation.
+          </small>
+        </div>
+        <div v-if="createTokenSource === 'paste'" style="display: flex; flex-direction: column; gap: 0.25rem">
           <label for="bridgeToken">Token</label>
           <Password id="bridgeToken" v-model="form.token" :feedback="false" toggleMask />
         </div>
-        <div style="display: flex; flex-direction: column; gap: 0.25rem">
+        <!-- System bridge: admin-only. A system bridge isn't bound to
+             an agent; inbound DMs route to the in-airlock sysagent
+             (operator chat surface). -->
+        <div v-if="auth.isAdmin" style="display: flex; align-items: center; justify-content: space-between; gap: 1rem">
+          <div>
+            <div style="font-weight: 600">System bridge</div>
+            <small style="color: var(--p-text-muted-color)">
+              Routes inbound DMs to the airlock system agent instead of an agent. Admin-only.
+            </small>
+          </div>
+          <ToggleSwitch v-model="createIsSystem" />
+        </div>
+        <div v-if="!createIsSystem" style="display: flex; flex-direction: column; gap: 0.25rem">
           <label for="bridgeAgentId">Agent</label>
           <Select id="bridgeAgentId" v-model="form.agentId" :options="agentsStore.agents" optionLabel="name" optionValue="id" placeholder="Select an agent" style="width: 100%" />
         </div>
 
+        <!-- Public-DM controls are hidden for system bridges: those
+             always require a linked identity, so the public-access
+             toggles have nothing to govern. -->
+        <template v-if="!createIsSystem">
         <!-- Public DMs -->
         <div style="display: flex; flex-direction: column; gap: 0.5rem; border-top: 1px solid var(--p-surface-200); padding-top: 1rem">
           <div style="display: flex; align-items: center; justify-content: space-between; gap: 1rem">
@@ -365,10 +492,16 @@ function confirmDelete(bridge: { id: string; name: string }) {
             />
           </div>
         </div>
+        </template>
       </div>
       <template #footer>
-        <Button label="Cancel" severity="secondary" text @click="dialogVisible = false" />
-        <Button label="Create" @click="onSubmit" />
+        <template v-if="pendingDeepLink">
+          <Button label="Done" @click="dialogVisible = false" />
+        </template>
+        <template v-else>
+          <Button label="Cancel" severity="secondary" text @click="dialogVisible = false" />
+          <Button label="Create" @click="onSubmit" />
+        </template>
       </template>
     </Dialog>
 

@@ -55,16 +55,17 @@ const (
 	AgentModelsUpdate  Action = "agent.models.update"
 
 	// Tenant axis.
-	TenantCatalogView    Action = "tenant.catalog.view"  // read providers/models/capabilities catalog: user+
-	TenantUserView       Action = "tenant.user.view"     // read tenant user directory (id/email/display_name): user+
-	TenantAgentCreate    Action = "tenant.agent.create"  // create an agent: manager+
-	TenantBridgeCreate   Action = "tenant.bridge.create" // any bridge: manager+
-	TenantBridgeSystem   Action = "tenant.bridge.system" // system (agent-less) bridge: admin
-	TenantUserManage     Action = "tenant.user.manage"
-	TenantProviderManage Action = "tenant.provider.manage"
-	TenantSettingsView   Action = "tenant.settings.view" // read system defaults (agent-create prefill): user+
-	TenantSettingsUpdate Action = "tenant.settings.update"
-	TenantIdentityManage Action = "tenant.identity.manage" // link / list / unlink caller's own platform identities: user+
+	TenantCatalogView      Action = "tenant.catalog.view"       // read providers/models/capabilities catalog: user+
+	TenantUserView         Action = "tenant.user.view"          // read tenant user directory (id/email/display_name): user+
+	TenantAgentCreate      Action = "tenant.agent.create"       // create an agent: manager+
+	TenantBridgeCreate     Action = "tenant.bridge.create"      // any bridge: manager+
+	TenantBridgeSystem     Action = "tenant.bridge.system"      // system (agent-less) bridge: admin
+	TenantManagerBotConfig Action = "tenant.manager_bot.config" // configure the Telegram-managed-bots manager bot token: admin
+	TenantUserManage       Action = "tenant.user.manage"
+	TenantProviderManage   Action = "tenant.provider.manage"
+	TenantSettingsView     Action = "tenant.settings.view" // read system defaults (agent-create prefill): user+
+	TenantSettingsUpdate   Action = "tenant.settings.update"
+	TenantIdentityManage   Action = "tenant.identity.manage" // link / list / unlink caller's own platform identities: user+
 )
 
 // policy is the whole permission matrix. Authorize panics on a missing
@@ -92,16 +93,17 @@ var policy = map[Action]Requirement{
 	AgentSiblings:      {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
 	AgentModelsUpdate:  {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
 
-	TenantCatalogView:    {Axis: AxisTenant, Tenant: auth.RoleUser},
-	TenantUserView:       {Axis: AxisTenant, Tenant: auth.RoleUser},
-	TenantAgentCreate:    {Axis: AxisTenant, Tenant: auth.RoleManager},
-	TenantBridgeCreate:   {Axis: AxisTenant, Tenant: auth.RoleManager},
-	TenantBridgeSystem:   {Axis: AxisTenant, Tenant: auth.RoleAdmin},
-	TenantUserManage:     {Axis: AxisTenant, Tenant: auth.RoleAdmin},
-	TenantProviderManage: {Axis: AxisTenant, Tenant: auth.RoleAdmin},
-	TenantSettingsView:   {Axis: AxisTenant, Tenant: auth.RoleUser},
-	TenantSettingsUpdate: {Axis: AxisTenant, Tenant: auth.RoleAdmin},
-	TenantIdentityManage: {Axis: AxisTenant, Tenant: auth.RoleUser},
+	TenantCatalogView:      {Axis: AxisTenant, Tenant: auth.RoleUser},
+	TenantUserView:         {Axis: AxisTenant, Tenant: auth.RoleUser},
+	TenantAgentCreate:      {Axis: AxisTenant, Tenant: auth.RoleManager},
+	TenantBridgeCreate:     {Axis: AxisTenant, Tenant: auth.RoleManager},
+	TenantBridgeSystem:     {Axis: AxisTenant, Tenant: auth.RoleAdmin},
+	TenantManagerBotConfig: {Axis: AxisTenant, Tenant: auth.RoleAdmin},
+	TenantUserManage:       {Axis: AxisTenant, Tenant: auth.RoleAdmin},
+	TenantProviderManage:   {Axis: AxisTenant, Tenant: auth.RoleAdmin},
+	TenantSettingsView:     {Axis: AxisTenant, Tenant: auth.RoleUser},
+	TenantSettingsUpdate:   {Axis: AxisTenant, Tenant: auth.RoleAdmin},
+	TenantIdentityManage:   {Axis: AxisTenant, Tenant: auth.RoleUser},
 }
 
 // RequiredTenantRole returns the minimum tenant role for a tenant-axis

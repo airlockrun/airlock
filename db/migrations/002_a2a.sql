@@ -655,7 +655,119 @@ CREATE TABLE system_audit (
 CREATE INDEX system_audit_user_time_idx ON system_audit(user_id, created_at DESC);
 CREATE INDEX system_audit_tool_time_idx ON system_audit(tool, created_at DESC);
 
+-- bridges.created_by → bridges.owner_id. A bridge's owner can read every
+-- conversation the bridge handles, so when the user is removed from the
+-- tenant their bridges must die with them. The 001 column was created_by
+-- with ON DELETE SET NULL (preserve orphaned rows); rename to owner_id
+-- and switch to CASCADE so the security relationship is explicit.
+ALTER TABLE bridges RENAME COLUMN created_by TO owner_id;
+ALTER TABLE bridges
+    DROP CONSTRAINT bridges_created_by_fkey,
+    ADD CONSTRAINT bridges_owner_id_fkey
+        FOREIGN KEY (owner_id) REFERENCES users(id) ON DELETE CASCADE;
+
+-- bridges.managed marks rows whose token was provisioned by the
+-- Telegram-managed-bots manager-bot flow (vs. pasted in the UI). Used
+-- by the UI to label "auto-created" bridges and to drive any future
+-- managed-only behavior (e.g. replaceManagedBotToken on rotation).
+ALTER TABLE bridges ADD COLUMN managed boolean NOT NULL DEFAULT false;
+
+-- bridges.telegram_bot_user_id — the stable bot user id from Telegram's
+-- getMe.id. ManagedBotUpdated callbacks reference the new bot by user
+-- id; bot_username can change so it isn't a reliable join key. Nullable
+-- because existing token-pasted rows have no value until the next poll
+-- cycle backfills it.
+ALTER TABLE bridges ADD COLUMN telegram_bot_user_id bigint;
+CREATE INDEX bridges_telegram_bot_user_id_idx
+    ON bridges(telegram_bot_user_id)
+    WHERE telegram_bot_user_id IS NOT NULL;
+
+-- system_settings.telegram_manager_bot_token_ref — encrypted ref to the
+-- Telegram bot that has can_manage_bots=true and can create new bots on
+-- behalf of users via KeyboardButtonRequestManagedBot. Empty disables
+-- the "Create new bot" UI affordance. _error carries the last validation
+-- failure (invalid token, can_manage_bots=false, network) so the
+-- settings page can show it inline; empty when healthy.
+ALTER TABLE system_settings
+    ADD COLUMN telegram_manager_bot_token_ref text NOT NULL DEFAULT '',
+    ADD COLUMN telegram_manager_bot_error     text NOT NULL DEFAULT '';
+
+-- system_conversations gains source + bridge_id so a system bridge gets
+-- its own sticky thread per user. Mirrors agent_conversations: one
+-- thread per (user, bridge) for source='bridge', 'web' threads stay
+-- multi-per-user. ON DELETE SET NULL preserves history if the bridge
+-- is deleted.
+ALTER TABLE system_conversations
+    ADD COLUMN source    text NOT NULL DEFAULT 'web',
+    ADD COLUMN bridge_id uuid REFERENCES bridges(id) ON DELETE SET NULL;
+CREATE UNIQUE INDEX system_conversations_user_bridge_idx
+    ON system_conversations(user_id, bridge_id)
+    WHERE bridge_id IS NOT NULL;
+
+-- agent_conversations: existing schema's idx_conversations_bridge_authed
+-- keys authed-bridge rows on (agent_id, user_id, source, external_id).
+-- Two bridges that DM the same Telegram user end up with the same
+-- external_id (the bot-user chat id) and collide into one thread. Fix
+-- by adding bridge_id to the key so each bridge owns its own thread.
+-- Also relax bridge_id FK to SET NULL so deleting a bridge preserves
+-- the conversation history (same rationale as system_conversations).
+-- 'web' and 'a2a' rows are intentionally non-unique today and stay so.
+ALTER TABLE agent_conversations
+    DROP CONSTRAINT agent_conversations_bridge_id_fkey,
+    ADD CONSTRAINT agent_conversations_bridge_id_fkey
+        FOREIGN KEY (bridge_id) REFERENCES bridges(id) ON DELETE SET NULL;
+DROP INDEX IF EXISTS idx_conversations_bridge_authed;
+CREATE UNIQUE INDEX idx_conversations_bridge_authed
+    ON agent_conversations (agent_id, user_id, source, external_id, bridge_id)
+    WHERE user_id IS NOT NULL AND external_id IS NOT NULL;
+
+-- managed_bot_sessions correlates an airlock "Create new bot" click to
+-- the eventual Telegram ManagedBotCreated callback. owner_id is the
+-- airlock user who initiated the flow; agent_id (XOR is_system) is the
+-- binding target. nonce is the URL-safe correlation token embedded in
+-- the manager-bot deep link and propagated through the keyboard
+-- request's suggested_username field. The /start handler refuses
+-- requests where from.id isn't linked or doesn't match session.owner_id,
+-- so ManagedBotCreated only ever fires for the right user — no
+-- orphaned-token recovery path needed.
+CREATE TABLE managed_bot_sessions (
+    id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    owner_id   uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    agent_id   uuid REFERENCES agents(id) ON DELETE CASCADE,
+    is_system  boolean NOT NULL,
+    nonce      text NOT NULL UNIQUE,
+    expires_at timestamptz NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    CHECK ((is_system AND agent_id IS NULL) OR (NOT is_system AND agent_id IS NOT NULL))
+);
+CREATE INDEX managed_bot_sessions_owner_idx ON managed_bot_sessions(owner_id);
+
 -- +goose Down
+DROP INDEX IF EXISTS managed_bot_sessions_owner_idx;
+DROP TABLE IF EXISTS managed_bot_sessions;
+DROP INDEX IF EXISTS idx_conversations_bridge_authed;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_conversations_bridge_authed
+    ON agent_conversations (agent_id, user_id, source, external_id)
+    WHERE user_id IS NOT NULL AND external_id IS NOT NULL;
+ALTER TABLE agent_conversations
+    DROP CONSTRAINT IF EXISTS agent_conversations_bridge_id_fkey,
+    ADD CONSTRAINT agent_conversations_bridge_id_fkey
+        FOREIGN KEY (bridge_id) REFERENCES bridges(id) ON DELETE CASCADE;
+DROP INDEX IF EXISTS system_conversations_user_bridge_idx;
+ALTER TABLE system_conversations
+    DROP COLUMN IF EXISTS bridge_id,
+    DROP COLUMN IF EXISTS source;
+ALTER TABLE system_settings
+    DROP COLUMN IF EXISTS telegram_manager_bot_error,
+    DROP COLUMN IF EXISTS telegram_manager_bot_token_ref;
+DROP INDEX IF EXISTS bridges_telegram_bot_user_id_idx;
+ALTER TABLE bridges DROP COLUMN IF EXISTS telegram_bot_user_id;
+ALTER TABLE bridges DROP COLUMN IF EXISTS managed;
+ALTER TABLE bridges
+    DROP CONSTRAINT IF EXISTS bridges_owner_id_fkey,
+    ADD CONSTRAINT bridges_created_by_fkey
+        FOREIGN KEY (owner_id) REFERENCES users(id) ON DELETE SET NULL;
+ALTER TABLE bridges RENAME COLUMN owner_id TO created_by;
 DROP INDEX IF EXISTS system_runs_conversation_idx;
 DROP TABLE IF EXISTS system_runs;
 ALTER TABLE system_conversations DROP CONSTRAINT IF EXISTS system_conversations_checkpoint_fk;

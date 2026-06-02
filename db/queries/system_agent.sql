@@ -58,6 +58,49 @@ WHERE id = @id;
 -- name: DeleteSystemConversation :exec
 DELETE FROM system_conversations WHERE id = @id AND user_id = @user_id;
 
+-- name: EnsureSystemConversationForBridge :one
+-- Upsert one sticky thread per (user, bridge) on the partial unique
+-- index (user_id, bridge_id) WHERE bridge_id IS NOT NULL — every system
+-- bridge funnels that user's inbound DMs into the same row. The first
+-- INSERT for a pair returns the new row; subsequent calls hit the
+-- conflict and return the existing one via the no-op ON CONFLICT
+-- update of bridge_id (which leaves the value unchanged).
+INSERT INTO system_conversations (user_id, bridge_id, source, title)
+VALUES (@user_id, @bridge_id, 'bridge', @title)
+ON CONFLICT (user_id, bridge_id) WHERE bridge_id IS NOT NULL
+DO UPDATE SET bridge_id = EXCLUDED.bridge_id
+RETURNING *;
+
+-- name: UpdateSystemConversationSettings :exec
+-- JSONB shallow merge: caller passes a patch with only the keys to
+-- overwrite; existing keys not in the patch survive. Used by /echo to
+-- flip the echo setting without touching anything else.
+UPDATE system_conversations
+SET settings = settings || @patch::jsonb,
+    updated_at = now()
+WHERE id = @id;
+
+-- name: GetLatestRunningSystemRun :one
+-- /cancel target: the most recent run on this conversation that hasn't
+-- terminated yet. Both 'running' and 'suspended' are cancellable —
+-- suspended runs that the user cancels via /cancel rather than via the
+-- confirmation dialog still need to be torn down.
+SELECT id FROM system_runs
+WHERE conversation_id = @conversation_id
+  AND status IN ('running', 'suspended')
+ORDER BY started_at DESC
+LIMIT 1;
+
+-- name: GetLatestSuspendedSystemRun :one
+-- /clear target: a suspended run on this conversation belongs to the
+-- pending-confirmation UI; once the context is cleared the dialog is
+-- meaningless, so we cancel the run alongside the checkpoint advance.
+SELECT id FROM system_runs
+WHERE conversation_id = @conversation_id
+  AND status = 'suspended'
+ORDER BY started_at DESC
+LIMIT 1;
+
 
 -- name: AppendSystemMessage :one
 -- Mirrors agent_messages' (content, parts) split: content is the

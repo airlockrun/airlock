@@ -25,7 +25,10 @@ import {
   UpdateSystemSettingsResponseSchema,
 } from '@/gen/airlock/v1/api_pb'
 import type { SystemSettingsInfo } from '@/gen/airlock/v1/types_pb'
-import { SystemSettingsInfoSchema } from '@/gen/airlock/v1/types_pb'
+import {
+  SystemSettingsInfoSchema,
+  UpdateTelegramManagerBotResponseSchema,
+} from '@/gen/airlock/v1/types_pb'
 
 const auth = useAuthStore()
 const catalog = useCatalogStore()
@@ -122,6 +125,7 @@ function applySettings(info: SystemSettingsInfo) {
       ? packModelValue(providerRowID, modelName)
       : ''
   }
+  applyManagerBotStatus(info)
 }
 
 onMounted(async () => {
@@ -272,6 +276,43 @@ async function saveDefaults() {
   }
 }
 
+// Telegram Manager Bot (admin only). Holds the editor state for the
+// token input plus the live status the backend reports (resolved
+// username from getMe + last validation error). The raw token never
+// comes back from the API — only the configured flag.
+const managerBotToken = ref('')
+const managerBotConfigured = ref(false)
+const managerBotUsername = ref('')
+const managerBotError = ref('')
+const managerBotSaving = ref(false)
+
+function applyManagerBotStatus(info: SystemSettingsInfo) {
+  managerBotConfigured.value = !!info.telegramManagerBotConfigured
+  managerBotUsername.value = info.telegramManagerBotUsername || ''
+  managerBotError.value = info.telegramManagerBotError || ''
+}
+
+async function saveManagerBot() {
+  managerBotSaving.value = true
+  try {
+    const { data } = await api.put('/api/v1/settings/telegram-manager-bot', { token: managerBotToken.value })
+    const resp = fromJson(UpdateTelegramManagerBotResponseSchema, data)
+    managerBotConfigured.value = resp.configured
+    managerBotUsername.value = resp.username || ''
+    managerBotError.value = resp.error || ''
+    managerBotToken.value = ''
+    if (resp.configured) {
+      toast.add({ severity: 'success', summary: `Connected as @${resp.username}`, life: 3000 })
+    } else {
+      toast.add({ severity: 'success', summary: 'Manager bot disabled', life: 3000 })
+    }
+  } catch (err: any) {
+    toast.add({ severity: 'error', summary: err?.response?.data?.error || 'Save failed', life: 5000 })
+  } finally {
+    managerBotSaving.value = false
+  }
+}
+
 async function changePassword() {
   if (!currentPassword.value || !newPassword.value || !confirmPassword.value) {
     toast.add({ severity: 'error', summary: 'All fields are required', life: 3000 })
@@ -361,6 +402,35 @@ async function changePassword() {
             <small style="color: var(--p-text-muted-color)">{{ row.help }}</small>
           </div>
           <Button label="Save" :loading="defaultsLoading" @click="saveDefaults" style="align-self: flex-start" />
+        </div>
+      </template>
+    </Card>
+
+    <!-- Telegram Manager Bot (admin only) -->
+    <Card v-if="auth.isAdmin" style="margin-bottom: 1.5rem">
+      <template #title>Telegram Manager Bot</template>
+      <template #subtitle>
+        Used for the "Create new bot via Telegram" flow on the Bridges page. Configure a Telegram bot that has <code>can_manage_bots</code> enabled in BotFather and paste its token here.
+      </template>
+      <template #content>
+        <div style="display: flex; flex-direction: column; gap: 0.75rem">
+          <div v-if="managerBotConfigured" style="display: flex; align-items: center; gap: 0.5rem">
+            <i class="pi pi-check-circle" style="color: var(--p-green-500)" />
+            <span>Connected as <strong>@{{ managerBotUsername || 'unknown' }}</strong></span>
+          </div>
+          <div v-else-if="managerBotError" style="display: flex; align-items: center; gap: 0.5rem">
+            <i class="pi pi-times-circle" style="color: var(--p-red-500)" />
+            <span style="color: var(--p-red-500)">{{ managerBotError }}</span>
+          </div>
+          <div v-else style="color: var(--p-text-muted-color)">
+            Not configured.
+          </div>
+          <label for="managerBotToken">Bot token</label>
+          <Password id="managerBotToken" v-model="managerBotToken" :feedback="false" toggleMask placeholder="Paste a new token to replace, or leave empty to disable" />
+          <div style="display: flex; gap: 0.5rem; align-items: center">
+            <Button label="Save" :loading="managerBotSaving" @click="saveManagerBot" />
+            <small style="color: var(--p-text-muted-color)">Empty token disables the feature.</small>
+          </div>
         </div>
       </template>
     </Card>
