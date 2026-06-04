@@ -1,6 +1,41 @@
 package sysagent
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/airlockrun/airlock/auth"
+	"github.com/airlockrun/airlock/authz"
+	"github.com/google/uuid"
+)
+
+// TestBuildToolSetTenantFilter guards the role→tool-filter contract: a
+// manager/admin sees the tenant-axis tools (create_agent, create/delete
+// bridge), a plain user does not. Regression for the Telegram sysagent path
+// that built the principal with an empty tenant role, silently hiding every
+// tenant-axis tool.
+func TestBuildToolSetTenantFilter(t *testing.T) {
+	s := &Service{}
+	mgr := s.buildToolSet(authz.UserPrincipal(uuid.New(), auth.RoleManager))
+	usr := s.buildToolSet(authz.UserPrincipal(uuid.New(), auth.RoleUser))
+
+	for _, name := range []string{"create_agent", "update_bridge", "delete_bridge"} {
+		if _, ok := mgr[name]; !ok {
+			t.Errorf("manager should see tenant-axis tool %q", name)
+		}
+		if _, ok := usr[name]; ok {
+			t.Errorf("plain user must NOT see tenant-axis tool %q", name)
+		}
+	}
+	// An ungated / agent-axis tool is present for both.
+	if _, ok := usr["list_agents"]; !ok {
+		t.Error("user should still see list_agents")
+	}
+	// An empty role (the bug) hides every tenant-axis tool.
+	none := s.buildToolSet(authz.UserPrincipal(uuid.New(), ""))
+	if _, ok := none["create_agent"]; ok {
+		t.Error("empty-role principal should not see create_agent (documents the bug)")
+	}
+}
 
 // TestIsDestructiveTool — every mutating tool must be in the destructive
 // set so the gated executor routes it through Sol's PermissionManager;

@@ -2,9 +2,11 @@ package trigger
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/airlockrun/agentsdk"
+	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/authz"
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/airlockrun/goai/message"
@@ -159,7 +161,14 @@ func (m *BridgeManager) handleSystemBridgeEvent(ctx context.Context, br dbq.Brid
 		return m.handleAuthCommand(ctx, br, driver, event)
 	}
 	userID := pgUUID(identity.UserID)
-	p := authz.UserPrincipal(userID, "")
+	// Resolve the tenant role so the sysagent tool filter (buildToolSet)
+	// admits tenant-axis tools (create_agent, …) for managers/admins. The
+	// identity FK guarantees the user row exists — a miss is a real error.
+	user, err := q.GetUserByID(ctx, identity.UserID)
+	if err != nil {
+		return fmt.Errorf("system bridge: resolve user tenant role: %w", err)
+	}
+	p := authz.UserPrincipal(userID, auth.Role(user.TenantRole))
 
 	// Files handling. System bridges only accept voice messages — any
 	// non-voice attachment is rejected with a clear message; voice
