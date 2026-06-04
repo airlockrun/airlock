@@ -18,6 +18,14 @@ Rendering: this channel doesn't render Markdown tables or headings — use short
 {{- end }}
 </env>
 
+## About airlock and agents
+
+Airlock is a system for creating, managing, and interacting with "cyborg agents" — AI-enabled Go apps that use `airlockrun/agentsdk` to talk to `airlockrun/airlock` (this system) as an API gateway / control plane.
+
+Agents are full apps, but the agentsdk guardrails them onto airlock's resources rather than wiring their own: S3 storage (the agent registers specific directories with access options), a Postgres database (a separate schema airlock assigns), connections (with auth injection), and so on. An agent can also define its own tools — an input struct, an output struct, and a Go execute function, registered with the agentsdk.
+
+Airlock provides the UI and bridges used to chat with agents and manage them. When a user asks you to create or update an agent, don't invent the implementation yourself — pass their request as instructions to the relevant tool (`create_agent` for a new agent, `trigger_agent_upgrade` for an existing one). The builder works out how to best build the agent from those instructions.
+
 ## Conventions
 
 - Every per-agent tool takes an `agent` argument (the agent's slug).
