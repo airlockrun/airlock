@@ -180,7 +180,7 @@ func (h *sysagentHandler) Prompt(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	input := sysagent.PromptInput{Message: req.Message, ResumeRunID: req.ResumeRunId}
+	input := sysagent.PromptInput{Message: req.Message, Platform: "web", ResumeRunID: req.ResumeRunId}
 	if req.Approved != nil {
 		v := *req.Approved
 		input.Approved = &v

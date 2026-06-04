@@ -230,7 +230,7 @@ func (m *BridgeManager) handleSystemBridgeEvent(ctx context.Context, br dbq.Brid
 			_, driverErr = driver.SendStream(ctx, br, event.ExternalID, ResolveEcho(conv.Settings, driver.DefaultEcho()), respEvents)
 			close(driverDone)
 		}()
-		_, rerr := m.sysagent.RunPromptInline(ctx, p, conversationID, "", &approved, resumeRunID, sink, sink.setRunID)
+		_, rerr := m.sysagent.RunPromptInline(ctx, p, conversationID, "", br.Type, &approved, resumeRunID, sink, sink.setRunID)
 		close(respEvents)
 		<-driverDone
 		if tg, ok := driver.(*TelegramDriver); ok && event.Callback.AckID != "" {
@@ -294,7 +294,7 @@ func (m *BridgeManager) handleSystemBridgeEvent(ctx context.Context, br dbq.Brid
 	// suspended, or cancelled). We close respEvents on return so
 	// SendStream sees EOF and exits; the per-bridge poller pulls the
 	// next inbound DM only after we return — natural serialization.
-	_, err = m.sysagent.RunPromptInline(ctx, p, conversationID, event.Text, nil, "", sink, sink.setRunID)
+	_, err = m.sysagent.RunPromptInline(ctx, p, conversationID, event.Text, br.Type, nil, "", sink, sink.setRunID)
 	close(respEvents)
 	<-driverDone
 	if driverErr != nil {

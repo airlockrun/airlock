@@ -31,7 +31,7 @@ type SysagentRuntime interface {
 		ctx context.Context,
 		p authz.Principal,
 		conversationID uuid.UUID,
-		text string,
+		text, platform string,
 		approved *bool,
 		resumeRunID string,
 		sink eventstream.Sink,

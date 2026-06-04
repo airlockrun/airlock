@@ -67,9 +67,11 @@ func (s *Service) Compact(ctx context.Context, p authz.Principal, conversationID
 	store := newSessionStore(s.db, conversationID)
 
 	solAgent := &agent.Agent{
-		Name:         "sysagent",
-		Model:        providerID + "/" + modelName,
-		SystemPrompt: SystemPrompt(tools),
+		Name:  "sysagent",
+		Model: providerID + "/" + modelName,
+		// Compaction summarizes history; there's no live channel, so <env>
+		// carries only the date + (resolved) user, no platform.
+		SystemPrompt: SystemPrompt(s.envFor(ctx, p.UserID, "", conversationID), tools),
 		Tools:        tools,
 		MaxSteps:     1,
 	}

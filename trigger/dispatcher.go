@@ -329,6 +329,11 @@ func (d *Dispatcher) ForwardPrompt(ctx context.Context, agentID uuid.UUID, input
 	}
 	input.VisibleSiblings = visible
 
+	// Per-turn <env> context: state the channel explicitly (web or the
+	// bridge's platform), and resolve the originating user. Fail-soft.
+	input.Platform = d.resolvePlatform(ctx, bridgeID)
+	input.UserDisplayName, input.UserEmail = d.resolveUserEnv(ctx, userID)
+
 	payload, err := json.Marshal(input)
 	if err != nil {
 		return nil, uuid.Nil, fmt.Errorf("marshal prompt input: %w", err)
@@ -375,6 +380,10 @@ func (d *Dispatcher) ForwardA2APrompt(ctx context.Context, agentID uuid.UUID, pa
 	}
 	input.VisibleSiblings = visible
 	input.CallerAccess = callerAccess
+
+	// A2A runs deliver to the calling agent, not a human channel.
+	input.Platform = "a2a"
+	input.UserDisplayName, input.UserEmail = d.resolveUserEnv(ctx, userID)
 
 	payload, err := json.Marshal(input)
 	if err != nil {
@@ -569,6 +578,39 @@ func (d *Dispatcher) forward(ctx context.Context, agentID uuid.UUID, c *containe
 }
 
 // --- helpers ---
+
+// resolvePlatform returns the channel name for the <env> block: "web" when
+// there's no bridge, else the bridge's platform type (telegram/discord).
+// Fail-soft — a lookup miss logs and returns "" (the line is then omitted)
+// rather than guessing.
+func (d *Dispatcher) resolvePlatform(ctx context.Context, bridgeID *uuid.UUID) string {
+	if bridgeID == nil {
+		return "web"
+	}
+	q := dbq.New(d.db.Pool())
+	b, err := q.GetBridgeByID(ctx, toPgUUID(*bridgeID))
+	if err != nil {
+		d.logger.Warn("env: resolve bridge platform failed", zap.String("bridge_id", bridgeID.String()), zap.Error(err))
+		return ""
+	}
+	return b.Type
+}
+
+// resolveUserEnv returns the originating user's display name + email for the
+// <env> block. Fail-soft — no user, or a lookup miss, yields empty strings
+// (the User line is then omitted).
+func (d *Dispatcher) resolveUserEnv(ctx context.Context, userID *uuid.UUID) (name, email string) {
+	if userID == nil || *userID == uuid.Nil {
+		return "", ""
+	}
+	q := dbq.New(d.db.Pool())
+	u, err := q.GetUserByID(ctx, toPgUUID(*userID))
+	if err != nil {
+		d.logger.Warn("env: resolve user failed", zap.String("user_id", userID.String()), zap.Error(err))
+		return "", ""
+	}
+	return u.DisplayName, u.Email
+}
 
 func toPgUUID(u uuid.UUID) pgtype.UUID {
 	return pgtype.UUID{Bytes: u, Valid: true}

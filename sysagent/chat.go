@@ -35,7 +35,10 @@ import (
 //   - Both empty = auto-resume after an injected system event (see
 //     Service.resumeConversation).
 type PromptInput struct {
-	Message  string
+	Message string
+	// Platform is the channel for the <env> block ("web"/"telegram"), set
+	// explicitly by the caller — never inferred. Empty omits the line.
+	Platform string
 	Approved *bool
 	// ResumeRunID, when set on an approve/deny, names the run whose
 	// confirmation is being resolved. RunPrompt waits for that run to suspend
@@ -144,8 +147,8 @@ func (s *Service) RunPrompt(ctx context.Context, p authz.Principal, conversation
 // is bypassed entirely; only the bridge sees events. Returns once
 // the chat loop exits — RunCompleted / RunFailed / RunSuspended /
 // RunCancelled all reach this.
-func (s *Service) RunPromptInline(ctx context.Context, p authz.Principal, conversationID uuid.UUID, text string, approved *bool, resumeRunID string, extraSink eventstream.Sink, onStart func(runID uuid.UUID)) (uuid.UUID, error) {
-	input := PromptInput{Message: text, Approved: approved, ResumeRunID: resumeRunID}
+func (s *Service) RunPromptInline(ctx context.Context, p authz.Principal, conversationID uuid.UUID, text, platform string, approved *bool, resumeRunID string, extraSink eventstream.Sink, onStart func(runID uuid.UUID)) (uuid.UUID, error) {
+	input := PromptInput{Message: text, Platform: platform, Approved: approved, ResumeRunID: resumeRunID}
 	runID, conversation, err := s.startRun(ctx, p, conversationID, input)
 	if err != nil {
 		return uuid.Nil, err
@@ -165,6 +168,26 @@ func (s *Service) RunPromptInline(ctx context.Context, p authz.Principal, conver
 	defer cancel()
 	s.runChat(runCtx, p, conversation, runID, input, extraSink)
 	return runID, nil
+}
+
+// envFor builds the per-turn <env> context for a sysagent run. Platform is
+// passed in explicitly (never inferred); the user is resolved fail-soft — a
+// lookup miss just omits the User line rather than blocking the run.
+func (s *Service) envFor(ctx context.Context, userID uuid.UUID, platform string, conversationID uuid.UUID) promptEnv {
+	env := promptEnv{
+		Date:         time.Now().Format("2006-01-02"),
+		Platform:     platform,
+		Conversation: conversationID.String(),
+	}
+	if userID != uuid.Nil {
+		q := dbq.New(s.db.Pool())
+		if u, err := q.GetUserByID(ctx, pgtype.UUID{Bytes: userID, Valid: true}); err == nil {
+			env.UserName, env.UserEmail = u.DisplayName, u.Email
+		} else {
+			s.logger.Warn("sysagent env: resolve user failed", zap.String("user_id", userID.String()), zap.Error(err))
+		}
+	}
+	return env
 }
 
 // startRun is the shared prep used by RunPrompt and RunPromptInline:
@@ -275,7 +298,7 @@ func (s *Service) runChat(ctx context.Context, p authz.Principal, conversation d
 	solAgent := &agent.Agent{
 		Name:         "sysagent",
 		Model:        providerID + "/" + modelName,
-		SystemPrompt: SystemPrompt(tools),
+		SystemPrompt: SystemPrompt(s.envFor(ctx, p.UserID, input.Platform, conversationID), tools),
 		Tools:        tools,
 		MaxSteps:     25,
 	}
