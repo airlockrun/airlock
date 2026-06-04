@@ -93,6 +93,42 @@ func TestPutGetDeleteRoundTrip(t *testing.T) {
 	}
 }
 
+func TestGetObjectRange(t *testing.T) {
+	client := newTestClient(t)
+	ctx := context.Background()
+	key := "test/range-" + uuid.New().String() + ".txt"
+	content := "0123456789ABCDEF"
+
+	if err := client.PutObject(ctx, key, bytes.NewReader([]byte(content)), int64(len(content))); err != nil {
+		t.Fatalf("PutObject: %v", err)
+	}
+	defer client.DeleteObject(ctx, key)
+
+	cases := []struct {
+		start, end int64
+		want       string
+	}{
+		{0, 4, "01234"},
+		{5, 9, "56789"},
+		{10, 15, "ABCDEF"},
+		{0, 0, "0"},
+	}
+	for _, c := range cases {
+		reader, err := client.GetObjectRange(ctx, key, c.start, c.end)
+		if err != nil {
+			t.Fatalf("GetObjectRange(%d,%d): %v", c.start, c.end, err)
+		}
+		got, err := io.ReadAll(reader)
+		reader.Close()
+		if err != nil {
+			t.Fatalf("ReadAll: %v", err)
+		}
+		if string(got) != c.want {
+			t.Fatalf("GetObjectRange(%d,%d) = %q, want %q", c.start, c.end, got, c.want)
+		}
+	}
+}
+
 func TestCopyObject(t *testing.T) {
 	client := newTestClient(t)
 	ctx := context.Background()

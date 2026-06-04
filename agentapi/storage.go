@@ -1,8 +1,10 @@
 package agentapi
 
 import (
+	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -87,6 +89,12 @@ func (h *Handler) StorageLoad(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusBadRequest, "invalid path: "+err.Error())
 		return
 	}
+
+	if rangeHeader := r.Header.Get("Range"); rangeHeader != "" {
+		h.serveRange(w, r, s3Key, rangeHeader)
+		return
+	}
+
 	reader, err := h.s3.GetObject(r.Context(), s3Key)
 	if err != nil {
 		writeJSONError(w, http.StatusNotFound, "object not found")
@@ -96,6 +104,84 @@ func (h *Handler) StorageLoad(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/octet-stream")
 	io.Copy(w, reader)
+}
+
+// serveRange answers a ranged GET with 206 Partial Content. It heads the
+// object for its size (needed to clamp the range and set Content-Range),
+// then streams the ranged body. A malformed or unsatisfiable range gets a
+// 416 with `Content-Range: bytes */<size>`.
+func (h *Handler) serveRange(w http.ResponseWriter, r *http.Request, s3Key, rangeHeader string) {
+	info, _, err := h.s3.HeadObject(r.Context(), s3Key)
+	if err != nil {
+		writeJSONError(w, http.StatusNotFound, "object not found")
+		return
+	}
+	start, end, ok := parseByteRange(rangeHeader, info.Size)
+	if !ok {
+		w.Header().Set("Content-Range", fmt.Sprintf("bytes */%d", info.Size))
+		writeJSONError(w, http.StatusRequestedRangeNotSatisfiable, "invalid range")
+		return
+	}
+	reader, err := h.s3.GetObjectRange(r.Context(), s3Key, start, end)
+	if err != nil {
+		writeJSONError(w, http.StatusNotFound, "object not found")
+		return
+	}
+	defer reader.Close()
+
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Accept-Ranges", "bytes")
+	w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, info.Size))
+	w.Header().Set("Content-Length", strconv.FormatInt(end-start+1, 10))
+	w.WriteHeader(http.StatusPartialContent)
+	io.Copy(w, reader)
+}
+
+// parseByteRange parses a single-range HTTP `Range` header ("bytes=start-end",
+// "bytes=start-", or suffix "bytes=-N") against the object size. Returns the
+// inclusive [start, end] clamped to the object, ok=false on a malformed,
+// multi-range, or unsatisfiable spec.
+func parseByteRange(header string, size int64) (start, end int64, ok bool) {
+	const prefix = "bytes="
+	if !strings.HasPrefix(header, prefix) {
+		return 0, 0, false
+	}
+	spec := strings.TrimPrefix(header, prefix)
+	if strings.Contains(spec, ",") {
+		return 0, 0, false // multi-range not supported
+	}
+	dash := strings.IndexByte(spec, '-')
+	if dash < 0 {
+		return 0, 0, false
+	}
+	startStr, endStr := spec[:dash], spec[dash+1:]
+	if startStr == "" {
+		// Suffix form "bytes=-N" → last N bytes.
+		n, err := strconv.ParseInt(endStr, 10, 64)
+		if err != nil || n <= 0 || size == 0 {
+			return 0, 0, false
+		}
+		if n > size {
+			n = size
+		}
+		return size - n, size - 1, true
+	}
+	start, err := strconv.ParseInt(startStr, 10, 64)
+	if err != nil || start < 0 || start >= size {
+		return 0, 0, false
+	}
+	if endStr == "" {
+		end = size - 1
+	} else {
+		end, err = strconv.ParseInt(endStr, 10, 64)
+		if err != nil || end < start {
+			return 0, 0, false
+		}
+	}
+	if end >= size {
+		end = size - 1
+	}
+	return start, end, true
 }
 
 // StorageDelete handles DELETE /api/agent/storage/*.

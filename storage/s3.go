@@ -193,6 +193,21 @@ func (c *S3Client) GetObject(ctx context.Context, key string) (io.ReadCloser, er
 	return out.Body, nil
 }
 
+// GetObjectRange returns a reader for the inclusive byte range [start, end]
+// (HTTP Range semantics) of the object at key. Caller must close the reader.
+func (c *S3Client) GetObjectRange(ctx context.Context, key string, start, end int64) (io.ReadCloser, error) {
+	rng := fmt.Sprintf("bytes=%d-%d", start, end)
+	out, err := c.client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: &c.bucket,
+		Key:    &key,
+		Range:  &rng,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out.Body, nil
+}
+
 // HeadObject returns metadata for the object at the given key.
 func (c *S3Client) HeadObject(ctx context.Context, key string) (ObjectInfo, string, error) {
 	out, err := c.client.HeadObject(ctx, &s3.HeadObjectInput{
