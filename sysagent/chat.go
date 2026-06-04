@@ -144,11 +144,20 @@ func (s *Service) RunPrompt(ctx context.Context, p authz.Principal, conversation
 // is bypassed entirely; only the bridge sees events. Returns once
 // the chat loop exits — RunCompleted / RunFailed / RunSuspended /
 // RunCancelled all reach this.
-func (s *Service) RunPromptInline(ctx context.Context, p authz.Principal, conversationID uuid.UUID, text string, approved *bool, resumeRunID string, extraSink eventstream.Sink) (uuid.UUID, error) {
+func (s *Service) RunPromptInline(ctx context.Context, p authz.Principal, conversationID uuid.UUID, text string, approved *bool, resumeRunID string, extraSink eventstream.Sink, onStart func(runID uuid.UUID)) (uuid.UUID, error) {
 	input := PromptInput{Message: text, Approved: approved, ResumeRunID: resumeRunID}
 	runID, conversation, err := s.startRun(ctx, p, conversationID, input)
 	if err != nil {
 		return uuid.Nil, err
+	}
+	// Fire the start callback before the chat loop attaches to the bus
+	// so the extra sink can learn the runID up-front. Without this the
+	// first event (typically OnPermissionAsked for a destructive tool)
+	// would carry an empty RunID — confirmation buttons in the bridge
+	// would render with `approve:` / `deny:` callback_data containing
+	// no UUID and the tap would silently drop on the way back.
+	if onStart != nil {
+		onStart(runID)
 	}
 	runCtx, cancel := context.WithCancel(ctx)
 	s.registerActiveRun(runID, cancel)
@@ -404,9 +413,16 @@ func (s *Service) dispatchResume(ctx context.Context, runner *sol.Runner, tools 
 	}
 	s.clearSuspension(ctx, uuid.UUID(conversation.ID.Bytes))
 
-	// Continue("") = no new user message, just let the LLM see the
-	// updated history (with the new tool results) and react.
-	return runner.Continue(ctx, "")
+	// Run("") on a fresh Runner loads history from the SessionStore
+	// (which now includes the synthetic tool-result messages we just
+	// appended), prepends the system prompt, and steps the LLM with
+	// no new user message — exactly the resume semantics we want.
+	// sol.Runner.Continue would be the moral equivalent but it
+	// requires Run to have populated r.session first; on a fresh
+	// per-turn Runner (sysagent has no per-process run-state) that
+	// pre-condition isn't met and Continue panics with
+	// "Continue called before Run".
+	return runner.Run(ctx, "")
 }
 
 // resolvePendingToolCalls is sysagent's tailored counterpart to

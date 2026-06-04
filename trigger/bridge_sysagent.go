@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 
+	"github.com/airlockrun/agentsdk"
 	"github.com/airlockrun/airlock/authz"
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/airlockrun/goai/message"
@@ -229,7 +230,7 @@ func (m *BridgeManager) handleSystemBridgeEvent(ctx context.Context, br dbq.Brid
 			_, driverErr = driver.SendStream(ctx, br, event.ExternalID, ResolveEcho(conv.Settings, driver.DefaultEcho()), respEvents)
 			close(driverDone)
 		}()
-		_, rerr := m.sysagent.RunPromptInline(ctx, p, conversationID, "", &approved, resumeRunID, sink)
+		_, rerr := m.sysagent.RunPromptInline(ctx, p, conversationID, "", &approved, resumeRunID, sink, sink.setRunID)
 		close(respEvents)
 		<-driverDone
 		if tg, ok := driver.(*TelegramDriver); ok && event.Callback.AckID != "" {
@@ -244,18 +245,31 @@ func (m *BridgeManager) handleSystemBridgeEvent(ctx context.Context, br dbq.Brid
 				zap.String("bridge", br.Name), zap.Error(driverErr))
 		}
 		if rerr != nil {
+			m.logger.Error("system bridge confirmation resume failed",
+				zap.String("bridge", br.Name),
+				zap.String("run_id", resumeRunID),
+				zap.Bool("approved", approved),
+				zap.Error(rerr))
 			sendOneShot(ctx, driver, br, event.ExternalID, "Confirmation failed: "+rerr.Error())
 		}
 		return nil
 	}
 
-	// Resolved access for slash-command gating. Sysagent has no per-agent
-	// axis; reading EffectiveAgentAccess against uuid.Nil collapses to
-	// AccessUser for any authenticated caller.
-	access := p.EffectiveAgentAccess(ctx, q, uuid.Nil)
+	// Resolved access for slash-command gating. Sysagent has no
+	// per-agent axis (no agent_members row to look up against), so
+	// EffectiveAgentAccess against uuid.Nil would wrongly collapse to
+	// AccessPublic and refuse user-level commands like /clear. The
+	// strict identity gate at the top of this handler already proved
+	// the caller is a linked airlock user, so AccessUser is the
+	// correct floor here.
+	access := agentsdk.AccessUser
 
 	slashConv := NewSysagentSlashConv(m.sysagent, q, p, m.logger)
 	if cmd, scerr := TrySlashCommand(ctx, slashConv, convPg, access, event.Text); scerr != nil {
+		m.logger.Error("system bridge slash command failed",
+			zap.String("bridge", br.Name),
+			zap.String("command", event.Text),
+			zap.Error(scerr))
 		sendOneShot(ctx, driver, br, event.ExternalID, "Slash command failed: "+scerr.Error())
 		return nil
 	} else if cmd.Handled {
@@ -280,14 +294,7 @@ func (m *BridgeManager) handleSystemBridgeEvent(ctx context.Context, br dbq.Brid
 	// suspended, or cancelled). We close respEvents on return so
 	// SendStream sees EOF and exits; the per-bridge poller pulls the
 	// next inbound DM only after we return — natural serialization.
-	runID, err := m.sysagent.RunPromptInline(ctx, p, conversationID, event.Text, nil, "", sink)
-	if err == nil {
-		// runID is known only after startRun; backfill it on the sink so
-		// any pending events were already tagged. (Events fired before
-		// this line carry empty RunID, which the driver tolerates —
-		// non-streaming text-delta still renders without a run_id.)
-		sink.setRunID(runID)
-	}
+	_, err = m.sysagent.RunPromptInline(ctx, p, conversationID, event.Text, nil, "", sink, sink.setRunID)
 	close(respEvents)
 	<-driverDone
 	if driverErr != nil {
@@ -296,6 +303,10 @@ func (m *BridgeManager) handleSystemBridgeEvent(ctx context.Context, br dbq.Brid
 			zap.Error(driverErr))
 	}
 	if err != nil {
+		m.logger.Error("system bridge run failed",
+			zap.String("bridge", br.Name),
+			zap.Stringer("conversation", conversationID),
+			zap.Error(err))
 		sendOneShot(ctx, driver, br, event.ExternalID, "System chat failed: "+err.Error())
 		return nil
 	}

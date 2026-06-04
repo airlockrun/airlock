@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math/big"
 
 	"github.com/airlockrun/airlock/authz"
 	"github.com/airlockrun/airlock/db/dbq"
@@ -34,6 +35,7 @@ type SysagentRuntime interface {
 		approved *bool,
 		resumeRunID string,
 		sink eventstream.Sink,
+		onStart func(runID uuid.UUID),
 	) (uuid.UUID, error)
 }
 
@@ -92,6 +94,13 @@ func (s *SysagentSlashConv) Clear(ctx context.Context, convID pgtype.UUID) (bool
 		Source:         "checkpoint",
 		Content:        "",
 		Parts:          markerParts,
+		TokensIn:       0,
+		TokensOut:      0,
+		// system_messages.cost_estimate is NOT NULL, so the pgtype.Numeric
+		// zero value (Valid=false → NULL) gets rejected at insert time.
+		// Markers are operator-side bookkeeping with no LLM cost; encode
+		// the explicit 0.
+		CostEstimate: pgtype.Numeric{Int: big.NewInt(0), Valid: true},
 	})
 	if err != nil {
 		return false, fmt.Errorf("create checkpoint marker: %w", err)

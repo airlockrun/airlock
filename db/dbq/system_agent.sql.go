@@ -307,12 +307,16 @@ func (q *Queries) InsertSystemAuditPending(ctx context.Context, arg InsertSystem
 
 const listSystemConversationsByUser = `-- name: ListSystemConversationsByUser :many
 SELECT id, user_id, title, status, checkpoint, context_checkpoint_message_id, settings, created_at, updated_at, source, bridge_id FROM system_conversations
-WHERE user_id = $1
+WHERE user_id = $1 AND source = 'web'
 ORDER BY updated_at DESC
 `
 
-// Ordered by updated_at DESC so the most-recently-active conversation
-// is first in the sidebar. Covered by (user_id, updated_at DESC).
+// Web-UI sidebar. Bridge-routed threads (source='bridge') are
+// intentionally hidden — they live on Telegram, the operator can't
+// meaningfully resume them from the web, and surfacing them would
+// leak bot-driven chat into the operator's conversation list.
+// Ordered by updated_at DESC so the most-recently-active web
+// conversation is first. Covered by (user_id, updated_at DESC).
 func (q *Queries) ListSystemConversationsByUser(ctx context.Context, userID pgtype.UUID) ([]SystemConversation, error) {
 	rows, err := q.db.Query(ctx, listSystemConversationsByUser, userID)
 	if err != nil {

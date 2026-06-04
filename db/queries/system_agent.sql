@@ -11,10 +11,14 @@ RETURNING *;
 SELECT * FROM system_conversations WHERE id = @id;
 
 -- name: ListSystemConversationsByUser :many
--- Ordered by updated_at DESC so the most-recently-active conversation
--- is first in the sidebar. Covered by (user_id, updated_at DESC).
+-- Web-UI sidebar. Bridge-routed threads (source='bridge') are
+-- intentionally hidden — they live on Telegram, the operator can't
+-- meaningfully resume them from the web, and surfacing them would
+-- leak bot-driven chat into the operator's conversation list.
+-- Ordered by updated_at DESC so the most-recently-active web
+-- conversation is first. Covered by (user_id, updated_at DESC).
 SELECT * FROM system_conversations
-WHERE user_id = @user_id
+WHERE user_id = @user_id AND source = 'web'
 ORDER BY updated_at DESC;
 
 -- name: RenameSystemConversation :exec
