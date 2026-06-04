@@ -60,8 +60,9 @@ const createPublicPromptTimeout = ref(60)
 
 // Edit dialog — covers both reassignment and per-bridge settings.
 const editVisible = ref(false)
-const editing = ref<{ id: string; name: string; agentId: string } | null>(null)
+const editing = ref<{ id: string; name: string; agentId: string; isSystem: boolean } | null>(null)
 const editAgentID = ref('')
+const editIsSystem = ref(false)
 const editAllowPublicDMs = ref(true)
 const editSessionMode = ref<'session' | 'one_shot'>('session')
 const editTTLAmount = ref(3)
@@ -210,6 +211,7 @@ function openEdit(bridge: {
   id: string
   name: string
   agentId: string
+  isSystem?: boolean
   settings?: {
     allowPublicDms?: boolean
     publicSessionTtlSeconds?: number
@@ -217,7 +219,13 @@ function openEdit(bridge: {
     publicPromptTimeoutSeconds?: number
   } | null
 }) {
-  editing.value = { id: bridge.id, name: bridge.name, agentId: bridge.agentId || '' }
+  editing.value = {
+    id: bridge.id,
+    name: bridge.name,
+    agentId: bridge.agentId || '',
+    isSystem: !!bridge.isSystem,
+  }
+  editIsSystem.value = !!bridge.isSystem
   editAgentID.value = bridge.agentId || ''
   editAllowPublicDMs.value = bridge.settings?.allowPublicDms ?? true
   editSessionMode.value = bridge.settings?.publicSessionMode === 'one_shot' ? 'one_shot' : 'session'
@@ -232,16 +240,28 @@ function openEdit(bridge: {
 
 async function onEdit() {
   if (!editing.value) return
+  if (!editIsSystem.value && !editAgentID.value) {
+    toast.add({ severity: 'error', summary: 'Pick an agent or enable System bridge', life: 4000 })
+    return
+  }
   try {
-    await store.updateBridge(editing.value.id, {
-      agentId: editAgentID.value,
-      settings: {
+    // System-bound bridges have no per-conversation public-DM controls
+    // (the operator surface always requires a linked identity), so we
+    // omit settings on that branch — the backend keeps the row's
+    // existing JSON.
+    const payload: Parameters<typeof store.updateBridge>[1] = {
+      agentId: editIsSystem.value ? '' : editAgentID.value,
+      isSystem: editIsSystem.value,
+    }
+    if (!editIsSystem.value) {
+      payload.settings = {
         allowPublicDms: editAllowPublicDMs.value,
         publicSessionTtlSeconds: editTTLNever.value ? 0 : ttlToSeconds(editTTLAmount.value, editTTLUnit.value),
         publicSessionMode: editSessionMode.value,
         publicPromptTimeoutSeconds: editPublicPromptTimeout.value,
-      },
-    })
+      }
+    }
+    await store.updateBridge(editing.value.id, payload)
     toast.add({ severity: 'success', summary: 'Bridge updated', life: 3000 })
     editVisible.value = false
   } catch (err: any) {
@@ -301,7 +321,10 @@ function confirmDelete(bridge: { id: string; name: string }) {
       <Column field="botUsername" header="Bot Username" />
       <Column header="Agent">
         <template #body="{ data }">
-          {{ agentsStore.agents.find(a => a.id === data.agentId)?.name || data.agentId || '—' }}
+          <span v-if="data.isSystem" style="font-style: italic">System agent</span>
+          <template v-else>
+            {{ agentsStore.agents.find(a => a.id === data.agentId)?.name || data.agentId || '—' }}
+          </template>
         </template>
       </Column>
       <Column header="Owner">
@@ -509,6 +532,22 @@ function confirmDelete(bridge: { id: string; name: string }) {
     <Dialog v-model:visible="editVisible" :header="`Edit ${editing?.name ?? 'bridge'}`" modal style="width: 30rem">
       <div style="display: flex; flex-direction: column; gap: 1.25rem; padding-top: 0.5rem">
 
+        <!-- System bridge toggle (admin-only). Flipping it switches the
+             bridge's surface: on → routes inbound DMs to the in-airlock
+             sysagent (no per-agent binding, no public-DM controls); off
+             → binds to a specific agent picked below. Backend requires
+             admin to cross the boundary in either direction. -->
+        <div v-if="auth.isAdmin" style="display: flex; align-items: center; justify-content: space-between; gap: 1rem">
+          <div>
+            <div style="font-weight: 600">System bridge</div>
+            <small style="color: var(--p-text-muted-color)">
+              Routes inbound DMs to the airlock system agent instead of an agent. Admin-only.
+            </small>
+          </div>
+          <ToggleSwitch v-model="editIsSystem" />
+        </div>
+
+        <template v-if="!editIsSystem">
         <!-- Agent binding -->
         <div style="display: flex; flex-direction: column; gap: 0.25rem">
           <label for="editAgent">Agent</label>
@@ -521,12 +560,8 @@ function confirmDelete(bridge: { id: string; name: string }) {
             placeholder="Select an agent"
             filter
             autoFilterFocus
-            showClear
             style="width: 100%"
           />
-          <small style="color: var(--p-text-muted-color)">
-            Clearing unbinds this bridge — credentials stay so you can reassign it later.
-          </small>
         </div>
 
         <!-- Public DMs -->
@@ -608,6 +643,7 @@ function confirmDelete(bridge: { id: string; name: string }) {
             />
           </div>
         </div>
+        </template>
 
       </div>
       <template #footer>

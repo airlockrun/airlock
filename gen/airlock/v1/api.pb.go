@@ -3579,9 +3579,14 @@ func (x *CreateBridgeRequest) GetType() string {
 // callers can rebind the agent, edit settings, or do both in one
 // request. A null/unset field leaves that aspect unchanged.
 type UpdateBridgeRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	AgentId       string                 `protobuf:"bytes,1,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"`
-	Settings      *BridgeSettings        `protobuf:"bytes,2,opt,name=settings,proto3" json:"settings,omitempty"`
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	AgentId  string                 `protobuf:"bytes,1,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"`
+	Settings *BridgeSettings        `protobuf:"bytes,2,opt,name=settings,proto3" json:"settings,omitempty"`
+	// Switch a bridge between the system-agent surface and an agent
+	// surface. Optional: unset = leave as-is. Switching to system
+	// requires the TenantBridgeSystem permission and forces agent_id
+	// empty; switching away from system requires a non-empty agent_id.
+	IsSystem      *bool `protobuf:"varint,3,opt,name=is_system,json=isSystem,proto3,oneof" json:"is_system,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3628,6 +3633,13 @@ func (x *UpdateBridgeRequest) GetSettings() *BridgeSettings {
 		return x.Settings
 	}
 	return nil
+}
+
+func (x *UpdateBridgeRequest) GetIsSystem() bool {
+	if x != nil && x.IsSystem != nil {
+		return *x.IsSystem
+	}
+	return false
 }
 
 type ListBridgesResponse struct {
@@ -5587,10 +5599,13 @@ const file_airlock_v1_api_proto_rawDesc = "" +
 	"\bagent_id\x18\x01 \x01(\tR\aagentId\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x14\n" +
 	"\x05token\x18\x03 \x01(\tR\x05token\x12\x12\n" +
-	"\x04type\x18\x04 \x01(\tR\x04type\"h\n" +
+	"\x04type\x18\x04 \x01(\tR\x04type\"\x98\x01\n" +
 	"\x13UpdateBridgeRequest\x12\x19\n" +
 	"\bagent_id\x18\x01 \x01(\tR\aagentId\x126\n" +
-	"\bsettings\x18\x02 \x01(\v2\x1a.airlock.v1.BridgeSettingsR\bsettings\"G\n" +
+	"\bsettings\x18\x02 \x01(\v2\x1a.airlock.v1.BridgeSettingsR\bsettings\x12 \n" +
+	"\tis_system\x18\x03 \x01(\bH\x00R\bisSystem\x88\x01\x01B\f\n" +
+	"\n" +
+	"_is_system\"G\n" +
 	"\x13ListBridgesResponse\x120\n" +
 	"\abridges\x18\x01 \x03(\v2\x16.airlock.v1.BridgeInfoR\abridges\"\\\n" +
 	"\x18ListCapabilitiesResponse\x12@\n" +
@@ -5920,6 +5935,7 @@ func file_airlock_v1_api_proto_init() {
 	file_airlock_v1_api_proto_msgTypes[17].OneofWrappers = []any{}
 	file_airlock_v1_api_proto_msgTypes[25].OneofWrappers = []any{}
 	file_airlock_v1_api_proto_msgTypes[44].OneofWrappers = []any{}
+	file_airlock_v1_api_proto_msgTypes[61].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{

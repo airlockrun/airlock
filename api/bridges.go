@@ -119,7 +119,7 @@ func (h *bridgeHandler) UpdateBridge(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	upd := bridgessvc.UpdateRequest{AgentID: req.AgentId}
+	upd := bridgessvc.UpdateRequest{AgentID: req.AgentId, IsSystem: req.IsSystem}
 	if req.Settings != nil {
 		upd.Settings = &bridgessvc.SettingsUpdate{
 			AllowPublicDMs:             req.Settings.AllowPublicDms,

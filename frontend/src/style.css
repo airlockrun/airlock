@@ -22,3 +22,12 @@ body {
 html.dark {
   color-scheme: dark;
 }
+
+/* PrimeVue ToggleSwitch ships without an intrinsic flex-basis, so when it
+ * sits in `display: flex` rows alongside multi-line labels (settings dialogs,
+ * the bridge edit panel) it gets squeezed into a curved blob — most visible
+ * on narrow viewports. Lock it to its rendered size so the pill never shrinks
+ * regardless of the parent's layout. */
+.p-toggleswitch {
+  flex: none;
+}

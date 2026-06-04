@@ -481,21 +481,26 @@ func (q *Queries) ListBridgesForAgent(ctx context.Context, agentID pgtype.UUID) 
 	return items, nil
 }
 
-const updateBridgeAgentID = `-- name: UpdateBridgeAgentID :one
-UPDATE bridges SET agent_id = $1, updated_at = now() WHERE id = $2
+const updateBridgeBinding = `-- name: UpdateBridgeBinding :one
+UPDATE bridges
+SET agent_id = $1, is_system = $2, updated_at = now()
+WHERE id = $3
 RETURNING id, agent_id, owner_id, type, name, bot_username, status, is_system, config, settings, bot_token_ref, last_polled_at, created_at, updated_at, managed, telegram_bot_user_id
 `
 
-type UpdateBridgeAgentIDParams struct {
-	AgentID pgtype.UUID `json:"agent_id"`
-	ID      pgtype.UUID `json:"id"`
+type UpdateBridgeBindingParams struct {
+	AgentID  pgtype.UUID `json:"agent_id"`
+	IsSystem bool        `json:"is_system"`
+	ID       pgtype.UUID `json:"id"`
 }
 
-// Reassign a bridge to a different agent. An empty (NULL) agent_id makes
-// it a system bridge. The running poller must be reloaded via
+// Rebind the bridge's target. Either is_system=true with NULL agent_id
+// (operator surface — routes to the in-airlock sysagent) or is_system=false
+// with a non-NULL agent_id (agent surface) — the XOR is enforced by the
+// service layer, not the schema. The running poller must be reloaded via
 // BridgeManager.AddBridge after this update — it holds AgentID in memory.
-func (q *Queries) UpdateBridgeAgentID(ctx context.Context, arg UpdateBridgeAgentIDParams) (Bridge, error) {
-	row := q.db.QueryRow(ctx, updateBridgeAgentID, arg.AgentID, arg.ID)
+func (q *Queries) UpdateBridgeBinding(ctx context.Context, arg UpdateBridgeBindingParams) (Bridge, error) {
+	row := q.db.QueryRow(ctx, updateBridgeBinding, arg.AgentID, arg.IsSystem, arg.ID)
 	var i Bridge
 	err := row.Scan(
 		&i.ID,

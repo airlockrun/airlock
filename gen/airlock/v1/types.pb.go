@@ -1950,17 +1950,20 @@ func (x *ConnectionInfo) GetWarnings() []string {
 
 // BridgeInfo represents a chat platform bot instance.
 type BridgeInfo struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	AgentId       string                 `protobuf:"bytes,2,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"` // empty = system bridge or orphaned, set = agent bridge
-	Owner         *UserSummary           `protobuf:"bytes,3,opt,name=owner,proto3" json:"owner,omitempty"`                    // unset for system bridges (no creator)
-	Type          string                 `protobuf:"bytes,4,opt,name=type,proto3" json:"type,omitempty"`                      // "telegram", "discord"
-	Name          string                 `protobuf:"bytes,5,opt,name=name,proto3" json:"name,omitempty"`
-	BotUsername   string                 `protobuf:"bytes,6,opt,name=bot_username,json=botUsername,proto3" json:"bot_username,omitempty"` // @handle from platform
-	Status        string                 `protobuf:"bytes,7,opt,name=status,proto3" json:"status,omitempty"`                              // "active", "error"
-	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
-	UpdatedAt     *timestamppb.Timestamp `protobuf:"bytes,9,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
-	Settings      *BridgeSettings        `protobuf:"bytes,10,opt,name=settings,proto3" json:"settings,omitempty"`
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	Id          string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	AgentId     string                 `protobuf:"bytes,2,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"` // empty when is_system is true
+	Owner       *UserSummary           `protobuf:"bytes,3,opt,name=owner,proto3" json:"owner,omitempty"`
+	Type        string                 `protobuf:"bytes,4,opt,name=type,proto3" json:"type,omitempty"` // "telegram", "discord"
+	Name        string                 `protobuf:"bytes,5,opt,name=name,proto3" json:"name,omitempty"`
+	BotUsername string                 `protobuf:"bytes,6,opt,name=bot_username,json=botUsername,proto3" json:"bot_username,omitempty"` // @handle from platform
+	Status      string                 `protobuf:"bytes,7,opt,name=status,proto3" json:"status,omitempty"`                              // "active", "error"
+	CreatedAt   *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	UpdatedAt   *timestamppb.Timestamp `protobuf:"bytes,9,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
+	Settings    *BridgeSettings        `protobuf:"bytes,10,opt,name=settings,proto3" json:"settings,omitempty"`
+	// True when inbound DMs route to the in-airlock sysagent instead of an
+	// agent. Disjoint with agent_id — exactly one is set.
+	IsSystem      bool `protobuf:"varint,11,opt,name=is_system,json=isSystem,proto3" json:"is_system,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2063,6 +2066,13 @@ func (x *BridgeInfo) GetSettings() *BridgeSettings {
 		return x.Settings
 	}
 	return nil
+}
+
+func (x *BridgeInfo) GetIsSystem() bool {
+	if x != nil {
+		return x.IsSystem
+	}
+	return false
 }
 
 // BridgeSettings is the user-tunable subset of bridge config exposed in
@@ -4327,7 +4337,7 @@ const file_airlock_v1_types_proto_rawDesc = "" +
 	"\rhas_oauth_app\x18\t \x01(\bR\vhasOauthApp\x12D\n" +
 	"\x10token_expires_at\x18\n" +
 	" \x01(\v2\x1a.google.protobuf.TimestampR\x0etokenExpiresAt\x12\x1a\n" +
-	"\bwarnings\x18\v \x03(\tR\bwarnings\"\xf7\x02\n" +
+	"\bwarnings\x18\v \x03(\tR\bwarnings\"\x94\x03\n" +
 	"\n" +
 	"BridgeInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x19\n" +
@@ -4342,7 +4352,8 @@ const file_airlock_v1_types_proto_rawDesc = "" +
 	"\n" +
 	"updated_at\x18\t \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x126\n" +
 	"\bsettings\x18\n" +
-	" \x01(\v2\x1a.airlock.v1.BridgeSettingsR\bsettings\"\xea\x01\n" +
+	" \x01(\v2\x1a.airlock.v1.BridgeSettingsR\bsettings\x12\x1b\n" +
+	"\tis_system\x18\v \x01(\bR\bisSystem\"\xea\x01\n" +
 	"\x0eBridgeSettings\x12(\n" +
 	"\x10allow_public_dms\x18\x01 \x01(\bR\x0eallowPublicDms\x12;\n" +
 	"\x1apublic_session_ttl_seconds\x18\x02 \x01(\x05R\x17publicSessionTtlSeconds\x12.\n" +

@@ -78,9 +78,13 @@ type SettingsUpdate struct {
 }
 
 // UpdateRequest is the input for Update. A nil Settings means "leave
-// settings alone"; an empty AgentID rebinds to system / orphan state.
+// settings alone". A nil IsSystem means "leave is_system as-is" — the
+// (AgentID, IsSystem) tuple maps to the new binding: IsSystem=true
+// forces agent-less (system surface), IsSystem=false requires a
+// non-empty AgentID.
 type UpdateRequest struct {
 	AgentID  string
+	IsSystem *bool
 	Settings *SettingsUpdate
 }
 
@@ -339,6 +343,7 @@ func (s *Service) List(ctx context.Context, p authz.Principal) ([]ListItem, erro
 				Bridge: dbq.Bridge{
 					ID: r.ID, Type: r.Type, Name: r.Name, BotUsername: r.BotUsername,
 					Status: r.Status, AgentID: r.AgentID, OwnerID: r.OwnerID,
+					IsSystem:  r.IsSystem,
 					CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt, Settings: r.Settings,
 				},
 				Owner: ownerFromJoin(r.OwnerID, r.OwnerEmail, r.OwnerDisplayName),
@@ -357,6 +362,7 @@ func (s *Service) List(ctx context.Context, p authz.Principal) ([]ListItem, erro
 			Bridge: dbq.Bridge{
 				ID: r.ID, Type: r.Type, Name: r.Name, BotUsername: r.BotUsername,
 				Status: r.Status, AgentID: r.AgentID, OwnerID: r.OwnerID,
+				IsSystem:  r.IsSystem,
 				CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt, Settings: r.Settings,
 			},
 			Owner: ownerFromJoin(r.OwnerID, r.OwnerEmail, r.OwnerDisplayName),
@@ -392,8 +398,26 @@ func (s *Service) Update(ctx context.Context, p authz.Principal, bridgeID uuid.U
 	case !isOwner:
 		return Result{}, service.Detail(service.ErrForbidden, "only the bridge owner can change its agent")
 	}
+	newIsSystem := br.IsSystem
+	if req.IsSystem != nil {
+		newIsSystem = *req.IsSystem
+	}
+	// Crossing the system boundary in either direction is an admin-only
+	// action: TenantBridgeSystem already gates is_system=true at create
+	// time; require the same role to flip an existing row in or out.
+	if newIsSystem != br.IsSystem && !isAdmin {
+		return Result{}, service.Detail(service.ErrForbidden, "switching is_system requires admin role")
+	}
 	var newAgentID pgtype.UUID
-	if req.AgentID != "" {
+	switch {
+	case newIsSystem:
+		if req.AgentID != "" {
+			return Result{}, service.Detail(service.ErrInvalidInput, "system bridges cannot have an agent_id")
+		}
+	default:
+		if req.AgentID == "" {
+			return Result{}, service.Detail(service.ErrInvalidInput, "agent bridges require a non-empty agent_id")
+		}
 		agentID, err := uuid.Parse(req.AgentID)
 		if err != nil {
 			return Result{}, service.Detail(service.ErrInvalidInput, "invalid agent_id")
@@ -405,9 +429,10 @@ func (s *Service) Update(ctx context.Context, p authz.Principal, bridgeID uuid.U
 		}
 		newAgentID = pgtype.UUID{Bytes: agentID, Valid: true}
 	}
-	updated, err := q.UpdateBridgeAgentID(ctx, dbq.UpdateBridgeAgentIDParams{
-		ID:      pgtype.UUID{Bytes: bridgeID, Valid: true},
-		AgentID: newAgentID,
+	updated, err := q.UpdateBridgeBinding(ctx, dbq.UpdateBridgeBindingParams{
+		ID:       pgtype.UUID{Bytes: bridgeID, Valid: true},
+		AgentID:  newAgentID,
+		IsSystem: newIsSystem,
 	})
 	if err != nil {
 		s.logger.Error("update bridge failed", zap.Error(err))

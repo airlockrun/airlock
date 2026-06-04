@@ -458,6 +458,11 @@ message CreateBridgeRequest {
 message UpdateBridgeRequest {
   string agent_id = 1;
   BridgeSettings settings = 2;
+  // Switch a bridge between the system-agent surface and an agent
+  // surface. Optional: unset = leave as-is. Switching to system
+  // requires the TenantBridgeSystem permission and forces agent_id
+  // empty; switching away from system requires a non-empty agent_id.
+  optional bool is_system = 3;
 }
 
 message ListBridgesResponse {

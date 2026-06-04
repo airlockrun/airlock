@@ -32,6 +32,7 @@ export const useBridgesStore = defineStore('bridges', () => {
     id: string,
     payload: {
       agentId: string
+      isSystem?: boolean
       settings?: {
         allowPublicDms: boolean
         publicSessionTtlSeconds: number

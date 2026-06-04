@@ -15,6 +15,7 @@ import (
 func BridgeFieldsToProto(
 	id, agentID, ownerID pgtype.UUID,
 	typ, name, botUsername, status string,
+	isSystem bool,
 	createdAt, updatedAt pgtype.Timestamptz,
 	ownerEmail, ownerDisplayName pgtype.Text,
 	settingsJSON []byte,
@@ -26,6 +27,7 @@ func BridgeFieldsToProto(
 		Type:        typ,
 		BotUsername: botUsername,
 		Status:      status,
+		IsSystem:    isSystem,
 		CreatedAt:   timestamppb.New(createdAt.Time),
 		UpdatedAt:   timestamppb.New(updatedAt.Time),
 		Settings: &airlockv1.BridgeSettings{
@@ -54,6 +56,7 @@ func BridgeRowToProto(br dbq.Bridge) *airlockv1.BridgeInfo {
 	return BridgeFieldsToProto(
 		br.ID, br.AgentID, br.OwnerID,
 		br.Type, br.Name, br.BotUsername, br.Status,
+		br.IsSystem,
 		br.CreatedAt, br.UpdatedAt,
 		pgtype.Text{}, pgtype.Text{},
 		br.Settings,
@@ -78,6 +81,7 @@ func BridgeResultToProto(res bridgessvc.Result) *airlockv1.BridgeInfo {
 	return BridgeFieldsToProto(
 		res.Bridge.ID, res.Bridge.AgentID, ownerID,
 		res.Bridge.Type, res.Bridge.Name, res.Bridge.BotUsername, res.Bridge.Status,
+		res.Bridge.IsSystem,
 		res.Bridge.CreatedAt, res.Bridge.UpdatedAt,
 		ownerEmail, ownerName,
 		res.Bridge.Settings,
@@ -96,6 +100,7 @@ func BridgeListItemToProto(item bridgessvc.ListItem) *airlockv1.BridgeInfo {
 	return BridgeFieldsToProto(
 		item.Bridge.ID, item.Bridge.AgentID, item.Bridge.OwnerID,
 		item.Bridge.Type, item.Bridge.Name, item.Bridge.BotUsername, item.Bridge.Status,
+		item.Bridge.IsSystem,
 		item.Bridge.CreatedAt, item.Bridge.UpdatedAt,
 		ownerEmail, ownerName,
 		item.Bridge.Settings,

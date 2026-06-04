@@ -66,11 +66,15 @@ SELECT * FROM bridges WHERE agent_id = @agent_id;
 -- polling forever (and racing on the bot token if the bridge is re-added).
 SELECT id FROM bridges WHERE agent_id = @agent_id;
 
--- name: UpdateBridgeAgentID :one
--- Reassign a bridge to a different agent. An empty (NULL) agent_id makes
--- it a system bridge. The running poller must be reloaded via
+-- name: UpdateBridgeBinding :one
+-- Rebind the bridge's target. Either is_system=true with NULL agent_id
+-- (operator surface — routes to the in-airlock sysagent) or is_system=false
+-- with a non-NULL agent_id (agent surface) — the XOR is enforced by the
+-- service layer, not the schema. The running poller must be reloaded via
 -- BridgeManager.AddBridge after this update — it holds AgentID in memory.
-UPDATE bridges SET agent_id = @agent_id, updated_at = now() WHERE id = @id
+UPDATE bridges
+SET agent_id = @agent_id, is_system = @is_system, updated_at = now()
+WHERE id = @id
 RETURNING *;
 
 -- name: UpdateBridgeSettings :one

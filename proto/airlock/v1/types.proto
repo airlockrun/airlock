@@ -323,8 +323,8 @@ message ConnectionInfo {
 // BridgeInfo represents a chat platform bot instance.
 message BridgeInfo {
   string id = 1;
-  string agent_id = 2;      // empty = system bridge or orphaned, set = agent bridge
-  UserSummary owner = 3;    // unset for system bridges (no creator)
+  string agent_id = 2;      // empty when is_system is true
+  UserSummary owner = 3;
   string type = 4;          // "telegram", "discord"
   string name = 5;
   string bot_username = 6;  // @handle from platform
@@ -332,6 +332,9 @@ message BridgeInfo {
   google.protobuf.Timestamp created_at = 8;
   google.protobuf.Timestamp updated_at = 9;
   BridgeSettings settings = 10;
+  // True when inbound DMs route to the in-airlock sysagent instead of an
+  // agent. Disjoint with agent_id — exactly one is set.
+  bool is_system = 11;
 }
 
 // BridgeSettings is the user-tunable subset of bridge config exposed in
