@@ -86,60 +86,70 @@ func SubdomainProxy(agentDomain string, database *db.DB, s3 *storage.S3Client, d
 			return
 		}
 
-		// Look up the registered route — match exact paths first, then parameterized patterns.
-		// airlockvet:allow-dbq reason: pure routing-table plumbing; authorization happens below per route.Access
-		routes, err := q.ListRoutesByAgentAndMethod(r.Context(), dbq.ListRoutesByAgentAndMethodParams{
-			AgentID: agent.ID,
-			Method:  r.Method,
-		})
-		if err != nil {
-			log.Debug("no routes found", zap.Error(err))
-			writeError(w, http.StatusNotFound, "route not found")
-			return
-		}
-		route, ok := matchRoute(routes, r.URL.Path)
-		if !ok {
-			log.Debug("no route matched")
-			writeError(w, http.StatusNotFound, "route not found")
-			return
-		}
+		// Bundled framework assets (htmx, pico.css) — agentsdk registers
+		// these inside its own mux at GET /__air/assets/{name}, so they
+		// don't appear in agent_routes. Skip the route-table lookup and
+		// per-route auth; forward straight to the container as public.
+		// The agent's handler validates the filename against a closed
+		// set so unknown names produce a 404 from the agent.
+		isAssetGET := r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/__air/assets/")
 
-		// Enforce access control based on route.Access.
 		var userID uuid.UUID
 		var userEmail string
 
-		switch route.Access {
-		case "public":
-			// No auth required.
-
-		case "user", "admin":
-			claims, ok := validateSubdomainAuth(r, jwtSecret)
-			if !ok {
-				rejectOrRedirect(w, r, publicURL)
-				return
-			}
-			uid, err := uuid.Parse(claims.Subject)
+		if !isAssetGET {
+			// Look up the registered route — match exact paths first, then parameterized patterns.
+			// airlockvet:allow-dbq reason: pure routing-table plumbing; authorization happens below per route.Access
+			routes, err := q.ListRoutesByAgentAndMethod(r.Context(), dbq.ListRoutesByAgentAndMethodParams{
+				AgentID: agent.ID,
+				Method:  r.Method,
+			})
 			if err != nil {
-				rejectOrRedirect(w, r, publicURL)
+				log.Debug("no routes found", zap.Error(err))
+				writeError(w, http.StatusNotFound, "route not found")
 				return
 			}
-			required := agentsdk.AccessUser
-			if route.Access == "admin" {
-				required = agentsdk.AccessAdmin
-			}
-			p := authz.UserPrincipal(uid, auth.Role(claims.TenantRole))
-			if !authz.AccessAtLeast(p.EffectiveAgentAccess(r.Context(), q, uuid.UUID(agent.ID.Bytes)), required) {
-				log.Warn("user lacks required agent access", zap.String("user_id", uid.String()), zap.String("required", string(required)))
-				writeError(w, http.StatusForbidden, "forbidden")
+			route, ok := matchRoute(routes, r.URL.Path)
+			if !ok {
+				log.Debug("no route matched")
+				writeError(w, http.StatusNotFound, "route not found")
 				return
 			}
-			userID = uid
-			userEmail = claims.Email
 
-		default:
-			log.Error("unknown route access level", zap.String("access", route.Access))
-			writeError(w, http.StatusInternalServerError, "misconfigured route")
-			return
+			// Enforce access control based on route.Access.
+			switch route.Access {
+			case "public":
+				// No auth required.
+
+			case "user", "admin":
+				claims, ok := validateSubdomainAuth(r, jwtSecret)
+				if !ok {
+					rejectOrRedirect(w, r, publicURL)
+					return
+				}
+				uid, err := uuid.Parse(claims.Subject)
+				if err != nil {
+					rejectOrRedirect(w, r, publicURL)
+					return
+				}
+				required := agentsdk.AccessUser
+				if route.Access == "admin" {
+					required = agentsdk.AccessAdmin
+				}
+				p := authz.UserPrincipal(uid, auth.Role(claims.TenantRole))
+				if !authz.AccessAtLeast(p.EffectiveAgentAccess(r.Context(), q, uuid.UUID(agent.ID.Bytes)), required) {
+					log.Warn("user lacks required agent access", zap.String("user_id", uid.String()), zap.String("required", string(required)))
+					writeError(w, http.StatusForbidden, "forbidden")
+					return
+				}
+				userID = uid
+				userEmail = claims.Email
+
+			default:
+				log.Error("unknown route access level", zap.String("access", route.Access))
+				writeError(w, http.StatusInternalServerError, "misconfigured route")
+				return
+			}
 		}
 
 		// Ensure agent container is running.
