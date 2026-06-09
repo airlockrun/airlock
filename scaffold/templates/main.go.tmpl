@@ -24,6 +24,26 @@ func main() {
 		Description: "Default placeholder homepage — replace this once the agent has real routes",
 	})
 
+	// Static asset route — serves the compiled Tailwind stylesheet (and any
+	// other files embedded in views/) under a content-hashed URL the
+	// scaffold's layout already references via views.AppCSSPath. The route
+	// is public so unauthenticated browsers can load the stylesheet.
+	agent.RegisterRoute(&agentsdk.Route{
+		Method: "GET",
+		Path:   "/static/{name}",
+		Handler: func(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+			if r.PathValue("name") == "app."+views.AppCSSHash()+".css" {
+				w.Header().Set("Content-Type", "text/css; charset=utf-8")
+				w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+				_, _ = w.Write(views.AppCSS)
+				return
+			}
+			http.NotFound(w, r)
+		},
+		Access:      agentsdk.AccessPublic,
+		Description: "Compiled stylesheet and other embedded static files",
+	})
+
 	// Sol will add RegisterTool, RegisterWebhook, RegisterCron, RegisterConnection calls here.
 	agent.Serve()
 }

@@ -15,6 +15,11 @@ WORKDIR /build
 COPY go.mod go.sum* ./
 COPY . .
 
+# Tailwind v4 standalone — Rust binary, no Node. Fetched fresh per build;
+# small (~30MB) and the layer caches.
+ADD https://github.com/tailwindlabs/tailwindcss/releases/download/v4.1.0/tailwindcss-linux-x64 /usr/local/bin/tailwindcss
+RUN chmod +x /usr/local/bin/tailwindcss && mkdir -p views/static
+
 # Resolve modules via the bind-mounted goproxy first, public proxy second.
 # The goproxy bind is build-time only (not baked into a layer). The dev proxy
 # serves the owned libs at content-addressed versions (v<const>-dev<hash>), so
@@ -23,11 +28,18 @@ COPY . .
 # GONOSUMDB=* skips the checksum DB for the unpublished local versions.
 # `go mod tidy` fills go.sum for the templ tool directive's transitive deps
 # that `go mod download` skips as of Go 1.24.
+#
+# Order: templ generate first (emits *_templ.go); tailwindcss next so it scans
+# the materialised .templ source for class names; go build last so the
+# stylesheet exists before //go:embed reads it.
 RUN --mount=type=bind,from=goproxy,target=/goproxy \
     --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     GOPROXY="file:///goproxy,https://proxy.golang.org" GONOSUMDB="*" GOSUMDB=off \
-    go mod tidy && go tool templ generate && go build -o /agent .
+    go mod tidy && \
+    go tool templ generate && \
+    tailwindcss -i styles/app.css -o views/static/app.css --minify && \
+    go build -o /agent .
 
 # Runtime
 FROM {{.AgentBaseImage}}

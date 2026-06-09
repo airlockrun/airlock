@@ -9,7 +9,7 @@ templ Layout(title string) {
 			<meta charset="UTF-8"/>
 			<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 			<title>{ title }</title>
-			<link rel="stylesheet" href={ agentsdk.Assets.Pico }/>
+			<link rel="stylesheet" href={ AppCSSPath }/>
 			<script src={ agentsdk.Assets.HTMX }></script>
 			<!-- Airlock auth: reload page on 401 to trigger the auth relay flow -->
 			<script>
@@ -18,8 +18,8 @@ templ Layout(title string) {
 				});
 			</script>
 		</head>
-		<body>
-			<main class="container">
+		<body class="min-h-screen bg-neutral-50 text-neutral-900 antialiased">
+			<main class="mx-auto max-w-3xl px-4 py-10">
 				{ children... }
 			</main>
 		</body>

@@ -1,0 +1,29 @@
+package views
+
+import (
+	"crypto/sha256"
+	_ "embed"
+	"encoding/hex"
+)
+
+// AppCSS holds the compiled Tailwind stylesheet. It is built from
+// styles/app.css by the Docker build (`tailwindcss -i styles/app.css
+// -o views/static/app.css --minify`) and embedded here. Don't edit
+// views/static/app.css by hand — the build overwrites it.
+//
+//go:embed static/app.css
+var AppCSS []byte
+
+// AppCSSHash is an 8-char content hash of AppCSS. A rebuilt agent gets
+// a fresh hash, so the /static/{name} route in main.go can serve
+// AppCSS with an immutable Cache-Control and browsers never resurface
+// stale styles. Same hash flows into AppCSSPath for use in layouts.
+func AppCSSHash() string {
+	h := sha256.Sum256(AppCSS)
+	return hex.EncodeToString(h[:4])
+}
+
+// AppCSSPath is the URL the scaffold's Layout references:
+//
+//	<link rel="stylesheet" href={ views.AppCSSPath }/>
+var AppCSSPath = "/static/app." + AppCSSHash() + ".css"

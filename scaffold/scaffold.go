@@ -34,6 +34,17 @@ var templateFiles = []templateFile{
 	{"templates/sqlc.yaml.tmpl", "sqlc.yaml"},
 	{"templates/layout.templ.tmpl", "views/layout.templ"},
 	{"templates/index.templ.tmpl", "views/index.templ"},
+	// views/assets.go holds the //go:embed for the compiled Tailwind
+	// stylesheet plus the content-hashed URL the layout references.
+	{"templates/views_assets.go.tmpl", "views/assets.go"},
+	// styles/app.css is the Tailwind source. The build runs
+	//   tailwindcss -i styles/app.css -o views/static/app.css --minify
+	// and the agent embeds the output via views/assets.go.
+	{"templates/app.css.tmpl", "styles/app.css"},
+	// views/static/app.css is a placeholder so views/assets.go's
+	// //go:embed compiles on a fresh checkout. The Docker build's
+	// tailwindcss step overwrites it before `go build` runs.
+	{"templates/views_static_app.css.tmpl", "views/static/app.css"},
 	{"templates/db_migrations_doc.go.tmpl", "db/migrations/doc.go"},
 	// Dockerfile is committed so users can `docker build .` locally
 	// after cloning. Airlock-side builds regenerate it into a temp dir

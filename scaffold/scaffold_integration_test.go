@@ -12,7 +12,18 @@ import (
 	"regexp"
 	"testing"
 	"time"
+
+	"golang.org/x/mod/semver"
 )
+
+// minAgentsdkForScaffold is the smallest published agentsdk version the
+// current scaffold compiles against. Bump whenever the scaffold adopts
+// a new agentsdk-side API (the scaffold's layout.templ currently uses
+// agentsdk.Assets.HTMX — pico was removed in favour of per-agent
+// Tailwind, both shipped in v0.3.0-rc.1). When airlock's go.mod pins
+// below this, the test auto-skips with an explanatory message; once
+// the pin catches up it runs again — no manual edit required.
+const minAgentsdkForScaffold = "v0.3.0-rc.1"
 
 // TestScaffoldBuildsAndStarts verifies that the scaffold output compiles
 // and that the resulting binary starts and serves /health.
@@ -20,13 +31,6 @@ func TestScaffoldBuildsAndStarts(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
-	// The scaffold's layout.templ imports agentsdk.HTMXAssetPath /
-	// PicoAssetPath. Those APIs landed in agentsdk's unreleased const
-	// (v0.3.0-rc.1) but airlock's go.mod still pins the published v0.2.4.
-	// Re-enable once the next agentsdk release ships + airlock's pin
-	// catches up.
-	t.Skip("pending agentsdk release with HTMXAssetPath/PicoAssetPath")
-
 	// Read airlock's go.mod (one level up from scaffold/) to pick up the
 	// agentsdk version airlock is currently pinned to. Same source of
 	// truth as the drift check — the scaffolded agent compiles against
@@ -42,6 +46,14 @@ func TestScaffoldBuildsAndStarts(t *testing.T) {
 	agentsdkVer := requireVersion(t, airlockMod, "github.com/airlockrun/agentsdk")
 	goaiVer := requireVersion(t, airlockMod, "github.com/airlockrun/goai")
 	solVer := requireVersion(t, airlockMod, "github.com/airlockrun/sol")
+
+	// The scaffold's layout.templ uses agentsdk.Assets.HTMX (htmx-only
+	// after the pico → Tailwind switch). Skip until airlock's pin
+	// reaches a published agentsdk version that exposes it — once the
+	// pin catches up the test re-enables automatically.
+	if semver.Compare(agentsdkVer, minAgentsdkForScaffold) < 0 {
+		t.Skipf("airlock pins agentsdk %s; needs %s for scaffold APIs (agentsdk.Assets.HTMX, Tailwind layout)", agentsdkVer, minAgentsdkForScaffold)
+	}
 
 	// Materialize scaffold.
 	dir := t.TempDir()
@@ -87,12 +99,31 @@ func TestScaffoldBuildsAndStarts(t *testing.T) {
 		t.Fatalf("go mod tidy failed:\n%s", out)
 	}
 
-	// --- Step 1: Generate templ + Build ---
+	// --- Step 1: Generate templ + Tailwind + Build ---
 	templGen := exec.Command("templ", "generate")
 	templGen.Dir = dir
 	templGen.Env = env
 	if out, err := templGen.CombinedOutput(); err != nil {
 		t.Fatalf("templ generate failed:\n%s", out)
+	}
+
+	// tailwindcss is optional in CI / dev — the scaffold ships a
+	// placeholder views/static/app.css the //go:embed reads, so the
+	// agent compiles without it. When the binary is on PATH (toolserver
+	// image, dev machines that apt-installed it) we run it so the test
+	// exercises the same chain as the prod Docker build.
+	if _, err := exec.LookPath("tailwindcss"); err == nil {
+		tw := exec.Command("tailwindcss",
+			"-i", "styles/app.css",
+			"-o", "views/static/app.css",
+			"--minify")
+		tw.Dir = dir
+		tw.Env = env
+		if out, err := tw.CombinedOutput(); err != nil {
+			t.Fatalf("tailwindcss compile failed:\n%s", out)
+		}
+	} else {
+		t.Log("tailwindcss not on PATH; using scaffold placeholder views/static/app.css")
 	}
 
 	binPath := filepath.Join(dir, "agent")
