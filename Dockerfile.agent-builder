@@ -18,6 +18,7 @@ ARG GOAI_VERSION=v0.1.2
 ARG SOL_VERSION=v0.1.6
 ARG GOOSE_VERSION=v3.27.1
 ARG TEMPL_VERSION=v0.3.865
+ARG TAILWIND_VERSION=v4.1.0
 
 COPY --from=sqlc/sqlc:latest /workspace/sqlc /usr/local/bin/sqlc
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -80,6 +81,12 @@ RUN cd /libs/sol   && go build -o /usr/local/bin/sol        ./cmd/sol && \
                       go build -o /usr/local/bin/toolserver ./cmd/toolserver
 RUN cd /libs/goose && go build -o /usr/local/bin/goose      ./cmd/goose
 RUN cd /libs/templ && go build -o /usr/local/bin/templ      ./cmd/templ
+
+# Tailwind v4 standalone — Rust binary, no Node. The toolserver's
+# iterative build loop runs `tailwindcss -i styles/app.css -o
+# views/static/app.css --minify` between templ generate and go build,
+# same as the agent's Dockerfile.tmpl does at final image-build time.
+ADD --chmod=0755 https://github.com/tailwindlabs/tailwindcss/releases/download/${TAILWIND_VERSION}/tailwindcss-linux-x64 /usr/local/bin/tailwindcss
 
 # Go cache dirs writable by the host UID — Docker volumes mount as root,
 # but the toolserver runs as the host user.
