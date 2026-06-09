@@ -127,6 +127,7 @@ func PostToConversation(ctx context.Context, deps PostDeps, opts PostOpts) error
 			ConversationID: opts.ConversationID.String(),
 			Source:         opts.Source,
 			CallerAccess:   access,
+			DirectTools:    access == agentsdk.AccessPublic,
 		}
 
 		var userIDPtr *uuid.UUID

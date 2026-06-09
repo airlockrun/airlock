@@ -380,6 +380,7 @@ func (d *Dispatcher) ForwardA2APrompt(ctx context.Context, agentID uuid.UUID, pa
 	}
 	input.VisibleSiblings = visible
 	input.CallerAccess = callerAccess
+	input.DirectTools = callerAccess == agentsdk.AccessPublic
 
 	// A2A runs deliver to the calling agent, not a human channel.
 	input.Platform = "a2a"

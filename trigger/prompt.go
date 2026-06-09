@@ -296,6 +296,11 @@ func (p *PromptProxy) HandleMessage(
 		// agent. A residual suspension (e.g. A2A-delegated) is auto-denied
 		// after streaming, below.
 		AutoConfirm: oneShot,
+		// Public-tier callers get a typed-tool surface (no JS sandbox, no
+		// TS manifest). The flag is wire-level so future trigger paths
+		// (e.g. trusted server triggers that want a typed surface) can
+		// opt in without another rule.
+		DirectTools: access == agentsdk.AccessPublic,
 	}
 	if forceCompact {
 		input.Message = ""
@@ -380,6 +385,7 @@ func (p *PromptProxy) autoDenyResidualSuspension(agentID, bridgeID uuid.UUID, co
 		Message:        "Confirmation is unavailable in a single-turn session; treat as declined.",
 		CallerAccess:   access,
 		AutoConfirm:    true,
+		DirectTools:    access == agentsdk.AccessPublic,
 	}
 	rc, _, err := p.dispatcher.ForwardPrompt(ctx, agentID, denyInput, &bridgeID, userIDPtr)
 	if err != nil {
@@ -483,6 +489,7 @@ func (p *PromptProxy) HandleCallback(
 		ResumeRunID:    runIDStr,
 		Approved:       &approved,
 		CallerAccess:   access,
+		DirectTools:    access == agentsdk.AccessPublic,
 	}
 	if !approved {
 		// Match the web "reject" flow so the LLM has something to re-reason from.

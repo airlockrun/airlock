@@ -444,6 +444,7 @@ func (h *conversationsHandler) Prompt(w http.ResponseWriter, r *http.Request) {
 		ExtraSystemPrompt:   extraSystemPrompt,
 		ForceCompact:        forceCompact,
 		CallerAccess:        access,
+		DirectTools:         access == agentsdk.AccessPublic,
 	}
 	if forceCompact {
 		// /compact doesn't carry a user-authored text; Sol produces the
@@ -588,6 +589,7 @@ func (h *conversationsHandler) NotifyUpgradeComplete(ctx context.Context, agentI
 		ConversationID: conversationID,
 		Source:         source,
 		CallerAccess:   access,
+		DirectTools:    access == agentsdk.AccessPublic,
 	}
 
 	// Web only: publish a NotificationEvent so the user-side bubble
