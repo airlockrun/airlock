@@ -26,6 +26,11 @@ services:
     command: caddy run --config /etc/caddy/Caddyfile.dev --adapter caddyfile
     volumes:
       - ./Caddyfile.dev:/etc/caddy/Caddyfile.dev:ro
+      # Frontend dist/ served as static files. `pnpm watch` (vite build
+      # --watch) keeps this populated on every source change. Dir may not
+      # exist on a fresh clone — docker bind mounts auto-create it as
+      # empty, so caddy comes up with 404s until the first build lands.
+      - ./frontend/dist:/srv/dist:ro
     extra_hosts:
       # Lets the in-container caddy reach the airlock binary running on
       # the host network. Linux needs the explicit `host-gateway` magic;
@@ -35,7 +40,9 @@ services:
     environment:
       DOMAIN: ${DOMAIN}
       AIRLOCK_UPSTREAM: ${AIRLOCK_UPSTREAM:-host.docker.internal:8080}
-      FRONTEND_UPSTREAM: ${FRONTEND_UPSTREAM:-host.docker.internal:5173}
+      # FRONTEND_UPSTREAM removed: caddy now serves the SPA from
+      # /srv/dist (vite build --watch output) instead of proxying to
+      # the dev server. Closes the vite-dev attack surface.
       # Caddyfile.dev's global block has both of these lines; exactly one
       # is a real directive per .env state, the other is a comment that
       # no-ops. Comment-trick avoids needing a shell-level "set→empty"

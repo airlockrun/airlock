@@ -1,20 +1,19 @@
 # Develop-against-source Caddy config.
 #
 # Pairs with docker-compose.dev.yml: postgres + rustfs + caddy run in
-# containers, but airlock and the frontend run natively from source on
-# the host. Caddy proxies through to the host binary via
-# host.docker.internal.
+# containers; airlock runs natively on the host (`go run ./cmd/airlock`)
+# and vite REBUILDS in watch mode (`pnpm watch` = `vite build --watch`)
+# emitting static files to frontend/dist, which caddy then serves
+# directly. No dev server is exposed on the network — the entire vite
+# dev-server attack surface (HMR WS, /@fs/, /@id/, etc.) is gone.
 #
-# TLS strategy mirrors the prod Caddyfile: on-demand, validated against
-# airlock's /caddy/ask endpoint. Each per-agent subdomain
-# (spotify.${DOMAIN}, slackbot.${DOMAIN}, …) gets its own real cert on
-# first request via Let's Encrypt's HTTP-01 challenge. No wildcard, no
-# DNS provider plugin.
+# Trade-off vs the old `vite dev`: no HMR (manual browser refresh on
+# edits) in exchange for closing every vite-dev-server CVE class. After
+# CVE-2026-39363 (WS-based fs.deny bypass), this is the right default.
 #
 # Env knobs:
 #   DOMAIN              public hostname (airlock.localhost / your-domain)
 #   AIRLOCK_UPSTREAM    Caddy → airlock binary (default host.docker.internal:8080)
-#   FRONTEND_UPSTREAM   Caddy → vite (default host.docker.internal:5173)
 #   ACME_EMAIL          set → LE issuance with this contact; unset → Caddy's
 #                       local CA (no internet/laptop dev, browsers warn).
 #                       The compose file expands this to the two lines
@@ -33,20 +32,31 @@
 	}
 }
 
-# Apex domain: SPA + REST/WebSocket API. No on_demand — apex is a single
-# hostname and gets its cert eagerly at startup (real LE if ACME_EMAIL is
-# set, local CA otherwise).
+# Apex domain: SPA static files + airlock REST/WebSocket API.
 {$DOMAIN} {
+	root * /srv/dist
+
+	# /auth/relay is a frontend SPA route (landing page for the
+	# subdomain relay-login flow). Matched BEFORE @backend so the
+	# /auth/* matcher doesn't swallow it. Serves index.html so the
+	# SPA router picks up the path. The backend serves
+	# POST /auth/relay-code, which the SPA calls from this page.
 	@spa_relay path /auth/relay
 	handle @spa_relay {
-		reverse_proxy {$FRONTEND_UPSTREAM}
+		rewrite * /index.html
+		file_server
 	}
+
 	@backend path /api/* /auth/* /auth-external /ws /webhooks/* /health /.well-known/* /oauth/*
 	handle @backend {
 		reverse_proxy {$AIRLOCK_UPSTREAM}
 	}
+
+	# Catch-all: static asset if it exists, else index.html (SPA fallback
+	# for client-side routing — /agents/42, /login, etc.).
 	handle {
-		reverse_proxy {$FRONTEND_UPSTREAM}
+		try_files {path} /index.html
+		file_server
 	}
 }
 

@@ -109,15 +109,20 @@ If you're hacking on airlock itself (Go backend, Vue frontend, agent build pipel
 cp .env.dev.example .env
 # Edit .env: set DOMAIN to suit your setup (airlock.localhost for laptop-only;
 # 1.2.3.4.nip.io for a shared dev server reachable from other machines).
+cd frontend && pnpm install && pnpm build && cd ..   # one-time, populates dist/
 docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
 # In separate terminals:
-go run ./cmd/airlock serve
-cd frontend && pnpm dev
+go run ./cmd/airlock serve         # backend
+cd frontend && pnpm watch          # vite build --watch — rebuilds dist/ on change
 ```
 
-This overlay runs postgres + rustfs + caddy in containers and exposes the DB / S3 ports on `127.0.0.1` so the natively-running airlock binary can connect. The in-container `airlock` and `frontend` services are profile-disabled — your `go run` and `pnpm dev` own those ports instead. Caddy proxies through `host.docker.internal` to reach them.
+This overlay runs postgres + rustfs + caddy in containers and exposes the DB / S3 ports on `127.0.0.1` so the natively-running airlock binary can connect. The in-container `airlock` and `frontend` services are profile-disabled. Caddy serves the SPA from `frontend/dist` as static files and proxies API/WS traffic through `host.docker.internal` to your `go run` backend.
 
-For cross-machine access (you SSH into a box and hit it from a laptop), drop a `docker-compose.override.yml` next to the compose files to swap Caddy's `tls internal` for mkcert or a Let's Encrypt setup — Compose auto-loads override.yml so it doesn't change the up command.
+**No vite dev server.** Earlier versions of this overlay proxied to `vite dev`, but the dev server is a chronic CVE surface (HMR WebSocket file-read, `/@fs/...` filesystem access, etc.) — exposing it on a shared dev server with a real domain is asking for trouble. `vite build --watch` gives you the compiler without the server: edits trigger a sub-second rebuild, you refresh the browser manually. Worth it.
+
+TLS modes (set in `.env`):
+- **`ACME_EMAIL` unset** (default): Caddy's local CA — works offline, browsers warn until you trust the CA.
+- **`ACME_EMAIL=you@example.com`**: real Let's Encrypt certs via on-demand HTTP-01, one per agent subdomain. Requires `DOMAIN` to resolve publicly and ports 80/443 reachable from the internet. Same shape as the prod self-host stack.
 
 ## Updating
 
