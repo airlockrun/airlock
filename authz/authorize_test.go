@@ -44,6 +44,32 @@ func TestAuthorize_TenantAxis(t *testing.T) {
 	}
 }
 
+func TestAuthorizeOwnedResource(t *testing.T) {
+	owner := uuid.New()
+	other := uuid.New()
+	tests := []struct {
+		name    string
+		p       Principal
+		ownerID uuid.UUID
+		action  Action
+		wantErr error
+	}{
+		{"owner passes regardless of role", UserPrincipal(owner, auth.RoleUser), owner, TenantBridgeUpdateAny, nil},
+		{"non-owner manager fails when admin-action is admin-only", UserPrincipal(other, auth.RoleManager), owner, TenantBridgeUpdateAny, apperr.ErrForbidden},
+		{"non-owner admin passes via admin-action", UserPrincipal(other, auth.RoleAdmin), owner, TenantBridgeUpdateAny, nil},
+		{"anonymous (no UserID) routes to Authorize and fails", AnonymousPrincipal(), owner, TenantBridgeUpdateAny, apperr.ErrForbidden},
+		{"registered user with nil UserID can't claim ownership of nil owner", UserPrincipal(uuid.Nil, auth.RoleAdmin), uuid.Nil, TenantBridgeUpdateAny, apperr.ErrUnauthorized},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := AuthorizeOwnedResource(context.Background(), nil, tt.p, tt.ownerID, tt.action)
+			if !errors.Is(err, tt.wantErr) {
+				t.Errorf("AuthorizeOwnedResource(p=%v, owner=%s) = %v, want %v", tt.p, tt.ownerID, err, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestAuthorize_UnknownActionPanics(t *testing.T) {
 	defer func() {
 		if recover() == nil {

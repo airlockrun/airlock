@@ -165,32 +165,87 @@ func (s *Service) Link(ctx context.Context, p authz.Principal, platform, uid str
 	return nil
 }
 
-func (s *Service) List(ctx context.Context, p authz.Principal) ([]dbq.PlatformIdentity, error) {
+// Item is the union return shape from List. UserEmail / UserDisplayName
+// are populated only when the caller holds TenantIdentityManageAll
+// (admin); for regular users they're zero strings.
+type Item struct {
+	dbq.PlatformIdentity
+	UserEmail       string
+	UserDisplayName string
+}
+
+func (s *Service) List(ctx context.Context, p authz.Principal) ([]Item, error) {
 	if err := s.authorize(ctx, p); err != nil {
 		return nil, err
 	}
 	q := dbq.New(s.db.Pool())
+	// Admins see every link in the tenant; everyone else sees only
+	// their own. The admin path joins users so the UI can show whose
+	// link is whose without an N+1.
+	if authz.Authorize(ctx, q, p, authz.TenantIdentityManageAll, uuid.Nil) == nil {
+		rows, err := q.ListPlatformIdentitiesAll(ctx)
+		if err != nil {
+			s.logger.Error("list identities (admin) failed", zap.Error(err))
+			return nil, err
+		}
+		out := make([]Item, len(rows))
+		for i, r := range rows {
+			out[i] = Item{
+				PlatformIdentity: dbq.PlatformIdentity{
+					ID: r.ID, UserID: r.UserID, Platform: r.Platform,
+					PlatformUserID: r.PlatformUserID, CreatedAt: r.CreatedAt,
+				},
+				UserEmail:       r.UserEmail,
+				UserDisplayName: r.UserDisplayName,
+			}
+		}
+		return out, nil
+	}
 	rows, err := q.ListPlatformIdentitiesByUser(ctx, pgtype.UUID{Bytes: p.UserID, Valid: true})
 	if err != nil {
 		s.logger.Error("list identities failed", zap.Error(err))
 		return nil, err
 	}
-	return rows, nil
+	out := make([]Item, len(rows))
+	for i, r := range rows {
+		out[i] = Item{PlatformIdentity: r}
+	}
+	return out, nil
 }
 
 func (s *Service) Unlink(ctx context.Context, p authz.Principal, identityID uuid.UUID) error {
+	// Gate registered-user-or-better up front so anonymous callers
+	// can't even probe identity ids via the GetPlatformIdentityByID
+	// read below. Owner / admin discrimination happens after.
 	if err := s.authorize(ctx, p); err != nil {
 		return err
 	}
 	q := dbq.New(s.db.Pool())
-	err := q.DeletePlatformIdentity(ctx, dbq.DeletePlatformIdentityParams{
-		ID:     pgtype.UUID{Bytes: identityID, Valid: true},
-		UserID: pgtype.UUID{Bytes: p.UserID, Valid: true},
-	})
-	if errors.Is(err, pgx.ErrNoRows) {
-		return service.ErrNotFound
-	}
+	// Resolve the owner first so authz can decide via
+	// AuthorizeOwnedResource — caller owns it OR caller satisfies
+	// TenantIdentityManageAll (admin). Unknown id → ErrNotFound,
+	// indistinguishable from "exists but you can't see it" by design.
+	identity, err := q.GetPlatformIdentityByID(ctx, pgtype.UUID{Bytes: identityID, Valid: true})
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return service.ErrNotFound
+		}
+		s.logger.Error("get identity failed", zap.Error(err))
+		return err
+	}
+	var ownerID uuid.UUID
+	if identity.UserID.Valid {
+		ownerID = uuid.UUID(identity.UserID.Bytes)
+	}
+	if err := authz.AuthorizeOwnedResource(ctx, q, p, ownerID, authz.TenantIdentityManageAll); err != nil {
+		// Make non-admins probing other users' ids see a 404, not a 403 —
+		// matches the "indistinguishable" invariant above.
+		if errors.Is(err, service.ErrForbidden) {
+			return service.ErrNotFound
+		}
+		return err
+	}
+	if err := q.DeletePlatformIdentityAny(ctx, pgtype.UUID{Bytes: identityID, Valid: true}); err != nil {
 		s.logger.Error("delete identity failed", zap.Error(err))
 		return err
 	}

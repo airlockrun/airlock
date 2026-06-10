@@ -36,17 +36,14 @@ func (q *Queries) CreatePlatformIdentity(ctx context.Context, arg CreatePlatform
 	return i, err
 }
 
-const deletePlatformIdentity = `-- name: DeletePlatformIdentity :exec
-DELETE FROM platform_identities WHERE id = $1 AND user_id = $2
+const deletePlatformIdentityAny = `-- name: DeletePlatformIdentityAny :exec
+DELETE FROM platform_identities WHERE id = $1
 `
 
-type DeletePlatformIdentityParams struct {
-	ID     pgtype.UUID `json:"id"`
-	UserID pgtype.UUID `json:"user_id"`
-}
-
-func (q *Queries) DeletePlatformIdentity(ctx context.Context, arg DeletePlatformIdentityParams) error {
-	_, err := q.db.Exec(ctx, deletePlatformIdentity, arg.ID, arg.UserID)
+// Admin variant: delete any platform identity by id, without the
+// caller's user_id constraint. Gated behind TenantIdentityManageAll.
+func (q *Queries) DeletePlatformIdentityAny(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, deletePlatformIdentityAny, id)
 	return err
 }
 
@@ -72,6 +69,75 @@ func (q *Queries) GetPlatformIdentity(ctx context.Context, arg GetPlatformIdenti
 		&i.CreatedAt,
 	)
 	return i, err
+}
+
+const getPlatformIdentityByID = `-- name: GetPlatformIdentityByID :one
+SELECT id, user_id, platform, platform_user_id, created_at FROM platform_identities WHERE id = $1
+`
+
+// Fetch a single identity by its row id. Used by the Unlink service
+// path to resolve the owner before authz.AuthorizeOwnedResource gates
+// the delete.
+func (q *Queries) GetPlatformIdentityByID(ctx context.Context, id pgtype.UUID) (PlatformIdentity, error) {
+	row := q.db.QueryRow(ctx, getPlatformIdentityByID, id)
+	var i PlatformIdentity
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.Platform,
+		&i.PlatformUserID,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const listPlatformIdentitiesAll = `-- name: ListPlatformIdentitiesAll :many
+SELECT i.id, i.user_id, i.platform, i.platform_user_id, i.created_at, u.email AS user_email, u.display_name AS user_display_name
+FROM platform_identities i
+JOIN users u ON u.id = i.user_id
+ORDER BY u.email, i.platform, i.created_at
+`
+
+type ListPlatformIdentitiesAllRow struct {
+	ID              pgtype.UUID        `json:"id"`
+	UserID          pgtype.UUID        `json:"user_id"`
+	Platform        string             `json:"platform"`
+	PlatformUserID  string             `json:"platform_user_id"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	UserEmail       string             `json:"user_email"`
+	UserDisplayName string             `json:"user_display_name"`
+}
+
+// Admin variant: every platform identity in the tenant joined with
+// the owning user's email + display_name for display in the admin UI.
+// Gated behind authz.TenantIdentityManageAll; non-admin callers must
+// use ListPlatformIdentitiesByUser.
+func (q *Queries) ListPlatformIdentitiesAll(ctx context.Context) ([]ListPlatformIdentitiesAllRow, error) {
+	rows, err := q.db.Query(ctx, listPlatformIdentitiesAll)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListPlatformIdentitiesAllRow{}
+	for rows.Next() {
+		var i ListPlatformIdentitiesAllRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.UserID,
+			&i.Platform,
+			&i.PlatformUserID,
+			&i.CreatedAt,
+			&i.UserEmail,
+			&i.UserDisplayName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listPlatformIdentitiesByUser = `-- name: ListPlatformIdentitiesByUser :many

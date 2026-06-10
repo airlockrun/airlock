@@ -2176,14 +2176,20 @@ func (x *BridgeSettings) GetPublicPromptTimeoutSeconds() int32 {
 }
 
 // PlatformIdentityInfo represents a user's verified external identity.
+// The owner_* fields are populated only on the admin variant of the
+// identities list (caller holds TenantIdentityManageAll); regular users
+// see them empty since the list is already scoped to themselves.
 type PlatformIdentityInfo struct {
-	state          protoimpl.MessageState `protogen:"open.v1"`
-	Id             string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	Platform       string                 `protobuf:"bytes,2,opt,name=platform,proto3" json:"platform,omitempty"`                                     // "telegram"
-	PlatformUserId string                 `protobuf:"bytes,3,opt,name=platform_user_id,json=platformUserId,proto3" json:"platform_user_id,omitempty"` // Telegram user ID
-	CreatedAt      *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	Id               string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Platform         string                 `protobuf:"bytes,2,opt,name=platform,proto3" json:"platform,omitempty"`                                     // "telegram"
+	PlatformUserId   string                 `protobuf:"bytes,3,opt,name=platform_user_id,json=platformUserId,proto3" json:"platform_user_id,omitempty"` // Telegram user ID
+	CreatedAt        *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	OwnerUserId      string                 `protobuf:"bytes,5,opt,name=owner_user_id,json=ownerUserId,proto3" json:"owner_user_id,omitempty"`
+	OwnerEmail       string                 `protobuf:"bytes,6,opt,name=owner_email,json=ownerEmail,proto3" json:"owner_email,omitempty"`
+	OwnerDisplayName string                 `protobuf:"bytes,7,opt,name=owner_display_name,json=ownerDisplayName,proto3" json:"owner_display_name,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *PlatformIdentityInfo) Reset() {
@@ -2242,6 +2248,27 @@ func (x *PlatformIdentityInfo) GetCreatedAt() *timestamppb.Timestamp {
 		return x.CreatedAt
 	}
 	return nil
+}
+
+func (x *PlatformIdentityInfo) GetOwnerUserId() string {
+	if x != nil {
+		return x.OwnerUserId
+	}
+	return ""
+}
+
+func (x *PlatformIdentityInfo) GetOwnerEmail() string {
+	if x != nil {
+		return x.OwnerEmail
+	}
+	return ""
+}
+
+func (x *PlatformIdentityInfo) GetOwnerDisplayName() string {
+	if x != nil {
+		return x.OwnerDisplayName
+	}
+	return ""
 }
 
 // ToolInfo represents a registered tool on an agent.
@@ -4374,13 +4401,17 @@ const file_airlock_v1_types_proto_rawDesc = "" +
 	"\x10allow_public_dms\x18\x01 \x01(\bR\x0eallowPublicDms\x12;\n" +
 	"\x1apublic_session_ttl_seconds\x18\x02 \x01(\x05R\x17publicSessionTtlSeconds\x12.\n" +
 	"\x13public_session_mode\x18\x03 \x01(\tR\x11publicSessionMode\x12A\n" +
-	"\x1dpublic_prompt_timeout_seconds\x18\x04 \x01(\x05R\x1apublicPromptTimeoutSeconds\"\xa7\x01\n" +
+	"\x1dpublic_prompt_timeout_seconds\x18\x04 \x01(\x05R\x1apublicPromptTimeoutSeconds\"\x9a\x02\n" +
 	"\x14PlatformIdentityInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1a\n" +
 	"\bplatform\x18\x02 \x01(\tR\bplatform\x12(\n" +
 	"\x10platform_user_id\x18\x03 \x01(\tR\x0eplatformUserId\x129\n" +
 	"\n" +
-	"created_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"\xb0\x01\n" +
+	"created_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x12\"\n" +
+	"\rowner_user_id\x18\x05 \x01(\tR\vownerUserId\x12\x1f\n" +
+	"\vowner_email\x18\x06 \x01(\tR\n" +
+	"ownerEmail\x12,\n" +
+	"\x12owner_display_name\x18\a \x01(\tR\x10ownerDisplayName\"\xb0\x01\n" +
 	"\bToolInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12 \n" +

@@ -372,11 +372,17 @@ message BridgeSettings {
 }
 
 // PlatformIdentityInfo represents a user's verified external identity.
+// The owner_* fields are populated only on the admin variant of the
+// identities list (caller holds TenantIdentityManageAll); regular users
+// see them empty since the list is already scoped to themselves.
 message PlatformIdentityInfo {
   string id = 1;
   string platform = 2;          // "telegram"
   string platform_user_id = 3;  // Telegram user ID
   google.protobuf.Timestamp created_at = 4;
+  string owner_user_id = 5;
+  string owner_email = 6;
+  string owner_display_name = 7;
 }
 
 // ToolInfo represents a registered tool on an agent.

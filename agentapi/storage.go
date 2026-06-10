@@ -10,6 +10,7 @@ import (
 
 	"github.com/airlockrun/agentsdk"
 	"github.com/airlockrun/airlock/auth"
+	"github.com/airlockrun/airlock/authz"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/airlockrun/airlock/storage"
@@ -399,7 +400,7 @@ func ServeStoragePath(w http.ResponseWriter, r *http.Request, database *db.DB, s
 			AgentID: toPgUUID(agentID),
 			UserID:  toPgUUID(uid),
 		})
-		if err != nil || !auth.Role(member.Role).AtLeast(auth.RoleAdmin) {
+		if err != nil || !authz.AccessAtLeast(agentsdk.Access(member.Role), agentsdk.AccessAdmin) {
 			http.NotFound(w, r)
 			return
 		}

@@ -12,5 +12,6 @@ func main() {
 		airlockvet.NoDBQ,
 		airlockvet.WriteProto,
 		airlockvet.AgentWire,
+		airlockvet.NoInlineRole,
 	)
 }

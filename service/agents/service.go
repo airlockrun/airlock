@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"github.com/airlockrun/agentsdk"
-	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/authz"
 	"github.com/airlockrun/airlock/builder"
 	"github.com/airlockrun/airlock/container"
@@ -309,9 +308,12 @@ func (s *Service) Create(ctx context.Context, p authz.Principal, req CreateReque
 // with the live container-running flag.
 func (s *Service) List(ctx context.Context, p authz.Principal) ([]ListItem, error) {
 	q := dbq.New(s.db.Pool())
+	if err := authz.Authorize(ctx, q, p, authz.TenantAgentList, uuid.Nil); err != nil {
+		return nil, err
+	}
 	var agents []dbq.Agent
 	var err error
-	if p.TenantRole.AtLeast(auth.RoleAdmin) {
+	if authz.Authorize(ctx, q, p, authz.TenantAgentListAll, uuid.Nil) == nil {
 		agents, err = q.ListAgents(ctx)
 	} else {
 		agents, err = q.ListAgentsByUserID(ctx, pgtype.UUID{Bytes: p.UserID, Valid: true})

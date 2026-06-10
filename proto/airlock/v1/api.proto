@@ -81,6 +81,15 @@ message ListUsersResponse {
   repeated User users = 1;
 }
 
+// MeResponse is the /api/v1/me payload. tenant_permissions enumerates
+// every tenant-axis Action (from airlock/authz/policy.go) the caller's
+// tenant role currently satisfies — the frontend uses this as the single
+// source of truth for UI gating, replacing per-component role checks.
+message MeResponse {
+  User user = 1;
+  repeated string tenant_permissions = 2;
+}
+
 message ListSelectableUsersResponse {
   repeated UserSummary users = 1;
 }

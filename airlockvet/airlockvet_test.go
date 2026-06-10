@@ -29,6 +29,14 @@ func TestWriteProto(t *testing.T) {
 	analysistest.Run(t, dir, WriteProto, "jsonapi")
 }
 
+func TestNoInlineRole(t *testing.T) {
+	dir, err := filepath.Abs("testdata")
+	if err != nil {
+		t.Fatalf("abs testdata: %v", err)
+	}
+	analysistest.Run(t, dir, NoInlineRole, "inlineroleapi")
+}
+
 func TestAgentWire(t *testing.T) {
 	dir, err := filepath.Abs("testdata")
 	if err != nil {

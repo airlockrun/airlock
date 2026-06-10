@@ -21,10 +21,11 @@ import { useProvidersStore } from '@/stores/providers'
 import api from '@/api/client'
 import {
   GetSystemSettingsResponseSchema,
+  ListPlatformIdentitiesResponseSchema,
   UpdateSystemSettingsRequestSchema,
   UpdateSystemSettingsResponseSchema,
 } from '@/gen/airlock/v1/api_pb'
-import type { SystemSettingsInfo } from '@/gen/airlock/v1/types_pb'
+import type { PlatformIdentityInfo, SystemSettingsInfo } from '@/gen/airlock/v1/types_pb'
 import {
   SystemSettingsInfoSchema,
   UpdateTelegramManagerBotResponseSchema,
@@ -88,6 +89,50 @@ function formatDate(iso: string): string {
   }
 }
 
+// Linked platform accounts (Telegram / Discord identities). Regular
+// users see only their own; admins see every link in the tenant with
+// the owner email column populated. Both can unlink — the backend
+// scopes the delete by caller's UserID, or by id alone when the
+// caller holds tenant.identity.manage_all.
+const identities = ref<PlatformIdentityInfo[]>([])
+const identitiesLoading = ref(false)
+const canManageAllIdentities = computed(() => auth.can('tenant.identity.manage_all'))
+
+async function loadIdentities() {
+  identitiesLoading.value = true
+  try {
+    const { data } = await api.get('/api/v1/identities')
+    const resp = fromJson(ListPlatformIdentitiesResponseSchema, data)
+    identities.value = resp.identities
+  } catch {
+    identities.value = []
+  } finally {
+    identitiesLoading.value = false
+  }
+}
+
+async function unlinkIdentity(it: PlatformIdentityInfo) {
+  try {
+    await api.delete(`/api/v1/identities/${encodeURIComponent(it.id)}`)
+    identities.value = identities.value.filter(x => x.id !== it.id)
+    toast.add({ severity: 'success', summary: 'Identity unlinked', life: 2000 })
+  } catch (err: any) {
+    toast.add({ severity: 'error', summary: err?.response?.data?.error || 'unlink failed', life: 5000 })
+  }
+}
+
+function formatDateTime(ts: any): string {
+  if (!ts) return ''
+  // protobuf-ts Timestamp → { seconds: bigint, nanos: number }
+  const seconds = typeof ts.seconds === 'bigint' ? Number(ts.seconds) : ts.seconds
+  if (!seconds) return ''
+  try {
+    return new Date(seconds * 1000).toLocaleString()
+  } catch {
+    return ''
+  }
+}
+
 // Default models (admin only). Keyed by the SystemSettingsInfo field key
 // (camelCase) so assignment back to the proto payload is trivial.
 const defaults = ref<Record<keyof SystemSettingsInfo & string, string>>({
@@ -130,7 +175,8 @@ function applySettings(info: SystemSettingsInfo) {
 
 onMounted(async () => {
   loadGrants()
-  if (auth.isAdmin) {
+  loadIdentities()
+  if (auth.can('tenant.settings.update')) {
     // Pickers depend on configured providers — fetch first so the
     // applySettings packed values match an option in the dropdown.
     await providers.fetchProviders()
@@ -353,7 +399,7 @@ async function changePassword() {
     </Card>
 
     <!-- Default Models (admin only) -->
-    <Card v-if="auth.isAdmin" style="margin-bottom: 1.5rem">
+    <Card v-if="auth.can('tenant.settings.update')" style="margin-bottom: 1.5rem">
       <template #title>Default Models</template>
       <template #subtitle>
         Per-capability defaults. Used wherever the system needs a model for a capability and no agent-specific override is set.
@@ -407,7 +453,7 @@ async function changePassword() {
     </Card>
 
     <!-- Telegram Manager Bot (admin only) -->
-    <Card v-if="auth.isAdmin" style="margin-bottom: 1.5rem">
+    <Card v-if="auth.can('tenant.manager_bot.config')" style="margin-bottom: 1.5rem">
       <template #title>Telegram Manager Bot</template>
       <template #subtitle>
         Used for the "Create new bot via Telegram" flow on the Bridges page. Configure a Telegram bot that has <code>can_manage_bots</code> enabled in BotFather and paste its token here.
@@ -473,6 +519,52 @@ async function changePassword() {
                 text
                 @click="revokeGrant(data)"
                 v-tooltip.left="'Revoke access'"
+              />
+            </template>
+          </Column>
+        </DataTable>
+      </template>
+    </Card>
+
+    <!-- Linked accounts (platform_identities) -->
+    <Card style="margin-bottom: 1.5rem">
+      <template #title>Linked accounts</template>
+      <template #subtitle>
+        <span v-if="canManageAllIdentities">
+          Every Telegram / Discord identity linked to a user in this tenant. Unlinking forces the user to re-run <code>/auth</code> in their bot to regain access.
+        </span>
+        <span v-else>
+          Your Telegram / Discord identities — used by bridge bots to recognise you. Unlinking forces you to re-run <code>/auth</code> in the bot the next time you DM it.
+        </span>
+      </template>
+      <template #content>
+        <div v-if="identitiesLoading" style="color: var(--p-text-muted-color)">Loading…</div>
+        <div v-else-if="identities.length === 0" style="color: var(--p-text-muted-color)">
+          {{ canManageAllIdentities ? 'No platform identities are linked in this tenant.' : 'You have no linked platform identities.' }}
+        </div>
+        <DataTable v-else :value="identities" stripedRows size="small">
+          <Column v-if="canManageAllIdentities" field="ownerEmail" header="Owner">
+            <template #body="{ data }">
+              <div>{{ data.ownerEmail }}</div>
+              <small v-if="data.ownerDisplayName" style="color: var(--p-text-muted-color)">
+                {{ data.ownerDisplayName }}
+              </small>
+            </template>
+          </Column>
+          <Column field="platform" header="Platform" />
+          <Column field="platformUserId" header="Platform user ID" />
+          <Column header="Linked">
+            <template #body="{ data }">{{ formatDateTime(data.createdAt) }}</template>
+          </Column>
+          <Column header="">
+            <template #body="{ data }">
+              <Button
+                icon="pi pi-trash"
+                size="small"
+                severity="danger"
+                text
+                @click="unlinkIdentity(data)"
+                v-tooltip.left="'Unlink'"
               />
             </template>
           </Column>

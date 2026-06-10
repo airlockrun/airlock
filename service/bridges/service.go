@@ -9,7 +9,6 @@ import (
 	"errors"
 
 	"github.com/airlockrun/agentsdk"
-	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/authz"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
@@ -327,11 +326,11 @@ func (s *Service) CreateFromManagedSession(ctx context.Context, in ManagedSessio
 // bridge; everyone else sees system bridges plus bridges bound to
 // agents they're a member of.
 func (s *Service) List(ctx context.Context, p authz.Principal) ([]ListItem, error) {
-	if !p.IsAuthenticatedUser() {
-		return nil, service.ErrUnauthorized
-	}
 	q := dbq.New(s.db.Pool())
-	if p.TenantRole.AtLeast(auth.RoleAdmin) {
+	if err := authz.Authorize(ctx, q, p, authz.TenantBridgeList, uuid.Nil); err != nil {
+		return nil, err
+	}
+	if authz.Authorize(ctx, q, p, authz.TenantBridgeListAll, uuid.Nil) == nil {
 		rows, err := q.ListBridgesAdmin(ctx)
 		if err != nil {
 			s.logger.Error("list bridges failed", zap.Error(err))
@@ -376,10 +375,6 @@ func (s *Service) List(ctx context.Context, p authz.Principal) ([]ListItem, erro
 // admin via Delete, not here). A non-empty new agent_id requires
 // ownership of that agent unless the caller is admin.
 func (s *Service) Update(ctx context.Context, p authz.Principal, bridgeID uuid.UUID, req UpdateRequest) (Result, error) {
-	if !p.IsAuthenticatedUser() {
-		return Result{}, service.ErrUnauthorized
-	}
-	isAdmin := p.TenantRole.AtLeast(auth.RoleAdmin)
 	q := dbq.New(s.db.Pool())
 	br, err := q.GetBridgeByID(ctx, pgtype.UUID{Bytes: bridgeID, Valid: true})
 	if err != nil {
@@ -389,23 +384,36 @@ func (s *Service) Update(ctx context.Context, p authz.Principal, bridgeID uuid.U
 		s.logger.Error("get bridge failed", zap.Error(err))
 		return Result{}, err
 	}
-	isOwner := br.OwnerID.Valid && uuid.UUID(br.OwnerID.Bytes) == p.UserID
-	switch {
-	case br.IsSystem:
-		if !isAdmin {
-			return Result{}, service.Detail(service.ErrForbidden, "system bridges require admin role to modify")
+	if br.IsSystem {
+		if err := authz.Authorize(ctx, q, p, authz.TenantBridgeSystem, uuid.Nil); err != nil {
+			if errors.Is(err, service.ErrForbidden) {
+				return Result{}, service.Detail(service.ErrForbidden, "system bridges require admin role to modify")
+			}
+			return Result{}, err
 		}
-	case !isOwner:
-		return Result{}, service.Detail(service.ErrForbidden, "only the bridge owner can change its agent")
+	} else {
+		var ownerID uuid.UUID
+		if br.OwnerID.Valid {
+			ownerID = uuid.UUID(br.OwnerID.Bytes)
+		}
+		if err := authz.AuthorizeOwnedResource(ctx, q, p, ownerID, authz.TenantBridgeUpdateAny); err != nil {
+			if errors.Is(err, service.ErrForbidden) {
+				return Result{}, service.Detail(service.ErrForbidden, "only the bridge owner or an admin can change its agent")
+			}
+			return Result{}, err
+		}
 	}
+	// Flipping is_system in either direction reuses the create-time gate.
+	// TenantBridgeUpdateAny doubles as the "tenant admin can bind a bridge
+	// to any agent without being an agent admin" escape — same admin
+	// power, expressed as the Action it logically extends.
+	canSwitchSystem := authz.Authorize(ctx, q, p, authz.TenantBridgeSystem, uuid.Nil) == nil
+	canBindAnyAgent := authz.Authorize(ctx, q, p, authz.TenantBridgeUpdateAny, uuid.Nil) == nil
 	newIsSystem := br.IsSystem
 	if req.IsSystem != nil {
 		newIsSystem = *req.IsSystem
 	}
-	// Crossing the system boundary in either direction is an admin-only
-	// action: TenantBridgeSystem already gates is_system=true at create
-	// time; require the same role to flip an existing row in or out.
-	if newIsSystem != br.IsSystem && !isAdmin {
+	if newIsSystem != br.IsSystem && !canSwitchSystem {
 		return Result{}, service.Detail(service.ErrForbidden, "switching is_system requires admin role")
 	}
 	var newAgentID pgtype.UUID
@@ -422,7 +430,7 @@ func (s *Service) Update(ctx context.Context, p authz.Principal, bridgeID uuid.U
 		if err != nil {
 			return Result{}, service.Detail(service.ErrInvalidInput, "invalid agent_id")
 		}
-		if !isAdmin {
+		if !canBindAnyAgent {
 			if !authz.AccessAtLeast(p.EffectiveAgentAccess(ctx, q, agentID), agentsdk.AccessAdmin) {
 				return Result{}, service.ErrForbidden
 			}
@@ -463,6 +471,11 @@ func (s *Service) Update(ctx context.Context, p authz.Principal, bridgeID uuid.U
 			PublicSessionTTLSeconds:    int(req.Settings.PublicSessionTTLSeconds),
 			PublicSessionMode:          mode,
 			PublicPromptTimeoutSeconds: timeout,
+			// Force-true until a frontend toggle exists; the runtime
+			// already reads settings.WebAppEnabled, so switching to a
+			// user-controlled value later is a one-line flip to
+			// req.Settings.WebAppEnabled.
+			WebAppEnabled: true,
 		}
 		raw, mErr := json.Marshal(settings)
 		if mErr != nil {
@@ -485,10 +498,6 @@ func (s *Service) Update(ctx context.Context, p authz.Principal, bridgeID uuid.U
 // Delete removes a bridge. Same owner/admin gate as Update; admin can
 // also delete someone else's bridge (the explicit escape hatch).
 func (s *Service) Delete(ctx context.Context, p authz.Principal, bridgeID uuid.UUID) error {
-	if !p.IsAuthenticatedUser() {
-		return service.ErrUnauthorized
-	}
-	isAdmin := p.TenantRole.AtLeast(auth.RoleAdmin)
 	q := dbq.New(s.db.Pool())
 	br, err := q.GetBridgeByID(ctx, pgtype.UUID{Bytes: bridgeID, Valid: true})
 	if err != nil {
@@ -498,13 +507,21 @@ func (s *Service) Delete(ctx context.Context, p authz.Principal, bridgeID uuid.U
 		s.logger.Error("get bridge failed", zap.Error(err))
 		return err
 	}
-	isOwner := br.OwnerID.Valid && uuid.UUID(br.OwnerID.Bytes) == p.UserID
 	if br.IsSystem {
-		if !isAdmin {
-			return service.Detail(service.ErrForbidden, "system bridges require admin role to delete")
+		if err := authz.Authorize(ctx, q, p, authz.TenantBridgeSystem, uuid.Nil); err != nil {
+			if errors.Is(err, service.ErrForbidden) {
+				return service.Detail(service.ErrForbidden, "system bridges require admin role to delete")
+			}
+			return err
 		}
-	} else if !isAdmin && !isOwner {
-		return service.ErrForbidden
+	} else {
+		var ownerID uuid.UUID
+		if br.OwnerID.Valid {
+			ownerID = uuid.UUID(br.OwnerID.Bytes)
+		}
+		if err := authz.AuthorizeOwnedResource(ctx, q, p, ownerID, authz.TenantBridgeDeleteAny); err != nil {
+			return err
+		}
 	}
 	if err := q.DeleteBridge(ctx, pgtype.UUID{Bytes: bridgeID, Valid: true}); err != nil {
 		s.logger.Error("delete bridge failed", zap.Error(err))

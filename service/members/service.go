@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/authz"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
@@ -83,8 +82,13 @@ func (s *Service) Add(ctx context.Context, p authz.Principal, agentID, targetID 
 		return service.ErrUnauthorized
 	}
 	q := dbq.New(s.db.Pool())
-	isSysAdmin := p.TenantRole.AtLeast(auth.RoleAdmin)
-	if !(isSysAdmin && p.UserID == targetID) {
+	// Tenant admin self-add escape: an admin can join any agent
+	// without already being an agent admin (the "I need into this to
+	// debug it" path). Skips the per-agent membership check; everyone
+	// else falls through to it.
+	selfAdd := p.UserID == targetID &&
+		authz.Authorize(ctx, q, p, authz.TenantAgentMembersSelfAdd, uuid.Nil) == nil
+	if !selfAdd {
 		if err := authz.Authorize(ctx, q, p, authz.AgentMembersManage, agentID); err != nil {
 			return err
 		}

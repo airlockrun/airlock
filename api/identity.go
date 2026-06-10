@@ -170,10 +170,13 @@ func (h *identityHandler) ListIdentities(w http.ResponseWriter, r *http.Request)
 	out := make([]*airlockv1.PlatformIdentityInfo, len(rows))
 	for i, id := range rows {
 		out[i] = &airlockv1.PlatformIdentityInfo{
-			Id:             pgUUID(id.ID).String(),
-			Platform:       id.Platform,
-			PlatformUserId: id.PlatformUserID,
-			CreatedAt:      timestamppb.New(id.CreatedAt.Time),
+			Id:               pgUUID(id.ID).String(),
+			Platform:         id.Platform,
+			PlatformUserId:   id.PlatformUserID,
+			CreatedAt:        timestamppb.New(id.CreatedAt.Time),
+			OwnerUserId:      pgUUID(id.UserID).String(),
+			OwnerEmail:       id.UserEmail,
+			OwnerDisplayName: id.UserDisplayName,
 		}
 	}
 	writeProto(w, http.StatusOK, &airlockv1.ListPlatformIdentitiesResponse{Identities: out})

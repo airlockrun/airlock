@@ -8,6 +8,7 @@ import (
 
 	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/auth/lockout"
+	"github.com/airlockrun/airlock/authz"
 	"github.com/airlockrun/airlock/convert"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
@@ -299,7 +300,15 @@ func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeProto(w, http.StatusOK, convert.UserToProto(user))
+	actions := authz.GrantedTenantActions(auth.Role(claims.TenantRole))
+	perms := make([]string, len(actions))
+	for i, a := range actions {
+		perms[i] = string(a)
+	}
+	writeProto(w, http.StatusOK, &airlockv1.MeResponse{
+		User:              convert.UserToProto(user),
+		TenantPermissions: perms,
+	})
 }
 
 func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {

@@ -291,7 +291,7 @@ function confirmDelete(bridge: { id: string; name: string }) {
   <div>
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem">
       <h1 style="margin: 0; font-size: 1.5rem">Bridges</h1>
-      <Button v-if="auth.isManagerOrAdmin" label="Add Bridge" icon="pi pi-plus" @click="openCreate" />
+      <Button v-if="auth.can('tenant.bridge.create')" label="Add Bridge" icon="pi pi-plus" @click="openCreate" />
     </div>
 
     <!-- Loading skeletons -->
@@ -418,7 +418,7 @@ function confirmDelete(bridge: { id: string; name: string }) {
         <!-- System bridge: admin-only. A system bridge isn't bound to
              an agent; inbound DMs route to the in-airlock sysagent
              (operator chat surface). -->
-        <div v-if="auth.isAdmin" style="display: flex; align-items: center; justify-content: space-between; gap: 1rem">
+        <div v-if="auth.can('tenant.bridge.system')" style="display: flex; align-items: center; justify-content: space-between; gap: 1rem">
           <div>
             <div style="font-weight: 600">System bridge</div>
             <small style="color: var(--p-text-muted-color)">
@@ -537,7 +537,7 @@ function confirmDelete(bridge: { id: string; name: string }) {
              sysagent (no per-agent binding, no public-DM controls); off
              → binds to a specific agent picked below. Backend requires
              admin to cross the boundary in either direction. -->
-        <div v-if="auth.isAdmin" style="display: flex; align-items: center; justify-content: space-between; gap: 1rem">
+        <div v-if="auth.can('tenant.bridge.system')" style="display: flex; align-items: center; justify-content: space-between; gap: 1rem">
           <div>
             <div style="font-weight: 600">System bridge</div>
             <small style="color: var(--p-text-muted-color)">

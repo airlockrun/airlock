@@ -343,8 +343,14 @@ func (m *BridgeManager) registerWebAppMenuButton(ctx context.Context, driver Bri
 		m.logger.Warn("web-app menu button: setChatMenuButton failed",
 			zap.String("bridge", br.Name),
 			zap.Bool("enabled", settings.WebAppEnabled),
+			zap.String("url", url),
 			zap.Error(err))
+		return
 	}
+	m.logger.Info("web-app menu button registered",
+		zap.String("bridge", br.Name),
+		zap.Bool("enabled", settings.WebAppEnabled),
+		zap.String("url", url))
 }
 
 // registerCommands pushes the slash-command registry to drivers that

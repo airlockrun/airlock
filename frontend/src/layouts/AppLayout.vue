@@ -48,12 +48,14 @@ const menuItems = computed(() => {
   const items = [
     { label: 'Agents', icon: 'pi pi-box', route: '/agents' },
   ]
-  if (auth.isAdmin) {
-    items.push(
-      { label: 'Providers', icon: 'pi pi-server', route: '/providers' },
-      { label: 'Bridges', icon: 'pi pi-link', route: '/bridges' },
-      { label: 'Users', icon: 'pi pi-users', route: '/users' },
-    )
+  if (auth.can('tenant.provider.manage')) {
+    items.push({ label: 'Providers', icon: 'pi pi-server', route: '/providers' })
+  }
+  // Bridges is visible to everyone authenticated — plain users see the
+  // list read-only; the page's own gates control Add/Edit/Delete.
+  items.push({ label: 'Bridges', icon: 'pi pi-link', route: '/bridges' })
+  if (auth.can('tenant.user.manage')) {
+    items.push({ label: 'Users', icon: 'pi pi-users', route: '/users' })
   }
   items.push(
     { label: 'Git Credentials', icon: 'pi pi-key', route: '/settings/git-credentials' },

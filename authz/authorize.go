@@ -58,3 +58,22 @@ func unauthenticatedOrForbidden(p Principal) error {
 	}
 	return apperr.ErrForbidden
 }
+
+// AuthorizeOwnedResource gates on "the caller owns the resource, OR
+// the caller's tenant role satisfies adminAction." Use this anywhere a
+// row has a single owner_id (bridges, platform_identities, OAuth
+// grants) and an admin escape exists for cross-user moderation.
+//
+// ownerID is the UserID stored on the resource. adminAction must be a
+// tenant-axis Action — the policy table is the single source of truth
+// for who can act on someone else's resource.
+//
+// Returns nil if owner, otherwise the result of Authorize(adminAction).
+// Anonymous / trigger principals fall through to Authorize, which
+// rejects them with 401/403 as appropriate.
+func AuthorizeOwnedResource(ctx context.Context, q *dbq.Queries, p Principal, ownerID uuid.UUID, adminAction Action) error {
+	if p.Kind == KindRegisteredUser && p.UserID != uuid.Nil && p.UserID == ownerID {
+		return nil
+	}
+	return Authorize(ctx, q, p, adminAction, uuid.Nil)
+}

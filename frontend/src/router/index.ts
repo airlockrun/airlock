@@ -56,9 +56,9 @@ const router = createRouter({
         { path: 'agents/:id/chat', name: 'agent-chat', component: () => import('@/views/AgentChatView.vue') },
         { path: 'agents/:id/runs/:runId', name: 'run-detail', component: () => import('@/views/RunDetailView.vue') },
         { path: 'agents/:id/builds/:buildId', name: 'build-detail', component: () => import('@/views/BuildDetailView.vue') },
-        { path: 'providers', name: 'providers', component: () => import('@/views/ProvidersView.vue'), meta: { requiresAdmin: true } },
-        { path: 'bridges', name: 'bridges', component: () => import('@/views/BridgesView.vue'), meta: { requiresAdmin: true } },
-        { path: 'users', name: 'users', component: () => import('@/views/UsersView.vue'), meta: { requiresAdmin: true } },
+        { path: 'providers', name: 'providers', component: () => import('@/views/ProvidersView.vue'), meta: { requires: 'tenant.provider.manage' } },
+        { path: 'bridges', name: 'bridges', component: () => import('@/views/BridgesView.vue') },
+        { path: 'users', name: 'users', component: () => import('@/views/UsersView.vue'), meta: { requires: 'tenant.user.manage' } },
         { path: 'settings', name: 'settings', component: () => import('@/views/SettingsView.vue') },
         { path: 'settings/git-credentials', name: 'git-credentials', component: () => import('@/views/GitCredentialsView.vue') },
         { path: 'link-identity', name: 'link-identity', component: () => import('@/views/LinkIdentityView.vue') },
@@ -86,7 +86,7 @@ router.beforeEach((to) => {
     return { name: 'agents' }
   }
 
-  if (to.meta.requiresAdmin && !auth.isAdmin) {
+  if (typeof to.meta.requires === 'string' && !auth.can(to.meta.requires)) {
     return { name: 'agents' }
   }
 

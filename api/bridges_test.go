@@ -223,9 +223,10 @@ func TestCreateBridgeBadToken(t *testing.T) {
 	}
 }
 
-// TestUpdateBridgeAdminCannotReassignOthersBridge confirms admins can
-// DELETE someone else's bridge but cannot change its agent.
-func TestUpdateBridgeAdminCannotReassignOthersBridge(t *testing.T) {
+// TestUpdateBridgeAdminCanReassignOthersBridge confirms admins can
+// reassign any user's bridge to an agent they have admin access on —
+// the admin escape in service/bridges.Update.
+func TestUpdateBridgeAdminCanReassignOthersBridge(t *testing.T) {
 	skipIfNoDB(t)
 
 	telegramSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -254,15 +255,15 @@ func TestUpdateBridgeAdminCannotReassignOthersBridge(t *testing.T) {
 	var created airlockv1.BridgeInfo
 	decodeProtoResp(t, rec, &created)
 
-	// Admin (different user) tries to reassign to their own agent → 403.
+	// Admin (different user) reassigns to their own agent.
 	updateBody := map[string]string{"agent_id": otherAgentID.String()}
 	req = requestJSONAs(t, "PUT",
 		fmt.Sprintf("/api/v1/bridges/%s", created.Id), adminID, "admin", updateBody)
 	rec = httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusForbidden {
-		t.Errorf("admin reassign someone else's bridge: status = %d, want 403; body: %s",
+	if rec.Code != http.StatusOK {
+		t.Errorf("admin reassign someone else's bridge: status = %d, want 200; body: %s",
 			rec.Code, rec.Body.String())
 	}
 }
