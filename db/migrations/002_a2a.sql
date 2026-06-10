@@ -743,7 +743,98 @@ CREATE TABLE managed_bot_sessions (
 );
 CREATE INDEX managed_bot_sessions_owner_idx ON managed_bot_sessions(owner_id);
 
+-- One-time history rewrite: migrate persisted file/image parts to goai's
+-- unified FilePart. The separate `image` part type folds into `file`, and
+-- the flat `data`/`url` string fields become a tagged `data` union
+-- ({type:"url"|"data", ...}). An `image`/`data:`-prefixed payload becomes a
+-- url variant, otherwise inline bytes. Idempotent: a part whose `data` is
+-- already an object (the new shape), and any non-file/image part, passes
+-- through untouched. Applied to both message tables that persist goai
+-- Content JSON (agent_messages, system_messages).
+-- +goose StatementBegin
+DO $$
+DECLARE
+    tbl text;
+BEGIN
+    FOREACH tbl IN ARRAY ARRAY['agent_messages', 'system_messages']
+    LOOP
+        EXECUTE format($q$
+            UPDATE %I m
+            SET parts = sub.new_parts
+            FROM (
+                SELECT m2.id,
+                       jsonb_agg(
+                           CASE
+                               WHEN elem->>'type' = 'image'
+                               THEN (elem - 'image') || jsonb_build_object(
+                                        'type', 'file',
+                                        'data', CASE WHEN (elem->>'image') LIKE 'http%%' OR (elem->>'image') LIKE 'data:%%'
+                                                     THEN jsonb_build_object('type','url','url', elem->>'image')
+                                                     ELSE jsonb_build_object('type','data','data', elem->>'image') END)
+                               WHEN elem->>'type' = 'file' AND jsonb_typeof(elem->'data') IS DISTINCT FROM 'object'
+                               THEN (elem - 'data' - 'url') || jsonb_build_object(
+                                        'data', CASE WHEN COALESCE(elem->>'url','') <> ''
+                                                     THEN jsonb_build_object('type','url','url', elem->>'url')
+                                                     ELSE jsonb_build_object('type','data','data', COALESCE(elem->>'data','')) END)
+                               ELSE elem
+                           END
+                           ORDER BY ord
+                       ) AS new_parts
+                FROM %I m2,
+                     jsonb_array_elements(m2.parts) WITH ORDINALITY AS t(elem, ord)
+                WHERE jsonb_typeof(m2.parts) = 'array'
+                GROUP BY m2.id
+            ) sub
+            WHERE m.id = sub.id
+              AND jsonb_typeof(m.parts) = 'array';
+        $q$, tbl, tbl);
+    END LOOP;
+END $$;
+-- +goose StatementEnd
+
 -- +goose Down
+-- Best-effort inverse of the unified-FilePart rewrite: an image/* file part
+-- collapses back to the `image` part type; other file parts get their flat
+-- `data`/`url` string fields back from the tagged union. Both message tables.
+-- +goose StatementBegin
+DO $$
+DECLARE
+    tbl text;
+BEGIN
+    FOREACH tbl IN ARRAY ARRAY['agent_messages', 'system_messages']
+    LOOP
+        EXECUTE format($q$
+            UPDATE %I m
+            SET parts = sub.new_parts
+            FROM (
+                SELECT m2.id,
+                       jsonb_agg(
+                           CASE
+                               WHEN elem->>'type' = 'file' AND jsonb_typeof(elem->'data') = 'object'
+                               THEN CASE
+                                       WHEN (elem->>'mimeType') LIKE 'image/%%'
+                                       THEN (elem - 'data' - 'filename') || jsonb_build_object(
+                                                'type', 'image',
+                                                'image', COALESCE(elem #>> '{data,url}', elem #>> '{data,data}', ''))
+                                       ELSE (elem - 'data') || jsonb_build_object(
+                                                CASE WHEN elem #>> '{data,type}' = 'url' THEN 'url' ELSE 'data' END,
+                                                COALESCE(elem #>> '{data,url}', elem #>> '{data,data}', ''))
+                                    END
+                               ELSE elem
+                           END
+                           ORDER BY ord
+                       ) AS new_parts
+                FROM %I m2,
+                     jsonb_array_elements(m2.parts) WITH ORDINALITY AS t(elem, ord)
+                WHERE jsonb_typeof(m2.parts) = 'array'
+                GROUP BY m2.id
+            ) sub
+            WHERE m.id = sub.id
+              AND jsonb_typeof(m.parts) = 'array';
+        $q$, tbl, tbl);
+    END LOOP;
+END $$;
+-- +goose StatementEnd
 DROP INDEX IF EXISTS managed_bot_sessions_owner_idx;
 DROP TABLE IF EXISTS managed_bot_sessions;
 DROP INDEX IF EXISTS idx_conversations_bridge_authed;

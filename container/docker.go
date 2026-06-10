@@ -34,6 +34,9 @@ type DockerManager struct {
 	idleTimeout  time.Duration
 	stopOnce     sync.Once
 	done         chan struct{}
+	// swapMu serializes the per-agent container-swap critical section
+	// (see LockSwap). One *sync.Mutex per agent ID, lazily created.
+	swapMu sync.Map // agentID(string) → *sync.Mutex
 }
 
 // NewDockerManager creates a Docker-based ContainerManager.
@@ -171,8 +174,18 @@ func agentName(agentID uuid.UUID) string {
 func (m *DockerManager) StartAgent(ctx context.Context, opts AgentOpts) (*Container, error) {
 	name := agentName(opts.AgentID)
 
+	// Stale-image guard: an existing container with the wrong image must
+	// be replaced, not adopted. Without this check, a rollback that
+	// races with a trigger (the trigger starts the OLD image while the
+	// rollback is mid-swap) results in agents.image_ref pointing to the
+	// new image while the running container serves the old code. The
+	// check runs against both the cache and the live Docker state.
+	imageMatch := func(have string) bool {
+		return opts.Image == "" || have == "" || have == opts.Image
+	}
+
 	m.mu.Lock()
-	if c, ok := m.active[name]; ok {
+	if c, ok := m.active[name]; ok && imageMatch(c.Image) {
 		m.lastActivity[name] = time.Now()
 		m.mu.Unlock()
 		if err := m.waitHealthy(ctx, c, 3*time.Second); err == nil {
@@ -182,19 +195,31 @@ func (m *DockerManager) StartAgent(ctx context.Context, opts AgentOpts) (*Contai
 		delete(m.active, name)
 		m.mu.Unlock()
 	} else {
+		// Cache hit with wrong image, or no cache entry: drop the stale
+		// entry so it doesn't shadow the freshly-built container below.
+		if ok {
+			delete(m.active, name)
+		}
 		m.mu.Unlock()
 	}
 
 	if c, err := m.inspectExisting(ctx, name); err == nil {
-		if err := m.waitHealthy(ctx, c, 15*time.Second); err == nil {
-			m.mu.Lock()
-			m.active[name] = c
-			m.lastActivity[name] = time.Now()
-			m.mu.Unlock()
-			return c, nil
+		if imageMatch(c.Image) {
+			if err := m.waitHealthy(ctx, c, 15*time.Second); err == nil {
+				m.mu.Lock()
+				m.active[name] = c
+				m.lastActivity[name] = time.Now()
+				m.mu.Unlock()
+				return c, nil
+			}
+		} else {
+			m.logger.Info("stale container image, replacing",
+				zap.String("name", name),
+				zap.String("have", c.Image),
+				zap.String("want", opts.Image))
 		}
 		if err := m.client.ContainerRemove(ctx, name, dcontainer.RemoveOptions{Force: true}); err != nil {
-			m.logger.Warn("failed to remove unhealthy container", zap.String("name", name), zap.Error(err))
+			m.logger.Warn("failed to remove existing container", zap.String("name", name), zap.Error(err))
 		}
 	}
 
@@ -232,6 +257,7 @@ func (m *DockerManager) StartAgent(ctx context.Context, opts AgentOpts) (*Contai
 		return nil, fmt.Errorf("start agent: %w", err)
 	}
 	c.Token = token
+	c.Image = image
 
 	m.mu.Lock()
 	m.active[name] = c
@@ -318,12 +344,21 @@ func (m *DockerManager) StopAgent(ctx context.Context, id string) error {
 	// container is fine — the goal state is reached either way.
 	m.client.ContainerRemove(ctx, id, dcontainer.RemoveOptions{})
 
+	// Cache cleanup: every current caller passes the container NAME
+	// ("airlock-agent-<short>"), so a direct map lookup is the right
+	// path. Fall back to a scan-by-Docker-ID for any future caller that
+	// resolves a container ID first.
 	m.mu.Lock()
-	for name, c := range m.active {
-		if c.ID == id {
-			delete(m.active, name)
-			delete(m.lastActivity, name)
-			break
+	if _, ok := m.active[id]; ok {
+		delete(m.active, id)
+		delete(m.lastActivity, id)
+	} else {
+		for name, c := range m.active {
+			if c.ID == id {
+				delete(m.active, name)
+				delete(m.lastActivity, name)
+				break
+			}
 		}
 	}
 	m.mu.Unlock()
@@ -473,11 +508,26 @@ func (m *DockerManager) inspectExisting(ctx context.Context, name string) (*Cont
 		return nil, err
 	}
 
+	image := ""
+	if info.Config != nil {
+		image = info.Config.Image
+	}
 	return &Container{
 		ID:       info.ID,
 		Name:     name,
 		Endpoint: endpoint,
+		Image:    image,
 	}, nil
+}
+
+// LockSwap acquires the per-agent container-swap mutex. See the
+// ContainerManager interface comment for the design rationale.
+func (m *DockerManager) LockSwap(agentID uuid.UUID) func() {
+	key := agentID.String()
+	mu, _ := m.swapMu.LoadOrStore(key, &sync.Mutex{})
+	mux := mu.(*sync.Mutex)
+	mux.Lock()
+	return mux.Unlock
 }
 
 func (m *DockerManager) getEndpoint(ctx context.Context, containerID string) (string, error) {

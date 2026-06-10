@@ -1,27 +1,20 @@
 <script setup lang="ts">
-import { onMounted, ref, computed, watch } from 'vue'
+import { onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useConfirm } from 'primevue/useconfirm'
 import { useToast } from 'primevue/usetoast'
 import { useBuildsStore } from '@/stores/builds'
-import { useAgentsStore } from '@/stores/agents'
 import type { AgentBuildInfo } from '@/gen/airlock/v1/types_pb'
 
-const props = defineProps<{ agentId: string }>()
+const props = defineProps<{ agentId: string; currentSourceRef: string }>()
 const emit = defineEmits<{ populated: [count: number] }>()
 const router = useRouter()
 const confirm = useConfirm()
 const toast = useToast()
 const store = useBuildsStore()
-const agentsStore = useAgentsStore()
 watch(() => store.builds.length, (n) => emit('populated', n), { immediate: true })
 
 const rollingBack = ref<string | null>(null)
-
-const currentSourceRef = computed(() => {
-  const agent = agentsStore.agents.find((a) => a.id === props.agentId)
-  return agent?.sourceRef ?? ''
-})
 
 function statusSeverity(status: string): string {
   switch (status) {
@@ -71,7 +64,7 @@ function canRollback(b: AgentBuildInfo): boolean {
   return (
     b.status === 'complete' &&
     b.sourceRef !== '' &&
-    b.sourceRef !== currentSourceRef.value &&
+    b.sourceRef !== props.currentSourceRef &&
     rollingBack.value === null
   )
 }

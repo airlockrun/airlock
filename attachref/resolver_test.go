@@ -80,8 +80,8 @@ func TestResolveForStorage_CanonicalizesAndSetsSource(t *testing.T) {
 			Role: "tool",
 			Parts: []solsession.Part{
 				{
-					Type:  "image",
-					Image: &solsession.ImagePart{Image: attachref.Sentinel + key, MimeType: "image/png", Source: key},
+					Type: "file",
+					File: &solsession.FilePart{Data: attachref.Sentinel + key, MimeType: "image/png", Source: key},
 				},
 			},
 		},
@@ -91,13 +91,13 @@ func TestResolveForStorage_CanonicalizesAndSetsSource(t *testing.T) {
 		t.Fatalf("ResolveForStorage: %v", err)
 	}
 
-	got := msgs[0].Parts[0].Image
+	got := msgs[0].Parts[0].File
 	wantSource := "llm/agents/" + agentID.String() + "/" + key
 	if got.Source != wantSource {
 		t.Errorf("Source = %q, want %q", got.Source, wantSource)
 	}
-	if got.Image != attachref.Sentinel+key {
-		t.Errorf("Image = %q, want sentinel preserved", got.Image)
+	if got.Data != attachref.Sentinel+key {
+		t.Errorf("Data = %q, want sentinel preserved", got.Data)
 	}
 
 	// Canonical blob should exist.
@@ -119,7 +119,7 @@ func TestResolveForLLM_URLModeForOpenAI(t *testing.T) {
 			Content: message.Content{
 				Parts: []message.Part{
 					message.TextPart{Text: "look at this"},
-					message.ImagePart{Image: attachref.Sentinel + key, MimeType: "image/png"},
+					message.FilePart{Data: message.FileDataBytes{Data: attachref.Sentinel + key}, MimeType: "image/png"},
 				},
 			},
 		},
@@ -134,12 +134,16 @@ func TestResolveForLLM_URLModeForOpenAI(t *testing.T) {
 		t.Fatalf("ResolveForLLM: %v", err)
 	}
 
-	ip, ok := msgs[0].Content.Parts[1].(message.ImagePart)
+	fp, ok := msgs[0].Content.Parts[1].(message.FilePart)
 	if !ok {
-		t.Fatalf("part 1 kind = %T, want ImagePart", msgs[0].Content.Parts[1])
+		t.Fatalf("part 1 kind = %T, want FilePart", msgs[0].Content.Parts[1])
 	}
-	if !strings.HasPrefix(ip.Image, "http") {
-		t.Errorf("expected http URL, got %q", ip.Image)
+	url, ok := fp.Data.(message.FileDataURL)
+	if !ok {
+		t.Fatalf("expected FileDataURL, got %T", fp.Data)
+	}
+	if !strings.HasPrefix(url.URL, "http") {
+		t.Errorf("expected http URL, got %q", url.URL)
 	}
 }
 
@@ -155,7 +159,7 @@ func TestResolveForLLM_InlineModeForNonURLProvider(t *testing.T) {
 			Role: message.RoleUser,
 			Content: message.Content{
 				Parts: []message.Part{
-					message.ImagePart{Image: attachref.Sentinel + key, MimeType: "image/png"},
+					message.FilePart{Data: message.FileDataBytes{Data: attachref.Sentinel + key}, MimeType: "image/png"},
 				},
 			},
 		},
@@ -172,11 +176,12 @@ func TestResolveForLLM_InlineModeForNonURLProvider(t *testing.T) {
 		t.Fatalf("ResolveForLLM: %v", err)
 	}
 
-	ip := msgs[0].Content.Parts[0].(message.ImagePart)
-	if strings.HasPrefix(ip.Image, "http") || strings.HasPrefix(ip.Image, attachref.Sentinel) {
-		t.Errorf("expected base64 payload, got %q", ip.Image[:min(40, len(ip.Image))])
+	fp := msgs[0].Content.Parts[0].(message.FilePart)
+	data := fp.Data.(message.FileDataBytes).Data
+	if strings.HasPrefix(data, "http") || strings.HasPrefix(data, attachref.Sentinel) {
+		t.Errorf("expected base64 payload, got %q", data[:min(40, len(data))])
 	}
-	if _, err := base64.StdEncoding.DecodeString(ip.Image); err != nil {
+	if _, err := base64.StdEncoding.DecodeString(data); err != nil {
 		t.Errorf("not valid base64: %v", err)
 	}
 }
@@ -205,7 +210,7 @@ func TestResolveForLLM_FileURLRoutesToFilePartURL(t *testing.T) {
 			Role: message.RoleUser,
 			Content: message.Content{
 				Parts: []message.Part{
-					message.FilePart{Data: attachref.Sentinel + key, MimeType: "application/pdf", Filename: "doc.pdf"},
+					message.FilePart{Data: message.FileDataBytes{Data: attachref.Sentinel + key}, MimeType: "application/pdf", Filename: "doc.pdf"},
 				},
 			},
 		},
@@ -221,11 +226,12 @@ func TestResolveForLLM_FileURLRoutesToFilePartURL(t *testing.T) {
 	}
 
 	fp := msgs[0].Content.Parts[0].(message.FilePart)
-	if !strings.HasPrefix(fp.URL, "http") {
-		t.Errorf("expected http URL on FilePart.URL, got %q", fp.URL)
+	url, isURL := fp.Data.(message.FileDataURL)
+	if !isURL {
+		t.Fatalf("expected FileDataURL in URL mode, got %T", fp.Data)
 	}
-	if fp.Data != "" {
-		t.Errorf("expected FilePart.Data empty in URL mode, got %d bytes", len(fp.Data))
+	if !strings.HasPrefix(url.URL, "http") {
+		t.Errorf("expected http URL on FileDataURL, got %q", url.URL)
 	}
 }
 
@@ -251,7 +257,7 @@ func TestResolveForLLM_OpenAIFilesStayInline(t *testing.T) {
 			Role: message.RoleUser,
 			Content: message.Content{
 				Parts: []message.Part{
-					message.FilePart{Data: attachref.Sentinel + key, MimeType: "application/pdf"},
+					message.FilePart{Data: message.FileDataBytes{Data: attachref.Sentinel + key}, MimeType: "application/pdf"},
 				},
 			},
 		},
@@ -267,14 +273,18 @@ func TestResolveForLLM_OpenAIFilesStayInline(t *testing.T) {
 	}
 
 	fp := msgs[0].Content.Parts[0].(message.FilePart)
-	if fp.URL != "" {
-		t.Errorf("expected FilePart.URL empty (file URL unsupported), got %q", fp.URL)
+	if _, isURL := fp.Data.(message.FileDataURL); isURL {
+		t.Error("expected inline bytes (file URL unsupported), got FileDataURL")
 	}
-	if fp.Data == "" {
-		t.Error("expected base64 FilePart.Data")
+	bytesData, isBytes := fp.Data.(message.FileDataBytes)
+	if !isBytes {
+		t.Fatalf("expected FileDataBytes, got %T", fp.Data)
 	}
-	if _, err := base64.StdEncoding.DecodeString(fp.Data); err != nil {
-		t.Errorf("FilePart.Data not valid base64: %v", err)
+	if bytesData.Data == "" {
+		t.Error("expected base64 FileDataBytes.Data")
+	}
+	if _, err := base64.StdEncoding.DecodeString(bytesData.Data); err != nil {
+		t.Errorf("FileDataBytes.Data not valid base64: %v", err)
 	}
 }
 
@@ -294,13 +304,13 @@ func TestResolveForLLM_EvictsPastInlineCap(t *testing.T) {
 
 	msgs := []message.Message{
 		{Role: message.RoleUser, Content: message.Content{Parts: []message.Part{
-			message.ImagePart{Image: attachref.Sentinel + keys[0], MimeType: "image/png"},
+			message.FilePart{Data: message.FileDataBytes{Data: attachref.Sentinel + keys[0]}, MimeType: "image/png"},
 		}}},
 		{Role: message.RoleUser, Content: message.Content{Parts: []message.Part{
-			message.ImagePart{Image: attachref.Sentinel + keys[1], MimeType: "image/png"},
+			message.FilePart{Data: message.FileDataBytes{Data: attachref.Sentinel + keys[1]}, MimeType: "image/png"},
 		}}},
 		{Role: message.RoleUser, Content: message.Content{Parts: []message.Part{
-			message.ImagePart{Image: attachref.Sentinel + keys[2], MimeType: "image/png"},
+			message.FilePart{Data: message.FileDataBytes{Data: attachref.Sentinel + keys[2]}, MimeType: "image/png"},
 		}}},
 	}
 
@@ -315,7 +325,7 @@ func TestResolveForLLM_EvictsPastInlineCap(t *testing.T) {
 	}
 
 	// Oldest messages should become text placeholders; most-recent stays.
-	_, lastIsImage := msgs[2].Content.Parts[0].(message.ImagePart)
+	_, lastIsImage := msgs[2].Content.Parts[0].(message.FilePart)
 	if !lastIsImage {
 		t.Error("last (current-turn) part should remain an image")
 	}
@@ -344,7 +354,7 @@ func TestResolveForLLM_CurrentTurnOverCapFailsLoud(t *testing.T) {
 
 	msgs := []message.Message{
 		{Role: message.RoleUser, Content: message.Content{Parts: []message.Part{
-			message.ImagePart{Image: attachref.Sentinel + k, MimeType: "image/png"},
+			message.FilePart{Data: message.FileDataBytes{Data: attachref.Sentinel + k}, MimeType: "image/png"},
 		}}},
 	}
 

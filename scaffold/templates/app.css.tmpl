@@ -1,40 +1,12 @@
-/* Tailwind v4 source. The build pipeline runs
+/* Tailwind v4 + DaisyUI v5 source. The build pipeline runs
  *   tailwindcss -i styles/app.css -o views/static/app.css --minify
  * and the compiled output is embedded into the agent and served at
- * /static/app.{hash}.css.
- *
- * `@theme` is where you brand the agent — define design tokens once and
- * Tailwind generates matching utilities (text-brand, bg-brand-dark, etc.)
- * and keeps the whole stylesheet coherent. Edit these freely. Hand-
- * written component CSS belongs in this file too (under @layer
- * components) so the build picks it up; never add `<style>` blocks in
- * templ files.
+ * /static/app.{hash}.css. The DaisyUI plugin is loaded from a fixed
+ * path the build environment provides; don't change it.
  */
 
 @import "tailwindcss";
 
-@theme {
-  /* Palette — pick a brand color and a neutral surface scale that fits
-   * the agent's domain. These are starting defaults; replace them. */
-  --color-brand: oklch(0.7 0.18 145);
-  --color-brand-dark: oklch(0.58 0.18 145);
-
-  /* Typography — uncomment after dropping a webfont file under
-   * views/static/fonts/ and adding the matching @font-face rule below. */
-  /* --font-display: "YourDisplayFont", system-ui, sans-serif; */
-  /* --font-sans: "YourBodyFont", system-ui, sans-serif; */
-
-  /* Radius / shadow tokens flow into rounded-* and shadow-* utilities. */
-  --radius-card: 0.75rem;
+@plugin "/usr/local/lib/tailwind/daisyui.mjs" {
+  themes: light --default, dark --prefersdark;
 }
-
-/* Self-host fonts under views/static/fonts/ (//go:embed in views/assets.go
- * picks them up automatically — they ship versioned through the same
- * /static/{name} route). Example:
- *
- *   @font-face {
- *     font-family: "YourDisplayFont";
- *     src: url("/static/fonts/your-display.woff2") format("woff2");
- *     font-display: swap;
- *   }
- */

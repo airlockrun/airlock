@@ -4,7 +4,7 @@ import "github.com/airlockrun/agentsdk"
 
 templ Layout(title string) {
 	<!DOCTYPE html>
-	<html lang="en">
+	<html lang="en" data-theme="light">
 		<head>
 			<meta charset="UTF-8"/>
 			<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
@@ -18,7 +18,7 @@ templ Layout(title string) {
 				});
 			</script>
 		</head>
-		<body class="min-h-screen bg-neutral-50 text-neutral-900 antialiased">
+		<body class="min-h-screen bg-base-100 text-base-content">
 			<main class="mx-auto max-w-3xl px-4 py-10">
 				{ children... }
 			</main>

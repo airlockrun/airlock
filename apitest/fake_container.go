@@ -169,3 +169,9 @@ func (m *FakeContainerManager) StartToolserver(ctx context.Context, opts contain
 func (m *FakeContainerManager) StopToolserver(ctx context.Context, name string) error  { return nil }
 func (m *FakeContainerManager) KillToolserver(ctx context.Context, name string) error  { return nil }
 func (m *FakeContainerManager) RemoveImage(ctx context.Context, imageRef string) error { return nil }
+
+// LockSwap returns a no-op release fn — the apitest harness doesn't race
+// builds with triggers, so swap serialisation has nothing to gate.
+func (m *FakeContainerManager) LockSwap(agentID uuid.UUID) func() {
+	return func() {}
+}

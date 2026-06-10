@@ -61,6 +61,15 @@ type Settings struct {
 	// run under the global PromptHTTPCeiling). 0 means "use the default"
 	// (DefaultPublicPromptTimeoutSeconds).
 	PublicPromptTimeoutSeconds int `json:"public_prompt_timeout_seconds"`
+
+	// WebAppEnabled controls whether a Telegram bridge registers a
+	// persistent "Open" menu button that launches the agent's HTML UI
+	// inside Telegram's in-app browser. When true (default), the bot's
+	// default menu button is set to a web_app pointing at the agent
+	// subdomain; auth happens automatically via initData verification.
+	// When false, the menu button is reset to Telegram's default
+	// commands menu. Only meaningful on telegram bridges.
+	WebAppEnabled bool `json:"web_app_enabled"`
 }
 
 // DefaultSettings returns the settings a freshly created bridge row
@@ -77,6 +86,7 @@ func DefaultSettings() Settings {
 		PublicSessionTTLSeconds:    DefaultPublicSessionTTLSeconds,
 		PublicSessionMode:          PublicSessionModeSession,
 		PublicPromptTimeoutSeconds: DefaultPublicPromptTimeoutSeconds,
+		WebAppEnabled:              true,
 	}
 }
 
@@ -109,6 +119,9 @@ func DecodeSettings(raw []byte) Settings {
 	}
 	if s.PublicPromptTimeoutSeconds <= 0 {
 		s.PublicPromptTimeoutSeconds = DefaultPublicPromptTimeoutSeconds
+	}
+	if v, ok := m["web_app_enabled"]; ok {
+		_ = json.Unmarshal(v, &s.WebAppEnabled)
 	}
 	return s
 }

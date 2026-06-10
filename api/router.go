@@ -721,7 +721,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	//   zapRecoverer      catches handler panics with full request context
 	var handler http.Handler = r
 	if cfg.AgentDomain != "" {
-		handler = SubdomainProxy(cfg.AgentDomain, cfg.DB, cfg.S3Client, cfg.Dispatcher, cfg.JWTSecret, cfg.PublicURL, r)
+		handler = SubdomainProxy(cfg.AgentDomain, cfg.DB, cfg.S3Client, cfg.Dispatcher, cfg.BridgeManager, cfg.JWTSecret, cfg.PublicURL, r)
 	}
 	handler = zapRecoverer(handler)
 	handler = requestLogger(cfg.Logger)(handler)

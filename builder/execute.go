@@ -404,12 +404,21 @@ func (b *BuildService) Execute(ctx context.Context, plan BuildPlan) (string, err
 	}
 
 	// ── Phase F: swap the container ────────────────────────────────────
+	// The stop → start → UpdateAgentRefs sequence is the only window
+	// where the running container can disagree with agents.image_ref.
+	// LockSwap serialises this with EnsureRunning so a concurrent
+	// trigger can't slip in and start the OLD image while we're
+	// mid-swap (and vice versa). Held only for the swap itself —
+	// codegen, image build, and migration validation already ran
+	// without the lock above.
+	unlockSwap := b.containers.LockSwap(agentUUID)
 	logLine("Starting agent container...")
 	if agent.ImageRef != "" {
 		_ = b.containers.StopAgent(ctx, "airlock-agent-"+agentUUID.String()[:8])
 	}
 	agentToken, err := auth.IssueAgentToken(b.cfg.JWTSecret, agentUUID)
 	if err != nil {
+		unlockSwap()
 		completeBuild("failed", err.Error(), commitHash, imageTag)
 		return "", fmt.Errorf("issue agent token: %w", err)
 	}
@@ -424,6 +433,7 @@ func (b *BuildService) Execute(ctx context.Context, plan BuildPlan) (string, err
 			"AIRLOCK_AGENT_TOKEN": agentToken,
 		},
 	}); err != nil {
+		unlockSwap()
 		completeBuild("failed", err.Error(), commitHash, imageTag)
 		return "", fmt.Errorf("start agent: %w", err)
 	}
@@ -434,6 +444,7 @@ func (b *BuildService) Execute(ctx context.Context, plan BuildPlan) (string, err
 			ID:     agent.ID,
 			Status: "active",
 		}); err != nil {
+			unlockSwap()
 			return "", fmt.Errorf("update status to active: %w", err)
 		}
 	}
@@ -442,8 +453,10 @@ func (b *BuildService) Execute(ctx context.Context, plan BuildPlan) (string, err
 		SourceRef: commitHash,
 		ImageRef:  imageTag,
 	}); err != nil {
+		unlockSwap()
 		return "", fmt.Errorf("update refs: %w", err)
 	}
+	unlockSwap()
 	completeBuild("complete", "", commitHash, imageTag)
 
 	if exitMessage == "" && plan.Kind == BuildKindUpgrade && plan.Instruction == "" {

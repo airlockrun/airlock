@@ -14,6 +14,12 @@ type Container struct {
 	Name     string // Human-readable name
 	Endpoint string // HTTP endpoint (e.g., "http://172.17.0.2:8080")
 	Token    string // Bearer token for authenticating requests to this container
+	// Image is the tag the container was started with, copied from
+	// Docker's Config.Image at inspect time. StartAgent compares this
+	// against opts.Image to detect a stale running container after a
+	// build/rollback swap — adopting one with the wrong image would
+	// silently keep the agent on the old code.
+	Image string
 }
 
 // AgentOpts configures an agent container.
@@ -77,4 +83,13 @@ type ContainerManager interface {
 
 	// RemoveImage removes a Docker image by reference (e.g., "agentID:hash").
 	RemoveImage(ctx context.Context, imageRef string) error
+
+	// LockSwap serializes the agent's container-swap window. Held by the
+	// builder around Phase F (StopAgent → StartAgent → UpdateAgentRefs)
+	// and by EnsureRunning around its GetAgent → StartAgent critical
+	// section, so a concurrent trigger can't start the old image while a
+	// build is mid-swap (and vice versa). Returns a release function
+	// callers must defer. Scope is just the swap — codegen, image build,
+	// and migration validation all run outside the lock.
+	LockSwap(agentID uuid.UUID) func()
 }

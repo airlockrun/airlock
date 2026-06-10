@@ -482,18 +482,13 @@ func dbMessageToSession(m dbq.AgentMessage) session.Message {
 				Content: content,
 			}
 			msg := session.FromGoAIMessage(goaiMsg)
-			// goai's ImagePart/FilePart don't carry Source, so it's dropped
-			// through the JSON roundtrip. Recover it from the s3ref sentinel
-			// that rides in Image/Data so downstream consumers (sol's
+			// goai's FilePart doesn't carry Source, so it's dropped through
+			// the JSON roundtrip. Recover it from the s3ref sentinel that
+			// rides in Data so downstream consumers (sol's
 			// stripOldFilesFromHistory → agentsdk's PrunedMessage callback)
 			// can render a detach note that includes the re-attach key.
 			for i := range msg.Parts {
 				p := &msg.Parts[i]
-				if p.Image != nil && p.Image.Source == "" {
-					if key, ok := strings.CutPrefix(p.Image.Image, attachref.Sentinel); ok {
-						p.Image.Source = key
-					}
-				}
 				if p.File != nil && p.File.Source == "" {
 					if key, ok := strings.CutPrefix(p.File.Data, attachref.Sentinel); ok {
 						p.File.Source = key

@@ -28,12 +28,22 @@ type TelegramDriver struct {
 // NewTelegramDriver creates a TelegramDriver. logger is used to surface
 // Telegram API errors (notably the silent-failure Markdown/HTML parse
 // rejections that otherwise vanish). Pass zap.NewNop() in tests.
+//
+// The HTTP client's Timeout caps the entire request — connect, TLS,
+// upload, server processing, response body read. Sized to comfortably
+// cover the long-poll getUpdates window (timeout=30s server-side) plus
+// TLS/network slack, while still releasing a goroutine if a connection
+// stalls on a short call (sendMessage, getMe, …). Without a ceiling
+// here those short calls can hang indefinitely on a half-open TCP
+// socket — the kind of failure that happens on a local network blip
+// (WG/VPN reconnect, NIC cycle) when the OS hasn't yet noticed the
+// peer is gone.
 func NewTelegramDriver(logger *zap.Logger) *TelegramDriver {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
 	return &TelegramDriver{
-		httpClient: &http.Client{},
+		httpClient: &http.Client{Timeout: 60 * time.Second},
 		logger:     logger,
 	}
 }
@@ -492,6 +502,42 @@ func (d *TelegramDriver) GetMe(ctx context.Context, token string) (string, error
 		return "", fmt.Errorf("telegram getMe: not ok")
 	}
 	return result.Result.Username, nil
+}
+
+// SetMenuButton configures the bot's default chat menu button to launch
+// a Telegram Web App at the given URL. The button is persistent — it
+// shows for every private chat the bot is in, opens the URL in
+// Telegram's in-app browser, and exposes initData to the page so airlock
+// can authenticate the user automatically.
+//
+// Passing url=="" clears the bot back to Telegram's default menu (the
+// commands list). Called once on bridge activation / token refresh; not
+// idempotent at the Telegram side (each call re-publishes the button)
+// but cheap and safe to call repeatedly.
+func (d *TelegramDriver) SetMenuButton(ctx context.Context, token, url string) error {
+	var menuButton map[string]any
+	if url == "" {
+		menuButton = map[string]any{"type": "default"}
+	} else {
+		menuButton = map[string]any{
+			"type": "web_app",
+			"text": "Open",
+			"web_app": map[string]any{
+				"url": url,
+			},
+		}
+	}
+	body := map[string]any{"menu_button": menuButton}
+	var result struct {
+		OK bool `json:"ok"`
+	}
+	if err := d.callTelegramJSON(ctx, token, "setChatMenuButton", body, &result); err != nil {
+		return err
+	}
+	if !result.OK {
+		return fmt.Errorf("telegram setChatMenuButton: not ok")
+	}
+	return nil
 }
 
 // TelegramChatInfo holds the subset of getChat fields we expose.

@@ -65,6 +65,8 @@ func (m *mockContainerManager) KillToolserver(_ context.Context, _ string) error
 
 func (m *mockContainerManager) RemoveImage(_ context.Context, _ string) error { return nil }
 
+func (m *mockContainerManager) LockSwap(_ uuid.UUID) func() { return func() {} }
+
 func TestForwardWebhook(t *testing.T) {
 	// Create a mock agent server that receives the webhook.
 	var receivedPath string

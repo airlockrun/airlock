@@ -10,6 +10,14 @@ FROM scratch AS goproxy
 
 FROM golang:{{.GoVersion}} AS builder
 
+# Pinned versions for the Tailwind toolchain. ARGs (not literal URLs) so
+# scripts/check-versions.sh can extract these and diff against the
+# toolserver image's ARGs — drift between the two means agent builds
+# would compile against a different stylesheet engine than the LLM's
+# iterative codegen loop.
+ARG TAILWIND_VERSION=v4.1.0
+ARG DAISYUI_VERSION=v5.5.23
+
 WORKDIR /build
 
 COPY go.mod go.sum* ./
@@ -17,7 +25,15 @@ COPY . .
 
 # Tailwind v4 standalone — Rust binary, no Node. Fetched fresh per build;
 # small (~30MB) and the layer caches.
-ADD https://github.com/tailwindlabs/tailwindcss/releases/download/v4.1.0/tailwindcss-linux-x64 /usr/local/bin/tailwindcss
+ADD https://github.com/tailwindlabs/tailwindcss/releases/download/${TAILWIND_VERSION}/tailwindcss-linux-x64 /usr/local/bin/tailwindcss
+# DaisyUI v5 — Tailwind plugin loaded by styles/app.css via `@plugin
+# "/usr/local/lib/tailwind/daisyui.mjs"`. The .mjs is a self-contained
+# plugin file the standalone Tailwind binary loads directly (no Node).
+# mkdir before ADD so the directory is world-traversable (ADD would
+# create it 0700 root, blocking non-root access in case USER changes).
+RUN mkdir -p /usr/local/lib/tailwind && chmod 0755 /usr/local/lib/tailwind
+ADD --chmod=0644 https://github.com/saadeghi/daisyui/releases/download/${DAISYUI_VERSION}/daisyui.mjs       /usr/local/lib/tailwind/daisyui.mjs
+ADD --chmod=0644 https://github.com/saadeghi/daisyui/releases/download/${DAISYUI_VERSION}/daisyui-theme.mjs /usr/local/lib/tailwind/daisyui-theme.mjs
 RUN chmod +x /usr/local/bin/tailwindcss && mkdir -p views/static
 
 # Resolve modules via the bind-mounted goproxy first, public proxy second.

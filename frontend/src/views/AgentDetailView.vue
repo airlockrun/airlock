@@ -640,7 +640,7 @@ function goToChat() {
               <RunsTab :agent-id="agentId" @populated="onPopulated('runs', $event)" />
             </TabPanel>
             <TabPanel :value="1">
-              <BuildsTab :agent-id="agentId" @populated="onPopulated('builds', $event)" />
+              <BuildsTab :agent-id="agentId" :current-source-ref="agent?.sourceRef ?? ''" @populated="onPopulated('builds', $event)" />
             </TabPanel>
           </TabPanels>
         </Tabs>

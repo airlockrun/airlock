@@ -34,9 +34,26 @@ var templateFiles = []templateFile{
 	{"templates/sqlc.yaml.tmpl", "sqlc.yaml"},
 	{"templates/layout.templ.tmpl", "views/layout.templ"},
 	{"templates/index.templ.tmpl", "views/index.templ"},
+	// views/viewmodel.go holds the view-model types templ files render
+	// over (HomeView and any others the LLM adds). The convention in
+	// the package doc keeps templates free of domain imports — see
+	// the MVC split notes in agentsdk/llms.md.
+	{"templates/views_viewmodel.go.tmpl", "views/viewmodel.go"},
 	// views/assets.go holds the //go:embed for the compiled Tailwind
 	// stylesheet plus the content-hashed URL the layout references.
 	{"templates/views_assets.go.tmpl", "views/assets.go"},
+	// handlers/home.go is the controller layer — it imports views and
+	// (eventually) domain packages, converts model types to view-models,
+	// and renders. Domain packages never import handlers or views, so
+	// no cycle can form.
+	{"templates/handlers_home.go.tmpl", "handlers/home.go"},
+	// AGENTS.md is the scaffold's "how this agent is built" doc —
+	// workspace structure, MVC cycle rule, build chain, short UI
+	// section. Materialised once; the agent owns its copy. The
+	// agentsdk API reference (/libs/agentsdk/llms.md) is the orthogonal
+	// half: this file says how to wire things together, llms.md says
+	// what the SDK gives you.
+	{"templates/AGENTS.md.tmpl", "AGENTS.md"},
 	// styles/app.css is the Tailwind source. The build runs
 	//   tailwindcss -i styles/app.css -o views/static/app.css --minify
 	// and the agent embeds the output via views/assets.go.

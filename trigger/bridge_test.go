@@ -70,3 +70,29 @@ func TestCancelPoller_ConcurrentSafe(t *testing.T) {
 		t.Fatal("deadlock / timeout")
 	}
 }
+
+// pickConfirmationBody picks a body string from a PermissionAsked
+// metadata bag — code first, then args (pretty-printed when JSON), then
+// message, and "" when nothing useful is present.
+func TestPickConfirmationBody(t *testing.T) {
+	cases := []struct {
+		name string
+		in   map[string]any
+		want string
+	}{
+		{"code wins", map[string]any{"code": "console.log(1)", "args": "{}", "message": "x"}, "console.log(1)"},
+		{"args JSON pretty-printed", map[string]any{"args": `{"agent":"spotify"}`}, "{\n  \"agent\": \"spotify\"\n}"},
+		{"args non-JSON passthrough", map[string]any{"args": "spotify"}, "spotify"},
+		{"message fallback", map[string]any{"message": "polling tripped"}, "polling tripped"},
+		{"empty inputs ignored", map[string]any{"code": "", "args": "", "message": ""}, ""},
+		{"nil metadata", nil, ""},
+		{"non-string values skipped", map[string]any{"code": 42, "args": []string{"a"}, "message": "fallback"}, "fallback"},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := pickConfirmationBody(tt.in); got != tt.want {
+				t.Errorf("pickConfirmationBody = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

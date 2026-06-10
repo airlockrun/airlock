@@ -4,8 +4,9 @@ import (
 	"context"
 	"net/http"
 
+	"{{.Module}}/handlers"
 	"{{.Module}}/views"
-	"github.com/a-h/templ"
+
 	"github.com/airlockrun/agentsdk"
 )
 
@@ -15,11 +16,9 @@ func main() {
 	})
 
 	agent.RegisterRoute(&agentsdk.Route{
-		Method: "GET",
-		Path:   "/",
-		Handler: func(ctx context.Context, w http.ResponseWriter, r *http.Request) {
-			templ.Handler(views.Index()).ServeHTTP(w, r)
-		},
+		Method:      "GET",
+		Path:        "/",
+		Handler:     handlers.Home,
 		Access:      agentsdk.AccessUser,
 		Description: "Default placeholder homepage — replace this once the agent has real routes",
 	})

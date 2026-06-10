@@ -431,6 +431,16 @@ func (s *Service) dispatchResume(ctx context.Context, runner *sol.Runner, tools 
 		return nil, fmt.Errorf("decode checkpoint: %w", err)
 	}
 
+	// Doom-loop denial short-circuits the entire turn. The runner's
+	// doomDetector resets between turns, so resuming after a deny
+	// just makes the LLM count to three again and re-trigger; instead,
+	// terminate this turn outright. The operator's next message starts
+	// a fresh run.
+	if !approved && isDoomLoopSuspension(sc) {
+		s.clearSuspension(ctx, uuid.UUID(conversation.ID.Bytes))
+		return &sol.RunResult{Status: sol.RunCancelled}, nil
+	}
+
 	if err := s.resolvePendingToolCalls(ctx, tools, store, sc.PendingToolCalls, approved, sink); err != nil {
 		return nil, fmt.Errorf("resolve pending tool calls: %w", err)
 	}
@@ -446,6 +456,22 @@ func (s *Service) dispatchResume(ctx context.Context, runner *sol.Runner, tools 
 	// pre-condition isn't met and Continue panics with
 	// "Continue called before Run".
 	return runner.Run(ctx, "")
+}
+
+// isDoomLoopSuspension reports whether the saved suspension was raised
+// by sol's doom-loop detector. The suspension Data round-trips through
+// JSON, so it lands as map[string]any with a "permission" field;
+// "doom_loop" is the constant sol/session/doomloop.go emits.
+func isDoomLoopSuspension(sc sol.SuspensionContext) bool {
+	if sc.Reason != "permission" {
+		return false
+	}
+	m, ok := sc.Data.(map[string]any)
+	if !ok {
+		return false
+	}
+	perm, _ := m["permission"].(string)
+	return perm == "doom_loop"
 }
 
 // resolvePendingToolCalls is sysagent's tailored counterpart to

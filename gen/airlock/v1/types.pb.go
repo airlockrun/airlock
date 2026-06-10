@@ -813,7 +813,14 @@ type AgentInfo struct {
 	// in-airlock system agent can locally decide which per-agent actions
 	// to offer without re-authorizing each one. Empty when the caller
 	// axis is not user-scoped (e.g. agent-internal lookups).
-	YourAccess    string `protobuf:"bytes,17,opt,name=your_access,json=yourAccess,proto3" json:"your_access,omitempty"`
+	YourAccess string `protobuf:"bytes,17,opt,name=your_access,json=yourAccess,proto3" json:"your_access,omitempty"`
+	// source_ref is the git commit hash of the build the agent is
+	// currently running (agents.source_ref in the DB; set by Execute on
+	// every successful build/upgrade/rollback). The UI compares against
+	// AgentBuildInfo.source_ref to decide which build row is "current"
+	// (e.g. to hide the rollback button on it). Empty for agents that
+	// have never had a successful build.
+	SourceRef     string `protobuf:"bytes,18,opt,name=source_ref,json=sourceRef,proto3" json:"source_ref,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -963,6 +970,13 @@ func (x *AgentInfo) GetEmoji() string {
 func (x *AgentInfo) GetYourAccess() string {
 	if x != nil {
 		return x.YourAccess
+	}
+	return ""
+}
+
+func (x *AgentInfo) GetSourceRef() string {
+	if x != nil {
+		return x.SourceRef
 	}
 	return ""
 }
@@ -4199,7 +4213,7 @@ const file_airlock_v1_types_proto_rawDesc = "" +
 	"costOutput\x12\x12\n" +
 	"\x04kind\x18\n" +
 	" \x01(\tR\x04kind\x12\x12\n" +
-	"\x04caps\x18\v \x03(\tR\x04caps\"\xc1\x04\n" +
+	"\x04caps\x18\v \x03(\tR\x04caps\"\xe0\x04\n" +
 	"\tAgentInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04slug\x18\x02 \x01(\tR\x04slug\x12\x12\n" +
@@ -4223,7 +4237,9 @@ const file_airlock_v1_types_proto_rawDesc = "" +
 	"\arunning\x18\x0f \x01(\bR\arunning\x12\x14\n" +
 	"\x05emoji\x18\x10 \x01(\tR\x05emoji\x12\x1f\n" +
 	"\vyour_access\x18\x11 \x01(\tR\n" +
-	"yourAccess\"\x8f\x05\n" +
+	"yourAccess\x12\x1d\n" +
+	"\n" +
+	"source_ref\x18\x12 \x01(\tR\tsourceRef\"\x8f\x05\n" +
 	"\aRunInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x19\n" +
 	"\bagent_id\x18\x02 \x01(\tR\aagentId\x12\x1b\n" +

@@ -181,7 +181,7 @@ func runServe(_ []string) {
 		"telegram": telegramDriver,
 		"discord":  discordDriver,
 	}
-	bridgeMgr := trigger.NewBridgeManager(drivers, prompter, database, secretStore, cfg.JWTSecret, cfg.PublicURL, logger.Named("bridges"))
+	bridgeMgr := trigger.NewBridgeManager(drivers, prompter, database, secretStore, cfg.JWTSecret, cfg.PublicURL, cfg.AgentBaseURL, logger.Named("bridges"))
 	scheduler := trigger.NewScheduler(dispatcher, database, logger.Named("scheduler"))
 
 	// OAuth client (used by credential endpoints and refresh job)

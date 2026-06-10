@@ -55,6 +55,29 @@ for lib in agentsdk goai sol; do
 	fi
 done
 
+# --- 1b. Tailwind toolchain ARGs match between toolserver and scaffold ---
+#
+# The toolserver (Dockerfile.agent-builder) runs the iterative LLM-driven
+# build; the scaffold's Dockerfile.tmpl is the final image-build the agent
+# gets compiled into. Both ADD the same tailwindcss/daisyui artefacts;
+# drift means the LLM iterates against one Tailwind and ships another.
+for tool in TAILWIND DAISYUI; do
+	tool_lc=$(printf '%s' "$tool" | tr '[:upper:]' '[:lower:]')
+	toolserver=$(awk -v p="^ARG ${tool}_VERSION=" '$0 ~ p {sub(p, ""); print; exit}' Dockerfile.agent-builder)
+	scaffold=$(awk -v p="^ARG ${tool}_VERSION=" '$0 ~ p {sub(p, ""); print; exit}' scaffold/templates/Dockerfile.tmpl)
+	if [ -z "$toolserver" ]; then
+		err "Dockerfile.agent-builder: missing ARG ${tool}_VERSION"
+		continue
+	fi
+	if [ -z "$scaffold" ]; then
+		err "scaffold/templates/Dockerfile.tmpl: missing ARG ${tool}_VERSION"
+		continue
+	fi
+	if [ "$toolserver" != "$scaffold" ]; then
+		err "${tool_lc} version drift: Dockerfile.agent-builder=$toolserver, scaffold/templates/Dockerfile.tmpl=$scaffold"
+	fi
+done
+
 # --- 2. docker-compose.yml ghcr tags are internally consistent ---
 
 # Match any ghcr.io/airlockrun/airlock(-something):vX.Y.Z[-pre] occurrence.

@@ -173,6 +173,13 @@ message AgentInfo {
   // to offer without re-authorizing each one. Empty when the caller
   // axis is not user-scoped (e.g. agent-internal lookups).
   string your_access = 17;
+  // source_ref is the git commit hash of the build the agent is
+  // currently running (agents.source_ref in the DB; set by Execute on
+  // every successful build/upgrade/rollback). The UI compares against
+  // AgentBuildInfo.source_ref to decide which build row is "current"
+  // (e.g. to hide the rollback button on it). Empty for agents that
+  // have never had a successful build.
+  string source_ref = 18;
 }
 
 // RunInfo represents a single execution of an agent.

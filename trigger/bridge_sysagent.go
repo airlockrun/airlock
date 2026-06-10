@@ -82,13 +82,12 @@ func (b *bridgeSink) OnPermissionAsked(p bus.PermissionAskedPayload) {
 		}
 		b.seenPerm[p.ToolCallID] = struct{}{}
 	}
-	code, _ := p.Metadata["code"].(string)
 	b.out <- ResponseEvent{
 		Type:       "confirmation_required",
 		RunID:      b.runID,
 		Permission: p.Permission,
 		Patterns:   p.Patterns,
-		Code:       code,
+		Code:       pickConfirmationBody(p.Metadata),
 	}
 }
 

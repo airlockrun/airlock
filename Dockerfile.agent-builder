@@ -19,6 +19,7 @@ ARG SOL_VERSION=v0.1.6
 ARG GOOSE_VERSION=v3.27.1
 ARG TEMPL_VERSION=v0.3.865
 ARG TAILWIND_VERSION=v4.1.0
+ARG DAISYUI_VERSION=v5.5.23
 
 COPY --from=sqlc/sqlc:latest /workspace/sqlc /usr/local/bin/sqlc
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -87,6 +88,16 @@ RUN cd /libs/templ && go build -o /usr/local/bin/templ      ./cmd/templ
 # views/static/app.css --minify` between templ generate and go build,
 # same as the agent's Dockerfile.tmpl does at final image-build time.
 ADD --chmod=0755 https://github.com/tailwindlabs/tailwindcss/releases/download/${TAILWIND_VERSION}/tailwindcss-linux-x64 /usr/local/bin/tailwindcss
+
+# DaisyUI v5 — Tailwind plugin shipped as a self-contained .mjs that the
+# standalone Tailwind binary loads via `@plugin "..."` (no Node runtime).
+# Agent's styles/app.css references this exact path. mkdir explicitly so
+# the directory is world-traversable (ADD would create it 0700 root,
+# and the toolserver runs as a non-root UID — then even --chmod=0644
+# files inside aren't reachable).
+RUN mkdir -p /usr/local/lib/tailwind && chmod 0755 /usr/local/lib/tailwind
+ADD --chmod=0644 https://github.com/saadeghi/daisyui/releases/download/${DAISYUI_VERSION}/daisyui.mjs       /usr/local/lib/tailwind/daisyui.mjs
+ADD --chmod=0644 https://github.com/saadeghi/daisyui/releases/download/${DAISYUI_VERSION}/daisyui-theme.mjs /usr/local/lib/tailwind/daisyui-theme.mjs
 
 # Go cache dirs writable by the host UID — Docker volumes mount as root,
 # but the toolserver runs as the host user.

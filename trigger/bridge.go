@@ -1,8 +1,11 @@
 package trigger
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"math/rand/v2"
 	"strings"
 	"sync"
 	"time"
@@ -21,6 +24,36 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"
 )
+
+// pickConfirmationBody chooses the best human-readable body string from a
+// PermissionAsked metadata bag for display in a bridge driver's
+// confirmation prompt. Producers vary in what they stuff in:
+//   - agentsdk run_js puts the JS source under "code".
+//   - sysagent destructive tools put the raw JSON args under "args".
+//   - doom_loop carries a human "message".
+//
+// Whichever is present (in this priority order) becomes the body. The
+// driver wraps the return as a <pre>...</pre> block; empty string means
+// the driver shows just the permission name with no body.
+func pickConfirmationBody(m map[string]any) string {
+	if c, ok := m["code"].(string); ok && c != "" {
+		return c
+	}
+	if a, ok := m["args"].(string); ok && a != "" {
+		// Pretty-print when the args look like JSON — sysagent's executor
+		// puts a single-line string in; multi-line is much more readable in
+		// chat. Fall back to the raw string on parse failure.
+		var pretty bytes.Buffer
+		if err := json.Indent(&pretty, []byte(a), "", "  "); err == nil && pretty.Len() > 0 {
+			return pretty.String()
+		}
+		return a
+	}
+	if msg, ok := m["message"].(string); ok && msg != "" {
+		return msg
+	}
+	return ""
+}
 
 // ResponseEvent represents an NDJSON event from the agent response stream,
 // forwarded to the bridge driver for progressive delivery.
@@ -154,16 +187,17 @@ type CommandRegistrar interface {
 
 // BridgeManager manages bridge drivers and routes events to agents.
 type BridgeManager struct {
-	drivers    map[string]BridgeDriver
-	prompter   *PromptProxy
-	db         *db.DB
-	encryptor  secrets.Store
-	logger     *zap.Logger
-	ctx        context.Context
-	cancel     context.CancelFunc
-	wg         sync.WaitGroup
-	hmacSecret string // for generating identity-linking URLs
-	publicURL  string // base URL for identity-linking URLs
+	drivers      map[string]BridgeDriver
+	prompter     *PromptProxy
+	db           *db.DB
+	encryptor    secrets.Store
+	logger       *zap.Logger
+	ctx          context.Context
+	cancel       context.CancelFunc
+	wg           sync.WaitGroup
+	hmacSecret   string                   // for generating identity-linking URLs
+	publicURL    string                   // base URL for identity-linking URLs
+	agentBaseURL func(slug string) string // builds {scheme}://{slug}.{agentDomain}[:port]; required for Telegram web-app menu button
 
 	// pollers tracks the running poller for each bridge ID. Needed so
 	// RemoveBridge can stop exactly one poller on bridge deletion —
@@ -210,17 +244,23 @@ type pollerHandle struct {
 	cancel context.CancelFunc
 }
 
-// NewBridgeManager creates a BridgeManager.
-func NewBridgeManager(drivers map[string]BridgeDriver, prompter *PromptProxy, database *db.DB, encryptor secrets.Store, hmacSecret, publicURL string, logger *zap.Logger) *BridgeManager {
+// NewBridgeManager creates a BridgeManager. agentBaseURL builds the
+// external URL for an agent's subdomain ({scheme}://{slug}.{domain}[:port]);
+// the Telegram driver needs it to register the web-app menu button.
+func NewBridgeManager(drivers map[string]BridgeDriver, prompter *PromptProxy, database *db.DB, encryptor secrets.Store, hmacSecret, publicURL string, agentBaseURL func(slug string) string, logger *zap.Logger) *BridgeManager {
+	if agentBaseURL == nil {
+		panic("trigger: NewBridgeManager called with nil agentBaseURL")
+	}
 	return &BridgeManager{
-		drivers:    drivers,
-		prompter:   prompter,
-		db:         database,
-		encryptor:  encryptor,
-		hmacSecret: hmacSecret,
-		publicURL:  publicURL,
-		logger:     logger,
-		pollers:    make(map[uuid.UUID]*pollerHandle),
+		drivers:      drivers,
+		prompter:     prompter,
+		db:           database,
+		encryptor:    encryptor,
+		hmacSecret:   hmacSecret,
+		publicURL:    publicURL,
+		agentBaseURL: agentBaseURL,
+		logger:       logger,
+		pollers:      make(map[uuid.UUID]*pollerHandle),
 	}
 }
 
@@ -263,11 +303,48 @@ func (m *BridgeManager) Start(ctx context.Context) error {
 			continue
 		}
 		m.registerCommands(ctx, driver, decrypted)
+		m.registerWebAppMenuButton(ctx, driver, decrypted)
 		m.startPoller(ctx, decrypted)
 	}
 
 	m.logger.Info("bridge manager started", zap.Int("pollers", len(bridges)))
 	return nil
+}
+
+// registerWebAppMenuButton configures the bot's persistent chat menu
+// button on Telegram bridges so users get a one-tap path into the
+// agent's HTML UI from inside Telegram. Auth happens transparently via
+// initData verification at the airlock proxy. Skipped for non-telegram
+// bridges, system bridges (no agent_id), and bridges with WebAppEnabled
+// disabled. Failures are logged but non-fatal — the bridge still works
+// for chat; users just don't get the button.
+func (m *BridgeManager) registerWebAppMenuButton(ctx context.Context, driver BridgeDriver, br dbq.Bridge) {
+	if br.Type != "telegram" || !br.AgentID.Valid {
+		return
+	}
+	tg, ok := driver.(*TelegramDriver)
+	if !ok {
+		return
+	}
+	settings := bridgessvc.DecodeSettings(br.Settings)
+	q := dbq.New(m.db.Pool())
+	agent, err := q.GetAgentByID(ctx, br.AgentID)
+	if err != nil {
+		m.logger.Warn("web-app menu button: agent lookup failed",
+			zap.String("bridge", br.Name),
+			zap.Error(err))
+		return
+	}
+	var url string
+	if settings.WebAppEnabled {
+		url = m.agentBaseURL(agent.Slug) + "/__air/tg/start?b=" + pgUUID(br.ID).String()
+	}
+	if err := tg.SetMenuButton(ctx, br.BotTokenRef, url); err != nil {
+		m.logger.Warn("web-app menu button: setChatMenuButton failed",
+			zap.String("bridge", br.Name),
+			zap.Bool("enabled", settings.WebAppEnabled),
+			zap.Error(err))
+	}
 }
 
 // registerCommands pushes the slash-command registry to drivers that
@@ -315,6 +392,7 @@ func (m *BridgeManager) AddBridge(bridgeID uuid.UUID) {
 		return
 	}
 	m.registerCommands(m.ctx, driver, br)
+	m.registerWebAppMenuButton(m.ctx, driver, br)
 	// Stop any stale poller for the same bridge ID before starting a new one.
 	m.cancelPoller(bridgeID)
 	m.startPoller(m.ctx, br)
@@ -365,6 +443,36 @@ func (m *BridgeManager) Stop() {
 		m.cancel()
 	}
 	m.wg.Wait()
+}
+
+// BotTokenForBridge returns the decrypted Telegram bot token for
+// (agentID, bridgeID) — only if the bridge belongs to that agent and is
+// of type "telegram". The agent guard is the cross-agent boundary at the
+// lookup layer; HMAC verification of the caller's initData then gates
+// the actual auth. Returns an error on any mismatch so the caller can
+// 401 without leaking which constraint failed.
+//
+// Used by the airlock proxy's Telegram Web App auth handler.
+func (m *BridgeManager) BotTokenForBridge(ctx context.Context, agentID, bridgeID uuid.UUID) (string, error) {
+	q := dbq.New(m.db.Pool())
+	br, err := q.GetBridgeByID(ctx, toPgUUID(bridgeID))
+	if err != nil {
+		return "", fmt.Errorf("get bridge: %w", err)
+	}
+	if br.Type != "telegram" {
+		return "", fmt.Errorf("bridge %s is not telegram", bridgeID)
+	}
+	if !br.AgentID.Valid || uuid.UUID(br.AgentID.Bytes) != agentID {
+		return "", fmt.Errorf("bridge %s does not belong to agent %s", bridgeID, agentID)
+	}
+	if br.BotTokenRef == "" {
+		return "", fmt.Errorf("bridge %s has no bot token", bridgeID)
+	}
+	token, err := m.encryptor.Get(ctx, "bridge/"+pgUUID(br.ID).String()+"/bot_token", br.BotTokenRef)
+	if err != nil {
+		return "", fmt.Errorf("decrypt bridge token: %w", err)
+	}
+	return token, nil
 }
 
 // isCancelTap reports whether a bridge event is a "Stop" button tap.
@@ -702,11 +810,16 @@ func (m *BridgeManager) startPoller(parent context.Context, br dbq.Bridge) {
 					ID:     br.ID,
 					Status: "error",
 				})
-				// Back off before retrying.
+				// Back off before retrying. Jitter spreads out the retries
+				// when several bridges fail in the same instant (a local
+				// network blip drops every poller's TCP socket within ~1 ms
+				// of each other); without jitter all of them would hammer
+				// the upstream simultaneously on the next attempt.
+				backoff := 30*time.Second + time.Duration(rand.Int64N(int64(10*time.Second)))
 				select {
 				case <-ctx.Done():
 					return
-				case <-time.After(30 * time.Second):
+				case <-time.After(backoff):
 				}
 				continue
 			}

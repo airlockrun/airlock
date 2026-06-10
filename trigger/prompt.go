@@ -866,19 +866,28 @@ func StreamNDJSONResponse(body io.Reader, runID string, events chan<- ResponseEv
 				continue
 			}
 			var cr struct {
-				Permission string   `json:"permission"`
-				Patterns   []string `json:"patterns"`
-				Code       string   `json:"code"`
-				ToolCallID string   `json:"toolCallId"`
+				Permission string         `json:"permission"`
+				Patterns   []string       `json:"patterns"`
+				Code       string         `json:"code"`
+				Metadata   map[string]any `json:"metadata,omitempty"`
+				ToolCallID string         `json:"toolCallId"`
 			}
 			json.Unmarshal(event.Data, &cr)
+			// Prefer the metadata-aware body picker so non-run_js permissions
+			// (sysagent-style tools, doom_loop, etc.) get a rendered body
+			// too. Falls back to the legacy top-level `code` for older
+			// agentsdk versions that don't emit `metadata`.
+			body := pickConfirmationBody(cr.Metadata)
+			if body == "" {
+				body = cr.Code
+			}
 			events <- ResponseEvent{
 				Type:       "confirmation_required",
 				Raw:        line,
 				RunID:      runID,
 				Permission: cr.Permission,
 				Patterns:   cr.Patterns,
-				Code:       cr.Code,
+				Code:       body,
 				ToolCallID: cr.ToolCallID,
 			}
 

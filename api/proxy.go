@@ -23,9 +23,16 @@ import (
 // header matches {slug}.{agentDomain}. Matching requests are authenticated
 // according to the route's access level and reverse-proxied to the agent's
 // container. Non-matching requests fall through to inner.
-func SubdomainProxy(agentDomain string, database *db.DB, s3 *storage.S3Client, dispatcher *trigger.Dispatcher, jwtSecret, publicURL string, inner http.Handler) http.Handler {
+//
+// bridgeMgr is required for the Telegram Web App auto-auth flow: the
+// /__air/tg/auth intercept verifies initData against the bridge's bot
+// token, which bridgeMgr decrypts on demand.
+func SubdomainProxy(agentDomain string, database *db.DB, s3 *storage.S3Client, dispatcher *trigger.Dispatcher, bridgeMgr *trigger.BridgeManager, jwtSecret, publicURL string, inner http.Handler) http.Handler {
 	if agentDomain == "" {
 		panic("api: SubdomainProxy called with empty agentDomain")
+	}
+	if bridgeMgr == nil {
+		panic("api: SubdomainProxy called with nil bridgeMgr")
 	}
 
 	suffix := "." + agentDomain
@@ -74,6 +81,20 @@ func SubdomainProxy(agentDomain string, database *db.DB, s3 *storage.S3Client, d
 			return
 		}
 		agentID := pgUUID(agent.ID)
+
+		// Telegram Web App auto-auth intercepts. /start serves the
+		// bootstrap stub the menu button opens; /auth verifies initData
+		// and issues an __air_session cookie. Same subdomain as the
+		// agent's own routes, so the cookie is host-scoped to that
+		// agent and can never reach the admin host or another agent.
+		if pathIsTGWebApp(r.URL.Path) {
+			if r.URL.Path == "/__air/tg/start" {
+				handleTGWebAppStart(w, r, publicURL)
+				return
+			}
+			handleTGWebAppAuth(r.Context(), w, r, jwtSecret, agentID, bridgeMgr, q, log)
+			return
+		}
 
 		// Directory reads under the agent's subdomain. Intercepted before
 		// route resolution so a builder's RegisterRoute("/__air/...")
@@ -297,21 +318,24 @@ func validateSubdomainAuth(r *http.Request, jwtSecret string) (*auth.Claims, boo
 	return claims, true
 }
 
-// rejectOrRedirect returns 401 for API/htmx clients or redirects browsers to the relay page.
+// rejectOrRedirect returns 401 for API/htmx clients or serves a stub
+// HTML page for browsers. The stub picks at runtime: if it loads inside
+// Telegram (window.Telegram.WebApp.initData present), it exchanges the
+// initData for a session cookie via /__air/tg/auth; otherwise it
+// redirects to the main-domain auth relay. One unauthenticated
+// landing page covers both flows.
 func rejectOrRedirect(w http.ResponseWriter, r *http.Request, publicURL string) {
-	// htmx requests: return 401 so client-side handler can reload the page.
+	// htmx requests: return 401 so the layout's responseError handler
+	// can reload the page — the reload picks up this same stub HTML and
+	// the JS resolves auth (TG or relay) without a manual login step.
 	if r.Header.Get("HX-Request") == "true" {
 		writeError(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
-	// Full page navigation: redirect to auth relay.
 	if strings.Contains(r.Header.Get("Accept"), "text/html") {
-		currentURL := requestScheme(r) + "://" + r.Host + r.RequestURI
-		relayURL := publicURL + "/auth/relay?return=" + url.QueryEscape(currentURL)
-		http.Redirect(w, r, relayURL, http.StatusFound)
+		renderTGWebAppStub(w, r, publicURL)
 		return
 	}
-	// API clients: plain 401.
 	writeError(w, http.StatusUnauthorized, "unauthorized")
 }
 

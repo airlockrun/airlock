@@ -213,6 +213,14 @@ func (b *busyCloser) Close() error {
 // EnsureRunning looks up the agent, decrypts its DB credentials, and starts
 // (or reconnects to) the agent container. Returns the running container.
 func (d *Dispatcher) EnsureRunning(ctx context.Context, agentID uuid.UUID) (*container.Container, error) {
+	// Hold the swap mutex for the whole GetAgent → StartAgent window so a
+	// concurrent build's Phase F can't slip in between the agent read
+	// and the StartAgent call, leaving us starting the OLD image while
+	// the build proceeds to swap in the new one. Reading the agent
+	// INSIDE the lock guarantees we always see the post-swap image_ref.
+	unlockSwap := d.containers.LockSwap(agentID)
+	defer unlockSwap()
+
 	q := dbq.New(d.db.Pool())
 	agent, err := q.GetAgentByID(ctx, toPgUUID(agentID))
 	if err != nil {

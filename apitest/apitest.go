@@ -176,7 +176,7 @@ func Setup(t *testing.T) *Harness {
 	discord := trigger.NewDiscordDriver(logger.Named("discord"))
 	bridgeMgr := trigger.NewBridgeManager(
 		map[string]trigger.BridgeDriver{"telegram": telegram, "discord": discord},
-		prompter, database, secretStore, cfg.JWTSecret, cfg.PublicURL,
+		prompter, database, secretStore, cfg.JWTSecret, cfg.PublicURL, cfg.AgentBaseURL,
 		logger.Named("bridges"),
 	)
 	scheduler := trigger.NewScheduler(dispatcher, database, logger.Named("scheduler"))

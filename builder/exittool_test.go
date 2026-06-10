@@ -3,6 +3,7 @@ package builder
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/airlockrun/goai/tool"
@@ -16,7 +17,6 @@ func TestNewExitTool(t *testing.T) {
 		wantErr bool
 	}{
 		{name: "success accepted", status: "success"},
-		{name: "error accepted", status: "error"},
 		{name: "refused accepted", status: "refused"},
 		{name: "unknown rejected", status: "bogus", wantErr: true},
 		{name: "empty rejected", status: "", wantErr: true},
@@ -47,6 +47,41 @@ func TestNewExitTool(t *testing.T) {
 				t.Fatalf("Result() = (%q, %q), want (%q, msg)", gotStatus, gotMsg, tt.status)
 			}
 		})
+	}
+}
+
+// First exit-error call is challenged (no termination, pushback message);
+// the second terminates. success and refused always terminate on the
+// first call (covered above).
+func TestNewExitTool_ErrorIsChallengedThenAccepted(t *testing.T) {
+	state := &soltools.ExitState{}
+	et := newExitTool(state)
+	in, _ := json.Marshal(exitToolInput{Status: "error", Message: "stuck"})
+
+	first, err := et.Execute(context.Background(), in, tool.CallOptions{})
+	if err != nil {
+		t.Fatalf("first error call returned err: %v", err)
+	}
+	if state.Called() {
+		t.Fatal("first error call set ExitState; expected pushback (no termination)")
+	}
+	if !strings.Contains(first.Output, "Before exiting with error") {
+		t.Errorf("first error output missing pushback prefix; got: %q", first.Output)
+	}
+
+	second, err := et.Execute(context.Background(), in, tool.CallOptions{})
+	if err != nil {
+		t.Fatalf("second error call returned err: %v", err)
+	}
+	if !state.Called() {
+		t.Fatal("second error call did not set ExitState; expected termination")
+	}
+	gotStatus, gotMsg := state.Result()
+	if gotStatus != "error" || gotMsg != "stuck" {
+		t.Fatalf("Result() = (%q, %q), want (\"error\", \"stuck\")", gotStatus, gotMsg)
+	}
+	if !strings.Contains(second.Output, "Run terminated") {
+		t.Errorf("second error output should announce termination; got: %q", second.Output)
 	}
 }
 

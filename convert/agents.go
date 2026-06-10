@@ -31,6 +31,7 @@ func AgentToProto(a dbq.Agent) *airlockv1.AgentInfo {
 		ExecModel:       a.ExecModel,
 		BuildProviderId: PgUUIDToString(a.BuildProviderID),
 		ExecProviderId:  PgUUIDToString(a.ExecProviderID),
+		SourceRef:       a.SourceRef,
 	}
 }
 

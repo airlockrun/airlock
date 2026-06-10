@@ -23,6 +23,20 @@ type Block =
 
 const props = defineProps<{ parts: DisplayPart[] }>()
 
+// kindOf decides how to render a part from its mimeType first (so a unified
+// file part with an image/* type renders as an image), falling back to the
+// explicit `type`. Returns null for parts this component doesn't render
+// (tool calls, reasoning, …).
+function kindOf(p: DisplayPart): 'image' | 'text' | 'file' | 'audio' | 'video' | null {
+  if (p.type === 'text') return 'text'
+  const mt = p.mimeType || ''
+  if (mt.startsWith('image/')) return 'image'
+  if (mt.startsWith('audio/')) return 'audio'
+  if (mt.startsWith('video/')) return 'video'
+  if (p.type === 'image' || p.type === 'audio' || p.type === 'video' || p.type === 'file') return p.type
+  return null
+}
+
 const blocks = computed<Block[]>(() => {
   const out: Block[] = []
   let album: DisplayPart[] = []
@@ -33,14 +47,14 @@ const blocks = computed<Block[]>(() => {
     }
   }
   for (const p of props.parts || []) {
-    if (p.type === 'image') {
+    const k = kindOf(p)
+    if (!k) continue
+    if (k === 'image') {
       album.push(p)
       continue
     }
     flush()
-    if (p.type === 'text' || p.type === 'file' || p.type === 'audio' || p.type === 'video') {
-      out.push({ kind: p.type, part: p } as Block)
-    }
+    out.push({ kind: k, part: p } as Block)
   }
   flush()
   return out
