@@ -110,6 +110,33 @@ services:
     command: ["true"]
     restart: "no"
 
+  # Rootless BuildKit daemon. airlock builds agent images through this (via
+  # BUILDKIT_HOST + a remote buildx builder) instead of the host's root
+  # dockerd, so an agent's untrusted setup.sh runs as root *inside* buildkitd
+  # — an unprivileged uid on the host. Needs unconfined seccomp/apparmor and
+  # /dev/fuse for rootless overlayfs; this is scoped to this container, not
+  # the host. On `default` only (it needs internet for ADD/module fetches,
+  # never the isolated agents net).
+  buildkitd:
+    image: moby/buildkit:rootless
+    # --oci-worker-no-process-sandbox: skip the per-RUN-step pid/proc
+    # sandbox, which can't nest inside a container host (the build would
+    # fail mounting /proc). Still fully rootless. Drop it on a bare-metal/VM
+    # host if you want the extra per-step isolation.
+    command:
+      - "--addr"
+      - "unix:///run/buildkit/buildkitd.sock"
+      - "--oci-worker-no-process-sandbox"
+    security_opt:
+      - seccomp=unconfined
+      - apparmor=unconfined
+    devices:
+      - /dev/fuse
+    volumes:
+      - buildkit-sock:/run/buildkit
+      - buildkit-state:/home/user/.local/share/buildkit
+    restart: unless-stopped
+
   airlock:
     build:
       context: .
@@ -124,6 +151,8 @@ services:
         condition: service_completed_successfully
       agent-base-image:
         condition: service_completed_successfully
+      buildkitd:
+        condition: service_started
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-airlock}:${POSTGRES_PASSWORD:-airlock}@postgres:5432/${POSTGRES_DB:-airlock}?sslmode=disable
 
@@ -180,6 +209,10 @@ services:
       # the network names in the `networks:` block below.
       DOCKER_NETWORK: airlock
       AGENT_NETWORK: airlock-agents
+      # Build agent images through the rootless buildkitd (see service above)
+      # instead of the host's root dockerd. Unset this to fall back to the
+      # legacy host `docker build`.
+      BUILDKIT_HOST: unix:///run/buildkit/buildkitd.sock
       # Opt-in toolserver/runtime image overrides. Empty default = airlock
       # uses config.DefaultAgent{Builder,Base}Image (pinned to airlock.Version,
       # matched to this release). Set in .env to point at a custom build.
@@ -208,6 +241,9 @@ services:
       # Required for launching agent containers. This grants root-equivalent
       # on the host — standard for any orchestrator that manages containers.
       - /var/run/docker.sock:/var/run/docker.sock
+      # Rootless buildkitd socket — agent image builds run here, not on the
+      # host dockerd. Read-only: airlock only connects as a client.
+      - buildkit-sock:/run/buildkit:ro
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8080/health >/dev/null || exit 1"]
       interval: 10s
@@ -264,6 +300,8 @@ networks:
 volumes:
   pgdata:
   rustfsdata:
+  buildkit-sock:    # shared dir holding the rootless buildkitd unix socket
+  buildkit-state:   # rootless buildkitd cache + state (persists build cache)
   caddy-data:    # CRITICAL: Let's Encrypt cert cache. Don't delete or you'll re-issue all certs and may hit rate limits.
   caddy-config:
   airlock-data:

@@ -94,10 +94,24 @@ operator owns — **recommended, not enforced by airlock**:
   the convenient host route, but a hard block of `169.254.169.254` (cloud
   credential endpoint) needs a host iptables/nftables rule or IMDSv2
   hop-limit=1.
-- **Rootless BuildKit** — the agent image build runs `setup.sh` as root
-  under the host's root `dockerd`, so a build-time escape is host root (cf.
-  CVE-2024-21626). Build with rootless BuildKit (ships as a container, no
-  host apt) so the build's root isn't host root.
+- **Rootless BuildKit** — *shipped (prod, opt-in via `BUILDKIT_HOST`).* The
+  prod compose runs a `moby/buildkit:rootless` daemon, and airlock builds
+  agent images through it via a remote buildx builder (`builder.buildImage`)
+  rather than the host's root `dockerd`. So an agent's untrusted `setup.sh`
+  runs as root *inside buildkitd* (an unprivileged host uid), closing the
+  build-time escape-to-host-root path (cf. CVE-2024-21626). `BUILDKIT_HOST`
+  unset → legacy host `docker build` (dev). **Bound:** airlock still mounts
+  the docker socket for `docker run`/`pull`/`cp` + agent lifecycle, so
+  airlock itself remains root-equivalent — what this removes is *untrusted
+  agent code running as root on the host daemon*, not airlock's own
+  privilege. Registry mode (`AGENT_REGISTRY_URL`) uses buildx `--push`,
+  which needs buildkitd to hold registry creds. **Host prerequisites:**
+  unprivileged user namespaces + `/dev/fuse`. On Ubuntu 23.10+ set
+  `kernel.apparmor_restrict_unprivileged_userns=0` (sysctl) or install the
+  `rootlesskit` AppArmor profile, or buildkitd won't start. The compose
+  passes `--oci-worker-no-process-sandbox` so it also works on container/LXC
+  hosts that can't nest namespaces (drop it on bare-metal/VM for stricter
+  per-step isolation).
 - **`userns-remap` / rootless Docker** — daemon-level remap of
   container-root → an unprivileged host uid, covering builds, the
   toolserver, and runtime agents in one setting. The low-effort

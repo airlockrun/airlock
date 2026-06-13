@@ -97,6 +97,12 @@ type Config struct {
 	AgentBuilderImage string // toolserver sandbox image (default: DefaultAgentBuilderImage)
 	AgentBaseImage    string // agent runtime base image
 	AgentRegistryURL  string // Docker registry for agent images (empty = local only)
+	// BuildkitHost, when set (e.g. unix:///run/buildkit/buildkitd.sock),
+	// routes agent image builds through a remote buildx builder backed by a
+	// rootless buildkitd — so the agent's untrusted setup.sh runs as root
+	// inside buildkitd (unprivileged on the host), not on the host's root
+	// dockerd. Empty = legacy `docker build` on the host daemon (dev).
+	BuildkitHost string
 	AgentLibsPath     string // path containing agentsdk/ goai/ sol/ dirs (the libs we own). Set after startup either to the user-supplied AGENT_LIBS_PATH (dev) or the extracted cache dir (prod). Always non-empty by the time the build pipeline runs.
 	AgentLibsExtPath  string // path containing goose/ templ/ dirs (third-party libs always sourced from the agent-builder image's baked /libs/). Set at startup by EnsureLibs; not read from env.
 	AgentLibsCacheDir string // base dir where extracted /libs/ from agent-builder image is cached. Subdir per image digest.
@@ -196,6 +202,7 @@ func Load() *Config {
 		AgentBuilderImage:     envOr("AGENT_BUILDER_IMAGE", DefaultAgentBuilderImage),
 		AgentBaseImage:        envOr("AGENT_BASE_IMAGE", DefaultAgentBaseImage),
 		AgentRegistryURL:      os.Getenv("AGENT_REGISTRY_URL"),
+		BuildkitHost:          os.Getenv("BUILDKIT_HOST"),
 		AgentLibsPath:         os.Getenv("AGENT_LIBS_PATH"),
 		AgentLibsPathExplicit: os.Getenv("AGENT_LIBS_PATH") != "",
 		AgentLibsCacheDir:     envOr("AGENT_LIBS_CACHE_DIR", "/var/lib/airlock/libs"),
