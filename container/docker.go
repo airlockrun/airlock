@@ -248,11 +248,9 @@ func (m *DockerManager) StartAgent(ctx context.Context, opts AgentOpts) (*Contai
 		},
 	}
 
-	hostCfg := &dcontainer.HostConfig{
-		ExtraHosts: []string{"host.docker.internal:host-gateway"},
-	}
+	hostCfg := buildAgentHostConfig(m.cfg)
 
-	c, err := m.createAndStart(ctx, name, containerCfg, hostCfg)
+	c, err := m.createAndStart(ctx, name, containerCfg, hostCfg, m.cfg.AgentNetwork)
 	if err != nil {
 		return nil, fmt.Errorf("start agent: %w", err)
 	}
@@ -426,7 +424,7 @@ func (m *DockerManager) StartToolserver(ctx context.Context, opts ToolserverOpts
 		Mounts: mounts,
 	}
 
-	c, err := m.createAndStart(ctx, name, containerCfg, hostCfg)
+	c, err := m.createAndStart(ctx, name, containerCfg, hostCfg, m.cfg.DockerNetwork)
 	if err != nil {
 		return nil, fmt.Errorf("start toolserver: %w", err)
 	}
@@ -461,17 +459,74 @@ func (m *DockerManager) KillToolserver(ctx context.Context, name string) error {
 	return m.client.ContainerRemove(ctx, name, dcontainer.RemoveOptions{Force: true})
 }
 
-func (m *DockerManager) createAndStart(ctx context.Context, name string, cfg *dcontainer.Config, hostCfg *dcontainer.HostConfig) (*Container, error) {
+// buildAgentHostConfig assembles the hardened HostConfig for an agent
+// runtime container. Agents are arbitrary user/LLM-authored code, so the
+// container is the trust boundary, not the in-container uid:
+//
+//   - CapDrop ALL — the agent needs no capabilities (it serves HTTP on
+//     :8080 and shells out to nothing; exec runs in the separate
+//     toolserver), so even container-root is powerless.
+//   - no-new-privileges — defangs any setuid binary or sudo a malicious
+//     setup.sh baked into the image at build time; it can't re-elevate.
+//   - PidsLimit / CPUShares — bound forks and give the agent a lower CPU
+//     weight than infra (default 1024), so it can't fork-bomb or starve
+//     airlock/postgres. Both are environment-independent (no host sizing).
+//   - OomScoreAdj 500 — under host memory pressure the kernel kills an
+//     agent before infra, so the host survives without a concurrency cap.
+//   - Memory — capped only when the operator sets AGENT_MEMORY_LIMIT; the
+//     host's size is unknown, and OomScoreAdj already protects it.
+//
+// Default seccomp is intentionally left in place (not unconfined).
+//
+// The host-gateway alias is added only in dev (AgentLibsPathExplicit),
+// where airlock runs on the host and agents reach it via
+// host.docker.internal. In prod agents reach airlock by service DNS, so
+// the alias — and the host reachability it grants — is omitted.
+func buildAgentHostConfig(cfg *config.Config) *dcontainer.HostConfig {
+	hc := &dcontainer.HostConfig{
+		CapDrop:     []string{"ALL"},
+		SecurityOpt: []string{"no-new-privileges"},
+		OomScoreAdj: 500,
+		Runtime:     cfg.AgentRuntime, // "" = Docker default (runc); "runsc" = gVisor
+		Resources: dcontainer.Resources{
+			PidsLimit: ptrInt64(1024),
+			CPUShares: 512,
+		},
+	}
+	if cfg.AgentMemoryLimitBytes > 0 {
+		// MemorySwap == Memory disables swap, making the limit a hard cap.
+		hc.Resources.Memory = cfg.AgentMemoryLimitBytes
+		hc.Resources.MemorySwap = cfg.AgentMemoryLimitBytes
+	}
+	if cfg.AgentLibsPathExplicit {
+		hc.ExtraHosts = []string{"host.docker.internal:host-gateway"}
+	}
+	return hc
+}
+
+func ptrInt64(v int64) *int64 { return &v }
+
+// networkConfig builds the Docker NetworkingConfig attaching a container to
+// networkName (empty = the daemon default network). Agent runtime
+// containers attach to cfg.AgentNetwork (an isolated net reaching only
+// airlock + postgres in prod); toolserver/build containers attach to
+// cfg.DockerNetwork (the infra net).
+func networkConfig(networkName string) *network.NetworkingConfig {
+	netCfg := &network.NetworkingConfig{}
+	if networkName != "" {
+		netCfg.EndpointsConfig = map[string]*network.EndpointSettings{
+			networkName: {},
+		}
+	}
+	return netCfg
+}
+
+func (m *DockerManager) createAndStart(ctx context.Context, name string, cfg *dcontainer.Config, hostCfg *dcontainer.HostConfig, networkName string) (*Container, error) {
 	if err := m.client.ContainerRemove(ctx, name, dcontainer.RemoveOptions{Force: true}); err != nil && !cerrdefs.IsNotFound(err) {
 		m.logger.Warn("failed to remove existing container", zap.String("name", name), zap.Error(err))
 	}
 
-	netCfg := &network.NetworkingConfig{}
-	if m.cfg.DockerNetwork != "" {
-		netCfg.EndpointsConfig = map[string]*network.EndpointSettings{
-			m.cfg.DockerNetwork: {},
-		}
-	}
+	netCfg := networkConfig(networkName)
 
 	resp, err := m.client.ContainerCreate(ctx, cfg, hostCfg, netCfg, nil, name)
 	if err != nil {

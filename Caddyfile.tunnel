@@ -1,0 +1,46 @@
+# Airlock self-host Caddy config — Cloudflare Tunnel (mode C).
+#
+# A `cloudflared` container dials out to Cloudflare and forwards public
+# hostnames to this caddy over the tunnel; Cloudflare terminates TLS at its
+# edge. So caddy serves plain HTTP here (no cert issuance, no host ports).
+# We force X-Forwarded-Proto=https on the airlock upstreams because the edge
+# is always HTTPS — that's what airlock signs PUBLIC_URL / presigned URLs
+# against, even though cloudflared→caddy is HTTP.
+#
+# Configure the tunnel's public-hostname routes (in the Cloudflare Zero-Trust
+# dashboard) to point DOMAIN, *.DOMAIN, and s3.DOMAIN at http://caddy:80.
+
+{
+	auto_https off
+}
+
+# Apex: dashboard SPA + airlock REST/WebSocket API.
+http://{$DOMAIN} {
+	@spa_relay path /auth/relay
+	handle @spa_relay {
+		reverse_proxy frontend:80
+	}
+	@backend path /api/* /auth/* /auth-external /ws /webhooks/* /health /.well-known/* /oauth/*
+	handle @backend {
+		reverse_proxy airlock:8080 {
+			header_up X-Forwarded-Proto https
+		}
+	}
+	handle {
+		reverse_proxy frontend:80
+	}
+}
+
+# Public S3 for presigned URLs.
+http://s3.{$DOMAIN} {
+	reverse_proxy rustfs:9000 {
+		header_up Host {host}
+	}
+}
+
+# Per-agent subdomains.
+http://*.{$DOMAIN} {
+	reverse_proxy airlock:8080 {
+		header_up X-Forwarded-Proto https
+	}
+}

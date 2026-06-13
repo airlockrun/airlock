@@ -47,8 +47,8 @@ jobs:
       - name: Validate version + tag does not exist
         run: |
           V='${{ inputs.version }}'
-          if ! [[ "$V" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::version must look like vX.Y.Z (got: $V)"; exit 1
+          if ! [[ "$V" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-(rc|alpha|beta|dev)\.[0-9]+)?$ ]]; then
+            echo "::error::version must look like vX.Y.Z or vX.Y.Z-rc.N (got: $V)"; exit 1
           fi
           if git rev-parse "$V" >/dev/null 2>&1; then
             echo "::error::tag $V already exists — bump to a new version"; exit 1

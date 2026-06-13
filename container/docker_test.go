@@ -4,8 +4,81 @@ import (
 	"testing"
 	"time"
 
+	"github.com/airlockrun/airlock/config"
 	"github.com/google/uuid"
 )
+
+func TestBuildAgentHostConfig(t *testing.T) {
+	// Baseline (prod-shape): no dev flag, no memory cap, default runtime.
+	hc := buildAgentHostConfig(&config.Config{})
+
+	if len(hc.CapDrop) != 1 || hc.CapDrop[0] != "ALL" {
+		t.Errorf("CapDrop = %v, want [ALL]", hc.CapDrop)
+	}
+	var hasNNP bool
+	for _, o := range hc.SecurityOpt {
+		if o == "no-new-privileges" {
+			hasNNP = true
+		}
+	}
+	if !hasNNP {
+		t.Errorf("SecurityOpt = %v, want it to contain no-new-privileges", hc.SecurityOpt)
+	}
+	if hc.PidsLimit == nil || *hc.PidsLimit != 1024 {
+		t.Errorf("PidsLimit = %v, want 1024", hc.PidsLimit)
+	}
+	if hc.CPUShares != 512 {
+		t.Errorf("CPUShares = %d, want 512", hc.CPUShares)
+	}
+	if hc.OomScoreAdj != 500 {
+		t.Errorf("OomScoreAdj = %d, want 500", hc.OomScoreAdj)
+	}
+	// Prod: no host-gateway alias, no memory cap, default runtime.
+	if len(hc.ExtraHosts) != 0 {
+		t.Errorf("ExtraHosts = %v, want none in prod", hc.ExtraHosts)
+	}
+	if hc.Memory != 0 {
+		t.Errorf("Memory = %d, want 0 (unlimited) when unset", hc.Memory)
+	}
+	if hc.Runtime != "" {
+		t.Errorf("Runtime = %q, want \"\" (Docker default)", hc.Runtime)
+	}
+
+	// Dev: host-gateway alias present so agents reach host-run airlock.
+	dev := buildAgentHostConfig(&config.Config{AgentLibsPathExplicit: true})
+	if len(dev.ExtraHosts) != 1 || dev.ExtraHosts[0] != "host.docker.internal:host-gateway" {
+		t.Errorf("dev ExtraHosts = %v, want [host.docker.internal:host-gateway]", dev.ExtraHosts)
+	}
+
+	// Memory cap applied (and swap pinned to it) only when configured.
+	const lim = 512 * 1024 * 1024
+	mem := buildAgentHostConfig(&config.Config{AgentMemoryLimitBytes: lim})
+	if mem.Memory != lim || mem.MemorySwap != lim {
+		t.Errorf("Memory/MemorySwap = %d/%d, want %d/%d", mem.Memory, mem.MemorySwap, lim, lim)
+	}
+
+	// gVisor runtime threads through.
+	gv := buildAgentHostConfig(&config.Config{AgentRuntime: "runsc"})
+	if gv.Runtime != "runsc" {
+		t.Errorf("Runtime = %q, want runsc", gv.Runtime)
+	}
+}
+
+func TestNetworkConfig(t *testing.T) {
+	// Named network → single endpoint attachment.
+	nc := networkConfig("agents")
+	if len(nc.EndpointsConfig) != 1 {
+		t.Fatalf("EndpointsConfig = %v, want one entry", nc.EndpointsConfig)
+	}
+	if _, ok := nc.EndpointsConfig["agents"]; !ok {
+		t.Errorf("EndpointsConfig missing 'agents': %v", nc.EndpointsConfig)
+	}
+
+	// Empty network → no endpoints (daemon default network).
+	if got := networkConfig(""); len(got.EndpointsConfig) != 0 {
+		t.Errorf("empty network: EndpointsConfig = %v, want none", got.EndpointsConfig)
+	}
+}
 
 func TestIdleContainersToStop(t *testing.T) {
 	now := time.Now()

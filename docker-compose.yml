@@ -42,6 +42,9 @@ services:
       timeout: 3s
       retries: 5
     restart: unless-stopped
+    # On both networks: infra (airlock process) + agents (per-agent scoped
+    # DB access). rustfs/caddy/frontend stay off `agents`.
+    networks: [default, agents]
 
   # RustFS — S3-compatible object store. Airlock auto-creates the bucket
   # on first connect, so no init sidecar is needed.
@@ -107,6 +110,39 @@ services:
     command: ["true"]
     restart: "no"
 
+  # Rootless BuildKit daemon. airlock builds agent images through this (via
+  # BUILDKIT_HOST=tcp://buildkitd:1234 + a remote buildx builder) instead of
+  # the host's root dockerd, so an agent's untrusted setup.sh runs as root
+  # *inside* buildkitd — an unprivileged uid on the host. Listens on TCP (not
+  # a unix socket: the rootless uid can't bind a socket in a root-owned shared
+  # volume). Unauthenticated, but only reachable on the internal `default`
+  # network — NOT published to the host and NOT on the agents network, so no
+  # agent or external client can reach it. (mTLS is a possible follow-up.)
+  # Needs unconfined seccomp/apparmor + /dev/fuse for rootless overlayfs,
+  # scoped to this container.
+  buildkitd:
+    image: moby/buildkit:rootless
+    # Opt-in: only runs when the `buildkit` profile is active (install.sh
+    # enables it after confirming the host supports rootless userns). Without
+    # it, BUILDKIT_HOST is empty and airlock uses the legacy host docker build.
+    profiles: ["buildkit"]
+    # --oci-worker-no-process-sandbox: skip the per-RUN-step pid/proc
+    # sandbox, which can't nest inside a container host (the build would
+    # fail mounting /proc). Still fully rootless. Drop it on a bare-metal/VM
+    # host if you want the extra per-step isolation.
+    command:
+      - "--addr"
+      - "tcp://0.0.0.0:1234"
+      - "--oci-worker-no-process-sandbox"
+    security_opt:
+      - seccomp=unconfined
+      - apparmor=unconfined
+    devices:
+      - /dev/fuse
+    volumes:
+      - buildkit-state:/home/user/.local/share/buildkit
+    restart: unless-stopped
+
   airlock:
     build:
       context: .
@@ -132,10 +168,11 @@ services:
       DB_NAME: ${POSTGRES_DB:-airlock}
       DB_SSL_MODE: disable
 
-      # S3 has three audiences:
-      #   S3_URL        — airlock and agents (in-network)
-      #   S3_URL_AGENT  — same for agents (kept distinct in case anchored
-      #                   deployments split them)
+      # S3 has two audiences:
+      #   S3_URL        — the airlock process (in-network). Agents never hit
+      #                   S3 directly; their storage goes through airlock's
+      #                   /api/agent/storage API (and they're not on rustfs's
+      #                   network anyway).
       #   S3_URL_PUBLIC — used when generating presigned URLs that LLM
       #                   providers (OpenAI, Anthropic, etc.) fetch from
       #                   the public internet. rustfs:9000 isn't routable
@@ -144,7 +181,6 @@ services:
       #                   rustfs:9000 with Host preserved (so the signed
       #                   URL validates).
       S3_URL: http://rustfs:9000
-      S3_URL_AGENT: http://rustfs:9000
       # S3_URL_PUBLIC is the externally-reachable host browsers (and, in
       # the prod path, LLM providers) hit for presigned media. Defaults
       # to `https://s3.${DOMAIN}` to match the Caddyfile, but
@@ -170,9 +206,21 @@ services:
       AGENT_DOMAIN: ${DOMAIN}
       API_URL_AGENT: http://airlock:8080
 
-      # Container orchestration: agent containers join this network so they
-      # can reach airlock:8080 internally. Must match the network name below.
+      # Container orchestration networks. DOCKER_NETWORK carries infra +
+      # toolserver/build containers. AGENT_NETWORK carries agent runtime
+      # containers — an isolated net with only airlock + postgres, so a
+      # malicious agent can't reach rustfs/caddy/frontend. Both must match
+      # the network names in the `networks:` block below.
       DOCKER_NETWORK: airlock
+      AGENT_NETWORK: airlock-agents
+      # Rootless agent image builds. Empty by default → legacy host
+      # `docker build` (works everywhere). install.sh sets BUILDKIT_HOST to the
+      # buildkitd socket and enables the `buildkit` profile when the host
+      # supports rootless userns. See docs/agent-isolation.md.
+      BUILDKIT_HOST: ${BUILDKIT_HOST-}
+      # Optional agent isolation knobs (install.sh / .env fill these).
+      AGENT_SANDBOX: ${AGENT_SANDBOX-}
+      AGENT_MEMORY_LIMIT: ${AGENT_MEMORY_LIMIT-}
       # Opt-in toolserver/runtime image overrides. Empty default = airlock
       # uses config.DefaultAgent{Builder,Base}Image (pinned to airlock.Version,
       # matched to this release). Set in .env to point at a custom build.
@@ -208,6 +256,9 @@ services:
       retries: 5
       start_period: 30s
     restart: unless-stopped
+    # On both networks: infra (reach rustfs/caddy/postgres) + agents (so
+    # agent containers can reach airlock:8080 on the isolated net).
+    networks: [default, agents]
 
   frontend:
     build:
@@ -238,16 +289,23 @@ services:
       - caddy-config:/config
     restart: unless-stopped
 
-# Single shared network. Agent containers launched by airlock join this
-# network too (DOCKER_NETWORK env var above), so they can reach airlock,
-# postgres, and rustfs by service name.
+# Two networks. `default` (airlock) carries all infra. `agents` carries
+# ONLY airlock + postgres — agent runtime containers attach here (via
+# AGENT_NETWORK), so a malicious agent can reach airlock's API and its
+# scoped DB but NOT rustfs, caddy, the frontend, or build containers.
+# Toolserver/build containers stay on `default` (DOCKER_NETWORK). Agents
+# still get internet egress (bridge NAT) for legitimate outbound calls.
+# See airlock/docs/agent-isolation.md.
 networks:
   default:
     name: airlock
+  agents:
+    name: airlock-agents
 
 volumes:
   pgdata:
   rustfsdata:
+  buildkit-state:   # rootless buildkitd cache + state (persists build cache)
   caddy-data:    # CRITICAL: Let's Encrypt cert cache. Don't delete or you'll re-issue all certs and may hit rate limits.
   caddy-config:
   airlock-data:

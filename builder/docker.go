@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/airlockrun/airlock/config"
 	"github.com/airlockrun/airlock/scaffold"
@@ -33,6 +34,28 @@ func buildImage(ctx context.Context, cfg *config.Config, agentID, contextDir, co
 		tag = fmt.Sprintf("%s/%s", cfg.AgentRegistryURL, tag)
 	}
 
+	// Rootless BuildKit path (prod): build via a remote buildx builder backed
+	// by the rootless buildkitd container, so the agent's untrusted setup.sh
+	// runs as root *inside buildkitd* (an unprivileged host uid) rather than
+	// on the host's root dockerd. --load imports the result into the local
+	// image store; --push (registry mode) goes straight to the registry, so
+	// no separate `docker push` is needed.
+	if cfg.BuildkitHost != "" {
+		if err := ensureBuildxBuilder(cfg.BuildkitHost); err != nil {
+			return "", err
+		}
+		args := buildxBuildArgs(tag, dockerfilePath, contextDir, goproxyDir, cfg.AgentRegistryURL != "")
+		cmd := exec.CommandContext(ctx, "docker", args...)
+		if logFn != nil {
+			return tag, runAndStream(cmd, logFn)
+		}
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return "", fmt.Errorf("docker buildx build: %s: %w", strings.TrimSpace(string(out)), err)
+		}
+		return tag, nil
+	}
+
+	// Legacy path (dev / no buildkitd): build on the host docker daemon.
 	args := []string{"build", "-t", tag}
 	if goproxyDir != "" {
 		args = append(args, "--build-context", "goproxy="+goproxyDir)
@@ -64,6 +87,54 @@ func buildImage(ctx context.Context, cfg *config.Config, agentID, contextDir, co
 	}
 
 	return tag, nil
+}
+
+// buildxBuilderName is the buildx builder airlock creates pointing at the
+// rootless buildkitd (BUILDKIT_HOST). Stable name so it's reused across builds.
+const buildxBuilderName = "airlock-rootless"
+
+// buildxBuildArgs builds the `docker buildx build` argv for an agent image.
+// push=true emits to the registry; otherwise the result is --loaded into the
+// local docker image store. goproxyDir, when set (dev), is wired as the
+// `goproxy` named build context.
+func buildxBuildArgs(tag, dockerfilePath, contextDir, goproxyDir string, push bool) []string {
+	args := []string{"buildx", "build", "--builder", buildxBuilderName, "--progress=plain", "-t", tag}
+	if push {
+		args = append(args, "--push")
+	} else {
+		args = append(args, "--load")
+	}
+	if goproxyDir != "" {
+		args = append(args, "--build-context", "goproxy="+goproxyDir)
+	}
+	if dockerfilePath != "" {
+		args = append(args, "-f", dockerfilePath)
+	}
+	args = append(args, contextDir)
+	return args
+}
+
+var (
+	buildxOnce sync.Once
+	buildxErr  error
+)
+
+// ensureBuildxBuilder lazily creates the remote-driver buildx builder that
+// targets the rootless buildkitd at host (e.g. unix:///run/buildkit/buildkitd.sock).
+// Idempotent: a builder that already exists is reused. Runs once per process.
+func ensureBuildxBuilder(host string) error {
+	buildxOnce.Do(func() {
+		ctx := context.Background()
+		if err := exec.CommandContext(ctx, "docker", "buildx", "inspect", buildxBuilderName).Run(); err == nil {
+			return // already exists
+		}
+		out, err := exec.CommandContext(ctx, "docker", "buildx", "create",
+			"--name", buildxBuilderName, "--driver", "remote", host).CombinedOutput()
+		if err != nil {
+			buildxErr = fmt.Errorf("buildx create (remote %s): %s: %w", host, strings.TrimSpace(string(out)), err)
+		}
+	})
+	return buildxErr
 }
 
 // WarmBuildCache pre-downloads Go module dependencies so that the first real
@@ -117,22 +188,41 @@ func (b *BuildService) WarmBuildCache(ctx context.Context) {
 	defer cleanup()
 
 	tag := "airlock-cache-warm:latest"
-	args := []string{"build", "-t", tag}
-	if proxyDir != "" {
-		args = append(args, "--build-context", "goproxy="+proxyDir)
+	var cmd *exec.Cmd
+	if b.cfg.BuildkitHost != "" {
+		// Rootless BuildKit: warm buildkitd's own (persistent) cache. No
+		// output requested (no --load/--push), so the throwaway image is
+		// discarded by buildkitd — nothing to `docker rmi` afterwards.
+		if err := ensureBuildxBuilder(b.cfg.BuildkitHost); err != nil {
+			b.logger.Warn("warm cache: buildx builder", zap.Error(err))
+			return
+		}
+		args := []string{"buildx", "build", "--builder", buildxBuilderName, "--progress=plain"}
+		if proxyDir != "" {
+			args = append(args, "--build-context", "goproxy="+proxyDir)
+		}
+		args = append(args, dir)
+		cmd = exec.CommandContext(ctx, "docker", args...)
+	} else {
+		args := []string{"build", "-t", tag}
+		if proxyDir != "" {
+			args = append(args, "--build-context", "goproxy="+proxyDir)
+		}
+		args = append(args, dir)
+		cmd = exec.CommandContext(ctx, "docker", args...)
+		cmd.Env = append(cmd.Environ(), "DOCKER_BUILDKIT=1")
 	}
-	args = append(args, dir)
 
-	cmd := exec.CommandContext(ctx, "docker", args...)
-	cmd.Env = append(cmd.Environ(), "DOCKER_BUILDKIT=1")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		b.logger.Warn("warm cache: docker build failed", zap.String("output", string(out)), zap.Error(err))
 		return
 	}
 
-	// Remove throwaway image — the cache mounts persist.
-	_ = exec.CommandContext(ctx, "docker", "rmi", tag).Run()
+	// Legacy build produced a tagged image; remove it (cache mounts persist).
+	if b.cfg.BuildkitHost == "" {
+		_ = exec.CommandContext(ctx, "docker", "rmi", tag).Run()
+	}
 
 	b.logger.Info("build cache warmed")
 }

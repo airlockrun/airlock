@@ -5,6 +5,55 @@ import (
 	"testing"
 )
 
+func TestParseSizeBytes(t *testing.T) {
+	tests := []struct {
+		in   string
+		want int64
+	}{
+		{"", 0},
+		{"   ", 0},
+		{"1024", 1024},
+		{"512m", 512 << 20},
+		{"512mb", 512 << 20},
+		{"2g", 2 << 30},
+		{"2GB", 2 << 30},
+		{"4k", 4 << 10},
+		{"100b", 100},
+		{"garbage", 0},
+		{"-5m", 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.in, func(t *testing.T) {
+			if got := parseSizeBytes(tt.in); got != tt.want {
+				t.Errorf("parseSizeBytes(%q) = %d, want %d", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestResolveAgentRuntime(t *testing.T) {
+	tests := []struct {
+		env  string
+		want string
+	}{
+		{"", ""},
+		{"runc", ""},
+		{"default", ""},
+		{"gvisor", "runsc"},
+		{"GVISOR", "runsc"},
+		{"runsc", "runsc"},
+		{"my-custom-runtime", "my-custom-runtime"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.env, func(t *testing.T) {
+			t.Setenv("AGENT_SANDBOX", tt.env)
+			if got := resolveAgentRuntime(); got != tt.want {
+				t.Errorf("resolveAgentRuntime() with AGENT_SANDBOX=%q = %q, want %q", tt.env, got, tt.want)
+			}
+		})
+	}
+}
+
 // setRequiredEnv sets all required env vars for Load().
 func setRequiredEnv(t *testing.T) {
 	t.Helper()
@@ -17,6 +66,23 @@ func setRequiredEnv(t *testing.T) {
 	// Subdomain routing is load-bearing — resolveAgentDomain panics if
 	// neither AGENT_DOMAIN nor PUBLIC_URL is set, so seed one for tests.
 	t.Setenv("AGENT_DOMAIN", "test.airlock.local")
+}
+
+func TestAgentNetworkFallback(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("DOCKER_NETWORK", "airlock-dev")
+
+	// AGENT_NETWORK unset → falls back to DOCKER_NETWORK (dev behaviour).
+	t.Setenv("AGENT_NETWORK", "")
+	if c := Load(); c.AgentNetwork != "airlock-dev" {
+		t.Errorf("AgentNetwork (unset) = %q, want airlock-dev", c.AgentNetwork)
+	}
+
+	// AGENT_NETWORK set → used verbatim (prod isolation).
+	t.Setenv("AGENT_NETWORK", "agents")
+	if c := Load(); c.AgentNetwork != "agents" {
+		t.Errorf("AgentNetwork (set) = %q, want agents", c.AgentNetwork)
+	}
 }
 
 func TestLoad(t *testing.T) {

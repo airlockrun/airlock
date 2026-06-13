@@ -179,6 +179,7 @@ Replay buffer (100 messages) per topic for late subscribers.
 - AES-256-GCM encryption at rest for API keys, secrets, tokens. Versioned keys for rotation.
 - Webhook verification: none, HMAC, or token-based.
 - Agent containers get scoped DB credentials (per-agent schema) and bearer token.
+- Agent runtime containers are hardened by default in `container.buildAgentHostConfig` (CapDrop:ALL, no-new-privileges, PidsLimit, lower CPUShares, OomScoreAdj so agents OOM before infra; host-gateway only in dev). Optional `AGENT_MEMORY_LIMIT` and `AGENT_SANDBOX=gvisor` (runsc) — see `docs/agent-isolation.md`.
 - OIDC enterprise support via build tag.
 
 ---
