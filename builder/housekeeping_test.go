@@ -77,6 +77,31 @@ func TestRunHousekeeping_RegeneratesStaleDockerfile(t *testing.T) {
 	}
 }
 
+func TestRunHousekeeping_RegeneratesStaleAgentsMD(t *testing.T) {
+	ctx := context.Background()
+	repoPath, data := scaffoldHousekeepingFixture(t)
+
+	if err := os.WriteFile(filepath.Join(repoPath, "AGENTS.md"),
+		[]byte("# user clobbered the docs\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := runHousekeeping(ctx, repoPath, data)
+	if err != nil {
+		t.Fatalf("runHousekeeping: %v", err)
+	}
+	if !res.AgentsMDChanged {
+		t.Error("expected AgentsMDChanged=true after editing AGENTS.md")
+	}
+	body, _ := os.ReadFile(filepath.Join(repoPath, "AGENTS.md"))
+	if !strings.Contains(string(body), "how this agent is built") {
+		t.Errorf("AGENTS.md not regenerated from template:\n%s", body)
+	}
+	if strings.Contains(string(body), "# user clobbered the docs") {
+		t.Error("user content survived; template should have overwritten")
+	}
+}
+
 func TestRunHousekeeping_AppendsMissingGitignoreLines(t *testing.T) {
 	ctx := context.Background()
 	repoPath, data := scaffoldHousekeepingFixture(t)

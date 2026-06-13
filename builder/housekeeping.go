@@ -16,13 +16,14 @@ import (
 // so the caller can decide whether to make a chore commit.
 type HousekeepingResult struct {
 	DockerfileChanged bool
+	AgentsMDChanged   bool
 	GitignoreChanged  bool
 	GoModChanged      bool
 }
 
 // Changed returns true if any airlock-managed file was rewritten.
 func (r HousekeepingResult) Changed() bool {
-	return r.DockerfileChanged || r.GitignoreChanged || r.GoModChanged
+	return r.DockerfileChanged || r.AgentsMDChanged || r.GitignoreChanged || r.GoModChanged
 }
 
 // gitignoreManagedLines are the entries airlock keeps in every agent's
@@ -33,6 +34,8 @@ var gitignoreManagedLines = []string{"go.work", "go.work.sum"}
 // runHousekeeping rewrites the airlock-managed files in repoPath to match
 // the current airlock binary's idea of canonical state:
 //   - Dockerfile: regenerated from scaffold/templates/Dockerfile.tmpl
+//   - AGENTS.md: regenerated from scaffold/templates/AGENTS.md.tmpl —
+//     airlock-managed doc, overwritten so agents pick up doc updates
 //   - .gitignore: airlock-kept entries appended if absent; user's other
 //     entries untouched
 //   - go.mod: the agentsdk `require` pinned to data.AgentSDKVersion — the
@@ -77,6 +80,12 @@ func runHousekeeping(ctx context.Context, repoPath string, data scaffold.Scaffol
 	}
 	res.DockerfileChanged = dockerfileChanged
 
+	agentsMDChanged, err := rewriteAgentsMD(repoPath, data)
+	if err != nil {
+		return res, fmt.Errorf("rewrite AGENTS.md: %w", err)
+	}
+	res.AgentsMDChanged = agentsMDChanged
+
 	gitignoreChanged, err := reconcileGitignore(repoPath, gitignoreManagedLines, gitignoreRemoveLines)
 	if err != nil {
 		return res, fmt.Errorf("update .gitignore: %w", err)
@@ -108,6 +117,24 @@ func rewriteDockerfile(repoPath string, data scaffold.ScaffoldData) (bool, error
 	target := filepath.Join(repoPath, "Dockerfile")
 	before, _ := os.ReadFile(target) // missing-file returns nil, fine
 	if err := scaffold.GenerateDockerfile(repoPath, data); err != nil {
+		return false, err
+	}
+	after, err := os.ReadFile(target)
+	if err != nil {
+		return false, err
+	}
+	return string(before) != string(after), nil
+}
+
+// rewriteAgentsMD renders the scaffold AGENTS.md template into repoPath and
+// reports whether the file content actually changed. AGENTS.md is
+// airlock-managed (not agent-owned), so housekeeping overwrites it to the
+// current template — the same overwrite-and-diff contract as the Dockerfile.
+// A no-op write returns false so the caller can skip the chore commit.
+func rewriteAgentsMD(repoPath string, data scaffold.ScaffoldData) (bool, error) {
+	target := filepath.Join(repoPath, "AGENTS.md")
+	before, _ := os.ReadFile(target) // missing-file returns nil, fine
+	if err := scaffold.GenerateAgentsMD(repoPath, data); err != nil {
 		return false, err
 	}
 	after, err := os.ReadFile(target)
@@ -183,6 +210,9 @@ func commitHousekeeping(repoPath string, r HousekeepingResult) error {
 	var paths []string
 	if r.DockerfileChanged {
 		paths = append(paths, "Dockerfile")
+	}
+	if r.AgentsMDChanged {
+		paths = append(paths, "AGENTS.md")
 	}
 	if r.GitignoreChanged {
 		paths = append(paths, ".gitignore")
