@@ -79,9 +79,19 @@ detect_os() { # sets OS, DISTRO, PKG
 	fi
 }
 
-is_cloudflare() { # is_cloudflare <domain> -> 0 if NS records look like Cloudflare
+is_cloudflare() { # is_cloudflare <domain> -> 0 if the zone's NS are Cloudflare
 	command -v dig >/dev/null 2>&1 || return 1
-	dig +short NS "$1" 2>/dev/null | grep -qi 'cloudflare'
+	# A subdomain (d.example.com) isn't its own zone, so its NS query is empty.
+	# Walk up to the registrable domain whose NS records actually exist.
+	local name="$1" ns
+	while :; do
+		ns=$(dig +short NS "$name" 2>/dev/null)
+		if [ -n "$ns" ]; then
+			printf '%s' "$ns" | grep -qi 'cloudflare'
+			return $?
+		fi
+		case "$name" in *.*.*) name="${name#*.}" ;; *) return 1 ;; esac
+	done
 }
 
 host_public_ip() {
