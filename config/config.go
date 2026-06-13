@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/airlockrun/airlock"
 )
@@ -64,6 +65,19 @@ type Config struct {
 	// --- Containers ---
 	ContainerRuntime string // "docker"
 	ContainerImage   string // toolserver image name
+
+	// AgentRuntime is the OCI runtime for agent containers — "" = the
+	// Docker default (runc), "runsc" = gVisor. Set via AGENT_SANDBOX
+	// (gvisor → runsc). The HostConfig hardening (cap drop, no-new-privs,
+	// limits) applies on either runtime; gVisor adds a userspace-kernel
+	// sandbox on top.
+	AgentRuntime string
+	// AgentMemoryLimitBytes caps each agent container's memory (0 =
+	// unlimited). Optional because the host's size is unknown; OomScoreAdj
+	// makes agents the first OOM victim regardless, so the host survives
+	// collective pressure without a per-agent cap. Set via
+	// AGENT_MEMORY_LIMIT (e.g. "512m", "2g").
+	AgentMemoryLimitBytes int64
 
 	// --- Build pipeline ---
 	// AgentReposPath is the base directory holding per-agent git repos.
@@ -165,8 +179,10 @@ func Load() *Config {
 		EncryptionKeyOld: os.Getenv("ENCRYPTION_KEY_OLD"),
 
 		// Containers
-		ContainerRuntime: envOr("CONTAINER_RUNTIME", "docker"),
-		ContainerImage:   envOr("CONTAINER_IMAGE", "airlock-toolserver"),
+		ContainerRuntime:      envOr("CONTAINER_RUNTIME", "docker"),
+		ContainerImage:        envOr("CONTAINER_IMAGE", "airlock-toolserver"),
+		AgentRuntime:          resolveAgentRuntime(),
+		AgentMemoryLimitBytes: parseSizeBytes(os.Getenv("AGENT_MEMORY_LIMIT")),
 
 		// Build pipeline
 		AgentReposPath:        envOr("AGENT_REPOS_PATH", "/var/lib/airlock/agents"),
@@ -233,6 +249,48 @@ func (c *Config) AgentBaseURL(slug string) string {
 		u += ":" + c.AgentPort
 	}
 	return u
+}
+
+// resolveAgentRuntime maps AGENT_SANDBOX to an OCI runtime name. "gvisor"
+// (or "runsc") selects gVisor; empty / "runc" / "default" use the Docker
+// default runtime. Any other value is passed through verbatim so an
+// operator can wire a custom runtime registered in their daemon.
+func resolveAgentRuntime() string {
+	raw := strings.TrimSpace(os.Getenv("AGENT_SANDBOX"))
+	switch strings.ToLower(raw) {
+	case "", "runc", "default":
+		return ""
+	case "gvisor", "runsc":
+		return "runsc"
+	default:
+		return raw
+	}
+}
+
+// parseSizeBytes parses a human size ("512m", "2g", "1024") into bytes.
+// Suffixes k/m/g (and kb/mb/gb) are powers of 1024; a bare number is
+// bytes. Empty or unparseable input returns 0, treated as "unlimited".
+func parseSizeBytes(s string) int64 {
+	s = strings.ToLower(strings.TrimSpace(s))
+	if s == "" {
+		return 0
+	}
+	mult := int64(1)
+	switch {
+	case strings.HasSuffix(s, "gb"), strings.HasSuffix(s, "g"):
+		mult, s = 1<<30, strings.TrimRight(s, "gb")
+	case strings.HasSuffix(s, "mb"), strings.HasSuffix(s, "m"):
+		mult, s = 1<<20, strings.TrimRight(s, "mb")
+	case strings.HasSuffix(s, "kb"), strings.HasSuffix(s, "k"):
+		mult, s = 1<<10, strings.TrimRight(s, "kb")
+	case strings.HasSuffix(s, "b"):
+		s = strings.TrimRight(s, "b")
+	}
+	n, err := strconv.ParseInt(strings.TrimSpace(s), 10, 64)
+	if err != nil || n < 0 {
+		return 0
+	}
+	return n * mult
 }
 
 func requireEnv(key string) string {
