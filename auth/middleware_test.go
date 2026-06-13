@@ -67,7 +67,7 @@ func TestRequireTenantRoleHierarchy(t *testing.T) {
 	tests := []struct {
 		name     string
 		userRole string
-		minRole  string
+		minRole  Role
 		wantCode int
 	}{
 		{"admin passes admin check", "admin", "admin", http.StatusOK},

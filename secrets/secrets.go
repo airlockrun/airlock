@@ -27,6 +27,18 @@ type Store interface {
 
 	// Get returns the plaintext given a value previously returned by Put.
 	Get(ctx context.Context, ref, stored string) (string, error)
+
+	// Seal encrypts plaintext bound to aad and returns an opaque sealed
+	// value. Open returns the plaintext only when given the identical aad —
+	// the binding lets the agent persist the sealed value in its own storage
+	// while a caller under a different aad cannot decrypt it. (For LocalStore
+	// the aad is the GCM additional-authenticated-data; a future KMS store
+	// maps it to the encryption context.)
+	Seal(ctx context.Context, aad, plaintext string) (string, error)
+
+	// Open reverses Seal. Returns an error if aad doesn't match the value
+	// sealed under.
+	Open(ctx context.Context, aad, sealed string) (string, error)
 }
 
 // LocalStore implements Store using AES-256-GCM with versioned keys.
@@ -50,4 +62,12 @@ func (l *LocalStore) Put(_ context.Context, _, plaintext string) (string, error)
 
 func (l *LocalStore) Get(_ context.Context, _, stored string) (string, error) {
 	return l.enc.Decrypt(stored)
+}
+
+func (l *LocalStore) Seal(_ context.Context, aad, plaintext string) (string, error) {
+	return l.enc.EncryptWithAAD(plaintext, aad)
+}
+
+func (l *LocalStore) Open(_ context.Context, aad, sealed string) (string, error) {
+	return l.enc.DecryptWithAAD(sealed, aad)
 }

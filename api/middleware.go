@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"net/http"
+	"runtime/debug"
 	"time"
 
 	"github.com/airlockrun/airlock/auth"
@@ -73,6 +74,31 @@ func (w *statusWriter) Unwrap() http.ResponseWriter {
 	return w.ResponseWriter
 }
 
+// zapRecoverer recovers from handler panics and logs the error and stack via
+// the per-request zap logger, so the panic record carries the same
+// method/path/ip/request_id fields as the access log. Mounted inside
+// requestLogger; a stock chimw.Recoverer remains outside as a last-resort net
+// for panics in the middleware above it.
+func zapRecoverer(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			rec := recover()
+			if rec == nil {
+				return
+			}
+			if err, ok := rec.(error); ok && err == http.ErrAbortHandler {
+				panic(rec)
+			}
+			logFor(r).Error("panic recovered",
+				zap.Any("err", rec),
+				zap.ByteString("stack", debug.Stack()),
+			)
+			w.WriteHeader(http.StatusInternalServerError)
+		}()
+		next.ServeHTTP(w, r)
+	})
+}
+
 // logFor returns the per-request logger from context.
 func logFor(r *http.Request) *zap.Logger {
 	if rl, ok := r.Context().Value(loggerKey{}).(*reqLogger); ok {
@@ -96,4 +122,3 @@ func identityLogger(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r)
 	})
 }
-

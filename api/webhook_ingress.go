@@ -32,22 +32,26 @@ type webhookIngressHandler struct {
 func (h *webhookIngressHandler) HandleWebhook(w http.ResponseWriter, r *http.Request) {
 	agentID, err := parseUUID(chi.URLParam(r, "agentID"))
 	if err != nil {
+		// airlockvet:allow-writejson reason: external public webhook endpoint — signature-gated, no JWT/Principal; provider expects JSON error envelopes
 		writeJSONError(w, http.StatusBadRequest, "invalid agent ID")
 		return
 	}
 	path := chi.URLParam(r, "path")
 	if path == "" {
+		// airlockvet:allow-writejson reason: external public webhook endpoint — signature-gated, no JWT/Principal; provider expects JSON error envelopes
 		writeJSONError(w, http.StatusBadRequest, "path is required")
 		return
 	}
 
 	// Look up the webhook registration.
 	q := dbq.New(h.db.Pool())
+	// airlockvet:allow-dbq reason: external public webhook endpoint — signature-gated, no JWT/Principal; provider expects JSON error envelopes
 	wh, err := q.GetWebhookByAgentAndPath(r.Context(), dbq.GetWebhookByAgentAndPathParams{
 		AgentID: toPgUUID(agentID),
 		Path:    path,
 	})
 	if err != nil {
+		// airlockvet:allow-writejson reason: external public webhook endpoint — signature-gated, no JWT/Principal; provider expects JSON error envelopes
 		writeJSONError(w, http.StatusNotFound, "webhook not found")
 		return
 	}
@@ -55,6 +59,7 @@ func (h *webhookIngressHandler) HandleWebhook(w http.ResponseWriter, r *http.Req
 	// Read the request body.
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
+		// airlockvet:allow-writejson reason: external public webhook endpoint — signature-gated, no JWT/Principal; provider expects JSON error envelopes
 		writeJSONError(w, http.StatusBadRequest, "failed to read body")
 		return
 	}
@@ -64,12 +69,14 @@ func (h *webhookIngressHandler) HandleWebhook(w http.ResponseWriter, r *http.Req
 	if wh.VerifyMode != "" && wh.VerifyMode != "none" {
 		if wh.Secret == "" {
 			h.logger.Error("webhook has no secret", zap.String("path", path))
+			// airlockvet:allow-writejson reason: external public webhook endpoint — signature-gated, no JWT/Principal; provider expects JSON error envelopes
 			writeJSONError(w, http.StatusInternalServerError, "webhook not configured")
 			return
 		}
 		secret, err := h.encryptor.Get(r.Context(), "webhook/"+pgUUID(wh.ID).String()+"/secret", wh.Secret)
 		if err != nil {
 			h.logger.Error("failed to decrypt webhook secret", zap.Error(err))
+			// airlockvet:allow-writejson reason: external public webhook endpoint — signature-gated, no JWT/Principal; provider expects JSON error envelopes
 			writeJSONError(w, http.StatusInternalServerError, "webhook not configured")
 			return
 		}
@@ -78,17 +85,20 @@ func (h *webhookIngressHandler) HandleWebhook(w http.ResponseWriter, r *http.Req
 		case "hmac":
 			sigHeader := r.Header.Get(wh.VerifyHeader)
 			if !verifyHMAC([]byte(secret), body, sigHeader) {
+				// airlockvet:allow-writejson reason: external public webhook endpoint — signature-gated, no JWT/Principal; provider expects JSON error envelopes
 				writeJSONError(w, http.StatusUnauthorized, "invalid signature")
 				return
 			}
 		case "token":
 			token := r.URL.Query().Get("token")
 			if !verifyToken(secret, token) {
+				// airlockvet:allow-writejson reason: external public webhook endpoint — signature-gated, no JWT/Principal; provider expects JSON error envelopes
 				writeJSONError(w, http.StatusUnauthorized, "invalid token")
 				return
 			}
 		case "bearer":
 			if !verifyBearer(secret, r.Header.Get("Authorization")) {
+				// airlockvet:allow-writejson reason: external public webhook endpoint — signature-gated, no JWT/Principal; provider expects JSON error envelopes
 				writeJSONError(w, http.StatusUnauthorized, "invalid bearer token")
 				return
 			}
@@ -98,11 +108,13 @@ func (h *webhookIngressHandler) HandleWebhook(w http.ResponseWriter, r *http.Req
 				sigHeaderName = "X-Signature-Ed25519"
 			}
 			if !verifyEd25519(secret, body, r.Header.Get(sigHeaderName), r.Header.Get("X-Signature-Timestamp"), time.Now()) {
+				// airlockvet:allow-writejson reason: external public webhook endpoint — signature-gated, no JWT/Principal; provider expects JSON error envelopes
 				writeJSONError(w, http.StatusUnauthorized, "invalid signature")
 				return
 			}
 		default:
 			h.logger.Error("unknown verify mode", zap.String("mode", wh.VerifyMode), zap.String("path", path))
+			// airlockvet:allow-writejson reason: external public webhook endpoint — signature-gated, no JWT/Principal; provider expects JSON error envelopes
 			writeJSONError(w, http.StatusInternalServerError, "webhook not configured")
 			return
 		}
@@ -115,13 +127,20 @@ func (h *webhookIngressHandler) HandleWebhook(w http.ResponseWriter, r *http.Req
 	}
 	rc, _, err := h.dispatcher.ForwardWebhook(r.Context(), agentID, path, body, nil, timeout)
 	if err != nil {
+		if status, msg, ok := notRunnableResponse(err); ok {
+			// airlockvet:allow-writejson reason: external public webhook endpoint — signature-gated, no JWT/Principal; provider expects JSON error envelopes
+			writeJSONError(w, status, msg)
+			return
+		}
 		h.logger.Error("forward webhook failed", zap.Error(err))
+		// airlockvet:allow-writejson reason: external public webhook endpoint — signature-gated, no JWT/Principal; provider expects JSON error envelopes
 		writeJSONError(w, http.StatusBadGateway, "failed to forward webhook")
 		return
 	}
 	defer rc.Close()
 
 	// Update last_received_at.
+	// airlockvet:allow-dbq reason: external public webhook endpoint — signature-gated, no JWT/Principal; provider expects JSON error envelopes
 	_ = q.UpdateWebhookLastReceived(r.Context(), wh.ID)
 
 	// Stream the response back.

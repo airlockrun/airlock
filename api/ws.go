@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"net/http"
+	"strconv"
 
 	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/db"
@@ -53,6 +54,7 @@ func (h *WSHandler) Upgrade(w http.ResponseWriter, r *http.Request) {
 	// Resolve the user's member agents BEFORE the upgrade so a DB error can
 	// return a real HTTP status instead of a half-open socket.
 	q := dbq.New(h.db.Pool())
+	// airlockvet:allow-dbq reason: pure read of caller's own membership rows; no authz decision to gate (you can always see what you're a member of)
 	memberAgents, err := q.ListAgentIDsByMember(r.Context(), toPgUUID(userID))
 	if err != nil {
 		h.logger.Error("list member agents for ws", zap.Error(err))
@@ -69,6 +71,10 @@ func (h *WSHandler) Upgrade(w http.ResponseWriter, r *http.Request) {
 	}
 
 	conn := realtime.NewConn(ws, userID, claims.Email, h.logger)
+	// Replay cursor: max Envelope.Seq the client already processed.
+	// Absent/garbage → 0 → fresh connect, no replay (the client's
+	// normal initial DB load covers it). Must be set before Subscribe.
+	conn.SinceSeq, _ = strconv.ParseUint(r.URL.Query().Get("since"), 10, 64)
 	h.hub.Register(conn)
 	for _, pgID := range memberAgents {
 		agentID, err := uuid.FromBytes(pgID.Bytes[:])
@@ -77,12 +83,18 @@ func (h *WSHandler) Upgrade(w http.ResponseWriter, r *http.Request) {
 		}
 		h.hub.Subscribe(conn, agentID)
 	}
+	// Also subscribe the connection to the user's own UUID as a topic
+	// — sysagent publishes thread events here (one user topic carries
+	// every thread's events, with the thread id on envelope.ConversationID
+	// for client-side per-thread routing). This avoids a dynamic
+	// subscribe roundtrip when the user creates a fresh thread mid-session.
+	h.hub.Subscribe(conn, userID)
 	h.logger.Info("ws connected",
 		zap.String("conn", conn.ID),
 		zap.String("uid", userID.String()),
 		zap.String("email", claims.Email),
 		zap.String("ip", r.RemoteAddr),
-		zap.Int("topics", len(memberAgents)),
+		zap.Int("topics", len(memberAgents)+1),
 	)
 
 	// Use background context — r.Context() is cancelled when the handler returns,

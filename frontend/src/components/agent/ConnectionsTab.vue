@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, watch } from 'vue'
 import { useToast } from 'primevue/usetoast'
 import api from '@/api/client'
 import { startOAuth } from '@/composables/useOAuth'
@@ -12,12 +12,15 @@ interface Connection {
   authorized: boolean
   hasOauthApp: boolean
   setupInstructions: string
+  warnings: string[]
 }
 
 const props = defineProps<{ agentId: string }>()
+const emit = defineEmits<{ populated: [count: number] }>()
 
 const toast = useToast()
 const connections = ref<Connection[]>([])
+watch(connections, (v) => emit('populated', v.length), { immediate: true })
 const loading = ref(true)
 const credDialogVisible = ref(false)
 const oauthAppDialogVisible = ref(false)
@@ -26,6 +29,14 @@ const oauthClientId = ref('')
 const oauthClientSecret = ref('')
 const oauthSaving = ref(false)
 const callbackUrl = ref('')
+
+// Connection health warnings, shown behind a (!) indicator in the table.
+const warnPopover = ref()
+const activeWarnings = ref<string[]>([])
+function showWarnings(event: Event, warnings: string[]) {
+  activeWarnings.value = warnings
+  warnPopover.value?.toggle(event)
+}
 
 function configure(conn: Connection) {
   if (conn.authMode === 'oauth') {
@@ -37,6 +48,13 @@ function configure(conn: Connection) {
     selectedConn.value = conn
     credDialogVisible.value = true
   }
+}
+
+// auth_mode='none' connections don't need credentials — the backend always
+// flags them authorized, but we also hide the Configure button and use a
+// different status label so the operator isn't nudged into a no-op dialog.
+function isNoAuth(conn: Connection) {
+  return conn.authMode === 'none'
 }
 
 async function saveOAuthApp() {
@@ -69,6 +87,16 @@ function reauthorize() {
   })
 }
 
+async function copyCallback() {
+  if (!callbackUrl.value) return
+  try {
+    await navigator.clipboard.writeText(callbackUrl.value)
+    toast.add({ severity: 'success', summary: 'Redirect URI copied', life: 2000 })
+  } catch {
+    toast.add({ severity: 'warn', summary: 'Copy failed — select the URL and copy manually', life: 4000 })
+  }
+}
+
 function mapConnection(raw: Record<string, any>): Connection {
   return {
     name: raw.name ?? '',
@@ -77,6 +105,7 @@ function mapConnection(raw: Record<string, any>): Connection {
     authorized: raw.authorized ?? false,
     hasOauthApp: raw.hasOauthApp ?? raw.has_oauth_app ?? false,
     setupInstructions: raw.setupInstructions ?? raw.setup_instructions ?? '',
+    warnings: raw.warnings ?? [],
   }
 }
 
@@ -103,15 +132,25 @@ onMounted(async () => {
       <Column field="authMode" header="Auth Mode" />
       <Column header="Status">
         <template #body="{ data: conn }">
-          <Tag
-            :value="conn.authorized ? 'Authorized' : 'Needs Setup'"
-            :severity="conn.authorized ? 'success' : 'warn'"
-          />
+          <span style="display: inline-flex; align-items: center; gap: 0.4rem">
+            <Tag
+              :value="isNoAuth(conn) ? 'No auth required' : (conn.authorized ? 'Authorized' : 'Needs Setup')"
+              :severity="isNoAuth(conn) ? 'info' : (conn.authorized ? 'success' : 'warn')"
+            />
+            <i
+              v-if="conn.warnings.length"
+              class="pi pi-exclamation-circle"
+              style="color: var(--p-orange-500); cursor: pointer"
+              v-tooltip.top="'This connection has issues — click for details'"
+              @click="showWarnings($event, conn.warnings)"
+            />
+          </span>
         </template>
       </Column>
       <Column header="Actions">
         <template #body="{ data: conn }">
-          <Button :label="conn.authorized ? 'Reconfigure' : 'Configure'" size="small" outlined @click="configure(conn)" />
+          <span v-if="isNoAuth(conn)" style="color: var(--p-text-muted-color); font-size: 0.85rem">—</span>
+          <Button v-else :label="conn.authorized ? 'Reconfigure' : 'Configure'" size="small" outlined @click="configure(conn)" />
         </template>
       </Column>
     </DataTable>
@@ -131,6 +170,12 @@ onMounted(async () => {
       </Column>
     </DataTable>
 
+    <Popover ref="warnPopover">
+      <ul style="margin: 0; padding-left: 1.1rem; max-width: 24rem; font-size: 0.85rem">
+        <li v-for="(w, i) in activeWarnings" :key="i" style="margin: 0.2rem 0">{{ w }}</li>
+      </ul>
+    </Popover>
+
     <CredentialDialog
       v-if="selectedConn"
       v-model:visible="credDialogVisible"
@@ -146,21 +191,66 @@ onMounted(async () => {
         </p>
         <div style="font-size: 0.8rem">
           <span style="color: var(--p-text-muted-color)">Redirect URI: </span>
-          <code style="user-select: all; word-break: break-all">{{ callbackUrl }}</code>
+          <span
+            class="copy-uri"
+            role="button"
+            tabindex="0"
+            v-tooltip.bottom="'Click to copy'"
+            @click="copyCallback"
+            @keydown.enter="copyCallback"
+          >
+            <code style="word-break: break-all">{{ callbackUrl }}</code>
+            <i class="pi pi-copy" style="font-size: 0.75rem; opacity: 0.6" />
+          </span>
         </div>
+        <Message v-if="selectedConn?.hasOauthApp" severity="info" :closable="false" style="font-size: 0.8rem">
+          An OAuth app is already saved. Just click <strong>Reauthorize</strong> to
+          re-run sign-in with the existing credentials — you don't need to
+          re-enter anything. Fill the fields below only to replace the saved
+          client ID / secret.
+        </Message>
         <FloatLabel>
           <InputText id="oauth-client-id" v-model="oauthClientId" style="width: 100%" />
-          <label for="oauth-client-id">Client ID</label>
+          <label for="oauth-client-id">{{ selectedConn?.hasOauthApp ? 'New Client ID (optional)' : 'Client ID' }}</label>
         </FloatLabel>
         <FloatLabel>
           <Password id="oauth-client-secret" v-model="oauthClientSecret" :feedback="false" toggle-mask style="width: 100%" :input-style="{ width: '100%' }" />
-          <label for="oauth-client-secret">Client Secret</label>
+          <label for="oauth-client-secret">{{ selectedConn?.hasOauthApp ? 'New Client Secret (optional)' : 'Client Secret' }}</label>
         </FloatLabel>
         <div style="display: flex; justify-content: flex-end; gap: 0.5rem">
-          <Button v-if="selectedConn?.hasOauthApp" label="Reauthorize" severity="secondary" @click="reauthorize" />
-          <Button label="Save & Authorize" :loading="oauthSaving" @click="saveOAuthApp" :disabled="!oauthClientId || !oauthClientSecret" />
+          <Button
+            :label="selectedConn?.hasOauthApp ? 'Replace credentials' : 'Save & Authorize'"
+            :severity="selectedConn?.hasOauthApp ? 'secondary' : undefined"
+            :outlined="selectedConn?.hasOauthApp"
+            :loading="oauthSaving"
+            :disabled="!oauthClientId || !oauthClientSecret"
+            @click="saveOAuthApp"
+          />
+          <Button
+            v-if="selectedConn?.hasOauthApp"
+            label="Reauthorize"
+            icon="pi pi-refresh"
+            @click="reauthorize"
+          />
         </div>
       </div>
     </Dialog>
   </div>
 </template>
+
+<style scoped>
+.copy-uri {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  cursor: pointer;
+  border-radius: 0.3rem;
+  padding: 0.05rem 0.25rem;
+}
+.copy-uri:hover {
+  background: var(--p-surface-100);
+}
+:root.dark .copy-uri:hover {
+  background: var(--p-surface-800);
+}
+</style>

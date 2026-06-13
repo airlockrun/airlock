@@ -13,27 +13,43 @@
 
 FROM golang:1.26-trixie
 
-ARG AGENTSDK_VERSION=v0.2.4
-ARG GOAI_VERSION=v0.1.2
-ARG SOL_VERSION=v0.1.6
+ARG AGENTSDK_VERSION=v0.3.0
+ARG GOAI_VERSION=v0.1.4
+ARG SOL_VERSION=v0.1.7
 ARG GOOSE_VERSION=v3.27.1
 ARG TEMPL_VERSION=v0.3.865
+ARG TAILWIND_VERSION=v4.1.0
+ARG DAISYUI_VERSION=v5.5.23
 
 COPY --from=sqlc/sqlc:latest /workspace/sqlc /usr/local/bin/sqlc
 RUN apt-get update && apt-get install -y --no-install-recommends \
         git ripgrep postgresql-client curl ca-certificates sudo && \
     rm -rf /var/lib/apt/lists/*
 
-# /usr/local/bin/run-setup is a fixed-path wrapper that execs the agent's
-# setup.sh as root. The sudoers entry grants NOPASSWD on this exact path
-# only — the LLM/builder can install anything by editing setup.sh, but
-# cannot run arbitrary `sudo <other-command>` ad-hoc. apt-get/apt-cache
-# stay whitelisted for ad-hoc package lookups without invoking the full
-# setup wrapper.
-RUN printf '#!/bin/bash\nset -euo pipefail\nexec bash /workspace/setup.sh "$@"\n' \
+# Toolserver UID resolution + sudo.
+#
+# The toolserver runs as the airlock host UID so files it writes into
+# the bind-mounted workspace are host-owned. That UID has no entry in
+# the image's account databases; the entrypoint self-registers it into
+# /etc/passwd + /etc/shadow on container start (both made world-writable
+# below so the non-root entrypoint can append).
+#
+# sudo is unrestricted (NOPASSWD: ALL) and that is the honest config —
+# it is NOT a privilege boundary. run-setup execs an LLM-authored
+# /workspace/setup.sh as root, so the codegen agent has root in this
+# container by design (it must, to install build dependencies). The
+# real boundary is the container itself: ephemeral, one per build, no
+# --privileged, no docker socket, no host mounts. World-writable
+# account files change nothing — the agent already has effective root
+# here, and the base image's /etc/shadow holds no real password
+# hashes. run-setup stays as a fixed-path convenience the build prompt
+# points at for applying setup.sh.
+COPY --chmod=0755 scripts/agent-builder-entrypoint.sh /usr/local/bin/agent-builder-entrypoint
+RUN chmod 0666 /etc/passwd /etc/shadow && \
+    printf '#!/bin/bash\nset -euo pipefail\nexec bash /workspace/setup.sh "$@"\n' \
         > /usr/local/bin/run-setup && \
     chmod 0755 /usr/local/bin/run-setup && \
-    echo 'ALL ALL=(root) NOPASSWD: /usr/bin/apt-get, /usr/bin/apt-cache, /usr/local/bin/run-setup' \
+    echo 'ALL ALL=(root) NOPASSWD: ALL' \
         > /etc/sudoers.d/99-airlock-builder && \
     chmod 0440 /etc/sudoers.d/99-airlock-builder && \
     mkdir -p /var/agent/bin /var/agent/data && \
@@ -67,8 +83,28 @@ RUN cd /libs/sol   && go build -o /usr/local/bin/sol        ./cmd/sol && \
 RUN cd /libs/goose && go build -o /usr/local/bin/goose      ./cmd/goose
 RUN cd /libs/templ && go build -o /usr/local/bin/templ      ./cmd/templ
 
+# Tailwind v4 standalone — Rust binary, no Node. The toolserver's
+# iterative build loop runs `tailwindcss -i styles/app.css -o
+# views/static/app.css --minify` between templ generate and go build,
+# same as the agent's Dockerfile.tmpl does at final image-build time.
+ADD --chmod=0755 https://github.com/tailwindlabs/tailwindcss/releases/download/${TAILWIND_VERSION}/tailwindcss-linux-x64 /usr/local/bin/tailwindcss
+
+# DaisyUI v5 — Tailwind plugin shipped as a self-contained .mjs that the
+# standalone Tailwind binary loads via `@plugin "..."` (no Node runtime).
+# Agent's styles/app.css references this exact path. mkdir explicitly so
+# the directory is world-traversable (ADD would create it 0700 root,
+# and the toolserver runs as a non-root UID — then even --chmod=0644
+# files inside aren't reachable).
+RUN mkdir -p /usr/local/lib/tailwind && chmod 0755 /usr/local/lib/tailwind
+ADD --chmod=0644 https://github.com/saadeghi/daisyui/releases/download/${DAISYUI_VERSION}/daisyui.mjs       /usr/local/lib/tailwind/daisyui.mjs
+ADD --chmod=0644 https://github.com/saadeghi/daisyui/releases/download/${DAISYUI_VERSION}/daisyui-theme.mjs /usr/local/lib/tailwind/daisyui-theme.mjs
+
 # Go cache dirs writable by the host UID — Docker volumes mount as root,
 # but the toolserver runs as the host user.
 RUN mkdir -p /tmp/go-mod /tmp/go-cache && chmod 777 /tmp/go-mod /tmp/go-cache
 
 WORKDIR /workspace
+
+# Self-register the runtime UID into /etc/passwd before exec'ing the
+# toolserver (or whatever Cmd airlock supplies). See the sudo block above.
+ENTRYPOINT ["/usr/local/bin/agent-builder-entrypoint"]

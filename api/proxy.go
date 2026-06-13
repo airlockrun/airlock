@@ -6,9 +6,13 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/airlockrun/agentsdk"
+	"github.com/airlockrun/airlock/agentapi"
 	"github.com/airlockrun/airlock/auth"
+	"github.com/airlockrun/airlock/authz"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
+	"github.com/airlockrun/airlock/service"
 	"github.com/airlockrun/airlock/storage"
 	"github.com/airlockrun/airlock/trigger"
 	"github.com/google/uuid"
@@ -19,9 +23,16 @@ import (
 // header matches {slug}.{agentDomain}. Matching requests are authenticated
 // according to the route's access level and reverse-proxied to the agent's
 // container. Non-matching requests fall through to inner.
-func SubdomainProxy(agentDomain string, database *db.DB, s3 *storage.S3Client, dispatcher *trigger.Dispatcher, jwtSecret, publicURL string, logger *zap.Logger, inner http.Handler) http.Handler {
+//
+// bridgeMgr is required for the Telegram Web App auto-auth flow: the
+// /__air/tg/auth intercept verifies initData against the bridge's bot
+// token, which bridgeMgr decrypts on demand.
+func SubdomainProxy(agentDomain string, database *db.DB, s3 *storage.S3Client, dispatcher *trigger.Dispatcher, bridgeMgr *trigger.BridgeManager, jwtSecret, publicURL string, inner http.Handler) http.Handler {
 	if agentDomain == "" {
 		panic("api: SubdomainProxy called with empty agentDomain")
+	}
+	if bridgeMgr == nil {
+		panic("api: SubdomainProxy called with nil bridgeMgr")
 	}
 
 	suffix := "." + agentDomain
@@ -53,7 +64,7 @@ func SubdomainProxy(agentDomain string, database *db.DB, s3 *storage.S3Client, d
 			return
 		}
 
-		log := logger.With(zap.String("slug", slug), zap.String("path", r.URL.Path), zap.String("method", r.Method))
+		log := logFor(r).Named("proxy").With(zap.String("slug", slug))
 
 		// Auth relay callback — exchange relay code for session cookie.
 		if r.URL.Path == "/__air/callback" {
@@ -63,14 +74,27 @@ func SubdomainProxy(agentDomain string, database *db.DB, s3 *storage.S3Client, d
 
 		q := dbq.New(database.Pool())
 
-		// Look up agent by slug.
-		agent, err := q.GetAgentBySlug(r.Context(), slug)
+		agent, err := service.ResolveAgent(r.Context(), q, slug)
 		if err != nil {
 			log.Warn("agent not found for slug", zap.Error(err))
 			writeError(w, http.StatusNotFound, "agent not found")
 			return
 		}
 		agentID := pgUUID(agent.ID)
+
+		// Telegram Web App auto-auth intercepts. /start serves the
+		// bootstrap stub the menu button opens; /auth verifies initData
+		// and issues an __air_session cookie. Same subdomain as the
+		// agent's own routes, so the cookie is host-scoped to that
+		// agent and can never reach the admin host or another agent.
+		if pathIsTGWebApp(r.URL.Path) {
+			if r.URL.Path == "/__air/tg/start" {
+				handleTGWebAppStart(w, r, publicURL)
+				return
+			}
+			handleTGWebAppAuth(r.Context(), w, r, jwtSecret, agentID, bridgeMgr, q, log)
+			return
+		}
 
 		// Directory reads under the agent's subdomain. Intercepted before
 		// route resolution so a builder's RegisterRoute("/__air/...")
@@ -79,90 +103,74 @@ func SubdomainProxy(agentDomain string, database *db.DB, s3 *storage.S3Client, d
 		// session cookie (rejectOrRedirect on miss kicks off login flow).
 		if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/__air/storage/") {
 			path := strings.TrimPrefix(r.URL.Path, "/__air/storage")
-			serveStoragePath(w, r, database, s3, agentID, path, jwtSecret, publicURL, log)
+			agentapi.ServeStoragePath(w, r, database, s3, agentID, path, jwtSecret, publicURL, log)
 			return
 		}
 
-		// Look up the registered route — match exact paths first, then parameterized patterns.
-		routes, err := q.ListRoutesByAgentAndMethod(r.Context(), dbq.ListRoutesByAgentAndMethodParams{
-			AgentID: agent.ID,
-			Method:  r.Method,
-		})
-		if err != nil {
-			log.Debug("no routes found", zap.Error(err))
-			writeError(w, http.StatusNotFound, "route not found")
-			return
-		}
-		route, ok := matchRoute(routes, r.URL.Path)
-		if !ok {
-			log.Debug("no route matched", zap.String("path", r.URL.Path))
-			writeError(w, http.StatusNotFound, "route not found")
-			return
-		}
+		// Bundled framework assets (htmx, pico.css) — agentsdk registers
+		// these inside its own mux at GET /__air/assets/{name}, so they
+		// don't appear in agent_routes. Skip the route-table lookup and
+		// per-route auth; forward straight to the container as public.
+		// The agent's handler validates the filename against a closed
+		// set so unknown names produce a 404 from the agent.
+		isAssetGET := r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/__air/assets/")
 
-		// Enforce access control based on route.Access.
 		var userID uuid.UUID
 		var userEmail string
 
-		switch route.Access {
-		case "public":
-			// No auth required.
-
-		case "user":
-			claims, ok := validateSubdomainAuth(r, jwtSecret)
-			if !ok {
-				rejectOrRedirect(w, r, publicURL)
-				return
-			}
-			uid, err := uuid.Parse(claims.Subject)
-			if err != nil {
-				rejectOrRedirect(w, r, publicURL)
-				return
-			}
-			hasAccess, err := q.HasAgentAccess(r.Context(), dbq.HasAgentAccessParams{
+		if !isAssetGET {
+			// Look up the registered route — match exact paths first, then parameterized patterns.
+			// airlockvet:allow-dbq reason: pure routing-table plumbing; authorization happens below per route.Access
+			routes, err := q.ListRoutesByAgentAndMethod(r.Context(), dbq.ListRoutesByAgentAndMethodParams{
 				AgentID: agent.ID,
-				UserID:  toPgUUID(uid),
-			})
-			if err != nil || !hasAccess {
-				log.Warn("user lacks agent access", zap.String("user_id", uid.String()), zap.Error(err))
-				writeError(w, http.StatusForbidden, "forbidden")
-				return
-			}
-			userID = uid
-			userEmail = claims.Email
-
-		case "admin":
-			claims, ok := validateSubdomainAuth(r, jwtSecret)
-			if !ok {
-				rejectOrRedirect(w, r, publicURL)
-				return
-			}
-			uid, err := uuid.Parse(claims.Subject)
-			if err != nil {
-				rejectOrRedirect(w, r, publicURL)
-				return
-			}
-			member, err := q.GetAgentMember(r.Context(), dbq.GetAgentMemberParams{
-				AgentID: agent.ID,
-				UserID:  toPgUUID(uid),
+				Method:  r.Method,
 			})
 			if err != nil {
-				log.Warn("user is not an agent member", zap.String("user_id", uid.String()), zap.Error(err))
-				writeError(w, http.StatusForbidden, "forbidden")
+				log.Debug("no routes found", zap.Error(err))
+				writeError(w, http.StatusNotFound, "route not found")
 				return
 			}
-			if !auth.RoleAtLeast(member.Role, "admin") {
-				log.Warn("user is not agent admin", zap.String("user_id", uid.String()), zap.String("role", member.Role))
-				writeError(w, http.StatusForbidden, "forbidden")
+			route, ok := matchRoute(routes, r.URL.Path)
+			if !ok {
+				log.Debug("no route matched")
+				writeError(w, http.StatusNotFound, "route not found")
 				return
 			}
-			userID = uid
-			userEmail = claims.Email
 
-		default:
-			log.Error("unknown route access level", zap.String("access", route.Access))
-			writeError(w, http.StatusInternalServerError, "misconfigured route")
-			return
+			// Enforce access control based on route.Access.
+			switch route.Access {
+			case "public":
+				// No auth required.
+
+			case "user", "admin":
+				claims, ok := validateSubdomainAuth(r, jwtSecret)
+				if !ok {
+					rejectOrRedirect(w, r, publicURL)
+					return
+				}
+				uid, err := uuid.Parse(claims.Subject)
+				if err != nil {
+					rejectOrRedirect(w, r, publicURL)
+					return
+				}
+				required := agentsdk.AccessUser
+				if route.Access == "admin" {
+					required = agentsdk.AccessAdmin
+				}
+				p := authz.UserPrincipal(uid, auth.Role(claims.TenantRole))
+				if !authz.AccessAtLeast(p.EffectiveAgentAccess(r.Context(), q, uuid.UUID(agent.ID.Bytes)), required) {
+					log.Warn("user lacks required agent access", zap.String("user_id", uid.String()), zap.String("required", string(required)))
+					writeError(w, http.StatusForbidden, "forbidden")
+					return
+				}
+				userID = uid
+				userEmail = claims.Email
+
+			default:
+				log.Error("unknown route access level", zap.String("access", route.Access))
+				writeError(w, http.StatusInternalServerError, "misconfigured route")
+				return
+			}
 		}
 
 		// Ensure agent container is running.
@@ -310,21 +318,24 @@ func validateSubdomainAuth(r *http.Request, jwtSecret string) (*auth.Claims, boo
 	return claims, true
 }
 
-// rejectOrRedirect returns 401 for API/htmx clients or redirects browsers to the relay page.
+// rejectOrRedirect returns 401 for API/htmx clients or serves a stub
+// HTML page for browsers. The stub picks at runtime: if it loads inside
+// Telegram (window.Telegram.WebApp.initData present), it exchanges the
+// initData for a session cookie via /__air/tg/auth; otherwise it
+// redirects to the main-domain auth relay. One unauthenticated
+// landing page covers both flows.
 func rejectOrRedirect(w http.ResponseWriter, r *http.Request, publicURL string) {
-	// htmx requests: return 401 so client-side handler can reload the page.
+	// htmx requests: return 401 so the layout's responseError handler
+	// can reload the page — the reload picks up this same stub HTML and
+	// the JS resolves auth (TG or relay) without a manual login step.
 	if r.Header.Get("HX-Request") == "true" {
 		writeError(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
-	// Full page navigation: redirect to auth relay.
 	if strings.Contains(r.Header.Get("Accept"), "text/html") {
-		currentURL := requestScheme(r) + "://" + r.Host + r.RequestURI
-		relayURL := publicURL + "/auth/relay?return=" + url.QueryEscape(currentURL)
-		http.Redirect(w, r, relayURL, http.StatusFound)
+		renderTGWebAppStub(w, r, publicURL)
 		return
 	}
-	// API clients: plain 401.
 	writeError(w, http.StatusUnauthorized, "unauthorized")
 }
 

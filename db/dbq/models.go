@@ -9,56 +9,73 @@ import (
 )
 
 type Agent struct {
-	ID                  pgtype.UUID        `json:"id"`
-	UserID              pgtype.UUID        `json:"user_id"`
-	Slug                string             `json:"slug"`
-	Name                string             `json:"name"`
-	Description         string             `json:"description"`
-	Status              string             `json:"status"`
-	UpgradeStatus       string             `json:"upgrade_status"`
-	AutoFix             bool               `json:"auto_fix"`
-	BuildProviderID     pgtype.UUID        `json:"build_provider_id"`
-	BuildModel          string             `json:"build_model"`
-	ExecProviderID      pgtype.UUID        `json:"exec_provider_id"`
-	ExecModel           string             `json:"exec_model"`
-	SttProviderID       pgtype.UUID        `json:"stt_provider_id"`
-	SttModel            string             `json:"stt_model"`
-	VisionProviderID    pgtype.UUID        `json:"vision_provider_id"`
-	VisionModel         string             `json:"vision_model"`
-	TtsProviderID       pgtype.UUID        `json:"tts_provider_id"`
-	TtsModel            string             `json:"tts_model"`
-	ImageGenProviderID  pgtype.UUID        `json:"image_gen_provider_id"`
-	ImageGenModel       string             `json:"image_gen_model"`
-	EmbeddingProviderID pgtype.UUID        `json:"embedding_provider_id"`
-	EmbeddingModel      string             `json:"embedding_model"`
-	SearchProviderID    pgtype.UUID        `json:"search_provider_id"`
-	SearchModel         string             `json:"search_model"`
-	SourceRef           string             `json:"source_ref"`
-	ImageRef            string             `json:"image_ref"`
-	DbSchema            string             `json:"db_schema"`
-	DbPassword          string             `json:"db_password"`
-	SdkVersion          string             `json:"sdk_version"`
-	Config              []byte             `json:"config"`
-	ExtraPrompts        []byte             `json:"extra_prompts"`
-	ErrorMessage        string             `json:"error_message"`
-	CreatedAt           pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
+	ID                   pgtype.UUID        `json:"id"`
+	UserID               pgtype.UUID        `json:"user_id"`
+	Slug                 string             `json:"slug"`
+	Name                 string             `json:"name"`
+	Description          string             `json:"description"`
+	Status               string             `json:"status"`
+	UpgradeStatus        string             `json:"upgrade_status"`
+	AutoFix              bool               `json:"auto_fix"`
+	BuildProviderID      pgtype.UUID        `json:"build_provider_id"`
+	BuildModel           string             `json:"build_model"`
+	ExecProviderID       pgtype.UUID        `json:"exec_provider_id"`
+	ExecModel            string             `json:"exec_model"`
+	SttProviderID        pgtype.UUID        `json:"stt_provider_id"`
+	SttModel             string             `json:"stt_model"`
+	VisionProviderID     pgtype.UUID        `json:"vision_provider_id"`
+	VisionModel          string             `json:"vision_model"`
+	TtsProviderID        pgtype.UUID        `json:"tts_provider_id"`
+	TtsModel             string             `json:"tts_model"`
+	ImageGenProviderID   pgtype.UUID        `json:"image_gen_provider_id"`
+	ImageGenModel        string             `json:"image_gen_model"`
+	EmbeddingProviderID  pgtype.UUID        `json:"embedding_provider_id"`
+	EmbeddingModel       string             `json:"embedding_model"`
+	SearchProviderID     pgtype.UUID        `json:"search_provider_id"`
+	SearchModel          string             `json:"search_model"`
+	SourceRef            string             `json:"source_ref"`
+	ImageRef             string             `json:"image_ref"`
+	DbSchema             string             `json:"db_schema"`
+	DbPassword           string             `json:"db_password"`
+	SdkVersion           string             `json:"sdk_version"`
+	Config               []byte             `json:"config"`
+	ExtraPrompts         []byte             `json:"extra_prompts"`
+	ErrorMessage         string             `json:"error_message"`
+	CreatedAt            pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt            pgtype.Timestamptz `json:"updated_at"`
+	AllowNonMemberMcp    bool               `json:"allow_non_member_mcp"`
+	AllowPublicMcp       bool               `json:"allow_public_mcp"`
+	ToolsHash            []byte             `json:"tools_hash"`
+	Emoji                string             `json:"emoji"`
+	AllowOauthMcpPrompt  bool               `json:"allow_oauth_mcp_prompt"`
+	AllowPublicMcpPrompt bool               `json:"allow_public_mcp_prompt"`
+	GitRemoteUrl         string             `json:"git_remote_url"`
+	GitCredentialID      pgtype.UUID        `json:"git_credential_id"`
+	GitDefaultBranch     string             `json:"git_default_branch"`
+	GitWebhookSecret     string             `json:"git_webhook_secret"`
+	GitLastSyncedRef     string             `json:"git_last_synced_ref"`
 }
 
 type AgentBuild struct {
-	ID           pgtype.UUID        `json:"id"`
-	AgentID      pgtype.UUID        `json:"agent_id"`
-	Type         string             `json:"type"`
-	Status       string             `json:"status"`
-	Instructions string             `json:"instructions"`
-	SourceRef    string             `json:"source_ref"`
-	ImageRef     string             `json:"image_ref"`
-	SolLog       string             `json:"sol_log"`
-	DockerLog    string             `json:"docker_log"`
-	LogSeq       int64              `json:"log_seq"`
-	ErrorMessage string             `json:"error_message"`
-	StartedAt    pgtype.Timestamptz `json:"started_at"`
-	FinishedAt   pgtype.Timestamptz `json:"finished_at"`
+	ID               pgtype.UUID        `json:"id"`
+	AgentID          pgtype.UUID        `json:"agent_id"`
+	Type             string             `json:"type"`
+	Status           string             `json:"status"`
+	Instructions     string             `json:"instructions"`
+	SourceRef        string             `json:"source_ref"`
+	ImageRef         string             `json:"image_ref"`
+	SolLog           string             `json:"sol_log"`
+	DockerLog        string             `json:"docker_log"`
+	LogSeq           int64              `json:"log_seq"`
+	ErrorMessage     string             `json:"error_message"`
+	StartedAt        pgtype.Timestamptz `json:"started_at"`
+	FinishedAt       pgtype.Timestamptz `json:"finished_at"`
+	LlmCalls         int32              `json:"llm_calls"`
+	LlmTokensIn      int32              `json:"llm_tokens_in"`
+	LlmTokensOut     int32              `json:"llm_tokens_out"`
+	LlmCostEstimate  float64            `json:"llm_cost_estimate"`
+	RollbackTargetID pgtype.UUID        `json:"rollback_target_id"`
+	SdkVersion       string             `json:"sdk_version"`
 }
 
 type AgentConversation struct {
@@ -101,6 +118,7 @@ type AgentDirectory struct {
 	RetentionHours int32              `json:"retention_hours"`
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+	Scope          string             `json:"scope"`
 }
 
 type AgentEnvVar struct {
@@ -114,6 +132,27 @@ type AgentEnvVar struct {
 	Pattern      string             `json:"pattern"`
 	CreatedAt    pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+}
+
+type AgentExecEndpoint struct {
+	ID               pgtype.UUID        `json:"id"`
+	AgentID          pgtype.UUID        `json:"agent_id"`
+	Slug             string             `json:"slug"`
+	Description      string             `json:"description"`
+	LlmHint          string             `json:"llm_hint"`
+	Access           string             `json:"access"`
+	Transport        pgtype.Text        `json:"transport"`
+	Host             pgtype.Text        `json:"host"`
+	Port             pgtype.Int4        `json:"port"`
+	SshUser          pgtype.Text        `json:"ssh_user"`
+	PrivateKeyRef    pgtype.Text        `json:"private_key_ref"`
+	PublicKeyOpenssh pgtype.Text        `json:"public_key_openssh"`
+	PublicKeyComment pgtype.Text        `json:"public_key_comment"`
+	HostKeyOpenssh   pgtype.Text        `json:"host_key_openssh"`
+	HostKeyPinnedAt  pgtype.Timestamptz `json:"host_key_pinned_at"`
+	LastUsedAt       pgtype.Timestamptz `json:"last_used_at"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
 }
 
 type AgentMcpServer struct {
@@ -138,6 +177,7 @@ type AgentMcpServer struct {
 	LastSyncedAt         pgtype.Timestamptz `json:"last_synced_at"`
 	CreatedAt            pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt            pgtype.Timestamptz `json:"updated_at"`
+	ServerInstructions   string             `json:"server_instructions"`
 }
 
 type AgentMember struct {
@@ -157,8 +197,6 @@ type AgentMessage struct {
 	Content        string             `json:"content"`
 	Parts          []byte             `json:"parts"`
 	FileKeys       []string           `json:"file_keys"`
-	TokensIn       int32              `json:"tokens_in"`
-	TokensOut      int32              `json:"tokens_out"`
 	CostEstimate   pgtype.Numeric     `json:"cost_estimate"`
 	Ephemeral      bool               `json:"ephemeral"`
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
@@ -182,6 +220,12 @@ type AgentRoute struct {
 	Description string             `json:"description"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+}
+
+type AgentSibling struct {
+	ParentAgentID  pgtype.UUID        `json:"parent_agent_id"`
+	SiblingAgentID pgtype.UUID        `json:"sibling_agent_id"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 }
 
 type AgentTool struct {
@@ -242,20 +286,22 @@ type AuthLockout struct {
 }
 
 type Bridge struct {
-	ID           pgtype.UUID        `json:"id"`
-	AgentID      pgtype.UUID        `json:"agent_id"`
-	CreatedBy    pgtype.UUID        `json:"created_by"`
-	Type         string             `json:"type"`
-	Name         string             `json:"name"`
-	BotUsername  string             `json:"bot_username"`
-	Status       string             `json:"status"`
-	IsSystem     bool               `json:"is_system"`
-	Config       []byte             `json:"config"`
-	Settings     []byte             `json:"settings"`
-	BotTokenRef  string             `json:"bot_token_ref"`
-	LastPolledAt pgtype.Timestamptz `json:"last_polled_at"`
-	CreatedAt    pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+	ID                pgtype.UUID        `json:"id"`
+	AgentID           pgtype.UUID        `json:"agent_id"`
+	OwnerID           pgtype.UUID        `json:"owner_id"`
+	Type              string             `json:"type"`
+	Name              string             `json:"name"`
+	BotUsername       string             `json:"bot_username"`
+	Status            string             `json:"status"`
+	IsSystem          bool               `json:"is_system"`
+	Config            []byte             `json:"config"`
+	Settings          []byte             `json:"settings"`
+	BotTokenRef       string             `json:"bot_token_ref"`
+	LastPolledAt      pgtype.Timestamptz `json:"last_polled_at"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
+	Managed           bool               `json:"managed"`
+	TelegramBotUserID pgtype.Int8        `json:"telegram_bot_user_id"`
 }
 
 type Connection struct {
@@ -282,6 +328,105 @@ type Connection struct {
 	TokenExpiresAt    pgtype.Timestamptz `json:"token_expires_at"`
 	CreatedAt         pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
+	AuthParams        []byte             `json:"auth_params"`
+	Headers           []byte             `json:"headers"`
+}
+
+type GitCredential struct {
+	ID              pgtype.UUID        `json:"id"`
+	UserID          pgtype.UUID        `json:"user_id"`
+	Type            string             `json:"type"`
+	Name            string             `json:"name"`
+	TokenRef        string             `json:"token_ref"`
+	GithubInstallID string             `json:"github_install_id"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	LastUsedAt      pgtype.Timestamptz `json:"last_used_at"`
+}
+
+type LlmUsage struct {
+	ID                pgtype.UUID        `json:"id"`
+	AgentID           pgtype.UUID        `json:"agent_id"`
+	RunID             pgtype.UUID        `json:"run_id"`
+	BuildID           pgtype.UUID        `json:"build_id"`
+	UserID            pgtype.UUID        `json:"user_id"`
+	ConversationID    pgtype.UUID        `json:"conversation_id"`
+	ProviderCatalogID string             `json:"provider_catalog_id"`
+	Model             string             `json:"model"`
+	Capability        string             `json:"capability"`
+	CallKind          string             `json:"call_kind"`
+	Slug              string             `json:"slug"`
+	TokensIn          int64              `json:"tokens_in"`
+	TokensOut         int64              `json:"tokens_out"`
+	TokensCached      int64              `json:"tokens_cached"`
+	TokensReasoning   int64              `json:"tokens_reasoning"`
+	Units             float64            `json:"units"`
+	UnitKind          string             `json:"unit_kind"`
+	CostInput         float64            `json:"cost_input"`
+	CostOutput        float64            `json:"cost_output"`
+	CostTotal         float64            `json:"cost_total"`
+	FinishReason      string             `json:"finish_reason"`
+	Errored           bool               `json:"errored"`
+	LatencyMs         int32              `json:"latency_ms"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+}
+
+type ManagedBotSession struct {
+	ID         pgtype.UUID        `json:"id"`
+	OwnerID    pgtype.UUID        `json:"owner_id"`
+	AgentID    pgtype.UUID        `json:"agent_id"`
+	IsSystem   bool               `json:"is_system"`
+	Nonce      string             `json:"nonce"`
+	BridgeName string             `json:"bridge_name"`
+	ExpiresAt  pgtype.Timestamptz `json:"expires_at"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+}
+
+type OauthAuthzCode struct {
+	Code          string             `json:"code"`
+	UserID        pgtype.UUID        `json:"user_id"`
+	ClientID      string             `json:"client_id"`
+	AgentID       pgtype.UUID        `json:"agent_id"`
+	RedirectUri   string             `json:"redirect_uri"`
+	CodeChallenge string             `json:"code_challenge"`
+	Scope         string             `json:"scope"`
+	Resource      string             `json:"resource"`
+	ExpiresAt     pgtype.Timestamptz `json:"expires_at"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+}
+
+type OauthClient struct {
+	ClientID                string             `json:"client_id"`
+	ClientName              string             `json:"client_name"`
+	RedirectUris            []string           `json:"redirect_uris"`
+	GrantTypes              []string           `json:"grant_types"`
+	ResponseTypes           []string           `json:"response_types"`
+	TokenEndpointAuthMethod string             `json:"token_endpoint_auth_method"`
+	Scope                   string             `json:"scope"`
+	CreatedAt               pgtype.Timestamptz `json:"created_at"`
+	LastUsedAt              pgtype.Timestamptz `json:"last_used_at"`
+}
+
+type OauthGrant struct {
+	UserID    pgtype.UUID        `json:"user_id"`
+	ClientID  string             `json:"client_id"`
+	AgentID   pgtype.UUID        `json:"agent_id"`
+	Scope     string             `json:"scope"`
+	GrantedAt pgtype.Timestamptz `json:"granted_at"`
+	ExpiresAt pgtype.Timestamptz `json:"expires_at"`
+	RevokedAt pgtype.Timestamptz `json:"revoked_at"`
+}
+
+type OauthRefreshToken struct {
+	TokenHash       []byte             `json:"token_hash"`
+	UserID          pgtype.UUID        `json:"user_id"`
+	ClientID        string             `json:"client_id"`
+	AgentID         pgtype.UUID        `json:"agent_id"`
+	Scope           string             `json:"scope"`
+	FamilyID        pgtype.UUID        `json:"family_id"`
+	ParentTokenHash []byte             `json:"parent_token_hash"`
+	ExpiresAt       pgtype.Timestamptz `json:"expires_at"`
+	ConsumedAt      pgtype.Timestamptz `json:"consumed_at"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
 }
 
 type OauthState struct {
@@ -330,7 +475,6 @@ type Run struct {
 	LlmTokensOut    int32              `json:"llm_tokens_out"`
 	LlmCostEstimate pgtype.Numeric     `json:"llm_cost_estimate"`
 	DurationMs      pgtype.Int4        `json:"duration_ms"`
-	Logs            string             `json:"logs"`
 	StdoutLog       string             `json:"stdout_log"`
 	ErrorMessage    string             `json:"error_message"`
 	ErrorKind       string             `json:"error_kind"`
@@ -340,12 +484,60 @@ type Run struct {
 	Compacted       bool               `json:"compacted"`
 	StartedAt       pgtype.Timestamptz `json:"started_at"`
 	FinishedAt      pgtype.Timestamptz `json:"finished_at"`
+	ParentRunID     pgtype.UUID        `json:"parent_run_id"`
+}
+
+type SystemAudit struct {
+	ID             int64              `json:"id"`
+	UserID         pgtype.UUID        `json:"user_id"`
+	ConversationID pgtype.UUID        `json:"conversation_id"`
+	Tool           string             `json:"tool"`
+	Args           []byte             `json:"args"`
+	ResultSummary  string             `json:"result_summary"`
+	Ok             bool               `json:"ok"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+}
+
+type SystemConversation struct {
+	ID                         pgtype.UUID        `json:"id"`
+	UserID                     pgtype.UUID        `json:"user_id"`
+	Title                      string             `json:"title"`
+	Status                     string             `json:"status"`
+	Checkpoint                 []byte             `json:"checkpoint"`
+	ContextCheckpointMessageID pgtype.UUID        `json:"context_checkpoint_message_id"`
+	Settings                   []byte             `json:"settings"`
+	CreatedAt                  pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt                  pgtype.Timestamptz `json:"updated_at"`
+	Source                     string             `json:"source"`
+	BridgeID                   pgtype.UUID        `json:"bridge_id"`
+}
+
+type SystemMessage struct {
+	ID             pgtype.UUID        `json:"id"`
+	Seq            int64              `json:"seq"`
+	ConversationID pgtype.UUID        `json:"conversation_id"`
+	Role           string             `json:"role"`
+	Source         string             `json:"source"`
+	Content        string             `json:"content"`
+	Parts          []byte             `json:"parts"`
+	TokensIn       int32              `json:"tokens_in"`
+	TokensOut      int32              `json:"tokens_out"`
+	CostEstimate   pgtype.Numeric     `json:"cost_estimate"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+}
+
+type SystemRun struct {
+	ID             pgtype.UUID        `json:"id"`
+	ConversationID pgtype.UUID        `json:"conversation_id"`
+	UserID         pgtype.UUID        `json:"user_id"`
+	Status         string             `json:"status"`
+	ErrorMessage   string             `json:"error_message"`
+	StartedAt      pgtype.Timestamptz `json:"started_at"`
+	FinishedAt     pgtype.Timestamptz `json:"finished_at"`
 }
 
 type SystemSetting struct {
 	ID                         bool               `json:"id"`
-	PublicUrl                  string             `json:"public_url"`
-	AgentDomain                string             `json:"agent_domain"`
 	DefaultBuildProviderID     pgtype.UUID        `json:"default_build_provider_id"`
 	DefaultBuildModel          string             `json:"default_build_model"`
 	DefaultExecProviderID      pgtype.UUID        `json:"default_exec_provider_id"`
@@ -365,6 +557,9 @@ type SystemSetting struct {
 	ActivationCode             pgtype.Text        `json:"activation_code"`
 	CreatedAt                  pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt                  pgtype.Timestamptz `json:"updated_at"`
+	LastSeenSdkVersion         string             `json:"last_seen_sdk_version"`
+	TelegramManagerBotTokenRef string             `json:"telegram_manager_bot_token_ref"`
+	TelegramManagerBotError    string             `json:"telegram_manager_bot_error"`
 }
 
 type Tenant struct {

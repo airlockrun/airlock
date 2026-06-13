@@ -41,13 +41,22 @@ func New(currentKey []byte, oldKeys ...[]byte) *Encryptor {
 // Encrypt encrypts plaintext and returns a base64-encoded string containing:
 // version byte + nonce + ciphertext.
 func (e *Encryptor) Encrypt(plaintext string) (string, error) {
+	return e.EncryptWithAAD(plaintext, "")
+}
+
+// EncryptWithAAD is Encrypt with additional authenticated data folded into the
+// GCM tag. The aad is authenticated but NOT encrypted; decryption only
+// succeeds when DecryptWithAAD is given the identical aad. Used to bind a
+// ciphertext to a context (e.g. an agent ID) so it can't be decrypted under a
+// different context. aad="" is byte-identical to Encrypt (no binding).
+func (e *Encryptor) EncryptWithAAD(plaintext, aad string) (string, error) {
 	gcm := e.keys[e.currentVersion]
 	nonce := make([]byte, gcm.NonceSize())
 	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
 		return "", fmt.Errorf("generate nonce: %w", err)
 	}
 
-	ciphertext := gcm.Seal(nil, nonce, []byte(plaintext), nil)
+	ciphertext := gcm.Seal(nil, nonce, []byte(plaintext), aadBytes(aad))
 
 	// Encode: version + nonce + ciphertext
 	buf := make([]byte, 0, 1+len(nonce)+len(ciphertext))
@@ -61,6 +70,13 @@ func (e *Encryptor) Encrypt(plaintext string) (string, error) {
 // Decrypt decodes a base64-encoded string and decrypts it using the key
 // identified by the version byte prefix.
 func (e *Encryptor) Decrypt(encoded string) (string, error) {
+	return e.DecryptWithAAD(encoded, "")
+}
+
+// DecryptWithAAD is Decrypt for ciphertext produced by EncryptWithAAD. It
+// returns an error when aad doesn't match the value used at encryption time
+// (the GCM auth tag fails to verify) — that mismatch is the binding guarantee.
+func (e *Encryptor) DecryptWithAAD(encoded, aad string) (string, error) {
 	raw, err := base64.StdEncoding.DecodeString(encoded)
 	if err != nil {
 		return "", fmt.Errorf("base64 decode: %w", err)
@@ -84,12 +100,23 @@ func (e *Encryptor) Decrypt(encoded string) (string, error) {
 	nonce := raw[1 : 1+nonceSize]
 	ciphertext := raw[1+nonceSize:]
 
-	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
+	plaintext, err := gcm.Open(nil, nonce, ciphertext, aadBytes(aad))
 	if err != nil {
 		return "", fmt.Errorf("decrypt: %w", err)
 	}
 
 	return string(plaintext), nil
+}
+
+// aadBytes maps an empty aad to a nil slice so Encrypt/Decrypt (aad="")
+// produce and accept exactly the same ciphertext as before AAD support — GCM
+// treats nil and empty additionalData identically, but nil keeps pre-AAD
+// ciphertexts decryptable and the intent explicit.
+func aadBytes(aad string) []byte {
+	if aad == "" {
+		return nil
+	}
+	return []byte(aad)
 }
 
 func mustGCM(key []byte) cipher.AEAD {

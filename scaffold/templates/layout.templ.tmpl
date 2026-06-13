@@ -1,30 +1,27 @@
 package views
 
+import "github.com/airlockrun/agentsdk"
+
 templ Layout(title string) {
 	<!DOCTYPE html>
-	<html lang="en">
+	<html lang="en" data-theme="light">
 		<head>
 			<meta charset="UTF-8"/>
 			<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 			<title>{ title }</title>
-			<script src="https://unpkg.com/htmx.org@2.0.4"></script>
+			<link rel="stylesheet" href={ AppCSSPath }/>
+			<script src={ agentsdk.Assets.HTMX }></script>
 			<!-- Airlock auth: reload page on 401 to trigger the auth relay flow -->
 			<script>
 				document.addEventListener("htmx:responseError", function(e) {
 					if (e.detail.xhr.status === 401) window.location.reload();
 				});
 			</script>
-			<style>
-				*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-				body { font-family: system-ui, -apple-system, sans-serif; line-height: 1.6; max-width: 800px; margin: 0 auto; padding: 1rem; color: #1a1a1a; background: #fafafa; }
-				h1, h2, h3 { margin-bottom: 0.5rem; }
-				a { color: #2563eb; }
-				.htmx-indicator { display: none; }
-				.htmx-request .htmx-indicator { display: inline; }
-			</style>
 		</head>
-		<body>
-			{ children... }
+		<body class="min-h-screen bg-base-100 text-base-content">
+			<main class="mx-auto max-w-3xl px-4 py-10">
+				{ children... }
+			</main>
 		</body>
 	</html>
 }

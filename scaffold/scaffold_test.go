@@ -27,6 +27,8 @@ func TestMaterialize(t *testing.T) {
 		"main.go",
 		"go.mod",
 		"sqlc.yaml",
+		"Dockerfile",
+		".gitignore",
 	}
 	for _, f := range expectedFiles {
 		path := filepath.Join(dir, f)
@@ -64,10 +66,10 @@ func TestMaterialize(t *testing.T) {
 		t.Error("main.go missing agent.Serve()")
 	}
 
-	// go.mod must always have the unconditional replace block — replace is
-	// the canonical resolution path for agentsdk/goai/sol regardless of
-	// dev/prod, so the agent build always uses /libs/ from the agent-builder
-	// image (prod) or the dev workspace overlay.
+	// Committed go.mod has no /libs/... replace block — those live only
+	// in the build-time go.work that airlock injects into codegen and
+	// docker contexts. Keeping replaces out of the committed file lets
+	// user clones compile against public modules.
 	goMod, err := os.ReadFile(filepath.Join(dir, "go.mod"))
 	if err != nil {
 		t.Fatalf("read go.mod: %v", err)
@@ -76,16 +78,34 @@ func TestMaterialize(t *testing.T) {
 	if !strings.Contains(goModStr, data.Module) {
 		t.Error("go.mod missing module path")
 	}
-	for _, want := range []string{"/libs/agentsdk", "/libs/goai", "/libs/sol", "/libs/goose", "/libs/templ"} {
-		if !strings.Contains(goModStr, want) {
-			t.Errorf("go.mod missing %s replace directive", want)
+	for _, unwanted := range []string{"/libs/agentsdk", "/libs/goai", "/libs/sol", "/libs/goose", "/libs/templ"} {
+		if strings.Contains(goModStr, unwanted) {
+			t.Errorf("go.mod must not contain %s replace directive (build-time go.work supplies it)", unwanted)
 		}
 	}
 	if !strings.Contains(goModStr, "agentsdk v1.0.0") {
 		t.Errorf("go.mod should pin agentsdk to AgentSDKVersion (v1.0.0); got:\n%s", goModStr)
 	}
 
-	// Dockerfile must always have COPY --from=libs (unconditional) and use
+	// .gitignore lists the build-time-only files airlock generates
+	// (go.work pair). Dockerfile is committed so users can build the
+	// container locally; airlock-side builds regenerate it into a temp
+	// dir and use `docker build -f` to avoid touching the committed copy.
+	gitignore, err := os.ReadFile(filepath.Join(dir, ".gitignore"))
+	if err != nil {
+		t.Fatalf("read .gitignore: %v", err)
+	}
+	for _, want := range []string{"go.work", "go.work.sum"} {
+		if !strings.Contains(string(gitignore), want) {
+			t.Errorf(".gitignore missing %q entry", want)
+		}
+	}
+	if strings.Contains(string(gitignore), "Dockerfile") {
+		t.Error(".gitignore must not list Dockerfile (committed for local-build support)")
+	}
+
+	// Dockerfile uses the goproxy build-context stage for lib resolution
+	// (airlock overrides it in dev; empty by default → public proxy) and
 	// the agent-base runtime + dep hooks.
 	if err := GenerateDockerfile(dir, data); err != nil {
 		t.Fatalf("GenerateDockerfile: %v", err)
@@ -101,8 +121,14 @@ func TestMaterialize(t *testing.T) {
 	if !strings.Contains(dockerfileStr, "airlock-agent-base") {
 		t.Error("Dockerfile missing agent base image")
 	}
-	if !strings.Contains(dockerfileStr, "--from=libs") {
-		t.Error("Dockerfile must always have --from=libs")
+	if !strings.Contains(dockerfileStr, "FROM scratch AS goproxy") {
+		t.Error("Dockerfile missing the goproxy build-context stage")
+	}
+	if !strings.Contains(dockerfileStr, "GOPROXY=") {
+		t.Error("Dockerfile missing GOPROXY in the build RUN")
+	}
+	if strings.Contains(dockerfileStr, "--from=libs") {
+		t.Error("Dockerfile must not reference the old libs-owned/libs-ext contexts")
 	}
 	if !strings.Contains(dockerfileStr, "setup.sh") {
 		t.Error("Dockerfile missing setup.sh hook")

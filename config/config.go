@@ -6,14 +6,17 @@ import (
 	"os"
 	"strconv"
 
-	"github.com/airlockrun/agentsdk"
+	"github.com/airlockrun/airlock"
 )
 
-// DefaultAgentBuilderImage is the image tag airlock uses for the toolserver
-// sandbox when AGENT_BUILDER_IMAGE is unset. Tag-pinning against
-// agentsdk.Version ensures every airlock release references the matching
-// toolserver build — drift between the two becomes impossible in prod.
-const DefaultAgentBuilderImage = "agent-builder:v" + agentsdk.Version
+// Default toolserver/runtime images. Pinned to airlock.Version so every airlock
+// release references the matched pair built+published by the same release tag —
+// drift becomes impossible in prod. Self-host operators can still override via
+// AGENT_BUILDER_IMAGE / AGENT_BASE_IMAGE if they need a custom build.
+const (
+	DefaultAgentBuilderImage = "ghcr.io/airlockrun/airlock-agent-builder:v" + airlock.Version
+	DefaultAgentBaseImage    = "ghcr.io/airlockrun/airlock-agent-base:v" + airlock.Version
+)
 
 type Config struct {
 	// --- Core ---
@@ -41,9 +44,15 @@ type Config struct {
 	DBSSLMode   string // "disable" for dev, "require" for prod
 
 	// --- Networking ---
-	PublicURL     string // Public base URL (OAuth callbacks, auth links, e.g. "https://dev.airlock.run")
-	APIURLAgent   string // Agent containers → Airlock API (e.g. "http://host.docker.internal:8080")
-	AgentDomain   string // Subdomain routing (e.g. "dev.airlock.run" → {slug}.dev.airlock.run)
+	PublicURL   string // Public base URL (OAuth callbacks, auth links, e.g. "https://dev.airlock.run")
+	APIURLAgent string // Agent containers → Airlock API (e.g. "http://host.docker.internal:8080"). Intentionally independent of PublicURL/AgentDomain — it's the internal container→airlock callback, not a public URL.
+	AgentDomain string // Subdomain routing (e.g. "dev.airlock.run" → {slug}.dev.airlock.run)
+	// AgentScheme/AgentPort are derived once from PublicURL (see Load).
+	// Together with AgentDomain they form the single source of truth for
+	// per-agent external route URLs — use AgentBaseURL(slug), never
+	// re-derive these elsewhere.
+	AgentScheme   string // "http" | "https"
+	AgentPort     string // explicit non-default port, else ""
 	DockerNetwork string // Docker network for agent containers (e.g. "airlock-dev")
 
 	// --- Encryption ---
@@ -57,8 +66,14 @@ type Config struct {
 	ContainerImage   string // toolserver image name
 
 	// --- Build pipeline ---
-	AgentMonorepoPath string // local path to agent monorepo
-	AgentBuilderImage string // toolserver sandbox image (default: agent-builder:v${agentsdk.Version})
+	// AgentReposPath is the base directory holding per-agent git repos.
+	// Each agent's source lives at <AgentReposPath>/<agentID>/ with its
+	// own .git/. The 003_split_monorepo migration moves any pre-multirepo
+	// install (single monorepo with agents/{id}/ subdirs) from the legacy
+	// AGENT_MONOREPO_PATH location into this layout on first startup
+	// after upgrade.
+	AgentReposPath    string
+	AgentBuilderImage string // toolserver sandbox image (default: DefaultAgentBuilderImage)
 	AgentBaseImage    string // agent runtime base image
 	AgentRegistryURL  string // Docker registry for agent images (empty = local only)
 	AgentLibsPath     string // path containing agentsdk/ goai/ sol/ dirs (the libs we own). Set after startup either to the user-supplied AGENT_LIBS_PATH (dev) or the extracted cache dir (prod). Always non-empty by the time the build pipeline runs.
@@ -154,10 +169,10 @@ func Load() *Config {
 		ContainerImage:   envOr("CONTAINER_IMAGE", "airlock-toolserver"),
 
 		// Build pipeline
-		AgentMonorepoPath: envOr("AGENT_MONOREPO_PATH", "/var/lib/airlock/monorepo"),
-		AgentBuilderImage: envOr("AGENT_BUILDER_IMAGE", DefaultAgentBuilderImage),
-		AgentBaseImage:    envOr("AGENT_BASE_IMAGE", "airlock-agent-base"),
-		AgentRegistryURL:  os.Getenv("AGENT_REGISTRY_URL"),
+		AgentReposPath:        envOr("AGENT_REPOS_PATH", "/var/lib/airlock/agents"),
+		AgentBuilderImage:     envOr("AGENT_BUILDER_IMAGE", DefaultAgentBuilderImage),
+		AgentBaseImage:        envOr("AGENT_BASE_IMAGE", DefaultAgentBaseImage),
+		AgentRegistryURL:      os.Getenv("AGENT_REGISTRY_URL"),
 		AgentLibsPath:         os.Getenv("AGENT_LIBS_PATH"),
 		AgentLibsPathExplicit: os.Getenv("AGENT_LIBS_PATH") != "",
 		AgentLibsCacheDir:     envOr("AGENT_LIBS_CACHE_DIR", "/var/lib/airlock/libs"),
@@ -185,7 +200,39 @@ func Load() *Config {
 		OIDCClientSecret: os.Getenv("OIDC_CLIENT_SECRET"),
 		OIDCRedirectURL:  os.Getenv("OIDC_REDIRECT_URL"),
 	}
+	c.AgentScheme, c.AgentPort = agentSchemePort(c.PublicURL)
 	return c
+}
+
+// agentSchemePort returns the scheme + optional explicit port that
+// per-agent {slug}.AGENT_DOMAIN URLs should use. Inherited from PublicURL
+// so a localhost overlay on `:8443` produces URLs that match what Caddy
+// actually serves. Standard 80/443 → empty port (no `:443` cruft in
+// production URLs); anything else is preserved verbatim. Falls back to
+// ("https", "") when PublicURL is malformed — same effective shape as the
+// historic hard-coded "https://" prefix.
+func agentSchemePort(publicURL string) (scheme, port string) {
+	scheme = "https"
+	if u, err := url.Parse(publicURL); err == nil && u.Host != "" {
+		scheme = u.Scheme
+		p := u.Port()
+		if p != "" && !((scheme == "https" && p == "443") || (scheme == "http" && p == "80")) {
+			port = p
+		}
+	}
+	return
+}
+
+// AgentBaseURL is the external base URL for an agent's registered HTTP
+// routes: {scheme}://{slug}.{AgentDomain}[:port], no trailing slash. The
+// one place that assembles it — handlers and the container-env builder
+// read this, never re-derive scheme/domain/port.
+func (c *Config) AgentBaseURL(slug string) string {
+	u := c.AgentScheme + "://" + slug + "." + c.AgentDomain
+	if c.AgentPort != "" {
+		u += ":" + c.AgentPort
+	}
+	return u
 }
 
 func requireEnv(key string) string {

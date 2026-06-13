@@ -15,20 +15,26 @@ const createAgent = `-- name: CreateAgent :one
 INSERT INTO agents (
     name, slug, user_id, description, config, status,
     upgrade_status, auto_fix,
+    allow_non_member_mcp, allow_public_mcp,
+    allow_oauth_mcp_prompt, allow_public_mcp_prompt,
     build_model, exec_model, stt_model, vision_model,
     tts_model, image_gen_model, embedding_model, search_model,
     source_ref, image_ref, db_schema, db_password, sdk_version,
-    extra_prompts, error_message
+    extra_prompts, error_message, emoji,
+    git_remote_url, git_default_branch, git_webhook_secret, git_last_synced_ref
 )
 VALUES (
     $1, $2, $3, $4, $5, 'draft',
     'idle', true,
+    false, false,
+    false, false,
     '', '', '', '',
     '', '', '', '',
     '', '', '', '', '',
-    '[]'::jsonb, ''
+    '[]'::jsonb, '', '',
+    '', '', '', ''
 )
-RETURNING id, user_id, slug, name, description, status, upgrade_status, auto_fix, build_provider_id, build_model, exec_provider_id, exec_model, stt_provider_id, stt_model, vision_provider_id, vision_model, tts_provider_id, tts_model, image_gen_provider_id, image_gen_model, embedding_provider_id, embedding_model, search_provider_id, search_model, source_ref, image_ref, db_schema, db_password, sdk_version, config, extra_prompts, error_message, created_at, updated_at
+RETURNING id, user_id, slug, name, description, status, upgrade_status, auto_fix, build_provider_id, build_model, exec_provider_id, exec_model, stt_provider_id, stt_model, vision_provider_id, vision_model, tts_provider_id, tts_model, image_gen_provider_id, image_gen_model, embedding_provider_id, embedding_model, search_provider_id, search_model, source_ref, image_ref, db_schema, db_password, sdk_version, config, extra_prompts, error_message, created_at, updated_at, allow_non_member_mcp, allow_public_mcp, tools_hash, emoji, allow_oauth_mcp_prompt, allow_public_mcp_prompt, git_remote_url, git_credential_id, git_default_branch, git_webhook_secret, git_last_synced_ref
 `
 
 type CreateAgentParams struct {
@@ -87,6 +93,17 @@ func (q *Queries) CreateAgent(ctx context.Context, arg CreateAgentParams) (Agent
 		&i.ErrorMessage,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.AllowNonMemberMcp,
+		&i.AllowPublicMcp,
+		&i.ToolsHash,
+		&i.Emoji,
+		&i.AllowOauthMcpPrompt,
+		&i.AllowPublicMcpPrompt,
+		&i.GitRemoteUrl,
+		&i.GitCredentialID,
+		&i.GitDefaultBranch,
+		&i.GitWebhookSecret,
+		&i.GitLastSyncedRef,
 	)
 	return i, err
 }
@@ -101,7 +118,7 @@ func (q *Queries) DeleteAgent(ctx context.Context, id pgtype.UUID) error {
 }
 
 const getAgentByID = `-- name: GetAgentByID :one
-SELECT id, user_id, slug, name, description, status, upgrade_status, auto_fix, build_provider_id, build_model, exec_provider_id, exec_model, stt_provider_id, stt_model, vision_provider_id, vision_model, tts_provider_id, tts_model, image_gen_provider_id, image_gen_model, embedding_provider_id, embedding_model, search_provider_id, search_model, source_ref, image_ref, db_schema, db_password, sdk_version, config, extra_prompts, error_message, created_at, updated_at FROM agents WHERE id = $1
+SELECT id, user_id, slug, name, description, status, upgrade_status, auto_fix, build_provider_id, build_model, exec_provider_id, exec_model, stt_provider_id, stt_model, vision_provider_id, vision_model, tts_provider_id, tts_model, image_gen_provider_id, image_gen_model, embedding_provider_id, embedding_model, search_provider_id, search_model, source_ref, image_ref, db_schema, db_password, sdk_version, config, extra_prompts, error_message, created_at, updated_at, allow_non_member_mcp, allow_public_mcp, tools_hash, emoji, allow_oauth_mcp_prompt, allow_public_mcp_prompt, git_remote_url, git_credential_id, git_default_branch, git_webhook_secret, git_last_synced_ref FROM agents WHERE id = $1
 `
 
 func (q *Queries) GetAgentByID(ctx context.Context, id pgtype.UUID) (Agent, error) {
@@ -142,12 +159,23 @@ func (q *Queries) GetAgentByID(ctx context.Context, id pgtype.UUID) (Agent, erro
 		&i.ErrorMessage,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.AllowNonMemberMcp,
+		&i.AllowPublicMcp,
+		&i.ToolsHash,
+		&i.Emoji,
+		&i.AllowOauthMcpPrompt,
+		&i.AllowPublicMcpPrompt,
+		&i.GitRemoteUrl,
+		&i.GitCredentialID,
+		&i.GitDefaultBranch,
+		&i.GitWebhookSecret,
+		&i.GitLastSyncedRef,
 	)
 	return i, err
 }
 
 const getAgentBySlug = `-- name: GetAgentBySlug :one
-SELECT id, user_id, slug, name, description, status, upgrade_status, auto_fix, build_provider_id, build_model, exec_provider_id, exec_model, stt_provider_id, stt_model, vision_provider_id, vision_model, tts_provider_id, tts_model, image_gen_provider_id, image_gen_model, embedding_provider_id, embedding_model, search_provider_id, search_model, source_ref, image_ref, db_schema, db_password, sdk_version, config, extra_prompts, error_message, created_at, updated_at FROM agents WHERE slug = $1
+SELECT id, user_id, slug, name, description, status, upgrade_status, auto_fix, build_provider_id, build_model, exec_provider_id, exec_model, stt_provider_id, stt_model, vision_provider_id, vision_model, tts_provider_id, tts_model, image_gen_provider_id, image_gen_model, embedding_provider_id, embedding_model, search_provider_id, search_model, source_ref, image_ref, db_schema, db_password, sdk_version, config, extra_prompts, error_message, created_at, updated_at, allow_non_member_mcp, allow_public_mcp, tools_hash, emoji, allow_oauth_mcp_prompt, allow_public_mcp_prompt, git_remote_url, git_credential_id, git_default_branch, git_webhook_secret, git_last_synced_ref FROM agents WHERE slug = $1
 `
 
 func (q *Queries) GetAgentBySlug(ctx context.Context, slug string) (Agent, error) {
@@ -188,6 +216,17 @@ func (q *Queries) GetAgentBySlug(ctx context.Context, slug string) (Agent, error
 		&i.ErrorMessage,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.AllowNonMemberMcp,
+		&i.AllowPublicMcp,
+		&i.ToolsHash,
+		&i.Emoji,
+		&i.AllowOauthMcpPrompt,
+		&i.AllowPublicMcpPrompt,
+		&i.GitRemoteUrl,
+		&i.GitCredentialID,
+		&i.GitDefaultBranch,
+		&i.GitWebhookSecret,
+		&i.GitLastSyncedRef,
 	)
 	return i, err
 }
@@ -208,8 +247,34 @@ func (q *Queries) GetAgentForUpgrade(ctx context.Context, id pgtype.UUID) (GetAg
 	return i, err
 }
 
+const listActiveAgentIDs = `-- name: ListActiveAgentIDs :many
+SELECT id FROM agents WHERE status = 'active'
+`
+
+// All agents in 'active' status. Used by the sibling-update broadcaster
+// to fan a /refresh out to every running agent (cold containers no-op).
+func (q *Queries) ListActiveAgentIDs(ctx context.Context) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, listActiveAgentIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []pgtype.UUID{}
+	for rows.Next() {
+		var id pgtype.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listAgents = `-- name: ListAgents :many
-SELECT id, user_id, slug, name, description, status, upgrade_status, auto_fix, build_provider_id, build_model, exec_provider_id, exec_model, stt_provider_id, stt_model, vision_provider_id, vision_model, tts_provider_id, tts_model, image_gen_provider_id, image_gen_model, embedding_provider_id, embedding_model, search_provider_id, search_model, source_ref, image_ref, db_schema, db_password, sdk_version, config, extra_prompts, error_message, created_at, updated_at FROM agents ORDER BY created_at DESC
+SELECT id, user_id, slug, name, description, status, upgrade_status, auto_fix, build_provider_id, build_model, exec_provider_id, exec_model, stt_provider_id, stt_model, vision_provider_id, vision_model, tts_provider_id, tts_model, image_gen_provider_id, image_gen_model, embedding_provider_id, embedding_model, search_provider_id, search_model, source_ref, image_ref, db_schema, db_password, sdk_version, config, extra_prompts, error_message, created_at, updated_at, allow_non_member_mcp, allow_public_mcp, tools_hash, emoji, allow_oauth_mcp_prompt, allow_public_mcp_prompt, git_remote_url, git_credential_id, git_default_branch, git_webhook_secret, git_last_synced_ref FROM agents ORDER BY created_at DESC
 `
 
 func (q *Queries) ListAgents(ctx context.Context) ([]Agent, error) {
@@ -256,6 +321,17 @@ func (q *Queries) ListAgents(ctx context.Context) ([]Agent, error) {
 			&i.ErrorMessage,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.AllowNonMemberMcp,
+			&i.AllowPublicMcp,
+			&i.ToolsHash,
+			&i.Emoji,
+			&i.AllowOauthMcpPrompt,
+			&i.AllowPublicMcpPrompt,
+			&i.GitRemoteUrl,
+			&i.GitCredentialID,
+			&i.GitDefaultBranch,
+			&i.GitWebhookSecret,
+			&i.GitLastSyncedRef,
 		); err != nil {
 			return nil, err
 		}
@@ -268,7 +344,7 @@ func (q *Queries) ListAgents(ctx context.Context) ([]Agent, error) {
 }
 
 const listAgentsByUser = `-- name: ListAgentsByUser :many
-SELECT id, user_id, slug, name, description, status, upgrade_status, auto_fix, build_provider_id, build_model, exec_provider_id, exec_model, stt_provider_id, stt_model, vision_provider_id, vision_model, tts_provider_id, tts_model, image_gen_provider_id, image_gen_model, embedding_provider_id, embedding_model, search_provider_id, search_model, source_ref, image_ref, db_schema, db_password, sdk_version, config, extra_prompts, error_message, created_at, updated_at FROM agents WHERE user_id = $1 ORDER BY created_at DESC
+SELECT id, user_id, slug, name, description, status, upgrade_status, auto_fix, build_provider_id, build_model, exec_provider_id, exec_model, stt_provider_id, stt_model, vision_provider_id, vision_model, tts_provider_id, tts_model, image_gen_provider_id, image_gen_model, embedding_provider_id, embedding_model, search_provider_id, search_model, source_ref, image_ref, db_schema, db_password, sdk_version, config, extra_prompts, error_message, created_at, updated_at, allow_non_member_mcp, allow_public_mcp, tools_hash, emoji, allow_oauth_mcp_prompt, allow_public_mcp_prompt, git_remote_url, git_credential_id, git_default_branch, git_webhook_secret, git_last_synced_ref FROM agents WHERE user_id = $1 ORDER BY created_at DESC
 `
 
 func (q *Queries) ListAgentsByUser(ctx context.Context, userID pgtype.UUID) ([]Agent, error) {
@@ -315,6 +391,17 @@ func (q *Queries) ListAgentsByUser(ctx context.Context, userID pgtype.UUID) ([]A
 			&i.ErrorMessage,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.AllowNonMemberMcp,
+			&i.AllowPublicMcp,
+			&i.ToolsHash,
+			&i.Emoji,
+			&i.AllowOauthMcpPrompt,
+			&i.AllowPublicMcpPrompt,
+			&i.GitRemoteUrl,
+			&i.GitCredentialID,
+			&i.GitDefaultBranch,
+			&i.GitWebhookSecret,
+			&i.GitLastSyncedRef,
 		); err != nil {
 			return nil, err
 		}
@@ -327,7 +414,7 @@ func (q *Queries) ListAgentsByUser(ctx context.Context, userID pgtype.UUID) ([]A
 }
 
 const listAgentsByUserID = `-- name: ListAgentsByUserID :many
-SELECT id, user_id, slug, name, description, status, upgrade_status, auto_fix, build_provider_id, build_model, exec_provider_id, exec_model, stt_provider_id, stt_model, vision_provider_id, vision_model, tts_provider_id, tts_model, image_gen_provider_id, image_gen_model, embedding_provider_id, embedding_model, search_provider_id, search_model, source_ref, image_ref, db_schema, db_password, sdk_version, config, extra_prompts, error_message, created_at, updated_at FROM agents WHERE user_id = $1 ORDER BY created_at DESC
+SELECT id, user_id, slug, name, description, status, upgrade_status, auto_fix, build_provider_id, build_model, exec_provider_id, exec_model, stt_provider_id, stt_model, vision_provider_id, vision_model, tts_provider_id, tts_model, image_gen_provider_id, image_gen_model, embedding_provider_id, embedding_model, search_provider_id, search_model, source_ref, image_ref, db_schema, db_password, sdk_version, config, extra_prompts, error_message, created_at, updated_at, allow_non_member_mcp, allow_public_mcp, tools_hash, emoji, allow_oauth_mcp_prompt, allow_public_mcp_prompt, git_remote_url, git_credential_id, git_default_branch, git_webhook_secret, git_last_synced_ref FROM agents WHERE user_id = $1 ORDER BY created_at DESC
 `
 
 func (q *Queries) ListAgentsByUserID(ctx context.Context, userID pgtype.UUID) ([]Agent, error) {
@@ -374,6 +461,96 @@ func (q *Queries) ListAgentsByUserID(ctx context.Context, userID pgtype.UUID) ([
 			&i.ErrorMessage,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.AllowNonMemberMcp,
+			&i.AllowPublicMcp,
+			&i.ToolsHash,
+			&i.Emoji,
+			&i.AllowOauthMcpPrompt,
+			&i.AllowPublicMcpPrompt,
+			&i.GitRemoteUrl,
+			&i.GitCredentialID,
+			&i.GitDefaultBranch,
+			&i.GitWebhookSecret,
+			&i.GitLastSyncedRef,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listRebuildableAgents = `-- name: ListRebuildableAgents :many
+SELECT id, user_id, slug, name, description, status, upgrade_status, auto_fix, build_provider_id, build_model, exec_provider_id, exec_model, stt_provider_id, stt_model, vision_provider_id, vision_model, tts_provider_id, tts_model, image_gen_provider_id, image_gen_model, embedding_provider_id, embedding_model, search_provider_id, search_model, source_ref, image_ref, db_schema, db_password, sdk_version, config, extra_prompts, error_message, created_at, updated_at, allow_non_member_mcp, allow_public_mcp, tools_hash, emoji, allow_oauth_mcp_prompt, allow_public_mcp_prompt, git_remote_url, git_credential_id, git_default_branch, git_webhook_secret, git_last_synced_ref FROM agents
+WHERE image_ref <> '' AND status IN ('active', 'stopped')
+ORDER BY created_at ASC
+`
+
+// Agents the SDK-bump mass rebuild iterates over. An empty image_ref
+// means no successful build yet (draft / failed initial build) —
+// nothing to re-image. Status='stopped' agents are included: a fleet
+// SDK bump should re-image them so they're ready when the operator
+// starts them again. Order by created_at ASC for deterministic
+// iteration order across replicas (advisory-locked single-runner per
+// agent prevents real races, but predictable order eases debugging).
+func (q *Queries) ListRebuildableAgents(ctx context.Context) ([]Agent, error) {
+	rows, err := q.db.Query(ctx, listRebuildableAgents)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Agent{}
+	for rows.Next() {
+		var i Agent
+		if err := rows.Scan(
+			&i.ID,
+			&i.UserID,
+			&i.Slug,
+			&i.Name,
+			&i.Description,
+			&i.Status,
+			&i.UpgradeStatus,
+			&i.AutoFix,
+			&i.BuildProviderID,
+			&i.BuildModel,
+			&i.ExecProviderID,
+			&i.ExecModel,
+			&i.SttProviderID,
+			&i.SttModel,
+			&i.VisionProviderID,
+			&i.VisionModel,
+			&i.TtsProviderID,
+			&i.TtsModel,
+			&i.ImageGenProviderID,
+			&i.ImageGenModel,
+			&i.EmbeddingProviderID,
+			&i.EmbeddingModel,
+			&i.SearchProviderID,
+			&i.SearchModel,
+			&i.SourceRef,
+			&i.ImageRef,
+			&i.DbSchema,
+			&i.DbPassword,
+			&i.SdkVersion,
+			&i.Config,
+			&i.ExtraPrompts,
+			&i.ErrorMessage,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.AllowNonMemberMcp,
+			&i.AllowPublicMcp,
+			&i.ToolsHash,
+			&i.Emoji,
+			&i.AllowOauthMcpPrompt,
+			&i.AllowPublicMcpPrompt,
+			&i.GitRemoteUrl,
+			&i.GitCredentialID,
+			&i.GitDefaultBranch,
+			&i.GitWebhookSecret,
+			&i.GitLastSyncedRef,
 		); err != nil {
 			return nil, err
 		}
@@ -402,6 +579,29 @@ WHERE upgrade_status IN ('queued', 'building')
 
 func (q *Queries) ResetStuckUpgrades(ctx context.Context) error {
 	_, err := q.db.Exec(ctx, resetStuckUpgrades)
+	return err
+}
+
+const updateAgentA2ASettings = `-- name: UpdateAgentA2ASettings :exec
+UPDATE agents SET
+    allow_non_member_mcp = $1,
+    allow_public_mcp     = $2,
+    updated_at           = now()
+WHERE id = $3
+`
+
+type UpdateAgentA2ASettingsParams struct {
+	AllowNonMemberMcp bool        `json:"allow_non_member_mcp"`
+	AllowPublicMcp    bool        `json:"allow_public_mcp"`
+	ID                pgtype.UUID `json:"id"`
+}
+
+// Updates the two A2A access toggles. CHECK constraint
+// agents_public_implies_non_member rejects the inconsistent state
+// (allow_public_mcp=true ∧ allow_non_member_mcp=false), so the API
+// layer auto-flips non-member on whenever it sets public on.
+func (q *Queries) UpdateAgentA2ASettings(ctx context.Context, arg UpdateAgentA2ASettingsParams) error {
+	_, err := q.db.Exec(ctx, updateAgentA2ASettings, arg.AllowNonMemberMcp, arg.AllowPublicMcp, arg.ID)
 	return err
 }
 
@@ -449,6 +649,20 @@ func (q *Queries) UpdateAgentDescription(ctx context.Context, arg UpdateAgentDes
 	return err
 }
 
+const updateAgentEmoji = `-- name: UpdateAgentEmoji :exec
+UPDATE agents SET emoji = $1, updated_at = now() WHERE id = $2
+`
+
+type UpdateAgentEmojiParams struct {
+	Emoji string      `json:"emoji"`
+	ID    pgtype.UUID `json:"id"`
+}
+
+func (q *Queries) UpdateAgentEmoji(ctx context.Context, arg UpdateAgentEmojiParams) error {
+	_, err := q.db.Exec(ctx, updateAgentEmoji, arg.Emoji, arg.ID)
+	return err
+}
+
 const updateAgentErrorMessage = `-- name: UpdateAgentErrorMessage :exec
 UPDATE agents SET error_message = $1, updated_at = now() WHERE id = $2
 `
@@ -479,19 +693,32 @@ func (q *Queries) UpdateAgentExtraPrompts(ctx context.Context, arg UpdateAgentEx
 
 const updateAgentFields = `-- name: UpdateAgentFields :one
 UPDATE agents SET
-    auto_fix = $1,
+    name = $1,
+    slug = $2,
+    auto_fix = $3,
     updated_at = now()
-WHERE id = $2
-RETURNING id, user_id, slug, name, description, status, upgrade_status, auto_fix, build_provider_id, build_model, exec_provider_id, exec_model, stt_provider_id, stt_model, vision_provider_id, vision_model, tts_provider_id, tts_model, image_gen_provider_id, image_gen_model, embedding_provider_id, embedding_model, search_provider_id, search_model, source_ref, image_ref, db_schema, db_password, sdk_version, config, extra_prompts, error_message, created_at, updated_at
+WHERE id = $4
+RETURNING id, user_id, slug, name, description, status, upgrade_status, auto_fix, build_provider_id, build_model, exec_provider_id, exec_model, stt_provider_id, stt_model, vision_provider_id, vision_model, tts_provider_id, tts_model, image_gen_provider_id, image_gen_model, embedding_provider_id, embedding_model, search_provider_id, search_model, source_ref, image_ref, db_schema, db_password, sdk_version, config, extra_prompts, error_message, created_at, updated_at, allow_non_member_mcp, allow_public_mcp, tools_hash, emoji, allow_oauth_mcp_prompt, allow_public_mcp_prompt, git_remote_url, git_credential_id, git_default_branch, git_webhook_secret, git_last_synced_ref
 `
 
 type UpdateAgentFieldsParams struct {
+	Name    string      `json:"name"`
+	Slug    string      `json:"slug"`
 	AutoFix bool        `json:"auto_fix"`
 	ID      pgtype.UUID `json:"id"`
 }
 
+// Caller resolves each value (keep-existing when the request omits it)
+// before calling, so this is an unconditional set. slug uniqueness is
+// enforced by the agents.slug UNIQUE constraint — a collision surfaces
+// as a duplicate-key error the handler maps to 409.
 func (q *Queries) UpdateAgentFields(ctx context.Context, arg UpdateAgentFieldsParams) (Agent, error) {
-	row := q.db.QueryRow(ctx, updateAgentFields, arg.AutoFix, arg.ID)
+	row := q.db.QueryRow(ctx, updateAgentFields,
+		arg.Name,
+		arg.Slug,
+		arg.AutoFix,
+		arg.ID,
+	)
 	var i Agent
 	err := row.Scan(
 		&i.ID,
@@ -528,6 +755,17 @@ func (q *Queries) UpdateAgentFields(ctx context.Context, arg UpdateAgentFieldsPa
 		&i.ErrorMessage,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.AllowNonMemberMcp,
+		&i.AllowPublicMcp,
+		&i.ToolsHash,
+		&i.Emoji,
+		&i.AllowOauthMcpPrompt,
+		&i.AllowPublicMcpPrompt,
+		&i.GitRemoteUrl,
+		&i.GitCredentialID,
+		&i.GitDefaultBranch,
+		&i.GitWebhookSecret,
+		&i.GitLastSyncedRef,
 	)
 	return i, err
 }
@@ -641,6 +879,22 @@ type UpdateAgentStatusParams struct {
 
 func (q *Queries) UpdateAgentStatus(ctx context.Context, arg UpdateAgentStatusParams) error {
 	_, err := q.db.Exec(ctx, updateAgentStatus, arg.Status, arg.ErrorMessage, arg.ID)
+	return err
+}
+
+const updateAgentToolsHash = `-- name: UpdateAgentToolsHash :exec
+UPDATE agents SET tools_hash = $1 WHERE id = $2
+`
+
+type UpdateAgentToolsHashParams struct {
+	ToolsHash []byte      `json:"tools_hash"`
+	ID        pgtype.UUID `json:"id"`
+}
+
+// Stamp the synced tool-set hash on the agent. Sync handler compares
+// before/after to decide whether to broadcast a sibling-update refresh.
+func (q *Queries) UpdateAgentToolsHash(ctx context.Context, arg UpdateAgentToolsHashParams) error {
+	_, err := q.db.Exec(ctx, updateAgentToolsHash, arg.ToolsHash, arg.ID)
 	return err
 }
 

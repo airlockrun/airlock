@@ -5,6 +5,8 @@
 - **Fail loud.** Required dependencies must panic on nil — no silent fallbacks, no optional params, no nil guards that degrade gracefully.
 - **Protobuf everywhere.** All REST requests/responses and WebSocket messages use proto-generated types for both input and output.
 - **sqlc for queries.** All DB access goes through sqlc-generated code in `db/dbq/`. SQL lives in `db/queries/*.sql`.
+- **Capabilities live in `service/{domain}/`, not handlers.** Any operation a user can perform (read, mutate, list — anything authorization or audit cares about) belongs in a `service/{domain}` package. HTTP handlers in `api/` parse the request, build the `authz.Principal`, call the service, and serialize the result; they do not query the DB directly. Sysagent tools, A2A tools, scripts, and tests all hit the same service surface — one capability, one implementation, one gate. Direct `dbq` access from outside `service/` is reserved for narrow read-only lookups that carry no authorization concern (e.g. resolving a slug to an id, fetching a row purely for plumbing).
+- **Every service method gates through `authz.Authorize`.** No inline `IsAuthenticatedUser` / `TenantRole.AtLeast` / hand-rolled role checks in service bodies — every gate calls `authz.Authorize(ctx, q, p, Action, agentID)` with an `Action` that lives in `authz/policy.go`. Adding a new capability means adding an `Action` constant + policy-table entry first, then calling `Authorize`. This is what keeps the permission matrix in one editable place; an inline check is invisible to the policy table and creates the drift the table exists to prevent.
 - **Keep this file current.** When adding new packages, API endpoints, DB tables, or changing key architecture, update this CLAUDE.md to reflect the change.
 
 ## Architecture
@@ -20,6 +22,16 @@ api/               HTTP handlers (chi router) + WebSocket upgrade
 auth/              JWT (HS256), middleware, RBAC (admin/manager/user)
 auth/lockout/      Per-(email, ip) login throttling — Policy, IP normalization,
                    constant-time response padding for the Login handler.
+authz/             The single authorization layer. Principal (registered /
+                   anonymous / trigger), EffectiveAgentAccess (the one
+                   agent_members resolver), AccessAtLeast (the one ladder
+                   ranking), a central Action→Requirement policy map, and
+                   Authorize. Every surface (HTTP handlers, bridges, A2A/MCP)
+                   builds a Principal and gates through here — no second place
+                   decides "what level does this action need".
+apperr/            Leaf package: the sentinel errors (ErrForbidden, …), Detail
+                   wrapper, and HTTPStatus mapping. service.ErrX are aliases of
+                   these so authz can return them without an import cycle.
 db/                Postgres — migrations, sqlc queries, connection pool with RLS cleanup
   migrations/      SQL migration files (001_schema.up.sql)
   queries/         sqlc SQL files (agents.sql, messages.sql, etc.)
@@ -28,6 +40,10 @@ config/            Environment-based config (DATABASE_URL, JWT_SECRET, S3_*, ENC
 builder/           Build pipeline: scaffold → Sol codegen → docker build → deploy
 scaffold/          Go project templates (Dockerfile.tmpl, go.mod.tmpl, main.go.tmpl)
 container/         Docker container lifecycle (start/stop/health/reap agents + toolservers)
+execproxy/         SSH dialer for agentsdk.RegisterExecEndpoint — opens sessions,
+                   streams stdout/stderr/exit envelopes back to the agent as
+                   NDJSON over chunked transfer encoding. Owns the per-endpoint
+                   *ssh.Client cache + host-key TOFU + ED25519 keygen.
 trigger/           Dispatcher, Scheduler (cron), BridgeManager, PromptProxy
 realtime/          WebSocket Hub + PubSub (in-memory, topic-based with replay buffer)
 storage/           S3 client (PutObject, GetObject, presigned URLs) — talks to RustFS
@@ -49,10 +65,25 @@ anchor/            Anchor container support
 ### Agent Execution
 - Agent containers are long-running Docker containers (one per agent, reused if healthy)
 - Started on demand via `dispatcher.EnsureRunning()`
-- Health checked (3s initial, 15s reuse), reaped after 10min idle
+- Health checked (3s initial, 15s reuse), reaped after 10min idle — a container with an in-flight request is exempt (the dispatcher brackets every forwarded request with `MarkBusy`/`MarkIdle`), so a run longer than the timeout is never killed mid-execution
 - Environment: `AIRLOCK_AGENT_ID`, `AIRLOCK_API_URL`, `AIRLOCK_AGENT_TOKEN`, `AIRLOCK_DB_URL`
 - Per-agent DB schema: `agent_{uuid}`
 - Libs (`agentsdk/`, `goai/`, `sol/`) injected via `--build-context libs=` from `AGENT_LIBS_PATH`
+
+### Agent Lifecycle States
+Runtime state surfaced to the operator is the `(agents.status, container running)` tuple — see `frontend/src/composables/useAgentStatus.ts`:
+- **Running**: `status=active` + container up.
+- **Suspended**: `status=active` + container down (reaped after idle OR explicitly via `/suspend`). Next trigger auto-resumes via `EnsureRunning`.
+- **Stopped**: `status=stopped`. `EnsureRunning` refuses; manual `/start` required.
+- **Failed**: `status=failed`. Terminal — needs Upgrade or Rollback.
+
+`/stop` sets status=stopped (no auto-resume); `/suspend` kills the container but leaves status=active (auto-resume on next trigger); `/start` flips stopped→active and starts the container.
+
+### Build Concurrency
+All build paths (initial build, manual upgrade, rollback, mass-rebuild) acquire a single shared semaphore inside `builder.Execute`. Default size `max(1, NumCPU/2)`; override via `AIRLOCK_BUILD_PARALLELISM`. The `agent_builds` row is created before the semaphore wait, so a queued build is visible as `status=building` immediately; cancellation while queued is honored via the same ctx that drives the cancel button.
+
+### SDK Bump Mass Rebuild
+On startup `builder.RebuildAllOnSDKChange` compares the airlock-bundled `agentsdk.Version` to `system_settings.last_seen_sdk_version`. On drift it iterates every `image_ref != ''` agent (status in active/stopped) and fans out one goroutine per agent calling `Execute(BuildPlan{Kind:upgrade, Instruction:""})` — the shared build semaphore (above) caps concurrency. Failures park the agent: `status=stopped` + `error_message` + container killed. `last_seen_sdk_version` is stamped only after the whole batch completes.
 
 ### Message Flow (Web)
 1. `POST /agents/{id}/prompt` → upload files to S3 → start container → forward to agent
@@ -83,10 +114,12 @@ anchor/            Anchor container support
 - **Catalog**: Available providers and models
 
 ### Agent Internal: `/api/agent` (agent JWT middleware)
-- `PUT connections/{slug}`, `PUT sync` — agent self-registration
+- `PUT connections/{slug}`, `PUT exec-endpoints/{slug}`, `PUT sync` — agent self-registration
+- `POST exec/{slug}` — run a command on a registered exec endpoint; airlock streams stdout/stderr/exit envelopes back as NDJSON
 - `POST llm/stream` — LLM proxy (optional telescope)
 - `POST proxy/{slug}` — credential-injected HTTP proxy
 - `PUT|GET|DELETE storage/*` — agent object storage
+- `POST seal`, `POST unseal` — encrypt/decrypt on the agent's behalf (the key stays in Airlock). The agent stores the returned ciphertext in its OWN DB, keyed however its domain needs (agent-wide, per-user). Bound to the agent via AAD = agent ID from the JWT, so one agent can't unseal another's. For runtime-generated secrets (e.g. session tokens); plaintext never persists in Airlock.
 - `GET|POST|PUT session/{convID}/messages` — conversation history (SessionStore)
 - `POST run/complete`, `GET run/{runID}/checkpoint` — run lifecycle
 - `POST publish`, `POST|DELETE subscribe` — topic pub/sub
@@ -106,6 +139,7 @@ Postgres with sqlc. Key tables:
 - `agent_webhooks`, `agent_crons`, `agent_routes`, `agent_topics` — trigger definitions
 - `agent_members` — sharing/permissions
 - `connections` — OAuth/API integrations (encrypted credentials)
+- `agent_exec_endpoints` — remote command targets (SSH today; transport pluggable). Operator-configured host/port/user + airlock-generated ED25519 keypair (private key in secrets store) + TOFU-pinned host key. Declared by the agent via `RegisterExecEndpoint`.
 - `bridges`, `platform_identities` — chat platform integrations (Telegram)
 - `runs` — execution history (trigger, status, input/output, timeline)
 - `oauth_states` — OAuth flow state tokens

@@ -8,23 +8,29 @@ import (
 	"testing"
 
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
+	bridgessvc "github.com/airlockrun/airlock/service/bridges"
 	"github.com/airlockrun/airlock/trigger"
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 	"go.uber.org/zap"
-	"google.golang.org/protobuf/encoding/protojson"
 )
+
+// testNoopBridgeMgr satisfies bridgessvc.BridgeManager without spinning
+// up a real poller — the test only cares that lifecycle methods exist.
+type testNoopBridgeMgr struct{}
+
+func (testNoopBridgeMgr) AddBridge(uuid.UUID)    {}
+func (testNoopBridgeMgr) RemoveBridge(uuid.UUID) {}
 
 func testBridgeHandler(telegramSrv *httptest.Server) *bridgeHandler {
 	td := trigger.NewTelegramDriver(zap.NewNop())
 	if telegramSrv != nil {
 		td = trigger.NewTelegramDriverWithBaseURL(telegramSrv.URL, telegramSrv.Client())
 	}
-	return &bridgeHandler{
-		db:        testDB,
-		encryptor: testEncryptor(),
-		telegram:  td,
-		logger:    zap.NewNop(),
-	}
+	dd := trigger.NewDiscordDriver(zap.NewNop())
+	return newBridgeHandler(bridgessvc.New(
+		testDB, testEncryptor(), td, dd, testNoopBridgeMgr{}, zap.NewNop(),
+	))
 }
 
 func TestCreateAgentBridge(t *testing.T) {
@@ -65,7 +71,7 @@ func TestCreateAgentBridge(t *testing.T) {
 	}
 
 	var resp airlockv1.BridgeInfo
-	protojson.Unmarshal(rec.Body.Bytes(), &resp)
+	decodeProtoResp(t, rec, &resp)
 	if resp.BotUsername != "test_bot" {
 		t.Errorf("bot_username = %q, want test_bot", resp.BotUsername)
 	}
@@ -77,9 +83,9 @@ func TestCreateAgentBridge(t *testing.T) {
 	}
 }
 
-// TestCreateBridgeUserRoleForbidden confirms that the `user` tenant role can
-// no longer create bridges (managers and admins still can — covered by
-// TestCreateAgentBridge / TestCreateSystemBridgeRequiresAdmin).
+// TestCreateBridgeUserRoleForbidden asserts that the `user` tenant role
+// is not allowed to create bridges; manager and admin paths are covered
+// by TestCreateAgentBridge / TestCreateSystemBridgeRequiresAdmin.
 func TestCreateBridgeUserRoleForbidden(t *testing.T) {
 	skipIfNoDB(t)
 
@@ -145,7 +151,8 @@ func TestListAndDeleteBridge(t *testing.T) {
 		r.Delete("/api/v1/bridges/{bridgeID}", bh.DeleteBridge)
 	})
 
-	// Create bridge as manager (user role can no longer create).
+	// Manager role creates the bridge — only manager and admin are
+	// permitted on this endpoint.
 	body := map[string]string{"name": "Del Bot", "token": "fake-token", "agent_id": agentID.String()}
 	req := requestJSONAs(t, "POST", "/api/v1/bridges", userID, "manager", body)
 	rec := httptest.NewRecorder()
@@ -154,7 +161,7 @@ func TestListAndDeleteBridge(t *testing.T) {
 		t.Fatalf("create: status = %d", rec.Code)
 	}
 	var created airlockv1.BridgeInfo
-	protojson.Unmarshal(rec.Body.Bytes(), &created)
+	decodeProtoResp(t, rec, &created)
 
 	// List — should contain the bridge (user is the agent's creator, so
 	// they're auto-added as a member; ListBridgesAccessible returns it).
@@ -165,7 +172,7 @@ func TestListAndDeleteBridge(t *testing.T) {
 		t.Fatalf("list: status = %d", rec.Code)
 	}
 	var listResp airlockv1.ListBridgesResponse
-	protojson.Unmarshal(rec.Body.Bytes(), &listResp)
+	decodeProtoResp(t, rec, &listResp)
 	found := false
 	for _, b := range listResp.Bridges {
 		if b.Id == created.Id {
@@ -216,9 +223,10 @@ func TestCreateBridgeBadToken(t *testing.T) {
 	}
 }
 
-// TestUpdateBridgeAdminCannotReassignOthersBridge confirms the new rule:
-// admins can DELETE someone else's bridge but cannot change its agent.
-func TestUpdateBridgeAdminCannotReassignOthersBridge(t *testing.T) {
+// TestUpdateBridgeAdminCanReassignOthersBridge confirms admins can
+// reassign any user's bridge to an agent they have admin access on —
+// the admin escape in service/bridges.Update.
+func TestUpdateBridgeAdminCanReassignOthersBridge(t *testing.T) {
 	skipIfNoDB(t)
 
 	telegramSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -245,17 +253,17 @@ func TestUpdateBridgeAdminCannotReassignOthersBridge(t *testing.T) {
 		t.Fatalf("create: status = %d", rec.Code)
 	}
 	var created airlockv1.BridgeInfo
-	protojson.Unmarshal(rec.Body.Bytes(), &created)
+	decodeProtoResp(t, rec, &created)
 
-	// Admin (different user) tries to reassign to their own agent → 403.
+	// Admin (different user) reassigns to their own agent.
 	updateBody := map[string]string{"agent_id": otherAgentID.String()}
 	req = requestJSONAs(t, "PUT",
 		fmt.Sprintf("/api/v1/bridges/%s", created.Id), adminID, "admin", updateBody)
 	rec = httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusForbidden {
-		t.Errorf("admin reassign someone else's bridge: status = %d, want 403; body: %s",
+	if rec.Code != http.StatusOK {
+		t.Errorf("admin reassign someone else's bridge: status = %d, want 200; body: %s",
 			rec.Code, rec.Body.String())
 	}
 }

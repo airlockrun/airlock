@@ -798,8 +798,31 @@ type AgentInfo struct {
 	UpdatedAt       *timestamppb.Timestamp `protobuf:"bytes,12,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
 	BuildProviderId string                 `protobuf:"bytes,13,opt,name=build_provider_id,json=buildProviderId,proto3" json:"build_provider_id,omitempty"`
 	ExecProviderId  string                 `protobuf:"bytes,14,opt,name=exec_provider_id,json=execProviderId,proto3" json:"exec_provider_id,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// running reflects live container state (a container is actually up),
+	// distinct from status (lifecycle: draft/building/active/failed/
+	// stopped). An 'active' agent with running=false is normal — idle
+	// containers are reaped and lazily restarted on the next trigger.
+	// Populated only on the agent-detail endpoint.
+	Running bool `protobuf:"varint,15,opt,name=running,proto3" json:"running,omitempty"`
+	// emoji is an optional decorative glyph (agentsdk.Config.Emoji) shown
+	// next to the agent in the UI. Empty = none.
+	Emoji string `protobuf:"bytes,16,opt,name=emoji,proto3" json:"emoji,omitempty"`
+	// your_access is the caller's effective access level on this agent —
+	// "admin", "user", or "public" (matches agentsdk.Access). Populated
+	// by the operator-facing list/detail endpoints so the UI and the
+	// in-airlock system agent can locally decide which per-agent actions
+	// to offer without re-authorizing each one. Empty when the caller
+	// axis is not user-scoped (e.g. agent-internal lookups).
+	YourAccess string `protobuf:"bytes,17,opt,name=your_access,json=yourAccess,proto3" json:"your_access,omitempty"`
+	// source_ref is the git commit hash of the build the agent is
+	// currently running (agents.source_ref in the DB; set by Execute on
+	// every successful build/upgrade/rollback). The UI compares against
+	// AgentBuildInfo.source_ref to decide which build row is "current"
+	// (e.g. to hide the rollback button on it). Empty for agents that
+	// have never had a successful build.
+	SourceRef     string `protobuf:"bytes,18,opt,name=source_ref,json=sourceRef,proto3" json:"source_ref,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *AgentInfo) Reset() {
@@ -926,6 +949,34 @@ func (x *AgentInfo) GetBuildProviderId() string {
 func (x *AgentInfo) GetExecProviderId() string {
 	if x != nil {
 		return x.ExecProviderId
+	}
+	return ""
+}
+
+func (x *AgentInfo) GetRunning() bool {
+	if x != nil {
+		return x.Running
+	}
+	return false
+}
+
+func (x *AgentInfo) GetEmoji() string {
+	if x != nil {
+		return x.Emoji
+	}
+	return ""
+}
+
+func (x *AgentInfo) GetYourAccess() string {
+	if x != nil {
+		return x.YourAccess
+	}
+	return ""
+}
+
+func (x *AgentInfo) GetSourceRef() string {
+	if x != nil {
+		return x.SourceRef
 	}
 	return ""
 }
@@ -1109,20 +1160,41 @@ func (x *RunInfo) GetFinishedAt() *timestamppb.Timestamp {
 
 // AgentBuildInfo represents a single build or upgrade of an agent.
 type AgentBuildInfo struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	AgentId       string                 `protobuf:"bytes,2,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"`
-	Type          string                 `protobuf:"bytes,3,opt,name=type,proto3" json:"type,omitempty"`     // "build" or "upgrade"
-	Status        string                 `protobuf:"bytes,4,opt,name=status,proto3" json:"status,omitempty"` // "building", "complete", "failed"
-	Instructions  string                 `protobuf:"bytes,5,opt,name=instructions,proto3" json:"instructions,omitempty"`
-	SourceRef     string                 `protobuf:"bytes,6,opt,name=source_ref,json=sourceRef,proto3" json:"source_ref,omitempty"`
-	ImageRef      string                 `protobuf:"bytes,7,opt,name=image_ref,json=imageRef,proto3" json:"image_ref,omitempty"`
-	SolLog        string                 `protobuf:"bytes,8,opt,name=sol_log,json=solLog,proto3" json:"sol_log,omitempty"`          // Only populated in detail responses.
-	DockerLog     string                 `protobuf:"bytes,9,opt,name=docker_log,json=dockerLog,proto3" json:"docker_log,omitempty"` // Only populated in detail responses.
-	LogSeq        int64                  `protobuf:"varint,10,opt,name=log_seq,json=logSeq,proto3" json:"log_seq,omitempty"`        // Highest log sequence number persisted; used for WS dedup.
-	ErrorMessage  string                 `protobuf:"bytes,11,opt,name=error_message,json=errorMessage,proto3" json:"error_message,omitempty"`
-	StartedAt     *timestamppb.Timestamp `protobuf:"bytes,12,opt,name=started_at,json=startedAt,proto3" json:"started_at,omitempty"`
-	FinishedAt    *timestamppb.Timestamp `protobuf:"bytes,13,opt,name=finished_at,json=finishedAt,proto3" json:"finished_at,omitempty"`
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	Id           string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	AgentId      string                 `protobuf:"bytes,2,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"`
+	Type         string                 `protobuf:"bytes,3,opt,name=type,proto3" json:"type,omitempty"`     // "build", "upgrade", or "rollback"
+	Status       string                 `protobuf:"bytes,4,opt,name=status,proto3" json:"status,omitempty"` // "building", "complete", "failed"
+	Instructions string                 `protobuf:"bytes,5,opt,name=instructions,proto3" json:"instructions,omitempty"`
+	SourceRef    string                 `protobuf:"bytes,6,opt,name=source_ref,json=sourceRef,proto3" json:"source_ref,omitempty"`
+	ImageRef     string                 `protobuf:"bytes,7,opt,name=image_ref,json=imageRef,proto3" json:"image_ref,omitempty"`
+	SolLog       string                 `protobuf:"bytes,8,opt,name=sol_log,json=solLog,proto3" json:"sol_log,omitempty"`          // Only populated in detail responses.
+	DockerLog    string                 `protobuf:"bytes,9,opt,name=docker_log,json=dockerLog,proto3" json:"docker_log,omitempty"` // Only populated in detail responses.
+	LogSeq       int64                  `protobuf:"varint,10,opt,name=log_seq,json=logSeq,proto3" json:"log_seq,omitempty"`        // Highest log sequence number persisted; used for WS dedup.
+	ErrorMessage string                 `protobuf:"bytes,11,opt,name=error_message,json=errorMessage,proto3" json:"error_message,omitempty"`
+	StartedAt    *timestamppb.Timestamp `protobuf:"bytes,12,opt,name=started_at,json=startedAt,proto3" json:"started_at,omitempty"`
+	FinishedAt   *timestamppb.Timestamp `protobuf:"bytes,13,opt,name=finished_at,json=finishedAt,proto3" json:"finished_at,omitempty"`
+	// Codegen LLM telemetry, aggregated from the llm_usage ledger
+	// (parity with RunInfo.llm_*). Zero for image-only rebuilds that ran
+	// no codegen.
+	LlmCalls        int32   `protobuf:"varint,14,opt,name=llm_calls,json=llmCalls,proto3" json:"llm_calls,omitempty"`
+	LlmTokensIn     int32   `protobuf:"varint,15,opt,name=llm_tokens_in,json=llmTokensIn,proto3" json:"llm_tokens_in,omitempty"`
+	LlmTokensOut    int32   `protobuf:"varint,16,opt,name=llm_tokens_out,json=llmTokensOut,proto3" json:"llm_tokens_out,omitempty"`
+	LlmCostEstimate float64 `protobuf:"fixed64,17,opt,name=llm_cost_estimate,json=llmCostEstimate,proto3" json:"llm_cost_estimate,omitempty"`
+	// rollback_target_id is set only on type='rollback' rows — points at
+	// the build we rolled back to so the UI can render "Rolled back to {X}".
+	// Empty for build/upgrade rows.
+	RollbackTargetId string `protobuf:"bytes,18,opt,name=rollback_target_id,json=rollbackTargetId,proto3" json:"rollback_target_id,omitempty"`
+	// rollback_target_source_ref is a denormalized convenience for the
+	// builds list: the source_ref of the target build, when one is set.
+	// Lets the row render the short commit hash without needing a second
+	// fetch.
+	RollbackTargetSourceRef string `protobuf:"bytes,19,opt,name=rollback_target_source_ref,json=rollbackTargetSourceRef,proto3" json:"rollback_target_source_ref,omitempty"`
+	// sdk_version is the agentsdk version embedded at the moment this
+	// build/upgrade/rollback completed. Empty for in-progress and failed
+	// rows; rollback uses it to decide whether the target's code needs
+	// an SDK migration pass.
+	SdkVersion    string `protobuf:"bytes,20,opt,name=sdk_version,json=sdkVersion,proto3" json:"sdk_version,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1248,6 +1320,55 @@ func (x *AgentBuildInfo) GetFinishedAt() *timestamppb.Timestamp {
 	return nil
 }
 
+func (x *AgentBuildInfo) GetLlmCalls() int32 {
+	if x != nil {
+		return x.LlmCalls
+	}
+	return 0
+}
+
+func (x *AgentBuildInfo) GetLlmTokensIn() int32 {
+	if x != nil {
+		return x.LlmTokensIn
+	}
+	return 0
+}
+
+func (x *AgentBuildInfo) GetLlmTokensOut() int32 {
+	if x != nil {
+		return x.LlmTokensOut
+	}
+	return 0
+}
+
+func (x *AgentBuildInfo) GetLlmCostEstimate() float64 {
+	if x != nil {
+		return x.LlmCostEstimate
+	}
+	return 0
+}
+
+func (x *AgentBuildInfo) GetRollbackTargetId() string {
+	if x != nil {
+		return x.RollbackTargetId
+	}
+	return ""
+}
+
+func (x *AgentBuildInfo) GetRollbackTargetSourceRef() string {
+	if x != nil {
+		return x.RollbackTargetSourceRef
+	}
+	return ""
+}
+
+func (x *AgentBuildInfo) GetSdkVersion() string {
+	if x != nil {
+		return x.SdkVersion
+	}
+	return ""
+}
+
 // ConversationInfo represents an agent conversation.
 type ConversationInfo struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -1345,16 +1466,14 @@ type AgentMessageInfo struct {
 	Source       string                 `protobuf:"bytes,4,opt,name=source,proto3" json:"source,omitempty"` // "user" (default), "system" (injected by Airlock), "bridge", "error"
 	Content      string                 `protobuf:"bytes,5,opt,name=content,proto3" json:"content,omitempty"`
 	Parts        string                 `protobuf:"bytes,6,opt,name=parts,proto3" json:"parts,omitempty"` // JSON-encoded goai Content for rich message display
-	TokensIn     int32                  `protobuf:"varint,7,opt,name=tokens_in,json=tokensIn,proto3" json:"tokens_in,omitempty"`
-	TokensOut    int32                  `protobuf:"varint,8,opt,name=tokens_out,json=tokensOut,proto3" json:"tokens_out,omitempty"`
-	CostEstimate float64                `protobuf:"fixed64,9,opt,name=cost_estimate,json=costEstimate,proto3" json:"cost_estimate,omitempty"`
-	CreatedAt    *timestamppb.Timestamp `protobuf:"bytes,10,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	CostEstimate float64                `protobuf:"fixed64,7,opt,name=cost_estimate,json=costEstimate,proto3" json:"cost_estimate,omitempty"`
+	CreatedAt    *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
 	// run_id groups assistant + tool rows produced by the same run so the UI
 	// can fold a multi-step run_js loop back into a single bubble — the live
 	// streaming path bundles them via finalizeMessage but the persisted shape
 	// is one row per LLM step. Empty for user/system rows that don't belong
 	// to a run.
-	RunId         string `protobuf:"bytes,11,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
+	RunId         string `protobuf:"bytes,9,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1429,20 +1548,6 @@ func (x *AgentMessageInfo) GetParts() string {
 		return x.Parts
 	}
 	return ""
-}
-
-func (x *AgentMessageInfo) GetTokensIn() int32 {
-	if x != nil {
-		return x.TokensIn
-	}
-	return 0
-}
-
-func (x *AgentMessageInfo) GetTokensOut() int32 {
-	if x != nil {
-		return x.TokensOut
-	}
-	return 0
 }
 
 func (x *AgentMessageInfo) GetCostEstimate() float64 {
@@ -1742,8 +1847,12 @@ type ConnectionInfo struct {
 	Authorized        bool                   `protobuf:"varint,8,opt,name=authorized,proto3" json:"authorized,omitempty"`                        // whether credentials exist and are valid
 	HasOauthApp       bool                   `protobuf:"varint,9,opt,name=has_oauth_app,json=hasOauthApp,proto3" json:"has_oauth_app,omitempty"` // whether client_id/secret configured (oauth2 only)
 	TokenExpiresAt    *timestamppb.Timestamp `protobuf:"bytes,10,opt,name=token_expires_at,json=tokenExpiresAt,proto3" json:"token_expires_at,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// Human-readable health warnings for an authorized-but-fragile
+	// connection (e.g. no refresh token, or an expired token). Empty when
+	// healthy; the UI shows a (!) indicator when non-empty.
+	Warnings      []string `protobuf:"bytes,11,rep,name=warnings,proto3" json:"warnings,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ConnectionInfo) Reset() {
@@ -1846,19 +1955,29 @@ func (x *ConnectionInfo) GetTokenExpiresAt() *timestamppb.Timestamp {
 	return nil
 }
 
+func (x *ConnectionInfo) GetWarnings() []string {
+	if x != nil {
+		return x.Warnings
+	}
+	return nil
+}
+
 // BridgeInfo represents a chat platform bot instance.
 type BridgeInfo struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	AgentId       string                 `protobuf:"bytes,2,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"` // empty = system bridge or orphaned, set = agent bridge
-	Owner         *UserSummary           `protobuf:"bytes,3,opt,name=owner,proto3" json:"owner,omitempty"`                    // unset for system bridges (no creator)
-	Type          string                 `protobuf:"bytes,4,opt,name=type,proto3" json:"type,omitempty"`                      // "telegram", "discord"
-	Name          string                 `protobuf:"bytes,5,opt,name=name,proto3" json:"name,omitempty"`
-	BotUsername   string                 `protobuf:"bytes,6,opt,name=bot_username,json=botUsername,proto3" json:"bot_username,omitempty"` // @handle from platform
-	Status        string                 `protobuf:"bytes,7,opt,name=status,proto3" json:"status,omitempty"`                              // "active", "error"
-	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
-	UpdatedAt     *timestamppb.Timestamp `protobuf:"bytes,9,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
-	Settings      *BridgeSettings        `protobuf:"bytes,10,opt,name=settings,proto3" json:"settings,omitempty"`
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	Id          string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	AgentId     string                 `protobuf:"bytes,2,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"` // empty when is_system is true
+	Owner       *UserSummary           `protobuf:"bytes,3,opt,name=owner,proto3" json:"owner,omitempty"`
+	Type        string                 `protobuf:"bytes,4,opt,name=type,proto3" json:"type,omitempty"` // "telegram", "discord"
+	Name        string                 `protobuf:"bytes,5,opt,name=name,proto3" json:"name,omitempty"`
+	BotUsername string                 `protobuf:"bytes,6,opt,name=bot_username,json=botUsername,proto3" json:"bot_username,omitempty"` // @handle from platform
+	Status      string                 `protobuf:"bytes,7,opt,name=status,proto3" json:"status,omitempty"`                              // "active", "error"
+	CreatedAt   *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	UpdatedAt   *timestamppb.Timestamp `protobuf:"bytes,9,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
+	Settings    *BridgeSettings        `protobuf:"bytes,10,opt,name=settings,proto3" json:"settings,omitempty"`
+	// True when inbound DMs route to the in-airlock sysagent instead of an
+	// agent. Disjoint with agent_id — exactly one is set.
+	IsSystem      bool `protobuf:"varint,11,opt,name=is_system,json=isSystem,proto3" json:"is_system,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1963,6 +2082,13 @@ func (x *BridgeInfo) GetSettings() *BridgeSettings {
 	return nil
 }
 
+func (x *BridgeInfo) GetIsSystem() bool {
+	if x != nil {
+		return x.IsSystem
+	}
+	return false
+}
+
 // BridgeSettings is the user-tunable subset of bridge config exposed in
 // the dashboard. Stored in bridges.settings JSONB on the backend.
 type BridgeSettings struct {
@@ -2050,14 +2176,20 @@ func (x *BridgeSettings) GetPublicPromptTimeoutSeconds() int32 {
 }
 
 // PlatformIdentityInfo represents a user's verified external identity.
+// The owner_* fields are populated only on the admin variant of the
+// identities list (caller holds TenantIdentityManageAll); regular users
+// see them empty since the list is already scoped to themselves.
 type PlatformIdentityInfo struct {
-	state          protoimpl.MessageState `protogen:"open.v1"`
-	Id             string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	Platform       string                 `protobuf:"bytes,2,opt,name=platform,proto3" json:"platform,omitempty"`                                     // "telegram"
-	PlatformUserId string                 `protobuf:"bytes,3,opt,name=platform_user_id,json=platformUserId,proto3" json:"platform_user_id,omitempty"` // Telegram user ID
-	CreatedAt      *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	Id               string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Platform         string                 `protobuf:"bytes,2,opt,name=platform,proto3" json:"platform,omitempty"`                                     // "telegram"
+	PlatformUserId   string                 `protobuf:"bytes,3,opt,name=platform_user_id,json=platformUserId,proto3" json:"platform_user_id,omitempty"` // Telegram user ID
+	CreatedAt        *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	OwnerUserId      string                 `protobuf:"bytes,5,opt,name=owner_user_id,json=ownerUserId,proto3" json:"owner_user_id,omitempty"`
+	OwnerEmail       string                 `protobuf:"bytes,6,opt,name=owner_email,json=ownerEmail,proto3" json:"owner_email,omitempty"`
+	OwnerDisplayName string                 `protobuf:"bytes,7,opt,name=owner_display_name,json=ownerDisplayName,proto3" json:"owner_display_name,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *PlatformIdentityInfo) Reset() {
@@ -2116,6 +2248,27 @@ func (x *PlatformIdentityInfo) GetCreatedAt() *timestamppb.Timestamp {
 		return x.CreatedAt
 	}
 	return nil
+}
+
+func (x *PlatformIdentityInfo) GetOwnerUserId() string {
+	if x != nil {
+		return x.OwnerUserId
+	}
+	return ""
+}
+
+func (x *PlatformIdentityInfo) GetOwnerEmail() string {
+	if x != nil {
+		return x.OwnerEmail
+	}
+	return ""
+}
+
+func (x *PlatformIdentityInfo) GetOwnerDisplayName() string {
+	if x != nil {
+		return x.OwnerDisplayName
+	}
+	return ""
 }
 
 // ToolInfo represents a registered tool on an agent.
@@ -2550,28 +2703,37 @@ func (x *TopicInfo) GetSubscribed() bool {
 // for a capability and no agent-specific override is set. Each slot pairs
 // a model name with a provider row UUID (multi-key support); empty + empty
 // means "no default configured for this capability".
+// public_url / agent_domain are deliberately absent: they are env-only
+// (PUBLIC_URL / AGENT_DOMAIN), shared with the bundled Caddy via .env, and
+// never DB/UI-editable.
 type SystemSettingsInfo struct {
 	state                      protoimpl.MessageState `protogen:"open.v1"`
-	PublicUrl                  string                 `protobuf:"bytes,1,opt,name=public_url,json=publicUrl,proto3" json:"public_url,omitempty"`
-	AgentDomain                string                 `protobuf:"bytes,2,opt,name=agent_domain,json=agentDomain,proto3" json:"agent_domain,omitempty"`
-	DefaultBuildModel          string                 `protobuf:"bytes,3,opt,name=default_build_model,json=defaultBuildModel,proto3" json:"default_build_model,omitempty"`
-	DefaultExecModel           string                 `protobuf:"bytes,4,opt,name=default_exec_model,json=defaultExecModel,proto3" json:"default_exec_model,omitempty"`
-	DefaultSttModel            string                 `protobuf:"bytes,5,opt,name=default_stt_model,json=defaultSttModel,proto3" json:"default_stt_model,omitempty"`
-	DefaultVisionModel         string                 `protobuf:"bytes,6,opt,name=default_vision_model,json=defaultVisionModel,proto3" json:"default_vision_model,omitempty"`
-	DefaultTtsModel            string                 `protobuf:"bytes,7,opt,name=default_tts_model,json=defaultTtsModel,proto3" json:"default_tts_model,omitempty"`
-	DefaultImageGenModel       string                 `protobuf:"bytes,8,opt,name=default_image_gen_model,json=defaultImageGenModel,proto3" json:"default_image_gen_model,omitempty"`
-	DefaultSearchModel         string                 `protobuf:"bytes,9,opt,name=default_search_model,json=defaultSearchModel,proto3" json:"default_search_model,omitempty"`
-	DefaultEmbeddingModel      string                 `protobuf:"bytes,10,opt,name=default_embedding_model,json=defaultEmbeddingModel,proto3" json:"default_embedding_model,omitempty"`
-	DefaultBuildProviderId     string                 `protobuf:"bytes,11,opt,name=default_build_provider_id,json=defaultBuildProviderId,proto3" json:"default_build_provider_id,omitempty"`
-	DefaultExecProviderId      string                 `protobuf:"bytes,12,opt,name=default_exec_provider_id,json=defaultExecProviderId,proto3" json:"default_exec_provider_id,omitempty"`
-	DefaultSttProviderId       string                 `protobuf:"bytes,13,opt,name=default_stt_provider_id,json=defaultSttProviderId,proto3" json:"default_stt_provider_id,omitempty"`
-	DefaultVisionProviderId    string                 `protobuf:"bytes,14,opt,name=default_vision_provider_id,json=defaultVisionProviderId,proto3" json:"default_vision_provider_id,omitempty"`
-	DefaultTtsProviderId       string                 `protobuf:"bytes,15,opt,name=default_tts_provider_id,json=defaultTtsProviderId,proto3" json:"default_tts_provider_id,omitempty"`
-	DefaultImageGenProviderId  string                 `protobuf:"bytes,16,opt,name=default_image_gen_provider_id,json=defaultImageGenProviderId,proto3" json:"default_image_gen_provider_id,omitempty"`
-	DefaultSearchProviderId    string                 `protobuf:"bytes,17,opt,name=default_search_provider_id,json=defaultSearchProviderId,proto3" json:"default_search_provider_id,omitempty"`
-	DefaultEmbeddingProviderId string                 `protobuf:"bytes,18,opt,name=default_embedding_provider_id,json=defaultEmbeddingProviderId,proto3" json:"default_embedding_provider_id,omitempty"`
-	unknownFields              protoimpl.UnknownFields
-	sizeCache                  protoimpl.SizeCache
+	DefaultBuildModel          string                 `protobuf:"bytes,1,opt,name=default_build_model,json=defaultBuildModel,proto3" json:"default_build_model,omitempty"`
+	DefaultExecModel           string                 `protobuf:"bytes,2,opt,name=default_exec_model,json=defaultExecModel,proto3" json:"default_exec_model,omitempty"`
+	DefaultSttModel            string                 `protobuf:"bytes,3,opt,name=default_stt_model,json=defaultSttModel,proto3" json:"default_stt_model,omitempty"`
+	DefaultVisionModel         string                 `protobuf:"bytes,4,opt,name=default_vision_model,json=defaultVisionModel,proto3" json:"default_vision_model,omitempty"`
+	DefaultTtsModel            string                 `protobuf:"bytes,5,opt,name=default_tts_model,json=defaultTtsModel,proto3" json:"default_tts_model,omitempty"`
+	DefaultImageGenModel       string                 `protobuf:"bytes,6,opt,name=default_image_gen_model,json=defaultImageGenModel,proto3" json:"default_image_gen_model,omitempty"`
+	DefaultSearchModel         string                 `protobuf:"bytes,7,opt,name=default_search_model,json=defaultSearchModel,proto3" json:"default_search_model,omitempty"`
+	DefaultEmbeddingModel      string                 `protobuf:"bytes,8,opt,name=default_embedding_model,json=defaultEmbeddingModel,proto3" json:"default_embedding_model,omitempty"`
+	DefaultBuildProviderId     string                 `protobuf:"bytes,9,opt,name=default_build_provider_id,json=defaultBuildProviderId,proto3" json:"default_build_provider_id,omitempty"`
+	DefaultExecProviderId      string                 `protobuf:"bytes,10,opt,name=default_exec_provider_id,json=defaultExecProviderId,proto3" json:"default_exec_provider_id,omitempty"`
+	DefaultSttProviderId       string                 `protobuf:"bytes,11,opt,name=default_stt_provider_id,json=defaultSttProviderId,proto3" json:"default_stt_provider_id,omitempty"`
+	DefaultVisionProviderId    string                 `protobuf:"bytes,12,opt,name=default_vision_provider_id,json=defaultVisionProviderId,proto3" json:"default_vision_provider_id,omitempty"`
+	DefaultTtsProviderId       string                 `protobuf:"bytes,13,opt,name=default_tts_provider_id,json=defaultTtsProviderId,proto3" json:"default_tts_provider_id,omitempty"`
+	DefaultImageGenProviderId  string                 `protobuf:"bytes,14,opt,name=default_image_gen_provider_id,json=defaultImageGenProviderId,proto3" json:"default_image_gen_provider_id,omitempty"`
+	DefaultSearchProviderId    string                 `protobuf:"bytes,15,opt,name=default_search_provider_id,json=defaultSearchProviderId,proto3" json:"default_search_provider_id,omitempty"`
+	DefaultEmbeddingProviderId string                 `protobuf:"bytes,16,opt,name=default_embedding_provider_id,json=defaultEmbeddingProviderId,proto3" json:"default_embedding_provider_id,omitempty"`
+	// Telegram Managed Bots: status of the admin-configured manager
+	// bot (the one with can_manage_bots that the operator-side flow
+	// uses to create new Telegram bots on behalf of users). The raw
+	// token never leaves the server; the UI only sees the resolved
+	// username + last-validation error.
+	TelegramManagerBotConfigured bool   `protobuf:"varint,17,opt,name=telegram_manager_bot_configured,json=telegramManagerBotConfigured,proto3" json:"telegram_manager_bot_configured,omitempty"`
+	TelegramManagerBotUsername   string `protobuf:"bytes,18,opt,name=telegram_manager_bot_username,json=telegramManagerBotUsername,proto3" json:"telegram_manager_bot_username,omitempty"`
+	TelegramManagerBotError      string `protobuf:"bytes,19,opt,name=telegram_manager_bot_error,json=telegramManagerBotError,proto3" json:"telegram_manager_bot_error,omitempty"`
+	unknownFields                protoimpl.UnknownFields
+	sizeCache                    protoimpl.SizeCache
 }
 
 func (x *SystemSettingsInfo) Reset() {
@@ -2602,20 +2764,6 @@ func (x *SystemSettingsInfo) ProtoReflect() protoreflect.Message {
 // Deprecated: Use SystemSettingsInfo.ProtoReflect.Descriptor instead.
 func (*SystemSettingsInfo) Descriptor() ([]byte, []int) {
 	return file_airlock_v1_types_proto_rawDescGZIP(), []int{25}
-}
-
-func (x *SystemSettingsInfo) GetPublicUrl() string {
-	if x != nil {
-		return x.PublicUrl
-	}
-	return ""
-}
-
-func (x *SystemSettingsInfo) GetAgentDomain() string {
-	if x != nil {
-		return x.AgentDomain
-	}
-	return ""
 }
 
 func (x *SystemSettingsInfo) GetDefaultBuildModel() string {
@@ -2730,6 +2878,1295 @@ func (x *SystemSettingsInfo) GetDefaultEmbeddingProviderId() string {
 	return ""
 }
 
+func (x *SystemSettingsInfo) GetTelegramManagerBotConfigured() bool {
+	if x != nil {
+		return x.TelegramManagerBotConfigured
+	}
+	return false
+}
+
+func (x *SystemSettingsInfo) GetTelegramManagerBotUsername() string {
+	if x != nil {
+		return x.TelegramManagerBotUsername
+	}
+	return ""
+}
+
+func (x *SystemSettingsInfo) GetTelegramManagerBotError() string {
+	if x != nil {
+		return x.TelegramManagerBotError
+	}
+	return ""
+}
+
+// ManagedBotSessionRequest creates a session row that correlates an
+// airlock "Create new Telegram bot" click to the Bot API 9.6
+// ManagedBotCreated callback. Exactly one of agent_id / is_system
+// must be set.
+type CreateManagedBotSessionRequest struct {
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	AgentId  string                 `protobuf:"bytes,1,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"`
+	IsSystem bool                   `protobuf:"varint,2,opt,name=is_system,json=isSystem,proto3" json:"is_system,omitempty"`
+	// Display name passed to Telegram on the deeplink (?name=…); the
+	// user can change it during creation. Empty falls back to a default.
+	SuggestedName string `protobuf:"bytes,3,opt,name=suggested_name,json=suggestedName,proto3" json:"suggested_name,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CreateManagedBotSessionRequest) Reset() {
+	*x = CreateManagedBotSessionRequest{}
+	mi := &file_airlock_v1_types_proto_msgTypes[26]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CreateManagedBotSessionRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CreateManagedBotSessionRequest) ProtoMessage() {}
+
+func (x *CreateManagedBotSessionRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_airlock_v1_types_proto_msgTypes[26]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CreateManagedBotSessionRequest.ProtoReflect.Descriptor instead.
+func (*CreateManagedBotSessionRequest) Descriptor() ([]byte, []int) {
+	return file_airlock_v1_types_proto_rawDescGZIP(), []int{26}
+}
+
+func (x *CreateManagedBotSessionRequest) GetAgentId() string {
+	if x != nil {
+		return x.AgentId
+	}
+	return ""
+}
+
+func (x *CreateManagedBotSessionRequest) GetIsSystem() bool {
+	if x != nil {
+		return x.IsSystem
+	}
+	return false
+}
+
+func (x *CreateManagedBotSessionRequest) GetSuggestedName() string {
+	if x != nil {
+		return x.SuggestedName
+	}
+	return ""
+}
+
+type CreateManagedBotSessionResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Nonce         string                 `protobuf:"bytes,1,opt,name=nonce,proto3" json:"nonce,omitempty"`
+	DeepLink      string                 `protobuf:"bytes,2,opt,name=deep_link,json=deepLink,proto3" json:"deep_link,omitempty"`
+	ExpiresAt     *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CreateManagedBotSessionResponse) Reset() {
+	*x = CreateManagedBotSessionResponse{}
+	mi := &file_airlock_v1_types_proto_msgTypes[27]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CreateManagedBotSessionResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CreateManagedBotSessionResponse) ProtoMessage() {}
+
+func (x *CreateManagedBotSessionResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_airlock_v1_types_proto_msgTypes[27]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CreateManagedBotSessionResponse.ProtoReflect.Descriptor instead.
+func (*CreateManagedBotSessionResponse) Descriptor() ([]byte, []int) {
+	return file_airlock_v1_types_proto_rawDescGZIP(), []int{27}
+}
+
+func (x *CreateManagedBotSessionResponse) GetNonce() string {
+	if x != nil {
+		return x.Nonce
+	}
+	return ""
+}
+
+func (x *CreateManagedBotSessionResponse) GetDeepLink() string {
+	if x != nil {
+		return x.DeepLink
+	}
+	return ""
+}
+
+func (x *CreateManagedBotSessionResponse) GetExpiresAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.ExpiresAt
+	}
+	return nil
+}
+
+type UpdateTelegramManagerBotRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Empty string disables the manager bot (clears the stored token).
+	Token         string `protobuf:"bytes,1,opt,name=token,proto3" json:"token,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UpdateTelegramManagerBotRequest) Reset() {
+	*x = UpdateTelegramManagerBotRequest{}
+	mi := &file_airlock_v1_types_proto_msgTypes[28]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UpdateTelegramManagerBotRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UpdateTelegramManagerBotRequest) ProtoMessage() {}
+
+func (x *UpdateTelegramManagerBotRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_airlock_v1_types_proto_msgTypes[28]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UpdateTelegramManagerBotRequest.ProtoReflect.Descriptor instead.
+func (*UpdateTelegramManagerBotRequest) Descriptor() ([]byte, []int) {
+	return file_airlock_v1_types_proto_rawDescGZIP(), []int{28}
+}
+
+func (x *UpdateTelegramManagerBotRequest) GetToken() string {
+	if x != nil {
+		return x.Token
+	}
+	return ""
+}
+
+type UpdateTelegramManagerBotResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Configured    bool                   `protobuf:"varint,1,opt,name=configured,proto3" json:"configured,omitempty"`
+	Username      string                 `protobuf:"bytes,2,opt,name=username,proto3" json:"username,omitempty"`
+	Error         string                 `protobuf:"bytes,3,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UpdateTelegramManagerBotResponse) Reset() {
+	*x = UpdateTelegramManagerBotResponse{}
+	mi := &file_airlock_v1_types_proto_msgTypes[29]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UpdateTelegramManagerBotResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UpdateTelegramManagerBotResponse) ProtoMessage() {}
+
+func (x *UpdateTelegramManagerBotResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_airlock_v1_types_proto_msgTypes[29]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UpdateTelegramManagerBotResponse.ProtoReflect.Descriptor instead.
+func (*UpdateTelegramManagerBotResponse) Descriptor() ([]byte, []int) {
+	return file_airlock_v1_types_proto_rawDescGZIP(), []int{29}
+}
+
+func (x *UpdateTelegramManagerBotResponse) GetConfigured() bool {
+	if x != nil {
+		return x.Configured
+	}
+	return false
+}
+
+func (x *UpdateTelegramManagerBotResponse) GetUsername() string {
+	if x != nil {
+		return x.Username
+	}
+	return ""
+}
+
+func (x *UpdateTelegramManagerBotResponse) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
+// GitCredential is a per-user credential for accessing external git
+// remotes (GitHub/GitLab/Bitbucket/self-hosted). The token itself is
+// never returned from the API after creation — only metadata.
+type GitCredential struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	Id              string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	UserId          string                 `protobuf:"bytes,2,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	Type            string                 `protobuf:"bytes,3,opt,name=type,proto3" json:"type,omitempty"` // "pat" | (v2) "github_app"
+	Name            string                 `protobuf:"bytes,4,opt,name=name,proto3" json:"name,omitempty"`
+	GithubInstallId string                 `protobuf:"bytes,5,opt,name=github_install_id,json=githubInstallId,proto3" json:"github_install_id,omitempty"` // empty for type="pat"
+	CreatedAt       *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	LastUsedAt      *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=last_used_at,json=lastUsedAt,proto3" json:"last_used_at,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *GitCredential) Reset() {
+	*x = GitCredential{}
+	mi := &file_airlock_v1_types_proto_msgTypes[30]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GitCredential) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GitCredential) ProtoMessage() {}
+
+func (x *GitCredential) ProtoReflect() protoreflect.Message {
+	mi := &file_airlock_v1_types_proto_msgTypes[30]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GitCredential.ProtoReflect.Descriptor instead.
+func (*GitCredential) Descriptor() ([]byte, []int) {
+	return file_airlock_v1_types_proto_rawDescGZIP(), []int{30}
+}
+
+func (x *GitCredential) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *GitCredential) GetUserId() string {
+	if x != nil {
+		return x.UserId
+	}
+	return ""
+}
+
+func (x *GitCredential) GetType() string {
+	if x != nil {
+		return x.Type
+	}
+	return ""
+}
+
+func (x *GitCredential) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *GitCredential) GetGithubInstallId() string {
+	if x != nil {
+		return x.GithubInstallId
+	}
+	return ""
+}
+
+func (x *GitCredential) GetCreatedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.CreatedAt
+	}
+	return nil
+}
+
+func (x *GitCredential) GetLastUsedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.LastUsedAt
+	}
+	return nil
+}
+
+// AgentGitConfig describes an agent's external git remote connection.
+// All string fields are empty when the agent is in internal-only mode.
+type AgentGitConfig struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	AgentId           string                 `protobuf:"bytes,1,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"`
+	GitRemoteUrl      string                 `protobuf:"bytes,2,opt,name=git_remote_url,json=gitRemoteUrl,proto3" json:"git_remote_url,omitempty"`
+	GitCredentialId   string                 `protobuf:"bytes,3,opt,name=git_credential_id,json=gitCredentialId,proto3" json:"git_credential_id,omitempty"`
+	GitCredentialName string                 `protobuf:"bytes,4,opt,name=git_credential_name,json=gitCredentialName,proto3" json:"git_credential_name,omitempty"` // resolved from git_credentials.name for UI
+	DefaultBranch     string                 `protobuf:"bytes,5,opt,name=default_branch,json=defaultBranch,proto3" json:"default_branch,omitempty"`
+	WebhookUrl        string                 `protobuf:"bytes,6,opt,name=webhook_url,json=webhookUrl,proto3" json:"webhook_url,omitempty"`          // fully-qualified URL the user pastes into their git provider
+	WebhookSecret     string                 `protobuf:"bytes,7,opt,name=webhook_secret,json=webhookSecret,proto3" json:"webhook_secret,omitempty"` // shown so the user can paste it into their provider settings
+	LastSyncedRef     string                 `protobuf:"bytes,8,opt,name=last_synced_ref,json=lastSyncedRef,proto3" json:"last_synced_ref,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *AgentGitConfig) Reset() {
+	*x = AgentGitConfig{}
+	mi := &file_airlock_v1_types_proto_msgTypes[31]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AgentGitConfig) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AgentGitConfig) ProtoMessage() {}
+
+func (x *AgentGitConfig) ProtoReflect() protoreflect.Message {
+	mi := &file_airlock_v1_types_proto_msgTypes[31]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AgentGitConfig.ProtoReflect.Descriptor instead.
+func (*AgentGitConfig) Descriptor() ([]byte, []int) {
+	return file_airlock_v1_types_proto_rawDescGZIP(), []int{31}
+}
+
+func (x *AgentGitConfig) GetAgentId() string {
+	if x != nil {
+		return x.AgentId
+	}
+	return ""
+}
+
+func (x *AgentGitConfig) GetGitRemoteUrl() string {
+	if x != nil {
+		return x.GitRemoteUrl
+	}
+	return ""
+}
+
+func (x *AgentGitConfig) GetGitCredentialId() string {
+	if x != nil {
+		return x.GitCredentialId
+	}
+	return ""
+}
+
+func (x *AgentGitConfig) GetGitCredentialName() string {
+	if x != nil {
+		return x.GitCredentialName
+	}
+	return ""
+}
+
+func (x *AgentGitConfig) GetDefaultBranch() string {
+	if x != nil {
+		return x.DefaultBranch
+	}
+	return ""
+}
+
+func (x *AgentGitConfig) GetWebhookUrl() string {
+	if x != nil {
+		return x.WebhookUrl
+	}
+	return ""
+}
+
+func (x *AgentGitConfig) GetWebhookSecret() string {
+	if x != nil {
+		return x.WebhookSecret
+	}
+	return ""
+}
+
+func (x *AgentGitConfig) GetLastSyncedRef() string {
+	if x != nil {
+		return x.LastSyncedRef
+	}
+	return ""
+}
+
+// MCPServerInfo is one row from ListMCPServers — agent-declared MCP
+// servers with their authorization status and live tool count.
+type MCPServerInfo struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	Id             string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Slug           string                 `protobuf:"bytes,2,opt,name=slug,proto3" json:"slug,omitempty"`
+	Name           string                 `protobuf:"bytes,3,opt,name=name,proto3" json:"name,omitempty"`
+	Url            string                 `protobuf:"bytes,4,opt,name=url,proto3" json:"url,omitempty"`
+	AuthMode       string                 `protobuf:"bytes,5,opt,name=auth_mode,json=authMode,proto3" json:"auth_mode,omitempty"`
+	Authorized     bool                   `protobuf:"varint,6,opt,name=authorized,proto3" json:"authorized,omitempty"`
+	HasOauthApp    bool                   `protobuf:"varint,7,opt,name=has_oauth_app,json=hasOauthApp,proto3" json:"has_oauth_app,omitempty"`
+	ToolCount      int32                  `protobuf:"varint,8,opt,name=tool_count,json=toolCount,proto3" json:"tool_count,omitempty"`
+	AuthUrl        string                 `protobuf:"bytes,9,opt,name=auth_url,json=authUrl,proto3" json:"auth_url,omitempty"` // airlock-hosted URL the operator visits to authorize; empty for non-interactive auth modes
+	TokenExpiresAt *timestamppb.Timestamp `protobuf:"bytes,10,opt,name=token_expires_at,json=tokenExpiresAt,proto3" json:"token_expires_at,omitempty"`
+	LastSyncedAt   *timestamppb.Timestamp `protobuf:"bytes,11,opt,name=last_synced_at,json=lastSyncedAt,proto3" json:"last_synced_at,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *MCPServerInfo) Reset() {
+	*x = MCPServerInfo{}
+	mi := &file_airlock_v1_types_proto_msgTypes[32]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MCPServerInfo) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MCPServerInfo) ProtoMessage() {}
+
+func (x *MCPServerInfo) ProtoReflect() protoreflect.Message {
+	mi := &file_airlock_v1_types_proto_msgTypes[32]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MCPServerInfo.ProtoReflect.Descriptor instead.
+func (*MCPServerInfo) Descriptor() ([]byte, []int) {
+	return file_airlock_v1_types_proto_rawDescGZIP(), []int{32}
+}
+
+func (x *MCPServerInfo) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *MCPServerInfo) GetSlug() string {
+	if x != nil {
+		return x.Slug
+	}
+	return ""
+}
+
+func (x *MCPServerInfo) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *MCPServerInfo) GetUrl() string {
+	if x != nil {
+		return x.Url
+	}
+	return ""
+}
+
+func (x *MCPServerInfo) GetAuthMode() string {
+	if x != nil {
+		return x.AuthMode
+	}
+	return ""
+}
+
+func (x *MCPServerInfo) GetAuthorized() bool {
+	if x != nil {
+		return x.Authorized
+	}
+	return false
+}
+
+func (x *MCPServerInfo) GetHasOauthApp() bool {
+	if x != nil {
+		return x.HasOauthApp
+	}
+	return false
+}
+
+func (x *MCPServerInfo) GetToolCount() int32 {
+	if x != nil {
+		return x.ToolCount
+	}
+	return 0
+}
+
+func (x *MCPServerInfo) GetAuthUrl() string {
+	if x != nil {
+		return x.AuthUrl
+	}
+	return ""
+}
+
+func (x *MCPServerInfo) GetTokenExpiresAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.TokenExpiresAt
+	}
+	return nil
+}
+
+func (x *MCPServerInfo) GetLastSyncedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.LastSyncedAt
+	}
+	return nil
+}
+
+// MCPStatusInfo is the lighter shape used by status-only endpoints
+// (set/revoke/oauth-app) — no URL / sync metadata, just whether
+// the MCP credential is currently configured.
+type MCPStatusInfo struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Slug          string                 `protobuf:"bytes,1,opt,name=slug,proto3" json:"slug,omitempty"`
+	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	AuthMode      string                 `protobuf:"bytes,3,opt,name=auth_mode,json=authMode,proto3" json:"auth_mode,omitempty"`
+	Authorized    bool                   `protobuf:"varint,4,opt,name=authorized,proto3" json:"authorized,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MCPStatusInfo) Reset() {
+	*x = MCPStatusInfo{}
+	mi := &file_airlock_v1_types_proto_msgTypes[33]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MCPStatusInfo) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MCPStatusInfo) ProtoMessage() {}
+
+func (x *MCPStatusInfo) ProtoReflect() protoreflect.Message {
+	mi := &file_airlock_v1_types_proto_msgTypes[33]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MCPStatusInfo.ProtoReflect.Descriptor instead.
+func (*MCPStatusInfo) Descriptor() ([]byte, []int) {
+	return file_airlock_v1_types_proto_rawDescGZIP(), []int{33}
+}
+
+func (x *MCPStatusInfo) GetSlug() string {
+	if x != nil {
+		return x.Slug
+	}
+	return ""
+}
+
+func (x *MCPStatusInfo) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *MCPStatusInfo) GetAuthMode() string {
+	if x != nil {
+		return x.AuthMode
+	}
+	return ""
+}
+
+func (x *MCPStatusInfo) GetAuthorized() bool {
+	if x != nil {
+		return x.Authorized
+	}
+	return false
+}
+
+// EnvVarInfo is one row from ListEnvVars. Value is populated only
+// when !is_secret AND configured; secret values are never returned
+// through any read endpoint.
+type EnvVarInfo struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Slug          string                 `protobuf:"bytes,1,opt,name=slug,proto3" json:"slug,omitempty"`
+	Description   string                 `protobuf:"bytes,2,opt,name=description,proto3" json:"description,omitempty"`
+	IsSecret      bool                   `protobuf:"varint,3,opt,name=is_secret,json=isSecret,proto3" json:"is_secret,omitempty"`
+	Configured    bool                   `protobuf:"varint,4,opt,name=configured,proto3" json:"configured,omitempty"`
+	DefaultValue  string                 `protobuf:"bytes,5,opt,name=default_value,json=defaultValue,proto3" json:"default_value,omitempty"`
+	Pattern       string                 `protobuf:"bytes,6,opt,name=pattern,proto3" json:"pattern,omitempty"`
+	Value         string                 `protobuf:"bytes,7,opt,name=value,proto3" json:"value,omitempty"`
+	UpdatedAt     *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *EnvVarInfo) Reset() {
+	*x = EnvVarInfo{}
+	mi := &file_airlock_v1_types_proto_msgTypes[34]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EnvVarInfo) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EnvVarInfo) ProtoMessage() {}
+
+func (x *EnvVarInfo) ProtoReflect() protoreflect.Message {
+	mi := &file_airlock_v1_types_proto_msgTypes[34]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EnvVarInfo.ProtoReflect.Descriptor instead.
+func (*EnvVarInfo) Descriptor() ([]byte, []int) {
+	return file_airlock_v1_types_proto_rawDescGZIP(), []int{34}
+}
+
+func (x *EnvVarInfo) GetSlug() string {
+	if x != nil {
+		return x.Slug
+	}
+	return ""
+}
+
+func (x *EnvVarInfo) GetDescription() string {
+	if x != nil {
+		return x.Description
+	}
+	return ""
+}
+
+func (x *EnvVarInfo) GetIsSecret() bool {
+	if x != nil {
+		return x.IsSecret
+	}
+	return false
+}
+
+func (x *EnvVarInfo) GetConfigured() bool {
+	if x != nil {
+		return x.Configured
+	}
+	return false
+}
+
+func (x *EnvVarInfo) GetDefaultValue() string {
+	if x != nil {
+		return x.DefaultValue
+	}
+	return ""
+}
+
+func (x *EnvVarInfo) GetPattern() string {
+	if x != nil {
+		return x.Pattern
+	}
+	return ""
+}
+
+func (x *EnvVarInfo) GetValue() string {
+	if x != nil {
+		return x.Value
+	}
+	return ""
+}
+
+func (x *EnvVarInfo) GetUpdatedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.UpdatedAt
+	}
+	return nil
+}
+
+// SiblingInfo is one entry in an agent's A2A address book.
+type SiblingInfo struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	Id                string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Slug              string                 `protobuf:"bytes,2,opt,name=slug,proto3" json:"slug,omitempty"`
+	Name              string                 `protobuf:"bytes,3,opt,name=name,proto3" json:"name,omitempty"`
+	Description       string                 `protobuf:"bytes,4,opt,name=description,proto3" json:"description,omitempty"`
+	AllowNonMemberMcp bool                   `protobuf:"varint,5,opt,name=allow_non_member_mcp,json=allowNonMemberMcp,proto3" json:"allow_non_member_mcp,omitempty"`
+	AllowPublicMcp    bool                   `protobuf:"varint,6,opt,name=allow_public_mcp,json=allowPublicMcp,proto3" json:"allow_public_mcp,omitempty"`
+	CreatedAt         *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *SiblingInfo) Reset() {
+	*x = SiblingInfo{}
+	mi := &file_airlock_v1_types_proto_msgTypes[35]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SiblingInfo) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SiblingInfo) ProtoMessage() {}
+
+func (x *SiblingInfo) ProtoReflect() protoreflect.Message {
+	mi := &file_airlock_v1_types_proto_msgTypes[35]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SiblingInfo.ProtoReflect.Descriptor instead.
+func (*SiblingInfo) Descriptor() ([]byte, []int) {
+	return file_airlock_v1_types_proto_rawDescGZIP(), []int{35}
+}
+
+func (x *SiblingInfo) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *SiblingInfo) GetSlug() string {
+	if x != nil {
+		return x.Slug
+	}
+	return ""
+}
+
+func (x *SiblingInfo) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *SiblingInfo) GetDescription() string {
+	if x != nil {
+		return x.Description
+	}
+	return ""
+}
+
+func (x *SiblingInfo) GetAllowNonMemberMcp() bool {
+	if x != nil {
+		return x.AllowNonMemberMcp
+	}
+	return false
+}
+
+func (x *SiblingInfo) GetAllowPublicMcp() bool {
+	if x != nil {
+		return x.AllowPublicMcp
+	}
+	return false
+}
+
+func (x *SiblingInfo) GetCreatedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.CreatedAt
+	}
+	return nil
+}
+
+// AddableSiblingInfo is a candidate the editing user can add to an
+// agent's A2A address book. is_member tells the UI whether the
+// editing user is already a member of the target (vs picking it
+// purely because allow_non_member_mcp=true).
+type AddableSiblingInfo struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	Id                string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Slug              string                 `protobuf:"bytes,2,opt,name=slug,proto3" json:"slug,omitempty"`
+	Name              string                 `protobuf:"bytes,3,opt,name=name,proto3" json:"name,omitempty"`
+	Description       string                 `protobuf:"bytes,4,opt,name=description,proto3" json:"description,omitempty"`
+	AllowNonMemberMcp bool                   `protobuf:"varint,5,opt,name=allow_non_member_mcp,json=allowNonMemberMcp,proto3" json:"allow_non_member_mcp,omitempty"`
+	IsMember          bool                   `protobuf:"varint,6,opt,name=is_member,json=isMember,proto3" json:"is_member,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *AddableSiblingInfo) Reset() {
+	*x = AddableSiblingInfo{}
+	mi := &file_airlock_v1_types_proto_msgTypes[36]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AddableSiblingInfo) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AddableSiblingInfo) ProtoMessage() {}
+
+func (x *AddableSiblingInfo) ProtoReflect() protoreflect.Message {
+	mi := &file_airlock_v1_types_proto_msgTypes[36]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AddableSiblingInfo.ProtoReflect.Descriptor instead.
+func (*AddableSiblingInfo) Descriptor() ([]byte, []int) {
+	return file_airlock_v1_types_proto_rawDescGZIP(), []int{36}
+}
+
+func (x *AddableSiblingInfo) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *AddableSiblingInfo) GetSlug() string {
+	if x != nil {
+		return x.Slug
+	}
+	return ""
+}
+
+func (x *AddableSiblingInfo) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *AddableSiblingInfo) GetDescription() string {
+	if x != nil {
+		return x.Description
+	}
+	return ""
+}
+
+func (x *AddableSiblingInfo) GetAllowNonMemberMcp() bool {
+	if x != nil {
+		return x.AllowNonMemberMcp
+	}
+	return false
+}
+
+func (x *AddableSiblingInfo) GetIsMember() bool {
+	if x != nil {
+		return x.IsMember
+	}
+	return false
+}
+
+// A2ASettings is the per-agent MCP-exposure toggles configured from
+// the A2A settings page. Wire shape for get_agent_sharing /
+// set_agent_sharing.
+type A2ASettings struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	AllowNonMemberMcp bool                   `protobuf:"varint,1,opt,name=allow_non_member_mcp,json=allowNonMemberMcp,proto3" json:"allow_non_member_mcp,omitempty"`
+	AllowPublicMcp    bool                   `protobuf:"varint,2,opt,name=allow_public_mcp,json=allowPublicMcp,proto3" json:"allow_public_mcp,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *A2ASettings) Reset() {
+	*x = A2ASettings{}
+	mi := &file_airlock_v1_types_proto_msgTypes[37]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *A2ASettings) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*A2ASettings) ProtoMessage() {}
+
+func (x *A2ASettings) ProtoReflect() protoreflect.Message {
+	mi := &file_airlock_v1_types_proto_msgTypes[37]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use A2ASettings.ProtoReflect.Descriptor instead.
+func (*A2ASettings) Descriptor() ([]byte, []int) {
+	return file_airlock_v1_types_proto_rawDescGZIP(), []int{37}
+}
+
+func (x *A2ASettings) GetAllowNonMemberMcp() bool {
+	if x != nil {
+		return x.AllowNonMemberMcp
+	}
+	return false
+}
+
+func (x *A2ASettings) GetAllowPublicMcp() bool {
+	if x != nil {
+		return x.AllowPublicMcp
+	}
+	return false
+}
+
+// ExecEndpointInfo is one row from ListExecEndpoints — the
+// operator-visible projection that strips the secrets-store
+// private-key reference and surfaces only the host-key SHA256
+// fingerprint (not the full blob).
+type ExecEndpointInfo struct {
+	state              protoimpl.MessageState `protogen:"open.v1"`
+	Id                 string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Slug               string                 `protobuf:"bytes,2,opt,name=slug,proto3" json:"slug,omitempty"`
+	Description        string                 `protobuf:"bytes,3,opt,name=description,proto3" json:"description,omitempty"`
+	LlmHint            string                 `protobuf:"bytes,4,opt,name=llm_hint,json=llmHint,proto3" json:"llm_hint,omitempty"`
+	Access             string                 `protobuf:"bytes,5,opt,name=access,proto3" json:"access,omitempty"`
+	Transport          string                 `protobuf:"bytes,6,opt,name=transport,proto3" json:"transport,omitempty"`
+	Host               string                 `protobuf:"bytes,7,opt,name=host,proto3" json:"host,omitempty"`
+	Port               int32                  `protobuf:"varint,8,opt,name=port,proto3" json:"port,omitempty"`
+	SshUser            string                 `protobuf:"bytes,9,opt,name=ssh_user,json=sshUser,proto3" json:"ssh_user,omitempty"`
+	PublicKeyOpenssh   string                 `protobuf:"bytes,10,opt,name=public_key_openssh,json=publicKeyOpenssh,proto3" json:"public_key_openssh,omitempty"`
+	PublicKeyComment   string                 `protobuf:"bytes,11,opt,name=public_key_comment,json=publicKeyComment,proto3" json:"public_key_comment,omitempty"`
+	HostKeyFingerprint string                 `protobuf:"bytes,12,opt,name=host_key_fingerprint,json=hostKeyFingerprint,proto3" json:"host_key_fingerprint,omitempty"`
+	HostKeyPinnedAt    *timestamppb.Timestamp `protobuf:"bytes,13,opt,name=host_key_pinned_at,json=hostKeyPinnedAt,proto3" json:"host_key_pinned_at,omitempty"`
+	LastUsedAt         *timestamppb.Timestamp `protobuf:"bytes,14,opt,name=last_used_at,json=lastUsedAt,proto3" json:"last_used_at,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
+}
+
+func (x *ExecEndpointInfo) Reset() {
+	*x = ExecEndpointInfo{}
+	mi := &file_airlock_v1_types_proto_msgTypes[38]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ExecEndpointInfo) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ExecEndpointInfo) ProtoMessage() {}
+
+func (x *ExecEndpointInfo) ProtoReflect() protoreflect.Message {
+	mi := &file_airlock_v1_types_proto_msgTypes[38]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ExecEndpointInfo.ProtoReflect.Descriptor instead.
+func (*ExecEndpointInfo) Descriptor() ([]byte, []int) {
+	return file_airlock_v1_types_proto_rawDescGZIP(), []int{38}
+}
+
+func (x *ExecEndpointInfo) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *ExecEndpointInfo) GetSlug() string {
+	if x != nil {
+		return x.Slug
+	}
+	return ""
+}
+
+func (x *ExecEndpointInfo) GetDescription() string {
+	if x != nil {
+		return x.Description
+	}
+	return ""
+}
+
+func (x *ExecEndpointInfo) GetLlmHint() string {
+	if x != nil {
+		return x.LlmHint
+	}
+	return ""
+}
+
+func (x *ExecEndpointInfo) GetAccess() string {
+	if x != nil {
+		return x.Access
+	}
+	return ""
+}
+
+func (x *ExecEndpointInfo) GetTransport() string {
+	if x != nil {
+		return x.Transport
+	}
+	return ""
+}
+
+func (x *ExecEndpointInfo) GetHost() string {
+	if x != nil {
+		return x.Host
+	}
+	return ""
+}
+
+func (x *ExecEndpointInfo) GetPort() int32 {
+	if x != nil {
+		return x.Port
+	}
+	return 0
+}
+
+func (x *ExecEndpointInfo) GetSshUser() string {
+	if x != nil {
+		return x.SshUser
+	}
+	return ""
+}
+
+func (x *ExecEndpointInfo) GetPublicKeyOpenssh() string {
+	if x != nil {
+		return x.PublicKeyOpenssh
+	}
+	return ""
+}
+
+func (x *ExecEndpointInfo) GetPublicKeyComment() string {
+	if x != nil {
+		return x.PublicKeyComment
+	}
+	return ""
+}
+
+func (x *ExecEndpointInfo) GetHostKeyFingerprint() string {
+	if x != nil {
+		return x.HostKeyFingerprint
+	}
+	return ""
+}
+
+func (x *ExecEndpointInfo) GetHostKeyPinnedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.HostKeyPinnedAt
+	}
+	return nil
+}
+
+func (x *ExecEndpointInfo) GetLastUsedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.LastUsedAt
+	}
+	return nil
+}
+
+// ExecEndpointTestResult is the parsed outcome of running `whoami`
+// over the configured SSH transport. ok signals success at the
+// transport+auth+host-key layer; non-zero exit_code with ok=true
+// means the connection worked but the command failed.
+type ExecEndpointTestResult struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Ok            bool                   `protobuf:"varint,1,opt,name=ok,proto3" json:"ok,omitempty"`
+	ExitCode      int32                  `protobuf:"varint,2,opt,name=exit_code,json=exitCode,proto3" json:"exit_code,omitempty"`
+	DurationMs    int64                  `protobuf:"varint,3,opt,name=duration_ms,json=durationMs,proto3" json:"duration_ms,omitempty"`
+	Stdout        string                 `protobuf:"bytes,4,opt,name=stdout,proto3" json:"stdout,omitempty"`
+	Stderr        string                 `protobuf:"bytes,5,opt,name=stderr,proto3" json:"stderr,omitempty"`
+	Error         string                 `protobuf:"bytes,6,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ExecEndpointTestResult) Reset() {
+	*x = ExecEndpointTestResult{}
+	mi := &file_airlock_v1_types_proto_msgTypes[39]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ExecEndpointTestResult) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ExecEndpointTestResult) ProtoMessage() {}
+
+func (x *ExecEndpointTestResult) ProtoReflect() protoreflect.Message {
+	mi := &file_airlock_v1_types_proto_msgTypes[39]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ExecEndpointTestResult.ProtoReflect.Descriptor instead.
+func (*ExecEndpointTestResult) Descriptor() ([]byte, []int) {
+	return file_airlock_v1_types_proto_rawDescGZIP(), []int{39}
+}
+
+func (x *ExecEndpointTestResult) GetOk() bool {
+	if x != nil {
+		return x.Ok
+	}
+	return false
+}
+
+func (x *ExecEndpointTestResult) GetExitCode() int32 {
+	if x != nil {
+		return x.ExitCode
+	}
+	return 0
+}
+
+func (x *ExecEndpointTestResult) GetDurationMs() int64 {
+	if x != nil {
+		return x.DurationMs
+	}
+	return 0
+}
+
+func (x *ExecEndpointTestResult) GetStdout() string {
+	if x != nil {
+		return x.Stdout
+	}
+	return ""
+}
+
+func (x *ExecEndpointTestResult) GetStderr() string {
+	if x != nil {
+		return x.Stderr
+	}
+	return ""
+}
+
+func (x *ExecEndpointTestResult) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
+// SetupCountsInfo aggregates the setup-completeness counters
+// across an agent's connections, MCP servers, and env vars. Used
+// by the agent-card progress bar to flag agents whose operator
+// hasn't finished setup.
+type SetupCountsInfo struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Connections   int32                  `protobuf:"varint,1,opt,name=connections,proto3" json:"connections,omitempty"`
+	McpServers    int32                  `protobuf:"varint,2,opt,name=mcp_servers,json=mcpServers,proto3" json:"mcp_servers,omitempty"`
+	EnvVars       int32                  `protobuf:"varint,3,opt,name=env_vars,json=envVars,proto3" json:"env_vars,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SetupCountsInfo) Reset() {
+	*x = SetupCountsInfo{}
+	mi := &file_airlock_v1_types_proto_msgTypes[40]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetupCountsInfo) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetupCountsInfo) ProtoMessage() {}
+
+func (x *SetupCountsInfo) ProtoReflect() protoreflect.Message {
+	mi := &file_airlock_v1_types_proto_msgTypes[40]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetupCountsInfo.ProtoReflect.Descriptor instead.
+func (*SetupCountsInfo) Descriptor() ([]byte, []int) {
+	return file_airlock_v1_types_proto_rawDescGZIP(), []int{40}
+}
+
+func (x *SetupCountsInfo) GetConnections() int32 {
+	if x != nil {
+		return x.Connections
+	}
+	return 0
+}
+
+func (x *SetupCountsInfo) GetMcpServers() int32 {
+	if x != nil {
+		return x.McpServers
+	}
+	return 0
+}
+
+func (x *SetupCountsInfo) GetEnvVars() int32 {
+	if x != nil {
+		return x.EnvVars
+	}
+	return 0
+}
+
 var File_airlock_v1_types_proto protoreflect.FileDescriptor
 
 const file_airlock_v1_types_proto_rawDesc = "" +
@@ -2803,7 +4240,7 @@ const file_airlock_v1_types_proto_rawDesc = "" +
 	"costOutput\x12\x12\n" +
 	"\x04kind\x18\n" +
 	" \x01(\tR\x04kind\x12\x12\n" +
-	"\x04caps\x18\v \x03(\tR\x04caps\"\xf0\x03\n" +
+	"\x04caps\x18\v \x03(\tR\x04caps\"\xe0\x04\n" +
 	"\tAgentInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04slug\x18\x02 \x01(\tR\x04slug\x12\x12\n" +
@@ -2823,7 +4260,13 @@ const file_airlock_v1_types_proto_rawDesc = "" +
 	"\n" +
 	"updated_at\x18\f \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x12*\n" +
 	"\x11build_provider_id\x18\r \x01(\tR\x0fbuildProviderId\x12(\n" +
-	"\x10exec_provider_id\x18\x0e \x01(\tR\x0eexecProviderId\"\x8f\x05\n" +
+	"\x10exec_provider_id\x18\x0e \x01(\tR\x0eexecProviderId\x12\x18\n" +
+	"\arunning\x18\x0f \x01(\bR\arunning\x12\x14\n" +
+	"\x05emoji\x18\x10 \x01(\tR\x05emoji\x12\x1f\n" +
+	"\vyour_access\x18\x11 \x01(\tR\n" +
+	"yourAccess\x12\x1d\n" +
+	"\n" +
+	"source_ref\x18\x12 \x01(\tR\tsourceRef\"\x8f\x05\n" +
 	"\aRunInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x19\n" +
 	"\bagent_id\x18\x02 \x01(\tR\aagentId\x12\x1b\n" +
@@ -2849,7 +4292,7 @@ const file_airlock_v1_types_proto_rawDesc = "" +
 	"\n" +
 	"started_at\x18\x10 \x01(\v2\x1a.google.protobuf.TimestampR\tstartedAt\x12;\n" +
 	"\vfinished_at\x18\x11 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
-	"finishedAt\"\xb5\x03\n" +
+	"finishedAt\"\xd4\x05\n" +
 	"\x0eAgentBuildInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x19\n" +
 	"\bagent_id\x18\x02 \x01(\tR\aagentId\x12\x12\n" +
@@ -2868,7 +4311,15 @@ const file_airlock_v1_types_proto_rawDesc = "" +
 	"\n" +
 	"started_at\x18\f \x01(\v2\x1a.google.protobuf.TimestampR\tstartedAt\x12;\n" +
 	"\vfinished_at\x18\r \x01(\v2\x1a.google.protobuf.TimestampR\n" +
-	"finishedAt\"\xe1\x01\n" +
+	"finishedAt\x12\x1b\n" +
+	"\tllm_calls\x18\x0e \x01(\x05R\bllmCalls\x12\"\n" +
+	"\rllm_tokens_in\x18\x0f \x01(\x05R\vllmTokensIn\x12$\n" +
+	"\x0ellm_tokens_out\x18\x10 \x01(\x05R\fllmTokensOut\x12*\n" +
+	"\x11llm_cost_estimate\x18\x11 \x01(\x01R\x0fllmCostEstimate\x12,\n" +
+	"\x12rollback_target_id\x18\x12 \x01(\tR\x10rollbackTargetId\x12;\n" +
+	"\x1arollback_target_source_ref\x18\x13 \x01(\tR\x17rollbackTargetSourceRef\x12\x1f\n" +
+	"\vsdk_version\x18\x14 \x01(\tR\n" +
+	"sdkVersion\"\xe1\x01\n" +
 	"\x10ConversationInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x19\n" +
 	"\bagent_id\x18\x02 \x01(\tR\aagentId\x12\x14\n" +
@@ -2877,22 +4328,18 @@ const file_airlock_v1_types_proto_rawDesc = "" +
 	"\n" +
 	"created_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x129\n" +
 	"\n" +
-	"updated_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\"\xc3\x02\n" +
+	"updated_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\"\x87\x02\n" +
 	"\x10AgentMessageInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x10\n" +
 	"\x03seq\x18\x02 \x01(\x03R\x03seq\x12\x12\n" +
 	"\x04role\x18\x03 \x01(\tR\x04role\x12\x16\n" +
 	"\x06source\x18\x04 \x01(\tR\x06source\x12\x18\n" +
 	"\acontent\x18\x05 \x01(\tR\acontent\x12\x14\n" +
-	"\x05parts\x18\x06 \x01(\tR\x05parts\x12\x1b\n" +
-	"\ttokens_in\x18\a \x01(\x05R\btokensIn\x12\x1d\n" +
+	"\x05parts\x18\x06 \x01(\tR\x05parts\x12#\n" +
+	"\rcost_estimate\x18\a \x01(\x01R\fcostEstimate\x129\n" +
 	"\n" +
-	"tokens_out\x18\b \x01(\x05R\ttokensOut\x12#\n" +
-	"\rcost_estimate\x18\t \x01(\x01R\fcostEstimate\x129\n" +
-	"\n" +
-	"created_at\x18\n" +
-	" \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x12\x15\n" +
-	"\x06run_id\x18\v \x01(\tR\x05runId\"\xb9\x02\n" +
+	"created_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x12\x15\n" +
+	"\x06run_id\x18\t \x01(\tR\x05runId\"\xb9\x02\n" +
 	"\vWebhookInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04path\x18\x02 \x01(\tR\x04path\x12\x1f\n" +
@@ -2918,7 +4365,7 @@ const file_airlock_v1_types_proto_rawDesc = "" +
 	"\x04path\x18\x02 \x01(\tR\x04path\x12\x16\n" +
 	"\x06method\x18\x03 \x01(\tR\x06method\x12\x16\n" +
 	"\x06access\x18\x04 \x01(\tR\x06access\x12 \n" +
-	"\vdescription\x18\x05 \x01(\tR\vdescription\"\xdb\x02\n" +
+	"\vdescription\x18\x05 \x01(\tR\vdescription\"\xf7\x02\n" +
 	"\x0eConnectionInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04slug\x18\x02 \x01(\tR\x04slug\x12\x12\n" +
@@ -2932,7 +4379,8 @@ const file_airlock_v1_types_proto_rawDesc = "" +
 	"authorized\x12\"\n" +
 	"\rhas_oauth_app\x18\t \x01(\bR\vhasOauthApp\x12D\n" +
 	"\x10token_expires_at\x18\n" +
-	" \x01(\v2\x1a.google.protobuf.TimestampR\x0etokenExpiresAt\"\xf7\x02\n" +
+	" \x01(\v2\x1a.google.protobuf.TimestampR\x0etokenExpiresAt\x12\x1a\n" +
+	"\bwarnings\x18\v \x03(\tR\bwarnings\"\x94\x03\n" +
 	"\n" +
 	"BridgeInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x19\n" +
@@ -2947,18 +4395,23 @@ const file_airlock_v1_types_proto_rawDesc = "" +
 	"\n" +
 	"updated_at\x18\t \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x126\n" +
 	"\bsettings\x18\n" +
-	" \x01(\v2\x1a.airlock.v1.BridgeSettingsR\bsettings\"\xea\x01\n" +
+	" \x01(\v2\x1a.airlock.v1.BridgeSettingsR\bsettings\x12\x1b\n" +
+	"\tis_system\x18\v \x01(\bR\bisSystem\"\xea\x01\n" +
 	"\x0eBridgeSettings\x12(\n" +
 	"\x10allow_public_dms\x18\x01 \x01(\bR\x0eallowPublicDms\x12;\n" +
 	"\x1apublic_session_ttl_seconds\x18\x02 \x01(\x05R\x17publicSessionTtlSeconds\x12.\n" +
 	"\x13public_session_mode\x18\x03 \x01(\tR\x11publicSessionMode\x12A\n" +
-	"\x1dpublic_prompt_timeout_seconds\x18\x04 \x01(\x05R\x1apublicPromptTimeoutSeconds\"\xa7\x01\n" +
+	"\x1dpublic_prompt_timeout_seconds\x18\x04 \x01(\x05R\x1apublicPromptTimeoutSeconds\"\x9a\x02\n" +
 	"\x14PlatformIdentityInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1a\n" +
 	"\bplatform\x18\x02 \x01(\tR\bplatform\x12(\n" +
 	"\x10platform_user_id\x18\x03 \x01(\tR\x0eplatformUserId\x129\n" +
 	"\n" +
-	"created_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"\xb0\x01\n" +
+	"created_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x12\"\n" +
+	"\rowner_user_id\x18\x05 \x01(\tR\vownerUserId\x12\x1f\n" +
+	"\vowner_email\x18\x06 \x01(\tR\n" +
+	"ownerEmail\x12,\n" +
+	"\x12owner_display_name\x18\a \x01(\tR\x10ownerDisplayName\"\xb0\x01\n" +
 	"\bToolInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12 \n" +
@@ -2991,28 +4444,150 @@ const file_airlock_v1_types_proto_rawDesc = "" +
 	"\vdescription\x18\x03 \x01(\tR\vdescription\x12\x1e\n" +
 	"\n" +
 	"subscribed\x18\x04 \x01(\bR\n" +
-	"subscribed\"\xc0\a\n" +
-	"\x12SystemSettingsInfo\x12\x1d\n" +
+	"subscribed\"\xc5\b\n" +
+	"\x12SystemSettingsInfo\x12.\n" +
+	"\x13default_build_model\x18\x01 \x01(\tR\x11defaultBuildModel\x12,\n" +
+	"\x12default_exec_model\x18\x02 \x01(\tR\x10defaultExecModel\x12*\n" +
+	"\x11default_stt_model\x18\x03 \x01(\tR\x0fdefaultSttModel\x120\n" +
+	"\x14default_vision_model\x18\x04 \x01(\tR\x12defaultVisionModel\x12*\n" +
+	"\x11default_tts_model\x18\x05 \x01(\tR\x0fdefaultTtsModel\x125\n" +
+	"\x17default_image_gen_model\x18\x06 \x01(\tR\x14defaultImageGenModel\x120\n" +
+	"\x14default_search_model\x18\a \x01(\tR\x12defaultSearchModel\x126\n" +
+	"\x17default_embedding_model\x18\b \x01(\tR\x15defaultEmbeddingModel\x129\n" +
+	"\x19default_build_provider_id\x18\t \x01(\tR\x16defaultBuildProviderId\x127\n" +
+	"\x18default_exec_provider_id\x18\n" +
+	" \x01(\tR\x15defaultExecProviderId\x125\n" +
+	"\x17default_stt_provider_id\x18\v \x01(\tR\x14defaultSttProviderId\x12;\n" +
+	"\x1adefault_vision_provider_id\x18\f \x01(\tR\x17defaultVisionProviderId\x125\n" +
+	"\x17default_tts_provider_id\x18\r \x01(\tR\x14defaultTtsProviderId\x12@\n" +
+	"\x1ddefault_image_gen_provider_id\x18\x0e \x01(\tR\x19defaultImageGenProviderId\x12;\n" +
+	"\x1adefault_search_provider_id\x18\x0f \x01(\tR\x17defaultSearchProviderId\x12A\n" +
+	"\x1ddefault_embedding_provider_id\x18\x10 \x01(\tR\x1adefaultEmbeddingProviderId\x12E\n" +
+	"\x1ftelegram_manager_bot_configured\x18\x11 \x01(\bR\x1ctelegramManagerBotConfigured\x12A\n" +
+	"\x1dtelegram_manager_bot_username\x18\x12 \x01(\tR\x1atelegramManagerBotUsername\x12;\n" +
+	"\x1atelegram_manager_bot_error\x18\x13 \x01(\tR\x17telegramManagerBotError\"\x7f\n" +
+	"\x1eCreateManagedBotSessionRequest\x12\x19\n" +
+	"\bagent_id\x18\x01 \x01(\tR\aagentId\x12\x1b\n" +
+	"\tis_system\x18\x02 \x01(\bR\bisSystem\x12%\n" +
+	"\x0esuggested_name\x18\x03 \x01(\tR\rsuggestedName\"\x8f\x01\n" +
+	"\x1fCreateManagedBotSessionResponse\x12\x14\n" +
+	"\x05nonce\x18\x01 \x01(\tR\x05nonce\x12\x1b\n" +
+	"\tdeep_link\x18\x02 \x01(\tR\bdeepLink\x129\n" +
 	"\n" +
-	"public_url\x18\x01 \x01(\tR\tpublicUrl\x12!\n" +
-	"\fagent_domain\x18\x02 \x01(\tR\vagentDomain\x12.\n" +
-	"\x13default_build_model\x18\x03 \x01(\tR\x11defaultBuildModel\x12,\n" +
-	"\x12default_exec_model\x18\x04 \x01(\tR\x10defaultExecModel\x12*\n" +
-	"\x11default_stt_model\x18\x05 \x01(\tR\x0fdefaultSttModel\x120\n" +
-	"\x14default_vision_model\x18\x06 \x01(\tR\x12defaultVisionModel\x12*\n" +
-	"\x11default_tts_model\x18\a \x01(\tR\x0fdefaultTtsModel\x125\n" +
-	"\x17default_image_gen_model\x18\b \x01(\tR\x14defaultImageGenModel\x120\n" +
-	"\x14default_search_model\x18\t \x01(\tR\x12defaultSearchModel\x126\n" +
-	"\x17default_embedding_model\x18\n" +
-	" \x01(\tR\x15defaultEmbeddingModel\x129\n" +
-	"\x19default_build_provider_id\x18\v \x01(\tR\x16defaultBuildProviderId\x127\n" +
-	"\x18default_exec_provider_id\x18\f \x01(\tR\x15defaultExecProviderId\x125\n" +
-	"\x17default_stt_provider_id\x18\r \x01(\tR\x14defaultSttProviderId\x12;\n" +
-	"\x1adefault_vision_provider_id\x18\x0e \x01(\tR\x17defaultVisionProviderId\x125\n" +
-	"\x17default_tts_provider_id\x18\x0f \x01(\tR\x14defaultTtsProviderId\x12@\n" +
-	"\x1ddefault_image_gen_provider_id\x18\x10 \x01(\tR\x19defaultImageGenProviderId\x12;\n" +
-	"\x1adefault_search_provider_id\x18\x11 \x01(\tR\x17defaultSearchProviderId\x12A\n" +
-	"\x1ddefault_embedding_provider_id\x18\x12 \x01(\tR\x1adefaultEmbeddingProviderId*o\n" +
+	"expires_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\"7\n" +
+	"\x1fUpdateTelegramManagerBotRequest\x12\x14\n" +
+	"\x05token\x18\x01 \x01(\tR\x05token\"t\n" +
+	" UpdateTelegramManagerBotResponse\x12\x1e\n" +
+	"\n" +
+	"configured\x18\x01 \x01(\bR\n" +
+	"configured\x12\x1a\n" +
+	"\busername\x18\x02 \x01(\tR\busername\x12\x14\n" +
+	"\x05error\x18\x03 \x01(\tR\x05error\"\x85\x02\n" +
+	"\rGitCredential\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x17\n" +
+	"\auser_id\x18\x02 \x01(\tR\x06userId\x12\x12\n" +
+	"\x04type\x18\x03 \x01(\tR\x04type\x12\x12\n" +
+	"\x04name\x18\x04 \x01(\tR\x04name\x12*\n" +
+	"\x11github_install_id\x18\x05 \x01(\tR\x0fgithubInstallId\x129\n" +
+	"\n" +
+	"created_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x12<\n" +
+	"\flast_used_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\n" +
+	"lastUsedAt\"\xc4\x02\n" +
+	"\x0eAgentGitConfig\x12\x19\n" +
+	"\bagent_id\x18\x01 \x01(\tR\aagentId\x12$\n" +
+	"\x0egit_remote_url\x18\x02 \x01(\tR\fgitRemoteUrl\x12*\n" +
+	"\x11git_credential_id\x18\x03 \x01(\tR\x0fgitCredentialId\x12.\n" +
+	"\x13git_credential_name\x18\x04 \x01(\tR\x11gitCredentialName\x12%\n" +
+	"\x0edefault_branch\x18\x05 \x01(\tR\rdefaultBranch\x12\x1f\n" +
+	"\vwebhook_url\x18\x06 \x01(\tR\n" +
+	"webhookUrl\x12%\n" +
+	"\x0ewebhook_secret\x18\a \x01(\tR\rwebhookSecret\x12&\n" +
+	"\x0flast_synced_ref\x18\b \x01(\tR\rlastSyncedRef\"\xfc\x02\n" +
+	"\rMCPServerInfo\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
+	"\x04slug\x18\x02 \x01(\tR\x04slug\x12\x12\n" +
+	"\x04name\x18\x03 \x01(\tR\x04name\x12\x10\n" +
+	"\x03url\x18\x04 \x01(\tR\x03url\x12\x1b\n" +
+	"\tauth_mode\x18\x05 \x01(\tR\bauthMode\x12\x1e\n" +
+	"\n" +
+	"authorized\x18\x06 \x01(\bR\n" +
+	"authorized\x12\"\n" +
+	"\rhas_oauth_app\x18\a \x01(\bR\vhasOauthApp\x12\x1d\n" +
+	"\n" +
+	"tool_count\x18\b \x01(\x05R\ttoolCount\x12\x19\n" +
+	"\bauth_url\x18\t \x01(\tR\aauthUrl\x12D\n" +
+	"\x10token_expires_at\x18\n" +
+	" \x01(\v2\x1a.google.protobuf.TimestampR\x0etokenExpiresAt\x12@\n" +
+	"\x0elast_synced_at\x18\v \x01(\v2\x1a.google.protobuf.TimestampR\flastSyncedAt\"t\n" +
+	"\rMCPStatusInfo\x12\x12\n" +
+	"\x04slug\x18\x01 \x01(\tR\x04slug\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\x12\x1b\n" +
+	"\tauth_mode\x18\x03 \x01(\tR\bauthMode\x12\x1e\n" +
+	"\n" +
+	"authorized\x18\x04 \x01(\bR\n" +
+	"authorized\"\x8f\x02\n" +
+	"\n" +
+	"EnvVarInfo\x12\x12\n" +
+	"\x04slug\x18\x01 \x01(\tR\x04slug\x12 \n" +
+	"\vdescription\x18\x02 \x01(\tR\vdescription\x12\x1b\n" +
+	"\tis_secret\x18\x03 \x01(\bR\bisSecret\x12\x1e\n" +
+	"\n" +
+	"configured\x18\x04 \x01(\bR\n" +
+	"configured\x12#\n" +
+	"\rdefault_value\x18\x05 \x01(\tR\fdefaultValue\x12\x18\n" +
+	"\apattern\x18\x06 \x01(\tR\apattern\x12\x14\n" +
+	"\x05value\x18\a \x01(\tR\x05value\x129\n" +
+	"\n" +
+	"updated_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\"\xfd\x01\n" +
+	"\vSiblingInfo\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
+	"\x04slug\x18\x02 \x01(\tR\x04slug\x12\x12\n" +
+	"\x04name\x18\x03 \x01(\tR\x04name\x12 \n" +
+	"\vdescription\x18\x04 \x01(\tR\vdescription\x12/\n" +
+	"\x14allow_non_member_mcp\x18\x05 \x01(\bR\x11allowNonMemberMcp\x12(\n" +
+	"\x10allow_public_mcp\x18\x06 \x01(\bR\x0eallowPublicMcp\x129\n" +
+	"\n" +
+	"created_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"\xbc\x01\n" +
+	"\x12AddableSiblingInfo\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
+	"\x04slug\x18\x02 \x01(\tR\x04slug\x12\x12\n" +
+	"\x04name\x18\x03 \x01(\tR\x04name\x12 \n" +
+	"\vdescription\x18\x04 \x01(\tR\vdescription\x12/\n" +
+	"\x14allow_non_member_mcp\x18\x05 \x01(\bR\x11allowNonMemberMcp\x12\x1b\n" +
+	"\tis_member\x18\x06 \x01(\bR\bisMember\"h\n" +
+	"\vA2ASettings\x12/\n" +
+	"\x14allow_non_member_mcp\x18\x01 \x01(\bR\x11allowNonMemberMcp\x12(\n" +
+	"\x10allow_public_mcp\x18\x02 \x01(\bR\x0eallowPublicMcp\"\x81\x04\n" +
+	"\x10ExecEndpointInfo\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
+	"\x04slug\x18\x02 \x01(\tR\x04slug\x12 \n" +
+	"\vdescription\x18\x03 \x01(\tR\vdescription\x12\x19\n" +
+	"\bllm_hint\x18\x04 \x01(\tR\allmHint\x12\x16\n" +
+	"\x06access\x18\x05 \x01(\tR\x06access\x12\x1c\n" +
+	"\ttransport\x18\x06 \x01(\tR\ttransport\x12\x12\n" +
+	"\x04host\x18\a \x01(\tR\x04host\x12\x12\n" +
+	"\x04port\x18\b \x01(\x05R\x04port\x12\x19\n" +
+	"\bssh_user\x18\t \x01(\tR\asshUser\x12,\n" +
+	"\x12public_key_openssh\x18\n" +
+	" \x01(\tR\x10publicKeyOpenssh\x12,\n" +
+	"\x12public_key_comment\x18\v \x01(\tR\x10publicKeyComment\x120\n" +
+	"\x14host_key_fingerprint\x18\f \x01(\tR\x12hostKeyFingerprint\x12G\n" +
+	"\x12host_key_pinned_at\x18\r \x01(\v2\x1a.google.protobuf.TimestampR\x0fhostKeyPinnedAt\x12<\n" +
+	"\flast_used_at\x18\x0e \x01(\v2\x1a.google.protobuf.TimestampR\n" +
+	"lastUsedAt\"\xac\x01\n" +
+	"\x16ExecEndpointTestResult\x12\x0e\n" +
+	"\x02ok\x18\x01 \x01(\bR\x02ok\x12\x1b\n" +
+	"\texit_code\x18\x02 \x01(\x05R\bexitCode\x12\x1f\n" +
+	"\vduration_ms\x18\x03 \x01(\x03R\n" +
+	"durationMs\x12\x16\n" +
+	"\x06stdout\x18\x04 \x01(\tR\x06stdout\x12\x16\n" +
+	"\x06stderr\x18\x05 \x01(\tR\x06stderr\x12\x14\n" +
+	"\x05error\x18\x06 \x01(\tR\x05error\"o\n" +
+	"\x0fSetupCountsInfo\x12 \n" +
+	"\vconnections\x18\x01 \x01(\x05R\vconnections\x12\x1f\n" +
+	"\vmcp_servers\x18\x02 \x01(\x05R\n" +
+	"mcpServers\x12\x19\n" +
+	"\benv_vars\x18\x03 \x01(\x05R\aenvVars*o\n" +
 	"\n" +
 	"TenantRole\x12\x1b\n" +
 	"\x17TENANT_ROLE_UNSPECIFIED\x10\x00\x12\x15\n" +
@@ -3039,75 +4614,99 @@ func file_airlock_v1_types_proto_rawDescGZIP() []byte {
 }
 
 var file_airlock_v1_types_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_airlock_v1_types_proto_msgTypes = make([]protoimpl.MessageInfo, 26)
+var file_airlock_v1_types_proto_msgTypes = make([]protoimpl.MessageInfo, 41)
 var file_airlock_v1_types_proto_goTypes = []any{
-	(TenantRole)(0),                // 0: airlock.v1.TenantRole
-	(MessageRole)(0),               // 1: airlock.v1.MessageRole
-	(*Tenant)(nil),                 // 2: airlock.v1.Tenant
-	(*User)(nil),                   // 3: airlock.v1.User
-	(*UserSummary)(nil),            // 4: airlock.v1.UserSummary
-	(*Provider)(nil),               // 5: airlock.v1.Provider
-	(*ProviderInfo)(nil),           // 6: airlock.v1.ProviderInfo
-	(*ProviderCapabilityInfo)(nil), // 7: airlock.v1.ProviderCapabilityInfo
-	(*ModelInfo)(nil),              // 8: airlock.v1.ModelInfo
-	(*AgentInfo)(nil),              // 9: airlock.v1.AgentInfo
-	(*RunInfo)(nil),                // 10: airlock.v1.RunInfo
-	(*AgentBuildInfo)(nil),         // 11: airlock.v1.AgentBuildInfo
-	(*ConversationInfo)(nil),       // 12: airlock.v1.ConversationInfo
-	(*AgentMessageInfo)(nil),       // 13: airlock.v1.AgentMessageInfo
-	(*WebhookInfo)(nil),            // 14: airlock.v1.WebhookInfo
-	(*CronInfo)(nil),               // 15: airlock.v1.CronInfo
-	(*RouteInfo)(nil),              // 16: airlock.v1.RouteInfo
-	(*ConnectionInfo)(nil),         // 17: airlock.v1.ConnectionInfo
-	(*BridgeInfo)(nil),             // 18: airlock.v1.BridgeInfo
-	(*BridgeSettings)(nil),         // 19: airlock.v1.BridgeSettings
-	(*PlatformIdentityInfo)(nil),   // 20: airlock.v1.PlatformIdentityInfo
-	(*ToolInfo)(nil),               // 21: airlock.v1.ToolInfo
-	(*AgentBuildEvent)(nil),        // 22: airlock.v1.AgentBuildEvent
-	(*AgentBuildLogEvent)(nil),     // 23: airlock.v1.AgentBuildLogEvent
-	(*AgentSyncedEvent)(nil),       // 24: airlock.v1.AgentSyncedEvent
-	(*FileInfo)(nil),               // 25: airlock.v1.FileInfo
-	(*TopicInfo)(nil),              // 26: airlock.v1.TopicInfo
-	(*SystemSettingsInfo)(nil),     // 27: airlock.v1.SystemSettingsInfo
-	(*structpb.Struct)(nil),        // 28: google.protobuf.Struct
-	(*timestamppb.Timestamp)(nil),  // 29: google.protobuf.Timestamp
-	(*structpb.ListValue)(nil),     // 30: google.protobuf.ListValue
+	(TenantRole)(0),                          // 0: airlock.v1.TenantRole
+	(MessageRole)(0),                         // 1: airlock.v1.MessageRole
+	(*Tenant)(nil),                           // 2: airlock.v1.Tenant
+	(*User)(nil),                             // 3: airlock.v1.User
+	(*UserSummary)(nil),                      // 4: airlock.v1.UserSummary
+	(*Provider)(nil),                         // 5: airlock.v1.Provider
+	(*ProviderInfo)(nil),                     // 6: airlock.v1.ProviderInfo
+	(*ProviderCapabilityInfo)(nil),           // 7: airlock.v1.ProviderCapabilityInfo
+	(*ModelInfo)(nil),                        // 8: airlock.v1.ModelInfo
+	(*AgentInfo)(nil),                        // 9: airlock.v1.AgentInfo
+	(*RunInfo)(nil),                          // 10: airlock.v1.RunInfo
+	(*AgentBuildInfo)(nil),                   // 11: airlock.v1.AgentBuildInfo
+	(*ConversationInfo)(nil),                 // 12: airlock.v1.ConversationInfo
+	(*AgentMessageInfo)(nil),                 // 13: airlock.v1.AgentMessageInfo
+	(*WebhookInfo)(nil),                      // 14: airlock.v1.WebhookInfo
+	(*CronInfo)(nil),                         // 15: airlock.v1.CronInfo
+	(*RouteInfo)(nil),                        // 16: airlock.v1.RouteInfo
+	(*ConnectionInfo)(nil),                   // 17: airlock.v1.ConnectionInfo
+	(*BridgeInfo)(nil),                       // 18: airlock.v1.BridgeInfo
+	(*BridgeSettings)(nil),                   // 19: airlock.v1.BridgeSettings
+	(*PlatformIdentityInfo)(nil),             // 20: airlock.v1.PlatformIdentityInfo
+	(*ToolInfo)(nil),                         // 21: airlock.v1.ToolInfo
+	(*AgentBuildEvent)(nil),                  // 22: airlock.v1.AgentBuildEvent
+	(*AgentBuildLogEvent)(nil),               // 23: airlock.v1.AgentBuildLogEvent
+	(*AgentSyncedEvent)(nil),                 // 24: airlock.v1.AgentSyncedEvent
+	(*FileInfo)(nil),                         // 25: airlock.v1.FileInfo
+	(*TopicInfo)(nil),                        // 26: airlock.v1.TopicInfo
+	(*SystemSettingsInfo)(nil),               // 27: airlock.v1.SystemSettingsInfo
+	(*CreateManagedBotSessionRequest)(nil),   // 28: airlock.v1.CreateManagedBotSessionRequest
+	(*CreateManagedBotSessionResponse)(nil),  // 29: airlock.v1.CreateManagedBotSessionResponse
+	(*UpdateTelegramManagerBotRequest)(nil),  // 30: airlock.v1.UpdateTelegramManagerBotRequest
+	(*UpdateTelegramManagerBotResponse)(nil), // 31: airlock.v1.UpdateTelegramManagerBotResponse
+	(*GitCredential)(nil),                    // 32: airlock.v1.GitCredential
+	(*AgentGitConfig)(nil),                   // 33: airlock.v1.AgentGitConfig
+	(*MCPServerInfo)(nil),                    // 34: airlock.v1.MCPServerInfo
+	(*MCPStatusInfo)(nil),                    // 35: airlock.v1.MCPStatusInfo
+	(*EnvVarInfo)(nil),                       // 36: airlock.v1.EnvVarInfo
+	(*SiblingInfo)(nil),                      // 37: airlock.v1.SiblingInfo
+	(*AddableSiblingInfo)(nil),               // 38: airlock.v1.AddableSiblingInfo
+	(*A2ASettings)(nil),                      // 39: airlock.v1.A2ASettings
+	(*ExecEndpointInfo)(nil),                 // 40: airlock.v1.ExecEndpointInfo
+	(*ExecEndpointTestResult)(nil),           // 41: airlock.v1.ExecEndpointTestResult
+	(*SetupCountsInfo)(nil),                  // 42: airlock.v1.SetupCountsInfo
+	(*structpb.Struct)(nil),                  // 43: google.protobuf.Struct
+	(*timestamppb.Timestamp)(nil),            // 44: google.protobuf.Timestamp
+	(*structpb.ListValue)(nil),               // 45: google.protobuf.ListValue
 }
 var file_airlock_v1_types_proto_depIdxs = []int32{
-	28, // 0: airlock.v1.Tenant.settings:type_name -> google.protobuf.Struct
-	29, // 1: airlock.v1.Tenant.created_at:type_name -> google.protobuf.Timestamp
-	29, // 2: airlock.v1.Tenant.updated_at:type_name -> google.protobuf.Timestamp
+	43, // 0: airlock.v1.Tenant.settings:type_name -> google.protobuf.Struct
+	44, // 1: airlock.v1.Tenant.created_at:type_name -> google.protobuf.Timestamp
+	44, // 2: airlock.v1.Tenant.updated_at:type_name -> google.protobuf.Timestamp
 	0,  // 3: airlock.v1.User.tenant_role:type_name -> airlock.v1.TenantRole
-	29, // 4: airlock.v1.User.created_at:type_name -> google.protobuf.Timestamp
-	29, // 5: airlock.v1.User.updated_at:type_name -> google.protobuf.Timestamp
-	29, // 6: airlock.v1.Provider.created_at:type_name -> google.protobuf.Timestamp
-	29, // 7: airlock.v1.Provider.updated_at:type_name -> google.protobuf.Timestamp
-	29, // 8: airlock.v1.AgentInfo.created_at:type_name -> google.protobuf.Timestamp
-	29, // 9: airlock.v1.AgentInfo.updated_at:type_name -> google.protobuf.Timestamp
-	28, // 10: airlock.v1.RunInfo.input_payload:type_name -> google.protobuf.Struct
-	30, // 11: airlock.v1.RunInfo.actions:type_name -> google.protobuf.ListValue
-	29, // 12: airlock.v1.RunInfo.started_at:type_name -> google.protobuf.Timestamp
-	29, // 13: airlock.v1.RunInfo.finished_at:type_name -> google.protobuf.Timestamp
-	29, // 14: airlock.v1.AgentBuildInfo.started_at:type_name -> google.protobuf.Timestamp
-	29, // 15: airlock.v1.AgentBuildInfo.finished_at:type_name -> google.protobuf.Timestamp
-	29, // 16: airlock.v1.ConversationInfo.created_at:type_name -> google.protobuf.Timestamp
-	29, // 17: airlock.v1.ConversationInfo.updated_at:type_name -> google.protobuf.Timestamp
-	29, // 18: airlock.v1.AgentMessageInfo.created_at:type_name -> google.protobuf.Timestamp
-	29, // 19: airlock.v1.WebhookInfo.last_received_at:type_name -> google.protobuf.Timestamp
-	29, // 20: airlock.v1.WebhookInfo.created_at:type_name -> google.protobuf.Timestamp
-	29, // 21: airlock.v1.CronInfo.last_fired_at:type_name -> google.protobuf.Timestamp
-	29, // 22: airlock.v1.CronInfo.created_at:type_name -> google.protobuf.Timestamp
-	29, // 23: airlock.v1.ConnectionInfo.token_expires_at:type_name -> google.protobuf.Timestamp
+	44, // 4: airlock.v1.User.created_at:type_name -> google.protobuf.Timestamp
+	44, // 5: airlock.v1.User.updated_at:type_name -> google.protobuf.Timestamp
+	44, // 6: airlock.v1.Provider.created_at:type_name -> google.protobuf.Timestamp
+	44, // 7: airlock.v1.Provider.updated_at:type_name -> google.protobuf.Timestamp
+	44, // 8: airlock.v1.AgentInfo.created_at:type_name -> google.protobuf.Timestamp
+	44, // 9: airlock.v1.AgentInfo.updated_at:type_name -> google.protobuf.Timestamp
+	43, // 10: airlock.v1.RunInfo.input_payload:type_name -> google.protobuf.Struct
+	45, // 11: airlock.v1.RunInfo.actions:type_name -> google.protobuf.ListValue
+	44, // 12: airlock.v1.RunInfo.started_at:type_name -> google.protobuf.Timestamp
+	44, // 13: airlock.v1.RunInfo.finished_at:type_name -> google.protobuf.Timestamp
+	44, // 14: airlock.v1.AgentBuildInfo.started_at:type_name -> google.protobuf.Timestamp
+	44, // 15: airlock.v1.AgentBuildInfo.finished_at:type_name -> google.protobuf.Timestamp
+	44, // 16: airlock.v1.ConversationInfo.created_at:type_name -> google.protobuf.Timestamp
+	44, // 17: airlock.v1.ConversationInfo.updated_at:type_name -> google.protobuf.Timestamp
+	44, // 18: airlock.v1.AgentMessageInfo.created_at:type_name -> google.protobuf.Timestamp
+	44, // 19: airlock.v1.WebhookInfo.last_received_at:type_name -> google.protobuf.Timestamp
+	44, // 20: airlock.v1.WebhookInfo.created_at:type_name -> google.protobuf.Timestamp
+	44, // 21: airlock.v1.CronInfo.last_fired_at:type_name -> google.protobuf.Timestamp
+	44, // 22: airlock.v1.CronInfo.created_at:type_name -> google.protobuf.Timestamp
+	44, // 23: airlock.v1.ConnectionInfo.token_expires_at:type_name -> google.protobuf.Timestamp
 	4,  // 24: airlock.v1.BridgeInfo.owner:type_name -> airlock.v1.UserSummary
-	29, // 25: airlock.v1.BridgeInfo.created_at:type_name -> google.protobuf.Timestamp
-	29, // 26: airlock.v1.BridgeInfo.updated_at:type_name -> google.protobuf.Timestamp
+	44, // 25: airlock.v1.BridgeInfo.created_at:type_name -> google.protobuf.Timestamp
+	44, // 26: airlock.v1.BridgeInfo.updated_at:type_name -> google.protobuf.Timestamp
 	19, // 27: airlock.v1.BridgeInfo.settings:type_name -> airlock.v1.BridgeSettings
-	29, // 28: airlock.v1.PlatformIdentityInfo.created_at:type_name -> google.protobuf.Timestamp
-	29, // [29:29] is the sub-list for method output_type
-	29, // [29:29] is the sub-list for method input_type
-	29, // [29:29] is the sub-list for extension type_name
-	29, // [29:29] is the sub-list for extension extendee
-	0,  // [0:29] is the sub-list for field type_name
+	44, // 28: airlock.v1.PlatformIdentityInfo.created_at:type_name -> google.protobuf.Timestamp
+	44, // 29: airlock.v1.CreateManagedBotSessionResponse.expires_at:type_name -> google.protobuf.Timestamp
+	44, // 30: airlock.v1.GitCredential.created_at:type_name -> google.protobuf.Timestamp
+	44, // 31: airlock.v1.GitCredential.last_used_at:type_name -> google.protobuf.Timestamp
+	44, // 32: airlock.v1.MCPServerInfo.token_expires_at:type_name -> google.protobuf.Timestamp
+	44, // 33: airlock.v1.MCPServerInfo.last_synced_at:type_name -> google.protobuf.Timestamp
+	44, // 34: airlock.v1.EnvVarInfo.updated_at:type_name -> google.protobuf.Timestamp
+	44, // 35: airlock.v1.SiblingInfo.created_at:type_name -> google.protobuf.Timestamp
+	44, // 36: airlock.v1.ExecEndpointInfo.host_key_pinned_at:type_name -> google.protobuf.Timestamp
+	44, // 37: airlock.v1.ExecEndpointInfo.last_used_at:type_name -> google.protobuf.Timestamp
+	38, // [38:38] is the sub-list for method output_type
+	38, // [38:38] is the sub-list for method input_type
+	38, // [38:38] is the sub-list for extension type_name
+	38, // [38:38] is the sub-list for extension extendee
+	0,  // [0:38] is the sub-list for field type_name
 }
 
 func init() { file_airlock_v1_types_proto_init() }
@@ -3121,7 +4720,7 @@ func file_airlock_v1_types_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_airlock_v1_types_proto_rawDesc), len(file_airlock_v1_types_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   26,
+			NumMessages:   41,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

@@ -114,8 +114,8 @@ func TestPreprocessImage_LargeByteCountTriggersReencode(t *testing.T) {
 
 func TestTargetSize(t *testing.T) {
 	tests := []struct {
-		name       string
-		w, h, max  int
+		name         string
+		w, h, max    int
 		wantW, wantH int
 	}{
 		{"no-op (both within max)", 400, 300, 1600, 400, 300},

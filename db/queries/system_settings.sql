@@ -13,13 +13,33 @@ UPDATE system_settings
 SET activation_code = NULL, updated_at = now()
 WHERE id = true;
 
+-- name: UpdateLastSeenSDKVersion :exec
+-- Stamp the bundled agentsdk version after a successful mass rebuild
+-- (or on first boot when there's nothing to rebuild). Compared against
+-- agentsdk.Version on the next airlock startup to detect SDK drift.
+UPDATE system_settings
+SET last_seen_sdk_version = @last_seen_sdk_version, updated_at = now()
+WHERE id = true;
+
+-- name: UpdateTelegramManagerBotToken :one
+-- Replace the encrypted manager-bot token ref + last-error string. The
+-- settings handler validates the raw token via getMe before writing,
+-- and the manager-bot poller reloads on the new value.
+UPDATE system_settings
+SET telegram_manager_bot_token_ref = @token_ref,
+    telegram_manager_bot_error     = @error_text,
+    updated_at = now()
+WHERE id = true
+RETURNING telegram_manager_bot_token_ref, telegram_manager_bot_error;
+
+-- name: GetTelegramManagerBotStatus :one
+SELECT telegram_manager_bot_token_ref, telegram_manager_bot_error FROM system_settings WHERE id = true;
+
 -- name: UpdateSystemSettings :one
 -- Each system default is a pair: a providers row FK (nullable) and the
 -- bare model name. NULL/empty ⇄ no default configured for that slot.
 UPDATE system_settings
-SET public_url = @public_url,
-    agent_domain = @agent_domain,
-    default_build_provider_id     = @default_build_provider_id,
+SET default_build_provider_id     = @default_build_provider_id,
     default_build_model           = @default_build_model,
     default_exec_provider_id      = @default_exec_provider_id,
     default_exec_model            = @default_exec_model,

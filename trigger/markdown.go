@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"html"
 	"strings"
+	"unicode"
 
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
@@ -13,11 +14,12 @@ import (
 )
 
 // tgParser parses the CommonMark + GFM subset the LLM tends to emit.
-// Strikethrough and Linkify are the two GFM features worth handling;
-// tables and task lists are rare in chat output and would render badly
-// in Telegram anyway.
+// Strikethrough, Linkify and Table are the GFM features worth handling;
+// task lists are rare in chat output and render acceptably as plain
+// lists. Telegram has no table markup, so a GFM table is flattened to a
+// monospace <pre> block — see renderTelegramTable.
 var tgParser = goldmark.New(
-	goldmark.WithExtensions(extension.Strikethrough, extension.Linkify),
+	goldmark.WithExtensions(extension.Strikethrough, extension.Linkify, extension.Table),
 ).Parser()
 
 // markdownToTelegramHTML converts LLM markdown output into the HTML subset
@@ -75,6 +77,9 @@ func walkMD(b *strings.Builder, src []byte, n ast.Node, depth int) {
 
 	case *ast.List:
 		walkList(b, src, node, depth)
+
+	case *extast.Table:
+		renderTelegramTable(b, src, node)
 
 	case *ast.ThematicBreak:
 		b.WriteString("———\n\n")
@@ -223,4 +228,243 @@ func extractText(src []byte, n ast.Node) string {
 	}
 	collect(n)
 	return b.String()
+}
+
+// renderTelegramTable flattens a GFM table into a monospace <pre> block.
+// Telegram's HTML has no table markup, but <pre> preserves the column
+// alignment of a space-padded ASCII layout. Cell content is reduced to
+// plain text — inline formatting can't survive inside <pre>.
+func renderTelegramTable(b *strings.Builder, src []byte, table *extast.Table) {
+	var rows [][]string
+	for c := table.FirstChild(); c != nil; c = c.NextSibling() {
+		var cells []string
+		for cell := c.FirstChild(); cell != nil; cell = cell.NextSibling() {
+			cells = append(cells, strings.TrimSpace(extractText(src, cell)))
+		}
+		if len(cells) > 0 {
+			rows = append(rows, cells)
+		}
+	}
+	if len(rows) == 0 {
+		return
+	}
+
+	ncol := 0
+	for _, r := range rows {
+		if len(r) > ncol {
+			ncol = len(r)
+		}
+	}
+	width := make([]int, ncol)
+	for _, r := range rows {
+		for i, cell := range r {
+			if w := len([]rune(cell)); w > width[i] {
+				width[i] = w
+			}
+		}
+	}
+
+	b.WriteString("<pre>")
+	for ri, r := range rows {
+		var line strings.Builder
+		for i := 0; i < ncol; i++ {
+			cell := ""
+			if i < len(r) {
+				cell = r[i]
+			}
+			line.WriteString(cell)
+			if i < ncol-1 {
+				line.WriteString(strings.Repeat(" ", width[i]-len([]rune(cell))))
+				line.WriteString("  ")
+			}
+		}
+		b.WriteString(html.EscapeString(strings.TrimRight(line.String(), " ")))
+		b.WriteString("\n")
+		if ri == 0 { // underline the header row
+			var sep strings.Builder
+			for i := 0; i < ncol; i++ {
+				sep.WriteString(strings.Repeat("─", width[i]))
+				if i < ncol-1 {
+					sep.WriteString("  ")
+				}
+			}
+			b.WriteString(html.EscapeString(sep.String()))
+			b.WriteString("\n")
+		}
+	}
+	b.WriteString("</pre>\n\n")
+}
+
+// telegramTextLimit is the Bot API's hard cap on sendMessage text,
+// counted in UTF-16 code units.
+const telegramTextLimit = 4096
+
+// utf16Len counts s in UTF-16 code units — the unit Telegram measures
+// message length in (a non-BMP rune, e.g. most emoji, costs two).
+func utf16Len(s string) int {
+	n := 0
+	for _, r := range s {
+		if r > 0xFFFF {
+			n += 2
+		} else {
+			n++
+		}
+	}
+	return n
+}
+
+// closeTagFor returns the closing tag matching an opening Telegram-HTML
+// tag — e.g. `<a href="x">` → `</a>`, `<code class="...">` → `</code>`.
+func closeTagFor(openTag string) string {
+	name := strings.TrimPrefix(openTag, "<")
+	if i := strings.IndexAny(name, " >"); i >= 0 {
+		name = name[:i]
+	}
+	return "</" + name + ">"
+}
+
+// telegramAtoms splits Telegram-HTML into indivisible atoms — each whole
+// tag, each whitespace run, each word — so a chunk boundary never lands
+// inside a tag or mid-word. A word longer than max is rune-sliced, so no
+// atom can exceed the chunk budget on its own.
+func telegramAtoms(s string, max int) []string {
+	var atoms []string
+	add := func(a string) {
+		if !strings.HasPrefix(a, "<") {
+			for utf16Len(a) > max {
+				ar := []rune(a)
+				cut, w := len(ar), 0
+				for k, r := range ar {
+					if r > 0xFFFF {
+						w += 2
+					} else {
+						w++
+					}
+					if w > max {
+						cut = k
+						break
+					}
+				}
+				if cut == 0 {
+					cut = 1
+				}
+				atoms = append(atoms, string(ar[:cut]))
+				a = string(ar[cut:])
+			}
+		}
+		if a != "" {
+			atoms = append(atoms, a)
+		}
+	}
+	rs := []rune(s)
+	for i := 0; i < len(rs); {
+		switch {
+		case rs[i] == '<':
+			j := i + 1
+			for j < len(rs) && rs[j] != '>' {
+				j++
+			}
+			if j < len(rs) {
+				j++ // include '>'
+			}
+			add(string(rs[i:j]))
+			i = j
+		case unicode.IsSpace(rs[i]):
+			j := i
+			for j < len(rs) && unicode.IsSpace(rs[j]) {
+				j++
+			}
+			add(string(rs[i:j]))
+			i = j
+		default:
+			j := i
+			for j < len(rs) && rs[j] != '<' && !unicode.IsSpace(rs[j]) {
+				j++
+			}
+			add(string(rs[i:j]))
+			i = j
+		}
+	}
+	return atoms
+}
+
+// splitForTelegram breaks Telegram-HTML into chunks each within the Bot
+// API's per-message limit. It splits on word/whitespace boundaries; any
+// tag still open at a split is closed at the chunk's end and reopened at
+// the next chunk's start, so every chunk is independently valid
+// parse_mode=HTML. Returns nil for blank input.
+func splitForTelegram(s string) []string {
+	if strings.TrimSpace(s) == "" {
+		return nil
+	}
+	if utf16Len(s) <= telegramTextLimit {
+		return []string{s}
+	}
+	// Budget below the hard limit leaves room for the close/reopen tag
+	// pair a split inside formatted text adds to the two chunks.
+	const budget = 3900
+	atoms := telegramAtoms(s, budget)
+
+	var (
+		chunks  []string
+		open    []string // open-tag stack, outermost first
+		cur     strings.Builder
+		curLen  int
+		content bool // current chunk holds non-whitespace content
+	)
+	closeAllLen := func() int {
+		n := 0
+		for _, t := range open {
+			n += utf16Len(closeTagFor(t))
+		}
+		return n
+	}
+	flush := func() {
+		if !content {
+			return
+		}
+		var b strings.Builder
+		b.WriteString(cur.String())
+		for i := len(open) - 1; i >= 0; i-- {
+			b.WriteString(closeTagFor(open[i]))
+		}
+		chunks = append(chunks, b.String())
+		cur.Reset()
+		curLen, content = 0, false
+		for _, t := range open { // reopen still-open tags on the next chunk
+			cur.WriteString(t)
+			curLen += utf16Len(t)
+		}
+	}
+
+	for _, a := range atoms {
+		isTag := strings.HasPrefix(a, "<")
+		isWS := !isTag && strings.TrimSpace(a) == ""
+		// Whitespace at the start of a fresh chunk is dead weight.
+		if isWS && !content {
+			continue
+		}
+		if curLen+utf16Len(a)+closeAllLen() > budget {
+			flush()
+			if isWS {
+				continue
+			}
+		}
+		cur.WriteString(a)
+		curLen += utf16Len(a)
+		switch {
+		case !isTag:
+			if !isWS {
+				content = true
+			}
+		case strings.HasPrefix(a, "</"):
+			if len(open) > 0 {
+				open = open[:len(open)-1]
+			}
+		default:
+			open = append(open, a)
+		}
+	}
+	flush()
+	return chunks
 }

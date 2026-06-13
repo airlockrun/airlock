@@ -14,10 +14,10 @@ func TestHubRegisterUnregister(t *testing.T) {
 	hub := NewHub(zap.NewNop())
 
 	conn := &Conn{
-		ID:       uuid.New().String(),
-		UserID:   uuid.New(),
+		ID:     uuid.New().String(),
+		UserID: uuid.New(),
 
-		send:     make(chan []byte, sendBufferSize),
+		send: make(chan []byte, sendBufferSize),
 	}
 
 	hub.Register(conn)
@@ -36,16 +36,16 @@ func TestHubSubscribeBroadcast(t *testing.T) {
 	topicID := uuid.New()
 
 	conn1 := &Conn{
-		ID:       uuid.New().String(),
-		UserID:   uuid.New(),
+		ID:     uuid.New().String(),
+		UserID: uuid.New(),
 
-		send:     make(chan []byte, sendBufferSize),
+		send: make(chan []byte, sendBufferSize),
 	}
 	conn2 := &Conn{
-		ID:       uuid.New().String(),
-		UserID:   uuid.New(),
+		ID:     uuid.New().String(),
+		UserID: uuid.New(),
 
-		send:     make(chan []byte, sendBufferSize),
+		send: make(chan []byte, sendBufferSize),
 	}
 
 	hub.Register(conn1)
@@ -164,10 +164,10 @@ func TestHubUnregisterCleansUpTopic(t *testing.T) {
 	hub.OnTopicSubscriptionChange(nil, func(id uuid.UUID) { lastCalled = id })
 
 	conn := &Conn{
-		ID:       uuid.New().String(),
-		UserID:   uuid.New(),
+		ID:     uuid.New().String(),
+		UserID: uuid.New(),
 
-		send:     make(chan []byte, sendBufferSize),
+		send: make(chan []byte, sendBufferSize),
 	}
 
 	hub.Register(conn)
@@ -186,10 +186,10 @@ func TestHubSendToConnection(t *testing.T) {
 	hub := NewHub(zap.NewNop())
 
 	conn := &Conn{
-		ID:       uuid.New().String(),
-		UserID:   uuid.New(),
+		ID:     uuid.New().String(),
+		UserID: uuid.New(),
 
-		send:     make(chan []byte, sendBufferSize),
+		send: make(chan []byte, sendBufferSize),
 	}
 
 	hub.Register(conn)

@@ -11,10 +11,38 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const conversationHasToolCall = `-- name: ConversationHasToolCall :one
+SELECT COUNT(*) > 0 AS has_call
+FROM agent_messages m
+WHERE m.conversation_id = $1
+  AND m.role = 'assistant'
+  AND m.parts @> jsonb_build_array(
+        jsonb_build_object('type', 'tool-call', 'toolCallId', $2::text)
+      )
+`
+
+type ConversationHasToolCallParams struct {
+	ConversationID pgtype.UUID `json:"conversation_id"`
+	ToolCallID     string      `json:"tool_call_id"`
+}
+
+// True if any assistant message in the conversation already carries a
+// tool-call part with this id. SessionAppend uses it to tell a genuinely
+// dangling tool-result (originating assistant turn never persisted) from
+// the normal case where the call landed in a prior committed batch (e.g.
+// the permission/question resume path) — only the former gets a
+// synthetic assistant tool-call written ahead of it.
+func (q *Queries) ConversationHasToolCall(ctx context.Context, arg ConversationHasToolCallParams) (bool, error) {
+	row := q.db.QueryRow(ctx, conversationHasToolCall, arg.ConversationID, arg.ToolCallID)
+	var has_call bool
+	err := row.Scan(&has_call)
+	return has_call, err
+}
+
 const createMessage = `-- name: CreateMessage :one
-INSERT INTO agent_messages (conversation_id, role, content, parts, tokens_in, tokens_out, cost_estimate, run_id, source, ephemeral, file_keys)
-VALUES ($1, $2, $3, $4, $5, $6, COALESCE($7, 0), $8, COALESCE(NULLIF($9, ''), 'user'), $10, '{}'::text[])
-RETURNING id, seq, conversation_id, run_id, role, source, content, parts, file_keys, tokens_in, tokens_out, cost_estimate, ephemeral, created_at
+INSERT INTO agent_messages (conversation_id, role, content, parts, cost_estimate, run_id, source, ephemeral, file_keys)
+VALUES ($1, $2, $3, $4, COALESCE($5, 0), $6, COALESCE(NULLIF($7, ''), 'user'), $8, '{}'::text[])
+RETURNING id, seq, conversation_id, run_id, role, source, content, parts, file_keys, cost_estimate, ephemeral, created_at
 `
 
 type CreateMessageParams struct {
@@ -22,8 +50,6 @@ type CreateMessageParams struct {
 	Role           string      `json:"role"`
 	Content        string      `json:"content"`
 	Parts          []byte      `json:"parts"`
-	TokensIn       int32       `json:"tokens_in"`
-	TokensOut      int32       `json:"tokens_out"`
 	CostEstimate   interface{} `json:"cost_estimate"`
 	RunID          pgtype.UUID `json:"run_id"`
 	Source         interface{} `json:"source"`
@@ -39,8 +65,6 @@ func (q *Queries) CreateMessage(ctx context.Context, arg CreateMessageParams) (A
 		arg.Role,
 		arg.Content,
 		arg.Parts,
-		arg.TokensIn,
-		arg.TokensOut,
 		arg.CostEstimate,
 		arg.RunID,
 		arg.Source,
@@ -57,8 +81,6 @@ func (q *Queries) CreateMessage(ctx context.Context, arg CreateMessageParams) (A
 		&i.Content,
 		&i.Parts,
 		&i.FileKeys,
-		&i.TokensIn,
-		&i.TokensOut,
 		&i.CostEstimate,
 		&i.Ephemeral,
 		&i.CreatedAt,
@@ -92,7 +114,7 @@ func (q *Queries) GetConversationIDByRun(ctx context.Context, runID pgtype.UUID)
 }
 
 const listAllMessagesByConversation = `-- name: ListAllMessagesByConversation :many
-SELECT id, seq, conversation_id, run_id, role, source, content, parts, file_keys, tokens_in, tokens_out, cost_estimate, ephemeral, created_at FROM agent_messages
+SELECT id, seq, conversation_id, run_id, role, source, content, parts, file_keys, cost_estimate, ephemeral, created_at FROM agent_messages
 WHERE conversation_id = $1
 ORDER BY
   COALESCE(MIN(seq) FILTER (WHERE run_id IS NOT NULL) OVER (PARTITION BY run_id), seq) ASC,
@@ -122,8 +144,6 @@ func (q *Queries) ListAllMessagesByConversation(ctx context.Context, conversatio
 			&i.Content,
 			&i.Parts,
 			&i.FileKeys,
-			&i.TokensIn,
-			&i.TokensOut,
 			&i.CostEstimate,
 			&i.Ephemeral,
 			&i.CreatedAt,
@@ -139,8 +159,8 @@ func (q *Queries) ListAllMessagesByConversation(ctx context.Context, conversatio
 }
 
 const listMessagesBackward = `-- name: ListMessagesBackward :many
-SELECT id, seq, conversation_id, run_id, role, source, content, parts, file_keys, tokens_in, tokens_out, cost_estimate, ephemeral, created_at FROM (
-    SELECT id, seq, conversation_id, run_id, role, source, content, parts, file_keys, tokens_in, tokens_out, cost_estimate, ephemeral, created_at FROM agent_messages
+SELECT id, seq, conversation_id, run_id, role, source, content, parts, file_keys, cost_estimate, ephemeral, created_at FROM (
+    SELECT id, seq, conversation_id, run_id, role, source, content, parts, file_keys, cost_estimate, ephemeral, created_at FROM agent_messages
     WHERE conversation_id = $1
       AND seq < $2
     ORDER BY seq DESC
@@ -176,8 +196,6 @@ func (q *Queries) ListMessagesBackward(ctx context.Context, arg ListMessagesBack
 			&i.Content,
 			&i.Parts,
 			&i.FileKeys,
-			&i.TokensIn,
-			&i.TokensOut,
 			&i.CostEstimate,
 			&i.Ephemeral,
 			&i.CreatedAt,
@@ -193,8 +211,8 @@ func (q *Queries) ListMessagesBackward(ctx context.Context, arg ListMessagesBack
 }
 
 const listMessagesByConversation = `-- name: ListMessagesByConversation :many
-SELECT id, seq, conversation_id, run_id, role, source, content, parts, file_keys, tokens_in, tokens_out, cost_estimate, ephemeral, created_at FROM (
-    SELECT id, seq, conversation_id, run_id, role, source, content, parts, file_keys, tokens_in, tokens_out, cost_estimate, ephemeral, created_at FROM agent_messages
+SELECT id, seq, conversation_id, run_id, role, source, content, parts, file_keys, cost_estimate, ephemeral, created_at FROM (
+    SELECT id, seq, conversation_id, run_id, role, source, content, parts, file_keys, cost_estimate, ephemeral, created_at FROM agent_messages
     WHERE conversation_id = $1
     ORDER BY seq DESC
     LIMIT 101
@@ -227,8 +245,6 @@ func (q *Queries) ListMessagesByConversation(ctx context.Context, conversationID
 			&i.Content,
 			&i.Parts,
 			&i.FileKeys,
-			&i.TokensIn,
-			&i.TokensOut,
 			&i.CostEstimate,
 			&i.Ephemeral,
 			&i.CreatedAt,
@@ -244,7 +260,7 @@ func (q *Queries) ListMessagesByConversation(ctx context.Context, conversationID
 }
 
 const listMessagesByRun = `-- name: ListMessagesByRun :many
-SELECT id, seq, conversation_id, run_id, role, source, content, parts, file_keys, tokens_in, tokens_out, cost_estimate, ephemeral, created_at FROM agent_messages
+SELECT id, seq, conversation_id, run_id, role, source, content, parts, file_keys, cost_estimate, ephemeral, created_at FROM agent_messages
 WHERE run_id = $1
 ORDER BY seq ASC
 `
@@ -268,8 +284,6 @@ func (q *Queries) ListMessagesByRun(ctx context.Context, runID pgtype.UUID) ([]A
 			&i.Content,
 			&i.Parts,
 			&i.FileKeys,
-			&i.TokensIn,
-			&i.TokensOut,
 			&i.CostEstimate,
 			&i.Ephemeral,
 			&i.CreatedAt,
@@ -285,7 +299,7 @@ func (q *Queries) ListMessagesByRun(ctx context.Context, runID pgtype.UUID) ([]A
 }
 
 const listMessagesForward = `-- name: ListMessagesForward :many
-SELECT id, seq, conversation_id, run_id, role, source, content, parts, file_keys, tokens_in, tokens_out, cost_estimate, ephemeral, created_at FROM agent_messages
+SELECT id, seq, conversation_id, run_id, role, source, content, parts, file_keys, cost_estimate, ephemeral, created_at FROM agent_messages
 WHERE conversation_id = $1
   AND seq > $2
 ORDER BY seq ASC
@@ -319,8 +333,6 @@ func (q *Queries) ListMessagesForward(ctx context.Context, arg ListMessagesForwa
 			&i.Content,
 			&i.Parts,
 			&i.FileKeys,
-			&i.TokensIn,
-			&i.TokensOut,
 			&i.CostEstimate,
 			&i.Ephemeral,
 			&i.CreatedAt,
@@ -387,7 +399,7 @@ func (q *Queries) ListOrphanToolCallsByRun(ctx context.Context, runID pgtype.UUI
 }
 
 const listSessionMessagesByConversation = `-- name: ListSessionMessagesByConversation :many
-SELECT m.id, m.seq, m.conversation_id, m.run_id, m.role, m.source, m.content, m.parts, m.file_keys, m.tokens_in, m.tokens_out, m.cost_estimate, m.ephemeral, m.created_at FROM agent_messages m
+SELECT m.id, m.seq, m.conversation_id, m.run_id, m.role, m.source, m.content, m.parts, m.file_keys, m.cost_estimate, m.ephemeral, m.created_at FROM agent_messages m
 JOIN agent_conversations c ON c.id = m.conversation_id
 WHERE m.conversation_id = $1
   AND NOT m.ephemeral
@@ -401,7 +413,7 @@ WHERE m.conversation_id = $1
 ORDER BY m.seq ASC
 `
 
-// Agent context loading — excludes ephemeral messages (printToUser output) and
+// Agent context loading — excludes ephemeral messages (output() / topic publish) and
 // messages before the active context checkpoint. When no checkpoint is set,
 // returns all non-ephemeral messages. Checkpoint-marker rows (source='checkpoint')
 // are UI-only metadata and are never sent to the LLM.
@@ -424,8 +436,6 @@ func (q *Queries) ListSessionMessagesByConversation(ctx context.Context, convers
 			&i.Content,
 			&i.Parts,
 			&i.FileKeys,
-			&i.TokensIn,
-			&i.TokensOut,
 			&i.CostEstimate,
 			&i.Ephemeral,
 			&i.CreatedAt,
@@ -455,29 +465,4 @@ type SetConversationCheckpointParams struct {
 func (q *Queries) SetConversationCheckpoint(ctx context.Context, arg SetConversationCheckpointParams) error {
 	_, err := q.db.Exec(ctx, setConversationCheckpoint, arg.CheckpointMessageID, arg.ConversationID)
 	return err
-}
-
-const sumPreCheckpointTokens = `-- name: SumPreCheckpointTokens :one
-SELECT COALESCE(SUM(m.tokens_in + m.tokens_out), 0)::bigint AS total
-FROM agent_messages m
-JOIN agent_conversations c ON c.id = m.conversation_id
-WHERE m.conversation_id = $1
-  AND NOT m.ephemeral
-  AND m.source <> 'checkpoint'
-  AND (
-    c.context_checkpoint_message_id IS NULL
-    OR m.seq >= (
-      SELECT seq FROM agent_messages WHERE id = c.context_checkpoint_message_id
-    )
-  )
-`
-
-// Sum of input+output tokens for messages before the current checkpoint
-// (or all messages if no checkpoint is set). Used when a new checkpoint is
-// being created to compute how many tokens are being freed.
-func (q *Queries) SumPreCheckpointTokens(ctx context.Context, conversationID pgtype.UUID) (int64, error) {
-	row := q.db.QueryRow(ctx, sumPreCheckpointTokens, conversationID)
-	var total int64
-	err := row.Scan(&total)
-	return total, err
 }

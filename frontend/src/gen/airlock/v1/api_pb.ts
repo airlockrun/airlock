@@ -4,7 +4,7 @@
 
 import type { GenFile, GenMessage } from "@bufbuild/protobuf/codegenv2";
 import { fileDesc, messageDesc } from "@bufbuild/protobuf/codegenv2";
-import type { AgentBuildInfo, AgentInfo, AgentMessageInfo, BridgeInfo, BridgeSettings, ConnectionInfo, ConversationInfo, CronInfo, FileInfo, ModelInfo, PlatformIdentityInfo, Provider, ProviderCapabilityInfo, ProviderInfo, RouteInfo, RunInfo, SystemSettingsInfo, Tenant, ToolInfo, TopicInfo, User, UserSummary, WebhookInfo } from "./types_pb";
+import type { A2ASettings, AddableSiblingInfo, AgentBuildInfo, AgentGitConfig, AgentInfo, AgentMessageInfo, BridgeInfo, BridgeSettings, ConnectionInfo, ConversationInfo, CronInfo, EnvVarInfo, ExecEndpointInfo, ExecEndpointTestResult, FileInfo, GitCredential, MCPServerInfo, MCPStatusInfo, ModelInfo, PlatformIdentityInfo, Provider, ProviderCapabilityInfo, ProviderInfo, RouteInfo, RunInfo, SetupCountsInfo, SiblingInfo, SystemSettingsInfo, Tenant, ToolInfo, TopicInfo, User, UserSummary, WebhookInfo } from "./types_pb";
 import { file_airlock_v1_types } from "./types_pb";
 import type { Timestamp } from "@bufbuild/protobuf/wkt";
 import { file_google_protobuf_timestamp } from "@bufbuild/protobuf/wkt";
@@ -14,7 +14,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file airlock/v1/api.proto.
  */
 export const file_airlock_v1_api: GenFile = /*@__PURE__*/
-  fileDesc("ChRhaXJsb2NrL3YxL2FwaS5wcm90bxIKYWlybG9jay52MSJyCg9SZWdpc3RlclJlcXVlc3QSDQoFZW1haWwYASABKAkSEAoIcGFzc3dvcmQYAiABKAkSFAoMZGlzcGxheV9uYW1lGAMgASgJEhMKC3RlbmFudF9uYW1lGAQgASgJEhMKC3RlbmFudF9zbHVnGAUgASgJIoMBChBSZWdpc3RlclJlc3BvbnNlEhQKDGFjY2Vzc190b2tlbhgBIAEoCRIVCg1yZWZyZXNoX3Rva2VuGAIgASgJEh4KBHVzZXIYAyABKAsyEC5haXJsb2NrLnYxLlVzZXISIgoGdGVuYW50GAQgASgLMhIuYWlybG9jay52MS5UZW5hbnQiLwoMTG9naW5SZXF1ZXN0Eg0KBWVtYWlsGAEgASgJEhAKCHBhc3N3b3JkGAIgASgJIlwKDUxvZ2luUmVzcG9uc2USFAoMYWNjZXNzX3Rva2VuGAEgASgJEhUKDXJlZnJlc2hfdG9rZW4YAiABKAkSHgoEdXNlchgDIAEoCzIQLmFpcmxvY2sudjEuVXNlciInCg5SZWZyZXNoUmVxdWVzdBIVCg1yZWZyZXNoX3Rva2VuGAEgASgJIicKD1JlZnJlc2hSZXNwb25zZRIUCgxhY2Nlc3NfdG9rZW4YASABKAkiYQoPQWN0aXZhdGVSZXF1ZXN0Eg0KBWVtYWlsGAEgASgJEhAKCHBhc3N3b3JkGAIgASgJEhQKDGRpc3BsYXlfbmFtZRgDIAEoCRIXCg9hY3RpdmF0aW9uX2NvZGUYBCABKAkiXwoRQ3JlYXRlVXNlclJlcXVlc3QSDQoFZW1haWwYASABKAkSFAoMZGlzcGxheV9uYW1lGAIgASgJEhAKCHBhc3N3b3JkGAMgASgJEhMKC3RlbmFudF9yb2xlGAQgASgJIjQKEkNyZWF0ZVVzZXJSZXNwb25zZRIeCgR1c2VyGAEgASgLMhAuYWlybG9jay52MS5Vc2VyIkcKFUNoYW5nZVBhc3N3b3JkUmVxdWVzdBIYChBjdXJyZW50X3Bhc3N3b3JkGAEgASgJEhQKDG5ld19wYXNzd29yZBgCIAEoCSJFChZDaGFuZ2VQYXNzd29yZFJlc3BvbnNlEhQKDGFjY2Vzc190b2tlbhgBIAEoCRIVCg1yZWZyZXNoX3Rva2VuGAIgASgJIjQKEUxpc3RVc2Vyc1Jlc3BvbnNlEh8KBXVzZXJzGAEgAygLMhAuYWlybG9jay52MS5Vc2VyIkUKG0xpc3RTZWxlY3RhYmxlVXNlcnNSZXNwb25zZRImCgV1c2VycxgBIAMoCzIXLmFpcmxvY2sudjEuVXNlclN1bW1hcnkiLAoVVXBkYXRlVXNlclJvbGVSZXF1ZXN0EhMKC3RlbmFudF9yb2xlGAEgASgJInMKFUNyZWF0ZVByb3ZpZGVyUmVxdWVzdBITCgtwcm92aWRlcl9pZBgBIAEoCRIUCgxkaXNwbGF5X25hbWUYAiABKAkSDwoHYXBpX2tleRgDIAEoCRIQCghiYXNlX3VybBgEIAEoCRIMCgRzbHVnGAUgASgJIkAKFkNyZWF0ZVByb3ZpZGVyUmVzcG9uc2USJgoIcHJvdmlkZXIYASABKAsyFC5haXJsb2NrLnYxLlByb3ZpZGVyIkAKFUxpc3RQcm92aWRlcnNSZXNwb25zZRInCglwcm92aWRlcnMYASADKAsyFC5haXJsb2NrLnYxLlByb3ZpZGVyIoYBChVVcGRhdGVQcm92aWRlclJlcXVlc3QSFAoMZGlzcGxheV9uYW1lGAEgASgJEg8KB2FwaV9rZXkYAiABKAkSEAoIYmFzZV91cmwYAyABKAkSFwoKaXNfZW5hYmxlZBgEIAEoCEgAiAEBEgwKBHNsdWcYBSABKAlCDQoLX2lzX2VuYWJsZWQiQAoWVXBkYXRlUHJvdmlkZXJSZXNwb25zZRImCghwcm92aWRlchgBIAEoCzIULmFpcmxvY2sudjEuUHJvdmlkZXIiSwocTGlzdENhdGFsb2dQcm92aWRlcnNSZXNwb25zZRIrCglwcm92aWRlcnMYASADKAsyGC5haXJsb2NrLnYxLlByb3ZpZGVySW5mbyJCChlMaXN0Q2F0YWxvZ01vZGVsc1Jlc3BvbnNlEiUKBm1vZGVscxgBIAMoCzIVLmFpcmxvY2sudjEuTW9kZWxJbmZvIrkBChJDcmVhdGVBZ2VudFJlcXVlc3QSDAoEbmFtZRgBIAEoCRIMCgRzbHVnGAIgASgJEhMKC2Rlc2NyaXB0aW9uGAMgASgJEhMKC2J1aWxkX21vZGVsGAQgASgJEhIKCmV4ZWNfbW9kZWwYBSABKAkSFAoMaW5zdHJ1Y3Rpb25zGAYgASgJEhkKEWJ1aWxkX3Byb3ZpZGVyX2lkGAcgASgJEhgKEGV4ZWNfcHJvdmlkZXJfaWQYCCABKAkiOwoTQ3JlYXRlQWdlbnRSZXNwb25zZRIkCgVhZ2VudBgBIAEoCzIVLmFpcmxvY2sudjEuQWdlbnRJbmZvIjsKEkxpc3RBZ2VudHNSZXNwb25zZRIlCgZhZ2VudHMYASADKAsyFS5haXJsb2NrLnYxLkFnZW50SW5mbyLmAQoWR2V0QWdlbnREZXRhaWxSZXNwb25zZRIkCgVhZ2VudBgBIAEoCzIVLmFpcmxvY2sudjEuQWdlbnRJbmZvEi8KC2Nvbm5lY3Rpb25zGAIgAygLMhouYWlybG9jay52MS5Db25uZWN0aW9uSW5mbxIpCgh3ZWJob29rcxgDIAMoCzIXLmFpcmxvY2sudjEuV2ViaG9va0luZm8SIwoFY3JvbnMYBCADKAsyFC5haXJsb2NrLnYxLkNyb25JbmZvEiUKBnJvdXRlcxgFIAMoCzIVLmFpcmxvY2sudjEuUm91dGVJbmZvInIKElVwZGF0ZUFnZW50UmVxdWVzdBITCgtkZXNjcmlwdGlvbhgBIAEoCRIVCghhdXRvX2ZpeBgCIAEoCEgAiAEBQgsKCV9hdXRvX2ZpeEoECAMQBEoECAQQBVILYnVpbGRfbW9kZWxSCmV4ZWNfbW9kZWwiOwoTVXBkYXRlQWdlbnRSZXNwb25zZRIkCgVhZ2VudBgBIAEoCzIVLmFpcmxvY2sudjEuQWdlbnRJbmZvIjoKE1VwZ3JhZGVBZ2VudFJlcXVlc3QSDgoGcnVuX2lkGAEgASgJEhMKC2Rlc2NyaXB0aW9uGAIgASgJInwKDU1vZGVsU2xvdEluZm8SDAoEc2x1ZxgBIAEoCRISCgpjYXBhYmlsaXR5GAIgASgJEhMKC2Rlc2NyaXB0aW9uGAMgASgJEhYKDmFzc2lnbmVkX21vZGVsGAQgASgJEhwKFGFzc2lnbmVkX3Byb3ZpZGVyX2lkGAUgASgJIsYDChBBZ2VudE1vZGVsQ29uZmlnEhMKC2J1aWxkX21vZGVsGAEgASgJEhIKCmV4ZWNfbW9kZWwYAiABKAkSEQoJc3R0X21vZGVsGAMgASgJEhQKDHZpc2lvbl9tb2RlbBgEIAEoCRIRCgl0dHNfbW9kZWwYBSABKAkSFwoPaW1hZ2VfZ2VuX21vZGVsGAYgASgJEhcKD2VtYmVkZGluZ19tb2RlbBgHIAEoCRIUCgxzZWFyY2hfbW9kZWwYCCABKAkSKAoFc2xvdHMYCSADKAsyGS5haXJsb2NrLnYxLk1vZGVsU2xvdEluZm8SGQoRYnVpbGRfcHJvdmlkZXJfaWQYCiABKAkSGAoQZXhlY19wcm92aWRlcl9pZBgLIAEoCRIXCg9zdHRfcHJvdmlkZXJfaWQYDCABKAkSGgoSdmlzaW9uX3Byb3ZpZGVyX2lkGA0gASgJEhcKD3R0c19wcm92aWRlcl9pZBgOIAEoCRIdChVpbWFnZV9nZW5fcHJvdmlkZXJfaWQYDyABKAkSHQoVZW1iZWRkaW5nX3Byb3ZpZGVyX2lkGBAgASgJEhoKEnNlYXJjaF9wcm92aWRlcl9pZBgRIAEoCSJLChtHZXRBZ2VudE1vZGVsQ29uZmlnUmVzcG9uc2USLAoGY29uZmlnGAEgASgLMhwuYWlybG9jay52MS5BZ2VudE1vZGVsQ29uZmlnIk0KHVVwZGF0ZUFnZW50TW9kZWxDb25maWdSZXF1ZXN0EiwKBmNvbmZpZxgBIAEoCzIcLmFpcmxvY2sudjEuQWdlbnRNb2RlbENvbmZpZyJOCh5VcGRhdGVBZ2VudE1vZGVsQ29uZmlnUmVzcG9uc2USLAoGY29uZmlnGAEgASgLMhwuYWlybG9jay52MS5BZ2VudE1vZGVsQ29uZmlnIkUKF0xpc3RBZ2VudEJ1aWxkc1Jlc3BvbnNlEioKBmJ1aWxkcxgBIAMoCzIaLmFpcmxvY2sudjEuQWdlbnRCdWlsZEluZm8iQgoVR2V0QWdlbnRCdWlsZFJlc3BvbnNlEikKBWJ1aWxkGAEgASgLMhouYWlybG9jay52MS5BZ2VudEJ1aWxkSW5mbyJKChBMaXN0UnVuc1Jlc3BvbnNlEiEKBHJ1bnMYASADKAsyEy5haXJsb2NrLnYxLlJ1bkluZm8SEwoLbmV4dF9jdXJzb3IYAiABKAkiYgoOR2V0UnVuUmVzcG9uc2USIAoDcnVuGAEgASgLMhMuYWlybG9jay52MS5SdW5JbmZvEi4KCG1lc3NhZ2VzGAIgAygLMhwuYWlybG9jay52MS5BZ2VudE1lc3NhZ2VJbmZvIioKGUNyZWF0ZUNvbnZlcnNhdGlvblJlcXVlc3QSDQoFdGl0bGUYASABKAkiUAoaQ3JlYXRlQ29udmVyc2F0aW9uUmVzcG9uc2USMgoMY29udmVyc2F0aW9uGAEgASgLMhwuYWlybG9jay52MS5Db252ZXJzYXRpb25JbmZvIlAKGUxpc3RDb252ZXJzYXRpb25zUmVzcG9uc2USMwoNY29udmVyc2F0aW9ucxgBIAMoCzIcLmFpcmxvY2sudjEuQ29udmVyc2F0aW9uSW5mbyLYAQoXR2V0Q29udmVyc2F0aW9uUmVzcG9uc2USMgoMY29udmVyc2F0aW9uGAEgASgLMhwuYWlybG9jay52MS5Db252ZXJzYXRpb25JbmZvEi4KCG1lc3NhZ2VzGAIgAygLMhwuYWlybG9jay52MS5BZ2VudE1lc3NhZ2VJbmZvEj0KFHBlbmRpbmdfY29uZmlybWF0aW9uGAMgASgLMh8uYWlybG9jay52MS5QZW5kaW5nQ29uZmlybWF0aW9uEhoKEmhhc19vbGRlcl9tZXNzYWdlcxgEIAEoCCJdChlQYWdpbmF0ZWRNZXNzYWdlc1Jlc3BvbnNlEi4KCG1lc3NhZ2VzGAEgAygLMhwuYWlybG9jay52MS5BZ2VudE1lc3NhZ2VJbmZvEhAKCGhhc19tb3JlGAIgASgIIk0KE1BlbmRpbmdDb25maXJtYXRpb24SFAoMdG9vbF9jYWxsX2lkGAEgASgJEhEKCXRvb2xfbmFtZRgCIAEoCRINCgVpbnB1dBgDIAEoCSJxCg1Qcm9tcHRSZXF1ZXN0EhcKD2NvbnZlcnNhdGlvbl9pZBgBIAEoCRIPCgdtZXNzYWdlGAIgASgJEhIKCmZpbGVfcGF0aHMYAyADKAkSFQoIYXBwcm92ZWQYBCABKAhIAIgBAUILCglfYXBwcm92ZWQiUAoOUHJvbXB0UmVzcG9uc2USDgoGcnVuX2lkGAEgASgJEhcKD2NvbnZlcnNhdGlvbl9pZBgCIAEoCRIVCg1jb21tYW5kX3JlcGx5GAMgASgJIkEKFExpc3RXZWJob29rc1Jlc3BvbnNlEikKCHdlYmhvb2tzGAEgAygLMhcuYWlybG9jay52MS5XZWJob29rSW5mbyI4ChFMaXN0Q3JvbnNSZXNwb25zZRIjCgVjcm9ucxgBIAMoCzIULmFpcmxvY2sudjEuQ3JvbkluZm8iOAoRTGlzdFRvb2xzUmVzcG9uc2USIwoFdG9vbHMYASADKAsyFC5haXJsb2NrLnYxLlRvb2xJbmZvIiIKEEZpcmVDcm9uUmVzcG9uc2USDgoGcnVuX2lkGAEgASgJIjYKFUFkZEFnZW50TWVtYmVyUmVxdWVzdBIPCgd1c2VyX2lkGAEgASgJEgwKBHJvbGUYAiABKAkihQEKD0FnZW50TWVtYmVySW5mbxIPCgd1c2VyX2lkGAEgASgJEg0KBWVtYWlsGAIgASgJEhQKDGRpc3BsYXlfbmFtZRgDIAEoCRIMCgRyb2xlGAQgASgJEi4KCmNyZWF0ZWRfYXQYBSABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wIkgKGExpc3RBZ2VudE1lbWJlcnNSZXNwb25zZRIsCgdtZW1iZXJzGAEgAygLMhsuYWlybG9jay52MS5BZ2VudE1lbWJlckluZm8iZgoXTGlzdENvbm5lY3Rpb25zUmVzcG9uc2USLwoLY29ubmVjdGlvbnMYASADKAsyGi5haXJsb2NrLnYxLkNvbm5lY3Rpb25JbmZvEhoKEm9hdXRoX2NhbGxiYWNrX3VybBgCIAEoCSIjChBTZXRBUElLZXlSZXF1ZXN0Eg8KB2FwaV9rZXkYASABKAkiPgoSU2V0T0F1dGhBcHBSZXF1ZXN0EhEKCWNsaWVudF9pZBgBIAEoCRIVCg1jbGllbnRfc2VjcmV0GAIgASgJIkkKEU9BdXRoU3RhcnRSZXF1ZXN0EhAKCGFnZW50X2lkGAEgASgJEgwKBHNsdWcYAiABKAkSFAoMcmVkaXJlY3RfdXJpGAMgASgJIisKEk9BdXRoU3RhcnRSZXNwb25zZRIVCg1hdXRob3JpemVfdXJsGAEgASgJIpMBChhDcmVkZW50aWFsU3RhdHVzUmVzcG9uc2USDAoEc2x1ZxgBIAEoCRIMCgRuYW1lGAIgASgJEhEKCWF1dGhfbW9kZRgDIAEoCRISCgphdXRob3JpemVkGAQgASgIEjQKEHRva2VuX2V4cGlyZXNfYXQYBSABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wIk8KFlRlc3RDcmVkZW50aWFsUmVzcG9uc2USDwoHc3VjY2VzcxgBIAEoCBITCgtzdGF0dXNfY29kZRgCIAEoBRIPCgdtZXNzYWdlGAMgASgJIlIKE0NyZWF0ZUJyaWRnZVJlcXVlc3QSEAoIYWdlbnRfaWQYASABKAkSDAoEbmFtZRgCIAEoCRINCgV0b2tlbhgDIAEoCRIMCgR0eXBlGAQgASgJIlUKE1VwZGF0ZUJyaWRnZVJlcXVlc3QSEAoIYWdlbnRfaWQYASABKAkSLAoIc2V0dGluZ3MYAiABKAsyGi5haXJsb2NrLnYxLkJyaWRnZVNldHRpbmdzIj4KE0xpc3RCcmlkZ2VzUmVzcG9uc2USJwoHYnJpZGdlcxgBIAMoCzIWLmFpcmxvY2sudjEuQnJpZGdlSW5mbyJRChhMaXN0Q2FwYWJpbGl0aWVzUmVzcG9uc2USNQoJcHJvdmlkZXJzGAEgAygLMiIuYWlybG9jay52MS5Qcm92aWRlckNhcGFiaWxpdHlJbmZvIlYKHkxpc3RQbGF0Zm9ybUlkZW50aXRpZXNSZXNwb25zZRI0CgppZGVudGl0aWVzGAEgAygLMiAuYWlybG9jay52MS5QbGF0Zm9ybUlkZW50aXR5SW5mbyLnAQobTGlua0lkZW50aXR5UHJldmlld1Jlc3BvbnNlEhAKCHBsYXRmb3JtGAEgASgJEhMKC2JyaWRnZV9uYW1lGAIgASgJEhQKDGJvdF91c2VybmFtZRgDIAEoCRIYChBwbGF0Zm9ybV91c2VyX2lkGAQgASgJEhkKEXBsYXRmb3JtX3VzZXJuYW1lGAUgASgJEh0KFXBsYXRmb3JtX2Rpc3BsYXlfbmFtZRgGIAEoCRIaChJjdXJyZW50X3VzZXJfZW1haWwYByABKAkSGwoTcGxhdGZvcm1fYXZhdGFyX3VybBgIIAEoCSI4ChFMaXN0RmlsZXNSZXNwb25zZRIjCgVmaWxlcxgBIAMoCzIULmFpcmxvY2sudjEuRmlsZUluZm8iNQoSVXBsb2FkRmlsZVJlc3BvbnNlEhIKCnVwbG9hZF91cmwYASABKAkSCwoDa2V5GAIgASgJIjsKEkxpc3RUb3BpY3NSZXNwb25zZRIlCgZ0b3BpY3MYASADKAsyFS5haXJsb2NrLnYxLlRvcGljSW5mbyJNChlHZXRTeXN0ZW1TZXR0aW5nc1Jlc3BvbnNlEjAKCHNldHRpbmdzGAEgASgLMh4uYWlybG9jay52MS5TeXN0ZW1TZXR0aW5nc0luZm8iTwobVXBkYXRlU3lzdGVtU2V0dGluZ3NSZXF1ZXN0EjAKCHNldHRpbmdzGAEgASgLMh4uYWlybG9jay52MS5TeXN0ZW1TZXR0aW5nc0luZm8iUAocVXBkYXRlU3lzdGVtU2V0dGluZ3NSZXNwb25zZRIwCghzZXR0aW5ncxgBIAEoCzIeLmFpcmxvY2sudjEuU3lzdGVtU2V0dGluZ3NJbmZvIi4KDUVycm9yUmVzcG9uc2USDQoFZXJyb3IYASABKAkSDgoGZGV0YWlsGAIgASgJIjgKDkhlYWx0aFJlc3BvbnNlEg4KBnN0YXR1cxgBIAEoCRIKCgJkYhgCIAEoCBIKCgJzMxgDIAEoCEI4WjZnaXRodWIuY29tL2FpcmxvY2tydW4vYWlybG9jay9nZW4vYWlybG9jay92MTthaXJsb2NrdjFiBnByb3RvMw", [file_airlock_v1_types, file_google_protobuf_timestamp]);
+  fileDesc("ChRhaXJsb2NrL3YxL2FwaS5wcm90bxIKYWlybG9jay52MSJyCg9SZWdpc3RlclJlcXVlc3QSDQoFZW1haWwYASABKAkSEAoIcGFzc3dvcmQYAiABKAkSFAoMZGlzcGxheV9uYW1lGAMgASgJEhMKC3RlbmFudF9uYW1lGAQgASgJEhMKC3RlbmFudF9zbHVnGAUgASgJIoMBChBSZWdpc3RlclJlc3BvbnNlEhQKDGFjY2Vzc190b2tlbhgBIAEoCRIVCg1yZWZyZXNoX3Rva2VuGAIgASgJEh4KBHVzZXIYAyABKAsyEC5haXJsb2NrLnYxLlVzZXISIgoGdGVuYW50GAQgASgLMhIuYWlybG9jay52MS5UZW5hbnQiLwoMTG9naW5SZXF1ZXN0Eg0KBWVtYWlsGAEgASgJEhAKCHBhc3N3b3JkGAIgASgJIlwKDUxvZ2luUmVzcG9uc2USFAoMYWNjZXNzX3Rva2VuGAEgASgJEhUKDXJlZnJlc2hfdG9rZW4YAiABKAkSHgoEdXNlchgDIAEoCzIQLmFpcmxvY2sudjEuVXNlciInCg5SZWZyZXNoUmVxdWVzdBIVCg1yZWZyZXNoX3Rva2VuGAEgASgJIicKD1JlZnJlc2hSZXNwb25zZRIUCgxhY2Nlc3NfdG9rZW4YASABKAkiYQoPQWN0aXZhdGVSZXF1ZXN0Eg0KBWVtYWlsGAEgASgJEhAKCHBhc3N3b3JkGAIgASgJEhQKDGRpc3BsYXlfbmFtZRgDIAEoCRIXCg9hY3RpdmF0aW9uX2NvZGUYBCABKAkiXwoRQ3JlYXRlVXNlclJlcXVlc3QSDQoFZW1haWwYASABKAkSFAoMZGlzcGxheV9uYW1lGAIgASgJEhAKCHBhc3N3b3JkGAMgASgJEhMKC3RlbmFudF9yb2xlGAQgASgJIjQKEkNyZWF0ZVVzZXJSZXNwb25zZRIeCgR1c2VyGAEgASgLMhAuYWlybG9jay52MS5Vc2VyIkcKFUNoYW5nZVBhc3N3b3JkUmVxdWVzdBIYChBjdXJyZW50X3Bhc3N3b3JkGAEgASgJEhQKDG5ld19wYXNzd29yZBgCIAEoCSJFChZDaGFuZ2VQYXNzd29yZFJlc3BvbnNlEhQKDGFjY2Vzc190b2tlbhgBIAEoCRIVCg1yZWZyZXNoX3Rva2VuGAIgASgJIjQKEUxpc3RVc2Vyc1Jlc3BvbnNlEh8KBXVzZXJzGAEgAygLMhAuYWlybG9jay52MS5Vc2VyIkgKCk1lUmVzcG9uc2USHgoEdXNlchgBIAEoCzIQLmFpcmxvY2sudjEuVXNlchIaChJ0ZW5hbnRfcGVybWlzc2lvbnMYAiADKAkiRQobTGlzdFNlbGVjdGFibGVVc2Vyc1Jlc3BvbnNlEiYKBXVzZXJzGAEgAygLMhcuYWlybG9jay52MS5Vc2VyU3VtbWFyeSIsChVVcGRhdGVVc2VyUm9sZVJlcXVlc3QSEwoLdGVuYW50X3JvbGUYASABKAkicwoVQ3JlYXRlUHJvdmlkZXJSZXF1ZXN0EhMKC3Byb3ZpZGVyX2lkGAEgASgJEhQKDGRpc3BsYXlfbmFtZRgCIAEoCRIPCgdhcGlfa2V5GAMgASgJEhAKCGJhc2VfdXJsGAQgASgJEgwKBHNsdWcYBSABKAkiQAoWQ3JlYXRlUHJvdmlkZXJSZXNwb25zZRImCghwcm92aWRlchgBIAEoCzIULmFpcmxvY2sudjEuUHJvdmlkZXIiQAoVTGlzdFByb3ZpZGVyc1Jlc3BvbnNlEicKCXByb3ZpZGVycxgBIAMoCzIULmFpcmxvY2sudjEuUHJvdmlkZXIihgEKFVVwZGF0ZVByb3ZpZGVyUmVxdWVzdBIUCgxkaXNwbGF5X25hbWUYASABKAkSDwoHYXBpX2tleRgCIAEoCRIQCghiYXNlX3VybBgDIAEoCRIXCgppc19lbmFibGVkGAQgASgISACIAQESDAoEc2x1ZxgFIAEoCUINCgtfaXNfZW5hYmxlZCJAChZVcGRhdGVQcm92aWRlclJlc3BvbnNlEiYKCHByb3ZpZGVyGAEgASgLMhQuYWlybG9jay52MS5Qcm92aWRlciJLChxMaXN0Q2F0YWxvZ1Byb3ZpZGVyc1Jlc3BvbnNlEisKCXByb3ZpZGVycxgBIAMoCzIYLmFpcmxvY2sudjEuUHJvdmlkZXJJbmZvIkIKGUxpc3RDYXRhbG9nTW9kZWxzUmVzcG9uc2USJQoGbW9kZWxzGAEgAygLMhUuYWlybG9jay52MS5Nb2RlbEluZm8iiAIKEkNyZWF0ZUFnZW50UmVxdWVzdBIMCgRuYW1lGAEgASgJEgwKBHNsdWcYAiABKAkSEwoLZGVzY3JpcHRpb24YAyABKAkSEwoLYnVpbGRfbW9kZWwYBCABKAkSEgoKZXhlY19tb2RlbBgFIAEoCRIUCgxpbnN0cnVjdGlvbnMYBiABKAkSGQoRYnVpbGRfcHJvdmlkZXJfaWQYByABKAkSGAoQZXhlY19wcm92aWRlcl9pZBgIIAEoCRIWCg5naXRfcmVtb3RlX3VybBgJIAEoCRIZChFnaXRfY3JlZGVudGlhbF9pZBgKIAEoCRIaChJnaXRfZGVmYXVsdF9icmFuY2gYCyABKAkiOwoTQ3JlYXRlQWdlbnRSZXNwb25zZRIkCgVhZ2VudBgBIAEoCzIVLmFpcmxvY2sudjEuQWdlbnRJbmZvIjsKEkxpc3RBZ2VudHNSZXNwb25zZRIlCgZhZ2VudHMYASADKAsyFS5haXJsb2NrLnYxLkFnZW50SW5mbyL+AQoWR2V0QWdlbnREZXRhaWxSZXNwb25zZRIkCgVhZ2VudBgBIAEoCzIVLmFpcmxvY2sudjEuQWdlbnRJbmZvEi8KC2Nvbm5lY3Rpb25zGAIgAygLMhouYWlybG9jay52MS5Db25uZWN0aW9uSW5mbxIpCgh3ZWJob29rcxgDIAMoCzIXLmFpcmxvY2sudjEuV2ViaG9va0luZm8SIwoFY3JvbnMYBCADKAsyFC5haXJsb2NrLnYxLkNyb25JbmZvEiUKBnJvdXRlcxgFIAMoCzIVLmFpcmxvY2sudjEuUm91dGVJbmZvEhYKDnJvdXRlX2Jhc2VfdXJsGAYgASgJIqoBChJVcGRhdGVBZ2VudFJlcXVlc3QSEwoLZGVzY3JpcHRpb24YASABKAkSFQoIYXV0b19maXgYAiABKAhIAIgBARIRCgRuYW1lGAUgASgJSAGIAQESEQoEc2x1ZxgGIAEoCUgCiAEBQgsKCV9hdXRvX2ZpeEIHCgVfbmFtZUIHCgVfc2x1Z0oECAMQBEoECAQQBVILYnVpbGRfbW9kZWxSCmV4ZWNfbW9kZWwiOwoTVXBkYXRlQWdlbnRSZXNwb25zZRIkCgVhZ2VudBgBIAEoCzIVLmFpcmxvY2sudjEuQWdlbnRJbmZvIjoKE1VwZ3JhZGVBZ2VudFJlcXVlc3QSDgoGcnVuX2lkGAEgASgJEhMKC2Rlc2NyaXB0aW9uGAIgASgJIkEKFFJvbGxiYWNrQnVpbGRSZXF1ZXN0EhAKCGJ1aWxkX2lkGAEgASgJEhcKD2NvbnZlcnNhdGlvbl9pZBgCIAEoCSJ8Cg1Nb2RlbFNsb3RJbmZvEgwKBHNsdWcYASABKAkSEgoKY2FwYWJpbGl0eRgCIAEoCRITCgtkZXNjcmlwdGlvbhgDIAEoCRIWCg5hc3NpZ25lZF9tb2RlbBgEIAEoCRIcChRhc3NpZ25lZF9wcm92aWRlcl9pZBgFIAEoCSLGAwoQQWdlbnRNb2RlbENvbmZpZxITCgtidWlsZF9tb2RlbBgBIAEoCRISCgpleGVjX21vZGVsGAIgASgJEhEKCXN0dF9tb2RlbBgDIAEoCRIUCgx2aXNpb25fbW9kZWwYBCABKAkSEQoJdHRzX21vZGVsGAUgASgJEhcKD2ltYWdlX2dlbl9tb2RlbBgGIAEoCRIXCg9lbWJlZGRpbmdfbW9kZWwYByABKAkSFAoMc2VhcmNoX21vZGVsGAggASgJEigKBXNsb3RzGAkgAygLMhkuYWlybG9jay52MS5Nb2RlbFNsb3RJbmZvEhkKEWJ1aWxkX3Byb3ZpZGVyX2lkGAogASgJEhgKEGV4ZWNfcHJvdmlkZXJfaWQYCyABKAkSFwoPc3R0X3Byb3ZpZGVyX2lkGAwgASgJEhoKEnZpc2lvbl9wcm92aWRlcl9pZBgNIAEoCRIXCg90dHNfcHJvdmlkZXJfaWQYDiABKAkSHQoVaW1hZ2VfZ2VuX3Byb3ZpZGVyX2lkGA8gASgJEh0KFWVtYmVkZGluZ19wcm92aWRlcl9pZBgQIAEoCRIaChJzZWFyY2hfcHJvdmlkZXJfaWQYESABKAkiSwobR2V0QWdlbnRNb2RlbENvbmZpZ1Jlc3BvbnNlEiwKBmNvbmZpZxgBIAEoCzIcLmFpcmxvY2sudjEuQWdlbnRNb2RlbENvbmZpZyJNCh1VcGRhdGVBZ2VudE1vZGVsQ29uZmlnUmVxdWVzdBIsCgZjb25maWcYASABKAsyHC5haXJsb2NrLnYxLkFnZW50TW9kZWxDb25maWciTgoeVXBkYXRlQWdlbnRNb2RlbENvbmZpZ1Jlc3BvbnNlEiwKBmNvbmZpZxgBIAEoCzIcLmFpcmxvY2sudjEuQWdlbnRNb2RlbENvbmZpZyJFChdMaXN0QWdlbnRCdWlsZHNSZXNwb25zZRIqCgZidWlsZHMYASADKAsyGi5haXJsb2NrLnYxLkFnZW50QnVpbGRJbmZvIkIKFUdldEFnZW50QnVpbGRSZXNwb25zZRIpCgVidWlsZBgBIAEoCzIaLmFpcmxvY2sudjEuQWdlbnRCdWlsZEluZm8iSgoQTGlzdFJ1bnNSZXNwb25zZRIhCgRydW5zGAEgAygLMhMuYWlybG9jay52MS5SdW5JbmZvEhMKC25leHRfY3Vyc29yGAIgASgJImIKDkdldFJ1blJlc3BvbnNlEiAKA3J1bhgBIAEoCzITLmFpcmxvY2sudjEuUnVuSW5mbxIuCghtZXNzYWdlcxgCIAMoCzIcLmFpcmxvY2sudjEuQWdlbnRNZXNzYWdlSW5mbyIqChlDcmVhdGVDb252ZXJzYXRpb25SZXF1ZXN0Eg0KBXRpdGxlGAEgASgJIlAKGkNyZWF0ZUNvbnZlcnNhdGlvblJlc3BvbnNlEjIKDGNvbnZlcnNhdGlvbhgBIAEoCzIcLmFpcmxvY2sudjEuQ29udmVyc2F0aW9uSW5mbyJQChlMaXN0Q29udmVyc2F0aW9uc1Jlc3BvbnNlEjMKDWNvbnZlcnNhdGlvbnMYASADKAsyHC5haXJsb2NrLnYxLkNvbnZlcnNhdGlvbkluZm8i8gEKF0dldENvbnZlcnNhdGlvblJlc3BvbnNlEjIKDGNvbnZlcnNhdGlvbhgBIAEoCzIcLmFpcmxvY2sudjEuQ29udmVyc2F0aW9uSW5mbxIuCghtZXNzYWdlcxgCIAMoCzIcLmFpcmxvY2sudjEuQWdlbnRNZXNzYWdlSW5mbxI9ChRwZW5kaW5nX2NvbmZpcm1hdGlvbhgDIAEoCzIfLmFpcmxvY2sudjEuUGVuZGluZ0NvbmZpcm1hdGlvbhIaChJoYXNfb2xkZXJfbWVzc2FnZXMYBCABKAgSGAoQaW5fZmxpZ2h0X3J1bl9pZBgFIAEoCSJdChlQYWdpbmF0ZWRNZXNzYWdlc1Jlc3BvbnNlEi4KCG1lc3NhZ2VzGAEgAygLMhwuYWlybG9jay52MS5BZ2VudE1lc3NhZ2VJbmZvEhAKCGhhc19tb3JlGAIgASgIIoEBChNQZW5kaW5nQ29uZmlybWF0aW9uEhQKDHRvb2xfY2FsbF9pZBgBIAEoCRIRCgl0b29sX25hbWUYAiABKAkSDQoFaW5wdXQYAyABKAkSEgoKcGVybWlzc2lvbhgEIAEoCRIQCghwYXR0ZXJucxgFIAMoCRIMCgRjb2RlGAYgASgJIogBCg1Qcm9tcHRSZXF1ZXN0EhcKD2NvbnZlcnNhdGlvbl9pZBgBIAEoCRIPCgdtZXNzYWdlGAIgASgJEhIKCmZpbGVfcGF0aHMYAyADKAkSFQoIYXBwcm92ZWQYBCABKAhIAIgBARIVCg1yZXN1bWVfcnVuX2lkGAUgASgJQgsKCV9hcHByb3ZlZCJQCg5Qcm9tcHRSZXNwb25zZRIOCgZydW5faWQYASABKAkSFwoPY29udmVyc2F0aW9uX2lkGAIgASgJEhUKDWNvbW1hbmRfcmVwbHkYAyABKAkiQQoUTGlzdFdlYmhvb2tzUmVzcG9uc2USKQoId2ViaG9va3MYASADKAsyFy5haXJsb2NrLnYxLldlYmhvb2tJbmZvIjgKEUxpc3RDcm9uc1Jlc3BvbnNlEiMKBWNyb25zGAEgAygLMhQuYWlybG9jay52MS5Dcm9uSW5mbyI4ChFMaXN0VG9vbHNSZXNwb25zZRIjCgV0b29scxgBIAMoCzIULmFpcmxvY2sudjEuVG9vbEluZm8iIgoQRmlyZUNyb25SZXNwb25zZRIOCgZydW5faWQYASABKAkiNgoVQWRkQWdlbnRNZW1iZXJSZXF1ZXN0Eg8KB3VzZXJfaWQYASABKAkSDAoEcm9sZRgCIAEoCSKFAQoPQWdlbnRNZW1iZXJJbmZvEg8KB3VzZXJfaWQYASABKAkSDQoFZW1haWwYAiABKAkSFAoMZGlzcGxheV9uYW1lGAMgASgJEgwKBHJvbGUYBCABKAkSLgoKY3JlYXRlZF9hdBgFIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXAiSAoYTGlzdEFnZW50TWVtYmVyc1Jlc3BvbnNlEiwKB21lbWJlcnMYASADKAsyGy5haXJsb2NrLnYxLkFnZW50TWVtYmVySW5mbyJmChdMaXN0Q29ubmVjdGlvbnNSZXNwb25zZRIvCgtjb25uZWN0aW9ucxgBIAMoCzIaLmFpcmxvY2sudjEuQ29ubmVjdGlvbkluZm8SGgoSb2F1dGhfY2FsbGJhY2tfdXJsGAIgASgJIiMKEFNldEFQSUtleVJlcXVlc3QSDwoHYXBpX2tleRgBIAEoCSI+ChJTZXRPQXV0aEFwcFJlcXVlc3QSEQoJY2xpZW50X2lkGAEgASgJEhUKDWNsaWVudF9zZWNyZXQYAiABKAkiSQoRT0F1dGhTdGFydFJlcXVlc3QSEAoIYWdlbnRfaWQYASABKAkSDAoEc2x1ZxgCIAEoCRIUCgxyZWRpcmVjdF91cmkYAyABKAkiKwoST0F1dGhTdGFydFJlc3BvbnNlEhUKDWF1dGhvcml6ZV91cmwYASABKAkikwEKGENyZWRlbnRpYWxTdGF0dXNSZXNwb25zZRIMCgRzbHVnGAEgASgJEgwKBG5hbWUYAiABKAkSEQoJYXV0aF9tb2RlGAMgASgJEhIKCmF1dGhvcml6ZWQYBCABKAgSNAoQdG9rZW5fZXhwaXJlc19hdBgFIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXAiTwoWVGVzdENyZWRlbnRpYWxSZXNwb25zZRIPCgdzdWNjZXNzGAEgASgIEhMKC3N0YXR1c19jb2RlGAIgASgFEg8KB21lc3NhZ2UYAyABKAkiUgoTQ3JlYXRlQnJpZGdlUmVxdWVzdBIQCghhZ2VudF9pZBgBIAEoCRIMCgRuYW1lGAIgASgJEg0KBXRva2VuGAMgASgJEgwKBHR5cGUYBCABKAkiewoTVXBkYXRlQnJpZGdlUmVxdWVzdBIQCghhZ2VudF9pZBgBIAEoCRIsCghzZXR0aW5ncxgCIAEoCzIaLmFpcmxvY2sudjEuQnJpZGdlU2V0dGluZ3MSFgoJaXNfc3lzdGVtGAMgASgISACIAQFCDAoKX2lzX3N5c3RlbSI+ChNMaXN0QnJpZGdlc1Jlc3BvbnNlEicKB2JyaWRnZXMYASADKAsyFi5haXJsb2NrLnYxLkJyaWRnZUluZm8iUQoYTGlzdENhcGFiaWxpdGllc1Jlc3BvbnNlEjUKCXByb3ZpZGVycxgBIAMoCzIiLmFpcmxvY2sudjEuUHJvdmlkZXJDYXBhYmlsaXR5SW5mbyJWCh5MaXN0UGxhdGZvcm1JZGVudGl0aWVzUmVzcG9uc2USNAoKaWRlbnRpdGllcxgBIAMoCzIgLmFpcmxvY2sudjEuUGxhdGZvcm1JZGVudGl0eUluZm8i5wEKG0xpbmtJZGVudGl0eVByZXZpZXdSZXNwb25zZRIQCghwbGF0Zm9ybRgBIAEoCRITCgticmlkZ2VfbmFtZRgCIAEoCRIUCgxib3RfdXNlcm5hbWUYAyABKAkSGAoQcGxhdGZvcm1fdXNlcl9pZBgEIAEoCRIZChFwbGF0Zm9ybV91c2VybmFtZRgFIAEoCRIdChVwbGF0Zm9ybV9kaXNwbGF5X25hbWUYBiABKAkSGgoSY3VycmVudF91c2VyX2VtYWlsGAcgASgJEhsKE3BsYXRmb3JtX2F2YXRhcl91cmwYCCABKAkiOAoRTGlzdEZpbGVzUmVzcG9uc2USIwoFZmlsZXMYASADKAsyFC5haXJsb2NrLnYxLkZpbGVJbmZvIjUKElVwbG9hZEZpbGVSZXNwb25zZRISCgp1cGxvYWRfdXJsGAEgASgJEgsKA2tleRgCIAEoCSI7ChJMaXN0VG9waWNzUmVzcG9uc2USJQoGdG9waWNzGAEgAygLMhUuYWlybG9jay52MS5Ub3BpY0luZm8iTQoZR2V0U3lzdGVtU2V0dGluZ3NSZXNwb25zZRIwCghzZXR0aW5ncxgBIAEoCzIeLmFpcmxvY2sudjEuU3lzdGVtU2V0dGluZ3NJbmZvIk8KG1VwZGF0ZVN5c3RlbVNldHRpbmdzUmVxdWVzdBIwCghzZXR0aW5ncxgBIAEoCzIeLmFpcmxvY2sudjEuU3lzdGVtU2V0dGluZ3NJbmZvIlAKHFVwZGF0ZVN5c3RlbVNldHRpbmdzUmVzcG9uc2USMAoIc2V0dGluZ3MYASABKAsyHi5haXJsb2NrLnYxLlN5c3RlbVNldHRpbmdzSW5mbyIuCg1FcnJvclJlc3BvbnNlEg0KBWVycm9yGAEgASgJEg4KBmRldGFpbBgCIAEoCSJHChpDcmVhdGVHaXRDcmVkZW50aWFsUmVxdWVzdBIMCgR0eXBlGAEgASgJEgwKBG5hbWUYAiABKAkSDQoFdG9rZW4YAyABKAkiTAobQ3JlYXRlR2l0Q3JlZGVudGlhbFJlc3BvbnNlEi0KCmNyZWRlbnRpYWwYASABKAsyGS5haXJsb2NrLnYxLkdpdENyZWRlbnRpYWwiTAoaTGlzdEdpdENyZWRlbnRpYWxzUmVzcG9uc2USLgoLY3JlZGVudGlhbHMYASADKAsyGS5haXJsb2NrLnYxLkdpdENyZWRlbnRpYWwiYwoWQ29ubmVjdEFnZW50R2l0UmVxdWVzdBIWCg5naXRfcmVtb3RlX3VybBgBIAEoCRIZChFnaXRfY3JlZGVudGlhbF9pZBgCIAEoCRIWCg5kZWZhdWx0X2JyYW5jaBgDIAEoCSJFChdDb25uZWN0QWdlbnRHaXRSZXNwb25zZRIqCgZjb25maWcYASABKAsyGi5haXJsb2NrLnYxLkFnZW50R2l0Q29uZmlnIkcKGUdldEFnZW50R2l0Q29uZmlnUmVzcG9uc2USKgoGY29uZmlnGAEgASgLMhouYWlybG9jay52MS5BZ2VudEdpdENvbmZpZyJkChZMaXN0TUNQU2VydmVyc1Jlc3BvbnNlEi4KC21jcF9zZXJ2ZXJzGAEgAygLMhkuYWlybG9jay52MS5NQ1BTZXJ2ZXJJbmZvEhoKEm9hdXRoX2NhbGxiYWNrX3VybBgCIAEoCSJIChtNQ1BDcmVkZW50aWFsU3RhdHVzUmVzcG9uc2USKQoGc3RhdHVzGAEgASgLMhkuYWlybG9jay52MS5NQ1BTdGF0dXNJbmZvIj8KE0xpc3RFbnZWYXJzUmVzcG9uc2USKAoIZW52X3ZhcnMYASADKAsyFi5haXJsb2NrLnYxLkVudlZhckluZm8iJgoVU2V0RW52VmFyVmFsdWVSZXF1ZXN0Eg0KBXZhbHVlGAEgASgJIi4KGEdlbmVyYXRlUmVsYXlDb2RlUmVxdWVzdBISCgpyZXR1cm5fdXJsGAEgASgJIj8KGUdlbmVyYXRlUmVsYXlDb2RlUmVzcG9uc2USDAoEY29kZRgBIAEoCRIUCgxjYWxsYmFja191cmwYAiABKAkiQQoUTGlzdFNpYmxpbmdzUmVzcG9uc2USKQoIc2libGluZ3MYASADKAsyFy5haXJsb2NrLnYxLlNpYmxpbmdJbmZvIk0KG0xpc3RBZGRhYmxlU2libGluZ3NSZXNwb25zZRIuCgZhZ2VudHMYASADKAsyHi5haXJsb2NrLnYxLkFkZGFibGVTaWJsaW5nSW5mbyJEChdHZXRBZ2VudFNoYXJpbmdSZXNwb25zZRIpCghzZXR0aW5ncxgBIAEoCzIXLmFpcmxvY2sudjEuQTJBU2V0dGluZ3MiRgoZVXBkYXRlQWdlbnRTaGFyaW5nUmVxdWVzdBIpCghzZXR0aW5ncxgBIAEoCzIXLmFpcmxvY2sudjEuQTJBU2V0dGluZ3MiRwoaVXBkYXRlQWdlbnRTaGFyaW5nUmVzcG9uc2USKQoIc2V0dGluZ3MYASABKAsyFy5haXJsb2NrLnYxLkEyQVNldHRpbmdzIkwKGUxpc3RFeGVjRW5kcG9pbnRzUmVzcG9uc2USLwoJZW5kcG9pbnRzGAEgAygLMhwuYWlybG9jay52MS5FeGVjRW5kcG9pbnRJbmZvIkwKHENvbmZpZ3VyZUV4ZWNFbmRwb2ludFJlcXVlc3QSDAoEaG9zdBgBIAEoCRIMCgRwb3J0GAIgASgFEhAKCHNzaF91c2VyGAMgASgJIk8KHUNvbmZpZ3VyZUV4ZWNFbmRwb2ludFJlc3BvbnNlEi4KCGVuZHBvaW50GAEgASgLMhwuYWlybG9jay52MS5FeGVjRW5kcG9pbnRJbmZvIksKGVJvdGF0ZUV4ZWNLZXlwYWlyUmVzcG9uc2USLgoIZW5kcG9pbnQYASABKAsyHC5haXJsb2NrLnYxLkV4ZWNFbmRwb2ludEluZm8iTgoYVGVzdEV4ZWNFbmRwb2ludFJlc3BvbnNlEjIKBnJlc3VsdBgBIAEoCzIiLmFpcmxvY2sudjEuRXhlY0VuZHBvaW50VGVzdFJlc3VsdCJMCh1Db25uZWN0aW9uU2V0dXBTdGF0dXNSZXNwb25zZRIrCgZjb3VudHMYASABKAsyGy5haXJsb2NrLnYxLlNldHVwQ291bnRzSW5mbyI4Cg5IZWFsdGhSZXNwb25zZRIOCgZzdGF0dXMYASABKAkSCgoCZGIYAiABKAgSCgoCczMYAyABKAhCOFo2Z2l0aHViLmNvbS9haXJsb2NrcnVuL2FpcmxvY2svZ2VuL2FpcmxvY2svdjE7YWlybG9ja3YxYgZwcm90bzM", [file_airlock_v1_types, file_google_protobuf_timestamp]);
 
 /**
  * @generated from message airlock.v1.RegisterRequest
@@ -311,6 +311,33 @@ export const ListUsersResponseSchema: GenMessage<ListUsersResponse> = /*@__PURE_
   messageDesc(file_airlock_v1_api, 11);
 
 /**
+ * MeResponse is the /api/v1/me payload. tenant_permissions enumerates
+ * every tenant-axis Action (from airlock/authz/policy.go) the caller's
+ * tenant role currently satisfies — the frontend uses this as the single
+ * source of truth for UI gating, replacing per-component role checks.
+ *
+ * @generated from message airlock.v1.MeResponse
+ */
+export type MeResponse = Message<"airlock.v1.MeResponse"> & {
+  /**
+   * @generated from field: airlock.v1.User user = 1;
+   */
+  user?: User | undefined;
+
+  /**
+   * @generated from field: repeated string tenant_permissions = 2;
+   */
+  tenantPermissions: string[];
+};
+
+/**
+ * Describes the message airlock.v1.MeResponse.
+ * Use `create(MeResponseSchema)` to create a new message.
+ */
+export const MeResponseSchema: GenMessage<MeResponse> = /*@__PURE__*/
+  messageDesc(file_airlock_v1_api, 12);
+
+/**
  * @generated from message airlock.v1.ListSelectableUsersResponse
  */
 export type ListSelectableUsersResponse = Message<"airlock.v1.ListSelectableUsersResponse"> & {
@@ -325,7 +352,7 @@ export type ListSelectableUsersResponse = Message<"airlock.v1.ListSelectableUser
  * Use `create(ListSelectableUsersResponseSchema)` to create a new message.
  */
 export const ListSelectableUsersResponseSchema: GenMessage<ListSelectableUsersResponse> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_api, 12);
+  messageDesc(file_airlock_v1_api, 13);
 
 /**
  * @generated from message airlock.v1.UpdateUserRoleRequest
@@ -342,7 +369,7 @@ export type UpdateUserRoleRequest = Message<"airlock.v1.UpdateUserRoleRequest"> 
  * Use `create(UpdateUserRoleRequestSchema)` to create a new message.
  */
 export const UpdateUserRoleRequestSchema: GenMessage<UpdateUserRoleRequest> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_api, 13);
+  messageDesc(file_airlock_v1_api, 14);
 
 /**
  * @generated from message airlock.v1.CreateProviderRequest
@@ -382,7 +409,7 @@ export type CreateProviderRequest = Message<"airlock.v1.CreateProviderRequest"> 
  * Use `create(CreateProviderRequestSchema)` to create a new message.
  */
 export const CreateProviderRequestSchema: GenMessage<CreateProviderRequest> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_api, 14);
+  messageDesc(file_airlock_v1_api, 15);
 
 /**
  * @generated from message airlock.v1.CreateProviderResponse
@@ -399,7 +426,7 @@ export type CreateProviderResponse = Message<"airlock.v1.CreateProviderResponse"
  * Use `create(CreateProviderResponseSchema)` to create a new message.
  */
 export const CreateProviderResponseSchema: GenMessage<CreateProviderResponse> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_api, 15);
+  messageDesc(file_airlock_v1_api, 16);
 
 /**
  * @generated from message airlock.v1.ListProvidersResponse
@@ -416,7 +443,7 @@ export type ListProvidersResponse = Message<"airlock.v1.ListProvidersResponse"> 
  * Use `create(ListProvidersResponseSchema)` to create a new message.
  */
 export const ListProvidersResponseSchema: GenMessage<ListProvidersResponse> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_api, 16);
+  messageDesc(file_airlock_v1_api, 17);
 
 /**
  * @generated from message airlock.v1.UpdateProviderRequest
@@ -457,7 +484,7 @@ export type UpdateProviderRequest = Message<"airlock.v1.UpdateProviderRequest"> 
  * Use `create(UpdateProviderRequestSchema)` to create a new message.
  */
 export const UpdateProviderRequestSchema: GenMessage<UpdateProviderRequest> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_api, 17);
+  messageDesc(file_airlock_v1_api, 18);
 
 /**
  * @generated from message airlock.v1.UpdateProviderResponse
@@ -474,7 +501,7 @@ export type UpdateProviderResponse = Message<"airlock.v1.UpdateProviderResponse"
  * Use `create(UpdateProviderResponseSchema)` to create a new message.
  */
 export const UpdateProviderResponseSchema: GenMessage<UpdateProviderResponse> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_api, 18);
+  messageDesc(file_airlock_v1_api, 19);
 
 /**
  * @generated from message airlock.v1.ListCatalogProvidersResponse
@@ -491,7 +518,7 @@ export type ListCatalogProvidersResponse = Message<"airlock.v1.ListCatalogProvid
  * Use `create(ListCatalogProvidersResponseSchema)` to create a new message.
  */
 export const ListCatalogProvidersResponseSchema: GenMessage<ListCatalogProvidersResponse> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_api, 19);
+  messageDesc(file_airlock_v1_api, 20);
 
 /**
  * @generated from message airlock.v1.ListCatalogModelsResponse
@@ -508,7 +535,7 @@ export type ListCatalogModelsResponse = Message<"airlock.v1.ListCatalogModelsRes
  * Use `create(ListCatalogModelsResponseSchema)` to create a new message.
  */
 export const ListCatalogModelsResponseSchema: GenMessage<ListCatalogModelsResponse> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_api, 20);
+  messageDesc(file_airlock_v1_api, 21);
 
 /**
  * @generated from message airlock.v1.CreateAgentRequest
@@ -557,6 +584,27 @@ export type CreateAgentRequest = Message<"airlock.v1.CreateAgentRequest"> & {
    * @generated from field: string exec_provider_id = 8;
    */
   execProviderId: string;
+
+  /**
+   * Optional external git connection. When git_remote_url is set the
+   * agent is attached to the remote on create and the scaffold +
+   * codegen are pushed to it via the build pipeline.
+   *
+   * @generated from field: string git_remote_url = 9;
+   */
+  gitRemoteUrl: string;
+
+  /**
+   * @generated from field: string git_credential_id = 10;
+   */
+  gitCredentialId: string;
+
+  /**
+   * empty → "main"
+   *
+   * @generated from field: string git_default_branch = 11;
+   */
+  gitDefaultBranch: string;
 };
 
 /**
@@ -564,7 +612,7 @@ export type CreateAgentRequest = Message<"airlock.v1.CreateAgentRequest"> & {
  * Use `create(CreateAgentRequestSchema)` to create a new message.
  */
 export const CreateAgentRequestSchema: GenMessage<CreateAgentRequest> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_api, 21);
+  messageDesc(file_airlock_v1_api, 22);
 
 /**
  * @generated from message airlock.v1.CreateAgentResponse
@@ -581,7 +629,7 @@ export type CreateAgentResponse = Message<"airlock.v1.CreateAgentResponse"> & {
  * Use `create(CreateAgentResponseSchema)` to create a new message.
  */
 export const CreateAgentResponseSchema: GenMessage<CreateAgentResponse> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_api, 22);
+  messageDesc(file_airlock_v1_api, 23);
 
 /**
  * @generated from message airlock.v1.ListAgentsResponse
@@ -598,7 +646,7 @@ export type ListAgentsResponse = Message<"airlock.v1.ListAgentsResponse"> & {
  * Use `create(ListAgentsResponseSchema)` to create a new message.
  */
 export const ListAgentsResponseSchema: GenMessage<ListAgentsResponse> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_api, 23);
+  messageDesc(file_airlock_v1_api, 24);
 
 /**
  * GetAgentDetailResponse returns rich agent detail with connections, webhooks, crons, and routes.
@@ -630,6 +678,16 @@ export type GetAgentDetailResponse = Message<"airlock.v1.GetAgentDetailResponse"
    * @generated from field: repeated airlock.v1.RouteInfo routes = 5;
    */
   routes: RouteInfo[];
+
+  /**
+   * External base URL for the agent's registered routes
+   * ({scheme}://{slug}.{agentDomain}[:port], no trailing slash). The UI
+   * links GET routes to route_base_url + path. Server-built from env —
+   * agent_domain is not client-derivable.
+   *
+   * @generated from field: string route_base_url = 6;
+   */
+  routeBaseUrl: string;
 };
 
 /**
@@ -637,7 +695,7 @@ export type GetAgentDetailResponse = Message<"airlock.v1.GetAgentDetailResponse"
  * Use `create(GetAgentDetailResponseSchema)` to create a new message.
  */
 export const GetAgentDetailResponseSchema: GenMessage<GetAgentDetailResponse> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_api, 24);
+  messageDesc(file_airlock_v1_api, 25);
 
 /**
  * @generated from message airlock.v1.UpdateAgentRequest
@@ -652,6 +710,20 @@ export type UpdateAgentRequest = Message<"airlock.v1.UpdateAgentRequest"> & {
    * @generated from field: optional bool auto_fix = 2;
    */
   autoFix?: boolean | undefined;
+
+  /**
+   * Rename: omitted (null) leaves the field unchanged. slug must stay
+   * unique and kebab-shaped; changing it re-points sibling agent_<slug>
+   * bindings and any externally-configured MCP URL.
+   *
+   * @generated from field: optional string name = 5;
+   */
+  name?: string | undefined;
+
+  /**
+   * @generated from field: optional string slug = 6;
+   */
+  slug?: string | undefined;
 };
 
 /**
@@ -659,7 +731,7 @@ export type UpdateAgentRequest = Message<"airlock.v1.UpdateAgentRequest"> & {
  * Use `create(UpdateAgentRequestSchema)` to create a new message.
  */
 export const UpdateAgentRequestSchema: GenMessage<UpdateAgentRequest> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_api, 25);
+  messageDesc(file_airlock_v1_api, 26);
 
 /**
  * @generated from message airlock.v1.UpdateAgentResponse
@@ -676,7 +748,7 @@ export type UpdateAgentResponse = Message<"airlock.v1.UpdateAgentResponse"> & {
  * Use `create(UpdateAgentResponseSchema)` to create a new message.
  */
 export const UpdateAgentResponseSchema: GenMessage<UpdateAgentResponse> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_api, 26);
+  messageDesc(file_airlock_v1_api, 27);
 
 /**
  * @generated from message airlock.v1.UpgradeAgentRequest
@@ -702,7 +774,34 @@ export type UpgradeAgentRequest = Message<"airlock.v1.UpgradeAgentRequest"> & {
  * Use `create(UpgradeAgentRequestSchema)` to create a new message.
  */
 export const UpgradeAgentRequestSchema: GenMessage<UpgradeAgentRequest> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_api, 27);
+  messageDesc(file_airlock_v1_api, 28);
+
+/**
+ * RollbackBuildRequest targets a specific past build to roll back to.
+ * build_id must reference a completed build belonging to the agent.
+ * conversation_id is optional; when set, a single post-rollback message
+ * is posted into that conversation (mirroring upgrade's notifier).
+ *
+ * @generated from message airlock.v1.RollbackBuildRequest
+ */
+export type RollbackBuildRequest = Message<"airlock.v1.RollbackBuildRequest"> & {
+  /**
+   * @generated from field: string build_id = 1;
+   */
+  buildId: string;
+
+  /**
+   * @generated from field: string conversation_id = 2;
+   */
+  conversationId: string;
+};
+
+/**
+ * Describes the message airlock.v1.RollbackBuildRequest.
+ * Use `create(RollbackBuildRequestSchema)` to create a new message.
+ */
+export const RollbackBuildRequestSchema: GenMessage<RollbackBuildRequest> = /*@__PURE__*/
+  messageDesc(file_airlock_v1_api, 29);
 
 /**
  * @generated from message airlock.v1.ModelSlotInfo
@@ -749,7 +848,7 @@ export type ModelSlotInfo = Message<"airlock.v1.ModelSlotInfo"> & {
  * Use `create(ModelSlotInfoSchema)` to create a new message.
  */
 export const ModelSlotInfoSchema: GenMessage<ModelSlotInfo> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_api, 28);
+  messageDesc(file_airlock_v1_api, 30);
 
 /**
  * @generated from message airlock.v1.AgentModelConfig
@@ -849,7 +948,7 @@ export type AgentModelConfig = Message<"airlock.v1.AgentModelConfig"> & {
  * Use `create(AgentModelConfigSchema)` to create a new message.
  */
 export const AgentModelConfigSchema: GenMessage<AgentModelConfig> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_api, 29);
+  messageDesc(file_airlock_v1_api, 31);
 
 /**
  * @generated from message airlock.v1.GetAgentModelConfigResponse
@@ -866,7 +965,7 @@ export type GetAgentModelConfigResponse = Message<"airlock.v1.GetAgentModelConfi
  * Use `create(GetAgentModelConfigResponseSchema)` to create a new message.
  */
 export const GetAgentModelConfigResponseSchema: GenMessage<GetAgentModelConfigResponse> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_api, 30);
+  messageDesc(file_airlock_v1_api, 32);
 
 /**
  * @generated from message airlock.v1.UpdateAgentModelConfigRequest
@@ -883,7 +982,7 @@ export type UpdateAgentModelConfigRequest = Message<"airlock.v1.UpdateAgentModel
  * Use `create(UpdateAgentModelConfigRequestSchema)` to create a new message.
  */
 export const UpdateAgentModelConfigRequestSchema: GenMessage<UpdateAgentModelConfigRequest> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_api, 31);
+  messageDesc(file_airlock_v1_api, 33);
 
 /**
  * @generated from message airlock.v1.UpdateAgentModelConfigResponse
@@ -900,7 +999,7 @@ export type UpdateAgentModelConfigResponse = Message<"airlock.v1.UpdateAgentMode
  * Use `create(UpdateAgentModelConfigResponseSchema)` to create a new message.
  */
 export const UpdateAgentModelConfigResponseSchema: GenMessage<UpdateAgentModelConfigResponse> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_api, 32);
+  messageDesc(file_airlock_v1_api, 34);
 
 /**
  * @generated from message airlock.v1.ListAgentBuildsResponse
@@ -917,7 +1016,7 @@ export type ListAgentBuildsResponse = Message<"airlock.v1.ListAgentBuildsRespons
  * Use `create(ListAgentBuildsResponseSchema)` to create a new message.
  */
 export const ListAgentBuildsResponseSchema: GenMessage<ListAgentBuildsResponse> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_api, 33);
+  messageDesc(file_airlock_v1_api, 35);
 
 /**
  * @generated from message airlock.v1.GetAgentBuildResponse
@@ -934,7 +1033,7 @@ export type GetAgentBuildResponse = Message<"airlock.v1.GetAgentBuildResponse"> 
  * Use `create(GetAgentBuildResponseSchema)` to create a new message.
  */
 export const GetAgentBuildResponseSchema: GenMessage<GetAgentBuildResponse> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_api, 34);
+  messageDesc(file_airlock_v1_api, 36);
 
 /**
  * @generated from message airlock.v1.ListRunsResponse
@@ -956,7 +1055,7 @@ export type ListRunsResponse = Message<"airlock.v1.ListRunsResponse"> & {
  * Use `create(ListRunsResponseSchema)` to create a new message.
  */
 export const ListRunsResponseSchema: GenMessage<ListRunsResponse> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_api, 35);
+  messageDesc(file_airlock_v1_api, 37);
 
 /**
  * @generated from message airlock.v1.GetRunResponse
@@ -980,7 +1079,7 @@ export type GetRunResponse = Message<"airlock.v1.GetRunResponse"> & {
  * Use `create(GetRunResponseSchema)` to create a new message.
  */
 export const GetRunResponseSchema: GenMessage<GetRunResponse> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_api, 36);
+  messageDesc(file_airlock_v1_api, 38);
 
 /**
  * @generated from message airlock.v1.CreateConversationRequest
@@ -999,7 +1098,7 @@ export type CreateConversationRequest = Message<"airlock.v1.CreateConversationRe
  * Use `create(CreateConversationRequestSchema)` to create a new message.
  */
 export const CreateConversationRequestSchema: GenMessage<CreateConversationRequest> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_api, 37);
+  messageDesc(file_airlock_v1_api, 39);
 
 /**
  * @generated from message airlock.v1.CreateConversationResponse
@@ -1016,7 +1115,7 @@ export type CreateConversationResponse = Message<"airlock.v1.CreateConversationR
  * Use `create(CreateConversationResponseSchema)` to create a new message.
  */
 export const CreateConversationResponseSchema: GenMessage<CreateConversationResponse> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_api, 38);
+  messageDesc(file_airlock_v1_api, 40);
 
 /**
  * @generated from message airlock.v1.ListConversationsResponse
@@ -1033,7 +1132,7 @@ export type ListConversationsResponse = Message<"airlock.v1.ListConversationsRes
  * Use `create(ListConversationsResponseSchema)` to create a new message.
  */
 export const ListConversationsResponseSchema: GenMessage<ListConversationsResponse> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_api, 39);
+  messageDesc(file_airlock_v1_api, 41);
 
 /**
  * @generated from message airlock.v1.GetConversationResponse
@@ -1064,6 +1163,17 @@ export type GetConversationResponse = Message<"airlock.v1.GetConversationRespons
    * @generated from field: bool has_older_messages = 4;
    */
   hasOlderMessages: boolean;
+
+  /**
+   * in_flight_run_id is set when a prompt run is currently in flight for
+   * this conversation (status=running). Lets the client adopt the run id
+   * even when it joined after the run.started WS event already fired —
+   * without it, mid-flight WS deltas / completion events get filtered
+   * out and the Cancel button stays disabled until a page refresh.
+   *
+   * @generated from field: string in_flight_run_id = 5;
+   */
+  inFlightRunId: string;
 };
 
 /**
@@ -1071,7 +1181,7 @@ export type GetConversationResponse = Message<"airlock.v1.GetConversationRespons
  * Use `create(GetConversationResponseSchema)` to create a new message.
  */
 export const GetConversationResponseSchema: GenMessage<GetConversationResponse> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_api, 40);
+  messageDesc(file_airlock_v1_api, 42);
 
 /**
  * PaginatedMessagesResponse is the result of GET /api/v1/conversations/{convID}/messages
@@ -1099,10 +1209,11 @@ export type PaginatedMessagesResponse = Message<"airlock.v1.PaginatedMessagesRes
  * Use `create(PaginatedMessagesResponseSchema)` to create a new message.
  */
 export const PaginatedMessagesResponseSchema: GenMessage<PaginatedMessagesResponse> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_api, 41);
+  messageDesc(file_airlock_v1_api, 43);
 
 /**
- * PendingConfirmation describes a tool call awaiting user approval.
+ * PendingConfirmation describes a tool call awaiting user approval,
+ * reconstructed from a suspended run's checkpoint on conversation load.
  *
  * @generated from message airlock.v1.PendingConfirmation
  */
@@ -1118,11 +1229,31 @@ export type PendingConfirmation = Message<"airlock.v1.PendingConfirmation"> & {
   toolName: string;
 
   /**
-   * JSON-encoded tool input
+   * JSON-encoded tool input (direct run_js confirmation)
    *
    * @generated from field: string input = 3;
    */
   input: string;
+
+  /**
+   * permission/patterns/code carry the confirmation detail for a
+   * delegated (A2A) suspension — a sub-agent's request_confirmation that
+   * surfaced through promptAgent. Mirrors ConfirmationRequiredEvent so
+   * the UI renders it the same as a live confirmation.
+   *
+   * @generated from field: string permission = 4;
+   */
+  permission: string;
+
+  /**
+   * @generated from field: repeated string patterns = 5;
+   */
+  patterns: string[];
+
+  /**
+   * @generated from field: string code = 6;
+   */
+  code: string;
 };
 
 /**
@@ -1130,7 +1261,7 @@ export type PendingConfirmation = Message<"airlock.v1.PendingConfirmation"> & {
  * Use `create(PendingConfirmationSchema)` to create a new message.
  */
 export const PendingConfirmationSchema: GenMessage<PendingConfirmation> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_api, 42);
+  messageDesc(file_airlock_v1_api, 44);
 
 /**
  * @generated from message airlock.v1.PromptRequest
@@ -1157,6 +1288,15 @@ export type PromptRequest = Message<"airlock.v1.PromptRequest"> & {
    * @generated from field: optional bool approved = 4;
    */
   approved?: boolean | undefined;
+
+  /**
+   * The exact run the UI is approving/denying — carried from the
+   * confirmation event so the backend resumes that run instead of guessing
+   * the conversation's latest suspended run. Required when `approved` is set.
+   *
+   * @generated from field: string resume_run_id = 5;
+   */
+  resumeRunId: string;
 };
 
 /**
@@ -1164,7 +1304,7 @@ export type PromptRequest = Message<"airlock.v1.PromptRequest"> & {
  * Use `create(PromptRequestSchema)` to create a new message.
  */
 export const PromptRequestSchema: GenMessage<PromptRequest> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_api, 43);
+  messageDesc(file_airlock_v1_api, 45);
 
 /**
  * @generated from message airlock.v1.PromptResponse
@@ -1196,7 +1336,7 @@ export type PromptResponse = Message<"airlock.v1.PromptResponse"> & {
  * Use `create(PromptResponseSchema)` to create a new message.
  */
 export const PromptResponseSchema: GenMessage<PromptResponse> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_api, 44);
+  messageDesc(file_airlock_v1_api, 46);
 
 /**
  * @generated from message airlock.v1.ListWebhooksResponse
@@ -1213,7 +1353,7 @@ export type ListWebhooksResponse = Message<"airlock.v1.ListWebhooksResponse"> & 
  * Use `create(ListWebhooksResponseSchema)` to create a new message.
  */
 export const ListWebhooksResponseSchema: GenMessage<ListWebhooksResponse> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_api, 45);
+  messageDesc(file_airlock_v1_api, 47);
 
 /**
  * @generated from message airlock.v1.ListCronsResponse
@@ -1230,7 +1370,7 @@ export type ListCronsResponse = Message<"airlock.v1.ListCronsResponse"> & {
  * Use `create(ListCronsResponseSchema)` to create a new message.
  */
 export const ListCronsResponseSchema: GenMessage<ListCronsResponse> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_api, 46);
+  messageDesc(file_airlock_v1_api, 48);
 
 /**
  * @generated from message airlock.v1.ListToolsResponse
@@ -1247,7 +1387,7 @@ export type ListToolsResponse = Message<"airlock.v1.ListToolsResponse"> & {
  * Use `create(ListToolsResponseSchema)` to create a new message.
  */
 export const ListToolsResponseSchema: GenMessage<ListToolsResponse> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_api, 47);
+  messageDesc(file_airlock_v1_api, 49);
 
 /**
  * @generated from message airlock.v1.FireCronResponse
@@ -1264,7 +1404,7 @@ export type FireCronResponse = Message<"airlock.v1.FireCronResponse"> & {
  * Use `create(FireCronResponseSchema)` to create a new message.
  */
 export const FireCronResponseSchema: GenMessage<FireCronResponse> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_api, 48);
+  messageDesc(file_airlock_v1_api, 50);
 
 /**
  * @generated from message airlock.v1.AddAgentMemberRequest
@@ -1288,7 +1428,7 @@ export type AddAgentMemberRequest = Message<"airlock.v1.AddAgentMemberRequest"> 
  * Use `create(AddAgentMemberRequestSchema)` to create a new message.
  */
 export const AddAgentMemberRequestSchema: GenMessage<AddAgentMemberRequest> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_api, 49);
+  messageDesc(file_airlock_v1_api, 51);
 
 /**
  * @generated from message airlock.v1.AgentMemberInfo
@@ -1325,7 +1465,7 @@ export type AgentMemberInfo = Message<"airlock.v1.AgentMemberInfo"> & {
  * Use `create(AgentMemberInfoSchema)` to create a new message.
  */
 export const AgentMemberInfoSchema: GenMessage<AgentMemberInfo> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_api, 50);
+  messageDesc(file_airlock_v1_api, 52);
 
 /**
  * @generated from message airlock.v1.ListAgentMembersResponse
@@ -1342,7 +1482,7 @@ export type ListAgentMembersResponse = Message<"airlock.v1.ListAgentMembersRespo
  * Use `create(ListAgentMembersResponseSchema)` to create a new message.
  */
 export const ListAgentMembersResponseSchema: GenMessage<ListAgentMembersResponse> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_api, 51);
+  messageDesc(file_airlock_v1_api, 53);
 
 /**
  * @generated from message airlock.v1.ListConnectionsResponse
@@ -1366,7 +1506,7 @@ export type ListConnectionsResponse = Message<"airlock.v1.ListConnectionsRespons
  * Use `create(ListConnectionsResponseSchema)` to create a new message.
  */
 export const ListConnectionsResponseSchema: GenMessage<ListConnectionsResponse> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_api, 52);
+  messageDesc(file_airlock_v1_api, 54);
 
 /**
  * @generated from message airlock.v1.SetAPIKeyRequest
@@ -1383,7 +1523,7 @@ export type SetAPIKeyRequest = Message<"airlock.v1.SetAPIKeyRequest"> & {
  * Use `create(SetAPIKeyRequestSchema)` to create a new message.
  */
 export const SetAPIKeyRequestSchema: GenMessage<SetAPIKeyRequest> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_api, 53);
+  messageDesc(file_airlock_v1_api, 55);
 
 /**
  * @generated from message airlock.v1.SetOAuthAppRequest
@@ -1405,7 +1545,7 @@ export type SetOAuthAppRequest = Message<"airlock.v1.SetOAuthAppRequest"> & {
  * Use `create(SetOAuthAppRequestSchema)` to create a new message.
  */
 export const SetOAuthAppRequestSchema: GenMessage<SetOAuthAppRequest> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_api, 54);
+  messageDesc(file_airlock_v1_api, 56);
 
 /**
  * @generated from message airlock.v1.OAuthStartRequest
@@ -1432,7 +1572,7 @@ export type OAuthStartRequest = Message<"airlock.v1.OAuthStartRequest"> & {
  * Use `create(OAuthStartRequestSchema)` to create a new message.
  */
 export const OAuthStartRequestSchema: GenMessage<OAuthStartRequest> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_api, 55);
+  messageDesc(file_airlock_v1_api, 57);
 
 /**
  * @generated from message airlock.v1.OAuthStartResponse
@@ -1449,7 +1589,7 @@ export type OAuthStartResponse = Message<"airlock.v1.OAuthStartResponse"> & {
  * Use `create(OAuthStartResponseSchema)` to create a new message.
  */
 export const OAuthStartResponseSchema: GenMessage<OAuthStartResponse> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_api, 56);
+  messageDesc(file_airlock_v1_api, 58);
 
 /**
  * @generated from message airlock.v1.CredentialStatusResponse
@@ -1486,7 +1626,7 @@ export type CredentialStatusResponse = Message<"airlock.v1.CredentialStatusRespo
  * Use `create(CredentialStatusResponseSchema)` to create a new message.
  */
 export const CredentialStatusResponseSchema: GenMessage<CredentialStatusResponse> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_api, 57);
+  messageDesc(file_airlock_v1_api, 59);
 
 /**
  * @generated from message airlock.v1.TestCredentialResponse
@@ -1513,7 +1653,7 @@ export type TestCredentialResponse = Message<"airlock.v1.TestCredentialResponse"
  * Use `create(TestCredentialResponseSchema)` to create a new message.
  */
 export const TestCredentialResponseSchema: GenMessage<TestCredentialResponse> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_api, 58);
+  messageDesc(file_airlock_v1_api, 60);
 
 /**
  * @generated from message airlock.v1.CreateBridgeRequest
@@ -1547,7 +1687,7 @@ export type CreateBridgeRequest = Message<"airlock.v1.CreateBridgeRequest"> & {
  * Use `create(CreateBridgeRequestSchema)` to create a new message.
  */
 export const CreateBridgeRequestSchema: GenMessage<CreateBridgeRequest> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_api, 59);
+  messageDesc(file_airlock_v1_api, 61);
 
 /**
  * Update fields on an existing bridge. Both fields are independent —
@@ -1566,6 +1706,16 @@ export type UpdateBridgeRequest = Message<"airlock.v1.UpdateBridgeRequest"> & {
    * @generated from field: airlock.v1.BridgeSettings settings = 2;
    */
   settings?: BridgeSettings | undefined;
+
+  /**
+   * Switch a bridge between the system-agent surface and an agent
+   * surface. Optional: unset = leave as-is. Switching to system
+   * requires the TenantBridgeSystem permission and forces agent_id
+   * empty; switching away from system requires a non-empty agent_id.
+   *
+   * @generated from field: optional bool is_system = 3;
+   */
+  isSystem?: boolean | undefined;
 };
 
 /**
@@ -1573,7 +1723,7 @@ export type UpdateBridgeRequest = Message<"airlock.v1.UpdateBridgeRequest"> & {
  * Use `create(UpdateBridgeRequestSchema)` to create a new message.
  */
 export const UpdateBridgeRequestSchema: GenMessage<UpdateBridgeRequest> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_api, 60);
+  messageDesc(file_airlock_v1_api, 62);
 
 /**
  * @generated from message airlock.v1.ListBridgesResponse
@@ -1590,7 +1740,7 @@ export type ListBridgesResponse = Message<"airlock.v1.ListBridgesResponse"> & {
  * Use `create(ListBridgesResponseSchema)` to create a new message.
  */
 export const ListBridgesResponseSchema: GenMessage<ListBridgesResponse> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_api, 61);
+  messageDesc(file_airlock_v1_api, 63);
 
 /**
  * @generated from message airlock.v1.ListCapabilitiesResponse
@@ -1607,7 +1757,7 @@ export type ListCapabilitiesResponse = Message<"airlock.v1.ListCapabilitiesRespo
  * Use `create(ListCapabilitiesResponseSchema)` to create a new message.
  */
 export const ListCapabilitiesResponseSchema: GenMessage<ListCapabilitiesResponse> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_api, 62);
+  messageDesc(file_airlock_v1_api, 64);
 
 /**
  * @generated from message airlock.v1.ListPlatformIdentitiesResponse
@@ -1624,7 +1774,7 @@ export type ListPlatformIdentitiesResponse = Message<"airlock.v1.ListPlatformIde
  * Use `create(ListPlatformIdentitiesResponseSchema)` to create a new message.
  */
 export const ListPlatformIdentitiesResponseSchema: GenMessage<ListPlatformIdentitiesResponse> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_api, 63);
+  messageDesc(file_airlock_v1_api, 65);
 
 /**
  * LinkIdentityPreviewResponse is returned by GET /api/v1/link-identity/preview
@@ -1697,7 +1847,7 @@ export type LinkIdentityPreviewResponse = Message<"airlock.v1.LinkIdentityPrevie
  * Use `create(LinkIdentityPreviewResponseSchema)` to create a new message.
  */
 export const LinkIdentityPreviewResponseSchema: GenMessage<LinkIdentityPreviewResponse> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_api, 64);
+  messageDesc(file_airlock_v1_api, 66);
 
 /**
  * @generated from message airlock.v1.ListFilesResponse
@@ -1714,7 +1864,7 @@ export type ListFilesResponse = Message<"airlock.v1.ListFilesResponse"> & {
  * Use `create(ListFilesResponseSchema)` to create a new message.
  */
 export const ListFilesResponseSchema: GenMessage<ListFilesResponse> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_api, 65);
+  messageDesc(file_airlock_v1_api, 67);
 
 /**
  * @generated from message airlock.v1.UploadFileResponse
@@ -1736,7 +1886,7 @@ export type UploadFileResponse = Message<"airlock.v1.UploadFileResponse"> & {
  * Use `create(UploadFileResponseSchema)` to create a new message.
  */
 export const UploadFileResponseSchema: GenMessage<UploadFileResponse> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_api, 66);
+  messageDesc(file_airlock_v1_api, 68);
 
 /**
  * @generated from message airlock.v1.ListTopicsResponse
@@ -1753,7 +1903,7 @@ export type ListTopicsResponse = Message<"airlock.v1.ListTopicsResponse"> & {
  * Use `create(ListTopicsResponseSchema)` to create a new message.
  */
 export const ListTopicsResponseSchema: GenMessage<ListTopicsResponse> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_api, 67);
+  messageDesc(file_airlock_v1_api, 69);
 
 /**
  * @generated from message airlock.v1.GetSystemSettingsResponse
@@ -1770,7 +1920,7 @@ export type GetSystemSettingsResponse = Message<"airlock.v1.GetSystemSettingsRes
  * Use `create(GetSystemSettingsResponseSchema)` to create a new message.
  */
 export const GetSystemSettingsResponseSchema: GenMessage<GetSystemSettingsResponse> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_api, 68);
+  messageDesc(file_airlock_v1_api, 70);
 
 /**
  * @generated from message airlock.v1.UpdateSystemSettingsRequest
@@ -1787,7 +1937,7 @@ export type UpdateSystemSettingsRequest = Message<"airlock.v1.UpdateSystemSettin
  * Use `create(UpdateSystemSettingsRequestSchema)` to create a new message.
  */
 export const UpdateSystemSettingsRequestSchema: GenMessage<UpdateSystemSettingsRequest> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_api, 69);
+  messageDesc(file_airlock_v1_api, 71);
 
 /**
  * @generated from message airlock.v1.UpdateSystemSettingsResponse
@@ -1804,7 +1954,7 @@ export type UpdateSystemSettingsResponse = Message<"airlock.v1.UpdateSystemSetti
  * Use `create(UpdateSystemSettingsResponseSchema)` to create a new message.
  */
 export const UpdateSystemSettingsResponseSchema: GenMessage<UpdateSystemSettingsResponse> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_api, 70);
+  messageDesc(file_airlock_v1_api, 72);
 
 /**
  * @generated from message airlock.v1.ErrorResponse
@@ -1826,7 +1976,446 @@ export type ErrorResponse = Message<"airlock.v1.ErrorResponse"> & {
  * Use `create(ErrorResponseSchema)` to create a new message.
  */
 export const ErrorResponseSchema: GenMessage<ErrorResponse> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_api, 71);
+  messageDesc(file_airlock_v1_api, 73);
+
+/**
+ * @generated from message airlock.v1.CreateGitCredentialRequest
+ */
+export type CreateGitCredentialRequest = Message<"airlock.v1.CreateGitCredentialRequest"> & {
+  /**
+   * "pat" (v1)
+   *
+   * @generated from field: string type = 1;
+   */
+  type: string;
+
+  /**
+   * user-chosen label, unique per user
+   *
+   * @generated from field: string name = 2;
+   */
+  name: string;
+
+  /**
+   * plaintext PAT; encrypted on the backend
+   *
+   * @generated from field: string token = 3;
+   */
+  token: string;
+};
+
+/**
+ * Describes the message airlock.v1.CreateGitCredentialRequest.
+ * Use `create(CreateGitCredentialRequestSchema)` to create a new message.
+ */
+export const CreateGitCredentialRequestSchema: GenMessage<CreateGitCredentialRequest> = /*@__PURE__*/
+  messageDesc(file_airlock_v1_api, 74);
+
+/**
+ * @generated from message airlock.v1.CreateGitCredentialResponse
+ */
+export type CreateGitCredentialResponse = Message<"airlock.v1.CreateGitCredentialResponse"> & {
+  /**
+   * @generated from field: airlock.v1.GitCredential credential = 1;
+   */
+  credential?: GitCredential | undefined;
+};
+
+/**
+ * Describes the message airlock.v1.CreateGitCredentialResponse.
+ * Use `create(CreateGitCredentialResponseSchema)` to create a new message.
+ */
+export const CreateGitCredentialResponseSchema: GenMessage<CreateGitCredentialResponse> = /*@__PURE__*/
+  messageDesc(file_airlock_v1_api, 75);
+
+/**
+ * @generated from message airlock.v1.ListGitCredentialsResponse
+ */
+export type ListGitCredentialsResponse = Message<"airlock.v1.ListGitCredentialsResponse"> & {
+  /**
+   * @generated from field: repeated airlock.v1.GitCredential credentials = 1;
+   */
+  credentials: GitCredential[];
+};
+
+/**
+ * Describes the message airlock.v1.ListGitCredentialsResponse.
+ * Use `create(ListGitCredentialsResponseSchema)` to create a new message.
+ */
+export const ListGitCredentialsResponseSchema: GenMessage<ListGitCredentialsResponse> = /*@__PURE__*/
+  messageDesc(file_airlock_v1_api, 76);
+
+/**
+ * @generated from message airlock.v1.ConnectAgentGitRequest
+ */
+export type ConnectAgentGitRequest = Message<"airlock.v1.ConnectAgentGitRequest"> & {
+  /**
+   * @generated from field: string git_remote_url = 1;
+   */
+  gitRemoteUrl: string;
+
+  /**
+   * @generated from field: string git_credential_id = 2;
+   */
+  gitCredentialId: string;
+
+  /**
+   * empty → "main"
+   *
+   * @generated from field: string default_branch = 3;
+   */
+  defaultBranch: string;
+};
+
+/**
+ * Describes the message airlock.v1.ConnectAgentGitRequest.
+ * Use `create(ConnectAgentGitRequestSchema)` to create a new message.
+ */
+export const ConnectAgentGitRequestSchema: GenMessage<ConnectAgentGitRequest> = /*@__PURE__*/
+  messageDesc(file_airlock_v1_api, 77);
+
+/**
+ * @generated from message airlock.v1.ConnectAgentGitResponse
+ */
+export type ConnectAgentGitResponse = Message<"airlock.v1.ConnectAgentGitResponse"> & {
+  /**
+   * @generated from field: airlock.v1.AgentGitConfig config = 1;
+   */
+  config?: AgentGitConfig | undefined;
+};
+
+/**
+ * Describes the message airlock.v1.ConnectAgentGitResponse.
+ * Use `create(ConnectAgentGitResponseSchema)` to create a new message.
+ */
+export const ConnectAgentGitResponseSchema: GenMessage<ConnectAgentGitResponse> = /*@__PURE__*/
+  messageDesc(file_airlock_v1_api, 78);
+
+/**
+ * @generated from message airlock.v1.GetAgentGitConfigResponse
+ */
+export type GetAgentGitConfigResponse = Message<"airlock.v1.GetAgentGitConfigResponse"> & {
+  /**
+   * @generated from field: airlock.v1.AgentGitConfig config = 1;
+   */
+  config?: AgentGitConfig | undefined;
+};
+
+/**
+ * Describes the message airlock.v1.GetAgentGitConfigResponse.
+ * Use `create(GetAgentGitConfigResponseSchema)` to create a new message.
+ */
+export const GetAgentGitConfigResponseSchema: GenMessage<GetAgentGitConfigResponse> = /*@__PURE__*/
+  messageDesc(file_airlock_v1_api, 79);
+
+/**
+ * @generated from message airlock.v1.ListMCPServersResponse
+ */
+export type ListMCPServersResponse = Message<"airlock.v1.ListMCPServersResponse"> & {
+  /**
+   * @generated from field: repeated airlock.v1.MCPServerInfo mcp_servers = 1;
+   */
+  mcpServers: MCPServerInfo[];
+
+  /**
+   * @generated from field: string oauth_callback_url = 2;
+   */
+  oauthCallbackUrl: string;
+};
+
+/**
+ * Describes the message airlock.v1.ListMCPServersResponse.
+ * Use `create(ListMCPServersResponseSchema)` to create a new message.
+ */
+export const ListMCPServersResponseSchema: GenMessage<ListMCPServersResponse> = /*@__PURE__*/
+  messageDesc(file_airlock_v1_api, 80);
+
+/**
+ * @generated from message airlock.v1.MCPCredentialStatusResponse
+ */
+export type MCPCredentialStatusResponse = Message<"airlock.v1.MCPCredentialStatusResponse"> & {
+  /**
+   * @generated from field: airlock.v1.MCPStatusInfo status = 1;
+   */
+  status?: MCPStatusInfo | undefined;
+};
+
+/**
+ * Describes the message airlock.v1.MCPCredentialStatusResponse.
+ * Use `create(MCPCredentialStatusResponseSchema)` to create a new message.
+ */
+export const MCPCredentialStatusResponseSchema: GenMessage<MCPCredentialStatusResponse> = /*@__PURE__*/
+  messageDesc(file_airlock_v1_api, 81);
+
+/**
+ * @generated from message airlock.v1.ListEnvVarsResponse
+ */
+export type ListEnvVarsResponse = Message<"airlock.v1.ListEnvVarsResponse"> & {
+  /**
+   * @generated from field: repeated airlock.v1.EnvVarInfo env_vars = 1;
+   */
+  envVars: EnvVarInfo[];
+};
+
+/**
+ * Describes the message airlock.v1.ListEnvVarsResponse.
+ * Use `create(ListEnvVarsResponseSchema)` to create a new message.
+ */
+export const ListEnvVarsResponseSchema: GenMessage<ListEnvVarsResponse> = /*@__PURE__*/
+  messageDesc(file_airlock_v1_api, 82);
+
+/**
+ * @generated from message airlock.v1.SetEnvVarValueRequest
+ */
+export type SetEnvVarValueRequest = Message<"airlock.v1.SetEnvVarValueRequest"> & {
+  /**
+   * @generated from field: string value = 1;
+   */
+  value: string;
+};
+
+/**
+ * Describes the message airlock.v1.SetEnvVarValueRequest.
+ * Use `create(SetEnvVarValueRequestSchema)` to create a new message.
+ */
+export const SetEnvVarValueRequestSchema: GenMessage<SetEnvVarValueRequest> = /*@__PURE__*/
+  messageDesc(file_airlock_v1_api, 83);
+
+/**
+ * @generated from message airlock.v1.GenerateRelayCodeRequest
+ */
+export type GenerateRelayCodeRequest = Message<"airlock.v1.GenerateRelayCodeRequest"> & {
+  /**
+   * @generated from field: string return_url = 1;
+   */
+  returnUrl: string;
+};
+
+/**
+ * Describes the message airlock.v1.GenerateRelayCodeRequest.
+ * Use `create(GenerateRelayCodeRequestSchema)` to create a new message.
+ */
+export const GenerateRelayCodeRequestSchema: GenMessage<GenerateRelayCodeRequest> = /*@__PURE__*/
+  messageDesc(file_airlock_v1_api, 84);
+
+/**
+ * @generated from message airlock.v1.GenerateRelayCodeResponse
+ */
+export type GenerateRelayCodeResponse = Message<"airlock.v1.GenerateRelayCodeResponse"> & {
+  /**
+   * @generated from field: string code = 1;
+   */
+  code: string;
+
+  /**
+   * @generated from field: string callback_url = 2;
+   */
+  callbackUrl: string;
+};
+
+/**
+ * Describes the message airlock.v1.GenerateRelayCodeResponse.
+ * Use `create(GenerateRelayCodeResponseSchema)` to create a new message.
+ */
+export const GenerateRelayCodeResponseSchema: GenMessage<GenerateRelayCodeResponse> = /*@__PURE__*/
+  messageDesc(file_airlock_v1_api, 85);
+
+/**
+ * @generated from message airlock.v1.ListSiblingsResponse
+ */
+export type ListSiblingsResponse = Message<"airlock.v1.ListSiblingsResponse"> & {
+  /**
+   * @generated from field: repeated airlock.v1.SiblingInfo siblings = 1;
+   */
+  siblings: SiblingInfo[];
+};
+
+/**
+ * Describes the message airlock.v1.ListSiblingsResponse.
+ * Use `create(ListSiblingsResponseSchema)` to create a new message.
+ */
+export const ListSiblingsResponseSchema: GenMessage<ListSiblingsResponse> = /*@__PURE__*/
+  messageDesc(file_airlock_v1_api, 86);
+
+/**
+ * @generated from message airlock.v1.ListAddableSiblingsResponse
+ */
+export type ListAddableSiblingsResponse = Message<"airlock.v1.ListAddableSiblingsResponse"> & {
+  /**
+   * @generated from field: repeated airlock.v1.AddableSiblingInfo agents = 1;
+   */
+  agents: AddableSiblingInfo[];
+};
+
+/**
+ * Describes the message airlock.v1.ListAddableSiblingsResponse.
+ * Use `create(ListAddableSiblingsResponseSchema)` to create a new message.
+ */
+export const ListAddableSiblingsResponseSchema: GenMessage<ListAddableSiblingsResponse> = /*@__PURE__*/
+  messageDesc(file_airlock_v1_api, 87);
+
+/**
+ * @generated from message airlock.v1.GetAgentSharingResponse
+ */
+export type GetAgentSharingResponse = Message<"airlock.v1.GetAgentSharingResponse"> & {
+  /**
+   * @generated from field: airlock.v1.A2ASettings settings = 1;
+   */
+  settings?: A2ASettings | undefined;
+};
+
+/**
+ * Describes the message airlock.v1.GetAgentSharingResponse.
+ * Use `create(GetAgentSharingResponseSchema)` to create a new message.
+ */
+export const GetAgentSharingResponseSchema: GenMessage<GetAgentSharingResponse> = /*@__PURE__*/
+  messageDesc(file_airlock_v1_api, 88);
+
+/**
+ * @generated from message airlock.v1.UpdateAgentSharingRequest
+ */
+export type UpdateAgentSharingRequest = Message<"airlock.v1.UpdateAgentSharingRequest"> & {
+  /**
+   * @generated from field: airlock.v1.A2ASettings settings = 1;
+   */
+  settings?: A2ASettings | undefined;
+};
+
+/**
+ * Describes the message airlock.v1.UpdateAgentSharingRequest.
+ * Use `create(UpdateAgentSharingRequestSchema)` to create a new message.
+ */
+export const UpdateAgentSharingRequestSchema: GenMessage<UpdateAgentSharingRequest> = /*@__PURE__*/
+  messageDesc(file_airlock_v1_api, 89);
+
+/**
+ * @generated from message airlock.v1.UpdateAgentSharingResponse
+ */
+export type UpdateAgentSharingResponse = Message<"airlock.v1.UpdateAgentSharingResponse"> & {
+  /**
+   * @generated from field: airlock.v1.A2ASettings settings = 1;
+   */
+  settings?: A2ASettings | undefined;
+};
+
+/**
+ * Describes the message airlock.v1.UpdateAgentSharingResponse.
+ * Use `create(UpdateAgentSharingResponseSchema)` to create a new message.
+ */
+export const UpdateAgentSharingResponseSchema: GenMessage<UpdateAgentSharingResponse> = /*@__PURE__*/
+  messageDesc(file_airlock_v1_api, 90);
+
+/**
+ * @generated from message airlock.v1.ListExecEndpointsResponse
+ */
+export type ListExecEndpointsResponse = Message<"airlock.v1.ListExecEndpointsResponse"> & {
+  /**
+   * @generated from field: repeated airlock.v1.ExecEndpointInfo endpoints = 1;
+   */
+  endpoints: ExecEndpointInfo[];
+};
+
+/**
+ * Describes the message airlock.v1.ListExecEndpointsResponse.
+ * Use `create(ListExecEndpointsResponseSchema)` to create a new message.
+ */
+export const ListExecEndpointsResponseSchema: GenMessage<ListExecEndpointsResponse> = /*@__PURE__*/
+  messageDesc(file_airlock_v1_api, 91);
+
+/**
+ * @generated from message airlock.v1.ConfigureExecEndpointRequest
+ */
+export type ConfigureExecEndpointRequest = Message<"airlock.v1.ConfigureExecEndpointRequest"> & {
+  /**
+   * @generated from field: string host = 1;
+   */
+  host: string;
+
+  /**
+   * @generated from field: int32 port = 2;
+   */
+  port: number;
+
+  /**
+   * @generated from field: string ssh_user = 3;
+   */
+  sshUser: string;
+};
+
+/**
+ * Describes the message airlock.v1.ConfigureExecEndpointRequest.
+ * Use `create(ConfigureExecEndpointRequestSchema)` to create a new message.
+ */
+export const ConfigureExecEndpointRequestSchema: GenMessage<ConfigureExecEndpointRequest> = /*@__PURE__*/
+  messageDesc(file_airlock_v1_api, 92);
+
+/**
+ * @generated from message airlock.v1.ConfigureExecEndpointResponse
+ */
+export type ConfigureExecEndpointResponse = Message<"airlock.v1.ConfigureExecEndpointResponse"> & {
+  /**
+   * @generated from field: airlock.v1.ExecEndpointInfo endpoint = 1;
+   */
+  endpoint?: ExecEndpointInfo | undefined;
+};
+
+/**
+ * Describes the message airlock.v1.ConfigureExecEndpointResponse.
+ * Use `create(ConfigureExecEndpointResponseSchema)` to create a new message.
+ */
+export const ConfigureExecEndpointResponseSchema: GenMessage<ConfigureExecEndpointResponse> = /*@__PURE__*/
+  messageDesc(file_airlock_v1_api, 93);
+
+/**
+ * @generated from message airlock.v1.RotateExecKeypairResponse
+ */
+export type RotateExecKeypairResponse = Message<"airlock.v1.RotateExecKeypairResponse"> & {
+  /**
+   * @generated from field: airlock.v1.ExecEndpointInfo endpoint = 1;
+   */
+  endpoint?: ExecEndpointInfo | undefined;
+};
+
+/**
+ * Describes the message airlock.v1.RotateExecKeypairResponse.
+ * Use `create(RotateExecKeypairResponseSchema)` to create a new message.
+ */
+export const RotateExecKeypairResponseSchema: GenMessage<RotateExecKeypairResponse> = /*@__PURE__*/
+  messageDesc(file_airlock_v1_api, 94);
+
+/**
+ * @generated from message airlock.v1.TestExecEndpointResponse
+ */
+export type TestExecEndpointResponse = Message<"airlock.v1.TestExecEndpointResponse"> & {
+  /**
+   * @generated from field: airlock.v1.ExecEndpointTestResult result = 1;
+   */
+  result?: ExecEndpointTestResult | undefined;
+};
+
+/**
+ * Describes the message airlock.v1.TestExecEndpointResponse.
+ * Use `create(TestExecEndpointResponseSchema)` to create a new message.
+ */
+export const TestExecEndpointResponseSchema: GenMessage<TestExecEndpointResponse> = /*@__PURE__*/
+  messageDesc(file_airlock_v1_api, 95);
+
+/**
+ * @generated from message airlock.v1.ConnectionSetupStatusResponse
+ */
+export type ConnectionSetupStatusResponse = Message<"airlock.v1.ConnectionSetupStatusResponse"> & {
+  /**
+   * @generated from field: airlock.v1.SetupCountsInfo counts = 1;
+   */
+  counts?: SetupCountsInfo | undefined;
+};
+
+/**
+ * Describes the message airlock.v1.ConnectionSetupStatusResponse.
+ * Use `create(ConnectionSetupStatusResponseSchema)` to create a new message.
+ */
+export const ConnectionSetupStatusResponseSchema: GenMessage<ConnectionSetupStatusResponse> = /*@__PURE__*/
+  messageDesc(file_airlock_v1_api, 96);
 
 /**
  * HealthResponse reports the liveness/readiness of the airlock process and its
@@ -1863,5 +2452,5 @@ export type HealthResponse = Message<"airlock.v1.HealthResponse"> & {
  * Use `create(HealthResponseSchema)` to create a new message.
  */
 export const HealthResponseSchema: GenMessage<HealthResponse> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_api, 72);
+  messageDesc(file_airlock_v1_api, 97);
 

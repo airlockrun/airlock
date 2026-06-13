@@ -8,14 +8,34 @@
  * WS reconnect.
  */
 
-interface RawEnvelope {
+export interface SubagentInfo {
+  agentId: string
+  runId: string
+  slug?: string
+}
+
+export interface RawEnvelope {
   type: string
   requestId?: string
   topicId?: string
+  // userId / conversationId are set by the backend for run events so
+  // the frontend can route by chat card and so server-side user-id
+  // gating is observable here (the server already filtered; this is
+  // for client-side card routing).
+  userId?: string
+  // Hub-global monotonic publish sequence. We keep the max seen and
+  // present it as ?since= on reconnect so the server replays only the
+  // delta (or sends `resync`) instead of the whole per-topic buffer.
+  seq?: number
+  conversationId?: string
+  // subagent tags the envelope as a sub-run event mirrored from an
+  // A2A child run; chat store routes these into the parent's active
+  // tool-call card instead of the main message stream.
+  subagent?: SubagentInfo
   payload?: unknown
 }
 
-type Handler = (payload: unknown) => void
+type Handler = (payload: unknown, envelope?: RawEnvelope) => void
 
 export class AirlockWS {
   private socket: WebSocket | null = null
@@ -23,6 +43,10 @@ export class AirlockWS {
   private reconnectDelay = 1000
   private maxReconnectDelay = 30000
   private shouldReconnect = false
+  // Max Envelope.seq processed; sent as ?since= on (re)connect for
+  // delta replay. Resets to 0 on full page reload (new instance) — a
+  // fresh load DB-loads anyway, so no replay is correct there.
+  private lastSeq = 0
   // Single in-flight refresh promise so concurrent reconnect attempts and
   // axios interceptor refreshes don't both POST /auth/refresh. The axios
   // interceptor manages its own promise; we don't share it (keeps ws.ts
@@ -107,19 +131,31 @@ export class AirlockWS {
         await this.ensureFreshToken()
         token = localStorage.getItem('access_token')
         if (!token) return
-      } catch {
-        // Refresh failed — refresh token is also dead. Stop the reconnect
-        // loop, clear creds, and let the next user action trigger /login
-        // through the REST interceptor.
-        this.shouldReconnect = false
-        localStorage.removeItem('access_token')
-        localStorage.removeItem('refresh_token')
+      } catch (err) {
+        // Only treat a 401/403 from the server as "refresh token is
+        // dead." A transport error or 5xx (Caddy 502/503 while airlock
+        // is restarting) is transient — keep the reconnect loop alive
+        // with backoff so the WS comes back as soon as the server does,
+        // and keep credentials so a subsequent REST call works too.
+        if (refreshIsAuthRejection(err)) {
+          this.shouldReconnect = false
+          localStorage.removeItem('access_token')
+          localStorage.removeItem('refresh_token')
+          return
+        }
+        // Transient: fall through into the reconnect-with-backoff path
+        // below by faking an onclose-style retry.
+        if (this.shouldReconnect) {
+          setTimeout(() => void this.doConnect(), this.reconnectDelay)
+          this.reconnectDelay = Math.min(this.reconnectDelay * 2, this.maxReconnectDelay)
+        }
         return
       }
     }
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const url = `${protocol}//${window.location.host}/ws?token=${token}`
+    const since = this.lastSeq > 0 ? `&since=${this.lastSeq}` : ''
+    const url = `${protocol}//${window.location.host}/ws?token=${token}${since}`
     this.socket = new WebSocket(url)
 
     this.socket.onopen = () => {
@@ -131,7 +167,10 @@ export class AirlockWS {
     this.socket.onmessage = (event) => {
       try {
         const envelope: RawEnvelope = JSON.parse(event.data)
-        this.emit(envelope.type, envelope.payload)
+        if (typeof envelope.seq === 'number' && envelope.seq > this.lastSeq) {
+          this.lastSeq = envelope.seq
+        }
+        this.emit(envelope.type, envelope.payload, envelope)
       } catch {
         // Ignore malformed messages.
       }
@@ -154,11 +193,11 @@ export class AirlockWS {
     }
   }
 
-  private emit(type: string, payload: unknown) {
+  private emit(type: string, payload: unknown, envelope?: RawEnvelope) {
     const handlers = this.handlers.get(type)
     if (handlers) {
       for (const handler of handlers) {
-        handler(payload)
+        handler(payload, envelope)
       }
     }
   }
@@ -187,21 +226,23 @@ export class AirlockWS {
    * POST /auth/refresh and overwrite localStorage.access_token. Coalesces
    * concurrent calls onto a single in-flight promise so two reconnect
    * attempts (or a reconnect racing the REST interceptor) don't double-fire.
-   * Throws if the refresh token is missing or the server rejects it.
+   * Throws RefreshError carrying the HTTP status (or undefined for transport
+   * errors) so the caller can distinguish auth rejection from transient
+   * outage.
    */
   private ensureFreshToken(): Promise<void> {
     if (this.refreshPromise) return this.refreshPromise
     const refreshToken = localStorage.getItem('refresh_token')
-    if (!refreshToken) return Promise.reject(new Error('no refresh token'))
+    if (!refreshToken) return Promise.reject(new RefreshError('no refresh token'))
     this.refreshPromise = fetch('/auth/refresh', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ refreshToken }),
     })
       .then(async (res) => {
-        if (!res.ok) throw new Error(`refresh failed: ${res.status}`)
+        if (!res.ok) throw new RefreshError(`refresh failed: ${res.status}`, res.status)
         const data = (await res.json()) as { accessToken?: string }
-        if (!data.accessToken) throw new Error('refresh response missing accessToken')
+        if (!data.accessToken) throw new RefreshError('refresh response missing accessToken')
         localStorage.setItem('access_token', data.accessToken)
       })
       .finally(() => {
@@ -209,6 +250,16 @@ export class AirlockWS {
       })
     return this.refreshPromise
   }
+}
+
+class RefreshError extends Error {
+  constructor(message: string, public status?: number) {
+    super(message)
+  }
+}
+
+function refreshIsAuthRejection(err: unknown): boolean {
+  return err instanceof RefreshError && (err.status === 401 || err.status === 403)
 }
 
 /** Singleton WebSocket instance. */

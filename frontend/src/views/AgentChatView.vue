@@ -1,42 +1,114 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, nextTick, watch, computed } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { useToast } from 'primevue/usetoast'
 import { useChatStore } from '@/stores/chat'
+import { useAgentsStore } from '@/stores/agents'
 import { ws } from '@/api/ws'
-import { useMarkdown } from '@/composables/useMarkdown'
+import { useMarkdown, renderMarkdown } from '@/composables/useMarkdown'
+import { toolLabel } from '@/utils/messageGroup'
 import api from '@/api/client'
 import MessageParts from '@/components/chat/MessageParts.vue'
+import ToolBadge from '@/components/chat/ToolBadge.vue'
 
 const route = useRoute()
+const router = useRouter()
 const toast = useToast()
 const chat = useChatStore()
+const agentsStore = useAgentsStore()
 
-const agentId = route.params.id as string
+// Reactive: the sidebar can navigate between agents/conversations without
+// remounting this view (same route record), so read the param live.
+const agentId = computed(() => route.params.id as string)
+const routeConvId = computed(() => (route.query.c as string) || undefined)
+const agentName = computed(
+  () => agentsStore.agents.find(a => a.id === agentId.value)?.name || '',
+)
+// A stopped agent won't auto-resume; prompting it 409s server-side. Gate
+// the composer up front and offer a Start affordance instead.
+const agentStopped = computed(
+  () => agentsStore.agents.find(a => a.id === agentId.value)?.status === 'stopped',
+)
+const starting = ref(false)
+async function startAgent() {
+  starting.value = true
+  try {
+    await agentsStore.startAgent(agentId.value)
+  } catch (err: any) {
+    toast.add({ severity: 'error', summary: err.response?.data?.error || 'Start failed', life: 5000 })
+  } finally {
+    starting.value = false
+  }
+}
+// No active conversation id yet — the next message mints the thread.
+const isNewConversation = computed(() => !chat.conversationId)
 const messageInput = ref('')
 const scrollContainer = ref<HTMLElement | null>(null)
 const topSentinel = ref<HTMLElement | null>(null)
 const bottomSentinel = ref<HTMLElement | null>(null)
 const attachedFiles = ref<{ path: string; filename: string }[]>([])
 const fileInput = ref<HTMLInputElement | null>(null)
-// Explicit collapse state: true=collapsed, false=expanded. Absent=auto (collapsed unless last).
-const toolCollapseState = ref<Record<string, boolean>>({})
 const uploading = ref(false)
 let topObserver: IntersectionObserver | null = null
 let bottomObserver: IntersectionObserver | null = null
+
+async function reload() {
+  try {
+    await chat.loadConversation(agentId.value, routeConvId.value)
+  } catch {
+    // No conversation yet — empty state is fine.
+  }
+  await nextTick()
+  scrollToBottom()
+}
 
 onMounted(async () => {
   // WS subscriptions are server-driven — the socket auto-subscribes to every
   // agent this user is a member of at connect time. No client subscribe call.
   chat.initListeners()
-  try {
-    await chat.loadConversation(agentId)
-  } catch {
-    // No conversation yet — empty state is fine.
-  }
-  scrollToBottom()
+  // The sidebar (AppLayout) usually has these loaded already; fetch on a
+  // deep-link/hard-refresh so the empty-state can name the agent.
+  if (agentsStore.agents.length === 0) agentsStore.fetchAgents().catch(() => {})
+  await reload()
   setupSentinelObservers()
 })
+
+// Sidebar navigation reuses this view: reload when the agent or the
+// selected conversation (?c=) changes.
+//
+// One exception: when the first message of a brand-new thread lands,
+// the chat.conversationId watcher below stamps that id into the URL
+// (?c=newId). That stamp changes routeConvId here and would otherwise
+// fire reload() mid-stream — loadConversationById runs resetTransient,
+// which wipes streamingText/currentRunId/sending, killing the live
+// bubble and dropping every text_delta that's already in flight. The
+// run resumes (loadConversationById restores currentRunId from
+// inFlightRunId) but streamingText is empty, so the bubble only ever
+// shows the second half until the next refresh.
+//
+// Skip the reload when the new routeConvId already matches the store's
+// conversation — that case is always our own URL echo, never a user
+// navigation.
+watch(
+  () => [agentId.value, routeConvId.value],
+  (cur, prev) => {
+    if (cur[0] === prev[0] && cur[1] === prev[1]) return
+    if (cur[0] === prev[0] && cur[1] && cur[1] === chat.conversationId) return
+    reload()
+  },
+)
+
+// Keep the URL in sync with the active thread so refresh/back and the
+// sidebar highlight track it — especially after the first message of a
+// brand-new conversation mints an id.
+watch(
+  () => chat.conversationId,
+  (id) => {
+    if (id && id !== routeConvId.value) {
+      router.replace({ query: { ...route.query, c: id } })
+    }
+  },
+)
 
 onUnmounted(() => {
   topObserver?.disconnect()
@@ -83,7 +155,7 @@ watch(
 )
 
 async function jumpToLatest() {
-  await chat.jumpToLatest(agentId)
+  await chat.jumpToLatest(agentId.value)
   await nextTick()
   scrollToBottom()
 }
@@ -93,7 +165,7 @@ async function jumpToLatest() {
 // actively loading older messages. Otherwise prepend/eviction would yank
 // their viewport to the bottom.
 watch(
-  () => [chat.messages.length, chat.streamingText, chat.activeToolCalls.size, chat.pendingConfirmation],
+  () => [chat.messages.length, chat.streamingText, chat.streamingBlocks.length, chat.activeToolCalls.size, chat.pendingConfirmation],
   () => nextTick(() => {
     if (chat.hasNewer || chat.loadingOlder) return
     scrollToBottom()
@@ -109,12 +181,17 @@ function scrollToBottom() {
 async function send() {
   const text = messageInput.value.trim()
   if (!text || chat.sending) return
+  const sentFiles = attachedFiles.value.slice()
+  const filePaths = sentFiles.map(f => f.path)
   messageInput.value = ''
-  const filePaths = attachedFiles.value.map(f => f.path)
   attachedFiles.value = []
   try {
-    await chat.sendMessage(agentId, text, undefined, filePaths.length ? filePaths : undefined)
+    await chat.sendMessage(agentId.value, text, undefined, filePaths.length ? filePaths : undefined)
   } catch (err: any) {
+    // Restore the composer so the user doesn't lose their text/attachments
+    // on a rejected send (e.g. 409 when the agent is stopped).
+    messageInput.value = text
+    attachedFiles.value = sentFiles
     toast.add({ severity: 'error', summary: err.response?.data?.error || 'Send failed', life: 5000 })
   }
 }
@@ -128,7 +205,7 @@ async function onFileSelect(e: Event) {
     for (const file of files) {
       const form = new FormData()
       form.append('file', file)
-      const { data } = await api.post(`/api/v1/agents/${agentId}/files`, form, {
+      const { data } = await api.post(`/api/v1/agents/${agentId.value}/files`, form, {
         headers: { 'Content-Type': 'multipart/form-data' },
       })
       attachedFiles.value.push({ path: data.path, filename: data.filename || file.name })
@@ -147,18 +224,19 @@ function removeFile(index: number) {
 
 async function approve() {
   try {
-    await chat.sendMessage(agentId, '', true)
+    await chat.sendMessage(agentId.value, '', true)
   } catch (err: any) {
-    toast.add({ severity: 'error', summary: 'Approval failed', life: 5000 })
+    toast.add({ severity: 'error', summary: 'Approval failed', detail: err.response?.data?.error, life: 5000 })
   }
 }
 
 async function reject() {
-  chat.pendingConfirmation = null
+  // Don't clear pendingConfirmation here — sendMessage reads its runId to tell
+  // the backend which run to resume, then clears it itself.
   try {
-    await chat.sendMessage(agentId, 'Rejected by user.', false)
+    await chat.sendMessage(agentId.value, 'Rejected by user.', false)
   } catch (err: any) {
-    toast.add({ severity: 'error', summary: 'Rejection failed', life: 5000 })
+    toast.add({ severity: 'error', summary: 'Rejection failed', detail: err.response?.data?.error, life: 5000 })
   }
 }
 
@@ -197,46 +275,22 @@ function prettyArgs(obj: any): string {
   return entries.map(([k, v]) => `${k}: ${typeof v === 'string' ? v : JSON.stringify(v)}`).join('\n')
 }
 
-// Compute the ID of the last tool element (message or active tool call) for auto-collapse.
-const lastToolId = computed(() => {
-  // Check active tool calls first (streaming).
-  if (chat.activeToolCalls.size) {
-    let last = ''
-    for (const [id] of chat.activeToolCalls) last = id
-    return last
-  }
-  // Fall back to last tool message in history.
-  for (let i = chat.messages.length - 1; i >= 0; i--) {
-    if (chat.messages[i].role === 'tool') return chat.messages[i].id
-  }
-  return ''
-})
-
-function isToolCollapsed(id: string, toolName?: string): boolean {
-  // A tool call awaiting confirmation must show its code — that's exactly
-  // what the user is being asked to approve. Force-expanded regardless of
-  // toolName or explicit user toggle.
-  if (chat.pendingConfirmation?.toolCallId === id) return false
-  const explicit = toolCollapseState.value[id]
-  if (explicit !== undefined) return explicit
-  // run_js bubbles are noisy (full script + full stdout). Collapse by default
-  // even when the bubble is the latest one — user can still click to expand.
-  if (toolName === 'run_js') return true
-  // Other tools: collapsed unless it's the last one in the transcript.
-  return id !== lastToolId.value
-}
-
-function toggleToolCollapse(id: string, toolName?: string) {
-  const current = isToolCollapsed(id, toolName)
-  toolCollapseState.value = { ...toolCollapseState.value, [id]: !current }
-}
-
-// Markdown helper for streaming text.
-const streamingHtml = computed(() => {
-  if (!chat.streamingText) return ''
-  const { html } = useMarkdown(computed(() => chat.streamingText))
-  return html.value
-})
+// Ordered live render units for the in-flight turn: text blocks carry
+// their markdown source; tool blocks resolve their live ToolCall (status,
+// output) from the reactive activeToolCalls map by id. Iterating this in
+// the template renders the streaming turn in true emission order, the
+// same as the persisted/finalized blocks[].
+const streamingRender = computed(() =>
+  chat.streamingBlocks.map((b) => {
+    if (b.kind === 'text') return { kind: 'text' as const, text: b.text }
+    const tc = chat.activeToolCalls.get(b.toolCallId)
+    return {
+      kind: 'tool' as const,
+      tc,
+      label: tc ? toolLabel(tc.toolName, tc.input) : 'tool',
+    }
+  }),
+)
 
 // Checkpoint markers (source === 'checkpoint') are rendered as a horizontal
 // divider instead of a message bubble. Each marker carries a single part
@@ -275,6 +329,9 @@ function formatTokens(n: number): string {
          in the app top bar (AppLayout) for chat routes so we don't burn a
          row inside the chat view itself. -->
 
+    <!-- Conversation selection (list, new, delete) lives in the app
+         sidebar now — this view is just the active thread. -->
+
     <!-- Jump-to-latest banner: shown when new agent output arrived while the
          user was scrolled into history. Clicking resets the window. -->
     <div v-if="chat.newMessagesPending" class="chat-jump-banner" @click="jumpToLatest">
@@ -284,10 +341,18 @@ function formatTokens(n: number): string {
 
     <!-- Message area -->
     <div ref="scrollContainer" class="chat-messages">
-        <!-- Empty state -->
-        <div v-if="chat.messages.length === 0 && !chat.streamingText" style="text-align: center; padding: 3rem; color: var(--p-text-muted-color)">
-          <i class="pi pi-comments" style="font-size: 3rem; margin-bottom: 1rem" />
-          <p>Send a message to start a conversation.</p>
+        <!-- Empty state — name the agent so the user knows which one this
+             not-yet-saved thread will belong to (the row appears in the
+             sidebar only once the first message is sent). -->
+        <div v-if="chat.messages.length === 0 && !chat.streamingText" class="chat-empty">
+          <i class="pi pi-comments" />
+          <p class="chat-empty-title">
+            {{ isNewConversation ? 'New conversation' : 'Conversation' }}
+            with <strong>{{ agentName || 'this agent' }}</strong>
+          </p>
+          <p class="chat-empty-sub">
+            Send a message to begin — it's saved as a new conversation once you do.
+          </p>
         </div>
 
         <!-- Top sentinel — when visible, fetch older page via IntersectionObserver. -->
@@ -316,22 +381,14 @@ function formatTokens(n: number): string {
                Folded rows are marked _hidden by enrichMessages. -->
           <div
             v-else-if="msg.role === 'tool' && !(msg as any)._hidden"
-            style="display: flex; justify-content: flex-start"
+            class="msg-response"
           >
-            <div class="msg-bubble msg-tool">
-              <div style="display: flex; align-items: center; justify-content: space-between; gap: 1rem; cursor: pointer" @click="toggleToolCollapse(msg.id, (msg as any).toolName)">
-                <div style="font-size: 0.7rem; text-transform: uppercase; opacity: 0.6">
-                  {{ (msg as any).toolName || 'Tool' }}
-                </div>
-                <i :class="isToolCollapsed(msg.id, (msg as any).toolName) ? 'pi pi-plus' : 'pi pi-minus'" style="font-size: 0.7rem; opacity: 0.4" />
-              </div>
-              <template v-if="!isToolCollapsed(msg.id, (msg as any).toolName)">
-                <div v-if="(msg as any).toolInput" style="margin-top: 0.25rem; margin-bottom: 0.5rem">
-                  <pre style="white-space: pre-wrap; word-break: break-all; font-size: 0.8rem; margin: 0; opacity: 0.7">{{ (msg as any).toolInput }}</pre>
-                </div>
-                <pre v-if="msg.content" style="white-space: pre-wrap; word-break: break-all; font-size: 0.8rem; margin: 0">{{ msg.content }}</pre>
-              </template>
-            </div>
+            <ToolBadge
+              :label="toolLabel((msg as any).toolName || 'tool')"
+              :tool-name="(msg as any).toolName"
+              :input="(msg as any).toolInput"
+              :output="msg.content"
+            />
           </div>
           <!-- System messages (upgrade notifications, etc.) -->
           <div
@@ -376,6 +433,21 @@ function formatTokens(n: number): string {
               <div style="margin-top: 0.25rem; font-size: 0.85rem; white-space: pre-wrap; word-break: break-word">{{ msg.content }}</div>
             </div>
           </div>
+          <!-- Control messages (e.g. the "Rejected by user." re-reason
+               nudge sol persists on deny). It's a signal for the model,
+               not something the human typed — render a muted inline
+               label, not a user bubble. -->
+          <div
+            v-else-if="msg.source === 'control'"
+            style="display: flex; justify-content: flex-start"
+          >
+            <div
+              style="display: flex; align-items: center; gap: 0.4rem; font-size: 0.72rem; opacity: 0.5; padding: 0.15rem 0.5rem"
+            >
+              <i class="pi pi-ban" style="font-size: 0.7rem" />
+              <span>{{ msg.content }}</span>
+            </div>
+          </div>
           <!-- Notification messages (printToUser / topic publish / user upload echo) — rich parts -->
           <div
             v-else-if="msg.source === 'notification' || msg.source === 'upload'"
@@ -389,43 +461,45 @@ function formatTokens(n: number): string {
               <div v-else style="font-size: 0.85rem">{{ msg.content }}</div>
             </div>
           </div>
-          <!-- User / assistant content. Assistant turns may carry a
-               toolCalls[] array (folded by enrichMessages from the
-               separate role=tool rows the backend persists). When
-               present, render them inside the same bubble first so the
-               final layout mirrors the streaming layout: tool calls on
-               top, text answer at the bottom. -->
+          <!-- User / assistant content. Assistant turns carry an ordered
+               blocks[] (text / tool, interleaved exactly as the model
+               emitted them — built by enrichMessages from the persisted
+               rows' parts, or by finalizeMessage from the live stream).
+               Render blocks in order; no tools-first reordering. Plain
+               user/text rows without blocks fall back to content. -->
           <div
-            v-else-if="(msg.content || (msg as any).toolCalls?.length || (msg as any)._cancelled) && !(msg as any)._hidden"
+            v-else-if="(msg.content || (msg as any).blocks?.length || (msg as any)._cancelled) && !(msg as any)._hidden"
             :style="{
               display: 'flex',
               justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start',
             }"
           >
             <div
-              :class="['msg-bubble', msg.role === 'user' ? 'msg-user' : 'msg-assistant']"
+              :class="msg.role === 'user' ? ['msg-bubble', 'msg-user'] : ['msg-response']"
               :style="(msg as any)._cancelled ? { opacity: 0.6 } : undefined"
             >
-              <div v-if="(msg as any).toolCalls?.length" :style="{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }">
-                <div v-for="tc in (msg as any).toolCalls" :key="tc.toolCallId" style="padding: 0.25rem 0">
-                  <div style="display: flex; align-items: center; justify-content: space-between; cursor: pointer" @click="toggleToolCollapse(tc.toolCallId, tc.toolName)">
-                    <div style="font-size: 0.7rem; text-transform: uppercase; opacity: 0.6">{{ tc.toolName }}</div>
-                    <i :class="isToolCollapsed(tc.toolCallId, tc.toolName) ? 'pi pi-plus' : 'pi pi-minus'" style="font-size: 0.7rem; opacity: 0.4" />
-                  </div>
-                  <template v-if="!isToolCollapsed(tc.toolCallId, tc.toolName)">
-                    <div v-if="tc.input" style="margin-top: 0.25rem; margin-bottom: 0.5rem">
-                      <pre style="white-space: pre-wrap; word-break: break-all; font-size: 0.8rem; margin: 0; opacity: 0.7">{{ tc.input }}</pre>
-                    </div>
-                    <pre v-if="tc.output" style="white-space: pre-wrap; word-break: break-all; font-size: 0.8rem; margin: 0">{{ tc.output }}</pre>
-                    <pre v-if="tc.error" style="white-space: pre-wrap; word-break: break-all; font-size: 0.8rem; margin: 0; color: var(--p-red-500)">{{ tc.error }}</pre>
-                  </template>
-                </div>
+              <div v-if="(msg as any).blocks?.length" :style="{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }">
+                <template v-for="(b, bi) in (msg as any).blocks" :key="bi">
+                  <div
+                    v-if="b.kind === 'text' && b.text"
+                    v-html="renderMarkdown(b.text)"
+                    class="chat-bubble"
+                  />
+                  <ToolBadge
+                    v-else-if="b.kind === 'tool'"
+                    :label="b.label"
+                    :tool-name="b.toolName"
+                    :input="b.input"
+                    :output="b.output"
+                    :error="b.error"
+                    :outcome="b.outcome"
+                  />
+                </template>
               </div>
               <div
-                v-if="msg.content"
+                v-else-if="msg.content"
                 v-html="useMarkdown(computed(() => msg.content)).html.value"
                 class="chat-bubble"
-                :style="{ marginTop: (msg as any).toolCalls?.length ? '0.75rem' : '0' }"
               />
               <div
                 v-if="(msg as any)._cancelled"
@@ -446,43 +520,32 @@ function formatTokens(n: number): string {
           </div>
         </div>
 
-        <!-- Streaming response. Tool calls render first (chronological:
-             think → call → answer); the assistant's text answer lands at
-             the bottom. The finalized assistant bubble below mirrors this
-             ordering so there's no visual snap when streaming completes. -->
-        <div v-if="chat.streamingText || chat.activeToolCalls.size" style="display: flex; justify-content: flex-start">
-          <div style="max-width: 70%; min-width: 0; overflow-wrap: break-word; padding: 0.75rem 1rem; border-radius: 0.75rem; background-color: var(--p-content-hover-background); color: var(--p-text-color)">
-            <!-- Active tool calls -->
-            <div v-if="chat.activeToolCalls.size" :style="{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }">
-              <template v-for="[id, tc] in chat.activeToolCalls" :key="id">
-                <!-- Completed/errored tool calls: render like finalized msg-tool -->
-                <div v-if="tc.status === 'done' || tc.status === 'error'" style="padding: 0.25rem 0">
-                  <div style="display: flex; align-items: center; justify-content: space-between; cursor: pointer" @click="toggleToolCollapse(id, tc.toolName)">
-                    <div style="font-size: 0.7rem; text-transform: uppercase; opacity: 0.6">{{ tc.toolName }}</div>
-                    <i :class="isToolCollapsed(id, tc.toolName) ? 'pi pi-plus' : 'pi pi-minus'" style="font-size: 0.7rem; opacity: 0.4" />
-                  </div>
-                  <template v-if="!isToolCollapsed(id, tc.toolName)">
-                    <div v-if="tc.input" style="margin-top: 0.25rem; margin-bottom: 0.5rem">
-                      <pre style="white-space: pre-wrap; word-break: break-all; font-size: 0.8rem; margin: 0; opacity: 0.7">{{ formatToolInput(tc.input) }}</pre>
-                    </div>
-                    <pre v-if="tc.output" style="white-space: pre-wrap; word-break: break-all; font-size: 0.8rem; margin: 0">{{ tc.output }}</pre>
-                    <pre v-if="tc.error" style="white-space: pre-wrap; word-break: break-all; font-size: 0.8rem; margin: 0; color: var(--p-red-500)">{{ tc.error }}</pre>
-                  </template>
-                </div>
-                <!-- Running/confirmation -->
-                <div v-else style="padding: 0.25rem 0">
-                  <div style="display: flex; align-items: center; justify-content: space-between; cursor: pointer" @click="toggleToolCollapse(id, tc.toolName)">
-                    <div style="display: flex; align-items: center; gap: 0.5rem">
-                      <div style="font-size: 0.7rem; text-transform: uppercase; opacity: 0.6">{{ tc.toolName }}</div>
-                      <Tag :value="tc.status" :severity="tc.status === 'running' ? 'warn' : 'info'" style="font-size: 0.65rem" />
-                    </div>
-                    <i :class="isToolCollapsed(id, tc.toolName) ? 'pi pi-plus' : 'pi pi-minus'" style="font-size: 0.7rem; opacity: 0.4" />
-                  </div>
-                  <template v-if="!isToolCollapsed(id, tc.toolName)">
-                    <pre v-if="tc.input" style="white-space: pre-wrap; word-break: break-all; font-size: 0.8rem; margin: 0.25rem 0 0; opacity: 0.7">{{ formatToolInput(tc.input) }}</pre>
-                  </template>
-                  <!-- Inline confirmation (always visible, even when collapsed) -->
-                  <div v-if="chat.pendingConfirmation && chat.pendingConfirmation.toolCallId === id" class="confirmation-box">
+        <!-- Streaming response. Rendered strictly in emission order from
+             streamingBlocks (text / tool interleaved) — same shape as the
+             finalized/persisted blocks[], so there's no reordering and no
+             visual snap when the run completes. -->
+        <div v-if="streamingRender.length" style="display: flex; justify-content: flex-start">
+          <div class="msg-response">
+            <div :style="{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }">
+              <template v-for="(entry, ei) in streamingRender" :key="ei">
+                <div
+                  v-if="entry.kind === 'text' && entry.text"
+                  v-html="renderMarkdown(entry.text)"
+                  class="chat-bubble"
+                />
+                <template v-else-if="entry.kind === 'tool' && entry.tc">
+                  <ToolBadge
+                    :label="entry.label"
+                    :tool-name="entry.tc.toolName"
+                    :input="formatToolInput(entry.tc.input)"
+                    :output="entry.tc.output"
+                    :error="entry.tc.error"
+                    :status="entry.tc.status"
+                    :force-expanded="!!(chat.pendingConfirmation && chat.pendingConfirmation.toolCallId === entry.tc.toolCallId)"
+                  />
+                  <!-- Inline confirmation — the user is being asked to
+                       approve THIS tool call; keep it always visible. -->
+                  <div v-if="chat.pendingConfirmation && chat.pendingConfirmation.toolCallId === entry.tc.toolCallId" class="confirmation-box">
                     <div style="display: flex; align-items: center; justify-content: space-between">
                       <span style="font-size: 0.8rem; font-weight: 500">Allow this action?</span>
                       <div style="display: flex; gap: 0.5rem">
@@ -491,10 +554,9 @@ function formatTokens(n: number): string {
                       </div>
                     </div>
                   </div>
-                </div>
+                </template>
               </template>
             </div>
-            <div v-if="chat.streamingText" v-html="streamingHtml" class="chat-bubble" :style="{ marginTop: chat.activeToolCalls.size ? '0.75rem' : '0' }" />
             <!-- Cancel button. Hidden when a confirmation is awaiting the
                  user (Approve/Reject is the relevant action then). The run
                  has an absolute ceiling on the server (PromptHTTPCeiling);
@@ -540,6 +602,21 @@ function formatTokens(n: number): string {
       />
     </div>
 
+    <!-- Stopped-agent banner: chatting is blocked until an admin starts it -->
+    <div
+      v-if="agentStopped"
+      style="display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; padding: 0.5rem 0.75rem; margin-top: 0.5rem; border: 1px solid var(--p-surface-300); border-radius: 6px; background: var(--p-surface-100)"
+    >
+      <span style="font-size: 0.875rem">This agent is stopped. Start it to chat.</span>
+      <Button
+        label="Start"
+        icon="pi pi-play"
+        size="small"
+        :loading="starting"
+        @click="startAgent"
+      />
+    </div>
+
     <!-- Input area -->
     <div style="display: flex; gap: 0.5rem; padding-top: 0.75rem; border-top: 1px solid var(--p-surface-200)">
       <input ref="fileInput" type="file" multiple hidden @change="onFileSelect" />
@@ -547,22 +624,22 @@ function formatTokens(n: number): string {
         icon="pi pi-paperclip"
         severity="secondary"
         text
-        :disabled="chat.sending || uploading"
+        :disabled="chat.sending || uploading || agentStopped"
         :loading="uploading"
         @click="fileInput?.click()"
       />
       <Textarea
         v-model="messageInput"
-        placeholder="Type a message..."
+        :placeholder="agentStopped ? 'Agent is stopped' : 'Type a message...'"
         :auto-resize="true"
         rows="1"
         style="flex: 1"
-        :disabled="chat.sending"
+        :disabled="chat.sending || agentStopped"
         @keydown="onKeydown"
       />
       <Button
         icon="pi pi-send"
-        :disabled="!messageInput.trim() || chat.sending"
+        :disabled="!messageInput.trim() || chat.sending || agentStopped"
         @click="send"
       />
     </div>
@@ -621,6 +698,41 @@ function formatTokens(n: number): string {
 .chat-bubble p {
   margin: 0.25rem 0;
 }
+
+/* GFM tables: marked emits a real <table>; without these the browser
+   default (no border-collapse, no padding) renders cramped/misaligned. */
+.chat-bubble table {
+  border-collapse: collapse;
+  margin: 0.5rem 0;
+  font-size: 0.85rem;
+  /* size to content but never overflow the bubble — scroll instead. */
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.chat-bubble th,
+.chat-bubble td {
+  border: 1px solid var(--p-surface-300);
+  padding: 0.35rem 0.6rem;
+  text-align: left;
+  vertical-align: top;
+}
+
+.chat-bubble th {
+  font-weight: 600;
+  background: rgba(0, 0, 0, 0.04);
+}
+
+:root.dark .chat-bubble th,
+:root.dark .chat-bubble td {
+  border-color: var(--p-surface-600);
+}
+
+:root.dark .chat-bubble th {
+  background: rgba(255, 255, 255, 0.06);
+}
 </style>
 
 <style scoped>
@@ -630,6 +742,29 @@ function formatTokens(n: number): string {
   height: 100%;
   min-height: 0;
   overflow: hidden;
+}
+
+.chat-empty {
+  text-align: center;
+  padding: 3rem 1.5rem;
+  color: var(--p-text-muted-color);
+}
+
+.chat-empty .pi-comments {
+  font-size: 2.5rem;
+  margin-bottom: 1rem;
+  opacity: 0.6;
+}
+
+.chat-empty-title {
+  font-size: 1.1rem;
+  color: var(--p-text-color);
+  margin: 0 0 0.35rem;
+}
+
+.chat-empty-sub {
+  font-size: 0.875rem;
+  margin: 0;
 }
 
 .msg-bubble {
@@ -645,21 +780,24 @@ function formatTokens(n: number): string {
   color: var(--p-primary-contrast-color);
 }
 
-.msg-assistant {
-  background-color: var(--p-content-hover-background);
-  color: var(--p-text-color);
+/* Links in the user bubble sit on the primary-colour background. Default
+   link / :visited colours (esp. the purple visited state in dark mode)
+   blend into the dark-blue bubble — force the bubble's contrast colour
+   and underline so they stay readable regardless of visited state. */
+.msg-user :deep(a),
+.msg-user :deep(a:visited) {
+  color: var(--p-primary-contrast-color);
+  text-decoration: underline;
 }
 
-.msg-tool {
-  background-color: var(--p-surface-100);
-  color: var(--p-text-color);
-  font-size: 0.85rem;
-  border: 1px solid var(--p-surface-200);
-}
-
-:root.dark .msg-tool {
-  background-color: var(--p-surface-800);
-  border-color: var(--p-surface-700);
+/* Assistant replies render bare — no bubble, flat transcript. width:100%
+   (not shrink-to-fit) so the response column is a stable width: tool
+   badges and text are sized by the chat area, never stretched to match a
+   long sibling message in the same turn. */
+.msg-response {
+  width: 100%;
+  min-width: 0;
+  overflow-wrap: break-word;
 }
 
 .msg-system {
@@ -700,7 +838,7 @@ function formatTokens(n: number): string {
   display: flex;
   flex-direction: column;
   gap: 1rem;
-  padding: 0.5rem 0 1rem;
+  padding: 0.5rem 2.25rem 1rem;
 }
 
 .chat-checkpoint {

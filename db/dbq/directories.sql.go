@@ -26,7 +26,7 @@ func (q *Queries) DeleteDirectoriesByAgentExcept(ctx context.Context, arg Delete
 }
 
 const getDirectoryByPath = `-- name: GetDirectoryByPath :one
-SELECT id, agent_id, path, read_access, write_access, list_access, description, llm_hint, retention_hours, created_at, updated_at FROM agent_directories
+SELECT id, agent_id, path, read_access, write_access, list_access, description, llm_hint, retention_hours, created_at, updated_at, scope FROM agent_directories
 WHERE agent_id = $1 AND $2::text LIKE path || '%'
 ORDER BY length(path) DESC LIMIT 1
 `
@@ -53,12 +53,13 @@ func (q *Queries) GetDirectoryByPath(ctx context.Context, arg GetDirectoryByPath
 		&i.RetentionHours,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Scope,
 	)
 	return i, err
 }
 
 const listDirectoriesByAgent = `-- name: ListDirectoriesByAgent :many
-SELECT id, agent_id, path, read_access, write_access, list_access, description, llm_hint, retention_hours, created_at, updated_at FROM agent_directories WHERE agent_id = $1 ORDER BY path
+SELECT id, agent_id, path, read_access, write_access, list_access, description, llm_hint, retention_hours, created_at, updated_at, scope FROM agent_directories WHERE agent_id = $1 ORDER BY path
 `
 
 func (q *Queries) ListDirectoriesByAgent(ctx context.Context, agentID pgtype.UUID) ([]AgentDirectory, error) {
@@ -82,6 +83,7 @@ func (q *Queries) ListDirectoriesByAgent(ctx context.Context, agentID pgtype.UUI
 			&i.RetentionHours,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.Scope,
 		); err != nil {
 			return nil, err
 		}
@@ -130,8 +132,8 @@ func (q *Queries) ListDirectoriesWithRetention(ctx context.Context) ([]ListDirec
 }
 
 const upsertDirectory = `-- name: UpsertDirectory :exec
-INSERT INTO agent_directories (agent_id, path, read_access, write_access, list_access, description, llm_hint, retention_hours)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+INSERT INTO agent_directories (agent_id, path, read_access, write_access, list_access, description, llm_hint, retention_hours, scope)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 ON CONFLICT (agent_id, path) DO UPDATE SET
     read_access = EXCLUDED.read_access,
     write_access = EXCLUDED.write_access,
@@ -139,6 +141,7 @@ ON CONFLICT (agent_id, path) DO UPDATE SET
     description = EXCLUDED.description,
     llm_hint = EXCLUDED.llm_hint,
     retention_hours = EXCLUDED.retention_hours,
+    scope = EXCLUDED.scope,
     updated_at = now()
 `
 
@@ -151,6 +154,7 @@ type UpsertDirectoryParams struct {
 	Description    string      `json:"description"`
 	LlmHint        string      `json:"llm_hint"`
 	RetentionHours int32       `json:"retention_hours"`
+	Scope          string      `json:"scope"`
 }
 
 func (q *Queries) UpsertDirectory(ctx context.Context, arg UpsertDirectoryParams) error {
@@ -163,6 +167,7 @@ func (q *Queries) UpsertDirectory(ctx context.Context, arg UpsertDirectoryParams
 		arg.Description,
 		arg.LlmHint,
 		arg.RetentionHours,
+		arg.Scope,
 	)
 	return err
 }

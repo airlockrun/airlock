@@ -65,6 +65,7 @@ WHERE agent_id = @agent_id AND slug = @slug;
 -- name: UpdateMCPServerToolSchemas :exec
 UPDATE agent_mcp_servers SET
     tool_schemas = @tool_schemas,
+    server_instructions = @server_instructions,
     last_synced_at = now(),
     updated_at = now()
 WHERE agent_id = @agent_id AND slug = @slug;

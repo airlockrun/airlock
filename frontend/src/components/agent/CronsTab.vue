@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, watch } from 'vue'
 import api from '@/api/client'
 import { useToast } from 'primevue/usetoast'
 
@@ -11,9 +11,11 @@ interface Cron {
 }
 
 const props = defineProps<{ agentId: string }>()
+const emit = defineEmits<{ populated: [count: number] }>()
 const toast = useToast()
 
 const crons = ref<Cron[]>([])
+watch(crons, (v) => emit('populated', v.length), { immediate: true })
 const loading = ref(true)
 
 function mapCron(raw: Record<string, any>): Cron {

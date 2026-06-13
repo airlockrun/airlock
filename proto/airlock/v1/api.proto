@@ -81,6 +81,15 @@ message ListUsersResponse {
   repeated User users = 1;
 }
 
+// MeResponse is the /api/v1/me payload. tenant_permissions enumerates
+// every tenant-axis Action (from airlock/authz/policy.go) the caller's
+// tenant role currently satisfies — the frontend uses this as the single
+// source of truth for UI gating, replacing per-component role checks.
+message MeResponse {
+  User user = 1;
+  repeated string tenant_permissions = 2;
+}
+
 message ListSelectableUsersResponse {
   repeated UserSummary users = 1;
 }
@@ -148,6 +157,12 @@ message CreateAgentRequest {
   string instructions = 6;
   string build_provider_id = 7;
   string exec_provider_id = 8;
+  // Optional external git connection. When git_remote_url is set the
+  // agent is attached to the remote on create and the scaffold +
+  // codegen are pushed to it via the build pipeline.
+  string git_remote_url = 9;
+  string git_credential_id = 10;
+  string git_default_branch = 11;  // empty → "main"
 }
 
 message CreateAgentResponse {
@@ -165,6 +180,11 @@ message GetAgentDetailResponse {
   repeated WebhookInfo webhooks = 3;
   repeated CronInfo crons = 4;
   repeated RouteInfo routes = 5;
+  // External base URL for the agent's registered routes
+  // ({scheme}://{slug}.{agentDomain}[:port], no trailing slash). The UI
+  // links GET routes to route_base_url + path. Server-built from env —
+  // agent_domain is not client-derivable.
+  string route_base_url = 6;
 }
 
 message UpdateAgentRequest {
@@ -174,6 +194,11 @@ message UpdateAgentRequest {
   // Field numbers 3 and 4 intentionally left reserved to avoid re-use.
   reserved 3, 4;
   reserved "build_model", "exec_model";
+  // Rename: omitted (null) leaves the field unchanged. slug must stay
+  // unique and kebab-shaped; changing it re-points sibling agent_<slug>
+  // bindings and any externally-configured MCP URL.
+  optional string name = 5;
+  optional string slug = 6;
 }
 
 message UpdateAgentResponse {
@@ -183,6 +208,15 @@ message UpdateAgentResponse {
 message UpgradeAgentRequest {
   string run_id = 1;      // optional — the failed run to fix
   string description = 2;  // optional — extra instructions for the upgrade
+}
+
+// RollbackBuildRequest targets a specific past build to roll back to.
+// build_id must reference a completed build belonging to the agent.
+// conversation_id is optional; when set, a single post-rollback message
+// is posted into that conversation (mirroring upgrade's notifier).
+message RollbackBuildRequest {
+  string build_id = 1;
+  string conversation_id = 2;
 }
 
 // --- Per-agent model configuration ---
@@ -282,6 +316,13 @@ message GetConversationResponse {
   // the first message in `messages`. The client uses this to decide whether
   // to enable scroll-up pagination via ListConversationMessages.
   bool has_older_messages = 4;
+
+  // in_flight_run_id is set when a prompt run is currently in flight for
+  // this conversation (status=running). Lets the client adopt the run id
+  // even when it joined after the run.started WS event already fired —
+  // without it, mid-flight WS deltas / completion events get filtered
+  // out and the Cancel button stays disabled until a page refresh.
+  string in_flight_run_id = 5;
 }
 
 // PaginatedMessagesResponse is the result of GET /api/v1/conversations/{convID}/messages
@@ -293,11 +334,19 @@ message PaginatedMessagesResponse {
   bool has_more = 2;
 }
 
-// PendingConfirmation describes a tool call awaiting user approval.
+// PendingConfirmation describes a tool call awaiting user approval,
+// reconstructed from a suspended run's checkpoint on conversation load.
 message PendingConfirmation {
   string tool_call_id = 1;
   string tool_name = 2;
-  string input = 3;  // JSON-encoded tool input
+  string input = 3;  // JSON-encoded tool input (direct run_js confirmation)
+  // permission/patterns/code carry the confirmation detail for a
+  // delegated (A2A) suspension — a sub-agent's request_confirmation that
+  // surfaced through promptAgent. Mirrors ConfirmationRequiredEvent so
+  // the UI renders it the same as a live confirmation.
+  string permission = 4;
+  repeated string patterns = 5;
+  string code = 6;
 }
 
 // --- Prompt ---
@@ -307,6 +356,10 @@ message PromptRequest {
   string message = 2;
   repeated string file_paths = 3;
   optional bool approved = 4; // Set by UI when responding to a confirmation request.
+  // The exact run the UI is approving/denying — carried from the
+  // confirmation event so the backend resumes that run instead of guessing
+  // the conversation's latest suspended run. Required when `approved` is set.
+  string resume_run_id = 5;
 }
 
 message PromptResponse {
@@ -414,6 +467,11 @@ message CreateBridgeRequest {
 message UpdateBridgeRequest {
   string agent_id = 1;
   BridgeSettings settings = 2;
+  // Switch a bridge between the system-agent surface and an agent
+  // surface. Optional: unset = leave as-is. Switching to system
+  // requires the TenantBridgeSystem permission and forces agent_id
+  // empty; switching away from system requires a non-empty agent_id.
+  optional bool is_system = 3;
 }
 
 message ListBridgesResponse {
@@ -483,6 +541,122 @@ message UpdateSystemSettingsResponse {
 message ErrorResponse {
   string error = 1;
   string detail = 2;
+}
+
+// --- Git credentials ---
+
+message CreateGitCredentialRequest {
+  string type = 1;   // "pat" (v1)
+  string name = 2;   // user-chosen label, unique per user
+  string token = 3;  // plaintext PAT; encrypted on the backend
+}
+
+message CreateGitCredentialResponse {
+  GitCredential credential = 1;
+}
+
+message ListGitCredentialsResponse {
+  repeated GitCredential credentials = 1;
+}
+
+// --- Agent git connection ---
+
+message ConnectAgentGitRequest {
+  string git_remote_url = 1;
+  string git_credential_id = 2;
+  string default_branch = 3;       // empty → "main"
+}
+
+message ConnectAgentGitResponse {
+  AgentGitConfig config = 1;
+}
+
+message GetAgentGitConfigResponse {
+  AgentGitConfig config = 1;
+}
+
+// --- MCP servers ---
+
+message ListMCPServersResponse {
+  repeated MCPServerInfo mcp_servers = 1;
+  string oauth_callback_url = 2;
+}
+
+message MCPCredentialStatusResponse {
+  MCPStatusInfo status = 1;
+}
+
+// --- Env vars ---
+
+message ListEnvVarsResponse {
+  repeated EnvVarInfo env_vars = 1;
+}
+
+message SetEnvVarValueRequest {
+  string value = 1;
+}
+
+// --- Relay codes (short-lived auth handoff to agent subdomains) ---
+
+message GenerateRelayCodeRequest {
+  string return_url = 1;
+}
+
+message GenerateRelayCodeResponse {
+  string code = 1;
+  string callback_url = 2;
+}
+
+// --- Siblings (A2A) ---
+
+message ListSiblingsResponse {
+  repeated SiblingInfo siblings = 1;
+}
+
+message ListAddableSiblingsResponse {
+  repeated AddableSiblingInfo agents = 1;
+}
+
+message GetAgentSharingResponse {
+  A2ASettings settings = 1;
+}
+
+message UpdateAgentSharingRequest {
+  A2ASettings settings = 1;
+}
+
+message UpdateAgentSharingResponse {
+  A2ASettings settings = 1;
+}
+
+// --- Exec endpoints ---
+
+message ListExecEndpointsResponse {
+  repeated ExecEndpointInfo endpoints = 1;
+}
+
+message ConfigureExecEndpointRequest {
+  string host = 1;
+  int32 port = 2;
+  string ssh_user = 3;
+}
+
+message ConfigureExecEndpointResponse {
+  ExecEndpointInfo endpoint = 1;
+}
+
+message RotateExecKeypairResponse {
+  ExecEndpointInfo endpoint = 1;
+}
+
+message TestExecEndpointResponse {
+  ExecEndpointTestResult result = 1;
+}
+
+// --- Connection setup status ---
+
+message ConnectionSetupStatusResponse {
+  SetupCountsInfo counts = 1;
 }
 
 // --- Health ---

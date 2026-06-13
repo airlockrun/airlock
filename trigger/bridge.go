@@ -1,9 +1,11 @@
 package trigger
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"math/rand/v2"
 	"strings"
 	"sync"
 	"time"
@@ -17,111 +19,40 @@ import (
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/airlockrun/airlock/secrets"
+	bridgessvc "github.com/airlockrun/airlock/service/bridges"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"
 )
 
-// DefaultPublicSessionTTLSeconds is the inactivity window after which a
-// public bridge conversation is swept and finalized. Three hours covers
-// the "user wandered off" case while keeping public state from
-// accumulating indefinitely.
-const DefaultPublicSessionTTLSeconds = 3 * 60 * 60
-
-// DefaultPublicPromptTimeoutSeconds caps how long a single public-DM
-// prompt run can take. Authenticated users get the full PromptHTTPCeiling;
-// public callers are throttled tighter so a noisy abuser can't tie up the
-// agent on long chains.
-const DefaultPublicPromptTimeoutSeconds = 60
-
-// PublicSessionMode controls how public conversations carry context
-// across turns.
-const (
-	// PublicSessionModeSession persists turns in a per-channel conversation
-	// (the default). The sweeper finalizes idle ones.
-	PublicSessionModeSession = "session"
-
-	// PublicSessionModeOneShot creates a fresh ephemeral conversation per
-	// turn — no history loaded, conversation deleted immediately after the
-	// run. If the user's message is a reply, the referenced text is
-	// included as a wrapped context block so the LLM has at least the
-	// thing being replied to.
-	PublicSessionModeOneShot = "one_shot"
-)
-
-// BridgeSettings is the user-tunable subset of bridge config exposed in
-// the dashboard. Stored in bridges.settings JSONB. Distinct from
-// bridges.config which carries driver-internal state.
-type BridgeSettings struct {
-	// AllowPublicDMs lets unauthenticated users DM the bot at AccessPublic.
-	// When false, unauth DMs are dropped (except /auth, which is the
-	// linking opt-in path and always works).
-	AllowPublicDMs bool `json:"allow_public_dms"`
-
-	// PublicSessionTTLSeconds is the inactivity window before a public
-	// conversation is finalized. 0 disables sweeping for that bridge.
-	// Only meaningful when PublicSessionMode == "session".
-	PublicSessionTTLSeconds int `json:"public_session_ttl_seconds"`
-
-	// PublicSessionMode chooses between persistent ("session") and
-	// stateless ("one_shot") public conversations. Defaults to session.
-	PublicSessionMode string `json:"public_session_mode"`
-
-	// PublicPromptTimeoutSeconds caps wall-clock duration of a single
-	// public-DM prompt run. Authenticated users are not affected (they
-	// run under the global PromptHTTPCeiling). 0 means "use the default"
-	// (DefaultPublicPromptTimeoutSeconds).
-	PublicPromptTimeoutSeconds int `json:"public_prompt_timeout_seconds"`
-}
-
-// DefaultBridgeSettings returns the settings a freshly created bridge
-// row should carry. New bridges currently insert `{}` and rely on this
-// function to materialize defaults at read time.
+// pickConfirmationBody chooses the best human-readable body string from a
+// PermissionAsked metadata bag for display in a bridge driver's
+// confirmation prompt. Producers vary in what they stuff in:
+//   - agentsdk run_js puts the JS source under "code".
+//   - sysagent destructive tools put the raw JSON args under "args".
+//   - doom_loop carries a human "message".
 //
-// AllowPublicDMs defaults to false: opening a bot to anonymous users is
-// a deliberate operator choice (it exposes the agent's free-tier surface
-// to the public internet). Operators flip it on from the bridge settings
-// dialog when they actually want public access.
-func DefaultBridgeSettings() BridgeSettings {
-	return BridgeSettings{
-		AllowPublicDMs:             false,
-		PublicSessionTTLSeconds:    DefaultPublicSessionTTLSeconds,
-		PublicSessionMode:          PublicSessionModeSession,
-		PublicPromptTimeoutSeconds: DefaultPublicPromptTimeoutSeconds,
+// Whichever is present (in this priority order) becomes the body. The
+// driver wraps the return as a <pre>...</pre> block; empty string means
+// the driver shows just the permission name with no body.
+func pickConfirmationBody(m map[string]any) string {
+	if c, ok := m["code"].(string); ok && c != "" {
+		return c
 	}
-}
-
-// DecodeBridgeSettings parses a bridges.settings JSON blob, falling back
-// to defaults for any missing keys. Empty / invalid JSON returns the
-// default settings.
-func DecodeBridgeSettings(raw []byte) BridgeSettings {
-	s := DefaultBridgeSettings()
-	if len(raw) == 0 {
-		return s
+	if a, ok := m["args"].(string); ok && a != "" {
+		// Pretty-print when the args look like JSON — sysagent's executor
+		// puts a single-line string in; multi-line is much more readable in
+		// chat. Fall back to the raw string on parse failure.
+		var pretty bytes.Buffer
+		if err := json.Indent(&pretty, []byte(a), "", "  "); err == nil && pretty.Len() > 0 {
+			return pretty.String()
+		}
+		return a
 	}
-	// Decode into a tolerant map first so missing keys keep their defaults.
-	var m map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &m); err != nil {
-		return s
+	if msg, ok := m["message"].(string); ok && msg != "" {
+		return msg
 	}
-	if v, ok := m["allow_public_dms"]; ok {
-		_ = json.Unmarshal(v, &s.AllowPublicDMs)
-	}
-	if v, ok := m["public_session_ttl_seconds"]; ok {
-		_ = json.Unmarshal(v, &s.PublicSessionTTLSeconds)
-	}
-	if v, ok := m["public_session_mode"]; ok {
-		_ = json.Unmarshal(v, &s.PublicSessionMode)
-	}
-	if s.PublicSessionMode != PublicSessionModeOneShot {
-		s.PublicSessionMode = PublicSessionModeSession
-	}
-	if v, ok := m["public_prompt_timeout_seconds"]; ok {
-		_ = json.Unmarshal(v, &s.PublicPromptTimeoutSeconds)
-	}
-	if s.PublicPromptTimeoutSeconds <= 0 {
-		s.PublicPromptTimeoutSeconds = DefaultPublicPromptTimeoutSeconds
-	}
-	return s
+	return ""
 }
 
 // ResponseEvent represents an NDJSON event from the agent response stream,
@@ -256,16 +187,17 @@ type CommandRegistrar interface {
 
 // BridgeManager manages bridge drivers and routes events to agents.
 type BridgeManager struct {
-	drivers    map[string]BridgeDriver
-	prompter   *PromptProxy
-	db         *db.DB
-	encryptor  secrets.Store
-	logger     *zap.Logger
-	ctx        context.Context
-	cancel     context.CancelFunc
-	wg         sync.WaitGroup
-	hmacSecret string // for generating identity-linking URLs
-	publicURL  string // base URL for identity-linking URLs
+	drivers      map[string]BridgeDriver
+	prompter     *PromptProxy
+	db           *db.DB
+	encryptor    secrets.Store
+	logger       *zap.Logger
+	ctx          context.Context
+	cancel       context.CancelFunc
+	wg           sync.WaitGroup
+	hmacSecret   string                   // for generating identity-linking URLs
+	publicURL    string                   // base URL for identity-linking URLs
+	agentBaseURL func(slug string) string // builds {scheme}://{slug}.{agentDomain}[:port]; required for Telegram web-app menu button
 
 	// pollers tracks the running poller for each bridge ID. Needed so
 	// RemoveBridge can stop exactly one poller on bridge deletion —
@@ -284,6 +216,23 @@ type BridgeManager struct {
 	// duplicate pollers on every subsequent AddBridge call.
 	pollersMu sync.Mutex
 	pollers   map[uuid.UUID]*pollerHandle
+
+	// sysagent is the in-airlock system-agent runtime. Routes inbound
+	// DMs on system bridges (br.IsSystem) into a per-bridge sysagent
+	// thread. Nil until AttachSysagent wires it after sysagent.New
+	// completes (constructor order: BridgeManager precedes the router,
+	// the router builds sysagent). System bridges receiving an event
+	// before AttachSysagent runs will silently drop, which is fine —
+	// inbound DMs can't arrive until the bridge poller is running, and
+	// pollers only start after airlock.Start which is well past
+	// AttachSysagent.
+	sysagent SysagentRuntime
+}
+
+// AttachSysagent wires the sysagent runtime after the router has built
+// it. Idempotent; the last set wins.
+func (m *BridgeManager) AttachSysagent(s SysagentRuntime) {
+	m.sysagent = s
 }
 
 // pollerHandle pairs a poller goroutine's cancel func with its context.
@@ -295,17 +244,23 @@ type pollerHandle struct {
 	cancel context.CancelFunc
 }
 
-// NewBridgeManager creates a BridgeManager.
-func NewBridgeManager(drivers map[string]BridgeDriver, prompter *PromptProxy, database *db.DB, encryptor secrets.Store, hmacSecret, publicURL string, logger *zap.Logger) *BridgeManager {
+// NewBridgeManager creates a BridgeManager. agentBaseURL builds the
+// external URL for an agent's subdomain ({scheme}://{slug}.{domain}[:port]);
+// the Telegram driver needs it to register the web-app menu button.
+func NewBridgeManager(drivers map[string]BridgeDriver, prompter *PromptProxy, database *db.DB, encryptor secrets.Store, hmacSecret, publicURL string, agentBaseURL func(slug string) string, logger *zap.Logger) *BridgeManager {
+	if agentBaseURL == nil {
+		panic("trigger: NewBridgeManager called with nil agentBaseURL")
+	}
 	return &BridgeManager{
-		drivers:    drivers,
-		prompter:   prompter,
-		db:         database,
-		encryptor:  encryptor,
-		hmacSecret: hmacSecret,
-		publicURL:  publicURL,
-		logger:     logger,
-		pollers:    make(map[uuid.UUID]*pollerHandle),
+		drivers:      drivers,
+		prompter:     prompter,
+		db:           database,
+		encryptor:    encryptor,
+		hmacSecret:   hmacSecret,
+		publicURL:    publicURL,
+		agentBaseURL: agentBaseURL,
+		logger:       logger,
+		pollers:      make(map[uuid.UUID]*pollerHandle),
 	}
 }
 
@@ -348,11 +303,54 @@ func (m *BridgeManager) Start(ctx context.Context) error {
 			continue
 		}
 		m.registerCommands(ctx, driver, decrypted)
+		m.registerWebAppMenuButton(ctx, driver, decrypted)
 		m.startPoller(ctx, decrypted)
 	}
 
 	m.logger.Info("bridge manager started", zap.Int("pollers", len(bridges)))
 	return nil
+}
+
+// registerWebAppMenuButton configures the bot's persistent chat menu
+// button on Telegram bridges so users get a one-tap path into the
+// agent's HTML UI from inside Telegram. Auth happens transparently via
+// initData verification at the airlock proxy. Skipped for non-telegram
+// bridges, system bridges (no agent_id), and bridges with WebAppEnabled
+// disabled. Failures are logged but non-fatal — the bridge still works
+// for chat; users just don't get the button.
+func (m *BridgeManager) registerWebAppMenuButton(ctx context.Context, driver BridgeDriver, br dbq.Bridge) {
+	if br.Type != "telegram" || !br.AgentID.Valid {
+		return
+	}
+	tg, ok := driver.(*TelegramDriver)
+	if !ok {
+		return
+	}
+	settings := bridgessvc.DecodeSettings(br.Settings)
+	q := dbq.New(m.db.Pool())
+	agent, err := q.GetAgentByID(ctx, br.AgentID)
+	if err != nil {
+		m.logger.Warn("web-app menu button: agent lookup failed",
+			zap.String("bridge", br.Name),
+			zap.Error(err))
+		return
+	}
+	var url string
+	if settings.WebAppEnabled {
+		url = m.agentBaseURL(agent.Slug) + "/__air/tg/start?b=" + pgUUID(br.ID).String()
+	}
+	if err := tg.SetMenuButton(ctx, br.BotTokenRef, url); err != nil {
+		m.logger.Warn("web-app menu button: setChatMenuButton failed",
+			zap.String("bridge", br.Name),
+			zap.Bool("enabled", settings.WebAppEnabled),
+			zap.String("url", url),
+			zap.Error(err))
+		return
+	}
+	m.logger.Info("web-app menu button registered",
+		zap.String("bridge", br.Name),
+		zap.Bool("enabled", settings.WebAppEnabled),
+		zap.String("url", url))
 }
 
 // registerCommands pushes the slash-command registry to drivers that
@@ -400,6 +398,7 @@ func (m *BridgeManager) AddBridge(bridgeID uuid.UUID) {
 		return
 	}
 	m.registerCommands(m.ctx, driver, br)
+	m.registerWebAppMenuButton(m.ctx, driver, br)
 	// Stop any stale poller for the same bridge ID before starting a new one.
 	m.cancelPoller(bridgeID)
 	m.startPoller(m.ctx, br)
@@ -411,6 +410,24 @@ func (m *BridgeManager) AddBridge(bridgeID uuid.UUID) {
 // q.DeleteBridge alongside this).
 func (m *BridgeManager) RemoveBridge(bridgeID uuid.UUID) {
 	m.cancelPoller(bridgeID)
+}
+
+// RemoveBridgesByOwner stops every poller for bridges owned by a
+// specific user. Called from service/users.Delete BEFORE the DB
+// CASCADE removes the bridge rows — otherwise the poller goroutines
+// would keep calling getUpdates against now-deleted bridges until
+// their next transient failure, racing on the bot token with any
+// replacement bridge that happened to land on the same row id.
+func (m *BridgeManager) RemoveBridgesByOwner(ctx context.Context, ownerID uuid.UUID) error {
+	q := dbq.New(m.db.Pool())
+	rows, err := q.ListBridgesByOwner(ctx, pgtype.UUID{Bytes: ownerID, Valid: true})
+	if err != nil {
+		return fmt.Errorf("list bridges by owner: %w", err)
+	}
+	for _, id := range rows {
+		m.cancelPoller(uuid.UUID(id.Bytes))
+	}
+	return nil
 }
 
 // cancelPoller stops the poller goroutine for a specific bridge ID, if any.
@@ -434,6 +451,43 @@ func (m *BridgeManager) Stop() {
 	m.wg.Wait()
 }
 
+// BotTokenForBridge returns the decrypted Telegram bot token for
+// (agentID, bridgeID) — only if the bridge belongs to that agent and is
+// of type "telegram". The agent guard is the cross-agent boundary at the
+// lookup layer; HMAC verification of the caller's initData then gates
+// the actual auth. Returns an error on any mismatch so the caller can
+// 401 without leaking which constraint failed.
+//
+// Used by the airlock proxy's Telegram Web App auth handler.
+func (m *BridgeManager) BotTokenForBridge(ctx context.Context, agentID, bridgeID uuid.UUID) (string, error) {
+	q := dbq.New(m.db.Pool())
+	br, err := q.GetBridgeByID(ctx, toPgUUID(bridgeID))
+	if err != nil {
+		return "", fmt.Errorf("get bridge: %w", err)
+	}
+	if br.Type != "telegram" {
+		return "", fmt.Errorf("bridge %s is not telegram", bridgeID)
+	}
+	if !br.AgentID.Valid || uuid.UUID(br.AgentID.Bytes) != agentID {
+		return "", fmt.Errorf("bridge %s does not belong to agent %s", bridgeID, agentID)
+	}
+	if br.BotTokenRef == "" {
+		return "", fmt.Errorf("bridge %s has no bot token", bridgeID)
+	}
+	token, err := m.encryptor.Get(ctx, "bridge/"+pgUUID(br.ID).String()+"/bot_token", br.BotTokenRef)
+	if err != nil {
+		return "", fmt.Errorf("decrypt bridge token: %w", err)
+	}
+	return token, nil
+}
+
+// isCancelTap reports whether a bridge event is a "Stop" button tap.
+// These are routed past the serial event worker (see startPoller) so a
+// cancel can reach a run that is still in flight.
+func isCancelTap(e BridgeEvent) bool {
+	return e.Callback != nil && strings.HasPrefix(e.Callback.Data, "cancel:")
+}
+
 // HandleEvent processes a parsed BridgeEvent — routes to agent via PromptProxy.
 func (m *BridgeManager) HandleEvent(ctx context.Context, event BridgeEvent) error {
 	q := dbq.New(m.db.Pool())
@@ -442,26 +496,31 @@ func (m *BridgeManager) HandleEvent(ctx context.Context, event BridgeEvent) erro
 		return fmt.Errorf("get bridge: %w", err)
 	}
 
-	if !br.AgentID.Valid {
-		return nil // system bridge with no agent bound — drop event for now
-	}
-	agentID := pgUUID(br.AgentID)
-
-	// Decrypt token for driver.
+	// Decrypt token once up front — needed by both system-bridge and
+	// agent-bridge paths for SendText / SendStream / AnswerCallback.
 	if br.BotTokenRef != "" {
-		token, err := m.encryptor.Get(ctx, "bridge/"+pgUUID(br.ID).String()+"/bot_token", br.BotTokenRef)
-		if err != nil {
-			return fmt.Errorf("decrypt bridge token: %w", err)
+		token, derr := m.encryptor.Get(ctx, "bridge/"+pgUUID(br.ID).String()+"/bot_token", br.BotTokenRef)
+		if derr != nil {
+			return fmt.Errorf("decrypt bridge token: %w", derr)
 		}
 		br.BotTokenRef = token
 	}
+
+	if br.IsSystem {
+		return m.handleSystemBridgeEvent(ctx, br, event)
+	}
+
+	if !br.AgentID.Valid {
+		return nil // orphan bridge (agent deleted, not system) — drop until rebinding
+	}
+	agentID := pgUUID(br.AgentID)
 
 	driver := m.drivers[br.Type]
 
 	// Cancel button tap (driver posts "Stop" button after CancelButtonAfter).
 	// Distinct from approve/deny callbacks routed through HandleCallback —
 	// those resolve a *suspended* run, this aborts a *running* one.
-	if event.Callback != nil && strings.HasPrefix(event.Callback.Data, "cancel:") {
+	if isCancelTap(event) {
 		runIDStr := strings.TrimPrefix(event.Callback.Data, "cancel:")
 		if runID, err := uuid.Parse(runIDStr); err == nil {
 			m.prompter.dispatcher.CancelRun(runID)
@@ -495,7 +554,7 @@ func (m *BridgeManager) HandleEvent(ctx context.Context, event BridgeEvent) erro
 	if idErr == nil {
 		userID = pgUUID(identity.UserID)
 	} else {
-		settings := DecodeBridgeSettings(br.Settings)
+		settings := bridgessvc.DecodeSettings(br.Settings)
 		if !settings.AllowPublicDMs {
 			m.logger.Debug("public DMs disabled; dropping unlinked sender",
 				zap.String("bridge", br.Name),
@@ -566,8 +625,8 @@ func (m *BridgeManager) HandleEvent(ctx context.Context, event BridgeEvent) erro
 	// Resolve session mode: only public (unlinked) senders honor the
 	// per-bridge one-shot toggle. Authenticated users always run in
 	// session mode.
-	settings := DecodeBridgeSettings(br.Settings)
-	oneShot := userID == uuid.Nil && settings.PublicSessionMode == PublicSessionModeOneShot
+	settings := bridgessvc.DecodeSettings(br.Settings)
+	oneShot := userID == uuid.Nil && settings.PublicSessionMode == bridgessvc.PublicSessionModeOneShot
 
 	// Public callers run under a tighter per-prompt timeout than authenticated
 	// users so a noisy abuser can't tie up the agent. Wrapping ctx with a
@@ -713,6 +772,30 @@ func (m *BridgeManager) startPoller(parent context.Context, br dbq.Bridge) {
 		ctx := pollCtx
 		driver := m.drivers[br.Type]
 
+		// Run-starting events (messages, approve/deny taps) are handled one
+		// at a time by this worker — concurrent runs in a single
+		// conversation aren't validated yet. Cancel taps bypass the worker
+		// (see the poll loop) so a cancel can reach a run that is still in
+		// flight. The buffer sits above getUpdates' 100-update max batch so
+		// a single poll never blocks the loop — which keeps cancel taps
+		// getting fetched promptly even while the worker is busy.
+		msgEvents := make(chan BridgeEvent, 128)
+		m.wg.Add(1)
+		go func() {
+			defer m.wg.Done()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case ev := <-msgEvents:
+					if err := m.HandleEvent(ctx, ev); err != nil {
+						m.logger.Error("handle event failed",
+							zap.String("bridge", br.Name), zap.Error(err))
+					}
+				}
+			}
+		}()
+
 		for {
 			select {
 			case <-ctx.Done():
@@ -733,20 +816,42 @@ func (m *BridgeManager) startPoller(parent context.Context, br dbq.Bridge) {
 					ID:     br.ID,
 					Status: "error",
 				})
-				// Back off before retrying.
+				// Back off before retrying. Jitter spreads out the retries
+				// when several bridges fail in the same instant (a local
+				// network blip drops every poller's TCP socket within ~1 ms
+				// of each other); without jitter all of them would hammer
+				// the upstream simultaneously on the next attempt.
+				backoff := 30*time.Second + time.Duration(rand.Int64N(int64(10*time.Second)))
 				select {
 				case <-ctx.Done():
 					return
-				case <-time.After(30 * time.Second):
+				case <-time.After(backoff):
 				}
 				continue
 			}
 
+			// A cancel tap must reach its run while the run is still in
+			// flight — it can't wait behind the serial worker, since the
+			// worker is busy running the very thing being cancelled. It
+			// starts no run (just fires CancelRun), so handling it
+			// concurrently introduces no parallel run. Every other event
+			// goes through the worker, one at a time.
 			for _, event := range events {
-				if err := m.HandleEvent(ctx, event); err != nil {
-					m.logger.Error("handle event failed",
-						zap.String("bridge", br.Name),
-						zap.Error(err))
+				if isCancelTap(event) {
+					m.wg.Add(1)
+					go func(ev BridgeEvent) {
+						defer m.wg.Done()
+						if err := m.HandleEvent(ctx, ev); err != nil {
+							m.logger.Error("handle event failed",
+								zap.String("bridge", br.Name), zap.Error(err))
+						}
+					}(event)
+					continue
+				}
+				select {
+				case msgEvents <- event:
+				case <-ctx.Done():
+					return
 				}
 			}
 

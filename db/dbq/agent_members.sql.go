@@ -141,6 +141,52 @@ func (q *Queries) ListAgentMembers(ctx context.Context, agentID pgtype.UUID) ([]
 	return items, nil
 }
 
+const listUserAgentMemberships = `-- name: ListUserAgentMemberships :many
+SELECT a.id, a.slug, a.name, am.role, am.created_at
+FROM agent_members am
+JOIN agents a ON a.id = am.agent_id
+WHERE am.user_id = $1
+ORDER BY a.slug
+`
+
+type ListUserAgentMembershipsRow struct {
+	ID        pgtype.UUID        `json:"id"`
+	Slug      string             `json:"slug"`
+	Name      string             `json:"name"`
+	Role      string             `json:"role"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
+// For sysagent's whoami tool: one row per agent the user is a member
+// of, with role + the agent's slug/name. Lets the LLM ground itself
+// on what the user can do across agents in one call rather than
+// per-agent lookups.
+func (q *Queries) ListUserAgentMemberships(ctx context.Context, userID pgtype.UUID) ([]ListUserAgentMembershipsRow, error) {
+	rows, err := q.db.Query(ctx, listUserAgentMemberships, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListUserAgentMembershipsRow{}
+	for rows.Next() {
+		var i ListUserAgentMembershipsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Slug,
+			&i.Name,
+			&i.Role,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const removeAgentMember = `-- name: RemoveAgentMember :exec
 DELETE FROM agent_members WHERE agent_id = $1 AND user_id = $2
 `

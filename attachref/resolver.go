@@ -58,8 +58,8 @@ const urlExpiry = 1 * time.Hour
 const urlMinRemaining = 15 * time.Minute
 
 // ResolveForStorage canonicalizes s3ref sentinels on session.Messages and
-// writes canonical derived keys into Source. Leaves the sentinel in
-// Image/Data (tiny, enables re-resolution without reading Source).
+// writes canonical derived keys into Source. Leaves the sentinel in the
+// file part's Data (tiny, enables re-resolution without reading Source).
 //
 // Mutates msgs in place. Returns the first error encountered — callers
 // should treat the whole batch as failed (don't persist partial state).
@@ -67,39 +67,20 @@ func ResolveForStorage(ctx context.Context, s3 *storage.S3Client, agentID uuid.U
 	for i := range msgs {
 		for j := range msgs[i].Parts {
 			p := &msgs[i].Parts[j]
-			switch p.Type {
-			case "image":
-				if p.Image == nil {
-					continue
-				}
-				key, ok := strings.CutPrefix(p.Image.Image, Sentinel)
-				if !ok {
-					continue
-				}
-				canonical, mime, err := canonicalize(ctx, s3, agentID, key, p.Image.MimeType)
-				if err != nil {
-					return fmt.Errorf("attachref: canonicalize image %q: %w", key, err)
-				}
-				p.Image.Source = canonical
-				if mime != "" {
-					p.Image.MimeType = mime
-				}
-			case "file":
-				if p.File == nil {
-					continue
-				}
-				key, ok := strings.CutPrefix(p.File.Data, Sentinel)
-				if !ok {
-					continue
-				}
-				canonical, mime, err := canonicalize(ctx, s3, agentID, key, p.File.MimeType)
-				if err != nil {
-					return fmt.Errorf("attachref: canonicalize file %q: %w", key, err)
-				}
-				p.File.Source = canonical
-				if mime != "" {
-					p.File.MimeType = mime
-				}
+			if p.Type != "file" || p.File == nil {
+				continue
+			}
+			key, ok := strings.CutPrefix(p.File.Data, Sentinel)
+			if !ok {
+				continue
+			}
+			canonical, mime, err := canonicalize(ctx, s3, agentID, key, p.File.MimeType)
+			if err != nil {
+				return fmt.Errorf("attachref: canonicalize file %q: %w", key, err)
+			}
+			p.File.Source = canonical
+			if mime != "" {
+				p.File.MimeType = mime
 			}
 		}
 	}
@@ -133,14 +114,20 @@ func ResolveForLLM(ctx context.Context, s3 *storage.S3Client, q *dbq.Queries, ag
 	for mi := range msgs {
 		parts := msgs[mi].Content.Parts
 		for pi, p := range parts {
-			switch v := p.(type) {
-			case message.ImagePart:
-				if key, ok := strings.CutPrefix(v.Image, Sentinel); ok {
-					refs = append(refs, ref{mi, pi, "image", key, v.MimeType, 0})
+			if v, ok := p.(message.FilePart); ok {
+				var raw string
+				switch d := v.Data.(type) {
+				case message.FileDataBytes:
+					raw = d.Data
+				case message.FileDataURL:
+					raw = d.URL
 				}
-			case message.FilePart:
-				if key, ok := strings.CutPrefix(v.Data, Sentinel); ok {
-					refs = append(refs, ref{mi, pi, "file", key, v.MimeType, 0})
+				if key, ok := strings.CutPrefix(raw, Sentinel); ok {
+					kind := "file"
+					if strings.HasPrefix(v.MimeType, "image/") {
+						kind = "image"
+					}
+					refs = append(refs, ref{mi, pi, kind, key, v.MimeType, 0})
 				}
 			}
 		}
@@ -196,7 +183,7 @@ func ResolveForLLM(ctx context.Context, s3 *storage.S3Client, q *dbq.Queries, ag
 					return fmt.Errorf("attachref: presign %q: %w", rr.canonicalKey, err)
 				}
 				rr.mode = "url"
-				writeResolved(msgs, rr.msgIdx, rr.partIdx, rr.kind, rr.mime, url, "")
+				writeResolved(msgs, rr.msgIdx, rr.partIdx, rr.mime, url, "")
 				urlCount++
 				continue
 			}
@@ -216,7 +203,7 @@ func ResolveForLLM(ctx context.Context, s3 *storage.S3Client, q *dbq.Queries, ag
 		rr.mode = "inline"
 		rr.inlineBytes = len(encoded)
 		inlineTotal += rr.inlineBytes
-		writeResolved(msgs, rr.msgIdx, rr.partIdx, rr.kind, rr.mime, "", encoded)
+		writeResolved(msgs, rr.msgIdx, rr.partIdx, rr.mime, "", encoded)
 	}
 
 	// Enforce MaxInlineBytesTotal. Evict oldest (earliest msgIdx) inline
@@ -319,41 +306,20 @@ func canonicalize(ctx context.Context, s3 *storage.S3Client, agentID uuid.UUID, 
 }
 
 // writeResolved rewrites a message part with the resolved URL or base64.
-// Exactly one of url/b64 must be set.
-//
-// Field routing differs for files: FilePart has separate URL / Data fields
-// and provider conversion logic picks one or the other (e.g. Anthropic
-// emits source.type=url iff URL is set). Keep exactly one populated.
-// ImagePart.Image is polymorphic — providers auto-detect http prefix —
-// so URL-or-base64 goes into the same field.
-func writeResolved(msgs []message.Message, mi, pi int, kind, mime, url, b64 string) {
+// Exactly one of url/b64 must be set: a URL becomes a FileDataURL (which
+// providers emit as source.type=url), bytes become FileDataBytes.
+func writeResolved(msgs []message.Message, mi, pi int, mime, url, b64 string) {
 	parts := msgs[mi].Content.Parts
-	switch kind {
-	case "image":
-		value := url
-		if value == "" {
-			value = b64
-		}
-		old := parts[pi].(message.ImagePart)
-		old.Image = value
-		if mime != "" {
-			old.MimeType = mime
-		}
-		parts[pi] = old
-	case "file":
-		old := parts[pi].(message.FilePart)
-		if url != "" {
-			old.URL = url
-			old.Data = ""
-		} else {
-			old.Data = b64
-			old.URL = ""
-		}
-		if mime != "" {
-			old.MimeType = mime
-		}
-		parts[pi] = old
+	old := parts[pi].(message.FilePart)
+	if url != "" {
+		old.Data = message.FileDataURL{URL: url}
+	} else {
+		old.Data = message.FileDataBytes{Data: b64}
 	}
+	if mime != "" {
+		old.MimeType = mime
+	}
+	parts[pi] = old
 }
 
 // replacePartWithText swaps a part out for a text placeholder. Used by

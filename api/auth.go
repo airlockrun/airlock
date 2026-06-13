@@ -8,6 +8,7 @@ import (
 
 	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/auth/lockout"
+	"github.com/airlockrun/airlock/authz"
 	"github.com/airlockrun/airlock/convert"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
@@ -49,6 +50,7 @@ func (h *AuthHandler) Activate(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	q := dbq.New(h.db.Pool())
 
+	// airlockvet:allow-dbq reason: pre-Principal bootstrap (activate/login/refresh) — runs before authz can apply, gated by HMAC / activation token / password
 	exists, err := q.TenantExists(ctx)
 	if err != nil {
 		logFor(r).Error("check tenant exists failed", zap.Error(err))
@@ -61,6 +63,7 @@ func (h *AuthHandler) Activate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Validate activation code if one has been generated.
+	// airlockvet:allow-dbq reason: pre-Principal bootstrap (activate/login/refresh) — runs before authz can apply, gated by HMAC / activation token / password
 	settings, err := q.GetSystemSettings(ctx)
 	if err != nil {
 		logFor(r).Error("get system settings failed", zap.Error(err))
@@ -72,6 +75,7 @@ func (h *AuthHandler) Activate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// airlockvet:allow-dbq reason: pre-Principal bootstrap (activate/login/refresh) — runs before authz can apply, gated by HMAC / activation token / password
 	tenant, err := q.CreateTenant(ctx, dbq.CreateTenantParams{
 		Name:     "Airlock",
 		Slug:     "default",
@@ -89,6 +93,7 @@ func (h *AuthHandler) Activate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// airlockvet:allow-dbq reason: pre-Principal bootstrap (activate/login/refresh) — runs before authz can apply, gated by HMAC / activation token / password
 	user, err := q.CreateUser(ctx, dbq.CreateUserParams{
 		Email:              req.Email,
 		DisplayName:        req.DisplayName,
@@ -117,6 +122,7 @@ func (h *AuthHandler) Activate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Consume the activation code now that setup is complete.
+	// airlockvet:allow-dbq reason: pre-Principal bootstrap (activate/login/refresh) — runs before authz can apply, gated by HMAC / activation token / password
 	_ = q.ClearActivationCode(ctx)
 	if h.activationCodeFile != "" {
 		if err := os.Remove(h.activationCodeFile); err != nil && !os.IsNotExist(err) {
@@ -140,16 +146,19 @@ func (h *AuthHandler) Status(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	q := dbq.New(h.db.Pool())
 
+	// airlockvet:allow-dbq reason: pre-Principal bootstrap (activate/login/refresh) — runs before authz can apply, gated by HMAC / activation token / password
 	exists, err := q.TenantExists(ctx)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
 	if exists {
+		// airlockvet:allow-writejson reason: pre-Principal bootstrap (activate/login/refresh) — runs before authz can apply, gated by HMAC / activation token / password
 		writeJSON(w, http.StatusOK, map[string]any{"activated": true})
 		return
 	}
 
+	// airlockvet:allow-writejson reason: pre-Principal bootstrap (activate/login/refresh) — runs before authz can apply, gated by HMAC / activation token / password
 	writeJSON(w, http.StatusOK, map[string]any{
 		"activated":                false,
 		"activation_code_required": true,
@@ -196,6 +205,7 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 
 	q := dbq.New(pool)
 
+	// airlockvet:allow-dbq reason: pre-Principal bootstrap (activate/login/refresh) — runs before authz can apply, gated by HMAC / activation token / password
 	user, err := q.GetUserByEmail(ctx, req.Email)
 	if err != nil {
 		// Record on unknown-email too — otherwise an attacker probes random
@@ -236,10 +246,36 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Mirror the access token into an HttpOnly cookie so top-level
+	// browser navigations to /oauth/authorize can authenticate the
+	// user without the SPA having to inject the bearer. The SPA still
+	// reads from localStorage; the cookie is dead weight on its
+	// fetch calls. SameSite=Lax is required so the cross-site redirect
+	// from a Claude Desktop loopback page back to /oauth/authorize
+	// still carries the cookie; Strict would block the flow.
+	setAirlockSessionCookie(w, accessToken)
+
 	writeProto(w, http.StatusOK, &airlockv1.LoginResponse{
 		AccessToken:  accessToken,
 		RefreshToken: refreshToken,
 		User:         convert.UserToProto(user),
+	})
+}
+
+// setAirlockSessionCookie writes the airlock_session cookie used by
+// the /oauth/authorize browser flow. Same lifetime as the access
+// token (15min); the cookie expires and the user re-logs in if
+// /authorize is hit after expiry. Distinct from the __air_session
+// cookie in relay.go (agent subdomain proxy).
+func setAirlockSessionCookie(w http.ResponseWriter, accessToken string) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     "airlock_session",
+		Value:    accessToken,
+		Path:     "/",
+		MaxAge:   int(auth.AccessTokenDuration.Seconds()),
+		HttpOnly: true,
+		Secure:   true,
+		SameSite: http.SameSiteLaxMode,
 	})
 }
 
@@ -257,13 +293,22 @@ func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) {
 	}
 
 	q := dbq.New(h.db.Pool())
+	// airlockvet:allow-dbq reason: pre-Principal bootstrap (activate/login/refresh) — runs before authz can apply, gated by HMAC / activation token / password
 	user, err := q.GetUserByID(r.Context(), toPgUUID(userID))
 	if err != nil {
 		writeError(w, http.StatusNotFound, "user not found")
 		return
 	}
 
-	writeProto(w, http.StatusOK, convert.UserToProto(user))
+	actions := authz.GrantedTenantActions(auth.Role(claims.TenantRole))
+	perms := make([]string, len(actions))
+	for i, a := range actions {
+		perms[i] = string(a)
+	}
+	writeProto(w, http.StatusOK, &airlockv1.MeResponse{
+		User:              convert.UserToProto(user),
+		TenantPermissions: perms,
+	})
 }
 
 func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
@@ -327,6 +372,7 @@ func (h *AuthHandler) ChangePassword(w http.ResponseWriter, r *http.Request) {
 	}
 
 	q := dbq.New(h.db.Pool())
+	// airlockvet:allow-dbq reason: pre-Principal bootstrap (activate/login/refresh) — runs before authz can apply, gated by HMAC / activation token / password
 	user, err := q.GetUserByID(ctx, toPgUUID(userID))
 	if err != nil {
 		writeError(w, http.StatusNotFound, "user not found")
@@ -345,6 +391,7 @@ func (h *AuthHandler) ChangePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// airlockvet:allow-dbq reason: pre-Principal bootstrap (activate/login/refresh) — runs before authz can apply, gated by HMAC / activation token / password
 	if err := q.UpdateUserPassword(ctx, dbq.UpdateUserPasswordParams{
 		PasswordHash: newHash,
 		ID:           toPgUUID(userID),

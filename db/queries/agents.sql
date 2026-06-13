@@ -6,18 +6,24 @@
 INSERT INTO agents (
     name, slug, user_id, description, config, status,
     upgrade_status, auto_fix,
+    allow_non_member_mcp, allow_public_mcp,
+    allow_oauth_mcp_prompt, allow_public_mcp_prompt,
     build_model, exec_model, stt_model, vision_model,
     tts_model, image_gen_model, embedding_model, search_model,
     source_ref, image_ref, db_schema, db_password, sdk_version,
-    extra_prompts, error_message
+    extra_prompts, error_message, emoji,
+    git_remote_url, git_default_branch, git_webhook_secret, git_last_synced_ref
 )
 VALUES (
     @name, @slug, @user_id, @description, @config, 'draft',
     'idle', true,
+    false, false,
+    false, false,
     '', '', '', '',
     '', '', '', '',
     '', '', '', '', '',
-    '[]'::jsonb, ''
+    '[]'::jsonb, '', '',
+    '', '', '', ''
 )
 RETURNING *;
 
@@ -61,6 +67,18 @@ UPDATE agents SET db_password = @db_password, updated_at = now() WHERE id = @id;
 -- name: ListAgents :many
 SELECT * FROM agents ORDER BY created_at DESC;
 
+-- name: ListRebuildableAgents :many
+-- Agents the SDK-bump mass rebuild iterates over. An empty image_ref
+-- means no successful build yet (draft / failed initial build) —
+-- nothing to re-image. Status='stopped' agents are included: a fleet
+-- SDK bump should re-image them so they're ready when the operator
+-- starts them again. Order by created_at ASC for deterministic
+-- iteration order across replicas (advisory-locked single-runner per
+-- agent prevents real races, but predictable order eases debugging).
+SELECT * FROM agents
+WHERE image_ref <> '' AND status IN ('active', 'stopped')
+ORDER BY created_at ASC;
+
 -- name: ListAgentsByUserID :many
 SELECT * FROM agents WHERE user_id = $1 ORDER BY created_at DESC;
 
@@ -68,7 +86,13 @@ SELECT * FROM agents WHERE user_id = $1 ORDER BY created_at DESC;
 DELETE FROM agents WHERE id = $1;
 
 -- name: UpdateAgentFields :one
+-- Caller resolves each value (keep-existing when the request omits it)
+-- before calling, so this is an unconditional set. slug uniqueness is
+-- enforced by the agents.slug UNIQUE constraint — a collision surfaces
+-- as a duplicate-key error the handler maps to 409.
 UPDATE agents SET
+    name = @name,
+    slug = @slug,
     auto_fix = @auto_fix,
     updated_at = now()
 WHERE id = @id
@@ -101,6 +125,9 @@ WHERE id = @id;
 -- name: UpdateAgentDescription :exec
 UPDATE agents SET description = @description, updated_at = now() WHERE id = @id;
 
+-- name: UpdateAgentEmoji :exec
+UPDATE agents SET emoji = @emoji, updated_at = now() WHERE id = @id;
+
 -- name: UpdateAgentExtraPrompts :exec
 UPDATE agents SET extra_prompts = @extra_prompts, updated_at = now() WHERE id = @id;
 
@@ -109,3 +136,24 @@ UPDATE agents SET sdk_version = @sdk_version, updated_at = now() WHERE id = @id;
 
 -- name: UpdateAgentErrorMessage :exec
 UPDATE agents SET error_message = @error_message, updated_at = now() WHERE id = @id;
+
+-- name: UpdateAgentA2ASettings :exec
+-- Updates the two A2A access toggles. CHECK constraint
+-- agents_public_implies_non_member rejects the inconsistent state
+-- (allow_public_mcp=true ∧ allow_non_member_mcp=false), so the API
+-- layer auto-flips non-member on whenever it sets public on.
+UPDATE agents SET
+    allow_non_member_mcp = @allow_non_member_mcp,
+    allow_public_mcp     = @allow_public_mcp,
+    updated_at           = now()
+WHERE id = @id;
+
+-- name: ListActiveAgentIDs :many
+-- All agents in 'active' status. Used by the sibling-update broadcaster
+-- to fan a /refresh out to every running agent (cold containers no-op).
+SELECT id FROM agents WHERE status = 'active';
+
+-- name: UpdateAgentToolsHash :exec
+-- Stamp the synced tool-set hash on the agent. Sync handler compares
+-- before/after to decide whether to broadcast a sibling-update refresh.
+UPDATE agents SET tools_hash = @tools_hash WHERE id = @id;

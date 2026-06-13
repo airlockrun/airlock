@@ -84,6 +84,92 @@ func TestValidateTokenRejectsExpired(t *testing.T) {
 	}
 }
 
+// TestIssueTokenHasNoClientID is the load-bearing invariant for the
+// MCP endpoint's OAuth vs. web-login discrimination: web-login JWTs
+// (IssueToken / IssueRefreshToken / IssueTokenWithDuration) must NEVER
+// carry a client_id claim. If this test ever fails, the MCP endpoint
+// would accept a regular user JWT as an OAuth access token and skip
+// the aud + scope checks.
+func TestIssueTokenHasNoClientID(t *testing.T) {
+	userID := uuid.New()
+
+	for name, issue := range map[string]func() (string, error){
+		"IssueToken": func() (string, error) {
+			return IssueToken(testSecret, userID, "x@y.z", "admin")
+		},
+		"IssueRefreshToken": func() (string, error) {
+			return IssueRefreshToken(testSecret, userID, "x@y.z", "admin")
+		},
+		"IssueTokenWithDuration": func() (string, error) {
+			return IssueTokenWithDuration(testSecret, userID, "x@y.z", "admin", time.Minute)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			tok, err := issue()
+			if err != nil {
+				t.Fatalf("issue: %v", err)
+			}
+			c, err := ValidateToken(testSecret, tok)
+			if err != nil {
+				t.Fatalf("validate: %v", err)
+			}
+			if c.ClientID != "" {
+				t.Errorf("ClientID = %q, want empty", c.ClientID)
+			}
+			if c.Scope != "" {
+				t.Errorf("Scope = %q, want empty", c.Scope)
+			}
+			if len(c.Audience) != 0 {
+				t.Errorf("Audience = %v, want empty", c.Audience)
+			}
+		})
+	}
+}
+
+func TestIssueOAuthAccessTokenCarriesClaims(t *testing.T) {
+	userID := uuid.New()
+	aud := "https://airlock.example.com/api/agent/abc/mcp"
+
+	tok, err := IssueOAuthAccessToken(testSecret, userID, "x@y.z", "admin", "alk_pub_xyz", "mcp", aud)
+	if err != nil {
+		t.Fatalf("issue: %v", err)
+	}
+	c, err := ValidateToken(testSecret, tok)
+	if err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	if c.ClientID != "alk_pub_xyz" {
+		t.Errorf("ClientID = %q", c.ClientID)
+	}
+	if c.Scope != "mcp" {
+		t.Errorf("Scope = %q", c.Scope)
+	}
+	if !AudienceContains(c.Audience, aud) {
+		t.Errorf("AudienceContains(%v, %q) = false", c.Audience, aud)
+	}
+	if !ScopeContains(c.Scope, "mcp") {
+		t.Errorf("ScopeContains(%q, mcp) = false", c.Scope)
+	}
+	if ScopeContains(c.Scope, "admin") {
+		t.Errorf("ScopeContains(%q, admin) should be false", c.Scope)
+	}
+}
+
+func TestScopeContainsMultiple(t *testing.T) {
+	if !ScopeContains("mcp offline_access", "mcp") {
+		t.Error("ScopeContains: should find 'mcp' in multi-scope")
+	}
+	if !ScopeContains("mcp offline_access", "offline_access") {
+		t.Error("ScopeContains: should find 'offline_access' in multi-scope")
+	}
+	if ScopeContains("mcp", "") {
+		t.Error("ScopeContains: empty required should be false")
+	}
+	if ScopeContains("", "mcp") {
+		t.Error("ScopeContains: empty scope should be false")
+	}
+}
+
 func TestRefreshToken(t *testing.T) {
 	userID := uuid.New()
 

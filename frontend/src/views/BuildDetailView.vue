@@ -25,9 +25,15 @@ const statusSeverity = computed(() => {
     case 'complete': return 'success'
     case 'building': return 'warn'
     case 'failed': return 'danger'
+    // refused: the request was out of scope — not an error, so not red.
+    case 'refused': return 'warn'
     default: return 'secondary'
   }
 })
+
+// Codegen LLM cost — parity with RunDetailView. Hidden when the build
+// ran no codegen (image-only rebuild: llmCalls === 0).
+const costFormatted = computed(() => `$${(build.value?.llmCostEstimate ?? 0).toFixed(4)}`)
 
 onMounted(async () => {
   try {
@@ -81,6 +87,12 @@ onMounted(async () => {
       </span>
       <span v-if="build.sourceRef" style="font-size: 0.875rem; color: var(--p-text-muted-color)">
         {{ build.sourceRef.slice(0, 12) }}
+      </span>
+      <span v-if="build.llmCalls" style="font-size: 0.875rem; color: var(--p-text-muted-color)">
+        {{ (build.llmTokensIn ?? 0).toLocaleString() }} in / {{ (build.llmTokensOut ?? 0).toLocaleString() }} out tokens
+      </span>
+      <span v-if="build.llmCalls" style="font-size: 0.875rem; color: var(--p-text-muted-color)">
+        {{ costFormatted }}
       </span>
     </div>
 

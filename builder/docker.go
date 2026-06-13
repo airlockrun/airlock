@@ -10,30 +10,37 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/airlockrun/agentsdk"
 	"github.com/airlockrun/airlock/config"
 	"github.com/airlockrun/airlock/scaffold"
 	"go.uber.org/zap"
 )
 
 // buildImage builds a Docker image from the agent's directory.
+// dockerfilePath, when non-empty, is passed via `docker build -f` so the
+// build uses an out-of-context Dockerfile (lets airlock always build
+// against its current template without overwriting the user-committed
+// Dockerfile in contextDir). When empty, docker looks for Dockerfile
+// inside contextDir as usual.
 // If logFn is non-nil, Docker build output is streamed line by line.
 // Returns the image tag.
-func buildImage(ctx context.Context, cfg *config.Config, agentID, contextDir, commitHash string, logFn func(string)) (string, error) {
+// goproxyDir, when non-empty (dev), is supplied as the `goproxy` build
+// context so the agent's owned libs resolve from the local file proxy
+// instead of the public proxy. Empty (prod) leaves the Dockerfile's empty
+// scratch stage in place — modules resolve from the public proxy.
+func buildImage(ctx context.Context, cfg *config.Config, agentID, contextDir, commitHash, dockerfilePath, goproxyDir string, logFn func(string)) (string, error) {
 	tag := fmt.Sprintf("%s:%s", agentID, commitHash[:12])
 	if cfg.AgentRegistryURL != "" {
 		tag = fmt.Sprintf("%s/%s", cfg.AgentRegistryURL, tag)
 	}
 
-	if cfg.AgentLibsPath == "" || cfg.AgentLibsExtPath == "" {
-		return "", fmt.Errorf("buildImage: AgentLibsPath/AgentLibsExtPath empty — startup should have populated both via EnsureLibs")
+	args := []string{"build", "-t", tag}
+	if goproxyDir != "" {
+		args = append(args, "--build-context", "goproxy="+goproxyDir)
 	}
-	args := []string{
-		"build", "-t", tag,
-		"--build-context", "libs-owned=" + cfg.AgentLibsPath,
-		"--build-context", "libs-ext=" + cfg.AgentLibsExtPath,
-		contextDir,
+	if dockerfilePath != "" {
+		args = append(args, "-f", dockerfilePath)
 	}
+	args = append(args, contextDir)
 
 	cmd := exec.CommandContext(ctx, "docker", args...)
 	cmd.Env = append(cmd.Environ(), "DOCKER_BUILDKIT=1")
@@ -71,27 +78,21 @@ func (b *BuildService) WarmBuildCache(ctx context.Context) {
 	}
 	defer os.RemoveAll(dir)
 
+	sdkVer, verErr := b.agentSDKVersion()
+	if verErr != nil {
+		b.logger.Warn("warm cache: agent sdk version", zap.Error(verErr))
+		return
+	}
+
 	// Materialize a real scaffold — same templates as actual agent builds.
 	if err := scaffold.Materialize(dir, scaffold.ScaffoldData{
 		AgentID:         "cache-warm",
 		Module:          "agent",
-		GoVersion:       "1.26",
-		AgentSDKVersion: "v" + agentsdk.Version,
+		GoVersion:       buildGoVersion,
+		AgentSDKVersion: sdkVer,
 		AgentBaseImage:  b.cfg.AgentBaseImage,
 	}); err != nil {
 		b.logger.Warn("warm cache: scaffold", zap.Error(err))
-		return
-	}
-
-	// Generate Dockerfile from current template (not part of scaffold anymore).
-	if err := scaffold.GenerateDockerfile(dir, scaffold.ScaffoldData{
-		AgentID:         "cache-warm",
-		Module:          "agent",
-		GoVersion:       "1.26",
-		AgentSDKVersion: "v" + agentsdk.Version,
-		AgentBaseImage:  b.cfg.AgentBaseImage,
-	}); err != nil {
-		b.logger.Warn("warm cache: generate Dockerfile", zap.Error(err))
 		return
 	}
 
@@ -105,17 +106,22 @@ func (b *BuildService) WarmBuildCache(ctx context.Context) {
 		return
 	}
 
-	if b.cfg.AgentLibsPath == "" || b.cfg.AgentLibsExtPath == "" {
-		b.logger.Warn("warm cache: lib paths empty — skipping (startup EnsureLibs must run first)")
+	// Dev: generate the local lib proxy so the owned libs resolve from live
+	// source. Prod: no proxy — the build resolves published versions from the
+	// public proxy.
+	proxyDir, cleanup, err := b.ensureLibProxy()
+	if err != nil {
+		b.logger.Warn("warm cache: generate lib proxy", zap.Error(err))
 		return
 	}
+	defer cleanup()
+
 	tag := "airlock-cache-warm:latest"
-	args := []string{
-		"build", "-t", tag,
-		"--build-context", "libs-owned=" + b.cfg.AgentLibsPath,
-		"--build-context", "libs-ext=" + b.cfg.AgentLibsExtPath,
-		dir,
+	args := []string{"build", "-t", tag}
+	if proxyDir != "" {
+		args = append(args, "--build-context", "goproxy="+proxyDir)
 	}
+	args = append(args, dir)
 
 	cmd := exec.CommandContext(ctx, "docker", args...)
 	cmd.Env = append(cmd.Environ(), "DOCKER_BUILDKIT=1")
@@ -153,11 +159,17 @@ func (b *BuildService) WarmRuntimeCaches(ctx context.Context) {
 	}
 	defer os.RemoveAll(dir)
 
+	sdkVer, verErr := b.agentSDKVersion()
+	if verErr != nil {
+		b.logger.Warn("warm runtime caches: agent sdk version", zap.Error(verErr))
+		return
+	}
+
 	if err := scaffold.Materialize(dir, scaffold.ScaffoldData{
 		AgentID:         "runtime-warm",
 		Module:          "agent",
-		GoVersion:       "1.26",
-		AgentSDKVersion: "v" + agentsdk.Version,
+		GoVersion:       buildGoVersion,
+		AgentSDKVersion: sdkVer,
 		AgentBaseImage:  b.cfg.AgentBaseImage,
 	}); err != nil {
 		b.logger.Warn("warm runtime caches: scaffold", zap.Error(err))
@@ -174,6 +186,14 @@ func (b *BuildService) WarmRuntimeCaches(ctx context.Context) {
 
 	uid := os.Getuid()
 	gid := os.Getgid()
+
+	// Dev: generate the local lib proxy. Prod: empty — public proxy.
+	proxyDir, cleanup, err := b.ensureLibProxy()
+	if err != nil {
+		b.logger.Warn("warm runtime caches: generate lib proxy", zap.Error(err))
+		return
+	}
+	defer cleanup()
 
 	// Workspace mount: in compose/docker-in-docker mode, mount the named
 	// volume that contains AgentCodegenPath so the daemon resolves both
@@ -200,29 +220,27 @@ func (b *BuildService) WarmRuntimeCaches(ctx context.Context) {
 		"-e", "GOFLAGS=-buildvcs=false",
 		// Sum DB tracking files live at $GOPATH/pkg/sumdb/, which is
 		// root-owned in the image while we run as the host UID. Disable
-		// the lookup entirely — modules come from the public proxy or
-		// the /libs replace targets, neither of which we authenticate.
+		// the lookup entirely — the public proxy and the local lib proxy
+		// serve content we don't authenticate via sum.golang.org.
 		"-e", "GOSUMDB=off",
 		"-v", "airlock-go-mod-cache:/tmp/go-mod",
 		"-v", "airlock-go-build-cache:/tmp/go-cache",
 		"-v", workspaceMount,
 		"-w", workspaceDir,
 	}
-	// Dev: overlay the live owned libs the same way solrunner does so the
-	// go.mod replace directives resolve to the dev tree, not the image's
-	// baked /libs. Prevents tidy from picking up stale baked sources.
-	// Only fires when AGENT_LIBS_PATH was explicitly set — see the
-	// AgentLibsPathExplicit comment in config for why prod skips this.
-	if b.cfg.AgentLibsPathExplicit {
-		for _, sub := range []string{"agentsdk", "goai", "sol"} {
-			args = append(args, "-v", filepath.Join(b.cfg.AgentLibsPath, sub)+":/libs/"+sub+":ro")
-		}
+	cmd := "go mod tidy && go build -o /tmp/agent ."
+	// Dev: mount the local lib proxy and point GOPROXY at it (public proxy
+	// second). The proxy serves each owned lib at a content-addressed
+	// version, so changed source is a new version — Go fetches it fresh with
+	// no cache eviction needed.
+	if proxyDir != "" {
+		args = append(args, "-v", proxyDir+":/goproxy:ro",
+			"-e", "GOPROXY=file:///goproxy,https://proxy.golang.org")
 	}
-	args = append(args, b.cfg.AgentBuilderImage,
-		"sh", "-c", "go mod tidy && go build -o /tmp/agent .")
+	args = append(args, b.cfg.AgentBuilderImage, "sh", "-c", cmd)
 
-	cmd := exec.CommandContext(ctx, "docker", args...)
-	out, err := cmd.CombinedOutput()
+	dcmd := exec.CommandContext(ctx, "docker", args...)
+	out, err := dcmd.CombinedOutput()
 	if err != nil {
 		b.logger.Warn("warm runtime caches: docker run failed", zap.String("output", string(out)), zap.Error(err))
 		return

@@ -12,3 +12,6 @@
 
 # Proto codegen deps
 /proto/node_modules/
+
+# Caddy on-demand cert storage (bind-mounted into the dev container).
+/caddy-certs/

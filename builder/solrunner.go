@@ -10,6 +10,9 @@ import (
 
 	"github.com/airlockrun/airlock/container"
 	"github.com/airlockrun/airlock/db/dbq"
+	"github.com/airlockrun/airlock/llmledger"
+	"github.com/airlockrun/goai/message"
+	"github.com/airlockrun/goai/stream"
 	"github.com/airlockrun/goai/tool"
 	sol "github.com/airlockrun/sol"
 	"github.com/airlockrun/sol/bus"
@@ -17,7 +20,6 @@ import (
 	solprovider "github.com/airlockrun/sol/provider"
 	soltools "github.com/airlockrun/sol/tools"
 	"github.com/airlockrun/sol/websearch"
-	"github.com/airlockrun/goai/stream"
 	dmount "github.com/docker/docker/api/types/mount"
 	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"
@@ -25,28 +27,32 @@ import (
 
 // solRunOpts configures an in-process Sol run with a remote toolserver.
 type solRunOpts struct {
-	WorkDir          string         // host path to sparse checkout
-	AgentDir         string         // container-side path (e.g., /workspace/agents/{id})
-	BuildProviderID  pgtype.UUID    // providers row FK; pairs with BuildModel
-	BuildModel       string         // bare model name (e.g. "gpt-5"); empty ⇄ FK invalid
-	Prompt           string         // prompt for the runner
-	LogCallback      func(line string)
-	LocalTools       tool.Set       // optional in-process tools (e.g., set_agent_description)
-	TestDBURL    string // test schema DB URL with search_path baked in
-	TestDBPSQL   string // test schema DB URL without search_path (for psql)
-	TestDBSchema string // test schema name (for psql SET search_path)
+	WorkDir         string      // host path to the cloned per-agent repo
+	AgentDir        string      // container-side path (typically "/workspace")
+	AgentID         pgtype.UUID // owning agent — for the llm_usage row
+	BuildID         pgtype.UUID // agent_builds row this codegen attributes to
+	BuildType       string      // "build" | "upgrade" — llm_usage.call_kind
+	BuildProviderID pgtype.UUID // providers row FK; pairs with BuildModel
+	BuildModel      string      // bare model name (e.g. "gpt-5"); empty ⇄ FK invalid
+	Prompt          string      // prompt for the runner
+	LogCallback     func(line string)
+	LocalTools      tool.Set // optional in-process tools (e.g., set_agent_description)
+	TestDBURL       string   // test schema DB URL with search_path baked in
+	TestDBPSQL      string   // test schema DB URL without search_path (for psql)
+	TestDBSchema    string   // test schema name (for psql SET search_path)
+	GoProxyDir      string   // dev: host path to the generated lib proxy; empty in prod
 }
 
 // solRunResult captures the outcome of an in-process Sol run. ExitStatus
 // and ExitMessage are populated when the agent invoked the exit tool —
-// callers map ExitStatus="error" onto a failed build and "success" onto
-// the next pipeline step.
+// callers map ExitStatus="success" onto the next pipeline step and any
+// other status ("error" or "refused") onto a halted pipeline.
 type solRunResult struct {
 	Status      sol.RunStatus
 	TotalText   string
 	Error       error
 	ExitCalled  bool
-	ExitStatus  string // "success" or "error" when ExitCalled
+	ExitStatus  string // "success", "error", or "refused" when ExitCalled
 	ExitMessage string
 	Nudges      int
 }
@@ -102,10 +108,10 @@ func (b *BuildService) runSolInProcess(ctx context.Context, opts solRunOpts) (*s
 	// absolute path airlock used. In dev/host mode, bind-mount
 	// opts.WorkDir at /workspace as before.
 	//
-	// agentDir is the working directory inside the sibling. Callers
-	// pass it as "/workspace/agents/{id}" expecting bind-mount mode;
-	// in volume mode we rewrite the /workspace prefix to the absolute
-	// workspace path.
+	// agentDir is the working directory inside the sibling. With
+	// per-agent repos callers pass "/workspace" (the cloned repo's
+	// root); in volume mode the /workspace prefix is rewritten to the
+	// absolute workspace path on the host volume.
 	var workspaceMount dmount.Mount
 	agentDir := opts.AgentDir
 	if b.cfg.AgentCodegenVolume != "" && b.cfg.AgentCodegenPath != "" {
@@ -123,14 +129,13 @@ func (b *BuildService) runSolInProcess(ctx context.Context, opts solRunOpts) (*s
 		workspaceMount = dmount.Mount{Type: dmount.TypeBind, Source: opts.WorkDir, Target: "/workspace"}
 	}
 	mounts := []dmount.Mount{workspaceMount}
-	// Dev: overlay the baked /libs with the live source tree so agentsdk
-	// edits are visible without rebuilding the agent-builder image. Only
-	// when the operator explicitly set AGENT_LIBS_PATH — in prod
-	// AgentLibsPath holds the extracted cache and overlaying it would
-	// just shadow the image's authoritative content with a copy of
-	// itself (and risks masking files mid-extraction or if the docker cp
-	// extraction is partial).
 	if b.cfg.AgentLibsPathExplicit {
+		// Dev: overlay the live lib trees read-only at /libs so the codegen
+		// LLM reads the current agentsdk/goai/sol source + llms.md guide
+		// (the prompt instructs it to). This is docs/reference only — go
+		// resolution goes through the proxy below, not /libs (the committed
+		// go.mod has no replaces pointing here). Prod uses the agent-builder
+		// image's baked /libs for the same docs.
 		for _, sub := range []string{"agentsdk", "goai", "sol"} {
 			mounts = append(mounts, dmount.Mount{
 				Type:     dmount.TypeBind,
@@ -139,6 +144,19 @@ func (b *BuildService) runSolInProcess(ctx context.Context, opts solRunOpts) (*s
 				ReadOnly: true,
 			})
 		}
+	}
+	// Dev: mount the generated lib proxy and point GOPROXY at it so the owned
+	// libs resolve from live source. The proxy serves each lib at a content-
+	// addressed version, so changed source is a new version Go fetches fresh
+	// — no shared-cache eviction needed. Prod: GoProxyDir empty → public proxy.
+	if opts.GoProxyDir != "" {
+		mounts = append(mounts, dmount.Mount{
+			Type:     dmount.TypeBind,
+			Source:   opts.GoProxyDir,
+			Target:   "/goproxy",
+			ReadOnly: true,
+		})
+		toolEnv = append(toolEnv, "GOPROXY=file:///goproxy,https://proxy.golang.org")
 	}
 	tc, err := b.containers.StartToolserver(ctx, container.ToolserverOpts{
 		Image:   b.cfg.AgentBuilderImage,
@@ -205,18 +223,19 @@ func (b *BuildService) runSolInProcess(ctx context.Context, opts solRunOpts) (*s
 
 	remoteExec := executor.NewRemoteExecutor(transport, remoteTools)
 
-	// Step 5: Register the exit tool as a LOCAL tool. Sol's NewRunner can
-	// auto-inject it into the agent's tool set, but execution still flows
-	// through the caller-provided executor — and our compositeExecutor
-	// routes anything not in `local.Tools()` to the remote toolserver,
-	// which does not implement `exit`. Adding it here ensures the
-	// composite keeps `exit` local; sol's auto-injection then sees it
-	// already in the tool set and skips its own copy.
+	// Step 5: Register the agent-builder's exit tool (sol's exit plus a
+	// "refused" status) as a LOCAL tool. Sol's NewRunner can auto-inject
+	// its own exit tool, but execution still flows through the
+	// caller-provided executor — and our compositeExecutor routes
+	// anything not in `local.Tools()` to the remote toolserver, which
+	// does not implement `exit`. Adding it here ensures the composite
+	// keeps `exit` local; sol's auto-injection then sees `exit` already
+	// in the tool set and skips its own copy.
 	exitState := &soltools.ExitState{}
 	if opts.LocalTools == nil {
 		opts.LocalTools = tool.Set{}
 	}
-	opts.LocalTools["exit"] = soltools.ExitTool(exitState)
+	opts.LocalTools["exit"] = newExitTool(exitState)
 
 	// Step 6: Build tool.Set and executor, merging local tools if present.
 	toolSet := remoteToolsToSet(remoteTools)
@@ -261,7 +280,14 @@ func (b *BuildService) runSolInProcess(ctx context.Context, opts solRunOpts) (*s
 		{Permission: "*", Pattern: "*", Action: "allow"},
 	})
 
+	codegenStart := time.Now()
 	exitedResult, err := runner.RunUntilExit(ctx, opts.Prompt, sol.RunUntilExitOptions{MaxNudges: 2})
+	// Codegen LLM spend bypasses the runtime proxy (in-process runner,
+	// direct provider model), so record it straight into the ledger here
+	// — both the success and error paths, since a failed codegen still
+	// burned tokens. resolveModel filled opts.BuildModel from the default
+	// when the agent had no override, so it's the effective model now.
+	b.recordBuildUsage(opts, rp.CatalogID, exitedResult, err, time.Since(codegenStart))
 	if err != nil {
 		// Preserve the runner's status when it filled one in (RunCancelled
 		// on ctx cancel) — overwriting to RunFailed unconditionally would
@@ -290,6 +316,42 @@ func (b *BuildService) runSolInProcess(ctx context.Context, opts solRunOpts) (*s
 		out.ExitStatus, out.ExitMessage = exitState.Result()
 	}
 	return out, nil
+}
+
+// recordBuildUsage writes the codegen run's LLM spend to the shared
+// llm_usage ledger (attributed to the build) and refreshes the
+// agent_builds aggregate. Best-effort and on a fresh bounded context so
+// a cancelled/failed build still records the tokens it already burned.
+// exited may be nil (runner returned before producing a result).
+func (b *BuildService) recordBuildUsage(opts solRunOpts, providerCatalogID string, exited *sol.ExitedRunResult, runErr error, latency time.Duration) {
+	if !opts.BuildID.Valid {
+		return // nothing to attribute to (defensive — callers set it)
+	}
+
+	c := llmledger.Capture{
+		AgentID:           opts.AgentID,
+		BuildID:           opts.BuildID,
+		ProviderCatalogID: providerCatalogID,
+		Model:             opts.BuildModel,
+		Capability:        "text",
+		CallKind:          opts.BuildType, // "build" | "upgrade"
+		Slug:              "codegen",
+		FinishReason:      "error",
+		Errored:           runErr != nil,
+		Latency:           latency,
+	}
+	if exited != nil && exited.RunResult != nil {
+		c.TokensFromStreamUsage(exited.RunResult.Usage)
+		c.FinishReason = string(exited.RunResult.Status)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	q := dbq.New(b.db.Pool())
+	llmledger.Record(ctx, q, b.logger, c)
+	if err := q.UpdateBuildLLMStats(ctx, opts.BuildID); err != nil {
+		b.logger.Error("aggregate build llm stats", zap.Error(err))
+	}
 }
 
 // resolvedProvider holds the result of looking up and decrypting a provider.
@@ -459,7 +521,7 @@ func subscribeForLogs(b *bus.Bus, cb func(string)) {
 		if !ok {
 			return
 		}
-		output := tr.Output.Output
+		output := message.ToolOutputText(tr.Output)
 		if len(output) > 500 {
 			output = output[:500] + "..."
 		}

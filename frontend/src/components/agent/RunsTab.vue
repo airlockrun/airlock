@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import { onMounted } from 'vue'
+import { onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useRunsStore } from '@/stores/runs'
 
 const props = defineProps<{ agentId: string }>()
+const emit = defineEmits<{ populated: [count: number] }>()
 const router = useRouter()
 const runsStore = useRunsStore()
+watch(() => runsStore.runs.length, (n) => emit('populated', n), { immediate: true })
 
 function runStatusSeverity(status: string): string {
   switch (status) {

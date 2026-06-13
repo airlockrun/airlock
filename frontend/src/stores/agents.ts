@@ -7,6 +7,7 @@ import type { AgentModelConfig } from '@/gen/airlock/v1/api_pb'
 import {
   ListAgentsResponseSchema,
   CreateAgentResponseSchema,
+  UpdateAgentResponseSchema,
   GetAgentModelConfigResponseSchema,
   UpdateAgentModelConfigRequestSchema,
   UpdateAgentModelConfigResponseSchema,
@@ -34,6 +35,7 @@ export const useAgentsStore = defineStore('agents', () => {
     execModel: string,
     execProviderId: string,
     instructions?: string,
+    git?: { remoteUrl: string; credentialId: string; defaultBranch?: string },
   ) {
     const payload: Record<string, string> = {
       name,
@@ -44,6 +46,11 @@ export const useAgentsStore = defineStore('agents', () => {
       execProviderId,
     }
     if (instructions) payload.instructions = instructions
+    if (git?.remoteUrl) {
+      payload.gitRemoteUrl = git.remoteUrl
+      payload.gitCredentialId = git.credentialId
+      if (git.defaultBranch) payload.gitDefaultBranch = git.defaultBranch
+    }
     const { data } = await api.post('/api/v1/agents', payload)
     const agent = fromJson(CreateAgentResponseSchema, data).agent!
     agents.value.unshift(agent)
@@ -55,10 +62,27 @@ export const useAgentsStore = defineStore('agents', () => {
     agents.value = agents.value.filter((a) => a.id !== id)
   }
 
+  // Rename name and/or slug. Only the changed fields need be passed
+  // (UpdateAgentRequest treats them as optional). Replaces the cached
+  // row so the sidebar / vanity-URL layer pick up the new slug at once.
+  async function renameAgent(id: string, name: string, slug: string) {
+    const { data } = await api.patch(`/api/v1/agents/${id}`, { name, slug })
+    const updated = fromJson(UpdateAgentResponseSchema, data).agent!
+    const i = agents.value.findIndex((a) => a.id === id)
+    if (i !== -1) agents.value[i] = updated
+    return updated
+  }
+
   async function stopAgent(id: string) {
     await api.post(`/api/v1/agents/${id}/stop`, {})
     const agent = agents.value.find((a) => a.id === id)
     if (agent) agent.status = 'stopped'
+  }
+
+  async function startAgent(id: string) {
+    await api.post(`/api/v1/agents/${id}/start`, {})
+    const agent = agents.value.find((a) => a.id === id)
+    if (agent) agent.status = 'active'
   }
 
   async function upgradeAgent(id: string) {
@@ -86,7 +110,9 @@ export const useAgentsStore = defineStore('agents', () => {
     fetchAgents,
     createAgent,
     deleteAgent,
+    renameAgent,
     stopAgent,
+    startAgent,
     upgradeAgent,
     fetchModelConfig,
     updateModelConfig,

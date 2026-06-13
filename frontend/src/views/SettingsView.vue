@@ -21,11 +21,15 @@ import { useProvidersStore } from '@/stores/providers'
 import api from '@/api/client'
 import {
   GetSystemSettingsResponseSchema,
+  ListPlatformIdentitiesResponseSchema,
   UpdateSystemSettingsRequestSchema,
   UpdateSystemSettingsResponseSchema,
 } from '@/gen/airlock/v1/api_pb'
-import type { SystemSettingsInfo } from '@/gen/airlock/v1/types_pb'
-import { SystemSettingsInfoSchema } from '@/gen/airlock/v1/types_pb'
+import type { PlatformIdentityInfo, SystemSettingsInfo } from '@/gen/airlock/v1/types_pb'
+import {
+  SystemSettingsInfoSchema,
+  UpdateTelegramManagerBotResponseSchema,
+} from '@/gen/airlock/v1/types_pb'
 
 const auth = useAuthStore()
 const catalog = useCatalogStore()
@@ -39,6 +43,96 @@ const newPassword = ref('')
 const confirmPassword = ref('')
 const loading = ref(false)
 
+// Connected apps (OAuth grants) — apps the user has authorized to
+// reach their agents via the MCP server-side OAuth flow. The list +
+// revoke buttons let the user yank consent without an admin doing it.
+interface GrantDTO {
+  clientId: string
+  clientName: string
+  agentId: string
+  agentSlug: string
+  agentName: string
+  scope: string
+  grantedAt: string
+  expiresAt: string
+}
+const grants = ref<GrantDTO[]>([])
+const grantsLoading = ref(false)
+
+async function loadGrants() {
+  grantsLoading.value = true
+  try {
+    const { data } = await api.get('/api/v1/oauth/grants')
+    grants.value = data || []
+  } catch {
+    grants.value = []
+  } finally {
+    grantsLoading.value = false
+  }
+}
+
+async function revokeGrant(g: GrantDTO) {
+  try {
+    await api.delete(`/api/v1/oauth/grants/${encodeURIComponent(g.clientId)}/${encodeURIComponent(g.agentId)}`)
+    grants.value = grants.value.filter(x => !(x.clientId === g.clientId && x.agentId === g.agentId))
+    toast.add({ severity: 'success', summary: 'Access revoked', life: 2000 })
+  } catch (err: any) {
+    toast.add({ severity: 'error', summary: err?.response?.data?.error || 'revoke failed', life: 5000 })
+  }
+}
+
+function formatDate(iso: string): string {
+  try {
+    return new Date(iso).toLocaleDateString()
+  } catch {
+    return iso
+  }
+}
+
+// Linked platform accounts (Telegram / Discord identities). Regular
+// users see only their own; admins see every link in the tenant with
+// the owner email column populated. Both can unlink — the backend
+// scopes the delete by caller's UserID, or by id alone when the
+// caller holds tenant.identity.manage_all.
+const identities = ref<PlatformIdentityInfo[]>([])
+const identitiesLoading = ref(false)
+const canManageAllIdentities = computed(() => auth.can('tenant.identity.manage_all'))
+
+async function loadIdentities() {
+  identitiesLoading.value = true
+  try {
+    const { data } = await api.get('/api/v1/identities')
+    const resp = fromJson(ListPlatformIdentitiesResponseSchema, data)
+    identities.value = resp.identities
+  } catch {
+    identities.value = []
+  } finally {
+    identitiesLoading.value = false
+  }
+}
+
+async function unlinkIdentity(it: PlatformIdentityInfo) {
+  try {
+    await api.delete(`/api/v1/identities/${encodeURIComponent(it.id)}`)
+    identities.value = identities.value.filter(x => x.id !== it.id)
+    toast.add({ severity: 'success', summary: 'Identity unlinked', life: 2000 })
+  } catch (err: any) {
+    toast.add({ severity: 'error', summary: err?.response?.data?.error || 'unlink failed', life: 5000 })
+  }
+}
+
+function formatDateTime(ts: any): string {
+  if (!ts) return ''
+  // protobuf-ts Timestamp → { seconds: bigint, nanos: number }
+  const seconds = typeof ts.seconds === 'bigint' ? Number(ts.seconds) : ts.seconds
+  if (!seconds) return ''
+  try {
+    return new Date(seconds * 1000).toLocaleString()
+  } catch {
+    return ''
+  }
+}
+
 // Default models (admin only). Keyed by the SystemSettingsInfo field key
 // (camelCase) so assignment back to the proto payload is trivial.
 const defaults = ref<Record<keyof SystemSettingsInfo & string, string>>({
@@ -51,8 +145,6 @@ const defaults = ref<Record<keyof SystemSettingsInfo & string, string>>({
   defaultEmbeddingModel: '',
   defaultSearchModel: '',
 } as Record<keyof SystemSettingsInfo & string, string>)
-const publicURL = ref('')
-const agentDomain = ref('')
 const defaultsLoading = ref(false)
 
 // Pairs each picker key with its companion *_provider_id field on the
@@ -78,12 +170,13 @@ function applySettings(info: SystemSettingsInfo) {
       ? packModelValue(providerRowID, modelName)
       : ''
   }
-  publicURL.value = info.publicUrl || ''
-  agentDomain.value = info.agentDomain || ''
+  applyManagerBotStatus(info)
 }
 
 onMounted(async () => {
-  if (auth.isAdmin) {
+  loadGrants()
+  loadIdentities()
+  if (auth.can('tenant.settings.update')) {
     // Pickers depend on configured providers — fetch first so the
     // applySettings packed values match an option in the dropdown.
     await providers.fetchProviders()
@@ -197,8 +290,6 @@ async function saveDefaults() {
     const search = split('defaultSearchModel')
     const info: SystemSettingsInfo = {
       $typeName: 'airlock.v1.SystemSettingsInfo',
-      publicUrl: publicURL.value,
-      agentDomain: agentDomain.value,
       defaultBuildModel:          build.modelName,
       defaultBuildProviderId:     build.providerRowID,
       defaultExecModel:           exec.modelName,
@@ -228,6 +319,43 @@ async function saveDefaults() {
     toast.add({ severity: 'error', summary: err.response?.data?.error || 'Failed', life: 5000 })
   } finally {
     defaultsLoading.value = false
+  }
+}
+
+// Telegram Manager Bot (admin only). Holds the editor state for the
+// token input plus the live status the backend reports (resolved
+// username from getMe + last validation error). The raw token never
+// comes back from the API — only the configured flag.
+const managerBotToken = ref('')
+const managerBotConfigured = ref(false)
+const managerBotUsername = ref('')
+const managerBotError = ref('')
+const managerBotSaving = ref(false)
+
+function applyManagerBotStatus(info: SystemSettingsInfo) {
+  managerBotConfigured.value = !!info.telegramManagerBotConfigured
+  managerBotUsername.value = info.telegramManagerBotUsername || ''
+  managerBotError.value = info.telegramManagerBotError || ''
+}
+
+async function saveManagerBot() {
+  managerBotSaving.value = true
+  try {
+    const { data } = await api.put('/api/v1/settings/telegram-manager-bot', { token: managerBotToken.value })
+    const resp = fromJson(UpdateTelegramManagerBotResponseSchema, data)
+    managerBotConfigured.value = resp.configured
+    managerBotUsername.value = resp.username || ''
+    managerBotError.value = resp.error || ''
+    managerBotToken.value = ''
+    if (resp.configured) {
+      toast.add({ severity: 'success', summary: `Connected as @${resp.username}`, life: 3000 })
+    } else {
+      toast.add({ severity: 'success', summary: 'Manager bot disabled', life: 3000 })
+    }
+  } catch (err: any) {
+    toast.add({ severity: 'error', summary: err?.response?.data?.error || 'Save failed', life: 5000 })
+  } finally {
+    managerBotSaving.value = false
   }
 }
 
@@ -271,7 +399,7 @@ async function changePassword() {
     </Card>
 
     <!-- Default Models (admin only) -->
-    <Card v-if="auth.isAdmin" style="margin-bottom: 1.5rem">
+    <Card v-if="auth.can('tenant.settings.update')" style="margin-bottom: 1.5rem">
       <template #title>Default Models</template>
       <template #subtitle>
         Per-capability defaults. Used wherever the system needs a model for a capability and no agent-specific override is set.
@@ -321,6 +449,126 @@ async function changePassword() {
           </div>
           <Button label="Save" :loading="defaultsLoading" @click="saveDefaults" style="align-self: flex-start" />
         </div>
+      </template>
+    </Card>
+
+    <!-- Telegram Manager Bot (admin only) -->
+    <Card v-if="auth.can('tenant.manager_bot.config')" style="margin-bottom: 1.5rem">
+      <template #title>Telegram Manager Bot</template>
+      <template #subtitle>
+        Used for the "Create new bot via Telegram" flow on the Bridges page. Configure a Telegram bot that has <code>can_manage_bots</code> enabled in BotFather and paste its token here.
+      </template>
+      <template #content>
+        <div style="display: flex; flex-direction: column; gap: 0.75rem">
+          <div v-if="managerBotConfigured" style="display: flex; align-items: center; gap: 0.5rem">
+            <i class="pi pi-check-circle" style="color: var(--p-green-500)" />
+            <span>Connected as <strong>@{{ managerBotUsername || 'unknown' }}</strong></span>
+          </div>
+          <div v-else-if="managerBotError" style="display: flex; align-items: center; gap: 0.5rem">
+            <i class="pi pi-times-circle" style="color: var(--p-red-500)" />
+            <span style="color: var(--p-red-500)">{{ managerBotError }}</span>
+          </div>
+          <div v-else style="color: var(--p-text-muted-color)">
+            Not configured.
+          </div>
+          <label for="managerBotToken">Bot token</label>
+          <Password id="managerBotToken" v-model="managerBotToken" :feedback="false" toggleMask placeholder="Paste a new token to replace, or leave empty to disable" />
+          <div style="display: flex; gap: 0.5rem; align-items: center">
+            <Button label="Save" :loading="managerBotSaving" @click="saveManagerBot" />
+            <small style="color: var(--p-text-muted-color)">Empty token disables the feature.</small>
+          </div>
+        </div>
+      </template>
+    </Card>
+
+    <!-- Connected apps (OAuth grants) -->
+    <Card style="margin-bottom: 1.5rem">
+      <template #title>Connected apps</template>
+      <template #subtitle>
+        External MCP clients (Claude Desktop, VSCode, Codex, …) that you've authorized to talk to your agents.
+        Revoking immediately stops future requests; tokens already issued may keep working for up to 15 minutes
+        until their access token naturally expires.
+      </template>
+      <template #content>
+        <div v-if="grantsLoading" style="color: var(--p-text-muted-color)">Loading…</div>
+        <div v-else-if="grants.length === 0" style="color: var(--p-text-muted-color)">
+          No external apps are connected.
+        </div>
+        <DataTable v-else :value="grants" stripedRows size="small">
+          <Column field="clientName" header="App" />
+          <Column header="Agent">
+            <template #body="{ data }">
+              <RouterLink :to="`/agents/${data.agentId}`">{{ data.agentName }}</RouterLink>
+              <span style="color: var(--p-text-muted-color); margin-left: 0.5rem">
+                ({{ data.agentSlug }})
+              </span>
+            </template>
+          </Column>
+          <Column header="Granted">
+            <template #body="{ data }">{{ formatDate(data.grantedAt) }}</template>
+          </Column>
+          <Column header="Expires">
+            <template #body="{ data }">{{ formatDate(data.expiresAt) }}</template>
+          </Column>
+          <Column header="">
+            <template #body="{ data }">
+              <Button
+                icon="pi pi-trash"
+                size="small"
+                severity="danger"
+                text
+                @click="revokeGrant(data)"
+                v-tooltip.left="'Revoke access'"
+              />
+            </template>
+          </Column>
+        </DataTable>
+      </template>
+    </Card>
+
+    <!-- Linked accounts (platform_identities) -->
+    <Card style="margin-bottom: 1.5rem">
+      <template #title>Linked accounts</template>
+      <template #subtitle>
+        <span v-if="canManageAllIdentities">
+          Every Telegram / Discord identity linked to a user in this tenant. Unlinking forces the user to re-run <code>/auth</code> in their bot to regain access.
+        </span>
+        <span v-else>
+          Your Telegram / Discord identities — used by bridge bots to recognise you. Unlinking forces you to re-run <code>/auth</code> in the bot the next time you DM it.
+        </span>
+      </template>
+      <template #content>
+        <div v-if="identitiesLoading" style="color: var(--p-text-muted-color)">Loading…</div>
+        <div v-else-if="identities.length === 0" style="color: var(--p-text-muted-color)">
+          {{ canManageAllIdentities ? 'No platform identities are linked in this tenant.' : 'You have no linked platform identities.' }}
+        </div>
+        <DataTable v-else :value="identities" stripedRows size="small">
+          <Column v-if="canManageAllIdentities" field="ownerEmail" header="Owner">
+            <template #body="{ data }">
+              <div>{{ data.ownerEmail }}</div>
+              <small v-if="data.ownerDisplayName" style="color: var(--p-text-muted-color)">
+                {{ data.ownerDisplayName }}
+              </small>
+            </template>
+          </Column>
+          <Column field="platform" header="Platform" />
+          <Column field="platformUserId" header="Platform user ID" />
+          <Column header="Linked">
+            <template #body="{ data }">{{ formatDateTime(data.createdAt) }}</template>
+          </Column>
+          <Column header="">
+            <template #body="{ data }">
+              <Button
+                icon="pi pi-trash"
+                size="small"
+                severity="danger"
+                text
+                @click="unlinkIdentity(data)"
+                v-tooltip.left="'Unlink'"
+              />
+            </template>
+          </Column>
+        </DataTable>
       </template>
     </Card>
 

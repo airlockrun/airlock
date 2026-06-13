@@ -1,0 +1,101 @@
+# Develop-against-source overlay. Use with:
+#
+#   cp .env.dev.example .env
+#   # edit DOMAIN / AGENT_LIBS_PATH for your machine
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+#   # then run airlock + frontend natively from your source tree:
+#   go run ./cmd/airlock serve
+#   cd frontend && pnpm dev
+#
+# vs docker-compose.local.yml (turn-key try-it-out, everything in
+# containers): this overlay disables the in-container airlock + frontend
+# and exposes postgres + rustfs on 127.0.0.1 so the natively-running
+# binary can reach them. For fast iteration when hacking on airlock
+# itself.
+#
+# Cross-machine access (server you SSH into and hit from a laptop):
+#   - Set DOMAIN to something like 1.2.3.4.nip.io that resolves to the
+#     dev box from any browser.
+#   - Pick a TLS mode via the TLS env var (see .env.dev.example for the
+#     three supported shapes: `internal`, an email for Let's Encrypt, or
+#     a /etc/caddy/certs/cert.pem /etc/caddy/certs/key.pem path pair for
+#     mkcert / bring-your-own).
+
+services:
+  caddy:
+    command: caddy run --config /etc/caddy/Caddyfile.dev --adapter caddyfile
+    volumes:
+      - ./Caddyfile.dev:/etc/caddy/Caddyfile.dev:ro
+      # Frontend dist/ served as static files. `pnpm watch` (vite build
+      # --watch) keeps this populated on every source change. Dir may not
+      # exist on a fresh clone — docker bind mounts auto-create it as
+      # empty, so caddy comes up with 404s until the first build lands.
+      - ./frontend/dist:/srv/dist:ro
+    extra_hosts:
+      # Lets the in-container caddy reach the airlock binary running on
+      # the host network. Linux needs the explicit `host-gateway` magic;
+      # Docker Desktop on macOS/Windows resolves host.docker.internal
+      # without it but the entry is harmless there.
+      - "host.docker.internal:host-gateway"
+    environment:
+      DOMAIN: ${DOMAIN}
+      AIRLOCK_UPSTREAM: ${AIRLOCK_UPSTREAM:-host.docker.internal:8080}
+      # FRONTEND_UPSTREAM removed: caddy now serves the SPA from
+      # /srv/dist (vite build --watch output) instead of proxying to
+      # the dev server. Closes the vite-dev attack surface.
+      # Caddyfile.dev's global block has both of these lines; exactly one
+      # is a real directive per .env state, the other is a comment that
+      # no-ops. Comment-trick avoids needing a shell-level "set→empty"
+      # inversion (which POSIX doesn't have a clean form for).
+      #   ACME_EMAIL set   → ACME_EMAIL_LINE  = "email <addr>"   (LE)
+      #                      LOCAL_CERTS_LINE = "# <addr>"       (comment)
+      #   ACME_EMAIL unset → ACME_EMAIL_LINE  = ""                (empty line)
+      #                      LOCAL_CERTS_LINE = "local_certs"    (Caddy local CA)
+      ACME_EMAIL_LINE: ${ACME_EMAIL:+email ${ACME_EMAIL}}
+      LOCAL_CERTS_LINE: ${ACME_EMAIL:+# }${ACME_EMAIL:-local_certs}
+    # Drop the default depends_on (which waits for in-container airlock +
+    # frontend services); those are profile-disabled below. !reset is a
+    # Compose v2.20+ extension — older Compose will error and you'll need
+    # to upgrade `docker compose`.
+    depends_on: !reset
+      postgres:
+        condition: service_healthy
+      rustfs:
+        condition: service_healthy
+
+  postgres:
+    # Loopback-only port exposure so the host-running airlock binary can
+    # reach the DB. The container is still on the airlock network for
+    # in-cluster access (e.g. db init scripts).
+    ports:
+      - "127.0.0.1:5432:5432"
+
+  rustfs:
+    ports:
+      - "127.0.0.1:9090:9000"   # S3 API
+      - "127.0.0.1:9001:9001"   # Console UI
+
+  # Profile-gate the four "everything in containers" services so they
+  # don't start. Compose only starts services whose profile is active
+  # (or that have no profile); these have one named "containerized" that
+  # we never activate from this overlay.
+  airlock:
+    profiles: ["containerized"]
+  frontend:
+    profiles: ["containerized"]
+  agent-builder-image:
+    profiles: ["containerized"]
+  agent-base-image:
+    profiles: ["containerized"]
+
+# Pin the bridge subnet so the UFW rule that allows container→host traffic
+# (caddy → host-bound airlock:8080 / vite:5173) survives `compose down/up`.
+# Without a pin docker auto-allocates from 172.17–172.31; anything in that
+# range would work but a redeploy could move it. 172.30 sits at the top of
+# the auto-allocation pool, last to be picked by busy hosts.
+networks:
+  default:
+    name: airlock-dev
+    ipam:
+      config:
+        - subnet: 172.30.0.0/16

@@ -1,0 +1,255 @@
+# AGENTS.md — how this agent is built
+
+This file describes how this agent is structured: the file layout, the
+MVC split, the build chain, and the high-level UI conventions. It is the
+authoritative reference for *this* repo's shape.
+
+> **Airlock-managed — do not edit.** Airlock regenerates this file from
+> its scaffold template on every build (build housekeeping), so any edits
+> here are overwritten. Put agent-specific decisions in `NOTES.md`, which
+> Airlock never touches.
+
+Two other documents complete the picture:
+
+- **`/libs/agentsdk/llms.md`** — the agentsdk API reference. Every
+  `Register*` function, the LLM-calling APIs, storage, seal/unseal,
+  built-in JS bindings, the full surface. Read it for "what does the
+  SDK give me?" — read this file for "how do I wire it together?".
+- **`NOTES.md`** — the agent-specific design log. Decisions made for
+  *this* agent (chosen integrations, non-obvious trade-offs, the
+  styling palette, anything a future upgrade needs to know about).
+  Keep it short and current as you go.
+
+## Workspace structure
+
+```
+{agent-repo}/
+├── main.go            # Entrypoint — registrations only
+├── handlers/          # CONTROLLERS — HTTP handlers; import domain + views
+│   └── home.go
+├── views/             # VIEW — templ templates + view-model types
+│   ├── layout.templ
+│   ├── index.templ
+│   ├── viewmodel.go   # HomeView (and any other view-model types)
+│   ├── assets.go      # //go:embed compiled Tailwind + AppCSSPath
+│   └── static/        # Tailwind build output (gitignored)
+├── styles/
+│   └── app.css        # Tailwind v4 + DaisyUI source
+├── deps/
+│   └── deps.go        # Deps struct — shared by all domain packages
+├── db/
+│   ├── migrations/    # goose migrations (you create; doc.go pre-scaffolded)
+│   └── queries/       # sqlc query files (you create)
+├── internal/db/       # sqlc-generated code
+├── Dockerfile         # Generated — do not edit
+├── setup.sh           # (optional) system setup — runs as root at image build
+├── go.mod
+├── sqlc.yaml
+└── NOTES.md           # Agent-specific design log
+```
+
+**Keep `main.go` thin.** Registrations only — `RegisterTool`,
+`RegisterRoute`, `RegisterWebhook`, `RegisterCron`, `RegisterConnection`,
+etc. Business logic lives in domain packages, never inline in main.
+
+## MVC: handlers are the integration point
+
+The scaffold uses an MVC split for the HTML UI. As the agent grows, you'll
+add domain packages and HTTP handlers; the rule below keeps the package
+graph cycle-free.
+
+```
+main.go      →   <domain> (model)
+                 handlers (controller) → <domain> + views
+                 views (view)
+```
+
+- **Model** — domain packages (`spotify/`, `kanban/`, `weather/`). Pure
+  Go: types, business logic, API calls. Never imports `views/` or
+  `handlers/`.
+- **View** — `views/` holds templ templates plus view-model types
+  (`views.HomeView`, `views.BoardView`). Templates take view-model
+  types only; `views/` never imports a domain package.
+- **Controller** — `handlers/` holds HTTP handlers (`handlers.Home`,
+  `handlers.BoardPage`). Handlers import both domain packages and
+  `views/`, do the model→view-model conversion, and render. Nothing
+  imports `handlers/` back.
+
+**If you find yourself wanting to import `views` from a domain
+package, the handler is in the wrong place — move it to `handlers/`.**
+That single rule prevents the cycle that would otherwise form:
+domain → views → domain.
+
+## Domain package shape
+
+`Deps` is shared across every domain package, so it lives in `deps/` —
+not inside any feature package. A feature package can't be imported by a
+sibling without coupling them, and `main` can't be imported at all.
+
+Each domain package has two layers:
+
+1. **Pure Go** — business logic, API calls. Accepts handles, returns
+   plain types.
+2. **Tool Execute** — `func(ctx, In) (Out, error)` that pulls handles
+   via `agentsdk.GetDeps[*deps.Deps](ctx)` and calls into the pure
+   layer. These are what `RegisterTool` exposes to the LLM.
+
+A typical domain package:
+
+```
+spotify/
+├── service.go  # NewService(...) + methods returning plain types
+└── tools.go    # SearchTracks, PlayTrack, etc. — RegisterTool targets
+```
+
+LLM-callable tools live in `tools.go`. HTTP routes live in `handlers/`.
+Both consume the pure layer in `service.go`; neither imports the other.
+
+## Build chain
+
+Every time you change a `.templ`, edit `styles/app.css`, or modify any
+Go source, run the chain end-to-end before declaring the build done:
+
+```bash
+go mod tidy
+go tool templ generate
+tailwindcss -i styles/app.css -o views/static/app.css --minify
+go build -buildvcs=false -o /tmp/agent .
+```
+
+`go mod tidy` runs FIRST. Airlock bumps `agentsdk`'s required version in
+`go.mod` before each build (so the build resolves against the current
+SDK), but it doesn't touch `go.sum` — so the chain has to reconcile the
+sums before `go tool templ generate` can resolve the templ tool
+dependency. Putting tidy first turns the trial-and-error you'd
+otherwise hit ("missing go.sum entry…") into a single clean pass.
+
+Run `sqlc generate` whenever `db/queries/*.sql` changes — only then,
+since sqlc output is committed for go-build consistency but
+regenerating without a query change is noise.
+
+You don't commit:
+- `*_templ.go` — regenerated from `.templ`
+- `views/static/app.css` — regenerated by tailwindcss
+- (sqlc generates committed but updated on demand)
+
+The Docker build re-runs the chain inside the image, so a fresh clone
++ `docker build .` works without any of the build artefacts checked in.
+
+## Database
+
+Migrations under `db/migrations/`, schema-modifying SQL only. Use
+goose's naming convention (`NNN_short_description.sql`) and
+sequential numbering. Query files under `db/queries/` are sqlc input;
+each `-- name: FuncName :one|:many|:exec` block becomes a typed Go
+function in `internal/db/`.
+
+To validate migrations locally when `$TEST_DB_URL` is set:
+
+```bash
+goose -dir db/migrations postgres "$TEST_DB_URL" up
+goose -dir db/migrations postgres "$TEST_DB_URL" reset
+goose -dir db/migrations postgres "$TEST_DB_URL" up
+psql "$TEST_DB_URL" -c "\dt"  # verify final schema shape
+```
+
+## Dockerfile & system setup
+
+**Never modify `Dockerfile`** — Airlock regenerates it. System packages,
+language runtimes, and binary tools the agent needs at runtime go in
+`setup.sh`, which runs as root at image build time and is baked into
+the runtime image. Example:
+
+```bash
+# setup.sh
+apt-get update && apt-get install -y --no-install-recommends ffmpeg
+# Drop tool binaries under /var/agent/bin/ — already on PATH at runtime.
+```
+
+After editing `setup.sh`, verify it works inside the toolserver with:
+
+```bash
+sudo run-setup && <new-binary> --version
+```
+
+## HTML UI — short
+
+Stack: `templ` (type-safe HTML) + `htmx` (interactivity) + Tailwind v4 +
+DaisyUI (styling). htmx is served same-origin by the framework under
+`agentsdk.Assets.HTMX`; the compiled Tailwind stylesheet is served from
+the agent's own `/static/app.{hash}.css` route (see `views/assets.go`
+and `main.go`'s `/static/{name}` handler).
+
+Design principles:
+
+- **Pick a tone before writing markup.** Music dashboard, weather
+  agent, admin console — each earns a distinct aesthetic. Decide
+  first; build to it. A centered title + three buttons is the stock-
+  demo trap.
+- **Mobile-first.** Design for narrow viewports, then add `sm:` /
+  `md:` / `lg:` variants for wider screens. Test at ~375px before
+  declaring done.
+- **Brand through DaisyUI's theme**, not per-element overrides.
+  Configure the theme block in `styles/app.css`. Don't sprinkle
+  `bg-[#...]` or inline `style=` colours through templates.
+- **Show the domain.** Render real data prominently — album art,
+  weather illustrations, charts. Emoji-as-title-decoration is a
+  placeholder you replaced.
+- **Don't double-wrap htmx swap targets.** Either the page owns the
+  card and the partial swaps inner content, or the partial owns the
+  card and the page renders only an empty target. Picking both
+  produces two stacked headers and a card-in-a-card border.
+- **Record styling decisions in `NOTES.md`** — chosen theme name (or
+  custom palette tokens), font family + where it's loaded from,
+  layout conventions you committed to. The next rebuild should see
+  what you decided.
+
+## Keeping the UI live
+
+Agents mutate state from *two* directions: the user editing in the web
+UI, and the LLM running tools over chat (Telegram, Discord, web chat).
+A board the user is looking at can grow new cards mid-session because
+they told the bot "add a card for X" in another tab. The web view must
+reflect that without a manual reload.
+
+The pattern: render every data-bearing region as its own template, then
+poll it from the page with htmx. The page is a shell; the partials
+refresh themselves.
+
+```go
+// views/board.templ
+templ Board(v BoardView) {
+    @BoardCards(v) // initial render so the page isn't empty pre-poll
+}
+
+templ BoardCards(v BoardView) {
+    <div id="board-cards"
+         hx-get="/board/cards"
+         hx-trigger="load, every 5s [document.visibilityState === 'visible']"
+         hx-swap="outerHTML"
+         class="grid …">
+        for _, c := range v.Cards { @Card(c) }
+    </div>
+}
+```
+
+Rules:
+
+- **One handler per refreshable region.** `GET /board/cards` returns
+  the partial template only — no layout, no surrounding chrome. Same
+  view-model shape as the embedded initial render so they stay in
+  sync.
+- **`[document.visibilityState === 'visible']`** on every polling
+  trigger. Without it, htmx keeps polling for a hidden tab — quiet
+  battery drain on phones and useless load on the agent.
+- **Match the cadence to the data.** Kanban / queue / chat-log feel:
+  3–5s. Slower-moving lists (members, settings): 15–30s. Anything that
+  shouldn't auto-change: don't poll, refresh on user action.
+- **Don't double-wrap.** The polled element IS the swap target — its
+  outer `<div id="board-cards">` must match the partial's. Wrapping
+  again on the page produces nested duplicates (see the rule above
+  about htmx swap targets).
+- **User actions still drive optimistic updates** — POSTs from the UI
+  should swap their own response immediately rather than waiting for
+  the next poll. Polling is the *fallback* that catches chat-side
+  mutations.

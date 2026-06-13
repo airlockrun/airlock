@@ -12,6 +12,61 @@ func testKey(fill byte) []byte {
 	return key
 }
 
+func TestAADBinding(t *testing.T) {
+	enc := New(testKey(0xAA))
+	const pt = "telegram-session-string-abc123"
+	const agentA = "11111111-1111-1111-1111-111111111111"
+	const agentB = "22222222-2222-2222-2222-222222222222"
+
+	sealed, err := enc.EncryptWithAAD(pt, agentA)
+	if err != nil {
+		t.Fatalf("EncryptWithAAD: %v", err)
+	}
+
+	// Same aad round-trips.
+	got, err := enc.DecryptWithAAD(sealed, agentA)
+	if err != nil {
+		t.Fatalf("DecryptWithAAD(same aad): %v", err)
+	}
+	if got != pt {
+		t.Fatalf("round-trip = %q, want %q", got, pt)
+	}
+
+	// Different aad (another agent) must fail — this is the binding.
+	if _, err := enc.DecryptWithAAD(sealed, agentB); err == nil {
+		t.Error("DecryptWithAAD with a different agent's aad should fail")
+	}
+
+	// Empty aad must also fail against an aad-bound ciphertext.
+	if _, err := enc.Decrypt(sealed); err == nil {
+		t.Error("Decrypt (empty aad) of an aad-bound ciphertext should fail")
+	}
+}
+
+func TestEmptyAADMatchesPlainEncrypt(t *testing.T) {
+	enc := New(testKey(0xCD))
+	const pt = "plain-config-value-987654321"
+
+	// A value sealed with empty aad decrypts via plain Decrypt, and vice
+	// versa — guarantees pre-AAD ciphertexts stay readable.
+	sealed, err := enc.EncryptWithAAD(pt, "")
+	if err != nil {
+		t.Fatalf("EncryptWithAAD(\"\"): %v", err)
+	}
+	got, err := enc.Decrypt(sealed)
+	if err != nil {
+		t.Fatalf("Decrypt: %v", err)
+	}
+	if got != pt {
+		t.Fatalf("= %q, want %q", got, pt)
+	}
+
+	enc2, _ := enc.Encrypt(pt)
+	if got, err := enc.DecryptWithAAD(enc2, ""); err != nil || got != pt {
+		t.Fatalf("DecryptWithAAD(\"\") of Encrypt output = %q, err %v", got, err)
+	}
+}
+
 func TestRoundTrip(t *testing.T) {
 	enc := New(testKey(0xAA))
 	plaintext := "sk-secret-api-key-12345"

@@ -4,6 +4,7 @@ import { fromJson } from '@bufbuild/protobuf'
 import api from '@/api/client'
 import type { BridgeInfo } from '@/gen/airlock/v1/types_pb'
 import { ListBridgesResponseSchema } from '@/gen/airlock/v1/api_pb'
+import { CreateManagedBotSessionResponseSchema } from '@/gen/airlock/v1/types_pb'
 
 export const useBridgesStore = defineStore('bridges', () => {
   const bridges = ref<BridgeInfo[]>([])
@@ -31,6 +32,7 @@ export const useBridgesStore = defineStore('bridges', () => {
     id: string,
     payload: {
       agentId: string
+      isSystem?: boolean
       settings?: {
         allowPublicDms: boolean
         publicSessionTtlSeconds: number
@@ -51,5 +53,16 @@ export const useBridgesStore = defineStore('bridges', () => {
     bridges.value = bridges.value.filter((b) => b.id !== id)
   }
 
-  return { bridges, loading, fetchBridges, createBridge, updateBridge, deleteBridge }
+  // createManagedBotSession kicks off the Telegram Managed Bots flow:
+  // server inserts a session row + returns the manager-bot deep link
+  // the UI opens in a new tab. The eventual bridge appears via the
+  // next fetchBridges() refresh (or, when WS is wired, a bridge.created
+  // push). Returns the deep link so the caller can window.open it.
+  async function createManagedBotSession(payload: { agentId?: string; isSystem: boolean; suggestedName?: string }): Promise<string> {
+    const { data } = await api.post('/api/v1/bridges/managed/sessions', payload)
+    const resp = fromJson(CreateManagedBotSessionResponseSchema, data)
+    return resp.deepLink
+  }
+
+  return { bridges, loading, fetchBridges, createBridge, updateBridge, deleteBridge, createManagedBotSession }
 })

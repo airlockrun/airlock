@@ -2,15 +2,13 @@ package trigger
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 
 	"github.com/airlockrun/agentsdk"
-	"github.com/airlockrun/airlock/db/dbq"
+	"github.com/airlockrun/airlock/authz"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
-	"go.uber.org/zap"
 )
 
 // SlashCommand describes a user-typable command. Registry is the single
@@ -33,9 +31,9 @@ var Registry = []SlashCommand{
 	{Name: "echo", Description: "Toggle tool output bubbles (on / off / blank=flip)", Access: agentsdk.AccessUser},
 }
 
-// RunCanceler is the slice of *Dispatcher that TrySlashCommand uses to
-// fire the /cancel command. Defined as an interface so tests can stub
-// without standing up containers / DB / encryptor.
+// RunCanceler is the slice of *Dispatcher that the agent-path slash
+// conv adapter uses to fire /cancel. Defined as an interface so tests
+// can stub without standing up containers / DB / encryptor.
 type RunCanceler interface {
 	CancelRun(runID uuid.UUID) bool
 }
@@ -57,64 +55,73 @@ func findCommand(name string) *SlashCommand {
 // recognized and processed. Reply is the short message to show the user,
 // unless ForwardAsCompact is set — in that case the caller should invoke
 // the agent with PromptInput.ForceCompact=true so Sol's summarization
-// produces the user-visible text via a normal run.
+// produces the user-visible text via a normal run. ForwardAsCompact is
+// agent-path only; the sysagent path runs compact inline and returns the
+// summary in Reply.
 type SlashCommandResult struct {
 	Handled          bool
 	Reply            string
 	ForwardAsCompact bool
 }
 
-// ResolveAgentAccess returns the caller's effective per-agent access level
-// from agent_members. Non-members get AccessPublic, members map straight
-// to AccessUser or AccessAdmin. Tenant role is deliberately not consulted —
-// see airlock/CLAUDE.md "Permission Model" for why these axes are separate.
-func ResolveAgentAccess(ctx context.Context, q *dbq.Queries, agentID, userID uuid.UUID) agentsdk.Access {
+// SlashConv is the per-conversation backing the slash-command dispatcher
+// operates against. Two implementations: agentConvAdapter (agent
+// bridges, web chat) and sysagentConvAdapter (system bridges → sysagent).
+// Each method is the full compound operation the corresponding /command
+// performs, not a primitive query — the per-conversation table choice
+// stays inside the adapter.
+type SlashConv interface {
+	// Cancel aborts the latest live run on this conversation. Returns
+	// true if a cancel was dispatched, false if there was nothing in
+	// flight (or the cancel target couldn't be reached, e.g. process
+	// restart cleared the in-memory dispatcher state).
+	Cancel(ctx context.Context, convID pgtype.UUID) bool
+
+	// Clear advances the conversation's context checkpoint to a fresh
+	// marker message and resolves any lingering suspended run. Returns
+	// whether a suspension was cleared so the reply can mention it.
+	Clear(ctx context.Context, convID pgtype.UUID) (suspensionCleared bool, err error)
+
+	// Compact compacts the conversation's history. Agent path: returns
+	// (forward=true) so TrySlashCommand sets ForwardAsCompact and the
+	// agent container runs Sol.Runner.Compact, emitting the summary as
+	// a normal assistant message. Sysagent path: runs compaction
+	// in-process and returns (summary, forward=false).
+	Compact(ctx context.Context, convID pgtype.UUID) (reply string, forward bool, err error)
+
+	// Echo updates the "show tool output bubbles" setting and returns
+	// the resulting state. args is the raw post-/echo token ("on",
+	// "off", or empty for toggle).
+	Echo(ctx context.Context, convID pgtype.UUID, args string) (on bool, err error)
+}
+
+// bridgePrincipal maps a resolved bridge user to an authz.Principal: an
+// anonymous public-channel caller (uuid.Nil) becomes AnonymousPrincipal,
+// a linked user becomes a registered-user principal. Tenant role is not
+// consulted on the per-agent axis, so it's left empty. The prompt path
+// uses this to resolve CallerAccess through the one authz resolver.
+func bridgePrincipal(userID uuid.UUID) authz.Principal {
 	if userID == uuid.Nil {
-		return agentsdk.AccessPublic
+		return authz.AnonymousPrincipal()
 	}
-	member, err := q.GetAgentMember(ctx, dbq.GetAgentMemberParams{
-		AgentID: pgtype.UUID{Bytes: agentID, Valid: true},
-		UserID:  pgtype.UUID{Bytes: userID, Valid: true},
-	})
-	if err != nil {
-		return agentsdk.AccessPublic
-	}
-	if member.Role == "admin" {
-		return agentsdk.AccessAdmin
-	}
-	return agentsdk.AccessUser
+	return authz.UserPrincipal(userID, "")
 }
 
-// accessRank orders access levels for comparison. AccessAdmin > AccessUser > AccessPublic.
-func accessRank(a agentsdk.Access) int {
-	switch a {
-	case agentsdk.AccessAdmin:
-		return 2
-	case agentsdk.AccessUser:
-		return 1
-	default:
-		return 0
-	}
-}
-
-// TrySlashCommand parses message for a leading slash command and, if recognized,
-// executes it against the conversation. Returns Handled=false when the message
-// is a plain user prompt. Both web (api.conversationsHandler.Prompt) and bridge
-// (PromptProxy) paths call this before forwarding to the agent.
+// TrySlashCommand parses message for a leading slash command and, if
+// recognized, dispatches it against conv. Returns Handled=false when the
+// message is a plain user prompt — callers forward it to the agent (or
+// sysagent) as usual.
 //
-// access is the caller's resolved agent access (see ResolveAgentAccess) and is
-// compared against the command's required level. agentID is used by /clear to
-// resolve any pending suspended run so the pending-confirmation dialog doesn't
-// linger after context clear.
+// access is the caller's resolved agent access; commands gate against
+// SlashCommand.Access. /clear, /echo, /compact, /cancel route into
+// SlashConv; /auth replies with the already-linked acknowledgement
+// (the un-linked path is handled by the bridge before identity lookup).
 func TrySlashCommand(
 	ctx context.Context,
-	q *dbq.Queries,
-	canceler RunCanceler,
+	conv SlashConv,
 	convID pgtype.UUID,
-	agentID uuid.UUID,
 	access agentsdk.Access,
 	message string,
-	logger *zap.Logger,
 ) (SlashCommandResult, error) {
 	trimmed := strings.TrimSpace(message)
 	if !strings.HasPrefix(trimmed, "/") {
@@ -140,7 +147,7 @@ func TrySlashCommand(
 		}, nil
 	}
 
-	if accessRank(access) < accessRank(entry.Access) {
+	if !authz.AccessAtLeast(access, entry.Access) {
 		return SlashCommandResult{
 			Handled: true,
 			Reply:   fmt.Sprintf("/%s requires %s access.", entry.Name, entry.Access),
@@ -154,187 +161,40 @@ func TrySlashCommand(
 		// either already linked (bridge path past identity lookup) or
 		// signed in via web — either way nothing to bind.
 		return SlashCommandResult{Handled: true, Reply: "You are already linked."}, nil
+
 	case "cancel":
-		return SlashCommandResult{Handled: true, Reply: handleCancelCommand(ctx, q, canceler, convID)}, nil
+		if conv.Cancel(ctx, convID) {
+			return SlashCommandResult{Handled: true, Reply: "Run cancelled."}, nil
+		}
+		return SlashCommandResult{Handled: true, Reply: "Nothing to cancel."}, nil
+
 	case "clear":
-		reply, err := handleClearCommand(ctx, q, convID, agentID, logger)
+		sus, err := conv.Clear(ctx, convID)
 		if err != nil {
 			return SlashCommandResult{Handled: true, Reply: "Failed to clear context: " + err.Error()}, err
 		}
+		reply := "Context cleared."
+		if sus {
+			reply += " Pending confirmation cancelled."
+		}
 		return SlashCommandResult{Handled: true, Reply: reply}, nil
+
 	case "compact":
-		// The agent container runs the actual summarization via Sol's
-		// Runner.Compact path. Airlock only forwards the request with
-		// ForceCompact=true; the agent emits the user-visible reply.
-		return SlashCommandResult{Handled: true, ForwardAsCompact: true}, nil
+		reply, forward, err := conv.Compact(ctx, convID)
+		if err != nil {
+			return SlashCommandResult{Handled: true, Reply: "Failed to compact: " + err.Error()}, err
+		}
+		return SlashCommandResult{Handled: true, Reply: reply, ForwardAsCompact: forward}, nil
+
 	case "echo":
-		reply, err := handleEchoCommand(ctx, q, convID, args)
+		next, err := conv.Echo(ctx, convID, args)
 		if err != nil {
 			return SlashCommandResult{Handled: true, Reply: "Failed to update echo: " + err.Error()}, err
 		}
-		return SlashCommandResult{Handled: true, Reply: reply}, nil
+		if next {
+			return SlashCommandResult{Handled: true, Reply: "Echo: on. Tool output will be shown."}, nil
+		}
+		return SlashCommandResult{Handled: true, Reply: "Echo: off. Tool output will be hidden (errors still shown)."}, nil
 	}
 	return SlashCommandResult{Handled: true, Reply: "Unhandled command"}, nil
-}
-
-// handleCancelCommand aborts the most recent in-flight prompt run for this
-// conversation by querying for it and firing the dispatcher's cancel hook.
-// Returns a user-visible reply describing the outcome. The HTTP-request
-// abort is what flips the run row out of 'running' (via the agent's
-// r.Complete or the stuck-run sweeper as a backstop).
-func handleCancelCommand(ctx context.Context, q *dbq.Queries, canceler RunCanceler, convID pgtype.UUID) string {
-	if !convID.Valid {
-		return "Nothing to cancel."
-	}
-	convIDStr := uuid.UUID(convID.Bytes).String()
-	row, err := q.GetLatestRunningPromptRun(ctx, convIDStr)
-	if err != nil {
-		return "Nothing to cancel."
-	}
-	if canceler == nil || !canceler.CancelRun(uuid.UUID(row.Bytes)) {
-		// Either no live in-memory state (airlock restarted) or the run
-		// just finalized between query and dispatch. The HTTP path's own
-		// finalization or the stuck-run sweeper will mark the row.
-		return "Nothing to cancel."
-	}
-	return "Run cancelled."
-}
-
-// handleClearCommand advances the conversation's context checkpoint to a newly
-// inserted marker row — forgetting prior LLM context without deleting history
-// from the DB. The marker is rendered by the UI as a "context cleared" divider
-// annotated with how many tokens were freed.
-//
-// If there's a pending suspended run for the agent, it's resolved too. A
-// pending tool confirmation against the now-forgotten context is not useful,
-// and leaving the run suspended would surface a stale confirmation dialog on
-// the next page reload.
-func handleClearCommand(ctx context.Context, q *dbq.Queries, convID pgtype.UUID, agentID uuid.UUID, logger *zap.Logger) (string, error) {
-	if !convID.Valid {
-		return "Nothing to clear.", nil
-	}
-	tokensFreed, err := q.SumPreCheckpointTokens(ctx, convID)
-	if err != nil {
-		return "", fmt.Errorf("sum pre-checkpoint tokens: %w", err)
-	}
-
-	markerParts, err := json.Marshal([]map[string]any{{
-		"type":        "checkpoint",
-		"kind":        "clear",
-		"tokensFreed": tokensFreed,
-	}})
-	if err != nil {
-		return "", fmt.Errorf("marshal marker parts: %w", err)
-	}
-
-	marker, err := q.CreateMessage(ctx, dbq.CreateMessageParams{
-		ConversationID: convID,
-		Role:           "system",
-		Content:        "",
-		Parts:          markerParts,
-		RunID:          pgtype.UUID{},
-		Source:         "checkpoint",
-	})
-	if err != nil {
-		return "", fmt.Errorf("create checkpoint marker: %w", err)
-	}
-
-	if err := q.SetConversationCheckpoint(ctx, dbq.SetConversationCheckpointParams{
-		ConversationID:      convID,
-		CheckpointMessageID: marker.ID,
-	}); err != nil {
-		return "", fmt.Errorf("set checkpoint: %w", err)
-	}
-
-	// Best-effort: clear any lingering suspended run. A resolve failure logs
-	// a warning but doesn't fail the /clear — the checkpoint has already
-	// advanced, and the caller gets the normal confirmation.
-	suspensionCleared := false
-	if sus, err := q.GetLatestSuspendedRun(ctx, pgtype.UUID{Bytes: agentID, Valid: true}); err == nil {
-		if rerr := q.ResolveSuspendedRun(ctx, sus.ID); rerr != nil {
-			if logger != nil {
-				logger.Warn("resolve suspended run during /clear", zap.Error(rerr))
-			}
-		} else {
-			suspensionCleared = true
-		}
-	}
-
-	reply := fmt.Sprintf("Context cleared. %d tokens freed.", tokensFreed)
-	if suspensionCleared {
-		reply += " Pending confirmation cancelled."
-	}
-	return reply, nil
-}
-
-// conversationSettings is the typed view over agent_conversations.settings.
-// Fields use pointers so we can distinguish "unset — follow driver default"
-// from "explicitly false".
-type conversationSettings struct {
-	Echo *bool `json:"echo,omitempty"`
-}
-
-// ResolveEcho returns the effective echo flag for a conversation given its
-// raw settings JSON and the driver's default. Explicit conversation settings
-// win over the driver default; missing JSON or missing key falls through to
-// the default.
-func ResolveEcho(settingsJSON []byte, driverDefault bool) bool {
-	var s conversationSettings
-	if len(settingsJSON) > 0 {
-		_ = json.Unmarshal(settingsJSON, &s)
-	}
-	if s.Echo != nil {
-		return *s.Echo
-	}
-	return driverDefault
-}
-
-// handleEchoCommand writes settings.echo to the conversation row. Accepts
-// "on", "off", or blank (toggle). Toggle flips from the currently stored
-// explicit value, treating unset as off — so the first `/echo` in a chat
-// that's quiet by default always turns echo on, which matches user intent.
-func handleEchoCommand(ctx context.Context, q *dbq.Queries, convID pgtype.UUID, args string) (string, error) {
-	if !convID.Valid {
-		return "No conversation yet — send a message first, then `/echo`.", nil
-	}
-	arg := strings.ToLower(strings.TrimSpace(args))
-	var next bool
-	switch arg {
-	case "on":
-		next = true
-	case "off":
-		next = false
-	case "":
-		conv, err := q.GetConversationByID(ctx, convID)
-		if err != nil {
-			return "", fmt.Errorf("get conversation: %w", err)
-		}
-		var s conversationSettings
-		if len(conv.Settings) > 0 {
-			_ = json.Unmarshal(conv.Settings, &s)
-		}
-		cur := false
-		if s.Echo != nil {
-			cur = *s.Echo
-		}
-		next = !cur
-	default:
-		return "Usage: /echo [on|off]. Blank toggles.", nil
-	}
-
-	patch, err := json.Marshal(map[string]any{"echo": next})
-	if err != nil {
-		return "", fmt.Errorf("marshal patch: %w", err)
-	}
-	if err := q.UpdateConversationSettings(ctx, dbq.UpdateConversationSettingsParams{
-		ID:    convID,
-		Patch: patch,
-	}); err != nil {
-		return "", fmt.Errorf("update settings: %w", err)
-	}
-
-	if next {
-		return "Echo: on. Tool output will be shown.", nil
-	}
-	return "Echo: off. Tool output will be hidden (errors still shown).", nil
 }

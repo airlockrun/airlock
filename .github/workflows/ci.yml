@@ -30,6 +30,37 @@ jobs:
       - name: check-versions
         run: ./scripts/check-versions.sh
 
+  migrations:
+    runs-on: ubuntu-latest
+    steps:
+      # Full history + tags: the immutability check compares migrations
+      # against the latest final release tag. Default shallow checkout
+      # has no tags and the check would pass vacuously.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - name: check-migrations
+        run: ./scripts/check-migrations.sh
+
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          # gofmt doesn't compile or fetch deps — skip the module cache.
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "::error::these files are not gofmt-formatted:"
+            echo "$unformatted"
+            echo "run: gofmt -w ."
+            exit 1
+          fi
+
   go:
     runs-on: ubuntu-latest
     steps:
@@ -45,5 +76,11 @@ jobs:
         run: go install github.com/a-h/templ/cmd/templ@v0.3.865
       - name: go vet
         run: go vet ./...
+      # airlockvet runs the airlock-specific static checks (nodbq +
+      # writeproto in api/, agentwire in agentapi/). multichecker exits
+      # non-zero whenever any analyzer reports a diagnostic, so a single
+      # un-annotated violation is enough to fail the build.
+      - name: airlockvet
+        run: go run ./cmd/airlockvet ./api/... ./agentapi/...
       - name: go test
         run: go test ./...

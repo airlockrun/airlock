@@ -2,20 +2,22 @@ package db
 
 import (
 	"context"
-	"log"
 	"os"
 	"testing"
+
+	"github.com/airlockrun/airlock/db/dbtest"
 )
 
+// testURL is the DSN of the ephemeral (or TEST_DATABASE_URL) database
+// provisioned in TestMain. Empty when no database is available.
+var testURL string
+
 func TestMain(m *testing.M) {
-	url := os.Getenv("DATABASE_URL")
-	if url == "" {
-		os.Exit(m.Run()) // skip DB tests, they'll call t.Skip individually
+	url, _, release, ok := dbtest.Setup(context.Background(), RunMigrations, TestLockAndReset)
+	if !ok {
+		os.Exit(m.Run()) // no DB available; integration tests skip individually
 	}
-	release, err := TestLockAndReset(url)
-	if err != nil {
-		log.Fatal(err)
-	}
+	testURL = url
 	code := m.Run()
 	release()
 	os.Exit(code)
@@ -23,11 +25,10 @@ func TestMain(m *testing.M) {
 
 func testDatabaseURL(t *testing.T) string {
 	t.Helper()
-	url := os.Getenv("DATABASE_URL")
-	if url == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
+	if testURL == "" {
+		t.Skip("no test database (Docker unavailable and TEST_DATABASE_URL unset)")
 	}
-	return url
+	return testURL
 }
 
 func TestDBConnectAndPing(t *testing.T) {
@@ -44,11 +45,9 @@ func TestDBConnectAndPing(t *testing.T) {
 }
 
 func TestRunMigrations(t *testing.T) {
-	// Migrations already ran in TestMain via TestLockAndReset.
-	// Just verify we can run them again (idempotent).
+	// Migrations already ran in TestMain. Just verify they're idempotent.
 	url := testDatabaseURL(t)
 	if err := RunMigrations(url); err != nil {
 		t.Fatalf("RunMigrations() failed: %v", err)
 	}
 }
-

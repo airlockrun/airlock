@@ -16,10 +16,10 @@ import (
 // Preprocessing tuning knobs. Kept non-configurable for now — tweak here if
 // provider quality/size tradeoffs shift.
 const (
-	maxSide          = 1600 // resize longest side to this, preserving aspect ratio
-	jpegQuality      = 85
-	skipBytesLimit   = 200 * 1024 // original bytes below this + dims already small → no re-encode
-	skipPixelDimLimit = 1600      // both dims must be ≤ this to skip
+	maxSide           = 1600 // resize longest side to this, preserving aspect ratio
+	jpegQuality       = 85
+	skipBytesLimit    = 200 * 1024 // original bytes below this + dims already small → no re-encode
+	skipPixelDimLimit = 1600       // both dims must be ≤ this to skip
 )
 
 // preprocessResult carries the bytes that should land in `llm/K` plus the

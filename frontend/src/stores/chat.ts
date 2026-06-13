@@ -3,14 +3,15 @@ import { defineStore } from 'pinia'
 import { fromJson } from '@bufbuild/protobuf'
 import api from '@/api/client'
 import { ws } from '@/api/ws'
-import type { AgentMessageInfo } from '@/gen/airlock/v1/types_pb'
+import type { AgentMessageInfo, ConversationInfo } from '@/gen/airlock/v1/types_pb'
 import {
   ListConversationsResponseSchema,
   GetConversationResponseSchema,
   PaginatedMessagesResponseSchema,
   PromptResponseSchema,
 } from '@/gen/airlock/v1/api_pb'
-import { enrichMessages as enrichMessagesShared, formatToolArgs } from '@/utils/messageGroup'
+import { enrichMessages as enrichMessagesShared, formatToolArgs, toolLabel, type MsgBlock, type ToolBlock } from '@/utils/messageGroup'
+import { useConversationsStore } from '@/stores/conversations'
 
 // Sliding-window pagination keeps the browser's in-memory message list
 // bounded. Scrolling up past the top fetches an older page; if the window
@@ -47,7 +48,7 @@ export interface ToolCall {
   input: string
   output: string
   error: string
-  status: 'running' | 'done' | 'error' | 'confirmation'
+  status: 'running' | 'done' | 'error' | 'denied' | 'confirmation'
 }
 
 export interface Confirmation {
@@ -60,11 +61,26 @@ export interface Confirmation {
 
 export const useChatStore = defineStore('chat', () => {
   const conversationId = ref<string | null>(null)
+  // Web conversations for this agent, newest first — the switcher list.
+  // Bridge/a2a threads are excluded server-side (ListConversationsByAgent).
+  const conversations = ref<ConversationInfo[]>([])
   const messages = ref<AgentMessageInfo[]>([])
   const streamingText = ref('')
   const activeToolCalls = reactive(new Map<string, ToolCall>())
+  // Ordered live render list for the in-flight assistant turn: text and
+  // tool entries in true emission order (mirrors the persisted blocks[]
+  // enrichMessages builds). Text entries hold their own text; tool
+  // entries reference activeToolCalls by id for live status/output. The
+  // streaming bubble iterates this so the live view interleaves exactly
+  // like the finalized/refetched one — no reordering, no finalize snap.
+  const streamingBlocks = ref<Array<{ kind: 'text'; text: string } | { kind: 'tool'; toolCallId: string }>>([])
   const pendingConfirmation = ref<Confirmation | null>(null)
   const currentRunId = ref<string | null>(null)
+  // The agent this store is bound to (its WS topic == this agent's UUID).
+  // Every run/notification envelope is addressed by topicId+conversationId;
+  // events not matching this binding belong to a different agent (e.g. an
+  // A2A sibling's own run) and are rejected at the edge — no runId guessing.
+  const boundAgentId = ref<string | null>(null)
   const sending = ref(false)
   const cancelling = ref(false)
   // Runs the user cancelled locally — late NDJSON events for these runIDs
@@ -123,30 +139,65 @@ export const useChatStore = defineStore('chat', () => {
   // Drops events for runs the user cancelled locally so the optimistically
   // finalized bubble doesn't repaint as the agent's straggling tool output
   // arrives.
-  function isCurrentRun(evRunId: string): boolean {
+  // The run we're tracking in this (agent, conversation). The address
+  // gate already guarantees the event is for the bound agent+conversation,
+  // so the only remaining ambiguity is run *sequencing* within this
+  // conversation (a delayed event from a previous run, or a duplicate
+  // terminal after currentRunId was cleared). runId === currentRunId
+  // resolves that precisely — no `sending ⇒ accept any` heuristic.
+  function isActiveRun(evRunId: string): boolean {
     if (cancelledRunIds.has(evRunId)) return false
-    if (evRunId === currentRunId.value) return true
-    if (sending.value) return true
-    // Silently ignore stale events (e.g., WS replay buffer from previous runs).
-    return false
+    return evRunId === currentRunId.value
+  }
+
+  // Address gate: a run/notification envelope is for this store iff it
+  // is on this agent's topic and this conversation. Subagent (A2A
+  // sub-run) envelopes carry the parent topic+conversation but a foreign
+  // run; until a sub-run UI exists they're dropped here (their data
+  // still reaches run_js via the tool return). A foreign agent's events
+  // (e.g. an A2A sibling reporting its own run on its own topic) have a
+  // different topicId and never reach the handler. This replaces the
+  // whole isCurrentRun/cancelledRunIds cross-scope guessing layer.
+  // Forward-compat: when envelope.scope lands (user/tenant/system
+  // events), also require scope === 'agent' here.
+  function onRunMessage(type: string, handler: (payload: unknown) => void) {
+    return ws.onMessage(type, (payload, env) => {
+      if (!env || env.subagent) return
+      if (!boundAgentId.value || env.topicId !== boundAgentId.value) return
+      if (conversationId.value) {
+        // Known conversation: reject other conversations on this agent.
+        // Some terminal events carry no conversationId — allow them; the
+        // handler's isActiveRun(runId) check scopes them to our run.
+        if (env.conversationId && env.conversationId !== conversationId.value) return
+      } else if (env.conversationId && sending.value) {
+        // Brand-new web conversation, first prompt in flight: adopt the
+        // id the server assigned (HTTP response will also set it).
+        conversationId.value = env.conversationId
+      } else {
+        return
+      }
+      handler(payload)
+    })
   }
 
   function initListeners() {
     unsubscribers.push(
-      // Adopt server-initiated runs (e.g., post-upgrade notification) for the current conversation.
-      ws.onMessage('run.started', (payload) => {
+      // The address gate guarantees this is our agent+conversation; adopt
+      // the run and reset stream state (run.started is a run's first
+      // event). Covers both user-initiated (HTTP response also sets the
+      // id) and server-initiated runs (post-upgrade notification).
+      onRunMessage('run.started', (payload) => {
         const ev = tryFromJson<RunStartedEvent>(RunStartedEventSchema, payload)
-        if (!ev) return
-        if (ev.conversationId === conversationId.value && !sending.value && !currentRunId.value) {
-          currentRunId.value = ev.runId
-          streamingText.value = ''
-          activeToolCalls.clear()
-          textBlockBoundary = false
-        }
+        if (!ev || cancelledRunIds.has(ev.runId)) return
+        currentRunId.value = ev.runId
+        streamingText.value = ''
+        activeToolCalls.clear()
+        streamingBlocks.value = []
+        textBlockBoundary = false
       }),
-      ws.onMessage('run.text_delta', (payload) => {
+      onRunMessage('run.text_delta', (payload) => {
         const ev = tryFromJson<TextDeltaEvent>(TextDeltaEventSchema, payload)
-        if (!ev || !isCurrentRun(ev.runId)) return
+        if (!ev || !isActiveRun(ev.runId)) return
         if (compactRunInFlight.value) {
           // Buffer the agent's "Context compacted. N tokens freed." line so
           // we can pull tokensFreed out for the synthetic divider, but
@@ -154,20 +205,24 @@ export const useChatStore = defineStore('chat', () => {
           compactReplyBuffer.value += ev.text
           return
         }
-        // Multi-step run_js loops emit text per step with no implicit
-        // separator, so step1 + step2 deltas would concatenate flush against
-        // each other ("…done.next thing…"). Persisted rows are stored per
-        // step and joined with \n on refetch — match that here when a new
-        // text block follows a tool roundtrip.
-        if (textBlockBoundary && streamingText.value && !streamingText.value.endsWith('\n')) {
-          streamingText.value += '\n'
+        // Ordered live blocks: a tool roundtrip (textBlockBoundary) or a
+        // non-text tail starts a new text block; otherwise the delta
+        // extends the current one. This is what the streaming bubble
+        // renders, so the live order matches the persisted blocks[].
+        const tail = streamingBlocks.value[streamingBlocks.value.length - 1]
+        if (textBlockBoundary || !tail || tail.kind !== 'text') {
+          streamingBlocks.value.push({ kind: 'text', text: ev.text })
+        } else {
+          tail.text += ev.text
         }
+        // streamingText is kept only for empty-state / watcher truthiness
+        // now; the bubble renders from streamingBlocks.
         textBlockBoundary = false
         streamingText.value += ev.text
       }),
-      ws.onMessage('run.tool_call', (payload) => {
+      onRunMessage('run.tool_call', (payload) => {
         const ev = tryFromJson<ToolCallEvent>(ToolCallEventSchema, payload)
-        if (!ev || !isCurrentRun(ev.runId)) return
+        if (!ev || !isActiveRun(ev.runId)) return
         textBlockBoundary = true
         activeToolCalls.set(ev.toolCallId, {
           toolCallId: ev.toolCallId,
@@ -177,21 +232,46 @@ export const useChatStore = defineStore('chat', () => {
           error: '',
           status: 'running',
         })
+        streamingBlocks.value.push({ kind: 'tool', toolCallId: ev.toolCallId })
       }),
-      ws.onMessage('run.tool_result', (payload) => {
+      onRunMessage('run.tool_result', (payload) => {
         const ev = tryFromJson<ToolResultEvent>(ToolResultEventSchema, payload)
-        if (!ev || !isCurrentRun(ev.runId)) return
+        if (!ev || !isActiveRun(ev.runId)) return
         textBlockBoundary = true
+        // outcome is the structured tool status (success|error|denied)
+        // straight from the discriminated output — no text sniffing.
+        const status =
+          ev.outcome === 'error' ? 'error' : ev.outcome === 'denied' ? 'denied' : 'done'
         const tc = activeToolCalls.get(ev.toolCallId)
         if (tc) {
           tc.output = ev.output
           tc.error = ev.error
-          tc.status = ev.error ? 'error' : 'done'
+          tc.status = status
+          return
+        }
+        // No live entry: the call was already finalized into messages[]
+        // (e.g. a resume — the promptAgent call bubble was committed and
+        // activeToolCalls cleared on run.started, then the sibling's
+        // reply arrives as this result). Patch the finalized bubble so
+        // the output renders live, matching what enrichMessages folds in
+        // on refresh.
+        for (let i = messages.value.length - 1; i >= 0; i--) {
+          const blocks = (messages.value[i] as any).blocks as MsgBlock[] | undefined
+          const hit = blocks?.find(
+            (b): b is Extract<MsgBlock, { kind: 'tool' }> =>
+              b.kind === 'tool' && b.toolCallId === ev.toolCallId,
+          )
+          if (hit) {
+            hit.output = ev.output
+            hit.error = ev.error
+            hit.outcome = (ev.outcome as ToolBlock['outcome']) || ''
+            break
+          }
         }
       }),
-      ws.onMessage('run.confirmation_required', (payload) => {
+      onRunMessage('run.confirmation_required', (payload) => {
         const ev = tryFromJson<ConfirmationRequiredEvent>(ConfirmationRequiredEventSchema, payload)
-        if (!ev || !isCurrentRun(ev.runId)) return
+        if (!ev || !isActiveRun(ev.runId)) return
         pendingConfirmation.value = {
           runId: ev.runId,
           permission: ev.permission,
@@ -207,9 +287,9 @@ export const useChatStore = defineStore('chat', () => {
           }
         }
       }),
-      ws.onMessage('run.complete', (payload) => {
+      onRunMessage('run.complete', (payload) => {
         const ev = tryFromJson<RunCompleteEvent>(RunCompleteEventSchema, payload)
-        if (!ev || !isCurrentRun(ev.runId)) return
+        if (!ev || !isActiveRun(ev.runId)) return
         // Don't finalize if awaiting confirmation — run is suspended, not complete.
         if (pendingConfirmation.value) return
         console.log('[chat] run.complete', { runId: ev.runId, textLen: streamingText.value.length })
@@ -228,14 +308,13 @@ export const useChatStore = defineStore('chat', () => {
             source: 'checkpoint',
             content: '',
             parts: JSON.stringify([{ type: 'checkpoint', kind: 'compact', tokensFreed }]),
-            tokensIn: 0,
-            tokensOut: 0,
             costEstimate: 0,
           } as any)
           compactRunInFlight.value = false
           compactReplyBuffer.value = ''
           streamingText.value = ''
           activeToolCalls.clear()
+          streamingBlocks.value = []
           textBlockBoundary = false
           currentRunId.value = null
           sending.value = false
@@ -243,9 +322,9 @@ export const useChatStore = defineStore('chat', () => {
         }
         finalizeMessage()
       }),
-      ws.onMessage('run.error', (payload) => {
+      onRunMessage('run.error', (payload) => {
         const ev = tryFromJson<RunErrorEvent>(RunErrorEventSchema, payload)
-        if (!ev || !isCurrentRun(ev.runId)) return
+        if (!ev || !isActiveRun(ev.runId)) return
         console.warn('[chat] run.error', { runId: ev.runId, error: ev.error })
         // Finalize whatever assistant text streamed before the failure (don't
         // discard partial output) and append a separate source='error' bubble
@@ -261,15 +340,13 @@ export const useChatStore = defineStore('chat', () => {
           role: 'assistant',
           source: 'error',
           content: errText,
-          tokensIn: 0,
-          tokensOut: 0,
           costEstimate: 0,
         } as any)
       }),
-      ws.onMessage('run.suspended', () => {
+      onRunMessage('run.suspended', () => {
         // Run suspended (e.g., awaiting approval) — keep state as-is.
       }),
-      ws.onMessage('notification', (payload) => {
+      onRunMessage('notification', (payload) => {
         const ev = tryFromJson<NotificationEvent>(NotificationEventSchema, payload)
         if (!ev || !ev.conversationId) return
         if (ev.conversationId !== conversationId.value) return
@@ -291,6 +368,15 @@ export const useChatStore = defineStore('chat', () => {
           enrichNotification(msg)
           messages.value.push(msg)
         }
+      }),
+      // Replay gap: the server couldn't serve the delta since our cursor
+      // (buffer rolled or was cleared during a disconnect). Refetch
+      // authoritative state from the DB for the bound agent. Topic-scoped
+      // only — not run/conversation — so handled directly, not via the
+      // address-gated onRunMessage.
+      ws.onMessage('resync', (_payload, env) => {
+        if (!boundAgentId.value || env?.topicId !== boundAgentId.value) return
+        void reloadCurrentThread()
       }),
     )
   }
@@ -319,8 +405,6 @@ export const useChatStore = defineStore('chat', () => {
       content,
       parts: partsJson,
       source,
-      tokensIn: 0,
-      tokensOut: 0,
       costEstimate: 0,
     } as any
   }
@@ -375,6 +459,7 @@ export const useChatStore = defineStore('chat', () => {
     if (hasNewer.value) {
       streamingText.value = ''
       activeToolCalls.clear()
+      streamingBlocks.value = []
       textBlockBoundary = false
       pendingNotifications.length = 0
       newMessagesPending.value = true
@@ -383,37 +468,48 @@ export const useChatStore = defineStore('chat', () => {
       return
     }
 
-    // Collect tool calls before clearing. Each is normalized to the same
-    // GroupedToolCall shape that enrichMessages produces on persisted rows
-    // so the live and refresh paths render identically.
-    const toolCalls = activeToolCalls.size > 0
-      ? [...activeToolCalls.values()].map((tc) => ({
-          toolCallId: tc.toolCallId,
-          toolName: tc.toolName,
-          input: formatToolArgs((() => { try { return JSON.parse(tc.input) } catch { return tc.input } })()),
-          output: tc.output || '',
-          error: tc.error || '',
-        }))
-      : undefined
+    // Freeze the ordered live blocks into the same MsgBlock[] shape
+    // enrichMessages produces on persisted rows, resolving each tool
+    // entry's details from activeToolCalls. Live and refetch paths then
+    // render identically and in the same order — no finalize snap.
+    const blocks: MsgBlock[] = streamingBlocks.value.map((b) => {
+      if (b.kind === 'text') return { kind: 'text', text: b.text }
+      const tc = activeToolCalls.get(b.toolCallId)
+      const rawArgs = (() => { try { return JSON.parse(tc?.input ?? '') } catch { return tc?.input ?? '' } })()
+      const outcome: ToolBlock['outcome'] =
+        tc?.status === 'error'
+          ? 'error'
+          : tc?.status === 'denied'
+            ? 'denied'
+            : tc?.status === 'done'
+              ? 'success'
+              : ''
+      return {
+        kind: 'tool',
+        toolCallId: b.toolCallId,
+        toolName: tc?.toolName || 'tool',
+        label: toolLabel(tc?.toolName || 'tool', rawArgs),
+        input: formatToolArgs(rawArgs),
+        output: tc?.output || '',
+        error: tc?.error || '',
+        outcome,
+      }
+    })
 
-    // Push ONE assistant message carrying both the streamed text and the
-    // tool calls inline. The render template groups them inside a single
-    // bubble (tool calls first, text last) — matches the streaming layout
-    // so finalize doesn't visually snap. Need to push even when there's
-    // no text, since a tool-only assistant turn (typical of run_js loops)
-    // still has to surface its tool calls.
-    if (toolCalls || streamingText.value || opts?.cancelled) {
+    // Push ONE assistant message carrying the ordered blocks. content is
+    // still set (plain-text fallback / non-block consumers) but the
+    // renderer prefers blocks. Push even with no text, since a tool-only
+    // turn (typical of run_js loops) still has to surface its tools.
+    if (blocks.length || streamingText.value || opts?.cancelled) {
       const stamp = currentRunId.value || Date.now().toString()
       const msg: any = {
         $typeName: 'airlock.v1.AgentMessageInfo',
         id: `msg-${stamp}`,
         role: 'assistant',
         content: streamingText.value,
-        tokensIn: 0,
-        tokensOut: 0,
         costEstimate: 0,
       }
-      if (toolCalls) msg.toolCalls = toolCalls
+      if (blocks.length) msg.blocks = blocks
       // Marker used by the renderer to fade the bubble + show a small
       // "(cancelled)" tag. The persisted assistant row from the agent's
       // r.Complete arrives later and lacks this flag, but by then the
@@ -433,6 +529,7 @@ export const useChatStore = defineStore('chat', () => {
     }
     streamingText.value = ''
     activeToolCalls.clear()
+    streamingBlocks.value = []
     textBlockBoundary = false
     currentRunId.value = null
     sending.value = false
@@ -448,8 +545,14 @@ export const useChatStore = defineStore('chat', () => {
     return msgs
   }
 
-  // Restore confirmation state from server-provided pending confirmation.
-  function restorePendingConfirmation(pc: { toolCallId: string; toolName: string; input: string }, msgs: AgentMessageInfo[]) {
+  // Restore confirmation state from a server-provided pending confirmation
+  // (conversation load after a refresh). A delegated A2A confirmation
+  // (permission/patterns/code populated) carries its own detail; a direct
+  // run_js confirmation describes the call via toolName/input.
+  function restorePendingConfirmation(
+    pc: { toolCallId: string; toolName: string; input: string; permission?: string; patterns?: string[]; code?: string },
+    msgs: AgentMessageInfo[],
+  ) {
     const input = formatToolArgs((() => { try { return JSON.parse(pc.input) } catch { return pc.input } })())
     activeToolCalls.set(pc.toolCallId, {
       toolCallId: pc.toolCallId,
@@ -459,48 +562,122 @@ export const useChatStore = defineStore('chat', () => {
       error: '',
       status: 'confirmation',
     })
-    pendingConfirmation.value = {
-      runId: '',
-      permission: pc.toolName,
-      patterns: [],
-      code: input,
-      toolCallId: pc.toolCallId,
-    }
-    // Hide the assistant message that contains this tool call — it's shown via activeToolCalls.
+    // Anchor the inline confirmation box to the assistant message bearing
+    // this tool call, if the thread has one — and hide that message, since
+    // it renders via activeToolCalls instead.
+    let anchored = false
     for (let i = msgs.length - 1; i >= 0; i--) {
-      if (msgs[i].role === 'assistant' && (msgs[i] as any).toolCalls?.some((c: any) => c.toolCallId === pc.toolCallId)) {
+      if (msgs[i].role === 'assistant' && (msgs[i] as any).blocks?.some((b: any) => b.kind === 'tool' && b.toolCallId === pc.toolCallId)) {
         ;(msgs[i] as any)._hidden = true
+        anchored = true
         break
       }
     }
+    pendingConfirmation.value = {
+      runId: '',
+      permission: pc.permission || pc.toolName,
+      patterns: pc.patterns ? [...pc.patterns] : [],
+      code: pc.code || input,
+      // Keep toolCallId only when an assistant message anchors it (drives
+      // the inline box). A delegated A2A confirmation's suspending turn is
+      // not persisted to the thread, so there's no anchor — blank it and
+      // the standalone confirmation card renders instead of nothing.
+      toolCallId: anchored ? pc.toolCallId : '',
+    }
   }
 
-  async function loadConversation(agentId: string) {
+  // Clear all ephemeral run state. Without this a deleted/!switched
+  // thread leaves its streaming text, active tool-call bubbles and
+  // pending confirmation on screen — e.g. after deleting the open
+  // conversation the empty-state text and a stale permission card
+  // render at the same time.
+  function resetTransient() {
+    streamingText.value = ''
+    activeToolCalls.clear()
+    streamingBlocks.value = []
+    pendingConfirmation.value = null
+    currentRunId.value = null
+    sending.value = false
+    cancelling.value = false
+  }
+
+  // Reset the message view to an empty "new conversation" state without
+  // touching the conversation list. The next sendMessage with no
+  // conversation_id mints a fresh thread server-side.
+  function resetThreadView() {
+    messages.value = []
+    hasOlder.value = false
+    hasNewer.value = false
+    newMessagesPending.value = false
+    resetTransient()
+  }
+
+  // Fetch and render one conversation's messages. Assumes the id belongs
+  // to a web thread the user owns (the server enforces this).
+  async function loadConversationById(convId: string) {
+    // Drop the previous thread's in-flight/streaming state before
+    // swapping in the new history (restorePendingConfirmation below
+    // re-establishes a gate if this thread has a suspended run).
+    resetTransient()
+    conversationId.value = convId
+    const { data: convData } = await api.get(`/api/v1/conversations/${convId}`)
+    const convResponse = fromJson(GetConversationResponseSchema, convData)
+    messages.value = enrichMessages(convResponse.messages)
+    hasOlder.value = convResponse.hasOlderMessages
+    hasNewer.value = false
+    newMessagesPending.value = false
+    if (convResponse.pendingConfirmation) {
+      restorePendingConfirmation(convResponse.pendingConfirmation, messages.value)
+    }
+    // Adopt an already-in-flight run so subsequent WS deltas
+    // (run.text_delta / run.tool_call / run.complete) survive the
+    // isActiveRun gate, and so the Cancel button is enabled. The
+    // pre-join text won't be visible (no replay of streamed deltas) —
+    // run.complete will refetch the conversation and the persisted
+    // assistant message fills in the gap.
+    if (convResponse.inFlightRunId) {
+      currentRunId.value = convResponse.inFlightRunId
+      sending.value = true
+    }
+  }
+
+  // Refresh the switcher list (web threads only — bridge/a2a are excluded
+  // server-side). Newest first so [0] is the natural default.
+  async function refreshConversations(agentId: string): Promise<ConversationInfo[]> {
     const { data } = await api.get(`/api/v1/agents/${agentId}/conversations`)
     const response = fromJson(ListConversationsResponseSchema, data)
-    // Only surface the web conversation here. Bridge conversations (telegram,
-    // etc.) live alongside it in the same list ordered by updated_at, so
-    // picking [0] would flip the UI to the bridge thread whenever someone
-    // chatted via the bot more recently than via the web.
-    const web = response.conversations.find(c => c.source === 'web')
-    if (web) {
-      conversationId.value = web.id
-      const { data: convData } = await api.get(`/api/v1/conversations/${conversationId.value}`)
-      const convResponse = fromJson(GetConversationResponseSchema, convData)
-      messages.value = enrichMessages(convResponse.messages)
-      hasOlder.value = convResponse.hasOlderMessages
-      hasNewer.value = false
-      newMessagesPending.value = false
-      // Restore pending confirmation from server if present.
-      if (convResponse.pendingConfirmation?.toolCallId) {
-        restorePendingConfirmation(convResponse.pendingConfirmation, messages.value)
-      }
+    conversations.value = response.conversations
+      .filter(c => c.source === 'web')
+      .sort((a, b) => Number(b.updatedAt?.seconds ?? 0n) - Number(a.updatedAt?.seconds ?? 0n))
+    return conversations.value
+  }
+
+  // convId pins a specific thread (sidebar click / ?c= in the URL).
+  // Omitted — or naming a thread that no longer exists — opens an empty
+  // "new conversation" view rather than resuming the most recent thread,
+  // so "New chat" and an agent's Chat button always start fresh. Past
+  // threads are reached through the sidebar.
+  async function loadConversation(agentId: string, convId?: string) {
+    boundAgentId.value = agentId
+    const web = await refreshConversations(agentId)
+    if (convId && web.some(c => c.id === convId)) {
+      await loadConversationById(convId)
     } else {
       conversationId.value = null
-      messages.value = []
-      hasOlder.value = false
-      hasNewer.value = false
-      newMessagesPending.value = false
+      resetThreadView()
+    }
+  }
+
+  // Re-fetch the active thread (and refresh the switcher list) without
+  // switching threads — for a resync, a jump-to-latest, or a slash
+  // command that inserted backend rows. Stays on the empty view when no
+  // thread is active.
+  async function reloadCurrentThread() {
+    if (boundAgentId.value) await refreshConversations(boundAgentId.value)
+    if (conversationId.value) {
+      await loadConversationById(conversationId.value)
+    } else {
+      resetThreadView()
     }
   }
 
@@ -566,44 +743,102 @@ export const useChatStore = defineStore('chat', () => {
   // banner — when the user is scrolled up in history and new agent output
   // arrives, they can click to jump back to live.
   async function jumpToLatest(agentId: string) {
-    await loadConversation(agentId)
+    boundAgentId.value = agentId
+    await reloadCurrentThread()
   }
 
   async function sendMessage(agentId: string, text: string, approved?: boolean, filePaths?: string[]) {
+    boundAgentId.value = agentId
     const isResume = approved !== undefined
+    // The run this confirmation belongs to (from the run.confirmation_required
+    // event). Sent so the backend resumes THIS exact run rather than guessing
+    // the conversation's latest suspended one — present for approve/deny and
+    // for free-text typed while a confirmation is still pending.
+    const resumeRunId = pendingConfirmation.value?.runId
     // Slash commands (/clear, /compact, ...) are handled synchronously by
     // Airlock — no run is created and no optimistic user bubble should appear.
     const isSlashCommand = !isResume && text.trim().startsWith('/')
     compactRunInFlight.value = !isResume && /^\/compact(\s|$)/.test(text.trim())
     if (compactRunInFlight.value) compactReplyBuffer.value = ''
 
+    if (isResume) {
+      // The suspended run's partial turn (assistant text + the tool call
+      // that requested confirmation) lives only in transient streaming
+      // state: run.complete is skipped while a confirmation is pending,
+      // so it was never finalized. The resume's run.started clears
+      // activeToolCalls — commit the bubble to messages first or it
+      // vanishes until a refresh repopulates it from the DB.
+      finalizeMessage()
+
+      // If the user hit Stop on this run before approving/denying, its id
+      // is in cancelledRunIds and isActiveRun() filters out every event
+      // the resumed run emits (run.started/text_delta/complete) — the
+      // backend resumes and finishes but the UI stays stuck on
+      // "(cancelled)". Approving/denying is an explicit decision to
+      // continue, so drop the cancel guard. Clearing the whole set is
+      // safe: event scoping still goes through the currentRunId check in
+      // isActiveRun, and a different old run's id can't equal the new
+      // resume run's id.
+      cancelledRunIds.clear()
+      cancelling.value = false
+      // Drop the optimistic "(cancelled)" tag cancelRun() stamped on the
+      // turn we're now resuming — it's no longer true. (Refresh wouldn't
+      // show it either; the DB never had it.)
+      for (const m of messages.value) {
+        if ((m as any)._cancelled) delete (m as any)._cancelled
+      }
+    }
+
+    // id of the optimistic user row, so the catch below can roll it back
+    // if the prompt POST fails (e.g. 409 on a stopped agent).
+    let optimisticID = ''
     if (!isResume && !isSlashCommand) {
       // Add optimistic user message for normal sends only. Skip when the
       // window is scrolled back (hasNewer=true) so we don't insert above
       // evicted history — the user will see their message after clicking
       // "jump to latest."
       if (!hasNewer.value) {
+        optimisticID = `pending-${Date.now()}`
         messages.value.push({
           $typeName: 'airlock.v1.AgentMessageInfo',
-          id: `pending-${Date.now()}`,
+          id: optimisticID,
           role: 'user',
           content: text,
-          tokensIn: 0,
-          tokensOut: 0,
           costEstimate: 0,
         } as AgentMessageInfo)
       }
       // Reset streaming state for new messages.
       streamingText.value = ''
       activeToolCalls.clear()
+      streamingBlocks.value = []
       textBlockBoundary = false
+    } else if (approved === false && text && !hasNewer.value) {
+      // Deny resume: airlock persists `text` as a source="control"
+      // message, but run.complete doesn't reload, so without an
+      // optimistic row the confirmation card just vanishes until a
+      // refresh. Mirror what the backend will store so the muted label
+      // shows immediately; loadConversation later replaces the array
+      // wholesale (no dedup needed).
+      messages.value.push({
+        $typeName: 'airlock.v1.AgentMessageInfo',
+        id: `pending-control-${Date.now()}`,
+        role: 'user',
+        source: 'control',
+        content: text,
+        costEstimate: 0,
+      } as AgentMessageInfo)
     }
 
     sending.value = true
     pendingConfirmation.value = null
 
+    // Empty/absent conversation_id starts a fresh web thread server-side;
+    // an explicit id continues that thread (multi-conversation).
+    const wasNew = !conversationId.value
     const payload: Record<string, any> = { message: text }
+    if (conversationId.value) payload.conversationId = conversationId.value
     if (approved !== undefined) payload.approved = approved
+    if (resumeRunId) payload.resumeRunId = resumeRunId
     if (filePaths?.length) payload.filePaths = filePaths
 
     try {
@@ -615,13 +850,20 @@ export const useChatStore = defineStore('chat', () => {
       // to pick up any checkpoint markers or other backend-inserted rows.
       if (!response.runId && response.commandReply) {
         sending.value = false
-        await loadConversation(agentId)
+        await reloadCurrentThread()
         return
       }
 
       currentRunId.value = response.runId
       if (response.conversationId) {
         conversationId.value = response.conversationId
+        // First message of a new thread — pull the freshly-created row
+        // (with its server-assigned title) into both the per-agent list
+        // and the global sidebar.
+        if (wasNew) {
+          await refreshConversations(agentId)
+          void useConversationsStore().refresh()
+        }
       }
 
       // Safety timeout: if run.complete/run.error never arrives (e.g., WS down),
@@ -630,18 +872,28 @@ export const useChatStore = defineStore('chat', () => {
       sendingTimeout = setTimeout(() => {
         if (sending.value) finalizeMessage()
       }, 5 * 60 * 1000)
-    } catch {
+    } catch (err) {
+      // Roll back the optimistic user row and re-throw so the view can
+      // toast the backend's message (e.g. the 409 "agent is stopped"
+      // notice) and restore the composer text.
       sending.value = false
+      if (optimisticID) {
+        messages.value = messages.value.filter(m => m.id !== optimisticID)
+      }
+      throw err
     }
   }
 
   function cleanup() {
     for (const unsub of unsubscribers) unsub()
     unsubscribers.length = 0
+    boundAgentId.value = null
     conversationId.value = null
+    conversations.value = []
     messages.value = []
     streamingText.value = ''
     activeToolCalls.clear()
+    streamingBlocks.value = []
     pendingConfirmation.value = null
     currentRunId.value = null
     sending.value = false
@@ -654,6 +906,7 @@ export const useChatStore = defineStore('chat', () => {
     conversationId,
     messages,
     streamingText,
+    streamingBlocks,
     activeToolCalls,
     pendingConfirmation,
     currentRunId,

@@ -248,8 +248,6 @@ const defaults = ref<Defaults>({
   defaultSttModel: '', defaultTtsModel: '', defaultImageGenModel: '',
   defaultEmbeddingModel: '', defaultSearchModel: '',
 })
-const publicURL = ref('')
-const agentDomain = ref('')
 
 async function loadExistingDefaults() {
   try {
@@ -272,8 +270,6 @@ async function loadExistingDefaults() {
       defaults.value.defaultImageGenModel  = pack('defaultImageGenModel', 'defaultImageGenProviderId')
       defaults.value.defaultEmbeddingModel = pack('defaultEmbeddingModel', 'defaultEmbeddingProviderId')
       defaults.value.defaultSearchModel    = pack('defaultSearchModel', 'defaultSearchProviderId')
-      publicURL.value  = resp.settings.publicUrl || ''
-      agentDomain.value = resp.settings.agentDomain || ''
     }
   } catch { /* best-effort */ }
 }
@@ -324,8 +320,6 @@ async function finish() {
     const search = split('defaultSearchModel')
     const info: SystemSettingsInfo = {
       $typeName: 'airlock.v1.SystemSettingsInfo',
-      publicUrl: publicURL.value,
-      agentDomain: agentDomain.value,
       defaultBuildModel:          build.modelName,
       defaultBuildProviderId:     build.providerRowID,
       defaultExecModel:           exec.modelName,

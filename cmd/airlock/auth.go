@@ -76,4 +76,3 @@ func runAuthUnlock(args []string) {
 	}
 	fmt.Printf("cleared %d lockout(s) and %d failure record(s) for %s\n", lockouts, failures, email)
 }
-

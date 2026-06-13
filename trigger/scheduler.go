@@ -2,6 +2,7 @@ package trigger
 
 import (
 	"context"
+	"errors"
 	"io"
 	"sync"
 	"time"
@@ -124,6 +125,17 @@ func (s *Scheduler) fireCron(agentID, cronID uuid.UUID, cronName string, timeout
 
 	rc, _, err := s.dispatcher.ForwardCron(ctx, agentID, cronName, timeout)
 	if err != nil {
+		// A stopped / unbuilt agent is an expected state, not a fault —
+		// the cron simply doesn't fire until the agent is runnable again.
+		// Log at info so it doesn't trip error alerting.
+		if errors.Is(err, ErrAgentStopped) || errors.Is(err, ErrAgentNoImage) {
+			s.logger.Info("skipping cron for non-runnable agent",
+				zap.String("agent", agentID.String()),
+				zap.String("cron", cronName),
+				zap.Error(err),
+			)
+			return
+		}
 		s.logger.Error("cron fire failed",
 			zap.String("agent", agentID.String()),
 			zap.String("cron", cronName),

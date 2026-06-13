@@ -14,25 +14,38 @@ import (
 const createAgentBuild = `-- name: CreateAgentBuild :one
 INSERT INTO agent_builds (
     agent_id, type, status, instructions,
-    source_ref, image_ref, sol_log, docker_log, log_seq, error_message
+    source_ref, image_ref, sol_log, docker_log, log_seq, error_message,
+    llm_calls, llm_tokens_in, llm_tokens_out, llm_cost_estimate,
+    rollback_target_id, sdk_version
 )
 VALUES (
     $1, $2, 'building', $3,
-    '', '', '', '', 0, ''
+    '', '', '', '', 0, '',
+    0, 0, 0, 0,
+    $4, ''
 )
-RETURNING id, agent_id, type, status, instructions, source_ref, image_ref, sol_log, docker_log, log_seq, error_message, started_at, finished_at
+RETURNING id, agent_id, type, status, instructions, source_ref, image_ref, sol_log, docker_log, log_seq, error_message, started_at, finished_at, llm_calls, llm_tokens_in, llm_tokens_out, llm_cost_estimate, rollback_target_id, sdk_version
 `
 
 type CreateAgentBuildParams struct {
-	AgentID      pgtype.UUID `json:"agent_id"`
-	Type         string      `json:"type"`
-	Instructions string      `json:"instructions"`
+	AgentID          pgtype.UUID `json:"agent_id"`
+	Type             string      `json:"type"`
+	Instructions     string      `json:"instructions"`
+	RollbackTargetID pgtype.UUID `json:"rollback_target_id"`
 }
 
 // Initial-row INSERT. Status starts 'building'; output fields start empty
-// and are filled by UpdateAgentBuildComplete / UpdateAgentBuildLogs.
+// and are filled by UpdateAgentBuildComplete / UpdateAgentBuildLogs. LLM
+// telemetry starts at 0 (no codegen spend yet) — set explicitly per the
+// "no fake defaults" rule, mirroring CreateRun; UpdateBuildLLMStats fills
+// it from the llm_usage ledger when codegen finishes.
 func (q *Queries) CreateAgentBuild(ctx context.Context, arg CreateAgentBuildParams) (AgentBuild, error) {
-	row := q.db.QueryRow(ctx, createAgentBuild, arg.AgentID, arg.Type, arg.Instructions)
+	row := q.db.QueryRow(ctx, createAgentBuild,
+		arg.AgentID,
+		arg.Type,
+		arg.Instructions,
+		arg.RollbackTargetID,
+	)
 	var i AgentBuild
 	err := row.Scan(
 		&i.ID,
@@ -48,12 +61,18 @@ func (q *Queries) CreateAgentBuild(ctx context.Context, arg CreateAgentBuildPara
 		&i.ErrorMessage,
 		&i.StartedAt,
 		&i.FinishedAt,
+		&i.LlmCalls,
+		&i.LlmTokensIn,
+		&i.LlmTokensOut,
+		&i.LlmCostEstimate,
+		&i.RollbackTargetID,
+		&i.SdkVersion,
 	)
 	return i, err
 }
 
 const getAgentBuild = `-- name: GetAgentBuild :one
-SELECT id, agent_id, type, status, instructions, source_ref, image_ref, sol_log, docker_log, log_seq, error_message, started_at, finished_at FROM agent_builds WHERE id = $1
+SELECT id, agent_id, type, status, instructions, source_ref, image_ref, sol_log, docker_log, log_seq, error_message, started_at, finished_at, llm_calls, llm_tokens_in, llm_tokens_out, llm_cost_estimate, rollback_target_id, sdk_version FROM agent_builds WHERE id = $1
 `
 
 func (q *Queries) GetAgentBuild(ctx context.Context, id pgtype.UUID) (AgentBuild, error) {
@@ -73,12 +92,20 @@ func (q *Queries) GetAgentBuild(ctx context.Context, id pgtype.UUID) (AgentBuild
 		&i.ErrorMessage,
 		&i.StartedAt,
 		&i.FinishedAt,
+		&i.LlmCalls,
+		&i.LlmTokensIn,
+		&i.LlmTokensOut,
+		&i.LlmCostEstimate,
+		&i.RollbackTargetID,
+		&i.SdkVersion,
 	)
 	return i, err
 }
 
 const listAgentBuildsByAgent = `-- name: ListAgentBuildsByAgent :many
-SELECT id, agent_id, type, status, instructions, error_message, source_ref, image_ref, started_at, finished_at
+SELECT id, agent_id, type, status, instructions, error_message, source_ref, image_ref, started_at, finished_at,
+       llm_calls, llm_tokens_in, llm_tokens_out, llm_cost_estimate,
+       rollback_target_id, sdk_version
 FROM agent_builds
 WHERE agent_id = $1
 ORDER BY started_at DESC
@@ -86,16 +113,22 @@ LIMIT 50
 `
 
 type ListAgentBuildsByAgentRow struct {
-	ID           pgtype.UUID        `json:"id"`
-	AgentID      pgtype.UUID        `json:"agent_id"`
-	Type         string             `json:"type"`
-	Status       string             `json:"status"`
-	Instructions string             `json:"instructions"`
-	ErrorMessage string             `json:"error_message"`
-	SourceRef    string             `json:"source_ref"`
-	ImageRef     string             `json:"image_ref"`
-	StartedAt    pgtype.Timestamptz `json:"started_at"`
-	FinishedAt   pgtype.Timestamptz `json:"finished_at"`
+	ID               pgtype.UUID        `json:"id"`
+	AgentID          pgtype.UUID        `json:"agent_id"`
+	Type             string             `json:"type"`
+	Status           string             `json:"status"`
+	Instructions     string             `json:"instructions"`
+	ErrorMessage     string             `json:"error_message"`
+	SourceRef        string             `json:"source_ref"`
+	ImageRef         string             `json:"image_ref"`
+	StartedAt        pgtype.Timestamptz `json:"started_at"`
+	FinishedAt       pgtype.Timestamptz `json:"finished_at"`
+	LlmCalls         int32              `json:"llm_calls"`
+	LlmTokensIn      int32              `json:"llm_tokens_in"`
+	LlmTokensOut     int32              `json:"llm_tokens_out"`
+	LlmCostEstimate  float64            `json:"llm_cost_estimate"`
+	RollbackTargetID pgtype.UUID        `json:"rollback_target_id"`
+	SdkVersion       string             `json:"sdk_version"`
 }
 
 func (q *Queries) ListAgentBuildsByAgent(ctx context.Context, agentID pgtype.UUID) ([]ListAgentBuildsByAgentRow, error) {
@@ -118,6 +151,12 @@ func (q *Queries) ListAgentBuildsByAgent(ctx context.Context, agentID pgtype.UUI
 			&i.ImageRef,
 			&i.StartedAt,
 			&i.FinishedAt,
+			&i.LlmCalls,
+			&i.LlmTokensIn,
+			&i.LlmTokensOut,
+			&i.LlmCostEstimate,
+			&i.RollbackTargetID,
+			&i.SdkVersion,
 		); err != nil {
 			return nil, err
 		}
@@ -148,8 +187,9 @@ UPDATE agent_builds SET
     error_message = COALESCE($2, ''),
     source_ref = COALESCE($3, ''),
     image_ref = COALESCE($4, ''),
+    sdk_version = COALESCE($5, ''),
     finished_at = now()
-WHERE id = $5
+WHERE id = $6
 `
 
 type UpdateAgentBuildCompleteParams struct {
@@ -157,6 +197,7 @@ type UpdateAgentBuildCompleteParams struct {
 	ErrorMessage string      `json:"error_message"`
 	SourceRef    string      `json:"source_ref"`
 	ImageRef     string      `json:"image_ref"`
+	SdkVersion   string      `json:"sdk_version"`
 	ID           pgtype.UUID `json:"id"`
 }
 
@@ -166,6 +207,7 @@ func (q *Queries) UpdateAgentBuildComplete(ctx context.Context, arg UpdateAgentB
 		arg.ErrorMessage,
 		arg.SourceRef,
 		arg.ImageRef,
+		arg.SdkVersion,
 		arg.ID,
 	)
 	return err
@@ -189,5 +231,33 @@ func (q *Queries) UpdateAgentBuildLogs(ctx context.Context, arg UpdateAgentBuild
 		arg.LogSeq,
 		arg.ID,
 	)
+	return err
+}
+
+const updateBuildLLMStats = `-- name: UpdateBuildLLMStats :exec
+UPDATE agent_builds
+SET llm_calls = stats.calls,
+    llm_tokens_in = stats.tokens_in,
+    llm_tokens_out = stats.tokens_out,
+    llm_cost_estimate = stats.cost
+FROM (
+    SELECT
+        COUNT(*)::integer                     AS calls,
+        COALESCE(SUM(tokens_in), 0)::integer  AS tokens_in,
+        COALESCE(SUM(tokens_out), 0)::integer AS tokens_out,
+        COALESCE(SUM(cost_total), 0)::float8  AS cost
+    FROM llm_usage
+    WHERE build_id = $1
+) stats
+WHERE agent_builds.id = $1
+`
+
+// Build-side parity with UpdateRunLLMStats: aggregates the build's
+// token/call/cost totals from the llm_usage ledger (rows the build
+// codegen runner wrote with build_id; cost already computed per-row).
+// Idempotent — recomputes the SUM each call. A build with no ledger
+// rows zeroes out (correct — no codegen spend recorded).
+func (q *Queries) UpdateBuildLLMStats(ctx context.Context, buildID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, updateBuildLLMStats, buildID)
 	return err
 }

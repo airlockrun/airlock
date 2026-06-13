@@ -3,22 +3,25 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
-	"unicode/utf8"
 
-	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 	"github.com/airlockrun/agentsdk"
-	"github.com/airlockrun/airlock/attachref"
+	"github.com/airlockrun/airlock/agentapi"
 	"github.com/airlockrun/airlock/auth"
+	"github.com/airlockrun/airlock/authz"
 	"github.com/airlockrun/airlock/convert"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
+	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 	promptpkg "github.com/airlockrun/airlock/prompt"
 	"github.com/airlockrun/airlock/realtime"
+	"github.com/airlockrun/airlock/service"
+	convsvc "github.com/airlockrun/airlock/service/conversations"
+	runssvc "github.com/airlockrun/airlock/service/runs"
 	"github.com/airlockrun/airlock/storage"
 	"github.com/airlockrun/airlock/trigger"
 	"github.com/airlockrun/sol/provider"
@@ -28,6 +31,8 @@ import (
 )
 
 type conversationsHandler struct {
+	svc         *convsvc.Service
+	runsSvc     *runssvc.Service
 	db          *db.DB
 	dispatcher  *trigger.Dispatcher
 	promptProxy *trigger.PromptProxy
@@ -38,76 +43,84 @@ type conversationsHandler struct {
 	logger      *zap.Logger
 }
 
+func writeConvError(w http.ResponseWriter, err error, fallback string) {
+	status := service.HTTPStatus(err)
+	switch {
+	case errors.Is(err, service.ErrInvalidInput):
+		if m := err.Error(); m != "invalid input" {
+			writeError(w, status, m)
+			return
+		}
+		writeError(w, status, "invalid input")
+	case errors.Is(err, service.ErrUnauthorized):
+		writeError(w, status, "missing user identity")
+	case errors.Is(err, service.ErrNotFound):
+		writeError(w, status, "conversation not found")
+	default:
+		writeError(w, status, fallback)
+	}
+}
+
 // CreateConversation handles POST /api/v1/agents/{agentID}/conversations.
-// DM-only: upserts on (agent_id, user_id).
+// Web is multi-conversation: every call mints a fresh thread the client
+// then addresses by id.
 func (h *conversationsHandler) CreateConversation(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
 	agentID, err := parseUUID(chi.URLParam(r, "agentID"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid agent ID")
 		return
 	}
-
-	userID := auth.UserIDFromContext(ctx)
-	if userID == uuid.Nil {
-		writeError(w, http.StatusUnauthorized, "missing user identity")
-		return
-	}
-
 	var req airlockv1.CreateConversationRequest
 	if err := decodeProto(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-
-	q := dbq.New(h.db.Pool())
-	conv, err := q.GetOrCreateConversation(ctx, dbq.GetOrCreateConversationParams{
-		AgentID: toPgUUID(agentID),
-		UserID:  toPgUUID(userID),
-		Source:  "web",
-		Title:   req.Title,
-	})
+	p := principalFromRequest(r)
+	conv, err := h.svc.Create(r.Context(), p, agentID, req.Title)
 	if err != nil {
-		h.logger.Error("create conversation", zap.Error(err))
-		writeError(w, http.StatusInternalServerError, "failed to create conversation")
+		writeConvError(w, err, "failed to create conversation")
 		return
 	}
-
 	writeProto(w, http.StatusCreated, &airlockv1.CreateConversationResponse{
-		Conversation: conversationToProto(rowToConversation(conv)),
+		Conversation: convert.ConversationToProto(conv),
 	})
 }
 
 // ListConversations handles GET /api/v1/agents/{agentID}/conversations.
 // DM-only: filters by user_id from JWT (returns at most one conversation).
 func (h *conversationsHandler) ListConversations(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
 	agentID, err := parseUUID(chi.URLParam(r, "agentID"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid agent ID")
 		return
 	}
-
-	userID := auth.UserIDFromContext(ctx)
-	if userID == uuid.Nil {
-		writeError(w, http.StatusUnauthorized, "missing user identity")
-		return
-	}
-
-	q := dbq.New(h.db.Pool())
-	convs, err := q.ListConversationsByAgent(ctx, dbq.ListConversationsByAgentParams{
-		AgentID: toPgUUID(agentID),
-		UserID:  toPgUUID(userID),
-	})
+	p := principalFromRequest(r)
+	convs, err := h.svc.ListByAgent(r.Context(), p, agentID)
 	if err != nil {
-		h.logger.Error("list conversations", zap.Error(err))
-		writeError(w, http.StatusInternalServerError, "failed to list conversations")
+		writeConvError(w, err, "failed to list conversations")
 		return
 	}
-
 	out := make([]*airlockv1.ConversationInfo, len(convs))
 	for i, c := range convs {
-		out[i] = conversationToProto(c)
+		out[i] = convert.ConversationToProto(c)
+	}
+	writeProto(w, http.StatusOK, &airlockv1.ListConversationsResponse{Conversations: out})
+}
+
+// ListAllConversations handles GET /api/v1/conversations — every web
+// conversation the user owns across all agents, newest first. Backs the
+// global sidebar list; each ConversationInfo carries agent_id so the UI
+// labels rows with the agent's name.
+func (h *conversationsHandler) ListAllConversations(w http.ResponseWriter, r *http.Request) {
+	p := principalFromRequest(r)
+	convs, err := h.svc.ListAll(r.Context(), p)
+	if err != nil {
+		writeConvError(w, err, "failed to list conversations")
+		return
+	}
+	out := make([]*airlockv1.ConversationInfo, len(convs))
+	for i, c := range convs {
+		out[i] = convert.ConversationToProto(c)
 	}
 	writeProto(w, http.StatusOK, &airlockv1.ListConversationsResponse{Conversations: out})
 }
@@ -120,65 +133,31 @@ func (h *conversationsHandler) GetConversation(w http.ResponseWriter, r *http.Re
 		writeError(w, http.StatusBadRequest, "invalid conversation ID")
 		return
 	}
-
-	q := dbq.New(h.db.Pool())
-	conv, err := q.GetConversationByID(ctx, toPgUUID(convID))
+	det, err := h.svc.Get(ctx, principalFromRequest(r), convID)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "conversation not found")
+		writeConvError(w, err, "failed to load conversation")
 		return
 	}
-
-	msgs, err := q.ListMessagesByConversation(ctx, toPgUUID(convID))
-	if err != nil {
-		h.logger.Error("list messages", zap.Error(err))
-		writeError(w, http.StatusInternalServerError, "failed to list messages")
-		return
-	}
-
-	// Query overfetches by one so we can report has_older_messages without a
-	// separate COUNT. When the extra row is present (the oldest of the 101
-	// newest), drop it and flag that more history exists older than this page.
-	hasOlder := len(msgs) > 100
-	if hasOlder {
-		msgs = msgs[1:]
-	}
-
-	msgInfos := make([]*airlockv1.AgentMessageInfo, len(msgs))
-	for i, m := range msgs {
+	msgInfos := make([]*airlockv1.AgentMessageInfo, len(det.Messages))
+	for i, m := range det.Messages {
 		msgInfos[i] = messageToProto(ctx, h.s3, h.logger, m)
 	}
-
 	resp := &airlockv1.GetConversationResponse{
-		Conversation:       conversationToProto(conv),
-		Messages:           msgInfos,
-		HasOlderMessages:   hasOlder,
+		Conversation:     convert.ConversationToProto(det.Conversation),
+		Messages:         msgInfos,
+		HasOlderMessages: det.HasOlderMessages,
+		InFlightRunId:    det.InFlightRunID,
 	}
-
-	// Check for a suspended run with pending tool calls.
-	if suspendedRun, err := q.GetLatestSuspendedRun(ctx, conv.AgentID); err == nil {
-		var checkpoint struct {
-			SuspensionContext struct {
-				PendingToolCalls []struct {
-					ID    string          `json:"id"`
-					Name  string          `json:"name"`
-					Input json.RawMessage `json:"input"`
-				} `json:"pendingToolCalls"`
-			} `json:"suspensionContext"`
-		}
-		if suspendedRun.Checkpoint != nil {
-			if err := json.Unmarshal(suspendedRun.Checkpoint, &checkpoint); err == nil {
-				if pcs := checkpoint.SuspensionContext.PendingToolCalls; len(pcs) > 0 {
-					pc := pcs[0]
-					resp.PendingConfirmation = &airlockv1.PendingConfirmation{
-						ToolCallId: pc.ID,
-						ToolName:   pc.Name,
-						Input:      string(pc.Input),
-					}
-				}
-			}
+	if det.PendingConfirmation != nil {
+		resp.PendingConfirmation = &airlockv1.PendingConfirmation{
+			ToolCallId: det.PendingConfirmation.ToolCallID,
+			ToolName:   det.PendingConfirmation.ToolName,
+			Permission: det.PendingConfirmation.Permission,
+			Patterns:   det.PendingConfirmation.Patterns,
+			Code:       det.PendingConfirmation.Code,
+			Input:      det.PendingConfirmation.Input,
 		}
 	}
-
 	writeProto(w, http.StatusOK, resp)
 }
 
@@ -194,79 +173,22 @@ func (h *conversationsHandler) ListConversationMessages(w http.ResponseWriter, r
 		writeError(w, http.StatusBadRequest, "invalid conversation ID")
 		return
 	}
-
-	before := r.URL.Query().Get("before")
-	after := r.URL.Query().Get("after")
-	if (before == "") == (after == "") {
-		writeError(w, http.StatusBadRequest, "exactly one of before or after is required")
+	page, err := h.svc.ListMessages(ctx, convID,
+		r.URL.Query().Get("before"),
+		r.URL.Query().Get("after"),
+		r.URL.Query().Get("limit"),
+	)
+	if err != nil {
+		writeConvError(w, err, "failed to list messages")
 		return
 	}
-
-	limitStr := r.URL.Query().Get("limit")
-	limit := int32(100)
-	if limitStr != "" {
-		if n, err := strconv.Atoi(limitStr); err == nil && n > 0 && n <= 500 {
-			limit = int32(n)
-		}
-	}
-	// Overfetch by one so we can report has_more without a second query.
-	limit++
-
-	q := dbq.New(h.db.Pool())
-	var msgs []dbq.AgentMessage
-	if before != "" {
-		seq, err := strconv.ParseInt(before, 10, 64)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, "invalid before seq")
-			return
-		}
-		msgs, err = q.ListMessagesBackward(ctx, dbq.ListMessagesBackwardParams{
-			ConversationID: toPgUUID(convID),
-			Before:         seq,
-			Lim:            limit,
-		})
-		if err != nil {
-			h.logger.Error("list messages backward", zap.Error(err))
-			writeError(w, http.StatusInternalServerError, "failed to list messages")
-			return
-		}
-	} else {
-		seq, err := strconv.ParseInt(after, 10, 64)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, "invalid after seq")
-			return
-		}
-		msgs, err = q.ListMessagesForward(ctx, dbq.ListMessagesForwardParams{
-			ConversationID: toPgUUID(convID),
-			After:          seq,
-			Lim:            limit,
-		})
-		if err != nil {
-			h.logger.Error("list messages forward", zap.Error(err))
-			writeError(w, http.StatusInternalServerError, "failed to list messages")
-			return
-		}
-	}
-
-	hasMore := int32(len(msgs)) >= limit
-	if hasMore {
-		// Drop the overfetched row. For backward we trim the oldest (first
-		// in the chronological slice); for forward we trim the newest (last).
-		if before != "" {
-			msgs = msgs[1:]
-		} else {
-			msgs = msgs[:len(msgs)-1]
-		}
-	}
-
-	msgInfos := make([]*airlockv1.AgentMessageInfo, len(msgs))
-	for i, m := range msgs {
+	msgInfos := make([]*airlockv1.AgentMessageInfo, len(page.Messages))
+	for i, m := range page.Messages {
 		msgInfos[i] = messageToProto(ctx, h.s3, h.logger, m)
 	}
-
 	writeProto(w, http.StatusOK, &airlockv1.PaginatedMessagesResponse{
 		Messages: msgInfos,
-		HasMore:  hasMore,
+		HasMore:  page.HasMore,
 	})
 }
 
@@ -275,55 +197,70 @@ func (h *conversationsHandler) ListConversationMessages(w http.ResponseWriter, r
 // conversation's messages referenced. Mirrors how SessionCompact handles
 // orphaned llm/ blobs when it advances a checkpoint.
 func (h *conversationsHandler) DeleteConversation(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
 	convID, err := parseUUID(chi.URLParam(r, "convID"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid conversation ID")
 		return
 	}
-
-	q := dbq.New(h.db.Pool())
-
-	// Resolve agent_id so we can reconstruct canonical S3 keys. Missing row
-	// is a real 404 — the subsequent DB delete would fail anyway.
-	conv, err := q.GetConversationByID(ctx, toPgUUID(convID))
-	if err != nil {
-		writeError(w, http.StatusNotFound, "conversation not found")
+	p := principalFromRequest(r)
+	if err := h.svc.Delete(r.Context(), p, convID); err != nil {
+		writeConvError(w, err, "failed to delete conversation")
 		return
 	}
-	agentID := convert.PgUUIDToString(conv.AgentID)
-
-	// Gather all attachment keys from every message in this conversation.
-	// Failures here are non-fatal — log and proceed with the DB delete so
-	// the user's action isn't blocked by a best-effort cleanup.
-	if rows, listErr := q.ListAllMessagesByConversation(ctx, toPgUUID(convID)); listErr != nil {
-		h.logger.Warn("delete conversation cleanup: list messages failed", zap.Error(listErr))
-	} else {
-		seen := make(map[string]struct{})
-		var keys []string
-		for _, m := range rows {
-			if len(m.Parts) == 0 {
-				continue
-			}
-			for _, k := range ExtractCanonicalKeys(m.Parts, agentID) {
-				if _, dup := seen[k]; dup {
-					continue
-				}
-				seen[k] = struct{}{}
-				keys = append(keys, k)
-			}
-		}
-		if len(keys) > 0 {
-			attachref.ScheduleDelete(ctx, h.s3, h.logger, keys)
-		}
-	}
-
-	if err := q.DeleteConversation(ctx, toPgUUID(convID)); err != nil {
-		writeError(w, http.StatusNotFound, "conversation not found")
-		return
-	}
-
 	w.WriteHeader(http.StatusNoContent)
+}
+
+const (
+	// resumeWaitTimeout bounds how long a confirmation resume waits for the
+	// agent's async /run/complete to mark the run suspended. The run streams
+	// its confirmation event to the UI before that write lands, so an approval
+	// can arrive a few ms ahead of the status flip — wait it out rather than
+	// dropping the grant and orphaning the run.
+	resumeWaitTimeout  = 10 * time.Second
+	resumeWaitInterval = 100 * time.Millisecond
+)
+
+// awaitSuspendedRun resolves the run a confirmation response names, scoped to
+// this conversation, tolerating the race where the approval beats the agent's
+// suspend write. Returns an error (surfaced as 409 → a UI toast) if the run
+// belongs elsewhere, has already finished, or never suspends before the
+// deadline. Validating trigger_ref == this web conversation also rejects
+// resuming a sibling-delegated (source='a2a') suspension on the same agent.
+func (h *conversationsHandler) awaitSuspendedRun(ctx context.Context, q *dbq.Queries, runIDStr string, conv dbq.AgentConversation, agentID uuid.UUID) (dbq.Run, error) {
+	runID, err := parseUUID(runIDStr)
+	if err != nil {
+		return dbq.Run{}, errors.New("invalid resume_run_id")
+	}
+	convIDStr := convert.PgUUIDToString(conv.ID)
+	deadline := time.Now().Add(resumeWaitTimeout)
+	for {
+		// airlockvet:allow-dbq reason: polling lookup inside Prompt's resume flow; caller already verified conversation ownership via h.ownedConversation
+		run, err := q.GetRunByID(ctx, toPgUUID(runID))
+		if err != nil {
+			return dbq.Run{}, errors.New("run not found")
+		}
+		if uuid.UUID(run.AgentID.Bytes) != agentID || run.TriggerType != "prompt" || run.TriggerRef != convIDStr {
+			return dbq.Run{}, errors.New("run does not belong to this conversation")
+		}
+		switch run.Status {
+		case "suspended":
+			return run, nil
+		case "running":
+			// Still in flight — the suspend write hasn't landed yet (or it
+			// won't). Wait until the deadline, then give up.
+			if time.Now().After(deadline) {
+				return dbq.Run{}, errors.New("run did not suspend in time; try again")
+			}
+			select {
+			case <-ctx.Done():
+				return dbq.Run{}, ctx.Err()
+			case <-time.After(resumeWaitInterval):
+			}
+		default:
+			// success / error / failed / cancelled — already terminal.
+			return dbq.Run{}, errors.New("run already finished; nothing to confirm")
+		}
+	}
 }
 
 // Prompt handles POST /api/v1/agents/{agentID}/prompt — streams NDJSON.
@@ -353,17 +290,41 @@ func (h *conversationsHandler) Prompt(w http.ResponseWriter, r *http.Request) {
 
 	q := dbq.New(h.db.Pool())
 
-	// Resolve or create conversation — DM-only: one per (agent, user).
-	conv, err := q.GetOrCreateConversation(ctx, dbq.GetOrCreateConversationParams{
-		AgentID: toPgUUID(agentID),
-		UserID:  toPgUUID(userID),
-		Source:  "web",
-		Title:   truncate(req.Message, 100),
-	})
-	if err != nil {
-		h.logger.Error("create conversation", zap.Error(err))
-		writeError(w, http.StatusInternalServerError, "failed to create conversation")
-		return
+	// Resolve the target conversation. A conversation_id addresses an
+	// existing web thread (multi-conversation); it must belong to this
+	// agent, be owned by this user, and be a web thread — never a
+	// bridge/a2a row reachable by id. Empty conversation_id starts a new
+	// web thread (the "new chat" affordance / first message).
+	var conv dbq.AgentConversation
+	if req.ConversationId != "" {
+		cid, perr := parseUUID(req.ConversationId)
+		if perr != nil {
+			writeError(w, http.StatusBadRequest, "invalid conversation ID")
+			return
+		}
+		// airlockvet:allow-dbq reason: ownership enforced inline below (agent+user+source=web) before returning the row
+		existing, gerr := q.GetConversationByID(ctx, toPgUUID(cid))
+		if gerr != nil ||
+			uuid.UUID(existing.AgentID.Bytes) != agentID ||
+			!existing.UserID.Valid || uuid.UUID(existing.UserID.Bytes) != userID ||
+			existing.Source != "web" {
+			writeError(w, http.StatusNotFound, "conversation not found")
+			return
+		}
+		conv = existing
+	} else {
+		// airlockvet:allow-dbq reason: new-thread create on a Prompt the caller already has access to (resolved upstream)
+		created, cerr := q.CreateWebConversation(ctx, dbq.CreateWebConversationParams{
+			AgentID: toPgUUID(agentID),
+			UserID:  toPgUUID(userID),
+			Title:   truncate(req.Message, 100),
+		})
+		if cerr != nil {
+			h.logger.Error("create conversation", zap.Error(cerr))
+			writeError(w, http.StatusInternalServerError, "failed to create conversation")
+			return
+		}
+		conv = created
 	}
 	convID := conv.ID
 	convIDStr := convert.PgUUIDToString(convID)
@@ -373,9 +334,10 @@ func (h *conversationsHandler) Prompt(w http.ResponseWriter, r *http.Request) {
 	// and the client learns about it via a populated command_reply.
 	// `/compact` still triggers an agent run but with ForceCompact=true, so
 	// we fall through to the normal forward-to-agent path.
-	access := trigger.ResolveAgentAccess(ctx, q, agentID, userID)
+	access := principalFromRequest(r).EffectiveAgentAccess(ctx, q, agentID)
 	var forceCompact bool
-	if cmd, err := trigger.TrySlashCommand(ctx, q, h.dispatcher, convID, agentID, access, req.Message, h.logger); err != nil {
+	slashConv := trigger.NewAgentSlashConv(q, h.dispatcher, h.logger)
+	if cmd, err := trigger.TrySlashCommand(ctx, slashConv, convID, access, req.Message); err != nil {
 		h.logger.Error("slash command failed", zap.Error(err))
 		writeError(w, http.StatusInternalServerError, "command failed")
 		return
@@ -406,7 +368,7 @@ func (h *conversationsHandler) Prompt(w http.ResponseWriter, r *http.Request) {
 			filename = origFilename
 		}
 		fileInfos = append(fileInfos, agentsdk.FileInfo{
-			Path:        filePath,
+			Path:        agentsdk.FilePath(filePath),
 			Filename:    filename,
 			ContentType: ct,
 			Size:        info.Size,
@@ -430,14 +392,14 @@ func (h *conversationsHandler) Prompt(w http.ResponseWriter, r *http.Request) {
 			}
 			parts = append(parts, agentsdk.DisplayPart{
 				Type:     partType,
-				Source:   "agents/" + agentID.String() + "/" + fi.Path,
+				Source:   "agents/" + agentID.String() + "/" + string(fi.Path),
 				Filename: fi.Filename,
 				MimeType: fi.ContentType,
 			})
 		}
-		if err := postToConversation(ctx, postDeps{
+		if err := agentapi.PostToConversation(ctx, agentapi.PostDeps{
 			DB: h.db, PubSub: h.pubsub, BridgeMgr: h.bridgeMgr, S3: h.s3, Logger: h.logger,
-		}, postOpts{
+		}, agentapi.PostOpts{
 			AgentID:        agentID,
 			ConversationID: pgUUID(convID),
 			Role:           "user",
@@ -447,12 +409,21 @@ func (h *conversationsHandler) Prompt(w http.ResponseWriter, r *http.Request) {
 		}); err != nil {
 			h.logger.Warn("post upload echo failed", zap.Error(err))
 		}
+
+		// Attached-files manifest — the single canonical producer. Lands
+		// pre-dispatch so it sorts right before the user's turn; sol's
+		// same-role coalescer folds the two user messages for providers
+		// that reject consecutive user turns.
+		if err := trigger.PostFilesManifest(ctx, q, convID, fileInfos); err != nil {
+			h.logger.Warn("post files manifest failed", zap.Error(err))
+		}
 	}
 
 	// Look up the agent row once — used for both model modalities and
 	// access-filtered extra system prompts.
 	var modalities []string
 	var extraSystemPrompt string
+	// airlockvet:allow-dbq reason: agent row read for modality + prompt rendering; access is gated by ownedConversation upstream
 	if ag, err := q.GetAgentByID(ctx, toPgUUID(agentID)); err == nil {
 		if ag.ExecModel != "" {
 			provID, modID := provider.ParseModel(ag.ExecModel)
@@ -473,6 +444,7 @@ func (h *conversationsHandler) Prompt(w http.ResponseWriter, r *http.Request) {
 		ExtraSystemPrompt:   extraSystemPrompt,
 		ForceCompact:        forceCompact,
 		CallerAccess:        access,
+		DirectTools:         access == agentsdk.AccessPublic,
 	}
 	if forceCompact {
 		// /compact doesn't carry a user-authored text; Sol produces the
@@ -482,20 +454,47 @@ func (h *conversationsHandler) Prompt(w http.ResponseWriter, r *http.Request) {
 	// Serialize prompts per conversation — second prompt blocks until first completes.
 	h.convLocks.Lock(convIDStr)
 
-	// Check for suspended run inside the lock to prevent races where two
-	// concurrent requests both find the same suspended run.
-	if suspendedRun, err := q.GetLatestSuspendedRun(ctx, toPgUUID(agentID)); err == nil {
-		input.ResumeRunID = convert.PgUUIDToString(suspendedRun.ID)
+	// A confirmation response — or a free-text message typed while a
+	// confirmation is pending — carries the exact run it resolves: the UI
+	// took the id from the confirmation event. Resume THAT run rather than
+	// guessing the conversation's latest suspended one. awaitSuspendedRun
+	// also tolerates the race where the approval beats the agent's async
+	// suspend write. An explicit approve/deny must name its run.
+	if req.ResumeRunId != "" {
+		run, werr := h.awaitSuspendedRun(ctx, q, req.ResumeRunId, conv, agentID)
+		if werr != nil {
+			h.convLocks.Unlock(convIDStr)
+			writeError(w, http.StatusConflict, werr.Error())
+			return
+		}
+		input.ResumeRunID = req.ResumeRunId
 		input.Approved = req.Approved
-		_ = q.ResolveSuspendedRun(ctx, suspendedRun.ID)
+		// On deny, sol persists the re-reason nudge ("Rejected by user.")
+		// as a user message. Tag it source="control" so the UI renders a
+		// muted label instead of a fake user bubble (a control signal for
+		// the model, not something the human typed). Only the deny path
+		// writes a role=user message, so a run-scoped source is exact.
+		if req.Approved != nil && !*req.Approved {
+			input.Source = "control"
+		}
+		// airlockvet:allow-dbq reason: marks the awaited suspended run resolved; caller already proven owner of the conversation
+		_ = q.ResolveSuspendedRun(ctx, run.ID)
+	} else if req.Approved != nil {
+		h.convLocks.Unlock(convIDStr)
+		writeError(w, http.StatusBadRequest, "resume_run_id is required for a confirmation response")
+		return
 	}
 
 	// Forward to agent container — no bridge_id for web.
 	// Use background context: the response body must outlive this HTTP request
 	// since we stream it in a goroutine after returning 200 to the client.
-	rc, runID, err := h.dispatcher.ForwardPrompt(context.Background(), agentID, input, nil)
+	rc, runID, err := h.dispatcher.ForwardPrompt(context.Background(), agentID, input, nil, &userID)
 	if err != nil {
 		h.convLocks.Unlock(convIDStr)
+		if status, msg, ok := notRunnableResponse(err); ok {
+			writeError(w, status, msg)
+			return
+		}
 		h.logger.Error("forward prompt", zap.Error(err))
 		writeError(w, http.StatusInternalServerError, "failed to forward to agent")
 		return
@@ -513,33 +512,14 @@ func (h *conversationsHandler) Prompt(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		defer h.convLocks.Unlock(convIDStr)
 		bgCtx := context.Background()
-		publishRunEvents(bgCtx, rc, h.pubsub, agentID, runID, convIDStr, h.logger)
+		agentapi.PublishRunEvents(bgCtx, rc, h.pubsub, h.db.Pool(), agentID, runID, convIDStr, userID.String(), nil, h.logger)
 
-		// Fallback status when the agent never wrote its own terminal
-		// status (e.g. stuck in an infinite run_js loop, container died).
-		// UpdateRunStatus has a CAS guard (WHERE status='running'), so the
-		// agent's authoritative success/error/tool_errors write — when it
-		// happens — wins this race. "timeout" is the meaningful value when
-		// nobody else wrote: the stream ended without a terminal event.
-		bgQ := dbq.New(h.db.Pool())
-		if err := bgQ.UpdateRunStatus(bgCtx, dbq.UpdateRunStatusParams{
-			ID:     toPgUUID(runID),
-			Status: "timeout",
-		}); err != nil {
-			h.logger.Error("update run status", zap.Error(err))
-		}
-		// Aggregate LLM telemetry. Idempotent with the agent-side write in
-		// agent_run.go RunComplete — whichever runs last reflects final state.
-		// Important for the timeout path where the agent never called
-		// RunComplete: any messages persisted before the agent died still
-		// roll up here.
-		costIn, costOut := runLLMCostRates(bgCtx, bgQ, h.logger, toPgUUID(agentID))
-		if err := bgQ.UpdateRunLLMStats(bgCtx, dbq.UpdateRunLLMStatsParams{
-			RunID:      toPgUUID(runID),
-			CostInput:  costIn,
-			CostOutput: costOut,
-		}); err != nil {
-			h.logger.Error("aggregate run llm stats", zap.Error(err))
+		// Fallback when the agent never wrote its own terminal status
+		// (stuck in an infinite run_js loop, container died, etc.). The
+		// CAS guard inside MarkTimedOut means the agent's authoritative
+		// success/error write — if it lands — wins this race.
+		if err := h.runsSvc.MarkTimedOut(bgCtx, runID); err != nil {
+			h.logger.Error("finalize run timeout", zap.Error(err))
 		}
 	}()
 }
@@ -559,13 +539,14 @@ func (h *conversationsHandler) Prompt(w http.ResponseWriter, r *http.Request) {
 // the result strictly as a user-side notification removes that
 // ambiguity.
 //
-// status: "success" or "error". message: the agent-provided exit
-// summary or the underlying failure reason.
+// status: "success", "error", or "refused". message: the agent-provided
+// exit summary, the underlying failure reason, or the out-of-scope
+// explanation.
 func (h *conversationsHandler) NotifyUpgradeComplete(ctx context.Context, agentID uuid.UUID, conversationID, status, message string) error {
 	h.convLocks.Lock(conversationID)
 
 	source := "upgrade"
-	if status == "error" {
+	if status == "error" || status == "refused" {
 		source = "error"
 	}
 
@@ -574,8 +555,11 @@ func (h *conversationsHandler) NotifyUpgradeComplete(ctx context.Context, agentI
 	// agent..." as a user statement of fact and tries to verify it;
 	// with the prefix it understands this is a system-injected event.
 	prefix := "[Upgrade succeeded] "
-	if status == "error" {
+	switch status {
+	case "error":
 		prefix = "[Upgrade failed] "
+	case "refused":
+		prefix = "[Request declined] "
 	}
 
 	llmText := prefix + message
@@ -587,9 +571,10 @@ func (h *conversationsHandler) NotifyUpgradeComplete(ctx context.Context, agentI
 	var conv dbq.AgentConversation
 	convUUID, err := uuid.Parse(conversationID)
 	if err == nil {
+		// airlockvet:allow-dbq reason: NotifyUpgradeComplete is builder→airlock-internal — no user request to authorize; the conversation row is read solely to pick the delivery channel
 		if loaded, lerr := q.GetConversationByID(ctx, toPgUUID(convUUID)); lerr == nil {
 			conv = loaded
-			access = trigger.ResolveAgentAccess(ctx, q, agentID, pgUUID(conv.UserID))
+			access = authz.UserPrincipal(pgUUID(conv.UserID), "").EffectiveAgentAccess(ctx, q, agentID)
 		}
 	}
 	isBridge := conv.Source == "bridge" && conv.BridgeID.Valid &&
@@ -604,6 +589,7 @@ func (h *conversationsHandler) NotifyUpgradeComplete(ctx context.Context, agentI
 		ConversationID: conversationID,
 		Source:         source,
 		CallerAccess:   access,
+		DirectTools:    access == agentsdk.AccessPublic,
 	}
 
 	// Web only: publish a NotificationEvent so the user-side bubble
@@ -622,7 +608,12 @@ func (h *conversationsHandler) NotifyUpgradeComplete(ctx context.Context, agentI
 
 	// Stream the agent's response in-process. The convLock is held until
 	// the stream drains so a concurrent user prompt waits its turn.
-	rc, runID, err := h.dispatcher.ForwardPrompt(context.Background(), agentID, input, nil)
+	var userIDPtr *uuid.UUID
+	if conv.UserID.Valid {
+		u := pgUUID(conv.UserID)
+		userIDPtr = &u
+	}
+	rc, runID, err := h.dispatcher.ForwardPrompt(context.Background(), agentID, input, nil, userIDPtr)
 	if err != nil {
 		h.convLocks.Unlock(conversationID)
 		return err
@@ -640,7 +631,7 @@ func (h *conversationsHandler) NotifyUpgradeComplete(ctx context.Context, agentI
 				for range respEvents {
 				}
 			}()
-			responseText, _, _, _ := trigger.StreamNDJSONResponse(rc, runID.String(), respEvents)
+			responseText, _, _, _ := trigger.StreamNDJSONResponse(rc, runID.String(), respEvents, false)
 			if responseText != "" {
 				parts := []agentsdk.DisplayPart{{Type: "text", Text: responseText}}
 				if err := h.bridgeMgr.SendParts(bgCtx, pgUUID(conv.BridgeID), conv.ExternalID.String, parts); err != nil {
@@ -648,27 +639,16 @@ func (h *conversationsHandler) NotifyUpgradeComplete(ctx context.Context, agentI
 				}
 			}
 		} else {
-			publishRunEvents(bgCtx, rc, h.pubsub, agentID, runID, conversationID, h.logger)
+			var convUserID string
+			if conv.UserID.Valid {
+				convUserID = pgUUID(conv.UserID).String()
+			}
+			agentapi.PublishRunEvents(bgCtx, rc, h.pubsub, h.db.Pool(), agentID, runID, conversationID, convUserID, nil, h.logger)
 		}
 
-		// Same CAS-protected fallback as the user-prompt path: if the
-		// agent never wrote a terminal status (timed out, died), mark
-		// the run "timeout"; the agent's own write — if it lands —
-		// wins via the WHERE status='running' guard.
-		bgQ := dbq.New(h.db.Pool())
-		if err := bgQ.UpdateRunStatus(bgCtx, dbq.UpdateRunStatusParams{
-			ID:     toPgUUID(runID),
-			Status: "timeout",
-		}); err != nil {
-			h.logger.Error("update upgrade run status", zap.Error(err))
-		}
-		costIn, costOut := runLLMCostRates(bgCtx, bgQ, h.logger, toPgUUID(agentID))
-		if err := bgQ.UpdateRunLLMStats(bgCtx, dbq.UpdateRunLLMStatsParams{
-			RunID:      toPgUUID(runID),
-			CostInput:  costIn,
-			CostOutput: costOut,
-		}); err != nil {
-			h.logger.Error("aggregate upgrade run llm stats", zap.Error(err))
+		// Same CAS-protected fallback as the user-prompt path.
+		if err := h.runsSvc.MarkTimedOut(bgCtx, runID); err != nil {
+			h.logger.Error("finalize upgrade run timeout", zap.Error(err))
 		}
 	}()
 	return nil
@@ -716,8 +696,9 @@ func (h *conversationsHandler) UploadFile(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	// airlockvet:allow-writejson reason: multipart upload receipt is the agentsdk.FileInfo shape; the agent client and chat UI both consume this exact JSON, not a proto envelope
 	writeJSON(w, http.StatusOK, agentsdk.FileInfo{
-		Path:         path,
+		Path:         agentsdk.FilePath(path),
 		Filename:     header.Filename,
 		ContentType:  ct,
 		Size:         header.Size,
@@ -727,251 +708,110 @@ func (h *conversationsHandler) UploadFile(w http.ResponseWriter, r *http.Request
 
 // --- helpers ---
 
-// rowToConversation converts a GetOrCreateConversationRow to AgentConversation.
-func rowToConversation(r dbq.GetOrCreateConversationRow) dbq.AgentConversation {
-	return dbq.AgentConversation{
-		ID:         r.ID,
-		AgentID:    r.AgentID,
-		Source:     r.Source,
-		ExternalID: r.ExternalID,
-		Title:      r.Title,
-		Metadata:   r.Metadata,
-		CreatedAt:  r.CreatedAt,
-		UpdatedAt:  r.UpdatedAt,
-		BridgeID:   r.BridgeID,
-		UserID:     r.UserID,
+// ownedConversation loads the {convID} route param and enforces the
+// same owner + surface gate as GetConversation/DeleteConversation: the
+// caller must own it and it must not be an a2a transport row. On any
+// failure it writes the response and returns ok=false so the handler
+// just returns. Used by the conversation-scoped topic endpoints.
+func (h *conversationsHandler) ownedConversation(ctx context.Context, w http.ResponseWriter, r *http.Request) (dbq.AgentConversation, bool) {
+	convID, err := parseUUID(chi.URLParam(r, "convID"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid conversation ID")
+		return dbq.AgentConversation{}, false
 	}
+	conv, err := h.svc.OwnedConversation(ctx, principalFromRequest(r), convID)
+	if err != nil {
+		writeConvError(w, err, "failed to load conversation")
+		return dbq.AgentConversation{}, false
+	}
+	return conv, true
 }
 
-func conversationToProto(c dbq.AgentConversation) *airlockv1.ConversationInfo {
-	source := c.Source
-	if source == "" {
-		source = "web"
-	}
-	return &airlockv1.ConversationInfo{
-		Id:        convert.PgUUIDToString(c.ID),
-		AgentId:   convert.PgUUIDToString(c.AgentID),
-		Title:     c.Title,
-		Source:    source,
-		CreatedAt: convert.PgTimestampToProto(c.CreatedAt),
-		UpdatedAt: convert.PgTimestampToProto(c.UpdatedAt),
-	}
-}
-
+// messageToProto resolves S3-keyed media parts to presigned URLs
+// before serializing. Stays in api/ because of those runtime deps
+// (S3 client + logger); the pure dbq→proto converter for
+// AgentConversation lives in convert.ConversationToProto.
 func messageToProto(ctx context.Context, s3Client *storage.S3Client, logger *zap.Logger, m dbq.AgentMessage) *airlockv1.AgentMessageInfo {
 	info := &airlockv1.AgentMessageInfo{
 		Id:           convert.PgUUIDToString(m.ID),
 		Seq:          m.Seq,
 		Role:         m.Role,
 		Content:      m.Content,
-		TokensIn:     m.TokensIn,
-		TokensOut:    m.TokensOut,
-		CostEstimate: pgNumericToFloat(m.CostEstimate),
+		CostEstimate: convert.PgNumericToFloat(m.CostEstimate),
 		CreatedAt:    convert.PgTimestampToProto(m.CreatedAt),
 		Source:       m.Source,
 		RunId:        convert.PgUUIDToString(m.RunID),
 	}
 	if len(m.Parts) > 0 {
-		info.Parts = string(resolveMediaPartsJSON(ctx, s3Client, logger, m.Parts))
+		info.Parts = string(agentapi.ResolveMediaPartsJSON(ctx, s3Client, logger, m.Parts))
 	}
 	return info
 }
 
-// truncate returns s clipped to at most maxLen *bytes*, but never cuts in
-// the middle of a UTF-8 sequence. A naive s[:maxLen] would leave a
-// dangling lead byte (e.g. Cyrillic 0xd0 starts a 2-byte rune; slicing
-// between the lead and continuation byte produces invalid UTF-8 that
-// Postgres rejects with `invalid byte sequence for encoding "UTF8"`).
-// Backs off to the previous rune boundary via utf8.RuneStart.
-func truncate(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	for end := maxLen; end > 0; end-- {
-		if utf8.RuneStart(s[end]) {
-			return s[:end]
-		}
-	}
-	return ""
-}
-
-// ListTopics handles GET /api/v1/agents/{agentID}/topics.
-// Returns all registered topics with subscription status for the user's conversation.
+// ListTopics handles GET /api/v1/conversations/{convID}/topics.
+// Returns the agent's topics with THIS conversation's subscription
+// state — the conversation that subscribes is the one that receives.
 func (h *conversationsHandler) ListTopics(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	agentID, err := parseUUID(chi.URLParam(r, "agentID"))
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid agent ID")
+	conv, ok := h.ownedConversation(ctx, w, r)
+	if !ok {
 		return
 	}
-
-	userID := auth.UserIDFromContext(ctx)
-	if userID == uuid.Nil {
-		writeError(w, http.StatusUnauthorized, "missing user identity")
-		return
-	}
-
-	q := dbq.New(h.db.Pool())
-
-	// Get all topics for this agent.
-	topics, err := q.ListTopicsByAgent(ctx, toPgUUID(agentID))
+	topics, err := h.svc.ListTopics(ctx, conv)
 	if err != nil {
-		h.logger.Error("list topics", zap.Error(err))
 		writeError(w, http.StatusInternalServerError, "failed to list topics")
 		return
 	}
-
-	// Get user's conversation to check subscriptions.
-	conv, err := q.GetOrCreateConversation(ctx, dbq.GetOrCreateConversationParams{
-		AgentID: toPgUUID(agentID),
-		UserID:  toPgUUID(userID),
-		Source:  "web",
-	})
-	if err != nil {
-		h.logger.Error("get conversation for topics", zap.Error(err))
-		writeError(w, http.StatusInternalServerError, "failed to resolve conversation")
-		return
-	}
-
-	// Get current subscriptions.
-	subs, err := q.ListTopicSubscriptions(ctx, dbq.ListTopicSubscriptionsParams{
-		AgentID:        toPgUUID(agentID),
-		ConversationID: conv.ID,
-	})
-	if err != nil {
-		h.logger.Error("list topic subscriptions", zap.Error(err))
-		writeError(w, http.StatusInternalServerError, "failed to list subscriptions")
-		return
-	}
-
-	// Build subscribed set.
-	subscribedTopics := make(map[string]bool, len(subs))
-	for _, sub := range subs {
-		subscribedTopics[sub.TopicSlug] = true
-	}
-
-	// Build response.
 	out := make([]*airlockv1.TopicInfo, len(topics))
 	for i, t := range topics {
 		out[i] = &airlockv1.TopicInfo{
-			Id:          convert.PgUUIDToString(t.ID),
+			Id:          t.ID.String(),
 			Slug:        t.Slug,
 			Description: t.Description,
-			Subscribed:  subscribedTopics[t.Slug],
+			Subscribed:  t.Subscribed,
 		}
 	}
 	writeProto(w, http.StatusOK, &airlockv1.ListTopicsResponse{Topics: out})
 }
 
-// SubscribeTopic handles POST /api/v1/agents/{agentID}/topics/{slug}/subscribe.
+// SubscribeTopic handles POST /api/v1/conversations/{convID}/topics/{slug}/subscribe.
 func (h *conversationsHandler) SubscribeTopic(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	agentID, err := parseUUID(chi.URLParam(r, "agentID"))
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid agent ID")
+	conv, ok := h.ownedConversation(ctx, w, r)
+	if !ok {
 		return
 	}
-	slug := chi.URLParam(r, "slug")
-	if slug == "" {
-		writeError(w, http.StatusBadRequest, "topic slug is required")
+	if err := h.svc.SubscribeTopic(ctx, conv, chi.URLParam(r, "slug")); err != nil {
+		switch {
+		case errors.Is(err, service.ErrInvalidInput):
+			writeError(w, http.StatusBadRequest, "topic slug is required")
+		case errors.Is(err, service.ErrNotFound):
+			writeError(w, http.StatusNotFound, "topic not found")
+		default:
+			writeError(w, http.StatusInternalServerError, "failed to subscribe")
+		}
 		return
 	}
-
-	userID := auth.UserIDFromContext(ctx)
-	if userID == uuid.Nil {
-		writeError(w, http.StatusUnauthorized, "missing user identity")
-		return
-	}
-
-	q := dbq.New(h.db.Pool())
-
-	// Look up topic.
-	topic, err := q.GetTopicBySlug(ctx, dbq.GetTopicBySlugParams{
-		AgentID: toPgUUID(agentID),
-		Slug:    slug,
-	})
-	if err != nil {
-		writeError(w, http.StatusNotFound, "topic not found")
-		return
-	}
-
-	// Get or create conversation.
-	conv, err := q.GetOrCreateConversation(ctx, dbq.GetOrCreateConversationParams{
-		AgentID: toPgUUID(agentID),
-		UserID:  toPgUUID(userID),
-		Source:  "web",
-	})
-	if err != nil {
-		h.logger.Error("get conversation for subscribe", zap.Error(err))
-		writeError(w, http.StatusInternalServerError, "failed to resolve conversation")
-		return
-	}
-
-	if err := q.SubscribeTopic(ctx, dbq.SubscribeTopicParams{
-		TopicID:        topic.ID,
-		ConversationID: conv.ID,
-	}); err != nil {
-		h.logger.Error("subscribe topic", zap.Error(err))
-		writeError(w, http.StatusInternalServerError, "failed to subscribe")
-		return
-	}
-
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// UnsubscribeTopic handles DELETE /api/v1/agents/{agentID}/topics/{slug}/subscribe.
+// UnsubscribeTopic handles DELETE /api/v1/conversations/{convID}/topics/{slug}/subscribe.
 func (h *conversationsHandler) UnsubscribeTopic(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	agentID, err := parseUUID(chi.URLParam(r, "agentID"))
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid agent ID")
+	conv, ok := h.ownedConversation(ctx, w, r)
+	if !ok {
 		return
 	}
-	slug := chi.URLParam(r, "slug")
-	if slug == "" {
-		writeError(w, http.StatusBadRequest, "topic slug is required")
+	if err := h.svc.UnsubscribeTopic(ctx, conv, chi.URLParam(r, "slug")); err != nil {
+		switch {
+		case errors.Is(err, service.ErrInvalidInput):
+			writeError(w, http.StatusBadRequest, "topic slug is required")
+		case errors.Is(err, service.ErrNotFound):
+			writeError(w, http.StatusNotFound, "topic not found")
+		default:
+			writeError(w, http.StatusInternalServerError, "failed to unsubscribe")
+		}
 		return
 	}
-
-	userID := auth.UserIDFromContext(ctx)
-	if userID == uuid.Nil {
-		writeError(w, http.StatusUnauthorized, "missing user identity")
-		return
-	}
-
-	q := dbq.New(h.db.Pool())
-
-	// Look up topic.
-	topic, err := q.GetTopicBySlug(ctx, dbq.GetTopicBySlugParams{
-		AgentID: toPgUUID(agentID),
-		Slug:    slug,
-	})
-	if err != nil {
-		writeError(w, http.StatusNotFound, "topic not found")
-		return
-	}
-
-	// Get conversation.
-	conv, err := q.GetOrCreateConversation(ctx, dbq.GetOrCreateConversationParams{
-		AgentID: toPgUUID(agentID),
-		UserID:  toPgUUID(userID),
-		Source:  "web",
-	})
-	if err != nil {
-		h.logger.Error("get conversation for unsubscribe", zap.Error(err))
-		writeError(w, http.StatusInternalServerError, "failed to resolve conversation")
-		return
-	}
-
-	if err := q.UnsubscribeTopic(ctx, dbq.UnsubscribeTopicParams{
-		TopicID:        topic.ID,
-		ConversationID: conv.ID,
-	}); err != nil {
-		h.logger.Error("unsubscribe topic", zap.Error(err))
-		writeError(w, http.StatusInternalServerError, "failed to unsubscribe")
-		return
-	}
-
 	w.WriteHeader(http.StatusNoContent)
 }
-

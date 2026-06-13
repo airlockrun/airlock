@@ -1,12 +1,13 @@
 import { ref, computed } from 'vue'
 import { defineStore } from 'pinia'
 import { fromJson } from '@bufbuild/protobuf'
-import api from '@/api/client'
+import api, { isAuthRejection } from '@/api/client'
 import { ws } from '@/api/ws'
 import type { User } from '@/gen/airlock/v1/types_pb'
-import { TenantRole, UserSchema } from '@/gen/airlock/v1/types_pb'
+import { TenantRole } from '@/gen/airlock/v1/types_pb'
 import {
   LoginResponseSchema,
+  MeResponseSchema,
   RegisterResponseSchema,
   RefreshResponseSchema,
   ChangePasswordResponseSchema,
@@ -14,6 +15,11 @@ import {
 
 export const useAuthStore = defineStore('auth', () => {
   const user = ref<User | null>(null)
+  // Tenant-axis Actions the current user satisfies, mirrored from
+  // GET /api/v1/me. Populated on fetchMe; replace per-component role
+  // checks with auth.can('tenant.bridge.create') etc. Empty until the
+  // first /me round-trip, so call fetchMe right after login/activate.
+  const tenantPermissions = ref<Set<string>>(new Set())
   const isAuthenticated = computed(() => user.value !== null)
   const isAdmin = computed(
     () => user.value?.tenantRole === TenantRole.ADMIN,
@@ -27,6 +33,10 @@ export const useAuthStore = defineStore('auth', () => {
   )
   const mustChangePassword = computed(() => user.value?.mustChangePassword === true)
 
+  function can(action: string): boolean {
+    return tenantPermissions.value.has(action)
+  }
+
   async function init() {
     const refreshToken = localStorage.getItem('refresh_token')
     if (!refreshToken) return
@@ -34,9 +44,16 @@ export const useAuthStore = defineStore('auth', () => {
       await refresh()
       await fetchMe()
       connectWS()
-    } catch {
-      localStorage.removeItem('access_token')
-      localStorage.removeItem('refresh_token')
+    } catch (err) {
+      // Only evict credentials when the server actively rejected the
+      // refresh token (401/403). A transport error or 5xx is a server
+      // restart / Caddy upstream-down — keep the tokens so the next
+      // page action after recovery just works, instead of bouncing the
+      // user to /login on every reload during a deploy.
+      if (isAuthRejection(err)) {
+        localStorage.removeItem('access_token')
+        localStorage.removeItem('refresh_token')
+      }
     }
   }
 
@@ -46,6 +63,9 @@ export const useAuthStore = defineStore('auth', () => {
     localStorage.setItem('access_token', response.accessToken)
     localStorage.setItem('refresh_token', response.refreshToken)
     user.value = response.user ?? null
+    // LoginResponse doesn't carry permissions; pull them so nav/route
+    // guards work on the first navigation after login.
+    await fetchMe()
     connectWS()
   }
 
@@ -55,6 +75,7 @@ export const useAuthStore = defineStore('auth', () => {
     localStorage.setItem('access_token', response.accessToken)
     localStorage.setItem('refresh_token', response.refreshToken)
     user.value = response.user ?? null
+    await fetchMe()
     connectWS()
   }
 
@@ -68,7 +89,9 @@ export const useAuthStore = defineStore('auth', () => {
 
   async function fetchMe() {
     const { data } = await api.get('/api/v1/me')
-    user.value = fromJson(UserSchema, data)
+    const me = fromJson(MeResponseSchema, data)
+    user.value = me.user ?? null
+    tenantPermissions.value = new Set(me.tenantPermissions)
   }
 
   async function changePassword(currentPassword: string, newPassword: string) {
@@ -83,6 +106,7 @@ export const useAuthStore = defineStore('auth', () => {
 
   function logout() {
     user.value = null
+    tenantPermissions.value = new Set()
     localStorage.removeItem('access_token')
     localStorage.removeItem('refresh_token')
     ws.disconnect()
@@ -97,10 +121,12 @@ export const useAuthStore = defineStore('auth', () => {
 
   return {
     user,
+    tenantPermissions,
     isAuthenticated,
     isAdmin,
     isManagerOrAdmin,
     mustChangePassword,
+    can,
     init,
     login,
     activate,

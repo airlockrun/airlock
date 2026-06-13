@@ -1,24 +1,25 @@
 package views
 
-templ Index() {
-	@Layout("Home") {
-		<div style="max-width: 640px; margin: 4rem auto; padding: 0 1rem; font-family: system-ui, sans-serif; line-height: 1.6;">
-			<h1 style="margin-bottom: 0.5rem;">👋 Hello from your new agent</h1>
-			<p style="color: #666; margin-top: 0;">This is the default placeholder homepage.</p>
+templ Index(view HomeView) {
+	@Layout(view.Title) {
+		<header class="mb-8">
+			<h1 class="text-3xl font-semibold">{ view.Title }</h1>
+			<p class="mt-2 text-base-content/70">{ view.Subtitle }</p>
+		</header>
 
-			<h2 style="margin-top: 2rem;">What now?</h2>
-			<p>
-				Open a chat with this agent and ask it to do something — for example:
-			</p>
-			<ul>
-				<li>"Replace this homepage with a dashboard for my tasks"</li>
-				<li>"Add a webhook that posts new GitHub issues to Slack"</li>
-				<li>"Schedule a daily digest of unread emails"</li>
-			</ul>
-
-			<p style="color: #666; font-size: 0.9rem; margin-top: 2rem;">
-				The agent will edit its own code, rebuild itself, and replace this page.
-			</p>
-		</div>
+		<section class="card bg-base-200 shadow-sm">
+			<div class="card-body">
+				<h2 class="card-title">What now?</h2>
+				<p>Open a chat with this agent and ask it to do something — for example:</p>
+				<ul class="list-disc space-y-1 pl-5">
+					for _, ex := range view.Examples {
+						<li>{ ex }</li>
+					}
+				</ul>
+				<p class="mt-4 text-sm text-base-content/60">
+					The agent will edit its own code, rebuild itself, and replace this page.
+				</p>
+			</div>
+		</section>
 	}
 }

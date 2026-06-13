@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/airlockrun/airlock/agentapi"
 	"github.com/airlockrun/airlock/api"
 	"github.com/airlockrun/airlock/builder"
 	"github.com/airlockrun/airlock/config"
@@ -72,27 +73,8 @@ func runServe(_ []string) {
 	}
 	logger.Info("migrations up to date")
 
-	// Seed system settings from INIT_ env vars (one-time: only writes if DB value is empty).
-	{
-		q := dbq.New(database.Pool())
-		settings, err := q.GetSystemSettings(ctx)
-		if err != nil {
-			logger.Fatal("read system settings failed", zap.Error(err))
-		}
-		initPublicURL := os.Getenv("INIT_PUBLIC_URL")
-		initAgentDomain := os.Getenv("INIT_AGENT_DOMAIN")
-		if settings.PublicUrl == "" && initPublicURL != "" {
-			if _, err := q.UpdateSystemSettings(ctx, dbq.UpdateSystemSettingsParams{
-				PublicUrl:   initPublicURL,
-				AgentDomain: initAgentDomain,
-			}); err != nil {
-				logger.Fatal("seed system settings failed", zap.Error(err))
-			}
-			logger.Info("system settings seeded from env",
-				zap.String("public_url", initPublicURL),
-				zap.String("agent_domain", initAgentDomain))
-		}
-	}
+	// public_url / agent_domain are env-only (PUBLIC_URL / AGENT_DOMAIN in
+	// config.go), shared with the bundled Caddy via .env — no DB seeding.
 
 	// Ensure an activation code exists on first run — generate if missing,
 	// log it, and write to a file for docker-compose users to `cat`.
@@ -163,7 +145,7 @@ func runServe(_ []string) {
 			validAgents[id] = a.ImageRef
 		}
 		containers.PruneAgentResources(ctx, validAgents)
-		pruneMonorepo(buildSvc.MonorepoPath(), validAgents, logger.Named("prune"))
+		pruneAgentRepos(buildSvc.ReposPath(), validAgents, logger.Named("prune"))
 	}
 
 	// Warm Docker build cache in background — first agent build will be faster.
@@ -172,6 +154,11 @@ func runServe(_ []string) {
 	// direct `go build` invocations consume (distinct cache from the one
 	// above, which only seeds BuildKit's cache mount for `docker build`).
 	go buildSvc.WarmRuntimeCaches(ctx)
+	// If the bundled agentsdk version moved since the last airlock boot,
+	// re-image every agent against the new SDK. Failures park the agent
+	// (status=stopped + error_message) so the operator sees the breakage
+	// instead of finding a silently incompatible agent days later.
+	go buildSvc.RebuildAllOnSDKChange(context.Background())
 
 	// Create Hub and PubSub
 	hub := realtime.NewHub(logger.Named("hub"))
@@ -194,7 +181,7 @@ func runServe(_ []string) {
 		"telegram": telegramDriver,
 		"discord":  discordDriver,
 	}
-	bridgeMgr := trigger.NewBridgeManager(drivers, prompter, database, secretStore, cfg.JWTSecret, cfg.PublicURL, logger.Named("bridges"))
+	bridgeMgr := trigger.NewBridgeManager(drivers, prompter, database, secretStore, cfg.JWTSecret, cfg.PublicURL, cfg.AgentBaseURL, logger.Named("bridges"))
 	scheduler := trigger.NewScheduler(dispatcher, database, logger.Named("scheduler"))
 
 	// OAuth client (used by credential endpoints and refresh job)
@@ -229,6 +216,7 @@ func runServe(_ []string) {
 		PubSub:                 pubsub,
 		Handler:                wsHandler,
 		AgentDomain:            cfg.AgentDomain,
+		AgentBaseURL:           cfg.AgentBaseURL,
 		LLMProxyURL:            cfg.LLMProxyURL,
 		ForceInlineAttachments: cfg.ForceInlineAttachments,
 		ActivationCodeFile:     cfg.ActivationCodeFile,
@@ -277,6 +265,17 @@ func runServe(_ []string) {
 	refreshJob := oauth.NewRefreshJob(database, secretStore, oauthClient, logger.Named("oauth-refresh"))
 	go refreshJob.Run(gctx)
 
+	// External-git polling fallback (5-min ls-remote per connected
+	// agent). Catches pushes from providers without webhook support
+	// configured (Bitbucket/Gitea in v1) and from users behind
+	// firewalls that block inbound webhooks.
+	go buildSvc.RunGitPoll(gctx)
+
+	// Inbound-OAuth GC: sweeps expired authz codes, long-consumed
+	// refresh tokens, and ancient grants every 5 minutes.
+	inboundOAuthGC := api.NewInboundOAuthGC(database, logger.Named("oauth-inbound-gc"))
+	go inboundOAuthGC.Run(gctx)
+
 	queries := dbq.New(database.Pool())
 
 	group.Go(func() error {
@@ -301,6 +300,12 @@ func runServe(_ []string) {
 		const period = time.Hour
 
 		return authPruner(gctx, logger, queries, period)
+	})
+
+	group.Go(func() error {
+		const period = time.Hour
+
+		return anonConvPruner(gctx, logger, queries, period)
 	})
 
 	group.Go(func() error {
@@ -408,31 +413,40 @@ func ensureActivationCode(ctx context.Context, database *db.DB, filePath string,
 	return nil
 }
 
-// pruneMonorepo removes agent directories from the monorepo that don't
-// correspond to any agent in the database. Uses builder.RemoveAgentCode
-// so the deletion is properly committed to git.
-func pruneMonorepo(repoPath string, validAgents map[string]string, logger *zap.Logger) {
-	if repoPath == "" {
+// pruneAgentRepos removes per-agent repo directories under basePath
+// that don't correspond to any agent in the database. With the
+// per-agent-repo layout each agent's source lives at basePath/<agentID>/,
+// so orphan cleanup is a single rm of that directory. The
+// _monorepo_archive/ folder (left in place by 003_split_monorepo for
+// disaster-recovery) is preserved by skipping non-UUID-shaped names.
+func pruneAgentRepos(basePath string, validAgents map[string]string, logger *zap.Logger) {
+	if basePath == "" {
 		return
 	}
-	agentsDir := filepath.Join(repoPath, "agents")
-	entries, err := os.ReadDir(agentsDir)
+	entries, err := os.ReadDir(basePath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return
 		}
-		logger.Warn("failed to read agents dir", zap.Error(err))
+		logger.Warn("failed to read agent repos dir", zap.Error(err))
 		return
 	}
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
 		}
-		if _, ok := validAgents[e.Name()]; !ok {
-			logger.Info("removing orphaned agent code", zap.String("agent", e.Name()))
-			if err := builder.RemoveAgentCode(repoPath, e.Name()); err != nil {
-				logger.Warn("failed to remove agent code", zap.String("agent", e.Name()), zap.Error(err))
-			}
+		name := e.Name()
+		// Skip anything that isn't a UUID: archive dirs, vendor caches,
+		// half-written tempdirs, etc. Only delete what we know we own.
+		if _, err := uuid.Parse(name); err != nil {
+			continue
+		}
+		if _, ok := validAgents[name]; ok {
+			continue
+		}
+		logger.Info("removing orphaned agent repo", zap.String("agent", name))
+		if err := builder.RemoveAgentRepo(basePath, name); err != nil {
+			logger.Warn("failed to remove agent repo", zap.String("agent", name), zap.Error(err))
 		}
 	}
 }
@@ -664,6 +678,49 @@ func authPruner(
 	}
 }
 
+// anonA2AConversationTTL bounds how long an anonymous A2A conversation
+// (user_id NULL, source='a2a' — minted for an unauthenticated
+// external-MCP caller) survives idle. These have no resume UI and no
+// owning user, so without a sweep they accumulate forever.
+const anonA2AConversationTTL = 12 * time.Hour
+
+// anonConvPruner deletes anonymous A2A conversations idle past
+// anonA2AConversationTTL every period. The row delete cascades to
+// agent_messages via FK. Authed-A2A and bridge conversations are
+// untouched (the query keys on user_id IS NULL AND source='a2a').
+func anonConvPruner(
+	ctx context.Context,
+	lgr *zap.Logger,
+	queries *dbq.Queries,
+	period time.Duration,
+) error {
+	ticker := time.NewTicker(period)
+	defer ticker.Stop()
+
+	if queries == nil {
+		return errors.New("expected *dbq.Queries but got nil")
+	}
+
+	lgr = lgr.Named("anon-a2a-conv-prune")
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+		}
+
+		n, err := queries.DeleteExpiredAnonA2AConversations(ctx, int32(anonA2AConversationTTL.Seconds()))
+		if err != nil {
+			lgr.Error("delete expired anon a2a conversations failed", zap.Error(err))
+		}
+
+		if n > 0 {
+			lgr.Info("pruned anon a2a conversations", zap.Int64("rows.count", n))
+		}
+	}
+}
+
 // Stuck-run sweeper — runs in 'running' status older than the absolute HTTP
 // ceiling are presumed orphaned (airlock restart, agent crash mid- stream,
 // network partition). Skip runs the dispatcher still tracks in memory: those
@@ -742,7 +799,7 @@ func sweeper(
 				continue
 			}
 
-			api.SynthesizeOrphanToolResults(ctx, queries, runUUID, "timeout", lgr)
+			agentapi.SynthesizeOrphanToolResults(ctx, queries, runUUID, "timeout", lgr)
 
 			err = queries.UpdateRunComplete(ctx, dbq.UpdateRunCompleteParams{
 				ID:           run.ID,
@@ -755,7 +812,7 @@ func sweeper(
 				continue
 			}
 
-			api.PublishRunTerminal(ctx, pubsub, agentUUID, runUUID, "error", "agent disconnected")
+			agentapi.PublishRunTerminal(ctx, pubsub, agentUUID, runUUID, "error", "agent disconnected")
 
 			lgr.Warn(
 				"stuck run reaped",

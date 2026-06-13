@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, watch } from 'vue'
 import api from '@/api/client'
 
 interface Webhook {
@@ -11,8 +11,10 @@ interface Webhook {
 }
 
 const props = defineProps<{ agentId: string }>()
+const emit = defineEmits<{ populated: [count: number] }>()
 
 const webhooks = ref<Webhook[]>([])
+watch(webhooks, (v) => emit('populated', v.length), { immediate: true })
 const loading = ref(true)
 
 function mapWebhook(raw: Record<string, any>): Webhook {

@@ -10,19 +10,15 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
-	"github.com/airlockrun/agentsdk"
-	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/config"
 	"github.com/airlockrun/airlock/container"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
-	"github.com/airlockrun/airlock/scaffold"
 	"github.com/airlockrun/airlock/secrets"
-	"github.com/airlockrun/goai/tool"
-	sol "github.com/airlockrun/sol"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"
@@ -44,16 +40,26 @@ func (noopPublisher) PublishBuildLogLine(context.Context, uuid.UUID, uuid.UUID, 
 
 // BuildService orchestrates the agent build and upgrade pipeline.
 type BuildService struct {
-	cfg              *config.Config
-	db               *db.DB
-	containers       container.ContainerManager
-	encryptor        secrets.Store
-	events           EventPublisher
-	upgradeNotifier  PostUpgradeNotifier
-	logger           *zap.Logger
+	cfg                   *config.Config
+	db                    *db.DB
+	containers            container.ContainerManager
+	encryptor             secrets.Store
+	events                EventPublisher
+	upgradeNotifier       PostUpgradeNotifier
+	upgradeSystemNotifier PostUpgradeSystemNotifier
+	logger                *zap.Logger
 
-	mu          sync.Mutex
-	inFlight    map[string]*buildHandle // agentID → handle for cancel + wait
+	mu       sync.Mutex
+	inFlight map[string]*buildHandle // agentID → handle for cancel + wait
+
+	// buildSem caps concurrent in-flight builds across the whole
+	// service. Every pipeline path — initial build, manual upgrade,
+	// rollback, mass-rebuild — acquires one slot inside Execute. Sized
+	// at NumCPU/2 by default (Go compilation is RAM-hungry; running
+	// every core in parallel reliably OOMs small VPSes); operator
+	// override via AIRLOCK_BUILD_PARALLELISM. Sized once at New() so
+	// the limit can't drift mid-run.
+	buildSem chan struct{}
 }
 
 // buildHandle tracks a running build/upgrade so callers can cancel and
@@ -82,20 +88,29 @@ func New(cfg *config.Config, database *db.DB, containers container.ContainerMana
 	if logger == nil {
 		panic("builder: logger is nil")
 	}
+	parallelism := buildParallelism()
+	logger.Info("build concurrency limit", zap.Int("parallelism", parallelism))
 	return &BuildService{
-		cfg:         cfg,
-		db:          database,
-		containers:  containers,
-		encryptor:   encryptor,
-		events:      noopPublisher{},
-		logger:      logger,
-		inFlight:    make(map[string]*buildHandle),
+		cfg:        cfg,
+		db:         database,
+		containers: containers,
+		encryptor:  encryptor,
+		events:     noopPublisher{},
+		logger:     logger,
+		inFlight:   make(map[string]*buildHandle),
+		buildSem:   make(chan struct{}, parallelism),
 	}
 }
 
-// MonorepoPath returns the agent monorepo path.
-func (b *BuildService) MonorepoPath() string {
-	return b.cfg.AgentMonorepoPath
+// ReposPath returns the base directory holding per-agent git repos.
+// Each agent's source lives at <ReposPath>/<agentID>/.
+func (b *BuildService) ReposPath() string {
+	return b.cfg.AgentReposPath
+}
+
+// AgentRepoPath returns the on-disk path for a single agent's repo.
+func (b *BuildService) AgentRepoPath(agentID string) string {
+	return AgentRepoPath(b.cfg.AgentReposPath, agentID)
 }
 
 // SetEventPublisher sets the event publisher for build/upgrade lifecycle events.
@@ -103,10 +118,19 @@ func (b *BuildService) SetEventPublisher(ep EventPublisher) {
 	b.events = ep
 }
 
-// SetUpgradeNotifier sets the notifier called after successful upgrades
-// to notify the originating conversation.
+// SetUpgradeNotifier sets the notifier called after an upgrade
+// initiated from an agent's web/bridge/A2A conversation finishes.
 func (b *BuildService) SetUpgradeNotifier(n PostUpgradeNotifier) {
 	b.upgradeNotifier = n
+}
+
+// SetUpgradeSystemNotifier sets the notifier called after an upgrade
+// initiated from a system-agent conversation finishes. Mirrors
+// SetUpgradeNotifier; the builder routes by UpgradeInput's
+// SystemConversationID vs ConversationID (mutually exclusive — see
+// notifyUpgradeOutcome).
+func (b *BuildService) SetUpgradeSystemNotifier(n PostUpgradeSystemNotifier) {
+	b.upgradeSystemNotifier = n
 }
 
 // startBuild registers a cancellable context for a build/upgrade.
@@ -190,12 +214,23 @@ type BuildInput struct {
 	BuildProviderID pgtype.UUID // providers row FK; pairs with BuildModel
 	BuildModel      string      // bare model name; "" + invalid FK ⇄ inherit system default
 	Instructions    string      // optional: when non-empty, run Sol code generation after scaffold
+
+	// Optional external-git connection. When GitRemoteURL is non-empty,
+	// the agent is connected to the remote during Build and the first
+	// push happens via Execute's post-merge push (Phase C2). The API
+	// handler enforces that GitCredentialID belongs to UserID before
+	// calling Build.
+	GitRemoteURL     string
+	GitCredentialID  pgtype.UUID
+	GitDefaultBranch string // defaults to "main" when empty
 }
 
-// Build runs the full build pipeline: scaffold → Sol code gen → compile → containerize → deploy.
-// This is synchronous — caller should run in a goroutine if needed.
-// If input.AgentID is set, uses the existing agent record (created by the API handler for async 202 responses).
-// If empty, creates a new agent record.
+// Build runs the initial-build pipeline: scaffold → Sol codegen (if
+// instructions present) → docker build → start container. Thin wrapper
+// over Execute that handles the build-specific outer lifecycle: load
+// or create the agent row, flip agents.status to building, route
+// failures into agents.status=failed. Synchronous; caller runs in a
+// goroutine.
 func (b *BuildService) Build(_ context.Context, input BuildInput) error {
 	ctx, cancel := b.startBuild(input.AgentID)
 	defer cancel()
@@ -212,15 +247,11 @@ func (b *BuildService) Build(_ context.Context, input BuildInput) error {
 	var err error
 
 	if input.AgentID != "" {
-		// Use pre-created agent record.
 		agent, err = q.GetAgentByID(ctx, mustParseUUID(input.AgentID))
 		if err != nil {
 			return fmt.Errorf("get agent: %w", err)
 		}
 	} else {
-		// Create agent record. Model overrides default to empty strings
-		// (live inheritance from system_settings); set BuildModel if the
-		// caller picked one explicitly.
 		userUUID := mustParseUUID(input.UserID)
 		agent, err = q.CreateAgent(ctx, dbq.CreateAgentParams{
 			Name:   input.Name,
@@ -242,7 +273,6 @@ func (b *BuildService) Build(_ context.Context, input BuildInput) error {
 		}
 	}
 
-	// Update status to building
 	if err := q.UpdateAgentStatus(ctx, dbq.UpdateAgentStatusParams{
 		ID:     agent.ID,
 		Status: "building",
@@ -250,392 +280,145 @@ func (b *BuildService) Build(_ context.Context, input BuildInput) error {
 		return fmt.Errorf("update status to building: %w", err)
 	}
 
-	agentUUID := uuid.UUID(agent.ID.Bytes)
-
-	// Create the agent_builds record up-front so we can include its ID in
-	// the "started" event. The frontend uses this to fetch the REST snapshot.
-	build, err := q.CreateAgentBuild(ctx, dbq.CreateAgentBuildParams{
-		AgentID:      agent.ID,
-		Type:         "build",
-		Instructions: input.Instructions,
-	})
-	if err != nil {
-		return fmt.Errorf("create build record: %w", err)
+	// Attach the optional external git remote BEFORE Execute runs, so
+	// Phase C2 (post-merge push) sees it and pushes the scaffold +
+	// codegen to the remote in one shot.
+	if input.GitRemoteURL != "" {
+		branch := input.GitDefaultBranch
+		if branch == "" {
+			branch = "main"
+		}
+		secret, err := randomHexBytes(32)
+		if err != nil {
+			return fmt.Errorf("generate webhook secret: %w", err)
+		}
+		if err := q.ConnectAgentGit(ctx, dbq.ConnectAgentGitParams{
+			ID:               agent.ID,
+			GitRemoteUrl:     input.GitRemoteURL,
+			GitCredentialID:  input.GitCredentialID,
+			GitDefaultBranch: branch,
+			GitWebhookSecret: secret,
+		}); err != nil {
+			return fmt.Errorf("connect agent git: %w", err)
+		}
+		// Re-read so plan.Agent below carries the new fields.
+		agent, err = q.GetAgentByID(ctx, agent.ID)
+		if err != nil {
+			return fmt.Errorf("reload agent after git connect: %w", err)
+		}
 	}
-	buildUUID := uuid.UUID(build.ID.Bytes)
 
-	b.events.PublishBuildEvent(ctx, agentUUID, buildUUID, "started", "")
-
-	// From here, failures should set status to failed.
-	// Use background context for DB updates — the build context may be cancelled.
-	dbCtx := context.Background()
-	if err := b.doBuild(ctx, q, agent, build, input.Instructions); err != nil {
-		status, event := "failed", "failed"
-		errMsg := err.Error()
+	plan := BuildPlan{
+		Agent:       agent,
+		Kind:        BuildKindBuild,
+		Instruction: input.Instructions,
+		Reason:      "manual",
+		RunID:       uuid.New().String(),
+		Scaffold: &ScaffoldInputs{
+			Name:            input.Name,
+			Slug:            input.Slug,
+			BuildProviderID: input.BuildProviderID,
+			BuildModel:      input.BuildModel,
+		},
+	}
+	if _, err := b.Execute(ctx, plan); err != nil {
+		status, errMsg := "failed", err.Error()
 		if errors.Is(err, context.Canceled) {
-			status = "failed"
-			event = "cancelled"
 			errMsg = "cancelled by user"
 			b.logger.Info("build cancelled", zap.String("agent_id", input.AgentID))
 		} else {
 			b.logger.Error("build failed", zap.String("agent_id", input.AgentID), zap.Error(err))
 		}
-		_ = q.UpdateAgentStatus(dbCtx, dbq.UpdateAgentStatusParams{
+		_ = q.UpdateAgentStatus(context.Background(), dbq.UpdateAgentStatusParams{
 			ID:           agent.ID,
 			Status:       status,
 			ErrorMessage: errMsg,
 		})
-		b.events.PublishBuildEvent(dbCtx, agentUUID, buildUUID, event, errMsg)
 		return err
 	}
-
 	b.logger.Info("build completed", zap.String("agent_id", input.AgentID))
-	b.events.PublishBuildEvent(dbCtx, agentUUID, buildUUID, "complete", "")
 	return nil
 }
 
-// doBuild runs the build steps after the agent record is created.
-// If instructions are provided, runs Sol code generation after scaffolding.
-func (b *BuildService) doBuild(ctx context.Context, q *dbq.Queries, agent dbq.Agent, build dbq.AgentBuild, instructions string) error {
-	repoPath := b.cfg.AgentMonorepoPath
-	agentID := uuidString(agent.ID)
-	agentUUID := uuid.UUID(agent.ID.Bytes)
-	buildUUID := uuid.UUID(build.ID.Bytes)
+// buildCodegenPrompt is the user-turn message for a fresh build. The
+// scaffold is empty, so this is a from-scratch implementation request —
+// not a spec the model should reconcile a tree against. The agentsdk
+// reference lives at /libs/agentsdk/llms.md and is pulled in by the
+// system prompt's First Step; this message is just the task.
+func buildCodegenPrompt(agent dbq.Agent, instructions string) string {
+	return fmt.Sprintf(`Build a new agent from scratch in the scaffolded workspace.
 
-	bl := newBuildLog(q, build.ID, b.logger)
-	defer bl.close()
+Agent: %s (slug: %s, id: %s)
 
-	solLog := func(line string) {
-		seq := bl.appendSol(line)
-		b.events.PublishBuildLogLine(ctx, agentUUID, buildUUID, seq, "sol", line)
-	}
-	dockerLog := func(line string) {
-		seq := bl.appendDocker(line)
-		b.events.PublishBuildLogLine(ctx, agentUUID, buildUUID, seq, "docker", line)
-	}
-	// logLine is a top-level progress messages (step headers). Route to the sol stream.
-	logLine := solLog
+What it should do:
 
-	completeBuild := func(status, errMsg, sourceRef, imageRef string) {
-		_ = q.UpdateAgentBuildComplete(context.Background(), dbq.UpdateAgentBuildCompleteParams{
-			ID:           build.ID,
-			Status:       status,
-			ErrorMessage: errMsg,
-			SourceRef:    sourceRef,
-			ImageRef:     imageRef,
-		})
-	}
-
-	// Step 1: Init monorepo
-	logLine("Initializing monorepo...")
-	if err := InitMonorepo(repoPath); err != nil {
-		completeBuild("failed", err.Error(), "", "")
-		return fmt.Errorf("init monorepo: %w", err)
-	}
-
-	if ctx.Err() != nil {
-		completeBuild("cancelled", "cancelled by user", "", "")
-		return ctx.Err()
-	}
-
-	// Step 2: Scaffold
-	logLine("Scaffolding agent...")
-	data := scaffold.ScaffoldData{
-		AgentID:         agentID,
-		Module:          "agent",
-		GoVersion:       "1.26",
-		AgentSDKVersion: "v" + agentsdk.Version,
-		AgentBaseImage:  b.cfg.AgentBaseImage,
-	}
-	commitHash, err := CommitScaffold(repoPath, agentID, data)
-	if err != nil {
-		completeBuild("failed", err.Error(), "", "")
-		return fmt.Errorf("commit scaffold: %w", err)
-	}
-	b.logger.Info("scaffold committed", zap.String("agent", agentID), zap.String("commit", commitHash))
-
-	// Step 3: Merge scaffold branch to main
-	logLine("Merging scaffold to main...")
-	branch := fmt.Sprintf("build/%s/init", agentID)
-	if err := MergeBranch(repoPath, branch); err != nil {
-		completeBuild("failed", err.Error(), "", "")
-		return fmt.Errorf("merge to main: %w", err)
-	}
-
-	if ctx.Err() != nil {
-		completeBuild("cancelled", "cancelled by user", "", "")
-		return ctx.Err()
-	}
-
-	// Step 4: Create agent DB role + schema (before Sol so we can create a test clone)
-	schemaName := fmt.Sprintf("agent_%s", sanitizeUUID(agentID))
-	dbPassword, err := b.createAgentSchema(ctx, agentID, schemaName)
-	if err != nil {
-		completeBuild("failed", err.Error(), "", "")
-		return fmt.Errorf("create schema: %w", err)
-	}
-
-	// Encrypt and store DB password in its dedicated column.
-	encPassword, err := b.encryptor.Put(ctx, "agent/"+agentID+"/db_password", dbPassword)
-	if err != nil {
-		completeBuild("failed", err.Error(), "", "")
-		return fmt.Errorf("encrypt db password: %w", err)
-	}
-	if err := q.UpdateAgentDBPassword(ctx, dbq.UpdateAgentDBPasswordParams{
-		ID:         agent.ID,
-		DbPassword: encPassword,
-	}); err != nil {
-		completeBuild("failed", err.Error(), "", "")
-		return fmt.Errorf("update agent db_password: %w", err)
-	}
-
-	// Step 5: Create a test clone for Sol to validate migrations against.
-	testClone := fmt.Sprintf("agent_%s_test_%s", sanitizeUUID(agentID), hex.EncodeToString(func() []byte { b := make([]byte, 4); rand.Read(b); return b }()))
-	if err := b.cloneSchema(ctx, schemaName, testClone, schemaName); err != nil {
-		completeBuild("failed", err.Error(), "", "")
-		return fmt.Errorf("create test clone: %w", err)
-	}
-	defer b.dropSchemaClone(ctx, testClone)
-
-	testDBURL := b.agentDBURL(schemaName, dbPassword, testClone)
-	testDBPSQL := b.agentDBURLBase(b.cfg.DBHostAgent, schemaName, dbPassword)
-	testDBSchema := testClone
-
-	// Step 6 (optional): Run Sol code generation if instructions are provided.
-	if instructions != "" {
-		logLine("Running Sol code generation...")
-		solHash, err := b.runBuildCodegen(ctx, q, agent, agentID, agentUUID, instructions, testDBURL, testDBPSQL, testDBSchema, solLog)
-		if err != nil {
-			completeBuild("failed", err.Error(), "", "")
-			return fmt.Errorf("sol codegen: %w", err)
-		}
-		commitHash = solHash
-	}
-
-	if ctx.Err() != nil {
-		completeBuild("cancelled", "cancelled by user", commitHash, "")
-		return ctx.Err()
-	}
-
-	// Step 7: Build Docker image
-	logLine("Building Docker image...")
-	contextDir := filepath.Join(repoPath, "agents", agentID)
-	if err := scaffold.GenerateDockerfile(contextDir, scaffold.ScaffoldData{
-		AgentID:         agentID,
-		Module:          "agent",
-		GoVersion:       "1.26",
-		AgentSDKVersion: "v" + agentsdk.Version,
-		AgentBaseImage:  b.cfg.AgentBaseImage,
-	}); err != nil {
-		completeBuild("failed", err.Error(), commitHash, "")
-		return fmt.Errorf("generate Dockerfile: %w", err)
-	}
-	imageTag, err := buildImage(ctx, b.cfg, agentID, contextDir, commitHash, dockerLog)
-	if err != nil {
-		completeBuild("failed", err.Error(), commitHash, "")
-		return fmt.Errorf("build image: %w", err)
-	}
-	b.logger.Info("image built", zap.String("image", imageTag))
-
-	// Step 8: Validate migrations by running the image with AGENT_VALIDATE_MIGRATIONS=1.
-	// Uses the agent-network DB URL since the container runs on the Docker network.
-	agentTestDBURL := b.agentDBURL(schemaName, dbPassword, testClone)
-	if err := b.validateMigrations(ctx, imageTag, agentTestDBURL, logLine); err != nil {
-		completeBuild("failed", err.Error(), commitHash, imageTag)
-		return fmt.Errorf("migration validation: %w", err)
-	}
-
-	if ctx.Err() != nil {
-		completeBuild("cancelled", "cancelled by user", commitHash, imageTag)
-		return ctx.Err()
-	}
-
-	// Step 9: Start agent container
-	logLine("Starting agent container...")
-	agentToken, err := auth.IssueAgentToken(b.cfg.JWTSecret, agentUUID)
-	if err != nil {
-		completeBuild("failed", err.Error(), commitHash, imageTag)
-		return fmt.Errorf("issue agent token: %w", err)
-	}
-	agentDBURL := b.agentDBURL(schemaName, dbPassword, schemaName)
-	c, err := b.containers.StartAgent(ctx, container.AgentOpts{
-		AgentID: agentUUID,
-		Image:   imageTag,
-		Env: map[string]string{
-			"AIRLOCK_AGENT_ID":    agentID,
-			"AIRLOCK_API_URL":     b.cfg.APIURLAgent,
-			"AIRLOCK_DB_URL":      agentDBURL,
-			"AIRLOCK_AGENT_TOKEN": agentToken,
-		},
-	})
-	if err != nil {
-		completeBuild("failed", err.Error(), commitHash, imageTag)
-		return fmt.Errorf("start agent: %w", err)
-	}
-	b.logger.Info("agent started", zap.String("endpoint", c.Endpoint))
-
-	// Step 8: Update agent record
-	if err := q.UpdateAgentStatus(ctx, dbq.UpdateAgentStatusParams{
-		ID:     agent.ID,
-		Status: "active",
-	}); err != nil {
-		return fmt.Errorf("update status to active: %w", err)
-	}
-	if err := q.UpdateAgentRefs(ctx, dbq.UpdateAgentRefsParams{
-		ID:        agent.ID,
-		SourceRef: commitHash,
-		ImageRef:  imageTag,
-	}); err != nil {
-		return fmt.Errorf("update refs: %w", err)
-	}
-
-	completeBuild("complete", "", commitHash, imageTag)
-	return nil
+%s`, agent.Name, agent.Slug, uuidString(agent.ID), instructions)
 }
 
-// runBuildCodegen runs Sol code generation on a freshly scaffolded agent.
-// Creates a branch, sparse checkouts the agent dir, writes AGENT_SPEC.md,
-// runs Sol, commits, merges back to main. Returns the new commit hash.
-func (b *BuildService) runBuildCodegen(ctx context.Context, q *dbq.Queries, agent dbq.Agent, agentID string, agentUUID uuid.UUID, instructions string, testDBURL, testDBPSQL, testDBSchema string, logLine func(string)) (string, error) {
-	repoPath := b.cfg.AgentMonorepoPath
+// buildUpgradePrompt is the user-turn message for a codegen upgrade.
+// Rebuilds never reach here (doUpgrade branches earlier), so there are
+// exactly two intents: a failure-fix (diagnostics present — diagnose
+// and repair a crashing agent) or a feature change. Both frame the work
+// as incremental against an already-working tree so the model preserves
+// everything unrelated. The internal Reason enum is deliberately NOT
+// surfaced — it means nothing to the model.
+func buildUpgradePrompt(agent dbq.Agent, input UpgradeInput, hasDiagnostics bool) string {
+	name := fmt.Sprintf("%s (slug: %s, id: %s)", agent.Name, agent.Slug, uuidString(agent.ID))
+	desc := strings.TrimSpace(input.Description)
 
-	// Create a codegen branch from main.
-	codegenBranch := fmt.Sprintf("build/%s/codegen", agentID)
-	if err := CreateBranch(repoPath, codegenBranch); err != nil {
-		return "", fmt.Errorf("create codegen branch: %w", err)
-	}
-
-	// Sparse checkout into a temp dir.
-	workDir, err := b.makeCodegenTempDir("airlock-codegen-*")
-	if err != nil {
-		return "", fmt.Errorf("create temp dir: %w", err)
-	}
-	defer os.RemoveAll(workDir)
-
-	if err := SparseCheckout(repoPath, codegenBranch, agentID, workDir); err != nil {
-		return "", fmt.Errorf("sparse checkout: %w", err)
-	}
-
-	// Write AGENT_SPEC.md with build instructions.
-	agentDir := filepath.Join(workDir, "agents", agentID)
-	if err := b.writeBuildSpec(agentDir, agent, instructions); err != nil {
-		return "", fmt.Errorf("write build spec: %w", err)
-	}
-
-	// Run Sol in-process.
-	localTools := tool.Set{}
-	localTools.Add(newMCPProbeTool())
-
-	solResult, err := b.runSolInProcess(ctx, solRunOpts{
-		WorkDir:         workDir,
-		AgentDir:        fmt.Sprintf("/workspace/agents/%s", agentID),
-		BuildProviderID: agent.BuildProviderID,
-		BuildModel:      agent.BuildModel,
-		Prompt:          "Implement the agent according to the specification. Read AGENT_SPEC.md for details.",
-		LocalTools:      localTools,
-		TestDBURL:    testDBURL,
-		TestDBPSQL:   testDBPSQL,
-		TestDBSchema: testDBSchema,
-		LogCallback: func(line string) {
-			logLine(line)
-		},
-	})
-	if err != nil {
-		return "", fmt.Errorf("sol run: %w", err)
-	}
-	// Outcome mapping. Three success-shaped paths to consider:
-	//   - RunExited + ExitStatus="success": the agent finished cleanly.
-	//   - RunExited + ExitStatus="error":  the agent reported a blocker.
-	//   - RunCompleted (no exit after nudges): treat as failure — agent
-	//     forgot to call exit, we have no signal whether the work is good.
-	// Anything else (RunFailed/RunCancelled/etc.) wraps the underlying
-	// error with %w so the outer Build loop's errors.Is cancellation
-	// check still fires.
-	if solResult.Status != sol.RunExited {
-		if solResult.Status == sol.RunCompleted {
-			logLine("[exit] agent did not call the exit tool after 2 reminders — treating as failure")
-			return "", errors.New("sol codegen failed: agent did not call the exit tool")
+	if hasDiagnostics {
+		p := fmt.Sprintf(`The EXISTING agent %s is failing. Diagnose and fix the failure described in DIAGNOSTICS.md in the workspace. Make the minimal change that fixes it and preserve everything not involved in the fix — do not remove tools, connections, routes, or files unrelated to the failure.`, name)
+		if desc != "" {
+			p += "\n\nAdditional context from the requester:\n\n" + desc
 		}
-		if solResult.Error != nil {
-			return "", fmt.Errorf("sol codegen failed: %w", solResult.Error)
-		}
-		return "", errors.New("sol codegen failed")
-	}
-	if solResult.ExitStatus != "success" {
-		logLine(fmt.Sprintf("[exit] agent reported error: %s", solResult.ExitMessage))
-		return "", fmt.Errorf("sol codegen failed: %s", solResult.ExitMessage)
-	}
-	logLine(fmt.Sprintf("[exit] success: %s", solResult.ExitMessage))
-
-	// Commit and push back to monorepo.
-	hash, err := CommitAndPush(workDir, fmt.Sprintf("codegen agent %s", agentID))
-	if err != nil {
-		return "", fmt.Errorf("commit codegen: %w", err)
+		return p
 	}
 
-	// Merge codegen branch to main.
-	if err := MergeBranch(repoPath, codegenBranch); err != nil {
-		return "", fmt.Errorf("merge codegen: %w", err)
+	if desc == "" {
+		// Degenerate: an auto_fix whose run carried no error context and
+		// no description. Don't invent work — just keep it building.
+		desc = "(no description provided — make no behavioral changes; only ensure the agent still builds.)"
 	}
+	return fmt.Sprintf(`You are upgrading the EXISTING agent %s. Its workspace already contains a working codebase. This is an incremental change request — implement it and preserve everything not related to it. Do not remove tools, connections, routes, or files the request doesn't mention.
 
-	return hash, nil
+Requested change:
+
+%s`, name, desc)
 }
 
-// writeBuildSpec writes AGENT_SPEC.md for initial code generation.
-func (b *BuildService) writeBuildSpec(dir string, agent dbq.Agent, instructions string) error {
-	content := fmt.Sprintf(`# Agent Specification
-
-## Identity
-
-- **Name:** %s
-- **Slug:** %s
-- **ID:** %s
-
-## Instructions
-
-%s
-`, agent.Name, agent.Slug, uuidString(agent.ID), instructions)
-
-	return os.WriteFile(filepath.Join(dir, "AGENT_SPEC.md"), []byte(content), 0o644)
-}
-
-// writeUpgradeSpec writes AGENT_SPEC.md for an upgrade to the agent workspace directory.
-func (b *BuildService) writeUpgradeSpec(dir string, agent dbq.Agent, input UpgradeInput) error {
-	content := fmt.Sprintf(`# Agent Specification
-
-## Identity
-
-- **Name:** %s
-- **Slug:** %s
-- **ID:** %s
-
-## Description
-
-%s
-
-## Upgrade Context
-
-- **Reason:** %s
-- **Description:** %s
-`, agent.Name, agent.Slug, uuidString(agent.ID), agent.Description, input.Reason, input.Description)
-
+// writeUpgradeDiagnostics writes DIAGNOSTICS.md only when the upgrade
+// carries failure context (auto_fix path). Returns true when a file was
+// written. Pure "manual"/"llm_request" upgrades carry no error context
+// and get no file — the request message alone is the brief.
+func writeUpgradeDiagnostics(dir string, input UpgradeInput) (bool, error) {
+	var content string
 	if input.ErrorMessage != "" {
-		content += fmt.Sprintf("\n### Error Message\n\n```\n%s\n```\n", input.ErrorMessage)
+		content += fmt.Sprintf("## Error Message\n\n```\n%s\n```\n", input.ErrorMessage)
 	}
 	if input.PanicTrace != "" {
-		content += fmt.Sprintf("\n### Panic Trace\n\n```\n%s\n```\n", input.PanicTrace)
+		content += fmt.Sprintf("\n## Panic Trace\n\n```\n%s\n```\n", input.PanicTrace)
 	}
 	if input.InputPayload != "" {
-		content += fmt.Sprintf("\n### Failed Input\n\n```json\n%s\n```\n", input.InputPayload)
+		content += fmt.Sprintf("\n## Failed Input\n\n```json\n%s\n```\n", input.InputPayload)
 	}
 	if input.Actions != "" {
-		content += fmt.Sprintf("\n### Recorded Actions\n\n```json\n%s\n```\n", input.Actions)
+		content += fmt.Sprintf("\n## Recorded Actions\n\n```json\n%s\n```\n", input.Actions)
 	}
 	if input.Messages != "" {
-		content += fmt.Sprintf("\n### Conversation Messages\n\n```\n%s\n```\n", input.Messages)
+		content += fmt.Sprintf("\n## Conversation Messages\n\n```\n%s\n```\n", input.Messages)
 	}
-
-	return os.WriteFile(filepath.Join(dir, "AGENT_SPEC.md"), []byte(content), 0o644)
+	if input.Logs != "" {
+		content += fmt.Sprintf("\n## Run Logs\n\n```\n%s\n```\n", input.Logs)
+	}
+	if content == "" {
+		return false, nil
+	}
+	runRef := "the failed run"
+	if input.RunID != "" {
+		runRef = "run " + input.RunID
+	}
+	header := fmt.Sprintf("# Failure diagnostics (%s)\n\nContext from the run that triggered this upgrade.\n\n", runRef)
+	return true, os.WriteFile(filepath.Join(dir, "DIAGNOSTICS.md"), []byte(header+content), 0o644)
 }
 
 // createAgentSchema creates a dedicated Postgres role and schema for the agent.
@@ -701,6 +484,42 @@ func (b *BuildService) agentDBURLBase(host, roleName, password string) string {
 	return fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=%s",
 		roleName, url.QueryEscape(password), host, b.cfg.DBPort,
 		b.cfg.DBName, b.cfg.DBSSLMode)
+}
+
+// runDownToCheck runs the given agent image with AGENT_MIGRATE_DOWN_TO
+// pointing at version targetVersion, against dbURL. Used by rollback's
+// Phase E pre-flight (on a clone) and Phase E2 apply (on the live
+// schema). The image is the CURRENT pre-rollback image — it knows
+// about the migrations being reversed; the target's image does not.
+//
+// Exits 0 on success, non-zero with stderr captured on failure. Same
+// container envelope as validateMigrations so failures surface the
+// same way and the orchestrator sees a one-shot completion.
+func (b *BuildService) runDownToCheck(ctx context.Context, imageTag, dbURL string, targetVersion int, logLine func(string)) error {
+	if imageTag == "" {
+		return errors.New("no current image to run down-migrations from")
+	}
+	logLine(fmt.Sprintf("Migrating down to version %d using image %s...", targetVersion, imageTag))
+
+	args := []string{
+		"run", "--rm",
+		"-e", fmt.Sprintf("AGENT_MIGRATE_DOWN_TO=%d", targetVersion),
+		"-e", "AIRLOCK_DB_URL=" + dbURL,
+		"-e", "AIRLOCK_AGENT_ID=rollback",
+		"-e", "AIRLOCK_API_URL=http://invalid-not-used-in-down-mode",
+		"-e", "AIRLOCK_AGENT_TOKEN=rollback",
+	}
+	if b.cfg.DockerNetwork != "" {
+		args = append(args, "--network", b.cfg.DockerNetwork)
+	}
+	args = append(args, imageTag)
+
+	cmd := exec.CommandContext(ctx, "docker", args...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("down-to %d failed: %w\n%s", targetVersion, err, string(out))
+	}
+	return nil
 }
 
 // validateMigrations runs the agent image with AGENT_VALIDATE_MIGRATIONS=1

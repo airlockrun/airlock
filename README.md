@@ -61,7 +61,7 @@ Verify with `dig +short anything.airlock.example.com` once propagation completes
 #    (Tracking `main` between releases is not supported — pin to a tag.)
 git clone https://github.com/airlockrun/airlock
 cd airlock
-git checkout v0.3.4
+git checkout v0.4.0-rc.1
 
 # 2. Generate secrets and edit configuration.
 cp .env.example .env
@@ -100,6 +100,29 @@ docker compose exec airlock cat /var/lib/airlock/activation_code.txt
 Open [https://airlock.localhost:24443](https://airlock.localhost:24443), accept the browser warning on the first visit, paste the activation code. `*.localhost` resolves to 127.0.0.1 automatically (RFC 6761) in every modern browser, so per-agent subdomains route to your machine without any DNS or `/etc/hosts` work. The overlay binds Caddy on the rarely-used `:24443` (HTTPS) and `:24080` (HTTP) so it doesn't fight whatever you have on 80/443 — change `HTTP_PORT` / `HTTPS_PORT` (and the matching `:port` in `PUBLIC_URL` / `S3_URL_PUBLIC`) in `.env` if 24xxx is taken too. Caddy uses its built-in local CA so you don't need a real domain or Let's Encrypt; the file `.env.local.example` shows how to trust the CA permanently if you'd rather skip the warning.
 
 This stack uses dummy secrets baked into the overlay — fine for poking around, **not** for anything you put real data into.
+
+## Develop against airlock from source
+
+If you're hacking on airlock itself (Go backend, Vue frontend, agent build pipeline) and want fast iteration without rebuilding images on every save:
+
+```bash
+cp .env.dev.example .env
+# Edit .env: set DOMAIN to suit your setup (airlock.localhost for laptop-only;
+# 1.2.3.4.nip.io for a shared dev server reachable from other machines).
+cd frontend && pnpm install && pnpm build && cd ..   # one-time, populates dist/
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+# In separate terminals:
+go run ./cmd/airlock serve         # backend
+cd frontend && pnpm watch          # vite build --watch — rebuilds dist/ on change
+```
+
+This overlay runs postgres + rustfs + caddy in containers and exposes the DB / S3 ports on `127.0.0.1` so the natively-running airlock binary can connect. The in-container `airlock` and `frontend` services are profile-disabled. Caddy serves the SPA from `frontend/dist` as static files and proxies API/WS traffic through `host.docker.internal` to your `go run` backend.
+
+**No vite dev server.** Earlier versions of this overlay proxied to `vite dev`, but the dev server is a chronic CVE surface (HMR WebSocket file-read, `/@fs/...` filesystem access, etc.) — exposing it on a shared dev server with a real domain is asking for trouble. `vite build --watch` gives you the compiler without the server: edits trigger a sub-second rebuild, you refresh the browser manually. Worth it.
+
+TLS modes (set in `.env`):
+- **`ACME_EMAIL` unset** (default): Caddy's local CA — works offline, browsers warn until you trust the CA.
+- **`ACME_EMAIL=you@example.com`**: real Let's Encrypt certs via on-demand HTTP-01, one per agent subdomain. Requires `DOMAIN` to resolve publicly and ports 80/443 reachable from the internet. Same shape as the prod self-host stack.
 
 ## Updating
 

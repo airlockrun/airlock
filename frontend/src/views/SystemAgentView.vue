@@ -1,0 +1,192 @@
+<script setup lang="ts">
+import { ref, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
+import { useToast } from 'primevue/usetoast'
+import { fromJson } from '@bufbuild/protobuf'
+import api from '@/api/client'
+import { useSystemChatStore } from '@/stores/systemChat'
+import {
+  type SystemRunInfo,
+  ListSystemRunsResponseSchema,
+} from '@/gen/airlock/v1/system_agent_pb'
+
+const router = useRouter()
+const toast = useToast()
+const sys = useSystemChatStore()
+
+const runs = ref<SystemRunInfo[]>([])
+const nextCursor = ref<string>('')
+const loading = ref(false)
+const loadingMore = ref(false)
+
+async function fetchRuns(cursor?: string) {
+  const params = cursor ? { cursor } : {}
+  const { data } = await api.get('/api/v1/system/runs', { params })
+  return fromJson(ListSystemRunsResponseSchema, data)
+}
+
+async function load() {
+  loading.value = true
+  try {
+    // Conversations back the sidebar; refresh them so the unified left
+    // pane reflects whatever the operator did since they last opened
+    // the system view.
+    await sys.refreshConversations()
+    const resp = await fetchRuns()
+    runs.value = [...resp.runs]
+    nextCursor.value = resp.nextCursor
+  } catch (err: any) {
+    toast.add({ severity: 'error', summary: 'Failed to load runs', detail: err?.message, life: 5000 })
+  } finally {
+    loading.value = false
+  }
+}
+
+async function loadMore() {
+  if (!nextCursor.value || loadingMore.value) return
+  loadingMore.value = true
+  try {
+    const resp = await fetchRuns(nextCursor.value)
+    runs.value.push(...resp.runs)
+    nextCursor.value = resp.nextCursor
+  } catch (err: any) {
+    toast.add({ severity: 'error', summary: 'Failed to load more', detail: err?.message, life: 5000 })
+  } finally {
+    loadingMore.value = false
+  }
+}
+
+function openNewChat() {
+  // Route to the empty-conversation view; the row is minted server-side
+  // on the first send (mirrors agent chat).
+  router.push('/system/chat')
+}
+
+function openRun(r: SystemRunInfo) {
+  router.push(`/system/chat/${r.conversationId}`)
+}
+
+function fmtTime(ts?: { seconds?: bigint }): string {
+  if (!ts?.seconds) return ''
+  return new Date(Number(ts.seconds) * 1000).toLocaleString()
+}
+
+function duration(r: SystemRunInfo): string {
+  if (!r.startedAt?.seconds) return ''
+  const startMs = Number(r.startedAt.seconds) * 1000
+  const endMs = r.finishedAt?.seconds ? Number(r.finishedAt.seconds) * 1000 : Date.now()
+  const sec = Math.max(0, Math.floor((endMs - startMs) / 1000))
+  if (sec < 60) return `${sec}s`
+  const m = Math.floor(sec / 60)
+  const s = sec % 60
+  return `${m}m ${s}s`
+}
+
+function statusSeverity(status: string): string {
+  switch (status) {
+    case 'running':
+    case 'suspended':
+      return 'info'
+    case 'complete':
+      return 'success'
+    case 'error':
+      return 'danger'
+    case 'cancelled':
+      return 'warn'
+    default:
+      return 'secondary'
+  }
+}
+
+onMounted(load)
+</script>
+
+<template>
+  <div>
+    <Breadcrumb :model="[{ label: 'Agents', to: '/agents' }, { label: 'System' }]" style="margin-bottom: 1rem">
+      <template #item="{ item }">
+        <router-link v-if="item.to" :to="item.to" style="text-decoration: none; color: var(--p-primary-color)">
+          {{ item.label }}
+        </router-link>
+        <span v-else>{{ item.label }}</span>
+      </template>
+    </Breadcrumb>
+
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; flex-wrap: wrap; gap: 0.75rem">
+      <div>
+        <div style="display: flex; align-items: center; gap: 0.75rem">
+          <h1 style="margin: 0; font-size: 1.875rem; font-weight: 700; line-height: 1.2">
+            <span style="margin-right: 0.4rem">⚙️</span>System Agent
+          </h1>
+          <Tag value="Operator" severity="info" />
+        </div>
+        <p style="margin: 0.25rem 0 0; color: var(--p-text-muted-color); font-size: 0.9rem">
+          In-airlock chat for managing agents, bridges, connections, members, and runs through your own permissions.
+        </p>
+      </div>
+      <div style="display: flex; gap: 0.5rem">
+        <Button label="Chat" icon="pi pi-comments" @click="openNewChat" />
+      </div>
+    </div>
+
+    <Card>
+      <template #title>
+        <div style="display: flex; align-items: center; gap: 0.5rem">
+          <i class="pi pi-history" />
+          <span>Runs</span>
+        </div>
+      </template>
+      <template #content>
+        <div v-if="loading" style="display: flex; flex-direction: column; gap: 0.5rem">
+          <Skeleton v-for="i in 4" :key="i" width="100%" height="2.5rem" />
+        </div>
+
+        <div v-else-if="runs.length === 0" style="text-align: center; padding: 1.5rem 0">
+          <i class="pi pi-history" style="font-size: 2rem; color: var(--p-surface-400); margin-bottom: 0.5rem" />
+          <p style="color: var(--p-text-muted-color); margin: 0.5rem 0 1rem">No runs yet. Start a chat to do something.</p>
+          <Button label="Chat" icon="pi pi-comments" @click="openNewChat" />
+        </div>
+
+        <div v-else>
+          <DataTable
+            :value="runs"
+            dataKey="id"
+            rowHover
+            @row-click="(e: any) => openRun(e.data)"
+            tableStyle="cursor: pointer"
+          >
+            <Column field="conversationTitle" header="Conversation">
+              <template #body="{ data }">
+                <span style="font-weight: 500">{{ data.conversationTitle }}</span>
+              </template>
+            </Column>
+            <Column field="status" header="Status" style="width: 8rem">
+              <template #body="{ data }">
+                <Tag :value="data.status" :severity="statusSeverity(data.status)" />
+              </template>
+            </Column>
+            <Column field="startedAt" header="Started" style="width: 14rem">
+              <template #body="{ data }">
+                <span style="color: var(--p-text-muted-color); font-size: 0.875rem">{{ fmtTime(data.startedAt) }}</span>
+              </template>
+            </Column>
+            <Column header="Duration" style="width: 7rem">
+              <template #body="{ data }">
+                <span style="color: var(--p-text-muted-color); font-size: 0.875rem">{{ duration(data) }}</span>
+              </template>
+            </Column>
+            <Column field="errorMessage" header="">
+              <template #body="{ data }">
+                <span v-if="data.errorMessage" style="font-size: 0.8rem; color: var(--p-red-500)">{{ data.errorMessage }}</span>
+              </template>
+            </Column>
+          </DataTable>
+
+          <div v-if="nextCursor" style="display: flex; justify-content: center; margin-top: 1rem">
+            <Button label="Load more" :loading="loadingMore" outlined @click="loadMore" />
+          </div>
+        </div>
+      </template>
+    </Card>
+  </div>
+</template>

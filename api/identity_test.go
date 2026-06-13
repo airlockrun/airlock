@@ -10,10 +10,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
+	identitysvc "github.com/airlockrun/airlock/service/identity"
 	"github.com/airlockrun/airlock/trigger"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -23,24 +25,32 @@ import (
 
 const testHMACSecret = "test-hmac-secret"
 
+func testIdentityService(td *trigger.TelegramDriver) *identitysvc.Service {
+	return identitysvc.New(
+		testDB, testEncryptor(),
+		telegramIdentityAdapter{d: td},
+		discordIdentityAdapter{d: trigger.NewDiscordDriver(zap.NewNop())},
+		zap.NewNop(),
+	)
+}
+
 func testIdentityHandler() *identityHandler {
-	return &identityHandler{
-		db:         testDB,
-		encryptor:  testEncryptor(),
-		telegram:   trigger.NewTelegramDriver(zap.NewNop()),
-		hmacSecret: testHMACSecret,
-		publicURL:  "http://localhost:8080",
-		logger:     zap.NewNop(),
-	}
+	return newIdentityHandler(
+		testIdentityService(trigger.NewTelegramDriver(zap.NewNop())),
+		testHMACSecret,
+		"http://localhost:8080",
+	)
 }
 
 // testIdentityHandlerWithTelegram builds an identityHandler wired to a mock
 // Telegram server so the preview endpoint can resolve display info without
 // hitting api.telegram.org.
 func testIdentityHandlerWithTelegram(srv *httptest.Server) *identityHandler {
-	ih := testIdentityHandler()
-	ih.telegram = trigger.NewTelegramDriverWithBaseURL(srv.URL, srv.Client())
-	return ih
+	return newIdentityHandler(
+		testIdentityService(trigger.NewTelegramDriverWithBaseURL(srv.URL, srv.Client())),
+		testHMACSecret,
+		"http://localhost:8080",
+	)
 }
 
 // createTestBridgeWithToken inserts a bridge with the given raw token (will
@@ -55,7 +65,8 @@ func createTestBridgeWithToken(t *testing.T, rawToken, botUsername string) uuid.
 	}
 	var bridgeID uuid.UUID
 	err = testDB.Pool().QueryRow(ctx,
-		`INSERT INTO bridges (type, name, bot_token_ref, bot_username) VALUES ('telegram', $1, $2, $3) RETURNING id`,
+		`INSERT INTO bridges (type, name, bot_token_ref, bot_username, status, is_system, config, settings)
+		 VALUES ('telegram', $1, $2, $3, 'active', false, '{}'::jsonb, '{}'::jsonb) RETURNING id`,
 		"preview-"+uuid.New().String()[:8], enc, botUsername,
 	).Scan(&bridgeID)
 	if err != nil {
@@ -88,7 +99,7 @@ func TestAuthExternalRedirects(t *testing.T) {
 		t.Fatalf("AuthExternal: status = %d, want 302", rec.Code)
 	}
 	loc := rec.Header().Get("Location")
-	if !contains(loc, "/link-identity?") {
+	if !strings.Contains(loc, "/link-identity?") {
 		t.Errorf("redirect location = %q, want /link-identity?...", loc)
 	}
 }
@@ -99,71 +110,78 @@ func TestLinkIdentity(t *testing.T) {
 	_, userID := testAgentAndUser(t)
 
 	const bridgeID = "00000000-0000-0000-0000-000000000001"
-	ts, sig := signAuthExternal("telegram", bridgeID, "99001122")
-	url := fmt.Sprintf("/api/v1/link-identity?platform=telegram&bridge=%s&uid=99001122&ts=%s&sig=%s", bridgeID, ts, sig)
+	const platformUID = "99001122"
 
-	router := userRouter(func(r chi.Router) {
+	linkRouter := userRouter(func(r chi.Router) {
 		r.Post("/api/v1/link-identity", ih.LinkIdentity)
 	})
-	req := userRequestJSON(t, "POST", url, userID, nil)
-	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusNoContent {
-		t.Fatalf("LinkIdentity: status = %d, want 204; body: %s", rec.Code, rec.Body.String())
-	}
-
-	// Verify identity was created — list identities.
 	listRouter := userRouter(func(r chi.Router) {
 		r.Get("/api/v1/identities", ih.ListIdentities)
 	})
-	req = userRequestJSON(t, "GET", "/api/v1/identities", userID, nil)
-	rec = httptest.NewRecorder()
-	listRouter.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("ListIdentities: status = %d", rec.Code)
-	}
-	var listResp airlockv1.ListPlatformIdentitiesResponse
-	protojson.Unmarshal(rec.Body.Bytes(), &listResp)
-	if len(listResp.Identities) == 0 {
-		t.Fatal("expected at least 1 identity")
-	}
-
-	found := false
-	var identityID string
-	for _, id := range listResp.Identities {
-		if id.Platform == "telegram" && id.PlatformUserId == "99001122" {
-			found = true
-			identityID = id.Id
-		}
-	}
-	if !found {
-		t.Error("linked identity not found in list")
-	}
-
-	// Unlink.
 	unlinkRouter := userRouter(func(r chi.Router) {
 		r.Delete("/api/v1/identities/{identityID}", ih.UnlinkIdentity)
 	})
-	req = userRequestJSON(t, "DELETE",
-		fmt.Sprintf("/api/v1/identities/%s", identityID), userID, nil)
-	rec = httptest.NewRecorder()
-	unlinkRouter.ServeHTTP(rec, req)
-	if rec.Code != http.StatusNoContent {
-		t.Errorf("Unlink: status = %d, want 204", rec.Code)
-	}
 
-	// Verify gone.
-	req = userRequestJSON(t, "GET", "/api/v1/identities", userID, nil)
-	rec = httptest.NewRecorder()
-	listRouter.ServeHTTP(rec, req)
-	protojson.Unmarshal(rec.Body.Bytes(), &listResp)
-	for _, id := range listResp.Identities {
-		if id.Id == identityID {
-			t.Error("identity should be gone after unlink")
+	t.Run("link", func(t *testing.T) {
+		ts, sig := signAuthExternal("telegram", bridgeID, platformUID)
+		url := fmt.Sprintf("/api/v1/link-identity?platform=telegram&bridge=%s&uid=%s&ts=%s&sig=%s",
+			bridgeID, platformUID, ts, sig)
+		req := userRequestJSON(t, "POST", url, userID, nil)
+		rec := httptest.NewRecorder()
+		linkRouter.ServeHTTP(rec, req)
+		if rec.Code != http.StatusNoContent {
+			t.Fatalf("LinkIdentity: status = %d, want 204; body: %s", rec.Code, rec.Body.String())
 		}
-	}
+	})
+
+	var identityID string
+	t.Run("list after link", func(t *testing.T) {
+		req := userRequestJSON(t, "GET", "/api/v1/identities", userID, nil)
+		rec := httptest.NewRecorder()
+		listRouter.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("ListIdentities: status = %d", rec.Code)
+		}
+		var listResp airlockv1.ListPlatformIdentitiesResponse
+		decodeProtoResp(t, rec, &listResp)
+		for _, id := range listResp.Identities {
+			if id.Platform == "telegram" && id.PlatformUserId == platformUID {
+				identityID = id.Id
+			}
+		}
+		if identityID == "" {
+			t.Fatal("linked identity not found in list")
+		}
+	})
+
+	t.Run("unlink", func(t *testing.T) {
+		if identityID == "" {
+			t.Skip("link step did not produce an identity ID")
+		}
+		req := userRequestJSON(t, "DELETE",
+			fmt.Sprintf("/api/v1/identities/%s", identityID), userID, nil)
+		rec := httptest.NewRecorder()
+		unlinkRouter.ServeHTTP(rec, req)
+		if rec.Code != http.StatusNoContent {
+			t.Fatalf("Unlink: status = %d, want 204", rec.Code)
+		}
+	})
+
+	t.Run("list after unlink", func(t *testing.T) {
+		if identityID == "" {
+			t.Skip("link step did not produce an identity ID")
+		}
+		req := userRequestJSON(t, "GET", "/api/v1/identities", userID, nil)
+		rec := httptest.NewRecorder()
+		listRouter.ServeHTTP(rec, req)
+		var listResp airlockv1.ListPlatformIdentitiesResponse
+		decodeProtoResp(t, rec, &listResp)
+		for _, id := range listResp.Identities {
+			if id.Id == identityID {
+				t.Error("identity should be gone after unlink")
+			}
+		}
+	})
 }
 
 func TestLinkIdentityBadSignature(t *testing.T) {
@@ -330,17 +348,4 @@ func TestLinkIdentityPreviewBridgePlatformMismatch(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("mismatch: status = %d, want 400", rec.Code)
 	}
-}
-
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && searchSubstring(s, substr)
-}
-
-func searchSubstring(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }

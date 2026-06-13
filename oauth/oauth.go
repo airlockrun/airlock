@@ -59,7 +59,9 @@ func GenerateState() (string, error) {
 }
 
 // BuildAuthURL constructs an OAuth 2.0 authorization URL with PKCE.
-func (c *Client) BuildAuthURL(authURL, clientID, redirectURI, state, codeChallenge, scopes string) (string, error) {
+// extraParams are provider-specific query parameters merged in last —
+// e.g. access_type=offline to request a refresh token.
+func (c *Client) BuildAuthURL(authURL, clientID, redirectURI, state, codeChallenge, scopes string, extraParams map[string]string) (string, error) {
 	u, err := url.Parse(authURL)
 	if err != nil {
 		return "", fmt.Errorf("parse authorization url: %w", err)
@@ -75,6 +77,9 @@ func (c *Client) BuildAuthURL(authURL, clientID, redirectURI, state, codeChallen
 
 	if scopes != "" {
 		q.Set("scope", scopes)
+	}
+	for k, v := range extraParams {
+		q.Set(k, v)
 	}
 
 	u.RawQuery = q.Encode()
@@ -131,10 +136,13 @@ func (c *Client) tokenRequest(ctx context.Context, tokenURL string, data url.Val
 		return nil, fmt.Errorf("read token response: %w", err)
 	}
 
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("token request failed with status %d: %s", resp.StatusCode, string(body))
-	}
-
+	// RFC 6749 §5.2 errors arrive as 400 + JSON `{"error":"…"}`. Try to
+	// extract the typed OAuthError *before* the status-code fallback so
+	// callers can branch on Code == "invalid_grant" (refresh-job uses
+	// this to clear revoked credentials so the UI reflects the disconnected
+	// state instead of showing a stale "authorized" badge). Only fall
+	// through to the opaque "status %d" error if the body doesn't carry a
+	// recognisable OAuth error code.
 	var tokenResp struct {
 		AccessToken  string `json:"access_token"`
 		RefreshToken string `json:"refresh_token"`
@@ -143,16 +151,20 @@ func (c *Client) tokenRequest(ctx context.Context, tokenURL string, data url.Val
 		Error        string `json:"error"`
 		ErrorDesc    string `json:"error_description"`
 	}
-
-	if err := json.Unmarshal(body, &tokenResp); err != nil {
-		return nil, fmt.Errorf("parse token response: %w", err)
-	}
-
-	if tokenResp.Error != "" {
+	jsonErr := json.Unmarshal(body, &tokenResp)
+	if jsonErr == nil && tokenResp.Error != "" {
 		return nil, &OAuthError{
 			Code:        tokenResp.Error,
 			Description: tokenResp.ErrorDesc,
 		}
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("token request failed with status %d: %s", resp.StatusCode, string(body))
+	}
+
+	if jsonErr != nil {
+		return nil, fmt.Errorf("parse token response: %w", jsonErr)
 	}
 
 	if tokenResp.AccessToken == "" {

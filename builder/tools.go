@@ -18,19 +18,19 @@ type mcpProbeInput struct {
 
 // mcpProbeResult is the output of mcp_probe.
 type mcpProbeResult struct {
-	URL                  string   `json:"url"`
-	RecommendedAuthMode  string   `json:"recommendedAuthMode"`
-	AuthorizationURL     string   `json:"authorizationUrl,omitempty"`
-	TokenURL             string   `json:"tokenUrl,omitempty"`
-	ScopesSupported      []string `json:"scopesSupported,omitempty"`
-	Tools                []string `json:"tools,omitempty"`
-	Error                string   `json:"error,omitempty"`
+	URL                 string   `json:"url"`
+	RecommendedAuthMode string   `json:"recommendedAuthMode"`
+	AuthorizationURL    string   `json:"authorizationUrl,omitempty"`
+	TokenURL            string   `json:"tokenUrl,omitempty"`
+	ScopesSupported     []string `json:"scopesSupported,omitempty"`
+	Tools               []string `json:"tools,omitempty"`
+	Error               string   `json:"error,omitempty"`
 }
 
 // newMCPProbeTool creates a tool that probes an MCP server URL for capabilities and auth requirements.
 func newMCPProbeTool() tool.Tool {
 	return tool.New("mcp_probe").
-		Description("Probe an MCP server URL to discover its auth requirements and available tools. "+
+		Description("Probe an MCP server URL to discover its auth requirements and available tools. " +
 			"Use this before writing RegisterMCP code to determine the correct AuthMode.").
 		SchemaFromStruct(mcpProbeInput{}).
 		Execute(func(ctx context.Context, input json.RawMessage, opts tool.CallOptions) (tool.Result, error) {

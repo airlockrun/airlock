@@ -22,20 +22,19 @@ func insertRunRaw(t *testing.T, agentID uuid.UUID, finishedAt *time.Time, verbos
 	}
 	inputPayload := []byte(`{}`)
 	actions := []byte(`[]`)
-	logs, stdout, panic := "", "", ""
+	stdout, panic := "", ""
 	var checkpoint []byte
 	if verbose {
 		inputPayload = []byte(`{"msg":"hello"}`)
 		actions = []byte(`[{"type":"tool_call"}]`)
-		logs = "some log output"
 		stdout = "stdout line"
 		panic = "stack trace"
 		checkpoint = []byte(`{"state":"x"}`)
 	}
 	_, err := testDB.Pool().Exec(context.Background(),
-		`INSERT INTO runs (id, agent_id, status, input_payload, actions, logs, stdout_log, panic_trace, checkpoint, llm_tokens_in, llm_tokens_out, llm_cost_estimate, source_ref, trigger_type, trigger_ref, compacted, finished_at)
-		 VALUES ($1, $2, 'success', $3, $4, $5, $6, $7, $8, 100, 200, 0.003, '', 'prompt', '', $9, $10)`,
-		toPgUUID(runID), toPgUUID(agentID), inputPayload, actions, logs, stdout, panic, checkpoint, compacted, finished,
+		`INSERT INTO runs (id, agent_id, status, input_payload, actions, stdout_log, error_message, error_kind, panic_trace, checkpoint, llm_calls, llm_tokens_in, llm_tokens_out, llm_cost_estimate, source_ref, trigger_type, trigger_ref, compacted, finished_at)
+		 VALUES ($1, $2, 'success', $3, $4, $5, '', '', $6, $7, 1, 100, 200, 0.003, '', 'prompt', '', $8, $9)`,
+		toPgUUID(runID), toPgUUID(agentID), inputPayload, actions, stdout, panic, checkpoint, compacted, finished,
 	)
 	if err != nil {
 		t.Fatalf("insert run: %v", err)
@@ -81,8 +80,8 @@ func TestCompactOldRuns(t *testing.T) {
 	if got.Checkpoint != nil {
 		t.Errorf("oldVerbose.Checkpoint = %q, want nil", string(got.Checkpoint))
 	}
-	if got.Logs != "" || got.StdoutLog != "" || got.PanicTrace != "" {
-		t.Errorf("oldVerbose text fields not cleared: logs=%q stdout=%q panic=%q", got.Logs, got.StdoutLog, got.PanicTrace)
+	if got.StdoutLog != "" || got.PanicTrace != "" {
+		t.Errorf("oldVerbose text fields not cleared: stdout=%q panic=%q", got.StdoutLog, got.PanicTrace)
 	}
 	if !got.Compacted {
 		t.Error("oldVerbose.Compacted = false, want true")

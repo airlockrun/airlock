@@ -28,12 +28,22 @@ type TelegramDriver struct {
 // NewTelegramDriver creates a TelegramDriver. logger is used to surface
 // Telegram API errors (notably the silent-failure Markdown/HTML parse
 // rejections that otherwise vanish). Pass zap.NewNop() in tests.
+//
+// The HTTP client's Timeout caps the entire request — connect, TLS,
+// upload, server processing, response body read. Sized to comfortably
+// cover the long-poll getUpdates window (timeout=30s server-side) plus
+// TLS/network slack, while still releasing a goroutine if a connection
+// stalls on a short call (sendMessage, getMe, …). Without a ceiling
+// here those short calls can hang indefinitely on a half-open TCP
+// socket — the kind of failure that happens on a local network blip
+// (WG/VPN reconnect, NIC cycle) when the OS hasn't yet noticed the
+// peer is gone.
 func NewTelegramDriver(logger *zap.Logger) *TelegramDriver {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
 	return &TelegramDriver{
-		httpClient: &http.Client{},
+		httpClient: &http.Client{Timeout: 60 * time.Second},
 		logger:     logger,
 	}
 }
@@ -102,7 +112,6 @@ func (d *TelegramDriver) Poll(ctx context.Context, br *dbq.Bridge) ([]BridgeEven
 	if err != nil {
 		return nil, err
 	}
-
 
 	var events []BridgeEvent
 	// advanceOffset must be called for EVERY update we observe — even ones we
@@ -495,6 +504,42 @@ func (d *TelegramDriver) GetMe(ctx context.Context, token string) (string, error
 	return result.Result.Username, nil
 }
 
+// SetMenuButton configures the bot's default chat menu button to launch
+// a Telegram Web App at the given URL. The button is persistent — it
+// shows for every private chat the bot is in, opens the URL in
+// Telegram's in-app browser, and exposes initData to the page so airlock
+// can authenticate the user automatically.
+//
+// Passing url=="" clears the bot back to Telegram's default menu (the
+// commands list). Called once on bridge activation / token refresh; not
+// idempotent at the Telegram side (each call re-publishes the button)
+// but cheap and safe to call repeatedly.
+func (d *TelegramDriver) SetMenuButton(ctx context.Context, token, url string) error {
+	var menuButton map[string]any
+	if url == "" {
+		menuButton = map[string]any{"type": "default"}
+	} else {
+		menuButton = map[string]any{
+			"type": "web_app",
+			"text": "Open",
+			"web_app": map[string]any{
+				"url": url,
+			},
+		}
+	}
+	body := map[string]any{"menu_button": menuButton}
+	var result struct {
+		OK bool `json:"ok"`
+	}
+	if err := d.callTelegramJSON(ctx, token, "setChatMenuButton", body, &result); err != nil {
+		return err
+	}
+	if !result.OK {
+		return fmt.Errorf("telegram setChatMenuButton: not ok")
+	}
+	return nil
+}
+
 // TelegramChatInfo holds the subset of getChat fields we expose.
 type TelegramChatInfo struct {
 	Username  string
@@ -670,7 +715,6 @@ func (d *TelegramDriver) getUpdates(ctx context.Context, token string, offset in
 	return result.Result, nil
 }
 
-
 // sendMessageDraft streams a partial message to the user (Bot API 9.3+).
 func (d *TelegramDriver) sendMessageDraft(ctx context.Context, token string, chatID int64, draftID, text string) error {
 	body := map[string]any{
@@ -708,9 +752,34 @@ func (d *TelegramDriver) sendMessageWithButtons(ctx context.Context, token strin
 	return d.sendMessageInner(ctx, token, chatID, text, keyboard)
 }
 
-// sendMessageInner is the shared HTML-first, plain-text-fallback sender.
-// Keyboard is attached via reply_markup when non-nil.
+// sendMessageInner splits text into chunks within Telegram's per-message
+// length limit and sends each. A keyboard is attached to the final chunk
+// only. Returns the last chunk's message ID — the one callers edit or
+// remove buttons from. Blank text sends nothing.
 func (d *TelegramDriver) sendMessageInner(ctx context.Context, token string, chatID int64, text string, keyboard map[string]any) (int64, error) {
+	chunks := splitForTelegram(text)
+	if len(chunks) == 0 {
+		return 0, nil
+	}
+	var lastID int64
+	for i, chunk := range chunks {
+		var kb map[string]any
+		if i == len(chunks)-1 {
+			kb = keyboard
+		}
+		id, err := d.sendOne(ctx, token, chatID, chunk, kb)
+		if err != nil {
+			return lastID, err
+		}
+		lastID = id
+	}
+	return lastID, nil
+}
+
+// sendOne sends a single message already within Telegram's length limit.
+// HTML-first; on a parse failure retries the same text as plain text so
+// the user still sees the content. Errors are logged.
+func (d *TelegramDriver) sendOne(ctx context.Context, token string, chatID int64, text string, keyboard map[string]any) (int64, error) {
 	body := map[string]any{
 		"chat_id":    chatID,
 		"text":       text,
@@ -969,20 +1038,20 @@ type telegramCallbackQuery struct {
 }
 
 type telegramMessage struct {
-	MessageID      int64                 `json:"message_id"`
-	Date           int64                 `json:"date"` // unix seconds
-	From           telegramUser          `json:"from"`
-	Chat           telegramChat          `json:"chat"`
-	Text           string                `json:"text"`
-	Caption        string                `json:"caption"`
-	Photo          []telegramPhotoSize   `json:"photo"`
-	Document       *telegramDocument     `json:"document"`
-	Voice          *telegramVoice        `json:"voice"`
-	Audio          *telegramAudio        `json:"audio"`
-	VideoNote      *telegramVideoNote    `json:"video_note"`
-	Video          *telegramVideo        `json:"video"`
-	ReplyToMessage *telegramMessage      `json:"reply_to_message"`
-	ForwardOrigin  *telegramForwardInfo  `json:"forward_origin"`
+	MessageID      int64                `json:"message_id"`
+	Date           int64                `json:"date"` // unix seconds
+	From           telegramUser         `json:"from"`
+	Chat           telegramChat         `json:"chat"`
+	Text           string               `json:"text"`
+	Caption        string               `json:"caption"`
+	Photo          []telegramPhotoSize  `json:"photo"`
+	Document       *telegramDocument    `json:"document"`
+	Voice          *telegramVoice       `json:"voice"`
+	Audio          *telegramAudio       `json:"audio"`
+	VideoNote      *telegramVideoNote   `json:"video_note"`
+	Video          *telegramVideo       `json:"video"`
+	ReplyToMessage *telegramMessage     `json:"reply_to_message"`
+	ForwardOrigin  *telegramForwardInfo `json:"forward_origin"`
 }
 
 // telegramForwardInfo is the modern (Bot API 7.0+) forward_origin field.
@@ -1038,12 +1107,12 @@ func telegramReferenced(m *telegramMessage) *BridgeReferencedMessage {
 }
 
 type telegramForwardInfo struct {
-	Type           string        `json:"type"` // "user" | "hidden_user" | "chat" | "channel"
-	Date           int64         `json:"date"`
-	SenderUser     *telegramUser `json:"sender_user"`
-	SenderUserName string        `json:"sender_user_name"`     // used when Type == "hidden_user"
-	SenderChat     *telegramChat `json:"sender_chat"`
-	AuthorSignature string       `json:"author_signature"`
+	Type            string        `json:"type"` // "user" | "hidden_user" | "chat" | "channel"
+	Date            int64         `json:"date"`
+	SenderUser      *telegramUser `json:"sender_user"`
+	SenderUserName  string        `json:"sender_user_name"` // used when Type == "hidden_user"
+	SenderChat      *telegramChat `json:"sender_chat"`
+	AuthorSignature string        `json:"author_signature"`
 }
 
 type telegramPhotoSize struct {

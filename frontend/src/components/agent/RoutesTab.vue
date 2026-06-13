@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, watch } from 'vue'
 import { fromJson } from '@bufbuild/protobuf'
 import api from '@/api/client'
 import { GetAgentDetailResponseSchema } from '@/gen/airlock/v1/api_pb'
@@ -11,15 +11,19 @@ interface Route {
   description: string
 }
 
-const props = defineProps<{ agentId: string; agentSlug?: string; agentDomain?: string }>()
+const props = defineProps<{ agentId: string }>()
+const emit = defineEmits<{ populated: [count: number] }>()
 
 const routes = ref<Route[]>([])
+watch(routes, (v) => emit('populated', v.length), { immediate: true })
+const routeBaseUrl = ref('')
 const loading = ref(true)
 
 onMounted(async () => {
   try {
     const { data } = await api.get(`/api/v1/agents/${props.agentId}`)
     const response = fromJson(GetAgentDetailResponseSchema, data)
+    routeBaseUrl.value = response.routeBaseUrl || ''
     routes.value = (response.routes || []).map(r => ({
       path: r.path,
       method: r.method,
@@ -30,6 +34,15 @@ onMounted(async () => {
     loading.value = false
   }
 })
+
+// A GET route is reachable in the browser, so link it to its external
+// URL ({routeBaseUrl}{/path}). Other methods (POST/PUT/...) aren't
+// navigable, so they stay plain text. Empty base → no link (defensive).
+function routeHref(r: Route): string | null {
+  if (r.method.toUpperCase() !== 'GET' || !routeBaseUrl.value) return null
+  const path = r.path.startsWith('/') ? r.path : '/' + r.path
+  return routeBaseUrl.value + path
+}
 </script>
 
 <template>
@@ -41,7 +54,17 @@ onMounted(async () => {
         </div>
       </template>
       <Column field="method" header="Method" style="width: 5rem" />
-      <Column field="path" header="Path" />
+      <Column field="path" header="Path">
+        <template #body="{ data }">
+          <a
+            v-if="routeHref(data)"
+            :href="routeHref(data)!"
+            target="_blank"
+            rel="noopener noreferrer"
+          >{{ data.path }}</a>
+          <span v-else>{{ data.path }}</span>
+        </template>
+      </Column>
       <Column field="description" header="Description" />
       <Column field="access" header="Access" style="width: 6rem" />
     </DataTable>

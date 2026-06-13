@@ -6,6 +6,7 @@ import (
 
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
+	"github.com/airlockrun/airlock/service"
 	"go.uber.org/zap"
 )
 
@@ -55,8 +56,7 @@ func (h *CaddyAskHandler) Ask(w http.ResponseWriter, r *http.Request) {
 
 	// Check if agent exists.
 	q := dbq.New(h.db.Pool())
-	_, err := q.GetAgentBySlug(r.Context(), slug)
-	if err != nil {
+	if _, err := service.ResolveAgent(r.Context(), q, slug); err != nil {
 		h.logger.Debug("unknown agent slug", zap.String("slug", slug), zap.Error(err))
 		writeError(w, http.StatusForbidden, "unknown agent")
 		return

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import api from '@/api/client'
 import { useConfirm } from 'primevue/useconfirm'
 import { useToast } from 'primevue/usetoast'
@@ -13,11 +13,13 @@ interface Member {
 }
 
 const props = defineProps<{ agentId: string }>()
+const emit = defineEmits<{ populated: [count: number] }>()
 const confirm = useConfirm()
 const toast = useToast()
 const usersStore = useUsersStore()
 
 const members = ref<Member[]>([])
+watch(members, (v) => emit('populated', v.length), { immediate: true })
 const loading = ref(true)
 
 const showAddDialog = ref(false)
@@ -105,10 +107,6 @@ onMounted(async () => {
 
 <template>
   <div>
-    <div class="flex justify-end mb-3">
-      <Button label="Add Member" icon="pi pi-plus" size="small" @click="showAddDialog = true" />
-    </div>
-
     <DataTable v-if="!loading" :value="members" stripedRows>
       <template #empty>
         <div style="text-align: center; padding: 2rem; color: var(--p-text-muted-color)">
@@ -149,6 +147,10 @@ onMounted(async () => {
         <template #body><Skeleton width="2rem" /></template>
       </Column>
     </DataTable>
+
+    <div style="margin-top: 0.75rem">
+      <Button label="Add Member" icon="pi pi-plus" size="small" @click="showAddDialog = true" />
+    </div>
 
     <Dialog v-model:visible="showAddDialog" header="Add Member" modal :style="{ width: '28rem' }">
       <div style="display: flex; flex-direction: column; gap: 1rem; padding-top: 0.5rem">

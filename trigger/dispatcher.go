@@ -35,6 +35,34 @@ import (
 // ForwardCron/Webhook.
 const PromptHTTPCeiling = 30 * time.Minute
 
+// Sentinel errors from EnsureRunning for agents that exist but aren't in a
+// runnable state. Callers map these to a surface-appropriate response
+// (409 on HTTP, an in-chat notice on bridges, a JSON-RPC error on A2A)
+// instead of a generic 500. Both are expected operator states, not faults.
+var (
+	// ErrAgentStopped — the agent is parked via /stop and only a manual
+	// /start resumes it; EnsureRunning refuses to auto-start it.
+	ErrAgentStopped = errors.New("agent is stopped")
+	// ErrAgentNoImage — the agent has never finished a build, so there is
+	// no container image to run.
+	ErrAgentNoImage = errors.New("agent has no image")
+)
+
+// notRunnableBridgeReply maps a not-runnable sentinel to a chat-friendly
+// reply for bridge surfaces. ok is false for any other error, so callers
+// fall through to their normal error return. The reply is plain prose —
+// a bridge user can't /start an agent, so it points them at an admin.
+func notRunnableBridgeReply(err error) (reply string, ok bool) {
+	switch {
+	case errors.Is(err, ErrAgentStopped):
+		return "This agent is stopped. An admin needs to start it before it can reply.", true
+	case errors.Is(err, ErrAgentNoImage):
+		return "This agent hasn't finished building yet. Try again once it's ready.", true
+	default:
+		return "", false
+	}
+}
+
 // runState tracks an in-flight run for cancellation. Cron, webhook, and
 // prompt runs all register their cancel func here so DELETE /runs/{id}
 // can abort them.
@@ -76,6 +104,13 @@ func NewDispatcher(cfg *config.Config, db *db.DB, containers container.Container
 // CancelRun aborts the in-flight outbound request for the given run, if any.
 // Returns true if a cancel was fired. Idempotent — repeat calls and calls
 // for runs that already finished are no-ops.
+//
+// A2A cascade: the cancel also walks runs.parent_run_id downward and
+// fires the cancel hook on every still-in-flight descendant. The HTTP
+// disconnect chain already cascades cancels (parent's outbound HTTP
+// closing → child's ctx.Done() → child's CancelRun), but this gives an
+// explicit best-effort kick for runs on the same replica when the user
+// cancels mid-chain.
 func (d *Dispatcher) CancelRun(runID uuid.UUID) bool {
 	d.mu.Lock()
 	state, ok := d.inFlight[runID]
@@ -84,7 +119,40 @@ func (d *Dispatcher) CancelRun(runID uuid.UUID) bool {
 	if ok {
 		state.cancel()
 	}
+	d.cancelDescendants(context.Background(), runID)
 	return ok
+}
+
+// cancelDescendants fires cancel on every descendant run reachable from
+// rootRunID via parent_run_id. Best-effort: descendants on a different
+// replica won't have an in-flight entry here and will only cancel when
+// their parent's HTTP request closes from above. Cross-replica
+// propagation is the same pre-existing gap CancelRun already has.
+//
+// Safe to call when the dispatcher has no DB (some unit tests construct
+// a bare Dispatcher with only the inFlight registry); skip the
+// descendant walk in that case.
+func (d *Dispatcher) cancelDescendants(ctx context.Context, rootRunID uuid.UUID) {
+	if d.db == nil {
+		return
+	}
+	q := dbq.New(d.db.Pool())
+	rows, err := q.GetDescendantRuns(ctx, toPgUUID(rootRunID))
+	if err != nil {
+		d.logger.Warn("cancelDescendants: lookup failed",
+			zap.String("root_run_id", rootRunID.String()), zap.Error(err))
+		return
+	}
+	for _, r := range rows {
+		childID := pgUUID(r.ID)
+		d.mu.Lock()
+		state, ok := d.inFlight[childID]
+		delete(d.inFlight, childID)
+		d.mu.Unlock()
+		if ok {
+			state.cancel()
+		}
+	}
 }
 
 // InFlightIDs returns a snapshot of currently-tracked run IDs. Used by the
@@ -127,16 +195,46 @@ func (r *runBodyCloser) Close() error {
 	return r.ReadCloser.Close()
 }
 
+// busyCloser wraps the agent's response body so closing it marks the
+// agent container idle. Paired with the MarkBusy call in forward: the
+// container is held busy — exempt from idle reaping — for the whole
+// life of the streamed response, however long the run takes.
+type busyCloser struct {
+	io.ReadCloser
+	containers container.ContainerManager
+	agentID    uuid.UUID
+}
+
+func (b *busyCloser) Close() error {
+	b.containers.MarkIdle(b.agentID)
+	return b.ReadCloser.Close()
+}
+
 // EnsureRunning looks up the agent, decrypts its DB credentials, and starts
 // (or reconnects to) the agent container. Returns the running container.
 func (d *Dispatcher) EnsureRunning(ctx context.Context, agentID uuid.UUID) (*container.Container, error) {
+	// Hold the swap mutex for the whole GetAgent → StartAgent window so a
+	// concurrent build's Phase F can't slip in between the agent read
+	// and the StartAgent call, leaving us starting the OLD image while
+	// the build proceeds to swap in the new one. Reading the agent
+	// INSIDE the lock guarantees we always see the post-swap image_ref.
+	unlockSwap := d.containers.LockSwap(agentID)
+	defer unlockSwap()
+
 	q := dbq.New(d.db.Pool())
 	agent, err := q.GetAgentByID(ctx, toPgUUID(agentID))
 	if err != nil {
 		return nil, fmt.Errorf("get agent: %w", err)
 	}
 	if agent.ImageRef == "" {
-		return nil, errors.New("agent has no image")
+		return nil, ErrAgentNoImage
+	}
+	// Stopped means the operator (or a failed rebuild) parked this agent
+	// and doesn't want it auto-restarted. Any trigger path that hits this
+	// gate while the agent is stopped must surface a clear error, not
+	// silently bring it back up. Manual Start is the only way out.
+	if agent.Status == "stopped" {
+		return nil, ErrAgentStopped
 	}
 
 	// Decrypt DB password from its dedicated column.
@@ -169,6 +267,7 @@ func (d *Dispatcher) EnsureRunning(ctx context.Context, agentID uuid.UUID) (*con
 	if err != nil {
 		return nil, fmt.Errorf("start agent: %w", err)
 	}
+
 	return c, nil
 }
 
@@ -181,12 +280,12 @@ func (d *Dispatcher) ForwardWebhook(ctx context.Context, agentID uuid.UUID, path
 		return nil, uuid.Nil, err
 	}
 
-	runID, err := d.createRun(ctx, agentID, bridgeID, body, "webhook", path)
+	runID, err := d.createRun(ctx, agentID, bridgeID, nil, body, "webhook", path)
 	if err != nil {
 		return nil, uuid.Nil, err
 	}
 
-	rc, err := d.forward(ctx, c, "POST", "/webhook/"+path, body, runID, bridgeID, timeout)
+	rc, err := d.forward(ctx, agentID, c, "POST", "/webhook/"+path, body, runID, bridgeID, nil, nil, timeout)
 	if err != nil {
 		return nil, uuid.Nil, err
 	}
@@ -202,7 +301,7 @@ func (d *Dispatcher) ForwardCron(ctx context.Context, agentID uuid.UUID, cronNam
 		return nil, uuid.Nil, err
 	}
 
-	runID, err := d.createRun(ctx, agentID, nil, nil, "cron", cronName)
+	runID, err := d.createRun(ctx, agentID, nil, nil, nil, "cron", cronName)
 	if err != nil {
 		return nil, uuid.Nil, err
 	}
@@ -210,7 +309,7 @@ func (d *Dispatcher) ForwardCron(ctx context.Context, agentID uuid.UUID, cronNam
 	cancelCtx, cancel := context.WithCancel(ctx)
 	d.registerInFlight(runID, cancel)
 
-	rc, err := d.forward(cancelCtx, c, "POST", "/cron/"+cronName, nil, runID, nil, timeout)
+	rc, err := d.forward(cancelCtx, agentID, c, "POST", "/cron/"+cronName, nil, runID, nil, nil, nil, timeout)
 	if err != nil {
 		d.deregisterInFlight(runID)
 		cancel()
@@ -221,19 +320,34 @@ func (d *Dispatcher) ForwardCron(ctx context.Context, agentID uuid.UUID, cronNam
 
 // ForwardPrompt ensures the agent is running, creates a run record, and POSTs
 // the prompt input to the agent container. Returns the response body stream
-// (NDJSON) and the run ID.
-func (d *Dispatcher) ForwardPrompt(ctx context.Context, agentID uuid.UUID, input agentsdk.PromptInput, bridgeID *uuid.UUID) (io.ReadCloser, uuid.UUID, error) {
+// (NDJSON) and the run ID. userID is the prompting user (anchor for A2A
+// VisibleSiblings); pass nil for anonymous/system runs.
+func (d *Dispatcher) ForwardPrompt(ctx context.Context, agentID uuid.UUID, input agentsdk.PromptInput, bridgeID *uuid.UUID, userID *uuid.UUID) (io.ReadCloser, uuid.UUID, error) {
 	c, err := d.EnsureRunning(ctx, agentID)
 	if err != nil {
 		return nil, uuid.Nil, err
 	}
+
+	// Populate VisibleSiblings: every sibling the user could call directly
+	// via MCP. The LLM's prompt and the VM bindings render against the
+	// same set so the model never sees a binding it can't actually invoke.
+	visible, err := d.computeVisibleSiblings(ctx, agentID, userID)
+	if err != nil {
+		return nil, uuid.Nil, fmt.Errorf("compute visible siblings: %w", err)
+	}
+	input.VisibleSiblings = visible
+
+	// Per-turn <env> context: state the channel explicitly (web or the
+	// bridge's platform), and resolve the originating user. Fail-soft.
+	input.Platform = d.resolvePlatform(ctx, bridgeID)
+	input.UserDisplayName, input.UserEmail = d.resolveUserEnv(ctx, userID)
 
 	payload, err := json.Marshal(input)
 	if err != nil {
 		return nil, uuid.Nil, fmt.Errorf("marshal prompt input: %w", err)
 	}
 
-	runID, err := d.createRun(ctx, agentID, bridgeID, payload, "prompt", input.ConversationID)
+	runID, err := d.createRun(ctx, agentID, bridgeID, nil, payload, "prompt", input.ConversationID)
 	if err != nil {
 		return nil, uuid.Nil, err
 	}
@@ -245,7 +359,7 @@ func (d *Dispatcher) ForwardPrompt(ctx context.Context, agentID uuid.UUID, input
 	cancelCtx, cancel := context.WithCancel(ctx)
 	d.registerInFlight(runID, cancel)
 
-	rc, err := d.forward(cancelCtx, c, "POST", "/prompt", payload, runID, bridgeID, PromptHTTPCeiling)
+	rc, err := d.forward(cancelCtx, agentID, c, "POST", "/prompt", payload, runID, bridgeID, nil, userID, PromptHTTPCeiling)
 	if err != nil {
 		d.deregisterInFlight(runID)
 		cancel()
@@ -254,13 +368,106 @@ func (d *Dispatcher) ForwardPrompt(ctx context.Context, agentID uuid.UUID, input
 	return &runBodyCloser{ReadCloser: rc, dispatcher: d, runID: runID}, runID, nil
 }
 
+// ForwardA2APrompt is ForwardPrompt for the sibling-agent code path:
+// the caller is another agent's run, parentRunID is its run.id, and the
+// new run's parent_run_id and trigger_type/_ref are wired accordingly.
+// callerAccess is the access level Airlock pre-resolved against the
+// target agent (see api/access.computeA2ACallerAccess). userID is the
+// original user (the human at the top of the chain — propagated through
+// every A2A hop via the conversation's user_id), used for both the new
+// run's VisibleSiblings computation and audit.
+func (d *Dispatcher) ForwardA2APrompt(ctx context.Context, agentID uuid.UUID, parentRunID uuid.UUID, callerAccess agentsdk.Access, userID *uuid.UUID, input agentsdk.PromptInput) (io.ReadCloser, uuid.UUID, error) {
+	c, err := d.EnsureRunning(ctx, agentID)
+	if err != nil {
+		return nil, uuid.Nil, err
+	}
+
+	visible, err := d.computeVisibleSiblings(ctx, agentID, userID)
+	if err != nil {
+		return nil, uuid.Nil, fmt.Errorf("compute visible siblings: %w", err)
+	}
+	input.VisibleSiblings = visible
+	input.CallerAccess = callerAccess
+	input.DirectTools = callerAccess == agentsdk.AccessPublic
+
+	// A2A runs deliver to the calling agent, not a human channel.
+	input.Platform = "a2a"
+	input.UserDisplayName, input.UserEmail = d.resolveUserEnv(ctx, userID)
+
+	payload, err := json.Marshal(input)
+	if err != nil {
+		return nil, uuid.Nil, fmt.Errorf("marshal prompt input: %w", err)
+	}
+
+	// Anon and user MCP callers reach this path with parentRunID = uuid.Nil
+	// — they aren't a sibling A2A child, just an external prompt that
+	// happens to enter via the MCP endpoint. Translate Nil → nil so we
+	// insert NULL parent_run_id (instead of an all-zero FK that trips
+	// runs_parent_run_id_fkey). trigger_type stays "a2a" so analytics
+	// can still distinguish these from web /prompt runs. trigger_ref is
+	// the conversation this turn runs in (resolved/minted by the MCP
+	// handler) — same convention as prompt runs, so contextId round-trips
+	// and parent-conversation lookups resolve correctly. The caller is
+	// linked via parent_run_id, not trigger_ref.
+	var parentRunIDPtr *uuid.UUID
+	if parentRunID != uuid.Nil {
+		parentRunIDPtr = &parentRunID
+	}
+	runID, err := d.createRun(ctx, agentID, nil, parentRunIDPtr, payload, "a2a", input.ConversationID)
+	if err != nil {
+		return nil, uuid.Nil, err
+	}
+
+	cancelCtx, cancel := context.WithCancel(ctx)
+	d.registerInFlight(runID, cancel)
+
+	rc, err := d.forward(cancelCtx, agentID, c, "POST", "/prompt", payload, runID, nil, parentRunIDPtr, userID, PromptHTTPCeiling)
+	if err != nil {
+		d.deregisterInFlight(runID)
+		cancel()
+		return nil, uuid.Nil, err
+	}
+	return &runBodyCloser{ReadCloser: rc, dispatcher: d, runID: runID}, runID, nil
+}
+
+// computeVisibleSiblings returns the set of agent IDs this run's user
+// is permitted to A2A-call from the prompting agent. Anonymous runs
+// (userID == nil) get only siblings with allow_non_member_mcp = true.
+// Cron/webhook runs (also userID == nil) get the same set — they
+// can't A2A in v1; agentsdk rejects A2A binding attempts when no
+// original user is on the run, but the visible set returned here is
+// harmless either way.
+func (d *Dispatcher) computeVisibleSiblings(ctx context.Context, agentID uuid.UUID, userID *uuid.UUID) ([]uuid.UUID, error) {
+	q := dbq.New(d.db.Pool())
+	var userPg pgtype.UUID
+	if userID != nil {
+		userPg = toPgUUID(*userID)
+	}
+	rows, err := q.ListVisibleSiblings(ctx, dbq.ListVisibleSiblingsParams{
+		ParentAgentID: toPgUUID(agentID),
+		UserID:        userPg,
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]uuid.UUID, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, pgUUID(r))
+	}
+	return out, nil
+}
+
 // createRun inserts a new run record and returns its ID.
-func (d *Dispatcher) createRun(ctx context.Context, agentID uuid.UUID, bridgeID *uuid.UUID, inputPayload []byte, triggerType, triggerRef string) (uuid.UUID, error) {
+func (d *Dispatcher) createRun(ctx context.Context, agentID uuid.UUID, bridgeID *uuid.UUID, parentRunID *uuid.UUID, inputPayload []byte, triggerType, triggerRef string) (uuid.UUID, error) {
 	q := dbq.New(d.db.Pool())
 
 	var pgBridgeID pgtype.UUID
 	if bridgeID != nil {
 		pgBridgeID = toPgUUID(*bridgeID)
+	}
+	var pgParentRunID pgtype.UUID
+	if parentRunID != nil {
+		pgParentRunID = toPgUUID(*parentRunID)
 	}
 	if inputPayload == nil {
 		inputPayload = []byte("{}")
@@ -275,6 +482,7 @@ func (d *Dispatcher) createRun(ctx context.Context, agentID uuid.UUID, bridgeID 
 	run, err := q.CreateRun(ctx, dbq.CreateRunParams{
 		AgentID:      toPgUUID(agentID),
 		BridgeID:     pgBridgeID,
+		ParentRunID:  pgParentRunID,
 		InputPayload: inputPayload,
 		SourceRef:    sourceRef,
 		TriggerType:  triggerType,
@@ -328,7 +536,15 @@ func (d *Dispatcher) RefreshAgent(ctx context.Context, agentID uuid.UUID) error 
 }
 
 // forward sends an HTTP request to the agent container and returns the response body.
-func (d *Dispatcher) forward(ctx context.Context, c *container.Container, method, path string, body []byte, runID uuid.UUID, bridgeID *uuid.UUID, timeout time.Duration) (io.ReadCloser, error) {
+//
+// parentRunID, when non-nil, becomes the X-Parent-Run-ID header so the
+// callee's agentsdk can scope reads on __incoming/run-<parent>/ paths
+// to this specific A2A call. userID, when non-nil, becomes X-User-ID
+// — the originating user, used by the callee for ScopeUser-scoped
+// directories. Both are nil for the web / bridge / cron / webhook
+// flows that pre-existed scoping (those handlers pass principal via
+// PromptInput / conversation lookups).
+func (d *Dispatcher) forward(ctx context.Context, agentID uuid.UUID, c *container.Container, method, path string, body []byte, runID uuid.UUID, bridgeID, parentRunID, userID *uuid.UUID, timeout time.Duration) (io.ReadCloser, error) {
 	var bodyReader io.Reader
 	if body != nil {
 		bodyReader = bytes.NewReader(body)
@@ -344,21 +560,66 @@ func (d *Dispatcher) forward(ctx context.Context, c *container.Container, method
 	if bridgeID != nil {
 		req.Header.Set("X-Bridge-ID", bridgeID.String())
 	}
+	if parentRunID != nil && *parentRunID != uuid.Nil {
+		req.Header.Set("X-Parent-Run-ID", parentRunID.String())
+	}
+	if userID != nil && *userID != uuid.Nil {
+		req.Header.Set("X-User-ID", userID.String())
+	}
 
+	// Hold the container busy for the whole life of this request so the
+	// idle reaper cannot stop it mid-run. MarkIdle fires on every exit
+	// path: a transport error, a 4xx/5xx, or the streamed body's Close.
 	client := &http.Client{Timeout: timeout}
+	d.containers.MarkBusy(agentID)
 	resp, err := client.Do(req)
 	if err != nil {
+		d.containers.MarkIdle(agentID)
 		return nil, fmt.Errorf("forward to agent: %w", err)
 	}
 	if resp.StatusCode >= 400 {
+		d.containers.MarkIdle(agentID)
 		defer resp.Body.Close()
 		respBody, _ := io.ReadAll(resp.Body)
 		return nil, fmt.Errorf("agent returned %d: %s", resp.StatusCode, respBody)
 	}
-	return resp.Body, nil
+	return &busyCloser{ReadCloser: resp.Body, containers: d.containers, agentID: agentID}, nil
 }
 
 // --- helpers ---
+
+// resolvePlatform returns the channel name for the <env> block: "web" when
+// there's no bridge, else the bridge's platform type (telegram/discord).
+// Fail-soft — a lookup miss logs and returns "" (the line is then omitted)
+// rather than guessing.
+func (d *Dispatcher) resolvePlatform(ctx context.Context, bridgeID *uuid.UUID) string {
+	if bridgeID == nil {
+		return "web"
+	}
+	q := dbq.New(d.db.Pool())
+	b, err := q.GetBridgeByID(ctx, toPgUUID(*bridgeID))
+	if err != nil {
+		d.logger.Warn("env: resolve bridge platform failed", zap.String("bridge_id", bridgeID.String()), zap.Error(err))
+		return ""
+	}
+	return b.Type
+}
+
+// resolveUserEnv returns the originating user's display name + email for the
+// <env> block. Fail-soft — no user, or a lookup miss, yields empty strings
+// (the User line is then omitted).
+func (d *Dispatcher) resolveUserEnv(ctx context.Context, userID *uuid.UUID) (name, email string) {
+	if userID == nil || *userID == uuid.Nil {
+		return "", ""
+	}
+	q := dbq.New(d.db.Pool())
+	u, err := q.GetUserByID(ctx, toPgUUID(*userID))
+	if err != nil {
+		d.logger.Warn("env: resolve user failed", zap.String("user_id", userID.String()), zap.Error(err))
+		return "", ""
+	}
+	return u.DisplayName, u.Email
+}
 
 func toPgUUID(u uuid.UUID) pgtype.UUID {
 	return pgtype.UUID{Bytes: u, Valid: true}

@@ -333,12 +333,15 @@ func (x *ToolCallEvent) GetInput() string {
 
 // ToolResultEvent carries the result (or error) of a tool execution.
 type ToolResultEvent struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	RunId         string                 `protobuf:"bytes,1,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
-	ToolCallId    string                 `protobuf:"bytes,2,opt,name=tool_call_id,json=toolCallId,proto3" json:"tool_call_id,omitempty"`
-	ToolName      string                 `protobuf:"bytes,3,opt,name=tool_name,json=toolName,proto3" json:"tool_name,omitempty"`
-	Output        string                 `protobuf:"bytes,4,opt,name=output,proto3" json:"output,omitempty"` // JSON string
-	Error         string                 `protobuf:"bytes,5,opt,name=error,proto3" json:"error,omitempty"`   // set if tool errored
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	RunId      string                 `protobuf:"bytes,1,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
+	ToolCallId string                 `protobuf:"bytes,2,opt,name=tool_call_id,json=toolCallId,proto3" json:"tool_call_id,omitempty"`
+	ToolName   string                 `protobuf:"bytes,3,opt,name=tool_name,json=toolName,proto3" json:"tool_name,omitempty"`
+	Output     string                 `protobuf:"bytes,4,opt,name=output,proto3" json:"output,omitempty"` // human-facing text of the result
+	Error      string                 `protobuf:"bytes,5,opt,name=error,proto3" json:"error,omitempty"`   // set if tool errored (error text)
+	// outcome is the structured, persisted tool status derived from the
+	// discriminated tool-result output: "success" | "error" | "denied".
+	Outcome       string `protobuf:"bytes,6,opt,name=outcome,proto3" json:"outcome,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -404,6 +407,13 @@ func (x *ToolResultEvent) GetOutput() string {
 func (x *ToolResultEvent) GetError() string {
 	if x != nil {
 		return x.Error
+	}
+	return ""
+}
+
+func (x *ToolResultEvent) GetOutcome() string {
+	if x != nil {
+		return x.Outcome
 	}
 	return ""
 }
@@ -660,12 +670,12 @@ func (x *RunErrorEvent) GetError() string {
 	return ""
 }
 
-// NotificationEvent carries a printToUser or topic publish notification.
+// NotificationEvent carries an output() or topic publish notification.
 type NotificationEvent struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	AgentId        string                 `protobuf:"bytes,1,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"`
 	ConversationId string                 `protobuf:"bytes,2,opt,name=conversation_id,json=conversationId,proto3" json:"conversation_id,omitempty"`
-	Topic          string                 `protobuf:"bytes,3,opt,name=topic,proto3" json:"topic,omitempty"`                          // empty for direct printToUser
+	Topic          string                 `protobuf:"bytes,3,opt,name=topic,proto3" json:"topic,omitempty"`                          // empty for direct output()
 	PartsJson      string                 `protobuf:"bytes,4,opt,name=parts_json,json=partsJson,proto3" json:"parts_json,omitempty"` // JSON-encoded []DisplayPart
 	Source         string                 `protobuf:"bytes,5,opt,name=source,proto3" json:"source,omitempty"`                        // "notification"
 	unknownFields  protoimpl.UnknownFields
@@ -761,14 +771,15 @@ const file_airlock_v1_realtime_proto_rawDesc = "" +
 	"\ftool_call_id\x18\x02 \x01(\tR\n" +
 	"toolCallId\x12\x1b\n" +
 	"\ttool_name\x18\x03 \x01(\tR\btoolName\x12\x14\n" +
-	"\x05input\x18\x04 \x01(\tR\x05input\"\x95\x01\n" +
+	"\x05input\x18\x04 \x01(\tR\x05input\"\xaf\x01\n" +
 	"\x0fToolResultEvent\x12\x15\n" +
 	"\x06run_id\x18\x01 \x01(\tR\x05runId\x12 \n" +
 	"\ftool_call_id\x18\x02 \x01(\tR\n" +
 	"toolCallId\x12\x1b\n" +
 	"\ttool_name\x18\x03 \x01(\tR\btoolName\x12\x16\n" +
 	"\x06output\x18\x04 \x01(\tR\x06output\x12\x14\n" +
-	"\x05error\x18\x05 \x01(\tR\x05error\"\xa4\x01\n" +
+	"\x05error\x18\x05 \x01(\tR\x05error\x12\x18\n" +
+	"\aoutcome\x18\x06 \x01(\tR\aoutcome\"\xa4\x01\n" +
 	"\x19ConfirmationRequiredEvent\x12\x15\n" +
 	"\x06run_id\x18\x01 \x01(\tR\x05runId\x12\x1e\n" +
 	"\n" +

@@ -1,42 +1,44 @@
 package api
 
 import (
+	"context"
+	"github.com/airlockrun/airlock/agentapi"
 	"net/http"
-	"net/url"
 
 	"github.com/airlockrun/airlock/auth"
+	"github.com/airlockrun/airlock/authz"
 	"github.com/airlockrun/airlock/builder"
 	"github.com/airlockrun/airlock/container"
 	"github.com/airlockrun/airlock/db"
+	"github.com/airlockrun/airlock/db/dbq"
+	"github.com/airlockrun/airlock/execproxy"
 	"github.com/airlockrun/airlock/oauth"
 	"github.com/airlockrun/airlock/realtime"
 	"github.com/airlockrun/airlock/secrets"
+	agentssvc "github.com/airlockrun/airlock/service/agents"
+	bridgessvc "github.com/airlockrun/airlock/service/bridges"
+	catalogsvc "github.com/airlockrun/airlock/service/catalog"
+	connsvc "github.com/airlockrun/airlock/service/connections"
+	convsvc "github.com/airlockrun/airlock/service/conversations"
+	execsvc "github.com/airlockrun/airlock/service/execendpoints"
+	gitcredssvc "github.com/airlockrun/airlock/service/gitcredentials"
+	identitysvc "github.com/airlockrun/airlock/service/identity"
+	managedbotssvc "github.com/airlockrun/airlock/service/managedbots"
+	memberssvc "github.com/airlockrun/airlock/service/members"
+	modelssvc "github.com/airlockrun/airlock/service/models"
+	providerssvc "github.com/airlockrun/airlock/service/providers"
+	runssvc "github.com/airlockrun/airlock/service/runs"
+	settingssvc "github.com/airlockrun/airlock/service/settings"
+	siblingssvc "github.com/airlockrun/airlock/service/siblings"
+	userssvc "github.com/airlockrun/airlock/service/users"
 	"github.com/airlockrun/airlock/storage"
+	"github.com/airlockrun/airlock/sysagent"
 	"github.com/airlockrun/airlock/trigger"
 	"github.com/go-chi/chi/v5"
 	chimw "github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
 	"go.uber.org/zap"
 )
-
-// agentRouteSchemePort returns the scheme + optional explicit port that
-// per-agent {slug}.AGENT_DOMAIN URLs should use. Inherited from PUBLIC_URL
-// so a localhost overlay on `:8443` produces signed URLs that match what
-// Caddy actually serves. Standard 80/443 → empty port (no `:443` cruft
-// in production URLs); anything else is preserved verbatim. Falls back
-// to ("https", "") when PUBLIC_URL is malformed — same effective shape
-// as the historic hard-coded "https://" prefix.
-func agentRouteSchemePort(publicURL string) (scheme, port string) {
-	scheme = "https"
-	if u, err := url.Parse(publicURL); err == nil && u.Host != "" {
-		scheme = u.Scheme
-		p := u.Port()
-		if p != "" && !((scheme == "https" && p == "443") || (scheme == "http" && p == "80")) {
-			port = p
-		}
-	}
-	return
-}
 
 type RouterConfig struct {
 	DB        *db.DB
@@ -83,6 +85,11 @@ type RouterConfig struct {
 	// Agent subdomain routing (e.g. "airlock.host" → {slug}.airlock.host)
 	AgentDomain string
 
+	// AgentBaseURL builds an agent's external route base
+	// ({scheme}://{slug}.{domain}[:port]). Sourced from config.Config —
+	// the single place that derives it; handlers never re-derive.
+	AgentBaseURL func(slug string) string
+
 	// LLM debugging proxy (e.g. telescope -watch)
 	LLMProxyURL string
 
@@ -115,11 +122,9 @@ func NewRouter(cfg RouterConfig) http.Handler {
 
 	r := chi.NewRouter()
 
-	// Standard middleware
-	r.Use(chimw.RequestID)
-	r.Use(chimw.Recoverer)
-	r.Use(RealIP(cfg.RealIP))
-	r.Use(requestLogger(cfg.Logger))
+	// Cross-cutting middleware (RequestID, RealIP, requestLogger, recoverers)
+	// is applied on the outer wrapper below, so it covers both the chi-routed
+	// platform API and the SubdomainProxy-intercepted agent traffic.
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   []string{"*"},
 		AllowedMethods:   []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
@@ -129,10 +134,46 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		MaxAge:           300,
 	}))
 
+	// SSH dialer for RegisterExecEndpoint. Owns a per-process *ssh.Client
+	// cache + background reaper; lives for the lifetime of the server.
+	// Shared by the agent-internal /api/agent/exec handler and the
+	// operator-facing /api/v1/agents/{id}/exec-endpoints handlers.
+	execDialer := execproxy.NewSSHDialer(
+		cfg.Secrets,
+		agentapi.NewTOFUPinner(cfg.DB.Pool()),
+		cfg.Logger,
+	)
+
 	authHandler := NewAuthHandler(cfg.DB, cfg.JWTSecret, cfg.ActivationCodeFile, cfg.Logger.Named("auth"))
-	providersHandler := NewProvidersHandler(cfg.DB, cfg.Secrets)
-	usersHandler := NewUsersHandler(cfg.DB)
-	sysSettingsHandler := &settingsHandler{db: cfg.DB, encryptor: cfg.Secrets, logger: cfg.Logger.Named("settings")}
+	providersHandler := NewProvidersHandler(providerssvc.New(cfg.DB, cfg.Secrets, cfg.Logger.Named("providers")))
+	gitCredsHandler := NewGitCredentialsHandler(gitcredssvc.New(cfg.DB, cfg.Secrets, cfg.Logger.Named("gitcredentials")))
+	gitWebhookHandler := NewGitWebhookHandler(cfg.DB, cfg.BuildService, cfg.Logger.Named("git-webhook"))
+	usersHandler := NewUsersHandler(cfg.DB, userssvc.New(cfg.DB, cfg.BridgeManager, cfg.Logger.Named("users")))
+	settingsSvc := settingssvc.New(cfg.DB, cfg.Logger.Named("settings"))
+	// Manager bot wiring is deferred until inside the auth group where
+	// the bridges service / managedbots service are constructed. The
+	// closures captured here read managerBot at call time, so a nil
+	// pointer at startup gracefully degrades to "not configured" until
+	// it's assigned below.
+	var managerBot *trigger.ManagerBot
+	sysSettingsHandler := newSettingsHandler(settingsHandlerDeps{
+		Svc:       settingsSvc,
+		Encryptor: cfg.Secrets,
+		ManagerBotUsername: func() string {
+			if managerBot == nil {
+				return ""
+			}
+			return managerBot.Username()
+		},
+		ValidateManagerBot: trigger.ValidateManagerBotToken,
+		ManagerBotReload: func(ctx context.Context) error {
+			if managerBot == nil {
+				return nil
+			}
+			return managerBot.Reload(ctx)
+		},
+		ManagerBotScope: trigger.ManagerBotTokenScope,
+	})
 
 	// Health check (public, no auth — reverse proxies and orchestrators need
 	// to hit this without credentials). 200 if DB+S3 reachable, 503 otherwise.
@@ -165,37 +206,57 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		})
 	})
 
-	// Credential, bridge, and identity handlers
-	credH := &credentialHandler{
-		db:          cfg.DB,
-		encryptor:   cfg.Secrets,
-		oauthClient: cfg.OAuthClient,
-		publicURL:   cfg.PublicURL,
-		logger:      cfg.Logger.Named("credentials"),
-		dispatcher:  cfg.Dispatcher,
+	// Credential, bridge, and identity handlers. The connections service
+	// takes function-typed deps for MCP discovery + auth injection so it
+	// doesn't have to depend on the goai/mcp client directly.
+	credSvcDiscovery := func(ctx context.Context, serverURL string, authInjection []byte, creds string) ([]connsvc.ToolInfo, string, error) {
+		tools, instructions, err := agentapi.DiscoverMCPTools(ctx, serverURL, authInjection, creds)
+		if err != nil {
+			return nil, "", err
+		}
+		out := make([]connsvc.ToolInfo, len(tools))
+		for i, t := range tools {
+			out[i] = connsvc.ToolInfo{Name: t.Name, Description: t.Description, InputSchema: t.InputSchema}
+		}
+		return out, instructions, nil
 	}
-	brH := &bridgeHandler{
-		db:        cfg.DB,
-		encryptor: cfg.Secrets,
-		telegram:  cfg.TelegramDriver,
-		discord:   cfg.DiscordDriver,
-		bridgeMgr: cfg.BridgeManager,
-		logger:    cfg.Logger.Named("bridges"),
-	}
-	idH := &identityHandler{
-		db:         cfg.DB,
-		encryptor:  cfg.Secrets,
-		telegram:   cfg.TelegramDriver,
-		discord:    cfg.DiscordDriver,
-		hmacSecret: cfg.JWTSecret, // reuse JWT secret for HMAC
-		publicURL:  cfg.PublicURL,
-		logger:     cfg.Logger.Named("identity"),
-	}
+	credH := newCredentialHandler(connsvc.New(
+		cfg.DB,
+		cfg.Secrets,
+		cfg.OAuthClient,
+		cfg.PublicURL,
+		cfg.Dispatcher.RefreshAgent,
+		cfg.Logger.Named("credentials"),
+		credSvcDiscovery,
+		agentapi.DiscoverMCPAuth,
+		agentapi.InjectAuth,
+		agentapi.MCPHTTPClient,
+	))
+	brH := newBridgeHandler(bridgessvc.New(
+		cfg.DB, cfg.Secrets, cfg.TelegramDriver, cfg.DiscordDriver,
+		cfg.BridgeManager, cfg.Logger.Named("bridges"),
+	))
+	idH := newIdentityHandler(
+		identitysvc.New(
+			cfg.DB, cfg.Secrets,
+			telegramIdentityAdapter{d: cfg.TelegramDriver},
+			discordIdentityAdapter{d: cfg.DiscordDriver},
+			cfg.Logger.Named("identity"),
+		),
+		cfg.JWTSecret, // reuse JWT secret for HMAC
+		cfg.PublicURL,
+	)
+
+	catalogH := newCatalogHandler(catalogsvc.New(cfg.DB, cfg.Logger.Named("catalog")))
 
 	// Public endpoints (no JWT required)
 	r.Get("/api/v1/credentials/oauth/callback", credH.OAuthCallback)
-	r.Get("/api/v1/catalog/providers", providersHandler.ListCatalogProviders)
 	r.Get("/auth-external", idH.AuthExternal)
+
+	// OAuth Authorization Server handler — built once and reused by
+	// both the top-level unauthenticated routes (/.well-known, /oauth/*)
+	// and the /api/v1/oauth/* routes that require a user JWT.
+	oauthH := newOAuthServerHandler(cfg.DB, cfg.JWTSecret, cfg.PublicURL, cfg.Logger.Named("oauth"))
 
 	// Authenticated API routes
 	r.Route("/api/v1", func(r chi.Router) {
@@ -204,13 +265,29 @@ func NewRouter(cfg RouterConfig) http.Handler {
 
 		r.Get("/me", authHandler.Me)
 
+		// Per-user git credentials (PATs for accessing external git
+		// remotes attached to agents). Self-service: any authenticated
+		// user can manage their own credentials; not admin-gated.
+		r.Route("/me/git/credentials", func(r chi.Router) {
+			r.Get("/", gitCredsHandler.List)
+			r.Post("/", gitCredsHandler.Create)
+			r.Delete("/{id}", gitCredsHandler.Delete)
+		})
+
+		// OAuth consent + grant management. The SPA hits /oauth/consent
+		// (POST) to approve or deny a pending /oauth/authorize request;
+		// /api/v1/oauth/grants lists and revokes existing consents.
+		r.Post("/oauth/consent", oauthH.Consent)
+		r.Get("/oauth/grants", oauthH.ListGrants)
+		r.Delete("/oauth/grants/{clientID}/{agentID}", oauthH.RevokeGrant)
+
 		// Slim tenant directory for member-picker dropdowns. Any authenticated
 		// user — agent admins who aren't tenant admins still need this list.
 		r.Get("/users/selectable", usersHandler.ListSelectable)
 
 		// User management (admin only)
 		r.Route("/users", func(r chi.Router) {
-			r.Use(auth.RequireTenantRole("admin"))
+			r.Use(auth.RequireTenantRole(authz.RequiredTenantRole(authz.TenantUserManage)))
 			r.Get("/", usersHandler.List)
 			r.Post("/", usersHandler.Create)
 			r.Patch("/{userID}", usersHandler.UpdateRole)
@@ -220,11 +297,11 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		// System settings. GET is readable by any authenticated user so the
 		// Agent Create flow can prefill system defaults; PUT stays admin-only.
 		r.Get("/settings", sysSettingsHandler.Get)
-		r.With(auth.RequireTenantRole("admin")).Put("/settings", sysSettingsHandler.Update)
+		r.With(auth.RequireTenantRole(authz.RequiredTenantRole(authz.TenantSettingsUpdate))).Put("/settings", sysSettingsHandler.Update)
 
 		// Provider management (admin/owner only)
 		r.Route("/providers", func(r chi.Router) {
-			r.Use(auth.RequireTenantRole("admin"))
+			r.Use(auth.RequireTenantRole(authz.RequiredTenantRole(authz.TenantProviderManage)))
 			r.Get("/", providersHandler.List)
 			r.Post("/", providersHandler.Create)
 			r.Route("/{id}", func(r chi.Router) {
@@ -234,34 +311,33 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		})
 
 		// Catalog (read-only, any authenticated user)
-		r.Get("/catalog/providers", providersHandler.ListCatalogProviders)
-		r.Get("/catalog/models", providersHandler.ListCatalogModels)
-		capH := &capabilitiesHandler{db: cfg.DB, logger: cfg.Logger.Named("capabilities")}
-		r.Get("/catalog/capabilities", capH.ListCapabilities)
+		r.Get("/catalog/providers", catalogH.ListProviders)
+		r.Get("/catalog/models", catalogH.ListModels)
+		r.Get("/catalog/capabilities", catalogH.ListCapabilities)
 
 		// Credential management
 		r.Post("/credentials/oauth/start", credH.OAuthStart)
 		r.Post("/credentials/mcp/oauth/start", credH.MCPOAuthStart)
 
 		// Agent management (Phase 6)
-		agH := &agentsHandler{
-			db:          cfg.DB,
-			builder:     cfg.BuildService,
-			dispatcher:  cfg.Dispatcher,
-			encryptor:   cfg.Secrets,
-			containers:  cfg.Containers,
-			promptProxy: cfg.PromptProxy,
-			bridgeMgr:   cfg.BridgeManager,
-			publicURL:   cfg.PublicURL,
-			logger:      cfg.Logger.Named("agents"),
-		}
-		rH := &runsHandler{
-			db:         cfg.DB,
-			dispatcher: cfg.Dispatcher,
-			s3:         cfg.S3Client,
-			logger:     cfg.Logger.Named("runs"),
-		}
+		agH := newAgentsHandler(
+			agentssvc.New(
+				cfg.DB, cfg.BuildService, cfg.Dispatcher,
+				cfg.Containers, cfg.BridgeManager,
+				cfg.Logger.Named("agents"),
+			),
+			memberssvc.New(cfg.DB, cfg.Logger.Named("members")),
+			cfg.PublicURL,
+			cfg.AgentBaseURL,
+		)
+		runsService := runssvc.New(cfg.DB, cfg.Dispatcher, cfg.Logger.Named("runs"))
+		rH := newRunsHandler(runsService, cfg.S3Client, cfg.Logger.Named("runs"))
 		cH := &conversationsHandler{
+			svc: convsvc.New(cfg.DB, cfg.S3Client, cfg.Logger.Named("conversations"),
+				func(parts []byte, agentID string) []string {
+					return agentapi.ExtractCanonicalKeys(parts, agentID)
+				}),
+			runsSvc:     runsService,
 			db:          cfg.DB,
 			dispatcher:  cfg.Dispatcher,
 			promptProxy: cfg.PromptProxy,
@@ -271,14 +347,90 @@ func NewRouter(cfg RouterConfig) http.Handler {
 			convLocks:   newConvMutexMap(),
 			logger:      cfg.Logger.Named("conversations"),
 		}
-		mH := &modelsHandler{
-			db:     cfg.DB,
-			logger: cfg.Logger.Named("models"),
-			agents: agH,
-		}
+		mH := newModelsHandler(modelssvc.New(cfg.DB, cfg.Logger.Named("models")))
+		siblingsH := newSiblingsHandler(siblingssvc.New(cfg.DB, cfg.Dispatcher, cfg.Logger.Named("siblings")))
 
 		// Wire post-upgrade notifications to conversations handler.
 		cfg.BuildService.SetUpgradeNotifier(cH)
+
+		// In-airlock system agent: operator-facing chat that wraps
+		// every per-domain service in typed Go tools. Per-domain
+		// services are fresh instances (stateless wrappers; identical
+		// to the handler-owned ones above modulo logger name).
+		sysagentSvc := sysagent.New(sysagent.Deps{
+			DB:        cfg.DB,
+			Encryptor: cfg.Secrets,
+			PubSub:    cfg.PubSub,
+			PublicURL: cfg.PublicURL,
+			Logger:    cfg.Logger.Named("sysagent"),
+			Agents: agentssvc.New(
+				cfg.DB, cfg.BuildService, cfg.Dispatcher,
+				cfg.Containers, cfg.BridgeManager,
+				cfg.Logger.Named("sysagent-agents"),
+			),
+			Bridges: bridgessvc.New(
+				cfg.DB, cfg.Secrets, cfg.TelegramDriver, cfg.DiscordDriver,
+				cfg.BridgeManager, cfg.Logger.Named("sysagent-bridges"),
+			),
+			Catalog: catalogsvc.New(cfg.DB, cfg.Logger.Named("sysagent-catalog")),
+			Conns: connsvc.New(
+				cfg.DB, cfg.Secrets, cfg.OAuthClient, cfg.PublicURL,
+				cfg.Dispatcher.RefreshAgent, cfg.Logger.Named("sysagent-conns"),
+				credSvcDiscovery, agentapi.DiscoverMCPAuth, agentapi.InjectAuth, agentapi.MCPHTTPClient,
+			),
+			Execs:    execsvc.New(cfg.DB.Pool(), cfg.Secrets, execDialer, cfg.Logger.Named("sysagent-execs")),
+			GitCreds: gitcredssvc.New(cfg.DB, cfg.Secrets, cfg.Logger.Named("sysagent-gitcreds")),
+			Members:  memberssvc.New(cfg.DB, cfg.Logger.Named("sysagent-members")),
+			Models:   modelssvc.New(cfg.DB, cfg.Logger.Named("sysagent-models")),
+			Runs:     runssvc.New(cfg.DB, cfg.Dispatcher, cfg.Logger.Named("sysagent-runs")),
+			Siblings: siblingssvc.New(cfg.DB, cfg.Dispatcher, cfg.Logger.Named("sysagent-siblings")),
+			Users:    userssvc.New(cfg.DB, cfg.BridgeManager, cfg.Logger.Named("sysagent-users")),
+		})
+		// Route post-upgrade notifications triggered from sysagent
+		// conversations back to the conversation (NotifyUpgradeComplete injects
+		// the [Upgrade succeeded] event + auto-resumes the LLM).
+		// Conversation-origin upgrades still flow through the
+		// cH-side notifier above.
+		cfg.BuildService.SetUpgradeSystemNotifier(sysagentSvc)
+		sysagentH := newSysagentHandler(sysagentSvc)
+
+		// Wire sysagent into the bridge manager so system-bridge
+		// (br.IsSystem) inbound DMs route into the in-airlock chat
+		// surface instead of the agent path. *sysagent.Service satisfies
+		// trigger.SysagentRuntime directly — same method names + types,
+		// the interface lives in trigger to break the import cycle
+		// (sysagent → service/agents → trigger).
+		cfg.BridgeManager.AttachSysagent(sysagentSvc)
+
+		// Managed-bot sessions service + singleton manager-bot poller.
+		// The bridges service shared with sysagent (above) is the one
+		// the manager-bot uses on ManagedBotCreated to create the
+		// resulting bridge row. managerBot is captured by the settings
+		// handler's closures via the pointer declared earlier.
+		managedBotsSvc := managedbotssvc.New(managedbotssvc.Deps{
+			DB: cfg.DB,
+			ManagerBotUsername: func() string {
+				if managerBot == nil {
+					return ""
+				}
+				return managerBot.Username()
+			},
+			Logger: cfg.Logger.Named("managedbots"),
+		})
+		managedBotsH := newManagedBotSessionsHandler(managedBotsSvc)
+
+		managerBot = trigger.NewManagerBot(
+			cfg.DB, cfg.Secrets,
+			bridgessvc.New(cfg.DB, cfg.Secrets, cfg.TelegramDriver, cfg.DiscordDriver, cfg.BridgeManager, cfg.Logger.Named("managerbot-bridges")),
+			cfg.BridgeManager,
+			cfg.Logger.Named("manager-bot"),
+		)
+		// Start the poller in the background. If no token is configured
+		// (or validation fails) Start returns nil after recording the
+		// error in system_settings — airlock startup is unaffected.
+		if err := managerBot.Start(context.Background()); err != nil {
+			cfg.Logger.Warn("manager bot start failed", zap.Error(err))
+		}
 
 		r.Route("/agents", func(r chi.Router) {
 			r.Get("/", agH.List)
@@ -290,7 +442,9 @@ func NewRouter(cfg RouterConfig) http.Handler {
 				r.Delete("/", agH.Delete)
 				r.Post("/stop", agH.Stop)
 				r.Post("/start", agH.Start)
+				r.Post("/suspend", agH.Suspend)
 				r.Post("/upgrade", agH.Upgrade)
+				r.Post("/rollback", agH.Rollback)
 				r.Post("/prompt", cH.Prompt)
 				r.Post("/files", cH.UploadFile)
 
@@ -307,6 +461,11 @@ func NewRouter(cfg RouterConfig) http.Handler {
 				r.Get("/builds/{buildID}", agH.GetBuild)
 				r.Post("/builds/cancel", agH.CancelBuild)
 
+				// External git remote (optional, per agent)
+				r.Get("/git", agH.GetGitConfig)
+				r.Post("/git/connect", agH.ConnectGit)
+				r.Post("/git/disconnect", agH.DisconnectGit)
+
 				// Runs
 				r.Get("/runs", rH.ListRuns)
 
@@ -321,6 +480,16 @@ func NewRouter(cfg RouterConfig) http.Handler {
 				r.Post("/members", agH.AddMember)
 				r.Delete("/members/{userID}", agH.RemoveMember)
 
+				// A2A: sibling address book + MCP access toggles. All
+				// admin-gated (siblingsH.requireParentAdmin); user JWT is
+				// already in ctx via the /api/v1 group middleware.
+				r.Get("/siblings", siblingsH.List)
+				r.Get("/siblings/addable", siblingsH.ListAddable)
+				r.Post("/siblings", siblingsH.Add)
+				r.Delete("/siblings/{siblingID}", siblingsH.Remove)
+				r.Get("/a2a-settings", siblingsH.GetA2ASettings)
+				r.Put("/a2a-settings", siblingsH.UpdateA2ASettings)
+
 				// Credentials & Connections
 				r.Get("/connections", credH.ListConnections)
 				r.Route("/credentials/{slug}", func(r chi.Router) {
@@ -331,10 +500,16 @@ func NewRouter(cfg RouterConfig) http.Handler {
 					r.Put("/oauth-app", credH.SetOAuthApp)
 				})
 
-				// Topics
-				r.Get("/topics", cH.ListTopics)
-				r.Post("/topics/{slug}/subscribe", cH.SubscribeTopic)
-				r.Delete("/topics/{slug}/subscribe", cH.UnsubscribeTopic)
+				// Exec endpoints (operator-configured SSH targets the agent's
+				// RegisterExecEndpoint declares).
+				execEpH := newExecEndpointsHandler(execsvc.New(cfg.DB.Pool(), cfg.Secrets, execDialer, cfg.Logger))
+				r.Get("/exec-endpoints", execEpH.List)
+				r.Route("/exec-endpoints/{slug}", func(r chi.Router) {
+					r.Put("/", execEpH.Configure)
+					r.Post("/rotate-keypair", execEpH.RotateKeypair)
+					r.Post("/unpin-host-key", execEpH.UnpinHostKey)
+					r.Post("/test", execEpH.Test)
+				})
 
 				// MCP Servers
 				r.Get("/mcp-servers", credH.ListMCPServers)
@@ -360,10 +535,30 @@ func NewRouter(cfg RouterConfig) http.Handler {
 			})
 		})
 
-		// Top-level conversation and run routes (not nested under agent)
+		// System-agent conversations: operator chat surface, per-user.
+		// Conversations are not shared; the service enforces ownership at
+		// every entry point.
+		r.Route("/system/conversations", func(r chi.Router) {
+			r.Get("/", sysagentH.ListConversations)
+			r.Post("/", sysagentH.CreateConversation)
+			r.Get("/{conversationID}", sysagentH.GetConversation)
+			r.Delete("/{conversationID}", sysagentH.DeleteConversation)
+			r.Post("/{conversationID}/prompt", sysagentH.Prompt)
+		})
+		// Activity view across the operator's own sysagent runs (all
+		// conversations). Owner-scoped query inside the service.
+		r.Get("/system/runs", sysagentH.ListRuns)
+
+		// Top-level conversation and run routes (not nested under agent).
+		// Topic subscription is conversation-scoped: the conversation that
+		// subscribes is the one that receives the topic's notifications.
+		r.Get("/conversations", cH.ListAllConversations)
 		r.Get("/conversations/{convID}", cH.GetConversation)
 		r.Get("/conversations/{convID}/messages", cH.ListConversationMessages)
 		r.Delete("/conversations/{convID}", cH.DeleteConversation)
+		r.Get("/conversations/{convID}/topics", cH.ListTopics)
+		r.Post("/conversations/{convID}/topics/{slug}/subscribe", cH.SubscribeTopic)
+		r.Delete("/conversations/{convID}/topics/{slug}/subscribe", cH.UnsubscribeTopic)
 		r.Get("/runs/{runID}", rH.GetRun)
 		r.Get("/runs/{runID}/logs", rH.GetRunLogs)
 		r.Delete("/runs/{runID}", rH.CancelRun)
@@ -374,7 +569,20 @@ func NewRouter(cfg RouterConfig) http.Handler {
 			r.Post("/", brH.CreateBridge)
 			r.Put("/{bridgeID}", brH.UpdateBridge)
 			r.Delete("/{bridgeID}", brH.DeleteBridge)
+
+			// Managed-bot create flow (Telegram Bot API 9.6).
+			// Sessions correlate an airlock "Create new bot" click
+			// to the eventual ManagedBotCreated callback received
+			// by the manager bot poller. The /start handler refuses
+			// requests from un-linked or mismatched-identity users,
+			// so ManagedBotCreated only fires for the right caller
+			// — no orphan-claim path is exposed.
+			r.Post("/managed/sessions", managedBotsH.Create)
 		})
+
+		// Manager-bot token config (admin only — gated inside the
+		// settings service via TenantManagerBotConfig).
+		r.Put("/settings/telegram-manager-bot", sysSettingsHandler.UpdateManagerBot)
 
 		// Platform identity management
 		r.Get("/link-identity/preview", idH.LinkIdentityPreview)
@@ -404,31 +612,65 @@ func NewRouter(cfg RouterConfig) http.Handler {
 			logger:     cfg.Logger.Named("webhook-ingress"),
 		}
 		r.Post("/webhooks/{agentID}/{path}", wh.HandleWebhook)
+		// External git push notifications (GitHub, GitLab). Signature
+		// verification gated by the per-agent git_webhook_secret.
+		r.Post("/webhooks/git/{agentID}", gitWebhookHandler.Handle)
 	}
 
 	// (channel event endpoint removed — bridges use long-polling, not push)
 
 	// Agent API routes (authenticated via agent JWT)
-	agentRouteScheme, agentRoutePort := agentRouteSchemePort(cfg.PublicURL)
-	ah := &agentHandler{
-		db:                     cfg.DB,
-		encryptor:              cfg.Secrets,
-		s3:                     cfg.S3Client,
-		builder:                cfg.BuildService,
-		pubsub:                 cfg.PubSub,
-		bridgeMgr:              cfg.BridgeManager,
-		scheduler:              cfg.Scheduler,
-		publicURL:              cfg.PublicURL,
-		agentDomain:            cfg.AgentDomain,
-		agentRouteScheme:       agentRouteScheme,
-		agentRoutePort:         agentRoutePort,
-		llmProxyURL:            cfg.LLMProxyURL,
-		forceInlineAttachments: cfg.ForceInlineAttachments,
-		logger:                 cfg.Logger.Named("agent-api"),
-	}
+	ah := agentapi.New(agentapi.Config{
+		DB:                     cfg.DB,
+		Encryptor:              cfg.Secrets,
+		S3:                     cfg.S3Client,
+		Builder:                cfg.BuildService,
+		PubSub:                 cfg.PubSub,
+		BridgeMgr:              cfg.BridgeManager,
+		Scheduler:              cfg.Scheduler,
+		PublicURL:              cfg.PublicURL,
+		AgentBaseURL:           cfg.AgentBaseURL,
+		LLMProxyURL:            cfg.LLMProxyURL,
+		ForceInlineAttachments: cfg.ForceInlineAttachments,
+		JWTSecret:              cfg.JWTSecret,
+		Dispatcher:             cfg.Dispatcher,
+		ExecDialer:             execDialer,
+		Logger:                 cfg.Logger.Named("agent-api"),
+	})
+	// Silence "unused" if dbq import only used by helper agentapi.NewTOFUPinner.
+	_ = dbq.New
+
+	// MCP server endpoint — A2A entry point + external MCP client
+	// entry point. Mounted at top level (outside the /api/agent
+	// agent-JWT route group) because its auth model is multi-principal
+	// (user JWT / agent JWT / OAuth-issued access token). The
+	// /public-mcp route serves the same JSON-RPC interface anonymously,
+	// gated by `agent.allow_public_mcp`.
+	mcp := agentapi.NewMCPServer(cfg.Dispatcher, cfg.PubSub, cfg.Logger.Named("mcp"))
+	r.Post("/api/agent/{identifier}/mcp", func(w http.ResponseWriter, req *http.Request) {
+		mcp.ServeHTTP(w, req, ah)
+	})
+	r.Post("/api/agent/{identifier}/public-mcp", func(w http.ResponseWriter, req *http.Request) {
+		mcp.ServePublicHTTP(w, req, ah)
+	})
+
+	// Server-side OAuth 2.1 — Authorization Server endpoints used by
+	// external MCP clients (Claude Desktop, VSCode, Codex CLI) to
+	// self-register, obtain audience-bound access tokens, and rotate
+	// refresh tokens against airlock's MCP endpoints. The /.well-known
+	// discovery docs are unauthenticated. oauthH is built earlier (before
+	// /api/v1) so both route groups share one instance.
+	r.Get("/.well-known/oauth-authorization-server", oauthH.ASMetadata)
+	r.Get("/.well-known/oauth-protected-resource/api/agent/{identifier}/mcp", oauthH.ResourceMetadata)
+	r.Post("/oauth/register", oauthH.Register)
+	r.Get("/oauth/authorize", oauthH.Authorize)
+	r.Post("/oauth/token", oauthH.Token)
+
 	r.Route("/api/agent", func(r chi.Router) {
 		r.Use(auth.AgentMiddleware(cfg.JWTSecret))
 		r.Put("/connections/{slug}", ah.UpsertConnection)
+		r.Put("/exec-endpoints/{slug}", ah.UpsertExecEndpoint)
+		r.Post("/exec/{slug}", ah.AgentExec)
 		r.Put("/sync", ah.Sync)
 		r.Post("/llm/stream", ah.LLMStream)
 		r.Post("/llm/image", ah.ImageGenerate)
@@ -460,12 +702,31 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		r.Post("/mcp/{slug}/tools/call", ah.MCPToolCall)
 		r.Put("/env-vars/{slug}", ah.UpsertEnvVar)
 		r.Get("/env-vars/{slug}", ah.GetEnvVarValue)
+		// Seal/unseal: airlock encrypts/decrypts on the agent's behalf, bound
+		// to the agent's identity (AAD) so the agent can persist secrets it
+		// generates (e.g. session tokens) in its own DB as ciphertext.
+		r.Post("/seal", ah.Seal)
+		r.Post("/unseal", ah.Unseal)
 	})
 
-	// Wrap with subdomain proxy for agent custom routes.
+	// Cross-cutting middleware wraps the entire handler tree (chi router and,
+	// when configured, the SubdomainProxy) so agent subdomain traffic gets the
+	// same request_id / real client IP / access log as the platform API.
+	//
+	// Order, outermost first:
+	//   chimw.Recoverer   last-resort net for panics in middleware below
+	//   chimw.RequestID   generates the per-request ID requestLogger reads
+	//   RealIP            normalizes r.RemoteAddr from trusted-proxy headers
+	//   requestLogger     stores the per-request zap logger in ctx; access log
+	//   zapRecoverer      catches handler panics with full request context
+	var handler http.Handler = r
 	if cfg.AgentDomain != "" {
-		return SubdomainProxy(cfg.AgentDomain, cfg.DB, cfg.S3Client, cfg.Dispatcher, cfg.JWTSecret, cfg.PublicURL, cfg.Logger.Named("proxy"), r)
+		handler = SubdomainProxy(cfg.AgentDomain, cfg.DB, cfg.S3Client, cfg.Dispatcher, cfg.BridgeManager, cfg.JWTSecret, cfg.PublicURL, r)
 	}
-
-	return r
+	handler = zapRecoverer(handler)
+	handler = requestLogger(cfg.Logger)(handler)
+	handler = RealIP(cfg.RealIP)(handler)
+	handler = chimw.RequestID(handler)
+	handler = chimw.Recoverer(handler)
+	return handler
 }

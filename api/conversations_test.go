@@ -10,11 +10,24 @@ import (
 
 	"github.com/airlockrun/airlock/db/dbq"
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
+	convsvc "github.com/airlockrun/airlock/service/conversations"
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"
 	"google.golang.org/protobuf/encoding/protojson"
 )
+
+// newTestConvHandler builds a conversationsHandler whose service depends
+// only on the shared test DB. s3 + extractKeys are nil — tests that
+// exercise Delete's S3 cleanup must supply them; the rest of the
+// surface (Create, List, Get, ListMessages, Topics) doesn't need them.
+func newTestConvHandler() *conversationsHandler {
+	return &conversationsHandler{
+		svc:    convsvc.New(testDB, nil, zap.NewNop(), nil),
+		db:     testDB,
+		logger: zap.NewNop(),
+	}
+}
 
 // seedMessages inserts N plain messages into the conversation. Returns the
 // seq values in insertion order so tests can use them as cursors.
@@ -24,8 +37,8 @@ func seedMessages(t *testing.T, convID pgtype.UUID, n int) []int64 {
 	seqs := make([]int64, n)
 	for i := 0; i < n; i++ {
 		err := testDB.Pool().QueryRow(ctx,
-			`INSERT INTO agent_messages (conversation_id, role, content, tokens_in, tokens_out, cost_estimate, source)
-			 VALUES ($1, 'user', $2, 0, 0, 0, 'user') RETURNING seq`,
+			`INSERT INTO agent_messages (conversation_id, role, content, cost_estimate, source, file_keys, ephemeral)
+			 VALUES ($1, 'user', $2, 0, 'user', '{}', false) RETURNING seq`,
 			convID, "msg "+strconv.Itoa(i)).Scan(&seqs[i])
 		if err != nil {
 			t.Fatalf("seed message %d: %v", i, err)
@@ -45,7 +58,7 @@ func TestGetConversation_PaginationFlag(t *testing.T) {
 
 	seeded := seedMessages(t, toPgUUID(convID), 150)
 
-	ch := &conversationsHandler{db: testDB, logger: zap.NewNop()}
+	ch := newTestConvHandler()
 	router := userRouter(func(r chi.Router) {
 		r.Get("/api/v1/conversations/{convID}", ch.GetConversation)
 	})
@@ -85,7 +98,7 @@ func TestListConversationMessages_Backward(t *testing.T) {
 	convID := testConversation(t, agentID, userID)
 	seeded := seedMessages(t, toPgUUID(convID), 50)
 
-	ch := &conversationsHandler{db: testDB, logger: zap.NewNop()}
+	ch := newTestConvHandler()
 	router := userRouter(func(r chi.Router) {
 		r.Get("/api/v1/conversations/{convID}/messages", ch.ListConversationMessages)
 	})
@@ -124,7 +137,7 @@ func TestListConversationMessages_Forward(t *testing.T) {
 	convID := testConversation(t, agentID, userID)
 	seeded := seedMessages(t, toPgUUID(convID), 20)
 
-	ch := &conversationsHandler{db: testDB, logger: zap.NewNop()}
+	ch := newTestConvHandler()
 	router := userRouter(func(r chi.Router) {
 		r.Get("/api/v1/conversations/{convID}/messages", ch.ListConversationMessages)
 	})
@@ -159,7 +172,7 @@ func TestListConversationMessages_RequiresDirection(t *testing.T) {
 	agentID, userID := testAgentAndUser(t)
 	convID := testConversation(t, agentID, userID)
 
-	ch := &conversationsHandler{db: testDB, logger: zap.NewNop()}
+	ch := newTestConvHandler()
 	router := userRouter(func(r chi.Router) {
 		r.Get("/api/v1/conversations/{convID}/messages", ch.ListConversationMessages)
 	})
@@ -198,7 +211,7 @@ func TestDeleteConversation_RemovesRow(t *testing.T) {
 		}
 	}
 
-	ch := &conversationsHandler{db: testDB, logger: zap.NewNop()}
+	ch := newTestConvHandler()
 	router := userRouter(func(r chi.Router) {
 		r.Delete("/api/v1/conversations/{convID}", ch.DeleteConversation)
 	})
@@ -215,9 +228,6 @@ func TestDeleteConversation_RemovesRow(t *testing.T) {
 		t.Error("expected GetConversationByID to fail after DeleteConversation")
 	}
 }
-
-// Unused helpers silence go vet on imports that only matter when tests run.
-var _ = dbq.ListMessagesBackwardParams{}
 
 // TestTruncate_RuneAware is a regression for the Postgres
 // "invalid byte sequence for encoding UTF8" crash on conversation

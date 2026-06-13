@@ -10,26 +10,37 @@ import (
 	"strings"
 	"testing"
 
-	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
+	"github.com/airlockrun/airlock/agentapi"
 	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/db/dbq"
+	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 	"github.com/airlockrun/airlock/oauth"
+	connsvc "github.com/airlockrun/airlock/service/connections"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
-	"google.golang.org/protobuf/encoding/protojson"
 )
 
 // --- test helpers for user-authenticated routes ---
 
 func testCredentialHandler() *credentialHandler {
-	return &credentialHandler{
-		db:          testDB,
-		encryptor:   testEncryptor(),
-		oauthClient: oauth.NewClient(),
-		publicURL:   "http://localhost:8080",
-		logger:      zap.NewNop(),
+	disc := func(ctx context.Context, serverURL string, authInjection []byte, creds string) ([]connsvc.ToolInfo, string, error) {
+		tools, instructions, err := agentapi.DiscoverMCPTools(ctx, serverURL, authInjection, creds)
+		if err != nil {
+			return nil, "", err
+		}
+		out := make([]connsvc.ToolInfo, len(tools))
+		for i, t := range tools {
+			out[i] = connsvc.ToolInfo{Name: t.Name, Description: t.Description, InputSchema: t.InputSchema}
+		}
+		return out, instructions, nil
 	}
+	noopRefresh := func(ctx context.Context, agentID uuid.UUID) error { return nil }
+	return newCredentialHandler(connsvc.New(
+		testDB, testEncryptor(), oauth.NewClient(),
+		"http://localhost:8080", noopRefresh, zap.NewNop(),
+		disc, agentapi.DiscoverMCPAuth, agentapi.InjectAuth, agentapi.MCPHTTPClient,
+	))
 }
 
 // userRouter creates a chi router with JWT user auth middleware.
@@ -80,6 +91,8 @@ func registerTestConnection(t *testing.T, agentID uuid.UUID, slug, authMode stri
 		Scopes:        "read write",
 		AuthInjection: []byte(`{"type":"bearer"}`),
 		Config:        []byte("{}"),
+		AuthParams:    []byte("{}"),
+		Headers:       []byte("{}"),
 	})
 	if err != nil {
 		t.Fatalf("upsert connection: %v", err)
@@ -108,7 +121,7 @@ func TestSetAPIKey(t *testing.T) {
 	}
 
 	var resp airlockv1.CredentialStatusResponse
-	protojson.Unmarshal(rec.Body.Bytes(), &resp)
+	decodeProtoResp(t, rec, &resp)
 	if !resp.Authorized {
 		t.Error("expected authorized = true after setting API key")
 	}
@@ -125,7 +138,7 @@ func TestSetAPIKey(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("CredentialStatus: status = %d", rec.Code)
 	}
-	protojson.Unmarshal(rec.Body.Bytes(), &resp)
+	decodeProtoResp(t, rec, &resp)
 	if !resp.Authorized {
 		t.Error("expected authorized = true from status check")
 	}
@@ -195,7 +208,7 @@ func TestRevokeCredential(t *testing.T) {
 		t.Fatalf("Status: status = %d", rec.Code)
 	}
 	var resp airlockv1.CredentialStatusResponse
-	protojson.Unmarshal(rec.Body.Bytes(), &resp)
+	decodeProtoResp(t, rec, &resp)
 	if resp.Authorized {
 		t.Error("expected authorized = false after revoke")
 	}
@@ -222,7 +235,7 @@ func TestListConnections(t *testing.T) {
 	}
 
 	var resp airlockv1.ListConnectionsResponse
-	protojson.Unmarshal(rec.Body.Bytes(), &resp)
+	decodeProtoResp(t, rec, &resp)
 	if len(resp.Connections) < 2 {
 		t.Errorf("expected at least 2 connections, got %d", len(resp.Connections))
 	}
@@ -234,59 +247,60 @@ func TestSetOAuthAppThenStart(t *testing.T) {
 	agentID, userID := testAgentAndUser(t)
 	registerTestConnection(t, agentID, "gcloud", "oauth")
 
-	// Start without OAuth app → should fail.
 	startRouter := userRouter(func(r chi.Router) {
 		r.Post("/api/v1/credentials/oauth/start", ch.OAuthStart)
 	})
-	startBody := map[string]string{"agent_id": agentID.String(), "slug": "gcloud"}
-	req := userRequestJSON(t, "POST", "/api/v1/credentials/oauth/start", userID, startBody)
-	rec := httptest.NewRecorder()
-	startRouter.ServeHTTP(rec, req)
-	if rec.Code != http.StatusBadRequest {
-		t.Errorf("OAuthStart without app: status = %d, want 400; body: %s", rec.Code, rec.Body.String())
-	}
-
-	// Set OAuth app.
 	setRouter := userRouter(func(r chi.Router) {
 		r.Put("/api/v1/agents/{agentID}/credentials/{slug}/oauth-app", ch.SetOAuthApp)
 	})
-	oauthAppBody := map[string]string{"client_id": "test-client-id", "client_secret": "test-client-secret"}
-	req = userRequestJSON(t, "PUT",
-		fmt.Sprintf("/api/v1/agents/%s/credentials/gcloud/oauth-app", agentID), userID, oauthAppBody)
-	rec = httptest.NewRecorder()
-	setRouter.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("SetOAuthApp: status = %d; body: %s", rec.Code, rec.Body.String())
-	}
+	startBody := map[string]string{"agent_id": agentID.String(), "slug": "gcloud"}
 
-	// Now start should succeed → returns authorize_url.
-	req = userRequestJSON(t, "POST", "/api/v1/credentials/oauth/start", userID, startBody)
-	rec = httptest.NewRecorder()
-	startRouter.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("OAuthStart: status = %d; body: %s", rec.Code, rec.Body.String())
-	}
+	t.Run("start without app fails", func(t *testing.T) {
+		req := userRequestJSON(t, "POST", "/api/v1/credentials/oauth/start", userID, startBody)
+		rec := httptest.NewRecorder()
+		startRouter.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400; body: %s", rec.Code, rec.Body.String())
+		}
+	})
 
-	var startResp airlockv1.OAuthStartResponse
-	protojson.Unmarshal(rec.Body.Bytes(), &startResp)
-	if startResp.AuthorizeUrl == "" {
-		t.Fatal("expected authorize_url in response")
-	}
+	t.Run("set oauth app", func(t *testing.T) {
+		body := map[string]string{"client_id": "test-client-id", "client_secret": "test-client-secret"}
+		req := userRequestJSON(t, "PUT",
+			fmt.Sprintf("/api/v1/agents/%s/credentials/gcloud/oauth-app", agentID), userID, body)
+		rec := httptest.NewRecorder()
+		setRouter.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d; body: %s", rec.Code, rec.Body.String())
+		}
+	})
 
-	// Verify the authorize URL points to the provider and includes PKCE params.
-	u, err := url.Parse(startResp.AuthorizeUrl)
-	if err != nil {
-		t.Fatalf("parse authorize_url: %v", err)
-	}
-	if u.Host != "provider.example.com" {
-		t.Errorf("authorize host = %q, want provider.example.com", u.Host)
-	}
-	if u.Query().Get("code_challenge") == "" {
-		t.Error("missing code_challenge in authorize URL")
-	}
-	if u.Query().Get("state") == "" {
-		t.Error("missing state in authorize URL")
-	}
+	t.Run("start succeeds and returns PKCE authorize url", func(t *testing.T) {
+		req := userRequestJSON(t, "POST", "/api/v1/credentials/oauth/start", userID, startBody)
+		rec := httptest.NewRecorder()
+		startRouter.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d; body: %s", rec.Code, rec.Body.String())
+		}
+		var resp airlockv1.OAuthStartResponse
+		decodeProtoResp(t, rec, &resp)
+		if resp.AuthorizeUrl == "" {
+			t.Fatal("expected authorize_url in response")
+		}
+		u, err := url.Parse(resp.AuthorizeUrl)
+		if err != nil {
+			t.Fatalf("parse authorize_url: %v", err)
+		}
+		if u.Host != "provider.example.com" {
+			t.Errorf("authorize host = %q, want provider.example.com", u.Host)
+		}
+		if u.Query().Get("code_challenge") == "" {
+			t.Error("missing code_challenge in authorize URL")
+		}
+		if u.Query().Get("state") == "" {
+			t.Error("missing state in authorize URL")
+		}
+	})
 }
 
 func TestOAuthCallbackFlow(t *testing.T) {
@@ -318,6 +332,8 @@ func TestOAuthCallbackFlow(t *testing.T) {
 		BaseUrl:       mockProvider.URL,
 		AuthInjection: []byte(`{"type":"bearer"}`),
 		Config:        []byte("{}"),
+		AuthParams:    []byte("{}"),
+		Headers:       []byte("{}"),
 	})
 	if err != nil {
 		t.Fatalf("upsert connection: %v", err)
@@ -336,58 +352,63 @@ func TestOAuthCallbackFlow(t *testing.T) {
 		t.Fatalf("update oauth app: %v", err)
 	}
 
-	// Start OAuth flow to get a state token.
 	startRouter := userRouter(func(r chi.Router) {
 		r.Post("/api/v1/credentials/oauth/start", ch.OAuthStart)
 	})
-	startBody := map[string]string{"agent_id": agentID.String(), "slug": "mock-oauth"}
-	req := userRequestJSON(t, "POST", "/api/v1/credentials/oauth/start", userID, startBody)
-	rec := httptest.NewRecorder()
-	startRouter.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("OAuthStart: status = %d; body: %s", rec.Code, rec.Body.String())
-	}
-
-	var startResp airlockv1.OAuthStartResponse
-	protojson.Unmarshal(rec.Body.Bytes(), &startResp)
-
-	// Extract state from authorize URL.
-	u, _ := url.Parse(startResp.AuthorizeUrl)
-	state := u.Query().Get("state")
-	if state == "" {
-		t.Fatal("no state in authorize URL")
-	}
-
-	// Simulate callback (no JWT needed — outside auth middleware).
 	callbackRouter := chi.NewRouter()
 	callbackRouter.Get("/api/v1/credentials/oauth/callback", ch.OAuthCallback)
-
-	callbackURL := fmt.Sprintf("/api/v1/credentials/oauth/callback?code=mock-auth-code&state=%s", state)
-	req = httptest.NewRequest("GET", callbackURL, nil)
-	rec = httptest.NewRecorder()
-	callbackRouter.ServeHTTP(rec, req)
-
-	// Should redirect (302).
-	if rec.Code != http.StatusFound {
-		t.Fatalf("OAuthCallback: status = %d, want 302; body: %s", rec.Code, rec.Body.String())
-	}
-
-	// Verify credentials were stored.
 	statusRouter := userRouter(func(r chi.Router) {
 		r.Get("/api/v1/agents/{agentID}/credentials/{slug}", ch.CredentialStatus)
 	})
-	req = userRequestJSON(t, "GET",
-		fmt.Sprintf("/api/v1/agents/%s/credentials/mock-oauth", agentID), userID, nil)
-	rec = httptest.NewRecorder()
-	statusRouter.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("CredentialStatus: status = %d", rec.Code)
-	}
-	var statusResp airlockv1.CredentialStatusResponse
-	protojson.Unmarshal(rec.Body.Bytes(), &statusResp)
-	if !statusResp.Authorized {
-		t.Error("expected authorized = true after OAuth callback")
-	}
+
+	var state string
+	t.Run("start returns state", func(t *testing.T) {
+		startBody := map[string]string{"agent_id": agentID.String(), "slug": "mock-oauth"}
+		req := userRequestJSON(t, "POST", "/api/v1/credentials/oauth/start", userID, startBody)
+		rec := httptest.NewRecorder()
+		startRouter.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d; body: %s", rec.Code, rec.Body.String())
+		}
+		var resp airlockv1.OAuthStartResponse
+		decodeProtoResp(t, rec, &resp)
+		u, err := url.Parse(resp.AuthorizeUrl)
+		if err != nil {
+			t.Fatalf("parse authorize_url: %v", err)
+		}
+		state = u.Query().Get("state")
+		if state == "" {
+			t.Fatal("no state in authorize URL")
+		}
+	})
+
+	t.Run("callback redirects", func(t *testing.T) {
+		if state == "" {
+			t.Skip("start subtest did not produce a state token")
+		}
+		callbackURL := fmt.Sprintf("/api/v1/credentials/oauth/callback?code=mock-auth-code&state=%s", state)
+		req := httptest.NewRequest("GET", callbackURL, nil)
+		rec := httptest.NewRecorder()
+		callbackRouter.ServeHTTP(rec, req)
+		if rec.Code != http.StatusFound {
+			t.Fatalf("status = %d, want 302; body: %s", rec.Code, rec.Body.String())
+		}
+	})
+
+	t.Run("status reports authorized", func(t *testing.T) {
+		req := userRequestJSON(t, "GET",
+			fmt.Sprintf("/api/v1/agents/%s/credentials/mock-oauth", agentID), userID, nil)
+		rec := httptest.NewRecorder()
+		statusRouter.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d", rec.Code)
+		}
+		var resp airlockv1.CredentialStatusResponse
+		decodeProtoResp(t, rec, &resp)
+		if !resp.Authorized {
+			t.Error("expected authorized = true after OAuth callback")
+		}
+	})
 }
 
 func TestTestCredentialNoCredentials(t *testing.T) {

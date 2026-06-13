@@ -4,25 +4,21 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
+	"strings"
 
-	"github.com/airlockrun/agentsdk"
-	"github.com/airlockrun/airlock/auth"
-	"github.com/airlockrun/airlock/container"
 	"github.com/airlockrun/airlock/db/dbq"
-	"github.com/airlockrun/airlock/scaffold"
-	sol "github.com/airlockrun/sol"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 )
 
-// PostUpgradeNotifier is called after an upgrade finishes (success or
-// failure) to post a single message into the originating conversation.
+// PostUpgradeNotifier is called after an upgrade finishes (success,
+// failure, or refusal) to post a single message into the originating
+// agent conversation.
 //
-// status is "success" or "error". message is the human-readable text to
-// surface — typically sourced from the agent-builder's exit tool on
-// success, or the underlying failure reason on error. The notifier
+// status is "success", "error", or "refused". message is the
+// human-readable text to surface — typically sourced from the
+// agent-builder's exit tool on success, the underlying failure reason
+// on error, or the out-of-scope explanation on refused. The notifier
 // posts exactly ONE message and does not trigger a follow-up LLM turn —
 // the agent's own exit-tool summary already describes the outcome, so
 // re-prompting just produces redundant text.
@@ -30,18 +26,68 @@ type PostUpgradeNotifier interface {
 	NotifyUpgradeComplete(ctx context.Context, agentID uuid.UUID, conversationID, status, message string) error
 }
 
+// PostUpgradeSystemNotifier is the parallel sink for upgrades initiated
+// from the in-airlock system agent (not from an agent's own
+// conversation). Same status/message contract as PostUpgradeNotifier;
+// the target is the system_conversations.id of the conversation that triggered the
+// upgrade. Exactly one of {ConversationID, SystemConversationID} is set on
+// any given UpgradeInput; the builder picks the notifier accordingly.
+type PostUpgradeSystemNotifier interface {
+	NotifyUpgradeComplete(ctx context.Context, agentID, conversationID uuid.UUID, status, message string) error
+}
+
 // UpgradeInput describes an upgrade request.
+//
+// ConversationID and SystemConversationID are mutually exclusive: an upgrade
+// triggered from a web/bridge/A2A agent conversation sets the former;
+// one triggered from a system-agent conversation sets the latter. The
+// post-build outcome is routed to whichever was set — see
+// BuildService.notifyUpgradeOutcome.
 type UpgradeInput struct {
-	AgentID        string
-	RunID          string // the run that triggered the upgrade
-	Reason         string // "llm_request", "auto_fix", "manual"
-	Description    string // what to change
-	ConversationID string // conversation that triggered the upgrade (for post-upgrade reply)
-	ErrorMessage   string // from failed run (auto_fix)
-	PanicTrace     string // from failed run (auto_fix)
-	InputPayload   string // JSON of failed run input (auto_fix)
-	Actions        string // JSON of recorded actions before failure (auto_fix)
-	Messages       string // conversation messages from the failed run
+	AgentID              string
+	RunID                string // the run that triggered the upgrade
+	Reason               string // "llm_request", "auto_fix", "manual"
+	Description          string // what to change
+	ConversationID       string // conversation that triggered the upgrade (for post-upgrade reply)
+	SystemConversationID string // system-agent conversation that triggered the upgrade (mutually exclusive with ConversationID)
+	ErrorMessage         string // from failed run (auto_fix)
+	PanicTrace           string // from failed run (auto_fix)
+	InputPayload         string // JSON of failed run input (auto_fix)
+	Actions              string // JSON of recorded actions before failure (auto_fix)
+	Messages             string // conversation messages from the failed run
+	Logs                 string // captured log lines from the failed run (auto_fix)
+}
+
+// notifyUpgradeOutcome routes the post-build message to whichever sink
+// matches the originating surface. Returns silently on:
+//   - no target set (cron / auto / unattended upgrades; nothing to post)
+//   - the target's notifier never registered (process started without
+//     it — log the miss, don't panic)
+//   - conversationID/conversationID parse failure (defensive — these are
+//     caller-supplied strings stored in agent_builds; a malformed one
+//     mustn't crash the build pipeline)
+func (b *BuildService) notifyUpgradeOutcome(ctx context.Context, agentID uuid.UUID, conversationID, systemConversationID, status, message string) {
+	if systemConversationID != "" {
+		if b.upgradeSystemNotifier == nil {
+			b.logger.Warn("system-conversation upgrade outcome dropped: no system notifier registered",
+				zap.String("conversation_id", systemConversationID))
+			return
+		}
+		tid, err := uuid.Parse(systemConversationID)
+		if err != nil {
+			b.logger.Error("invalid system conversation id on upgrade outcome", zap.String("conversation_id", systemConversationID), zap.Error(err))
+			return
+		}
+		if nerr := b.upgradeSystemNotifier.NotifyUpgradeComplete(ctx, agentID, tid, status, message); nerr != nil {
+			b.logger.Error("post-upgrade system-conversation notification failed", zap.Error(nerr))
+		}
+		return
+	}
+	if conversationID != "" && b.upgradeNotifier != nil {
+		if nerr := b.upgradeNotifier.NotifyUpgradeComplete(ctx, agentID, conversationID, status, message); nerr != nil {
+			b.logger.Error("post-upgrade conversation notification failed", zap.Error(nerr))
+		}
+	}
 }
 
 // Upgrade runs the upgrade pipeline for an existing agent.
@@ -81,8 +127,11 @@ func (b *BuildService) AcquireUpgradeLock(ctx context.Context, agentID string) e
 	return tx.Commit(ctx)
 }
 
-// RunUpgrade executes the upgrade pipeline for an agent that already has
-// its upgrade_status set to "building" via AcquireUpgradeLock.
+// RunUpgrade executes the upgrade pipeline for an agent whose
+// upgrade_status was set to "building" via AcquireUpgradeLock. Thin
+// wrapper over Execute that handles the upgrade-specific outer
+// lifecycle: route Execute's outcome into agents.upgrade_status and
+// post the single conversation message describing the result.
 func (b *BuildService) RunUpgrade(_ context.Context, input UpgradeInput) {
 	ctx, cancel := b.startBuild(input.AgentID)
 	defer cancel()
@@ -100,312 +149,98 @@ func (b *BuildService) RunUpgrade(_ context.Context, input UpgradeInput) {
 	q := dbq.New(b.db.Pool())
 	agentPgUUID := mustParseUUID(input.AgentID)
 	agentUUID, _ := uuid.Parse(input.AgentID)
-	dbCtx := context.Background() // for DB updates after cancellation
+	dbCtx := context.Background()
 
-	// Create the agent_builds record up-front so the "started" event can
-	// carry its ID (frontend uses it to fetch the REST snapshot).
-	upgradeInstructions := fmt.Sprintf("Reason: %s\nDescription: %s", input.Reason, input.Description)
-	if input.ErrorMessage != "" {
-		upgradeInstructions += fmt.Sprintf("\nError: %s", input.ErrorMessage)
-	}
-	if input.Messages != "" {
-		upgradeInstructions += fmt.Sprintf("\nMessages:\n%s", input.Messages)
-	}
-	build, err := q.CreateAgentBuild(ctx, dbq.CreateAgentBuildParams{
-		AgentID:      agentPgUUID,
-		Type:         "upgrade",
-		Instructions: upgradeInstructions,
-	})
+	agent, err := q.GetAgentByID(ctx, agentPgUUID)
 	if err != nil {
-		b.logger.Error("create upgrade build record", zap.Error(err))
+		b.logger.Error("load agent for upgrade", zap.Error(err))
+		_ = q.UpdateAgentUpgradeStatus(dbCtx, dbq.UpdateAgentUpgradeStatusParams{
+			ID:            agentPgUUID,
+			UpgradeStatus: "failed",
+			ErrorMessage:  err.Error(),
+		})
 		return
 	}
-	buildUUID := uuid.UUID(build.ID.Bytes)
 
-	b.events.PublishBuildEvent(ctx, agentUUID, buildUUID, "started", "")
+	plan := BuildPlan{
+		Agent:          agent,
+		Kind:           BuildKindUpgrade,
+		Instruction:    strings.TrimSpace(input.Description),
+		Reason:         input.Reason,
+		RunID:          input.RunID,
+		ConversationID: input.ConversationID,
+		Diagnostics:    autoFixContextFromInput(input),
+	}
 
-	successMsg, err := b.doUpgrade(ctx, q, input, build)
-	if err != nil {
-		event := "failed"
-		errMsg := err.Error()
-		if errors.Is(err, context.Canceled) {
-			event = "cancelled"
+	successMsg, runErr := b.Execute(ctx, plan)
+	if runErr != nil {
+		// A refused request is not an upgrade failure — the agent is
+		// untouched and healthy. Release the upgrade lock back to idle
+		// and tell the user the request was declined, not that the
+		// upgrade broke.
+		var refErr *RefusedError
+		if errors.As(runErr, &refErr) {
+			b.logger.Info("upgrade request declined as out of scope", zap.String("agent_id", input.AgentID))
+			_ = q.UpdateAgentUpgradeStatus(dbCtx, dbq.UpdateAgentUpgradeStatusParams{
+				ID:            agentPgUUID,
+				UpgradeStatus: "idle",
+				ErrorMessage:  "",
+			})
+			b.notifyUpgradeOutcome(dbCtx, agentUUID, input.ConversationID, input.SystemConversationID, "refused", refErr.Message)
+			return
+		}
+		errMsg := runErr.Error()
+		if errors.Is(runErr, context.Canceled) {
 			errMsg = "cancelled by user"
 			b.logger.Info("upgrade cancelled", zap.String("agent_id", input.AgentID))
 		} else {
-			b.logger.Error("upgrade failed", zap.String("agent_id", input.AgentID), zap.Error(err))
+			b.logger.Error("upgrade failed", zap.String("agent_id", input.AgentID), zap.Error(runErr))
 		}
 		_ = q.UpdateAgentUpgradeStatus(dbCtx, dbq.UpdateAgentUpgradeStatusParams{
 			ID:            agentPgUUID,
 			UpgradeStatus: "failed",
 			ErrorMessage:  errMsg,
 		})
-		b.events.PublishBuildEvent(dbCtx, agentUUID, buildUUID, event, errMsg)
-		// Surface the failure as a single conversation message too —
-		// previously the user only saw "still spinning" then nothing.
-		// Cancellation skips the notification (the cancel button toast
-		// already covered it).
-		if event != "cancelled" && input.ConversationID != "" && b.upgradeNotifier != nil {
-			if nerr := b.upgradeNotifier.NotifyUpgradeComplete(dbCtx, agentUUID, input.ConversationID, "error", errMsg); nerr != nil {
-				b.logger.Error("post-upgrade error notification failed", zap.Error(nerr))
-			}
+		// Surface the failure as a single conversation/conversation message —
+		// without it the user only sees "still spinning" then nothing.
+		// Cancellation skips the notification (the toast already covered it).
+		if !errors.Is(runErr, context.Canceled) {
+			b.notifyUpgradeOutcome(dbCtx, agentUUID, input.ConversationID, input.SystemConversationID, "error", errMsg)
 		}
 		return
 	}
 
 	b.logger.Info("upgrade completed", zap.String("agent_id", input.AgentID))
-	b.events.PublishBuildEvent(dbCtx, agentUUID, buildUUID, "complete", "")
-
 	_ = q.UpdateAgentUpgradeStatus(dbCtx, dbq.UpdateAgentUpgradeStatusParams{
 		ID:            agentPgUUID,
 		UpgradeStatus: "idle",
 		ErrorMessage:  "",
 	})
 
-	// Notify the originating conversation. Single message — the
+	// Notify the originating surface. Single message — the
 	// agent-builder's exit tool already produced the user-facing summary
 	// (successMsg), so no LLM follow-up turn is needed.
-	if input.ConversationID != "" && b.upgradeNotifier != nil {
-		// Fall back to the user's original description if the agent
-		// somehow returned an empty exit message (shouldn't happen with
-		// the nudge loop, but cheap defense).
-		msg := successMsg
-		if msg == "" {
-			msg = "Upgrade complete: " + input.Description
-		}
-		if err := b.upgradeNotifier.NotifyUpgradeComplete(dbCtx, agentUUID, input.ConversationID, "success", msg); err != nil {
-			b.logger.Error("post-upgrade notification failed", zap.Error(err))
-		}
+	msg := successMsg
+	if msg == "" {
+		msg = "Upgrade complete: " + input.Description
 	}
+	b.notifyUpgradeOutcome(dbCtx, agentUUID, input.ConversationID, input.SystemConversationID, "success", msg)
 }
 
-// doUpgrade returns the agent-builder's exit-tool success message
-// alongside the err. Caller plumbs successMsg into the conversation
-// notification so the user sees the agent's own summary of what
-// changed instead of the canned "Upgrade complete: <description>" we
-// used to post.
-func (b *BuildService) doUpgrade(ctx context.Context, q *dbq.Queries, input UpgradeInput, build dbq.AgentBuild) (string, error) {
-	agentPgUUID := mustParseUUID(input.AgentID)
-	agentID := input.AgentID
-	repoPath := b.cfg.AgentMonorepoPath
-	buildUUID := uuid.UUID(build.ID.Bytes)
-
-	// Load full agent record
-	agent, err := q.GetAgentByID(ctx, agentPgUUID)
-	if err != nil {
-		return "", fmt.Errorf("get agent: %w", err)
+// autoFixContextFromInput returns a populated AutoFixContext when the
+// UpgradeInput carries any failure context (auto_fix path), otherwise
+// nil. Execute uses the nil/non-nil distinction to decide whether to
+// write DIAGNOSTICS.md before invoking Sol.
+func autoFixContextFromInput(input UpgradeInput) *AutoFixContext {
+	if input.ErrorMessage == "" && input.PanicTrace == "" && input.InputPayload == "" && input.Actions == "" && input.Messages == "" && input.Logs == "" {
+		return nil
 	}
-
-	agentUUID, _ := uuid.Parse(agentID)
-
-	bl := newBuildLog(q, build.ID, b.logger)
-	defer bl.close()
-
-	completeBuild := func(status, errMsg, sourceRef, imageRef string) {
-		_ = q.UpdateAgentBuildComplete(context.Background(), dbq.UpdateAgentBuildCompleteParams{
-			ID:           build.ID,
-			Status:       status,
-			ErrorMessage: errMsg,
-			SourceRef:    sourceRef,
-			ImageRef:     imageRef,
-		})
+	return &AutoFixContext{
+		ErrorMessage: input.ErrorMessage,
+		PanicTrace:   input.PanicTrace,
+		InputPayload: input.InputPayload,
+		Actions:      input.Actions,
+		Messages:     input.Messages,
+		Logs:         input.Logs,
 	}
-
-	// Step 2: Clone schema for safe upgrade testing + migration validation.
-	sourceSchema := fmt.Sprintf("agent_%s", sanitizeUUID(agentID))
-	cloneName := fmt.Sprintf("agent_%s_upgrade_%s", sanitizeUUID(agentID), sanitizeUUID(input.RunID))
-	if err := b.cloneSchema(ctx, sourceSchema, cloneName, sourceSchema); err != nil {
-		return "", fmt.Errorf("clone schema: %w", err)
-	}
-	defer func() {
-		if err := b.dropSchemaClone(ctx, cloneName); err != nil {
-			b.logger.Warn("failed to drop clone schema", zap.Error(err))
-		}
-	}()
-
-	// Decrypt DB password (needed for test URL and later for container start).
-	dbPassword, err := b.encryptor.Get(ctx, "agent/"+agentID+"/db_password", agent.DbPassword)
-	if err != nil {
-		return "", fmt.Errorf("decrypt db password: %w", err)
-	}
-	testDBURL := b.agentDBURL(sourceSchema, dbPassword, cloneName)
-
-	// Step 3: Create upgrade branch
-	if err := CreateUpgradeBranch(repoPath, agentID, input.RunID); err != nil {
-		return "", fmt.Errorf("create upgrade branch: %w", err)
-	}
-
-	// Step 4: Sparse checkout
-	workDir, err := b.makeCodegenTempDir("airlock-upgrade-*")
-	if err != nil {
-		return "", fmt.Errorf("create temp dir: %w", err)
-	}
-	defer os.RemoveAll(workDir)
-
-	branch := fmt.Sprintf("upgrade/%s/%s", agentID, input.RunID)
-	if err := SparseCheckout(repoPath, branch, agentID, workDir); err != nil {
-		return "", fmt.Errorf("sparse checkout: %w", err)
-	}
-
-	// Step 5: Write upgrade spec
-	agentDir := filepath.Join(workDir, "agents", agentID)
-	if err := b.writeUpgradeSpec(agentDir, agent, input); err != nil {
-		return "", fmt.Errorf("write upgrade spec: %w", err)
-	}
-
-	if ctx.Err() != nil {
-		completeBuild("cancelled", "cancelled by user", "", "")
-		return "", ctx.Err()
-	}
-
-	// Step 6: Run Sol. Pass the agent's build model verbatim — empty
-	// string is fine, runSolInProcess falls back to the system-wide
-	// default (settings.default_build_model) when no per-agent override
-	// is set.
-	logLine := func(line string) {
-		seq := bl.appendSol(line)
-		b.events.PublishBuildLogLine(ctx, agentUUID, buildUUID, seq, "sol", line)
-	}
-
-	solResult, err := b.runSolInProcess(ctx, solRunOpts{
-		WorkDir:    workDir,
-		AgentDir:   fmt.Sprintf("/workspace/agents/%s", agentID),
-		BuildModel: agent.BuildModel,
-		Prompt:     "Fix/upgrade the agent. Read AGENT_SPEC.md for the specification and error context.",
-		TestDBURL:    testDBURL,
-		TestDBPSQL:   b.agentDBURLBase(b.cfg.DBHostAgent, sourceSchema, dbPassword),
-		TestDBSchema: cloneName,
-		LogCallback:  logLine,
-	})
-	if err != nil {
-		completeBuild("failed", err.Error(), "", "")
-		return "", fmt.Errorf("sol upgrade: %w", err)
-	}
-
-	// Step 7: Check result. Same exit-tool mapping as runBuildCodegen —
-	// see that function for the full rationale.
-	if solResult.Status != sol.RunExited {
-		if solResult.Status == sol.RunCompleted {
-			b.logger.Error("sol upgrade did not call exit tool")
-			completeBuild("failed", "agent did not call the exit tool", "", "")
-			return "", errors.New("upgrade failed: agent did not call the exit tool")
-		}
-		errMsg := "unknown error"
-		if solResult.Error != nil {
-			errMsg = solResult.Error.Error()
-		}
-		b.logger.Error("sol upgrade failed", zap.String("status", string(solResult.Status)), zap.String("error", errMsg))
-		completeBuild("failed", errMsg, "", "")
-		if solResult.Error != nil {
-			return "", fmt.Errorf("upgrade failed: %w", solResult.Error)
-		}
-		return "", errors.New("upgrade failed")
-	}
-	if solResult.ExitStatus != "success" {
-		b.logger.Error("sol upgrade reported error", zap.String("message", solResult.ExitMessage))
-		completeBuild("failed", solResult.ExitMessage, "", "")
-		// Return the exit message verbatim — the conversation
-		// notification reads err.Error() and surfaces it as the
-		// "agent reports it failed because…" line for the user.
-		return "", errors.New(solResult.ExitMessage)
-	}
-
-	// Step 9: Commit and push
-	hash, err := CommitAndPush(workDir, fmt.Sprintf("upgrade agent %s: %s", agentID, input.Reason))
-	if err != nil {
-		completeBuild("failed", err.Error(), "", "")
-		return "", fmt.Errorf("commit upgrade: %w", err)
-	}
-	b.logger.Info("upgrade committed", zap.String("commit", hash))
-
-	// Step 10: Merge
-	if err := MergeBranch(repoPath, branch); err != nil {
-		completeBuild("failed", err.Error(), "", "")
-		return "", fmt.Errorf("merge upgrade: %w", err)
-	}
-
-	if ctx.Err() != nil {
-		completeBuild("cancelled", "cancelled by user", hash, "")
-		return "", ctx.Err()
-	}
-
-	// Step 11: Build image
-	contextDir := filepath.Join(repoPath, "agents", agentID)
-	if err := scaffold.GenerateDockerfile(contextDir, scaffold.ScaffoldData{
-		AgentID:         agentID,
-		Module:          "agent",
-		GoVersion:       "1.26",
-		AgentSDKVersion: "v" + agentsdk.Version,
-		AgentBaseImage:  b.cfg.AgentBaseImage,
-	}); err != nil {
-		completeBuild("failed", err.Error(), hash, "")
-		return "", fmt.Errorf("generate Dockerfile: %w", err)
-	}
-	// Bump the agent's go.mod require line to the current SDK version so
-	// gopls/editor tooling shows what the build is actually linking against
-	// (the replace directive shadows it for compilation).
-	if err := bumpAgentSDKRequire(ctx, contextDir, agentsdk.Version); err != nil {
-		completeBuild("failed", err.Error(), hash, "")
-		return "", fmt.Errorf("bump agent SDK require: %w", err)
-	}
-	imageTag, err := buildImage(ctx, b.cfg, agentID, contextDir, hash, func(line string) {
-		seq := bl.appendDocker(line)
-		b.events.PublishBuildLogLine(ctx, agentUUID, buildUUID, seq, "docker", line)
-	})
-	if err != nil {
-		completeBuild("failed", err.Error(), hash, "")
-		return "", fmt.Errorf("build image: %w", err)
-	}
-
-	// Validate migrations against the clone schema by running the new image.
-	upgradeTestDBURL := b.agentDBURL(sourceSchema, dbPassword, cloneName)
-	if err := b.validateMigrations(ctx, imageTag, upgradeTestDBURL, logLine); err != nil {
-		completeBuild("failed", err.Error(), hash, imageTag)
-		return "", fmt.Errorf("migration validation: %w", err)
-	}
-
-	if ctx.Err() != nil {
-		completeBuild("cancelled", "cancelled by user", hash, imageTag)
-		return "", ctx.Err()
-	}
-
-	// Stop old container
-	if agent.ImageRef != "" {
-		_ = b.containers.StopAgent(ctx, "airlock-agent-"+agentUUID.String()[:8])
-	}
-
-	// Start new container (dbPassword already decrypted above).
-	schemaName := fmt.Sprintf("agent_%s", sanitizeUUID(agentID))
-	agentToken, err := auth.IssueAgentToken(b.cfg.JWTSecret, agentUUID)
-	if err != nil {
-		completeBuild("failed", err.Error(), hash, imageTag)
-		return "", fmt.Errorf("issue agent token: %w", err)
-	}
-	agentDBURL := b.agentDBURL(schemaName, dbPassword, schemaName)
-	_, err = b.containers.StartAgent(ctx, container.AgentOpts{
-		AgentID: agentUUID,
-		Image:   imageTag,
-		Env: map[string]string{
-			"AIRLOCK_AGENT_ID":    agentID,
-			"AIRLOCK_API_URL":     b.cfg.APIURLAgent,
-			"AIRLOCK_DB_URL":      agentDBURL,
-			"AIRLOCK_AGENT_TOKEN": agentToken,
-		},
-	})
-	if err != nil {
-		completeBuild("failed", err.Error(), hash, imageTag)
-		return "", fmt.Errorf("start upgraded agent: %w", err)
-	}
-
-	// Update refs
-	if err := q.UpdateAgentRefs(ctx, dbq.UpdateAgentRefsParams{
-		ID:        agentPgUUID,
-		SourceRef: hash,
-		ImageRef:  imageTag,
-	}); err != nil {
-		return "", fmt.Errorf("update refs: %w", err)
-	}
-
-	completeBuild("complete", "", hash, imageTag)
-	return solResult.ExitMessage, nil
 }

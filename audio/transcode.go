@@ -60,7 +60,7 @@ func transcodeToMP3(ctx context.Context, in []byte) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, "ffmpeg",
 		"-hide_banner", "-loglevel", "error",
 		"-i", "pipe:0",
-		"-vn",              // drop any video track — STT only needs audio
+		"-vn", // drop any video track — STT only needs audio
 		"-f", "mp3",
 		"-acodec", "libmp3lame",
 		"-q:a", "4", // VBR ~165kbps — plenty for speech, smaller than the default
