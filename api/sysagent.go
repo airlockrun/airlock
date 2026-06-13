@@ -117,7 +117,9 @@ func (h *sysagentHandler) ListRuns(w http.ResponseWriter, r *http.Request) {
 	}
 	var limit int32 = 25
 	if raw := r.URL.Query().Get("limit"); raw != "" {
-		if n, err := strconv.Atoi(raw); err == nil {
+		// Clamp to 1..100; out-of-range (including int32-overflowing)
+		// values fall back to the default rather than truncating.
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 && n <= 100 {
 			limit = int32(n)
 		}
 	}
