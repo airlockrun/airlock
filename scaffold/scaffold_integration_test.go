@@ -138,9 +138,13 @@ func TestScaffoldBuildsAndStarts(t *testing.T) {
 	// --- Step 2: Start with mock Airlock ---
 	mock := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		// Sync endpoint needs a valid JSON response; others just need 200.
+		// Sync endpoint must return a valid SyncResponse: agentsdk's
+		// applySyncResponse panics at boot on an empty
+		// PromptData.AgentRouteURL (the "airlock newer than agentsdk"
+		// guard), which would crash the agent before it binds /health.
+		// Other endpoints just need a 200 with parseable JSON.
 		if r.URL.Path == "/api/agent/sync" {
-			w.Write([]byte(`{"systemPrompt":"test"}`))
+			w.Write([]byte(`{"promptData":{"agentDashboardUrl":"http://airlock.test/agents/test-agent","agentRouteUrl":"http://agent.test"}}`))
 		} else {
 			w.Write([]byte(`{}`))
 		}
