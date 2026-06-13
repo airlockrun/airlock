@@ -26,9 +26,10 @@ type Config struct {
 	ServerAddr  string
 
 	// --- S3 / Object Storage ---
-	// Three audiences: Airlock process, agent containers, public internet.
+	// Two audiences: Airlock process and public internet. Agents never hit
+	// S3 directly — their storage goes through airlock's /api/agent/storage
+	// API, and presigned shares use S3URLPublic over internet egress.
 	S3URL       string // Airlock process → MinIO (e.g. "http://localhost:9090")
-	S3URLAgent  string // Agent containers → MinIO via Docker network (e.g. "http://minio:9000")
 	S3URLPublic string // Public internet → MinIO via reverse proxy (e.g. "https://s3.dev.airlock.run")
 	S3AccessKey string
 	S3SecretKey string
@@ -54,7 +55,13 @@ type Config struct {
 	// re-derive these elsewhere.
 	AgentScheme   string // "http" | "https"
 	AgentPort     string // explicit non-default port, else ""
-	DockerNetwork string // Docker network for agent containers (e.g. "airlock-dev")
+	DockerNetwork string // Docker network for infra + toolserver/build containers (e.g. "airlock-dev")
+	// AgentNetwork is the Docker network agent RUNTIME containers attach to.
+	// Defaults to DockerNetwork when AGENT_NETWORK is unset. Prod sets it to
+	// an isolated network carrying only airlock + postgres (not rustfs/caddy/
+	// frontend) so a malicious agent can't reach infra services it doesn't
+	// need. See docs/agent-isolation.md.
+	AgentNetwork string
 
 	// --- Encryption ---
 	// AES-256-GCM for provider API keys, webhook secrets, tokens at rest.
@@ -154,7 +161,6 @@ func Load() *Config {
 
 		// S3
 		S3URL:       requireEnv("S3_URL"),
-		S3URLAgent:  os.Getenv("S3_URL_AGENT"),
 		S3URLPublic: os.Getenv("S3_URL_PUBLIC"),
 		S3AccessKey: requireEnv("S3_ACCESS_KEY"),
 		S3SecretKey: requireEnv("S3_SECRET_KEY"),
@@ -173,6 +179,7 @@ func Load() *Config {
 		APIURLAgent:   envOr("API_URL_AGENT", "http://localhost:8080"),
 		AgentDomain:   resolveAgentDomain(),
 		DockerNetwork: os.Getenv("DOCKER_NETWORK"),
+		AgentNetwork:  envOr("AGENT_NETWORK", os.Getenv("DOCKER_NETWORK")),
 
 		// Encryption
 		EncryptionKey:    requireEnv("ENCRYPTION_KEY"),

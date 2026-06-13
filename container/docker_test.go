@@ -64,6 +64,22 @@ func TestBuildAgentHostConfig(t *testing.T) {
 	}
 }
 
+func TestNetworkConfig(t *testing.T) {
+	// Named network → single endpoint attachment.
+	nc := networkConfig("agents")
+	if len(nc.EndpointsConfig) != 1 {
+		t.Fatalf("EndpointsConfig = %v, want one entry", nc.EndpointsConfig)
+	}
+	if _, ok := nc.EndpointsConfig["agents"]; !ok {
+		t.Errorf("EndpointsConfig missing 'agents': %v", nc.EndpointsConfig)
+	}
+
+	// Empty network → no endpoints (daemon default network).
+	if got := networkConfig(""); len(got.EndpointsConfig) != 0 {
+		t.Errorf("empty network: EndpointsConfig = %v, want none", got.EndpointsConfig)
+	}
+}
+
 func TestIdleContainersToStop(t *testing.T) {
 	now := time.Now()
 	m := &DockerManager{

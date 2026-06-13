@@ -78,11 +78,18 @@ Tier 1 gets you to "an agent needs a kernel 0-day to touch the host, and
 can't reach infra/siblings." Closing the rest is deployment topology the
 operator owns — **recommended, not enforced by airlock**:
 
-- **Network segmentation** — agents currently join the same Docker network
-  as postgres/rustfs. Postgres reachability is by design (agents get a
-  scoped per-agent schema + role via `AIRLOCK_DB_URL`). Put agents on a
-  network that reaches only airlock + their DB + the public internet; serve
-  the object store via presigned URLs through the proxy, not direct.
+- **Network segmentation** — *partially shipped.* Agent runtime containers
+  attach to a dedicated `AGENT_NETWORK` (`AGENT_NETWORK` env; prod compose
+  sets it to `airlock-agents`) carrying only **airlock + postgres** —
+  rustfs, caddy, the frontend, and build containers are excluded, so an
+  agent can't reach them. Postgres reachability is by design (scoped
+  per-agent schema + role via `AIRLOCK_DB_URL`); S3 goes through airlock's
+  storage API and presigned public URLs, never direct. Agents keep internet
+  egress (bridge NAT). **Residual:** agents on the shared `agents` network
+  can still reach *each other* — accepted, because A2A is proxied through
+  airlock and an agent's `:8080` is JWT-gated; full sibling isolation would
+  need a network per agent. Dev leaves `AGENT_NETWORK` unset (agents stay on
+  the single dev network — the dev box is the trusted operator's).
 - **Metadata egress firewall** — dropping the host-gateway alias removes
   the convenient host route, but a hard block of `169.254.169.254` (cloud
   credential endpoint) needs a host iptables/nftables rule or IMDSv2

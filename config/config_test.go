@@ -68,6 +68,23 @@ func setRequiredEnv(t *testing.T) {
 	t.Setenv("AGENT_DOMAIN", "test.airlock.local")
 }
 
+func TestAgentNetworkFallback(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("DOCKER_NETWORK", "airlock-dev")
+
+	// AGENT_NETWORK unset → falls back to DOCKER_NETWORK (dev behaviour).
+	t.Setenv("AGENT_NETWORK", "")
+	if c := Load(); c.AgentNetwork != "airlock-dev" {
+		t.Errorf("AgentNetwork (unset) = %q, want airlock-dev", c.AgentNetwork)
+	}
+
+	// AGENT_NETWORK set → used verbatim (prod isolation).
+	t.Setenv("AGENT_NETWORK", "agents")
+	if c := Load(); c.AgentNetwork != "agents" {
+		t.Errorf("AgentNetwork (set) = %q, want agents", c.AgentNetwork)
+	}
+}
+
 func TestLoad(t *testing.T) {
 	setRequiredEnv(t)
 

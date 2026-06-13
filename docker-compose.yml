@@ -42,6 +42,9 @@ services:
       timeout: 3s
       retries: 5
     restart: unless-stopped
+    # On both networks: infra (airlock process) + agents (per-agent scoped
+    # DB access). rustfs/caddy/frontend stay off `agents`.
+    networks: [default, agents]
 
   # RustFS — S3-compatible object store. Airlock auto-creates the bucket
   # on first connect, so no init sidecar is needed.
@@ -132,10 +135,11 @@ services:
       DB_NAME: ${POSTGRES_DB:-airlock}
       DB_SSL_MODE: disable
 
-      # S3 has three audiences:
-      #   S3_URL        — airlock and agents (in-network)
-      #   S3_URL_AGENT  — same for agents (kept distinct in case anchored
-      #                   deployments split them)
+      # S3 has two audiences:
+      #   S3_URL        — the airlock process (in-network). Agents never hit
+      #                   S3 directly; their storage goes through airlock's
+      #                   /api/agent/storage API (and they're not on rustfs's
+      #                   network anyway).
       #   S3_URL_PUBLIC — used when generating presigned URLs that LLM
       #                   providers (OpenAI, Anthropic, etc.) fetch from
       #                   the public internet. rustfs:9000 isn't routable
@@ -144,7 +148,6 @@ services:
       #                   rustfs:9000 with Host preserved (so the signed
       #                   URL validates).
       S3_URL: http://rustfs:9000
-      S3_URL_AGENT: http://rustfs:9000
       # S3_URL_PUBLIC is the externally-reachable host browsers (and, in
       # the prod path, LLM providers) hit for presigned media. Defaults
       # to `https://s3.${DOMAIN}` to match the Caddyfile, but
@@ -170,9 +173,13 @@ services:
       AGENT_DOMAIN: ${DOMAIN}
       API_URL_AGENT: http://airlock:8080
 
-      # Container orchestration: agent containers join this network so they
-      # can reach airlock:8080 internally. Must match the network name below.
+      # Container orchestration networks. DOCKER_NETWORK carries infra +
+      # toolserver/build containers. AGENT_NETWORK carries agent runtime
+      # containers — an isolated net with only airlock + postgres, so a
+      # malicious agent can't reach rustfs/caddy/frontend. Both must match
+      # the network names in the `networks:` block below.
       DOCKER_NETWORK: airlock
+      AGENT_NETWORK: airlock-agents
       # Opt-in toolserver/runtime image overrides. Empty default = airlock
       # uses config.DefaultAgent{Builder,Base}Image (pinned to airlock.Version,
       # matched to this release). Set in .env to point at a custom build.
@@ -208,6 +215,9 @@ services:
       retries: 5
       start_period: 30s
     restart: unless-stopped
+    # On both networks: infra (reach rustfs/caddy/postgres) + agents (so
+    # agent containers can reach airlock:8080 on the isolated net).
+    networks: [default, agents]
 
   frontend:
     build:
@@ -238,12 +248,18 @@ services:
       - caddy-config:/config
     restart: unless-stopped
 
-# Single shared network. Agent containers launched by airlock join this
-# network too (DOCKER_NETWORK env var above), so they can reach airlock,
-# postgres, and rustfs by service name.
+# Two networks. `default` (airlock) carries all infra. `agents` carries
+# ONLY airlock + postgres — agent runtime containers attach here (via
+# AGENT_NETWORK), so a malicious agent can reach airlock's API and its
+# scoped DB but NOT rustfs, caddy, the frontend, or build containers.
+# Toolserver/build containers stay on `default` (DOCKER_NETWORK). Agents
+# still get internet egress (bridge NAT) for legitimate outbound calls.
+# See airlock/docs/agent-isolation.md.
 networks:
   default:
     name: airlock
+  agents:
+    name: airlock-agents
 
 volumes:
   pgdata:

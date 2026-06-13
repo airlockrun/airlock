@@ -250,7 +250,7 @@ func (m *DockerManager) StartAgent(ctx context.Context, opts AgentOpts) (*Contai
 
 	hostCfg := buildAgentHostConfig(m.cfg)
 
-	c, err := m.createAndStart(ctx, name, containerCfg, hostCfg)
+	c, err := m.createAndStart(ctx, name, containerCfg, hostCfg, m.cfg.AgentNetwork)
 	if err != nil {
 		return nil, fmt.Errorf("start agent: %w", err)
 	}
@@ -424,7 +424,7 @@ func (m *DockerManager) StartToolserver(ctx context.Context, opts ToolserverOpts
 		Mounts: mounts,
 	}
 
-	c, err := m.createAndStart(ctx, name, containerCfg, hostCfg)
+	c, err := m.createAndStart(ctx, name, containerCfg, hostCfg, m.cfg.DockerNetwork)
 	if err != nil {
 		return nil, fmt.Errorf("start toolserver: %w", err)
 	}
@@ -506,17 +506,27 @@ func buildAgentHostConfig(cfg *config.Config) *dcontainer.HostConfig {
 
 func ptrInt64(v int64) *int64 { return &v }
 
-func (m *DockerManager) createAndStart(ctx context.Context, name string, cfg *dcontainer.Config, hostCfg *dcontainer.HostConfig) (*Container, error) {
+// networkConfig builds the Docker NetworkingConfig attaching a container to
+// networkName (empty = the daemon default network). Agent runtime
+// containers attach to cfg.AgentNetwork (an isolated net reaching only
+// airlock + postgres in prod); toolserver/build containers attach to
+// cfg.DockerNetwork (the infra net).
+func networkConfig(networkName string) *network.NetworkingConfig {
+	netCfg := &network.NetworkingConfig{}
+	if networkName != "" {
+		netCfg.EndpointsConfig = map[string]*network.EndpointSettings{
+			networkName: {},
+		}
+	}
+	return netCfg
+}
+
+func (m *DockerManager) createAndStart(ctx context.Context, name string, cfg *dcontainer.Config, hostCfg *dcontainer.HostConfig, networkName string) (*Container, error) {
 	if err := m.client.ContainerRemove(ctx, name, dcontainer.RemoveOptions{Force: true}); err != nil && !cerrdefs.IsNotFound(err) {
 		m.logger.Warn("failed to remove existing container", zap.String("name", name), zap.Error(err))
 	}
 
-	netCfg := &network.NetworkingConfig{}
-	if m.cfg.DockerNetwork != "" {
-		netCfg.EndpointsConfig = map[string]*network.EndpointSettings{
-			m.cfg.DockerNetwork: {},
-		}
-	}
+	netCfg := networkConfig(networkName)
 
 	resp, err := m.client.ContainerCreate(ctx, cfg, hostCfg, netCfg, nil, name)
 	if err != nil {
