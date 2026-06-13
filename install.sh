@@ -151,6 +151,66 @@ ensure_buildkit_capable() {
 	printf 'unix:///run/buildkit/buildkitd.sock'
 }
 
+# ---------- Cloudflare API (one token: create DNS records + DNS-01 cert) ----------
+CF_API="https://api.cloudflare.com/client/v4"
+CF_TOKEN=""
+CF_AUTO_DNS=0
+PUBLIC_IP=""
+
+ensure_jq() {
+	need_cmd jq && return 0
+	log "installing jq (for Cloudflare API)"
+	if [ "$OS" = macos ]; then brew install jq; else install_pkg jq; fi
+	need_cmd jq || die "jq is required for Cloudflare automation — install it and re-run"
+}
+
+cf_api() { # cf_api METHOD /path [json-body]
+	local method="$1" path="$2" data="${3:-}"
+	if [ -n "$data" ]; then
+		curl -fsS -X "$method" "$CF_API$path" -H "Authorization: Bearer $CF_TOKEN" -H "Content-Type: application/json" --data "$data"
+	else
+		curl -fsS -X "$method" "$CF_API$path" -H "Authorization: Bearer $CF_TOKEN"
+	fi
+}
+
+cf_verify_token() {
+	cf_api GET /user/tokens/verify 2>/dev/null | jq -e '.success==true and .result.status=="active"' >/dev/null 2>&1
+}
+
+# Find the zone whose name is a suffix of DOMAIN (e.g. example.com for
+# airlock.example.com). Echoes the zone id.
+cf_zone_id() {
+	local name="$DOMAIN" id
+	while :; do
+		id=$(cf_api GET "/zones?name=$name" 2>/dev/null | jq -r '.result[0].id // empty')
+		[ -n "$id" ] && { printf '%s' "$id"; return 0; }
+		case "$name" in *.*.*) name="${name#*.}" ;; *) return 1 ;; esac
+	done
+}
+
+cf_upsert_a() { # cf_upsert_a <zone_id> <fqdn> <ip>  (DNS-only / grey cloud)
+	local zid="$1" fqdn="$2" ip="$3" rid body
+	rid=$(cf_api GET "/zones/$zid/dns_records?type=A&name=$fqdn" 2>/dev/null | jq -r '.result[0].id // empty')
+	body=$(jq -nc --arg n "$fqdn" --arg c "$ip" '{type:"A",name:$n,content:$c,proxied:false,ttl:120}')
+	if [ -n "$rid" ]; then
+		cf_api PUT "/zones/$zid/dns_records/$rid" "$body" >/dev/null 2>&1 && log "DNS: A $fqdn → $ip (updated)" || warn "DNS: update A $fqdn failed"
+	else
+		cf_api POST "/zones/$zid/dns_records" "$body" >/dev/null 2>&1 && log "DNS: A $fqdn → $ip (created)" || warn "DNS: create A $fqdn failed"
+	fi
+}
+
+# Create apex + wildcard A records pointing at this host (grey cloud, so Caddy's
+# DNS-01 wildcard cert serves directly — proxied multi-level wildcards aren't
+# covered by Cloudflare's free Universal SSL anyway).
+cf_setup_dns() {
+	[ "$CF_AUTO_DNS" = 1 ] || return 0
+	[ -n "$PUBLIC_IP" ] || die "no public IP determined for DNS records"
+	if [ "$DRY_RUN" = 1 ]; then log "DRY RUN — would create A $DOMAIN and A *.$DOMAIN → $PUBLIC_IP (grey cloud)"; return 0; fi
+	local zid; zid=$(cf_zone_id) || die "could not find a Cloudflare zone for $DOMAIN (does the token cover it?)"
+	cf_upsert_a "$zid" "$DOMAIN" "$PUBLIC_IP"
+	cf_upsert_a "$zid" "*.$DOMAIN" "$PUBLIC_IP"
+}
+
 # ---------- main ----------
 parse_args() {
 	while [ $# -gt 0 ]; do
@@ -201,24 +261,35 @@ choose_mode() {
 	[ -n "$DOMAIN" ] || die "domain required (or run with --local)"
 
 	# Publicly reachable? macOS never is (no public-server modes).
+	PUBLIC_IP=$(host_public_ip)
 	local public=n
-	if [ "$OS" = linux ]; then
-		local ip; ip=$(host_public_ip)
-		if [ -n "$ip" ] && resolves_to "$DOMAIN" "$ip"; then
-			public=y
-			resolves_to "test-$RANDOM.$DOMAIN" "$ip" || warn "wildcard *.$DOMAIN does not resolve to $ip yet — add an A record '*.$DOMAIN → $ip' (per-agent subdomains need it)."
-		else
-			warn "$DOMAIN does not resolve to this host's public IP (${ip:-unknown})."
-		fi
+	if [ "$OS" = linux ] && [ -n "$PUBLIC_IP" ] && resolves_to "$DOMAIN" "$PUBLIC_IP"; then
+		public=y
+	elif [ "$OS" = linux ]; then
+		warn "$DOMAIN does not resolve to this host's public IP (${PUBLIC_IP:-unknown}) yet."
 	fi
 
 	if is_cloudflare "$DOMAIN"; then
-		log "domain appears to be on Cloudflare."
-		if [ "$public" = y ] && confirm "Use a Cloudflare DNS-01 wildcard cert (recommended for >30 agents)?"; then
+		log "domain is on Cloudflare."
+		# One token does it all: create the A records AND issue the wildcard
+		# cert (DNS-01). Works even on a fresh domain with no records yet.
+		if [ "$OS" = linux ] && [ -n "$PUBLIC_IP" ] && confirm "Auto-configure DNS records + wildcard TLS with a Cloudflare API token?"; then
+			CF_TOKEN=$(ask_secret "Cloudflare API token (zone DNS edit)")
+			[ -n "$CF_TOKEN" ] || die "token required"
+			ensure_jq
+			cf_verify_token || die "Cloudflare token invalid / inactive — check it has Zone:DNS:Edit + Zone:Read"
 			MODE=b
-			local tok; tok=$(ask_secret "Cloudflare API token (Zone:DNS:Edit)")
-			[ -n "$tok" ] || die "token required for wildcard mode"
-			ENV_EXTRA+=("CLOUDFLARE_API_TOKEN=$tok")
+			CF_AUTO_DNS=1
+			ENV_EXTRA+=("CLOUDFLARE_API_TOKEN=$CF_TOKEN")
+			log "will create A $DOMAIN and A *.$DOMAIN → $PUBLIC_IP, and issue a *.$DOMAIN cert."
+			return
+		fi
+		# Manual-DNS wildcard (records already created by hand).
+		if [ "$public" = y ] && confirm "Use a Cloudflare DNS-01 wildcard cert (records already set)?"; then
+			MODE=b
+			CF_TOKEN=$(ask_secret "Cloudflare API token (Zone:DNS:Edit)")
+			[ -n "$CF_TOKEN" ] || die "token required for wildcard mode"
+			ENV_EXTRA+=("CLOUDFLARE_API_TOKEN=$CF_TOKEN")
 			return
 		fi
 		if [ "$public" = n ] && confirm "This host isn't publicly reachable — serve it via a Cloudflare Tunnel?"; then
@@ -315,8 +386,9 @@ main() {
 	ensure_docker
 	clone_repo
 	choose_mode
+	cf_setup_dns   # create A records via the CF token when auto-DNS was chosen
 	BUILDKIT_HOST_VAL=""
-	[ "$MODE" != d ] && BUILDKIT_HOST_VAL="$(ensure_buildkit_capable)"
+	if [ "$MODE" != d ]; then BUILDKIT_HOST_VAL="$(ensure_buildkit_capable)"; fi
 	select_compose
 	render_env
 	bring_up
