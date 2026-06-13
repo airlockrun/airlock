@@ -119,6 +119,10 @@ services:
   # never the isolated agents net).
   buildkitd:
     image: moby/buildkit:rootless
+    # Opt-in: only runs when the `buildkit` profile is active (install.sh
+    # enables it after confirming the host supports rootless userns). Without
+    # it, BUILDKIT_HOST is empty and airlock uses the legacy host docker build.
+    profiles: ["buildkit"]
     # --oci-worker-no-process-sandbox: skip the per-RUN-step pid/proc
     # sandbox, which can't nest inside a container host (the build would
     # fail mounting /proc). Still fully rootless. Drop it on a bare-metal/VM
@@ -151,8 +155,6 @@ services:
         condition: service_completed_successfully
       agent-base-image:
         condition: service_completed_successfully
-      buildkitd:
-        condition: service_started
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-airlock}:${POSTGRES_PASSWORD:-airlock}@postgres:5432/${POSTGRES_DB:-airlock}?sslmode=disable
 
@@ -209,10 +211,14 @@ services:
       # the network names in the `networks:` block below.
       DOCKER_NETWORK: airlock
       AGENT_NETWORK: airlock-agents
-      # Build agent images through the rootless buildkitd (see service above)
-      # instead of the host's root dockerd. Unset this to fall back to the
-      # legacy host `docker build`.
-      BUILDKIT_HOST: unix:///run/buildkit/buildkitd.sock
+      # Rootless agent image builds. Empty by default → legacy host
+      # `docker build` (works everywhere). install.sh sets BUILDKIT_HOST to the
+      # buildkitd socket and enables the `buildkit` profile when the host
+      # supports rootless userns. See docs/agent-isolation.md.
+      BUILDKIT_HOST: ${BUILDKIT_HOST-}
+      # Optional agent isolation knobs (install.sh / .env fill these).
+      AGENT_SANDBOX: ${AGENT_SANDBOX-}
+      AGENT_MEMORY_LIMIT: ${AGENT_MEMORY_LIMIT-}
       # Opt-in toolserver/runtime image overrides. Empty default = airlock
       # uses config.DefaultAgent{Builder,Base}Image (pinned to airlock.Version,
       # matched to this release). Set in .env to point at a custom build.

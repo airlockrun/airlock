@@ -17,7 +17,42 @@ If "Heroku for cyborg agents, but I run it myself" lands, that's the shape.
 
 ## Quickstart
 
-5 steps to a running self-hosted airlock instance.
+### Fastest: the installer
+
+On a fresh Linux VPS (or macOS for local/tunnel), one command installs Docker,
+generates secrets, verifies your domain, wires TLS, and brings the stack up:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/airlockrun/airlock/v0.4.0-rc.1/install.sh | bash
+```
+
+Prefer to read it first (recommended for any `curl | bash`):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/airlockrun/airlock/v0.4.0-rc.1/install.sh -o install.sh
+less install.sh && bash install.sh
+```
+
+It picks a deployment mode from what your host has:
+- **Public server** (public IP, ports 80/443) → on-demand Let's Encrypt TLS.
+- **Public + Cloudflare** → optional **DNS-01 wildcard** cert (one cert for all
+  agent subdomains; no rate limit). Needs a CF API token scoped `Zone:DNS:Edit`.
+- **No public IP** (home/NAT/Mac) + Cloudflare → **Cloudflare Tunnel**: CF dials
+  in and serves your domain with edge TLS, no open ports. Needs a tunnel token.
+- **No domain** → local mode (`airlock.localhost`, inline attachments).
+
+Missing optional prereqs degrade gracefully (e.g. rootless BuildKit needs
+unprivileged user namespaces — on Ubuntu 23.10+ the installer offers to set the
+`apparmor_restrict_unprivileged_userns` sysctl; decline and it falls back to the
+legacy build). See [docs/agent-isolation.md](docs/agent-isolation.md) for the
+hardening knobs.
+
+Re-run anytime; it's idempotent (`--force` to regenerate `.env`, `--dry-run` to
+preview, `--local` to force local mode).
+
+### Manual: 5 steps
+
+If you'd rather wire it up yourself — a running self-hosted airlock instance.
 
 **Prerequisites:**
 - Linux server with Docker 24+ and the Compose v2 plugin
