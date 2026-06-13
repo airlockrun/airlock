@@ -111,12 +111,15 @@ services:
     restart: "no"
 
   # Rootless BuildKit daemon. airlock builds agent images through this (via
-  # BUILDKIT_HOST + a remote buildx builder) instead of the host's root
-  # dockerd, so an agent's untrusted setup.sh runs as root *inside* buildkitd
-  # — an unprivileged uid on the host. Needs unconfined seccomp/apparmor and
-  # /dev/fuse for rootless overlayfs; this is scoped to this container, not
-  # the host. On `default` only (it needs internet for ADD/module fetches,
-  # never the isolated agents net).
+  # BUILDKIT_HOST=tcp://buildkitd:1234 + a remote buildx builder) instead of
+  # the host's root dockerd, so an agent's untrusted setup.sh runs as root
+  # *inside* buildkitd — an unprivileged uid on the host. Listens on TCP (not
+  # a unix socket: the rootless uid can't bind a socket in a root-owned shared
+  # volume). Unauthenticated, but only reachable on the internal `default`
+  # network — NOT published to the host and NOT on the agents network, so no
+  # agent or external client can reach it. (mTLS is a possible follow-up.)
+  # Needs unconfined seccomp/apparmor + /dev/fuse for rootless overlayfs,
+  # scoped to this container.
   buildkitd:
     image: moby/buildkit:rootless
     # Opt-in: only runs when the `buildkit` profile is active (install.sh
@@ -129,7 +132,7 @@ services:
     # host if you want the extra per-step isolation.
     command:
       - "--addr"
-      - "unix:///run/buildkit/buildkitd.sock"
+      - "tcp://0.0.0.0:1234"
       - "--oci-worker-no-process-sandbox"
     security_opt:
       - seccomp=unconfined
@@ -137,7 +140,6 @@ services:
     devices:
       - /dev/fuse
     volumes:
-      - buildkit-sock:/run/buildkit
       - buildkit-state:/home/user/.local/share/buildkit
     restart: unless-stopped
 
@@ -247,9 +249,6 @@ services:
       # Required for launching agent containers. This grants root-equivalent
       # on the host — standard for any orchestrator that manages containers.
       - /var/run/docker.sock:/var/run/docker.sock
-      # Rootless buildkitd socket — agent image builds run here, not on the
-      # host dockerd. Read-only: airlock only connects as a client.
-      - buildkit-sock:/run/buildkit:ro
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8080/health >/dev/null || exit 1"]
       interval: 10s
@@ -306,7 +305,6 @@ networks:
 volumes:
   pgdata:
   rustfsdata:
-  buildkit-sock:    # shared dir holding the rootless buildkitd unix socket
   buildkit-state:   # rootless buildkitd cache + state (persists build cache)
   caddy-data:    # CRITICAL: Let's Encrypt cert cache. Don't delete or you'll re-issue all certs and may hit rate limits.
   caddy-config:

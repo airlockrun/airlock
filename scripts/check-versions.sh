@@ -17,11 +17,16 @@
 #     compose ghcr tag. Operators clone + checkout the version the
 #     README documents; if it drifts from compose, they pull a tag
 #     that doesn't exist or whose images don't match the compose file.
+#   - install.sh's pinned RELEASE_TAG default (and the README curl|bash
+#     URLs that embed it) match the compose tag. The installer clones
+#     this tag and pulls its images; a stale pin would fetch a tag whose
+#     images don't exist or don't match.
 #
 # Release-only (RELEASE_TAG env set — runs in CI on tag push):
 #   - Compose ghcr image tags equal $RELEASE_TAG. Catches "bumped to
 #     wrong number" or "forgot to bump compose entirely before tagging".
 #   - README.md's checkout version equals $RELEASE_TAG. Same idea.
+#   - install.sh RELEASE_TAG equals $RELEASE_TAG.
 #
 # Exit status: 0 on pass, 1 on any failure. All failures reported, not
 # fail-fast — one run surfaces every drift.
@@ -134,7 +139,27 @@ elif [ "$n" -eq 1 ] && [ "v$version_go" != "$tags" ]; then
 	err "version.go Version=v$version_go doesn't match compose tag $tags"
 fi
 
-# --- 6. Release-only: compose + README + version.go equal $RELEASE_TAG ---
+# --- 6. install.sh pinned tag + README curl URLs match compose tag ---
+
+# install.sh clones + pulls this tag: RELEASE_TAG="${AIRLOCK_TAG:-vX.Y.Z}".
+install_tag=$(sed -nE 's/.*AIRLOCK_TAG:-(v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?).*/\1/p' install.sh | head -1)
+if [ -z "$install_tag" ]; then
+	err "install.sh: missing pinned RELEASE_TAG default (\${AIRLOCK_TAG:-vX.Y.Z})"
+elif [ "$n" -eq 1 ] && [ "$install_tag" != "$tags" ]; then
+	err "install.sh RELEASE_TAG $install_tag doesn't match compose tag $tags"
+fi
+
+# The README curl|bash one-liners embed the tag in the raw.githubusercontent URL.
+readme_curl_tags=$(grep -oE 'raw\.githubusercontent\.com/airlockrun/airlock/v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?/install\.sh' README.md \
+	| sed -E 's#.*/airlock/(v[^/]+)/install\.sh#\1#' | sort -u || true)
+if [ -n "$readme_curl_tags" ] && [ "$n" -eq 1 ]; then
+	while IFS= read -r u; do
+		[ -z "$u" ] && continue
+		[ "$u" != "$tags" ] && err "README.md install.sh curl URL tag $u doesn't match compose tag $tags"
+	done <<< "$readme_curl_tags"
+fi
+
+# --- 7. Release-only: compose + README + version.go + install.sh equal $RELEASE_TAG ---
 
 if [ -n "${RELEASE_TAG:-}" ]; then
 	if [ "$n" -eq 1 ] && [ "$tags" != "$RELEASE_TAG" ]; then
@@ -145,6 +170,9 @@ if [ -n "${RELEASE_TAG:-}" ]; then
 	fi
 	if [ -n "$version_go" ] && [ "v$version_go" != "$RELEASE_TAG" ]; then
 		err "version.go Version=v$version_go doesn't match release tag $RELEASE_TAG"
+	fi
+	if [ -n "$install_tag" ] && [ "$install_tag" != "$RELEASE_TAG" ]; then
+		err "install.sh RELEASE_TAG $install_tag doesn't match release tag $RELEASE_TAG"
 	fi
 fi
 

@@ -36,7 +36,11 @@ less install.sh && bash install.sh
 It picks a deployment mode from what your host has:
 - **Public server** (public IP, ports 80/443) → on-demand Let's Encrypt TLS.
 - **Public + Cloudflare** → optional **DNS-01 wildcard** cert (one cert for all
-  agent subdomains; no rate limit). Needs a CF API token scoped `Zone:DNS:Edit`.
+  agent subdomains; no rate limit). The installer can also **create the DNS
+  records for you** from the same token. Create it from the **"Edit zone DNS"**
+  template (My Profile → API Tokens → Create Token), which grants exactly
+  **Zone → DNS → Edit** + **Zone → Zone → Read**; scope it to your zone (e.g.
+  `example.com`). (Not Zone:Edit, no account-level perms.)
 - **No public IP** (home/NAT/Mac) + Cloudflare → **Cloudflare Tunnel**: CF dials
   in and serves your domain with edge TLS, no open ports. Needs a tunnel token.
 - **No domain** → local mode (`airlock.localhost`, inline attachments).

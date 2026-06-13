@@ -158,7 +158,7 @@ ensure_buildkit_capable() {
 			printf ''; return
 		fi
 	fi
-	printf 'unix:///run/buildkit/buildkitd.sock'
+	printf 'tcp://buildkitd:1234'
 }
 
 # ---------- Cloudflare API (one token: create DNS records + DNS-01 cert) ----------
@@ -184,7 +184,22 @@ cf_api() { # cf_api METHOD /path [json-body]
 }
 
 cf_verify_token() {
-	cf_api GET /user/tokens/verify 2>/dev/null | jq -e '.success==true and .result.status=="active"' >/dev/null 2>&1
+	# Verify by exercising the permission we actually need (Zone:Read via
+	# GET /zones). This works for BOTH user-owned and account-owned (cfat_)
+	# API tokens — unlike /user/tokens/verify, which rejects account tokens.
+	cf_api GET /zones 2>/dev/null | jq -e '.success==true' >/dev/null 2>&1
+}
+
+# Printed before asking for the token so the user creates the right one.
+cf_token_hint() {
+	cat >&2 <<-'EOF'
+	  Create a Cloudflare API token: dash.cloudflare.com → My Profile →
+	  API Tokens → Create Token →
+	    • Template:    "Edit zone DNS"
+	    • Permissions: Zone · DNS · Edit   AND   Zone · Zone · Read
+	    • Zone Resources: Include · Specific zone · <your domain's zone>
+	  (Not Zone:Edit; no account-level permissions.)
+	EOF
 }
 
 # Find the zone whose name is a suffix of DOMAIN (e.g. example.com for
@@ -256,7 +271,7 @@ clone_repo() {
 # Globals filled by choose_mode: MODE, DOMAIN, plus env extras in ENV_EXTRA[]
 declare -a ENV_EXTRA=()
 declare -a COMPOSE_FILES=(-f docker-compose.yml)
-BUILD_FLAG=""
+BUILD_CADDY=0   # mode B: build ONLY the custom Cloudflare caddy image
 
 choose_mode() {
 	if [ "$FORCE_LOCAL" = 1 ]; then MODE=d; return; fi
@@ -284,7 +299,8 @@ choose_mode() {
 		# One token does it all: create the A records AND issue the wildcard
 		# cert (DNS-01). Works even on a fresh domain with no records yet.
 		if [ "$OS" = linux ] && [ -n "$PUBLIC_IP" ] && confirm "Auto-configure DNS records + wildcard TLS with a Cloudflare API token?"; then
-			CF_TOKEN=$(ask_secret "Cloudflare API token (zone DNS edit)")
+			cf_token_hint
+			CF_TOKEN=$(ask_secret "Cloudflare API token")
 			[ -n "$CF_TOKEN" ] || die "token required"
 			ensure_jq
 			cf_verify_token || die "Cloudflare token invalid / inactive — check it has Zone:DNS:Edit + Zone:Read"
@@ -297,7 +313,8 @@ choose_mode() {
 		# Manual-DNS wildcard (records already created by hand).
 		if [ "$public" = y ] && confirm "Use a Cloudflare DNS-01 wildcard cert (records already set)?"; then
 			MODE=b
-			CF_TOKEN=$(ask_secret "Cloudflare API token (Zone:DNS:Edit)")
+			cf_token_hint
+			CF_TOKEN=$(ask_secret "Cloudflare API token")
 			[ -n "$CF_TOKEN" ] || die "token required for wildcard mode"
 			ENV_EXTRA+=("CLOUDFLARE_API_TOKEN=$CF_TOKEN")
 			return
@@ -319,7 +336,7 @@ choose_mode() {
 select_compose() {
 	case "$MODE" in
 		a) ;;  # base only
-		b) COMPOSE_FILES+=(-f docker-compose.cloudflare.yml); BUILD_FLAG="--build" ;;
+		b) COMPOSE_FILES+=(-f docker-compose.cloudflare.yml); BUILD_CADDY=1 ;;
 		c) COMPOSE_FILES+=(-f docker-compose.tunnel.yml) ;;
 		d) COMPOSE_FILES+=(-f docker-compose.local.yml) ;;
 	esac
@@ -356,16 +373,30 @@ render_env() {
 }
 
 bring_up() {
-	local cmd=(docker compose "${COMPOSE_FILES[@]}")
+	local base=(docker compose "${COMPOSE_FILES[@]}")
+	local cmd=("${base[@]}")
 	[ -n "$BUILDKIT_HOST_VAL" ] && cmd+=(--profile buildkit)
-	cmd+=(up -d)
-	[ -n "$BUILD_FLAG" ] && cmd+=("$BUILD_FLAG")
+	# Prod: pull the published ghcr images; never build app images (--no-build
+	# errors loudly if a release image is missing — i.e. the tag isn't
+	# published). The custom Cloudflare caddy image is the one exception, built
+	# locally below (mode B), since it's never published.
+	cmd+=(up -d --no-build)
+
 	if [ "$DRY_RUN" = 1 ]; then
-		hr; log "DRY RUN — would run:"; printf '  %s\n' "${cmd[*]}"
+		hr; log "DRY RUN — would run:"
+		[ "$BUILD_CADDY" = 1 ] && printf '  %s\n' "${base[*]} build caddy"
+		printf '  %s\n' "${cmd[*]}"
 		return
 	fi
+	if [ "$BUILD_CADDY" = 1 ]; then
+		log "building the Cloudflare caddy image"
+		"${base[@]}" build caddy || die "caddy image build failed"
+	fi
 	log "starting the stack: ${cmd[*]}"
-	"${cmd[@]}" || die "stack failed to start (see 'docker compose ${COMPOSE_FILES[*]} logs')"
+	if ! "${cmd[@]}"; then
+		warn "Could not pull an image for tag $RELEASE_TAG — make sure this release's images are published to ghcr (or pass --tag <published-tag>)."
+		die "stack failed to start (see 'docker compose ${COMPOSE_FILES[*]} logs')"
+	fi
 }
 
 finish() {
