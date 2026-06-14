@@ -49,16 +49,16 @@ const createRun = `-- name: CreateRun :one
 INSERT INTO runs (
     agent_id, bridge_id, parent_run_id, status, error_kind,
     input_payload, source_ref, trigger_type, trigger_ref,
-    actions, llm_calls, llm_tokens_in, llm_tokens_out, llm_cost_estimate,
+    actions, llm_calls, llm_tokens_in, llm_tokens_out, llm_tokens_cached, llm_cost_estimate,
     stdout_log, error_message, panic_trace, compacted
 )
 VALUES (
     $1, $2, $3, 'running', '',
     $4, $5, $6, $7,
-    '[]'::jsonb, 0, 0, 0, 0,
+    '[]'::jsonb, 0, 0, 0, 0, 0,
     '', '', '', false
 )
-RETURNING id, agent_id, bridge_id, status, trigger_type, trigger_ref, source_ref, input_payload, actions, llm_calls, llm_tokens_in, llm_tokens_out, llm_cost_estimate, duration_ms, stdout_log, error_message, error_kind, exit_code, panic_trace, checkpoint, compacted, started_at, finished_at, parent_run_id
+RETURNING id, agent_id, bridge_id, status, trigger_type, trigger_ref, source_ref, input_payload, actions, llm_calls, llm_tokens_in, llm_tokens_out, llm_cost_estimate, duration_ms, stdout_log, error_message, error_kind, exit_code, panic_trace, checkpoint, compacted, started_at, finished_at, parent_run_id, llm_tokens_cached
 `
 
 type CreateRunParams struct {
@@ -112,6 +112,7 @@ func (q *Queries) CreateRun(ctx context.Context, arg CreateRunParams) (Run, erro
 		&i.StartedAt,
 		&i.FinishedAt,
 		&i.ParentRunID,
+		&i.LlmTokensCached,
 	)
 	return i, err
 }
@@ -177,7 +178,7 @@ func (q *Queries) GetLatestRunningPromptRun(ctx context.Context, triggerRef stri
 }
 
 const getLatestSuspendedRun = `-- name: GetLatestSuspendedRun :one
-SELECT id, agent_id, bridge_id, status, trigger_type, trigger_ref, source_ref, input_payload, actions, llm_calls, llm_tokens_in, llm_tokens_out, llm_cost_estimate, duration_ms, stdout_log, error_message, error_kind, exit_code, panic_trace, checkpoint, compacted, started_at, finished_at, parent_run_id FROM runs
+SELECT id, agent_id, bridge_id, status, trigger_type, trigger_ref, source_ref, input_payload, actions, llm_calls, llm_tokens_in, llm_tokens_out, llm_cost_estimate, duration_ms, stdout_log, error_message, error_kind, exit_code, panic_trace, checkpoint, compacted, started_at, finished_at, parent_run_id, llm_tokens_cached FROM runs
 WHERE agent_id = $1 AND status = 'suspended'
 ORDER BY started_at DESC
 LIMIT 1
@@ -211,12 +212,13 @@ func (q *Queries) GetLatestSuspendedRun(ctx context.Context, agentID pgtype.UUID
 		&i.StartedAt,
 		&i.FinishedAt,
 		&i.ParentRunID,
+		&i.LlmTokensCached,
 	)
 	return i, err
 }
 
 const getLatestSuspendedRunByConversation = `-- name: GetLatestSuspendedRunByConversation :one
-SELECT id, agent_id, bridge_id, status, trigger_type, trigger_ref, source_ref, input_payload, actions, llm_calls, llm_tokens_in, llm_tokens_out, llm_cost_estimate, duration_ms, stdout_log, error_message, error_kind, exit_code, panic_trace, checkpoint, compacted, started_at, finished_at, parent_run_id FROM runs
+SELECT id, agent_id, bridge_id, status, trigger_type, trigger_ref, source_ref, input_payload, actions, llm_calls, llm_tokens_in, llm_tokens_out, llm_cost_estimate, duration_ms, stdout_log, error_message, error_kind, exit_code, panic_trace, checkpoint, compacted, started_at, finished_at, parent_run_id, llm_tokens_cached FROM runs
 WHERE trigger_ref = $1 AND status = 'suspended'
 ORDER BY started_at DESC
 LIMIT 1
@@ -257,12 +259,13 @@ func (q *Queries) GetLatestSuspendedRunByConversation(ctx context.Context, conve
 		&i.StartedAt,
 		&i.FinishedAt,
 		&i.ParentRunID,
+		&i.LlmTokensCached,
 	)
 	return i, err
 }
 
 const getRunByID = `-- name: GetRunByID :one
-SELECT id, agent_id, bridge_id, status, trigger_type, trigger_ref, source_ref, input_payload, actions, llm_calls, llm_tokens_in, llm_tokens_out, llm_cost_estimate, duration_ms, stdout_log, error_message, error_kind, exit_code, panic_trace, checkpoint, compacted, started_at, finished_at, parent_run_id FROM runs WHERE id = $1
+SELECT id, agent_id, bridge_id, status, trigger_type, trigger_ref, source_ref, input_payload, actions, llm_calls, llm_tokens_in, llm_tokens_out, llm_cost_estimate, duration_ms, stdout_log, error_message, error_kind, exit_code, panic_trace, checkpoint, compacted, started_at, finished_at, parent_run_id, llm_tokens_cached FROM runs WHERE id = $1
 `
 
 func (q *Queries) GetRunByID(ctx context.Context, id pgtype.UUID) (Run, error) {
@@ -293,6 +296,7 @@ func (q *Queries) GetRunByID(ctx context.Context, id pgtype.UUID) (Run, error) {
 		&i.StartedAt,
 		&i.FinishedAt,
 		&i.ParentRunID,
+		&i.LlmTokensCached,
 	)
 	return i, err
 }
@@ -309,7 +313,7 @@ func (q *Queries) GetRunCheckpoint(ctx context.Context, id pgtype.UUID) ([]byte,
 }
 
 const getSuspendedRunByID = `-- name: GetSuspendedRunByID :one
-SELECT id, agent_id, bridge_id, status, trigger_type, trigger_ref, source_ref, input_payload, actions, llm_calls, llm_tokens_in, llm_tokens_out, llm_cost_estimate, duration_ms, stdout_log, error_message, error_kind, exit_code, panic_trace, checkpoint, compacted, started_at, finished_at, parent_run_id FROM runs WHERE id = $1 AND status = 'suspended'
+SELECT id, agent_id, bridge_id, status, trigger_type, trigger_ref, source_ref, input_payload, actions, llm_calls, llm_tokens_in, llm_tokens_out, llm_cost_estimate, duration_ms, stdout_log, error_message, error_kind, exit_code, panic_trace, checkpoint, compacted, started_at, finished_at, parent_run_id, llm_tokens_cached FROM runs WHERE id = $1 AND status = 'suspended'
 `
 
 func (q *Queries) GetSuspendedRunByID(ctx context.Context, id pgtype.UUID) (Run, error) {
@@ -340,12 +344,13 @@ func (q *Queries) GetSuspendedRunByID(ctx context.Context, id pgtype.UUID) (Run,
 		&i.StartedAt,
 		&i.FinishedAt,
 		&i.ParentRunID,
+		&i.LlmTokensCached,
 	)
 	return i, err
 }
 
 const listRunningByAgent = `-- name: ListRunningByAgent :many
-SELECT id, agent_id, bridge_id, status, trigger_type, trigger_ref, source_ref, input_payload, actions, llm_calls, llm_tokens_in, llm_tokens_out, llm_cost_estimate, duration_ms, stdout_log, error_message, error_kind, exit_code, panic_trace, checkpoint, compacted, started_at, finished_at, parent_run_id FROM runs WHERE agent_id = $1 AND status = 'running'
+SELECT id, agent_id, bridge_id, status, trigger_type, trigger_ref, source_ref, input_payload, actions, llm_calls, llm_tokens_in, llm_tokens_out, llm_cost_estimate, duration_ms, stdout_log, error_message, error_kind, exit_code, panic_trace, checkpoint, compacted, started_at, finished_at, parent_run_id, llm_tokens_cached FROM runs WHERE agent_id = $1 AND status = 'running'
 `
 
 func (q *Queries) ListRunningByAgent(ctx context.Context, agentID pgtype.UUID) ([]Run, error) {
@@ -382,6 +387,7 @@ func (q *Queries) ListRunningByAgent(ctx context.Context, agentID pgtype.UUID) (
 			&i.StartedAt,
 			&i.FinishedAt,
 			&i.ParentRunID,
+			&i.LlmTokensCached,
 		); err != nil {
 			return nil, err
 		}
@@ -394,7 +400,7 @@ func (q *Queries) ListRunningByAgent(ctx context.Context, agentID pgtype.UUID) (
 }
 
 const listRunsByAgent = `-- name: ListRunsByAgent :many
-SELECT id, agent_id, bridge_id, status, trigger_type, trigger_ref, source_ref, input_payload, actions, llm_calls, llm_tokens_in, llm_tokens_out, llm_cost_estimate, duration_ms, stdout_log, error_message, error_kind, exit_code, panic_trace, checkpoint, compacted, started_at, finished_at, parent_run_id FROM runs
+SELECT id, agent_id, bridge_id, status, trigger_type, trigger_ref, source_ref, input_payload, actions, llm_calls, llm_tokens_in, llm_tokens_out, llm_cost_estimate, duration_ms, stdout_log, error_message, error_kind, exit_code, panic_trace, checkpoint, compacted, started_at, finished_at, parent_run_id, llm_tokens_cached FROM runs
 WHERE agent_id = $1
     AND ($2::timestamptz IS NULL OR started_at < $2)
 ORDER BY started_at DESC
@@ -441,6 +447,7 @@ func (q *Queries) ListRunsByAgent(ctx context.Context, arg ListRunsByAgentParams
 			&i.StartedAt,
 			&i.FinishedAt,
 			&i.ParentRunID,
+			&i.LlmTokensCached,
 		); err != nil {
 			return nil, err
 		}
@@ -565,13 +572,15 @@ UPDATE runs
 SET llm_calls = stats.calls,
     llm_tokens_in = stats.tokens_in,
     llm_tokens_out = stats.tokens_out,
+    llm_tokens_cached = stats.tokens_cached,
     llm_cost_estimate = stats.cost
 FROM (
     SELECT
-        COUNT(*)::integer                     AS calls,
-        COALESCE(SUM(tokens_in), 0)::integer  AS tokens_in,
-        COALESCE(SUM(tokens_out), 0)::integer AS tokens_out,
-        COALESCE(SUM(cost_total), 0)::float8  AS cost
+        COUNT(*)::integer                        AS calls,
+        COALESCE(SUM(tokens_in), 0)::integer     AS tokens_in,
+        COALESCE(SUM(tokens_out), 0)::integer    AS tokens_out,
+        COALESCE(SUM(tokens_cached), 0)::integer AS tokens_cached,
+        COALESCE(SUM(cost_total), 0)::float8     AS cost
     FROM llm_usage
     WHERE run_id = $1
 ) stats
@@ -612,14 +621,14 @@ INSERT INTO runs (
     id, agent_id, status, error_message, error_kind, actions,
     stdout_log, panic_trace, input_payload, source_ref,
     trigger_type, trigger_ref, finished_at, duration_ms,
-    llm_calls, llm_tokens_in, llm_tokens_out, llm_cost_estimate,
+    llm_calls, llm_tokens_in, llm_tokens_out, llm_tokens_cached, llm_cost_estimate,
     compacted
 )
 VALUES (
     $1, $2, $3, $4, $5, $6,
     $7, $8, '{}'::jsonb, '',
     'prompt', '', now(), 0,
-    0, 0, 0, 0,
+    0, 0, 0, 0, 0,
     false
 )
 ON CONFLICT (id) DO UPDATE SET

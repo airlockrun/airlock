@@ -7,13 +7,13 @@
 INSERT INTO agent_builds (
     agent_id, type, status, instructions,
     source_ref, image_ref, sol_log, docker_log, log_seq, error_message,
-    llm_calls, llm_tokens_in, llm_tokens_out, llm_cost_estimate,
+    llm_calls, llm_tokens_in, llm_tokens_out, llm_tokens_cached, llm_cost_estimate,
     rollback_target_id, sdk_version
 )
 VALUES (
     @agent_id, @type, 'building', @instructions,
     '', '', '', '', 0, '',
-    0, 0, 0, 0,
+    0, 0, 0, 0, 0,
     sqlc.narg('rollback_target_id'), ''
 )
 RETURNING *;
@@ -41,13 +41,15 @@ UPDATE agent_builds
 SET llm_calls = stats.calls,
     llm_tokens_in = stats.tokens_in,
     llm_tokens_out = stats.tokens_out,
+    llm_tokens_cached = stats.tokens_cached,
     llm_cost_estimate = stats.cost
 FROM (
     SELECT
-        COUNT(*)::integer                     AS calls,
-        COALESCE(SUM(tokens_in), 0)::integer  AS tokens_in,
-        COALESCE(SUM(tokens_out), 0)::integer AS tokens_out,
-        COALESCE(SUM(cost_total), 0)::float8  AS cost
+        COUNT(*)::integer                        AS calls,
+        COALESCE(SUM(tokens_in), 0)::integer     AS tokens_in,
+        COALESCE(SUM(tokens_out), 0)::integer    AS tokens_out,
+        COALESCE(SUM(tokens_cached), 0)::integer AS tokens_cached,
+        COALESCE(SUM(cost_total), 0)::float8     AS cost
     FROM llm_usage
     WHERE build_id = @build_id
 ) stats
@@ -58,7 +60,7 @@ SELECT * FROM agent_builds WHERE id = $1;
 
 -- name: ListAgentBuildsByAgent :many
 SELECT id, agent_id, type, status, instructions, error_message, source_ref, image_ref, started_at, finished_at,
-       llm_calls, llm_tokens_in, llm_tokens_out, llm_cost_estimate,
+       llm_calls, llm_tokens_in, llm_tokens_out, llm_tokens_cached, llm_cost_estimate,
        rollback_target_id, sdk_version
 FROM agent_builds
 WHERE agent_id = @agent_id
