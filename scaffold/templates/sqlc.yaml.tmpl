@@ -7,6 +7,9 @@ sql:
       go:
         package: "db"
         out: "internal/db"
-        sql_package: "pgx/v5"
+        # database/sql (lib/pq) to match agentsdk's Agent.DB(), which returns an
+        # *AgentDB over *sql.DB you pass to the generated New(). uuid maps to
+        # github.com/google/uuid; nullable columns use sql.Null*.
+        sql_package: "database/sql"
         emit_json_tags: true
         emit_empty_slices: true
