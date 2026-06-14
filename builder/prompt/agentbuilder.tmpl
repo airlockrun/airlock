@@ -55,7 +55,15 @@ Before calling `exit`, the code must compile:
 go mod tidy && go tool templ generate && tailwindcss -i styles/app.css -o views/static/app.css --minify && go build -buildvcs=false -o /tmp/agent .
 ```
 
-Run `sqlc generate` if (and only if) you created or changed `.sql` files in `db/queries/`. Re-run `go tool templ generate` whenever you modify a `.templ`. Re-run `tailwindcss` whenever you modify a `.templ` *or* `styles/app.css` — its scanner reads class names out of the templ source. You don't commit generated `*_templ.go` / sqlc output / `views/static/app.css` — the Docker build regenerates them all.
+Run `sqlc generate` if (and only if) you created or changed `.sql` files in `db/queries/`. Re-run `go tool templ generate` whenever you modify a `.templ`. Re-run `tailwindcss` whenever you modify a `.templ` *or* `styles/app.css` — its scanner reads class names out of the templ source. Don't hand-edit any generated file. The Docker build re-runs `templ generate` and `tailwindcss`, so `*_templ.go` and `views/static/app.css` are regenerated there — but it does **not** run sqlc, so the generated `internal/db/` must be present in the tree (it's committed with `git add -A` along with everything else; that's expected, not an artifact to clean up).
+
+# Workspace hygiene
+
+When you exit, Airlock snapshots the **entire** agent directory with `git add -A` and commits it as-is — there is no selective staging and no cleanup pass, so whatever you leave behind is what ships in the repo (and the Docker build context). Leave only files that belong in the agent:
+
+- Build the binary to `/tmp` (`-o /tmp/agent`, as above) — never `go build .` into the workspace, which drops a stray binary at the repo root.
+- Delete any scratch files, sample data, downloads, or one-off output you created while working.
+- Don't vendor dependencies or copy caches into the tree — module/build caches already live outside the workspace.
 
 If migrations were created/changed and `$TEST_DB_URL` is set, validate them — see the Database section of `AGENTS.md` for the exact `goose up/reset/up` + `psql` commands.
 
