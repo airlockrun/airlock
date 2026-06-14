@@ -1001,12 +1001,16 @@ type RunInfo struct {
 	// error_kind classifies error_message: "platform" (provider/network),
 	// "agent" (agent code bug), or "" (no error / unknown). Frontend uses
 	// this to suppress the "Fix this error" workflow on platform errors.
-	ErrorKind     string                 `protobuf:"bytes,14,opt,name=error_kind,json=errorKind,proto3" json:"error_kind,omitempty"`
-	PanicTrace    string                 `protobuf:"bytes,15,opt,name=panic_trace,json=panicTrace,proto3" json:"panic_trace,omitempty"`
-	StartedAt     *timestamppb.Timestamp `protobuf:"bytes,16,opt,name=started_at,json=startedAt,proto3" json:"started_at,omitempty"`
-	FinishedAt    *timestamppb.Timestamp `protobuf:"bytes,17,opt,name=finished_at,json=finishedAt,proto3" json:"finished_at,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	ErrorKind  string                 `protobuf:"bytes,14,opt,name=error_kind,json=errorKind,proto3" json:"error_kind,omitempty"`
+	PanicTrace string                 `protobuf:"bytes,15,opt,name=panic_trace,json=panicTrace,proto3" json:"panic_trace,omitempty"`
+	StartedAt  *timestamppb.Timestamp `protobuf:"bytes,16,opt,name=started_at,json=startedAt,proto3" json:"started_at,omitempty"`
+	FinishedAt *timestamppb.Timestamp `protobuf:"bytes,17,opt,name=finished_at,json=finishedAt,proto3" json:"finished_at,omitempty"`
+	// Cached (cache-read) portion of llm_tokens_in. Non-cached input is
+	// llm_tokens_in - llm_tokens_cached; llm_cost_estimate already reflects
+	// the cheaper cache-read rate (priced per-row in the llm_usage ledger).
+	LlmTokensCached int32 `protobuf:"varint,18,opt,name=llm_tokens_cached,json=llmTokensCached,proto3" json:"llm_tokens_cached,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *RunInfo) Reset() {
@@ -1158,6 +1162,13 @@ func (x *RunInfo) GetFinishedAt() *timestamppb.Timestamp {
 	return nil
 }
 
+func (x *RunInfo) GetLlmTokensCached() int32 {
+	if x != nil {
+		return x.LlmTokensCached
+	}
+	return 0
+}
+
 // AgentBuildInfo represents a single build or upgrade of an agent.
 type AgentBuildInfo struct {
 	state        protoimpl.MessageState `protogen:"open.v1"`
@@ -1181,6 +1192,10 @@ type AgentBuildInfo struct {
 	LlmTokensIn     int32   `protobuf:"varint,15,opt,name=llm_tokens_in,json=llmTokensIn,proto3" json:"llm_tokens_in,omitempty"`
 	LlmTokensOut    int32   `protobuf:"varint,16,opt,name=llm_tokens_out,json=llmTokensOut,proto3" json:"llm_tokens_out,omitempty"`
 	LlmCostEstimate float64 `protobuf:"fixed64,17,opt,name=llm_cost_estimate,json=llmCostEstimate,proto3" json:"llm_cost_estimate,omitempty"`
+	// Cached (cache-read) portion of llm_tokens_in for codegen. Non-cached
+	// input is llm_tokens_in - llm_tokens_cached; llm_cost_estimate already
+	// reflects the cheaper cache-read rate.
+	LlmTokensCached int32 `protobuf:"varint,21,opt,name=llm_tokens_cached,json=llmTokensCached,proto3" json:"llm_tokens_cached,omitempty"`
 	// rollback_target_id is set only on type='rollback' rows — points at
 	// the build we rolled back to so the UI can render "Rolled back to {X}".
 	// Empty for build/upgrade rows.
@@ -1344,6 +1359,13 @@ func (x *AgentBuildInfo) GetLlmTokensOut() int32 {
 func (x *AgentBuildInfo) GetLlmCostEstimate() float64 {
 	if x != nil {
 		return x.LlmCostEstimate
+	}
+	return 0
+}
+
+func (x *AgentBuildInfo) GetLlmTokensCached() int32 {
+	if x != nil {
+		return x.LlmTokensCached
 	}
 	return 0
 }
@@ -4266,7 +4288,7 @@ const file_airlock_v1_types_proto_rawDesc = "" +
 	"\vyour_access\x18\x11 \x01(\tR\n" +
 	"yourAccess\x12\x1d\n" +
 	"\n" +
-	"source_ref\x18\x12 \x01(\tR\tsourceRef\"\x8f\x05\n" +
+	"source_ref\x18\x12 \x01(\tR\tsourceRef\"\xbb\x05\n" +
 	"\aRunInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x19\n" +
 	"\bagent_id\x18\x02 \x01(\tR\aagentId\x12\x1b\n" +
@@ -4292,7 +4314,8 @@ const file_airlock_v1_types_proto_rawDesc = "" +
 	"\n" +
 	"started_at\x18\x10 \x01(\v2\x1a.google.protobuf.TimestampR\tstartedAt\x12;\n" +
 	"\vfinished_at\x18\x11 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
-	"finishedAt\"\xd4\x05\n" +
+	"finishedAt\x12*\n" +
+	"\x11llm_tokens_cached\x18\x12 \x01(\x05R\x0fllmTokensCached\"\x80\x06\n" +
 	"\x0eAgentBuildInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x19\n" +
 	"\bagent_id\x18\x02 \x01(\tR\aagentId\x12\x12\n" +
@@ -4315,7 +4338,8 @@ const file_airlock_v1_types_proto_rawDesc = "" +
 	"\tllm_calls\x18\x0e \x01(\x05R\bllmCalls\x12\"\n" +
 	"\rllm_tokens_in\x18\x0f \x01(\x05R\vllmTokensIn\x12$\n" +
 	"\x0ellm_tokens_out\x18\x10 \x01(\x05R\fllmTokensOut\x12*\n" +
-	"\x11llm_cost_estimate\x18\x11 \x01(\x01R\x0fllmCostEstimate\x12,\n" +
+	"\x11llm_cost_estimate\x18\x11 \x01(\x01R\x0fllmCostEstimate\x12*\n" +
+	"\x11llm_tokens_cached\x18\x15 \x01(\x05R\x0fllmTokensCached\x12,\n" +
 	"\x12rollback_target_id\x18\x12 \x01(\tR\x10rollbackTargetId\x12;\n" +
 	"\x1arollback_target_source_ref\x18\x13 \x01(\tR\x17rollbackTargetSourceRef\x12\x1f\n" +
 	"\vsdk_version\x18\x14 \x01(\tR\n" +

@@ -296,12 +296,24 @@ ALTER TABLE agent_builds
     ADD COLUMN llm_calls         integer NOT NULL DEFAULT 0,
     ADD COLUMN llm_tokens_in     integer NOT NULL DEFAULT 0,
     ADD COLUMN llm_tokens_out    integer NOT NULL DEFAULT 0,
+    ADD COLUMN llm_tokens_cached integer NOT NULL DEFAULT 0,
     ADD COLUMN llm_cost_estimate double precision NOT NULL DEFAULT 0;
 ALTER TABLE agent_builds
     ALTER COLUMN llm_calls         DROP DEFAULT,
     ALTER COLUMN llm_tokens_in     DROP DEFAULT,
     ALTER COLUMN llm_tokens_out    DROP DEFAULT,
+    ALTER COLUMN llm_tokens_cached DROP DEFAULT,
     ALTER COLUMN llm_cost_estimate DROP DEFAULT;
+
+-- runs LLM telemetry gains the cached-input breakdown (parity with the
+-- llm_usage ledger's tokens_cached). The other runs.llm_* columns live in
+-- 001's CREATE TABLE; this one rides the cache-aware ledger work here.
+-- DEFAULT 0 backfills existing rows, dropped immediately so CreateRun must
+-- set it explicitly per the "no fake defaults" rule.
+ALTER TABLE runs
+    ADD COLUMN llm_tokens_cached integer NOT NULL DEFAULT 0;
+ALTER TABLE runs
+    ALTER COLUMN llm_tokens_cached DROP DEFAULT;
 
 -- One-time history rewrite: migrate persisted tool-result parts from the
 -- legacy flat {result, isError} shape to ai-sdk's discriminated
@@ -916,10 +928,12 @@ FROM (
 ) sub
 WHERE m.id = sub.id
   AND jsonb_typeof(m.parts) = 'array';
+ALTER TABLE runs DROP COLUMN IF EXISTS llm_tokens_cached;
 ALTER TABLE agent_builds
     DROP COLUMN IF EXISTS llm_calls,
     DROP COLUMN IF EXISTS llm_tokens_in,
     DROP COLUMN IF EXISTS llm_tokens_out,
+    DROP COLUMN IF EXISTS llm_tokens_cached,
     DROP COLUMN IF EXISTS llm_cost_estimate;
 DROP INDEX IF EXISTS llm_usage_agent_created_idx;
 DROP INDEX IF EXISTS llm_usage_build_idx;

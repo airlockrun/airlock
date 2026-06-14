@@ -205,6 +205,10 @@ message RunInfo {
   string panic_trace = 15;
   google.protobuf.Timestamp started_at = 16;
   google.protobuf.Timestamp finished_at = 17;
+  // Cached (cache-read) portion of llm_tokens_in. Non-cached input is
+  // llm_tokens_in - llm_tokens_cached; llm_cost_estimate already reflects
+  // the cheaper cache-read rate (priced per-row in the llm_usage ledger).
+  int32 llm_tokens_cached = 18;
 }
 
 // AgentBuildInfo represents a single build or upgrade of an agent.
@@ -229,6 +233,10 @@ message AgentBuildInfo {
   int32 llm_tokens_in = 15;
   int32 llm_tokens_out = 16;
   double llm_cost_estimate = 17;
+  // Cached (cache-read) portion of llm_tokens_in for codegen. Non-cached
+  // input is llm_tokens_in - llm_tokens_cached; llm_cost_estimate already
+  // reflects the cheaper cache-read rate.
+  int32 llm_tokens_cached = 21;
   // rollback_target_id is set only on type='rollback' rows — points at
   // the build we rolled back to so the UI can render "Rolled back to {X}".
   // Empty for build/upgrade rows.

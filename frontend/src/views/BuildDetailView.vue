@@ -35,6 +35,11 @@ const statusSeverity = computed(() => {
 // ran no codegen (image-only rebuild: llmCalls === 0).
 const costFormatted = computed(() => `$${(build.value?.llmCostEstimate ?? 0).toFixed(4)}`)
 
+const cachedTokens = computed(() => build.value?.llmTokensCached ?? 0)
+// Non-cached input billed at the full input rate; cached at the cheaper
+// cache-read rate. llmCostEstimate already reflects that split.
+const nonCachedIn = computed(() => Math.max(0, (build.value?.llmTokensIn ?? 0) - cachedTokens.value))
+
 onMounted(async () => {
   try {
     const [b] = await Promise.all([
@@ -89,7 +94,7 @@ onMounted(async () => {
         {{ build.sourceRef.slice(0, 12) }}
       </span>
       <span v-if="build.llmCalls" style="font-size: 0.875rem; color: var(--p-text-muted-color)">
-        {{ (build.llmTokensIn ?? 0).toLocaleString() }} in / {{ (build.llmTokensOut ?? 0).toLocaleString() }} out tokens
+        {{ nonCachedIn.toLocaleString() }} in<template v-if="cachedTokens > 0"> + {{ cachedTokens.toLocaleString() }} cached</template> / {{ (build.llmTokensOut ?? 0).toLocaleString() }} out tokens
       </span>
       <span v-if="build.llmCalls" style="font-size: 0.875rem; color: var(--p-text-muted-color)">
         {{ costFormatted }}

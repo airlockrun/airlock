@@ -15,16 +15,16 @@ const createAgentBuild = `-- name: CreateAgentBuild :one
 INSERT INTO agent_builds (
     agent_id, type, status, instructions,
     source_ref, image_ref, sol_log, docker_log, log_seq, error_message,
-    llm_calls, llm_tokens_in, llm_tokens_out, llm_cost_estimate,
+    llm_calls, llm_tokens_in, llm_tokens_out, llm_tokens_cached, llm_cost_estimate,
     rollback_target_id, sdk_version
 )
 VALUES (
     $1, $2, 'building', $3,
     '', '', '', '', 0, '',
-    0, 0, 0, 0,
+    0, 0, 0, 0, 0,
     $4, ''
 )
-RETURNING id, agent_id, type, status, instructions, source_ref, image_ref, sol_log, docker_log, log_seq, error_message, started_at, finished_at, llm_calls, llm_tokens_in, llm_tokens_out, llm_cost_estimate, rollback_target_id, sdk_version
+RETURNING id, agent_id, type, status, instructions, source_ref, image_ref, sol_log, docker_log, log_seq, error_message, started_at, finished_at, llm_calls, llm_tokens_in, llm_tokens_out, llm_tokens_cached, llm_cost_estimate, rollback_target_id, sdk_version
 `
 
 type CreateAgentBuildParams struct {
@@ -64,6 +64,7 @@ func (q *Queries) CreateAgentBuild(ctx context.Context, arg CreateAgentBuildPara
 		&i.LlmCalls,
 		&i.LlmTokensIn,
 		&i.LlmTokensOut,
+		&i.LlmTokensCached,
 		&i.LlmCostEstimate,
 		&i.RollbackTargetID,
 		&i.SdkVersion,
@@ -72,7 +73,7 @@ func (q *Queries) CreateAgentBuild(ctx context.Context, arg CreateAgentBuildPara
 }
 
 const getAgentBuild = `-- name: GetAgentBuild :one
-SELECT id, agent_id, type, status, instructions, source_ref, image_ref, sol_log, docker_log, log_seq, error_message, started_at, finished_at, llm_calls, llm_tokens_in, llm_tokens_out, llm_cost_estimate, rollback_target_id, sdk_version FROM agent_builds WHERE id = $1
+SELECT id, agent_id, type, status, instructions, source_ref, image_ref, sol_log, docker_log, log_seq, error_message, started_at, finished_at, llm_calls, llm_tokens_in, llm_tokens_out, llm_tokens_cached, llm_cost_estimate, rollback_target_id, sdk_version FROM agent_builds WHERE id = $1
 `
 
 func (q *Queries) GetAgentBuild(ctx context.Context, id pgtype.UUID) (AgentBuild, error) {
@@ -95,6 +96,7 @@ func (q *Queries) GetAgentBuild(ctx context.Context, id pgtype.UUID) (AgentBuild
 		&i.LlmCalls,
 		&i.LlmTokensIn,
 		&i.LlmTokensOut,
+		&i.LlmTokensCached,
 		&i.LlmCostEstimate,
 		&i.RollbackTargetID,
 		&i.SdkVersion,
@@ -104,7 +106,7 @@ func (q *Queries) GetAgentBuild(ctx context.Context, id pgtype.UUID) (AgentBuild
 
 const listAgentBuildsByAgent = `-- name: ListAgentBuildsByAgent :many
 SELECT id, agent_id, type, status, instructions, error_message, source_ref, image_ref, started_at, finished_at,
-       llm_calls, llm_tokens_in, llm_tokens_out, llm_cost_estimate,
+       llm_calls, llm_tokens_in, llm_tokens_out, llm_tokens_cached, llm_cost_estimate,
        rollback_target_id, sdk_version
 FROM agent_builds
 WHERE agent_id = $1
@@ -126,6 +128,7 @@ type ListAgentBuildsByAgentRow struct {
 	LlmCalls         int32              `json:"llm_calls"`
 	LlmTokensIn      int32              `json:"llm_tokens_in"`
 	LlmTokensOut     int32              `json:"llm_tokens_out"`
+	LlmTokensCached  int32              `json:"llm_tokens_cached"`
 	LlmCostEstimate  float64            `json:"llm_cost_estimate"`
 	RollbackTargetID pgtype.UUID        `json:"rollback_target_id"`
 	SdkVersion       string             `json:"sdk_version"`
@@ -154,6 +157,7 @@ func (q *Queries) ListAgentBuildsByAgent(ctx context.Context, agentID pgtype.UUI
 			&i.LlmCalls,
 			&i.LlmTokensIn,
 			&i.LlmTokensOut,
+			&i.LlmTokensCached,
 			&i.LlmCostEstimate,
 			&i.RollbackTargetID,
 			&i.SdkVersion,
@@ -239,13 +243,15 @@ UPDATE agent_builds
 SET llm_calls = stats.calls,
     llm_tokens_in = stats.tokens_in,
     llm_tokens_out = stats.tokens_out,
+    llm_tokens_cached = stats.tokens_cached,
     llm_cost_estimate = stats.cost
 FROM (
     SELECT
-        COUNT(*)::integer                     AS calls,
-        COALESCE(SUM(tokens_in), 0)::integer  AS tokens_in,
-        COALESCE(SUM(tokens_out), 0)::integer AS tokens_out,
-        COALESCE(SUM(cost_total), 0)::float8  AS cost
+        COUNT(*)::integer                        AS calls,
+        COALESCE(SUM(tokens_in), 0)::integer     AS tokens_in,
+        COALESCE(SUM(tokens_out), 0)::integer    AS tokens_out,
+        COALESCE(SUM(tokens_cached), 0)::integer AS tokens_cached,
+        COALESCE(SUM(cost_total), 0)::float8     AS cost
     FROM llm_usage
     WHERE build_id = $1
 ) stats

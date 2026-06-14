@@ -26,6 +26,7 @@ func RunToProto(r dbq.Run, detail bool) *airlockv1.RunInfo {
 		ErrorKind:       r.ErrorKind,
 		LlmTokensIn:     r.LlmTokensIn,
 		LlmTokensOut:    r.LlmTokensOut,
+		LlmTokensCached: r.LlmTokensCached,
 		LlmCostEstimate: PgNumericToFloat(r.LlmCostEstimate),
 		SourceRef:       r.SourceRef,
 	}

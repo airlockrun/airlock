@@ -73,6 +73,7 @@ type AgentBuild struct {
 	LlmCalls         int32              `json:"llm_calls"`
 	LlmTokensIn      int32              `json:"llm_tokens_in"`
 	LlmTokensOut     int32              `json:"llm_tokens_out"`
+	LlmTokensCached  int32              `json:"llm_tokens_cached"`
 	LlmCostEstimate  float64            `json:"llm_cost_estimate"`
 	RollbackTargetID pgtype.UUID        `json:"rollback_target_id"`
 	SdkVersion       string             `json:"sdk_version"`
@@ -485,6 +486,7 @@ type Run struct {
 	StartedAt       pgtype.Timestamptz `json:"started_at"`
 	FinishedAt      pgtype.Timestamptz `json:"finished_at"`
 	ParentRunID     pgtype.UUID        `json:"parent_run_id"`
+	LlmTokensCached int32              `json:"llm_tokens_cached"`
 }
 
 type SystemAudit struct {

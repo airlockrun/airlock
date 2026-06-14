@@ -69,13 +69,19 @@ const costFormatted = computed(() => {
   return `$${cost.toFixed(4)}`
 })
 
+const cachedTokens = computed(() => run.value?.llmTokensCached ?? 0)
+// Non-cached input is billed at the full input rate; cached at the cheaper
+// cache-read rate. llmCostEstimate already reflects that split.
+const nonCachedIn = computed(() => Math.max(0, (run.value?.llmTokensIn ?? 0) - cachedTokens.value))
 const tokenTotal = computed(() => (run.value?.llmTokensIn ?? 0) + (run.value?.llmTokensOut ?? 0))
 const meterValues = computed(() => {
   if (!tokenTotal.value) return []
-  return [
-    { label: 'Input', value: run.value?.llmTokensIn ?? 0, color: 'var(--p-blue-500)' },
-    { label: 'Output', value: run.value?.llmTokensOut ?? 0, color: 'var(--p-green-500)' },
-  ]
+  const vals = [{ label: 'Input', value: nonCachedIn.value, color: 'var(--p-blue-500)' }]
+  if (cachedTokens.value > 0) {
+    vals.push({ label: 'Cached', value: cachedTokens.value, color: 'var(--p-cyan-400)' })
+  }
+  vals.push({ label: 'Output', value: run.value?.llmTokensOut ?? 0, color: 'var(--p-green-500)' })
+  return vals
 })
 
 const actions = computed(() => {
@@ -163,7 +169,7 @@ onMounted(async () => {
         {{ durationFormatted }}
       </span>
       <span v-if="tokenTotal" style="font-size: 0.875rem; color: var(--p-text-muted-color)">
-        {{ (run.llmTokensIn ?? 0).toLocaleString() }} in / {{ (run.llmTokensOut ?? 0).toLocaleString() }} out tokens
+        {{ nonCachedIn.toLocaleString() }} in<template v-if="cachedTokens > 0"> + {{ cachedTokens.toLocaleString() }} cached</template> / {{ (run.llmTokensOut ?? 0).toLocaleString() }} out tokens
       </span>
       <span style="font-size: 0.875rem; color: var(--p-text-muted-color)">
         {{ costFormatted }}
