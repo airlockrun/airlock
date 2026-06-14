@@ -145,3 +145,7 @@ SELECT EXISTS(
     WHERE agent_id = @agent_id
       AND (last_synced_at IS NULL OR updated_at > last_synced_at)
 ) AS dirty;
+
+-- name: GetMCPServerBySlugForUpdate :one
+-- Row-locked read for on-demand token refresh (see GetConnectionBySlugForUpdate).
+SELECT * FROM agent_mcp_servers WHERE agent_id = @agent_id AND slug = @slug FOR UPDATE;

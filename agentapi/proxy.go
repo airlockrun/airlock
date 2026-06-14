@@ -2,6 +2,7 @@ package agentapi
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"github.com/airlockrun/agentsdk"
 	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/db/dbq"
+	"github.com/airlockrun/airlock/oauth"
 	"github.com/airlockrun/sol/webfetch"
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
@@ -50,13 +52,18 @@ func (h *Handler) ServiceProxy(w http.ResponseWriter, r *http.Request) {
 	// declared with ConnectionAuthNone land here.
 	noAuth := conn.AuthMode == string(agentsdk.ConnectionAuthNone)
 
+	// Resolve credentials (skipped for auth_mode='none'). EnsureConnectionToken
+	// renews an expired access token on demand, under a row lock, so a lapsed
+	// token self-heals on this very call instead of waiting for the background
+	// refresh tick. Only a genuinely unrecoverable connection (no token / no
+	// refresh token / provider-revoked) returns 402 auth_required; the agent's
+	// system prompt already routes the user to the settings page, so the body
+	// carries only slug/connName, not a raw OAuth URL.
+	var creds string
 	if !noAuth {
-		// No credentials → 402 auth required. The agent's system prompt
-		// already tells it to direct the user to the agent settings page,
-		// so the response carries only slug/connName — not a raw OAuth
-		// URL, which would otherwise surface verbatim in the agent's
-		// reply.
-		if conn.AccessTokenRef == "" {
+		token, err := oauth.EnsureConnectionToken(r.Context(), h.db, h.encryptor, h.oauthClient, h.logger, toPgUUID(agentID), slug, time.Now())
+		switch {
+		case errors.Is(err, oauth.ErrNeedsReauth):
 			writeJSON(w, http.StatusPaymentRequired, map[string]string{
 				"error":    "auth_required",
 				"slug":     conn.Slug,
@@ -64,31 +71,14 @@ func (h *Handler) ServiceProxy(w http.ResponseWriter, r *http.Request) {
 				"message":  fmt.Sprintf("%s needs authorization", conn.Name),
 			})
 			return
-		}
-
-		// Token expired → 402, refresh job should have caught this.
-		if conn.TokenExpiresAt.Valid && conn.TokenExpiresAt.Time.Before(time.Now()) {
-			writeJSON(w, http.StatusPaymentRequired, map[string]string{
-				"error":    "auth_required",
-				"slug":     conn.Slug,
-				"connName": conn.Name,
-				"message":  fmt.Sprintf("%s authorization has expired", conn.Name),
-			})
+		case err != nil:
+			// Transient refresh/decrypt failure — the connection may recover,
+			// so don't nudge the user to re-authorize. Surface as a gateway error.
+			h.logger.Warn("resolve connection token failed", zap.String("slug", slug), zap.Error(err))
+			writeJSONError(w, http.StatusBadGateway, "failed to obtain connection credentials")
 			return
 		}
-	}
-
-	// Decrypt credentials (skipped for auth_mode='none' — nothing to
-	// decrypt and nothing to inject downstream).
-	var creds string
-	if !noAuth {
-		c, err := h.encryptor.Get(r.Context(), "connection/"+pgUUID(conn.ID).String()+"/access_token", conn.AccessTokenRef)
-		if err != nil {
-			h.logger.Error("decrypt credentials failed", zap.Error(err))
-			writeJSONError(w, http.StatusInternalServerError, "failed to decrypt credentials")
-			return
-		}
-		creds = c
+		creds = token
 	}
 
 	// Build upstream request.

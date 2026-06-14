@@ -73,6 +73,53 @@ func (q *Queries) GetConnectionBySlug(ctx context.Context, arg GetConnectionBySl
 	return i, err
 }
 
+const getConnectionBySlugForUpdate = `-- name: GetConnectionBySlugForUpdate :one
+SELECT id, agent_id, slug, name, description, llm_hint, access, auth_mode, auth_url, token_url, base_url, scopes, auth_injection, test_path, setup_instructions, config, client_id, client_secret, access_token_ref, refresh_token, token_expires_at, created_at, updated_at, auth_params, headers FROM connections WHERE agent_id = $1 AND slug = $2 FOR UPDATE
+`
+
+type GetConnectionBySlugForUpdateParams struct {
+	AgentID pgtype.UUID `json:"agent_id"`
+	Slug    string      `json:"slug"`
+}
+
+// Row-locked read for on-demand token refresh: the caller locks the row,
+// re-checks expiry inside the txn, and refreshes only if still expired —
+// so concurrent proxy requests (and the background job, across replicas)
+// serialize on the row instead of double-refreshing and clobbering a
+// rotated refresh token.
+func (q *Queries) GetConnectionBySlugForUpdate(ctx context.Context, arg GetConnectionBySlugForUpdateParams) (Connection, error) {
+	row := q.db.QueryRow(ctx, getConnectionBySlugForUpdate, arg.AgentID, arg.Slug)
+	var i Connection
+	err := row.Scan(
+		&i.ID,
+		&i.AgentID,
+		&i.Slug,
+		&i.Name,
+		&i.Description,
+		&i.LlmHint,
+		&i.Access,
+		&i.AuthMode,
+		&i.AuthUrl,
+		&i.TokenUrl,
+		&i.BaseUrl,
+		&i.Scopes,
+		&i.AuthInjection,
+		&i.TestPath,
+		&i.SetupInstructions,
+		&i.Config,
+		&i.ClientID,
+		&i.ClientSecret,
+		&i.AccessTokenRef,
+		&i.RefreshToken,
+		&i.TokenExpiresAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.AuthParams,
+		&i.Headers,
+	)
+	return i, err
+}
+
 const getConnectionForOAuth = `-- name: GetConnectionForOAuth :one
 SELECT id, agent_id, slug, name, auth_mode, auth_url, token_url, scopes,
        client_id, client_secret, auth_params

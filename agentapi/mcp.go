@@ -3,6 +3,7 @@ package agentapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -117,8 +118,13 @@ func (h *Handler) MCPToolCall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// No credentials → 402.
-	if server.AccessTokenRef == "" {
+	// Resolve credentials with on-demand refresh (see ServiceProxy): an
+	// expired token is renewed here under a row lock, so it self-heals on this
+	// call instead of waiting for the background tick. Only an unrecoverable
+	// server (no token / no refresh token / provider-revoked) returns 402.
+	creds, err := oauth.EnsureMCPServerToken(r.Context(), h.db, h.encryptor, h.oauthClient, h.logger, toPgUUID(agentID), slug, time.Now())
+	switch {
+	case errors.Is(err, oauth.ErrNeedsReauth):
 		writeJSON(w, http.StatusPaymentRequired, map[string]string{
 			"error":   "auth_required",
 			"slug":    server.Slug,
@@ -126,24 +132,9 @@ func (h *Handler) MCPToolCall(w http.ResponseWriter, r *http.Request) {
 			"message": fmt.Sprintf("MCP server %q needs authorization", server.Name),
 		})
 		return
-	}
-
-	// Token expired → 402.
-	if server.TokenExpiresAt.Valid && server.TokenExpiresAt.Time.Before(time.Now()) {
-		writeJSON(w, http.StatusPaymentRequired, map[string]string{
-			"error":   "auth_required",
-			"slug":    server.Slug,
-			"authUrl": buildMCPAuthURL(h.publicURL, agentID, slug, server.AuthMode),
-			"message": fmt.Sprintf("MCP server %q authorization has expired", server.Name),
-		})
-		return
-	}
-
-	// Decrypt credentials.
-	creds, err := h.encryptor.Get(r.Context(), "mcp/"+pgUUID(server.ID).String()+"/access_token", server.AccessTokenRef)
-	if err != nil {
-		h.logger.Error("decrypt MCP credentials failed", zap.Error(err))
-		writeJSONError(w, http.StatusInternalServerError, "failed to decrypt credentials")
+	case err != nil:
+		h.logger.Warn("resolve MCP token failed", zap.String("slug", slug), zap.Error(err))
+		writeJSONError(w, http.StatusBadGateway, "failed to obtain MCP credentials")
 		return
 	}
 

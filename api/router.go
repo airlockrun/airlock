@@ -623,6 +623,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	ah := agentapi.New(agentapi.Config{
 		DB:                     cfg.DB,
 		Encryptor:              cfg.Secrets,
+		OAuthClient:            cfg.OAuthClient,
 		S3:                     cfg.S3Client,
 		Builder:                cfg.BuildService,
 		PubSub:                 cfg.PubSub,
