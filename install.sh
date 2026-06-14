@@ -18,6 +18,9 @@
 #   --tag <tag>      release tag to check out (default: the pinned RELEASE_TAG)
 #   --local          force local mode (no domain)
 #   --force          overwrite an existing .env
+#   --pre-release    allow installing a pre-release tag (rc/alpha/beta/dev).
+#                    Refused by default — pre-releases have no supported
+#                    upgrade/migration path. (env: AIRLOCK_ALLOW_PRERELEASE=1)
 #   --dry-run        print decisions + .env + compose command, change nothing
 #   --yes            assume yes for non-destructive prompts (non-interactive)
 # Note: intentionally NOT `set -e` — this script uses many `cond && action`
@@ -33,6 +36,7 @@ FORCE=0
 DRY_RUN=0
 ASSUME_YES=0
 FORCE_LOCAL=0
+ALLOW_PRERELEASE=0  # --pre-release / AIRLOCK_ALLOW_PRERELEASE: install an rc/alpha/beta/dev tag
 
 # ---------- output helpers ----------
 BOLD=$'\033[1m'; RED=$'\033[31m'; GRN=$'\033[32m'; YLW=$'\033[33m'; NC=$'\033[0m'
@@ -245,6 +249,7 @@ parse_args() {
 			--local) FORCE_LOCAL=1; shift ;;
 			--force) FORCE=1; shift ;;
 			--dry-run) DRY_RUN=1; shift ;;
+			--pre-release) ALLOW_PRERELEASE=1; shift ;;
 			--yes|-y) ASSUME_YES=1; shift ;;
 			-h|--help) grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
 			*) die "unknown flag: $1" ;;
@@ -419,9 +424,15 @@ finish() {
 	hr
 }
 
+is_prerelease() { [[ "$1" =~ -(rc|alpha|beta|dev)\.[0-9]+$ ]]; }
+
 main() {
 	parse_args "$@"
 	detect_os
+	# Pre-releases have no supported upgrade/migration path — refuse by default.
+	if is_prerelease "$RELEASE_TAG" && [ "$ALLOW_PRERELEASE" != 1 ] && [ "${AIRLOCK_ALLOW_PRERELEASE:-}" != 1 ]; then
+		die "$RELEASE_TAG is a pre-release — not for production (migrations/upgrade path are not finalized for pre-releases). Pass --pre-release (or AIRLOCK_ALLOW_PRERELEASE=1) to install it anyway, or use a stable --tag."
+	fi
 	log "airlock installer — OS=$OS DISTRO=${DISTRO:-n/a} tag=$RELEASE_TAG"
 	ensure_base_tools
 	ensure_docker

@@ -17,114 +17,15 @@ If "Heroku for cyborg agents, but I run it myself" lands, that's the shape.
 
 ## Quickstart
 
-### Fastest: the installer
-
-On a fresh Linux VPS (or macOS for local/tunnel), one command installs Docker,
-generates secrets, verifies your domain, wires TLS, and brings the stack up:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/airlockrun/airlock/v0.4.0-rc.1/install.sh | bash
-```
-
-Prefer to read it first (recommended for any `curl | bash`):
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/airlockrun/airlock/v0.4.0-rc.1/install.sh -o install.sh
-less install.sh && bash install.sh
-```
-
-It picks a deployment mode from what your host has:
-- **Public server** (public IP, ports 80/443) → on-demand Let's Encrypt TLS.
-- **Public + Cloudflare** → optional **DNS-01 wildcard** cert (one cert for all
-  agent subdomains; no rate limit). The installer can also **create the DNS
-  records for you** from the same token. Create it from the **"Edit zone DNS"**
-  template (My Profile → API Tokens → Create Token), which grants exactly
-  **Zone → DNS → Edit** + **Zone → Zone → Read**; scope it to your zone (e.g.
-  `example.com`). (Not Zone:Edit, no account-level perms.)
-- **No public IP** (home/NAT/Mac) + Cloudflare → **Cloudflare Tunnel**: CF dials
-  in and serves your domain with edge TLS, no open ports. Needs a tunnel token.
-- **No domain** → local mode (`airlock.localhost`, inline attachments).
-
-Missing optional prereqs degrade gracefully (e.g. rootless BuildKit needs
-unprivileged user namespaces — on Ubuntu 23.10+ the installer offers to set the
-`apparmor_restrict_unprivileged_userns` sysctl; decline and it falls back to the
-legacy build). See [docs/agent-isolation.md](docs/agent-isolation.md) for the
-hardening knobs.
-
-Re-run anytime; it's idempotent (`--force` to regenerate `.env`, `--dry-run` to
-preview, `--local` to force local mode).
-
-### Manual: 5 steps
-
-If you'd rather wire it up yourself — a running self-hosted airlock instance.
-
-**Prerequisites:**
-- Linux server with Docker 24+ and the Compose v2 plugin
-- A domain you control, with DNS administration access
-- Ports 80 and 443 reachable from the public internet
-- ~2 GB RAM, ~10 GB disk for a small install (more as agents and conversation history grow)
-
-<details>
-<summary>Don't have these set up yet? Click for install pointers.</summary>
-
-**Docker + Compose v2** — install per [Docker's official guide](https://docs.docker.com/engine/install/) (covers Ubuntu, Debian, RHEL, Fedora, etc.). Compose v2 ships as a plugin alongside Docker Engine since 2022; the install guide includes it. On a fresh Ubuntu/Debian server, the [convenience script](https://docs.docker.com/engine/install/ubuntu/#install-using-the-convenience-script) is the fastest path:
-
-```bash
-curl -fsSL https://get.docker.com | sudo sh
-sudo usermod -aG docker $USER     # then log out/in so the group takes effect
-docker compose version            # verify
-```
-
-Docker Desktop on macOS / Windows works for poking around but isn't suitable for a real self-host — you want a Linux server.
-
-**Firewall (ports 80 + 443)** — on Ubuntu with UFW:
-
-```bash
-sudo ufw allow 80/tcp
-sudo ufw allow 443/tcp
-sudo ufw status
-```
-
-Cloud providers (DigitalOcean, Hetzner, AWS, GCP, etc.) usually have their own firewall layer in addition to the OS — check their dashboard/security-group settings for the same two ports.
-
-**Domain + wildcard DNS** — at your DNS provider (Cloudflare, Namecheap, Route 53, etc.), add an `A` record where the **name** field is `*.airlock` (or `*` if airlock.example.com is the apex) and the **value** is your server's public IP. The wildcard covers per-agent subdomains like `myagent.airlock.example.com` automatically. Cloudflare has a [walkthrough](https://developers.cloudflare.com/dns/manage-dns-records/how-to/create-dns-records/) that maps cleanly to other providers' UIs.
-
-Verify with `dig +short anything.airlock.example.com` once propagation completes (usually 1-5 min).
-
-</details>
-
-**Steps:**
-
-```bash
-# 1. Clone the repository and check out the latest release tag.
-#    (Tracking `main` between releases is not supported — pin to a tag.)
-git clone https://github.com/airlockrun/airlock
-cd airlock
-git checkout v0.4.0-rc.1
-
-# 2. Generate secrets and edit configuration.
-cp .env.example .env
-# Edit .env:
-#   - Set DOMAIN to your real domain (e.g. airlock.example.com)
-#   - Generate ENCRYPTION_KEY: openssl rand -hex 32
-#   - Generate JWT_SECRET:     openssl rand -hex 32
-
-# 3. Add a wildcard DNS A record at your DNS provider:
-#       *.your-domain.com  →  <your server IP>
-#    Caddy will use this to issue TLS certs from Let's Encrypt.
-
-# 4. Bring everything up. First launch pulls the four prebuilt images
-#    (airlock, frontend, agent-builder, agent-base) from ghcr.io —
-#    nothing builds locally. Subsequent launches are near-instant.
-docker compose up -d
-
-# 5. Get the first-run activation code, then sign in to create the admin user.
-docker compose exec airlock cat /var/lib/airlock/activation_code.txt
-```
-
-Open `https://your-domain.com` in a browser, paste the activation code, set up the admin account.
-
-The activation code is single-use and the file is removed after a successful activation.
+> [!NOTE]
+> **v0.4.0 is in pre-release.** The next stable release isn't out yet, and the
+> upgrade path (database migrations) is only finalized for stable releases — so
+> there's no production install quickstart pinned here right now. Watch
+> [Releases](https://github.com/airlockrun/airlock/releases) and install once
+> v0.4.0 ships; the one-command installer and the manual steps return here then.
+>
+> Want to kick the tires today? See [Try it on your laptop](#try-it-on-your-laptop)
+> below — it runs the same stack locally with no domain or DNS.
 
 ## Try it on your laptop
 
