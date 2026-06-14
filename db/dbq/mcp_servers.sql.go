@@ -111,6 +111,46 @@ func (q *Queries) GetMCPServerBySlug(ctx context.Context, arg GetMCPServerBySlug
 	return i, err
 }
 
+const getMCPServerBySlugForUpdate = `-- name: GetMCPServerBySlugForUpdate :one
+SELECT id, agent_id, slug, name, access, url, auth_mode, auth_url, token_url, registration_endpoint, scopes, auth_injection, tool_schemas, client_id, client_secret, access_token_ref, refresh_token, token_expires_at, last_synced_at, created_at, updated_at, server_instructions FROM agent_mcp_servers WHERE agent_id = $1 AND slug = $2 FOR UPDATE
+`
+
+type GetMCPServerBySlugForUpdateParams struct {
+	AgentID pgtype.UUID `json:"agent_id"`
+	Slug    string      `json:"slug"`
+}
+
+// Row-locked read for on-demand token refresh (see GetConnectionBySlugForUpdate).
+func (q *Queries) GetMCPServerBySlugForUpdate(ctx context.Context, arg GetMCPServerBySlugForUpdateParams) (AgentMcpServer, error) {
+	row := q.db.QueryRow(ctx, getMCPServerBySlugForUpdate, arg.AgentID, arg.Slug)
+	var i AgentMcpServer
+	err := row.Scan(
+		&i.ID,
+		&i.AgentID,
+		&i.Slug,
+		&i.Name,
+		&i.Access,
+		&i.Url,
+		&i.AuthMode,
+		&i.AuthUrl,
+		&i.TokenUrl,
+		&i.RegistrationEndpoint,
+		&i.Scopes,
+		&i.AuthInjection,
+		&i.ToolSchemas,
+		&i.ClientID,
+		&i.ClientSecret,
+		&i.AccessTokenRef,
+		&i.RefreshToken,
+		&i.TokenExpiresAt,
+		&i.LastSyncedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.ServerInstructions,
+	)
+	return i, err
+}
+
 const getMCPServerForOAuth = `-- name: GetMCPServerForOAuth :one
 SELECT id, agent_id, slug, name, url, auth_mode, auth_url, token_url,
        registration_endpoint, scopes, client_id, client_secret

@@ -101,3 +101,11 @@ WHERE c.auth_mode = 'oauth'
   AND c.token_expires_at IS NOT NULL
   AND c.token_expires_at < @expiry_threshold
   AND a.status = 'active';
+
+-- name: GetConnectionBySlugForUpdate :one
+-- Row-locked read for on-demand token refresh: the caller locks the row,
+-- re-checks expiry inside the txn, and refreshes only if still expired —
+-- so concurrent proxy requests (and the background job, across replicas)
+-- serialize on the row instead of double-refreshing and clobbering a
+-- rotated refresh token.
+SELECT * FROM connections WHERE agent_id = @agent_id AND slug = @slug FOR UPDATE;

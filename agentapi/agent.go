@@ -15,6 +15,7 @@ import (
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/airlockrun/airlock/execproxy"
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
+	"github.com/airlockrun/airlock/oauth"
 	"github.com/airlockrun/airlock/realtime"
 	"github.com/airlockrun/airlock/secrets"
 	"github.com/airlockrun/airlock/storage"
@@ -34,6 +35,7 @@ type cronReloader interface {
 type Handler struct {
 	db                     *db.DB
 	encryptor              secrets.Store
+	oauthClient            *oauth.Client
 	s3                     *storage.S3Client
 	builder                *builder.BuildService
 	pubsub                 *realtime.PubSub
@@ -55,6 +57,7 @@ type Handler struct {
 type Config struct {
 	DB                     *db.DB
 	Encryptor              secrets.Store
+	OAuthClient            *oauth.Client
 	S3                     *storage.S3Client
 	Builder                *builder.BuildService
 	PubSub                 *realtime.PubSub
@@ -88,6 +91,7 @@ func New(c Config) *Handler {
 	return &Handler{
 		db:                     c.DB,
 		encryptor:              c.Encryptor,
+		oauthClient:            c.OAuthClient,
 		s3:                     c.S3,
 		builder:                c.Builder,
 		pubsub:                 c.PubSub,

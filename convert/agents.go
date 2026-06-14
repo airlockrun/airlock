@@ -2,12 +2,10 @@ package convert
 
 import (
 	"fmt"
-	"time"
 
 	"github.com/airlockrun/airlock/db/dbq"
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 	connsvc "github.com/airlockrun/airlock/service/connections"
-	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // AgentToProto maps an agents row to the wire AgentInfo. Does not
@@ -65,7 +63,7 @@ func ConnectionToProto(c dbq.Connection, publicURL, agentID string) *airlockv1.C
 		SetupInstructions: c.SetupInstructions,
 		AuthUrl:           authURL,
 		TokenExpiresAt:    PgTimestampToProto(c.TokenExpiresAt),
-		Warnings:          ConnectionWarnings(c.AuthMode, authorized, c.RefreshToken != "", c.TokenExpiresAt),
+		Warnings:          ConnectionWarnings(c.AuthMode, authorized, c.RefreshToken != ""),
 	}
 }
 
@@ -89,7 +87,7 @@ func ConnectionDTOToProto(c connsvc.Connection, publicURL, agentID string) *airl
 		HasOauthApp:       c.HasOAuthApp,
 		SetupInstructions: c.SetupInstructions,
 		AuthUrl:           authURL,
-		Warnings:          ConnectionWarnings(c.AuthMode, c.Authorized, c.HasRefreshToken, c.TokenExpiresAt),
+		Warnings:          ConnectionWarnings(c.AuthMode, c.Authorized, c.HasRefreshToken),
 	}
 	if c.TokenExpiresAt.Valid {
 		ci.TokenExpiresAt = PgTimestampToProto(c.TokenExpiresAt)
@@ -101,18 +99,21 @@ func ConnectionDTOToProto(c connsvc.Connection, publicURL, agentID string) *airl
 // on a connection card. Exposed so the credentials handler — which
 // builds ConnectionInfo from the connections service DTO (not the raw
 // dbq row) — uses the same warning list as ConnectionToProto.
-func ConnectionWarnings(authMode string, authorized, hasRefreshToken bool, tokenExpiresAt pgtype.Timestamptz) []string {
+//
+// An expired access token is deliberately NOT a warning: the proxy renews
+// it on demand (oauth.EnsureConnectionToken) so it self-heals on the next
+// call. The only durable risk is having no refresh token to renew from —
+// once that access token lapses the connection truly stops working until
+// re-auth. A provider-revoked grant clears the credentials entirely, which
+// drops authorized to false (card shows "Needs Setup"), handled by line 105.
+func ConnectionWarnings(authMode string, authorized, hasRefreshToken bool) []string {
 	if authMode != "oauth" || !authorized {
 		return nil
 	}
-	var warnings []string
 	if !hasRefreshToken {
-		warnings = append(warnings, "No refresh token — this connection will stop working once its access token expires. Re-authorize to fix.")
+		return []string{"No refresh token — this connection will stop working once its access token expires. Re-authorize to fix."}
 	}
-	if tokenExpiresAt.Valid && tokenExpiresAt.Time.Before(time.Now()) {
-		warnings = append(warnings, "Authorization has expired — re-authorize.")
-	}
-	return warnings
+	return nil
 }
 
 // WebhookToProto masks the verification secret (first/last 4 of >8-char
