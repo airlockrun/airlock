@@ -66,11 +66,27 @@ TLS modes (set in `.env`):
 
 ## Updating
 
+From an existing install, `upgrade.sh` fetches tags, checks out the newest
+release, pulls its images, and brings the stack back up in the same deployment
+mode (it recovers the mode from your `.env`):
+
+```bash
+cd airlock
+./upgrade.sh                 # upgrade to the latest stable release
+./upgrade.sh --tag v0.4.2    # or pin a specific release
+```
+
+By default it only considers stable `vX.Y.Z` releases. Pre-releases have no
+supported migration path, so opting into one is explicit — `./upgrade.sh
+--pre-release` (or `AIRLOCK_ALLOW_PRERELEASE=1`).
+
+Or do it by hand:
+
 ```bash
 cd airlock
 git fetch --tags
 git checkout vX.Y.Z          # check the release notes for breaking changes first
-docker compose up -d --build
+docker compose pull && docker compose up -d
 ```
 
 Migrations run automatically on airlock startup. Always `pg_dump` before a major version bump if you care about your data.
