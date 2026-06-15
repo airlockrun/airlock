@@ -19,6 +19,9 @@ import {
 } from '@/composables/useModelCapabilities'
 import { useToast } from 'primevue/usetoast'
 import api from '@/api/client'
+import { registerPasskey } from '@/api/passkeys'
+import { scorePassword } from '@/composables/usePasswordStrength'
+import PasswordStrengthMeter from '@/components/PasswordStrengthMeter.vue'
 import {
   GetSystemSettingsResponseSchema,
   UpdateSystemSettingsRequestSchema,
@@ -53,6 +56,16 @@ const email = ref('')
 const password = ref('')
 const confirmPassword = ref('')
 const displayName = ref('')
+// Passkey is the default; the admin can opt into also setting a password.
+const wantPassword = ref(false)
+// Tracks that the account+tenant already exist so a retry (e.g. after a
+// cancelled passkey prompt) doesn't re-run activation and 409.
+const accountCreated = ref(false)
+
+function isCeremonyAbort(err: any): boolean {
+  const name = err?.name
+  return name === 'NotAllowedError' || name === 'AbortError'
+}
 
 async function nextStep() {
   error.value = ''
@@ -60,28 +73,44 @@ async function nextStep() {
     error.value = 'Activation code is required.'
     return
   }
-  if (!email.value || !password.value || !confirmPassword.value) {
-    error.value = 'All fields are required.'
+  if (!email.value) {
+    error.value = 'Email is required.'
     return
   }
-  if (password.value !== confirmPassword.value) {
-    error.value = 'Passwords do not match.'
-    return
-  }
-  if (password.value.length < 8) {
-    error.value = 'Password must be at least 8 characters.'
-    return
+  if (wantPassword.value) {
+    if (!password.value || !confirmPassword.value) {
+      error.value = 'Enter and confirm a password.'
+      return
+    }
+    if (password.value !== confirmPassword.value) {
+      error.value = 'Passwords do not match.'
+      return
+    }
+    if (!scorePassword(password.value, [email.value]).ok) {
+      error.value = 'Password is too weak — choose a longer or less predictable one.'
+      return
+    }
   }
 
   loading.value = true
   try {
-    await auth.activate(email.value, password.value, displayName.value || email.value, activationCode.value)
-    // After activation we're logged in as admin. Load the data for steps 2-3.
+    if (!accountCreated.value) {
+      await auth.activate(email.value, wantPassword.value ? password.value : '', displayName.value || email.value, activationCode.value)
+      accountCreated.value = true
+    }
+    // Passkey-only admins must enroll a passkey now (the account has no other
+    // credential). With a password set, a passkey is optional and can be added
+    // later under Security.
+    if (!wantPassword.value) {
+      await registerPasskey('Passkey')
+    }
     catalog.fetchCapabilities()
     activeStep.value = 1
   } catch (err: any) {
     if (err.response?.status === 409) {
       alreadyActivated.value = true
+    } else if (isCeremonyAbort(err)) {
+      error.value = 'Passkey setup was cancelled. Try again, or tick "Also set a password" to use a password instead.'
     } else {
       error.value = err.response?.data?.error || 'Activation failed.'
     }
@@ -390,19 +419,28 @@ async function finish() {
                 <label for="act-email">Email</label>
               </FloatLabel>
               <FloatLabel>
-                <Password id="act-pass" v-model="password" toggle-mask :input-props="{ autocomplete: 'new-password' }" style="width: 100%" :input-style="{ width: '100%' }" />
-                <label for="act-pass">Password</label>
-              </FloatLabel>
-              <FloatLabel>
-                <Password id="act-confirm" v-model="confirmPassword" :feedback="false" toggle-mask :input-props="{ autocomplete: 'new-password' }" style="width: 100%" :input-style="{ width: '100%' }" />
-                <label for="act-confirm">Confirm Password</label>
-              </FloatLabel>
-              <FloatLabel>
                 <InputText id="act-name" v-model="displayName" autocomplete="name" style="width: 100%" />
                 <label for="act-name">Display Name</label>
               </FloatLabel>
+              <div style="display: flex; align-items: center; gap: 0.5rem">
+                <Checkbox v-model="wantPassword" :binary="true" inputId="want-pass" />
+                <label for="want-pass" style="font-size: 0.9rem; color: var(--p-text-muted-color)">
+                  Also set a password (a passkey is added by default)
+                </label>
+              </div>
+              <template v-if="wantPassword">
+                <FloatLabel>
+                  <Password id="act-pass" v-model="password" :feedback="false" toggle-mask :input-props="{ autocomplete: 'new-password' }" style="width: 100%" :input-style="{ width: '100%' }" />
+                  <label for="act-pass">Password</label>
+                </FloatLabel>
+                <PasswordStrengthMeter :password="password" :user-inputs="[email]" />
+                <FloatLabel>
+                  <Password id="act-confirm" v-model="confirmPassword" :feedback="false" toggle-mask :input-props="{ autocomplete: 'new-password' }" style="width: 100%" :input-style="{ width: '100%' }" />
+                  <label for="act-confirm">Confirm Password</label>
+                </FloatLabel>
+              </template>
               <div style="display: flex; justify-content: flex-end">
-                <Button type="submit" label="Next" icon="pi pi-arrow-right" icon-pos="right" :loading="loading" />
+                <Button type="submit" :label="wantPassword ? 'Next' : 'Create & add passkey'" :icon="wantPassword ? 'pi pi-arrow-right' : 'pi pi-key'" icon-pos="right" :loading="loading" />
               </div>
             </form>
           </StepPanel>

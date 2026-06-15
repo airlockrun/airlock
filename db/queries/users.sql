@@ -21,6 +21,21 @@ SELECT * FROM users ORDER BY created_at;
 -- name: UpdateUserPassword :exec
 UPDATE users SET password_hash = @password_hash, must_change_password = false, updated_at = now() WHERE id = @id;
 
+-- name: SetTempPassword :exec
+-- Set a password and force a change on next login. Used by admin user
+-- creation and the `airlock auth reset` break-glass CLI.
+UPDATE users SET password_hash = @password_hash, must_change_password = true, updated_at = now() WHERE id = @id;
+
+-- name: ClearMustChangePassword :exec
+-- Clears the forced-secure flag. Registering a passkey satisfies the
+-- "secure your account" requirement just as changing the password does.
+UPDATE users SET must_change_password = false, updated_at = now() WHERE id = $1;
+
+-- name: ClearUserPassword :exec
+-- Remove the password credential (passkey-only). Guarded by the
+-- last-credential check in service/passkeys.
+UPDATE users SET password_hash = NULL, updated_at = now() WHERE id = $1;
+
 -- name: DeleteUser :exec
 DELETE FROM users WHERE id = $1;
 

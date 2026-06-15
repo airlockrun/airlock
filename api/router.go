@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/airlockrun/airlock/auth"
+	"github.com/airlockrun/airlock/auth/passkey"
 	"github.com/airlockrun/airlock/authz"
 	"github.com/airlockrun/airlock/builder"
 	"github.com/airlockrun/airlock/container"
@@ -26,6 +27,7 @@ import (
 	managedbotssvc "github.com/airlockrun/airlock/service/managedbots"
 	memberssvc "github.com/airlockrun/airlock/service/members"
 	modelssvc "github.com/airlockrun/airlock/service/models"
+	passkeyssvc "github.com/airlockrun/airlock/service/passkeys"
 	providerssvc "github.com/airlockrun/airlock/service/providers"
 	runssvc "github.com/airlockrun/airlock/service/runs"
 	settingssvc "github.com/airlockrun/airlock/service/settings"
@@ -145,6 +147,11 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	)
 
 	authHandler := NewAuthHandler(cfg.DB, cfg.JWTSecret, cfg.ActivationCodeFile, cfg.Logger.Named("auth"))
+	webAuthn, err := passkey.New(cfg.PublicURL)
+	if err != nil {
+		panic("api: build webauthn from PUBLIC_URL: " + err.Error())
+	}
+	passkeyHandler := NewPasskeyHandler(passkeyssvc.New(cfg.DB, webAuthn, cfg.Logger.Named("passkeys")), cfg.DB, cfg.JWTSecret)
 	providersHandler := NewProvidersHandler(providerssvc.New(cfg.DB, cfg.Secrets, cfg.Logger.Named("providers")))
 	gitCredsHandler := NewGitCredentialsHandler(gitcredssvc.New(cfg.DB, cfg.Secrets, cfg.Logger.Named("gitcredentials")))
 	gitWebhookHandler := NewGitWebhookHandler(cfg.DB, cfg.BuildService, cfg.Logger.Named("git-webhook"))
@@ -197,6 +204,11 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		r.Post("/activate", authHandler.Activate)
 		r.Post("/login", authHandler.Login)
 		r.Post("/refresh", authHandler.Refresh)
+
+		// Passkey login ceremony (public). Begin returns a challenge +
+		// ceremony id; finish verifies the assertion and issues tokens.
+		r.Post("/passkey/login/begin", passkeyHandler.LoginBegin)
+		r.Post("/passkey/login/finish", passkeyHandler.LoginFinish)
 
 		// Authenticated: change password, relay code
 		r.Group(func(r chi.Router) {
@@ -262,8 +274,25 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Use(auth.Middleware(cfg.JWTSecret))
 		r.Use(identityLogger)
+		// Block a must_change_password user from everything except the
+		// account-securing endpoints until they secure the account.
+		r.Use(securedAccountGate)
 
 		r.Get("/me", authHandler.Me)
+
+		// Per-user passkeys + password. Self-service: any authenticated user
+		// manages their own; not admin-gated. The register endpoints are on
+		// the secured-account allowlist so a forced-change user can enroll a
+		// passkey to secure the account.
+		r.Route("/me/passkeys", func(r chi.Router) {
+			r.Get("/", passkeyHandler.List)
+			r.Post("/register/begin", passkeyHandler.RegisterBegin)
+			r.Post("/register/finish", passkeyHandler.RegisterFinish)
+			r.Patch("/{id}", passkeyHandler.Rename)
+			r.Delete("/{id}", passkeyHandler.Delete)
+		})
+		r.Post("/me/password", passkeyHandler.SetPassword)
+		r.Delete("/me/password", passkeyHandler.RemovePassword)
 
 		// Per-user git credentials (PATs for accessing external git
 		// remotes attached to agents). Self-service: any authenticated

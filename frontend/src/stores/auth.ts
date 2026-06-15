@@ -2,6 +2,7 @@ import { ref, computed } from 'vue'
 import { defineStore } from 'pinia'
 import { fromJson } from '@bufbuild/protobuf'
 import api, { isAuthRejection } from '@/api/client'
+import { passkeyLogin, registerPasskey } from '@/api/passkeys'
 import { ws } from '@/api/ws'
 import type { User } from '@/gen/airlock/v1/types_pb'
 import { TenantRole } from '@/gen/airlock/v1/types_pb'
@@ -69,6 +70,27 @@ export const useAuthStore = defineStore('auth', () => {
     connectWS()
   }
 
+  // loginWithPasskey runs the WebAuthn assertion ceremony. An empty email is a
+  // usernameless (discoverable) login; a provided email scopes to that account.
+  async function loginWithPasskey(email?: string) {
+    const response = await passkeyLogin(email)
+    localStorage.setItem('access_token', response.accessToken)
+    localStorage.setItem('refresh_token', response.refreshToken)
+    user.value = response.user ?? null
+    await fetchMe()
+    connectWS()
+  }
+
+  // registerPasskeyAndSecure enrolls a passkey for the signed-in user. When the
+  // account is in the forced-secure state, registering a passkey clears the
+  // flag on the backend; refresh + fetchMe pull the cleared state so the route
+  // guard releases.
+  async function registerPasskeyAndSecure(name: string) {
+    await registerPasskey(name)
+    await refresh()
+    await fetchMe()
+  }
+
   async function activate(email: string, password: string, displayName: string, activationCode?: string) {
     const { data } = await api.post('/auth/activate', { email, password, displayName, activationCode })
     const response = fromJson(RegisterResponseSchema, data)
@@ -129,6 +151,8 @@ export const useAuthStore = defineStore('auth', () => {
     can,
     init,
     login,
+    loginWithPasskey,
+    registerPasskeyAndSecure,
     activate,
     refresh,
     fetchMe,

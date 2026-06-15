@@ -14,7 +14,7 @@ const testSecret = "test-secret-key"
 func TestIssueAndValidateToken(t *testing.T) {
 	userID := uuid.New()
 
-	token, err := IssueToken(testSecret, userID, "test@example.com", "admin")
+	token, err := IssueToken(testSecret, userID, "test@example.com", "admin", false)
 	if err != nil {
 		t.Fatalf("IssueToken() error: %v", err)
 	}
@@ -38,7 +38,7 @@ func TestIssueAndValidateToken(t *testing.T) {
 func TestValidateTokenRejectsTampered(t *testing.T) {
 	userID := uuid.New()
 
-	token, _ := IssueToken(testSecret, userID, "test@example.com", "admin")
+	token, _ := IssueToken(testSecret, userID, "test@example.com", "admin", false)
 	// Tamper with the payload (middle segment)
 	parts := strings.SplitN(token, ".", 3)
 	parts[1] = "eyJzdWIiOiJ0YW1wZXJlZCJ9" // {"sub":"tampered"}
@@ -53,7 +53,7 @@ func TestValidateTokenRejectsTampered(t *testing.T) {
 func TestValidateTokenRejectsWrongSecret(t *testing.T) {
 	userID := uuid.New()
 
-	token, _ := IssueToken(testSecret, userID, "test@example.com", "admin")
+	token, _ := IssueToken(testSecret, userID, "test@example.com", "admin", false)
 
 	_, err := ValidateToken("wrong-secret", token)
 	if err == nil {
@@ -95,13 +95,13 @@ func TestIssueTokenHasNoClientID(t *testing.T) {
 
 	for name, issue := range map[string]func() (string, error){
 		"IssueToken": func() (string, error) {
-			return IssueToken(testSecret, userID, "x@y.z", "admin")
+			return IssueToken(testSecret, userID, "x@y.z", "admin", false)
 		},
 		"IssueRefreshToken": func() (string, error) {
-			return IssueRefreshToken(testSecret, userID, "x@y.z", "admin")
+			return IssueRefreshToken(testSecret, userID, "x@y.z", "admin", false)
 		},
 		"IssueTokenWithDuration": func() (string, error) {
-			return IssueTokenWithDuration(testSecret, userID, "x@y.z", "admin", time.Minute)
+			return IssueTokenWithDuration(testSecret, userID, "x@y.z", "admin", false, time.Minute)
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -173,7 +173,7 @@ func TestScopeContainsMultiple(t *testing.T) {
 func TestRefreshToken(t *testing.T) {
 	userID := uuid.New()
 
-	token, err := IssueRefreshToken(testSecret, userID, "test@example.com", "admin")
+	token, err := IssueRefreshToken(testSecret, userID, "test@example.com", "admin", false)
 	if err != nil {
 		t.Fatalf("IssueRefreshToken() error: %v", err)
 	}

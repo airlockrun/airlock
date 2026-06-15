@@ -31,24 +31,30 @@ type Claims struct {
 	TenantRole string `json:"tenant_role"`
 	ClientID   string `json:"client_id,omitempty"`
 	Scope      string `json:"scope,omitempty"`
+	// MustChangePassword mirrors users.must_change_password. When true the
+	// /api/v1 secured-account gate restricts the token to the account-securing
+	// endpoints until the user sets a strong password or registers a passkey,
+	// then receives a fresh token with the flag cleared. Web-login tokens carry
+	// the live value at issue; OAuth/MCP tokens never set it.
+	MustChangePassword bool `json:"must_change_password,omitempty"`
 }
 
 // IssueToken creates a signed access token (15 min).
-func IssueToken(secret string, userID uuid.UUID, email, tenantRole string) (string, error) {
-	return issueToken(secret, userID, email, tenantRole, AccessTokenDuration)
+func IssueToken(secret string, userID uuid.UUID, email, tenantRole string, mustChangePassword bool) (string, error) {
+	return issueToken(secret, userID, email, tenantRole, mustChangePassword, AccessTokenDuration)
 }
 
 // IssueRefreshToken creates a signed refresh token (7 days).
-func IssueRefreshToken(secret string, userID uuid.UUID, email, tenantRole string) (string, error) {
-	return issueToken(secret, userID, email, tenantRole, RefreshTokenDuration)
+func IssueRefreshToken(secret string, userID uuid.UUID, email, tenantRole string, mustChangePassword bool) (string, error) {
+	return issueToken(secret, userID, email, tenantRole, mustChangePassword, RefreshTokenDuration)
 }
 
 // IssueTokenWithDuration creates a signed token with a custom duration.
-func IssueTokenWithDuration(secret string, userID uuid.UUID, email, tenantRole string, duration time.Duration) (string, error) {
-	return issueToken(secret, userID, email, tenantRole, duration)
+func IssueTokenWithDuration(secret string, userID uuid.UUID, email, tenantRole string, mustChangePassword bool, duration time.Duration) (string, error) {
+	return issueToken(secret, userID, email, tenantRole, mustChangePassword, duration)
 }
 
-func issueToken(secret string, userID uuid.UUID, email, tenantRole string, duration time.Duration) (string, error) {
+func issueToken(secret string, userID uuid.UUID, email, tenantRole string, mustChangePassword bool, duration time.Duration) (string, error) {
 	now := time.Now()
 	claims := Claims{
 		RegisteredClaims: jwt.RegisteredClaims{
@@ -56,8 +62,9 @@ func issueToken(secret string, userID uuid.UUID, email, tenantRole string, durat
 			IssuedAt:  jwt.NewNumericDate(now),
 			ExpiresAt: jwt.NewNumericDate(now.Add(duration)),
 		},
-		Email:      email,
-		TenantRole: tenantRole,
+		Email:              email,
+		TenantRole:         tenantRole,
+		MustChangePassword: mustChangePassword,
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	return token.SignedString([]byte(secret))

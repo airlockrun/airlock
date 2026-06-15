@@ -13,6 +13,7 @@ import (
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
+	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"
 )
 
@@ -42,8 +43,8 @@ func (h *AuthHandler) Activate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if req.Email == "" || req.Password == "" {
-		writeError(w, http.StatusBadRequest, "email and password are required")
+	if req.Email == "" {
+		writeError(w, http.StatusBadRequest, "email is required")
 		return
 	}
 
@@ -86,18 +87,29 @@ func (h *AuthHandler) Activate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	hash, err := auth.HashPassword(req.Password)
-	if err != nil {
-		logFor(r).Error("hash password failed", zap.Error(err))
-		writeError(w, http.StatusInternalServerError, "internal error")
-		return
+	// Password is optional: the first admin may activate passkey-only and
+	// enroll a passkey immediately after (the SPA drives that with the token
+	// returned here). When a password is given it must be strong.
+	var passwordHash pgtype.Text
+	if req.Password != "" {
+		if err := auth.ValidatePasswordStrength(req.Password, []string{req.Email, req.DisplayName}); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		hash, herr := auth.HashPassword(req.Password)
+		if herr != nil {
+			logFor(r).Error("hash password failed", zap.Error(herr))
+			writeError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+		passwordHash = pgtype.Text{String: hash, Valid: true}
 	}
 
 	// airlockvet:allow-dbq reason: pre-Principal bootstrap (activate/login/refresh) — runs before authz can apply, gated by HMAC / activation token / password
 	user, err := q.CreateUser(ctx, dbq.CreateUserParams{
 		Email:              req.Email,
 		DisplayName:        req.DisplayName,
-		PasswordHash:       hash,
+		PasswordHash:       passwordHash,
 		TenantRole:         "admin",
 		MustChangePassword: false,
 	})
@@ -108,13 +120,13 @@ func (h *AuthHandler) Activate(w http.ResponseWriter, r *http.Request) {
 
 	userID := pgUUID(user.ID)
 
-	accessToken, err := auth.IssueToken(h.jwtSecret, userID, user.Email, user.TenantRole)
+	accessToken, err := auth.IssueToken(h.jwtSecret, userID, user.Email, user.TenantRole, user.MustChangePassword)
 	if err != nil {
 		logFor(r).Error("issue access token failed", zap.Error(err))
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	refreshToken, err := auth.IssueRefreshToken(h.jwtSecret, userID, user.Email, user.TenantRole)
+	refreshToken, err := auth.IssueRefreshToken(h.jwtSecret, userID, user.Email, user.TenantRole, user.MustChangePassword)
 	if err != nil {
 		logFor(r).Error("issue refresh token failed", zap.Error(err))
 		writeError(w, http.StatusInternalServerError, "internal error")
@@ -218,7 +230,9 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := auth.CheckPassword(user.PasswordHash, req.Password); err != nil {
+	// A passkey-only user has a NULL password_hash; a password login attempt
+	// against it always fails (and is recorded like any bad credential).
+	if !user.PasswordHash.Valid || auth.CheckPassword(user.PasswordHash.String, req.Password) != nil {
 		if rfErr := policy.RecordFailure(ctx, pool, req.Email, ip); rfErr != nil {
 			logFor(r).Error("record auth failure failed", zap.Error(rfErr))
 		}
@@ -233,13 +247,13 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 
 	userID := pgUUID(user.ID)
 
-	accessToken, err := auth.IssueToken(h.jwtSecret, userID, user.Email, user.TenantRole)
+	accessToken, err := auth.IssueToken(h.jwtSecret, userID, user.Email, user.TenantRole, user.MustChangePassword)
 	if err != nil {
 		logFor(r).Error("issue access token failed", zap.Error(err))
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	refreshToken, err := auth.IssueRefreshToken(h.jwtSecret, userID, user.Email, user.TenantRole)
+	refreshToken, err := auth.IssueRefreshToken(h.jwtSecret, userID, user.Email, user.TenantRole, user.MustChangePassword)
 	if err != nil {
 		logFor(r).Error("issue refresh token failed", zap.Error(err))
 		writeError(w, http.StatusInternalServerError, "internal error")
@@ -334,7 +348,18 @@ func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	accessToken, err := auth.IssueToken(h.jwtSecret, userID, claims.Email, claims.TenantRole)
+	// Re-read the live user row so the new access token reflects the current
+	// role and must_change_password — securing the account (set password /
+	// register passkey) clears the flag in the DB, and the next refresh is what
+	// releases the secured-account gate.
+	// airlockvet:allow-dbq reason: pre-Principal bootstrap (activate/login/refresh) — runs before authz can apply, gated by HMAC / activation token / password
+	user, err := dbq.New(h.db.Pool()).GetUserByID(r.Context(), toPgUUID(userID))
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "invalid refresh token")
+		return
+	}
+
+	accessToken, err := auth.IssueToken(h.jwtSecret, userID, user.Email, user.TenantRole, user.MustChangePassword)
 	if err != nil {
 		logFor(r).Error("issue access token failed", zap.Error(err))
 		writeError(w, http.StatusInternalServerError, "internal error")
@@ -379,8 +404,17 @@ func (h *AuthHandler) ChangePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := auth.CheckPassword(user.PasswordHash, req.CurrentPassword); err != nil {
+	// Passkey-only users (NULL password_hash) have no current password to
+	// verify; they set a first password through the self-service endpoint, not
+	// here. Treat the missing-password case as an incorrect password so the
+	// response doesn't reveal which accounts lack one.
+	if !user.PasswordHash.Valid || auth.CheckPassword(user.PasswordHash.String, req.CurrentPassword) != nil {
 		writeError(w, http.StatusUnauthorized, "current password is incorrect")
+		return
+	}
+
+	if err := auth.ValidatePasswordStrength(req.NewPassword, []string{user.Email, user.DisplayName}); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -393,7 +427,7 @@ func (h *AuthHandler) ChangePassword(w http.ResponseWriter, r *http.Request) {
 
 	// airlockvet:allow-dbq reason: pre-Principal bootstrap (activate/login/refresh) — runs before authz can apply, gated by HMAC / activation token / password
 	if err := q.UpdateUserPassword(ctx, dbq.UpdateUserPasswordParams{
-		PasswordHash: newHash,
+		PasswordHash: pgtype.Text{String: newHash, Valid: true},
 		ID:           toPgUUID(userID),
 	}); err != nil {
 		logFor(r).Error("update password failed", zap.Error(err))
@@ -401,14 +435,15 @@ func (h *AuthHandler) ChangePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Issue new tokens
-	accessToken, err := auth.IssueToken(h.jwtSecret, userID, user.Email, user.TenantRole)
+	// Issue new tokens with the forced-change flag cleared — the password was
+	// just rotated, so the account is secured.
+	accessToken, err := auth.IssueToken(h.jwtSecret, userID, user.Email, user.TenantRole, false)
 	if err != nil {
 		logFor(r).Error("issue access token failed", zap.Error(err))
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	refreshToken, err := auth.IssueRefreshToken(h.jwtSecret, userID, user.Email, user.TenantRole)
+	refreshToken, err := auth.IssueRefreshToken(h.jwtSecret, userID, user.Email, user.TenantRole, false)
 	if err != nil {
 		logFor(r).Error("issue refresh token failed", zap.Error(err))
 		writeError(w, http.StatusInternalServerError, "internal error")

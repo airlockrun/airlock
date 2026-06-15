@@ -15,6 +15,10 @@ Commands:
   serve                       Start the HTTP server (config from env).
   auth unlock <email>         Clear lockouts/failures for an email.
                               --ip <ip>  narrow to one (email, ip) bucket.
+  auth reset <email>          Set a one-time temporary password for a user
+                              (printed to stdout); they must change it or
+                              register a passkey on first login. Break-glass
+                              for a locked-out user, including the sole admin.
   help                        Show this help.
 
 All commands read DATABASE_URL (and the rest of airlock's env) the same way.

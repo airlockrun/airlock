@@ -65,6 +65,10 @@ message CreateUserRequest {
 
 message CreateUserResponse {
   User user = 1;
+  // One-time temporary password generated for the new user, shown to the
+  // admin once to hand off. The user must change it (or register a passkey)
+  // on first login. Empty when the admin supplied the password directly.
+  string temp_password = 2;
 }
 
 message ChangePasswordRequest {
@@ -557,6 +561,29 @@ message CreateGitCredentialResponse {
 
 message ListGitCredentialsResponse {
   repeated GitCredential credentials = 1;
+}
+
+// --- Passkeys (WebAuthn) ---
+//
+// The begin/finish ceremony endpoints exchange raw WebAuthn JSON (the browser's
+// attestation/assertion), not proto, so they have no messages here. These cover
+// the management surface plus the register-finish response that returns the
+// newly created passkey.
+
+message ListPasskeysResponse {
+  repeated Passkey passkeys = 1;
+}
+
+message RegisterPasskeyResponse {
+  Passkey passkey = 1;
+}
+
+message RenamePasskeyRequest {
+  string friendly_name = 1;  // id is a path param
+}
+
+message SetPasswordRequest {
+  string password = 1;
 }
 
 // --- Agent git connection ---

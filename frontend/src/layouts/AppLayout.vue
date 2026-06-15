@@ -58,6 +58,7 @@ const menuItems = computed(() => {
     items.push({ label: 'Users', icon: 'pi pi-users', route: '/users' })
   }
   items.push(
+    { label: 'Security', icon: 'pi pi-shield', route: '/settings/security' },
     { label: 'Git Credentials', icon: 'pi pi-key', route: '/settings/git-credentials' },
     { label: 'Settings', icon: 'pi pi-cog', route: '/settings' },
   )

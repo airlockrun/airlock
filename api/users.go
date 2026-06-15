@@ -75,10 +75,9 @@ func (h *UsersHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := principalFromRequest(r)
-	detail, err := h.users.Create(r.Context(), p, userssvc.CreateRequest{
+	detail, tempPassword, err := h.users.Create(r.Context(), p, userssvc.CreateRequest{
 		Email:       req.Email,
 		DisplayName: req.DisplayName,
-		Password:    req.Password,
 		TenantRole:  req.TenantRole,
 	})
 	if err != nil {
@@ -86,7 +85,10 @@ func (h *UsersHandler) Create(w http.ResponseWriter, r *http.Request) {
 		writeUsersError(w, err, "create user")
 		return
 	}
-	writeProto(w, http.StatusCreated, &airlockv1.CreateUserResponse{User: convert.UserDetailToProto(detail)})
+	writeProto(w, http.StatusCreated, &airlockv1.CreateUserResponse{
+		User:         convert.UserDetailToProto(detail),
+		TempPassword: tempPassword,
+	})
 }
 
 // UpdateRole changes a user's tenant role.
