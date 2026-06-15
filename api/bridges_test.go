@@ -19,8 +19,9 @@ import (
 // up a real poller — the test only cares that lifecycle methods exist.
 type testNoopBridgeMgr struct{}
 
-func (testNoopBridgeMgr) AddBridge(uuid.UUID)    {}
-func (testNoopBridgeMgr) RemoveBridge(uuid.UUID) {}
+func (testNoopBridgeMgr) AddBridge(uuid.UUID)      {}
+func (testNoopBridgeMgr) TeardownBridge(uuid.UUID) {}
+func (testNoopBridgeMgr) RemoveBridge(uuid.UUID)   {}
 
 func testBridgeHandler(telegramSrv *httptest.Server) *bridgeHandler {
 	td := trigger.NewTelegramDriver(zap.NewNop())

@@ -74,8 +74,12 @@ func (d *TelegramDriver) Activate(ctx context.Context, br dbq.Bridge) error {
 	return d.callTelegram(ctx, token, "deleteWebhook", nil)
 }
 
-func (d *TelegramDriver) Teardown(_ context.Context, _ dbq.Bridge) error {
-	return nil
+// Teardown clears the bot's chat menu button so a deleted or disabled bridge
+// doesn't leave a dead web-app "Open" button in Telegram (setChatMenuButton is
+// bot-global server-side state that otherwise persists). br.BotTokenRef must be
+// the decrypted bot token — BridgeManager.TeardownBridge resolves it.
+func (d *TelegramDriver) Teardown(ctx context.Context, br dbq.Bridge) error {
+	return d.SetMenuButton(ctx, br.BotTokenRef, "")
 }
 
 // DefaultEcho reports that Telegram defaults to hiding tool bubbles: each
