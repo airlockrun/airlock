@@ -297,6 +297,20 @@ func ResetHard(repoPath, commit string) error {
 	return nil
 }
 
+// CleanWorktree removes untracked files and directories from the working
+// tree. It respects .gitignore (no -x), so airlock-generated ignored files
+// (DIAGNOSTICS.md, Dockerfile) and regenerated build artefacts (*_templ.go,
+// views/static) are left alone — only stray tracked-then-orphaned sources are
+// removed. Used on a fresh build so files left behind by a prior failed
+// build/codegen don't leak into the docker build context, which is the repo
+// working tree itself.
+func CleanWorktree(repoPath string) error {
+	if err := git(repoPath, "clean", "-fd"); err != nil {
+		return fmt.Errorf("git clean -fd: %w", err)
+	}
+	return nil
+}
+
 // MigrationVersionAt returns the highest goose version number among
 // files in migrations/ at the given commit. Goose's contract is "all
 // migrations get applied to head", so this is the version a deployed
