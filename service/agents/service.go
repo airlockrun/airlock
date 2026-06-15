@@ -31,6 +31,7 @@ import (
 
 // BridgeStopper is the subset of *trigger.BridgeManager Delete uses.
 type BridgeStopper interface {
+	TeardownBridge(id uuid.UUID)
 	RemoveBridge(id uuid.UUID)
 }
 
@@ -447,6 +448,10 @@ func (s *Service) Delete(ctx context.Context, p authz.Principal, agentID uuid.UU
 			if err != nil {
 				continue
 			}
+			// Teardown first (clears the Telegram menu button / closes the
+			// Discord gateway) while the row + token still exist; the agent
+			// delete below orphans the bridge (agent_id → NULL).
+			s.bridgeMgr.TeardownBridge(bridgeUUID)
 			s.bridgeMgr.RemoveBridge(bridgeUUID)
 		}
 	}

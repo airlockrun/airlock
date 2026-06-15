@@ -24,6 +24,7 @@ import (
 // uses. Exposed as an interface so tests can stub the poller lifecycle.
 type BridgeManager interface {
 	AddBridge(id uuid.UUID)
+	TeardownBridge(id uuid.UUID)
 	RemoveBridge(id uuid.UUID)
 }
 
@@ -523,6 +524,10 @@ func (s *Service) Delete(ctx context.Context, p authz.Principal, bridgeID uuid.U
 			return err
 		}
 	}
+	// Teardown first (clears the Telegram menu button / closes the Discord
+	// gateway) while the row + token still exist, then delete and stop the
+	// poller.
+	s.bridgeMgr.TeardownBridge(bridgeID)
 	if err := q.DeleteBridge(ctx, pgtype.UUID{Bytes: bridgeID, Valid: true}); err != nil {
 		s.logger.Error("delete bridge failed", zap.Error(err))
 		return err

@@ -412,6 +412,41 @@ func (m *BridgeManager) RemoveBridge(bridgeID uuid.UUID) {
 	m.cancelPoller(bridgeID)
 }
 
+// TeardownBridge runs the driver's teardown for a bridge — for Telegram this
+// clears the chat menu button so a deleted/disabled bridge doesn't leave a
+// dead web-app "Open" button behind; for Discord it closes the gateway
+// connection. Best-effort: it logs and returns on lookup/decrypt/teardown
+// failure so it never blocks an agent or bridge deletion. Call it BEFORE the
+// bridge row is deleted and before RemoveBridge, while the bot token is still
+// resolvable. Uses the manager's own context so the platform API call isn't
+// cut short when the deleting request returns.
+func (m *BridgeManager) TeardownBridge(bridgeID uuid.UUID) {
+	if m.ctx == nil {
+		return
+	}
+	q := dbq.New(m.db.Pool())
+	br, err := q.GetBridgeByID(m.ctx, toPgUUID(bridgeID))
+	if err != nil {
+		m.logger.Warn("teardown bridge: get bridge", zap.Error(err))
+		return
+	}
+	driver, ok := m.drivers[br.Type]
+	if !ok {
+		return
+	}
+	if br.BotTokenRef != "" {
+		token, err := m.encryptor.Get(m.ctx, "bridge/"+pgUUID(br.ID).String()+"/bot_token", br.BotTokenRef)
+		if err != nil {
+			m.logger.Warn("teardown bridge: decrypt token", zap.String("name", br.Name), zap.Error(err))
+			return
+		}
+		br.BotTokenRef = token
+	}
+	if err := driver.Teardown(m.ctx, br); err != nil {
+		m.logger.Warn("teardown bridge: driver teardown", zap.String("name", br.Name), zap.Error(err))
+	}
+}
+
 // RemoveBridgesByOwner stops every poller for bridges owned by a
 // specific user. Called from service/users.Delete BEFORE the DB
 // CASCADE removes the bridge rows — otherwise the poller goroutines
