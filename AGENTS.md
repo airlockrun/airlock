@@ -18,8 +18,17 @@ cmd/airlock/       Multi-command binary. Subcommands:
                      - airlock serve              Run the HTTP server
                      - airlock auth unlock <email> [--ip <ip>]
                                                   Clear login lockouts/failures (escape hatch)
+                     - airlock auth reset <email>
+                                                  Set a one-time temp password (printed
+                                                  to stdout); break-glass for a locked-out
+                                                  user, including a passkey-only admin.
 api/               HTTP handlers (chi router) + WebSocket upgrade
-auth/              JWT (HS256), middleware, RBAC (admin/manager/user)
+auth/              JWT (HS256), middleware, RBAC (admin/manager/user), bcrypt +
+                   zxcvbn password strength (ValidatePasswordStrength), temp-password
+                   generation. Claims.MustChangePassword drives the secured-account gate.
+auth/passkey/      WebAuthn (go-webauthn) relying-party builder + webauthn.User adapter.
+                   RP ID/origin derive from PUBLIC_URL. Ceremonies + storage live in
+                   service/passkeys; this is the thin library binding.
 auth/lockout/      Per-(email, ip) login throttling — Policy, IP normalization,
                    constant-time response padding for the Login handler.
 authz/             The single authorization layer. Principal (registered /
@@ -99,9 +108,17 @@ On startup `builder.RebuildAllOnSDKChange` compares the airlock-bundled `agentsd
 ## API Structure
 
 ### Public: `/auth`
-`POST status|activate|login|refresh|change-password`
+`POST status|activate|login|refresh|change-password`. `activate` accepts an empty
+password (passkey-only first admin). Passkey login: `POST passkey/login/begin|finish`
+— begin/finish exchange raw WebAuthn JSON (browser attestation/assertion), not proto;
+finish issues the same tokens as password login.
 
-### Authenticated: `/api/v1` (JWT middleware)
+### Authenticated: `/api/v1` (JWT middleware + secured-account gate)
+The secured-account gate (`securedAccountGate`) blocks a `MustChangePassword` principal
+from everything except `GET /me`, `POST /me/password`, and `POST /me/passkeys/register/*`
+until they set a password or register a passkey (then `/auth/refresh` re-reads the cleared
+flag and the gate releases).
+- **Passkeys**: `GET/POST /me/passkeys`, `register/begin|finish`, rename/delete; `POST/DELETE /me/password` (self-service; raw WebAuthn JSON on the register ceremony, proto elsewhere)
 - **Agents**: CRUD + `stop`, `upgrade`, `prompt`, `files`
 - **Conversations**: CRUD per agent (one DM per user+agent)
 - **Runs**: List, detail, logs (streaming), cancel
@@ -144,6 +161,9 @@ Postgres with sqlc. Key tables:
 - `runs` — execution history (trigger, status, input/output, timeline)
 - `oauth_states` — OAuth flow state tokens
 - `auth_failures`, `auth_lockouts` — per-(email, ip) login throttle (see `auth/lockout/`)
+- `webauthn_credentials` — registered passkeys (one row per authenticator per user)
+- `webauthn_ceremonies` — short-lived, single-use WebAuthn challenge state (begin→finish), GC'd by InboundOAuthGC
+- `users.password_hash` is nullable: passkey-only users have no password
 
 ## Permission Model
 
@@ -176,6 +196,11 @@ Replay buffer (100 messages) per topic for late subscribers.
 ## Security
 
 - JWT HS256 tokens: 15min access, 7d refresh. Agent tokens: 100-year.
+- Login: passkeys (WebAuthn, phishing-resistant) are primary; a strong password
+  (zxcvbn score ≥ 3, enforced identically on the frontend meter) is an optional
+  alternative. Passkeys require user verification + resident keys (usernameless
+  sign-in). WebAuthn needs HTTPS in production (localhost is exempt for dev); the
+  RP ID is the PUBLIC_URL host, so changing that host invalidates enrolled passkeys.
 - AES-256-GCM encryption at rest for API keys, secrets, tokens. Versioned keys for rotation.
 - Webhook verification: none, HMAC, or token-based.
 - Agent containers get scoped DB credentials (per-agent schema) and bearer token.

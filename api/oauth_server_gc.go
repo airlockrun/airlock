@@ -10,7 +10,8 @@ import (
 )
 
 // InboundOAuthGC sweeps expired authorization codes, expired/
-// long-consumed refresh tokens, and ancient grants. Mirrors
+// long-consumed refresh tokens, ancient grants, and expired WebAuthn
+// login/registration ceremonies. Mirrors
 // oauth.RefreshJob in cadence — 5min ticker, started from
 // cmd/airlock/serve.go and stopped via ctx cancellation.
 //
@@ -75,5 +76,9 @@ func (j *InboundOAuthGC) sweep(ctx context.Context) {
 		j.logger.Warn("gc: grants", zap.Error(err))
 	} else if n > 0 {
 		j.logger.Debug("gc: grants", zap.Int64("deleted", n))
+	}
+	// airlockvet:allow-dbq reason: startup garbage-collection sweep — no caller Principal, runs as airlock-internal housekeeping
+	if err := q.DeleteExpiredCeremonies(ctx); err != nil {
+		j.logger.Warn("gc: webauthn ceremonies", zap.Error(err))
 	}
 }

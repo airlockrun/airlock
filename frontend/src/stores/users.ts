@@ -29,9 +29,14 @@ export const useUsersStore = defineStore('users', () => {
     selectable.value = fromJson(ListSelectableUsersResponseSchema, data).users
   }
 
-  async function createUser(payload: { email: string; password: string; displayName: string; tenantRole: string }) {
+  // createUser provisions a user. The backend generates a one-time temporary
+  // password and returns it once (the user must change it or register a passkey
+  // on first login); surface it to the admin to hand off.
+  async function createUser(payload: { email: string; displayName: string; tenantRole: string }): Promise<string> {
     const { data } = await api.post('/api/v1/users', payload)
-    users.value.unshift(fromJson(CreateUserResponseSchema, data).user!)
+    const resp = fromJson(CreateUserResponseSchema, data)
+    users.value.unshift(resp.user!)
+    return resp.tempPassword
   }
 
   async function updateUserRole(id: string, role: string) {

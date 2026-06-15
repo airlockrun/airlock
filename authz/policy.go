@@ -76,6 +76,7 @@ const (
 	TenantSettingsUpdate      Action = "tenant.settings.update"
 	TenantIdentityManage      Action = "tenant.identity.manage"     // link / list / unlink caller's own platform identities: user+
 	TenantIdentityManageAll   Action = "tenant.identity.manage_all" // list / unlink any user's platform identities: admin
+	TenantSelfPasskeyManage   Action = "tenant.self.passkey.manage" // register / list / rename / delete the caller's own passkeys + set/remove own password: user+
 )
 
 // policy is the whole permission matrix. Authorize panics on a missing
@@ -122,6 +123,7 @@ var policy = map[Action]Requirement{
 	TenantSettingsUpdate:      {Axis: AxisTenant, Tenant: auth.RoleAdmin},
 	TenantIdentityManage:      {Axis: AxisTenant, Tenant: auth.RoleUser},
 	TenantIdentityManageAll:   {Axis: AxisTenant, Tenant: auth.RoleAdmin},
+	TenantSelfPasskeyManage:   {Axis: AxisTenant, Tenant: auth.RoleUser},
 }
 
 // RequiredTenantRole returns the minimum tenant role for a tenant-axis

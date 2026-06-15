@@ -14,6 +14,7 @@ import (
 	"github.com/airlockrun/airlock/db/dbq"
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"
 )
 
@@ -50,7 +51,7 @@ func seedLockoutUser(t *testing.T) string {
 	_, err = dbq.New(testDB.Pool()).CreateUser(context.Background(), dbq.CreateUserParams{
 		Email:        email,
 		DisplayName:  "Lockout Test",
-		PasswordHash: hash,
+		PasswordHash: pgtype.Text{String: hash, Valid: true},
 		TenantRole:   "user",
 	})
 	if err != nil {

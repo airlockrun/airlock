@@ -130,7 +130,7 @@ func AddAgentMember(t *testing.T, h *Harness, agentID, userID uuid.UUID, role st
 // parameter on the WS upgrade.
 func IssueUserToken(t *testing.T, h *Harness, userID uuid.UUID, email, role string) string {
 	t.Helper()
-	tok, err := auth.IssueToken(h.JWTSecret, userID, email, role)
+	tok, err := auth.IssueToken(h.JWTSecret, userID, email, role, false)
 	if err != nil {
 		t.Fatalf("apitest: IssueUserToken: %v", err)
 	}

@@ -526,6 +526,18 @@ message GitCredential {
   google.protobuf.Timestamp last_used_at = 7;
 }
 
+// Passkey is a registered WebAuthn credential for human login. The raw
+// credential id and public key never leave the backend; only display metadata
+// is surfaced. backup_eligible distinguishes a synced/multi-device passkey from
+// a single-device one for the UI.
+message Passkey {
+  string id = 1;
+  string friendly_name = 2;
+  google.protobuf.Timestamp created_at = 3;
+  google.protobuf.Timestamp last_used_at = 4;
+  bool backup_eligible = 5;
+}
+
 // AgentGitConfig describes an agent's external git remote connection.
 // All string fields are empty when the agent is in internal-only mode.
 message AgentGitConfig {

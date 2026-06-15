@@ -11,7 +11,20 @@ const toast = useToast()
 const confirm = useConfirm()
 
 const dialogVisible = ref(false)
-const form = ref({ email: '', displayName: '', password: '', tenantRole: 'user' })
+const form = ref({ email: '', displayName: '', tenantRole: 'user' })
+
+// One-time temp password shown after creating a user, for the admin to hand
+// off. The user must change it (or register a passkey) on first login.
+const tempPasswordDialog = ref(false)
+const tempPassword = ref('')
+const tempPasswordEmail = ref('')
+
+async function copyTempPassword() {
+  try {
+    await navigator.clipboard.writeText(tempPassword.value)
+    toast.add({ severity: 'success', summary: 'Copied', life: 2000 })
+  } catch { /* clipboard unavailable — user can select manually */ }
+}
 const roleOptions = [
   { label: 'Admin', value: 'admin' },
   { label: 'Manager', value: 'manager' },
@@ -31,20 +44,21 @@ onMounted(() => {
 })
 
 function openCreate() {
-  form.value = { email: '', displayName: '', password: '', tenantRole: 'user' }
+  form.value = { email: '', displayName: '', tenantRole: 'user' }
   dialogVisible.value = true
 }
 
 async function onSubmit() {
   try {
-    await store.createUser({
+    const temp = await store.createUser({
       email: form.value.email,
-      password: form.value.password,
       displayName: form.value.displayName,
       tenantRole: form.value.tenantRole,
     })
-    toast.add({ severity: 'success', summary: 'User created', life: 3000 })
     dialogVisible.value = false
+    tempPassword.value = temp
+    tempPasswordEmail.value = form.value.email
+    tempPasswordDialog.value = true
   } catch (err: any) {
     toast.add({ severity: 'error', summary: err.response?.data?.error || 'Create failed', life: 5000 })
   }
@@ -152,10 +166,6 @@ function isSelf(userId: string): boolean {
           <InputText id="userDisplayName" v-model="form.displayName" placeholder="Jane Doe" />
         </div>
         <div style="display: flex; flex-direction: column; gap: 0.25rem">
-          <label for="userPassword">Password</label>
-          <Password id="userPassword" v-model="form.password" :feedback="false" toggleMask />
-        </div>
-        <div style="display: flex; flex-direction: column; gap: 0.25rem">
           <label for="userRole">Role</label>
           <Select
             id="userRole"
@@ -169,6 +179,24 @@ function isSelf(userId: string): boolean {
       <template #footer>
         <Button label="Cancel" severity="secondary" text @click="dialogVisible = false" />
         <Button label="Create" @click="onSubmit" />
+      </template>
+    </Dialog>
+
+    <!-- One-time temp password handoff -->
+    <Dialog v-model:visible="tempPasswordDialog" header="User created" modal style="width: 30rem">
+      <div style="display: flex; flex-direction: column; gap: 1rem">
+        <p style="margin: 0">
+          Share this one-time password with <strong>{{ tempPasswordEmail }}</strong>. They'll be
+          required to set their own password or register a passkey on first sign-in. It won't be
+          shown again.
+        </p>
+        <div style="display: flex; gap: 0.5rem; align-items: center">
+          <InputText :value="tempPassword" readonly style="width: 100%; font-family: monospace" />
+          <Button icon="pi pi-copy" severity="secondary" @click="copyTempPassword" />
+        </div>
+      </div>
+      <template #footer>
+        <Button label="Done" @click="tempPasswordDialog = false" />
       </template>
     </Dialog>
   </div>

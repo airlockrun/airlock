@@ -585,9 +585,35 @@ type User struct {
 	Email              string             `json:"email"`
 	DisplayName        string             `json:"display_name"`
 	TenantRole         string             `json:"tenant_role"`
-	PasswordHash       string             `json:"password_hash"`
+	PasswordHash       pgtype.Text        `json:"password_hash"`
 	OidcSub            string             `json:"oidc_sub"`
 	MustChangePassword bool               `json:"must_change_password"`
 	CreatedAt          pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
+}
+
+type WebauthnCeremony struct {
+	ID          pgtype.UUID        `json:"id"`
+	UserID      pgtype.UUID        `json:"user_id"`
+	Kind        string             `json:"kind"`
+	SessionData []byte             `json:"session_data"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	ExpiresAt   pgtype.Timestamptz `json:"expires_at"`
+}
+
+type WebauthnCredential struct {
+	ID              pgtype.UUID        `json:"id"`
+	UserID          pgtype.UUID        `json:"user_id"`
+	CredentialID    []byte             `json:"credential_id"`
+	PublicKey       []byte             `json:"public_key"`
+	AttestationType string             `json:"attestation_type"`
+	Aaguid          []byte             `json:"aaguid"`
+	SignCount       int64              `json:"sign_count"`
+	Transports      []string           `json:"transports"`
+	BackupEligible  bool               `json:"backup_eligible"`
+	BackupState     bool               `json:"backup_state"`
+	CloneWarning    bool               `json:"clone_warning"`
+	FriendlyName    string             `json:"friendly_name"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	LastUsedAt      pgtype.Timestamptz `json:"last_used_at"`
 }

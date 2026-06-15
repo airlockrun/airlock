@@ -11,6 +11,28 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const clearMustChangePassword = `-- name: ClearMustChangePassword :exec
+UPDATE users SET must_change_password = false, updated_at = now() WHERE id = $1
+`
+
+// Clears the forced-secure flag. Registering a passkey satisfies the
+// "secure your account" requirement just as changing the password does.
+func (q *Queries) ClearMustChangePassword(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, clearMustChangePassword, id)
+	return err
+}
+
+const clearUserPassword = `-- name: ClearUserPassword :exec
+UPDATE users SET password_hash = NULL, updated_at = now() WHERE id = $1
+`
+
+// Remove the password credential (passkey-only). Guarded by the
+// last-credential check in service/passkeys.
+func (q *Queries) ClearUserPassword(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, clearUserPassword, id)
+	return err
+}
+
 const createUser = `-- name: CreateUser :one
 INSERT INTO users (email, display_name, password_hash, tenant_role, oidc_sub, must_change_password)
 VALUES ($1, $2, $3, $4, $5, $6)
@@ -18,12 +40,12 @@ RETURNING id, email, display_name, tenant_role, password_hash, oidc_sub, must_ch
 `
 
 type CreateUserParams struct {
-	Email              string `json:"email"`
-	DisplayName        string `json:"display_name"`
-	PasswordHash       string `json:"password_hash"`
-	TenantRole         string `json:"tenant_role"`
-	OidcSub            string `json:"oidc_sub"`
-	MustChangePassword bool   `json:"must_change_password"`
+	Email              string      `json:"email"`
+	DisplayName        string      `json:"display_name"`
+	PasswordHash       pgtype.Text `json:"password_hash"`
+	TenantRole         string      `json:"tenant_role"`
+	OidcSub            string      `json:"oidc_sub"`
+	MustChangePassword bool        `json:"must_change_password"`
 }
 
 func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, error) {
@@ -156,6 +178,22 @@ func (q *Queries) ListUsers(ctx context.Context) ([]User, error) {
 	return items, nil
 }
 
+const setTempPassword = `-- name: SetTempPassword :exec
+UPDATE users SET password_hash = $1, must_change_password = true, updated_at = now() WHERE id = $2
+`
+
+type SetTempPasswordParams struct {
+	PasswordHash pgtype.Text `json:"password_hash"`
+	ID           pgtype.UUID `json:"id"`
+}
+
+// Set a password and force a change on next login. Used by admin user
+// creation and the `airlock auth reset` break-glass CLI.
+func (q *Queries) SetTempPassword(ctx context.Context, arg SetTempPasswordParams) error {
+	_, err := q.db.Exec(ctx, setTempPassword, arg.PasswordHash, arg.ID)
+	return err
+}
+
 const updateUserNameEmail = `-- name: UpdateUserNameEmail :exec
 UPDATE users SET display_name = $2, email = $3, updated_at = now() WHERE id = $1
 `
@@ -176,7 +214,7 @@ UPDATE users SET password_hash = $1, must_change_password = false, updated_at = 
 `
 
 type UpdateUserPasswordParams struct {
-	PasswordHash string      `json:"password_hash"`
+	PasswordHash pgtype.Text `json:"password_hash"`
 	ID           pgtype.UUID `json:"id"`
 }
 

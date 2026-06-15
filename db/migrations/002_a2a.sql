@@ -804,7 +804,78 @@ BEGIN
 END $$;
 -- +goose StatementEnd
 
+-- ============================================================
+-- WebAuthn / passkeys for human login.
+-- ============================================================
+
+-- Passwords become optional: a user authenticates with a passkey (the
+-- default), a strong password, or both. password_hash is therefore
+-- nullable — NULL means "passkey-only, no password set". Login rejects a
+-- password attempt against a NULL hash; the last remaining credential
+-- (passkey or password) can't be removed, so a user is never left unable
+-- to sign in.
+ALTER TABLE users ALTER COLUMN password_hash DROP NOT NULL;
+
+-- webauthn_credentials — one row per registered authenticator. A user may
+-- register several (laptop, phone, hardware key). credential_id is the raw
+-- WebAuthn credential id, UNIQUE across all users: the spec makes it
+-- globally unique and discoverable (usernameless) login resolves the user
+-- from it alone. public_key / sign_count / aaguid / transports / backup_*
+-- are the persisted fields of go-webauthn's Credential. sign_count is
+-- bigint (the spec counter is uint32; bigint sidesteps signedness).
+-- clone_warning records a sign-count regression for forensics — synced
+-- platform passkeys legitimately report 0, so it is flagged, never used to
+-- block a login. friendly_name is the user-facing label ("MacBook Touch
+-- ID"). last_used_at is NULL until the first successful assertion.
+CREATE TABLE webauthn_credentials (
+    id               uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id          uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    credential_id    bytea NOT NULL UNIQUE,
+    public_key       bytea NOT NULL,
+    attestation_type text NOT NULL,
+    aaguid           bytea NOT NULL,
+    sign_count       bigint NOT NULL,
+    transports       text[] NOT NULL,
+    backup_eligible  boolean NOT NULL,
+    backup_state     boolean NOT NULL,
+    clone_warning    boolean NOT NULL,
+    friendly_name    text NOT NULL,
+    created_at       timestamptz NOT NULL DEFAULT now(),
+    last_used_at     timestamptz
+);
+CREATE INDEX webauthn_credentials_user_id_idx ON webauthn_credentials(user_id);
+
+-- webauthn_ceremonies — short-lived (5 min) server state bridging a
+-- WebAuthn begin→finish ceremony. The challenge state lives in the DB, not
+-- process memory, so a multi-replica deployment can finish a ceremony on a
+-- different instance than began it — and usernameless login-begin (which
+-- has no user, JWT, or cookie yet) still has somewhere to keep it.
+-- session_data is the JSON-marshalled go-webauthn SessionData (challenge +
+-- expected flags). user_id is NULL for usernameless (discoverable)
+-- login-begin, set for registration and email-first login. The finish
+-- handler consumes a row with a single-use atomic DELETE ... RETURNING, so
+-- it is safe under concurrency and replay; expired rows are GC'd.
+CREATE TABLE webauthn_ceremonies (
+    id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id      uuid REFERENCES users(id) ON DELETE CASCADE,
+    kind         text NOT NULL,
+    session_data bytea NOT NULL,
+    created_at   timestamptz NOT NULL DEFAULT now(),
+    expires_at   timestamptz NOT NULL
+);
+CREATE INDEX webauthn_ceremonies_expires_at_idx ON webauthn_ceremonies(expires_at);
+
 -- +goose Down
+-- WebAuthn / passkeys — reverse of the passkey block at the end of Up.
+DROP INDEX IF EXISTS webauthn_ceremonies_expires_at_idx;
+DROP TABLE IF EXISTS webauthn_ceremonies;
+DROP INDEX IF EXISTS webauthn_credentials_user_id_idx;
+DROP TABLE IF EXISTS webauthn_credentials;
+-- Restore password_hash NOT NULL. Passkey-only users carry a NULL hash;
+-- backfill to '' first (a down-only recovery value, not a fake default on
+-- the forward path) so the constraint can be re-added.
+UPDATE users SET password_hash = '' WHERE password_hash IS NULL;
+ALTER TABLE users ALTER COLUMN password_hash SET NOT NULL;
 -- Best-effort inverse of the unified-FilePart rewrite: an image/* file part
 -- collapses back to the `image` part type; other file parts get their flat
 -- `data`/`url` string fields back from the tagged union. Both message tables.

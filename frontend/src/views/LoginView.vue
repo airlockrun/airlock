@@ -13,7 +13,9 @@ const toast = useToast()
 const email = ref('')
 const password = ref('')
 const loading = ref(false)
+const passkeyLoading = ref(false)
 const error = ref('')
+const showPassword = ref(false)
 // Default to true so the activation link doesn't flash before /auth/status
 // resolves; flips to false only on a confirmed not-yet-activated install.
 const activated = ref(true)
@@ -25,6 +27,33 @@ onMounted(async () => {
   } catch { /* leave activated=true; link stays hidden on transient errors */ }
 })
 
+function done() {
+  toast.add({ severity: 'success', summary: 'Welcome back', life: 3000 })
+  router.push((route.query.redirect as string) || '/')
+}
+
+// Treat a user-cancelled / no-credential ceremony as a quiet no-op rather than
+// an error banner — the browser already showed its own UI.
+function isCeremonyAbort(err: any): boolean {
+  const name = err?.name
+  return name === 'NotAllowedError' || name === 'AbortError'
+}
+
+async function onPasskey() {
+  error.value = ''
+  passkeyLoading.value = true
+  try {
+    await auth.loginWithPasskey(email.value || undefined)
+    done()
+  } catch (err: any) {
+    if (!isCeremonyAbort(err)) {
+      error.value = err.response?.data?.error || 'Passkey sign-in failed.'
+    }
+  } finally {
+    passkeyLoading.value = false
+  }
+}
+
 async function onSubmit() {
   error.value = ''
   if (!email.value || !password.value) {
@@ -34,9 +63,7 @@ async function onSubmit() {
   loading.value = true
   try {
     await auth.login(email.value, password.value)
-    toast.add({ severity: 'success', summary: 'Welcome back', life: 3000 })
-    const redirect = route.query.redirect as string
-    router.push(redirect || '/')
+    done()
   } catch (err: any) {
     error.value = err.response?.data?.error || 'Login failed.'
   } finally {
@@ -51,18 +78,40 @@ async function onSubmit() {
       <div style="text-align: center; font-size: 1.5rem">Airlock</div>
     </template>
     <template #content>
-      <form @submit.prevent="onSubmit" style="display: flex; flex-direction: column; gap: 1.25rem">
+      <div style="display: flex; flex-direction: column; gap: 1.25rem">
         <Message v-if="error" severity="error" :closable="false">{{ error }}</Message>
-        <FloatLabel>
-          <InputText id="email" v-model="email" type="email" autocomplete="username" style="width: 100%" />
-          <label for="email">Email</label>
+
+        <!-- Passkeys are the primary sign-in. Usernameless when the email is
+             blank; scoped to the typed email otherwise. -->
+        <Button
+          label="Sign in with a passkey"
+          icon="pi pi-key"
+          :loading="passkeyLoading"
+          style="width: 100%"
+          @click="onPasskey"
+        />
+
+        <button type="button" class="pw-toggle" @click="showPassword = !showPassword">
+          {{ showPassword ? 'Hide password sign-in' : 'Use a password instead' }}
+        </button>
+
+        <form v-if="showPassword" @submit.prevent="onSubmit" style="display: flex; flex-direction: column; gap: 1.25rem">
+          <FloatLabel>
+            <InputText id="email" v-model="email" type="email" autocomplete="username webauthn" style="width: 100%" />
+            <label for="email">Email</label>
+          </FloatLabel>
+          <FloatLabel>
+            <Password id="password" v-model="password" :feedback="false" toggle-mask :input-props="{ autocomplete: 'current-password' }" style="width: 100%" :input-style="{ width: '100%' }" />
+            <label for="password">Password</label>
+          </FloatLabel>
+          <Button type="submit" label="Sign In" :loading="loading" severity="secondary" style="width: 100%" />
+        </form>
+        <!-- Email field is also useful for email-first passkey login. -->
+        <FloatLabel v-else>
+          <InputText id="email-passkey" v-model="email" type="email" autocomplete="username webauthn" style="width: 100%" />
+          <label for="email-passkey">Email (optional)</label>
         </FloatLabel>
-        <FloatLabel>
-          <Password id="password" v-model="password" :feedback="false" toggle-mask :input-props="{ autocomplete: 'current-password' }" style="width: 100%" :input-style="{ width: '100%' }" />
-          <label for="password">Password</label>
-        </FloatLabel>
-        <Button type="submit" label="Sign In" :loading="loading" style="width: 100%" />
-      </form>
+      </div>
     </template>
     <template #footer>
       <div v-if="!activated" style="text-align: center">
@@ -73,3 +122,18 @@ async function onSubmit() {
     </template>
   </Card>
 </template>
+
+<style scoped>
+.pw-toggle {
+  background: none;
+  border: none;
+  color: var(--p-text-muted-color);
+  font-size: 0.85rem;
+  cursor: pointer;
+  text-align: center;
+  padding: 0;
+}
+.pw-toggle:hover {
+  color: var(--p-primary-color);
+}
+</style>

@@ -162,46 +162,47 @@ func (s *Service) ListDetail(ctx context.Context, p authz.Principal) ([]Detail, 
 }
 
 // CreateRequest is the input to Create. Role "" defaults to "user".
-// Password is required (PasswordHash is computed inside the service);
-// the wire-side handler accepts a plaintext password and forwards it
-// here so the bcrypt cost lives in one place.
 type CreateRequest struct {
 	Email       string
 	DisplayName string
-	Password    string
 	TenantRole  string
 }
 
-// Create inserts a new user with must_change_password=true so the
-// recipient is forced to rotate the temporary password on first login.
-// Admin-gated (TenantUserManage). ErrConflict on duplicate email.
-func (s *Service) Create(ctx context.Context, p authz.Principal, req CreateRequest) (Detail, error) {
+// Create provisions a user with a server-generated temporary password and
+// must_change_password=true, so the recipient is forced to secure the account
+// (set a strong password or register a passkey) on first login. It returns the
+// one-time temp password for the admin to hand off; it is never stored in
+// plaintext or retrievable again. Admin-gated (TenantUserManage). ErrConflict
+// on duplicate email.
+func (s *Service) Create(ctx context.Context, p authz.Principal, req CreateRequest) (Detail, string, error) {
 	q := dbq.New(s.db.Pool())
 	if err := authz.Authorize(ctx, q, p, authz.TenantUserManage, uuid.Nil); err != nil {
-		return Detail{}, err
+		return Detail{}, "", err
 	}
 	if req.Email == "" {
-		return Detail{}, service.Detail(service.ErrInvalidInput, "email is required")
-	}
-	if req.Password == "" {
-		return Detail{}, service.Detail(service.ErrInvalidInput, "password is required")
+		return Detail{}, "", service.Detail(service.ErrInvalidInput, "email is required")
 	}
 	role := req.TenantRole
 	if role == "" {
 		role = "user"
 	}
 	if !validTenantRole(role) {
-		return Detail{}, service.Detail(service.ErrInvalidInput, "tenant_role must be user|manager|admin")
+		return Detail{}, "", service.Detail(service.ErrInvalidInput, "tenant_role must be user|manager|admin")
 	}
-	hash, err := auth.HashPassword(req.Password)
+	tempPassword, err := auth.GenerateTempPassword()
+	if err != nil {
+		s.logger.Error("users: generate temp password failed", zap.Error(err))
+		return Detail{}, "", err
+	}
+	hash, err := auth.HashPassword(tempPassword)
 	if err != nil {
 		s.logger.Error("users: hash password failed", zap.Error(err))
-		return Detail{}, err
+		return Detail{}, "", err
 	}
 	row, err := q.CreateUser(ctx, dbq.CreateUserParams{
 		Email:              req.Email,
 		DisplayName:        req.DisplayName,
-		PasswordHash:       hash,
+		PasswordHash:       pgtype.Text{String: hash, Valid: true},
 		TenantRole:         role,
 		MustChangePassword: true,
 	})
@@ -209,9 +210,9 @@ func (s *Service) Create(ctx context.Context, p authz.Principal, req CreateReque
 		// CreateUser surfaces a uniqueness violation here — translate to
 		// ErrConflict so the handler returns 409 without inspecting pg
 		// error codes.
-		return Detail{}, service.Detail(service.ErrConflict, "user already exists")
+		return Detail{}, "", service.Detail(service.ErrConflict, "user already exists")
 	}
-	return detailFromRow(row), nil
+	return detailFromRow(row), tempPassword, nil
 }
 
 // UpdateRole changes a user's tenant role. Admin-gated. Refuses the
