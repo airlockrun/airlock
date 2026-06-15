@@ -494,6 +494,13 @@ func (b *BuildService) prepareNewAgent(ctx context.Context, q *dbq.Queries, agen
 	if err := MergeBranch(repoPath, "build/init"); err != nil {
 		return "", "", fmt.Errorf("merge scaffold: %w", err)
 	}
+	// A re-build of an agent whose earlier build failed reuses the existing
+	// repo dir; clear any files a prior build/codegen left untracked so they
+	// don't survive into the docker build context (which is the working tree)
+	// and break the compile against the fresh scaffold.
+	if err := CleanWorktree(repoPath); err != nil {
+		return "", "", fmt.Errorf("clean worktree: %w", err)
+	}
 
 	schemaName := fmt.Sprintf("agent_%s", sanitizeUUID(agentID))
 	pw, err := b.createAgentSchema(ctx, agentID, schemaName)

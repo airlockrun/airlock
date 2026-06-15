@@ -584,6 +584,11 @@ func (s *Service) Upgrade(ctx context.Context, p authz.Principal, agentID uuid.U
 		return err
 	}
 	if agent.ImageRef == "" {
+		// The agent never built a working image (initial build failed), so
+		// there's nothing to upgrade against — route to a fresh build. Carry
+		// the user's instruction through as the codegen instruction;
+		// otherwise the build re-scaffolds with no instruction, skips codegen
+		// entirely, and just rebuilds the (stale/empty) tree.
 		go func() {
 			_ = s.builder.Build(context.Background(), builder.BuildInput{
 				AgentID:         agentID.String(),
@@ -592,6 +597,7 @@ func (s *Service) Upgrade(ctx context.Context, p authz.Principal, agentID uuid.U
 				UserID:          uuid.UUID(agent.UserID.Bytes).String(),
 				BuildProviderID: agent.BuildProviderID,
 				BuildModel:      agent.BuildModel,
+				Instructions:    req.Description,
 			})
 		}()
 		return nil
