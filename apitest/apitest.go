@@ -55,15 +55,15 @@ type packageState struct {
 func PackageMain(m interface{ Run() int }) int {
 	ctx := context.Background()
 	pkgOnce.Do(func() {
-		dsn, reset, releaseDB, dbOK := dbtest.Setup(ctx, db.RunMigrations, db.TestLockAndReset)
+		dsn, reset, releaseDB, dbOK := dbtest.Setup(ctx, db.RunMigrations)
 		if !dbOK {
-			pkgInitErr = errors.New("apitest: no postgres available (docker unreachable, TEST_DATABASE_URL unset)")
+			pkgInitErr = errors.New("apitest: no postgres available (docker unreachable)")
 			return
 		}
 		s3, releaseS3, s3OK := setupS3(ctx)
 		if !s3OK {
 			releaseDB()
-			pkgInitErr = errors.New("apitest: no s3/minio available (docker unreachable, TEST_S3_URL unset)")
+			pkgInitErr = errors.New("apitest: no s3/minio available (docker unreachable)")
 			return
 		}
 		pkgState = &packageState{
@@ -128,10 +128,8 @@ func Setup(t *testing.T) *Harness {
 	t.Helper()
 	SkipIfUnavailable(t)
 
-	if pkgState.dbReset != nil {
-		if err := pkgState.dbReset(); err != nil {
-			t.Fatalf("apitest: db reset: %v", err)
-		}
+	if err := pkgState.dbReset(); err != nil {
+		t.Fatalf("apitest: db reset: %v", err)
 	}
 
 	ctx := context.Background()

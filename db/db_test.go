@@ -8,12 +8,12 @@ import (
 	"github.com/airlockrun/airlock/db/dbtest"
 )
 
-// testURL is the DSN of the ephemeral (or TEST_DATABASE_URL) database
-// provisioned in TestMain. Empty when no database is available.
+// testURL is the DSN of the ephemeral database provisioned in TestMain.
+// Empty when no database is available.
 var testURL string
 
 func TestMain(m *testing.M) {
-	url, _, release, ok := dbtest.Setup(context.Background(), RunMigrations, TestLockAndReset)
+	url, _, release, ok := dbtest.Setup(context.Background(), RunMigrations)
 	if !ok {
 		os.Exit(m.Run()) // no DB available; integration tests skip individually
 	}
@@ -26,7 +26,7 @@ func TestMain(m *testing.M) {
 func testDatabaseURL(t *testing.T) string {
 	t.Helper()
 	if testURL == "" {
-		t.Skip("no test database (Docker unavailable and TEST_DATABASE_URL unset)")
+		t.Skip("no test database (Docker unavailable)")
 	}
 	return testURL
 }

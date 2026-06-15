@@ -24,11 +24,11 @@ import (
 var (
 	testDB    *db.DB
 	testURL   string
-	testReset func() error // nil on the external TEST_DATABASE_URL path
+	testReset func() error
 )
 
 func TestMain(m *testing.M) {
-	url, reset, release, ok := dbtest.Setup(context.Background(), db.RunMigrations, db.TestLockAndReset)
+	url, reset, release, ok := dbtest.Setup(context.Background(), db.RunMigrations)
 	if !ok {
 		os.Exit(m.Run()) // no DB available; integration tests skip individually
 	}
@@ -43,7 +43,7 @@ func TestMain(m *testing.M) {
 func skipIfNoDB(t *testing.T) {
 	t.Helper()
 	if testDB == nil {
-		t.Skip("no test database (Docker unavailable and TEST_DATABASE_URL unset)")
+		t.Skip("no test database (Docker unavailable)")
 	}
 	resetTestData(t)
 }
@@ -53,12 +53,9 @@ func skipIfNoDB(t *testing.T) {
 // rows like system_settings — making the serial api suite (no
 // t.Parallel) fully order-independent. Restore drops and recreates the
 // database, so the shared testDB pool must be closed and rebuilt around
-// it. No-op on the external TEST_DATABASE_URL path (no snapshot).
+// it.
 func resetTestData(t *testing.T) {
 	t.Helper()
-	if testReset == nil {
-		return
-	}
 	testDB.Close()
 	if err := testReset(); err != nil {
 		t.Fatalf("resetTestData: restore snapshot: %v", err)

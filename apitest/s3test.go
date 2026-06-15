@@ -6,7 +6,6 @@ package apitest
 import (
 	"context"
 	"fmt"
-	"os"
 
 	tcminio "github.com/testcontainers/testcontainers-go/modules/minio"
 )
@@ -24,10 +23,9 @@ type S3Params struct {
 	Region    string
 }
 
-// setupS3 boots a MinIO container (or uses TEST_S3_URL for an external
-// MinIO/S3 endpoint) and returns connection params plus a teardown.
-// ok=false when no S3 is available (no Docker and no TEST_S3_URL); the
-// caller should skip tests that need S3.
+// setupS3 boots a MinIO container (the production storage image) and returns
+// connection params plus a teardown. ok=false when no S3 is available (no
+// Docker); the caller should skip tests that need S3.
 //
 // The bucket is NOT created here — apitest.Setup creates it via
 // S3Client.EnsureBucket after constructing the client.
@@ -38,16 +36,6 @@ func setupS3(ctx context.Context) (params S3Params, release func(), ok bool) {
 		bucket    = "airlock-test"
 		region    = "us-east-1"
 	)
-
-	if ext := os.Getenv("TEST_S3_URL"); ext != "" {
-		return S3Params{
-			Endpoint:  ext,
-			AccessKey: envOr("TEST_S3_ACCESS_KEY", accessKey),
-			SecretKey: envOr("TEST_S3_SECRET_KEY", secretKey),
-			Bucket:    envOr("TEST_S3_BUCKET", bucket),
-			Region:    envOr("TEST_S3_REGION", region),
-		}, func() {}, true
-	}
 
 	ctr, err := tcminio.Run(ctx, minioImage,
 		tcminio.WithUsername(accessKey),
@@ -75,11 +63,4 @@ func setupS3(ctx context.Context) (params S3Params, release func(), ok bool) {
 		Bucket:    bucket,
 		Region:    region,
 	}, terminate, true
-}
-
-func envOr(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return fallback
 }
