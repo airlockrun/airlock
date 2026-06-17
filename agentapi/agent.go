@@ -457,25 +457,11 @@ func (h *Handler) Sync(w http.ResponseWriter, r *http.Request) {
 			writeJSONError(w, http.StatusBadRequest, "invalid auth_injection for MCP "+mcp.Slug)
 			return
 		}
-		srv, err := q.UpsertMCPServer(ctx, dbq.UpsertMCPServerParams{
-			AgentID:       pgAgentID,
-			Slug:          mcp.Slug,
-			Name:          mcp.Name,
-			Url:           mcp.URL,
-			AuthMode:      string(mcp.AuthMode),
-			AuthUrl:       mcp.AuthURL,
-			TokenUrl:      mcp.TokenURL,
-			Scopes:        scopes,
-			Access:        string(mcp.Access),
-			AuthInjection: authInjection,
-		})
-		if err != nil {
-			h.logger.Error("upsert MCP server failed", zap.Error(err))
-			writeJSONError(w, http.StatusInternalServerError, "failed to sync MCP servers")
-			return
-		}
-		// Record the agent's need for this MCP server (spec = declared
-		// template) and bind it to the agent's own resource.
+		// Record the agent's need (spec = declared template). The resource is
+		// created (owned by the configuring user) when a user configures
+		// credentials; a no-auth MCP server has no configure step, so it is
+		// auto-created + bound here. A bound resource has its declaration
+		// refreshed.
 		mcpSpec, _ := json.Marshal(map[string]any{
 			"name": mcp.Name, "url": mcp.URL, "auth_mode": string(mcp.AuthMode),
 			"auth_url": mcp.AuthURL, "token_url": mcp.TokenURL, "scopes": scopes,
@@ -490,12 +476,33 @@ func (h *Handler) Sync(w http.ResponseWriter, r *http.Request) {
 			writeJSONError(w, http.StatusInternalServerError, "failed to sync MCP servers")
 			return
 		}
-		if err := q.BindMCPServerNeed(ctx, dbq.BindMCPServerNeedParams{
-			AgentID: pgAgentID, Slug: mcp.Slug, ResourceID: srv.ID,
-		}); err != nil {
-			h.logger.Error("bind mcp need failed", zap.Error(err))
-			writeJSONError(w, http.StatusInternalServerError, "failed to sync MCP servers")
-			return
+		need, nerr := q.GetResourceNeed(ctx, dbq.GetResourceNeedParams{AgentID: pgAgentID, Type: "mcp_server", Slug: mcp.Slug})
+		bound := nerr == nil && need.BoundMcpID.Valid
+		if bound || mcp.AuthMode == agentsdk.MCPAuthNone || mcp.AuthMode == "" {
+			srv, err := q.UpsertMCPServer(ctx, dbq.UpsertMCPServerParams{
+				AgentID:       pgAgentID,
+				Slug:          mcp.Slug,
+				Name:          mcp.Name,
+				Url:           mcp.URL,
+				AuthMode:      string(mcp.AuthMode),
+				AuthUrl:       mcp.AuthURL,
+				TokenUrl:      mcp.TokenURL,
+				Scopes:        scopes,
+				Access:        string(mcp.Access),
+				AuthInjection: authInjection,
+			})
+			if err != nil {
+				h.logger.Error("upsert MCP server failed", zap.Error(err))
+				writeJSONError(w, http.StatusInternalServerError, "failed to sync MCP servers")
+				return
+			}
+			if !bound {
+				if err := q.BindMCPServerNeed(ctx, dbq.BindMCPServerNeedParams{AgentID: pgAgentID, Slug: mcp.Slug, ResourceID: srv.ID}); err != nil {
+					h.logger.Error("bind mcp need failed", zap.Error(err))
+					writeJSONError(w, http.StatusInternalServerError, "failed to sync MCP servers")
+					return
+				}
+			}
 		}
 		mcpSlugs[i] = mcp.Slug
 	}

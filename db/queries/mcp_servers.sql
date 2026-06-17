@@ -108,6 +108,10 @@ WHERE agent_id = @agent_id AND slug = @slug;
 -- name: GetMCPServerByIDForUpdate :one
 SELECT * FROM agent_mcp_servers WHERE id = @id FOR UPDATE;
 
+-- name: UpdateMCPServerOwnerByID :exec
+-- Set the resource owner to the principal who created it (the configuring user).
+UPDATE agent_mcp_servers SET owner_principal_id = @owner_principal_id WHERE id = @id;
+
 -- name: UpdateMCPServerCredentialsByID :exec
 UPDATE agent_mcp_servers SET
     access_token_ref = @access_token_ref,

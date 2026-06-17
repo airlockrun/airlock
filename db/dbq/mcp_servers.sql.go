@@ -551,6 +551,21 @@ func (q *Queries) UpdateMCPServerOAuthApp(ctx context.Context, arg UpdateMCPServ
 	return err
 }
 
+const updateMCPServerOwnerByID = `-- name: UpdateMCPServerOwnerByID :exec
+UPDATE agent_mcp_servers SET owner_principal_id = $1 WHERE id = $2
+`
+
+type UpdateMCPServerOwnerByIDParams struct {
+	OwnerPrincipalID pgtype.UUID `json:"owner_principal_id"`
+	ID               pgtype.UUID `json:"id"`
+}
+
+// Set the resource owner to the principal who created it (the configuring user).
+func (q *Queries) UpdateMCPServerOwnerByID(ctx context.Context, arg UpdateMCPServerOwnerByIDParams) error {
+	_, err := q.db.Exec(ctx, updateMCPServerOwnerByID, arg.OwnerPrincipalID, arg.ID)
+	return err
+}
+
 const updateMCPServerToolSchemas = `-- name: UpdateMCPServerToolSchemas :exec
 UPDATE agent_mcp_servers SET
     tool_schemas = $1,
