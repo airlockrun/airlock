@@ -17,6 +17,7 @@ import (
 	"github.com/airlockrun/airlock/execproxy"
 	"github.com/airlockrun/airlock/secrets"
 	"github.com/airlockrun/airlock/service"
+	"github.com/airlockrun/airlock/service/needs"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -96,48 +97,11 @@ func (s *Service) List(ctx context.Context, p authz.Principal, agentID uuid.UUID
 
 // ensureExecEndpoint makes sure a configured exec-endpoint resource exists for
 // the agent's declared need, creating it — owned by the configuring principal —
-// and binding it on first configure. Returns ErrNotFound if the agent never
-// declared the slug as a need.
+// and binding it on first configure (idempotent if already bound). The
+// provisioning is the shared needs.CreateForNeed step.
 func (s *Service) ensureExecEndpoint(ctx context.Context, p authz.Principal, agentID uuid.UUID, slug string) error {
-	pgAgent := pgtype.UUID{Bytes: agentID, Valid: true}
-	need, err := s.queries.GetResourceNeed(ctx, dbq.GetResourceNeedParams{
-		AgentID: pgAgent, Type: "exec_endpoint", Slug: slug,
-	})
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return service.Detail(service.ErrNotFound, "exec endpoint not declared by the agent")
-		}
-		return err
-	}
-	if need.BoundExecID.Valid {
-		return nil // resource already created + bound
-	}
-	var spec struct {
-		LLMHint string `json:"llm_hint"`
-		Access  string `json:"access"`
-	}
-	_ = json.Unmarshal(need.Spec, &spec)
-	access := spec.Access
-	if access == "" {
-		access = "admin"
-	}
-	if err := s.queries.UpsertExecEndpointDeclaration(ctx, dbq.UpsertExecEndpointDeclarationParams{
-		AgentID: pgAgent, Slug: slug, Description: need.Description, LlmHint: spec.LLMHint, Access: access,
-	}); err != nil {
-		return err
-	}
-	ep, err := s.queries.GetExecEndpointBySlug(ctx, dbq.GetExecEndpointBySlugParams{AgentID: pgAgent, Slug: slug})
-	if err != nil {
-		return err
-	}
-	if p.UserID != uuid.Nil {
-		if err := s.queries.UpdateExecEndpointOwnerByID(ctx, dbq.UpdateExecEndpointOwnerByIDParams{
-			ID: ep.ID, OwnerPrincipalID: pgtype.UUID{Bytes: p.UserID, Valid: true},
-		}); err != nil {
-			return err
-		}
-	}
-	return s.queries.BindExecEndpointNeed(ctx, dbq.BindExecEndpointNeedParams{AgentID: pgAgent, Slug: slug, ResourceID: ep.ID})
+	_, err := needs.CreateForNeed(ctx, s.queries, p, agentID, "exec_endpoint", slug)
+	return err
 }
 
 // Configure persists host/port/user for a declared endpoint and generates a
