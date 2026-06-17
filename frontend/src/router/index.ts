@@ -57,6 +57,7 @@ const router = createRouter({
         { path: 'agents/:id/runs/:runId', name: 'run-detail', component: () => import('@/views/RunDetailView.vue') },
         { path: 'agents/:id/builds/:buildId', name: 'build-detail', component: () => import('@/views/BuildDetailView.vue') },
         { path: 'providers', name: 'providers', component: () => import('@/views/ProvidersView.vue'), meta: { requires: 'tenant.provider.manage' } },
+        { path: 'models', name: 'models', component: () => import('@/views/ModelsView.vue'), meta: { requires: 'tenant.provider.manage' } },
         { path: 'bridges', name: 'bridges', component: () => import('@/views/BridgesView.vue') },
         { path: 'users', name: 'users', component: () => import('@/views/UsersView.vue'), meta: { requires: 'tenant.user.manage' } },
         { path: 'settings', name: 'settings', component: () => import('@/views/SettingsView.vue') },
