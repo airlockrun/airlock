@@ -67,6 +67,19 @@ func TestUpdateModelConfig_AtomicReplaceAndSlotAssignment(t *testing.T) {
 	}
 	prov := provUUID.String()
 
+	// Models are deny-by-default: a non-admin assigner may only set a model
+	// that is a system default or granted to their grantee set. Grant the
+	// models this PUT assigns to the built-in `user` group so the assignment
+	// is allowed (this test's caller is tenant_role=user).
+	for _, m := range []string{"gpt-4o", "claude-vision", "gpt-4o-mini"} {
+		if _, err := testDB.Pool().Exec(ctx,
+			`INSERT INTO model_grants (provider_id, model, grantee_id)
+			 VALUES ($1, $2, '00000000-0000-0000-0000-0000000000a3')`,
+			provUUID, m); err != nil {
+			t.Fatalf("grant model %s: %v", m, err)
+		}
+	}
+
 	// Declare a slot so the PUT has a known slug to bind.
 	if err := q.UpsertAgentModelSlot(ctx, dbq.UpsertAgentModelSlotParams{
 		AgentID:    toPgUUID(agentID),
