@@ -76,11 +76,13 @@ func requestJSONAs(t *testing.T, method, path string, userID uuid.UUID, role str
 	return req
 }
 
-// registerTestConnection inserts a connection for the agent.
+// registerTestConnection records a connection need and a resource bound to it,
+// mirroring the real model (sync records the need; a configure creates + binds
+// the resource). Credential ops resolve the bound resource via the need.
 func registerTestConnection(t *testing.T, agentID uuid.UUID, slug, authMode string) {
 	t.Helper()
 	q := dbq.New(testDB.Pool())
-	_, err := q.UpsertConnection(context.Background(), dbq.UpsertConnectionParams{
+	conn, err := q.UpsertConnection(context.Background(), dbq.UpsertConnectionParams{
 		AgentID:       toPgUUID(agentID),
 		Slug:          slug,
 		Name:          "Test " + slug,
@@ -96,6 +98,18 @@ func registerTestConnection(t *testing.T, agentID uuid.UUID, slug, authMode stri
 	})
 	if err != nil {
 		t.Fatalf("upsert connection: %v", err)
+	}
+	if err := q.UpsertResourceNeed(context.Background(), dbq.UpsertResourceNeedParams{
+		AgentID: toPgUUID(agentID), Type: "connection", Slug: slug, Description: "Test " + slug,
+		SetupInstructions: "", ExpectedUrl: "https://api.example.com", ExpectedScopes: "read write",
+		Spec: []byte("{}"),
+	}); err != nil {
+		t.Fatalf("upsert connection need: %v", err)
+	}
+	if err := q.BindConnectionNeed(context.Background(), dbq.BindConnectionNeedParams{
+		AgentID: toPgUUID(agentID), Slug: slug, ResourceID: conn.ID,
+	}); err != nil {
+		t.Fatalf("bind connection need: %v", err)
 	}
 }
 

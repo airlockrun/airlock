@@ -122,9 +122,11 @@ type BridgePartsDeliverer interface {
 	SendParts(ctx context.Context, bridgeID uuid.UUID, externalID string, parts []agentsdk.DisplayPart) error
 }
 
-// recordConnectionNeed upserts the agent's connection need (carrying the
-// declared template as spec) and binds it to resourceID.
-func (h *Handler) recordConnectionNeed(ctx context.Context, q *dbq.Queries, agentID uuid.UUID, slug string, def agentsdk.ConnectionDef, scopes string, authInjection []byte, resourceID pgtype.UUID) error {
+// recordConnectionNeed upserts the agent's connection need, carrying the full
+// declared template as spec so the resource can be instantiated from it on
+// configure. It does not create or bind a resource — that happens when a user
+// configures credentials.
+func (h *Handler) recordConnectionNeed(ctx context.Context, q *dbq.Queries, agentID uuid.UUID, slug string, def agentsdk.ConnectionDef, scopes string, authInjection, authParams, headers []byte) error {
 	spec, err := json.Marshal(map[string]any{
 		"name":               def.Name,
 		"auth_mode":          string(def.AuthMode),
@@ -133,6 +135,8 @@ func (h *Handler) recordConnectionNeed(ctx context.Context, q *dbq.Queries, agen
 		"base_url":           def.BaseURL,
 		"scopes":             scopes,
 		"auth_injection":     json.RawMessage(authInjection),
+		"auth_params":        json.RawMessage(authParams),
+		"headers":            json.RawMessage(headers),
 		"llm_hint":           def.LLMHint,
 		"access":             string(def.Access),
 		"setup_instructions": def.SetupInstructions,
@@ -140,7 +144,7 @@ func (h *Handler) recordConnectionNeed(ctx context.Context, q *dbq.Queries, agen
 	if err != nil {
 		return err
 	}
-	if err := q.UpsertResourceNeed(ctx, dbq.UpsertResourceNeedParams{
+	return q.UpsertResourceNeed(ctx, dbq.UpsertResourceNeedParams{
 		AgentID:           toPgUUID(agentID),
 		Type:              "connection",
 		Slug:              slug,
@@ -149,13 +153,6 @@ func (h *Handler) recordConnectionNeed(ctx context.Context, q *dbq.Queries, agen
 		ExpectedUrl:       def.BaseURL,
 		ExpectedScopes:    scopes,
 		Spec:              spec,
-	}); err != nil {
-		return err
-	}
-	return q.BindConnectionNeed(ctx, dbq.BindConnectionNeedParams{
-		AgentID:    toPgUUID(agentID),
-		Slug:       slug,
-		ResourceID: resourceID,
 	})
 }
 
@@ -520,8 +517,10 @@ func (h *Handler) Sync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Connections: declared in the sync batch as needs (and, for now, bound to
-	// the agent's own auto-upserted resource).
+	// Connections: record the agent's need. The resource is created (owned by
+	// the configuring user) when a user first sets credentials — sync never
+	// auto-creates it. If one is already bound, refresh its declaration fields
+	// (UpsertConnection preserves the stored credentials).
 	connSlugs := make([]string, len(req.Connections))
 	for i, c := range req.Connections {
 		authInjection, err := json.Marshal(c.AuthInjection)
@@ -544,21 +543,36 @@ func (h *Handler) Sync(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		scopes := strings.Join(c.Scopes, ",")
-		conn, err := q.UpsertConnection(ctx, dbq.UpsertConnectionParams{
-			AgentID: pgAgentID, Slug: c.Slug, Name: c.Name, Description: c.Description, LlmHint: c.LLMHint,
-			AuthMode: string(c.AuthMode), AuthUrl: c.AuthURL, TokenUrl: c.TokenURL, BaseUrl: c.BaseURL,
-			Scopes: scopes, AuthInjection: authInjection, SetupInstructions: c.SetupInstructions,
-			Config: []byte("{}"), AuthParams: authParams, Headers: headers, Access: string(c.Access),
-		})
-		if err != nil {
-			h.logger.Error("upsert connection failed", zap.Error(err))
-			writeJSONError(w, http.StatusInternalServerError, "failed to sync connections")
-			return
-		}
-		if err := h.recordConnectionNeed(ctx, q, agentID, c.Slug, c, scopes, authInjection, conn.ID); err != nil {
+		if err := h.recordConnectionNeed(ctx, q, agentID, c.Slug, c, scopes, authInjection, authParams, headers); err != nil {
 			h.logger.Error("record connection need failed", zap.Error(err))
 			writeJSONError(w, http.StatusInternalServerError, "failed to sync connections")
 			return
+		}
+		need, nerr := q.GetResourceNeed(ctx, dbq.GetResourceNeedParams{AgentID: pgAgentID, Type: "connection", Slug: c.Slug})
+		bound := nerr == nil && need.BoundConnectionID.Valid
+		// A bound resource gets its declaration refreshed; a no-auth connection
+		// has no configure step (no credentials to own), so it is auto-created +
+		// bound here. Credential-bearing connections wait for a user to
+		// configure, which creates the resource owned by that user.
+		if bound || c.AuthMode == agentsdk.ConnectionAuthNone {
+			conn, err := q.UpsertConnection(ctx, dbq.UpsertConnectionParams{
+				AgentID: pgAgentID, Slug: c.Slug, Name: c.Name, Description: c.Description, LlmHint: c.LLMHint,
+				AuthMode: string(c.AuthMode), AuthUrl: c.AuthURL, TokenUrl: c.TokenURL, BaseUrl: c.BaseURL,
+				Scopes: scopes, AuthInjection: authInjection, SetupInstructions: c.SetupInstructions,
+				Config: []byte("{}"), AuthParams: authParams, Headers: headers, Access: string(c.Access),
+			})
+			if err != nil {
+				h.logger.Error("upsert connection failed", zap.Error(err))
+				writeJSONError(w, http.StatusInternalServerError, "failed to sync connections")
+				return
+			}
+			if !bound {
+				if err := q.BindConnectionNeed(ctx, dbq.BindConnectionNeedParams{AgentID: pgAgentID, Slug: c.Slug, ResourceID: conn.ID}); err != nil {
+					h.logger.Error("bind no-auth connection failed", zap.Error(err))
+					writeJSONError(w, http.StatusInternalServerError, "failed to sync connections")
+					return
+				}
+			}
 		}
 		connSlugs[i] = c.Slug
 	}

@@ -198,10 +198,66 @@ type SetupCounts struct {
 
 // --- connections ---
 
+// ensureBoundConnection makes sure a connection resource exists for the agent's
+// declared need, creating it — owned by the configuring principal — and binding
+// it on first credential configuration. Returns ErrNotFound if the agent never
+// declared the slug as a need.
+func (s *Service) ensureBoundConnection(ctx context.Context, q *dbq.Queries, p authz.Principal, agentID uuid.UUID, slug string) error {
+	need, err := q.GetResourceNeed(ctx, dbq.GetResourceNeedParams{AgentID: toPg(agentID), Type: "connection", Slug: slug})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return service.Detail(service.ErrNotFound, "connection not declared by the agent")
+		}
+		return err
+	}
+	if need.BoundConnectionID.Valid {
+		return nil
+	}
+	var spec struct {
+		Name              string          `json:"name"`
+		AuthMode          string          `json:"auth_mode"`
+		AuthURL           string          `json:"auth_url"`
+		TokenURL          string          `json:"token_url"`
+		BaseURL           string          `json:"base_url"`
+		Scopes            string          `json:"scopes"`
+		AuthInjection     json.RawMessage `json:"auth_injection"`
+		AuthParams        json.RawMessage `json:"auth_params"`
+		Headers           json.RawMessage `json:"headers"`
+		LLMHint           string          `json:"llm_hint"`
+		Access            string          `json:"access"`
+		SetupInstructions string          `json:"setup_instructions"`
+	}
+	_ = json.Unmarshal(need.Spec, &spec)
+	jsonOr := func(b json.RawMessage) []byte {
+		if len(b) == 0 {
+			return []byte("{}")
+		}
+		return b
+	}
+	conn, err := q.UpsertConnection(ctx, dbq.UpsertConnectionParams{
+		AgentID: toPg(agentID), Slug: slug, Name: spec.Name, Description: need.Description, LlmHint: spec.LLMHint,
+		AuthMode: spec.AuthMode, AuthUrl: spec.AuthURL, TokenUrl: spec.TokenURL, BaseUrl: spec.BaseURL,
+		Scopes: spec.Scopes, AuthInjection: jsonOr(spec.AuthInjection), SetupInstructions: spec.SetupInstructions,
+		Config: []byte("{}"), AuthParams: jsonOr(spec.AuthParams), Headers: jsonOr(spec.Headers), Access: spec.Access,
+	})
+	if err != nil {
+		return err
+	}
+	if p.UserID != uuid.Nil {
+		if err := q.UpdateConnectionOwnerByID(ctx, dbq.UpdateConnectionOwnerByIDParams{ID: conn.ID, OwnerPrincipalID: toPg(p.UserID)}); err != nil {
+			return err
+		}
+	}
+	return q.BindConnectionNeed(ctx, dbq.BindConnectionNeedParams{AgentID: toPg(agentID), Slug: slug, ResourceID: conn.ID})
+}
+
 // SetOAuthApp persists encrypted client_id/client_secret for a connection.
 func (s *Service) SetOAuthApp(ctx context.Context, p authz.Principal, agentID uuid.UUID, slug, clientID, clientSecret string) (Status, error) {
 	q := dbq.New(s.db.Pool())
 	if err := authz.Authorize(ctx, q, p, authz.AgentConnections, agentID); err != nil {
+		return Status{}, err
+	}
+	if err := s.ensureBoundConnection(ctx, q, p, agentID, slug); err != nil {
 		return Status{}, err
 	}
 	conn, err := q.GetConnectionForOAuth(ctx, dbq.GetConnectionForOAuthParams{AgentID: toPg(agentID), Slug: slug})
@@ -449,6 +505,9 @@ func (s *Service) refreshMCPAfterAuth(ctx context.Context, agentID uuid.UUID, sl
 func (s *Service) SetAPIKey(ctx context.Context, p authz.Principal, agentID uuid.UUID, slug, apiKey string) (Status, error) {
 	q := dbq.New(s.db.Pool())
 	if err := authz.Authorize(ctx, q, p, authz.AgentConnections, agentID); err != nil {
+		return Status{}, err
+	}
+	if err := s.ensureBoundConnection(ctx, q, p, agentID, slug); err != nil {
 		return Status{}, err
 	}
 	conn, err := q.GetConnectionBySlug(ctx, dbq.GetConnectionBySlugParams{AgentID: toPg(agentID), Slug: slug})
