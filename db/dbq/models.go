@@ -141,6 +141,7 @@ type AgentExecEndpoint struct {
 	LastUsedAt       pgtype.Timestamptz `json:"last_used_at"`
 	CreatedAt        pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
+	OwnerPrincipalID pgtype.UUID        `json:"owner_principal_id"`
 }
 
 type AgentMcpServer struct {
@@ -166,6 +167,7 @@ type AgentMcpServer struct {
 	CreatedAt            pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt            pgtype.Timestamptz `json:"updated_at"`
 	ServerInstructions   string             `json:"server_instructions"`
+	OwnerPrincipalID     pgtype.UUID        `json:"owner_principal_id"`
 }
 
 type AgentMember struct {
@@ -197,6 +199,22 @@ type AgentModelSlot struct {
 	Description        string      `json:"description"`
 	AssignedProviderID pgtype.UUID `json:"assigned_provider_id"`
 	AssignedModel      string      `json:"assigned_model"`
+}
+
+type AgentResourceNeed struct {
+	ID                pgtype.UUID        `json:"id"`
+	AgentID           pgtype.UUID        `json:"agent_id"`
+	Type              string             `json:"type"`
+	Slug              string             `json:"slug"`
+	Description       string             `json:"description"`
+	SetupInstructions string             `json:"setup_instructions"`
+	ExpectedUrl       string             `json:"expected_url"`
+	ExpectedScopes    string             `json:"expected_scopes"`
+	Required          bool               `json:"required"`
+	BoundConnectionID pgtype.UUID        `json:"bound_connection_id"`
+	BoundMcpID        pgtype.UUID        `json:"bound_mcp_id"`
+	BoundExecID       pgtype.UUID        `json:"bound_exec_id"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
 }
 
 type AgentRoute struct {
@@ -345,6 +363,7 @@ type Connection struct {
 	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
 	AuthParams        []byte             `json:"auth_params"`
 	Headers           []byte             `json:"headers"`
+	OwnerPrincipalID  pgtype.UUID        `json:"owner_principal_id"`
 }
 
 type GitCredential struct {
