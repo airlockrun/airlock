@@ -3,6 +3,7 @@ package agentapi
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"net/http"
 
@@ -57,6 +58,34 @@ func (h *Handler) UpsertExecEndpoint(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusInternalServerError, "failed to upsert exec endpoint")
 		return
 	}
+
+	// Record the agent's need for this exec endpoint (spec = declared
+	// template) and bind it to the agent's own resource.
+	ep, err := q.GetExecEndpointBySlug(r.Context(), dbq.GetExecEndpointBySlugParams{
+		AgentID: toPgUUID(agentID),
+		Slug:    slug,
+	})
+	if err != nil {
+		h.logger.Error("get exec endpoint after upsert failed", zap.Error(err))
+		writeJSONError(w, http.StatusInternalServerError, "failed to upsert exec endpoint")
+		return
+	}
+	spec, _ := json.Marshal(map[string]any{"llm_hint": def.LLMHint, "access": access})
+	if err := q.UpsertResourceNeed(r.Context(), dbq.UpsertResourceNeedParams{
+		AgentID: toPgUUID(agentID), Type: "exec_endpoint", Slug: slug,
+		Description: def.Description, SetupInstructions: "", ExpectedUrl: "", ExpectedScopes: "", Spec: spec,
+	}); err != nil {
+		h.logger.Error("record exec need failed", zap.Error(err))
+		writeJSONError(w, http.StatusInternalServerError, "failed to upsert exec endpoint")
+		return
+	}
+	if err := q.BindExecEndpointNeed(r.Context(), dbq.BindExecEndpointNeedParams{
+		AgentID: toPgUUID(agentID), Slug: slug, ResourceID: ep.ID,
+	}); err != nil {
+		h.logger.Error("bind exec need failed", zap.Error(err))
+		writeJSONError(w, http.StatusInternalServerError, "failed to upsert exec endpoint")
+		return
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -88,16 +117,18 @@ func (h *Handler) AgentExec(w http.ResponseWriter, r *http.Request) {
 	}
 
 	q := dbq.New(h.db.Pool())
-	ep, err := q.GetExecEndpointBySlug(r.Context(), dbq.GetExecEndpointBySlugParams{
+	// Resolve the agent's exec_endpoint need to its bound resource; the SSH
+	// dialer reads host/keypair off the resolved row.
+	ep, err := q.ResolveBoundExecEndpoint(r.Context(), dbq.ResolveBoundExecEndpointParams{
 		AgentID: toPgUUID(agentID),
 		Slug:    slug,
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			writeJSONError(w, http.StatusNotFound, "exec endpoint not configured")
+			writeJSONError(w, http.StatusNotFound, "exec endpoint not bound")
 			return
 		}
-		h.logger.Error("get exec endpoint failed", zap.Error(err))
+		h.logger.Error("resolve exec endpoint failed", zap.Error(err))
 		writeJSONError(w, http.StatusInternalServerError, "failed to load exec endpoint")
 		return
 	}

@@ -33,16 +33,19 @@ func (h *Handler) ServiceProxy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	q := dbq.New(h.db.Pool())
-	conn, err := q.GetConnectionBySlug(r.Context(), dbq.GetConnectionBySlugParams{
+	// Resolve the agent's connection need to its bound resource. The proxy and
+	// the credential refresh below key on the resolved resource's own id, so
+	// one connection can back many agents' bindings.
+	conn, err := q.ResolveBoundConnection(r.Context(), dbq.ResolveBoundConnectionParams{
 		AgentID: toPgUUID(agentID),
 		Slug:    slug,
 	})
 	if err != nil {
 		if err == pgx.ErrNoRows {
-			writeJSONError(w, http.StatusNotFound, "connection not found")
+			writeJSONError(w, http.StatusNotFound, "connection not bound")
 			return
 		}
-		h.logger.Error("get connection failed", zap.Error(err))
+		h.logger.Error("resolve connection failed", zap.Error(err))
 		writeJSONError(w, http.StatusInternalServerError, "failed to get connection")
 		return
 	}
@@ -61,7 +64,7 @@ func (h *Handler) ServiceProxy(w http.ResponseWriter, r *http.Request) {
 	// carries only slug/connName, not a raw OAuth URL.
 	var creds string
 	if !noAuth {
-		token, err := oauth.EnsureConnectionToken(r.Context(), h.db, h.encryptor, h.oauthClient, h.logger, toPgUUID(agentID), slug, time.Now())
+		token, err := oauth.EnsureConnectionToken(r.Context(), h.db, h.encryptor, h.oauthClient, h.logger, conn.ID, time.Now())
 		switch {
 		case errors.Is(err, oauth.ErrNeedsReauth):
 			writeJSON(w, http.StatusPaymentRequired, map[string]string{

@@ -129,7 +129,7 @@ func resolveToken(
 // concurrent callers serialize and see the freshly written token instead of
 // double-refreshing. Returns ErrNeedsReauth when re-authorization is required;
 // a wrapped error for transient refresh failures.
-func EnsureConnectionToken(ctx context.Context, database *db.DB, enc secrets.Store, client *Client, logger *zap.Logger, agentID pgtype.UUID, slug string, refreshIfBefore time.Time) (string, error) {
+func EnsureConnectionToken(ctx context.Context, database *db.DB, enc secrets.Store, client *Client, logger *zap.Logger, connectionID pgtype.UUID, refreshIfBefore time.Time) (string, error) {
 	tx, err := database.Pool().Begin(ctx)
 	if err != nil {
 		return "", fmt.Errorf("begin tx: %w", err)
@@ -137,7 +137,7 @@ func EnsureConnectionToken(ctx context.Context, database *db.DB, enc secrets.Sto
 	defer tx.Rollback(ctx)
 
 	q := dbq.New(tx)
-	conn, err := q.GetConnectionBySlugForUpdate(ctx, dbq.GetConnectionBySlugForUpdateParams{AgentID: agentID, Slug: slug})
+	conn, err := q.GetConnectionByIDForUpdate(ctx, connectionID)
 	if err != nil {
 		return "", err
 	}
@@ -153,12 +153,12 @@ func EnsureConnectionToken(ctx context.Context, database *db.DB, enc secrets.Sto
 		expiresAt:    conn.TokenExpiresAt,
 	}, refreshIfBefore,
 		func(ctx context.Context, accessRef string, expiresAt pgtype.Timestamptz, refreshRef string) error {
-			return q.UpdateConnectionCredentials(ctx, dbq.UpdateConnectionCredentialsParams{
-				AgentID: agentID, Slug: slug, AccessTokenRef: accessRef, TokenExpiresAt: expiresAt, RefreshToken: refreshRef,
+			return q.UpdateConnectionCredentialsByID(ctx, dbq.UpdateConnectionCredentialsByIDParams{
+				ID: connectionID, AccessTokenRef: accessRef, TokenExpiresAt: expiresAt, RefreshToken: refreshRef,
 			})
 		},
 		func(ctx context.Context) error {
-			return q.ClearConnectionCredentials(ctx, dbq.ClearConnectionCredentialsParams{AgentID: agentID, Slug: slug})
+			return q.ClearConnectionCredentialsByID(ctx, connectionID)
 		},
 	)
 	if persist {
@@ -171,7 +171,7 @@ func EnsureConnectionToken(ctx context.Context, database *db.DB, enc secrets.Sto
 
 // EnsureMCPServerToken is the MCP-server analogue of EnsureConnectionToken,
 // operating on the agent_mcp_servers table and the "mcp" secret namespace.
-func EnsureMCPServerToken(ctx context.Context, database *db.DB, enc secrets.Store, client *Client, logger *zap.Logger, agentID pgtype.UUID, slug string, refreshIfBefore time.Time) (string, error) {
+func EnsureMCPServerToken(ctx context.Context, database *db.DB, enc secrets.Store, client *Client, logger *zap.Logger, serverID pgtype.UUID, refreshIfBefore time.Time) (string, error) {
 	tx, err := database.Pool().Begin(ctx)
 	if err != nil {
 		return "", fmt.Errorf("begin tx: %w", err)
@@ -179,7 +179,7 @@ func EnsureMCPServerToken(ctx context.Context, database *db.DB, enc secrets.Stor
 	defer tx.Rollback(ctx)
 
 	q := dbq.New(tx)
-	srv, err := q.GetMCPServerBySlugForUpdate(ctx, dbq.GetMCPServerBySlugForUpdateParams{AgentID: agentID, Slug: slug})
+	srv, err := q.GetMCPServerByIDForUpdate(ctx, serverID)
 	if err != nil {
 		return "", err
 	}
@@ -195,12 +195,12 @@ func EnsureMCPServerToken(ctx context.Context, database *db.DB, enc secrets.Stor
 		expiresAt:    srv.TokenExpiresAt,
 	}, refreshIfBefore,
 		func(ctx context.Context, accessRef string, expiresAt pgtype.Timestamptz, refreshRef string) error {
-			return q.UpdateMCPServerCredentials(ctx, dbq.UpdateMCPServerCredentialsParams{
-				AgentID: agentID, Slug: slug, AccessTokenRef: accessRef, TokenExpiresAt: expiresAt, RefreshToken: refreshRef,
+			return q.UpdateMCPServerCredentialsByID(ctx, dbq.UpdateMCPServerCredentialsByIDParams{
+				ID: serverID, AccessTokenRef: accessRef, TokenExpiresAt: expiresAt, RefreshToken: refreshRef,
 			})
 		},
 		func(ctx context.Context) error {
-			return q.ClearMCPServerCredentials(ctx, dbq.ClearMCPServerCredentialsParams{AgentID: agentID, Slug: slug})
+			return q.ClearMCPServerCredentialsByID(ctx, serverID)
 		},
 	)
 	if persist {

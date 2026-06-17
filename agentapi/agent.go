@@ -163,8 +163,9 @@ func (h *Handler) UpsertConnection(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	scopes := strings.Join(def.Scopes, ",")
 	q := dbq.New(h.db.Pool())
-	_, err = q.UpsertConnection(r.Context(), dbq.UpsertConnectionParams{
+	conn, err := q.UpsertConnection(r.Context(), dbq.UpsertConnectionParams{
 		AgentID:           toPgUUID(agentID),
 		Slug:              slug,
 		Name:              def.Name,
@@ -174,7 +175,7 @@ func (h *Handler) UpsertConnection(w http.ResponseWriter, r *http.Request) {
 		AuthUrl:           def.AuthURL,
 		TokenUrl:          def.TokenURL,
 		BaseUrl:           def.BaseURL,
-		Scopes:            strings.Join(def.Scopes, ","),
+		Scopes:            scopes,
 		AuthInjection:     authInjection,
 		SetupInstructions: def.SetupInstructions,
 		Config:            []byte("{}"),
@@ -188,7 +189,53 @@ func (h *Handler) UpsertConnection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The agent declaring a connection is, in the resource model, an agent
+	// declaring a NEED. Record it (spec = the declared template) and bind it to
+	// the agent's own just-upserted resource so single-agent setups resolve.
+	if err := h.recordConnectionNeed(r.Context(), q, agentID, slug, def, scopes, authInjection, conn.ID); err != nil {
+		h.logger.Error("record connection need failed", zap.Error(err))
+		writeJSONError(w, http.StatusInternalServerError, "failed to record connection need")
+		return
+	}
+
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// recordConnectionNeed upserts the agent's connection need (carrying the
+// declared template as spec) and binds it to resourceID.
+func (h *Handler) recordConnectionNeed(ctx context.Context, q *dbq.Queries, agentID uuid.UUID, slug string, def agentsdk.ConnectionDef, scopes string, authInjection []byte, resourceID pgtype.UUID) error {
+	spec, err := json.Marshal(map[string]any{
+		"name":               def.Name,
+		"auth_mode":          string(def.AuthMode),
+		"auth_url":           def.AuthURL,
+		"token_url":          def.TokenURL,
+		"base_url":           def.BaseURL,
+		"scopes":             scopes,
+		"auth_injection":     json.RawMessage(authInjection),
+		"llm_hint":           def.LLMHint,
+		"access":             string(def.Access),
+		"setup_instructions": def.SetupInstructions,
+	})
+	if err != nil {
+		return err
+	}
+	if err := q.UpsertResourceNeed(ctx, dbq.UpsertResourceNeedParams{
+		AgentID:           toPgUUID(agentID),
+		Type:              "connection",
+		Slug:              slug,
+		Description:       def.Description,
+		SetupInstructions: def.SetupInstructions,
+		ExpectedUrl:       def.BaseURL,
+		ExpectedScopes:    scopes,
+		Spec:              spec,
+	}); err != nil {
+		return err
+	}
+	return q.BindConnectionNeed(ctx, dbq.BindConnectionNeedParams{
+		AgentID:    toPgUUID(agentID),
+		Slug:       slug,
+		ResourceID: resourceID,
+	})
 }
 
 // CreateRun handles POST /api/agent/run/create.
@@ -492,7 +539,7 @@ func (h *Handler) Sync(w http.ResponseWriter, r *http.Request) {
 			writeJSONError(w, http.StatusBadRequest, "invalid auth_injection for MCP "+mcp.Slug)
 			return
 		}
-		if _, err := q.UpsertMCPServer(ctx, dbq.UpsertMCPServerParams{
+		srv, err := q.UpsertMCPServer(ctx, dbq.UpsertMCPServerParams{
 			AgentID:       pgAgentID,
 			Slug:          mcp.Slug,
 			Name:          mcp.Name,
@@ -503,12 +550,45 @@ func (h *Handler) Sync(w http.ResponseWriter, r *http.Request) {
 			Scopes:        scopes,
 			Access:        string(mcp.Access),
 			AuthInjection: authInjection,
-		}); err != nil {
+		})
+		if err != nil {
 			h.logger.Error("upsert MCP server failed", zap.Error(err))
 			writeJSONError(w, http.StatusInternalServerError, "failed to sync MCP servers")
 			return
 		}
+		// Record the agent's need for this MCP server (spec = declared
+		// template) and bind it to the agent's own resource.
+		mcpSpec, _ := json.Marshal(map[string]any{
+			"name": mcp.Name, "url": mcp.URL, "auth_mode": string(mcp.AuthMode),
+			"auth_url": mcp.AuthURL, "token_url": mcp.TokenURL, "scopes": scopes,
+			"auth_injection": json.RawMessage(authInjection), "access": string(mcp.Access),
+		})
+		if err := q.UpsertResourceNeed(ctx, dbq.UpsertResourceNeedParams{
+			AgentID: pgAgentID, Type: "mcp_server", Slug: mcp.Slug,
+			Description: mcp.Name, SetupInstructions: "", ExpectedUrl: mcp.URL,
+			ExpectedScopes: scopes, Spec: mcpSpec,
+		}); err != nil {
+			h.logger.Error("record mcp need failed", zap.Error(err))
+			writeJSONError(w, http.StatusInternalServerError, "failed to sync MCP servers")
+			return
+		}
+		if err := q.BindMCPServerNeed(ctx, dbq.BindMCPServerNeedParams{
+			AgentID: pgAgentID, Slug: mcp.Slug, ResourceID: srv.ID,
+		}); err != nil {
+			h.logger.Error("bind mcp need failed", zap.Error(err))
+			writeJSONError(w, http.StatusInternalServerError, "failed to sync MCP servers")
+			return
+		}
 		mcpSlugs[i] = mcp.Slug
+	}
+	// Stale MCP needs (slug no longer declared) are removed alongside the
+	// resources below.
+	if err := q.DeleteResourceNeedsByAgentTypeExcept(ctx, dbq.DeleteResourceNeedsByAgentTypeExceptParams{
+		AgentID: pgAgentID, Type: "mcp_server", Slugs: mcpSlugs,
+	}); err != nil {
+		h.logger.Error("delete stale mcp needs failed", zap.Error(err))
+		writeJSONError(w, http.StatusInternalServerError, "failed to sync MCP servers")
+		return
 	}
 	if err := q.DeleteMCPServersByAgentExcept(ctx, dbq.DeleteMCPServersByAgentExceptParams{
 		AgentID: pgAgentID,

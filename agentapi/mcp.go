@@ -104,16 +104,18 @@ func (h *Handler) MCPToolCall(w http.ResponseWriter, r *http.Request) {
 	}
 
 	q := dbq.New(h.db.Pool())
-	server, err := q.GetMCPServerBySlug(r.Context(), dbq.GetMCPServerBySlugParams{
+	// Resolve the agent's mcp_server need to its bound resource; credentials
+	// below key on the resolved server's own id.
+	server, err := q.ResolveBoundMCPServer(r.Context(), dbq.ResolveBoundMCPServerParams{
 		AgentID: toPgUUID(agentID),
 		Slug:    slug,
 	})
 	if err != nil {
 		if err == pgx.ErrNoRows {
-			writeJSONError(w, http.StatusNotFound, "MCP server not found")
+			writeJSONError(w, http.StatusNotFound, "MCP server not bound")
 			return
 		}
-		h.logger.Error("get MCP server failed", zap.Error(err))
+		h.logger.Error("resolve MCP server failed", zap.Error(err))
 		writeJSONError(w, http.StatusInternalServerError, "failed to get MCP server")
 		return
 	}
@@ -122,7 +124,7 @@ func (h *Handler) MCPToolCall(w http.ResponseWriter, r *http.Request) {
 	// expired token is renewed here under a row lock, so it self-heals on this
 	// call instead of waiting for the background tick. Only an unrecoverable
 	// server (no token / no refresh token / provider-revoked) returns 402.
-	creds, err := oauth.EnsureMCPServerToken(r.Context(), h.db, h.encryptor, h.oauthClient, h.logger, toPgUUID(agentID), slug, time.Now())
+	creds, err := oauth.EnsureMCPServerToken(r.Context(), h.db, h.encryptor, h.oauthClient, h.logger, server.ID, time.Now())
 	switch {
 	case errors.Is(err, oauth.ErrNeedsReauth):
 		writeJSON(w, http.StatusPaymentRequired, map[string]string{

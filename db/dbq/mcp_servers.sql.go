@@ -30,6 +30,20 @@ func (q *Queries) ClearMCPServerCredentials(ctx context.Context, arg ClearMCPSer
 	return err
 }
 
+const clearMCPServerCredentialsByID = `-- name: ClearMCPServerCredentialsByID :exec
+UPDATE agent_mcp_servers SET
+    access_token_ref = '',
+    refresh_token = '',
+    token_expires_at = NULL,
+    updated_at = now()
+WHERE id = $1
+`
+
+func (q *Queries) ClearMCPServerCredentialsByID(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, clearMCPServerCredentialsByID, id)
+	return err
+}
+
 const clearMCPServerOAuthApp = `-- name: ClearMCPServerOAuthApp :exec
 UPDATE agent_mcp_servers SET
     client_id = '',
@@ -70,6 +84,43 @@ type DeleteMCPServersByAgentExceptParams struct {
 func (q *Queries) DeleteMCPServersByAgentExcept(ctx context.Context, arg DeleteMCPServersByAgentExceptParams) error {
 	_, err := q.db.Exec(ctx, deleteMCPServersByAgentExcept, arg.AgentID, arg.Slugs)
 	return err
+}
+
+const getMCPServerByIDForUpdate = `-- name: GetMCPServerByIDForUpdate :one
+
+SELECT id, agent_id, slug, name, access, url, auth_mode, auth_url, token_url, registration_endpoint, scopes, auth_injection, tool_schemas, client_id, client_secret, access_token_ref, refresh_token, token_expires_at, last_synced_at, created_at, updated_at, server_instructions, owner_principal_id FROM agent_mcp_servers WHERE id = $1 FOR UPDATE
+`
+
+// id-keyed credential proxy variants (one server backs many agents' bindings).
+func (q *Queries) GetMCPServerByIDForUpdate(ctx context.Context, id pgtype.UUID) (AgentMcpServer, error) {
+	row := q.db.QueryRow(ctx, getMCPServerByIDForUpdate, id)
+	var i AgentMcpServer
+	err := row.Scan(
+		&i.ID,
+		&i.AgentID,
+		&i.Slug,
+		&i.Name,
+		&i.Access,
+		&i.Url,
+		&i.AuthMode,
+		&i.AuthUrl,
+		&i.TokenUrl,
+		&i.RegistrationEndpoint,
+		&i.Scopes,
+		&i.AuthInjection,
+		&i.ToolSchemas,
+		&i.ClientID,
+		&i.ClientSecret,
+		&i.AccessTokenRef,
+		&i.RefreshToken,
+		&i.TokenExpiresAt,
+		&i.LastSyncedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.ServerInstructions,
+		&i.OwnerPrincipalID,
+	)
+	return i, err
 }
 
 const getMCPServerBySlug = `-- name: GetMCPServerBySlug :one
@@ -412,6 +463,32 @@ func (q *Queries) UpdateMCPServerCredentials(ctx context.Context, arg UpdateMCPS
 		arg.RefreshToken,
 		arg.AgentID,
 		arg.Slug,
+	)
+	return err
+}
+
+const updateMCPServerCredentialsByID = `-- name: UpdateMCPServerCredentialsByID :exec
+UPDATE agent_mcp_servers SET
+    access_token_ref = $1,
+    token_expires_at = $2,
+    refresh_token = $3,
+    updated_at = now()
+WHERE id = $4
+`
+
+type UpdateMCPServerCredentialsByIDParams struct {
+	AccessTokenRef string             `json:"access_token_ref"`
+	TokenExpiresAt pgtype.Timestamptz `json:"token_expires_at"`
+	RefreshToken   string             `json:"refresh_token"`
+	ID             pgtype.UUID        `json:"id"`
+}
+
+func (q *Queries) UpdateMCPServerCredentialsByID(ctx context.Context, arg UpdateMCPServerCredentialsByIDParams) error {
+	_, err := q.db.Exec(ctx, updateMCPServerCredentialsByID,
+		arg.AccessTokenRef,
+		arg.TokenExpiresAt,
+		arg.RefreshToken,
+		arg.ID,
 	)
 	return err
 }

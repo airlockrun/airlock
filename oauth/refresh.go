@@ -72,7 +72,7 @@ func (j *RefreshJob) refreshOnce(ctx context.Context) {
 		if conn.RefreshToken == "" {
 			continue
 		}
-		_, err := EnsureConnectionToken(ctx, j.db, j.encryptor, j.client, j.logger, conn.AgentID, conn.Slug, refreshIfBefore)
+		_, err := EnsureConnectionToken(ctx, j.db, j.encryptor, j.client, j.logger, conn.ID, refreshIfBefore)
 		if err != nil && !errors.Is(err, ErrNeedsReauth) {
 			j.logger.Warn("token refresh failed",
 				zap.String("kind", "connection"), zap.String("agent", conn.AgentSlug),
@@ -88,7 +88,7 @@ func (j *RefreshJob) refreshOnce(ctx context.Context) {
 		if srv.RefreshToken == "" {
 			continue
 		}
-		_, err := EnsureMCPServerToken(ctx, j.db, j.encryptor, j.client, j.logger, srv.AgentID, srv.Slug, refreshIfBefore)
+		_, err := EnsureMCPServerToken(ctx, j.db, j.encryptor, j.client, j.logger, srv.ID, refreshIfBefore)
 		if err != nil && !errors.Is(err, ErrNeedsReauth) {
 			j.logger.Warn("token refresh failed",
 				zap.String("kind", "mcp"), zap.String("agent", srv.AgentSlug),

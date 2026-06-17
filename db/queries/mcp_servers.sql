@@ -103,6 +103,27 @@ UPDATE agent_mcp_servers SET
     updated_at = now()
 WHERE agent_id = @agent_id AND slug = @slug;
 
+-- id-keyed credential proxy variants (one server backs many agents' bindings).
+
+-- name: GetMCPServerByIDForUpdate :one
+SELECT * FROM agent_mcp_servers WHERE id = @id FOR UPDATE;
+
+-- name: UpdateMCPServerCredentialsByID :exec
+UPDATE agent_mcp_servers SET
+    access_token_ref = @access_token_ref,
+    token_expires_at = @token_expires_at,
+    refresh_token = @refresh_token,
+    updated_at = now()
+WHERE id = @id;
+
+-- name: ClearMCPServerCredentialsByID :exec
+UPDATE agent_mcp_servers SET
+    access_token_ref = '',
+    refresh_token = '',
+    token_expires_at = NULL,
+    updated_at = now()
+WHERE id = @id;
+
 -- name: ClearMCPServerOAuthApp :exec
 -- Wipe the OAuth app config (client_id/secret) AND the access_token_ref that
 -- belong to it. Used by "Re-register client" (oauth_discovery, forces a
