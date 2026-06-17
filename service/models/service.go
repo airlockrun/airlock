@@ -7,6 +7,7 @@ package models
 import (
 	"context"
 
+	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/authz"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
@@ -140,10 +141,26 @@ func (s *Service) Update(ctx context.Context, p authz.Principal, agentID uuid.UU
 		{"embedding", req.Embedding},
 		{"search", req.Search},
 	}
+	current := map[string]struct {
+		fk    pgtype.UUID
+		model string
+	}{
+		"build":     {agent.BuildProviderID, agent.BuildModel},
+		"exec":      {agent.ExecProviderID, agent.ExecModel},
+		"stt":       {agent.SttProviderID, agent.SttModel},
+		"vision":    {agent.VisionProviderID, agent.VisionModel},
+		"tts":       {agent.TtsProviderID, agent.TtsModel},
+		"image_gen": {agent.ImageGenProviderID, agent.ImageGenModel},
+		"embedding": {agent.EmbeddingProviderID, agent.EmbeddingModel},
+		"search":    {agent.SearchProviderID, agent.SearchModel},
+	}
 	fks := make(map[string]pgtype.UUID, len(pairs))
 	for _, item := range pairs {
 		fk, err := parsePair(item.name, item.p)
 		if err != nil {
+			return State{}, err
+		}
+		if err := s.checkModelAllowed(ctx, q, p, fk, item.p.Model, current[item.name].fk, current[item.name].model); err != nil {
 			return State{}, err
 		}
 		fks[item.name] = fk
@@ -175,16 +192,26 @@ func (s *Service) Update(ctx context.Context, p authz.Principal, agentID uuid.UU
 		s.logger.Error("list model slots", zap.Error(err))
 		return State{}, err
 	}
-	declared := make(map[string]struct{}, len(existing))
+	declared := make(map[string]struct {
+		fk    pgtype.UUID
+		model string
+	}, len(existing))
 	for _, slot := range existing {
-		declared[slot.Slug] = struct{}{}
+		declared[slot.Slug] = struct {
+			fk    pgtype.UUID
+			model string
+		}{slot.AssignedProviderID, slot.AssignedModel}
 	}
 	for _, slot := range req.Slots {
-		if _, ok := declared[slot.Slug]; !ok {
+		cur, ok := declared[slot.Slug]
+		if !ok {
 			continue
 		}
 		fk, err := parsePair("slot "+slot.Slug, Pair{ProviderID: slot.ProviderID, Model: slot.Model})
 		if err != nil {
+			return State{}, err
+		}
+		if err := s.checkModelAllowed(ctx, q, p, fk, slot.Model, cur.fk, cur.model); err != nil {
 			return State{}, err
 		}
 		_ = q.SetAgentModelSlotAssignment(ctx, dbq.SetAgentModelSlotAssignmentParams{
@@ -197,4 +224,38 @@ func (s *Service) Update(ctx context.Context, p authz.Principal, agentID uuid.UU
 	agent, _ = q.GetAgentByID(ctx, agent.ID)
 	slots, _ := q.ListAgentModelSlots(ctx, agent.ID)
 	return State{Agent: agent, Slots: slots}, nil
+}
+
+// checkModelAllowed enforces model deny-by-default at assignment time: a
+// (provider, model) the assigner is setting must be a configured system default
+// or carry a grant matching the assigner's grantee set. An unset or unchanged
+// pair is always allowed, so an existing agent is never locked out of the model
+// it already runs — only switching TO a new, non-granted model is gated.
+func (s *Service) checkModelAllowed(ctx context.Context, q *dbq.Queries, p authz.Principal, fk pgtype.UUID, model string, curFK pgtype.UUID, curModel string) error {
+	if !fk.Valid || model == "" {
+		return nil
+	}
+	// Tenant admins own the model-grant surface; gating them would be a
+	// chicken-and-egg (grant to yourself first). They assign freely.
+	if p.TenantRole.AtLeast(auth.RoleAdmin) {
+		return nil
+	}
+	if fk == curFK && model == curModel {
+		return nil
+	}
+	if ok, err := q.IsSystemDefaultModel(ctx, dbq.IsSystemDefaultModelParams{CatalogID: fk, Model: model}); err == nil && ok {
+		return nil
+	}
+	if set := p.GranteeSet(); len(set) > 0 {
+		grantees := make([]pgtype.UUID, len(set))
+		for i, id := range set {
+			grantees[i] = pgtype.UUID{Bytes: id, Valid: true}
+		}
+		if n, err := q.CountMatchingModelGrants(ctx, dbq.CountMatchingModelGrantsParams{
+			CatalogID: fk, Model: model, GranteeIds: grantees,
+		}); err == nil && n > 0 {
+			return nil
+		}
+	}
+	return service.Detail(service.ErrForbidden, "model %q is not allowed for you — ask an admin to grant it", model)
 }
