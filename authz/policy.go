@@ -77,6 +77,8 @@ const (
 	TenantIdentityManage      Action = "tenant.identity.manage"     // link / list / unlink caller's own platform identities: user+
 	TenantIdentityManageAll   Action = "tenant.identity.manage_all" // list / unlink any user's platform identities: admin
 	TenantSelfPasskeyManage   Action = "tenant.self.passkey.manage" // register / list / rename / delete the caller's own passkeys + set/remove own password: user+
+	TenantGroupView           Action = "tenant.group.view"          // list groups + their grants: admin
+	TenantModelGrantManage    Action = "tenant.model_grant.manage"  // grant/revoke which (provider, model) a group may use: admin
 )
 
 // policy is the whole permission matrix. Authorize panics on a missing
@@ -124,6 +126,8 @@ var policy = map[Action]Requirement{
 	TenantIdentityManage:      {Axis: AxisTenant, Tenant: auth.RoleUser},
 	TenantIdentityManageAll:   {Axis: AxisTenant, Tenant: auth.RoleAdmin},
 	TenantSelfPasskeyManage:   {Axis: AxisTenant, Tenant: auth.RoleUser},
+	TenantGroupView:           {Axis: AxisTenant, Tenant: auth.RoleAdmin},
+	TenantModelGrantManage:    {Axis: AxisTenant, Tenant: auth.RoleAdmin},
 }
 
 // RequiredTenantRole returns the minimum tenant role for a tenant-axis

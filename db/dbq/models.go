@@ -423,6 +423,14 @@ type ManagedBotSession struct {
 	CreatedAt  pgtype.Timestamptz `json:"created_at"`
 }
 
+type ModelGrant struct {
+	ID        pgtype.UUID        `json:"id"`
+	CatalogID pgtype.UUID        `json:"provider_id"`
+	Model     string             `json:"model"`
+	GranteeID pgtype.UUID        `json:"grantee_id"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
 type OauthAuthzCode struct {
 	Code          string             `json:"code"`
 	UserID        pgtype.UUID        `json:"user_id"`
@@ -506,6 +514,17 @@ type Provider struct {
 	ApiKey      string             `json:"api_key"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+}
+
+type ResourceGrant struct {
+	ID              pgtype.UUID        `json:"id"`
+	ConnectionID    pgtype.UUID        `json:"connection_id"`
+	McpServerID     pgtype.UUID        `json:"mcp_server_id"`
+	ExecEndpointID  pgtype.UUID        `json:"exec_endpoint_id"`
+	GitCredentialID pgtype.UUID        `json:"git_credential_id"`
+	GranteeID       pgtype.UUID        `json:"grantee_id"`
+	Capabilities    []string           `json:"capabilities"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
 }
 
 type Run struct {
