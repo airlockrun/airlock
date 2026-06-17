@@ -137,6 +137,40 @@ func (q *Queries) ListModelGrants(ctx context.Context) ([]ListModelGrantsRow, er
 	return items, nil
 }
 
+const listModelGrantsForGrantees = `-- name: ListModelGrantsForGrantees :many
+SELECT provider_id, model FROM model_grants
+WHERE grantee_id = ANY ($1::uuid[])
+`
+
+type ListModelGrantsForGranteesRow struct {
+	CatalogID pgtype.UUID `json:"provider_id"`
+	Model     string      `json:"model"`
+}
+
+// The (provider row, model) pairs granted to any principal in the caller's
+// grantee set — the models a non-admin caller may assign. Powers the model
+// picker's allow-list (defaults aren't listed; the caller leaves a slot unset
+// to fall back to the capability default).
+func (q *Queries) ListModelGrantsForGrantees(ctx context.Context, granteeIds []pgtype.UUID) ([]ListModelGrantsForGranteesRow, error) {
+	rows, err := q.db.Query(ctx, listModelGrantsForGrantees, granteeIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListModelGrantsForGranteesRow{}
+	for rows.Next() {
+		var i ListModelGrantsForGranteesRow
+		if err := rows.Scan(&i.CatalogID, &i.Model); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const revokeModelGrant = `-- name: RevokeModelGrant :exec
 DELETE FROM model_grants WHERE id = $1
 `

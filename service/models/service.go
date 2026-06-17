@@ -259,3 +259,42 @@ func (s *Service) checkModelAllowed(ctx context.Context, q *dbq.Queries, p authz
 	}
 	return service.Detail(service.ErrForbidden, "model %q is not allowed for you — ask an admin to grant it", model)
 }
+
+// AllowedModel is one (provider row, model id) pair a caller may assign.
+type AllowedModel struct {
+	ProviderID uuid.UUID
+	Model      string
+}
+
+// AllowedModels returns the models the caller may assign to an agent capability
+// — the allow-list the model pickers render. Tenant admins are unrestricted
+// (they own the grant surface). Everyone else gets the models granted to their
+// grantee set. System defaults are intentionally NOT listed: a caller leaves a
+// capability slot unset to fall back to the default, rather than picking it.
+func (s *Service) AllowedModels(ctx context.Context, p authz.Principal) (unrestricted bool, models []AllowedModel, err error) {
+	if !p.IsAuthenticatedUser() {
+		return false, nil, service.ErrUnauthorized
+	}
+	if p.TenantRole.AtLeast(auth.RoleAdmin) {
+		return true, nil, nil
+	}
+	set := p.GranteeSet()
+	if len(set) == 0 {
+		return false, nil, nil
+	}
+	grantees := make([]pgtype.UUID, len(set))
+	for i, id := range set {
+		grantees[i] = pgtype.UUID{Bytes: id, Valid: true}
+	}
+	q := dbq.New(s.db.Pool())
+	rows, err := q.ListModelGrantsForGrantees(ctx, grantees)
+	if err != nil {
+		s.logger.Error("list model grants for grantees failed", zap.Error(err))
+		return false, nil, err
+	}
+	out := make([]AllowedModel, len(rows))
+	for i, r := range rows {
+		out[i] = AllowedModel{ProviderID: uuid.UUID(r.CatalogID.Bytes), Model: r.Model}
+	}
+	return false, out, nil
+}

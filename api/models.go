@@ -42,6 +42,21 @@ func writeModelsError(w http.ResponseWriter, err error, fallback string) {
 	writeError(w, status, msg)
 }
 
+// AllowedModels handles GET /api/v1/models/allowed — the models the caller may
+// assign to an agent capability (the picker allow-list).
+func (h *modelsHandler) AllowedModels(w http.ResponseWriter, r *http.Request) {
+	unrestricted, models, err := h.svc.AllowedModels(r.Context(), principalFromRequest(r))
+	if err != nil {
+		writeModelsError(w, err, "failed to list allowed models")
+		return
+	}
+	out := make([]*airlockv1.AllowedModel, len(models))
+	for i, m := range models {
+		out[i] = &airlockv1.AllowedModel{ProviderId: m.ProviderID.String(), Model: m.Model}
+	}
+	writeProto(w, http.StatusOK, &airlockv1.ListAllowedModelsResponse{Unrestricted: unrestricted, Models: out})
+}
+
 // GetConfig handles GET /api/v1/agents/{agentID}/models.
 func (h *modelsHandler) GetConfig(w http.ResponseWriter, r *http.Request) {
 	agentID, err := parseUUID(chi.URLParam(r, "agentID"))

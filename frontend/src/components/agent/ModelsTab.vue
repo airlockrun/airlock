@@ -17,6 +17,7 @@ import {
   type CatalogModel,
 } from '@/composables/useModelCapabilities'
 import { useProvidersStore } from '@/stores/providers'
+import { useModelsAllowedStore } from '@/stores/modelsAllowed'
 import type { AgentModelConfig, ModelSlotInfo } from '@/gen/airlock/v1/api_pb'
 import { AgentModelConfigSchema, ModelSlotInfoSchema } from '@/gen/airlock/v1/api_pb'
 
@@ -26,8 +27,9 @@ const emit = defineEmits<{ populated: [count: number] }>()
 const agents = useAgentsStore()
 const catalog = useCatalogStore()
 const providers = useProvidersStore()
+const modelsAllowed = useModelsAllowedStore()
 const toast = useToast()
-const { groupModels, searchProviderOptions } = useModelCapabilities()
+const { groupModels, searchProviderOptions } = useModelCapabilities({ restrictToAllowed: true })
 
 const loading = ref(true)
 const saving = ref(false)
@@ -77,6 +79,7 @@ onMounted(async () => {
       catalog.fetchConfiguredModels(),
       catalog.fetchCapabilities(),
       providers.fetchProviders(),
+      modelsAllowed.fetchAllowed(),
     ])
     config.value = await agents.fetchModelConfig(props.agentId)
     refreshPickerValues()

@@ -1,6 +1,7 @@
 import { computed, type ComputedRef } from 'vue'
 import { useCatalogStore } from '@/stores/catalog'
 import { useProvidersStore } from '@/stores/providers'
+import { useModelsAllowedStore } from '@/stores/modelsAllowed'
 
 // CatalogModel mirrors the airlock ModelInfo proto fields the pickers
 // need. `kind` is sol's goai-aggregated classification; `caps` are the
@@ -55,9 +56,16 @@ export function hasCap(m: CatalogModel, cap: string): boolean {
   return m.caps.includes(cap)
 }
 
-export function useModelCapabilities() {
+// Options for useModelCapabilities. restrictToAllowed filters picker options to
+// the models the caller may assign (per the modelsAllowed store): used by the
+// agent capability-override pickers. The system-default pickers (activation,
+// settings) leave it off — that's where the defaults themselves are chosen.
+export type ModelCapabilitiesOptions = { restrictToAllowed?: boolean }
+
+export function useModelCapabilities(opts: ModelCapabilitiesOptions = {}) {
   const catalog = useCatalogStore()
   const providers = useProvidersStore()
+  const allowed = useModelsAllowedStore()
 
   // groupModels fans out catalog models across every configured provider
   // row that shares the model's catalog provider_id. Multiple keys per
@@ -72,6 +80,7 @@ export function useModelCapabilities() {
       if (!accept(m)) continue
       const rows = providers.providers.filter(p => p.providerId === m.providerId)
       for (const row of rows) {
+        if (opts.restrictToAllowed && !allowed.isAllowed(row.id, m.id)) continue
         const key = `${row.providerId}/${row.slug}`
         if (!groups[key]) groups[key] = []
         groups[key].push({

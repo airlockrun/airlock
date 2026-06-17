@@ -406,6 +406,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 			logger:      cfg.Logger.Named("conversations"),
 		}
 		mH := newModelsHandler(modelssvc.New(cfg.DB, cfg.Logger.Named("models")))
+		r.Get("/models/allowed", mH.AllowedModels)
 		siblingsH := newSiblingsHandler(siblingssvc.New(cfg.DB, cfg.Dispatcher, cfg.Logger.Named("siblings")))
 
 		// Wire post-upgrade notifications to conversations handler.

@@ -737,6 +737,19 @@ message ListModelGrantsResponse {
   repeated ModelGrantInfo grants = 1;
 }
 
+// AllowedModel is one (provider row, model id) pair the caller may assign.
+message AllowedModel {
+  string provider_id = 1;
+  string model = 2;
+}
+
+// ListAllowedModelsResponse is the model picker's allow-list. unrestricted=true
+// (tenant admin) means any configured model may be assigned.
+message ListAllowedModelsResponse {
+  bool unrestricted = 1;
+  repeated AllowedModel models = 2;
+}
+
 // ── Owner resource inventory (per-user Resources view) ──
 
 // OwnedResourceInfo is one resource a principal owns, across all of their
