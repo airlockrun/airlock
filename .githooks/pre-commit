@@ -62,3 +62,8 @@ if [ -n "$staged_vet" ]; then
 		exit 1
 	fi
 fi
+
+# Build / correctness gates (go.work overlay resolves sibling libs).
+go vet ./... || { echo "ERROR: go vet failed" >&2; exit 1; }
+go test ./... || { echo "ERROR: go test failed" >&2; exit 1; }
+echo "airlock gofmt/vet/test: OK"
