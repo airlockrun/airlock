@@ -58,13 +58,15 @@ var ErrMCPForbidden = errors.New("mcp: access denied for target agent")
 // target agent's MCP endpoint by applying the same access ladder as
 // chat: tenant role isn't consulted (agent_members is the only axis).
 //
-// For sibling-agent callers the agent's own identity is purely for
-// audit/accounting — the principal is the *original user* (propagated
-// from the parent run's conversation), and authorization is evaluated
-// as if that user had hit the MCP endpoint directly. This is the
-// natural delegation model: an agent's code runs with its user's
-// privileges, no more.
+// A user or OAuth caller is evaluated as that user against the target's
+// agent_members ladder. A sibling-agent caller is evaluated the same way for
+// the driving user, but the result is then capped by the ceiling of the
+// ACTING agent's owner: a sibling agent can never wield more authority on the
+// target than its own owner holds, even when a higher-privilege user drives
+// the run. So a compromised agent's blast radius is bounded by its owner, not
+// by whoever happens to be talking to it.
 func computeA2ACallerAccess(ctx context.Context, q *dbq.Queries, target dbq.Agent, principal MCPPrincipal) (agentsdk.Access, error) {
+	targetID := uuid.UUID(target.ID.Bytes)
 	switch principal.Kind {
 	case MCPPrincipalAnon:
 		if !target.AllowPublicMcp {
@@ -72,27 +74,40 @@ func computeA2ACallerAccess(ctx context.Context, q *dbq.Queries, target dbq.Agen
 		}
 		return agentsdk.AccessPublic, nil
 
-	case MCPPrincipalUser, MCPPrincipalAgent, MCPPrincipalOAuthClient:
-		// Both apply the same user-side ladder against the target. Agent
-		// callers were already verified upstream: the caller's JWT
-		// matches ParentRunID's agent_id, and the principal.UserID was
-		// pulled from that run's conversation.user_id.
+	case MCPPrincipalUser, MCPPrincipalOAuthClient:
+		// Apply the user-side ladder against the target. authz.Effective-
+		// AgentAccess maps (user, agent) → admin/user/public off
+		// agent_members; a non-member resolves to AccessPublic, honored
+		// only if the target opens itself to non-members.
 		userID := principal.UserID
 		if userID == uuid.Nil {
-			// Defensive: an agent JWT with no derivable original user
-			// means the parent run is a cron/webhook trigger. v1 does
-			// not allow A2A from those — agentsdk rejects upfront, but
-			// belt-and-suspenders here.
 			return "", fmt.Errorf("%w: no original user for caller", ErrMCPForbidden)
 		}
-		// One ladder for every surface: authz.EffectiveAgentAccess maps
-		// (user, agent) → admin/user/public off agent_members. A member
-		// resolves to AccessUser/AccessAdmin; a non-member resolves to
-		// AccessPublic, which here is only honored if the target opens
-		// itself to non-members — otherwise it's a 403. The non-member /
-		// public-MCP flags are MCP-surface policy and stay here, not in
-		// the shared ladder.
-		access := authz.UserPrincipal(userID, "").EffectiveAgentAccess(ctx, q, uuid.UUID(target.ID.Bytes))
+		access := authz.UserPrincipal(userID, "").EffectiveAgentAccess(ctx, q, targetID)
+		if access == agentsdk.AccessPublic && !target.AllowNonMemberMcp {
+			return "", ErrMCPForbidden
+		}
+		return access, nil
+
+	case MCPPrincipalAgent:
+		// Verified upstream: the caller's JWT matches ParentRunID's
+		// agent_id, and principal.UserID was pulled from that run's
+		// conversation.user_id. The driving user's access still applies,
+		// but capped by the acting agent's OWNER ceiling (the MIN).
+		userID := principal.UserID
+		if userID == uuid.Nil {
+			// An agent JWT with no derivable original user means the parent
+			// run is a cron/webhook trigger. v1 does not allow A2A from
+			// those — agentsdk rejects upfront, belt-and-suspenders here.
+			return "", fmt.Errorf("%w: no original user for caller", ErrMCPForbidden)
+		}
+		userAccess := authz.UserPrincipal(userID, "").EffectiveAgentAccess(ctx, q, targetID)
+		actingAgent, err := q.GetAgentByID(ctx, toPgUUID(principal.CallerAgentID))
+		if err != nil {
+			return "", fmt.Errorf("%w: acting agent not found", ErrMCPForbidden)
+		}
+		ownerAccess := authz.UserPrincipal(uuid.UUID(actingAgent.UserID.Bytes), "").EffectiveAgentAccess(ctx, q, targetID)
+		access := authz.MinAccess(userAccess, ownerAccess)
 		if access == agentsdk.AccessPublic && !target.AllowNonMemberMcp {
 			return "", ErrMCPForbidden
 		}

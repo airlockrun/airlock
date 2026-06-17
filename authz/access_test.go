@@ -33,3 +33,27 @@ func TestAccessAtLeast(t *testing.T) {
 		})
 	}
 }
+
+func TestMinAccess(t *testing.T) {
+	tests := []struct {
+		name string
+		a    agentsdk.Access
+		b    agentsdk.Access
+		want agentsdk.Access
+	}{
+		{"admin,admin", agentsdk.AccessAdmin, agentsdk.AccessAdmin, agentsdk.AccessAdmin},
+		{"admin,user -> user", agentsdk.AccessAdmin, agentsdk.AccessUser, agentsdk.AccessUser},
+		{"user,admin -> user (commutes)", agentsdk.AccessUser, agentsdk.AccessAdmin, agentsdk.AccessUser},
+		{"admin,public -> public", agentsdk.AccessAdmin, agentsdk.AccessPublic, agentsdk.AccessPublic},
+		{"user,public -> public", agentsdk.AccessUser, agentsdk.AccessPublic, agentsdk.AccessPublic},
+		{"user,user", agentsdk.AccessUser, agentsdk.AccessUser, agentsdk.AccessUser},
+		{"public,public", agentsdk.AccessPublic, agentsdk.AccessPublic, agentsdk.AccessPublic},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := MinAccess(tt.a, tt.b); got != tt.want {
+				t.Errorf("MinAccess(%q, %q) = %q, want %q", tt.a, tt.b, got, tt.want)
+			}
+		})
+	}
+}
