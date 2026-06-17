@@ -30,6 +30,17 @@ func AccessAtLeast(a, min agentsdk.Access) bool {
 	return accessRank(a) >= accessRank(min)
 }
 
+// MinAccess returns the lower of two access levels on the agent ladder. It
+// is the A2A delegation ceiling: a sibling agent acting on a user's behalf
+// can never exceed the access its own owner holds on the target, so the
+// effective access is the minimum of (driving user, acting-agent owner).
+func MinAccess(a, b agentsdk.Access) agentsdk.Access {
+	if accessRank(a) <= accessRank(b) {
+		return a
+	}
+	return b
+}
+
 // EffectiveAgentAccess resolves the principal's access on agentID off
 // agent_members. It is the pure membership ladder: a member maps to
 // AccessUser/AccessAdmin, everyone else (anonymous, trigger, non-member
