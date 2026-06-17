@@ -570,25 +570,15 @@ func (h *Handler) Sync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Exec endpoints: declared in the sync batch as needs.
+	// Exec endpoints: record the agent's need. The resource is created (owned
+	// by the configuring user) on first operator configure — sync never
+	// auto-creates it. If one is already bound, refresh its declaration fields
+	// (preserving the operator-configured columns).
 	execSlugs := make([]string, len(req.ExecEndpoints))
 	for i, e := range req.ExecEndpoints {
 		access := string(e.Access)
 		if access == "" {
 			access = string(agentsdk.AccessAdmin)
-		}
-		if err := q.UpsertExecEndpointDeclaration(ctx, dbq.UpsertExecEndpointDeclarationParams{
-			AgentID: pgAgentID, Slug: e.Slug, Description: e.Description, LlmHint: e.LLMHint, Access: access,
-		}); err != nil {
-			h.logger.Error("upsert exec endpoint failed", zap.Error(err))
-			writeJSONError(w, http.StatusInternalServerError, "failed to sync exec endpoints")
-			return
-		}
-		ep, err := q.GetExecEndpointBySlug(ctx, dbq.GetExecEndpointBySlugParams{AgentID: pgAgentID, Slug: e.Slug})
-		if err != nil {
-			h.logger.Error("get exec endpoint after upsert failed", zap.Error(err))
-			writeJSONError(w, http.StatusInternalServerError, "failed to sync exec endpoints")
-			return
 		}
 		execSpec, _ := json.Marshal(map[string]any{"llm_hint": e.LLMHint, "access": access})
 		if err := q.UpsertResourceNeed(ctx, dbq.UpsertResourceNeedParams{
@@ -599,10 +589,15 @@ func (h *Handler) Sync(w http.ResponseWriter, r *http.Request) {
 			writeJSONError(w, http.StatusInternalServerError, "failed to sync exec endpoints")
 			return
 		}
-		if err := q.BindExecEndpointNeed(ctx, dbq.BindExecEndpointNeedParams{AgentID: pgAgentID, Slug: e.Slug, ResourceID: ep.ID}); err != nil {
-			h.logger.Error("bind exec need failed", zap.Error(err))
-			writeJSONError(w, http.StatusInternalServerError, "failed to sync exec endpoints")
-			return
+		need, nerr := q.GetResourceNeed(ctx, dbq.GetResourceNeedParams{AgentID: pgAgentID, Type: "exec_endpoint", Slug: e.Slug})
+		if nerr == nil && need.BoundExecID.Valid {
+			if err := q.UpsertExecEndpointDeclaration(ctx, dbq.UpsertExecEndpointDeclarationParams{
+				AgentID: pgAgentID, Slug: e.Slug, Description: e.Description, LlmHint: e.LLMHint, Access: access,
+			}); err != nil {
+				h.logger.Error("refresh exec declaration failed", zap.Error(err))
+				writeJSONError(w, http.StatusInternalServerError, "failed to sync exec endpoints")
+				return
+			}
 		}
 		execSlugs[i] = e.Slug
 	}
