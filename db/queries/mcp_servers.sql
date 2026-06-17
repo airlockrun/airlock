@@ -1,13 +1,17 @@
+-- MCP servers are principal-owned resources, identified by id or
+-- (owner_principal_id, slug). An agent reaches a server only through a binding
+-- on agent_resource_needs, so credential ops address the resource by id and
+-- listings join through the needs table, keyed by the agent's NEED slug.
+
 -- name: UpsertMCPServer :one
--- When url or scopes change, clear access_token_ref so the user must re-authorize.
--- Discovery + credential fields are passed explicitly as empty on first
--- insert; ON CONFLICT preserves existing access_token_ref unless invalidated.
--- registration_endpoint is taken from EXCLUDED only when newly populated —
--- a fresh discovery run that turned up empty doesn't blow away a previously
--- discovered endpoint.
-INSERT INTO agent_mcp_servers (agent_id, owner_principal_id, slug, name, url, auth_mode, auth_url, token_url, registration_endpoint, scopes, access, auth_injection, tool_schemas, client_id, client_secret, access_token_ref, refresh_token)
-VALUES (@agent_id, (SELECT user_id FROM agents WHERE id = @agent_id), @slug, @name, @url, @auth_mode, @auth_url, @token_url, @registration_endpoint, @scopes, @access, @auth_injection, '[]'::jsonb, '', '', '', '')
-ON CONFLICT (agent_id, slug) DO UPDATE SET
+-- Create-or-refresh the owner's MCP server for @slug. The owner is the agent's
+-- user; @agent_id only resolves that owner — the row carries no agent_id. When
+-- url or scopes change, clear access_token_ref so the user must re-authorize.
+-- registration_endpoint is taken from EXCLUDED only when newly populated, so a
+-- fresh discovery run that turned up empty doesn't blow away a known endpoint.
+INSERT INTO agent_mcp_servers (owner_principal_id, slug, name, url, auth_mode, auth_url, token_url, registration_endpoint, scopes, access, auth_injection, tool_schemas, client_id, client_secret, access_token_ref, refresh_token)
+VALUES ((SELECT user_id FROM agents WHERE agents.id = @agent_id), @slug, @name, @url, @auth_mode, @auth_url, @token_url, @registration_endpoint, @scopes, @access, @auth_injection, '[]'::jsonb, '', '', '', '')
+ON CONFLICT (owner_principal_id, slug) DO UPDATE SET
     name = EXCLUDED.name,
     url = EXCLUDED.url,
     auth_mode = EXCLUDED.auth_mode,
@@ -38,72 +42,45 @@ ON CONFLICT (agent_id, slug) DO UPDATE SET
     updated_at = now()
 RETURNING *;
 
--- name: GetMCPServerBySlug :one
-SELECT * FROM agent_mcp_servers WHERE agent_id = @agent_id AND slug = @slug;
+-- name: ListMCPNeedsByAgent :many
+-- The agent's MCP needs joined to their bound server (if any), keyed by the
+-- NEED slug. Unconfigured needs surface with the declared spec shape and
+-- authorized=false. Drives the operator MCP tab.
+SELECT
+    n.slug AS slug,
+    COALESCE(m.id, '00000000-0000-0000-0000-000000000000'::uuid) AS mcp_id,
+    COALESCE(m.name, n.spec->>'name', n.slug) AS name,
+    COALESCE(m.url, n.spec->>'url', '') AS url,
+    COALESCE(m.auth_mode, n.spec->>'auth_mode', '') AS auth_mode,
+    COALESCE(m.tool_schemas, '[]'::jsonb) AS tool_schemas,
+    (COALESCE(m.access_token_ref, '') != '')::boolean AS authorized,
+    (COALESCE(m.client_id, '') != '')::boolean AS has_oauth_app,
+    (n.bound_mcp_id IS NOT NULL)::boolean AS bound,
+    m.token_expires_at AS token_expires_at,
+    m.last_synced_at AS last_synced_at
+FROM agent_resource_needs n
+LEFT JOIN agent_mcp_servers m ON m.id = n.bound_mcp_id
+WHERE n.agent_id = @agent_id AND n.type = 'mcp_server'
+ORDER BY n.slug;
 
--- name: ListMCPServersByAgent :many
-SELECT * FROM agent_mcp_servers WHERE agent_id = $1 ORDER BY slug;
+-- name: ListBoundMCPServersByAgent :many
+-- The agent's bound MCP servers (resource rows), keyed by the NEED slug — for
+-- the sync-time tool-discovery sweep. Only bound needs have a server to probe.
+SELECT
+    n.slug AS slug,
+    m.id AS id,
+    m.name AS name,
+    m.url AS url,
+    m.auth_mode AS auth_mode,
+    m.auth_injection AS auth_injection,
+    m.access_token_ref AS access_token_ref,
+    m.tool_schemas AS tool_schemas
+FROM agent_resource_needs n
+JOIN agent_mcp_servers m ON m.id = n.bound_mcp_id
+WHERE n.agent_id = @agent_id AND n.type = 'mcp_server'
+ORDER BY n.slug;
 
--- name: ListMCPServersWithStatus :many
--- For frontend: list with auth status
-SELECT id, agent_id, slug, name, url, auth_mode, auth_url,
-       (access_token_ref != '') AS authorized,
-       (client_id != '') AS has_oauth_app,
-       tool_schemas,
-       token_expires_at,
-       last_synced_at
-FROM agent_mcp_servers WHERE agent_id = @agent_id ORDER BY slug;
-
--- name: UpdateMCPServerCredentials :exec
-UPDATE agent_mcp_servers SET
-    access_token_ref = @access_token_ref,
-    token_expires_at = @token_expires_at,
-    refresh_token = @refresh_token,
-    updated_at = now()
-WHERE agent_id = @agent_id AND slug = @slug;
-
--- name: UpdateMCPServerToolSchemas :exec
-UPDATE agent_mcp_servers SET
-    tool_schemas = @tool_schemas,
-    server_instructions = @server_instructions,
-    last_synced_at = now(),
-    updated_at = now()
-WHERE agent_id = @agent_id AND slug = @slug;
-
--- name: UpdateMCPServerOAuthApp :exec
-UPDATE agent_mcp_servers SET
-    client_id = @client_id,
-    client_secret = @client_secret,
-    updated_at = now()
-WHERE agent_id = @agent_id AND slug = @slug;
-
--- name: GetMCPServerForOAuth :one
-SELECT id, agent_id, slug, name, url, auth_mode, auth_url, token_url,
-       registration_endpoint, scopes, client_id, client_secret
-FROM agent_mcp_servers WHERE agent_id = @agent_id AND slug = @slug;
-
--- name: UpdateMCPServerDiscovery :exec
--- Lazy re-discovery: refresh auth_url / token_url / registration_endpoint
--- after a fresh RFC 8414 fetch. Only used by oauth_discovery's MCPOAuthStart
--- when registration_endpoint is missing (the only path forward for DCR).
--- Does NOT touch access_token_ref — re-discovery never invalidates auth state by
--- itself; callers chain it with DCR + UpdateMCPServerOAuthApp when needed.
-UPDATE agent_mcp_servers SET
-    auth_url = @auth_url,
-    token_url = @token_url,
-    registration_endpoint = @registration_endpoint,
-    updated_at = now()
-WHERE agent_id = @agent_id AND slug = @slug;
-
--- name: ClearMCPServerCredentials :exec
-UPDATE agent_mcp_servers SET
-    access_token_ref = '',
-    refresh_token = '',
-    token_expires_at = NULL,
-    updated_at = now()
-WHERE agent_id = @agent_id AND slug = @slug;
-
--- id-keyed credential proxy variants (one server backs many agents' bindings).
+-- id-keyed credential proxy + operator ops (one server backs many bindings).
 
 -- name: GetMCPServerByIDForUpdate :one
 SELECT * FROM agent_mcp_servers WHERE id = @id FOR UPDATE;
@@ -128,12 +105,36 @@ UPDATE agent_mcp_servers SET
     updated_at = now()
 WHERE id = @id;
 
--- name: ClearMCPServerOAuthApp :exec
+-- name: UpdateMCPServerOAuthAppByID :exec
+UPDATE agent_mcp_servers SET
+    client_id = @client_id,
+    client_secret = @client_secret,
+    updated_at = now()
+WHERE id = @id;
+
+-- name: UpdateMCPServerToolSchemasByID :exec
+UPDATE agent_mcp_servers SET
+    tool_schemas = @tool_schemas,
+    server_instructions = @server_instructions,
+    last_synced_at = now(),
+    updated_at = now()
+WHERE id = @id;
+
+-- name: UpdateMCPServerDiscoveryByID :exec
+-- Lazy re-discovery: refresh auth_url / token_url / registration_endpoint after
+-- a fresh RFC 8414 fetch. Does NOT touch access_token_ref — re-discovery never
+-- invalidates auth state by itself.
+UPDATE agent_mcp_servers SET
+    auth_url = @auth_url,
+    token_url = @token_url,
+    registration_endpoint = @registration_endpoint,
+    updated_at = now()
+WHERE id = @id;
+
+-- name: ClearMCPServerOAuthAppByID :exec
 -- Wipe the OAuth app config (client_id/secret) AND the access_token_ref that
--- belong to it. Used by "Re-register client" (oauth_discovery, forces a
--- fresh DCR on next authorize) and "Edit OAuth app" (oauth, paste new
--- access_token_ref). Existing tokens MUST go too — they're tied to the old
--- client_id at the OAuth provider and would 401 the moment they're used.
+-- belong to it. Existing tokens MUST go too — they're tied to the old client_id
+-- at the OAuth provider and would 401 the moment they're used.
 UPDATE agent_mcp_servers SET
     client_id = '',
     client_secret = '',
@@ -141,36 +142,22 @@ UPDATE agent_mcp_servers SET
     refresh_token = '',
     token_expires_at = NULL,
     updated_at = now()
-WHERE agent_id = @agent_id AND slug = @slug;
-
--- name: DeleteMCPServersByAgentExcept :exec
--- Delete MCP servers not in the current sync.
-DELETE FROM agent_mcp_servers
-WHERE agent_id = @agent_id AND slug != ALL(@slugs::text[]);
+WHERE id = @id;
 
 -- name: ListExpiringMCPServers :many
--- For refresh job: find tokens expiring within buffer window.
-SELECT m.id, m.agent_id, m.slug, m.name, m.auth_mode, m.token_url,
+-- For the refresh job: OAuth tokens expiring within the buffer window that back
+-- at least one active agent's bound need.
+SELECT m.id, m.slug, m.name, m.auth_mode, m.token_url,
        m.client_id, m.client_secret, m.access_token_ref, m.refresh_token,
-       m.token_expires_at, m.scopes,
-       a.slug AS agent_slug
+       m.token_expires_at, m.scopes
 FROM agent_mcp_servers m
-JOIN agents a ON m.agent_id = a.id
 WHERE m.auth_mode IN ('oauth', 'oauth_discovery')
   AND m.access_token_ref != ''
   AND m.refresh_token != ''
   AND m.token_expires_at IS NOT NULL
   AND m.token_expires_at < @expiry_threshold
-  AND a.status = 'active';
-
--- name: HasDirtyMCPServers :one
--- Check if any MCP server has been updated since last sync (for dirty flag).
-SELECT EXISTS(
-    SELECT 1 FROM agent_mcp_servers
-    WHERE agent_id = @agent_id
-      AND (last_synced_at IS NULL OR updated_at > last_synced_at)
-) AS dirty;
-
--- name: GetMCPServerBySlugForUpdate :one
--- Row-locked read for on-demand token refresh (see GetConnectionBySlugForUpdate).
-SELECT * FROM agent_mcp_servers WHERE agent_id = @agent_id AND slug = @slug FOR UPDATE;
+  AND EXISTS (
+      SELECT 1 FROM agent_resource_needs n
+      JOIN agents a ON a.id = n.agent_id
+      WHERE n.bound_mcp_id = m.id AND a.status = 'active'
+  );

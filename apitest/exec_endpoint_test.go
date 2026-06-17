@@ -59,7 +59,7 @@ func TestExecEndpoint_DeclarationUpsertPreservesOperatorConfig(t *testing.T) {
 	})
 
 	q := dbq.New(h.DB.Pool())
-	row, err := q.GetExecEndpointBySlug(context.Background(), dbq.GetExecEndpointBySlugParams{
+	row, err := q.ResolveBoundExecEndpoint(context.Background(), dbq.ResolveBoundExecEndpointParams{
 		AgentID: pgUUID(agentID),
 		Slug:    "ci",
 	})
@@ -224,7 +224,7 @@ func TestExecEndpoint_EndToEnd(t *testing.T) {
 	// 4. Host key was TOFU-pinned after first connect — DB row carries
 	//    the same fingerprint the server presents.
 	q := dbq.New(h.DB.Pool())
-	row, err := q.GetExecEndpointBySlug(context.Background(), dbq.GetExecEndpointBySlugParams{
+	row, err := q.ResolveBoundExecEndpoint(context.Background(), dbq.ResolveBoundExecEndpointParams{
 		AgentID: pgUUID(agentID),
 		Slug:    "vps",
 	})

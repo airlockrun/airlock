@@ -48,3 +48,30 @@ func ExecEndpointRowToProto(ep dbq.AgentExecEndpoint) *airlockv1.ExecEndpointInf
 	}
 	return out
 }
+
+// ExecNeedRowToProto packs an agent's exec-endpoint need (joined to its bound
+// resource, if any) into the wire ExecEndpointInfo. Id is the zero UUID for an
+// unconfigured need; the agent's handle is the need Slug.
+func ExecNeedRowToProto(ep dbq.ListExecNeedsByAgentRow) *airlockv1.ExecEndpointInfo {
+	out := &airlockv1.ExecEndpointInfo{
+		Id:               PgUUIDToString(ep.ExecID),
+		Slug:             ep.Slug,
+		Description:      ep.Description,
+		LlmHint:          ep.LlmHint,
+		Access:           ep.Access,
+		Transport:        ep.Transport.String,
+		Host:             ep.Host.String,
+		SshUser:          ep.SshUser.String,
+		PublicKeyOpenssh: ep.PublicKeyOpenssh.String,
+		PublicKeyComment: ep.PublicKeyComment.String,
+		HostKeyPinnedAt:  PgTimestampToProto(ep.HostKeyPinnedAt),
+		LastUsedAt:       PgTimestampToProto(ep.LastUsedAt),
+	}
+	if ep.Port.Valid {
+		out.Port = ep.Port.Int32
+	}
+	if ep.HostKeyOpenssh.Valid && ep.HostKeyOpenssh.String != "" {
+		out.HostKeyFingerprint = execproxy.HostKeyFingerprint(ep.HostKeyOpenssh.String)
+	}
+	return out
+}

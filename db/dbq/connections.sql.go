@@ -11,26 +11,6 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const clearConnectionCredentials = `-- name: ClearConnectionCredentials :exec
-UPDATE connections SET
-    access_token_ref = '',
-    refresh_token = '',
-    token_expires_at = NULL,
-    updated_at = now()
-WHERE agent_id = $1 AND slug = $2
-`
-
-type ClearConnectionCredentialsParams struct {
-	AgentID pgtype.UUID `json:"agent_id"`
-	Slug    string      `json:"slug"`
-}
-
-// Revoke: clear access_token, refresh_token, expiry
-func (q *Queries) ClearConnectionCredentials(ctx context.Context, arg ClearConnectionCredentialsParams) error {
-	_, err := q.db.Exec(ctx, clearConnectionCredentials, arg.AgentID, arg.Slug)
-	return err
-}
-
 const clearConnectionCredentialsByID = `-- name: ClearConnectionCredentialsByID :exec
 UPDATE connections SET
     access_token_ref = '',
@@ -47,18 +27,18 @@ func (q *Queries) ClearConnectionCredentialsByID(ctx context.Context, id pgtype.
 
 const getConnectionByIDForUpdate = `-- name: GetConnectionByIDForUpdate :one
 
-SELECT id, agent_id, slug, name, description, llm_hint, access, auth_mode, auth_url, token_url, base_url, scopes, auth_injection, test_path, setup_instructions, config, client_id, client_secret, access_token_ref, refresh_token, token_expires_at, created_at, updated_at, auth_params, headers, owner_principal_id FROM connections WHERE id = $1 FOR UPDATE
+SELECT id, slug, name, description, llm_hint, access, auth_mode, auth_url, token_url, base_url, scopes, auth_injection, test_path, setup_instructions, config, client_id, client_secret, access_token_ref, refresh_token, token_expires_at, created_at, updated_at, auth_params, headers, owner_principal_id FROM connections WHERE id = $1 FOR UPDATE
 `
 
-// The credential proxy keys token reads + write-backs on the resource id, not
-// (agent, slug): one connection backs many agents' bindings, so the consuming
-// agent is not a stable handle for the row.
+// The credential proxy and the operator credential ops key reads + write-backs
+// on the resource id (one connection backs many agents' bindings), so the
+// consuming agent is not a stable handle for the row. Callers resolve the
+// binding to an id (ResolveBoundConnection / a freshly upserted row) first.
 func (q *Queries) GetConnectionByIDForUpdate(ctx context.Context, id pgtype.UUID) (Connection, error) {
 	row := q.db.QueryRow(ctx, getConnectionByIDForUpdate, id)
 	var i Connection
 	err := row.Scan(
 		&i.ID,
-		&i.AgentID,
 		&i.Slug,
 		&i.Name,
 		&i.Description,
@@ -87,304 +67,73 @@ func (q *Queries) GetConnectionByIDForUpdate(ctx context.Context, id pgtype.UUID
 	return i, err
 }
 
-const getConnectionBySlug = `-- name: GetConnectionBySlug :one
-SELECT id, agent_id, slug, name, description, llm_hint, access, auth_mode, auth_url, token_url, base_url, scopes, auth_injection, test_path, setup_instructions, config, client_id, client_secret, access_token_ref, refresh_token, token_expires_at, created_at, updated_at, auth_params, headers, owner_principal_id FROM connections WHERE agent_id = $1 AND slug = $2
+const listConnectionNeedsByAgent = `-- name: ListConnectionNeedsByAgent :many
+SELECT
+    n.slug AS slug,
+    n.description AS description,
+    COALESCE(c.id, '00000000-0000-0000-0000-000000000000'::uuid) AS connection_id,
+    COALESCE(c.name, n.spec->>'name', n.slug) AS name,
+    COALESCE(c.auth_mode, n.spec->>'auth_mode', '') AS auth_mode,
+    COALESCE(c.auth_url, n.spec->>'auth_url', '') AS auth_url,
+    COALESCE(c.base_url, n.spec->>'base_url', '') AS base_url,
+    COALESCE(c.scopes, n.spec->>'scopes', '') AS scopes,
+    COALESCE(c.setup_instructions, n.spec->>'setup_instructions', '') AS setup_instructions,
+    (COALESCE(c.auth_mode, n.spec->>'auth_mode', '') = 'none' OR COALESCE(c.access_token_ref, '') != '')::boolean AS authorized,
+    (COALESCE(c.client_id, '') != '')::boolean AS has_oauth_app,
+    (COALESCE(c.refresh_token, '') != '')::boolean AS has_refresh_token,
+    (n.bound_connection_id IS NOT NULL)::boolean AS bound,
+    c.token_expires_at AS token_expires_at
+FROM agent_resource_needs n
+LEFT JOIN connections c ON c.id = n.bound_connection_id
+WHERE n.agent_id = $1 AND n.type = 'connection'
+ORDER BY n.slug
 `
 
-type GetConnectionBySlugParams struct {
-	AgentID pgtype.UUID `json:"agent_id"`
-	Slug    string      `json:"slug"`
-}
-
-func (q *Queries) GetConnectionBySlug(ctx context.Context, arg GetConnectionBySlugParams) (Connection, error) {
-	row := q.db.QueryRow(ctx, getConnectionBySlug, arg.AgentID, arg.Slug)
-	var i Connection
-	err := row.Scan(
-		&i.ID,
-		&i.AgentID,
-		&i.Slug,
-		&i.Name,
-		&i.Description,
-		&i.LlmHint,
-		&i.Access,
-		&i.AuthMode,
-		&i.AuthUrl,
-		&i.TokenUrl,
-		&i.BaseUrl,
-		&i.Scopes,
-		&i.AuthInjection,
-		&i.TestPath,
-		&i.SetupInstructions,
-		&i.Config,
-		&i.ClientID,
-		&i.ClientSecret,
-		&i.AccessTokenRef,
-		&i.RefreshToken,
-		&i.TokenExpiresAt,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.AuthParams,
-		&i.Headers,
-		&i.OwnerPrincipalID,
-	)
-	return i, err
-}
-
-const getConnectionBySlugForUpdate = `-- name: GetConnectionBySlugForUpdate :one
-SELECT id, agent_id, slug, name, description, llm_hint, access, auth_mode, auth_url, token_url, base_url, scopes, auth_injection, test_path, setup_instructions, config, client_id, client_secret, access_token_ref, refresh_token, token_expires_at, created_at, updated_at, auth_params, headers, owner_principal_id FROM connections WHERE agent_id = $1 AND slug = $2 FOR UPDATE
-`
-
-type GetConnectionBySlugForUpdateParams struct {
-	AgentID pgtype.UUID `json:"agent_id"`
-	Slug    string      `json:"slug"`
-}
-
-// Row-locked read for on-demand token refresh: the caller locks the row,
-// re-checks expiry inside the txn, and refreshes only if still expired —
-// so concurrent proxy requests (and the background job, across replicas)
-// serialize on the row instead of double-refreshing and clobbering a
-// rotated refresh token.
-func (q *Queries) GetConnectionBySlugForUpdate(ctx context.Context, arg GetConnectionBySlugForUpdateParams) (Connection, error) {
-	row := q.db.QueryRow(ctx, getConnectionBySlugForUpdate, arg.AgentID, arg.Slug)
-	var i Connection
-	err := row.Scan(
-		&i.ID,
-		&i.AgentID,
-		&i.Slug,
-		&i.Name,
-		&i.Description,
-		&i.LlmHint,
-		&i.Access,
-		&i.AuthMode,
-		&i.AuthUrl,
-		&i.TokenUrl,
-		&i.BaseUrl,
-		&i.Scopes,
-		&i.AuthInjection,
-		&i.TestPath,
-		&i.SetupInstructions,
-		&i.Config,
-		&i.ClientID,
-		&i.ClientSecret,
-		&i.AccessTokenRef,
-		&i.RefreshToken,
-		&i.TokenExpiresAt,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.AuthParams,
-		&i.Headers,
-		&i.OwnerPrincipalID,
-	)
-	return i, err
-}
-
-const getConnectionForOAuth = `-- name: GetConnectionForOAuth :one
-SELECT id, agent_id, slug, name, auth_mode, auth_url, token_url, scopes,
-       client_id, client_secret, auth_params
-FROM connections WHERE agent_id = $1 AND slug = $2
-`
-
-type GetConnectionForOAuthParams struct {
-	AgentID pgtype.UUID `json:"agent_id"`
-	Slug    string      `json:"slug"`
-}
-
-type GetConnectionForOAuthRow struct {
-	ID           pgtype.UUID `json:"id"`
-	AgentID      pgtype.UUID `json:"agent_id"`
-	Slug         string      `json:"slug"`
-	Name         string      `json:"name"`
-	AuthMode     string      `json:"auth_mode"`
-	AuthUrl      string      `json:"auth_url"`
-	TokenUrl     string      `json:"token_url"`
-	Scopes       string      `json:"scopes"`
-	ClientID     string      `json:"client_id"`
-	ClientSecret string      `json:"client_secret"`
-	AuthParams   []byte      `json:"auth_params"`
-}
-
-// For OAuth flow: need auth_url, token_url, scopes, client_id, client_secret,
-// and auth_params (extra authorize-request params overriding the defaults).
-func (q *Queries) GetConnectionForOAuth(ctx context.Context, arg GetConnectionForOAuthParams) (GetConnectionForOAuthRow, error) {
-	row := q.db.QueryRow(ctx, getConnectionForOAuth, arg.AgentID, arg.Slug)
-	var i GetConnectionForOAuthRow
-	err := row.Scan(
-		&i.ID,
-		&i.AgentID,
-		&i.Slug,
-		&i.Name,
-		&i.AuthMode,
-		&i.AuthUrl,
-		&i.TokenUrl,
-		&i.Scopes,
-		&i.ClientID,
-		&i.ClientSecret,
-		&i.AuthParams,
-	)
-	return i, err
-}
-
-const getConnectionWithCredentialStatus = `-- name: GetConnectionWithCredentialStatus :one
-SELECT id, agent_id, slug, name, description, auth_mode, auth_url, base_url,
-       scopes, setup_instructions, test_path,
-       (COALESCE(auth_mode = 'none' OR access_token_ref != '', false))::boolean AS authorized,
-       (client_id != '') AS has_oauth_app,
-       token_expires_at
-FROM connections WHERE agent_id = $1 AND slug = $2
-`
-
-type GetConnectionWithCredentialStatusParams struct {
-	AgentID pgtype.UUID `json:"agent_id"`
-	Slug    string      `json:"slug"`
-}
-
-type GetConnectionWithCredentialStatusRow struct {
-	ID                pgtype.UUID        `json:"id"`
-	AgentID           pgtype.UUID        `json:"agent_id"`
+type ListConnectionNeedsByAgentRow struct {
 	Slug              string             `json:"slug"`
-	Name              string             `json:"name"`
 	Description       string             `json:"description"`
+	ConnectionID      pgtype.UUID        `json:"connection_id"`
+	Name              string             `json:"name"`
 	AuthMode          string             `json:"auth_mode"`
 	AuthUrl           string             `json:"auth_url"`
 	BaseUrl           string             `json:"base_url"`
 	Scopes            string             `json:"scopes"`
 	SetupInstructions string             `json:"setup_instructions"`
-	TestPath          string             `json:"test_path"`
-	Authorized        bool               `json:"authorized"`
-	HasOauthApp       bool               `json:"has_oauth_app"`
-	TokenExpiresAt    pgtype.Timestamptz `json:"token_expires_at"`
-}
-
-// Returns connection with enough info to determine if authorized.
-// auth_mode='none' connections need no credentials, so they're always
-// considered authorized; oauth/token connections require a stored token.
-func (q *Queries) GetConnectionWithCredentialStatus(ctx context.Context, arg GetConnectionWithCredentialStatusParams) (GetConnectionWithCredentialStatusRow, error) {
-	row := q.db.QueryRow(ctx, getConnectionWithCredentialStatus, arg.AgentID, arg.Slug)
-	var i GetConnectionWithCredentialStatusRow
-	err := row.Scan(
-		&i.ID,
-		&i.AgentID,
-		&i.Slug,
-		&i.Name,
-		&i.Description,
-		&i.AuthMode,
-		&i.AuthUrl,
-		&i.BaseUrl,
-		&i.Scopes,
-		&i.SetupInstructions,
-		&i.TestPath,
-		&i.Authorized,
-		&i.HasOauthApp,
-		&i.TokenExpiresAt,
-	)
-	return i, err
-}
-
-const listConnectionsByAgent = `-- name: ListConnectionsByAgent :many
-SELECT id, agent_id, slug, name, description, llm_hint, access, auth_mode, auth_url, token_url, base_url, scopes, auth_injection, test_path, setup_instructions, config, client_id, client_secret, access_token_ref, refresh_token, token_expires_at, created_at, updated_at, auth_params, headers, owner_principal_id FROM connections WHERE agent_id = $1
-`
-
-func (q *Queries) ListConnectionsByAgent(ctx context.Context, agentID pgtype.UUID) ([]Connection, error) {
-	rows, err := q.db.Query(ctx, listConnectionsByAgent, agentID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []Connection{}
-	for rows.Next() {
-		var i Connection
-		if err := rows.Scan(
-			&i.ID,
-			&i.AgentID,
-			&i.Slug,
-			&i.Name,
-			&i.Description,
-			&i.LlmHint,
-			&i.Access,
-			&i.AuthMode,
-			&i.AuthUrl,
-			&i.TokenUrl,
-			&i.BaseUrl,
-			&i.Scopes,
-			&i.AuthInjection,
-			&i.TestPath,
-			&i.SetupInstructions,
-			&i.Config,
-			&i.ClientID,
-			&i.ClientSecret,
-			&i.AccessTokenRef,
-			&i.RefreshToken,
-			&i.TokenExpiresAt,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-			&i.AuthParams,
-			&i.Headers,
-			&i.OwnerPrincipalID,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listConnectionsWithStatus = `-- name: ListConnectionsWithStatus :many
-SELECT id, agent_id, slug, name, description, auth_mode, auth_url, base_url,
-       scopes, setup_instructions, test_path,
-       (COALESCE(auth_mode = 'none' OR access_token_ref != '', false))::boolean AS authorized,
-       (client_id != '') AS has_oauth_app,
-       (refresh_token != '') AS has_refresh_token,
-       token_expires_at
-FROM connections WHERE agent_id = $1 ORDER BY slug
-`
-
-type ListConnectionsWithStatusRow struct {
-	ID                pgtype.UUID        `json:"id"`
-	AgentID           pgtype.UUID        `json:"agent_id"`
-	Slug              string             `json:"slug"`
-	Name              string             `json:"name"`
-	Description       string             `json:"description"`
-	AuthMode          string             `json:"auth_mode"`
-	AuthUrl           string             `json:"auth_url"`
-	BaseUrl           string             `json:"base_url"`
-	Scopes            string             `json:"scopes"`
-	SetupInstructions string             `json:"setup_instructions"`
-	TestPath          string             `json:"test_path"`
 	Authorized        bool               `json:"authorized"`
 	HasOauthApp       bool               `json:"has_oauth_app"`
 	HasRefreshToken   bool               `json:"has_refresh_token"`
+	Bound             bool               `json:"bound"`
 	TokenExpiresAt    pgtype.Timestamptz `json:"token_expires_at"`
 }
 
-// For GET /api/v1/agents/{agentID}/connections.
-// See GetConnectionWithCredentialStatus for the auth_mode='none' rule.
-func (q *Queries) ListConnectionsWithStatus(ctx context.Context, agentID pgtype.UUID) ([]ListConnectionsWithStatusRow, error) {
-	rows, err := q.db.Query(ctx, listConnectionsWithStatus, agentID)
+// The agent's connection needs joined to their bound resource (if any). The
+// agent's local handle is the NEED slug; an unconfigured need surfaces with its
+// declared spec shape and authorized=false so the operator can set it up. Drives
+// the operator connections tab, the agent-detail bundle, and the prompt's
+// "needs setup" hints — none of which should see another agent's slug.
+func (q *Queries) ListConnectionNeedsByAgent(ctx context.Context, agentID pgtype.UUID) ([]ListConnectionNeedsByAgentRow, error) {
+	rows, err := q.db.Query(ctx, listConnectionNeedsByAgent, agentID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []ListConnectionsWithStatusRow{}
+	items := []ListConnectionNeedsByAgentRow{}
 	for rows.Next() {
-		var i ListConnectionsWithStatusRow
+		var i ListConnectionNeedsByAgentRow
 		if err := rows.Scan(
-			&i.ID,
-			&i.AgentID,
 			&i.Slug,
-			&i.Name,
 			&i.Description,
+			&i.ConnectionID,
+			&i.Name,
 			&i.AuthMode,
 			&i.AuthUrl,
 			&i.BaseUrl,
 			&i.Scopes,
 			&i.SetupInstructions,
-			&i.TestPath,
 			&i.Authorized,
 			&i.HasOauthApp,
 			&i.HasRefreshToken,
+			&i.Bound,
 			&i.TokenExpiresAt,
 		); err != nil {
 			return nil, err
@@ -398,23 +147,24 @@ func (q *Queries) ListConnectionsWithStatus(ctx context.Context, agentID pgtype.
 }
 
 const listExpiringConnections = `-- name: ListExpiringConnections :many
-SELECT c.id, c.agent_id, c.slug, c.name, c.auth_mode, c.token_url,
+SELECT c.id, c.slug, c.name, c.auth_mode, c.token_url,
        c.client_id, c.client_secret, c.access_token_ref, c.refresh_token,
-       c.token_expires_at, c.scopes,
-       a.slug AS agent_slug
+       c.token_expires_at, c.scopes
 FROM connections c
-JOIN agents a ON c.agent_id = a.id
 WHERE c.auth_mode = 'oauth'
   AND c.access_token_ref != ''
   AND c.refresh_token != ''
   AND c.token_expires_at IS NOT NULL
   AND c.token_expires_at < $1
-  AND a.status = 'active'
+  AND EXISTS (
+      SELECT 1 FROM agent_resource_needs n
+      JOIN agents a ON a.id = n.agent_id
+      WHERE n.bound_connection_id = c.id AND a.status = 'active'
+  )
 `
 
 type ListExpiringConnectionsRow struct {
 	ID             pgtype.UUID        `json:"id"`
-	AgentID        pgtype.UUID        `json:"agent_id"`
 	Slug           string             `json:"slug"`
 	Name           string             `json:"name"`
 	AuthMode       string             `json:"auth_mode"`
@@ -425,10 +175,11 @@ type ListExpiringConnectionsRow struct {
 	RefreshToken   string             `json:"refresh_token"`
 	TokenExpiresAt pgtype.Timestamptz `json:"token_expires_at"`
 	Scopes         string             `json:"scopes"`
-	AgentSlug      string             `json:"agent_slug"`
 }
 
-// For refresh job: find tokens expiring within buffer window
+// For the refresh job: OAuth tokens expiring within the buffer window that back
+// at least one active agent's bound need (a connection bound only to suspended
+// or stopped agents doesn't need a pre-warmed token).
 func (q *Queries) ListExpiringConnections(ctx context.Context, expiryThreshold pgtype.Timestamptz) ([]ListExpiringConnectionsRow, error) {
 	rows, err := q.db.Query(ctx, listExpiringConnections, expiryThreshold)
 	if err != nil {
@@ -440,7 +191,6 @@ func (q *Queries) ListExpiringConnections(ctx context.Context, expiryThreshold p
 		var i ListExpiringConnectionsRow
 		if err := rows.Scan(
 			&i.ID,
-			&i.AgentID,
 			&i.Slug,
 			&i.Name,
 			&i.AuthMode,
@@ -451,7 +201,6 @@ func (q *Queries) ListExpiringConnections(ctx context.Context, expiryThreshold p
 			&i.RefreshToken,
 			&i.TokenExpiresAt,
 			&i.Scopes,
-			&i.AgentSlug,
 		); err != nil {
 			return nil, err
 		}
@@ -461,34 +210,6 @@ func (q *Queries) ListExpiringConnections(ctx context.Context, expiryThreshold p
 		return nil, err
 	}
 	return items, nil
-}
-
-const updateConnectionCredentials = `-- name: UpdateConnectionCredentials :exec
-UPDATE connections SET
-    access_token_ref = $1,
-    token_expires_at = $2,
-    refresh_token = $3,
-    updated_at = now()
-WHERE agent_id = $4 AND slug = $5
-`
-
-type UpdateConnectionCredentialsParams struct {
-	AccessTokenRef string             `json:"access_token_ref"`
-	TokenExpiresAt pgtype.Timestamptz `json:"token_expires_at"`
-	RefreshToken   string             `json:"refresh_token"`
-	AgentID        pgtype.UUID        `json:"agent_id"`
-	Slug           string             `json:"slug"`
-}
-
-func (q *Queries) UpdateConnectionCredentials(ctx context.Context, arg UpdateConnectionCredentialsParams) error {
-	_, err := q.db.Exec(ctx, updateConnectionCredentials,
-		arg.AccessTokenRef,
-		arg.TokenExpiresAt,
-		arg.RefreshToken,
-		arg.AgentID,
-		arg.Slug,
-	)
-	return err
 }
 
 const updateConnectionCredentialsByID = `-- name: UpdateConnectionCredentialsByID :exec
@@ -517,29 +238,23 @@ func (q *Queries) UpdateConnectionCredentialsByID(ctx context.Context, arg Updat
 	return err
 }
 
-const updateConnectionOAuthApp = `-- name: UpdateConnectionOAuthApp :exec
+const updateConnectionOAuthAppByID = `-- name: UpdateConnectionOAuthAppByID :exec
 UPDATE connections SET
     client_id = $1,
     client_secret = $2,
     updated_at = now()
-WHERE agent_id = $3 AND slug = $4
+WHERE id = $3
 `
 
-type UpdateConnectionOAuthAppParams struct {
+type UpdateConnectionOAuthAppByIDParams struct {
 	ClientID     string      `json:"client_id"`
 	ClientSecret string      `json:"client_secret"`
-	AgentID      pgtype.UUID `json:"agent_id"`
-	Slug         string      `json:"slug"`
+	ID           pgtype.UUID `json:"id"`
 }
 
-// User enters OAuth client_id + client_secret
-func (q *Queries) UpdateConnectionOAuthApp(ctx context.Context, arg UpdateConnectionOAuthAppParams) error {
-	_, err := q.db.Exec(ctx, updateConnectionOAuthApp,
-		arg.ClientID,
-		arg.ClientSecret,
-		arg.AgentID,
-		arg.Slug,
-	)
+// User enters OAuth client_id + client_secret.
+func (q *Queries) UpdateConnectionOAuthAppByID(ctx context.Context, arg UpdateConnectionOAuthAppByIDParams) error {
+	_, err := q.db.Exec(ctx, updateConnectionOAuthAppByID, arg.ClientID, arg.ClientSecret, arg.ID)
 	return err
 }
 
@@ -560,9 +275,10 @@ func (q *Queries) UpdateConnectionOwnerByID(ctx context.Context, arg UpdateConne
 }
 
 const upsertConnection = `-- name: UpsertConnection :one
-INSERT INTO connections (agent_id, owner_principal_id, slug, name, description, llm_hint, auth_mode, auth_url, token_url, base_url, scopes, auth_injection, setup_instructions, test_path, config, auth_params, headers, access, client_id, client_secret, access_token_ref, refresh_token)
-VALUES ($1, (SELECT user_id FROM agents WHERE id = $1), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, '', '', '', '')
-ON CONFLICT (agent_id, slug) DO UPDATE SET
+
+INSERT INTO connections (owner_principal_id, slug, name, description, llm_hint, auth_mode, auth_url, token_url, base_url, scopes, auth_injection, setup_instructions, test_path, config, auth_params, headers, access, client_id, client_secret, access_token_ref, refresh_token)
+VALUES ((SELECT user_id FROM agents WHERE agents.id = $1), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, '', '', '', '')
+ON CONFLICT (owner_principal_id, slug) DO UPDATE SET
     name = EXCLUDED.name,
     description = EXCLUDED.description,
     llm_hint = EXCLUDED.llm_hint,
@@ -582,7 +298,7 @@ ON CONFLICT (agent_id, slug) DO UPDATE SET
     refresh_token = CASE WHEN connections.scopes != EXCLUDED.scopes THEN '' ELSE connections.refresh_token END,
     token_expires_at = CASE WHEN connections.scopes != EXCLUDED.scopes THEN NULL ELSE connections.token_expires_at END,
     updated_at = now()
-RETURNING id, agent_id, slug, name, description, llm_hint, access, auth_mode, auth_url, token_url, base_url, scopes, auth_injection, test_path, setup_instructions, config, client_id, client_secret, access_token_ref, refresh_token, token_expires_at, created_at, updated_at, auth_params, headers, owner_principal_id
+RETURNING id, slug, name, description, llm_hint, access, auth_mode, auth_url, token_url, base_url, scopes, auth_injection, test_path, setup_instructions, config, client_id, client_secret, access_token_ref, refresh_token, token_expires_at, created_at, updated_at, auth_params, headers, owner_principal_id
 `
 
 type UpsertConnectionParams struct {
@@ -605,10 +321,16 @@ type UpsertConnectionParams struct {
 	Access            string      `json:"access"`
 }
 
-// When scopes change, clear access_token_ref so the user must re-authorize with the new scopes.
-// Credential fields (client_id, client_secret, access_token_ref, refresh_token)
-// are passed explicitly as ” on first insert; the ON CONFLICT clause
-// preserves existing access_token_ref unless scopes changed.
+// Connections are principal-owned resources, identified by id or
+// (owner_principal_id, slug). An agent reaches a connection only through a
+// binding on agent_resource_needs, so credential-management queries address the
+// resource by id (the service resolves the binding first) and listings join
+// through the needs table, keyed by the agent's NEED slug.
+// Create-or-refresh the owner's connection for @slug. The owner is the agent's
+// user; @agent_id only resolves that owner — the row carries no agent_id. When
+// scopes change, clear access_token_ref so the user must re-authorize with the
+// new scopes. Credential fields are seeded empty on insert; ON CONFLICT
+// preserves an existing access_token_ref unless scopes changed.
 func (q *Queries) UpsertConnection(ctx context.Context, arg UpsertConnectionParams) (Connection, error) {
 	row := q.db.QueryRow(ctx, upsertConnection,
 		arg.AgentID,
@@ -632,7 +354,6 @@ func (q *Queries) UpsertConnection(ctx context.Context, arg UpsertConnectionPara
 	var i Connection
 	err := row.Scan(
 		&i.ID,
-		&i.AgentID,
 		&i.Slug,
 		&i.Name,
 		&i.Description,

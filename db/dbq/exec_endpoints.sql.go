@@ -11,140 +11,119 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const clearExecEndpointHostKey = `-- name: ClearExecEndpointHostKey :exec
+const clearExecEndpointHostKeyByID = `-- name: ClearExecEndpointHostKeyByID :exec
 UPDATE agent_exec_endpoints SET
     host_key_openssh   = NULL,
     host_key_pinned_at = NULL,
     updated_at         = now()
-WHERE agent_id = $1 AND slug = $2
+WHERE id = $1
 `
 
-type ClearExecEndpointHostKeyParams struct {
-	AgentID pgtype.UUID `json:"agent_id"`
-	Slug    string      `json:"slug"`
-}
-
-// Operator "unpin & re-TOFU" — typically used after a known-good rotation
-// on the target box. Next successful connect pins the new host key.
-func (q *Queries) ClearExecEndpointHostKey(ctx context.Context, arg ClearExecEndpointHostKeyParams) error {
-	_, err := q.db.Exec(ctx, clearExecEndpointHostKey, arg.AgentID, arg.Slug)
+// Operator "unpin & re-TOFU" — typically used after a known-good rotation on the
+// target box. Next successful connect pins the new host key.
+func (q *Queries) ClearExecEndpointHostKeyByID(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, clearExecEndpointHostKeyByID, id)
 	return err
 }
 
-const configureExecEndpointSSH = `-- name: ConfigureExecEndpointSSH :exec
+const configureExecEndpointSSHByID = `-- name: ConfigureExecEndpointSSHByID :exec
 UPDATE agent_exec_endpoints SET
     transport  = 'ssh',
     host       = $1,
     port       = $2,
     ssh_user   = $3,
     updated_at = now()
-WHERE agent_id = $4 AND slug = $5
+WHERE id = $4
 `
 
-type ConfigureExecEndpointSSHParams struct {
+type ConfigureExecEndpointSSHByIDParams struct {
 	Host    pgtype.Text `json:"host"`
 	Port    pgtype.Int4 `json:"port"`
 	SshUser pgtype.Text `json:"ssh_user"`
-	AgentID pgtype.UUID `json:"agent_id"`
-	Slug    string      `json:"slug"`
+	ID      pgtype.UUID `json:"id"`
 }
 
-// Operator sets transport=ssh and the connection target. Does NOT touch
-// keypair or host_key — those are owned by the keypair / TOFU flows.
-func (q *Queries) ConfigureExecEndpointSSH(ctx context.Context, arg ConfigureExecEndpointSSHParams) error {
-	_, err := q.db.Exec(ctx, configureExecEndpointSSH,
+// Operator sets transport=ssh and the connection target. Does NOT touch keypair
+// or host_key — those are owned by the keypair / TOFU flows.
+func (q *Queries) ConfigureExecEndpointSSHByID(ctx context.Context, arg ConfigureExecEndpointSSHByIDParams) error {
+	_, err := q.db.Exec(ctx, configureExecEndpointSSHByID,
 		arg.Host,
 		arg.Port,
 		arg.SshUser,
-		arg.AgentID,
-		arg.Slug,
+		arg.ID,
 	)
 	return err
 }
 
-const deleteExecEndpoint = `-- name: DeleteExecEndpoint :exec
-DELETE FROM agent_exec_endpoints WHERE agent_id = $1 AND slug = $2
+const listExecNeedsByAgent = `-- name: ListExecNeedsByAgent :many
+SELECT
+    n.slug AS slug,
+    COALESCE(e.id, '00000000-0000-0000-0000-000000000000'::uuid) AS exec_id,
+    COALESCE(e.description, n.description) AS description,
+    COALESCE(e.llm_hint, n.spec->>'llm_hint', '') AS llm_hint,
+    COALESCE(e.access, n.spec->>'access', 'admin') AS access,
+    (n.bound_exec_id IS NOT NULL)::boolean AS bound,
+    e.transport AS transport,
+    e.host AS host,
+    e.port AS port,
+    e.ssh_user AS ssh_user,
+    e.public_key_openssh AS public_key_openssh,
+    e.public_key_comment AS public_key_comment,
+    e.host_key_openssh AS host_key_openssh,
+    e.host_key_pinned_at AS host_key_pinned_at,
+    e.last_used_at AS last_used_at
+FROM agent_resource_needs n
+LEFT JOIN agent_exec_endpoints e ON e.id = n.bound_exec_id
+WHERE n.agent_id = $1 AND n.type = 'exec_endpoint'
+ORDER BY n.slug
 `
 
-type DeleteExecEndpointParams struct {
-	AgentID pgtype.UUID `json:"agent_id"`
-	Slug    string      `json:"slug"`
+type ListExecNeedsByAgentRow struct {
+	Slug             string             `json:"slug"`
+	ExecID           pgtype.UUID        `json:"exec_id"`
+	Description      string             `json:"description"`
+	LlmHint          string             `json:"llm_hint"`
+	Access           string             `json:"access"`
+	Bound            bool               `json:"bound"`
+	Transport        pgtype.Text        `json:"transport"`
+	Host             pgtype.Text        `json:"host"`
+	Port             pgtype.Int4        `json:"port"`
+	SshUser          pgtype.Text        `json:"ssh_user"`
+	PublicKeyOpenssh pgtype.Text        `json:"public_key_openssh"`
+	PublicKeyComment pgtype.Text        `json:"public_key_comment"`
+	HostKeyOpenssh   pgtype.Text        `json:"host_key_openssh"`
+	HostKeyPinnedAt  pgtype.Timestamptz `json:"host_key_pinned_at"`
+	LastUsedAt       pgtype.Timestamptz `json:"last_used_at"`
 }
 
-func (q *Queries) DeleteExecEndpoint(ctx context.Context, arg DeleteExecEndpointParams) error {
-	_, err := q.db.Exec(ctx, deleteExecEndpoint, arg.AgentID, arg.Slug)
-	return err
-}
-
-const getExecEndpointBySlug = `-- name: GetExecEndpointBySlug :one
-SELECT id, agent_id, slug, description, llm_hint, access, transport, host, port, ssh_user, private_key_ref, public_key_openssh, public_key_comment, host_key_openssh, host_key_pinned_at, last_used_at, created_at, updated_at, owner_principal_id FROM agent_exec_endpoints WHERE agent_id = $1 AND slug = $2
-`
-
-type GetExecEndpointBySlugParams struct {
-	AgentID pgtype.UUID `json:"agent_id"`
-	Slug    string      `json:"slug"`
-}
-
-func (q *Queries) GetExecEndpointBySlug(ctx context.Context, arg GetExecEndpointBySlugParams) (AgentExecEndpoint, error) {
-	row := q.db.QueryRow(ctx, getExecEndpointBySlug, arg.AgentID, arg.Slug)
-	var i AgentExecEndpoint
-	err := row.Scan(
-		&i.ID,
-		&i.AgentID,
-		&i.Slug,
-		&i.Description,
-		&i.LlmHint,
-		&i.Access,
-		&i.Transport,
-		&i.Host,
-		&i.Port,
-		&i.SshUser,
-		&i.PrivateKeyRef,
-		&i.PublicKeyOpenssh,
-		&i.PublicKeyComment,
-		&i.HostKeyOpenssh,
-		&i.HostKeyPinnedAt,
-		&i.LastUsedAt,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.OwnerPrincipalID,
-	)
-	return i, err
-}
-
-const listExecEndpointsByAgent = `-- name: ListExecEndpointsByAgent :many
-SELECT id, agent_id, slug, description, llm_hint, access, transport, host, port, ssh_user, private_key_ref, public_key_openssh, public_key_comment, host_key_openssh, host_key_pinned_at, last_used_at, created_at, updated_at, owner_principal_id FROM agent_exec_endpoints WHERE agent_id = $1 ORDER BY slug
-`
-
-func (q *Queries) ListExecEndpointsByAgent(ctx context.Context, agentID pgtype.UUID) ([]AgentExecEndpoint, error) {
-	rows, err := q.db.Query(ctx, listExecEndpointsByAgent, agentID)
+// The agent's exec-endpoint needs joined to their bound resource (if any), keyed
+// by the NEED slug. Unconfigured needs surface with the declared spec shape and
+// null operator columns. Drives the operator exec tab.
+func (q *Queries) ListExecNeedsByAgent(ctx context.Context, agentID pgtype.UUID) ([]ListExecNeedsByAgentRow, error) {
+	rows, err := q.db.Query(ctx, listExecNeedsByAgent, agentID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []AgentExecEndpoint{}
+	items := []ListExecNeedsByAgentRow{}
 	for rows.Next() {
-		var i AgentExecEndpoint
+		var i ListExecNeedsByAgentRow
 		if err := rows.Scan(
-			&i.ID,
-			&i.AgentID,
 			&i.Slug,
+			&i.ExecID,
 			&i.Description,
 			&i.LlmHint,
 			&i.Access,
+			&i.Bound,
 			&i.Transport,
 			&i.Host,
 			&i.Port,
 			&i.SshUser,
-			&i.PrivateKeyRef,
 			&i.PublicKeyOpenssh,
 			&i.PublicKeyComment,
 			&i.HostKeyOpenssh,
 			&i.HostKeyPinnedAt,
 			&i.LastUsedAt,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-			&i.OwnerPrincipalID,
 		); err != nil {
 			return nil, err
 		}
@@ -169,41 +148,37 @@ type SetExecEndpointHostKeyParams struct {
 	ID             pgtype.UUID `json:"id"`
 }
 
-// TOFU pin: written the first time the dialer successfully connects to a
-// target whose host_key_openssh is currently NULL. Keyed on id (not
-// agent_id+slug) so the dialer's pinner can call it without re-looking
-// up the row.
+// TOFU pin: written the first time the dialer successfully connects to a target
+// whose host_key_openssh is currently NULL.
 func (q *Queries) SetExecEndpointHostKey(ctx context.Context, arg SetExecEndpointHostKeyParams) error {
 	_, err := q.db.Exec(ctx, setExecEndpointHostKey, arg.HostKeyOpenssh, arg.ID)
 	return err
 }
 
-const setExecEndpointKeypair = `-- name: SetExecEndpointKeypair :exec
+const setExecEndpointKeypairByID = `-- name: SetExecEndpointKeypairByID :exec
 UPDATE agent_exec_endpoints SET
     private_key_ref    = $1,
     public_key_openssh = $2,
     public_key_comment = $3,
     updated_at         = now()
-WHERE agent_id = $4 AND slug = $5
+WHERE id = $4
 `
 
-type SetExecEndpointKeypairParams struct {
+type SetExecEndpointKeypairByIDParams struct {
 	PrivateKeyRef    pgtype.Text `json:"private_key_ref"`
 	PublicKeyOpenssh pgtype.Text `json:"public_key_openssh"`
 	PublicKeyComment pgtype.Text `json:"public_key_comment"`
-	AgentID          pgtype.UUID `json:"agent_id"`
-	Slug             string      `json:"slug"`
+	ID               pgtype.UUID `json:"id"`
 }
 
-// Stores a freshly generated keypair. Called at first configure (when no
-// key exists yet) and on operator-triggered rotation.
-func (q *Queries) SetExecEndpointKeypair(ctx context.Context, arg SetExecEndpointKeypairParams) error {
-	_, err := q.db.Exec(ctx, setExecEndpointKeypair,
+// Stores a freshly generated keypair. Called at first configure (when no key
+// exists yet) and on operator-triggered rotation.
+func (q *Queries) SetExecEndpointKeypairByID(ctx context.Context, arg SetExecEndpointKeypairByIDParams) error {
+	_, err := q.db.Exec(ctx, setExecEndpointKeypairByID,
 		arg.PrivateKeyRef,
 		arg.PublicKeyOpenssh,
 		arg.PublicKeyComment,
-		arg.AgentID,
-		arg.Slug,
+		arg.ID,
 	)
 	return err
 }
@@ -218,6 +193,7 @@ func (q *Queries) TouchExecEndpointLastUsed(ctx context.Context, id pgtype.UUID)
 }
 
 const updateExecEndpointOwnerByID = `-- name: UpdateExecEndpointOwnerByID :exec
+
 UPDATE agent_exec_endpoints SET owner_principal_id = $1 WHERE id = $2
 `
 
@@ -226,6 +202,7 @@ type UpdateExecEndpointOwnerByIDParams struct {
 	ID               pgtype.UUID `json:"id"`
 }
 
+// id-keyed operator ops (the service resolves the binding to an id first).
 // Set the resource owner to the principal who created it (the configuring user),
 // overriding the agent-owner default the declaration upsert seeds.
 func (q *Queries) UpdateExecEndpointOwnerByID(ctx context.Context, arg UpdateExecEndpointOwnerByIDParams) error {
@@ -233,14 +210,16 @@ func (q *Queries) UpdateExecEndpointOwnerByID(ctx context.Context, arg UpdateExe
 	return err
 }
 
-const upsertExecEndpointDeclaration = `-- name: UpsertExecEndpointDeclaration :exec
-INSERT INTO agent_exec_endpoints (agent_id, owner_principal_id, slug, description, llm_hint, access)
-VALUES ($1, (SELECT user_id FROM agents WHERE id = $1), $2, $3, $4, $5)
-ON CONFLICT (agent_id, slug) DO UPDATE SET
+const upsertExecEndpointDeclaration = `-- name: UpsertExecEndpointDeclaration :one
+
+INSERT INTO agent_exec_endpoints (owner_principal_id, slug, description, llm_hint, access)
+VALUES ((SELECT user_id FROM agents WHERE agents.id = $1), $2, $3, $4, $5)
+ON CONFLICT (owner_principal_id, slug) DO UPDATE SET
     description = EXCLUDED.description,
     llm_hint    = EXCLUDED.llm_hint,
     access      = EXCLUDED.access,
     updated_at  = now()
+RETURNING id, slug, description, llm_hint, access, transport, host, port, ssh_user, private_key_ref, public_key_openssh, public_key_comment, host_key_openssh, host_key_pinned_at, last_used_at, created_at, updated_at, owner_principal_id
 `
 
 type UpsertExecEndpointDeclarationParams struct {
@@ -251,17 +230,45 @@ type UpsertExecEndpointDeclarationParams struct {
 	Access      string      `json:"access"`
 }
 
-// Pushed by the agent on every startup (syncWithAirlock). Only touches
-// fields the agent declares in code; operator-configured columns (transport,
-// host, port, ssh_user, private_key_ref, public_key_*, host_key_*) are left
-// untouched so re-syncing a running agent does not nuke its operator config.
-func (q *Queries) UpsertExecEndpointDeclaration(ctx context.Context, arg UpsertExecEndpointDeclarationParams) error {
-	_, err := q.db.Exec(ctx, upsertExecEndpointDeclaration,
+// Exec endpoints are principal-owned resources, identified by id or
+// (owner_principal_id, slug). An agent reaches one only through a binding on
+// agent_resource_needs, so operator ops address the resource by id (the service
+// resolves the binding first) and the listing joins through needs, keyed by the
+// agent's NEED slug.
+// Create-or-refresh the owner's exec endpoint for @slug. The owner is the
+// agent's user; @agent_id only resolves that owner — the row carries no
+// agent_id. Only the agent-declared fields are touched; operator-configured
+// columns (transport, host, port, ssh_user, private_key_ref, public_key_*,
+// host_key_*) are left untouched so re-syncing a running agent does not nuke
+// its operator config.
+func (q *Queries) UpsertExecEndpointDeclaration(ctx context.Context, arg UpsertExecEndpointDeclarationParams) (AgentExecEndpoint, error) {
+	row := q.db.QueryRow(ctx, upsertExecEndpointDeclaration,
 		arg.AgentID,
 		arg.Slug,
 		arg.Description,
 		arg.LlmHint,
 		arg.Access,
 	)
-	return err
+	var i AgentExecEndpoint
+	err := row.Scan(
+		&i.ID,
+		&i.Slug,
+		&i.Description,
+		&i.LlmHint,
+		&i.Access,
+		&i.Transport,
+		&i.Host,
+		&i.Port,
+		&i.SshUser,
+		&i.PrivateKeyRef,
+		&i.PublicKeyOpenssh,
+		&i.PublicKeyComment,
+		&i.HostKeyOpenssh,
+		&i.HostKeyPinnedAt,
+		&i.LastUsedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.OwnerPrincipalID,
+	)
+	return i, err
 }

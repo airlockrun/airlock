@@ -99,7 +99,7 @@ func (s *Service) toolListExecEndpoints() tool.Tool {
 			}
 			out := make([]*airlockv1.ExecEndpointInfo, len(rows))
 			for i, ep := range rows {
-				out[i] = convert.ExecEndpointRowToProto(ep)
+				out[i] = convert.ExecNeedRowToProto(ep)
 			}
 			return okResult(out)
 		}).

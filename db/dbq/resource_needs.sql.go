@@ -151,7 +151,7 @@ func (q *Queries) ListResourceNeedsByAgent(ctx context.Context, agentID pgtype.U
 
 const resolveBoundConnection = `-- name: ResolveBoundConnection :one
 
-SELECT c.id, c.agent_id, c.slug, c.name, c.description, c.llm_hint, c.access, c.auth_mode, c.auth_url, c.token_url, c.base_url, c.scopes, c.auth_injection, c.test_path, c.setup_instructions, c.config, c.client_id, c.client_secret, c.access_token_ref, c.refresh_token, c.token_expires_at, c.created_at, c.updated_at, c.auth_params, c.headers, c.owner_principal_id FROM agent_resource_needs n
+SELECT c.id, c.slug, c.name, c.description, c.llm_hint, c.access, c.auth_mode, c.auth_url, c.token_url, c.base_url, c.scopes, c.auth_injection, c.test_path, c.setup_instructions, c.config, c.client_id, c.client_secret, c.access_token_ref, c.refresh_token, c.token_expires_at, c.created_at, c.updated_at, c.auth_params, c.headers, c.owner_principal_id FROM agent_resource_needs n
 JOIN connections c ON c.id = n.bound_connection_id
 WHERE n.agent_id = $1 AND n.type = 'connection' AND n.slug = $2
 `
@@ -169,7 +169,6 @@ func (q *Queries) ResolveBoundConnection(ctx context.Context, arg ResolveBoundCo
 	var i Connection
 	err := row.Scan(
 		&i.ID,
-		&i.AgentID,
 		&i.Slug,
 		&i.Name,
 		&i.Description,
@@ -199,7 +198,7 @@ func (q *Queries) ResolveBoundConnection(ctx context.Context, arg ResolveBoundCo
 }
 
 const resolveBoundExecEndpoint = `-- name: ResolveBoundExecEndpoint :one
-SELECT e.id, e.agent_id, e.slug, e.description, e.llm_hint, e.access, e.transport, e.host, e.port, e.ssh_user, e.private_key_ref, e.public_key_openssh, e.public_key_comment, e.host_key_openssh, e.host_key_pinned_at, e.last_used_at, e.created_at, e.updated_at, e.owner_principal_id FROM agent_resource_needs n
+SELECT e.id, e.slug, e.description, e.llm_hint, e.access, e.transport, e.host, e.port, e.ssh_user, e.private_key_ref, e.public_key_openssh, e.public_key_comment, e.host_key_openssh, e.host_key_pinned_at, e.last_used_at, e.created_at, e.updated_at, e.owner_principal_id FROM agent_resource_needs n
 JOIN agent_exec_endpoints e ON e.id = n.bound_exec_id
 WHERE n.agent_id = $1 AND n.type = 'exec_endpoint' AND n.slug = $2
 `
@@ -214,7 +213,6 @@ func (q *Queries) ResolveBoundExecEndpoint(ctx context.Context, arg ResolveBound
 	var i AgentExecEndpoint
 	err := row.Scan(
 		&i.ID,
-		&i.AgentID,
 		&i.Slug,
 		&i.Description,
 		&i.LlmHint,
@@ -237,7 +235,7 @@ func (q *Queries) ResolveBoundExecEndpoint(ctx context.Context, arg ResolveBound
 }
 
 const resolveBoundMCPServer = `-- name: ResolveBoundMCPServer :one
-SELECT m.id, m.agent_id, m.slug, m.name, m.access, m.url, m.auth_mode, m.auth_url, m.token_url, m.registration_endpoint, m.scopes, m.auth_injection, m.tool_schemas, m.client_id, m.client_secret, m.access_token_ref, m.refresh_token, m.token_expires_at, m.last_synced_at, m.created_at, m.updated_at, m.server_instructions, m.owner_principal_id FROM agent_resource_needs n
+SELECT m.id, m.slug, m.name, m.access, m.url, m.auth_mode, m.auth_url, m.token_url, m.registration_endpoint, m.scopes, m.auth_injection, m.tool_schemas, m.client_id, m.client_secret, m.access_token_ref, m.refresh_token, m.token_expires_at, m.last_synced_at, m.created_at, m.updated_at, m.server_instructions, m.owner_principal_id FROM agent_resource_needs n
 JOIN agent_mcp_servers m ON m.id = n.bound_mcp_id
 WHERE n.agent_id = $1 AND n.type = 'mcp_server' AND n.slug = $2
 `
@@ -252,7 +250,6 @@ func (q *Queries) ResolveBoundMCPServer(ctx context.Context, arg ResolveBoundMCP
 	var i AgentMcpServer
 	err := row.Scan(
 		&i.ID,
-		&i.AgentID,
 		&i.Slug,
 		&i.Name,
 		&i.Access,

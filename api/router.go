@@ -755,7 +755,6 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		r.Delete("/schedules/{id}", ah.CancelScheduledFire)
 		r.Post("/topic/{slug}/subscribe", ah.TopicSubscribe)
 		r.Delete("/topic/{slug}/subscribe", ah.TopicUnsubscribe)
-		r.Put("/mcp-servers/{slug}", ah.UpsertMCPServer)
 		r.Post("/mcp/{slug}/tools/call", ah.MCPToolCall)
 		r.Put("/env-vars/{slug}", ah.UpsertEnvVar)
 		r.Get("/env-vars/{slug}", ah.GetEnvVarValue)

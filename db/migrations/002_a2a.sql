@@ -1001,6 +1001,28 @@ INSERT INTO agent_resource_needs (agent_id, type, slug, description, setup_instr
            jsonb_build_object('llm_hint', llm_hint, 'access', access),
            id FROM agent_exec_endpoints;
 
+-- Now that every resource is owner-stamped and mirrored into a bound need, sever
+-- the agent_id coupling: a resource is identified by its owner + slug (and id),
+-- and an agent reaches it only through agent_resource_needs. This is what lets
+-- one set of credentials back many of an owner's agents, and makes a resource
+-- outlive the agent that first declared it (it dies with its owner, not its
+-- creating agent). owner_principal_id is the lifecycle anchor, so it is NOT NULL.
+ALTER TABLE connections          ALTER COLUMN owner_principal_id SET NOT NULL;
+ALTER TABLE agent_mcp_servers    ALTER COLUMN owner_principal_id SET NOT NULL;
+ALTER TABLE agent_exec_endpoints ALTER COLUMN owner_principal_id SET NOT NULL;
+
+ALTER TABLE connections          DROP CONSTRAINT connections_agent_id_slug_key;
+ALTER TABLE agent_mcp_servers    DROP CONSTRAINT agent_mcp_servers_agent_id_slug_key;
+ALTER TABLE agent_exec_endpoints DROP CONSTRAINT agent_exec_endpoints_agent_id_slug_key;
+ALTER TABLE connections          ADD CONSTRAINT connections_owner_slug_key          UNIQUE (owner_principal_id, slug);
+ALTER TABLE agent_mcp_servers    ADD CONSTRAINT agent_mcp_servers_owner_slug_key    UNIQUE (owner_principal_id, slug);
+ALTER TABLE agent_exec_endpoints ADD CONSTRAINT agent_exec_endpoints_owner_slug_key UNIQUE (owner_principal_id, slug);
+
+DROP INDEX agent_exec_endpoints_agent_id_idx;
+ALTER TABLE connections          DROP COLUMN agent_id;
+ALTER TABLE agent_mcp_servers    DROP COLUMN agent_id;
+ALTER TABLE agent_exec_endpoints DROP COLUMN agent_id;
+
 -- ─── management-plane capability grants + model entitlements ───
 -- A grant extends view/bind/manage on a resource to a principal (user/group).
 -- The owner holds all three implicitly. The exclusive arc + per-arc ON DELETE
@@ -1041,6 +1063,22 @@ CREATE INDEX model_grants_grantee_idx ON model_grants (grantee_id);
 DROP TABLE IF EXISTS model_grants;
 DROP TABLE IF EXISTS resource_grants;
 -- ─── resources / needs — reverse ───
+-- Re-attach agent_id (nullable; the original ownership mapping cannot be
+-- reconstructed once a resource may back several agents) and restore the
+-- per-agent slug uniqueness + index.
+ALTER TABLE connections          ADD COLUMN agent_id uuid REFERENCES agents(id) ON DELETE CASCADE;
+ALTER TABLE agent_mcp_servers    ADD COLUMN agent_id uuid REFERENCES agents(id) ON DELETE CASCADE;
+ALTER TABLE agent_exec_endpoints ADD COLUMN agent_id uuid REFERENCES agents(id) ON DELETE CASCADE;
+CREATE INDEX agent_exec_endpoints_agent_id_idx ON agent_exec_endpoints(agent_id);
+ALTER TABLE connections          DROP CONSTRAINT connections_owner_slug_key;
+ALTER TABLE agent_mcp_servers    DROP CONSTRAINT agent_mcp_servers_owner_slug_key;
+ALTER TABLE agent_exec_endpoints DROP CONSTRAINT agent_exec_endpoints_owner_slug_key;
+ALTER TABLE connections          ADD CONSTRAINT connections_agent_id_slug_key          UNIQUE (agent_id, slug);
+ALTER TABLE agent_mcp_servers    ADD CONSTRAINT agent_mcp_servers_agent_id_slug_key    UNIQUE (agent_id, slug);
+ALTER TABLE agent_exec_endpoints ADD CONSTRAINT agent_exec_endpoints_agent_id_slug_key UNIQUE (agent_id, slug);
+ALTER TABLE connections          ALTER COLUMN owner_principal_id DROP NOT NULL;
+ALTER TABLE agent_mcp_servers    ALTER COLUMN owner_principal_id DROP NOT NULL;
+ALTER TABLE agent_exec_endpoints ALTER COLUMN owner_principal_id DROP NOT NULL;
 DROP TABLE IF EXISTS agent_resource_needs;
 ALTER TABLE agent_exec_endpoints DROP COLUMN IF EXISTS owner_principal_id;
 ALTER TABLE agent_mcp_servers    DROP COLUMN IF EXISTS owner_principal_id;

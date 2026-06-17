@@ -130,12 +130,9 @@ func CreateForNeed(ctx context.Context, q *dbq.Queries, p authz.Principal, agent
 		if access == "" {
 			access = "admin"
 		}
-		if err := q.UpsertExecEndpointDeclaration(ctx, dbq.UpsertExecEndpointDeclarationParams{
+		ep, err := q.UpsertExecEndpointDeclaration(ctx, dbq.UpsertExecEndpointDeclarationParams{
 			AgentID: pg(agentID), Slug: slug, Description: need.Description, LlmHint: spec.LLMHint, Access: access,
-		}); err != nil {
-			return uuid.Nil, err
-		}
-		ep, err := q.GetExecEndpointBySlug(ctx, dbq.GetExecEndpointBySlugParams{AgentID: pg(agentID), Slug: slug})
+		})
 		if err != nil {
 			return uuid.Nil, err
 		}

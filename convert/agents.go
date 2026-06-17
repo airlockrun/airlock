@@ -33,18 +33,13 @@ func AgentToProto(a dbq.Agent) *airlockv1.AgentInfo {
 	}
 }
 
-// ConnectionToProto strips the raw secret columns (ClientID, ClientSecret,
-// AccessTokenRef, RefreshToken, AuthInjection, Config) and returns only
-// the operator-visible projection: derived booleans (Authorized,
-// HasOAuthApp), the auth-flow start URL, and any human-readable
-// warnings. Every consumer that surfaces a connection — web UI handler
-// and the in-airlock system agent — goes through this projection so a
-// new sensitive column can't leak to one surface without leaking to
-// both.
-func ConnectionToProto(c dbq.Connection, publicURL, agentID string) *airlockv1.ConnectionInfo {
-	authorized := c.AccessTokenRef != ""
-	hasOAuthApp := c.ClientID != "" && c.ClientSecret != ""
-
+// ConnectionToProto projects an agent's connection need (joined to its bound
+// resource, if any) to the operator-visible wire shape: the need slug as the
+// handle, derived booleans (Authorized, HasOAuthApp), the auth-flow start URL,
+// and warnings. The row carries no secret columns, so none can leak. Id is the
+// zero UUID for an unconfigured need. Every consumer that surfaces a connection
+// — web UI handler and the in-airlock system agent — goes through this.
+func ConnectionToProto(c dbq.ListConnectionNeedsByAgentRow, publicURL, agentID string) *airlockv1.ConnectionInfo {
 	var authURL string
 	if c.AuthMode == "oauth" {
 		authURL = fmt.Sprintf("%s/api/v1/credentials/oauth/start?agent_id=%s&slug=%s", publicURL, agentID, c.Slug)
@@ -53,17 +48,17 @@ func ConnectionToProto(c dbq.Connection, publicURL, agentID string) *airlockv1.C
 	}
 
 	return &airlockv1.ConnectionInfo{
-		Id:                PgUUIDToString(c.ID),
+		Id:                PgUUIDToString(c.ConnectionID),
 		Slug:              c.Slug,
 		Name:              c.Name,
 		Description:       c.Description,
 		AuthMode:          c.AuthMode,
-		Authorized:        authorized,
-		HasOauthApp:       hasOAuthApp,
+		Authorized:        c.Authorized,
+		HasOauthApp:       c.HasOauthApp,
 		SetupInstructions: c.SetupInstructions,
 		AuthUrl:           authURL,
 		TokenExpiresAt:    PgTimestampToProto(c.TokenExpiresAt),
-		Warnings:          ConnectionWarnings(c.AuthMode, authorized, c.RefreshToken != ""),
+		Warnings:          ConnectionWarnings(c.AuthMode, c.Authorized, c.HasRefreshToken),
 	}
 }
 

@@ -64,6 +64,20 @@ func New(pool Pool, store secrets.Store, dialer Dialer, logger *zap.Logger) *Ser
 	}
 }
 
+// resolveEndpoint maps (agentID, need slug) to the bound exec-endpoint resource
+// — the row an agent reaches through its need's binding. An unbound need is
+// "not found".
+func (s *Service) resolveEndpoint(ctx context.Context, agentID uuid.UUID, slug string) (dbq.AgentExecEndpoint, error) {
+	ep, err := s.queries.ResolveBoundExecEndpoint(ctx, dbq.ResolveBoundExecEndpointParams{
+		AgentID: pgtype.UUID{Bytes: agentID, Valid: true},
+		Slug:    slug,
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return dbq.AgentExecEndpoint{}, service.ErrNotFound
+	}
+	return ep, err
+}
+
 // ConfigureRequest is the input for Configure. Port=0 defaults to 22.
 type ConfigureRequest struct {
 	Host    string
@@ -82,12 +96,13 @@ type TestResult struct {
 	Error      string
 }
 
-// List returns every exec endpoint declared by the agent.
-func (s *Service) List(ctx context.Context, p authz.Principal, agentID uuid.UUID) ([]dbq.AgentExecEndpoint, error) {
+// List returns every exec-endpoint need the agent declares, joined to its bound
+// resource (if configured) — keyed by the agent's need slug.
+func (s *Service) List(ctx context.Context, p authz.Principal, agentID uuid.UUID) ([]dbq.ListExecNeedsByAgentRow, error) {
 	if err := authz.Authorize(ctx, s.queries, p, authz.AgentExecEndpoints, agentID); err != nil {
 		return nil, err
 	}
-	rows, err := s.queries.ListExecEndpointsByAgent(ctx, pgtype.UUID{Bytes: agentID, Valid: true})
+	rows, err := s.queries.ListExecNeedsByAgent(ctx, pgtype.UUID{Bytes: agentID, Valid: true})
 	if err != nil {
 		s.logger.Error("list exec endpoints failed", zap.Error(err))
 		return nil, err
@@ -124,20 +139,16 @@ func (s *Service) Configure(ctx context.Context, p authz.Principal, agentID uuid
 	if req.Port == 0 {
 		req.Port = 22
 	}
-	ep, err := s.queries.GetExecEndpointBySlug(ctx, dbq.GetExecEndpointBySlugParams{
-		AgentID: pgtype.UUID{Bytes: agentID, Valid: true},
-		Slug:    slug,
-	})
+	ep, err := s.resolveEndpoint(ctx, agentID, slug)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, service.ErrNotFound) {
 			return dbq.AgentExecEndpoint{}, service.Detail(service.ErrNotFound, "exec endpoint not declared by the agent")
 		}
 		s.logger.Error("get exec endpoint", zap.Error(err))
 		return dbq.AgentExecEndpoint{}, err
 	}
-	if err := s.queries.ConfigureExecEndpointSSH(ctx, dbq.ConfigureExecEndpointSSHParams{
-		AgentID: pgtype.UUID{Bytes: agentID, Valid: true},
-		Slug:    slug,
+	if err := s.queries.ConfigureExecEndpointSSHByID(ctx, dbq.ConfigureExecEndpointSSHByIDParams{
+		ID:      ep.ID,
 		Host:    pgtype.Text{String: req.Host, Valid: true},
 		Port:    pgtype.Int4{Int32: req.Port, Valid: true},
 		SshUser: pgtype.Text{String: req.SSHUser, Valid: true},
@@ -154,10 +165,7 @@ func (s *Service) Configure(ctx context.Context, p authz.Principal, agentID uuid
 		}
 	}
 	s.dialer.EvictCache(uuid.UUID(ep.ID.Bytes))
-	refreshed, _ := s.queries.GetExecEndpointBySlug(ctx, dbq.GetExecEndpointBySlugParams{
-		AgentID: pgtype.UUID{Bytes: agentID, Valid: true},
-		Slug:    slug,
-	})
+	refreshed, _ := s.resolveEndpoint(ctx, agentID, slug)
 	return refreshed, nil
 }
 
@@ -167,15 +175,11 @@ func (s *Service) RotateKeypair(ctx context.Context, p authz.Principal, agentID 
 	if err := authz.Authorize(ctx, s.queries, p, authz.AgentExecEndpoints, agentID); err != nil {
 		return dbq.AgentExecEndpoint{}, err
 	}
-	ep, err := s.queries.GetExecEndpointBySlug(ctx, dbq.GetExecEndpointBySlugParams{
-		AgentID: pgtype.UUID{Bytes: agentID, Valid: true},
-		Slug:    slug,
-	})
+	ep, err := s.resolveEndpoint(ctx, agentID, slug)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return dbq.AgentExecEndpoint{}, service.ErrNotFound
+		if !errors.Is(err, service.ErrNotFound) {
+			s.logger.Error("get exec endpoint", zap.Error(err))
 		}
-		s.logger.Error("get exec endpoint", zap.Error(err))
 		return dbq.AgentExecEndpoint{}, err
 	}
 	if _, err := s.generateAndStoreKeypair(ctx, agentID, slug); err != nil {
@@ -183,10 +187,7 @@ func (s *Service) RotateKeypair(ctx context.Context, p authz.Principal, agentID 
 		return dbq.AgentExecEndpoint{}, err
 	}
 	s.dialer.EvictCache(uuid.UUID(ep.ID.Bytes))
-	refreshed, _ := s.queries.GetExecEndpointBySlug(ctx, dbq.GetExecEndpointBySlugParams{
-		AgentID: pgtype.UUID{Bytes: agentID, Valid: true},
-		Slug:    slug,
-	})
+	refreshed, _ := s.resolveEndpoint(ctx, agentID, slug)
 	return refreshed, nil
 }
 
@@ -196,21 +197,14 @@ func (s *Service) UnpinHostKey(ctx context.Context, p authz.Principal, agentID u
 	if err := authz.Authorize(ctx, s.queries, p, authz.AgentExecEndpoints, agentID); err != nil {
 		return err
 	}
-	ep, err := s.queries.GetExecEndpointBySlug(ctx, dbq.GetExecEndpointBySlugParams{
-		AgentID: pgtype.UUID{Bytes: agentID, Valid: true},
-		Slug:    slug,
-	})
+	ep, err := s.resolveEndpoint(ctx, agentID, slug)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return service.ErrNotFound
+		if !errors.Is(err, service.ErrNotFound) {
+			s.logger.Error("get exec endpoint", zap.Error(err))
 		}
-		s.logger.Error("get exec endpoint", zap.Error(err))
 		return err
 	}
-	if err := s.queries.ClearExecEndpointHostKey(ctx, dbq.ClearExecEndpointHostKeyParams{
-		AgentID: pgtype.UUID{Bytes: agentID, Valid: true},
-		Slug:    slug,
-	}); err != nil {
+	if err := s.queries.ClearExecEndpointHostKeyByID(ctx, ep.ID); err != nil {
 		s.logger.Error("clear host key", zap.Error(err))
 		return err
 	}
@@ -224,14 +218,8 @@ func (s *Service) Test(ctx context.Context, p authz.Principal, agentID uuid.UUID
 	if err := authz.Authorize(ctx, s.queries, p, authz.AgentExecEndpoints, agentID); err != nil {
 		return TestResult{}, err
 	}
-	ep, err := s.queries.GetExecEndpointBySlug(ctx, dbq.GetExecEndpointBySlugParams{
-		AgentID: pgtype.UUID{Bytes: agentID, Valid: true},
-		Slug:    slug,
-	})
+	ep, err := s.resolveEndpoint(ctx, agentID, slug)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return TestResult{}, service.ErrNotFound
-		}
 		return TestResult{}, err
 	}
 	const capPerStream = 4 * 1024
@@ -261,10 +249,7 @@ func (s *Service) generateAndStoreKeypair(ctx context.Context, agentID uuid.UUID
 	if err != nil {
 		return "", err
 	}
-	ep, err := s.queries.GetExecEndpointBySlug(ctx, dbq.GetExecEndpointBySlugParams{
-		AgentID: pgtype.UUID{Bytes: agentID, Valid: true},
-		Slug:    slug,
-	})
+	ep, err := s.resolveEndpoint(ctx, agentID, slug)
 	if err != nil {
 		return "", err
 	}
@@ -273,9 +258,8 @@ func (s *Service) generateAndStoreKeypair(ctx context.Context, agentID uuid.UUID
 	if err != nil {
 		return "", err
 	}
-	if err := s.queries.SetExecEndpointKeypair(ctx, dbq.SetExecEndpointKeypairParams{
-		AgentID:          pgtype.UUID{Bytes: agentID, Valid: true},
-		Slug:             slug,
+	if err := s.queries.SetExecEndpointKeypairByID(ctx, dbq.SetExecEndpointKeypairByIDParams{
+		ID:               ep.ID,
 		PrivateKeyRef:    pgtype.Text{String: ref, Valid: true},
 		PublicKeyOpenssh: pgtype.Text{String: strings.TrimRight(kp.PublicOpenSSH, "\n"), Valid: true},
 		PublicKeyComment: pgtype.Text{String: kp.Comment, Valid: true},

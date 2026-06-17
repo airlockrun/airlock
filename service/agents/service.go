@@ -115,7 +115,7 @@ type Detail struct {
 	Agent       dbq.Agent                              `json:"agent"`
 	Running     bool                                   `json:"running"`
 	YourAccess  agentsdk.Access                        `json:"your_access"`
-	Connections []dbq.Connection                       `json:"connections"`
+	Connections []dbq.ListConnectionNeedsByAgentRow    `json:"connections"`
 	Webhooks    []dbq.ListWebhooksByAgentWithStatusRow `json:"webhooks"`
 	Schedules   []dbq.ListSchedulesWithNextFireRow     `json:"schedules"`
 	Routes      []dbq.AgentRoute                       `json:"routes"`
@@ -356,7 +356,7 @@ func (s *Service) Get(ctx context.Context, p authz.Principal, agentID uuid.UUID)
 	if err := authz.Authorize(ctx, q, p, authz.AgentGet, agentID); err != nil {
 		return Detail{}, err
 	}
-	conns, _ := q.ListConnectionsByAgent(ctx, pgID)
+	conns, _ := q.ListConnectionNeedsByAgent(ctx, pgID)
 	webhooks, _ := q.ListWebhooksByAgentWithStatus(ctx, pgID)
 	schedules, _ := q.ListSchedulesWithNextFire(ctx, pgID)
 	routes, _ := q.ListRoutesByAgent(ctx, pgID)

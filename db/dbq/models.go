@@ -124,7 +124,6 @@ type AgentEnvVar struct {
 
 type AgentExecEndpoint struct {
 	ID               pgtype.UUID        `json:"id"`
-	AgentID          pgtype.UUID        `json:"agent_id"`
 	Slug             string             `json:"slug"`
 	Description      string             `json:"description"`
 	LlmHint          string             `json:"llm_hint"`
@@ -146,7 +145,6 @@ type AgentExecEndpoint struct {
 
 type AgentMcpServer struct {
 	ID                   pgtype.UUID        `json:"id"`
-	AgentID              pgtype.UUID        `json:"agent_id"`
 	Slug                 string             `json:"slug"`
 	Name                 string             `json:"name"`
 	Access               string             `json:"access"`
@@ -340,7 +338,6 @@ type Bridge struct {
 
 type Connection struct {
 	ID                pgtype.UUID        `json:"id"`
-	AgentID           pgtype.UUID        `json:"agent_id"`
 	Slug              string             `json:"slug"`
 	Name              string             `json:"name"`
 	Description       string             `json:"description"`

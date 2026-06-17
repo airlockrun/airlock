@@ -336,7 +336,7 @@ func TestOAuthCallbackFlow(t *testing.T) {
 
 	// Register connection pointing to mock provider.
 	q := dbq.New(testDB.Pool())
-	_, err := q.UpsertConnection(context.Background(), dbq.UpsertConnectionParams{
+	conn, err := q.UpsertConnection(context.Background(), dbq.UpsertConnectionParams{
 		AgentID:       toPgUUID(agentID),
 		Slug:          "mock-oauth",
 		Name:          "Mock OAuth",
@@ -352,14 +352,24 @@ func TestOAuthCallbackFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("upsert connection: %v", err)
 	}
+	if err := q.UpsertResourceNeed(context.Background(), dbq.UpsertResourceNeedParams{
+		AgentID: toPgUUID(agentID), Type: "connection", Slug: "mock-oauth", Description: "Mock OAuth",
+		SetupInstructions: "", ExpectedUrl: mockProvider.URL, ExpectedScopes: "", Spec: []byte("{}"),
+	}); err != nil {
+		t.Fatalf("upsert connection need: %v", err)
+	}
+	if err := q.BindConnectionNeed(context.Background(), dbq.BindConnectionNeedParams{
+		AgentID: toPgUUID(agentID), Slug: "mock-oauth", ResourceID: conn.ID,
+	}); err != nil {
+		t.Fatalf("bind connection need: %v", err)
+	}
 
 	// Set OAuth app credentials.
 	enc := testEncryptor()
 	encClientID, _ := enc.Put(context.Background(), "test/client_id", "mock-client-id")
 	encClientSecret, _ := enc.Put(context.Background(), "test/client_secret", "mock-client-secret")
-	if err := q.UpdateConnectionOAuthApp(context.Background(), dbq.UpdateConnectionOAuthAppParams{
-		AgentID:      toPgUUID(agentID),
-		Slug:         "mock-oauth",
+	if err := q.UpdateConnectionOAuthAppByID(context.Background(), dbq.UpdateConnectionOAuthAppByIDParams{
+		ID:           conn.ID,
 		ClientID:     encClientID,
 		ClientSecret: encClientSecret,
 	}); err != nil {

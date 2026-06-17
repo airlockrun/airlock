@@ -506,20 +506,13 @@ func (h *Handler) Sync(w http.ResponseWriter, r *http.Request) {
 		}
 		mcpSlugs[i] = mcp.Slug
 	}
-	// Stale MCP needs (slug no longer declared) are removed alongside the
-	// resources below.
+	// Drop needs for slugs the agent no longer declares. The backing MCP server
+	// resource is owner-owned and shared, so it is not deleted here — it outlives
+	// this agent's declaration and may back another agent's binding.
 	if err := q.DeleteResourceNeedsByAgentTypeExcept(ctx, dbq.DeleteResourceNeedsByAgentTypeExceptParams{
 		AgentID: pgAgentID, Type: "mcp_server", Slugs: mcpSlugs,
 	}); err != nil {
 		h.logger.Error("delete stale mcp needs failed", zap.Error(err))
-		writeJSONError(w, http.StatusInternalServerError, "failed to sync MCP servers")
-		return
-	}
-	if err := q.DeleteMCPServersByAgentExcept(ctx, dbq.DeleteMCPServersByAgentExceptParams{
-		AgentID: pgAgentID,
-		Slugs:   mcpSlugs,
-	}); err != nil {
-		h.logger.Error("delete stale MCP servers failed", zap.Error(err))
 		writeJSONError(w, http.StatusInternalServerError, "failed to sync MCP servers")
 		return
 	}
@@ -612,7 +605,7 @@ func (h *Handler) Sync(w http.ResponseWriter, r *http.Request) {
 		}
 		need, nerr := q.GetResourceNeed(ctx, dbq.GetResourceNeedParams{AgentID: pgAgentID, Type: "exec_endpoint", Slug: e.Slug})
 		if nerr == nil && need.BoundExecID.Valid {
-			if err := q.UpsertExecEndpointDeclaration(ctx, dbq.UpsertExecEndpointDeclarationParams{
+			if _, err := q.UpsertExecEndpointDeclaration(ctx, dbq.UpsertExecEndpointDeclarationParams{
 				AgentID: pgAgentID, Slug: e.Slug, Description: e.Description, LlmHint: e.LLMHint, Access: access,
 			}); err != nil {
 				h.logger.Error("refresh exec declaration failed", zap.Error(err))
@@ -662,14 +655,14 @@ func (h *Handler) Sync(w http.ResponseWriter, r *http.Request) {
 	// Discover MCP status for servers with credentials. discoverAllMCPStatus
 	// updates the tool_schemas JSONB column on success, so re-fetch the rows
 	// afterwards to read the freshly-cached schemas into the prompt + response.
-	mcpServers, _ := q.ListMCPServersByAgent(ctx, pgAgentID)
+	mcpServers, _ := q.ListBoundMCPServersByAgent(ctx, pgAgentID)
 	mcpStatuses := h.discoverAllMCPStatus(ctx, q, agentID, mcpServers)
-	mcpServers, _ = q.ListMCPServersByAgent(ctx, pgAgentID)
+	mcpServers, _ = q.ListBoundMCPServersByAgent(ctx, pgAgentID)
 
-	// Index the (possibly-refreshed) server rows by slug so we can decode
-	// tool_schemas once and reuse for both the prompt template and the
+	// Index the (possibly-refreshed) server rows by the agent's need slug so we
+	// can decode tool_schemas once and reuse for both the prompt template and the
 	// SyncResponse payload.
-	serverBySlug := make(map[string]dbq.AgentMcpServer, len(mcpServers))
+	serverBySlug := make(map[string]dbq.ListBoundMCPServersByAgentRow, len(mcpServers))
 	for _, srv := range mcpServers {
 		serverBySlug[srv.Slug] = srv
 	}
