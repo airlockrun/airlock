@@ -968,6 +968,12 @@ CREATE TABLE agent_resource_needs (
     setup_instructions  text NOT NULL,
     expected_url        text NOT NULL,
     expected_scopes     text NOT NULL,
+    -- spec is the agent-declared template (auth_mode/urls/injection/...): the
+    -- shape a resource must have to satisfy this need. The operator's "create
+    -- config" form prefills from it and CreateResourceForNeed instantiates a
+    -- resource from it server-side, so the agent's code — not the operator —
+    -- defines the integration shape; the operator only supplies credentials.
+    spec                jsonb NOT NULL,
     required            boolean NOT NULL DEFAULT true,
     bound_connection_id uuid REFERENCES connections(id)          ON DELETE SET NULL,
     bound_mcp_id        uuid REFERENCES agent_mcp_servers(id)    ON DELETE SET NULL,
@@ -978,12 +984,22 @@ CREATE TABLE agent_resource_needs (
 );
 -- Backfill: each existing resource becomes a need for its (former) agent, bound
 -- to that resource. Uses the still-present agent_id.
-INSERT INTO agent_resource_needs (agent_id, type, slug, description, setup_instructions, expected_url, expected_scopes, bound_connection_id)
-    SELECT agent_id, 'connection', slug, description, setup_instructions, base_url, scopes, id FROM connections;
-INSERT INTO agent_resource_needs (agent_id, type, slug, description, setup_instructions, expected_url, expected_scopes, bound_mcp_id)
-    SELECT agent_id, 'mcp_server', slug, name, '', url, scopes, id FROM agent_mcp_servers;
-INSERT INTO agent_resource_needs (agent_id, type, slug, description, setup_instructions, expected_url, expected_scopes, bound_exec_id)
-    SELECT agent_id, 'exec_endpoint', slug, description, '', '', '', id FROM agent_exec_endpoints;
+INSERT INTO agent_resource_needs (agent_id, type, slug, description, setup_instructions, expected_url, expected_scopes, spec, bound_connection_id)
+    SELECT agent_id, 'connection', slug, description, setup_instructions, base_url, scopes,
+           jsonb_build_object('auth_mode', auth_mode, 'auth_url', auth_url, 'token_url', token_url,
+               'base_url', base_url, 'scopes', scopes, 'auth_injection', auth_injection,
+               'llm_hint', llm_hint, 'access', access, 'test_path', test_path,
+               'setup_instructions', setup_instructions),
+           id FROM connections;
+INSERT INTO agent_resource_needs (agent_id, type, slug, description, setup_instructions, expected_url, expected_scopes, spec, bound_mcp_id)
+    SELECT agent_id, 'mcp_server', slug, name, '', url, scopes,
+           jsonb_build_object('name', name, 'url', url, 'auth_mode', auth_mode, 'auth_url', auth_url,
+               'token_url', token_url, 'scopes', scopes, 'auth_injection', auth_injection, 'access', access),
+           id FROM agent_mcp_servers;
+INSERT INTO agent_resource_needs (agent_id, type, slug, description, setup_instructions, expected_url, expected_scopes, spec, bound_exec_id)
+    SELECT agent_id, 'exec_endpoint', slug, description, '', '', '',
+           jsonb_build_object('llm_hint', llm_hint, 'access', access),
+           id FROM agent_exec_endpoints;
 
 -- +goose Down
 -- ─── resources / needs — reverse ───

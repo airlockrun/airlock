@@ -210,6 +210,7 @@ type AgentResourceNeed struct {
 	SetupInstructions string             `json:"setup_instructions"`
 	ExpectedUrl       string             `json:"expected_url"`
 	ExpectedScopes    string             `json:"expected_scopes"`
+	Spec              []byte             `json:"spec"`
 	Required          bool               `json:"required"`
 	BoundConnectionID pgtype.UUID        `json:"bound_connection_id"`
 	BoundMcpID        pgtype.UUID        `json:"bound_mcp_id"`
