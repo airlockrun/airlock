@@ -68,7 +68,7 @@ func (h *execEndpointsHandler) List(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]*airlockv1.ExecEndpointInfo, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, convert.ExecEndpointRowToProto(row))
+		out = append(out, convert.ExecNeedRowToProto(row))
 	}
 	writeProto(w, http.StatusOK, &airlockv1.ListExecEndpointsResponse{Endpoints: out})
 }

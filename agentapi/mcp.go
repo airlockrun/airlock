@@ -23,74 +23,6 @@ import (
 
 var MCPHTTPClient = &http.Client{Timeout: 60 * time.Second}
 
-// UpsertMCPServer handles PUT /api/agent/mcp-servers/{slug}.
-func (h *Handler) UpsertMCPServer(w http.ResponseWriter, r *http.Request) {
-	agentID := auth.AgentIDFromContext(r.Context())
-	slug := chi.URLParam(r, "slug")
-	if slug == "" {
-		writeJSONError(w, http.StatusBadRequest, "slug is required")
-		return
-	}
-
-	var def agentsdk.MCPDef
-	if err := readJSON(r, &def); err != nil {
-		writeJSONError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-
-	// For oauth_discovery, resolve auth/token URLs + DCR registration
-	// endpoint via RFC 9728/8414 discovery. Errors are non-fatal — store
-	// the server anyway and let MCPOAuthStart re-try discovery lazily
-	// the first time the operator clicks Authorize.
-	registrationEndpoint := ""
-	if def.AuthMode == agentsdk.MCPAuthOAuthDiscovery && def.AuthURL == "" {
-		result, err := DiscoverMCPAuth(r.Context(), def.URL)
-		if err != nil {
-			h.logger.Warn("MCP OAuth discovery failed", zap.String("slug", slug), zap.Error(err))
-		} else {
-			def.AuthURL = result.AuthorizationURL
-			def.TokenURL = result.TokenURL
-			registrationEndpoint = result.RegistrationEndpoint
-			if len(result.ScopesSupported) > 0 && len(def.Scopes) == 0 {
-				def.Scopes = result.ScopesSupported
-			}
-		}
-	}
-
-	scopes := ""
-	if len(def.Scopes) > 0 {
-		b, _ := json.Marshal(def.Scopes)
-		scopes = string(b)
-	}
-
-	authInjection, err := json.Marshal(def.AuthInjection)
-	if err != nil {
-		writeJSONError(w, http.StatusBadRequest, "invalid auth_injection")
-		return
-	}
-
-	q := dbq.New(h.db.Pool())
-	if _, err := q.UpsertMCPServer(r.Context(), dbq.UpsertMCPServerParams{
-		AgentID:              toPgUUID(agentID),
-		Slug:                 slug,
-		Name:                 def.Name,
-		Url:                  def.URL,
-		AuthMode:             string(def.AuthMode),
-		AuthUrl:              def.AuthURL,
-		TokenUrl:             def.TokenURL,
-		RegistrationEndpoint: registrationEndpoint,
-		Scopes:               scopes,
-		Access:               string(def.Access),
-		AuthInjection:        authInjection,
-	}); err != nil {
-		h.logger.Error("upsert MCP server failed", zap.Error(err))
-		writeJSONError(w, http.StatusInternalServerError, "failed to register MCP server")
-		return
-	}
-
-	w.WriteHeader(http.StatusNoContent)
-}
-
 // MCPToolCall handles POST /api/agent/mcp/{slug}/tools/call.
 // Stateless: connect → initialize → tools/call → disconnect.
 func (h *Handler) MCPToolCall(w http.ResponseWriter, r *http.Request) {
@@ -166,7 +98,7 @@ func (h *Handler) discoverAllMCPStatus(
 	ctx context.Context,
 	q *dbq.Queries,
 	agentID uuid.UUID,
-	servers []dbq.AgentMcpServer,
+	servers []dbq.ListBoundMCPServersByAgentRow,
 ) []mcpServerStatus {
 	var result []mcpServerStatus
 
@@ -205,9 +137,8 @@ func (h *Handler) discoverAllMCPStatus(
 		// Store discovered schemas + server-level instructions in DB for
 		// caching (durable across syncs without a re-handshake).
 		schemasJSON, _ := json.Marshal(tools)
-		_ = q.UpdateMCPServerToolSchemas(ctx, dbq.UpdateMCPServerToolSchemasParams{
-			AgentID:            toPgUUID(agentID),
-			Slug:               server.Slug,
+		_ = q.UpdateMCPServerToolSchemasByID(ctx, dbq.UpdateMCPServerToolSchemasByIDParams{
+			ID:                 server.ID,
 			ToolSchemas:        schemasJSON,
 			ServerInstructions: instructions,
 		})

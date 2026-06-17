@@ -11,25 +11,6 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const clearMCPServerCredentials = `-- name: ClearMCPServerCredentials :exec
-UPDATE agent_mcp_servers SET
-    access_token_ref = '',
-    refresh_token = '',
-    token_expires_at = NULL,
-    updated_at = now()
-WHERE agent_id = $1 AND slug = $2
-`
-
-type ClearMCPServerCredentialsParams struct {
-	AgentID pgtype.UUID `json:"agent_id"`
-	Slug    string      `json:"slug"`
-}
-
-func (q *Queries) ClearMCPServerCredentials(ctx context.Context, arg ClearMCPServerCredentialsParams) error {
-	_, err := q.db.Exec(ctx, clearMCPServerCredentials, arg.AgentID, arg.Slug)
-	return err
-}
-
 const clearMCPServerCredentialsByID = `-- name: ClearMCPServerCredentialsByID :exec
 UPDATE agent_mcp_servers SET
     access_token_ref = '',
@@ -44,7 +25,7 @@ func (q *Queries) ClearMCPServerCredentialsByID(ctx context.Context, id pgtype.U
 	return err
 }
 
-const clearMCPServerOAuthApp = `-- name: ClearMCPServerOAuthApp :exec
+const clearMCPServerOAuthAppByID = `-- name: ClearMCPServerOAuthAppByID :exec
 UPDATE agent_mcp_servers SET
     client_id = '',
     client_secret = '',
@@ -52,52 +33,28 @@ UPDATE agent_mcp_servers SET
     refresh_token = '',
     token_expires_at = NULL,
     updated_at = now()
-WHERE agent_id = $1 AND slug = $2
+WHERE id = $1
 `
-
-type ClearMCPServerOAuthAppParams struct {
-	AgentID pgtype.UUID `json:"agent_id"`
-	Slug    string      `json:"slug"`
-}
 
 // Wipe the OAuth app config (client_id/secret) AND the access_token_ref that
-// belong to it. Used by "Re-register client" (oauth_discovery, forces a
-// fresh DCR on next authorize) and "Edit OAuth app" (oauth, paste new
-// access_token_ref). Existing tokens MUST go too — they're tied to the old
-// client_id at the OAuth provider and would 401 the moment they're used.
-func (q *Queries) ClearMCPServerOAuthApp(ctx context.Context, arg ClearMCPServerOAuthAppParams) error {
-	_, err := q.db.Exec(ctx, clearMCPServerOAuthApp, arg.AgentID, arg.Slug)
-	return err
-}
-
-const deleteMCPServersByAgentExcept = `-- name: DeleteMCPServersByAgentExcept :exec
-DELETE FROM agent_mcp_servers
-WHERE agent_id = $1 AND slug != ALL($2::text[])
-`
-
-type DeleteMCPServersByAgentExceptParams struct {
-	AgentID pgtype.UUID `json:"agent_id"`
-	Slugs   []string    `json:"slugs"`
-}
-
-// Delete MCP servers not in the current sync.
-func (q *Queries) DeleteMCPServersByAgentExcept(ctx context.Context, arg DeleteMCPServersByAgentExceptParams) error {
-	_, err := q.db.Exec(ctx, deleteMCPServersByAgentExcept, arg.AgentID, arg.Slugs)
+// belong to it. Existing tokens MUST go too — they're tied to the old client_id
+// at the OAuth provider and would 401 the moment they're used.
+func (q *Queries) ClearMCPServerOAuthAppByID(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, clearMCPServerOAuthAppByID, id)
 	return err
 }
 
 const getMCPServerByIDForUpdate = `-- name: GetMCPServerByIDForUpdate :one
 
-SELECT id, agent_id, slug, name, access, url, auth_mode, auth_url, token_url, registration_endpoint, scopes, auth_injection, tool_schemas, client_id, client_secret, access_token_ref, refresh_token, token_expires_at, last_synced_at, created_at, updated_at, server_instructions, owner_principal_id FROM agent_mcp_servers WHERE id = $1 FOR UPDATE
+SELECT id, slug, name, access, url, auth_mode, auth_url, token_url, registration_endpoint, scopes, auth_injection, tool_schemas, client_id, client_secret, access_token_ref, refresh_token, token_expires_at, last_synced_at, created_at, updated_at, server_instructions, owner_principal_id FROM agent_mcp_servers WHERE id = $1 FOR UPDATE
 `
 
-// id-keyed credential proxy variants (one server backs many agents' bindings).
+// id-keyed credential proxy + operator ops (one server backs many bindings).
 func (q *Queries) GetMCPServerByIDForUpdate(ctx context.Context, id pgtype.UUID) (AgentMcpServer, error) {
 	row := q.db.QueryRow(ctx, getMCPServerByIDForUpdate, id)
 	var i AgentMcpServer
 	err := row.Scan(
 		&i.ID,
-		&i.AgentID,
 		&i.Slug,
 		&i.Name,
 		&i.Access,
@@ -123,167 +80,83 @@ func (q *Queries) GetMCPServerByIDForUpdate(ctx context.Context, id pgtype.UUID)
 	return i, err
 }
 
-const getMCPServerBySlug = `-- name: GetMCPServerBySlug :one
-SELECT id, agent_id, slug, name, access, url, auth_mode, auth_url, token_url, registration_endpoint, scopes, auth_injection, tool_schemas, client_id, client_secret, access_token_ref, refresh_token, token_expires_at, last_synced_at, created_at, updated_at, server_instructions, owner_principal_id FROM agent_mcp_servers WHERE agent_id = $1 AND slug = $2
+const listBoundMCPServersByAgent = `-- name: ListBoundMCPServersByAgent :many
+SELECT
+    n.slug AS slug,
+    m.id AS id,
+    m.name AS name,
+    m.url AS url,
+    m.auth_mode AS auth_mode,
+    m.auth_injection AS auth_injection,
+    m.access_token_ref AS access_token_ref,
+    m.tool_schemas AS tool_schemas
+FROM agent_resource_needs n
+JOIN agent_mcp_servers m ON m.id = n.bound_mcp_id
+WHERE n.agent_id = $1 AND n.type = 'mcp_server'
+ORDER BY n.slug
 `
 
-type GetMCPServerBySlugParams struct {
-	AgentID pgtype.UUID `json:"agent_id"`
-	Slug    string      `json:"slug"`
+type ListBoundMCPServersByAgentRow struct {
+	Slug           string      `json:"slug"`
+	ID             pgtype.UUID `json:"id"`
+	Name           string      `json:"name"`
+	Url            string      `json:"url"`
+	AuthMode       string      `json:"auth_mode"`
+	AuthInjection  []byte      `json:"auth_injection"`
+	AccessTokenRef string      `json:"access_token_ref"`
+	ToolSchemas    []byte      `json:"tool_schemas"`
 }
 
-func (q *Queries) GetMCPServerBySlug(ctx context.Context, arg GetMCPServerBySlugParams) (AgentMcpServer, error) {
-	row := q.db.QueryRow(ctx, getMCPServerBySlug, arg.AgentID, arg.Slug)
-	var i AgentMcpServer
-	err := row.Scan(
-		&i.ID,
-		&i.AgentID,
-		&i.Slug,
-		&i.Name,
-		&i.Access,
-		&i.Url,
-		&i.AuthMode,
-		&i.AuthUrl,
-		&i.TokenUrl,
-		&i.RegistrationEndpoint,
-		&i.Scopes,
-		&i.AuthInjection,
-		&i.ToolSchemas,
-		&i.ClientID,
-		&i.ClientSecret,
-		&i.AccessTokenRef,
-		&i.RefreshToken,
-		&i.TokenExpiresAt,
-		&i.LastSyncedAt,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.ServerInstructions,
-		&i.OwnerPrincipalID,
-	)
-	return i, err
-}
-
-const getMCPServerBySlugForUpdate = `-- name: GetMCPServerBySlugForUpdate :one
-SELECT id, agent_id, slug, name, access, url, auth_mode, auth_url, token_url, registration_endpoint, scopes, auth_injection, tool_schemas, client_id, client_secret, access_token_ref, refresh_token, token_expires_at, last_synced_at, created_at, updated_at, server_instructions, owner_principal_id FROM agent_mcp_servers WHERE agent_id = $1 AND slug = $2 FOR UPDATE
-`
-
-type GetMCPServerBySlugForUpdateParams struct {
-	AgentID pgtype.UUID `json:"agent_id"`
-	Slug    string      `json:"slug"`
-}
-
-// Row-locked read for on-demand token refresh (see GetConnectionBySlugForUpdate).
-func (q *Queries) GetMCPServerBySlugForUpdate(ctx context.Context, arg GetMCPServerBySlugForUpdateParams) (AgentMcpServer, error) {
-	row := q.db.QueryRow(ctx, getMCPServerBySlugForUpdate, arg.AgentID, arg.Slug)
-	var i AgentMcpServer
-	err := row.Scan(
-		&i.ID,
-		&i.AgentID,
-		&i.Slug,
-		&i.Name,
-		&i.Access,
-		&i.Url,
-		&i.AuthMode,
-		&i.AuthUrl,
-		&i.TokenUrl,
-		&i.RegistrationEndpoint,
-		&i.Scopes,
-		&i.AuthInjection,
-		&i.ToolSchemas,
-		&i.ClientID,
-		&i.ClientSecret,
-		&i.AccessTokenRef,
-		&i.RefreshToken,
-		&i.TokenExpiresAt,
-		&i.LastSyncedAt,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.ServerInstructions,
-		&i.OwnerPrincipalID,
-	)
-	return i, err
-}
-
-const getMCPServerForOAuth = `-- name: GetMCPServerForOAuth :one
-SELECT id, agent_id, slug, name, url, auth_mode, auth_url, token_url,
-       registration_endpoint, scopes, client_id, client_secret
-FROM agent_mcp_servers WHERE agent_id = $1 AND slug = $2
-`
-
-type GetMCPServerForOAuthParams struct {
-	AgentID pgtype.UUID `json:"agent_id"`
-	Slug    string      `json:"slug"`
-}
-
-type GetMCPServerForOAuthRow struct {
-	ID                   pgtype.UUID `json:"id"`
-	AgentID              pgtype.UUID `json:"agent_id"`
-	Slug                 string      `json:"slug"`
-	Name                 string      `json:"name"`
-	Url                  string      `json:"url"`
-	AuthMode             string      `json:"auth_mode"`
-	AuthUrl              string      `json:"auth_url"`
-	TokenUrl             string      `json:"token_url"`
-	RegistrationEndpoint string      `json:"registration_endpoint"`
-	Scopes               string      `json:"scopes"`
-	ClientID             string      `json:"client_id"`
-	ClientSecret         string      `json:"client_secret"`
-}
-
-func (q *Queries) GetMCPServerForOAuth(ctx context.Context, arg GetMCPServerForOAuthParams) (GetMCPServerForOAuthRow, error) {
-	row := q.db.QueryRow(ctx, getMCPServerForOAuth, arg.AgentID, arg.Slug)
-	var i GetMCPServerForOAuthRow
-	err := row.Scan(
-		&i.ID,
-		&i.AgentID,
-		&i.Slug,
-		&i.Name,
-		&i.Url,
-		&i.AuthMode,
-		&i.AuthUrl,
-		&i.TokenUrl,
-		&i.RegistrationEndpoint,
-		&i.Scopes,
-		&i.ClientID,
-		&i.ClientSecret,
-	)
-	return i, err
-}
-
-const hasDirtyMCPServers = `-- name: HasDirtyMCPServers :one
-SELECT EXISTS(
-    SELECT 1 FROM agent_mcp_servers
-    WHERE agent_id = $1
-      AND (last_synced_at IS NULL OR updated_at > last_synced_at)
-) AS dirty
-`
-
-// Check if any MCP server has been updated since last sync (for dirty flag).
-func (q *Queries) HasDirtyMCPServers(ctx context.Context, agentID pgtype.UUID) (bool, error) {
-	row := q.db.QueryRow(ctx, hasDirtyMCPServers, agentID)
-	var dirty bool
-	err := row.Scan(&dirty)
-	return dirty, err
+// The agent's bound MCP servers (resource rows), keyed by the NEED slug — for
+// the sync-time tool-discovery sweep. Only bound needs have a server to probe.
+func (q *Queries) ListBoundMCPServersByAgent(ctx context.Context, agentID pgtype.UUID) ([]ListBoundMCPServersByAgentRow, error) {
+	rows, err := q.db.Query(ctx, listBoundMCPServersByAgent, agentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListBoundMCPServersByAgentRow{}
+	for rows.Next() {
+		var i ListBoundMCPServersByAgentRow
+		if err := rows.Scan(
+			&i.Slug,
+			&i.ID,
+			&i.Name,
+			&i.Url,
+			&i.AuthMode,
+			&i.AuthInjection,
+			&i.AccessTokenRef,
+			&i.ToolSchemas,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listExpiringMCPServers = `-- name: ListExpiringMCPServers :many
-SELECT m.id, m.agent_id, m.slug, m.name, m.auth_mode, m.token_url,
+SELECT m.id, m.slug, m.name, m.auth_mode, m.token_url,
        m.client_id, m.client_secret, m.access_token_ref, m.refresh_token,
-       m.token_expires_at, m.scopes,
-       a.slug AS agent_slug
+       m.token_expires_at, m.scopes
 FROM agent_mcp_servers m
-JOIN agents a ON m.agent_id = a.id
 WHERE m.auth_mode IN ('oauth', 'oauth_discovery')
   AND m.access_token_ref != ''
   AND m.refresh_token != ''
   AND m.token_expires_at IS NOT NULL
   AND m.token_expires_at < $1
-  AND a.status = 'active'
+  AND EXISTS (
+      SELECT 1 FROM agent_resource_needs n
+      JOIN agents a ON a.id = n.agent_id
+      WHERE n.bound_mcp_id = m.id AND a.status = 'active'
+  )
 `
 
 type ListExpiringMCPServersRow struct {
 	ID             pgtype.UUID        `json:"id"`
-	AgentID        pgtype.UUID        `json:"agent_id"`
 	Slug           string             `json:"slug"`
 	Name           string             `json:"name"`
 	AuthMode       string             `json:"auth_mode"`
@@ -294,10 +167,10 @@ type ListExpiringMCPServersRow struct {
 	RefreshToken   string             `json:"refresh_token"`
 	TokenExpiresAt pgtype.Timestamptz `json:"token_expires_at"`
 	Scopes         string             `json:"scopes"`
-	AgentSlug      string             `json:"agent_slug"`
 }
 
-// For refresh job: find tokens expiring within buffer window.
+// For the refresh job: OAuth tokens expiring within the buffer window that back
+// at least one active agent's bound need.
 func (q *Queries) ListExpiringMCPServers(ctx context.Context, expiryThreshold pgtype.Timestamptz) ([]ListExpiringMCPServersRow, error) {
 	rows, err := q.db.Query(ctx, listExpiringMCPServers, expiryThreshold)
 	if err != nil {
@@ -309,7 +182,6 @@ func (q *Queries) ListExpiringMCPServers(ctx context.Context, expiryThreshold pg
 		var i ListExpiringMCPServersRow
 		if err := rows.Scan(
 			&i.ID,
-			&i.AgentID,
 			&i.Slug,
 			&i.Name,
 			&i.AuthMode,
@@ -320,7 +192,6 @@ func (q *Queries) ListExpiringMCPServers(ctx context.Context, expiryThreshold pg
 			&i.RefreshToken,
 			&i.TokenExpiresAt,
 			&i.Scopes,
-			&i.AgentSlug,
 		); err != nil {
 			return nil, err
 		}
@@ -332,100 +203,61 @@ func (q *Queries) ListExpiringMCPServers(ctx context.Context, expiryThreshold pg
 	return items, nil
 }
 
-const listMCPServersByAgent = `-- name: ListMCPServersByAgent :many
-SELECT id, agent_id, slug, name, access, url, auth_mode, auth_url, token_url, registration_endpoint, scopes, auth_injection, tool_schemas, client_id, client_secret, access_token_ref, refresh_token, token_expires_at, last_synced_at, created_at, updated_at, server_instructions, owner_principal_id FROM agent_mcp_servers WHERE agent_id = $1 ORDER BY slug
+const listMCPNeedsByAgent = `-- name: ListMCPNeedsByAgent :many
+SELECT
+    n.slug AS slug,
+    COALESCE(m.id, '00000000-0000-0000-0000-000000000000'::uuid) AS mcp_id,
+    COALESCE(m.name, n.spec->>'name', n.slug) AS name,
+    COALESCE(m.url, n.spec->>'url', '') AS url,
+    COALESCE(m.auth_mode, n.spec->>'auth_mode', '') AS auth_mode,
+    COALESCE(m.tool_schemas, '[]'::jsonb) AS tool_schemas,
+    (COALESCE(m.access_token_ref, '') != '')::boolean AS authorized,
+    (COALESCE(m.client_id, '') != '')::boolean AS has_oauth_app,
+    (n.bound_mcp_id IS NOT NULL)::boolean AS bound,
+    m.token_expires_at AS token_expires_at,
+    m.last_synced_at AS last_synced_at
+FROM agent_resource_needs n
+LEFT JOIN agent_mcp_servers m ON m.id = n.bound_mcp_id
+WHERE n.agent_id = $1 AND n.type = 'mcp_server'
+ORDER BY n.slug
 `
 
-func (q *Queries) ListMCPServersByAgent(ctx context.Context, agentID pgtype.UUID) ([]AgentMcpServer, error) {
-	rows, err := q.db.Query(ctx, listMCPServersByAgent, agentID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []AgentMcpServer{}
-	for rows.Next() {
-		var i AgentMcpServer
-		if err := rows.Scan(
-			&i.ID,
-			&i.AgentID,
-			&i.Slug,
-			&i.Name,
-			&i.Access,
-			&i.Url,
-			&i.AuthMode,
-			&i.AuthUrl,
-			&i.TokenUrl,
-			&i.RegistrationEndpoint,
-			&i.Scopes,
-			&i.AuthInjection,
-			&i.ToolSchemas,
-			&i.ClientID,
-			&i.ClientSecret,
-			&i.AccessTokenRef,
-			&i.RefreshToken,
-			&i.TokenExpiresAt,
-			&i.LastSyncedAt,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-			&i.ServerInstructions,
-			&i.OwnerPrincipalID,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listMCPServersWithStatus = `-- name: ListMCPServersWithStatus :many
-SELECT id, agent_id, slug, name, url, auth_mode, auth_url,
-       (access_token_ref != '') AS authorized,
-       (client_id != '') AS has_oauth_app,
-       tool_schemas,
-       token_expires_at,
-       last_synced_at
-FROM agent_mcp_servers WHERE agent_id = $1 ORDER BY slug
-`
-
-type ListMCPServersWithStatusRow struct {
-	ID             pgtype.UUID        `json:"id"`
-	AgentID        pgtype.UUID        `json:"agent_id"`
+type ListMCPNeedsByAgentRow struct {
 	Slug           string             `json:"slug"`
+	McpID          pgtype.UUID        `json:"mcp_id"`
 	Name           string             `json:"name"`
 	Url            string             `json:"url"`
 	AuthMode       string             `json:"auth_mode"`
-	AuthUrl        string             `json:"auth_url"`
+	ToolSchemas    []byte             `json:"tool_schemas"`
 	Authorized     bool               `json:"authorized"`
 	HasOauthApp    bool               `json:"has_oauth_app"`
-	ToolSchemas    []byte             `json:"tool_schemas"`
+	Bound          bool               `json:"bound"`
 	TokenExpiresAt pgtype.Timestamptz `json:"token_expires_at"`
 	LastSyncedAt   pgtype.Timestamptz `json:"last_synced_at"`
 }
 
-// For frontend: list with auth status
-func (q *Queries) ListMCPServersWithStatus(ctx context.Context, agentID pgtype.UUID) ([]ListMCPServersWithStatusRow, error) {
-	rows, err := q.db.Query(ctx, listMCPServersWithStatus, agentID)
+// The agent's MCP needs joined to their bound server (if any), keyed by the
+// NEED slug. Unconfigured needs surface with the declared spec shape and
+// authorized=false. Drives the operator MCP tab.
+func (q *Queries) ListMCPNeedsByAgent(ctx context.Context, agentID pgtype.UUID) ([]ListMCPNeedsByAgentRow, error) {
+	rows, err := q.db.Query(ctx, listMCPNeedsByAgent, agentID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []ListMCPServersWithStatusRow{}
+	items := []ListMCPNeedsByAgentRow{}
 	for rows.Next() {
-		var i ListMCPServersWithStatusRow
+		var i ListMCPNeedsByAgentRow
 		if err := rows.Scan(
-			&i.ID,
-			&i.AgentID,
 			&i.Slug,
+			&i.McpID,
 			&i.Name,
 			&i.Url,
 			&i.AuthMode,
-			&i.AuthUrl,
+			&i.ToolSchemas,
 			&i.Authorized,
 			&i.HasOauthApp,
-			&i.ToolSchemas,
+			&i.Bound,
 			&i.TokenExpiresAt,
 			&i.LastSyncedAt,
 		); err != nil {
@@ -437,34 +269,6 @@ func (q *Queries) ListMCPServersWithStatus(ctx context.Context, agentID pgtype.U
 		return nil, err
 	}
 	return items, nil
-}
-
-const updateMCPServerCredentials = `-- name: UpdateMCPServerCredentials :exec
-UPDATE agent_mcp_servers SET
-    access_token_ref = $1,
-    token_expires_at = $2,
-    refresh_token = $3,
-    updated_at = now()
-WHERE agent_id = $4 AND slug = $5
-`
-
-type UpdateMCPServerCredentialsParams struct {
-	AccessTokenRef string             `json:"access_token_ref"`
-	TokenExpiresAt pgtype.Timestamptz `json:"token_expires_at"`
-	RefreshToken   string             `json:"refresh_token"`
-	AgentID        pgtype.UUID        `json:"agent_id"`
-	Slug           string             `json:"slug"`
-}
-
-func (q *Queries) UpdateMCPServerCredentials(ctx context.Context, arg UpdateMCPServerCredentialsParams) error {
-	_, err := q.db.Exec(ctx, updateMCPServerCredentials,
-		arg.AccessTokenRef,
-		arg.TokenExpiresAt,
-		arg.RefreshToken,
-		arg.AgentID,
-		arg.Slug,
-	)
-	return err
 }
 
 const updateMCPServerCredentialsByID = `-- name: UpdateMCPServerCredentialsByID :exec
@@ -493,61 +297,51 @@ func (q *Queries) UpdateMCPServerCredentialsByID(ctx context.Context, arg Update
 	return err
 }
 
-const updateMCPServerDiscovery = `-- name: UpdateMCPServerDiscovery :exec
+const updateMCPServerDiscoveryByID = `-- name: UpdateMCPServerDiscoveryByID :exec
 UPDATE agent_mcp_servers SET
     auth_url = $1,
     token_url = $2,
     registration_endpoint = $3,
     updated_at = now()
-WHERE agent_id = $4 AND slug = $5
+WHERE id = $4
 `
 
-type UpdateMCPServerDiscoveryParams struct {
+type UpdateMCPServerDiscoveryByIDParams struct {
 	AuthUrl              string      `json:"auth_url"`
 	TokenUrl             string      `json:"token_url"`
 	RegistrationEndpoint string      `json:"registration_endpoint"`
-	AgentID              pgtype.UUID `json:"agent_id"`
-	Slug                 string      `json:"slug"`
+	ID                   pgtype.UUID `json:"id"`
 }
 
-// Lazy re-discovery: refresh auth_url / token_url / registration_endpoint
-// after a fresh RFC 8414 fetch. Only used by oauth_discovery's MCPOAuthStart
-// when registration_endpoint is missing (the only path forward for DCR).
-// Does NOT touch access_token_ref — re-discovery never invalidates auth state by
-// itself; callers chain it with DCR + UpdateMCPServerOAuthApp when needed.
-func (q *Queries) UpdateMCPServerDiscovery(ctx context.Context, arg UpdateMCPServerDiscoveryParams) error {
-	_, err := q.db.Exec(ctx, updateMCPServerDiscovery,
+// Lazy re-discovery: refresh auth_url / token_url / registration_endpoint after
+// a fresh RFC 8414 fetch. Does NOT touch access_token_ref — re-discovery never
+// invalidates auth state by itself.
+func (q *Queries) UpdateMCPServerDiscoveryByID(ctx context.Context, arg UpdateMCPServerDiscoveryByIDParams) error {
+	_, err := q.db.Exec(ctx, updateMCPServerDiscoveryByID,
 		arg.AuthUrl,
 		arg.TokenUrl,
 		arg.RegistrationEndpoint,
-		arg.AgentID,
-		arg.Slug,
+		arg.ID,
 	)
 	return err
 }
 
-const updateMCPServerOAuthApp = `-- name: UpdateMCPServerOAuthApp :exec
+const updateMCPServerOAuthAppByID = `-- name: UpdateMCPServerOAuthAppByID :exec
 UPDATE agent_mcp_servers SET
     client_id = $1,
     client_secret = $2,
     updated_at = now()
-WHERE agent_id = $3 AND slug = $4
+WHERE id = $3
 `
 
-type UpdateMCPServerOAuthAppParams struct {
+type UpdateMCPServerOAuthAppByIDParams struct {
 	ClientID     string      `json:"client_id"`
 	ClientSecret string      `json:"client_secret"`
-	AgentID      pgtype.UUID `json:"agent_id"`
-	Slug         string      `json:"slug"`
+	ID           pgtype.UUID `json:"id"`
 }
 
-func (q *Queries) UpdateMCPServerOAuthApp(ctx context.Context, arg UpdateMCPServerOAuthAppParams) error {
-	_, err := q.db.Exec(ctx, updateMCPServerOAuthApp,
-		arg.ClientID,
-		arg.ClientSecret,
-		arg.AgentID,
-		arg.Slug,
-	)
+func (q *Queries) UpdateMCPServerOAuthAppByID(ctx context.Context, arg UpdateMCPServerOAuthAppByIDParams) error {
+	_, err := q.db.Exec(ctx, updateMCPServerOAuthAppByID, arg.ClientID, arg.ClientSecret, arg.ID)
 	return err
 }
 
@@ -566,36 +360,31 @@ func (q *Queries) UpdateMCPServerOwnerByID(ctx context.Context, arg UpdateMCPSer
 	return err
 }
 
-const updateMCPServerToolSchemas = `-- name: UpdateMCPServerToolSchemas :exec
+const updateMCPServerToolSchemasByID = `-- name: UpdateMCPServerToolSchemasByID :exec
 UPDATE agent_mcp_servers SET
     tool_schemas = $1,
     server_instructions = $2,
     last_synced_at = now(),
     updated_at = now()
-WHERE agent_id = $3 AND slug = $4
+WHERE id = $3
 `
 
-type UpdateMCPServerToolSchemasParams struct {
+type UpdateMCPServerToolSchemasByIDParams struct {
 	ToolSchemas        []byte      `json:"tool_schemas"`
 	ServerInstructions string      `json:"server_instructions"`
-	AgentID            pgtype.UUID `json:"agent_id"`
-	Slug               string      `json:"slug"`
+	ID                 pgtype.UUID `json:"id"`
 }
 
-func (q *Queries) UpdateMCPServerToolSchemas(ctx context.Context, arg UpdateMCPServerToolSchemasParams) error {
-	_, err := q.db.Exec(ctx, updateMCPServerToolSchemas,
-		arg.ToolSchemas,
-		arg.ServerInstructions,
-		arg.AgentID,
-		arg.Slug,
-	)
+func (q *Queries) UpdateMCPServerToolSchemasByID(ctx context.Context, arg UpdateMCPServerToolSchemasByIDParams) error {
+	_, err := q.db.Exec(ctx, updateMCPServerToolSchemasByID, arg.ToolSchemas, arg.ServerInstructions, arg.ID)
 	return err
 }
 
 const upsertMCPServer = `-- name: UpsertMCPServer :one
-INSERT INTO agent_mcp_servers (agent_id, owner_principal_id, slug, name, url, auth_mode, auth_url, token_url, registration_endpoint, scopes, access, auth_injection, tool_schemas, client_id, client_secret, access_token_ref, refresh_token)
-VALUES ($1, (SELECT user_id FROM agents WHERE id = $1), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, '[]'::jsonb, '', '', '', '')
-ON CONFLICT (agent_id, slug) DO UPDATE SET
+
+INSERT INTO agent_mcp_servers (owner_principal_id, slug, name, url, auth_mode, auth_url, token_url, registration_endpoint, scopes, access, auth_injection, tool_schemas, client_id, client_secret, access_token_ref, refresh_token)
+VALUES ((SELECT user_id FROM agents WHERE agents.id = $1), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, '[]'::jsonb, '', '', '', '')
+ON CONFLICT (owner_principal_id, slug) DO UPDATE SET
     name = EXCLUDED.name,
     url = EXCLUDED.url,
     auth_mode = EXCLUDED.auth_mode,
@@ -624,7 +413,7 @@ ON CONFLICT (agent_id, slug) DO UPDATE SET
         WHEN agent_mcp_servers.url != EXCLUDED.url OR agent_mcp_servers.scopes != EXCLUDED.scopes
         THEN NULL ELSE agent_mcp_servers.token_expires_at END,
     updated_at = now()
-RETURNING id, agent_id, slug, name, access, url, auth_mode, auth_url, token_url, registration_endpoint, scopes, auth_injection, tool_schemas, client_id, client_secret, access_token_ref, refresh_token, token_expires_at, last_synced_at, created_at, updated_at, server_instructions, owner_principal_id
+RETURNING id, slug, name, access, url, auth_mode, auth_url, token_url, registration_endpoint, scopes, auth_injection, tool_schemas, client_id, client_secret, access_token_ref, refresh_token, token_expires_at, last_synced_at, created_at, updated_at, server_instructions, owner_principal_id
 `
 
 type UpsertMCPServerParams struct {
@@ -641,12 +430,15 @@ type UpsertMCPServerParams struct {
 	AuthInjection        []byte      `json:"auth_injection"`
 }
 
-// When url or scopes change, clear access_token_ref so the user must re-authorize.
-// Discovery + credential fields are passed explicitly as empty on first
-// insert; ON CONFLICT preserves existing access_token_ref unless invalidated.
-// registration_endpoint is taken from EXCLUDED only when newly populated —
-// a fresh discovery run that turned up empty doesn't blow away a previously
-// discovered endpoint.
+// MCP servers are principal-owned resources, identified by id or
+// (owner_principal_id, slug). An agent reaches a server only through a binding
+// on agent_resource_needs, so credential ops address the resource by id and
+// listings join through the needs table, keyed by the agent's NEED slug.
+// Create-or-refresh the owner's MCP server for @slug. The owner is the agent's
+// user; @agent_id only resolves that owner — the row carries no agent_id. When
+// url or scopes change, clear access_token_ref so the user must re-authorize.
+// registration_endpoint is taken from EXCLUDED only when newly populated, so a
+// fresh discovery run that turned up empty doesn't blow away a known endpoint.
 func (q *Queries) UpsertMCPServer(ctx context.Context, arg UpsertMCPServerParams) (AgentMcpServer, error) {
 	row := q.db.QueryRow(ctx, upsertMCPServer,
 		arg.AgentID,
@@ -664,7 +456,6 @@ func (q *Queries) UpsertMCPServer(ctx context.Context, arg UpsertMCPServerParams
 	var i AgentMcpServer
 	err := row.Scan(
 		&i.ID,
-		&i.AgentID,
 		&i.Slug,
 		&i.Name,
 		&i.Access,

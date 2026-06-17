@@ -661,10 +661,10 @@ func (p *PromptProxy) buildAgentStatusContext(ctx context.Context, agentID uuid.
 
 	var sections []string
 
-	// Connections needing setup (no credentials).
-	conns, _ := q.ListConnectionsByAgent(ctx, pgID)
+	// Connection needs that aren't authorized yet.
+	conns, _ := q.ListConnectionNeedsByAgent(ctx, pgID)
 	for _, c := range conns {
-		if c.AccessTokenRef == "" {
+		if !c.Authorized {
 			sections = append(sections, fmt.Sprintf(
 				"- Connection %q needs authorization. The user should visit: %s",
 				c.Name, c.AuthUrl))

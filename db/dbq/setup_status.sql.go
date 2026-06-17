@@ -13,15 +13,17 @@ import (
 
 const agentSetupStatus = `-- name: AgentSetupStatus :one
 SELECT
-    (SELECT COUNT(*)::int FROM connections c
-        WHERE c.agent_id = $1
-          AND c.auth_mode != 'none'
-          AND c.access_token_ref = '')
+    (SELECT COUNT(*)::int FROM agent_resource_needs n
+        LEFT JOIN connections c ON c.id = n.bound_connection_id
+        WHERE n.agent_id = $1 AND n.type = 'connection'
+          AND COALESCE(c.auth_mode, n.spec->>'auth_mode') != 'none'
+          AND COALESCE(c.access_token_ref, '') = '')
         AS connections,
-    (SELECT COUNT(*)::int FROM agent_mcp_servers m
-        WHERE m.agent_id = $1
-          AND m.auth_mode != 'none'
-          AND m.access_token_ref = '')
+    (SELECT COUNT(*)::int FROM agent_resource_needs n
+        LEFT JOIN agent_mcp_servers m ON m.id = n.bound_mcp_id
+        WHERE n.agent_id = $1 AND n.type = 'mcp_server'
+          AND COALESCE(m.auth_mode, n.spec->>'auth_mode') != 'none'
+          AND COALESCE(m.access_token_ref, '') = '')
         AS mcp_servers,
     (SELECT COUNT(*)::int FROM agent_env_vars e
         WHERE e.agent_id = $1

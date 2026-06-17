@@ -12,7 +12,7 @@ import (
 )
 
 const getConnectionByID = `-- name: GetConnectionByID :one
-SELECT id, agent_id, slug, name, description, llm_hint, access, auth_mode, auth_url, token_url, base_url, scopes, auth_injection, test_path, setup_instructions, config, client_id, client_secret, access_token_ref, refresh_token, token_expires_at, created_at, updated_at, auth_params, headers, owner_principal_id FROM connections WHERE id = $1
+SELECT id, slug, name, description, llm_hint, access, auth_mode, auth_url, token_url, base_url, scopes, auth_injection, test_path, setup_instructions, config, client_id, client_secret, access_token_ref, refresh_token, token_expires_at, created_at, updated_at, auth_params, headers, owner_principal_id FROM connections WHERE id = $1
 `
 
 func (q *Queries) GetConnectionByID(ctx context.Context, id pgtype.UUID) (Connection, error) {
@@ -20,7 +20,6 @@ func (q *Queries) GetConnectionByID(ctx context.Context, id pgtype.UUID) (Connec
 	var i Connection
 	err := row.Scan(
 		&i.ID,
-		&i.AgentID,
 		&i.Slug,
 		&i.Name,
 		&i.Description,
@@ -50,7 +49,7 @@ func (q *Queries) GetConnectionByID(ctx context.Context, id pgtype.UUID) (Connec
 }
 
 const getExecEndpointByID = `-- name: GetExecEndpointByID :one
-SELECT id, agent_id, slug, description, llm_hint, access, transport, host, port, ssh_user, private_key_ref, public_key_openssh, public_key_comment, host_key_openssh, host_key_pinned_at, last_used_at, created_at, updated_at, owner_principal_id FROM agent_exec_endpoints WHERE id = $1
+SELECT id, slug, description, llm_hint, access, transport, host, port, ssh_user, private_key_ref, public_key_openssh, public_key_comment, host_key_openssh, host_key_pinned_at, last_used_at, created_at, updated_at, owner_principal_id FROM agent_exec_endpoints WHERE id = $1
 `
 
 func (q *Queries) GetExecEndpointByID(ctx context.Context, id pgtype.UUID) (AgentExecEndpoint, error) {
@@ -58,7 +57,6 @@ func (q *Queries) GetExecEndpointByID(ctx context.Context, id pgtype.UUID) (Agen
 	var i AgentExecEndpoint
 	err := row.Scan(
 		&i.ID,
-		&i.AgentID,
 		&i.Slug,
 		&i.Description,
 		&i.LlmHint,
@@ -81,7 +79,7 @@ func (q *Queries) GetExecEndpointByID(ctx context.Context, id pgtype.UUID) (Agen
 }
 
 const getMCPServerByID = `-- name: GetMCPServerByID :one
-SELECT id, agent_id, slug, name, access, url, auth_mode, auth_url, token_url, registration_endpoint, scopes, auth_injection, tool_schemas, client_id, client_secret, access_token_ref, refresh_token, token_expires_at, last_synced_at, created_at, updated_at, server_instructions, owner_principal_id FROM agent_mcp_servers WHERE id = $1
+SELECT id, slug, name, access, url, auth_mode, auth_url, token_url, registration_endpoint, scopes, auth_injection, tool_schemas, client_id, client_secret, access_token_ref, refresh_token, token_expires_at, last_synced_at, created_at, updated_at, server_instructions, owner_principal_id FROM agent_mcp_servers WHERE id = $1
 `
 
 func (q *Queries) GetMCPServerByID(ctx context.Context, id pgtype.UUID) (AgentMcpServer, error) {
@@ -89,7 +87,6 @@ func (q *Queries) GetMCPServerByID(ctx context.Context, id pgtype.UUID) (AgentMc
 	var i AgentMcpServer
 	err := row.Scan(
 		&i.ID,
-		&i.AgentID,
 		&i.Slug,
 		&i.Name,
 		&i.Access,
@@ -117,7 +114,7 @@ func (q *Queries) GetMCPServerByID(ctx context.Context, id pgtype.UUID) (AgentMc
 
 const listConnectionsByOwners = `-- name: ListConnectionsByOwners :many
 
-SELECT id, agent_id, slug, name, description, llm_hint, access, auth_mode, auth_url, token_url, base_url, scopes, auth_injection, test_path, setup_instructions, config, client_id, client_secret, access_token_ref, refresh_token, token_expires_at, created_at, updated_at, auth_params, headers, owner_principal_id FROM connections WHERE owner_principal_id = ANY ($1::uuid[]) ORDER BY name
+SELECT id, slug, name, description, llm_hint, access, auth_mode, auth_url, token_url, base_url, scopes, auth_injection, test_path, setup_instructions, config, client_id, client_secret, access_token_ref, refresh_token, token_expires_at, created_at, updated_at, auth_params, headers, owner_principal_id FROM connections WHERE owner_principal_id = ANY ($1::uuid[]) ORDER BY name
 `
 
 // Resource lookups for the need bind/list surface: list a principal-set's
@@ -134,7 +131,6 @@ func (q *Queries) ListConnectionsByOwners(ctx context.Context, ownerIds []pgtype
 		var i Connection
 		if err := rows.Scan(
 			&i.ID,
-			&i.AgentID,
 			&i.Slug,
 			&i.Name,
 			&i.Description,
@@ -171,7 +167,7 @@ func (q *Queries) ListConnectionsByOwners(ctx context.Context, ownerIds []pgtype
 }
 
 const listExecEndpointsByOwners = `-- name: ListExecEndpointsByOwners :many
-SELECT id, agent_id, slug, description, llm_hint, access, transport, host, port, ssh_user, private_key_ref, public_key_openssh, public_key_comment, host_key_openssh, host_key_pinned_at, last_used_at, created_at, updated_at, owner_principal_id FROM agent_exec_endpoints WHERE owner_principal_id = ANY ($1::uuid[]) ORDER BY slug
+SELECT id, slug, description, llm_hint, access, transport, host, port, ssh_user, private_key_ref, public_key_openssh, public_key_comment, host_key_openssh, host_key_pinned_at, last_used_at, created_at, updated_at, owner_principal_id FROM agent_exec_endpoints WHERE owner_principal_id = ANY ($1::uuid[]) ORDER BY slug
 `
 
 func (q *Queries) ListExecEndpointsByOwners(ctx context.Context, ownerIds []pgtype.UUID) ([]AgentExecEndpoint, error) {
@@ -185,7 +181,6 @@ func (q *Queries) ListExecEndpointsByOwners(ctx context.Context, ownerIds []pgty
 		var i AgentExecEndpoint
 		if err := rows.Scan(
 			&i.ID,
-			&i.AgentID,
 			&i.Slug,
 			&i.Description,
 			&i.LlmHint,
@@ -215,7 +210,7 @@ func (q *Queries) ListExecEndpointsByOwners(ctx context.Context, ownerIds []pgty
 }
 
 const listMCPServersByOwners = `-- name: ListMCPServersByOwners :many
-SELECT id, agent_id, slug, name, access, url, auth_mode, auth_url, token_url, registration_endpoint, scopes, auth_injection, tool_schemas, client_id, client_secret, access_token_ref, refresh_token, token_expires_at, last_synced_at, created_at, updated_at, server_instructions, owner_principal_id FROM agent_mcp_servers WHERE owner_principal_id = ANY ($1::uuid[]) ORDER BY name
+SELECT id, slug, name, access, url, auth_mode, auth_url, token_url, registration_endpoint, scopes, auth_injection, tool_schemas, client_id, client_secret, access_token_ref, refresh_token, token_expires_at, last_synced_at, created_at, updated_at, server_instructions, owner_principal_id FROM agent_mcp_servers WHERE owner_principal_id = ANY ($1::uuid[]) ORDER BY name
 `
 
 func (q *Queries) ListMCPServersByOwners(ctx context.Context, ownerIds []pgtype.UUID) ([]AgentMcpServer, error) {
@@ -229,7 +224,6 @@ func (q *Queries) ListMCPServersByOwners(ctx context.Context, ownerIds []pgtype.
 		var i AgentMcpServer
 		if err := rows.Scan(
 			&i.ID,
-			&i.AgentID,
 			&i.Slug,
 			&i.Name,
 			&i.Access,
