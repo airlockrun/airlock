@@ -31,6 +31,62 @@ func (q *Queries) ClearConnectionCredentials(ctx context.Context, arg ClearConne
 	return err
 }
 
+const clearConnectionCredentialsByID = `-- name: ClearConnectionCredentialsByID :exec
+UPDATE connections SET
+    access_token_ref = '',
+    refresh_token = '',
+    token_expires_at = NULL,
+    updated_at = now()
+WHERE id = $1
+`
+
+func (q *Queries) ClearConnectionCredentialsByID(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, clearConnectionCredentialsByID, id)
+	return err
+}
+
+const getConnectionByIDForUpdate = `-- name: GetConnectionByIDForUpdate :one
+
+SELECT id, agent_id, slug, name, description, llm_hint, access, auth_mode, auth_url, token_url, base_url, scopes, auth_injection, test_path, setup_instructions, config, client_id, client_secret, access_token_ref, refresh_token, token_expires_at, created_at, updated_at, auth_params, headers, owner_principal_id FROM connections WHERE id = $1 FOR UPDATE
+`
+
+// The credential proxy keys token reads + write-backs on the resource id, not
+// (agent, slug): one connection backs many agents' bindings, so the consuming
+// agent is not a stable handle for the row.
+func (q *Queries) GetConnectionByIDForUpdate(ctx context.Context, id pgtype.UUID) (Connection, error) {
+	row := q.db.QueryRow(ctx, getConnectionByIDForUpdate, id)
+	var i Connection
+	err := row.Scan(
+		&i.ID,
+		&i.AgentID,
+		&i.Slug,
+		&i.Name,
+		&i.Description,
+		&i.LlmHint,
+		&i.Access,
+		&i.AuthMode,
+		&i.AuthUrl,
+		&i.TokenUrl,
+		&i.BaseUrl,
+		&i.Scopes,
+		&i.AuthInjection,
+		&i.TestPath,
+		&i.SetupInstructions,
+		&i.Config,
+		&i.ClientID,
+		&i.ClientSecret,
+		&i.AccessTokenRef,
+		&i.RefreshToken,
+		&i.TokenExpiresAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.AuthParams,
+		&i.Headers,
+		&i.OwnerPrincipalID,
+	)
+	return i, err
+}
+
 const getConnectionBySlug = `-- name: GetConnectionBySlug :one
 SELECT id, agent_id, slug, name, description, llm_hint, access, auth_mode, auth_url, token_url, base_url, scopes, auth_injection, test_path, setup_instructions, config, client_id, client_secret, access_token_ref, refresh_token, token_expires_at, created_at, updated_at, auth_params, headers, owner_principal_id FROM connections WHERE agent_id = $1 AND slug = $2
 `
@@ -431,6 +487,32 @@ func (q *Queries) UpdateConnectionCredentials(ctx context.Context, arg UpdateCon
 		arg.RefreshToken,
 		arg.AgentID,
 		arg.Slug,
+	)
+	return err
+}
+
+const updateConnectionCredentialsByID = `-- name: UpdateConnectionCredentialsByID :exec
+UPDATE connections SET
+    access_token_ref = $1,
+    token_expires_at = $2,
+    refresh_token = $3,
+    updated_at = now()
+WHERE id = $4
+`
+
+type UpdateConnectionCredentialsByIDParams struct {
+	AccessTokenRef string             `json:"access_token_ref"`
+	TokenExpiresAt pgtype.Timestamptz `json:"token_expires_at"`
+	RefreshToken   string             `json:"refresh_token"`
+	ID             pgtype.UUID        `json:"id"`
+}
+
+func (q *Queries) UpdateConnectionCredentialsByID(ctx context.Context, arg UpdateConnectionCredentialsByIDParams) error {
+	_, err := q.db.Exec(ctx, updateConnectionCredentialsByID,
+		arg.AccessTokenRef,
+		arg.TokenExpiresAt,
+		arg.RefreshToken,
+		arg.ID,
 	)
 	return err
 }

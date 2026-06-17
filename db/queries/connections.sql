@@ -87,6 +87,29 @@ UPDATE connections SET
     updated_at = now()
 WHERE agent_id = @agent_id AND slug = @slug;
 
+-- The credential proxy keys token reads + write-backs on the resource id, not
+-- (agent, slug): one connection backs many agents' bindings, so the consuming
+-- agent is not a stable handle for the row.
+
+-- name: GetConnectionByIDForUpdate :one
+SELECT * FROM connections WHERE id = @id FOR UPDATE;
+
+-- name: UpdateConnectionCredentialsByID :exec
+UPDATE connections SET
+    access_token_ref = @access_token_ref,
+    token_expires_at = @token_expires_at,
+    refresh_token = @refresh_token,
+    updated_at = now()
+WHERE id = @id;
+
+-- name: ClearConnectionCredentialsByID :exec
+UPDATE connections SET
+    access_token_ref = '',
+    refresh_token = '',
+    token_expires_at = NULL,
+    updated_at = now()
+WHERE id = @id;
+
 -- name: ListExpiringConnections :many
 -- For refresh job: find tokens expiring within buffer window
 SELECT c.id, c.agent_id, c.slug, c.name, c.auth_mode, c.token_url,
