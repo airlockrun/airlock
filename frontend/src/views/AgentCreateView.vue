@@ -16,6 +16,7 @@ import {
   type CatalogModel,
 } from '@/composables/useModelCapabilities'
 import { useProvidersStore } from '@/stores/providers'
+import { useModelsAllowedStore } from '@/stores/modelsAllowed'
 import { useGitCredentialsStore } from '@/stores/gitCredentials'
 import { useToast } from 'primevue/usetoast'
 import api from '@/api/client'
@@ -31,9 +32,10 @@ const router = useRouter()
 const store = useAgentsStore()
 const catalog = useCatalogStore()
 const providers = useProvidersStore()
+const modelsAllowed = useModelsAllowedStore()
 const gitCredsStore = useGitCredentialsStore()
 const toast = useToast()
-const { groupModels, searchProviderOptions } = useModelCapabilities()
+const { groupModels, searchProviderOptions } = useModelCapabilities({ restrictToAllowed: true })
 
 const name = ref('')
 const slug = ref('')
@@ -86,6 +88,7 @@ onMounted(async () => {
   // Pickers fan out per (catalog provider × configured row), so we need
   // the providers list before the model dropdowns render.
   providers.fetchProviders()
+  modelsAllowed.fetchAllowed()
   gitCredsStore.fetchCredentials()
   try {
     const { data } = await api.get('/api/v1/settings')

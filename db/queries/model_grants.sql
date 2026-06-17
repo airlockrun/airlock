@@ -18,6 +18,14 @@ FROM model_grants mg
 JOIN providers p ON p.id = mg.provider_id
 ORDER BY p.provider_id, mg.model;
 
+-- name: ListModelGrantsForGrantees :many
+-- The (provider row, model) pairs granted to any principal in the caller's
+-- grantee set — the models a non-admin caller may assign. Powers the model
+-- picker's allow-list (defaults aren't listed; the caller leaves a slot unset
+-- to fall back to the capability default).
+SELECT provider_id, model FROM model_grants
+WHERE grantee_id = ANY (@grantee_ids::uuid[]);
+
 -- name: CountMatchingModelGrants :one
 -- For the entitlement check: does any grant for this (provider, model) target a
 -- principal in the caller's grantee set?
