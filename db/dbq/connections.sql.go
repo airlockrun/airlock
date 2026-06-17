@@ -32,7 +32,7 @@ func (q *Queries) ClearConnectionCredentials(ctx context.Context, arg ClearConne
 }
 
 const getConnectionBySlug = `-- name: GetConnectionBySlug :one
-SELECT id, agent_id, slug, name, description, llm_hint, access, auth_mode, auth_url, token_url, base_url, scopes, auth_injection, test_path, setup_instructions, config, client_id, client_secret, access_token_ref, refresh_token, token_expires_at, created_at, updated_at, auth_params, headers FROM connections WHERE agent_id = $1 AND slug = $2
+SELECT id, agent_id, slug, name, description, llm_hint, access, auth_mode, auth_url, token_url, base_url, scopes, auth_injection, test_path, setup_instructions, config, client_id, client_secret, access_token_ref, refresh_token, token_expires_at, created_at, updated_at, auth_params, headers, owner_principal_id FROM connections WHERE agent_id = $1 AND slug = $2
 `
 
 type GetConnectionBySlugParams struct {
@@ -69,12 +69,13 @@ func (q *Queries) GetConnectionBySlug(ctx context.Context, arg GetConnectionBySl
 		&i.UpdatedAt,
 		&i.AuthParams,
 		&i.Headers,
+		&i.OwnerPrincipalID,
 	)
 	return i, err
 }
 
 const getConnectionBySlugForUpdate = `-- name: GetConnectionBySlugForUpdate :one
-SELECT id, agent_id, slug, name, description, llm_hint, access, auth_mode, auth_url, token_url, base_url, scopes, auth_injection, test_path, setup_instructions, config, client_id, client_secret, access_token_ref, refresh_token, token_expires_at, created_at, updated_at, auth_params, headers FROM connections WHERE agent_id = $1 AND slug = $2 FOR UPDATE
+SELECT id, agent_id, slug, name, description, llm_hint, access, auth_mode, auth_url, token_url, base_url, scopes, auth_injection, test_path, setup_instructions, config, client_id, client_secret, access_token_ref, refresh_token, token_expires_at, created_at, updated_at, auth_params, headers, owner_principal_id FROM connections WHERE agent_id = $1 AND slug = $2 FOR UPDATE
 `
 
 type GetConnectionBySlugForUpdateParams struct {
@@ -116,6 +117,7 @@ func (q *Queries) GetConnectionBySlugForUpdate(ctx context.Context, arg GetConne
 		&i.UpdatedAt,
 		&i.AuthParams,
 		&i.Headers,
+		&i.OwnerPrincipalID,
 	)
 	return i, err
 }
@@ -223,7 +225,7 @@ func (q *Queries) GetConnectionWithCredentialStatus(ctx context.Context, arg Get
 }
 
 const listConnectionsByAgent = `-- name: ListConnectionsByAgent :many
-SELECT id, agent_id, slug, name, description, llm_hint, access, auth_mode, auth_url, token_url, base_url, scopes, auth_injection, test_path, setup_instructions, config, client_id, client_secret, access_token_ref, refresh_token, token_expires_at, created_at, updated_at, auth_params, headers FROM connections WHERE agent_id = $1
+SELECT id, agent_id, slug, name, description, llm_hint, access, auth_mode, auth_url, token_url, base_url, scopes, auth_injection, test_path, setup_instructions, config, client_id, client_secret, access_token_ref, refresh_token, token_expires_at, created_at, updated_at, auth_params, headers, owner_principal_id FROM connections WHERE agent_id = $1
 `
 
 func (q *Queries) ListConnectionsByAgent(ctx context.Context, agentID pgtype.UUID) ([]Connection, error) {
@@ -261,6 +263,7 @@ func (q *Queries) ListConnectionsByAgent(ctx context.Context, agentID pgtype.UUI
 			&i.UpdatedAt,
 			&i.AuthParams,
 			&i.Headers,
+			&i.OwnerPrincipalID,
 		); err != nil {
 			return nil, err
 		}
@@ -481,7 +484,7 @@ ON CONFLICT (agent_id, slug) DO UPDATE SET
     refresh_token = CASE WHEN connections.scopes != EXCLUDED.scopes THEN '' ELSE connections.refresh_token END,
     token_expires_at = CASE WHEN connections.scopes != EXCLUDED.scopes THEN NULL ELSE connections.token_expires_at END,
     updated_at = now()
-RETURNING id, agent_id, slug, name, description, llm_hint, access, auth_mode, auth_url, token_url, base_url, scopes, auth_injection, test_path, setup_instructions, config, client_id, client_secret, access_token_ref, refresh_token, token_expires_at, created_at, updated_at, auth_params, headers
+RETURNING id, agent_id, slug, name, description, llm_hint, access, auth_mode, auth_url, token_url, base_url, scopes, auth_injection, test_path, setup_instructions, config, client_id, client_secret, access_token_ref, refresh_token, token_expires_at, created_at, updated_at, auth_params, headers, owner_principal_id
 `
 
 type UpsertConnectionParams struct {
@@ -555,6 +558,7 @@ func (q *Queries) UpsertConnection(ctx context.Context, arg UpsertConnectionPara
 		&i.UpdatedAt,
 		&i.AuthParams,
 		&i.Headers,
+		&i.OwnerPrincipalID,
 	)
 	return i, err
 }

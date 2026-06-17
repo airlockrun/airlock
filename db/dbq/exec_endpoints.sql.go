@@ -77,7 +77,7 @@ func (q *Queries) DeleteExecEndpoint(ctx context.Context, arg DeleteExecEndpoint
 }
 
 const getExecEndpointBySlug = `-- name: GetExecEndpointBySlug :one
-SELECT id, agent_id, slug, description, llm_hint, access, transport, host, port, ssh_user, private_key_ref, public_key_openssh, public_key_comment, host_key_openssh, host_key_pinned_at, last_used_at, created_at, updated_at FROM agent_exec_endpoints WHERE agent_id = $1 AND slug = $2
+SELECT id, agent_id, slug, description, llm_hint, access, transport, host, port, ssh_user, private_key_ref, public_key_openssh, public_key_comment, host_key_openssh, host_key_pinned_at, last_used_at, created_at, updated_at, owner_principal_id FROM agent_exec_endpoints WHERE agent_id = $1 AND slug = $2
 `
 
 type GetExecEndpointBySlugParams struct {
@@ -107,12 +107,13 @@ func (q *Queries) GetExecEndpointBySlug(ctx context.Context, arg GetExecEndpoint
 		&i.LastUsedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.OwnerPrincipalID,
 	)
 	return i, err
 }
 
 const listExecEndpointsByAgent = `-- name: ListExecEndpointsByAgent :many
-SELECT id, agent_id, slug, description, llm_hint, access, transport, host, port, ssh_user, private_key_ref, public_key_openssh, public_key_comment, host_key_openssh, host_key_pinned_at, last_used_at, created_at, updated_at FROM agent_exec_endpoints WHERE agent_id = $1 ORDER BY slug
+SELECT id, agent_id, slug, description, llm_hint, access, transport, host, port, ssh_user, private_key_ref, public_key_openssh, public_key_comment, host_key_openssh, host_key_pinned_at, last_used_at, created_at, updated_at, owner_principal_id FROM agent_exec_endpoints WHERE agent_id = $1 ORDER BY slug
 `
 
 func (q *Queries) ListExecEndpointsByAgent(ctx context.Context, agentID pgtype.UUID) ([]AgentExecEndpoint, error) {
@@ -143,6 +144,7 @@ func (q *Queries) ListExecEndpointsByAgent(ctx context.Context, agentID pgtype.U
 			&i.LastUsedAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.OwnerPrincipalID,
 		); err != nil {
 			return nil, err
 		}

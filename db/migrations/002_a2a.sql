@@ -942,7 +942,55 @@ INSERT INTO groups (id, name, description, builtin) VALUES
     ('00000000-0000-0000-0000-0000000000a2', 'manager', 'Built-in manager group', true),
     ('00000000-0000-0000-0000-0000000000a3', 'user',    'Built-in user group',    true);
 
+-- ─── resources become principal-owned; agent needs + bindings ───
+-- A resource (connection / MCP server / exec endpoint) stops being owned by an
+-- agent and becomes owned by a principal (in this tier always the agent's owner
+-- user), so one set of credentials can be reused across that owner's agents.
+-- agent_id stays for now; runtime keeps resolving through it until the needs
+-- table is wired, after which agent_id is dropped.
+ALTER TABLE connections          ADD COLUMN owner_principal_id uuid REFERENCES principals(id) ON DELETE CASCADE;
+ALTER TABLE agent_mcp_servers    ADD COLUMN owner_principal_id uuid REFERENCES principals(id) ON DELETE CASCADE;
+ALTER TABLE agent_exec_endpoints ADD COLUMN owner_principal_id uuid REFERENCES principals(id) ON DELETE CASCADE;
+UPDATE connections          c SET owner_principal_id = a.user_id FROM agents a WHERE a.id = c.agent_id;
+UPDATE agent_mcp_servers    m SET owner_principal_id = a.user_id FROM agents a WHERE a.id = m.agent_id;
+UPDATE agent_exec_endpoints e SET owner_principal_id = a.user_id FROM agents a WHERE a.id = e.agent_id;
+
+-- An agent declares a NEED for a resource (slug + expected shape); a binding
+-- (bound_*_id) attaches a concrete resource that satisfies it. Slug is unique
+-- per (agent, type): a connection and an mcp may share slug 'a' because the
+-- runtime endpoint (proxy/ vs mcp/ vs exec/) already implies the type.
+CREATE TABLE agent_resource_needs (
+    id                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    agent_id            uuid NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    type                text NOT NULL CHECK (type IN ('connection', 'mcp_server', 'exec_endpoint')),
+    slug                text NOT NULL,
+    description         text NOT NULL,
+    setup_instructions  text NOT NULL,
+    expected_url        text NOT NULL,
+    expected_scopes     text NOT NULL,
+    required            boolean NOT NULL DEFAULT true,
+    bound_connection_id uuid REFERENCES connections(id)          ON DELETE SET NULL,
+    bound_mcp_id        uuid REFERENCES agent_mcp_servers(id)    ON DELETE SET NULL,
+    bound_exec_id       uuid REFERENCES agent_exec_endpoints(id) ON DELETE SET NULL,
+    created_at          timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (agent_id, type, slug),
+    CHECK (num_nonnulls(bound_connection_id, bound_mcp_id, bound_exec_id) <= 1)
+);
+-- Backfill: each existing resource becomes a need for its (former) agent, bound
+-- to that resource. Uses the still-present agent_id.
+INSERT INTO agent_resource_needs (agent_id, type, slug, description, setup_instructions, expected_url, expected_scopes, bound_connection_id)
+    SELECT agent_id, 'connection', slug, description, setup_instructions, base_url, scopes, id FROM connections;
+INSERT INTO agent_resource_needs (agent_id, type, slug, description, setup_instructions, expected_url, expected_scopes, bound_mcp_id)
+    SELECT agent_id, 'mcp_server', slug, name, '', url, scopes, id FROM agent_mcp_servers;
+INSERT INTO agent_resource_needs (agent_id, type, slug, description, setup_instructions, expected_url, expected_scopes, bound_exec_id)
+    SELECT agent_id, 'exec_endpoint', slug, description, '', '', '', id FROM agent_exec_endpoints;
+
 -- +goose Down
+-- ─── resources / needs — reverse ───
+DROP TABLE IF EXISTS agent_resource_needs;
+ALTER TABLE agent_exec_endpoints DROP COLUMN IF EXISTS owner_principal_id;
+ALTER TABLE agent_mcp_servers    DROP COLUMN IF EXISTS owner_principal_id;
+ALTER TABLE connections          DROP COLUMN IF EXISTS owner_principal_id;
 -- ─── principals & groups — reverse ───
 ALTER TABLE agents DROP CONSTRAINT IF EXISTS agents_principal_fk;
 ALTER TABLE users  DROP CONSTRAINT IF EXISTS users_principal_fk;
