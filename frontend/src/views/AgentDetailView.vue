@@ -14,7 +14,7 @@ import { GetAgentDetailResponseSchema } from '@/gen/airlock/v1/api_pb'
 import ConnectionsTab from '@/components/agent/ConnectionsTab.vue'
 import ExecEndpointsTab from '@/components/agent/ExecEndpointsTab.vue'
 import WebhooksTab from '@/components/agent/WebhooksTab.vue'
-import CronsTab from '@/components/agent/CronsTab.vue'
+import SchedulesTab from '@/components/agent/SchedulesTab.vue'
 import RoutesTab from '@/components/agent/RoutesTab.vue'
 import MCPServersTab from '@/components/agent/MCPServersTab.vue'
 import EnvVarsTab from '@/components/agent/EnvVarsTab.vue'
@@ -137,7 +137,7 @@ const configSections = [
   { id: 'env-vars',       label: 'Environment',    component: markRaw(EnvVarsTab),       needsSetupKey: 'envVars' as const },
   { id: 'exec-endpoints', label: 'Exec Endpoints', component: markRaw(ExecEndpointsTab) },
   { id: 'webhooks',       label: 'Webhooks',       component: markRaw(WebhooksTab) },
-  { id: 'crons',          label: 'Crons',          component: markRaw(CronsTab) },
+  { id: 'schedules',      label: 'Schedules',      component: markRaw(SchedulesTab) },
   { id: 'siblings',       label: 'Siblings',       component: markRaw(SiblingsTab), alwaysShow: true },
   { id: 'source',         label: 'Source',         component: markRaw(SourceTab) },
   { id: 'routes',         label: 'Routes',         component: markRaw(RoutesTab) },
@@ -377,7 +377,7 @@ onMounted(async () => {
   })
 
   // Agent finished a sync (initial boot after build, restart, upgrade) —
-  // its declared surface (tools, webhooks, crons, routes, MCP, connections,
+  // its declared surface (tools, webhooks, schedules, routes, MCP, connections,
   // model slots) just changed. Bump tabsKey so each tab remounts and
   // refetches; saves wiring a WS listener into every tab component.
   unsubSynced = ws.onMessage('agent.synced', (payload: any) => {

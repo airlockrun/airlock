@@ -2,7 +2,7 @@
 -- Initial-row INSERT. All "starts empty" string fields are passed
 -- explicitly as '' rather than relying on column defaults (per AGENTS.md
 -- "no fake defaults" rule). Status starts 'draft', upgrade_status 'idle',
--- auto_fix true, extra_prompts empty array.
+-- auto_fix true, instructions empty array.
 INSERT INTO agents (
     name, slug, user_id, description, config, status,
     upgrade_status, auto_fix,
@@ -11,7 +11,7 @@ INSERT INTO agents (
     build_model, exec_model, stt_model, vision_model,
     tts_model, image_gen_model, embedding_model, search_model,
     source_ref, image_ref, db_schema, db_password, sdk_version,
-    extra_prompts, error_message, emoji,
+    instructions, error_message, emoji,
     git_remote_url, git_default_branch, git_webhook_secret, git_last_synced_ref
 )
 VALUES (
@@ -128,8 +128,8 @@ UPDATE agents SET description = @description, updated_at = now() WHERE id = @id;
 -- name: UpdateAgentEmoji :exec
 UPDATE agents SET emoji = @emoji, updated_at = now() WHERE id = @id;
 
--- name: UpdateAgentExtraPrompts :exec
-UPDATE agents SET extra_prompts = @extra_prompts, updated_at = now() WHERE id = @id;
+-- name: UpdateAgentInstructions :exec
+UPDATE agents SET instructions = @instructions, updated_at = now() WHERE id = @id;
 
 -- name: UpdateAgentSDKVersion :exec
 UPDATE agents SET sdk_version = @sdk_version, updated_at = now() WHERE id = @id;

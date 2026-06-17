@@ -1694,33 +1694,38 @@ func (x *WebhookInfo) GetCreatedAt() *timestamppb.Timestamp {
 	return nil
 }
 
-// CronInfo represents a code-synced cron registration.
-type CronInfo struct {
+// ScheduleInfo represents one synced schedule handler — a recurring cron
+// (kind="cron") or a runtime-armed one-shot handler (kind="schedule") — enriched
+// with the next pending fire time.
+type ScheduleInfo struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
-	Schedule      string                 `protobuf:"bytes,3,opt,name=schedule,proto3" json:"schedule,omitempty"`
+	Slug          string                 `protobuf:"bytes,2,opt,name=slug,proto3" json:"slug,omitempty"`
+	Schedule      string                 `protobuf:"bytes,3,opt,name=schedule,proto3" json:"schedule,omitempty"` // cron expression for kind="cron"; empty for "schedule"
 	Description   string                 `protobuf:"bytes,4,opt,name=description,proto3" json:"description,omitempty"`
 	LastFiredAt   *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=last_fired_at,json=lastFiredAt,proto3" json:"last_fired_at,omitempty"`
 	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	Kind          string                 `protobuf:"bytes,7,opt,name=kind,proto3" json:"kind,omitempty"`                                 // "cron" | "schedule"
+	NextFireAt    *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=next_fire_at,json=nextFireAt,proto3" json:"next_fire_at,omitempty"` // earliest pending fire; null if none armed
+	Enabled       bool                   `protobuf:"varint,9,opt,name=enabled,proto3" json:"enabled,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *CronInfo) Reset() {
-	*x = CronInfo{}
+func (x *ScheduleInfo) Reset() {
+	*x = ScheduleInfo{}
 	mi := &file_airlock_v1_types_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *CronInfo) String() string {
+func (x *ScheduleInfo) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*CronInfo) ProtoMessage() {}
+func (*ScheduleInfo) ProtoMessage() {}
 
-func (x *CronInfo) ProtoReflect() protoreflect.Message {
+func (x *ScheduleInfo) ProtoReflect() protoreflect.Message {
 	mi := &file_airlock_v1_types_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -1732,51 +1737,72 @@ func (x *CronInfo) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use CronInfo.ProtoReflect.Descriptor instead.
-func (*CronInfo) Descriptor() ([]byte, []int) {
+// Deprecated: Use ScheduleInfo.ProtoReflect.Descriptor instead.
+func (*ScheduleInfo) Descriptor() ([]byte, []int) {
 	return file_airlock_v1_types_proto_rawDescGZIP(), []int{13}
 }
 
-func (x *CronInfo) GetId() string {
+func (x *ScheduleInfo) GetId() string {
 	if x != nil {
 		return x.Id
 	}
 	return ""
 }
 
-func (x *CronInfo) GetName() string {
+func (x *ScheduleInfo) GetSlug() string {
 	if x != nil {
-		return x.Name
+		return x.Slug
 	}
 	return ""
 }
 
-func (x *CronInfo) GetSchedule() string {
+func (x *ScheduleInfo) GetSchedule() string {
 	if x != nil {
 		return x.Schedule
 	}
 	return ""
 }
 
-func (x *CronInfo) GetDescription() string {
+func (x *ScheduleInfo) GetDescription() string {
 	if x != nil {
 		return x.Description
 	}
 	return ""
 }
 
-func (x *CronInfo) GetLastFiredAt() *timestamppb.Timestamp {
+func (x *ScheduleInfo) GetLastFiredAt() *timestamppb.Timestamp {
 	if x != nil {
 		return x.LastFiredAt
 	}
 	return nil
 }
 
-func (x *CronInfo) GetCreatedAt() *timestamppb.Timestamp {
+func (x *ScheduleInfo) GetCreatedAt() *timestamppb.Timestamp {
 	if x != nil {
 		return x.CreatedAt
 	}
 	return nil
+}
+
+func (x *ScheduleInfo) GetKind() string {
+	if x != nil {
+		return x.Kind
+	}
+	return ""
+}
+
+func (x *ScheduleInfo) GetNextFireAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.NextFireAt
+	}
+	return nil
+}
+
+func (x *ScheduleInfo) GetEnabled() bool {
+	if x != nil {
+		return x.Enabled
+	}
+	return false
 }
 
 // RouteInfo represents a code-synced HTTP route registration.
@@ -4455,15 +4481,19 @@ const file_airlock_v1_types_proto_rawDesc = "" +
 	"\rsecret_masked\x18\x06 \x01(\tR\fsecretMasked\x12D\n" +
 	"\x10last_received_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\x0elastReceivedAt\x129\n" +
 	"\n" +
-	"created_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"\xe7\x01\n" +
-	"\bCronInfo\x12\x0e\n" +
+	"created_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"\xd7\x02\n" +
+	"\fScheduleInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
-	"\x04name\x18\x02 \x01(\tR\x04name\x12\x1a\n" +
+	"\x04slug\x18\x02 \x01(\tR\x04slug\x12\x1a\n" +
 	"\bschedule\x18\x03 \x01(\tR\bschedule\x12 \n" +
 	"\vdescription\x18\x04 \x01(\tR\vdescription\x12>\n" +
 	"\rlast_fired_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\vlastFiredAt\x129\n" +
 	"\n" +
-	"created_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"\x81\x01\n" +
+	"created_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x12\x12\n" +
+	"\x04kind\x18\a \x01(\tR\x04kind\x12<\n" +
+	"\fnext_fire_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\n" +
+	"nextFireAt\x12\x18\n" +
+	"\aenabled\x18\t \x01(\bR\aenabled\"\x81\x01\n" +
 	"\tRouteInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04path\x18\x02 \x01(\tR\x04path\x12\x16\n" +
@@ -4743,7 +4773,7 @@ var file_airlock_v1_types_proto_goTypes = []any{
 	(*ConversationInfo)(nil),                 // 12: airlock.v1.ConversationInfo
 	(*AgentMessageInfo)(nil),                 // 13: airlock.v1.AgentMessageInfo
 	(*WebhookInfo)(nil),                      // 14: airlock.v1.WebhookInfo
-	(*CronInfo)(nil),                         // 15: airlock.v1.CronInfo
+	(*ScheduleInfo)(nil),                     // 15: airlock.v1.ScheduleInfo
 	(*RouteInfo)(nil),                        // 16: airlock.v1.RouteInfo
 	(*ConnectionInfo)(nil),                   // 17: airlock.v1.ConnectionInfo
 	(*BridgeInfo)(nil),                       // 18: airlock.v1.BridgeInfo
@@ -4798,30 +4828,31 @@ var file_airlock_v1_types_proto_depIdxs = []int32{
 	45, // 18: airlock.v1.AgentMessageInfo.created_at:type_name -> google.protobuf.Timestamp
 	45, // 19: airlock.v1.WebhookInfo.last_received_at:type_name -> google.protobuf.Timestamp
 	45, // 20: airlock.v1.WebhookInfo.created_at:type_name -> google.protobuf.Timestamp
-	45, // 21: airlock.v1.CronInfo.last_fired_at:type_name -> google.protobuf.Timestamp
-	45, // 22: airlock.v1.CronInfo.created_at:type_name -> google.protobuf.Timestamp
-	45, // 23: airlock.v1.ConnectionInfo.token_expires_at:type_name -> google.protobuf.Timestamp
-	4,  // 24: airlock.v1.BridgeInfo.owner:type_name -> airlock.v1.UserSummary
-	45, // 25: airlock.v1.BridgeInfo.created_at:type_name -> google.protobuf.Timestamp
-	45, // 26: airlock.v1.BridgeInfo.updated_at:type_name -> google.protobuf.Timestamp
-	19, // 27: airlock.v1.BridgeInfo.settings:type_name -> airlock.v1.BridgeSettings
-	45, // 28: airlock.v1.PlatformIdentityInfo.created_at:type_name -> google.protobuf.Timestamp
-	45, // 29: airlock.v1.CreateManagedBotSessionResponse.expires_at:type_name -> google.protobuf.Timestamp
-	45, // 30: airlock.v1.GitCredential.created_at:type_name -> google.protobuf.Timestamp
-	45, // 31: airlock.v1.GitCredential.last_used_at:type_name -> google.protobuf.Timestamp
-	45, // 32: airlock.v1.Passkey.created_at:type_name -> google.protobuf.Timestamp
-	45, // 33: airlock.v1.Passkey.last_used_at:type_name -> google.protobuf.Timestamp
-	45, // 34: airlock.v1.MCPServerInfo.token_expires_at:type_name -> google.protobuf.Timestamp
-	45, // 35: airlock.v1.MCPServerInfo.last_synced_at:type_name -> google.protobuf.Timestamp
-	45, // 36: airlock.v1.EnvVarInfo.updated_at:type_name -> google.protobuf.Timestamp
-	45, // 37: airlock.v1.SiblingInfo.created_at:type_name -> google.protobuf.Timestamp
-	45, // 38: airlock.v1.ExecEndpointInfo.host_key_pinned_at:type_name -> google.protobuf.Timestamp
-	45, // 39: airlock.v1.ExecEndpointInfo.last_used_at:type_name -> google.protobuf.Timestamp
-	40, // [40:40] is the sub-list for method output_type
-	40, // [40:40] is the sub-list for method input_type
-	40, // [40:40] is the sub-list for extension type_name
-	40, // [40:40] is the sub-list for extension extendee
-	0,  // [0:40] is the sub-list for field type_name
+	45, // 21: airlock.v1.ScheduleInfo.last_fired_at:type_name -> google.protobuf.Timestamp
+	45, // 22: airlock.v1.ScheduleInfo.created_at:type_name -> google.protobuf.Timestamp
+	45, // 23: airlock.v1.ScheduleInfo.next_fire_at:type_name -> google.protobuf.Timestamp
+	45, // 24: airlock.v1.ConnectionInfo.token_expires_at:type_name -> google.protobuf.Timestamp
+	4,  // 25: airlock.v1.BridgeInfo.owner:type_name -> airlock.v1.UserSummary
+	45, // 26: airlock.v1.BridgeInfo.created_at:type_name -> google.protobuf.Timestamp
+	45, // 27: airlock.v1.BridgeInfo.updated_at:type_name -> google.protobuf.Timestamp
+	19, // 28: airlock.v1.BridgeInfo.settings:type_name -> airlock.v1.BridgeSettings
+	45, // 29: airlock.v1.PlatformIdentityInfo.created_at:type_name -> google.protobuf.Timestamp
+	45, // 30: airlock.v1.CreateManagedBotSessionResponse.expires_at:type_name -> google.protobuf.Timestamp
+	45, // 31: airlock.v1.GitCredential.created_at:type_name -> google.protobuf.Timestamp
+	45, // 32: airlock.v1.GitCredential.last_used_at:type_name -> google.protobuf.Timestamp
+	45, // 33: airlock.v1.Passkey.created_at:type_name -> google.protobuf.Timestamp
+	45, // 34: airlock.v1.Passkey.last_used_at:type_name -> google.protobuf.Timestamp
+	45, // 35: airlock.v1.MCPServerInfo.token_expires_at:type_name -> google.protobuf.Timestamp
+	45, // 36: airlock.v1.MCPServerInfo.last_synced_at:type_name -> google.protobuf.Timestamp
+	45, // 37: airlock.v1.EnvVarInfo.updated_at:type_name -> google.protobuf.Timestamp
+	45, // 38: airlock.v1.SiblingInfo.created_at:type_name -> google.protobuf.Timestamp
+	45, // 39: airlock.v1.ExecEndpointInfo.host_key_pinned_at:type_name -> google.protobuf.Timestamp
+	45, // 40: airlock.v1.ExecEndpointInfo.last_used_at:type_name -> google.protobuf.Timestamp
+	41, // [41:41] is the sub-list for method output_type
+	41, // [41:41] is the sub-list for method input_type
+	41, // [41:41] is the sub-list for extension type_name
+	41, // [41:41] is the sub-list for extension extendee
+	0,  // [0:41] is the sub-list for field type_name
 }
 
 func init() { file_airlock_v1_types_proto_init() }

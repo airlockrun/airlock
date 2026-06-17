@@ -8,14 +8,14 @@ import (
 	"github.com/airlockrun/agentsdk"
 )
 
-// RenderExtras filters the agent's registered extra prompt fragments by
+// RenderInstructions filters the agent's registered instruction fragments by
 // the caller's resolved access and joins the visible ones with "\n\n".
 // Returns an empty string when raw is unset or contains no visible specs.
-func RenderExtras(raw []byte, access agentsdk.Access) string {
+func RenderInstructions(raw []byte, access agentsdk.Access) string {
 	if len(raw) == 0 {
 		return ""
 	}
-	var specs []agentsdk.ExtraPromptDef
+	var specs []agentsdk.InstructionDef
 	if err := json.Unmarshal(raw, &specs); err != nil {
 		return ""
 	}

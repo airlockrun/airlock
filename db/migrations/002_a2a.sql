@@ -865,7 +865,65 @@ CREATE TABLE webauthn_ceremonies (
 );
 CREATE INDEX webauthn_ceremonies_expires_at_idx ON webauthn_ceremonies(expires_at);
 
+-- ─── scheduler / instructions / per-user topics (feat/scheduler-instructions) ───
+-- Instructions: rename the AddInstruction store column.
+ALTER TABLE agents RENAME COLUMN extra_prompts TO instructions;
+
+-- Per-user topics: forbid-broadcast flag for personal feeds (PublishToUser).
+ALTER TABLE agent_topics ADD COLUMN per_user boolean NOT NULL DEFAULT false;
+ALTER TABLE agent_topics ALTER COLUMN per_user DROP DEFAULT;
+
+-- Unified scheduler: agent_crons is subsumed by agent_schedule_handlers
+-- (synced cron+schedule defs), and agent_scheduled_fires is the one due-table
+-- a single airlock poller drains (FOR UPDATE SKIP LOCKED).
+DROP TABLE IF EXISTS agent_crons;
+CREATE TABLE agent_schedule_handlers (
+    id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    agent_id      uuid NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    slug          text NOT NULL,
+    kind          text NOT NULL,        -- 'cron' | 'schedule'
+    recurrence    text NOT NULL,        -- cron expr for kind='cron'; '' for schedule
+    enabled       boolean NOT NULL DEFAULT true,
+    timeout_ms    bigint NOT NULL,
+    description   text NOT NULL,
+    last_fired_at timestamptz,
+    created_at    timestamptz NOT NULL DEFAULT now(),
+    updated_at    timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (agent_id, slug)
+);
+CREATE TABLE agent_scheduled_fires (
+    id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    agent_id    uuid NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    source      text NOT NULL,          -- 'cron' | 'schedule'
+    slug        text NOT NULL,
+    fire_at     timestamptz NOT NULL,
+    recurrence  text NOT NULL,          -- cron expr if recurring (re-armed on fire); '' = one-shot
+    timeout_ms  bigint NOT NULL,
+    status      text NOT NULL,          -- pending|fired|error|orphaned|cancelled
+    created_at  timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX agent_scheduled_fires_due_idx ON agent_scheduled_fires (status, fire_at);
+
 -- +goose Down
+-- ─── scheduler / instructions / per-user topics — reverse ───
+DROP INDEX IF EXISTS agent_scheduled_fires_due_idx;
+DROP TABLE IF EXISTS agent_scheduled_fires;
+DROP TABLE IF EXISTS agent_schedule_handlers;
+CREATE TABLE agent_crons (
+    id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    agent_id      uuid NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    name          text NOT NULL,
+    schedule      text NOT NULL,
+    enabled       boolean NOT NULL,
+    timeout_ms    integer NOT NULL,
+    description   text NOT NULL,
+    last_fired_at timestamptz,
+    created_at    timestamptz NOT NULL DEFAULT now(),
+    updated_at    timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (agent_id, name)
+);
+ALTER TABLE agent_topics DROP COLUMN IF EXISTS per_user;
+ALTER TABLE agents RENAME COLUMN instructions TO extra_prompts;
 -- WebAuthn / passkeys — reverse of the passkey block at the end of Up.
 DROP INDEX IF EXISTS webauthn_ceremonies_expires_at_idx;
 DROP TABLE IF EXISTS webauthn_ceremonies;

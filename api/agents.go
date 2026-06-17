@@ -140,9 +140,9 @@ func (h *agentsHandler) Get(w http.ResponseWriter, r *http.Request) {
 	for i, wh := range d.Webhooks {
 		whInfos[i] = convert.WebhookToProto(wh, h.publicURL, agentID.String())
 	}
-	cronInfos := make([]*airlockv1.CronInfo, len(d.Crons))
-	for i, c := range d.Crons {
-		cronInfos[i] = convert.CronToProto(c)
+	scheduleInfos := make([]*airlockv1.ScheduleInfo, len(d.Schedules))
+	for i, c := range d.Schedules {
+		scheduleInfos[i] = convert.ScheduleToProto(c)
 	}
 	routeInfos := make([]*airlockv1.RouteInfo, len(d.Routes))
 	for i, route := range d.Routes {
@@ -156,7 +156,7 @@ func (h *agentsHandler) Get(w http.ResponseWriter, r *http.Request) {
 		RouteBaseUrl: h.agentBaseURL(d.Agent.Slug),
 		Connections:  connInfos,
 		Webhooks:     whInfos,
-		Crons:        cronInfos,
+		Schedules:    scheduleInfos,
 		Routes:       routeInfos,
 	})
 }
@@ -329,24 +329,24 @@ func (h *agentsHandler) ListWebhooks(w http.ResponseWriter, r *http.Request) {
 	writeProto(w, http.StatusOK, &airlockv1.ListWebhooksResponse{Webhooks: out})
 }
 
-// ListCrons handles GET /api/v1/agents/{agentID}/crons.
-func (h *agentsHandler) ListCrons(w http.ResponseWriter, r *http.Request) {
+// ListSchedules handles GET /api/v1/agents/{agentID}/schedules.
+func (h *agentsHandler) ListSchedules(w http.ResponseWriter, r *http.Request) {
 	agentID, err := parseUUID(chi.URLParam(r, "agentID"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid agent ID")
 		return
 	}
 	p := principalFromRequest(r)
-	rows, err := h.svc.ListCrons(r.Context(), p, agentID)
+	rows, err := h.svc.ListSchedules(r.Context(), p, agentID)
 	if err != nil {
-		writeAgentsError(w, err, "failed to list crons")
+		writeAgentsError(w, err, "failed to list schedules")
 		return
 	}
-	out := make([]*airlockv1.CronInfo, len(rows))
+	out := make([]*airlockv1.ScheduleInfo, len(rows))
 	for i, c := range rows {
-		out[i] = convert.CronToProto(c)
+		out[i] = convert.ScheduleToProto(c)
 	}
-	writeProto(w, http.StatusOK, &airlockv1.ListCronsResponse{Crons: out})
+	writeProto(w, http.StatusOK, &airlockv1.ListSchedulesResponse{Schedules: out})
 }
 
 // ListTools handles GET /api/v1/agents/{agentID}/tools.
@@ -369,20 +369,20 @@ func (h *agentsHandler) ListTools(w http.ResponseWriter, r *http.Request) {
 	writeProto(w, http.StatusOK, &airlockv1.ListToolsResponse{Tools: out})
 }
 
-// FireCron handles POST /api/v1/agents/{agentID}/crons/{name}/fire.
-func (h *agentsHandler) FireCron(w http.ResponseWriter, r *http.Request) {
+// FireSchedule handles POST /api/v1/agents/{agentID}/schedules/{slug}/fire.
+func (h *agentsHandler) FireSchedule(w http.ResponseWriter, r *http.Request) {
 	agentID, err := parseUUID(chi.URLParam(r, "agentID"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid agent ID")
 		return
 	}
 	p := principalFromRequest(r)
-	res, err := h.svc.FireCron(r.Context(), p, agentID, chi.URLParam(r, "name"))
+	res, err := h.svc.FireSchedule(r.Context(), p, agentID, chi.URLParam(r, "slug"))
 	if err != nil {
-		writeAgentsError(w, err, "failed to fire cron")
+		writeAgentsError(w, err, "failed to fire schedule")
 		return
 	}
-	writeProto(w, http.StatusOK, &airlockv1.FireCronResponse{RunId: res.RunID.String()})
+	writeProto(w, http.StatusOK, &airlockv1.FireScheduleResponse{RunId: res.RunID.String()})
 }
 
 // ListBuilds handles GET /api/v1/agents/{agentID}/builds.

@@ -39,7 +39,7 @@ type Agent struct {
 	DbPassword           string             `json:"db_password"`
 	SdkVersion           string             `json:"sdk_version"`
 	Config               []byte             `json:"config"`
-	ExtraPrompts         []byte             `json:"extra_prompts"`
+	Instructions         []byte             `json:"instructions"`
 	ErrorMessage         string             `json:"error_message"`
 	CreatedAt            pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt            pgtype.Timestamptz `json:"updated_at"`
@@ -92,19 +92,6 @@ type AgentConversation struct {
 	ContextCheckpointMessageID pgtype.UUID        `json:"context_checkpoint_message_id"`
 	CreatedAt                  pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt                  pgtype.Timestamptz `json:"updated_at"`
-}
-
-type AgentCron struct {
-	ID          pgtype.UUID        `json:"id"`
-	AgentID     pgtype.UUID        `json:"agent_id"`
-	Name        string             `json:"name"`
-	Schedule    string             `json:"schedule"`
-	Enabled     bool               `json:"enabled"`
-	TimeoutMs   int32              `json:"timeout_ms"`
-	Description string             `json:"description"`
-	LastFiredAt pgtype.Timestamptz `json:"last_fired_at"`
-	CreatedAt   pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
 }
 
 type AgentDirectory struct {
@@ -223,6 +210,32 @@ type AgentRoute struct {
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
 }
 
+type AgentScheduleHandler struct {
+	ID          pgtype.UUID        `json:"id"`
+	AgentID     pgtype.UUID        `json:"agent_id"`
+	Slug        string             `json:"slug"`
+	Kind        string             `json:"kind"`
+	Recurrence  string             `json:"recurrence"`
+	Enabled     bool               `json:"enabled"`
+	TimeoutMs   int64              `json:"timeout_ms"`
+	Description string             `json:"description"`
+	LastFiredAt pgtype.Timestamptz `json:"last_fired_at"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+}
+
+type AgentScheduledFire struct {
+	ID         pgtype.UUID        `json:"id"`
+	AgentID    pgtype.UUID        `json:"agent_id"`
+	Source     string             `json:"source"`
+	Slug       string             `json:"slug"`
+	FireAt     pgtype.Timestamptz `json:"fire_at"`
+	Recurrence string             `json:"recurrence"`
+	TimeoutMs  int64              `json:"timeout_ms"`
+	Status     string             `json:"status"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+}
+
 type AgentSibling struct {
 	ParentAgentID  pgtype.UUID        `json:"parent_agent_id"`
 	SiblingAgentID pgtype.UUID        `json:"sibling_agent_id"`
@@ -250,6 +263,7 @@ type AgentTopic struct {
 	Access      string             `json:"access"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+	PerUser     bool               `json:"per_user"`
 }
 
 type AgentWebhook struct {

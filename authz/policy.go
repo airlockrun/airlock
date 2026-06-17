@@ -49,8 +49,8 @@ const (
 	AgentBuildManage   Action = "agent.build.manage" // upgrade / rollback / cancel build
 	AgentMembersManage Action = "agent.members.manage"
 	AgentWebhooksView  Action = "agent.webhooks.view"
-	AgentCronsView     Action = "agent.crons.view"
-	AgentCronFire      Action = "agent.cron.fire"
+	AgentSchedulesView Action = "agent.schedules.view"
+	AgentScheduleFire  Action = "agent.schedule.fire"
 	AgentConnections   Action = "agent.connections"    // credentials / MCP / env-vars
 	AgentExecEndpoints Action = "agent.exec_endpoints" // SSH exec-endpoint config
 	AgentSiblings      Action = "agent.siblings"
@@ -97,8 +97,8 @@ var policy = map[Action]Requirement{
 	AgentBuildManage:   {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
 	AgentMembersManage: {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
 	AgentWebhooksView:  {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
-	AgentCronsView:     {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
-	AgentCronFire:      {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
+	AgentSchedulesView: {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
+	AgentScheduleFire:  {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
 	AgentConnections:   {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
 	AgentExecEndpoints: {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
 	AgentSiblings:      {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},

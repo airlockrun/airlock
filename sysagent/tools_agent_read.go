@@ -19,7 +19,7 @@ func (s *Service) agentReadTools() []tool.Tool {
 		s.toolListAgents(),
 		s.toolGetAgent(),
 		s.toolListWebhooks(),
-		s.toolListCrons(),
+		s.toolListSchedules(),
 		s.toolListAgentDeclaredTools(),
 		s.toolListBuilds(),
 		s.toolGetBuild(),
@@ -56,7 +56,7 @@ func (s *Service) toolListAgents() tool.Tool {
 
 func (s *Service) toolGetAgent() tool.Tool {
 	return tool.New("get_agent").
-		Description(`Return one agent's full detail: agent row, running flag, your_access, connections/webhooks/crons/routes. Pass the agent slug.`).
+		Description(`Return one agent's full detail: agent row, running flag, your_access, connections/webhooks/schedules/routes. Pass the agent slug.`).
 		SchemaFromStruct(agentSlugInput{}).
 		Execute(func(ctx context.Context, raw json.RawMessage, _ tool.CallOptions) (tool.Result, error) {
 			var in agentSlugInput
@@ -80,7 +80,7 @@ func (s *Service) toolGetAgent() tool.Tool {
 				Agent:       ap,
 				Connections: make([]*airlockv1.ConnectionInfo, len(d.Connections)),
 				Webhooks:    make([]*airlockv1.WebhookInfo, len(d.Webhooks)),
-				Crons:       make([]*airlockv1.CronInfo, len(d.Crons)),
+				Schedules:   make([]*airlockv1.ScheduleInfo, len(d.Schedules)),
 				Routes:      make([]*airlockv1.RouteInfo, len(d.Routes)),
 			}
 			for i, c := range d.Connections {
@@ -89,8 +89,8 @@ func (s *Service) toolGetAgent() tool.Tool {
 			for i, w := range d.Webhooks {
 				resp.Webhooks[i] = convert.WebhookToProto(w, s.publicURL, agentID.String())
 			}
-			for i, c := range d.Crons {
-				resp.Crons[i] = convert.CronToProto(c)
+			for i, c := range d.Schedules {
+				resp.Schedules[i] = convert.ScheduleToProto(c)
 			}
 			for i, r := range d.Routes {
 				resp.Routes[i] = convert.RouteToProto(r)
@@ -130,11 +130,11 @@ func (s *Service) toolListWebhooks() tool.Tool {
 		Build()
 }
 
-// --- list_crons ---
+// --- list_schedules ---
 
-func (s *Service) toolListCrons() tool.Tool {
-	return tool.New("list_crons").
-		Description(`List the agent's declared cron jobs (name, schedule, last-run state). Use fire_cron to trigger one manually.`).
+func (s *Service) toolListSchedules() tool.Tool {
+	return tool.New("list_schedules").
+		Description(`List the agent's declared schedule handlers — crons (recurring) and schedules (runtime-armed) — with kind, schedule, next fire, and last-run state. Use fire_schedule to trigger one manually.`).
 		SchemaFromStruct(agentSlugInput{}).
 		Execute(func(ctx context.Context, raw json.RawMessage, _ tool.CallOptions) (tool.Result, error) {
 			var in agentSlugInput
@@ -146,13 +146,13 @@ func (s *Service) toolListCrons() tool.Tool {
 			if err != nil {
 				return errResult(err), nil
 			}
-			rows, err := s.agents.ListCrons(ctx, p, uuid.UUID(a.ID.Bytes))
+			rows, err := s.agents.ListSchedules(ctx, p, uuid.UUID(a.ID.Bytes))
 			if err != nil {
 				return errResult(err), nil
 			}
-			out := make([]*airlockv1.CronInfo, len(rows))
+			out := make([]*airlockv1.ScheduleInfo, len(rows))
 			for i, c := range rows {
-				out[i] = convert.CronToProto(c)
+				out[i] = convert.ScheduleToProto(c)
 			}
 			return okResult(out)
 		}).

@@ -27,9 +27,10 @@ import (
 	"go.uber.org/zap"
 )
 
-// cronReloader is the subset of trigger.Scheduler needed by the Sync handler.
-type cronReloader interface {
-	ReloadAgent(ctx context.Context, agentID uuid.UUID) error
+// scheduleReconciler is the subset of trigger.Scheduler the Sync handler needs:
+// re-seed cron fire rows and orphan removed schedules after a sync.
+type scheduleReconciler interface {
+	ReconcileAgent(ctx context.Context, agentID uuid.UUID) error
 }
 
 type Handler struct {
@@ -40,7 +41,7 @@ type Handler struct {
 	builder                *builder.BuildService
 	pubsub                 *realtime.PubSub
 	bridgeMgr              BridgePartsDeliverer // for output()/topic bridge delivery
-	scheduler              cronReloader         // nil until trigger system is wired
+	scheduler              scheduleReconciler   // nil until trigger system is wired
 	publicURL              string
 	agentBaseURL           func(slug string) string // {scheme}://{slug}.{domain}[:port] — from config.Config (single source)
 	llmProxyURL            string                   // optional: route LLM calls through this proxy
@@ -62,7 +63,7 @@ type Config struct {
 	Builder                *builder.BuildService
 	PubSub                 *realtime.PubSub
 	BridgeMgr              BridgePartsDeliverer
-	Scheduler              cronReloader
+	Scheduler              scheduleReconciler
 	PublicURL              string
 	AgentBaseURL           func(slug string) string
 	LLMProxyURL            string
@@ -283,18 +284,18 @@ func (h *Handler) Sync(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	// Sync is authoritative for extra_prompts — absent field resets to
-	// empty so removing an AddExtraPrompt call and resyncing wipes stale
+	// Sync is authoritative for instructions — absent field resets to
+	// empty so removing an AddInstruction call and resyncing wipes stale
 	// fragments.
 	extrasJSON := []byte("[]")
-	if len(req.ExtraPrompts) > 0 {
-		if b, err := json.Marshal(req.ExtraPrompts); err == nil {
+	if len(req.Instructions) > 0 {
+		if b, err := json.Marshal(req.Instructions); err == nil {
 			extrasJSON = b
 		}
 	}
-	_ = q.UpdateAgentExtraPrompts(ctx, dbq.UpdateAgentExtraPromptsParams{
+	_ = q.UpdateAgentInstructions(ctx, dbq.UpdateAgentInstructionsParams{
 		ID:           pgAgentID,
-		ExtraPrompts: extrasJSON,
+		Instructions: extrasJSON,
 	})
 
 	// Upsert tools, then delete stale.
@@ -390,39 +391,40 @@ func (h *Handler) Sync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Upsert crons, then delete stale.
-	cronNames := make([]string, len(req.Crons))
-	for i, cron := range req.Crons {
-		cronTimeoutMs := int32(cron.TimeoutMs)
-		if cronTimeoutMs == 0 {
-			cronTimeoutMs = 120000
+	// Upsert schedule handlers (crons + schedules), then delete stale.
+	handlerSlugs := make([]string, len(req.ScheduleHandlers))
+	for i, sh := range req.ScheduleHandlers {
+		timeoutMs := sh.TimeoutMs
+		if timeoutMs == 0 {
+			timeoutMs = 120000
 		}
-		if err := q.UpsertCron(ctx, dbq.UpsertCronParams{
+		if err := q.UpsertScheduleHandler(ctx, dbq.UpsertScheduleHandlerParams{
 			AgentID:     pgAgentID,
-			Name:        cron.Name,
-			Schedule:    cron.Schedule,
-			TimeoutMs:   cronTimeoutMs,
-			Description: cron.Description,
+			Slug:        sh.Slug,
+			Kind:        sh.Kind,
+			Recurrence:  sh.Recurrence,
+			TimeoutMs:   timeoutMs,
+			Description: sh.Description,
 		}); err != nil {
-			h.logger.Error("upsert cron failed", zap.Error(err))
-			writeJSONError(w, http.StatusInternalServerError, "failed to sync crons")
+			h.logger.Error("upsert schedule handler failed", zap.Error(err))
+			writeJSONError(w, http.StatusInternalServerError, "failed to sync schedules")
 			return
 		}
-		cronNames[i] = cron.Name
+		handlerSlugs[i] = sh.Slug
 	}
-	if err := q.DeleteCronsByAgentExcept(ctx, dbq.DeleteCronsByAgentExceptParams{
+	if err := q.DeleteScheduleHandlersByAgentExcept(ctx, dbq.DeleteScheduleHandlersByAgentExceptParams{
 		AgentID: pgAgentID,
-		Names:   cronNames,
+		Slugs:   handlerSlugs,
 	}); err != nil {
-		h.logger.Error("delete stale crons failed", zap.Error(err))
-		writeJSONError(w, http.StatusInternalServerError, "failed to sync crons")
+		h.logger.Error("delete stale schedule handlers failed", zap.Error(err))
+		writeJSONError(w, http.StatusInternalServerError, "failed to sync schedules")
 		return
 	}
 
-	// Reload cron scheduler for this agent.
+	// Reconcile fire rows: re-seed cron fires, orphan removed schedules.
 	if h.scheduler != nil {
-		if err := h.scheduler.ReloadAgent(ctx, agentID); err != nil {
-			h.logger.Error("reload scheduler failed", zap.Error(err))
+		if err := h.scheduler.ReconcileAgent(ctx, agentID); err != nil {
+			h.logger.Error("reconcile scheduler failed", zap.Error(err))
 		}
 	}
 
@@ -460,6 +462,7 @@ func (h *Handler) Sync(w http.ResponseWriter, r *http.Request) {
 			Description: t.Description,
 			LlmHint:     t.LLMHint,
 			Access:      string(t.Access),
+			PerUser:     t.PerUser,
 		}); err != nil {
 			h.logger.Error("upsert topic failed", zap.Error(err))
 			writeJSONError(w, http.StatusInternalServerError, "failed to sync topics")

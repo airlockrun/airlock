@@ -117,13 +117,13 @@ type Detail struct {
 	YourAccess  agentsdk.Access                        `json:"your_access"`
 	Connections []dbq.Connection                       `json:"connections"`
 	Webhooks    []dbq.ListWebhooksByAgentWithStatusRow `json:"webhooks"`
-	Crons       []dbq.AgentCron                        `json:"crons"`
+	Schedules   []dbq.ListSchedulesWithNextFireRow     `json:"schedules"`
 	Routes      []dbq.AgentRoute                       `json:"routes"`
 }
 
-// FireCronResult is the output of FireCron — the run ID for the SPA to
+// FireScheduleResult is the output of FireSchedule — the run ID for the SPA to
 // subscribe to.
-type FireCronResult struct {
+type FireScheduleResult struct {
 	RunID uuid.UUID
 }
 
@@ -358,14 +358,14 @@ func (s *Service) Get(ctx context.Context, p authz.Principal, agentID uuid.UUID)
 	}
 	conns, _ := q.ListConnectionsByAgent(ctx, pgID)
 	webhooks, _ := q.ListWebhooksByAgentWithStatus(ctx, pgID)
-	crons, _ := q.ListCronsByAgent(ctx, pgID)
+	schedules, _ := q.ListSchedulesWithNextFire(ctx, pgID)
 	routes, _ := q.ListRoutesByAgent(ctx, pgID)
 	d := Detail{
 		Agent:       agent,
 		YourAccess:  p.EffectiveAgentAccess(ctx, q, agentID),
 		Connections: conns,
 		Webhooks:    webhooks,
-		Crons:       crons,
+		Schedules:   schedules,
 		Routes:      routes,
 	}
 	if c, gerr := s.containers.GetRunning(ctx, agentID); gerr == nil && c != nil {
@@ -731,16 +731,16 @@ func (s *Service) ListWebhooks(ctx context.Context, p authz.Principal, agentID u
 	return rows, nil
 }
 
-// ListCrons returns the agent's cron rows. Requires agent-admin (cron
-// config is owner-only).
-func (s *Service) ListCrons(ctx context.Context, p authz.Principal, agentID uuid.UUID) ([]dbq.AgentCron, error) {
+// ListSchedules returns the agent's schedule handlers (crons + schedules) with
+// each one's next pending fire time. Requires agent-admin (config is owner-only).
+func (s *Service) ListSchedules(ctx context.Context, p authz.Principal, agentID uuid.UUID) ([]dbq.ListSchedulesWithNextFireRow, error) {
 	q := dbq.New(s.db.Pool())
-	if err := authz.Authorize(ctx, q, p, authz.AgentCronsView, agentID); err != nil {
+	if err := authz.Authorize(ctx, q, p, authz.AgentSchedulesView, agentID); err != nil {
 		return nil, err
 	}
-	rows, err := q.ListCronsByAgent(ctx, pgtype.UUID{Bytes: agentID, Valid: true})
+	rows, err := q.ListSchedulesWithNextFire(ctx, pgtype.UUID{Bytes: agentID, Valid: true})
 	if err != nil {
-		s.logger.Error("list crons", zap.Error(err))
+		s.logger.Error("list schedules", zap.Error(err))
 		return nil, err
 	}
 	return rows, nil
@@ -761,32 +761,33 @@ func (s *Service) ListTools(ctx context.Context, p authz.Principal, agentID uuid
 	return rows, nil
 }
 
-// FireCron triggers a cron run synchronously and returns the run ID
-// after draining the response body. Requires agent-admin.
-func (s *Service) FireCron(ctx context.Context, p authz.Principal, agentID uuid.UUID, name string) (FireCronResult, error) {
+// FireSchedule manually fires a registered handler (cron or schedule) once and
+// returns the run ID after draining the response body. No fire id is passed —
+// a manual fire carries no per-instance data. Requires agent-admin.
+func (s *Service) FireSchedule(ctx context.Context, p authz.Principal, agentID uuid.UUID, slug string) (FireScheduleResult, error) {
 	q := dbq.New(s.db.Pool())
-	if err := authz.Authorize(ctx, q, p, authz.AgentCronFire, agentID); err != nil {
-		return FireCronResult{}, err
+	if err := authz.Authorize(ctx, q, p, authz.AgentScheduleFire, agentID); err != nil {
+		return FireScheduleResult{}, err
 	}
-	cron, err := q.GetCronByAgentAndName(ctx, dbq.GetCronByAgentAndNameParams{
+	handler, err := q.GetScheduleHandler(ctx, dbq.GetScheduleHandlerParams{
 		AgentID: pgtype.UUID{Bytes: agentID, Valid: true},
-		Name:    name,
+		Slug:    slug,
 	})
 	if err != nil {
-		return FireCronResult{}, service.ErrNotFound
+		return FireScheduleResult{}, service.ErrNotFound
 	}
-	timeout := time.Duration(cron.TimeoutMs) * time.Millisecond
+	timeout := time.Duration(handler.TimeoutMs) * time.Millisecond
 	if timeout == 0 {
 		timeout = 2 * time.Minute
 	}
-	rc, runID, err := s.dispatcher.ForwardCron(ctx, agentID, name, timeout)
+	rc, runID, err := s.dispatcher.ForwardFire(ctx, agentID, "", slug, timeout)
 	if err != nil {
-		s.logger.Error("fire cron", zap.Error(err))
-		return FireCronResult{}, err
+		s.logger.Error("fire schedule", zap.Error(err))
+		return FireScheduleResult{}, err
 	}
 	io.Copy(io.Discard, rc)
 	rc.Close()
-	return FireCronResult{RunID: runID}, nil
+	return FireScheduleResult{RunID: runID}, nil
 }
 
 // ListBuilds returns the agent's build history (latest 50). Requires

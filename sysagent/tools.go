@@ -30,7 +30,7 @@ var destructiveTools = map[string]struct{}{
 	"trigger_agent_upgrade": {},
 	"rollback_agent":        {},
 	"cancel_build":          {},
-	"fire_cron":             {},
+	"fire_schedule":         {},
 	"connect_git":           {},
 	"disconnect_git":        {},
 	"delete_git_credential": {},
