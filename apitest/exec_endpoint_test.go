@@ -251,8 +251,8 @@ func TestExecEndpoint_UnconfiguredReturns4xx(t *testing.T) {
 	agentID := apitest.CreateAgent(t, h, apitest.AgentOpts{OwnerID: owner})
 	agentToken := apitest.IssueAgentToken(t, h, agentID)
 
-	// Case 1: slug declared by the agent but never configured by the
-	// operator → 501 (transport not configured).
+	// Case 1: slug declared by the agent as a need but never configured by the
+	// operator → the resource was never created/bound → 404 (not bound).
 	declareExecEndpoint(t, h, agentToken, "vps", agentsdk.ExecEndpointDef{
 		Description: "Not yet configured",
 		Access:      agentsdk.AccessAdmin,
@@ -261,8 +261,8 @@ func TestExecEndpoint_UnconfiguredReturns4xx(t *testing.T) {
 		"/api/agent/exec/vps",
 		agentToken,
 		asJSON(t, map[string]any{"command": "anything"})))
-	if resp.StatusCode != http.StatusNotImplemented {
-		t.Errorf("declared-but-unconfigured: status %d, want 501", resp.StatusCode)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("declared-but-unconfigured: status %d, want 404", resp.StatusCode)
 		t.Logf("body: %s", h.ReadBody(resp))
 	} else {
 		resp.Body.Close()

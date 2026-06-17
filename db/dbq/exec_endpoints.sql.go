@@ -217,6 +217,22 @@ func (q *Queries) TouchExecEndpointLastUsed(ctx context.Context, id pgtype.UUID)
 	return err
 }
 
+const updateExecEndpointOwnerByID = `-- name: UpdateExecEndpointOwnerByID :exec
+UPDATE agent_exec_endpoints SET owner_principal_id = $1 WHERE id = $2
+`
+
+type UpdateExecEndpointOwnerByIDParams struct {
+	OwnerPrincipalID pgtype.UUID `json:"owner_principal_id"`
+	ID               pgtype.UUID `json:"id"`
+}
+
+// Set the resource owner to the principal who created it (the configuring user),
+// overriding the agent-owner default the declaration upsert seeds.
+func (q *Queries) UpdateExecEndpointOwnerByID(ctx context.Context, arg UpdateExecEndpointOwnerByIDParams) error {
+	_, err := q.db.Exec(ctx, updateExecEndpointOwnerByID, arg.OwnerPrincipalID, arg.ID)
+	return err
+}
+
 const upsertExecEndpointDeclaration = `-- name: UpsertExecEndpointDeclaration :exec
 INSERT INTO agent_exec_endpoints (agent_id, owner_principal_id, slug, description, llm_hint, access)
 VALUES ($1, (SELECT user_id FROM agents WHERE id = $1), $2, $3, $4, $5)

@@ -94,12 +94,61 @@ func (s *Service) List(ctx context.Context, p authz.Principal, agentID uuid.UUID
 	return rows, nil
 }
 
-// Configure persists host/port/user for an existing declared endpoint
-// and generates a keypair on first configure. ErrInvalidInput for bad
-// input, ErrNotFound when the endpoint slug wasn't declared by the
-// agent.
+// ensureExecEndpoint makes sure a configured exec-endpoint resource exists for
+// the agent's declared need, creating it — owned by the configuring principal —
+// and binding it on first configure. Returns ErrNotFound if the agent never
+// declared the slug as a need.
+func (s *Service) ensureExecEndpoint(ctx context.Context, p authz.Principal, agentID uuid.UUID, slug string) error {
+	pgAgent := pgtype.UUID{Bytes: agentID, Valid: true}
+	need, err := s.queries.GetResourceNeed(ctx, dbq.GetResourceNeedParams{
+		AgentID: pgAgent, Type: "exec_endpoint", Slug: slug,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return service.Detail(service.ErrNotFound, "exec endpoint not declared by the agent")
+		}
+		return err
+	}
+	if need.BoundExecID.Valid {
+		return nil // resource already created + bound
+	}
+	var spec struct {
+		LLMHint string `json:"llm_hint"`
+		Access  string `json:"access"`
+	}
+	_ = json.Unmarshal(need.Spec, &spec)
+	access := spec.Access
+	if access == "" {
+		access = "admin"
+	}
+	if err := s.queries.UpsertExecEndpointDeclaration(ctx, dbq.UpsertExecEndpointDeclarationParams{
+		AgentID: pgAgent, Slug: slug, Description: need.Description, LlmHint: spec.LLMHint, Access: access,
+	}); err != nil {
+		return err
+	}
+	ep, err := s.queries.GetExecEndpointBySlug(ctx, dbq.GetExecEndpointBySlugParams{AgentID: pgAgent, Slug: slug})
+	if err != nil {
+		return err
+	}
+	if p.UserID != uuid.Nil {
+		if err := s.queries.UpdateExecEndpointOwnerByID(ctx, dbq.UpdateExecEndpointOwnerByIDParams{
+			ID: ep.ID, OwnerPrincipalID: pgtype.UUID{Bytes: p.UserID, Valid: true},
+		}); err != nil {
+			return err
+		}
+	}
+	return s.queries.BindExecEndpointNeed(ctx, dbq.BindExecEndpointNeedParams{AgentID: pgAgent, Slug: slug, ResourceID: ep.ID})
+}
+
+// Configure persists host/port/user for a declared endpoint and generates a
+// keypair on first configure. The exec-endpoint resource is created (owned by
+// the configuring principal) and bound to the agent's need on first configure.
+// ErrInvalidInput for bad input, ErrNotFound when the slug wasn't declared.
 func (s *Service) Configure(ctx context.Context, p authz.Principal, agentID uuid.UUID, slug string, req ConfigureRequest) (dbq.AgentExecEndpoint, error) {
 	if err := authz.Authorize(ctx, s.queries, p, authz.AgentExecEndpoints, agentID); err != nil {
+		return dbq.AgentExecEndpoint{}, err
+	}
+	if err := s.ensureExecEndpoint(ctx, p, agentID, slug); err != nil {
 		return dbq.AgentExecEndpoint{}, err
 	}
 	if strings.TrimSpace(req.Host) == "" {

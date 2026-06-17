@@ -14,6 +14,11 @@ ON CONFLICT (agent_id, slug) DO UPDATE SET
 -- name: GetExecEndpointBySlug :one
 SELECT * FROM agent_exec_endpoints WHERE agent_id = @agent_id AND slug = @slug;
 
+-- name: UpdateExecEndpointOwnerByID :exec
+-- Set the resource owner to the principal who created it (the configuring user),
+-- overriding the agent-owner default the declaration upsert seeds.
+UPDATE agent_exec_endpoints SET owner_principal_id = @owner_principal_id WHERE id = @id;
+
 -- name: ListExecEndpointsByAgent :many
 SELECT * FROM agent_exec_endpoints WHERE agent_id = @agent_id ORDER BY slug;
 
