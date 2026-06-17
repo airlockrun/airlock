@@ -34,8 +34,11 @@ func (q *Queries) ClearUserPassword(ctx context.Context, id pgtype.UUID) error {
 }
 
 const createUser = `-- name: CreateUser :one
-INSERT INTO users (email, display_name, password_hash, tenant_role, oidc_sub, must_change_password)
-VALUES ($1, $2, $3, $4, $5, $6)
+WITH p AS (
+    INSERT INTO principals (kind) VALUES ('user') RETURNING id
+)
+INSERT INTO users (id, email, display_name, password_hash, tenant_role, oidc_sub, must_change_password)
+SELECT p.id, $1, $2, $3, $4, $5, $6 FROM p
 RETURNING id, email, display_name, tenant_role, password_hash, oidc_sub, must_change_password, created_at, updated_at
 `
 
@@ -48,6 +51,9 @@ type CreateUserParams struct {
 	MustChangePassword bool        `json:"must_change_password"`
 }
 
+// Seed the principal supertype row and the user subtype atomically (one
+// statement, one tx); the id is derived from the new principal so every user
+// is guaranteed a matching principals row — the FK fails loud otherwise.
 func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, error) {
 	row := q.db.QueryRow(ctx, createUser,
 		arg.Email,
@@ -73,9 +79,11 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 }
 
 const deleteUser = `-- name: DeleteUser :exec
-DELETE FROM users WHERE id = $1
+DELETE FROM principals WHERE id = $1
 `
 
+// Delete through the principal: ON DELETE CASCADE removes the users row plus
+// any grants/memberships keyed on this principal.
 func (q *Queries) DeleteUser(ctx context.Context, id pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, deleteUser, id)
 	return err

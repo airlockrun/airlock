@@ -12,8 +12,11 @@ import (
 )
 
 const createAgent = `-- name: CreateAgent :one
+WITH p AS (
+    INSERT INTO principals (kind) VALUES ('agent') RETURNING id
+)
 INSERT INTO agents (
-    name, slug, user_id, description, config, status,
+    id, name, slug, user_id, description, config, status,
     upgrade_status, auto_fix,
     allow_non_member_mcp, allow_public_mcp,
     allow_oauth_mcp_prompt, allow_public_mcp_prompt,
@@ -23,8 +26,8 @@ INSERT INTO agents (
     instructions, error_message, emoji,
     git_remote_url, git_default_branch, git_webhook_secret, git_last_synced_ref
 )
-VALUES (
-    $1, $2, $3, $4, $5, 'draft',
+SELECT
+    p.id, $1, $2, $3, $4, $5, 'draft',
     'idle', true,
     false, false,
     false, false,
@@ -33,7 +36,7 @@ VALUES (
     '', '', '', '', '',
     '[]'::jsonb, '', '',
     '', '', '', ''
-)
+FROM p
 RETURNING id, user_id, slug, name, description, status, upgrade_status, auto_fix, build_provider_id, build_model, exec_provider_id, exec_model, stt_provider_id, stt_model, vision_provider_id, vision_model, tts_provider_id, tts_model, image_gen_provider_id, image_gen_model, embedding_provider_id, embedding_model, search_provider_id, search_model, source_ref, image_ref, db_schema, db_password, sdk_version, config, instructions, error_message, created_at, updated_at, allow_non_member_mcp, allow_public_mcp, tools_hash, emoji, allow_oauth_mcp_prompt, allow_public_mcp_prompt, git_remote_url, git_credential_id, git_default_branch, git_webhook_secret, git_last_synced_ref
 `
 
@@ -49,6 +52,9 @@ type CreateAgentParams struct {
 // explicitly as ” rather than relying on column defaults (per AGENTS.md
 // "no fake defaults" rule). Status starts 'draft', upgrade_status 'idle',
 // auto_fix true, instructions empty array.
+// The agent's id is derived from a freshly-seeded principal (one statement,
+// one tx), so every agent is guaranteed a matching principals row of kind
+// 'agent' — the FK on agents.id fails loud otherwise.
 func (q *Queries) CreateAgent(ctx context.Context, arg CreateAgentParams) (Agent, error) {
 	row := q.db.QueryRow(ctx, createAgent,
 		arg.Name,
@@ -109,9 +115,11 @@ func (q *Queries) CreateAgent(ctx context.Context, arg CreateAgentParams) (Agent
 }
 
 const deleteAgent = `-- name: DeleteAgent :exec
-DELETE FROM agents WHERE id = $1
+DELETE FROM principals WHERE id = $1
 `
 
+// Delete through the principal: ON DELETE CASCADE removes the agents row and,
+// via the agent's own FKs, all of its agent-scoped rows.
 func (q *Queries) DeleteAgent(ctx context.Context, id pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, deleteAgent, id)
 	return err

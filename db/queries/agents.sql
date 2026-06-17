@@ -3,8 +3,14 @@
 -- explicitly as '' rather than relying on column defaults (per AGENTS.md
 -- "no fake defaults" rule). Status starts 'draft', upgrade_status 'idle',
 -- auto_fix true, instructions empty array.
+-- The agent's id is derived from a freshly-seeded principal (one statement,
+-- one tx), so every agent is guaranteed a matching principals row of kind
+-- 'agent' — the FK on agents.id fails loud otherwise.
+WITH p AS (
+    INSERT INTO principals (kind) VALUES ('agent') RETURNING id
+)
 INSERT INTO agents (
-    name, slug, user_id, description, config, status,
+    id, name, slug, user_id, description, config, status,
     upgrade_status, auto_fix,
     allow_non_member_mcp, allow_public_mcp,
     allow_oauth_mcp_prompt, allow_public_mcp_prompt,
@@ -14,8 +20,8 @@ INSERT INTO agents (
     instructions, error_message, emoji,
     git_remote_url, git_default_branch, git_webhook_secret, git_last_synced_ref
 )
-VALUES (
-    @name, @slug, @user_id, @description, @config, 'draft',
+SELECT
+    p.id, @name, @slug, @user_id, @description, @config, 'draft',
     'idle', true,
     false, false,
     false, false,
@@ -24,7 +30,7 @@ VALUES (
     '', '', '', '', '',
     '[]'::jsonb, '', '',
     '', '', '', ''
-)
+FROM p
 RETURNING *;
 
 -- name: GetAgentByID :one
@@ -83,7 +89,9 @@ ORDER BY created_at ASC;
 SELECT * FROM agents WHERE user_id = $1 ORDER BY created_at DESC;
 
 -- name: DeleteAgent :exec
-DELETE FROM agents WHERE id = $1;
+-- Delete through the principal: ON DELETE CASCADE removes the agents row and,
+-- via the agent's own FKs, all of its agent-scoped rows.
+DELETE FROM principals WHERE id = $1;
 
 -- name: UpdateAgentFields :one
 -- Caller resolves each value (keep-existing when the request omits it)

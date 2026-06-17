@@ -358,6 +358,13 @@ type GitCredential struct {
 	LastUsedAt      pgtype.Timestamptz `json:"last_used_at"`
 }
 
+type Group struct {
+	ID          pgtype.UUID `json:"id"`
+	Name        string      `json:"name"`
+	Description string      `json:"description"`
+	Builtin     bool        `json:"builtin"`
+}
+
 type LlmUsage struct {
 	ID                pgtype.UUID        `json:"id"`
 	AgentID           pgtype.UUID        `json:"agent_id"`
@@ -461,6 +468,12 @@ type PlatformIdentity struct {
 	Platform       string             `json:"platform"`
 	PlatformUserID string             `json:"platform_user_id"`
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+}
+
+type Principal struct {
+	ID        pgtype.UUID        `json:"id"`
+	Kind      string             `json:"kind"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
 }
 
 type Provider struct {
