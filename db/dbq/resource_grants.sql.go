@@ -135,6 +135,52 @@ func (q *Queries) CreateMCPServerGrant(ctx context.Context, arg CreateMCPServerG
 	return i, err
 }
 
+const getConnectionOwner = `-- name: GetConnectionOwner :one
+
+SELECT owner_principal_id FROM connections WHERE id = $1
+`
+
+// Resource owner lookups for the capability check (owner holds all caps).
+func (q *Queries) GetConnectionOwner(ctx context.Context, id pgtype.UUID) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, getConnectionOwner, id)
+	var owner_principal_id pgtype.UUID
+	err := row.Scan(&owner_principal_id)
+	return owner_principal_id, err
+}
+
+const getExecEndpointOwner = `-- name: GetExecEndpointOwner :one
+SELECT owner_principal_id FROM agent_exec_endpoints WHERE id = $1
+`
+
+func (q *Queries) GetExecEndpointOwner(ctx context.Context, id pgtype.UUID) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, getExecEndpointOwner, id)
+	var owner_principal_id pgtype.UUID
+	err := row.Scan(&owner_principal_id)
+	return owner_principal_id, err
+}
+
+const getGitCredentialOwner = `-- name: GetGitCredentialOwner :one
+SELECT user_id FROM git_credentials WHERE id = $1
+`
+
+func (q *Queries) GetGitCredentialOwner(ctx context.Context, id pgtype.UUID) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, getGitCredentialOwner, id)
+	var user_id pgtype.UUID
+	err := row.Scan(&user_id)
+	return user_id, err
+}
+
+const getMCPServerOwner = `-- name: GetMCPServerOwner :one
+SELECT owner_principal_id FROM agent_mcp_servers WHERE id = $1
+`
+
+func (q *Queries) GetMCPServerOwner(ctx context.Context, id pgtype.UUID) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, getMCPServerOwner, id)
+	var owner_principal_id pgtype.UUID
+	err := row.Scan(&owner_principal_id)
+	return owner_principal_id, err
+}
+
 const listConnectionGrants = `-- name: ListConnectionGrants :many
 
 SELECT grantee_id, capabilities FROM resource_grants WHERE connection_id = $1

@@ -13,7 +13,7 @@ DELETE FROM model_grants WHERE id = @id;
 
 -- name: ListModelGrants :many
 SELECT mg.id, mg.provider_id, mg.model, mg.grantee_id, mg.created_at,
-       p.provider_id AS catalog_id, p.slug AS provider_slug
+       p.provider_id AS provider_catalog, p.slug AS provider_slug
 FROM model_grants mg
 JOIN providers p ON p.id = mg.provider_id
 ORDER BY p.provider_id, mg.model;
