@@ -218,8 +218,8 @@ func (q *Queries) TouchExecEndpointLastUsed(ctx context.Context, id pgtype.UUID)
 }
 
 const upsertExecEndpointDeclaration = `-- name: UpsertExecEndpointDeclaration :exec
-INSERT INTO agent_exec_endpoints (agent_id, slug, description, llm_hint, access)
-VALUES ($1, $2, $3, $4, $5)
+INSERT INTO agent_exec_endpoints (agent_id, owner_principal_id, slug, description, llm_hint, access)
+VALUES ($1, (SELECT user_id FROM agents WHERE id = $1), $2, $3, $4, $5)
 ON CONFLICT (agent_id, slug) DO UPDATE SET
     description = EXCLUDED.description,
     llm_hint    = EXCLUDED.llm_hint,
