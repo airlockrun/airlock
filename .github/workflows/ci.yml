@@ -73,7 +73,7 @@ jobs:
        # the materialized template, so the templ CLI must be on PATH at
        # the same version the test's synthesized go.mod pins.
       - name: install templ
-        run: go install github.com/a-h/templ/cmd/templ@v0.3.865
+        run: go install github.com/a-h/templ/cmd/templ@v0.3.1020
       - name: go vet
         run: go vet ./...
       # airlockvet runs the airlock-specific static checks (nodbq +

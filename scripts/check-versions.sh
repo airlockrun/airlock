@@ -83,6 +83,28 @@ for tool in TAILWIND DAISYUI; do
 	fi
 done
 
+# --- 1c. templ version consistency ---
+#
+# templ generates *_templ.go against its runtime library, so the generator
+# (CLI) and the linked library MUST be the same version — otherwise generated
+# code calls runtime symbols the library lacks (e.g. `undefined:
+# templ.JoinURLErrs`). The scaffold's go.mod.tmpl pin is the source of truth
+# (it's what shipped agents build against); the agent-builder image, the CI/
+# release workflows that install the CLI, and the build/scaffold test fixtures
+# must all match it.
+templ_canonical=$(grep -oE 'github.com/a-h/templ v[0-9]+\.[0-9]+\.[0-9]+' scaffold/templates/go.mod.tmpl | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+if [ -z "$templ_canonical" ]; then
+	err "scaffold/templates/go.mod.tmpl: missing 'github.com/a-h/templ vX.Y.Z' pin"
+else
+	for f in Dockerfile.agent-builder builder/gomod_test.go scaffold/scaffold_integration_test.go .github/workflows/ci.yml .github/workflows/release.yml; do
+		# Every templ version token on a line that names templ or TEMPL_VERSION.
+		while IFS= read -r v; do
+			[ -z "$v" ] && continue
+			[ "$v" != "$templ_canonical" ] && err "$f: templ $v doesn't match scaffold pin $templ_canonical"
+		done < <(grep -hE 'a-h/templ|TEMPL_VERSION' "$f" 2>/dev/null | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | sort -u || true)
+	done
+fi
+
 # --- 2. docker-compose.yml ghcr tags are internally consistent ---
 
 # Match any ghcr.io/airlockrun/airlock(-something):vX.Y.Z[-pre] occurrence.

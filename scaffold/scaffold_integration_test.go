@@ -79,7 +79,7 @@ func TestScaffoldBuildsAndStarts(t *testing.T) {
 	// transitive sub-pins, ensuring the scaffold compiles against the
 	// same set of versions the build pipeline will use.
 	goMod := fmt.Sprintf(
-		"module agent\n\ngo 1.26.0\n\nrequire (\n\tgithub.com/a-h/templ v0.3.865\n\tgithub.com/airlockrun/agentsdk %s\n\tgithub.com/airlockrun/goai %s\n\tgithub.com/airlockrun/sol %s\n)\n",
+		"module agent\n\ngo 1.26.0\n\nrequire (\n\tgithub.com/a-h/templ v0.3.1020\n\tgithub.com/airlockrun/agentsdk %s\n\tgithub.com/airlockrun/goai %s\n\tgithub.com/airlockrun/sol %s\n)\n",
 		agentsdkVer, goaiVer, solVer,
 	)
 	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(goMod), 0o644); err != nil {

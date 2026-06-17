@@ -69,7 +69,7 @@ jobs:
 
       # The scaffold integration test shells out to `templ generate`.
       - name: install templ
-        run: go install github.com/a-h/templ/cmd/templ@v0.3.865
+        run: go install github.com/a-h/templ/cmd/templ@v0.3.1020
 
       # No GOWORK=off needed: a single-repo checkout has no go.work, so
       # this already resolves through the public proxy — the exact view
