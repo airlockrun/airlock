@@ -5,6 +5,7 @@ import { fromJson, toJson } from '@bufbuild/protobuf'
 import { useAuthStore } from '@/stores/auth'
 import { useCatalogStore } from '@/stores/catalog'
 import { useProvidersStore } from '@/stores/providers'
+import { useModelGrantsStore } from '@/stores/modelGrants'
 import {
   useModelCapabilities,
   isLanguage,
@@ -32,6 +33,7 @@ const router = useRouter()
 const auth = useAuthStore()
 const catalog = useCatalogStore()
 const providersStore = useProvidersStore()
+const modelGrants = useModelGrantsStore()
 const toast = useToast()
 const { groupModels, searchProviderOptions } = useModelCapabilities()
 
@@ -334,7 +336,9 @@ const visibleDefaultRows = computed(() =>
   })
 )
 
-async function finish() {
+// saveDefaults persists the capability defaults. Returns true on success; on
+// error it sets `error` and returns false so the caller stays on the step.
+async function saveDefaults(): Promise<boolean> {
   error.value = ''
   loading.value = true
   try {
@@ -371,13 +375,54 @@ async function finish() {
       settings: info,
     })
     await api.put('/api/v1/settings', req)
-    toast.add({ severity: 'success', summary: 'Airlock activated', life: 3000 })
-    router.push('/')
+    return true
   } catch (err: any) {
     error.value = err.response?.data?.error || 'Failed to save defaults.'
+    return false
   } finally {
     loading.value = false
   }
+}
+
+// --- Step 4: Allow models (optional)
+// Configured providers × their catalog models, each with an allow toggle.
+// Defaults are always usable, so this is purely about which extra models the
+// team may assign; deny-by-default means nothing else is assignable until allowed.
+const allowGroups = computed(() =>
+  providersStore.providers
+    .filter(p => p.isEnabled)
+    .map(p => ({
+      provider: p,
+      models: catalog.models
+        .filter(m => m.providerId === p.providerId)
+        .sort((a, b) => a.id.localeCompare(b.id)),
+    }))
+    .filter(g => g.models.length > 0),
+)
+
+async function saveDefaultsAndContinue() {
+  if (!(await saveDefaults())) return
+  await modelGrants.fetchGrants().catch(() => {})
+  activeStep.value = 3
+}
+
+async function toggleAllow(provider: { id: string }, model: { id: string }, on: boolean) {
+  try {
+    if (on) {
+      await modelGrants.grant(provider.id, model.id)
+    } else {
+      const id = modelGrants.grantId(provider.id, model.id)
+      if (id) await modelGrants.revoke(id)
+    }
+  } catch (err: any) {
+    toast.add({ severity: 'error', summary: err.response?.data?.error || 'Update failed', life: 5000 })
+    await modelGrants.fetchGrants()
+  }
+}
+
+function finishActivation() {
+  toast.add({ severity: 'success', summary: 'Airlock activated', life: 3000 })
+  router.push('/')
 }
 </script>
 
@@ -404,6 +449,7 @@ async function finish() {
           <Step :value="0">Admin Account</Step>
           <Step :value="1">LLM Providers</Step>
           <Step :value="2">Default Models</Step>
+          <Step :value="3">Allow Models</Step>
         </StepList>
         <StepPanels>
           <!-- Step 1: Admin Account -->
@@ -635,7 +681,42 @@ async function finish() {
 
               <div style="display: flex; justify-content: space-between; align-items: center; border-top: 1px solid var(--p-surface-border); padding-top: 1rem">
                 <Button label="Back" severity="secondary" text icon="pi pi-arrow-left" @click="activeStep = 1" />
-                <Button label="Finish" icon="pi pi-check" :loading="loading" @click="finish" />
+                <Button label="Next" icon="pi pi-arrow-right" icon-pos="right" :loading="loading" @click="saveDefaultsAndContinue" />
+              </div>
+            </div>
+          </StepPanel>
+
+          <!-- Step 4: Allow Models -->
+          <StepPanel :value="3">
+            <div style="display: flex; flex-direction: column; gap: 1.25rem; padding-top: 1rem">
+              <Message v-if="error" severity="error" :closable="false">{{ error }}</Message>
+              <p style="color: var(--p-text-muted-color); margin: 0">
+                Models are deny-by-default. Your default models above are always usable; allow any
+                extra models you want members to be able to assign to agents. You can change this
+                later under Models.
+              </p>
+
+              <div v-for="g in allowGroups" :key="g.provider.id" class="allow-group">
+                <div class="allow-group-title">{{ g.provider.displayName || g.provider.providerId }}</div>
+                <div v-for="m in g.models" :key="m.id" class="allow-row">
+                  <div style="display: flex; flex-direction: column">
+                    <span>{{ m.name }}</span>
+                    <span style="font-size: 0.72rem; color: var(--p-text-muted-color)">{{ m.id }}</span>
+                  </div>
+                  <ToggleSwitch
+                    :modelValue="modelGrants.isAllowed(g.provider.id, m.id)"
+                    @update:modelValue="(v: boolean) => toggleAllow(g.provider, m, v)"
+                  />
+                </div>
+              </div>
+
+              <p v-if="!allowGroups.length" style="color: var(--p-text-muted-color); margin: 0">
+                No configured models to allow.
+              </p>
+
+              <div style="display: flex; justify-content: space-between; align-items: center; border-top: 1px solid var(--p-surface-border); padding-top: 1rem">
+                <Button label="Back" severity="secondary" text icon="pi pi-arrow-left" @click="activeStep = 2" />
+                <Button label="Finish" icon="pi pi-check" @click="finishActivation" />
               </div>
             </div>
           </StepPanel>
@@ -699,5 +780,23 @@ async function finish() {
   margin-top: 0.375rem;
   font-size: 0.75rem;
   color: var(--p-text-muted-color);
+}
+.allow-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+.allow-group-title {
+  font-weight: 500;
+  font-size: 0.85rem;
+  color: var(--p-text-muted-color);
+  border-bottom: 1px solid var(--p-surface-border);
+  padding-bottom: 0.25rem;
+}
+.allow-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.35rem 0;
 }
 </style>
