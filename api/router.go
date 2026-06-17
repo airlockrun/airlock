@@ -28,6 +28,7 @@ import (
 	managedbotssvc "github.com/airlockrun/airlock/service/managedbots"
 	memberssvc "github.com/airlockrun/airlock/service/members"
 	modelssvc "github.com/airlockrun/airlock/service/models"
+	needssvc "github.com/airlockrun/airlock/service/needs"
 	passkeyssvc "github.com/airlockrun/airlock/service/passkeys"
 	providerssvc "github.com/airlockrun/airlock/service/providers"
 	runssvc "github.com/airlockrun/airlock/service/runs"
@@ -158,6 +159,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	gitWebhookHandler := NewGitWebhookHandler(cfg.DB, cfg.BuildService, cfg.Logger.Named("git-webhook"))
 	usersHandler := NewUsersHandler(cfg.DB, userssvc.New(cfg.DB, cfg.BridgeManager, cfg.Logger.Named("users")))
 	grantsHandler := NewGrantsHandler(grantssvc.New(cfg.DB, cfg.Logger.Named("grants")))
+	needsHandler := NewNeedsHandler(needssvc.NewService(cfg.DB, cfg.Logger.Named("needs")))
 	settingsSvc := settingssvc.New(cfg.DB, cfg.Logger.Named("settings"))
 	// Manager bot wiring is deferred until inside the auth group where
 	// the bridges service / managedbots service are constructed. The
@@ -340,6 +342,13 @@ func NewRouter(cfg RouterConfig) http.Handler {
 				r.Delete("/", providersHandler.Delete)
 			})
 		})
+
+		// Agent resource needs (manifest) + binding. The service gates each op
+		// (list = member; candidates/bind/create = agent admin per resource type).
+		r.Get("/agents/{agentID}/needs", needsHandler.ListNeeds)
+		r.Get("/agents/{agentID}/needs/{type}/{slug}/candidates", needsHandler.ListCandidates)
+		r.Post("/agents/{agentID}/needs/{type}/{slug}/bind", needsHandler.BindNeed)
+		r.Post("/agents/{agentID}/needs/{type}/{slug}/create", needsHandler.CreateForNeed)
 
 		// Resource grants — sharing a user-owned resource. Authorized by the
 		// manage/view capability on the resource (in the service), so no tenant
