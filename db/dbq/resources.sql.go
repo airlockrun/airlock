@@ -255,3 +255,149 @@ func (q *Queries) ListMCPServersByOwners(ctx context.Context, ownerIds []pgtype.
 	}
 	return items, nil
 }
+
+const listOwnedConnections = `-- name: ListOwnedConnections :many
+
+SELECT c.id, c.slug, c.name, c.auth_mode,
+       (c.auth_mode = 'none' OR c.access_token_ref != '')::boolean AS authorized,
+       c.created_at,
+       (SELECT count(*) FROM agent_resource_needs n WHERE n.bound_connection_id = c.id)::int AS agent_count
+FROM connections c
+WHERE c.owner_principal_id = ANY ($1::uuid[])
+ORDER BY c.name
+`
+
+type ListOwnedConnectionsRow struct {
+	ID         pgtype.UUID        `json:"id"`
+	Slug       string             `json:"slug"`
+	Name       string             `json:"name"`
+	AuthMode   string             `json:"auth_mode"`
+	Authorized bool               `json:"authorized"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+	AgentCount int32              `json:"agent_count"`
+}
+
+// Owner-scoped resource listings for the per-user Resources view: every
+// resource a principal owns, with how many agents currently bind it
+// (agent_count) so the operator can see what's shared and what's orphaned.
+func (q *Queries) ListOwnedConnections(ctx context.Context, ownerIds []pgtype.UUID) ([]ListOwnedConnectionsRow, error) {
+	rows, err := q.db.Query(ctx, listOwnedConnections, ownerIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListOwnedConnectionsRow{}
+	for rows.Next() {
+		var i ListOwnedConnectionsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Slug,
+			&i.Name,
+			&i.AuthMode,
+			&i.Authorized,
+			&i.CreatedAt,
+			&i.AgentCount,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listOwnedExecEndpoints = `-- name: ListOwnedExecEndpoints :many
+SELECT e.id, e.slug,
+       (e.transport IS NOT NULL)::boolean AS configured,
+       e.created_at, e.last_used_at,
+       (SELECT count(*) FROM agent_resource_needs n WHERE n.bound_exec_id = e.id)::int AS agent_count
+FROM agent_exec_endpoints e
+WHERE e.owner_principal_id = ANY ($1::uuid[])
+ORDER BY e.slug
+`
+
+type ListOwnedExecEndpointsRow struct {
+	ID         pgtype.UUID        `json:"id"`
+	Slug       string             `json:"slug"`
+	Configured bool               `json:"configured"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+	LastUsedAt pgtype.Timestamptz `json:"last_used_at"`
+	AgentCount int32              `json:"agent_count"`
+}
+
+func (q *Queries) ListOwnedExecEndpoints(ctx context.Context, ownerIds []pgtype.UUID) ([]ListOwnedExecEndpointsRow, error) {
+	rows, err := q.db.Query(ctx, listOwnedExecEndpoints, ownerIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListOwnedExecEndpointsRow{}
+	for rows.Next() {
+		var i ListOwnedExecEndpointsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Slug,
+			&i.Configured,
+			&i.CreatedAt,
+			&i.LastUsedAt,
+			&i.AgentCount,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listOwnedMCPServers = `-- name: ListOwnedMCPServers :many
+SELECT m.id, m.slug, m.name, m.auth_mode,
+       (m.access_token_ref != '')::boolean AS authorized,
+       m.created_at,
+       (SELECT count(*) FROM agent_resource_needs n WHERE n.bound_mcp_id = m.id)::int AS agent_count
+FROM agent_mcp_servers m
+WHERE m.owner_principal_id = ANY ($1::uuid[])
+ORDER BY m.name
+`
+
+type ListOwnedMCPServersRow struct {
+	ID         pgtype.UUID        `json:"id"`
+	Slug       string             `json:"slug"`
+	Name       string             `json:"name"`
+	AuthMode   string             `json:"auth_mode"`
+	Authorized bool               `json:"authorized"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+	AgentCount int32              `json:"agent_count"`
+}
+
+func (q *Queries) ListOwnedMCPServers(ctx context.Context, ownerIds []pgtype.UUID) ([]ListOwnedMCPServersRow, error) {
+	rows, err := q.db.Query(ctx, listOwnedMCPServers, ownerIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListOwnedMCPServersRow{}
+	for rows.Next() {
+		var i ListOwnedMCPServersRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Slug,
+			&i.Name,
+			&i.AuthMode,
+			&i.Authorized,
+			&i.CreatedAt,
+			&i.AgentCount,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}

@@ -62,7 +62,8 @@ const router = createRouter({
         { path: 'users', name: 'users', component: () => import('@/views/UsersView.vue'), meta: { requires: 'tenant.user.manage' } },
         { path: 'settings', name: 'settings', component: () => import('@/views/SettingsView.vue') },
         { path: 'settings/security', name: 'security', component: () => import('@/views/SecurityView.vue') },
-        { path: 'settings/git-credentials', name: 'git-credentials', component: () => import('@/views/GitCredentialsView.vue') },
+        { path: 'settings/resources', name: 'resources', component: () => import('@/views/ResourcesView.vue') },
+        { path: 'settings/git-credentials', redirect: '/settings/resources' },
         { path: 'link-identity', name: 'link-identity', component: () => import('@/views/LinkIdentityView.vue') },
         // OAuth consent — landing page for /oauth/authorize when the
         // user is logged in and a fresh grant is required. Auth guard

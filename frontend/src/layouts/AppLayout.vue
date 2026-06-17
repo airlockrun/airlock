@@ -60,7 +60,7 @@ const menuItems = computed(() => {
   }
   items.push(
     { label: 'Security', icon: 'pi pi-shield', route: '/settings/security' },
-    { label: 'Git Credentials', icon: 'pi pi-key', route: '/settings/git-credentials' },
+    { label: 'Resources', icon: 'pi pi-key', route: '/settings/resources' },
     { label: 'Settings', icon: 'pi pi-cog', route: '/settings' },
   )
   return items
