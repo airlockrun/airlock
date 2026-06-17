@@ -869,8 +869,20 @@ func (s *Service) ConnectGit(ctx context.Context, p authz.Principal, agentID uui
 	if err != nil {
 		return GitConfig{}, service.Detail(service.ErrNotFound, "credential not found")
 	}
-	if uuid.UUID(cred.UserID.Bytes) != p.UserID {
-		return GitConfig{}, service.Detail(service.ErrForbidden, "credential does not belong to you")
+	// A git credential is a shareable resource: the caller may bind it if they
+	// own it OR hold a bind grant on it (so a credential shared to a group is
+	// bindable by its members), not only when they are the owner.
+	gitGrants, err := q.ListGitCredentialGrants(ctx, cred.ID)
+	if err != nil {
+		s.logger.Error("list git credential grants", zap.Error(err))
+		return GitConfig{}, err
+	}
+	grants := make([]authz.Grant, len(gitGrants))
+	for i, g := range gitGrants {
+		grants[i] = authz.Grant{GranteeID: uuid.UUID(g.GranteeID.Bytes), Capabilities: g.Capabilities}
+	}
+	if !p.HasResourceCapability(uuid.UUID(cred.UserID.Bytes), grants, authz.CapBind) {
+		return GitConfig{}, service.Detail(service.ErrForbidden, "you do not have bind access to this credential")
 	}
 	secret, err := randomHex(32)
 	if err != nil {
