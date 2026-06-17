@@ -543,6 +543,22 @@ func (q *Queries) UpdateConnectionOAuthApp(ctx context.Context, arg UpdateConnec
 	return err
 }
 
+const updateConnectionOwnerByID = `-- name: UpdateConnectionOwnerByID :exec
+UPDATE connections SET owner_principal_id = $1 WHERE id = $2
+`
+
+type UpdateConnectionOwnerByIDParams struct {
+	OwnerPrincipalID pgtype.UUID `json:"owner_principal_id"`
+	ID               pgtype.UUID `json:"id"`
+}
+
+// Set the resource owner to the principal who created it (the configuring user),
+// overriding the agent-owner default the upsert seeds.
+func (q *Queries) UpdateConnectionOwnerByID(ctx context.Context, arg UpdateConnectionOwnerByIDParams) error {
+	_, err := q.db.Exec(ctx, updateConnectionOwnerByID, arg.OwnerPrincipalID, arg.ID)
+	return err
+}
+
 const upsertConnection = `-- name: UpsertConnection :one
 INSERT INTO connections (agent_id, owner_principal_id, slug, name, description, llm_hint, auth_mode, auth_url, token_url, base_url, scopes, auth_injection, setup_instructions, test_path, config, auth_params, headers, access, client_id, client_secret, access_token_ref, refresh_token)
 VALUES ($1, (SELECT user_id FROM agents WHERE id = $1), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, '', '', '', '')

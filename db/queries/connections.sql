@@ -94,6 +94,11 @@ WHERE agent_id = @agent_id AND slug = @slug;
 -- name: GetConnectionByIDForUpdate :one
 SELECT * FROM connections WHERE id = @id FOR UPDATE;
 
+-- name: UpdateConnectionOwnerByID :exec
+-- Set the resource owner to the principal who created it (the configuring user),
+-- overriding the agent-owner default the upsert seeds.
+UPDATE connections SET owner_principal_id = @owner_principal_id WHERE id = @id;
+
 -- name: UpdateConnectionCredentialsByID :exec
 UPDATE connections SET
     access_token_ref = @access_token_ref,
