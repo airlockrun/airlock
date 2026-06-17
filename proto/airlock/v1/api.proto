@@ -736,3 +736,36 @@ message ModelGrantInfo {
 message ListModelGrantsResponse {
   repeated ModelGrantInfo grants = 1;
 }
+
+// ── Resource needs (agent manifest) + binding ──
+
+message NeedInfo {
+  string type = 1;  // connection | mcp_server | exec_endpoint
+  string slug = 2;
+  string description = 3;
+  bool bound = 4;
+  string bound_resource_id = 5;
+}
+
+message ListNeedsResponse {
+  repeated NeedInfo needs = 1;
+}
+
+// CandidateInfo is an existing resource whose shape matches a need (bindable for reuse).
+message CandidateInfo {
+  string resource_id = 1;
+  string name = 2;
+  string slug = 3;
+}
+
+message ListCandidatesResponse {
+  repeated CandidateInfo candidates = 1;
+}
+
+message BindNeedRequest {
+  string resource_id = 1;
+}
+
+message CreateForNeedResponse {
+  string resource_id = 1;
+}
