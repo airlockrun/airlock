@@ -27,7 +27,7 @@ func (q *Queries) DeleteTopicsByAgentExcept(ctx context.Context, arg DeleteTopic
 }
 
 const getTopicBySlug = `-- name: GetTopicBySlug :one
-SELECT id, agent_id, slug, description, llm_hint, access, created_at, updated_at FROM agent_topics WHERE agent_id = $1 AND slug = $2
+SELECT id, agent_id, slug, description, llm_hint, access, created_at, updated_at, per_user FROM agent_topics WHERE agent_id = $1 AND slug = $2
 `
 
 type GetTopicBySlugParams struct {
@@ -47,6 +47,7 @@ func (q *Queries) GetTopicBySlug(ctx context.Context, arg GetTopicBySlugParams) 
 		&i.Access,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.PerUser,
 	)
 	return i, err
 }
@@ -65,6 +66,40 @@ type ListSubscribedConversationsParams struct {
 
 func (q *Queries) ListSubscribedConversations(ctx context.Context, arg ListSubscribedConversationsParams) ([]pgtype.UUID, error) {
 	rows, err := q.db.Query(ctx, listSubscribedConversations, arg.AgentID, arg.Slug)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []pgtype.UUID{}
+	for rows.Next() {
+		var conversation_id pgtype.UUID
+		if err := rows.Scan(&conversation_id); err != nil {
+			return nil, err
+		}
+		items = append(items, conversation_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSubscribedConversationsForUser = `-- name: ListSubscribedConversationsForUser :many
+SELECT ts.conversation_id
+FROM topic_subscriptions ts
+JOIN agent_topics at ON at.id = ts.topic_id
+JOIN agent_conversations c ON c.id = ts.conversation_id
+WHERE at.agent_id = $1 AND at.slug = $2 AND c.user_id = $3
+`
+
+type ListSubscribedConversationsForUserParams struct {
+	AgentID pgtype.UUID `json:"agent_id"`
+	Slug    string      `json:"slug"`
+	UserID  pgtype.UUID `json:"user_id"`
+}
+
+func (q *Queries) ListSubscribedConversationsForUser(ctx context.Context, arg ListSubscribedConversationsForUserParams) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, listSubscribedConversationsForUser, arg.AgentID, arg.Slug, arg.UserID)
 	if err != nil {
 		return nil, err
 	}
@@ -132,7 +167,7 @@ func (q *Queries) ListTopicSubscriptions(ctx context.Context, arg ListTopicSubsc
 }
 
 const listTopicsByAgent = `-- name: ListTopicsByAgent :many
-SELECT id, agent_id, slug, description, llm_hint, access, created_at, updated_at FROM agent_topics WHERE agent_id = $1
+SELECT id, agent_id, slug, description, llm_hint, access, created_at, updated_at, per_user FROM agent_topics WHERE agent_id = $1
 `
 
 func (q *Queries) ListTopicsByAgent(ctx context.Context, agentID pgtype.UUID) ([]AgentTopic, error) {
@@ -153,6 +188,7 @@ func (q *Queries) ListTopicsByAgent(ctx context.Context, agentID pgtype.UUID) ([
 			&i.Access,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.PerUser,
 		); err != nil {
 			return nil, err
 		}
@@ -196,12 +232,13 @@ func (q *Queries) UnsubscribeTopic(ctx context.Context, arg UnsubscribeTopicPara
 }
 
 const upsertTopic = `-- name: UpsertTopic :exec
-INSERT INTO agent_topics (agent_id, slug, description, llm_hint, access)
-VALUES ($1, $2, $3, $4, $5)
+INSERT INTO agent_topics (agent_id, slug, description, llm_hint, access, per_user)
+VALUES ($1, $2, $3, $4, $5, $6)
 ON CONFLICT (agent_id, slug) DO UPDATE SET
     description = EXCLUDED.description,
     llm_hint = EXCLUDED.llm_hint,
     access = EXCLUDED.access,
+    per_user = EXCLUDED.per_user,
     updated_at = now()
 `
 
@@ -211,6 +248,7 @@ type UpsertTopicParams struct {
 	Description string      `json:"description"`
 	LlmHint     string      `json:"llm_hint"`
 	Access      string      `json:"access"`
+	PerUser     bool        `json:"per_user"`
 }
 
 func (q *Queries) UpsertTopic(ctx context.Context, arg UpsertTopicParams) error {
@@ -220,6 +258,7 @@ func (q *Queries) UpsertTopic(ctx context.Context, arg UpsertTopicParams) error 
 		arg.Description,
 		arg.LlmHint,
 		arg.Access,
+		arg.PerUser,
 	)
 	return err
 }

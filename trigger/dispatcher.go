@@ -32,7 +32,7 @@ import (
 // many minutes (long tool chains, slow LLMs); the user cancels manually
 // via DELETE /api/v1/runs/{runID} when they want to stop earlier. Cron and
 // webhook callers pass their own (typically shorter) timeout to
-// ForwardCron/Webhook.
+// ForwardFire/Webhook.
 const PromptHTTPCeiling = 30 * time.Minute
 
 // Sentinel errors from EnsureRunning for agents that exist but aren't in a
@@ -79,7 +79,7 @@ type Dispatcher struct {
 	logger     *zap.Logger
 
 	// In-flight per-run state registry. Populated when ForwardPrompt /
-	// ForwardCron / ForwardWebhook starts streaming from the agent,
+	// ForwardFire / ForwardWebhook starts streaming from the agent,
 	// removed when the response body is closed (after publishRunEvents
 	// drains it). CancelRun(runID) fires the registered cancel func,
 	// which aborts the outbound HTTP request — the agent's r.Context()
@@ -285,23 +285,25 @@ func (d *Dispatcher) ForwardWebhook(ctx context.Context, agentID uuid.UUID, path
 		return nil, uuid.Nil, err
 	}
 
-	rc, err := d.forward(ctx, agentID, c, "POST", "/webhook/"+path, body, runID, bridgeID, nil, nil, timeout)
+	rc, err := d.forward(ctx, agentID, c, "POST", "/webhook/"+path, body, runID, bridgeID, nil, nil, "", timeout)
 	if err != nil {
 		return nil, uuid.Nil, err
 	}
 	return rc, runID, nil
 }
 
-// ForwardCron ensures the agent is running, creates a run record, and POSTs
-// to the agent's cron endpoint. Returns the response body stream and the run ID.
-// The timeout parameter controls the HTTP client timeout.
-func (d *Dispatcher) ForwardCron(ctx context.Context, agentID uuid.UUID, cronName string, timeout time.Duration) (io.ReadCloser, uuid.UUID, error) {
+// ForwardFire ensures the agent is running, creates a run record, and POSTs to
+// the agent's /fire/{slug} endpoint for a scheduler-driven cron/schedule fire.
+// fireID (the agent_scheduled_fires row id) rides X-Fire-ID so a schedule
+// handler can look up its per-instance data; pass "" for a manual cron fire
+// with no row. Returns the response body stream and the run ID.
+func (d *Dispatcher) ForwardFire(ctx context.Context, agentID uuid.UUID, fireID, slug string, timeout time.Duration) (io.ReadCloser, uuid.UUID, error) {
 	c, err := d.EnsureRunning(ctx, agentID)
 	if err != nil {
 		return nil, uuid.Nil, err
 	}
 
-	runID, err := d.createRun(ctx, agentID, nil, nil, nil, "cron", cronName)
+	runID, err := d.createRun(ctx, agentID, nil, nil, nil, "schedule", slug)
 	if err != nil {
 		return nil, uuid.Nil, err
 	}
@@ -309,7 +311,7 @@ func (d *Dispatcher) ForwardCron(ctx context.Context, agentID uuid.UUID, cronNam
 	cancelCtx, cancel := context.WithCancel(ctx)
 	d.registerInFlight(runID, cancel)
 
-	rc, err := d.forward(cancelCtx, agentID, c, "POST", "/cron/"+cronName, nil, runID, nil, nil, nil, timeout)
+	rc, err := d.forward(cancelCtx, agentID, c, "POST", "/fire/"+slug, nil, runID, nil, nil, nil, fireID, timeout)
 	if err != nil {
 		d.deregisterInFlight(runID)
 		cancel()
@@ -359,7 +361,7 @@ func (d *Dispatcher) ForwardPrompt(ctx context.Context, agentID uuid.UUID, input
 	cancelCtx, cancel := context.WithCancel(ctx)
 	d.registerInFlight(runID, cancel)
 
-	rc, err := d.forward(cancelCtx, agentID, c, "POST", "/prompt", payload, runID, bridgeID, nil, userID, PromptHTTPCeiling)
+	rc, err := d.forward(cancelCtx, agentID, c, "POST", "/prompt", payload, runID, bridgeID, nil, userID, "", PromptHTTPCeiling)
 	if err != nil {
 		d.deregisterInFlight(runID)
 		cancel()
@@ -421,7 +423,7 @@ func (d *Dispatcher) ForwardA2APrompt(ctx context.Context, agentID uuid.UUID, pa
 	cancelCtx, cancel := context.WithCancel(ctx)
 	d.registerInFlight(runID, cancel)
 
-	rc, err := d.forward(cancelCtx, agentID, c, "POST", "/prompt", payload, runID, nil, parentRunIDPtr, userID, PromptHTTPCeiling)
+	rc, err := d.forward(cancelCtx, agentID, c, "POST", "/prompt", payload, runID, nil, parentRunIDPtr, userID, "", PromptHTTPCeiling)
 	if err != nil {
 		d.deregisterInFlight(runID)
 		cancel()
@@ -544,7 +546,7 @@ func (d *Dispatcher) RefreshAgent(ctx context.Context, agentID uuid.UUID) error 
 // directories. Both are nil for the web / bridge / cron / webhook
 // flows that pre-existed scoping (those handlers pass principal via
 // PromptInput / conversation lookups).
-func (d *Dispatcher) forward(ctx context.Context, agentID uuid.UUID, c *container.Container, method, path string, body []byte, runID uuid.UUID, bridgeID, parentRunID, userID *uuid.UUID, timeout time.Duration) (io.ReadCloser, error) {
+func (d *Dispatcher) forward(ctx context.Context, agentID uuid.UUID, c *container.Container, method, path string, body []byte, runID uuid.UUID, bridgeID, parentRunID, userID *uuid.UUID, fireID string, timeout time.Duration) (io.ReadCloser, error) {
 	var bodyReader io.Reader
 	if body != nil {
 		bodyReader = bytes.NewReader(body)
@@ -565,6 +567,9 @@ func (d *Dispatcher) forward(ctx context.Context, agentID uuid.UUID, c *containe
 	}
 	if userID != nil && *userID != uuid.Nil {
 		req.Header.Set("X-User-ID", userID.String())
+	}
+	if fireID != "" {
+		req.Header.Set("X-Fire-ID", fireID)
 	}
 
 	// Hold the container busy for the whole life of this request so the

@@ -47,7 +47,7 @@ func TestIntegration_AgentEndpointGates(t *testing.T) {
 		{"builds", "/builds", http.StatusOK, http.StatusOK, http.StatusForbidden},
 		// admin-only reads: even a 'user' member is refused.
 		{"webhooks", "/webhooks", http.StatusOK, http.StatusForbidden, http.StatusForbidden},
-		{"crons", "/crons", http.StatusOK, http.StatusForbidden, http.StatusForbidden},
+		{"schedules", "/schedules", http.StatusOK, http.StatusForbidden, http.StatusForbidden},
 		{"exec-endpoints", "/exec-endpoints", http.StatusOK, http.StatusForbidden, http.StatusForbidden},
 	}
 	for _, tt := range tests {

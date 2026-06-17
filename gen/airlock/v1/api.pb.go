@@ -1444,13 +1444,13 @@ func (x *ListAgentsResponse) GetAgents() []*AgentInfo {
 	return nil
 }
 
-// GetAgentDetailResponse returns rich agent detail with connections, webhooks, crons, and routes.
+// GetAgentDetailResponse returns rich agent detail with connections, webhooks, schedules, and routes.
 type GetAgentDetailResponse struct {
 	state       protoimpl.MessageState `protogen:"open.v1"`
 	Agent       *AgentInfo             `protobuf:"bytes,1,opt,name=agent,proto3" json:"agent,omitempty"`
 	Connections []*ConnectionInfo      `protobuf:"bytes,2,rep,name=connections,proto3" json:"connections,omitempty"`
 	Webhooks    []*WebhookInfo         `protobuf:"bytes,3,rep,name=webhooks,proto3" json:"webhooks,omitempty"`
-	Crons       []*CronInfo            `protobuf:"bytes,4,rep,name=crons,proto3" json:"crons,omitempty"`
+	Schedules   []*ScheduleInfo        `protobuf:"bytes,4,rep,name=schedules,proto3" json:"schedules,omitempty"`
 	Routes      []*RouteInfo           `protobuf:"bytes,5,rep,name=routes,proto3" json:"routes,omitempty"`
 	// External base URL for the agent's registered routes
 	// ({scheme}://{slug}.{agentDomain}[:port], no trailing slash). The UI
@@ -1512,9 +1512,9 @@ func (x *GetAgentDetailResponse) GetWebhooks() []*WebhookInfo {
 	return nil
 }
 
-func (x *GetAgentDetailResponse) GetCrons() []*CronInfo {
+func (x *GetAgentDetailResponse) GetSchedules() []*ScheduleInfo {
 	if x != nil {
-		return x.Crons
+		return x.Schedules
 	}
 	return nil
 }
@@ -2882,27 +2882,27 @@ func (x *ListWebhooksResponse) GetWebhooks() []*WebhookInfo {
 	return nil
 }
 
-type ListCronsResponse struct {
+type ListSchedulesResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Crons         []*CronInfo            `protobuf:"bytes,1,rep,name=crons,proto3" json:"crons,omitempty"`
+	Schedules     []*ScheduleInfo        `protobuf:"bytes,1,rep,name=schedules,proto3" json:"schedules,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *ListCronsResponse) Reset() {
-	*x = ListCronsResponse{}
+func (x *ListSchedulesResponse) Reset() {
+	*x = ListSchedulesResponse{}
 	mi := &file_airlock_v1_api_proto_msgTypes[48]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *ListCronsResponse) String() string {
+func (x *ListSchedulesResponse) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*ListCronsResponse) ProtoMessage() {}
+func (*ListSchedulesResponse) ProtoMessage() {}
 
-func (x *ListCronsResponse) ProtoReflect() protoreflect.Message {
+func (x *ListSchedulesResponse) ProtoReflect() protoreflect.Message {
 	mi := &file_airlock_v1_api_proto_msgTypes[48]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -2914,14 +2914,14 @@ func (x *ListCronsResponse) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use ListCronsResponse.ProtoReflect.Descriptor instead.
-func (*ListCronsResponse) Descriptor() ([]byte, []int) {
+// Deprecated: Use ListSchedulesResponse.ProtoReflect.Descriptor instead.
+func (*ListSchedulesResponse) Descriptor() ([]byte, []int) {
 	return file_airlock_v1_api_proto_rawDescGZIP(), []int{48}
 }
 
-func (x *ListCronsResponse) GetCrons() []*CronInfo {
+func (x *ListSchedulesResponse) GetSchedules() []*ScheduleInfo {
 	if x != nil {
-		return x.Crons
+		return x.Schedules
 	}
 	return nil
 }
@@ -2970,27 +2970,27 @@ func (x *ListToolsResponse) GetTools() []*ToolInfo {
 	return nil
 }
 
-type FireCronResponse struct {
+type FireScheduleResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	RunId         string                 `protobuf:"bytes,1,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *FireCronResponse) Reset() {
-	*x = FireCronResponse{}
+func (x *FireScheduleResponse) Reset() {
+	*x = FireScheduleResponse{}
 	mi := &file_airlock_v1_api_proto_msgTypes[50]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *FireCronResponse) String() string {
+func (x *FireScheduleResponse) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*FireCronResponse) ProtoMessage() {}
+func (*FireScheduleResponse) ProtoMessage() {}
 
-func (x *FireCronResponse) ProtoReflect() protoreflect.Message {
+func (x *FireScheduleResponse) ProtoReflect() protoreflect.Message {
 	mi := &file_airlock_v1_api_proto_msgTypes[50]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -3002,12 +3002,12 @@ func (x *FireCronResponse) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use FireCronResponse.ProtoReflect.Descriptor instead.
-func (*FireCronResponse) Descriptor() ([]byte, []int) {
+// Deprecated: Use FireScheduleResponse.ProtoReflect.Descriptor instead.
+func (*FireScheduleResponse) Descriptor() ([]byte, []int) {
 	return file_airlock_v1_api_proto_rawDescGZIP(), []int{50}
 }
 
-func (x *FireCronResponse) GetRunId() string {
+func (x *FireScheduleResponse) GetRunId() string {
 	if x != nil {
 		return x.RunId
 	}
@@ -5688,12 +5688,12 @@ const file_airlock_v1_api_proto_rawDesc = "" +
 	"\x13CreateAgentResponse\x12+\n" +
 	"\x05agent\x18\x01 \x01(\v2\x15.airlock.v1.AgentInfoR\x05agent\"C\n" +
 	"\x12ListAgentsResponse\x12-\n" +
-	"\x06agents\x18\x01 \x03(\v2\x15.airlock.v1.AgentInfoR\x06agents\"\xb9\x02\n" +
+	"\x06agents\x18\x01 \x03(\v2\x15.airlock.v1.AgentInfoR\x06agents\"\xc5\x02\n" +
 	"\x16GetAgentDetailResponse\x12+\n" +
 	"\x05agent\x18\x01 \x01(\v2\x15.airlock.v1.AgentInfoR\x05agent\x12<\n" +
 	"\vconnections\x18\x02 \x03(\v2\x1a.airlock.v1.ConnectionInfoR\vconnections\x123\n" +
-	"\bwebhooks\x18\x03 \x03(\v2\x17.airlock.v1.WebhookInfoR\bwebhooks\x12*\n" +
-	"\x05crons\x18\x04 \x03(\v2\x14.airlock.v1.CronInfoR\x05crons\x12-\n" +
+	"\bwebhooks\x18\x03 \x03(\v2\x17.airlock.v1.WebhookInfoR\bwebhooks\x126\n" +
+	"\tschedules\x18\x04 \x03(\v2\x18.airlock.v1.ScheduleInfoR\tschedules\x12-\n" +
 	"\x06routes\x18\x05 \x03(\v2\x15.airlock.v1.RouteInfoR\x06routes\x12$\n" +
 	"\x0eroute_base_url\x18\x06 \x01(\tR\frouteBaseUrl\"\xcc\x01\n" +
 	"\x12UpdateAgentRequest\x12 \n" +
@@ -5797,12 +5797,12 @@ const file_airlock_v1_api_proto_rawDesc = "" +
 	"\x0fconversation_id\x18\x02 \x01(\tR\x0econversationId\x12#\n" +
 	"\rcommand_reply\x18\x03 \x01(\tR\fcommandReply\"K\n" +
 	"\x14ListWebhooksResponse\x123\n" +
-	"\bwebhooks\x18\x01 \x03(\v2\x17.airlock.v1.WebhookInfoR\bwebhooks\"?\n" +
-	"\x11ListCronsResponse\x12*\n" +
-	"\x05crons\x18\x01 \x03(\v2\x14.airlock.v1.CronInfoR\x05crons\"?\n" +
+	"\bwebhooks\x18\x01 \x03(\v2\x17.airlock.v1.WebhookInfoR\bwebhooks\"O\n" +
+	"\x15ListSchedulesResponse\x126\n" +
+	"\tschedules\x18\x01 \x03(\v2\x18.airlock.v1.ScheduleInfoR\tschedules\"?\n" +
 	"\x11ListToolsResponse\x12*\n" +
-	"\x05tools\x18\x01 \x03(\v2\x14.airlock.v1.ToolInfoR\x05tools\")\n" +
-	"\x10FireCronResponse\x12\x15\n" +
+	"\x05tools\x18\x01 \x03(\v2\x14.airlock.v1.ToolInfoR\x05tools\"-\n" +
+	"\x14FireScheduleResponse\x12\x15\n" +
 	"\x06run_id\x18\x01 \x01(\tR\x05runId\"D\n" +
 	"\x15AddAgentMemberRequest\x12\x17\n" +
 	"\auser_id\x18\x01 \x01(\tR\x06userId\x12\x12\n" +
@@ -6022,9 +6022,9 @@ var file_airlock_v1_api_proto_goTypes = []any{
 	(*PromptRequest)(nil),                  // 45: airlock.v1.PromptRequest
 	(*PromptResponse)(nil),                 // 46: airlock.v1.PromptResponse
 	(*ListWebhooksResponse)(nil),           // 47: airlock.v1.ListWebhooksResponse
-	(*ListCronsResponse)(nil),              // 48: airlock.v1.ListCronsResponse
+	(*ListSchedulesResponse)(nil),          // 48: airlock.v1.ListSchedulesResponse
 	(*ListToolsResponse)(nil),              // 49: airlock.v1.ListToolsResponse
-	(*FireCronResponse)(nil),               // 50: airlock.v1.FireCronResponse
+	(*FireScheduleResponse)(nil),           // 50: airlock.v1.FireScheduleResponse
 	(*AddAgentMemberRequest)(nil),          // 51: airlock.v1.AddAgentMemberRequest
 	(*AgentMemberInfo)(nil),                // 52: airlock.v1.AgentMemberInfo
 	(*ListAgentMembersResponse)(nil),       // 53: airlock.v1.ListAgentMembersResponse
@@ -6085,7 +6085,7 @@ var file_airlock_v1_api_proto_goTypes = []any{
 	(*AgentInfo)(nil),                      // 108: airlock.v1.AgentInfo
 	(*ConnectionInfo)(nil),                 // 109: airlock.v1.ConnectionInfo
 	(*WebhookInfo)(nil),                    // 110: airlock.v1.WebhookInfo
-	(*CronInfo)(nil),                       // 111: airlock.v1.CronInfo
+	(*ScheduleInfo)(nil),                   // 111: airlock.v1.ScheduleInfo
 	(*RouteInfo)(nil),                      // 112: airlock.v1.RouteInfo
 	(*AgentBuildInfo)(nil),                 // 113: airlock.v1.AgentBuildInfo
 	(*RunInfo)(nil),                        // 114: airlock.v1.RunInfo
@@ -6131,7 +6131,7 @@ var file_airlock_v1_api_proto_depIdxs = []int32{
 	108, // 14: airlock.v1.GetAgentDetailResponse.agent:type_name -> airlock.v1.AgentInfo
 	109, // 15: airlock.v1.GetAgentDetailResponse.connections:type_name -> airlock.v1.ConnectionInfo
 	110, // 16: airlock.v1.GetAgentDetailResponse.webhooks:type_name -> airlock.v1.WebhookInfo
-	111, // 17: airlock.v1.GetAgentDetailResponse.crons:type_name -> airlock.v1.CronInfo
+	111, // 17: airlock.v1.GetAgentDetailResponse.schedules:type_name -> airlock.v1.ScheduleInfo
 	112, // 18: airlock.v1.GetAgentDetailResponse.routes:type_name -> airlock.v1.RouteInfo
 	108, // 19: airlock.v1.UpdateAgentResponse.agent:type_name -> airlock.v1.AgentInfo
 	30,  // 20: airlock.v1.AgentModelConfig.slots:type_name -> airlock.v1.ModelSlotInfo
@@ -6150,7 +6150,7 @@ var file_airlock_v1_api_proto_depIdxs = []int32{
 	44,  // 33: airlock.v1.GetConversationResponse.pending_confirmation:type_name -> airlock.v1.PendingConfirmation
 	115, // 34: airlock.v1.PaginatedMessagesResponse.messages:type_name -> airlock.v1.AgentMessageInfo
 	110, // 35: airlock.v1.ListWebhooksResponse.webhooks:type_name -> airlock.v1.WebhookInfo
-	111, // 36: airlock.v1.ListCronsResponse.crons:type_name -> airlock.v1.CronInfo
+	111, // 36: airlock.v1.ListSchedulesResponse.schedules:type_name -> airlock.v1.ScheduleInfo
 	117, // 37: airlock.v1.ListToolsResponse.tools:type_name -> airlock.v1.ToolInfo
 	118, // 38: airlock.v1.AgentMemberInfo.created_at:type_name -> google.protobuf.Timestamp
 	52,  // 39: airlock.v1.ListAgentMembersResponse.members:type_name -> airlock.v1.AgentMemberInfo

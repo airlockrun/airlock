@@ -498,10 +498,10 @@ func NewRouter(cfg RouterConfig) http.Handler {
 				// Runs
 				r.Get("/runs", rH.ListRuns)
 
-				// Webhooks, Crons & Functions
+				// Webhooks, Schedules & Functions
 				r.Get("/webhooks", agH.ListWebhooks)
-				r.Get("/crons", agH.ListCrons)
-				r.Post("/crons/{name}/fire", agH.FireCron)
+				r.Get("/schedules", agH.ListSchedules)
+				r.Post("/schedules/{slug}/fire", agH.FireSchedule)
 				r.Get("/tools", agH.ListTools)
 
 				// Members
@@ -726,6 +726,9 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		r.Get("/run/{runID}/checkpoint", ah.GetCheckpoint)
 		r.Post("/upgrade", ah.Upgrade)
 		r.Post("/print", ah.Print)
+		r.Post("/schedules", ah.CreateScheduledFire)
+		r.Get("/schedules", ah.ListScheduledFires)
+		r.Delete("/schedules/{id}", ah.CancelScheduledFire)
 		r.Post("/topic/{slug}/subscribe", ah.TopicSubscribe)
 		r.Delete("/topic/{slug}/subscribe", ah.TopicUnsubscribe)
 		r.Put("/mcp-servers/{slug}", ah.UpsertMCPServer)

@@ -420,9 +420,9 @@ func (h *conversationsHandler) Prompt(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Look up the agent row once — used for both model modalities and
-	// access-filtered extra system prompts.
+	// access-filtered instructions.
 	var modalities []string
-	var extraSystemPrompt string
+	var instructions string
 	// airlockvet:allow-dbq reason: agent row read for modality + prompt rendering; access is gated by ownedConversation upstream
 	if ag, err := q.GetAgentByID(ctx, toPgUUID(agentID)); err == nil {
 		if ag.ExecModel != "" {
@@ -431,7 +431,7 @@ func (h *conversationsHandler) Prompt(w http.ResponseWriter, r *http.Request) {
 				modalities = m.Input
 			}
 		}
-		extraSystemPrompt = promptpkg.RenderExtras(ag.ExtraPrompts, access)
+		instructions = promptpkg.RenderInstructions(ag.Instructions, access)
 	}
 
 	// Build prompt input — SessionStore in agent container handles message
@@ -441,7 +441,7 @@ func (h *conversationsHandler) Prompt(w http.ResponseWriter, r *http.Request) {
 		ConversationID:      convIDStr,
 		Files:               fileInfos,
 		SupportedModalities: modalities,
-		ExtraSystemPrompt:   extraSystemPrompt,
+		Instructions:        instructions,
 		ForceCompact:        forceCompact,
 		CallerAccess:        access,
 		DirectTools:         access == agentsdk.AccessPublic,

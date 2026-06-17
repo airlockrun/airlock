@@ -26,7 +26,7 @@ func (s *Service) agentMutateTools() []tool.Tool {
 		s.toolTriggerAgentUpgrade(),
 		s.toolRollbackAgent(),
 		s.toolCancelBuild(),
-		s.toolFireCron(),
+		s.toolFireSchedule(),
 		s.toolConnectGit(),
 		s.toolDisconnectGit(),
 		s.toolDeleteGitCredential(),
@@ -281,19 +281,19 @@ func (s *Service) toolCancelBuild() tool.Tool {
 		Build()
 }
 
-// --- fire_cron ---
+// --- fire_schedule ---
 
-type fireCronInput struct {
+type fireScheduleInput struct {
 	Agent string `json:"agent" jsonschema:"required,description=Agent slug or UUID."`
-	Name  string `json:"name" jsonschema:"required,description=Cron name (matches one returned by list_crons)."`
+	Slug  string `json:"slug" jsonschema:"required,description=Schedule slug (matches one returned by list_schedules)."`
 }
 
-func (s *Service) toolFireCron() tool.Tool {
-	return tool.New("fire_cron").
-		Description(`Manually fire one of the agent's declared crons. Returns {run_id} so the operator can follow the run.`).
-		SchemaFromStruct(fireCronInput{}).
+func (s *Service) toolFireSchedule() tool.Tool {
+	return tool.New("fire_schedule").
+		Description(`Manually fire one of the agent's declared schedule handlers (cron or schedule). Returns {run_id} so the operator can follow the run.`).
+		SchemaFromStruct(fireScheduleInput{}).
 		Execute(func(ctx context.Context, raw json.RawMessage, _ tool.CallOptions) (tool.Result, error) {
-			var in fireCronInput
+			var in fireScheduleInput
 			if err := json.Unmarshal(raw, &in); err != nil {
 				return errResult(err), nil
 			}
@@ -302,11 +302,11 @@ func (s *Service) toolFireCron() tool.Tool {
 			if err != nil {
 				return errResult(err), nil
 			}
-			out, err := s.agents.FireCron(ctx, p, uuid.UUID(a.ID.Bytes), in.Name)
+			out, err := s.agents.FireSchedule(ctx, p, uuid.UUID(a.ID.Bytes), in.Slug)
 			if err != nil {
 				return errResult(err), nil
 			}
-			return okResult(&airlockv1.FireCronResponse{RunId: out.RunID.String()})
+			return okResult(&airlockv1.FireScheduleResponse{RunId: out.RunID.String()})
 		}).
 		Build()
 }

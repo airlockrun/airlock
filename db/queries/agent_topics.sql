@@ -1,10 +1,11 @@
 -- name: UpsertTopic :exec
-INSERT INTO agent_topics (agent_id, slug, description, llm_hint, access)
-VALUES (@agent_id, @slug, @description, @llm_hint, @access)
+INSERT INTO agent_topics (agent_id, slug, description, llm_hint, access, per_user)
+VALUES (@agent_id, @slug, @description, @llm_hint, @access, @per_user)
 ON CONFLICT (agent_id, slug) DO UPDATE SET
     description = EXCLUDED.description,
     llm_hint = EXCLUDED.llm_hint,
     access = EXCLUDED.access,
+    per_user = EXCLUDED.per_user,
     updated_at = now();
 
 -- name: ListTopicsByAgent :many
@@ -37,3 +38,10 @@ SELECT ts.conversation_id
 FROM topic_subscriptions ts
 JOIN agent_topics at ON at.id = ts.topic_id
 WHERE at.agent_id = @agent_id AND at.slug = @slug;
+
+-- name: ListSubscribedConversationsForUser :many
+SELECT ts.conversation_id
+FROM topic_subscriptions ts
+JOIN agent_topics at ON at.id = ts.topic_id
+JOIN agent_conversations c ON c.id = ts.conversation_id
+WHERE at.agent_id = @agent_id AND at.slug = @slug AND c.user_id = @user_id;

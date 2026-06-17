@@ -296,14 +296,19 @@ message WebhookInfo {
   google.protobuf.Timestamp created_at = 8;
 }
 
-// CronInfo represents a code-synced cron registration.
-message CronInfo {
+// ScheduleInfo represents one synced schedule handler — a recurring cron
+// (kind="cron") or a runtime-armed one-shot handler (kind="schedule") — enriched
+// with the next pending fire time.
+message ScheduleInfo {
   string id = 1;
-  string name = 2;
-  string schedule = 3;
+  string slug = 2;
+  string schedule = 3;  // cron expression for kind="cron"; empty for "schedule"
   string description = 4;
   google.protobuf.Timestamp last_fired_at = 5;
   google.protobuf.Timestamp created_at = 6;
+  string kind = 7;  // "cron" | "schedule"
+  google.protobuf.Timestamp next_fire_at = 8;  // earliest pending fire; null if none armed
+  bool enabled = 9;
 }
 
 // RouteInfo represents a code-synced HTTP route registration.

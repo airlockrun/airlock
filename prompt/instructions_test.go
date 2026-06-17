@@ -6,7 +6,7 @@ import (
 	"github.com/airlockrun/agentsdk"
 )
 
-func TestRenderExtras(t *testing.T) {
+func TestRenderInstructions(t *testing.T) {
 	tests := []struct {
 		name   string
 		raw    []byte
@@ -83,9 +83,9 @@ func TestRenderExtras(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := RenderExtras(tt.raw, tt.access)
+			got := RenderInstructions(tt.raw, tt.access)
 			if got != tt.want {
-				t.Errorf("RenderExtras() = %q, want %q", got, tt.want)
+				t.Errorf("RenderInstructions() = %q, want %q", got, tt.want)
 			}
 		})
 	}

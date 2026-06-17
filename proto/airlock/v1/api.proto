@@ -177,12 +177,12 @@ message ListAgentsResponse {
   repeated AgentInfo agents = 1;
 }
 
-// GetAgentDetailResponse returns rich agent detail with connections, webhooks, crons, and routes.
+// GetAgentDetailResponse returns rich agent detail with connections, webhooks, schedules, and routes.
 message GetAgentDetailResponse {
   AgentInfo agent = 1;
   repeated ConnectionInfo connections = 2;
   repeated WebhookInfo webhooks = 3;
-  repeated CronInfo crons = 4;
+  repeated ScheduleInfo schedules = 4;
   repeated RouteInfo routes = 5;
   // External base URL for the agent's registered routes
   // ({scheme}://{slug}.{agentDomain}[:port], no trailing slash). The UI
@@ -377,21 +377,21 @@ message PromptResponse {
   string command_reply = 3;
 }
 
-// --- Webhooks & Crons ---
+// --- Webhooks & Schedules ---
 
 message ListWebhooksResponse {
   repeated WebhookInfo webhooks = 1;
 }
 
-message ListCronsResponse {
-  repeated CronInfo crons = 1;
+message ListSchedulesResponse {
+  repeated ScheduleInfo schedules = 1;
 }
 
 message ListToolsResponse {
   repeated ToolInfo tools = 1;
 }
 
-message FireCronResponse {
+message FireScheduleResponse {
   string run_id = 1;
 }
 

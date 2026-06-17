@@ -140,14 +140,19 @@ func WebhookToProto(wh dbq.ListWebhooksByAgentWithStatusRow, publicURL, agentID 
 	}
 }
 
-func CronToProto(c dbq.AgentCron) *airlockv1.CronInfo {
-	return &airlockv1.CronInfo{
-		Id:          PgUUIDToString(c.ID),
-		Name:        c.Name,
-		Schedule:    c.Schedule,
-		LastFiredAt: PgTimestampToProto(c.LastFiredAt),
-		CreatedAt:   PgTimestampToProto(c.CreatedAt),
-		Description: c.Description,
+// ScheduleToProto renders a schedule handler (cron or schedule) with its next
+// pending fire time for the operator-facing schedules list.
+func ScheduleToProto(s dbq.ListSchedulesWithNextFireRow) *airlockv1.ScheduleInfo {
+	return &airlockv1.ScheduleInfo{
+		Id:          PgUUIDToString(s.ID),
+		Slug:        s.Slug,
+		Kind:        s.Kind,
+		Schedule:    s.Recurrence,
+		Description: s.Description,
+		Enabled:     s.Enabled,
+		LastFiredAt: PgTimestampToProto(s.LastFiredAt),
+		NextFireAt:  PgTimestampToProto(s.NextFireAt),
+		CreatedAt:   PgTimestampToProto(s.CreatedAt),
 	}
 }
 

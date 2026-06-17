@@ -196,7 +196,7 @@ func (p *PromptProxy) HandleMessage(
 	userMessage = wrapReferencedMessage(userMessage, referenced)
 
 	// Resolve access once — reused for slash-command gating and for
-	// filtering per-caller extra system prompts. Non-members fall through
+	// filtering per-caller instructions. Non-members fall through
 	// to AccessPublic, which is correct for anonymous public-channel users.
 	access := bridgePrincipal(userID).EffectiveAgentAccess(ctx, q, agentID)
 
@@ -270,12 +270,12 @@ func (p *PromptProxy) HandleMessage(
 			zap.Error(err))
 	}
 
-	// Resolve access-filtered extra system prompt fragments. Failure to load
+	// Resolve access-filtered instruction fragments. Failure to load
 	// the agent row is non-fatal — we just skip extras rather than blocking
 	// the whole prompt.
-	var extraSystemPrompt string
+	var instructions string
 	if ag, err := q.GetAgentByID(ctx, toPgUUID(agentID)); err == nil {
-		extraSystemPrompt = promptpkg.RenderExtras(ag.ExtraPrompts, access)
+		instructions = promptpkg.RenderInstructions(ag.Instructions, access)
 	}
 
 	// Forward to agent container — SessionStore handles message loading and persistence.
@@ -285,12 +285,12 @@ func (p *PromptProxy) HandleMessage(
 	// AccessUser and admin-only verbs ReferenceError when called from a
 	// bridge-triggered run.
 	input := agentsdk.PromptInput{
-		Message:           userMessage,
-		ConversationID:    convert.PgUUIDToString(conversationID),
-		Files:             fileInfos,
-		ExtraSystemPrompt: extraSystemPrompt,
-		ForceCompact:      forceCompact,
-		CallerAccess:      access,
+		Message:        userMessage,
+		ConversationID: convert.PgUUIDToString(conversationID),
+		Files:          fileInfos,
+		Instructions:   instructions,
+		ForceCompact:   forceCompact,
+		CallerAccess:   access,
 		// One-shot is single-turn: there is no second turn to answer a
 		// confirmation, so run_js confirmations are auto-accepted in the
 		// agent. A residual suspension (e.g. A2A-delegated) is auto-denied

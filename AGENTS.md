@@ -101,8 +101,8 @@ On startup `builder.RebuildAllOnSDKChange` compares the airlock-bundled `agentsd
 4. WebSocket publishes events to subscribed frontend clients
 
 ### Trigger System
-- **Webhooks**: `POST /webhooks/{agentID}/{path}` → verify (none/hmac/token) → forward to agent
-- **Crons**: robfig/cron scheduler, loaded from `agent_crons`, fires via dispatcher
+- **Webhooks**: `POST /webhooks/{agentID}/{path}` → verify (none/hmac/token/bearer/ed25519) → forward to agent
+- **Schedules** (crons + dynamic): one unified substrate. `agent_schedule_handlers` holds synced handler defs (`kind` = `cron` | `schedule`); `agent_scheduled_fires` is the due-table a single airlock poller drains every 30s with `FOR UPDATE SKIP LOCKED` (replica-safe; agents stay suspended until a fire is due). `trigger.Scheduler` re-arms recurring crons in-tx (robfig is now a next-time parser only) and `ReconcileAgent` re-seeds cron fires on sync. Fires `POST /fire/{slug}` via `Dispatcher.ForwardFire` (X-Fire-ID header). Agents arm one-shots via `POST /api/agent/schedules` (`ScheduleAt`); the operator cron surface (`ListCrons`/`FireCron`/`CronInfo`) is backed by `kind='cron'` rows.
 - **Bridges**: Chat platform integrations (Telegram) — poll for messages, forward via PromptProxy, stream response back
 
 ## API Structure
@@ -153,7 +153,8 @@ Postgres with sqlc. Key tables:
 - `providers` — LLM provider catalog (encrypted API keys)
 - `agents` — status lifecycle (draft→building→active→failed), config JSONB, build/exec models
 - `agent_conversations`, `agent_messages` — DM threads with token tracking
-- `agent_webhooks`, `agent_crons`, `agent_routes`, `agent_topics` — trigger definitions
+- `agent_webhooks`, `agent_routes`, `agent_topics` (+ `per_user` for personal feeds) — trigger definitions
+- `agent_schedule_handlers` (cron+schedule defs, `kind`), `agent_scheduled_fires` (due-table, `FOR UPDATE SKIP LOCKED` poller) — unified scheduler
 - `agent_members` — sharing/permissions
 - `connections` — OAuth/API integrations (encrypted credentials)
 - `agent_exec_endpoints` — remote command targets (SSH today; transport pluggable). Operator-configured host/port/user + airlock-generated ED25519 keypair (private key in secrets store) + TOFU-pinned host key. Declared by the agent via `RegisterExecEndpoint`.

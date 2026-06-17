@@ -222,8 +222,8 @@ func TestSync(t *testing.T) {
 			{Path: "/webhook/github", Verify: "hmac", Header: "X-Hub-Signature-256"},
 			{Path: "/webhook/stripe", Verify: "hmac", Header: "Stripe-Signature"},
 		},
-		Crons: []agentsdk.CronDef{
-			{Name: "daily-digest", Schedule: "0 9 * * *"},
+		ScheduleHandlers: []agentsdk.ScheduleHandlerDef{
+			{Slug: "daily-digest", Kind: "cron", Recurrence: "0 9 * * *"},
 		},
 	}
 
@@ -243,7 +243,7 @@ func TestSync(t *testing.T) {
 	syncReq.Webhooks = []agentsdk.WebhookDef{
 		{Path: "/webhook/github", Verify: "hmac", Header: "X-Hub-Signature-256"},
 	}
-	syncReq.Crons = nil
+	syncReq.ScheduleHandlers = nil
 
 	req = agentRequest(t, "PUT", "/api/agent/sync", agentID, syncReq)
 	rec = httptest.NewRecorder()

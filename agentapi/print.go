@@ -11,6 +11,7 @@ import (
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"
 )
 
@@ -128,11 +129,41 @@ func (h *Handler) Print(w http.ResponseWriter, r *http.Request) {
 
 	// Route to conversations.
 	if req.Topic != "" {
-		// Topic publish — find all subscribed conversations.
-		rows, err := q.ListSubscribedConversations(ctx, dbq.ListSubscribedConversationsParams{
+		// Topic publish. Load the topic to honor its per_user guard.
+		topic, err := q.GetTopicBySlug(ctx, dbq.GetTopicBySlugParams{
 			AgentID: toPgUUID(agentID),
 			Slug:    req.Topic,
 		})
+		if err != nil {
+			h.logger.Warn("print: topic not found", zap.String("slug", req.Topic), zap.Error(err))
+			writeJSONError(w, http.StatusNotFound, "topic not found")
+			return
+		}
+		if topic.PerUser && req.UserID == "" {
+			// A per_user topic forbids broadcast — it would leak across users.
+			writeJSONError(w, http.StatusBadRequest, "per-user topic requires a target user")
+			return
+		}
+
+		// Find subscribed conversations — all, or just the target user's.
+		var rows []pgtype.UUID
+		if req.UserID != "" {
+			uid, perr := parseUUID(req.UserID)
+			if perr != nil {
+				writeJSONError(w, http.StatusBadRequest, "invalid userId")
+				return
+			}
+			rows, err = q.ListSubscribedConversationsForUser(ctx, dbq.ListSubscribedConversationsForUserParams{
+				AgentID: toPgUUID(agentID),
+				Slug:    req.Topic,
+				UserID:  toPgUUID(uid),
+			})
+		} else {
+			rows, err = q.ListSubscribedConversations(ctx, dbq.ListSubscribedConversationsParams{
+				AgentID: toPgUUID(agentID),
+				Slug:    req.Topic,
+			})
+		}
 		if err != nil {
 			h.logger.Error("list subscribed conversations", zap.Error(err))
 			writeJSONError(w, http.StatusInternalServerError, "failed to list subscribers")
