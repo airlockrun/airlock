@@ -50,3 +50,16 @@ SELECT e.id, e.slug,
 FROM agent_exec_endpoints e
 WHERE e.owner_principal_id = ANY (@owner_ids::uuid[])
 ORDER BY e.slug;
+
+-- Owner-initiated deletes from the Resources view. Grants cascade with the row
+-- and any binding need's pointer is nulled (ON DELETE SET NULL), so dependent
+-- agents fall back to an unbound need rather than a dangling reference.
+
+-- name: DeleteConnectionByID :exec
+DELETE FROM connections WHERE id = @id;
+
+-- name: DeleteMCPServerByID :exec
+DELETE FROM agent_mcp_servers WHERE id = @id;
+
+-- name: DeleteExecEndpointByID :exec
+DELETE FROM agent_exec_endpoints WHERE id = @id;

@@ -8,12 +8,14 @@ package resources
 
 import (
 	"context"
+	"errors"
 
 	"github.com/airlockrun/airlock/authz"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/airlockrun/airlock/service"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"
 )
@@ -106,4 +108,79 @@ func ownerSet(p authz.Principal) []pgtype.UUID {
 		out[i] = pgtype.UUID{Bytes: id, Valid: true}
 	}
 	return out
+}
+
+// requireOwner resolves the resource's owner and verifies the caller owns it
+// (its owner is in the caller's grantee set). Not-found maps to ErrNotFound; a
+// live row the caller doesn't own maps to ErrForbidden.
+func (s *Service) requireOwner(ctx context.Context, q *dbq.Queries, p authz.Principal, typ string, id uuid.UUID) error {
+	pgID := pgtype.UUID{Bytes: id, Valid: true}
+	var owner pgtype.UUID
+	var err error
+	switch typ {
+	case "connection":
+		owner, err = q.GetConnectionOwner(ctx, pgID)
+	case "mcp_server":
+		owner, err = q.GetMCPServerOwner(ctx, pgID)
+	case "exec_endpoint":
+		owner, err = q.GetExecEndpointOwner(ctx, pgID)
+	default:
+		return service.Detail(service.ErrInvalidInput, "unknown resource type %q", typ)
+	}
+	if errors.Is(err, pgx.ErrNoRows) {
+		return service.Detail(service.ErrNotFound, "resource not found")
+	}
+	if err != nil {
+		return err
+	}
+	for _, g := range p.GranteeSet() {
+		if owner.Valid && uuid.UUID(owner.Bytes) == g {
+			return nil
+		}
+	}
+	return service.Detail(service.ErrForbidden, "you do not own that resource")
+}
+
+// Revoke clears the stored credentials of an owned connection or MCP server,
+// affecting every agent that binds it. Exec endpoints carry no credentials.
+func (s *Service) Revoke(ctx context.Context, p authz.Principal, typ string, id uuid.UUID) error {
+	if !p.IsAuthenticatedUser() {
+		return service.ErrUnauthorized
+	}
+	q := dbq.New(s.db.Pool())
+	if err := s.requireOwner(ctx, q, p, typ, id); err != nil {
+		return err
+	}
+	pgID := pgtype.UUID{Bytes: id, Valid: true}
+	switch typ {
+	case "connection":
+		return q.ClearConnectionCredentialsByID(ctx, pgID)
+	case "mcp_server":
+		return q.ClearMCPServerCredentialsByID(ctx, pgID)
+	default:
+		return service.Detail(service.ErrInvalidInput, "%s resources have no credentials to revoke", typ)
+	}
+}
+
+// Delete removes an owned resource. Its grants cascade and any binding need's
+// pointer is nulled, so dependent agents fall back to an unbound need.
+func (s *Service) Delete(ctx context.Context, p authz.Principal, typ string, id uuid.UUID) error {
+	if !p.IsAuthenticatedUser() {
+		return service.ErrUnauthorized
+	}
+	q := dbq.New(s.db.Pool())
+	if err := s.requireOwner(ctx, q, p, typ, id); err != nil {
+		return err
+	}
+	pgID := pgtype.UUID{Bytes: id, Valid: true}
+	switch typ {
+	case "connection":
+		return q.DeleteConnectionByID(ctx, pgID)
+	case "mcp_server":
+		return q.DeleteMCPServerByID(ctx, pgID)
+	case "exec_endpoint":
+		return q.DeleteExecEndpointByID(ctx, pgID)
+	default:
+		return service.Detail(service.ErrInvalidInput, "unknown resource type %q", typ)
+	}
 }
