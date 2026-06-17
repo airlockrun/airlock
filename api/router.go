@@ -31,6 +31,7 @@ import (
 	needssvc "github.com/airlockrun/airlock/service/needs"
 	passkeyssvc "github.com/airlockrun/airlock/service/passkeys"
 	providerssvc "github.com/airlockrun/airlock/service/providers"
+	resourcessvc "github.com/airlockrun/airlock/service/resources"
 	runssvc "github.com/airlockrun/airlock/service/runs"
 	settingssvc "github.com/airlockrun/airlock/service/settings"
 	siblingssvc "github.com/airlockrun/airlock/service/siblings"
@@ -160,6 +161,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	usersHandler := NewUsersHandler(cfg.DB, userssvc.New(cfg.DB, cfg.BridgeManager, cfg.Logger.Named("users")))
 	grantsHandler := NewGrantsHandler(grantssvc.New(cfg.DB, cfg.Logger.Named("grants")))
 	needsHandler := NewNeedsHandler(needssvc.NewService(cfg.DB, cfg.Logger.Named("needs")))
+	resourcesHandler := NewResourcesHandler(resourcessvc.New(cfg.DB, cfg.Logger.Named("resources")))
 	settingsSvc := settingssvc.New(cfg.DB, cfg.Logger.Named("settings"))
 	// Manager bot wiring is deferred until inside the auth group where
 	// the bridges service / managedbots service are constructed. The
@@ -353,6 +355,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		// Resource grants — sharing a user-owned resource. Authorized by the
 		// manage/view capability on the resource (in the service), so no tenant
 		// middleware here.
+		r.Get("/resources", resourcesHandler.List)
 		r.Get("/resources/{type}/{id}/grants", grantsHandler.ListResourceGrants)
 		r.Post("/resources/{type}/{id}/grants", grantsHandler.GrantResource)
 		r.Delete("/resources/{type}/{id}/grants/{grantID}", grantsHandler.RevokeResourceGrant)

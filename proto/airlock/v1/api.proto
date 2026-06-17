@@ -737,6 +737,26 @@ message ListModelGrantsResponse {
   repeated ModelGrantInfo grants = 1;
 }
 
+// ── Owner resource inventory (per-user Resources view) ──
+
+// OwnedResourceInfo is one resource a principal owns, across all of their
+// agents, with how many agents currently bind it. No secret material.
+message OwnedResourceInfo {
+  string id = 1;
+  string type = 2;  // connection | mcp_server | exec_endpoint
+  string slug = 3;
+  string name = 4;
+  string auth_mode = 5;
+  bool authorized = 6;       // has usable credentials (or is configured, for exec)
+  int32 agent_count = 7;     // how many of the owner's agents bind this resource
+  google.protobuf.Timestamp created_at = 8;
+  google.protobuf.Timestamp last_used_at = 9;
+}
+
+message ListOwnedResourcesResponse {
+  repeated OwnedResourceInfo resources = 1;
+}
+
 // ── Resource needs (agent manifest) + binding ──
 
 message NeedInfo {
