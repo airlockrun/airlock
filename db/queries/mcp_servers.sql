@@ -5,8 +5,8 @@
 -- registration_endpoint is taken from EXCLUDED only when newly populated —
 -- a fresh discovery run that turned up empty doesn't blow away a previously
 -- discovered endpoint.
-INSERT INTO agent_mcp_servers (agent_id, slug, name, url, auth_mode, auth_url, token_url, registration_endpoint, scopes, access, auth_injection, tool_schemas, client_id, client_secret, access_token_ref, refresh_token)
-VALUES (@agent_id, @slug, @name, @url, @auth_mode, @auth_url, @token_url, @registration_endpoint, @scopes, @access, @auth_injection, '[]'::jsonb, '', '', '', '')
+INSERT INTO agent_mcp_servers (agent_id, owner_principal_id, slug, name, url, auth_mode, auth_url, token_url, registration_endpoint, scopes, access, auth_injection, tool_schemas, client_id, client_secret, access_token_ref, refresh_token)
+VALUES (@agent_id, (SELECT user_id FROM agents WHERE id = @agent_id), @slug, @name, @url, @auth_mode, @auth_url, @token_url, @registration_endpoint, @scopes, @access, @auth_injection, '[]'::jsonb, '', '', '', '')
 ON CONFLICT (agent_id, slug) DO UPDATE SET
     name = EXCLUDED.name,
     url = EXCLUDED.url,

@@ -3,8 +3,8 @@
 -- fields the agent declares in code; operator-configured columns (transport,
 -- host, port, ssh_user, private_key_ref, public_key_*, host_key_*) are left
 -- untouched so re-syncing a running agent does not nuke its operator config.
-INSERT INTO agent_exec_endpoints (agent_id, slug, description, llm_hint, access)
-VALUES (@agent_id, @slug, @description, @llm_hint, @access)
+INSERT INTO agent_exec_endpoints (agent_id, owner_principal_id, slug, description, llm_hint, access)
+VALUES (@agent_id, (SELECT user_id FROM agents WHERE id = @agent_id), @slug, @description, @llm_hint, @access)
 ON CONFLICT (agent_id, slug) DO UPDATE SET
     description = EXCLUDED.description,
     llm_hint    = EXCLUDED.llm_hint,
