@@ -1001,7 +1001,45 @@ INSERT INTO agent_resource_needs (agent_id, type, slug, description, setup_instr
            jsonb_build_object('llm_hint', llm_hint, 'access', access),
            id FROM agent_exec_endpoints;
 
+-- ─── management-plane capability grants + model entitlements ───
+-- A grant extends view/bind/manage on a resource to a principal (user/group).
+-- The owner holds all three implicitly. The exclusive arc + per-arc ON DELETE
+-- CASCADE means deleting a resource takes its grants with it (no orphans).
+CREATE TABLE resource_grants (
+    id                uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    connection_id     uuid REFERENCES connections(id)          ON DELETE CASCADE,
+    mcp_server_id     uuid REFERENCES agent_mcp_servers(id)    ON DELETE CASCADE,
+    exec_endpoint_id  uuid REFERENCES agent_exec_endpoints(id) ON DELETE CASCADE,
+    git_credential_id uuid REFERENCES git_credentials(id)      ON DELETE CASCADE,
+    grantee_id        uuid NOT NULL REFERENCES principals(id)  ON DELETE CASCADE,
+    capabilities      text[] NOT NULL,        -- subset of {view, bind, manage}
+    created_at        timestamptz NOT NULL DEFAULT now(),
+    CHECK (num_nonnulls(connection_id, mcp_server_id, exec_endpoint_id, git_credential_id) = 1)
+);
+CREATE UNIQUE INDEX resource_grants_conn_grantee ON resource_grants (connection_id, grantee_id)     WHERE connection_id IS NOT NULL;
+CREATE UNIQUE INDEX resource_grants_mcp_grantee  ON resource_grants (mcp_server_id, grantee_id)     WHERE mcp_server_id IS NOT NULL;
+CREATE UNIQUE INDEX resource_grants_exec_grantee ON resource_grants (exec_endpoint_id, grantee_id)  WHERE exec_endpoint_id IS NOT NULL;
+CREATE UNIQUE INDEX resource_grants_git_grantee  ON resource_grants (git_credential_id, grantee_id) WHERE git_credential_id IS NOT NULL;
+CREATE INDEX resource_grants_grantee_idx ON resource_grants (grantee_id);
+
+-- Model entitlements: deny-by-default. A model is usable when it is the agent's
+-- default/assigned model OR a grant matches the caller's grantee-set. Models
+-- are named by (provider, model) — no catalog table, since the model list is
+-- rendered live and changes; a grant for a removed model just stops matching.
+CREATE TABLE model_grants (
+    id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    provider_id uuid NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
+    model       text NOT NULL,
+    grantee_id  uuid NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
+    created_at  timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (provider_id, model, grantee_id)
+);
+CREATE INDEX model_grants_grantee_idx ON model_grants (grantee_id);
+
 -- +goose Down
+-- ─── grants — reverse ───
+DROP TABLE IF EXISTS model_grants;
+DROP TABLE IF EXISTS resource_grants;
 -- ─── resources / needs — reverse ───
 DROP TABLE IF EXISTS agent_resource_needs;
 ALTER TABLE agent_exec_endpoints DROP COLUMN IF EXISTS owner_principal_id;
