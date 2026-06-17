@@ -715,8 +715,6 @@ func NewRouter(cfg RouterConfig) http.Handler {
 
 	r.Route("/api/agent", func(r chi.Router) {
 		r.Use(auth.AgentMiddleware(cfg.JWTSecret))
-		r.Put("/connections/{slug}", ah.UpsertConnection)
-		r.Put("/exec-endpoints/{slug}", ah.UpsertExecEndpoint)
 		r.Post("/exec/{slug}", ah.AgentExec)
 		r.Put("/sync", ah.Sync)
 		r.Post("/llm/stream", ah.LLMStream)

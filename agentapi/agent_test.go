@@ -179,6 +179,7 @@ func TestUpsertConnection(t *testing.T) {
 	agentID := createTestAgent(t)
 
 	def := agentsdk.ConnectionDef{
+		Slug:        "github",
 		Name:        "GitHub",
 		Description: "GitHub API access",
 		AuthMode:    agentsdk.ConnectionAuthOAuth,
@@ -189,26 +190,27 @@ func TestUpsertConnection(t *testing.T) {
 		},
 	}
 
+	// Connections are declared as needs in the sync batch.
 	router := testRouter(ah, func(r chi.Router) {
-		r.Put("/api/agent/connections/{slug}", ah.UpsertConnection)
+		r.Put("/api/agent/sync", ah.Sync)
 	})
 
-	req := agentRequest(t, "PUT", "/api/agent/connections/github", agentID, def)
+	req := agentRequest(t, "PUT", "/api/agent/sync", agentID, agentsdk.SyncRequest{Connections: []agentsdk.ConnectionDef{def}})
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusNoContent {
-		t.Errorf("status = %d, want %d; body: %s", rec.Code, http.StatusNoContent, rec.Body.String())
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
 	}
 
-	// Upsert again — should be idempotent.
+	// Re-sync with a changed description — should be idempotent.
 	def.Description = "Updated description"
-	req = agentRequest(t, "PUT", "/api/agent/connections/github", agentID, def)
+	req = agentRequest(t, "PUT", "/api/agent/sync", agentID, agentsdk.SyncRequest{Connections: []agentsdk.ConnectionDef{def}})
 	rec = httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusNoContent {
-		t.Errorf("upsert again: status = %d, want %d", rec.Code, http.StatusNoContent)
+	if rec.Code != http.StatusOK {
+		t.Errorf("re-sync: status = %d, want %d", rec.Code, http.StatusOK)
 	}
 }
 
