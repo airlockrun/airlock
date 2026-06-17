@@ -1,6 +1,12 @@
 -- name: CreateUser :one
-INSERT INTO users (email, display_name, password_hash, tenant_role, oidc_sub, must_change_password)
-VALUES ($1, $2, $3, $4, $5, $6)
+-- Seed the principal supertype row and the user subtype atomically (one
+-- statement, one tx); the id is derived from the new principal so every user
+-- is guaranteed a matching principals row — the FK fails loud otherwise.
+WITH p AS (
+    INSERT INTO principals (kind) VALUES ('user') RETURNING id
+)
+INSERT INTO users (id, email, display_name, password_hash, tenant_role, oidc_sub, must_change_password)
+SELECT p.id, $1, $2, $3, $4, $5, $6 FROM p
 RETURNING *;
 
 -- name: GetUserByID :one
@@ -37,7 +43,9 @@ UPDATE users SET must_change_password = false, updated_at = now() WHERE id = $1;
 UPDATE users SET password_hash = NULL, updated_at = now() WHERE id = $1;
 
 -- name: DeleteUser :exec
-DELETE FROM users WHERE id = $1;
+-- Delete through the principal: ON DELETE CASCADE removes the users row plus
+-- any grants/memberships keyed on this principal.
+DELETE FROM principals WHERE id = $1;
 
 -- name: UpdateUserNameEmail :exec
 UPDATE users SET display_name = $2, email = $3, updated_at = now() WHERE id = $1;

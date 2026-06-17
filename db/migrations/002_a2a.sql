@@ -904,7 +904,50 @@ CREATE TABLE agent_scheduled_fires (
 );
 CREATE INDEX agent_scheduled_fires_due_idx ON agent_scheduled_fires (status, fire_at);
 
+-- ─── principals & groups (identity supertype) ───
+-- principals is a thin identity anchor: every user, agent, and group is a
+-- principal, so anything that points at "an identity" (a resource grant's
+-- grantee, a model entitlement) points at one table with one FK. users and
+-- agents become subtypes via a FK on their existing PK (principal_id == id),
+-- so code that already carries a user/agent id already carries its principal.
+CREATE TABLE principals (
+    id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    kind       text NOT NULL CHECK (kind IN ('user', 'agent', 'group')),
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+-- Backfill one principal per existing user/agent (id reused verbatim) BEFORE
+-- the validating ADD CONSTRAINT, else the FK would reject every existing row.
+INSERT INTO principals (id, kind) SELECT id, 'user'  FROM users;
+INSERT INTO principals (id, kind) SELECT id, 'agent' FROM agents;
+ALTER TABLE users  ADD CONSTRAINT users_principal_fk  FOREIGN KEY (id) REFERENCES principals(id) ON DELETE CASCADE;
+ALTER TABLE agents ADD CONSTRAINT agents_principal_fk FOREIGN KEY (id) REFERENCES principals(id) ON DELETE CASCADE;
+
+-- Groups are a flat principal subtype. The three built-ins (admin/manager/user)
+-- carry well-known ids the policy resolver references as grant targets; their
+-- membership is derived from users.tenant_role, not stored. Custom groups +
+-- stored membership are a higher-tier concern and not created here.
+CREATE TABLE groups (
+    id          uuid PRIMARY KEY REFERENCES principals(id) ON DELETE CASCADE,
+    name        text NOT NULL,
+    description text NOT NULL,
+    builtin     boolean NOT NULL DEFAULT false
+);
+CREATE UNIQUE INDEX groups_name_key ON groups (lower(name));
+INSERT INTO principals (id, kind) VALUES
+    ('00000000-0000-0000-0000-0000000000a1', 'group'),
+    ('00000000-0000-0000-0000-0000000000a2', 'group'),
+    ('00000000-0000-0000-0000-0000000000a3', 'group');
+INSERT INTO groups (id, name, description, builtin) VALUES
+    ('00000000-0000-0000-0000-0000000000a1', 'admin',   'Built-in admin group',   true),
+    ('00000000-0000-0000-0000-0000000000a2', 'manager', 'Built-in manager group', true),
+    ('00000000-0000-0000-0000-0000000000a3', 'user',    'Built-in user group',    true);
+
 -- +goose Down
+-- ─── principals & groups — reverse ───
+ALTER TABLE agents DROP CONSTRAINT IF EXISTS agents_principal_fk;
+ALTER TABLE users  DROP CONSTRAINT IF EXISTS users_principal_fk;
+DROP TABLE IF EXISTS groups;
+DROP TABLE IF EXISTS principals;
 -- ─── scheduler / instructions / per-user topics — reverse ───
 DROP INDEX IF EXISTS agent_scheduled_fires_due_idx;
 DROP TABLE IF EXISTS agent_scheduled_fires;
