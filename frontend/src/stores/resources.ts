@@ -22,5 +22,17 @@ export const useResourcesStore = defineStore('resources', () => {
     }
   }
 
-  return { resources, loading, fetchResources }
+  // Clear a connection's / MCP server's stored credentials. Re-fetch so the
+  // row's authorized badge reflects the change.
+  async function revoke(type: string, id: string) {
+    await api.post(`/api/v1/resources/${type}/${id}/revoke`)
+    await fetchResources()
+  }
+
+  async function remove(type: string, id: string) {
+    await api.delete(`/api/v1/resources/${type}/${id}`)
+    resources.value = resources.value.filter((r) => r.id !== id)
+  }
+
+  return { resources, loading, fetchResources, revoke, remove }
 })

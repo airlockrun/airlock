@@ -356,6 +356,8 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		// manage/view capability on the resource (in the service), so no tenant
 		// middleware here.
 		r.Get("/resources", resourcesHandler.List)
+		r.Post("/resources/{type}/{id}/revoke", resourcesHandler.Revoke)
+		r.Delete("/resources/{type}/{id}", resourcesHandler.Delete)
 		r.Get("/resources/{type}/{id}/grants", grantsHandler.ListResourceGrants)
 		r.Post("/resources/{type}/{id}/grants", grantsHandler.GrantResource)
 		r.Delete("/resources/{type}/{id}/grants/{grantID}", grantsHandler.RevokeResourceGrant)

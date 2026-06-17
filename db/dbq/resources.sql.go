@@ -11,6 +11,37 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const deleteConnectionByID = `-- name: DeleteConnectionByID :exec
+
+DELETE FROM connections WHERE id = $1
+`
+
+// Owner-initiated deletes from the Resources view. Grants cascade with the row
+// and any binding need's pointer is nulled (ON DELETE SET NULL), so dependent
+// agents fall back to an unbound need rather than a dangling reference.
+func (q *Queries) DeleteConnectionByID(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, deleteConnectionByID, id)
+	return err
+}
+
+const deleteExecEndpointByID = `-- name: DeleteExecEndpointByID :exec
+DELETE FROM agent_exec_endpoints WHERE id = $1
+`
+
+func (q *Queries) DeleteExecEndpointByID(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, deleteExecEndpointByID, id)
+	return err
+}
+
+const deleteMCPServerByID = `-- name: DeleteMCPServerByID :exec
+DELETE FROM agent_mcp_servers WHERE id = $1
+`
+
+func (q *Queries) DeleteMCPServerByID(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, deleteMCPServerByID, id)
+	return err
+}
+
 const getConnectionByID = `-- name: GetConnectionByID :one
 SELECT id, slug, name, description, llm_hint, access, auth_mode, auth_url, token_url, base_url, scopes, auth_injection, test_path, setup_instructions, config, client_id, client_secret, access_token_ref, refresh_token, token_expires_at, created_at, updated_at, auth_params, headers, owner_principal_id FROM connections WHERE id = $1
 `

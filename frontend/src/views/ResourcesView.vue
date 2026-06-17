@@ -76,6 +76,49 @@ function formatTimestamp(ts: any): string {
   return '—'
 }
 
+function usageNote(n: number): string {
+  if (n === 0) return ''
+  return ` ${n} agent${n === 1 ? '' : 's'} using it will need to be reconfigured.`
+}
+
+function onRevoke(res: any) {
+  confirm.require({
+    header: `Revoke credentials for "${res.name}"?`,
+    message: `The stored credentials will be cleared.${usageNote(res.agentCount)}`,
+    icon: 'pi pi-exclamation-triangle',
+    acceptLabel: 'Revoke',
+    rejectLabel: 'Cancel',
+    acceptClass: 'p-button-danger',
+    accept: async () => {
+      try {
+        await resources.revoke(res.type, res.id)
+        toast.add({ severity: 'info', summary: 'Credentials revoked', life: 3000 })
+      } catch (err: any) {
+        toast.add({ severity: 'error', summary: err.response?.data?.error || 'Failed to revoke', life: 5000 })
+      }
+    },
+  })
+}
+
+function onDeleteResource(res: any) {
+  confirm.require({
+    header: `Delete "${res.name}"?`,
+    message: `This removes the resource and its sharing.${usageNote(res.agentCount)}`,
+    icon: 'pi pi-exclamation-triangle',
+    acceptLabel: 'Delete',
+    rejectLabel: 'Cancel',
+    acceptClass: 'p-button-danger',
+    accept: async () => {
+      try {
+        await resources.remove(res.type, res.id)
+        toast.add({ severity: 'info', summary: 'Resource deleted', life: 3000 })
+      } catch (err: any) {
+        toast.add({ severity: 'error', summary: err.response?.data?.error || 'Failed to delete', life: 5000 })
+      }
+    },
+  })
+}
+
 onMounted(() => {
   resources.fetchResources()
   git.fetchCredentials()
@@ -137,6 +180,29 @@ onMounted(() => {
             <template #body="{ data }">
               <span v-if="data.agentCount > 0">{{ data.agentCount }} agent{{ data.agentCount === 1 ? '' : 's' }}</span>
               <span v-else style="color: var(--p-text-muted-color); font-style: italic">unused</span>
+            </template>
+          </Column>
+          <Column header="" style="width: 6rem">
+            <template #body="{ data }">
+              <div style="display: flex; gap: 0.25rem; justify-content: flex-end">
+                <Button
+                  v-if="data.type !== 'exec_endpoint' && data.authorized"
+                  v-tooltip.top="'Revoke credentials'"
+                  icon="pi pi-ban"
+                  severity="secondary"
+                  size="small"
+                  text
+                  @click="onRevoke(data)"
+                />
+                <Button
+                  v-tooltip.top="'Delete resource'"
+                  icon="pi pi-trash"
+                  severity="danger"
+                  size="small"
+                  text
+                  @click="onDeleteResource(data)"
+                />
+              </div>
             </template>
           </Column>
         </DataTable>
