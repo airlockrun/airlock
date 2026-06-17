@@ -47,3 +47,17 @@ SELECT grantee_id, capabilities FROM resource_grants WHERE exec_endpoint_id = @e
 
 -- name: ListGitCredentialGrants :many
 SELECT grantee_id, capabilities FROM resource_grants WHERE git_credential_id = @git_credential_id;
+
+-- Resource owner lookups for the capability check (owner holds all caps).
+
+-- name: GetConnectionOwner :one
+SELECT owner_principal_id FROM connections WHERE id = @id;
+
+-- name: GetMCPServerOwner :one
+SELECT owner_principal_id FROM agent_mcp_servers WHERE id = @id;
+
+-- name: GetExecEndpointOwner :one
+SELECT owner_principal_id FROM agent_exec_endpoints WHERE id = @id;
+
+-- name: GetGitCredentialOwner :one
+SELECT user_id FROM git_credentials WHERE id = @id;

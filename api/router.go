@@ -23,6 +23,7 @@ import (
 	convsvc "github.com/airlockrun/airlock/service/conversations"
 	execsvc "github.com/airlockrun/airlock/service/execendpoints"
 	gitcredssvc "github.com/airlockrun/airlock/service/gitcredentials"
+	grantssvc "github.com/airlockrun/airlock/service/grants"
 	identitysvc "github.com/airlockrun/airlock/service/identity"
 	managedbotssvc "github.com/airlockrun/airlock/service/managedbots"
 	memberssvc "github.com/airlockrun/airlock/service/members"
@@ -156,6 +157,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	gitCredsHandler := NewGitCredentialsHandler(gitcredssvc.New(cfg.DB, cfg.Secrets, cfg.Logger.Named("gitcredentials")))
 	gitWebhookHandler := NewGitWebhookHandler(cfg.DB, cfg.BuildService, cfg.Logger.Named("git-webhook"))
 	usersHandler := NewUsersHandler(cfg.DB, userssvc.New(cfg.DB, cfg.BridgeManager, cfg.Logger.Named("users")))
+	grantsHandler := NewGrantsHandler(grantssvc.New(cfg.DB, cfg.Logger.Named("grants")))
 	settingsSvc := settingssvc.New(cfg.DB, cfg.Logger.Named("settings"))
 	// Manager bot wiring is deferred until inside the auth group where
 	// the bridges service / managedbots service are constructed. The
@@ -337,6 +339,21 @@ func NewRouter(cfg RouterConfig) http.Handler {
 				r.Patch("/", providersHandler.Update)
 				r.Delete("/", providersHandler.Delete)
 			})
+		})
+
+		// Resource grants — sharing a user-owned resource. Authorized by the
+		// manage/view capability on the resource (in the service), so no tenant
+		// middleware here.
+		r.Get("/resources/{type}/{id}/grants", grantsHandler.ListResourceGrants)
+		r.Post("/resources/{type}/{id}/grants", grantsHandler.GrantResource)
+		r.Delete("/resources/{type}/{id}/grants/{grantID}", grantsHandler.RevokeResourceGrant)
+
+		// Model entitlements (admin only).
+		r.Route("/model-grants", func(r chi.Router) {
+			r.Use(auth.RequireTenantRole(authz.RequiredTenantRole(authz.TenantModelGrantManage)))
+			r.Get("/", grantsHandler.ListModelGrants)
+			r.Post("/", grantsHandler.GrantModel)
+			r.Delete("/{id}", grantsHandler.RevokeModelGrant)
 		})
 
 		// Catalog (read-only, any authenticated user)

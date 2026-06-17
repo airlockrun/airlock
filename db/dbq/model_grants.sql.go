@@ -93,20 +93,20 @@ func (q *Queries) IsSystemDefaultModel(ctx context.Context, arg IsSystemDefaultM
 
 const listModelGrants = `-- name: ListModelGrants :many
 SELECT mg.id, mg.provider_id, mg.model, mg.grantee_id, mg.created_at,
-       p.provider_id AS catalog_id, p.slug AS provider_slug
+       p.provider_id AS provider_catalog, p.slug AS provider_slug
 FROM model_grants mg
 JOIN providers p ON p.id = mg.provider_id
 ORDER BY p.provider_id, mg.model
 `
 
 type ListModelGrantsRow struct {
-	ID           pgtype.UUID        `json:"id"`
-	CatalogID    pgtype.UUID        `json:"provider_id"`
-	Model        string             `json:"model"`
-	GranteeID    pgtype.UUID        `json:"grantee_id"`
-	CreatedAt    pgtype.Timestamptz `json:"created_at"`
-	CatalogID_2  string             `json:"catalog_id_2"`
-	ProviderSlug string             `json:"provider_slug"`
+	ID              pgtype.UUID        `json:"id"`
+	CatalogID       pgtype.UUID        `json:"provider_id"`
+	Model           string             `json:"model"`
+	GranteeID       pgtype.UUID        `json:"grantee_id"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	ProviderCatalog string             `json:"provider_catalog"`
+	ProviderSlug    string             `json:"provider_slug"`
 }
 
 func (q *Queries) ListModelGrants(ctx context.Context) ([]ListModelGrantsRow, error) {
@@ -124,7 +124,7 @@ func (q *Queries) ListModelGrants(ctx context.Context) ([]ListModelGrantsRow, er
 			&i.Model,
 			&i.GranteeID,
 			&i.CreatedAt,
-			&i.CatalogID_2,
+			&i.ProviderCatalog,
 			&i.ProviderSlug,
 		); err != nil {
 			return nil, err
