@@ -17,9 +17,9 @@ import (
 )
 
 // TestExecEndpoint_DeclarationUpsertPreservesOperatorConfig drives the
-// agent-side sync path: PUT /api/agent/exec-endpoints/{slug} from the
-// agent should write the declaration fields but never touch the
-// operator-configured host / user / keypair / host-key columns.
+// agent-side sync path: declaring an exec endpoint in the sync batch
+// writes the declaration fields but never touches the operator-configured
+// host / user / keypair / host-key columns.
 //
 // This is the load-bearing invariant: a container restart with a
 // modified description must NOT wipe the operator's config and force
@@ -32,7 +32,7 @@ func TestExecEndpoint_DeclarationUpsertPreservesOperatorConfig(t *testing.T) {
 	ownerToken := apitest.IssueUserToken(t, h, owner, "owner@apitest.local", "user")
 
 	// First declaration from the agent.
-	putExecEndpoint(t, h, agentToken, "ci", agentsdk.ExecEndpointDef{
+	declareExecEndpoint(t, h, agentToken, "ci", agentsdk.ExecEndpointDef{
 		Description: "Self-hosted CI runner",
 		LLMHint:     "use kick-build",
 		Access:      agentsdk.AccessAdmin,
@@ -52,7 +52,7 @@ func TestExecEndpoint_DeclarationUpsertPreservesOperatorConfig(t *testing.T) {
 	// Re-declare with a different description and llmHint. This
 	// simulates a container restart after the agent author edited
 	// main.go.
-	putExecEndpoint(t, h, agentToken, "ci", agentsdk.ExecEndpointDef{
+	declareExecEndpoint(t, h, agentToken, "ci", agentsdk.ExecEndpointDef{
 		Description: "Self-hosted CI runner (renamed)",
 		LLMHint:     "use kick-build --branch <name>",
 		Access:      agentsdk.AccessAdmin,
@@ -103,7 +103,7 @@ func TestExecEndpoint_ConfigureGeneratesKeypair(t *testing.T) {
 	agentToken := apitest.IssueAgentToken(t, h, agentID)
 	ownerToken := apitest.IssueUserToken(t, h, owner, "owner@apitest.local", "user")
 
-	putExecEndpoint(t, h, agentToken, "ci", agentsdk.ExecEndpointDef{
+	declareExecEndpoint(t, h, agentToken, "ci", agentsdk.ExecEndpointDef{
 		Description: "Self-hosted CI runner",
 		Access:      agentsdk.AccessAdmin,
 	})
@@ -174,7 +174,7 @@ func TestExecEndpoint_EndToEnd(t *testing.T) {
 	agentToken := apitest.IssueAgentToken(t, h, agentID)
 	ownerToken := apitest.IssueUserToken(t, h, owner, "owner@apitest.local", "user")
 
-	putExecEndpoint(t, h, agentToken, "vps", agentsdk.ExecEndpointDef{
+	declareExecEndpoint(t, h, agentToken, "vps", agentsdk.ExecEndpointDef{
 		Description: "VPS",
 		Access:      agentsdk.AccessAdmin,
 	})
@@ -253,7 +253,7 @@ func TestExecEndpoint_UnconfiguredReturns4xx(t *testing.T) {
 
 	// Case 1: slug declared by the agent but never configured by the
 	// operator → 501 (transport not configured).
-	putExecEndpoint(t, h, agentToken, "vps", agentsdk.ExecEndpointDef{
+	declareExecEndpoint(t, h, agentToken, "vps", agentsdk.ExecEndpointDef{
 		Description: "Not yet configured",
 		Access:      agentsdk.AccessAdmin,
 	})
@@ -298,7 +298,7 @@ func TestExecEndpoint_TestConnection(t *testing.T) {
 	agentToken := apitest.IssueAgentToken(t, h, agentID)
 	ownerToken := apitest.IssueUserToken(t, h, owner, "owner@apitest.local", "user")
 
-	putExecEndpoint(t, h, agentToken, "vps", agentsdk.ExecEndpointDef{
+	declareExecEndpoint(t, h, agentToken, "vps", agentsdk.ExecEndpointDef{
 		Description: "VPS",
 		Access:      agentsdk.AccessAdmin,
 	})
@@ -349,12 +349,18 @@ func TestExecEndpoint_TestConnection(t *testing.T) {
 
 // --- helpers ---
 
-func putExecEndpoint(t *testing.T, h *apitest.Harness, agentToken, slug string, def agentsdk.ExecEndpointDef) {
+// declareExecEndpoint declares an exec endpoint by running an agent sync with
+// it in the batch — the only way an agent registers an exec endpoint now that
+// the per-slug PUT is gone. A re-sync of the same endpoint preserves the
+// operator-configured columns (the UpsertExecEndpointDeclaration ON CONFLICT
+// clause).
+func declareExecEndpoint(t *testing.T, h *apitest.Harness, agentToken, slug string, def agentsdk.ExecEndpointDef) {
 	t.Helper()
-	resp := h.Do(h.NewRequest(http.MethodPut,
-		"/api/agent/exec-endpoints/"+slug, agentToken, asJSON(t, def)))
-	if resp.StatusCode != http.StatusNoContent {
-		t.Fatalf("PUT exec-endpoints/%s: status %d, body %s",
+	def.Slug = slug
+	body := agentsdk.SyncRequest{ExecEndpoints: []agentsdk.ExecEndpointDef{def}}
+	resp := h.Do(h.NewRequest(http.MethodPut, "/api/agent/sync", agentToken, asJSON(t, body)))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("sync exec-endpoint %s: status %d, body %s",
 			slug, resp.StatusCode, h.ReadBody(resp))
 	}
 	resp.Body.Close()

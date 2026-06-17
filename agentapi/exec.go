@@ -3,7 +3,6 @@ package agentapi
 import (
 	"context"
 	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"net/http"
 
@@ -16,78 +15,6 @@ import (
 	"github.com/jackc/pgx/v5"
 	"go.uber.org/zap"
 )
-
-// UpsertExecEndpoint handles PUT /api/agent/exec-endpoints/{slug}.
-// Pushed by every container on startup via agentsdk's syncWithAirlock.
-// Only writes declaration fields (description, llm_hint, access);
-// operator-configured columns (transport, host, ssh_user, private_key,
-// host_key) are preserved on conflict so a re-sync of a running agent
-// doesn't nuke its operator config.
-func (h *Handler) UpsertExecEndpoint(w http.ResponseWriter, r *http.Request) {
-	agentID := auth.AgentIDFromContext(r.Context())
-	slug := chi.URLParam(r, "slug")
-	if slug == "" {
-		writeJSONError(w, http.StatusBadRequest, "slug is required")
-		return
-	}
-
-	var def agentsdk.ExecEndpointDef
-	if err := readJSON(r, &def); err != nil {
-		writeJSONError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-	if def.Description == "" {
-		writeJSONError(w, http.StatusBadRequest, "description is required")
-		return
-	}
-	access := string(def.Access)
-	if access == "" {
-		access = string(agentsdk.AccessAdmin)
-	}
-
-	q := dbq.New(h.db.Pool())
-	err := q.UpsertExecEndpointDeclaration(r.Context(), dbq.UpsertExecEndpointDeclarationParams{
-		AgentID:     toPgUUID(agentID),
-		Slug:        slug,
-		Description: def.Description,
-		LlmHint:     def.LLMHint,
-		Access:      access,
-	})
-	if err != nil {
-		h.logger.Error("upsert exec endpoint failed", zap.Error(err))
-		writeJSONError(w, http.StatusInternalServerError, "failed to upsert exec endpoint")
-		return
-	}
-
-	// Record the agent's need for this exec endpoint (spec = declared
-	// template) and bind it to the agent's own resource.
-	ep, err := q.GetExecEndpointBySlug(r.Context(), dbq.GetExecEndpointBySlugParams{
-		AgentID: toPgUUID(agentID),
-		Slug:    slug,
-	})
-	if err != nil {
-		h.logger.Error("get exec endpoint after upsert failed", zap.Error(err))
-		writeJSONError(w, http.StatusInternalServerError, "failed to upsert exec endpoint")
-		return
-	}
-	spec, _ := json.Marshal(map[string]any{"llm_hint": def.LLMHint, "access": access})
-	if err := q.UpsertResourceNeed(r.Context(), dbq.UpsertResourceNeedParams{
-		AgentID: toPgUUID(agentID), Type: "exec_endpoint", Slug: slug,
-		Description: def.Description, SetupInstructions: "", ExpectedUrl: "", ExpectedScopes: "", Spec: spec,
-	}); err != nil {
-		h.logger.Error("record exec need failed", zap.Error(err))
-		writeJSONError(w, http.StatusInternalServerError, "failed to upsert exec endpoint")
-		return
-	}
-	if err := q.BindExecEndpointNeed(r.Context(), dbq.BindExecEndpointNeedParams{
-		AgentID: toPgUUID(agentID), Slug: slug, ResourceID: ep.ID,
-	}); err != nil {
-		h.logger.Error("bind exec need failed", zap.Error(err))
-		writeJSONError(w, http.StatusInternalServerError, "failed to upsert exec endpoint")
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
-}
 
 // AgentExec handles POST /api/agent/exec/{slug}. Streams the exec
 // session's stdout/stderr/exit envelopes back to the agent as NDJSON

@@ -21,7 +21,6 @@ import (
 	"github.com/airlockrun/airlock/storage"
 	"github.com/airlockrun/airlock/trigger"
 	solprovider "github.com/airlockrun/sol/provider"
-	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"
@@ -121,84 +120,6 @@ type ExecDialerService interface {
 // BridgePartsDeliverer is the subset of trigger.BridgeManager needed for message delivery.
 type BridgePartsDeliverer interface {
 	SendParts(ctx context.Context, bridgeID uuid.UUID, externalID string, parts []agentsdk.DisplayPart) error
-}
-
-// UpsertConnection handles PUT /api/agent/connections/{slug}.
-func (h *Handler) UpsertConnection(w http.ResponseWriter, r *http.Request) {
-	agentID := auth.AgentIDFromContext(r.Context())
-	slug := chi.URLParam(r, "slug")
-	if slug == "" {
-		writeJSONError(w, http.StatusBadRequest, "slug is required")
-		return
-	}
-
-	var def agentsdk.ConnectionDef
-	if err := readJSON(r, &def); err != nil {
-		writeJSONError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-
-	authInjection, err := json.Marshal(def.AuthInjection)
-	if err != nil {
-		writeJSONError(w, http.StatusBadRequest, "invalid auth_injection")
-		return
-	}
-
-	// auth_params and headers are NOT NULL jsonb — a nil map marshals to
-	// "null", so default an empty object when the agent declared none.
-	authParams := []byte("{}")
-	if len(def.AuthParams) > 0 {
-		authParams, err = json.Marshal(def.AuthParams)
-		if err != nil {
-			writeJSONError(w, http.StatusBadRequest, "invalid auth_params")
-			return
-		}
-	}
-	headers := []byte("{}")
-	if len(def.Headers) > 0 {
-		headers, err = json.Marshal(def.Headers)
-		if err != nil {
-			writeJSONError(w, http.StatusBadRequest, "invalid headers")
-			return
-		}
-	}
-
-	scopes := strings.Join(def.Scopes, ",")
-	q := dbq.New(h.db.Pool())
-	conn, err := q.UpsertConnection(r.Context(), dbq.UpsertConnectionParams{
-		AgentID:           toPgUUID(agentID),
-		Slug:              slug,
-		Name:              def.Name,
-		Description:       def.Description,
-		LlmHint:           def.LLMHint,
-		AuthMode:          string(def.AuthMode),
-		AuthUrl:           def.AuthURL,
-		TokenUrl:          def.TokenURL,
-		BaseUrl:           def.BaseURL,
-		Scopes:            scopes,
-		AuthInjection:     authInjection,
-		SetupInstructions: def.SetupInstructions,
-		Config:            []byte("{}"),
-		AuthParams:        authParams,
-		Headers:           headers,
-		Access:            string(def.Access),
-	})
-	if err != nil {
-		h.logger.Error("upsert connection failed", zap.Error(err))
-		writeJSONError(w, http.StatusInternalServerError, "failed to upsert connection")
-		return
-	}
-
-	// The agent declaring a connection is, in the resource model, an agent
-	// declaring a NEED. Record it (spec = the declared template) and bind it to
-	// the agent's own just-upserted resource so single-agent setups resolve.
-	if err := h.recordConnectionNeed(r.Context(), q, agentID, slug, def, scopes, authInjection, conn.ID); err != nil {
-		h.logger.Error("record connection need failed", zap.Error(err))
-		writeJSONError(w, http.StatusInternalServerError, "failed to record connection need")
-		return
-	}
-
-	w.WriteHeader(http.StatusNoContent)
 }
 
 // recordConnectionNeed upserts the agent's connection need (carrying the
@@ -596,6 +517,100 @@ func (h *Handler) Sync(w http.ResponseWriter, r *http.Request) {
 	}); err != nil {
 		h.logger.Error("delete stale MCP servers failed", zap.Error(err))
 		writeJSONError(w, http.StatusInternalServerError, "failed to sync MCP servers")
+		return
+	}
+
+	// Connections: declared in the sync batch as needs (and, for now, bound to
+	// the agent's own auto-upserted resource).
+	connSlugs := make([]string, len(req.Connections))
+	for i, c := range req.Connections {
+		authInjection, err := json.Marshal(c.AuthInjection)
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "invalid auth_injection for connection "+c.Slug)
+			return
+		}
+		authParams := []byte("{}")
+		if len(c.AuthParams) > 0 {
+			if authParams, err = json.Marshal(c.AuthParams); err != nil {
+				writeJSONError(w, http.StatusBadRequest, "invalid auth_params for connection "+c.Slug)
+				return
+			}
+		}
+		headers := []byte("{}")
+		if len(c.Headers) > 0 {
+			if headers, err = json.Marshal(c.Headers); err != nil {
+				writeJSONError(w, http.StatusBadRequest, "invalid headers for connection "+c.Slug)
+				return
+			}
+		}
+		scopes := strings.Join(c.Scopes, ",")
+		conn, err := q.UpsertConnection(ctx, dbq.UpsertConnectionParams{
+			AgentID: pgAgentID, Slug: c.Slug, Name: c.Name, Description: c.Description, LlmHint: c.LLMHint,
+			AuthMode: string(c.AuthMode), AuthUrl: c.AuthURL, TokenUrl: c.TokenURL, BaseUrl: c.BaseURL,
+			Scopes: scopes, AuthInjection: authInjection, SetupInstructions: c.SetupInstructions,
+			Config: []byte("{}"), AuthParams: authParams, Headers: headers, Access: string(c.Access),
+		})
+		if err != nil {
+			h.logger.Error("upsert connection failed", zap.Error(err))
+			writeJSONError(w, http.StatusInternalServerError, "failed to sync connections")
+			return
+		}
+		if err := h.recordConnectionNeed(ctx, q, agentID, c.Slug, c, scopes, authInjection, conn.ID); err != nil {
+			h.logger.Error("record connection need failed", zap.Error(err))
+			writeJSONError(w, http.StatusInternalServerError, "failed to sync connections")
+			return
+		}
+		connSlugs[i] = c.Slug
+	}
+	if err := q.DeleteResourceNeedsByAgentTypeExcept(ctx, dbq.DeleteResourceNeedsByAgentTypeExceptParams{
+		AgentID: pgAgentID, Type: "connection", Slugs: connSlugs,
+	}); err != nil {
+		h.logger.Error("delete stale connection needs failed", zap.Error(err))
+		writeJSONError(w, http.StatusInternalServerError, "failed to sync connections")
+		return
+	}
+
+	// Exec endpoints: declared in the sync batch as needs.
+	execSlugs := make([]string, len(req.ExecEndpoints))
+	for i, e := range req.ExecEndpoints {
+		access := string(e.Access)
+		if access == "" {
+			access = string(agentsdk.AccessAdmin)
+		}
+		if err := q.UpsertExecEndpointDeclaration(ctx, dbq.UpsertExecEndpointDeclarationParams{
+			AgentID: pgAgentID, Slug: e.Slug, Description: e.Description, LlmHint: e.LLMHint, Access: access,
+		}); err != nil {
+			h.logger.Error("upsert exec endpoint failed", zap.Error(err))
+			writeJSONError(w, http.StatusInternalServerError, "failed to sync exec endpoints")
+			return
+		}
+		ep, err := q.GetExecEndpointBySlug(ctx, dbq.GetExecEndpointBySlugParams{AgentID: pgAgentID, Slug: e.Slug})
+		if err != nil {
+			h.logger.Error("get exec endpoint after upsert failed", zap.Error(err))
+			writeJSONError(w, http.StatusInternalServerError, "failed to sync exec endpoints")
+			return
+		}
+		execSpec, _ := json.Marshal(map[string]any{"llm_hint": e.LLMHint, "access": access})
+		if err := q.UpsertResourceNeed(ctx, dbq.UpsertResourceNeedParams{
+			AgentID: pgAgentID, Type: "exec_endpoint", Slug: e.Slug, Description: e.Description,
+			SetupInstructions: "", ExpectedUrl: "", ExpectedScopes: "", Spec: execSpec,
+		}); err != nil {
+			h.logger.Error("record exec need failed", zap.Error(err))
+			writeJSONError(w, http.StatusInternalServerError, "failed to sync exec endpoints")
+			return
+		}
+		if err := q.BindExecEndpointNeed(ctx, dbq.BindExecEndpointNeedParams{AgentID: pgAgentID, Slug: e.Slug, ResourceID: ep.ID}); err != nil {
+			h.logger.Error("bind exec need failed", zap.Error(err))
+			writeJSONError(w, http.StatusInternalServerError, "failed to sync exec endpoints")
+			return
+		}
+		execSlugs[i] = e.Slug
+	}
+	if err := q.DeleteResourceNeedsByAgentTypeExcept(ctx, dbq.DeleteResourceNeedsByAgentTypeExceptParams{
+		AgentID: pgAgentID, Type: "exec_endpoint", Slugs: execSlugs,
+	}); err != nil {
+		h.logger.Error("delete stale exec needs failed", zap.Error(err))
+		writeJSONError(w, http.StatusInternalServerError, "failed to sync exec endpoints")
 		return
 	}
 
