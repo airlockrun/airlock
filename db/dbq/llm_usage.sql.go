@@ -13,7 +13,7 @@ import (
 
 const insertLLMUsage = `-- name: InsertLLMUsage :exec
 INSERT INTO llm_usage (
-    agent_id, run_id, build_id, user_id, conversation_id,
+    agent_id, agent_slug, agent_name, run_id, build_id, user_id, user_email, conversation_id,
     provider_catalog_id, model, capability, call_kind, slug,
     tokens_in, tokens_out, tokens_cached, tokens_reasoning,
     units, unit_kind,
@@ -21,7 +21,12 @@ INSERT INTO llm_usage (
     finish_reason, errored, latency_ms
 )
 VALUES (
-    $1, $2, $3, $4, $5,
+    $1,
+    COALESCE((SELECT slug FROM agents WHERE id = $1), ''),
+    COALESCE((SELECT name FROM agents WHERE id = $1), ''),
+    $2, $3, $4,
+    COALESCE((SELECT email FROM users WHERE id = $4), ''),
+    $5,
     $6, $7, $8, $9, $10,
     $11, $12, $13, $14,
     $15, $16,
@@ -60,6 +65,9 @@ type InsertLLMUsageParams struct {
 // (image/audio/character) are recorded with cost 0 (not priced). Plain
 // INSERT, no rate math here. run_id/user_id/conversation_id are nullable —
 // an unattributed call still records its spend. id/created_at use defaults.
+// agent_slug/agent_name/user_email are snapshotted from the referenced rows at
+// write time (COALESCE to ” when absent) so the ledger row survives — and stays
+// readable — after the agent or user is deleted.
 func (q *Queries) InsertLLMUsage(ctx context.Context, arg InsertLLMUsageParams) error {
 	_, err := q.db.Exec(ctx, insertLLMUsage,
 		arg.AgentID,

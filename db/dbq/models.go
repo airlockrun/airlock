@@ -385,9 +385,12 @@ type Group struct {
 type LlmUsage struct {
 	ID                pgtype.UUID        `json:"id"`
 	AgentID           pgtype.UUID        `json:"agent_id"`
+	AgentSlug         string             `json:"agent_slug"`
+	AgentName         string             `json:"agent_name"`
 	RunID             pgtype.UUID        `json:"run_id"`
 	BuildID           pgtype.UUID        `json:"build_id"`
 	UserID            pgtype.UUID        `json:"user_id"`
+	UserEmail         string             `json:"user_email"`
 	ConversationID    pgtype.UUID        `json:"conversation_id"`
 	ProviderCatalogID string             `json:"provider_catalog_id"`
 	Model             string             `json:"model"`
