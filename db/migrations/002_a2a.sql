@@ -257,12 +257,22 @@ CREATE UNIQUE INDEX idx_conversations_bridge_authed
 -- and a call tied to neither stays unattributed. Every column is written
 -- explicitly on each INSERT — append-only, so NOT NULL without a backfill
 -- DEFAULT is correct (no existing rows). Multi-replica safe: pure INSERT.
+--
+-- This is a durable spend ledger: every FK is ON DELETE SET NULL (including
+-- agent_id), so deleting an agent / user / run / build never erases the spend.
+-- agent_slug, agent_name and user_email are denormalized snapshots captured at
+-- write time, so a row stays human-readable for billing/audit long after the
+-- agent or user it references is gone (and after run/build cascade to NULL,
+-- call_kind still says whether it was a run or a build/upgrade).
 CREATE TABLE llm_usage (
     id                   uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    agent_id             uuid NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    agent_id             uuid REFERENCES agents(id) ON DELETE SET NULL,
+    agent_slug           text NOT NULL,
+    agent_name           text NOT NULL,
     run_id               uuid REFERENCES runs(id) ON DELETE SET NULL,
     build_id             uuid REFERENCES agent_builds(id) ON DELETE SET NULL,
     user_id              uuid REFERENCES users(id) ON DELETE SET NULL,
+    user_email           text NOT NULL,
     conversation_id      uuid REFERENCES agent_conversations(id) ON DELETE SET NULL,
     provider_catalog_id  text NOT NULL,
     model                text NOT NULL,
