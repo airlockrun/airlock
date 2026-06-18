@@ -205,11 +205,11 @@ onMounted(async () => {
         <Message severity="info" :closable="false" style="font-size: 0.8rem">
           Create an empty repo on your git provider, paste its HTTPS clone URL below, and pick a credential. Airlock will push the agent's current state to it and use that repo as the source of truth.
         </Message>
-        <FloatLabel>
+        <FloatLabel variant="on">
           <InputText id="remote-url" v-model="remoteUrl" style="width: 100%" placeholder="https://github.com/your-org/your-agent.git" autocomplete="off" />
           <label for="remote-url">Remote URL</label>
         </FloatLabel>
-        <FloatLabel>
+        <FloatLabel variant="on">
           <Select
             id="cred-select"
             v-model="credentialId"
@@ -220,7 +220,7 @@ onMounted(async () => {
           />
           <label for="cred-select">Credential</label>
         </FloatLabel>
-        <FloatLabel>
+        <FloatLabel variant="on">
           <InputText id="branch" v-model="branch" style="width: 100%" />
           <label for="branch">Default branch</label>
         </FloatLabel>

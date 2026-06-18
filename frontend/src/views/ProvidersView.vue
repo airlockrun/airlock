@@ -253,68 +253,65 @@ function confirmDelete(provider: { id: string; displayName: string }) {
           <a href="#" style="margin-left: 0.5rem" @click.prevent="dialogCapabilityFilter = null">Show all</a>
         </Message>
         <div style="display: flex; flex-direction: column; gap: 0.25rem">
-          <label for="providerId">Provider</label>
-          <Select
-            v-if="!editingId"
-            id="providerId"
-            v-model="form.providerId"
-            :options="dialogCandidates"
-            optionLabel="name"
-            optionValue="id"
-            :placeholder="dialogCandidates.length ? 'Select a provider' : 'No matching providers available'"
-            :disabled="dialogCandidates.length === 0"
-            filter
-            autoFilterFocus
-            style="width: 100%"
-            @update:modelValue="onProviderSelect"
-          />
-          <InputText v-else id="providerId" v-model="form.providerId" disabled autocomplete="off" />
+          <FloatLabel variant="on">
+            <Select
+              v-if="!editingId"
+              id="providerId"
+              v-model="form.providerId"
+              :options="dialogCandidates"
+              optionLabel="name"
+              optionValue="id"
+              :disabled="dialogCandidates.length === 0"
+              filter
+              autoFilterFocus
+              resetFilterOnHide
+              style="width: 100%"
+              @update:modelValue="onProviderSelect"
+            />
+            <InputText v-else id="providerId" v-model="form.providerId" disabled autocomplete="off" style="width: 100%" />
+            <label for="providerId">Provider</label>
+          </FloatLabel>
         </div>
         <div style="display: flex; flex-direction: column; gap: 0.25rem">
-          <label for="displayName">Display Name</label>
-          <InputText
-            id="displayName"
-            v-model="form.displayName"
-            autocomplete="off"
-            placeholder="e.g. OpenAI Personal"
-            @input="onDisplayNameInput"
-          />
+          <FloatLabel variant="on">
+            <InputText id="displayName" v-model="form.displayName" autocomplete="off" style="width: 100%" @input="onDisplayNameInput" />
+            <label for="displayName">Display Name</label>
+          </FloatLabel>
         </div>
         <div style="display: flex; flex-direction: column; gap: 0.25rem">
-          <label for="slug">Slug</label>
-          <InputText
-            id="slug"
-            v-model="form.slug"
-            autocomplete="off"
-            placeholder="e.g. personal"
-            @input="onSlugInput"
-          />
+          <FloatLabel variant="on">
+            <InputText id="slug" v-model="form.slug" autocomplete="off" style="width: 100%" @input="onSlugInput" />
+            <label for="slug">Slug</label>
+          </FloatLabel>
           <small style="color: var(--p-text-muted-color)">
             Disambiguates rows for the same provider (e.g. <code>openai/personal</code> vs <code>openai/team-acme</code>).
           </small>
         </div>
         <div style="display: flex; flex-direction: column; gap: 0.25rem">
-          <label for="baseUrl">Base URL (optional)</label>
-          <InputText id="baseUrl" v-model="form.baseUrl" autocomplete="off" placeholder="Leave blank for provider default" />
+          <FloatLabel variant="on">
+            <InputText id="baseUrl" v-model="form.baseUrl" autocomplete="off" style="width: 100%" />
+            <label for="baseUrl">Base URL (optional)</label>
+          </FloatLabel>
+          <small style="color: var(--p-text-muted-color)">Leave blank for the provider default.</small>
         </div>
         <div style="display: flex; flex-direction: column; gap: 0.25rem">
-          <label for="apiKey">API Key{{ editingId ? ' (leave blank to keep current)' : '' }}</label>
-          <!-- type="text" + -webkit-text-security keeps the visual masking
-               but avoids the password manager entirely — Chrome fixates on
-               type="password" and ignores autocomplete tokens. Hidden by
-               CSS in Chromium/Safari; Firefox shows plain text but never
-               offers to save. -->
-          <InputText
-            id="apiKey"
-            v-model="form.apiKey"
-            type="text"
-            autocomplete="off"
-            name="provider-api-key"
-            data-1p-ignore="true"
-            data-lpignore="true"
-            data-bwignore="true"
-            style="-webkit-text-security: disc;"
-          />
+          <!-- type="text" + -webkit-text-security keeps the visual masking but
+               avoids the password manager entirely — Chrome fixates on
+               type="password" and ignores autocomplete tokens. -->
+          <FloatLabel variant="on">
+            <InputText
+              id="apiKey"
+              v-model="form.apiKey"
+              type="text"
+              autocomplete="off"
+              name="provider-api-key"
+              data-1p-ignore="true"
+              data-lpignore="true"
+              data-bwignore="true"
+              style="width: 100%; -webkit-text-security: disc;"
+            />
+            <label for="apiKey">API Key{{ editingId ? ' (leave blank to keep current)' : '' }}</label>
+          </FloatLabel>
         </div>
       </form>
       <template #footer>

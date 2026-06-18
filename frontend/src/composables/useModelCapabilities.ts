@@ -98,22 +98,30 @@ export function useModelCapabilities(opts: ModelCapabilitiesOptions = {}) {
     }))
   }
 
-  // Search is provider-scoped — the stored value is a row UUID, not a
-  // model. Only configured rows of providers that declare the capability
-  // appear, with the picker label disambiguating slug-by-slug.
-  const searchProviderOptions: ComputedRef<FlatOption[]> = computed(() => {
+  // Search is provider-scoped, but the backend can also run a specific model
+  // (threaded into the websearch client). Per configured search-capable
+  // provider row we offer a "Provider default" entry (packs an empty model →
+  // the backend's default search model) plus that provider's language models
+  // (allowed-filtered when restrictToAllowed). The packed value is
+  // (row UUID, model id | '').
+  const searchModelOptions: ComputedRef<GroupedOption[]> = computed(() => {
     const searchCapable = new Set<string>()
     for (const p of catalog.capabilities) {
       if (p.capabilities.includes('search')) searchCapable.add(p.providerId)
     }
-    return providers.providers
-      .filter(row => searchCapable.has(row.providerId))
-      .map(row => ({
-        label: `${row.providerId}/${row.slug}`,
-        value: packModelValue(row.id, ''),
-      }))
-      .sort((a, b) => a.label.localeCompare(b.label))
+    const groups: GroupedOption[] = []
+    for (const row of providers.providers) {
+      if (!searchCapable.has(row.providerId)) continue
+      const items: FlatOption[] = [{ label: 'Provider default', value: packModelValue(row.id, '') }]
+      for (const m of catalog.models) {
+        if (m.providerId !== row.providerId || !isLanguage(m)) continue
+        if (opts.restrictToAllowed && !allowed.isAllowed(row.id, m.id)) continue
+        items.push({ label: m.name || m.id, value: packModelValue(row.id, m.id) })
+      }
+      groups.push({ label: `${row.providerId}/${row.slug}`, items })
+    }
+    return groups.sort((a, b) => a.label.localeCompare(b.label))
   })
 
-  return { groupModels, searchProviderOptions }
+  return { groupModels, searchModelOptions }
 }

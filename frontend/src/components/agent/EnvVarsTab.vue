@@ -195,11 +195,11 @@ onMounted(load)
           This value is treated as a secret. It will be redacted from LLM input, and you won't be able to read it back from this UI — only rotate.
         </div>
 
-        <FloatLabel v-if="selected.isSecret">
+        <FloatLabel variant="on" v-if="selected.isSecret">
           <Password id="env-value" v-model="formValue" :feedback="false" toggle-mask style="width: 100%" :input-style="{ width: '100%' }" />
           <label for="env-value">Value</label>
         </FloatLabel>
-        <FloatLabel v-else>
+        <FloatLabel variant="on" v-else>
           <InputText id="env-value" v-model="formValue" :pattern="selected.pattern" style="width: 100%" />
           <label for="env-value">Value</label>
         </FloatLabel>

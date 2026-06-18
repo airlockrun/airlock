@@ -92,16 +92,16 @@ async function onSubmit() {
         <Divider align="center"><span style="color: var(--p-text-muted-color); font-size: 0.8rem">or set a password</span></Divider>
 
         <form @submit.prevent="onSubmit" style="display: flex; flex-direction: column; gap: 1.25rem">
-          <FloatLabel>
+          <FloatLabel variant="on">
             <Password id="current" v-model="currentPassword" :feedback="false" toggle-mask :input-props="{ autocomplete: 'current-password' }" style="width: 100%" :input-style="{ width: '100%' }" />
             <label for="current">Current Password</label>
           </FloatLabel>
-          <FloatLabel>
+          <FloatLabel variant="on">
             <Password id="new-pass" v-model="newPassword" :feedback="false" toggle-mask :input-props="{ autocomplete: 'new-password' }" style="width: 100%" :input-style="{ width: '100%' }" />
             <label for="new-pass">New Password</label>
           </FloatLabel>
           <PasswordStrengthMeter :password="newPassword" :user-inputs="[auth.user?.email ?? '']" />
-          <FloatLabel>
+          <FloatLabel variant="on">
             <Password id="confirm-pass" v-model="confirmPassword" :feedback="false" toggle-mask :input-props="{ autocomplete: 'new-password' }" style="width: 100%" :input-style="{ width: '100%' }" />
             <label for="confirm-pass">Confirm New Password</label>
           </FloatLabel>

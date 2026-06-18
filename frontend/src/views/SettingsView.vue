@@ -36,7 +36,7 @@ const catalog = useCatalogStore()
 const providers = useProvidersStore()
 const toast = useToast()
 const { isDark, toggle: toggleTheme } = useTheme()
-const { groupModels, searchProviderOptions } = useModelCapabilities()
+const { groupModels, searchModelOptions } = useModelCapabilities()
 
 const currentPassword = ref('')
 const newPassword = ref('')
@@ -263,9 +263,9 @@ const defaultRows = computed<DefaultRow[]>(() => [
     key: 'defaultSearchModel',
     label: 'Web Search',
     icon: 'pi pi-search',
-    help: 'Default search provider. Stored as a provider ID — search is a provider-level tool.',
-    options: searchProviderOptions.value,
-    placeholder: 'Select search provider',
+    help: 'Default web search backend + model. Pick "Provider default" to let the backend choose its model.',
+    options: searchModelOptions.value,
+    placeholder: 'Select search backend',
   },
 ])
 
@@ -577,15 +577,15 @@ async function changePassword() {
       <template #title>Change Password</template>
       <template #content>
         <form @submit.prevent="changePassword" style="display: flex; flex-direction: column; gap: 1.25rem">
-          <FloatLabel>
+          <FloatLabel variant="on">
             <Password id="set-current" v-model="currentPassword" :feedback="false" toggle-mask :input-props="{ autocomplete: 'current-password' }" style="width: 100%" :input-style="{ width: '100%' }" />
             <label for="set-current">Current Password</label>
           </FloatLabel>
-          <FloatLabel>
+          <FloatLabel variant="on">
             <Password id="set-new" v-model="newPassword" toggle-mask :input-props="{ autocomplete: 'new-password' }" style="width: 100%" :input-style="{ width: '100%' }" />
             <label for="set-new">New Password</label>
           </FloatLabel>
-          <FloatLabel>
+          <FloatLabel variant="on">
             <Password id="set-confirm" v-model="confirmPassword" :feedback="false" toggle-mask :input-props="{ autocomplete: 'new-password' }" style="width: 100%" :input-style="{ width: '100%' }" />
             <label for="set-confirm">Confirm New Password</label>
           </FloatLabel>

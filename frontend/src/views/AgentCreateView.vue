@@ -35,7 +35,7 @@ const providers = useProvidersStore()
 const modelsAllowed = useModelsAllowedStore()
 const gitCredsStore = useGitCredentialsStore()
 const toast = useToast()
-const { groupModels, searchProviderOptions } = useModelCapabilities({ restrictToAllowed: true })
+const { groupModels, searchModelOptions } = useModelCapabilities({ restrictToAllowed: true })
 
 const name = ref('')
 const slug = ref('')
@@ -182,9 +182,9 @@ const advancedRows = computed<OverrideRow[]>(() => [
     key: 'searchModel',
     label: 'Web Search',
     icon: 'pi pi-search',
-    help: 'Search provider (provider ID, not a model).',
-    options: searchProviderOptions.value,
-    grouped: false,
+    help: 'Web search backend + model. Pick "Provider default" to let the backend choose its model.',
+    options: searchModelOptions.value,
+    grouped: true,
   },
 ])
 
@@ -368,13 +368,13 @@ onUnmounted(() => {
     <h1 style="font-size: 1.5rem; margin-bottom: 1.5rem">Create Agent</h1>
 
     <form @submit.prevent="onSubmit" style="display: flex; flex-direction: column; gap: 1.25rem">
-      <FloatLabel>
+      <FloatLabel variant="on">
         <InputText id="agent-name" v-model="name" style="width: 100%" :disabled="building" />
         <label for="agent-name">Agent Name</label>
       </FloatLabel>
 
       <div>
-        <FloatLabel>
+        <FloatLabel variant="on">
           <InputText id="agent-slug" v-model="slug" style="width: 100%" :disabled="building" @input="onSlugInput" />
           <label for="agent-slug">Slug</label>
         </FloatLabel>
