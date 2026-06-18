@@ -35,6 +35,7 @@ import (
 	runssvc "github.com/airlockrun/airlock/service/runs"
 	settingssvc "github.com/airlockrun/airlock/service/settings"
 	siblingssvc "github.com/airlockrun/airlock/service/siblings"
+	usagesvc "github.com/airlockrun/airlock/service/usage"
 	userssvc "github.com/airlockrun/airlock/service/users"
 	"github.com/airlockrun/airlock/storage"
 	"github.com/airlockrun/airlock/sysagent"
@@ -162,6 +163,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	grantsHandler := NewGrantsHandler(grantssvc.New(cfg.DB, cfg.Logger.Named("grants")))
 	needsHandler := NewNeedsHandler(needssvc.NewService(cfg.DB, cfg.Logger.Named("needs")))
 	resourcesHandler := NewResourcesHandler(resourcessvc.New(cfg.DB, cfg.Logger.Named("resources")))
+	usageHandler := NewUsageHandler(usagesvc.New(cfg.DB, cfg.Logger.Named("usage")))
 	settingsSvc := settingssvc.New(cfg.DB, cfg.Logger.Named("settings"))
 	// Manager bot wiring is deferred until inside the auth group where
 	// the bridges service / managedbots service are constructed. The
@@ -356,6 +358,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		// manage/view capability on the resource (in the service), so no tenant
 		// middleware here.
 		r.Get("/resources", resourcesHandler.List)
+		r.Get("/usage", usageHandler.Get)
 		r.Post("/resources/{type}/{id}/revoke", resourcesHandler.Revoke)
 		r.Delete("/resources/{type}/{id}", resourcesHandler.Delete)
 		r.Get("/resources/{type}/{id}/grants", grantsHandler.ListResourceGrants)
