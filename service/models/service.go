@@ -35,8 +35,8 @@ func New(d *db.DB, logger *zap.Logger) *Service {
 // Pair is a (provider FK, bare model name) tuple. An empty ProviderID
 // means "inherit the system default for this capability"; an empty
 // Model has the same meaning. Both halves must be set together or both
-// unset — except `search`, where Model is always empty (the runtime
-// picks the search backend from the provider's overlay capability).
+// unset — except `search`, where a provider may stand alone (empty Model =
+// the search backend's default model; a set Model overrides it).
 type Pair struct {
 	ProviderID string // empty or a parseable UUID string
 	Model      string
@@ -92,12 +92,13 @@ func (s *Service) Get(ctx context.Context, p authz.Principal, agentID uuid.UUID)
 	return State{Agent: agent, Slots: slots}, nil
 }
 
-// parsePair validates a Pair and returns the parsed FK. For the `search`
-// slot Model is always empty by design — only the FK matters; other
-// slots must move both halves together.
+// parsePair validates a Pair and returns the parsed FK. A model without a
+// provider is always invalid. For the `search` slot a provider may stand
+// alone (empty model = the backend default); other slots must move both
+// halves together.
 func parsePair(name string, p Pair) (pgtype.UUID, error) {
 	if p.ProviderID == "" {
-		if p.Model != "" && name != "search" {
+		if p.Model != "" {
 			return pgtype.UUID{}, service.Detail(service.ErrInvalidInput,
 				"%s_model and %s_provider_id must be set or unset together", name, name)
 		}
