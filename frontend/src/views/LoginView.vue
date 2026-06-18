@@ -96,18 +96,18 @@ async function onSubmit() {
         </button>
 
         <form v-if="showPassword" @submit.prevent="onSubmit" style="display: flex; flex-direction: column; gap: 1.25rem">
-          <FloatLabel>
+          <FloatLabel variant="on">
             <InputText id="email" v-model="email" type="email" autocomplete="username webauthn" style="width: 100%" />
             <label for="email">Email</label>
           </FloatLabel>
-          <FloatLabel>
+          <FloatLabel variant="on">
             <Password id="password" v-model="password" :feedback="false" toggle-mask :input-props="{ autocomplete: 'current-password' }" style="width: 100%" :input-style="{ width: '100%' }" />
             <label for="password">Password</label>
           </FloatLabel>
           <Button type="submit" label="Sign In" :loading="loading" severity="secondary" style="width: 100%" />
         </form>
         <!-- Email field is also useful for email-first passkey login. -->
-        <FloatLabel v-else>
+        <FloatLabel variant="on" v-else>
           <InputText id="email-passkey" v-model="email" type="email" autocomplete="username webauthn" style="width: 100%" />
           <label for="email-passkey">Email (optional)</label>
         </FloatLabel>

@@ -29,7 +29,7 @@ const catalog = useCatalogStore()
 const providers = useProvidersStore()
 const modelsAllowed = useModelsAllowedStore()
 const toast = useToast()
-const { groupModels, searchProviderOptions } = useModelCapabilities({ restrictToAllowed: true })
+const { groupModels, searchModelOptions } = useModelCapabilities({ restrictToAllowed: true })
 
 const loading = ref(true)
 const saving = ref(false)
@@ -161,9 +161,9 @@ const overrideRows = computed<ConfigRow[]>(() => [
     key: 'searchModel',
     label: 'Web Search',
     icon: 'pi pi-search',
-    help: 'Search provider override (provider ID, not a model).',
-    options: searchProviderOptions.value,
-    grouped: false,
+    help: 'Web search backend + model. Pick "Provider default" to let the backend choose its model.',
+    options: searchModelOptions.value,
+    grouped: true,
   },
 ])
 

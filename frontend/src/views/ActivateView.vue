@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { ref, computed, onMounted, nextTick, watch } from 'vue'
+import { useRouter, useRoute } from 'vue-router'
 import { fromJson, toJson } from '@bufbuild/protobuf'
 import { useAuthStore } from '@/stores/auth'
 import { useCatalogStore } from '@/stores/catalog'
@@ -21,6 +21,7 @@ import {
 import { useToast } from 'primevue/usetoast'
 import api from '@/api/client'
 import { registerPasskey } from '@/api/passkeys'
+import { usePasskeysStore } from '@/stores/passkeys'
 import { scorePassword } from '@/composables/usePasswordStrength'
 import PasswordStrengthMeter from '@/components/PasswordStrengthMeter.vue'
 import {
@@ -30,14 +31,35 @@ import {
 import type { SystemSettingsInfo } from '@/gen/airlock/v1/types_pb'
 
 const router = useRouter()
+const route = useRoute()
 const auth = useAuthStore()
+const passkeys = usePasskeysStore()
 const catalog = useCatalogStore()
 const providersStore = useProvidersStore()
 const modelGrants = useModelGrantsStore()
 const toast = useToast()
-const { groupModels, searchProviderOptions } = useModelCapabilities()
+const { groupModels, searchModelOptions } = useModelCapabilities()
 
 const activeStep = ref(0)
+const stepperEl = ref<HTMLElement | null>(null)
+
+// Keep the active step visible when the header is wider than the card (narrow
+// screens): scroll it to center within the scrollbar-hidden step list. Indexing
+// .p-step by the step value avoids depending on PrimeVue's active-class name.
+watch(activeStep, async (step) => {
+  // Reflect the step in the URL so a mid-wizard refresh resumes where the
+  // operator left off (the account already exists + the session is live).
+  router.replace({ query: { ...route.query, step: step ? String(step) : undefined } })
+  await nextTick()
+  const root = stepperEl.value
+  if (!root) return
+  const list = root.querySelector<HTMLElement>('.p-steplist')
+  const steps = root.querySelectorAll<HTMLElement>('.p-step')
+  const active = steps[step]
+  if (!list || !active) return
+  const target = active.offsetLeft - (list.clientWidth - active.clientWidth) / 2
+  list.scrollTo({ left: Math.max(0, target), behavior: 'smooth' })
+})
 const alreadyActivated = ref(false)
 const activationCodeRequired = ref(false)
 const loading = ref(false)
@@ -45,12 +67,43 @@ const error = ref('')
 
 onMounted(async () => {
   catalog.fetchCatalogProviders()
+  // Resume a step from the URL (a refresh mid-wizard).
+  const wanted = Number(route.query.step)
+  const resumeStep = Number.isInteger(wanted) && wanted >= 1 && wanted <= 3 ? wanted : 0
   try {
     const { data } = await api.get('/auth/status')
-    if (data.activated) alreadyActivated.value = true
     if (data.activation_code_required) activationCodeRequired.value = true
+    if (data.activated) {
+      // Already activated. A mid-wizard refresh (an authenticated admin landing
+      // with a ?step) resumes the post-account setup; a bare visit or a
+      // non-admin is genuinely done and gets the "already activated" notice.
+      if (resumeStep >= 1 && auth.isAuthenticated && auth.isAdmin) {
+        accountCreated.value = true
+        credentialSet.value = true
+        await resumeSetup(resumeStep)
+      } else {
+        alreadyActivated.value = true
+      }
+    }
   } catch { /* show the form anyway */ }
 })
+
+// resumeSetup loads the data the post-account steps need (normally fetched as
+// the operator advances) and jumps to the requested step after a refresh.
+async function resumeSetup(step: number) {
+  await catalog.fetchCapabilities()
+  if (step >= 2) {
+    await Promise.all([
+      catalog.fetchConfiguredModels(),
+      providersStore.fetchProviders(),
+      loadExistingDefaults(),
+    ])
+  }
+  if (step >= 3) {
+    await modelGrants.fetchGrants().catch(() => {})
+  }
+  activeStep.value = step
+}
 
 // --- Step 1: Admin account
 const activationCode = ref('')
@@ -58,11 +111,16 @@ const email = ref('')
 const password = ref('')
 const confirmPassword = ref('')
 const displayName = ref('')
-// Passkey is the default; the admin can opt into also setting a password.
-const wantPassword = ref(false)
+// Passkey is the default (checkbox ticked); unticking opts into a password
+// instead. usePasskey === false is the "password" mode used throughout.
+const usePasskey = ref(true)
 // Tracks that the account+tenant already exist so a retry (e.g. after a
 // cancelled passkey prompt) doesn't re-run activation and 409.
 const accountCreated = ref(false)
+// Tracks that the account has a usable credential (password or enrolled
+// passkey). Gates advancing past step 1: a cancelled passkey ceremony on a
+// fresh passkey-only account must not move on with no way to sign back in.
+const credentialSet = ref(false)
 
 function isCeremonyAbort(err: any): boolean {
   const name = err?.name
@@ -79,7 +137,7 @@ async function nextStep() {
     error.value = 'Email is required.'
     return
   }
-  if (wantPassword.value) {
+  if (!usePasskey.value) {
     if (!password.value || !confirmPassword.value) {
       error.value = 'Enter and confirm a password.'
       return
@@ -97,14 +155,25 @@ async function nextStep() {
   loading.value = true
   try {
     if (!accountCreated.value) {
-      await auth.activate(email.value, wantPassword.value ? password.value : '', displayName.value || email.value, activationCode.value)
+      // Creates the account AND authenticates the session; a passkey-only
+      // account is created with an empty password.
+      await auth.activate(email.value, usePasskey.value ? '' : password.value, displayName.value || email.value, activationCode.value)
       accountCreated.value = true
+      credentialSet.value = !usePasskey.value
+    } else if (!usePasskey.value && !credentialSet.value) {
+      // Account already exists (e.g. passkey-only after a cancelled ceremony)
+      // and the session is authenticated, so set the password via the
+      // self-service endpoint — activate is a one-time create and won't re-run.
+      await passkeys.setPassword(password.value)
+      credentialSet.value = true
     }
-    // Passkey-only admins must enroll a passkey now (the account has no other
-    // credential). With a password set, a passkey is optional and can be added
-    // later under Security.
-    if (!wantPassword.value) {
+    // A passkey-only admin must enroll a passkey now — it's the account's only
+    // credential. With a password set, a passkey is optional (add later under
+    // Security). Gate on credentialSet so a cancelled ceremony can't advance
+    // with no usable credential.
+    if (!credentialSet.value) {
       await registerPasskey('Passkey')
+      credentialSet.value = true
     }
     catalog.fetchCapabilities()
     activeStep.value = 1
@@ -112,7 +181,7 @@ async function nextStep() {
     if (err.response?.status === 409) {
       alreadyActivated.value = true
     } else if (isCeremonyAbort(err)) {
-      error.value = 'Passkey setup was cancelled. Try again, or tick "Also set a password" to use a password instead.'
+      error.value = 'Passkey setup was cancelled. Try again, or uncheck "Use a passkey" to set a password instead.'
     } else {
       error.value = err.response?.data?.error || 'Activation failed.'
     }
@@ -322,7 +391,7 @@ const defaultRows = computed<DefaultRow[]>(() => [
   { key: 'defaultTtsModel',       label: 'TTS',              icon: 'pi pi-volume-up',  help: 'Text-to-speech.',                     options: groupModels(isSpeech),                                              grouped: true },
   { key: 'defaultImageGenModel',  label: 'Image Gen',        icon: 'pi pi-palette',    help: 'Text-to-image generation.',           options: groupModels(isImageGen),                                            grouped: true },
   { key: 'defaultEmbeddingModel', label: 'Embedding',        icon: 'pi pi-database',   help: 'Text → vector embeddings.',           options: groupModels(isEmbedding),                                           grouped: true },
-  { key: 'defaultSearchModel',    label: 'Web Search',       icon: 'pi pi-search',     help: 'Search provider (provider ID).',      options: searchProviderOptions.value,                                        grouped: false },
+  { key: 'defaultSearchModel',    label: 'Web Search',       icon: 'pi pi-search',     help: 'Web search backend + model.',          options: searchModelOptions.value,                                        grouped: true },
 ])
 
 // Don't bother showing a capability row the tenant can't satisfy with any
@@ -444,6 +513,7 @@ function finishActivation() {
       <div style="text-align: center; font-size: 1.5rem">Airlock Setup</div>
     </template>
     <template #content>
+      <div ref="stepperEl">
       <Stepper v-model:value="activeStep" linear>
         <StepList>
           <Step :value="0">Account</Step>
@@ -456,37 +526,37 @@ function finishActivation() {
           <StepPanel :value="0">
             <form @submit.prevent="nextStep" style="display: flex; flex-direction: column; gap: 1.25rem; padding-top: 1rem">
               <Message v-if="error" severity="error" :closable="false">{{ error }}</Message>
-              <FloatLabel v-if="activationCodeRequired">
+              <FloatLabel variant="on" v-if="activationCodeRequired">
                 <InputText id="act-code" v-model="activationCode" autocomplete="one-time-code" style="width: 100%" />
                 <label for="act-code">Activation Code</label>
               </FloatLabel>
-              <FloatLabel>
+              <FloatLabel variant="on">
                 <InputText id="act-email" v-model="email" type="email" autocomplete="username" style="width: 100%" />
                 <label for="act-email">Email</label>
               </FloatLabel>
-              <FloatLabel>
+              <FloatLabel variant="on">
                 <InputText id="act-name" v-model="displayName" autocomplete="name" style="width: 100%" />
                 <label for="act-name">Display Name</label>
               </FloatLabel>
               <div style="display: flex; align-items: center; gap: 0.5rem">
-                <Checkbox v-model="wantPassword" :binary="true" inputId="want-pass" />
-                <label for="want-pass" style="font-size: 0.9rem; color: var(--p-text-muted-color)">
-                  Also set a password (a passkey is added by default)
+                <Checkbox v-model="usePasskey" :binary="true" inputId="use-passkey" />
+                <label for="use-passkey" style="font-size: 0.9rem; color: var(--p-text-muted-color)">
+                  Use a passkey (uncheck to set a password instead)
                 </label>
               </div>
-              <template v-if="wantPassword">
-                <FloatLabel>
+              <template v-if="!usePasskey">
+                <FloatLabel variant="on">
                   <Password id="act-pass" v-model="password" :feedback="false" toggle-mask :input-props="{ autocomplete: 'new-password' }" style="width: 100%" :input-style="{ width: '100%' }" />
                   <label for="act-pass">Password</label>
                 </FloatLabel>
                 <PasswordStrengthMeter :password="password" :user-inputs="[email]" />
-                <FloatLabel>
+                <FloatLabel variant="on">
                   <Password id="act-confirm" v-model="confirmPassword" :feedback="false" toggle-mask :input-props="{ autocomplete: 'new-password' }" style="width: 100%" :input-style="{ width: '100%' }" />
                   <label for="act-confirm">Confirm Password</label>
                 </FloatLabel>
               </template>
               <div style="display: flex; justify-content: flex-end">
-                <Button type="submit" :label="wantPassword ? 'Next' : 'Create & add passkey'" :icon="wantPassword ? 'pi pi-arrow-right' : 'pi pi-key'" icon-pos="right" :loading="loading" />
+                <Button type="submit" :label="usePasskey ? 'Create account & passkey' : 'Create account'" :icon="usePasskey ? 'pi pi-key' : 'pi pi-check'" icon-pos="right" :loading="loading" />
               </div>
             </form>
           </StepPanel>
@@ -524,21 +594,23 @@ function finishActivation() {
                    save "Display Name + API Key" as a credential pair. -->
               <form @submit.prevent="addProvider" autocomplete="off" style="display: flex; flex-direction: column; gap: 1rem">
                 <div style="display: flex; flex-direction: column; gap: 0.25rem">
-                  <label for="prov-id">Provider</label>
-                  <Select
-                    id="prov-id"
-                    v-model="providerID"
-                    :options="providerCandidates"
-                    optionLabel="name"
-                    optionValue="id"
-                    :placeholder="providerCandidates.length ? 'Select a provider' : 'All providers already configured'"
-                    :disabled="providerCandidates.length === 0"
-                    filter
-                    autoFilterFocus
-                    showClear
-                    style="width: 100%"
-                    @update:modelValue="onProviderSelect"
-                  />
+                  <FloatLabel variant="on">
+                    <Select
+                      id="prov-id"
+                      v-model="providerID"
+                      :options="providerCandidates"
+                      optionLabel="name"
+                      optionValue="id"
+                      :disabled="providerCandidates.length === 0"
+                      filter
+                      autoFilterFocus
+                      showClear
+                      resetFilterOnHide
+                      style="width: 100%"
+                      @update:modelValue="onProviderSelect"
+                    />
+                    <label for="prov-id">Provider</label>
+                  </FloatLabel>
                   <!-- Preview what this provider will cover -->
                   <div v-if="selectedProviderCaps.length" class="cap-preview">
                     Provides:
@@ -552,52 +624,45 @@ function finishActivation() {
                   </div>
                 </div>
                 <div style="display: flex; flex-direction: column; gap: 0.25rem">
-                  <label for="prov-name">Display Name</label>
-                  <InputText
-                    id="prov-name"
-                    v-model="providerName"
-                    autocomplete="off"
-                    style="width: 100%"
-                    @input="onProviderNameInput"
-                  />
+                  <FloatLabel variant="on">
+                    <InputText id="prov-name" v-model="providerName" autocomplete="off" style="width: 100%" @input="onProviderNameInput" />
+                    <label for="prov-name">Display Name</label>
+                  </FloatLabel>
                 </div>
                 <div style="display: flex; flex-direction: column; gap: 0.25rem">
-                  <label for="prov-slug">Slug</label>
-                  <InputText
-                    id="prov-slug"
-                    v-model="providerSlug"
-                    autocomplete="off"
-                    style="width: 100%"
-                    placeholder="e.g. personal"
-                    @input="onSlugInput"
-                  />
+                  <FloatLabel variant="on">
+                    <InputText id="prov-slug" v-model="providerSlug" autocomplete="off" style="width: 100%" @input="onSlugInput" />
+                    <label for="prov-slug">Slug</label>
+                  </FloatLabel>
                   <small style="color: var(--p-text-muted-color)">
                     Disambiguates rows for the same provider (multi-key support).
                   </small>
                 </div>
                 <div style="display: flex; flex-direction: column; gap: 0.25rem">
-                  <label for="prov-url">Base URL (optional)</label>
-                  <InputText id="prov-url" v-model="baseURL" autocomplete="off" style="width: 100%" />
+                  <FloatLabel variant="on">
+                    <InputText id="prov-url" v-model="baseURL" autocomplete="off" style="width: 100%" />
+                    <label for="prov-url">Base URL (optional)</label>
+                  </FloatLabel>
                 </div>
                 <div style="display: flex; flex-direction: column; gap: 0.25rem">
-                  <label for="prov-key">API Key</label>
                   <!-- type="text" + -webkit-text-security keeps the visual
                        masking but avoids the password manager entirely —
                        Chrome's built-in manager fixates on type="password"
-                       and ignores autocomplete tokens. Hidden by CSS in
-                       Chromium/Safari; Firefox shows plain text but never
-                       offers to save. -->
-                  <InputText
-                    id="prov-key"
-                    v-model="apiKey"
-                    type="text"
-                    autocomplete="off"
-                    name="prov-api-key"
-                    data-1p-ignore="true"
-                    data-lpignore="true"
-                    data-bwignore="true"
-                    style="width: 100%; -webkit-text-security: disc;"
-                  />
+                       and ignores autocomplete tokens. -->
+                  <FloatLabel variant="on">
+                    <InputText
+                      id="prov-key"
+                      v-model="apiKey"
+                      type="text"
+                      autocomplete="off"
+                      name="prov-api-key"
+                      data-1p-ignore="true"
+                      data-lpignore="true"
+                      data-bwignore="true"
+                      style="width: 100%; -webkit-text-security: disc;"
+                    />
+                    <label for="prov-key">API Key</label>
+                  </FloatLabel>
                 </div>
                 <div style="display: flex; justify-content: flex-end">
                   <Button
@@ -638,40 +703,40 @@ function finishActivation() {
                 :key="row.key"
                 style="display: flex; flex-direction: column; gap: 0.5rem"
               >
-                <label :for="`def-${row.key}`" style="font-weight: 500; display: flex; align-items: center; gap: 0.5rem">
-                  <i :class="row.icon" />
-                  <span>{{ row.label }}</span>
-                </label>
-                <Select
-                  v-if="row.grouped"
-                  :id="`def-${row.key}`"
-                  v-model="defaults[row.key]"
-                  :options="row.options"
-                  optionLabel="label"
-                  optionValue="value"
-                  optionGroupLabel="label"
-                  optionGroupChildren="items"
-                  filter
-                  autoFilterFocus
-                  showClear
-                  placeholder="No default — leave empty"
-                  :loading="catalog.loading"
-                  style="width: 100%"
-                />
-                <Select
-                  v-else
-                  :id="`def-${row.key}`"
-                  v-model="defaults[row.key]"
-                  :options="row.options"
-                  optionLabel="label"
-                  optionValue="value"
-                  filter
-                  autoFilterFocus
-                  showClear
-                  placeholder="No default — leave empty"
-                  :loading="catalog.loading"
-                  style="width: 100%"
-                />
+                <FloatLabel variant="on">
+                  <Select
+                    v-if="row.grouped"
+                    :id="`def-${row.key}`"
+                    v-model="defaults[row.key]"
+                    :options="row.options"
+                    optionLabel="label"
+                    optionValue="value"
+                    optionGroupLabel="label"
+                    optionGroupChildren="items"
+                    filter
+                    autoFilterFocus
+                    showClear
+                    :loading="catalog.loading"
+                    style="width: 100%"
+                  />
+                  <Select
+                    v-else
+                    :id="`def-${row.key}`"
+                    v-model="defaults[row.key]"
+                    :options="row.options"
+                    optionLabel="label"
+                    optionValue="value"
+                    filter
+                    autoFilterFocus
+                    showClear
+                    :loading="catalog.loading"
+                    style="width: 100%"
+                  />
+                  <label :for="`def-${row.key}`" style="display: flex; align-items: center; gap: 0.4rem">
+                    <i :class="row.icon" />
+                    <span>{{ row.label }}</span>
+                  </label>
+                </FloatLabel>
                 <small style="color: var(--p-text-muted-color)">{{ row.help }}</small>
               </div>
 
@@ -722,6 +787,7 @@ function finishActivation() {
           </StepPanel>
         </StepPanels>
       </Stepper>
+      </div>
     </template>
     <template #footer>
       <div style="text-align: center">
@@ -781,15 +847,17 @@ function finishActivation() {
   font-size: 0.75rem;
   color: var(--p-text-muted-color);
 }
-/* Keep the 4-step header inside the card — let step titles shrink/ellipsize
-   instead of forcing a horizontal scrollbar on the panel. */
+/* The step header may be wider than the card on narrow screens. Let it scroll
+   horizontally but hide the scrollbar — the active step is auto-scrolled into
+   view in script, so the bar is never needed or seen. */
 :deep(.p-steplist) {
   max-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: none; /* Firefox */
+  -ms-overflow-style: none; /* legacy Edge */
 }
-:deep(.p-step-title) {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+:deep(.p-steplist)::-webkit-scrollbar {
+  display: none; /* WebKit */
 }
 .allow-group {
   display: flex;

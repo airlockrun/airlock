@@ -64,7 +64,7 @@ async function test() {
 <template>
   <Dialog v-model:visible="visible" :header="`Configure ${name}`" modal style="width: 28rem">
     <div style="display: flex; flex-direction: column; gap: 1.25rem; padding-top: 0.5rem">
-      <FloatLabel>
+      <FloatLabel variant="on">
         <Password id="cred-key" v-model="apiKey" :feedback="false" toggle-mask style="width: 100%" :input-style="{ width: '100%' }" />
         <label for="cred-key">API Key</label>
       </FloatLabel>

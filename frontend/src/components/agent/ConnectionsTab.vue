@@ -209,11 +209,11 @@ onMounted(async () => {
           re-enter anything. Fill the fields below only to replace the saved
           client ID / secret.
         </Message>
-        <FloatLabel>
+        <FloatLabel variant="on">
           <InputText id="oauth-client-id" v-model="oauthClientId" style="width: 100%" />
           <label for="oauth-client-id">{{ selectedConn?.hasOauthApp ? 'New Client ID (optional)' : 'Client ID' }}</label>
         </FloatLabel>
-        <FloatLabel>
+        <FloatLabel variant="on">
           <Password id="oauth-client-secret" v-model="oauthClientSecret" :feedback="false" toggle-mask style="width: 100%" :input-style="{ width: '100%' }" />
           <label for="oauth-client-secret">{{ selectedConn?.hasOauthApp ? 'New Client Secret (optional)' : 'Client Secret' }}</label>
         </FloatLabel>

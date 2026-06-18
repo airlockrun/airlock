@@ -254,11 +254,11 @@ onMounted(() => {
           Create a fine-scoped PAT on your git provider with permission to read and write the repos you want to attach.
           Airlock encrypts the token at rest and does not store the plaintext.
         </Message>
-        <FloatLabel>
+        <FloatLabel variant="on">
           <InputText id="cred-name" v-model="newName" style="width: 100%" autocomplete="off" />
           <label for="cred-name">Name (e.g. "GitHub Personal")</label>
         </FloatLabel>
-        <FloatLabel>
+        <FloatLabel variant="on">
           <Password id="cred-token" v-model="newToken" :feedback="false" toggle-mask style="width: 100%" :input-style="{ width: '100%' }" />
           <label for="cred-token">Token</label>
         </FloatLabel>

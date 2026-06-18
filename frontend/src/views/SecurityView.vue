@@ -195,12 +195,12 @@ function removePassword() {
       <template #content>
         <form @submit.prevent="savePassword" style="display: flex; flex-direction: column; gap: 1rem; max-width: 24rem">
           <Message v-if="pwError" severity="error" :closable="false">{{ pwError }}</Message>
-          <FloatLabel>
+          <FloatLabel variant="on">
             <Password id="sec-pass" v-model="password" :feedback="false" toggle-mask :input-props="{ autocomplete: 'new-password' }" style="width: 100%" :input-style="{ width: '100%' }" />
             <label for="sec-pass">New password</label>
           </FloatLabel>
           <PasswordStrengthMeter :password="password" :user-inputs="[auth.user?.email ?? '']" />
-          <FloatLabel>
+          <FloatLabel variant="on">
             <Password id="sec-confirm" v-model="confirmPassword" :feedback="false" toggle-mask :input-props="{ autocomplete: 'new-password' }" style="width: 100%" :input-style="{ width: '100%' }" />
             <label for="sec-confirm">Confirm password</label>
           </FloatLabel>
@@ -217,7 +217,7 @@ function removePassword() {
         <p style="margin: 0; color: var(--p-text-muted-color); font-size: 0.875rem">
           Give this passkey a name so you can recognize the device later.
         </p>
-        <FloatLabel>
+        <FloatLabel variant="on">
           <InputText id="pk-name" v-model="newName" style="width: 100%" placeholder="e.g. MacBook Touch ID" />
           <label for="pk-name">Name</label>
         </FloatLabel>
@@ -229,7 +229,7 @@ function removePassword() {
     </Dialog>
 
     <Dialog v-model:visible="renameDialog" header="Rename passkey" modal style="width: 24rem">
-      <FloatLabel>
+      <FloatLabel variant="on">
         <InputText id="pk-rename" v-model="renameName" style="width: 100%" />
         <label for="pk-rename">Name</label>
       </FloatLabel>

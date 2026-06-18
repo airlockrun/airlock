@@ -332,11 +332,11 @@ onMounted(async () => {
           <span style="color: var(--p-text-muted-color)">Redirect URI: </span>
           <code style="user-select: all; word-break: break-all">{{ callbackUrl }}</code>
         </div>
-        <FloatLabel>
+        <FloatLabel variant="on">
           <InputText id="mcp-oauth-client-id" v-model="oauthClientId" style="width: 100%" />
           <label for="mcp-oauth-client-id">Client ID</label>
         </FloatLabel>
-        <FloatLabel>
+        <FloatLabel variant="on">
           <Password id="mcp-oauth-client-secret" v-model="oauthClientSecret" :feedback="false" toggle-mask style="width: 100%" :input-style="{ width: '100%' }" />
           <label for="mcp-oauth-client-secret">Client Secret</label>
         </FloatLabel>
