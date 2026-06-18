@@ -52,6 +52,9 @@ const menuItems = computed(() => {
     items.push({ label: 'Providers', icon: 'pi pi-server', route: '/providers' })
     items.push({ label: 'Models', icon: 'pi pi-sparkles', route: '/models' })
   }
+  if (auth.can('tenant.usage.view')) {
+    items.push({ label: 'Usage', icon: 'pi pi-chart-bar', route: '/usage' })
+  }
   // Bridges is visible to everyone authenticated — plain users see the
   // list read-only; the page's own gates control Add/Edit/Delete.
   items.push({ label: 'Bridges', icon: 'pi pi-link', route: '/bridges' })

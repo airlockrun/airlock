@@ -770,6 +770,43 @@ message ListOwnedResourcesResponse {
   repeated OwnedResourceInfo resources = 1;
 }
 
+// ── LLM spend ledger rollups (admin Usage view) ──
+
+message UsageSummary {
+  int64 calls = 1;
+  int64 tokens_in = 2;
+  int64 tokens_out = 3;
+  int64 tokens_cached = 4;
+  double cost_total = 5;
+}
+
+message UsageByAgent {
+  string agent_slug = 1;
+  string agent_name = 2;
+  bool deleted = 3;  // the agent has since been deleted (snapshot identity)
+  int64 calls = 4;
+  int64 tokens_in = 5;
+  int64 tokens_out = 6;
+  int64 tokens_cached = 7;
+  double cost_total = 8;
+}
+
+message UsageByModel {
+  string provider_catalog_id = 1;
+  string model = 2;
+  int64 calls = 3;
+  int64 tokens_in = 4;
+  int64 tokens_out = 5;
+  double cost_total = 6;
+}
+
+message GetUsageResponse {
+  UsageSummary summary = 1;
+  repeated UsageByAgent by_agent = 2;
+  repeated UsageByModel by_model = 3;
+  int32 window_days = 4;  // window the rollup covers; 0 = all time
+}
+
 // ── Resource needs (agent manifest) + binding ──
 
 message NeedInfo {

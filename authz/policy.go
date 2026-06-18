@@ -79,6 +79,7 @@ const (
 	TenantSelfPasskeyManage   Action = "tenant.self.passkey.manage" // register / list / rename / delete the caller's own passkeys + set/remove own password: user+
 	TenantGroupView           Action = "tenant.group.view"          // list groups + their grants: admin
 	TenantModelGrantManage    Action = "tenant.model_grant.manage"  // grant/revoke which (provider, model) a group may use: admin
+	TenantUsageView           Action = "tenant.usage.view"          // read the LLM spend ledger rollups (billing/usage): admin
 )
 
 // policy is the whole permission matrix. Authorize panics on a missing
@@ -128,6 +129,7 @@ var policy = map[Action]Requirement{
 	TenantSelfPasskeyManage:   {Axis: AxisTenant, Tenant: auth.RoleUser},
 	TenantGroupView:           {Axis: AxisTenant, Tenant: auth.RoleAdmin},
 	TenantModelGrantManage:    {Axis: AxisTenant, Tenant: auth.RoleAdmin},
+	TenantUsageView:           {Axis: AxisTenant, Tenant: auth.RoleAdmin},
 }
 
 // RequiredTenantRole returns the minimum tenant role for a tenant-axis
