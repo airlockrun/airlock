@@ -439,17 +439,17 @@ function finishActivation() {
     </template>
   </Card>
 
-  <Card v-else style="width: 34rem">
+  <Card v-else style="width: 40rem; max-width: 95vw">
     <template #title>
       <div style="text-align: center; font-size: 1.5rem">Airlock Setup</div>
     </template>
     <template #content>
       <Stepper v-model:value="activeStep" linear>
         <StepList>
-          <Step :value="0">Admin Account</Step>
-          <Step :value="1">LLM Providers</Step>
-          <Step :value="2">Default Models</Step>
-          <Step :value="3">Allow Models</Step>
+          <Step :value="0">Account</Step>
+          <Step :value="1">Providers</Step>
+          <Step :value="2">Defaults</Step>
+          <Step :value="3">Models</Step>
         </StepList>
         <StepPanels>
           <!-- Step 1: Admin Account -->
@@ -780,6 +780,16 @@ function finishActivation() {
   margin-top: 0.375rem;
   font-size: 0.75rem;
   color: var(--p-text-muted-color);
+}
+/* Keep the 4-step header inside the card — let step titles shrink/ellipsize
+   instead of forcing a horizontal scrollbar on the panel. */
+:deep(.p-steplist) {
+  max-width: 100%;
+}
+:deep(.p-step-title) {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .allow-group {
   display: flex;
