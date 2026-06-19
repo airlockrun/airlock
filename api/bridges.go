@@ -73,10 +73,11 @@ func (h *bridgeHandler) CreateBridge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	res, err := h.svc.Create(r.Context(), p, bridgessvc.CreateRequest{
-		Type:    req.Type,
-		Name:    req.Name,
-		Token:   req.Token,
-		AgentID: req.AgentId,
+		Type:      req.Type,
+		Name:      req.Name,
+		Token:     req.Token,
+		AgentID:   req.AgentId,
+		IsManager: req.IsManager,
 	})
 	if err != nil {
 		writeBridgesError(w, err, "failed to create bridge")
@@ -119,7 +120,7 @@ func (h *bridgeHandler) UpdateBridge(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	upd := bridgessvc.UpdateRequest{AgentID: req.AgentId, IsSystem: req.IsSystem}
+	upd := bridgessvc.UpdateRequest{AgentID: req.AgentId, IsSystem: req.IsSystem, IsManager: req.IsManager}
 	if req.Settings != nil {
 		upd.Settings = &bridgessvc.SettingsUpdate{
 			AllowPublicDMs:             req.Settings.AllowPublicDms,

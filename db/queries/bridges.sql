@@ -1,6 +1,6 @@
 -- name: CreateBridge :one
-INSERT INTO bridges (type, name, bot_token_ref, bot_username, agent_id, owner_id, is_system, managed, telegram_bot_user_id, status, config, settings)
-VALUES (@type, @name, @bot_token_ref, @bot_username, @agent_id, @owner_id, @is_system, @managed, @telegram_bot_user_id, 'active', '{}'::jsonb, '{}'::jsonb)
+INSERT INTO bridges (type, name, bot_token_ref, bot_username, agent_id, owner_id, is_system, is_manager, managed, telegram_bot_user_id, status, config, settings)
+VALUES (@type, @name, @bot_token_ref, @bot_username, @agent_id, @owner_id, @is_system, @is_manager, @managed, @telegram_bot_user_id, 'active', '{}'::jsonb, '{}'::jsonb)
 RETURNING *;
 
 -- name: GetBridgeByID :one
@@ -54,6 +54,20 @@ ORDER BY created_at;
 -- The system bridge — there should be at most one
 SELECT * FROM bridges WHERE is_system LIMIT 1;
 
+-- name: GetManagerBridge :one
+-- The Telegram manager bridge (is_manager). A partial unique index caps it
+-- at one across the instance. Includes 'error' status so the deep-link flow
+-- and the periodic capability re-check can still find and reconcile it.
+SELECT * FROM bridges WHERE is_manager AND status IN ('active', 'error') LIMIT 1;
+
+-- name: ReconcileManagerBridge :exec
+-- Refresh the manager bridge's live identity/capability from a getMe poll:
+-- bot_username (Telegram handles can change) + manager_error ('' when the
+-- can_manage_bots capability is healthy).
+UPDATE bridges
+SET bot_username = @bot_username, manager_error = @manager_error, updated_at = now()
+WHERE id = @id;
+
 -- name: GetBridgeByAgentID :one
 -- Find the bridge bound to a specific agent
 SELECT * FROM bridges WHERE agent_id = @agent_id;
@@ -73,7 +87,7 @@ SELECT id FROM bridges WHERE agent_id = @agent_id;
 -- service layer, not the schema. The running poller must be reloaded via
 -- BridgeManager.AddBridge after this update — it holds AgentID in memory.
 UPDATE bridges
-SET agent_id = @agent_id, is_system = @is_system, updated_at = now()
+SET agent_id = @agent_id, is_system = @is_system, is_manager = @is_manager, updated_at = now()
 WHERE id = @id
 RETURNING *;
 

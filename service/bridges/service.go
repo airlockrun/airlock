@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 
 	"github.com/airlockrun/agentsdk"
 	"github.com/airlockrun/airlock/authz"
@@ -29,15 +30,16 @@ type BridgeManager interface {
 }
 
 type Service struct {
-	db        *db.DB
-	encryptor secrets.Store
-	telegram  Driver
-	discord   Driver
-	bridgeMgr BridgeManager
-	logger    *zap.Logger
+	db            *db.DB
+	encryptor     secrets.Store
+	telegram      Driver
+	discord       Driver
+	enableDiscord bool
+	bridgeMgr     BridgeManager
+	logger        *zap.Logger
 }
 
-func New(d *db.DB, enc secrets.Store, telegram Driver, discord Driver, bridgeMgr BridgeManager, logger *zap.Logger) *Service {
+func New(d *db.DB, enc secrets.Store, telegram Driver, discord Driver, enableDiscord bool, bridgeMgr BridgeManager, logger *zap.Logger) *Service {
 	if d == nil {
 		panic("bridges: db is required")
 	}
@@ -56,15 +58,30 @@ func New(d *db.DB, enc secrets.Store, telegram Driver, discord Driver, bridgeMgr
 	if logger == nil {
 		panic("bridges: logger is required")
 	}
-	return &Service{db: d, encryptor: enc, telegram: telegram, discord: discord, bridgeMgr: bridgeMgr, logger: logger}
+	return &Service{db: d, encryptor: enc, telegram: telegram, discord: discord, enableDiscord: enableDiscord, bridgeMgr: bridgeMgr, logger: logger}
 }
 
 // CreateRequest is the input for Create.
 type CreateRequest struct {
-	Type    string // "telegram" or "discord" — empty defaults to "telegram"
-	Name    string
-	Token   string
-	AgentID string // empty → system bridge (admin only)
+	Type      string // "telegram" or "discord" — empty defaults to "telegram"
+	Name      string
+	Token     string
+	AgentID   string // empty → system bridge (admin only)
+	IsManager bool   // Telegram-only manager capability (admin only)
+}
+
+// telegramCapabilities is the slice of the Telegram driver the bridges
+// service needs beyond the platform-agnostic Driver: the stable bot id +
+// can_manage_bots flag (one-listener dedupe + manager gating) and the
+// managed-bot token fetch. The concrete *trigger.TelegramDriver satisfies it.
+type telegramCapabilities interface {
+	GetMeFull(ctx context.Context, token string) (username string, botUserID int64, canManageBots bool, err error)
+	GetManagedBotToken(ctx context.Context, managerToken string, botUserID int64) (string, error)
+}
+
+func (s *Service) telegramCaps() (telegramCapabilities, bool) {
+	c, ok := s.telegram.(telegramCapabilities)
+	return c, ok
 }
 
 // SettingsUpdate carries the public-DM toggles when present on an
@@ -83,9 +100,10 @@ type SettingsUpdate struct {
 // forces agent-less (system surface), IsSystem=false requires a
 // non-empty AgentID.
 type UpdateRequest struct {
-	AgentID  string
-	IsSystem *bool
-	Settings *SettingsUpdate
+	AgentID   string
+	IsSystem  *bool
+	IsManager *bool // nil → leave as-is; Telegram-only, admin-gated
+	Settings  *SettingsUpdate
 }
 
 // Result bundles a bridge row with the owner info the UI needs in the
@@ -168,13 +186,62 @@ func (s *Service) Create(ctx context.Context, p authz.Principal, req CreateReque
 	if bridgeType == "" {
 		bridgeType = "telegram"
 	}
-	botUsername, err := s.validateBot(ctx, bridgeType, req.Token)
-	if err != nil {
-		if errors.Is(err, service.ErrInvalidInput) {
-			return Result{}, err
-		}
-		return Result{}, service.Detail(service.ErrInvalidInput, "invalid bot token: %v", err)
+	if bridgeType == "discord" && !s.enableDiscord {
+		return Result{}, service.Detail(service.ErrInvalidInput, "Discord bridges are disabled on this instance")
 	}
+	// Resolve the bot identity. Telegram exposes a stable user id +
+	// can_manage_bots; Discord only the username.
+	var botUsername string
+	var botUserID pgtype.Int8
+	var canManageBots bool
+	if bridgeType == "telegram" {
+		caps, ok := s.telegramCaps()
+		if !ok {
+			return Result{}, service.Detail(service.ErrInvalidInput, "telegram driver lacks capability lookup")
+		}
+		uname, id, canManage, verr := caps.GetMeFull(ctx, req.Token)
+		if verr != nil {
+			return Result{}, service.Detail(service.ErrInvalidInput, "invalid bot token: %v", verr)
+		}
+		botUsername, canManageBots = uname, canManage
+		if id != 0 {
+			botUserID = pgtype.Int8{Int64: id, Valid: true}
+		}
+	} else {
+		uname, verr := s.validateBot(ctx, bridgeType, req.Token)
+		if verr != nil {
+			if errors.Is(verr, service.ErrInvalidInput) {
+				return Result{}, verr
+			}
+			return Result{}, service.Detail(service.ErrInvalidInput, "invalid bot token: %v", verr)
+		}
+		botUsername = uname
+	}
+
+	// Manager capability: Telegram-only, admin-gated, requires the live
+	// can_manage_bots flag (the deep-link flow can't work without it).
+	if req.IsManager {
+		if bridgeType != "telegram" {
+			return Result{}, service.Detail(service.ErrInvalidInput, "the manager capability is Telegram-only")
+		}
+		if err := authz.Authorize(ctx, q, p, authz.TenantManagerBotConfig, uuid.Nil); err != nil {
+			return Result{}, service.Detail(err, "configuring the manager bot requires admin role")
+		}
+		if !canManageBots {
+			return Result{}, service.Detail(service.ErrInvalidInput, "bot @%s does not have can_manage_bots enabled in BotFather", botUsername)
+		}
+	}
+
+	// One listener per Telegram bot: a given bot may back at most one bridge
+	// (a second getUpdates consumer 409s). The partial unique index is the
+	// backstop; this gives a clear error instead of a constraint violation.
+	if botUserID.Valid {
+		if existing, gerr := q.GetBridgeByTelegramBotUserID(ctx, botUserID); gerr == nil {
+			return Result{}, service.Detail(service.ErrInvalidInput,
+				"bot @%s already has a bridge (%s) — one bridge per bot", botUsername, uuid.UUID(existing.ID.Bytes))
+		}
+	}
+
 	encToken, err := s.encryptor.Put(ctx, "bridge/new/bot_token", req.Token)
 	if err != nil {
 		s.logger.Error("encrypt token failed", zap.Error(err))
@@ -189,8 +256,9 @@ func (s *Service) Create(ctx context.Context, p authz.Principal, req CreateReque
 		AgentID:           agentPgID,
 		OwnerID:           ownerID,
 		IsSystem:          isSystem,
+		IsManager:         req.IsManager,
 		Managed:           false,
-		TelegramBotUserID: pgtype.Int8{},
+		TelegramBotUserID: botUserID,
 	})
 	if err != nil {
 		s.logger.Error("create bridge failed", zap.Error(err))
@@ -299,6 +367,7 @@ func (s *Service) CreateFromManagedSession(ctx context.Context, in ManagedSessio
 		AgentID:           in.Session.AgentID,
 		OwnerID:           in.Session.OwnerID,
 		IsSystem:          in.Session.IsSystem,
+		IsManager:         false, // a managed bot is an agent/system bot, never a manager
 		Managed:           true,
 		TelegramBotUserID: telegramBotUserID,
 	})
@@ -323,6 +392,91 @@ func (s *Service) CreateFromManagedSession(ctx context.Context, in ManagedSessio
 	return Result{Bridge: br, Owner: s.fetchOwner(ctx, q, br.OwnerID)}, nil
 }
 
+// ManagerBridgeUsername returns the @username of the configured Telegram
+// manager bridge, after a LIVE can_manage_bots re-check. The deep-link flow
+// calls it just before issuing a link so it never hands the user a dead link
+// when the capability was revoked in BotFather out of band. Side effect: it
+// reconciles the bridge's manager_error (and refreshed username) so the UI
+// reflects the live state. A descriptive error is returned when no manager is
+// configured, it's unreachable, or the capability is gone.
+func (s *Service) ManagerBridgeUsername(ctx context.Context) (string, error) {
+	q := dbq.New(s.db.Pool())
+	br, err := q.GetManagerBridge(ctx)
+	if err != nil {
+		return "", service.Detail(service.ErrInvalidInput,
+			"no Telegram manager bot is configured — create a Telegram bridge with the Manager capability first")
+	}
+	caps, ok := s.telegramCaps()
+	if !ok {
+		return "", service.Detail(service.ErrInvalidInput, "telegram driver lacks capability lookup")
+	}
+	token, err := s.encryptor.Get(ctx, "bridge/"+uuid.UUID(br.ID.Bytes).String()+"/bot_token", br.BotTokenRef)
+	if err != nil {
+		return "", err
+	}
+	username, _, canManage, err := caps.GetMeFull(ctx, token)
+	reconcile := func(name, mgrErr string) {
+		_ = q.ReconcileManagerBridge(ctx, dbq.ReconcileManagerBridgeParams{
+			ID: br.ID, BotUsername: name, ManagerError: mgrErr,
+		})
+	}
+	switch {
+	case err != nil:
+		reconcile(br.BotUsername, "getMe failed: "+err.Error())
+		return "", service.Detail(service.ErrInvalidInput, "manager bot is unreachable: %v", err)
+	case !canManage:
+		msg := "bot @" + username + " no longer has can_manage_bots enabled in BotFather"
+		reconcile(username, msg)
+		return "", service.Detail(service.ErrInvalidInput, "%s", msg)
+	}
+	reconcile(username, "")
+	return username, nil
+}
+
+// IngestManagedBotCreated turns a Telegram managed_bot_created event (seen on
+// the manager bridge's poll loop) into a bridge for the freshly-created bot.
+// Wired into the BridgeManager via AttachManagedBotIngest. Idempotent: a
+// duplicate event for a bot that already has a bridge no-ops.
+func (s *Service) IngestManagedBotCreated(ctx context.Context, managerToken string, botUserID int64, botUsername string) error {
+	if botUserID == 0 || botUsername == "" {
+		return nil
+	}
+	q := dbq.New(s.db.Pool())
+	// Already have a bridge for this bot — nothing to do.
+	if _, err := q.GetBridgeByTelegramBotUserID(ctx, pgtype.Int8{Int64: botUserID, Valid: true}); err == nil {
+		return nil
+	}
+	// Correlate the deep-link session: the suggested username we embedded in
+	// the link is the session nonce, and Telegram preserves it as the new
+	// bot's username.
+	session, err := q.GetManagedBotSessionByNonce(ctx, botUsername)
+	if err != nil {
+		s.logger.Warn("managed_bot_created: no session matches bot username",
+			zap.String("bot_username", botUsername))
+		return nil
+	}
+	caps, ok := s.telegramCaps()
+	if !ok {
+		return service.Detail(service.ErrInvalidInput, "telegram driver lacks capability lookup")
+	}
+	rawToken, err := caps.GetManagedBotToken(ctx, managerToken, botUserID)
+	if err != nil {
+		return fmt.Errorf("get managed bot token: %w", err)
+	}
+	if _, err := s.CreateFromManagedSession(ctx, ManagedSessionCreate{
+		Session:           session,
+		BotUsername:       botUsername,
+		TelegramBotUserID: botUserID,
+		RawToken:          rawToken,
+	}); err != nil {
+		return fmt.Errorf("create bridge from managed session: %w", err)
+	}
+	if derr := q.DeleteManagedBotSessionByNonce(ctx, session.Nonce); derr != nil {
+		s.logger.Warn("delete consumed managed bot session failed", zap.Error(derr))
+	}
+	return nil
+}
+
 // List returns all bridges visible to the caller. Admins see every
 // bridge; everyone else sees system bridges plus bridges bound to
 // agents they're a member of.
@@ -343,7 +497,7 @@ func (s *Service) List(ctx context.Context, p authz.Principal) ([]ListItem, erro
 				Bridge: dbq.Bridge{
 					ID: r.ID, Type: r.Type, Name: r.Name, BotUsername: r.BotUsername,
 					Status: r.Status, AgentID: r.AgentID, OwnerID: r.OwnerID,
-					IsSystem:  r.IsSystem,
+					IsSystem: r.IsSystem, IsManager: r.IsManager, ManagerError: r.ManagerError,
 					CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt, Settings: r.Settings,
 				},
 				Owner: ownerFromJoin(r.OwnerID, r.OwnerEmail, r.OwnerDisplayName),
@@ -362,7 +516,7 @@ func (s *Service) List(ctx context.Context, p authz.Principal) ([]ListItem, erro
 			Bridge: dbq.Bridge{
 				ID: r.ID, Type: r.Type, Name: r.Name, BotUsername: r.BotUsername,
 				Status: r.Status, AgentID: r.AgentID, OwnerID: r.OwnerID,
-				IsSystem:  r.IsSystem,
+				IsSystem: r.IsSystem, IsManager: r.IsManager, ManagerError: r.ManagerError,
 				CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt, Settings: r.Settings,
 			},
 			Owner: ownerFromJoin(r.OwnerID, r.OwnerEmail, r.OwnerDisplayName),
@@ -438,10 +592,42 @@ func (s *Service) Update(ctx context.Context, p authz.Principal, bridgeID uuid.U
 		}
 		newAgentID = pgtype.UUID{Bytes: agentID, Valid: true}
 	}
+	// Manager capability: Telegram-only, admin-gated; turning it on requires
+	// the live can_manage_bots capability.
+	newIsManager := br.IsManager
+	if req.IsManager != nil {
+		newIsManager = *req.IsManager
+	}
+	if newIsManager != br.IsManager {
+		if err := authz.Authorize(ctx, q, p, authz.TenantManagerBotConfig, uuid.Nil); err != nil {
+			return Result{}, service.Detail(err, "the manager capability requires admin role")
+		}
+		if newIsManager {
+			if br.Type != "telegram" {
+				return Result{}, service.Detail(service.ErrInvalidInput, "the manager capability is Telegram-only")
+			}
+			caps, ok := s.telegramCaps()
+			if !ok {
+				return Result{}, service.Detail(service.ErrInvalidInput, "telegram driver lacks capability lookup")
+			}
+			token, derr := s.encryptor.Get(ctx, "bridge/"+bridgeID.String()+"/bot_token", br.BotTokenRef)
+			if derr != nil {
+				return Result{}, derr
+			}
+			uname, _, canManage, verr := caps.GetMeFull(ctx, token)
+			if verr != nil {
+				return Result{}, service.Detail(service.ErrInvalidInput, "manager bot unreachable: %v", verr)
+			}
+			if !canManage {
+				return Result{}, service.Detail(service.ErrInvalidInput, "bot @%s does not have can_manage_bots enabled in BotFather", uname)
+			}
+		}
+	}
 	updated, err := q.UpdateBridgeBinding(ctx, dbq.UpdateBridgeBindingParams{
-		ID:       pgtype.UUID{Bytes: bridgeID, Valid: true},
-		AgentID:  newAgentID,
-		IsSystem: newIsSystem,
+		ID:        pgtype.UUID{Bytes: bridgeID, Valid: true},
+		AgentID:   newAgentID,
+		IsSystem:  newIsSystem,
+		IsManager: newIsManager,
 	})
 	if err != nil {
 		s.logger.Error("update bridge failed", zap.Error(err))

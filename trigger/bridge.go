@@ -100,7 +100,17 @@ type BridgeEvent struct {
 	Files             []BridgeFile // attached files (photos, documents)
 	Callback          *BridgeCallback
 	ReferencedMessage *BridgeReferencedMessage // reply target / forward source (driver-populated)
+	ManagedBot        *ManagedBotEvent         // Telegram managed_bot_created service message (manager bridges only)
 	RawPayload        []byte
+}
+
+// ManagedBotEvent carries a Telegram `managed_bot_created` service message —
+// a new bot a user created via the manager bot's deep-link flow. Only a
+// manager bridge (is_manager) produces these; HandleEvent turns it into a
+// bridge for the freshly-created bot.
+type ManagedBotEvent struct {
+	BotID    int64
+	Username string
 }
 
 // BridgeReferenceKind distinguishes the platform mechanism that produced
@@ -227,12 +237,27 @@ type BridgeManager struct {
 	// pollers only start after airlock.Start which is well past
 	// AttachSysagent.
 	sysagent SysagentRuntime
+
+	// managedBotIngest turns a Telegram `managed_bot_created` event (seen on
+	// a manager bridge's poll loop) into a new bridge for the freshly-created
+	// bot. Wired to bridges.Service.IngestManagedBotCreated via
+	// AttachManagedBotIngest — a callback (not a direct dep) because the
+	// bridges service already holds *BridgeManager, so a direct reference
+	// would be a cycle. Nil until wired; a managed_bot_created before then is
+	// dropped (managed bridges only start polling after wiring).
+	managedBotIngest func(ctx context.Context, managerToken string, botUserID int64, botUsername string) error
 }
 
 // AttachSysagent wires the sysagent runtime after the router has built
 // it. Idempotent; the last set wins.
 func (m *BridgeManager) AttachSysagent(s SysagentRuntime) {
 	m.sysagent = s
+}
+
+// AttachManagedBotIngest wires the managed-bot ingest callback (see the
+// field doc). Idempotent; the last set wins.
+func (m *BridgeManager) AttachManagedBotIngest(fn func(ctx context.Context, managerToken string, botUserID int64, botUsername string) error) {
+	m.managedBotIngest = fn
 }
 
 // pollerHandle pairs a poller goroutine's cancel func with its context.
@@ -541,6 +566,17 @@ func (m *BridgeManager) HandleEvent(ctx context.Context, event BridgeEvent) erro
 		br.BotTokenRef = token
 	}
 
+	// Managed-bot creation arrives only on a manager bridge. Routed before
+	// the system/agent branches so a system+manager bridge handles both DMs
+	// and managed_bot_created on the same poll loop. br.BotTokenRef is the
+	// decrypted manager token.
+	if event.ManagedBot != nil {
+		if !br.IsManager {
+			return nil // stray service message on a non-manager bridge — ignore
+		}
+		return m.handleManagerBotCreated(ctx, br, *event.ManagedBot)
+	}
+
 	if br.IsSystem {
 		return m.handleSystemBridgeEvent(ctx, br, event)
 	}
@@ -806,6 +842,7 @@ func (m *BridgeManager) startPoller(parent context.Context, br dbq.Bridge) {
 		}()
 		ctx := pollCtx
 		driver := m.drivers[br.Type]
+		var lastMgrCheck time.Time // manager-capability getMe throttle (is_manager only)
 
 		// Run-starting events (messages, approve/deny taps) are handled one
 		// at a time by this worker — concurrent runs in a single
@@ -896,6 +933,14 @@ func (m *BridgeManager) startPoller(parent context.Context, br dbq.Bridge) {
 				ID:     br.ID,
 				Config: br.Config,
 			})
+
+			// Manager bridge: periodically refresh the live identity +
+			// can_manage_bots capability from getMe (interleaved between poll
+			// cycles — getMe doesn't conflict with getUpdates). Throttled to
+			// ~10 min; the zero lastMgrCheck makes the first iteration run it.
+			if br.IsManager {
+				m.reconcileManagerCapability(ctx, &br, &lastMgrCheck)
+			}
 		}
 	}()
 }

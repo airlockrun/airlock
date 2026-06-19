@@ -7,7 +7,6 @@ package settings
 
 import (
 	"context"
-	"strings"
 
 	"github.com/airlockrun/airlock/apihelpers"
 	"github.com/airlockrun/airlock/authz"
@@ -63,110 +62,6 @@ func (s *Service) Get(ctx context.Context, p authz.Principal) (dbq.SystemSetting
 		return dbq.SystemSetting{}, err
 	}
 	return row, nil
-}
-
-// ManagerBotStatus is the system-settings view the UI surfaces on the
-// Telegram Manager Bot settings card: the encrypted-token presence
-// flag, the resolved username from the poller's last successful
-// getMe (empty when un-validated), and the last validation error
-// (empty when healthy).
-type ManagerBotStatus struct {
-	Configured bool
-	Username   string
-	Error      string
-}
-
-// UpdateManagerBotToken validates the raw token via getMe + the
-// can_manage_bots gate (caller supplies the validator), encrypts the
-// token, persists the ciphertext, and asks the poller to reload. On
-// validation failure the error string is persisted (and returned)
-// without changing the stored token — so a typo doesn't blow away a
-// working configuration.
-func (s *Service) UpdateManagerBotToken(
-	ctx context.Context,
-	p authz.Principal,
-	rawToken string,
-	encrypt func(ctx context.Context, scope, plaintext string) (string, error),
-	validate func(ctx context.Context, token string) (username string, canManage bool, err error),
-	reload func(ctx context.Context) error,
-	tokenScope string,
-) (ManagerBotStatus, error) {
-	q := dbq.New(s.db.Pool())
-	if err := authz.Authorize(ctx, q, p, authz.TenantManagerBotConfig, uuid.Nil); err != nil {
-		return ManagerBotStatus{}, err
-	}
-	rawToken = strings.TrimSpace(rawToken)
-	if rawToken == "" {
-		// Empty token = "disable manager bot." Clear the stored
-		// ciphertext + error, reload (which Stops the poller).
-		if _, err := q.UpdateTelegramManagerBotToken(ctx, dbq.UpdateTelegramManagerBotTokenParams{
-			TokenRef:  "",
-			ErrorText: "",
-		}); err != nil {
-			s.logger.Error("clear manager bot token failed", zap.Error(err))
-			return ManagerBotStatus{}, err
-		}
-		if reload != nil {
-			_ = reload(ctx)
-		}
-		return ManagerBotStatus{}, nil
-	}
-
-	username, canManage, verr := validate(ctx, rawToken)
-	if verr != nil {
-		errText := "getMe: " + verr.Error()
-		if _, err := q.UpdateTelegramManagerBotToken(ctx, dbq.UpdateTelegramManagerBotTokenParams{
-			TokenRef:  "", // refuse to persist an invalid token
-			ErrorText: errText,
-		}); err != nil {
-			s.logger.Error("record manager bot validation error failed", zap.Error(err))
-			return ManagerBotStatus{}, err
-		}
-		return ManagerBotStatus{}, service.Detail(service.ErrInvalidInput, "%s", errText)
-	}
-	if !canManage {
-		errText := "bot @" + username + " does not have can_manage_bots enabled in BotFather"
-		_, _ = q.UpdateTelegramManagerBotToken(ctx, dbq.UpdateTelegramManagerBotTokenParams{
-			TokenRef:  "",
-			ErrorText: errText,
-		})
-		return ManagerBotStatus{Username: username}, service.Detail(service.ErrInvalidInput, "%s", errText)
-	}
-
-	enc, err := encrypt(ctx, tokenScope, rawToken)
-	if err != nil {
-		s.logger.Error("encrypt manager bot token failed", zap.Error(err))
-		return ManagerBotStatus{}, err
-	}
-	if _, err := q.UpdateTelegramManagerBotToken(ctx, dbq.UpdateTelegramManagerBotTokenParams{
-		TokenRef:  enc,
-		ErrorText: "",
-	}); err != nil {
-		s.logger.Error("persist manager bot token failed", zap.Error(err))
-		return ManagerBotStatus{}, err
-	}
-	if reload != nil {
-		_ = reload(ctx)
-	}
-	return ManagerBotStatus{Configured: true, Username: username}, nil
-}
-
-// GetManagerBotStatus reads the current status row for the settings
-// page. Authz: same as settings view.
-func (s *Service) GetManagerBotStatus(ctx context.Context, p authz.Principal, runningUsername string) (ManagerBotStatus, error) {
-	q := dbq.New(s.db.Pool())
-	if err := authz.Authorize(ctx, q, p, authz.TenantSettingsView, uuid.Nil); err != nil {
-		return ManagerBotStatus{}, err
-	}
-	row, err := q.GetTelegramManagerBotStatus(ctx)
-	if err != nil {
-		return ManagerBotStatus{}, err
-	}
-	return ManagerBotStatus{
-		Configured: row.TelegramManagerBotTokenRef != "",
-		Username:   runningUsername,
-		Error:      row.TelegramManagerBotError,
-	}, nil
 }
 
 func (s *Service) Update(ctx context.Context, p authz.Principal, req UpdateRequest) (dbq.SystemSetting, error) {
