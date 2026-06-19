@@ -260,10 +260,13 @@ CREATE UNIQUE INDEX idx_conversations_bridge_authed
 --
 -- This is a durable spend ledger: every FK is ON DELETE SET NULL (including
 -- agent_id), so deleting an agent / user / run / build never erases the spend.
--- agent_slug, agent_name and user_email are denormalized snapshots captured at
--- write time, so a row stays human-readable for billing/audit long after the
--- agent or user it references is gone (and after run/build cascade to NULL,
--- call_kind still says whether it was a run or a build/upgrade).
+-- agent_slug, agent_name, user_email and provider_slug are denormalized
+-- snapshots captured at write time, so a row stays human-readable for
+-- billing/audit long after the agent, user, or provider it references is gone
+-- (and after run/build cascade to NULL, call_kind still says whether it was a
+-- run or a build/upgrade). provider_catalog_id is the models.dev catalog key
+-- (e.g. "openai"); provider_slug is the operator's configured-provider handle,
+-- so two keys against the same upstream stay distinguishable in rollups.
 CREATE TABLE llm_usage (
     id                   uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     agent_id             uuid REFERENCES agents(id) ON DELETE SET NULL,
@@ -275,6 +278,7 @@ CREATE TABLE llm_usage (
     user_email           text NOT NULL,
     conversation_id      uuid REFERENCES agent_conversations(id) ON DELETE SET NULL,
     provider_catalog_id  text NOT NULL,
+    provider_slug        text NOT NULL,
     model                text NOT NULL,
     capability           text NOT NULL,
     call_kind            text NOT NULL,
@@ -441,6 +445,26 @@ ALTER TABLE agent_builds
     ADD COLUMN sdk_version text NOT NULL DEFAULT '';
 ALTER TABLE agent_builds
     ALTER COLUMN sdk_version DROP DEFAULT;
+
+-- agent_builds.todos — the agent's task list as of the last codegen
+-- update, snapshot for the Build page's TODO checklist and the
+-- "Building N/M tasks" badge. jsonb '[]' is a real empty list (no tasks
+-- yet), not a fake placeholder, so the default is permanent.
+ALTER TABLE agent_builds
+    ADD COLUMN todos jsonb NOT NULL DEFAULT '[]';
+
+-- agent_builds.exit_status / exit_message — the agent's own exit-tool
+-- outcome (success | error | refused + its summary/reason), kept on both
+-- success and failure. Distinct from error_message (infra/external
+-- failures); the builds table renders both as the "Result". Empty is a
+-- legitimate "agent never called exit" value; DEFAULT '' backfills then
+-- drops so new rows set them explicitly.
+ALTER TABLE agent_builds
+    ADD COLUMN exit_status  text NOT NULL DEFAULT '',
+    ADD COLUMN exit_message text NOT NULL DEFAULT '';
+ALTER TABLE agent_builds
+    ALTER COLUMN exit_status  DROP DEFAULT,
+    ALTER COLUMN exit_message DROP DEFAULT;
 
 -- connections.auth_params — extra OAuth authorization-request query
 -- params declared by the agent (agentsdk Connection.AuthParams), merged
@@ -1285,6 +1309,9 @@ DROP INDEX IF EXISTS agent_siblings_sibling_idx;
 DROP TABLE IF EXISTS agent_siblings;
 ALTER TABLE agent_builds DROP COLUMN IF EXISTS rollback_target_id;
 ALTER TABLE agent_builds DROP COLUMN IF EXISTS sdk_version;
+ALTER TABLE agent_builds DROP COLUMN IF EXISTS todos;
+ALTER TABLE agent_builds DROP COLUMN IF EXISTS exit_status;
+ALTER TABLE agent_builds DROP COLUMN IF EXISTS exit_message;
 ALTER TABLE system_settings DROP COLUMN IF EXISTS last_seen_sdk_version;
 -- Re-add the vestigial runs.logs (NOT NULL via transient default, then
 -- drop it per the no-fake-defaults rule). Content is not recoverable.

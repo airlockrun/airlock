@@ -64,6 +64,18 @@ func (bl *buildLog) appendDocker(line string) int64 {
 	return seq
 }
 
+// nextSeq advances and returns the shared monotonic counter without recording
+// a log line — used by structured build events (actions, todos) so they
+// interleave in the same per-build sequence space as log lines for ordering
+// and dedup. Gaps in the log-line seq are expected and harmless.
+func (bl *buildLog) nextSeq() int64 {
+	bl.mu.Lock()
+	bl.seq++
+	seq := bl.seq
+	bl.mu.Unlock()
+	return seq
+}
+
 func (bl *buildLog) flush() {
 	bl.mu.Lock()
 	if !bl.dirty {

@@ -192,6 +192,31 @@ func (h *Hub) Subscribe(conn *Conn, topicID uuid.UUID) {
 	}
 }
 
+// Unsubscribe removes one topic subscription from a connection (the inverse of
+// a single Subscribe). Used when the client leaves a dynamically-subscribed
+// topic — e.g. the Build page unmounting its per-build subscription — while the
+// connection's other subscriptions stay intact. Idempotent.
+func (h *Hub) Unsubscribe(conn *Conn, topicID uuid.UUID) {
+	h.mu.Lock()
+	emptied := false
+	if topicConns, exists := h.topics[topicID]; exists {
+		if _, ok := topicConns[conn.ID]; ok {
+			delete(topicConns, conn.ID)
+			if len(topicConns) == 0 {
+				delete(h.topics, topicID)
+				emptied = true
+			}
+		}
+	}
+	delete(h.connTopics[conn.ID], topicID)
+	onLast := h.onLastUnsubscribe
+	h.mu.Unlock()
+
+	if emptied && onLast != nil {
+		onLast(topicID)
+	}
+}
+
 // BroadcastToTopic sends an envelope to all connections subscribed to a topic.
 //
 // User-id gating: if env.UserID is set, only connections whose

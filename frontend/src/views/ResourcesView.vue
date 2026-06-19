@@ -126,15 +126,13 @@ onMounted(() => {
 </script>
 
 <template>
-  <div style="padding: 1.5rem; max-width: 64rem">
-    <div style="margin-bottom: 1.5rem">
-      <h2 style="margin: 0">Resources</h2>
-      <p style="margin: 0.25rem 0 0; color: var(--p-text-muted-color); font-size: 0.9rem; max-width: 48rem">
-        Credentials and integrations you own. One resource can back several of your agents — an agent
-        binds it from its own configuration. Set up and reauthorize connections, MCP servers, and exec
-        endpoints from each agent's detail page; this is your inventory across all of them.
-      </p>
-    </div>
+  <div style="max-width: 64rem">
+    <h1 style="margin: 0; font-size: 1.5rem">Resources</h1>
+    <p style="margin: 0 0 1.5rem; color: var(--p-text-muted-color); max-width: 48rem">
+      Credentials and integrations you own. One resource can back several of your agents — an agent
+      binds it from its own configuration. Set up and reauthorize connections, MCP servers, and exec
+      endpoints from each agent's detail page; this is your inventory across all of them.
+    </p>
 
     <!-- Connections / MCP / Exec inventory -->
     <Card style="margin-bottom: 1.5rem">

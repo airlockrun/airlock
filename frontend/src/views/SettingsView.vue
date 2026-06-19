@@ -385,7 +385,7 @@ async function changePassword() {
 
 <template>
   <div style="max-width: 36rem">
-    <h1 style="font-size: 1.5rem; margin-bottom: 1.5rem">Settings</h1>
+    <h1 style="margin: 0 0 1.5rem; font-size: 1.5rem">Settings</h1>
 
     <!-- Appearance -->
     <Card style="margin-bottom: 1.5rem">

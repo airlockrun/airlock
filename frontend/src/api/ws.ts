@@ -54,6 +54,9 @@ export class AirlockWS {
   // that two concurrent calls just produce two access tokens — last write
   // to localStorage wins, both work until expiry.
   private refreshPromise: Promise<void> | null = null
+  // Per-build topics the client has dynamically subscribed to (Build page
+  // open). Re-sent on every (re)connect so a drop mid-build resubscribes.
+  private buildSubs = new Set<string>()
 
   /**
    * Open the socket. Token argument is ignored — the connection always reads
@@ -116,6 +119,29 @@ export class AirlockWS {
     return this.socket?.readyState === WebSocket.OPEN
   }
 
+  /** Send a client→server control message. No-ops if the socket isn't open. */
+  private send(type: string, payload: unknown) {
+    if (this.socket?.readyState === WebSocket.OPEN) {
+      this.socket.send(JSON.stringify({ type, payload }))
+    }
+  }
+
+  /**
+   * Subscribe to a build's verbose topic (codegen log, live actions, todos).
+   * The Build page calls this on mount; the subscription is remembered and
+   * re-sent on reconnect. The server gates it on build-view access.
+   */
+  subscribeBuild(buildId: string) {
+    this.buildSubs.add(buildId)
+    this.send('subscribe.build', { buildId })
+  }
+
+  /** Drop a per-build subscription (Build page unmount). */
+  unsubscribeBuild(buildId: string) {
+    this.buildSubs.delete(buildId)
+    this.send('unsubscribe.build', { buildId })
+  }
+
   private async doConnect() {
     // Read fresh — REST interceptor or our own pre-connect refresh may have
     // rotated this since the last connect.
@@ -161,6 +187,8 @@ export class AirlockWS {
     this.socket.onopen = () => {
       this.reconnectDelay = 1000
       console.log('[ws] connected to', url.replace(/token=[^&]+/, 'token=***'))
+      // Re-arm any dynamic per-build subscriptions across a reconnect.
+      for (const id of this.buildSubs) this.send('subscribe.build', { buildId: id })
       this.emit('_connected', null)
     }
 

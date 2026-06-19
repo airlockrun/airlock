@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useToast } from 'primevue/usetoast'
 import { useConfirm } from 'primevue/useconfirm'
@@ -25,9 +25,9 @@ import ModelsTab from '@/components/agent/ModelsTab.vue'
 import RunsTab from '@/components/agent/RunsTab.vue'
 import BuildsTab from '@/components/agent/BuildsTab.vue'
 import SourceTab from '@/components/agent/SourceTab.vue'
-import BuildLogPanel from '@/components/agent/BuildLogPanel.vue'
 import SectionCard from '@/components/agent/SectionCard.vue'
 import { useBuildsStore } from '@/stores/builds'
+import { buildBadgeText } from '@/utils/buildBadge'
 import { markRaw } from 'vue'
 
 const route = useRoute()
@@ -106,6 +106,10 @@ const agentId = route.params.id as string
 const agent = ref<AgentInfo | null>(null)
 const loading = ref(true)
 const activeBuildId = ref<string | undefined>(undefined)
+const buildTasksDone = ref(0)
+const buildTasksTotal = ref(0)
+const buildPhase = ref('')
+const buildBadgeLabel = computed(() => buildBadgeText(buildPhase.value, buildTasksDone.value, buildTasksTotal.value))
 
 // Per-section item counts emitted by each *Tab component via @populated.
 // Sections (and their right-rail entries) only render when count > 0, so the
@@ -122,6 +126,27 @@ const activityTab = ref(0)
 // Active section in the scroll viewport — drives the highlight in the
 // right-rail jump nav. Set by an IntersectionObserver in onMounted.
 const activeSectionId = ref<string>('')
+
+// The sticky section nav; horizontally scrollable on narrow viewports.
+const navRef = ref<HTMLElement | null>(null)
+
+// Keep the highlighted tab visible as scrollspy moves it: on mobile the nav
+// is horizontally truncated and the active tab can sit off-screen, so center
+// it in the nav. Only adjusts the nav's own horizontal scroll — never the
+// page's vertical position.
+watch(activeSectionId, (id) => {
+  if (!id) return
+  nextTick(() => {
+    const nav = navRef.value
+    if (!nav) return
+    const link = nav.querySelector(`a[href="#${id}"]`) as HTMLElement | null
+    if (!link) return
+    const navRect = nav.getBoundingClientRect()
+    const linkRect = link.getBoundingClientRect()
+    const delta = linkRect.left + linkRect.width / 2 - (navRect.left + navRect.width / 2)
+    nav.scrollTo({ left: nav.scrollLeft + delta, behavior: 'smooth' })
+  })
+})
 
 // Configuration sections rendered inline inside the Configure tab, in the
 // order users typically walk through them: integrations → triggers →
@@ -312,8 +337,8 @@ onMounted(async () => {
   catalog.fetchConfiguredModels()
   loadSetupStatus()
 
-  // If a build is currently in progress, grab its id so BuildLogPanel can
-  // fetch the persisted log snapshot and dedupe against live WS messages.
+  // If a build is currently in progress, grab its id so the build badge can
+  // link to the dedicated Build page.
   if (agent.value?.status === 'building' || agent.value?.upgradeStatus === 'building') {
     try {
       await buildsStore.fetchBuilds(agentId)
@@ -326,11 +351,13 @@ onMounted(async () => {
   unsubBuild = ws.onMessage('agent.build', (payload: any) => {
     if (payload?.agentId !== agentId) return
     if (payload.buildId) activeBuildId.value = payload.buildId
+    buildTasksDone.value = payload.tasksDone ?? 0
+    buildTasksTotal.value = payload.tasksTotal ?? 0
+    buildPhase.value = payload.phase ?? ''
     if (payload.status === 'started') {
       // New build kicked off while we were watching; buildId already captured
-      // above. Mirror the server-side state transition so BuildLogPanel
-      // (gated on agent.status/upgradeStatus === 'building') renders
-      // immediately instead of waiting for a page refresh.
+      // above. Mirror the server-side state transition so the build badge
+      // appears immediately instead of waiting for a page refresh.
       if (agent.value) {
         if (agent.value.status === 'draft' || agent.value.status === 'failed') {
           agent.value.status = 'building'
@@ -517,16 +544,6 @@ function goToChat() {
   </div>
 
   <div v-else-if="agent">
-    <!-- Breadcrumb -->
-    <Breadcrumb :model="[{ label: 'Agents', to: '/agents' }, { label: agent.name }]" style="margin-bottom: 1rem">
-      <template #item="{ item }">
-        <router-link v-if="item.to" :to="item.to" style="text-decoration: none; color: var(--p-primary-color)">
-          {{ item.label }}
-        </router-link>
-        <span v-else>{{ item.label }}</span>
-      </template>
-    </Breadcrumb>
-
     <!-- Header -->
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; flex-wrap: wrap; gap: 0.75rem">
       <div>
@@ -568,14 +585,23 @@ function goToChat() {
       </div>
     </div>
 
-    <!-- Build/upgrade log panel -->
-    <BuildLogPanel
-      :agent-id="agentId"
-      :build-id="activeBuildId"
-      :active="agent.status === 'building' || agent.upgradeStatus === 'building'"
-      style="margin-bottom: 1rem"
-      @cancel="cancelBuild"
-    />
+    <!-- Build in progress: link to the dedicated Build page (the codegen +
+         docker logs, task checklist, and live actions stream there). -->
+    <div
+      v-if="agent.status === 'building' || agent.upgradeStatus === 'building'"
+      style="display: flex; align-items: center; gap: 0.75rem; margin-bottom: 1rem"
+    >
+      <RouterLink
+        v-if="activeBuildId"
+        :to="{ name: 'build-detail', params: { id: agentId, buildId: activeBuildId } }"
+        class="build-badge"
+      >
+        <i class="pi pi-spin pi-spinner" />
+        <span>{{ buildBadgeLabel }}</span>
+        <i class="pi pi-arrow-right" style="font-size: 0.75rem" />
+      </RouterLink>
+      <Button label="Cancel Build" icon="pi pi-times" severity="danger" size="small" text @click="cancelBuild" />
+    </div>
 
     <!-- Error message -->
     <Message v-if="agent.errorMessage" severity="error" :closable="false" style="margin-bottom: 1rem">
@@ -586,7 +612,7 @@ function goToChat() {
          sits above the sections and stays visible as the user scrolls
          through them. Only populated sections appear; the section currently
          in view (per scrollspy) gets the underline. -->
-    <nav class="agent-page-nav" aria-label="Section navigation">
+    <nav ref="navRef" class="agent-page-nav" aria-label="Section navigation">
       <ul>
         <li
           v-for="s in visibleSections"
@@ -688,6 +714,23 @@ function goToChat() {
 </template>
 
 <style scoped>
+/* Clickable "Building N/M tasks" badge linking to the dedicated Build page. */
+.build-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.75rem;
+  border-radius: 0.5rem;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--p-primary-contrast-color);
+  background: var(--p-primary-color);
+  text-decoration: none;
+}
+.build-badge:hover {
+  filter: brightness(1.05);
+}
+
 /* Sticky horizontal section nav. Sits above the sections and stays at the
  * top of the scroll viewport as the user scrolls through them. The
  * negative horizontal margins let it span the full inner width of the

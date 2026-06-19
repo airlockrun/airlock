@@ -64,6 +64,7 @@ const router = createRouter({
         { path: 'settings', name: 'settings', component: () => import('@/views/SettingsView.vue') },
         { path: 'settings/security', name: 'security', component: () => import('@/views/SecurityView.vue') },
         { path: 'settings/resources', name: 'resources', component: () => import('@/views/ResourcesView.vue') },
+        { path: 'settings/preferences', name: 'preferences', component: () => import('@/views/PreferencesView.vue') },
         { path: 'settings/git-credentials', redirect: '/settings/resources' },
         { path: 'link-identity', name: 'link-identity', component: () => import('@/views/LinkIdentityView.vue') },
         // OAuth consent — landing page for /oauth/authorize when the

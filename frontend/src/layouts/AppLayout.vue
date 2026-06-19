@@ -8,7 +8,6 @@ import { useConversationsStore } from '@/stores/conversations'
 import { useChatStore } from '@/stores/chat'
 import { useSystemChatStore } from '@/stores/systemChat'
 import { useConfirm } from 'primevue/useconfirm'
-import { useTheme } from '@/composables/useTheme'
 import type { ConversationInfo } from '@/gen/airlock/v1/types_pb'
 
 const router = useRouter()
@@ -20,7 +19,6 @@ const chat = useChatStore()
 const systemChat = useSystemChatStore()
 const confirm = useConfirm()
 const toast = useToast()
-const { isDark, toggle: toggleTheme } = useTheme()
 
 // The vanity-URL router layer bounces a stale (renamed) agent slug here
 // with ?staleAgent=<slug>. Surface it once, then strip the query so a
@@ -44,37 +42,57 @@ watch(
 
 const drawerVisible = ref(false)
 
-const menuItems = computed(() => {
-  const items = [
-    { label: 'Agents', icon: 'pi pi-box', route: '/agents' },
+// Settings is its own context: the sidebar swaps the chat list for these
+// sections (each an existing route), gated by role. Bridges/Security/Resources/
+// Preferences are universal; the rest are admin.
+const settingsSections = computed(() => {
+  const items: { label: string; icon: string; route: string }[] = [
+    { label: 'Preferences', icon: 'pi pi-sliders-h', route: '/settings/preferences' },
+    { label: 'Security', icon: 'pi pi-shield', route: '/settings/security' },
+    { label: 'Resources', icon: 'pi pi-key', route: '/settings/resources' },
+    { label: 'Bridges', icon: 'pi pi-link', route: '/bridges' },
   ]
   if (auth.can('tenant.provider.manage')) {
-    items.push({ label: 'Providers', icon: 'pi pi-server', route: '/providers' })
-    items.push({ label: 'Models', icon: 'pi pi-sparkles', route: '/models' })
+    items.push(
+      { label: 'Providers', icon: 'pi pi-server', route: '/providers' },
+      { label: 'Models', icon: 'pi pi-sparkles', route: '/models' },
+      { label: 'System defaults', icon: 'pi pi-cog', route: '/settings' },
+    )
   }
   if (auth.can('tenant.usage.view')) {
     items.push({ label: 'Usage', icon: 'pi pi-chart-bar', route: '/usage' })
   }
-  // Bridges is visible to everyone authenticated — plain users see the
-  // list read-only; the page's own gates control Add/Edit/Delete.
-  items.push({ label: 'Bridges', icon: 'pi pi-link', route: '/bridges' })
   if (auth.can('tenant.user.manage')) {
     items.push({ label: 'Users', icon: 'pi pi-users', route: '/users' })
   }
-  items.push(
-    { label: 'Security', icon: 'pi pi-shield', route: '/settings/security' },
-    { label: 'Resources', icon: 'pi pi-key', route: '/settings/resources' },
-    { label: 'Settings', icon: 'pi pi-cog', route: '/settings' },
-  )
   return items
 })
+
+// Routes that live under the Settings context (so the sidebar shows sections +
+// the top bar shows a back arrow). '/settings' covers /settings/{preferences,
+// security,resources}.
+const settingsPaths = ['/providers', '/models', '/usage', '/bridges', '/users', '/settings']
+const inSettings = computed(() =>
+  settingsPaths.some((p) => route.path === p || route.path.startsWith(p + '/')),
+)
+
+// Remember where we were before entering Settings, so the back arrow returns to
+// the main (chat) view rather than always /agents.
+const lastAppRoute = ref('/agents')
+watch(
+  () => route.fullPath,
+  (p) => {
+    if (!inSettings.value) lastAppRoute.value = p
+  },
+  { immediate: true },
+)
 
 const userMenuRef = ref()
 const userMenuItems = ref([
   {
     label: 'Settings',
     icon: 'pi pi-cog',
-    command: () => router.push('/settings'),
+    command: () => navigateTo('/settings/preferences'),
   },
   {
     label: 'Logout',
@@ -89,6 +107,8 @@ const userMenuItems = ref([
 function toggleUserMenu(event: Event) {
   userMenuRef.value.toggle(event)
 }
+
+const userLabel = computed(() => auth.user?.displayName || auth.user?.email || 'Account')
 
 function isActive(path: string) {
   return route.path.startsWith(path)
@@ -262,6 +282,18 @@ const backTarget = computed<string | null>(() => {
   return null
 })
 
+// Single back affordance for the top bar: leaving Settings returns to wherever
+// we came from (the chat/app view); inside chat it returns to the agent; a
+// run/build detail page returns to its agent. Kept separate from backTarget so
+// the chat-only app-content-flush padding doesn't apply to those detail pages.
+const back = computed<string | null>(() => {
+  if (inSettings.value) return lastAppRoute.value || '/agents'
+  if (backTarget.value) return backTarget.value
+  const m = /^\/agents\/([^/]+)\/(?:runs|builds)\/[^/]+$/.exec(route.path)
+  if (m) return `/agents/${m[1]}`
+  return null
+})
+
 // AgentDetailView (/agents/:id) renders a sticky section nav at the top.
 // Drop the main scroll container's top padding so the nav sits flush
 // against the page top once it sticks, instead of leaving a 1.5rem gap.
@@ -274,11 +306,6 @@ function navigateTo(path: string) {
   drawerVisible.value = false
 }
 
-const userInitial = computed(() => {
-  const name = auth.user?.displayName || auth.user?.email || '?'
-  return name.charAt(0).toUpperCase()
-})
-
 onMounted(() => {
   // All three back the sidebar; failures are non-fatal (empty list /
   // 'Agent' fallback) and self-heal on the next navigation.
@@ -289,7 +316,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="app-layout">
+  <div class="app-layout" :class="{ 'in-settings': inSettings }">
     <!-- Top Toolbar -->
     <Toolbar class="app-toolbar">
       <template #start>
@@ -302,89 +329,105 @@ onMounted(() => {
             @click="drawerVisible = true"
           />
           <Button
-            v-if="backTarget"
+            v-if="back"
             icon="pi pi-arrow-left"
             text
             severity="secondary"
             aria-label="Back"
-            @click="router.push(backTarget)"
+            @click="router.push(back)"
           />
-          <span style="font-size: 1.15rem; font-weight: 700">Airlock</span>
-        </div>
-      </template>
-      <template #end>
-        <div style="display: flex; align-items: center; gap: 0.75rem">
-          <ToggleSwitch v-model="isDark" />
-          <i :class="isDark ? 'pi pi-moon' : 'pi pi-sun'" style="font-size: 0.875rem" />
-          <Avatar
-            :label="userInitial"
-            shape="circle"
-            style="cursor: pointer"
-            @click="toggleUserMenu"
-          />
-          <Menu ref="userMenuRef" :model="userMenuItems" :popup="true" />
+          <span style="font-size: 1.15rem; font-weight: 700">{{ inSettings ? 'Settings' : 'Airlock' }}</span>
         </div>
       </template>
     </Toolbar>
 
+    <!-- User menu popup (triggered from the sidebar/drawer "User" item). -->
+    <Menu ref="userMenuRef" :model="userMenuItems" :popup="true" />
+
     <div class="app-body">
-      <!-- Desktop Sidebar: conversations on top, app nav pinned bottom -->
+      <!-- Desktop Sidebar: chats + Agents/User, or the Settings sections. -->
       <nav class="app-sidebar">
-        <div class="sidebar-conv">
-          <button class="sidebar-new" @click="openNewMenu">
-            <span class="pi pi-plus" />
-            <span>New chat</span>
-          </button>
-          <Menu ref="newMenuRef" :model="agentMenuItems" :popup="true" />
-
-          <div class="conv-list">
-            <div
-              v-for="item in sidebarItems"
-              :key="`${item.kind}-${item.id}`"
-              :class="['conv-item', { active: isActiveItem(item) }]"
-              @click="openSidebarItem(item)"
-            >
-              <div class="conv-text">
-                <span class="conv-agent">
-                  <template v-if="item.kind === 'agent'">
-                    <span v-if="agentEmoji(item.agentId!)">{{ agentEmoji(item.agentId!) }} </span>{{ agentName(item.agentId!) }}
-                  </template>
-                  <template v-else>
-                    <span>⚙️ System Agent</span>
-                    <i v-if="item.status === 'awaiting_confirmation'" class="pi pi-exclamation-circle" style="color: var(--p-yellow-500); margin-left: 0.25rem" />
-                  </template>
-                </span>
-                <span class="conv-title">{{ item.title }}</span>
-              </div>
-              <button
-                class="conv-del"
-                aria-label="Delete conversation"
-                @click="deleteSidebarItem(item, $event)"
-              >
-                <span class="pi pi-trash" />
-              </button>
-            </div>
-            <p v-if="sidebarItems.length === 0" class="conv-empty">
-              No conversations yet
-            </p>
-          </div>
-        </div>
-
-        <div class="sidebar-nav">
+        <!-- Settings context: section list -->
+        <div v-if="inSettings" class="conv-list settings-list">
           <a
-            v-for="item in menuItems"
-            :key="item.route"
-            :class="['sidebar-item', { active: isActive(item.route) }]"
-            @click.prevent="navigateTo(item.route)"
+            v-for="s in settingsSections"
+            :key="s.route"
+            :class="['sidebar-item', { active: route.path === s.route }]"
+            :title="s.label"
+            @click.prevent="navigateTo(s.route)"
           >
-            <span :class="item.icon" />
-            <span>{{ item.label }}</span>
+            <span :class="s.icon" />
+            <span>{{ s.label }}</span>
           </a>
         </div>
+
+        <!-- App context: conversations + slim nav (Agents, User) -->
+        <template v-else>
+          <div class="sidebar-conv">
+            <button class="sidebar-new" @click="openNewMenu">
+              <span class="pi pi-plus" />
+              <span>New chat</span>
+            </button>
+            <Menu ref="newMenuRef" :model="agentMenuItems" :popup="true" />
+
+            <div class="conv-list">
+              <div
+                v-for="item in sidebarItems"
+                :key="`${item.kind}-${item.id}`"
+                :class="['conv-item', { active: isActiveItem(item) }]"
+                @click="openSidebarItem(item)"
+              >
+                <div class="conv-text">
+                  <span class="conv-agent">
+                    <template v-if="item.kind === 'agent'">
+                      <span v-if="agentEmoji(item.agentId!)">{{ agentEmoji(item.agentId!) }} </span>{{ agentName(item.agentId!) }}
+                    </template>
+                    <template v-else>
+                      <span>⚙️ System Agent</span>
+                      <i v-if="item.status === 'awaiting_confirmation'" class="pi pi-exclamation-circle" style="color: var(--p-yellow-500); margin-left: 0.25rem" />
+                    </template>
+                  </span>
+                  <span class="conv-title">{{ item.title }}</span>
+                </div>
+                <button
+                  class="conv-del"
+                  aria-label="Delete conversation"
+                  @click="deleteSidebarItem(item, $event)"
+                >
+                  <span class="pi pi-trash" />
+                </button>
+              </div>
+              <p v-if="sidebarItems.length === 0" class="conv-empty">
+                No conversations yet
+              </p>
+            </div>
+          </div>
+
+          <div class="sidebar-nav">
+            <a
+              :class="['sidebar-item', { active: isActive('/agents') }]"
+              @click.prevent="navigateTo('/agents')"
+            >
+              <span class="pi pi-box" />
+              <span>Agents</span>
+            </a>
+            <a class="sidebar-item" @click="toggleUserMenu">
+              <span class="pi pi-user" />
+              <span>{{ userLabel }}</span>
+              <span class="pi pi-ellipsis-v sidebar-item-more" />
+            </a>
+          </div>
+        </template>
       </nav>
 
-      <!-- Mobile Drawer: same content -->
-      <Drawer v-model:visible="drawerVisible" header="Airlock">
+      <!-- Mobile Drawer: chat navigation. In Settings the hamburger is
+           replaced by the back button and the section rail is always
+           visible, so the drawer is only ever the chat list. -->
+      <Drawer
+        v-model:visible="drawerVisible"
+        header="Airlock"
+        :pt="{ content: { style: 'display:flex;flex-direction:column;min-height:0' } }"
+      >
         <div class="sidebar-conv drawer-conv">
           <button class="sidebar-new" @click="openNewMenu">
             <span class="pi pi-plus" />
@@ -421,13 +464,16 @@ onMounted(() => {
         </div>
         <div class="sidebar-nav">
           <a
-            v-for="item in menuItems"
-            :key="item.route"
-            :class="['sidebar-item', { active: isActive(item.route) }]"
-            @click.prevent="navigateTo(item.route)"
+            :class="['sidebar-item', { active: isActive('/agents') }]"
+            @click.prevent="navigateTo('/agents')"
           >
-            <span :class="item.icon" />
-            <span>{{ item.label }}</span>
+            <span class="pi pi-box" />
+            <span>Agents</span>
+          </a>
+          <a class="sidebar-item" @click="toggleUserMenu">
+            <span class="pi pi-user" />
+            <span>{{ userLabel }}</span>
+            <span class="pi pi-ellipsis-v sidebar-item-more" />
           </a>
         </div>
       </Drawer>
@@ -618,6 +664,8 @@ onMounted(() => {
 
 .sidebar-nav {
   flex-shrink: 0;
+  /* Pin to the bottom of the sidebar even if the conversation list is short. */
+  margin-top: auto;
   border-top: 1px solid var(--p-surface-200);
   padding: 0.25rem 0;
 }
@@ -641,8 +689,41 @@ onMounted(() => {
   color: var(--p-primary-color);
 }
 
+/* Trailing 3-dots on a row that opens a popup menu (e.g. User). */
+.sidebar-item-more {
+  margin-left: auto;
+  font-size: 0.8rem;
+  opacity: 0.55;
+}
+
+/* Settings context: the section list reads like a nav, with a highlighted
+   active row (rather than the bottom-pinned app nav's bare bold). */
+.settings-list {
+  padding-top: 0.5rem;
+}
+.settings-list .sidebar-item {
+  margin: 0 0.4rem;
+  border-radius: 0.5rem;
+}
+.settings-list .sidebar-item:hover {
+  background: var(--p-surface-100);
+}
+:root.dark .settings-list .sidebar-item:hover {
+  background: var(--p-surface-800);
+}
+.settings-list .sidebar-item.active {
+  background: var(--p-highlight-background);
+  color: var(--p-highlight-color);
+  font-weight: 500;
+}
+
+/* The drawer content is a flex column (set via the Drawer's pt, since it's
+   teleported out of this scoped tree): the conversation list fills the slack
+   and the Agents/User nav pins to the bottom (via sidebar-nav margin-top:auto)
+   rather than trailing the list mid-drawer. */
 .drawer-conv {
-  height: 60vh;
+  flex: 1;
+  min-height: 0;
 }
 
 .app-content {
@@ -679,6 +760,26 @@ onMounted(() => {
   }
   .mobile-menu-btn {
     display: inline-flex;
+  }
+
+  /* Settings on mobile: the chat drawer is hidden behind the hamburger, so
+     the section list would be invisible. Surface it instead as an
+     always-visible icon-only rail, and swap the hamburger for the back
+     button (the rail is the navigation; there's nothing to open). */
+  .in-settings .app-sidebar {
+    display: flex;
+    width: 3.25rem;
+  }
+  .in-settings .mobile-menu-btn {
+    display: none;
+  }
+  .in-settings .settings-list .sidebar-item {
+    justify-content: center;
+    margin: 0 0.2rem;
+    padding: 0.65rem 0;
+  }
+  .in-settings .settings-list .sidebar-item > span:last-child {
+    display: none;
   }
 }
 </style>

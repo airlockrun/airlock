@@ -12,7 +12,7 @@ import type { JsonObject, Message } from "@bufbuild/protobuf";
  * Describes the file airlock/v1/types.proto.
  */
 export const file_airlock_v1_types: GenFile = /*@__PURE__*/
-  fileDesc("ChZhaXJsb2NrL3YxL3R5cGVzLnByb3RvEgphaXJsb2NrLnYxIrsBCgZUZW5hbnQSCgoCaWQYASABKAkSDAoEc2x1ZxgCIAEoCRIMCgRuYW1lGAMgASgJEikKCHNldHRpbmdzGAQgASgLMhcuZ29vZ2xlLnByb3RvYnVmLlN0cnVjdBIuCgpjcmVhdGVkX2F0GAUgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIuCgp1cGRhdGVkX2F0GAYgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcCKHAgoEVXNlchIKCgJpZBgBIAEoCRIRCgl0ZW5hbnRfaWQYAiABKAkSDQoFZW1haWwYAyABKAkSFAoMZGlzcGxheV9uYW1lGAQgASgJEisKC3RlbmFudF9yb2xlGAUgASgOMhYuYWlybG9jay52MS5UZW5hbnRSb2xlEhAKCG9pZGNfc3ViGAYgASgJEhwKFG11c3RfY2hhbmdlX3Bhc3N3b3JkGAcgASgIEi4KCmNyZWF0ZWRfYXQYCCABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEi4KCnVwZGF0ZWRfYXQYCSABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wIj4KC1VzZXJTdW1tYXJ5EgoKAmlkGAEgASgJEg0KBWVtYWlsGAIgASgJEhQKDGRpc3BsYXlfbmFtZRgDIAEoCSLtAQoIUHJvdmlkZXISCgoCaWQYASABKAkSEwoLcHJvdmlkZXJfaWQYAiABKAkSFAoMZGlzcGxheV9uYW1lGAMgASgJEhIKCmlzX2VuYWJsZWQYBCABKAgSEAoIYmFzZV91cmwYBSABKAkSFgoOYXBpX2tleV9tYXNrZWQYBiABKAkSLgoKY3JlYXRlZF9hdBgHIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASLgoKdXBkYXRlZF9hdBgIIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASDAoEc2x1ZxgJIAEoCSIoCgxQcm92aWRlckluZm8SCgoCaWQYASABKAkSDAoEbmFtZRgCIAEoCSKDAQoWUHJvdmlkZXJDYXBhYmlsaXR5SW5mbxITCgtwcm92aWRlcl9pZBgBIAEoCRIUCgxkaXNwbGF5X25hbWUYAiABKAkSFAoMY2FwYWJpbGl0aWVzGAMgAygJEhIKCmNvbmZpZ3VyZWQYBCABKAgSFAoMY2F0YWxvZ19vbmx5GAUgASgIItIBCglNb2RlbEluZm8SCgoCaWQYASABKAkSEwoLcHJvdmlkZXJfaWQYAiABKAkSDAoEbmFtZRgDIAEoCRIRCgl0b29sX2NhbGwYBCABKAgSEQoJcmVhc29uaW5nGAUgASgIEhUKDWNvbnRleHRfbGltaXQYBiABKAUSFAoMb3V0cHV0X2xpbWl0GAcgASgFEhIKCmNvc3RfaW5wdXQYCCABKAESEwoLY29zdF9vdXRwdXQYCSABKAESDAoEa2luZBgKIAEoCRIMCgRjYXBzGAsgAygJIqADCglBZ2VudEluZm8SCgoCaWQYASABKAkSDAoEc2x1ZxgCIAEoCRIMCgRuYW1lGAMgASgJEhMKC2Rlc2NyaXB0aW9uGAQgASgJEg4KBnN0YXR1cxgFIAEoCRIWCg51cGdyYWRlX3N0YXR1cxgGIAEoCRIQCghhdXRvX2ZpeBgHIAEoCBITCgtidWlsZF9tb2RlbBgIIAEoCRISCgpleGVjX21vZGVsGAkgASgJEhUKDWVycm9yX21lc3NhZ2UYCiABKAkSLgoKY3JlYXRlZF9hdBgLIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASLgoKdXBkYXRlZF9hdBgMIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASGQoRYnVpbGRfcHJvdmlkZXJfaWQYDSABKAkSGAoQZXhlY19wcm92aWRlcl9pZBgOIAEoCRIPCgdydW5uaW5nGA8gASgIEg0KBWVtb2ppGBAgASgJEhMKC3lvdXJfYWNjZXNzGBEgASgJEhIKCnNvdXJjZV9yZWYYEiABKAki6gMKB1J1bkluZm8SCgoCaWQYASABKAkSEAoIYWdlbnRfaWQYAiABKAkSEQoJYnJpZGdlX2lkGAMgASgJEg4KBnN0YXR1cxgEIAEoCRISCgpzb3VyY2VfcmVmGAUgASgJEi4KDWlucHV0X3BheWxvYWQYBiABKAsyFy5nb29nbGUucHJvdG9idWYuU3RydWN0EisKB2FjdGlvbnMYByABKAsyGi5nb29nbGUucHJvdG9idWYuTGlzdFZhbHVlEhUKDWxsbV90b2tlbnNfaW4YCCABKAUSFgoObGxtX3Rva2Vuc19vdXQYCSABKAUSGQoRbGxtX2Nvc3RfZXN0aW1hdGUYCiABKAESEwoLZHVyYXRpb25fbXMYCyABKAUSEgoKc3Rkb3V0X2xvZxgMIAEoCRIVCg1lcnJvcl9tZXNzYWdlGA0gASgJEhIKCmVycm9yX2tpbmQYDiABKAkSEwoLcGFuaWNfdHJhY2UYDyABKAkSLgoKc3RhcnRlZF9hdBgQIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASLwoLZmluaXNoZWRfYXQYESABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEhkKEWxsbV90b2tlbnNfY2FjaGVkGBIgASgFIoQECg5BZ2VudEJ1aWxkSW5mbxIKCgJpZBgBIAEoCRIQCghhZ2VudF9pZBgCIAEoCRIMCgR0eXBlGAMgASgJEg4KBnN0YXR1cxgEIAEoCRIUCgxpbnN0cnVjdGlvbnMYBSABKAkSEgoKc291cmNlX3JlZhgGIAEoCRIRCglpbWFnZV9yZWYYByABKAkSDwoHc29sX2xvZxgIIAEoCRISCgpkb2NrZXJfbG9nGAkgASgJEg8KB2xvZ19zZXEYCiABKAMSFQoNZXJyb3JfbWVzc2FnZRgLIAEoCRIuCgpzdGFydGVkX2F0GAwgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIvCgtmaW5pc2hlZF9hdBgNIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASEQoJbGxtX2NhbGxzGA4gASgFEhUKDWxsbV90b2tlbnNfaW4YDyABKAUSFgoObGxtX3Rva2Vuc19vdXQYECABKAUSGQoRbGxtX2Nvc3RfZXN0aW1hdGUYESABKAESGQoRbGxtX3Rva2Vuc19jYWNoZWQYFSABKAUSGgoScm9sbGJhY2tfdGFyZ2V0X2lkGBIgASgJEiIKGnJvbGxiYWNrX3RhcmdldF9zb3VyY2VfcmVmGBMgASgJEhMKC3Nka192ZXJzaW9uGBQgASgJIq8BChBDb252ZXJzYXRpb25JbmZvEgoKAmlkGAEgASgJEhAKCGFnZW50X2lkGAIgASgJEg0KBXRpdGxlGAMgASgJEg4KBnNvdXJjZRgEIAEoCRIuCgpjcmVhdGVkX2F0GAUgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIuCgp1cGRhdGVkX2F0GAYgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcCLAAQoQQWdlbnRNZXNzYWdlSW5mbxIKCgJpZBgBIAEoCRILCgNzZXEYAiABKAMSDAoEcm9sZRgDIAEoCRIOCgZzb3VyY2UYBCABKAkSDwoHY29udGVudBgFIAEoCRINCgVwYXJ0cxgGIAEoCRIVCg1jb3N0X2VzdGltYXRlGAcgASgBEi4KCmNyZWF0ZWRfYXQYCCABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEg4KBnJ1bl9pZBgJIAEoCSLiAQoLV2ViaG9va0luZm8SCgoCaWQYASABKAkSDAoEcGF0aBgCIAEoCRITCgt2ZXJpZnlfbW9kZRgDIAEoCRISCgpwdWJsaWNfdXJsGAQgASgJEhMKC2Rlc2NyaXB0aW9uGAUgASgJEhUKDXNlY3JldF9tYXNrZWQYBiABKAkSNAoQbGFzdF9yZWNlaXZlZF9hdBgHIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASLgoKY3JlYXRlZF9hdBgIIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXAigwIKDFNjaGVkdWxlSW5mbxIKCgJpZBgBIAEoCRIMCgRzbHVnGAIgASgJEhAKCHNjaGVkdWxlGAMgASgJEhMKC2Rlc2NyaXB0aW9uGAQgASgJEjEKDWxhc3RfZmlyZWRfYXQYBSABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEi4KCmNyZWF0ZWRfYXQYBiABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEgwKBGtpbmQYByABKAkSMAoMbmV4dF9maXJlX2F0GAggASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIPCgdlbmFibGVkGAkgASgIIloKCVJvdXRlSW5mbxIKCgJpZBgBIAEoCRIMCgRwYXRoGAIgASgJEg4KBm1ldGhvZBgDIAEoCRIOCgZhY2Nlc3MYBCABKAkSEwoLZGVzY3JpcHRpb24YBSABKAkigQIKDkNvbm5lY3Rpb25JbmZvEgoKAmlkGAEgASgJEgwKBHNsdWcYAiABKAkSDAoEbmFtZRgDIAEoCRITCgtkZXNjcmlwdGlvbhgEIAEoCRIRCglhdXRoX21vZGUYBSABKAkSEAoIYXV0aF91cmwYBiABKAkSGgoSc2V0dXBfaW5zdHJ1Y3Rpb25zGAcgASgJEhIKCmF1dGhvcml6ZWQYCCABKAgSFQoNaGFzX29hdXRoX2FwcBgJIAEoCBI0ChB0b2tlbl9leHBpcmVzX2F0GAogASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIQCgh3YXJuaW5ncxgLIAMoCSK1AgoKQnJpZGdlSW5mbxIKCgJpZBgBIAEoCRIQCghhZ2VudF9pZBgCIAEoCRImCgVvd25lchgDIAEoCzIXLmFpcmxvY2sudjEuVXNlclN1bW1hcnkSDAoEdHlwZRgEIAEoCRIMCgRuYW1lGAUgASgJEhQKDGJvdF91c2VybmFtZRgGIAEoCRIOCgZzdGF0dXMYByABKAkSLgoKY3JlYXRlZF9hdBgIIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASLgoKdXBkYXRlZF9hdBgJIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASLAoIc2V0dGluZ3MYCiABKAsyGi5haXJsb2NrLnYxLkJyaWRnZVNldHRpbmdzEhEKCWlzX3N5c3RlbRgLIAEoCCKSAQoOQnJpZGdlU2V0dGluZ3MSGAoQYWxsb3dfcHVibGljX2RtcxgBIAEoCBIiChpwdWJsaWNfc2Vzc2lvbl90dGxfc2Vjb25kcxgCIAEoBRIbChNwdWJsaWNfc2Vzc2lvbl9tb2RlGAMgASgJEiUKHXB1YmxpY19wcm9tcHRfdGltZW91dF9zZWNvbmRzGAQgASgFIsYBChRQbGF0Zm9ybUlkZW50aXR5SW5mbxIKCgJpZBgBIAEoCRIQCghwbGF0Zm9ybRgCIAEoCRIYChBwbGF0Zm9ybV91c2VyX2lkGAMgASgJEi4KCmNyZWF0ZWRfYXQYBCABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEhUKDW93bmVyX3VzZXJfaWQYBSABKAkSEwoLb3duZXJfZW1haWwYBiABKAkSGgoSb3duZXJfZGlzcGxheV9uYW1lGAcgASgJInYKCFRvb2xJbmZvEgoKAmlkGAEgASgJEgwKBG5hbWUYAiABKAkSEwoLZGVzY3JpcHRpb24YAyABKAkSDgoGYWNjZXNzGAQgASgJEhQKDGlucHV0X3NjaGVtYRgFIAEoCRIVCg1vdXRwdXRfc2NoZW1hGAYgASgJIlQKD0FnZW50QnVpbGRFdmVudBIQCghhZ2VudF9pZBgBIAEoCRIQCghidWlsZF9pZBgCIAEoCRIOCgZzdGF0dXMYAyABKAkSDQoFZXJyb3IYBCABKAkiYwoSQWdlbnRCdWlsZExvZ0V2ZW50EhAKCGFnZW50X2lkGAEgASgJEhAKCGJ1aWxkX2lkGAIgASgJEgsKA3NlcRgDIAEoAxIOCgZzdHJlYW0YBCABKAkSDAoEbGluZRgFIAEoCSIkChBBZ2VudFN5bmNlZEV2ZW50EhAKCGFnZW50X2lkGAEgASgJImUKCEZpbGVJbmZvEgwKBHBhdGgYASABKAkSEAoIZmlsZW5hbWUYAiABKAkSFAoMY29udGVudF90eXBlGAMgASgJEgwKBHNpemUYBCABKAMSFQoNbGFzdF9tb2RpZmllZBgFIAEoCSJOCglUb3BpY0luZm8SCgoCaWQYASABKAkSDAoEc2x1ZxgCIAEoCRITCgtkZXNjcmlwdGlvbhgDIAEoCRISCgpzdWJzY3JpYmVkGAQgASgIIpIFChJTeXN0ZW1TZXR0aW5nc0luZm8SGwoTZGVmYXVsdF9idWlsZF9tb2RlbBgBIAEoCRIaChJkZWZhdWx0X2V4ZWNfbW9kZWwYAiABKAkSGQoRZGVmYXVsdF9zdHRfbW9kZWwYAyABKAkSHAoUZGVmYXVsdF92aXNpb25fbW9kZWwYBCABKAkSGQoRZGVmYXVsdF90dHNfbW9kZWwYBSABKAkSHwoXZGVmYXVsdF9pbWFnZV9nZW5fbW9kZWwYBiABKAkSHAoUZGVmYXVsdF9zZWFyY2hfbW9kZWwYByABKAkSHwoXZGVmYXVsdF9lbWJlZGRpbmdfbW9kZWwYCCABKAkSIQoZZGVmYXVsdF9idWlsZF9wcm92aWRlcl9pZBgJIAEoCRIgChhkZWZhdWx0X2V4ZWNfcHJvdmlkZXJfaWQYCiABKAkSHwoXZGVmYXVsdF9zdHRfcHJvdmlkZXJfaWQYCyABKAkSIgoaZGVmYXVsdF92aXNpb25fcHJvdmlkZXJfaWQYDCABKAkSHwoXZGVmYXVsdF90dHNfcHJvdmlkZXJfaWQYDSABKAkSJQodZGVmYXVsdF9pbWFnZV9nZW5fcHJvdmlkZXJfaWQYDiABKAkSIgoaZGVmYXVsdF9zZWFyY2hfcHJvdmlkZXJfaWQYDyABKAkSJQodZGVmYXVsdF9lbWJlZGRpbmdfcHJvdmlkZXJfaWQYECABKAkSJwofdGVsZWdyYW1fbWFuYWdlcl9ib3RfY29uZmlndXJlZBgRIAEoCBIlCh10ZWxlZ3JhbV9tYW5hZ2VyX2JvdF91c2VybmFtZRgSIAEoCRIiChp0ZWxlZ3JhbV9tYW5hZ2VyX2JvdF9lcnJvchgTIAEoCSJdCh5DcmVhdGVNYW5hZ2VkQm90U2Vzc2lvblJlcXVlc3QSEAoIYWdlbnRfaWQYASABKAkSEQoJaXNfc3lzdGVtGAIgASgIEhYKDnN1Z2dlc3RlZF9uYW1lGAMgASgJInMKH0NyZWF0ZU1hbmFnZWRCb3RTZXNzaW9uUmVzcG9uc2USDQoFbm9uY2UYASABKAkSEQoJZGVlcF9saW5rGAIgASgJEi4KCmV4cGlyZXNfYXQYAyABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wIjAKH1VwZGF0ZVRlbGVncmFtTWFuYWdlckJvdFJlcXVlc3QSDQoFdG9rZW4YASABKAkiVwogVXBkYXRlVGVsZWdyYW1NYW5hZ2VyQm90UmVzcG9uc2USEgoKY29uZmlndXJlZBgBIAEoCBIQCgh1c2VybmFtZRgCIAEoCRINCgVlcnJvchgDIAEoCSLFAQoNR2l0Q3JlZGVudGlhbBIKCgJpZBgBIAEoCRIPCgd1c2VyX2lkGAIgASgJEgwKBHR5cGUYAyABKAkSDAoEbmFtZRgEIAEoCRIZChFnaXRodWJfaW5zdGFsbF9pZBgFIAEoCRIuCgpjcmVhdGVkX2F0GAYgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIwCgxsYXN0X3VzZWRfYXQYByABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wIqcBCgdQYXNza2V5EgoKAmlkGAEgASgJEhUKDWZyaWVuZGx5X25hbWUYAiABKAkSLgoKY3JlYXRlZF9hdBgDIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASMAoMbGFzdF91c2VkX2F0GAQgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIXCg9iYWNrdXBfZWxpZ2libGUYBSABKAgi0AEKDkFnZW50R2l0Q29uZmlnEhAKCGFnZW50X2lkGAEgASgJEhYKDmdpdF9yZW1vdGVfdXJsGAIgASgJEhkKEWdpdF9jcmVkZW50aWFsX2lkGAMgASgJEhsKE2dpdF9jcmVkZW50aWFsX25hbWUYBCABKAkSFgoOZGVmYXVsdF9icmFuY2gYBSABKAkSEwoLd2ViaG9va191cmwYBiABKAkSFgoOd2ViaG9va19zZWNyZXQYByABKAkSFwoPbGFzdF9zeW5jZWRfcmVmGAggASgJIpICCg1NQ1BTZXJ2ZXJJbmZvEgoKAmlkGAEgASgJEgwKBHNsdWcYAiABKAkSDAoEbmFtZRgDIAEoCRILCgN1cmwYBCABKAkSEQoJYXV0aF9tb2RlGAUgASgJEhIKCmF1dGhvcml6ZWQYBiABKAgSFQoNaGFzX29hdXRoX2FwcBgHIAEoCBISCgp0b29sX2NvdW50GAggASgFEhAKCGF1dGhfdXJsGAkgASgJEjQKEHRva2VuX2V4cGlyZXNfYXQYCiABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEjIKDmxhc3Rfc3luY2VkX2F0GAsgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcCJSCg1NQ1BTdGF0dXNJbmZvEgwKBHNsdWcYASABKAkSDAoEbmFtZRgCIAEoCRIRCglhdXRoX21vZGUYAyABKAkSEgoKYXV0aG9yaXplZBgEIAEoCCK9AQoKRW52VmFySW5mbxIMCgRzbHVnGAEgASgJEhMKC2Rlc2NyaXB0aW9uGAIgASgJEhEKCWlzX3NlY3JldBgDIAEoCBISCgpjb25maWd1cmVkGAQgASgIEhUKDWRlZmF1bHRfdmFsdWUYBSABKAkSDwoHcGF0dGVybhgGIAEoCRINCgV2YWx1ZRgHIAEoCRIuCgp1cGRhdGVkX2F0GAggASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcCKyAQoLU2libGluZ0luZm8SCgoCaWQYASABKAkSDAoEc2x1ZxgCIAEoCRIMCgRuYW1lGAMgASgJEhMKC2Rlc2NyaXB0aW9uGAQgASgJEhwKFGFsbG93X25vbl9tZW1iZXJfbWNwGAUgASgIEhgKEGFsbG93X3B1YmxpY19tY3AYBiABKAgSLgoKY3JlYXRlZF9hdBgHIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXAiggEKEkFkZGFibGVTaWJsaW5nSW5mbxIKCgJpZBgBIAEoCRIMCgRzbHVnGAIgASgJEgwKBG5hbWUYAyABKAkSEwoLZGVzY3JpcHRpb24YBCABKAkSHAoUYWxsb3dfbm9uX21lbWJlcl9tY3AYBSABKAgSEQoJaXNfbWVtYmVyGAYgASgIIkUKC0EyQVNldHRpbmdzEhwKFGFsbG93X25vbl9tZW1iZXJfbWNwGAEgASgIEhgKEGFsbG93X3B1YmxpY19tY3AYAiABKAgi5AIKEEV4ZWNFbmRwb2ludEluZm8SCgoCaWQYASABKAkSDAoEc2x1ZxgCIAEoCRITCgtkZXNjcmlwdGlvbhgDIAEoCRIQCghsbG1faGludBgEIAEoCRIOCgZhY2Nlc3MYBSABKAkSEQoJdHJhbnNwb3J0GAYgASgJEgwKBGhvc3QYByABKAkSDAoEcG9ydBgIIAEoBRIQCghzc2hfdXNlchgJIAEoCRIaChJwdWJsaWNfa2V5X29wZW5zc2gYCiABKAkSGgoScHVibGljX2tleV9jb21tZW50GAsgASgJEhwKFGhvc3Rfa2V5X2ZpbmdlcnByaW50GAwgASgJEjYKEmhvc3Rfa2V5X3Bpbm5lZF9hdBgNIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASMAoMbGFzdF91c2VkX2F0GA4gASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcCJ7ChZFeGVjRW5kcG9pbnRUZXN0UmVzdWx0EgoKAm9rGAEgASgIEhEKCWV4aXRfY29kZRgCIAEoBRITCgtkdXJhdGlvbl9tcxgDIAEoAxIOCgZzdGRvdXQYBCABKAkSDgoGc3RkZXJyGAUgASgJEg0KBWVycm9yGAYgASgJIk0KD1NldHVwQ291bnRzSW5mbxITCgtjb25uZWN0aW9ucxgBIAEoBRITCgttY3Bfc2VydmVycxgCIAEoBRIQCghlbnZfdmFycxgDIAEoBSpvCgpUZW5hbnRSb2xlEhsKF1RFTkFOVF9ST0xFX1VOU1BFQ0lGSUVEEAASFQoRVEVOQU5UX1JPTEVfQURNSU4QARIXChNURU5BTlRfUk9MRV9NQU5BR0VSEAISFAoQVEVOQU5UX1JPTEVfVVNFUhADKo4BCgtNZXNzYWdlUm9sZRIcChhNRVNTQUdFX1JPTEVfVU5TUEVDSUZJRUQQABIVChFNRVNTQUdFX1JPTEVfVVNFUhABEhoKFk1FU1NBR0VfUk9MRV9BU1NJU1RBTlQQAhIXChNNRVNTQUdFX1JPTEVfU1lTVEVNEAMSFQoRTUVTU0FHRV9ST0xFX1RPT0wQBEI4WjZnaXRodWIuY29tL2FpcmxvY2tydW4vYWlybG9jay9nZW4vYWlybG9jay92MTthaXJsb2NrdjFiBnByb3RvMw", [file_google_protobuf_struct, file_google_protobuf_timestamp]);
+  fileDesc("ChZhaXJsb2NrL3YxL3R5cGVzLnByb3RvEgphaXJsb2NrLnYxIrsBCgZUZW5hbnQSCgoCaWQYASABKAkSDAoEc2x1ZxgCIAEoCRIMCgRuYW1lGAMgASgJEikKCHNldHRpbmdzGAQgASgLMhcuZ29vZ2xlLnByb3RvYnVmLlN0cnVjdBIuCgpjcmVhdGVkX2F0GAUgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIuCgp1cGRhdGVkX2F0GAYgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcCKdAgoEVXNlchIKCgJpZBgBIAEoCRIRCgl0ZW5hbnRfaWQYAiABKAkSDQoFZW1haWwYAyABKAkSFAoMZGlzcGxheV9uYW1lGAQgASgJEisKC3RlbmFudF9yb2xlGAUgASgOMhYuYWlybG9jay52MS5UZW5hbnRSb2xlEhAKCG9pZGNfc3ViGAYgASgJEhwKFG11c3RfY2hhbmdlX3Bhc3N3b3JkGAcgASgIEi4KCmNyZWF0ZWRfYXQYCCABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEi4KCnVwZGF0ZWRfYXQYCSABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEhQKDGhhc19wYXNzd29yZBgKIAEoCCI+CgtVc2VyU3VtbWFyeRIKCgJpZBgBIAEoCRINCgVlbWFpbBgCIAEoCRIUCgxkaXNwbGF5X25hbWUYAyABKAki7QEKCFByb3ZpZGVyEgoKAmlkGAEgASgJEhMKC3Byb3ZpZGVyX2lkGAIgASgJEhQKDGRpc3BsYXlfbmFtZRgDIAEoCRISCgppc19lbmFibGVkGAQgASgIEhAKCGJhc2VfdXJsGAUgASgJEhYKDmFwaV9rZXlfbWFza2VkGAYgASgJEi4KCmNyZWF0ZWRfYXQYByABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEi4KCnVwZGF0ZWRfYXQYCCABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEgwKBHNsdWcYCSABKAkiKAoMUHJvdmlkZXJJbmZvEgoKAmlkGAEgASgJEgwKBG5hbWUYAiABKAkigwEKFlByb3ZpZGVyQ2FwYWJpbGl0eUluZm8SEwoLcHJvdmlkZXJfaWQYASABKAkSFAoMZGlzcGxheV9uYW1lGAIgASgJEhQKDGNhcGFiaWxpdGllcxgDIAMoCRISCgpjb25maWd1cmVkGAQgASgIEhQKDGNhdGFsb2dfb25seRgFIAEoCCLSAQoJTW9kZWxJbmZvEgoKAmlkGAEgASgJEhMKC3Byb3ZpZGVyX2lkGAIgASgJEgwKBG5hbWUYAyABKAkSEQoJdG9vbF9jYWxsGAQgASgIEhEKCXJlYXNvbmluZxgFIAEoCBIVCg1jb250ZXh0X2xpbWl0GAYgASgFEhQKDG91dHB1dF9saW1pdBgHIAEoBRISCgpjb3N0X2lucHV0GAggASgBEhMKC2Nvc3Rfb3V0cHV0GAkgASgBEgwKBGtpbmQYCiABKAkSDAoEY2FwcxgLIAMoCSKgAwoJQWdlbnRJbmZvEgoKAmlkGAEgASgJEgwKBHNsdWcYAiABKAkSDAoEbmFtZRgDIAEoCRITCgtkZXNjcmlwdGlvbhgEIAEoCRIOCgZzdGF0dXMYBSABKAkSFgoOdXBncmFkZV9zdGF0dXMYBiABKAkSEAoIYXV0b19maXgYByABKAgSEwoLYnVpbGRfbW9kZWwYCCABKAkSEgoKZXhlY19tb2RlbBgJIAEoCRIVCg1lcnJvcl9tZXNzYWdlGAogASgJEi4KCmNyZWF0ZWRfYXQYCyABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEi4KCnVwZGF0ZWRfYXQYDCABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEhkKEWJ1aWxkX3Byb3ZpZGVyX2lkGA0gASgJEhgKEGV4ZWNfcHJvdmlkZXJfaWQYDiABKAkSDwoHcnVubmluZxgPIAEoCBINCgVlbW9qaRgQIAEoCRITCgt5b3VyX2FjY2VzcxgRIAEoCRISCgpzb3VyY2VfcmVmGBIgASgJIuoDCgdSdW5JbmZvEgoKAmlkGAEgASgJEhAKCGFnZW50X2lkGAIgASgJEhEKCWJyaWRnZV9pZBgDIAEoCRIOCgZzdGF0dXMYBCABKAkSEgoKc291cmNlX3JlZhgFIAEoCRIuCg1pbnB1dF9wYXlsb2FkGAYgASgLMhcuZ29vZ2xlLnByb3RvYnVmLlN0cnVjdBIrCgdhY3Rpb25zGAcgASgLMhouZ29vZ2xlLnByb3RvYnVmLkxpc3RWYWx1ZRIVCg1sbG1fdG9rZW5zX2luGAggASgFEhYKDmxsbV90b2tlbnNfb3V0GAkgASgFEhkKEWxsbV9jb3N0X2VzdGltYXRlGAogASgBEhMKC2R1cmF0aW9uX21zGAsgASgFEhIKCnN0ZG91dF9sb2cYDCABKAkSFQoNZXJyb3JfbWVzc2FnZRgNIAEoCRISCgplcnJvcl9raW5kGA4gASgJEhMKC3BhbmljX3RyYWNlGA8gASgJEi4KCnN0YXJ0ZWRfYXQYECABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEi8KC2ZpbmlzaGVkX2F0GBEgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIZChFsbG1fdG9rZW5zX2NhY2hlZBgSIAEoBSLUBAoOQWdlbnRCdWlsZEluZm8SCgoCaWQYASABKAkSEAoIYWdlbnRfaWQYAiABKAkSDAoEdHlwZRgDIAEoCRIOCgZzdGF0dXMYBCABKAkSFAoMaW5zdHJ1Y3Rpb25zGAUgASgJEhIKCnNvdXJjZV9yZWYYBiABKAkSEQoJaW1hZ2VfcmVmGAcgASgJEg8KB3NvbF9sb2cYCCABKAkSEgoKZG9ja2VyX2xvZxgJIAEoCRIPCgdsb2dfc2VxGAogASgDEhUKDWVycm9yX21lc3NhZ2UYCyABKAkSLgoKc3RhcnRlZF9hdBgMIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASLwoLZmluaXNoZWRfYXQYDSABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEhEKCWxsbV9jYWxscxgOIAEoBRIVCg1sbG1fdG9rZW5zX2luGA8gASgFEhYKDmxsbV90b2tlbnNfb3V0GBAgASgFEhkKEWxsbV9jb3N0X2VzdGltYXRlGBEgASgBEhkKEWxsbV90b2tlbnNfY2FjaGVkGBUgASgFEhoKEnJvbGxiYWNrX3RhcmdldF9pZBgSIAEoCRIiChpyb2xsYmFja190YXJnZXRfc291cmNlX3JlZhgTIAEoCRITCgtzZGtfdmVyc2lvbhgUIAEoCRIjCgV0b2RvcxgWIAMoCzIULmFpcmxvY2sudjEuVG9kb0l0ZW0SEwoLZXhpdF9zdGF0dXMYFyABKAkSFAoMZXhpdF9tZXNzYWdlGBggASgJIq8BChBDb252ZXJzYXRpb25JbmZvEgoKAmlkGAEgASgJEhAKCGFnZW50X2lkGAIgASgJEg0KBXRpdGxlGAMgASgJEg4KBnNvdXJjZRgEIAEoCRIuCgpjcmVhdGVkX2F0GAUgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIuCgp1cGRhdGVkX2F0GAYgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcCLAAQoQQWdlbnRNZXNzYWdlSW5mbxIKCgJpZBgBIAEoCRILCgNzZXEYAiABKAMSDAoEcm9sZRgDIAEoCRIOCgZzb3VyY2UYBCABKAkSDwoHY29udGVudBgFIAEoCRINCgVwYXJ0cxgGIAEoCRIVCg1jb3N0X2VzdGltYXRlGAcgASgBEi4KCmNyZWF0ZWRfYXQYCCABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEg4KBnJ1bl9pZBgJIAEoCSLiAQoLV2ViaG9va0luZm8SCgoCaWQYASABKAkSDAoEcGF0aBgCIAEoCRITCgt2ZXJpZnlfbW9kZRgDIAEoCRISCgpwdWJsaWNfdXJsGAQgASgJEhMKC2Rlc2NyaXB0aW9uGAUgASgJEhUKDXNlY3JldF9tYXNrZWQYBiABKAkSNAoQbGFzdF9yZWNlaXZlZF9hdBgHIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASLgoKY3JlYXRlZF9hdBgIIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXAigwIKDFNjaGVkdWxlSW5mbxIKCgJpZBgBIAEoCRIMCgRzbHVnGAIgASgJEhAKCHNjaGVkdWxlGAMgASgJEhMKC2Rlc2NyaXB0aW9uGAQgASgJEjEKDWxhc3RfZmlyZWRfYXQYBSABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEi4KCmNyZWF0ZWRfYXQYBiABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEgwKBGtpbmQYByABKAkSMAoMbmV4dF9maXJlX2F0GAggASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIPCgdlbmFibGVkGAkgASgIIloKCVJvdXRlSW5mbxIKCgJpZBgBIAEoCRIMCgRwYXRoGAIgASgJEg4KBm1ldGhvZBgDIAEoCRIOCgZhY2Nlc3MYBCABKAkSEwoLZGVzY3JpcHRpb24YBSABKAkigQIKDkNvbm5lY3Rpb25JbmZvEgoKAmlkGAEgASgJEgwKBHNsdWcYAiABKAkSDAoEbmFtZRgDIAEoCRITCgtkZXNjcmlwdGlvbhgEIAEoCRIRCglhdXRoX21vZGUYBSABKAkSEAoIYXV0aF91cmwYBiABKAkSGgoSc2V0dXBfaW5zdHJ1Y3Rpb25zGAcgASgJEhIKCmF1dGhvcml6ZWQYCCABKAgSFQoNaGFzX29hdXRoX2FwcBgJIAEoCBI0ChB0b2tlbl9leHBpcmVzX2F0GAogASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIQCgh3YXJuaW5ncxgLIAMoCSK1AgoKQnJpZGdlSW5mbxIKCgJpZBgBIAEoCRIQCghhZ2VudF9pZBgCIAEoCRImCgVvd25lchgDIAEoCzIXLmFpcmxvY2sudjEuVXNlclN1bW1hcnkSDAoEdHlwZRgEIAEoCRIMCgRuYW1lGAUgASgJEhQKDGJvdF91c2VybmFtZRgGIAEoCRIOCgZzdGF0dXMYByABKAkSLgoKY3JlYXRlZF9hdBgIIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASLgoKdXBkYXRlZF9hdBgJIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASLAoIc2V0dGluZ3MYCiABKAsyGi5haXJsb2NrLnYxLkJyaWRnZVNldHRpbmdzEhEKCWlzX3N5c3RlbRgLIAEoCCKSAQoOQnJpZGdlU2V0dGluZ3MSGAoQYWxsb3dfcHVibGljX2RtcxgBIAEoCBIiChpwdWJsaWNfc2Vzc2lvbl90dGxfc2Vjb25kcxgCIAEoBRIbChNwdWJsaWNfc2Vzc2lvbl9tb2RlGAMgASgJEiUKHXB1YmxpY19wcm9tcHRfdGltZW91dF9zZWNvbmRzGAQgASgFIsYBChRQbGF0Zm9ybUlkZW50aXR5SW5mbxIKCgJpZBgBIAEoCRIQCghwbGF0Zm9ybRgCIAEoCRIYChBwbGF0Zm9ybV91c2VyX2lkGAMgASgJEi4KCmNyZWF0ZWRfYXQYBCABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEhUKDW93bmVyX3VzZXJfaWQYBSABKAkSEwoLb3duZXJfZW1haWwYBiABKAkSGgoSb3duZXJfZGlzcGxheV9uYW1lGAcgASgJInYKCFRvb2xJbmZvEgoKAmlkGAEgASgJEgwKBG5hbWUYAiABKAkSEwoLZGVzY3JpcHRpb24YAyABKAkSDgoGYWNjZXNzGAQgASgJEhQKDGlucHV0X3NjaGVtYRgFIAEoCRIVCg1vdXRwdXRfc2NoZW1hGAYgASgJIowBCg9BZ2VudEJ1aWxkRXZlbnQSEAoIYWdlbnRfaWQYASABKAkSEAoIYnVpbGRfaWQYAiABKAkSDgoGc3RhdHVzGAMgASgJEg0KBWVycm9yGAQgASgJEhIKCnRhc2tzX2RvbmUYBSABKAUSEwoLdGFza3NfdG90YWwYBiABKAUSDQoFcGhhc2UYByABKAkiYwoSQWdlbnRCdWlsZExvZ0V2ZW50EhAKCGFnZW50X2lkGAEgASgJEhAKCGJ1aWxkX2lkGAIgASgJEgsKA3NlcRgDIAEoAxIOCgZzdHJlYW0YBCABKAkSDAoEbGluZRgFIAEoCSJJCghUb2RvSXRlbRIPCgdjb250ZW50GAEgASgJEg4KBnN0YXR1cxgCIAEoCRIQCghwcmlvcml0eRgDIAEoCRIKCgJpZBgEIAEoCSKMAQoVQWdlbnRCdWlsZEFjdGlvbkV2ZW50EhAKCGJ1aWxkX2lkGAEgASgJEgsKA3NlcRgCIAEoAxIMCgRraW5kGAMgASgJEg0KBWxhYmVsGAQgASgJEg4KBmRldGFpbBgFIAEoCRIUCgx0b29sX2NhbGxfaWQYBiABKAkSEQoJdG9vbF9uYW1lGAcgASgJIlkKE0FnZW50QnVpbGRUb2RvRXZlbnQSEAoIYnVpbGRfaWQYASABKAkSCwoDc2VxGAIgASgDEiMKBXRvZG9zGAMgAygLMhQuYWlybG9jay52MS5Ub2RvSXRlbSIkChBBZ2VudFN5bmNlZEV2ZW50EhAKCGFnZW50X2lkGAEgASgJImUKCEZpbGVJbmZvEgwKBHBhdGgYASABKAkSEAoIZmlsZW5hbWUYAiABKAkSFAoMY29udGVudF90eXBlGAMgASgJEgwKBHNpemUYBCABKAMSFQoNbGFzdF9tb2RpZmllZBgFIAEoCSJOCglUb3BpY0luZm8SCgoCaWQYASABKAkSDAoEc2x1ZxgCIAEoCRITCgtkZXNjcmlwdGlvbhgDIAEoCRISCgpzdWJzY3JpYmVkGAQgASgIIpIFChJTeXN0ZW1TZXR0aW5nc0luZm8SGwoTZGVmYXVsdF9idWlsZF9tb2RlbBgBIAEoCRIaChJkZWZhdWx0X2V4ZWNfbW9kZWwYAiABKAkSGQoRZGVmYXVsdF9zdHRfbW9kZWwYAyABKAkSHAoUZGVmYXVsdF92aXNpb25fbW9kZWwYBCABKAkSGQoRZGVmYXVsdF90dHNfbW9kZWwYBSABKAkSHwoXZGVmYXVsdF9pbWFnZV9nZW5fbW9kZWwYBiABKAkSHAoUZGVmYXVsdF9zZWFyY2hfbW9kZWwYByABKAkSHwoXZGVmYXVsdF9lbWJlZGRpbmdfbW9kZWwYCCABKAkSIQoZZGVmYXVsdF9idWlsZF9wcm92aWRlcl9pZBgJIAEoCRIgChhkZWZhdWx0X2V4ZWNfcHJvdmlkZXJfaWQYCiABKAkSHwoXZGVmYXVsdF9zdHRfcHJvdmlkZXJfaWQYCyABKAkSIgoaZGVmYXVsdF92aXNpb25fcHJvdmlkZXJfaWQYDCABKAkSHwoXZGVmYXVsdF90dHNfcHJvdmlkZXJfaWQYDSABKAkSJQodZGVmYXVsdF9pbWFnZV9nZW5fcHJvdmlkZXJfaWQYDiABKAkSIgoaZGVmYXVsdF9zZWFyY2hfcHJvdmlkZXJfaWQYDyABKAkSJQodZGVmYXVsdF9lbWJlZGRpbmdfcHJvdmlkZXJfaWQYECABKAkSJwofdGVsZWdyYW1fbWFuYWdlcl9ib3RfY29uZmlndXJlZBgRIAEoCBIlCh10ZWxlZ3JhbV9tYW5hZ2VyX2JvdF91c2VybmFtZRgSIAEoCRIiChp0ZWxlZ3JhbV9tYW5hZ2VyX2JvdF9lcnJvchgTIAEoCSJdCh5DcmVhdGVNYW5hZ2VkQm90U2Vzc2lvblJlcXVlc3QSEAoIYWdlbnRfaWQYASABKAkSEQoJaXNfc3lzdGVtGAIgASgIEhYKDnN1Z2dlc3RlZF9uYW1lGAMgASgJInMKH0NyZWF0ZU1hbmFnZWRCb3RTZXNzaW9uUmVzcG9uc2USDQoFbm9uY2UYASABKAkSEQoJZGVlcF9saW5rGAIgASgJEi4KCmV4cGlyZXNfYXQYAyABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wIjAKH1VwZGF0ZVRlbGVncmFtTWFuYWdlckJvdFJlcXVlc3QSDQoFdG9rZW4YASABKAkiVwogVXBkYXRlVGVsZWdyYW1NYW5hZ2VyQm90UmVzcG9uc2USEgoKY29uZmlndXJlZBgBIAEoCBIQCgh1c2VybmFtZRgCIAEoCRINCgVlcnJvchgDIAEoCSLFAQoNR2l0Q3JlZGVudGlhbBIKCgJpZBgBIAEoCRIPCgd1c2VyX2lkGAIgASgJEgwKBHR5cGUYAyABKAkSDAoEbmFtZRgEIAEoCRIZChFnaXRodWJfaW5zdGFsbF9pZBgFIAEoCRIuCgpjcmVhdGVkX2F0GAYgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIwCgxsYXN0X3VzZWRfYXQYByABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wIqcBCgdQYXNza2V5EgoKAmlkGAEgASgJEhUKDWZyaWVuZGx5X25hbWUYAiABKAkSLgoKY3JlYXRlZF9hdBgDIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASMAoMbGFzdF91c2VkX2F0GAQgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIXCg9iYWNrdXBfZWxpZ2libGUYBSABKAgi0AEKDkFnZW50R2l0Q29uZmlnEhAKCGFnZW50X2lkGAEgASgJEhYKDmdpdF9yZW1vdGVfdXJsGAIgASgJEhkKEWdpdF9jcmVkZW50aWFsX2lkGAMgASgJEhsKE2dpdF9jcmVkZW50aWFsX25hbWUYBCABKAkSFgoOZGVmYXVsdF9icmFuY2gYBSABKAkSEwoLd2ViaG9va191cmwYBiABKAkSFgoOd2ViaG9va19zZWNyZXQYByABKAkSFwoPbGFzdF9zeW5jZWRfcmVmGAggASgJIpICCg1NQ1BTZXJ2ZXJJbmZvEgoKAmlkGAEgASgJEgwKBHNsdWcYAiABKAkSDAoEbmFtZRgDIAEoCRILCgN1cmwYBCABKAkSEQoJYXV0aF9tb2RlGAUgASgJEhIKCmF1dGhvcml6ZWQYBiABKAgSFQoNaGFzX29hdXRoX2FwcBgHIAEoCBISCgp0b29sX2NvdW50GAggASgFEhAKCGF1dGhfdXJsGAkgASgJEjQKEHRva2VuX2V4cGlyZXNfYXQYCiABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEjIKDmxhc3Rfc3luY2VkX2F0GAsgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcCJSCg1NQ1BTdGF0dXNJbmZvEgwKBHNsdWcYASABKAkSDAoEbmFtZRgCIAEoCRIRCglhdXRoX21vZGUYAyABKAkSEgoKYXV0aG9yaXplZBgEIAEoCCK9AQoKRW52VmFySW5mbxIMCgRzbHVnGAEgASgJEhMKC2Rlc2NyaXB0aW9uGAIgASgJEhEKCWlzX3NlY3JldBgDIAEoCBISCgpjb25maWd1cmVkGAQgASgIEhUKDWRlZmF1bHRfdmFsdWUYBSABKAkSDwoHcGF0dGVybhgGIAEoCRINCgV2YWx1ZRgHIAEoCRIuCgp1cGRhdGVkX2F0GAggASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcCKyAQoLU2libGluZ0luZm8SCgoCaWQYASABKAkSDAoEc2x1ZxgCIAEoCRIMCgRuYW1lGAMgASgJEhMKC2Rlc2NyaXB0aW9uGAQgASgJEhwKFGFsbG93X25vbl9tZW1iZXJfbWNwGAUgASgIEhgKEGFsbG93X3B1YmxpY19tY3AYBiABKAgSLgoKY3JlYXRlZF9hdBgHIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXAiggEKEkFkZGFibGVTaWJsaW5nSW5mbxIKCgJpZBgBIAEoCRIMCgRzbHVnGAIgASgJEgwKBG5hbWUYAyABKAkSEwoLZGVzY3JpcHRpb24YBCABKAkSHAoUYWxsb3dfbm9uX21lbWJlcl9tY3AYBSABKAgSEQoJaXNfbWVtYmVyGAYgASgIIkUKC0EyQVNldHRpbmdzEhwKFGFsbG93X25vbl9tZW1iZXJfbWNwGAEgASgIEhgKEGFsbG93X3B1YmxpY19tY3AYAiABKAgi5AIKEEV4ZWNFbmRwb2ludEluZm8SCgoCaWQYASABKAkSDAoEc2x1ZxgCIAEoCRITCgtkZXNjcmlwdGlvbhgDIAEoCRIQCghsbG1faGludBgEIAEoCRIOCgZhY2Nlc3MYBSABKAkSEQoJdHJhbnNwb3J0GAYgASgJEgwKBGhvc3QYByABKAkSDAoEcG9ydBgIIAEoBRIQCghzc2hfdXNlchgJIAEoCRIaChJwdWJsaWNfa2V5X29wZW5zc2gYCiABKAkSGgoScHVibGljX2tleV9jb21tZW50GAsgASgJEhwKFGhvc3Rfa2V5X2ZpbmdlcnByaW50GAwgASgJEjYKEmhvc3Rfa2V5X3Bpbm5lZF9hdBgNIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASMAoMbGFzdF91c2VkX2F0GA4gASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcCJ7ChZFeGVjRW5kcG9pbnRUZXN0UmVzdWx0EgoKAm9rGAEgASgIEhEKCWV4aXRfY29kZRgCIAEoBRITCgtkdXJhdGlvbl9tcxgDIAEoAxIOCgZzdGRvdXQYBCABKAkSDgoGc3RkZXJyGAUgASgJEg0KBWVycm9yGAYgASgJIk0KD1NldHVwQ291bnRzSW5mbxITCgtjb25uZWN0aW9ucxgBIAEoBRITCgttY3Bfc2VydmVycxgCIAEoBRIQCghlbnZfdmFycxgDIAEoBSpvCgpUZW5hbnRSb2xlEhsKF1RFTkFOVF9ST0xFX1VOU1BFQ0lGSUVEEAASFQoRVEVOQU5UX1JPTEVfQURNSU4QARIXChNURU5BTlRfUk9MRV9NQU5BR0VSEAISFAoQVEVOQU5UX1JPTEVfVVNFUhADKo4BCgtNZXNzYWdlUm9sZRIcChhNRVNTQUdFX1JPTEVfVU5TUEVDSUZJRUQQABIVChFNRVNTQUdFX1JPTEVfVVNFUhABEhoKFk1FU1NBR0VfUk9MRV9BU1NJU1RBTlQQAhIXChNNRVNTQUdFX1JPTEVfU1lTVEVNEAMSFQoRTUVTU0FHRV9ST0xFX1RPT0wQBEI4WjZnaXRodWIuY29tL2FpcmxvY2tydW4vYWlybG9jay9nZW4vYWlybG9jay92MTthaXJsb2NrdjFiBnByb3RvMw", [file_google_protobuf_struct, file_google_protobuf_timestamp]);
 
 /**
  * Tenant represents a workspace (organization).
@@ -108,6 +108,14 @@ export type User = Message<"airlock.v1.User"> & {
    * @generated from field: google.protobuf.Timestamp updated_at = 9;
    */
   updatedAt?: Timestamp | undefined;
+
+  /**
+   * Whether a password is set (vs passkey-only). Drives the self-service
+   * password UI: remove is offered only when one exists.
+   *
+   * @generated from field: bool has_password = 10;
+   */
+  hasPassword: boolean;
 };
 
 /**
@@ -764,6 +772,32 @@ export type AgentBuildInfo = Message<"airlock.v1.AgentBuildInfo"> & {
    * @generated from field: string sdk_version = 20;
    */
   sdkVersion: string;
+
+  /**
+   * todos is the agent's task list as of the last codegen update. Snapshot
+   * for the Build page's TODO checklist and the tasks_done/total badge.
+   * Detail responses only.
+   *
+   * @generated from field: repeated airlock.v1.TodoItem todos = 22;
+   */
+  todos: TodoItem[];
+
+  /**
+   * exit_status / exit_message capture the agent's own exit-tool outcome:
+   * status is "success" | "error" | "refused" (empty if the agent never
+   * called exit); message is its summary (on success) or reason (on
+   * error/refused). Distinct from error_message, which carries
+   * infra/external failures (docker, push, validation). The builds table
+   * shows both together as the "Result".
+   *
+   * @generated from field: string exit_status = 23;
+   */
+  exitStatus: string;
+
+  /**
+   * @generated from field: string exit_message = 24;
+   */
+  exitMessage: string;
 };
 
 /**
@@ -1379,7 +1413,10 @@ export const ToolInfoSchema: GenMessage<ToolInfo> = /*@__PURE__*/
   messageDesc(file_airlock_v1_types, 19);
 
 /**
- * AgentBuildEvent carries build/upgrade lifecycle events.
+ * AgentBuildEvent carries build/upgrade lifecycle events. Broadcast on the
+ * agent topic so every member's badges update; tasks_done/tasks_total drive
+ * the "Building N/M tasks" badge without subscribing to the verbose build
+ * stream.
  *
  * @generated from message airlock.v1.AgentBuildEvent
  */
@@ -1395,7 +1432,7 @@ export type AgentBuildEvent = Message<"airlock.v1.AgentBuildEvent"> & {
   buildId: string;
 
   /**
-   * "started", "complete", "failed", "cancelled"
+   * "started", "progress", "complete", "failed", "cancelled"
    *
    * @generated from field: string status = 3;
    */
@@ -1405,6 +1442,26 @@ export type AgentBuildEvent = Message<"airlock.v1.AgentBuildEvent"> & {
    * @generated from field: string error = 4;
    */
   error: string;
+
+  /**
+   * @generated from field: int32 tasks_done = 5;
+   */
+  tasksDone: number;
+
+  /**
+   * @generated from field: int32 tasks_total = 6;
+   */
+  tasksTotal: number;
+
+  /**
+   * phase is the current pipeline stage on a "progress" event:
+   * "codegen" | "image" | "migrations" | "deploy". Lets the badge show
+   * "Building image…" / "Running migrations…" once codegen's task list is
+   * done, instead of freezing on the final N/M task count.
+   *
+   * @generated from field: string phase = 7;
+   */
+  phase: string;
 };
 
 /**
@@ -1415,7 +1472,9 @@ export const AgentBuildEventSchema: GenMessage<AgentBuildEvent> = /*@__PURE__*/
   messageDesc(file_airlock_v1_types, 20);
 
 /**
- * AgentBuildLogEvent carries a single build log line.
+ * AgentBuildLogEvent carries a single build log line. Published on the
+ * per-build topic (the build UUID), which the Build page subscribes to only
+ * while open.
  *
  * @generated from message airlock.v1.AgentBuildLogEvent
  */
@@ -1458,6 +1517,133 @@ export const AgentBuildLogEventSchema: GenMessage<AgentBuildLogEvent> = /*@__PUR
   messageDesc(file_airlock_v1_types, 21);
 
 /**
+ * TodoItem mirrors a sol todo entry. Carried on AgentBuildInfo (snapshot) and
+ * AgentBuildTodoEvent (live).
+ *
+ * @generated from message airlock.v1.TodoItem
+ */
+export type TodoItem = Message<"airlock.v1.TodoItem"> & {
+  /**
+   * @generated from field: string content = 1;
+   */
+  content: string;
+
+  /**
+   * "pending" | "in_progress" | "completed" | "cancelled"
+   *
+   * @generated from field: string status = 2;
+   */
+  status: string;
+
+  /**
+   * "high" | "medium" | "low"
+   *
+   * @generated from field: string priority = 3;
+   */
+  priority: string;
+
+  /**
+   * @generated from field: string id = 4;
+   */
+  id: string;
+};
+
+/**
+ * Describes the message airlock.v1.TodoItem.
+ * Use `create(TodoItemSchema)` to create a new message.
+ */
+export const TodoItemSchema: GenMessage<TodoItem> = /*@__PURE__*/
+  messageDesc(file_airlock_v1_types, 22);
+
+/**
+ * AgentBuildActionEvent is one compact tool action for the Build page's
+ * "Live actions" feed. Published on the per-build topic.
+ *
+ * @generated from message airlock.v1.AgentBuildActionEvent
+ */
+export type AgentBuildActionEvent = Message<"airlock.v1.AgentBuildActionEvent"> & {
+  /**
+   * @generated from field: string build_id = 1;
+   */
+  buildId: string;
+
+  /**
+   * shares the build's monotonic seq for dedup
+   *
+   * @generated from field: int64 seq = 2;
+   */
+  seq: bigint;
+
+  /**
+   * command | search | read | write | edit | exit | error | tool
+   *
+   * @generated from field: string kind = 3;
+   */
+  kind: string;
+
+  /**
+   * headline, e.g. "Read File: main.go"
+   *
+   * @generated from field: string label = 4;
+   */
+  label: string;
+
+  /**
+   * secondary, e.g. "120 lines"
+   *
+   * @generated from field: string detail = 5;
+   */
+  detail: string;
+
+  /**
+   * @generated from field: string tool_call_id = 6;
+   */
+  toolCallId: string;
+
+  /**
+   * @generated from field: string tool_name = 7;
+   */
+  toolName: string;
+};
+
+/**
+ * Describes the message airlock.v1.AgentBuildActionEvent.
+ * Use `create(AgentBuildActionEventSchema)` to create a new message.
+ */
+export const AgentBuildActionEventSchema: GenMessage<AgentBuildActionEvent> = /*@__PURE__*/
+  messageDesc(file_airlock_v1_types, 23);
+
+/**
+ * AgentBuildTodoEvent carries the full todo list as the agent rewrites it.
+ * Published on the per-build topic.
+ *
+ * @generated from message airlock.v1.AgentBuildTodoEvent
+ */
+export type AgentBuildTodoEvent = Message<"airlock.v1.AgentBuildTodoEvent"> & {
+  /**
+   * @generated from field: string build_id = 1;
+   */
+  buildId: string;
+
+  /**
+   * @generated from field: int64 seq = 2;
+   */
+  seq: bigint;
+
+  /**
+   * @generated from field: repeated airlock.v1.TodoItem todos = 3;
+   */
+  todos: TodoItem[];
+};
+
+/**
+ * Describes the message airlock.v1.AgentBuildTodoEvent.
+ * Use `create(AgentBuildTodoEventSchema)` to create a new message.
+ */
+export const AgentBuildTodoEventSchema: GenMessage<AgentBuildTodoEvent> = /*@__PURE__*/
+  messageDesc(file_airlock_v1_types, 24);
+
+/**
  * AgentSyncedEvent fires after the agent container completes a sync —
  * frontend tabs that show synced surface (tools, webhooks, crons,
  * routes, MCP servers, connections, model slots) refetch on this event
@@ -1477,7 +1663,7 @@ export type AgentSyncedEvent = Message<"airlock.v1.AgentSyncedEvent"> & {
  * Use `create(AgentSyncedEventSchema)` to create a new message.
  */
 export const AgentSyncedEventSchema: GenMessage<AgentSyncedEvent> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_types, 22);
+  messageDesc(file_airlock_v1_types, 25);
 
 /**
  * FileInfo describes a file in agent storage. Returned by listDir / statFile /
@@ -1523,7 +1709,7 @@ export type FileInfo = Message<"airlock.v1.FileInfo"> & {
  * Use `create(FileInfoSchema)` to create a new message.
  */
 export const FileInfoSchema: GenMessage<FileInfo> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_types, 23);
+  messageDesc(file_airlock_v1_types, 26);
 
 /**
  * TopicInfo represents a notification topic with subscription status.
@@ -1559,7 +1745,7 @@ export type TopicInfo = Message<"airlock.v1.TopicInfo"> & {
  * Use `create(TopicInfoSchema)` to create a new message.
  */
 export const TopicInfoSchema: GenMessage<TopicInfo> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_types, 24);
+  messageDesc(file_airlock_v1_types, 27);
 
 /**
  * SystemSettingsInfo mirrors the system_settings table (single-row, global).
@@ -1681,7 +1867,7 @@ export type SystemSettingsInfo = Message<"airlock.v1.SystemSettingsInfo"> & {
  * Use `create(SystemSettingsInfoSchema)` to create a new message.
  */
 export const SystemSettingsInfoSchema: GenMessage<SystemSettingsInfo> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_types, 25);
+  messageDesc(file_airlock_v1_types, 28);
 
 /**
  * ManagedBotSessionRequest creates a session row that correlates an
@@ -1716,7 +1902,7 @@ export type CreateManagedBotSessionRequest = Message<"airlock.v1.CreateManagedBo
  * Use `create(CreateManagedBotSessionRequestSchema)` to create a new message.
  */
 export const CreateManagedBotSessionRequestSchema: GenMessage<CreateManagedBotSessionRequest> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_types, 26);
+  messageDesc(file_airlock_v1_types, 29);
 
 /**
  * @generated from message airlock.v1.CreateManagedBotSessionResponse
@@ -1743,7 +1929,7 @@ export type CreateManagedBotSessionResponse = Message<"airlock.v1.CreateManagedB
  * Use `create(CreateManagedBotSessionResponseSchema)` to create a new message.
  */
 export const CreateManagedBotSessionResponseSchema: GenMessage<CreateManagedBotSessionResponse> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_types, 27);
+  messageDesc(file_airlock_v1_types, 30);
 
 /**
  * @generated from message airlock.v1.UpdateTelegramManagerBotRequest
@@ -1762,7 +1948,7 @@ export type UpdateTelegramManagerBotRequest = Message<"airlock.v1.UpdateTelegram
  * Use `create(UpdateTelegramManagerBotRequestSchema)` to create a new message.
  */
 export const UpdateTelegramManagerBotRequestSchema: GenMessage<UpdateTelegramManagerBotRequest> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_types, 28);
+  messageDesc(file_airlock_v1_types, 31);
 
 /**
  * @generated from message airlock.v1.UpdateTelegramManagerBotResponse
@@ -1789,7 +1975,7 @@ export type UpdateTelegramManagerBotResponse = Message<"airlock.v1.UpdateTelegra
  * Use `create(UpdateTelegramManagerBotResponseSchema)` to create a new message.
  */
 export const UpdateTelegramManagerBotResponseSchema: GenMessage<UpdateTelegramManagerBotResponse> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_types, 29);
+  messageDesc(file_airlock_v1_types, 32);
 
 /**
  * GitCredential is a per-user credential for accessing external git
@@ -1844,7 +2030,7 @@ export type GitCredential = Message<"airlock.v1.GitCredential"> & {
  * Use `create(GitCredentialSchema)` to create a new message.
  */
 export const GitCredentialSchema: GenMessage<GitCredential> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_types, 30);
+  messageDesc(file_airlock_v1_types, 33);
 
 /**
  * Passkey is a registered WebAuthn credential for human login. The raw
@@ -1886,7 +2072,7 @@ export type Passkey = Message<"airlock.v1.Passkey"> & {
  * Use `create(PasskeySchema)` to create a new message.
  */
 export const PasskeySchema: GenMessage<Passkey> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_types, 31);
+  messageDesc(file_airlock_v1_types, 34);
 
 /**
  * AgentGitConfig describes an agent's external git remote connection.
@@ -1947,7 +2133,7 @@ export type AgentGitConfig = Message<"airlock.v1.AgentGitConfig"> & {
  * Use `create(AgentGitConfigSchema)` to create a new message.
  */
 export const AgentGitConfigSchema: GenMessage<AgentGitConfig> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_types, 32);
+  messageDesc(file_airlock_v1_types, 35);
 
 /**
  * MCPServerInfo is one row from ListMCPServers — agent-declared MCP
@@ -2019,7 +2205,7 @@ export type MCPServerInfo = Message<"airlock.v1.MCPServerInfo"> & {
  * Use `create(MCPServerInfoSchema)` to create a new message.
  */
 export const MCPServerInfoSchema: GenMessage<MCPServerInfo> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_types, 33);
+  messageDesc(file_airlock_v1_types, 36);
 
 /**
  * MCPStatusInfo is the lighter shape used by status-only endpoints
@@ -2055,7 +2241,7 @@ export type MCPStatusInfo = Message<"airlock.v1.MCPStatusInfo"> & {
  * Use `create(MCPStatusInfoSchema)` to create a new message.
  */
 export const MCPStatusInfoSchema: GenMessage<MCPStatusInfo> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_types, 34);
+  messageDesc(file_airlock_v1_types, 37);
 
 /**
  * EnvVarInfo is one row from ListEnvVars. Value is populated only
@@ -2111,7 +2297,7 @@ export type EnvVarInfo = Message<"airlock.v1.EnvVarInfo"> & {
  * Use `create(EnvVarInfoSchema)` to create a new message.
  */
 export const EnvVarInfoSchema: GenMessage<EnvVarInfo> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_types, 35);
+  messageDesc(file_airlock_v1_types, 38);
 
 /**
  * SiblingInfo is one entry in an agent's A2A address book.
@@ -2160,7 +2346,7 @@ export type SiblingInfo = Message<"airlock.v1.SiblingInfo"> & {
  * Use `create(SiblingInfoSchema)` to create a new message.
  */
 export const SiblingInfoSchema: GenMessage<SiblingInfo> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_types, 36);
+  messageDesc(file_airlock_v1_types, 39);
 
 /**
  * AddableSiblingInfo is a candidate the editing user can add to an
@@ -2207,7 +2393,7 @@ export type AddableSiblingInfo = Message<"airlock.v1.AddableSiblingInfo"> & {
  * Use `create(AddableSiblingInfoSchema)` to create a new message.
  */
 export const AddableSiblingInfoSchema: GenMessage<AddableSiblingInfo> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_types, 37);
+  messageDesc(file_airlock_v1_types, 40);
 
 /**
  * A2ASettings is the per-agent MCP-exposure toggles configured from
@@ -2233,7 +2419,7 @@ export type A2ASettings = Message<"airlock.v1.A2ASettings"> & {
  * Use `create(A2ASettingsSchema)` to create a new message.
  */
 export const A2ASettingsSchema: GenMessage<A2ASettings> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_types, 38);
+  messageDesc(file_airlock_v1_types, 41);
 
 /**
  * ExecEndpointInfo is one row from ListExecEndpoints — the
@@ -2320,7 +2506,7 @@ export type ExecEndpointInfo = Message<"airlock.v1.ExecEndpointInfo"> & {
  * Use `create(ExecEndpointInfoSchema)` to create a new message.
  */
 export const ExecEndpointInfoSchema: GenMessage<ExecEndpointInfo> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_types, 39);
+  messageDesc(file_airlock_v1_types, 42);
 
 /**
  * ExecEndpointTestResult is the parsed outcome of running `whoami`
@@ -2367,7 +2553,7 @@ export type ExecEndpointTestResult = Message<"airlock.v1.ExecEndpointTestResult"
  * Use `create(ExecEndpointTestResultSchema)` to create a new message.
  */
 export const ExecEndpointTestResultSchema: GenMessage<ExecEndpointTestResult> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_types, 40);
+  messageDesc(file_airlock_v1_types, 43);
 
 /**
  * SetupCountsInfo aggregates the setup-completeness counters
@@ -2399,7 +2585,7 @@ export type SetupCountsInfo = Message<"airlock.v1.SetupCountsInfo"> & {
  * Use `create(SetupCountsInfoSchema)` to create a new message.
  */
 export const SetupCountsInfoSchema: GenMessage<SetupCountsInfo> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_types, 41);
+  messageDesc(file_airlock_v1_types, 44);
 
 /**
  * TenantRole defines the role a user has within a tenant.

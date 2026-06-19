@@ -115,6 +115,7 @@ async function savePassword() {
   pwLoading.value = true
   try {
     await store.setPassword(password.value)
+    if (auth.user) auth.user.hasPassword = true
     password.value = ''
     confirmPassword.value = ''
     toast.add({ severity: 'success', summary: 'Password saved', life: 3000 })
@@ -134,6 +135,7 @@ function removePassword() {
     accept: async () => {
       try {
         await store.removePassword()
+        if (auth.user) auth.user.hasPassword = false
         toast.add({ severity: 'success', summary: 'Password removed', life: 3000 })
       } catch (err: any) {
         toast.add({ severity: 'error', summary: err.response?.data?.error || 'Failed to remove password', life: 5000 })
@@ -144,8 +146,8 @@ function removePassword() {
 </script>
 
 <template>
-  <div style="max-width: 48rem; margin: 0 auto; display: flex; flex-direction: column; gap: 1.5rem">
-    <h1 style="margin: 0">Security</h1>
+  <div style="display: flex; flex-direction: column; gap: 1.5rem; max-width: 48rem">
+    <h1 style="margin: 0; font-size: 1.5rem">Security</h1>
 
     <Card>
       <template #title>
@@ -205,8 +207,8 @@ function removePassword() {
             <label for="sec-confirm">Confirm password</label>
           </FloatLabel>
           <div style="display: flex; gap: 0.5rem">
-            <Button type="submit" label="Save password" :loading="pwLoading" :disabled="!password" />
-            <Button type="button" label="Remove password" severity="secondary" outlined @click="removePassword" />
+            <Button type="submit" :label="auth.user?.hasPassword ? 'Change password' : 'Set password'" :loading="pwLoading" :disabled="!password" />
+            <Button v-if="auth.user?.hasPassword" type="button" label="Remove password" severity="secondary" outlined @click="removePassword" />
           </div>
         </form>
       </template>

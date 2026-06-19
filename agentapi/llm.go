@@ -33,7 +33,7 @@ func (h *Handler) LLMStream(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Resolve model: explicit slug > capability default > agent exec_model.
-	providerID, modelID, apiKey, baseURL, err := h.resolveModel(ctx, agentID.String(), req.Slug, req.Capability)
+	providerID, providerSlug, modelID, apiKey, baseURL, err := h.resolveModel(ctx, agentID.String(), req.Slug, req.Capability)
 	if err != nil {
 		h.logger.Error("resolve model failed", zap.Error(err))
 		writeJSONError(w, http.StatusBadRequest, err.Error())
@@ -77,6 +77,7 @@ func (h *Handler) LLMStream(w http.ResponseWriter, r *http.Request) {
 
 	capture := llmUsageCapture{
 		providerCatalogID: providerID,
+		providerSlug:      providerSlug,
 		model:             modelID,
 		capability:        normalizeCapability(req.Capability),
 		slug:              req.Slug,
@@ -202,12 +203,12 @@ type ndJSONEvent struct {
 //
 // An undeclared or unbound slug quietly falls through to step 2.
 // Empty + invalid FK at every tier ⇒ "no model configured" error.
-func (h *Handler) resolveModel(ctx context.Context, agentID, slug, capability string) (providerID, modelID, apiKey, baseURL string, err error) {
+func (h *Handler) resolveModel(ctx context.Context, agentID, slug, capability string) (providerID, providerSlug, modelID, apiKey, baseURL string, err error) {
 	q := dbq.New(h.db.Pool())
 
 	agentUUID, parseErr := parseUUID(agentID)
 	if parseErr != nil {
-		return "", "", "", "", fmt.Errorf("invalid agent ID: %w", parseErr)
+		return "", "", "", "", "", fmt.Errorf("invalid agent ID: %w", parseErr)
 	}
 	pgAgentID := toPgUUID(agentUUID)
 
@@ -229,27 +230,27 @@ func (h *Handler) resolveModel(ctx context.Context, agentID, slug, capability st
 	if !providerRowID.Valid || modelName == "" {
 		providerRowID, modelName, err = h.modelForCapability(ctx, q, pgAgentID, capability)
 		if err != nil {
-			return "", "", "", "", err
+			return "", "", "", "", "", err
 		}
 	}
 	if !providerRowID.Valid || modelName == "" {
-		return "", "", "", "", fmt.Errorf("no model configured for capability %q — set one in admin Settings or the agent's Models tab", capability)
+		return "", "", "", "", "", fmt.Errorf("no model configured for capability %q — set one in admin Settings or the agent's Models tab", capability)
 	}
 
 	// Load the providers row by FK so we get the catalog provider_id and
 	// API key without parsing strings.
 	p, dbErr := q.GetProviderByID(ctx, providerRowID)
 	if dbErr != nil {
-		return "", "", "", "", fmt.Errorf("provider row not found: %w", dbErr)
+		return "", "", "", "", "", fmt.Errorf("provider row not found: %w", dbErr)
 	}
 	if !p.IsEnabled {
-		return "", "", "", "", fmt.Errorf("provider %q (%s) is disabled", p.CatalogID, p.Slug)
+		return "", "", "", "", "", fmt.Errorf("provider %q (%s) is disabled", p.CatalogID, p.Slug)
 	}
 	decrypted, decErr := h.encryptor.Get(ctx, "provider/"+p.ID.String()+"/api_key", p.ApiKey)
 	if decErr != nil {
-		return "", "", "", "", fmt.Errorf("decrypt API key for %q (%s): %w", p.CatalogID, p.Slug, decErr)
+		return "", "", "", "", "", fmt.Errorf("decrypt API key for %q (%s): %w", p.CatalogID, p.Slug, decErr)
 	}
-	return p.CatalogID, modelName, decrypted, p.BaseUrl, nil
+	return p.CatalogID, p.Slug, modelName, decrypted, p.BaseUrl, nil
 }
 
 // modelForCapability picks the model for a capability using the tier-2 and
@@ -327,7 +328,7 @@ func (h *Handler) ImageGenerate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	providerID, modelID, apiKey, baseURL, err := h.resolveModel(ctx, agentID.String(), req.Slug, req.Capability)
+	providerID, providerSlug, modelID, apiKey, baseURL, err := h.resolveModel(ctx, agentID.String(), req.Slug, req.Capability)
 	if err != nil {
 		h.logger.Error("resolve image model failed", zap.Error(err))
 		writeJSONError(w, http.StatusBadRequest, err.Error())
@@ -346,7 +347,7 @@ func (h *Handler) ImageGenerate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	capture := llmUsageCapture{providerCatalogID: providerID, model: modelID, capability: "image", slug: req.Slug}
+	capture := llmUsageCapture{providerCatalogID: providerID, providerSlug: providerSlug, model: modelID, capability: "image", slug: req.Slug}
 	started := time.Now()
 	result, err := m.Generate(ctx, opts)
 	capture.latency = time.Since(started)
@@ -383,7 +384,7 @@ func (h *Handler) Embed(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	providerID, modelID, apiKey, baseURL, err := h.resolveModel(ctx, agentID.String(), req.Slug, req.Capability)
+	providerID, providerSlug, modelID, apiKey, baseURL, err := h.resolveModel(ctx, agentID.String(), req.Slug, req.Capability)
 	if err != nil {
 		h.logger.Error("resolve embedding model failed", zap.Error(err))
 		writeJSONError(w, http.StatusBadRequest, err.Error())
@@ -402,7 +403,7 @@ func (h *Handler) Embed(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	capture := llmUsageCapture{providerCatalogID: providerID, model: modelID, capability: "embedding", slug: req.Slug}
+	capture := llmUsageCapture{providerCatalogID: providerID, providerSlug: providerSlug, model: modelID, capability: "embedding", slug: req.Slug}
 	started := time.Now()
 	result, err := m.Embed(ctx, opts)
 	capture.latency = time.Since(started)
@@ -432,7 +433,7 @@ func (h *Handler) SpeechGenerate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	providerID, modelID, apiKey, baseURL, err := h.resolveModel(ctx, agentID.String(), req.Slug, req.Capability)
+	providerID, providerSlug, modelID, apiKey, baseURL, err := h.resolveModel(ctx, agentID.String(), req.Slug, req.Capability)
 	if err != nil {
 		h.logger.Error("resolve speech model failed", zap.Error(err))
 		writeJSONError(w, http.StatusBadRequest, err.Error())
@@ -451,7 +452,7 @@ func (h *Handler) SpeechGenerate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	capture := llmUsageCapture{providerCatalogID: providerID, model: modelID, capability: "speech", slug: req.Slug}
+	capture := llmUsageCapture{providerCatalogID: providerID, providerSlug: providerSlug, model: modelID, capability: "speech", slug: req.Slug}
 	started := time.Now()
 	result, err := m.Generate(ctx, opts)
 	capture.latency = time.Since(started)
@@ -486,7 +487,7 @@ func (h *Handler) Transcribe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	providerID, modelID, apiKey, baseURL, err := h.resolveModel(ctx, agentID.String(), req.Slug, req.Capability)
+	providerID, providerSlug, modelID, apiKey, baseURL, err := h.resolveModel(ctx, agentID.String(), req.Slug, req.Capability)
 	if err != nil {
 		h.logger.Error("resolve transcription model failed", zap.Error(err))
 		writeJSONError(w, http.StatusBadRequest, err.Error())
@@ -516,7 +517,7 @@ func (h *Handler) Transcribe(w http.ResponseWriter, r *http.Request) {
 		h.logger.Warn("transcription transcode failed — sending original bytes", zap.Error(tErr))
 	}
 
-	capture := llmUsageCapture{providerCatalogID: providerID, model: modelID, capability: "transcription", slug: req.Slug}
+	capture := llmUsageCapture{providerCatalogID: providerID, providerSlug: providerSlug, model: modelID, capability: "transcription", slug: req.Slug}
 	started := time.Now()
 	result, err := m.Transcribe(ctx, opts)
 	capture.latency = time.Since(started)

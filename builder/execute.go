@@ -14,10 +14,46 @@ import (
 	"github.com/airlockrun/airlock/container"
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/airlockrun/airlock/scaffold"
+	"github.com/airlockrun/sol/activity"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"
 )
+
+// buildPublisher implements buildSink: it streams structured codegen activity
+// to the per-build WS topic and persists the todo snapshot. It also tracks the
+// latest task counts so the lifecycle badge (on the agent topic) and the build
+// row's completion event carry tasks_done/total. Its methods run on the
+// runner's bus goroutine during runCodegen — sequential, never concurrent with
+// the surrounding Execute flow — so the unsynchronized counter fields are safe.
+type buildPublisher struct {
+	events     EventPublisher
+	q          *dbq.Queries
+	agentUUID  uuid.UUID
+	buildUUID  uuid.UUID
+	buildID    pgtype.UUID
+	bl         *buildLog
+	tasksDone  int32
+	tasksTotal int32
+}
+
+// OnAction streams one compact tool action to the per-build topic.
+func (bp *buildPublisher) OnAction(a activity.Action) {
+	bp.events.PublishBuildAction(context.Background(), bp.buildUUID, bp.bl.nextSeq(),
+		a.Kind, a.Label, a.Detail, a.ToolCallID, a.ToolName)
+}
+
+// OnTodos persists the todo snapshot, streams it on the per-build topic, and
+// pushes the task progress onto the agent topic for the "Building N/M" badge.
+func (bp *buildPublisher) OnTodos(todosJSON []byte, done, total int) {
+	bp.tasksDone, bp.tasksTotal = int32(done), int32(total)
+	_ = bp.q.UpdateAgentBuildTodos(context.Background(), dbq.UpdateAgentBuildTodosParams{
+		ID:    bp.buildID,
+		Todos: todosJSON,
+	})
+	bp.events.PublishBuildTodos(context.Background(), bp.buildUUID, bp.bl.nextSeq(), todosJSON)
+	bp.events.PublishBuildEvent(context.Background(), bp.agentUUID, bp.buildUUID, "progress", "", "codegen", bp.tasksDone, bp.tasksTotal)
+}
 
 // Execute is the single pipeline shared by Build, RunUpgrade, and
 // Rollback. Each entry point constructs a BuildPlan and hands it off
@@ -115,10 +151,19 @@ func (b *BuildService) Execute(ctx context.Context, plan BuildPlan) (string, err
 		return "", fmt.Errorf("create build record: %w", err)
 	}
 	buildUUID := uuid.UUID(build.ID.Bytes)
-	b.events.PublishBuildEvent(ctx, agentUUID, buildUUID, "started", "")
+	b.events.PublishBuildEvent(ctx, agentUUID, buildUUID, "started", "", "codegen", 0, 0)
 
 	bl := newBuildLog(q, build.ID, b.logger)
 	defer bl.close()
+
+	bp := &buildPublisher{
+		events:    b.events,
+		q:         q,
+		agentUUID: agentUUID,
+		buildUUID: buildUUID,
+		buildID:   build.ID,
+		bl:        bl,
+	}
 
 	solLog := func(line string) {
 		seq := bl.appendSol(line)
@@ -129,6 +174,10 @@ func (b *BuildService) Execute(ctx context.Context, plan BuildPlan) (string, err
 		b.events.PublishBuildLogLine(ctx, agentUUID, buildUUID, seq, "docker", line)
 	}
 	logLine := solLog
+
+	// The agent's exit-tool outcome (set after codegen runs), persisted on
+	// the build row and rendered as the "Result" alongside any infra error.
+	var exitStatus, exitMessage string
 
 	completeBuild := func(status, errMsg, sourceRef, imageRef string) {
 		// sdk_version records what the build was DEPLOYED with — that's
@@ -145,14 +194,17 @@ func (b *BuildService) Execute(ctx context.Context, plan BuildPlan) (string, err
 			SourceRef:    sourceRef,
 			ImageRef:     imageRef,
 			SdkVersion:   sdkVersion,
+			ExitStatus:   exitStatus,
+			ExitMessage:  exitMessage,
 		})
-		event := status
-		if event == "complete" {
-			// Build-event names mirror REST status values, with one
-			// exception: success is "complete" on both sides. failed
-			// and cancelled match.
-		}
-		b.events.PublishBuildEvent(context.Background(), agentUUID, buildUUID, event, errMsg)
+		b.events.PublishBuildEvent(context.Background(), agentUUID, buildUUID, status, errMsg, "", bp.tasksDone, bp.tasksTotal)
+	}
+
+	// publishPhase emits a lightweight badge update on the agent topic as the
+	// pipeline moves past codegen (image build → migrations → deploy), so the
+	// badge stops freezing on the final N/M task count.
+	publishPhase := func(phase string) {
+		b.events.PublishBuildEvent(ctx, agentUUID, buildUUID, "progress", "", phase, bp.tasksDone, bp.tasksTotal)
 	}
 
 	if ctx.Err() != nil {
@@ -251,7 +303,7 @@ func (b *BuildService) Execute(ctx context.Context, plan BuildPlan) (string, err
 	testDBPSQL := b.agentDBURLBase(b.cfg.DBHostAgent, schemaName, dbPassword)
 
 	// ── Phase C: codegen (Sol) if Instruction is non-empty ─────────────
-	commitHash, exitMessage, codegenErr := b.runCodegen(ctx, plan, agent, build, agentID, agentUUID, testDBURL, testDBPSQL, cloneName, goProxyDir, solLog)
+	commitHash, exitStatus, exitMessage, codegenErr := b.runCodegen(ctx, plan, agent, build, agentID, agentUUID, testDBURL, testDBPSQL, cloneName, goProxyDir, solLog, bp)
 	if codegenErr != nil {
 		// A "refused" exit is recorded distinctly: the request was out
 		// of scope, the existing agent is untouched — not a build that
@@ -261,6 +313,12 @@ func (b *BuildService) Execute(ctx context.Context, plan BuildPlan) (string, err
 		var refErr *RefusedError
 		if errors.As(codegenErr, &refErr) {
 			buildStatus = "refused"
+		} else if exitStatus == "" {
+			// A failure that isn't the agent's own exit report (e.g. the
+			// "not all tools returned results" validation error, or a runner
+			// fault) — surface it in the log; the exit-status paths already
+			// logged their own [exit] line in runCodegen.
+			solLog("[error] " + codegenErr.Error())
 		}
 		completeBuild(buildStatus, codegenErr.Error(), commitHash, "")
 		return "", codegenErr
@@ -324,6 +382,7 @@ func (b *BuildService) Execute(ctx context.Context, plan BuildPlan) (string, err
 	}
 
 	// ── Phase D: build the image at current HEAD ───────────────────────
+	publishPhase("image")
 	logLine("Building Docker image...")
 	contextDir := repoPath
 	// Regenerate the Dockerfile into a TEMP directory (not contextDir)
@@ -365,6 +424,7 @@ func (b *BuildService) Execute(ctx context.Context, plan BuildPlan) (string, err
 	b.logger.Info("image built", zap.String("image", imageTag))
 
 	// ── Phase E: validate migrations on the clone ──────────────────────
+	publishPhase("migrations")
 	//
 	// For build/upgrade we run the NEW image with AGENT_VALIDATE_MIGRATIONS=1
 	// (up→down→up) — the canonical reversibility check.
@@ -411,6 +471,7 @@ func (b *BuildService) Execute(ctx context.Context, plan BuildPlan) (string, err
 	// mid-swap (and vice versa). Held only for the swap itself —
 	// codegen, image build, and migration validation already ran
 	// without the lock above.
+	publishPhase("deploy")
 	unlockSwap := b.containers.LockSwap(agentUUID)
 	logLine("Starting agent container...")
 	if agent.ImageRef != "" {

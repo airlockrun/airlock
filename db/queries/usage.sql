@@ -14,10 +14,32 @@ FROM llm_usage
 WHERE created_at >= @since;
 
 -- name: UsageByAgent :many
+-- Owner (agents.user_id → users) is joined live, so it's empty for rows whose
+-- agent (or whose agent's owner) has since been deleted.
 SELECT
-    agent_slug,
-    agent_name,
-    (agent_id IS NULL)::boolean                 AS deleted,
+    lu.agent_slug,
+    lu.agent_name,
+    (lu.agent_id IS NULL)::boolean              AS deleted,
+    COALESCE(ou.email, '')::text               AS owner_email,
+    COALESCE(ou.display_name, '')::text        AS owner_name,
+    count(*)::bigint                            AS calls,
+    COALESCE(sum(lu.tokens_in), 0)::bigint      AS tokens_in,
+    COALESCE(sum(lu.tokens_out), 0)::bigint     AS tokens_out,
+    COALESCE(sum(lu.tokens_cached), 0)::bigint  AS tokens_cached,
+    COALESCE(sum(lu.cost_total), 0)::double precision AS cost_total
+FROM llm_usage lu
+LEFT JOIN agents a ON a.id = lu.agent_id
+LEFT JOIN users ou ON ou.id = a.user_id
+WHERE lu.created_at >= @since
+GROUP BY lu.agent_slug, lu.agent_name, (lu.agent_id IS NULL), ou.email, ou.display_name
+ORDER BY cost_total DESC, calls DESC;
+
+-- name: UsageByUser :many
+-- Grouped by the triggering user's snapshot email; deleted = the user row is
+-- gone (user_id was SET NULL) but the email snapshot remains.
+SELECT
+    user_email,
+    (user_id IS NULL)::boolean                  AS deleted,
     count(*)::bigint                            AS calls,
     COALESCE(sum(tokens_in), 0)::bigint         AS tokens_in,
     COALESCE(sum(tokens_out), 0)::bigint        AS tokens_out,
@@ -25,12 +47,13 @@ SELECT
     COALESCE(sum(cost_total), 0)::double precision AS cost_total
 FROM llm_usage
 WHERE created_at >= @since
-GROUP BY agent_slug, agent_name, (agent_id IS NULL)
+GROUP BY user_email, (user_id IS NULL)
 ORDER BY cost_total DESC, calls DESC;
 
 -- name: UsageByModel :many
 SELECT
     provider_catalog_id,
+    provider_slug,
     model,
     count(*)::bigint                            AS calls,
     COALESCE(sum(tokens_in), 0)::bigint         AS tokens_in,
@@ -38,5 +61,5 @@ SELECT
     COALESCE(sum(cost_total), 0)::double precision AS cost_total
 FROM llm_usage
 WHERE created_at >= @since
-GROUP BY provider_catalog_id, model
+GROUP BY provider_catalog_id, provider_slug, model
 ORDER BY cost_total DESC, calls DESC;

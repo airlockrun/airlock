@@ -131,7 +131,7 @@ func TestResolveModel_Precedence(t *testing.T) {
 
 	resolveTextModel := func(t *testing.T, slug string) string {
 		t.Helper()
-		_, modelID, _, _, err := ah.resolveModel(ctx, agentID.String(), slug, "text")
+		_, _, modelID, _, _, err := ah.resolveModel(ctx, agentID.String(), slug, "text")
 		if err != nil {
 			t.Fatalf("resolveModel(slug=%q): %v", slug, err)
 		}
@@ -191,7 +191,7 @@ func TestResolveModel_Precedence(t *testing.T) {
 	})
 
 	t.Run("all-empty capability errors", func(t *testing.T) {
-		if _, _, _, _, err := ah.resolveModel(ctx, agentID.String(), "", "image"); err == nil {
+		if _, _, _, _, _, err := ah.resolveModel(ctx, agentID.String(), "", "image"); err == nil {
 			t.Error("expected error when all tiers empty for image capability")
 		}
 	})

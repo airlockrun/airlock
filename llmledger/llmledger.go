@@ -45,6 +45,7 @@ type Capture struct {
 	ConversationID pgtype.UUID
 
 	ProviderCatalogID string
+	ProviderSlug      string
 	Model             string
 	Capability        string
 	CallKind          string
@@ -94,6 +95,7 @@ func Record(ctx context.Context, q *dbq.Queries, logger *zap.Logger, c Capture) 
 		UserID:            c.UserID,
 		ConversationID:    c.ConversationID,
 		ProviderCatalogID: c.ProviderCatalogID,
+		ProviderSlug:      c.ProviderSlug,
 		Model:             c.Model,
 		Capability:        c.Capability,
 		CallKind:          c.CallKind,

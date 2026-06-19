@@ -22,6 +22,7 @@ type Report struct {
 	Summary    dbq.UsageSummaryRow
 	ByAgent    []dbq.UsageByAgentRow
 	ByModel    []dbq.UsageByModelRow
+	ByUser     []dbq.UsageByUserRow
 }
 
 type Service struct {
@@ -67,8 +68,13 @@ func (s *Service) Get(ctx context.Context, p authz.Principal, windowDays int32) 
 		s.logger.Error("usage by model failed", zap.Error(err))
 		return Report{}, err
 	}
+	byUser, err := q.UsageByUser(ctx, since)
+	if err != nil {
+		s.logger.Error("usage by user failed", zap.Error(err))
+		return Report{}, err
+	}
 	if windowDays < 0 {
 		windowDays = 0
 	}
-	return Report{WindowDays: windowDays, Summary: summary, ByAgent: byAgent, ByModel: byModel}, nil
+	return Report{WindowDays: windowDays, Summary: summary, ByAgent: byAgent, ByModel: byModel, ByUser: byUser}, nil
 }

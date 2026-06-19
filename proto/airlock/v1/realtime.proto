@@ -85,6 +85,20 @@ message RunErrorEvent {
   string error = 2;
 }
 
+// --- Client → server control messages ---
+
+// SubscribeBuildRequest asks the hub to subscribe this connection to a
+// build's verbose topic (codegen log, live actions, todos). The Build page
+// sends it on mount; the hub gates it on AgentBuildsView for the owning agent.
+message SubscribeBuildRequest {
+  string build_id = 1;
+}
+
+// UnsubscribeBuildRequest drops the per-build subscription (sent on unmount).
+message UnsubscribeBuildRequest {
+  string build_id = 1;
+}
+
 // --- Notification events ---
 
 // NotificationEvent carries an output() or topic publish notification.

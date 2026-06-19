@@ -103,5 +103,6 @@ func UserToProto(u dbq.User) *airlockv1.User {
 		CreatedAt:          PgTimestampToProto(u.CreatedAt),
 		UpdatedAt:          PgTimestampToProto(u.UpdatedAt),
 		MustChangePassword: u.MustChangePassword,
+		HasPassword:        u.PasswordHash.Valid,
 	}
 }

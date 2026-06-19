@@ -1,92 +1,104 @@
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { ref, onMounted, computed, watch, nextTick } from 'vue'
+import { useRoute } from 'vue-router'
 import { timestampDate } from '@bufbuild/protobuf/wkt'
 import { fromJson } from '@bufbuild/protobuf'
-import { useBuildsStore } from '@/stores/builds'
-import type { AgentBuildInfo } from '@/gen/airlock/v1/types_pb'
 import { GetAgentDetailResponseSchema } from '@/gen/airlock/v1/api_pb'
-import { useToast } from 'primevue/usetoast'
+import { useBuildStream } from '@/composables/useBuildStream'
 import api from '@/api/client'
 
 const route = useRoute()
-const router = useRouter()
-const buildsStore = useBuildsStore()
-const toast = useToast()
-
 const agentId = route.params.id as string
 const buildId = route.params.buildId as string
-const build = ref<AgentBuildInfo | null>(null)
 const agentName = ref(agentId.slice(0, 8))
-const loading = ref(true)
+
+const { build, solLines, dockerLines, actions, todos, phase, loaded } = useBuildStream(agentId, buildId)
+
+const isBuilding = computed(() => build.value?.status === 'building')
+const phaseLabel = computed(() => {
+  switch (phase.value) {
+    case 'image': return 'Building image…'
+    case 'migrations': return 'Running migrations…'
+    case 'deploy': return 'Deploying…'
+    case 'codegen': return 'Generating code…'
+    default: return ''
+  }
+})
+
+const solScroll = ref<HTMLElement | null>(null)
+const dockerScroll = ref<HTMLElement | null>(null)
+
+function scrollToBottom(el: HTMLElement | null) {
+  if (el) el.scrollTop = el.scrollHeight
+}
+watch(() => solLines.value.length, () => nextTick(() => scrollToBottom(solScroll.value)))
+watch(() => dockerLines.value.length, () => nextTick(() => scrollToBottom(dockerScroll.value)))
 
 const statusSeverity = computed(() => {
   switch (build.value?.status) {
     case 'complete': return 'success'
     case 'building': return 'warn'
     case 'failed': return 'danger'
-    // refused: the request was out of scope — not an error, so not red.
     case 'refused': return 'warn'
     default: return 'secondary'
   }
 })
 
-// Codegen LLM cost — parity with RunDetailView. Hidden when the build
-// ran no codegen (image-only rebuild: llmCalls === 0).
 const costFormatted = computed(() => `$${(build.value?.llmCostEstimate ?? 0).toFixed(4)}`)
-
 const cachedTokens = computed(() => build.value?.llmTokensCached ?? 0)
-// Non-cached input billed at the full input rate; cached at the cheaper
-// cache-read rate. llmCostEstimate already reflects that split.
 const nonCachedIn = computed(() => Math.max(0, (build.value?.llmTokensIn ?? 0) - cachedTokens.value))
 
-onMounted(async () => {
-  try {
-    const [b] = await Promise.all([
-      buildsStore.fetchBuild(agentId, buildId),
-      api.get(`/api/v1/agents/${agentId}`).then(({ data }) => {
-        const agent = fromJson(GetAgentDetailResponseSchema, data).agent
-        if (agent) agentName.value = agent.name
-      }).catch(() => {}),
-    ])
-    build.value = b
-  } catch {
-    toast.add({ severity: 'error', summary: 'Build not found', life: 3000 })
-    router.push(`/agents/${agentId}`)
-  } finally {
-    loading.value = false
+const tasksDone = computed(() => todos.value.filter((t) => t.status === 'completed').length)
+
+const todoIcon = (status: string) => {
+  switch (status) {
+    case 'completed': return 'pi pi-check-circle'
+    case 'in_progress': return 'pi pi-spin pi-spinner'
+    case 'cancelled': return 'pi pi-times-circle'
+    default: return 'pi pi-circle'
   }
+}
+const todoClass = (status: string) => `todo-${status}`
+
+const actionIcon = (kind: string) => {
+  switch (kind) {
+    case 'command': case 'bash': return 'pi pi-terminal'
+    case 'search': case 'grep': case 'glob': return 'pi pi-search'
+    case 'read': return 'pi pi-file'
+    case 'write': return 'pi pi-file-edit'
+    case 'edit': return 'pi pi-pencil'
+    case 'error': case 'denied': return 'pi pi-exclamation-triangle'
+    default: return 'pi pi-bolt'
+  }
+}
+
+onMounted(() => {
+  api.get(`/api/v1/agents/${agentId}`).then(({ data }) => {
+    const agent = fromJson(GetAgentDetailResponseSchema, data).agent
+    if (agent) agentName.value = agent.name
+  }).catch(() => {})
 })
 </script>
 
 <template>
-  <div v-if="loading">
+  <div v-if="!loaded">
     <Skeleton width="40%" height="2rem" style="margin-bottom: 1rem" />
     <Skeleton width="100%" height="24rem" />
   </div>
 
   <div v-else-if="build">
-    <Breadcrumb
-      :model="[
-        { label: 'Agents', to: '/agents' },
-        { label: agentName, to: `/agents/${agentId}` },
-        { label: 'Builds' },
-        { label: build.id.slice(0, 8) },
-      ]"
-      style="margin-bottom: 1rem"
-    >
-      <template #item="{ item }">
-        <router-link v-if="item.to" :to="item.to" style="text-decoration: none; color: var(--p-primary-color)">
-          {{ item.label }}
-        </router-link>
-        <span v-else>{{ item.label }}</span>
-      </template>
-    </Breadcrumb>
+    <h1 style="margin: 0 0 1rem; font-size: 1.25rem">{{ agentName }} · Build {{ build.id.slice(0, 8) }}</h1>
 
     <!-- Metadata bar -->
     <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 1rem; margin-bottom: 1.5rem">
       <Tag :value="build.type" severity="secondary" />
       <Tag :value="build.status" :severity="statusSeverity" />
+      <span v-if="isBuilding && phaseLabel" style="display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.875rem; color: var(--p-primary-color); font-weight: 500">
+        <i class="pi pi-spin pi-spinner" style="font-size: 0.75rem" /> {{ phaseLabel }}
+      </span>
+      <span v-if="todos.length" style="font-size: 0.875rem; color: var(--p-text-muted-color)">
+        {{ tasksDone }}/{{ todos.length }} tasks
+      </span>
       <span v-if="build.startedAt" style="font-size: 0.875rem; color: var(--p-text-muted-color)">
         {{ timestampDate(build.startedAt).toLocaleString() }}
       </span>
@@ -101,8 +113,14 @@ onMounted(async () => {
       </span>
     </div>
 
-    <!-- Error -->
-    <Message v-if="build.errorMessage" severity="error" :closable="false" style="margin-bottom: 1rem">
+    <!-- Result: exit outcome + any infra error -->
+    <Message v-if="build.exitStatus === 'success' && build.exitMessage" severity="success" :closable="false" style="margin-bottom: 0.75rem">
+      {{ build.exitMessage }}
+    </Message>
+    <Message v-else-if="build.exitMessage" severity="warn" :closable="false" style="margin-bottom: 0.75rem">
+      {{ build.exitMessage }}
+    </Message>
+    <Message v-if="build.errorMessage && build.errorMessage !== build.exitMessage" severity="error" :closable="false" style="margin-bottom: 1rem">
       {{ build.errorMessage }}
     </Message>
 
@@ -112,16 +130,41 @@ onMounted(async () => {
       <pre class="log-panel">{{ build.instructions }}</pre>
     </div>
 
-    <!-- Sol Log -->
-    <div v-if="build.solLog" style="margin-bottom: 1.5rem">
-      <h3 style="margin-bottom: 0.75rem">Sol Log</h3>
-      <pre class="log-panel">{{ build.solLog }}</pre>
+    <!-- Section 1: TODO checklist -->
+    <div v-if="todos.length" style="margin-bottom: 1.5rem">
+      <h3 style="margin-bottom: 0.75rem">Tasks ({{ tasksDone }}/{{ todos.length }})</h3>
+      <ul class="todo-list">
+        <li v-for="(t, i) in todos" :key="t.id || i" :class="todoClass(t.status)">
+          <i :class="todoIcon(t.status)" /> <span>{{ t.content }}</span>
+        </li>
+      </ul>
     </div>
 
-    <!-- Docker Log -->
-    <div v-if="build.dockerLog" style="margin-bottom: 1.5rem">
-      <h3 style="margin-bottom: 0.75rem">Docker Log</h3>
-      <pre class="log-panel">{{ build.dockerLog }}</pre>
+    <!-- Section 2: Live actions -->
+    <div v-if="actions.length" style="margin-bottom: 1.5rem">
+      <h3 style="margin-bottom: 0.75rem">Activity</h3>
+      <ul class="action-list">
+        <li v-for="(a, i) in actions" :key="i" :class="{ 'action-error': a.kind === 'error' || a.kind === 'denied' }">
+          <i :class="actionIcon(a.kind)" /> <span>{{ a.text }}</span>
+        </li>
+      </ul>
+    </div>
+
+    <!-- Section 3: Codegen log -->
+    <div style="margin-bottom: 1.5rem">
+      <h3 style="margin-bottom: 0.75rem">Codegen log</h3>
+      <div ref="solScroll" class="stream-panel stream-sol">
+        <div v-for="(line, i) in solLines" :key="i">{{ line }}</div>
+        <div v-if="solLines.length === 0" style="opacity: 0.5">Waiting for build output…</div>
+      </div>
+    </div>
+
+    <!-- Section 4: Docker build log -->
+    <div v-if="dockerLines.length > 0" style="margin-bottom: 1.5rem">
+      <h3 style="margin-bottom: 0.75rem">Docker build log</h3>
+      <div ref="dockerScroll" class="stream-panel stream-docker">
+        <div v-for="(line, i) in dockerLines" :key="i">{{ line }}</div>
+      </div>
     </div>
   </div>
 </template>
@@ -138,9 +181,52 @@ onMounted(async () => {
   max-height: 24rem;
   overflow: auto;
 }
-
 :root.dark .log-panel {
   background: var(--p-surface-800);
   border-color: var(--p-surface-700);
 }
+
+.stream-panel {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.8rem;
+  line-height: 1.4;
+  padding: 0.75rem;
+  border-radius: 0.5rem;
+  max-height: 24rem;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  background: var(--p-surface-900);
+}
+.stream-sol { color: var(--p-green-400); }
+.stream-docker { color: var(--p-blue-400); }
+
+.todo-list,
+.action-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+.todo-list li,
+.action-list li {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  font-size: 0.9rem;
+}
+.todo-list .pi,
+.action-list .pi {
+  font-size: 0.8rem;
+}
+.todo-completed { color: var(--p-green-500); }
+.todo-completed span { text-decoration: line-through; opacity: 0.7; }
+.todo-in_progress { color: var(--p-primary-color); font-weight: 500; }
+.todo-cancelled { color: var(--p-text-muted-color); }
+.todo-cancelled span { text-decoration: line-through; opacity: 0.6; }
+.todo-pending { color: var(--p-text-color); }
+.action-error { color: var(--p-red-400); }
+.action-list { max-height: 20rem; overflow-y: auto; }
 </style>
