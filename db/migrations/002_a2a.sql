@@ -466,6 +466,15 @@ ALTER TABLE agent_builds
     ALTER COLUMN exit_status  DROP DEFAULT,
     ALTER COLUMN exit_message DROP DEFAULT;
 
+-- agent_builds.failure_kind — for a failed build, whether the cause is
+-- code-attributable ('code': compile error, migration reversibility, the
+-- agent's own exit-tool error) or a platform/infrastructure failure
+-- ('infra': toolserver/docker/schema/git/deploy). Only 'code' failures are
+-- fed back into the next upgrade's codegen diagnostics — an agent can't fix
+-- a stale toolserver image. '' for non-failed builds. The classifier
+-- defaults to 'infra' so an unclassified failure never trains the agent.
+ALTER TABLE agent_builds ADD COLUMN failure_kind text NOT NULL DEFAULT '';
+
 -- connections.auth_params — extra OAuth authorization-request query
 -- params declared by the agent (agentsdk Connection.AuthParams), merged
 -- over the platform defaults per key at authorize time. An empty object
@@ -1318,6 +1327,7 @@ ALTER TABLE agent_builds DROP COLUMN IF EXISTS sdk_version;
 ALTER TABLE agent_builds DROP COLUMN IF EXISTS todos;
 ALTER TABLE agent_builds DROP COLUMN IF EXISTS exit_status;
 ALTER TABLE agent_builds DROP COLUMN IF EXISTS exit_message;
+ALTER TABLE agent_builds DROP COLUMN IF EXISTS failure_kind;
 ALTER TABLE system_settings DROP COLUMN IF EXISTS last_seen_sdk_version;
 -- Re-add the vestigial runs.logs (NOT NULL via transient default, then
 -- drop it per the no-fake-defaults rule). Content is not recoverable.

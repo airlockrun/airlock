@@ -24,7 +24,7 @@ VALUES (
     0, 0, 0, 0, 0,
     $4, '', '[]', '', ''
 )
-RETURNING id, agent_id, type, status, instructions, source_ref, image_ref, sol_log, docker_log, log_seq, error_message, started_at, finished_at, llm_calls, llm_tokens_in, llm_tokens_out, llm_tokens_cached, llm_cost_estimate, rollback_target_id, sdk_version, todos, exit_status, exit_message
+RETURNING id, agent_id, type, status, instructions, source_ref, image_ref, sol_log, docker_log, log_seq, error_message, started_at, finished_at, llm_calls, llm_tokens_in, llm_tokens_out, llm_tokens_cached, llm_cost_estimate, rollback_target_id, sdk_version, todos, exit_status, exit_message, failure_kind
 `
 
 type CreateAgentBuildParams struct {
@@ -71,12 +71,13 @@ func (q *Queries) CreateAgentBuild(ctx context.Context, arg CreateAgentBuildPara
 		&i.Todos,
 		&i.ExitStatus,
 		&i.ExitMessage,
+		&i.FailureKind,
 	)
 	return i, err
 }
 
 const getAgentBuild = `-- name: GetAgentBuild :one
-SELECT id, agent_id, type, status, instructions, source_ref, image_ref, sol_log, docker_log, log_seq, error_message, started_at, finished_at, llm_calls, llm_tokens_in, llm_tokens_out, llm_tokens_cached, llm_cost_estimate, rollback_target_id, sdk_version, todos, exit_status, exit_message FROM agent_builds WHERE id = $1
+SELECT id, agent_id, type, status, instructions, source_ref, image_ref, sol_log, docker_log, log_seq, error_message, started_at, finished_at, llm_calls, llm_tokens_in, llm_tokens_out, llm_tokens_cached, llm_cost_estimate, rollback_target_id, sdk_version, todos, exit_status, exit_message, failure_kind FROM agent_builds WHERE id = $1
 `
 
 func (q *Queries) GetAgentBuild(ctx context.Context, id pgtype.UUID) (AgentBuild, error) {
@@ -106,12 +107,13 @@ func (q *Queries) GetAgentBuild(ctx context.Context, id pgtype.UUID) (AgentBuild
 		&i.Todos,
 		&i.ExitStatus,
 		&i.ExitMessage,
+		&i.FailureKind,
 	)
 	return i, err
 }
 
 const getLatestBuildForAgent = `-- name: GetLatestBuildForAgent :one
-SELECT id, agent_id, type, status, instructions, source_ref, image_ref, sol_log, docker_log, log_seq, error_message, started_at, finished_at, llm_calls, llm_tokens_in, llm_tokens_out, llm_tokens_cached, llm_cost_estimate, rollback_target_id, sdk_version, todos, exit_status, exit_message FROM agent_builds WHERE agent_id = $1 ORDER BY started_at DESC LIMIT 1
+SELECT id, agent_id, type, status, instructions, source_ref, image_ref, sol_log, docker_log, log_seq, error_message, started_at, finished_at, llm_calls, llm_tokens_in, llm_tokens_out, llm_tokens_cached, llm_cost_estimate, rollback_target_id, sdk_version, todos, exit_status, exit_message, failure_kind FROM agent_builds WHERE agent_id = $1 ORDER BY started_at DESC LIMIT 1
 `
 
 func (q *Queries) GetLatestBuildForAgent(ctx context.Context, agentID pgtype.UUID) (AgentBuild, error) {
@@ -141,6 +143,7 @@ func (q *Queries) GetLatestBuildForAgent(ctx context.Context, agentID pgtype.UUI
 		&i.Todos,
 		&i.ExitStatus,
 		&i.ExitMessage,
+		&i.FailureKind,
 	)
 	return i, err
 }
@@ -148,7 +151,7 @@ func (q *Queries) GetLatestBuildForAgent(ctx context.Context, agentID pgtype.UUI
 const listAgentBuildsByAgent = `-- name: ListAgentBuildsByAgent :many
 SELECT id, agent_id, type, status, instructions, error_message, source_ref, image_ref, started_at, finished_at,
        llm_calls, llm_tokens_in, llm_tokens_out, llm_tokens_cached, llm_cost_estimate,
-       rollback_target_id, sdk_version, exit_status, exit_message
+       rollback_target_id, sdk_version, exit_status, exit_message, failure_kind
 FROM agent_builds
 WHERE agent_id = $1
 ORDER BY started_at DESC
@@ -175,6 +178,7 @@ type ListAgentBuildsByAgentRow struct {
 	SdkVersion       string             `json:"sdk_version"`
 	ExitStatus       string             `json:"exit_status"`
 	ExitMessage      string             `json:"exit_message"`
+	FailureKind      string             `json:"failure_kind"`
 }
 
 func (q *Queries) ListAgentBuildsByAgent(ctx context.Context, agentID pgtype.UUID) ([]ListAgentBuildsByAgentRow, error) {
@@ -206,6 +210,7 @@ func (q *Queries) ListAgentBuildsByAgent(ctx context.Context, agentID pgtype.UUI
 			&i.SdkVersion,
 			&i.ExitStatus,
 			&i.ExitMessage,
+			&i.FailureKind,
 		); err != nil {
 			return nil, err
 		}
@@ -239,8 +244,9 @@ UPDATE agent_builds SET
     sdk_version = COALESCE($5, ''),
     exit_status = COALESCE($6, ''),
     exit_message = COALESCE($7, ''),
+    failure_kind = COALESCE($8, ''),
     finished_at = now()
-WHERE id = $8
+WHERE id = $9
 `
 
 type UpdateAgentBuildCompleteParams struct {
@@ -251,6 +257,7 @@ type UpdateAgentBuildCompleteParams struct {
 	SdkVersion   string      `json:"sdk_version"`
 	ExitStatus   string      `json:"exit_status"`
 	ExitMessage  string      `json:"exit_message"`
+	FailureKind  string      `json:"failure_kind"`
 	ID           pgtype.UUID `json:"id"`
 }
 
@@ -263,6 +270,7 @@ func (q *Queries) UpdateAgentBuildComplete(ctx context.Context, arg UpdateAgentB
 		arg.SdkVersion,
 		arg.ExitStatus,
 		arg.ExitMessage,
+		arg.FailureKind,
 		arg.ID,
 	)
 	return err

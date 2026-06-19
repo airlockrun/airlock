@@ -114,6 +114,9 @@ onMounted(() => {
     </div>
 
     <!-- Result: exit outcome + any infra error -->
+    <Message v-if="build.status === 'failed' && build.failureKind === 'infra'" severity="warn" :closable="false" icon="pi pi-server" style="margin-bottom: 0.75rem">
+      Platform error — a build infrastructure failure (toolserver / docker / deploy), not a problem in your agent's code. Retry the build; if it persists, check the airlock logs.
+    </Message>
     <Message v-if="build.exitStatus === 'success' && build.exitMessage" severity="success" :closable="false" style="margin-bottom: 0.75rem">
       {{ build.exitMessage }}
     </Message>

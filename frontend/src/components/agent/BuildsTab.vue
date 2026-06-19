@@ -147,6 +147,12 @@ onMounted(() => {
       <Column header="Result">
         <template #body="{ data: b }">
           <div class="result-cell">
+            <Tag
+              v-if="b.status === 'failed' && b.failureKind === 'infra'"
+              value="Platform error"
+              severity="warn"
+              v-tooltip.top="'A build infrastructure failure (toolserver/docker/deploy), not your agent\'s code.'"
+            />
             <div v-if="b.exitMessage" :class="b.exitStatus === 'success' ? 'result-ok' : 'result-bad'">
               <i :class="b.exitStatus === 'success' ? 'pi pi-check' : 'pi pi-times'" />
               {{ b.exitMessage }}

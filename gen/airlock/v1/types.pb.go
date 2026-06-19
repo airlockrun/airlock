@@ -1230,8 +1230,14 @@ type AgentBuildInfo struct {
 	// error/refused). Distinct from error_message, which carries
 	// infra/external failures (docker, push, validation). The builds table
 	// shows both together as the "Result".
-	ExitStatus    string `protobuf:"bytes,23,opt,name=exit_status,json=exitStatus,proto3" json:"exit_status,omitempty"`
-	ExitMessage   string `protobuf:"bytes,24,opt,name=exit_message,json=exitMessage,proto3" json:"exit_message,omitempty"`
+	ExitStatus  string `protobuf:"bytes,23,opt,name=exit_status,json=exitStatus,proto3" json:"exit_status,omitempty"`
+	ExitMessage string `protobuf:"bytes,24,opt,name=exit_message,json=exitMessage,proto3" json:"exit_message,omitempty"`
+	// failure_kind classifies a failed build: "code" (compile error, migration
+	// reversibility, the agent's own exit error) vs "infra" (platform failure —
+	// toolserver/docker/schema/deploy). Empty for non-failed builds. The UI
+	// renders an infra failure as a platform error ("not your agent") rather
+	// than a code failure.
+	FailureKind   string `protobuf:"bytes,25,opt,name=failure_kind,json=failureKind,proto3" json:"failure_kind,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1430,6 +1436,13 @@ func (x *AgentBuildInfo) GetExitStatus() string {
 func (x *AgentBuildInfo) GetExitMessage() string {
 	if x != nil {
 		return x.ExitMessage
+	}
+	return ""
+}
+
+func (x *AgentBuildInfo) GetFailureKind() string {
+	if x != nil {
+		return x.FailureKind
 	}
 	return ""
 }
@@ -4611,7 +4624,7 @@ const file_airlock_v1_types_proto_rawDesc = "" +
 	"started_at\x18\x10 \x01(\v2\x1a.google.protobuf.TimestampR\tstartedAt\x12;\n" +
 	"\vfinished_at\x18\x11 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
 	"finishedAt\x12*\n" +
-	"\x11llm_tokens_cached\x18\x12 \x01(\x05R\x0fllmTokensCached\"\xf0\x06\n" +
+	"\x11llm_tokens_cached\x18\x12 \x01(\x05R\x0fllmTokensCached\"\x93\a\n" +
 	"\x0eAgentBuildInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x19\n" +
 	"\bagent_id\x18\x02 \x01(\tR\aagentId\x12\x12\n" +
@@ -4643,7 +4656,8 @@ const file_airlock_v1_types_proto_rawDesc = "" +
 	"\x05todos\x18\x16 \x03(\v2\x14.airlock.v1.TodoItemR\x05todos\x12\x1f\n" +
 	"\vexit_status\x18\x17 \x01(\tR\n" +
 	"exitStatus\x12!\n" +
-	"\fexit_message\x18\x18 \x01(\tR\vexitMessage\"\xe1\x01\n" +
+	"\fexit_message\x18\x18 \x01(\tR\vexitMessage\x12!\n" +
+	"\ffailure_kind\x18\x19 \x01(\tR\vfailureKind\"\xe1\x01\n" +
 	"\x10ConversationInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x19\n" +
 	"\bagent_id\x18\x02 \x01(\tR\aagentId\x12\x14\n" +

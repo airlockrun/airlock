@@ -36,6 +36,7 @@ UPDATE agent_builds SET
     sdk_version = COALESCE(@sdk_version, ''),
     exit_status = COALESCE(@exit_status, ''),
     exit_message = COALESCE(@exit_message, ''),
+    failure_kind = COALESCE(@failure_kind, ''),
     finished_at = now()
 WHERE id = @id;
 
@@ -72,7 +73,7 @@ SELECT * FROM agent_builds WHERE agent_id = $1 ORDER BY started_at DESC LIMIT 1;
 -- name: ListAgentBuildsByAgent :many
 SELECT id, agent_id, type, status, instructions, error_message, source_ref, image_ref, started_at, finished_at,
        llm_calls, llm_tokens_in, llm_tokens_out, llm_tokens_cached, llm_cost_estimate,
-       rollback_target_id, sdk_version, exit_status, exit_message
+       rollback_target_id, sdk_version, exit_status, exit_message, failure_kind
 FROM agent_builds
 WHERE agent_id = @agent_id
 ORDER BY started_at DESC

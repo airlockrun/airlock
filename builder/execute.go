@@ -179,7 +179,7 @@ func (b *BuildService) Execute(ctx context.Context, plan BuildPlan) (string, err
 	// the build row and rendered as the "Result" alongside any infra error.
 	var exitStatus, exitMessage string
 
-	completeBuild := func(status, errMsg, sourceRef, imageRef string) {
+	completeBuild := func(status, errMsg, failKind, sourceRef, imageRef string) {
 		// sdk_version records what the build was DEPLOYED with — that's
 		// what rollback needs to detect drift. Stamp on success only; a
 		// failed build never deployed anything.
@@ -196,8 +196,23 @@ func (b *BuildService) Execute(ctx context.Context, plan BuildPlan) (string, err
 			SdkVersion:   sdkVersion,
 			ExitStatus:   exitStatus,
 			ExitMessage:  exitMessage,
+			FailureKind:  failKind,
 		})
 		b.events.PublishBuildEvent(context.Background(), agentUUID, buildUUID, status, errMsg, "", bp.tasksDone, bp.tasksTotal)
+	}
+
+	// Failure classification. A failed build is either code-attributable
+	// (compile error, migration reversibility, the agent's own exit-tool
+	// error) or a platform failure (toolserver/docker/schema/git/deploy).
+	// Only "code" failures feed the next upgrade's codegen diagnostics — an
+	// agent can't fix a stale toolserver image. failInfra is the default for
+	// every pipeline-mechanics failure; failCode marks the three cases the
+	// agent should see.
+	failInfra := func(err error, sourceRef, imageRef string) {
+		completeBuild("failed", err.Error(), "infra", sourceRef, imageRef)
+	}
+	failCode := func(errMsg, sourceRef, imageRef string) {
+		completeBuild("failed", errMsg, "code", sourceRef, imageRef)
 	}
 
 	// publishPhase emits a lightweight badge update on the agent topic as the
@@ -208,7 +223,7 @@ func (b *BuildService) Execute(ctx context.Context, plan BuildPlan) (string, err
 	}
 
 	if ctx.Err() != nil {
-		completeBuild("cancelled", "cancelled by user", "", "")
+		completeBuild("cancelled", "cancelled by user", "", "", "")
 		return "", ctx.Err()
 	}
 
@@ -225,7 +240,7 @@ func (b *BuildService) Execute(ctx context.Context, plan BuildPlan) (string, err
 	select {
 	case b.buildSem <- struct{}{}:
 	case <-ctx.Done():
-		completeBuild("cancelled", "cancelled while queued", "", "")
+		completeBuild("cancelled", "cancelled while queued", "", "", "")
 		return "", ctx.Err()
 	}
 	defer func() { <-b.buildSem }()
@@ -235,13 +250,13 @@ func (b *BuildService) Execute(ctx context.Context, plan BuildPlan) (string, err
 		logLine(fmt.Sprintf("Repositioning repo to %s...", plan.StartCommit[:min(12, len(plan.StartCommit))]))
 		if plan.PreserveBranch != "" {
 			if err := SaveRef(repoPath, plan.PreserveBranch, "HEAD"); err != nil {
-				completeBuild("failed", err.Error(), "", "")
+				failInfra(err, "", "")
 				return "", fmt.Errorf("save preserve branch: %w", err)
 			}
 			logLine(fmt.Sprintf("Saved forward history at %s", plan.PreserveBranch))
 		}
 		if err := ResetHard(repoPath, plan.StartCommit); err != nil {
-			completeBuild("failed", err.Error(), "", "")
+			failInfra(err, "", "")
 			return "", fmt.Errorf("reset repo: %w", err)
 		}
 	}
@@ -265,12 +280,12 @@ func (b *BuildService) Execute(ctx context.Context, plan BuildPlan) (string, err
 			AgentBaseImage:  b.cfg.AgentBaseImage,
 		})
 		if err != nil {
-			completeBuild("failed", err.Error(), "", "")
+			failInfra(err, "", "")
 			return "", fmt.Errorf("housekeeping: %w", err)
 		}
 		if hk.Changed() {
 			if err := commitHousekeeping(repoPath, hk); err != nil {
-				completeBuild("failed", err.Error(), "", "")
+				failInfra(err, "", "")
 				return "", fmt.Errorf("commit housekeeping: %w", err)
 			}
 			logLine("Airlock housekeeping: refreshed managed files (Dockerfile/.gitignore/go.mod)")
@@ -290,7 +305,7 @@ func (b *BuildService) Execute(ctx context.Context, plan BuildPlan) (string, err
 		cloneName = fmt.Sprintf("agent_%s_upgrade_%s", sanitizeUUID(agentID), sanitizeUUID(plan.RunID))
 	}
 	if err := b.cloneSchema(ctx, schemaName, cloneName, schemaName); err != nil {
-		completeBuild("failed", err.Error(), "", "")
+		failInfra(err, "", "")
 		return "", fmt.Errorf("clone schema: %w", err)
 	}
 	defer func() {
@@ -310,17 +325,23 @@ func (b *BuildService) Execute(ctx context.Context, plan BuildPlan) (string, err
 		// failed. Callers (RunUpgrade/Rollback) likewise unwrap
 		// RefusedError to report a declined request, not a failure.
 		buildStatus := "failed"
+		failKind := "infra"
 		var refErr *RefusedError
 		if errors.As(codegenErr, &refErr) {
 			buildStatus = "refused"
+			failKind = ""
+		} else if exitStatus == exitStatusError {
+			// The agent ran and reported its own failure via the exit tool —
+			// code-domain; the next upgrade's codegen should see it.
+			failKind = "code"
 		} else if exitStatus == "" {
-			// A failure that isn't the agent's own exit report (e.g. the
-			// "not all tools returned results" validation error, or a runner
-			// fault) — surface it in the log; the exit-status paths already
-			// logged their own [exit] line in runCodegen.
+			// Not the agent's own exit (toolserver/runner/connect fault) — a
+			// platform failure. Surface it in the log; don't feed it back to
+			// the agent (it can't fix the platform). The exit-status paths
+			// already logged their own [exit] line in runCodegen.
 			solLog("[error] " + codegenErr.Error())
 		}
-		completeBuild(buildStatus, codegenErr.Error(), commitHash, "")
+		completeBuild(buildStatus, codegenErr.Error(), failKind, commitHash, "")
 		return "", codegenErr
 	}
 	if commitHash == "" {
@@ -329,14 +350,14 @@ func (b *BuildService) Execute(ctx context.Context, plan BuildPlan) (string, err
 		// main pointed at coming in.
 		hash, err := gitOutput(repoPath, "rev-parse", "HEAD")
 		if err != nil {
-			completeBuild("failed", err.Error(), "", "")
+			failInfra(err, "", "")
 			return "", fmt.Errorf("rev-parse HEAD: %w", err)
 		}
 		commitHash = hash
 	}
 
 	if ctx.Err() != nil {
-		completeBuild("cancelled", "cancelled by user", commitHash, "")
+		completeBuild("cancelled", "cancelled by user", "", commitHash, "")
 		return "", ctx.Err()
 	}
 
@@ -364,7 +385,7 @@ func (b *BuildService) Execute(ctx context.Context, plan BuildPlan) (string, err
 			// user needs to know, so fail the build rather than silently
 			// keep going. pushAgentRepo already surfaces the side-branch
 			// name in the error message.
-			completeBuild("failed", pushErr.Error(), commitHash, "")
+			failInfra(pushErr, commitHash, "")
 			return "", pushErr
 		default:
 			// Transport / auth / 5xx / rate-limit / anything else
@@ -388,8 +409,9 @@ func (b *BuildService) Execute(ctx context.Context, plan BuildPlan) (string, err
 	// merged to `main` in Phase C, so an unbuildable commit can land there —
 	// but the container swap (Phase F) and the `image_ref`/`source_ref` write
 	// (Phase G) run ONLY after this build and migration validation (Phase E)
-	// pass. Every failure below calls completeBuild("failed", …) and returns
-	// without deploying, so the agent stays on its last buildable image. A
+	// pass. Every failure below fails the build (failCode for compile/migration,
+	// failInfra otherwise) and returns without deploying, so the agent stays on
+	// its last buildable image. A
 	// broken `main` is expected (iterate on top, or rollback→upgrade); it is
 	// never deployed.
 	publishPhase("image")
@@ -402,7 +424,7 @@ func (b *BuildService) Execute(ctx context.Context, plan BuildPlan) (string, err
 	// contextDir as the build context.
 	dockerfileDir, err := os.MkdirTemp("", "airlock-dockerfile-*")
 	if err != nil {
-		completeBuild("failed", err.Error(), commitHash, "")
+		failInfra(err, commitHash, "")
 		return "", fmt.Errorf("create dockerfile temp dir: %w", err)
 	}
 	defer os.RemoveAll(dockerfileDir)
@@ -413,7 +435,7 @@ func (b *BuildService) Execute(ctx context.Context, plan BuildPlan) (string, err
 		AgentSDKVersion: sdkVer,
 		AgentBaseImage:  b.cfg.AgentBaseImage,
 	}); err != nil {
-		completeBuild("failed", err.Error(), commitHash, "")
+		failInfra(err, commitHash, "")
 		return "", fmt.Errorf("generate Dockerfile: %w", err)
 	}
 	imageTag, err := buildImage(ctx, b.cfg, agentID, contextDir, commitHash, filepath.Join(dockerfileDir, "Dockerfile"), goProxyDir, dockerLog)
@@ -425,10 +447,10 @@ func (b *BuildService) Execute(ctx context.Context, plan BuildPlan) (string, err
 			msg := fmt.Sprintf("rebuild failed to compile against the current agentsdk. "+
 				"If the SDK API changed, re-run Upgrade with a short description so the "+
 				"builder can adapt the code.\n\n%s", err.Error())
-			completeBuild("failed", msg, commitHash, "")
+			failCode(msg, commitHash, "")
 			return "", errors.New(msg)
 		}
-		completeBuild("failed", err.Error(), commitHash, "")
+		failCode(err.Error(), commitHash, "")
 		return "", fmt.Errorf("build image: %w", err)
 	}
 	b.logger.Info("image built", zap.String("image", imageTag))
@@ -449,27 +471,27 @@ func (b *BuildService) Execute(ctx context.Context, plan BuildPlan) (string, err
 	if plan.Kind == BuildKindRollback {
 		targetVersion, vErr := MigrationVersionAt(repoPath, plan.StartCommit)
 		if vErr != nil {
-			completeBuild("failed", vErr.Error(), commitHash, imageTag)
+			failInfra(vErr, commitHash, imageTag)
 			return "", fmt.Errorf("read target migration version: %w", vErr)
 		}
 		if err := b.runDownToCheck(ctx, agent.ImageRef, testDBURL, targetVersion, logLine); err != nil {
-			completeBuild("failed", err.Error(), commitHash, imageTag)
+			failCode(err.Error(), commitHash, imageTag)
 			return "", fmt.Errorf("rollback pre-flight: %w", err)
 		}
 		liveDBURL := b.agentDBURL(schemaName, dbPassword, schemaName)
 		if err := b.runDownToCheck(ctx, agent.ImageRef, liveDBURL, targetVersion, logLine); err != nil {
-			completeBuild("failed", err.Error(), commitHash, imageTag)
+			failCode(err.Error(), commitHash, imageTag)
 			return "", fmt.Errorf("rollback apply: %w", err)
 		}
 	} else {
 		if err := b.validateMigrations(ctx, imageTag, testDBURL, logLine); err != nil {
-			completeBuild("failed", err.Error(), commitHash, imageTag)
+			failCode(err.Error(), commitHash, imageTag)
 			return "", fmt.Errorf("migration validation: %w", err)
 		}
 	}
 
 	if ctx.Err() != nil {
-		completeBuild("cancelled", "cancelled by user", commitHash, imageTag)
+		completeBuild("cancelled", "cancelled by user", "", commitHash, imageTag)
 		return "", ctx.Err()
 	}
 
@@ -490,7 +512,7 @@ func (b *BuildService) Execute(ctx context.Context, plan BuildPlan) (string, err
 	agentToken, err := auth.IssueAgentToken(b.cfg.JWTSecret, agentUUID)
 	if err != nil {
 		unlockSwap()
-		completeBuild("failed", err.Error(), commitHash, imageTag)
+		failInfra(err, commitHash, imageTag)
 		return "", fmt.Errorf("issue agent token: %w", err)
 	}
 	agentDBURL := b.agentDBURL(schemaName, dbPassword, schemaName)
@@ -505,7 +527,7 @@ func (b *BuildService) Execute(ctx context.Context, plan BuildPlan) (string, err
 		},
 	}); err != nil {
 		unlockSwap()
-		completeBuild("failed", err.Error(), commitHash, imageTag)
+		failInfra(err, commitHash, imageTag)
 		return "", fmt.Errorf("start agent: %w", err)
 	}
 
@@ -528,7 +550,7 @@ func (b *BuildService) Execute(ctx context.Context, plan BuildPlan) (string, err
 		return "", fmt.Errorf("update refs: %w", err)
 	}
 	unlockSwap()
-	completeBuild("complete", "", commitHash, imageTag)
+	completeBuild("complete", "", "", commitHash, imageTag)
 
 	if exitMessage == "" && plan.Kind == BuildKindUpgrade && plan.Instruction == "" {
 		exitMessage = "Rebuilt against the current agentsdk (no code changes)."
