@@ -56,6 +56,8 @@ type UpgradeInput struct {
 	Actions              string // JSON of recorded actions before failure (auto_fix)
 	Messages             string // conversation messages from the failed run
 	Logs                 string // captured log lines from the failed run (auto_fix)
+	BuildError           string // error_message of the agent's most recent failed build
+	BuildLog             string // tail of that build's docker log
 }
 
 // notifyUpgradeOutcome routes the post-build message to whichever sink
@@ -162,6 +164,16 @@ func (b *BuildService) RunUpgrade(_ context.Context, input UpgradeInput) {
 		return
 	}
 
+	// If the agent's most recent build failed, surface that failure to this
+	// upgrade's codegen via DIAGNOSTICS.md. The prior codegen may have
+	// committed to main but broken docker/migrations (it never saw the
+	// breakage — it thought it succeeded), so feeding back the build error
+	// lets the agent fix it. Best-effort: a lookup miss just omits it.
+	if last, lerr := q.GetLatestBuildForAgent(ctx, agentPgUUID); lerr == nil && last.Status == "failed" {
+		input.BuildError = last.ErrorMessage
+		input.BuildLog = tailLines(last.DockerLog, 100)
+	}
+
 	plan := BuildPlan{
 		Agent:          agent,
 		Kind:           BuildKindUpgrade,
@@ -231,8 +243,23 @@ func (b *BuildService) RunUpgrade(_ context.Context, input UpgradeInput) {
 // UpgradeInput carries any failure context (auto_fix path), otherwise
 // nil. Execute uses the nil/non-nil distinction to decide whether to
 // write DIAGNOSTICS.md before invoking Sol.
+// tailLines returns the last n lines of s, prefixed with an elision marker
+// when content was dropped. Bounds the docker log fed into DIAGNOSTICS.md so
+// a large build log doesn't blow the codegen prompt.
+func tailLines(s string, n int) string {
+	s = strings.TrimRight(s, "\n")
+	if s == "" {
+		return ""
+	}
+	lines := strings.Split(s, "\n")
+	if len(lines) <= n {
+		return s
+	}
+	return "… (earlier build output omitted)\n" + strings.Join(lines[len(lines)-n:], "\n")
+}
+
 func autoFixContextFromInput(input UpgradeInput) *AutoFixContext {
-	if input.ErrorMessage == "" && input.PanicTrace == "" && input.InputPayload == "" && input.Actions == "" && input.Messages == "" && input.Logs == "" {
+	if input.ErrorMessage == "" && input.PanicTrace == "" && input.InputPayload == "" && input.Actions == "" && input.Messages == "" && input.Logs == "" && input.BuildError == "" && input.BuildLog == "" {
 		return nil
 	}
 	return &AutoFixContext{
@@ -242,5 +269,7 @@ func autoFixContextFromInput(input UpgradeInput) *AutoFixContext {
 		Actions:      input.Actions,
 		Messages:     input.Messages,
 		Logs:         input.Logs,
+		BuildError:   input.BuildError,
+		BuildLog:     input.BuildLog,
 	}
 }

@@ -362,34 +362,39 @@ What it should do:
 }
 
 // buildUpgradePrompt is the user-turn message for a codegen upgrade.
-// Rebuilds never reach here (doUpgrade branches earlier), so there are
-// exactly two intents: a failure-fix (diagnostics present — diagnose
-// and repair a crashing agent) or a feature change. Both frame the work
-// as incremental against an already-working tree so the model preserves
-// everything unrelated. The internal Reason enum is deliberately NOT
-// surfaced — it means nothing to the model.
+// Rebuilds never reach here (doUpgrade branches earlier). The framing keys
+// off whether the requester supplied a change description:
+//   - no description + diagnostics → a pure failure-fix (auto-fix of a
+//     crashing/failing agent): diagnose and repair, minimal change.
+//   - a description → a change request: implement it. When diagnostics are
+//     also present (e.g. the prior build broke), fix that breakage as part
+//     of delivering the change rather than abandoning the request.
+//
+// Both frame the work as incremental against an already-working tree so the
+// model preserves everything unrelated. The internal Reason enum is
+// deliberately NOT surfaced — it means nothing to the model.
 func buildUpgradePrompt(agent dbq.Agent, input UpgradeInput, hasDiagnostics bool) string {
 	name := fmt.Sprintf("%s (slug: %s, id: %s)", agent.Name, agent.Slug, uuidString(agent.ID))
 	desc := strings.TrimSpace(input.Description)
 
-	if hasDiagnostics {
-		p := fmt.Sprintf(`The EXISTING agent %s is failing. Diagnose and fix the failure described in DIAGNOSTICS.md in the workspace. Make the minimal change that fixes it and preserve everything not involved in the fix — do not remove tools, connections, routes, or files unrelated to the failure.`, name)
-		if desc != "" {
-			p += "\n\nAdditional context from the requester:\n\n" + desc
-		}
-		return p
-	}
-
 	if desc == "" {
+		if hasDiagnostics {
+			return fmt.Sprintf(`The EXISTING agent %s is failing. Diagnose and fix the failure described in DIAGNOSTICS.md in the workspace. Make the minimal change that fixes it and preserve everything not involved in the fix — do not remove tools, connections, routes, or files unrelated to the failure.`, name)
+		}
 		// Degenerate: an auto_fix whose run carried no error context and
 		// no description. Don't invent work — just keep it building.
 		desc = "(no description provided — make no behavioral changes; only ensure the agent still builds.)"
 	}
-	return fmt.Sprintf(`You are upgrading the EXISTING agent %s. Its workspace already contains a working codebase. This is an incremental change request — implement it and preserve everything not related to it. Do not remove tools, connections, routes, or files the request doesn't mention.
+
+	p := fmt.Sprintf(`You are upgrading the EXISTING agent %s. Its workspace already contains a working codebase. This is an incremental change request — implement it and preserve everything not related to it. Do not remove tools, connections, routes, or files the request doesn't mention.
 
 Requested change:
 
 %s`, name, desc)
+	if hasDiagnostics {
+		p += "\n\nThe workspace code may currently be in a failing state — DIAGNOSTICS.md describes the most recent failure (build or runtime). Fix it as part of this change so the agent builds and runs."
+	}
+	return p
 }
 
 // writeUpgradeDiagnostics writes DIAGNOSTICS.md only when the upgrade
@@ -415,6 +420,12 @@ func writeUpgradeDiagnostics(dir string, input UpgradeInput) (bool, error) {
 	}
 	if input.Logs != "" {
 		content += fmt.Sprintf("\n## Run Logs\n\n```\n%s\n```\n", input.Logs)
+	}
+	if input.BuildError != "" {
+		content += fmt.Sprintf("\n## Previous Build Failure\n\nThe most recent build of this agent failed. Its committed code is in the workspace; fix the cause so the build succeeds.\n\n```\n%s\n```\n", input.BuildError)
+	}
+	if input.BuildLog != "" {
+		content += fmt.Sprintf("\n## Previous Build Log (tail)\n\n```\n%s\n```\n", input.BuildLog)
 	}
 	if content == "" {
 		return false, nil

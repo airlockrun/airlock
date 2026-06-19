@@ -63,9 +63,12 @@ type ScaffoldInputs struct {
 	BuildModel      string
 }
 
-// AutoFixContext is the run-failure trail that gets written into
-// DIAGNOSTICS.md before Sol sees the workspace, so the builder agent
-// can diagnose the failure. Mirrors the auto-fix subset of UpgradeInput.
+// AutoFixContext is the failure trail that gets written into DIAGNOSTICS.md
+// before Sol sees the workspace, so the builder agent can diagnose the
+// failure. Two independent sources: a failed runtime run (ErrorMessage …
+// Logs) and the agent's previous failed build (BuildError/BuildLog — the
+// docker/migration breakage that the prior codegen committed to main but
+// never got deployed). Mirrors the corresponding subset of UpgradeInput.
 type AutoFixContext struct {
 	ErrorMessage string
 	PanicTrace   string
@@ -73,4 +76,7 @@ type AutoFixContext struct {
 	Actions      string
 	Messages     string
 	Logs         string // captured log lines from the failed run
+
+	BuildError string // error_message of the agent's most recent failed build
+	BuildLog   string // tail of that build's docker log
 }

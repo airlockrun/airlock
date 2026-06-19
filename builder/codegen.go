@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/airlockrun/goai/tool"
@@ -50,8 +51,8 @@ func (b *BuildService) runCodegen(
 	}
 	defer os.RemoveAll(workDir)
 
-	if err := CloneAgentRepo(repoPath, branch, workDir); err != nil {
-		return "", "", "", fmt.Errorf("clone agent repo: %w", err)
+	if err := MaterializeBranch(repoPath, branch, workDir); err != nil {
+		return "", "", "", fmt.Errorf("materialize agent repo: %w", err)
 	}
 	// Lib resolution: the toolserver gets GOPROXY pointed at the dev lib
 	// proxy (when goProxyDir is set) so codegen's go-tool calls resolve
@@ -129,18 +130,79 @@ func (b *BuildService) runCodegen(
 	}
 	logLine(fmt.Sprintf("[exit] success: %s", solResult.ExitMessage))
 
-	commitMsg := fmt.Sprintf("%s agent %s", plan.Kind, agentID)
-	if plan.Reason != "" {
-		commitMsg = fmt.Sprintf("%s agent %s: %s", plan.Kind, agentID, plan.Reason)
+	commitMsg := codegenCommitMessage(plan, agentID, solResult.ExitMessage)
+
+	// Mirror the agent's edits into the per-agent repo (excluding the
+	// airlock-injected DIAGNOSTICS.md) and commit them host-side. The agent
+	// never had a .git to commit into, so this is airlock's sole, deterministic
+	// commit of the work.
+	if err := SyncWorkdirToRepo(workDir, repoPath, []string{"DIAGNOSTICS.md"}); err != nil {
+		return "", "", "", fmt.Errorf("sync codegen workspace: %w", err)
 	}
-	hash, err := CommitAndPush(workDir, commitMsg)
+	hash, committed, err := CommitWorktree(repoPath, commitMsg)
 	if err != nil {
 		return "", "", "", fmt.Errorf("commit codegen: %w", err)
+	}
+	if !committed {
+		// Agent exited success but changed nothing. Leave HEAD untouched and
+		// let Execute fall through to current HEAD as the source ref.
+		return "", exitStatusSuccess, solResult.ExitMessage, nil
 	}
 	if err := MergeBranch(repoPath, branch); err != nil {
 		return "", "", "", fmt.Errorf("merge codegen: %w", err)
 	}
 	return hash, exitStatusSuccess, solResult.ExitMessage, nil
+}
+
+// codegenCommitMessage builds the git commit message for a successful
+// codegen result: a subject line from the user's instruction, the agent's
+// own exit-tool summary as the body, and Reason/Run trailers for
+// provenance. Falls back to the exit summary, then a generic
+// "<kind> agent <id>", when no instruction is present (defensive — codegen
+// only runs with a non-empty instruction).
+func codegenCommitMessage(plan BuildPlan, agentID, exitSummary string) string {
+	subject := firstLine(plan.Instruction)
+	if subject == "" {
+		subject = firstLine(exitSummary)
+	}
+	if subject == "" {
+		subject = fmt.Sprintf("%s agent %s", plan.Kind, agentID)
+	}
+	subject = truncateSubject(subject, 72)
+
+	var b strings.Builder
+	b.WriteString(subject)
+	if body := strings.TrimSpace(exitSummary); body != "" && body != subject {
+		b.WriteString("\n\n")
+		b.WriteString(body)
+	}
+	b.WriteString("\n")
+	if plan.Reason != "" {
+		fmt.Fprintf(&b, "\nReason: %s", plan.Reason)
+	}
+	if plan.RunID != "" {
+		fmt.Fprintf(&b, "\nRun: %s", plan.RunID)
+	}
+	return b.String()
+}
+
+// firstLine returns the first non-empty line of s, trimmed.
+func firstLine(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		s = strings.TrimSpace(s[:i])
+	}
+	return s
+}
+
+// truncateSubject caps a commit subject at max runes, appending an ellipsis
+// when it had to cut.
+func truncateSubject(s string, max int) string {
+	r := []rune(s)
+	if len(r) <= max {
+		return s
+	}
+	return strings.TrimSpace(string(r[:max])) + "…"
 }
 
 // codegenBranchName picks a working-branch name per kind so concurrent
@@ -189,6 +251,8 @@ func writePlanDiagnostics(workDir string, plan BuildPlan) error {
 		Actions:      d.Actions,
 		Messages:     d.Messages,
 		Logs:         d.Logs,
+		BuildError:   d.BuildError,
+		BuildLog:     d.BuildLog,
 	}
 	_, err := writeUpgradeDiagnostics(workDir, input)
 	return err
