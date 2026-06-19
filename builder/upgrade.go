@@ -174,12 +174,14 @@ func (b *BuildService) RunUpgrade(_ context.Context, input UpgradeInput) {
 		return
 	}
 
-	// If the agent's most recent build failed, surface that failure to this
-	// upgrade's codegen via DIAGNOSTICS.md. The prior codegen may have
-	// committed to main but broken docker/migrations (it never saw the
-	// breakage — it thought it succeeded), so feeding back the build error
-	// lets the agent fix it. Best-effort: a lookup miss just omits it.
-	if last, lerr := q.GetLatestBuildForAgent(ctx, agentPgUUID); lerr == nil && last.Status == "failed" {
+	// If the agent's most recent build failed with a CODE-attributable cause
+	// (compile error, migration reversibility, the agent's own exit error),
+	// surface it to this upgrade's codegen via DIAGNOSTICS.md — the prior
+	// codegen may have committed to main but broken the build without seeing
+	// it. Platform failures (failure_kind="infra": toolserver/docker/schema/
+	// deploy) are skipped: the agent can't fix a stale toolserver image, and
+	// feeding it infra noise just provokes spurious changes. Best-effort.
+	if last, lerr := q.GetLatestBuildForAgent(ctx, agentPgUUID); lerr == nil && last.Status == "failed" && last.FailureKind == "code" {
 		input.BuildError = last.ErrorMessage
 		input.BuildLog = tailLines(last.DockerLog, 100)
 	}

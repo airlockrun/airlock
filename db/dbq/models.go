@@ -80,6 +80,7 @@ type AgentBuild struct {
 	Todos            []byte             `json:"todos"`
 	ExitStatus       string             `json:"exit_status"`
 	ExitMessage      string             `json:"exit_message"`
+	FailureKind      string             `json:"failure_kind"`
 }
 
 type AgentConversation struct {

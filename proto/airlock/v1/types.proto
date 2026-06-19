@@ -266,6 +266,12 @@ message AgentBuildInfo {
   // shows both together as the "Result".
   string exit_status = 23;
   string exit_message = 24;
+  // failure_kind classifies a failed build: "code" (compile error, migration
+  // reversibility, the agent's own exit error) vs "infra" (platform failure —
+  // toolserver/docker/schema/deploy). Empty for non-failed builds. The UI
+  // renders an infra failure as a platform error ("not your agent") rather
+  // than a code failure.
+  string failure_kind = 25;
 }
 
 // ConversationInfo represents an agent conversation.

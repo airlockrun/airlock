@@ -203,6 +203,7 @@ func AgentBuildListItemToProto(b dbq.ListAgentBuildsByAgentRow, rollbackTargetSo
 		SdkVersion:              b.SdkVersion,
 		ExitStatus:              b.ExitStatus,
 		ExitMessage:             b.ExitMessage,
+		FailureKind:             b.FailureKind,
 	}
 }
 
@@ -239,6 +240,7 @@ func AgentBuildDetailToProto(b dbq.AgentBuild, rollbackTargetSourceRef string) *
 		SdkVersion:              b.SdkVersion,
 		ExitStatus:              b.ExitStatus,
 		ExitMessage:             b.ExitMessage,
+		FailureKind:             b.FailureKind,
 		Todos:                   TodosFromJSON(b.Todos),
 	}
 }
