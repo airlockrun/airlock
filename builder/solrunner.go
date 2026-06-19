@@ -2,6 +2,7 @@ package builder
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"sort"
@@ -15,6 +16,7 @@ import (
 	"github.com/airlockrun/goai/stream"
 	"github.com/airlockrun/goai/tool"
 	sol "github.com/airlockrun/sol"
+	"github.com/airlockrun/sol/activity"
 	"github.com/airlockrun/sol/bus"
 	"github.com/airlockrun/sol/executor"
 	solprovider "github.com/airlockrun/sol/provider"
@@ -24,6 +26,14 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"
 )
+
+// buildSink receives structured codegen activity. The builder's
+// buildPublisher implements it to stream live actions and persist + publish
+// the todo list; nil in non-build callers (e.g. sol CLI parity tests).
+type buildSink interface {
+	OnAction(activity.Action)
+	OnTodos(todosJSON []byte, done, total int)
+}
 
 // solRunOpts configures an in-process Sol run with a remote toolserver.
 type solRunOpts struct {
@@ -36,11 +46,12 @@ type solRunOpts struct {
 	BuildModel      string      // bare model name (e.g. "gpt-5"); empty ⇄ FK invalid
 	Prompt          string      // prompt for the runner
 	LogCallback     func(line string)
-	LocalTools      tool.Set // optional in-process tools (e.g., set_agent_description)
-	TestDBURL       string   // test schema DB URL with search_path baked in
-	TestDBPSQL      string   // test schema DB URL without search_path (for psql)
-	TestDBSchema    string   // test schema name (for psql SET search_path)
-	GoProxyDir      string   // dev: host path to the generated lib proxy; empty in prod
+	Sink            buildSink // optional: receives structured live actions + todos
+	LocalTools      tool.Set  // optional in-process tools (e.g., set_agent_description)
+	TestDBURL       string    // test schema DB URL with search_path baked in
+	TestDBPSQL      string    // test schema DB URL without search_path (for psql)
+	TestDBSchema    string    // test schema name (for psql SET search_path)
+	GoProxyDir      string    // dev: host path to the generated lib proxy; empty in prod
 }
 
 // solRunResult captures the outcome of an in-process Sol run. ExitStatus
@@ -260,7 +271,7 @@ func (b *BuildService) runSolInProcess(ctx context.Context, opts solRunOpts) (*s
 	// Step 8: Create scoped bus and subscribe for log streaming.
 	runBus := bus.New()
 	if opts.LogCallback != nil {
-		subscribeForLogs(runBus, opts.LogCallback)
+		subscribeForLogs(runBus, opts.LogCallback, opts.Sink)
 	}
 
 	// Step 9: Create and run Sol Runner. ExitState opts the runner into
@@ -287,7 +298,7 @@ func (b *BuildService) runSolInProcess(ctx context.Context, opts solRunOpts) (*s
 	// — both the success and error paths, since a failed codegen still
 	// burned tokens. resolveModel filled opts.BuildModel from the default
 	// when the agent had no override, so it's the effective model now.
-	b.recordBuildUsage(opts, rp.CatalogID, exitedResult, err, time.Since(codegenStart))
+	b.recordBuildUsage(opts, rp.CatalogID, rp.Slug, exitedResult, err, time.Since(codegenStart))
 	if err != nil {
 		// Preserve the runner's status when it filled one in (RunCancelled
 		// on ctx cancel) — overwriting to RunFailed unconditionally would
@@ -323,7 +334,7 @@ func (b *BuildService) runSolInProcess(ctx context.Context, opts solRunOpts) (*s
 // agent_builds aggregate. Best-effort and on a fresh bounded context so
 // a cancelled/failed build still records the tokens it already burned.
 // exited may be nil (runner returned before producing a result).
-func (b *BuildService) recordBuildUsage(opts solRunOpts, providerCatalogID string, exited *sol.ExitedRunResult, runErr error, latency time.Duration) {
+func (b *BuildService) recordBuildUsage(opts solRunOpts, providerCatalogID, providerSlug string, exited *sol.ExitedRunResult, runErr error, latency time.Duration) {
 	if !opts.BuildID.Valid {
 		return // nothing to attribute to (defensive — callers set it)
 	}
@@ -332,6 +343,7 @@ func (b *BuildService) recordBuildUsage(opts solRunOpts, providerCatalogID strin
 		AgentID:           opts.AgentID,
 		BuildID:           opts.BuildID,
 		ProviderCatalogID: providerCatalogID,
+		ProviderSlug:      providerSlug,
 		Model:             opts.BuildModel,
 		Capability:        "text",
 		CallKind:          opts.BuildType, // "build" | "upgrade"
@@ -360,6 +372,7 @@ func (b *BuildService) recordBuildUsage(opts solRunOpts, providerCatalogID strin
 // FK columns; we don't carry it here because callers already have it.
 type resolvedProvider struct {
 	CatalogID string
+	Slug      string
 	APIKey    string
 	BaseURL   string
 }
@@ -403,6 +416,7 @@ func (b *BuildService) resolveProvider(ctx context.Context, providerRowID pgtype
 
 	return &resolvedProvider{
 		CatalogID: p.CatalogID,
+		Slug:      p.Slug,
 		APIKey:    apiKey,
 		BaseURL:   baseURL,
 	}, nil
@@ -479,13 +493,19 @@ func remoteToolsToSet(infos []tool.Info) tool.Set {
 	return ts
 }
 
-// subscribeForLogs subscribes to bus events and forwards them as log lines.
+// subscribeForLogs subscribes to bus events and forwards them as the curated
+// codegen log plus, when sink is non-nil, structured live actions and todo
+// snapshots.
 //
-// LLM text deltas are buffered and emitted as a single `[output] ...` line
-// just before the next tool call / tool result / step boundary. The bus
+// Each tool result becomes one compact line via the shared activity formatter
+// (no file contents, no edited line bodies; commands/searches truncated) — a
+// stark contrast to dumping the model-facing output. LLM text deltas are
+// buffered and emitted as a single `[output] ...` line just before the next
+// tool call / step boundary. The exit tool is skipped here — codegen.go emits
+// the richer `[exit] <status>: <message>` line from the run result. The bus
 // dispatches synchronously on the runner's goroutine, so a closure-local
 // buffer is safe without a mutex.
-func subscribeForLogs(b *bus.Bus, cb func(string)) {
+func subscribeForLogs(b *bus.Bus, cb func(string), sink buildSink) {
 	var textBuf strings.Builder
 
 	flushText := func() {
@@ -503,17 +523,10 @@ func subscribeForLogs(b *bus.Bus, cb func(string)) {
 		}
 		textBuf.WriteString(td.Text)
 	})
+	// A tool call only flushes any buffered LLM text; the result event below
+	// carries the one compact line per tool.
 	b.Subscribe(bus.StreamToolCall, func(e bus.Event) {
 		flushText()
-		tc, ok := e.Properties.(stream.ToolCallEvent)
-		if !ok {
-			return
-		}
-		input := string(tc.Input)
-		if len(input) > 200 {
-			input = input[:200] + "..."
-		}
-		cb(fmt.Sprintf("[tool] %s %s", tc.ToolName, input))
 	})
 	b.Subscribe(bus.StreamToolResult, func(e bus.Event) {
 		flushText()
@@ -521,11 +534,27 @@ func subscribeForLogs(b *bus.Bus, cb func(string)) {
 		if !ok {
 			return
 		}
-		output := message.ToolOutputText(tr.Output)
-		if len(output) > 500 {
-			output = output[:500] + "..."
+		// The exit tool's outcome is logged by codegen.go from the run result;
+		// streaming its benign "Run terminated" result here would double up.
+		if tr.ToolName == "exit" {
+			return
 		}
-		cb(fmt.Sprintf("[result] %s", output))
+		act := activity.Summarize(
+			tr.ToolName, tr.Input, tr.Title, tr.Metadata,
+			message.ToolOutputText(tr.Output), string(message.ToolOutcome(tr.Output)),
+		)
+		cb(act.LogLine())
+		if sink == nil {
+			return
+		}
+		switch tr.ToolName {
+		case "todowrite", "todoread":
+			todosJSON, _ := json.Marshal(tr.Metadata["todos"])
+			done, total := activity.TodoCounts(tr.Metadata)
+			sink.OnTodos(todosJSON, done, total)
+		default:
+			sink.OnAction(act)
+		}
 	})
 	b.Subscribe(bus.StreamStepComplete, func(e bus.Event) {
 		flushText()

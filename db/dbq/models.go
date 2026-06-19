@@ -77,6 +77,9 @@ type AgentBuild struct {
 	LlmCostEstimate  float64            `json:"llm_cost_estimate"`
 	RollbackTargetID pgtype.UUID        `json:"rollback_target_id"`
 	SdkVersion       string             `json:"sdk_version"`
+	Todos            []byte             `json:"todos"`
+	ExitStatus       string             `json:"exit_status"`
+	ExitMessage      string             `json:"exit_message"`
 }
 
 type AgentConversation struct {
@@ -393,6 +396,7 @@ type LlmUsage struct {
 	UserEmail         string             `json:"user_email"`
 	ConversationID    pgtype.UUID        `json:"conversation_id"`
 	ProviderCatalogID string             `json:"provider_catalog_id"`
+	ProviderSlug      string             `json:"provider_slug"`
 	Model             string             `json:"model"`
 	Capability        string             `json:"capability"`
 	CallKind          string             `json:"call_kind"`

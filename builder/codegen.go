@@ -13,11 +13,13 @@ import (
 )
 
 // runCodegen is Execute's Phase C: optional Sol invocation. Returns
-// (commitHash, exitMessage, error). commitHash is the new HEAD after
-// merge; exitMessage is the agent-builder's success-tool text (plumbed
-// into the originating conversation by upper layers).
+// (commitHash, exitStatus, exitMessage, error). commitHash is the new HEAD
+// after merge; exitStatus is the agent's exit-tool status ("success" |
+// "error" | "refused", empty if it never called exit) and exitMessage its
+// summary/reason — both persisted on the build row and (on success) plumbed
+// into the originating conversation by upper layers.
 //
-// When plan.Instruction is empty this is a no-op: returns ("", "", nil)
+// When plan.Instruction is empty this is a no-op: returns ("", "", "", nil)
 // and Execute falls back to current HEAD as the source ref.
 func (b *BuildService) runCodegen(
 	ctx context.Context,
@@ -29,26 +31,27 @@ func (b *BuildService) runCodegen(
 	testDBURL, testDBPSQL, testDBSchema string,
 	goProxyDir string,
 	logLine func(string),
-) (string, string, error) {
+	sink buildSink,
+) (string, string, string, error) {
 	if plan.Instruction == "" {
-		return "", "", nil
+		return "", "", "", nil
 	}
 
 	repoPath := b.AgentRepoPath(agentID)
 	branch := codegenBranchName(plan)
 
 	if err := CreateBranch(repoPath, branch); err != nil {
-		return "", "", fmt.Errorf("create %s branch: %w", branch, err)
+		return "", "", "", fmt.Errorf("create %s branch: %w", branch, err)
 	}
 
 	workDir, err := b.makeCodegenTempDir("airlock-codegen-*")
 	if err != nil {
-		return "", "", fmt.Errorf("create temp dir: %w", err)
+		return "", "", "", fmt.Errorf("create temp dir: %w", err)
 	}
 	defer os.RemoveAll(workDir)
 
 	if err := CloneAgentRepo(repoPath, branch, workDir); err != nil {
-		return "", "", fmt.Errorf("clone agent repo: %w", err)
+		return "", "", "", fmt.Errorf("clone agent repo: %w", err)
 	}
 	// Lib resolution: the toolserver gets GOPROXY pointed at the dev lib
 	// proxy (when goProxyDir is set) so codegen's go-tool calls resolve
@@ -58,12 +61,12 @@ func (b *BuildService) runCodegen(
 	// Auto-fix diagnostics file lands in the workspace before Sol runs.
 	if plan.Diagnostics != nil {
 		if err := writePlanDiagnostics(workDir, plan); err != nil {
-			return "", "", fmt.Errorf("write diagnostics: %w", err)
+			return "", "", "", fmt.Errorf("write diagnostics: %w", err)
 		}
 	}
 
 	if ctx.Err() != nil {
-		return "", "", ctx.Err()
+		return "", "", "", ctx.Err()
 	}
 
 	localTools := tool.Set{}
@@ -89,9 +92,10 @@ func (b *BuildService) runCodegen(
 		TestDBSchema:    testDBSchema,
 		GoProxyDir:      goProxyDir,
 		LogCallback:     logLine,
+		Sink:            sink,
 	})
 	if err != nil {
-		return "", "", fmt.Errorf("sol run: %w", err)
+		return "", "", "", fmt.Errorf("sol run: %w", err)
 	}
 
 	// Exit-tool mapping. RunExited + ExitStatus=="success" → success
@@ -105,23 +109,23 @@ func (b *BuildService) runCodegen(
 	if solResult.Status != sol.RunExited {
 		if solResult.Status == sol.RunCompleted {
 			logLine("[exit] agent did not call the exit tool after 2 reminders — treating as failure")
-			return "", "", errors.New("sol codegen failed: agent did not call the exit tool")
+			return "", "", "", errors.New("sol codegen failed: agent did not call the exit tool")
 		}
 		if solResult.Error != nil {
-			return "", "", fmt.Errorf("sol codegen failed: %w", solResult.Error)
+			return "", "", "", fmt.Errorf("sol codegen failed: %w", solResult.Error)
 		}
-		return "", "", errors.New("sol codegen failed")
+		return "", "", "", errors.New("sol codegen failed")
 	}
 	if solResult.ExitStatus != exitStatusSuccess {
 		if solResult.ExitStatus == exitStatusRefused {
 			logLine(fmt.Sprintf("[exit] agent declined the request as out of scope: %s", solResult.ExitMessage))
-			return "", "", &RefusedError{Message: solResult.ExitMessage}
+			return "", exitStatusRefused, solResult.ExitMessage, &RefusedError{Message: solResult.ExitMessage}
 		}
 		logLine(fmt.Sprintf("[exit] agent reported error: %s", solResult.ExitMessage))
 		// Return the exit message verbatim — the conversation notifier
 		// surfaces err.Error() as the "agent reports it failed because…"
 		// line for the user.
-		return "", "", errors.New(solResult.ExitMessage)
+		return "", exitStatusError, solResult.ExitMessage, errors.New(solResult.ExitMessage)
 	}
 	logLine(fmt.Sprintf("[exit] success: %s", solResult.ExitMessage))
 
@@ -131,12 +135,12 @@ func (b *BuildService) runCodegen(
 	}
 	hash, err := CommitAndPush(workDir, commitMsg)
 	if err != nil {
-		return "", "", fmt.Errorf("commit codegen: %w", err)
+		return "", "", "", fmt.Errorf("commit codegen: %w", err)
 	}
 	if err := MergeBranch(repoPath, branch); err != nil {
-		return "", "", fmt.Errorf("merge codegen: %w", err)
+		return "", "", "", fmt.Errorf("merge codegen: %w", err)
 	}
-	return hash, solResult.ExitMessage, nil
+	return hash, exitStatusSuccess, solResult.ExitMessage, nil
 }
 
 // codegenBranchName picks a working-branch name per kind so concurrent

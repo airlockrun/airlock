@@ -58,6 +58,9 @@ message User {
   bool must_change_password = 7;
   google.protobuf.Timestamp created_at = 8;
   google.protobuf.Timestamp updated_at = 9;
+  // Whether a password is set (vs passkey-only). Drives the self-service
+  // password UI: remove is offered only when one exists.
+  bool has_password = 10;
 }
 
 // UserSummary is a slim user view used for member-picker dropdowns.
@@ -251,6 +254,18 @@ message AgentBuildInfo {
   // rows; rollback uses it to decide whether the target's code needs
   // an SDK migration pass.
   string sdk_version = 20;
+  // todos is the agent's task list as of the last codegen update. Snapshot
+  // for the Build page's TODO checklist and the tasks_done/total badge.
+  // Detail responses only.
+  repeated TodoItem todos = 22;
+  // exit_status / exit_message capture the agent's own exit-tool outcome:
+  // status is "success" | "error" | "refused" (empty if the agent never
+  // called exit); message is its summary (on success) or reason (on
+  // error/refused). Distinct from error_message, which carries
+  // infra/external failures (docker, push, validation). The builds table
+  // shows both together as the "Result".
+  string exit_status = 23;
+  string exit_message = 24;
 }
 
 // ConversationInfo represents an agent conversation.
@@ -411,21 +426,62 @@ message ToolInfo {
 
 // --- Build Events ---
 
-// AgentBuildEvent carries build/upgrade lifecycle events.
+// AgentBuildEvent carries build/upgrade lifecycle events. Broadcast on the
+// agent topic so every member's badges update; tasks_done/tasks_total drive
+// the "Building N/M tasks" badge without subscribing to the verbose build
+// stream.
 message AgentBuildEvent {
   string agent_id = 1;
   string build_id = 2;
-  string status = 3;   // "started", "complete", "failed", "cancelled"
+  string status = 3;   // "started", "progress", "complete", "failed", "cancelled"
   string error = 4;
+  int32  tasks_done = 5;
+  int32  tasks_total = 6;
+  // phase is the current pipeline stage on a "progress" event:
+  // "codegen" | "image" | "migrations" | "deploy". Lets the badge show
+  // "Building image…" / "Running migrations…" once codegen's task list is
+  // done, instead of freezing on the final N/M task count.
+  string phase = 7;
 }
 
-// AgentBuildLogEvent carries a single build log line.
+// AgentBuildLogEvent carries a single build log line. Published on the
+// per-build topic (the build UUID), which the Build page subscribes to only
+// while open.
 message AgentBuildLogEvent {
   string agent_id = 1;
   string build_id = 2;
   int64  seq = 3;       // monotonic per-build line counter (for frontend dedup)
   string stream = 4;    // "sol" | "docker"
   string line = 5;
+}
+
+// TodoItem mirrors a sol todo entry. Carried on AgentBuildInfo (snapshot) and
+// AgentBuildTodoEvent (live).
+message TodoItem {
+  string content = 1;
+  string status = 2;   // "pending" | "in_progress" | "completed" | "cancelled"
+  string priority = 3; // "high" | "medium" | "low"
+  string id = 4;
+}
+
+// AgentBuildActionEvent is one compact tool action for the Build page's
+// "Live actions" feed. Published on the per-build topic.
+message AgentBuildActionEvent {
+  string build_id = 1;
+  int64  seq = 2;        // shares the build's monotonic seq for dedup
+  string kind = 3;       // command | search | read | write | edit | exit | error | tool
+  string label = 4;      // headline, e.g. "Read File: main.go"
+  string detail = 5;     // secondary, e.g. "120 lines"
+  string tool_call_id = 6;
+  string tool_name = 7;
+}
+
+// AgentBuildTodoEvent carries the full todo list as the agent rewrites it.
+// Published on the per-build topic.
+message AgentBuildTodoEvent {
+  string build_id = 1;
+  int64  seq = 2;
+  repeated TodoItem todos = 3;
 }
 
 // AgentSyncedEvent fires after the agent container completes a sync —

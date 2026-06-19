@@ -141,23 +141,7 @@ onMounted(async () => {
   </div>
 
   <div v-else-if="run">
-    <!-- Breadcrumb -->
-    <Breadcrumb
-      :model="[
-        { label: 'Agents', to: '/agents' },
-        { label: agentName, to: `/agents/${agentId}` },
-        { label: 'Runs' },
-        { label: run.id.slice(0, 8) },
-      ]"
-      style="margin-bottom: 1rem"
-    >
-      <template #item="{ item }">
-        <router-link v-if="item.to" :to="item.to" style="text-decoration: none; color: var(--p-primary-color)">
-          {{ item.label }}
-        </router-link>
-        <span v-else>{{ item.label }}</span>
-      </template>
-    </Breadcrumb>
+    <h1 style="margin: 0 0 1rem; font-size: 1.25rem">{{ agentName }} · Run {{ run.id.slice(0, 8) }}</h1>
 
     <!-- Metadata bar -->
     <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 1rem; margin-bottom: 1.5rem">

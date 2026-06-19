@@ -20,6 +20,25 @@ Two other documents complete the picture:
   styling palette, anything a future upgrade needs to know about).
   Keep it short and current as you go.
 
+## What "an app" usually means
+
+Requests are often a single line — "build me a Spotify app", "a kanban
+board", or just "I want an app". Unless the user clearly asks for something
+narrower (one chat tool, a webhook, a cron), read "app" as **a web app plus
+the tools that drive it**, not one or the other:
+
+- A **web UI** — templ + htmx pages (see the HTML UI section) the user opens
+  in a browser to see and manipulate their data.
+- **LLM-callable tools** (`RegisterTool`) over the *same* domain, so the agent
+  can do the same things conversationally (Telegram / Discord / web chat).
+- The **state, connections, and schedules** that domain needs behind both.
+
+The UI and the tools are two faces of one domain layer (`service.go`) — build
+both against it. A bare tool with no UI, or a UI the agent can't operate over
+chat, is usually half of what the user pictured. When the request is vague,
+pick a concrete domain, build the full web-app-plus-tools shape, and record the
+assumption in `NOTES.md`.
+
 ## Workspace structure
 
 ```

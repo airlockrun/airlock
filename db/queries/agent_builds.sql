@@ -8,18 +8,24 @@ INSERT INTO agent_builds (
     agent_id, type, status, instructions,
     source_ref, image_ref, sol_log, docker_log, log_seq, error_message,
     llm_calls, llm_tokens_in, llm_tokens_out, llm_tokens_cached, llm_cost_estimate,
-    rollback_target_id, sdk_version
+    rollback_target_id, sdk_version, todos, exit_status, exit_message
 )
 VALUES (
     @agent_id, @type, 'building', @instructions,
     '', '', '', '', 0, '',
     0, 0, 0, 0, 0,
-    sqlc.narg('rollback_target_id'), ''
+    sqlc.narg('rollback_target_id'), '', '[]', '', ''
 )
 RETURNING *;
 
 -- name: UpdateAgentBuildLogs :exec
 UPDATE agent_builds SET sol_log = @sol_log, docker_log = @docker_log, log_seq = @log_seq WHERE id = @id;
+
+-- name: UpdateAgentBuildTodos :exec
+-- Persists the agent's current task list (jsonb) as it rewrites it during
+-- codegen. Separate from UpdateAgentBuildLogs so the todo write cadence is
+-- independent of the 1s log flush.
+UPDATE agent_builds SET todos = @todos WHERE id = @id;
 
 -- name: UpdateAgentBuildComplete :exec
 UPDATE agent_builds SET
@@ -28,6 +34,8 @@ UPDATE agent_builds SET
     source_ref = COALESCE(@source_ref, ''),
     image_ref = COALESCE(@image_ref, ''),
     sdk_version = COALESCE(@sdk_version, ''),
+    exit_status = COALESCE(@exit_status, ''),
+    exit_message = COALESCE(@exit_message, ''),
     finished_at = now()
 WHERE id = @id;
 
@@ -61,7 +69,7 @@ SELECT * FROM agent_builds WHERE id = $1;
 -- name: ListAgentBuildsByAgent :many
 SELECT id, agent_id, type, status, instructions, error_message, source_ref, image_ref, started_at, finished_at,
        llm_calls, llm_tokens_in, llm_tokens_out, llm_tokens_cached, llm_cost_estimate,
-       rollback_target_id, sdk_version
+       rollback_target_id, sdk_version, exit_status, exit_message
 FROM agent_builds
 WHERE agent_id = @agent_id
 ORDER BY started_at DESC

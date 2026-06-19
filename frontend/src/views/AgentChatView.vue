@@ -10,6 +10,7 @@ import { toolLabel } from '@/utils/messageGroup'
 import api from '@/api/client'
 import MessageParts from '@/components/chat/MessageParts.vue'
 import ToolBadge from '@/components/chat/ToolBadge.vue'
+import { buildBadgeText } from '@/utils/buildBadge'
 
 const route = useRoute()
 const router = useRouter()
@@ -29,6 +30,21 @@ const agentName = computed(
 const agentStopped = computed(
   () => agentsStore.agents.find(a => a.id === agentId.value)?.status === 'stopped',
 )
+
+// Build-in-progress badge: links to the dedicated Build page. Status comes
+// from the agents store (kept fresh by the agent.build listener below); task
+// counts ride the same events.
+const buildActive = computed(() => {
+  const a = agentsStore.agents.find(x => x.id === agentId.value)
+  return a?.status === 'building' || a?.upgradeStatus === 'building'
+})
+const activeBuildId = ref<string | undefined>(undefined)
+const buildTasksDone = ref(0)
+const buildTasksTotal = ref(0)
+const buildPhase = ref('')
+const buildBadgeLabel = computed(() => buildBadgeText(buildPhase.value, buildTasksDone.value, buildTasksTotal.value))
+let unsubBuild: (() => void) | null = null
+
 const starting = ref(false)
 async function startAgent() {
   starting.value = true
@@ -69,6 +85,29 @@ onMounted(async () => {
   // The sidebar (AppLayout) usually has these loaded already; fetch on a
   // deep-link/hard-refresh so the empty-state can name the agent.
   if (agentsStore.agents.length === 0) agentsStore.fetchAgents().catch(() => {})
+
+  // Track build progress for the badge + keep the store agent's status fresh
+  // so the badge appears/disappears as a build runs.
+  unsubBuild = ws.onMessage('agent.build', (payload: any) => {
+    if (payload?.agentId !== agentId.value) return
+    if (payload.buildId) activeBuildId.value = payload.buildId
+    buildTasksDone.value = payload.tasksDone ?? 0
+    buildTasksTotal.value = payload.tasksTotal ?? 0
+    buildPhase.value = payload.phase ?? ''
+    const a = agentsStore.agents.find(x => x.id === agentId.value)
+    if (!a) return
+    if (payload.status === 'started') {
+      if (a.status === 'draft' || a.status === 'failed') a.status = 'building'
+      else a.upgradeStatus = 'building'
+    } else if (payload.status === 'complete') {
+      a.status = 'active'
+      a.upgradeStatus = 'idle'
+    } else if (payload.status === 'failed' || payload.status === 'cancelled' || payload.status === 'refused') {
+      a.upgradeStatus = 'idle'
+      if (a.status === 'building') a.status = 'failed'
+    }
+  })
+
   await reload()
   setupSentinelObservers()
 })
@@ -114,6 +153,7 @@ onUnmounted(() => {
   topObserver?.disconnect()
   bottomObserver?.disconnect()
   chat.cleanup()
+  unsubBuild?.()
 })
 
 // IntersectionObserver sentinels at the top and bottom of the message list.
@@ -331,6 +371,17 @@ function formatTokens(n: number): string {
 
     <!-- Conversation selection (list, new, delete) lives in the app
          sidebar now — this view is just the active thread. -->
+
+    <!-- Build-in-progress banner → links to the dedicated Build page. -->
+    <RouterLink
+      v-if="buildActive && activeBuildId"
+      :to="{ name: 'build-detail', params: { id: agentId, buildId: activeBuildId } }"
+      class="chat-build-banner"
+    >
+      <i class="pi pi-spin pi-spinner" />
+      <span>{{ buildBadgeLabel }}</span>
+      <i class="pi pi-arrow-right" style="font-size: 0.75rem; margin-left: auto" />
+    </RouterLink>
 
     <!-- Jump-to-latest banner: shown when new agent output arrived while the
          user was scrolled into history. Clicking resets the window. -->
@@ -897,5 +948,22 @@ function formatTokens(n: number): string {
 
 .chat-jump-banner:hover {
   opacity: 0.9;
+}
+
+.chat-build-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.9rem;
+  margin: 0.25rem 0.75rem;
+  background-color: var(--p-primary-color);
+  color: var(--p-primary-contrast-color);
+  border-radius: 0.75rem;
+  font-size: 0.85rem;
+  font-weight: 500;
+  text-decoration: none;
+}
+.chat-build-banner:hover {
+  filter: brightness(1.05);
 }
 </style>

@@ -144,6 +144,20 @@ onMounted(() => {
           <Tag :value="b.status" :severity="statusSeverity(b.status)" />
         </template>
       </Column>
+      <Column header="Result">
+        <template #body="{ data: b }">
+          <div class="result-cell">
+            <div v-if="b.exitMessage" :class="b.exitStatus === 'success' ? 'result-ok' : 'result-bad'">
+              <i :class="b.exitStatus === 'success' ? 'pi pi-check' : 'pi pi-times'" />
+              {{ b.exitMessage }}
+            </div>
+            <div v-if="b.errorMessage && b.errorMessage !== b.exitMessage" class="result-bad">
+              <i class="pi pi-times" /> {{ b.errorMessage }}
+            </div>
+            <span v-if="!b.exitMessage && !b.errorMessage" style="color: var(--p-text-muted-color)">—</span>
+          </div>
+        </template>
+      </Column>
       <Column header="Started">
         <template #body="{ data: b }">
           {{ formatTimestamp(b.startedAt) }}
@@ -179,6 +193,7 @@ onMounted(() => {
       <Column header="Type"><template #body><Skeleton width="4rem" /></template></Column>
       <Column header="Description"><template #body><Skeleton /></template></Column>
       <Column header="Status"><template #body><Skeleton width="5rem" /></template></Column>
+      <Column header="Result"><template #body><Skeleton /></template></Column>
       <Column header="Started"><template #body><Skeleton /></template></Column>
       <Column header="Cost"><template #body><Skeleton width="4rem" /></template></Column>
       <Column header="Finished"><template #body><Skeleton /></template></Column>
@@ -195,5 +210,22 @@ onMounted(() => {
   text-overflow: ellipsis;
   white-space: nowrap;
   vertical-align: middle;
+}
+.result-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  max-width: 26rem;
+  font-size: 0.85rem;
+}
+.result-cell .pi {
+  font-size: 0.7rem;
+  margin-right: 0.2rem;
+}
+.result-ok {
+  color: var(--p-green-500);
+}
+.result-bad {
+  color: var(--p-red-400);
 }
 </style>

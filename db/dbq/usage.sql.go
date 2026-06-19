@@ -13,17 +13,21 @@ import (
 
 const usageByAgent = `-- name: UsageByAgent :many
 SELECT
-    agent_slug,
-    agent_name,
-    (agent_id IS NULL)::boolean                 AS deleted,
+    lu.agent_slug,
+    lu.agent_name,
+    (lu.agent_id IS NULL)::boolean              AS deleted,
+    COALESCE(ou.email, '')::text               AS owner_email,
+    COALESCE(ou.display_name, '')::text        AS owner_name,
     count(*)::bigint                            AS calls,
-    COALESCE(sum(tokens_in), 0)::bigint         AS tokens_in,
-    COALESCE(sum(tokens_out), 0)::bigint        AS tokens_out,
-    COALESCE(sum(tokens_cached), 0)::bigint     AS tokens_cached,
-    COALESCE(sum(cost_total), 0)::double precision AS cost_total
-FROM llm_usage
-WHERE created_at >= $1
-GROUP BY agent_slug, agent_name, (agent_id IS NULL)
+    COALESCE(sum(lu.tokens_in), 0)::bigint      AS tokens_in,
+    COALESCE(sum(lu.tokens_out), 0)::bigint     AS tokens_out,
+    COALESCE(sum(lu.tokens_cached), 0)::bigint  AS tokens_cached,
+    COALESCE(sum(lu.cost_total), 0)::double precision AS cost_total
+FROM llm_usage lu
+LEFT JOIN agents a ON a.id = lu.agent_id
+LEFT JOIN users ou ON ou.id = a.user_id
+WHERE lu.created_at >= $1
+GROUP BY lu.agent_slug, lu.agent_name, (lu.agent_id IS NULL), ou.email, ou.display_name
 ORDER BY cost_total DESC, calls DESC
 `
 
@@ -31,6 +35,8 @@ type UsageByAgentRow struct {
 	AgentSlug    string  `json:"agent_slug"`
 	AgentName    string  `json:"agent_name"`
 	Deleted      bool    `json:"deleted"`
+	OwnerEmail   string  `json:"owner_email"`
+	OwnerName    string  `json:"owner_name"`
 	Calls        int64   `json:"calls"`
 	TokensIn     int64   `json:"tokens_in"`
 	TokensOut    int64   `json:"tokens_out"`
@@ -38,6 +44,8 @@ type UsageByAgentRow struct {
 	CostTotal    float64 `json:"cost_total"`
 }
 
+// Owner (agents.user_id → users) is joined live, so it's empty for rows whose
+// agent (or whose agent's owner) has since been deleted.
 func (q *Queries) UsageByAgent(ctx context.Context, since pgtype.Timestamptz) ([]UsageByAgentRow, error) {
 	rows, err := q.db.Query(ctx, usageByAgent, since)
 	if err != nil {
@@ -51,6 +59,8 @@ func (q *Queries) UsageByAgent(ctx context.Context, since pgtype.Timestamptz) ([
 			&i.AgentSlug,
 			&i.AgentName,
 			&i.Deleted,
+			&i.OwnerEmail,
+			&i.OwnerName,
 			&i.Calls,
 			&i.TokensIn,
 			&i.TokensOut,
@@ -70,6 +80,7 @@ func (q *Queries) UsageByAgent(ctx context.Context, since pgtype.Timestamptz) ([
 const usageByModel = `-- name: UsageByModel :many
 SELECT
     provider_catalog_id,
+    provider_slug,
     model,
     count(*)::bigint                            AS calls,
     COALESCE(sum(tokens_in), 0)::bigint         AS tokens_in,
@@ -77,12 +88,13 @@ SELECT
     COALESCE(sum(cost_total), 0)::double precision AS cost_total
 FROM llm_usage
 WHERE created_at >= $1
-GROUP BY provider_catalog_id, model
+GROUP BY provider_catalog_id, provider_slug, model
 ORDER BY cost_total DESC, calls DESC
 `
 
 type UsageByModelRow struct {
 	ProviderCatalogID string  `json:"provider_catalog_id"`
+	ProviderSlug      string  `json:"provider_slug"`
 	Model             string  `json:"model"`
 	Calls             int64   `json:"calls"`
 	TokensIn          int64   `json:"tokens_in"`
@@ -101,10 +113,66 @@ func (q *Queries) UsageByModel(ctx context.Context, since pgtype.Timestamptz) ([
 		var i UsageByModelRow
 		if err := rows.Scan(
 			&i.ProviderCatalogID,
+			&i.ProviderSlug,
 			&i.Model,
 			&i.Calls,
 			&i.TokensIn,
 			&i.TokensOut,
+			&i.CostTotal,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const usageByUser = `-- name: UsageByUser :many
+SELECT
+    user_email,
+    (user_id IS NULL)::boolean                  AS deleted,
+    count(*)::bigint                            AS calls,
+    COALESCE(sum(tokens_in), 0)::bigint         AS tokens_in,
+    COALESCE(sum(tokens_out), 0)::bigint        AS tokens_out,
+    COALESCE(sum(tokens_cached), 0)::bigint     AS tokens_cached,
+    COALESCE(sum(cost_total), 0)::double precision AS cost_total
+FROM llm_usage
+WHERE created_at >= $1
+GROUP BY user_email, (user_id IS NULL)
+ORDER BY cost_total DESC, calls DESC
+`
+
+type UsageByUserRow struct {
+	UserEmail    string  `json:"user_email"`
+	Deleted      bool    `json:"deleted"`
+	Calls        int64   `json:"calls"`
+	TokensIn     int64   `json:"tokens_in"`
+	TokensOut    int64   `json:"tokens_out"`
+	TokensCached int64   `json:"tokens_cached"`
+	CostTotal    float64 `json:"cost_total"`
+}
+
+// Grouped by the triggering user's snapshot email; deleted = the user row is
+// gone (user_id was SET NULL) but the email snapshot remains.
+func (q *Queries) UsageByUser(ctx context.Context, since pgtype.Timestamptz) ([]UsageByUserRow, error) {
+	rows, err := q.db.Query(ctx, usageByUser, since)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []UsageByUserRow{}
+	for rows.Next() {
+		var i UsageByUserRow
+		if err := rows.Scan(
+			&i.UserEmail,
+			&i.Deleted,
+			&i.Calls,
+			&i.TokensIn,
+			&i.TokensOut,
+			&i.TokensCached,
 			&i.CostTotal,
 		); err != nil {
 			return nil, err

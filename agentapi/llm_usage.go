@@ -17,6 +17,7 @@ import (
 // quantities the token catalog cannot price.
 type llmUsageCapture struct {
 	providerCatalogID string
+	providerSlug      string
 	model             string
 	capability        string
 	slug              string
@@ -99,6 +100,7 @@ func (h *Handler) recordLLMUsage(agentID uuid.UUID, runIDHeader string, c llmUsa
 		UserID:            userID,
 		ConversationID:    convID,
 		ProviderCatalogID: c.providerCatalogID,
+		ProviderSlug:      c.providerSlug,
 		Model:             c.model,
 		Capability:        c.capability,
 		CallKind:          callKind,

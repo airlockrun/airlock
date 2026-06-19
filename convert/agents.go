@@ -1,6 +1,7 @@
 package convert
 
 import (
+	"encoding/json"
 	"fmt"
 
 	"github.com/airlockrun/airlock/db/dbq"
@@ -200,6 +201,8 @@ func AgentBuildListItemToProto(b dbq.ListAgentBuildsByAgentRow, rollbackTargetSo
 		RollbackTargetId:        rollbackTargetID,
 		RollbackTargetSourceRef: rollbackTargetSourceRef,
 		SdkVersion:              b.SdkVersion,
+		ExitStatus:              b.ExitStatus,
+		ExitMessage:             b.ExitMessage,
 	}
 }
 
@@ -234,5 +237,36 @@ func AgentBuildDetailToProto(b dbq.AgentBuild, rollbackTargetSourceRef string) *
 		RollbackTargetId:        rollbackTargetID,
 		RollbackTargetSourceRef: rollbackTargetSourceRef,
 		SdkVersion:              b.SdkVersion,
+		ExitStatus:              b.ExitStatus,
+		ExitMessage:             b.ExitMessage,
+		Todos:                   TodosFromJSON(b.Todos),
 	}
+}
+
+// TodosFromJSON decodes the agent_builds.todos jsonb into wire TodoItems.
+// A malformed or empty blob yields nil (no todos) rather than an error —
+// the todo list is presentational, never load-bearing.
+func TodosFromJSON(raw []byte) []*airlockv1.TodoItem {
+	if len(raw) == 0 {
+		return nil
+	}
+	var items []struct {
+		Content  string `json:"content"`
+		Status   string `json:"status"`
+		Priority string `json:"priority"`
+		ID       string `json:"id"`
+	}
+	if err := json.Unmarshal(raw, &items); err != nil {
+		return nil
+	}
+	out := make([]*airlockv1.TodoItem, 0, len(items))
+	for _, it := range items {
+		out = append(out, &airlockv1.TodoItem{
+			Content:  it.Content,
+			Status:   it.Status,
+			Priority: it.Priority,
+			Id:       it.ID,
+		})
+	}
+	return out
 }

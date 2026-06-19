@@ -120,7 +120,7 @@ func TestResolveModel(t *testing.T) {
 				setAgentExecModel(t, agentID.String(), openaiID, tc.execModel)
 			}
 
-			provID, modelID, apiKey, _, err := ah.resolveModel(
+			provID, provSlug, modelID, apiKey, _, err := ah.resolveModel(
 				context.Background(), agentID.String(), tc.slug, tc.capability)
 
 			if tc.wantErrSubs != "" {
@@ -142,6 +142,9 @@ func TestResolveModel(t *testing.T) {
 			}
 			if modelID != tc.wantModel {
 				t.Errorf("modelID = %q, want %q", modelID, tc.wantModel)
+			}
+			if provSlug != "default" {
+				t.Errorf("providerSlug = %q, want %q", provSlug, "default")
 			}
 			if apiKey != "sk-test" {
 				t.Errorf("apiKey = %q, want sk-test (decrypt failed?)", apiKey)

@@ -670,6 +670,98 @@ func (x *RunErrorEvent) GetError() string {
 	return ""
 }
 
+// SubscribeBuildRequest asks the hub to subscribe this connection to a
+// build's verbose topic (codegen log, live actions, todos). The Build page
+// sends it on mount; the hub gates it on AgentBuildsView for the owning agent.
+type SubscribeBuildRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	BuildId       string                 `protobuf:"bytes,1,opt,name=build_id,json=buildId,proto3" json:"build_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SubscribeBuildRequest) Reset() {
+	*x = SubscribeBuildRequest{}
+	mi := &file_airlock_v1_realtime_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SubscribeBuildRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SubscribeBuildRequest) ProtoMessage() {}
+
+func (x *SubscribeBuildRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_airlock_v1_realtime_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SubscribeBuildRequest.ProtoReflect.Descriptor instead.
+func (*SubscribeBuildRequest) Descriptor() ([]byte, []int) {
+	return file_airlock_v1_realtime_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *SubscribeBuildRequest) GetBuildId() string {
+	if x != nil {
+		return x.BuildId
+	}
+	return ""
+}
+
+// UnsubscribeBuildRequest drops the per-build subscription (sent on unmount).
+type UnsubscribeBuildRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	BuildId       string                 `protobuf:"bytes,1,opt,name=build_id,json=buildId,proto3" json:"build_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UnsubscribeBuildRequest) Reset() {
+	*x = UnsubscribeBuildRequest{}
+	mi := &file_airlock_v1_realtime_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UnsubscribeBuildRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UnsubscribeBuildRequest) ProtoMessage() {}
+
+func (x *UnsubscribeBuildRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_airlock_v1_realtime_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UnsubscribeBuildRequest.ProtoReflect.Descriptor instead.
+func (*UnsubscribeBuildRequest) Descriptor() ([]byte, []int) {
+	return file_airlock_v1_realtime_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *UnsubscribeBuildRequest) GetBuildId() string {
+	if x != nil {
+		return x.BuildId
+	}
+	return ""
+}
+
 // NotificationEvent carries an output() or topic publish notification.
 type NotificationEvent struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
@@ -684,7 +776,7 @@ type NotificationEvent struct {
 
 func (x *NotificationEvent) Reset() {
 	*x = NotificationEvent{}
-	mi := &file_airlock_v1_realtime_proto_msgTypes[11]
+	mi := &file_airlock_v1_realtime_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -696,7 +788,7 @@ func (x *NotificationEvent) String() string {
 func (*NotificationEvent) ProtoMessage() {}
 
 func (x *NotificationEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_airlock_v1_realtime_proto_msgTypes[11]
+	mi := &file_airlock_v1_realtime_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -709,7 +801,7 @@ func (x *NotificationEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NotificationEvent.ProtoReflect.Descriptor instead.
 func (*NotificationEvent) Descriptor() ([]byte, []int) {
-	return file_airlock_v1_realtime_proto_rawDescGZIP(), []int{11}
+	return file_airlock_v1_realtime_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *NotificationEvent) GetAgentId() string {
@@ -800,7 +892,11 @@ const file_airlock_v1_realtime_proto_rawDesc = "" +
 	"tokens_out\x18\x04 \x01(\x05R\ttokensOut\"<\n" +
 	"\rRunErrorEvent\x12\x15\n" +
 	"\x06run_id\x18\x01 \x01(\tR\x05runId\x12\x14\n" +
-	"\x05error\x18\x02 \x01(\tR\x05error\"\xa4\x01\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error\"2\n" +
+	"\x15SubscribeBuildRequest\x12\x19\n" +
+	"\bbuild_id\x18\x01 \x01(\tR\abuildId\"4\n" +
+	"\x17UnsubscribeBuildRequest\x12\x19\n" +
+	"\bbuild_id\x18\x01 \x01(\tR\abuildId\"\xa4\x01\n" +
 	"\x11NotificationEvent\x12\x19\n" +
 	"\bagent_id\x18\x01 \x01(\tR\aagentId\x12'\n" +
 	"\x0fconversation_id\x18\x02 \x01(\tR\x0econversationId\x12\x14\n" +
@@ -821,7 +917,7 @@ func file_airlock_v1_realtime_proto_rawDescGZIP() []byte {
 	return file_airlock_v1_realtime_proto_rawDescData
 }
 
-var file_airlock_v1_realtime_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
+var file_airlock_v1_realtime_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
 var file_airlock_v1_realtime_proto_goTypes = []any{
 	(*ErrorEvent)(nil),                // 0: airlock.v1.ErrorEvent
 	(*SubscribedEvent)(nil),           // 1: airlock.v1.SubscribedEvent
@@ -834,11 +930,13 @@ var file_airlock_v1_realtime_proto_goTypes = []any{
 	(*RunSuspendedEvent)(nil),         // 8: airlock.v1.RunSuspendedEvent
 	(*RunCompleteEvent)(nil),          // 9: airlock.v1.RunCompleteEvent
 	(*RunErrorEvent)(nil),             // 10: airlock.v1.RunErrorEvent
-	(*NotificationEvent)(nil),         // 11: airlock.v1.NotificationEvent
-	(*AgentInfo)(nil),                 // 12: airlock.v1.AgentInfo
+	(*SubscribeBuildRequest)(nil),     // 11: airlock.v1.SubscribeBuildRequest
+	(*UnsubscribeBuildRequest)(nil),   // 12: airlock.v1.UnsubscribeBuildRequest
+	(*NotificationEvent)(nil),         // 13: airlock.v1.NotificationEvent
+	(*AgentInfo)(nil),                 // 14: airlock.v1.AgentInfo
 }
 var file_airlock_v1_realtime_proto_depIdxs = []int32{
-	12, // 0: airlock.v1.AgentStatusEvent.agent:type_name -> airlock.v1.AgentInfo
+	14, // 0: airlock.v1.AgentStatusEvent.agent:type_name -> airlock.v1.AgentInfo
 	1,  // [1:1] is the sub-list for method output_type
 	1,  // [1:1] is the sub-list for method input_type
 	1,  // [1:1] is the sub-list for extension type_name
@@ -858,7 +956,7 @@ func file_airlock_v1_realtime_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_airlock_v1_realtime_proto_rawDesc), len(file_airlock_v1_realtime_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   12,
+			NumMessages:   14,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

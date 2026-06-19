@@ -45,12 +45,19 @@ func (h *UsageHandler) Get(w http.ResponseWriter, r *http.Request) {
 		resp.ByAgent = append(resp.ByAgent, &airlockv1.UsageByAgent{
 			AgentSlug: a.AgentSlug, AgentName: a.AgentName, Deleted: a.Deleted, Calls: a.Calls,
 			TokensIn: a.TokensIn, TokensOut: a.TokensOut, TokensCached: a.TokensCached, CostTotal: a.CostTotal,
+			OwnerEmail: a.OwnerEmail, OwnerName: a.OwnerName,
 		})
 	}
 	for _, m := range rep.ByModel {
 		resp.ByModel = append(resp.ByModel, &airlockv1.UsageByModel{
-			ProviderCatalogId: m.ProviderCatalogID, Model: m.Model, Calls: m.Calls,
+			ProviderCatalogId: m.ProviderCatalogID, ProviderSlug: m.ProviderSlug, Model: m.Model, Calls: m.Calls,
 			TokensIn: m.TokensIn, TokensOut: m.TokensOut, CostTotal: m.CostTotal,
+		})
+	}
+	for _, u := range rep.ByUser {
+		resp.ByUser = append(resp.ByUser, &airlockv1.UsageByUser{
+			UserEmail: u.UserEmail, Deleted: u.Deleted, Calls: u.Calls,
+			TokensIn: u.TokensIn, TokensOut: u.TokensOut, TokensCached: u.TokensCached, CostTotal: u.CostTotal,
 		})
 	}
 	writeProto(w, http.StatusOK, resp)

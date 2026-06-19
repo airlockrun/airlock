@@ -14,7 +14,7 @@ import (
 const insertLLMUsage = `-- name: InsertLLMUsage :exec
 INSERT INTO llm_usage (
     agent_id, agent_slug, agent_name, run_id, build_id, user_id, user_email, conversation_id,
-    provider_catalog_id, model, capability, call_kind, slug,
+    provider_catalog_id, provider_slug, model, capability, call_kind, slug,
     tokens_in, tokens_out, tokens_cached, tokens_reasoning,
     units, unit_kind,
     cost_input, cost_output, cost_total,
@@ -27,11 +27,11 @@ VALUES (
     $2, $3, $4,
     COALESCE((SELECT email FROM users WHERE id = $4), ''),
     $5,
-    $6, $7, $8, $9, $10,
-    $11, $12, $13, $14,
-    $15, $16,
-    $17, $18, $19,
-    $20, $21, $22
+    $6, $7, $8, $9, $10, $11,
+    $12, $13, $14, $15,
+    $16, $17,
+    $18, $19, $20,
+    $21, $22, $23
 )
 `
 
@@ -42,6 +42,7 @@ type InsertLLMUsageParams struct {
 	UserID            pgtype.UUID `json:"user_id"`
 	ConversationID    pgtype.UUID `json:"conversation_id"`
 	ProviderCatalogID string      `json:"provider_catalog_id"`
+	ProviderSlug      string      `json:"provider_slug"`
 	Model             string      `json:"model"`
 	Capability        string      `json:"capability"`
 	CallKind          string      `json:"call_kind"`
@@ -67,7 +68,8 @@ type InsertLLMUsageParams struct {
 // an unattributed call still records its spend. id/created_at use defaults.
 // agent_slug/agent_name/user_email are snapshotted from the referenced rows at
 // write time (COALESCE to ” when absent) so the ledger row survives — and stays
-// readable — after the agent or user is deleted.
+// readable — after the agent or user is deleted. provider_slug is snapshotted by
+// the caller (resolved from the providers row) for the same reason.
 func (q *Queries) InsertLLMUsage(ctx context.Context, arg InsertLLMUsageParams) error {
 	_, err := q.db.Exec(ctx, insertLLMUsage,
 		arg.AgentID,
@@ -76,6 +78,7 @@ func (q *Queries) InsertLLMUsage(ctx context.Context, arg InsertLLMUsageParams) 
 		arg.UserID,
 		arg.ConversationID,
 		arg.ProviderCatalogID,
+		arg.ProviderSlug,
 		arg.Model,
 		arg.Capability,
 		arg.CallKind,

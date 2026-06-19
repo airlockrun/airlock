@@ -29,6 +29,13 @@ import './style.css'
 import App from './App.vue'
 import router from './router'
 import { useAuthStore } from './stores/auth'
+import { useTheme } from './composables/useTheme'
+
+// Apply the persisted theme at boot. useTheme's module-level watchEffect
+// toggles the `.dark` class (which PrimeVue's darkModeSelector keys on);
+// it only runs once the composable is imported, so pull it in here rather
+// than relying on a view to do it lazily.
+useTheme()
 
 const app = createApp(App)
 const pinia = createPinia()

@@ -239,6 +239,13 @@ func (s *Service) RemovePassword(ctx context.Context, p authz.Principal) error {
 	if err := authz.Authorize(ctx, q, p, authz.TenantSelfPasskeyManage, uuid.Nil); err != nil {
 		return err
 	}
+	hasPassword, err := s.userHasPassword(ctx, q, p.UserID)
+	if err != nil {
+		return err
+	}
+	if !hasPassword {
+		return service.Detail(service.ErrInvalidInput, "no password is set")
+	}
 	count, err := q.CountCredentialsByUserID(ctx, pgtype.UUID{Bytes: p.UserID, Valid: true})
 	if err != nil {
 		return err

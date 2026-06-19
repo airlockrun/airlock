@@ -26,7 +26,6 @@ import {
   GetSystemSettingsResponseSchema,
   AgentModelConfigSchema,
 } from '@/gen/airlock/v1/api_pb'
-import BuildLogPanel from '@/components/agent/BuildLogPanel.vue'
 
 const router = useRouter()
 const store = useAgentsStore()
@@ -51,7 +50,6 @@ const loading = ref(false)
 const building = ref(false)
 const buildError = ref('')
 const buildAgentId = ref('')
-const activeBuildId = ref<string | undefined>(undefined)
 
 // All 8 capability override slots — empty = live inherit from system default.
 // Mirrors the AgentModelConfig proto field names so this object can be
@@ -232,16 +230,6 @@ function onBuildFailed(error: string) {
   building.value = false
 }
 
-async function onCancelBuild() {
-  if (!buildAgentId.value) return
-  try {
-    await api.post(`/api/v1/agents/${buildAgentId.value}/builds/cancel`)
-    toast.add({ severity: 'info', summary: 'Build cancelled', life: 3000 })
-  } catch (err: any) {
-    toast.add({ severity: 'error', summary: err.response?.data?.error || 'Cancel failed', life: 5000 })
-  }
-}
-
 function stopPolling() {
   if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
 }
@@ -340,13 +328,14 @@ async function onSubmit() {
     unsubBuild?.()
     unsubBuild = ws.onMessage('agent.build', (payload: any) => {
       if (payload?.agentId !== agent.id) return
-      if (payload.buildId) activeBuildId.value = payload.buildId
-      if (payload.status === 'complete' || payload.status === 'active' || payload.status === 'done') {
-        onBuildDone(agent.id)
-      } else if (payload.status === 'failed' || payload.status === 'error' || payload.status === 'refused') {
-        // refused: the request was out of scope — payload.error carries
-        // the agent-builder's explanation of what it couldn't build.
-        onBuildFailed(payload.error)
+      // As soon as the build row exists, hand off to the dedicated Build page
+      // (task checklist + live actions + codegen/docker logs stream there).
+      if (payload.buildId) {
+        const buildId = payload.buildId
+        unsubBuild?.()
+        unsubBuild = null
+        stopPolling()
+        router.push({ name: 'build-detail', params: { id: agent.id, buildId } })
       }
     })
     startPolling(agent.id)
@@ -520,11 +509,12 @@ onUnmounted(() => {
       />
     </form>
 
-    <!-- Build progress -->
+    <!-- Build kicked off — we hand off to the dedicated Build page as soon as
+         the build row exists; this is the brief interim state. -->
     <div v-if="building" style="margin-top: 1.5rem">
-      <p style="margin-bottom: 0.75rem; font-weight: 600">Building {{ name }}...</p>
+      <p style="margin-bottom: 0.75rem; font-weight: 600">Building {{ name }}…</p>
       <ProgressBar mode="indeterminate" style="height: 0.375rem; margin-bottom: 0.75rem" />
-      <BuildLogPanel :agent-id="buildAgentId" :build-id="activeBuildId" :active="building" @cancel="onCancelBuild" />
+      <p style="color: var(--p-text-muted-color); font-size: 0.85rem">Opening the build view…</p>
     </div>
 
     <Message v-if="buildError" severity="error" :closable="false" style="margin-top: 1rem">

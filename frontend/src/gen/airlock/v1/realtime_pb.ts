@@ -12,7 +12,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file airlock/v1/realtime.proto.
  */
 export const file_airlock_v1_realtime: GenFile = /*@__PURE__*/
-  fileDesc("ChlhaXJsb2NrL3YxL3JlYWx0aW1lLnByb3RvEgphaXJsb2NrLnYxIhsKCkVycm9yRXZlbnQSDQoFZXJyb3IYASABKAkiEQoPU3Vic2NyaWJlZEV2ZW50IjgKEEFnZW50U3RhdHVzRXZlbnQSJAoFYWdlbnQYASABKAsyFS5haXJsb2NrLnYxLkFnZW50SW5mbyJMCg9SdW5TdGFydGVkRXZlbnQSDgoGcnVuX2lkGAEgASgJEhAKCGFnZW50X2lkGAIgASgJEhcKD2NvbnZlcnNhdGlvbl9pZBgDIAEoCSIuCg5UZXh0RGVsdGFFdmVudBIOCgZydW5faWQYASABKAkSDAoEdGV4dBgCIAEoCSJXCg1Ub29sQ2FsbEV2ZW50Eg4KBnJ1bl9pZBgBIAEoCRIUCgx0b29sX2NhbGxfaWQYAiABKAkSEQoJdG9vbF9uYW1lGAMgASgJEg0KBWlucHV0GAQgASgJInoKD1Rvb2xSZXN1bHRFdmVudBIOCgZydW5faWQYASABKAkSFAoMdG9vbF9jYWxsX2lkGAIgASgJEhEKCXRvb2xfbmFtZRgDIAEoCRIOCgZvdXRwdXQYBCABKAkSDQoFZXJyb3IYBSABKAkSDwoHb3V0Y29tZRgGIAEoCSJ1ChlDb25maXJtYXRpb25SZXF1aXJlZEV2ZW50Eg4KBnJ1bl9pZBgBIAEoCRISCgpwZXJtaXNzaW9uGAIgASgJEhAKCHBhdHRlcm5zGAMgAygJEgwKBGNvZGUYBCABKAkSFAoMdG9vbF9jYWxsX2lkGAUgASgJIjMKEVJ1blN1c3BlbmRlZEV2ZW50Eg4KBnJ1bl9pZBgBIAEoCRIOCgZyZWFzb24YAiABKAkiYAoQUnVuQ29tcGxldGVFdmVudBIOCgZydW5faWQYASABKAkSFQoNZmluaXNoX3JlYXNvbhgCIAEoCRIRCgl0b2tlbnNfaW4YAyABKAUSEgoKdG9rZW5zX291dBgEIAEoBSIuCg1SdW5FcnJvckV2ZW50Eg4KBnJ1bl9pZBgBIAEoCRINCgVlcnJvchgCIAEoCSJxChFOb3RpZmljYXRpb25FdmVudBIQCghhZ2VudF9pZBgBIAEoCRIXCg9jb252ZXJzYXRpb25faWQYAiABKAkSDQoFdG9waWMYAyABKAkSEgoKcGFydHNfanNvbhgEIAEoCRIOCgZzb3VyY2UYBSABKAlCOFo2Z2l0aHViLmNvbS9haXJsb2NrcnVuL2FpcmxvY2svZ2VuL2FpcmxvY2svdjE7YWlybG9ja3YxYgZwcm90bzM", [file_airlock_v1_types]);
+  fileDesc("ChlhaXJsb2NrL3YxL3JlYWx0aW1lLnByb3RvEgphaXJsb2NrLnYxIhsKCkVycm9yRXZlbnQSDQoFZXJyb3IYASABKAkiEQoPU3Vic2NyaWJlZEV2ZW50IjgKEEFnZW50U3RhdHVzRXZlbnQSJAoFYWdlbnQYASABKAsyFS5haXJsb2NrLnYxLkFnZW50SW5mbyJMCg9SdW5TdGFydGVkRXZlbnQSDgoGcnVuX2lkGAEgASgJEhAKCGFnZW50X2lkGAIgASgJEhcKD2NvbnZlcnNhdGlvbl9pZBgDIAEoCSIuCg5UZXh0RGVsdGFFdmVudBIOCgZydW5faWQYASABKAkSDAoEdGV4dBgCIAEoCSJXCg1Ub29sQ2FsbEV2ZW50Eg4KBnJ1bl9pZBgBIAEoCRIUCgx0b29sX2NhbGxfaWQYAiABKAkSEQoJdG9vbF9uYW1lGAMgASgJEg0KBWlucHV0GAQgASgJInoKD1Rvb2xSZXN1bHRFdmVudBIOCgZydW5faWQYASABKAkSFAoMdG9vbF9jYWxsX2lkGAIgASgJEhEKCXRvb2xfbmFtZRgDIAEoCRIOCgZvdXRwdXQYBCABKAkSDQoFZXJyb3IYBSABKAkSDwoHb3V0Y29tZRgGIAEoCSJ1ChlDb25maXJtYXRpb25SZXF1aXJlZEV2ZW50Eg4KBnJ1bl9pZBgBIAEoCRISCgpwZXJtaXNzaW9uGAIgASgJEhAKCHBhdHRlcm5zGAMgAygJEgwKBGNvZGUYBCABKAkSFAoMdG9vbF9jYWxsX2lkGAUgASgJIjMKEVJ1blN1c3BlbmRlZEV2ZW50Eg4KBnJ1bl9pZBgBIAEoCRIOCgZyZWFzb24YAiABKAkiYAoQUnVuQ29tcGxldGVFdmVudBIOCgZydW5faWQYASABKAkSFQoNZmluaXNoX3JlYXNvbhgCIAEoCRIRCgl0b2tlbnNfaW4YAyABKAUSEgoKdG9rZW5zX291dBgEIAEoBSIuCg1SdW5FcnJvckV2ZW50Eg4KBnJ1bl9pZBgBIAEoCRINCgVlcnJvchgCIAEoCSIpChVTdWJzY3JpYmVCdWlsZFJlcXVlc3QSEAoIYnVpbGRfaWQYASABKAkiKwoXVW5zdWJzY3JpYmVCdWlsZFJlcXVlc3QSEAoIYnVpbGRfaWQYASABKAkicQoRTm90aWZpY2F0aW9uRXZlbnQSEAoIYWdlbnRfaWQYASABKAkSFwoPY29udmVyc2F0aW9uX2lkGAIgASgJEg0KBXRvcGljGAMgASgJEhIKCnBhcnRzX2pzb24YBCABKAkSDgoGc291cmNlGAUgASgJQjhaNmdpdGh1Yi5jb20vYWlybG9ja3J1bi9haXJsb2NrL2dlbi9haXJsb2NrL3YxO2FpcmxvY2t2MWIGcHJvdG8z", [file_airlock_v1_types]);
 
 /**
  * ErrorEvent carries a WebSocket error message.
@@ -329,6 +329,46 @@ export const RunErrorEventSchema: GenMessage<RunErrorEvent> = /*@__PURE__*/
   messageDesc(file_airlock_v1_realtime, 10);
 
 /**
+ * SubscribeBuildRequest asks the hub to subscribe this connection to a
+ * build's verbose topic (codegen log, live actions, todos). The Build page
+ * sends it on mount; the hub gates it on AgentBuildsView for the owning agent.
+ *
+ * @generated from message airlock.v1.SubscribeBuildRequest
+ */
+export type SubscribeBuildRequest = Message<"airlock.v1.SubscribeBuildRequest"> & {
+  /**
+   * @generated from field: string build_id = 1;
+   */
+  buildId: string;
+};
+
+/**
+ * Describes the message airlock.v1.SubscribeBuildRequest.
+ * Use `create(SubscribeBuildRequestSchema)` to create a new message.
+ */
+export const SubscribeBuildRequestSchema: GenMessage<SubscribeBuildRequest> = /*@__PURE__*/
+  messageDesc(file_airlock_v1_realtime, 11);
+
+/**
+ * UnsubscribeBuildRequest drops the per-build subscription (sent on unmount).
+ *
+ * @generated from message airlock.v1.UnsubscribeBuildRequest
+ */
+export type UnsubscribeBuildRequest = Message<"airlock.v1.UnsubscribeBuildRequest"> & {
+  /**
+   * @generated from field: string build_id = 1;
+   */
+  buildId: string;
+};
+
+/**
+ * Describes the message airlock.v1.UnsubscribeBuildRequest.
+ * Use `create(UnsubscribeBuildRequestSchema)` to create a new message.
+ */
+export const UnsubscribeBuildRequestSchema: GenMessage<UnsubscribeBuildRequest> = /*@__PURE__*/
+  messageDesc(file_airlock_v1_realtime, 12);
+
+/**
  * NotificationEvent carries an output() or topic publish notification.
  *
  * @generated from message airlock.v1.NotificationEvent
@@ -371,5 +411,5 @@ export type NotificationEvent = Message<"airlock.v1.NotificationEvent"> & {
  * Use `create(NotificationEventSchema)` to create a new message.
  */
 export const NotificationEventSchema: GenMessage<NotificationEvent> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_realtime, 11);
+  messageDesc(file_airlock_v1_realtime, 13);
 
