@@ -15,21 +15,24 @@ import (
 func BridgeFieldsToProto(
 	id, agentID, ownerID pgtype.UUID,
 	typ, name, botUsername, status string,
-	isSystem bool,
+	isSystem, isManager bool,
+	managerError string,
 	createdAt, updatedAt pgtype.Timestamptz,
 	ownerEmail, ownerDisplayName pgtype.Text,
 	settingsJSON []byte,
 ) *airlockv1.BridgeInfo {
 	settings := bridgessvc.DecodeSettings(settingsJSON)
 	info := &airlockv1.BridgeInfo{
-		Id:          PgUUIDToString(id),
-		Name:        name,
-		Type:        typ,
-		BotUsername: botUsername,
-		Status:      status,
-		IsSystem:    isSystem,
-		CreatedAt:   timestamppb.New(createdAt.Time),
-		UpdatedAt:   timestamppb.New(updatedAt.Time),
+		Id:           PgUUIDToString(id),
+		Name:         name,
+		Type:         typ,
+		BotUsername:  botUsername,
+		Status:       status,
+		IsSystem:     isSystem,
+		IsManager:    isManager,
+		ManagerError: managerError,
+		CreatedAt:    timestamppb.New(createdAt.Time),
+		UpdatedAt:    timestamppb.New(updatedAt.Time),
 		Settings: &airlockv1.BridgeSettings{
 			AllowPublicDms:             settings.AllowPublicDMs,
 			PublicSessionTtlSeconds:    int32(settings.PublicSessionTTLSeconds),
@@ -56,7 +59,8 @@ func BridgeRowToProto(br dbq.Bridge) *airlockv1.BridgeInfo {
 	return BridgeFieldsToProto(
 		br.ID, br.AgentID, br.OwnerID,
 		br.Type, br.Name, br.BotUsername, br.Status,
-		br.IsSystem,
+		br.IsSystem, br.IsManager,
+		br.ManagerError,
 		br.CreatedAt, br.UpdatedAt,
 		pgtype.Text{}, pgtype.Text{},
 		br.Settings,
@@ -81,7 +85,8 @@ func BridgeResultToProto(res bridgessvc.Result) *airlockv1.BridgeInfo {
 	return BridgeFieldsToProto(
 		res.Bridge.ID, res.Bridge.AgentID, ownerID,
 		res.Bridge.Type, res.Bridge.Name, res.Bridge.BotUsername, res.Bridge.Status,
-		res.Bridge.IsSystem,
+		res.Bridge.IsSystem, res.Bridge.IsManager,
+		res.Bridge.ManagerError,
 		res.Bridge.CreatedAt, res.Bridge.UpdatedAt,
 		ownerEmail, ownerName,
 		res.Bridge.Settings,
@@ -100,7 +105,8 @@ func BridgeListItemToProto(item bridgessvc.ListItem) *airlockv1.BridgeInfo {
 	return BridgeFieldsToProto(
 		item.Bridge.ID, item.Bridge.AgentID, item.Bridge.OwnerID,
 		item.Bridge.Type, item.Bridge.Name, item.Bridge.BotUsername, item.Bridge.Status,
-		item.Bridge.IsSystem,
+		item.Bridge.IsSystem, item.Bridge.IsManager,
+		item.Bridge.ManagerError,
 		item.Bridge.CreatedAt, item.Bridge.UpdatedAt,
 		ownerEmail, ownerName,
 		item.Bridge.Settings,

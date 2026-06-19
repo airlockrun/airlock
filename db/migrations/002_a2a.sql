@@ -721,22 +721,27 @@ ALTER TABLE bridges ADD COLUMN managed boolean NOT NULL DEFAULT false;
 -- bridges.telegram_bot_user_id — the stable bot user id from Telegram's
 -- getMe.id. ManagedBotUpdated callbacks reference the new bot by user
 -- id; bot_username can change so it isn't a reliable join key. Nullable
--- because existing token-pasted rows have no value until the next poll
--- cycle backfills it.
+-- because a row has no value until the bridge is created/polled. UNIQUE so
+-- a given Telegram bot has at most one bridge — exactly one getUpdates
+-- long-poll consumer per bot (a second one 409s).
 ALTER TABLE bridges ADD COLUMN telegram_bot_user_id bigint;
-CREATE INDEX bridges_telegram_bot_user_id_idx
+CREATE UNIQUE INDEX bridges_telegram_bot_user_id_key
     ON bridges(telegram_bot_user_id)
     WHERE telegram_bot_user_id IS NOT NULL;
 
--- system_settings.telegram_manager_bot_token_ref — encrypted ref to the
--- Telegram bot that has can_manage_bots=true and can create new bots on
--- behalf of users via KeyboardButtonRequestManagedBot. Empty disables
--- the "Create new bot" UI affordance. _error carries the last validation
--- failure (invalid token, can_manage_bots=false, network) so the
--- settings page can show it inline; empty when healthy.
-ALTER TABLE system_settings
-    ADD COLUMN telegram_manager_bot_token_ref text NOT NULL DEFAULT '',
-    ADD COLUMN telegram_manager_bot_error     text NOT NULL DEFAULT '';
+-- bridges.is_manager — the Telegram "manager bot" capability (a bot with
+-- can_manage_bots=true that creates new bots for users via the deep-link
+-- flow). Modeled as a capability on a bridge rather than a separate poller,
+-- so one bot can be system+manager on a single getUpdates loop. Telegram-
+-- only, and at most one across the instance. manager_error carries the last
+-- live can_manage_bots check failure (empty when healthy) for inline UI
+-- status; airlock keeps is_manager (intent) and gates behavior on the live
+-- capability.
+ALTER TABLE bridges ADD COLUMN is_manager    boolean NOT NULL DEFAULT false;
+ALTER TABLE bridges ADD COLUMN manager_error text NOT NULL DEFAULT '';
+ALTER TABLE bridges
+    ADD CONSTRAINT bridges_manager_telegram_only CHECK (NOT is_manager OR type = 'telegram');
+CREATE UNIQUE INDEX bridges_one_manager ON bridges((true)) WHERE is_manager;
 
 -- system_conversations gains source + bridge_id so a system bridge gets
 -- its own sticky thread per user. Mirrors agent_conversations: one
@@ -1207,10 +1212,11 @@ DROP INDEX IF EXISTS system_conversations_user_bridge_idx;
 ALTER TABLE system_conversations
     DROP COLUMN IF EXISTS bridge_id,
     DROP COLUMN IF EXISTS source;
-ALTER TABLE system_settings
-    DROP COLUMN IF EXISTS telegram_manager_bot_error,
-    DROP COLUMN IF EXISTS telegram_manager_bot_token_ref;
-DROP INDEX IF EXISTS bridges_telegram_bot_user_id_idx;
+DROP INDEX IF EXISTS bridges_one_manager;
+ALTER TABLE bridges DROP CONSTRAINT IF EXISTS bridges_manager_telegram_only;
+ALTER TABLE bridges DROP COLUMN IF EXISTS manager_error;
+ALTER TABLE bridges DROP COLUMN IF EXISTS is_manager;
+DROP INDEX IF EXISTS bridges_telegram_bot_user_id_key;
 ALTER TABLE bridges DROP COLUMN IF EXISTS telegram_bot_user_id;
 ALTER TABLE bridges DROP COLUMN IF EXISTS managed;
 ALTER TABLE bridges

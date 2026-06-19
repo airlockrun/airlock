@@ -3575,11 +3575,14 @@ func (x *TestCredentialResponse) GetMessage() string {
 }
 
 type CreateBridgeRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	AgentId       string                 `protobuf:"bytes,1,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"`
-	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
-	Token         string                 `protobuf:"bytes,3,opt,name=token,proto3" json:"token,omitempty"`
-	Type          string                 `protobuf:"bytes,4,opt,name=type,proto3" json:"type,omitempty"` // "telegram", "discord"
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	AgentId string                 `protobuf:"bytes,1,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"`
+	Name    string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	Token   string                 `protobuf:"bytes,3,opt,name=token,proto3" json:"token,omitempty"`
+	Type    string                 `protobuf:"bytes,4,opt,name=type,proto3" json:"type,omitempty"` // "telegram", "discord"
+	// Telegram manager-bot capability (admin only; requires the bot's
+	// can_manage_bots to be enabled in BotFather). Telegram-only.
+	IsManager     bool `protobuf:"varint,5,opt,name=is_manager,json=isManager,proto3" json:"is_manager,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3642,6 +3645,13 @@ func (x *CreateBridgeRequest) GetType() string {
 	return ""
 }
 
+func (x *CreateBridgeRequest) GetIsManager() bool {
+	if x != nil {
+		return x.IsManager
+	}
+	return false
+}
+
 // Update fields on an existing bridge. Both fields are independent —
 // callers can rebind the agent, edit settings, or do both in one
 // request. A null/unset field leaves that aspect unchanged.
@@ -3653,7 +3663,10 @@ type UpdateBridgeRequest struct {
 	// surface. Optional: unset = leave as-is. Switching to system
 	// requires the TenantBridgeSystem permission and forces agent_id
 	// empty; switching away from system requires a non-empty agent_id.
-	IsSystem      *bool `protobuf:"varint,3,opt,name=is_system,json=isSystem,proto3,oneof" json:"is_system,omitempty"`
+	IsSystem *bool `protobuf:"varint,3,opt,name=is_system,json=isSystem,proto3,oneof" json:"is_system,omitempty"`
+	// Toggle the Telegram manager-bot capability (admin only). Optional:
+	// unset = leave as-is. Turning it on requires can_manage_bots.
+	IsManager     *bool `protobuf:"varint,4,opt,name=is_manager,json=isManager,proto3,oneof" json:"is_manager,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3705,6 +3718,13 @@ func (x *UpdateBridgeRequest) GetSettings() *BridgeSettings {
 func (x *UpdateBridgeRequest) GetIsSystem() bool {
 	if x != nil && x.IsSystem != nil {
 		return *x.IsSystem
+	}
+	return false
+}
+
+func (x *UpdateBridgeRequest) GetIsManager() bool {
+	if x != nil && x.IsManager != nil {
+		return *x.IsManager
 	}
 	return false
 }
@@ -7227,18 +7247,23 @@ const file_airlock_v1_api_proto_rawDesc = "" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x1f\n" +
 	"\vstatus_code\x18\x02 \x01(\x05R\n" +
 	"statusCode\x12\x18\n" +
-	"\amessage\x18\x03 \x01(\tR\amessage\"n\n" +
+	"\amessage\x18\x03 \x01(\tR\amessage\"\x8d\x01\n" +
 	"\x13CreateBridgeRequest\x12\x19\n" +
 	"\bagent_id\x18\x01 \x01(\tR\aagentId\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x14\n" +
 	"\x05token\x18\x03 \x01(\tR\x05token\x12\x12\n" +
-	"\x04type\x18\x04 \x01(\tR\x04type\"\x98\x01\n" +
+	"\x04type\x18\x04 \x01(\tR\x04type\x12\x1d\n" +
+	"\n" +
+	"is_manager\x18\x05 \x01(\bR\tisManager\"\xcb\x01\n" +
 	"\x13UpdateBridgeRequest\x12\x19\n" +
 	"\bagent_id\x18\x01 \x01(\tR\aagentId\x126\n" +
 	"\bsettings\x18\x02 \x01(\v2\x1a.airlock.v1.BridgeSettingsR\bsettings\x12 \n" +
-	"\tis_system\x18\x03 \x01(\bH\x00R\bisSystem\x88\x01\x01B\f\n" +
+	"\tis_system\x18\x03 \x01(\bH\x00R\bisSystem\x88\x01\x01\x12\"\n" +
 	"\n" +
-	"_is_system\"G\n" +
+	"is_manager\x18\x04 \x01(\bH\x01R\tisManager\x88\x01\x01B\f\n" +
+	"\n" +
+	"_is_systemB\r\n" +
+	"\v_is_manager\"G\n" +
 	"\x13ListBridgesResponse\x120\n" +
 	"\abridges\x18\x01 \x03(\v2\x16.airlock.v1.BridgeInfoR\abridges\"\\\n" +
 	"\x18ListCapabilitiesResponse\x12@\n" +

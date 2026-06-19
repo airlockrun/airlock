@@ -1,15 +1,15 @@
-// Package managedbots owns the Telegram Bot API 9.6 "Managed Bots"
-// create-flow's session correlation: airlock UI button →
-// manager-bot deep link → user creates a bot in Telegram →
-// manager-bot poller receives ManagedBotCreated → bridge row
-// inserted. This package handles the session row (one per Create
-// click) the poller correlates the callback against.
+// Package managedbots owns the Telegram Bot API "Managed Bots"
+// create-flow's session correlation: airlock UI button → manager-bot
+// deep link → user creates a bot in Telegram → the manager bridge's
+// poll loop receives ManagedBotCreated → bridge row inserted. This
+// package handles the session row (one per Create click) the ingest
+// path correlates the callback against by nonce.
 //
-// The actual poller and Telegram protocol live in airlock/trigger
-// (manager_bot.go). The /start handler there refuses requests where
-// from.id isn't linked to airlock or doesn't match session.owner_id,
-// so ManagedBotCreated only ever fires for the session's owner —
-// no orphaned-token recovery flow needed.
+// The manager is a capability on a Telegram bridge (bridges.is_manager);
+// its poll loop (airlock/trigger) surfaces ManagedBotCreated, which the
+// bridges service ingests. This package only mints the session +
+// deep link, resolving the manager bridge's username (with a live
+// can_manage_bots check) via the injected callback.
 package managedbots
 
 import (
@@ -36,28 +36,31 @@ import (
 // than depending on the manager bot poller directly — keeps this
 // package free of trigger imports).
 type Service struct {
-	db               *db.DB
-	managerBotUserCB func() string
-	sessionTTL       time.Duration
-	logger           *zap.Logger
+	db                  *db.DB
+	managerBridgeUserCB func(ctx context.Context) (string, error)
+	sessionTTL          time.Duration
+	logger              *zap.Logger
 }
 
-// Deps bundles construction-time dependencies. ManagerBotUsername is
-// a callback (not a string) so the running manager bot can update
-// its resolved username via getMe without a service restart.
+// Deps bundles construction-time dependencies. ManagerBridgeUsername is a
+// callback (not a string) so it resolves the manager bridge's username with a
+// LIVE can_manage_bots re-check at deep-link time — returning a descriptive
+// error when no manager is configured or the capability was revoked. Wired to
+// bridges.Service.ManagerBridgeUsername; a callback keeps this package free of
+// trigger/bridges imports.
 type Deps struct {
-	DB                 *db.DB
-	ManagerBotUsername func() string // returns "" when manager bot isn't configured
-	SessionTTL         time.Duration // default 15 minutes if zero
-	Logger             *zap.Logger
+	DB                    *db.DB
+	ManagerBridgeUsername func(ctx context.Context) (string, error)
+	SessionTTL            time.Duration // default 15 minutes if zero
+	Logger                *zap.Logger
 }
 
 func New(d Deps) *Service {
 	if d.DB == nil {
 		panic("managedbots: db is required")
 	}
-	if d.ManagerBotUsername == nil {
-		panic("managedbots: ManagerBotUsername callback is required")
+	if d.ManagerBridgeUsername == nil {
+		panic("managedbots: ManagerBridgeUsername callback is required")
 	}
 	if d.Logger == nil {
 		panic("managedbots: logger is required")
@@ -67,10 +70,10 @@ func New(d Deps) *Service {
 		ttl = 15 * time.Minute
 	}
 	return &Service{
-		db:               d.DB,
-		managerBotUserCB: d.ManagerBotUsername,
-		sessionTTL:       ttl,
-		logger:           d.Logger,
+		db:                  d.DB,
+		managerBridgeUserCB: d.ManagerBridgeUsername,
+		sessionTTL:          ttl,
+		logger:              d.Logger,
 	}
 }
 
@@ -126,10 +129,12 @@ func (s *Service) CreateSession(ctx context.Context, p authz.Principal, req Crea
 		}
 	}
 
-	managerBotUsername := s.managerBotUserCB()
-	if managerBotUsername == "" {
-		return SessionCreated{}, service.Detail(service.ErrConflict,
-			"Telegram manager bot is not configured; ask an admin to set the token in System Settings")
+	// Resolve the manager bridge's username with a live can_manage_bots
+	// re-check, so we never issue a dead deep link when the capability was
+	// revoked in BotFather out of band.
+	managerBotUsername, err := s.managerBridgeUserCB(ctx)
+	if err != nil {
+		return SessionCreated{}, err
 	}
 
 	nonce, err := generateNonce()

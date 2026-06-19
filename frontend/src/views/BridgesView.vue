@@ -1,13 +1,10 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
-import { fromJson } from '@bufbuild/protobuf'
+import { ref, onMounted, computed } from 'vue'
 import { useToast } from 'primevue/usetoast'
 import { useConfirm } from 'primevue/useconfirm'
-import api from '@/api/client'
 import { useBridgesStore } from '@/stores/bridges'
 import { useAgentsStore } from '@/stores/agents'
 import { useAuthStore } from '@/stores/auth'
-import { GetSystemSettingsResponseSchema } from '@/gen/airlock/v1/api_pb'
 
 const store = useBridgesStore()
 const agentsStore = useAgentsStore()
@@ -29,7 +26,7 @@ function canDelete(bridge: { owner?: { id?: string } | null }): boolean {
 }
 
 const dialogVisible = ref(false)
-const form = ref({ name: '', type: 'telegram', token: '', agentId: '' })
+const form = ref({ name: '', type: 'telegram', token: '', agentId: '', isManager: false })
 // "System bridge" toggle: admin-only. When on, the backend persists
 // the bridge with is_system=true and agentId is forced empty. Mirrors
 // the backend's authz.TenantBridgeSystem gate.
@@ -45,10 +42,13 @@ const createTokenSource = ref<'paste' | 'create_new'>('paste')
 // block window.open still have a tappable / copyable fallback.
 const pendingDeepLink = ref<string | null>(null)
 const deepLinkCopied = ref(false)
-// True iff an admin has configured the Telegram manager bot. Without
-// it, the Managed Bots create-flow has no bot to dispatch to, so the
-// "Create new bot via Telegram" radio stays hidden.
-const managerBotConfigured = ref(false)
+// True iff a Telegram manager bridge (is_manager) exists. Without it the
+// Managed Bots create-flow has no bot to dispatch to, so the "Create new bot
+// via Telegram" radio stays hidden. Derived from the bridge list — the
+// manager is now a bridge capability, not a separate settings token.
+const managerBotConfigured = computed(() =>
+  store.bridges.some((b) => b.isManager && b.type === 'telegram'),
+)
 // Mirrors the edit dialog so operators see and lock the public-access
 // posture at creation rather than only after a refresh.
 const createAllowPublicDMs = ref(false)
@@ -100,25 +100,19 @@ function ttlToSeconds(amount: number, unit: 'minutes' | 'hours' | 'days'): numbe
   }
 }
 
+// Discord is gated server-side by ENABLE_DISCORD (off by default); the
+// option is omitted here until it's re-enabled.
 const bridgeTypes = [
   { label: 'Telegram', value: 'telegram' },
-  { label: 'Discord', value: 'discord' },
 ]
 
-onMounted(async () => {
+onMounted(() => {
   store.fetchBridges()
   agentsStore.fetchAgents()
-  try {
-    const { data } = await api.get('/api/v1/settings')
-    const resp = fromJson(GetSystemSettingsResponseSchema, data)
-    managerBotConfigured.value = !!resp.settings?.telegramManagerBotConfigured
-  } catch {
-    managerBotConfigured.value = false
-  }
 })
 
 function openCreate() {
-  form.value = { name: '', type: 'telegram', token: '', agentId: '' }
+  form.value = { name: '', type: 'telegram', token: '', agentId: '', isManager: false }
   pendingDeepLink.value = null
   deepLinkCopied.value = false
   // Reset to the same defaults the backend would write (DMs off, session
@@ -164,6 +158,7 @@ async function onSubmit() {
       type: form.value.type,
       token: form.value.token,
       agentId: agentIdField,
+      isManager: form.value.type === 'telegram' ? form.value.isManager : false,
     })
     if (created?.id) {
       await store.updateBridge(created.id, {
@@ -315,7 +310,15 @@ function confirmDelete(bridge: { id: string; name: string }) {
       <Column field="name" header="Name" />
       <Column header="Type">
         <template #body="{ data }">
-          <Tag :value="formatType(data.type)" :icon="typeIcon(data.type)" severity="info" />
+          <div style="display: flex; gap: 0.35rem; align-items: center">
+            <Tag :value="formatType(data.type)" :icon="typeIcon(data.type)" severity="info" />
+            <Tag
+              v-if="data.isManager"
+              value="Manager"
+              :severity="data.managerError ? 'warn' : 'success'"
+              v-tooltip.top="data.managerError || 'Creates new bots via the deep-link flow'"
+            />
+          </div>
         </template>
       </Column>
       <Column field="botUsername" header="Bot Username" />
@@ -426,6 +429,18 @@ function confirmDelete(bridge: { id: string; name: string }) {
             </small>
           </div>
           <ToggleSwitch v-model="createIsSystem" />
+        </div>
+        <!-- Manager capability: Telegram-only, admin-only. Lets this bot
+             create new bots for users via the deep-link flow. The pasted
+             token's bot must have can_manage_bots enabled in BotFather. -->
+        <div v-if="form.type === 'telegram' && createTokenSource === 'paste' && auth.can('tenant.manager_bot.config')" style="display: flex; align-items: center; justify-content: space-between; gap: 1rem">
+          <div>
+            <div style="font-weight: 600">Manager bot</div>
+            <small style="color: var(--p-text-muted-color)">
+              Enables the "Create new bot via Telegram" flow. Requires <code>can_manage_bots</code> in BotFather. At most one across the instance.
+            </small>
+          </div>
+          <ToggleSwitch v-model="form.isManager" />
         </div>
         <div v-if="!createIsSystem" style="display: flex; flex-direction: column; gap: 0.25rem">
           <label for="bridgeAgentId">Agent</label>

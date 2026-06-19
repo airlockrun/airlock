@@ -30,7 +30,7 @@ func testBridgeHandler(telegramSrv *httptest.Server) *bridgeHandler {
 	}
 	dd := trigger.NewDiscordDriver(zap.NewNop())
 	return newBridgeHandler(bridgessvc.New(
-		testDB, testEncryptor(), td, dd, testNoopBridgeMgr{}, zap.NewNop(),
+		testDB, testEncryptor(), td, dd, true, testNoopBridgeMgr{}, zap.NewNop(),
 	))
 }
 

@@ -370,6 +370,12 @@ message BridgeInfo {
   // True when inbound DMs route to the in-airlock sysagent instead of an
   // agent. Disjoint with agent_id — exactly one is set.
   bool is_system = 11;
+  // Telegram manager-bot capability: this bot creates new bots for users via
+  // the deep-link flow. Telegram-only and at most one across the instance.
+  bool is_manager = 12;
+  // Last live can_manage_bots check failure for a manager bridge; empty when
+  // healthy. Lets the UI show "capability revoked — re-enable in BotFather".
+  string manager_error = 13;
 }
 
 // BridgeSettings is the user-tunable subset of bridge config exposed in
@@ -535,14 +541,10 @@ message SystemSettingsInfo {
   string default_image_gen_provider_id = 14;
   string default_search_provider_id = 15;
   string default_embedding_provider_id = 16;
-  // Telegram Managed Bots: status of the admin-configured manager
-  // bot (the one with can_manage_bots that the operator-side flow
-  // uses to create new Telegram bots on behalf of users). The raw
-  // token never leaves the server; the UI only sees the resolved
-  // username + last-validation error.
-  bool   telegram_manager_bot_configured = 17;
-  string telegram_manager_bot_username   = 18;
-  string telegram_manager_bot_error      = 19;
+  // 17-19 retired: the Telegram manager bot is now a capability on a bridge
+  // (BridgeInfo.is_manager) rather than a system_settings token.
+  reserved 17, 18, 19;
+  reserved "telegram_manager_bot_configured", "telegram_manager_bot_username", "telegram_manager_bot_error";
 }
 
 // ManagedBotSessionRequest creates a session row that correlates an
@@ -561,17 +563,6 @@ message CreateManagedBotSessionResponse {
   string nonce     = 1;
   string deep_link = 2;
   google.protobuf.Timestamp expires_at = 3;
-}
-
-message UpdateTelegramManagerBotRequest {
-  // Empty string disables the manager bot (clears the stored token).
-  string token = 1;
-}
-
-message UpdateTelegramManagerBotResponse {
-  bool   configured = 1;
-  string username   = 2;
-  string error      = 3;
 }
 
 // GitCredential is a per-user credential for accessing external git

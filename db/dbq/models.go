@@ -337,6 +337,8 @@ type Bridge struct {
 	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
 	Managed           bool               `json:"managed"`
 	TelegramBotUserID pgtype.Int8        `json:"telegram_bot_user_id"`
+	IsManager         bool               `json:"is_manager"`
+	ManagerError      string             `json:"manager_error"`
 }
 
 type Connection struct {
@@ -630,8 +632,6 @@ type SystemSetting struct {
 	CreatedAt                  pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt                  pgtype.Timestamptz `json:"updated_at"`
 	LastSeenSdkVersion         string             `json:"last_seen_sdk_version"`
-	TelegramManagerBotTokenRef string             `json:"telegram_manager_bot_token_ref"`
-	TelegramManagerBotError    string             `json:"telegram_manager_bot_error"`
 }
 
 type Tenant struct {

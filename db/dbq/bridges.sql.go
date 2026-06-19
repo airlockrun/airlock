@@ -12,9 +12,9 @@ import (
 )
 
 const createBridge = `-- name: CreateBridge :one
-INSERT INTO bridges (type, name, bot_token_ref, bot_username, agent_id, owner_id, is_system, managed, telegram_bot_user_id, status, config, settings)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'active', '{}'::jsonb, '{}'::jsonb)
-RETURNING id, agent_id, owner_id, type, name, bot_username, status, is_system, config, settings, bot_token_ref, last_polled_at, created_at, updated_at, managed, telegram_bot_user_id
+INSERT INTO bridges (type, name, bot_token_ref, bot_username, agent_id, owner_id, is_system, is_manager, managed, telegram_bot_user_id, status, config, settings)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'active', '{}'::jsonb, '{}'::jsonb)
+RETURNING id, agent_id, owner_id, type, name, bot_username, status, is_system, config, settings, bot_token_ref, last_polled_at, created_at, updated_at, managed, telegram_bot_user_id, is_manager, manager_error
 `
 
 type CreateBridgeParams struct {
@@ -25,6 +25,7 @@ type CreateBridgeParams struct {
 	AgentID           pgtype.UUID `json:"agent_id"`
 	OwnerID           pgtype.UUID `json:"owner_id"`
 	IsSystem          bool        `json:"is_system"`
+	IsManager         bool        `json:"is_manager"`
 	Managed           bool        `json:"managed"`
 	TelegramBotUserID pgtype.Int8 `json:"telegram_bot_user_id"`
 }
@@ -38,6 +39,7 @@ func (q *Queries) CreateBridge(ctx context.Context, arg CreateBridgeParams) (Bri
 		arg.AgentID,
 		arg.OwnerID,
 		arg.IsSystem,
+		arg.IsManager,
 		arg.Managed,
 		arg.TelegramBotUserID,
 	)
@@ -59,6 +61,8 @@ func (q *Queries) CreateBridge(ctx context.Context, arg CreateBridgeParams) (Bri
 		&i.UpdatedAt,
 		&i.Managed,
 		&i.TelegramBotUserID,
+		&i.IsManager,
+		&i.ManagerError,
 	)
 	return i, err
 }
@@ -73,7 +77,7 @@ func (q *Queries) DeleteBridge(ctx context.Context, id pgtype.UUID) error {
 }
 
 const getBridgeByAgentID = `-- name: GetBridgeByAgentID :one
-SELECT id, agent_id, owner_id, type, name, bot_username, status, is_system, config, settings, bot_token_ref, last_polled_at, created_at, updated_at, managed, telegram_bot_user_id FROM bridges WHERE agent_id = $1
+SELECT id, agent_id, owner_id, type, name, bot_username, status, is_system, config, settings, bot_token_ref, last_polled_at, created_at, updated_at, managed, telegram_bot_user_id, is_manager, manager_error FROM bridges WHERE agent_id = $1
 `
 
 // Find the bridge bound to a specific agent
@@ -97,12 +101,14 @@ func (q *Queries) GetBridgeByAgentID(ctx context.Context, agentID pgtype.UUID) (
 		&i.UpdatedAt,
 		&i.Managed,
 		&i.TelegramBotUserID,
+		&i.IsManager,
+		&i.ManagerError,
 	)
 	return i, err
 }
 
 const getBridgeByID = `-- name: GetBridgeByID :one
-SELECT id, agent_id, owner_id, type, name, bot_username, status, is_system, config, settings, bot_token_ref, last_polled_at, created_at, updated_at, managed, telegram_bot_user_id FROM bridges WHERE id = $1
+SELECT id, agent_id, owner_id, type, name, bot_username, status, is_system, config, settings, bot_token_ref, last_polled_at, created_at, updated_at, managed, telegram_bot_user_id, is_manager, manager_error FROM bridges WHERE id = $1
 `
 
 func (q *Queries) GetBridgeByID(ctx context.Context, id pgtype.UUID) (Bridge, error) {
@@ -125,12 +131,14 @@ func (q *Queries) GetBridgeByID(ctx context.Context, id pgtype.UUID) (Bridge, er
 		&i.UpdatedAt,
 		&i.Managed,
 		&i.TelegramBotUserID,
+		&i.IsManager,
+		&i.ManagerError,
 	)
 	return i, err
 }
 
 const getBridgeByTelegramBotUserID = `-- name: GetBridgeByTelegramBotUserID :one
-SELECT id, agent_id, owner_id, type, name, bot_username, status, is_system, config, settings, bot_token_ref, last_polled_at, created_at, updated_at, managed, telegram_bot_user_id FROM bridges WHERE telegram_bot_user_id = $1 LIMIT 1
+SELECT id, agent_id, owner_id, type, name, bot_username, status, is_system, config, settings, bot_token_ref, last_polled_at, created_at, updated_at, managed, telegram_bot_user_id, is_manager, manager_error FROM bridges WHERE telegram_bot_user_id = $1 LIMIT 1
 `
 
 // Lookup a Telegram bridge by the bot's stable Telegram user_id.
@@ -157,12 +165,47 @@ func (q *Queries) GetBridgeByTelegramBotUserID(ctx context.Context, telegramBotU
 		&i.UpdatedAt,
 		&i.Managed,
 		&i.TelegramBotUserID,
+		&i.IsManager,
+		&i.ManagerError,
+	)
+	return i, err
+}
+
+const getManagerBridge = `-- name: GetManagerBridge :one
+SELECT id, agent_id, owner_id, type, name, bot_username, status, is_system, config, settings, bot_token_ref, last_polled_at, created_at, updated_at, managed, telegram_bot_user_id, is_manager, manager_error FROM bridges WHERE is_manager AND status IN ('active', 'error') LIMIT 1
+`
+
+// The Telegram manager bridge (is_manager). A partial unique index caps it
+// at one across the instance. Includes 'error' status so the deep-link flow
+// and the periodic capability re-check can still find and reconcile it.
+func (q *Queries) GetManagerBridge(ctx context.Context) (Bridge, error) {
+	row := q.db.QueryRow(ctx, getManagerBridge)
+	var i Bridge
+	err := row.Scan(
+		&i.ID,
+		&i.AgentID,
+		&i.OwnerID,
+		&i.Type,
+		&i.Name,
+		&i.BotUsername,
+		&i.Status,
+		&i.IsSystem,
+		&i.Config,
+		&i.Settings,
+		&i.BotTokenRef,
+		&i.LastPolledAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Managed,
+		&i.TelegramBotUserID,
+		&i.IsManager,
+		&i.ManagerError,
 	)
 	return i, err
 }
 
 const getSystemBridge = `-- name: GetSystemBridge :one
-SELECT id, agent_id, owner_id, type, name, bot_username, status, is_system, config, settings, bot_token_ref, last_polled_at, created_at, updated_at, managed, telegram_bot_user_id FROM bridges WHERE is_system LIMIT 1
+SELECT id, agent_id, owner_id, type, name, bot_username, status, is_system, config, settings, bot_token_ref, last_polled_at, created_at, updated_at, managed, telegram_bot_user_id, is_manager, manager_error FROM bridges WHERE is_system LIMIT 1
 `
 
 // The system bridge — there should be at most one
@@ -186,12 +229,14 @@ func (q *Queries) GetSystemBridge(ctx context.Context) (Bridge, error) {
 		&i.UpdatedAt,
 		&i.Managed,
 		&i.TelegramBotUserID,
+		&i.IsManager,
+		&i.ManagerError,
 	)
 	return i, err
 }
 
 const listActiveBridges = `-- name: ListActiveBridges :many
-SELECT id, agent_id, owner_id, type, name, bot_username, status, is_system, config, settings, bot_token_ref, last_polled_at, created_at, updated_at, managed, telegram_bot_user_id FROM bridges WHERE status IN ('active', 'error')
+SELECT id, agent_id, owner_id, type, name, bot_username, status, is_system, config, settings, bot_token_ref, last_polled_at, created_at, updated_at, managed, telegram_bot_user_id, is_manager, manager_error FROM bridges WHERE status IN ('active', 'error')
 `
 
 // All bridges to start polling on startup. Includes 'error' so a bridge that
@@ -223,6 +268,8 @@ func (q *Queries) ListActiveBridges(ctx context.Context) ([]Bridge, error) {
 			&i.UpdatedAt,
 			&i.Managed,
 			&i.TelegramBotUserID,
+			&i.IsManager,
+			&i.ManagerError,
 		); err != nil {
 			return nil, err
 		}
@@ -235,7 +282,7 @@ func (q *Queries) ListActiveBridges(ctx context.Context) ([]Bridge, error) {
 }
 
 const listBridgesAccessible = `-- name: ListBridgesAccessible :many
-SELECT b.id, b.agent_id, b.owner_id, b.type, b.name, b.bot_username, b.status, b.is_system, b.config, b.settings, b.bot_token_ref, b.last_polled_at, b.created_at, b.updated_at, b.managed, b.telegram_bot_user_id, u.email AS owner_email, u.display_name AS owner_display_name
+SELECT b.id, b.agent_id, b.owner_id, b.type, b.name, b.bot_username, b.status, b.is_system, b.config, b.settings, b.bot_token_ref, b.last_polled_at, b.created_at, b.updated_at, b.managed, b.telegram_bot_user_id, b.is_manager, b.manager_error, u.email AS owner_email, u.display_name AS owner_display_name
 FROM bridges b
 LEFT JOIN users u ON u.id = b.owner_id
 WHERE b.is_system
@@ -261,6 +308,8 @@ type ListBridgesAccessibleRow struct {
 	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
 	Managed           bool               `json:"managed"`
 	TelegramBotUserID pgtype.Int8        `json:"telegram_bot_user_id"`
+	IsManager         bool               `json:"is_manager"`
+	ManagerError      string             `json:"manager_error"`
 	OwnerEmail        pgtype.Text        `json:"owner_email"`
 	OwnerDisplayName  pgtype.Text        `json:"owner_display_name"`
 }
@@ -296,6 +345,8 @@ func (q *Queries) ListBridgesAccessible(ctx context.Context, userID pgtype.UUID)
 			&i.UpdatedAt,
 			&i.Managed,
 			&i.TelegramBotUserID,
+			&i.IsManager,
+			&i.ManagerError,
 			&i.OwnerEmail,
 			&i.OwnerDisplayName,
 		); err != nil {
@@ -310,7 +361,7 @@ func (q *Queries) ListBridgesAccessible(ctx context.Context, userID pgtype.UUID)
 }
 
 const listBridgesAdmin = `-- name: ListBridgesAdmin :many
-SELECT b.id, b.agent_id, b.owner_id, b.type, b.name, b.bot_username, b.status, b.is_system, b.config, b.settings, b.bot_token_ref, b.last_polled_at, b.created_at, b.updated_at, b.managed, b.telegram_bot_user_id, u.email AS owner_email, u.display_name AS owner_display_name
+SELECT b.id, b.agent_id, b.owner_id, b.type, b.name, b.bot_username, b.status, b.is_system, b.config, b.settings, b.bot_token_ref, b.last_polled_at, b.created_at, b.updated_at, b.managed, b.telegram_bot_user_id, b.is_manager, b.manager_error, u.email AS owner_email, u.display_name AS owner_display_name
 FROM bridges b
 LEFT JOIN users u ON u.id = b.owner_id
 ORDER BY b.created_at
@@ -333,6 +384,8 @@ type ListBridgesAdminRow struct {
 	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
 	Managed           bool               `json:"managed"`
 	TelegramBotUserID pgtype.Int8        `json:"telegram_bot_user_id"`
+	IsManager         bool               `json:"is_manager"`
+	ManagerError      string             `json:"manager_error"`
 	OwnerEmail        pgtype.Text        `json:"owner_email"`
 	OwnerDisplayName  pgtype.Text        `json:"owner_display_name"`
 }
@@ -367,6 +420,8 @@ func (q *Queries) ListBridgesAdmin(ctx context.Context) ([]ListBridgesAdminRow, 
 			&i.UpdatedAt,
 			&i.Managed,
 			&i.TelegramBotUserID,
+			&i.IsManager,
+			&i.ManagerError,
 			&i.OwnerEmail,
 			&i.OwnerDisplayName,
 		); err != nil {
@@ -438,7 +493,7 @@ func (q *Queries) ListBridgesByOwner(ctx context.Context, ownerID pgtype.UUID) (
 }
 
 const listBridgesForAgent = `-- name: ListBridgesForAgent :many
-SELECT id, agent_id, owner_id, type, name, bot_username, status, is_system, config, settings, bot_token_ref, last_polled_at, created_at, updated_at, managed, telegram_bot_user_id FROM bridges
+SELECT id, agent_id, owner_id, type, name, bot_username, status, is_system, config, settings, bot_token_ref, last_polled_at, created_at, updated_at, managed, telegram_bot_user_id, is_manager, manager_error FROM bridges
 WHERE agent_id = $1 OR is_system
 ORDER BY created_at
 `
@@ -470,6 +525,8 @@ func (q *Queries) ListBridgesForAgent(ctx context.Context, agentID pgtype.UUID) 
 			&i.UpdatedAt,
 			&i.Managed,
 			&i.TelegramBotUserID,
+			&i.IsManager,
+			&i.ManagerError,
 		); err != nil {
 			return nil, err
 		}
@@ -481,17 +538,38 @@ func (q *Queries) ListBridgesForAgent(ctx context.Context, agentID pgtype.UUID) 
 	return items, nil
 }
 
+const reconcileManagerBridge = `-- name: ReconcileManagerBridge :exec
+UPDATE bridges
+SET bot_username = $1, manager_error = $2, updated_at = now()
+WHERE id = $3
+`
+
+type ReconcileManagerBridgeParams struct {
+	BotUsername  string      `json:"bot_username"`
+	ManagerError string      `json:"manager_error"`
+	ID           pgtype.UUID `json:"id"`
+}
+
+// Refresh the manager bridge's live identity/capability from a getMe poll:
+// bot_username (Telegram handles can change) + manager_error (” when the
+// can_manage_bots capability is healthy).
+func (q *Queries) ReconcileManagerBridge(ctx context.Context, arg ReconcileManagerBridgeParams) error {
+	_, err := q.db.Exec(ctx, reconcileManagerBridge, arg.BotUsername, arg.ManagerError, arg.ID)
+	return err
+}
+
 const updateBridgeBinding = `-- name: UpdateBridgeBinding :one
 UPDATE bridges
-SET agent_id = $1, is_system = $2, updated_at = now()
-WHERE id = $3
-RETURNING id, agent_id, owner_id, type, name, bot_username, status, is_system, config, settings, bot_token_ref, last_polled_at, created_at, updated_at, managed, telegram_bot_user_id
+SET agent_id = $1, is_system = $2, is_manager = $3, updated_at = now()
+WHERE id = $4
+RETURNING id, agent_id, owner_id, type, name, bot_username, status, is_system, config, settings, bot_token_ref, last_polled_at, created_at, updated_at, managed, telegram_bot_user_id, is_manager, manager_error
 `
 
 type UpdateBridgeBindingParams struct {
-	AgentID  pgtype.UUID `json:"agent_id"`
-	IsSystem bool        `json:"is_system"`
-	ID       pgtype.UUID `json:"id"`
+	AgentID   pgtype.UUID `json:"agent_id"`
+	IsSystem  bool        `json:"is_system"`
+	IsManager bool        `json:"is_manager"`
+	ID        pgtype.UUID `json:"id"`
 }
 
 // Rebind the bridge's target. Either is_system=true with NULL agent_id
@@ -500,7 +578,12 @@ type UpdateBridgeBindingParams struct {
 // service layer, not the schema. The running poller must be reloaded via
 // BridgeManager.AddBridge after this update — it holds AgentID in memory.
 func (q *Queries) UpdateBridgeBinding(ctx context.Context, arg UpdateBridgeBindingParams) (Bridge, error) {
-	row := q.db.QueryRow(ctx, updateBridgeBinding, arg.AgentID, arg.IsSystem, arg.ID)
+	row := q.db.QueryRow(ctx, updateBridgeBinding,
+		arg.AgentID,
+		arg.IsSystem,
+		arg.IsManager,
+		arg.ID,
+	)
 	var i Bridge
 	err := row.Scan(
 		&i.ID,
@@ -519,6 +602,8 @@ func (q *Queries) UpdateBridgeBinding(ctx context.Context, arg UpdateBridgeBindi
 		&i.UpdatedAt,
 		&i.Managed,
 		&i.TelegramBotUserID,
+		&i.IsManager,
+		&i.ManagerError,
 	)
 	return i, err
 }
@@ -542,7 +627,7 @@ func (q *Queries) UpdateBridgeLastPolled(ctx context.Context, arg UpdateBridgeLa
 
 const updateBridgeSettings = `-- name: UpdateBridgeSettings :one
 UPDATE bridges SET settings = $1, updated_at = now() WHERE id = $2
-RETURNING id, agent_id, owner_id, type, name, bot_username, status, is_system, config, settings, bot_token_ref, last_polled_at, created_at, updated_at, managed, telegram_bot_user_id
+RETURNING id, agent_id, owner_id, type, name, bot_username, status, is_system, config, settings, bot_token_ref, last_polled_at, created_at, updated_at, managed, telegram_bot_user_id, is_manager, manager_error
 `
 
 type UpdateBridgeSettingsParams struct {
@@ -572,6 +657,8 @@ func (q *Queries) UpdateBridgeSettings(ctx context.Context, arg UpdateBridgeSett
 		&i.UpdatedAt,
 		&i.Managed,
 		&i.TelegramBotUserID,
+		&i.IsManager,
+		&i.ManagerError,
 	)
 	return i, err
 }

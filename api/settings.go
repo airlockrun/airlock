@@ -1,53 +1,28 @@
 package api
 
 import (
-	"context"
 	"net/http"
 
 	"github.com/airlockrun/airlock/convert"
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
-	"github.com/airlockrun/airlock/secrets"
 	settingssvc "github.com/airlockrun/airlock/service/settings"
 )
 
 type settingsHandler struct {
-	svc                *settingssvc.Service
-	encryptor          secrets.Store
-	managerBotUsername func() string // live username from the running manager bot poller; "" when stopped
-	validateManagerBot func(ctx context.Context, token string) (username string, canManage bool, err error)
-	managerBotReload   func(ctx context.Context) error
-	managerBotScope    string
+	svc *settingssvc.Service
 }
 
-// settingsHandlerDeps bundles the bits the settings handler needs
-// from the wider startup graph. ManagerBot* are nil when the
-// manager-bot feature isn't wired in (e.g. tests); the handler
-// surfaces "not configured" semantically in that case.
+// settingsHandlerDeps bundles the bits the settings handler needs from the
+// wider startup graph.
 type settingsHandlerDeps struct {
-	Svc                *settingssvc.Service
-	Encryptor          secrets.Store
-	ManagerBotUsername func() string
-	ValidateManagerBot func(ctx context.Context, token string) (username string, canManage bool, err error)
-	ManagerBotReload   func(ctx context.Context) error
-	ManagerBotScope    string
+	Svc *settingssvc.Service
 }
 
 func newSettingsHandler(d settingsHandlerDeps) *settingsHandler {
 	if d.Svc == nil {
 		panic("settingsHandler: svc is required")
 	}
-	h := &settingsHandler{
-		svc:                d.Svc,
-		encryptor:          d.Encryptor,
-		managerBotUsername: d.ManagerBotUsername,
-		validateManagerBot: d.ValidateManagerBot,
-		managerBotReload:   d.ManagerBotReload,
-		managerBotScope:    d.ManagerBotScope,
-	}
-	if h.managerBotUsername == nil {
-		h.managerBotUsername = func() string { return "" }
-	}
-	return h
+	return &settingsHandler{svc: d.Svc}
 }
 
 func (h *settingsHandler) Get(w http.ResponseWriter, r *http.Request) {
@@ -57,40 +32,7 @@ func (h *settingsHandler) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeProto(w, http.StatusOK, &airlockv1.GetSystemSettingsResponse{
-		Settings: convert.SystemSettingsToProto(row, h.managerBotUsername()),
-	})
-}
-
-// UpdateManagerBot validates a new Telegram manager-bot token and,
-// on success, persists it + asks the poller to reload. An empty
-// token disables the feature.
-func (h *settingsHandler) UpdateManagerBot(w http.ResponseWriter, r *http.Request) {
-	if h.encryptor == nil || h.validateManagerBot == nil {
-		writeError(w, http.StatusServiceUnavailable, "manager bot feature is not wired")
-		return
-	}
-	var req airlockv1.UpdateTelegramManagerBotRequest
-	if err := decodeProto(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-	status, err := h.svc.UpdateManagerBotToken(
-		r.Context(),
-		principalFromRequest(r),
-		req.GetToken(),
-		h.encryptor.Put,
-		h.validateManagerBot,
-		h.managerBotReload,
-		h.managerBotScope,
-	)
-	if err != nil {
-		writeServiceError(w, err, "failed to update manager bot token")
-		return
-	}
-	writeProto(w, http.StatusOK, &airlockv1.UpdateTelegramManagerBotResponse{
-		Configured: status.Configured,
-		Username:   status.Username,
-		Error:      status.Error,
+		Settings: convert.SystemSettingsToProto(row),
 	})
 }
 
@@ -125,6 +67,6 @@ func (h *settingsHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeProto(w, http.StatusOK, &airlockv1.UpdateSystemSettingsResponse{
-		Settings: convert.SystemSettingsToProto(row, h.managerBotUsername()),
+		Settings: convert.SystemSettingsToProto(row),
 	})
 }

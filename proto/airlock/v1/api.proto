@@ -463,6 +463,9 @@ message CreateBridgeRequest {
   string name = 2;
   string token = 3;
   string type = 4; // "telegram", "discord"
+  // Telegram manager-bot capability (admin only; requires the bot's
+  // can_manage_bots to be enabled in BotFather). Telegram-only.
+  bool is_manager = 5;
 }
 
 // Update fields on an existing bridge. Both fields are independent —
@@ -476,6 +479,9 @@ message UpdateBridgeRequest {
   // requires the TenantBridgeSystem permission and forces agent_id
   // empty; switching away from system requires a non-empty agent_id.
   optional bool is_system = 3;
+  // Toggle the Telegram manager-bot capability (admin only). Optional:
+  // unset = leave as-is. Turning it on requires can_manage_bots.
+  optional bool is_manager = 4;
 }
 
 message ListBridgesResponse {

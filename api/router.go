@@ -77,6 +77,9 @@ type RouterConfig struct {
 	// Discord driver (for bridge validation via /users/@me)
 	DiscordDriver *trigger.DiscordDriver
 
+	// EnableDiscord gates Discord bridge creation (off by default).
+	EnableDiscord bool
+
 	// Trigger system
 	Dispatcher    *trigger.Dispatcher
 	Scheduler     *trigger.Scheduler
@@ -165,30 +168,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	resourcesHandler := NewResourcesHandler(resourcessvc.New(cfg.DB, cfg.Logger.Named("resources")))
 	usageHandler := NewUsageHandler(usagesvc.New(cfg.DB, cfg.Logger.Named("usage")))
 	settingsSvc := settingssvc.New(cfg.DB, cfg.Logger.Named("settings"))
-	// Manager bot wiring is deferred until inside the auth group where
-	// the bridges service / managedbots service are constructed. The
-	// closures captured here read managerBot at call time, so a nil
-	// pointer at startup gracefully degrades to "not configured" until
-	// it's assigned below.
-	var managerBot *trigger.ManagerBot
-	sysSettingsHandler := newSettingsHandler(settingsHandlerDeps{
-		Svc:       settingsSvc,
-		Encryptor: cfg.Secrets,
-		ManagerBotUsername: func() string {
-			if managerBot == nil {
-				return ""
-			}
-			return managerBot.Username()
-		},
-		ValidateManagerBot: trigger.ValidateManagerBotToken,
-		ManagerBotReload: func(ctx context.Context) error {
-			if managerBot == nil {
-				return nil
-			}
-			return managerBot.Reload(ctx)
-		},
-		ManagerBotScope: trigger.ManagerBotTokenScope,
-	})
+	sysSettingsHandler := newSettingsHandler(settingsHandlerDeps{Svc: settingsSvc})
 
 	// Health check (public, no auth — reverse proxies and orchestrators need
 	// to hit this without credentials). 200 if DB+S3 reachable, 503 otherwise.
@@ -253,7 +233,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		agentapi.MCPHTTPClient,
 	))
 	brH := newBridgeHandler(bridgessvc.New(
-		cfg.DB, cfg.Secrets, cfg.TelegramDriver, cfg.DiscordDriver,
+		cfg.DB, cfg.Secrets, cfg.TelegramDriver, cfg.DiscordDriver, cfg.EnableDiscord,
 		cfg.BridgeManager, cfg.Logger.Named("bridges"),
 	))
 	idH := newIdentityHandler(
@@ -433,7 +413,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 				cfg.Logger.Named("sysagent-agents"),
 			),
 			Bridges: bridgessvc.New(
-				cfg.DB, cfg.Secrets, cfg.TelegramDriver, cfg.DiscordDriver,
+				cfg.DB, cfg.Secrets, cfg.TelegramDriver, cfg.DiscordDriver, cfg.EnableDiscord,
 				cfg.BridgeManager, cfg.Logger.Named("sysagent-bridges"),
 			),
 			Catalog: catalogsvc.New(cfg.DB, cfg.Logger.Named("sysagent-catalog")),
@@ -469,35 +449,20 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		// (sysagent → service/agents → trigger).
 		cfg.BridgeManager.AttachSysagent(sysagentSvc)
 
-		// Managed-bot sessions service + singleton manager-bot poller.
-		// The bridges service shared with sysagent (above) is the one
-		// the manager-bot uses on ManagedBotCreated to create the
-		// resulting bridge row. managerBot is captured by the settings
-		// handler's closures via the pointer declared earlier.
+		// Managed-bot sessions. The Telegram manager is a capability on a
+		// bridge (is_manager), so there's no separate poller: the manager
+		// bridge's own poll loop surfaces ManagedBotCreated events, which the
+		// BridgeManager hands to the bridges service to materialize into a
+		// bridge. The deep-link flow resolves the manager bridge's username
+		// (with a live can_manage_bots re-check) from the same service.
+		managerBridgesSvc := bridgessvc.New(cfg.DB, cfg.Secrets, cfg.TelegramDriver, cfg.DiscordDriver, cfg.EnableDiscord, cfg.BridgeManager, cfg.Logger.Named("managed-bridges"))
+		cfg.BridgeManager.AttachManagedBotIngest(managerBridgesSvc.IngestManagedBotCreated)
 		managedBotsSvc := managedbotssvc.New(managedbotssvc.Deps{
-			DB: cfg.DB,
-			ManagerBotUsername: func() string {
-				if managerBot == nil {
-					return ""
-				}
-				return managerBot.Username()
-			},
-			Logger: cfg.Logger.Named("managedbots"),
+			DB:                    cfg.DB,
+			ManagerBridgeUsername: managerBridgesSvc.ManagerBridgeUsername,
+			Logger:                cfg.Logger.Named("managedbots"),
 		})
 		managedBotsH := newManagedBotSessionsHandler(managedBotsSvc)
-
-		managerBot = trigger.NewManagerBot(
-			cfg.DB, cfg.Secrets,
-			bridgessvc.New(cfg.DB, cfg.Secrets, cfg.TelegramDriver, cfg.DiscordDriver, cfg.BridgeManager, cfg.Logger.Named("managerbot-bridges")),
-			cfg.BridgeManager,
-			cfg.Logger.Named("manager-bot"),
-		)
-		// Start the poller in the background. If no token is configured
-		// (or validation fails) Start returns nil after recording the
-		// error in system_settings — airlock startup is unaffected.
-		if err := managerBot.Start(context.Background()); err != nil {
-			cfg.Logger.Warn("manager bot start failed", zap.Error(err))
-		}
 
 		r.Route("/agents", func(r chi.Router) {
 			r.Get("/", agH.List)
@@ -646,10 +611,6 @@ func NewRouter(cfg RouterConfig) http.Handler {
 			// — no orphan-claim path is exposed.
 			r.Post("/managed/sessions", managedBotsH.Create)
 		})
-
-		// Manager-bot token config (admin only — gated inside the
-		// settings service via TenantManagerBotConfig).
-		r.Put("/settings/telegram-manager-bot", sysSettingsHandler.UpdateManagerBot)
 
 		// Platform identity management
 		r.Get("/link-identity/preview", idH.LinkIdentityPreview)

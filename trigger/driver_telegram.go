@@ -155,6 +155,18 @@ func (d *TelegramDriver) Poll(ctx context.Context, br *dbq.Bridge) ([]BridgeEven
 			advanceOffset(u.UpdateID)
 			continue
 		}
+		// Managed-bot creation service message — surface it for manager
+		// bridges (HandleEvent ignores it on non-manager bridges). Handled
+		// before the private-chat filter since it's a service message.
+		if mbc := u.Message.ManagedBotCreated; mbc != nil && mbc.Bot.ID != 0 {
+			events = append(events, BridgeEvent{
+				BridgeID:   pgUUID(br.ID),
+				ManagedBot: &ManagedBotEvent{BotID: mbc.Bot.ID, Username: mbc.Bot.Username},
+				RawPayload: mustJSON(u),
+			})
+			advanceOffset(u.UpdateID)
+			continue
+		}
 		// DM-only: drop messages from groups, supergroups, channels.
 		if u.Message.Chat.Type != "private" {
 			advanceOffset(u.UpdateID)
@@ -506,6 +518,46 @@ func (d *TelegramDriver) GetMe(ctx context.Context, token string) (string, error
 		return "", fmt.Errorf("telegram getMe: not ok")
 	}
 	return result.Result.Username, nil
+}
+
+// GetMeFull calls getMe and returns the bot's username, stable user id, and
+// can_manage_bots capability. Used where airlock needs the bot identity (to
+// dedupe one-listener-per-bot) and the manager capability (to gate the
+// is_manager behavior), not just the username.
+func (d *TelegramDriver) GetMeFull(ctx context.Context, token string) (username string, botUserID int64, canManageBots bool, err error) {
+	var result struct {
+		OK     bool `json:"ok"`
+		Result struct {
+			ID            int64  `json:"id"`
+			Username      string `json:"username"`
+			CanManageBots bool   `json:"can_manage_bots"`
+		} `json:"result"`
+	}
+	if err := d.callTelegramJSON(ctx, token, "getMe", nil, &result); err != nil {
+		return "", 0, false, err
+	}
+	if !result.OK {
+		return "", 0, false, fmt.Errorf("telegram getMe: not ok")
+	}
+	return result.Result.Username, result.Result.ID, result.Result.CanManageBots, nil
+}
+
+// GetManagedBotToken fetches the bot token for a managed bot the manager bot
+// just created. Bot API getManagedBotToken takes the new bot's user_id and
+// returns the token directly under `result` (managerToken authenticates the
+// call — it must have can_manage_bots).
+func (d *TelegramDriver) GetManagedBotToken(ctx context.Context, managerToken string, botUserID int64) (string, error) {
+	var result struct {
+		OK     bool   `json:"ok"`
+		Result string `json:"result"`
+	}
+	if err := d.callTelegramJSON(ctx, managerToken, "getManagedBotToken", map[string]any{"user_id": botUserID}, &result); err != nil {
+		return "", err
+	}
+	if !result.OK || result.Result == "" {
+		return "", fmt.Errorf("telegram getManagedBotToken: no token")
+	}
+	return result.Result, nil
 }
 
 // SetMenuButton configures the bot's default chat menu button to launch
@@ -1059,6 +1111,20 @@ type telegramMessage struct {
 	Video          *telegramVideo       `json:"video"`
 	ReplyToMessage *telegramMessage     `json:"reply_to_message"`
 	ForwardOrigin  *telegramForwardInfo `json:"forward_origin"`
+	// ManagedBotCreated is the Bot API service message delivered to a
+	// manager bot when a user finishes creating a bot via the deep-link
+	// flow. Only manager bridges act on it (see HandleEvent).
+	ManagedBotCreated *telegramManagedBotCreated `json:"managed_bot_created"`
+}
+
+// telegramManagedBotCreated — the `managed_bot_created` service message.
+// Only the bot is included; its token is fetched separately via
+// getManagedBotToken{user_id: bot.id}.
+type telegramManagedBotCreated struct {
+	Bot struct {
+		ID       int64  `json:"id"`
+		Username string `json:"username"`
+	} `json:"bot"`
 }
 
 // telegramForwardInfo is the modern (Bot API 7.0+) forward_origin field.
