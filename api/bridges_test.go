@@ -34,6 +34,143 @@ func testBridgeHandler(telegramSrv *httptest.Server) *bridgeHandler {
 	))
 }
 
+// telegramGetMeServer mocks the Telegram Bot API: every method returns the
+// same getMe result shape (id/username/can_manage_bots). Driver.Init's
+// getUpdates call gets the object-shaped result, fails to parse, and is
+// swallowed (non-fatal) — same as the other tests' single-shape mocks.
+func telegramGetMeServer(id int64, username string, canManageBots bool) *httptest.Server {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"ok": true,
+			"result": map[string]any{
+				"id":              id,
+				"username":        username,
+				"can_manage_bots": canManageBots,
+			},
+		})
+	}))
+}
+
+// TestCreateManagerBridge: an admin can create a system+manager Telegram
+// bridge when the bot's can_manage_bots is enabled.
+func TestCreateManagerBridge(t *testing.T) {
+	skipIfNoDB(t)
+
+	srv := telegramGetMeServer(50001, "mgr_bot", true)
+	defer srv.Close()
+
+	bh := testBridgeHandler(srv)
+	_, userID := testAgentAndUser(t)
+
+	router := userRouter(func(r chi.Router) {
+		r.Post("/api/v1/bridges", bh.CreateBridge)
+	})
+
+	// No agent_id → system bridge; is_manager → also the manager. Both gates
+	// are admin, so an admin clears them.
+	body := map[string]any{"name": "Manager Bot", "token": "fake-token", "is_manager": true}
+	req := requestJSONAs(t, "POST", "/api/v1/bridges", userID, "admin", body)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("create manager bridge: status = %d, want 200; body: %s", rec.Code, rec.Body.String())
+	}
+	var resp airlockv1.BridgeInfo
+	decodeProtoResp(t, rec, &resp)
+	if !resp.IsManager {
+		t.Error("is_manager = false, want true")
+	}
+}
+
+// TestCreateManagerBridgeRequiresCapability: is_manager is refused when the
+// bot doesn't have can_manage_bots enabled in BotFather.
+func TestCreateManagerBridgeRequiresCapability(t *testing.T) {
+	skipIfNoDB(t)
+
+	srv := telegramGetMeServer(50002, "nocap_bot", false) // can_manage_bots: false
+	defer srv.Close()
+
+	bh := testBridgeHandler(srv)
+	_, userID := testAgentAndUser(t)
+
+	router := userRouter(func(r chi.Router) {
+		r.Post("/api/v1/bridges", bh.CreateBridge)
+	})
+
+	body := map[string]any{"name": "No Cap Bot", "token": "fake-token", "is_manager": true}
+	req := requestJSONAs(t, "POST", "/api/v1/bridges", userID, "admin", body)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("manager bridge without can_manage_bots: status = %d, want 400; body: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestCreateManagerBridgeRequiresAdmin: a manager-role user (agent-admin on
+// the target) can create an ordinary agent bridge but not flag it is_manager.
+func TestCreateManagerBridgeRequiresAdmin(t *testing.T) {
+	skipIfNoDB(t)
+
+	srv := telegramGetMeServer(50003, "mgr_bot", true)
+	defer srv.Close()
+
+	bh := testBridgeHandler(srv)
+	agentID, userID := testAgentAndUser(t)
+
+	router := userRouter(func(r chi.Router) {
+		r.Post("/api/v1/bridges", bh.CreateBridge)
+	})
+
+	// Agent-bound (so the system gate doesn't fire first) + is_manager as a
+	// manager-role user → blocked by the manager-config (admin) gate.
+	body := map[string]any{"name": "Mgr", "token": "fake-token", "agent_id": agentID.String(), "is_manager": true}
+	req := requestJSONAs(t, "POST", "/api/v1/bridges", userID, "manager", body)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("is_manager as manager role: status = %d, want 403; body: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestCreateBridgeOneListenerPerBot: a given Telegram bot can back only one
+// bridge — a second create for the same bot id is rejected (one getUpdates
+// consumer per bot).
+func TestCreateBridgeOneListenerPerBot(t *testing.T) {
+	skipIfNoDB(t)
+
+	srv := telegramGetMeServer(50004, "dup_bot", false) // same id for every getMe
+	defer srv.Close()
+
+	bh := testBridgeHandler(srv)
+	agentID, userID := testAgentAndUser(t)
+
+	router := userRouter(func(r chi.Router) {
+		r.Post("/api/v1/bridges", bh.CreateBridge)
+	})
+
+	first := map[string]any{"name": "First", "token": "fake-token", "agent_id": agentID.String()}
+	req := requestJSONAs(t, "POST", "/api/v1/bridges", userID, "manager", first)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("first create: status = %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	// Second bridge on the same agent, same bot id (mock returns id 50004
+	// again) → rejected by the one-listener-per-bot guard.
+	second := map[string]any{"name": "Second", "token": "fake-token-2", "agent_id": agentID.String()}
+	req = requestJSONAs(t, "POST", "/api/v1/bridges", userID, "manager", second)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("second bridge for same bot: status = %d, want 400; body: %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestCreateAgentBridge(t *testing.T) {
 	skipIfNoDB(t)
 
