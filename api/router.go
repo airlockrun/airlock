@@ -456,6 +456,9 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		// Conversation-origin upgrades still flow through the
 		// cH-side notifier above.
 		cfg.BuildService.SetUpgradeSystemNotifier(sysagentSvc)
+		// Same path for initial builds kicked off from a sysagent
+		// create_agent tool (NotifyBuildComplete → [Build succeeded] + resume).
+		cfg.BuildService.SetBuildSystemNotifier(sysagentSvc)
 		sysagentH := newSysagentHandler(sysagentSvc)
 
 		// Wire sysagent into the bridge manager so system-bridge

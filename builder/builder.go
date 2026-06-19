@@ -53,6 +53,7 @@ type BuildService struct {
 	events                EventPublisher
 	upgradeNotifier       PostUpgradeNotifier
 	upgradeSystemNotifier PostUpgradeSystemNotifier
+	buildSystemNotifier   PostBuildSystemNotifier
 	logger                *zap.Logger
 
 	mu       sync.Mutex
@@ -137,6 +138,32 @@ func (b *BuildService) SetUpgradeNotifier(n PostUpgradeNotifier) {
 // notifyUpgradeOutcome).
 func (b *BuildService) SetUpgradeSystemNotifier(n PostUpgradeSystemNotifier) {
 	b.upgradeSystemNotifier = n
+}
+
+// SetBuildSystemNotifier sets the notifier called after an INITIAL build
+// kicked off from a system-agent create_agent tool finishes. Routed by
+// BuildInput.SystemConversationID (system-agent create path only).
+func (b *BuildService) SetBuildSystemNotifier(n PostBuildSystemNotifier) {
+	b.buildSystemNotifier = n
+}
+
+// notifyBuildOutcome posts an initial-build result into the originating
+// system-agent conversation (when a create_agent tool triggered it). No-op
+// for the web create path, which carries no conversation id and surfaces
+// status via the build view.
+func (b *BuildService) notifyBuildOutcome(ctx context.Context, agentID uuid.UUID, systemConversationID, status, message string) {
+	if systemConversationID == "" || b.buildSystemNotifier == nil {
+		return
+	}
+	tid, err := uuid.Parse(systemConversationID)
+	if err != nil {
+		b.logger.Error("invalid system conversation id on build outcome",
+			zap.String("conversation_id", systemConversationID), zap.Error(err))
+		return
+	}
+	if nerr := b.buildSystemNotifier.NotifyBuildComplete(ctx, agentID, tid, status, message); nerr != nil {
+		b.logger.Error("post-build system-conversation notification failed", zap.Error(nerr))
+	}
 }
 
 // startBuild registers a cancellable context for a build/upgrade.
@@ -229,6 +256,12 @@ type BuildInput struct {
 	GitRemoteURL     string
 	GitCredentialID  pgtype.UUID
 	GitDefaultBranch string // defaults to "main" when empty
+
+	// SystemConversationID, when set, is the system-agent conversation that
+	// triggered this build via create_agent. On completion the build outcome
+	// is posted back there + the system agent resumes. Empty for the web
+	// create path (no conversation).
+	SystemConversationID string
 }
 
 // Build runs the initial-build pipeline: scaffold → Sol codegen (if
@@ -327,7 +360,8 @@ func (b *BuildService) Build(_ context.Context, input BuildInput) error {
 			BuildModel:      input.BuildModel,
 		},
 	}
-	if _, err := b.Execute(ctx, plan); err != nil {
+	summary, err := b.Execute(ctx, plan)
+	if err != nil {
 		status, errMsg := "failed", err.Error()
 		if errors.Is(err, context.Canceled) {
 			errMsg = "cancelled by user"
@@ -340,9 +374,18 @@ func (b *BuildService) Build(_ context.Context, input BuildInput) error {
 			Status:       status,
 			ErrorMessage: errMsg,
 		})
+		// Cancellation already surfaced via the build view toast; don't post.
+		if !errors.Is(err, context.Canceled) {
+			b.notifyBuildOutcome(context.Background(), uuid.UUID(agent.ID.Bytes), input.SystemConversationID, "error", errMsg)
+		}
 		return err
 	}
 	b.logger.Info("build completed", zap.String("agent_id", input.AgentID))
+	msg := summary // the agent-builder's exit summary when codegen ran
+	if msg == "" {
+		msg = fmt.Sprintf("Agent %q is built and active.", agent.Name)
+	}
+	b.notifyBuildOutcome(context.Background(), uuid.UUID(agent.ID.Bytes), input.SystemConversationID, "success", msg)
 	return nil
 }
 
