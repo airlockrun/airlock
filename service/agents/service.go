@@ -85,6 +85,9 @@ type CreateRequest struct {
 	GitRemoteURL     string
 	GitCredentialID  string
 	GitDefaultBranch string
+	// SystemConversationID, when set (system-agent create_agent path),
+	// routes the build-completion outcome back to that conversation.
+	SystemConversationID string
 }
 
 // UpdateRequest mirrors UpdateAgentRequest. Pointer fields express
@@ -289,16 +292,17 @@ func (s *Service) Create(ctx context.Context, p authz.Principal, req CreateReque
 	agentIDStr := uuid.UUID(agent.ID.Bytes).String()
 	go func() {
 		_ = s.builder.Build(context.Background(), builder.BuildInput{
-			AgentID:          agentIDStr,
-			Name:             req.Name,
-			Slug:             req.Slug,
-			UserID:           p.UserID.String(),
-			BuildProviderID:  buildProviderFK,
-			BuildModel:       req.BuildModel,
-			Instructions:     req.Instructions,
-			GitRemoteURL:     req.GitRemoteURL,
-			GitCredentialID:  gitCredFK,
-			GitDefaultBranch: req.GitDefaultBranch,
+			AgentID:              agentIDStr,
+			Name:                 req.Name,
+			Slug:                 req.Slug,
+			UserID:               p.UserID.String(),
+			BuildProviderID:      buildProviderFK,
+			BuildModel:           req.BuildModel,
+			Instructions:         req.Instructions,
+			GitRemoteURL:         req.GitRemoteURL,
+			GitCredentialID:      gitCredFK,
+			GitDefaultBranch:     req.GitDefaultBranch,
+			SystemConversationID: req.SystemConversationID,
 		})
 	}()
 	return agent, nil

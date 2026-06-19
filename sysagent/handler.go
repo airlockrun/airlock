@@ -34,6 +34,23 @@ import (
 // the sysagent conversation that triggered the upgrade.
 func (s *Service) NotifyUpgradeComplete(ctx context.Context, agentID, conversationID uuid.UUID, status, message string) error {
 	prefix, source := upgradeOutcomeRendering(status)
+	return s.notifyAndResume(ctx, agentID, conversationID, prefix, source, message)
+}
+
+// NotifyBuildComplete satisfies builder.PostBuildSystemNotifier — the
+// initial-build counterpart of NotifyUpgradeComplete. Triggered after a
+// build kicked off from the system-agent create_agent tool finishes; same
+// inject-then-resume mechanism, build-flavored prefix.
+func (s *Service) NotifyBuildComplete(ctx context.Context, agentID, conversationID uuid.UUID, status, message string) error {
+	prefix, source := buildOutcomeRendering(status)
+	return s.notifyAndResume(ctx, agentID, conversationID, prefix, source, message)
+}
+
+// notifyAndResume injects a user-role outcome message into a system-agent
+// conversation and kicks an auto-resume LLM turn so the agent reacts. Shared
+// by the upgrade and build notifiers; prefix/source are pre-rendered by the
+// caller for the specific outcome.
+func (s *Service) notifyAndResume(ctx context.Context, agentID, conversationID uuid.UUID, prefix, source, message string) error {
 	body := prefix + message
 
 	// 1. Persist the user-role injection. content is the plain-text
@@ -43,7 +60,7 @@ func (s *Service) NotifyUpgradeComplete(ctx context.Context, agentID, conversati
 	//    goai-shape parts blob so the existing NotificationEvent
 	//    renderer (shared with agent chat) lights up immediately.
 	if err := s.appendInjectedMessage(ctx, conversationID, "user", source, body, nil); err != nil {
-		return fmt.Errorf("append upgrade-notify message: %w", err)
+		return fmt.Errorf("append outcome-notify message: %w", err)
 	}
 	partsForWS, err := json.Marshal([]map[string]any{{
 		"type":   "text",
@@ -51,7 +68,7 @@ func (s *Service) NotifyUpgradeComplete(ctx context.Context, agentID, conversati
 		"source": source,
 	}})
 	if err != nil {
-		return fmt.Errorf("marshal upgrade-notify parts: %w", err)
+		return fmt.Errorf("marshal outcome-notify parts: %w", err)
 	}
 
 	// 2. Publish a notification event on the conversation owner's WS topic so
@@ -63,7 +80,7 @@ func (s *Service) NotifyUpgradeComplete(ctx context.Context, agentID, conversati
 	q := dbq.New(s.db.Pool())
 	conversation, err := q.GetSystemConversationByID(ctx, pgtype.UUID{Bytes: conversationID, Valid: true})
 	if err != nil {
-		return fmt.Errorf("load conversation for upgrade-notify publish: %w", err)
+		return fmt.Errorf("load conversation for outcome-notify publish: %w", err)
 	}
 	userID := uuid.UUID(conversation.UserID.Bytes)
 	env := realtime.NewEnvelopeForUser("notification", userID.String(), userID.String(), conversationID.String(),
@@ -90,7 +107,7 @@ func (s *Service) NotifyUpgradeComplete(ctx context.Context, agentID, conversati
 		// can take many seconds.
 		bg := context.Background()
 		if err := s.resumeConversation(bg, conversationID); err != nil {
-			s.logger.Error("sysagent: auto-resume after upgrade-notify failed",
+			s.logger.Error("sysagent: auto-resume after outcome-notify failed",
 				zap.Stringer("conversation", conversationID), zap.Error(err))
 		}
 	}()
@@ -113,6 +130,19 @@ func upgradeOutcomeRendering(status string) (prefix, source string) {
 	// Unknown status — surface verbatim rather than dropping the
 	// notification entirely. The LLM still sees something useful.
 	return "[Upgrade " + status + "] ", "upgrade"
+}
+
+// buildOutcomeRendering returns (prefix, source) for an initial build's two
+// outcomes. Reuses the upgrade bubble sources ("upgrade"/"error") so the UI
+// renders these notifications identically; only the prefix differs.
+func buildOutcomeRendering(status string) (prefix, source string) {
+	switch status {
+	case "success":
+		return "[Build succeeded] ", "upgrade"
+	case "error":
+		return "[Build failed] ", "error"
+	}
+	return "[Build " + status + "] ", "upgrade"
 }
 
 // appendInjectedMessage persists a system-injected message into the

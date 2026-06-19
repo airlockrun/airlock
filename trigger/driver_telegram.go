@@ -658,7 +658,10 @@ func (d *TelegramDriver) SendParts(ctx context.Context, token string, chatID int
 
 	flush := func() {
 		if textBuf.Len() > 0 {
-			_, _ = d.sendMessage(ctx, token, chatID, textBuf.String())
+			// Convert markdown to Telegram HTML — sendMessage sends with
+			// parse_mode=HTML, so raw markdown (e.g. **bold**) would render
+			// literally. Mirrors the SendStream path.
+			_, _ = d.sendMessage(ctx, token, chatID, markdownToTelegramHTML(textBuf.String()))
 			textBuf.Reset()
 		}
 	}

@@ -60,17 +60,18 @@ func (s *Service) toolCreateAgent() tool.Tool {
 			}
 			p := principalFromCtx(ctx)
 			out, err := s.agents.Create(ctx, p, agentssvc.CreateRequest{
-				Name:             in.Name,
-				Slug:             in.Slug,
-				Description:      in.Description,
-				BuildModel:       in.BuildModel,
-				BuildProviderID:  in.BuildProviderID,
-				ExecModel:        in.ExecModel,
-				ExecProviderID:   in.ExecProviderID,
-				Instructions:     in.Instructions,
-				GitRemoteURL:     in.GitRemoteURL,
-				GitCredentialID:  in.GitCredentialID,
-				GitDefaultBranch: in.GitDefaultBranch,
+				Name:                 in.Name,
+				Slug:                 in.Slug,
+				Description:          in.Description,
+				BuildModel:           in.BuildModel,
+				BuildProviderID:      in.BuildProviderID,
+				ExecModel:            in.ExecModel,
+				ExecProviderID:       in.ExecProviderID,
+				Instructions:         in.Instructions,
+				GitRemoteURL:         in.GitRemoteURL,
+				GitCredentialID:      in.GitCredentialID,
+				GitDefaultBranch:     in.GitDefaultBranch,
+				SystemConversationID: conversationIDFromCtx(ctx),
 			})
 			if err != nil {
 				return errResult(err), nil

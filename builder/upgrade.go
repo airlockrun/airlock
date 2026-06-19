@@ -36,6 +36,16 @@ type PostUpgradeSystemNotifier interface {
 	NotifyUpgradeComplete(ctx context.Context, agentID, conversationID uuid.UUID, status, message string) error
 }
 
+// PostBuildSystemNotifier is the initial-build counterpart of
+// PostUpgradeSystemNotifier: called after a build kicked off by a
+// system-agent create_agent tool finishes (success or failure), so the
+// system agent surfaces the outcome and resumes. Only the system-agent
+// create path sets BuildInput.SystemConversationID; the web create path
+// has none and gets no notification (status shows in the build view).
+type PostBuildSystemNotifier interface {
+	NotifyBuildComplete(ctx context.Context, agentID, conversationID uuid.UUID, status, message string) error
+}
+
 // UpgradeInput describes an upgrade request.
 //
 // ConversationID and SystemConversationID are mutually exclusive: an upgrade
