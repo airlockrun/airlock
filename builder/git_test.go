@@ -81,14 +81,16 @@ func TestCommitScaffold(t *testing.T) {
 	}
 }
 
-func TestCloneAgentRepo(t *testing.T) {
+// scaffoldedRepo inits a per-agent repo, commits the scaffold, and merges to
+// main — the steady state the codegen git helpers operate on.
+func scaffoldedRepo(t *testing.T) string {
+	t.Helper()
 	base := t.TempDir()
-	agentID := "clone-agent"
+	agentID := "git-helper-agent"
 	if err := InitAgentRepo(base, agentID); err != nil {
 		t.Fatalf("InitAgentRepo: %v", err)
 	}
 	repoPath := AgentRepoPath(base, agentID)
-
 	data := scaffold.ScaffoldData{
 		AgentID:         agentID,
 		Module:          "agent",
@@ -101,18 +103,97 @@ func TestCloneAgentRepo(t *testing.T) {
 	if err := MergeBranch(repoPath, "build/init"); err != nil {
 		t.Fatalf("MergeBranch: %v", err)
 	}
+	return repoPath
+}
 
-	checkoutDir := filepath.Join(t.TempDir(), "checkout")
-	mainBranch := "main"
-	if err := CloneAgentRepo(repoPath, mainBranch, checkoutDir); err != nil {
-		mainBranch = "master"
-		if err2 := CloneAgentRepo(repoPath, mainBranch, checkoutDir); err2 != nil {
-			t.Fatalf("CloneAgentRepo: main=%v, master=%v", err, err2)
-		}
+func TestMaterializeBranch(t *testing.T) {
+	repoPath := scaffoldedRepo(t)
+	workDir := filepath.Join(t.TempDir(), "ws")
+
+	if err := MaterializeBranch(repoPath, "main", workDir); err != nil {
+		t.Fatalf("MaterializeBranch: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(workDir, "main.go")); err != nil {
+		t.Fatal("main.go not materialized at workdir root")
+	}
+	// The whole point: no .git reachable by the codegen container.
+	if _, err := os.Stat(filepath.Join(workDir, ".git")); !os.IsNotExist(err) {
+		t.Fatalf("workDir must not contain .git, got stat err=%v", err)
+	}
+}
+
+func TestSyncWorkdirToRepoAndCommit(t *testing.T) {
+	repoPath := scaffoldedRepo(t)
+	workDir := filepath.Join(t.TempDir(), "ws")
+	if err := MaterializeBranch(repoPath, "main", workDir); err != nil {
+		t.Fatalf("MaterializeBranch: %v", err)
 	}
 
-	if _, err := os.Stat(filepath.Join(checkoutDir, "main.go")); err != nil {
-		t.Fatal("main.go not found at clone root")
+	// Agent edits: modify a tracked file, add a new one, delete a tracked
+	// one, and drop an excluded DIAGNOSTICS.md that must never be committed.
+	if err := os.WriteFile(filepath.Join(workDir, "main.go"), []byte("package main\n\nfunc main() {}\n"), 0o644); err != nil {
+		t.Fatalf("modify main.go: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workDir, "added.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatalf("add file: %v", err)
+	}
+	if err := os.Remove(filepath.Join(workDir, "go.mod")); err != nil {
+		t.Fatalf("delete go.mod: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workDir, "DIAGNOSTICS.md"), []byte("secret context"), 0o644); err != nil {
+		t.Fatalf("write DIAGNOSTICS.md: %v", err)
+	}
+
+	if err := SyncWorkdirToRepo(workDir, repoPath, []string{"DIAGNOSTICS.md"}); err != nil {
+		t.Fatalf("SyncWorkdirToRepo: %v", err)
+	}
+
+	// repoPath working tree should mirror workDir minus DIAGNOSTICS.md.
+	if _, err := os.Stat(filepath.Join(repoPath, "added.go")); err != nil {
+		t.Error("added.go not mirrored into repo")
+	}
+	if _, err := os.Stat(filepath.Join(repoPath, "go.mod")); !os.IsNotExist(err) {
+		t.Errorf("go.mod should have been deleted from repo, stat err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(repoPath, "DIAGNOSTICS.md")); !os.IsNotExist(err) {
+		t.Error("DIAGNOSTICS.md must not be mirrored into repo")
+	}
+
+	hash, committed, err := CommitWorktree(repoPath, "test change")
+	if err != nil {
+		t.Fatalf("CommitWorktree: %v", err)
+	}
+	if !committed || hash == "" {
+		t.Fatalf("expected a commit, got committed=%v hash=%q", committed, hash)
+	}
+
+	// DIAGNOSTICS.md must not be tracked in the resulting commit.
+	tracked, err := gitOutput(repoPath, "ls-files")
+	if err != nil {
+		t.Fatalf("ls-files: %v", err)
+	}
+	if strings.Contains(tracked, "DIAGNOSTICS.md") {
+		t.Error("DIAGNOSTICS.md leaked into the commit")
+	}
+	if !strings.Contains(tracked, "added.go") {
+		t.Error("added.go not tracked after commit")
+	}
+	if strings.Contains(tracked, "go.mod") {
+		t.Error("go.mod deletion not committed")
+	}
+}
+
+func TestCommitWorktreeCleanTreeNoOp(t *testing.T) {
+	repoPath := scaffoldedRepo(t)
+	hash, committed, err := CommitWorktree(repoPath, "no changes")
+	if err != nil {
+		t.Fatalf("CommitWorktree: %v", err)
+	}
+	if committed {
+		t.Error("clean tree should not produce a commit")
+	}
+	if hash == "" {
+		t.Error("clean-tree no-op should still return current HEAD")
 	}
 }
 
@@ -146,49 +227,6 @@ func TestMergeBranch(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(repoPath, "main.go")); err != nil {
 		t.Fatal("main.go not found at repo root after merge")
-	}
-}
-
-func TestCommitAndPush(t *testing.T) {
-	base := t.TempDir()
-	agentID := "push-agent"
-	if err := InitAgentRepo(base, agentID); err != nil {
-		t.Fatalf("InitAgentRepo: %v", err)
-	}
-	repoPath := AgentRepoPath(base, agentID)
-
-	data := scaffold.ScaffoldData{
-		AgentID:         agentID,
-		Module:          "agent",
-		GoVersion:       "1.26",
-		AgentSDKVersion: "v1.0.0",
-	}
-	if _, err := CommitScaffold(repoPath, data); err != nil {
-		t.Fatalf("CommitScaffold: %v", err)
-	}
-	if err := MergeBranch(repoPath, "build/init"); err != nil {
-		t.Fatalf("MergeBranch: %v", err)
-	}
-
-	checkoutDir := filepath.Join(t.TempDir(), "checkout")
-	branch := "main"
-	if err := CloneAgentRepo(repoPath, branch, checkoutDir); err != nil {
-		branch = "master"
-		if err2 := CloneAgentRepo(repoPath, branch, checkoutDir); err2 != nil {
-			t.Fatalf("CloneAgentRepo: %v", err2)
-		}
-	}
-
-	if err := os.WriteFile(filepath.Join(checkoutDir, "test.txt"), []byte("test content"), 0o644); err != nil {
-		t.Fatalf("write test file: %v", err)
-	}
-
-	hash, err := CommitAndPush(checkoutDir, "add test file")
-	if err != nil {
-		t.Fatalf("CommitAndPush: %v", err)
-	}
-	if hash == "" {
-		t.Fatal("expected non-empty commit hash")
 	}
 }
 

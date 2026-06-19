@@ -110,6 +110,41 @@ func (q *Queries) GetAgentBuild(ctx context.Context, id pgtype.UUID) (AgentBuild
 	return i, err
 }
 
+const getLatestBuildForAgent = `-- name: GetLatestBuildForAgent :one
+SELECT id, agent_id, type, status, instructions, source_ref, image_ref, sol_log, docker_log, log_seq, error_message, started_at, finished_at, llm_calls, llm_tokens_in, llm_tokens_out, llm_tokens_cached, llm_cost_estimate, rollback_target_id, sdk_version, todos, exit_status, exit_message FROM agent_builds WHERE agent_id = $1 ORDER BY started_at DESC LIMIT 1
+`
+
+func (q *Queries) GetLatestBuildForAgent(ctx context.Context, agentID pgtype.UUID) (AgentBuild, error) {
+	row := q.db.QueryRow(ctx, getLatestBuildForAgent, agentID)
+	var i AgentBuild
+	err := row.Scan(
+		&i.ID,
+		&i.AgentID,
+		&i.Type,
+		&i.Status,
+		&i.Instructions,
+		&i.SourceRef,
+		&i.ImageRef,
+		&i.SolLog,
+		&i.DockerLog,
+		&i.LogSeq,
+		&i.ErrorMessage,
+		&i.StartedAt,
+		&i.FinishedAt,
+		&i.LlmCalls,
+		&i.LlmTokensIn,
+		&i.LlmTokensOut,
+		&i.LlmTokensCached,
+		&i.LlmCostEstimate,
+		&i.RollbackTargetID,
+		&i.SdkVersion,
+		&i.Todos,
+		&i.ExitStatus,
+		&i.ExitMessage,
+	)
+	return i, err
+}
+
 const listAgentBuildsByAgent = `-- name: ListAgentBuildsByAgent :many
 SELECT id, agent_id, type, status, instructions, error_message, source_ref, image_ref, started_at, finished_at,
        llm_calls, llm_tokens_in, llm_tokens_out, llm_tokens_cached, llm_cost_estimate,

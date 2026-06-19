@@ -66,6 +66,9 @@ WHERE agent_builds.id = @build_id;
 -- name: GetAgentBuild :one
 SELECT * FROM agent_builds WHERE id = $1;
 
+-- name: GetLatestBuildForAgent :one
+SELECT * FROM agent_builds WHERE agent_id = $1 ORDER BY started_at DESC LIMIT 1;
+
 -- name: ListAgentBuildsByAgent :many
 SELECT id, agent_id, type, status, instructions, error_message, source_ref, image_ref, started_at, finished_at,
        llm_calls, llm_tokens_in, llm_tokens_out, llm_tokens_cached, llm_cost_estimate,

@@ -382,6 +382,16 @@ func (b *BuildService) Execute(ctx context.Context, plan BuildPlan) (string, err
 	}
 
 	// ── Phase D: build the image at current HEAD ───────────────────────
+	//
+	// Deploy invariant: the per-agent repo's `main` and the agent's deployed
+	// `image_ref` are intentionally decoupled. Codegen already committed +
+	// merged to `main` in Phase C, so an unbuildable commit can land there —
+	// but the container swap (Phase F) and the `image_ref`/`source_ref` write
+	// (Phase G) run ONLY after this build and migration validation (Phase E)
+	// pass. Every failure below calls completeBuild("failed", …) and returns
+	// without deploying, so the agent stays on its last buildable image. A
+	// broken `main` is expected (iterate on top, or rollback→upgrade); it is
+	// never deployed.
 	publishPhase("image")
 	logLine("Building Docker image...")
 	contextDir := repoPath
