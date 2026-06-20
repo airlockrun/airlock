@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"github.com/airlockrun/goai/model"
 	"github.com/airlockrun/goai/stream"
 	solprovider "github.com/airlockrun/sol/provider"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"
 )
@@ -196,13 +198,21 @@ type ndJSONEvent struct {
 // request, then loads the row by FK and decrypts its API key.
 //
 // Precedence:
-//  1. slug declared in agent_model_slots with a non-empty assigned_model
-//     (and a non-NULL assigned_provider_id pinning the row)
-//  2. agent's per-capability override pair (*_provider_id + *_model)
-//  3. system_settings capability default pair
+//  1. A non-empty slug names a registered agent_model_slots row:
+//     - bound (assigned_provider_id + assigned_model) ⇒ use it directly
+//     - unbound ⇒ resolve the default for the SLOT's declared capability,
+//     not the request-supplied one (the slot owns the capability — it is
+//     what the operator sees and binds in the UI)
+//     An unregistered non-empty slug is a loud error: the agentsdk getters
+//     require RegisterModel, so a missing row means a stale/typo'd slug, not
+//     something to silently route to a default.
+//  2. An empty slug is the capability-routed path used by the built-in media
+//     tools (transcribe/vision/image/speech/embedding): resolve the default
+//     for the request-supplied capability.
 //
-// An undeclared or unbound slug quietly falls through to step 2.
-// Empty + invalid FK at every tier ⇒ "no model configured" error.
+// Steps 1(unbound) and 2 then walk the agent's per-capability override pair,
+// then the system_settings capability default pair (modelForCapability).
+// Empty FK at every tier ⇒ "no model configured" error.
 func (h *Handler) resolveModel(ctx context.Context, agentID, slug, capability string) (providerID, providerSlug, modelID, apiKey, baseURL string, err error) {
 	q := dbq.New(h.db.Pool())
 
@@ -218,12 +228,23 @@ func (h *Handler) resolveModel(ctx context.Context, agentID, slug, capability st
 	)
 
 	if slug != "" {
-		if slot, slotErr := q.GetAgentModelSlot(ctx, dbq.GetAgentModelSlotParams{
+		slot, slotErr := q.GetAgentModelSlot(ctx, dbq.GetAgentModelSlotParams{
 			AgentID: pgAgentID,
 			Slug:    slug,
-		}); slotErr == nil && slot.AssignedProviderID.Valid && slot.AssignedModel != "" {
+		})
+		switch {
+		case errors.Is(slotErr, pgx.ErrNoRows):
+			return "", "", "", "", "", fmt.Errorf("model slug %q is not registered for this agent — declare it with RegisterModel", slug)
+		case slotErr != nil:
+			return "", "", "", "", "", fmt.Errorf("look up model slot %q: %w", slug, slotErr)
+		case slot.AssignedProviderID.Valid && slot.AssignedModel != "":
 			providerRowID = slot.AssignedProviderID
 			modelName = slot.AssignedModel
+		default:
+			// Declared but unbound: the slot's declared capability governs the
+			// default fallback, overriding whatever capability the request
+			// carried — a vision slot must never resolve via the text/exec pair.
+			capability = slot.Capability
 		}
 	}
 
