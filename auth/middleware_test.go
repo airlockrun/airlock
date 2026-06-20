@@ -39,7 +39,7 @@ func TestMiddlewareInvalidToken(t *testing.T) {
 
 func TestMiddlewareValidToken(t *testing.T) {
 	userID := uuid.New()
-	token, _ := IssueToken(testSecret, userID, "test@example.com", "admin", false)
+	token, _ := IssueToken(testSecret, userID, "test@example.com", "", "admin", false)
 
 	var gotClaims *Claims
 	handler := Middleware(testSecret)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -84,7 +84,7 @@ func TestRequireTenantRoleHierarchy(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			userID := uuid.New()
-			token, _ := IssueToken(testSecret, userID, "test@example.com", tt.userRole, false)
+			token, _ := IssueToken(testSecret, userID, "test@example.com", "", tt.userRole, false)
 
 			handler := Middleware(testSecret)(RequireTenantRole(tt.minRole)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusOK)

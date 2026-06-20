@@ -158,7 +158,11 @@ func issueSessionCookie(w http.ResponseWriter, r *http.Request, jwtSecret string
 		return fmt.Errorf("parse user ID: %w", err)
 	}
 
-	token, err := auth.IssueTokenWithDuration(jwtSecret, uid, c.Email, c.TenantRole, false, relaySessionTTL)
+	// Display name is omitted from the relay code's positional, |-delimited
+	// format (free-text names could contain the delimiter); relay-origin
+	// sessions carry id+email only. Routes still get the name for the
+	// primary login/passkey/web flows.
+	token, err := auth.IssueTokenWithDuration(jwtSecret, uid, c.Email, "", c.TenantRole, false, relaySessionTTL)
 	if err != nil {
 		return fmt.Errorf("issue session token: %w", err)
 	}
