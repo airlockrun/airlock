@@ -329,7 +329,7 @@ async function onSubmit() {
     unsubBuild = ws.onMessage('agent.build', (payload: any) => {
       if (payload?.agentId !== agent.id) return
       // As soon as the build row exists, hand off to the dedicated Build page
-      // (task checklist + live actions + codegen/docker logs stream there).
+      // (task checklist + codegen/docker logs stream there).
       if (payload.buildId) {
         const buildId = payload.buildId
         unsubBuild?.()

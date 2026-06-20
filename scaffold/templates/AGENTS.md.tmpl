@@ -217,6 +217,18 @@ Design principles:
 - **Show the domain.** Render real data prominently — album art,
   weather illustrations, charts. Emoji-as-title-decoration is a
   placeholder you replaced.
+- **The web app IS the product — don't explain it, build it.** The web UI
+  is the user's web-side control surface over the same domain they also
+  drive from chat. They already know both exist and that changes sync, so
+  don't narrate that relationship or the mechanics: no "Chat controls"
+  panel, no "ask the agent in chat to do X", no "this page refreshes so
+  chat-side changes appear here", no meta tagline describing what the agent
+  is. Skip filler stat badges that just restate what's already on screen.
+  Never surface the agent's plumbing — tool inventory, model/SDK names,
+  internal IDs. Just build the genuinely useful, operable product and make
+  the web side as capable for the domain as chat is. If a line only makes
+  sense to someone who knows this is an LLM agent, it doesn't belong in the
+  UI.
 - **Don't double-wrap htmx swap targets.** Either the page owns the
   card and the partial swaps inner content, or the partial owns the
   card and the page renders only an empty target. Picking both
@@ -226,52 +238,28 @@ Design principles:
   layout conventions you committed to. The next rebuild should see
   what you decided.
 
-## Keeping the UI live
+## Updating the UI
 
-Agents mutate state from *two* directions: the user editing in the web
-UI, and the LLM running tools over chat (Telegram, Discord, web chat).
-A board the user is looking at can grow new cards mid-session because
-they told the bot "add a card for X" in another tab. The web view must
-reflect that without a manual reload.
+The web UI is action-driven: a user's POST swaps its own response, so the
+page reflects what they just did. **Don't poll on a timer** — a periodic
+swap resets scroll, focus, and in-progress drags out from under the user.
 
-The pattern: render every data-bearing region as its own template, then
-poll it from the page with htmx. The page is a shell; the partials
-refresh themselves.
+State can also change from the other surface (the user told the bot "add a
+card" over chat). Catch that the cheap way: **refresh data-bearing regions
+when the tab regains focus, not on an interval.** Cross-surface edits almost
+always happen while the user is away in the chat app, so refreshing on
+return shows the change exactly when they come back — and never fires
+mid-interaction. This is the "revalidate on focus" pattern; in htmx it's a
+trigger:
 
-```go
-// views/board.templ
-templ Board(v BoardView) {
-    @BoardCards(v) // initial render so the page isn't empty pre-poll
-}
-
-templ BoardCards(v BoardView) {
-    <div id="board-cards"
-         hx-get="/board/cards"
-         hx-trigger="load, every 5s [document.visibilityState === 'visible']"
-         hx-swap="outerHTML"
-         class="grid …">
-        for _, c := range v.Cards { @Card(c) }
-    </div>
-}
+```
+hx-trigger="visibilitychange[document.visibilityState === 'visible'] from:document"
 ```
 
-Rules:
+If the user scrolls or drags inside that region, refresh the parts that
+changed rather than replacing the scroll container.
 
-- **One handler per refreshable region.** `GET /board/cards` returns
-  the partial template only — no layout, no surrounding chrome. Same
-  view-model shape as the embedded initial render so they stay in
-  sync.
-- **`[document.visibilityState === 'visible']`** on every polling
-  trigger. Without it, htmx keeps polling for a hidden tab — quiet
-  battery drain on phones and useless load on the agent.
-- **Match the cadence to the data.** Kanban / queue / chat-log feel:
-  3–5s. Slower-moving lists (members, settings): 15–30s. Anything that
-  shouldn't auto-change: don't poll, refresh on user action.
-- **Don't double-wrap.** The polled element IS the swap target — its
-  outer `<div id="board-cards">` must match the partial's. Wrapping
-  again on the page produces nested duplicates (see the rule above
-  about htmx swap targets).
-- **User actions still drive optimistic updates** — POSTs from the UI
-  should swap their own response immediately rather than waiting for
-  the next poll. Polling is the *fallback* that catches chat-side
-  mutations.
+This refocus refresh is the general-case default. A few apps genuinely need
+real-time state — a chat UI, a live feed, presence — where waiting for
+refocus isn't acceptable. For those, the approach is your call; just keep
+the don't-disrupt-the-user rule above.

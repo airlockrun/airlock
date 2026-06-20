@@ -27,11 +27,10 @@ import (
 	"go.uber.org/zap"
 )
 
-// buildSink receives structured codegen activity. The builder's
-// buildPublisher implements it to stream live actions and persist + publish
-// the todo list; nil in non-build callers (e.g. sol CLI parity tests).
+// buildSink receives the codegen todo snapshot. The builder's buildPublisher
+// implements it to persist + publish the todo list; nil in non-build callers
+// (e.g. sol CLI parity tests).
 type buildSink interface {
-	OnAction(activity.Action)
 	OnTodos(todosJSON []byte, done, total int)
 }
 
@@ -547,13 +546,12 @@ func subscribeForLogs(b *bus.Bus, cb func(string), sink buildSink) {
 		if sink == nil {
 			return
 		}
-		switch tr.ToolName {
-		case "todowrite", "todoread":
+		// Todo snapshots drive the Tasks checklist + the "N/M" badge; every
+		// other tool is represented by its compact codegen-log line above.
+		if tr.ToolName == "todowrite" || tr.ToolName == "todoread" {
 			todosJSON, _ := json.Marshal(tr.Metadata["todos"])
 			done, total := activity.TodoCounts(tr.Metadata)
 			sink.OnTodos(todosJSON, done, total)
-		default:
-			sink.OnAction(act)
 		}
 	})
 	b.Subscribe(bus.StreamStepComplete, func(e bus.Event) {

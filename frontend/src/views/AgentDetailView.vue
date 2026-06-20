@@ -375,7 +375,12 @@ onMounted(async () => {
       toast.add({ severity: 'success', summary: 'Build complete', life: 3000 })
       tabsKey.value++
     } else if (payload.status === 'failed') {
-      if (agent.value) agent.value.upgradeStatus = 'failed'
+      if (agent.value) {
+        agent.value.upgradeStatus = 'failed'
+        // Initial build that failed never reached active — drop it out of
+        // 'building' so the badge clears (mirrors the cancelled branch).
+        if (agent.value.status === 'building') agent.value.status = 'failed'
+      }
       toast.add({ severity: 'error', summary: payload.error || 'Build failed', life: 10000 })
       tabsKey.value++
     } else if (payload.status === 'cancelled') {
@@ -586,7 +591,7 @@ function goToChat() {
     </div>
 
     <!-- Build in progress: link to the dedicated Build page (the codegen +
-         docker logs, task checklist, and live actions stream there). -->
+         docker logs, and task checklist stream there). -->
     <div
       v-if="agent.status === 'building' || agent.upgradeStatus === 'building'"
       style="display: flex; align-items: center; gap: 0.75rem; margin-bottom: 1rem"

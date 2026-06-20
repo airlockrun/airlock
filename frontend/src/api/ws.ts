@@ -127,7 +127,7 @@ export class AirlockWS {
   }
 
   /**
-   * Subscribe to a build's verbose topic (codegen log, live actions, todos).
+   * Subscribe to a build's verbose topic (codegen log + todos).
    * The Build page calls this on mount; the subscription is remembered and
    * re-sent on reconnect. The server gates it on build-view access.
    */

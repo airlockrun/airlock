@@ -5,16 +5,31 @@ import { timestampDate } from '@bufbuild/protobuf/wkt'
 import { fromJson } from '@bufbuild/protobuf'
 import { GetAgentDetailResponseSchema } from '@/gen/airlock/v1/api_pb'
 import { useBuildStream } from '@/composables/useBuildStream'
+import { useToast } from 'primevue/usetoast'
 import api from '@/api/client'
 
 const route = useRoute()
+const toast = useToast()
 const agentId = route.params.id as string
 const buildId = route.params.buildId as string
 const agentName = ref(agentId.slice(0, 8))
 
-const { build, solLines, dockerLines, actions, todos, phase, loaded } = useBuildStream(agentId, buildId)
+const { build, solLines, dockerLines, todos, phase, loaded } = useBuildStream(agentId, buildId)
 
 const isBuilding = computed(() => build.value?.status === 'building')
+const canceling = ref(false)
+
+async function cancelBuild() {
+  canceling.value = true
+  try {
+    await api.post(`/api/v1/agents/${agentId}/builds/cancel`)
+    toast.add({ severity: 'info', summary: 'Build cancelled', life: 3000 })
+  } catch (err: any) {
+    toast.add({ severity: 'error', summary: err.response?.data?.error || 'Cancel failed', life: 5000 })
+  } finally {
+    canceling.value = false
+  }
+}
 const phaseLabel = computed(() => {
   switch (phase.value) {
     case 'image': return 'Building image…'
@@ -60,18 +75,6 @@ const todoIcon = (status: string) => {
 }
 const todoClass = (status: string) => `todo-${status}`
 
-const actionIcon = (kind: string) => {
-  switch (kind) {
-    case 'command': case 'bash': return 'pi pi-terminal'
-    case 'search': case 'grep': case 'glob': return 'pi pi-search'
-    case 'read': return 'pi pi-file'
-    case 'write': return 'pi pi-file-edit'
-    case 'edit': return 'pi pi-pencil'
-    case 'error': case 'denied': return 'pi pi-exclamation-triangle'
-    default: return 'pi pi-bolt'
-  }
-}
-
 onMounted(() => {
   api.get(`/api/v1/agents/${agentId}`).then(({ data }) => {
     const agent = fromJson(GetAgentDetailResponseSchema, data).agent
@@ -96,6 +99,16 @@ onMounted(() => {
       <span v-if="isBuilding && phaseLabel" style="display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.875rem; color: var(--p-primary-color); font-weight: 500">
         <i class="pi pi-spin pi-spinner" style="font-size: 0.75rem" /> {{ phaseLabel }}
       </span>
+      <Button
+        v-if="isBuilding"
+        label="Cancel build"
+        icon="pi pi-times"
+        severity="danger"
+        outlined
+        size="small"
+        :loading="canceling"
+        @click="cancelBuild"
+      />
       <span v-if="todos.length" style="font-size: 0.875rem; color: var(--p-text-muted-color)">
         {{ tasksDone }}/{{ todos.length }} tasks
       </span>
@@ -133,7 +146,7 @@ onMounted(() => {
       <pre class="log-panel">{{ build.instructions }}</pre>
     </div>
 
-    <!-- Section 1: TODO checklist -->
+    <!-- Tasks checklist -->
     <div v-if="todos.length" style="margin-bottom: 1.5rem">
       <h3 style="margin-bottom: 0.75rem">Tasks ({{ tasksDone }}/{{ todos.length }})</h3>
       <ul class="todo-list">
@@ -143,17 +156,7 @@ onMounted(() => {
       </ul>
     </div>
 
-    <!-- Section 2: Live actions -->
-    <div v-if="actions.length" style="margin-bottom: 1.5rem">
-      <h3 style="margin-bottom: 0.75rem">Activity</h3>
-      <ul class="action-list">
-        <li v-for="(a, i) in actions" :key="i" :class="{ 'action-error': a.kind === 'error' || a.kind === 'denied' }">
-          <i :class="actionIcon(a.kind)" /> <span>{{ a.text }}</span>
-        </li>
-      </ul>
-    </div>
-
-    <!-- Section 3: Codegen log -->
+    <!-- Codegen log -->
     <div style="margin-bottom: 1.5rem">
       <h3 style="margin-bottom: 0.75rem">Codegen log</h3>
       <div ref="solScroll" class="stream-panel stream-sol">
@@ -162,7 +165,7 @@ onMounted(() => {
       </div>
     </div>
 
-    <!-- Section 4: Docker build log -->
+    <!-- Docker build log -->
     <div v-if="dockerLines.length > 0" style="margin-bottom: 1.5rem">
       <h3 style="margin-bottom: 0.75rem">Docker build log</h3>
       <div ref="dockerScroll" class="stream-panel stream-docker">
@@ -204,8 +207,7 @@ onMounted(() => {
 .stream-sol { color: var(--p-green-400); }
 .stream-docker { color: var(--p-blue-400); }
 
-.todo-list,
-.action-list {
+.todo-list {
   list-style: none;
   margin: 0;
   padding: 0;
@@ -213,15 +215,13 @@ onMounted(() => {
   flex-direction: column;
   gap: 0.35rem;
 }
-.todo-list li,
-.action-list li {
+.todo-list li {
   display: flex;
   align-items: baseline;
   gap: 0.5rem;
   font-size: 0.9rem;
 }
-.todo-list .pi,
-.action-list .pi {
+.todo-list .pi {
   font-size: 0.8rem;
 }
 .todo-completed { color: var(--p-green-500); }
@@ -230,6 +230,4 @@ onMounted(() => {
 .todo-cancelled { color: var(--p-text-muted-color); }
 .todo-cancelled span { text-decoration: line-through; opacity: 0.6; }
 .todo-pending { color: var(--p-text-color); }
-.action-error { color: var(--p-red-400); }
-.action-list { max-height: 20rem; overflow-y: auto; }
 </style>

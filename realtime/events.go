@@ -61,21 +61,6 @@ func (p *BuildEventPublisher) PublishBuildLogLine(ctx context.Context, agentID, 
 	_ = p.pubsub.Publish(ctx, buildID, env)
 }
 
-// PublishBuildAction publishes one compact tool action on the per-build topic
-// (the Build page's "Live actions" feed).
-func (p *BuildEventPublisher) PublishBuildAction(ctx context.Context, buildID uuid.UUID, seq int64, kind, label, detail, toolCallID, toolName string) {
-	env := NewEnvelope("agent.build.action", buildID.String(), &airlockv1.AgentBuildActionEvent{
-		BuildId:    buildID.String(),
-		Seq:        seq,
-		Kind:       kind,
-		Label:      label,
-		Detail:     detail,
-		ToolCallId: toolCallID,
-		ToolName:   toolName,
-	})
-	_ = p.pubsub.Publish(ctx, buildID, env)
-}
-
 // PublishBuildTodos publishes the agent's full todo list on the per-build
 // topic. todosJSON is the same jsonb blob persisted to agent_builds.todos.
 func (p *BuildEventPublisher) PublishBuildTodos(ctx context.Context, buildID uuid.UUID, seq int64, todosJSON []byte) {
