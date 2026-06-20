@@ -476,18 +476,6 @@ message TodoItem {
   string id = 4;
 }
 
-// AgentBuildActionEvent is one compact tool action for the Build page's
-// "Live actions" feed. Published on the per-build topic.
-message AgentBuildActionEvent {
-  string build_id = 1;
-  int64  seq = 2;        // shares the build's monotonic seq for dedup
-  string kind = 3;       // command | search | read | write | edit | exit | error | tool
-  string label = 4;      // headline, e.g. "Read File: main.go"
-  string detail = 5;     // secondary, e.g. "120 lines"
-  string tool_call_id = 6;
-  string tool_name = 7;
-}
-
 // AgentBuildTodoEvent carries the full todo list as the agent rewrites it.
 // Published on the per-build topic.
 message AgentBuildTodoEvent {

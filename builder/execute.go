@@ -14,7 +14,6 @@ import (
 	"github.com/airlockrun/airlock/container"
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/airlockrun/airlock/scaffold"
-	"github.com/airlockrun/sol/activity"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"
@@ -35,12 +34,6 @@ type buildPublisher struct {
 	bl         *buildLog
 	tasksDone  int32
 	tasksTotal int32
-}
-
-// OnAction streams one compact tool action to the per-build topic.
-func (bp *buildPublisher) OnAction(a activity.Action) {
-	bp.events.PublishBuildAction(context.Background(), bp.buildUUID, bp.bl.nextSeq(),
-		a.Kind, a.Label, a.Detail, a.ToolCallID, a.ToolName)
 }
 
 // OnTodos persists the todo snapshot, streams it on the per-build topic, and
@@ -320,6 +313,13 @@ func (b *BuildService) Execute(ctx context.Context, plan BuildPlan) (string, err
 	// ── Phase C: codegen (Sol) if Instruction is non-empty ─────────────
 	commitHash, exitStatus, exitMessage, codegenErr := b.runCodegen(ctx, plan, agent, build, agentID, agentUUID, testDBURL, testDBPSQL, cloneName, goProxyDir, solLog, bp)
 	if codegenErr != nil {
+		// User cancelled mid-codegen: record it as cancelled (not failed) so
+		// the lifecycle event clears the "building" badge and the row reads
+		// honestly.
+		if errors.Is(codegenErr, context.Canceled) {
+			completeBuild("cancelled", "cancelled by user", "", commitHash, "")
+			return "", codegenErr
+		}
 		// A "refused" exit is recorded distinctly: the request was out
 		// of scope, the existing agent is untouched — not a build that
 		// failed. Callers (RunUpgrade/Rollback) likewise unwrap

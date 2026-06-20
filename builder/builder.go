@@ -29,7 +29,6 @@ import (
 type EventPublisher interface {
 	PublishBuildEvent(ctx context.Context, agentID, buildID uuid.UUID, status, errMsg, phase string, tasksDone, tasksTotal int32)
 	PublishBuildLogLine(ctx context.Context, agentID, buildID uuid.UUID, seq int64, stream, line string)
-	PublishBuildAction(ctx context.Context, buildID uuid.UUID, seq int64, kind, label, detail, toolCallID, toolName string)
 	PublishBuildTodos(ctx context.Context, buildID uuid.UUID, seq int64, todosJSON []byte)
 }
 
@@ -39,8 +38,6 @@ type noopPublisher struct{}
 func (noopPublisher) PublishBuildEvent(context.Context, uuid.UUID, uuid.UUID, string, string, string, int32, int32) {
 }
 func (noopPublisher) PublishBuildLogLine(context.Context, uuid.UUID, uuid.UUID, int64, string, string) {
-}
-func (noopPublisher) PublishBuildAction(context.Context, uuid.UUID, int64, string, string, string, string, string) {
 }
 func (noopPublisher) PublishBuildTodos(context.Context, uuid.UUID, int64, []byte) {}
 
