@@ -170,9 +170,36 @@ func TestResolveModel_Precedence(t *testing.T) {
 		}
 	})
 
-	t.Run("undeclared slug falls back to tier 2", func(t *testing.T) {
-		if got := resolveTextModel(t, "brand-new-slug"); got != "agent-exec" {
-			t.Errorf("modelID = %q, want %q (tier-2 fallback)", got, "agent-exec")
+	t.Run("undeclared slug is a loud error", func(t *testing.T) {
+		if _, _, _, _, _, err := ah.resolveModel(ctx, agentID.String(), "brand-new-slug", "text"); err == nil {
+			t.Error("expected error for an unregistered slug, got nil")
+		}
+	})
+
+	t.Run("unbound slot uses slot capability, not request capability", func(t *testing.T) {
+		// A vision slot left unbound must fall back to the VISION default even
+		// when the request carries capability="text" — the slot owns the
+		// capability. Regression for vision calls silently routing to the
+		// text/exec model.
+		if _, err := testDB.Pool().Exec(ctx,
+			`UPDATE system_settings SET default_vision_provider_id=$1, default_vision_model='system-vision' WHERE id=true`,
+			provFK,
+		); err != nil {
+			t.Fatalf("set system default vision model: %v", err)
+		}
+		if err := q.UpsertAgentModelSlot(ctx, dbq.UpsertAgentModelSlotParams{
+			AgentID:    toPgUUID(agentID),
+			Slug:       "see-food",
+			Capability: "vision",
+		}); err != nil {
+			t.Fatalf("UpsertAgentModelSlot: %v", err)
+		}
+		_, _, modelID, _, _, err := ah.resolveModel(ctx, agentID.String(), "see-food", "text")
+		if err != nil {
+			t.Fatalf("resolveModel(slug=see-food): %v", err)
+		}
+		if modelID != "system-vision" {
+			t.Errorf("modelID = %q, want %q (slot capability governs)", modelID, "system-vision")
 		}
 	})
 
