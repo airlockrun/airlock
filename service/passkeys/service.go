@@ -70,6 +70,7 @@ type Passkey struct {
 type LoginResult struct {
 	UserID             uuid.UUID
 	Email              string
+	DisplayName        string
 	TenantRole         string
 	MustChangePassword bool
 }
@@ -340,6 +341,7 @@ func (s *Service) LoginFinish(ctx context.Context, ceremonyID string, r *http.Re
 	return LoginResult{
 		UserID:             uuid.UUID(owner.ID.Bytes),
 		Email:              owner.Email,
+		DisplayName:        owner.DisplayName,
 		TenantRole:         owner.TenantRole,
 		MustChangePassword: owner.MustChangePassword,
 	}, nil

@@ -33,7 +33,7 @@ func userRequestProto(t *testing.T, method, path string, userID uuid.UUID, msg p
 	req := httptest.NewRequest(method, path, bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 
-	token, err := auth.IssueToken(testJWTSecret, userID, "test@example.com", "user", false)
+	token, err := auth.IssueToken(testJWTSecret, userID, "test@example.com", "", "user", false)
 	if err != nil {
 		t.Fatalf("IssueToken: %v", err)
 	}

@@ -175,7 +175,7 @@ func handleTGWebAppAuth(
 		return
 	}
 
-	token, err := auth.IssueTokenWithDuration(jwtSecret, uuid.UUID(user.ID.Bytes), user.Email, user.TenantRole, user.MustChangePassword, tgSessionTTL)
+	token, err := auth.IssueTokenWithDuration(jwtSecret, uuid.UUID(user.ID.Bytes), user.Email, user.DisplayName, user.TenantRole, user.MustChangePassword, tgSessionTTL)
 	if err != nil {
 		log.Error("tg webapp: issue session token failed", zap.Error(err))
 		writeError(w, http.StatusInternalServerError, "auth failed")

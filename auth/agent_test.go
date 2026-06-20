@@ -37,7 +37,7 @@ func TestAgentTokenRejectsUserJWT(t *testing.T) {
 	userID := uuid.New()
 
 	// Issue a user token (no agent_id claim).
-	userToken, err := IssueToken(secret, userID, "test@example.com", "admin", false)
+	userToken, err := IssueToken(secret, userID, "test@example.com", "Test User", "admin", false)
 	if err != nil {
 		t.Fatalf("IssueToken: %v", err)
 	}
@@ -121,7 +121,7 @@ func TestAgentMiddleware(t *testing.T) {
 	})
 
 	t.Run("user token rejected", func(t *testing.T) {
-		userToken, _ := IssueToken(secret, uuid.New(), "test@example.com", "admin", false)
+		userToken, _ := IssueToken(secret, uuid.New(), "test@example.com", "", "admin", false)
 		handler := AgentMiddleware(secret)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			t.Fatal("handler should not be called")
 		}))

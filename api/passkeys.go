@@ -155,12 +155,12 @@ func (h *PasskeyHandler) LoginFinish(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	accessToken, err := auth.IssueToken(h.jwtSecret, res.UserID, res.Email, res.TenantRole, res.MustChangePassword)
+	accessToken, err := auth.IssueToken(h.jwtSecret, res.UserID, res.Email, res.DisplayName, res.TenantRole, res.MustChangePassword)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	refreshToken, err := auth.IssueRefreshToken(h.jwtSecret, res.UserID, res.Email, res.TenantRole, res.MustChangePassword)
+	refreshToken, err := auth.IssueRefreshToken(h.jwtSecret, res.UserID, res.Email, res.DisplayName, res.TenantRole, res.MustChangePassword)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return

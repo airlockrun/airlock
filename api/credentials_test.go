@@ -68,7 +68,7 @@ func requestJSONAs(t *testing.T, method, path string, userID uuid.UUID, role str
 	req := httptest.NewRequest(method, path, strings.NewReader(reqBody))
 	req.Header.Set("Content-Type", "application/json")
 
-	token, err := auth.IssueToken(testJWTSecret, userID, "test@example.com", role, false)
+	token, err := auth.IssueToken(testJWTSecret, userID, "test@example.com", "", role, false)
 	if err != nil {
 		t.Fatalf("IssueToken: %v", err)
 	}

@@ -120,13 +120,13 @@ func (h *AuthHandler) Activate(w http.ResponseWriter, r *http.Request) {
 
 	userID := pgUUID(user.ID)
 
-	accessToken, err := auth.IssueToken(h.jwtSecret, userID, user.Email, user.TenantRole, user.MustChangePassword)
+	accessToken, err := auth.IssueToken(h.jwtSecret, userID, user.Email, user.DisplayName, user.TenantRole, user.MustChangePassword)
 	if err != nil {
 		logFor(r).Error("issue access token failed", zap.Error(err))
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	refreshToken, err := auth.IssueRefreshToken(h.jwtSecret, userID, user.Email, user.TenantRole, user.MustChangePassword)
+	refreshToken, err := auth.IssueRefreshToken(h.jwtSecret, userID, user.Email, user.DisplayName, user.TenantRole, user.MustChangePassword)
 	if err != nil {
 		logFor(r).Error("issue refresh token failed", zap.Error(err))
 		writeError(w, http.StatusInternalServerError, "internal error")
@@ -247,13 +247,13 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 
 	userID := pgUUID(user.ID)
 
-	accessToken, err := auth.IssueToken(h.jwtSecret, userID, user.Email, user.TenantRole, user.MustChangePassword)
+	accessToken, err := auth.IssueToken(h.jwtSecret, userID, user.Email, user.DisplayName, user.TenantRole, user.MustChangePassword)
 	if err != nil {
 		logFor(r).Error("issue access token failed", zap.Error(err))
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	refreshToken, err := auth.IssueRefreshToken(h.jwtSecret, userID, user.Email, user.TenantRole, user.MustChangePassword)
+	refreshToken, err := auth.IssueRefreshToken(h.jwtSecret, userID, user.Email, user.DisplayName, user.TenantRole, user.MustChangePassword)
 	if err != nil {
 		logFor(r).Error("issue refresh token failed", zap.Error(err))
 		writeError(w, http.StatusInternalServerError, "internal error")
@@ -359,7 +359,7 @@ func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	accessToken, err := auth.IssueToken(h.jwtSecret, userID, user.Email, user.TenantRole, user.MustChangePassword)
+	accessToken, err := auth.IssueToken(h.jwtSecret, userID, user.Email, user.DisplayName, user.TenantRole, user.MustChangePassword)
 	if err != nil {
 		logFor(r).Error("issue access token failed", zap.Error(err))
 		writeError(w, http.StatusInternalServerError, "internal error")
@@ -437,13 +437,13 @@ func (h *AuthHandler) ChangePassword(w http.ResponseWriter, r *http.Request) {
 
 	// Issue new tokens with the forced-change flag cleared — the password was
 	// just rotated, so the account is secured.
-	accessToken, err := auth.IssueToken(h.jwtSecret, userID, user.Email, user.TenantRole, false)
+	accessToken, err := auth.IssueToken(h.jwtSecret, userID, user.Email, user.DisplayName, user.TenantRole, false)
 	if err != nil {
 		logFor(r).Error("issue access token failed", zap.Error(err))
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	refreshToken, err := auth.IssueRefreshToken(h.jwtSecret, userID, user.Email, user.TenantRole, false)
+	refreshToken, err := auth.IssueRefreshToken(h.jwtSecret, userID, user.Email, user.DisplayName, user.TenantRole, false)
 	if err != nil {
 		logFor(r).Error("issue refresh token failed", zap.Error(err))
 		writeError(w, http.StatusInternalServerError, "internal error")

@@ -117,6 +117,7 @@ func SubdomainProxy(agentDomain string, database *db.DB, s3 *storage.S3Client, d
 
 		var userID uuid.UUID
 		var userEmail string
+		var userDisplayName string
 
 		if !isAssetGET {
 			// Look up the registered route — match exact paths first, then parameterized patterns.
@@ -165,6 +166,7 @@ func SubdomainProxy(agentDomain string, database *db.DB, s3 *storage.S3Client, d
 				}
 				userID = uid
 				userEmail = claims.Email
+				userDisplayName = claims.DisplayName
 
 			default:
 				log.Error("unknown route access level", zap.String("access", route.Access))
@@ -207,6 +209,9 @@ func SubdomainProxy(agentDomain string, database *db.DB, s3 *storage.S3Client, d
 				if userID != uuid.Nil {
 					req.Header.Set("X-User-ID", userID.String())
 					req.Header.Set("X-User-Email", userEmail)
+					if userDisplayName != "" {
+						req.Header.Set("X-User-Name", userDisplayName)
+					}
 				}
 			},
 			ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
