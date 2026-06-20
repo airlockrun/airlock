@@ -3,6 +3,7 @@ import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { create, fromJson } from '@bufbuild/protobuf'
 import { useAgentsStore } from '@/stores/agents'
+import { useBuildsStore } from '@/stores/builds'
 import { useCatalogStore } from '@/stores/catalog'
 import {
   useModelCapabilities,
@@ -29,6 +30,7 @@ import {
 
 const router = useRouter()
 const store = useAgentsStore()
+const buildsStore = useBuildsStore()
 const catalog = useCatalogStore()
 const providers = useProvidersStore()
 const modelsAllowed = useModelsAllowedStore()
@@ -240,10 +242,27 @@ function startPolling(agentId: string) {
       const { data } = await api.get(`/api/v1/agents/${agentId}`)
       const agent = fromJson(GetAgentDetailResponseSchema, data).agent
       if (!agent) return
+      // Build already finished before we got a chance to hand off — go to the
+      // agent page / surface the error.
       if (agent.status === 'active') {
         onBuildDone(agentId)
-      } else if (agent.status === 'failed') {
+        return
+      }
+      if (agent.status === 'failed') {
         onBuildFailed(agent.errorMessage)
+        return
+      }
+      // Still building: navigate to the build view as soon as the build row
+      // exists. This is the reliable hand-off; the WS 'agent.build' event is
+      // just the faster path when the subscription is already live (it can be
+      // missed in the race right after create).
+      await buildsStore.fetchBuilds(agentId)
+      const latest = buildsStore.builds[0]
+      if (latest?.id) {
+        unsubBuild?.()
+        unsubBuild = null
+        stopPolling()
+        router.push({ name: 'build-detail', params: { id: agentId, buildId: latest.id } })
       }
     } catch { /* ignore polling errors */ }
   }, 2000)
