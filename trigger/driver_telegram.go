@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"html"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -333,12 +332,13 @@ func (d *TelegramDriver) SendStream(ctx context.Context, br dbq.Bridge, external
 
 	var sb strings.Builder
 
-	// flushText sends the accumulated text as a final message and resets for the next segment.
-	// LLM output is markdown — convert to the HTML subset Telegram understands.
+	// flushText sends the accumulated text as a final message and resets for the
+	// next segment. LLM output is markdown — sent as a Rich Message so tables,
+	// headings, lists, and quotes render natively (verbatim, no conversion).
 	flushText := func() {
 		text := sb.String()
 		if text != "" {
-			_, _ = d.sendMessage(ctx, token, chatID, markdownToTelegramHTML(text))
+			_, _ = d.sendRichMessage(ctx, token, chatID, text, nil)
 			sb.Reset()
 		}
 	}
@@ -359,7 +359,7 @@ func (d *TelegramDriver) SendStream(ctx context.Context, br dbq.Bridge, external
 			flushText()
 			if echo {
 				msg := formatToolCall(ev.ToolName, ev.ToolInput)
-				_, _ = d.sendMessage(ctx, token, chatID, msg)
+				_, _ = d.sendRichMessage(ctx, token, chatID, msg, nil)
 			}
 
 		case "tool-result", "tool-error":
@@ -371,18 +371,18 @@ func (d *TelegramDriver) SendStream(ctx context.Context, br dbq.Bridge, external
 				continue
 			}
 			msg := formatToolResult(ev.ToolName, ev.ToolOutput, ev.ToolError)
-			_, _ = d.sendMessage(ctx, token, chatID, msg)
+			_, _ = d.sendRichMessage(ctx, token, chatID, msg, nil)
 
 		case "confirmation_required":
 			flushText()
-			text := formatConfirmation(ev.Permission, ev.Patterns, ev.Code)
+			text := formatConfirmation(ev.Description, ev.Permission, ev.Patterns, ev.Code)
 			kb := approvalKeyboard(ev.RunID)
-			_, _ = d.sendMessageWithButtons(ctx, token, chatID, text, kb)
+			_, _ = d.sendRichMessage(ctx, token, chatID, text, kb)
 
 		case "info":
 			flushText()
 			if ev.Text != "" {
-				_, _ = d.sendMessage(ctx, token, chatID, markdownToTelegramHTML(ev.Text))
+				_, _ = d.sendRichMessage(ctx, token, chatID, ev.Text, nil)
 			}
 		}
 	}
@@ -393,50 +393,56 @@ func (d *TelegramDriver) SendStream(ctx context.Context, br dbq.Bridge, external
 	return sb.String(), nil
 }
 
-// formatToolCall formats a tool call for Telegram display (HTML parse_mode).
-// Code content is wrapped in <pre> which renders as a fixed-width block and
-// requires no escaping of backticks, underscores, or asterisks.
+// codeFence wraps text in a Rich Markdown fenced code block — the rich
+// renderer's fixed-width block, the markdown analogue of the old <pre>.
+func codeFence(s string) string {
+	return "```\n" + s + "\n```"
+}
+
+// formatToolCall formats a tool call as Rich Markdown.
 func formatToolCall(toolName, input string) string {
 	var sb strings.Builder
-	sb.WriteString("▶ <b>")
-	sb.WriteString(html.EscapeString(toolName))
-	sb.WriteString("</b>")
+	sb.WriteString("▶ **")
+	sb.WriteString(toolName)
+	sb.WriteString("**")
 	if input != "" {
-		// For single-arg tools, try to extract just the value.
+		// For single-arg tools, show just the value.
+		val := input
 		var args map[string]any
 		if json.Unmarshal([]byte(input), &args) == nil && len(args) == 1 {
 			for _, v := range args {
-				sb.WriteString("\n<pre>")
-				sb.WriteString(html.EscapeString(fmt.Sprint(v)))
-				sb.WriteString("</pre>")
-				return sb.String()
+				val = fmt.Sprint(v)
 			}
 		}
-		sb.WriteString("\n<pre>")
-		sb.WriteString(html.EscapeString(input))
-		sb.WriteString("</pre>")
+		sb.WriteString("\n")
+		sb.WriteString(codeFence(val))
 	}
 	return sb.String()
 }
 
-// formatConfirmation renders the approval prompt body as HTML. Buttons are
-// attached separately via reply_markup. Patterns are intentionally omitted
+// formatConfirmation renders the approval prompt body as Rich Markdown. Buttons
+// are attached separately via reply_markup. Patterns are intentionally omitted
 // from the UI — for run_js they're "*", and for tools where they'd be
-// meaningful (bash, edit) the same info is either in the command/path
-// already embedded in code or not useful to the end user reviewing.
-func formatConfirmation(permission string, patterns []string, code string) string {
+// meaningful (bash, edit) the same info is either in the command/path already
+// embedded in code or not useful to the end user reviewing.
+func formatConfirmation(description, permission string, patterns []string, code string) string {
 	_ = patterns
 	var sb strings.Builder
-	sb.WriteString("🔐 <b>Confirmation required</b>")
-	if permission != "" {
-		sb.WriteString("\nPermission: <code>")
-		sb.WriteString(html.EscapeString(permission))
-		sb.WriteString("</code>")
+	sb.WriteString("🔐 **Confirmation required**")
+	// Lead with the plain-language description when the tool supplies one
+	// (run_js); otherwise fall back to the permission name. Not every tool
+	// carries a description.
+	if description != "" {
+		sb.WriteString("\n")
+		sb.WriteString(description)
+	} else if permission != "" {
+		sb.WriteString("\nPermission: `")
+		sb.WriteString(permission)
+		sb.WriteString("`")
 	}
 	if code != "" {
-		sb.WriteString("\n<pre>")
-		sb.WriteString(html.EscapeString(code))
-		sb.WriteString("</pre>")
+		sb.WriteString("\n")
+		sb.WriteString(codeFence(code))
 	}
 	return sb.String()
 }
@@ -488,19 +494,19 @@ func (d *TelegramDriver) scheduleCancelButton(ctx context.Context, token string,
 	_ = d.deleteMessage(delCtx, token, chatID, msgID)
 }
 
-// formatToolResult formats a tool result for Telegram display (HTML parse_mode).
+// formatToolResult formats a tool result as Rich Markdown.
 // output is the tool's string output (already unwrapped from tool.Result in prompt.go).
 func formatToolResult(toolName, output, toolError string) string {
 	if toolError != "" {
-		return "✗ <b>" + html.EscapeString(toolName) + "</b>: " + html.EscapeString(toolError)
+		return "✗ **" + toolName + "**: " + toolError
 	}
 	if output == "" {
-		return "✓ <b>" + html.EscapeString(toolName) + "</b>"
+		return "✓ **" + toolName + "**"
 	}
 	if len(output) > 500 {
 		output = output[:500] + "…"
 	}
-	return "✓ <b>" + html.EscapeString(toolName) + "</b>\n<pre>" + html.EscapeString(output) + "</pre>"
+	return "✓ **" + toolName + "**\n" + codeFence(output)
 }
 
 // GetMe calls the Telegram getMe API and returns the bot username.
@@ -710,10 +716,10 @@ func (d *TelegramDriver) SendParts(ctx context.Context, token string, chatID int
 
 	flush := func() {
 		if textBuf.Len() > 0 {
-			// Convert markdown to Telegram HTML — sendMessage sends with
-			// parse_mode=HTML, so raw markdown (e.g. **bold**) would render
-			// literally. Mirrors the SendStream path.
-			_, _ = d.sendMessage(ctx, token, chatID, markdownToTelegramHTML(textBuf.String()))
+			// Send as a Rich Message so markdown (tables, **bold**, etc.)
+			// renders natively. Mirrors the SendStream path. Media parts below
+			// still upload via sendPhoto/sendDocument.
+			_, _ = d.sendRichMessage(ctx, token, chatID, textBuf.String(), nil)
 			textBuf.Reset()
 		}
 	}
@@ -809,6 +815,42 @@ func (d *TelegramDriver) sendMessage(ctx context.Context, token string, chatID i
 // sendMessageWithButtons sends an HTML message with an attached inline keyboard.
 func (d *TelegramDriver) sendMessageWithButtons(ctx context.Context, token string, chatID int64, text string, keyboard map[string]any) (int64, error) {
 	return d.sendMessageInner(ctx, token, chatID, text, keyboard)
+}
+
+// sendRichMessage delivers agent content as a Bot API 10.1 Rich Message. The
+// markdown is passed through verbatim — Telegram's rich-markdown parser renders
+// tables, headings, lists, block quotes, and fenced code that the legacy HTML
+// subset (sendMessage) can't. reply_markup is supported, so inline keyboards
+// (approval/cancel) ride along. There is no HTML fallback: rich markdown is
+// lenient, and a failure is logged like any other send error. The rich text
+// limit is 32768 chars, so the 4096-char chunking sendMessage needs doesn't
+// apply here.
+func (d *TelegramDriver) sendRichMessage(ctx context.Context, token string, chatID int64, md string, keyboard map[string]any) (int64, error) {
+	if strings.TrimSpace(md) == "" {
+		return 0, nil
+	}
+	body := map[string]any{
+		"chat_id":      chatID,
+		"rich_message": map[string]any{"markdown": md},
+	}
+	if keyboard != nil {
+		body["reply_markup"] = keyboard
+	}
+	var result struct {
+		OK     bool `json:"ok"`
+		Result struct {
+			MessageID int64 `json:"message_id"`
+		} `json:"result"`
+	}
+	if err := d.callTelegramJSON(ctx, token, "sendRichMessage", body, &result); err != nil {
+		d.logger.Error("telegram sendRichMessage failed",
+			zap.Int64("chatID", chatID),
+			zap.Error(err),
+			zap.String("preview", preview(md, 200)),
+		)
+		return 0, err
+	}
+	return result.Result.MessageID, nil
 }
 
 // sendMessageInner splits text into chunks within Telegram's per-message

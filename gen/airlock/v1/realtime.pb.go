@@ -420,12 +420,17 @@ func (x *ToolResultEvent) GetOutcome() string {
 
 // ConfirmationRequiredEvent signals the user must approve an action.
 type ConfirmationRequiredEvent struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	RunId         string                 `protobuf:"bytes,1,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
-	Permission    string                 `protobuf:"bytes,2,opt,name=permission,proto3" json:"permission,omitempty"`
-	Patterns      []string               `protobuf:"bytes,3,rep,name=patterns,proto3" json:"patterns,omitempty"`
-	Code          string                 `protobuf:"bytes,4,opt,name=code,proto3" json:"code,omitempty"`
-	ToolCallId    string                 `protobuf:"bytes,5,opt,name=tool_call_id,json=toolCallId,proto3" json:"tool_call_id,omitempty"`
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	RunId      string                 `protobuf:"bytes,1,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
+	Permission string                 `protobuf:"bytes,2,opt,name=permission,proto3" json:"permission,omitempty"`
+	Patterns   []string               `protobuf:"bytes,3,rep,name=patterns,proto3" json:"patterns,omitempty"`
+	Code       string                 `protobuf:"bytes,4,opt,name=code,proto3" json:"code,omitempty"`
+	ToolCallId string                 `protobuf:"bytes,5,opt,name=tool_call_id,json=toolCallId,proto3" json:"tool_call_id,omitempty"`
+	// description is the plain-language summary a run_js call carries (its
+	// `description` arg). Shown in the confirmation card / bridge prompt in
+	// place of the permission name when present. Empty for tools that don't
+	// supply one.
+	Description   string `protobuf:"bytes,6,opt,name=description,proto3" json:"description,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -491,6 +496,13 @@ func (x *ConfirmationRequiredEvent) GetCode() string {
 func (x *ConfirmationRequiredEvent) GetToolCallId() string {
 	if x != nil {
 		return x.ToolCallId
+	}
+	return ""
+}
+
+func (x *ConfirmationRequiredEvent) GetDescription() string {
+	if x != nil {
+		return x.Description
 	}
 	return ""
 }
@@ -871,7 +883,7 @@ const file_airlock_v1_realtime_proto_rawDesc = "" +
 	"\ttool_name\x18\x03 \x01(\tR\btoolName\x12\x16\n" +
 	"\x06output\x18\x04 \x01(\tR\x06output\x12\x14\n" +
 	"\x05error\x18\x05 \x01(\tR\x05error\x12\x18\n" +
-	"\aoutcome\x18\x06 \x01(\tR\aoutcome\"\xa4\x01\n" +
+	"\aoutcome\x18\x06 \x01(\tR\aoutcome\"\xc6\x01\n" +
 	"\x19ConfirmationRequiredEvent\x12\x15\n" +
 	"\x06run_id\x18\x01 \x01(\tR\x05runId\x12\x1e\n" +
 	"\n" +
@@ -880,7 +892,8 @@ const file_airlock_v1_realtime_proto_rawDesc = "" +
 	"\bpatterns\x18\x03 \x03(\tR\bpatterns\x12\x12\n" +
 	"\x04code\x18\x04 \x01(\tR\x04code\x12 \n" +
 	"\ftool_call_id\x18\x05 \x01(\tR\n" +
-	"toolCallId\"B\n" +
+	"toolCallId\x12 \n" +
+	"\vdescription\x18\x06 \x01(\tR\vdescription\"B\n" +
 	"\x11RunSuspendedEvent\x12\x15\n" +
 	"\x06run_id\x18\x01 \x01(\tR\x05runId\x12\x16\n" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\"\x8a\x01\n" +

@@ -312,7 +312,7 @@ func (d *DiscordDriver) SendStream(ctx context.Context, br dbq.Bridge, externalI
 
 		case "confirmation_required":
 			flushText()
-			text := formatDiscordConfirmation(ev.Permission, ev.Patterns, ev.Code)
+			text := formatDiscordConfirmation(ev.Description, ev.Permission, ev.Patterns, ev.Code)
 			components := discordApprovalButtons(ev.RunID)
 			_, _ = d.sendMessage(ctx, token, channelID, text, components)
 
@@ -1205,11 +1205,16 @@ func formatDiscordToolResult(toolName, output, toolError string) string {
 	return "✓ **" + toolName + "**\n```\n" + output + "\n```"
 }
 
-func formatDiscordConfirmation(permission string, patterns []string, code string) string {
+func formatDiscordConfirmation(description, permission string, patterns []string, code string) string {
 	_ = patterns
 	var sb strings.Builder
 	sb.WriteString("🔐 **Confirmation required**")
-	if permission != "" {
+	// Lead with the plain-language description when present (run_js); else the
+	// permission name. Not every tool carries a description.
+	if description != "" {
+		sb.WriteString("\n")
+		sb.WriteString(description)
+	} else if permission != "" {
 		sb.WriteString("\nPermission: `")
 		sb.WriteString(permission)
 		sb.WriteString("`")

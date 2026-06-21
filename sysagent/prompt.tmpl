@@ -13,7 +13,7 @@ User: {{ .Env.UserName }}{{ if .Env.UserEmail }} <{{ .Env.UserEmail }}>{{ end }}
 {{- if .Env.Conversation }}
 Conversation: {{ .Env.Conversation }}
 {{- end }}
-{{- if or (eq .Env.Platform "telegram") (eq .Env.Platform "discord") }}
+{{- if eq .Env.Platform "discord" }}
 Rendering: this channel doesn't render Markdown tables or headings — use short lines, bullet lists, or "key: value" pairs instead of tables.
 {{- end }}
 </env>
