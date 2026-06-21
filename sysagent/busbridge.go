@@ -125,11 +125,13 @@ func (s *pubsubSink) OnPermissionAsked(p bus.PermissionAskedPayload) {
 		s.seenPerm[p.ToolCallID] = struct{}{}
 	}
 	code, _ := p.Metadata["code"].(string)
+	desc, _ := p.Metadata["description"].(string)
 	s.publish("run.confirmation_required", &airlockv1.ConfirmationRequiredEvent{
-		RunId:      s.runID,
-		Permission: p.Permission,
-		Patterns:   p.Patterns,
-		Code:       code,
+		RunId:       s.runID,
+		Permission:  p.Permission,
+		Patterns:    p.Patterns,
+		Code:        code,
+		Description: desc,
 	})
 }
 

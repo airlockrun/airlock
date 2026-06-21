@@ -2616,9 +2616,18 @@ type PendingConfirmation struct {
 	// delegated (A2A) suspension — a sub-agent's request_confirmation that
 	// surfaced through promptAgent. Mirrors ConfirmationRequiredEvent so
 	// the UI renders it the same as a live confirmation.
-	Permission    string   `protobuf:"bytes,4,opt,name=permission,proto3" json:"permission,omitempty"`
-	Patterns      []string `protobuf:"bytes,5,rep,name=patterns,proto3" json:"patterns,omitempty"`
-	Code          string   `protobuf:"bytes,6,opt,name=code,proto3" json:"code,omitempty"`
+	Permission string   `protobuf:"bytes,4,opt,name=permission,proto3" json:"permission,omitempty"`
+	Patterns   []string `protobuf:"bytes,5,rep,name=patterns,proto3" json:"patterns,omitempty"`
+	Code       string   `protobuf:"bytes,6,opt,name=code,proto3" json:"code,omitempty"`
+	// run_id is the suspended run this confirmation belongs to. The client
+	// sends it back as resume_run_id on approve/deny so the backend resumes
+	// THIS run rather than guessing the conversation's latest suspended one.
+	// Carried here so a gate restored on conversation load (no live
+	// confirmation_required event in hand) is still approvable.
+	RunId string `protobuf:"bytes,7,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
+	// description is the plain-language summary a run_js call carries, shown in
+	// the confirmation card in place of the raw code/permission when present.
+	Description   string `protobuf:"bytes,8,opt,name=description,proto3" json:"description,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2691,6 +2700,20 @@ func (x *PendingConfirmation) GetPatterns() []string {
 func (x *PendingConfirmation) GetCode() string {
 	if x != nil {
 		return x.Code
+	}
+	return ""
+}
+
+func (x *PendingConfirmation) GetRunId() string {
+	if x != nil {
+		return x.RunId
+	}
+	return ""
+}
+
+func (x *PendingConfirmation) GetDescription() string {
+	if x != nil {
+		return x.Description
 	}
 	return ""
 }
@@ -7178,7 +7201,7 @@ const file_airlock_v1_api_proto_rawDesc = "" +
 	"\x10in_flight_run_id\x18\x05 \x01(\tR\rinFlightRunId\"p\n" +
 	"\x19PaginatedMessagesResponse\x128\n" +
 	"\bmessages\x18\x01 \x03(\v2\x1c.airlock.v1.AgentMessageInfoR\bmessages\x12\x19\n" +
-	"\bhas_more\x18\x02 \x01(\bR\ahasMore\"\xba\x01\n" +
+	"\bhas_more\x18\x02 \x01(\bR\ahasMore\"\xf3\x01\n" +
 	"\x13PendingConfirmation\x12 \n" +
 	"\ftool_call_id\x18\x01 \x01(\tR\n" +
 	"toolCallId\x12\x1b\n" +
@@ -7188,7 +7211,9 @@ const file_airlock_v1_api_proto_rawDesc = "" +
 	"permission\x18\x04 \x01(\tR\n" +
 	"permission\x12\x1a\n" +
 	"\bpatterns\x18\x05 \x03(\tR\bpatterns\x12\x12\n" +
-	"\x04code\x18\x06 \x01(\tR\x04code\"\xc3\x01\n" +
+	"\x04code\x18\x06 \x01(\tR\x04code\x12\x15\n" +
+	"\x06run_id\x18\a \x01(\tR\x05runId\x12 \n" +
+	"\vdescription\x18\b \x01(\tR\vdescription\"\xc3\x01\n" +
 	"\rPromptRequest\x12'\n" +
 	"\x0fconversation_id\x18\x01 \x01(\tR\x0econversationId\x12\x18\n" +
 	"\amessage\x18\x02 \x01(\tR\amessage\x12\x1d\n" +

@@ -72,6 +72,9 @@ type ResponseEvent struct {
 	Permission string
 	Patterns   []string
 	Code       string
+	// Description is the plain-language summary a run_js confirmation carries;
+	// drivers lead with it instead of the permission name when present.
+	Description string
 }
 
 // CancelButtonAfter is how long a bridge run can stream before the driver

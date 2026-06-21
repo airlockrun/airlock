@@ -881,14 +881,16 @@ func StreamNDJSONResponse(body io.Reader, runID string, events chan<- ResponseEv
 			if body == "" {
 				body = cr.Code
 			}
+			desc, _ := cr.Metadata["description"].(string)
 			events <- ResponseEvent{
-				Type:       "confirmation_required",
-				Raw:        line,
-				RunID:      runID,
-				Permission: cr.Permission,
-				Patterns:   cr.Patterns,
-				Code:       body,
-				ToolCallID: cr.ToolCallID,
+				Type:        "confirmation_required",
+				Raw:         line,
+				RunID:       runID,
+				Permission:  cr.Permission,
+				Patterns:    cr.Patterns,
+				Code:        body,
+				Description: desc,
+				ToolCallID:  cr.ToolCallID,
 			}
 
 		case "finish":

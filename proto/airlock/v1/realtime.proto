@@ -63,6 +63,11 @@ message ConfirmationRequiredEvent {
   repeated string patterns = 3;
   string code = 4;
   string tool_call_id = 5;
+  // description is the plain-language summary a run_js call carries (its
+  // `description` arg). Shown in the confirmation card / bridge prompt in
+  // place of the permission name when present. Empty for tools that don't
+  // supply one.
+  string description = 6;
 }
 
 // RunSuspendedEvent signals the run is suspended (e.g. awaiting approval).

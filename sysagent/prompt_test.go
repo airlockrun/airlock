@@ -12,19 +12,22 @@ func TestSystemPromptTemplate(t *testing.T) {
 		"whoami": tool.New("whoami").Description("Show your access.\nsecond line ignored").Build(),
 	}
 
-	// Telegram: env block carries platform + user + the no-tables note; the
-	// preamble and tool catalogue still render.
+	// Telegram: env block carries platform + user, and (since it renders rich
+	// messages) NO no-tables note; the preamble and tool catalogue still render.
 	out := SystemPrompt(promptEnv{Date: "2026-06-04", Platform: "telegram", UserName: "Jane Doe", UserEmail: "jane@example.com", Conversation: "c1"}, tools)
 	for _, want := range []string{
 		"You are the airlock system agent", // preamble preserved
 		"## Conventions",                   // preamble preserved
 		"## Available tools",               // catalogue header
 		"- `whoami` — Show your access.",   // tool, first desc line only
-		"<env>\nDate: 2026-06-04\nPlatform: telegram\nUser: Jane Doe <jane@example.com>\nConversation: c1\nRendering: this channel doesn't render Markdown tables",
+		"<env>\nDate: 2026-06-04\nPlatform: telegram\nUser: Jane Doe <jane@example.com>\nConversation: c1\n</env>",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("prompt missing %q\n---\n%s", want, out)
 		}
+	}
+	if strings.Contains(out, "Rendering:") {
+		t.Fatalf("telegram prompt should not carry a rendering note (rich messages render tables):\n%s", out)
 	}
 	if strings.Contains(out, "second line ignored") {
 		t.Fatal("tool catalogue should keep only the first description line")

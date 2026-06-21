@@ -351,6 +351,15 @@ message PendingConfirmation {
   string permission = 4;
   repeated string patterns = 5;
   string code = 6;
+  // run_id is the suspended run this confirmation belongs to. The client
+  // sends it back as resume_run_id on approve/deny so the backend resumes
+  // THIS run rather than guessing the conversation's latest suspended one.
+  // Carried here so a gate restored on conversation load (no live
+  // confirmation_required event in hand) is still approvable.
+  string run_id = 7;
+  // description is the plain-language summary a run_js call carries, shown in
+  // the confirmation card in place of the raw code/permission when present.
+  string description = 8;
 }
 
 // --- Prompt ---

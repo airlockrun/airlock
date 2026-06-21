@@ -210,18 +210,21 @@ func PublishRunEvents(
 
 		case "confirmation_required":
 			var cr struct {
-				Permission string   `json:"permission"`
-				Patterns   []string `json:"patterns"`
-				Code       string   `json:"code"`
-				ToolCallID string   `json:"toolCallId"`
+				Permission string         `json:"permission"`
+				Patterns   []string       `json:"patterns"`
+				Code       string         `json:"code"`
+				ToolCallID string         `json:"toolCallId"`
+				Metadata   map[string]any `json:"metadata"`
 			}
 			json.Unmarshal(event.Data, &cr)
+			desc, _ := cr.Metadata["description"].(string)
 			mirror("run.confirmation_required", &airlockv1.ConfirmationRequiredEvent{
-				RunId:      runID.String(),
-				Permission: cr.Permission,
-				Patterns:   cr.Patterns,
-				Code:       cr.Code,
-				ToolCallId: cr.ToolCallID,
+				RunId:       runID.String(),
+				Permission:  cr.Permission,
+				Patterns:    cr.Patterns,
+				Code:        cr.Code,
+				ToolCallId:  cr.ToolCallID,
+				Description: desc,
 			})
 
 		case "suspended":

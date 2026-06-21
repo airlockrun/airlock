@@ -102,12 +102,14 @@ func (s *Service) ListAll(ctx context.Context, p authz.Principal) ([]dbq.AgentCo
 // PendingConfirmation describes a suspended run's outstanding tool
 // call awaiting user approval.
 type PendingConfirmation struct {
-	ToolCallID string
-	ToolName   string
-	Permission string
-	Patterns   []string
-	Code       string
-	Input      string
+	RunID       string
+	ToolCallID  string
+	ToolName    string
+	Permission  string
+	Patterns    []string
+	Code        string
+	Input       string
+	Description string
 }
 
 // Detail is the GetConversation response payload.
@@ -149,7 +151,10 @@ func (s *Service) Get(ctx context.Context, p authz.Principal, convID uuid.UUID) 
 		det.InFlightRunID = uuid.UUID(runID.Bytes).String()
 	}
 	if suspendedRun, err := q.GetLatestSuspendedRunByConversation(ctx, convID.String()); err == nil {
-		det.PendingConfirmation = parsePendingConfirmation(suspendedRun.Checkpoint)
+		if pc := parsePendingConfirmation(suspendedRun.Checkpoint); pc != nil {
+			pc.RunID = convert.PgUUIDToString(suspendedRun.ID)
+			det.PendingConfirmation = pc
+		}
 	}
 	return det, nil
 }
@@ -171,7 +176,10 @@ func parsePendingConfirmation(checkpointJSON []byte) *PendingConfirmation {
 			} `json:"pendingToolCalls"`
 			Data struct {
 				ToolCallID string `json:"toolCallID"`
-				Child      struct {
+				Metadata   struct {
+					Description string `json:"description"`
+				} `json:"metadata"`
+				Child struct {
 					Confirmation struct {
 						Permission string   `json:"permission"`
 						Patterns   []string `json:"patterns"`
@@ -197,10 +205,21 @@ func parsePendingConfirmation(checkpointJSON []byte) *PendingConfirmation {
 		}
 	case len(sc.PendingToolCalls) > 0:
 		pc := sc.PendingToolCalls[0]
+		// Plain-language summary for the card: from the suspension metadata,
+		// falling back to the tool call's own `description` arg (run_js).
+		desc := sc.Data.Metadata.Description
+		if desc == "" {
+			var in struct {
+				Description string `json:"description"`
+			}
+			_ = json.Unmarshal(pc.Input, &in)
+			desc = in.Description
+		}
 		return &PendingConfirmation{
-			ToolCallID: pc.ID,
-			ToolName:   pc.Name,
-			Input:      string(pc.Input),
+			ToolCallID:  pc.ID,
+			ToolName:    pc.Name,
+			Input:       string(pc.Input),
+			Description: desc,
 		}
 	}
 	return nil

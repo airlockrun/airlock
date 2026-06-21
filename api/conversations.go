@@ -150,12 +150,14 @@ func (h *conversationsHandler) GetConversation(w http.ResponseWriter, r *http.Re
 	}
 	if det.PendingConfirmation != nil {
 		resp.PendingConfirmation = &airlockv1.PendingConfirmation{
-			ToolCallId: det.PendingConfirmation.ToolCallID,
-			ToolName:   det.PendingConfirmation.ToolName,
-			Permission: det.PendingConfirmation.Permission,
-			Patterns:   det.PendingConfirmation.Patterns,
-			Code:       det.PendingConfirmation.Code,
-			Input:      det.PendingConfirmation.Input,
+			RunId:       det.PendingConfirmation.RunID,
+			ToolCallId:  det.PendingConfirmation.ToolCallID,
+			ToolName:    det.PendingConfirmation.ToolName,
+			Permission:  det.PendingConfirmation.Permission,
+			Patterns:    det.PendingConfirmation.Patterns,
+			Code:        det.PendingConfirmation.Code,
+			Input:       det.PendingConfirmation.Input,
+			Description: det.PendingConfirmation.Description,
 		}
 	}
 	writeProto(w, http.StatusOK, resp)
@@ -483,6 +485,26 @@ func (h *conversationsHandler) Prompt(w http.ResponseWriter, r *http.Request) {
 		h.convLocks.Unlock(convIDStr)
 		writeError(w, http.StatusBadRequest, "resume_run_id is required for a confirmation response")
 		return
+	} else {
+		// Free-text typed while a confirmation is still pending, with no
+		// resume_run_id attached. The client is supposed to carry the id from
+		// the confirmation event (or restore it on conversation load), but a
+		// dropped WS event on a flaky link leaves the gate unknown to the
+		// client, so it sends a plain prompt. Mirror the bridge path
+		// ([trigger/prompt.go:314]): resolve the pending run as denied and
+		// re-reason the new message in it. Without this the suspended turn's
+		// tool-call is orphaned (an assistant tool_calls message with no tool
+		// result), which permanently 400s the conversation on OpenAI-compatible
+		// providers ("tool message must follow tool_calls"). The conversation
+		// lock guarantees the run is durably suspended by the time we get here.
+		// airlockvet:allow-dbq reason: resolves a stranded suspended run; caller already proven owner of the conversation
+		if suspendedRun, err := q.GetLatestSuspendedRunByConversation(ctx, convIDStr); err == nil {
+			input.ResumeRunID = convert.PgUUIDToString(suspendedRun.ID)
+			approved := false
+			input.Approved = &approved
+			// airlockvet:allow-dbq reason: resolves a stranded suspended run; caller already proven owner of the conversation
+			_ = q.ResolveSuspendedRun(ctx, suspendedRun.ID)
+		}
 	}
 
 	// Forward to agent container — no bridge_id for web.
