@@ -20,9 +20,9 @@ ORDER BY s.created_at;
 INSERT INTO agent_siblings (parent_agent_id, sibling_agent_id)
 SELECT @parent_agent_id, @sibling_agent_id
 WHERE EXISTS (
-    SELECT 1 FROM agent_members
-    WHERE agent_members.agent_id = @sibling_agent_id
-      AND agent_members.user_id = @user_id
+    SELECT 1 FROM agent_grants
+    WHERE agent_grants.agent_id = @sibling_agent_id
+      AND agent_grants.grantee_id = @user_id
 ) OR EXISTS (
     SELECT 1 FROM agents
     WHERE agents.id = @sibling_agent_id AND agents.allow_non_member_mcp = true
@@ -38,9 +38,9 @@ WHERE parent_agent_id = @parent_agent_id AND sibling_agent_id = @sibling_agent_i
 -- allow_non_member_mcp = true. Not used by the mutation (which
 -- inlines the predicate atomically) — only by GET /siblings/addable.
 SELECT (EXISTS (
-    SELECT 1 FROM agent_members
-    WHERE agent_members.agent_id = @sibling_agent_id
-      AND agent_members.user_id = @user_id
+    SELECT 1 FROM agent_grants
+    WHERE agent_grants.agent_id = @sibling_agent_id
+      AND agent_grants.grantee_id = @user_id
 ) OR EXISTS (
     SELECT 1 FROM agents
     WHERE agents.id = @sibling_agent_id AND agents.allow_non_member_mcp = true
@@ -52,9 +52,9 @@ SELECT (EXISTS (
 -- members first, then non-member-open agents; within each, by recency.
 SELECT a.id, a.slug, a.name, a.description, a.allow_non_member_mcp,
        EXISTS (
-           SELECT 1 FROM agent_members
-           WHERE agent_members.agent_id = a.id
-             AND agent_members.user_id = @user_id
+           SELECT 1 FROM agent_grants
+           WHERE agent_grants.agent_id = a.id
+             AND agent_grants.grantee_id = @user_id
        ) AS is_member
 FROM agents a
 WHERE a.id <> @parent_agent_id
@@ -65,9 +65,9 @@ WHERE a.id <> @parent_agent_id
   )
   AND (
       EXISTS (
-          SELECT 1 FROM agent_members
-          WHERE agent_members.agent_id = a.id
-            AND agent_members.user_id = @user_id
+          SELECT 1 FROM agent_grants
+          WHERE agent_grants.agent_id = a.id
+            AND agent_grants.grantee_id = @user_id
       )
       OR a.allow_non_member_mcp = true
   )
@@ -80,7 +80,7 @@ ORDER BY is_member DESC, a.created_at DESC;
 --   - user is a member of the sibling, OR
 --   - the sibling has allow_non_member_mcp = true.
 -- For anonymous runs (no user), pass uuid_nil as @user_id; the
--- EXISTS check on agent_members fails, leaving only the
+-- EXISTS check on agent_grants fails, leaving only the
 -- non-member-open siblings.
 SELECT a.id
 FROM agent_siblings s
@@ -89,8 +89,8 @@ WHERE s.parent_agent_id = @parent_agent_id
   AND (
       a.allow_non_member_mcp = true
       OR EXISTS (
-          SELECT 1 FROM agent_members
-          WHERE agent_members.agent_id = a.id
-            AND agent_members.user_id = @user_id
+          SELECT 1 FROM agent_grants
+          WHERE agent_grants.agent_id = a.id
+            AND agent_grants.grantee_id = @user_id
       )
   );

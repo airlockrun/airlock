@@ -10,7 +10,8 @@ import (
 // AgentMemberInfo.
 func MemberToProto(m memberssvc.Member) *airlockv1.AgentMemberInfo {
 	return &airlockv1.AgentMemberInfo{
-		UserId:      m.UserID.String(),
+		UserId:      m.GranteeID.String(),
+		Kind:        m.Kind,
 		Email:       m.Email,
 		DisplayName: m.DisplayName,
 		Role:        m.Role,

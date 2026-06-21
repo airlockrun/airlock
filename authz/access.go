@@ -42,24 +42,37 @@ func MinAccess(a, b agentsdk.Access) agentsdk.Access {
 }
 
 // EffectiveAgentAccess resolves the principal's access on agentID off
-// agent_members. It is the pure membership ladder: a member maps to
-// AccessUser/AccessAdmin, everyone else (anonymous, trigger, non-member
-// registered user) to AccessPublic. Surface-specific "is public allowed
-// here" policy (the agent's allow_public_mcp / AllowPublicDMs flags)
-// lives at the surface, not in this ladder.
+// agent_grants. A grant may target the principal's own user id (per-user
+// member) or a role-group in its grantee-set (e.g. the built-in `user` group =
+// every registered user, "shared with everyone"); the effective access is the
+// max role across all matching grants. Everyone with no matching grant
+// (anonymous, trigger, non-member registered user) maps to AccessPublic.
+// Surface-specific "is public allowed here" policy (the agent's allow_public_mcp
+// / AllowPublicDMs flags) lives at the surface, not in this ladder.
 func (p Principal) EffectiveAgentAccess(ctx context.Context, q *dbq.Queries, agentID uuid.UUID) agentsdk.Access {
-	if p.Kind != KindRegisteredUser || p.UserID == uuid.Nil {
+	set := p.GranteeSet()
+	if len(set) == 0 {
 		return agentsdk.AccessPublic
 	}
-	member, err := q.GetAgentMember(ctx, dbq.GetAgentMemberParams{
-		AgentID: pgtype.UUID{Bytes: agentID, Valid: true},
-		UserID:  pgtype.UUID{Bytes: p.UserID, Valid: true},
+	grantees := make([]pgtype.UUID, len(set))
+	for i, id := range set {
+		grantees[i] = pgtype.UUID{Bytes: id, Valid: true}
+	}
+	roles, err := q.ListAgentGrantsForGrantees(ctx, dbq.ListAgentGrantsForGranteesParams{
+		AgentID:    pgtype.UUID{Bytes: agentID, Valid: true},
+		GranteeIds: grantees,
 	})
 	if err != nil {
 		return agentsdk.AccessPublic
 	}
-	if member.Role == "admin" {
-		return agentsdk.AccessAdmin
+	best := agentsdk.AccessPublic
+	for _, role := range roles {
+		switch role {
+		case "admin":
+			return agentsdk.AccessAdmin
+		case "user":
+			best = agentsdk.AccessUser
+		}
 	}
-	return agentsdk.AccessUser
+	return best
 }

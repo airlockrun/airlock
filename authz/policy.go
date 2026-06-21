@@ -9,7 +9,7 @@ import (
 
 // Axis is the permission axis an action gates on. The two axes are
 // independent (see airlock/CLAUDE.md "Permission Model"): agent access
-// comes from agent_members, tenant role from the user record/JWT.
+// comes from agent_grants, tenant role from the user record/JWT.
 type Axis int
 
 const (

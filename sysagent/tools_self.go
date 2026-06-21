@@ -87,9 +87,10 @@ func (s *Service) toolWhoami() tool.Tool {
 			// Membership list — kept as a direct dbq read because it's
 			// an agent-axis query (not a user-axis one) and we don't
 			// have a dedicated service surface for "what agents am I in"
-			// yet. Same axis as authz.EffectiveAgentAccess below.
+			// yet. Explicit per-user grants only (same shape as the old
+			// membership list); group-derived access isn't expanded here.
 			q := dbq.New(s.db.Pool())
-			rows, err := q.ListUserAgentMemberships(ctx, pgtype.UUID{Bytes: p.UserID, Valid: true})
+			rows, err := q.ListUserAgentGrants(ctx, pgtype.UUID{Bytes: p.UserID, Valid: true})
 			if err != nil {
 				return errResult(err), nil
 			}

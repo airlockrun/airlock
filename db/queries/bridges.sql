@@ -17,16 +17,16 @@ LEFT JOIN users u ON u.id = b.owner_id
 ORDER BY b.created_at;
 
 -- name: ListBridgesAccessible :many
--- Non-admin variant: system bridges plus bridges bound to agents the
--- user has access to via agent_members, plus bridges the user owns
--- that have since been orphaned (agent deleted but bridge preserved).
--- The agent's creator is auto-added to agent_members at agent-create
--- time, so the membership check also covers "agents I created."
+-- Non-admin variant: system bridges plus bridges bound to agents the user has
+-- an explicit per-user grant on, plus bridges the user owns that have since
+-- been orphaned (agent deleted but bridge preserved). The agent's creator is
+-- granted admin at agent-create time, so the grant check also covers "agents I
+-- created."
 SELECT b.*, u.email AS owner_email, u.display_name AS owner_display_name
 FROM bridges b
 LEFT JOIN users u ON u.id = b.owner_id
 WHERE b.is_system
-   OR b.agent_id IN (SELECT agent_id FROM agent_members WHERE user_id = @user_id)
+   OR b.agent_id IN (SELECT agent_id FROM agent_grants WHERE grantee_id = @user_id)
    OR (b.agent_id IS NULL AND b.owner_id = @user_id)
 ORDER BY b.created_at;
 

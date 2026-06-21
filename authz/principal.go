@@ -1,7 +1,7 @@
 // Package authz is the single authorization layer every surface gates
 // through. It models the caller as a Principal (registered user,
 // anonymous human, or non-human trigger), resolves that principal's
-// effective per-agent access off agent_members, and checks it against a
+// effective per-agent access off agent_grants, and checks it against a
 // central action→required-level policy. HTTP handlers, bridges, A2A, and
 // the system agent all build a Principal and call Authorize — there is
 // no second place that decides "what level does this action need".

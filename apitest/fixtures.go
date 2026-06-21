@@ -76,12 +76,12 @@ func CreateAgent(t *testing.T, h *Harness, opts AgentOpts) uuid.UUID {
 	}
 	agentID := uuid.UUID(row.ID.Bytes)
 
-	if err := q.AddAgentMember(ctx, dbq.AddAgentMemberParams{
-		AgentID: row.ID,
-		UserID:  pgtype.UUID{Bytes: opts.OwnerID, Valid: true},
-		Role:    "admin",
+	if err := q.UpsertAgentGrant(ctx, dbq.UpsertAgentGrantParams{
+		AgentID:   row.ID,
+		GranteeID: pgtype.UUID{Bytes: opts.OwnerID, Valid: true},
+		Role:      "admin",
 	}); err != nil {
-		t.Fatalf("apitest: AddAgentMember (owner): %v", err)
+		t.Fatalf("apitest: UpsertAgentGrant (owner): %v", err)
 	}
 
 	encryptedPW, err := h.Secrets.Put(ctx, "agent/"+agentID.String()+"/db_password", "apitest-stub-password")
@@ -115,13 +115,13 @@ func CreateAgent(t *testing.T, h *Harness, opts AgentOpts) uuid.UUID {
 func AddAgentMember(t *testing.T, h *Harness, agentID, userID uuid.UUID, role string) {
 	t.Helper()
 	q := dbq.New(h.DB.Pool())
-	err := q.AddAgentMember(context.Background(), dbq.AddAgentMemberParams{
-		AgentID: pgtype.UUID{Bytes: agentID, Valid: true},
-		UserID:  pgtype.UUID{Bytes: userID, Valid: true},
-		Role:    role,
+	err := q.UpsertAgentGrant(context.Background(), dbq.UpsertAgentGrantParams{
+		AgentID:   pgtype.UUID{Bytes: agentID, Valid: true},
+		GranteeID: pgtype.UUID{Bytes: userID, Valid: true},
+		Role:      role,
 	})
 	if err != nil {
-		t.Fatalf("apitest: AddAgentMember: %v", err)
+		t.Fatalf("apitest: UpsertAgentGrant: %v", err)
 	}
 }
 

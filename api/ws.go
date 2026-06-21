@@ -29,9 +29,10 @@ func NewWSHandler(database *db.DB, hub *realtime.Hub, handler *realtime.Handler,
 }
 
 // Upgrade handles GET /ws?token=<jwt> — validates the token, upgrades to
-// WebSocket, and auto-subscribes the connection to every agent the user has
-// access to (via agent_members). The client does not issue subscribe
-// messages; authorization is enforced at connect time from durable DB state.
+// WebSocket, and auto-subscribes the connection to every agent the user holds
+// an explicit per-user grant on (via agent_grants). The client does not issue
+// subscribe messages; authorization is enforced at connect time from durable
+// DB state.
 func (h *WSHandler) Upgrade(w http.ResponseWriter, r *http.Request) {
 	token := r.URL.Query().Get("token")
 	if token == "" {
@@ -54,8 +55,8 @@ func (h *WSHandler) Upgrade(w http.ResponseWriter, r *http.Request) {
 	// Resolve the user's member agents BEFORE the upgrade so a DB error can
 	// return a real HTTP status instead of a half-open socket.
 	q := dbq.New(h.db.Pool())
-	// airlockvet:allow-dbq reason: pure read of caller's own membership rows; no authz decision to gate (you can always see what you're a member of)
-	memberAgents, err := q.ListAgentIDsByMember(r.Context(), toPgUUID(userID))
+	// airlockvet:allow-dbq reason: pure read of caller's own grant rows; no authz decision to gate (you can always see what you're a member of)
+	memberAgents, err := q.ListAgentIDsByGrantee(r.Context(), toPgUUID(userID))
 	if err != nil {
 		h.logger.Error("list member agents for ws", zap.Error(err))
 		writeError(w, http.StatusInternalServerError, "failed to resolve agent membership")

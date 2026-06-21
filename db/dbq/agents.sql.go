@@ -351,82 +351,18 @@ func (q *Queries) ListAgents(ctx context.Context) ([]Agent, error) {
 	return items, nil
 }
 
-const listAgentsByUser = `-- name: ListAgentsByUser :many
-SELECT id, user_id, slug, name, description, status, upgrade_status, auto_fix, build_provider_id, build_model, exec_provider_id, exec_model, stt_provider_id, stt_model, vision_provider_id, vision_model, tts_provider_id, tts_model, image_gen_provider_id, image_gen_model, embedding_provider_id, embedding_model, search_provider_id, search_model, source_ref, image_ref, db_schema, db_password, sdk_version, config, instructions, error_message, created_at, updated_at, allow_non_member_mcp, allow_public_mcp, tools_hash, emoji, allow_oauth_mcp_prompt, allow_public_mcp_prompt, git_remote_url, git_credential_id, git_default_branch, git_webhook_secret, git_last_synced_ref FROM agents WHERE user_id = $1 ORDER BY created_at DESC
+const listAgentsVisibleToUser = `-- name: ListAgentsVisibleToUser :many
+SELECT DISTINCT a.id, a.user_id, a.slug, a.name, a.description, a.status, a.upgrade_status, a.auto_fix, a.build_provider_id, a.build_model, a.exec_provider_id, a.exec_model, a.stt_provider_id, a.stt_model, a.vision_provider_id, a.vision_model, a.tts_provider_id, a.tts_model, a.image_gen_provider_id, a.image_gen_model, a.embedding_provider_id, a.embedding_model, a.search_provider_id, a.search_model, a.source_ref, a.image_ref, a.db_schema, a.db_password, a.sdk_version, a.config, a.instructions, a.error_message, a.created_at, a.updated_at, a.allow_non_member_mcp, a.allow_public_mcp, a.tools_hash, a.emoji, a.allow_oauth_mcp_prompt, a.allow_public_mcp_prompt, a.git_remote_url, a.git_credential_id, a.git_default_branch, a.git_webhook_secret, a.git_last_synced_ref FROM agents a
+JOIN agent_grants g ON g.agent_id = a.id AND g.grantee_id = ANY ($1::uuid[])
+ORDER BY a.created_at DESC
 `
 
-func (q *Queries) ListAgentsByUser(ctx context.Context, userID pgtype.UUID) ([]Agent, error) {
-	rows, err := q.db.Query(ctx, listAgentsByUser, userID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []Agent{}
-	for rows.Next() {
-		var i Agent
-		if err := rows.Scan(
-			&i.ID,
-			&i.UserID,
-			&i.Slug,
-			&i.Name,
-			&i.Description,
-			&i.Status,
-			&i.UpgradeStatus,
-			&i.AutoFix,
-			&i.BuildProviderID,
-			&i.BuildModel,
-			&i.ExecProviderID,
-			&i.ExecModel,
-			&i.SttProviderID,
-			&i.SttModel,
-			&i.VisionProviderID,
-			&i.VisionModel,
-			&i.TtsProviderID,
-			&i.TtsModel,
-			&i.ImageGenProviderID,
-			&i.ImageGenModel,
-			&i.EmbeddingProviderID,
-			&i.EmbeddingModel,
-			&i.SearchProviderID,
-			&i.SearchModel,
-			&i.SourceRef,
-			&i.ImageRef,
-			&i.DbSchema,
-			&i.DbPassword,
-			&i.SdkVersion,
-			&i.Config,
-			&i.Instructions,
-			&i.ErrorMessage,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-			&i.AllowNonMemberMcp,
-			&i.AllowPublicMcp,
-			&i.ToolsHash,
-			&i.Emoji,
-			&i.AllowOauthMcpPrompt,
-			&i.AllowPublicMcpPrompt,
-			&i.GitRemoteUrl,
-			&i.GitCredentialID,
-			&i.GitDefaultBranch,
-			&i.GitWebhookSecret,
-			&i.GitLastSyncedRef,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listAgentsByUserID = `-- name: ListAgentsByUserID :many
-SELECT id, user_id, slug, name, description, status, upgrade_status, auto_fix, build_provider_id, build_model, exec_provider_id, exec_model, stt_provider_id, stt_model, vision_provider_id, vision_model, tts_provider_id, tts_model, image_gen_provider_id, image_gen_model, embedding_provider_id, embedding_model, search_provider_id, search_model, source_ref, image_ref, db_schema, db_password, sdk_version, config, instructions, error_message, created_at, updated_at, allow_non_member_mcp, allow_public_mcp, tools_hash, emoji, allow_oauth_mcp_prompt, allow_public_mcp_prompt, git_remote_url, git_credential_id, git_default_branch, git_webhook_secret, git_last_synced_ref FROM agents WHERE user_id = $1 ORDER BY created_at DESC
-`
-
-func (q *Queries) ListAgentsByUserID(ctx context.Context, userID pgtype.UUID) ([]Agent, error) {
-	rows, err := q.db.Query(ctx, listAgentsByUserID, userID)
+// Agents the caller can see: any agent carrying a grant to a principal in the
+// caller's grantee-set (their own user principal — owners/members — or a
+// role-group like the built-in `user` group for shared-with-everyone). The
+// owner is always included because CreateAgent seeds the creator's admin grant.
+func (q *Queries) ListAgentsVisibleToUser(ctx context.Context, granteeIds []pgtype.UUID) ([]Agent, error) {
+	rows, err := q.db.Query(ctx, listAgentsVisibleToUser, granteeIds)
 	if err != nil {
 		return nil, err
 	}

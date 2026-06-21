@@ -104,12 +104,12 @@ func testAgentAndUser(t *testing.T) (agentID, userID uuid.UUID) {
 		t.Fatalf("CreateAgent: %v", err)
 	}
 
-	if err := q.AddAgentMember(ctx, dbq.AddAgentMemberParams{
-		AgentID: agent.ID,
-		UserID:  user.ID,
-		Role:    "admin",
+	if err := q.UpsertAgentGrant(ctx, dbq.UpsertAgentGrantParams{
+		AgentID:   agent.ID,
+		GranteeID: user.ID,
+		Role:      "admin",
 	}); err != nil {
-		t.Fatalf("AddAgentMember: %v", err)
+		t.Fatalf("UpsertAgentGrant: %v", err)
 	}
 
 	return pgUUID(agent.ID), pgUUID(user.ID)

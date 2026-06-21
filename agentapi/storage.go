@@ -377,11 +377,8 @@ func ServeStoragePath(w http.ResponseWriter, r *http.Request, database *db.DB, s
 			rejectOrRedirect(w, r, publicURL)
 			return
 		}
-		hasAccess, err := q.HasAgentAccess(r.Context(), dbq.HasAgentAccessParams{
-			AgentID: toPgUUID(agentID),
-			UserID:  toPgUUID(uid),
-		})
-		if err != nil || !hasAccess {
+		access := authz.UserPrincipal(uid, "").EffectiveAgentAccess(r.Context(), q, agentID)
+		if !authz.AccessAtLeast(access, agentsdk.AccessUser) {
 			http.NotFound(w, r)
 			return
 		}
@@ -396,11 +393,8 @@ func ServeStoragePath(w http.ResponseWriter, r *http.Request, database *db.DB, s
 			rejectOrRedirect(w, r, publicURL)
 			return
 		}
-		member, err := q.GetAgentMember(r.Context(), dbq.GetAgentMemberParams{
-			AgentID: toPgUUID(agentID),
-			UserID:  toPgUUID(uid),
-		})
-		if err != nil || !authz.AccessAtLeast(agentsdk.Access(member.Role), agentsdk.AccessAdmin) {
+		access := authz.UserPrincipal(uid, "").EffectiveAgentAccess(r.Context(), q, agentID)
+		if !authz.AccessAtLeast(access, agentsdk.AccessAdmin) {
 			http.NotFound(w, r)
 			return
 		}
