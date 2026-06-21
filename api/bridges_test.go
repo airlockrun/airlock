@@ -260,14 +260,25 @@ func TestCreateSystemBridgeRequiresAdmin(t *testing.T) {
 		r.Post("/api/v1/bridges", bh.CreateBridge)
 	})
 
-	// System bridge (no agent_id) as a manager role → still 403.
-	body := map[string]string{"name": "System Bot", "token": "fake-token"}
+	// System bridge (is_system) as a manager role → 403 (admin-only).
+	body := map[string]any{"name": "System Bot", "token": "fake-token", "isSystem": true}
 	req := requestJSONAs(t, "POST", "/api/v1/bridges", userID, "manager", body)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusForbidden {
 		t.Errorf("system bridge as manager: status = %d, want 403", rec.Code)
+	}
+
+	// No agent + not system → unbound bridge, which a manager MAY create.
+	// Regression guard: empty agent_id must not be inferred as a system bridge.
+	unbound := map[string]any{"name": "Unbound Bot", "token": "fake-token"}
+	req = requestJSONAs(t, "POST", "/api/v1/bridges", userID, "manager", unbound)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("unbound bridge as manager: status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
 	}
 }
 

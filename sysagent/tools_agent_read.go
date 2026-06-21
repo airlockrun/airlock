@@ -6,6 +6,7 @@ import (
 
 	"github.com/airlockrun/airlock/convert"
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
+	"github.com/airlockrun/airlock/sysagent/agentview"
 	"github.com/airlockrun/goai/tool"
 	"github.com/google/uuid"
 )
@@ -47,7 +48,7 @@ func (s *Service) toolListAgents() tool.Tool {
 				ap.YourAccess = string(it.YourAccess)
 				agents[i] = ap
 			}
-			return okResult(&airlockv1.ListAgentsResponse{Agents: agents})
+			return okResult(agentview.Agents(agents))
 		}).
 		Build()
 }
@@ -76,26 +77,33 @@ func (s *Service) toolGetAgent() tool.Tool {
 			ap := convert.AgentToProto(d.Agent)
 			ap.Running = d.Running
 			ap.YourAccess = string(d.YourAccess)
-			resp := &airlockv1.GetAgentDetailResponse{
-				Agent:       ap,
-				Connections: make([]*airlockv1.ConnectionInfo, len(d.Connections)),
-				Webhooks:    make([]*airlockv1.WebhookInfo, len(d.Webhooks)),
-				Schedules:   make([]*airlockv1.ScheduleInfo, len(d.Schedules)),
-				Routes:      make([]*airlockv1.RouteInfo, len(d.Routes)),
-			}
+			conns := make([]*airlockv1.ConnectionInfo, len(d.Connections))
 			for i, c := range d.Connections {
-				resp.Connections[i] = convert.ConnectionToProto(c, s.publicURL, agentID.String())
+				conns[i] = convert.ConnectionToProto(c, s.publicURL, agentID.String())
 			}
+			hooks := make([]*airlockv1.WebhookInfo, len(d.Webhooks))
 			for i, w := range d.Webhooks {
-				resp.Webhooks[i] = convert.WebhookToProto(w, s.publicURL, agentID.String())
+				hooks[i] = convert.WebhookToProto(w, s.publicURL, agentID.String())
 			}
+			scheds := make([]*airlockv1.ScheduleInfo, len(d.Schedules))
 			for i, c := range d.Schedules {
-				resp.Schedules[i] = convert.ScheduleToProto(c)
+				scheds[i] = convert.ScheduleToProto(c)
 			}
+			routes := make([]*airlockv1.RouteInfo, len(d.Routes))
 			for i, r := range d.Routes {
-				resp.Routes[i] = convert.RouteToProto(r)
+				routes[i] = convert.RouteToProto(r)
 			}
-			return okResult(resp)
+			// slug/path is the handle on the nested resources, so their UUID
+			// ids + timestamps are dropped (delete on an absent key is a no-op,
+			// so the generous noise list is safe across types).
+			noise := []string{"id", "created_at", "updated_at", "token_expires_at"}
+			return okResult(map[string]any{
+				"agent":       agentview.Agent(ap),
+				"connections": agentview.StripEach(conns, noise...),
+				"webhooks":    agentview.StripEach(hooks, noise...),
+				"schedules":   agentview.StripEach(scheds, noise...),
+				"routes":      agentview.StripEach(routes, noise...),
+			})
 		}).
 		Build()
 }
@@ -125,7 +133,7 @@ func (s *Service) toolListWebhooks() tool.Tool {
 			for i, w := range rows {
 				out[i] = convert.WebhookToProto(w, s.publicURL, agentID.String())
 			}
-			return okResult(out)
+			return okResult(agentview.StripEach(out, "id", "created_at", "updated_at"))
 		}).
 		Build()
 }
@@ -154,7 +162,7 @@ func (s *Service) toolListSchedules() tool.Tool {
 			for i, c := range rows {
 				out[i] = convert.ScheduleToProto(c)
 			}
-			return okResult(out)
+			return okResult(agentview.StripEach(out, "id", "created_at", "updated_at"))
 		}).
 		Build()
 }

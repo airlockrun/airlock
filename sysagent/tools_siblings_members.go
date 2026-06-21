@@ -8,6 +8,7 @@ import (
 	"github.com/airlockrun/airlock/convert"
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 	siblingssvc "github.com/airlockrun/airlock/service/siblings"
+	"github.com/airlockrun/airlock/sysagent/agentview"
 	"github.com/airlockrun/goai/tool"
 	"github.com/google/uuid"
 )
@@ -53,7 +54,7 @@ func (s *Service) toolListSiblings() tool.Tool {
 			for i, sb := range rows {
 				out[i] = convert.SiblingToProto(sb)
 			}
-			return okResult(out)
+			return okResult(agentview.StripEach(out, "id", "created_at", "updated_at"))
 		}).
 		Build()
 }
@@ -82,7 +83,7 @@ func (s *Service) toolListAddableSiblings() tool.Tool {
 			for i, ad := range rows {
 				out[i] = convert.AddableSiblingToProto(ad)
 			}
-			return okResult(out)
+			return okResult(agentview.StripEach(out, "id", "created_at", "updated_at"))
 		}).
 		Build()
 }
@@ -231,7 +232,9 @@ func (s *Service) toolListAgentMembers() tool.Tool {
 			for i, m := range rows {
 				out[i] = convert.MemberToProto(m)
 			}
-			return okResult(out)
+			// user_id stays — it's the grantee handle (the All-users group has
+			// no email); only the boilerplate timestamp is noise.
+			return okResult(agentview.StripEach(out, "created_at"))
 		}).
 		Build()
 }

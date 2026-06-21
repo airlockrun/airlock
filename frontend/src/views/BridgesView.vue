@@ -158,11 +158,13 @@ async function onSubmit() {
       type: form.value.type,
       token: form.value.token,
       agentId: agentIdField,
+      isSystem: createIsSystem.value,
       isManager: form.value.type === 'telegram' ? form.value.isManager : false,
     })
     if (created?.id) {
       await store.updateBridge(created.id, {
         agentId: agentIdField,
+        isSystem: createIsSystem.value,
         settings: {
           allowPublicDms: createAllowPublicDMs.value,
           publicSessionTtlSeconds: createTTLNever.value ? 0 : ttlToSeconds(createTTLAmount.value, createTTLUnit.value),

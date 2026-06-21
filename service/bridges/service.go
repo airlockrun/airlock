@@ -66,7 +66,8 @@ type CreateRequest struct {
 	Type      string // "telegram" or "discord" — empty defaults to "telegram"
 	Name      string
 	Token     string
-	AgentID   string // empty → system bridge (admin only)
+	AgentID   string // bound agent; empty → system (if IsSystem) or unbound
+	IsSystem  bool   // route inbound DMs to the system agent (admin only; AgentID must be empty)
 	IsManager bool   // Telegram-only manager capability (admin only)
 }
 
@@ -166,13 +167,20 @@ func (s *Service) Create(ctx context.Context, p authz.Principal, req CreateReque
 	if err := authz.Authorize(ctx, q, p, authz.TenantBridgeCreate, uuid.Nil); err != nil {
 		return Result{}, service.Detail(err, "creating bridges requires manager role")
 	}
+	// System is an explicit flag, never inferred from an empty agent_id. Three
+	// outcomes: system (admin, no agent), agent-bound (agent-admin), or unbound
+	// (manager, owner-scoped — routes nothing until rebound to an agent).
 	var agentPgID pgtype.UUID
-	isSystem := req.AgentID == ""
-	if isSystem {
+	isSystem := req.IsSystem
+	switch {
+	case isSystem:
+		if req.AgentID != "" {
+			return Result{}, service.Detail(service.ErrInvalidInput, "a system bridge cannot be bound to an agent")
+		}
 		if err := authz.Authorize(ctx, q, p, authz.TenantBridgeSystem, uuid.Nil); err != nil {
 			return Result{}, service.Detail(err, "system bridges require admin role")
 		}
-	} else {
+	case req.AgentID != "":
 		agentID, err := uuid.Parse(req.AgentID)
 		if err != nil {
 			return Result{}, service.Detail(service.ErrInvalidInput, "invalid agent_id")
@@ -181,6 +189,9 @@ func (s *Service) Create(ctx context.Context, p authz.Principal, req CreateReque
 			return Result{}, service.ErrForbidden
 		}
 		agentPgID = pgtype.UUID{Bytes: agentID, Valid: true}
+	default:
+		// Unbound: no agent, not system. Owner-scoped; only TenantBridgeCreate
+		// (already checked above) is required.
 	}
 	bridgeType := req.Type
 	if bridgeType == "" {
@@ -577,10 +588,10 @@ func (s *Service) Update(ctx context.Context, p authz.Principal, bridgeID uuid.U
 		if req.AgentID != "" {
 			return Result{}, service.Detail(service.ErrInvalidInput, "system bridges cannot have an agent_id")
 		}
+	case req.AgentID == "":
+		// Not system, no agent → unbind to the orphan/unbound state (routes
+		// nothing until rebound). newAgentID stays the zero (NULL) value.
 	default:
-		if req.AgentID == "" {
-			return Result{}, service.Detail(service.ErrInvalidInput, "agent bridges require a non-empty agent_id")
-		}
 		agentID, err := uuid.Parse(req.AgentID)
 		if err != nil {
 			return Result{}, service.Detail(service.ErrInvalidInput, "invalid agent_id")

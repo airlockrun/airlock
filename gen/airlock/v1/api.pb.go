@@ -3613,7 +3613,11 @@ type CreateBridgeRequest struct {
 	Type    string                 `protobuf:"bytes,4,opt,name=type,proto3" json:"type,omitempty"` // "telegram", "discord"
 	// Telegram manager-bot capability (admin only; requires the bot's
 	// can_manage_bots to be enabled in BotFather). Telegram-only.
-	IsManager     bool `protobuf:"varint,5,opt,name=is_manager,json=isManager,proto3" json:"is_manager,omitempty"`
+	IsManager bool `protobuf:"varint,5,opt,name=is_manager,json=isManager,proto3" json:"is_manager,omitempty"`
+	// System bridge: routes inbound DMs to the airlock system agent (admin
+	// only; agent_id must be empty). When false and agent_id is empty, the
+	// bridge is created unbound (owner-scoped, routes nothing until bound).
+	IsSystem      bool `protobuf:"varint,6,opt,name=is_system,json=isSystem,proto3" json:"is_system,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3679,6 +3683,13 @@ func (x *CreateBridgeRequest) GetType() string {
 func (x *CreateBridgeRequest) GetIsManager() bool {
 	if x != nil {
 		return x.IsManager
+	}
+	return false
+}
+
+func (x *CreateBridgeRequest) GetIsSystem() bool {
+	if x != nil {
+		return x.IsSystem
 	}
 	return false
 }
@@ -7281,14 +7292,15 @@ const file_airlock_v1_api_proto_rawDesc = "" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x1f\n" +
 	"\vstatus_code\x18\x02 \x01(\x05R\n" +
 	"statusCode\x12\x18\n" +
-	"\amessage\x18\x03 \x01(\tR\amessage\"\x8d\x01\n" +
+	"\amessage\x18\x03 \x01(\tR\amessage\"\xaa\x01\n" +
 	"\x13CreateBridgeRequest\x12\x19\n" +
 	"\bagent_id\x18\x01 \x01(\tR\aagentId\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x14\n" +
 	"\x05token\x18\x03 \x01(\tR\x05token\x12\x12\n" +
 	"\x04type\x18\x04 \x01(\tR\x04type\x12\x1d\n" +
 	"\n" +
-	"is_manager\x18\x05 \x01(\bR\tisManager\"\xcb\x01\n" +
+	"is_manager\x18\x05 \x01(\bR\tisManager\x12\x1b\n" +
+	"\tis_system\x18\x06 \x01(\bR\bisSystem\"\xcb\x01\n" +
 	"\x13UpdateBridgeRequest\x12\x19\n" +
 	"\bagent_id\x18\x01 \x01(\tR\aagentId\x126\n" +
 	"\bsettings\x18\x02 \x01(\v2\x1a.airlock.v1.BridgeSettingsR\bsettings\x12 \n" +

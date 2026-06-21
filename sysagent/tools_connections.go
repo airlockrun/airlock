@@ -6,6 +6,7 @@ import (
 
 	"github.com/airlockrun/airlock/convert"
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
+	"github.com/airlockrun/airlock/sysagent/agentview"
 	"github.com/airlockrun/goai/tool"
 	"github.com/google/uuid"
 )
@@ -60,9 +61,9 @@ func (s *Service) toolListConnections() tool.Tool {
 			for i, c := range out.Connections {
 				conns[i] = convert.ConnectionDTOToProto(c, s.publicURL, agentID.String())
 			}
-			return okResult(&airlockv1.ListConnectionsResponse{
-				Connections:      conns,
-				OauthCallbackUrl: out.OAuthCallbackURL,
+			return okResult(map[string]any{
+				"connections":        agentview.StripEach(conns, "id", "created_at", "updated_at", "token_expires_at"),
+				"oauth_callback_url": out.OAuthCallbackURL,
 			})
 		}).
 		Build()
@@ -191,7 +192,7 @@ func (s *Service) toolListMCPServers() tool.Tool {
 			for i, m := range rows {
 				out[i] = convert.MCPServerToProto(m, s.publicURL, uuid.UUID(a.ID.Bytes).String())
 			}
-			return okResult(out)
+			return okResult(agentview.StripEach(out, "id", "created_at", "updated_at"))
 		}).
 		Build()
 }

@@ -3,11 +3,15 @@ package sysagent
 import (
 	"context"
 	"encoding/json"
+	"time"
 
 	"github.com/airlockrun/airlock/convert"
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 	bridgessvc "github.com/airlockrun/airlock/service/bridges"
+	managedbotssvc "github.com/airlockrun/airlock/service/managedbots"
+	"github.com/airlockrun/airlock/sysagent/agentview"
 	"github.com/airlockrun/goai/tool"
+	"github.com/google/uuid"
 )
 
 // bridgeTools wires the tenant-axis bridge tools (every mutator gates
@@ -26,7 +30,45 @@ func (s *Service) bridgeTools() []tool.Tool {
 		s.toolListBridges(),
 		s.toolDeleteBridge(),
 		s.toolUpdateBridge(),
+		s.toolCreateTgBot(),
 	}
+}
+
+// --- create_tg_bot ---
+
+type createTgBotInput struct {
+	Agent string `json:"agent" jsonschema:"required,description=Agent slug (or UUID) to bind the new Telegram bot to."`
+	Name  string `json:"name,omitempty" jsonschema:"description=Display name for the new bot; pre-fills the Telegram bot name."`
+}
+
+func (s *Service) toolCreateTgBot() tool.Tool {
+	return tool.New("create_tg_bot").
+		Description(`Start creating a Telegram bot bound to an agent through the manager-bot deep link. Returns a t.me link the operator opens in Telegram to finish setup; the resulting bot becomes an agent-bound bridge. Errors if no Telegram manager bot is configured. Requires manager-or-admin tenant role and agent-admin on the target agent.`).
+		SchemaFromStruct(createTgBotInput{}).
+		Execute(func(ctx context.Context, raw json.RawMessage, _ tool.CallOptions) (tool.Result, error) {
+			var in createTgBotInput
+			if err := json.Unmarshal(raw, &in); err != nil {
+				return errResult(err), nil
+			}
+			a, err := s.resolveAgent(ctx, in.Agent)
+			if err != nil {
+				return errResult(err), nil
+			}
+			p := principalFromCtx(ctx)
+			out, err := s.managedbots.CreateSession(ctx, p, managedbotssvc.CreateSessionRequest{
+				AgentID:       uuid.UUID(a.ID.Bytes),
+				SuggestedName: in.Name,
+			})
+			if err != nil {
+				return errResult(err), nil
+			}
+			return okResult(map[string]string{
+				"status":     "Open this link in Telegram to finish creating the bot",
+				"deep_link":  out.DeepLink,
+				"expires_at": out.Expires.Format(time.RFC3339),
+			})
+		}).
+		Build()
 }
 
 // --- list_bridges ---
@@ -45,7 +87,8 @@ func (s *Service) toolListBridges() tool.Tool {
 			for i, item := range rows {
 				out[i] = convert.BridgeListItemToProto(item)
 			}
-			return okResult(out)
+			// id stays — bridge_id is the handle for update_bridge/delete_bridge.
+			return okResult(agentview.StripEach(out, "created_at", "updated_at", "last_polled_at"))
 		}).
 		Build()
 }
@@ -98,7 +141,7 @@ func (s *Service) toolUpdateBridge() tool.Tool {
 			if err != nil {
 				return errResult(err), nil
 			}
-			return okResult(convert.BridgeResultToProto(res))
+			return okResult(agentview.Strip(convert.BridgeResultToProto(res), "created_at", "updated_at", "last_polled_at"))
 		}).
 		Build()
 }
