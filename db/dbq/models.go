@@ -147,6 +147,13 @@ type AgentExecEndpoint struct {
 	OwnerPrincipalID pgtype.UUID        `json:"owner_principal_id"`
 }
 
+type AgentGrant struct {
+	AgentID   pgtype.UUID        `json:"agent_id"`
+	GranteeID pgtype.UUID        `json:"grantee_id"`
+	Role      string             `json:"role"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
 type AgentMcpServer struct {
 	ID                   pgtype.UUID        `json:"id"`
 	Slug                 string             `json:"slug"`
@@ -170,13 +177,6 @@ type AgentMcpServer struct {
 	UpdatedAt            pgtype.Timestamptz `json:"updated_at"`
 	ServerInstructions   string             `json:"server_instructions"`
 	OwnerPrincipalID     pgtype.UUID        `json:"owner_principal_id"`
-}
-
-type AgentMember struct {
-	AgentID   pgtype.UUID        `json:"agent_id"`
-	UserID    pgtype.UUID        `json:"user_id"`
-	Role      string             `json:"role"`
-	CreatedAt pgtype.Timestamptz `json:"created_at"`
 }
 
 type AgentMessage struct {

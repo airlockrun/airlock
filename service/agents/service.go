@@ -102,7 +102,7 @@ type UpdateRequest struct {
 // and the caller's effective access on this agent.
 //
 // YourAccess is "admin" / "user" / "public" (see agentsdk.Access),
-// resolved from agent_members at list time. It exists so any caller —
+// resolved from agent_grants at list time. It exists so any caller —
 // web UI, A2A, the in-airlock system agent — can decide locally which
 // per-agent actions to offer without re-authorizing each one.
 type ListItem struct {
@@ -284,10 +284,10 @@ func (s *Service) Create(ctx context.Context, p authz.Principal, req CreateReque
 		agent.ExecProviderID = execProviderFK
 		agent.ExecModel = req.ExecModel
 	}
-	_ = q.AddAgentMember(ctx, dbq.AddAgentMemberParams{
-		AgentID: agent.ID,
-		UserID:  pgtype.UUID{Bytes: p.UserID, Valid: true},
-		Role:    "admin",
+	_ = q.UpsertAgentGrant(ctx, dbq.UpsertAgentGrantParams{
+		AgentID:   agent.ID,
+		GranteeID: pgtype.UUID{Bytes: p.UserID, Valid: true},
+		Role:      "admin",
 	})
 	agentIDStr := uuid.UUID(agent.ID.Bytes).String()
 	go func() {
@@ -309,8 +309,8 @@ func (s *Service) Create(ctx context.Context, p authz.Principal, req CreateReque
 }
 
 // List returns the agents visible to the caller — every agent for
-// tenant admins, agent_members-joined for everyone else — annotated
-// with the live container-running flag.
+// tenant admins, grant-joined (own + member + group-shared) for everyone
+// else — annotated with the live container-running flag.
 func (s *Service) List(ctx context.Context, p authz.Principal) ([]ListItem, error) {
 	q := dbq.New(s.db.Pool())
 	if err := authz.Authorize(ctx, q, p, authz.TenantAgentList, uuid.Nil); err != nil {
@@ -321,7 +321,12 @@ func (s *Service) List(ctx context.Context, p authz.Principal) ([]ListItem, erro
 	if authz.Authorize(ctx, q, p, authz.TenantAgentListAll, uuid.Nil) == nil {
 		agents, err = q.ListAgents(ctx)
 	} else {
-		agents, err = q.ListAgentsByUserID(ctx, pgtype.UUID{Bytes: p.UserID, Valid: true})
+		set := p.GranteeSet()
+		grantees := make([]pgtype.UUID, len(set))
+		for i, id := range set {
+			grantees[i] = pgtype.UUID{Bytes: id, Valid: true}
+		}
+		agents, err = q.ListAgentsVisibleToUser(ctx, grantees)
 	}
 	if err != nil {
 		s.logger.Error("list agents", zap.Error(err))

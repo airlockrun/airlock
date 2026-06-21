@@ -15,9 +15,9 @@ const addSiblingIfAllowed = `-- name: AddSiblingIfAllowed :execrows
 INSERT INTO agent_siblings (parent_agent_id, sibling_agent_id)
 SELECT $1, $2
 WHERE EXISTS (
-    SELECT 1 FROM agent_members
-    WHERE agent_members.agent_id = $2
-      AND agent_members.user_id = $3
+    SELECT 1 FROM agent_grants
+    WHERE agent_grants.agent_id = $2
+      AND agent_grants.grantee_id = $3
 ) OR EXISTS (
     SELECT 1 FROM agents
     WHERE agents.id = $2 AND agents.allow_non_member_mcp = true
@@ -45,9 +45,9 @@ func (q *Queries) AddSiblingIfAllowed(ctx context.Context, arg AddSiblingIfAllow
 
 const isUserAllowedAddSibling = `-- name: IsUserAllowedAddSibling :one
 SELECT (EXISTS (
-    SELECT 1 FROM agent_members
-    WHERE agent_members.agent_id = $1
-      AND agent_members.user_id = $2
+    SELECT 1 FROM agent_grants
+    WHERE agent_grants.agent_id = $1
+      AND agent_grants.grantee_id = $2
 ) OR EXISTS (
     SELECT 1 FROM agents
     WHERE agents.id = $1 AND agents.allow_non_member_mcp = true
@@ -73,9 +73,9 @@ func (q *Queries) IsUserAllowedAddSibling(ctx context.Context, arg IsUserAllowed
 const listAddableSiblings = `-- name: ListAddableSiblings :many
 SELECT a.id, a.slug, a.name, a.description, a.allow_non_member_mcp,
        EXISTS (
-           SELECT 1 FROM agent_members
-           WHERE agent_members.agent_id = a.id
-             AND agent_members.user_id = $1
+           SELECT 1 FROM agent_grants
+           WHERE agent_grants.agent_id = a.id
+             AND agent_grants.grantee_id = $1
        ) AS is_member
 FROM agents a
 WHERE a.id <> $2
@@ -86,9 +86,9 @@ WHERE a.id <> $2
   )
   AND (
       EXISTS (
-          SELECT 1 FROM agent_members
-          WHERE agent_members.agent_id = a.id
-            AND agent_members.user_id = $1
+          SELECT 1 FROM agent_grants
+          WHERE agent_grants.agent_id = a.id
+            AND agent_grants.grantee_id = $1
       )
       OR a.allow_non_member_mcp = true
   )
@@ -199,9 +199,9 @@ WHERE s.parent_agent_id = $1
   AND (
       a.allow_non_member_mcp = true
       OR EXISTS (
-          SELECT 1 FROM agent_members
-          WHERE agent_members.agent_id = a.id
-            AND agent_members.user_id = $2
+          SELECT 1 FROM agent_grants
+          WHERE agent_grants.agent_id = a.id
+            AND agent_grants.grantee_id = $2
       )
   )
 `
@@ -218,7 +218,7 @@ type ListVisibleSiblingsParams struct {
 //   - the sibling has allow_non_member_mcp = true.
 //
 // For anonymous runs (no user), pass uuid_nil as @user_id; the
-// EXISTS check on agent_members fails, leaving only the
+// EXISTS check on agent_grants fails, leaving only the
 // non-member-open siblings.
 func (q *Queries) ListVisibleSiblings(ctx context.Context, arg ListVisibleSiblingsParams) ([]pgtype.UUID, error) {
 	rows, err := q.db.Query(ctx, listVisibleSiblings, arg.ParentAgentID, arg.UserID)

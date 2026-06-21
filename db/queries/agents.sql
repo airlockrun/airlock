@@ -39,9 +39,6 @@ SELECT * FROM agents WHERE id = $1;
 -- name: GetAgentBySlug :one
 SELECT * FROM agents WHERE slug = $1;
 
--- name: ListAgentsByUser :many
-SELECT * FROM agents WHERE user_id = $1 ORDER BY created_at DESC;
-
 -- name: UpdateAgentStatus :exec
 UPDATE agents SET status = @status, error_message = @error_message, updated_at = now() WHERE id = @id;
 
@@ -85,8 +82,14 @@ SELECT * FROM agents
 WHERE image_ref <> '' AND status IN ('active', 'stopped')
 ORDER BY created_at ASC;
 
--- name: ListAgentsByUserID :many
-SELECT * FROM agents WHERE user_id = $1 ORDER BY created_at DESC;
+-- name: ListAgentsVisibleToUser :many
+-- Agents the caller can see: any agent carrying a grant to a principal in the
+-- caller's grantee-set (their own user principal — owners/members — or a
+-- role-group like the built-in `user` group for shared-with-everyone). The
+-- owner is always included because CreateAgent seeds the creator's admin grant.
+SELECT DISTINCT a.* FROM agents a
+JOIN agent_grants g ON g.agent_id = a.id AND g.grantee_id = ANY (@grantee_ids::uuid[])
+ORDER BY a.created_at DESC;
 
 -- name: DeleteAgent :exec
 -- Delete through the principal: ON DELETE CASCADE removes the agents row and,

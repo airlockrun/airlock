@@ -1106,7 +1106,39 @@ CREATE TABLE model_grants (
 );
 CREATE INDEX model_grants_grantee_idx ON model_grants (grantee_id);
 
+-- ─── agent access via grants (agent_members unified into principal-keyed grants) ───
+-- Agent access is a grant to a principal: a user (per-user member) or a group
+-- (the built-in `user` group = every registered user → "shared with everyone").
+-- EffectiveAgentAccess resolves it through the caller's grantee-set, the same
+-- resolver resource/model grants use — one table, one FK, one resolver. The
+-- agent owner's admin grant is seeded on create.
+CREATE TABLE agent_grants (
+    agent_id   uuid NOT NULL REFERENCES agents(id)     ON DELETE CASCADE,
+    grantee_id uuid NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
+    role       text NOT NULL CHECK (role IN ('admin', 'user')),
+    created_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (agent_id, grantee_id)
+);
+CREATE INDEX agent_grants_grantee_idx ON agent_grants (grantee_id);
+-- agent_members.user_id values are already user principal ids → FK valid.
+INSERT INTO agent_grants (agent_id, grantee_id, role, created_at)
+    SELECT agent_id, user_id, role, created_at FROM agent_members;
+DROP TABLE agent_members;
+
 -- +goose Down
+-- ─── agent access — reverse (agent_grants → agent_members) ───
+CREATE TABLE agent_members (
+    agent_id   uuid NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    user_id    uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    role       text NOT NULL CHECK (role IN ('admin', 'user')),
+    created_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (agent_id, user_id)
+);
+-- Only user-kind grantees map back; group grants (shared-with-everyone) are dropped.
+INSERT INTO agent_members (agent_id, user_id, role, created_at)
+    SELECT g.agent_id, g.grantee_id, g.role, g.created_at
+    FROM agent_grants g JOIN users u ON u.id = g.grantee_id;
+DROP TABLE agent_grants;
 -- ─── grants — reverse ───
 DROP TABLE IF EXISTS model_grants;
 DROP TABLE IF EXISTS resource_grants;

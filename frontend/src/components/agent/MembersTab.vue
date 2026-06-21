@@ -10,7 +10,13 @@ interface Member {
   email: string
   displayName: string
   role: string
+  kind: string // "user" | "group"
 }
+
+// Built-in `user` group principal — every registered user. Granting it shares
+// the agent with everyone; it shows in the picker/list as "All users".
+const GROUP_USER_ID = '00000000-0000-0000-0000-0000000000a3'
+const ALL_USERS_LABEL = 'All users'
 
 const props = defineProps<{ agentId: string }>()
 const emit = defineEmits<{ populated: [count: number] }>()
@@ -30,13 +36,24 @@ const roleOptions = [
   { label: 'User', value: 'user' },
 ]
 
-// Users not already members
+// "All users" (the built-in group) plus individual users not already granted.
 const availableUsers = computed(() => {
   const memberIds = new Set(members.value.map(m => m.userId))
-  return usersStore.selectable
-    .filter(u => !memberIds.has(u.id))
-    .map(u => ({ id: u.id, email: u.email, displayName: u.displayName, label: u.displayName ? `${u.displayName} (${u.email})` : u.email }))
+  const out: { id: string; email: string; displayName: string; label: string }[] = []
+  if (!memberIds.has(GROUP_USER_ID)) {
+    out.push({ id: GROUP_USER_ID, email: '', displayName: ALL_USERS_LABEL, label: ALL_USERS_LABEL })
+  }
+  for (const u of usersStore.selectable) {
+    if (memberIds.has(u.id)) continue
+    out.push({ id: u.id, email: u.email, displayName: u.displayName, label: u.displayName ? `${u.displayName} (${u.email})` : u.email })
+  }
+  return out
 })
+
+function memberLabel(m: Member): string {
+  if (m.userId === GROUP_USER_ID) return ALL_USERS_LABEL
+  return m.email || m.displayName || m.userId
+}
 
 function mapMember(raw: Record<string, any>): Member {
   return {
@@ -44,6 +61,7 @@ function mapMember(raw: Record<string, any>): Member {
     email: raw.email ?? '',
     displayName: raw.displayName ?? raw.display_name ?? '',
     role: raw.role ?? '',
+    kind: raw.kind ?? 'user',
   }
 }
 
@@ -68,6 +86,7 @@ async function addMember() {
       email: user.email,
       displayName: user.displayName,
       role: newRole.value,
+      kind: user.id === GROUP_USER_ID ? 'group' : 'user',
     })
     showAddDialog.value = false
     selectedUserId.value = ''
@@ -79,7 +98,7 @@ async function addMember() {
 
 function confirmRemove(member: Member) {
   confirm.require({
-    message: `Remove ${member.email} from this agent?`,
+    message: `Remove ${memberLabel(member)} from this agent?`,
     header: 'Confirm Removal',
     acceptLabel: 'Remove',
     rejectLabel: 'Cancel',
@@ -113,8 +132,15 @@ onMounted(async () => {
           No members.
         </div>
       </template>
-      <Column field="email" header="Email" />
-      <Column field="displayName" header="Display Name" />
+      <Column header="Member">
+        <template #body="{ data: member }">
+          <span v-if="member.kind === 'group'"><i class="pi pi-users" style="margin-right: 0.4rem" />{{ memberLabel(member) }}</span>
+          <span v-else>{{ member.email }}</span>
+        </template>
+      </Column>
+      <Column header="Display Name">
+        <template #body="{ data: member }">{{ member.kind === 'group' ? '' : member.displayName }}</template>
+      </Column>
       <Column header="Role">
         <template #body="{ data: member }">
           <Tag :value="member.role" :severity="roleSeverity(member.role)" />
@@ -134,7 +160,7 @@ onMounted(async () => {
     </DataTable>
 
     <DataTable v-else :value="[{}, {}, {}]">
-      <Column header="Email">
+      <Column header="Member">
         <template #body><Skeleton /></template>
       </Column>
       <Column header="Display Name">

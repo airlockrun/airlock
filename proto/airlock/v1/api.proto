@@ -407,16 +407,17 @@ message FireScheduleResponse {
 // --- Agent Members ---
 
 message AddAgentMemberRequest {
-  string user_id = 1;
+  string user_id = 1; // grantee principal id: a user, or the built-in `user` group (All users)
   string role = 2; // "admin" or "user"
 }
 
 message AgentMemberInfo {
-  string user_id = 1;
+  string user_id = 1; // grantee principal id (user or group)
   string email = 2;
   string display_name = 3;
   string role = 4;
   google.protobuf.Timestamp created_at = 5;
+  string kind = 6; // grantee kind: "user" or "group"
 }
 
 message ListAgentMembersResponse {

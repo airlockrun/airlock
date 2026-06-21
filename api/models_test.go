@@ -166,12 +166,12 @@ func TestUpdateModelConfig_AdminOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateUser: %v", err)
 	}
-	if err := q.AddAgentMember(ctx, dbq.AddAgentMemberParams{
-		AgentID: toPgUUID(agentID),
-		UserID:  outsider.ID,
-		Role:    "user",
+	if err := q.UpsertAgentGrant(ctx, dbq.UpsertAgentGrantParams{
+		AgentID:   toPgUUID(agentID),
+		GranteeID: outsider.ID,
+		Role:      "user",
 	}); err != nil {
-		t.Fatalf("AddAgentMember: %v", err)
+		t.Fatalf("UpsertAgentGrant: %v", err)
 	}
 
 	router := userRouter(func(r chi.Router) {
