@@ -451,12 +451,12 @@ func (b *BuildService) resolveSearchTool(ctx context.Context, rp *resolvedProvid
 		if !p.IsEnabled {
 			continue
 		}
-		ov, ok := solprovider.Overlay[p.CatalogID]
-		if !ok || ov.SearchBackend == "" {
+		backend := solprovider.SearchBackend(p.CatalogID)
+		if backend == "" {
 			continue
 		}
 		_, inBase := base[p.CatalogID]
-		ranked = append(ranked, cand{row: p, backend: ov.SearchBackend, catalogOnly: !inBase})
+		ranked = append(ranked, cand{row: p, backend: backend, catalogOnly: !inBase})
 	}
 	sort.Slice(ranked, func(i, j int) bool {
 		if ranked[i].catalogOnly != ranked[j].catalogOnly {
