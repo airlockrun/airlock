@@ -8,6 +8,7 @@ import (
 	"github.com/airlockrun/airlock/db/dbq"
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 	"github.com/airlockrun/airlock/service"
+	"github.com/airlockrun/airlock/sysagent/agentview"
 	"github.com/airlockrun/goai/tool"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -33,7 +34,8 @@ func (s *Service) toolListUsers() tool.Tool {
 			for i, u := range rows {
 				out[i] = convert.UserSummaryToProto(u)
 			}
-			return okResult(out)
+			// email is the handle for add_agent_member; drop the UUID + timestamps.
+			return okResult(agentview.StripEach(out, "id", "created_at", "updated_at"))
 		}).
 		Build()
 }

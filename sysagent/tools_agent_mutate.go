@@ -8,6 +8,7 @@ import (
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 	"github.com/airlockrun/airlock/service"
 	agentssvc "github.com/airlockrun/airlock/service/agents"
+	"github.com/airlockrun/airlock/sysagent/agentview"
 	"github.com/airlockrun/goai/tool"
 	"github.com/google/uuid"
 )
@@ -39,10 +40,6 @@ type createAgentInput struct {
 	Slug             string `json:"slug" jsonschema:"required,description=Agent slug — kebab-case, 2-63 chars."`
 	Name             string `json:"name" jsonschema:"required,description=Display name."`
 	Description      string `json:"description,omitempty" jsonschema:"description=Short prose description shown on the agent card."`
-	BuildModel       string `json:"build_model,omitempty" jsonschema:"description=Optional build-time model override (bare model name)."`
-	BuildProviderID  string `json:"build_provider_id,omitempty" jsonschema:"description=Provider UUID for build_model override."`
-	ExecModel        string `json:"exec_model,omitempty" jsonschema:"description=Optional runtime model override."`
-	ExecProviderID   string `json:"exec_provider_id,omitempty" jsonschema:"description=Provider UUID for exec_model override."`
 	Instructions     string `json:"instructions,omitempty" jsonschema:"description=Initial build instructions / spec for the agent."`
 	GitRemoteURL     string `json:"git_remote_url,omitempty" jsonschema:"description=Optional git remote URL to bind on create."`
 	GitCredentialID  string `json:"git_credential_id,omitempty" jsonschema:"description=Git credential UUID — call list_git_credentials to pick one."`
@@ -63,10 +60,6 @@ func (s *Service) toolCreateAgent() tool.Tool {
 				Name:                 in.Name,
 				Slug:                 in.Slug,
 				Description:          in.Description,
-				BuildModel:           in.BuildModel,
-				BuildProviderID:      in.BuildProviderID,
-				ExecModel:            in.ExecModel,
-				ExecProviderID:       in.ExecProviderID,
 				Instructions:         in.Instructions,
 				GitRemoteURL:         in.GitRemoteURL,
 				GitCredentialID:      in.GitCredentialID,
@@ -76,7 +69,7 @@ func (s *Service) toolCreateAgent() tool.Tool {
 			if err != nil {
 				return errResult(err), nil
 			}
-			return okResult(convert.AgentToProto(out))
+			return okResult(agentview.Agent(convert.AgentToProto(out)))
 		}).
 		Build()
 }
@@ -112,7 +105,7 @@ func (s *Service) toolUpdateAgent() tool.Tool {
 			if err != nil {
 				return errResult(err), nil
 			}
-			return okResult(convert.AgentToProto(out))
+			return okResult(agentview.Agent(convert.AgentToProto(out)))
 		}).
 		Build()
 }

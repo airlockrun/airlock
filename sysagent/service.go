@@ -13,8 +13,8 @@ import (
 	connsvc "github.com/airlockrun/airlock/service/connections"
 	execsvc "github.com/airlockrun/airlock/service/execendpoints"
 	gitcredssvc "github.com/airlockrun/airlock/service/gitcredentials"
+	managedbotssvc "github.com/airlockrun/airlock/service/managedbots"
 	memberssvc "github.com/airlockrun/airlock/service/members"
-	modelssvc "github.com/airlockrun/airlock/service/models"
 	runssvc "github.com/airlockrun/airlock/service/runs"
 	siblingssvc "github.com/airlockrun/airlock/service/siblings"
 	userssvc "github.com/airlockrun/airlock/service/users"
@@ -38,17 +38,17 @@ type Service struct {
 
 	// Per-domain services. The tool catalogue resolves these at
 	// registration time; no global lookups in tool bodies.
-	agents   *agentssvc.Service
-	bridges  *bridgessvc.Service
-	catalog  *catalogsvc.Service
-	conns    *connsvc.Service
-	execs    *execsvc.Service
-	gitcreds *gitcredssvc.Service
-	members  *memberssvc.Service
-	models   *modelssvc.Service
-	runs     *runssvc.Service
-	siblings *siblingssvc.Service
-	users    *userssvc.Service
+	agents      *agentssvc.Service
+	bridges     *bridgessvc.Service
+	catalog     *catalogsvc.Service
+	conns       *connsvc.Service
+	execs       *execsvc.Service
+	gitcreds    *gitcredssvc.Service
+	managedbots *managedbotssvc.Service
+	members     *memberssvc.Service
+	runs        *runssvc.Service
+	siblings    *siblingssvc.Service
+	users       *userssvc.Service
 
 	// activeRuns is the in-process registry of cancellable chat
 	// goroutines, keyed by run id. /cancel and operator-initiated
@@ -68,17 +68,17 @@ type Deps struct {
 	PublicURL string // base URL for deep-link tools (no trailing slash)
 	Logger    *zap.Logger
 
-	Agents   *agentssvc.Service
-	Bridges  *bridgessvc.Service
-	Catalog  *catalogsvc.Service
-	Conns    *connsvc.Service
-	Execs    *execsvc.Service
-	GitCreds *gitcredssvc.Service
-	Members  *memberssvc.Service
-	Models   *modelssvc.Service
-	Runs     *runssvc.Service
-	Siblings *siblingssvc.Service
-	Users    *userssvc.Service
+	Agents      *agentssvc.Service
+	Bridges     *bridgessvc.Service
+	Catalog     *catalogsvc.Service
+	Conns       *connsvc.Service
+	Execs       *execsvc.Service
+	GitCreds    *gitcredssvc.Service
+	ManagedBots *managedbotssvc.Service
+	Members     *memberssvc.Service
+	Runs        *runssvc.Service
+	Siblings    *siblingssvc.Service
+	Users       *userssvc.Service
 }
 
 // New wires the sysagent Service. Fail-loud on nil deps — every field
@@ -100,28 +100,28 @@ func New(d Deps) *Service {
 		panic("sysagent: logger is required")
 	}
 	if d.Agents == nil || d.Bridges == nil || d.Catalog == nil || d.Conns == nil ||
-		d.Execs == nil || d.GitCreds == nil || d.Members == nil ||
-		d.Models == nil || d.Runs == nil || d.Siblings == nil || d.Users == nil {
+		d.Execs == nil || d.GitCreds == nil || d.ManagedBots == nil || d.Members == nil ||
+		d.Runs == nil || d.Siblings == nil || d.Users == nil {
 		panic("sysagent: every per-domain service is required")
 	}
 	return &Service{
-		db:         d.DB,
-		encryptor:  d.Encryptor,
-		pubsub:     d.PubSub,
-		publicURL:  d.PublicURL,
-		logger:     d.Logger,
-		agents:     d.Agents,
-		bridges:    d.Bridges,
-		catalog:    d.Catalog,
-		conns:      d.Conns,
-		execs:      d.Execs,
-		gitcreds:   d.GitCreds,
-		members:    d.Members,
-		models:     d.Models,
-		runs:       d.Runs,
-		siblings:   d.Siblings,
-		users:      d.Users,
-		activeRuns: make(map[uuid.UUID]context.CancelFunc),
+		db:          d.DB,
+		encryptor:   d.Encryptor,
+		pubsub:      d.PubSub,
+		publicURL:   d.PublicURL,
+		logger:      d.Logger,
+		agents:      d.Agents,
+		bridges:     d.Bridges,
+		catalog:     d.Catalog,
+		conns:       d.Conns,
+		execs:       d.Execs,
+		gitcreds:    d.GitCreds,
+		managedbots: d.ManagedBots,
+		members:     d.Members,
+		runs:        d.Runs,
+		siblings:    d.Siblings,
+		users:       d.Users,
+		activeRuns:  make(map[uuid.UUID]context.CancelFunc),
 	}
 }
 

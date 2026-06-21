@@ -6,6 +6,7 @@ import (
 
 	"github.com/airlockrun/airlock/convert"
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
+	"github.com/airlockrun/airlock/sysagent/agentview"
 	"github.com/airlockrun/goai/tool"
 	"github.com/google/uuid"
 )
@@ -48,7 +49,7 @@ func (s *Service) toolListEnvVars() tool.Tool {
 			for i, e := range rows {
 				out[i] = convert.EnvVarToProto(e)
 			}
-			return okResult(out)
+			return okResult(agentview.StripEach(out, "id", "created_at", "updated_at"))
 		}).
 		Build()
 }
@@ -101,7 +102,7 @@ func (s *Service) toolListExecEndpoints() tool.Tool {
 			for i, ep := range rows {
 				out[i] = convert.ExecNeedRowToProto(ep)
 			}
-			return okResult(out)
+			return okResult(agentview.StripEach(out, "id", "created_at", "updated_at"))
 		}).
 		Build()
 }
@@ -126,7 +127,7 @@ func (s *Service) toolRotateExecKeypair() tool.Tool {
 			if err != nil {
 				return errResult(err), nil
 			}
-			return okResult(convert.ExecEndpointRowToProto(ep))
+			return okResult(agentview.Strip(convert.ExecEndpointRowToProto(ep), "id", "created_at", "updated_at"))
 		}).
 		Build()
 }

@@ -397,6 +397,22 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		// Wire post-upgrade notifications to conversations handler.
 		cfg.BuildService.SetUpgradeNotifier(cH)
 
+		// Managed-bot sessions. The Telegram manager is a capability on a
+		// bridge (is_manager), so there's no separate poller: the manager
+		// bridge's own poll loop surfaces ManagedBotCreated events, which the
+		// BridgeManager hands to the bridges service to materialize into a
+		// bridge. The deep-link flow resolves the manager bridge's username
+		// (with a live can_manage_bots re-check) from the same service.
+		// Built before the sysagent so its create_tg_bot tool can call it.
+		managerBridgesSvc := bridgessvc.New(cfg.DB, cfg.Secrets, cfg.TelegramDriver, cfg.DiscordDriver, cfg.EnableDiscord, cfg.BridgeManager, cfg.Logger.Named("managed-bridges"))
+		cfg.BridgeManager.AttachManagedBotIngest(managerBridgesSvc.IngestManagedBotCreated)
+		managedBotsSvc := managedbotssvc.New(managedbotssvc.Deps{
+			DB:                    cfg.DB,
+			ManagerBridgeUsername: managerBridgesSvc.ManagerBridgeUsername,
+			Logger:                cfg.Logger.Named("managedbots"),
+		})
+		managedBotsH := newManagedBotSessionsHandler(managedBotsSvc)
+
 		// In-airlock system agent: operator-facing chat that wraps
 		// every per-domain service in typed Go tools. Per-domain
 		// services are fresh instances (stateless wrappers; identical
@@ -422,13 +438,13 @@ func NewRouter(cfg RouterConfig) http.Handler {
 				cfg.Dispatcher.RefreshAgent, cfg.Logger.Named("sysagent-conns"),
 				credSvcDiscovery, agentapi.DiscoverMCPAuth, agentapi.InjectAuth, agentapi.MCPHTTPClient,
 			),
-			Execs:    execsvc.New(cfg.DB.Pool(), cfg.Secrets, execDialer, cfg.Logger.Named("sysagent-execs")),
-			GitCreds: gitcredssvc.New(cfg.DB, cfg.Secrets, cfg.Logger.Named("sysagent-gitcreds")),
-			Members:  memberssvc.New(cfg.DB, cfg.Logger.Named("sysagent-members")),
-			Models:   modelssvc.New(cfg.DB, cfg.Logger.Named("sysagent-models")),
-			Runs:     runssvc.New(cfg.DB, cfg.Dispatcher, cfg.Logger.Named("sysagent-runs")),
-			Siblings: siblingssvc.New(cfg.DB, cfg.Dispatcher, cfg.Logger.Named("sysagent-siblings")),
-			Users:    userssvc.New(cfg.DB, cfg.BridgeManager, cfg.Logger.Named("sysagent-users")),
+			Execs:       execsvc.New(cfg.DB.Pool(), cfg.Secrets, execDialer, cfg.Logger.Named("sysagent-execs")),
+			GitCreds:    gitcredssvc.New(cfg.DB, cfg.Secrets, cfg.Logger.Named("sysagent-gitcreds")),
+			ManagedBots: managedBotsSvc,
+			Members:     memberssvc.New(cfg.DB, cfg.Logger.Named("sysagent-members")),
+			Runs:        runssvc.New(cfg.DB, cfg.Dispatcher, cfg.Logger.Named("sysagent-runs")),
+			Siblings:    siblingssvc.New(cfg.DB, cfg.Dispatcher, cfg.Logger.Named("sysagent-siblings")),
+			Users:       userssvc.New(cfg.DB, cfg.BridgeManager, cfg.Logger.Named("sysagent-users")),
 		})
 		// Route post-upgrade notifications triggered from sysagent
 		// conversations back to the conversation (NotifyUpgradeComplete injects
@@ -448,21 +464,6 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		// the interface lives in trigger to break the import cycle
 		// (sysagent → service/agents → trigger).
 		cfg.BridgeManager.AttachSysagent(sysagentSvc)
-
-		// Managed-bot sessions. The Telegram manager is a capability on a
-		// bridge (is_manager), so there's no separate poller: the manager
-		// bridge's own poll loop surfaces ManagedBotCreated events, which the
-		// BridgeManager hands to the bridges service to materialize into a
-		// bridge. The deep-link flow resolves the manager bridge's username
-		// (with a live can_manage_bots re-check) from the same service.
-		managerBridgesSvc := bridgessvc.New(cfg.DB, cfg.Secrets, cfg.TelegramDriver, cfg.DiscordDriver, cfg.EnableDiscord, cfg.BridgeManager, cfg.Logger.Named("managed-bridges"))
-		cfg.BridgeManager.AttachManagedBotIngest(managerBridgesSvc.IngestManagedBotCreated)
-		managedBotsSvc := managedbotssvc.New(managedbotssvc.Deps{
-			DB:                    cfg.DB,
-			ManagerBridgeUsername: managerBridgesSvc.ManagerBridgeUsername,
-			Logger:                cfg.Logger.Named("managedbots"),
-		})
-		managedBotsH := newManagedBotSessionsHandler(managedBotsSvc)
 
 		r.Route("/agents", func(r chi.Router) {
 			r.Get("/", agH.List)

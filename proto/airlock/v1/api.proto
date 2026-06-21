@@ -476,6 +476,10 @@ message CreateBridgeRequest {
   // Telegram manager-bot capability (admin only; requires the bot's
   // can_manage_bots to be enabled in BotFather). Telegram-only.
   bool is_manager = 5;
+  // System bridge: routes inbound DMs to the airlock system agent (admin
+  // only; agent_id must be empty). When false and agent_id is empty, the
+  // bridge is created unbound (owner-scoped, routes nothing until bound).
+  bool is_system = 6;
 }
 
 // Update fields on an existing bridge. Both fields are independent —

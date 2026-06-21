@@ -34,7 +34,7 @@ var destructiveTools = map[string]struct{}{
 	"connect_git":           {},
 	"disconnect_git":        {},
 	"delete_git_credential": {},
-	"update_agent_models":   {},
+	"create_tg_bot":         {},
 	"update_bridge":         {},
 	"delete_bridge":         {},
 	"revoke_connection":     {},
@@ -69,6 +69,7 @@ func isDestructiveTool(name string) bool {
 // absent from this map → always registered.
 var tenantAxisTools = map[string]authz.Action{
 	"create_agent":  authz.TenantAgentCreate,
+	"create_tg_bot": authz.TenantBridgeCreate,
 	"update_bridge": authz.TenantBridgeCreate,
 	"delete_bridge": authz.TenantBridgeCreate,
 }
@@ -104,7 +105,6 @@ func (s *Service) allTools() []tool.Tool {
 	out = append(out, s.selfTools()...)
 	out = append(out, s.agentReadTools()...)
 	out = append(out, s.agentMutateTools()...)
-	out = append(out, s.modelTools()...)
 	out = append(out, s.bridgeTools()...)
 	out = append(out, s.connectionTools()...)
 	out = append(out, s.envExecTools()...)

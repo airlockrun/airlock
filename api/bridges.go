@@ -77,6 +77,7 @@ func (h *bridgeHandler) CreateBridge(w http.ResponseWriter, r *http.Request) {
 		Name:      req.Name,
 		Token:     req.Token,
 		AgentID:   req.AgentId,
+		IsSystem:  req.IsSystem,
 		IsManager: req.IsManager,
 	})
 	if err != nil {
