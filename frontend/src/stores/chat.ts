@@ -10,7 +10,7 @@ import {
   PaginatedMessagesResponseSchema,
   PromptResponseSchema,
 } from '@/gen/airlock/v1/api_pb'
-import { enrichMessages as enrichMessagesShared, formatToolArgs, toolLabel, type MsgBlock, type ToolBlock } from '@/utils/messageGroup'
+import { enrichMessages as enrichMessagesShared, formatToolArgs, toolDescription, toolLabel, type MsgBlock, type ToolBlock } from '@/utils/messageGroup'
 import { useConversationsStore } from '@/stores/conversations'
 
 // Sliding-window pagination keeps the browser's in-memory message list
@@ -57,6 +57,7 @@ export interface Confirmation {
   patterns: string[]
   code: string
   toolCallId: string
+  description: string
 }
 
 export const useChatStore = defineStore('chat', () => {
@@ -278,6 +279,7 @@ export const useChatStore = defineStore('chat', () => {
           patterns: [...ev.patterns],
           code: ev.code,
           toolCallId: ev.toolCallId,
+          description: ev.description,
         }
         // Mark the associated tool call as awaiting confirmation.
         if (ev.toolCallId) {
@@ -378,7 +380,37 @@ export const useChatStore = defineStore('chat', () => {
         if (!boundAgentId.value || env?.topicId !== boundAgentId.value) return
         void reloadCurrentThread()
       }),
+      // On every (re)connect, reconcile the confirmation gate with
+      // authoritative DB state. A dropped confirmation_required frame on a
+      // flaky link can't always be recovered by ?since= replay: if a later
+      // higher-seq frame (run.suspended) arrived, lastSeq advanced past the
+      // lost frame and the server won't replay it. Re-fetch so the gate
+      // reappears instead of the user silently losing it — and then bricking
+      // the run by typing a fresh message over the orphaned tool-call.
+      ws.onMessage('_connected', () => {
+        void syncPendingConfirmationFromServer()
+      }),
     )
+  }
+
+  // Re-fetch the open thread's pending confirmation from the DB and restore
+  // the gate if one exists and none is currently shown. Best-effort: a failed
+  // fetch leaves state as-is (the backend free-text fallback still prevents an
+  // orphaned tool-call). Doesn't touch messages/scroll — only the gate.
+  async function syncPendingConfirmationFromServer() {
+    const convId = conversationId.value
+    if (!convId) return
+    // A live gate is already in hand — don't clobber its fresh anchor/runId.
+    if (pendingConfirmation.value) return
+    try {
+      const { data } = await api.get(`/api/v1/conversations/${convId}`)
+      const resp = fromJson(GetConversationResponseSchema, data)
+      if (resp.pendingConfirmation) {
+        restorePendingConfirmation(resp.pendingConfirmation, messages.value)
+      }
+    } catch {
+      // Leave the gate as-is.
+    }
   }
 
   function buildNotificationMessage(partsJson: string, source: string = 'notification'): AgentMessageInfo {
@@ -490,6 +522,7 @@ export const useChatStore = defineStore('chat', () => {
         toolName: tc?.toolName || 'tool',
         label: toolLabel(tc?.toolName || 'tool', rawArgs),
         input: formatToolArgs(rawArgs),
+        description: toolDescription(rawArgs),
         output: tc?.output || '',
         error: tc?.error || '',
         outcome,
@@ -550,7 +583,7 @@ export const useChatStore = defineStore('chat', () => {
   // (permission/patterns/code populated) carries its own detail; a direct
   // run_js confirmation describes the call via toolName/input.
   function restorePendingConfirmation(
-    pc: { toolCallId: string; toolName: string; input: string; permission?: string; patterns?: string[]; code?: string },
+    pc: { runId?: string; toolCallId: string; toolName: string; input: string; permission?: string; patterns?: string[]; code?: string; description?: string },
     msgs: AgentMessageInfo[],
   ) {
     const input = formatToolArgs((() => { try { return JSON.parse(pc.input) } catch { return pc.input } })())
@@ -574,7 +607,11 @@ export const useChatStore = defineStore('chat', () => {
       }
     }
     pendingConfirmation.value = {
-      runId: '',
+      // The run id lets approve/deny resume THIS suspended run. Carried in
+      // the restored confirmation (conversation load / reconnect) so a gate
+      // rebuilt without a live confirmation_required event is still
+      // approvable instead of 400ing for a missing resume_run_id.
+      runId: pc.runId || '',
       permission: pc.permission || pc.toolName,
       patterns: pc.patterns ? [...pc.patterns] : [],
       code: pc.code || input,
@@ -583,6 +620,7 @@ export const useChatStore = defineStore('chat', () => {
       // not persisted to the thread, so there's no anchor — blank it and
       // the standalone confirmation card renders instead of nothing.
       toolCallId: anchored ? pc.toolCallId : '',
+      description: pc.description || '',
     }
   }
 

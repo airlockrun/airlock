@@ -29,7 +29,7 @@ import {
   type RunErrorEvent,
   type NotificationEvent,
 } from '@/gen/airlock/v1/realtime_pb'
-import { formatToolArgs, toolLabel, toolOutputInfo, type MsgBlock, type ToolBlock } from '@/utils/messageGroup'
+import { formatToolArgs, toolDescription, toolLabel, toolOutputInfo, type MsgBlock, type ToolBlock } from '@/utils/messageGroup'
 
 // Trimmed sysagent equivalent of stores/chat.ts. Sysagent conversations stay
 // short (operator chats), so this store skips the agent-chat machinery
@@ -52,6 +52,7 @@ export interface Confirmation {
   toolName: string
   argsJson: string
   toolCallId: string
+  description: string
 }
 
 // Display message — wraps the wire SystemMessageInfo + adds the same
@@ -125,6 +126,7 @@ function enrichMessages(rows: SystemMessageInfo[]): DisplayMessage[] {
           toolName: p.toolName || 'tool',
           label: toolLabel(p.toolName || 'tool', rawArgs),
           input: formatToolArgs(rawArgs),
+          description: toolDescription(rawArgs),
           output: '',
           error: '',
           outcome: '' as ToolBlock['outcome'],
@@ -292,6 +294,7 @@ export const useSystemChatStore = defineStore('systemChat', () => {
           toolName: ev.permission,
           argsJson: ev.code || '',
           toolCallId: ev.toolCallId,
+          description: ev.description || '',
         }
         const tc = activeToolCalls.get(ev.toolCallId)
         if (tc) tc.status = 'confirmation'
@@ -362,6 +365,7 @@ export const useSystemChatStore = defineStore('systemChat', () => {
         toolName: tc?.toolName || 'tool',
         label: toolLabel(tc?.toolName || 'tool', rawArgs),
         input: formatToolArgs(rawArgs),
+        description: toolDescription(rawArgs),
         output: tc?.output || '',
         error: tc?.error || '',
         outcome,
@@ -447,6 +451,7 @@ export const useSystemChatStore = defineStore('systemChat', () => {
           toolName: pt.toolName,
           argsJson: pt.argsJson,
           toolCallId: pt.callId,
+          description: toolDescription(pt.argsJson),
         }
       }
       // No explicit WS subscribe — the user's UUID topic is auto-subscribed

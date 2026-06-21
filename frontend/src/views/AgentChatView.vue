@@ -6,7 +6,7 @@ import { useChatStore } from '@/stores/chat'
 import { useAgentsStore } from '@/stores/agents'
 import { ws } from '@/api/ws'
 import { useMarkdown, renderMarkdown } from '@/composables/useMarkdown'
-import { toolLabel } from '@/utils/messageGroup'
+import { toolLabel, toolDescription } from '@/utils/messageGroup'
 import api from '@/api/client'
 import MessageParts from '@/components/chat/MessageParts.vue'
 import ToolBadge from '@/components/chat/ToolBadge.vue'
@@ -110,6 +110,14 @@ onMounted(async () => {
 
   await reload()
   setupSentinelObservers()
+
+  // Mobile soft keyboard: opening/closing resizes the visual viewport. The
+  // send-time autoscroll runs while the keyboard is still up (short viewport);
+  // when it dismisses the area grows but scrollTop stays, leaving the latest
+  // bubble stranded above the bottom. Re-pin on viewport resize.
+  const vv = window.visualViewport
+  if (vv) vv.addEventListener('resize', onViewportResize)
+  else window.addEventListener('resize', onViewportResize)
 })
 
 // Sidebar navigation reuses this view: reload when the agent or the
@@ -152,6 +160,9 @@ watch(
 onUnmounted(() => {
   topObserver?.disconnect()
   bottomObserver?.disconnect()
+  const vv = window.visualViewport
+  if (vv) vv.removeEventListener('resize', onViewportResize)
+  else window.removeEventListener('resize', onViewportResize)
   chat.cleanup()
   unsubBuild?.()
 })
@@ -216,6 +227,21 @@ function scrollToBottom() {
   if (scrollContainer.value) {
     scrollContainer.value.scrollTop = scrollContainer.value.scrollHeight
   }
+}
+
+// Re-pin to the bottom only when the visual viewport GROWS — i.e. the mobile
+// keyboard was dismissed (e.g. after a send), which otherwise leaves the last
+// bubble stranded above the bottom. On shrink (keyboard opening) we leave the
+// scroll alone so a short, top-anchored conversation isn't shoved up under the
+// top bar. rAF so we read scrollHeight after the layout reflowed.
+let prevViewportH = window.visualViewport?.height ?? window.innerHeight
+function onViewportResize() {
+  const h = window.visualViewport?.height ?? window.innerHeight
+  const grew = h > prevViewportH + 1
+  prevViewportH = h
+  if (!grew) return
+  if (chat.hasNewer || chat.loadingOlder) return
+  requestAnimationFrame(scrollToBottom)
 }
 
 async function send() {
@@ -288,7 +314,7 @@ function onKeydown(e: KeyboardEvent) {
 }
 
 // Format tool input JSON for display — strips metadata keys and shows just the value for single-arg tools.
-const metaKeys = new Set(['request_confirmation'])
+const metaKeys = new Set(['request_confirmation', 'description'])
 
 function formatToolInput(raw: string): string {
   try {
@@ -520,6 +546,7 @@ function formatTokens(n: number): string {
                user/text rows without blocks fall back to content. -->
           <div
             v-else-if="(msg.content || (msg as any).blocks?.length || (msg as any)._cancelled) && !(msg as any)._hidden"
+            :class="{ 'msg-row-user': msg.role === 'user' }"
             :style="{
               display: 'flex',
               justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start',
@@ -541,6 +568,7 @@ function formatTokens(n: number): string {
                     :label="b.label"
                     :tool-name="b.toolName"
                     :input="b.input"
+                    :description="b.description"
                     :output="b.output"
                     :error="b.error"
                     :outcome="b.outcome"
@@ -589,6 +617,7 @@ function formatTokens(n: number): string {
                     :label="entry.label"
                     :tool-name="entry.tc.toolName"
                     :input="formatToolInput(entry.tc.input)"
+                    :description="toolDescription(entry.tc.input)"
                     :output="entry.tc.output"
                     :error="entry.tc.error"
                     :status="entry.tc.status"
@@ -631,7 +660,9 @@ function formatTokens(n: number): string {
         <div v-if="chat.pendingConfirmation && !chat.pendingConfirmation.toolCallId" style="padding: 0.5rem">
           <Message severity="warn" :closable="false">
             <div style="margin-bottom: 0.75rem">
-              <strong>Confirmation required:</strong> {{ chat.pendingConfirmation.permission }}
+              <strong>Confirmation required</strong>
+              <div v-if="chat.pendingConfirmation.description" style="margin-top: 0.25rem">{{ chat.pendingConfirmation.description }}</div>
+              <span v-else>: {{ chat.pendingConfirmation.permission }}</span>
             </div>
             <pre v-if="chat.pendingConfirmation.code" style="white-space: pre-wrap; word-break: break-all; font-size: 0.8rem; background: var(--p-surface-50); padding: 0.5rem; border-radius: 0.25rem; margin-bottom: 0.75rem">{{ chat.pendingConfirmation.code }}</pre>
             <div style="display: flex; gap: 0.5rem; justify-content: flex-end">
@@ -642,57 +673,63 @@ function formatTokens(n: number): string {
         </div>
     </div>
 
-    <!-- Attached files -->
-    <div v-if="attachedFiles.length" style="display: flex; gap: 0.5rem; flex-wrap: wrap; padding-top: 0.5rem">
-      <Chip
-        v-for="(file, i) in attachedFiles"
-        :key="file.path"
-        :label="file.filename"
-        removable
-        @remove="removeFile(i)"
-      />
-    </div>
+    <!-- Composer: floats over the bottom of the chat. The message list
+         scrolls behind it and fades out into the gradient, so the transcript
+         disappears under the input instead of peeking around it. No top
+         divider — the fade is the separation. -->
+    <div class="chat-composer">
+      <!-- Attached files -->
+      <div v-if="attachedFiles.length" class="composer-files">
+        <Chip
+          v-for="(file, i) in attachedFiles"
+          :key="file.path"
+          :label="file.filename"
+          removable
+          @remove="removeFile(i)"
+        />
+      </div>
 
-    <!-- Stopped-agent banner: chatting is blocked until an admin starts it -->
-    <div
-      v-if="agentStopped"
-      style="display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; padding: 0.5rem 0.75rem; margin-top: 0.5rem; border: 1px solid var(--p-surface-300); border-radius: 6px; background: var(--p-surface-100)"
-    >
-      <span style="font-size: 0.875rem">This agent is stopped. Start it to chat.</span>
-      <Button
-        label="Start"
-        icon="pi pi-play"
-        size="small"
-        :loading="starting"
-        @click="startAgent"
-      />
-    </div>
+      <!-- Stopped-agent banner: chatting is blocked until an admin starts it -->
+      <div v-if="agentStopped" class="composer-stopped">
+        <span style="font-size: 0.875rem">This agent is stopped. Start it to chat.</span>
+        <Button
+          label="Start"
+          icon="pi pi-play"
+          size="small"
+          :loading="starting"
+          @click="startAgent"
+        />
+      </div>
 
-    <!-- Input area -->
-    <div style="display: flex; gap: 0.5rem; padding-top: 0.75rem; border-top: 1px solid var(--p-surface-200)">
-      <input ref="fileInput" type="file" multiple hidden @change="onFileSelect" />
-      <Button
-        icon="pi pi-paperclip"
-        severity="secondary"
-        text
-        :disabled="chat.sending || uploading || agentStopped"
-        :loading="uploading"
-        @click="fileInput?.click()"
-      />
-      <Textarea
-        v-model="messageInput"
-        :placeholder="agentStopped ? 'Agent is stopped' : 'Type a message...'"
-        :auto-resize="true"
-        rows="1"
-        style="flex: 1"
-        :disabled="chat.sending || agentStopped"
-        @keydown="onKeydown"
-      />
-      <Button
-        icon="pi pi-send"
-        :disabled="!messageInput.trim() || chat.sending || agentStopped"
-        @click="send"
-      />
+      <!-- Input box: attach + textarea + send all live inside one rounded box -->
+      <div class="composer-box">
+        <input ref="fileInput" type="file" multiple hidden @change="onFileSelect" />
+        <Button
+          class="composer-btn"
+          icon="pi pi-paperclip"
+          severity="secondary"
+          text
+          rounded
+          :disabled="chat.sending || uploading || agentStopped"
+          :loading="uploading"
+          @click="fileInput?.click()"
+        />
+        <Textarea
+          v-model="messageInput"
+          :placeholder="agentStopped ? 'Agent is stopped' : 'Type a message...'"
+          :auto-resize="true"
+          rows="1"
+          :disabled="chat.sending || agentStopped"
+          @keydown="onKeydown"
+        />
+        <Button
+          class="composer-btn"
+          icon="pi pi-send"
+          rounded
+          :disabled="!messageInput.trim() || chat.sending || agentStopped"
+          @click="send"
+        />
+      </div>
     </div>
   </div>
 </template>
@@ -793,6 +830,8 @@ function formatTokens(n: number): string {
   height: 100%;
   min-height: 0;
   overflow: hidden;
+  /* Positioning context for the floating composer. */
+  position: relative;
 }
 
 .chat-empty {
@@ -824,6 +863,20 @@ function formatTokens(n: number): string {
   overflow-wrap: break-word;
   padding: 0.5rem 0.75rem;
   border-radius: 0.75rem;
+}
+
+/* Tighten the spacing around the user's bubble to half the list gap. The
+   list uses a 1rem flex gap between every turn; negative vertical margin on
+   the user row pulls its neighbours in to ~0.5rem above and below. */
+.msg-row-user {
+  margin-top: -0.5rem;
+  margin-bottom: -0.5rem;
+}
+
+/* Don't pull the very first bubble up — the negative top margin would drag it
+   under the top bar. Only tighten between siblings. */
+.msg-row-user:first-child {
+  margin-top: 0;
 }
 
 .msg-user {
@@ -889,7 +942,100 @@ function formatTokens(n: number): string {
   display: flex;
   flex-direction: column;
   gap: 1rem;
-  padding: 0.5rem 2.25rem 1rem;
+  /* Bottom space so the last message can scroll clear of the floating
+     composer instead of sitting permanently behind it. */
+  padding: 0.25rem 1rem 3.75rem;
+}
+
+/* Floating composer overlaid on the bottom of the scroll area. */
+.chat-composer {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 1rem 1rem 0.5rem;
+  /* Opaque fade: messages scrolling up dissolve into the page background as
+     they approach the input rather than peeking around the floating box. The
+     gradient itself is click-through so the transcript behind it stays
+     scrollable; only the interactive children below opt back in. */
+  background: linear-gradient(to top, var(--p-content-background) 60%, transparent);
+  pointer-events: none;
+}
+
+.chat-composer > * {
+  pointer-events: auto;
+}
+
+.composer-files {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.composer-stopped {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--p-surface-300);
+  border-radius: 6px;
+  background: var(--p-surface-100);
+}
+
+:root.dark .composer-stopped {
+  border-color: var(--p-surface-600);
+  background: var(--p-surface-800);
+}
+
+.composer-box {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.25rem;
+  padding: 0.3rem 0.4rem;
+  border: 1px solid var(--p-surface-300);
+  border-radius: 1.4rem;
+  background: var(--p-content-background);
+  box-shadow: 0 2px 16px rgba(0, 0, 0, 0.12);
+}
+
+:root.dark .composer-box {
+  border-color: var(--p-surface-600);
+  box-shadow: 0 2px 16px rgba(0, 0, 0, 0.45);
+}
+
+/* Strip the textarea's own chrome so it reads as part of the box, not a
+   nested control. Kill the focus ring too — the box owns the boundary. */
+.composer-box :deep(.p-textarea) {
+  flex: 1 1 auto;
+  align-self: center;
+  border: none;
+  background: transparent;
+  box-shadow: none !important;
+  resize: none;
+  padding: 0.5rem 0.4rem;
+  max-height: 40vh;
+}
+
+.composer-btn {
+  flex-shrink: 0;
+}
+
+/* Desktop (sidebar layout) — the tight mobile inset looks cramped on a wide
+   column, so widen the horizontal gutters. Mirrors AppLayout's
+   max-width:768px mobile breakpoint. Top/bottom padding is untouched. */
+@media (min-width: 769px) {
+  .chat-messages {
+    padding-left: 2.5rem;
+    padding-right: 2.5rem;
+  }
+  .chat-composer {
+    padding-left: 2.5rem;
+    padding-right: 2.5rem;
+  }
 }
 
 .chat-checkpoint {

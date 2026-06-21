@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { ref, computed, nextTick, onMounted, watch } from 'vue'
+import { ref, computed, nextTick, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useToast } from 'primevue/usetoast'
 import { useSystemChatStore } from '@/stores/systemChat'
 import ToolBadge from '@/components/chat/ToolBadge.vue'
 import { renderMarkdown } from '@/composables/useMarkdown'
+import { toolDescription } from '@/utils/messageGroup'
 
 const route = useRoute()
 const router = useRouter()
@@ -22,6 +23,23 @@ const messagesEl = ref<HTMLElement | null>(null)
 
 function scrollToBottom() {
   nextTick(() => {
+    const el = messagesEl.value
+    if (el) el.scrollTop = el.scrollHeight
+  })
+}
+
+// Re-pin to the bottom only when the visual viewport GROWS — i.e. the mobile
+// keyboard was dismissed (e.g. after a send), which otherwise leaves the last
+// bubble stranded above the bottom. On shrink (keyboard opening) leave the
+// scroll alone so a short, top-anchored conversation isn't shoved up under the
+// top bar. rAF so we read scrollHeight after the layout reflowed.
+let prevViewportH = window.visualViewport?.height ?? window.innerHeight
+function onViewportResize() {
+  const h = window.visualViewport?.height ?? window.innerHeight
+  const grew = h > prevViewportH + 1
+  prevViewportH = h
+  if (!grew) return
+  requestAnimationFrame(() => {
     const el = messagesEl.value
     if (el) el.scrollTop = el.scrollHeight
   })
@@ -47,6 +65,15 @@ async function load() {
 onMounted(() => {
   sys.initListeners()
   load()
+  const vv = window.visualViewport
+  if (vv) vv.addEventListener('resize', onViewportResize)
+  else window.addEventListener('resize', onViewportResize)
+})
+
+onUnmounted(() => {
+  const vv = window.visualViewport
+  if (vv) vv.removeEventListener('resize', onViewportResize)
+  else window.removeEventListener('resize', onViewportResize)
 })
 
 watch(conversationId, () => load())
@@ -146,6 +173,7 @@ function msgClassForSource(source: string): string {
         <template v-for="msg in sys.messages" :key="msg.id">
           <div
             v-if="!msg._hidden"
+            :class="{ 'msg-row-user': msg.role === 'user' }"
             :style="{ display: 'flex', justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start' }"
           >
             <div
@@ -164,6 +192,7 @@ function msgClassForSource(source: string): string {
                     :label="b.label"
                     :tool-name="b.toolName"
                     :input="b.input"
+                    :description="b.description"
                     :output="b.output"
                     :error="b.error"
                     :outcome="b.outcome"
@@ -200,6 +229,7 @@ function msgClassForSource(source: string): string {
                   :label="sys.activeToolCalls.get(block.toolCallId)?.toolName || 'tool'"
                   :tool-name="sys.activeToolCalls.get(block.toolCallId)?.toolName || 'tool'"
                   :input="sys.activeToolCalls.get(block.toolCallId)?.input || ''"
+                  :description="toolDescription(sys.activeToolCalls.get(block.toolCallId)?.input)"
                   :output="sys.activeToolCalls.get(block.toolCallId)?.output || ''"
                   :error="sys.activeToolCalls.get(block.toolCallId)?.error || ''"
                   :outcome="(sys.activeToolCalls.get(block.toolCallId)?.status === 'error' ? 'error' : sys.activeToolCalls.get(block.toolCallId)?.status === 'done' ? 'success' : '') as any"
@@ -213,7 +243,8 @@ function msgClassForSource(source: string): string {
         <div v-if="sys.pendingConfirmation" class="confirmation-box">
           <div class="confirmation-title">
             <i class="pi pi-exclamation-triangle" style="margin-right: 0.25rem" />
-            Confirmation required: <code>{{ sys.pendingConfirmation.toolName }}</code>
+            <template v-if="sys.pendingConfirmation.description">{{ sys.pendingConfirmation.description }}</template>
+            <template v-else>Confirmation required: <code>{{ sys.pendingConfirmation.toolName }}</code></template>
           </div>
           <pre
             v-if="sys.pendingConfirmation.argsJson"
@@ -227,22 +258,27 @@ function msgClassForSource(source: string): string {
       </template>
     </div>
 
-    <!-- Composer pinned to the bottom -->
+    <!-- Composer: floats over the bottom of the chat. The message list scrolls
+         behind it and fades into the gradient. No top divider — the fade is the
+         separation. Send lives inside the rounded box. -->
     <div class="chat-composer">
-      <Textarea
-        v-model="composer"
-        :disabled="sys.sending || !!sys.pendingConfirmation"
-        :placeholder="sys.pendingConfirmation ? 'Approve or reject the pending tool call above first.' : 'Ask me anything…'"
-        autoResize
-        rows="1"
-        style="flex: 1"
-        @keydown="onKeydown"
-      />
-      <Button
-        icon="pi pi-send"
-        :disabled="!composer.trim() || sys.sending || !!sys.pendingConfirmation"
-        @click="send"
-      />
+      <div class="composer-box">
+        <Textarea
+          v-model="composer"
+          :disabled="sys.sending || !!sys.pendingConfirmation"
+          :placeholder="sys.pendingConfirmation ? 'Approve or reject the pending tool call above first.' : 'Ask me anything…'"
+          autoResize
+          rows="1"
+          @keydown="onKeydown"
+        />
+        <Button
+          class="composer-btn"
+          icon="pi pi-send"
+          rounded
+          :disabled="!composer.trim() || sys.sending || !!sys.pendingConfirmation"
+          @click="send"
+        />
+      </div>
     </div>
   </div>
 </template>
@@ -337,6 +373,8 @@ function msgClassForSource(source: string): string {
   height: 100%;
   min-height: 0;
   overflow: hidden;
+  /* Positioning context for the floating composer. */
+  position: relative;
 }
 
 .chat-messages {
@@ -347,7 +385,20 @@ function msgClassForSource(source: string): string {
   display: flex;
   flex-direction: column;
   gap: 1rem;
-  padding: 0.5rem 2.25rem 1rem;
+  /* Bottom space so the last message clears the floating composer. */
+  padding: 0.25rem 1rem 3.75rem;
+}
+
+/* Tighten the spacing around the user's bubble to half the list gap. */
+.msg-row-user {
+  margin-top: -0.5rem;
+  margin-bottom: -0.5rem;
+}
+
+/* Don't pull the very first bubble up — system chat has no top sentinel, so a
+   first-message user bubble would otherwise be dragged under the top bar. */
+.msg-row-user:first-child {
+  margin-top: 0;
 }
 
 .chat-loading {
@@ -451,11 +502,70 @@ function msgClassForSource(source: string): string {
   gap: 0.5rem;
 }
 
+/* Floating composer overlaid on the bottom of the scroll area. */
 .chat-composer {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
   display: flex;
+  flex-direction: column;
   gap: 0.5rem;
-  padding: 0.75rem 2.25rem;
-  border-top: 1px solid var(--p-surface-200);
-  background: var(--p-content-background, transparent);
+  padding: 1rem 1rem 0.5rem;
+  /* Opaque fade so messages dissolve into the page background as they reach
+     the input rather than peeking around the floating box. Click-through so
+     the transcript behind it stays scrollable; the box opts back in. */
+  background: linear-gradient(to top, var(--p-content-background) 60%, transparent);
+  pointer-events: none;
+}
+
+.chat-composer > * {
+  pointer-events: auto;
+}
+
+.composer-box {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.25rem;
+  padding: 0.3rem 0.4rem;
+  border: 1px solid var(--p-surface-300);
+  border-radius: 1.4rem;
+  background: var(--p-content-background);
+  box-shadow: 0 2px 16px rgba(0, 0, 0, 0.12);
+}
+
+:root.dark .composer-box {
+  border-color: var(--p-surface-600);
+  box-shadow: 0 2px 16px rgba(0, 0, 0, 0.45);
+}
+
+/* Strip the textarea's own chrome so it reads as part of the box. */
+.composer-box :deep(.p-textarea) {
+  flex: 1 1 auto;
+  align-self: center;
+  border: none;
+  background: transparent;
+  box-shadow: none !important;
+  resize: none;
+  padding: 0.5rem 0.4rem;
+  max-height: 40vh;
+}
+
+.composer-btn {
+  flex-shrink: 0;
+}
+
+/* Desktop (sidebar layout) — widen the horizontal gutters; the tight mobile
+   inset looks cramped on a wide column. Mirrors AppLayout's max-width:768px
+   mobile breakpoint. Top/bottom padding is untouched. */
+@media (min-width: 769px) {
+  .chat-messages {
+    padding-left: 2.5rem;
+    padding-right: 2.5rem;
+  }
+  .chat-composer {
+    padding-left: 2.5rem;
+    padding-right: 2.5rem;
+  }
 }
 </style>

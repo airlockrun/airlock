@@ -30,6 +30,7 @@ export interface ToolBlock {
   toolName: string // raw name — drives collapse defaults + promptAgentText
   label: string // human display name (toolLabel of name + args)
   input: string
+  description: string // plain-language summary from the call args (run_js)
   output: string
   error: string
   outcome: ToolOutcome
@@ -69,7 +70,7 @@ export function toolOutputInfo(out: any): { text: string; outcome: ToolOutcome }
 // object or a JSON string (live path); a slug is only pulled for
 // promptAgent.
 export function toolLabel(toolName: string, args?: unknown): string {
-  if (toolName === 'run_js') return 'Code Run'
+  if (toolName === 'run_js') return 'Code'
   if (toolName === 'promptAgent') {
     let a = args
     if (typeof a === 'string') {
@@ -91,7 +92,21 @@ export interface TextBlock {
 // render an assistant turn identically and in true sequence order.
 export type MsgBlock = TextBlock | ToolBlock
 
-const metaKeys = new Set(['request_confirmation'])
+const metaKeys = new Set(['request_confirmation', 'description'])
+
+// toolDescription pulls the plain-language `description` a tool call carries
+// (run_js) so the transcript can show it in place of the raw code. `args`
+// may be the raw object or a JSON string (live path). '' when absent.
+export function toolDescription(args: unknown): string {
+  let a = args
+  if (typeof a === 'string') {
+    try { a = JSON.parse(a) } catch { return '' }
+  }
+  if (a && typeof a === 'object' && typeof (a as any).description === 'string') {
+    return (a as any).description
+  }
+  return ''
+}
 
 /** Stringify tool args for display, dropping framework-only keys. */
 // promptAgentText pulls the human-facing `text` out of a promptAgent
@@ -175,6 +190,7 @@ export function enrichMessages(msgs: AgentMessageInfo[]): AgentMessageInfo[] {
             toolName: p.toolName || 'tool',
             label: toolLabel(p.toolName || 'tool', p.args),
             input: formatToolArgs(p.args),
+            description: toolDescription(p.args),
             output: '',
             error: '',
             outcome: '',
