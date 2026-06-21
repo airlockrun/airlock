@@ -6348,8 +6348,8 @@ type UsageByAgent struct {
 	TokensOut    int64                  `protobuf:"varint,6,opt,name=tokens_out,json=tokensOut,proto3" json:"tokens_out,omitempty"`
 	TokensCached int64                  `protobuf:"varint,7,opt,name=tokens_cached,json=tokensCached,proto3" json:"tokens_cached,omitempty"`
 	CostTotal    float64                `protobuf:"fixed64,8,opt,name=cost_total,json=costTotal,proto3" json:"cost_total,omitempty"`
-	// Current owner of the agent (agents.user_id), joined live. Empty when the
-	// agent — or its owner — has since been deleted.
+	// Current owner of the agent (agents.owner_principal_id), joined live. Empty
+	// when the agent — or its owner — has since been deleted.
 	OwnerEmail    string `protobuf:"bytes,9,opt,name=owner_email,json=ownerEmail,proto3" json:"owner_email,omitempty"`
 	OwnerName     string `protobuf:"bytes,10,opt,name=owner_name,json=ownerName,proto3" json:"owner_name,omitempty"`
 	unknownFields protoimpl.UnknownFields

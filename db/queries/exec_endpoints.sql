@@ -12,7 +12,7 @@
 -- host_key_*) are left untouched so re-syncing a running agent does not nuke
 -- its operator config.
 INSERT INTO agent_exec_endpoints (owner_principal_id, slug, description, llm_hint, access)
-VALUES ((SELECT user_id FROM agents WHERE agents.id = @agent_id), @slug, @description, @llm_hint, @access)
+VALUES ((SELECT owner_principal_id FROM agents WHERE agents.id = @agent_id), @slug, @description, @llm_hint, @access)
 ON CONFLICT (owner_principal_id, slug) DO UPDATE SET
     description = EXCLUDED.description,
     llm_hint    = EXCLUDED.llm_hint,

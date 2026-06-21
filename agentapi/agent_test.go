@@ -129,10 +129,10 @@ func testAgentAndUser(t *testing.T) (agentID, userID uuid.UUID) {
 	}
 
 	agent, err := q.CreateAgent(ctx, dbq.CreateAgentParams{
-		Name:   "test-" + suffix,
-		Slug:   "test-" + suffix,
-		UserID: user.ID,
-		Config: []byte("{}"),
+		Name:             "test-" + suffix,
+		Slug:             "test-" + suffix,
+		OwnerPrincipalID: user.ID,
+		Config:           []byte("{}"),
 	})
 	if err != nil {
 		t.Fatalf("CreateAgent: %v", err)

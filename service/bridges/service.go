@@ -265,7 +265,7 @@ func (s *Service) Create(ctx context.Context, p authz.Principal, req CreateReque
 		BotTokenRef:       encToken,
 		BotUsername:       botUsername,
 		AgentID:           agentPgID,
-		OwnerID:           ownerID,
+		OwnerPrincipalID:  ownerID,
 		IsSystem:          isSystem,
 		IsManager:         req.IsManager,
 		Managed:           false,
@@ -376,7 +376,7 @@ func (s *Service) CreateFromManagedSession(ctx context.Context, in ManagedSessio
 		BotTokenRef:       encToken,
 		BotUsername:       verifiedUsername,
 		AgentID:           in.Session.AgentID,
-		OwnerID:           in.Session.OwnerID,
+		OwnerPrincipalID:  in.Session.OwnerID,
 		IsSystem:          in.Session.IsSystem,
 		IsManager:         false, // a managed bot is an agent/system bot, never a manager
 		Managed:           true,
@@ -400,7 +400,7 @@ func (s *Service) CreateFromManagedSession(ctx context.Context, in ManagedSessio
 		})
 	}
 	s.bridgeMgr.AddBridge(uuid.UUID(br.ID.Bytes))
-	return Result{Bridge: br, Owner: s.fetchOwner(ctx, q, br.OwnerID)}, nil
+	return Result{Bridge: br, Owner: s.fetchOwner(ctx, q, br.OwnerPrincipalID)}, nil
 }
 
 // ManagerBridgeUsername returns the @username of the configured Telegram
@@ -507,11 +507,11 @@ func (s *Service) List(ctx context.Context, p authz.Principal) ([]ListItem, erro
 			out[i] = ListItem{
 				Bridge: dbq.Bridge{
 					ID: r.ID, Type: r.Type, Name: r.Name, BotUsername: r.BotUsername,
-					Status: r.Status, AgentID: r.AgentID, OwnerID: r.OwnerID,
+					Status: r.Status, AgentID: r.AgentID, OwnerPrincipalID: r.OwnerPrincipalID,
 					IsSystem: r.IsSystem, IsManager: r.IsManager, ManagerError: r.ManagerError,
 					CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt, Settings: r.Settings,
 				},
-				Owner: ownerFromJoin(r.OwnerID, r.OwnerEmail, r.OwnerDisplayName),
+				Owner: ownerFromJoin(r.OwnerPrincipalID, r.OwnerEmail, r.OwnerDisplayName),
 			}
 		}
 		return out, nil
@@ -526,11 +526,11 @@ func (s *Service) List(ctx context.Context, p authz.Principal) ([]ListItem, erro
 		out[i] = ListItem{
 			Bridge: dbq.Bridge{
 				ID: r.ID, Type: r.Type, Name: r.Name, BotUsername: r.BotUsername,
-				Status: r.Status, AgentID: r.AgentID, OwnerID: r.OwnerID,
+				Status: r.Status, AgentID: r.AgentID, OwnerPrincipalID: r.OwnerPrincipalID,
 				IsSystem: r.IsSystem, IsManager: r.IsManager, ManagerError: r.ManagerError,
 				CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt, Settings: r.Settings,
 			},
-			Owner: ownerFromJoin(r.OwnerID, r.OwnerEmail, r.OwnerDisplayName),
+			Owner: ownerFromJoin(r.OwnerPrincipalID, r.OwnerEmail, r.OwnerDisplayName),
 		}
 	}
 	return out, nil
@@ -559,8 +559,8 @@ func (s *Service) Update(ctx context.Context, p authz.Principal, bridgeID uuid.U
 		}
 	} else {
 		var ownerID uuid.UUID
-		if br.OwnerID.Valid {
-			ownerID = uuid.UUID(br.OwnerID.Bytes)
+		if br.OwnerPrincipalID.Valid {
+			ownerID = uuid.UUID(br.OwnerPrincipalID.Bytes)
 		}
 		if err := authz.AuthorizeOwnedResource(ctx, q, p, ownerID, authz.TenantBridgeUpdateAny); err != nil {
 			if errors.Is(err, service.ErrForbidden) {
@@ -690,7 +690,7 @@ func (s *Service) Update(ctx context.Context, p authz.Principal, bridgeID uuid.U
 		}
 	}
 	s.bridgeMgr.AddBridge(bridgeID)
-	return Result{Bridge: updated, Owner: s.fetchOwner(ctx, q, updated.OwnerID)}, nil
+	return Result{Bridge: updated, Owner: s.fetchOwner(ctx, q, updated.OwnerPrincipalID)}, nil
 }
 
 // Delete removes a bridge. Same owner/admin gate as Update; admin can
@@ -714,8 +714,8 @@ func (s *Service) Delete(ctx context.Context, p authz.Principal, bridgeID uuid.U
 		}
 	} else {
 		var ownerID uuid.UUID
-		if br.OwnerID.Valid {
-			ownerID = uuid.UUID(br.OwnerID.Bytes)
+		if br.OwnerPrincipalID.Valid {
+			ownerID = uuid.UUID(br.OwnerPrincipalID.Bytes)
 		}
 		if err := authz.AuthorizeOwnedResource(ctx, q, p, ownerID, authz.TenantBridgeDeleteAny); err != nil {
 			return err

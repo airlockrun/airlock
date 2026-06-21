@@ -213,7 +213,7 @@ func (q *Queries) UpdateExecEndpointOwnerByID(ctx context.Context, arg UpdateExe
 const upsertExecEndpointDeclaration = `-- name: UpsertExecEndpointDeclaration :one
 
 INSERT INTO agent_exec_endpoints (owner_principal_id, slug, description, llm_hint, access)
-VALUES ((SELECT user_id FROM agents WHERE agents.id = $1), $2, $3, $4, $5)
+VALUES ((SELECT owner_principal_id FROM agents WHERE agents.id = $1), $2, $3, $4, $5)
 ON CONFLICT (owner_principal_id, slug) DO UPDATE SET
     description = EXCLUDED.description,
     llm_hint    = EXCLUDED.llm_hint,

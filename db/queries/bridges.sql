@@ -1,6 +1,6 @@
 -- name: CreateBridge :one
-INSERT INTO bridges (type, name, bot_token_ref, bot_username, agent_id, owner_id, is_system, is_manager, managed, telegram_bot_user_id, status, config, settings)
-VALUES (@type, @name, @bot_token_ref, @bot_username, @agent_id, @owner_id, @is_system, @is_manager, @managed, @telegram_bot_user_id, 'active', '{}'::jsonb, '{}'::jsonb)
+INSERT INTO bridges (type, name, bot_token_ref, bot_username, agent_id, owner_principal_id, is_system, is_manager, managed, telegram_bot_user_id, status, config, settings)
+VALUES (@type, @name, @bot_token_ref, @bot_username, @agent_id, @owner_principal_id, @is_system, @is_manager, @managed, @telegram_bot_user_id, 'active', '{}'::jsonb, '{}'::jsonb)
 RETURNING *;
 
 -- name: GetBridgeByID :one
@@ -8,12 +8,12 @@ SELECT * FROM bridges WHERE id = $1;
 
 -- name: ListBridgesAdmin :many
 -- Admin variant: every bridge in the tenant with the owner joined for
--- the Owner column in the UI. owner_id is NULL for system bridges (and
+-- the Owner column in the UI. owner_principal_id is NULL for system bridges (and
 -- for owner-deleted orphans, though those CASCADE today), so LEFT JOIN
 -- keeps those rows.
 SELECT b.*, u.email AS owner_email, u.display_name AS owner_display_name
 FROM bridges b
-LEFT JOIN users u ON u.id = b.owner_id
+LEFT JOIN users u ON u.id = b.owner_principal_id
 ORDER BY b.created_at;
 
 -- name: ListBridgesAccessible :many
@@ -24,10 +24,10 @@ ORDER BY b.created_at;
 -- created."
 SELECT b.*, u.email AS owner_email, u.display_name AS owner_display_name
 FROM bridges b
-LEFT JOIN users u ON u.id = b.owner_id
+LEFT JOIN users u ON u.id = b.owner_principal_id
 WHERE b.is_system
    OR b.agent_id IN (SELECT agent_id FROM agent_grants WHERE grantee_id = @user_id)
-   OR (b.agent_id IS NULL AND b.owner_id = @user_id)
+   OR (b.agent_id IS NULL AND b.owner_principal_id = @user_id)
 ORDER BY b.created_at;
 
 -- name: GetBridgeByTelegramBotUserID :one
@@ -42,7 +42,7 @@ SELECT * FROM bridges WHERE telegram_bot_user_id = @telegram_bot_user_id LIMIT 1
 -- pre-stop the BridgeManager pollers before the ON DELETE CASCADE wipes
 -- the rows — leaving a goroutine polling a deleted row would race on
 -- token re-encryption if the user is re-created with the same id.
-SELECT id FROM bridges WHERE owner_id = @owner_id;
+SELECT id FROM bridges WHERE owner_principal_id = @owner_principal_id;
 
 -- name: ListBridgesForAgent :many
 -- Bridges relevant to a specific agent: its own bridge + system bridges.

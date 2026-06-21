@@ -237,18 +237,18 @@ func (b *BuildService) CancelBuildAndWait(agentID string, timeout time.Duration)
 
 // BuildInput describes what to build.
 type BuildInput struct {
-	AgentID         string
-	Name            string
-	Slug            string
-	UserID          string
-	BuildProviderID pgtype.UUID // providers row FK; pairs with BuildModel
-	BuildModel      string      // bare model name; "" + invalid FK ⇄ inherit system default
-	Instructions    string      // optional: when non-empty, run Sol code generation after scaffold
+	AgentID          string
+	Name             string
+	Slug             string
+	OwnerPrincipalID string
+	BuildProviderID  pgtype.UUID // providers row FK; pairs with BuildModel
+	BuildModel       string      // bare model name; "" + invalid FK ⇄ inherit system default
+	Instructions     string      // optional: when non-empty, run Sol code generation after scaffold
 
 	// Optional external-git connection. When GitRemoteURL is non-empty,
 	// the agent is connected to the remote during Build and the first
 	// push happens via Execute's post-merge push (Phase C2). The API
-	// handler enforces that GitCredentialID belongs to UserID before
+	// handler enforces that GitCredentialID belongs to OwnerPrincipalID before
 	// calling Build.
 	GitRemoteURL     string
 	GitCredentialID  pgtype.UUID
@@ -288,12 +288,12 @@ func (b *BuildService) Build(_ context.Context, input BuildInput) error {
 			return fmt.Errorf("get agent: %w", err)
 		}
 	} else {
-		userUUID := mustParseUUID(input.UserID)
+		ownerUUID := mustParseUUID(input.OwnerPrincipalID)
 		agent, err = q.CreateAgent(ctx, dbq.CreateAgentParams{
-			Name:   input.Name,
-			Slug:   input.Slug,
-			UserID: userUUID,
-			Config: []byte("{}"),
+			Name:             input.Name,
+			Slug:             input.Slug,
+			OwnerPrincipalID: ownerUUID,
+			Config:           []byte("{}"),
 		})
 		if err != nil {
 			return fmt.Errorf("create agent: %w", err)

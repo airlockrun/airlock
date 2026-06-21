@@ -2972,8 +2972,8 @@ export type UsageByAgent = Message<"airlock.v1.UsageByAgent"> & {
   costTotal: number;
 
   /**
-   * Current owner of the agent (agents.user_id), joined live. Empty when the
-   * agent — or its owner — has since been deleted.
+   * Current owner of the agent (agents.owner_principal_id), joined live. Empty
+   * when the agent — or its owner — has since been deleted.
    *
    * @generated from field: string owner_email = 9;
    */

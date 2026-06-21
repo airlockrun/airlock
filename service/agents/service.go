@@ -258,11 +258,11 @@ func (s *Service) Create(ctx context.Context, p authz.Principal, req CreateReque
 		gitCredFK = pgtype.UUID{Bytes: credID, Valid: true}
 	}
 	agent, err := q.CreateAgent(ctx, dbq.CreateAgentParams{
-		Name:        req.Name,
-		Slug:        req.Slug,
-		UserID:      pgtype.UUID{Bytes: p.UserID, Valid: true},
-		Description: req.Description,
-		Config:      []byte("{}"),
+		Name:             req.Name,
+		Slug:             req.Slug,
+		OwnerPrincipalID: pgtype.UUID{Bytes: p.UserID, Valid: true},
+		Description:      req.Description,
+		Config:           []byte("{}"),
 	})
 	if err != nil {
 		if strings.Contains(err.Error(), "duplicate key") {
@@ -295,7 +295,7 @@ func (s *Service) Create(ctx context.Context, p authz.Principal, req CreateReque
 			AgentID:              agentIDStr,
 			Name:                 req.Name,
 			Slug:                 req.Slug,
-			UserID:               p.UserID.String(),
+			OwnerPrincipalID:     p.UserID.String(),
 			BuildProviderID:      buildProviderFK,
 			BuildModel:           req.BuildModel,
 			Instructions:         req.Instructions,
@@ -600,13 +600,13 @@ func (s *Service) Upgrade(ctx context.Context, p authz.Principal, agentID uuid.U
 		// entirely, and just rebuilds the (stale/empty) tree.
 		go func() {
 			_ = s.builder.Build(context.Background(), builder.BuildInput{
-				AgentID:         agentID.String(),
-				Name:            agent.Name,
-				Slug:            agent.Slug,
-				UserID:          uuid.UUID(agent.UserID.Bytes).String(),
-				BuildProviderID: agent.BuildProviderID,
-				BuildModel:      agent.BuildModel,
-				Instructions:    req.Description,
+				AgentID:          agentID.String(),
+				Name:             agent.Name,
+				Slug:             agent.Slug,
+				OwnerPrincipalID: uuid.UUID(agent.OwnerPrincipalID.Bytes).String(),
+				BuildProviderID:  agent.BuildProviderID,
+				BuildModel:       agent.BuildModel,
+				Instructions:     req.Description,
 			})
 		}()
 		return nil
