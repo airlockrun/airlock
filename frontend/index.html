@@ -2,7 +2,12 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- interactive-widget=resizes-content makes the on-screen keyboard shrink
+         the layout viewport (and dvh) instead of overlaying the page. The
+         100dvh app column then reflows above the keyboard, keeping the chat
+         input visible without the browser scrolling the whole conversation up
+         to reveal the focused field. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, interactive-widget=resizes-content" />
     <title>Airlock</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />

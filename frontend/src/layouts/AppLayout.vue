@@ -499,7 +499,11 @@ onMounted(() => {
 .app-layout {
   display: flex;
   flex-direction: column;
+  /* dvh tracks the visible viewport as the mobile browser's address/tab bars
+     show and hide, so the bottom-pinned chat input always sits inside the
+     window — no scroll-to-reveal. vh first as a fallback for old engines. */
   height: 100vh;
+  height: 100dvh;
   overflow: hidden;
 }
 
@@ -730,6 +734,13 @@ onMounted(() => {
   flex: 1;
   padding: 1.5rem;
   overflow-y: auto;
+  /* Pin the horizontal axis. overflow-y:auto alone forces overflow-x from
+     visible to auto (CSS spec), making this a horizontal scroll container —
+     which turns AgentDetailView's full-bleed sticky nav (negative side
+     margins) into a phantom horizontal scrollbar once the vertical scrollbar
+     claims its width. We never want horizontal page scroll; inner content
+     (tables, code) scrolls within itself. */
+  overflow-x: hidden;
   min-height: 0;
 }
 
@@ -738,8 +749,10 @@ onMounted(() => {
    right up to the top bar. Top drops to 0 to butt against the bar; the
    bottom keeps a small gutter so the input row doesn't sit on the
    viewport edge. */
+/* Chat fills the content area edge-to-edge — no gutter revealing the page
+   background around it. The composer and message list own their own insets. */
 .app-content-flush {
-  padding: 0 1rem 1rem;
+  padding: 0;
 }
 
 /* AgentDetailView's sticky section nav wants top: 0 to actually be at the

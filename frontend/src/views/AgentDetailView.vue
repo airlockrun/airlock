@@ -106,6 +106,8 @@ const agentId = route.params.id as string
 const agent = ref<AgentInfo | null>(null)
 const loading = ref(true)
 const activeBuildId = ref<string | undefined>(undefined)
+// External URL of the agent's web homepage (GET "/"), or null when it has none.
+const webUrl = ref<string | null>(null)
 const buildTasksDone = ref(0)
 const buildTasksTotal = ref(0)
 const buildPhase = ref('')
@@ -326,7 +328,15 @@ onMounted(async () => {
   setTimeout(setupScrollSpy, 0)
   try {
     const { data } = await api.get(`/api/v1/agents/${agentId}`)
-    agent.value = fromJson(GetAgentDetailResponseSchema, data).agent ?? null
+    const resp = fromJson(GetAgentDetailResponseSchema, data)
+    agent.value = resp.agent ?? null
+    // Surface a "Web" button only when the agent serves a browser-reachable
+    // homepage — a GET route at "/". External URL is routeBaseUrl + "/".
+    const base = resp.routeBaseUrl || ''
+    const hasHome = (resp.routes || []).some(
+      (r) => r.method.toUpperCase() === 'GET' && (r.path === '/' || r.path === ''),
+    )
+    webUrl.value = base && hasHome ? base + '/' : null
   } catch {
     toast.add({ severity: 'error', summary: 'Agent not found', life: 3000 })
     router.push('/agents')
@@ -539,23 +549,30 @@ function goToChat() {
   router.push(`/agents/${agentId}/chat`)
 }
 
+function openWeb() {
+  if (webUrl.value) window.open(webUrl.value, '_blank', 'noopener')
+}
+
 </script>
 
 <template>
-  <div v-if="loading" style="display: flex; flex-direction: column; gap: 1rem">
+  <div v-if="loading" style="display: flex; flex-direction: column; gap: 1rem; margin-top: 1.5rem">
     <Skeleton width="40%" height="2rem" />
     <Skeleton width="20%" height="1.5rem" />
     <Skeleton width="100%" height="20rem" />
   </div>
 
   <div v-else-if="agent">
-    <!-- Header -->
-    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; flex-wrap: wrap; gap: 0.75rem">
+    <!-- Header — restore the top gap the layout's flush-top removed (that
+         flush-top is for the sticky section nav below, not this header). -->
+    <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-top: 1.5rem; margin-bottom: 1.5rem; flex-wrap: wrap; gap: 0.75rem">
       <div>
-        <div style="display: flex; align-items: center; gap: 0.75rem">
-          <h1 style="margin: 0; font-size: 1.875rem; font-weight: 700; line-height: 1.2">
-            <span v-if="agent.emoji" style="margin-right: 0.4rem">{{ agent.emoji }}</span>{{ agent.name }}
-          </h1>
+        <!-- Line 1: emoji + name -->
+        <h1 style="margin: 0; font-size: 1.875rem; font-weight: 700; line-height: 1.2">
+          <span v-if="agent.emoji" style="margin-right: 0.4rem">{{ agent.emoji }}</span>{{ agent.name }}
+        </h1>
+        <!-- Line 2: slug, rename, status -->
+        <div style="display: flex; align-items: center; gap: 0.6rem; margin-top: 0.4rem; flex-wrap: wrap">
           <span style="color: var(--p-text-muted-color)">{{ agent.slug }}</span>
           <Button
             icon="pi pi-pencil"
@@ -582,10 +599,11 @@ function goToChat() {
             v-tooltip.bottom="setupTooltip"
           />
         </div>
-        <p v-if="agent.description" style="margin: 0.25rem 0 0; color: var(--p-text-muted-color); font-size: 0.9rem">{{ agent.description }}</p>
+        <p v-if="agent.description" style="margin: 0.5rem 0 0; color: var(--p-text-muted-color); font-size: 0.9rem">{{ agent.description }}</p>
       </div>
       <div style="display: flex; gap: 0.5rem">
         <Button label="Chat" icon="pi pi-comments" @click="goToChat" />
+        <Button v-if="webUrl" label="Web" icon="pi pi-external-link" severity="secondary" outlined @click="openWeb" />
         <SplitButton label="Actions" :model="actionItems" severity="secondary" />
       </div>
     </div>
@@ -746,8 +764,13 @@ function goToChat() {
   top: 0;
   z-index: 10;
   background: var(--p-content-background);
-  margin: 0 0 1.25rem;
-  padding: 0;
+  /* Break out of .app-content's 1.5rem side padding so the bar spans the
+     full content area (reads as a top bar, not a section), then pad the
+     items back in to keep them aligned with the page content. A baseline
+     border separates it from the sections below. */
+  margin: 0 -1.5rem 1.25rem;
+  padding: 0 1.5rem;
+  border-bottom: 1px solid var(--p-content-border-color);
   overflow-x: auto;
   /* Setting overflow-x alone implicitly auto-s overflow-y in most engines —
    * pin overflow-y so a phantom vertical scrollbar can't appear. */

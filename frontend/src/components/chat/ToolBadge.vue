@@ -11,6 +11,10 @@ const props = defineProps<{
   label: string
   toolName?: string
   input?: string
+  // Plain-language summary of what this call does (run_js). When present it
+  // headlines the collapsed view and the raw input drops to a muted line —
+  // most users can't read the code, so the description is the real summary.
+  description?: string
   output?: string
   error?: string
   status?: string // live only: running | confirmation | done | error | denied
@@ -91,12 +95,16 @@ const dotColor = computed(() => {
     <div class="tool-badge-head" @click="expanded = !isOpen">
       <i :class="isOpen ? 'pi pi-chevron-down' : 'pi pi-chevron-right'" class="tool-caret" />
       <span class="tool-dot" :style="{ backgroundColor: dotColor }" />
-      <span class="tool-badge-name">{{ label }}</span>
+      <span class="tool-badge-name">{{ description ? label + ':' : label }}</span>
+      <!-- With a description (run_js), it rides on the header line right after
+           the label and is the whole collapsed summary — no code/output. -->
+      <span v-if="description" class="tool-badge-headdesc">{{ description }}</span>
       <Tag v-if="showStatus" :value="status" :severity="statusSeverity" class="tool-badge-tag" />
     </div>
 
-    <!-- Collapsed summary: one-line input + ≤5 formatted output lines -->
-    <div v-if="!isOpen && (inputLine || clampedOutput.text)" class="tool-badge-summary" @click="expanded = true">
+    <!-- Collapsed summary (only when there's no description): one-line input +
+         output preview. -->
+    <div v-if="!isOpen && !description && (inputLine || clampedOutput.text)" class="tool-badge-summary" @click="expanded = true">
       <div v-if="inputLine" class="tool-badge-inline">{{ inputLine }}</div>
       <pre
         v-if="clampedOutput.text"
@@ -108,7 +116,8 @@ const dotColor = computed(() => {
       </div>
     </div>
 
-    <!-- Expanded: full input / output / error -->
+    <!-- Expanded: full input / output / error. The description already rides
+         the header line, so it isn't repeated here. -->
     <div v-else-if="isOpen" class="tool-badge-body">
       <pre v-if="input" class="tool-pre tool-pre-in">{{ input }}</pre>
       <div v-if="mdOutput" v-html="mdOutput" class="tool-badge-md" />
@@ -175,6 +184,19 @@ const dotColor = computed(() => {
   flex-direction: column;
   gap: 0.3rem;
   cursor: pointer;
+}
+
+/* Description riding the header line, right after the bold "CODE:" label.
+   Takes the remaining width and ellipsizes so the badge stays one line. */
+.tool-badge-headdesc {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.78rem;
+  color: var(--p-text-color);
+  opacity: 0.9;
 }
 
 .tool-badge-inline {
