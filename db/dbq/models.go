@@ -10,7 +10,7 @@ import (
 
 type Agent struct {
 	ID                   pgtype.UUID        `json:"id"`
-	UserID               pgtype.UUID        `json:"user_id"`
+	OwnerPrincipalID     pgtype.UUID        `json:"owner_principal_id"`
 	Slug                 string             `json:"slug"`
 	Name                 string             `json:"name"`
 	Description          string             `json:"description"`
@@ -324,7 +324,7 @@ type AuthLockout struct {
 type Bridge struct {
 	ID                pgtype.UUID        `json:"id"`
 	AgentID           pgtype.UUID        `json:"agent_id"`
-	OwnerID           pgtype.UUID        `json:"owner_id"`
+	OwnerPrincipalID  pgtype.UUID        `json:"owner_principal_id"`
 	Type              string             `json:"type"`
 	Name              string             `json:"name"`
 	BotUsername       string             `json:"bot_username"`

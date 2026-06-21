@@ -809,8 +809,8 @@ message UsageByAgent {
   int64 tokens_out = 6;
   int64 tokens_cached = 7;
   double cost_total = 8;
-  // Current owner of the agent (agents.user_id), joined live. Empty when the
-  // agent — or its owner — has since been deleted.
+  // Current owner of the agent (agents.owner_principal_id), joined live. Empty
+  // when the agent — or its owner — has since been deleted.
   string owner_email = 9;
   string owner_name = 10;
 }

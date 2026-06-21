@@ -133,7 +133,7 @@ func (s *Service) Remove(ctx context.Context, p authz.Principal, agentID, grante
 	if err != nil {
 		return service.ErrNotFound
 	}
-	if uuid.UUID(agent.UserID.Bytes) == granteeID {
+	if uuid.UUID(agent.OwnerPrincipalID.Bytes) == granteeID {
 		return ErrCannotRemoveOwner
 	}
 	if err := q.DeleteAgentGrant(ctx, dbq.DeleteAgentGrantParams{

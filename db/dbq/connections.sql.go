@@ -277,7 +277,7 @@ func (q *Queries) UpdateConnectionOwnerByID(ctx context.Context, arg UpdateConne
 const upsertConnection = `-- name: UpsertConnection :one
 
 INSERT INTO connections (owner_principal_id, slug, name, description, llm_hint, auth_mode, auth_url, token_url, base_url, scopes, auth_injection, setup_instructions, test_path, config, auth_params, headers, access, client_id, client_secret, access_token_ref, refresh_token)
-VALUES ((SELECT user_id FROM agents WHERE agents.id = $1), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, '', '', '', '')
+VALUES ((SELECT owner_principal_id FROM agents WHERE agents.id = $1), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, '', '', '', '')
 ON CONFLICT (owner_principal_id, slug) DO UPDATE SET
     name = EXCLUDED.name,
     description = EXCLUDED.description,

@@ -710,16 +710,13 @@ CREATE TABLE system_audit (
 CREATE INDEX system_audit_user_time_idx ON system_audit(user_id, created_at DESC);
 CREATE INDEX system_audit_tool_time_idx ON system_audit(tool, created_at DESC);
 
--- bridges.created_by → bridges.owner_id. A bridge's owner can read every
--- conversation the bridge handles, so when the user is removed from the
--- tenant their bridges must die with them. The 001 column was created_by
--- with ON DELETE SET NULL (preserve orphaned rows); rename to owner_id
--- and switch to CASCADE so the security relationship is explicit.
-ALTER TABLE bridges RENAME COLUMN created_by TO owner_id;
-ALTER TABLE bridges
-    DROP CONSTRAINT bridges_created_by_fkey,
-    ADD CONSTRAINT bridges_owner_id_fkey
-        FOREIGN KEY (owner_id) REFERENCES users(id) ON DELETE CASCADE;
+-- bridges.created_by → bridges.owner_principal_id. A bridge's owner can read
+-- every conversation the bridge handles, so when the owner is removed their
+-- bridges die with them (ON DELETE CASCADE, set with the principals FK below —
+-- principals doesn't exist yet at this point in the migration). The owner is a
+-- principal (a user today; group-capable later), matching resource ownership.
+ALTER TABLE bridges RENAME COLUMN created_by TO owner_principal_id;
+ALTER TABLE bridges DROP CONSTRAINT bridges_created_by_fkey;
 
 -- bridges.managed marks rows whose token was provisioned by the
 -- Telegram-managed-bots manager-bot flow (vs. pasted in the UI). Used
@@ -990,6 +987,20 @@ INSERT INTO groups (id, name, description, builtin) VALUES
     ('00000000-0000-0000-0000-0000000000a2', 'manager', 'Built-in manager group', true),
     ('00000000-0000-0000-0000-0000000000a3', 'user',    'Built-in user group',    true);
 
+-- ─── owner columns reference principals ───
+-- agents + bridges owner_principal_id point at the principal supertype
+-- (a user today via the user→principal backfill above; group-capable later),
+-- matching resource owner_principal_id. ON DELETE CASCADE: an owned thing dies
+-- with its owner. Done here, after principals exists and is backfilled.
+ALTER TABLE bridges
+    ADD CONSTRAINT bridges_owner_principal_id_fkey
+        FOREIGN KEY (owner_principal_id) REFERENCES principals(id) ON DELETE CASCADE;
+ALTER TABLE agents RENAME COLUMN user_id TO owner_principal_id;
+ALTER TABLE agents
+    DROP CONSTRAINT agents_user_id_fkey,
+    ADD CONSTRAINT agents_owner_principal_id_fkey
+        FOREIGN KEY (owner_principal_id) REFERENCES principals(id) ON DELETE CASCADE;
+
 -- ─── resources become principal-owned; agent needs + bindings ───
 -- A resource (connection / MCP server / exec endpoint) stops being owned by an
 -- agent and becomes owned by a principal (in this tier always the agent's owner
@@ -999,9 +1010,9 @@ INSERT INTO groups (id, name, description, builtin) VALUES
 ALTER TABLE connections          ADD COLUMN owner_principal_id uuid REFERENCES principals(id) ON DELETE CASCADE;
 ALTER TABLE agent_mcp_servers    ADD COLUMN owner_principal_id uuid REFERENCES principals(id) ON DELETE CASCADE;
 ALTER TABLE agent_exec_endpoints ADD COLUMN owner_principal_id uuid REFERENCES principals(id) ON DELETE CASCADE;
-UPDATE connections          c SET owner_principal_id = a.user_id FROM agents a WHERE a.id = c.agent_id;
-UPDATE agent_mcp_servers    m SET owner_principal_id = a.user_id FROM agents a WHERE a.id = m.agent_id;
-UPDATE agent_exec_endpoints e SET owner_principal_id = a.user_id FROM agents a WHERE a.id = e.agent_id;
+UPDATE connections          c SET owner_principal_id = a.owner_principal_id FROM agents a WHERE a.id = c.agent_id;
+UPDATE agent_mcp_servers    m SET owner_principal_id = a.owner_principal_id FROM agents a WHERE a.id = m.agent_id;
+UPDATE agent_exec_endpoints e SET owner_principal_id = a.owner_principal_id FROM agents a WHERE a.id = e.agent_id;
 
 -- An agent declares a NEED for a resource (slug + expected shape); a binding
 -- (bound_*_id) attaches a concrete resource that satisfies it. Slug is unique
@@ -1163,6 +1174,17 @@ DROP TABLE IF EXISTS agent_resource_needs;
 ALTER TABLE agent_exec_endpoints DROP COLUMN IF EXISTS owner_principal_id;
 ALTER TABLE agent_mcp_servers    DROP COLUMN IF EXISTS owner_principal_id;
 ALTER TABLE connections          DROP COLUMN IF EXISTS owner_principal_id;
+-- ─── owner columns — reverse (principals → users), before principals is dropped ───
+ALTER TABLE agents RENAME COLUMN owner_principal_id TO user_id;
+ALTER TABLE agents
+    DROP CONSTRAINT IF EXISTS agents_owner_principal_id_fkey,
+    ADD CONSTRAINT agents_user_id_fkey
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE;
+ALTER TABLE bridges RENAME COLUMN owner_principal_id TO created_by;
+ALTER TABLE bridges
+    DROP CONSTRAINT IF EXISTS bridges_owner_principal_id_fkey,
+    ADD CONSTRAINT bridges_created_by_fkey
+        FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL;
 -- ─── principals & groups — reverse ───
 ALTER TABLE agents DROP CONSTRAINT IF EXISTS agents_principal_fk;
 ALTER TABLE users  DROP CONSTRAINT IF EXISTS users_principal_fk;
@@ -1260,11 +1282,6 @@ ALTER TABLE bridges DROP COLUMN IF EXISTS is_manager;
 DROP INDEX IF EXISTS bridges_telegram_bot_user_id_key;
 ALTER TABLE bridges DROP COLUMN IF EXISTS telegram_bot_user_id;
 ALTER TABLE bridges DROP COLUMN IF EXISTS managed;
-ALTER TABLE bridges
-    DROP CONSTRAINT IF EXISTS bridges_owner_id_fkey,
-    ADD CONSTRAINT bridges_created_by_fkey
-        FOREIGN KEY (owner_id) REFERENCES users(id) ON DELETE SET NULL;
-ALTER TABLE bridges RENAME COLUMN owner_id TO created_by;
 DROP INDEX IF EXISTS system_runs_conversation_idx;
 DROP TABLE IF EXISTS system_runs;
 ALTER TABLE system_conversations DROP CONSTRAINT IF EXISTS system_conversations_checkpoint_fk;

@@ -106,7 +106,7 @@ func computeA2ACallerAccess(ctx context.Context, q *dbq.Queries, target dbq.Agen
 		if err != nil {
 			return "", fmt.Errorf("%w: acting agent not found", ErrMCPForbidden)
 		}
-		ownerAccess := authz.UserPrincipal(uuid.UUID(actingAgent.UserID.Bytes), "").EffectiveAgentAccess(ctx, q, targetID)
+		ownerAccess := authz.UserPrincipal(uuid.UUID(actingAgent.OwnerPrincipalID.Bytes), "").EffectiveAgentAccess(ctx, q, targetID)
 		access := authz.MinAccess(userAccess, ownerAccess)
 		if access == agentsdk.AccessPublic && !target.AllowNonMemberMcp {
 			return "", ErrMCPForbidden

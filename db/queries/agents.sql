@@ -10,7 +10,7 @@ WITH p AS (
     INSERT INTO principals (kind) VALUES ('agent') RETURNING id
 )
 INSERT INTO agents (
-    id, name, slug, user_id, description, config, status,
+    id, name, slug, owner_principal_id, description, config, status,
     upgrade_status, auto_fix,
     allow_non_member_mcp, allow_public_mcp,
     allow_oauth_mcp_prompt, allow_public_mcp_prompt,
@@ -21,7 +21,7 @@ INSERT INTO agents (
     git_remote_url, git_default_branch, git_webhook_secret, git_last_synced_ref
 )
 SELECT
-    p.id, @name, @slug, @user_id, @description, @config, 'draft',
+    p.id, @name, @slug, @owner_principal_id, @description, @config, 'draft',
     'idle', true,
     false, false,
     false, false,

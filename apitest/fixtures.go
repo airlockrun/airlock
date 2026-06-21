@@ -66,10 +66,10 @@ func CreateAgent(t *testing.T, h *Harness, opts AgentOpts) uuid.UUID {
 	ctx := context.Background()
 	q := dbq.New(h.DB.Pool())
 	row, err := q.CreateAgent(ctx, dbq.CreateAgentParams{
-		Name:   opts.Name,
-		Slug:   opts.Slug,
-		UserID: pgtype.UUID{Bytes: opts.OwnerID, Valid: true},
-		Config: []byte("{}"),
+		Name:             opts.Name,
+		Slug:             opts.Slug,
+		OwnerPrincipalID: pgtype.UUID{Bytes: opts.OwnerID, Valid: true},
+		Config:           []byte("{}"),
 	})
 	if err != nil {
 		t.Fatalf("apitest: CreateAgent %q: %v", opts.Name, err)

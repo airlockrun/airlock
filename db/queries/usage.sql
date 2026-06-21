@@ -14,8 +14,8 @@ FROM llm_usage
 WHERE created_at >= @since;
 
 -- name: UsageByAgent :many
--- Owner (agents.user_id → users) is joined live, so it's empty for rows whose
--- agent (or whose agent's owner) has since been deleted.
+-- Owner (agents.owner_principal_id → users via the user-principal id) is joined
+-- live, so it's empty for rows whose agent (or whose agent's owner) is deleted.
 SELECT
     lu.agent_slug,
     lu.agent_name,
@@ -29,7 +29,7 @@ SELECT
     COALESCE(sum(lu.cost_total), 0)::double precision AS cost_total
 FROM llm_usage lu
 LEFT JOIN agents a ON a.id = lu.agent_id
-LEFT JOIN users ou ON ou.id = a.user_id
+LEFT JOIN users ou ON ou.id = a.owner_principal_id
 WHERE lu.created_at >= @since
 GROUP BY lu.agent_slug, lu.agent_name, (lu.agent_id IS NULL), ou.email, ou.display_name
 ORDER BY cost_total DESC, calls DESC;

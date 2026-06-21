@@ -383,7 +383,7 @@ func (q *Queries) UpdateMCPServerToolSchemasByID(ctx context.Context, arg Update
 const upsertMCPServer = `-- name: UpsertMCPServer :one
 
 INSERT INTO agent_mcp_servers (owner_principal_id, slug, name, url, auth_mode, auth_url, token_url, registration_endpoint, scopes, access, auth_injection, tool_schemas, client_id, client_secret, access_token_ref, refresh_token)
-VALUES ((SELECT user_id FROM agents WHERE agents.id = $1), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, '[]'::jsonb, '', '', '', '')
+VALUES ((SELECT owner_principal_id FROM agents WHERE agents.id = $1), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, '[]'::jsonb, '', '', '', '')
 ON CONFLICT (owner_principal_id, slug) DO UPDATE SET
     name = EXCLUDED.name,
     url = EXCLUDED.url,
