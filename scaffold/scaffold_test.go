@@ -29,6 +29,7 @@ func TestMaterialize(t *testing.T) {
 		"sqlc.yaml",
 		"Dockerfile",
 		".gitignore",
+		"THIRD_PARTY_NOTICES.md",
 	}
 	for _, f := range expectedFiles {
 		path := filepath.Join(dir, f)

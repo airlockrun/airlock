@@ -5,10 +5,12 @@
   "packageManager": "pnpm@10.33.0",
   "scripts": {
     "dev": "vite",
-    "build": "vue-tsc --noEmit && vite build",
+    "build": "pnpm run notices && vue-tsc --noEmit && vite build",
     "watch": "vite build --watch",
     "typecheck": "vue-tsc --noEmit",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "notices": "node scripts/licenses.mjs gen",
+    "check:licenses": "node scripts/licenses.mjs check"
   },
   "dependencies": {
     "@bufbuild/protobuf": "^2.11.0",
