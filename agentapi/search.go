@@ -105,14 +105,14 @@ func resolveSearchClient(
 		if !p.IsEnabled {
 			continue
 		}
-		ov, ok := solprovider.Overlay[p.CatalogID]
-		if !ok || ov.SearchBackend == "" {
+		backend := solprovider.SearchBackend(p.CatalogID)
+		if backend == "" {
 			continue
 		}
 		_, inBase := base[p.CatalogID]
 		ranked = append(ranked, searchCandidate{
 			row:         p,
-			backend:     ov.SearchBackend,
+			backend:     backend,
 			catalogOnly: !inBase,
 		})
 	}
@@ -182,8 +182,8 @@ func tryConfiguredSearch(
 	if err != nil || !p.IsEnabled {
 		return nil, nil
 	}
-	ov, ok := solprovider.Overlay[p.CatalogID]
-	if !ok || ov.SearchBackend == "" {
+	backend := solprovider.SearchBackend(p.CatalogID)
+	if backend == "" {
 		return nil, nil
 	}
 	apiKey, err := enc.Get(ctx, "provider/"+p.ID.String()+"/api_key", p.ApiKey)
@@ -191,7 +191,7 @@ func tryConfiguredSearch(
 		return nil, fmt.Errorf("decrypt %q (%s) key for configured search: %w", p.CatalogID, p.Slug, err)
 	}
 	return websearch.NewClient(websearch.Options{
-		Provider: ov.SearchBackend,
+		Provider: backend,
 		APIKey:   apiKey,
 		Model:    model,
 	}), nil
@@ -220,8 +220,8 @@ func tryExecProviderSearch(
 	if err != nil || !p.IsEnabled {
 		return nil, nil
 	}
-	ov, ok := solprovider.Overlay[p.CatalogID]
-	if !ok || ov.SearchBackend == "" {
+	backend := solprovider.SearchBackend(p.CatalogID)
+	if backend == "" {
 		return nil, nil
 	}
 	apiKey, err := enc.Get(ctx, "provider/"+p.ID.String()+"/api_key", p.ApiKey)
@@ -229,7 +229,7 @@ func tryExecProviderSearch(
 		return nil, fmt.Errorf("decrypt %q (%s) key for exec-model search: %w", p.CatalogID, p.Slug, err)
 	}
 	return websearch.NewClient(websearch.Options{
-		Provider: ov.SearchBackend,
+		Provider: backend,
 		APIKey:   apiKey,
 	}), nil
 }

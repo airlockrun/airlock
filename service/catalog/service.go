@@ -204,8 +204,7 @@ func (s *Service) ListCapabilities(ctx context.Context, p authz.Principal) ([]Pr
 
 	out := make([]ProviderCapability, 0, len(catalog))
 	for id, p := range catalog {
-		ov := solprovider.Overlay[id]
-		caps := solprovider.ProviderCapabilities(p, ov.ExtraCapabilities)
+		caps := solprovider.ProviderCapabilities(p)
 		_, inBase := base[id]
 		out = append(out, ProviderCapability{
 			ProviderID:   id,
