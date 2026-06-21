@@ -62,6 +62,9 @@ RUN mkdir -p /root/.cache/sol \
     || true
 
 COPY --from=builder /airlock /airlock
+# Third-party license attributions for the deps compiled into the binary
+# (required by their MIT/BSD/Apache terms to travel with the distribution).
+COPY THIRD_PARTY_NOTICES.md /THIRD_PARTY_NOTICES.md
 
 EXPOSE 8080
 ENTRYPOINT ["/airlock"]

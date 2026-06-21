@@ -43,6 +43,37 @@ jobs:
       - name: check-migrations
         run: ./scripts/check-migrations.sh
 
+  licenses:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      # Fails the build if any dependency compiled into the airlock binary
+      # carries a non-permissive (copyleft / source-available) or unrecognised
+      # license. The agent-side scan + notices-freshness run in the pre-commit
+      # hook — they need the sibling agentsdk checkout, absent in this
+      # airlock-only CI checkout.
+      - name: check-licenses
+        run: ./scripts/check-licenses.sh
+
+  frontend-licenses:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: enable pnpm
+        run: corepack enable
+      - name: install frontend deps
+        run: pnpm -C frontend install --frozen-lockfile
+      # Gates the bundled SPA's npm dependency licenses against the same allowlist.
+      - name: check frontend licenses
+        run: pnpm -C frontend run check:licenses
+
   fmt:
     runs-on: ubuntu-latest
     steps:

@@ -1,15 +1,18 @@
 #!/usr/bin/env bash
-# Pre-commit hook — four gates, all also enforced in CI:
+# Pre-commit hook — gates, all also enforced in CI:
 #
 #   1. Version-invariant check (Dockerfile↔go.mod drift, compose tags,
 #      README pin, version.go). Same script CI runs on tag push.
 #   2. Migration immutability — a migration shipped in a release tag
 #      cannot be changed or deleted (goose has no checksum; a silent
 #      diverge otherwise). New/in-dev migrations are unrestricted.
-#   3. gofmt on the Go files staged for this commit. Blocks the commit
+#   3. Dependency licenses — every dep compiled into a distributed binary
+#      must be permissive (no copyleft/source-available sneaking in).
+#   4. Notices freshness — THIRD_PARTY_NOTICES files match the dep graph.
+#   5. gofmt on the Go files staged for this commit. Blocks the commit
 #      if any need formatting; does NOT auto-rewrite (explicit, no
 #      surprise edits to your working tree).
-#   4. airlockvet on api/ — nodbq (handlers route through service/) +
+#   6. airlockvet on api/ — nodbq (handlers route through service/) +
 #      writeproto (handlers emit proto, not JSON). Skipped when no api/
 #      file is staged; otherwise a single un-annotated violation blocks
 #      the commit.
@@ -26,6 +29,8 @@ repo_root=$(git rev-parse --show-toplevel)
 
 "$repo_root/scripts/check-versions.sh"
 "$repo_root/scripts/check-migrations.sh"
+"$repo_root/scripts/check-licenses.sh"
+"$repo_root/scripts/check-notices.sh"
 
 # Only the .go files staged in this commit (Added/Copied/Modified/Renamed),
 # so an unrelated unformatted file elsewhere in the tree doesn't block you.

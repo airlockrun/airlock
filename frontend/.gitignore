@@ -4,3 +4,6 @@ dist/
 components.d.ts
 package-lock.json
 yarn.lock
+
+# Generated at build time by scripts/licenses.mjs
+public/THIRD_PARTY_NOTICES.md
