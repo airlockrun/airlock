@@ -71,6 +71,7 @@ const (
 	TenantBridgeSystem        Action = "tenant.bridge.system"          // system (agent-less) bridge: admin
 	TenantManagerBotConfig    Action = "tenant.manager_bot.config"     // configure the Telegram-managed-bots manager bot token: admin
 	TenantUserManage          Action = "tenant.user.manage"
+	TenantProviderView        Action = "tenant.provider.view" // list configured providers (no secrets) for model selection: manager+
 	TenantProviderManage      Action = "tenant.provider.manage"
 	TenantSettingsView        Action = "tenant.settings.view" // read system defaults (agent-create prefill): user+
 	TenantSettingsUpdate      Action = "tenant.settings.update"
@@ -121,6 +122,7 @@ var policy = map[Action]Requirement{
 	TenantBridgeSystem:        {Axis: AxisTenant, Tenant: auth.RoleAdmin},
 	TenantManagerBotConfig:    {Axis: AxisTenant, Tenant: auth.RoleAdmin},
 	TenantUserManage:          {Axis: AxisTenant, Tenant: auth.RoleAdmin},
+	TenantProviderView:        {Axis: AxisTenant, Tenant: auth.RoleManager},
 	TenantProviderManage:      {Axis: AxisTenant, Tenant: auth.RoleAdmin},
 	TenantSettingsView:        {Axis: AxisTenant, Tenant: auth.RoleUser},
 	TenantSettingsUpdate:      {Axis: AxisTenant, Tenant: auth.RoleAdmin},

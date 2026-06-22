@@ -671,7 +671,7 @@ function openWeb() {
         :title="s.label"
         :badge="badgeFor(s)"
       >
-        <component :is="s.component" :agent-id="agentId" @populated="onPopulated(s.id, $event)" />
+        <component :is="s.component" :agent-id="agentId" :your-access="s.id === 'models' ? (agent?.yourAccess ?? '') : undefined" @populated="onPopulated(s.id, $event)" />
       </SectionCard>
 
       <SectionCard

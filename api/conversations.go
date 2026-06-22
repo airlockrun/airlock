@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -123,6 +124,39 @@ func (h *conversationsHandler) ListAllConversations(w http.ResponseWriter, r *ht
 		out[i] = convert.ConversationToProto(c)
 	}
 	writeProto(w, http.StatusOK, &airlockv1.ListConversationsResponse{Conversations: out})
+}
+
+// FeedConversations handles GET /api/v1/conversations/feed?cursor=&limit= —
+// the merged agent+system web-conversation feed, newest-first, keyset
+// paginated so the sidebar can window large histories.
+func (h *conversationsHandler) FeedConversations(w http.ResponseWriter, r *http.Request) {
+	p := principalFromRequest(r)
+	var limit int32
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil {
+			limit = int32(n)
+		}
+	}
+	res, err := h.svc.ListFeed(r.Context(), p, r.URL.Query().Get("cursor"), limit)
+	if err != nil {
+		writeConvError(w, err, "failed to list conversation feed")
+		return
+	}
+	items := make([]*airlockv1.ConversationFeedItem, len(res.Rows))
+	for i, row := range res.Rows {
+		items[i] = &airlockv1.ConversationFeedItem{
+			Kind:      row.Kind,
+			Id:        convert.PgUUIDToString(row.ID),
+			AgentId:   convert.PgUUIDToString(row.AgentID),
+			Title:     row.Title,
+			UpdatedAt: convert.PgTimestampToProto(row.UpdatedAt),
+			Status:    row.Status,
+		}
+	}
+	writeProto(w, http.StatusOK, &airlockv1.ListConversationFeedResponse{
+		Items:      items,
+		NextCursor: res.NextCursor,
+	})
 }
 
 // GetConversation handles GET /api/v1/conversations/{convID}.

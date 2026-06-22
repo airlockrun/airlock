@@ -3,6 +3,7 @@ import { ref, computed, nextTick, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useToast } from 'primevue/usetoast'
 import { useSystemChatStore } from '@/stores/systemChat'
+import { useConversationFeedStore } from '@/stores/conversationFeed'
 import ToolBadge from '@/components/chat/ToolBadge.vue'
 import { renderMarkdown } from '@/composables/useMarkdown'
 import { toolDescription } from '@/utils/messageGroup'
@@ -11,6 +12,7 @@ const route = useRoute()
 const router = useRouter()
 const toast = useToast()
 const sys = useSystemChatStore()
+const feed = useConversationFeedStore()
 
 // route.params.conversationId is undefined on /system/chat (the empty
 // "new conversation" route). The chat view treats undefined as the
@@ -19,7 +21,18 @@ const conversationId = computed(() => (route.params.conversationId as string) ||
 const isNew = computed(() => !conversationId.value)
 
 const composer = ref('')
+const composerRef = ref<any>(null)
 const messagesEl = ref<HTMLElement | null>(null)
+
+// PrimeVue's autoResize only recomputes on a real `input` event, so clearing
+// the model in code (e.g. after send) leaves a multi-line box stretched. Reset
+// the inline height so an empty composer collapses back to a single row.
+function resetComposerHeight() {
+  nextTick(() => {
+    const el = composerRef.value?.$el as HTMLTextAreaElement | undefined
+    if (el) el.style.height = 'auto'
+  })
+}
 
 function scrollToBottom() {
   nextTick(() => {
@@ -50,11 +63,11 @@ async function load() {
     // Empty-state landing: keep the sidebar conversations fresh so the
     // unified left pane reflects the live state, but don't load a thread.
     sys.resetConversationView()
-    void sys.refreshConversations()
+    void feed.loadFirst()
     return
   }
   try {
-    await sys.refreshConversations()
+    void feed.loadFirst()
     await sys.loadConversation(conversationId.value)
     scrollToBottom()
   } catch (err: any) {
@@ -76,7 +89,18 @@ onUnmounted(() => {
   else window.removeEventListener('resize', onViewportResize)
 })
 
-watch(conversationId, () => load())
+watch(conversationId, (id) => {
+  // First-send mints the conversation and sets sys.conversationId, then send()
+  // does router.replace('/system/chat/{id}') — which lands here. The store is
+  // already on this conversation and streaming the reply; calling load() would
+  // run loadConversation → resetTransient and wipe the in-flight stream
+  // (currentRunId/streamingText), so every text_delta already arriving gets
+  // dropped — the "blink then nothing until refresh" bug. Skip when the URL has
+  // merely caught up to the conversation we're already on; only reload on a real
+  // switch to a different thread (or to the empty new-chat route).
+  if (id && id === sys.conversationId) return
+  load()
+})
 watch(
   () => [sys.messages.length, sys.streamingBlocks.length, sys.activeToolCalls.size, sys.pendingConfirmation],
   () => scrollToBottom(),
@@ -86,6 +110,7 @@ async function send() {
   const text = composer.value.trim()
   if (!text || sys.sending) return
   composer.value = ''
+  resetComposerHeight()
   try {
     const cid = await sys.sendPrompt(text)
     // First send on the empty route mints the conversation server-side;
@@ -118,10 +143,14 @@ async function reject() {
 }
 
 function onKeydown(e: KeyboardEvent) {
-  if (e.key === 'Enter' && !e.shiftKey) {
-    e.preventDefault()
-    send()
-  }
+  // Desktop: Enter sends, Shift+Enter inserts a newline. Touch keyboards
+  // (coarse pointer) let Enter be a newline — the on-screen Send button
+  // submits — so dumping multi-line text on mobile doesn't fire early. Skip
+  // IME composition so selecting a candidate with Enter never sends.
+  if (e.key !== 'Enter' || e.shiftKey || e.isComposing) return
+  if (window.matchMedia?.('(pointer: coarse)').matches) return
+  e.preventDefault()
+  send()
 }
 
 // Per-source accent class — notifications / errors / upgrade events
@@ -264,6 +293,7 @@ function msgClassForSource(source: string): string {
     <div class="chat-composer">
       <div class="composer-box">
         <Textarea
+          ref="composerRef"
           v-model="composer"
           :disabled="sys.sending || !!sys.pendingConfirmation"
           :placeholder="sys.pendingConfirmation ? 'Approve or reject the pending tool call above first.' : 'Ask me anything…'"

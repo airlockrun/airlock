@@ -39,7 +39,7 @@ func (h *ProvidersHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeProto(w, http.StatusCreated, &airlockv1.CreateProviderResponse{
-		Provider: convert.ProviderToProto(res.Row, res.APIKey),
+		Provider: convert.ProviderToProto(res.Row),
 	})
 }
 
@@ -51,7 +51,7 @@ func (h *ProvidersHandler) List(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]*airlockv1.Provider, len(results))
 	for i, res := range results {
-		out[i] = convert.ProviderToProto(res.Row, res.APIKey)
+		out[i] = convert.ProviderToProto(res.Row)
 	}
 	writeProto(w, http.StatusOK, &airlockv1.ListProvidersResponse{Providers: out})
 }
@@ -79,7 +79,7 @@ func (h *ProvidersHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeProto(w, http.StatusOK, &airlockv1.UpdateProviderResponse{
-		Provider: convert.ProviderToProto(res.Row, res.APIKey),
+		Provider: convert.ProviderToProto(res.Row),
 	})
 }
 

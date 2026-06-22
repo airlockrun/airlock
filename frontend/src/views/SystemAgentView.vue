@@ -4,7 +4,7 @@ import { useRouter } from 'vue-router'
 import { useToast } from 'primevue/usetoast'
 import { fromJson } from '@bufbuild/protobuf'
 import api from '@/api/client'
-import { useSystemChatStore } from '@/stores/systemChat'
+import { useConversationFeedStore } from '@/stores/conversationFeed'
 import {
   type SystemRunInfo,
   ListSystemRunsResponseSchema,
@@ -12,7 +12,7 @@ import {
 
 const router = useRouter()
 const toast = useToast()
-const sys = useSystemChatStore()
+const feed = useConversationFeedStore()
 
 const runs = ref<SystemRunInfo[]>([])
 const nextCursor = ref<string>('')
@@ -28,10 +28,10 @@ async function fetchRuns(cursor?: string) {
 async function load() {
   loading.value = true
   try {
-    // Conversations back the sidebar; refresh them so the unified left
-    // pane reflects whatever the operator did since they last opened
-    // the system view.
-    await sys.refreshConversations()
+    // The feed backs the sidebar; refresh it so the unified left pane
+    // reflects whatever the operator did since they last opened the
+    // system view.
+    void feed.loadFirst()
     const resp = await fetchRuns()
     runs.value = [...resp.runs]
     nextCursor.value = resp.nextCursor
@@ -60,10 +60,6 @@ function openNewChat() {
   // Route to the empty-conversation view; the row is minted server-side
   // on the first send (mirrors agent chat).
   router.push('/system/chat')
-}
-
-function openRun(r: SystemRunInfo) {
-  router.push(`/system/chat/${r.conversationId}`)
 }
 
 function fmtTime(ts?: { seconds?: bigint }): string {
@@ -103,15 +99,6 @@ onMounted(load)
 
 <template>
   <div>
-    <Breadcrumb :model="[{ label: 'Agents', to: '/agents' }, { label: 'System' }]" style="margin-bottom: 1rem">
-      <template #item="{ item }">
-        <router-link v-if="item.to" :to="item.to" style="text-decoration: none; color: var(--p-primary-color)">
-          {{ item.label }}
-        </router-link>
-        <span v-else>{{ item.label }}</span>
-      </template>
-    </Breadcrumb>
-
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; flex-wrap: wrap; gap: 0.75rem">
       <div>
         <div style="display: flex; align-items: center; gap: 0.75rem">
@@ -151,9 +138,6 @@ onMounted(load)
           <DataTable
             :value="runs"
             dataKey="id"
-            rowHover
-            @row-click="(e: any) => openRun(e.data)"
-            tableStyle="cursor: pointer"
           >
             <Column field="conversationTitle" header="Conversation">
               <template #body="{ data }">

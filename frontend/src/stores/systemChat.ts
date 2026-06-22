@@ -4,10 +4,10 @@ import { fromJson } from '@bufbuild/protobuf'
 import api from '@/api/client'
 import { ws } from '@/api/ws'
 import { useAuthStore } from '@/stores/auth'
+import { useConversationFeedStore } from '@/stores/conversationFeed'
 import {
   type SystemConversationInfo,
   type SystemMessageInfo,
-  ListSystemConversationsResponseSchema,
   GetSystemConversationResponseSchema,
 } from '@/gen/airlock/v1/system_agent_pb'
 import { PromptResponseSchema } from '@/gen/airlock/v1/api_pb'
@@ -182,7 +182,6 @@ function parseParts(parts: unknown): any[] | null {
 }
 
 export const useSystemChatStore = defineStore('systemChat', () => {
-  const conversations = ref<SystemConversationInfo[]>([])
   const conversationId = ref<string | null>(null)
   const conversation = ref<SystemConversationInfo | null>(null)
   const messages = ref<DisplayMessage[]>([])
@@ -403,27 +402,17 @@ export const useSystemChatStore = defineStore('systemChat', () => {
     sending.value = false
   }
 
-  async function refreshConversations() {
-    const { data } = await api.get('/api/v1/system/conversations')
-    const resp = fromJson(ListSystemConversationsResponseSchema, data)
-    conversations.value = [...resp.conversations].sort(
-      (a, b) => Number(b.updatedAt?.seconds ?? 0n) - Number(a.updatedAt?.seconds ?? 0n))
-    return conversations.value
-  }
-
   async function createConversation(title?: string): Promise<SystemConversationInfo> {
     const payload: Record<string, any> = {}
     if (title) payload.title = title
     const { data } = await api.post('/api/v1/system/conversations', payload)
     // CreateSystemConversationResponse shape: { conversation }
     const created: SystemConversationInfo = data.conversation
-    conversations.value = [created, ...conversations.value.filter(t => t.id !== created.id)]
     return created
   }
 
   async function deleteConversation(id: string) {
     await api.delete(`/api/v1/system/conversations/${id}`)
-    conversations.value = conversations.value.filter(t => t.id !== id)
     if (conversationId.value === id) {
       conversationId.value = null
       conversation.value = null
@@ -537,7 +526,7 @@ export const useSystemChatStore = defineStore('systemChat', () => {
       const { data } = await api.post(`/api/v1/system/conversations/${conversationId.value}/prompt`, payload)
       const response = fromJson(PromptResponseSchema, data)
       currentRunId.value = response.runId
-      void refreshConversations() // bubble updated_at to top
+      void useConversationFeedStore().loadFirst() // bubble updated_at to the sidebar top
       return conversationId.value!
     } catch (err) {
       sending.value = false
@@ -550,7 +539,6 @@ export const useSystemChatStore = defineStore('systemChat', () => {
   function cleanup() {
     for (const unsub of unsubscribers) unsub()
     unsubscribers.length = 0
-    conversations.value = []
     conversationId.value = null
     conversation.value = null
     messages.value = []
@@ -558,7 +546,6 @@ export const useSystemChatStore = defineStore('systemChat', () => {
   }
 
   return {
-    conversations,
     conversationId,
     conversation,
     messages,
@@ -570,7 +557,6 @@ export const useSystemChatStore = defineStore('systemChat', () => {
     sending,
     loading,
     initListeners,
-    refreshConversations,
     createConversation,
     deleteConversation,
     loadConversation,

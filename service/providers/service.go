@@ -1,8 +1,10 @@
 // Package providers owns the tenant-wide LLM provider catalog: rows
 // in the providers table, their encrypted API keys, and the lifecycle
-// (create / list / update / delete). Every method gates through
-// authz.Authorize(TenantProviderManage) so the policy table is the
-// single editable knob for "who can manage providers".
+// (create / list / update / delete). Mutations gate through
+// authz.Authorize(TenantProviderManage) (admin); List gates through
+// TenantProviderView (manager+) so anyone who can configure an agent's
+// models can resolve provider id→name. API keys are write-once: set on
+// create/update, encrypted at rest, and never returned to any caller.
 package providers
 
 import (
@@ -38,13 +40,11 @@ func New(d *db.DB, enc secrets.Store, logger *zap.Logger) *Service {
 	return &Service{db: d, enc: enc, logger: logger}
 }
 
-// Result pairs the persisted row with the decrypted API key. Callers
-// use the key only to feed convert.MaskAPIKey for display — the
-// service hands back plaintext on purpose so the handler doesn't need
-// to know how the key is stored.
+// Result is the persisted row. The API key is never included — it's
+// write-once and stays encrypted at rest; the row's has-key state is
+// derived from the ciphertext column (see convert.ProviderToProto).
 type Result struct {
-	Row    dbq.Provider
-	APIKey string
+	Row dbq.Provider
 }
 
 type CreateRequest struct {
@@ -66,6 +66,13 @@ type UpdateRequest struct {
 func (s *Service) authorize(ctx context.Context, p authz.Principal) error {
 	q := dbq.New(s.db.Pool())
 	return authz.Authorize(ctx, q, p, authz.TenantProviderManage, uuid.Nil)
+}
+
+// authorizeView gates List at manager+ (read of non-secret provider rows for
+// model selection), distinct from the admin-only mutation gate.
+func (s *Service) authorizeView(ctx context.Context, p authz.Principal) error {
+	q := dbq.New(s.db.Pool())
+	return authz.Authorize(ctx, q, p, authz.TenantProviderView, uuid.Nil)
 }
 
 func (s *Service) Create(ctx context.Context, p authz.Principal, req CreateRequest) (Result, error) {
@@ -115,11 +122,11 @@ func (s *Service) Create(ctx context.Context, p authz.Principal, req CreateReque
 		s.logger.Error("create provider failed", zap.Error(err))
 		return Result{}, err
 	}
-	return Result{Row: row, APIKey: req.APIKey}, nil
+	return Result{Row: row}, nil
 }
 
 func (s *Service) List(ctx context.Context, p authz.Principal) ([]Result, error) {
-	if err := s.authorize(ctx, p); err != nil {
+	if err := s.authorizeView(ctx, p); err != nil {
 		return nil, err
 	}
 	q := dbq.New(s.db.Pool())
@@ -130,13 +137,7 @@ func (s *Service) List(ctx context.Context, p authz.Principal) ([]Result, error)
 	}
 	out := make([]Result, len(rows))
 	for i, row := range rows {
-		key, err := s.enc.Get(ctx, "provider/"+uuid.UUID(row.ID.Bytes).String()+"/api_key", row.ApiKey)
-		if err != nil {
-			s.logger.Error("decrypt api key failed", zap.Error(err),
-				zap.String("provider", row.CatalogID), zap.String("slug", row.Slug))
-			key = ""
-		}
-		out[i] = Result{Row: row, APIKey: key}
+		out[i] = Result{Row: row}
 	}
 	return out, nil
 }
@@ -170,11 +171,7 @@ func (s *Service) Update(ctx context.Context, p authz.Principal, id uuid.UUID, r
 		s.logger.Error("update provider failed", zap.Error(err))
 		return Result{}, err
 	}
-	key, err := s.enc.Get(ctx, "provider/"+uuid.UUID(row.ID.Bytes).String()+"/api_key", row.ApiKey)
-	if err != nil {
-		key = ""
-	}
-	return Result{Row: row, APIKey: key}, nil
+	return Result{Row: row}, nil
 }
 
 func (s *Service) Delete(ctx context.Context, p authz.Principal, id uuid.UUID) error {

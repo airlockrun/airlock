@@ -5,28 +5,19 @@ import (
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 )
 
-// MaskAPIKey returns a masked version of an API key for display.
-// Shows first 3 and last 4 characters: "sk-...key1".
-// Keys shorter than 8 characters are fully masked.
-func MaskAPIKey(key string) string {
-	if len(key) <= 8 {
-		return "****"
-	}
-	return key[:3] + "..." + key[len(key)-4:]
-}
-
-// ProviderToProto converts a dbq.Provider to the proto type.
-// The decryptedKey is used only for masking — the full key is never exposed.
-func ProviderToProto(p dbq.Provider, decryptedKey string) *airlockv1.Provider {
+// ProviderToProto converts a dbq.Provider to the proto type. The API key is
+// never included — it's write-once and encrypted at rest; HasApiKey reports
+// only whether a key is configured (the ciphertext column is non-empty).
+func ProviderToProto(p dbq.Provider) *airlockv1.Provider {
 	return &airlockv1.Provider{
-		Id:           PgUUIDToString(p.ID),
-		ProviderId:   p.CatalogID,
-		Slug:         p.Slug,
-		DisplayName:  p.DisplayName,
-		ApiKeyMasked: MaskAPIKey(decryptedKey),
-		BaseUrl:      p.BaseUrl,
-		IsEnabled:    p.IsEnabled,
-		CreatedAt:    PgTimestampToProto(p.CreatedAt),
-		UpdatedAt:    PgTimestampToProto(p.UpdatedAt),
+		Id:          PgUUIDToString(p.ID),
+		ProviderId:  p.CatalogID,
+		Slug:        p.Slug,
+		DisplayName: p.DisplayName,
+		HasApiKey:   p.ApiKey != "",
+		BaseUrl:     p.BaseUrl,
+		IsEnabled:   p.IsEnabled,
+		CreatedAt:   PgTimestampToProto(p.CreatedAt),
+		UpdatedAt:   PgTimestampToProto(p.UpdatedAt),
 	}
 }

@@ -5,6 +5,7 @@ import { useToast } from 'primevue/usetoast'
 import { useAuthStore } from '@/stores/auth'
 import { useAgentsStore } from '@/stores/agents'
 import { useConversationsStore } from '@/stores/conversations'
+import { useConversationFeedStore } from '@/stores/conversationFeed'
 import { useChatStore } from '@/stores/chat'
 import { useSystemChatStore } from '@/stores/systemChat'
 import { useConfirm } from 'primevue/useconfirm'
@@ -15,6 +16,7 @@ const route = useRoute()
 const auth = useAuthStore()
 const agentsStore = useAgentsStore()
 const conversationsStore = useConversationsStore()
+const feed = useConversationFeedStore()
 const chat = useChatStore()
 const systemChat = useSystemChatStore()
 const confirm = useConfirm()
@@ -124,6 +126,17 @@ function startSystemChat() {
   router.push('/system/chat')
   drawerVisible.value = false
 }
+// Most-recent web-conversation time per agent, derived from the loaded
+// conversation list. Orders the New-chat menu by last use (recent first);
+// agents never chatted with fall back to their existing created-desc order.
+const agentLastUsedSec = computed(() => {
+  const m = new Map<string, number>()
+  for (const c of feed.items) {
+    if (c.kind !== 'agent') continue
+    if (c.updatedAtSec > (m.get(c.agentId) ?? 0)) m.set(c.agentId, c.updatedAtSec)
+  }
+  return m
+})
 const agentMenuItems = computed(() => {
   const items: any[] = [
     {
@@ -131,13 +144,15 @@ const agentMenuItems = computed(() => {
       icon: 'pi pi-cog',
       command: startSystemChat,
     },
-    { separator: true },
   ]
   if (agentsStore.agents.length === 0) {
     items.push({ label: 'No agents yet', disabled: true })
     return items
   }
-  for (const a of agentsStore.agents) {
+  const ranked = [...agentsStore.agents].sort(
+    (a, b) => (agentLastUsedSec.value.get(b.id) ?? 0) - (agentLastUsedSec.value.get(a.id) ?? 0),
+  )
+  for (const a of ranked) {
     items.push({
       label: a.name,
       icon: 'pi pi-box',
@@ -147,10 +162,38 @@ const agentMenuItems = computed(() => {
       },
     })
   }
+  // Shortcut to the full agents page (and any agents past what's handy to
+  // scroll here).
+  items.push({ label: 'All agents', icon: 'pi pi-th-large', command: () => navigateTo('/agents') })
   return items
 })
 function openNewMenu(event: Event) {
   newMenuRef.value.toggle(event)
+}
+
+// Surface the (thin) scrollbar only while the list is actively scrolling:
+// tag the element on scroll, clear the tag after a short idle.
+const scrollHideTimers = new WeakMap<HTMLElement, number>()
+const lastScrollTop = new WeakMap<HTMLElement, number>()
+function onListScroll(e: Event) {
+  const el = e.target as HTMLElement
+  el.classList.add('scrolling')
+  const prev = scrollHideTimers.get(el)
+  if (prev) clearTimeout(prev)
+  scrollHideTimers.set(el, window.setTimeout(() => el.classList.remove('scrolling'), 700))
+
+  // Windowed infinite scroll over the conversation feed. Near the bottom →
+  // page in older conversations; scrolled well back up → drop the last page so
+  // a long history never all lives in memory (it re-pages on the way down).
+  const top = el.scrollTop
+  const goingUp = top < (lastScrollTop.get(el) ?? top)
+  lastScrollTop.set(el, top)
+  const distanceFromBottom = el.scrollHeight - top - el.clientHeight
+  if (distanceFromBottom < 240) {
+    void feed.loadMore()
+  } else if (goingUp && distanceFromBottom > el.clientHeight * 2) {
+    feed.dropLastPage()
+  }
 }
 
 const agentNameById = computed(() => {
@@ -174,11 +217,6 @@ function isActiveConv(c: ConversationInfo): boolean {
   return route.path === `/agents/${c.agentId}/chat` && chat.conversationId === c.id
 }
 
-function openConversation(c: ConversationInfo) {
-  router.push({ path: `/agents/${c.agentId}/chat`, query: { c: c.id } })
-  drawerVisible.value = false
-}
-
 function deleteConversation(c: ConversationInfo, event: Event) {
   event.stopPropagation()
   confirm.require({
@@ -193,6 +231,7 @@ function deleteConversation(c: ConversationInfo, event: Event) {
       } catch {
         return
       }
+      feed.removeItem(c.id)
       // If the open thread was just deleted, drop ?c= so the chat view
       // reloads into the agent's next thread (or empty state).
       if (wasActive) {
@@ -214,23 +253,9 @@ interface SidebarItem {
   updatedAtSec: number
   status?: string                 // 'system': 'active' | 'awaiting_confirmation'
 }
-const sidebarItems = computed<SidebarItem[]>(() => {
-  const agentItems: SidebarItem[] = conversationsStore.list.map(c => ({
-    kind: 'agent',
-    id: c.id,
-    agentId: c.agentId,
-    title: c.title || 'Untitled conversation',
-    updatedAtSec: Number(c.updatedAt?.seconds ?? 0n),
-  }))
-  const sysItems: SidebarItem[] = systemChat.conversations.map(c => ({
-    kind: 'system',
-    id: c.id,
-    title: c.title || 'New chat',
-    updatedAtSec: Number(c.updatedAt?.seconds ?? 0n),
-    status: c.status,
-  }))
-  return [...agentItems, ...sysItems].sort((a, b) => b.updatedAtSec - a.updatedAtSec)
-})
+// Backed by the windowed feed store — already merged (agent + system) and
+// sorted newest-first by the backend, paged in/out as the user scrolls.
+const sidebarItems = computed<SidebarItem[]>(() => feed.items)
 
 function isActiveItem(item: SidebarItem): boolean {
   if (item.kind === 'agent') {
@@ -266,6 +291,7 @@ function deleteSidebarItem(item: SidebarItem, event: Event) {
       } catch {
         return
       }
+      feed.removeItem(item.id)
       if (wasActive) router.replace('/system')
     },
   })
@@ -301,42 +327,72 @@ const isAgentDetail = computed<boolean>(() =>
   /^\/agents\/[^/]+$/.test(route.path),
 )
 
+// True on the chat routes (agent + system) — backTarget is non-null exactly
+// there. Drives the desktop two-part header: "Airlock" on the left, the
+// agent/chat title aligned with the message column.
+const isChat = computed<boolean>(() => backTarget.value !== null)
+
+// Top-bar title. In a chat it reads "Agent name: chat title" (or just the
+// agent / "System Agent" name for a brand-new thread); elsewhere it's the
+// context name. Truncated to the available width by CSS (ellipsis).
+const headerTitle = computed<string>(() => {
+  const activeTitle = () => sidebarItems.value.find(isActiveItem)?.title || ''
+  const agentChat = /^\/agents\/([^/]+)\/chat$/.exec(route.path)
+  if (agentChat) {
+    const name = agentName(agentChat[1])
+    const title = activeTitle()
+    return title ? `${name}: ${title}` : name
+  }
+  if (/^\/system\/chat(?:\/[^/]+)?$/.test(route.path)) {
+    const title = activeTitle()
+    return title ? `System: ${title}` : 'System'
+  }
+  return inSettings.value ? 'Settings' : 'Airlock'
+})
+
 function navigateTo(path: string) {
   router.push(path)
   drawerVisible.value = false
 }
 
 onMounted(() => {
-  // All three back the sidebar; failures are non-fatal (empty list /
-  // 'Agent' fallback) and self-heal on the next navigation.
+  // Agents back the New-chat menu + row labels; the feed backs the sidebar
+  // list (its first page). Failures are non-fatal and self-heal on the next
+  // navigation/action.
   agentsStore.fetchAgents().catch(() => {})
-  conversationsStore.load().catch(() => {})
-  systemChat.refreshConversations().catch(() => {})
+  feed.loadFirst().catch(() => {})
 })
 </script>
 
 <template>
   <div class="app-layout" :class="{ 'in-settings': inSettings }">
     <!-- Top Toolbar -->
-    <Toolbar class="app-toolbar">
+    <Toolbar class="app-toolbar" :class="{ 'app-toolbar-chat': isChat }">
       <template #start>
-        <div style="display: flex; align-items: center; gap: 0.5rem">
-          <Button
-            icon="pi pi-bars"
-            text
-            severity="secondary"
-            class="mobile-menu-btn"
-            @click="drawerVisible = true"
-          />
-          <Button
-            v-if="back"
-            icon="pi pi-arrow-left"
-            text
-            severity="secondary"
-            aria-label="Back"
-            @click="router.push(back)"
-          />
-          <span style="font-size: 1.15rem; font-weight: 700">{{ inSettings ? 'Settings' : 'Airlock' }}</span>
+        <div class="bar-start" :class="{ 'is-chat': isChat }">
+          <!-- Left zone: hamburger + back + brand. On desktop in a chat this
+               zone is exactly the sidebar width so the title beside it lines up
+               with the message column. -->
+          <div class="bar-left">
+            <Button
+              icon="pi pi-bars"
+              text
+              severity="secondary"
+              class="mobile-menu-btn"
+              @click="drawerVisible = true"
+            />
+            <Button
+              v-if="back"
+              icon="pi pi-arrow-left"
+              text
+              severity="secondary"
+              aria-label="Back"
+              @click="router.push(back)"
+            />
+            <span class="bar-brand">{{ isChat ? 'Airlock' : headerTitle }}</span>
+          </div>
+          <!-- Chat title, aligned with the message column on desktop. -->
+          <span v-if="isChat" class="bar-chat-title" :title="headerTitle">{{ headerTitle }}</span>
         </div>
       </template>
     </Toolbar>
@@ -368,9 +424,15 @@ onMounted(() => {
               <span class="pi pi-plus" />
               <span>New chat</span>
             </button>
-            <Menu ref="newMenuRef" :model="agentMenuItems" :popup="true" />
+            <Menu
+              ref="newMenuRef"
+              :model="agentMenuItems"
+              :popup="true"
+              class="newchat-menu"
+              :pt="{ root: { style: 'max-height: 66vh; overflow-y: auto' } }"
+            />
 
-            <div class="conv-list">
+            <div class="conv-list" @scroll="onListScroll">
               <div
                 v-for="item in sidebarItems"
                 :key="`${item.kind}-${item.id}`"
@@ -420,62 +482,80 @@ onMounted(() => {
         </template>
       </nav>
 
-      <!-- Mobile Drawer: chat navigation. In Settings the hamburger is
-           replaced by the back button and the section rail is always
-           visible, so the drawer is only ever the chat list. -->
+      <!-- Mobile Drawer: opened by the hamburger. In Settings it shows the
+           section list (with names); otherwise the chat list + app nav. -->
       <Drawer
         v-model:visible="drawerVisible"
-        header="Airlock"
-        :pt="{ content: { style: 'display:flex;flex-direction:column;min-height:0' } }"
+        :header="inSettings ? 'Settings' : 'Airlock'"
+        :pt="{
+          header: { style: 'padding:0.6rem 1rem' },
+          content: { style: 'display:flex;flex-direction:column;min-height:0;padding:0' },
+        }"
       >
-        <div class="sidebar-conv drawer-conv">
-          <button class="sidebar-new" @click="openNewMenu">
-            <span class="pi pi-plus" />
-            <span>New chat</span>
-          </button>
-          <div class="conv-list">
-            <div
-              v-for="item in sidebarItems"
-              :key="`${item.kind}-${item.id}`"
-              :class="['conv-item', { active: isActiveItem(item) }]"
-              @click="openSidebarItem(item)"
-            >
-              <div class="conv-text">
-                <span class="conv-agent">
-                  <template v-if="item.kind === 'agent'">
-                    <span v-if="agentEmoji(item.agentId!)">{{ agentEmoji(item.agentId!) }} </span>{{ agentName(item.agentId!) }}
-                  </template>
-                  <template v-else>
-                    <span>⚙️ System Agent</span>
-                    <i v-if="item.status === 'awaiting_confirmation'" class="pi pi-exclamation-circle" style="color: var(--p-yellow-500); margin-left: 0.25rem" />
-                  </template>
-                </span>
-                <span class="conv-title">{{ item.title }}</span>
-              </div>
-              <button
-                class="conv-del"
-                aria-label="Delete conversation"
-                @click="deleteSidebarItem(item, $event)"
+        <!-- Settings context: section list with full labels. -->
+        <div v-if="inSettings" class="conv-list settings-list">
+          <a
+            v-for="s in settingsSections"
+            :key="s.route"
+            :class="['sidebar-item', { active: route.path === s.route }]"
+            @click.prevent="navigateTo(s.route)"
+          >
+            <span :class="s.icon" />
+            <span>{{ s.label }}</span>
+          </a>
+        </div>
+
+        <!-- App context: conversations + slim nav. -->
+        <template v-else>
+          <div class="sidebar-conv drawer-conv">
+            <button class="sidebar-new" @click="openNewMenu">
+              <span class="pi pi-plus" />
+              <span>New chat</span>
+            </button>
+            <div class="conv-list" @scroll="onListScroll">
+              <div
+                v-for="item in sidebarItems"
+                :key="`${item.kind}-${item.id}`"
+                :class="['conv-item', { active: isActiveItem(item) }]"
+                @click="openSidebarItem(item)"
               >
-                <span class="pi pi-trash" />
-              </button>
+                <div class="conv-text">
+                  <span class="conv-agent">
+                    <template v-if="item.kind === 'agent'">
+                      <span v-if="agentEmoji(item.agentId!)">{{ agentEmoji(item.agentId!) }} </span>{{ agentName(item.agentId!) }}
+                    </template>
+                    <template v-else>
+                      <span>⚙️ System Agent</span>
+                      <i v-if="item.status === 'awaiting_confirmation'" class="pi pi-exclamation-circle" style="color: var(--p-yellow-500); margin-left: 0.25rem" />
+                    </template>
+                  </span>
+                  <span class="conv-title">{{ item.title }}</span>
+                </div>
+                <button
+                  class="conv-del"
+                  aria-label="Delete conversation"
+                  @click="deleteSidebarItem(item, $event)"
+                >
+                  <span class="pi pi-trash" />
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-        <div class="sidebar-nav">
-          <a
-            :class="['sidebar-item', { active: isActive('/agents') }]"
-            @click.prevent="navigateTo('/agents')"
-          >
-            <span class="pi pi-box" />
-            <span>Agents</span>
-          </a>
-          <a class="sidebar-item" @click="toggleUserMenu">
-            <span class="pi pi-user" />
-            <span>{{ userLabel }}</span>
-            <span class="pi pi-ellipsis-v sidebar-item-more" />
-          </a>
-        </div>
+          <div class="sidebar-nav">
+            <a
+              :class="['sidebar-item', { active: isActive('/agents') }]"
+              @click.prevent="navigateTo('/agents')"
+            >
+              <span class="pi pi-box" />
+              <span>Agents</span>
+            </a>
+            <a class="sidebar-item" @click="toggleUserMenu">
+              <span class="pi pi-user" />
+              <span>{{ userLabel }}</span>
+              <span class="pi pi-ellipsis-v sidebar-item-more" />
+            </a>
+          </div>
+        </template>
       </Drawer>
 
       <!-- Content -->
@@ -488,8 +568,12 @@ onMounted(() => {
              between siblings, breaking WS handler filters and refetches.
              Keyed on path (not fullPath) so query-string-only navigations
              (chat's ?c=convId switcher) still hit each view's in-place
-             watcher and don't pay the remount cost. Pinia stores survive. -->
-        <router-view :key="$route.params.id ?? $route.name" />
+             watcher and don't pay the remount cost. Pinia stores survive.
+             A route may set meta.viewKey to pin a constant key across an
+             otherwise-remounting transition — system chat does this so the
+             new→saved URL change (/system/chat → /system/chat/:id, which
+             flips the route name) doesn't remount mid-stream. -->
+        <router-view :key="($route.meta.viewKey as string) ?? $route.params.id ?? $route.name" />
       </main>
     </div>
   </div>
@@ -508,12 +592,60 @@ onMounted(() => {
 }
 
 .app-toolbar {
+  border: 0;
   border-radius: 0;
-  border-left: 0;
-  border-right: 0;
-  border-top: 0;
   /* Compact header — default Toolbar padding (~1rem) is too tall. */
   padding: 0.45rem 0.85rem;
+  /* A soft drop-shadow splitter instead of a hard border line. position +
+     z-index keep the shadow painted over the scrolling content below. */
+  position: relative;
+  z-index: 1;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+:root.dark .app-toolbar {
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+}
+
+/* Let the start section span the bar so the title zones lay out and ellipsize. */
+.app-toolbar :deep(.p-toolbar-start) {
+  flex: 1;
+  min-width: 0;
+}
+
+.bar-start {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  flex: 1;
+  /* Consistent height even on pages with no button (the agents list hides the
+     hamburger on desktop) — otherwise the bar collapses to the text line and
+     reads shorter than the chat/detail pages. */
+  min-height: 2.25rem;
+}
+
+.bar-left {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  flex: 1;
+}
+
+/* Single-line title/brand, truncated with "…" when it outgrows its zone. */
+.bar-brand,
+.bar-chat-title {
+  min-width: 0;
+  font-size: 1.15rem;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.bar-chat-title {
+  flex: 1;
 }
 
 /* Trim the icon buttons + avatar so they don't re-inflate the bar. */
@@ -540,11 +672,16 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  border-right: 1px solid var(--p-surface-200);
+  /* Separate from the content with a subtle background tint rather than a
+     border or shadow — a faint overlay that reads a touch darker than the
+     content canvas. Overlay (not a surface token) so it holds up on any
+     theme background. */
+  background: rgba(0, 0, 0, 0.025);
 }
 
 :root.dark .app-sidebar {
-  border-right-color: var(--p-surface-700);
+  /* Lighter than the dark canvas, mirroring the light-mode tint. */
+  background: rgba(255, 255, 255, 0.03);
 }
 
 /* Conversation list takes all the slack; nav stays pinned below it. */
@@ -586,6 +723,38 @@ onMounted(() => {
   min-height: 0;
   overflow-y: auto;
   padding: 0 0.4rem 0.4rem;
+  /* Thin, arrow-less scrollbar that only surfaces while scrolling (the
+     .scrolling class is toggled by onListScroll) or on hover. */
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+
+.conv-list.scrolling,
+.conv-list:hover {
+  scrollbar-color: var(--p-surface-400) transparent;
+}
+
+.conv-list::-webkit-scrollbar {
+  width: 6px;
+}
+
+.conv-list::-webkit-scrollbar-button {
+  display: none; /* no up/down arrows */
+}
+
+.conv-list::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 3px;
+}
+
+.conv-list.scrolling::-webkit-scrollbar-thumb,
+.conv-list:hover::-webkit-scrollbar-thumb {
+  background: var(--p-surface-400);
+}
+
+:root.dark .conv-list.scrolling::-webkit-scrollbar-thumb,
+:root.dark .conv-list:hover::-webkit-scrollbar-thumb {
+  background: var(--p-surface-600);
 }
 
 .conv-item {
@@ -670,12 +839,7 @@ onMounted(() => {
   flex-shrink: 0;
   /* Pin to the bottom of the sidebar even if the conversation list is short. */
   margin-top: auto;
-  border-top: 1px solid var(--p-surface-200);
   padding: 0.25rem 0;
-}
-
-:root.dark .sidebar-nav {
-  border-top-color: var(--p-surface-700);
 }
 
 .sidebar-item {
@@ -774,25 +938,55 @@ onMounted(() => {
   .mobile-menu-btn {
     display: inline-flex;
   }
+  /* Settings on mobile uses the same hamburger → drawer as the rest of the
+     app; the drawer renders the section list (with names) when in Settings. */
 
-  /* Settings on mobile: the chat drawer is hidden behind the hamburger, so
-     the section list would be invisible. Surface it instead as an
-     always-visible icon-only rail, and swap the hamburger for the back
-     button (the rail is the navigation; there's nothing to open). */
-  .in-settings .app-sidebar {
-    display: flex;
-    width: 3.25rem;
-  }
-  .in-settings .mobile-menu-btn {
+  /* No room for the "Airlock" brand next to the chat title on mobile — show
+     just the chat title (the hamburger + back still sit to its left). */
+  .bar-start.is-chat .bar-brand {
     display: none;
   }
-  .in-settings .settings-list .sidebar-item {
-    justify-content: center;
-    margin: 0 0.2rem;
-    padding: 0.65rem 0;
+  .bar-start.is-chat .bar-left {
+    flex: 0 0 auto;
   }
-  .in-settings .settings-list .sidebar-item > span:last-child {
-    display: none;
+}
+
+/* Desktop chat: split the bar into a sidebar-width brand zone + a title that
+   lines up with the message column. The left padding is dropped from the
+   toolbar and restored inside the brand zone so 240px lands exactly on the
+   sidebar edge; the title's 2.5rem inset matches .chat-messages on desktop. */
+@media (min-width: 769px) {
+  .app-toolbar-chat {
+    padding-left: 0;
   }
+  .bar-start.is-chat {
+    gap: 0;
+  }
+  .bar-start.is-chat .bar-left {
+    flex: 0 0 240px;
+    padding-left: 0.85rem;
+    box-sizing: border-box;
+  }
+  .bar-start.is-chat .bar-chat-title {
+    padding-left: 2.5rem;
+  }
+}
+</style>
+
+<!-- Non-scoped: the New-chat Menu is a popup teleported to <body>, so scoped
+     styles can't reach it. Keep its scrollbar thin + arrow-less to match. -->
+<style>
+.newchat-menu {
+  scrollbar-width: thin;
+}
+.newchat-menu::-webkit-scrollbar {
+  width: 6px;
+}
+.newchat-menu::-webkit-scrollbar-button {
+  display: none;
+}
+.newchat-menu::-webkit-scrollbar-thumb {
+  background: var(--p-surface-400);
+  border-radius: 3px;
 }
 </style>

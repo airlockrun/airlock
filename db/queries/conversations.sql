@@ -92,6 +92,25 @@ SELECT * FROM agent_conversations
 WHERE user_id = @user_id AND source = 'web'
 ORDER BY updated_at DESC;
 
+-- name: ListConversationFeed :many
+-- Merged sidebar feed: the user's web agent-conversations + system
+-- conversations as one stream, keyset-paginated by (updated_at, id) DESC so
+-- the windowed sidebar can page without loading everything. The first page
+-- passes cursor_updated='infinity' and cursor_id = the max uuid.
+SELECT kind, id, agent_id, title, updated_at, status FROM (
+    SELECT 'agent'::text AS kind, ac.id, ac.agent_id, ac.title, ac.updated_at, ''::text AS status
+    FROM agent_conversations ac
+    WHERE ac.user_id = @user_id AND ac.source = 'web'
+      AND (ac.updated_at < @cursor_updated OR (ac.updated_at = @cursor_updated AND ac.id < @cursor_id))
+    UNION ALL
+    SELECT 'system'::text AS kind, sc.id, NULL::uuid AS agent_id, sc.title, sc.updated_at, sc.status
+    FROM system_conversations sc
+    WHERE sc.user_id = @user_id AND sc.source = 'web'
+      AND (sc.updated_at < @cursor_updated OR (sc.updated_at = @cursor_updated AND sc.id < @cursor_id))
+) feed
+ORDER BY 5 DESC, 2 DESC
+LIMIT @lim;
+
 -- name: GetConversationByID :one
 SELECT * FROM agent_conversations WHERE id = $1;
 

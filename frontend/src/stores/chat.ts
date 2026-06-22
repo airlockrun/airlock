@@ -11,7 +11,7 @@ import {
   PromptResponseSchema,
 } from '@/gen/airlock/v1/api_pb'
 import { enrichMessages as enrichMessagesShared, formatToolArgs, toolDescription, toolLabel, type MsgBlock, type ToolBlock } from '@/utils/messageGroup'
-import { useConversationsStore } from '@/stores/conversations'
+import { useConversationFeedStore } from '@/stores/conversationFeed'
 
 // Sliding-window pagination keeps the browser's in-memory message list
 // bounded. Scrolling up past the top fetches an older page; if the window
@@ -900,7 +900,7 @@ export const useChatStore = defineStore('chat', () => {
         // and the global sidebar.
         if (wasNew) {
           await refreshConversations(agentId)
-          void useConversationsStore().refresh()
+          void useConversationFeedStore().loadFirst()
         }
       }
 
