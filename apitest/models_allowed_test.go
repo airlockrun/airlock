@@ -23,13 +23,38 @@ func allowedModels(t *testing.T, h *apitest.Harness, token string) *airlockv1.Li
 	return out
 }
 
-// TestAllowedModels_AdminUnrestricted: a tenant admin may assign any model.
-func TestAllowedModels_AdminUnrestricted(t *testing.T) {
+// TestAllowedModels_AdminRestrictedToGranted: a tenant admin is held to the
+// allow-list too — empty before any grant, and after allowing a model (granted
+// to the All-Users group, which is in the admin's grantee set) it appears.
+func TestAllowedModels_AdminRestrictedToGranted(t *testing.T) {
 	h := apitest.Setup(t)
 	admin := apitest.CreateUser(t, h, "admin", "admin")
 	tok := apitest.IssueUserToken(t, h, admin, "admin@apitest.local", "admin")
-	if resp := allowedModels(t, h, tok); !resp.Unrestricted {
-		t.Error("admin should be unrestricted")
+
+	if resp := allowedModels(t, h, tok); resp.Unrestricted || len(resp.Models) != 0 {
+		t.Fatalf("admin pre-grant: want restricted+empty, got unrestricted=%v n=%d", resp.Unrestricted, len(resp.Models))
+	}
+
+	ctx := context.Background()
+	q := dbq.New(h.DB.Pool())
+	provID := uuid.New()
+	if _, err := q.CreateProvider(ctx, dbq.CreateProviderParams{
+		ID: pgUUID(provID), CatalogID: "openai", Slug: "test", DisplayName: "Test", ApiKey: "k", BaseUrl: "", IsEnabled: true,
+	}); err != nil {
+		t.Fatalf("seed provider: %v", err)
+	}
+	if _, err := q.CreateModelGrant(ctx, dbq.CreateModelGrantParams{
+		CatalogID: pgUUID(provID), Model: "gpt-5", GranteeID: pgUUID(authz.GroupUser),
+	}); err != nil {
+		t.Fatalf("seed model grant: %v", err)
+	}
+
+	resp := allowedModels(t, h, tok)
+	if resp.Unrestricted {
+		t.Error("admin should be restricted")
+	}
+	if len(resp.Models) != 1 || resp.Models[0].Model != "gpt-5" {
+		t.Fatalf("want 1 allowed model gpt-5, got %d", len(resp.Models))
 	}
 }
 

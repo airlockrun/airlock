@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useToast } from 'primevue/usetoast'
+import { useConfirm } from 'primevue/useconfirm'
 import { useProvidersStore } from '@/stores/providers'
 import { useCatalogStore } from '@/stores/catalog'
 import { useModelGrantsStore } from '@/stores/modelGrants'
@@ -10,6 +11,7 @@ const providers = useProvidersStore()
 const catalog = useCatalogStore()
 const grants = useModelGrantsStore()
 const toast = useToast()
+const confirm = useConfirm()
 
 const search = ref('')
 
@@ -47,18 +49,53 @@ function fmtPrice(v: number): string {
 }
 
 async function toggle(provider: Provider, model: ModelInfo, on: boolean) {
-  try {
-    if (on) {
+  if (on) {
+    try {
       await grants.grant(provider.id, model.id)
-    } else {
-      const id = grants.grantId(provider.id, model.id)
-      if (id) await grants.revoke(id)
+    } catch (err: any) {
+      toast.add({ severity: 'error', summary: err.response?.data?.error || 'Update failed', life: 5000 })
+      await grants.fetchGrants()
     }
-  } catch (err: any) {
-    toast.add({ severity: 'error', summary: err.response?.data?.error || 'Update failed', life: 5000 })
-    // Re-sync the switch with server truth after a failed write.
-    await grants.fetchGrants()
+    return
   }
+
+  const id = grants.grantId(provider.id, model.id)
+  if (!id) return
+
+  // Before disabling, see how the model is configured. Agents that pin it as an
+  // override get reset to the workspace default — confirm that first. A
+  // configured system default stays usable, so it's revoked without fuss.
+  let agentCount = 0
+  try {
+    const u = await grants.usage(provider.id, model.id)
+    agentCount = u.isSystemDefault ? 0 : u.agentCount
+  } catch {
+    // Usage lookup is advisory; fall through to a plain revoke on failure.
+  }
+
+  const doRevoke = async () => {
+    try {
+      await grants.revoke(id)
+    } catch (err: any) {
+      toast.add({ severity: 'error', summary: err.response?.data?.error || 'Update failed', life: 5000 })
+    } finally {
+      await grants.fetchGrants()
+    }
+  }
+
+  if (agentCount > 0) {
+    confirm.require({
+      header: 'Disable model',
+      message: `${agentCount} agent${agentCount === 1 ? '' : 's'} use this model as a configured override. Disabling it will reset ${agentCount === 1 ? 'it' : 'them'} to the workspace default. Continue?`,
+      icon: 'pi pi-exclamation-triangle',
+      acceptLabel: 'Disable',
+      rejectLabel: 'Cancel',
+      accept: doRevoke,
+      reject: () => grants.fetchGrants(), // re-sync the switch back on
+    })
+    return
+  }
+  await doRevoke()
 }
 </script>
 

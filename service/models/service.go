@@ -7,7 +7,6 @@ package models
 import (
 	"context"
 
-	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/authz"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
@@ -324,16 +323,14 @@ func (s *Service) capabilityValidator(ctx context.Context, p authz.Principal) (f
 
 // checkModelAllowed enforces model deny-by-default at assignment time: a
 // (provider, model) the assigner is setting must be a configured system default
-// or carry a grant matching the assigner's grantee set. An unset or unchanged
-// pair is always allowed, so an existing agent is never locked out of the model
-// it already runs — only switching TO a new, non-granted model is gated.
+// or carry a grant matching the assigner's grantee set. This holds for admins
+// too — to use a model on an agent, allow it first (grant it, which targets the
+// All-Users group and so lands in every grantee set, admins included). An unset
+// or unchanged pair is always allowed, so an existing agent is never locked out
+// of the model it already runs — only switching TO a new, non-allowed model is
+// gated.
 func (s *Service) checkModelAllowed(ctx context.Context, q *dbq.Queries, p authz.Principal, fk pgtype.UUID, model string, curFK pgtype.UUID, curModel string) error {
 	if !fk.Valid || model == "" {
-		return nil
-	}
-	// Tenant admins own the model-grant surface; gating them would be a
-	// chicken-and-egg (grant to yourself first). They assign freely.
-	if p.TenantRole.AtLeast(auth.RoleAdmin) {
 		return nil
 	}
 	if fk == curFK && model == curModel {
@@ -363,16 +360,14 @@ type AllowedModel struct {
 }
 
 // AllowedModels returns the models the caller may assign to an agent capability
-// — the allow-list the model pickers render. Tenant admins are unrestricted
-// (they own the grant surface). Everyone else gets the models granted to their
-// grantee set. System defaults are intentionally NOT listed: a caller leaves a
-// capability slot unset to fall back to the default, rather than picking it.
+// — the allow-list the model pickers render: the models granted to the caller's
+// grantee set. This applies to admins too (an admin allows a model by granting
+// it, which targets the All-Users group in their own grantee set). System
+// defaults are intentionally NOT listed: a caller leaves a capability slot unset
+// to fall back to the default, rather than picking it.
 func (s *Service) AllowedModels(ctx context.Context, p authz.Principal) (unrestricted bool, models []AllowedModel, err error) {
 	if !p.IsAuthenticatedUser() {
 		return false, nil, service.ErrUnauthorized
-	}
-	if p.TenantRole.AtLeast(auth.RoleAdmin) {
-		return true, nil, nil
 	}
 	set := p.GranteeSet()
 	if len(set) == 0 {
