@@ -18,8 +18,10 @@ const toast = useToast()
 const loading = ref(true)
 const settings = ref<A2ASettings>({ mcpEnabled: true, allowPublicMcp: false, allowPublicRoutes: true })
 
-// The MCP endpoint other apps connect to. Same origin as the web app.
-const mcpUrl = computed(() => `${window.location.origin}/api/agent/${props.agentId}/mcp`)
+// Endpoints other apps connect to. Same origin as the web app.
+const base = computed(() => `${window.location.origin}/api/agent/${props.agentId}`)
+const mcpUrl = computed(() => `${base.value}/mcp`)
+const publicMcpUrl = computed(() => `${base.value}/public-mcp`)
 
 async function loadSettings() {
   loading.value = true
@@ -49,9 +51,9 @@ async function saveSettings() {
   }
 }
 
-async function copyMcpUrl() {
+async function copyUrl(url: string) {
   try {
-    await navigator.clipboard.writeText(mcpUrl.value)
+    await navigator.clipboard.writeText(url)
     toast.add({ severity: 'success', summary: 'URL copied', life: 2000 })
   } catch {
     toast.add({ severity: 'warn', summary: 'Copy failed — select the URL and copy manually', life: 4000 })
@@ -74,15 +76,13 @@ onMounted(loadSettings)
           <ToggleSwitch v-model="settings.mcpEnabled" :disabled="loading" />
           <span>Let other apps connect to this agent (MCP)</span>
         </label>
-        <small style="display: block; color: var(--p-text-muted-color); margin: 0.25rem 0 0 3.5rem">
-          For tools like Claude Desktop and other agents.
-        </small>
-        <div v-if="settings.mcpEnabled" style="margin: 0.5rem 0 0 3.5rem; font-size: 0.85rem">
-          <span style="color: var(--p-text-muted-color)">Connection URL: </span>
+        <small class="hint">For tools like Claude Desktop and other agents.</small>
+        <div v-if="settings.mcpEnabled" class="url-line">
+          <div class="url-label">Connection URL</div>
           <span class="copy-uri" role="button" tabindex="0" v-tooltip.bottom="'Click to copy'"
-                @click="copyMcpUrl" @keydown.enter="copyMcpUrl">
-            <code style="word-break: break-all">{{ mcpUrl }}</code>
-            <i class="pi pi-copy" style="font-size: 0.75rem; opacity: 0.6" />
+                @click="copyUrl(mcpUrl)" @keydown.enter="copyUrl(mcpUrl)">
+            <code>{{ mcpUrl }}</code>
+            <i class="pi pi-copy" />
           </span>
         </div>
       </div>
@@ -92,9 +92,15 @@ onMounted(loadSettings)
           <ToggleSwitch v-model="settings.allowPublicMcp" :disabled="loading || !settings.mcpEnabled" />
           <span>Allow connecting without signing in</span>
         </label>
-        <small style="display: block; color: var(--p-text-muted-color); margin: 0.25rem 0 0 3.5rem">
-          Anyone can connect; only public tools are exposed.
-        </small>
+        <small class="hint">Anyone can connect; only public tools are exposed.</small>
+        <div v-if="settings.mcpEnabled && settings.allowPublicMcp" class="url-line">
+          <div class="url-label">Public URL (no sign-in)</div>
+          <span class="copy-uri" role="button" tabindex="0" v-tooltip.bottom="'Click to copy'"
+                @click="copyUrl(publicMcpUrl)" @keydown.enter="copyUrl(publicMcpUrl)">
+            <code>{{ publicMcpUrl }}</code>
+            <i class="pi pi-copy" />
+          </span>
+        </div>
       </div>
 
       <div>
@@ -102,9 +108,7 @@ onMounted(loadSettings)
           <ToggleSwitch v-model="settings.allowPublicRoutes" :disabled="loading" />
           <span>Allow public web pages without signing in</span>
         </label>
-        <small style="display: block; color: var(--p-text-muted-color); margin: 0.25rem 0 0 3.5rem">
-          Lets anyone open this agent's pages marked public.
-        </small>
+        <small class="hint">Lets anyone open this agent's pages marked public.</small>
       </div>
 
       <div>
@@ -115,13 +119,39 @@ onMounted(loadSettings)
 </template>
 
 <style scoped>
+.hint {
+  display: block;
+  color: var(--p-text-muted-color);
+  margin-top: 0.25rem;
+}
+.url-line {
+  margin-top: 0.5rem;
+  font-size: 0.85rem;
+}
+.url-label {
+  color: var(--p-text-muted-color);
+  margin-bottom: 0.15rem;
+}
+/* Block-level flex so the long URL wraps within the column instead of
+   widening the page. */
 .copy-uri {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   gap: 0.35rem;
   cursor: pointer;
   border-radius: 0.3rem;
-  padding: 0.05rem 0.25rem;
+  padding: 0.15rem 0.3rem;
+  max-width: 100%;
+}
+.copy-uri code {
+  flex: 1;
+  min-width: 0;
+  word-break: break-all;
+}
+.copy-uri .pi-copy {
+  flex-shrink: 0;
+  font-size: 0.75rem;
+  opacity: 0.6;
 }
 .copy-uri:hover {
   background: var(--p-surface-100);

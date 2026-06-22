@@ -37,11 +37,23 @@ onMounted(async () => {
 
 // A GET route is reachable in the browser, so link it to its external
 // URL ({routeBaseUrl}{/path}). Other methods (POST/PUT/...) aren't
-// navigable, so they stay plain text. Empty base → no link (defensive).
+// navigable, and paths with a parameter placeholder (e.g. /board/{id})
+// can't be opened verbatim, so both stay plain text. Empty base → no
+// link (defensive).
 function routeHref(r: Route): string | null {
   if (r.method.toUpperCase() !== 'GET' || !routeBaseUrl.value) return null
+  if (r.path.includes('{')) return null
   const path = r.path.startsWith('/') ? r.path : '/' + r.path
   return routeBaseUrl.value + path
+}
+
+// Colored access tag, matching the Tools tab.
+function accessSeverity(access: string): string {
+  switch (access) {
+    case 'admin': return 'warn'
+    case 'public': return 'success'
+    default: return 'info'
+  }
 }
 </script>
 
@@ -66,7 +78,11 @@ function routeHref(r: Route): string | null {
         </template>
       </Column>
       <Column field="description" header="Description" />
-      <Column field="access" header="Access" style="width: 6rem" />
+      <Column field="access" header="Access" style="width: 6rem">
+        <template #body="{ data }">
+          <Tag :value="data.access" :severity="accessSeverity(data.access)" />
+        </template>
+      </Column>
     </DataTable>
 
     <DataTable v-else :value="[{}, {}, {}]">
