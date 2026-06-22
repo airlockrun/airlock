@@ -23,6 +23,7 @@ type promptEnv struct {
 	UserName     string
 	UserEmail    string
 	Conversation string
+	WebURL       string // base URL of the airlock web UI (no trailing slash)
 }
 
 type sysToolInfo struct {

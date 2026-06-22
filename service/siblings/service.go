@@ -83,12 +83,14 @@ type Inbound struct {
 }
 
 // Addable describes a candidate agent the parent may add as a sibling —
-// any agent the parent's owner holds a grant on.
+// any agent the parent's owner holds a grant on. OwnerName is the candidate
+// owner's display name (user or group).
 type Addable struct {
 	ID          uuid.UUID
 	Slug        string
 	Name        string
 	Description string
+	OwnerName   string
 }
 
 // A2ASettings is the per-agent protocol-surface toggles, orthogonal to
@@ -196,6 +198,7 @@ func (s *Service) ListAddable(ctx context.Context, p authz.Principal, parentID u
 			Slug:        r.Slug,
 			Name:        r.Name,
 			Description: r.Description,
+			OwnerName:   r.OwnerName,
 		})
 	}
 	return out, nil

@@ -667,6 +667,8 @@ message AddableSiblingInfo {
   string slug = 2;
   string name = 3;
   string description = 4;
+  // Display name of the candidate's owner (user or group).
+  string owner_name = 7;
 }
 
 // A2ASettings is the per-agent protocol-surface toggles, orthogonal to the
