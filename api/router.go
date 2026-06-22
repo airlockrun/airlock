@@ -161,7 +161,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	needsHandler := NewNeedsHandler(needssvc.NewService(cfg.DB, cfg.Logger.Named("needs")))
 	resourcesHandler := NewResourcesHandler(resourcessvc.New(cfg.DB, cfg.Logger.Named("resources")))
 	usageHandler := NewUsageHandler(usagesvc.New(cfg.DB, cfg.Logger.Named("usage")))
-	settingsSvc := settingssvc.New(cfg.DB, cfg.Logger.Named("settings"))
+	settingsSvc := settingssvc.New(cfg.DB, catalogsvc.New(cfg.DB, cfg.Logger.Named("settings-catalog")), cfg.Logger.Named("settings"))
 	sysSettingsHandler := newSettingsHandler(settingsHandlerDeps{Svc: settingsSvc})
 
 	// Health check (public, no auth — reverse proxies and orchestrators need
@@ -387,7 +387,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 			convLocks:   newConvMutexMap(),
 			logger:      cfg.Logger.Named("conversations"),
 		}
-		mH := newModelsHandler(modelssvc.New(cfg.DB, cfg.Logger.Named("models")))
+		mH := newModelsHandler(modelssvc.New(cfg.DB, catalogsvc.New(cfg.DB, cfg.Logger.Named("models-catalog")), cfg.Logger.Named("models")))
 		r.Get("/models/allowed", mH.AllowedModels)
 		siblingsH := newSiblingsHandler(siblingssvc.New(cfg.DB, cfg.Dispatcher, cfg.Logger.Named("siblings")))
 

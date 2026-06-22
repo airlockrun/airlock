@@ -259,7 +259,7 @@ const defaultRows = computed<DefaultRow[]>(() => [
     key: 'defaultSearchModel',
     label: 'Web Search',
     icon: 'pi pi-search',
-    help: 'Default web search backend + model. Pick "Provider default" to let the backend choose its model.',
+    help: 'Default web search backend + model. Only tool-capable text models are listed (the backend runs search by calling the model with a search tool). Pick "Provider default" to let the backend choose its model.',
     options: searchModelOptions.value,
     placeholder: 'Select search backend',
   },
