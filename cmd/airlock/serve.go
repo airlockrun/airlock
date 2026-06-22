@@ -263,10 +263,6 @@ func runServe(_ []string) {
 	}
 	defer bridgeMgr.Stop()
 
-	// Public-bridge session sweeper — finalize and delete public
-	// conversations idle past the per-bridge TTL.
-	trigger.StartPublicSweeper(gctx, database, bridgeMgr, 5*time.Minute, logger.Named("public-sweeper"))
-
 	// Token refresh job
 	refreshJob := oauth.NewRefreshJob(database, secretStore, oauthClient, logger.Named("oauth-refresh"))
 	go refreshJob.Run(gctx)

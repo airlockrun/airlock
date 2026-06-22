@@ -19,9 +19,7 @@ func BridgeFieldsToProto(
 	managerError string,
 	createdAt, updatedAt pgtype.Timestamptz,
 	ownerEmail, ownerDisplayName pgtype.Text,
-	settingsJSON []byte,
 ) *airlockv1.BridgeInfo {
-	settings := bridgessvc.DecodeSettings(settingsJSON)
 	info := &airlockv1.BridgeInfo{
 		Id:           PgUUIDToString(id),
 		Name:         name,
@@ -33,12 +31,6 @@ func BridgeFieldsToProto(
 		ManagerError: managerError,
 		CreatedAt:    timestamppb.New(createdAt.Time),
 		UpdatedAt:    timestamppb.New(updatedAt.Time),
-		Settings: &airlockv1.BridgeSettings{
-			AllowPublicDms:             settings.AllowPublicDMs,
-			PublicSessionTtlSeconds:    int32(settings.PublicSessionTTLSeconds),
-			PublicSessionMode:          settings.PublicSessionMode,
-			PublicPromptTimeoutSeconds: int32(settings.PublicPromptTimeoutSeconds),
-		},
 	}
 	if agentID.Valid {
 		info.AgentId = PgUUIDToString(agentID)
@@ -63,7 +55,6 @@ func BridgeRowToProto(br dbq.Bridge) *airlockv1.BridgeInfo {
 		br.ManagerError,
 		br.CreatedAt, br.UpdatedAt,
 		pgtype.Text{}, pgtype.Text{},
-		br.Settings,
 	)
 }
 
@@ -89,7 +80,6 @@ func BridgeResultToProto(res bridgessvc.Result) *airlockv1.BridgeInfo {
 		res.Bridge.ManagerError,
 		res.Bridge.CreatedAt, res.Bridge.UpdatedAt,
 		ownerEmail, ownerName,
-		res.Bridge.Settings,
 	)
 }
 
@@ -109,6 +99,5 @@ func BridgeListItemToProto(item bridgessvc.ListItem) *airlockv1.BridgeInfo {
 		item.Bridge.ManagerError,
 		item.Bridge.CreatedAt, item.Bridge.UpdatedAt,
 		ownerEmail, ownerName,
-		item.Bridge.Settings,
 	)
 }

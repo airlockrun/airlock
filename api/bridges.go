@@ -122,14 +122,6 @@ func (h *bridgeHandler) UpdateBridge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	upd := bridgessvc.UpdateRequest{AgentID: req.AgentId, IsSystem: req.IsSystem, IsManager: req.IsManager}
-	if req.Settings != nil {
-		upd.Settings = &bridgessvc.SettingsUpdate{
-			AllowPublicDMs:             req.Settings.AllowPublicDms,
-			PublicSessionTTLSeconds:    req.Settings.PublicSessionTtlSeconds,
-			PublicSessionMode:          req.Settings.PublicSessionMode,
-			PublicPromptTimeoutSeconds: req.Settings.PublicPromptTimeoutSeconds,
-		}
-	}
 	res, err := h.svc.Update(r.Context(), p, bridgeID, upd)
 	if err != nil {
 		writeBridgesError(w, err, "failed to update bridge")

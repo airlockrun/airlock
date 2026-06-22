@@ -96,17 +96,13 @@ func (s *Service) toolListBridges() tool.Tool {
 // --- update_bridge ---
 
 type updateBridgeInput struct {
-	BridgeID                   string `json:"bridge_id" jsonschema:"required,description=Bridge UUID."`
-	AgentID                    string `json:"agent_id,omitempty" jsonschema:"description=Rebind to this agent UUID. Empty string means rebind to system / orphan state."`
-	AllowPublicDMs             *bool  `json:"allow_public_dms,omitempty"`
-	PublicSessionTTLSeconds    *int32 `json:"public_session_ttl_seconds,omitempty"`
-	PublicSessionMode          string `json:"public_session_mode,omitempty"`
-	PublicPromptTimeoutSeconds *int32 `json:"public_prompt_timeout_seconds,omitempty"`
+	BridgeID string `json:"bridge_id" jsonschema:"required,description=Bridge UUID."`
+	AgentID  string `json:"agent_id,omitempty" jsonschema:"description=Rebind to this agent UUID. Empty string means rebind to system / orphan state."`
 }
 
 func (s *Service) toolUpdateBridge() tool.Tool {
 	return tool.New("update_bridge").
-		Description(`Rebind a bridge to another agent and/or update its public-DM settings. All settings are optional — omit to leave alone. Requires admin-or-creator of the target bridge.`).
+		Description(`Rebind a bridge to another agent. Requires admin-or-creator of the target bridge.`).
 		SchemaFromStruct(updateBridgeInput{}).
 		Execute(func(ctx context.Context, raw json.RawMessage, _ tool.CallOptions) (tool.Result, error) {
 			var in updateBridgeInput
@@ -117,26 +113,9 @@ func (s *Service) toolUpdateBridge() tool.Tool {
 			if err != nil {
 				return errResult(err), nil
 			}
-			var settings *bridgessvc.SettingsUpdate
-			if in.AllowPublicDMs != nil || in.PublicSessionTTLSeconds != nil ||
-				in.PublicSessionMode != "" || in.PublicPromptTimeoutSeconds != nil {
-				su := bridgessvc.SettingsUpdate{}
-				if in.AllowPublicDMs != nil {
-					su.AllowPublicDMs = *in.AllowPublicDMs
-				}
-				if in.PublicSessionTTLSeconds != nil {
-					su.PublicSessionTTLSeconds = *in.PublicSessionTTLSeconds
-				}
-				if in.PublicPromptTimeoutSeconds != nil {
-					su.PublicPromptTimeoutSeconds = *in.PublicPromptTimeoutSeconds
-				}
-				su.PublicSessionMode = in.PublicSessionMode
-				settings = &su
-			}
 			p := principalFromCtx(ctx)
 			res, err := s.bridges.Update(ctx, p, bridgeID, bridgessvc.UpdateRequest{
-				AgentID:  in.AgentID,
-				Settings: settings,
+				AgentID: in.AgentID,
 			})
 			if err != nil {
 				return errResult(err), nil

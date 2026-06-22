@@ -47,8 +47,8 @@ func MinAccess(a, b agentsdk.Access) agentsdk.Access {
 // every registered user, "shared with everyone"); the effective access is the
 // max role across all matching grants. Everyone with no matching grant
 // (anonymous, trigger, non-member registered user) maps to AccessPublic.
-// Surface-specific "is public allowed here" policy (the agent's allow_public_mcp
-// / AllowPublicDMs flags) lives at the surface, not in this ladder.
+// Surface-specific "is public allowed here" policy (e.g. the agent's
+// allow_public_mcp flag) lives at the surface, not in this ladder.
 func (p Principal) EffectiveAgentAccess(ctx context.Context, q *dbq.Queries, agentID uuid.UUID) agentsdk.Access {
 	set := p.GranteeSet()
 	if len(set) == 0 {

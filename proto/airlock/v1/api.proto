@@ -504,7 +504,7 @@ message CreateBridgeRequest {
 // request. A null/unset field leaves that aspect unchanged.
 message UpdateBridgeRequest {
   string agent_id = 1;
-  BridgeSettings settings = 2;
+  reserved 2; // was BridgeSettings settings (public-DM config removed)
   // Switch a bridge between the system-agent surface and an agent
   // surface. Optional: unset = leave as-is. Switching to system
   // requires the TenantBridgeSystem permission and forces agent_id

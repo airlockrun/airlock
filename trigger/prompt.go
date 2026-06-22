@@ -57,7 +57,6 @@ func (p *PromptProxy) HandleMessage(
 	agentID, bridgeID, userID uuid.UUID,
 	externalID string,
 	storeHistory bool,
-	oneShot bool,
 	userMessage string,
 	files []BridgeFile,
 	referenced *BridgeReferencedMessage,
@@ -66,54 +65,17 @@ func (p *PromptProxy) HandleMessage(
 	q := dbq.New(p.db.Pool())
 
 	// Slash commands operate on whatever conversation already exists —
-	// they never need to create one. Avoiding the create on `/cancel`
-	// from a fresh public DM means the public-session sweeper won't
-	// later send "Conversation completed." for a session the user never
-	// knowingly opened.
+	// they never need to create one.
 	isSlash := strings.HasPrefix(strings.TrimSpace(userMessage), "/")
 
 	var conversationID pgtype.UUID
 
 	switch {
-	case oneShot:
-		// One-shot mode: fresh ephemeral conversation per turn. Delete on
-		// return so no history accumulates. Cascade FK on agent_messages
-		// drops any rows the agent persisted during the run.
-		if externalID == "" {
-			close(events)
-			return "", fmt.Errorf("one-shot bridge conversation requires external_id")
-		}
-		turnExternalID := externalID + ":oneshot:" + uuid.New().String()
-		conv, err := q.GetOrCreateConversationByExternal(ctx, dbq.GetOrCreateConversationByExternalParams{
-			AgentID:    toPgUUID(agentID),
-			Source:     "bridge",
-			Title:      truncate(userMessage, 100),
-			BridgeID:   toPgUUID(bridgeID),
-			ExternalID: pgtype.Text{String: turnExternalID, Valid: true},
-		})
-		if err != nil {
-			close(events)
-			return "", fmt.Errorf("create one-shot conversation: %w", err)
-		}
-		conversationID = conv.ID
-		defer func() {
-			// Best-effort delete with a fresh context — the request ctx
-			// may already be cancelled by the time the streaming finishes.
-			delCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			if err := dbq.New(p.db.Pool()).DeleteConversation(delCtx, conversationID); err != nil {
-				p.logger.Warn("one-shot: delete ephemeral conversation",
-					zap.String("conversation_id", convert.PgUUIDToString(conversationID)),
-					zap.Error(err),
-				)
-			}
-		}()
-
-	case isSlash && userID != uuid.Nil:
-		// Slash command from authed user — look up the existing conv but
-		// don't create one. If the user has no conversation yet, the
-		// command runs against an invalid convID and individual handlers
-		// reply with a "Nothing to …" message.
+	case isSlash:
+		// Slash command — look up the existing conv but don't create one.
+		// If the user has no conversation yet, the command runs against an
+		// invalid convID and individual handlers reply with a "Nothing to …"
+		// message.
 		if conv, err := q.GetConversationBySource(ctx, dbq.GetConversationBySourceParams{
 			AgentID: toPgUUID(agentID),
 			UserID:  toPgUUID(userID),
@@ -122,39 +84,14 @@ func (p *PromptProxy) HandleMessage(
 			conversationID = conv.ID
 		}
 
-	case isSlash && externalID != "":
-		// Slash command from public sender — look up only.
-		if conv, err := q.GetConversationByExternal(ctx, dbq.GetConversationByExternalParams{
-			AgentID:    toPgUUID(agentID),
-			Source:     "bridge",
-			ExternalID: pgtype.Text{String: externalID, Valid: true},
-		}); err == nil {
-			conversationID = conv.ID
-		}
-
-	case storeHistory && userID != uuid.Nil:
-		// Authenticated bridge user → one thread per (agent, user,
-		// external_id): the same user in a different chat/bot is a
-		// different conversation. external_id (the platform chat id) is
-		// required — fail loud rather than collapse every chat into one
-		// NULL-keyed row.
+	case storeHistory:
+		// One thread per (agent, user, external_id): the same user in a
+		// different chat/bot is a different conversation. external_id (the
+		// platform chat id) is required — fail loud rather than collapse
+		// every chat into one row.
 		if externalID == "" {
 			close(events)
-			return "", fmt.Errorf("authed bridge conversation requires external_id")
-		}
-		// If the user previously chatted publicly (before /auth), drop the
-		// orphan public row so its history doesn't linger and the sweeper
-		// doesn't later send a confusing "Conversation completed." DM.
-		if pubConv, err := q.GetConversationByExternal(ctx, dbq.GetConversationByExternalParams{
-			AgentID:    toPgUUID(agentID),
-			Source:     "bridge",
-			ExternalID: pgtype.Text{String: externalID, Valid: true},
-		}); err == nil {
-			if delErr := q.DeleteConversation(ctx, pubConv.ID); delErr != nil {
-				p.logger.Warn("delete orphan public conversation after auth",
-					zap.String("conversation_id", convert.PgUUIDToString(pubConv.ID)),
-					zap.Error(delErr))
-			}
+			return "", fmt.Errorf("bridge conversation requires external_id")
 		}
 		conv, err := q.GetOrCreateBridgeAuthedConversation(ctx, dbq.GetOrCreateBridgeAuthedConversationParams{
 			AgentID:    toPgUUID(agentID),
@@ -168,36 +105,15 @@ func (p *PromptProxy) HandleMessage(
 			return "", fmt.Errorf("get/create conversation: %w", err)
 		}
 		conversationID = conv.ID
-
-	case storeHistory:
-		// Public/anonymous (session mode) → keyed on (agent, source, external_id) with user_id NULL.
-		if externalID == "" {
-			close(events)
-			return "", fmt.Errorf("public bridge conversation requires external_id")
-		}
-		conv, err := q.GetOrCreateConversationByExternal(ctx, dbq.GetOrCreateConversationByExternalParams{
-			AgentID:    toPgUUID(agentID),
-			Source:     "bridge",
-			Title:      truncate(userMessage, 100),
-			BridgeID:   toPgUUID(bridgeID),
-			ExternalID: pgtype.Text{String: externalID, Valid: true},
-		})
-		if err != nil {
-			close(events)
-			return "", fmt.Errorf("get/create public conversation: %w", err)
-		}
-		conversationID = conv.ID
 	}
 
-	// Always wrap a referenced message into the user prompt so the LLM
-	// has the explicit context regardless of mode. In one-shot it's the
-	// only context the model gets; in session mode it strengthens the
-	// signal beyond whatever happens to be in history.
+	// Wrap a referenced message (reply / forward) into the user prompt so
+	// the LLM can tell it apart from the asker's own text.
 	userMessage = wrapReferencedMessage(userMessage, referenced)
 
 	// Resolve access once — reused for slash-command gating and for
-	// filtering per-caller instructions. Non-members fall through
-	// to AccessPublic, which is correct for anonymous public-channel users.
+	// filtering per-caller instructions. Non-members fall through to
+	// AccessPublic.
 	access := bridgePrincipal(userID).EffectiveAgentAccess(ctx, q, agentID)
 
 	// Intercept slash commands (/clear, /compact, ...) before forwarding.
@@ -236,15 +152,10 @@ func (p *PromptProxy) HandleMessage(
 		paths[i] = "tmp/" + uuid.New().String()[:8] + "-" + files[i].Filename
 	}
 
-	// Auto-transcribe voice notes before forwarding. Authed users only:
-	// transcription consumes the configured STT model's budget and we
-	// don't want public-DM senders to run it up (the audio still uploads
-	// raw; the agent can choose to handle it). Transcription failures
-	// fall back to attaching the audio without a transcript — we never
-	// drop the user's message.
-	if userID != uuid.Nil {
-		userMessage = p.transcribeVoiceNotes(ctx, userMessage, files, paths)
-	}
+	// Auto-transcribe voice notes before forwarding. Transcription failures
+	// fall back to attaching the audio without a transcript — we never drop
+	// the user's message.
+	userMessage = p.transcribeVoiceNotes(ctx, userMessage, files, paths)
 
 	// Store attached files in agent's S3 prefix and build FileInfo entries.
 	var fileInfos []agentsdk.FileInfo
@@ -291,11 +202,6 @@ func (p *PromptProxy) HandleMessage(
 		Instructions:   instructions,
 		ForceCompact:   forceCompact,
 		CallerAccess:   access,
-		// One-shot is single-turn: there is no second turn to answer a
-		// confirmation, so run_js confirmations are auto-accepted in the
-		// agent. A residual suspension (e.g. A2A-delegated) is auto-denied
-		// after streaming, below.
-		AutoConfirm: oneShot,
 		// Public-tier callers get a typed-tool surface (no JS sandbox, no
 		// TS manifest). The flag is wire-level so future trigger paths
 		// (e.g. trusted server triggers that want a typed surface) can
@@ -336,67 +242,12 @@ func (p *PromptProxy) HandleMessage(
 
 	// Stream NDJSON response — forwards events to driver and collects text.
 	// Message persistence is handled by the SessionStore in the agent container.
-	// In one-shot mode confirmation events are suppressed (no dead buttons —
-	// the ephemeral conversation can't survive to a second turn); any
-	// residual suspension is auto-denied below.
-	responseText, _, _, err := StreamNDJSONResponse(rc, runID.String(), events, oneShot)
+	responseText, _, _, err := StreamNDJSONResponse(rc, runID.String(), events)
 	if err != nil {
 		return "", fmt.Errorf("stream response: %w", err)
 	}
 
-	if oneShot {
-		p.autoDenyResidualSuspension(agentID, bridgeID, conversationID, runID, access, userIDPtr)
-	}
-
 	return responseText, nil
-}
-
-// autoDenyResidualSuspension resolves a one-shot run that came back
-// suspended. One-shot (public, single-turn) sessions have no interactive
-// second turn, so a confirmation that reached the bridge instead of being
-// auto-accepted in the agent (agentsdk.AutoConfirm covers run_js — the
-// common case) is denied: the run is resumed with Approved=false and the
-// resulting stream drained so the agent finalizes via its detached
-// /run/complete instead of dangling suspended. Best-effort on a fresh
-// context — the request ctx may already be at its public-prompt deadline,
-// and the run's conversation must outlive this call (HandleMessage's
-// deferred delete runs only after this returns). The post-denial reply is
-// intentionally not surfaced; a residual suspension is a rare fallback.
-func (p *PromptProxy) autoDenyResidualSuspension(agentID, bridgeID uuid.UUID, conversationID pgtype.UUID, runID uuid.UUID, access agentsdk.Access, userIDPtr *uuid.UUID) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
-	q := dbq.New(p.db.Pool())
-
-	susp, err := q.GetSuspendedRunByID(ctx, toPgUUID(runID))
-	if err != nil {
-		return // run did not suspend — nothing to do
-	}
-	if err := q.ResolveSuspendedRun(ctx, susp.ID); err != nil {
-		p.logger.Warn("one-shot auto-deny: resolve suspended run",
-			zap.String("run_id", runID.String()), zap.Error(err))
-		return
-	}
-
-	denied := false
-	denyInput := agentsdk.PromptInput{
-		ConversationID: convert.PgUUIDToString(conversationID),
-		ResumeRunID:    runID.String(),
-		Approved:       &denied,
-		Message:        "Confirmation is unavailable in a single-turn session; treat as declined.",
-		CallerAccess:   access,
-		AutoConfirm:    true,
-		DirectTools:    access == agentsdk.AccessPublic,
-	}
-	rc, _, err := p.dispatcher.ForwardPrompt(ctx, agentID, denyInput, &bridgeID, userIDPtr)
-	if err != nil {
-		p.logger.Warn("one-shot auto-deny: forward denial",
-			zap.String("run_id", runID.String()), zap.Error(err))
-		return
-	}
-	defer rc.Close()
-	// Drain so the agent runs the denial turn to completion. Output is
-	// intentionally discarded — one-shot shows no follow-up message.
-	_, _ = io.Copy(io.Discard, rc)
 }
 
 // HandleCallback resolves a suspended run based on a bridge UI callback
@@ -444,41 +295,22 @@ func (p *PromptProxy) HandleCallback(
 	}
 
 	// Look up the conversation so SessionStore on the agent side persists
-	// messages into the right thread. For unauthenticated public callers
-	// the conversation is keyed on the external chat ID, not on user_id.
-	var convID pgtype.UUID
-	if userID != uuid.Nil {
-		if externalID == "" {
-			close(events)
-			return false, fmt.Errorf("authed bridge conversation requires external_id")
-		}
-		conv, err := q.GetOrCreateBridgeAuthedConversation(ctx, dbq.GetOrCreateBridgeAuthedConversationParams{
-			AgentID:    toPgUUID(agentID),
-			UserID:     toPgUUID(userID),
-			BridgeID:   toPgUUID(bridgeID),
-			ExternalID: pgtype.Text{String: externalID, Valid: true},
-		})
-		if err != nil {
-			close(events)
-			return false, fmt.Errorf("get conversation: %w", err)
-		}
-		convID = conv.ID
-	} else {
-		if externalID == "" {
-			close(events)
-			return false, fmt.Errorf("public callback requires external_id")
-		}
-		conv, err := q.GetConversationByExternal(ctx, dbq.GetConversationByExternalParams{
-			AgentID:    toPgUUID(agentID),
-			Source:     "bridge",
-			ExternalID: pgtype.Text{String: externalID, Valid: true},
-		})
-		if err != nil {
-			close(events)
-			return false, fmt.Errorf("get public conversation: %w", err)
-		}
-		convID = conv.ID
+	// messages into the right thread.
+	if externalID == "" {
+		close(events)
+		return false, fmt.Errorf("bridge conversation requires external_id")
 	}
+	conv, err := q.GetOrCreateBridgeAuthedConversation(ctx, dbq.GetOrCreateBridgeAuthedConversationParams{
+		AgentID:    toPgUUID(agentID),
+		UserID:     toPgUUID(userID),
+		BridgeID:   toPgUUID(bridgeID),
+		ExternalID: pgtype.Text{String: externalID, Valid: true},
+	})
+	if err != nil {
+		close(events)
+		return false, fmt.Errorf("get conversation: %w", err)
+	}
+	convID := conv.ID
 
 	approved := action == "approve"
 	// Same CallerAccess plumbing as HandleMessage above — admin-only
@@ -512,7 +344,7 @@ func (p *PromptProxy) HandleCallback(
 	}
 	defer rc.Close()
 
-	if _, _, _, err := StreamNDJSONResponse(rc, newRunID.String(), events, false); err != nil {
+	if _, _, _, err := StreamNDJSONResponse(rc, newRunID.String(), events); err != nil {
 		return false, fmt.Errorf("stream response: %w", err)
 	}
 	return false, nil
@@ -758,13 +590,7 @@ type usageInfo struct {
 // the full text response. Closes the events channel when done. runID is
 // stamped onto confirmation_required events so drivers can build
 // callback-bound UI (e.g. Telegram inline keyboards).
-//
-// suppressConfirmation drops confirmation_required events instead of
-// forwarding them: a one-shot (public, single-turn) session has no second
-// turn in which to answer, so rendering approve/deny buttons would only
-// produce dead UI. The caller detects the resulting suspended run and
-// auto-denies it.
-func StreamNDJSONResponse(body io.Reader, runID string, events chan<- ResponseEvent, suppressConfirmation bool) (string, []message.Message, *usageInfo, error) {
+func StreamNDJSONResponse(body io.Reader, runID string, events chan<- ResponseEvent) (string, []message.Message, *usageInfo, error) {
 	defer close(events)
 
 	// Announce the run before any tokens flow so bridge drivers can wire
@@ -862,9 +688,6 @@ func StreamNDJSONResponse(body io.Reader, runID string, events chan<- ResponseEv
 			}
 
 		case "confirmation_required":
-			if suppressConfirmation {
-				continue
-			}
 			var cr struct {
 				Permission string         `json:"permission"`
 				Patterns   []string       `json:"patterns"`
