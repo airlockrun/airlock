@@ -9,6 +9,7 @@ import (
 	"github.com/airlockrun/airlock/authz"
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
 // MCPPrincipalKind discriminates how a caller hit the A2A MCP endpoint.
@@ -55,16 +56,21 @@ var ErrMCPUnauthenticated = errors.New("mcp: unauthenticated and target disallow
 var ErrMCPForbidden = errors.New("mcp: access denied for target agent")
 
 // computeA2ACallerAccess resolves the caller's effective access on the
-// target agent's MCP endpoint by applying the same access ladder as
-// chat: tenant role isn't consulted (agent_members is the only axis).
+// target agent's MCP endpoint off the grant ladder: a caller is admitted
+// only if a grant actually matches their grantee-set (a direct grant or a
+// group, incl. the All-Users group = "shared with everyone"), and the level
+// is that grant's role. The bare AccessPublic floor (no matching grant) is
+// not admitted — that's what distinguishes an explicit All-Users `public`
+// grant (admit at public) from a non-member (deny). The MCP master switch
+// (mcp_enabled) and anonymous exposure (allow_public_mcp) are gated by the
+// handlers; this function decides the per-caller level.
 //
-// A user or OAuth caller is evaluated as that user against the target's
-// agent_members ladder. A sibling-agent caller is evaluated the same way for
-// the driving user, but the result is then capped by the ceiling of the
-// ACTING agent's owner: a sibling agent can never wield more authority on the
-// target than its own owner holds, even when a higher-privilege user drives
-// the run. So a compromised agent's blast radius is bounded by its owner, not
-// by whoever happens to be talking to it.
+// A sibling-agent caller is evaluated for the driving user, then capped by
+// the acting agent's owner (a sibling agent can never wield more authority
+// than its own owner holds, even when a higher-privilege user drives the
+// run) and by the per-edge max_access the operator set. Both can only lower
+// access; the admit decision (a grant must match for BOTH the user and the
+// owner) is made before the caps.
 func computeA2ACallerAccess(ctx context.Context, q *dbq.Queries, target dbq.Agent, principal MCPPrincipal) (agentsdk.Access, error) {
 	targetID := uuid.UUID(target.ID.Bytes)
 	switch principal.Kind {
@@ -75,16 +81,12 @@ func computeA2ACallerAccess(ctx context.Context, q *dbq.Queries, target dbq.Agen
 		return agentsdk.AccessPublic, nil
 
 	case MCPPrincipalUser, MCPPrincipalOAuthClient:
-		// Apply the user-side ladder against the target. authz.Effective-
-		// AgentAccess maps (user, agent) → admin/user/public off
-		// agent_members; a non-member resolves to AccessPublic, honored
-		// only if the target opens itself to non-members.
 		userID := principal.UserID
 		if userID == uuid.Nil {
 			return "", fmt.Errorf("%w: no original user for caller", ErrMCPForbidden)
 		}
-		access := authz.UserPrincipal(userID, "").EffectiveAgentAccess(ctx, q, targetID)
-		if access == agentsdk.AccessPublic && !target.AllowNonMemberMcp {
+		access, granted := authz.UserPrincipal(userID, "").EffectiveAgentAccessGranted(ctx, q, targetID)
+		if !granted {
 			return "", ErrMCPForbidden
 		}
 		return access, nil
@@ -92,8 +94,7 @@ func computeA2ACallerAccess(ctx context.Context, q *dbq.Queries, target dbq.Agen
 	case MCPPrincipalAgent:
 		// Verified upstream: the caller's JWT matches ParentRunID's
 		// agent_id, and principal.UserID was pulled from that run's
-		// conversation.user_id. The driving user's access still applies,
-		// but capped by the acting agent's OWNER ceiling (the MIN).
+		// conversation.user_id.
 		userID := principal.UserID
 		if userID == uuid.Nil {
 			// An agent JWT with no derivable original user means the parent
@@ -101,17 +102,36 @@ func computeA2ACallerAccess(ctx context.Context, q *dbq.Queries, target dbq.Agen
 			// those — agentsdk rejects upfront, belt-and-suspenders here.
 			return "", fmt.Errorf("%w: no original user for caller", ErrMCPForbidden)
 		}
-		userAccess := authz.UserPrincipal(userID, "").EffectiveAgentAccess(ctx, q, targetID)
+		userAccess, userGranted := authz.UserPrincipal(userID, "").EffectiveAgentAccessGranted(ctx, q, targetID)
 		actingAgent, err := q.GetAgentByID(ctx, toPgUUID(principal.CallerAgentID))
 		if err != nil {
 			return "", fmt.Errorf("%w: acting agent not found", ErrMCPForbidden)
 		}
-		ownerAccess := authz.UserPrincipal(uuid.UUID(actingAgent.OwnerPrincipalID.Bytes), "").EffectiveAgentAccess(ctx, q, targetID)
-		access := authz.MinAccess(userAccess, ownerAccess)
-		if access == agentsdk.AccessPublic && !target.AllowNonMemberMcp {
+		ownerAccess, ownerGranted := authz.UserPrincipal(uuid.UUID(actingAgent.OwnerPrincipalID.Bytes), "").EffectiveAgentAccessGranted(ctx, q, targetID)
+		// Admit only if both the driving user and the acting agent's owner
+		// hold a grant on the target. Either lacking one means the
+		// delegation has no authority to borrow.
+		if !userGranted || !ownerGranted {
 			return "", ErrMCPForbidden
 		}
-		return access, nil
+		entitlement := authz.MinAccess(userAccess, ownerAccess)
+		// Per-edge max_access cap the operator set when adding the sibling.
+		// Absent (a raw MCP call outside the caller's address book) means no
+		// extra cap, preserving the owner/user-floored entitlement.
+		maxAccess := agentsdk.AccessAdmin
+		edge, err := q.GetSiblingMaxAccess(ctx, dbq.GetSiblingMaxAccessParams{
+			ParentAgentID:  toPgUUID(principal.CallerAgentID),
+			SiblingAgentID: target.ID,
+		})
+		switch {
+		case err == nil:
+			maxAccess = agentsdk.Access(edge)
+		case errors.Is(err, pgx.ErrNoRows):
+			// no declared edge — leave maxAccess at AccessAdmin (no cap)
+		default:
+			return "", fmt.Errorf("%w: read sibling edge", ErrMCPForbidden)
+		}
+		return authz.MinAccess(entitlement, maxAccess), nil
 
 	default:
 		return "", fmt.Errorf("%w: unknown principal kind", ErrMCPForbidden)

@@ -118,19 +118,10 @@ func (h *oauthServerHandler) ResourceMetadata(w http.ResponseWriter, r *http.Req
 	identifier := chi.URLParam(r, "identifier")
 	q := dbq.New(h.db.Pool())
 
-	ag, err := lookupAgentByIdentifier(r.Context(), q, identifier)
-	if err != nil {
+	if _, err := lookupAgentByIdentifier(r.Context(), q, identifier); err != nil {
 		// airlockvet:allow-writejson reason: OAuth 2.0 / RFC 6749 endpoint — wire is JSON by spec; client_id + grant flow drives authz, not user Principal
 		writeJSONError(w, http.StatusNotFound, "agent not found")
 		return
-	}
-	// If the agent is only available via public-mcp (no protected
-	// access path), discovery would lie to the client. Withhold.
-	if ag.AllowPublicMcp && !ag.AllowNonMemberMcp {
-		// The non-member path doesn't go through OAuth either — but
-		// `allow_non_member_mcp=true` means there IS still an OAuth
-		// path for non-members. The condition above is "ONLY public
-		// is enabled" → no auth path exists, so no resource metadata.
 	}
 	resourceURL := fmt.Sprintf("%s/api/agent/%s/mcp", h.publicURL, identifier)
 	out := resourceMetadata{
@@ -883,14 +874,6 @@ func (h *oauthServerHandler) canonicalizeResource(ctx context.Context, resource 
 	ag, err := lookupAgentByIdentifier(ctx, q, identifier)
 	if err != nil {
 		return uuid.Nil, "", fmt.Errorf("unknown agent")
-	}
-	// Reject agents that only serve via public-mcp (no protected
-	// path → nothing to authorize for).
-	if ag.AllowPublicMcp && !ag.AllowNonMemberMcp {
-		// public-mcp only mode is signaled by allow_public_mcp without
-		// allow_non_member_mcp being meaningful — we still have a
-		// protected /mcp endpoint that members hit, so this check is
-		// more conservative than strictly necessary. Skip the rejection.
 	}
 	agentID := uuid.UUID(ag.ID.Bytes)
 	canonical := fmt.Sprintf("%s/api/agent/%s/mcp", h.publicURL, agentID.String())

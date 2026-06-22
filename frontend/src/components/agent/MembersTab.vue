@@ -34,6 +34,9 @@ const newRole = ref('user')
 const roleOptions = [
   { label: 'Admin', value: 'admin' },
   { label: 'User', value: 'user' },
+  // 'public' is the floor tier — most useful granted to the All-Users group
+  // to open the agent to every registered user at public access.
+  { label: 'Public', value: 'public' },
 ]
 
 // "All users" (the built-in group) plus individual users not already granted.

@@ -515,7 +515,9 @@ func NewRouter(cfg RouterConfig) http.Handler {
 				// already in ctx via the /api/v1 group middleware.
 				r.Get("/siblings", siblingsH.List)
 				r.Get("/siblings/addable", siblingsH.ListAddable)
+				r.Get("/siblings/inbound", siblingsH.ListInbound)
 				r.Post("/siblings", siblingsH.Add)
+				r.Patch("/siblings/{siblingID}", siblingsH.UpdateMaxAccess)
 				r.Delete("/siblings/{siblingID}", siblingsH.Remove)
 				r.Get("/a2a-settings", siblingsH.GetA2ASettings)
 				r.Put("/a2a-settings", siblingsH.UpdateA2ASettings)

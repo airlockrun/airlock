@@ -1,13 +1,14 @@
 <script setup lang="ts">
-// SiblingsTab: A2A (agent-to-agent) controls on the parent agent's
-// detail page.
-//   - Two access toggles (allow_non_member_mcp, allow_public_mcp)
-//     governing who may call THIS agent's MCP endpoint.
-//   - The address book — other agents this one's LLM is allowed to
-//     call. Authorization at call time is always evaluated fresh
-//     against each target's settings; this list is only a discovery
-//     aid that produces `agent_<slug>` bindings in the LLM's
-//     run_js sandbox.
+// SiblingsTab: the agent's A2A address book.
+//   - Outbound: other agents this one's LLM can call. Each row produces an
+//     agent_<slug> binding, capped at the per-edge max_access (operator
+//     intent). The table shows the LIVE effective ceiling = min(intent,
+//     current authorizing-grant role) and auto-downgrades when the target's
+//     owner lowers the grant; the edge disappears entirely when the grant is
+//     revoked (DB cascade).
+//   - Inbound: agents that have added THIS agent — who can reach in, and at
+//     what live ceiling.
+// Who may call this agent's MCP endpoint at all lives on the Access tab.
 import { ref, onMounted, watch } from 'vue'
 import api from '@/api/client'
 import { useConfirm } from 'primevue/useconfirm'
@@ -18,17 +19,25 @@ interface Sibling {
   slug: string
   name: string
   description?: string
-  allowNonMemberMcp: boolean
-  allowPublicMcp?: boolean
+  maxAccess: string
+  effectiveMaxAccess: string
 }
 
-interface AddableSibling extends Sibling {
-  isMember: boolean
+interface AddableSibling {
+  id: string
+  slug: string
+  name: string
+  description?: string
 }
 
-interface A2ASettings {
-  allowNonMemberMcp: boolean
-  allowPublicMcp: boolean
+interface InboundSibling {
+  id: string
+  slug: string
+  name: string
+  description?: string
+  maxAccess: string
+  effectiveMaxAccess: string
+  ownerName?: string
 }
 
 const props = defineProps<{ agentId: string }>()
@@ -37,45 +46,46 @@ const toast = useToast()
 const confirm = useConfirm()
 
 const siblings = ref<Sibling[]>([])
-watch(siblings, (v) => emit('populated', v.length), { immediate: true })
+const inbound = ref<InboundSibling[]>([])
+watch([siblings, inbound], () => emit('populated', siblings.value.length + inbound.value.length), {
+  immediate: true,
+})
 const addable = ref<AddableSibling[]>([])
 const loading = ref(true)
-const settings = ref<A2ASettings>({ allowNonMemberMcp: false, allowPublicMcp: false })
+
+const accessOptions = [
+  { label: 'public', value: 'public' },
+  { label: 'user', value: 'user' },
+  { label: 'admin', value: 'admin' },
+]
+
 const showAddDialog = ref(false)
 const selectedSiblingId = ref('')
+const selectedMaxAccess = ref<'public' | 'user' | 'admin'>('user')
+
+const showEditDialog = ref(false)
+const editTarget = ref<Sibling | null>(null)
+const editMaxAccess = ref<'public' | 'user' | 'admin'>('user')
+
+function accessSeverity(a: string): string {
+  if (a === 'admin') return 'warn'
+  if (a === 'user') return 'info'
+  return 'secondary'
+}
 
 async function loadAll() {
   loading.value = true
   try {
-    const [sList, aList, sCfg] = await Promise.all([
+    const [sList, iList, aList] = await Promise.all([
       api.get(`/api/v1/agents/${props.agentId}/siblings`),
+      api.get(`/api/v1/agents/${props.agentId}/siblings/inbound`),
       api.get(`/api/v1/agents/${props.agentId}/siblings/addable`),
-      api.get(`/api/v1/agents/${props.agentId}/a2a-settings`),
     ])
     siblings.value = sList.data?.siblings || []
+    inbound.value = iList.data?.siblings || []
     addable.value = aList.data?.agents || []
-    settings.value = {
-      allowNonMemberMcp: !!sCfg.data?.settings?.allowNonMemberMcp,
-      allowPublicMcp: !!sCfg.data?.settings?.allowPublicMcp,
-    }
   } finally {
     loading.value = false
-  }
-}
-
-async function saveSettings() {
-  // The "public" toggle silently flips "non-member" on — the server
-  // enforces this via a CHECK constraint, but we mirror in the UI
-  // so the user sees the rule rather than getting a 400.
-  if (settings.value.allowPublicMcp) {
-    settings.value.allowNonMemberMcp = true
-  }
-  try {
-    await api.put(`/api/v1/agents/${props.agentId}/a2a-settings`, { settings: settings.value })
-    toast.add({ severity: 'success', summary: 'MCP settings saved', life: 2000 })
-    await loadAll() // addable list changes when non-member-mcp flips
-  } catch (err: any) {
-    toast.add({ severity: 'error', summary: err.response?.data?.error || 'save failed', life: 5000 })
   }
 }
 
@@ -84,12 +94,34 @@ async function addSibling() {
   try {
     await api.post(`/api/v1/agents/${props.agentId}/siblings`, {
       siblingId: selectedSiblingId.value,
+      maxAccess: selectedMaxAccess.value,
     })
     showAddDialog.value = false
     selectedSiblingId.value = ''
+    selectedMaxAccess.value = 'user'
     await loadAll()
   } catch (err: any) {
     toast.add({ severity: 'error', summary: err.response?.data?.error || 'add failed', life: 5000 })
+  }
+}
+
+function openEdit(s: Sibling) {
+  editTarget.value = s
+  editMaxAccess.value = s.maxAccess as 'public' | 'user' | 'admin'
+  showEditDialog.value = true
+}
+
+async function saveEdit() {
+  if (!editTarget.value) return
+  try {
+    await api.patch(`/api/v1/agents/${props.agentId}/siblings/${editTarget.value.id}`, {
+      maxAccess: editMaxAccess.value,
+    })
+    showEditDialog.value = false
+    editTarget.value = null
+    await loadAll()
+  } catch (err: any) {
+    toast.add({ severity: 'error', summary: err.response?.data?.error || 'update failed', life: 5000 })
   }
 }
 
@@ -115,46 +147,19 @@ onMounted(loadAll)
 
 <template>
   <div>
-    <!-- Access toggles -->
-    <h3 style="margin-top: 0">Who can call this agent</h3>
+    <!-- Outbound: sibling address book -->
+    <h3 style="margin-top: 0">Sibling agents</h3>
     <p style="color: var(--p-text-muted-color); margin-top: 0">
-      These toggles govern access to this agent's <code>/api/agent/&lt;uuid&gt;/mcp</code>
-      endpoint — used by other Airlock agents and by external MCP clients (Claude Desktop, Codex CLI).
-      Toggling either OFF immediately revokes the matching tier; in-flight calls are unaffected.
-    </p>
-    <div style="display: flex; flex-direction: column; gap: 0.75rem; margin-bottom: 1.5rem">
-      <label style="display: flex; align-items: center; gap: 0.75rem">
-        <ToggleSwitch v-model="settings.allowNonMemberMcp" :disabled="settings.allowPublicMcp" />
-        <span>
-          Allow authed users who are <strong>not</strong> members of this agent (they get public-tier access)
-        </span>
-      </label>
-      <label style="display: flex; align-items: center; gap: 0.75rem">
-        <ToggleSwitch v-model="settings.allowPublicMcp" />
-        <span>
-          Allow <strong>anonymous</strong> MCP calls (no JWT). Forces the non-member toggle on.
-        </span>
-      </label>
-      <div>
-        <Button label="Save MCP settings" size="small" @click="saveSettings" />
-      </div>
-    </div>
-
-    <!-- Sibling address book -->
-    <h3>Sibling agents</h3>
-    <p style="color: var(--p-text-muted-color); margin-top: 0">
-      Other agents whose tools this agent's LLM can discover and call. Each row produces an
-      <code>agent_&lt;slug&gt;</code> namespace in <code>run_js</code> with one method per tool plus
-      <code>prompt({ message, conversationId? })</code>.
-      Authorization is always re-evaluated against the target's MCP settings — a sibling listed
-      here may still return 403 if the original user lacks access.
+      This agent will be able to call the other agents listed here. Max access caps what this
+      agent can do on each; it auto-downgrades (and the row drops) if the target's owner lowers
+      or revokes access.
     </p>
 
     <DataTable v-if="loading" :value="[{}, {}, {}]">
       <Column header="Slug"><template #body><Skeleton /></template></Column>
       <Column header="Name"><template #body><Skeleton /></template></Column>
       <Column header="Description"><template #body><Skeleton /></template></Column>
-      <Column header="MCP access"><template #body><Skeleton width="4rem" /></template></Column>
+      <Column header="Max access"><template #body><Skeleton width="4rem" /></template></Column>
       <Column header=""><template #body><Skeleton width="2rem" /></template></Column>
     </DataTable>
 
@@ -162,28 +167,55 @@ onMounted(loadAll)
       <Column field="slug" header="Slug" />
       <Column field="name" header="Name" />
       <Column field="description" header="Description" />
-      <Column header="MCP access">
+      <Column header="Max access">
         <template #body="{ data: s }">
-          <Tag v-if="s.allowPublicMcp" value="public" severity="warn" />
-          <Tag v-else-if="s.allowNonMemberMcp" value="non-member" severity="info" />
-          <Tag v-else value="members-only" severity="secondary" />
+          <Tag :value="s.effectiveMaxAccess" :severity="accessSeverity(s.effectiveMaxAccess)" />
+          <span
+            v-if="s.effectiveMaxAccess !== s.maxAccess"
+            style="color: var(--p-text-muted-color); font-size: 0.8em; margin-left: 0.4rem"
+            :title="`Set to ${s.maxAccess}, capped by the target's current grant`"
+          >capped from {{ s.maxAccess }}</span>
         </template>
       </Column>
       <Column header="">
         <template #body="{ data: s }">
+          <Button icon="pi pi-pencil" size="small" text @click="openEdit(s)" />
           <Button icon="pi pi-trash" size="small" severity="danger" text @click="confirmRemove(s)" />
         </template>
       </Column>
     </DataTable>
+    <p v-else style="color: var(--p-text-muted-color)">No sibling agents yet.</p>
 
     <div style="margin-top: 1rem">
       <Button label="Add sibling" icon="pi pi-plus" size="small" :disabled="addable.length === 0" @click="showAddDialog = true" />
     </div>
 
+    <!-- Inbound: agents that can call this one -->
+    <h3 style="margin-top: 2rem">Connected to this agent</h3>
+    <p style="color: var(--p-text-muted-color); margin-top: 0">
+      Agents that have added this one to their address book — who can call this agent via A2A,
+      and the live max access each has.
+    </p>
+
+    <DataTable v-if="!loading && inbound.length > 0" :value="inbound" stripedRows>
+      <Column field="slug" header="Slug" />
+      <Column field="name" header="Name" />
+      <Column header="Owner">
+        <template #body="{ data: s }">{{ s.ownerName || '—' }}</template>
+      </Column>
+      <Column header="Max access">
+        <template #body="{ data: s }">
+          <Tag :value="s.effectiveMaxAccess" :severity="accessSeverity(s.effectiveMaxAccess)" />
+        </template>
+      </Column>
+    </DataTable>
+    <p v-else-if="!loading" style="color: var(--p-text-muted-color)">No agents call this one.</p>
+
     <Dialog v-model:visible="showAddDialog" header="Add sibling" modal :style="{ width: '32rem' }">
       <p style="margin-top: 0; color: var(--p-text-muted-color)">
-        Only agents you are a member of, or that have non-member MCP enabled, are listed here.
+        Agents this agent's owner has access to.
       </p>
+      <label style="display: block; font-weight: 600; margin-bottom: 0.25rem">Agent</label>
       <Select
         v-model="selectedSiblingId"
         :options="addable"
@@ -195,17 +227,48 @@ onMounted(loadAll)
         <template #option="slot">
           <div>
             <strong>{{ slot.option.name }}</strong> <code>({{ slot.option.slug }})</code>
-            <Tag v-if="slot.option.isMember" value="member" severity="success" style="margin-left: 0.5rem" />
-            <Tag v-else value="non-member-open" severity="info" style="margin-left: 0.5rem" />
             <div v-if="slot.option.description" style="color: var(--p-text-muted-color); font-size: 0.85em">
               {{ slot.option.description }}
             </div>
           </div>
         </template>
       </Select>
+      <label style="display: block; font-weight: 600; margin: 1rem 0 0.25rem">Max access</label>
+      <Select
+        v-model="selectedMaxAccess"
+        :options="accessOptions"
+        optionLabel="label"
+        optionValue="value"
+        style="width: 100%"
+      />
+      <p style="color: var(--p-text-muted-color); font-size: 0.85em; margin-top: 0.5rem">
+        The ceiling for what this agent can do when it calls the sibling. The real access is still
+        floored by the driving user's and this agent's owner's access on the target.
+      </p>
       <template #footer>
         <Button label="Cancel" severity="secondary" text @click="showAddDialog = false" />
         <Button label="Add" :disabled="!selectedSiblingId" @click="addSibling" />
+      </template>
+    </Dialog>
+
+    <Dialog v-model:visible="showEditDialog" header="Edit max access" modal :style="{ width: '28rem' }">
+      <p style="margin-top: 0; color: var(--p-text-muted-color)">
+        {{ editTarget?.name }} <code>({{ editTarget?.slug }})</code>
+      </p>
+      <label style="display: block; font-weight: 600; margin-bottom: 0.25rem">Max access</label>
+      <Select
+        v-model="editMaxAccess"
+        :options="accessOptions"
+        optionLabel="label"
+        optionValue="value"
+        style="width: 100%"
+      />
+      <p style="color: var(--p-text-muted-color); font-size: 0.85em; margin-top: 0.5rem">
+        Operator intent. The effective ceiling is still floored by the target's current grant.
+      </p>
+      <template #footer>
+        <Button label="Cancel" severity="secondary" text @click="showEditDialog = false" />
+        <Button label="Save" @click="saveEdit" />
       </template>
     </Dialog>
   </div>

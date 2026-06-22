@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/url"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -386,6 +387,11 @@ func (s *Service) List(ctx context.Context, p authz.Principal) ([]ListItem, erro
 			}
 		}
 	}
+	// Owner-owned agents first, then the rest. Stable so the underlying
+	// created_at-DESC order is preserved within each group.
+	sort.SliceStable(out, func(i, j int) bool {
+		return out[i].IsOwner && !out[j].IsOwner
+	})
 	return out, nil
 }
 

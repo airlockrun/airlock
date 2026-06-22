@@ -11,109 +11,86 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const addSiblingIfAllowed = `-- name: AddSiblingIfAllowed :execrows
-INSERT INTO agent_siblings (parent_agent_id, sibling_agent_id)
-SELECT $1, $2
-WHERE EXISTS (
-    SELECT 1 FROM agent_grants
-    WHERE agent_grants.agent_id = $2
-      AND agent_grants.grantee_id = $3
-) OR EXISTS (
-    SELECT 1 FROM agents
-    WHERE agents.id = $2 AND agents.allow_non_member_mcp = true
-)
+const addSibling = `-- name: AddSibling :exec
+INSERT INTO agent_siblings (parent_agent_id, sibling_agent_id, max_access, authorizing_grantee_id)
+VALUES ($1, $2, $3, $4)
 `
 
-type AddSiblingIfAllowedParams struct {
+type AddSiblingParams struct {
+	ParentAgentID        pgtype.UUID `json:"parent_agent_id"`
+	SiblingAgentID       pgtype.UUID `json:"sibling_agent_id"`
+	MaxAccess            string      `json:"max_access"`
+	AuthorizingGranteeID pgtype.UUID `json:"authorizing_grantee_id"`
+}
+
+// Insert one address-book edge. The add gate (the parent owner has access
+// to the sibling) and the choice of authorizing_grantee_id live in the
+// service; the composite FK to agent_grants(agent_id, grantee_id) makes the
+// write atomic — if that grant vanished between check and insert, the FK
+// rejects the row. A PK violation means it is already in the list (409).
+func (q *Queries) AddSibling(ctx context.Context, arg AddSiblingParams) error {
+	_, err := q.db.Exec(ctx, addSibling,
+		arg.ParentAgentID,
+		arg.SiblingAgentID,
+		arg.MaxAccess,
+		arg.AuthorizingGranteeID,
+	)
+	return err
+}
+
+const getSiblingMaxAccess = `-- name: GetSiblingMaxAccess :one
+SELECT max_access FROM agent_siblings
+WHERE parent_agent_id = $1 AND sibling_agent_id = $2
+`
+
+type GetSiblingMaxAccessParams struct {
 	ParentAgentID  pgtype.UUID `json:"parent_agent_id"`
 	SiblingAgentID pgtype.UUID `json:"sibling_agent_id"`
-	UserID         pgtype.UUID `json:"user_id"`
 }
 
-// Atomic add: the row only lands if the user is either a member of the
-// sibling, OR the sibling has allow_non_member_mcp = true. Encoded as
-// INSERT ... SELECT ... WHERE EXISTS so there is no separate
-// check-then-act race. Caller reads RowsAffected: 0 → 403,
-// 1 → success, PK violation → 409 (already present).
-func (q *Queries) AddSiblingIfAllowed(ctx context.Context, arg AddSiblingIfAllowedParams) (int64, error) {
-	result, err := q.db.Exec(ctx, addSiblingIfAllowed, arg.ParentAgentID, arg.SiblingAgentID, arg.UserID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
-const isUserAllowedAddSibling = `-- name: IsUserAllowedAddSibling :one
-SELECT (EXISTS (
-    SELECT 1 FROM agent_grants
-    WHERE agent_grants.agent_id = $1
-      AND agent_grants.grantee_id = $2
-) OR EXISTS (
-    SELECT 1 FROM agents
-    WHERE agents.id = $1 AND agents.allow_non_member_mcp = true
-)) AS allowed
-`
-
-type IsUserAllowedAddSiblingParams struct {
-	SiblingAgentID pgtype.UUID `json:"sibling_agent_id"`
-	UserID         pgtype.UUID `json:"user_id"`
-}
-
-// Read-side helper for the "addable agents" picker. True iff the user
-// is a member of the candidate sibling OR the candidate sibling has
-// allow_non_member_mcp = true. Not used by the mutation (which
-// inlines the predicate atomically) — only by GET /siblings/addable.
-func (q *Queries) IsUserAllowedAddSibling(ctx context.Context, arg IsUserAllowedAddSiblingParams) (pgtype.Bool, error) {
-	row := q.db.QueryRow(ctx, isUserAllowedAddSibling, arg.SiblingAgentID, arg.UserID)
-	var allowed pgtype.Bool
-	err := row.Scan(&allowed)
-	return allowed, err
+// The per-edge max_access ceiling for a (parent → sibling) pair, read at
+// A2A call time to cap the caller's effective access. No row means the
+// target is not a declared sibling of the caller (a raw MCP call outside
+// the address book) — the caller treats that as "no extra cap".
+func (q *Queries) GetSiblingMaxAccess(ctx context.Context, arg GetSiblingMaxAccessParams) (string, error) {
+	row := q.db.QueryRow(ctx, getSiblingMaxAccess, arg.ParentAgentID, arg.SiblingAgentID)
+	var max_access string
+	err := row.Scan(&max_access)
+	return max_access, err
 }
 
 const listAddableSiblings = `-- name: ListAddableSiblings :many
-SELECT a.id, a.slug, a.name, a.description, a.allow_non_member_mcp,
-       EXISTS (
-           SELECT 1 FROM agent_grants
-           WHERE agent_grants.agent_id = a.id
-             AND agent_grants.grantee_id = $1
-       ) AS is_member
+SELECT a.id, a.slug, a.name, a.description
 FROM agents a
-WHERE a.id <> $2
+WHERE a.id <> $1
   AND NOT EXISTS (
-      SELECT 1 FROM agent_siblings
-      WHERE agent_siblings.parent_agent_id = $2
-        AND agent_siblings.sibling_agent_id = a.id
+      SELECT 1 FROM agent_siblings s
+      WHERE s.parent_agent_id = $1 AND s.sibling_agent_id = a.id
   )
-  AND (
-      EXISTS (
-          SELECT 1 FROM agent_grants
-          WHERE agent_grants.agent_id = a.id
-            AND agent_grants.grantee_id = $1
-      )
-      OR a.allow_non_member_mcp = true
+  AND EXISTS (
+      SELECT 1 FROM agent_grants g
+      WHERE g.agent_id = a.id AND g.grantee_id = ANY ($2::uuid[])
   )
-ORDER BY is_member DESC, a.created_at DESC
+ORDER BY a.created_at DESC
 `
 
 type ListAddableSiblingsParams struct {
-	UserID        pgtype.UUID `json:"user_id"`
-	ParentAgentID pgtype.UUID `json:"parent_agent_id"`
+	ParentAgentID   pgtype.UUID   `json:"parent_agent_id"`
+	OwnerGranteeIds []pgtype.UUID `json:"owner_grantee_ids"`
 }
 
 type ListAddableSiblingsRow struct {
-	ID                pgtype.UUID `json:"id"`
-	Slug              string      `json:"slug"`
-	Name              string      `json:"name"`
-	Description       string      `json:"description"`
-	AllowNonMemberMcp bool        `json:"allow_non_member_mcp"`
-	IsMember          bool        `json:"is_member"`
+	ID          pgtype.UUID `json:"id"`
+	Slug        string      `json:"slug"`
+	Name        string      `json:"name"`
+	Description string      `json:"description"`
 }
 
-// The set of agents the editing user MAY add as siblings of @parent_agent_id,
-// excluding the parent itself and any already-added siblings. Order:
-// members first, then non-member-open agents; within each, by recency.
+// Agents the parent MAY add as siblings: any agent its OWNER holds a grant
+// on (a direct grant or a group in @owner_grantee_ids — incl. the All-Users
+// group), excluding the parent itself and already-added siblings.
 func (q *Queries) ListAddableSiblings(ctx context.Context, arg ListAddableSiblingsParams) ([]ListAddableSiblingsRow, error) {
-	rows, err := q.db.Query(ctx, listAddableSiblings, arg.UserID, arg.ParentAgentID)
+	rows, err := q.db.Query(ctx, listAddableSiblings, arg.ParentAgentID, arg.OwnerGranteeIds)
 	if err != nil {
 		return nil, err
 	}
@@ -126,8 +103,103 @@ func (q *Queries) ListAddableSiblings(ctx context.Context, arg ListAddableSiblin
 			&i.Slug,
 			&i.Name,
 			&i.Description,
-			&i.AllowNonMemberMcp,
-			&i.IsMember,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAgentGrantRowsForGrantees = `-- name: ListAgentGrantRowsForGrantees :many
+SELECT grantee_id, role FROM agent_grants
+WHERE agent_id = $1 AND grantee_id = ANY ($2::uuid[])
+`
+
+type ListAgentGrantRowsForGranteesParams struct {
+	AgentID    pgtype.UUID   `json:"agent_id"`
+	GranteeIds []pgtype.UUID `json:"grantee_ids"`
+}
+
+type ListAgentGrantRowsForGranteesRow struct {
+	GranteeID pgtype.UUID `json:"grantee_id"`
+	Role      string      `json:"role"`
+}
+
+// The (grantee_id, role) grants on @agent_id held by any grantee in
+// @grantee_ids. The siblings service uses it to pick the authorizing grantee
+// for a new edge — the highest-role grant in the parent owner's grantee-set.
+func (q *Queries) ListAgentGrantRowsForGrantees(ctx context.Context, arg ListAgentGrantRowsForGranteesParams) ([]ListAgentGrantRowsForGranteesRow, error) {
+	rows, err := q.db.Query(ctx, listAgentGrantRowsForGrantees, arg.AgentID, arg.GranteeIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListAgentGrantRowsForGranteesRow{}
+	for rows.Next() {
+		var i ListAgentGrantRowsForGranteesRow
+		if err := rows.Scan(&i.GranteeID, &i.Role); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listInboundSiblings = `-- name: ListInboundSiblings :many
+SELECT a.id, a.slug, a.name, a.description,
+       s.max_access, g.role AS authorizing_role, s.created_at,
+       COALESCE(u.display_name, gr.name, '')::text AS owner_name
+FROM agent_siblings s
+JOIN agents a ON a.id = s.parent_agent_id
+JOIN agent_grants g
+  ON g.agent_id = s.sibling_agent_id AND g.grantee_id = s.authorizing_grantee_id
+LEFT JOIN users u   ON u.id  = a.owner_principal_id
+LEFT JOIN groups gr ON gr.id = a.owner_principal_id
+WHERE s.sibling_agent_id = $1
+ORDER BY s.created_at
+`
+
+type ListInboundSiblingsRow struct {
+	ID              pgtype.UUID        `json:"id"`
+	Slug            string             `json:"slug"`
+	Name            string             `json:"name"`
+	Description     string             `json:"description"`
+	MaxAccess       string             `json:"max_access"`
+	AuthorizingRole string             `json:"authorizing_role"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	OwnerName       string             `json:"owner_name"`
+}
+
+// The reverse of ListSiblings: every agent that has added @sibling_agent_id
+// to its address book, with the per-edge ceiling, the live authorizing-grant
+// role on THIS agent, and the parent's owner name (a user's display_name or
+// a group's name). Lets the target's admin see who can reach in, at what
+// level. Inner join on the authorizing grant (guaranteed by the cascade FK).
+func (q *Queries) ListInboundSiblings(ctx context.Context, siblingAgentID pgtype.UUID) ([]ListInboundSiblingsRow, error) {
+	rows, err := q.db.Query(ctx, listInboundSiblings, siblingAgentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListInboundSiblingsRow{}
+	for rows.Next() {
+		var i ListInboundSiblingsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Slug,
+			&i.Name,
+			&i.Description,
+			&i.MaxAccess,
+			&i.AuthorizingRole,
+			&i.CreatedAt,
+			&i.OwnerName,
 		); err != nil {
 			return nil, err
 		}
@@ -141,28 +213,31 @@ func (q *Queries) ListAddableSiblings(ctx context.Context, arg ListAddableSiblin
 
 const listSiblings = `-- name: ListSiblings :many
 SELECT a.id, a.slug, a.name, a.description,
-       a.allow_non_member_mcp, a.allow_public_mcp,
-       s.created_at
+       s.max_access, g.role AS authorizing_role, s.created_at
 FROM agent_siblings s
 JOIN agents a ON a.id = s.sibling_agent_id
+JOIN agent_grants g
+  ON g.agent_id = s.sibling_agent_id AND g.grantee_id = s.authorizing_grantee_id
 WHERE s.parent_agent_id = $1
 ORDER BY s.created_at
 `
 
 type ListSiblingsRow struct {
-	ID                pgtype.UUID        `json:"id"`
-	Slug              string             `json:"slug"`
-	Name              string             `json:"name"`
-	Description       string             `json:"description"`
-	AllowNonMemberMcp bool               `json:"allow_non_member_mcp"`
-	AllowPublicMcp    bool               `json:"allow_public_mcp"`
-	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+	ID              pgtype.UUID        `json:"id"`
+	Slug            string             `json:"slug"`
+	Name            string             `json:"name"`
+	Description     string             `json:"description"`
+	MaxAccess       string             `json:"max_access"`
+	AuthorizingRole string             `json:"authorizing_role"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
 }
 
-// Returns every agent on the caller's address book with the data the
-// prompt renderer needs (id, slug, name, description). Tool schemas
-// come from a separate ListAgentTools call per sibling — kept
-// separate to keep this query stable as agent_tools evolves.
+// The parent's address book with the data the prompt renderer needs
+// (id, slug, name, description), the per-edge max_access ceiling, and the
+// current role of the grant that authorizes the edge — so the service can
+// show the live effective ceiling = min(max_access, authorizing role). The
+// cascade FK guarantees the authorizing grant row exists, so the join is
+// inner.
 func (q *Queries) ListSiblings(ctx context.Context, parentAgentID pgtype.UUID) ([]ListSiblingsRow, error) {
 	rows, err := q.db.Query(ctx, listSiblings, parentAgentID)
 	if err != nil {
@@ -177,8 +252,8 @@ func (q *Queries) ListSiblings(ctx context.Context, parentAgentID pgtype.UUID) (
 			&i.Slug,
 			&i.Name,
 			&i.Description,
-			&i.AllowNonMemberMcp,
-			&i.AllowPublicMcp,
+			&i.MaxAccess,
+			&i.AuthorizingRole,
 			&i.CreatedAt,
 		); err != nil {
 			return nil, err
@@ -196,32 +271,23 @@ SELECT a.id
 FROM agent_siblings s
 JOIN agents a ON a.id = s.sibling_agent_id
 WHERE s.parent_agent_id = $1
-  AND (
-      a.allow_non_member_mcp = true
-      OR EXISTS (
-          SELECT 1 FROM agent_grants
-          WHERE agent_grants.agent_id = a.id
-            AND agent_grants.grantee_id = $2
-      )
+  AND EXISTS (
+      SELECT 1 FROM agent_grants g
+      WHERE g.agent_id = s.sibling_agent_id AND g.grantee_id = ANY ($2::uuid[])
   )
 `
 
 type ListVisibleSiblingsParams struct {
-	ParentAgentID pgtype.UUID `json:"parent_agent_id"`
-	UserID        pgtype.UUID `json:"user_id"`
+	ParentAgentID pgtype.UUID   `json:"parent_agent_id"`
+	GranteeIds    []pgtype.UUID `json:"grantee_ids"`
 }
 
-// Used by the dispatcher at run dispatch time to compute the set of
-// siblings this run's user can call. Returns the sibling agent IDs
-// that pass the access ladder for the supplied user:
-//   - user is a member of the sibling, OR
-//   - the sibling has allow_non_member_mcp = true.
-//
-// For anonymous runs (no user), pass uuid_nil as @user_id; the
-// EXISTS check on agent_grants fails, leaving only the
-// non-member-open siblings.
+// Dispatch-time: the sibling agent IDs the run's user may A2A-call from the
+// parent — those where the driving user (via @grantee_ids) holds a grant.
+// Anonymous / cron / webhook runs pass an empty set and get nothing (they
+// can't A2A in v1).
 func (q *Queries) ListVisibleSiblings(ctx context.Context, arg ListVisibleSiblingsParams) ([]pgtype.UUID, error) {
-	rows, err := q.db.Query(ctx, listVisibleSiblings, arg.ParentAgentID, arg.UserID)
+	rows, err := q.db.Query(ctx, listVisibleSiblings, arg.ParentAgentID, arg.GranteeIds)
 	if err != nil {
 		return nil, err
 	}
@@ -253,4 +319,25 @@ type RemoveSiblingParams struct {
 func (q *Queries) RemoveSibling(ctx context.Context, arg RemoveSiblingParams) error {
 	_, err := q.db.Exec(ctx, removeSibling, arg.ParentAgentID, arg.SiblingAgentID)
 	return err
+}
+
+const updateSiblingMaxAccess = `-- name: UpdateSiblingMaxAccess :execrows
+UPDATE agent_siblings SET max_access = $1
+WHERE parent_agent_id = $2 AND sibling_agent_id = $3
+`
+
+type UpdateSiblingMaxAccessParams struct {
+	MaxAccess      string      `json:"max_access"`
+	ParentAgentID  pgtype.UUID `json:"parent_agent_id"`
+	SiblingAgentID pgtype.UUID `json:"sibling_agent_id"`
+}
+
+// Change the per-edge ceiling (operator intent). Returns rows affected so
+// the caller can distinguish a missing edge (0) from success (1).
+func (q *Queries) UpdateSiblingMaxAccess(ctx context.Context, arg UpdateSiblingMaxAccessParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updateSiblingMaxAccess, arg.MaxAccess, arg.ParentAgentID, arg.SiblingAgentID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }

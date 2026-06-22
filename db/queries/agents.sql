@@ -12,7 +12,7 @@ WITH p AS (
 INSERT INTO agents (
     id, name, slug, owner_principal_id, description, config, status,
     upgrade_status, auto_fix,
-    allow_non_member_mcp, allow_public_mcp,
+    mcp_enabled, allow_public_mcp, allow_public_routes,
     allow_oauth_mcp_prompt, allow_public_mcp_prompt,
     build_model, exec_model, stt_model, vision_model,
     tts_model, image_gen_model, embedding_model, search_model,
@@ -23,7 +23,7 @@ INSERT INTO agents (
 SELECT
     p.id, @name, @slug, @owner_principal_id, @description, @config, 'draft',
     'idle', true,
-    false, false,
+    true, false, true,
     false, false,
     '', '', '', '',
     '', '', '', '',
@@ -149,14 +149,14 @@ UPDATE agents SET sdk_version = @sdk_version, updated_at = now() WHERE id = @id;
 UPDATE agents SET error_message = @error_message, updated_at = now() WHERE id = @id;
 
 -- name: UpdateAgentA2ASettings :exec
--- Updates the two A2A access toggles. CHECK constraint
--- agents_public_implies_non_member rejects the inconsistent state
--- (allow_public_mcp=true ∧ allow_non_member_mcp=false), so the API
--- layer auto-flips non-member on whenever it sets public on.
+-- Updates the three protocol-surface toggles. The grant ladder governs who
+-- may make an authed MCP call; these are orthogonal (anonymous MCP, the
+-- MCP master switch, anonymous public web routes).
 UPDATE agents SET
-    allow_non_member_mcp = @allow_non_member_mcp,
-    allow_public_mcp     = @allow_public_mcp,
-    updated_at           = now()
+    mcp_enabled         = @mcp_enabled,
+    allow_public_mcp    = @allow_public_mcp,
+    allow_public_routes = @allow_public_routes,
+    updated_at          = now()
 WHERE id = @id;
 
 -- name: ListActiveAgentIDs :many

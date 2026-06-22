@@ -81,7 +81,9 @@ func (s *Service) List(ctx context.Context, p authz.Principal, agentID uuid.UUID
 // user nor the `user` group; ErrForbidden when the caller is neither a sysadmin
 // self-adder nor an agent admin.
 func (s *Service) Add(ctx context.Context, p authz.Principal, agentID, granteeID uuid.UUID, role string) error {
-	if role != "admin" && role != "user" {
+	// 'public' is a real grant tier: granting the All-Users group at 'public'
+	// opens the agent to every registered user at the public floor.
+	if role != "admin" && role != "user" && role != "public" {
 		return service.ErrInvalidInput
 	}
 	if !p.IsAuthenticatedUser() {

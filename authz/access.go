@@ -31,9 +31,11 @@ func AccessAtLeast(a, min agentsdk.Access) bool {
 }
 
 // MinAccess returns the lower of two access levels on the agent ladder. It
-// is the A2A delegation ceiling: a sibling agent acting on a user's behalf
-// can never exceed the access its own owner holds on the target, so the
-// effective access is the minimum of (driving user, acting-agent owner).
+// composes the A2A delegation caps: a sibling agent acting on a user's behalf
+// can never exceed the access its own owner holds on the target, nor the
+// per-edge max_access the operator set on the address-book entry. The
+// effective access is the minimum across (driving user, acting-agent owner,
+// edge max_access).
 func MinAccess(a, b agentsdk.Access) agentsdk.Access {
 	if accessRank(a) <= accessRank(b) {
 		return a
@@ -50,9 +52,20 @@ func MinAccess(a, b agentsdk.Access) agentsdk.Access {
 // Surface-specific "is public allowed here" policy (e.g. the agent's
 // allow_public_mcp flag) lives at the surface, not in this ladder.
 func (p Principal) EffectiveAgentAccess(ctx context.Context, q *dbq.Queries, agentID uuid.UUID) agentsdk.Access {
+	access, _ := p.EffectiveAgentAccessGranted(ctx, q, agentID)
+	return access
+}
+
+// EffectiveAgentAccessGranted is EffectiveAgentAccess plus whether an actual
+// grant matched. The access value alone can't distinguish "AccessPublic
+// because an explicit `public` grant matched" from "AccessPublic because the
+// caller is a non-member at the floor" — both read as AccessPublic. The A2A
+// entitlement gate needs that distinction (an explicit All-Users `public`
+// grant admits the caller; the bare floor does not), so it reads granted.
+func (p Principal) EffectiveAgentAccessGranted(ctx context.Context, q *dbq.Queries, agentID uuid.UUID) (access agentsdk.Access, granted bool) {
 	set := p.GranteeSet()
 	if len(set) == 0 {
-		return agentsdk.AccessPublic
+		return agentsdk.AccessPublic, false
 	}
 	grantees := make([]pgtype.UUID, len(set))
 	for i, id := range set {
@@ -62,17 +75,17 @@ func (p Principal) EffectiveAgentAccess(ctx context.Context, q *dbq.Queries, age
 		AgentID:    pgtype.UUID{Bytes: agentID, Valid: true},
 		GranteeIds: grantees,
 	})
-	if err != nil {
-		return agentsdk.AccessPublic
+	if err != nil || len(roles) == 0 {
+		return agentsdk.AccessPublic, false
 	}
 	best := agentsdk.AccessPublic
 	for _, role := range roles {
 		switch role {
 		case "admin":
-			return agentsdk.AccessAdmin
+			return agentsdk.AccessAdmin, true
 		case "user":
 			best = agentsdk.AccessUser
 		}
 	}
-	return best
+	return best, true
 }

@@ -18,8 +18,9 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-// TestIntegration_A2A_AccessDenied — non-member user calling target
-// MCP with allow_non_member_mcp=false yields 403 and creates no run.
+// TestIntegration_A2A_AccessDenied — a non-member user (no grant on the
+// target, and no All-Users grant) calling its MCP endpoint yields 403 and
+// creates no run.
 func TestIntegration_A2A_AccessDenied(t *testing.T) {
 	h := apitest.Setup(t)
 
@@ -29,7 +30,7 @@ func TestIntegration_A2A_AccessDenied(t *testing.T) {
 	target := apitest.CreateAgent(t, h, apitest.AgentOpts{
 		OwnerID: owner,
 		Slug:    "target-closed",
-		// AllowNonMember stays false — the default.
+		// No All-Users grant → the stranger has no access.
 	})
 
 	strangerToken := apitest.IssueUserToken(t, h, stranger, "stranger@apitest.local", "user")

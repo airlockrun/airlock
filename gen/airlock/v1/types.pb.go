@@ -3797,16 +3797,22 @@ func (x *EnvVarInfo) GetUpdatedAt() *timestamppb.Timestamp {
 
 // SiblingInfo is one entry in an agent's A2A address book.
 type SiblingInfo struct {
-	state             protoimpl.MessageState `protogen:"open.v1"`
-	Id                string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	Slug              string                 `protobuf:"bytes,2,opt,name=slug,proto3" json:"slug,omitempty"`
-	Name              string                 `protobuf:"bytes,3,opt,name=name,proto3" json:"name,omitempty"`
-	Description       string                 `protobuf:"bytes,4,opt,name=description,proto3" json:"description,omitempty"`
-	AllowNonMemberMcp bool                   `protobuf:"varint,5,opt,name=allow_non_member_mcp,json=allowNonMemberMcp,proto3" json:"allow_non_member_mcp,omitempty"`
-	AllowPublicMcp    bool                   `protobuf:"varint,6,opt,name=allow_public_mcp,json=allowPublicMcp,proto3" json:"allow_public_mcp,omitempty"`
-	CreatedAt         *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	Id          string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Slug        string                 `protobuf:"bytes,2,opt,name=slug,proto3" json:"slug,omitempty"`
+	Name        string                 `protobuf:"bytes,3,opt,name=name,proto3" json:"name,omitempty"`
+	Description string                 `protobuf:"bytes,4,opt,name=description,proto3" json:"description,omitempty"`
+	CreatedAt   *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	// Per-edge access ceiling ("public" | "user" | "admin") the operator
+	// picked when adding the sibling — caps what this agent can do when it
+	// calls the sibling (operator intent).
+	MaxAccess string `protobuf:"bytes,8,opt,name=max_access,json=maxAccess,proto3" json:"max_access,omitempty"`
+	// The live effective ceiling = min(max_access, current role of the grant
+	// that authorizes this edge). Auto-downgrades when the target lowers the
+	// grant; this is the value the UI shows.
+	EffectiveMaxAccess string `protobuf:"bytes,9,opt,name=effective_max_access,json=effectiveMaxAccess,proto3" json:"effective_max_access,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *SiblingInfo) Reset() {
@@ -3867,20 +3873,6 @@ func (x *SiblingInfo) GetDescription() string {
 	return ""
 }
 
-func (x *SiblingInfo) GetAllowNonMemberMcp() bool {
-	if x != nil {
-		return x.AllowNonMemberMcp
-	}
-	return false
-}
-
-func (x *SiblingInfo) GetAllowPublicMcp() bool {
-	if x != nil {
-		return x.AllowPublicMcp
-	}
-	return false
-}
-
 func (x *SiblingInfo) GetCreatedAt() *timestamppb.Timestamp {
 	if x != nil {
 		return x.CreatedAt
@@ -3888,25 +3880,141 @@ func (x *SiblingInfo) GetCreatedAt() *timestamppb.Timestamp {
 	return nil
 }
 
-// AddableSiblingInfo is a candidate the editing user can add to an
-// agent's A2A address book. is_member tells the UI whether the
-// editing user is already a member of the target (vs picking it
-// purely because allow_non_member_mcp=true).
+func (x *SiblingInfo) GetMaxAccess() string {
+	if x != nil {
+		return x.MaxAccess
+	}
+	return ""
+}
+
+func (x *SiblingInfo) GetEffectiveMaxAccess() string {
+	if x != nil {
+		return x.EffectiveMaxAccess
+	}
+	return ""
+}
+
+// InboundSiblingInfo is one agent that has added THIS agent to its
+// address book (the reverse of SiblingInfo): who can call this agent via
+// A2A, with the access ceiling they configured.
+type InboundSiblingInfo struct {
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	Id          string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Slug        string                 `protobuf:"bytes,2,opt,name=slug,proto3" json:"slug,omitempty"`
+	Name        string                 `protobuf:"bytes,3,opt,name=name,proto3" json:"name,omitempty"`
+	Description string                 `protobuf:"bytes,4,opt,name=description,proto3" json:"description,omitempty"`
+	// Per-edge ceiling the parent agent picked (operator intent).
+	MaxAccess string `protobuf:"bytes,5,opt,name=max_access,json=maxAccess,proto3" json:"max_access,omitempty"`
+	// Display name of the parent agent's owner (user or group).
+	OwnerName string                 `protobuf:"bytes,6,opt,name=owner_name,json=ownerName,proto3" json:"owner_name,omitempty"`
+	CreatedAt *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	// Live effective ceiling = min(max_access, current authorizing-grant role).
+	EffectiveMaxAccess string `protobuf:"bytes,8,opt,name=effective_max_access,json=effectiveMaxAccess,proto3" json:"effective_max_access,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
+}
+
+func (x *InboundSiblingInfo) Reset() {
+	*x = InboundSiblingInfo{}
+	mi := &file_airlock_v1_types_proto_msgTypes[36]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *InboundSiblingInfo) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*InboundSiblingInfo) ProtoMessage() {}
+
+func (x *InboundSiblingInfo) ProtoReflect() protoreflect.Message {
+	mi := &file_airlock_v1_types_proto_msgTypes[36]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use InboundSiblingInfo.ProtoReflect.Descriptor instead.
+func (*InboundSiblingInfo) Descriptor() ([]byte, []int) {
+	return file_airlock_v1_types_proto_rawDescGZIP(), []int{36}
+}
+
+func (x *InboundSiblingInfo) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *InboundSiblingInfo) GetSlug() string {
+	if x != nil {
+		return x.Slug
+	}
+	return ""
+}
+
+func (x *InboundSiblingInfo) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *InboundSiblingInfo) GetDescription() string {
+	if x != nil {
+		return x.Description
+	}
+	return ""
+}
+
+func (x *InboundSiblingInfo) GetMaxAccess() string {
+	if x != nil {
+		return x.MaxAccess
+	}
+	return ""
+}
+
+func (x *InboundSiblingInfo) GetOwnerName() string {
+	if x != nil {
+		return x.OwnerName
+	}
+	return ""
+}
+
+func (x *InboundSiblingInfo) GetCreatedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.CreatedAt
+	}
+	return nil
+}
+
+func (x *InboundSiblingInfo) GetEffectiveMaxAccess() string {
+	if x != nil {
+		return x.EffectiveMaxAccess
+	}
+	return ""
+}
+
+// AddableSiblingInfo is a candidate agent the parent may add to its A2A
+// address book — any agent the parent's owner holds a grant on.
 type AddableSiblingInfo struct {
-	state             protoimpl.MessageState `protogen:"open.v1"`
-	Id                string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	Slug              string                 `protobuf:"bytes,2,opt,name=slug,proto3" json:"slug,omitempty"`
-	Name              string                 `protobuf:"bytes,3,opt,name=name,proto3" json:"name,omitempty"`
-	Description       string                 `protobuf:"bytes,4,opt,name=description,proto3" json:"description,omitempty"`
-	AllowNonMemberMcp bool                   `protobuf:"varint,5,opt,name=allow_non_member_mcp,json=allowNonMemberMcp,proto3" json:"allow_non_member_mcp,omitempty"`
-	IsMember          bool                   `protobuf:"varint,6,opt,name=is_member,json=isMember,proto3" json:"is_member,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Slug          string                 `protobuf:"bytes,2,opt,name=slug,proto3" json:"slug,omitempty"`
+	Name          string                 `protobuf:"bytes,3,opt,name=name,proto3" json:"name,omitempty"`
+	Description   string                 `protobuf:"bytes,4,opt,name=description,proto3" json:"description,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *AddableSiblingInfo) Reset() {
 	*x = AddableSiblingInfo{}
-	mi := &file_airlock_v1_types_proto_msgTypes[36]
+	mi := &file_airlock_v1_types_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3918,7 +4026,7 @@ func (x *AddableSiblingInfo) String() string {
 func (*AddableSiblingInfo) ProtoMessage() {}
 
 func (x *AddableSiblingInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_airlock_v1_types_proto_msgTypes[36]
+	mi := &file_airlock_v1_types_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3931,7 +4039,7 @@ func (x *AddableSiblingInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AddableSiblingInfo.ProtoReflect.Descriptor instead.
 func (*AddableSiblingInfo) Descriptor() ([]byte, []int) {
-	return file_airlock_v1_types_proto_rawDescGZIP(), []int{36}
+	return file_airlock_v1_types_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *AddableSiblingInfo) GetId() string {
@@ -3962,34 +4070,24 @@ func (x *AddableSiblingInfo) GetDescription() string {
 	return ""
 }
 
-func (x *AddableSiblingInfo) GetAllowNonMemberMcp() bool {
-	if x != nil {
-		return x.AllowNonMemberMcp
-	}
-	return false
-}
-
-func (x *AddableSiblingInfo) GetIsMember() bool {
-	if x != nil {
-		return x.IsMember
-	}
-	return false
-}
-
-// A2ASettings is the per-agent MCP-exposure toggles configured from
-// the A2A settings page. Wire shape for get_agent_sharing /
-// set_agent_sharing.
+// A2ASettings is the per-agent protocol-surface toggles, orthogonal to the
+// grant ladder that governs authed MCP access. Wire shape for
+// get_agent_sharing / set_agent_sharing.
 type A2ASettings struct {
-	state             protoimpl.MessageState `protogen:"open.v1"`
-	AllowNonMemberMcp bool                   `protobuf:"varint,1,opt,name=allow_non_member_mcp,json=allowNonMemberMcp,proto3" json:"allow_non_member_mcp,omitempty"`
-	AllowPublicMcp    bool                   `protobuf:"varint,2,opt,name=allow_public_mcp,json=allowPublicMcp,proto3" json:"allow_public_mcp,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Anonymous (no-JWT) MCP requests may reach public-tier tools.
+	AllowPublicMcp bool `protobuf:"varint,2,opt,name=allow_public_mcp,json=allowPublicMcp,proto3" json:"allow_public_mcp,omitempty"`
+	// The agent serves an MCP endpoint to grant-authorized callers at all.
+	McpEnabled bool `protobuf:"varint,3,opt,name=mcp_enabled,json=mcpEnabled,proto3" json:"mcp_enabled,omitempty"`
+	// Anonymous requests may reach the agent's AccessPublic web routes.
+	AllowPublicRoutes bool `protobuf:"varint,4,opt,name=allow_public_routes,json=allowPublicRoutes,proto3" json:"allow_public_routes,omitempty"`
 	unknownFields     protoimpl.UnknownFields
 	sizeCache         protoimpl.SizeCache
 }
 
 func (x *A2ASettings) Reset() {
 	*x = A2ASettings{}
-	mi := &file_airlock_v1_types_proto_msgTypes[37]
+	mi := &file_airlock_v1_types_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4001,7 +4099,7 @@ func (x *A2ASettings) String() string {
 func (*A2ASettings) ProtoMessage() {}
 
 func (x *A2ASettings) ProtoReflect() protoreflect.Message {
-	mi := &file_airlock_v1_types_proto_msgTypes[37]
+	mi := &file_airlock_v1_types_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4014,19 +4112,26 @@ func (x *A2ASettings) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use A2ASettings.ProtoReflect.Descriptor instead.
 func (*A2ASettings) Descriptor() ([]byte, []int) {
-	return file_airlock_v1_types_proto_rawDescGZIP(), []int{37}
-}
-
-func (x *A2ASettings) GetAllowNonMemberMcp() bool {
-	if x != nil {
-		return x.AllowNonMemberMcp
-	}
-	return false
+	return file_airlock_v1_types_proto_rawDescGZIP(), []int{38}
 }
 
 func (x *A2ASettings) GetAllowPublicMcp() bool {
 	if x != nil {
 		return x.AllowPublicMcp
+	}
+	return false
+}
+
+func (x *A2ASettings) GetMcpEnabled() bool {
+	if x != nil {
+		return x.McpEnabled
+	}
+	return false
+}
+
+func (x *A2ASettings) GetAllowPublicRoutes() bool {
+	if x != nil {
+		return x.AllowPublicRoutes
 	}
 	return false
 }
@@ -4057,7 +4162,7 @@ type ExecEndpointInfo struct {
 
 func (x *ExecEndpointInfo) Reset() {
 	*x = ExecEndpointInfo{}
-	mi := &file_airlock_v1_types_proto_msgTypes[38]
+	mi := &file_airlock_v1_types_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4069,7 +4174,7 @@ func (x *ExecEndpointInfo) String() string {
 func (*ExecEndpointInfo) ProtoMessage() {}
 
 func (x *ExecEndpointInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_airlock_v1_types_proto_msgTypes[38]
+	mi := &file_airlock_v1_types_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4082,7 +4187,7 @@ func (x *ExecEndpointInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExecEndpointInfo.ProtoReflect.Descriptor instead.
 func (*ExecEndpointInfo) Descriptor() ([]byte, []int) {
-	return file_airlock_v1_types_proto_rawDescGZIP(), []int{38}
+	return file_airlock_v1_types_proto_rawDescGZIP(), []int{39}
 }
 
 func (x *ExecEndpointInfo) GetId() string {
@@ -4201,7 +4306,7 @@ type ExecEndpointTestResult struct {
 
 func (x *ExecEndpointTestResult) Reset() {
 	*x = ExecEndpointTestResult{}
-	mi := &file_airlock_v1_types_proto_msgTypes[39]
+	mi := &file_airlock_v1_types_proto_msgTypes[40]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4213,7 +4318,7 @@ func (x *ExecEndpointTestResult) String() string {
 func (*ExecEndpointTestResult) ProtoMessage() {}
 
 func (x *ExecEndpointTestResult) ProtoReflect() protoreflect.Message {
-	mi := &file_airlock_v1_types_proto_msgTypes[39]
+	mi := &file_airlock_v1_types_proto_msgTypes[40]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4226,7 +4331,7 @@ func (x *ExecEndpointTestResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExecEndpointTestResult.ProtoReflect.Descriptor instead.
 func (*ExecEndpointTestResult) Descriptor() ([]byte, []int) {
-	return file_airlock_v1_types_proto_rawDescGZIP(), []int{39}
+	return file_airlock_v1_types_proto_rawDescGZIP(), []int{40}
 }
 
 func (x *ExecEndpointTestResult) GetOk() bool {
@@ -4286,7 +4391,7 @@ type SetupCountsInfo struct {
 
 func (x *SetupCountsInfo) Reset() {
 	*x = SetupCountsInfo{}
-	mi := &file_airlock_v1_types_proto_msgTypes[40]
+	mi := &file_airlock_v1_types_proto_msgTypes[41]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4298,7 +4403,7 @@ func (x *SetupCountsInfo) String() string {
 func (*SetupCountsInfo) ProtoMessage() {}
 
 func (x *SetupCountsInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_airlock_v1_types_proto_msgTypes[40]
+	mi := &file_airlock_v1_types_proto_msgTypes[41]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4311,7 +4416,7 @@ func (x *SetupCountsInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetupCountsInfo.ProtoReflect.Descriptor instead.
 func (*SetupCountsInfo) Descriptor() ([]byte, []int) {
-	return file_airlock_v1_types_proto_rawDescGZIP(), []int{40}
+	return file_airlock_v1_types_proto_rawDescGZIP(), []int{41}
 }
 
 func (x *SetupCountsInfo) GetConnections() int32 {
@@ -4731,26 +4836,39 @@ const file_airlock_v1_types_proto_rawDesc = "" +
 	"\apattern\x18\x06 \x01(\tR\apattern\x12\x14\n" +
 	"\x05value\x18\a \x01(\tR\x05value\x129\n" +
 	"\n" +
-	"updated_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\"\xfd\x01\n" +
+	"updated_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\"\xff\x01\n" +
 	"\vSiblingInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04slug\x18\x02 \x01(\tR\x04slug\x12\x12\n" +
 	"\x04name\x18\x03 \x01(\tR\x04name\x12 \n" +
-	"\vdescription\x18\x04 \x01(\tR\vdescription\x12/\n" +
-	"\x14allow_non_member_mcp\x18\x05 \x01(\bR\x11allowNonMemberMcp\x12(\n" +
-	"\x10allow_public_mcp\x18\x06 \x01(\bR\x0eallowPublicMcp\x129\n" +
+	"\vdescription\x18\x04 \x01(\tR\vdescription\x129\n" +
 	"\n" +
-	"created_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"\xbc\x01\n" +
+	"created_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x12\x1d\n" +
+	"\n" +
+	"max_access\x18\b \x01(\tR\tmaxAccess\x120\n" +
+	"\x14effective_max_access\x18\t \x01(\tR\x12effectiveMaxAccessJ\x04\b\x05\x10\x06J\x04\b\x06\x10\a\"\x99\x02\n" +
+	"\x12InboundSiblingInfo\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
+	"\x04slug\x18\x02 \x01(\tR\x04slug\x12\x12\n" +
+	"\x04name\x18\x03 \x01(\tR\x04name\x12 \n" +
+	"\vdescription\x18\x04 \x01(\tR\vdescription\x12\x1d\n" +
+	"\n" +
+	"max_access\x18\x05 \x01(\tR\tmaxAccess\x12\x1d\n" +
+	"\n" +
+	"owner_name\x18\x06 \x01(\tR\townerName\x129\n" +
+	"\n" +
+	"created_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x120\n" +
+	"\x14effective_max_access\x18\b \x01(\tR\x12effectiveMaxAccess\"z\n" +
 	"\x12AddableSiblingInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04slug\x18\x02 \x01(\tR\x04slug\x12\x12\n" +
 	"\x04name\x18\x03 \x01(\tR\x04name\x12 \n" +
-	"\vdescription\x18\x04 \x01(\tR\vdescription\x12/\n" +
-	"\x14allow_non_member_mcp\x18\x05 \x01(\bR\x11allowNonMemberMcp\x12\x1b\n" +
-	"\tis_member\x18\x06 \x01(\bR\bisMember\"h\n" +
-	"\vA2ASettings\x12/\n" +
-	"\x14allow_non_member_mcp\x18\x01 \x01(\bR\x11allowNonMemberMcp\x12(\n" +
-	"\x10allow_public_mcp\x18\x02 \x01(\bR\x0eallowPublicMcp\"\x81\x04\n" +
+	"\vdescription\x18\x04 \x01(\tR\vdescriptionJ\x04\b\x05\x10\x06J\x04\b\x06\x10\a\"\x8e\x01\n" +
+	"\vA2ASettings\x12(\n" +
+	"\x10allow_public_mcp\x18\x02 \x01(\bR\x0eallowPublicMcp\x12\x1f\n" +
+	"\vmcp_enabled\x18\x03 \x01(\bR\n" +
+	"mcpEnabled\x12.\n" +
+	"\x13allow_public_routes\x18\x04 \x01(\bR\x11allowPublicRoutesJ\x04\b\x01\x10\x02\"\x81\x04\n" +
 	"\x10ExecEndpointInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04slug\x18\x02 \x01(\tR\x04slug\x12 \n" +
@@ -4807,7 +4925,7 @@ func file_airlock_v1_types_proto_rawDescGZIP() []byte {
 }
 
 var file_airlock_v1_types_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_airlock_v1_types_proto_msgTypes = make([]protoimpl.MessageInfo, 41)
+var file_airlock_v1_types_proto_msgTypes = make([]protoimpl.MessageInfo, 42)
 var file_airlock_v1_types_proto_goTypes = []any{
 	(TenantRole)(0),                         // 0: airlock.v1.TenantRole
 	(MessageRole)(0),                        // 1: airlock.v1.MessageRole
@@ -4847,63 +4965,65 @@ var file_airlock_v1_types_proto_goTypes = []any{
 	(*MCPStatusInfo)(nil),                   // 35: airlock.v1.MCPStatusInfo
 	(*EnvVarInfo)(nil),                      // 36: airlock.v1.EnvVarInfo
 	(*SiblingInfo)(nil),                     // 37: airlock.v1.SiblingInfo
-	(*AddableSiblingInfo)(nil),              // 38: airlock.v1.AddableSiblingInfo
-	(*A2ASettings)(nil),                     // 39: airlock.v1.A2ASettings
-	(*ExecEndpointInfo)(nil),                // 40: airlock.v1.ExecEndpointInfo
-	(*ExecEndpointTestResult)(nil),          // 41: airlock.v1.ExecEndpointTestResult
-	(*SetupCountsInfo)(nil),                 // 42: airlock.v1.SetupCountsInfo
-	(*structpb.Struct)(nil),                 // 43: google.protobuf.Struct
-	(*timestamppb.Timestamp)(nil),           // 44: google.protobuf.Timestamp
-	(*structpb.ListValue)(nil),              // 45: google.protobuf.ListValue
+	(*InboundSiblingInfo)(nil),              // 38: airlock.v1.InboundSiblingInfo
+	(*AddableSiblingInfo)(nil),              // 39: airlock.v1.AddableSiblingInfo
+	(*A2ASettings)(nil),                     // 40: airlock.v1.A2ASettings
+	(*ExecEndpointInfo)(nil),                // 41: airlock.v1.ExecEndpointInfo
+	(*ExecEndpointTestResult)(nil),          // 42: airlock.v1.ExecEndpointTestResult
+	(*SetupCountsInfo)(nil),                 // 43: airlock.v1.SetupCountsInfo
+	(*structpb.Struct)(nil),                 // 44: google.protobuf.Struct
+	(*timestamppb.Timestamp)(nil),           // 45: google.protobuf.Timestamp
+	(*structpb.ListValue)(nil),              // 46: google.protobuf.ListValue
 }
 var file_airlock_v1_types_proto_depIdxs = []int32{
-	43, // 0: airlock.v1.Tenant.settings:type_name -> google.protobuf.Struct
-	44, // 1: airlock.v1.Tenant.created_at:type_name -> google.protobuf.Timestamp
-	44, // 2: airlock.v1.Tenant.updated_at:type_name -> google.protobuf.Timestamp
+	44, // 0: airlock.v1.Tenant.settings:type_name -> google.protobuf.Struct
+	45, // 1: airlock.v1.Tenant.created_at:type_name -> google.protobuf.Timestamp
+	45, // 2: airlock.v1.Tenant.updated_at:type_name -> google.protobuf.Timestamp
 	0,  // 3: airlock.v1.User.tenant_role:type_name -> airlock.v1.TenantRole
-	44, // 4: airlock.v1.User.created_at:type_name -> google.protobuf.Timestamp
-	44, // 5: airlock.v1.User.updated_at:type_name -> google.protobuf.Timestamp
-	44, // 6: airlock.v1.Provider.created_at:type_name -> google.protobuf.Timestamp
-	44, // 7: airlock.v1.Provider.updated_at:type_name -> google.protobuf.Timestamp
-	44, // 8: airlock.v1.AgentInfo.created_at:type_name -> google.protobuf.Timestamp
-	44, // 9: airlock.v1.AgentInfo.updated_at:type_name -> google.protobuf.Timestamp
-	43, // 10: airlock.v1.RunInfo.input_payload:type_name -> google.protobuf.Struct
-	45, // 11: airlock.v1.RunInfo.actions:type_name -> google.protobuf.ListValue
-	44, // 12: airlock.v1.RunInfo.started_at:type_name -> google.protobuf.Timestamp
-	44, // 13: airlock.v1.RunInfo.finished_at:type_name -> google.protobuf.Timestamp
-	44, // 14: airlock.v1.AgentBuildInfo.started_at:type_name -> google.protobuf.Timestamp
-	44, // 15: airlock.v1.AgentBuildInfo.finished_at:type_name -> google.protobuf.Timestamp
+	45, // 4: airlock.v1.User.created_at:type_name -> google.protobuf.Timestamp
+	45, // 5: airlock.v1.User.updated_at:type_name -> google.protobuf.Timestamp
+	45, // 6: airlock.v1.Provider.created_at:type_name -> google.protobuf.Timestamp
+	45, // 7: airlock.v1.Provider.updated_at:type_name -> google.protobuf.Timestamp
+	45, // 8: airlock.v1.AgentInfo.created_at:type_name -> google.protobuf.Timestamp
+	45, // 9: airlock.v1.AgentInfo.updated_at:type_name -> google.protobuf.Timestamp
+	44, // 10: airlock.v1.RunInfo.input_payload:type_name -> google.protobuf.Struct
+	46, // 11: airlock.v1.RunInfo.actions:type_name -> google.protobuf.ListValue
+	45, // 12: airlock.v1.RunInfo.started_at:type_name -> google.protobuf.Timestamp
+	45, // 13: airlock.v1.RunInfo.finished_at:type_name -> google.protobuf.Timestamp
+	45, // 14: airlock.v1.AgentBuildInfo.started_at:type_name -> google.protobuf.Timestamp
+	45, // 15: airlock.v1.AgentBuildInfo.finished_at:type_name -> google.protobuf.Timestamp
 	23, // 16: airlock.v1.AgentBuildInfo.todos:type_name -> airlock.v1.TodoItem
-	44, // 17: airlock.v1.ConversationInfo.created_at:type_name -> google.protobuf.Timestamp
-	44, // 18: airlock.v1.ConversationInfo.updated_at:type_name -> google.protobuf.Timestamp
-	44, // 19: airlock.v1.AgentMessageInfo.created_at:type_name -> google.protobuf.Timestamp
-	44, // 20: airlock.v1.WebhookInfo.last_received_at:type_name -> google.protobuf.Timestamp
-	44, // 21: airlock.v1.WebhookInfo.created_at:type_name -> google.protobuf.Timestamp
-	44, // 22: airlock.v1.ScheduleInfo.last_fired_at:type_name -> google.protobuf.Timestamp
-	44, // 23: airlock.v1.ScheduleInfo.created_at:type_name -> google.protobuf.Timestamp
-	44, // 24: airlock.v1.ScheduleInfo.next_fire_at:type_name -> google.protobuf.Timestamp
-	44, // 25: airlock.v1.ConnectionInfo.token_expires_at:type_name -> google.protobuf.Timestamp
+	45, // 17: airlock.v1.ConversationInfo.created_at:type_name -> google.protobuf.Timestamp
+	45, // 18: airlock.v1.ConversationInfo.updated_at:type_name -> google.protobuf.Timestamp
+	45, // 19: airlock.v1.AgentMessageInfo.created_at:type_name -> google.protobuf.Timestamp
+	45, // 20: airlock.v1.WebhookInfo.last_received_at:type_name -> google.protobuf.Timestamp
+	45, // 21: airlock.v1.WebhookInfo.created_at:type_name -> google.protobuf.Timestamp
+	45, // 22: airlock.v1.ScheduleInfo.last_fired_at:type_name -> google.protobuf.Timestamp
+	45, // 23: airlock.v1.ScheduleInfo.created_at:type_name -> google.protobuf.Timestamp
+	45, // 24: airlock.v1.ScheduleInfo.next_fire_at:type_name -> google.protobuf.Timestamp
+	45, // 25: airlock.v1.ConnectionInfo.token_expires_at:type_name -> google.protobuf.Timestamp
 	4,  // 26: airlock.v1.BridgeInfo.owner:type_name -> airlock.v1.UserSummary
-	44, // 27: airlock.v1.BridgeInfo.created_at:type_name -> google.protobuf.Timestamp
-	44, // 28: airlock.v1.BridgeInfo.updated_at:type_name -> google.protobuf.Timestamp
-	44, // 29: airlock.v1.PlatformIdentityInfo.created_at:type_name -> google.protobuf.Timestamp
+	45, // 27: airlock.v1.BridgeInfo.created_at:type_name -> google.protobuf.Timestamp
+	45, // 28: airlock.v1.BridgeInfo.updated_at:type_name -> google.protobuf.Timestamp
+	45, // 29: airlock.v1.PlatformIdentityInfo.created_at:type_name -> google.protobuf.Timestamp
 	23, // 30: airlock.v1.AgentBuildTodoEvent.todos:type_name -> airlock.v1.TodoItem
-	44, // 31: airlock.v1.CreateManagedBotSessionResponse.expires_at:type_name -> google.protobuf.Timestamp
-	44, // 32: airlock.v1.GitCredential.created_at:type_name -> google.protobuf.Timestamp
-	44, // 33: airlock.v1.GitCredential.last_used_at:type_name -> google.protobuf.Timestamp
-	44, // 34: airlock.v1.Passkey.created_at:type_name -> google.protobuf.Timestamp
-	44, // 35: airlock.v1.Passkey.last_used_at:type_name -> google.protobuf.Timestamp
-	44, // 36: airlock.v1.MCPServerInfo.token_expires_at:type_name -> google.protobuf.Timestamp
-	44, // 37: airlock.v1.MCPServerInfo.last_synced_at:type_name -> google.protobuf.Timestamp
-	44, // 38: airlock.v1.EnvVarInfo.updated_at:type_name -> google.protobuf.Timestamp
-	44, // 39: airlock.v1.SiblingInfo.created_at:type_name -> google.protobuf.Timestamp
-	44, // 40: airlock.v1.ExecEndpointInfo.host_key_pinned_at:type_name -> google.protobuf.Timestamp
-	44, // 41: airlock.v1.ExecEndpointInfo.last_used_at:type_name -> google.protobuf.Timestamp
-	42, // [42:42] is the sub-list for method output_type
-	42, // [42:42] is the sub-list for method input_type
-	42, // [42:42] is the sub-list for extension type_name
-	42, // [42:42] is the sub-list for extension extendee
-	0,  // [0:42] is the sub-list for field type_name
+	45, // 31: airlock.v1.CreateManagedBotSessionResponse.expires_at:type_name -> google.protobuf.Timestamp
+	45, // 32: airlock.v1.GitCredential.created_at:type_name -> google.protobuf.Timestamp
+	45, // 33: airlock.v1.GitCredential.last_used_at:type_name -> google.protobuf.Timestamp
+	45, // 34: airlock.v1.Passkey.created_at:type_name -> google.protobuf.Timestamp
+	45, // 35: airlock.v1.Passkey.last_used_at:type_name -> google.protobuf.Timestamp
+	45, // 36: airlock.v1.MCPServerInfo.token_expires_at:type_name -> google.protobuf.Timestamp
+	45, // 37: airlock.v1.MCPServerInfo.last_synced_at:type_name -> google.protobuf.Timestamp
+	45, // 38: airlock.v1.EnvVarInfo.updated_at:type_name -> google.protobuf.Timestamp
+	45, // 39: airlock.v1.SiblingInfo.created_at:type_name -> google.protobuf.Timestamp
+	45, // 40: airlock.v1.InboundSiblingInfo.created_at:type_name -> google.protobuf.Timestamp
+	45, // 41: airlock.v1.ExecEndpointInfo.host_key_pinned_at:type_name -> google.protobuf.Timestamp
+	45, // 42: airlock.v1.ExecEndpointInfo.last_used_at:type_name -> google.protobuf.Timestamp
+	43, // [43:43] is the sub-list for method output_type
+	43, // [43:43] is the sub-list for method input_type
+	43, // [43:43] is the sub-list for extension type_name
+	43, // [43:43] is the sub-list for extension extendee
+	0,  // [0:43] is the sub-list for field type_name
 }
 
 func init() { file_airlock_v1_types_proto_init() }
@@ -4917,7 +5037,7 @@ func file_airlock_v1_types_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_airlock_v1_types_proto_rawDesc), len(file_airlock_v1_types_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   41,
+			NumMessages:   42,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

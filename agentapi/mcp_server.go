@@ -102,6 +102,12 @@ func (s *MCPServer) ServeHTTP(w http.ResponseWriter, r *http.Request, h *Handler
 		writeJSONRPCError(w, nil, rpcErrInvalidParams, "agent not found")
 		return
 	}
+	// mcp_enabled is the master switch: a disabled MCP surface 404s for
+	// every caller (members and A2A included).
+	if !target.McpEnabled {
+		http.NotFound(w, r)
+		return
+	}
 
 	// Resolve the caller principal from headers BEFORE access checks
 	// so we can return the right HTTP status (401 vs 403) and emit the
@@ -341,7 +347,7 @@ func (s *MCPServer) ServePublicHTTP(w http.ResponseWriter, r *http.Request, h *H
 		writeJSONRPCError(w, nil, rpcErrInvalidParams, "agent not found")
 		return
 	}
-	if !target.AllowPublicMcp {
+	if !target.McpEnabled || !target.AllowPublicMcp {
 		http.NotFound(w, r)
 		return
 	}

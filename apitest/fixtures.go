@@ -19,7 +19,6 @@ type AgentOpts struct {
 	Slug            string
 	OwnerID         uuid.UUID
 	AllowPublicMCP  bool
-	AllowNonMember  bool
 	AllowPublicChat bool
 	// Stopped parks the agent at status='stopped' (image_ref still set) so
 	// EnsureRunning refuses it — used to exercise the not-runnable paths.
@@ -98,11 +97,10 @@ func CreateAgent(t *testing.T, h *Harness, opts AgentOpts) uuid.UUID {
 		    SET status=$2,
 		        image_ref='apitest:stub',
 		        db_password=$3,
-		        allow_non_member_mcp=$4,
-		        allow_public_mcp=$5,
-		        allow_public_mcp_prompt=$6
+		        allow_public_mcp=$4,
+		        allow_public_mcp_prompt=$5
 		  WHERE id=$1`,
-		row.ID, status, encryptedPW, opts.AllowNonMember, opts.AllowPublicMCP, opts.AllowPublicChat,
+		row.ID, status, encryptedPW, opts.AllowPublicMCP, opts.AllowPublicChat,
 	); err != nil {
 		t.Fatalf("apitest: stamp agent status: %v", err)
 	}
