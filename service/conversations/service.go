@@ -10,6 +10,8 @@ import (
 	"encoding/json"
 	"errors"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/airlockrun/airlock/attachref"
 	"github.com/airlockrun/airlock/authz"
@@ -97,6 +99,77 @@ func (s *Service) ListAll(ctx context.Context, p authz.Principal) ([]dbq.AgentCo
 		return nil, err
 	}
 	return rows, nil
+}
+
+const (
+	feedDefaultLimit int32 = 30
+	feedMaxLimit     int32 = 100
+)
+
+// FeedResult is one keyset page of the merged sidebar feed plus the cursor for
+// the next (older) page ("" when the end is reached).
+type FeedResult struct {
+	Rows       []dbq.ListConversationFeedRow
+	NextCursor string
+}
+
+// ListFeed returns the merged agent+system web-conversation feed, newest-first,
+// keyset-paginated. An empty cursor starts at the most recent item.
+func (s *Service) ListFeed(ctx context.Context, p authz.Principal, cursor string, limit int32) (FeedResult, error) {
+	if !p.IsAuthenticatedUser() {
+		return FeedResult{}, service.ErrUnauthorized
+	}
+	if limit <= 0 || limit > feedMaxLimit {
+		limit = feedDefaultLimit
+	}
+	cu, ci, err := parseFeedCursor(cursor)
+	if err != nil {
+		return FeedResult{}, service.Detail(service.ErrInvalidInput, "invalid cursor")
+	}
+	rows, err := dbq.New(s.db.Pool()).ListConversationFeed(ctx, dbq.ListConversationFeedParams{
+		UserID:        toPg(p.UserID),
+		CursorUpdated: cu,
+		CursorID:      ci,
+		Lim:           limit,
+	})
+	if err != nil {
+		s.logger.Error("list conversation feed", zap.Error(err))
+		return FeedResult{}, err
+	}
+	res := FeedResult{Rows: rows}
+	// A full page means there may be more; hand back a cursor pinned to the
+	// last (oldest) row's (updated_at, id).
+	if int32(len(rows)) == limit {
+		last := rows[len(rows)-1]
+		res.NextCursor = last.UpdatedAt.Time.UTC().Format(time.RFC3339Nano) + "|" + uuid.UUID(last.ID.Bytes).String()
+	}
+	return res, nil
+}
+
+// parseFeedCursor decodes a "<rfc3339nano>|<uuid>" cursor. The empty cursor is
+// the first page: 'infinity' + the max uuid, so the keyset predicate admits
+// every row.
+func parseFeedCursor(cursor string) (pgtype.Timestamptz, pgtype.UUID, error) {
+	if cursor == "" {
+		maxID := pgtype.UUID{Valid: true}
+		for i := range maxID.Bytes {
+			maxID.Bytes[i] = 0xff
+		}
+		return pgtype.Timestamptz{InfinityModifier: pgtype.Infinity, Valid: true}, maxID, nil
+	}
+	at, idStr, ok := strings.Cut(cursor, "|")
+	if !ok {
+		return pgtype.Timestamptz{}, pgtype.UUID{}, errors.New("malformed cursor")
+	}
+	t, err := time.Parse(time.RFC3339Nano, at)
+	if err != nil {
+		return pgtype.Timestamptz{}, pgtype.UUID{}, err
+	}
+	id, err := uuid.Parse(idStr)
+	if err != nil {
+		return pgtype.Timestamptz{}, pgtype.UUID{}, err
+	}
+	return pgtype.Timestamptz{Time: t, Valid: true}, pgtype.UUID{Bytes: id, Valid: true}, nil
 }
 
 // PendingConfirmation describes a suspended run's outstanding tool

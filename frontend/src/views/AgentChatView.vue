@@ -59,6 +59,17 @@ async function startAgent() {
 // No active conversation id yet — the next message mints the thread.
 const isNewConversation = computed(() => !chat.conversationId)
 const messageInput = ref('')
+const messageInputRef = ref<any>(null)
+
+// PrimeVue's autoResize only recomputes on a real `input` event, so clearing
+// the model in code (e.g. after send) leaves a multi-line box stretched. Reset
+// the inline height so an empty composer collapses back to a single row.
+function resetComposerHeight() {
+  nextTick(() => {
+    const el = messageInputRef.value?.$el as HTMLTextAreaElement | undefined
+    if (el) el.style.height = 'auto'
+  })
+}
 const scrollContainer = ref<HTMLElement | null>(null)
 const topSentinel = ref<HTMLElement | null>(null)
 const bottomSentinel = ref<HTMLElement | null>(null)
@@ -251,6 +262,7 @@ async function send() {
   const filePaths = sentFiles.map(f => f.path)
   messageInput.value = ''
   attachedFiles.value = []
+  resetComposerHeight()
   try {
     await chat.sendMessage(agentId.value, text, undefined, filePaths.length ? filePaths : undefined)
   } catch (err: any) {
@@ -307,10 +319,14 @@ async function reject() {
 }
 
 function onKeydown(e: KeyboardEvent) {
-  if (e.key === 'Enter' && !e.shiftKey) {
-    e.preventDefault()
-    send()
-  }
+  // Desktop: Enter sends, Shift+Enter inserts a newline. Touch keyboards
+  // (coarse pointer) let Enter be a newline — the on-screen Send button
+  // submits — so dumping multi-line text on mobile doesn't fire early. Skip
+  // IME composition so selecting a candidate with Enter never sends.
+  if (e.key !== 'Enter' || e.shiftKey || e.isComposing) return
+  if (window.matchMedia?.('(pointer: coarse)').matches) return
+  e.preventDefault()
+  send()
 }
 
 // Format tool input JSON for display — strips metadata keys and shows just the value for single-arg tools.
@@ -715,6 +731,7 @@ function formatTokens(n: number): string {
           @click="fileInput?.click()"
         />
         <Textarea
+          ref="messageInputRef"
           v-model="messageInput"
           :placeholder="agentStopped ? 'Agent is stopped' : 'Type a message...'"
           :auto-resize="true"

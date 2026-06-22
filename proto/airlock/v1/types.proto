@@ -79,7 +79,7 @@ message Provider {
   string display_name = 3;
   bool is_enabled = 4;
   string base_url = 5;
-  string api_key_masked = 6;
+  reserved 6; // was api_key_masked — keys are write-once and never returned
   google.protobuf.Timestamp created_at = 7;
   google.protobuf.Timestamp updated_at = 8;
   // slug disambiguates rows that share a provider_id (multi-key
@@ -87,6 +87,10 @@ message Provider {
   // Auto-derived from display_name on the client (kebab-case); user
   // can override.
   string slug = 9;
+  // has_api_key reports that a key is configured, without ever sending it
+  // (keys are write-once + encrypted at rest). Lets the admin UI show a
+  // "configured" state and the create/edit form treat the key as set-once.
+  bool has_api_key = 10;
 }
 
 // ProviderInfo represents a known LLM provider from the catalog.

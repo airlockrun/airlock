@@ -50,8 +50,12 @@ const router = createRouter({
         // in the sidebar only once the first message is sent (mirrors
         // agent chat's wasNew flow). /system/chat/:conversationId opens
         // an existing conversation.
-        { path: 'system/chat', name: 'system-chat-new', component: () => import('@/views/SystemChatView.vue') },
-        { path: 'system/chat/:conversationId', name: 'system-chat', component: () => import('@/views/SystemChatView.vue') },
+        // Both share viewKey so the <router-view :key> stays constant across the
+        // new→saved transition (first send does router.replace to add the id).
+        // Without it the route NAME changes and the view remounts mid-stream,
+        // wiping the in-flight first reply (it only reappears on refresh).
+        { path: 'system/chat', name: 'system-chat-new', component: () => import('@/views/SystemChatView.vue'), meta: { viewKey: 'system-chat' } },
+        { path: 'system/chat/:conversationId', name: 'system-chat', component: () => import('@/views/SystemChatView.vue'), meta: { viewKey: 'system-chat' } },
         { path: 'agents/:id', name: 'agent-detail', component: () => import('@/views/AgentDetailView.vue') },
         { path: 'agents/:id/chat', name: 'agent-chat', component: () => import('@/views/AgentChatView.vue') },
         { path: 'agents/:id/runs/:runId', name: 'run-detail', component: () => import('@/views/RunDetailView.vue') },

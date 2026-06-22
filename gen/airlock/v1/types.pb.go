@@ -402,20 +402,23 @@ func (x *UserSummary) GetDisplayName() string {
 
 // Provider represents a configured LLM provider with encrypted API key.
 type Provider struct {
-	state        protoimpl.MessageState `protogen:"open.v1"`
-	Id           string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	ProviderId   string                 `protobuf:"bytes,2,opt,name=provider_id,json=providerId,proto3" json:"provider_id,omitempty"`
-	DisplayName  string                 `protobuf:"bytes,3,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
-	IsEnabled    bool                   `protobuf:"varint,4,opt,name=is_enabled,json=isEnabled,proto3" json:"is_enabled,omitempty"`
-	BaseUrl      string                 `protobuf:"bytes,5,opt,name=base_url,json=baseUrl,proto3" json:"base_url,omitempty"`
-	ApiKeyMasked string                 `protobuf:"bytes,6,opt,name=api_key_masked,json=apiKeyMasked,proto3" json:"api_key_masked,omitempty"`
-	CreatedAt    *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
-	UpdatedAt    *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	Id          string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	ProviderId  string                 `protobuf:"bytes,2,opt,name=provider_id,json=providerId,proto3" json:"provider_id,omitempty"`
+	DisplayName string                 `protobuf:"bytes,3,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
+	IsEnabled   bool                   `protobuf:"varint,4,opt,name=is_enabled,json=isEnabled,proto3" json:"is_enabled,omitempty"`
+	BaseUrl     string                 `protobuf:"bytes,5,opt,name=base_url,json=baseUrl,proto3" json:"base_url,omitempty"`
+	CreatedAt   *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	UpdatedAt   *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
 	// slug disambiguates rows that share a provider_id (multi-key
 	// support: "openai/personal" + "openai/team-acme"). Required.
 	// Auto-derived from display_name on the client (kebab-case); user
 	// can override.
-	Slug          string `protobuf:"bytes,9,opt,name=slug,proto3" json:"slug,omitempty"`
+	Slug string `protobuf:"bytes,9,opt,name=slug,proto3" json:"slug,omitempty"`
+	// has_api_key reports that a key is configured, without ever sending it
+	// (keys are write-once + encrypted at rest). Lets the admin UI show a
+	// "configured" state and the create/edit form treat the key as set-once.
+	HasApiKey     bool `protobuf:"varint,10,opt,name=has_api_key,json=hasApiKey,proto3" json:"has_api_key,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -485,13 +488,6 @@ func (x *Provider) GetBaseUrl() string {
 	return ""
 }
 
-func (x *Provider) GetApiKeyMasked() string {
-	if x != nil {
-		return x.ApiKeyMasked
-	}
-	return ""
-}
-
 func (x *Provider) GetCreatedAt() *timestamppb.Timestamp {
 	if x != nil {
 		return x.CreatedAt
@@ -511,6 +507,13 @@ func (x *Provider) GetSlug() string {
 		return x.Slug
 	}
 	return ""
+}
+
+func (x *Provider) GetHasApiKey() bool {
+	if x != nil {
+		return x.HasApiKey
+	}
+	return false
 }
 
 // ProviderInfo represents a known LLM provider from the catalog.
@@ -4443,13 +4446,14 @@ const file_airlock_v1_types_proto_rawDesc = "" +
 	"\fdisplay_name\x18\x03 \x01(\tR\vdisplayName\x12\x1d\n" +
 	"\n" +
 	"is_enabled\x18\x04 \x01(\bR\tisEnabled\x12\x19\n" +
-	"\bbase_url\x18\x05 \x01(\tR\abaseUrl\x12$\n" +
-	"\x0eapi_key_masked\x18\x06 \x01(\tR\fapiKeyMasked\x129\n" +
+	"\bbase_url\x18\x05 \x01(\tR\abaseUrl\x129\n" +
 	"\n" +
 	"created_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x129\n" +
 	"\n" +
 	"updated_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x12\x12\n" +
-	"\x04slug\x18\t \x01(\tR\x04slug\"2\n" +
+	"\x04slug\x18\t \x01(\tR\x04slug\x12\x1e\n" +
+	"\vhas_api_key\x18\n" +
+	" \x01(\bR\thasApiKeyJ\x04\b\x06\x10\a\"2\n" +
 	"\fProviderInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\"\xc3\x01\n" +

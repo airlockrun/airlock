@@ -311,6 +311,23 @@ message ListConversationsResponse {
   repeated ConversationInfo conversations = 1;
 }
 
+// One row of the merged sidebar feed (agent web conversations + system
+// conversations), keyset-paginated newest-first.
+message ConversationFeedItem {
+  string kind = 1; // "agent" | "system"
+  string id = 2;
+  string agent_id = 3; // empty for system conversations
+  string title = 4;
+  google.protobuf.Timestamp updated_at = 5;
+  string status = 6; // system conversations only (e.g. awaiting_confirmation)
+}
+
+message ListConversationFeedResponse {
+  repeated ConversationFeedItem items = 1;
+  // Opaque cursor for the next (older) page; empty when the end is reached.
+  string next_cursor = 2;
+}
+
 message GetConversationResponse {
   ConversationInfo conversation = 1;
   repeated AgentMessageInfo messages = 2;

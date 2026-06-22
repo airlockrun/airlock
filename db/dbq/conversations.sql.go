@@ -359,6 +359,74 @@ func (q *Queries) ListAllWebConversationsByUser(ctx context.Context, userID pgty
 	return items, nil
 }
 
+const listConversationFeed = `-- name: ListConversationFeed :many
+SELECT kind, id, agent_id, title, updated_at, status FROM (
+    SELECT 'agent'::text AS kind, ac.id, ac.agent_id, ac.title, ac.updated_at, ''::text AS status
+    FROM agent_conversations ac
+    WHERE ac.user_id = $1 AND ac.source = 'web'
+      AND (ac.updated_at < $2 OR (ac.updated_at = $2 AND ac.id < $3))
+    UNION ALL
+    SELECT 'system'::text AS kind, sc.id, NULL::uuid AS agent_id, sc.title, sc.updated_at, sc.status
+    FROM system_conversations sc
+    WHERE sc.user_id = $1 AND sc.source = 'web'
+      AND (sc.updated_at < $2 OR (sc.updated_at = $2 AND sc.id < $3))
+) feed
+ORDER BY 5 DESC, 2 DESC
+LIMIT $4
+`
+
+type ListConversationFeedParams struct {
+	UserID        pgtype.UUID        `json:"user_id"`
+	CursorUpdated pgtype.Timestamptz `json:"cursor_updated"`
+	CursorID      pgtype.UUID        `json:"cursor_id"`
+	Lim           int32              `json:"lim"`
+}
+
+type ListConversationFeedRow struct {
+	Kind      string             `json:"kind"`
+	ID        pgtype.UUID        `json:"id"`
+	AgentID   pgtype.UUID        `json:"agent_id"`
+	Title     string             `json:"title"`
+	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+	Status    string             `json:"status"`
+}
+
+// Merged sidebar feed: the user's web agent-conversations + system
+// conversations as one stream, keyset-paginated by (updated_at, id) DESC so
+// the windowed sidebar can page without loading everything. The first page
+// passes cursor_updated='infinity' and cursor_id = the max uuid.
+func (q *Queries) ListConversationFeed(ctx context.Context, arg ListConversationFeedParams) ([]ListConversationFeedRow, error) {
+	rows, err := q.db.Query(ctx, listConversationFeed,
+		arg.UserID,
+		arg.CursorUpdated,
+		arg.CursorID,
+		arg.Lim,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListConversationFeedRow{}
+	for rows.Next() {
+		var i ListConversationFeedRow
+		if err := rows.Scan(
+			&i.Kind,
+			&i.ID,
+			&i.AgentID,
+			&i.Title,
+			&i.UpdatedAt,
+			&i.Status,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listConversationsByAgent = `-- name: ListConversationsByAgent :many
 SELECT id, agent_id, bridge_id, user_id, source, external_id, title, metadata, settings, context_checkpoint_message_id, created_at, updated_at FROM agent_conversations
 WHERE agent_id = $1 AND user_id = $2 AND source <> 'a2a'

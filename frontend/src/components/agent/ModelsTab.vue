@@ -18,18 +18,28 @@ import {
 } from '@/composables/useModelCapabilities'
 import { useProvidersStore } from '@/stores/providers'
 import { useModelsAllowedStore } from '@/stores/modelsAllowed'
+import { useAuthStore } from '@/stores/auth'
 import type { AgentModelConfig, ModelSlotInfo } from '@/gen/airlock/v1/api_pb'
 import { AgentModelConfigSchema, ModelSlotInfoSchema } from '@/gen/airlock/v1/api_pb'
 
-const props = defineProps<{ agentId: string }>()
+// yourAccess is the caller's per-agent access ("admin"/"user"/"public"), passed
+// down from AgentDetailView. Editing models needs both agent-admin (to save) and
+// the manager+ provider list (to pick from); otherwise the tab is read-only.
+const props = defineProps<{ agentId: string; yourAccess?: string }>()
 const emit = defineEmits<{ populated: [count: number] }>()
 
 const agents = useAgentsStore()
 const catalog = useCatalogStore()
 const providers = useProvidersStore()
 const modelsAllowed = useModelsAllowedStore()
+const auth = useAuthStore()
 const toast = useToast()
 const { groupModels, searchModelOptions } = useModelCapabilities({ restrictToAllowed: true })
+
+// Editing requires the provider list (manager+, TenantProviderView) AND
+// agent-admin. A plain member / users-group caller sees the current models
+// read-only and we never query providers for them.
+const canEdit = computed(() => auth.can('tenant.provider.view') && props.yourAccess === 'admin')
 
 const loading = ref(true)
 const saving = ref(false)
@@ -75,12 +85,16 @@ function refreshPickerValues() {
 
 onMounted(async () => {
   try {
-    await Promise.all([
-      catalog.fetchConfiguredModels(),
-      catalog.fetchCapabilities(),
-      providers.fetchProviders(),
-      modelsAllowed.fetchAllowed(),
-    ])
+    // Picker data (catalog + providers + allowed set) is only needed — and only
+    // permitted (providers is manager+) — when the caller can edit.
+    if (canEdit.value) {
+      await Promise.all([
+        catalog.fetchConfiguredModels(),
+        catalog.fetchCapabilities(),
+        providers.fetchProviders(),
+        modelsAllowed.fetchAllowed(),
+      ])
+    }
     config.value = await agents.fetchModelConfig(props.agentId)
     refreshPickerValues()
   } catch (err: any) {
@@ -89,6 +103,23 @@ onMounted(async () => {
     loading.value = false
   }
 })
+
+// Read-only display metadata (label + icon) for the eight capability slots,
+// keyed by the AgentModelConfig field. Used when canEdit is false to show the
+// current assignment without the catalog-backed picker.
+const readonlyRows: { key: keyof AgentModelConfig; label: string; icon: string }[] = [
+  { key: 'buildModel', label: 'Build Model', icon: 'pi pi-hammer' },
+  { key: 'execModel', label: 'Execution Model (Text)', icon: 'pi pi-align-left' },
+  { key: 'visionModel', label: 'Vision', icon: 'pi pi-image' },
+  { key: 'sttModel', label: 'STT', icon: 'pi pi-microphone' },
+  { key: 'ttsModel', label: 'TTS', icon: 'pi pi-volume-up' },
+  { key: 'imageGenModel', label: 'Image Gen', icon: 'pi pi-palette' },
+  { key: 'embeddingModel', label: 'Embedding', icon: 'pi pi-database' },
+  { key: 'searchModel', label: 'Web Search', icon: 'pi pi-search' },
+]
+function currentModel(key: keyof AgentModelConfig): string {
+  return (config.value as any)[key] || 'Inherits system default'
+}
 
 // --- Rows. Each binds to a capability-override field on `config`.
 interface ConfigRow {
@@ -251,6 +282,7 @@ async function save() {
     <Skeleton height="12rem" />
   </div>
   <div v-else style="display: flex; flex-direction: column; gap: 1.75rem">
+    <template v-if="canEdit">
     <!-- Per-agent capability overrides -->
     <div>
       <h3 class="models-subhead">Capability overrides</h3>
@@ -340,6 +372,42 @@ async function save() {
     <div>
       <Button label="Save" :loading="saving" @click="save" />
     </div>
+    </template>
+
+    <!-- Read-only view: non-admin members / users-group can't edit models and
+         we never query providers for them. Show the current assignments. -->
+    <template v-else>
+      <div>
+        <h3 class="models-subhead">Models</h3>
+        <p class="models-sub">
+          Models configured for this agent. Editing requires manager access and agent-admin.
+        </p>
+        <div style="display: flex; flex-direction: column; gap: 0.75rem">
+          <div
+            v-for="row in readonlyRows"
+            :key="row.key as string"
+            style="display: flex; align-items: center; gap: 0.5rem"
+          >
+            <i :class="row.icon" style="width: 1.25rem; color: var(--p-text-muted-color)" />
+            <span style="font-weight: 500; min-width: 11rem">{{ row.label }}</span>
+            <span style="color: var(--p-text-muted-color)">{{ currentModel(row.key) }}</span>
+          </div>
+        </div>
+      </div>
+      <div v-if="config.slots.length > 0">
+        <h3 class="models-subhead">Model slots</h3>
+        <div style="display: flex; flex-direction: column; gap: 0.5rem">
+          <div
+            v-for="slot in config.slots"
+            :key="slot.slug"
+            style="display: flex; align-items: center; gap: 0.5rem"
+          >
+            <span style="font-family: var(--p-font-family-monospace, monospace); font-weight: 600; min-width: 11rem">{{ slot.slug }}</span>
+            <span style="color: var(--p-text-muted-color)">{{ slot.assignedModel || 'Inherits capability default' }}</span>
+          </div>
+        </div>
+      </div>
+    </template>
   </div>
 </template>
 

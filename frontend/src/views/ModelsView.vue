@@ -40,6 +40,12 @@ const groups = computed(() => {
 
 const allowedCount = computed(() => grants.grants.length)
 
+// Catalog costs are USD per 1M tokens. Trim trailing zeros so $3.00 reads
+// "$3" but $0.15 stays "$0.15"; 0 (unknown) renders as a dash by the caller.
+function fmtPrice(v: number): string {
+  return '$' + +v.toFixed(2)
+}
+
 async function toggle(provider: Provider, model: ModelInfo, on: boolean) {
   try {
     if (on) {
@@ -115,6 +121,24 @@ async function toggle(provider: Provider, model: ModelInfo, on: boolean) {
                   style="font-size: 0.7rem"
                 />
               </div>
+            </template>
+          </Column>
+          <Column header="Price /1M" style="width: 8rem">
+            <template #body="{ data }">
+              <div
+                v-if="data.costInput || data.costOutput"
+                style="font-size: 0.75rem; line-height: 1.35"
+              >
+                <div>
+                  <span style="color: var(--p-text-muted-color)">in</span>
+                  {{ fmtPrice(data.costInput) }}
+                </div>
+                <div>
+                  <span style="color: var(--p-text-muted-color)">out</span>
+                  {{ fmtPrice(data.costOutput) }}
+                </div>
+              </div>
+              <span v-else style="color: var(--p-text-muted-color)">—</span>
             </template>
           </Column>
           <Column header="Allowed" style="width: 8rem">

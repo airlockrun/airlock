@@ -318,12 +318,16 @@ func NewRouter(cfg RouterConfig) http.Handler {
 
 		// Provider management (admin/owner only)
 		r.Route("/providers", func(r chi.Router) {
-			r.Use(auth.RequireTenantRole(authz.RequiredTenantRole(authz.TenantProviderManage)))
-			r.Get("/", providersHandler.List)
-			r.Post("/", providersHandler.Create)
-			r.Route("/{id}", func(r chi.Router) {
-				r.Patch("/", providersHandler.Update)
-				r.Delete("/", providersHandler.Delete)
+			// List is manager+ (model selection needs the non-secret provider
+			// list); mutations stay admin. The service re-gates either way.
+			r.With(auth.RequireTenantRole(authz.RequiredTenantRole(authz.TenantProviderView))).Get("/", providersHandler.List)
+			r.Group(func(r chi.Router) {
+				r.Use(auth.RequireTenantRole(authz.RequiredTenantRole(authz.TenantProviderManage)))
+				r.Post("/", providersHandler.Create)
+				r.Route("/{id}", func(r chi.Router) {
+					r.Patch("/", providersHandler.Update)
+					r.Delete("/", providersHandler.Delete)
+				})
 			})
 		})
 
@@ -586,6 +590,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		// Topic subscription is conversation-scoped: the conversation that
 		// subscribes is the one that receives the topic's notifications.
 		r.Get("/conversations", cH.ListAllConversations)
+		r.Get("/conversations/feed", cH.FeedConversations)
 		r.Get("/conversations/{convID}", cH.GetConversation)
 		r.Get("/conversations/{convID}/messages", cH.ListConversationMessages)
 		r.Delete("/conversations/{convID}", cH.DeleteConversation)
