@@ -91,12 +91,6 @@ SET agent_id = @agent_id, is_system = @is_system, is_manager = @is_manager, upda
 WHERE id = @id
 RETURNING *;
 
--- name: UpdateBridgeSettings :one
--- Replaces the whole settings JSON. Caller is responsible for merging if
--- they want partial updates; v1 of the edit dialog sends the full payload.
-UPDATE bridges SET settings = @settings, updated_at = now() WHERE id = @id
-RETURNING *;
-
 -- name: UpdateBridgeStatus :exec
 UPDATE bridges SET status = @status, updated_at = now() WHERE id = @id;
 

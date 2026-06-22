@@ -376,7 +376,7 @@ message BridgeInfo {
   string status = 7;        // "active", "error"
   google.protobuf.Timestamp created_at = 8;
   google.protobuf.Timestamp updated_at = 9;
-  BridgeSettings settings = 10;
+  reserved 10; // was BridgeSettings settings (public-DM config removed)
   // True when inbound DMs route to the in-airlock sysagent instead of an
   // agent. Disjoint with agent_id — exactly one is set.
   bool is_system = 11;
@@ -386,33 +386,6 @@ message BridgeInfo {
   // Last live can_manage_bots check failure for a manager bridge; empty when
   // healthy. Lets the UI show "capability revoked — re-enable in BotFather".
   string manager_error = 13;
-}
-
-// BridgeSettings is the user-tunable subset of bridge config exposed in
-// the dashboard. Stored in bridges.settings JSONB on the backend.
-message BridgeSettings {
-  // When true, unauthenticated users can DM the bot at AccessPublic.
-  // When false, unauth DMs are dropped (except /auth, which is the
-  // explicit linking opt-in and always works).
-  bool allow_public_dms = 1;
-
-  // Inactivity window after which a public conversation is finalized
-  // and deleted. 0 disables sweeping for this bridge. Only meaningful
-  // when public_session_mode == "session".
-  int32 public_session_ttl_seconds = 2;
-
-  // How public conversations carry context across turns:
-  //   "session"  — persistent, per-channel conversation; finalized by
-  //                the sweeper after public_session_ttl_seconds.
-  //   "one_shot" — fresh ephemeral conversation per turn; no history;
-  //                deleted right after the run. The user's referenced
-  //                message (reply / forward) is included as context.
-  string public_session_mode = 3;
-
-  // Wall-clock cap for a single public-DM prompt run, in seconds.
-  // Authenticated users are not affected. 0 means "use the default"
-  // (60 seconds).
-  int32 public_prompt_timeout_seconds = 4;
 }
 
 // PlatformIdentityInfo represents a user's verified external identity.

@@ -617,40 +617,30 @@ func (m *BridgeManager) HandleEvent(ctx context.Context, event BridgeEvent) erro
 	}
 
 	// Resolve user_id from platform identity. Lookup failure means the
-	// sender hasn't run /auth: if the bridge allows public DMs, we fall
-	// through with userID = uuid.Nil and downstream resolves AccessPublic;
-	// otherwise we silently drop.
-	var userID uuid.UUID
+	// sender hasn't run /auth — bridge chat requires a linked identity, so
+	// we silently drop. (/auth itself ran above, before this gate.)
 	identity, idErr := q.GetPlatformIdentity(ctx, dbq.GetPlatformIdentityParams{
 		Platform:       br.Type,
 		PlatformUserID: event.SenderID,
 	})
-	if idErr == nil {
-		userID = pgUUID(identity.UserID)
-	} else {
-		settings := bridgessvc.DecodeSettings(br.Settings)
-		if !settings.AllowPublicDMs {
-			m.logger.Debug("public DMs disabled; dropping unlinked sender",
-				zap.String("bridge", br.Name),
-				zap.String("sender_id", event.SenderID),
-			)
-			return nil
-		}
-		// userID stays uuid.Nil — public-access path.
+	if idErr != nil {
+		m.logger.Debug("dropping unlinked sender (bridge requires a linked identity)",
+			zap.String("bridge", br.Name),
+			zap.String("sender_id", event.SenderID),
+		)
+		return nil
 	}
+	userID := pgUUID(identity.UserID)
 
-	// Resolve effective echo for this conversation. For unlinked (public)
-	// senders we skip the user-keyed lookup and use the driver default —
-	// per-channel echo overrides for public conversations are deferred.
+	// Resolve effective echo for this conversation from the user's
+	// per-channel override, falling back to the driver default.
 	echo := driver.DefaultEcho()
-	if userID != uuid.Nil {
-		if conv, err := q.GetConversationBySource(ctx, dbq.GetConversationBySourceParams{
-			AgentID: toPgUUID(agentID),
-			UserID:  toPgUUID(userID),
-			Source:  "bridge",
-		}); err == nil {
-			echo = ResolveEcho(conv.Settings, driver.DefaultEcho())
-		}
+	if conv, err := q.GetConversationBySource(ctx, dbq.GetConversationBySourceParams{
+		AgentID: toPgUUID(agentID),
+		UserID:  toPgUUID(userID),
+		Source:  "bridge",
+	}); err == nil {
+		echo = ResolveEcho(conv.Settings, driver.DefaultEcho())
 	}
 
 	// Create event channel for streaming between PromptProxy and driver.
@@ -696,24 +686,8 @@ func (m *BridgeManager) HandleEvent(ctx context.Context, event BridgeEvent) erro
 		return nil
 	}
 
-	// Resolve session mode: only public (unlinked) senders honor the
-	// per-bridge one-shot toggle. Authenticated users always run in
-	// session mode.
-	settings := bridgessvc.DecodeSettings(br.Settings)
-	oneShot := userID == uuid.Nil && settings.PublicSessionMode == bridgessvc.PublicSessionModeOneShot
-
-	// Public callers run under a tighter per-prompt timeout than authenticated
-	// users so a noisy abuser can't tie up the agent. Wrapping ctx with a
-	// deadline propagates through ForwardPrompt → outbound HTTP → agent.
-	promptCtx := ctx
-	if userID == uuid.Nil {
-		var cancel context.CancelFunc
-		promptCtx, cancel = context.WithTimeout(ctx, time.Duration(settings.PublicPromptTimeoutSeconds)*time.Second)
-		defer cancel()
-	}
-
 	// Route to prompt proxy — streams events into the channel.
-	_, err = m.prompter.HandleMessage(promptCtx, agentID, event.BridgeID, userID, event.ExternalID, true, oneShot, event.Text, event.Files, event.ReferencedMessage, respEvents)
+	_, err = m.prompter.HandleMessage(ctx, agentID, event.BridgeID, userID, event.ExternalID, true, event.Text, event.Files, event.ReferencedMessage, respEvents)
 	if err != nil {
 		return fmt.Errorf("prompt proxy: %w", err)
 	}

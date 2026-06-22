@@ -625,44 +625,6 @@ func (q *Queries) UpdateBridgeLastPolled(ctx context.Context, arg UpdateBridgeLa
 	return err
 }
 
-const updateBridgeSettings = `-- name: UpdateBridgeSettings :one
-UPDATE bridges SET settings = $1, updated_at = now() WHERE id = $2
-RETURNING id, agent_id, owner_principal_id, type, name, bot_username, status, is_system, config, settings, bot_token_ref, last_polled_at, created_at, updated_at, managed, telegram_bot_user_id, is_manager, manager_error
-`
-
-type UpdateBridgeSettingsParams struct {
-	Settings []byte      `json:"settings"`
-	ID       pgtype.UUID `json:"id"`
-}
-
-// Replaces the whole settings JSON. Caller is responsible for merging if
-// they want partial updates; v1 of the edit dialog sends the full payload.
-func (q *Queries) UpdateBridgeSettings(ctx context.Context, arg UpdateBridgeSettingsParams) (Bridge, error) {
-	row := q.db.QueryRow(ctx, updateBridgeSettings, arg.Settings, arg.ID)
-	var i Bridge
-	err := row.Scan(
-		&i.ID,
-		&i.AgentID,
-		&i.OwnerPrincipalID,
-		&i.Type,
-		&i.Name,
-		&i.BotUsername,
-		&i.Status,
-		&i.IsSystem,
-		&i.Config,
-		&i.Settings,
-		&i.BotTokenRef,
-		&i.LastPolledAt,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.Managed,
-		&i.TelegramBotUserID,
-		&i.IsManager,
-		&i.ManagerError,
-	)
-	return i, err
-}
-
 const updateBridgeStatus = `-- name: UpdateBridgeStatus :exec
 UPDATE bridges SET status = $1, updated_at = now() WHERE id = $2
 `

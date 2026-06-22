@@ -33,12 +33,6 @@ export const useBridgesStore = defineStore('bridges', () => {
     payload: {
       agentId: string
       isSystem?: boolean
-      settings?: {
-        allowPublicDms: boolean
-        publicSessionTtlSeconds: number
-        publicSessionMode: 'session' | 'one_shot'
-        publicPromptTimeoutSeconds: number
-      }
     },
   ) {
     const { data } = await api.put(`/api/v1/bridges/${id}`, payload)

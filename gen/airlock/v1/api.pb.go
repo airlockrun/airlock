@@ -3837,9 +3837,8 @@ func (x *CreateBridgeRequest) GetIsSystem() bool {
 // callers can rebind the agent, edit settings, or do both in one
 // request. A null/unset field leaves that aspect unchanged.
 type UpdateBridgeRequest struct {
-	state    protoimpl.MessageState `protogen:"open.v1"`
-	AgentId  string                 `protobuf:"bytes,1,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"`
-	Settings *BridgeSettings        `protobuf:"bytes,2,opt,name=settings,proto3" json:"settings,omitempty"`
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	AgentId string                 `protobuf:"bytes,1,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"`
 	// Switch a bridge between the system-agent surface and an agent
 	// surface. Optional: unset = leave as-is. Switching to system
 	// requires the TenantBridgeSystem permission and forces agent_id
@@ -3887,13 +3886,6 @@ func (x *UpdateBridgeRequest) GetAgentId() string {
 		return x.AgentId
 	}
 	return ""
-}
-
-func (x *UpdateBridgeRequest) GetSettings() *BridgeSettings {
-	if x != nil {
-		return x.Settings
-	}
-	return nil
 }
 
 func (x *UpdateBridgeRequest) GetIsSystem() bool {
@@ -7451,16 +7443,15 @@ const file_airlock_v1_api_proto_rawDesc = "" +
 	"\x04type\x18\x04 \x01(\tR\x04type\x12\x1d\n" +
 	"\n" +
 	"is_manager\x18\x05 \x01(\bR\tisManager\x12\x1b\n" +
-	"\tis_system\x18\x06 \x01(\bR\bisSystem\"\xcb\x01\n" +
+	"\tis_system\x18\x06 \x01(\bR\bisSystem\"\x99\x01\n" +
 	"\x13UpdateBridgeRequest\x12\x19\n" +
-	"\bagent_id\x18\x01 \x01(\tR\aagentId\x126\n" +
-	"\bsettings\x18\x02 \x01(\v2\x1a.airlock.v1.BridgeSettingsR\bsettings\x12 \n" +
+	"\bagent_id\x18\x01 \x01(\tR\aagentId\x12 \n" +
 	"\tis_system\x18\x03 \x01(\bH\x00R\bisSystem\x88\x01\x01\x12\"\n" +
 	"\n" +
 	"is_manager\x18\x04 \x01(\bH\x01R\tisManager\x88\x01\x01B\f\n" +
 	"\n" +
 	"_is_systemB\r\n" +
-	"\v_is_manager\"G\n" +
+	"\v_is_managerJ\x04\b\x02\x10\x03\"G\n" +
 	"\x13ListBridgesResponse\x120\n" +
 	"\abridges\x18\x01 \x03(\v2\x16.airlock.v1.BridgeInfoR\abridges\"\\\n" +
 	"\x18ListCapabilitiesResponse\x12@\n" +
@@ -7854,25 +7845,24 @@ var file_airlock_v1_api_proto_goTypes = []any{
 	(*ConversationInfo)(nil),               // 139: airlock.v1.ConversationInfo
 	(*timestamppb.Timestamp)(nil),          // 140: google.protobuf.Timestamp
 	(*ToolInfo)(nil),                       // 141: airlock.v1.ToolInfo
-	(*BridgeSettings)(nil),                 // 142: airlock.v1.BridgeSettings
-	(*BridgeInfo)(nil),                     // 143: airlock.v1.BridgeInfo
-	(*ProviderCapabilityInfo)(nil),         // 144: airlock.v1.ProviderCapabilityInfo
-	(*PlatformIdentityInfo)(nil),           // 145: airlock.v1.PlatformIdentityInfo
-	(*FileInfo)(nil),                       // 146: airlock.v1.FileInfo
-	(*TopicInfo)(nil),                      // 147: airlock.v1.TopicInfo
-	(*SystemSettingsInfo)(nil),             // 148: airlock.v1.SystemSettingsInfo
-	(*GitCredential)(nil),                  // 149: airlock.v1.GitCredential
-	(*Passkey)(nil),                        // 150: airlock.v1.Passkey
-	(*AgentGitConfig)(nil),                 // 151: airlock.v1.AgentGitConfig
-	(*MCPServerInfo)(nil),                  // 152: airlock.v1.MCPServerInfo
-	(*MCPStatusInfo)(nil),                  // 153: airlock.v1.MCPStatusInfo
-	(*EnvVarInfo)(nil),                     // 154: airlock.v1.EnvVarInfo
-	(*SiblingInfo)(nil),                    // 155: airlock.v1.SiblingInfo
-	(*AddableSiblingInfo)(nil),             // 156: airlock.v1.AddableSiblingInfo
-	(*A2ASettings)(nil),                    // 157: airlock.v1.A2ASettings
-	(*ExecEndpointInfo)(nil),               // 158: airlock.v1.ExecEndpointInfo
-	(*ExecEndpointTestResult)(nil),         // 159: airlock.v1.ExecEndpointTestResult
-	(*SetupCountsInfo)(nil),                // 160: airlock.v1.SetupCountsInfo
+	(*BridgeInfo)(nil),                     // 142: airlock.v1.BridgeInfo
+	(*ProviderCapabilityInfo)(nil),         // 143: airlock.v1.ProviderCapabilityInfo
+	(*PlatformIdentityInfo)(nil),           // 144: airlock.v1.PlatformIdentityInfo
+	(*FileInfo)(nil),                       // 145: airlock.v1.FileInfo
+	(*TopicInfo)(nil),                      // 146: airlock.v1.TopicInfo
+	(*SystemSettingsInfo)(nil),             // 147: airlock.v1.SystemSettingsInfo
+	(*GitCredential)(nil),                  // 148: airlock.v1.GitCredential
+	(*Passkey)(nil),                        // 149: airlock.v1.Passkey
+	(*AgentGitConfig)(nil),                 // 150: airlock.v1.AgentGitConfig
+	(*MCPServerInfo)(nil),                  // 151: airlock.v1.MCPServerInfo
+	(*MCPStatusInfo)(nil),                  // 152: airlock.v1.MCPStatusInfo
+	(*EnvVarInfo)(nil),                     // 153: airlock.v1.EnvVarInfo
+	(*SiblingInfo)(nil),                    // 154: airlock.v1.SiblingInfo
+	(*AddableSiblingInfo)(nil),             // 155: airlock.v1.AddableSiblingInfo
+	(*A2ASettings)(nil),                    // 156: airlock.v1.A2ASettings
+	(*ExecEndpointInfo)(nil),               // 157: airlock.v1.ExecEndpointInfo
+	(*ExecEndpointTestResult)(nil),         // 158: airlock.v1.ExecEndpointTestResult
+	(*SetupCountsInfo)(nil),                // 159: airlock.v1.SetupCountsInfo
 }
 var file_airlock_v1_api_proto_depIdxs = []int32{
 	125, // 0: airlock.v1.RegisterResponse.user:type_name -> airlock.v1.User
@@ -7919,51 +7909,50 @@ var file_airlock_v1_api_proto_depIdxs = []int32{
 	54,  // 41: airlock.v1.ListAgentMembersResponse.members:type_name -> airlock.v1.AgentMemberInfo
 	132, // 42: airlock.v1.ListConnectionsResponse.connections:type_name -> airlock.v1.ConnectionInfo
 	140, // 43: airlock.v1.CredentialStatusResponse.token_expires_at:type_name -> google.protobuf.Timestamp
-	142, // 44: airlock.v1.UpdateBridgeRequest.settings:type_name -> airlock.v1.BridgeSettings
-	143, // 45: airlock.v1.ListBridgesResponse.bridges:type_name -> airlock.v1.BridgeInfo
-	144, // 46: airlock.v1.ListCapabilitiesResponse.providers:type_name -> airlock.v1.ProviderCapabilityInfo
-	145, // 47: airlock.v1.ListPlatformIdentitiesResponse.identities:type_name -> airlock.v1.PlatformIdentityInfo
-	146, // 48: airlock.v1.ListFilesResponse.files:type_name -> airlock.v1.FileInfo
-	147, // 49: airlock.v1.ListTopicsResponse.topics:type_name -> airlock.v1.TopicInfo
-	148, // 50: airlock.v1.GetSystemSettingsResponse.settings:type_name -> airlock.v1.SystemSettingsInfo
-	148, // 51: airlock.v1.UpdateSystemSettingsRequest.settings:type_name -> airlock.v1.SystemSettingsInfo
-	148, // 52: airlock.v1.UpdateSystemSettingsResponse.settings:type_name -> airlock.v1.SystemSettingsInfo
-	149, // 53: airlock.v1.CreateGitCredentialResponse.credential:type_name -> airlock.v1.GitCredential
-	149, // 54: airlock.v1.ListGitCredentialsResponse.credentials:type_name -> airlock.v1.GitCredential
-	150, // 55: airlock.v1.ListPasskeysResponse.passkeys:type_name -> airlock.v1.Passkey
-	150, // 56: airlock.v1.RegisterPasskeyResponse.passkey:type_name -> airlock.v1.Passkey
-	151, // 57: airlock.v1.ConnectAgentGitResponse.config:type_name -> airlock.v1.AgentGitConfig
-	151, // 58: airlock.v1.GetAgentGitConfigResponse.config:type_name -> airlock.v1.AgentGitConfig
-	152, // 59: airlock.v1.ListMCPServersResponse.mcp_servers:type_name -> airlock.v1.MCPServerInfo
-	153, // 60: airlock.v1.MCPCredentialStatusResponse.status:type_name -> airlock.v1.MCPStatusInfo
-	154, // 61: airlock.v1.ListEnvVarsResponse.env_vars:type_name -> airlock.v1.EnvVarInfo
-	155, // 62: airlock.v1.ListSiblingsResponse.siblings:type_name -> airlock.v1.SiblingInfo
-	156, // 63: airlock.v1.ListAddableSiblingsResponse.agents:type_name -> airlock.v1.AddableSiblingInfo
-	157, // 64: airlock.v1.GetAgentSharingResponse.settings:type_name -> airlock.v1.A2ASettings
-	157, // 65: airlock.v1.UpdateAgentSharingRequest.settings:type_name -> airlock.v1.A2ASettings
-	157, // 66: airlock.v1.UpdateAgentSharingResponse.settings:type_name -> airlock.v1.A2ASettings
-	158, // 67: airlock.v1.ListExecEndpointsResponse.endpoints:type_name -> airlock.v1.ExecEndpointInfo
-	158, // 68: airlock.v1.ConfigureExecEndpointResponse.endpoint:type_name -> airlock.v1.ExecEndpointInfo
-	158, // 69: airlock.v1.RotateExecKeypairResponse.endpoint:type_name -> airlock.v1.ExecEndpointInfo
-	159, // 70: airlock.v1.TestExecEndpointResponse.result:type_name -> airlock.v1.ExecEndpointTestResult
-	160, // 71: airlock.v1.ConnectionSetupStatusResponse.counts:type_name -> airlock.v1.SetupCountsInfo
-	105, // 72: airlock.v1.ListResourceGrantsResponse.grants:type_name -> airlock.v1.ResourceGrantInfo
-	108, // 73: airlock.v1.ListModelGrantsResponse.grants:type_name -> airlock.v1.ModelGrantInfo
-	110, // 74: airlock.v1.ListAllowedModelsResponse.models:type_name -> airlock.v1.AllowedModel
-	140, // 75: airlock.v1.OwnedResourceInfo.created_at:type_name -> google.protobuf.Timestamp
-	140, // 76: airlock.v1.OwnedResourceInfo.last_used_at:type_name -> google.protobuf.Timestamp
-	112, // 77: airlock.v1.ListOwnedResourcesResponse.resources:type_name -> airlock.v1.OwnedResourceInfo
-	114, // 78: airlock.v1.GetUsageResponse.summary:type_name -> airlock.v1.UsageSummary
-	115, // 79: airlock.v1.GetUsageResponse.by_agent:type_name -> airlock.v1.UsageByAgent
-	117, // 80: airlock.v1.GetUsageResponse.by_model:type_name -> airlock.v1.UsageByModel
-	116, // 81: airlock.v1.GetUsageResponse.by_user:type_name -> airlock.v1.UsageByUser
-	119, // 82: airlock.v1.ListNeedsResponse.needs:type_name -> airlock.v1.NeedInfo
-	121, // 83: airlock.v1.ListCandidatesResponse.candidates:type_name -> airlock.v1.CandidateInfo
-	84,  // [84:84] is the sub-list for method output_type
-	84,  // [84:84] is the sub-list for method input_type
-	84,  // [84:84] is the sub-list for extension type_name
-	84,  // [84:84] is the sub-list for extension extendee
-	0,   // [0:84] is the sub-list for field type_name
+	142, // 44: airlock.v1.ListBridgesResponse.bridges:type_name -> airlock.v1.BridgeInfo
+	143, // 45: airlock.v1.ListCapabilitiesResponse.providers:type_name -> airlock.v1.ProviderCapabilityInfo
+	144, // 46: airlock.v1.ListPlatformIdentitiesResponse.identities:type_name -> airlock.v1.PlatformIdentityInfo
+	145, // 47: airlock.v1.ListFilesResponse.files:type_name -> airlock.v1.FileInfo
+	146, // 48: airlock.v1.ListTopicsResponse.topics:type_name -> airlock.v1.TopicInfo
+	147, // 49: airlock.v1.GetSystemSettingsResponse.settings:type_name -> airlock.v1.SystemSettingsInfo
+	147, // 50: airlock.v1.UpdateSystemSettingsRequest.settings:type_name -> airlock.v1.SystemSettingsInfo
+	147, // 51: airlock.v1.UpdateSystemSettingsResponse.settings:type_name -> airlock.v1.SystemSettingsInfo
+	148, // 52: airlock.v1.CreateGitCredentialResponse.credential:type_name -> airlock.v1.GitCredential
+	148, // 53: airlock.v1.ListGitCredentialsResponse.credentials:type_name -> airlock.v1.GitCredential
+	149, // 54: airlock.v1.ListPasskeysResponse.passkeys:type_name -> airlock.v1.Passkey
+	149, // 55: airlock.v1.RegisterPasskeyResponse.passkey:type_name -> airlock.v1.Passkey
+	150, // 56: airlock.v1.ConnectAgentGitResponse.config:type_name -> airlock.v1.AgentGitConfig
+	150, // 57: airlock.v1.GetAgentGitConfigResponse.config:type_name -> airlock.v1.AgentGitConfig
+	151, // 58: airlock.v1.ListMCPServersResponse.mcp_servers:type_name -> airlock.v1.MCPServerInfo
+	152, // 59: airlock.v1.MCPCredentialStatusResponse.status:type_name -> airlock.v1.MCPStatusInfo
+	153, // 60: airlock.v1.ListEnvVarsResponse.env_vars:type_name -> airlock.v1.EnvVarInfo
+	154, // 61: airlock.v1.ListSiblingsResponse.siblings:type_name -> airlock.v1.SiblingInfo
+	155, // 62: airlock.v1.ListAddableSiblingsResponse.agents:type_name -> airlock.v1.AddableSiblingInfo
+	156, // 63: airlock.v1.GetAgentSharingResponse.settings:type_name -> airlock.v1.A2ASettings
+	156, // 64: airlock.v1.UpdateAgentSharingRequest.settings:type_name -> airlock.v1.A2ASettings
+	156, // 65: airlock.v1.UpdateAgentSharingResponse.settings:type_name -> airlock.v1.A2ASettings
+	157, // 66: airlock.v1.ListExecEndpointsResponse.endpoints:type_name -> airlock.v1.ExecEndpointInfo
+	157, // 67: airlock.v1.ConfigureExecEndpointResponse.endpoint:type_name -> airlock.v1.ExecEndpointInfo
+	157, // 68: airlock.v1.RotateExecKeypairResponse.endpoint:type_name -> airlock.v1.ExecEndpointInfo
+	158, // 69: airlock.v1.TestExecEndpointResponse.result:type_name -> airlock.v1.ExecEndpointTestResult
+	159, // 70: airlock.v1.ConnectionSetupStatusResponse.counts:type_name -> airlock.v1.SetupCountsInfo
+	105, // 71: airlock.v1.ListResourceGrantsResponse.grants:type_name -> airlock.v1.ResourceGrantInfo
+	108, // 72: airlock.v1.ListModelGrantsResponse.grants:type_name -> airlock.v1.ModelGrantInfo
+	110, // 73: airlock.v1.ListAllowedModelsResponse.models:type_name -> airlock.v1.AllowedModel
+	140, // 74: airlock.v1.OwnedResourceInfo.created_at:type_name -> google.protobuf.Timestamp
+	140, // 75: airlock.v1.OwnedResourceInfo.last_used_at:type_name -> google.protobuf.Timestamp
+	112, // 76: airlock.v1.ListOwnedResourcesResponse.resources:type_name -> airlock.v1.OwnedResourceInfo
+	114, // 77: airlock.v1.GetUsageResponse.summary:type_name -> airlock.v1.UsageSummary
+	115, // 78: airlock.v1.GetUsageResponse.by_agent:type_name -> airlock.v1.UsageByAgent
+	117, // 79: airlock.v1.GetUsageResponse.by_model:type_name -> airlock.v1.UsageByModel
+	116, // 80: airlock.v1.GetUsageResponse.by_user:type_name -> airlock.v1.UsageByUser
+	119, // 81: airlock.v1.ListNeedsResponse.needs:type_name -> airlock.v1.NeedInfo
+	121, // 82: airlock.v1.ListCandidatesResponse.candidates:type_name -> airlock.v1.CandidateInfo
+	83,  // [83:83] is the sub-list for method output_type
+	83,  // [83:83] is the sub-list for method input_type
+	83,  // [83:83] is the sub-list for extension type_name
+	83,  // [83:83] is the sub-list for extension extendee
+	0,   // [0:83] is the sub-list for field type_name
 }
 
 func init() { file_airlock_v1_api_proto_init() }

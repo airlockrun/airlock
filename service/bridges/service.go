@@ -5,7 +5,6 @@ package bridges
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -85,26 +84,14 @@ func (s *Service) telegramCaps() (telegramCapabilities, bool) {
 	return c, ok
 }
 
-// SettingsUpdate carries the public-DM toggles when present on an
-// Update. The handler decides whether to send it (the proto's nil-ness
-// signals "don't change settings").
-type SettingsUpdate struct {
-	AllowPublicDMs             bool
-	PublicSessionTTLSeconds    int32
-	PublicSessionMode          string
-	PublicPromptTimeoutSeconds int32
-}
-
-// UpdateRequest is the input for Update. A nil Settings means "leave
-// settings alone". A nil IsSystem means "leave is_system as-is" — the
-// (AgentID, IsSystem) tuple maps to the new binding: IsSystem=true
-// forces agent-less (system surface), IsSystem=false requires a
-// non-empty AgentID.
+// UpdateRequest is the input for Update. A nil IsSystem means "leave
+// is_system as-is" — the (AgentID, IsSystem) tuple maps to the new
+// binding: IsSystem=true forces agent-less (system surface),
+// IsSystem=false requires a non-empty AgentID.
 type UpdateRequest struct {
 	AgentID   string
 	IsSystem  *bool
 	IsManager *bool // nil → leave as-is; Telegram-only, admin-gated
-	Settings  *SettingsUpdate
 }
 
 // Result bundles a bridge row with the owner info the UI needs in the
@@ -643,51 +630,6 @@ func (s *Service) Update(ctx context.Context, p authz.Principal, bridgeID uuid.U
 	if err != nil {
 		s.logger.Error("update bridge failed", zap.Error(err))
 		return Result{}, err
-	}
-	if req.Settings != nil {
-		mode := req.Settings.PublicSessionMode
-		if mode != PublicSessionModeOneShot {
-			mode = PublicSessionModeSession
-		}
-		timeout := int(req.Settings.PublicPromptTimeoutSeconds)
-		if timeout <= 0 {
-			timeout = DefaultPublicPromptTimeoutSeconds
-		}
-		allowPublicDMs := req.Settings.AllowPublicDMs
-		if br.IsSystem {
-			// System bridges route to the in-airlock sysagent, which
-			// runs every tool with the caller's tenant permissions —
-			// an unauthenticated DM has nothing to act with. The
-			// runtime path in trigger/bridge_sysagent.go already
-			// hard-rejects un-linked senders; force the persisted
-			// flag to match so the UI never advertises a setting
-			// that has no effect.
-			allowPublicDMs = false
-		}
-		settings := Settings{
-			AllowPublicDMs:             allowPublicDMs,
-			PublicSessionTTLSeconds:    int(req.Settings.PublicSessionTTLSeconds),
-			PublicSessionMode:          mode,
-			PublicPromptTimeoutSeconds: timeout,
-			// Force-true until a frontend toggle exists; the runtime
-			// already reads settings.WebAppEnabled, so switching to a
-			// user-controlled value later is a one-line flip to
-			// req.Settings.WebAppEnabled.
-			WebAppEnabled: true,
-		}
-		raw, mErr := json.Marshal(settings)
-		if mErr != nil {
-			s.logger.Error("marshal settings failed", zap.Error(mErr))
-			return Result{}, mErr
-		}
-		updated, err = q.UpdateBridgeSettings(ctx, dbq.UpdateBridgeSettingsParams{
-			ID:       pgtype.UUID{Bytes: bridgeID, Valid: true},
-			Settings: raw,
-		})
-		if err != nil {
-			s.logger.Error("update bridge settings failed", zap.Error(err))
-			return Result{}, err
-		}
 	}
 	s.bridgeMgr.AddBridge(bridgeID)
 	return Result{Bridge: updated, Owner: s.fetchOwner(ctx, q, updated.OwnerPrincipalID)}, nil
