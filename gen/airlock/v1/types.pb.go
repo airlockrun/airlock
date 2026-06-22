@@ -4003,11 +4003,13 @@ func (x *InboundSiblingInfo) GetEffectiveMaxAccess() string {
 // AddableSiblingInfo is a candidate agent the parent may add to its A2A
 // address book — any agent the parent's owner holds a grant on.
 type AddableSiblingInfo struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	Slug          string                 `protobuf:"bytes,2,opt,name=slug,proto3" json:"slug,omitempty"`
-	Name          string                 `protobuf:"bytes,3,opt,name=name,proto3" json:"name,omitempty"`
-	Description   string                 `protobuf:"bytes,4,opt,name=description,proto3" json:"description,omitempty"`
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	Id          string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Slug        string                 `protobuf:"bytes,2,opt,name=slug,proto3" json:"slug,omitempty"`
+	Name        string                 `protobuf:"bytes,3,opt,name=name,proto3" json:"name,omitempty"`
+	Description string                 `protobuf:"bytes,4,opt,name=description,proto3" json:"description,omitempty"`
+	// Display name of the candidate's owner (user or group).
+	OwnerName     string `protobuf:"bytes,7,opt,name=owner_name,json=ownerName,proto3" json:"owner_name,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -4066,6 +4068,13 @@ func (x *AddableSiblingInfo) GetName() string {
 func (x *AddableSiblingInfo) GetDescription() string {
 	if x != nil {
 		return x.Description
+	}
+	return ""
+}
+
+func (x *AddableSiblingInfo) GetOwnerName() string {
+	if x != nil {
+		return x.OwnerName
 	}
 	return ""
 }
@@ -4858,12 +4867,14 @@ const file_airlock_v1_types_proto_rawDesc = "" +
 	"owner_name\x18\x06 \x01(\tR\townerName\x129\n" +
 	"\n" +
 	"created_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x120\n" +
-	"\x14effective_max_access\x18\b \x01(\tR\x12effectiveMaxAccess\"z\n" +
+	"\x14effective_max_access\x18\b \x01(\tR\x12effectiveMaxAccess\"\x99\x01\n" +
 	"\x12AddableSiblingInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04slug\x18\x02 \x01(\tR\x04slug\x12\x12\n" +
 	"\x04name\x18\x03 \x01(\tR\x04name\x12 \n" +
-	"\vdescription\x18\x04 \x01(\tR\vdescriptionJ\x04\b\x05\x10\x06J\x04\b\x06\x10\a\"\x8e\x01\n" +
+	"\vdescription\x18\x04 \x01(\tR\vdescription\x12\x1d\n" +
+	"\n" +
+	"owner_name\x18\a \x01(\tR\townerNameJ\x04\b\x05\x10\x06J\x04\b\x06\x10\a\"\x8e\x01\n" +
 	"\vA2ASettings\x12(\n" +
 	"\x10allow_public_mcp\x18\x02 \x01(\bR\x0eallowPublicMcp\x12\x1f\n" +
 	"\vmcp_enabled\x18\x03 \x01(\bR\n" +

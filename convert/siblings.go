@@ -43,6 +43,7 @@ func AddableSiblingToProto(a siblingssvc.Addable) *airlockv1.AddableSiblingInfo 
 		Slug:        a.Slug,
 		Name:        a.Name,
 		Description: a.Description,
+		OwnerName:   a.OwnerName,
 	}
 }
 

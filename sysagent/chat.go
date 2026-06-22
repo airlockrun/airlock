@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/airlockrun/airlock/authz"
@@ -178,6 +179,7 @@ func (s *Service) envFor(ctx context.Context, userID uuid.UUID, platform string,
 		Date:         time.Now().Format("2006-01-02"),
 		Platform:     platform,
 		Conversation: conversationID.String(),
+		WebURL:       strings.TrimRight(s.publicURL, "/"),
 	}
 	if userID != uuid.Nil {
 		q := dbq.New(s.db.Pool())

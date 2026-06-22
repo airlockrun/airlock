@@ -28,6 +28,7 @@ interface AddableSibling {
   slug: string
   name: string
   description?: string
+  ownerName?: string
 }
 
 interface InboundSibling {
@@ -223,10 +224,16 @@ onMounted(loadAll)
         optionValue="id"
         placeholder="Pick an agent"
         style="width: 100%"
+        :pt="{ overlay: { style: 'max-width: 95vw' } }"
       >
         <template #option="slot">
-          <div>
+          <!-- white-space:normal so a long name/description wraps instead of
+               forcing the overlay wider than the viewport on mobile. -->
+          <div style="white-space: normal; overflow-wrap: anywhere; max-width: 100%">
             <strong>{{ slot.option.name }}</strong> <code>({{ slot.option.slug }})</code>
+            <span v-if="slot.option.ownerName" style="color: var(--p-text-muted-color); font-size: 0.85em">
+              · {{ slot.option.ownerName }}
+            </span>
             <div v-if="slot.option.description" style="color: var(--p-text-muted-color); font-size: 0.85em">
               {{ slot.option.description }}
             </div>

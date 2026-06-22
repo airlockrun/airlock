@@ -62,9 +62,14 @@ ORDER BY s.created_at;
 -- name: ListAddableSiblings :many
 -- Agents the parent MAY add as siblings: any agent its OWNER holds a grant
 -- on (a direct grant or a group in @owner_grantee_ids — incl. the All-Users
--- group), excluding the parent itself and already-added siblings.
-SELECT a.id, a.slug, a.name, a.description
+-- group), excluding the parent itself and already-added siblings. Carries the
+-- candidate's owner name (a user's display_name or a group's name) so the
+-- picker can disambiguate same-named agents.
+SELECT a.id, a.slug, a.name, a.description,
+       COALESCE(u.display_name, gr.name, '')::text AS owner_name
 FROM agents a
+LEFT JOIN users u   ON u.id  = a.owner_principal_id
+LEFT JOIN groups gr ON gr.id = a.owner_principal_id
 WHERE a.id <> @parent_agent_id
   AND NOT EXISTS (
       SELECT 1 FROM agent_siblings s
