@@ -43,6 +43,14 @@ export const useModelGrantsStore = defineStore('modelGrants', () => {
     grants.value = grants.value.filter((g) => g.id !== id)
   }
 
+  // usage reports how a (provider, model) is configured before a disable:
+  // agentCount agents pin it as an override (reset to the workspace default on
+  // revoke); isSystemDefault means it stays usable as a configured default.
+  async function usage(providerId: string, model: string): Promise<{ agentCount: number; isSystemDefault: boolean }> {
+    const { data } = await api.get('/api/v1/model-grants/usage', { params: { providerId, model } })
+    return { agentCount: Number(data?.agentCount ?? 0), isSystemDefault: !!data?.isSystemDefault }
+  }
+
   function isAllowed(providerRowId: string, model: string): boolean {
     return grantByKey.value.has(`${providerRowId}::${model}`)
   }
@@ -51,5 +59,5 @@ export const useModelGrantsStore = defineStore('modelGrants', () => {
     return grantByKey.value.get(`${providerRowId}::${model}`)
   }
 
-  return { grants, loading, grantByKey, fetchGrants, grant, revoke, isAllowed, grantId }
+  return { grants, loading, grantByKey, fetchGrants, grant, revoke, usage, isAllowed, grantId }
 })

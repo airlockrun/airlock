@@ -346,6 +346,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		r.Route("/model-grants", func(r chi.Router) {
 			r.Use(auth.RequireTenantRole(authz.RequiredTenantRole(authz.TenantModelGrantManage)))
 			r.Get("/", grantsHandler.ListModelGrants)
+			r.Get("/usage", grantsHandler.ModelUsage)
 			r.Post("/", grantsHandler.GrantModel)
 			r.Delete("/{id}", grantsHandler.RevokeModelGrant)
 		})

@@ -778,6 +778,16 @@ message ListModelGrantsResponse {
   repeated ModelGrantInfo grants = 1;
 }
 
+// ModelUsageResponse reports how a (provider, model) is currently configured,
+// so the UI can confirm before disabling it. agent_count is how many agents
+// pin it as a capability override or slot assignment (those reset to the
+// workspace default on disable); is_system_default means it's a configured
+// default and stays usable regardless of the allow-list (left untouched).
+message ModelUsageResponse {
+  int32 agent_count = 1;
+  bool is_system_default = 2;
+}
+
 // AllowedModel is one (provider row, model id) pair the caller may assign.
 message AllowedModel {
   string provider_id = 1;

@@ -123,6 +123,30 @@ func (h *GrantsHandler) RevokeModelGrant(w http.ResponseWriter, r *http.Request)
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// ModelUsage handles GET /api/v1/model-grants/usage?providerId=&model= —
+// how a (provider, model) is configured, so the UI can confirm a disable.
+func (h *GrantsHandler) ModelUsage(w http.ResponseWriter, r *http.Request) {
+	providerID, err := uuid.Parse(r.URL.Query().Get("providerId"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid provider ID")
+		return
+	}
+	model := r.URL.Query().Get("model")
+	if model == "" {
+		writeError(w, http.StatusBadRequest, "model is required")
+		return
+	}
+	count, isDefault, err := h.svc.ModelUsage(r.Context(), principalFromRequest(r), providerID, model)
+	if err != nil {
+		writeServiceError(w, err, "failed to read model usage")
+		return
+	}
+	writeProto(w, http.StatusOK, &airlockv1.ModelUsageResponse{
+		AgentCount:      int32(count),
+		IsSystemDefault: isDefault,
+	})
+}
+
 // ListModelGrants handles GET /api/v1/model-grants.
 func (h *GrantsHandler) ListModelGrants(w http.ResponseWriter, r *http.Request) {
 	grants, err := h.svc.ListModelGrants(r.Context(), principalFromRequest(r))

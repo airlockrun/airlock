@@ -11,6 +11,206 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const clearAgentBuildModel = `-- name: ClearAgentBuildModel :execrows
+
+UPDATE agents SET build_provider_id = NULL, build_model = '', updated_at = now()
+WHERE build_provider_id = $1 AND build_model = $2
+`
+
+type ClearAgentBuildModelParams struct {
+	CatalogID pgtype.UUID `json:"provider_id"`
+	Model     string      `json:"model"`
+}
+
+// Reset each capability override matching (provider, model) back to inherit
+// (NULL provider + ” model → falls back to the workspace default). One
+// statement per capability column keeps the named params unambiguous for the
+// query generator; the revoke path runs all eight.
+func (q *Queries) ClearAgentBuildModel(ctx context.Context, arg ClearAgentBuildModelParams) (int64, error) {
+	result, err := q.db.Exec(ctx, clearAgentBuildModel, arg.CatalogID, arg.Model)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const clearAgentEmbeddingModel = `-- name: ClearAgentEmbeddingModel :execrows
+UPDATE agents SET embedding_provider_id = NULL, embedding_model = '', updated_at = now()
+WHERE embedding_provider_id = $1 AND embedding_model = $2
+`
+
+type ClearAgentEmbeddingModelParams struct {
+	CatalogID pgtype.UUID `json:"provider_id"`
+	Model     string      `json:"model"`
+}
+
+func (q *Queries) ClearAgentEmbeddingModel(ctx context.Context, arg ClearAgentEmbeddingModelParams) (int64, error) {
+	result, err := q.db.Exec(ctx, clearAgentEmbeddingModel, arg.CatalogID, arg.Model)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const clearAgentExecModel = `-- name: ClearAgentExecModel :execrows
+UPDATE agents SET exec_provider_id = NULL, exec_model = '', updated_at = now()
+WHERE exec_provider_id = $1 AND exec_model = $2
+`
+
+type ClearAgentExecModelParams struct {
+	CatalogID pgtype.UUID `json:"provider_id"`
+	Model     string      `json:"model"`
+}
+
+func (q *Queries) ClearAgentExecModel(ctx context.Context, arg ClearAgentExecModelParams) (int64, error) {
+	result, err := q.db.Exec(ctx, clearAgentExecModel, arg.CatalogID, arg.Model)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const clearAgentImageGenModel = `-- name: ClearAgentImageGenModel :execrows
+UPDATE agents SET image_gen_provider_id = NULL, image_gen_model = '', updated_at = now()
+WHERE image_gen_provider_id = $1 AND image_gen_model = $2
+`
+
+type ClearAgentImageGenModelParams struct {
+	CatalogID pgtype.UUID `json:"provider_id"`
+	Model     string      `json:"model"`
+}
+
+func (q *Queries) ClearAgentImageGenModel(ctx context.Context, arg ClearAgentImageGenModelParams) (int64, error) {
+	result, err := q.db.Exec(ctx, clearAgentImageGenModel, arg.CatalogID, arg.Model)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const clearAgentModelSlotsForModel = `-- name: ClearAgentModelSlotsForModel :execrows
+UPDATE agent_model_slots SET assigned_provider_id = NULL, assigned_model = ''
+WHERE assigned_provider_id = $1 AND assigned_model = $2
+`
+
+type ClearAgentModelSlotsForModelParams struct {
+	CatalogID pgtype.UUID `json:"provider_id"`
+	Model     string      `json:"model"`
+}
+
+// Reset declared model-slot assignments matching (provider, model) to inherit.
+func (q *Queries) ClearAgentModelSlotsForModel(ctx context.Context, arg ClearAgentModelSlotsForModelParams) (int64, error) {
+	result, err := q.db.Exec(ctx, clearAgentModelSlotsForModel, arg.CatalogID, arg.Model)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const clearAgentSearchModel = `-- name: ClearAgentSearchModel :execrows
+UPDATE agents SET search_provider_id = NULL, search_model = '', updated_at = now()
+WHERE search_provider_id = $1 AND search_model = $2
+`
+
+type ClearAgentSearchModelParams struct {
+	CatalogID pgtype.UUID `json:"provider_id"`
+	Model     string      `json:"model"`
+}
+
+func (q *Queries) ClearAgentSearchModel(ctx context.Context, arg ClearAgentSearchModelParams) (int64, error) {
+	result, err := q.db.Exec(ctx, clearAgentSearchModel, arg.CatalogID, arg.Model)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const clearAgentSttModel = `-- name: ClearAgentSttModel :execrows
+UPDATE agents SET stt_provider_id = NULL, stt_model = '', updated_at = now()
+WHERE stt_provider_id = $1 AND stt_model = $2
+`
+
+type ClearAgentSttModelParams struct {
+	CatalogID pgtype.UUID `json:"provider_id"`
+	Model     string      `json:"model"`
+}
+
+func (q *Queries) ClearAgentSttModel(ctx context.Context, arg ClearAgentSttModelParams) (int64, error) {
+	result, err := q.db.Exec(ctx, clearAgentSttModel, arg.CatalogID, arg.Model)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const clearAgentTtsModel = `-- name: ClearAgentTtsModel :execrows
+UPDATE agents SET tts_provider_id = NULL, tts_model = '', updated_at = now()
+WHERE tts_provider_id = $1 AND tts_model = $2
+`
+
+type ClearAgentTtsModelParams struct {
+	CatalogID pgtype.UUID `json:"provider_id"`
+	Model     string      `json:"model"`
+}
+
+func (q *Queries) ClearAgentTtsModel(ctx context.Context, arg ClearAgentTtsModelParams) (int64, error) {
+	result, err := q.db.Exec(ctx, clearAgentTtsModel, arg.CatalogID, arg.Model)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const clearAgentVisionModel = `-- name: ClearAgentVisionModel :execrows
+UPDATE agents SET vision_provider_id = NULL, vision_model = '', updated_at = now()
+WHERE vision_provider_id = $1 AND vision_model = $2
+`
+
+type ClearAgentVisionModelParams struct {
+	CatalogID pgtype.UUID `json:"provider_id"`
+	Model     string      `json:"model"`
+}
+
+func (q *Queries) ClearAgentVisionModel(ctx context.Context, arg ClearAgentVisionModelParams) (int64, error) {
+	result, err := q.db.Exec(ctx, clearAgentVisionModel, arg.CatalogID, arg.Model)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const countAgentsUsingModel = `-- name: CountAgentsUsingModel :one
+SELECT count(*) FROM (
+    SELECT a.id FROM agents a WHERE
+         (a.build_provider_id     = $1 AND a.build_model     = $2)
+      OR (a.exec_provider_id      = $1 AND a.exec_model      = $2)
+      OR (a.stt_provider_id       = $1 AND a.stt_model       = $2)
+      OR (a.vision_provider_id    = $1 AND a.vision_model    = $2)
+      OR (a.tts_provider_id       = $1 AND a.tts_model       = $2)
+      OR (a.image_gen_provider_id = $1 AND a.image_gen_model = $2)
+      OR (a.embedding_provider_id = $1 AND a.embedding_model = $2)
+      OR (a.search_provider_id    = $1 AND a.search_model    = $2)
+    UNION
+    SELECT s.agent_id FROM agent_model_slots s
+    WHERE s.assigned_provider_id = $1 AND s.assigned_model = $2
+) u
+`
+
+type CountAgentsUsingModelParams struct {
+	CatalogID pgtype.UUID `json:"provider_id"`
+	Model     string      `json:"model"`
+}
+
+// Number of agents that have (provider, model) configured as a capability
+// override or a declared model-slot assignment. Drives the disable
+// confirmation ("N agents will be reset to the default").
+func (q *Queries) CountAgentsUsingModel(ctx context.Context, arg CountAgentsUsingModelParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countAgentsUsingModel, arg.CatalogID, arg.Model)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countMatchingModelGrants = `-- name: CountMatchingModelGrants :one
 SELECT count(*) FROM model_grants
 WHERE provider_id = $1 AND model = $2
@@ -59,6 +259,24 @@ func (q *Queries) CreateModelGrant(ctx context.Context, arg CreateModelGrantPara
 		&i.GranteeID,
 		&i.CreatedAt,
 	)
+	return i, err
+}
+
+const getModelGrant = `-- name: GetModelGrant :one
+SELECT provider_id, model FROM model_grants WHERE id = $1
+`
+
+type GetModelGrantRow struct {
+	CatalogID pgtype.UUID `json:"provider_id"`
+	Model     string      `json:"model"`
+}
+
+// Resolve a grant id to its (provider, model) so a revoke can find and reset
+// the agent overrides that referenced the now-disallowed model.
+func (q *Queries) GetModelGrant(ctx context.Context, id pgtype.UUID) (GetModelGrantRow, error) {
+	row := q.db.QueryRow(ctx, getModelGrant, id)
+	var i GetModelGrantRow
+	err := row.Scan(&i.CatalogID, &i.Model)
 	return i, err
 }
 
