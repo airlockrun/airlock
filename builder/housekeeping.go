@@ -19,11 +19,12 @@ type HousekeepingResult struct {
 	AgentsMDChanged   bool
 	GitignoreChanged  bool
 	GoModChanged      bool
+	NoticesChanged    bool
 }
 
 // Changed returns true if any airlock-managed file was rewritten.
 func (r HousekeepingResult) Changed() bool {
-	return r.DockerfileChanged || r.AgentsMDChanged || r.GitignoreChanged || r.GoModChanged
+	return r.DockerfileChanged || r.AgentsMDChanged || r.GitignoreChanged || r.GoModChanged || r.NoticesChanged
 }
 
 // gitignoreManagedLines are the entries airlock keeps in every agent's
@@ -38,6 +39,10 @@ var gitignoreManagedLines = []string{"go.work", "go.work.sum"}
 //     airlock-managed doc, overwritten so agents pick up doc updates
 //   - .gitignore: airlock-kept entries appended if absent; user's other
 //     entries untouched
+//   - THIRD_PARTY_NOTICES.generated.md: airlock-owned dependency notices,
+//     overwritten from the embedded template so the bundled licenses stay
+//     current. Distinct from the conventional THIRD_PARTY_NOTICES.md, which is
+//     left for the user's own notices.
 //   - go.mod: the agentsdk `require` pinned to data.AgentSDKVersion — the
 //     published v<const> in prod, the content-addressed v<const>-dev<hash>
 //     in dev (regex edit — agentsdk is the only owned lib the agent requires
@@ -92,6 +97,12 @@ func runHousekeeping(ctx context.Context, repoPath string, data scaffold.Scaffol
 	}
 	res.GitignoreChanged = gitignoreChanged
 
+	noticesChanged, err := rewriteNotices(repoPath)
+	if err != nil {
+		return res, fmt.Errorf("rewrite notices: %w", err)
+	}
+	res.NoticesChanged = noticesChanged
+
 	before, err := os.ReadFile(goModPath)
 	if err != nil {
 		return res, fmt.Errorf("read go.mod: %w", err)
@@ -135,6 +146,26 @@ func rewriteAgentsMD(repoPath string, data scaffold.ScaffoldData) (bool, error) 
 	target := filepath.Join(repoPath, "AGENTS.md")
 	before, _ := os.ReadFile(target) // missing-file returns nil, fine
 	if err := scaffold.GenerateAgentsMD(repoPath, data); err != nil {
+		return false, err
+	}
+	after, err := os.ReadFile(target)
+	if err != nil {
+		return false, err
+	}
+	return string(before) != string(after), nil
+}
+
+// rewriteNotices copies the airlock-owned third-party notices into repoPath and
+// reports whether the content changed. The file is airlock-managed (generated
+// from the dep graph, embedded in the binary), so housekeeping overwrites it to
+// the current template — the same overwrite-and-diff contract as the
+// Dockerfile. Its name (THIRD_PARTY_NOTICES.generated.md) is distinct from the
+// conventional THIRD_PARTY_NOTICES.md, so a user's own notices are never
+// touched. A no-op write returns false so the caller can skip the chore commit.
+func rewriteNotices(repoPath string) (bool, error) {
+	target := filepath.Join(repoPath, scaffold.NoticesFilename)
+	before, _ := os.ReadFile(target) // missing-file returns nil, fine
+	if err := scaffold.GenerateNotices(repoPath); err != nil {
 		return false, err
 	}
 	after, err := os.ReadFile(target)
@@ -216,6 +247,9 @@ func commitHousekeeping(repoPath string, r HousekeepingResult) error {
 	}
 	if r.GitignoreChanged {
 		paths = append(paths, ".gitignore")
+	}
+	if r.NoticesChanged {
+		paths = append(paths, scaffold.NoticesFilename)
 	}
 	if r.GoModChanged {
 		paths = append(paths, "go.mod")
