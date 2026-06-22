@@ -68,6 +68,14 @@ UPDATE bridges
 SET bot_username = @bot_username, manager_error = @manager_error, updated_at = now()
 WHERE id = @id;
 
+-- name: UpdateBridgeIdentity :exec
+-- Refresh a bridge's bot-controlled identity from a getMe poll: the display
+-- name (the bridge name shown in the UI) + bot_username (the @handle, which can
+-- change). The operator never sets these — they mirror the bot.
+UPDATE bridges
+SET name = @name, bot_username = @bot_username, updated_at = now()
+WHERE id = @id;
+
 -- name: GetBridgeByAgentID :one
 -- Find the bridge bound to a specific agent
 SELECT * FROM bridges WHERE agent_id = @agent_id;

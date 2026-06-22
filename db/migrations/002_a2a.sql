@@ -749,6 +749,12 @@ ALTER TABLE bridges
     ADD CONSTRAINT bridges_manager_telegram_only CHECK (NOT is_manager OR type = 'telegram');
 CREATE UNIQUE INDEX bridges_one_manager ON bridges((true)) WHERE is_manager;
 
+-- Telegram is the only supported bridge platform. Drop any Discord rows (the
+-- driver and creation path are gone) and tighten the type CHECK to telegram.
+DELETE FROM bridges WHERE type = 'discord';
+ALTER TABLE bridges DROP CONSTRAINT bridges_type_check;
+ALTER TABLE bridges ADD CONSTRAINT bridges_type_check CHECK (type IN ('telegram'));
+
 -- system_conversations gains source + bridge_id so a system bridge gets
 -- its own sticky thread per user. Mirrors agent_conversations: one
 -- thread per (user, bridge) for source='bridge', 'web' threads stay
@@ -1275,6 +1281,9 @@ DROP INDEX IF EXISTS system_conversations_user_bridge_idx;
 ALTER TABLE system_conversations
     DROP COLUMN IF EXISTS bridge_id,
     DROP COLUMN IF EXISTS source;
+-- Restore the original (telegram, discord) type CHECK from 001.
+ALTER TABLE bridges DROP CONSTRAINT IF EXISTS bridges_type_check;
+ALTER TABLE bridges ADD CONSTRAINT bridges_type_check CHECK (type IN ('telegram', 'discord'));
 DROP INDEX IF EXISTS bridges_one_manager;
 ALTER TABLE bridges DROP CONSTRAINT IF EXISTS bridges_manager_telegram_only;
 ALTER TABLE bridges DROP COLUMN IF EXISTS manager_error;

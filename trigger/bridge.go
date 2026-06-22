@@ -119,11 +119,11 @@ type ManagedBotEvent struct {
 // BridgeReferenceKind distinguishes the platform mechanism that produced
 // the reference so the prompt builder can label it for the LLM.
 const (
-	// BridgeReferenceReply — the user replied to another message (Discord
-	// reply, Telegram reply_to_message, Slack thread parent).
+	// BridgeReferenceReply — the user replied to another message
+	// (Telegram reply_to_message).
 	BridgeReferenceReply = "reply"
 	// BridgeReferenceForward — the user forwarded a message authored
-	// elsewhere (Discord message snapshot, Telegram forward_origin).
+	// elsewhere (Telegram forward_origin).
 	BridgeReferenceForward = "forward"
 )
 
@@ -191,8 +191,8 @@ type BridgeDriver interface {
 }
 
 // CommandRegistrar is an optional BridgeDriver capability: platforms with
-// a native command menu (Telegram setMyCommands, Discord app commands, ...)
-// implement it to receive the slash-command registry on activation.
+// a native command menu (Telegram setMyCommands) implement it to receive
+// the slash-command registry on activation.
 // Drivers without such a menu simply don't implement it.
 type CommandRegistrar interface {
 	RegisterCommands(ctx context.Context, br dbq.Bridge, cmds []SlashCommand) error
@@ -442,8 +442,7 @@ func (m *BridgeManager) RemoveBridge(bridgeID uuid.UUID) {
 
 // TeardownBridge runs the driver's teardown for a bridge — for Telegram this
 // clears the chat menu button so a deleted/disabled bridge doesn't leave a
-// dead web-app "Open" button behind; for Discord it closes the gateway
-// connection. Best-effort: it logs and returns on lookup/decrypt/teardown
+// dead web-app "Open" button behind. Best-effort: it logs and returns on lookup/decrypt/teardown
 // failure so it never blocks an agent or bridge deletion. Call it BEFORE the
 // bridge row is deleted and before RemoveBridge, while the bot token is still
 // resolvable. Uses the manager's own context so the platform API call isn't
@@ -599,8 +598,7 @@ func (m *BridgeManager) HandleEvent(ctx context.Context, event BridgeEvent) erro
 		if runID, err := uuid.Parse(runIDStr); err == nil {
 			m.prompter.dispatcher.CancelRun(runID)
 		}
-		// Telegram needs an explicit ack to clear the spinner; Discord acked
-		// already via deferred-update at the gateway dispatch handler.
+		// Telegram needs an explicit ack to clear the spinner.
 		if tg, ok := driver.(*TelegramDriver); ok && event.Callback.AckID != "" {
 			_ = tg.AnswerCallbackQuery(ctx, br.BotTokenRef, event.Callback.AckID, "Cancelled")
 		}
@@ -704,34 +702,28 @@ func (m *BridgeManager) HandleEvent(ctx context.Context, event BridgeEvent) erro
 }
 
 // isAuthCommand reports whether text is the /auth slash command,
-// possibly with arguments. Recognized in either DMs or guild channels —
-// /auth is special-cased above identity lookup so unlinked users can
-// invoke it.
+// possibly with arguments. /auth is special-cased above identity lookup
+// so unlinked users can invoke it.
 func isAuthCommand(text string) bool {
 	t := strings.ToLower(strings.TrimSpace(text))
 	return t == "/auth" || strings.HasPrefix(t, "/auth ")
 }
 
 // handleAuthCommand replies to /auth with a fresh signed linking URL.
-// The link is always delivered privately — Telegram bots are typically
-// in DMs already, but for Discord we explicitly open a DM channel so
-// the URL is never posted in a public guild channel where it could be
-// scraped to bind someone else's identity.
+// Telegram bots are in DMs already, so the link is delivered straight back
+// to the sender's chat.
 func (m *BridgeManager) handleAuthCommand(ctx context.Context, br dbq.Bridge, driver BridgeDriver, event BridgeEvent) error {
 	if m.publicURL == "" {
 		return nil
 	}
 	linkURL := buildAuthExternalURL(m.publicURL, m.hmacSecret, br.Type, pgUUID(br.ID).String(), event.SenderID)
 	msg := fmt.Sprintf("Click to link your Airlock account:\n%s", linkURL)
-	switch dr := driver.(type) {
-	case *TelegramDriver:
+	if dr, ok := driver.(*TelegramDriver); ok {
 		chatID, _ := strconv.ParseInt(event.ExternalID, 10, 64)
 		if chatID == 0 {
 			return nil
 		}
 		return dr.SendMessage(ctx, br.BotTokenRef, chatID, msg)
-	case *DiscordDriver:
-		return dr.SendDM(ctx, br.BotTokenRef, event.SenderID, msg)
 	}
 	return nil
 }
@@ -770,15 +762,12 @@ func (m *BridgeManager) SendParts(ctx context.Context, bridgeID uuid.UUID, exter
 		return fmt.Errorf("no driver for type %q", br.Type)
 	}
 
-	switch dr := driver.(type) {
-	case *TelegramDriver:
+	if dr, ok := driver.(*TelegramDriver); ok {
 		chatID, err := strconv.ParseInt(externalID, 10, 64)
 		if err != nil {
 			return fmt.Errorf("invalid chat ID: %w", err)
 		}
 		return dr.SendParts(ctx, token, chatID, parts)
-	case *DiscordDriver:
-		return dr.SendParts(ctx, token, externalID, parts)
 	}
 
 	return fmt.Errorf("driver %q does not support SendParts", br.Type)
@@ -819,7 +808,7 @@ func (m *BridgeManager) startPoller(parent context.Context, br dbq.Bridge) {
 		}()
 		ctx := pollCtx
 		driver := m.drivers[br.Type]
-		var lastMgrCheck time.Time // manager-capability getMe throttle (is_manager only)
+		var lastIdentityCheck time.Time // bot-identity getMe throttle (all bridges)
 
 		// Run-starting events (messages, approve/deny taps) are handled one
 		// at a time by this worker — concurrent runs in a single
@@ -911,13 +900,12 @@ func (m *BridgeManager) startPoller(parent context.Context, br dbq.Bridge) {
 				Config: br.Config,
 			})
 
-			// Manager bridge: periodically refresh the live identity +
-			// can_manage_bots capability from getMe (interleaved between poll
-			// cycles — getMe doesn't conflict with getUpdates). Throttled to
-			// ~10 min; the zero lastMgrCheck makes the first iteration run it.
-			if br.IsManager {
-				m.reconcileManagerCapability(ctx, &br, &lastMgrCheck)
-			}
+			// Periodically re-sync the bot-controlled identity (display name +
+			// @handle, plus can_manage_bots for manager bridges) from getMe,
+			// interleaved between poll cycles — getMe doesn't conflict with
+			// getUpdates. Throttled to ~10 min; the zero lastIdentityCheck makes
+			// the first iteration run it.
+			m.reconcileBridgeIdentity(ctx, &br, &lastIdentityCheck)
 		}
 	}()
 }

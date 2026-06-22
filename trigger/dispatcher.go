@@ -594,7 +594,7 @@ func (d *Dispatcher) forward(ctx context.Context, agentID uuid.UUID, c *containe
 // --- helpers ---
 
 // resolvePlatform returns the channel name for the <env> block: "web" when
-// there's no bridge, else the bridge's platform type (telegram/discord).
+// there's no bridge, else the bridge's platform type (telegram).
 // Fail-soft — a lookup miss logs and returns "" (the line is then omitted)
 // rather than guessing.
 func (d *Dispatcher) resolvePlatform(ctx context.Context, bridgeID *uuid.UUID) string {

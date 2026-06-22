@@ -370,7 +370,7 @@ message BridgeInfo {
   string id = 1;
   string agent_id = 2;      // empty when is_system is true
   UserSummary owner = 3;
-  string type = 4;          // "telegram", "discord"
+  string type = 4;          // "telegram"
   string name = 5;
   string bot_username = 6;  // @handle from platform
   string status = 7;        // "active", "error"

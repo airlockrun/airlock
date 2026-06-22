@@ -3747,9 +3747,8 @@ func (x *TestCredentialResponse) GetMessage() string {
 type CreateBridgeRequest struct {
 	state   protoimpl.MessageState `protogen:"open.v1"`
 	AgentId string                 `protobuf:"bytes,1,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"`
-	Name    string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
 	Token   string                 `protobuf:"bytes,3,opt,name=token,proto3" json:"token,omitempty"`
-	Type    string                 `protobuf:"bytes,4,opt,name=type,proto3" json:"type,omitempty"` // "telegram", "discord"
+	Type    string                 `protobuf:"bytes,4,opt,name=type,proto3" json:"type,omitempty"` // "telegram"
 	// Telegram manager-bot capability (admin only; requires the bot's
 	// can_manage_bots to be enabled in BotFather). Telegram-only.
 	IsManager bool `protobuf:"varint,5,opt,name=is_manager,json=isManager,proto3" json:"is_manager,omitempty"`
@@ -3794,13 +3793,6 @@ func (*CreateBridgeRequest) Descriptor() ([]byte, []int) {
 func (x *CreateBridgeRequest) GetAgentId() string {
 	if x != nil {
 		return x.AgentId
-	}
-	return ""
-}
-
-func (x *CreateBridgeRequest) GetName() string {
-	if x != nil {
-		return x.Name
 	}
 	return ""
 }
@@ -4040,10 +4032,10 @@ func (x *ListPlatformIdentitiesResponse) GetIdentities() []*PlatformIdentityInfo
 // fetch them from the platform.
 type LinkIdentityPreviewResponse struct {
 	state               protoimpl.MessageState `protogen:"open.v1"`
-	Platform            string                 `protobuf:"bytes,1,opt,name=platform,proto3" json:"platform,omitempty"`                                                    // "telegram", "discord"
+	Platform            string                 `protobuf:"bytes,1,opt,name=platform,proto3" json:"platform,omitempty"`                                                    // "telegram"
 	BridgeName          string                 `protobuf:"bytes,2,opt,name=bridge_name,json=bridgeName,proto3" json:"bridge_name,omitempty"`                              // Bridge display name from DB
 	BotUsername         string                 `protobuf:"bytes,3,opt,name=bot_username,json=botUsername,proto3" json:"bot_username,omitempty"`                           // @botname from bridges.bot_username
-	PlatformUserId      string                 `protobuf:"bytes,4,opt,name=platform_user_id,json=platformUserId,proto3" json:"platform_user_id,omitempty"`                // Platform-native user ID (Telegram chat_id, Discord snowflake)
+	PlatformUserId      string                 `protobuf:"bytes,4,opt,name=platform_user_id,json=platformUserId,proto3" json:"platform_user_id,omitempty"`                // Platform-native user ID (Telegram chat_id)
 	PlatformUsername    string                 `protobuf:"bytes,5,opt,name=platform_username,json=platformUsername,proto3" json:"platform_username,omitempty"`            // @handle (may be empty)
 	PlatformDisplayName string                 `protobuf:"bytes,6,opt,name=platform_display_name,json=platformDisplayName,proto3" json:"platform_display_name,omitempty"` // Full / display name (may be empty)
 	CurrentUserEmail    string                 `protobuf:"bytes,7,opt,name=current_user_email,json=currentUserEmail,proto3" json:"current_user_email,omitempty"`          // Airlock account being linked to
@@ -7435,15 +7427,14 @@ const file_airlock_v1_api_proto_rawDesc = "" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x1f\n" +
 	"\vstatus_code\x18\x02 \x01(\x05R\n" +
 	"statusCode\x12\x18\n" +
-	"\amessage\x18\x03 \x01(\tR\amessage\"\xaa\x01\n" +
+	"\amessage\x18\x03 \x01(\tR\amessage\"\x9c\x01\n" +
 	"\x13CreateBridgeRequest\x12\x19\n" +
-	"\bagent_id\x18\x01 \x01(\tR\aagentId\x12\x12\n" +
-	"\x04name\x18\x02 \x01(\tR\x04name\x12\x14\n" +
+	"\bagent_id\x18\x01 \x01(\tR\aagentId\x12\x14\n" +
 	"\x05token\x18\x03 \x01(\tR\x05token\x12\x12\n" +
 	"\x04type\x18\x04 \x01(\tR\x04type\x12\x1d\n" +
 	"\n" +
 	"is_manager\x18\x05 \x01(\bR\tisManager\x12\x1b\n" +
-	"\tis_system\x18\x06 \x01(\bR\bisSystem\"\x99\x01\n" +
+	"\tis_system\x18\x06 \x01(\bR\bisSystemJ\x04\b\x02\x10\x03\"\x99\x01\n" +
 	"\x13UpdateBridgeRequest\x12\x19\n" +
 	"\bagent_id\x18\x01 \x01(\tR\aagentId\x12 \n" +
 	"\tis_system\x18\x03 \x01(\bH\x00R\bisSystem\x88\x01\x01\x12\"\n" +

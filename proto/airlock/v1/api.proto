@@ -487,9 +487,9 @@ message TestCredentialResponse {
 
 message CreateBridgeRequest {
   string agent_id = 1;
-  string name = 2;
+  reserved 2; // was name — a bridge's name is the bot's display name (getMe), never operator-set
   string token = 3;
-  string type = 4; // "telegram", "discord"
+  string type = 4; // "telegram"
   // Telegram manager-bot capability (admin only; requires the bot's
   // can_manage_bots to be enabled in BotFather). Telegram-only.
   bool is_manager = 5;
@@ -536,10 +536,10 @@ message ListPlatformIdentitiesResponse {
 // are best-effort — display_name / username may be empty if the bridge can't
 // fetch them from the platform.
 message LinkIdentityPreviewResponse {
-  string platform = 1;               // "telegram", "discord"
+  string platform = 1;               // "telegram"
   string bridge_name = 2;            // Bridge display name from DB
   string bot_username = 3;           // @botname from bridges.bot_username
-  string platform_user_id = 4;       // Platform-native user ID (Telegram chat_id, Discord snowflake)
+  string platform_user_id = 4;       // Platform-native user ID (Telegram chat_id)
   string platform_username = 5;      // @handle (may be empty)
   string platform_display_name = 6;  // Full / display name (may be empty)
   string current_user_email = 7;     // Airlock account being linked to

@@ -30,10 +30,9 @@ func newIdentityHandler(svc *identitysvc.Service, hmacSecret, publicURL string) 
 	return &identityHandler{svc: svc, hmacSecret: hmacSecret, publicURL: publicURL}
 }
 
-// telegramIdentityAdapter and discordIdentityAdapter bridge the trigger
-// driver value-return shape into service/identity's narrow interfaces.
-// service/identity declares its own types so it doesn't transitively
-// pull in trigger.
+// telegramIdentityAdapter bridges the trigger driver value-return shape
+// into service/identity's narrow interface. service/identity declares its
+// own types so it doesn't transitively pull in trigger.
 type telegramIdentityAdapter struct{ d *trigger.TelegramDriver }
 
 func (a telegramIdentityAdapter) GetChat(ctx context.Context, token, chatID string) (identitysvc.TelegramChatInfo, error) {
@@ -45,20 +44,6 @@ func (a telegramIdentityAdapter) GetChat(ctx context.Context, token, chatID stri
 		Username:  info.Username,
 		FirstName: info.FirstName,
 		LastName:  info.LastName,
-	}, nil
-}
-
-type discordIdentityAdapter struct{ d *trigger.DiscordDriver }
-
-func (a discordIdentityAdapter) FetchUser(ctx context.Context, token, userID string) (identitysvc.DiscordUserInfo, error) {
-	info, err := a.d.FetchUser(ctx, token, userID)
-	if err != nil {
-		return identitysvc.DiscordUserInfo{}, err
-	}
-	return identitysvc.DiscordUserInfo{
-		Username:   info.Username,
-		GlobalName: info.GlobalName,
-		AvatarURL:  info.AvatarURL,
 	}, nil
 }
 

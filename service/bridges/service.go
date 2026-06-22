@@ -29,16 +29,14 @@ type BridgeManager interface {
 }
 
 type Service struct {
-	db            *db.DB
-	encryptor     secrets.Store
-	telegram      Driver
-	discord       Driver
-	enableDiscord bool
-	bridgeMgr     BridgeManager
-	logger        *zap.Logger
+	db        *db.DB
+	encryptor secrets.Store
+	telegram  Driver
+	bridgeMgr BridgeManager
+	logger    *zap.Logger
 }
 
-func New(d *db.DB, enc secrets.Store, telegram Driver, discord Driver, enableDiscord bool, bridgeMgr BridgeManager, logger *zap.Logger) *Service {
+func New(d *db.DB, enc secrets.Store, telegram Driver, bridgeMgr BridgeManager, logger *zap.Logger) *Service {
 	if d == nil {
 		panic("bridges: db is required")
 	}
@@ -48,22 +46,19 @@ func New(d *db.DB, enc secrets.Store, telegram Driver, discord Driver, enableDis
 	if telegram == nil {
 		panic("bridges: telegram driver is required")
 	}
-	if discord == nil {
-		panic("bridges: discord driver is required")
-	}
 	if bridgeMgr == nil {
 		panic("bridges: bridge manager is required")
 	}
 	if logger == nil {
 		panic("bridges: logger is required")
 	}
-	return &Service{db: d, encryptor: enc, telegram: telegram, discord: discord, enableDiscord: enableDiscord, bridgeMgr: bridgeMgr, logger: logger}
+	return &Service{db: d, encryptor: enc, telegram: telegram, bridgeMgr: bridgeMgr, logger: logger}
 }
 
-// CreateRequest is the input for Create.
+// CreateRequest is the input for Create. There's no Name: a bridge's name
+// is the bot's display name, resolved from getMe and kept in sync on poll.
 type CreateRequest struct {
-	Type      string // "telegram" or "discord" — empty defaults to "telegram"
-	Name      string
+	Type      string // "telegram" — empty defaults to "telegram"
 	Token     string
 	AgentID   string // bound agent; empty → system (if IsSystem) or unbound
 	IsSystem  bool   // route inbound DMs to the system agent (admin only; AgentID must be empty)
@@ -75,7 +70,7 @@ type CreateRequest struct {
 // can_manage_bots flag (one-listener dedupe + manager gating) and the
 // managed-bot token fetch. The concrete *trigger.TelegramDriver satisfies it.
 type telegramCapabilities interface {
-	GetMeFull(ctx context.Context, token string) (username string, botUserID int64, canManageBots bool, err error)
+	GetMeFull(ctx context.Context, token string) (username, name string, botUserID int64, canManageBots bool, err error)
 	GetManagedBotToken(ctx context.Context, managerToken string, botUserID int64) (string, error)
 }
 
@@ -133,8 +128,6 @@ func (s *Service) validateBot(ctx context.Context, bridgeType, token string) (st
 	switch bridgeType {
 	case "telegram":
 		return s.telegram.GetMe(ctx, token)
-	case "discord":
-		return s.discord.GetMe(ctx, token)
 	default:
 		return "", service.Detail(service.ErrInvalidInput, "unsupported bridge type %q", bridgeType)
 	}
@@ -184,36 +177,30 @@ func (s *Service) Create(ctx context.Context, p authz.Principal, req CreateReque
 	if bridgeType == "" {
 		bridgeType = "telegram"
 	}
-	if bridgeType == "discord" && !s.enableDiscord {
-		return Result{}, service.Detail(service.ErrInvalidInput, "Discord bridges are disabled on this instance")
+	if bridgeType != "telegram" {
+		return Result{}, service.Detail(service.ErrInvalidInput, "unsupported bridge type %q", bridgeType)
 	}
-	// Resolve the bot identity. Telegram exposes a stable user id +
-	// can_manage_bots; Discord only the username.
-	var botUsername string
+	// Resolve the bot identity from getMe: stable user id (one-listener
+	// dedupe), display name (the bridge name), the @handle, and
+	// can_manage_bots (manager gating). The name is bot-controlled and kept
+	// in sync on the poll loop — the operator never sets it.
+	caps, ok := s.telegramCaps()
+	if !ok {
+		return Result{}, service.Detail(service.ErrInvalidInput, "telegram driver lacks capability lookup")
+	}
+	botUsername, botName, id, canManageBots, verr := caps.GetMeFull(ctx, req.Token)
+	if verr != nil {
+		return Result{}, service.Detail(service.ErrInvalidInput, "invalid bot token: %v", verr)
+	}
 	var botUserID pgtype.Int8
-	var canManageBots bool
-	if bridgeType == "telegram" {
-		caps, ok := s.telegramCaps()
-		if !ok {
-			return Result{}, service.Detail(service.ErrInvalidInput, "telegram driver lacks capability lookup")
-		}
-		uname, id, canManage, verr := caps.GetMeFull(ctx, req.Token)
-		if verr != nil {
-			return Result{}, service.Detail(service.ErrInvalidInput, "invalid bot token: %v", verr)
-		}
-		botUsername, canManageBots = uname, canManage
-		if id != 0 {
-			botUserID = pgtype.Int8{Int64: id, Valid: true}
-		}
-	} else {
-		uname, verr := s.validateBot(ctx, bridgeType, req.Token)
-		if verr != nil {
-			if errors.Is(verr, service.ErrInvalidInput) {
-				return Result{}, verr
-			}
-			return Result{}, service.Detail(service.ErrInvalidInput, "invalid bot token: %v", verr)
-		}
-		botUsername = uname
+	if id != 0 {
+		botUserID = pgtype.Int8{Int64: id, Valid: true}
+	}
+	// Name is the bot's display name; fall back to the @handle if Telegram
+	// returns no first_name (shouldn't happen for a bot).
+	bridgeName := botName
+	if bridgeName == "" {
+		bridgeName = botUsername
 	}
 
 	// Manager capability: Telegram-only, admin-gated, requires the live
@@ -248,7 +235,7 @@ func (s *Service) Create(ctx context.Context, p authz.Principal, req CreateReque
 	ownerID := pgtype.UUID{Bytes: p.UserID, Valid: true}
 	br, err := q.CreateBridge(ctx, dbq.CreateBridgeParams{
 		Type:              bridgeType,
-		Name:              req.Name,
+		Name:              bridgeName,
 		BotTokenRef:       encToken,
 		BotUsername:       botUsername,
 		AgentID:           agentPgID,
@@ -267,13 +254,7 @@ func (s *Service) Create(ctx context.Context, p authz.Principal, req CreateReque
 	// untouched.
 	initBr := br
 	initBr.BotTokenRef = req.Token
-	var initErr error
-	switch bridgeType {
-	case "telegram":
-		initErr = s.telegram.Init(ctx, &initBr)
-	case "discord":
-		initErr = s.discord.Init(ctx, &initBr)
-	}
+	initErr := s.telegram.Init(ctx, &initBr)
 	if initErr != nil {
 		s.logger.Warn("bridge init failed", zap.Error(initErr))
 	} else if len(initBr.Config) > 0 {
@@ -412,7 +393,7 @@ func (s *Service) ManagerBridgeUsername(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	username, _, canManage, err := caps.GetMeFull(ctx, token)
+	username, _, _, canManage, err := caps.GetMeFull(ctx, token)
 	reconcile := func(name, mgrErr string) {
 		_ = q.ReconcileManagerBridge(ctx, dbq.ReconcileManagerBridgeParams{
 			ID: br.ID, BotUsername: name, ManagerError: mgrErr,
@@ -612,7 +593,7 @@ func (s *Service) Update(ctx context.Context, p authz.Principal, bridgeID uuid.U
 			if derr != nil {
 				return Result{}, derr
 			}
-			uname, _, canManage, verr := caps.GetMeFull(ctx, token)
+			uname, _, _, canManage, verr := caps.GetMeFull(ctx, token)
 			if verr != nil {
 				return Result{}, service.Detail(service.ErrInvalidInput, "manager bot unreachable: %v", verr)
 			}
@@ -663,9 +644,8 @@ func (s *Service) Delete(ctx context.Context, p authz.Principal, bridgeID uuid.U
 			return err
 		}
 	}
-	// Teardown first (clears the Telegram menu button / closes the Discord
-	// gateway) while the row + token still exist, then delete and stop the
-	// poller.
+	// Teardown first (clears the Telegram menu button) while the row + token
+	// still exist, then delete and stop the poller.
 	s.bridgeMgr.TeardownBridge(bridgeID)
 	if err := q.DeleteBridge(ctx, pgtype.UUID{Bytes: bridgeID, Valid: true}); err != nil {
 		s.logger.Error("delete bridge failed", zap.Error(err))

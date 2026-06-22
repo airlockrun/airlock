@@ -29,7 +29,6 @@ func testIdentityService(td *trigger.TelegramDriver) *identitysvc.Service {
 	return identitysvc.New(
 		testDB, testEncryptor(),
 		telegramIdentityAdapter{d: td},
-		discordIdentityAdapter{d: trigger.NewDiscordDriver(zap.NewNop())},
 		zap.NewNop(),
 	)
 }
@@ -334,8 +333,8 @@ func TestLinkIdentityPreviewBridgePlatformMismatch(t *testing.T) {
 	bridgeID := createTestBridgeWithToken(t, "fake-token", "preview_bot")
 
 	// Sign with a platform that doesn't match the bridge row's type.
-	ts, sig := signAuthExternal("discord", bridgeID.String(), "1")
-	url := fmt.Sprintf("/api/v1/link-identity/preview?platform=discord&bridge=%s&uid=1&ts=%s&sig=%s",
+	ts, sig := signAuthExternal("slack", bridgeID.String(), "1")
+	url := fmt.Sprintf("/api/v1/link-identity/preview?platform=slack&bridge=%s&uid=1&ts=%s&sig=%s",
 		bridgeID, ts, sig)
 
 	router := userRouter(func(r chi.Router) {
