@@ -12,24 +12,37 @@ import (
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/airlockrun/airlock/service"
+	"github.com/airlockrun/airlock/service/catalog"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"
 )
 
-type Service struct {
-	db     *db.DB
-	logger *zap.Logger
+// ModelCatalog is the slice of the catalog service used to verify, server-side,
+// that a model assigned to a capability slot actually has that capability
+// (defense-in-depth behind the UI's capability-filtered pickers).
+// *catalog.Service satisfies it.
+type ModelCatalog interface {
+	ListModels(ctx context.Context, p authz.Principal, opts catalog.ListModelsOptions) ([]catalog.Model, error)
 }
 
-func New(d *db.DB, logger *zap.Logger) *Service {
+type Service struct {
+	db      *db.DB
+	catalog ModelCatalog
+	logger  *zap.Logger
+}
+
+func New(d *db.DB, cat ModelCatalog, logger *zap.Logger) *Service {
 	if d == nil {
 		panic("models: db is required")
+	}
+	if cat == nil {
+		panic("models: catalog is required")
 	}
 	if logger == nil {
 		panic("models: logger is required")
 	}
-	return &Service{db: d, logger: logger}
+	return &Service{db: d, catalog: cat, logger: logger}
 }
 
 // Pair is a (provider FK, bare model name) tuple. An empty ProviderID
@@ -155,6 +168,14 @@ func (s *Service) Update(ctx context.Context, p authz.Principal, agentID uuid.UU
 		"embedding": {agent.EmbeddingProviderID, agent.EmbeddingModel},
 		"search":    {agent.SearchProviderID, agent.SearchModel},
 	}
+	// Defense-in-depth: the UI only offers capability-matching models per slot,
+	// but a direct API call could send anything. validateCapability rejects a
+	// model that lacks the capability its slot needs before it's persisted.
+	validateCapability, err := s.capabilityValidator(ctx, p)
+	if err != nil {
+		return State{}, err
+	}
+
 	fks := make(map[string]pgtype.UUID, len(pairs))
 	for _, item := range pairs {
 		fk, err := parsePair(item.name, item.p)
@@ -162,6 +183,9 @@ func (s *Service) Update(ctx context.Context, p authz.Principal, agentID uuid.UU
 			return State{}, err
 		}
 		if err := s.checkModelAllowed(ctx, q, p, fk, item.p.Model, current[item.name].fk, current[item.name].model); err != nil {
+			return State{}, err
+		}
+		if err := validateCapability(fk, item.p.Model, pairCapability(item.name)); err != nil {
 			return State{}, err
 		}
 		fks[item.name] = fk
@@ -194,14 +218,16 @@ func (s *Service) Update(ctx context.Context, p authz.Principal, agentID uuid.UU
 		return State{}, err
 	}
 	declared := make(map[string]struct {
-		fk    pgtype.UUID
-		model string
+		fk         pgtype.UUID
+		model      string
+		capability string
 	}, len(existing))
 	for _, slot := range existing {
 		declared[slot.Slug] = struct {
-			fk    pgtype.UUID
-			model string
-		}{slot.AssignedProviderID, slot.AssignedModel}
+			fk         pgtype.UUID
+			model      string
+			capability string
+		}{slot.AssignedProviderID, slot.AssignedModel, slot.Capability}
 	}
 	for _, slot := range req.Slots {
 		cur, ok := declared[slot.Slug]
@@ -215,6 +241,10 @@ func (s *Service) Update(ctx context.Context, p authz.Principal, agentID uuid.UU
 		if err := s.checkModelAllowed(ctx, q, p, fk, slot.Model, cur.fk, cur.model); err != nil {
 			return State{}, err
 		}
+		// The slot's declared capability (agentsdk vocab) governs the model.
+		if err := validateCapability(fk, slot.Model, cur.capability); err != nil {
+			return State{}, err
+		}
 		_ = q.SetAgentModelSlotAssignment(ctx, dbq.SetAgentModelSlotAssignmentParams{
 			AgentID:            agent.ID,
 			Slug:               slot.Slug,
@@ -225,6 +255,71 @@ func (s *Service) Update(ctx context.Context, p authz.Principal, agentID uuid.UU
 	agent, _ = q.GetAgentByID(ctx, agent.ID)
 	slots, _ := q.ListAgentModelSlots(ctx, agent.ID)
 	return State{Agent: agent, Slots: slots}, nil
+}
+
+// pairCapability maps a fixed capability-override slot to the capability
+// vocabulary catalog.ModelMeetsCapability understands.
+func pairCapability(name string) string {
+	switch name {
+	case "build", "exec":
+		return "text"
+	case "vision":
+		return "vision"
+	case "stt":
+		return "transcription"
+	case "tts":
+		return "speech"
+	case "image_gen":
+		return "image"
+	case "embedding":
+		return "embedding"
+	case "search":
+		return "search"
+	}
+	return ""
+}
+
+// capabilityValidator loads the catalog once and returns a closure that checks
+// an assigned (provider FK, model) against a required capability — empty model
+// or FK is a no-op (inherit the default). The catalog index + per-FK catalog-id
+// lookups are cached across calls within one Update.
+func (s *Service) capabilityValidator(ctx context.Context, p authz.Principal) (func(fk pgtype.UUID, model, capability string) error, error) {
+	all, err := s.catalog.ListModels(ctx, p, catalog.ListModelsOptions{})
+	if err != nil {
+		return nil, err
+	}
+	index := make(map[string]catalog.Model, len(all))
+	for _, m := range all {
+		index[m.ProviderID+"\x00"+m.ID] = m
+	}
+	q := dbq.New(s.db.Pool())
+	fkToCatalog := map[uuid.UUID]string{}
+	return func(fk pgtype.UUID, model, capability string) error {
+		if model == "" || !fk.Valid {
+			return nil
+		}
+		id := uuid.UUID(fk.Bytes)
+		catID, ok := fkToCatalog[id]
+		if !ok {
+			row, gerr := q.GetProviderByID(ctx, fk)
+			if gerr != nil {
+				return service.Detail(service.ErrInvalidInput, "unknown provider for model %q", model)
+			}
+			catID = row.CatalogID
+			fkToCatalog[id] = catID
+		}
+		// Capability is derived from the catalog; a model the catalog doesn't
+		// list (e.g. granted before models.dev caught up) can't be checked, so
+		// defer to the other gates rather than block.
+		m, ok := index[catID+"\x00"+model]
+		if !ok {
+			return nil
+		}
+		if ok, reason := catalog.ModelMeetsCapability(m, capability); !ok {
+			return service.Detail(service.ErrInvalidInput, "model %q %s", model, reason)
+		}
+		return nil
+	}, nil
 }
 
 // checkModelAllowed enforces model deny-by-default at assignment time: a

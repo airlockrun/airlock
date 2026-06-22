@@ -10,6 +10,7 @@ import (
 	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/db/dbq"
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
+	catalogsvc "github.com/airlockrun/airlock/service/catalog"
 	modelssvc "github.com/airlockrun/airlock/service/models"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -43,7 +44,7 @@ func userRequestProto(t *testing.T, method, path string, userID uuid.UUID, msg p
 
 // testModelsHandler wires a modelsHandler against the shared test DB.
 func testModelsHandler() *modelsHandler {
-	return newModelsHandler(modelssvc.New(testDB, zap.NewNop()))
+	return newModelsHandler(modelssvc.New(testDB, catalogsvc.New(testDB, zap.NewNop()), zap.NewNop()))
 }
 
 // TestUpdateModelConfig_AtomicReplaceAndSlotAssignment verifies PUT

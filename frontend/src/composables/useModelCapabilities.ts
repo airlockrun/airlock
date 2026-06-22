@@ -9,6 +9,7 @@ import { useModelsAllowedStore } from '@/stores/modelsAllowed'
 export type CatalogModel = {
   kind?: string
   caps: string[]
+  toolCall?: boolean
 }
 export type FlatOption = { label: string; value: string }
 export type GroupedOption = { label: string; items: FlatOption[] }
@@ -54,6 +55,14 @@ export function isTranscription(m: CatalogModel): boolean {
 // `isLanguage(m) && hasCap(m, 'vision')`.
 export function hasCap(m: CatalogModel, cap: string): boolean {
   return m.caps.includes(cap)
+}
+
+// isToolTextModel gates the web-search picker: the backend drives web search
+// by calling the model with a search tool, so the model must support tool
+// calls and text in + text out. (sol's "text" cap already means text-in AND
+// text-out.)
+export function isToolTextModel(m: CatalogModel): boolean {
+  return !!m.toolCall && hasCap(m, 'text')
 }
 
 // Options for useModelCapabilities. restrictToAllowed filters picker options to
@@ -114,7 +123,9 @@ export function useModelCapabilities(opts: ModelCapabilitiesOptions = {}) {
       if (!searchCapable.has(row.providerId)) continue
       const items: FlatOption[] = [{ label: 'Provider default', value: packModelValue(row.id, '') }]
       for (const m of catalog.models) {
-        if (m.providerId !== row.providerId || !isLanguage(m)) continue
+        // A search model must be tool-capable and text-in/text-out — the
+        // backend runs web search by calling it with a search tool.
+        if (m.providerId !== row.providerId || !isToolTextModel(m)) continue
         if (opts.restrictToAllowed && !allowed.isAllowed(row.id, m.id)) continue
         items.push({ label: m.name || m.id, value: packModelValue(row.id, m.id) })
       }

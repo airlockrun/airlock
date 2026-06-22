@@ -61,6 +61,57 @@ type Model struct {
 	OutputLimit  int32
 }
 
+// ModelMeetsCapability reports whether m can serve the given capability and, if
+// not, a human-readable reason. capability uses the agentsdk vocabulary
+// (text / vision / embedding / image / speech / transcription) plus "search"
+// (a tool-driven web-search model). It's the single source of truth for the
+// capability gate behind both the system-default and per-agent model pickers;
+// the predicates mirror the frontend (useModelCapabilities). An unknown
+// capability imposes no requirement. Empty kind is the openai-compat bucket,
+// treated as a language/text model.
+func ModelMeetsCapability(m Model, capability string) (ok bool, reason string) {
+	isLanguage := m.Kind == "" || m.Kind == "language"
+	hasCap := func(c string) bool {
+		for _, x := range m.Caps {
+			if x == c {
+				return true
+			}
+		}
+		return false
+	}
+	switch capability {
+	case "text":
+		if !isLanguage {
+			return false, "is not a text/language model"
+		}
+	case "vision":
+		if !(isLanguage && hasCap("vision")) {
+			return false, "does not support image input (vision)"
+		}
+	case "embedding":
+		if m.Kind != "embedding" {
+			return false, "is not an embedding model"
+		}
+	case "image":
+		if m.Kind != "image" {
+			return false, "is not an image-generation model"
+		}
+	case "speech":
+		if m.Kind != "speech" {
+			return false, "is not a text-to-speech model"
+		}
+	case "transcription":
+		if m.Kind != "transcription" {
+			return false, "is not a speech-to-text model"
+		}
+	case "search":
+		if !(m.ToolCall && hasCap("text")) {
+			return false, "must support tool calls and text input/output"
+		}
+	}
+	return true, ""
+}
+
 // ProviderCapability is one row in the capability matrix Settings
 // renders. Configured = the user has an enabled providers row for it;
 // CatalogOnly = the provider lives only in the overlay (not in the
