@@ -4,7 +4,7 @@
 # Produces two files, one per distributed binary:
 #   airlock/THIRD_PARTY_NOTICES.md
 #       — every module compiled into the airlock server binary.
-#   airlock/scaffold/templates/THIRD_PARTY_NOTICES.md
+#   airlock/scaffold/templates/THIRD_PARTY_NOTICES.generated.md
 #       — every module compiled into an agent binary (agentsdk + its deps),
 #         plus Tailwind CSS + DaisyUI (their compiled CSS ships in the agent).
 #       The scaffold materializes this into each generated agent verbatim.
@@ -112,7 +112,7 @@ gen_go "$AIRLOCK" "./cmd/airlock" "github.com/airlockrun/airlock" \
 # Only when the agentsdk source is checked out alongside airlock (local dev /
 # the full monorepo). In an airlock-only checkout (CI) it's absent — the
 # committed scaffold notices stand, regenerated wherever agentsdk is present.
-AGENT_OUT="$AIRLOCK/scaffold/templates/THIRD_PARTY_NOTICES.md"
+AGENT_OUT="$AIRLOCK/scaffold/templates/THIRD_PARTY_NOTICES.generated.md"
 if [ -d "$HQ/agentsdk" ]; then
 	gen_go "$HQ/agentsdk" "./..." "" "$AGENT_OUT" "airlock agent"
 
