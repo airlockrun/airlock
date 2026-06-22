@@ -168,3 +168,12 @@ SELECT id FROM agents WHERE status = 'active';
 -- Stamp the synced tool-set hash on the agent. Sync handler compares
 -- before/after to decide whether to broadcast a sibling-update refresh.
 UPDATE agents SET tools_hash = @tools_hash WHERE id = @id;
+
+-- name: ResolvePrincipalNames :many
+-- Resolve principal ids to a display name: a user's display_name or a group's
+-- name (a principal is one or the other). Used to label an agent's owner.
+SELECT p.id, COALESCE(u.display_name, gr.name, '')::text AS name
+FROM principals p
+LEFT JOIN users u  ON u.id = p.id
+LEFT JOIN groups gr ON gr.id = p.id
+WHERE p.id = ANY (@ids::uuid[]);

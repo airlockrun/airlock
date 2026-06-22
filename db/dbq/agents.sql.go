@@ -526,6 +526,41 @@ func (q *Queries) ResetStuckUpgrades(ctx context.Context) error {
 	return err
 }
 
+const resolvePrincipalNames = `-- name: ResolvePrincipalNames :many
+SELECT p.id, COALESCE(u.display_name, gr.name, '')::text AS name
+FROM principals p
+LEFT JOIN users u  ON u.id = p.id
+LEFT JOIN groups gr ON gr.id = p.id
+WHERE p.id = ANY ($1::uuid[])
+`
+
+type ResolvePrincipalNamesRow struct {
+	ID   pgtype.UUID `json:"id"`
+	Name string      `json:"name"`
+}
+
+// Resolve principal ids to a display name: a user's display_name or a group's
+// name (a principal is one or the other). Used to label an agent's owner.
+func (q *Queries) ResolvePrincipalNames(ctx context.Context, ids []pgtype.UUID) ([]ResolvePrincipalNamesRow, error) {
+	rows, err := q.db.Query(ctx, resolvePrincipalNames, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ResolvePrincipalNamesRow{}
+	for rows.Next() {
+		var i ResolvePrincipalNamesRow
+		if err := rows.Scan(&i.ID, &i.Name); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const updateAgentA2ASettings = `-- name: UpdateAgentA2ASettings :exec
 UPDATE agents SET
     allow_non_member_mcp = $1,

@@ -109,6 +109,11 @@ type ListItem struct {
 	Agent      dbq.Agent       `json:"agent"`
 	Running    bool            `json:"running"`
 	YourAccess agentsdk.Access `json:"your_access"`
+	// OwnerName is the agent owner principal's display name (user display name
+	// or group name); IsOwner is true when the caller owns the agent (the owner
+	// principal is in the caller's grantee set).
+	OwnerName string `json:"owner_name"`
+	IsOwner   bool   `json:"is_owner"`
 }
 
 // Detail is the Get response payload — the agent plus the per-agent
@@ -332,12 +337,43 @@ func (s *Service) List(ctx context.Context, p authz.Principal) ([]ListItem, erro
 		s.logger.Error("list agents", zap.Error(err))
 		return nil, err
 	}
+	// Owner principal in the caller's grantee set ⇒ they own the agent
+	// (directly or via a group). Resolve owner display names in one batch.
+	ownsSet := make(map[uuid.UUID]struct{})
+	for _, id := range p.GranteeSet() {
+		ownsSet[id] = struct{}{}
+	}
+	ownerNames := make(map[uuid.UUID]string)
+	ownerIDs := make([]pgtype.UUID, 0, len(agents))
+	seenOwner := make(map[uuid.UUID]struct{})
+	for _, a := range agents {
+		oid := uuid.UUID(a.OwnerPrincipalID.Bytes)
+		if _, ok := seenOwner[oid]; ok || !a.OwnerPrincipalID.Valid {
+			continue
+		}
+		seenOwner[oid] = struct{}{}
+		ownerIDs = append(ownerIDs, a.OwnerPrincipalID)
+	}
+	if len(ownerIDs) > 0 {
+		if rows, err := q.ResolvePrincipalNames(ctx, ownerIDs); err != nil {
+			s.logger.Warn("list agents: owner-name lookup failed", zap.Error(err))
+		} else {
+			for _, r := range rows {
+				ownerNames[uuid.UUID(r.ID.Bytes)] = r.Name
+			}
+		}
+	}
+
 	out := make([]ListItem, len(agents))
 	ids := make([]uuid.UUID, len(agents))
 	for i, a := range agents {
+		oid := uuid.UUID(a.OwnerPrincipalID.Bytes)
+		_, isOwner := ownsSet[oid]
 		out[i] = ListItem{
 			Agent:      a,
 			YourAccess: p.EffectiveAgentAccess(ctx, q, uuid.UUID(a.ID.Bytes)),
+			OwnerName:  ownerNames[oid],
+			IsOwner:    a.OwnerPrincipalID.Valid && isOwner,
 		}
 		ids[i] = uuid.UUID(a.ID.Bytes)
 	}

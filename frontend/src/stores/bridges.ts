@@ -33,6 +33,7 @@ export const useBridgesStore = defineStore('bridges', () => {
     payload: {
       agentId: string
       isSystem?: boolean
+      isManager?: boolean
     },
   ) {
     const { data } = await api.put(`/api/v1/bridges/${id}`, payload)
