@@ -681,6 +681,10 @@ message ListAddableSiblingsResponse {
   repeated AddableSiblingInfo agents = 1;
 }
 
+message ListInboundSiblingsResponse {
+  repeated InboundSiblingInfo siblings = 1;
+}
+
 message GetAgentSharingResponse {
   A2ASettings settings = 1;
 }

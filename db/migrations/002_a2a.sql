@@ -27,33 +27,33 @@ ALTER TABLE runs
     ADD COLUMN parent_run_id uuid REFERENCES runs(id) ON DELETE SET NULL;
 CREATE INDEX runs_parent_run_id_idx ON runs(parent_run_id) WHERE parent_run_id IS NOT NULL;
 
--- Per-agent A2A settings on the *target* (callee). Two booleans control
--- who is allowed to call this agent's MCP endpoint.
+-- Per-agent protocol-surface toggles on the *target* (callee). These gate
+-- the anonymous + protocol planes only; who may make an authenticated MCP
+-- call is decided purely by the grant ladder (agent_grants via
+-- EffectiveAgentAccess), with "non-members" expressed as a grant to the
+-- built-in All-Users group rather than a flag here.
 --
---   allow_non_member_mcp — authed users without an agent_members row
---                          get AccessPublic; without this, they 403.
---   allow_public_mcp     — unauthenticated requests get AccessPublic;
---                          without this, they 401.
+--   mcp_enabled         — the agent serves an MCP endpoint to
+--                         grant-authorized callers (members + A2A) at all.
+--   allow_public_mcp    — anonymous (no-JWT) MCP requests may reach the
+--                         agent's public-tier tools.
+--   allow_public_routes — anonymous requests may reach the agent's
+--                         AccessPublic web routes (subdomain proxy).
 --
--- Backfill rule: existing rows get false (closed-by-default). DEFAULT
--- is set only for the backfill INSERT and immediately dropped so every
--- subsequent INSERT must set both columns explicitly — no fake defaults
--- on data columns.
---
--- The same-row CHECK enforces "public implies non-member" at the
--- storage layer. The API surface presents the public toggle as a
--- friendly affordance that also flips non-member; the constraint
--- guarantees no path (UI bug, raw SQL, future endpoint) can land the
--- inconsistent state.
+-- Backfill: mcp_enabled + allow_public_routes default true (preserve
+-- today's authed-MCP and public-route behavior); allow_public_mcp false
+-- (anonymous MCP stays opt-in). DEFAULT is set for the backfill only and
+-- dropped immediately so every INSERT sets each column explicitly — no
+-- fake defaults on data columns.
 ALTER TABLE agents
-    ADD COLUMN allow_non_member_mcp boolean NOT NULL DEFAULT false,
-    ADD COLUMN allow_public_mcp     boolean NOT NULL DEFAULT false,
-    ADD CONSTRAINT agents_public_implies_non_member
-        CHECK (NOT allow_public_mcp OR allow_non_member_mcp);
+    ADD COLUMN mcp_enabled         boolean NOT NULL DEFAULT true,
+    ADD COLUMN allow_public_mcp    boolean NOT NULL DEFAULT false,
+    ADD COLUMN allow_public_routes boolean NOT NULL DEFAULT true;
 
 ALTER TABLE agents
-    ALTER COLUMN allow_non_member_mcp DROP DEFAULT,
-    ALTER COLUMN allow_public_mcp     DROP DEFAULT;
+    ALTER COLUMN mcp_enabled         DROP DEFAULT,
+    ALTER COLUMN allow_public_mcp    DROP DEFAULT,
+    ALTER COLUMN allow_public_routes DROP DEFAULT;
 
 -- agent_siblings — the caller's address book of agents it may bind to
 -- in its own LLM prompt / VM. Authorization at call time is always
@@ -64,15 +64,29 @@ ALTER TABLE agents
 -- Join table over uuid[] for FK integrity + ON DELETE CASCADE (deleted
 -- agent disappears from every parent's list) + PK uniqueness.
 --
--- The cross-row rule "user can only add Y as a sibling of X if they're
--- a member of Y or Y.allow_non_member_mcp" lives in the API layer
--- (siblings POST handler) — it depends on the actor identity, which
--- DB CHECK constraints can't reach. Raw SQL writes bypass; that's true
--- for every per-row permission rule in the codebase already.
+-- max_access is the per-edge ceiling the operator picks when adding the
+-- sibling: when the parent calls this sibling, the call's effective
+-- access is capped at this level. It can only lower, never raise, the
+-- real entitlement — the A2A path still floors it by the driving user's
+-- and the parent agent owner's access on the target.
+--
+-- The add rule "X may add Y as a sibling iff X's owner has a grant on Y
+-- (a direct grant or the All-Users group)" lives in the API/query layer
+-- (siblings add) — it records which grant authorized the edge in
+-- authorizing_grantee_id, the anchor for the cascade FK below.
+-- authorizing_grantee_id is the grant on the sibling that justifies this
+-- edge: the parent agent owner's own user-principal grant, or the built-in
+-- All-Users group when the parent owner's access to the sibling comes from
+-- "shared with everyone". The composite FK to agent_grants (added once that
+-- table exists, below) makes the edge vanish (ON DELETE CASCADE) the moment
+-- that grant is revoked — no application hook. The live role of this grant
+-- also caps the displayed effective access (LEAST(max_access, role)).
 CREATE TABLE agent_siblings (
-    parent_agent_id  uuid NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
-    sibling_agent_id uuid NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
-    created_at       timestamptz NOT NULL DEFAULT now(),
+    parent_agent_id        uuid NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    sibling_agent_id       uuid NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    max_access             text NOT NULL CHECK (max_access IN ('public', 'user', 'admin')),
+    authorizing_grantee_id uuid NOT NULL,
+    created_at             timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (parent_agent_id, sibling_agent_id)
 );
 CREATE INDEX agent_siblings_sibling_idx ON agent_siblings (sibling_agent_id);
@@ -1133,10 +1147,15 @@ CREATE INDEX model_grants_grantee_idx ON model_grants (grantee_id);
 -- EffectiveAgentAccess resolves it through the caller's grantee-set, the same
 -- resolver resource/model grants use — one table, one FK, one resolver. The
 -- agent owner's admin grant is seeded on create.
+-- role 'public' is a first-class grant tier: granting the All-Users group
+-- at 'public' opts non-members in to authed A2A/MCP at the public floor.
+-- admin > user > public on the access ladder; a non-grantee still resolves
+-- to the public floor via EffectiveAgentAccess, but without a matching grant
+-- row (the distinction the A2A entitlement gate reads).
 CREATE TABLE agent_grants (
     agent_id   uuid NOT NULL REFERENCES agents(id)     ON DELETE CASCADE,
     grantee_id uuid NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
-    role       text NOT NULL CHECK (role IN ('admin', 'user')),
+    role       text NOT NULL CHECK (role IN ('admin', 'user', 'public')),
     created_at timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (agent_id, grantee_id)
 );
@@ -1145,6 +1164,15 @@ CREATE INDEX agent_grants_grantee_idx ON agent_grants (grantee_id);
 INSERT INTO agent_grants (agent_id, grantee_id, role, created_at)
     SELECT agent_id, user_id, role, created_at FROM agent_members;
 DROP TABLE agent_members;
+
+-- Now that agent_grants exists, wire the agent_siblings cascade FK: an
+-- edge dies when the grant that authorizes it is revoked. agent_siblings
+-- is empty at this point (newly created above), so the NOT NULL FK adds
+-- cleanly.
+ALTER TABLE agent_siblings
+    ADD CONSTRAINT agent_siblings_grant_fk
+        FOREIGN KEY (sibling_agent_id, authorizing_grantee_id)
+        REFERENCES agent_grants (agent_id, grantee_id) ON DELETE CASCADE;
 
 -- +goose Down
 -- ─── agent access — reverse (agent_grants → agent_members) ───
@@ -1155,10 +1183,15 @@ CREATE TABLE agent_members (
     created_at timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (agent_id, user_id)
 );
--- Only user-kind grantees map back; group grants (shared-with-everyone) are dropped.
+-- Only user-kind grantees with an admin/user role map back; group grants
+-- (shared-with-everyone) and the 'public' tier have no agent_members
+-- equivalent and are dropped. Drop the sibling cascade FK first so
+-- agent_grants can be dropped.
+ALTER TABLE agent_siblings DROP CONSTRAINT IF EXISTS agent_siblings_grant_fk;
 INSERT INTO agent_members (agent_id, user_id, role, created_at)
     SELECT g.agent_id, g.grantee_id, g.role, g.created_at
-    FROM agent_grants g JOIN users u ON u.id = g.grantee_id;
+    FROM agent_grants g JOIN users u ON u.id = g.grantee_id
+    WHERE g.role IN ('admin', 'user');
 DROP TABLE agent_grants;
 -- ─── grants — reverse ───
 DROP TABLE IF EXISTS model_grants;
@@ -1399,6 +1432,8 @@ ALTER TABLE runs ALTER COLUMN logs DROP DEFAULT;
 ALTER TABLE agents DROP COLUMN IF EXISTS allow_public_mcp_prompt;
 ALTER TABLE agents DROP COLUMN IF EXISTS allow_oauth_mcp_prompt;
 ALTER TABLE agents DROP CONSTRAINT IF EXISTS agents_public_implies_non_member;
+ALTER TABLE agents DROP COLUMN IF EXISTS allow_public_routes;
+ALTER TABLE agents DROP COLUMN IF EXISTS mcp_enabled;
 ALTER TABLE agents DROP COLUMN IF EXISTS allow_public_mcp;
 ALTER TABLE agents DROP COLUMN IF EXISTS allow_non_member_mcp;
 ALTER TABLE agent_directories DROP COLUMN IF EXISTS scope;

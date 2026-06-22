@@ -626,34 +626,60 @@ message EnvVarInfo {
 
 // SiblingInfo is one entry in an agent's A2A address book.
 message SiblingInfo {
+  reserved 5, 6;  // removed allow_non_member_mcp / allow_public_mcp
   string id = 1;
   string slug = 2;
   string name = 3;
   string description = 4;
-  bool allow_non_member_mcp = 5;
-  bool allow_public_mcp = 6;
   google.protobuf.Timestamp created_at = 7;
+  // Per-edge access ceiling ("public" | "user" | "admin") the operator
+  // picked when adding the sibling — caps what this agent can do when it
+  // calls the sibling (operator intent).
+  string max_access = 8;
+  // The live effective ceiling = min(max_access, current role of the grant
+  // that authorizes this edge). Auto-downgrades when the target lowers the
+  // grant; this is the value the UI shows.
+  string effective_max_access = 9;
 }
 
-// AddableSiblingInfo is a candidate the editing user can add to an
-// agent's A2A address book. is_member tells the UI whether the
-// editing user is already a member of the target (vs picking it
-// purely because allow_non_member_mcp=true).
-message AddableSiblingInfo {
+// InboundSiblingInfo is one agent that has added THIS agent to its
+// address book (the reverse of SiblingInfo): who can call this agent via
+// A2A, with the access ceiling they configured.
+message InboundSiblingInfo {
   string id = 1;
   string slug = 2;
   string name = 3;
   string description = 4;
-  bool allow_non_member_mcp = 5;
-  bool is_member = 6;
+  // Per-edge ceiling the parent agent picked (operator intent).
+  string max_access = 5;
+  // Display name of the parent agent's owner (user or group).
+  string owner_name = 6;
+  google.protobuf.Timestamp created_at = 7;
+  // Live effective ceiling = min(max_access, current authorizing-grant role).
+  string effective_max_access = 8;
 }
 
-// A2ASettings is the per-agent MCP-exposure toggles configured from
-// the A2A settings page. Wire shape for get_agent_sharing /
-// set_agent_sharing.
+// AddableSiblingInfo is a candidate agent the parent may add to its A2A
+// address book — any agent the parent's owner holds a grant on.
+message AddableSiblingInfo {
+  reserved 5, 6;  // removed allow_non_member_mcp / is_member
+  string id = 1;
+  string slug = 2;
+  string name = 3;
+  string description = 4;
+}
+
+// A2ASettings is the per-agent protocol-surface toggles, orthogonal to the
+// grant ladder that governs authed MCP access. Wire shape for
+// get_agent_sharing / set_agent_sharing.
 message A2ASettings {
-  bool allow_non_member_mcp = 1;
+  reserved 1;  // removed allow_non_member_mcp (now an All-Users grant)
+  // Anonymous (no-JWT) MCP requests may reach public-tier tools.
   bool allow_public_mcp = 2;
+  // The agent serves an MCP endpoint to grant-authorized callers at all.
+  bool mcp_enabled = 3;
+  // Anonymous requests may reach the agent's AccessPublic web routes.
+  bool allow_public_routes = 4;
 }
 
 // ExecEndpointInfo is one row from ListExecEndpoints — the

@@ -21,6 +21,7 @@ import EnvVarsTab from '@/components/agent/EnvVarsTab.vue'
 import ToolsTab from '@/components/agent/ToolsTab.vue'
 import MembersTab from '@/components/agent/MembersTab.vue'
 import SiblingsTab from '@/components/agent/SiblingsTab.vue'
+import AccessTab from '@/components/agent/AccessTab.vue'
 import ModelsTab from '@/components/agent/ModelsTab.vue'
 import RunsTab from '@/components/agent/RunsTab.vue'
 import BuildsTab from '@/components/agent/BuildsTab.vue'
@@ -166,6 +167,7 @@ const configSections = [
   { id: 'webhooks',       label: 'Webhooks',       component: markRaw(WebhooksTab) },
   { id: 'schedules',      label: 'Schedules',      component: markRaw(SchedulesTab) },
   { id: 'siblings',       label: 'Siblings',       component: markRaw(SiblingsTab), alwaysShow: true },
+  { id: 'access',         label: 'Access',         component: markRaw(AccessTab), alwaysShow: true },
   { id: 'source',         label: 'Source',         component: markRaw(SourceTab) },
   { id: 'routes',         label: 'Routes',         component: markRaw(RoutesTab) },
   { id: 'tools',          label: 'Tools',          component: markRaw(ToolsTab) },

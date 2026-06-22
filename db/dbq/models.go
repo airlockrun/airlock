@@ -43,8 +43,9 @@ type Agent struct {
 	ErrorMessage         string             `json:"error_message"`
 	CreatedAt            pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt            pgtype.Timestamptz `json:"updated_at"`
-	AllowNonMemberMcp    bool               `json:"allow_non_member_mcp"`
+	McpEnabled           bool               `json:"mcp_enabled"`
 	AllowPublicMcp       bool               `json:"allow_public_mcp"`
+	AllowPublicRoutes    bool               `json:"allow_public_routes"`
 	ToolsHash            []byte             `json:"tools_hash"`
 	Emoji                string             `json:"emoji"`
 	AllowOauthMcpPrompt  bool               `json:"allow_oauth_mcp_prompt"`
@@ -258,9 +259,11 @@ type AgentScheduledFire struct {
 }
 
 type AgentSibling struct {
-	ParentAgentID  pgtype.UUID        `json:"parent_agent_id"`
-	SiblingAgentID pgtype.UUID        `json:"sibling_agent_id"`
-	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	ParentAgentID        pgtype.UUID        `json:"parent_agent_id"`
+	SiblingAgentID       pgtype.UUID        `json:"sibling_agent_id"`
+	MaxAccess            string             `json:"max_access"`
+	AuthorizingGranteeID pgtype.UUID        `json:"authorizing_grantee_id"`
+	CreatedAt            pgtype.Timestamptz `json:"created_at"`
 }
 
 type AgentTool struct {

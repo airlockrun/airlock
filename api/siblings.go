@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/airlockrun/agentsdk"
 	"github.com/airlockrun/airlock/convert"
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 	"github.com/airlockrun/airlock/service"
@@ -98,7 +99,28 @@ func (h *siblingsHandler) ListAddable(w http.ResponseWriter, r *http.Request) {
 	writeProto(w, http.StatusOK, &airlockv1.ListAddableSiblingsResponse{Agents: out})
 }
 
-// Add POST /api/v1/agents/{agentID}/siblings — body: {"siblingId": "..."}.
+// ListInbound GET /api/v1/agents/{agentID}/siblings/inbound — the agents
+// that have added this one to their address book (reverse direction).
+func (h *siblingsHandler) ListInbound(w http.ResponseWriter, r *http.Request) {
+	agentID, ok := parentAgentID(w, r)
+	if !ok {
+		return
+	}
+	p := principalFromRequest(r)
+	rows, err := h.svc.ListInbound(r.Context(), p, agentID)
+	if err != nil {
+		writeSiblingsError(w, err, "list inbound siblings")
+		return
+	}
+	out := make([]*airlockv1.InboundSiblingInfo, 0, len(rows))
+	for _, s := range rows {
+		out = append(out, convert.InboundSiblingToProto(s))
+	}
+	writeProto(w, http.StatusOK, &airlockv1.ListInboundSiblingsResponse{Siblings: out})
+}
+
+// Add POST /api/v1/agents/{agentID}/siblings — body:
+// {"siblingId": "...", "maxAccess": "public|user|admin"}.
 func (h *siblingsHandler) Add(w http.ResponseWriter, r *http.Request) {
 	parentID, ok := parentAgentID(w, r)
 	if !ok {
@@ -106,6 +128,7 @@ func (h *siblingsHandler) Add(w http.ResponseWriter, r *http.Request) {
 	}
 	var body struct {
 		SiblingID string `json:"siblingId"`
+		MaxAccess string `json:"maxAccess"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid body")
@@ -117,7 +140,7 @@ func (h *siblingsHandler) Add(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := principalFromRequest(r)
-	if err := h.svc.Add(r.Context(), p, parentID, siblingID); err != nil {
+	if err := h.svc.Add(r.Context(), p, parentID, siblingID, agentsdk.Access(body.MaxAccess)); err != nil {
 		switch {
 		case errors.Is(err, service.ErrInvalidInput):
 			writeError(w, http.StatusBadRequest, "agent cannot be its own sibling")
@@ -133,6 +156,33 @@ func (h *siblingsHandler) Add(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusCreated)
+}
+
+// UpdateMaxAccess PATCH /api/v1/agents/{agentID}/siblings/{siblingID} —
+// body: {"maxAccess": "public|user|admin"}. Edits the per-edge ceiling.
+func (h *siblingsHandler) UpdateMaxAccess(w http.ResponseWriter, r *http.Request) {
+	parentID, ok := parentAgentID(w, r)
+	if !ok {
+		return
+	}
+	siblingID, err := uuid.Parse(chi.URLParam(r, "siblingID"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid sibling ID")
+		return
+	}
+	var body struct {
+		MaxAccess string `json:"maxAccess"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	p := principalFromRequest(r)
+	if err := h.svc.UpdateMaxAccess(r.Context(), p, parentID, siblingID, agentsdk.Access(body.MaxAccess)); err != nil {
+		writeSiblingsError(w, err, "update sibling")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // Remove DELETE /api/v1/agents/{agentID}/siblings/{siblingID}.
@@ -185,8 +235,9 @@ func (h *siblingsHandler) UpdateA2ASettings(w http.ResponseWriter, r *http.Reque
 	}
 	in := siblings.A2ASettings{}
 	if req.Settings != nil {
-		in.AllowNonMemberMcp = req.Settings.AllowNonMemberMcp
+		in.McpEnabled = req.Settings.McpEnabled
 		in.AllowPublicMcp = req.Settings.AllowPublicMcp
+		in.AllowPublicRoutes = req.Settings.AllowPublicRoutes
 	}
 	p := principalFromRequest(r)
 	out, err := h.svc.UpdateSettings(r.Context(), p, parentID, in)

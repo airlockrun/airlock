@@ -17,6 +17,7 @@ import (
 
 	"github.com/airlockrun/agentsdk"
 	"github.com/airlockrun/airlock/auth"
+	"github.com/airlockrun/airlock/authz"
 	"github.com/airlockrun/airlock/config"
 	"github.com/airlockrun/airlock/container"
 	"github.com/airlockrun/airlock/db"
@@ -432,22 +433,27 @@ func (d *Dispatcher) ForwardA2APrompt(ctx context.Context, agentID uuid.UUID, pa
 	return &runBodyCloser{ReadCloser: rc, dispatcher: d, runID: runID}, runID, nil
 }
 
-// computeVisibleSiblings returns the set of agent IDs this run's user
-// is permitted to A2A-call from the prompting agent. Anonymous runs
-// (userID == nil) get only siblings with allow_non_member_mcp = true.
-// Cron/webhook runs (also userID == nil) get the same set — they
-// can't A2A in v1; agentsdk rejects A2A binding attempts when no
-// original user is on the run, but the visible set returned here is
-// harmless either way.
+// computeVisibleSiblings returns the set of agent IDs this run's user is
+// permitted to A2A-call from the prompting agent: the parent's siblings on
+// which the driving user holds a grant (resolved through the user's full
+// grantee-set, so group grants incl. All-Users count). Anonymous /
+// cron / webhook runs (userID == nil) pass an empty grantee-set and get
+// nothing — they can't A2A in v1, and a non-member has no grant anyway.
 func (d *Dispatcher) computeVisibleSiblings(ctx context.Context, agentID uuid.UUID, userID *uuid.UUID) ([]uuid.UUID, error) {
 	q := dbq.New(d.db.Pool())
-	var userPg pgtype.UUID
+	var grantees []pgtype.UUID
 	if userID != nil {
-		userPg = toPgUUID(*userID)
+		var role auth.Role
+		if u, err := q.GetUserByID(ctx, toPgUUID(*userID)); err == nil {
+			role = auth.Role(u.TenantRole)
+		}
+		for _, id := range authz.UserPrincipal(*userID, role).GranteeSet() {
+			grantees = append(grantees, toPgUUID(id))
+		}
 	}
 	rows, err := q.ListVisibleSiblings(ctx, dbq.ListVisibleSiblingsParams{
 		ParentAgentID: toPgUUID(agentID),
-		UserID:        userPg,
+		GranteeIds:    grantees,
 	})
 	if err != nil {
 		return nil, err

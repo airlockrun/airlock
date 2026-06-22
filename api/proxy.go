@@ -141,7 +141,12 @@ func SubdomainProxy(agentDomain string, database *db.DB, s3 *storage.S3Client, d
 			// Enforce access control based on route.Access.
 			switch route.Access {
 			case "public":
-				// No auth required.
+				// No auth required — but the agent's allow_public_routes
+				// toggle can close the anonymous public-route surface.
+				if !agent.AllowPublicRoutes {
+					rejectOrRedirect(w, r, publicURL)
+					return
+				}
 
 			case "user", "admin":
 				claims, ok := validateSubdomainAuth(r, jwtSecret)
