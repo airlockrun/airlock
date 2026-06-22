@@ -171,9 +171,8 @@ func Setup(t *testing.T) *Harness {
 	transcription := trigger.NewTranscriptionResolver(database, secretStore)
 	prompter := trigger.NewPromptProxy(dispatcher, database, s3Client, transcription, logger.Named("prompt-proxy"))
 	telegram := trigger.NewTelegramDriver(logger.Named("telegram"))
-	discord := trigger.NewDiscordDriver(logger.Named("discord"))
 	bridgeMgr := trigger.NewBridgeManager(
-		map[string]trigger.BridgeDriver{"telegram": telegram, "discord": discord},
+		map[string]trigger.BridgeDriver{"telegram": telegram},
 		prompter, database, secretStore, cfg.JWTSecret, cfg.PublicURL, cfg.AgentBaseURL,
 		logger.Named("bridges"),
 	)
@@ -185,7 +184,6 @@ func Setup(t *testing.T) *Harness {
 		PublicURL:      cfg.PublicURL,
 		OAuthClient:    oauth.NewClient(),
 		TelegramDriver: telegram,
-		DiscordDriver:  discord,
 		Secrets:        secretStore,
 		S3Client:       s3Client,
 		BuildService:   buildSvc,

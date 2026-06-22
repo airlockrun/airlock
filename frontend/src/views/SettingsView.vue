@@ -86,7 +86,7 @@ function formatDate(iso: string): string {
   }
 }
 
-// Linked platform accounts (Telegram / Discord identities). Regular
+// Linked platform accounts (Telegram identities). Regular
 // users see only their own; admins see every link in the tenant with
 // the owner email column populated. Both can unlink — the backend
 // scopes the delete by caller's UserID, or by id alone when the
@@ -461,10 +461,10 @@ async function changePassword() {
       <template #title>Linked accounts</template>
       <template #subtitle>
         <span v-if="canManageAllIdentities">
-          Every Telegram / Discord identity linked to a user in this tenant. Unlinking forces the user to re-run <code>/auth</code> in their bot to regain access.
+          Every Telegram identity linked to a user in this tenant. Unlinking forces the user to re-run <code>/auth</code> in their bot to regain access.
         </span>
         <span v-else>
-          Your Telegram / Discord identities — used by bridge bots to recognise you. Unlinking forces you to re-run <code>/auth</code> in the bot the next time you DM it.
+          Your Telegram identities — used by bridge bots to recognise you. Unlinking forces you to re-run <code>/auth</code> in the bot the next time you DM it.
         </span>
       </template>
       <template #content>

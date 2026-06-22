@@ -147,12 +147,6 @@ type Config struct {
 	ActivationCodeFile     string // path to write the first-run activation code to (so `docker compose` users can `cat` it)
 	ForceInlineAttachments bool   // dev escape hatch: force base64 delivery to LLMs even when the provider supports URLs (public URL unreachable from provider)
 
-	// EnableDiscord gates the Discord chat bridge. Off by default: the
-	// Discord gateway integration isn't actively tested, so new Discord
-	// bridges can't be created and the driver isn't polled unless an
-	// operator opts in. The driver code stays intact for a flag flip.
-	EnableDiscord bool
-
 	// --- OIDC (optional) ---
 	OIDCIssuerURL    string
 	OIDCClientID     string
@@ -211,7 +205,6 @@ func Load() *Config {
 		BuildkitHost:          os.Getenv("BUILDKIT_HOST"),
 		AgentLibsPath:         os.Getenv("AGENT_LIBS_PATH"),
 		AgentLibsPathExplicit: os.Getenv("AGENT_LIBS_PATH") != "",
-		EnableDiscord:         envBoolOr("ENABLE_DISCORD", false),
 		AgentLibsCacheDir:     envOr("AGENT_LIBS_CACHE_DIR", "/var/lib/airlock/libs"),
 
 		// Codegen workspace — see field doc above. Both empty by default

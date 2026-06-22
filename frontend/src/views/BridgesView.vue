@@ -55,8 +55,7 @@ const editing = ref<{ id: string; name: string; agentId: string; isSystem: boole
 const editAgentID = ref('')
 const editIsSystem = ref(false)
 
-// Discord is gated server-side by ENABLE_DISCORD (off by default); the
-// option is omitted here until it's re-enabled.
+// Telegram is the only supported bridge platform.
 const bridgeTypes = [
   { label: 'Telegram', value: 'telegram' },
 ]
@@ -95,7 +94,6 @@ async function onSubmit() {
     }
     const agentIdField = createIsSystem.value ? '' : form.value.agentId
     await store.createBridge({
-      name: form.value.name,
       type: form.value.type,
       token: form.value.token,
       agentId: agentIdField,
@@ -128,7 +126,6 @@ function formatType(t: string): string {
 function typeIcon(t: string): string {
   switch (t) {
     case 'telegram': return 'pi pi-send'
-    case 'discord': return 'pi pi-discord'
     default: return 'pi pi-link'
   }
 }
@@ -291,10 +288,6 @@ function confirmDelete(bridge: { id: string; name: string }) {
       </div>
       <div v-else style="display: flex; flex-direction: column; gap: 1rem; padding-top: 0.5rem">
         <div style="display: flex; flex-direction: column; gap: 0.25rem">
-          <label for="bridgeName">Name</label>
-          <InputText id="bridgeName" v-model="form.name" placeholder="My Telegram Bot" />
-        </div>
-        <div style="display: flex; flex-direction: column; gap: 0.25rem">
           <label for="bridgeType">Type</label>
           <Select id="bridgeType" v-model="form.type" :options="bridgeTypes" optionLabel="label" optionValue="value" style="width: 100%" />
         </div>
@@ -321,6 +314,12 @@ function confirmDelete(bridge: { id: string; name: string }) {
         <div v-if="createTokenSource === 'paste'" style="display: flex; flex-direction: column; gap: 0.25rem">
           <label for="bridgeToken">Token</label>
           <Password id="bridgeToken" v-model="form.token" :feedback="false" toggleMask />
+          <small style="color: var(--p-text-muted-color)">The bridge name is taken from the bot's display name and kept in sync automatically.</small>
+        </div>
+        <div v-if="createTokenSource === 'create_new'" style="display: flex; flex-direction: column; gap: 0.25rem">
+          <label for="bridgeBotName">Bot name</label>
+          <InputText id="bridgeBotName" v-model="form.name" placeholder="My Telegram Bot" />
+          <small style="color: var(--p-text-muted-color)">Suggested name for the new bot. The bridge then mirrors the bot's display name.</small>
         </div>
         <!-- System bridge: admin-only. A system bridge isn't bound to
              an agent; inbound DMs route to the in-airlock sysagent

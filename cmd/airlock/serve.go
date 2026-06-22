@@ -176,15 +176,8 @@ func runServe(_ []string) {
 	transcriptionResolver := trigger.NewTranscriptionResolver(database, secretStore)
 	prompter := trigger.NewPromptProxy(dispatcher, database, s3Client, transcriptionResolver, logger.Named("prompt-proxy"))
 	telegramDriver := trigger.NewTelegramDriver(logger.Named("telegram"))
-	discordDriver := trigger.NewDiscordDriver(logger.Named("discord"))
 	drivers := map[string]trigger.BridgeDriver{
 		"telegram": telegramDriver,
-	}
-	// Discord is opt-in (the gateway integration isn't actively tested).
-	// When off, it isn't polled and no Discord bridge can be created; the
-	// driver instance still backs the identity-link adapters dormantly.
-	if cfg.EnableDiscord {
-		drivers["discord"] = discordDriver
 	}
 	bridgeMgr := trigger.NewBridgeManager(drivers, prompter, database, secretStore, cfg.JWTSecret, cfg.PublicURL, cfg.AgentBaseURL, logger.Named("bridges"))
 	scheduler := trigger.NewScheduler(dispatcher, database, logger.Named("scheduler"))
@@ -208,8 +201,6 @@ func runServe(_ []string) {
 		PublicURL:              cfg.PublicURL,
 		OAuthClient:            oauthClient,
 		TelegramDriver:         telegramDriver,
-		DiscordDriver:          discordDriver,
-		EnableDiscord:          cfg.EnableDiscord,
 		Secrets:                secretStore,
 		S3Client:               s3Client,
 		BuildService:           buildSvc,

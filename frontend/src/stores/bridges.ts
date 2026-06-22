@@ -20,7 +20,7 @@ export const useBridgesStore = defineStore('bridges', () => {
     }
   }
 
-  async function createBridge(payload: { name: string; type: string; token: string; agentId?: string; isSystem?: boolean; isManager?: boolean }): Promise<BridgeInfo> {
+  async function createBridge(payload: { type: string; token: string; agentId?: string; isSystem?: boolean; isManager?: boolean }): Promise<BridgeInfo> {
     const { data } = await api.post('/api/v1/bridges', payload)
     // createBridge returns a single BridgeInfo, not wrapped in a response message
     const created = fromJson(ListBridgesResponseSchema, { bridges: [data] }).bridges[0]

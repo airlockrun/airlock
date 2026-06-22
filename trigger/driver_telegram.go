@@ -526,26 +526,28 @@ func (d *TelegramDriver) GetMe(ctx context.Context, token string) (string, error
 	return result.Result.Username, nil
 }
 
-// GetMeFull calls getMe and returns the bot's username, stable user id, and
-// can_manage_bots capability. Used where airlock needs the bot identity (to
-// dedupe one-listener-per-bot) and the manager capability (to gate the
-// is_manager behavior), not just the username.
-func (d *TelegramDriver) GetMeFull(ctx context.Context, token string) (username string, botUserID int64, canManageBots bool, err error) {
+// GetMeFull calls getMe and returns the bot's username, display name
+// (first_name — the human-readable name that may contain spaces), stable user
+// id, and can_manage_bots capability. Used where airlock needs the bot identity
+// (to dedupe one-listener-per-bot), its display name (the bridge name shown in
+// the UI), and the manager capability (to gate the is_manager behavior).
+func (d *TelegramDriver) GetMeFull(ctx context.Context, token string) (username, name string, botUserID int64, canManageBots bool, err error) {
 	var result struct {
 		OK     bool `json:"ok"`
 		Result struct {
 			ID            int64  `json:"id"`
 			Username      string `json:"username"`
+			FirstName     string `json:"first_name"`
 			CanManageBots bool   `json:"can_manage_bots"`
 		} `json:"result"`
 	}
 	if err := d.callTelegramJSON(ctx, token, "getMe", nil, &result); err != nil {
-		return "", 0, false, err
+		return "", "", 0, false, err
 	}
 	if !result.OK {
-		return "", 0, false, fmt.Errorf("telegram getMe: not ok")
+		return "", "", 0, false, fmt.Errorf("telegram getMe: not ok")
 	}
-	return result.Result.Username, result.Result.ID, result.Result.CanManageBots, nil
+	return result.Result.Username, result.Result.FirstName, result.Result.ID, result.Result.CanManageBots, nil
 }
 
 // GetManagedBotToken fetches the bot token for a managed bot the manager bot

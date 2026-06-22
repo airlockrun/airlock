@@ -74,7 +74,6 @@ func (h *bridgeHandler) CreateBridge(w http.ResponseWriter, r *http.Request) {
 	}
 	res, err := h.svc.Create(r.Context(), p, bridgessvc.CreateRequest{
 		Type:      req.Type,
-		Name:      req.Name,
 		Token:     req.Token,
 		AgentID:   req.AgentId,
 		IsSystem:  req.IsSystem,

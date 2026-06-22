@@ -608,6 +608,26 @@ func (q *Queries) UpdateBridgeBinding(ctx context.Context, arg UpdateBridgeBindi
 	return i, err
 }
 
+const updateBridgeIdentity = `-- name: UpdateBridgeIdentity :exec
+UPDATE bridges
+SET name = $1, bot_username = $2, updated_at = now()
+WHERE id = $3
+`
+
+type UpdateBridgeIdentityParams struct {
+	Name        string      `json:"name"`
+	BotUsername string      `json:"bot_username"`
+	ID          pgtype.UUID `json:"id"`
+}
+
+// Refresh a bridge's bot-controlled identity from a getMe poll: the display
+// name (the bridge name shown in the UI) + bot_username (the @handle, which can
+// change). The operator never sets these — they mirror the bot.
+func (q *Queries) UpdateBridgeIdentity(ctx context.Context, arg UpdateBridgeIdentityParams) error {
+	_, err := q.db.Exec(ctx, updateBridgeIdentity, arg.Name, arg.BotUsername, arg.ID)
+	return err
+}
+
 const updateBridgeLastPolled = `-- name: UpdateBridgeLastPolled :exec
 UPDATE bridges SET last_polled_at = now(), config = $1, status = 'active', updated_at = now() WHERE id = $2
 `

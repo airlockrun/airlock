@@ -74,12 +74,6 @@ type RouterConfig struct {
 	// Telegram driver (for bridge validation via getMe)
 	TelegramDriver *trigger.TelegramDriver
 
-	// Discord driver (for bridge validation via /users/@me)
-	DiscordDriver *trigger.DiscordDriver
-
-	// EnableDiscord gates Discord bridge creation (off by default).
-	EnableDiscord bool
-
 	// Trigger system
 	Dispatcher    *trigger.Dispatcher
 	Scheduler     *trigger.Scheduler
@@ -233,14 +227,13 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		agentapi.MCPHTTPClient,
 	))
 	brH := newBridgeHandler(bridgessvc.New(
-		cfg.DB, cfg.Secrets, cfg.TelegramDriver, cfg.DiscordDriver, cfg.EnableDiscord,
+		cfg.DB, cfg.Secrets, cfg.TelegramDriver,
 		cfg.BridgeManager, cfg.Logger.Named("bridges"),
 	))
 	idH := newIdentityHandler(
 		identitysvc.New(
 			cfg.DB, cfg.Secrets,
 			telegramIdentityAdapter{d: cfg.TelegramDriver},
-			discordIdentityAdapter{d: cfg.DiscordDriver},
 			cfg.Logger.Named("identity"),
 		),
 		cfg.JWTSecret, // reuse JWT secret for HMAC
@@ -408,7 +401,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		// bridge. The deep-link flow resolves the manager bridge's username
 		// (with a live can_manage_bots re-check) from the same service.
 		// Built before the sysagent so its create_tg_bot tool can call it.
-		managerBridgesSvc := bridgessvc.New(cfg.DB, cfg.Secrets, cfg.TelegramDriver, cfg.DiscordDriver, cfg.EnableDiscord, cfg.BridgeManager, cfg.Logger.Named("managed-bridges"))
+		managerBridgesSvc := bridgessvc.New(cfg.DB, cfg.Secrets, cfg.TelegramDriver, cfg.BridgeManager, cfg.Logger.Named("managed-bridges"))
 		cfg.BridgeManager.AttachManagedBotIngest(managerBridgesSvc.IngestManagedBotCreated)
 		managedBotsSvc := managedbotssvc.New(managedbotssvc.Deps{
 			DB:                    cfg.DB,
@@ -433,7 +426,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 				cfg.Logger.Named("sysagent-agents"),
 			),
 			Bridges: bridgessvc.New(
-				cfg.DB, cfg.Secrets, cfg.TelegramDriver, cfg.DiscordDriver, cfg.EnableDiscord,
+				cfg.DB, cfg.Secrets, cfg.TelegramDriver,
 				cfg.BridgeManager, cfg.Logger.Named("sysagent-bridges"),
 			),
 			Catalog: catalogsvc.New(cfg.DB, cfg.Logger.Named("sysagent-catalog")),

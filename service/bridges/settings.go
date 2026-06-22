@@ -53,10 +53,9 @@ func DecodeSettings(raw []byte) Settings {
 }
 
 // Driver is the bot-platform adapter the bridges service calls when
-// configuring or registering a bridge. trigger.TelegramDriver and
-// trigger.DiscordDriver implement this. The interface lives here (not
-// in trigger) so trigger can import this package for Settings without
-// creating a cycle.
+// configuring or registering a bridge. trigger.TelegramDriver implements
+// this. The interface lives here (not in trigger) so trigger can import
+// this package for Settings without creating a cycle.
 type Driver interface {
 	GetMe(ctx context.Context, token string) (string, error)
 	Init(ctx context.Context, br *dbq.Bridge) error

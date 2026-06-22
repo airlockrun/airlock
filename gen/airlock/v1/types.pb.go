@@ -2075,7 +2075,7 @@ type BridgeInfo struct {
 	Id          string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	AgentId     string                 `protobuf:"bytes,2,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"` // empty when is_system is true
 	Owner       *UserSummary           `protobuf:"bytes,3,opt,name=owner,proto3" json:"owner,omitempty"`
-	Type        string                 `protobuf:"bytes,4,opt,name=type,proto3" json:"type,omitempty"` // "telegram", "discord"
+	Type        string                 `protobuf:"bytes,4,opt,name=type,proto3" json:"type,omitempty"` // "telegram"
 	Name        string                 `protobuf:"bytes,5,opt,name=name,proto3" json:"name,omitempty"`
 	BotUsername string                 `protobuf:"bytes,6,opt,name=bot_username,json=botUsername,proto3" json:"bot_username,omitempty"` // @handle from platform
 	Status      string                 `protobuf:"bytes,7,opt,name=status,proto3" json:"status,omitempty"`                              // "active", "error"

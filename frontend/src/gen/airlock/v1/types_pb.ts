@@ -1214,7 +1214,7 @@ export type BridgeInfo = Message<"airlock.v1.BridgeInfo"> & {
   owner?: UserSummary | undefined;
 
   /**
-   * "telegram", "discord"
+   * "telegram"
    *
    * @generated from field: string type = 4;
    */
