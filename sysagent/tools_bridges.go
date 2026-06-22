@@ -43,7 +43,7 @@ type createTgBotInput struct {
 
 func (s *Service) toolCreateTgBot() tool.Tool {
 	return tool.New("create_tg_bot").
-		Description(`Start creating a Telegram bot bound to an agent through the manager-bot deep link. Returns a t.me link the operator opens in Telegram to finish setup; the resulting bot becomes an agent-bound bridge. Errors if no Telegram manager bot is configured. Requires manager-or-admin tenant role and agent-admin on the target agent.`).
+		Description(`Start creating a Telegram bot bound to an agent through the manager-bot deep link. Returns a t.me link the operator opens in Telegram to finish setup; the resulting bot becomes an agent-bound bridge. IMPORTANT: tell the operator to keep the pre-filled bot username unchanged when Telegram prompts for it — airlock binds the new bot back to this workspace by that username, so editing it leaves the bot orphaned (the display name shown in chats can be set freely). Errors if no Telegram manager bot is configured. Requires manager-or-admin tenant role and agent-admin on the target agent.`).
 		SchemaFromStruct(createTgBotInput{}).
 		Execute(func(ctx context.Context, raw json.RawMessage, _ tool.CallOptions) (tool.Result, error) {
 			var in createTgBotInput
@@ -64,6 +64,7 @@ func (s *Service) toolCreateTgBot() tool.Tool {
 			}
 			return okResult(map[string]string{
 				"status":     "Open this link in Telegram to finish creating the bot",
+				"warning":    "Keep the pre-filled bot username as-is — airlock binds the bot back by that username; changing it leaves the bot orphaned. The display name can be edited.",
 				"deep_link":  out.DeepLink,
 				"expires_at": out.Expires.Format(time.RFC3339),
 			})

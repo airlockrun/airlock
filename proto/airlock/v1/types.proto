@@ -187,6 +187,16 @@ message AgentInfo {
   // (e.g. to hide the rollback button on it). Empty for agents that
   // have never had a successful build.
   string source_ref = 18;
+  // owner_name is the display name of the agent's owner principal — a user's
+  // display name or a group's name (the owner is a principal, so either).
+  // Resolved + populated by the operator-facing list/detail endpoints; empty
+  // for agent-internal lookups.
+  string owner_name = 19;
+  // is_owner is true when the caller owns this agent — the owner principal is
+  // in the caller's grantee set (directly, or via a group they belong to).
+  // Distinct from your_access: a co-owner (agent_members admin) has admin
+  // access but is_owner=false. Populated alongside owner_name.
+  bool is_owner = 20;
 }
 
 // RunInfo represents a single execution of an agent.

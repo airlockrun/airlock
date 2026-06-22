@@ -747,6 +747,10 @@ ALTER TABLE bridges ADD COLUMN is_manager    boolean NOT NULL DEFAULT false;
 ALTER TABLE bridges ADD COLUMN manager_error text NOT NULL DEFAULT '';
 ALTER TABLE bridges
     ADD CONSTRAINT bridges_manager_telegram_only CHECK (NOT is_manager OR type = 'telegram');
+-- A manager bridge is never agent-bound: it's the bot that creates other bots,
+-- so it stands alone (unbound) or routes to the system agent (is_system).
+ALTER TABLE bridges
+    ADD CONSTRAINT bridges_manager_no_agent CHECK (NOT is_manager OR agent_id IS NULL);
 CREATE UNIQUE INDEX bridges_one_manager ON bridges((true)) WHERE is_manager;
 
 -- Telegram is the only supported bridge platform. Drop any Discord rows (the
@@ -1285,6 +1289,7 @@ ALTER TABLE system_conversations
 ALTER TABLE bridges DROP CONSTRAINT IF EXISTS bridges_type_check;
 ALTER TABLE bridges ADD CONSTRAINT bridges_type_check CHECK (type IN ('telegram', 'discord'));
 DROP INDEX IF EXISTS bridges_one_manager;
+ALTER TABLE bridges DROP CONSTRAINT IF EXISTS bridges_manager_no_agent;
 ALTER TABLE bridges DROP CONSTRAINT IF EXISTS bridges_manager_telegram_only;
 ALTER TABLE bridges DROP COLUMN IF EXISTS manager_error;
 ALTER TABLE bridges DROP COLUMN IF EXISTS is_manager;

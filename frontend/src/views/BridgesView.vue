@@ -49,11 +49,23 @@ const deepLinkCopied = ref(false)
 const managerBotConfigured = computed(() =>
   store.bridges.some((b) => b.isManager && b.type === 'telegram'),
 )
+
+// Agent picker options: the caller's own agents first, then alphabetical by
+// name. Names aren't unique, so the option rows also show the slug + owner to
+// disambiguate; the filter box matches name / slug / owner.
+const agentOptions = computed(() =>
+  [...agentsStore.agents].sort((a, b) => {
+    if (a.isOwner !== b.isOwner) return a.isOwner ? -1 : 1
+    return a.name.localeCompare(b.name)
+  }),
+)
 // Edit dialog — covers both reassignment and per-bridge settings.
 const editVisible = ref(false)
 const editing = ref<{ id: string; name: string; agentId: string; isSystem: boolean } | null>(null)
 const editAgentID = ref('')
 const editIsSystem = ref(false)
+const editType = ref('telegram')
+const editIsManager = ref(false)
 
 // Telegram is the only supported bridge platform.
 const bridgeTypes = [
@@ -92,7 +104,8 @@ async function onSubmit() {
       window.open(deepLink, '_blank', 'noopener')
       return
     }
-    const agentIdField = createIsSystem.value ? '' : form.value.agentId
+    // System and manager bridges are never agent-bound.
+    const agentIdField = createIsSystem.value || form.value.isManager ? '' : form.value.agentId
     await store.createBridge({
       type: form.value.type,
       token: form.value.token,
@@ -135,6 +148,8 @@ function openEdit(bridge: {
   name: string
   agentId: string
   isSystem?: boolean
+  type?: string
+  isManager?: boolean
 }) {
   editing.value = {
     id: bridge.id,
@@ -144,20 +159,30 @@ function openEdit(bridge: {
   }
   editIsSystem.value = !!bridge.isSystem
   editAgentID.value = bridge.agentId || ''
+  editType.value = bridge.type || 'telegram'
+  editIsManager.value = !!bridge.isManager
   editVisible.value = true
 }
 
 async function onEdit() {
   if (!editing.value) return
-  if (!editIsSystem.value && !editAgentID.value) {
-    toast.add({ severity: 'error', summary: 'Pick an agent or enable System bridge', life: 4000 })
+  const isManagerEdit = editType.value === 'telegram' && auth.can('tenant.manager_bot.config') && editIsManager.value
+  // A manager or system bridge isn't agent-bound; otherwise an agent is required.
+  if (!editIsSystem.value && !isManagerEdit && !editAgentID.value) {
+    toast.add({ severity: 'error', summary: 'Pick an agent, or enable System / Manager bridge', life: 4000 })
     return
   }
   try {
-    await store.updateBridge(editing.value.id, {
-      agentId: editIsSystem.value ? '' : editAgentID.value,
+    const payload: Parameters<typeof store.updateBridge>[1] = {
+      agentId: editIsSystem.value || isManagerEdit ? '' : editAgentID.value,
       isSystem: editIsSystem.value,
-    })
+    }
+    // Manager capability is Telegram-only + admin-gated. Only send it when the
+    // toggle is shown; otherwise leave the flag as-is on the server.
+    if (editType.value === 'telegram' && auth.can('tenant.manager_bot.config')) {
+      payload.isManager = editIsManager.value
+    }
+    await store.updateBridge(editing.value.id, payload)
     toast.add({ severity: 'success', summary: 'Bridge updated', life: 3000 })
     editVisible.value = false
   } catch (err: any) {
@@ -267,6 +292,9 @@ function confirmDelete(bridge: { id: string; name: string }) {
         <small style="color: var(--p-text-muted-color)">
           We tried to open Telegram in a new tab. If that didn't work, tap the link below. The new bridge will appear in the list once the bot is created.
         </small>
+        <Message severity="warn" :closable="false">
+          Keep the suggested bot <b>username</b> exactly as Telegram pre-fills it — airlock binds the new bot back to this workspace by that username, so changing it leaves the bot orphaned. You can freely edit the bot's display name.
+        </Message>
         <a
           :href="pendingDeepLink"
           target="_blank"
@@ -308,7 +336,7 @@ function confirmDelete(bridge: { id: string; name: string }) {
             </label>
           </div>
           <small style="color: var(--p-text-muted-color)">
-            Create-new opens Telegram with the airlock manager bot to walk through bot creation.
+            Create-new opens Telegram with the airlock manager bot to walk through bot creation. Keep the suggested username unchanged — airlock uses it to bind the bot back.
           </small>
         </div>
         <div v-if="createTokenSource === 'paste'" style="display: flex; flex-direction: column; gap: 0.25rem">
@@ -345,9 +373,29 @@ function confirmDelete(bridge: { id: string; name: string }) {
           </div>
           <ToggleSwitch v-model="form.isManager" />
         </div>
-        <div v-if="!createIsSystem" style="display: flex; flex-direction: column; gap: 0.25rem">
+        <!-- A manager bridge is never agent-bound (it's the bot that creates
+             other bots): hide the agent picker when manager is on. -->
+        <div v-if="!createIsSystem && !form.isManager" style="display: flex; flex-direction: column; gap: 0.25rem">
           <label for="bridgeAgentId">Agent</label>
-          <Select id="bridgeAgentId" v-model="form.agentId" :options="agentsStore.agents" optionLabel="name" optionValue="id" placeholder="Select an agent" style="width: 100%" />
+          <Select
+            id="bridgeAgentId"
+            v-model="form.agentId"
+            :options="agentOptions"
+            optionLabel="name"
+            optionValue="id"
+            placeholder="Select an agent"
+            filter
+            :filterFields="['name', 'slug', 'ownerName']"
+            autoFilterFocus
+            style="width: 100%"
+          >
+            <template #option="{ option }">
+              <div style="display: flex; flex-direction: column">
+                <span><span style="font-weight: 600">{{ option.name }}</span> <span style="color: var(--p-text-muted-color); font-size: 0.85em">{{ option.slug }}</span></span>
+                <small style="color: var(--p-text-muted-color)">{{ option.ownerName || 'unknown owner' }}{{ option.isOwner ? ' · you' : '' }}</small>
+              </div>
+            </template>
+          </Select>
         </div>
       </div>
       <template #footer>
@@ -380,21 +428,44 @@ function confirmDelete(bridge: { id: string; name: string }) {
           <ToggleSwitch v-model="editIsSystem" />
         </div>
 
-        <template v-if="!editIsSystem">
+        <!-- Manager capability: Telegram-only, admin-only. Lets this bot
+             create new bots for users via the deep-link flow. The bot's
+             token must have can_manage_bots enabled in BotFather. -->
+        <div v-if="editType === 'telegram' && auth.can('tenant.manager_bot.config')" style="display: flex; align-items: center; justify-content: space-between; gap: 1rem">
+          <div>
+            <div style="font-weight: 600">Manager bot</div>
+            <small style="color: var(--p-text-muted-color)">
+              Enables the "Create new bot via Telegram" flow. Requires <code>can_manage_bots</code> in BotFather. At most one across the instance.
+            </small>
+          </div>
+          <ToggleSwitch v-model="editIsManager" />
+        </div>
+
+        <!-- A manager bridge is never agent-bound: hide the agent picker when
+             manager (or system) is on. -->
+        <template v-if="!editIsSystem && !editIsManager">
         <!-- Agent binding -->
         <div style="display: flex; flex-direction: column; gap: 0.25rem">
           <label for="editAgent">Agent</label>
           <Select
             id="editAgent"
             v-model="editAgentID"
-            :options="agentsStore.agents"
+            :options="agentOptions"
             optionLabel="name"
             optionValue="id"
             placeholder="Select an agent"
             filter
+            :filterFields="['name', 'slug', 'ownerName']"
             autoFilterFocus
             style="width: 100%"
-          />
+          >
+            <template #option="{ option }">
+              <div style="display: flex; flex-direction: column">
+                <span><span style="font-weight: 600">{{ option.name }}</span> <span style="color: var(--p-text-muted-color); font-size: 0.85em">{{ option.slug }}</span></span>
+                <small style="color: var(--p-text-muted-color)">{{ option.ownerName || 'unknown owner' }}{{ option.isOwner ? ' · you' : '' }}</small>
+              </div>
+            </template>
+          </Select>
         </div>
         </template>
 

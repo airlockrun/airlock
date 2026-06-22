@@ -833,7 +833,17 @@ type AgentInfo struct {
 	// AgentBuildInfo.source_ref to decide which build row is "current"
 	// (e.g. to hide the rollback button on it). Empty for agents that
 	// have never had a successful build.
-	SourceRef     string `protobuf:"bytes,18,opt,name=source_ref,json=sourceRef,proto3" json:"source_ref,omitempty"`
+	SourceRef string `protobuf:"bytes,18,opt,name=source_ref,json=sourceRef,proto3" json:"source_ref,omitempty"`
+	// owner_name is the display name of the agent's owner principal — a user's
+	// display name or a group's name (the owner is a principal, so either).
+	// Resolved + populated by the operator-facing list/detail endpoints; empty
+	// for agent-internal lookups.
+	OwnerName string `protobuf:"bytes,19,opt,name=owner_name,json=ownerName,proto3" json:"owner_name,omitempty"`
+	// is_owner is true when the caller owns this agent — the owner principal is
+	// in the caller's grantee set (directly, or via a group they belong to).
+	// Distinct from your_access: a co-owner (agent_members admin) has admin
+	// access but is_owner=false. Populated alongside owner_name.
+	IsOwner       bool `protobuf:"varint,20,opt,name=is_owner,json=isOwner,proto3" json:"is_owner,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -992,6 +1002,20 @@ func (x *AgentInfo) GetSourceRef() string {
 		return x.SourceRef
 	}
 	return ""
+}
+
+func (x *AgentInfo) GetOwnerName() string {
+	if x != nil {
+		return x.OwnerName
+	}
+	return ""
+}
+
+func (x *AgentInfo) GetIsOwner() bool {
+	if x != nil {
+		return x.IsOwner
+	}
+	return false
 }
 
 // RunInfo represents a single execution of an agent.
@@ -4387,7 +4411,7 @@ const file_airlock_v1_types_proto_rawDesc = "" +
 	"costOutput\x12\x12\n" +
 	"\x04kind\x18\n" +
 	" \x01(\tR\x04kind\x12\x12\n" +
-	"\x04caps\x18\v \x03(\tR\x04caps\"\xe0\x04\n" +
+	"\x04caps\x18\v \x03(\tR\x04caps\"\x9a\x05\n" +
 	"\tAgentInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04slug\x18\x02 \x01(\tR\x04slug\x12\x12\n" +
@@ -4413,7 +4437,10 @@ const file_airlock_v1_types_proto_rawDesc = "" +
 	"\vyour_access\x18\x11 \x01(\tR\n" +
 	"yourAccess\x12\x1d\n" +
 	"\n" +
-	"source_ref\x18\x12 \x01(\tR\tsourceRef\"\xbb\x05\n" +
+	"source_ref\x18\x12 \x01(\tR\tsourceRef\x12\x1d\n" +
+	"\n" +
+	"owner_name\x18\x13 \x01(\tR\townerName\x12\x19\n" +
+	"\bis_owner\x18\x14 \x01(\bR\aisOwner\"\xbb\x05\n" +
 	"\aRunInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x19\n" +
 	"\bagent_id\x18\x02 \x01(\tR\aagentId\x12\x1b\n" +

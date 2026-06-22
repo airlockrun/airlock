@@ -46,6 +46,8 @@ func (s *Service) toolListAgents() tool.Tool {
 				ap := convert.AgentToProto(it.Agent)
 				ap.Running = it.Running
 				ap.YourAccess = string(it.YourAccess)
+				ap.OwnerName = it.OwnerName
+				ap.IsOwner = it.IsOwner
 				agents[i] = ap
 			}
 			return okResult(agentview.Agents(agents))

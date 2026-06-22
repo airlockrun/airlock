@@ -212,6 +212,9 @@ func (s *Service) Create(ctx context.Context, p authz.Principal, req CreateReque
 		if err := authz.Authorize(ctx, q, p, authz.TenantManagerBotConfig, uuid.Nil); err != nil {
 			return Result{}, service.Detail(err, "configuring the manager bot requires admin role")
 		}
+		if agentPgID.Valid {
+			return Result{}, service.Detail(service.ErrInvalidInput, "a manager bridge cannot be bound to an agent (it may be a system bridge or unbound)")
+		}
 		if !canManageBots {
 			return Result{}, service.Detail(service.ErrInvalidInput, "bot @%s does not have can_manage_bots enabled in BotFather", botUsername)
 		}
@@ -601,6 +604,11 @@ func (s *Service) Update(ctx context.Context, p authz.Principal, bridgeID uuid.U
 				return Result{}, service.Detail(service.ErrInvalidInput, "bot @%s does not have can_manage_bots enabled in BotFather", uname)
 			}
 		}
+	}
+	// A manager bridge can't be agent-bound: it's either a system bridge or
+	// unbound. (is_system already forces a NULL agent above.)
+	if newIsManager && newAgentID.Valid {
+		return Result{}, service.Detail(service.ErrInvalidInput, "a manager bridge cannot be bound to an agent (it may be a system bridge or unbound)")
 	}
 	updated, err := q.UpdateBridgeBinding(ctx, dbq.UpdateBridgeBindingParams{
 		ID:        pgtype.UUID{Bytes: bridgeID, Valid: true},

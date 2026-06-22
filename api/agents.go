@@ -114,6 +114,8 @@ func (h *agentsHandler) List(w http.ResponseWriter, r *http.Request) {
 		p := convert.AgentToProto(it.Agent)
 		p.Running = it.Running
 		p.YourAccess = string(it.YourAccess)
+		p.OwnerName = it.OwnerName
+		p.IsOwner = it.IsOwner
 		out[i] = p
 	}
 	writeProto(w, http.StatusOK, &airlockv1.ListAgentsResponse{Agents: out})
