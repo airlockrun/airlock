@@ -143,10 +143,10 @@ func (m *FakeContainerManager) RunningAgents(ctx context.Context, agentIDs []uui
 	return out, nil
 }
 
-func (m *FakeContainerManager) StopAgent(ctx context.Context, id string) error {
+func (m *FakeContainerManager) StopAgent(ctx context.Context, agentID uuid.UUID) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.stopped[id] = true
+	m.stopped[agentID.String()] = true
 	return nil
 }
 

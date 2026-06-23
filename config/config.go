@@ -19,6 +19,14 @@ const (
 	DefaultAgentBaseImage    = "ghcr.io/airlockrun/airlock-agent-base:v" + airlock.Version
 )
 
+// LabelInstance is the Docker label key stamped on every container and agent
+// image with its owning airlock instance (InstanceID). It is the source of
+// truth for ownership: container/image list+prune calls filter on it, so
+// instances sharing a daemon never see or remove each other's resources.
+// Defined here (imported by both container and builder) so the build-time
+// --label and the prune-time filter can never drift apart.
+const LabelInstance = "run.airlock.instance"
+
 type Config struct {
 	// --- Core ---
 	DatabaseURL string // Airlock's own Postgres connection
@@ -72,6 +80,15 @@ type Config struct {
 	// --- Containers ---
 	ContainerRuntime string // "docker"
 	ContainerImage   string // toolserver image name
+
+	// InstanceID namespaces every Docker resource this airlock owns —
+	// agent/builder container names, agent image labels, and build-cache
+	// volume names. All container/image list+prune calls filter on the
+	// run.airlock.instance=<InstanceID> label, so instances sharing a
+	// daemon never touch each other's resources. Required (AIRLOCK_INSTANCE_ID):
+	// the compose/.env files supply it (default "airlock"); co-locating
+	// instances on one daemon means giving each a DISTINCT value.
+	InstanceID string
 
 	// AgentRuntime is the OCI runtime for agent containers — "" = the
 	// Docker default (runc), "runsc" = gVisor. Set via AGENT_SANDBOX
@@ -194,6 +211,7 @@ func Load() *Config {
 		// Containers
 		ContainerRuntime:      envOr("CONTAINER_RUNTIME", "docker"),
 		ContainerImage:        envOr("CONTAINER_IMAGE", "airlock-toolserver"),
+		InstanceID:            requireEnv("AIRLOCK_INSTANCE_ID"),
 		AgentRuntime:          resolveAgentRuntime(),
 		AgentMemoryLimitBytes: parseSizeBytes(os.Getenv("AGENT_MEMORY_LIMIT")),
 

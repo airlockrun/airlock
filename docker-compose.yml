@@ -206,6 +206,14 @@ services:
       AGENT_DOMAIN: ${DOMAIN}
       API_URL_AGENT: http://airlock:8080
 
+      # Namespaces every Docker resource this airlock owns (agent/builder
+      # container names, agent image labels, build-cache volumes) so
+      # instances sharing the host Docker daemon never see or reap each
+      # other's resources. The default suits a single instance; running a
+      # second stack on the same daemon means giving it a DISTINCT value
+      # (e.g. INSTANCE_ID=prod in that stack's .env).
+      AIRLOCK_INSTANCE_ID: ${AIRLOCK_INSTANCE_ID:-airlock}
+
       # Container orchestration networks. DOCKER_NETWORK carries infra +
       # toolserver/build containers. AGENT_NETWORK carries agent runtime
       # containers — an isolated net with only airlock + postgres, so a

@@ -121,3 +121,31 @@ For deployments that run **untrusted third-party** agents (not the current
 target), prefer a VM-isolated runtime (gVisor everywhere, or
 Kata/Firecracker) — namespaces alone are not a boundary against a
 determined attacker hunting a kernel bug.
+
+## Multiple instances on one Docker daemon
+
+Airlock identifies the Docker resources it owns by the `run.airlock.instance`
+label (value = `AIRLOCK_INSTANCE_ID`), and prefixes container, image-cache, and
+buildx-builder names with the same id. Every container/image **list and prune**
+call filters on that label, so an instance only ever sees — and only ever reaps
+— its own resources. This is what makes it safe to run, e.g., a prod stack
+alongside a dev one on the same host Docker daemon (the dev native binary and a
+prod compose both bind `/var/run/docker.sock`).
+
+**The contract:** `AIRLOCK_INSTANCE_ID` is required (the compose/.env files
+supply it; default `airlock`). The default is fine for a *single* instance.
+**Co-locating instances on one daemon means giving each a DISTINCT value** —
+otherwise they share a namespace and the prune sweep of one removes the other's
+agent containers and images.
+
+Namespacing the agent layer (containers / images / build caches / buildx
+builder) is handled in code. Running a full second *stack* additionally needs
+its own infra so it doesn't collide on Docker's other shared namespaces:
+distinct Docker networks (`DOCKER_NETWORK` / `AGENT_NETWORK`), a distinct
+`airlock-data` volume + `AGENT_CODEGEN_VOLUME`, its own postgres/rustfs volumes
+(auto project-prefixed by compose), and distinct host ports for caddy
+(`HTTP_PORT` / `HTTPS_PORT`). All of those are already env/compose-driven.
+
+The Kubernetes path solves the same problem natively with a namespace per
+instance behind the same `container.ContainerManager` interface;
+`AIRLOCK_INSTANCE_ID` maps onto that namespace.

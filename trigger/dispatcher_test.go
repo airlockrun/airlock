@@ -51,7 +51,7 @@ func (m *mockContainerManager) RunningAgents(_ context.Context, ids []uuid.UUID)
 	return out, nil
 }
 
-func (m *mockContainerManager) StopAgent(_ context.Context, _ string) error { return nil }
+func (m *mockContainerManager) StopAgent(_ context.Context, _ uuid.UUID) error { return nil }
 
 func (m *mockContainerManager) MarkBusy(_ uuid.UUID) {}
 func (m *mockContainerManager) MarkIdle(_ uuid.UUID) {}

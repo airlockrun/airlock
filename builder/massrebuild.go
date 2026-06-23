@@ -121,7 +121,7 @@ func (b *BuildService) rebuildOneAgent(agent dbq.Agent) {
 		// would normally leave the old image running on failure; here
 		// we want the operator's attention, so the agent goes offline
 		// until they explicitly act.
-		_ = b.containers.StopAgent(dbCtx, "airlock-agent-"+agentUUID.String()[:8])
+		_ = b.containers.StopAgent(dbCtx, agentUUID)
 		_ = q.UpdateAgentStatus(dbCtx, dbq.UpdateAgentStatusParams{
 			ID:           agent.ID,
 			Status:       "stopped",

@@ -507,7 +507,7 @@ func (b *BuildService) Execute(ctx context.Context, plan BuildPlan) (string, err
 	unlockSwap := b.containers.LockSwap(agentUUID)
 	logLine("Starting agent container...")
 	if agent.ImageRef != "" {
-		_ = b.containers.StopAgent(ctx, "airlock-agent-"+agentUUID.String()[:8])
+		_ = b.containers.StopAgent(ctx, agentUUID)
 	}
 	agentToken, err := auth.IssueAgentToken(b.cfg.JWTSecret, agentUUID)
 	if err != nil {

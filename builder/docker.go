@@ -41,10 +41,10 @@ func buildImage(ctx context.Context, cfg *config.Config, agentID, contextDir, co
 	// image store; --push (registry mode) goes straight to the registry, so
 	// no separate `docker push` is needed.
 	if cfg.BuildkitHost != "" {
-		if err := ensureBuildxBuilder(cfg.BuildkitHost); err != nil {
+		if err := ensureBuildxBuilder(cfg.BuildkitHost, cfg.InstanceID); err != nil {
 			return "", err
 		}
-		args := buildxBuildArgs(tag, dockerfilePath, contextDir, goproxyDir, cfg.AgentRegistryURL != "")
+		args := buildxBuildArgs(tag, dockerfilePath, contextDir, goproxyDir, cfg.AgentRegistryURL != "", cfg.InstanceID)
 		cmd := exec.CommandContext(ctx, "docker", args...)
 		if logFn != nil {
 			return tag, runAndStream(cmd, logFn)
@@ -57,6 +57,7 @@ func buildImage(ctx context.Context, cfg *config.Config, agentID, contextDir, co
 
 	// Legacy path (dev / no buildkitd): build on the host docker daemon.
 	args := []string{"build", "-t", tag}
+	args = append(args, instanceLabelArg(cfg.InstanceID)...)
 	if goproxyDir != "" {
 		args = append(args, "--build-context", "goproxy="+goproxyDir)
 	}
@@ -89,16 +90,31 @@ func buildImage(ctx context.Context, cfg *config.Config, agentID, contextDir, co
 	return tag, nil
 }
 
-// buildxBuilderName is the buildx builder airlock creates pointing at the
-// rootless buildkitd (BUILDKIT_HOST). Stable name so it's reused across builds.
-const buildxBuilderName = "airlock-rootless"
+// buildxBuilderBase is the prefix for the buildx builder airlock creates
+// pointing at the rootless buildkitd (BUILDKIT_HOST). The actual name is
+// instance-scoped (buildxBuilderName) because buildx builders live in
+// ~/.docker/buildx — per-user, shared across daemons — so co-located
+// instances must not collide and cross-route builds to each other's buildkitd.
+const buildxBuilderBase = "airlock-rootless"
+
+// buildxBuilderName is the instance-scoped buildx builder name. Stable per
+// instance so it's reused across that instance's builds.
+func buildxBuilderName(instanceID string) string { return buildxBuilderBase + "-" + instanceID }
+
+// instanceLabelArg returns the `--label run.airlock.instance=<id>` pair that
+// stamps the ownership label on a built agent image (matching the prune-time
+// filter in container.DockerManager).
+func instanceLabelArg(instanceID string) []string {
+	return []string{"--label", config.LabelInstance + "=" + instanceID}
+}
 
 // buildxBuildArgs builds the `docker buildx build` argv for an agent image.
 // push=true emits to the registry; otherwise the result is --loaded into the
 // local docker image store. goproxyDir, when set (dev), is wired as the
 // `goproxy` named build context.
-func buildxBuildArgs(tag, dockerfilePath, contextDir, goproxyDir string, push bool) []string {
-	args := []string{"buildx", "build", "--builder", buildxBuilderName, "--progress=plain", "-t", tag}
+func buildxBuildArgs(tag, dockerfilePath, contextDir, goproxyDir string, push bool, instanceID string) []string {
+	args := []string{"buildx", "build", "--builder", buildxBuilderName(instanceID), "--progress=plain", "-t", tag}
+	args = append(args, instanceLabelArg(instanceID)...)
 	if push {
 		args = append(args, "--push")
 	} else {
@@ -122,14 +138,15 @@ var (
 // ensureBuildxBuilder lazily creates the remote-driver buildx builder that
 // targets the rootless buildkitd at host (e.g. unix:///run/buildkit/buildkitd.sock).
 // Idempotent: a builder that already exists is reused. Runs once per process.
-func ensureBuildxBuilder(host string) error {
+func ensureBuildxBuilder(host, instanceID string) error {
 	buildxOnce.Do(func() {
 		ctx := context.Background()
-		if err := exec.CommandContext(ctx, "docker", "buildx", "inspect", buildxBuilderName).Run(); err == nil {
+		name := buildxBuilderName(instanceID)
+		if err := exec.CommandContext(ctx, "docker", "buildx", "inspect", name).Run(); err == nil {
 			return // already exists
 		}
 		out, err := exec.CommandContext(ctx, "docker", "buildx", "create",
-			"--name", buildxBuilderName, "--driver", "remote", host).CombinedOutput()
+			"--name", name, "--driver", "remote", host).CombinedOutput()
 		if err != nil {
 			buildxErr = fmt.Errorf("buildx create (remote %s): %s: %w", host, strings.TrimSpace(string(out)), err)
 		}
@@ -187,17 +204,19 @@ func (b *BuildService) WarmBuildCache(ctx context.Context) {
 	}
 	defer cleanup()
 
-	tag := "airlock-cache-warm:latest"
+	// Instance-scoped throwaway tag so concurrent warms on a shared daemon
+	// don't `docker rmi` each other (legacy path).
+	tag := b.cfg.InstanceID + "-cache-warm:latest"
 	var cmd *exec.Cmd
 	if b.cfg.BuildkitHost != "" {
 		// Rootless BuildKit: warm buildkitd's own (persistent) cache. No
 		// output requested (no --load/--push), so the throwaway image is
 		// discarded by buildkitd — nothing to `docker rmi` afterwards.
-		if err := ensureBuildxBuilder(b.cfg.BuildkitHost); err != nil {
+		if err := ensureBuildxBuilder(b.cfg.BuildkitHost, b.cfg.InstanceID); err != nil {
 			b.logger.Warn("warm cache: buildx builder", zap.Error(err))
 			return
 		}
-		args := []string{"buildx", "build", "--builder", buildxBuilderName, "--progress=plain"}
+		args := []string{"buildx", "build", "--builder", buildxBuilderName(b.cfg.InstanceID), "--progress=plain"}
 		if proxyDir != "" {
 			args = append(args, "--build-context", "goproxy="+proxyDir)
 		}
@@ -231,8 +250,9 @@ func (b *BuildService) WarmBuildCache(ctx context.Context) {
 // direct `go mod tidy` / `go build` invocations consume — distinct from
 // the BuildKit cache mount that WarmBuildCache populates. The agent-builder
 // container at runtime sets GOMODCACHE=/tmp/go-mod and GOCACHE=/tmp/go-cache
-// (see container/docker.go) backed by the airlock-go-mod-cache and
-// airlock-go-build-cache Docker named volumes. Without this seed, the
+// (see container/docker.go) backed by the instance-scoped
+// <instance>-go-mod-cache and <instance>-go-build-cache Docker named
+// volumes. Without this seed, the
 // first build-prompt iteration pays full download cost for ~25 modules
 // in agentsdk+sol's transitive dep tree. The volumes persist across
 // airlock restarts.
@@ -302,8 +322,13 @@ func (b *BuildService) WarmRuntimeCaches(ctx context.Context) {
 		workspaceDir = "/workspace"
 	}
 
+	// Cache volume names are instance-scoped — must match StartToolserver's
+	// mounts so the volume seeded here is the one the build-prompt loop's
+	// toolserver consumes.
+	vp := b.cfg.InstanceID + "-"
 	args := []string{
 		"run", "--rm",
+		"--label", config.LabelInstance + "=" + b.cfg.InstanceID,
 		"--user", fmt.Sprintf("%d:%d", uid, gid),
 		"-e", "GOMODCACHE=/tmp/go-mod",
 		"-e", "GOCACHE=/tmp/go-cache",
@@ -313,8 +338,8 @@ func (b *BuildService) WarmRuntimeCaches(ctx context.Context) {
 		// the lookup entirely — the public proxy and the local lib proxy
 		// serve content we don't authenticate via sum.golang.org.
 		"-e", "GOSUMDB=off",
-		"-v", "airlock-go-mod-cache:/tmp/go-mod",
-		"-v", "airlock-go-build-cache:/tmp/go-cache",
+		"-v", vp + "go-mod-cache:/tmp/go-mod",
+		"-v", vp + "go-build-cache:/tmp/go-cache",
 		"-v", workspaceMount,
 		"-w", workspaceDir,
 	}
