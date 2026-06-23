@@ -11,6 +11,14 @@ import (
 )
 
 func main() {
+	newAgent().Serve()
+}
+
+// newAgent builds the agent and registers everything on it. main() and the
+// tests both go through here, so a test can exercise the fully-wired agent via
+// agent.Handler(). Keep registration in this function — don't inline it back
+// into main(), or the tests stop compiling.
+func newAgent() *agentsdk.Agent {
 	agent := agentsdk.New(agentsdk.Config{
 		Description: "New agent — update this description after implementation",
 	})
@@ -31,7 +39,7 @@ func main() {
 		Method: "GET",
 		Path:   "/static/{name}",
 		Handler: func(ctx context.Context, w http.ResponseWriter, r *http.Request) {
-			if r.PathValue("name") == "app."+views.AppCSSHash()+".css" {
+			if r.PathValue("name") == views.AppCSSName {
 				w.Header().Set("Content-Type", "text/css; charset=utf-8")
 				w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 				_, _ = w.Write(views.AppCSS)
@@ -44,5 +52,5 @@ func main() {
 	})
 
 	// Sol will add RegisterTool, RegisterWebhook, RegisterCron, RegisterConnection calls here.
-	agent.Serve()
+	return agent
 }
