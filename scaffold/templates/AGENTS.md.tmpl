@@ -192,6 +192,23 @@ chain. A failing test means the build isn't done.
   and add a test for each route you register. Testing a route through
   `Handler()` (not by calling the handler func directly) is what catches a
   route that serves a 200 with the wrong body.
+- **DB-backed tests** use `agenttest.UseDB(t, a)` after `newAgent()`: it points
+  the agent at the test database (`$TEST_DB_URL`), resets the schema, and applies
+  `db/migrations` — so each test starts from a clean, fully-migrated schema. It
+  **skips the test when `$TEST_DB_URL` is unset**, so the suite still runs where
+  no database is provisioned. After it returns, `agent.DB()` is live; pass it to
+  your sqlc `New()` and assert on real rows. The scaffold ships
+  `TestDBMigratesAndConnects` as the worked example.
+
+  ```go
+  func TestThing(t *testing.T) {
+      agenttest.NewEnv(t)
+      a := newAgent()
+      agenttest.UseDB(t, a) // skips if no $TEST_DB_URL
+      q := db.New(a.DB())
+      // exercise queries, assert results
+  }
+  ```
 - `go test` can exceed the default bash timeout on a cold cache — pass a larger
   `timeout` when you run it.
 
@@ -249,8 +266,8 @@ Design principles:
   `md:` / `lg:` variants for wider screens. Test at ~375px before
   declaring done.
 - **Brand through DaisyUI's theme**, not per-element overrides.
-  Configure the theme block in `styles/app.css`. Don't sprinkle
-  `bg-[#...]` or inline `style=` colours through templates.
+  Set the theme in `styles/app.css` (see **Theming** below). Don't
+  sprinkle `bg-[#...]` or inline `style=` colours through templates.
 - **Show the domain.** Render real data prominently — album art,
   weather illustrations, charts. Emoji-as-title-decoration is a
   placeholder you replaced.
@@ -270,10 +287,43 @@ Design principles:
   card and the partial swaps inner content, or the partial owns the
   card and the page renders only an empty target. Picking both
   produces two stacked headers and a card-in-a-card border.
+- **Static JS handlers are quoted literals, not `{ }` expressions.**
+  Write `onclick="my_modal.showModal()"` — templ emits it verbatim. The
+  `onclick={ "…" }` brace form types the value as `templ.ComponentScript`,
+  so a plain string won't compile and you'd be pushed to
+  `templ.JSUnsafeFuncCall`. Prefer htmx for behavior; reserve inline JS
+  for trivial DOM calls like opening a `<dialog>`.
 - **Record styling decisions in `NOTES.md`** — chosen theme name (or
   custom palette tokens), font family + where it's loaded from,
   layout conventions you committed to. The next rebuild should see
   what you decided.
+
+### Theming
+
+DaisyUI ships ~35 built-in themes. **Run `daisyui-themes` (via the bash
+tool)** to list the ones installed in this build (grouped light/dark),
+then **pick the one that fits the app's tone and use it — don't
+hand-author a palette.** Set it in `styles/app.css` and on the page:
+
+```css
+@plugin "/usr/local/lib/tailwind/daisyui.mjs" {
+  themes: winter --default, night --prefersdark;
+}
+```
+```html
+<html data-theme="winter">   <!-- or omit and rely on --default -->
+```
+
+Plugins load by **absolute path** — don't `npm i daisyui` or use the
+bare `@plugin "daisyui"` name (it doesn't resolve here); the daisyUI
+skills' bare-name examples need this path translation.
+
+For light branding you may retint a built-in theme by reusing its name
+and overriding a token or two — `@plugin
+"/usr/local/lib/tailwind/daisyui-theme.mjs" { name: "winter"; --color-primary: …; }`
+inherits the rest. (A native Tailwind `@theme {}` block does *not*
+retint daisyUI components.) Authoring a full theme from scratch is
+rarely worth it.
 
 ## Updating the UI
 

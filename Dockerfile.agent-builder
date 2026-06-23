@@ -99,17 +99,31 @@ RUN mkdir -p /usr/local/lib/tailwind && chmod 0755 /usr/local/lib/tailwind
 ADD --chmod=0644 https://github.com/saadeghi/daisyui/releases/download/${DAISYUI_VERSION}/daisyui.mjs       /usr/local/lib/tailwind/daisyui.mjs
 ADD --chmod=0644 https://github.com/saadeghi/daisyui/releases/download/${DAISYUI_VERSION}/daisyui-theme.mjs /usr/local/lib/tailwind/daisyui-theme.mjs
 
+# daisyui-themes — lists the themes the installed bundle ships, grouped
+# light/dark. The codegen agent runs it via the bash tool to pick a built-in
+# theme. Smoke-test it at build time: it exits non-zero unless it lists both a
+# light and a dark theme, so a daisyUI output-shape change fails the build loud.
+COPY --chmod=0755 scripts/daisyui-themes /usr/local/bin/daisyui-themes
+RUN daisyui-themes
+
 # DaisyUI skill — official agent guidance for daisyUI, pulled from the same
 # pinned tag as the .mjs above so library and guidance stay in lockstep. The
 # codegen toolserver's `skill` tool serves it from here (SKILLS_DIRS, set by
 # airlock at container launch → /usr/local/lib/agent-skills). Sparse-fetch only
-# skills/daisyui; git is already installed above.
+# skills/daisyui; git is already installed above. The npm/CDN-only `install`
+# sub-skill misleads our standalone (path-loaded .mjs) build, so we drop it —
+# guarded by an existence check so an upstream skill restructure fails the
+# build loudly instead of silently shipping a stale skill.
 RUN git clone --depth 1 --branch ${DAISYUI_VERSION} --filter=blob:none --sparse \
         https://github.com/saadeghi/daisyui.git /tmp/ds && \
     git -C /tmp/ds sparse-checkout set skills/daisyui && \
     mkdir -p /usr/local/lib/agent-skills/skills && \
     cp -r /tmp/ds/skills/daisyui /usr/local/lib/agent-skills/skills/ && \
-    rm -rf /tmp/ds && chmod -R a+rX /usr/local/lib/agent-skills
+    rm -rf /tmp/ds && \
+    SK=/usr/local/lib/agent-skills/skills/daisyui && \
+    test -f "$SK/install/SKILL.md" && grep -q 'install/SKILL.md' "$SK/SKILL.md" && \
+    rm -rf "$SK/install" && sed -i '\#install/SKILL.md#d' "$SK/SKILL.md" && \
+    chmod -R a+rX /usr/local/lib/agent-skills
 
 # Go cache dirs writable by the host UID — Docker volumes mount as root,
 # but the toolserver runs as the host user.
