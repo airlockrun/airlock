@@ -39,6 +39,21 @@ if [ -z "$latest_tag" ]; then
 	exit 0
 fi
 
+# --- Baseline reset (0.4 clean slate) ---
+# 0.4 squashed the migration history into a single schema, deliberately
+# abandoning the 0.3.x lineage (there is no in-place 0.3 -> 0.4 upgrade). The
+# migrations tagged in v0.3.4 no longer exist, so there is nothing valid to
+# freeze against while the latest FINAL tag still predates the reset. Once the
+# first 0.4 final tag ships it becomes the latest final tag (sort -V) and normal
+# freezing resumes against the new baseline — this guard self-heals; the marker
+# can be deleted then.
+BASELINE_RESET_AFTER="v0.3.4"
+if [ -n "$BASELINE_RESET_AFTER" ] \
+	&& [ "$(printf '%s\n%s\n' "$latest_tag" "$BASELINE_RESET_AFTER" | sort -V | tail -1)" = "$BASELINE_RESET_AFTER" ]; then
+	echo "migration immutability: baseline reset after $BASELINE_RESET_AFTER; latest final tag $latest_tag is at/before it — freeze suspended (resumes at the next final tag)"
+	exit 0
+fi
+
 fail=0
 while IFS= read -r path; do
 	[ -z "$path" ] && continue
