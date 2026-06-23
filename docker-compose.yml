@@ -98,7 +98,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.agent-builder
-    image: ghcr.io/airlockrun/airlock-agent-builder:v0.4.0-rc.1
+    image: ghcr.io/airlockrun/airlock-agent-builder:v0.4.0-rc.2
     command: ["true"]
     restart: "no"
 
@@ -106,7 +106,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.agent-base
-    image: ghcr.io/airlockrun/airlock-agent-base:v0.4.0-rc.1
+    image: ghcr.io/airlockrun/airlock-agent-base:v0.4.0-rc.2
     command: ["true"]
     restart: "no"
 
@@ -147,7 +147,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.airlock
-    image: ghcr.io/airlockrun/airlock:v0.4.0-rc.1
+    image: ghcr.io/airlockrun/airlock:v0.4.0-rc.2
     depends_on:
       postgres:
         condition: service_healthy
@@ -272,7 +272,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.frontend
-    image: ghcr.io/airlockrun/airlock-frontend:v0.4.0-rc.1
+    image: ghcr.io/airlockrun/airlock-frontend:v0.4.0-rc.2
     restart: unless-stopped
 
   caddy:
