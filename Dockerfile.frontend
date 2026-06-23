@@ -5,8 +5,9 @@
 # --- Build ---
 FROM node:22-alpine AS builder
 
-# pnpm via corepack (matches frontend/pnpm-lock.yaml)
-RUN corepack enable
+# pnpm via corepack (matches frontend/pnpm-lock.yaml). Pin explicitly: newer
+# corepack defaults to pnpm 11 and won't auto-switch to the packageManager pin.
+RUN corepack enable && corepack prepare pnpm@10.33.0 --activate
 
 WORKDIR /app
 # pnpm-workspace.yaml carries `ignoredBuiltDependencies` — must be
