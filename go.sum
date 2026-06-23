@@ -8,12 +8,12 @@ github.com/Masterminds/semver/v3 v3.2.1 h1:RN9w6+7QoMeJVGyfmbcgs28Br8cvmnucEXnY0
 github.com/Masterminds/semver/v3 v3.2.1/go.mod h1:qvl/7zhW3nngYb5+80sSMF+FG2BjYrf8m9wsX0PNOMQ=
 github.com/Microsoft/go-winio v0.6.2 h1:F2VQgta7ecxGYO8k3ZZz3RS8fVIXVxONVUPlNERoyfY=
 github.com/Microsoft/go-winio v0.6.2/go.mod h1:yd8OoFMLzJbo9gZq8j5qaps8bJ9aShtEA8Ipt1oGCvU=
-github.com/airlockrun/agentsdk v0.3.1-rc.3 h1:mjTLlba5FsRb99HwqAH6hU/jWnFIPAuWFCbfNSVCMd4=
-github.com/airlockrun/agentsdk v0.3.1-rc.3/go.mod h1:OQp8FBuMtenhlBoo+bZ+9VUQAisHEzKeoxA4MnAwvn0=
+github.com/airlockrun/agentsdk v0.3.1-rc.4 h1:S3fe4xkbOgYYXtHK0VJtqJO4YPUHUHvMGqiYGWjJ77c=
+github.com/airlockrun/agentsdk v0.3.1-rc.4/go.mod h1:HSKK5b7kM87cbNFe+lnM0lhXU+3VzseuuVL4uBj2wVM=
 github.com/airlockrun/goai v0.1.5-rc.2 h1:tVK2uLMjS+5H23bkWB6jvWj+zJUtWunAP2Y3hqaPP4c=
 github.com/airlockrun/goai v0.1.5-rc.2/go.mod h1:bwFi12cS+TAyr8SjW7s48WMnsuKWx8PeNcxbIWJ4drM=
-github.com/airlockrun/sol v0.1.8-rc.2 h1:j+VRn+0FpRBYE8mD3Q1RjY+AcsFEIO/r4+ymSdq9vkw=
-github.com/airlockrun/sol v0.1.8-rc.2/go.mod h1:uwdrir3KrrkQQuWP7t3sbV/iBrBywFz9O/rY6C1EMM4=
+github.com/airlockrun/sol v0.1.8-rc.3 h1:FGrDdYuX5A76aVJ22916xNQ8UGT7wHeaSi5ZuGnm0BA=
+github.com/airlockrun/sol v0.1.8-rc.3/go.mod h1:uwdrir3KrrkQQuWP7t3sbV/iBrBywFz9O/rY6C1EMM4=
 github.com/aws/aws-sdk-go-v2 v1.41.1 h1:ABlyEARCDLN034NhxlRUSZr4l71mh+T5KAeGh6cerhU=
 github.com/aws/aws-sdk-go-v2 v1.41.1/go.mod h1:MayyLB8y+buD9hZqkCW3kX1AKq07Y5pXxtgB+rRFhz0=
 github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.4 h1:489krEF9xIGkOaaX3CE/Be2uWjiXrkCH6gUX+bZA/BU=
