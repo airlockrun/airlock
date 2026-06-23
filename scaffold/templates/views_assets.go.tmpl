@@ -23,7 +23,13 @@ func AppCSSHash() string {
 	return hex.EncodeToString(h[:4])
 }
 
-// AppCSSPath is the URL the scaffold's Layout references:
+// AppCSSName is the embedded stylesheet's content-hashed filename. It is the
+// {name} the /static/{name} route matches against — match handlers compare
+// r.PathValue("name") to this, NOT to AppCSSPath (which carries the /static/
+// prefix and would never equal the bare path value).
+var AppCSSName = "app." + AppCSSHash() + ".css"
+
+// AppCSSPath is the public URL the scaffold's Layout references:
 //
 //	<link rel="stylesheet" href={ views.AppCSSPath }/>
-var AppCSSPath = "/static/app." + AppCSSHash() + ".css"
+var AppCSSPath = "/static/" + AppCSSName

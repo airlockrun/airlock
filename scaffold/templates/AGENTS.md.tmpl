@@ -43,7 +43,8 @@ assumption in `NOTES.md`.
 
 ```
 {agent-repo}/
-├── main.go            # Entrypoint — registrations only
+├── main.go            # newAgent() registers everything; main() serves it
+├── main_test.go       # Agent-wide HTTP test — routes via agent.Handler()
 ├── handlers/          # CONTROLLERS — HTTP handlers; import domain + views
 │   └── home.go
 ├── views/             # VIEW — templ templates + view-model types
@@ -69,7 +70,9 @@ assumption in `NOTES.md`.
 
 **Keep `main.go` thin.** Registrations only — `RegisterTool`,
 `RegisterRoute`, `RegisterWebhook`, `RegisterCron`, `RegisterConnection`,
-etc. Business logic lives in domain packages, never inline in main.
+etc. Business logic lives in domain packages, never inline in main. The
+registrations go in `newAgent()`, which `main()` calls and then `Serve()`s;
+keep that split so the tests can build the agent and serve `agent.Handler()`.
 
 ## MVC: handlers are the integration point
 
@@ -157,6 +160,38 @@ Committed:
 
 So a fresh clone + `docker build .` works: templ/tailwind are regenerated, and
 the committed sqlc output + your source are already present.
+
+## Testing
+
+Write Go tests for what you add and run `go test ./...` as part of the build
+chain. A failing test means the build isn't done.
+
+- **Unit tests** sit next to the code they cover, one `_test.go` per source
+  file: `<domain>/service_test.go` for business logic, `handlers/home_test.go`
+  for handlers. Table-driven subtests with `t.Run`.
+- **Agent-wide HTTP tests** live in `main_test.go`. Build the agent with
+  `newAgent()` and serve `agent.Handler()` through `httptest` so requests run
+  the real route mux. Wire the Airlock environment with
+  `agenttest.NewEnv(t)` (from `github.com/airlockrun/agentsdk/agenttest`)
+  before calling `newAgent()` — it stands up a mock Airlock and sets the
+  `AIRLOCK_*` env vars `agentsdk.New` requires:
+
+  ```go
+  func TestHomePageRenders(t *testing.T) {
+      agenttest.NewEnv(t)
+      srv := httptest.NewServer(newAgent().Handler())
+      defer srv.Close()
+      resp, _ := http.Get(srv.URL + "/")
+      // assert status, content type, body
+  }
+  ```
+
+  The scaffold ships `TestStaticStylesheetServed` as a worked example; keep it,
+  and add a test for each route you register. Testing a route through
+  `Handler()` (not by calling the handler func directly) is what catches a
+  route that serves a 200 with the wrong body.
+- `go test` can exceed the default bash timeout on a cold cache — pass a larger
+  `timeout` when you run it.
 
 ## Database
 

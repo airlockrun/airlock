@@ -1,0 +1,58 @@
+package main
+
+import (
+	"bytes"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	"{{.Module}}/views"
+
+	"github.com/airlockrun/agentsdk/agenttest"
+)
+
+// TestStaticStylesheetServed checks that the compiled stylesheet round-trips
+// through the real /static/{name} route: a GET of views.AppCSSPath returns the
+// embedded CSS with a text/css content type, and an unknown name 404s. This runs
+// the request through the actual mux (agent.Handler()), so it catches a route
+// that is registered but never writes the bytes — the kind of silent "page
+// loads with no styling" bug that compiles and serves a 200 but an empty body.
+func TestStaticStylesheetServed(t *testing.T) {
+	agenttest.NewEnv(t)
+
+	srv := httptest.NewServer(newAgent().Handler())
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + views.AppCSSPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET %s = %d, want 200", views.AppCSSPath, resp.StatusCode)
+	}
+	if ct := resp.Header.Get("Content-Type"); ct != "text/css; charset=utf-8" {
+		t.Errorf("Content-Type = %q, want text/css; charset=utf-8", ct)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(body) == 0 {
+		t.Fatal("stylesheet body is empty — the route served a 200 with no CSS")
+	}
+	if !bytes.Equal(body, views.AppCSS) {
+		t.Errorf("served body (%d bytes) does not match embedded views.AppCSS (%d bytes)", len(body), len(views.AppCSS))
+	}
+
+	miss, err := http.Get(srv.URL + "/static/does-not-exist.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	miss.Body.Close()
+	if miss.StatusCode != http.StatusNotFound {
+		t.Errorf("GET unknown static file = %d, want 404", miss.StatusCode)
+	}
+}

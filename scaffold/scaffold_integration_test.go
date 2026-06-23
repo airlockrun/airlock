@@ -18,12 +18,12 @@ import (
 
 // minAgentsdkForScaffold is the smallest published agentsdk version the
 // current scaffold compiles against. Bump whenever the scaffold adopts
-// a new agentsdk-side API (the scaffold's layout.templ currently uses
-// agentsdk.Assets.HTMX — pico was removed in favour of per-agent
-// Tailwind, both shipped in v0.3.0-rc.1). When airlock's go.mod pins
-// below this, the test auto-skips with an explanatory message; once
-// the pin catches up it runs again — no manual edit required.
-const minAgentsdkForScaffold = "v0.3.0-rc.1"
+// a new agentsdk-side API. The scaffold's main_test.go imports
+// github.com/airlockrun/agentsdk/agenttest and calls agent.Handler(),
+// both added in v0.3.1-rc.3. When airlock's go.mod pins below this, the
+// test auto-skips with an explanatory message; once the pin catches up
+// it runs again — no manual edit required.
+const minAgentsdkForScaffold = "v0.3.1-rc.3"
 
 // TestScaffoldBuildsAndStarts verifies that the scaffold output compiles
 // and that the resulting binary starts and serves /health.

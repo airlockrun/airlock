@@ -25,6 +25,7 @@ func TestMaterialize(t *testing.T) {
 	// Verify all expected files exist
 	expectedFiles := []string{
 		"main.go",
+		"main_test.go",
 		"go.mod",
 		"sqlc.yaml",
 		"Dockerfile",
@@ -63,8 +64,11 @@ func TestMaterialize(t *testing.T) {
 	if !strings.Contains(string(mainGo), "agentsdk.New(agentsdk.Config{") {
 		t.Error("main.go missing agentsdk.New(agentsdk.Config{)")
 	}
-	if !strings.Contains(string(mainGo), "agent.Serve()") {
-		t.Error("main.go missing agent.Serve()")
+	if !strings.Contains(string(mainGo), "func newAgent()") {
+		t.Error("main.go missing func newAgent() — tests build the agent through it")
+	}
+	if !strings.Contains(string(mainGo), "newAgent().Serve()") {
+		t.Error("main.go missing newAgent().Serve()")
 	}
 
 	// Committed go.mod has no /libs/... replace block — those live only
