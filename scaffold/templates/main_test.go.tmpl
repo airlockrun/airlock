@@ -58,6 +58,28 @@ func TestStaticStylesheetServed(t *testing.T) {
 	}
 }
 
+// TestHomePageRenders is the worked example for page-render tests: GET the
+// route through Handler() and assert 200. A panic inside a view is recovered as
+// a 500, so this catches a page that crashes in its empty/resting state (nil
+// pointers, no rows) before the build ships. Keep one of these per rendered
+// page; for a DB-backed page, call agenttest.UseDB(t, a) first.
+func TestHomePageRenders(t *testing.T) {
+	agenttest.NewEnv(t)
+
+	srv := httptest.NewServer(newAgent().Handler())
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET / = %d, want 200 (a panic in a view renders 500 — render the empty state without dereferencing nil)", resp.StatusCode)
+	}
+}
+
 // TestDBMigratesAndConnects is the worked example for DB-backed tests.
 // agenttest.UseDB points the agent at $TEST_DB_URL, resets the schema, and
 // applies db/migrations — skipping the test when no test database is set. Once

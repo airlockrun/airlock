@@ -188,10 +188,14 @@ chain. A failing test means the build isn't done.
   }
   ```
 
-  The scaffold ships `TestStaticStylesheetServed` as a worked example; keep it,
-  and add a test for each route you register. Testing a route through
-  `Handler()` (not by calling the handler func directly) is what catches a
-  route that serves a 200 with the wrong body.
+  The scaffold ships `TestStaticStylesheetServed` and `TestHomePageRenders` as
+  worked examples; keep them. **Every rendered page needs a test that GETs it
+  through `Handler()` and asserts 200 — `GET /` always, plus each route you add
+  — exercised in the empty/resting state (no rows, nil pointers), which is where
+  a view nil-derefs.** A panic inside a view is recovered as a 500, so this
+  render test catches it before the build ships; calling the handler func
+  directly would miss it. For a DB-backed page, call `agenttest.UseDB(t, a)`
+  first (it migrates a clean, empty schema — exactly the resting state).
 - **DB-backed tests:** `agenttest.NewEnv` points the agent at the test database
   (`$TEST_DB_URL`) *before* you build it, so caching `agent.DB()` in your Deps at
   construction works the same as in production — no need to fetch the DB per
