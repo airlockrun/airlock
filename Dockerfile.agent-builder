@@ -99,6 +99,18 @@ RUN mkdir -p /usr/local/lib/tailwind && chmod 0755 /usr/local/lib/tailwind
 ADD --chmod=0644 https://github.com/saadeghi/daisyui/releases/download/${DAISYUI_VERSION}/daisyui.mjs       /usr/local/lib/tailwind/daisyui.mjs
 ADD --chmod=0644 https://github.com/saadeghi/daisyui/releases/download/${DAISYUI_VERSION}/daisyui-theme.mjs /usr/local/lib/tailwind/daisyui-theme.mjs
 
+# DaisyUI skill — official agent guidance for daisyUI, pulled from the same
+# pinned tag as the .mjs above so library and guidance stay in lockstep. The
+# codegen toolserver's `skill` tool serves it from here (SKILLS_DIRS, set by
+# airlock at container launch → /usr/local/lib/agent-skills). Sparse-fetch only
+# skills/daisyui; git is already installed above.
+RUN git clone --depth 1 --branch ${DAISYUI_VERSION} --filter=blob:none --sparse \
+        https://github.com/saadeghi/daisyui.git /tmp/ds && \
+    git -C /tmp/ds sparse-checkout set skills/daisyui && \
+    mkdir -p /usr/local/lib/agent-skills/skills && \
+    cp -r /tmp/ds/skills/daisyui /usr/local/lib/agent-skills/skills/ && \
+    rm -rf /tmp/ds && chmod -R a+rX /usr/local/lib/agent-skills
+
 # Go cache dirs writable by the host UID — Docker volumes mount as root,
 # but the toolserver runs as the host user.
 RUN mkdir -p /tmp/go-mod /tmp/go-cache && chmod 777 /tmp/go-mod /tmp/go-cache
