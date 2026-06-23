@@ -2614,6 +2614,25 @@ ALTER TABLE ONLY public.webauthn_credentials
 
 
 
+-- Seed data carried over from the pre-squash 001+002 seeds: the built-in
+-- group principals + groups, and the system_settings singleton. created_at /
+-- updated_at fall to DEFAULT now() per install. (The other historical INSERTs
+-- were SELECT-from-existing backfills that no-op on a fresh DB.)
+INSERT INTO principals (id, kind) VALUES
+    ('00000000-0000-0000-0000-0000000000a1', 'group'),
+    ('00000000-0000-0000-0000-0000000000a2', 'group'),
+    ('00000000-0000-0000-0000-0000000000a3', 'group');
+INSERT INTO groups (id, name, description, builtin) VALUES
+    ('00000000-0000-0000-0000-0000000000a1', 'admin',   'Built-in admin group',   true),
+    ('00000000-0000-0000-0000-0000000000a2', 'manager', 'Built-in manager group', true),
+    ('00000000-0000-0000-0000-0000000000a3', 'user',    'Built-in user group',    true);
+INSERT INTO system_settings (
+    id,
+    default_build_model, default_exec_model, default_stt_model,
+    default_vision_model, default_tts_model, default_image_gen_model,
+    default_embedding_model, default_search_model, last_seen_sdk_version
+) VALUES (true, '', '', '', '', '', '', '', '', '');
+
 -- +goose Down
 DROP TABLE IF EXISTS public.agent_builds CASCADE;
 DROP TABLE IF EXISTS public.agent_conversations CASCADE;
