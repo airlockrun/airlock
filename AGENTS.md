@@ -206,6 +206,7 @@ Replay buffer (100 messages) per topic for late subscribers.
 - Webhook verification: none, HMAC, or token-based.
 - Agent containers get scoped DB credentials (per-agent schema) and bearer token.
 - Agent runtime containers are hardened by default in `container.buildAgentHostConfig` (CapDrop:ALL, no-new-privileges, PidsLimit, lower CPUShares, OomScoreAdj so agents OOM before infra; host-gateway only in dev). Optional `AGENT_MEMORY_LIMIT` and `AGENT_SANDBOX=gvisor` (runsc) — see `docs/agent-isolation.md`.
+- **Instance namespacing.** Every Docker resource airlock owns (agent/builder container names, agent image labels, build-cache volumes, buildx builder) is namespaced by `AIRLOCK_INSTANCE_ID` (required; default `airlock`) via the `config.LabelInstance` (`run.airlock.instance`) label. All container/image list+prune calls filter on that label, so instances sharing one Docker daemon never reap each other's resources. **Co-locating instances on one daemon requires a DISTINCT `AIRLOCK_INSTANCE_ID` per instance** (a full second stack also needs its own networks/volumes/ports). See `docs/agent-isolation.md`.
 - OIDC enterprise support via build tag.
 
 ---

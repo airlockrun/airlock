@@ -55,8 +55,9 @@ type ContainerManager interface {
 	// otherwise fan out into one inspect per agent.
 	RunningAgents(ctx context.Context, agentIDs []uuid.UUID) (map[uuid.UUID]bool, error)
 
-	// StopAgent stops a specific agent container.
-	StopAgent(ctx context.Context, id string) error
+	// StopAgent stops a specific agent's container (resolved from the agent
+	// ID via the instance-scoped name scheme).
+	StopAgent(ctx context.Context, agentID uuid.UUID) error
 
 	// MarkBusy / MarkIdle bracket an in-flight request to an agent
 	// container. While the in-flight count is above zero the idle

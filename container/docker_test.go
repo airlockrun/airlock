@@ -108,13 +108,14 @@ func TestIdleContainersToStop(t *testing.T) {
 // must survive a reap pass, and MarkIdle must restart the idle clock.
 func TestMarkBusyExemptsFromReaping(t *testing.T) {
 	id := uuid.New()
-	name := agentName(id)
 	m := &DockerManager{
-		active:       map[string]*Container{name: {ID: "cid"}},
-		lastActivity: map[string]time.Time{name: time.Now().Add(-time.Hour)},
-		inFlight:     make(map[string]int),
-		idleTimeout:  10 * time.Minute,
+		cfg:         &config.Config{InstanceID: "test"},
+		inFlight:    make(map[string]int),
+		idleTimeout: 10 * time.Minute,
 	}
+	name := m.agentName(id)
+	m.active = map[string]*Container{name: {ID: "cid"}}
+	m.lastActivity = map[string]time.Time{name: time.Now().Add(-time.Hour)}
 
 	// In flight: not reapable despite an hour-old lastActivity stamp.
 	m.MarkBusy(id)
@@ -142,13 +143,14 @@ func TestMarkBusyExemptsFromReaping(t *testing.T) {
 // container only becomes reapable after the last MarkIdle.
 func TestMarkBusyNested(t *testing.T) {
 	id := uuid.New()
-	name := agentName(id)
 	m := &DockerManager{
-		active:       map[string]*Container{name: {ID: "cid"}},
-		lastActivity: map[string]time.Time{name: time.Now().Add(-time.Hour)},
-		inFlight:     make(map[string]int),
-		idleTimeout:  10 * time.Minute,
+		cfg:         &config.Config{InstanceID: "test"},
+		inFlight:    make(map[string]int),
+		idleTimeout: 10 * time.Minute,
 	}
+	name := m.agentName(id)
+	m.active = map[string]*Container{name: {ID: "cid"}}
+	m.lastActivity = map[string]time.Time{name: time.Now().Add(-time.Hour)}
 
 	m.MarkBusy(id)
 	m.MarkBusy(id)

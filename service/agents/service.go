@@ -506,8 +506,7 @@ func (s *Service) Delete(ctx context.Context, p authz.Principal, agentID uuid.UU
 			s.bridgeMgr.RemoveBridge(bridgeUUID)
 		}
 	}
-	containerName := "airlock-agent-" + agentID.String()[:8]
-	_ = s.containers.StopAgent(ctx, containerName)
+	_ = s.containers.StopAgent(ctx, agentID)
 	if agent.ImageRef != "" {
 		_ = s.containers.RemoveImage(ctx, agent.ImageRef)
 	}
@@ -537,8 +536,7 @@ func (s *Service) Stop(ctx context.Context, p authz.Principal, agentID uuid.UUID
 	if err := authz.Authorize(ctx, q, p, authz.AgentLifecycle, agentID); err != nil {
 		return err
 	}
-	containerName := "airlock-agent-" + agentID.String()[:8]
-	if err := s.containers.StopAgent(ctx, containerName); err != nil {
+	if err := s.containers.StopAgent(ctx, agentID); err != nil {
 		s.logger.Error("stop agent", zap.Error(err))
 		return err
 	}
@@ -588,8 +586,7 @@ func (s *Service) Suspend(ctx context.Context, p authz.Principal, agentID uuid.U
 	if err := authz.Authorize(ctx, q, p, authz.AgentLifecycle, agentID); err != nil {
 		return err
 	}
-	containerName := "airlock-agent-" + agentID.String()[:8]
-	if err := s.containers.StopAgent(ctx, containerName); err != nil {
+	if err := s.containers.StopAgent(ctx, agentID); err != nil {
 		s.logger.Error("suspend agent", zap.Error(err))
 		return err
 	}

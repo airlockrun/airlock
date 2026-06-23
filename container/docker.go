@@ -63,15 +63,18 @@ func NewDockerManager(cfg *config.Config, logger *zap.Logger) *DockerManager {
 	return m
 }
 
-// cleanupOrphanedBuilderContainers removes any leftover airlock-agent-builder-*
+// cleanupOrphanedBuilderContainers removes any leftover <instance>-agent-builder-*
 // containers from a previous Airlock process that was killed before cleanup.
+// Scoped to this instance via the ownership label.
 func (m *DockerManager) cleanupOrphanedBuilderContainers() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
+	f := m.instanceFilter()
+	f.Add("name", m.builderPrefix())
 	containers, err := m.client.ContainerList(ctx, dcontainer.ListOptions{
 		All:     true,
-		Filters: filters.NewArgs(filters.Arg("name", "airlock-agent-builder-")),
+		Filters: f,
 	})
 	if err != nil {
 		m.logger.Warn("failed to list orphaned agent-builder containers", zap.Error(err))
@@ -88,7 +91,9 @@ func (m *DockerManager) cleanupOrphanedBuilderContainers() {
 // agents (keeping only the current image_ref).
 //
 // validAgents maps agent UUID string → current image_ref (e.g., "uuid:hash").
-// Any airlock-agent-* container or UUID-tagged image not matching this set is removed.
+// Any container or UUID-tagged image owned by this instance (run.airlock.instance
+// label) not matching this set is removed. Other instances' resources carry a
+// different label value and are never listed here.
 func (m *DockerManager) PruneAgentResources(ctx context.Context, validAgents map[string]string) {
 	// Build a lookup from container name prefix (first 8 chars of UUID) → full UUID.
 	prefixToID := make(map[string]string, len(validAgents))
@@ -98,16 +103,18 @@ func (m *DockerManager) PruneAgentResources(ctx context.Context, validAgents map
 		}
 	}
 
+	agentPrefix := m.agentPrefix()
+
 	// --- Containers ---
 	containers, err := m.client.ContainerList(ctx, dcontainer.ListOptions{
 		All:     true,
-		Filters: filters.NewArgs(filters.Arg("name", "airlock-agent-")),
+		Filters: m.instanceFilter(),
 	})
 	if err != nil {
 		m.logger.Warn("prune: failed to list containers", zap.Error(err))
 	} else {
 		for _, c := range containers {
-			// Container names are "/airlock-agent-{first8}"
+			// Container names are "/<instance>-agent-{first8}"
 			name := ""
 			for _, n := range c.Names {
 				if len(n) > 1 {
@@ -116,8 +123,8 @@ func (m *DockerManager) PruneAgentResources(ctx context.Context, validAgents map
 				}
 			}
 			prefix := ""
-			if len(name) > len("airlock-agent-") {
-				prefix = name[len("airlock-agent-"):]
+			if len(name) > len(agentPrefix) {
+				prefix = name[len(agentPrefix):]
 			}
 			if _, ok := prefixToID[prefix]; !ok {
 				m.logger.Info("prune: removing orphaned container",
@@ -130,8 +137,10 @@ func (m *DockerManager) PruneAgentResources(ctx context.Context, validAgents map
 	}
 
 	// --- Images ---
-	// Agent images are tagged as "{agentUUID}:{commitHash}".
-	images, err := m.client.ImageList(ctx, image.ListOptions{})
+	// Agent images are tagged as "{agentUUID}:{commitHash}" and carry this
+	// instance's ownership label (set at build time via --label), so the
+	// filter keeps another instance's images out of the prune set.
+	images, err := m.client.ImageList(ctx, image.ListOptions{Filters: m.instanceFilter()})
 	if err != nil {
 		m.logger.Warn("prune: failed to list images", zap.Error(err))
 		return
@@ -166,13 +175,30 @@ func (m *DockerManager) Close() {
 	m.client.Close()
 }
 
-func agentName(agentID uuid.UUID) string {
-	return "airlock-agent-" + agentID.String()[:8]
+// labelInstance is the ownership label key (see config.LabelInstance).
+// Names carry the same instance prefix only for daemon-global uniqueness
+// and readability; the label is what list/prune filter on.
+const labelInstance = config.LabelInstance
+
+// agentPrefix is the instance-scoped name prefix for agent runtime
+// containers ("<instance>-agent-"). builderPrefix is the same for
+// ephemeral build/toolserver containers ("<instance>-agent-builder-").
+func (m *DockerManager) agentPrefix() string   { return m.cfg.InstanceID + "-agent-" }
+func (m *DockerManager) builderPrefix() string { return m.cfg.InstanceID + "-agent-builder-" }
+
+// instanceFilter scopes a Docker list call to this instance's resources
+// via the ownership label.
+func (m *DockerManager) instanceFilter() filters.Args {
+	return filters.NewArgs(filters.Arg("label", labelInstance+"="+m.cfg.InstanceID))
+}
+
+func (m *DockerManager) agentName(agentID uuid.UUID) string {
+	return m.agentPrefix() + agentID.String()[:8]
 }
 
 // StartAgent implements ContainerManager.
 func (m *DockerManager) StartAgent(ctx context.Context, opts AgentOpts) (*Container, error) {
-	name := agentName(opts.AgentID)
+	name := m.agentName(opts.AgentID)
 
 	// Stale-image guard: an existing container with the wrong image must
 	// be replaced, not adopted. Without this check, a rollback that
@@ -275,7 +301,7 @@ func (m *DockerManager) StartAgent(ctx context.Context, opts AgentOpts) (*Contai
 // when it finds a running container Airlock didn't previously know about
 // (typical after an Airlock restart).
 func (m *DockerManager) GetRunning(ctx context.Context, agentID uuid.UUID) (*Container, error) {
-	name := agentName(agentID)
+	name := m.agentName(agentID)
 
 	m.mu.Lock()
 	if c, ok := m.active[name]; ok {
@@ -300,13 +326,13 @@ func (m *DockerManager) GetRunning(ctx context.Context, agentID uuid.UUID) (*Con
 }
 
 // RunningAgents implements ContainerManager. One ContainerList call,
-// filtered to agent container names, then matched back to the requested
-// IDs via agentName. Builder/toolserver containers ("airlock-agent-
-// builder-*") also match the name filter but never equal an
+// scoped to this instance via the ownership label, then matched back to
+// the requested IDs via agentName. Builder/toolserver containers
+// ("<instance>-agent-builder-*") also carry the label but never equal an
 // agentName(id), so they fall out of the lookup harmlessly.
 func (m *DockerManager) RunningAgents(ctx context.Context, agentIDs []uuid.UUID) (map[uuid.UUID]bool, error) {
 	list, err := m.client.ContainerList(ctx, dcontainer.ListOptions{
-		Filters: filters.NewArgs(filters.Arg("name", "airlock-agent-")),
+		Filters: m.instanceFilter(),
 	})
 	if err != nil {
 		return nil, err
@@ -320,7 +346,7 @@ func (m *DockerManager) RunningAgents(ctx context.Context, agentIDs []uuid.UUID)
 	}
 	out := make(map[uuid.UUID]bool, len(agentIDs))
 	for _, id := range agentIDs {
-		_, ok := running[agentName(id)]
+		_, ok := running[m.agentName(id)]
 		out[id] = ok
 	}
 	return out, nil
@@ -332,33 +358,22 @@ func (m *DockerManager) RunningAgents(ctx context.Context, agentIDs []uuid.UUID)
 // already met, so a not-found error is success. Without this a
 // dead-but-status='active' agent could never be stopped and so never
 // restarted (the UI only offers Stop while active).
-func (m *DockerManager) StopAgent(ctx context.Context, id string) error {
+func (m *DockerManager) StopAgent(ctx context.Context, agentID uuid.UUID) error {
+	name := m.agentName(agentID)
+
 	timeout := 5
-	err := m.client.ContainerStop(ctx, id, dcontainer.StopOptions{Timeout: &timeout})
+	err := m.client.ContainerStop(ctx, name, dcontainer.StopOptions{Timeout: &timeout})
 	if err != nil && !cerrdefs.IsNotFound(err) {
 		return err
 	}
 	// Best-effort remove (unchanged): a not-found / already-removing
 	// container is fine — the goal state is reached either way.
-	m.client.ContainerRemove(ctx, id, dcontainer.RemoveOptions{})
+	m.client.ContainerRemove(ctx, name, dcontainer.RemoveOptions{})
 
-	// Cache cleanup: every current caller passes the container NAME
-	// ("airlock-agent-<short>"), so a direct map lookup is the right
-	// path. Fall back to a scan-by-Docker-ID for any future caller that
-	// resolves a container ID first.
+	// Cache cleanup: drop the in-memory entry keyed by the container name.
 	m.mu.Lock()
-	if _, ok := m.active[id]; ok {
-		delete(m.active, id)
-		delete(m.lastActivity, id)
-	} else {
-		for name, c := range m.active {
-			if c.ID == id {
-				delete(m.active, name)
-				delete(m.lastActivity, name)
-				break
-			}
-		}
-	}
+	delete(m.active, name)
+	delete(m.lastActivity, name)
 	m.mu.Unlock()
 
 	return nil
@@ -374,7 +389,7 @@ func (m *DockerManager) RemoveImage(ctx context.Context, imageRef string) error 
 // The container runs the toolserver binary with the workspace mounted.
 // Returns the container with a WebSocket endpoint for remote tool execution.
 func (m *DockerManager) StartToolserver(ctx context.Context, opts ToolserverOpts) (*Container, error) {
-	name := fmt.Sprintf("airlock-agent-builder-%d", time.Now().UnixNano())
+	name := fmt.Sprintf("%s%d", m.builderPrefix(), time.Now().UnixNano())
 
 	// Set -home-dir so tools that resolve $HOME (e.g. todowrite's XDG path)
 	// have a writable target — the container runs as the host UID, which
@@ -413,11 +428,14 @@ func (m *DockerManager) StartToolserver(ctx context.Context, opts ToolserverOpts
 	// env pays the index download once; subsequent installs are warm.
 	// Volumes are owned by root because apt only writes via sudo; the
 	// host-UID toolserver process never touches them directly.
+	// Cache volumes are instance-scoped so co-located instances don't share
+	// (and race on) the same go-mod/go-build/apt caches.
+	vp := m.cfg.InstanceID + "-"
 	mounts := append(opts.Mounts,
-		dmount.Mount{Type: dmount.TypeVolume, Source: "airlock-go-mod-cache", Target: "/tmp/go-mod"},
-		dmount.Mount{Type: dmount.TypeVolume, Source: "airlock-go-build-cache", Target: "/tmp/go-cache"},
-		dmount.Mount{Type: dmount.TypeVolume, Source: "airlock-apt-lists", Target: "/var/lib/apt/lists"},
-		dmount.Mount{Type: dmount.TypeVolume, Source: "airlock-apt-cache", Target: "/var/cache/apt"},
+		dmount.Mount{Type: dmount.TypeVolume, Source: vp + "go-mod-cache", Target: "/tmp/go-mod"},
+		dmount.Mount{Type: dmount.TypeVolume, Source: vp + "go-build-cache", Target: "/tmp/go-cache"},
+		dmount.Mount{Type: dmount.TypeVolume, Source: vp + "apt-lists", Target: "/var/lib/apt/lists"},
+		dmount.Mount{Type: dmount.TypeVolume, Source: vp + "apt-cache", Target: "/var/cache/apt"},
 	)
 
 	hostCfg := &dcontainer.HostConfig{
@@ -526,6 +544,15 @@ func (m *DockerManager) createAndStart(ctx context.Context, name string, cfg *dc
 		m.logger.Warn("failed to remove existing container", zap.String("name", name), zap.Error(err))
 	}
 
+	// Stamp the ownership label on every container (agent + toolserver) so
+	// list/prune calls scoped by instanceFilter never touch another
+	// instance's resources. This is the single chokepoint both paths funnel
+	// through.
+	if cfg.Labels == nil {
+		cfg.Labels = map[string]string{}
+	}
+	cfg.Labels[labelInstance] = m.cfg.InstanceID
+
 	netCfg := networkConfig(networkName)
 
 	resp, err := m.client.ContainerCreate(ctx, cfg, hostCfg, netCfg, nil, name)
@@ -626,7 +653,7 @@ func (m *DockerManager) waitHealthy(ctx context.Context, c *Container, timeout t
 // skips the container, so a run that outlasts idleTimeout is not
 // stopped mid-execution. Pair every MarkBusy with exactly one MarkIdle.
 func (m *DockerManager) MarkBusy(agentID uuid.UUID) {
-	name := agentName(agentID)
+	name := m.agentName(agentID)
 	m.mu.Lock()
 	m.inFlight[name]++
 	m.lastActivity[name] = time.Now()
@@ -637,7 +664,7 @@ func (m *DockerManager) MarkBusy(agentID uuid.UUID) {
 // the idle clock so the timeout is measured from the end of the last
 // request rather than its start.
 func (m *DockerManager) MarkIdle(agentID uuid.UUID) {
-	name := agentName(agentID)
+	name := m.agentName(agentID)
 	m.mu.Lock()
 	if m.inFlight[name] > 0 {
 		m.inFlight[name]--

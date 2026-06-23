@@ -63,6 +63,7 @@ func setRequiredEnv(t *testing.T) {
 	t.Setenv("S3_URL", "http://localhost:9090")
 	t.Setenv("S3_ACCESS_KEY", "minioadmin")
 	t.Setenv("S3_SECRET_KEY", "minioadmin")
+	t.Setenv("AIRLOCK_INSTANCE_ID", "airlock")
 	// Subdomain routing is load-bearing — resolveAgentDomain panics if
 	// neither AGENT_DOMAIN nor PUBLIC_URL is set, so seed one for tests.
 	t.Setenv("AGENT_DOMAIN", "test.airlock.local")
@@ -134,6 +135,23 @@ func TestLoadPanicsOnMissingDatabaseURL(t *testing.T) {
 		}
 		msg, ok := r.(string)
 		if !ok || msg != "required environment variable DATABASE_URL is not set" {
+			t.Errorf("unexpected panic message: %v", r)
+		}
+	}()
+	Load()
+}
+
+func TestLoadPanicsOnMissingInstanceID(t *testing.T) {
+	setRequiredEnv(t)
+	os.Unsetenv("AIRLOCK_INSTANCE_ID")
+
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("expected panic for missing AIRLOCK_INSTANCE_ID")
+		}
+		msg, ok := r.(string)
+		if !ok || msg != "required environment variable AIRLOCK_INSTANCE_ID is not set" {
 			t.Errorf("unexpected panic message: %v", r)
 		}
 	}()
