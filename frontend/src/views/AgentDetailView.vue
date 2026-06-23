@@ -777,6 +777,13 @@ function openWeb() {
   /* Setting overflow-x alone implicitly auto-s overflow-y in most engines —
    * pin overflow-y so a phantom vertical scrollbar can't appear. */
   overflow-y: hidden;
+  /* Keep the bar scrollable (narrow viewports + scrollspy centering) but hide
+   * the scrollbar track, which otherwise shows as a thin strip under the tabs. */
+  scrollbar-width: none; /* Firefox */
+  -ms-overflow-style: none; /* legacy Edge */
+}
+.agent-page-nav::-webkit-scrollbar {
+  display: none; /* Chromium, Safari */
 }
 .agent-page-nav ul {
   list-style: none;
