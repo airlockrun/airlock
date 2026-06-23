@@ -92,6 +92,19 @@ func (b *BuildService) runSolInProcess(ctx context.Context, opts solRunOpts) (*s
 		return nil, fmt.Errorf("resolve model: %w", err)
 	}
 
+	// Record the resolved model on the build row so the builds list can show
+	// which model produced each build. Written now (not at completion) so a
+	// build that later fails still carries it. Best-effort: this is cosmetic
+	// metadata, never load-bearing, so a write error only logs.
+	if opts.BuildID.Valid {
+		if mErr := dbq.New(b.db.Pool()).SetAgentBuildModel(ctx, dbq.SetAgentBuildModelParams{
+			ID:         opts.BuildID,
+			BuildModel: opts.BuildModel,
+		}); mErr != nil {
+			b.logger.Warn("record build model", zap.Error(mErr))
+		}
+	}
+
 	// Step 1b: Resolve web search tool (optional).
 	hasWebSearch := false
 	if searchTool, ok := b.resolveSearchTool(ctx, rp); ok {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 
 	"github.com/airlockrun/airlock/db/dbq"
@@ -161,6 +162,9 @@ func (b *BuildService) runCodegen(
 // "<kind> agent <id>", when no instruction is present (defensive — codegen
 // only runs with a non-empty instruction).
 func codegenCommitMessage(plan BuildPlan, agentID, exitSummary string) string {
+	// Codegen models often write the exit summary as markdown; strip it so the
+	// committed message reads as plain prose.
+	exitSummary = stripMarkdown(exitSummary)
 	subject := firstLine(plan.Instruction)
 	if subject == "" {
 		subject = firstLine(exitSummary)
@@ -184,6 +188,40 @@ func codegenCommitMessage(plan BuildPlan, agentID, exitSummary string) string {
 		fmt.Fprintf(&b, "\nRun: %s", plan.RunID)
 	}
 	return b.String()
+}
+
+// Markdown-stripping patterns, compiled once. Applied to the agent's exit
+// summary before it becomes a git commit body.
+var (
+	mdFenceLine  = regexp.MustCompile("(?m)^[ \t]*```.*\n?")     // ``` fence lines
+	mdHeading    = regexp.MustCompile(`(?m)^[ \t]*#{1,6}[ \t]+`) // # heading markers
+	mdBlockquote = regexp.MustCompile(`(?m)^[ \t]*>[ \t]?`)      // > blockquote markers
+	mdBullet     = regexp.MustCompile(`(?m)^([ \t]*)[*+][ \t]+`) // *,+ bullets -> "- "
+	mdImage      = regexp.MustCompile(`!\[[^\]]*\]\([^)]*\)`)    // ![alt](url) -> drop
+	mdLink       = regexp.MustCompile(`\[([^\]]+)\]\([^)]*\)`)   // [text](url) -> text
+	mdInlineCode = regexp.MustCompile("`+([^`\n]*?)`+")          // `code` -> code
+	mdItalicStar = regexp.MustCompile(`\*([^*\n]+?)\*`)          // *italic* -> italic
+	mdBlankRuns  = regexp.MustCompile(`\n{3,}`)                  // collapse blank-line runs
+)
+
+// stripMarkdown reduces the common markdown an LLM emits to plain text: it
+// drops code-fence lines, heading/blockquote markers and image syntax,
+// normalizes bullets to "- ", rewrites [text](url) to text, and removes
+// inline-code backticks and ** / * emphasis. Underscores are left untouched so
+// snake_case identifiers in the summary survive. It's a pragmatic cleanup for a
+// commit body, not a full CommonMark parser.
+func stripMarkdown(s string) string {
+	s = mdImage.ReplaceAllString(s, "")
+	s = mdFenceLine.ReplaceAllString(s, "")
+	s = mdHeading.ReplaceAllString(s, "")
+	s = mdBlockquote.ReplaceAllString(s, "")
+	s = mdBullet.ReplaceAllString(s, "$1- ")
+	s = mdLink.ReplaceAllString(s, "$1")
+	s = mdInlineCode.ReplaceAllString(s, "$1")
+	s = strings.ReplaceAll(s, "**", "")
+	s = mdItalicStar.ReplaceAllString(s, "$1")
+	s = mdBlankRuns.ReplaceAllString(s, "\n\n")
+	return s
 }
 
 // firstLine returns the first non-empty line of s, trimmed.

@@ -1264,7 +1264,12 @@ type AgentBuildInfo struct {
 	// toolserver/docker/schema/deploy). Empty for non-failed builds. The UI
 	// renders an infra failure as a platform error ("not your agent") rather
 	// than a code failure.
-	FailureKind   string `protobuf:"bytes,25,opt,name=failure_kind,json=failureKind,proto3" json:"failure_kind,omitempty"`
+	FailureKind string `protobuf:"bytes,25,opt,name=failure_kind,json=failureKind,proto3" json:"failure_kind,omitempty"`
+	// build_model is the LLM model that ran this build's codegen (resolved at
+	// build time: the agent's configured build model, or the system default
+	// when it inherits). Empty for rollbacks and for builds that failed before
+	// model resolution. Shown in the builds list next to the cost.
+	BuildModel    string `protobuf:"bytes,26,opt,name=build_model,json=buildModel,proto3" json:"build_model,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1470,6 +1475,13 @@ func (x *AgentBuildInfo) GetExitMessage() string {
 func (x *AgentBuildInfo) GetFailureKind() string {
 	if x != nil {
 		return x.FailureKind
+	}
+	return ""
+}
+
+func (x *AgentBuildInfo) GetBuildModel() string {
+	if x != nil {
+		return x.BuildModel
 	}
 	return ""
 }
@@ -4581,7 +4593,7 @@ const file_airlock_v1_types_proto_rawDesc = "" +
 	"started_at\x18\x10 \x01(\v2\x1a.google.protobuf.TimestampR\tstartedAt\x12;\n" +
 	"\vfinished_at\x18\x11 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
 	"finishedAt\x12*\n" +
-	"\x11llm_tokens_cached\x18\x12 \x01(\x05R\x0fllmTokensCached\"\x93\a\n" +
+	"\x11llm_tokens_cached\x18\x12 \x01(\x05R\x0fllmTokensCached\"\xb4\a\n" +
 	"\x0eAgentBuildInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x19\n" +
 	"\bagent_id\x18\x02 \x01(\tR\aagentId\x12\x12\n" +
@@ -4614,7 +4626,9 @@ const file_airlock_v1_types_proto_rawDesc = "" +
 	"\vexit_status\x18\x17 \x01(\tR\n" +
 	"exitStatus\x12!\n" +
 	"\fexit_message\x18\x18 \x01(\tR\vexitMessage\x12!\n" +
-	"\ffailure_kind\x18\x19 \x01(\tR\vfailureKind\"\xe1\x01\n" +
+	"\ffailure_kind\x18\x19 \x01(\tR\vfailureKind\x12\x1f\n" +
+	"\vbuild_model\x18\x1a \x01(\tR\n" +
+	"buildModel\"\xe1\x01\n" +
 	"\x10ConversationInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x19\n" +
 	"\bagent_id\x18\x02 \x01(\tR\aagentId\x12\x14\n" +
