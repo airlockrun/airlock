@@ -67,7 +67,11 @@ jobs:
         with:
           node-version: 22
       - name: enable pnpm
-        run: corepack enable
+        # Pin the project's pnpm explicitly: newer corepack defaults to pnpm 11
+        # and refuses to auto-switch down to the packageManager pin.
+        run: |
+          corepack enable
+          corepack prepare pnpm@10.33.0 --activate
       - name: install frontend deps
         run: pnpm -C frontend install --frozen-lockfile
       # Gates the bundled SPA's npm dependency licenses against the same allowlist.
