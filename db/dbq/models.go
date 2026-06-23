@@ -82,6 +82,7 @@ type AgentBuild struct {
 	ExitStatus       string             `json:"exit_status"`
 	ExitMessage      string             `json:"exit_message"`
 	FailureKind      string             `json:"failure_kind"`
+	BuildModel       string             `json:"build_model"`
 }
 
 type AgentConversation struct {

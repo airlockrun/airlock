@@ -8,13 +8,13 @@ INSERT INTO agent_builds (
     agent_id, type, status, instructions,
     source_ref, image_ref, sol_log, docker_log, log_seq, error_message,
     llm_calls, llm_tokens_in, llm_tokens_out, llm_tokens_cached, llm_cost_estimate,
-    rollback_target_id, sdk_version, todos, exit_status, exit_message
+    rollback_target_id, sdk_version, todos, exit_status, exit_message, build_model
 )
 VALUES (
     @agent_id, @type, 'building', @instructions,
     '', '', '', '', 0, '',
     0, 0, 0, 0, 0,
-    sqlc.narg('rollback_target_id'), '', '[]', '', ''
+    sqlc.narg('rollback_target_id'), '', '[]', '', '', ''
 )
 RETURNING *;
 
@@ -39,6 +39,12 @@ UPDATE agent_builds SET
     failure_kind = COALESCE(@failure_kind, ''),
     finished_at = now()
 WHERE id = @id;
+
+-- name: SetAgentBuildModel :exec
+-- Records the LLM model resolved for this build's codegen. Written once the
+-- model is resolved (before the run), so a build that later fails still shows
+-- which model produced it.
+UPDATE agent_builds SET build_model = @build_model WHERE id = @id;
 
 -- name: UpdateBuildLLMStats :exec
 -- Build-side parity with UpdateRunLLMStats: aggregates the build's
@@ -73,7 +79,7 @@ SELECT * FROM agent_builds WHERE agent_id = $1 ORDER BY started_at DESC LIMIT 1;
 -- name: ListAgentBuildsByAgent :many
 SELECT id, agent_id, type, status, instructions, error_message, source_ref, image_ref, started_at, finished_at,
        llm_calls, llm_tokens_in, llm_tokens_out, llm_tokens_cached, llm_cost_estimate,
-       rollback_target_id, sdk_version, exit_status, exit_message, failure_kind
+       rollback_target_id, sdk_version, exit_status, exit_message, failure_kind, build_model
 FROM agent_builds
 WHERE agent_id = @agent_id
 ORDER BY started_at DESC

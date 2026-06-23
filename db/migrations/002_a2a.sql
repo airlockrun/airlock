@@ -489,6 +489,17 @@ ALTER TABLE agent_builds
 -- defaults to 'infra' so an unclassified failure never trains the agent.
 ALTER TABLE agent_builds ADD COLUMN failure_kind text NOT NULL DEFAULT '';
 
+-- agent_builds.build_model — the LLM model that ran this build's codegen,
+-- resolved at build time (the agent's configured build model, or the system
+-- default when it inherits). Recorded so the builds list can show which model
+-- produced each build, next to its cost. Empty for rollbacks (no codegen) and
+-- for builds that fail before model resolution; DEFAULT '' backfills legacy
+-- rows then drops so new rows record it explicitly.
+ALTER TABLE agent_builds
+    ADD COLUMN build_model text NOT NULL DEFAULT '';
+ALTER TABLE agent_builds
+    ALTER COLUMN build_model DROP DEFAULT;
+
 -- connections.auth_params — extra OAuth authorization-request query
 -- params declared by the agent (agentsdk Connection.AuthParams), merged
 -- over the platform defaults per key at authorize time. An empty object
@@ -1424,6 +1435,7 @@ ALTER TABLE agent_builds DROP COLUMN IF EXISTS todos;
 ALTER TABLE agent_builds DROP COLUMN IF EXISTS exit_status;
 ALTER TABLE agent_builds DROP COLUMN IF EXISTS exit_message;
 ALTER TABLE agent_builds DROP COLUMN IF EXISTS failure_kind;
+ALTER TABLE agent_builds DROP COLUMN IF EXISTS build_model;
 ALTER TABLE system_settings DROP COLUMN IF EXISTS last_seen_sdk_version;
 -- Re-add the vestigial runs.logs (NOT NULL via transient default, then
 -- drop it per the no-fake-defaults rule). Content is not recoverable.

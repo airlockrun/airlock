@@ -286,6 +286,11 @@ message AgentBuildInfo {
   // renders an infra failure as a platform error ("not your agent") rather
   // than a code failure.
   string failure_kind = 25;
+  // build_model is the LLM model that ran this build's codegen (resolved at
+  // build time: the agent's configured build model, or the system default
+  // when it inherits). Empty for rollbacks and for builds that failed before
+  // model resolution. Shown in the builds list next to the cost.
+  string build_model = 26;
 }
 
 // ConversationInfo represents an agent conversation.

@@ -155,10 +155,10 @@ onMounted(() => {
             />
             <div v-if="b.exitMessage" :class="b.exitStatus === 'success' ? 'result-ok' : 'result-bad'">
               <i :class="b.exitStatus === 'success' ? 'pi pi-check' : 'pi pi-times'" />
-              {{ b.exitMessage }}
+              <span class="result-text">{{ b.exitMessage }}</span>
             </div>
             <div v-if="b.errorMessage && b.errorMessage !== b.exitMessage" class="result-bad">
-              <i class="pi pi-times" /> {{ b.errorMessage }}
+              <i class="pi pi-times" /> <span class="result-text">{{ b.errorMessage }}</span>
             </div>
             <span v-if="!b.exitMessage && !b.errorMessage" style="color: var(--p-text-muted-color)">—</span>
           </div>
@@ -167,6 +167,11 @@ onMounted(() => {
       <Column header="Started">
         <template #body="{ data: b }">
           {{ formatTimestamp(b.startedAt) }}
+        </template>
+      </Column>
+      <Column header="Model">
+        <template #body="{ data: b }">
+          <span class="build-model">{{ b.buildModel || '—' }}</span>
         </template>
       </Column>
       <Column header="Cost">
@@ -201,6 +206,7 @@ onMounted(() => {
       <Column header="Status"><template #body><Skeleton width="5rem" /></template></Column>
       <Column header="Result"><template #body><Skeleton /></template></Column>
       <Column header="Started"><template #body><Skeleton /></template></Column>
+      <Column header="Model"><template #body><Skeleton width="5rem" /></template></Column>
       <Column header="Cost"><template #body><Skeleton width="4rem" /></template></Column>
       <Column header="Finished"><template #body><Skeleton /></template></Column>
       <Column header=""><template #body><Skeleton width="5rem" /></template></Column>
@@ -210,19 +216,33 @@ onMounted(() => {
 
 <style scoped>
 .build-label {
-  display: inline-block;
-  max-width: 24rem;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  max-width: 18rem;
+  word-break: break-word;
   vertical-align: middle;
+}
+.build-model {
+  font-size: 0.85rem;
+  color: var(--p-text-muted-color);
 }
 .result-cell {
   display: flex;
   flex-direction: column;
   gap: 0.2rem;
-  max-width: 26rem;
+  max-width: 22rem;
   font-size: 0.85rem;
+}
+/* Clamp the result summary to a couple of lines so a long exit message
+   doesn't inflate the row; the full text shows on the build detail page. */
+.result-text {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
 }
 .result-cell .pi {
   font-size: 0.7rem;
