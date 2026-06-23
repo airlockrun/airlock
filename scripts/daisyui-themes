@@ -1,0 +1,29 @@
+#!/bin/sh
+# List the daisyUI themes baked into this image, grouped by color scheme.
+# Self-discovering: compiles a throwaway stylesheet with every theme enabled
+# and reads back which themes (and their light/dark scheme) the installed
+# bundle emits — so the list always matches the shipped DAISYUI_VERSION.
+# Exits non-zero if extraction yields no themes or is missing light/dark,
+# so the image build fails loud if daisyUI ever changes its output shape.
+set -eu
+
+MJS=/usr/local/lib/tailwind/daisyui.mjs
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+printf '@import "tailwindcss";\n@plugin "%s" { themes: all; }\n' "$MJS" > "$tmp/in.css"
+tailwindcss -i "$tmp/in.css" -o "$tmp/out.css" --minify >/dev/null 2>&1
+
+pairs=$(grep -oE '\[data-theme=[a-z]+\]\{color-scheme:[a-z]+' "$tmp/out.css" \
+  | sed -E 's/.*\[data-theme=([a-z]+)\]\{color-scheme:([a-z]+)/\1 \2/' \
+  | sort -u)
+
+light=$(printf '%s\n' "$pairs" | awk '$2=="light"{print $1}' | paste -sd' ' -)
+dark=$(printf '%s\n' "$pairs" | awk '$2=="dark"{print $1}' | paste -sd' ' -)
+
+case " $light " in *" light "*) ;; *) echo "daisyui-themes: 'light' missing — extraction broken" >&2; exit 1 ;; esac
+case " $dark " in *" dark "*) ;; *) echo "daisyui-themes: 'dark' missing — extraction broken" >&2; exit 1 ;; esac
+
+echo "daisyUI themes (set one in styles/app.css: themes: <name> --default):"
+echo "  light: $light"
+echo "  dark:  $dark"

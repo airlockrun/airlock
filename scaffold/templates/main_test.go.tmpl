@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -54,5 +55,20 @@ func TestStaticStylesheetServed(t *testing.T) {
 	miss.Body.Close()
 	if miss.StatusCode != http.StatusNotFound {
 		t.Errorf("GET unknown static file = %d, want 404", miss.StatusCode)
+	}
+}
+
+// TestDBMigratesAndConnects is the worked example for DB-backed tests.
+// agenttest.UseDB points the agent at $TEST_DB_URL, resets the schema, and
+// applies db/migrations — skipping the test when no test database is set. Once
+// you add tables, query through agent.DB() (which sqlc's New() accepts) and
+// assert on the results; this run just checks the migrated schema is reachable.
+func TestDBMigratesAndConnects(t *testing.T) {
+	agenttest.NewEnv(t)
+	a := newAgent()
+	agenttest.UseDB(t, a) // skips unless $TEST_DB_URL is set
+
+	if err := a.DB().PingContext(context.Background()); err != nil {
+		t.Fatalf("agent DB not reachable after migrate: %v", err)
 	}
 }

@@ -18,9 +18,10 @@ import (
 
 // minAgentsdkForScaffold is the smallest published agentsdk version the
 // current scaffold compiles against. Bump whenever the scaffold adopts
-// a new agentsdk-side API. The scaffold's main_test.go imports
-// github.com/airlockrun/agentsdk/agenttest and calls agent.Handler(),
-// both added in v0.3.1-rc.3. When airlock's go.mod pins below this, the
+// a new agentsdk-side API. The scaffold's main_test.go uses
+// github.com/airlockrun/agentsdk/agenttest (NewEnv, UseDB) and calls
+// agent.Handler() / agent.MigrationContext, all added in v0.3.1-rc.3.
+// When airlock's go.mod pins below this, the
 // test auto-skips with an explanatory message; once the pin catches up
 // it runs again — no manual edit required.
 const minAgentsdkForScaffold = "v0.3.1-rc.3"
