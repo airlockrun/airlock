@@ -131,6 +131,19 @@ func (b *BuildService) Execute(ctx context.Context, plan BuildPlan) (string, err
 			return "", fmt.Errorf("decrypt db password: %w", err)
 		}
 		dbPassword = pw
+
+		// Re-assert the role's password to the stored value before the build
+		// touches the role (migration validation connects as it). The live
+		// role and the stored password can drift — a retried/partial initial
+		// build ALTERs the role before the new password is persisted, and a
+		// recreated Postgres volume loses the role entirely. create_agent_role
+		// is idempotent (ALTER if the role exists, CREATE if missing), so this
+		// self-heals both cases instead of failing the upgrade with an auth
+		// error (pq 28P01). Pairs with the SDK-bump mass rebuild: a drifted
+		// agent recovers on its next upgrade rather than needing a manual fix.
+		if _, err := b.db.Pool().Exec(ctx, "SELECT create_agent_role($1, $2)", schemaName, dbPassword); err != nil {
+			return "", fmt.Errorf("ensure agent db role: %w", err)
+		}
 	}
 
 	// ── Phase A4: agent_builds row ─────────────────────────────────────
