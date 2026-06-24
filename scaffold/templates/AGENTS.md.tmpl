@@ -333,26 +333,47 @@ rarely worth it.
 
 ## Updating the UI
 
-The web UI is action-driven: a user's POST swaps its own response, so the
-page reflects what they just did. **Don't poll on a timer** — a periodic
-swap resets scroll, focus, and in-progress drags out from under the user.
+The web UI is action-driven first: a user's POST swaps its own response, so the
+page reflects what they just did. That covers most updates and disrupts nobody.
 
-State can also change from the other surface (the user told the bot "add a
-card" over chat). Catch that the cheap way: **refresh data-bearing regions
-when the tab regains focus, not on an interval.** Cross-surface edits almost
-always happen while the user is away in the chat app, so refreshing on
-return shows the change exactly when they come back — and never fires
-mid-interaction. This is the "revalidate on focus" pattern; in htmx it's a
-trigger:
+State also changes from outside the page — the other surface (the user told the
+bot "add a card" in chat) or live data (now-playing, a feed). To pick that up,
+**poll, but never re-swap unchanged content.** A periodic swap that replaces a
+region resets scroll, focus, and in-progress drags — the classic "it scrolled me
+back to the top every few seconds" bug.
+
+Make the poll conditional: give the data an updated-at (or version), have the
+polling request carry what it last saw (a query param or header you set — htmx
+does not send `If-Modified-Since` for you), and in the handler **return `204 No
+Content` when nothing changed.** htmx treats 204 as "do nothing", so an idle page
+never re-swaps and scroll/focus is left alone; return `200` with the fragment
+only on a real change. Use **204, not 304** — htmx swaps 3xx responses, so a 304
+would blank the target; 204 is its built-in no-swap code.
+
+```
+<div id="np" hx-get="/now-playing?since=0" hx-trigger="every 5s" hx-swap="outerHTML">…</div>
+```
+```go
+// nothing new since the client's last-seen version → tell htmx to do nothing
+if r.URL.Query().Get("since") == currentVersion {
+    w.WriteHeader(http.StatusNoContent) // 204
+    return
+}
+// changed → render the replacement div carrying the current version; outerHTML
+// swaps it in, so the next poll sends since=<current> and idles on 204 again
+```
+
+When a real change does swap, don't yank the user around: swap the smallest
+region that changed (or out-of-band swaps of just the changed items), not the
+whole scroll container. Mark an element that must survive untouched with
+`hx-preserve` (a media player, a focused input); to refresh a region in place
+while keeping scroll and selection, use a morph swap (idiomorph) rather than
+replacing it.
+
+For a page that isn't live and only needs to catch cross-surface edits (which
+happen while the user is away in chat), refresh-on-focus is a fine, lighter
+alternative to polling:
 
 ```
 hx-trigger="visibilitychange[document.visibilityState === 'visible'] from:document"
 ```
-
-If the user scrolls or drags inside that region, refresh the parts that
-changed rather than replacing the scroll container.
-
-This refocus refresh is the general-case default. A few apps genuinely need
-real-time state — a chat UI, a live feed, presence — where waiting for
-refocus isn't acceptable. For those, the approach is your call; just keep
-the don't-disrupt-the-user rule above.
