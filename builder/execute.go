@@ -132,17 +132,14 @@ func (b *BuildService) Execute(ctx context.Context, plan BuildPlan) (string, err
 		}
 		dbPassword = pw
 
-		// Re-assert the role's password to the stored value before the build
-		// touches the role (migration validation connects as it). The live
-		// role and the stored password can drift — a retried/partial initial
-		// build ALTERs the role before the new password is persisted, and a
-		// recreated Postgres volume loses the role entirely. create_agent_role
-		// is idempotent (ALTER if the role exists, CREATE if missing), so this
-		// self-heals both cases instead of failing the upgrade with an auth
-		// error (pq 28P01). Pairs with the SDK-bump mass rebuild: a drifted
-		// agent recovers on its next upgrade rather than needing a manual fix.
-		if _, err := b.db.Pool().Exec(ctx, "SELECT create_agent_role($1, $2)", schemaName, dbPassword); err != nil {
-			return "", fmt.Errorf("ensure agent db role: %w", err)
+		// Re-assert the role to the stored password before the build touches it
+		// (migration validation connects as the role). Heals a role that drifted
+		// from the stored copy or a recreated Postgres volume that lost the role
+		// — idempotent, never rotates. Pairs with the SDK-bump mass rebuild so a
+		// drifted agent recovers on its next upgrade rather than needing a manual
+		// fix.
+		if err := b.ensureAgentRole(ctx, schemaName, dbPassword); err != nil {
+			return "", fmt.Errorf("provision agent db: %w", err)
 		}
 	}
 
@@ -609,19 +606,40 @@ func (b *BuildService) prepareNewAgent(ctx context.Context, q *dbq.Queries, agen
 	}
 
 	schemaName := fmt.Sprintf("agent_%s", sanitizeUUID(agentID))
-	pw, err := b.createAgentSchema(ctx, agentID, schemaName)
-	if err != nil {
-		return "", "", fmt.Errorf("create schema: %w", err)
+
+	// Reuse the agent's existing DB password on a rebuild; mint a new one only
+	// on first creation. Regenerating per build ALTERs the live role's
+	// password, which races with in-flight containers/health checks (pq 28P01)
+	// and risks permanent role↔stored drift if a build crashes mid-rotation.
+	var pw string
+	if agent.DbPassword != "" {
+		stored, err := b.encryptor.Get(ctx, "agent/"+agentID+"/db_password", agent.DbPassword)
+		if err != nil {
+			return "", "", fmt.Errorf("decrypt db password: %w", err)
+		}
+		pw = stored
+	} else {
+		fresh, err := newDBPassword()
+		if err != nil {
+			return "", "", err
+		}
+		enc, err := b.encryptor.Put(ctx, "agent/"+agentID+"/db_password", fresh)
+		if err != nil {
+			return "", "", fmt.Errorf("encrypt db password: %w", err)
+		}
+		if err := q.UpdateAgentDBPassword(ctx, dbq.UpdateAgentDBPasswordParams{
+			ID:         agent.ID,
+			DbPassword: enc,
+		}); err != nil {
+			return "", "", fmt.Errorf("update agent db_password: %w", err)
+		}
+		pw = fresh
 	}
-	enc, err := b.encryptor.Put(ctx, "agent/"+agentID+"/db_password", pw)
-	if err != nil {
-		return "", "", fmt.Errorf("encrypt db password: %w", err)
-	}
-	if err := q.UpdateAgentDBPassword(ctx, dbq.UpdateAgentDBPasswordParams{
-		ID:         agent.ID,
-		DbPassword: enc,
-	}); err != nil {
-		return "", "", fmt.Errorf("update agent db_password: %w", err)
+
+	// Idempotently ensure the role (with this exact password) and schema exist
+	// — never rotates, so rebuilds don't invalidate a running container's creds.
+	if err := b.ensureAgentRole(ctx, schemaName, pw); err != nil {
+		return "", "", fmt.Errorf("provision agent db: %w", err)
 	}
 	return pw, schemaName, nil
 }

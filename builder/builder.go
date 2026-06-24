@@ -478,37 +478,41 @@ func writeUpgradeDiagnostics(dir string, input UpgradeInput) (bool, error) {
 	return true, os.WriteFile(filepath.Join(dir, "DIAGNOSTICS.md"), []byte(header+content), 0o644)
 }
 
-// createAgentSchema creates a dedicated Postgres role and schema for the agent.
-// Returns the plaintext DB password for the role.
-func (b *BuildService) createAgentSchema(ctx context.Context, agentID, schemaName string) (string, error) {
+// ensureAgentRole idempotently provisions the agent's Postgres role (with the
+// given password) and schema. Safe to call on every build and cold start:
+// create_agent_role ALTERs the role to this exact password if it exists, or
+// CREATEs it if missing, so the live role always matches the caller's stored
+// password — never rotated. Regenerating a fresh password per build (the old
+// behavior) ALTERed the live role mid-flight, racing with in-flight
+// containers and health checks (transient pq 28P01) and leaving the role
+// permanently diverged from the stored copy if a build crashed between the
+// ALTER and persisting the new value.
+func (b *BuildService) ensureAgentRole(ctx context.Context, schemaName, password string) error {
 	conn, err := b.db.Pool().Acquire(ctx)
 	if err != nil {
-		return "", fmt.Errorf("acquire conn: %w", err)
+		return fmt.Errorf("acquire conn: %w", err)
 	}
 	defer conn.Release()
 
-	// Generate random password.
+	// SECURITY DEFINER bridge — avoids granting CREATEROLE to airlock_app.
+	if _, err := conn.Exec(ctx, "SELECT create_agent_role($1, $2)", schemaName, password); err != nil {
+		return fmt.Errorf("create role: %w", err)
+	}
+	if _, err := conn.Exec(ctx, fmt.Sprintf("CREATE SCHEMA IF NOT EXISTS %s AUTHORIZATION %s", schemaName, schemaName)); err != nil {
+		return fmt.Errorf("create schema: %w", err)
+	}
+	return nil
+}
+
+// newDBPassword returns a fresh 32-byte hex-encoded password for a new agent
+// role. Minted only on first creation; rebuilds reuse the stored value so the
+// role password is never rotated out from under a running container.
+func newDBPassword() (string, error) {
 	pwBytes := make([]byte, 32)
 	if _, err := rand.Read(pwBytes); err != nil {
 		return "", fmt.Errorf("generate password: %w", err)
 	}
-	password := hex.EncodeToString(pwBytes)
-
-	roleName := schemaName // e.g. agent_<uuid_no_hyphens>
-
-	// Create role via SECURITY DEFINER function (avoids granting CREATEROLE to airlock_app).
-	_, err = conn.Exec(ctx, "SELECT create_agent_role($1, $2)", roleName, password)
-	if err != nil {
-		return "", fmt.Errorf("create role: %w", err)
-	}
-
-	// Create schema owned by the agent role.
-	_, err = conn.Exec(ctx, fmt.Sprintf("CREATE SCHEMA IF NOT EXISTS %s AUTHORIZATION %s", schemaName, roleName))
-	if err != nil {
-		return "", fmt.Errorf("create schema: %w", err)
-	}
-
-	return password, nil
+	return hex.EncodeToString(pwBytes), nil
 }
 
 // agentDBURL builds a Postgres connection URL for an agent's dedicated role.
