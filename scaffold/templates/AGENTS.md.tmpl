@@ -262,6 +262,12 @@ DaisyUI (styling). htmx is served same-origin by the framework under
 the agent's own `/static/app.{hash}.css` route (see `views/assets.go`
 and `main.go`'s `/static/{name}` handler).
 
+**Load the `templ`, `htmx`, and `daisyui` skills (via the `skill` tool)
+before writing UI** — each carries the version-matched language/library
+reference. The gotchas below are the high-frequency traps; the skills have
+the full rules. templ markup is not a Go function body and an `hx-*` swap
+is not a free-form DOM write — when in doubt, read the skill, don't guess.
+
 Design principles:
 
 - **Pick a tone before writing markup.** Music dashboard, weather
@@ -289,6 +295,12 @@ Design principles:
   the web side as capable for the domain as chat is. If a line only makes
   sense to someone who knows this is an LLM agent, it doesn't belong in the
   UI.
+- **templ control flow is only `if` / `else` / `switch` / `for` — there is
+  no early `return`.** A bare `return` inside a templ block is not an exit;
+  templ writes it to the page as the literal text "return" and the
+  surrounding markup still renders. To show one of several states, use a
+  single `if / else if / else` chain — never `if cond { …markup… return }`,
+  which renders every matching block plus stray "return" text.
 - **Don't double-wrap htmx swap targets.** Either the page owns the
   card and the partial swaps inner content, or the partial owns the
   card and the page renders only an empty target. Picking both
