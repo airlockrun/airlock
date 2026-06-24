@@ -63,8 +63,9 @@ WHERE upgrade_status IN ('queued', 'building');
 UPDATE agents SET config = @config, updated_at = now() WHERE id = @id;
 
 -- name: UpdateAgentDBPassword :exec
--- Set the encrypted DB password for the agent's per-schema role. Called by
--- the builder once createAgentSchema has provisioned the role.
+-- Set the encrypted DB password for the agent's per-schema role. Written once
+-- on first creation; rebuilds reuse the stored value (the role password is
+-- never rotated) so a running container's creds can't be invalidated mid-build.
 UPDATE agents SET db_password = @db_password, updated_at = now() WHERE id = @id;
 
 -- name: ListAgents :many
