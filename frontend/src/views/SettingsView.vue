@@ -4,7 +4,6 @@ import { fromJson, toJson } from '@bufbuild/protobuf'
 import { useAuthStore } from '@/stores/auth'
 import { useCatalogStore } from '@/stores/catalog'
 import { useToast } from 'primevue/usetoast'
-import { useTheme } from '@/composables/useTheme'
 import {
   useModelCapabilities,
   isLanguage,
@@ -32,13 +31,7 @@ const auth = useAuthStore()
 const catalog = useCatalogStore()
 const providers = useProvidersStore()
 const toast = useToast()
-const { isDark, toggle: toggleTheme } = useTheme()
 const { groupModels, searchModelOptions } = useModelCapabilities()
-
-const currentPassword = ref('')
-const newPassword = ref('')
-const confirmPassword = ref('')
-const loading = ref(false)
 
 // Connected apps (OAuth grants) — apps the user has authorized to
 // reach their agents via the MCP server-side OAuth flow. The list +
@@ -318,44 +311,11 @@ async function saveDefaults() {
   }
 }
 
-async function changePassword() {
-  if (!currentPassword.value || !newPassword.value || !confirmPassword.value) {
-    toast.add({ severity: 'error', summary: 'All fields are required', life: 3000 })
-    return
-  }
-  if (newPassword.value !== confirmPassword.value) {
-    toast.add({ severity: 'error', summary: 'New passwords do not match', life: 3000 })
-    return
-  }
-  loading.value = true
-  try {
-    await auth.changePassword(currentPassword.value, newPassword.value)
-    toast.add({ severity: 'success', summary: 'Password changed', life: 3000 })
-    currentPassword.value = ''
-    newPassword.value = ''
-    confirmPassword.value = ''
-  } catch (err: any) {
-    toast.add({ severity: 'error', summary: err.response?.data?.error || 'Failed', life: 5000 })
-  } finally {
-    loading.value = false
-  }
-}
 </script>
 
 <template>
   <div style="max-width: 36rem">
     <h1 style="margin: 0 0 1.5rem; font-size: 1.5rem">Settings</h1>
-
-    <!-- Appearance -->
-    <Card style="margin-bottom: 1.5rem">
-      <template #title>Appearance</template>
-      <template #content>
-        <div style="display: flex; align-items: center; gap: 0.75rem">
-          <span>Dark Mode</span>
-          <ToggleSwitch v-model="isDark" @change="toggleTheme" />
-        </div>
-      </template>
-    </Card>
 
     <!-- Default Models (admin only) -->
     <Card v-if="auth.can('tenant.settings.update')" style="margin-bottom: 1.5rem">
@@ -499,28 +459,6 @@ async function changePassword() {
             </template>
           </Column>
         </DataTable>
-      </template>
-    </Card>
-
-    <!-- Change Password -->
-    <Card>
-      <template #title>Change Password</template>
-      <template #content>
-        <form @submit.prevent="changePassword" style="display: flex; flex-direction: column; gap: 1.25rem">
-          <FloatLabel variant="on">
-            <Password id="set-current" v-model="currentPassword" :feedback="false" toggle-mask :input-props="{ autocomplete: 'current-password' }" style="width: 100%" :input-style="{ width: '100%' }" />
-            <label for="set-current">Current Password</label>
-          </FloatLabel>
-          <FloatLabel variant="on">
-            <Password id="set-new" v-model="newPassword" toggle-mask :input-props="{ autocomplete: 'new-password' }" style="width: 100%" :input-style="{ width: '100%' }" />
-            <label for="set-new">New Password</label>
-          </FloatLabel>
-          <FloatLabel variant="on">
-            <Password id="set-confirm" v-model="confirmPassword" :feedback="false" toggle-mask :input-props="{ autocomplete: 'new-password' }" style="width: 100%" :input-style="{ width: '100%' }" />
-            <label for="set-confirm">Confirm New Password</label>
-          </FloatLabel>
-          <Button type="submit" label="Change Password" :loading="loading" style="align-self: flex-start" />
-        </form>
       </template>
     </Card>
   </div>

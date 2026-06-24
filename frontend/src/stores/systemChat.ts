@@ -295,6 +295,12 @@ export const useSystemChatStore = defineStore('systemChat', () => {
           toolCallId: ev.toolCallId,
           description: ev.description || '',
         }
+        // The run is suspended awaiting the user's decision — it isn't actively
+        // streaming, so clear `sending`. Without this the Approve/Reject buttons
+        // (bound to :loading="sending") stay disabled until a page refresh.
+        // currentRunId/pendingConfirmation stay set so the resume still targets
+        // this run.
+        sending.value = false
         const tc = activeToolCalls.get(ev.toolCallId)
         if (tc) tc.status = 'confirmation'
       }),
