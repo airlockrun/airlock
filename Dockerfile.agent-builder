@@ -20,6 +20,9 @@ ARG GOOSE_VERSION=v3.27.1
 ARG TEMPL_VERSION=v0.3.1020
 ARG TAILWIND_VERSION=v4.1.0
 ARG DAISYUI_VERSION=v5.5.23
+# Keep in sync with agentsdk.HTMXVersion (the htmx the agent runtime serves), so
+# the bundled htmx skill docs match the htmx the agent actually ships.
+ARG HTMX_VERSION=2.0.10
 
 COPY --from=sqlc/sqlc:latest /workspace/sqlc /usr/local/bin/sqlc
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -124,6 +127,32 @@ RUN git clone --depth 1 --branch ${DAISYUI_VERSION} --filter=blob:none --sparse 
     test -f "$SK/install/SKILL.md" && grep -q 'install/SKILL.md' "$SK/SKILL.md" && \
     rm -rf "$SK/install" && sed -i '\#install/SKILL.md#d' "$SK/SKILL.md" && \
     chmod -R a+rX /usr/local/lib/agent-skills
+
+# templ skill — our authored router (in-repo) plus the upstream templ docs,
+# sparse-checked-out at the same tag the toolchain pins (TEMPL_VERSION) so the
+# language reference (control flow, escaping, script templates) matches the templ
+# the agent compiles with. The test -f guards against an upstream docs restructure
+# silently shipping an empty skill.
+COPY --chmod=0644 scaffold/skills/templ/SKILL.md /usr/local/lib/agent-skills/skills/templ/SKILL.md
+RUN git clone --depth 1 --branch ${TEMPL_VERSION} --filter=blob:none --sparse \
+        https://github.com/a-h/templ.git /tmp/templ && \
+    git -C /tmp/templ sparse-checkout set docs/docs/03-syntax-and-usage docs/docs/04-core-concepts && \
+    mkdir -p /usr/local/lib/agent-skills/skills/templ/reference && \
+    cp -r /tmp/templ/docs/docs/03-syntax-and-usage /tmp/templ/docs/docs/04-core-concepts \
+          /usr/local/lib/agent-skills/skills/templ/reference/ && \
+    rm -rf /tmp/templ && \
+    test -f /usr/local/lib/agent-skills/skills/templ/reference/03-syntax-and-usage/06-if-else.md && \
+    chmod -R a+rX /usr/local/lib/agent-skills/skills/templ
+
+# htmx skill — our authored router plus the upstream htmx docs at the pinned tag
+# (HTMX_VERSION mirrors agentsdk.HTMXVersion). docs.md is the narrative guide,
+# reference.md the attribute/header/event index. ADD fails the build loud if the
+# tagged URL 404s, keeping the docs in lockstep with the served htmx.
+COPY --chmod=0644 scaffold/skills/htmx/SKILL.md /usr/local/lib/agent-skills/skills/htmx/SKILL.md
+RUN mkdir -p /usr/local/lib/agent-skills/skills/htmx/reference
+ADD --chmod=0644 https://raw.githubusercontent.com/bigskysoftware/htmx/v${HTMX_VERSION}/www/content/docs.md      /usr/local/lib/agent-skills/skills/htmx/reference/docs.md
+ADD --chmod=0644 https://raw.githubusercontent.com/bigskysoftware/htmx/v${HTMX_VERSION}/www/content/reference.md /usr/local/lib/agent-skills/skills/htmx/reference/reference.md
+RUN chmod -R a+rX /usr/local/lib/agent-skills/skills/htmx
 
 # Go cache dirs writable by the host UID — Docker volumes mount as root,
 # but the toolserver runs as the host user.
