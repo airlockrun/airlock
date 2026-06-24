@@ -23,6 +23,16 @@ onMounted(async () => {
   ])
 })
 
+// modelHaystack is the lowercased text the search box matches against: name + id
+// plus capabilities — the kind (transcription/speech/image/embedding/language)
+// and per-model caps (vision, …) — so a query like "transcription" or "vision"
+// surfaces those models, not just name matches.
+function modelHaystack(m: ModelInfo): string {
+  const caps = [m.kind || 'language', ...m.caps]
+  if (m.toolCall) caps.push('tools')
+  return [m.name, m.id, ...caps].join(' ').toLowerCase()
+}
+
 // One group per configured (enabled) provider row, with the catalog models that
 // provider supplies. Allowance is keyed on the provider row, so two rows for the
 // same catalog provider are listed (and toggled) independently.
@@ -34,7 +44,7 @@ const groups = computed(() => {
       provider: p,
       models: catalog.models
         .filter((m) => m.providerId === p.providerId)
-        .filter((m) => !q || m.name.toLowerCase().includes(q) || m.id.toLowerCase().includes(q))
+        .filter((m) => !q || modelHaystack(m).includes(q))
         .sort((a, b) => a.id.localeCompare(b.id)),
     }))
     .filter((g) => g.models.length > 0)
@@ -114,7 +124,7 @@ async function toggle(provider: Provider, model: ModelInfo, on: boolean) {
     <div style="margin-bottom: 1rem; max-width: 24rem">
       <IconField>
         <InputIcon class="pi pi-search" />
-        <InputText v-model="search" placeholder="Filter models" style="width: 100%" />
+        <InputText v-model="search" placeholder="Filter by name or capability (e.g. transcription, vision)" style="width: 100%" />
       </IconField>
     </div>
 
