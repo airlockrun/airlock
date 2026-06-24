@@ -20,6 +20,7 @@ import (
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/airlockrun/airlock/secrets"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"
 )
@@ -478,16 +479,19 @@ func writeUpgradeDiagnostics(dir string, input UpgradeInput) (bool, error) {
 	return true, os.WriteFile(filepath.Join(dir, "DIAGNOSTICS.md"), []byte(header+content), 0o644)
 }
 
-// ensureAgentRole idempotently provisions the agent's Postgres role (with the
-// given password) and schema. Safe to call on every build and cold start:
-// create_agent_role ALTERs the role to this exact password if it exists, or
-// CREATEs it if missing, so the live role always matches the caller's stored
-// password — never rotated. Regenerating a fresh password per build (the old
-// behavior) ALTERed the live role mid-flight, racing with in-flight
-// containers and health checks (transient pq 28P01) and leaving the role
-// permanently diverged from the stored copy if a build crashed between the
-// ALTER and persisting the new value.
+// ensureAgentRole reconciles the agent's Postgres role + schema to the given
+// password — but only when needed. If the role already authenticates with this
+// password it does nothing: re-running ALTER ROLE ... PASSWORD rewrites the
+// scram-sha-256 verifier (new salt), and an ALTER that lands during the agent's
+// in-flight auth handshake fails it with 28P01 for the *correct* password.
+// Repeated reconciles (build + cold starts) churn the verifier and break health
+// checks. So we provision only on a genuine auth failure: drift or a missing
+// role. create_agent_role is idempotent (CREATE if missing, ALTER otherwise).
 func (b *BuildService) ensureAgentRole(ctx context.Context, schemaName, password string) error {
+	if b.roleAuthenticates(ctx, schemaName, password) {
+		return nil // already correct — don't churn the SCRAM verifier
+	}
+
 	conn, err := b.db.Pool().Acquire(ctx)
 	if err != nil {
 		return fmt.Errorf("acquire conn: %w", err)
@@ -502,6 +506,20 @@ func (b *BuildService) ensureAgentRole(ctx context.Context, schemaName, password
 		return fmt.Errorf("create schema: %w", err)
 	}
 	return nil
+}
+
+// roleAuthenticates reports whether the agent role can connect with password.
+// Used to skip a gratuitous ALTER ROLE (see ensureAgentRole) when the role is
+// already correct — false on a missing role or a wrong password.
+func (b *BuildService) roleAuthenticates(ctx context.Context, roleName, password string) bool {
+	cctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	conn, err := pgx.Connect(cctx, b.agentDBURLBase(b.cfg.DBHost, roleName, password))
+	if err != nil {
+		return false
+	}
+	_ = conn.Close(context.Background())
+	return true
 }
 
 // newDBPassword returns a fresh 32-byte hex-encoded password for a new agent
