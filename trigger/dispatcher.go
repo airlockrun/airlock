@@ -24,6 +24,7 @@ import (
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/airlockrun/airlock/secrets"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"
 )
@@ -255,19 +256,20 @@ func (d *Dispatcher) EnsureRunning(ctx context.Context, agentID uuid.UUID) (*con
 		return nil, fmt.Errorf("issue agent token: %w", err)
 	}
 
-	// On a cold start, re-assert the role's password to the stored value before
-	// launching. The live role can drift from the stored copy (a build that
-	// failed mid-rotation) or vanish (a recreated DB volume); without this the
-	// container fails auth (pq 28P01) at autoMigrate/health and never becomes
-	// healthy — which is also why a stopped+drifted agent can't recover via
-	// /start. Gated on "not already running" so the warm forward path doesn't
-	// ALTER ROLE on every request (GetRunning is cache-first). create_agent_role
-	// is idempotent; best-effort — a reconcile hiccup shouldn't block the start,
-	// the agent surfaces any real auth error itself.
+	// On a cold start, heal the role only if it can't already authenticate with
+	// the stored password — drift (a build that failed mid-rotation) or a
+	// recreated DB volume that lost the role. Gated on "not already running" so
+	// the warm forward path is untouched, and on a failed test-connect so we
+	// never gratuitously ALTER ROLE: re-writing the scram-sha-256 verifier
+	// races with the agent's in-flight auth handshake and yields transient
+	// 28P01 for the correct password. create_agent_role is idempotent;
+	// best-effort — the agent surfaces any real auth error itself.
 	if running, _ := d.containers.GetRunning(ctx, agentID); running == nil {
-		if _, err := d.db.Pool().Exec(ctx, "SELECT create_agent_role($1, $2)", schemaName, dbPassword); err != nil {
-			d.logger.Warn("ensure agent db role before cold start",
-				zap.String("agent", agentID.String()), zap.Error(err))
+		if !d.roleAuthenticates(ctx, schemaName, dbPassword) {
+			if _, err := d.db.Pool().Exec(ctx, "SELECT create_agent_role($1, $2)", schemaName, dbPassword); err != nil {
+				d.logger.Warn("ensure agent db role before cold start",
+					zap.String("agent", agentID.String()), zap.Error(err))
+			}
 		}
 	}
 
@@ -286,6 +288,23 @@ func (d *Dispatcher) EnsureRunning(ctx context.Context, agentID uuid.UUID) (*con
 	}
 
 	return c, nil
+}
+
+// roleAuthenticates reports whether the agent's Postgres role can connect with
+// password. Used to skip a gratuitous ALTER ROLE (which would churn the
+// scram-sha-256 verifier and race with the agent's auth) when the role is
+// already correct — false on a missing role or a wrong password.
+func (d *Dispatcher) roleAuthenticates(ctx context.Context, roleName, password string) bool {
+	dsn := fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=%s",
+		roleName, url.QueryEscape(password), d.cfg.DBHost, d.cfg.DBPort, d.cfg.DBName, d.cfg.DBSSLMode)
+	cctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	conn, err := pgx.Connect(cctx, dsn)
+	if err != nil {
+		return false
+	}
+	_ = conn.Close(context.Background())
+	return true
 }
 
 // ForwardWebhook ensures the agent is running, creates a run record, and POSTs
