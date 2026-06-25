@@ -24,7 +24,6 @@ import (
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/airlockrun/airlock/secrets"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"
 )
@@ -256,18 +255,18 @@ func (d *Dispatcher) EnsureRunning(ctx context.Context, agentID uuid.UUID) (*con
 		return nil, fmt.Errorf("issue agent token: %w", err)
 	}
 
-	// On a cold start, heal the role only if it can't already authenticate with
-	// the stored password — drift (a build that failed mid-rotation) or a
-	// recreated DB volume that lost the role. Gated on "not already running" so
-	// the warm forward path is untouched, and on a failed test-connect so we
-	// never gratuitously ALTER ROLE: re-writing the scram-sha-256 verifier
-	// races with the agent's in-flight auth handshake and yields transient
-	// 28P01 for the correct password. create_agent_role is idempotent;
-	// best-effort — the agent surfaces any real auth error itself.
+	// On a cold start, create the role only if it is MISSING (e.g. a recreated
+	// Postgres volume that lost it). Never ALTER an existing role here: ALTER
+	// ROLE ... PASSWORD rewrites the scram-sha-256 verifier, and one landing
+	// mid-handshake makes the agent's connect fail with a spurious 28P01 for
+	// the correct password. Password drift is instead reconciled on the next
+	// build (builder.ensureAgentRole), which runs before any container of the
+	// agent starts, so it can't race a live connect. Gated on "not already
+	// running" to skip the warm forward path. Best-effort.
 	if running, _ := d.containers.GetRunning(ctx, agentID); running == nil {
-		if !d.roleAuthenticates(ctx, schemaName, dbPassword) {
+		if !d.roleExists(ctx, schemaName) {
 			if _, err := d.db.Pool().Exec(ctx, "SELECT create_agent_role($1, $2)", schemaName, dbPassword); err != nil {
-				d.logger.Warn("ensure agent db role before cold start",
+				d.logger.Warn("create missing agent db role before cold start",
 					zap.String("agent", agentID.String()), zap.Error(err))
 			}
 		}
@@ -290,21 +289,18 @@ func (d *Dispatcher) EnsureRunning(ctx context.Context, agentID uuid.UUID) (*con
 	return c, nil
 }
 
-// roleAuthenticates reports whether the agent's Postgres role can connect with
-// password. Used to skip a gratuitous ALTER ROLE (which would churn the
-// scram-sha-256 verifier and race with the agent's auth) when the role is
-// already correct — false on a missing role or a wrong password.
-func (d *Dispatcher) roleAuthenticates(ctx context.Context, roleName, password string) bool {
-	dsn := fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=%s",
-		roleName, url.QueryEscape(password), d.cfg.DBHost, d.cfg.DBPort, d.cfg.DBName, d.cfg.DBSSLMode)
-	cctx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	defer cancel()
-	conn, err := pgx.Connect(cctx, dsn)
-	if err != nil {
-		return false
+// roleExists reports whether the agent's Postgres role is present. Used to
+// create a role only when it's genuinely missing (recreated DB volume) without
+// touching an existing one's password. On query error it returns true (assume
+// present) so we never CREATE/ALTER on a transient hiccup.
+func (d *Dispatcher) roleExists(ctx context.Context, roleName string) bool {
+	var exists bool
+	if err := d.db.Pool().QueryRow(ctx,
+		"SELECT EXISTS(SELECT 1 FROM pg_roles WHERE rolname = $1)", roleName).Scan(&exists); err != nil {
+		d.logger.Warn("role-exists check failed; skipping create", zap.Error(err))
+		return true
 	}
-	_ = conn.Close(context.Background())
-	return true
+	return exists
 }
 
 // ForwardWebhook ensures the agent is running, creates a run record, and POSTs
