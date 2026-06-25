@@ -74,7 +74,7 @@ require (
 
 require (
 	github.com/Microsoft/go-winio v0.6.2 // indirect
-	github.com/airlockrun/agentsdk v0.3.1-rc.5
+	github.com/airlockrun/agentsdk v0.3.1-rc.6
 	github.com/airlockrun/goai v0.1.5-rc.3
 	github.com/airlockrun/sol v0.1.8-rc.4
 	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.4 // indirect
