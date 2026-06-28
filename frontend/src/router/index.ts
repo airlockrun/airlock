@@ -65,6 +65,7 @@ const router = createRouter({
         { path: 'usage', name: 'usage', component: () => import('@/views/UsageView.vue'), meta: { requires: 'tenant.usage.view' } },
         { path: 'bridges', name: 'bridges', component: () => import('@/views/BridgesView.vue') },
         { path: 'users', name: 'users', component: () => import('@/views/UsersView.vue'), meta: { requires: 'tenant.user.manage' } },
+        { path: 'settings/agents', name: 'agents-governance', component: () => import('@/views/AgentsGovernanceView.vue'), meta: { requires: 'tenant.agent.list_all' } },
         { path: 'settings', name: 'settings', component: () => import('@/views/SettingsView.vue') },
         { path: 'settings/security', name: 'security', component: () => import('@/views/SecurityView.vue') },
         { path: 'settings/resources', name: 'resources', component: () => import('@/views/ResourcesView.vue') },

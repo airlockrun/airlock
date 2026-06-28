@@ -314,30 +314,48 @@ func (s *Service) Create(ctx context.Context, p authz.Principal, req CreateReque
 	return agent, nil
 }
 
-// List returns the agents visible to the caller — every agent for
-// tenant admins, grant-joined (own + member + group-shared) for everyone
-// else — annotated with the live container-running flag.
+// List returns the agents the caller can access — grant-joined (own + member
+// + group-shared), annotated with the live container-running flag. Tenant
+// admins do NOT see every agent here: the main page is the caller's working
+// set. The all-agents governance surface is ListAll.
 func (s *Service) List(ctx context.Context, p authz.Principal) ([]ListItem, error) {
 	q := dbq.New(s.db.Pool())
 	if err := authz.Authorize(ctx, q, p, authz.TenantAgentList, uuid.Nil); err != nil {
 		return nil, err
 	}
-	var agents []dbq.Agent
-	var err error
-	if authz.Authorize(ctx, q, p, authz.TenantAgentListAll, uuid.Nil) == nil {
-		agents, err = q.ListAgents(ctx)
-	} else {
-		set := p.GranteeSet()
-		grantees := make([]pgtype.UUID, len(set))
-		for i, id := range set {
-			grantees[i] = pgtype.UUID{Bytes: id, Valid: true}
-		}
-		agents, err = q.ListAgentsVisibleToUser(ctx, grantees)
+	set := p.GranteeSet()
+	grantees := make([]pgtype.UUID, len(set))
+	for i, id := range set {
+		grantees[i] = pgtype.UUID{Bytes: id, Valid: true}
 	}
+	agents, err := q.ListAgentsVisibleToUser(ctx, grantees)
 	if err != nil {
 		s.logger.Error("list agents", zap.Error(err))
 		return nil, err
 	}
+	return s.buildListItems(ctx, q, p, agents), nil
+}
+
+// ListAll returns every agent in the tenant — the admin governance surface
+// behind Settings. Agents the caller isn't a member of come back with
+// YourAccess=public and IsOwner=false, so the UI can offer Claim. Admin-only.
+func (s *Service) ListAll(ctx context.Context, p authz.Principal) ([]ListItem, error) {
+	q := dbq.New(s.db.Pool())
+	if err := authz.Authorize(ctx, q, p, authz.TenantAgentListAll, uuid.Nil); err != nil {
+		return nil, err
+	}
+	agents, err := q.ListAgents(ctx)
+	if err != nil {
+		s.logger.Error("list all agents", zap.Error(err))
+		return nil, err
+	}
+	return s.buildListItems(ctx, q, p, agents), nil
+}
+
+// buildListItems decorates raw agent rows with the owner's display name, the
+// caller's effective access, the ownership flag, and live running state,
+// sorting owner-owned agents first.
+func (s *Service) buildListItems(ctx context.Context, q *dbq.Queries, p authz.Principal, agents []dbq.Agent) []ListItem {
 	// Owner principal in the caller's grantee set ⇒ they own the agent
 	// (directly or via a group). Resolve owner display names in one batch.
 	ownsSet := make(map[uuid.UUID]struct{})
@@ -392,7 +410,7 @@ func (s *Service) List(ctx context.Context, p authz.Principal) ([]ListItem, erro
 	sort.SliceStable(out, func(i, j int) bool {
 		return out[i].IsOwner && !out[j].IsOwner
 	})
-	return out, nil
+	return out
 }
 
 // Get returns the agent detail bundle: agent + connections + webhooks
@@ -479,6 +497,22 @@ func (s *Service) Update(ctx context.Context, p authz.Principal, agentID uuid.UU
 	return updated, nil
 }
 
+// authorizeGovernance permits an operation when the caller has the per-agent
+// access (agentAction) or, failing that, the tenant-wide governance action
+// (tenantAction) — a tenant admin acting on an agent they're not a member of.
+// On denial it returns the agent-axis error so a non-admin still sees the
+// membership requirement, not the tenant one.
+func authorizeGovernance(ctx context.Context, q *dbq.Queries, p authz.Principal, agentAction, tenantAction authz.Action, agentID uuid.UUID) error {
+	err := authz.Authorize(ctx, q, p, agentAction, agentID)
+	if err == nil {
+		return nil
+	}
+	if authz.Authorize(ctx, q, p, tenantAction, uuid.Nil) == nil {
+		return nil
+	}
+	return err
+}
+
 // Delete cancels in-flight builds, stops bridge pollers, stops the
 // container, removes the image, drops the per-agent schema/role,
 // removes the local repo, deletes the row (CASCADE handles the rest),
@@ -489,7 +523,7 @@ func (s *Service) Delete(ctx context.Context, p authz.Principal, agentID uuid.UU
 	if err != nil {
 		return service.ErrNotFound
 	}
-	if err := authz.Authorize(ctx, q, p, authz.AgentDelete, agentID); err != nil {
+	if err := authorizeGovernance(ctx, q, p, authz.AgentDelete, authz.TenantAgentDeleteAny, agentID); err != nil {
 		return err
 	}
 	s.builder.CancelBuildAndWait(agentID.String(), 30*time.Second)
@@ -533,7 +567,7 @@ func (s *Service) Stop(ctx context.Context, p authz.Principal, agentID uuid.UUID
 	if _, err := q.GetAgentByID(ctx, pgtype.UUID{Bytes: agentID, Valid: true}); err != nil {
 		return service.ErrNotFound
 	}
-	if err := authz.Authorize(ctx, q, p, authz.AgentLifecycle, agentID); err != nil {
+	if err := authorizeGovernance(ctx, q, p, authz.AgentLifecycle, authz.TenantAgentLifecycleAny, agentID); err != nil {
 		return err
 	}
 	if err := s.containers.StopAgent(ctx, agentID); err != nil {
@@ -555,7 +589,7 @@ func (s *Service) Start(ctx context.Context, p authz.Principal, agentID uuid.UUI
 	if err != nil {
 		return service.ErrNotFound
 	}
-	if err := authz.Authorize(ctx, q, p, authz.AgentLifecycle, agentID); err != nil {
+	if err := authorizeGovernance(ctx, q, p, authz.AgentLifecycle, authz.TenantAgentLifecycleAny, agentID); err != nil {
 		return err
 	}
 	if agent.ImageRef == "" {
@@ -583,7 +617,7 @@ func (s *Service) Suspend(ctx context.Context, p authz.Principal, agentID uuid.U
 	if _, err := q.GetAgentByID(ctx, pgtype.UUID{Bytes: agentID, Valid: true}); err != nil {
 		return service.ErrNotFound
 	}
-	if err := authz.Authorize(ctx, q, p, authz.AgentLifecycle, agentID); err != nil {
+	if err := authorizeGovernance(ctx, q, p, authz.AgentLifecycle, authz.TenantAgentLifecycleAny, agentID); err != nil {
 		return err
 	}
 	if err := s.containers.StopAgent(ctx, agentID); err != nil {

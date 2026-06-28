@@ -121,6 +121,28 @@ func (h *agentsHandler) List(w http.ResponseWriter, r *http.Request) {
 	writeProto(w, http.StatusOK, &airlockv1.ListAgentsResponse{Agents: out})
 }
 
+// ListAll handles GET /api/v1/agents/all — the admin governance surface:
+// every agent in the tenant, including ones the caller isn't a member of
+// (those carry YourAccess=public so the UI can offer Claim). Admin-only.
+func (h *agentsHandler) ListAll(w http.ResponseWriter, r *http.Request) {
+	p := principalFromRequest(r)
+	items, err := h.svc.ListAll(r.Context(), p)
+	if err != nil {
+		writeAgentsError(w, err, "failed to list agents")
+		return
+	}
+	out := make([]*airlockv1.AgentInfo, len(items))
+	for i, it := range items {
+		ap := convert.AgentToProto(it.Agent)
+		ap.Running = it.Running
+		ap.YourAccess = string(it.YourAccess)
+		ap.OwnerName = it.OwnerName
+		ap.IsOwner = it.IsOwner
+		out[i] = ap
+	}
+	writeProto(w, http.StatusOK, &airlockv1.ListAgentsResponse{Agents: out})
+}
+
 // Get handles GET /api/v1/agents/{agentID}.
 func (h *agentsHandler) Get(w http.ResponseWriter, r *http.Request) {
 	agentID, err := parseUUID(chi.URLParam(r, "agentID"))
