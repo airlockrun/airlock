@@ -680,7 +680,7 @@ function formatTokens(n: number): string {
               <div v-if="chat.pendingConfirmation.description" style="margin-top: 0.25rem">{{ chat.pendingConfirmation.description }}</div>
               <span v-else>: {{ chat.pendingConfirmation.permission }}</span>
             </div>
-            <pre v-if="chat.pendingConfirmation.code" style="white-space: pre-wrap; word-break: break-all; font-size: 0.8rem; background: var(--p-surface-50); padding: 0.5rem; border-radius: 0.25rem; margin-bottom: 0.75rem">{{ chat.pendingConfirmation.code }}</pre>
+            <pre v-if="chat.pendingConfirmation.code" class="code-chip" style="white-space: pre-wrap; font-size: 0.8rem; padding: 0.5rem; margin-bottom: 0.75rem">{{ chat.pendingConfirmation.code }}</pre>
             <div style="display: flex; gap: 0.5rem; justify-content: flex-end">
               <Button label="Reject" severity="secondary" size="small" @click="reject" />
               <Button label="Approve" severity="success" size="small" @click="approve" />

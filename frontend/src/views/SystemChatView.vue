@@ -277,7 +277,7 @@ function msgClassForSource(source: string): string {
           </div>
           <pre
             v-if="sys.pendingConfirmation.argsJson"
-            class="confirmation-args"
+            class="confirmation-args code-chip"
           >{{ sys.pendingConfirmation.argsJson }}</pre>
           <div class="confirmation-actions">
             <Button label="Approve" severity="success" size="small" :loading="sys.sending" @click="approve" />
@@ -521,9 +521,7 @@ function msgClassForSource(source: string): string {
   white-space: pre-wrap;
   word-break: break-all;
   font-size: 0.8rem;
-  background: var(--p-surface-50);
   padding: 0.5rem;
-  border-radius: 0.25rem;
   margin: 0 0 0.75rem;
 }
 

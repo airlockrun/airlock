@@ -169,4 +169,8 @@ code {
   border-radius: 3px;
   font-size: 0.9em;
 }
+/* surface-100 stays light in dark mode; swap it so inline code is readable. */
+:root.dark code {
+  background: var(--p-surface-800);
+}
 </style>

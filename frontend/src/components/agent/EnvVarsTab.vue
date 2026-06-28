@@ -191,7 +191,7 @@ onMounted(load)
           {{ selected.description }}
         </p>
 
-        <div v-if="selected.isSecret" style="font-size: 0.8rem; color: var(--p-text-muted-color); background: var(--p-surface-100); padding: 0.5rem 0.75rem; border-radius: 4px">
+        <div v-if="selected.isSecret" class="code-chip" style="font-size: 0.8rem; color: var(--p-text-muted-color); padding: 0.5rem 0.75rem">
           This value is treated as a secret. It will be redacted from LLM input, and you won't be able to read it back from this UI — only rotate.
         </div>
 
