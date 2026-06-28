@@ -465,6 +465,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 
 		r.Route("/agents", func(r chi.Router) {
 			r.Get("/", agH.List)
+			r.Get("/all", agH.ListAll) // admin governance: every agent in the tenant
 			r.Post("/", agH.Create)
 
 			r.Route("/{agentID}", func(r chi.Router) {

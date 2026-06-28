@@ -63,6 +63,8 @@ const (
 	TenantAgentList           Action = "tenant.agent.list"             // list agents visible to the caller: user+
 	TenantAgentListAll        Action = "tenant.agent.list_all"         // list every agent in the tenant: admin
 	TenantAgentMembersSelfAdd Action = "tenant.agent.members.self_add" // escape: tenant admin adds self to an agent they're not yet a member of: admin
+	TenantAgentLifecycleAny   Action = "tenant.agent.lifecycle_any"    // stop/start/suspend an agent the caller isn't a member of: admin
+	TenantAgentDeleteAny      Action = "tenant.agent.delete_any"       // delete an agent the caller isn't a member of: admin
 	TenantBridgeList          Action = "tenant.bridge.list"            // list bridges visible to the caller: user+
 	TenantBridgeListAll       Action = "tenant.bridge.list_all"        // list every bridge in the tenant: admin
 	TenantBridgeCreate        Action = "tenant.bridge.create"          // any bridge: manager+
@@ -114,6 +116,8 @@ var policy = map[Action]Requirement{
 	TenantAgentList:           {Axis: AxisTenant, Tenant: auth.RoleUser},
 	TenantAgentListAll:        {Axis: AxisTenant, Tenant: auth.RoleAdmin},
 	TenantAgentMembersSelfAdd: {Axis: AxisTenant, Tenant: auth.RoleAdmin},
+	TenantAgentLifecycleAny:   {Axis: AxisTenant, Tenant: auth.RoleAdmin},
+	TenantAgentDeleteAny:      {Axis: AxisTenant, Tenant: auth.RoleAdmin},
 	TenantBridgeList:          {Axis: AxisTenant, Tenant: auth.RoleUser},
 	TenantBridgeListAll:       {Axis: AxisTenant, Tenant: auth.RoleAdmin},
 	TenantBridgeCreate:        {Axis: AxisTenant, Tenant: auth.RoleManager},

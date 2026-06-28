@@ -67,6 +67,9 @@ const settingsSections = computed(() => {
   if (auth.can('tenant.user.manage')) {
     items.push({ label: 'Users', icon: 'pi pi-users', route: '/users' })
   }
+  if (auth.can('tenant.agent.list_all')) {
+    items.push({ label: 'Manage agents', icon: 'pi pi-th-large', route: '/settings/agents' })
+  }
   return items
 })
 

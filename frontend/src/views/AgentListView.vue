@@ -1,11 +1,18 @@
 <script setup lang="ts">
-import { onMounted } from 'vue'
+import { computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAgentsStore } from '@/stores/agents'
+import { useAuthStore } from '@/stores/auth'
 import { useAgentStatus } from '@/composables/useAgentStatus'
 
 const router = useRouter()
 const store = useAgentsStore()
+const auth = useAuthStore()
+
+// Admins can administer every agent in the workspace, not just the ones they're
+// a member of. The grid above is the caller's working set; this points to the
+// governance surface for the rest without listing other people's agents here.
+const canGovern = computed(() => auth.can('tenant.agent.list_all'))
 
 onMounted(() => {
   store.fetchAgents()
@@ -77,7 +84,13 @@ function goToAgent(id: string) {
           </div>
         </template>
         <template #subtitle>
-          {{ agent.slug }}
+          <span>{{ agent.slug }}</span>
+          <span
+            v-if="!agent.isOwner && agent.ownerName"
+            style="color: var(--p-text-muted-color)"
+          >
+            · <i class="pi pi-user" style="font-size: 0.7rem" /> {{ agent.ownerName }}
+          </span>
         </template>
         <template #content>
           <Tag
@@ -95,6 +108,20 @@ function goToAgent(id: string) {
           </p>
         </template>
       </Card>
+    </div>
+
+    <div
+      v-if="canGovern"
+      style="margin-top: 1.5rem; padding-top: 1rem; border-top: 1px solid var(--p-content-border-color)"
+    >
+      <router-link
+        to="/settings/agents"
+        style="color: var(--p-text-muted-color); font-size: 0.875rem; text-decoration: none; display: inline-flex; align-items: center; gap: 0.4rem"
+      >
+        <i class="pi pi-th-large" style="font-size: 0.8rem" />
+        Manage all agents in this workspace
+        <i class="pi pi-arrow-right" style="font-size: 0.7rem" />
+      </router-link>
     </div>
   </div>
 </template>
