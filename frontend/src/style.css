@@ -31,3 +31,19 @@ html.dark {
 .p-toggleswitch {
   flex: none;
 }
+
+/* Inset box for copyable / code-like values (git remotes, clone commands,
+ * webhook URLs & secrets, tool args, confirmation payloads). --p-surface-100
+ * is a fixed light slate that does NOT flip with the color scheme, so on its
+ * own it stays white in dark mode and the text (which rides --p-text-color)
+ * vanishes. Swap the background for a dark surface under html.dark; text
+ * contrast then takes care of itself. Per-element padding / flex / white-space
+ * stay on the element. */
+.code-chip {
+  background: var(--p-surface-100);
+  border-radius: 0.3rem;
+  word-break: break-all;
+}
+html.dark .code-chip {
+  background: var(--p-surface-800);
+}

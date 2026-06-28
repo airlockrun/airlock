@@ -141,7 +141,7 @@ onMounted(async () => {
       <div>
         <label style="display: block; font-size: 0.75rem; text-transform: uppercase; color: var(--p-text-muted-color); margin-bottom: 0.25rem">Remote</label>
         <div style="display: flex; align-items: center; gap: 0.5rem">
-          <code style="flex: 1; padding: 0.4rem 0.6rem; background: var(--p-surface-100); border-radius: 0.3rem; word-break: break-all">{{ cfg!.gitRemoteUrl }}</code>
+          <code class="code-chip">{{ cfg!.gitRemoteUrl }}</code>
           <Button icon="pi pi-copy" text size="small" @click="copyToClipboard(cfg!.gitRemoteUrl, 'URL')" />
         </div>
       </div>
@@ -165,7 +165,7 @@ onMounted(async () => {
       <div>
         <label style="display: block; font-size: 0.75rem; text-transform: uppercase; color: var(--p-text-muted-color); margin-bottom: 0.25rem">Clone command</label>
         <div style="display: flex; align-items: center; gap: 0.5rem">
-          <code style="flex: 1; padding: 0.4rem 0.6rem; background: var(--p-surface-100); border-radius: 0.3rem; word-break: break-all">{{ cloneCmd }}</code>
+          <code class="code-chip">{{ cloneCmd }}</code>
           <Button icon="pi pi-copy" text size="small" @click="copyToClipboard(cloneCmd, 'Command')" />
         </div>
       </div>
@@ -176,14 +176,14 @@ onMounted(async () => {
           <div>
             <label style="display: block; font-size: 0.75rem; text-transform: uppercase; color: var(--p-text-muted-color); margin-bottom: 0.25rem">Payload URL</label>
             <div style="display: flex; align-items: center; gap: 0.5rem">
-              <code style="flex: 1; padding: 0.4rem 0.6rem; background: var(--p-surface-100); border-radius: 0.3rem; word-break: break-all">{{ cfg!.webhookUrl }}</code>
+              <code class="code-chip">{{ cfg!.webhookUrl }}</code>
               <Button icon="pi pi-copy" text size="small" @click="copyToClipboard(cfg!.webhookUrl, 'Webhook URL')" />
             </div>
           </div>
           <div>
             <label style="display: block; font-size: 0.75rem; text-transform: uppercase; color: var(--p-text-muted-color); margin-bottom: 0.25rem">Secret</label>
             <div style="display: flex; align-items: center; gap: 0.5rem">
-              <code style="flex: 1; padding: 0.4rem 0.6rem; background: var(--p-surface-100); border-radius: 0.3rem; word-break: break-all">{{ cfg!.webhookSecret }}</code>
+              <code class="code-chip">{{ cfg!.webhookSecret }}</code>
               <Button icon="pi pi-copy" text size="small" @click="copyToClipboard(cfg!.webhookSecret, 'Secret')" />
             </div>
           </div>
@@ -241,3 +241,12 @@ onMounted(async () => {
     <Skeleton width="100%" height="3rem" style="margin-top: 1rem" />
   </div>
 </template>
+
+<style scoped>
+/* Layout for the inline value chips; the theme-adaptive background and dark
+   override come from the global .code-chip utility in style.css. */
+.code-chip {
+  flex: 1;
+  padding: 0.4rem 0.6rem;
+}
+</style>

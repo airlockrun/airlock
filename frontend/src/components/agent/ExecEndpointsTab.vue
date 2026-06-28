@@ -243,7 +243,7 @@ onMounted(async () => {
 
       <div v-if="lastTest[ep.slug]" v-show="!isCollapsed(ep.slug)" class="exec-section">
         <h4 style="margin: 0 0 0.5rem 0">Last test result</h4>
-        <pre style="margin: 0; padding: 0.75rem; background: var(--p-surface-100); border-radius: 0.3rem; font-size: 0.8rem; white-space: pre-wrap">{{ JSON.stringify(lastTest[ep.slug], null, 2) }}</pre>
+        <pre class="code-chip" style="margin: 0; padding: 0.75rem; font-size: 0.8rem; white-space: pre-wrap">{{ JSON.stringify(lastTest[ep.slug], null, 2) }}</pre>
       </div>
     </div>
 
