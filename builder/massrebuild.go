@@ -2,9 +2,11 @@ package builder
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/airlockrun/agentsdk"
@@ -25,6 +27,11 @@ import (
 // transitioned to status=stopped with the build error captured in
 // error_message — the operator decides whether to roll back, run an
 // upgrade-with-description (Sol bridges the SDK gap), or investigate.
+//
+// A breaking SDK series change (different major, or a different minor while
+// still pre-1.0) routes every agent through codegen with a migration
+// instruction — a bare recompile would fail on the removed API. A patch / rc
+// bump keeps the fast bare-recompile path (no LLM, image-cache hit).
 //
 // last_seen_sdk_version is updated only AFTER every agent has been
 // processed (regardless of individual successes) so a crash mid-batch
@@ -49,10 +56,12 @@ func (b *BuildService) RebuildAllOnSDKChange(ctx context.Context) {
 		b.logger.Error("mass-rebuild: list agents", zap.Error(err))
 		return
 	}
+	instruction := sdkMigrationInstruction(settings.LastSeenSdkVersion, current)
 	b.logger.Info("mass-rebuild: SDK changed",
 		zap.String("from", settings.LastSeenSdkVersion),
 		zap.String("to", current),
-		zap.Int("agents", len(agents)))
+		zap.Int("agents", len(agents)),
+		zap.Bool("codegen", instruction != ""))
 
 	if len(agents) == 0 {
 		if err := q.UpdateLastSeenSDKVersion(ctx, current); err != nil {
@@ -72,7 +81,7 @@ func (b *BuildService) RebuildAllOnSDKChange(ctx context.Context) {
 		wg.Add(1)
 		go func(a dbq.Agent) {
 			defer wg.Done()
-			b.rebuildOneAgent(a)
+			b.rebuildOneAgent(a, instruction)
 		}(agent)
 	}
 	wg.Wait()
@@ -90,7 +99,7 @@ func (b *BuildService) RebuildAllOnSDKChange(ctx context.Context) {
 // transitions agents.status→stopped and stops any live container so
 // the agent is in a known parked state (not silently serving stale
 // code that may be incompatible with the new airlock).
-func (b *BuildService) rebuildOneAgent(agent dbq.Agent) {
+func (b *BuildService) rebuildOneAgent(agent dbq.Agent, instruction string) {
 	agentID := uuidString(agent.ID)
 	agentUUID := uuid.UUID(agent.ID.Bytes)
 	dbCtx := context.Background()
@@ -109,7 +118,7 @@ func (b *BuildService) rebuildOneAgent(agent dbq.Agent) {
 	plan := BuildPlan{
 		Agent:       agent,
 		Kind:        BuildKindUpgrade,
-		Instruction: "",
+		Instruction: instruction,
 		Reason:      "sdk_bump",
 		RunID:       uuid.New().String(),
 	}
@@ -168,4 +177,58 @@ func envInt(name string) int {
 		return 0
 	}
 	return n
+}
+
+// sdkMigrationInstruction returns the codegen prompt for a mass rebuild when the
+// SDK series changed in a breaking way, or "" to keep the bare-recompile path.
+// On a breaking bump a plain recompile fails on removed API; routing through
+// codegen lets the builder adapt the agent's source to the new API. Generic by
+// design: the builder reads /libs/agentsdk/llms.md (always current) for specifics.
+func sdkMigrationInstruction(from, to string) string {
+	if !sdkSeriesChanged(from, to) {
+		return ""
+	}
+	return fmt.Sprintf("The agentsdk was upgraded from v%s to v%s — a breaking "+
+		"release. Make the agent compile against the new SDK: read "+
+		"/libs/agentsdk/llms.md first, then migrate every tool registration and "+
+		"any agent-code model-generation calls to the current API. Change only "+
+		"what the new SDK requires — preserve all behavior, tool names, schemas, "+
+		"and unrelated code.", from, to)
+}
+
+// sdkSeriesChanged reports whether two agentsdk versions differ in a way that
+// can break the agent's source: a different MAJOR, or — while still pre-1.0 — a
+// different MINOR (0.x minor bumps carry breaking changes by convention). A
+// patch / rc-only change returns false. An empty or unparseable `from` (e.g.
+// first boot, before last_seen is stamped) returns false: there is no prior
+// series to have broken away from, and the agents were just built on `to`.
+func sdkSeriesChanged(from, to string) bool {
+	fMaj, fMin, ok1 := parseMajorMinor(from)
+	tMaj, tMin, ok2 := parseMajorMinor(to)
+	if !ok1 || !ok2 {
+		return false
+	}
+	if fMaj != tMaj {
+		return true
+	}
+	return fMaj == 0 && fMin != tMin
+}
+
+// parseMajorMinor extracts the leading MAJOR.MINOR from a semver-ish string
+// ("0.4.0-rc.1" → 0, 4). Returns ok=false when there's no parseable major.minor.
+func parseMajorMinor(v string) (int, int, bool) {
+	v = strings.TrimPrefix(v, "v")
+	if i := strings.IndexAny(v, "-+"); i >= 0 {
+		v = v[:i]
+	}
+	parts := strings.Split(v, ".")
+	if len(parts) < 2 {
+		return 0, 0, false
+	}
+	maj, err1 := strconv.Atoi(parts[0])
+	min, err2 := strconv.Atoi(parts[1])
+	if err1 != nil || err2 != nil {
+		return 0, 0, false
+	}
+	return maj, min, true
 }
