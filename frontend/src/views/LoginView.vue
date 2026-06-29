@@ -29,7 +29,19 @@ onMounted(async () => {
 
 function done() {
   toast.add({ severity: 'success', summary: 'Welcome back', life: 3000 })
-  router.push((route.query.redirect as string) || '/')
+  router.push(safeRedirect(route.query.redirect))
+}
+
+// The OAuth consent flow sends ?redirect= as an absolute same-origin URL
+// (e.g. https://host/oauth/consent?...); reduce it to a router path and reject
+// cross-origin targets (no open redirect). Falls back to the dashboard.
+function safeRedirect(raw: unknown): string {
+  if (typeof raw !== 'string' || !raw) return '/'
+  try {
+    const u = new URL(raw, window.location.origin)
+    if (u.origin === window.location.origin) return u.pathname + u.search + u.hash
+  } catch { /* not a URL — fall through */ }
+  return '/'
 }
 
 // Treat a user-cancelled / no-credential ceremony as a quiet no-op rather than

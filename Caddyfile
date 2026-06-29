@@ -29,6 +29,17 @@
 	handle @spa_relay {
 		reverse_proxy frontend:80
 	}
+	# GET /oauth/consent is the SPA consent page the /oauth/authorize handler
+	# redirects the browser to; POST /oauth/consent is the backend handler the
+	# SPA submits to. Serve the page from the SPA so the /oauth/* @backend
+	# matcher below doesn't swallow it (same carve-out as /auth/relay).
+	@spa_consent {
+		method GET
+		path /oauth/consent
+	}
+	handle @spa_consent {
+		reverse_proxy frontend:80
+	}
 	# /.well-known/* and /oauth/* are the MCP-server-side OAuth 2.1
 	# surface (RFC 9728 discovery + RFC 7591 DCR + the authorization /
 	# token endpoints). They must route to airlock at the apex —
