@@ -90,9 +90,24 @@ router.beforeEach((to) => {
     return { name: 'login', query: { redirect: to.fullPath } }
   }
 
-  // Redirect away from login if already authenticated.
-  // Don't redirect from activate — user may be on step 2 (provider setup) after creating account.
+  // Redirect away from login if already authenticated — but honor a ?redirect=
+  // target. The MCP OAuth flow bounces through /login?redirect=/oauth/consent
+  // (the airlock_session cookie /oauth/authorize reads can be expired even while
+  // the SPA is still logged in via its refreshed JWT); without this an
+  // already-authenticated user lands on the dashboard instead of the consent
+  // screen. Only same-origin redirects are followed (no open redirect).
   if (auth.isAuthenticated && to.name === 'login') {
+    const redirect = typeof to.query.redirect === 'string' ? to.query.redirect : ''
+    if (redirect) {
+      try {
+        const u = new URL(redirect, window.location.origin)
+        if (u.origin === window.location.origin) {
+          return u.pathname + u.search + u.hash
+        }
+      } catch {
+        /* not a parseable URL — fall through to the dashboard */
+      }
+    }
     return { name: 'agents' }
   }
 
