@@ -481,7 +481,9 @@ func cleanS3Objects(
 			continue
 		}
 
-		lgr.Info("deleted events", zap.Int("deleted.count", deleted))
+		if deleted > 0 {
+			lgr.Info("deleted events", zap.Int("deleted.count", deleted))
+		}
 	}
 }
 
@@ -557,13 +559,15 @@ func cleanupAgentsObjects(
 				continue
 			}
 
-			lgr.Info(
-				"deleted events",
-				zap.Int("deleted.count", deleted),
-				zap.String("agent_id", dir.AgentID.String()),
-				zap.String("path", dir.Path),
-				zap.Duration("retention", retention),
-			)
+			if deleted > 0 {
+				lgr.Info(
+					"deleted events",
+					zap.Int("deleted.count", deleted),
+					zap.String("agent_id", dir.AgentID.String()),
+					zap.String("path", dir.Path),
+					zap.Duration("retention", retention),
+				)
+			}
 		}
 	}
 }
