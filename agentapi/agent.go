@@ -196,6 +196,30 @@ func (h *Handler) CreateRun(w http.ResponseWriter, r *http.Request) {
 }
 
 // Sync handles PUT /api/agent/sync.
+// normalizeToolInputSchema ensures a synced tool's input schema is a JSON object
+// schema. A tool's input is always an object of named arguments; a no-argument
+// tool can reflect to {"type":"null"} (or arrive empty), which strict tool / MCP
+// schema validators (OpenAI function-calling, ChatGPT's MCP client) reject.
+// Coerce to an empty object schema, and warn loudly when the agent declared a
+// non-empty, non-object schema so the agentsdk-level root cause stays visible
+// (it should be fixed by rebuilding the agent, not by relying on this fallback).
+func normalizeToolInputSchema(raw []byte, tool string, agentID uuid.UUID, lg *zap.Logger) []byte {
+	var m map[string]any
+	if json.Unmarshal(raw, &m) == nil {
+		if t, _ := m["type"].(string); t == "object" {
+			return raw
+		}
+	}
+	if s := strings.TrimSpace(string(raw)); s != "" && s != "{}" {
+		lg.Warn("agent tool has a non-object input schema; coercing to object for MCP/tool compatibility",
+			zap.String("agent_id", agentID.String()),
+			zap.String("tool", tool),
+			zap.ByteString("input_schema", raw),
+			zap.String("hint", "rebuild the agent against an agentsdk that emits object-typed tool inputs"))
+	}
+	return []byte(`{"type":"object","properties":{}}`)
+}
+
 func (h *Handler) Sync(w http.ResponseWriter, r *http.Request) {
 	agentID := auth.AgentIDFromContext(r.Context())
 	pgAgentID := toPgUUID(agentID)
@@ -267,10 +291,7 @@ func (h *Handler) Sync(w http.ResponseWriter, r *http.Request) {
 	toolNames := make([]string, len(req.Tools))
 	for i, t := range req.Tools {
 		toolNames[i] = t.Name
-		inSchema := []byte(t.InputSchema)
-		if len(inSchema) == 0 {
-			inSchema = []byte("{}")
-		}
+		inSchema := normalizeToolInputSchema([]byte(t.InputSchema), t.Name, agentID, h.logger)
 		outSchema := []byte(t.OutputSchema)
 		if len(outSchema) == 0 {
 			outSchema = []byte("{}")
