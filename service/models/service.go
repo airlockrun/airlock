@@ -105,10 +105,11 @@ func (s *Service) Get(ctx context.Context, p authz.Principal, agentID uuid.UUID)
 }
 
 // parsePair validates a Pair and returns the parsed FK. A model without a
-// provider is always invalid. For the `search` slot a provider may stand
-// alone (empty model = the backend default); other slots must move both
-// halves together.
-func parsePair(name string, p Pair) (pgtype.UUID, error) {
+// provider is always invalid. When allowProviderOnly is true (search
+// capability — both the fixed `search` slot and CapSearch model slots) a
+// provider may stand alone (empty model = the backend default); otherwise
+// both halves must move together.
+func parsePair(name string, p Pair, allowProviderOnly bool) (pgtype.UUID, error) {
 	if p.ProviderID == "" {
 		if p.Model != "" {
 			return pgtype.UUID{}, service.Detail(service.ErrInvalidInput,
@@ -121,7 +122,7 @@ func parsePair(name string, p Pair) (pgtype.UUID, error) {
 		return pgtype.UUID{}, service.Detail(service.ErrInvalidInput,
 			"invalid %s_provider_id: %s", name, err.Error())
 	}
-	if name != "search" && p.Model == "" {
+	if !allowProviderOnly && p.Model == "" {
 		return pgtype.UUID{}, service.Detail(service.ErrInvalidInput,
 			"%s_model and %s_provider_id must be set or unset together", name, name)
 	}
@@ -177,7 +178,7 @@ func (s *Service) Update(ctx context.Context, p authz.Principal, agentID uuid.UU
 
 	fks := make(map[string]pgtype.UUID, len(pairs))
 	for _, item := range pairs {
-		fk, err := parsePair(item.name, item.p)
+		fk, err := parsePair(item.name, item.p, item.name == "search")
 		if err != nil {
 			return State{}, err
 		}
@@ -233,7 +234,7 @@ func (s *Service) Update(ctx context.Context, p authz.Principal, agentID uuid.UU
 		if !ok {
 			continue
 		}
-		fk, err := parsePair("slot "+slot.Slug, Pair{ProviderID: slot.ProviderID, Model: slot.Model})
+		fk, err := parsePair("slot "+slot.Slug, Pair{ProviderID: slot.ProviderID, Model: slot.Model}, cur.capability == "search")
 		if err != nil {
 			return State{}, err
 		}
