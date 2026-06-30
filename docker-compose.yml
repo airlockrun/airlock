@@ -1,20 +1,30 @@
-# Airlock self-host. One-command setup:
+# Airlock self-host — one parametrized compose for every deployment.
 #
 #   1. cp .env.example .env
-#   2. Edit .env: set DOMAIN, generate ENCRYPTION_KEY and JWT_SECRET
+#   2. Edit .env: set DOMAIN, generate ENCRYPTION_KEY / JWT_SECRET / S3_SECRET_KEY
 #   3. Add wildcard DNS A record: *.${DOMAIN} → <server IP>
 #   4. docker compose up -d
 #
-# First launch pulls airlock, frontend, agent-builder, and agent-base
-# images from ghcr.io. No local builds — Subsequent launches start in
-# seconds. The `build:` blocks below are kept as a development fallback
-# for working against this repo.
+# Everything that used to be a separate overlay file is now an .env knob:
+#   TLS_MODE          ondemand | wildcard | tunnel | internal | manual | proxy
+#                     → selects caddy/Caddyfile.<mode>
+#   COMPOSE_PROFILES  bundled-db (postgres+rustfs) | tunnel (cloudflared) |
+#                     buildkit (rootless builder) — comma-separated, read
+#                     automatically by docker compose
+#   DATABASE_URL / DB_HOST / S3_URL / …  → point airlock at external infra
+#                     (drop bundled-db from COMPOSE_PROFILES)
+# See .env.example for every section. install.sh writes a correct .env for you.
+#
+# First launch pulls airlock, frontend, agent-builder, and agent-base images
+# from ghcr.io — no local builds. The `build:` blocks are a dev fallback for
+# working against this repo. (TLS_MODE=wildcard is the one mode that needs a
+# local build: caddy with the Cloudflare DNS plugin — see caddy/Dockerfile +
+# CADDY_IMAGE.)
 #
 # Get the first-run activation code:
 #   docker compose exec airlock cat /var/lib/airlock/activation_code.txt
 #
-# Update to a new release:
-#   git fetch --tags && git checkout vX.Y.Z && docker compose up -d --build
+# Update to a new release: ./upgrade.sh   (or: git checkout vX.Y.Z && docker compose up -d)
 
 services:
   postgres:
@@ -25,10 +35,20 @@ services:
     # tolerates a missing extension and the rest of the bootstrap still
     # succeeds.
     image: pgvector/pgvector:pg17
+    # Bundled Postgres only runs when the `bundled-db` profile is active
+    # (the .env.example default). To use an external Postgres, drop
+    # bundled-db from COMPOSE_PROFILES and set DATABASE_URL / DB_HOST /
+    # DB_HOST_AGENT in .env — this service then never starts and airlock
+    # talks to your instance.
+    profiles: ["bundled-db"]
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-airlock}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-airlock}
       POSTGRES_DB: ${POSTGRES_DB:-airlock}
+    # Loopback-only host port so a native dev binary (`make dev`) can reach
+    # the DB at 127.0.0.1. Not exposed off-host — safe in prod.
+    ports:
+      - "127.0.0.1:${DB_PORT_HOST:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
       # First-boot bootstrap: creates the create_agent_role() helper
@@ -50,6 +70,13 @@ services:
   # on first connect, so no init sidecar is needed.
   rustfs:
     image: rustfs/rustfs:latest
+    # Bundled object store — same profile gate as postgres. For an external
+    # S3/RustFS, drop bundled-db and set S3_URL / S3_URL_PUBLIC in .env.
+    profiles: ["bundled-db"]
+    # Loopback-only host ports so a native dev binary can reach S3 + console.
+    ports:
+      - "127.0.0.1:${S3_PORT_HOST:-9090}:9000"   # S3 API
+      - "127.0.0.1:${S3_CONSOLE_PORT_HOST:-9001}:9001"   # Console UI
     environment:
       RUSTFS_ADDRESS: "0.0.0.0:9000"
       RUSTFS_CONSOLE_ADDRESS: "0.0.0.0:9001"
@@ -149,24 +176,33 @@ services:
       dockerfile: Dockerfile.airlock
     image: ghcr.io/airlockrun/airlock:v0.4.0-rc.10
     depends_on:
+      # required:false — when bundled-db is inactive (external Postgres/S3),
+      # these services don't start and airlock proceeds without waiting (it
+      # connects to the external DATABASE_URL / S3_URL instead). When
+      # bundled-db is active they start and airlock waits for healthy.
       postgres:
         condition: service_healthy
+        required: false
       rustfs:
         condition: service_healthy
+        required: false
       agent-builder-image:
         condition: service_completed_successfully
       agent-base-image:
         condition: service_completed_successfully
     environment:
-      DATABASE_URL: postgres://${POSTGRES_USER:-airlock}:${POSTGRES_PASSWORD:-airlock}@postgres:5432/${POSTGRES_DB:-airlock}?sslmode=disable
+      # DATABASE_URL defaults to the bundled Postgres; set it in .env to point
+      # at an external instance. DB_HOST / DB_HOST_AGENT / DB_SSL_MODE feed the
+      # per-agent schema DSNs (assembled separately from DATABASE_URL).
+      DATABASE_URL: "${DATABASE_URL:-postgres://${POSTGRES_USER:-airlock}:${POSTGRES_PASSWORD:-airlock}@${DB_HOST:-postgres}:5432/${POSTGRES_DB:-airlock}?sslmode=${DB_SSL_MODE:-disable}}"
 
       # Per-agent schema connections (agents reach Postgres at the same
       # hostname inside the network).
-      DB_HOST: postgres
-      DB_HOST_AGENT: postgres
-      DB_PORT: "5432"
+      DB_HOST: ${DB_HOST:-postgres}
+      DB_HOST_AGENT: ${DB_HOST_AGENT:-postgres}
+      DB_PORT: "${DB_PORT:-5432}"
       DB_NAME: ${POSTGRES_DB:-airlock}
-      DB_SSL_MODE: disable
+      DB_SSL_MODE: ${DB_SSL_MODE:-disable}
 
       # S3 has two audiences:
       #   S3_URL        — the airlock process (in-network). Agents never hit
@@ -180,10 +216,10 @@ services:
       #                   s3.{DOMAIN} subdomain which reverse-proxies to
       #                   rustfs:9000 with Host preserved (so the signed
       #                   URL validates).
-      S3_URL: http://rustfs:9000
+      S3_URL: ${S3_URL:-http://rustfs:9000}
       # S3_URL_PUBLIC is the externally-reachable host browsers (and, in
       # the prod path, LLM providers) hit for presigned media. Defaults
-      # to `https://s3.${DOMAIN}` to match the Caddyfile, but
+      # to `https://s3.${DOMAIN}` to match caddy/routes.caddy, but
       # `.env` can override it to carry a non-default port (e.g. when
       # the laptop overlay fronts Caddy on :8443).
       S3_URL_PUBLIC: "${S3_URL_PUBLIC:-https://s3.${DOMAIN}}"
@@ -204,7 +240,7 @@ services:
       # signed asset URLs match what Caddy actually serves.
       PUBLIC_URL: "${PUBLIC_URL:-https://${DOMAIN:?DOMAIN is required — your public domain like airlock.example.com}}"
       AGENT_DOMAIN: ${DOMAIN}
-      API_URL_AGENT: http://airlock:8080
+      API_URL_AGENT: ${API_URL_AGENT:-http://airlock:8080}
 
       # Namespaces every Docker resource this airlock owns (agent/builder
       # container names, agent image labels, build-cache volumes) so
@@ -219,8 +255,8 @@ services:
       # containers — an isolated net with only airlock + postgres, so a
       # malicious agent can't reach rustfs/caddy/frontend. Both must match
       # the network names in the `networks:` block below.
-      DOCKER_NETWORK: airlock
-      AGENT_NETWORK: airlock-agents
+      DOCKER_NETWORK: ${DOCKER_NETWORK:-airlock}
+      AGENT_NETWORK: ${AGENT_NETWORK:-airlock-agents}
       # Rootless agent image builds. Empty by default → legacy host
       # `docker build` (works everywhere). install.sh sets BUILDKIT_HOST to the
       # buildkitd socket and enables the `buildkit` profile when the host
@@ -248,9 +284,11 @@ services:
       AGENT_CODEGEN_VOLUME: airlock-data
 
       # Trust the Caddy container that fronts us. Docker's default bridge
-      # CIDR (172.16.0.0/12) covers all compose-created networks.
-      REVERSE_PROXY_TRUSTED_PROXIES: "172.16.0.0/12"
-      REVERSE_PROXY_LIMIT: "1"
+      # CIDR (172.16.0.0/12) covers all compose-created networks. For
+      # TLS_MODE=proxy add your external proxy's CIDR here (or "*") so airlock
+      # trusts its X-Forwarded-* headers and keeps signing https:// URLs.
+      REVERSE_PROXY_TRUSTED_PROXIES: "${REVERSE_PROXY_TRUSTED_PROXIES:-172.16.0.0/12}"
+      REVERSE_PROXY_LIMIT: "${REVERSE_PROXY_LIMIT:-1}"
     volumes:
       # Persistent: activation_code.txt, libs cache extracted from agent-builder.
       - airlock-data:/var/lib/airlock
@@ -276,26 +314,73 @@ services:
     restart: unless-stopped
 
   caddy:
-    image: caddy:2-alpine
-    depends_on:
-      airlock:
-        condition: service_healthy
-      frontend:
-        condition: service_started
+    # Stock caddy for every TLS_MODE except wildcard, which needs the
+    # Cloudflare DNS plugin — install.sh builds caddy/Dockerfile and sets
+    # CADDY_IMAGE to that local tag.
+    image: ${CADDY_IMAGE:-caddy:2-alpine}
+    # No depends_on: caddy reverse-proxies on demand (returns 502 until an
+    # upstream is up, then recovers), and in native dev (`make dev`) airlock
+    # and frontend aren't containers at all.
     ports:
-      # HTTP_PORT / HTTPS_PORT default to 80/443 for prod. The laptop
-      # overlay sets them via .env when 80/443 are taken on the host;
-      # the airlock backend's PUBLIC_URL must then carry the matching
-      # port so signed URLs validate.
+      # 80/443 for prod. .env overrides for non-default binds:
+      #   laptop      HTTP_PORT=24080  HTTPS_PORT=24443  (avoid host conflicts)
+      #   proxy/tunnel HTTP_PORT=127.0.0.1:8080  HTTPS_PORT=127.0.0.1:8443
+      #               (external proxy / cloudflared owns the public ports)
+      # PUBLIC_URL must carry any non-default port so signed URLs validate.
       - "${HTTP_PORT:-80}:80"
       - "${HTTPS_PORT:-443}:443"
     environment:
       DOMAIN: ${DOMAIN}
+      # Upstreams (defaults reach the bundled services over the docker
+      # network; native dev repoints AIRLOCK_UPSTREAM at host.docker.internal).
+      AIRLOCK_UPSTREAM: ${AIRLOCK_UPSTREAM:-airlock:8080}
+      S3_UPSTREAM: ${S3_UPSTREAM:-rustfs:9000}
+      # Optional Let's Encrypt contact (ondemand/wildcard). Comment-trick:
+      # expands to an `email <addr>` directive when ACME_EMAIL is set, empty
+      # otherwise — see caddy/Caddyfile.ondemand's global block.
+      ACME_EMAIL_LINE: ${ACME_EMAIL:+email ${ACME_EMAIL}}
+      # SPA serving (see caddy/routes.caddy). Prod defaults reverse-proxy the
+      # frontend container; .env.dev.example flips these to static file serving
+      # from /srv/dist (vite `pnpm watch` output).
+      SPA_ROOT_LINE: "${SPA_ROOT_LINE:-#}"
+      SPA_SERVE_LINE: "${SPA_SERVE_LINE:-reverse_proxy frontend:80}"
+      SPA_SERVE_LINE2: "${SPA_SERVE_LINE2:-#}"
+      # wildcard mode
+      CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN:-}
+      # manual (BYO cert) mode — paths inside the mounted cert dir
+      TLS_CERT_FILE: ${TLS_CERT_FILE:-/etc/caddy/certs/cert.pem}
+      TLS_KEY_FILE: ${TLS_KEY_FILE:-/etc/caddy/certs/key.pem}
+    command: caddy run --config /etc/caddy/Caddyfile.${TLS_MODE:-ondemand} --adapter caddyfile
+    extra_hosts:
+      # Lets the in-container caddy reach a native airlock binary on the host
+      # (`make dev`). Harmless in a full-container deploy.
+      - "host.docker.internal:host-gateway"
     volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Whole caddy/ dir so `import routes.caddy` resolves next to the mode file.
+      - ./caddy:/etc/caddy:ro
+      # Static SPA for native dev (TLS_MODE-independent). Bind auto-creates an
+      # empty dir on a fresh clone; unused in container deploys (reverse_proxy).
+      - ./frontend/dist:/srv/dist:ro
+      # BYO cert dir for manual mode; inert otherwise.
+      - ${TLS_CERT_DIR:-./certs}:/etc/caddy/certs:ro
       - caddy-data:/data
       - caddy-config:/config
     restart: unless-stopped
+
+  # Cloudflare Tunnel sidecar — only with COMPOSE_PROFILES=tunnel (TLS_MODE=
+  # tunnel). Dials out to Cloudflare and forwards public hostnames to caddy
+  # over the tunnel; CF terminates TLS at its edge. Route DOMAIN / *.DOMAIN /
+  # s3.DOMAIN → http://caddy:80 in the CF Zero-Trust dashboard.
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    profiles: ["tunnel"]
+    # Plain ${TUNNEL_TOKEN} (not :?): compose interpolates this even when the
+    # tunnel profile is inactive, so a hard-require would break every other
+    # mode's `compose config`. Set TUNNEL_TOKEN in .env for tunnel mode;
+    # cloudflared exits with a clear error on an empty token.
+    command: ["tunnel", "--no-autoupdate", "run", "--token", "${TUNNEL_TOKEN:-}"]
+    restart: unless-stopped
+    networks: [default]
 
 # Two networks. `default` (airlock) carries all infra. `agents` carries
 # ONLY airlock + postgres — agent runtime containers attach here (via

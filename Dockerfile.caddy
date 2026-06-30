@@ -1,9 +1,0 @@
-# Caddy with the Cloudflare DNS plugin, for DNS-01 wildcard certificates
-# (deployment mode B). Only the reverse-proxy `caddy` service uses this; the
-# frontend's caddy stays on the stock image. Built locally by
-# docker-compose.cloudflare.yml — no published image required.
-FROM caddy:2-builder AS build
-RUN xcaddy build --with github.com/caddy-dns/cloudflare
-
-FROM caddy:2-alpine
-COPY --from=build /usr/bin/caddy /usr/bin/caddy

@@ -9,7 +9,8 @@
 #
 # Takes a fresh Linux VPS (or macOS for local/tunnel) from nothing to a running,
 # hardened airlock: installs Docker, generates secrets, verifies the domain,
-# wires TLS (on-demand / Cloudflare wildcard / Cloudflare Tunnel), and brings
+# picks a TLS_MODE (ondemand / wildcard / tunnel / internal / manual / proxy)
+# and infra (bundled or external Postgres/S3), writes a single .env, and brings
 # the stack up. Missing optional prereqs degrade gracefully ("drop caps") — only
 # a missing Docker hard-fails.
 #
@@ -31,7 +32,8 @@ set -uo pipefail
 RELEASE_TAG="${AIRLOCK_TAG:-v0.4.0-rc.10}"
 REPO_URL="https://github.com/airlockrun/airlock.git"
 INSTALL_DIR="${HOME}/airlock"
-MODE=""            # a|b|c|d, decided interactively
+TLS_MODE=""        # ondemand|wildcard|tunnel|internal|manual|proxy — decided interactively
+INFRA="bundled"    # bundled | external (Postgres/S3)
 FORCE=0
 DRY_RUN=0
 ASSUME_YES=0
@@ -273,22 +275,43 @@ clone_repo() {
 	cd "$INSTALL_DIR" || die "cannot cd into $INSTALL_DIR"
 }
 
-# Globals filled by choose_mode: MODE, DOMAIN, plus env extras in ENV_EXTRA[]
+# Globals filled by choose_mode / choose_infra: TLS_MODE, DOMAIN, INFRA, plus
+# .env lines in ENV_EXTRA[] and compose profiles in PROFILES[].
 declare -a ENV_EXTRA=()
-declare -a COMPOSE_FILES=(-f docker-compose.yml)
-BUILD_CADDY=0   # mode B: build ONLY the custom Cloudflare caddy image
+declare -a PROFILES=()
+BUILD_CADDY=0   # wildcard mode: build the local Cloudflare-plugin caddy image
 
 choose_mode() {
-	if [ "$FORCE_LOCAL" = 1 ]; then MODE=d; return; fi
+	if [ "$FORCE_LOCAL" = 1 ]; then TLS_MODE=internal; DOMAIN=airlock.localhost; return; fi
 	local has_domain; has_domain=$(ask "Do you have a domain to use? (y/n)" "y")
 	case "$has_domain" in
 		[nN]*)
-			warn "No domain → local mode (airlock.localhost, inline attachments)."
+			warn "No domain → internal mode (airlock.localhost, local CA, inline attachments)."
 			warn "For a public deployment, get a domain (any registrar) and re-run."
-			MODE=d; return ;;
+			TLS_MODE=internal; DOMAIN=airlock.localhost; return ;;
 	esac
 	DOMAIN=$(ask "Domain (e.g. airlock.example.com)" "")
 	[ -n "$DOMAIN" ] || die "domain required (or run with --local)"
+
+	# Advanced operator setups that bypass TLS auto-detection.
+	if confirm "Advanced TLS? (bring-your-own cert, or sit behind your own reverse proxy)"; then
+		local adv; adv=$(ask "  Which? [manual = BYO cert / proxy = behind nginx]" "manual")
+		case "$adv" in
+			proxy)
+				TLS_MODE=proxy
+				warn "Your proxy must terminate a *.$DOMAIN wildcard cert and forward apex / *. / s3. → caddy's HTTP port (loopback 8080)."
+				local cidr; cidr=$(ask "  Trusted proxy CIDR (e.g. 10.0.0.0/8, or * to trust all)" "*")
+				ENV_EXTRA+=("HTTP_PORT=127.0.0.1:8080" "HTTPS_PORT=127.0.0.1:8443")
+				ENV_EXTRA+=("REVERSE_PROXY_TRUSTED_PROXIES=$cidr" "PUBLIC_URL=https://$DOMAIN")
+				return ;;
+			*)
+				TLS_MODE=manual
+				warn "Provide a WILDCARD cert (apex + *.$DOMAIN + s3.$DOMAIN). A single-host cert breaks per-agent routing."
+				local cdir; cdir=$(ask "  Host cert dir holding cert.pem + key.pem" "./certs")
+				ENV_EXTRA+=("TLS_CERT_DIR=$cdir")
+				return ;;
+		esac
+	fi
 
 	# Publicly reachable? macOS never is (no public-server modes).
 	PUBLIC_IP=$(host_public_ip)
@@ -309,15 +332,17 @@ choose_mode() {
 			[ -n "$CF_TOKEN" ] || die "token required"
 			ensure_jq
 			cf_verify_token || die "Cloudflare token invalid / inactive — check it has Zone:DNS:Edit + Zone:Read"
-			MODE=b
+			TLS_MODE=wildcard
 			CF_AUTO_DNS=1
+			BUILD_CADDY=1
 			ENV_EXTRA+=("CLOUDFLARE_API_TOKEN=$CF_TOKEN")
 			log "will create A $DOMAIN and A *.$DOMAIN → $PUBLIC_IP, and issue a *.$DOMAIN cert."
 			return
 		fi
 		# Manual-DNS wildcard (records already created by hand).
 		if [ "$public" = y ] && confirm "Use a Cloudflare DNS-01 wildcard cert (records already set)?"; then
-			MODE=b
+			TLS_MODE=wildcard
+			BUILD_CADDY=1
 			cf_token_hint
 			CF_TOKEN=$(ask_secret "Cloudflare API token")
 			[ -n "$CF_TOKEN" ] || die "token required for wildcard mode"
@@ -325,26 +350,49 @@ choose_mode() {
 			return
 		fi
 		if [ "$public" = n ] && confirm "This host isn't publicly reachable — serve it via a Cloudflare Tunnel?"; then
-			MODE=c
+			TLS_MODE=tunnel
 			local tok; tok=$(ask_secret "Cloudflare Tunnel token (Zero-Trust > Tunnels)")
 			[ -n "$tok" ] || die "tunnel token required for tunnel mode"
 			ENV_EXTRA+=("TUNNEL_TOKEN=$tok")
+			ENV_EXTRA+=("HTTP_PORT=127.0.0.1:8080" "HTTPS_PORT=127.0.0.1:8443")
 			warn "In the CF dashboard, route $DOMAIN, *.$DOMAIN, s3.$DOMAIN → http://caddy:80 for this tunnel."
 			return
 		fi
 	fi
 
 	[ "$public" = n ] && die "Host not publicly reachable and not using a tunnel. Re-run with a Cloudflare Tunnel, on a public host, or --local."
-	MODE=a  # public + on-demand HTTP-01
+	TLS_MODE=ondemand  # public + on-demand HTTP-01
 }
 
-select_compose() {
-	case "$MODE" in
-		a) ;;  # base only
-		b) COMPOSE_FILES+=(-f docker-compose.cloudflare.yml); BUILD_CADDY=1 ;;
-		c) COMPOSE_FILES+=(-f docker-compose.tunnel.yml) ;;
-		d) COMPOSE_FILES+=(-f docker-compose.local.yml) ;;
-	esac
+# Bundled Postgres + RustFS (default) or an external instance. External fills
+# ENV_EXTRA with the endpoints and drops bundled-db from the profiles.
+choose_infra() {
+	[ "$TLS_MODE" = internal ] && { INFRA=bundled; return; }  # laptop = always bundled
+	if confirm "Use the bundled Postgres + object store (recommended)?"; then INFRA=bundled; return; fi
+	INFRA=external
+	warn "External infra: run db/init/*.sql on your Postgres once (create_agent_role() helper + the vector extension)."
+	local db s3 s3pub ak sk dbhost
+	db=$(ask "DATABASE_URL (postgres://user:pass@host:5432/airlock?sslmode=require)" "")
+	[ -n "$db" ] || die "DATABASE_URL required for external infra"
+	ENV_EXTRA+=("DATABASE_URL=$db")
+	dbhost=$(printf '%s' "$db" | sed -E 's#^[^@]*@([^:/]+).*#\1#')
+	[ -n "$dbhost" ] && ENV_EXTRA+=("DB_HOST=$dbhost" "DB_HOST_AGENT=$dbhost")
+	printf '%s' "$db" | grep -q 'sslmode=require' && ENV_EXTRA+=("DB_SSL_MODE=require")
+	s3=$(ask "S3_URL (e.g. https://s3.us-east-1.amazonaws.com)" "")
+	[ -n "$s3" ] || die "S3_URL required for external infra"
+	s3pub=$(ask "S3_URL_PUBLIC (public endpoint for presigned URLs)" "$s3")
+	ak=$(ask "S3_ACCESS_KEY" "airlock")
+	sk=$(ask_secret "S3_SECRET_KEY (your external S3 secret)")
+	[ -n "$sk" ] || die "S3_SECRET_KEY required for external infra"
+	ENV_EXTRA+=("S3_URL=$s3" "S3_URL_PUBLIC=$s3pub" "S3_ACCESS_KEY=$ak" "S3_SECRET_KEY=$sk")
+}
+
+# COMPOSE_PROFILES (written into .env; docker compose reads it automatically).
+assemble_profiles() {
+	PROFILES=()
+	[ "$INFRA" = bundled ] && PROFILES+=("bundled-db")
+	[ "$TLS_MODE" = tunnel ] && PROFILES+=("tunnel")
+	[ -n "$BUILDKIT_HOST_VAL" ] && PROFILES+=("buildkit")
 }
 
 render_env() {
@@ -353,23 +401,37 @@ render_env() {
 		warn ".env exists — keeping it (use --force to regenerate). Skipping secret generation."
 		return
 	fi
+	local profiles_csv; profiles_csv=$(IFS=,; printf '%s' "${PROFILES[*]:-}")
 	content="$(
-		echo "# Generated by install.sh on $(date -u +%FT%TZ) — mode $MODE"
+		echo "# Generated by install.sh on $(date -u +%FT%TZ) — TLS_MODE=$TLS_MODE infra=$INFRA"
+		echo "TLS_MODE=$TLS_MODE"
+		echo "COMPOSE_PROFILES=$profiles_csv"
 		echo "ENCRYPTION_KEY=$(gen_secret)"
 		echo "JWT_SECRET=$(gen_secret)"
-		echo "S3_ACCESS_KEY=airlock"
-		echo "S3_SECRET_KEY=$(gen_secret)"
-		echo "POSTGRES_PASSWORD=$(gen_secret)"
-		case "$MODE" in
-			d) echo "DOMAIN=airlock.localhost"; echo "FORCE_INLINE_ATTACHMENTS=true" ;;
-			*) echo "DOMAIN=$DOMAIN" ;;
-		esac
+		# Bundled infra needs generated creds; external supplies its own via
+		# ENV_EXTRA (S3_*), and DATABASE_URL carries Postgres creds.
+		if [ "$INFRA" = bundled ]; then
+			echo "S3_ACCESS_KEY=airlock"
+			echo "S3_SECRET_KEY=$(gen_secret)"
+			echo "POSTGRES_PASSWORD=$(gen_secret)"
+		fi
+		if [ "$TLS_MODE" = internal ]; then
+			echo "DOMAIN=airlock.localhost"
+			echo "HTTP_PORT=24080"
+			echo "HTTPS_PORT=24443"
+			echo "PUBLIC_URL=https://airlock.localhost:24443"
+			echo "S3_URL_PUBLIC=https://s3.airlock.localhost:24443"
+			echo "FORCE_INLINE_ATTACHMENTS=true"
+		else
+			echo "DOMAIN=$DOMAIN"
+		fi
+		[ "$BUILD_CADDY" = 1 ] && echo "CADDY_IMAGE=airlock-caddy-local"
 		[ -n "$BUILDKIT_HOST_VAL" ] && echo "BUILDKIT_HOST=$BUILDKIT_HOST_VAL"
 		local kv; for kv in "${ENV_EXTRA[@]:-}"; do [ -n "$kv" ] && echo "$kv"; done
 	)"
 	if [ "$DRY_RUN" = 1 ]; then
 		log "DRY RUN — .env that would be written (secrets redacted):"
-		printf '%s\n' "$content" | sed 's/=.*/=<redacted>/' | sed 's/^/  /'
+		printf '%s\n' "$content" | sed 's/\(KEY\|SECRET\|TOKEN\|PASSWORD\)=.*/\1=<redacted>/' | sed 's/^/  /'
 		return
 	fi
 	log "generating secrets + .env"
@@ -378,29 +440,27 @@ render_env() {
 }
 
 bring_up() {
-	local base=(docker compose "${COMPOSE_FILES[@]}")
-	local cmd=("${base[@]}")
-	[ -n "$BUILDKIT_HOST_VAL" ] && cmd+=(--profile buildkit)
-	# Prod: pull the published ghcr images; never build app images (--no-build
-	# errors loudly if a release image is missing — i.e. the tag isn't
-	# published). The custom Cloudflare caddy image is the one exception, built
-	# locally below (mode B), since it's never published.
-	cmd+=(up -d --no-build)
+	# Profiles + TLS_MODE + CADDY_IMAGE all live in .env, which docker compose
+	# reads automatically — no -f or --profile flags. Prod pulls the published
+	# ghcr images; --no-build errors loudly if a release image is missing (the
+	# tag isn't published). The Cloudflare-plugin caddy image is the one local
+	# build (wildcard mode), done below.
+	local cmd=(docker compose up -d --no-build)
 
 	if [ "$DRY_RUN" = 1 ]; then
 		hr; log "DRY RUN — would run:"
-		[ "$BUILD_CADDY" = 1 ] && printf '  %s\n' "${base[*]} build caddy"
+		[ "$BUILD_CADDY" = 1 ] && printf '  %s\n' "docker build -f caddy/Dockerfile -t airlock-caddy-local ."
 		printf '  %s\n' "${cmd[*]}"
 		return
 	fi
 	if [ "$BUILD_CADDY" = 1 ]; then
-		log "building the Cloudflare caddy image"
-		"${base[@]}" build caddy || die "caddy image build failed"
+		log "building the Cloudflare-plugin caddy image"
+		docker build -f caddy/Dockerfile -t airlock-caddy-local . || die "caddy image build failed"
 	fi
-	log "starting the stack: ${cmd[*]}"
+	log "starting the stack (profiles: $(IFS=,; printf '%s' "${PROFILES[*]:-none}"))"
 	if ! "${cmd[@]}"; then
 		warn "Could not pull an image for tag $RELEASE_TAG — make sure this release's images are published to ghcr (or pass --tag <published-tag>)."
-		die "stack failed to start (see 'docker compose ${COMPOSE_FILES[*]} logs')"
+		die "stack failed to start (see 'docker compose logs')"
 	fi
 }
 
@@ -408,18 +468,18 @@ finish() {
 	[ "$DRY_RUN" = 1 ] && return
 	log "waiting for airlock to become healthy..."
 	local i; for i in $(seq 1 60); do
-		docker compose "${COMPOSE_FILES[@]}" exec -T airlock wget -qO- http://localhost:8080/health >/dev/null 2>&1 && break
+		docker compose exec -T airlock wget -qO- http://localhost:8080/health >/dev/null 2>&1 && break
 		sleep 3
 	done
 	hr
 	log "airlock is up."
-	local url; case "$MODE" in
-		d) url="https://airlock.localhost:24443" ;;
+	local url; case "$TLS_MODE" in
+		internal) url="https://airlock.localhost:24443" ;;
 		*) url="https://$DOMAIN" ;;
 	esac
 	echo "  URL:            $url"
 	echo -n "  Activation code: "
-	docker compose "${COMPOSE_FILES[@]}" exec -T airlock cat /var/lib/airlock/activation_code.txt 2>/dev/null || echo "(run: docker compose exec airlock cat /var/lib/airlock/activation_code.txt)"
+	docker compose exec -T airlock cat /var/lib/airlock/activation_code.txt 2>/dev/null || echo "(run: docker compose exec airlock cat /var/lib/airlock/activation_code.txt)"
 	echo "  Open the URL, paste the activation code, create the first admin."
 	hr
 }
@@ -438,10 +498,11 @@ main() {
 	ensure_docker
 	clone_repo
 	choose_mode
+	choose_infra
 	cf_setup_dns   # create A records via the CF token when auto-DNS was chosen
 	BUILDKIT_HOST_VAL=""
-	if [ "$MODE" != d ]; then BUILDKIT_HOST_VAL="$(ensure_buildkit_capable)"; fi
-	select_compose
+	if [ "$TLS_MODE" != internal ]; then BUILDKIT_HOST_VAL="$(ensure_buildkit_capable)"; fi
+	assemble_profiles
 	render_env
 	bring_up
 	finish
