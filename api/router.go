@@ -453,6 +453,12 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		// Same path for initial builds kicked off from a sysagent
 		// create_agent tool (NotifyBuildComplete → [Build succeeded] + resume).
 		cfg.BuildService.SetBuildSystemNotifier(sysagentSvc)
+		// Bridge delivery for those completion follow-ups: a bridge-originated
+		// create/upgrade has no live inbound update, so the notifier asks the
+		// bridge manager to run the auto-resume through the same sink the
+		// inbound poller uses (streams the reply + renders confirmation buttons
+		// for any gated tool the resume chains into).
+		sysagentSvc.SetBridgeResumer(cfg.BridgeManager)
 		sysagentH := newSysagentHandler(sysagentSvc)
 
 		// Wire sysagent into the bridge manager so system-bridge

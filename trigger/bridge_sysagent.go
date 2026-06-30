@@ -204,9 +204,10 @@ func (m *BridgeManager) handleSystemBridgeEvent(ctx context.Context, br dbq.Brid
 		title = br.Name
 	}
 	conv, err := q.EnsureSystemConversationForBridge(ctx, dbq.EnsureSystemConversationForBridgeParams{
-		UserID:   toPgUUID(userID),
-		BridgeID: toPgUUID(uuid.UUID(br.ID.Bytes)),
-		Title:    title,
+		UserID:     toPgUUID(userID),
+		BridgeID:   toPgUUID(uuid.UUID(br.ID.Bytes)),
+		Title:      title,
+		ExternalID: pgtype.Text{String: event.ExternalID, Valid: event.ExternalID != ""},
 	})
 	if err != nil {
 		return err
@@ -321,4 +322,64 @@ func (m *BridgeManager) handleSystemBridgeEvent(ctx context.Context, br dbq.Brid
 		return nil
 	}
 	return nil
+}
+
+// ResumeSystemConversation runs a server-initiated auto-resume turn for a
+// bridge-originated system conversation and streams it to the chat through the
+// SAME bridgeSink + driver.SendStream the inbound poller uses. This is the
+// delivery path for a build/upgrade completion follow-up: because it uses the
+// real sink, a gated tool the resume chains into (e.g. create_tg_bot) renders
+// Approve/Reject buttons in the chat — and the normal inbound callback path
+// resumes the run on a tap — instead of silently suspending the way a
+// text-only push would.
+//
+// The conversation must already carry source="bridge" + bridge_id +
+// external_id (EnsureSystemConversationForBridge refreshes external_id on every
+// inbound turn). Invoked by sysagent's build/upgrade notifier via the
+// BridgeResumer interface; it runs synchronously and the caller drives it from
+// a goroutine.
+func (m *BridgeManager) ResumeSystemConversation(ctx context.Context, conversationID uuid.UUID) error {
+	if m.sysagent == nil {
+		return fmt.Errorf("sysagent runtime not attached")
+	}
+	q := dbq.New(m.db.Pool())
+	conv, err := q.GetSystemConversationByID(ctx, toPgUUID(conversationID))
+	if err != nil {
+		return fmt.Errorf("load system conversation: %w", err)
+	}
+	if conv.Source != "bridge" || !conv.BridgeID.Valid || !conv.ExternalID.Valid || conv.ExternalID.String == "" {
+		return fmt.Errorf("conversation %s is not a deliverable bridge thread", conversationID)
+	}
+
+	br, err := q.GetBridgeByID(ctx, conv.BridgeID)
+	if err != nil {
+		return fmt.Errorf("load bridge: %w", err)
+	}
+	user, err := q.GetUserByID(ctx, conv.UserID)
+	if err != nil {
+		return fmt.Errorf("load user: %w", err)
+	}
+	p := authz.UserPrincipal(pgUUID(conv.UserID), auth.Role(user.TenantRole))
+
+	// Producer: the in-process run feeds the bridge sink. Consumer: the
+	// shared StreamToBridge primitive renders to the chat. The sink does not
+	// close the channel, so we close it once the run returns.
+	respEvents := make(chan ResponseEvent, 64)
+	sink := newBridgeSink(respEvents)
+	var deliverErr error
+	deliverDone := make(chan struct{})
+	go func() {
+		deliverErr = m.StreamToBridge(ctx, uuid.UUID(conv.BridgeID.Bytes), conv.ExternalID.String, conv.Settings, respEvents)
+		close(deliverDone)
+	}()
+
+	// text="" + approved=nil → the auto-resume branch in runChat.
+	_, runErr := m.sysagent.RunPromptInline(ctx, p, conversationID, "", br.Type, nil, "", sink, sink.setRunID)
+	close(respEvents)
+	<-deliverDone
+	if deliverErr != nil {
+		m.logger.Error("system bridge resume delivery failed",
+			zap.Stringer("conversation", conversationID), zap.Error(deliverErr))
+	}
+	return runErr
 }

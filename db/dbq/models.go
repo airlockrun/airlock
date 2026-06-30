@@ -589,6 +589,7 @@ type SystemConversation struct {
 	UpdatedAt                  pgtype.Timestamptz `json:"updated_at"`
 	Source                     string             `json:"source"`
 	BridgeID                   pgtype.UUID        `json:"bridge_id"`
+	ExternalID                 pgtype.Text        `json:"external_id"`
 }
 
 type SystemMessage struct {

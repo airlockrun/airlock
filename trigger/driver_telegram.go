@@ -158,9 +158,17 @@ func (d *TelegramDriver) Poll(ctx context.Context, br *dbq.Bridge) ([]BridgeEven
 		// bridges (HandleEvent ignores it on non-manager bridges). Handled
 		// before the private-chat filter since it's a service message.
 		if mbc := u.Message.ManagedBotCreated; mbc != nil && mbc.Bot.ID != 0 {
+			mb := &ManagedBotEvent{
+				BotID:      mbc.Bot.ID,
+				Username:   mbc.Bot.Username,
+				ExternalID: strconv.FormatInt(u.Message.Chat.ID, 10),
+			}
+			if u.Message.From.ID != 0 {
+				mb.SenderID = strconv.FormatInt(u.Message.From.ID, 10)
+			}
 			events = append(events, BridgeEvent{
 				BridgeID:   pgUUID(br.ID),
-				ManagedBot: &ManagedBotEvent{BotID: mbc.Bot.ID, Username: mbc.Bot.Username},
+				ManagedBot: mb,
 				RawPayload: mustJSON(u),
 			})
 			advanceOffset(u.UpdateID)

@@ -81,7 +81,7 @@ const createSystemConversation = `-- name: CreateSystemConversation :one
 
 INSERT INTO system_conversations (user_id, title)
 VALUES ($1, $2)
-RETURNING id, user_id, title, status, checkpoint, context_checkpoint_message_id, settings, created_at, updated_at, source, bridge_id
+RETURNING id, user_id, title, status, checkpoint, context_checkpoint_message_id, settings, created_at, updated_at, source, bridge_id, external_id
 `
 
 type CreateSystemConversationParams struct {
@@ -107,6 +107,7 @@ func (q *Queries) CreateSystemConversation(ctx context.Context, arg CreateSystem
 		&i.UpdatedAt,
 		&i.Source,
 		&i.BridgeID,
+		&i.ExternalID,
 	)
 	return i, err
 }
@@ -156,27 +157,35 @@ func (q *Queries) DeleteSystemConversation(ctx context.Context, arg DeleteSystem
 }
 
 const ensureSystemConversationForBridge = `-- name: EnsureSystemConversationForBridge :one
-INSERT INTO system_conversations (user_id, bridge_id, source, title)
-VALUES ($1, $2, 'bridge', $3)
+INSERT INTO system_conversations (user_id, bridge_id, source, title, external_id)
+VALUES ($1, $2, 'bridge', $3, $4)
 ON CONFLICT (user_id, bridge_id) WHERE bridge_id IS NOT NULL
-DO UPDATE SET bridge_id = EXCLUDED.bridge_id
-RETURNING id, user_id, title, status, checkpoint, context_checkpoint_message_id, settings, created_at, updated_at, source, bridge_id
+DO UPDATE SET external_id = EXCLUDED.external_id
+RETURNING id, user_id, title, status, checkpoint, context_checkpoint_message_id, settings, created_at, updated_at, source, bridge_id, external_id
 `
 
 type EnsureSystemConversationForBridgeParams struct {
-	UserID   pgtype.UUID `json:"user_id"`
-	BridgeID pgtype.UUID `json:"bridge_id"`
-	Title    string      `json:"title"`
+	UserID     pgtype.UUID `json:"user_id"`
+	BridgeID   pgtype.UUID `json:"bridge_id"`
+	Title      string      `json:"title"`
+	ExternalID pgtype.Text `json:"external_id"`
 }
 
 // Upsert one sticky thread per (user, bridge) on the partial unique
 // index (user_id, bridge_id) WHERE bridge_id IS NOT NULL — every system
 // bridge funnels that user's inbound DMs into the same row. The first
 // INSERT for a pair returns the new row; subsequent calls hit the
-// conflict and return the existing one via the no-op ON CONFLICT
-// update of bridge_id (which leaves the value unchanged).
+// conflict and return the existing one, refreshing external_id (the
+// platform chat id) so a server-initiated follow-up — e.g. a build /
+// upgrade completion auto-resume, which has no live inbound update to
+// read the chat id from — can deliver back to the right chat.
 func (q *Queries) EnsureSystemConversationForBridge(ctx context.Context, arg EnsureSystemConversationForBridgeParams) (SystemConversation, error) {
-	row := q.db.QueryRow(ctx, ensureSystemConversationForBridge, arg.UserID, arg.BridgeID, arg.Title)
+	row := q.db.QueryRow(ctx, ensureSystemConversationForBridge,
+		arg.UserID,
+		arg.BridgeID,
+		arg.Title,
+		arg.ExternalID,
+	)
 	var i SystemConversation
 	err := row.Scan(
 		&i.ID,
@@ -190,6 +199,7 @@ func (q *Queries) EnsureSystemConversationForBridge(ctx context.Context, arg Ens
 		&i.UpdatedAt,
 		&i.Source,
 		&i.BridgeID,
+		&i.ExternalID,
 	)
 	return i, err
 }
@@ -232,7 +242,7 @@ func (q *Queries) GetLatestSuspendedSystemRun(ctx context.Context, conversationI
 }
 
 const getSystemConversationByID = `-- name: GetSystemConversationByID :one
-SELECT id, user_id, title, status, checkpoint, context_checkpoint_message_id, settings, created_at, updated_at, source, bridge_id FROM system_conversations WHERE id = $1
+SELECT id, user_id, title, status, checkpoint, context_checkpoint_message_id, settings, created_at, updated_at, source, bridge_id, external_id FROM system_conversations WHERE id = $1
 `
 
 func (q *Queries) GetSystemConversationByID(ctx context.Context, id pgtype.UUID) (SystemConversation, error) {
@@ -250,6 +260,7 @@ func (q *Queries) GetSystemConversationByID(ctx context.Context, id pgtype.UUID)
 		&i.UpdatedAt,
 		&i.Source,
 		&i.BridgeID,
+		&i.ExternalID,
 	)
 	return i, err
 }
@@ -306,7 +317,7 @@ func (q *Queries) InsertSystemAuditPending(ctx context.Context, arg InsertSystem
 }
 
 const listSystemConversationsByUser = `-- name: ListSystemConversationsByUser :many
-SELECT id, user_id, title, status, checkpoint, context_checkpoint_message_id, settings, created_at, updated_at, source, bridge_id FROM system_conversations
+SELECT id, user_id, title, status, checkpoint, context_checkpoint_message_id, settings, created_at, updated_at, source, bridge_id, external_id FROM system_conversations
 WHERE user_id = $1 AND source = 'web'
 ORDER BY updated_at DESC
 `
@@ -338,6 +349,7 @@ func (q *Queries) ListSystemConversationsByUser(ctx context.Context, userID pgty
 			&i.UpdatedAt,
 			&i.Source,
 			&i.BridgeID,
+			&i.ExternalID,
 		); err != nil {
 			return nil, err
 		}

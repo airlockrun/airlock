@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/airlockrun/airlock/db/dbq"
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 )
 
@@ -28,7 +29,28 @@ func (m *BridgeManager) handleManagerBotCreated(ctx context.Context, br dbq.Brid
 			zap.String("bridge", br.Name))
 		return nil
 	}
-	return m.managedBotIngest(ctx, br.BotTokenRef, evt.BotID, evt.Username)
+	if err := m.managedBotIngest(ctx, br.BotTokenRef, evt.BotID, evt.Username); err != nil {
+		return err
+	}
+
+	// Hand the user a deep link to open their new bot. Opening it drops them
+	// into the new bot's chat (where the web-app menu button lives) and fires
+	// its first inbound /start — the deterministic moment the new bot's poller
+	// re-asserts the menu button, sidestepping the create-time client race
+	// where the freshly-created bot's chat isn't synced yet. Sent to
+	// evt.ExternalID: the exact chat the creation happened in, so a user with
+	// multiple linked Telegram accounts always gets it in the right one.
+	if evt.ExternalID != "" {
+		link := "https://t.me/" + evt.Username
+		msg := "✅ Your bot @" + evt.Username + " is ready. Open it to finish setup:\n" + link
+		if serr := m.SendMessage(ctx, uuid.UUID(br.ID.Bytes), evt.ExternalID, msg); serr != nil {
+			m.logger.Warn("post-create deep link send failed",
+				zap.String("bridge", br.Name),
+				zap.String("new_bot", evt.Username),
+				zap.Error(serr))
+		}
+	}
+	return nil
 }
 
 // reconcileBridgeIdentity re-syncs a bridge's bot-controlled identity from a

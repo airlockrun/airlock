@@ -57,7 +57,25 @@ type Service struct {
 	// signal too, but airlock is single-instance today.
 	activeMu   sync.Mutex
 	activeRuns map[uuid.UUID]context.CancelFunc
+
+	// bridgeResumer runs a server-initiated follow-up (build/upgrade
+	// completion auto-resume) for a bridge conversation, streaming it to the
+	// chat through the same sink the inbound poller uses. Set in
+	// api/router.go with the trigger.BridgeManager; an interface here keeps
+	// trigger out of sysagent's import graph (trigger already imports sysagent).
+	bridgeResumer bridgeResumer
 }
+
+// bridgeResumer drives the auto-resume turn for a bridge-originated system
+// conversation and delivers it (text + confirmation buttons) to the chat.
+// Implemented by trigger.BridgeManager, which owns the driver + bridge sink.
+type bridgeResumer interface {
+	ResumeSystemConversation(ctx context.Context, conversationID uuid.UUID) error
+}
+
+// SetBridgeResumer wires the bridge resume path. Called once at startup; nil
+// leaves bridge follow-up delivery disabled (web notifications still work).
+func (s *Service) SetBridgeResumer(r bridgeResumer) { s.bridgeResumer = r }
 
 // Deps bundles the dependencies New requires. Pulled out as a struct
 // so the call site stays readable as the service set grows.
