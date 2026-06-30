@@ -1,12 +1,15 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
+import { fromJson } from '@bufbuild/protobuf'
 import { useAuthStore } from '@/stores/auth'
 import { usePasskeysStore } from '@/stores/passkeys'
 import { useToast } from 'primevue/usetoast'
 import { useConfirm } from 'primevue/useconfirm'
 import PasswordStrengthMeter from '@/components/PasswordStrengthMeter.vue'
 import { scorePassword } from '@/composables/usePasswordStrength'
-import type { Passkey } from '@/gen/airlock/v1/types_pb'
+import api from '@/api/client'
+import { ListPlatformIdentitiesResponseSchema } from '@/gen/airlock/v1/api_pb'
+import type { Passkey, PlatformIdentityInfo } from '@/gen/airlock/v1/types_pb'
 
 const auth = useAuthStore()
 const store = usePasskeysStore()
@@ -20,6 +23,8 @@ onMounted(() => {
   store.fetchPasskeys().catch((e: any) => {
     error.value = e.response?.data?.error || 'Failed to load passkeys.'
   })
+  loadGrants()
+  loadIdentities()
 })
 
 function isCeremonyAbort(err: any): boolean {
@@ -143,6 +148,96 @@ function removePassword() {
     },
   })
 }
+
+// --- Authorized apps (inbound OAuth grants) ---
+// External MCP clients the user authorized to reach their agents via the MCP
+// server-side OAuth flow. The list + revoke buttons let the user yank consent.
+interface GrantDTO {
+  clientId: string
+  clientName: string
+  agentId: string
+  agentSlug: string
+  agentName: string
+  scope: string
+  grantedAt: string
+  expiresAt: string
+}
+const grants = ref<GrantDTO[]>([])
+const grantsLoading = ref(false)
+
+async function loadGrants() {
+  grantsLoading.value = true
+  try {
+    const { data } = await api.get('/api/v1/oauth/grants')
+    grants.value = data || []
+  } catch {
+    grants.value = []
+  } finally {
+    grantsLoading.value = false
+  }
+}
+
+async function revokeGrant(g: GrantDTO) {
+  try {
+    await api.delete(`/api/v1/oauth/grants/${encodeURIComponent(g.clientId)}/${encodeURIComponent(g.agentId)}`)
+    grants.value = grants.value.filter(x => !(x.clientId === g.clientId && x.agentId === g.agentId))
+    toast.add({ severity: 'success', summary: 'Access revoked', life: 2000 })
+  } catch (err: any) {
+    toast.add({ severity: 'error', summary: err?.response?.data?.error || 'revoke failed', life: 5000 })
+  }
+}
+
+function formatDate(iso: string): string {
+  try {
+    return new Date(iso).toLocaleDateString()
+  } catch {
+    return iso
+  }
+}
+
+// --- Linked accounts (platform_identities) ---
+// External accounts (Telegram) linked to this user. Regular users see only
+// their own; admins additionally see every link in the tenant with the owner
+// column populated. Both can unlink — the backend scopes the delete by caller
+// UserID, or by id alone when the caller holds tenant.identity.manage_all.
+const identities = ref<PlatformIdentityInfo[]>([])
+const identitiesLoading = ref(false)
+const canManageAllIdentities = computed(() => auth.can('tenant.identity.manage_all'))
+
+async function loadIdentities() {
+  identitiesLoading.value = true
+  try {
+    const { data } = await api.get('/api/v1/identities')
+    const resp = fromJson(ListPlatformIdentitiesResponseSchema, data)
+    identities.value = resp.identities
+  } catch {
+    identities.value = []
+  } finally {
+    identitiesLoading.value = false
+  }
+}
+
+async function unlinkIdentity(it: PlatformIdentityInfo) {
+  try {
+    await api.delete(`/api/v1/identities/${encodeURIComponent(it.id)}`)
+    identities.value = identities.value.filter(x => x.id !== it.id)
+    toast.add({ severity: 'success', summary: 'Identity unlinked', life: 2000 })
+  } catch (err: any) {
+    toast.add({ severity: 'error', summary: err?.response?.data?.error || 'unlink failed', life: 5000 })
+  }
+}
+
+function formatDateTime(ts: any): string {
+  if (!ts) return ''
+  // protobuf-ts Timestamp → { seconds: bigint, nanos: number }
+  const seconds = typeof ts.seconds === 'bigint' ? Number(ts.seconds) : ts.seconds
+  if (!seconds) return ''
+  try {
+    return new Date(seconds * 1000).toLocaleString()
+  } catch {
+    return ''
+  }
+}
 </script>
 
 <template>
@@ -211,6 +306,97 @@ function removePassword() {
             <Button v-if="auth.user?.hasPassword" type="button" label="Remove password" severity="secondary" outlined @click="removePassword" />
           </div>
         </form>
+      </template>
+    </Card>
+
+    <!-- Authorized apps (inbound OAuth grants) -->
+    <Card>
+      <template #title>Authorized apps</template>
+      <template #subtitle>
+        External MCP clients (Claude Desktop, VSCode, Codex, …) that you've authorized to talk to your agents.
+        Revoking immediately stops future requests; tokens already issued may keep working for up to 15 minutes
+        until their access token naturally expires.
+      </template>
+      <template #content>
+        <div v-if="grantsLoading" style="color: var(--p-text-muted-color)">Loading…</div>
+        <div v-else-if="grants.length === 0" style="color: var(--p-text-muted-color)">
+          No external apps are connected.
+        </div>
+        <DataTable v-else :value="grants" stripedRows size="small">
+          <Column field="clientName" header="App" />
+          <Column header="Agent">
+            <template #body="{ data }">
+              <RouterLink :to="`/agents/${data.agentId}`">{{ data.agentName }}</RouterLink>
+              <span style="color: var(--p-text-muted-color); margin-left: 0.5rem">
+                ({{ data.agentSlug }})
+              </span>
+            </template>
+          </Column>
+          <Column header="Granted">
+            <template #body="{ data }">{{ formatDate(data.grantedAt) }}</template>
+          </Column>
+          <Column header="Expires">
+            <template #body="{ data }">{{ formatDate(data.expiresAt) }}</template>
+          </Column>
+          <Column header="">
+            <template #body="{ data }">
+              <Button
+                icon="pi pi-trash"
+                size="small"
+                severity="danger"
+                text
+                @click="revokeGrant(data)"
+                v-tooltip.left="'Revoke access'"
+              />
+            </template>
+          </Column>
+        </DataTable>
+      </template>
+    </Card>
+
+    <!-- Linked accounts (platform_identities) -->
+    <Card>
+      <template #title>Linked accounts</template>
+      <template #subtitle>
+        <span v-if="canManageAllIdentities">
+          Every Telegram identity linked to a user in this tenant. Unlinking forces the user to re-run <code>/auth</code> in their bot to regain access.
+        </span>
+        <span v-else>
+          Your Telegram identities — used by bridge bots to recognise you. Unlinking forces you to re-run <code>/auth</code> in the bot the next time you DM it.
+        </span>
+      </template>
+      <template #content>
+        <div v-if="identitiesLoading" style="color: var(--p-text-muted-color)">Loading…</div>
+        <div v-else-if="identities.length === 0" style="color: var(--p-text-muted-color)">
+          {{ canManageAllIdentities ? 'No platform identities are linked in this tenant.' : 'You have no linked platform identities.' }}
+        </div>
+        <DataTable v-else :value="identities" stripedRows size="small">
+          <Column v-if="canManageAllIdentities" field="ownerEmail" header="Owner">
+            <template #body="{ data }">
+              <div>{{ data.ownerEmail }}</div>
+              <small v-if="data.ownerDisplayName" style="color: var(--p-text-muted-color)">
+                {{ data.ownerDisplayName }}
+              </small>
+            </template>
+          </Column>
+          <Column field="platform" header="Platform" />
+          <Column field="platformUserId" header="Platform user ID" />
+          <Column header="Linked">
+            <template #body="{ data }">{{ formatDateTime(data.createdAt) }}</template>
+          </Column>
+          <Column header="">
+            <template #body="{ data }">
+              <Button
+                icon="pi pi-trash"
+                size="small"
+                severity="danger"
+                text
+                @click="unlinkIdentity(data)"
+                v-tooltip.left="'Unlink'"
+              />
+            </template>
+          </Column>
+        </DataTable>
       </template>
     </Card>
 

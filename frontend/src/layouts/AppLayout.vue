@@ -9,11 +9,13 @@ import { useConversationFeedStore } from '@/stores/conversationFeed'
 import { useChatStore } from '@/stores/chat'
 import { useSystemChatStore } from '@/stores/systemChat'
 import { useConfirm } from 'primevue/useconfirm'
+import { useTheme } from '@/composables/useTheme'
 import type { ConversationInfo } from '@/gen/airlock/v1/types_pb'
 
 const router = useRouter()
 const route = useRoute()
 const auth = useAuthStore()
+const { isDark } = useTheme()
 const agentsStore = useAgentsStore()
 const conversationsStore = useConversationsStore()
 const feed = useConversationFeedStore()
@@ -45,11 +47,10 @@ watch(
 const drawerVisible = ref(false)
 
 // Settings is its own context: the sidebar swaps the chat list for these
-// sections (each an existing route), gated by role. Bridges/Security/Resources/
-// Preferences are universal; the rest are admin.
+// sections (each an existing route), gated by role. Security/Resources/Bridges
+// are universal; the rest are admin.
 const settingsSections = computed(() => {
   const items: { label: string; icon: string; route: string }[] = [
-    { label: 'Preferences', icon: 'pi pi-sliders-h', route: '/settings/preferences' },
     { label: 'Security', icon: 'pi pi-shield', route: '/settings/security' },
     { label: 'Resources', icon: 'pi pi-key', route: '/settings/resources' },
     { label: 'Bridges', icon: 'pi pi-link', route: '/bridges' },
@@ -74,8 +75,8 @@ const settingsSections = computed(() => {
 })
 
 // Routes that live under the Settings context (so the sidebar shows sections +
-// the top bar shows a back arrow). '/settings' covers /settings/{preferences,
-// security,resources}.
+// the top bar shows a back arrow). '/settings' covers /settings/{security,
+// resources}.
 const settingsPaths = ['/providers', '/models', '/usage', '/bridges', '/users', '/settings']
 const inSettings = computed(() =>
   settingsPaths.some((p) => route.path === p || route.path.startsWith(p + '/')),
@@ -93,11 +94,18 @@ watch(
 )
 
 const userMenuRef = ref()
-const userMenuItems = ref([
+// Computed so the theme row's label/icon track the current mode. The Settings
+// entry lands on Security — the first universal Settings section.
+const userMenuItems = computed(() => [
   {
     label: 'Settings',
     icon: 'pi pi-cog',
-    command: () => navigateTo('/settings/preferences'),
+    command: () => navigateTo('/settings/security'),
+  },
+  {
+    label: isDark.value ? 'Light mode' : 'Dark mode',
+    icon: isDark.value ? 'pi pi-sun' : 'pi pi-moon',
+    command: () => { isDark.value = !isDark.value },
   },
   {
     label: 'Logout',
