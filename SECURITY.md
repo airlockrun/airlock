@@ -32,7 +32,7 @@
 
 - airlock backend (`api/`, `auth/`, `builder/`, `container/`, etc.).
 - airlock frontend (XSS, CSRF, auth flow flaws).
-- Default `Caddyfile` and `docker-compose.yml` as shipped in this repo.
+- Default `caddy/` configs and `docker-compose.yml` as shipped in this repo.
 - Per-`(email, ip)` lockout bypass.
 - AES-256-GCM key handling, JWT signing/validation, RBAC enforcement.
 - Container escape via the agent build pipeline.

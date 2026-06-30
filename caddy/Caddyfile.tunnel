@@ -1,0 +1,36 @@
+# TLS_MODE=tunnel — Cloudflare Tunnel (no public IP / behind NAT).
+#
+# A cloudflared sidecar (COMPOSE_PROFILES=tunnel) dials out to Cloudflare and
+# forwards public hostnames to this caddy over the tunnel; Cloudflare terminates
+# TLS at its edge. So caddy serves plain HTTP here (no cert issuance, no host
+# ports). We force X-Forwarded-Proto=https on the airlock upstreams because the
+# edge is always HTTPS — that's what airlock signs PUBLIC_URL / presigned URLs
+# against, even though cloudflared→caddy is HTTP.
+#
+# Per-agent `*.{$DOMAIN}` TLS is terminated at the Cloudflare edge. Configure
+# the tunnel's public-hostname routes (CF Zero-Trust dashboard) to point
+# {$DOMAIN}, *.{$DOMAIN}, and s3.{$DOMAIN} at http://caddy:80.
+
+{
+	auto_https off
+}
+
+import routes.caddy
+
+(proxy_airlock) {
+	reverse_proxy {$AIRLOCK_UPSTREAM} {
+		header_up X-Forwarded-Proto https
+	}
+}
+
+http://{$DOMAIN} {
+	import apex_routes
+}
+
+http://s3.{$DOMAIN} {
+	import s3_routes
+}
+
+http://*.{$DOMAIN} {
+	import proxy_airlock
+}

@@ -8,9 +8,11 @@
 #   ./upgrade.sh --tag v0.4.2    # upgrade to a specific tag
 #
 # It fetches tags, checks out the target release, pulls that release's images,
-# and brings the stack back up with the SAME deployment mode the install was
-# created with (recovered from .env). Migrations run automatically on airlock
-# startup.
+# and brings the stack back up. The deployment mode (TLS_MODE + COMPOSE_PROFILES
+# + endpoints) lives entirely in .env, which docker compose reads automatically
+# — so the upgrade is mode-agnostic, no -f overlay mapping. Migrations run
+# automatically on airlock startup. Once healthy on the new tag, the previous
+# tag's four stack images are removed to reclaim disk.
 #
 # Pre-releases are refused by default — they have no supported migration/upgrade
 # path. Pass --pre-release (or AIRLOCK_ALLOW_PRERELEASE=1) to opt in.
@@ -85,32 +87,13 @@ latest_tag() {
 	git tag --sort=-creatordate | grep -E "$re" | head -1
 }
 
-# Recover the deployment mode install.sh wrote into .env, so we bring the stack
-# back up with the same overlay. Sets COMPOSE_FILES, BUILD_CADDY, PROFILE.
-declare -a COMPOSE_FILES=(-f docker-compose.yml)
-declare -a PROFILE=()
+# The only mode-specific upgrade step: the wildcard caddy image is built
+# locally, so it must be rebuilt against the new tag. Everything else (which
+# services run, which Caddyfile, the endpoints) comes from .env automatically.
+# Detected by CADDY_IMAGE pointing at the local tag install.sh sets.
 BUILD_CADDY=0
-detect_compose() {
-	local mode=""
-	if [ -f .env ]; then
-		# Prefer the explicit "— mode X" header install.sh writes; fall back to
-		# inferring from which mode-specific keys are present.
-		mode=$(sed -nE '1s/.*mode ([a-d]).*/\1/p' .env)
-		if [ -z "$mode" ]; then
-			if   grep -qE '^FORCE_INLINE_ATTACHMENTS=true' .env; then mode=d
-			elif grep -qE '^TUNNEL_TOKEN=.+'              .env; then mode=c
-			elif grep -qE '^CLOUDFLARE_API_TOKEN=.+'      .env; then mode=b
-			else mode=a; fi
-		fi
-		grep -qE '^BUILDKIT_HOST=.+' .env && PROFILE=(--profile buildkit)
-	fi
-	case "$mode" in
-		b) COMPOSE_FILES+=(-f docker-compose.cloudflare.yml); BUILD_CADDY=1 ;;
-		c) COMPOSE_FILES+=(-f docker-compose.tunnel.yml) ;;
-		d) COMPOSE_FILES+=(-f docker-compose.local.yml) ;;
-		*) ;;  # a / unknown: base only
-	esac
-	MODE="${mode:-a}"
+detect_local_caddy() {
+	[ -f .env ] && grep -qE '^CADDY_IMAGE=airlock-caddy-local' .env && BUILD_CADDY=1
 }
 
 upgrade() {
@@ -143,15 +126,14 @@ upgrade() {
 		return 0
 	fi
 
-	detect_compose
+	detect_local_caddy
 	hr
 	echo "  Directory:  $INSTALL_DIR"
 	echo "  Current:    $current"
 	echo "  Target:     $target"
-	echo "  Mode:       $MODE  (compose: ${COMPOSE_FILES[*]})"
 	hr
 	warn "Upgrades run database migrations on startup and are not auto-reversible."
-	warn "Back up Postgres first:  docker compose ${COMPOSE_FILES[*]} exec -T postgres pg_dump -U airlock airlock > airlock-backup.sql"
+	warn "Back up Postgres first:  docker compose exec -T postgres pg_dump -U airlock airlock > airlock-backup.sql"
 
 	if [ "$DRY_RUN" = 1 ]; then
 		log "DRY RUN — would: git checkout $target; pull images; up -d. No changes made."
@@ -163,22 +145,36 @@ upgrade() {
 	git checkout --quiet "$target" || die "checkout $target failed (commit or stash local changes first)"
 
 	if [ "$BUILD_CADDY" = 1 ]; then
-		log "building the Cloudflare caddy image"
-		docker compose "${COMPOSE_FILES[@]}" build caddy || die "caddy image build failed"
+		log "rebuilding the Cloudflare-plugin caddy image"
+		docker build -f caddy/Dockerfile -t airlock-caddy-local . || die "caddy image build failed"
 	fi
 
 	log "pulling $target images"
-	docker compose "${COMPOSE_FILES[@]}" pull --ignore-buildable || die "image pull failed (are $target's images published to ghcr?)"
+	docker compose pull --ignore-buildable || die "image pull failed (are $target's images published to ghcr?)"
 
 	log "restarting the stack"
-	docker compose "${COMPOSE_FILES[@]}" "${PROFILE[@]}" up -d --no-build \
-		|| die "stack failed to start (see 'docker compose ${COMPOSE_FILES[*]} logs')"
+	docker compose up -d --no-build \
+		|| die "stack failed to start (see 'docker compose logs')"
 
 	log "waiting for airlock to become healthy..."
 	local i; for i in $(seq 1 60); do
-		docker compose "${COMPOSE_FILES[@]}" exec -T airlock wget -qO- http://localhost:8080/health >/dev/null 2>&1 && break
+		docker compose exec -T airlock wget -qO- http://localhost:8080/health >/dev/null 2>&1 && break
 		sleep 3
 	done
+
+	# Reclaim disk: drop the previous tag's stack images now that we're healthy
+	# on $target. Only when $current is a real release tag (git describe gives a
+	# bare commit hash otherwise — nothing to map to an image tag, so skip).
+	# `|| true`: agent-base layers still referenced by running agents just keep
+	# the layers and lose the tag, which is fine.
+	if [[ "$current" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$ ]]; then
+		log "removing previous version's images ($current)"
+		local img
+		for img in airlock airlock-frontend airlock-agent-builder airlock-agent-base; do
+			docker rmi "ghcr.io/airlockrun/$img:$current" >/dev/null 2>&1 || true
+		done
+	fi
+
 	hr
 	log "upgraded to $target."
 	hr

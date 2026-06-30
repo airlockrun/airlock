@@ -1,0 +1,81 @@
+# Shared Airlock routing — imported by every caddy/Caddyfile.<mode>.
+#
+# The site addresses and TLS stanzas differ per mode and live in the mode
+# files; everything *inside* a site (the SPA + API + S3 routing) is identical
+# across modes and lives here exactly once. Mode files import these snippets:
+#   import apex_routes   — the dashboard SPA + airlock REST/WebSocket API
+#   import s3_routes     — public S3 for presigned URLs
+#   import proxy_airlock — bare reverse_proxy to airlock (defined per mode so
+#                          tunnel/proxy can add X-Forwarded-Proto)
+#
+# Two upstreams come from the environment (set by docker-compose.yml):
+#   {$AIRLOCK_UPSTREAM}  airlock backend     (default airlock:8080)
+#   {$S3_UPSTREAM}       rustfs object store (default rustfs:9000)
+#
+# SPA serving is the one axis that varies by *deploy context* rather than TLS
+# mode: in a container deploy caddy reverse-proxies the frontend image; in
+# native dev caddy serves frontend/dist as static files (vite `pnpm watch`
+# output). Rather than two route files, the three SPA-serving lines are driven
+# by env vars with prod defaults; .env.dev.example flips them to static. Each
+# is a single directive (or a "#" comment no-op when unused):
+#   prod (default)        SPA_ROOT_LINE=#  SPA_SERVE_LINE=reverse_proxy frontend:80  SPA_SERVE_LINE2=#
+#   native dev (.env.dev) SPA_ROOT_LINE=root * /srv/dist
+#                         SPA_SERVE_LINE=try_files {path} /index.html
+#                         SPA_SERVE_LINE2=file_server
+(spa) {
+	{$SPA_ROOT_LINE}
+	{$SPA_SERVE_LINE}
+	{$SPA_SERVE_LINE2}
+}
+
+# Apex domain: dashboard SPA + airlock REST/WebSocket API.
+(apex_routes) {
+	# /auth/relay is a frontend SPA route — the landing page for the
+	# subdomain relay-login flow. Matched BEFORE @backend so the /auth/*
+	# matcher doesn't swallow it. The backend serves POST /auth/relay-code,
+	# which the SPA calls from this page.
+	@spa_relay path /auth/relay
+	handle @spa_relay {
+		import spa
+	}
+
+	# GET /oauth/consent is the SPA consent page the /oauth/authorize handler
+	# redirects the browser to; POST /oauth/consent is the backend handler the
+	# SPA submits to. Serve the page from the SPA so the /oauth/* @backend
+	# matcher below doesn't swallow it (same carve-out as /auth/relay).
+	@spa_consent {
+		method GET
+		path /oauth/consent
+	}
+	handle @spa_consent {
+		import spa
+	}
+
+	# /.well-known/* and /oauth/* are the MCP-server-side OAuth 2.1 surface
+	# (RFC 9728 discovery + RFC 7591 DCR + the authorization / token
+	# endpoints). They must route to airlock at the apex — discovery docs
+	# always advertise the apex `issuer`.
+	@backend path /api/* /auth/* /auth-external /ws /webhooks/* /health /.well-known/* /oauth/*
+	handle @backend {
+		import proxy_airlock
+	}
+
+	handle {
+		import spa
+	}
+}
+
+# Public S3 — for presigned URLs that LLM providers (OpenAI, Anthropic, etc.)
+# fetch directly, plus shareFileURL links handed to end users. The internal
+# upstream isn't reachable from the public internet, so any presigned URL
+# airlock generates points here.
+#
+# header_up Host: airlock signs presigned URLs against host=s3.{$DOMAIN}.
+# reverse_proxy's default rewrites Host to the upstream address, which would
+# invalidate the signature when RustFS recomputes it. Preserve the original
+# Host so RustFS sees what airlock signed.
+(s3_routes) {
+	reverse_proxy {$S3_UPSTREAM} {
+		header_up Host {host}
+	}
+}
