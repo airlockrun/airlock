@@ -189,10 +189,15 @@ func rowToSessionMessage(r dbq.SystemMessage) session.Message {
 			})
 		}
 	}
-	// Fallback for rows that somehow landed with bad/empty parts —
-	// emit a role-only empty session.Message so Load never short-
-	// circuits the whole history because of a single malformed row.
-	return session.Message{Role: r.Role}
+	// Fallback: text-only message. Plain-text turns are stored with parts
+	// NULL (appendSessionMessage only marshals parts for multi-part content),
+	// so reconstruct from the content column — same as the agent store's
+	// dbMessageToSession (agentapi/session.go). Without this the model sees a
+	// blank turn for every typed/transcribed message and loses all history.
+	return session.Message{
+		Role:    r.Role,
+		Content: r.Content,
+	}
 }
 
 // appendSessionMessage persists one session.Message, expanding it into
