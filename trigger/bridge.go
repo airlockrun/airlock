@@ -114,6 +114,14 @@ type BridgeEvent struct {
 type ManagedBotEvent struct {
 	BotID    int64
 	Username string
+	// ExternalID is the chat the creation happened in — the exact account +
+	// device whose client just went through the flow. It's the unambiguous
+	// reply target for the post-create deep link (no platform_identities
+	// lookup, so a user with multiple linked Telegram accounts is a non-issue).
+	ExternalID string
+	// SenderID is the Telegram user who created the bot (optional sanity check
+	// against the session owner's linked identities).
+	SenderID string
 }
 
 // BridgeReferenceKind distinguishes the platform mechanism that produced
@@ -778,6 +786,51 @@ func (m *BridgeManager) SendMessage(ctx context.Context, bridgeID uuid.UUID, ext
 	return m.SendParts(ctx, bridgeID, externalID, []agentsdk.DisplayPart{{Type: "text", Text: text}})
 }
 
+// StreamToBridge is the single bridge-delivery primitive the completion-resume
+// paths share: it resolves the bridge's driver + echo setting and streams a
+// ResponseEvent channel to the chat via SendStream. The caller produces the
+// events from whatever run source it has and closes the channel — an in-process
+// sysagent run via bridgeSink (BridgeManager.ResumeSystemConversation), or an
+// agent NDJSON stream via StreamNDJSONResponse (api NotifyUpgradeComplete).
+// Because both go through SendStream, text, tool calls, and — crucially —
+// confirmation_required prompts render identically; a gated tool the resume
+// chains into gets Approve/Reject buttons instead of being silently swallowed.
+//
+// settingsJSON is the conversation's settings blob (drives the per-thread echo
+// override). On a resolution error the channel is drained so the producer
+// goroutine never blocks on a full buffer.
+func (m *BridgeManager) StreamToBridge(ctx context.Context, bridgeID uuid.UUID, externalID string, settingsJSON []byte, events <-chan ResponseEvent) error {
+	q := dbq.New(m.db.Pool())
+	br, err := q.GetBridgeByID(ctx, toPgUUID(bridgeID))
+	if err != nil {
+		for range events {
+		}
+		return fmt.Errorf("get bridge: %w", err)
+	}
+	// SendStream uses br.BotTokenRef as the literal bot token. The poll loop
+	// swaps the ciphertext ref for the decrypted token in its in-memory copy;
+	// a fresh DB row still carries the ref, so decrypt it here or Telegram sees
+	// /bot<ciphertext>/... and 404s.
+	if br.BotTokenRef != "" {
+		token, derr := m.encryptor.Get(ctx, "bridge/"+pgUUID(br.ID).String()+"/bot_token", br.BotTokenRef)
+		if derr != nil {
+			for range events {
+			}
+			return fmt.Errorf("decrypt bot token: %w", derr)
+		}
+		br.BotTokenRef = token
+	}
+	driver, ok := m.drivers[br.Type]
+	if !ok {
+		for range events {
+		}
+		return fmt.Errorf("no driver for type %q", br.Type)
+	}
+	echo := ResolveEcho(settingsJSON, driver.DefaultEcho())
+	_, err = driver.SendStream(ctx, br, externalID, echo, events)
+	return err
+}
+
 // startPoller starts a background goroutine that polls a bridge for new events.
 // The goroutine's context is scoped to this bridge ID so RemoveBridge /
 // AddBridge-on-same-id can stop exactly one poller without tearing down
@@ -821,11 +874,21 @@ func (m *BridgeManager) startPoller(parent context.Context, br dbq.Bridge) {
 		m.wg.Add(1)
 		go func() {
 			defer m.wg.Done()
+			menuAsserted := false
 			for {
 				select {
 				case <-ctx.Done():
 					return
 				case ev := <-msgEvents:
+					// On first inbound contact, re-assert the web-app menu
+					// button. The create-time set (AddBridge) can race the
+					// creating client — it hadn't opened the new bot yet — so
+					// by the first real inbound the user is in the chat and
+					// setChatMenuButton lands. Idempotent, once per poller life.
+					if !menuAsserted {
+						menuAsserted = true
+						m.registerWebAppMenuButton(ctx, driver, br)
+					}
 					if err := m.HandleEvent(ctx, ev); err != nil {
 						m.logger.Error("handle event failed",
 							zap.String("bridge", br.Name), zap.Error(err))

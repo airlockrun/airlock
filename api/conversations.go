@@ -679,20 +679,27 @@ func (h *conversationsHandler) NotifyUpgradeComplete(ctx context.Context, agentI
 		defer h.convLocks.Unlock(conversationID)
 		bgCtx := context.Background()
 		if isBridge {
-			// Drain the NDJSON stream, collecting the final assistant
-			// text. Send it as a single bridge message — bridge users
-			// don't need progressive streaming for a short follow-up.
+			// Stream the follow-up to the chat through the shared
+			// StreamToBridge primitive — the same path an inbound bridge
+			// turn uses. Producer: StreamNDJSONResponse (NDJSON → events,
+			// closes the channel). Consumer: StreamToBridge → SendStream.
+			// Streaming (not a single SendParts push) is what lets a gated
+			// tool the follow-up chains into render Approve/Reject buttons
+			// instead of being silently swallowed.
 			respEvents := make(chan trigger.ResponseEvent, 64)
+			var deliverErr error
+			deliverDone := make(chan struct{})
 			go func() {
-				for range respEvents {
-				}
+				deliverErr = h.bridgeMgr.StreamToBridge(bgCtx, pgUUID(conv.BridgeID), conv.ExternalID.String, conv.Settings, respEvents)
+				close(deliverDone)
 			}()
-			responseText, _, _, _ := trigger.StreamNDJSONResponse(rc, runID.String(), respEvents)
-			if responseText != "" {
-				parts := []agentsdk.DisplayPart{{Type: "text", Text: responseText}}
-				if err := h.bridgeMgr.SendParts(bgCtx, pgUUID(conv.BridgeID), conv.ExternalID.String, parts); err != nil {
-					h.logger.Warn("post-upgrade bridge delivery failed", zap.Error(err))
-				}
+			_, _, _, nerr := trigger.StreamNDJSONResponse(rc, runID.String(), respEvents)
+			<-deliverDone
+			if nerr != nil {
+				h.logger.Warn("post-upgrade bridge stream failed", zap.Error(nerr))
+			}
+			if deliverErr != nil {
+				h.logger.Warn("post-upgrade bridge delivery failed", zap.Error(deliverErr))
 			}
 		} else {
 			var convUserID string

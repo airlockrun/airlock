@@ -67,12 +67,14 @@ DELETE FROM system_conversations WHERE id = @id AND user_id = @user_id;
 -- index (user_id, bridge_id) WHERE bridge_id IS NOT NULL — every system
 -- bridge funnels that user's inbound DMs into the same row. The first
 -- INSERT for a pair returns the new row; subsequent calls hit the
--- conflict and return the existing one via the no-op ON CONFLICT
--- update of bridge_id (which leaves the value unchanged).
-INSERT INTO system_conversations (user_id, bridge_id, source, title)
-VALUES (@user_id, @bridge_id, 'bridge', @title)
+-- conflict and return the existing one, refreshing external_id (the
+-- platform chat id) so a server-initiated follow-up — e.g. a build /
+-- upgrade completion auto-resume, which has no live inbound update to
+-- read the chat id from — can deliver back to the right chat.
+INSERT INTO system_conversations (user_id, bridge_id, source, title, external_id)
+VALUES (@user_id, @bridge_id, 'bridge', @title, @external_id)
 ON CONFLICT (user_id, bridge_id) WHERE bridge_id IS NOT NULL
-DO UPDATE SET bridge_id = EXCLUDED.bridge_id
+DO UPDATE SET external_id = EXCLUDED.external_id
 RETURNING *;
 
 -- name: UpdateSystemConversationSettings :exec

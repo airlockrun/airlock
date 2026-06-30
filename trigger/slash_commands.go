@@ -135,6 +135,15 @@ func TrySlashCommand(
 		args = strings.TrimSpace(parts[1])
 	}
 
+	// /start is Telegram's onboarding command — the START button every new
+	// user taps, and the target of ?start=<payload> deep links. Forward it to
+	// the agent (Handled=false) so it greets in-character, instead of hitting
+	// the unknown-command path below. Not in Registry: it's a Telegram built-in,
+	// never shown in the custom command menu.
+	if name == "start" {
+		return SlashCommandResult{}, nil
+	}
+
 	entry := findCommand(name)
 	if entry == nil {
 		names := make([]string, len(Registry))

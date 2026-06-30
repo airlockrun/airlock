@@ -844,6 +844,7 @@ CREATE TABLE public.system_conversations (
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     source text DEFAULT 'web'::text NOT NULL,
     bridge_id uuid,
+    external_id text,
     CONSTRAINT system_conversations_status_check CHECK ((status = ANY (ARRAY['active'::text, 'awaiting_confirmation'::text])))
 );
 

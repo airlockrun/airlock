@@ -53,59 +53,71 @@ func (s *Service) NotifyBuildComplete(ctx context.Context, agentID, conversation
 func (s *Service) notifyAndResume(ctx context.Context, agentID, conversationID uuid.UUID, prefix, source, message string) error {
 	body := prefix + message
 
-	// 1. Persist the user-role injection. content is the plain-text
-	//    display string; parts stays NULL — same shape agent_messages
-	//    uses for a single-text payload. source="upgrade"/"error"
-	//    drives bubble styling. For the WS broadcast we still build a
-	//    goai-shape parts blob so the existing NotificationEvent
-	//    renderer (shared with agent chat) lights up immediately.
+	// 1. Persist the user-role injection (web + bridge alike). content is
+	//    the plain-text display string; parts stays NULL — same shape
+	//    agent_messages uses for a single-text payload. source="upgrade"/
+	//    "error" drives bubble styling. The next history load picks it up,
+	//    and the auto-resume turn below reacts to it.
 	if err := s.appendInjectedMessage(ctx, conversationID, "user", source, body, nil); err != nil {
 		return fmt.Errorf("append outcome-notify message: %w", err)
 	}
-	partsForWS, err := json.Marshal([]map[string]any{{
-		"type":   "text",
-		"text":   body,
-		"source": source,
-	}})
-	if err != nil {
-		return fmt.Errorf("marshal outcome-notify parts: %w", err)
-	}
 
-	// 2. Publish a notification event on the conversation owner's WS topic so
-	//    the UI bubble renders live before the auto-resume's LLM reply
-	//    starts streaming. Topic = user UUID (matches busbridge.go); the
-	//    conversation id rides on ConversationID. Loading the user_id is a DB
-	//    round-trip but the notify path runs only on build completion,
-	//    not per-tool, so cheap.
+	// 2. Resolve the delivery channel from the conversation row — same
+	//    decision the agent path makes (api/conversations.go
+	//    NotifyUpgradeComplete): a bridge thread (source="bridge" + bridge_id
+	//    + external_id) is delivered out-of-band by the bridge poster; a web
+	//    thread streams over the WS pubsub.
 	q := dbq.New(s.db.Pool())
 	conversation, err := q.GetSystemConversationByID(ctx, pgtype.UUID{Bytes: conversationID, Valid: true})
 	if err != nil {
-		return fmt.Errorf("load conversation for outcome-notify publish: %w", err)
+		return fmt.Errorf("load conversation for outcome-notify: %w", err)
 	}
-	userID := uuid.UUID(conversation.UserID.Bytes)
-	env := realtime.NewEnvelopeForUser("notification", userID.String(), userID.String(), conversationID.String(),
-		&airlockv1.NotificationEvent{
-			AgentId:        agentID.String(), // agent that was upgraded, not the sysagent itself
-			ConversationId: conversationID.String(),
-			PartsJson:      string(partsForWS),
-			Source:         source,
-		})
-	if pserr := s.pubsub.Publish(ctx, userID, env); pserr != nil {
-		s.logger.Warn("sysagent: notification publish failed",
-			zap.Stringer("conversation", conversationID), zap.Error(pserr))
-		// Not fatal — the next conversation load will pick up the message
-		// from the DB even if the live event was dropped.
+	isBridge := conversation.Source == "bridge" && conversation.BridgeID.Valid &&
+		conversation.ExternalID.Valid && conversation.ExternalID.String != "" && s.bridgeResumer != nil
+
+	// 3. Web only: publish a NotificationEvent on the owner's WS topic so the
+	//    UI bubble renders live before the auto-resume reply streams. Bridges
+	//    have no such channel — their user already knows they triggered the
+	//    build; we deliver the resume reply itself (step 4).
+	if !isBridge {
+		partsForWS, err := json.Marshal([]map[string]any{{
+			"type":   "text",
+			"text":   body,
+			"source": source,
+		}})
+		if err != nil {
+			return fmt.Errorf("marshal outcome-notify parts: %w", err)
+		}
+		userID := uuid.UUID(conversation.UserID.Bytes)
+		env := realtime.NewEnvelopeForUser("notification", userID.String(), userID.String(), conversationID.String(),
+			&airlockv1.NotificationEvent{
+				AgentId:        agentID.String(), // agent that was built, not the sysagent itself
+				ConversationId: conversationID.String(),
+				PartsJson:      string(partsForWS),
+				Source:         source,
+			})
+		if pserr := s.pubsub.Publish(ctx, userID, env); pserr != nil {
+			s.logger.Warn("sysagent: notification publish failed",
+				zap.Stringer("conversation", conversationID), zap.Error(pserr))
+			// Not fatal — the next conversation load picks up the message
+			// from the DB even if the live event was dropped.
+		}
 	}
 
-	// 3. Trigger the auto-resume: a fresh LLM turn against the
-	//    conversation with the new user-injected message in history. The
-	//    runtime hook lives on Service.resumeConversation so chat.go can
-	//    own the actual goai loop; from here we just kick it.
+	// 4. Trigger the auto-resume: a fresh LLM turn with the injected message
+	//    in history. Background context — the notifier's caller (the builder
+	//    goroutine) shouldn't block on the resumed run. Bridge threads route
+	//    through resumeToBridge (capture the reply, push via SendParts); web
+	//    threads stream through resumeConversation's WS path.
 	go func() {
-		// Background context — the notifier's caller (builder
-		// goroutine) shouldn't block on the resumed LLM run, which
-		// can take many seconds.
 		bg := context.Background()
+		if isBridge {
+			if err := s.bridgeResumer.ResumeSystemConversation(bg, conversationID); err != nil {
+				s.logger.Error("sysagent: bridge auto-resume after outcome-notify failed",
+					zap.Stringer("conversation", conversationID), zap.Error(err))
+			}
+			return
+		}
 		if err := s.resumeConversation(bg, conversationID); err != nil {
 			s.logger.Error("sysagent: auto-resume after outcome-notify failed",
 				zap.Stringer("conversation", conversationID), zap.Error(err))
