@@ -343,6 +343,13 @@ func (s *Service) runChat(ctx context.Context, p authz.Principal, conversation d
 		// Fresh operator turn.
 		result, err = runner.Run(turnCtx, input.Message)
 
+	case input.Message != "" && conversation.Status == "awaiting_confirmation":
+		// Self-heal: the operator sent a fresh message instead of tapping
+		// Approve/Reject. Deny the dangling confirmation (closing the pending
+		// tool call) and run the new message — same policy a normal agent
+		// already applies, so the thread can't wedge.
+		result, err = s.healSuspensionThenRun(turnCtx, runner, tools, store, conversation, input.Message, resumeSink)
+
 	case input.Message == "" && input.Approved == nil:
 		// Auto-resume after a system-injected user message (e.g.
 		// [Upgrade succeeded]). History already includes the
@@ -350,10 +357,9 @@ func (s *Service) runChat(ctx context.Context, p authz.Principal, conversation d
 		result, err = runner.Run(turnCtx, "")
 
 	default:
-		// Shape mismatch (e.g. message during awaiting_confirmation,
-		// or approved against an active conversation). Reject loudly so the
-		// caller fixes their request rather than us silently
-		// guessing.
+		// Shape mismatch (e.g. approved against an active conversation).
+		// Reject loudly so the caller fixes their request rather than us
+		// silently guessing.
 		err = service.Detail(service.ErrInvalidInput,
 			"prompt shape doesn't match conversation state (status=%s, approved=%v, message-empty=%v)",
 			conversation.Status, input.Approved != nil, input.Message == "")
@@ -458,6 +464,35 @@ func (s *Service) dispatchResume(ctx context.Context, runner *sol.Runner, tools 
 	// pre-condition isn't met and Continue panics with
 	// "Continue called before Run".
 	return runner.Run(ctx, "")
+}
+
+// healSuspensionThenRun is the self-heal for an operator who sends a fresh
+// message instead of tapping Approve/Reject on a pending confirmation. It
+// resolves the dangling confirmation as denied — closing the assistant's
+// unanswered tool call so the message history stays valid — clears the
+// suspension, then runs the new message as a normal turn. This mirrors how a
+// normal agent already behaves (api/conversations.go auto-denies the latest
+// suspended run and re-reasons the new message), so an awaiting_confirmation
+// thread can never wedge: the system agent had a conversation-level status gate
+// that errored on this shape, where agents have none.
+func (s *Service) healSuspensionThenRun(ctx context.Context, runner *sol.Runner, tools tool.Set, store session.SessionStore, conversation dbq.SystemConversation, prompt string, sink eventstream.Sink) (*sol.RunResult, error) {
+	convID := uuid.UUID(conversation.ID.Bytes)
+	if len(conversation.Checkpoint) > 0 {
+		var sc sol.SuspensionContext
+		if err := json.Unmarshal(conversation.Checkpoint, &sc); err != nil {
+			return nil, fmt.Errorf("decode checkpoint: %w", err)
+		}
+		// A doom-loop suspension has no real pending tool call to close — just
+		// drop it. Otherwise deny the pending calls so the unanswered tool_call
+		// gets a (denied) result before the new user message in history.
+		if !isDoomLoopSuspension(sc) {
+			if err := s.resolvePendingToolCalls(ctx, tools, store, sc.PendingToolCalls, false, sink); err != nil {
+				return nil, fmt.Errorf("resolve pending tool calls: %w", err)
+			}
+		}
+	}
+	s.clearSuspension(ctx, convID)
+	return runner.Run(ctx, prompt)
 }
 
 // isDoomLoopSuspension reports whether the saved suspension was raised
