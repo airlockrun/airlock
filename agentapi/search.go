@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"sort"
 
+	"github.com/airlockrun/agentsdk"
 	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
@@ -24,7 +25,7 @@ var errNoSearchProvider = errors.New("no search provider configured")
 // Search handles POST /api/agent/search — proxies web search requests
 // from agent containers without exposing API keys.
 func (h *Handler) Search(w http.ResponseWriter, r *http.Request) {
-	var req websearch.Request
+	var req agentsdk.SearchProxyRequest
 	if err := readJSON(r, &req); err != nil {
 		writeJSONError(w, http.StatusBadRequest, "invalid request body")
 		return
@@ -36,14 +37,14 @@ func (h *Handler) Search(w http.ResponseWriter, r *http.Request) {
 
 	agentID := auth.AgentIDFromContext(r.Context())
 
-	client, err := resolveSearchClient(r.Context(), h.db, h.encryptor, h.logger, agentID.String())
+	client, err := resolveSearchClient(r.Context(), h.db, h.encryptor, h.logger, agentID.String(), req.Slug)
 	if err != nil {
 		h.logger.Warn("search not available", zap.String("agent", agentID.String()), zap.Error(err))
 		writeJSONError(w, http.StatusNotFound, "web search not configured")
 		return
 	}
 
-	resp, err := client.Search(r.Context(), req)
+	resp, err := client.Search(r.Context(), req.Request)
 	if err != nil {
 		h.logger.Error("web search failed", zap.Error(err))
 		writeJSONError(w, http.StatusBadGateway, "search failed: "+err.Error())
@@ -55,15 +56,18 @@ func (h *Handler) Search(w http.ResponseWriter, r *http.Request) {
 
 // resolveSearchClient creates a websearch.Client using a cascade:
 //
-//  0. The agent's configured search slot (or the tenant default when unset):
+//  0. The per-slug binding: when the request names a registered CapSearch slot
+//     bound to a provider, use that provider (+ optional model). An empty or
+//     unbound slug drops through, exactly like an unbound model slot.
+//  1. The agent's configured search slot (or the tenant default when unset):
 //     the chosen provider's overlay SearchBackend + the chosen model threaded
 //     into Options.Model (empty → the backend's default model).
-//  1. The agent's exec-model provider, if its overlay entry declares a
+//  2. The agent's exec-model provider, if its overlay entry declares a
 //     SearchBackend. Reuses the LLM provider's stored API key.
-//  2. Any enabled provider row whose overlay entry declares a
+//  3. Any enabled provider row whose overlay entry declares a
 //     SearchBackend. Catalog-only (brave/perplexity) rows are preferred
 //     over LLM providers that happen to offer search on the side.
-//  3. errNoSearchProvider.
+//  4. errNoSearchProvider.
 //
 // Decrypt errors are reported as hard errors, not silently swallowed: a key
 // we can't decrypt is a misconfiguration the admin needs to see.
@@ -73,10 +77,18 @@ func resolveSearchClient(
 	enc secrets.Store,
 	logger *zap.Logger,
 	agentID string,
+	slug string,
 ) (websearch.Client, error) {
 	q := dbq.New(database.Pool())
 
-	// Tier 0: the agent's configured search slot (or the tenant default),
+	// Tier 0: the request's per-slug binding, when bound.
+	if c, err := trySlotSearch(ctx, q, enc, agentID, slug); err != nil {
+		return nil, err
+	} else if c != nil {
+		return c, nil
+	}
+
+	// Tier 1: the agent's configured search slot (or the tenant default),
 	// honoring the operator's chosen provider AND model.
 	if c, err := tryConfiguredSearch(ctx, q, enc, agentID); err != nil {
 		return nil, err
@@ -147,6 +159,51 @@ type searchCandidate struct {
 	row         dbq.Provider
 	backend     string
 	catalogOnly bool
+}
+
+// trySlotSearch builds a client from a registered CapSearch model slot's
+// binding. Returns (nil, nil) when the slug is empty, the slot is missing or
+// unbound, or its provider isn't usable — the caller then drops to the
+// agent/system search default, mirroring how an unbound model slot resolves.
+// Hard error only on decrypt failure.
+func trySlotSearch(
+	ctx context.Context,
+	q *dbq.Queries,
+	enc secrets.Store,
+	agentID string,
+	slug string,
+) (websearch.Client, error) {
+	if slug == "" {
+		return nil, nil
+	}
+	uid, err := parseUUID(agentID)
+	if err != nil {
+		return nil, nil
+	}
+	slot, err := q.GetAgentModelSlot(ctx, dbq.GetAgentModelSlotParams{
+		AgentID: toPgUUID(uid),
+		Slug:    slug,
+	})
+	if err != nil || !slot.AssignedProviderID.Valid {
+		return nil, nil
+	}
+	p, err := q.GetProviderByID(ctx, slot.AssignedProviderID)
+	if err != nil || !p.IsEnabled {
+		return nil, nil
+	}
+	backend := solprovider.SearchBackend(p.CatalogID)
+	if backend == "" {
+		return nil, nil
+	}
+	apiKey, err := enc.Get(ctx, "provider/"+p.ID.String()+"/api_key", p.ApiKey)
+	if err != nil {
+		return nil, fmt.Errorf("decrypt %q (%s) key for search slot %q: %w", p.CatalogID, p.Slug, slug, err)
+	}
+	return websearch.NewClient(websearch.Options{
+		Provider: backend,
+		APIKey:   apiKey,
+		Model:    slot.AssignedModel,
+	}), nil
 }
 
 // tryConfiguredSearch builds a client from the agent's configured search slot,

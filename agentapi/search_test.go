@@ -56,6 +56,45 @@ func setAgentExecModel(t *testing.T, agentID string, providerRowID uuid.UUID, mo
 	}
 }
 
+// TestTrySlotSearch exercises the per-slug tier directly: empty, unregistered,
+// and declared-but-unbound slugs are no-ops (nil,nil) so the caller drops to the
+// default cascade; a bound CapSearch slot yields a client. Brave binds
+// provider-only (empty model), the dedicated-search shape.
+func TestTrySlotSearch(t *testing.T) {
+	skipIfNoDB(t)
+	agentID, _ := testAgentAndUser(t)
+	ctx := context.Background()
+	q := dbq.New(testDB.Pool())
+	enc := testEncryptor()
+
+	braveID := seedEnabledProvider(t, "brave", "Brave Search", "brave-secret")
+
+	if c, err := trySlotSearch(ctx, q, enc, agentID.String(), ""); err != nil || c != nil {
+		t.Fatalf("empty slug = (%v, %v), want (nil, nil)", c, err)
+	}
+	if c, err := trySlotSearch(ctx, q, enc, agentID.String(), "research"); err != nil || c != nil {
+		t.Fatalf("unregistered slug = (%v, %v), want (nil, nil)", c, err)
+	}
+
+	if err := q.UpsertAgentModelSlot(ctx, dbq.UpsertAgentModelSlotParams{
+		AgentID: toPgUUID(agentID), Slug: "research", Capability: "search", Description: "Web search",
+	}); err != nil {
+		t.Fatalf("upsert slot: %v", err)
+	}
+	if c, err := trySlotSearch(ctx, q, enc, agentID.String(), "research"); err != nil || c != nil {
+		t.Fatalf("unbound slug = (%v, %v), want (nil, nil)", c, err)
+	}
+
+	if err := q.SetAgentModelSlotAssignment(ctx, dbq.SetAgentModelSlotAssignmentParams{
+		AgentID: toPgUUID(agentID), Slug: "research", AssignedProviderID: toPgUUID(braveID), AssignedModel: "",
+	}); err != nil {
+		t.Fatalf("bind slot: %v", err)
+	}
+	if c, err := trySlotSearch(ctx, q, enc, agentID.String(), "research"); err != nil || c == nil {
+		t.Fatalf("bound slug = (%v, %v), want non-nil client", c, err)
+	}
+}
+
 // TestResolveSearchTier1_ExecProviderNative: agent's exec_model points at
 // xai, an xai provider row exists, resolveSearchClient must pick it
 // (overlay maps xai → grok backend).
@@ -66,7 +105,7 @@ func TestResolveSearchTier1_ExecProviderNative(t *testing.T) {
 	xaiID := seedEnabledProvider(t, "xai", "xAI", "xai-secret")
 	setAgentExecModel(t, agentID.String(), xaiID, "grok-4")
 
-	client, err := resolveSearchClient(context.Background(), testDB, testEncryptor(), zap.NewNop(), agentID.String())
+	client, err := resolveSearchClient(context.Background(), testDB, testEncryptor(), zap.NewNop(), agentID.String(), "")
 	if err != nil {
 		t.Fatalf("resolveSearchClient: %v", err)
 	}
@@ -87,7 +126,7 @@ func TestResolveSearchTier2_DedicatedBrave(t *testing.T) {
 	seedEnabledProvider(t, "brave", "Brave Search", "brave-secret")
 	setAgentExecModel(t, agentID.String(), anthropicID, "claude-sonnet-4-6")
 
-	client, err := resolveSearchClient(context.Background(), testDB, testEncryptor(), zap.NewNop(), agentID.String())
+	client, err := resolveSearchClient(context.Background(), testDB, testEncryptor(), zap.NewNop(), agentID.String(), "")
 	if err != nil {
 		t.Fatalf("resolveSearchClient: %v", err)
 	}
@@ -106,7 +145,7 @@ func TestResolveSearchTier3_None(t *testing.T) {
 	anthropicID := seedEnabledProvider(t, "anthropic", "Anthropic", "ant-secret")
 	setAgentExecModel(t, agentID.String(), anthropicID, "claude-sonnet-4-6")
 
-	_, err := resolveSearchClient(context.Background(), testDB, testEncryptor(), zap.NewNop(), agentID.String())
+	_, err := resolveSearchClient(context.Background(), testDB, testEncryptor(), zap.NewNop(), agentID.String(), "")
 	if !errors.Is(err, errNoSearchProvider) {
 		t.Fatalf("resolveSearchClient err = %v, want errNoSearchProvider", err)
 	}
@@ -126,7 +165,7 @@ func TestResolveSearchTier2_PreferCatalogOnly(t *testing.T) {
 	seedEnabledProvider(t, "brave", "Brave Search", "brave-secret")
 	setAgentExecModel(t, agentID.String(), anthropicID, "claude-sonnet-4-6")
 
-	client, err := resolveSearchClient(context.Background(), testDB, testEncryptor(), zap.NewNop(), agentID.String())
+	client, err := resolveSearchClient(context.Background(), testDB, testEncryptor(), zap.NewNop(), agentID.String(), "")
 	if err != nil {
 		t.Fatalf("resolveSearchClient: %v", err)
 	}

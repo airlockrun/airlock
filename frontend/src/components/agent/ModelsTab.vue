@@ -206,6 +206,10 @@ function optionsForCapability(capability: string) {
     case 'speech': return groupModels(isSpeech)
     case 'transcription': return groupModels(isTranscription)
     case 'embedding': return groupModels(isEmbedding)
+    // Search slots bind a search-capable provider (+ optional model). Reuses the
+    // same source as the capability-default picker: filters to providers whose
+    // catalog capabilities include "search" and offers a provider-only entry.
+    case 'search': return searchModelOptions.value
   }
   return []
 }
@@ -218,6 +222,7 @@ function capabilitySeverity(capability: string): string {
     case 'speech':
     case 'transcription': return 'success'
     case 'embedding': return 'contrast'
+    case 'search': return 'help'
   }
   return 'info'
 }
