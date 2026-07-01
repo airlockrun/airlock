@@ -51,6 +51,7 @@ const tgWebAppStubHTML = `<!doctype html>
   var tg = window.Telegram && window.Telegram.WebApp;
   var u = new URL(location.href);
   var ret = u.searchParams.get("return") || "/";
+  function fail(msg) { document.body.innerText = msg; }
   if (tg && tg.initData) {
     var b = u.searchParams.get("b") || localStorage.getItem("__air_tg_bridge");
     fetch("/__air/tg/auth", {
@@ -61,11 +62,21 @@ const tgWebAppStubHTML = `<!doctype html>
       if (r.ok) {
         if (b) localStorage.setItem("__air_tg_bridge", b);
         location.replace(ret);
+        return;
+      }
+      // Distinct guidance per failure — the old single message wrongly told
+      // everyone to run /auth. Only 403 (unlinked user) actually needs it;
+      // 401 is a stale/expired initData (e.g. the app sat backgrounded past
+      // the freshness window) and just needs a reopen.
+      if (r.status === 403) {
+        fail("Run /auth in the bridge bot first, then reopen this page.");
+      } else if (r.status === 401) {
+        fail("This sign-in link expired — close and reopen the app.");
       } else {
-        document.body.innerText = "Open the bridge bot, run /auth, then reopen this page.";
+        fail("Couldn't sign you in — please try again.");
       }
     }).catch(function() {
-      document.body.innerText = "Authentication failed. Try again.";
+      fail("Authentication failed. Check your connection and try again.");
     });
   } else {
     var fallback = %q;
