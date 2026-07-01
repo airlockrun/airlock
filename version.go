@@ -8,4 +8,4 @@ package airlock
 // Consumed at the module level so the default AGENT_BUILDER_IMAGE / AGENT_BASE_IMAGE
 // in config tracks airlock's own version — drift between airlock and its
 // matched toolserver/runtime images becomes a build-time error.
-const Version = "0.4.0-rc.10"
+const Version = "0.4.0-rc.11"
