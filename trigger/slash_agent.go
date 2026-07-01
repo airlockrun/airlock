@@ -19,13 +19,16 @@ type AgentSlashConv struct {
 	q        *dbq.Queries
 	canceler RunCanceler
 	logger   *zap.Logger
+	agentID  uuid.UUID
 }
 
 // NewAgentSlashConv builds an adapter for the agent-conversation path.
 // canceler dispatches /cancel into the agent dispatcher; nil yields the
-// "Nothing to cancel" path on restart (no live in-memory state).
-func NewAgentSlashConv(q *dbq.Queries, canceler RunCanceler, logger *zap.Logger) *AgentSlashConv {
-	return &AgentSlashConv{q: q, canceler: canceler, logger: logger}
+// "Nothing to cancel" path on restart (no live in-memory state). agentID
+// identifies the bound agent so /start can name it even before any
+// conversation exists (slash commands don't create one).
+func NewAgentSlashConv(q *dbq.Queries, canceler RunCanceler, logger *zap.Logger, agentID uuid.UUID) *AgentSlashConv {
+	return &AgentSlashConv{q: q, canceler: canceler, logger: logger, agentID: agentID}
 }
 
 // Cancel — q.GetLatestRunningPromptRun then dispatcher.CancelRun. The
@@ -146,15 +149,13 @@ func (a *AgentSlashConv) Echo(ctx context.Context, convID pgtype.UUID, args stri
 	return next, nil
 }
 
-// Start greets the user and names the agent this bot is bound to. Access is
-// not consulted — every linked user is welcome (a member can hold Public
-// access), so this is a plain identify-the-agent greeting, not a gate.
+// Start greets the user and names the bound agent. Resolved from agentID, not
+// the conversation — /start runs before any conversation exists. Access is not
+// consulted: every linked user is welcome (a member can hold Public access).
 func (a *AgentSlashConv) Start(ctx context.Context, convID pgtype.UUID) string {
 	name := "this agent"
-	if conv, err := a.q.GetConversationByID(ctx, convID); err == nil {
-		if ag, aerr := a.q.GetAgentByID(ctx, conv.AgentID); aerr == nil && ag.Name != "" {
-			name = ag.Name
-		}
+	if ag, err := a.q.GetAgentByID(ctx, toPgUUID(a.agentID)); err == nil && ag.Name != "" {
+		name = ag.Name
 	}
 	return "👋 Hi! You're connected to " + name + ". Send me a message to get started."
 }

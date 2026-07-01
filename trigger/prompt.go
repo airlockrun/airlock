@@ -122,7 +122,7 @@ func (p *PromptProxy) HandleMessage(
 	// the agent with ForceCompact=true so Sol's Runner.Compact produces the
 	// reply via its usual streaming path.
 	var forceCompact bool
-	slashConv := NewAgentSlashConv(q, p.dispatcher, p.logger)
+	slashConv := NewAgentSlashConv(q, p.dispatcher, p.logger, agentID)
 	if cmd, err := TrySlashCommand(ctx, slashConv, conversationID, access, userMessage); err != nil {
 		close(events)
 		return "", fmt.Errorf("slash command: %w", err)
