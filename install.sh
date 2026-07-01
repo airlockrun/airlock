@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Airlock turnkey installer.
 #
-#   curl -fsSL https://raw.githubusercontent.com/airlockrun/airlock/v0.4.0-rc.13/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/airlockrun/airlock/v0.4.0-rc.14/install.sh | bash
 #
 # Or inspect first (recommended):
-#   curl -fsSL https://raw.githubusercontent.com/airlockrun/airlock/v0.4.0-rc.13/install.sh -o install.sh
+#   curl -fsSL https://raw.githubusercontent.com/airlockrun/airlock/v0.4.0-rc.14/install.sh -o install.sh
 #   less install.sh && bash install.sh
 #
 # Takes a fresh Linux VPS (or macOS for local/tunnel) from nothing to a running,
@@ -29,7 +29,7 @@
 # mutating commands are guarded with explicit `|| die`.
 set -uo pipefail
 
-RELEASE_TAG="${AIRLOCK_TAG:-v0.4.0-rc.13}"
+RELEASE_TAG="${AIRLOCK_TAG:-v0.4.0-rc.14}"
 REPO_URL="https://github.com/airlockrun/airlock.git"
 INSTALL_DIR="${HOME}/airlock"
 TLS_MODE=""        # ondemand|wildcard|tunnel|internal|manual|proxy — decided interactively
@@ -402,14 +402,16 @@ choose_infra() {
 		INFRA_S3=bundled
 	else
 		INFRA_S3=external
-		local s3 s3pub ak sk
-		s3=$(ask "S3_URL (e.g. https://s3.us-east-1.amazonaws.com)" "")
+		local s3 s3pub ak sk bucket region
+		s3=$(ask "S3_URL (e.g. https://s3.eu-central-1.s4.mega.io)" "")
 		[ -n "$s3" ] || die "S3_URL required for external object store"
 		s3pub=$(ask "S3_URL_PUBLIC (public endpoint for presigned URLs)" "$s3")
-		ak=$(ask "S3_ACCESS_KEY" "airlock")
+		bucket=$(ask "S3_BUCKET" "airlock")
+		region=$(ask "S3_REGION" "us-east-1")
+		ak=$(ask "S3_ACCESS_KEY" "")
 		sk=$(ask_secret "S3_SECRET_KEY (your external S3 secret)")
 		[ -n "$sk" ] || die "S3_SECRET_KEY required for external object store"
-		ENV_EXTRA+=("S3_URL=$s3" "S3_URL_PUBLIC=$s3pub" "S3_ACCESS_KEY=$ak" "S3_SECRET_KEY=$sk")
+		ENV_EXTRA+=("S3_URL=$s3" "S3_URL_PUBLIC=$s3pub" "S3_BUCKET=$bucket" "S3_REGION=$region" "S3_ACCESS_KEY=$ak" "S3_SECRET_KEY=$sk")
 	fi
 }
 
