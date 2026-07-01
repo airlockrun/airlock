@@ -10,10 +10,14 @@ github.com/Microsoft/go-winio v0.6.2 h1:F2VQgta7ecxGYO8k3ZZz3RS8fVIXVxONVUPlNERo
 github.com/Microsoft/go-winio v0.6.2/go.mod h1:yd8OoFMLzJbo9gZq8j5qaps8bJ9aShtEA8Ipt1oGCvU=
 github.com/airlockrun/agentsdk v0.4.0-rc.1 h1:Tj5+cCDCNWaWEM2USkh9eDgp+3uhEcOTHyMHd2EIcMw=
 github.com/airlockrun/agentsdk v0.4.0-rc.1/go.mod h1:/kWAj6j1/EOVO4zHLVCU1rmzWgdD9KT7S2FJLxlbkgs=
+github.com/airlockrun/agentsdk v0.4.0-rc.2 h1:L2IWS3pzTsx6aW5/c3o6aDcbnsc9dYaz7hnUF3IJ5mM=
+github.com/airlockrun/agentsdk v0.4.0-rc.2/go.mod h1:/kWAj6j1/EOVO4zHLVCU1rmzWgdD9KT7S2FJLxlbkgs=
 github.com/airlockrun/goai v0.1.5-rc.4 h1:GVkpkkZh98T2kbGYyxW7rQGrDIxvaNytJJOEom6y7pc=
 github.com/airlockrun/goai v0.1.5-rc.4/go.mod h1:bwFi12cS+TAyr8SjW7s48WMnsuKWx8PeNcxbIWJ4drM=
 github.com/airlockrun/sol v0.1.8-rc.4 h1:zPSOFnB1PNNHZ2eyRc/tCf60i1quCeIluNL/x9/j0m8=
 github.com/airlockrun/sol v0.1.8-rc.4/go.mod h1:xCxCsXxK9jScDuXuKfOTlSG5giSGwQL6m0NBpszXUIk=
+github.com/airlockrun/sol v0.1.8-rc.5 h1:X/9H8sX5xF1RKvg/6ypVDQKD0l7nt9qqNdoVJZaJFCc=
+github.com/airlockrun/sol v0.1.8-rc.5/go.mod h1:xCxCsXxK9jScDuXuKfOTlSG5giSGwQL6m0NBpszXUIk=
 github.com/aws/aws-sdk-go-v2 v1.41.1 h1:ABlyEARCDLN034NhxlRUSZr4l71mh+T5KAeGh6cerhU=
 github.com/aws/aws-sdk-go-v2 v1.41.1/go.mod h1:MayyLB8y+buD9hZqkCW3kX1AKq07Y5pXxtgB+rRFhz0=
 github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.4 h1:489krEF9xIGkOaaX3CE/Be2uWjiXrkCH6gUX+bZA/BU=
