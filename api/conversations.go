@@ -372,7 +372,7 @@ func (h *conversationsHandler) Prompt(w http.ResponseWriter, r *http.Request) {
 	// we fall through to the normal forward-to-agent path.
 	access := principalFromRequest(r).EffectiveAgentAccess(ctx, q, agentID)
 	var forceCompact bool
-	slashConv := trigger.NewAgentSlashConv(q, h.dispatcher, h.logger)
+	slashConv := trigger.NewAgentSlashConv(q, h.dispatcher, h.logger, agentID)
 	if cmd, err := trigger.TrySlashCommand(ctx, slashConv, convID, access, req.Message); err != nil {
 		h.logger.Error("slash command failed", zap.Error(err))
 		writeError(w, http.StatusInternalServerError, "command failed")
