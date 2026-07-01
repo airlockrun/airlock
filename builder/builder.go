@@ -246,6 +246,13 @@ type BuildInput struct {
 	BuildModel       string      // bare model name; "" + invalid FK ⇄ inherit system default
 	Instructions     string      // optional: when non-empty, run Sol code generation after scaffold
 
+	// SkipScaffold, when true, provisions the agent's DB schema but does NOT
+	// re-run the scaffold (CommitScaffold/MergeBranch/CleanWorktree) that
+	// overwrites scaffold-managed files. Set for a clone whose repo is copied
+	// in already-complete — re-scaffolding would clobber the source agent's
+	// customizations to those files (viewmodel.go, main.go, index.templ, …).
+	SkipScaffold bool
+
 	// Optional external-git connection. When GitRemoteURL is non-empty,
 	// the agent is connected to the remote during Build and the first
 	// push happens via Execute's post-merge push (Phase C2). The API
@@ -346,11 +353,12 @@ func (b *BuildService) Build(_ context.Context, input BuildInput) error {
 	}
 
 	plan := BuildPlan{
-		Agent:       agent,
-		Kind:        BuildKindBuild,
-		Instruction: input.Instructions,
-		Reason:      "manual",
-		RunID:       uuid.New().String(),
+		Agent:        agent,
+		Kind:         BuildKindBuild,
+		Instruction:  input.Instructions,
+		SkipScaffold: input.SkipScaffold,
+		Reason:       "manual",
+		RunID:        uuid.New().String(),
 		Scaffold: &ScaffoldInputs{
 			Name:            input.Name,
 			Slug:            input.Slug,
