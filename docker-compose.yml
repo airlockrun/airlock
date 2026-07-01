@@ -8,11 +8,12 @@
 # Everything that used to be a separate overlay file is now an .env knob:
 #   TLS_MODE          ondemand | wildcard | tunnel | internal | manual | proxy
 #                     → selects caddy/Caddyfile.<mode>
-#   COMPOSE_PROFILES  bundled-db (postgres+rustfs) | tunnel (cloudflared) |
-#                     buildkit (rootless builder) — comma-separated, read
-#                     automatically by docker compose
+#   COMPOSE_PROFILES  bundled-db (postgres) | bundled-s3 (rustfs) |
+#                     tunnel (cloudflared) | buildkit (rootless builder) —
+#                     comma-separated, read automatically by docker compose
 #   DATABASE_URL / DB_HOST / S3_URL / …  → point airlock at external infra
-#                     (drop bundled-db from COMPOSE_PROFILES)
+#                     (drop bundled-db and/or bundled-s3 from COMPOSE_PROFILES —
+#                     independently, so bundled DB + external S3 works)
 # See .env.example for every section. install.sh writes a correct .env for you.
 #
 # First launch pulls airlock, frontend, agent-builder, and agent-base images
@@ -70,9 +71,10 @@ services:
   # on first connect, so no init sidecar is needed.
   rustfs:
     image: rustfs/rustfs:latest
-    # Bundled object store — same profile gate as postgres. For an external
-    # S3/RustFS, drop bundled-db and set S3_URL / S3_URL_PUBLIC in .env.
-    profiles: ["bundled-db"]
+    # Bundled object store, gated independently of Postgres so you can bundle one
+    # and BYO the other. For an external S3/RustFS, drop bundled-s3 from
+    # COMPOSE_PROFILES and set S3_URL / S3_URL_PUBLIC in .env.
+    profiles: ["bundled-s3"]
     # Loopback-only host ports so a native dev binary can reach S3 + console.
     ports:
       - "127.0.0.1:${S3_PORT_HOST:-9090}:9000"   # S3 API
@@ -125,7 +127,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.agent-builder
-    image: ghcr.io/airlockrun/airlock-agent-builder:v0.4.0-rc.12
+    image: ghcr.io/airlockrun/airlock-agent-builder:v0.4.0-rc.13
     command: ["true"]
     restart: "no"
 
@@ -133,7 +135,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.agent-base
-    image: ghcr.io/airlockrun/airlock-agent-base:v0.4.0-rc.12
+    image: ghcr.io/airlockrun/airlock-agent-base:v0.4.0-rc.13
     command: ["true"]
     restart: "no"
 
@@ -174,12 +176,13 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.airlock
-    image: ghcr.io/airlockrun/airlock:v0.4.0-rc.12
+    image: ghcr.io/airlockrun/airlock:v0.4.0-rc.13
     depends_on:
-      # required:false — when bundled-db is inactive (external Postgres/S3),
-      # these services don't start and airlock proceeds without waiting (it
-      # connects to the external DATABASE_URL / S3_URL instead). When
-      # bundled-db is active they start and airlock waits for healthy.
+      # required:false — when a service's profile is inactive (external Postgres
+      # via bundled-db off, external S3 via bundled-s3 off) it doesn't start and
+      # airlock proceeds without waiting (it connects to the external
+      # DATABASE_URL / S3_URL instead). When the profile is active the service
+      # starts and airlock waits for healthy.
       postgres:
         condition: service_healthy
         required: false
@@ -310,7 +313,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.frontend
-    image: ghcr.io/airlockrun/airlock-frontend:v0.4.0-rc.12
+    image: ghcr.io/airlockrun/airlock-frontend:v0.4.0-rc.13
     restart: unless-stopped
 
   caddy:

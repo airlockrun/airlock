@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
 # Airlock turnkey installer.
 #
-#   curl -fsSL https://raw.githubusercontent.com/airlockrun/airlock/v0.4.0-rc.12/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/airlockrun/airlock/v0.4.0-rc.13/install.sh | bash
 #
 # Or inspect first (recommended):
-#   curl -fsSL https://raw.githubusercontent.com/airlockrun/airlock/v0.4.0-rc.12/install.sh -o install.sh
+#   curl -fsSL https://raw.githubusercontent.com/airlockrun/airlock/v0.4.0-rc.13/install.sh -o install.sh
 #   less install.sh && bash install.sh
 #
 # Takes a fresh Linux VPS (or macOS for local/tunnel) from nothing to a running,
 # hardened airlock: installs Docker, generates secrets, verifies the domain,
 # picks a TLS_MODE (ondemand / wildcard / tunnel / internal / manual / proxy)
-# and infra (bundled or external Postgres/S3), writes a single .env, and brings
-# the stack up. Missing optional prereqs degrade gracefully ("drop caps") — only
-# a missing Docker hard-fails.
+# and infra (Postgres and object store each bundled or external, independently),
+# writes a single .env, and brings the stack up. Missing optional prereqs degrade
+# gracefully ("drop caps") — only a missing Docker hard-fails.
 #
 # Flags:
 #   --dir <path>     install dir (default: ~/airlock)
@@ -29,11 +29,12 @@
 # mutating commands are guarded with explicit `|| die`.
 set -uo pipefail
 
-RELEASE_TAG="${AIRLOCK_TAG:-v0.4.0-rc.12}"
+RELEASE_TAG="${AIRLOCK_TAG:-v0.4.0-rc.13}"
 REPO_URL="https://github.com/airlockrun/airlock.git"
 INSTALL_DIR="${HOME}/airlock"
 TLS_MODE=""        # ondemand|wildcard|tunnel|internal|manual|proxy — decided interactively
-INFRA="bundled"    # bundled | external (Postgres/S3)
+INFRA_DB="bundled" # bundled | external (Postgres)
+INFRA_S3="bundled" # bundled | external (object store)
 FORCE=0
 DRY_RUN=0
 ASSUME_YES=0
@@ -375,33 +376,48 @@ choose_mode() {
 	TLS_MODE=ondemand  # public + on-demand HTTP-01
 }
 
-# Bundled Postgres + RustFS (default) or an external instance. External fills
-# ENV_EXTRA with the endpoints and drops bundled-db from the profiles.
+# Postgres and the object store are chosen independently — bundle one and BYO
+# the other freely (e.g. bundled pgvector + external AWS S3). Each "external"
+# answer fills ENV_EXTRA with endpoints and drops its bundled-* profile.
 choose_infra() {
-	[ "$TLS_MODE" = internal ] && { INFRA=bundled; return; }  # laptop = always bundled
-	if confirm "Use the bundled Postgres + object store (recommended)?" y; then INFRA=bundled; return; fi
-	INFRA=external
-	warn "External infra: run db/init/*.sql on your Postgres once (create_agent_role() helper + the vector extension)."
-	local db s3 s3pub ak sk dbhost
-	db=$(ask "DATABASE_URL (postgres://user:pass@host:5432/airlock?sslmode=require)" "")
-	[ -n "$db" ] || die "DATABASE_URL required for external infra"
-	ENV_EXTRA+=("DATABASE_URL=$db")
-	dbhost=$(printf '%s' "$db" | sed -E 's#^[^@]*@([^:/]+).*#\1#')
-	[ -n "$dbhost" ] && ENV_EXTRA+=("DB_HOST=$dbhost" "DB_HOST_AGENT=$dbhost")
-	printf '%s' "$db" | grep -q 'sslmode=require' && ENV_EXTRA+=("DB_SSL_MODE=require")
-	s3=$(ask "S3_URL (e.g. https://s3.us-east-1.amazonaws.com)" "")
-	[ -n "$s3" ] || die "S3_URL required for external infra"
-	s3pub=$(ask "S3_URL_PUBLIC (public endpoint for presigned URLs)" "$s3")
-	ak=$(ask "S3_ACCESS_KEY" "airlock")
-	sk=$(ask_secret "S3_SECRET_KEY (your external S3 secret)")
-	[ -n "$sk" ] || die "S3_SECRET_KEY required for external infra"
-	ENV_EXTRA+=("S3_URL=$s3" "S3_URL_PUBLIC=$s3pub" "S3_ACCESS_KEY=$ak" "S3_SECRET_KEY=$sk")
+	if [ "$TLS_MODE" = internal ]; then INFRA_DB=bundled; INFRA_S3=bundled; return; fi  # laptop = all bundled
+
+	# --- Postgres ---
+	if confirm "Use the bundled Postgres (pgvector)?" y; then
+		INFRA_DB=bundled
+	else
+		INFRA_DB=external
+		warn "External Postgres: run db/init/*.sql on it once (create_agent_role() helper + the vector extension)."
+		local db dbhost
+		db=$(ask "DATABASE_URL (postgres://user:pass@host:5432/airlock?sslmode=require)" "")
+		[ -n "$db" ] || die "DATABASE_URL required for external Postgres"
+		ENV_EXTRA+=("DATABASE_URL=$db")
+		dbhost=$(printf '%s' "$db" | sed -E 's#^[^@]*@([^:/]+).*#\1#')
+		[ -n "$dbhost" ] && ENV_EXTRA+=("DB_HOST=$dbhost" "DB_HOST_AGENT=$dbhost")
+		printf '%s' "$db" | grep -q 'sslmode=require' && ENV_EXTRA+=("DB_SSL_MODE=require")
+	fi
+
+	# --- Object store ---
+	if confirm "Use the bundled object store (RustFS)?" y; then
+		INFRA_S3=bundled
+	else
+		INFRA_S3=external
+		local s3 s3pub ak sk
+		s3=$(ask "S3_URL (e.g. https://s3.us-east-1.amazonaws.com)" "")
+		[ -n "$s3" ] || die "S3_URL required for external object store"
+		s3pub=$(ask "S3_URL_PUBLIC (public endpoint for presigned URLs)" "$s3")
+		ak=$(ask "S3_ACCESS_KEY" "airlock")
+		sk=$(ask_secret "S3_SECRET_KEY (your external S3 secret)")
+		[ -n "$sk" ] || die "S3_SECRET_KEY required for external object store"
+		ENV_EXTRA+=("S3_URL=$s3" "S3_URL_PUBLIC=$s3pub" "S3_ACCESS_KEY=$ak" "S3_SECRET_KEY=$sk")
+	fi
 }
 
 # COMPOSE_PROFILES (written into .env; docker compose reads it automatically).
 assemble_profiles() {
 	PROFILES=()
-	[ "$INFRA" = bundled ] && PROFILES+=("bundled-db")
+	[ "$INFRA_DB" = bundled ] && PROFILES+=("bundled-db")
+	[ "$INFRA_S3" = bundled ] && PROFILES+=("bundled-s3")
 	[ "$TLS_MODE" = tunnel ] && PROFILES+=("tunnel")
 	[ -n "$BUILDKIT_HOST_VAL" ] && PROFILES+=("buildkit")
 }
@@ -414,17 +430,17 @@ render_env() {
 	fi
 	local profiles_csv; profiles_csv=$(IFS=,; printf '%s' "${PROFILES[*]:-}")
 	content="$(
-		echo "# Generated by install.sh on $(date -u +%FT%TZ) — TLS_MODE=$TLS_MODE infra=$INFRA"
+		echo "# Generated by install.sh on $(date -u +%FT%TZ) — TLS_MODE=$TLS_MODE db=$INFRA_DB s3=$INFRA_S3"
 		echo "TLS_MODE=$TLS_MODE"
 		echo "COMPOSE_PROFILES=$profiles_csv"
 		echo "ENCRYPTION_KEY=$(gen_secret)"
 		echo "JWT_SECRET=$(gen_secret)"
 		# Bundled infra needs generated creds; external supplies its own via
-		# ENV_EXTRA (S3_*), and DATABASE_URL carries Postgres creds.
-		if [ "$INFRA" = bundled ]; then
+		# ENV_EXTRA (DATABASE_URL carries Postgres creds; S3_* the object store).
+		[ "$INFRA_DB" = bundled ] && echo "POSTGRES_PASSWORD=$(gen_secret)"
+		if [ "$INFRA_S3" = bundled ]; then
 			echo "S3_ACCESS_KEY=airlock"
 			echo "S3_SECRET_KEY=$(gen_secret)"
-			echo "POSTGRES_PASSWORD=$(gen_secret)"
 		fi
 		if [ "$TLS_MODE" = internal ]; then
 			echo "DOMAIN=airlock.localhost"
