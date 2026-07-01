@@ -47,3 +47,43 @@ html.dark {
 html.dark .code-chip {
   background: var(--p-surface-800);
 }
+
+/* Modals never exceed the viewport. Every dialog sets a fixed rem width; this
+ * caps them on narrow screens AND stops long unbreakable content (e.g. a long
+ * name in a Select) from pushing the box past the screen edge. */
+.p-dialog {
+  max-width: calc(100vw - 2rem);
+}
+
+/* Let a Select shrink inside a dialog and ellipsize a long selected label
+ * rather than forcing the dialog wider — flex/grid items default to a
+ * min-content width that a long name would blow past. */
+.p-dialog .p-select {
+  max-width: 100%;
+  min-width: 0;
+}
+.p-dialog .p-select-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Toasts never exceed the viewport. The container is a fixed rem width; cap it
+ * on narrow screens, wrap long unbreakable strings (error messages, URLs,
+ * tokens) instead of overflowing horizontally, and scroll a very long detail
+ * rather than growing off the bottom of the screen. */
+.p-toast {
+  max-width: calc(100vw - 2rem);
+}
+.p-toast .p-toast-message {
+  max-width: 100%;
+}
+.p-toast .p-toast-summary,
+.p-toast .p-toast-detail {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.p-toast .p-toast-detail {
+  max-height: 40vh;
+  overflow-y: auto;
+}
