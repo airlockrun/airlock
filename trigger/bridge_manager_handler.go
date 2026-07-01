@@ -29,17 +29,32 @@ func (m *BridgeManager) handleManagerBotCreated(ctx context.Context, br dbq.Brid
 			zap.String("bridge", br.Name))
 		return nil
 	}
-	if err := m.managedBotIngest(ctx, br.BotTokenRef, evt.BotID, evt.Username); err != nil {
+	sysConvID, err := m.managedBotIngest(ctx, br.BotTokenRef, evt.BotID, evt.Username)
+	if err != nil {
 		return err
 	}
 
-	// Hand the user a deep link to open their new bot. Opening it drops them
-	// into the new bot's chat (where the web-app menu button lives) and fires
-	// its first inbound /start — the deterministic moment the new bot's poller
-	// re-asserts the menu button, sidestepping the create-time client race
-	// where the freshly-created bot's chat isn't synced yet. Sent to
-	// evt.ExternalID: the exact chat the creation happened in, so a user with
-	// multiple linked Telegram accounts always gets it in the right one.
+	// If the bot was requested from a sysagent conversation (create_tg_bot),
+	// resume that conversation so the agent announces the ready bot in-character
+	// and hands over the open link — same mechanism as a build/upgrade
+	// completion. Its reply streams back through the system bridge.
+	if sysConvID != "" && m.sysagent != nil {
+		if cid, perr := uuid.Parse(sysConvID); perr == nil {
+			if nerr := m.sysagent.NotifyBotCreated(ctx, cid, evt.Username); nerr != nil {
+				m.logger.Warn("notify bot created (sysagent resume) failed",
+					zap.String("bridge", br.Name),
+					zap.String("new_bot", evt.Username),
+					zap.Error(nerr))
+			}
+			return nil
+		}
+	}
+
+	// Web-UI / non-sysagent path: no conversation to resume, so post the open
+	// link straight to the chat the creation happened in (evt.ExternalID — the
+	// exact chat/account, so a user with multiple linked Telegram accounts gets
+	// it in the right one). Opening the bot fires its first /start, which binds
+	// the web-app menu button.
 	if evt.ExternalID != "" {
 		link := "https://t.me/" + evt.Username
 		msg := "✅ Your bot @" + evt.Username + " is ready. Open it to finish setup:\n" + link

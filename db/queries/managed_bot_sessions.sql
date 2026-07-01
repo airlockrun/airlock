@@ -3,8 +3,8 @@
 -- ManagedBotCreated callback the manager bot receives.
 
 -- name: CreateManagedBotSession :one
-INSERT INTO managed_bot_sessions (owner_id, agent_id, is_system, nonce, bridge_name, expires_at)
-VALUES (@owner_id, @agent_id, @is_system, @nonce, @bridge_name, @expires_at)
+INSERT INTO managed_bot_sessions (owner_id, agent_id, is_system, nonce, bridge_name, expires_at, system_conversation_id)
+VALUES (@owner_id, @agent_id, @is_system, @nonce, @bridge_name, @expires_at, @system_conversation_id)
 RETURNING *;
 
 -- name: GetManagedBotSessionByNonce :one

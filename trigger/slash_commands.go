@@ -38,6 +38,21 @@ type RunCanceler interface {
 	CancelRun(runID uuid.UUID) bool
 }
 
+// isStartCommand reports whether text is the /start command (tolerating a
+// @botname suffix or a deep-link payload). Used to bind the web-app menu button
+// on the user's actual /start rather than an earlier service message.
+func isStartCommand(text string) bool {
+	fields := strings.Fields(strings.TrimSpace(text))
+	if len(fields) == 0 {
+		return false
+	}
+	cmd := fields[0]
+	if at := strings.IndexByte(cmd, '@'); at >= 0 {
+		cmd = cmd[:at]
+	}
+	return strings.EqualFold(cmd, "/start")
+}
+
 // findCommand returns the registry entry for name (without leading slash)
 // or nil if not registered.
 func findCommand(name string) *SlashCommand {
@@ -93,6 +108,13 @@ type SlashConv interface {
 	// the resulting state. args is the raw post-/echo token ("on",
 	// "off", or empty for toggle).
 	Echo(ctx context.Context, convID pgtype.UUID, args string) (on bool, err error)
+
+	// Start returns the onboarding reply for /start — a greeting that names
+	// the bot's agent binding (agent bridge) or introduces the system
+	// assistant (system bridge). It does not gate on membership: a linked
+	// user at any access level (Public included) is welcome. Unlinked users
+	// never reach here — the bridge DMs a signed auth link upstream.
+	Start(ctx context.Context, convID pgtype.UUID) string
 }
 
 // bridgePrincipal maps a resolved bridge user to an authz.Principal: an
@@ -136,12 +158,12 @@ func TrySlashCommand(
 	}
 
 	// /start is Telegram's onboarding command — the START button every new
-	// user taps, and the target of ?start=<payload> deep links. Forward it to
-	// the agent (Handled=false) so it greets in-character, instead of hitting
-	// the unknown-command path below. Not in Registry: it's a Telegram built-in,
-	// never shown in the custom command menu.
+	// user taps. Reply with a greeting that names the agent binding rather
+	// than forwarding to the agent (which does nothing useful for a fresh
+	// user) or hitting the unknown-command path below. Not in Registry: it's
+	// a Telegram built-in, never shown in the custom command menu.
 	if name == "start" {
-		return SlashCommandResult{}, nil
+		return SlashCommandResult{Handled: true, Reply: conv.Start(ctx, convID)}, nil
 	}
 
 	entry := findCommand(name)

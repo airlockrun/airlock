@@ -55,9 +55,16 @@ func (s *Service) toolCreateTgBot() tool.Tool {
 				return errResult(err), nil
 			}
 			p := principalFromCtx(ctx)
+			// Correlate the eventual managed_bot_created back to this sysagent
+			// conversation so the "bot ready" follow-up resumes here in-character.
+			var sysConv uuid.UUID
+			if cid := conversationIDFromCtx(ctx); cid != "" {
+				sysConv, _ = uuid.Parse(cid)
+			}
 			out, err := s.managedbots.CreateSession(ctx, p, managedbotssvc.CreateSessionRequest{
-				AgentID:       uuid.UUID(a.ID.Bytes),
-				SuggestedName: in.Name,
+				AgentID:              uuid.UUID(a.ID.Bytes),
+				SuggestedName:        in.Name,
+				SystemConversationID: sysConv,
 			})
 			if err != nil {
 				return errResult(err), nil

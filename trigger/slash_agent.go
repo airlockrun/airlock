@@ -146,6 +146,19 @@ func (a *AgentSlashConv) Echo(ctx context.Context, convID pgtype.UUID, args stri
 	return next, nil
 }
 
+// Start greets the user and names the agent this bot is bound to. Access is
+// not consulted — every linked user is welcome (a member can hold Public
+// access), so this is a plain identify-the-agent greeting, not a gate.
+func (a *AgentSlashConv) Start(ctx context.Context, convID pgtype.UUID) string {
+	name := "this agent"
+	if conv, err := a.q.GetConversationByID(ctx, convID); err == nil {
+		if ag, aerr := a.q.GetAgentByID(ctx, conv.AgentID); aerr == nil && ag.Name != "" {
+			name = ag.Name
+		}
+	}
+	return "👋 Hi! You're connected to " + name + ". Send me a message to get started."
+}
+
 // conversationSettings is the typed view over agent_conversations.settings.
 // Fields use pointers so we can distinguish "unset — follow driver default"
 // from "explicitly false".

@@ -256,7 +256,7 @@ type BridgeManager struct {
 	// bridges service already holds *BridgeManager, so a direct reference
 	// would be a cycle. Nil until wired; a managed_bot_created before then is
 	// dropped (managed bridges only start polling after wiring).
-	managedBotIngest func(ctx context.Context, managerToken string, botUserID int64, botUsername string) error
+	managedBotIngest func(ctx context.Context, managerToken string, botUserID int64, botUsername string) (string, error)
 }
 
 // AttachSysagent wires the sysagent runtime after the router has built
@@ -267,7 +267,7 @@ func (m *BridgeManager) AttachSysagent(s SysagentRuntime) {
 
 // AttachManagedBotIngest wires the managed-bot ingest callback (see the
 // field doc). Idempotent; the last set wins.
-func (m *BridgeManager) AttachManagedBotIngest(fn func(ctx context.Context, managerToken string, botUserID int64, botUsername string) error) {
+func (m *BridgeManager) AttachManagedBotIngest(fn func(ctx context.Context, managerToken string, botUserID int64, botUsername string) (string, error)) {
 	m.managedBotIngest = fn
 }
 
@@ -874,19 +874,18 @@ func (m *BridgeManager) startPoller(parent context.Context, br dbq.Bridge) {
 		m.wg.Add(1)
 		go func() {
 			defer m.wg.Done()
-			menuAsserted := false
 			for {
 				select {
 				case <-ctx.Done():
 					return
 				case ev := <-msgEvents:
-					// On first inbound contact, re-assert the web-app menu
-					// button. The create-time set (AddBridge) can race the
-					// creating client — it hadn't opened the new bot yet — so
-					// by the first real inbound the user is in the chat and
-					// setChatMenuButton lands. Idempotent, once per poller life.
-					if !menuAsserted {
-						menuAsserted = true
+					// Bind the web-app menu button on /start — not merely the
+					// first inbound, since a service message (managed_bot_created,
+					// etc.) can arrive before it. By /start the user is in the
+					// chat, so setChatMenuButton lands, sidestepping the
+					// create-time client race. Idempotent, so re-binding on a
+					// later /start is harmless.
+					if isStartCommand(ev.Text) {
 						m.registerWebAppMenuButton(ctx, driver, br)
 					}
 					if err := m.HandleEvent(ctx, ev); err != nil {
