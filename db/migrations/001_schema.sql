@@ -600,6 +600,7 @@ CREATE TABLE public.managed_bot_sessions (
     bridge_name text NOT NULL,
     expires_at timestamp with time zone NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
+    system_conversation_id uuid,
     CONSTRAINT managed_bot_sessions_check CHECK (((is_system AND (agent_id IS NULL)) OR ((NOT is_system) AND (agent_id IS NOT NULL))))
 );
 

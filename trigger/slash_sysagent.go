@@ -27,6 +27,11 @@ import (
 type SysagentRuntime interface {
 	CancelRun(runID uuid.UUID) bool
 	Compact(ctx context.Context, p authz.Principal, conversationID uuid.UUID) (string, error)
+	// NotifyBotCreated injects a "bot ready" event into the sysagent
+	// conversation that requested the bot and resumes it, so the agent
+	// announces the new bot in-character (same shape as build/upgrade
+	// completion). Delivery to the bridge rides the resume's normal path.
+	NotifyBotCreated(ctx context.Context, conversationID uuid.UUID, botUsername string) error
 	RunPromptInline(
 		ctx context.Context,
 		p authz.Principal,
@@ -193,4 +198,10 @@ func (s *SysagentSlashConv) Echo(ctx context.Context, convID pgtype.UUID, args s
 		return false, fmt.Errorf("update sysagent settings: %w", err)
 	}
 	return next, nil
+}
+
+// Start introduces the system assistant. A system bridge isn't bound to a
+// single user-agent, so there's no agent to name — just orient the user.
+func (s *SysagentSlashConv) Start(ctx context.Context, convID pgtype.UUID) string {
+	return "👋 Hi! I'm your Airlock assistant — ask me to manage agents, bots, connections, models, and more."
 }

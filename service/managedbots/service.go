@@ -88,6 +88,10 @@ type CreateSessionRequest struct {
 	AgentID       uuid.UUID
 	IsSystem      bool
 	SuggestedName string // user-facing display name; empty falls back to "Airlock bot"
+	// SystemConversationID is the sysagent conversation that requested the bot
+	// (create_tg_bot tool). uuid.Nil for the web-UI path. When set, the
+	// managed_bot_created ingest routes a "bot ready" follow-up back into it.
+	SystemConversationID uuid.UUID
 }
 
 // SessionCreated wraps the new session row plus the rendered deep
@@ -158,13 +162,18 @@ func (s *Service) CreateSession(ctx context.Context, p authz.Principal, req Crea
 		name = "Airlock bot"
 	}
 
+	var sysConvPg pgtype.UUID
+	if req.SystemConversationID != uuid.Nil {
+		sysConvPg = pgtype.UUID{Bytes: req.SystemConversationID, Valid: true}
+	}
 	if _, err := q.CreateManagedBotSession(ctx, dbq.CreateManagedBotSessionParams{
-		OwnerID:    pgtype.UUID{Bytes: p.UserID, Valid: true},
-		AgentID:    agentPg,
-		IsSystem:   req.IsSystem,
-		Nonce:      nonce,
-		BridgeName: name,
-		ExpiresAt:  pgtype.Timestamptz{Time: expires, Valid: true},
+		OwnerID:              pgtype.UUID{Bytes: p.UserID, Valid: true},
+		AgentID:              agentPg,
+		IsSystem:             req.IsSystem,
+		Nonce:                nonce,
+		BridgeName:           name,
+		ExpiresAt:            pgtype.Timestamptz{Time: expires, Valid: true},
+		SystemConversationID: sysConvPg,
 	}); err != nil {
 		s.logger.Error("create managed bot session failed", zap.Error(err))
 		return SessionCreated{}, err

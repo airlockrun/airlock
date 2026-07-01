@@ -419,14 +419,18 @@ func (s *Service) ManagerBridgeUsername(ctx context.Context) (string, error) {
 // the manager bridge's poll loop) into a bridge for the freshly-created bot.
 // Wired into the BridgeManager via AttachManagedBotIngest. Idempotent: a
 // duplicate event for a bot that already has a bridge no-ops.
-func (s *Service) IngestManagedBotCreated(ctx context.Context, managerToken string, botUserID int64, botUsername string) error {
+//
+// Returns the originating sysagent conversation id (empty for the web-UI path
+// or any no-op) so the caller can resume that conversation with a "bot ready"
+// follow-up.
+func (s *Service) IngestManagedBotCreated(ctx context.Context, managerToken string, botUserID int64, botUsername string) (string, error) {
 	if botUserID == 0 || botUsername == "" {
-		return nil
+		return "", nil
 	}
 	q := dbq.New(s.db.Pool())
 	// Already have a bridge for this bot — nothing to do.
 	if _, err := q.GetBridgeByTelegramBotUserID(ctx, pgtype.Int8{Int64: botUserID, Valid: true}); err == nil {
-		return nil
+		return "", nil
 	}
 	// Correlate the deep-link session: the suggested username we embedded in
 	// the link is the session nonce, and Telegram preserves it as the new
@@ -435,15 +439,15 @@ func (s *Service) IngestManagedBotCreated(ctx context.Context, managerToken stri
 	if err != nil {
 		s.logger.Warn("managed_bot_created: no session matches bot username",
 			zap.String("bot_username", botUsername))
-		return nil
+		return "", nil
 	}
 	caps, ok := s.telegramCaps()
 	if !ok {
-		return service.Detail(service.ErrInvalidInput, "telegram driver lacks capability lookup")
+		return "", service.Detail(service.ErrInvalidInput, "telegram driver lacks capability lookup")
 	}
 	rawToken, err := caps.GetManagedBotToken(ctx, managerToken, botUserID)
 	if err != nil {
-		return fmt.Errorf("get managed bot token: %w", err)
+		return "", fmt.Errorf("get managed bot token: %w", err)
 	}
 	if _, err := s.CreateFromManagedSession(ctx, ManagedSessionCreate{
 		Session:           session,
@@ -451,12 +455,16 @@ func (s *Service) IngestManagedBotCreated(ctx context.Context, managerToken stri
 		TelegramBotUserID: botUserID,
 		RawToken:          rawToken,
 	}); err != nil {
-		return fmt.Errorf("create bridge from managed session: %w", err)
+		return "", fmt.Errorf("create bridge from managed session: %w", err)
 	}
 	if derr := q.DeleteManagedBotSessionByNonce(ctx, session.Nonce); derr != nil {
 		s.logger.Warn("delete consumed managed bot session failed", zap.Error(derr))
 	}
-	return nil
+	sysConvID := ""
+	if session.SystemConversationID.Valid {
+		sysConvID = uuid.UUID(session.SystemConversationID.Bytes).String()
+	}
+	return sysConvID, nil
 }
 
 // List returns all bridges visible to the caller. Admins see every

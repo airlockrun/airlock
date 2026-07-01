@@ -46,6 +46,16 @@ func (s *Service) NotifyBuildComplete(ctx context.Context, agentID, conversation
 	return s.notifyAndResume(ctx, agentID, conversationID, prefix, source, message)
 }
 
+// NotifyBotCreated announces a freshly-created managed Telegram bot into the
+// system-agent conversation that requested it (create_tg_bot) and auto-resumes,
+// so the agent hands the operator the open link in-character. Same inject-then-
+// resume mechanism as NotifyBuildComplete; agentID is nil (the event is about a
+// bot, not an agent build — the WS envelope's AgentId is unused on bridges).
+func (s *Service) NotifyBotCreated(ctx context.Context, conversationID uuid.UUID, botUsername string) error {
+	msg := fmt.Sprintf("Telegram bot @%s was created and bound to the agent. Give the operator a link to open it: https://t.me/%s", botUsername, botUsername)
+	return s.notifyAndResume(ctx, uuid.Nil, conversationID, "[Bot ready] ", "upgrade", msg)
+}
+
 // notifyAndResume injects a user-role outcome message into a system-agent
 // conversation and kicks an auto-resume LLM turn so the agent reacts. Shared
 // by the upgrade and build notifiers; prefix/source are pre-rendered by the
