@@ -175,6 +175,7 @@ func (h *agentsHandler) Get(w http.ResponseWriter, r *http.Request) {
 	agentProto := convert.AgentToProto(d.Agent)
 	agentProto.Running = d.Running
 	agentProto.YourAccess = string(d.YourAccess)
+	agentProto.IsOwner = d.IsOwner
 	writeProto(w, http.StatusOK, &airlockv1.GetAgentDetailResponse{
 		Agent:        agentProto,
 		RouteBaseUrl: h.agentBaseURL(d.Agent.Slug),
@@ -225,6 +226,54 @@ func (h *agentsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// Clone handles POST /api/v1/agents/{agentID}/clone — fork the agent's code
+// into a new agent owned by the caller (manager + member of source).
+func (h *agentsHandler) Clone(w http.ResponseWriter, r *http.Request) {
+	sourceID, err := parseUUID(chi.URLParam(r, "agentID"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid agent ID")
+		return
+	}
+	var req airlockv1.CloneAgentRequest
+	if err := decodeProto(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	p := principalFromRequest(r)
+	agent, err := h.svc.Clone(r.Context(), p, sourceID, agentssvc.CloneRequest{Name: req.Name, Slug: req.Slug})
+	if err != nil {
+		writeAgentsError(w, err, "failed to clone agent")
+		return
+	}
+	writeProto(w, http.StatusAccepted, &airlockv1.CloneAgentResponse{Agent: convert.AgentToProto(agent)})
+}
+
+// TransferOwnership handles POST /api/v1/agents/{agentID}/transfer.
+func (h *agentsHandler) TransferOwnership(w http.ResponseWriter, r *http.Request) {
+	agentID, err := parseUUID(chi.URLParam(r, "agentID"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid agent ID")
+		return
+	}
+	var req airlockv1.TransferAgentOwnershipRequest
+	if err := decodeProto(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	newOwnerID, err := parseUUID(req.NewOwnerId)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid new_owner_id")
+		return
+	}
+	p := principalFromRequest(r)
+	agent, err := h.svc.TransferOwnership(r.Context(), p, agentID, newOwnerID)
+	if err != nil {
+		writeAgentsError(w, err, "failed to transfer ownership")
+		return
+	}
+	writeProto(w, http.StatusOK, &airlockv1.TransferAgentOwnershipResponse{Agent: convert.AgentToProto(agent)})
 }
 
 // Stop handles POST /api/v1/agents/{agentID}/stop.

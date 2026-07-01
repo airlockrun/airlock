@@ -451,6 +451,37 @@ func MigrationVersionAt(repoPath, commit string) (int, error) {
 	return max, nil
 }
 
+// CopyAgentRepo clones the srcID agent's repo into the dstID path as an
+// independent repo — committed code + history, working tree checked out, no
+// upstream remote (the clone is a new agent, not a fork tracking the source's
+// on-disk path). --no-hardlinks so the two repos never share object storage.
+// Used by agent clone; the destination must not already exist.
+func CopyAgentRepo(basePath, srcID, dstID string) error {
+	src := AgentRepoPath(basePath, srcID)
+	dst := AgentRepoPath(basePath, dstID)
+	if _, err := os.Stat(filepath.Join(src, ".git")); err != nil {
+		return fmt.Errorf("source agent repo %s not initialized: %w", srcID, err)
+	}
+	if _, err := os.Stat(dst); err == nil {
+		return fmt.Errorf("destination agent repo %s already exists", dstID)
+	}
+	if err := os.MkdirAll(basePath, 0o755); err != nil {
+		return fmt.Errorf("mkdir %s: %w", basePath, err)
+	}
+	if err := git(basePath, "clone", "--no-hardlinks", src, dst); err != nil {
+		return fmt.Errorf("git clone %s: %w", srcID, err)
+	}
+	// Detach from the source path so the clone is standalone.
+	_ = git(dst, "remote", "remove", "origin")
+	if err := git(dst, "config", "user.email", "airlock@localhost"); err != nil {
+		return fmt.Errorf("git config email: %w", err)
+	}
+	if err := git(dst, "config", "user.name", "Airlock"); err != nil {
+		return fmt.Errorf("git config name: %w", err)
+	}
+	return nil
+}
+
 // RemoveAgentRepo deletes the per-agent repo directory entirely.
 // Idempotent — missing dir is not an error.
 func RemoveAgentRepo(basePath, agentID string) error {

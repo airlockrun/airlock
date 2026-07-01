@@ -88,6 +88,13 @@ SELECT * FROM bridges WHERE agent_id = @agent_id;
 -- polling forever (and racing on the bot token if the bridge is re-added).
 SELECT id FROM bridges WHERE agent_id = @agent_id;
 
+-- name: UnbindBridgesByAgent :exec
+-- Detach every bridge from an agent (leaves the bridge rows, owned by the old
+-- owner, with a NULL target). Used on ownership transfer: a bridge holds the
+-- old owner's bot token. Enumerate with ListBridgesByAgentID first and cancel
+-- each in-memory poller — this only clears the DB target.
+UPDATE bridges SET agent_id = NULL, updated_at = now() WHERE agent_id = @agent_id;
+
 -- name: UpdateBridgeBinding :one
 -- Rebind the bridge's target. Either is_system=true with NULL agent_id
 -- (operator surface — routes to the in-airlock sysagent) or is_system=false

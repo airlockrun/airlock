@@ -831,6 +831,24 @@ func (q *Queries) UpdateAgentModels(ctx context.Context, arg UpdateAgentModelsPa
 	return err
 }
 
+const updateAgentOwner = `-- name: UpdateAgentOwner :exec
+UPDATE agents SET owner_principal_id = $1, updated_at = now()
+WHERE id = $2
+`
+
+type UpdateAgentOwnerParams struct {
+	OwnerPrincipalID pgtype.UUID `json:"owner_principal_id"`
+	ID               pgtype.UUID `json:"id"`
+}
+
+// Reassign the agent's owner (transfer ownership). The caller separately
+// moves the agent_grants admin membership and clears owner-scoped bindings —
+// ownership is the column here plus the grant, and they must move together.
+func (q *Queries) UpdateAgentOwner(ctx context.Context, arg UpdateAgentOwnerParams) error {
+	_, err := q.db.Exec(ctx, updateAgentOwner, arg.OwnerPrincipalID, arg.ID)
+	return err
+}
+
 const updateAgentRefs = `-- name: UpdateAgentRefs :exec
 UPDATE agents SET source_ref = $1, image_ref = $2, updated_at = now() WHERE id = $3
 `

@@ -63,3 +63,11 @@ WHERE agent_id = @agent_id AND type = 'exec_endpoint' AND slug = @slug;
 UPDATE agent_resource_needs
 SET bound_connection_id = NULL, bound_mcp_id = NULL, bound_exec_id = NULL
 WHERE agent_id = @agent_id AND type = @type AND slug = @slug;
+
+-- name: UnbindAllResourceNeedsByAgent :exec
+-- Clear every binding on an agent's needs (the need rows stay — they are the
+-- code-synced manifest). Used on ownership transfer: the bound connection/MCP/
+-- exec resources are the OLD owner's, and the new owner has no access to them.
+UPDATE agent_resource_needs
+SET bound_connection_id = NULL, bound_mcp_id = NULL, bound_exec_id = NULL
+WHERE agent_id = @agent_id;

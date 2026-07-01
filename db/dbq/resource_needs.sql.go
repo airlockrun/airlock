@@ -275,6 +275,20 @@ func (q *Queries) ResolveBoundMCPServer(ctx context.Context, arg ResolveBoundMCP
 	return i, err
 }
 
+const unbindAllResourceNeedsByAgent = `-- name: UnbindAllResourceNeedsByAgent :exec
+UPDATE agent_resource_needs
+SET bound_connection_id = NULL, bound_mcp_id = NULL, bound_exec_id = NULL
+WHERE agent_id = $1
+`
+
+// Clear every binding on an agent's needs (the need rows stay — they are the
+// code-synced manifest). Used on ownership transfer: the bound connection/MCP/
+// exec resources are the OLD owner's, and the new owner has no access to them.
+func (q *Queries) UnbindAllResourceNeedsByAgent(ctx context.Context, agentID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, unbindAllResourceNeedsByAgent, agentID)
+	return err
+}
+
 const unbindResourceNeed = `-- name: UnbindResourceNeed :exec
 UPDATE agent_resource_needs
 SET bound_connection_id = NULL, bound_mcp_id = NULL, bound_exec_id = NULL

@@ -8,6 +8,8 @@ import api from '@/api/client'
 import { ws } from '@/api/ws'
 import { useCatalogStore } from '@/stores/catalog'
 import { useAgentsStore } from '@/stores/agents'
+import { useAuthStore } from '@/stores/auth'
+import { useUsersStore } from '@/stores/users'
 import { useAgentStatus } from '@/composables/useAgentStatus'
 import type { AgentInfo } from '@/gen/airlock/v1/types_pb'
 import { GetAgentDetailResponseSchema } from '@/gen/airlock/v1/api_pb'
@@ -39,6 +41,8 @@ const confirm = useConfirm()
 const catalog = useCatalogStore()
 const buildsStore = useBuildsStore()
 const agentsStore = useAgentsStore()
+const auth = useAuthStore()
+const usersStore = useUsersStore()
 
 // --- Rename (name + slug) ---
 const renameOpen = ref(false)
@@ -101,6 +105,96 @@ async function saveRename() {
   } finally {
     renaming.value = false
   }
+}
+
+// --- Clone (fork this agent's code into a new agent I own) ---
+// Visible to managers who are members of this agent; the server also enforces
+// it. Copies code + authored config only — no data, secrets, or bindings.
+const canClone = computed(() => auth.can('tenant.agent.clone'))
+const cloneOpen = ref(false)
+const cloneName = ref('')
+const cloneSlug = ref('')
+const cloning = ref(false)
+
+function openClone() {
+  if (!agent.value) return
+  cloneName.value = `${agent.value.name} copy`
+  cloneSlug.value = `${agent.value.slug}-copy`
+  cloneOpen.value = true
+}
+
+async function saveClone() {
+  if (!agent.value) return
+  const name = cloneName.value.trim()
+  const slug = cloneSlug.value.trim()
+  if (!name) {
+    toast.add({ severity: 'warn', summary: 'Name is required', life: 3000 })
+    return
+  }
+  if (slug.length < 2 || slug.length > 63 || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) {
+    toast.add({ severity: 'warn', summary: 'Invalid slug', detail: '2–63 chars: lowercase letters/digits, single dashes.', life: 4000 })
+    return
+  }
+  cloning.value = true
+  try {
+    const clone = await agentsStore.cloneAgent(agent.value.id, name, slug)
+    cloneOpen.value = false
+    toast.add({ severity: 'success', summary: 'Agent cloned', detail: 'Building your copy…', life: 3000 })
+    router.push(`/agents/${clone.slug}`)
+  } catch (e: any) {
+    const status = e?.response?.status
+    toast.add({ severity: 'error', summary: status === 409 ? 'Slug already taken' : 'Clone failed', detail: e?.response?.data?.error, life: 5000 })
+  } finally {
+    cloning.value = false
+  }
+}
+
+// --- Transfer ownership ---
+// Owner (or tenant admin) only. Hands the agent to another tenant user; the
+// current owner loses access and all owner-scoped bindings are unbound.
+const canTransfer = computed(() => !!agent.value?.isOwner || auth.can('tenant.agent.transfer_any'))
+const transferOpen = ref(false)
+const transferTarget = ref('')
+const transferring = ref(false)
+const transferUsers = computed(() =>
+  usersStore.selectable.map((u) => ({
+    id: u.id,
+    label: u.displayName ? `${u.displayName} (${u.email})` : u.email,
+  })),
+)
+
+function openTransfer() {
+  transferTarget.value = ''
+  usersStore.fetchSelectable()
+  transferOpen.value = true
+}
+
+function saveTransfer() {
+  if (!agent.value || !transferTarget.value) {
+    toast.add({ severity: 'warn', summary: 'Pick a user to transfer to', life: 3000 })
+    return
+  }
+  const target = transferUsers.value.find((u) => u.id === transferTarget.value)
+  confirm.require({
+    message: `Transfer "${agent.value.name}" to ${target?.label ?? 'this user'}? You will lose access, and its connections, git credential, and bridges will be unbound.`,
+    header: 'Transfer ownership',
+    icon: 'pi pi-exclamation-triangle',
+    acceptClass: 'p-button-danger',
+    accept: async () => {
+      if (!agent.value) return
+      transferring.value = true
+      try {
+        await agentsStore.transferOwnership(agent.value.id, transferTarget.value)
+        transferOpen.value = false
+        toast.add({ severity: 'success', summary: 'Ownership transferred', life: 3000 })
+        router.push('/agents')
+      } catch (e: any) {
+        toast.add({ severity: 'error', summary: 'Transfer failed', detail: e?.response?.data?.error, life: 5000 })
+      } finally {
+        transferring.value = false
+      }
+    },
+  })
 }
 
 const agentId = route.params.id as string
@@ -230,6 +324,12 @@ const actionItems = computed(() => {
     items.push({ label: 'Start', icon: 'pi pi-play', command: () => doStart() })
   }
   items.push({ label: 'Upgrade', icon: 'pi pi-arrow-up', command: () => doUpgrade() })
+  if (canClone.value) {
+    items.push({ label: 'Clone', icon: 'pi pi-copy', command: () => openClone() })
+  }
+  if (canTransfer.value) {
+    items.push({ label: 'Transfer ownership', icon: 'pi pi-user-edit', command: () => openTransfer() })
+  }
   items.push({ label: 'Delete', icon: 'pi pi-trash', command: () => confirmDelete() })
   return items
 })
@@ -733,6 +833,57 @@ function openWeb() {
       <template #footer>
         <Button label="Cancel" severity="secondary" text :disabled="renaming" @click="renameOpen = false" />
         <Button label="Save" icon="pi pi-check" :loading="renaming" @click="saveRename" />
+      </template>
+    </Dialog>
+
+    <Dialog v-model:visible="cloneOpen" header="Clone agent" modal style="width: 28rem">
+      <div style="display: flex; flex-direction: column; gap: 1rem; margin-top: 0.25rem">
+        <Message severity="info" :closable="false">
+          Copies this agent's code and settings into a new agent you own. Its data,
+          secrets, connections and bridges are <strong>not</strong> copied — the clone
+          starts clean and builds fresh.
+        </Message>
+        <div>
+          <label style="display: block; margin-bottom: 0.35rem; font-size: 0.85rem">Name</label>
+          <InputText v-model="cloneName" style="width: 100%" autofocus />
+        </div>
+        <div>
+          <label style="display: block; margin-bottom: 0.35rem; font-size: 0.85rem">Slug</label>
+          <InputText v-model="cloneSlug" style="width: 100%" />
+          <small style="display: block; margin-top: 0.35rem; color: var(--p-text-muted-color)">
+            Lowercase letters, digits and single dashes (2–63 chars).
+          </small>
+        </div>
+      </div>
+      <template #footer>
+        <Button label="Cancel" severity="secondary" text :disabled="cloning" @click="cloneOpen = false" />
+        <Button label="Clone" icon="pi pi-copy" :loading="cloning" @click="saveClone" />
+      </template>
+    </Dialog>
+
+    <Dialog v-model:visible="transferOpen" header="Transfer ownership" modal style="width: 28rem">
+      <div style="display: flex; flex-direction: column; gap: 1rem; margin-top: 0.25rem">
+        <Message severity="warn" :closable="false">
+          The new owner becomes admin and you lose access. Owner-scoped bindings
+          (connections, MCP/exec credentials, git credential, bridges) are unbound —
+          the new owner reconnects their own.
+        </Message>
+        <div>
+          <label style="display: block; margin-bottom: 0.35rem; font-size: 0.85rem">Transfer to</label>
+          <Select
+            v-model="transferTarget"
+            :options="transferUsers"
+            option-label="label"
+            option-value="id"
+            placeholder="Select a user"
+            filter
+            style="width: 100%"
+          />
+        </div>
+      </div>
+      <template #footer>
+        <Button label="Cancel" severity="secondary" text :disabled="transferring" @click="transferOpen = false" />
+        <Button label="Transfer" icon="pi pi-user-edit" severity="danger" :loading="transferring" :disabled="!transferTarget" @click="saveTransfer" />
       </template>
     </Dialog>
   </div>

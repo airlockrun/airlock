@@ -123,6 +123,7 @@ type ListItem struct {
 type Detail struct {
 	Agent       dbq.Agent                              `json:"agent"`
 	Running     bool                                   `json:"running"`
+	IsOwner     bool                                   `json:"is_owner"`
 	YourAccess  agentsdk.Access                        `json:"your_access"`
 	Connections []dbq.ListConnectionNeedsByAgentRow    `json:"connections"`
 	Webhooks    []dbq.ListWebhooksByAgentWithStatusRow `json:"webhooks"`
@@ -314,6 +315,101 @@ func (s *Service) Create(ctx context.Context, p authz.Principal, req CreateReque
 	return agent, nil
 }
 
+// CloneRequest is the input to Clone.
+type CloneRequest struct {
+	Name string
+	Slug string
+}
+
+// Clone forks sourceID's code into a new agent owned by the caller. It copies
+// the git repo (committed code) plus authored config — description, model-slot
+// choices (providers are tenant-wide), emoji, protocol flags — and NOTHING
+// else: no DB data, no S3 objects, no secrets, no resource bindings. The clone
+// builds fresh (new schema, empty storage) and its first-boot Sync repopulates
+// every code-derived declaration. Requires manager tenant role AND membership
+// (AccessUser) of the source agent.
+func (s *Service) Clone(ctx context.Context, p authz.Principal, sourceID uuid.UUID, req CloneRequest) (dbq.Agent, error) {
+	q := dbq.New(s.db.Pool())
+	if err := authz.Authorize(ctx, q, p, authz.TenantAgentClone, uuid.Nil); err != nil {
+		return dbq.Agent{}, service.Detail(err, "cloning agents requires manager role")
+	}
+	if err := authz.Authorize(ctx, q, p, authz.AgentClone, sourceID); err != nil {
+		return dbq.Agent{}, service.Detail(err, "you must be a member of the agent to clone it")
+	}
+	src, err := q.GetAgentByID(ctx, pgtype.UUID{Bytes: sourceID, Valid: true})
+	if err != nil {
+		return dbq.Agent{}, service.ErrNotFound
+	}
+	if req.Name == "" {
+		return dbq.Agent{}, service.Detail(service.ErrInvalidInput, "name is required")
+	}
+	if !validAgentSlug(req.Slug) {
+		return dbq.Agent{}, service.Detail(service.ErrInvalidInput, "slug must be 2-63 lowercase kebab-case chars")
+	}
+	if src.SourceRef == "" {
+		return dbq.Agent{}, service.Detail(service.ErrInvalidInput, "source agent has no built code to clone yet")
+	}
+
+	agent, err := q.CreateAgent(ctx, dbq.CreateAgentParams{
+		Name:             req.Name,
+		Slug:             req.Slug,
+		OwnerPrincipalID: pgtype.UUID{Bytes: p.UserID, Valid: true},
+		Description:      src.Description,
+		Config:           []byte("{}"),
+	})
+	if err != nil {
+		if strings.Contains(err.Error(), "duplicate key") {
+			return dbq.Agent{}, service.Detail(service.ErrConflict, "agent slug already exists")
+		}
+		s.logger.Error("clone: create agent", zap.Error(err))
+		return dbq.Agent{}, err
+	}
+	// Cloner becomes admin owner (column set at create + the grant).
+	_ = q.UpsertAgentGrant(ctx, dbq.UpsertAgentGrantParams{
+		AgentID:   agent.ID,
+		GranteeID: pgtype.UUID{Bytes: p.UserID, Valid: true},
+		Role:      "admin",
+	})
+	// Authored config: models (tenant-wide providers stay valid), emoji, flags.
+	_ = q.UpdateAgentModels(ctx, dbq.UpdateAgentModelsParams{
+		ID:              agent.ID,
+		BuildProviderID: src.BuildProviderID, BuildModel: src.BuildModel,
+		ExecProviderID: src.ExecProviderID, ExecModel: src.ExecModel,
+		SttProviderID: src.SttProviderID, SttModel: src.SttModel,
+		VisionProviderID: src.VisionProviderID, VisionModel: src.VisionModel,
+		TtsProviderID: src.TtsProviderID, TtsModel: src.TtsModel,
+		ImageGenProviderID: src.ImageGenProviderID, ImageGenModel: src.ImageGenModel,
+		EmbeddingProviderID: src.EmbeddingProviderID, EmbeddingModel: src.EmbeddingModel,
+		SearchProviderID: src.SearchProviderID, SearchModel: src.SearchModel,
+	})
+	_ = q.UpdateAgentEmoji(ctx, dbq.UpdateAgentEmojiParams{ID: agent.ID, Emoji: src.Emoji})
+	_ = q.UpdateAgentA2ASettings(ctx, dbq.UpdateAgentA2ASettingsParams{
+		ID: agent.ID, McpEnabled: src.McpEnabled, AllowPublicMcp: src.AllowPublicMcp, AllowPublicRoutes: src.AllowPublicRoutes,
+	})
+
+	newIDStr := uuid.UUID(agent.ID.Bytes).String()
+	// Copy the repo BEFORE build so InitAgentRepo no-ops and the build rebuilds
+	// the copied HEAD (empty Instructions ⇒ no codegen). Roll back the row if
+	// the copy fails so we never leave a codeless clone.
+	if err := builder.CopyAgentRepo(s.builder.ReposPath(), sourceID.String(), newIDStr); err != nil {
+		_ = q.DeleteAgent(ctx, agent.ID)
+		s.logger.Error("clone: copy repo", zap.Error(err))
+		return dbq.Agent{}, service.Detail(service.ErrConflict, "failed to copy agent code: %s", err.Error())
+	}
+	go func() {
+		_ = s.builder.Build(context.Background(), builder.BuildInput{
+			AgentID:          newIDStr,
+			Name:             req.Name,
+			Slug:             req.Slug,
+			OwnerPrincipalID: p.UserID.String(),
+			BuildProviderID:  src.BuildProviderID,
+			BuildModel:       src.BuildModel,
+			Instructions:     "", // rebuild the copied repo; no codegen
+		})
+	}()
+	return agent, nil
+}
+
 // List returns the agents the caller can access — grant-joined (own + member
 // + group-shared), annotated with the live container-running flag. Tenant
 // admins do NOT see every agent here: the main page is the caller's working
@@ -429,8 +525,19 @@ func (s *Service) Get(ctx context.Context, p authz.Principal, agentID uuid.UUID)
 	webhooks, _ := q.ListWebhooksByAgentWithStatus(ctx, pgID)
 	schedules, _ := q.ListSchedulesWithNextFire(ctx, pgID)
 	routes, _ := q.ListRoutesByAgent(ctx, pgID)
+	ownerID := uuid.UUID(agent.OwnerPrincipalID.Bytes)
+	isOwner := false
+	if agent.OwnerPrincipalID.Valid {
+		for _, g := range p.GranteeSet() {
+			if g == ownerID {
+				isOwner = true
+				break
+			}
+		}
+	}
 	d := Detail{
 		Agent:       agent,
+		IsOwner:     isOwner,
 		YourAccess:  p.EffectiveAgentAccess(ctx, q, agentID),
 		Connections: conns,
 		Webhooks:    webhooks,
@@ -559,6 +666,81 @@ func (s *Service) Delete(ctx context.Context, p authz.Principal, agentID uuid.UU
 	}
 	go s.broadcastSiblingChange(context.Background(), agentID)
 	return nil
+}
+
+// TransferOwnership hands the agent to newOwnerID. Moves the owner column AND
+// the admin grant together, removes the old owner, and unbinds every
+// owner-scoped binding — connection/MCP/exec bindings, the git credential, and
+// bridges — because the new owner has no access to the old owner's resources.
+// The need rows and agent code stay; only the bindings clear. Caller must be
+// the current owner or a tenant admin. Env-var values (agent-scoped) and model
+// slots (tenant-wide providers) are kept.
+func (s *Service) TransferOwnership(ctx context.Context, p authz.Principal, agentID, newOwnerID uuid.UUID) (dbq.Agent, error) {
+	q := dbq.New(s.db.Pool())
+	agent, err := q.GetAgentByID(ctx, pgtype.UUID{Bytes: agentID, Valid: true})
+	if err != nil {
+		return dbq.Agent{}, service.ErrNotFound
+	}
+	oldOwnerID := uuid.UUID(agent.OwnerPrincipalID.Bytes)
+	if err := authz.AuthorizeOwnedResource(ctx, q, p, oldOwnerID, authz.TenantAgentTransferAny); err != nil {
+		return dbq.Agent{}, err
+	}
+	if newOwnerID == uuid.Nil {
+		return dbq.Agent{}, service.Detail(service.ErrInvalidInput, "new owner is required")
+	}
+	if newOwnerID == oldOwnerID {
+		return dbq.Agent{}, service.Detail(service.ErrInvalidInput, "agent is already owned by that user")
+	}
+	if _, err := q.GetUserByID(ctx, pgtype.UUID{Bytes: newOwnerID, Valid: true}); err != nil {
+		return dbq.Agent{}, service.Detail(service.ErrInvalidInput, "target user not found")
+	}
+
+	// Enumerate bridges before the unbind so we can stop their pollers after.
+	bridgeIDs, _ := q.ListBridgesByAgentID(ctx, pgtype.UUID{Bytes: agentID, Valid: true})
+
+	tx, err := s.db.Pool().Begin(ctx)
+	if err != nil {
+		return dbq.Agent{}, err
+	}
+	defer tx.Rollback(ctx)
+	qtx := q.WithTx(tx)
+	newOwnerPG := pgtype.UUID{Bytes: newOwnerID, Valid: true}
+	if err := qtx.UpdateAgentOwner(ctx, dbq.UpdateAgentOwnerParams{ID: agent.ID, OwnerPrincipalID: newOwnerPG}); err != nil {
+		return dbq.Agent{}, err
+	}
+	if err := qtx.UpsertAgentGrant(ctx, dbq.UpsertAgentGrantParams{AgentID: agent.ID, GranteeID: newOwnerPG, Role: "admin"}); err != nil {
+		return dbq.Agent{}, err
+	}
+	if err := qtx.DeleteAgentGrant(ctx, dbq.DeleteAgentGrantParams{AgentID: agent.ID, GranteeID: pgtype.UUID{Bytes: oldOwnerID, Valid: true}}); err != nil {
+		return dbq.Agent{}, err
+	}
+	if err := qtx.UnbindAllResourceNeedsByAgent(ctx, agent.ID); err != nil {
+		return dbq.Agent{}, err
+	}
+	if err := qtx.DisconnectAgentGit(ctx, agent.ID); err != nil {
+		return dbq.Agent{}, err
+	}
+	if err := qtx.UnbindBridgesByAgent(ctx, agent.ID); err != nil {
+		return dbq.Agent{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return dbq.Agent{}, err
+	}
+
+	// Stop the now-detached bridge pollers (row unbind alone leaves them
+	// polling with the old owner's token). Best-effort.
+	for _, bid := range bridgeIDs {
+		if bu, err := uuid.FromBytes(bid.Bytes[:]); err == nil {
+			s.bridgeMgr.TeardownBridge(bu)
+			s.bridgeMgr.RemoveBridge(bu)
+		}
+	}
+
+	updated, err := q.GetAgentByID(ctx, agent.ID)
+	if err != nil {
+		return dbq.Agent{}, err
+	}
+	return updated, nil
 }
 
 // Stop kills the container and flips status to stopped (no auto-resume).
