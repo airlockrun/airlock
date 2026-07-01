@@ -125,7 +125,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.agent-builder
-    image: ghcr.io/airlockrun/airlock-agent-builder:v0.4.0-rc.11
+    image: ghcr.io/airlockrun/airlock-agent-builder:v0.4.0-rc.12
     command: ["true"]
     restart: "no"
 
@@ -133,7 +133,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.agent-base
-    image: ghcr.io/airlockrun/airlock-agent-base:v0.4.0-rc.11
+    image: ghcr.io/airlockrun/airlock-agent-base:v0.4.0-rc.12
     command: ["true"]
     restart: "no"
 
@@ -174,7 +174,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.airlock
-    image: ghcr.io/airlockrun/airlock:v0.4.0-rc.11
+    image: ghcr.io/airlockrun/airlock:v0.4.0-rc.12
     depends_on:
       # required:false — when bundled-db is inactive (external Postgres/S3),
       # these services don't start and airlock proceeds without waiting (it
@@ -310,7 +310,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.frontend
-    image: ghcr.io/airlockrun/airlock-frontend:v0.4.0-rc.11
+    image: ghcr.io/airlockrun/airlock-frontend:v0.4.0-rc.12
     restart: unless-stopped
 
   caddy:
@@ -347,9 +347,9 @@ services:
       SPA_SERVE_LINE2: "${SPA_SERVE_LINE2:-#}"
       # wildcard mode
       CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN:-}
-      # manual (BYO cert) mode — paths inside the mounted cert dir
-      TLS_CERT_FILE: ${TLS_CERT_FILE:-/etc/caddy/certs/cert.pem}
-      TLS_KEY_FILE: ${TLS_KEY_FILE:-/etc/caddy/certs/key.pem}
+      # manual (BYO cert) mode — paths inside the mounted cert dir (/certs)
+      TLS_CERT_FILE: ${TLS_CERT_FILE:-/certs/cert.pem}
+      TLS_KEY_FILE: ${TLS_KEY_FILE:-/certs/key.pem}
     command: caddy run --config /etc/caddy/Caddyfile.${TLS_MODE:-ondemand} --adapter caddyfile
     extra_hosts:
       # Lets the in-container caddy reach a native airlock binary on the host
@@ -361,8 +361,10 @@ services:
       # Static SPA for native dev (TLS_MODE-independent). Bind auto-creates an
       # empty dir on a fresh clone; unused in container deploys (reverse_proxy).
       - ./frontend/dist:/srv/dist:ro
-      # BYO cert dir for manual mode; inert otherwise.
-      - ${TLS_CERT_DIR:-./certs}:/etc/caddy/certs:ro
+      # BYO cert dir for manual mode; inert otherwise. MUST be a top-level target
+      # (not under /etc/caddy) — /etc/caddy is a read-only mount, so Docker can't
+      # create a nested mountpoint beneath it.
+      - ${TLS_CERT_DIR:-./certs}:/certs:ro
       - caddy-data:/data
       - caddy-config:/config
     restart: unless-stopped
