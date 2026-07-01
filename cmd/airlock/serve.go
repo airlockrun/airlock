@@ -30,6 +30,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/term"
 )
@@ -37,19 +38,31 @@ import (
 func runServe(_ []string) {
 	cfg := config.Load()
 
-	// Create logger: console format for terminals, JSON for pipes/containers.
-	// LOG_FORMAT=json forces JSON output; LOG_LEVEL=debug enables debug verbosity.
+	// Logger. Default is a human-readable console format — the one you see in
+	// `docker logs` — with a plain wall-clock timestamp instead of an epoch
+	// float. LOG_FORMAT=json switches to structured JSON (with ISO8601 times)
+	// for log aggregation and the enterprise build. LOG_LEVEL=debug raises
+	// verbosity. Color is applied only when stdout is a real terminal, so
+	// container logs stay clean.
+	level := zap.InfoLevel
+	if os.Getenv("LOG_LEVEL") == "debug" {
+		level = zap.DebugLevel
+	}
 	var logger *zap.Logger
-	useConsole := term.IsTerminal(int(os.Stdout.Fd())) && os.Getenv("LOG_FORMAT") != "json"
-	if useConsole {
-		zapCfg := zap.NewDevelopmentConfig()
-		if os.Getenv("LOG_LEVEL") != "debug" {
-			zapCfg.Level = zap.NewAtomicLevelAt(zap.InfoLevel)
-		}
-		// Only show stacktraces for panics, not regular errors
-		logger = zap.Must(zapCfg.Build(zap.AddStacktrace(zap.DPanicLevel)))
+	if os.Getenv("LOG_FORMAT") == "json" {
+		zapCfg := zap.NewProductionConfig()
+		zapCfg.Level = zap.NewAtomicLevelAt(level)
+		zapCfg.EncoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
+		logger = zap.Must(zapCfg.Build())
 	} else {
-		logger = zap.Must(zap.NewProduction())
+		zapCfg := zap.NewDevelopmentConfig()
+		zapCfg.Level = zap.NewAtomicLevelAt(level)
+		zapCfg.EncoderConfig.EncodeTime = zapcore.TimeEncoderOfLayout("2006-01-02 15:04:05.000")
+		if term.IsTerminal(int(os.Stdout.Fd())) {
+			zapCfg.EncoderConfig.EncodeLevel = zapcore.CapitalColorLevelEncoder
+		}
+		// Stacktraces only for panics, not regular errors.
+		logger = zap.Must(zapCfg.Build(zap.AddStacktrace(zap.DPanicLevel)))
 	}
 	defer logger.Sync()
 
