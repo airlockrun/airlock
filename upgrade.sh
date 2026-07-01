@@ -149,8 +149,14 @@ upgrade() {
 		docker build -f caddy/Dockerfile -t airlock-caddy-local . || die "caddy image build failed"
 	fi
 
+	# Pull only the published ghcr app images for this release. Naming them
+	# explicitly skips caddy — whose image is either the stock caddy:2-alpine
+	# (pulled by `up` if missing) or the locally-built airlock-caddy-local
+	# (rebuilt above), neither of which can be `pull`ed as a release image.
+	# postgres/rustfs are external pinned images `up` fetches on demand.
 	log "pulling $target images"
-	docker compose pull --ignore-buildable || die "image pull failed (are $target's images published to ghcr?)"
+	docker compose pull airlock frontend agent-builder-image agent-base-image \
+		|| die "image pull failed (are $target's images published to ghcr?)"
 
 	log "restarting the stack"
 	docker compose up -d --no-build \
