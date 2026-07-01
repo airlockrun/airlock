@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Airlock turnkey installer.
 #
-#   curl -fsSL https://raw.githubusercontent.com/airlockrun/airlock/v0.4.0-rc.11/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/airlockrun/airlock/v0.4.0-rc.12/install.sh | bash
 #
 # Or inspect first (recommended):
-#   curl -fsSL https://raw.githubusercontent.com/airlockrun/airlock/v0.4.0-rc.11/install.sh -o install.sh
+#   curl -fsSL https://raw.githubusercontent.com/airlockrun/airlock/v0.4.0-rc.12/install.sh -o install.sh
 #   less install.sh && bash install.sh
 #
 # Takes a fresh Linux VPS (or macOS for local/tunnel) from nothing to a running,
@@ -29,7 +29,7 @@
 # mutating commands are guarded with explicit `|| die`.
 set -uo pipefail
 
-RELEASE_TAG="${AIRLOCK_TAG:-v0.4.0-rc.11}"
+RELEASE_TAG="${AIRLOCK_TAG:-v0.4.0-rc.12}"
 REPO_URL="https://github.com/airlockrun/airlock.git"
 INSTALL_DIR="${HOME}/airlock"
 TLS_MODE=""        # ondemand|wildcard|tunnel|internal|manual|proxy — decided interactively
@@ -54,15 +54,26 @@ ask() { # ask "prompt" "default" -> echoes answer
 	read -r reply </dev/tty || reply=""
 	printf '%s' "${reply:-$default}"
 }
-ask_secret() { # ask_secret "prompt" -> echoes (no echo to screen)
-	local prompt="$1" reply
+ask_secret() { # ask_secret "prompt" -> echoes (input masked with asterisks)
+	local prompt="$1" reply='' char
 	printf '%s: ' "$prompt" >&2
-	read -rs reply </dev/tty || reply=""; printf '\n' >&2
+	# Read char-by-char so we can echo a '*' per keystroke (plain `read -s` shows
+	# nothing, leaving the user unsure input is registering). Handles backspace.
+	while IFS= read -rsn1 char </dev/tty; do
+		case "$char" in
+			'') break ;;                                   # Enter
+			$'\x7f'|$'\b') [ -n "$reply" ] && { reply="${reply%?}"; printf '\b \b' >&2; } ;;
+			*) reply="$reply$char"; printf '*' >&2 ;;
+		esac
+	done
+	printf '\n' >&2
 	printf '%s' "$reply"
 }
-confirm() { # confirm "prompt" -> 0 if yes
+confirm() { # confirm "prompt" [default:n] -> 0 if yes
 	[ "$ASSUME_YES" = 1 ] && return 0
-	local reply; reply=$(ask "$1 (y/N)" "n"); case "$reply" in [yY]*) return 0;; *) return 1;; esac
+	local def="${2:-n}" hint="y/N"
+	[ "$def" = y ] && hint="Y/n"
+	local reply; reply=$(ask "$1 ($hint)" "$def"); case "$reply" in [yY]*) return 0;; *) return 1;; esac
 }
 
 # ---------- pure helpers (unit-testable) ----------
@@ -326,7 +337,7 @@ choose_mode() {
 		log "domain is on Cloudflare."
 		# One token does it all: create the A records AND issue the wildcard
 		# cert (DNS-01). Works even on a fresh domain with no records yet.
-		if [ "$OS" = linux ] && [ -n "$PUBLIC_IP" ] && confirm "Auto-configure DNS records + wildcard TLS with a Cloudflare API token?"; then
+		if [ "$OS" = linux ] && [ -n "$PUBLIC_IP" ] && confirm "Auto-configure DNS records + wildcard TLS with a Cloudflare API token?" y; then
 			cf_token_hint
 			CF_TOKEN=$(ask_secret "Cloudflare API token")
 			[ -n "$CF_TOKEN" ] || die "token required"
@@ -368,7 +379,7 @@ choose_mode() {
 # ENV_EXTRA with the endpoints and drops bundled-db from the profiles.
 choose_infra() {
 	[ "$TLS_MODE" = internal ] && { INFRA=bundled; return; }  # laptop = always bundled
-	if confirm "Use the bundled Postgres + object store (recommended)?"; then INFRA=bundled; return; fi
+	if confirm "Use the bundled Postgres + object store (recommended)?" y; then INFRA=bundled; return; fi
 	INFRA=external
 	warn "External infra: run db/init/*.sql on your Postgres once (create_agent_role() helper + the vector extension)."
 	local db s3 s3pub ak sk dbhost

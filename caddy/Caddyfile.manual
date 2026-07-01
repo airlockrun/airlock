@@ -2,8 +2,8 @@
 #
 # Caddy serves the cert + key you provide instead of issuing any. Drop them in
 # the cert dir bind-mounted by docker-compose.yml (TLS_CERT_DIR, default
-# ./certs → /etc/caddy/certs) and point TLS_CERT_FILE / TLS_KEY_FILE at them in
-# .env (defaults /etc/caddy/certs/cert.pem and /etc/caddy/certs/key.pem).
+# ./certs → /certs) and point TLS_CERT_FILE / TLS_KEY_FILE at them in .env
+# (defaults /certs/cert.pem and /certs/key.pem).
 #
 # Per-agent `*.{$DOMAIN}` TLS is terminated here using your cert, so it MUST be
 # a wildcard cert covering apex + `*.{$DOMAIN}` (+ s3.{$DOMAIN}) — a
