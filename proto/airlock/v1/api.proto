@@ -209,6 +209,29 @@ message UpdateAgentResponse {
   AgentInfo agent = 1;
 }
 
+// CloneAgentRequest forks an existing agent's code into a new agent owned by
+// the caller. Only the code + authored config is copied — no data, secrets, or
+// resource bindings. name/slug are required and must be unique.
+message CloneAgentRequest {
+  string name = 1;
+  string slug = 2;
+}
+
+message CloneAgentResponse {
+  AgentInfo agent = 1;
+}
+
+// TransferAgentOwnershipRequest hands the agent to another tenant user. The new
+// owner gets admin membership; the old owner is removed. Owner-scoped bindings
+// (connections, MCP/exec, git credential, bridges) are unbound.
+message TransferAgentOwnershipRequest {
+  string new_owner_id = 1;
+}
+
+message TransferAgentOwnershipResponse {
+  AgentInfo agent = 1;
+}
+
 message UpgradeAgentRequest {
   string run_id = 1;      // optional — the failed run to fix
   string description = 2;  // optional — extra instructions for the upgrade

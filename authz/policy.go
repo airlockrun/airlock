@@ -43,6 +43,7 @@ const (
 	AgentBuildsView   Action = "agent.builds.view"  // builds list / get
 	AgentConversation Action = "agent.conversation" // create / list web conversations
 	AgentModelsView   Action = "agent.models.view"
+	AgentClone        Action = "agent.clone" // fork this agent's code into a new agent (member of source; also needs TenantAgentClone)
 
 	// Agent axis — owner (AccessAdmin) required.
 	AgentDelete        Action = "agent.delete"
@@ -65,6 +66,8 @@ const (
 	TenantAgentMembersSelfAdd Action = "tenant.agent.members.self_add" // escape: tenant admin adds self to an agent they're not yet a member of: admin
 	TenantAgentLifecycleAny   Action = "tenant.agent.lifecycle_any"    // stop/start/suspend an agent the caller isn't a member of: admin
 	TenantAgentDeleteAny      Action = "tenant.agent.delete_any"       // delete an agent the caller isn't a member of: admin
+	TenantAgentClone          Action = "tenant.agent.clone"            // clone an agent (produces a new agent): manager+ (paired with AgentClone member gate)
+	TenantAgentTransferAny    Action = "tenant.agent.transfer_any"     // transfer an agent the caller doesn't own: admin
 	TenantBridgeList          Action = "tenant.bridge.list"            // list bridges visible to the caller: user+
 	TenantBridgeListAll       Action = "tenant.bridge.list_all"        // list every bridge in the tenant: admin
 	TenantBridgeCreate        Action = "tenant.bridge.create"          // any bridge: manager+
@@ -98,6 +101,7 @@ var policy = map[Action]Requirement{
 	AgentBuildsView:   {Axis: AxisAgent, Agent: agentsdk.AccessUser},
 	AgentConversation: {Axis: AxisAgent, Agent: agentsdk.AccessUser},
 	AgentModelsView:   {Axis: AxisAgent, Agent: agentsdk.AccessUser},
+	AgentClone:        {Axis: AxisAgent, Agent: agentsdk.AccessUser},
 
 	AgentDelete:        {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
 	AgentBuildManage:   {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
@@ -118,6 +122,8 @@ var policy = map[Action]Requirement{
 	TenantAgentMembersSelfAdd: {Axis: AxisTenant, Tenant: auth.RoleAdmin},
 	TenantAgentLifecycleAny:   {Axis: AxisTenant, Tenant: auth.RoleAdmin},
 	TenantAgentDeleteAny:      {Axis: AxisTenant, Tenant: auth.RoleAdmin},
+	TenantAgentClone:          {Axis: AxisTenant, Tenant: auth.RoleManager},
+	TenantAgentTransferAny:    {Axis: AxisTenant, Tenant: auth.RoleAdmin},
 	TenantBridgeList:          {Axis: AxisTenant, Tenant: auth.RoleUser},
 	TenantBridgeListAll:       {Axis: AxisTenant, Tenant: auth.RoleAdmin},
 	TenantBridgeCreate:        {Axis: AxisTenant, Tenant: auth.RoleManager},

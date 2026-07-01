@@ -478,6 +478,8 @@ func NewRouter(cfg RouterConfig) http.Handler {
 				r.Get("/", agH.Get)
 				r.Patch("/", agH.Update)
 				r.Delete("/", agH.Delete)
+				r.Post("/clone", agH.Clone)
+				r.Post("/transfer", agH.TransferOwnership)
 				r.Post("/stop", agH.Stop)
 				r.Post("/start", agH.Start)
 				r.Post("/suspend", agH.Suspend)

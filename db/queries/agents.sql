@@ -110,6 +110,13 @@ UPDATE agents SET
 WHERE id = @id
 RETURNING *;
 
+-- name: UpdateAgentOwner :exec
+-- Reassign the agent's owner (transfer ownership). The caller separately
+-- moves the agent_grants admin membership and clears owner-scoped bindings —
+-- ownership is the column here plus the grant, and they must move together.
+UPDATE agents SET owner_principal_id = @owner_principal_id, updated_at = now()
+WHERE id = @id;
+
 -- name: UpdateAgentModels :exec
 -- Atomic replace of all eight per-agent model overrides. Each slot is
 -- two columns: a provider FK (nullable) and the bare model name string.

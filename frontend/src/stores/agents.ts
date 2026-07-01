@@ -7,6 +7,8 @@ import type { AgentModelConfig } from '@/gen/airlock/v1/api_pb'
 import {
   ListAgentsResponseSchema,
   CreateAgentResponseSchema,
+  CloneAgentResponseSchema,
+  TransferAgentOwnershipResponseSchema,
   UpdateAgentResponseSchema,
   GetAgentModelConfigResponseSchema,
   UpdateAgentModelConfigRequestSchema,
@@ -73,6 +75,24 @@ export const useAgentsStore = defineStore('agents', () => {
     return updated
   }
 
+  // Clone forks an agent's code into a new agent owned by the caller. The new
+  // agent starts building (status=draft/building) and appears at the top.
+  async function cloneAgent(id: string, name: string, slug: string) {
+    const { data } = await api.post(`/api/v1/agents/${id}/clone`, { name, slug })
+    const agent = fromJson(CloneAgentResponseSchema, data).agent!
+    agents.value.unshift(agent)
+    return agent
+  }
+
+  // Transfer ownership to another tenant user. The caller (old owner) loses
+  // access, so drop the row from the local list after a successful transfer.
+  async function transferOwnership(id: string, newOwnerId: string) {
+    const { data } = await api.post(`/api/v1/agents/${id}/transfer`, { newOwnerId })
+    const updated = fromJson(TransferAgentOwnershipResponseSchema, data).agent!
+    agents.value = agents.value.filter((a) => a.id !== id)
+    return updated
+  }
+
   async function stopAgent(id: string) {
     await api.post(`/api/v1/agents/${id}/stop`, {})
     const agent = agents.value.find((a) => a.id === id)
@@ -109,6 +129,8 @@ export const useAgentsStore = defineStore('agents', () => {
     loading,
     fetchAgents,
     createAgent,
+    cloneAgent,
+    transferOwnership,
     deleteAgent,
     renameAgent,
     stopAgent,

@@ -558,6 +558,19 @@ func (q *Queries) ReconcileManagerBridge(ctx context.Context, arg ReconcileManag
 	return err
 }
 
+const unbindBridgesByAgent = `-- name: UnbindBridgesByAgent :exec
+UPDATE bridges SET agent_id = NULL, updated_at = now() WHERE agent_id = $1
+`
+
+// Detach every bridge from an agent (leaves the bridge rows, owned by the old
+// owner, with a NULL target). Used on ownership transfer: a bridge holds the
+// old owner's bot token. Enumerate with ListBridgesByAgentID first and cancel
+// each in-memory poller — this only clears the DB target.
+func (q *Queries) UnbindBridgesByAgent(ctx context.Context, agentID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, unbindBridgesByAgent, agentID)
+	return err
+}
+
 const updateBridgeBinding = `-- name: UpdateBridgeBinding :one
 UPDATE bridges
 SET agent_id = $1, is_system = $2, is_manager = $3, updated_at = now()
