@@ -40,6 +40,10 @@ type BuildPlan struct {
 
 	Instruction string
 
+	// SkipScaffold (BuildKindBuild only) provisions the DB schema but skips the
+	// scaffold overwrite — used by clone, whose repo arrives already-complete.
+	SkipScaffold bool
+
 	RollbackTargetID pgtype.UUID
 
 	Scaffold *ScaffoldInputs

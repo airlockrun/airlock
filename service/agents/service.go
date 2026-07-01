@@ -404,7 +404,8 @@ func (s *Service) Clone(ctx context.Context, p authz.Principal, sourceID uuid.UU
 			OwnerPrincipalID: p.UserID.String(),
 			BuildProviderID:  src.BuildProviderID,
 			BuildModel:       src.BuildModel,
-			Instructions:     "", // rebuild the copied repo; no codegen
+			Instructions:     "",   // rebuild the copied repo; no codegen
+			SkipScaffold:     true, // repo is copied in complete — don't clobber it
 		})
 	}()
 	return agent, nil

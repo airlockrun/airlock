@@ -120,7 +120,7 @@ func (b *BuildService) Execute(ctx context.Context, plan BuildPlan) (string, err
 	var prepareErr error
 
 	if plan.Kind == BuildKindBuild {
-		dbPassword, schemaName, prepareErr = b.prepareNewAgent(ctx, q, agent, agentID)
+		dbPassword, schemaName, prepareErr = b.prepareNewAgent(ctx, q, agent, agentID, plan.SkipScaffold)
 		if prepareErr != nil {
 			return "", prepareErr
 		}
@@ -573,36 +573,44 @@ func (b *BuildService) Execute(ctx context.Context, plan BuildPlan) (string, err
 // schema + role, encrypt and store the role password. Returns the
 // plaintext password (re-used to mint container env URLs without going
 // back through encryptor.Get) and the schema name.
-func (b *BuildService) prepareNewAgent(ctx context.Context, q *dbq.Queries, agent dbq.Agent, agentID string) (string, string, error) {
+func (b *BuildService) prepareNewAgent(ctx context.Context, q *dbq.Queries, agent dbq.Agent, agentID string, skipScaffold bool) (string, string, error) {
 	repoPath := b.AgentRepoPath(agentID)
 
 	if err := InitAgentRepo(b.cfg.AgentReposPath, agentID); err != nil {
 		return "", "", fmt.Errorf("init agent repo: %w", err)
 	}
 
-	sdkVer, err := b.agentSDKVersion()
-	if err != nil {
-		return "", "", fmt.Errorf("resolve agent sdk version: %w", err)
-	}
-	data := scaffold.ScaffoldData{
-		AgentID:         agentID,
-		Module:          "agent",
-		GoVersion:       buildGoVersion,
-		AgentSDKVersion: sdkVer,
-		AgentBaseImage:  b.cfg.AgentBaseImage,
-	}
-	if _, err := CommitScaffold(repoPath, data); err != nil {
-		return "", "", fmt.Errorf("commit scaffold: %w", err)
-	}
-	if err := MergeBranch(repoPath, "build/init"); err != nil {
-		return "", "", fmt.Errorf("merge scaffold: %w", err)
-	}
-	// A re-build of an agent whose earlier build failed reuses the existing
-	// repo dir; clear any files a prior build/codegen left untracked so they
-	// don't survive into the docker build context (which is the working tree)
-	// and break the compile against the fresh scaffold.
-	if err := CleanWorktree(repoPath); err != nil {
-		return "", "", fmt.Errorf("clean worktree: %w", err)
+	// A clone's repo is copied in already-complete (scaffold + the source
+	// agent's customizations, all committed). Re-running the scaffold here
+	// would overwrite scaffold-managed files (viewmodel.go, main.go,
+	// index.templ, …) back to their defaults and — with no codegen to
+	// regenerate the customizations — break the build. So skip it for clones;
+	// the DB provisioning below still runs (the clone gets a fresh schema).
+	if !skipScaffold {
+		sdkVer, err := b.agentSDKVersion()
+		if err != nil {
+			return "", "", fmt.Errorf("resolve agent sdk version: %w", err)
+		}
+		data := scaffold.ScaffoldData{
+			AgentID:         agentID,
+			Module:          "agent",
+			GoVersion:       buildGoVersion,
+			AgentSDKVersion: sdkVer,
+			AgentBaseImage:  b.cfg.AgentBaseImage,
+		}
+		if _, err := CommitScaffold(repoPath, data); err != nil {
+			return "", "", fmt.Errorf("commit scaffold: %w", err)
+		}
+		if err := MergeBranch(repoPath, "build/init"); err != nil {
+			return "", "", fmt.Errorf("merge scaffold: %w", err)
+		}
+		// A re-build of an agent whose earlier build failed reuses the existing
+		// repo dir; clear any files a prior build/codegen left untracked so they
+		// don't survive into the docker build context (which is the working tree)
+		// and break the compile against the fresh scaffold.
+		if err := CleanWorktree(repoPath); err != nil {
+			return "", "", fmt.Errorf("clean worktree: %w", err)
+		}
 	}
 
 	schemaName := fmt.Sprintf("agent_%s", sanitizeUUID(agentID))
