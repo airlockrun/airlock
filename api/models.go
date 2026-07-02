@@ -71,7 +71,7 @@ func (h *modelsHandler) GetConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeProto(w, http.StatusOK, &airlockv1.GetAgentModelConfigResponse{
-		Config: convert.AgentModelConfigToProto(state.Agent, state.Slots),
+		Config: convert.AgentModelConfigToProto(state.Agent, state.Slots, state.Settings),
 	})
 }
 
@@ -117,6 +117,6 @@ func (h *modelsHandler) UpdateConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeProto(w, http.StatusOK, &airlockv1.UpdateAgentModelConfigResponse{
-		Config: convert.AgentModelConfigToProto(state.Agent, state.Slots),
+		Config: convert.AgentModelConfigToProto(state.Agent, state.Slots, state.Settings),
 	})
 }

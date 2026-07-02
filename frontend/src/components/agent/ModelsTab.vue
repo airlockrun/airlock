@@ -370,6 +370,9 @@ async function save() {
             :loading="catalog.loading"
             style="width: 100%"
           />
+          <small v-if="!slotPickerValues[slot.slug] && slot.resolvedModel" style="color: var(--p-text-muted-color)">
+            Inherits default: <strong>{{ slot.resolvedModel }}</strong>
+          </small>
         </div>
       </div>
     </div>
@@ -408,7 +411,7 @@ async function save() {
             style="display: flex; align-items: center; gap: 0.5rem"
           >
             <span style="font-family: var(--p-font-family-monospace, monospace); font-weight: 600; min-width: 11rem">{{ slot.slug }}</span>
-            <span style="color: var(--p-text-muted-color)">{{ slot.assignedModel || 'Inherits capability default' }}</span>
+            <span style="color: var(--p-text-muted-color)">{{ slot.assignedModel || (slot.resolvedModel ? `Inherits default · ${slot.resolvedModel}` : 'Inherits capability default') }}</span>
           </div>
         </div>
       </div>
