@@ -44,7 +44,8 @@ func userRequestProto(t *testing.T, method, path string, userID uuid.UUID, msg p
 
 // testModelsHandler wires a modelsHandler against the shared test DB.
 func testModelsHandler() *modelsHandler {
-	return newModelsHandler(modelssvc.New(testDB, catalogsvc.New(testDB, zap.NewNop()), zap.NewNop()))
+	noRefresh := func(context.Context, uuid.UUID) error { return nil }
+	return newModelsHandler(modelssvc.New(testDB, catalogsvc.New(testDB, zap.NewNop()), noRefresh, zap.NewNop()))
 }
 
 // TestUpdateModelConfig_AtomicReplaceAndSlotAssignment verifies PUT

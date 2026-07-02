@@ -25,7 +25,6 @@ import (
 	runssvc "github.com/airlockrun/airlock/service/runs"
 	"github.com/airlockrun/airlock/storage"
 	"github.com/airlockrun/airlock/trigger"
-	"github.com/airlockrun/sol/provider"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -455,32 +454,25 @@ func (h *conversationsHandler) Prompt(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Look up the agent row once — used for both model modalities and
-	// access-filtered instructions.
-	var modalities []string
+	// Look up the agent row for access-filtered instructions. Model
+	// modalities aren't resolved here — the agent renders them from its
+	// synced PromptData, which airlock keeps current across model changes.
 	var instructions string
-	// airlockvet:allow-dbq reason: agent row read for modality + prompt rendering; access is gated by ownedConversation upstream
+	// airlockvet:allow-dbq reason: agent row read for prompt rendering; access is gated by ownedConversation upstream
 	if ag, err := q.GetAgentByID(ctx, toPgUUID(agentID)); err == nil {
-		if ag.ExecModel != "" {
-			provID, modID := provider.ParseModel(ag.ExecModel)
-			if m := provider.GetModalities(provID, modID); m != nil {
-				modalities = m.Input
-			}
-		}
 		instructions = promptpkg.RenderInstructions(ag.Instructions, access)
 	}
 
 	// Build prompt input — SessionStore in agent container handles message
 	// loading and persistence. Airlock just sends the new user message.
 	input := agentsdk.PromptInput{
-		Message:             req.Message,
-		ConversationID:      convIDStr,
-		Files:               fileInfos,
-		SupportedModalities: modalities,
-		Instructions:        instructions,
-		ForceCompact:        forceCompact,
-		CallerAccess:        access,
-		DirectTools:         access == agentsdk.AccessPublic,
+		Message:        req.Message,
+		ConversationID: convIDStr,
+		Files:          fileInfos,
+		Instructions:   instructions,
+		ForceCompact:   forceCompact,
+		CallerAccess:   access,
+		DirectTools:    access == agentsdk.AccessPublic,
 	}
 	if forceCompact {
 		// /compact doesn't carry a user-authored text; Sol produces the

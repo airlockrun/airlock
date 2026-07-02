@@ -25,23 +25,35 @@ type ModelCatalog interface {
 	ListModels(ctx context.Context, p authz.Principal, opts catalog.ListModelsOptions) ([]catalog.Model, error)
 }
 
+// RefreshAgentFunc pushes a /refresh into a running agent container so it
+// re-syncs its cached PromptData after a model-slot change. A model change
+// alters the agent's Capabilities/SupportedModalities, which the prompt and
+// the attach-modality guard render from — without a refresh those stay stale
+// until the next restart. A dispatch-time hash check self-heals as a backstop
+// (see trigger.AgentConfigHash), but this makes the correction immediate.
+type RefreshAgentFunc func(ctx context.Context, agentID uuid.UUID) error
+
 type Service struct {
 	db      *db.DB
 	catalog ModelCatalog
+	refresh RefreshAgentFunc
 	logger  *zap.Logger
 }
 
-func New(d *db.DB, cat ModelCatalog, logger *zap.Logger) *Service {
+func New(d *db.DB, cat ModelCatalog, refresh RefreshAgentFunc, logger *zap.Logger) *Service {
 	if d == nil {
 		panic("models: db is required")
 	}
 	if cat == nil {
 		panic("models: catalog is required")
 	}
+	if refresh == nil {
+		panic("models: refresh func is required")
+	}
 	if logger == nil {
 		panic("models: logger is required")
 	}
-	return &Service{db: d, catalog: cat, logger: logger}
+	return &Service{db: d, catalog: cat, refresh: refresh, logger: logger}
 }
 
 // Pair is a (provider FK, bare model name) tuple. An empty ProviderID
@@ -254,6 +266,15 @@ func (s *Service) Update(ctx context.Context, p authz.Principal, agentID uuid.UU
 	}
 	agent, _ = q.GetAgentByID(ctx, agent.ID)
 	slots, _ := q.ListAgentModelSlots(ctx, agent.ID)
+
+	// Push a /refresh so the running container re-syncs its cached
+	// Capabilities/SupportedModalities immediately. Best-effort: a cold or
+	// unreachable container picks the change up on its next startup sync, and
+	// the dispatch-time hash check heals it on the next run regardless.
+	if err := s.refresh(ctx, agentID); err != nil {
+		s.logger.Warn("refresh agent after model update", zap.String("agent_id", agentID.String()), zap.Error(err))
+	}
+
 	return State{Agent: agent, Slots: slots}, nil
 }
 

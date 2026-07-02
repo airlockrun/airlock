@@ -776,6 +776,10 @@ func (h *Handler) Sync(w http.ResponseWriter, r *http.Request) {
 			Capabilities:        caps,
 			SupportedModalities: modalities,
 		},
+		// Fingerprint the config this PromptData reflects; airlock stamps the
+		// same value onto each dispatch so the agent can detect drift and
+		// self-heal (see trigger.AgentConfigHash).
+		SyncStateHash:     trigger.AgentConfigHash(agentRecord),
 		MCPAuthStatus:     mcpAuthStatus,
 		MCPSchemas:        mcpSchemas,
 		PublicStorageBase: publicStorageBase,
