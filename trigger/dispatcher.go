@@ -376,6 +376,8 @@ func (d *Dispatcher) ForwardPrompt(ctx context.Context, agentID uuid.UUID, input
 	input.Platform = d.resolvePlatform(ctx, bridgeID)
 	input.UserDisplayName, input.UserEmail = d.resolveUserEnv(ctx, userID)
 
+	d.stampSyncHash(ctx, agentID, &input)
+
 	payload, err := json.Marshal(input)
 	if err != nil {
 		return nil, uuid.Nil, fmt.Errorf("marshal prompt input: %w", err)
@@ -428,6 +430,8 @@ func (d *Dispatcher) ForwardA2APrompt(ctx context.Context, agentID uuid.UUID, pa
 	input.Platform = "a2a"
 	input.UserDisplayName, input.UserEmail = d.resolveUserEnv(ctx, userID)
 
+	d.stampSyncHash(ctx, agentID, &input)
+
 	payload, err := json.Marshal(input)
 	if err != nil {
 		return nil, uuid.Nil, fmt.Errorf("marshal prompt input: %w", err)
@@ -462,6 +466,20 @@ func (d *Dispatcher) ForwardA2APrompt(ctx context.Context, agentID uuid.UUID, pa
 		return nil, uuid.Nil, err
 	}
 	return &runBodyCloser{ReadCloser: rc, dispatcher: d, runID: runID}, runID, nil
+}
+
+// stampSyncHash sets input.ExpectedSyncHash to the agent's current config
+// fingerprint so the agent can detect a stale sync cache and self-heal (see
+// AgentConfigHash). Best-effort: a lookup failure leaves the field empty, which
+// the agent reads as "no check" — it never blocks or fails the dispatch.
+func (d *Dispatcher) stampSyncHash(ctx context.Context, agentID uuid.UUID, input *agentsdk.PromptInput) {
+	ag, err := dbq.New(d.db.Pool()).GetAgentByID(ctx, toPgUUID(agentID))
+	if err != nil {
+		d.logger.Warn("stamp sync hash: load agent",
+			zap.String("agent_id", agentID.String()), zap.Error(err))
+		return
+	}
+	input.ExpectedSyncHash = AgentConfigHash(ag)
 }
 
 // computeVisibleSiblings returns the set of agent IDs this run's user is

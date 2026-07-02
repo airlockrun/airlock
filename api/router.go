@@ -388,7 +388,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 			convLocks:   newConvMutexMap(),
 			logger:      cfg.Logger.Named("conversations"),
 		}
-		mH := newModelsHandler(modelssvc.New(cfg.DB, catalogsvc.New(cfg.DB, cfg.Logger.Named("models-catalog")), cfg.Logger.Named("models")))
+		mH := newModelsHandler(modelssvc.New(cfg.DB, catalogsvc.New(cfg.DB, cfg.Logger.Named("models-catalog")), cfg.Dispatcher.RefreshAgent, cfg.Logger.Named("models")))
 		r.Get("/models/allowed", mH.AllowedModels)
 		siblingsH := newSiblingsHandler(siblingssvc.New(cfg.DB, cfg.Dispatcher, cfg.Logger.Named("siblings")))
 
