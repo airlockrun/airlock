@@ -1124,7 +1124,8 @@ func (s *Service) ConnectGit(ctx context.Context, p authz.Principal, agentID uui
 		branch = "main"
 	}
 	q := dbq.New(s.db.Pool())
-	if _, err := q.GetAgentByID(ctx, pgtype.UUID{Bytes: agentID, Valid: true}); err != nil {
+	agent, err := q.GetAgentByID(ctx, pgtype.UUID{Bytes: agentID, Valid: true})
+	if err != nil {
 		return GitConfig{}, service.ErrNotFound
 	}
 	if err := authz.Authorize(ctx, q, p, authz.AgentGit, agentID); err != nil {
@@ -1152,10 +1153,19 @@ func (s *Service) ConnectGit(ctx context.Context, p authz.Principal, agentID uui
 	// Validate the remote is reachable with the chosen credential before
 	// recording it — otherwise a wrong URL or bad/expired token is accepted
 	// silently and only surfaces as a confusing push failure on the next build.
-	if _, err := s.builder.InspectRemote(ctx, remote, branch, pgtype.UUID{Bytes: credID, Valid: true}); err != nil {
+	state, err := s.builder.InspectRemote(ctx, remote, branch, pgtype.UUID{Bytes: credID, Valid: true})
+	if err != nil {
 		s.logger.Warn("git connect: inspect remote", zap.String("agent", agentID.String()), zap.Error(err))
 		return GitConfig{}, service.Detail(service.ErrInvalidInput,
 			"could not access %s with the selected credential — verify the URL and that the token has repo access", remote)
+	}
+	// A populated remote can only be adopted by a never-built agent (import);
+	// mirroring an agent's own code needs an empty remote. A populated remote
+	// against an agent that already has built code has no safe merge — reject.
+	importing := !state.Empty
+	if importing && agent.ImageRef != "" {
+		return GitConfig{}, service.Detail(service.ErrInvalidInput,
+			"%s already contains code and this agent already has its own — connect an empty repository, or import into a freshly created agent", remote)
 	}
 	secret, err := randomHex(32)
 	if err != nil {
@@ -1172,6 +1182,39 @@ func (s *Service) ConnectGit(ctx context.Context, p authz.Principal, agentID uui
 		s.logger.Error("connect agent git", zap.Error(err))
 		return GitConfig{}, err
 	}
+
+	// Import: adopt the populated remote's code into this fresh agent, then
+	// build the imported HEAD (SkipScaffold — the repo is complete, exactly as
+	// for a clone). An empty remote skips this and just mirrors on next build.
+	if importing {
+		if err := s.builder.CloneRemoteIntoAgent(ctx, agentID.String(), remote, branch, pgtype.UUID{Bytes: credID, Valid: true}); err != nil {
+			_ = q.DisconnectAgentGit(ctx, pgtype.UUID{Bytes: agentID, Valid: true})
+			s.logger.Error("git import: clone", zap.String("agent", agentID.String()), zap.Error(err))
+			return GitConfig{}, service.Detail(service.ErrInvalidInput, "failed to import repository: %s", err.Error())
+		}
+		if state.HeadSHA != "" {
+			// Stamp the imported tip so the git poller doesn't see instant drift.
+			_ = q.UpdateAgentGitLastSyncedRef(ctx, dbq.UpdateAgentGitLastSyncedRefParams{
+				ID:               pgtype.UUID{Bytes: agentID, Valid: true},
+				GitLastSyncedRef: state.HeadSHA,
+			})
+		}
+		go func() {
+			if err := s.builder.Build(context.Background(), builder.BuildInput{
+				AgentID:          agentID.String(),
+				Name:             agent.Name,
+				Slug:             agent.Slug,
+				OwnerPrincipalID: uuid.UUID(agent.OwnerPrincipalID.Bytes).String(),
+				BuildProviderID:  agent.BuildProviderID,
+				BuildModel:       agent.BuildModel,
+				Instructions:     "",   // build the imported HEAD; no codegen
+				SkipScaffold:     true, // repo is imported complete — don't clobber it
+			}); err != nil {
+				s.logger.Error("git import: build", zap.String("agent", agentID.String()), zap.Error(err))
+			}
+		}()
+	}
+
 	return GitConfig{
 		RemoteURL:      remote,
 		CredentialID:   credID.String(),

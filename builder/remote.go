@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/airlockrun/airlock/db/dbq"
@@ -52,6 +53,42 @@ func (b *BuildService) InspectRemote(ctx context.Context, remote, branch string,
 	}
 
 	return parseRemoteState(out, branch), nil
+}
+
+// CloneRemoteIntoAgent clones remote's branch into the agent's repo path so a
+// not-yet-built agent can adopt an existing external codebase (import). It
+// replaces any existing repo dir and verifies the result is a Go project. The
+// caller triggers a SkipScaffold build afterwards to compile the imported HEAD —
+// re-scaffolding would clobber the imported files, exactly as for a clone.
+func (b *BuildService) CloneRemoteIntoAgent(ctx context.Context, agentID, remote, branch string, credID pgtype.UUID) error {
+	q := dbq.New(b.db.Pool())
+	auth, err := resolveGitAuth(ctx, q, b.encryptor, credID)
+	if err != nil {
+		return err
+	}
+	header, err := auth.ExtraHeader(ctx)
+	if err != nil {
+		return err
+	}
+	if branch == "" {
+		branch = "main"
+	}
+	if err := os.MkdirAll(b.ReposPath(), 0o755); err != nil {
+		return fmt.Errorf("ensure repos dir: %w", err)
+	}
+	repoPath := b.AgentRepoPath(agentID)
+	if err := os.RemoveAll(repoPath); err != nil {
+		return fmt.Errorf("clear repo path: %w", err)
+	}
+	if err := gitAuthed(ctx, b.ReposPath(), header, "clone", "--branch", branch, "--single-branch", remote, repoPath); err != nil {
+		_ = os.RemoveAll(repoPath)
+		return fmt.Errorf("clone: %s", strings.ReplaceAll(err.Error(), header, "[redacted]"))
+	}
+	if _, err := os.Stat(filepath.Join(repoPath, "go.mod")); err != nil {
+		_ = os.RemoveAll(repoPath)
+		return fmt.Errorf("imported repository has no go.mod at its root — not a valid agent project")
+	}
+	return nil
 }
 
 // parseRemoteState interprets `git ls-remote --heads` output: empty when no
