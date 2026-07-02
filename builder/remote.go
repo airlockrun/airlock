@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 
@@ -14,6 +15,67 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"
 )
+
+// RemoteState summarizes a git remote as seen via ls-remote with a credential.
+type RemoteState struct {
+	Empty     bool   // the remote advertises no branches at all
+	HasBranch bool   // the requested branch exists on the remote
+	HeadSHA   string // tip SHA of the requested branch ("" when absent)
+}
+
+// InspectRemote validates that remote is reachable with credID and reports
+// whether it has any branches (empty vs populated) and whether branch exists.
+// Used at git-connect time to (1) fail fast on a bad/expired token or wrong URL
+// instead of silently saving and breaking on the next build, and (2) drive the
+// empty→mirror / non-empty→import decision. Runs ls-remote from a throwaway
+// temp dir — it's a pure remote query and touches no agent repo.
+func (b *BuildService) InspectRemote(ctx context.Context, remote, branch string, credID pgtype.UUID) (RemoteState, error) {
+	q := dbq.New(b.db.Pool())
+	auth, err := resolveGitAuth(ctx, q, b.encryptor, credID)
+	if err != nil {
+		return RemoteState{}, err
+	}
+	header, err := auth.ExtraHeader(ctx)
+	if err != nil {
+		return RemoteState{}, err
+	}
+	dir, err := os.MkdirTemp("", "airlock-lsremote-")
+	if err != nil {
+		return RemoteState{}, fmt.Errorf("temp dir: %w", err)
+	}
+	defer os.RemoveAll(dir)
+
+	out, err := gitAuthedOutput(ctx, dir, header, "ls-remote", "--heads", remote)
+	if err != nil {
+		// Redact the auth header defensively before the error escapes to logs.
+		return RemoteState{}, fmt.Errorf("%s", strings.ReplaceAll(err.Error(), header, "[redacted]"))
+	}
+
+	return parseRemoteState(out, branch), nil
+}
+
+// parseRemoteState interprets `git ls-remote --heads` output: empty when no
+// branches are advertised, plus the tip of the requested branch when present.
+func parseRemoteState(lsRemoteOutput, branch string) RemoteState {
+	if branch == "" {
+		branch = "main"
+	}
+	st := RemoteState{Empty: true}
+	for _, line := range strings.Split(lsRemoteOutput, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		st.Empty = false
+		if strings.HasSuffix(line, "refs/heads/"+branch) {
+			st.HasBranch = true
+			if f := strings.Fields(line); len(f) > 0 {
+				st.HeadSHA = f[0]
+			}
+		}
+	}
+	return st
+}
 
 // randomHexBytes returns n random bytes hex-encoded. Used to mint
 // per-agent webhook secrets.

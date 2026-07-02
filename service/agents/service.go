@@ -1149,6 +1149,14 @@ func (s *Service) ConnectGit(ctx context.Context, p authz.Principal, agentID uui
 	if !p.HasResourceCapability(uuid.UUID(cred.UserID.Bytes), grants, authz.CapBind) {
 		return GitConfig{}, service.Detail(service.ErrForbidden, "you do not have bind access to this credential")
 	}
+	// Validate the remote is reachable with the chosen credential before
+	// recording it — otherwise a wrong URL or bad/expired token is accepted
+	// silently and only surfaces as a confusing push failure on the next build.
+	if _, err := s.builder.InspectRemote(ctx, remote, branch, pgtype.UUID{Bytes: credID, Valid: true}); err != nil {
+		s.logger.Warn("git connect: inspect remote", zap.String("agent", agentID.String()), zap.Error(err))
+		return GitConfig{}, service.Detail(service.ErrInvalidInput,
+			"could not access %s with the selected credential — verify the URL and that the token has repo access", remote)
+	}
 	secret, err := randomHex(32)
 	if err != nil {
 		s.logger.Error("generate webhook secret", zap.Error(err))
