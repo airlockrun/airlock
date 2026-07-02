@@ -1956,6 +1956,12 @@ type ModelSlotInfo struct {
 	// the capability default.
 	AssignedModel      string `protobuf:"bytes,4,opt,name=assigned_model,json=assignedModel,proto3" json:"assigned_model,omitempty"`
 	AssignedProviderId string `protobuf:"bytes,5,opt,name=assigned_provider_id,json=assignedProviderId,proto3" json:"assigned_provider_id,omitempty"`
+	// resolved_model / resolved_provider_id are the model this slot will
+	// actually use right now: the assignment when bound, otherwise the slot's
+	// capability default (agent override → system default). Read-only, ignored
+	// on update; the UI shows it as the inherited default for an unbound slot.
+	ResolvedModel      string `protobuf:"bytes,6,opt,name=resolved_model,json=resolvedModel,proto3" json:"resolved_model,omitempty"`
+	ResolvedProviderId string `protobuf:"bytes,7,opt,name=resolved_provider_id,json=resolvedProviderId,proto3" json:"resolved_provider_id,omitempty"`
 	unknownFields      protoimpl.UnknownFields
 	sizeCache          protoimpl.SizeCache
 }
@@ -2021,6 +2027,20 @@ func (x *ModelSlotInfo) GetAssignedModel() string {
 func (x *ModelSlotInfo) GetAssignedProviderId() string {
 	if x != nil {
 		return x.AssignedProviderId
+	}
+	return ""
+}
+
+func (x *ModelSlotInfo) GetResolvedModel() string {
+	if x != nil {
+		return x.ResolvedModel
+	}
+	return ""
+}
+
+func (x *ModelSlotInfo) GetResolvedProviderId() string {
+	if x != nil {
+		return x.ResolvedProviderId
 	}
 	return ""
 }
@@ -7583,7 +7603,7 @@ const file_airlock_v1_api_proto_rawDesc = "" +
 	"\vdescription\x18\x02 \x01(\tR\vdescription\"Z\n" +
 	"\x14RollbackBuildRequest\x12\x19\n" +
 	"\bbuild_id\x18\x01 \x01(\tR\abuildId\x12'\n" +
-	"\x0fconversation_id\x18\x02 \x01(\tR\x0econversationId\"\xbe\x01\n" +
+	"\x0fconversation_id\x18\x02 \x01(\tR\x0econversationId\"\x97\x02\n" +
 	"\rModelSlotInfo\x12\x12\n" +
 	"\x04slug\x18\x01 \x01(\tR\x04slug\x12\x1e\n" +
 	"\n" +
@@ -7591,7 +7611,9 @@ const file_airlock_v1_api_proto_rawDesc = "" +
 	"capability\x12 \n" +
 	"\vdescription\x18\x03 \x01(\tR\vdescription\x12%\n" +
 	"\x0eassigned_model\x18\x04 \x01(\tR\rassignedModel\x120\n" +
-	"\x14assigned_provider_id\x18\x05 \x01(\tR\x12assignedProviderId\"\xbd\x05\n" +
+	"\x14assigned_provider_id\x18\x05 \x01(\tR\x12assignedProviderId\x12%\n" +
+	"\x0eresolved_model\x18\x06 \x01(\tR\rresolvedModel\x120\n" +
+	"\x14resolved_provider_id\x18\a \x01(\tR\x12resolvedProviderId\"\xbd\x05\n" +
 	"\x10AgentModelConfig\x12\x1f\n" +
 	"\vbuild_model\x18\x01 \x01(\tR\n" +
 	"buildModel\x12\x1d\n" +

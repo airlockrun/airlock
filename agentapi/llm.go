@@ -14,6 +14,7 @@ import (
 	"github.com/airlockrun/airlock/audio"
 	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/db/dbq"
+	"github.com/airlockrun/airlock/modelresolve"
 	"github.com/airlockrun/goai/model"
 	"github.com/airlockrun/goai/stream"
 	solprovider "github.com/airlockrun/sol/provider"
@@ -283,56 +284,15 @@ func (h *Handler) modelForCapability(ctx context.Context, q *dbq.Queries, agentI
 	if dbErr != nil {
 		return pgtype.UUID{}, "", fmt.Errorf("get agent: %w", dbErr)
 	}
-	if fk, name := agentCapabilityOverride(agent, capability); fk.Valid && name != "" {
+	if fk, name := modelresolve.AgentCapabilityOverride(agent, capability); fk.Valid && name != "" {
 		return fk, name, nil
 	}
 	settings, sErr := q.GetSystemSettings(ctx)
 	if sErr != nil {
 		return pgtype.UUID{}, "", fmt.Errorf("get system settings: %w", sErr)
 	}
-	fk, name := systemCapabilityDefault(settings, capability)
+	fk, name := modelresolve.SystemCapabilityDefault(settings, capability)
 	return fk, name, nil
-}
-
-// agentCapabilityOverride returns the agent's per-capability override pair
-// (provider FK + model name). Both empty/invalid ⇄ "no override — inherit
-// system default". Unknown capability returns the zero pair.
-func agentCapabilityOverride(agent dbq.Agent, capability string) (pgtype.UUID, string) {
-	switch capability {
-	case "", "text":
-		return agent.ExecProviderID, agent.ExecModel
-	case "vision":
-		return agent.VisionProviderID, agent.VisionModel
-	case "image":
-		return agent.ImageGenProviderID, agent.ImageGenModel
-	case "speech":
-		return agent.TtsProviderID, agent.TtsModel
-	case "transcription":
-		return agent.SttProviderID, agent.SttModel
-	case "embedding":
-		return agent.EmbeddingProviderID, agent.EmbeddingModel
-	}
-	return pgtype.UUID{}, ""
-}
-
-// systemCapabilityDefault returns the (default_*_provider_id, default_*_model)
-// pair from system_settings for the given capability.
-func systemCapabilityDefault(settings dbq.SystemSetting, capability string) (pgtype.UUID, string) {
-	switch capability {
-	case "", "text":
-		return settings.DefaultExecProviderID, settings.DefaultExecModel
-	case "vision":
-		return settings.DefaultVisionProviderID, settings.DefaultVisionModel
-	case "image":
-		return settings.DefaultImageGenProviderID, settings.DefaultImageGenModel
-	case "speech":
-		return settings.DefaultTtsProviderID, settings.DefaultTtsModel
-	case "transcription":
-		return settings.DefaultSttProviderID, settings.DefaultSttModel
-	case "embedding":
-		return settings.DefaultEmbeddingProviderID, settings.DefaultEmbeddingModel
-	}
-	return pgtype.UUID{}, ""
 }
 
 // --- Non-language model handlers ---

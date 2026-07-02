@@ -262,6 +262,12 @@ message ModelSlotInfo {
   // the capability default.
   string assigned_model = 4;
   string assigned_provider_id = 5;
+  // resolved_model / resolved_provider_id are the model this slot will
+  // actually use right now: the assignment when bound, otherwise the slot's
+  // capability default (agent override → system default). Read-only, ignored
+  // on update; the UI shows it as the inherited default for an unbound slot.
+  string resolved_model = 6;
+  string resolved_provider_id = 7;
 }
 
 message AgentModelConfig {

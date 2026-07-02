@@ -94,6 +94,9 @@ type UpdateRequest struct {
 type State struct {
 	Agent dbq.Agent
 	Slots []dbq.AgentModelSlot
+	// Settings carries the tenant model defaults so callers can resolve the
+	// effective model for an unset override / unbound slot (modelresolve).
+	Settings dbq.SystemSetting
 }
 
 // Get returns the agent and its declared model slots. Any agent member
@@ -113,7 +116,12 @@ func (s *Service) Get(ctx context.Context, p authz.Principal, agentID uuid.UUID)
 		s.logger.Error("list model slots", zap.Error(err))
 		return State{}, err
 	}
-	return State{Agent: agent, Slots: slots}, nil
+	settings, err := q.GetSystemSettings(ctx)
+	if err != nil {
+		s.logger.Error("get system settings", zap.Error(err))
+		return State{}, err
+	}
+	return State{Agent: agent, Slots: slots, Settings: settings}, nil
 }
 
 // parsePair validates a Pair and returns the parsed FK. A model without a
@@ -266,6 +274,7 @@ func (s *Service) Update(ctx context.Context, p authz.Principal, agentID uuid.UU
 	}
 	agent, _ = q.GetAgentByID(ctx, agent.ID)
 	slots, _ := q.ListAgentModelSlots(ctx, agent.ID)
+	settings, _ := q.GetSystemSettings(ctx)
 
 	// Push a /refresh so the running container re-syncs its cached
 	// Capabilities/SupportedModalities immediately. Best-effort: a cold or
@@ -275,7 +284,7 @@ func (s *Service) Update(ctx context.Context, p authz.Principal, agentID uuid.UU
 		s.logger.Warn("refresh agent after model update", zap.String("agent_id", agentID.String()), zap.Error(err))
 	}
 
-	return State{Agent: agent, Slots: slots}, nil
+	return State{Agent: agent, Slots: slots, Settings: settings}, nil
 }
 
 // pairCapability maps a fixed capability-override slot to the capability
