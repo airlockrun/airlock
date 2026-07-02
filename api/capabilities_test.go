@@ -96,20 +96,25 @@ func TestListCapabilitiesShape(t *testing.T) {
 	if openai.CatalogOnly {
 		t.Error("openai.CatalogOnly = true, expected false (it exists in models.dev)")
 	}
-	// Goai's typed lists supply transcription (whisper-1, gpt-4o-transcribe)
-	// and speech (tts-1, gpt-4o-mini-tts) models, and the overlay contributes
-	// the Responses API web_search tool (ExtraCapabilities + SearchBackend
-	// = "openai"), so all three must be present on openai.
-	for _, want := range []string{"transcription", "speech", "search"} {
-		found := false
-		for _, c := range openai.Capabilities {
-			if c == want {
-				found = true
-				break
+	// The search overlay contributes the Responses API web_search tool
+	// (ExtraCapabilities + SearchBackend = "openai"), so "search" must be
+	// present. Transcription and speech are NOT: sol no longer enumerates
+	// OpenAI's audio models (they're absent from both models.dev and
+	// OpenRouter), so those capabilities are gone from the native provider.
+	hasCap := func(c string) bool {
+		for _, x := range openai.Capabilities {
+			if x == c {
+				return true
 			}
 		}
-		if !found {
-			t.Errorf("openai capabilities missing %q; got %v", want, openai.Capabilities)
+		return false
+	}
+	if !hasCap("search") {
+		t.Errorf("openai capabilities missing \"search\"; got %v", openai.Capabilities)
+	}
+	for _, gone := range []string{"transcription", "speech"} {
+		if hasCap(gone) {
+			t.Errorf("openai should no longer expose %q (dropped with goai enumeration); got %v", gone, openai.Capabilities)
 		}
 	}
 
