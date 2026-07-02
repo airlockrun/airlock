@@ -290,6 +290,12 @@ message AgentModelConfig {
   string image_gen_provider_id = 15;
   string embedding_provider_id = 16;
   string search_provider_id = 17;
+  // system_defaults maps each capability-override field name (buildModel,
+  // execModel, sttModel, visionModel, ttsModel, imageGenModel,
+  // embeddingModel, searchModel) to the tenant system-default model an empty
+  // override inherits. Read-only, ignored on update; lets the UI show the
+  // effective model for an unset capability slot.
+  map<string, string> system_defaults = 18;
 }
 
 message GetAgentModelConfigResponse {
