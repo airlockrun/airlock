@@ -117,11 +117,40 @@ const readonlyRows: { key: keyof AgentModelConfig; label: string; icon: string }
   { key: 'embeddingModel', label: 'Embedding', icon: 'pi pi-database' },
   { key: 'searchModel', label: 'Web Search', icon: 'pi pi-search' },
 ]
+// providerLabel resolves a providers-row UUID to its catalog id (e.g. "openai")
+// via the providers store. Empty when the row isn't loaded (read-only callers
+// never fetch providers) — callers then fall back to the bare model name.
+function providerLabel(rowID: string): string {
+  if (!rowID) return ''
+  return providers.providers.find(p => p.id === rowID)?.providerId || ''
+}
+
+// defaultLabel renders a ModelRef as "provider/model" (or just "model").
+function defaultLabel(ref?: { model: string; providerId: string }): string {
+  if (!ref?.model) return ''
+  const prov = providerLabel(ref.providerId)
+  return prov ? `${prov}/${ref.model}` : ref.model
+}
+
+// capabilityPlaceholder is the picker's placeholder for an unset override row:
+// names the inherited system default instead of a generic "inherit" string.
+function capabilityPlaceholder(key: keyof AgentModelConfig): string {
+  const label = defaultLabel(config.value.systemDefaults?.[key as string])
+  return label ? `Default (${label})` : 'Inherit system default'
+}
+
+// slotPlaceholder is the same, for a RegisterModel slot's picker: its resolved
+// model is the capability default when unbound.
+function slotPlaceholder(slot: ModelSlotInfo): string {
+  const label = defaultLabel({ model: slot.resolvedModel, providerId: slot.resolvedProviderId })
+  return label ? `Default (${label})` : 'Inherit capability default'
+}
+
 function currentModel(key: keyof AgentModelConfig): string {
   const set = (config.value as any)[key]
   if (set) return set
-  const def = config.value.systemDefaults?.[key as string]
-  return def ? `Inherits default · ${def}` : 'Inherits system default'
+  const ref = config.value.systemDefaults?.[key as string]
+  return ref?.model ? `Inherits default · ${ref.model}` : 'Inherits system default'
 }
 
 // --- Rows. Each binds to a capability-override field on `config`.
@@ -319,7 +348,7 @@ async function save() {
             filter
             autoFilterFocus
             showClear
-            placeholder="Inherit system default"
+            :placeholder="capabilityPlaceholder(row.key)"
             :loading="catalog.loading"
             style="width: 100%"
           />
@@ -333,13 +362,10 @@ async function save() {
             filter
             autoFilterFocus
             showClear
-            placeholder="Inherit system default"
+            :placeholder="capabilityPlaceholder(row.key)"
             :loading="catalog.loading"
             style="width: 100%"
           />
-          <small v-if="!pickerValues[row.key as string] && config.systemDefaults?.[row.key as string]" style="color: var(--p-text-muted-color)">
-            Inherits default: <strong>{{ config.systemDefaults[row.key as string] }}</strong>
-          </small>
           <small style="color: var(--p-text-muted-color)">{{ row.help }}</small>
         </div>
       </div>
@@ -372,13 +398,10 @@ async function save() {
             filter
             autoFilterFocus
             showClear
-            placeholder="Inherit capability default"
+            :placeholder="slotPlaceholder(slot)"
             :loading="catalog.loading"
             style="width: 100%"
           />
-          <small v-if="!slotPickerValues[slot.slug] && slot.resolvedModel" style="color: var(--p-text-muted-color)">
-            Inherits default: <strong>{{ slot.resolvedModel }}</strong>
-          </small>
         </div>
       </div>
     </div>

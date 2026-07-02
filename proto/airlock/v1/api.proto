@@ -292,10 +292,17 @@ message AgentModelConfig {
   string search_provider_id = 17;
   // system_defaults maps each capability-override field name (buildModel,
   // execModel, sttModel, visionModel, ttsModel, imageGenModel,
-  // embeddingModel, searchModel) to the tenant system-default model an empty
-  // override inherits. Read-only, ignored on update; lets the UI show the
-  // effective model for an unset capability slot.
-  map<string, string> system_defaults = 18;
+  // embeddingModel, searchModel) to the tenant system default an empty
+  // override inherits. Read-only, ignored on update; the UI shows it as the
+  // picker's "Default (…)" placeholder for an unset capability slot.
+  map<string, ModelRef> system_defaults = 18;
+}
+
+// ModelRef is a (model, providers-row) pair the UI resolves to a display
+// label. Used for read-only "inherited default" hints.
+message ModelRef {
+  string model = 1;
+  string provider_id = 2;
 }
 
 message GetAgentModelConfigResponse {
