@@ -406,7 +406,7 @@ async function save() {
       </div>
     </div>
 
-    <div>
+    <div class="save-row">
       <Button label="Save" :loading="saving" @click="save" />
     </div>
     </template>
@@ -471,5 +471,9 @@ async function save() {
     grid-template-columns: 1fr 1fr;
     column-gap: 1.5rem;
   }
+}
+/* Pull the Save button up — the section gap leaves too much air above it. */
+.save-row {
+  margin-top: -1rem;
 }
 </style>
