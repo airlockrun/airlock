@@ -326,7 +326,7 @@ async function save() {
       <p class="models-sub">
         Override system defaults for this agent. Leave empty to inherit the system default for that capability.
       </p>
-      <div style="display: flex; flex-direction: column; gap: 1.25rem">
+      <div class="override-grid">
         <div
           v-for="row in overrideRows"
           :key="row.key as string"
@@ -458,5 +458,18 @@ async function save() {
   margin: 0 0 1rem;
   color: var(--p-text-muted-color);
   font-size: 0.85rem;
+}
+/* Capability overrides: single column on narrow screens, two columns on
+   desktop so the eight slots fit in roughly half the width. */
+.override-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1.25rem;
+}
+@media (min-width: 768px) {
+  .override-grid {
+    grid-template-columns: 1fr 1fr;
+    column-gap: 1.5rem;
+  }
 }
 </style>
