@@ -46,6 +46,12 @@ type BuildPlan struct {
 
 	RollbackTargetID pgtype.UUID
 
+	// InitiatorUserID attributes the codegen LLM spend to the user who
+	// triggered this build (UI upgrade/rollback, initial create, sysagent
+	// mutate). Invalid for unattended builds (git push/poll, SDK mass-rebuild
+	// migration) — codegen falls back to the agent owner.
+	InitiatorUserID pgtype.UUID
+
 	Scaffold *ScaffoldInputs
 
 	RunID          string

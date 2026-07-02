@@ -35,11 +35,15 @@ GROUP BY lu.agent_slug, lu.agent_name, (lu.agent_id IS NULL), ou.email, ou.displ
 ORDER BY cost_total DESC, calls DESC;
 
 -- name: UsageByUser :many
--- Grouped by the triggering user's snapshot email; deleted = the user row is
--- gone (user_id was SET NULL) but the email snapshot remains.
+-- Grouped by the triggering user's snapshot email. Spend with no user in the
+-- loop — agent HTTP route / scheduled "code" runs, or otherwise unattributed
+-- calls — carries an empty email snapshot; it is bucketed under its call_kind
+-- (e.g. "code") instead of shown as a phantom deleted user. deleted marks a
+-- real user whose row is gone (user_id SET NULL) but whose email snapshot
+-- survives — i.e. a non-empty email with no live user id.
 SELECT
-    user_email,
-    (user_id IS NULL)::boolean                  AS deleted,
+    COALESCE(NULLIF(user_email, ''), call_kind)     AS user_email,
+    (user_id IS NULL AND user_email <> '')::boolean AS deleted,
     count(*)::bigint                            AS calls,
     COALESCE(sum(tokens_in), 0)::bigint         AS tokens_in,
     COALESCE(sum(tokens_out), 0)::bigint        AS tokens_out,
@@ -47,7 +51,7 @@ SELECT
     COALESCE(sum(cost_total), 0)::double precision AS cost_total
 FROM llm_usage
 WHERE created_at >= @since
-GROUP BY user_email, (user_id IS NULL)
+GROUP BY COALESCE(NULLIF(user_email, ''), call_kind), (user_id IS NULL AND user_email <> '')
 ORDER BY cost_total DESC, calls DESC;
 
 -- name: UsageByModel :many

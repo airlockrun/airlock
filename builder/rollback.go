@@ -23,6 +23,7 @@ import (
 // BuildService.notifyUpgradeOutcome.
 type RollbackInput struct {
 	AgentID              string
+	InitiatorUserID      pgtype.UUID // user who triggered the rollback; attributes codegen spend (falls back to owner)
 	BuildID              string
 	ConversationID       string
 	SystemConversationID string
@@ -111,6 +112,7 @@ func (b *BuildService) Rollback(_ context.Context, in RollbackInput) {
 		Reason:           "rollback",
 		RunID:            runID,
 		ConversationID:   in.ConversationID,
+		InitiatorUserID:  in.InitiatorUserID,
 	}
 
 	successMsg, runErr := b.Execute(ctx, plan)

@@ -8,6 +8,7 @@ import (
 
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"
 )
 
@@ -55,19 +56,20 @@ type PostBuildSystemNotifier interface {
 // BuildService.notifyUpgradeOutcome.
 type UpgradeInput struct {
 	AgentID              string
-	RunID                string // the run that triggered the upgrade
-	Reason               string // "llm_request", "auto_fix", "manual"
-	Description          string // what to change
-	ConversationID       string // conversation that triggered the upgrade (for post-upgrade reply)
-	SystemConversationID string // system-agent conversation that triggered the upgrade (mutually exclusive with ConversationID)
-	ErrorMessage         string // from failed run (auto_fix)
-	PanicTrace           string // from failed run (auto_fix)
-	InputPayload         string // JSON of failed run input (auto_fix)
-	Actions              string // JSON of recorded actions before failure (auto_fix)
-	Messages             string // conversation messages from the failed run
-	Logs                 string // captured log lines from the failed run (auto_fix)
-	BuildError           string // error_message of the agent's most recent failed build
-	BuildLog             string // tail of that build's docker log
+	InitiatorUserID      pgtype.UUID // user who triggered the upgrade; attributes codegen spend (falls back to owner)
+	RunID                string      // the run that triggered the upgrade
+	Reason               string      // "llm_request", "auto_fix", "manual"
+	Description          string      // what to change
+	ConversationID       string      // conversation that triggered the upgrade (for post-upgrade reply)
+	SystemConversationID string      // system-agent conversation that triggered the upgrade (mutually exclusive with ConversationID)
+	ErrorMessage         string      // from failed run (auto_fix)
+	PanicTrace           string      // from failed run (auto_fix)
+	InputPayload         string      // JSON of failed run input (auto_fix)
+	Actions              string      // JSON of recorded actions before failure (auto_fix)
+	Messages             string      // conversation messages from the failed run
+	Logs                 string      // captured log lines from the failed run (auto_fix)
+	BuildError           string      // error_message of the agent's most recent failed build
+	BuildLog             string      // tail of that build's docker log
 }
 
 // notifyUpgradeOutcome routes the post-build message to whichever sink
@@ -187,13 +189,14 @@ func (b *BuildService) RunUpgrade(_ context.Context, input UpgradeInput) {
 	}
 
 	plan := BuildPlan{
-		Agent:          agent,
-		Kind:           BuildKindUpgrade,
-		Instruction:    strings.TrimSpace(input.Description),
-		Reason:         input.Reason,
-		RunID:          input.RunID,
-		ConversationID: input.ConversationID,
-		Diagnostics:    autoFixContextFromInput(input),
+		Agent:           agent,
+		Kind:            BuildKindUpgrade,
+		Instruction:     strings.TrimSpace(input.Description),
+		Reason:          input.Reason,
+		RunID:           input.RunID,
+		ConversationID:  input.ConversationID,
+		InitiatorUserID: input.InitiatorUserID,
+		Diagnostics:     autoFixContextFromInput(input),
 	}
 
 	successMsg, runErr := b.Execute(ctx, plan)

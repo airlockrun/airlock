@@ -303,6 +303,7 @@ func (s *Service) Create(ctx context.Context, p authz.Principal, req CreateReque
 			Name:                 req.Name,
 			Slug:                 req.Slug,
 			OwnerPrincipalID:     p.UserID.String(),
+			InitiatorUserID:      pgUserID(p),
 			BuildProviderID:      buildProviderFK,
 			BuildModel:           req.BuildModel,
 			Instructions:         req.Instructions,
@@ -860,6 +861,7 @@ func (s *Service) Upgrade(ctx context.Context, p authz.Principal, agentID uuid.U
 				Name:             agent.Name,
 				Slug:             agent.Slug,
 				OwnerPrincipalID: uuid.UUID(agent.OwnerPrincipalID.Bytes).String(),
+				InitiatorUserID:  pgUserID(p),
 				BuildProviderID:  agent.BuildProviderID,
 				BuildModel:       agent.BuildModel,
 				Instructions:     req.Description,
@@ -874,6 +876,7 @@ func (s *Service) Upgrade(ctx context.Context, p authz.Principal, agentID uuid.U
 		}
 		input := builder.UpgradeInput{
 			AgentID:              agentID.String(),
+			InitiatorUserID:      pgUserID(p),
 			RunID:                runID,
 			Reason:               "manual",
 			Description:          req.Description,
@@ -973,6 +976,7 @@ func (s *Service) Rollback(ctx context.Context, p authz.Principal, agentID uuid.
 		}
 		s.builder.Rollback(context.Background(), builder.RollbackInput{
 			AgentID:              agentID.String(),
+			InitiatorUserID:      pgUserID(p),
 			BuildID:              buildID.String(),
 			ConversationID:       req.ConversationID,
 			SystemConversationID: req.SystemConversationID,
@@ -1266,4 +1270,12 @@ func (s *Service) GetGitConfig(ctx context.Context, p authz.Principal, agentID u
 		out.CredentialName = cfg.CredentialName.String
 	}
 	return out, nil
+}
+
+// pgUserID converts a principal's user id to a pgtype.UUID, marking it
+// invalid for a non-registered principal (uuid.Nil). Used to attribute
+// build/upgrade/rollback codegen spend to the initiating user; an invalid
+// value lets the builder fall back to the agent owner.
+func pgUserID(p authz.Principal) pgtype.UUID {
+	return pgtype.UUID{Bytes: p.UserID, Valid: p.UserID != uuid.Nil}
 }

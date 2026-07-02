@@ -562,6 +562,7 @@ CREATE TABLE public.llm_usage (
     agent_name text NOT NULL,
     run_id uuid,
     build_id uuid,
+    system_run_id uuid,
     user_id uuid,
     user_email text NOT NULL,
     conversation_id uuid,
@@ -898,10 +899,17 @@ CREATE TABLE public.system_runs (
     conversation_id uuid NOT NULL,
     user_id uuid NOT NULL,
     status text DEFAULT 'running'::text NOT NULL,
+    trigger_type text NOT NULL,
+    message_preview text NOT NULL,
     error_message text DEFAULT ''::text NOT NULL,
+    llm_calls integer DEFAULT 0 NOT NULL,
+    llm_tokens_in bigint DEFAULT 0 NOT NULL,
+    llm_tokens_out bigint DEFAULT 0 NOT NULL,
+    llm_cost_estimate double precision DEFAULT 0 NOT NULL,
     started_at timestamp with time zone DEFAULT now() NOT NULL,
     finished_at timestamp with time zone,
-    CONSTRAINT system_runs_status_check CHECK ((status = ANY (ARRAY['running'::text, 'suspended'::text, 'complete'::text, 'error'::text, 'cancelled'::text])))
+    CONSTRAINT system_runs_status_check CHECK ((status = ANY (ARRAY['running'::text, 'suspended'::text, 'complete'::text, 'error'::text, 'cancelled'::text]))),
+    CONSTRAINT system_runs_trigger_type_check CHECK ((trigger_type = ANY (ARRAY['prompt'::text, 'bridge'::text, 'event'::text])))
 );
 
 
@@ -1706,6 +1714,13 @@ CREATE INDEX llm_usage_run_idx ON public.llm_usage USING btree (run_id) WHERE (r
 
 
 --
+-- Name: llm_usage_system_run_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX llm_usage_system_run_idx ON public.llm_usage USING btree (system_run_id) WHERE (system_run_id IS NOT NULL);
+
+
+--
 -- Name: managed_bot_sessions_owner_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -2249,6 +2264,14 @@ ALTER TABLE ONLY public.llm_usage
 
 ALTER TABLE ONLY public.llm_usage
     ADD CONSTRAINT llm_usage_run_id_fkey FOREIGN KEY (run_id) REFERENCES public.runs(id) ON DELETE SET NULL;
+
+
+--
+-- Name: llm_usage llm_usage_system_run_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.llm_usage
+    ADD CONSTRAINT llm_usage_system_run_id_fkey FOREIGN KEY (system_run_id) REFERENCES public.system_runs(id) ON DELETE SET NULL;
 
 
 --

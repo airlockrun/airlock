@@ -113,14 +113,16 @@ func (q *Queries) CreateSystemConversation(ctx context.Context, arg CreateSystem
 }
 
 const createSystemRun = `-- name: CreateSystemRun :one
-INSERT INTO system_runs (conversation_id, user_id)
-VALUES ($1, $2)
-RETURNING id, conversation_id, user_id, status, error_message, started_at, finished_at
+INSERT INTO system_runs (conversation_id, user_id, trigger_type, message_preview)
+VALUES ($1, $2, $3, $4)
+RETURNING id, conversation_id, user_id, status, trigger_type, message_preview, error_message, llm_calls, llm_tokens_in, llm_tokens_out, llm_cost_estimate, started_at, finished_at
 `
 
 type CreateSystemRunParams struct {
 	ConversationID pgtype.UUID `json:"conversation_id"`
 	UserID         pgtype.UUID `json:"user_id"`
+	TriggerType    string      `json:"trigger_type"`
+	MessagePreview string      `json:"message_preview"`
 }
 
 // Inserts a fresh run row at the start of a turn. The id becomes the
@@ -128,14 +130,25 @@ type CreateSystemRunParams struct {
 // text_delta/tool_call/tool_result events under one bubble — same
 // contract as agent chat's runs.id.
 func (q *Queries) CreateSystemRun(ctx context.Context, arg CreateSystemRunParams) (SystemRun, error) {
-	row := q.db.QueryRow(ctx, createSystemRun, arg.ConversationID, arg.UserID)
+	row := q.db.QueryRow(ctx, createSystemRun,
+		arg.ConversationID,
+		arg.UserID,
+		arg.TriggerType,
+		arg.MessagePreview,
+	)
 	var i SystemRun
 	err := row.Scan(
 		&i.ID,
 		&i.ConversationID,
 		&i.UserID,
 		&i.Status,
+		&i.TriggerType,
+		&i.MessagePreview,
 		&i.ErrorMessage,
+		&i.LlmCalls,
+		&i.LlmTokensIn,
+		&i.LlmTokensOut,
+		&i.LlmCostEstimate,
 		&i.StartedAt,
 		&i.FinishedAt,
 	)
@@ -266,7 +279,7 @@ func (q *Queries) GetSystemConversationByID(ctx context.Context, id pgtype.UUID)
 }
 
 const getSystemRunByID = `-- name: GetSystemRunByID :one
-SELECT id, conversation_id, user_id, status, error_message, started_at, finished_at FROM system_runs WHERE id = $1
+SELECT id, conversation_id, user_id, status, trigger_type, message_preview, error_message, llm_calls, llm_tokens_in, llm_tokens_out, llm_cost_estimate, started_at, finished_at FROM system_runs WHERE id = $1
 `
 
 func (q *Queries) GetSystemRunByID(ctx context.Context, id pgtype.UUID) (SystemRun, error) {
@@ -277,7 +290,13 @@ func (q *Queries) GetSystemRunByID(ctx context.Context, id pgtype.UUID) (SystemR
 		&i.ConversationID,
 		&i.UserID,
 		&i.Status,
+		&i.TriggerType,
+		&i.MessagePreview,
 		&i.ErrorMessage,
+		&i.LlmCalls,
+		&i.LlmTokensIn,
+		&i.LlmTokensOut,
+		&i.LlmCostEstimate,
 		&i.StartedAt,
 		&i.FinishedAt,
 	)
@@ -501,7 +520,8 @@ func (q *Queries) ListSystemMessagesByConversationAll(ctx context.Context, conve
 }
 
 const listSystemRunsByUser = `-- name: ListSystemRunsByUser :many
-SELECT r.id, r.conversation_id, r.user_id, r.status, r.error_message,
+SELECT r.id, r.conversation_id, r.user_id, r.status, r.trigger_type,
+       r.message_preview, r.error_message, r.llm_cost_estimate,
        r.started_at, r.finished_at, c.title AS conversation_title
 FROM system_runs r
 JOIN system_conversations c ON c.id = r.conversation_id
@@ -522,7 +542,10 @@ type ListSystemRunsByUserRow struct {
 	ConversationID    pgtype.UUID        `json:"conversation_id"`
 	UserID            pgtype.UUID        `json:"user_id"`
 	Status            string             `json:"status"`
+	TriggerType       string             `json:"trigger_type"`
+	MessagePreview    string             `json:"message_preview"`
 	ErrorMessage      string             `json:"error_message"`
+	LlmCostEstimate   float64            `json:"llm_cost_estimate"`
 	StartedAt         pgtype.Timestamptz `json:"started_at"`
 	FinishedAt        pgtype.Timestamptz `json:"finished_at"`
 	ConversationTitle string             `json:"conversation_title"`
@@ -545,7 +568,10 @@ func (q *Queries) ListSystemRunsByUser(ctx context.Context, arg ListSystemRunsBy
 			&i.ConversationID,
 			&i.UserID,
 			&i.Status,
+			&i.TriggerType,
+			&i.MessagePreview,
 			&i.ErrorMessage,
+			&i.LlmCostEstimate,
 			&i.StartedAt,
 			&i.FinishedAt,
 			&i.ConversationTitle,
@@ -665,6 +691,24 @@ type UpdateSystemConversationSettingsParams struct {
 // flip the echo setting without touching anything else.
 func (q *Queries) UpdateSystemConversationSettings(ctx context.Context, arg UpdateSystemConversationSettingsParams) error {
 	_, err := q.db.Exec(ctx, updateSystemConversationSettings, arg.Patch, arg.ID)
+	return err
+}
+
+const updateSystemRunLLMStats = `-- name: UpdateSystemRunLLMStats :exec
+UPDATE system_runs
+SET llm_calls        = COALESCE((SELECT count(*) FROM llm_usage WHERE llm_usage.system_run_id = $1), 0),
+    llm_tokens_in    = COALESCE((SELECT sum(tokens_in) FROM llm_usage WHERE llm_usage.system_run_id = $1), 0),
+    llm_tokens_out   = COALESCE((SELECT sum(tokens_out) FROM llm_usage WHERE llm_usage.system_run_id = $1), 0),
+    llm_cost_estimate = COALESCE((SELECT sum(cost_total) FROM llm_usage WHERE llm_usage.system_run_id = $1), 0)
+WHERE id = $1
+`
+
+// Refreshes the run's token/call/cost aggregate from the llm_usage ledger
+// (rows the sysagent turn wrote under this system_run_id). Mirrors
+// UpdateRunLLMStats / UpdateBuildLLMStats so the per-run cost surfaced in the
+// activity view stays the ledger's sum, computed in exactly one place.
+func (q *Queries) UpdateSystemRunLLMStats(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, updateSystemRunLLMStats, id)
 	return err
 }
 

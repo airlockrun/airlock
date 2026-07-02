@@ -399,6 +399,7 @@ type LlmUsage struct {
 	AgentName         string             `json:"agent_name"`
 	RunID             pgtype.UUID        `json:"run_id"`
 	BuildID           pgtype.UUID        `json:"build_id"`
+	SystemRunID       pgtype.UUID        `json:"system_run_id"`
 	UserID            pgtype.UUID        `json:"user_id"`
 	UserEmail         string             `json:"user_email"`
 	ConversationID    pgtype.UUID        `json:"conversation_id"`
@@ -608,13 +609,19 @@ type SystemMessage struct {
 }
 
 type SystemRun struct {
-	ID             pgtype.UUID        `json:"id"`
-	ConversationID pgtype.UUID        `json:"conversation_id"`
-	UserID         pgtype.UUID        `json:"user_id"`
-	Status         string             `json:"status"`
-	ErrorMessage   string             `json:"error_message"`
-	StartedAt      pgtype.Timestamptz `json:"started_at"`
-	FinishedAt     pgtype.Timestamptz `json:"finished_at"`
+	ID              pgtype.UUID        `json:"id"`
+	ConversationID  pgtype.UUID        `json:"conversation_id"`
+	UserID          pgtype.UUID        `json:"user_id"`
+	Status          string             `json:"status"`
+	TriggerType     string             `json:"trigger_type"`
+	MessagePreview  string             `json:"message_preview"`
+	ErrorMessage    string             `json:"error_message"`
+	LlmCalls        int32              `json:"llm_calls"`
+	LlmTokensIn     int64              `json:"llm_tokens_in"`
+	LlmTokensOut    int64              `json:"llm_tokens_out"`
+	LlmCostEstimate float64            `json:"llm_cost_estimate"`
+	StartedAt       pgtype.Timestamptz `json:"started_at"`
+	FinishedAt      pgtype.Timestamptz `json:"finished_at"`
 }
 
 type SystemSetting struct {

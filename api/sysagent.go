@@ -136,7 +136,10 @@ func (h *sysagentHandler) ListRuns(w http.ResponseWriter, r *http.Request) {
 			ConversationId:    run.ConversationID.String(),
 			ConversationTitle: run.ConversationTitle,
 			Status:            run.Status,
+			TriggerType:       run.TriggerType,
+			MessagePreview:    run.MessagePreview,
 			ErrorMessage:      run.ErrorMessage,
+			LlmCostEstimate:   run.CostEstimate,
 			StartedAt:         timestamppb.New(run.StartedAt),
 		}
 		if run.FinishedAt != nil {

@@ -226,6 +226,9 @@ message RunInfo {
   // llm_tokens_in - llm_tokens_cached; llm_cost_estimate already reflects
   // the cheaper cache-read rate (priced per-row in the llm_usage ledger).
   int32 llm_tokens_cached = 18;
+  // trigger_type is what fired the run: "prompt" (web chat), "bridge",
+  // "code" (agent HTTP route), "webhook", "cron", or "a2a".
+  string trigger_type = 19;
 }
 
 // AgentBuildInfo represents a single build or upgrade of an agent.

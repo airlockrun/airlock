@@ -12,6 +12,7 @@ import (
 	"github.com/airlockrun/goai/tool"
 	sol "github.com/airlockrun/sol"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // runCodegen is Execute's Phase C: optional Sol invocation. Returns
@@ -83,6 +84,7 @@ func (b *BuildService) runCodegen(
 		WorkDir:         workDir,
 		AgentDir:        "/workspace",
 		AgentID:         agent.ID,
+		UserID:          buildSpendUser(plan, agent),
 		BuildID:         build.ID,
 		BuildType:       string(plan.Kind),
 		BuildProviderID: agent.BuildProviderID,
@@ -153,6 +155,18 @@ func (b *BuildService) runCodegen(
 		return "", "", "", fmt.Errorf("merge codegen: %w", err)
 	}
 	return hash, exitStatusSuccess, solResult.ExitMessage, nil
+}
+
+// buildSpendUser picks the user to attribute this build's codegen LLM spend
+// to: the initiating user when one is known (UI upgrade/rollback, initial
+// create, sysagent), falling back to the agent owner for unattended builds
+// (git push/poll). owner_principal_id is NOT NULL and, for an agent, is
+// always a user principal, so the fallback is always a valid users row.
+func buildSpendUser(plan BuildPlan, agent dbq.Agent) pgtype.UUID {
+	if plan.InitiatorUserID.Valid {
+		return plan.InitiatorUserID
+	}
+	return agent.OwnerPrincipalID
 }
 
 // codegenCommitMessage builds the git commit message for a successful

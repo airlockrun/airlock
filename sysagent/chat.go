@@ -195,6 +195,22 @@ func (s *Service) envFor(ctx context.Context, userID uuid.UUID, platform string,
 // startRun is the shared prep used by RunPrompt and RunPromptInline:
 // load + ownership-check the conversation, do the resume-race wait if
 // this is a confirmation reply, rename a first-message conversation,
+// systemTriggerType classifies what initiated a sysagent turn, for the
+// activity view's Trigger column. Values mirror the agent runs taxonomy so the
+// two tables read the same: "prompt" for the web chat, "bridge" for a Telegram
+// DM. An auto-resume turn (no operator message and no approve/deny — the server
+// injected a completion notice and asked the LLM to react) is an "event", which
+// has no agent-run analog.
+func systemTriggerType(input PromptInput) string {
+	if input.Message == "" && input.Approved == nil {
+		return "event"
+	}
+	if input.Platform == "web" {
+		return "prompt"
+	}
+	return "bridge"
+}
+
 // and insert the system_runs row. The actual chat goroutine /
 // inline loop is up to the caller.
 func (s *Service) startRun(ctx context.Context, p authz.Principal, conversationID uuid.UUID, input PromptInput) (uuid.UUID, dbq.SystemConversation, error) {
@@ -235,6 +251,8 @@ func (s *Service) startRun(ctx context.Context, p authz.Principal, conversationI
 	run, err := q.CreateSystemRun(ctx, dbq.CreateSystemRunParams{
 		ConversationID: conversation.ID,
 		UserID:         pgtype.UUID{Bytes: p.UserID, Valid: true},
+		TriggerType:    systemTriggerType(input),
+		MessagePreview: truncate(input.Message, 120),
 	})
 	if err != nil {
 		return uuid.Nil, dbq.SystemConversation{}, fmt.Errorf("create system run: %w", err)
@@ -376,6 +394,12 @@ func (s *Service) runChat(ctx context.Context, p authz.Principal, conversation d
 		}
 		return
 	}
+
+	// Record this turn's model spend to the shared ledger (attributed to the
+	// operator + this system run) and refresh the run's cost aggregate. Runs
+	// for every result state — the tokens were burned whether the turn
+	// completed, failed, or suspended mid-flight. Best-effort.
+	s.recordSystemRunUsage(runID, p.UserID, providerID, modelName, result.Usage, result.Status == sol.RunFailed)
 
 	// Result-level handling — RunResult.Status is what determines
 	// what we persist + which terminal event we emit.

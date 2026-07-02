@@ -33,14 +33,17 @@ func warnOnce(logger *zap.Logger, key, msg string, fields ...zap.Field) {
 }
 
 // Capture is one fully-resolved model charge. Attribution (RunID/BuildID/
-// UserID/ConversationID) is the caller's responsibility — the api side
-// resolves it from the run row, the builder side sets BuildID directly.
-// Exactly one of RunID/BuildID is normally Valid (or neither, for an
+// SystemRunID/UserID/ConversationID) is the caller's responsibility — the api
+// side resolves it from the run row; the builder side sets BuildID plus UserID
+// (the agent owner, so build spend is attributed to a real user, not an
+// orphaned row); the sysagent side sets SystemRunID plus UserID (the operator).
+// Exactly one of RunID/BuildID/SystemRunID is normally Valid (or none, for an
 // unattributed call); they are not mutually enforced here.
 type Capture struct {
 	AgentID        pgtype.UUID
 	RunID          pgtype.UUID
 	BuildID        pgtype.UUID
+	SystemRunID    pgtype.UUID
 	UserID         pgtype.UUID
 	ConversationID pgtype.UUID
 
@@ -92,6 +95,7 @@ func Record(ctx context.Context, q *dbq.Queries, logger *zap.Logger, c Capture) 
 		AgentID:           c.AgentID,
 		RunID:             c.RunID,
 		BuildID:           c.BuildID,
+		SystemRunID:       c.SystemRunID,
 		UserID:            c.UserID,
 		ConversationID:    c.ConversationID,
 		ProviderCatalogID: c.ProviderCatalogID,

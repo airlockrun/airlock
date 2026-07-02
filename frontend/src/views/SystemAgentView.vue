@@ -67,15 +67,15 @@ function fmtTime(ts?: { seconds?: bigint }): string {
   return new Date(Number(ts.seconds) * 1000).toLocaleString()
 }
 
-function duration(r: SystemRunInfo): string {
-  if (!r.startedAt?.seconds) return ''
-  const startMs = Number(r.startedAt.seconds) * 1000
-  const endMs = r.finishedAt?.seconds ? Number(r.finishedAt.seconds) * 1000 : Date.now()
-  const sec = Math.max(0, Math.floor((endMs - startMs) / 1000))
-  if (sec < 60) return `${sec}s`
-  const m = Math.floor(sec / 60)
-  const s = sec % 60
-  return `${m}m ${s}s`
+function cost(v: number): string {
+  if (!v) return '—'
+  return '$' + v.toFixed(v < 0.01 ? 4 : 2)
+}
+
+function snippet(s: string): string {
+  const t = (s || '').trim()
+  if (!t) return '—'
+  return t.length > 60 ? t.slice(0, 60) + '…' : t
 }
 
 function statusSeverity(status: string): string {
@@ -139,9 +139,10 @@ onMounted(load)
             :value="runs"
             dataKey="id"
           >
-            <Column field="conversationTitle" header="Conversation">
+            <Column header="Message">
               <template #body="{ data }">
-                <span style="font-weight: 500">{{ data.conversationTitle }}</span>
+                <span :title="data.messagePreview" style="color: var(--p-text-muted-color); font-size: 0.85rem">{{ snippet(data.messagePreview) }}</span>
+                <div v-if="data.errorMessage" style="font-size: 0.8rem; color: var(--p-red-500)">{{ data.errorMessage }}</div>
               </template>
             </Column>
             <Column field="status" header="Status" style="width: 8rem">
@@ -149,19 +150,19 @@ onMounted(load)
                 <Tag :value="data.status" :severity="statusSeverity(data.status)" />
               </template>
             </Column>
+            <Column field="triggerType" header="Trigger" style="width: 7rem">
+              <template #body="{ data }">
+                <Tag :value="data.triggerType" severity="secondary" />
+              </template>
+            </Column>
             <Column field="startedAt" header="Started" style="width: 14rem">
               <template #body="{ data }">
                 <span style="color: var(--p-text-muted-color); font-size: 0.875rem">{{ fmtTime(data.startedAt) }}</span>
               </template>
             </Column>
-            <Column header="Duration" style="width: 7rem">
+            <Column header="Cost" style="width: 7rem">
               <template #body="{ data }">
-                <span style="color: var(--p-text-muted-color); font-size: 0.875rem">{{ duration(data) }}</span>
-              </template>
-            </Column>
-            <Column field="errorMessage" header="">
-              <template #body="{ data }">
-                <span v-if="data.errorMessage" style="font-size: 0.8rem; color: var(--p-red-500)">{{ data.errorMessage }}</span>
+                <span style="color: var(--p-text-muted-color); font-size: 0.875rem">{{ cost(data.llmCostEstimate) }}</span>
               </template>
             </Column>
           </DataTable>

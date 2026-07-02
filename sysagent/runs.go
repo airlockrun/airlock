@@ -19,7 +19,10 @@ type RunSummary struct {
 	ConversationID    uuid.UUID
 	ConversationTitle string
 	Status            string // 'running' | 'suspended' | 'complete' | 'error' | 'cancelled'
+	TriggerType       string // 'prompt' | 'bridge' | 'event'
+	MessagePreview    string // truncated operator message for the turn ('' for event/confirmation runs)
 	ErrorMessage      string
+	CostEstimate      float64
 	StartedAt         time.Time
 	FinishedAt        *time.Time
 }
@@ -72,7 +75,10 @@ func (s *Service) ListRuns(ctx context.Context, p authz.Principal, cursor time.T
 			ConversationID:    uuid.UUID(r.ConversationID.Bytes),
 			ConversationTitle: r.ConversationTitle,
 			Status:            r.Status,
+			TriggerType:       r.TriggerType,
+			MessagePreview:    r.MessagePreview,
 			ErrorMessage:      r.ErrorMessage,
+			CostEstimate:      r.LlmCostEstimate,
 			StartedAt:         r.StartedAt.Time,
 		}
 		if r.FinishedAt.Valid {
