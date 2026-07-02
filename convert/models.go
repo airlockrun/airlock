@@ -29,6 +29,19 @@ func AgentModelConfigToProto(agent dbq.Agent, slots []dbq.AgentModelSlot, settin
 		EmbeddingProviderId: PgUUIDToString(agent.EmbeddingProviderID),
 		SearchProviderId:    PgUUIDToString(agent.SearchProviderID),
 	}
+	// System defaults per capability field — what an empty override inherits.
+	// Keyed by the camelCase AgentModelConfig field name so the UI can look up
+	// row.key directly.
+	out.SystemDefaults = map[string]string{
+		"buildModel":     settings.DefaultBuildModel,
+		"execModel":      settings.DefaultExecModel,
+		"sttModel":       settings.DefaultSttModel,
+		"visionModel":    settings.DefaultVisionModel,
+		"ttsModel":       settings.DefaultTtsModel,
+		"imageGenModel":  settings.DefaultImageGenModel,
+		"embeddingModel": settings.DefaultEmbeddingModel,
+		"searchModel":    settings.DefaultSearchModel,
+	}
 	for _, s := range slots {
 		resolvedFK, resolvedModel := modelresolve.EffectiveForSlot(agent, settings, s)
 		out.Slots = append(out.Slots, &airlockv1.ModelSlotInfo{

@@ -118,7 +118,10 @@ const readonlyRows: { key: keyof AgentModelConfig; label: string; icon: string }
   { key: 'searchModel', label: 'Web Search', icon: 'pi pi-search' },
 ]
 function currentModel(key: keyof AgentModelConfig): string {
-  return (config.value as any)[key] || 'Inherits system default'
+  const set = (config.value as any)[key]
+  if (set) return set
+  const def = config.value.systemDefaults?.[key as string]
+  return def ? `Inherits default · ${def}` : 'Inherits system default'
 }
 
 // --- Rows. Each binds to a capability-override field on `config`.
@@ -334,6 +337,9 @@ async function save() {
             :loading="catalog.loading"
             style="width: 100%"
           />
+          <small v-if="!pickerValues[row.key as string] && config.systemDefaults?.[row.key as string]" style="color: var(--p-text-muted-color)">
+            Inherits default: <strong>{{ config.systemDefaults[row.key as string] }}</strong>
+          </small>
           <small style="color: var(--p-text-muted-color)">{{ row.help }}</small>
         </div>
       </div>
