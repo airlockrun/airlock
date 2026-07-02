@@ -106,7 +106,11 @@ func PostToConversation(ctx context.Context, deps PostDeps, opts PostOpts) error
 		convIDStr := opts.ConversationID.String()
 		// Resolve S3 keys to presigned URLs so the browser can load media directly.
 		resolvedJSON := ResolveMediaPartsJSON(ctx, deps.S3, deps.Logger, partsJSON)
-		_ = deps.PubSub.Publish(ctx, opts.AgentID, realtime.NewEnvelope("notification", agentIDStr, &airlockv1.NotificationEvent{
+		// ConversationID must ride on the ENVELOPE (not just the payload): the
+		// web client's address gate adopts a brand-new thread only when the
+		// envelope carries it (chat store onRunMessage). Without it the first
+		// message's upload echo is dropped and its image only shows on refresh.
+		_ = deps.PubSub.Publish(ctx, opts.AgentID, realtime.NewEnvelopeForUser("notification", agentIDStr, pgUUID(conv.UserID).String(), convIDStr, &airlockv1.NotificationEvent{
 			AgentId:        agentIDStr,
 			ConversationId: convIDStr,
 			PartsJson:      string(resolvedJSON),
