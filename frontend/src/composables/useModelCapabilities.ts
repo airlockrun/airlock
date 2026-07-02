@@ -4,8 +4,8 @@ import { useProvidersStore } from '@/stores/providers'
 import { useModelsAllowedStore } from '@/stores/modelsAllowed'
 
 // CatalogModel mirrors the airlock ModelInfo proto fields the pickers
-// need. `kind` is sol's goai-aggregated classification; `caps` are the
-// per-model capability flags sol's CapabilitiesFromModel emits.
+// need. `kind` is sol's derived classification (models.dev + OpenRouter);
+// `caps` are the per-model capability flags sol's CapabilitiesFromModel emits.
 export type CatalogModel = {
   kind?: string
   caps: string[]
@@ -30,18 +30,22 @@ export function splitModelValue(v: string): { providerRowID: string; modelName: 
 }
 
 // Kind predicates — primary axis for picker filtering. Empty kind means
-// sol has no goai typed-list coverage for the provider (the openai-compat
-// bucket: groq, xai, cerebras, fireworks, etc.). Those providers ship
-// language models exclusively today, so isLanguage treats empty as
-// language; the other predicates require an exact match.
+// sol classified the model as a plain language model (chat models + the
+// openai-compat bucket: groq, xai, cerebras, fireworks, etc.), so isLanguage
+// treats empty as language; the other kind predicates require an exact match.
 export function isLanguage(m: CatalogModel): boolean {
   return !m.kind || m.kind === 'language'
 }
 export function isEmbedding(m: CatalogModel): boolean {
   return m.kind === 'embedding'
 }
+// isImageGen selects models for the image-generation slot by CAPABILITY, not
+// kind: any model that outputs images qualifies — a dedicated generator
+// (kind=image) or a chat model with image output (kind=language, output
+// includes "image"). Both carry the image_gen capability from sol's
+// CapabilitiesFromModel. Mirrors the backend gate (ModelMeetsCapability "image").
 export function isImageGen(m: CatalogModel): boolean {
-  return m.kind === 'image'
+  return hasCap(m, 'image_gen')
 }
 export function isSpeech(m: CatalogModel): boolean {
   return m.kind === 'speech'
