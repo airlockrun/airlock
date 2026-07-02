@@ -27,6 +27,28 @@ func TestEffectiveForCapability(t *testing.T) {
 	}
 }
 
+func TestSystemDefaultForOverride(t *testing.T) {
+	settings := dbq.SystemSetting{
+		DefaultBuildProviderID: fk(true), DefaultBuildModel: "build-default",
+		DefaultExecProviderID: fk(true), DefaultExecModel: "exec-default",
+		DefaultSearchProviderID: fk(true), DefaultSearchModel: "search-default",
+	}
+	// build and exec are both the "text" capability but must NOT collapse.
+	if _, m := SystemDefaultForOverride(settings, "build"); m != "build-default" {
+		t.Errorf("build = %q, want build-default", m)
+	}
+	if _, m := SystemDefaultForOverride(settings, "exec"); m != "exec-default" {
+		t.Errorf("exec = %q, want exec-default", m)
+	}
+	// search has a default despite not being a runtime capability.
+	if _, m := SystemDefaultForOverride(settings, "search"); m != "search-default" {
+		t.Errorf("search = %q, want search-default", m)
+	}
+	if _, m := SystemDefaultForOverride(settings, "bogus"); m != "" {
+		t.Errorf("unknown slot = %q, want empty", m)
+	}
+}
+
 func TestEffectiveForSlot(t *testing.T) {
 	agent := dbq.Agent{ExecProviderID: fk(true), ExecModel: "agent-exec"}
 	settings := dbq.SystemSetting{

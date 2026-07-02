@@ -50,6 +50,34 @@ func SystemCapabilityDefault(settings dbq.SystemSetting, capability string) (pgt
 	return pgtype.UUID{}, ""
 }
 
+// SystemDefaultForOverride returns the (provider FK, model) an empty
+// capability-override row inherits, keyed by the override SLOT — not the
+// capability. The distinction matters: build and exec are both the "text"
+// capability at runtime but have separate system defaults, and search has a
+// default without being part of the runtime capability vocabulary. Slot is one
+// of build/exec/stt/vision/tts/image_gen/embedding/search.
+func SystemDefaultForOverride(settings dbq.SystemSetting, slot string) (pgtype.UUID, string) {
+	switch slot {
+	case "build":
+		return settings.DefaultBuildProviderID, settings.DefaultBuildModel
+	case "exec":
+		return settings.DefaultExecProviderID, settings.DefaultExecModel
+	case "stt":
+		return settings.DefaultSttProviderID, settings.DefaultSttModel
+	case "vision":
+		return settings.DefaultVisionProviderID, settings.DefaultVisionModel
+	case "tts":
+		return settings.DefaultTtsProviderID, settings.DefaultTtsModel
+	case "image_gen":
+		return settings.DefaultImageGenProviderID, settings.DefaultImageGenModel
+	case "embedding":
+		return settings.DefaultEmbeddingProviderID, settings.DefaultEmbeddingModel
+	case "search":
+		return settings.DefaultSearchProviderID, settings.DefaultSearchModel
+	}
+	return pgtype.UUID{}, ""
+}
+
 // EffectiveForCapability walks the override → default tiers for a capability:
 // the agent's per-capability override, then the system default. The pair is
 // empty/invalid only when neither tier is configured.

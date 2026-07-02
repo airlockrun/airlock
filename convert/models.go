@@ -29,18 +29,24 @@ func AgentModelConfigToProto(agent dbq.Agent, slots []dbq.AgentModelSlot, settin
 		EmbeddingProviderId: PgUUIDToString(agent.EmbeddingProviderID),
 		SearchProviderId:    PgUUIDToString(agent.SearchProviderID),
 	}
-	// System defaults per capability field — what an empty override inherits.
-	// Keyed by the camelCase AgentModelConfig field name so the UI can look up
-	// row.key directly.
-	out.SystemDefaults = map[string]string{
-		"buildModel":     settings.DefaultBuildModel,
-		"execModel":      settings.DefaultExecModel,
-		"sttModel":       settings.DefaultSttModel,
-		"visionModel":    settings.DefaultVisionModel,
-		"ttsModel":       settings.DefaultTtsModel,
-		"imageGenModel":  settings.DefaultImageGenModel,
-		"embeddingModel": settings.DefaultEmbeddingModel,
-		"searchModel":    settings.DefaultSearchModel,
+	// System defaults per capability-override field — what an empty override
+	// inherits. Keyed by the camelCase AgentModelConfig field name so the UI can
+	// look up row.key directly; resolved through modelresolve (keyed per
+	// override slot, so build ≠ exec). Empty defaults are omitted.
+	out.SystemDefaults = map[string]*airlockv1.ModelRef{}
+	for field, slot := range map[string]string{
+		"buildModel": "build", "execModel": "exec", "sttModel": "stt",
+		"visionModel": "vision", "ttsModel": "tts", "imageGenModel": "image_gen",
+		"embeddingModel": "embedding", "searchModel": "search",
+	} {
+		fk, model := modelresolve.SystemDefaultForOverride(settings, slot)
+		if model == "" {
+			continue
+		}
+		out.SystemDefaults[field] = &airlockv1.ModelRef{
+			Model:      model,
+			ProviderId: PgUUIDToString(fk),
+		}
 	}
 	for _, s := range slots {
 		resolvedFK, resolvedModel := modelresolve.EffectiveForSlot(agent, settings, s)
