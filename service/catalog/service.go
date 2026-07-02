@@ -93,8 +93,12 @@ func ModelMeetsCapability(m Model, capability string) (ok bool, reason string) {
 			return false, "is not an embedding model"
 		}
 	case "image":
-		if m.Kind != "image" {
-			return false, "is not an image-generation model"
+		// Any model that outputs images qualifies — a dedicated image
+		// generator (Kind=image) or a chat model with image output
+		// (Kind=language, output includes "image"). Both carry the
+		// image_gen capability from CapabilitiesFromModel.
+		if !hasCap("image_gen") {
+			return false, "does not support image output"
 		}
 	case "speech":
 		if m.Kind != "speech" {
