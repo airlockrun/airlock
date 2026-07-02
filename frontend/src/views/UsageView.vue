@@ -115,6 +115,7 @@ const byUser = computed(() => usage.report?.byUser ?? [])
               <div style="display: flex; align-items: center; gap: 0.4rem">
                 <span style="font-weight: 500">{{ data.userEmail }}</span>
                 <Tag v-if="data.deleted" value="deleted" severity="secondary" style="font-size: 0.65rem" />
+                <Tag v-else-if="!data.userEmail.includes('@')" value="system" severity="info" style="font-size: 0.65rem" />
               </div>
             </template>
           </Column>

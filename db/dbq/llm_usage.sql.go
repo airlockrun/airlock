@@ -13,7 +13,7 @@ import (
 
 const insertLLMUsage = `-- name: InsertLLMUsage :exec
 INSERT INTO llm_usage (
-    agent_id, agent_slug, agent_name, run_id, build_id, user_id, user_email, conversation_id,
+    agent_id, agent_slug, agent_name, run_id, build_id, system_run_id, user_id, user_email, conversation_id,
     provider_catalog_id, provider_slug, model, capability, call_kind, slug,
     tokens_in, tokens_out, tokens_cached, tokens_reasoning,
     units, unit_kind,
@@ -24,14 +24,14 @@ VALUES (
     $1,
     COALESCE((SELECT slug FROM agents WHERE id = $1), ''),
     COALESCE((SELECT name FROM agents WHERE id = $1), ''),
-    $2, $3, $4,
-    COALESCE((SELECT email FROM users WHERE id = $4), ''),
-    $5,
-    $6, $7, $8, $9, $10, $11,
-    $12, $13, $14, $15,
-    $16, $17,
-    $18, $19, $20,
-    $21, $22, $23
+    $2, $3, $4, $5,
+    COALESCE((SELECT email FROM users WHERE id = $5), ''),
+    $6,
+    $7, $8, $9, $10, $11, $12,
+    $13, $14, $15, $16,
+    $17, $18,
+    $19, $20, $21,
+    $22, $23, $24
 )
 `
 
@@ -39,6 +39,7 @@ type InsertLLMUsageParams struct {
 	AgentID           pgtype.UUID `json:"agent_id"`
 	RunID             pgtype.UUID `json:"run_id"`
 	BuildID           pgtype.UUID `json:"build_id"`
+	SystemRunID       pgtype.UUID `json:"system_run_id"`
 	UserID            pgtype.UUID `json:"user_id"`
 	ConversationID    pgtype.UUID `json:"conversation_id"`
 	ProviderCatalogID string      `json:"provider_catalog_id"`
@@ -75,6 +76,7 @@ func (q *Queries) InsertLLMUsage(ctx context.Context, arg InsertLLMUsageParams) 
 		arg.AgentID,
 		arg.RunID,
 		arg.BuildID,
+		arg.SystemRunID,
 		arg.UserID,
 		arg.ConversationID,
 		arg.ProviderCatalogID,

@@ -161,8 +161,8 @@ LIMIT @max_rows;
 -- run_id every WS event carries so the frontend can group
 -- text_delta/tool_call/tool_result events under one bubble — same
 -- contract as agent chat's runs.id.
-INSERT INTO system_runs (conversation_id, user_id)
-VALUES (@conversation_id, @user_id)
+INSERT INTO system_runs (conversation_id, user_id, trigger_type, message_preview)
+VALUES (@conversation_id, @user_id, @trigger_type, @message_preview)
 RETURNING *;
 
 -- name: GetSystemRunByID :one
@@ -172,7 +172,8 @@ SELECT * FROM system_runs WHERE id = @id;
 -- Caller's runs across all their conversations, paginated by started_at.
 -- JOINs system_conversations for the conversation title so the operator's
 -- activity view doesn't need a second per-row fetch.
-SELECT r.id, r.conversation_id, r.user_id, r.status, r.error_message,
+SELECT r.id, r.conversation_id, r.user_id, r.status, r.trigger_type,
+       r.message_preview, r.error_message, r.llm_cost_estimate,
        r.started_at, r.finished_at, c.title AS conversation_title
 FROM system_runs r
 JOIN system_conversations c ON c.id = r.conversation_id
@@ -186,6 +187,18 @@ UPDATE system_runs
 SET status = @status,
     error_message = @error_message,
     finished_at = CASE WHEN @status IN ('complete', 'error', 'cancelled') THEN now() ELSE finished_at END
+WHERE id = @id;
+
+-- name: UpdateSystemRunLLMStats :exec
+-- Refreshes the run's token/call/cost aggregate from the llm_usage ledger
+-- (rows the sysagent turn wrote under this system_run_id). Mirrors
+-- UpdateRunLLMStats / UpdateBuildLLMStats so the per-run cost surfaced in the
+-- activity view stays the ledger's sum, computed in exactly one place.
+UPDATE system_runs
+SET llm_calls        = COALESCE((SELECT count(*) FROM llm_usage WHERE llm_usage.system_run_id = @id), 0),
+    llm_tokens_in    = COALESCE((SELECT sum(tokens_in) FROM llm_usage WHERE llm_usage.system_run_id = @id), 0),
+    llm_tokens_out   = COALESCE((SELECT sum(tokens_out) FROM llm_usage WHERE llm_usage.system_run_id = @id), 0),
+    llm_cost_estimate = COALESCE((SELECT sum(cost_total) FROM llm_usage WHERE llm_usage.system_run_id = @id), 0)
 WHERE id = @id;
 
 

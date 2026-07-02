@@ -39,6 +39,7 @@ type solRunOpts struct {
 	WorkDir         string      // host path to the cloned per-agent repo
 	AgentDir        string      // container-side path (typically "/workspace")
 	AgentID         pgtype.UUID // owning agent — for the llm_usage row
+	UserID          pgtype.UUID // attributes build llm_usage to a user (initiator, or owner fallback)
 	BuildID         pgtype.UUID // agent_builds row this codegen attributes to
 	BuildType       string      // "build" | "upgrade" — llm_usage.call_kind
 	BuildProviderID pgtype.UUID // providers row FK; pairs with BuildModel
@@ -357,6 +358,7 @@ func (b *BuildService) recordBuildUsage(opts solRunOpts, providerCatalogID, prov
 
 	c := llmledger.Capture{
 		AgentID:           opts.AgentID,
+		UserID:            opts.UserID,
 		BuildID:           opts.BuildID,
 		ProviderCatalogID: providerCatalogID,
 		ProviderSlug:      providerSlug,

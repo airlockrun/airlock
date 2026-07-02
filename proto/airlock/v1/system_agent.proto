@@ -82,6 +82,9 @@ message SystemRunInfo {
   string error_message = 5;
   google.protobuf.Timestamp started_at = 6;
   google.protobuf.Timestamp finished_at = 7;
+  string trigger_type = 8;        // 'prompt' | 'bridge' | 'event'
+  double llm_cost_estimate = 9;
+  string message_preview = 10;    // truncated operator message for the turn
 }
 
 // ListSystemRunsResponse is the activity view's page shape. next_cursor

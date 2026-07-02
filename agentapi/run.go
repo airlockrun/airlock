@@ -175,6 +175,16 @@ func (h *Handler) Upgrade(w http.ResponseWriter, r *http.Request) {
 		Description:    req.Description,
 		ConversationID: req.ConversationID,
 	}
+	// Attribute the codegen spend to the user in whose conversation the agent
+	// requested this upgrade; the builder falls back to the agent owner when
+	// no conversation is bound.
+	if req.ConversationID != "" {
+		if cu, perr := parseUUID(req.ConversationID); perr == nil {
+			if conv, cerr := dbq.New(h.db.Pool()).GetConversationByID(r.Context(), toPgUUID(cu)); cerr == nil {
+				input.InitiatorUserID = conv.UserID
+			}
+		}
+	}
 
 	if err := h.builder.AcquireUpgradeLock(r.Context(), input.AgentID); err != nil {
 		if errors.Is(err, builder.ErrUpgradeInProgress) {

@@ -88,6 +88,11 @@ onMounted(() => {
           <Tag :value="run.status" :severity="runStatusSeverity(run.status)" />
         </template>
       </Column>
+      <Column header="Trigger">
+        <template #body="{ data: run }">
+          <Tag :value="run.triggerType" severity="secondary" />
+        </template>
+      </Column>
       <Column header="Started">
         <template #body="{ data: run }">
           {{ formatTimestamp(run.startedAt) }}
@@ -116,6 +121,9 @@ onMounted(() => {
     <DataTable v-else :value="[{}, {}, {}, {}, {}]">
       <Column header="Status">
         <template #body><Skeleton width="5rem" /></template>
+      </Column>
+      <Column header="Trigger">
+        <template #body><Skeleton width="4rem" /></template>
       </Column>
       <Column header="Started">
         <template #body><Skeleton /></template>

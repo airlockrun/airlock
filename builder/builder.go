@@ -242,6 +242,7 @@ type BuildInput struct {
 	Name             string
 	Slug             string
 	OwnerPrincipalID string
+	InitiatorUserID  pgtype.UUID // user who triggered the build; attributes codegen spend (falls back to owner)
 	BuildProviderID  pgtype.UUID // providers row FK; pairs with BuildModel
 	BuildModel       string      // bare model name; "" + invalid FK ⇄ inherit system default
 	Instructions     string      // optional: when non-empty, run Sol code generation after scaffold
@@ -353,12 +354,13 @@ func (b *BuildService) Build(_ context.Context, input BuildInput) error {
 	}
 
 	plan := BuildPlan{
-		Agent:        agent,
-		Kind:         BuildKindBuild,
-		Instruction:  input.Instructions,
-		SkipScaffold: input.SkipScaffold,
-		Reason:       "manual",
-		RunID:        uuid.New().String(),
+		Agent:           agent,
+		Kind:            BuildKindBuild,
+		Instruction:     input.Instructions,
+		SkipScaffold:    input.SkipScaffold,
+		Reason:          "manual",
+		RunID:           uuid.New().String(),
+		InitiatorUserID: input.InitiatorUserID,
 		Scaffold: &ScaffoldInputs{
 			Name:            input.Name,
 			Slug:            input.Slug,

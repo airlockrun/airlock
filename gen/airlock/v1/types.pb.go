@@ -1046,8 +1046,11 @@ type RunInfo struct {
 	// llm_tokens_in - llm_tokens_cached; llm_cost_estimate already reflects
 	// the cheaper cache-read rate (priced per-row in the llm_usage ledger).
 	LlmTokensCached int32 `protobuf:"varint,18,opt,name=llm_tokens_cached,json=llmTokensCached,proto3" json:"llm_tokens_cached,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// trigger_type is what fired the run: "prompt" (web chat), "bridge",
+	// "code" (agent HTTP route), "webhook", "cron", or "a2a".
+	TriggerType   string `protobuf:"bytes,19,opt,name=trigger_type,json=triggerType,proto3" json:"trigger_type,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *RunInfo) Reset() {
@@ -1204,6 +1207,13 @@ func (x *RunInfo) GetLlmTokensCached() int32 {
 		return x.LlmTokensCached
 	}
 	return 0
+}
+
+func (x *RunInfo) GetTriggerType() string {
+	if x != nil {
+		return x.TriggerType
+	}
+	return ""
 }
 
 // AgentBuildInfo represents a single build or upgrade of an agent.
@@ -4566,7 +4576,7 @@ const file_airlock_v1_types_proto_rawDesc = "" +
 	"source_ref\x18\x12 \x01(\tR\tsourceRef\x12\x1d\n" +
 	"\n" +
 	"owner_name\x18\x13 \x01(\tR\townerName\x12\x19\n" +
-	"\bis_owner\x18\x14 \x01(\bR\aisOwner\"\xbb\x05\n" +
+	"\bis_owner\x18\x14 \x01(\bR\aisOwner\"\xde\x05\n" +
 	"\aRunInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x19\n" +
 	"\bagent_id\x18\x02 \x01(\tR\aagentId\x12\x1b\n" +
@@ -4593,7 +4603,8 @@ const file_airlock_v1_types_proto_rawDesc = "" +
 	"started_at\x18\x10 \x01(\v2\x1a.google.protobuf.TimestampR\tstartedAt\x12;\n" +
 	"\vfinished_at\x18\x11 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
 	"finishedAt\x12*\n" +
-	"\x11llm_tokens_cached\x18\x12 \x01(\x05R\x0fllmTokensCached\"\xb4\a\n" +
+	"\x11llm_tokens_cached\x18\x12 \x01(\x05R\x0fllmTokensCached\x12!\n" +
+	"\ftrigger_type\x18\x13 \x01(\tR\vtriggerType\"\xb4\a\n" +
 	"\x0eAgentBuildInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x19\n" +
 	"\bagent_id\x18\x02 \x01(\tR\aagentId\x12\x12\n" +

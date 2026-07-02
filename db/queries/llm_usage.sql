@@ -9,7 +9,7 @@
 -- readable — after the agent or user is deleted. provider_slug is snapshotted by
 -- the caller (resolved from the providers row) for the same reason.
 INSERT INTO llm_usage (
-    agent_id, agent_slug, agent_name, run_id, build_id, user_id, user_email, conversation_id,
+    agent_id, agent_slug, agent_name, run_id, build_id, system_run_id, user_id, user_email, conversation_id,
     provider_catalog_id, provider_slug, model, capability, call_kind, slug,
     tokens_in, tokens_out, tokens_cached, tokens_reasoning,
     units, unit_kind,
@@ -20,7 +20,7 @@ VALUES (
     @agent_id,
     COALESCE((SELECT slug FROM agents WHERE id = @agent_id), ''),
     COALESCE((SELECT name FROM agents WHERE id = @agent_id), ''),
-    @run_id, @build_id, @user_id,
+    @run_id, @build_id, @system_run_id, @user_id,
     COALESCE((SELECT email FROM users WHERE id = @user_id), ''),
     @conversation_id,
     @provider_catalog_id, @provider_slug, @model, @capability, @call_kind, @slug,

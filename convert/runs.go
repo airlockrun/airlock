@@ -29,6 +29,7 @@ func RunToProto(r dbq.Run, detail bool) *airlockv1.RunInfo {
 		LlmTokensCached: r.LlmTokensCached,
 		LlmCostEstimate: PgNumericToFloat(r.LlmCostEstimate),
 		SourceRef:       r.SourceRef,
+		TriggerType:     r.TriggerType,
 	}
 	if detail {
 		info.InputPayload = JSONToStruct(r.InputPayload)

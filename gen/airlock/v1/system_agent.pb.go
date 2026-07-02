@@ -498,6 +498,9 @@ type SystemRunInfo struct {
 	ErrorMessage      string                 `protobuf:"bytes,5,opt,name=error_message,json=errorMessage,proto3" json:"error_message,omitempty"`
 	StartedAt         *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=started_at,json=startedAt,proto3" json:"started_at,omitempty"`
 	FinishedAt        *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=finished_at,json=finishedAt,proto3" json:"finished_at,omitempty"`
+	TriggerType       string                 `protobuf:"bytes,8,opt,name=trigger_type,json=triggerType,proto3" json:"trigger_type,omitempty"` // 'prompt' | 'bridge' | 'event'
+	LlmCostEstimate   float64                `protobuf:"fixed64,9,opt,name=llm_cost_estimate,json=llmCostEstimate,proto3" json:"llm_cost_estimate,omitempty"`
+	MessagePreview    string                 `protobuf:"bytes,10,opt,name=message_preview,json=messagePreview,proto3" json:"message_preview,omitempty"` // truncated operator message for the turn
 	unknownFields     protoimpl.UnknownFields
 	sizeCache         protoimpl.SizeCache
 }
@@ -579,6 +582,27 @@ func (x *SystemRunInfo) GetFinishedAt() *timestamppb.Timestamp {
 		return x.FinishedAt
 	}
 	return nil
+}
+
+func (x *SystemRunInfo) GetTriggerType() string {
+	if x != nil {
+		return x.TriggerType
+	}
+	return ""
+}
+
+func (x *SystemRunInfo) GetLlmCostEstimate() float64 {
+	if x != nil {
+		return x.LlmCostEstimate
+	}
+	return 0
+}
+
+func (x *SystemRunInfo) GetMessagePreview() string {
+	if x != nil {
+		return x.MessagePreview
+	}
+	return ""
 }
 
 // ListSystemRunsResponse is the activity view's page shape. next_cursor
@@ -746,7 +770,7 @@ const file_airlock_v1_system_agent_proto_rawDesc = "" +
 	"\rconversations\x18\x01 \x03(\v2\".airlock.v1.SystemConversationInfoR\rconversations\"\xa2\x01\n" +
 	"\x1dGetSystemConversationResponse\x12F\n" +
 	"\fconversation\x18\x01 \x01(\v2\".airlock.v1.SystemConversationInfoR\fconversation\x129\n" +
-	"\bmessages\x18\x02 \x03(\v2\x1d.airlock.v1.SystemMessageInfoR\bmessages\"\xac\x02\n" +
+	"\bmessages\x18\x02 \x03(\v2\x1d.airlock.v1.SystemMessageInfoR\bmessages\"\xa4\x03\n" +
 	"\rSystemRunInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12'\n" +
 	"\x0fconversation_id\x18\x02 \x01(\tR\x0econversationId\x12-\n" +
@@ -756,7 +780,11 @@ const file_airlock_v1_system_agent_proto_rawDesc = "" +
 	"\n" +
 	"started_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\tstartedAt\x12;\n" +
 	"\vfinished_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\n" +
-	"finishedAt\"h\n" +
+	"finishedAt\x12!\n" +
+	"\ftrigger_type\x18\b \x01(\tR\vtriggerType\x12*\n" +
+	"\x11llm_cost_estimate\x18\t \x01(\x01R\x0fllmCostEstimate\x12'\n" +
+	"\x0fmessage_preview\x18\n" +
+	" \x01(\tR\x0emessagePreview\"h\n" +
 	"\x16ListSystemRunsResponse\x12-\n" +
 	"\x04runs\x18\x01 \x03(\v2\x19.airlock.v1.SystemRunInfoR\x04runs\x12\x1f\n" +
 	"\vnext_cursor\x18\x02 \x01(\tR\n" +
