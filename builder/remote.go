@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -89,6 +90,47 @@ func (b *BuildService) CloneRemoteIntoAgent(ctx context.Context, agentID, remote
 		return fmt.Errorf("imported repository has no go.mod at its root — not a valid agent project")
 	}
 	return nil
+}
+
+// RemoteSharesHistory fetches the remote branch into the agent's repo and
+// reports whether it shares any history with the agent's local HEAD (a common
+// ancestor exists). Used at connect time to tell a same-repo reconnect (safe —
+// the normal push/pull reconciles with no data loss) from a different, unrelated
+// repo (dangerous — on a push conflict the agent resets its main to the remote's
+// unrelated code). The fetch only updates FETCH_HEAD; it never moves a branch.
+func (b *BuildService) RemoteSharesHistory(ctx context.Context, agentID, remote, branch string, credID pgtype.UUID) (bool, error) {
+	q := dbq.New(b.db.Pool())
+	auth, err := resolveGitAuth(ctx, q, b.encryptor, credID)
+	if err != nil {
+		return false, err
+	}
+	header, err := auth.ExtraHeader(ctx)
+	if err != nil {
+		return false, err
+	}
+	if branch == "" {
+		branch = "main"
+	}
+	repoPath := b.AgentRepoPath(agentID)
+	if _, err := os.Stat(filepath.Join(repoPath, ".git")); err != nil {
+		return false, fmt.Errorf("agent has no local repository to compare against")
+	}
+	if err := gitAuthed(ctx, repoPath, header, "fetch", "--no-tags", remote, branch); err != nil {
+		return false, fmt.Errorf("fetch remote: %s", strings.ReplaceAll(err.Error(), header, "[redacted]"))
+	}
+	// git merge-base exits 0 when a common ancestor exists, 1 when the histories
+	// are unrelated; any other exit code is a genuine error.
+	cmd := exec.CommandContext(ctx, "git", "merge-base", "HEAD", "FETCH_HEAD")
+	cmd.Dir = repoPath
+	cmd.Env = append(gitCleanEnv(), "GIT_TERMINAL_PROMPT=0")
+	if err := cmd.Run(); err != nil {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) && ee.ExitCode() == 1 {
+			return false, nil
+		}
+		return false, fmt.Errorf("merge-base: %w", err)
+	}
+	return true, nil
 }
 
 // parseRemoteState interprets `git ls-remote --heads` output: empty when no
