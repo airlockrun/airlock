@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/airlockrun/airlock/scaffold"
+	"github.com/airlockrun/agentsdk/scaffold"
 )
 
 // HousekeepingResult reports what runHousekeeping changed in the agent repo

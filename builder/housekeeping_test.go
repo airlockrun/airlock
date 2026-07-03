@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/airlockrun/agentsdk"
-	"github.com/airlockrun/airlock/scaffold"
+	"github.com/airlockrun/agentsdk/scaffold"
 )
 
 // scaffoldHousekeepingFixture initializes a per-agent repo with a real
