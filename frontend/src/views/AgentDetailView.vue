@@ -262,7 +262,7 @@ const configSections = [
   { id: 'schedules',      label: 'Schedules',      component: markRaw(SchedulesTab) },
   { id: 'siblings',       label: 'Siblings',       component: markRaw(SiblingsTab), alwaysShow: true },
   { id: 'access',         label: 'Access',         component: markRaw(AccessTab), alwaysShow: true },
-  { id: 'source',         label: 'Source',         component: markRaw(SourceTab), alwaysShow: true },
+  { id: 'source',         label: 'Source',         component: markRaw(SourceTab), alwaysShow: true, adminOnly: true },
   { id: 'routes',         label: 'Routes',         component: markRaw(RoutesTab) },
   { id: 'tools',          label: 'Tools',          component: markRaw(ToolsTab) },
   { id: 'models',         label: 'Models',         component: markRaw(ModelsTab) },
@@ -277,8 +277,14 @@ const activityVisible = computed(() => (counts.value.runs ?? 0) > 0 || (counts.v
 // sections from the rail (which itself still mounts so it can emit a count).
 // Sections marked alwaysShow stay visible even at count 0 (e.g. Siblings,
 // where the "add your first sibling" affordance is a meaningful entry point).
+// adminOnly sections (Source: its only action, connect, is agent-admin) are
+// hidden entirely from non-admins rather than showing an action that 403s.
+const isAgentAdmin = computed(() => agent.value?.yourAccess === 'admin')
 const visibleSections = computed(() =>
-  configSections.filter((s) => (s as any).alwaysShow || (counts.value[s.id] ?? 0) > 0),
+  configSections.filter((s) => {
+    if ((s as any).adminOnly && !isAgentAdmin.value) return false
+    return (s as any).alwaysShow || (counts.value[s.id] ?? 0) > 0
+  }),
 )
 
 // badgeFor surfaces the existing setup-status counts on the three sections
@@ -767,7 +773,7 @@ function openWeb() {
     <div class="agent-page-main" :key="tabsKey">
       <SectionCard
         v-for="s in configSections"
-        v-show="(s as any).alwaysShow || (counts[s.id] ?? 0) > 0"
+        v-show="(!(s as any).adminOnly || isAgentAdmin) && ((s as any).alwaysShow || (counts[s.id] ?? 0) > 0)"
         :key="s.id"
         :id="s.id"
         :title="s.label"
