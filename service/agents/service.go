@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/url"
 	"regexp"
 	"sort"
 	"strings"
@@ -247,7 +246,16 @@ func (s *Service) Create(ctx context.Context, p authz.Principal, req CreateReque
 		return dbq.Agent{}, service.Detail(service.ErrInvalidInput, "exec_model and exec_provider_id must be set or unset together")
 	}
 	var gitCredFK pgtype.UUID
+	gitRemoteURL := req.GitRemoteURL
 	if req.GitRemoteURL != "" {
+		// Normalize/validate the scheme here too — the connect path did but
+		// create didn't, which is how SSH remotes (unusable with a PAT) slipped
+		// through and failed at push time.
+		normalized, nerr := normalizeGitRemoteURL(req.GitRemoteURL)
+		if nerr != nil {
+			return dbq.Agent{}, service.Detail(service.ErrInvalidInput, "%s", nerr.Error())
+		}
+		gitRemoteURL = normalized
 		if req.GitCredentialID == "" {
 			return dbq.Agent{}, service.Detail(service.ErrInvalidInput, "git_credential_id is required when git_remote_url is set")
 		}
@@ -307,7 +315,7 @@ func (s *Service) Create(ctx context.Context, p authz.Principal, req CreateReque
 			BuildProviderID:      buildProviderFK,
 			BuildModel:           req.BuildModel,
 			Instructions:         req.Instructions,
-			GitRemoteURL:         req.GitRemoteURL,
+			GitRemoteURL:         gitRemoteURL,
 			GitCredentialID:      gitCredFK,
 			GitDefaultBranch:     req.GitDefaultBranch,
 			SystemConversationID: req.SystemConversationID,
@@ -1107,13 +1115,11 @@ func (s *Service) GetBuild(ctx context.Context, p authz.Principal, buildID uuid.
 // the URL, credential FK, default branch, and a freshly-generated
 // HMAC secret for the webhook ingress.
 func (s *Service) ConnectGit(ctx context.Context, p authz.Principal, agentID uuid.UUID, req ConnectGitRequest) (GitConfig, error) {
-	remote := strings.TrimSpace(req.RemoteURL)
-	if remote == "" {
-		return GitConfig{}, service.Detail(service.ErrInvalidInput, "git_remote_url is required")
-	}
-	u, perr := url.Parse(remote)
-	if perr != nil || (u.Scheme != "https" && u.Scheme != "http") {
-		return GitConfig{}, service.Detail(service.ErrInvalidInput, "git_remote_url must be an http(s) URL")
+	// Normalize a pasted SSH clone URL to HTTPS and reject anything a PAT
+	// can't authenticate — PATs only work over HTTPS (see normalizeGitRemoteURL).
+	remote, nerr := normalizeGitRemoteURL(req.RemoteURL)
+	if nerr != nil {
+		return GitConfig{}, service.Detail(service.ErrInvalidInput, "%s", nerr.Error())
 	}
 	credIDStr := strings.TrimSpace(req.CredentialID)
 	if credIDStr == "" {
@@ -1163,13 +1169,29 @@ func (s *Service) ConnectGit(ctx context.Context, p authz.Principal, agentID uui
 		return GitConfig{}, service.Detail(service.ErrInvalidInput,
 			"could not access %s with the selected credential — verify the URL and that the token has repo access", remote)
 	}
-	// A populated remote can only be adopted by a never-built agent (import);
-	// mirroring an agent's own code needs an empty remote. A populated remote
-	// against an agent that already has built code has no safe merge — reject.
-	importing := !state.Empty
-	if importing && agent.ImageRef != "" {
-		return GitConfig{}, service.Detail(service.ErrInvalidInput,
-			"%s already contains code and this agent already has its own — connect an empty repository, or import into a freshly created agent", remote)
+	// Decide what a populated target branch means for this agent:
+	//   - never-built agent        → import (adopt the remote's code)
+	//   - built agent, shared hist. → reconnect (same repo; normal push/pull
+	//                                 reconciles — no import, no force)
+	//   - built agent, unrelated    → reject (a different repo; on a push
+	//                                 conflict the agent would adopt its code)
+	// An empty remote (or a remote without the target branch) always mirrors:
+	// the first push just creates/advances the branch.
+	importing := false
+	if state.HasBranch {
+		if agent.ImageRef == "" {
+			importing = true
+		} else {
+			shared, herr := s.builder.RemoteSharesHistory(ctx, agentID.String(), remote, branch, pgtype.UUID{Bytes: credID, Valid: true})
+			if herr != nil {
+				s.logger.Warn("git connect: history check", zap.String("agent", agentID.String()), zap.Error(herr))
+				return GitConfig{}, service.Detail(service.ErrInvalidInput, "could not compare %s with the agent's code — try again", remote)
+			}
+			if !shared {
+				return GitConfig{}, service.Detail(service.ErrInvalidInput,
+					"%s has commits unrelated to this agent's code — it looks like a different repository. Connect an empty repository or the agent's own repo.", remote)
+			}
+		}
 	}
 	secret, err := randomHex(32)
 	if err != nil {
