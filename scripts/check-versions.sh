@@ -68,49 +68,70 @@ for lib in agentsdk goai sol; do
 	fi
 done
 
-# --- 1b. Tailwind toolchain ARGs match between toolserver and scaffold ---
+# --- 1b/1c. Frontend toolchain versions match the agentsdk scaffold consts ---
 #
-# The toolserver (Dockerfile.agent-builder) runs the iterative LLM-driven
-# build; the scaffold's Dockerfile.tmpl is the final image-build the agent
-# gets compiled into. Both ADD the same tailwindcss/daisyui artefacts;
-# drift means the LLM iterates against one Tailwind and ships another.
-for tool in TAILWIND DAISYUI; do
-	tool_lc=$(printf '%s' "$tool" | tr '[:upper:]' '[:lower:]')
-	toolserver=$(awk -v p="^ARG ${tool}_VERSION=" '$0 ~ p {sub(p, ""); print; exit}' Dockerfile.agent-builder)
-	scaffold=$(awk -v p="^ARG ${tool}_VERSION=" '$0 ~ p {sub(p, ""); print; exit}' scaffold/templates/Dockerfile.tmpl)
-	if [ -z "$toolserver" ]; then
-		err "Dockerfile.agent-builder: missing ARG ${tool}_VERSION"
-		continue
-	fi
-	if [ -z "$scaffold" ]; then
-		err "scaffold/templates/Dockerfile.tmpl: missing ARG ${tool}_VERSION"
-		continue
-	fi
-	if [ "$toolserver" != "$scaffold" ]; then
-		err "${tool_lc} version drift: Dockerfile.agent-builder=$toolserver, scaffold/templates/Dockerfile.tmpl=$scaffold"
-	fi
-done
-
-# --- 1c. templ version consistency ---
+# agentsdk/scaffold/versions.go is the single source of truth for the templ/
+# tailwind/daisyui versions a scaffolded agent pins — its templates render from
+# those consts, so a materialized agent can't drift from them. The toolserver
+# image (Dockerfile.agent-builder) bakes the same toolchain as literal ARGs for
+# its iterative codegen loop, and the CI/release workflows install the templ CLI
+# by literal version. Docker/YAML can't read a Go const, so we enforce that each
+# literal equals the const here.
 #
-# templ generates *_templ.go against its runtime library, so the generator
-# (CLI) and the linked library MUST be the same version — otherwise generated
-# code calls runtime symbols the library lacks (e.g. `undefined:
-# templ.JoinURLErrs`). The scaffold's go.mod.tmpl pin is the source of truth
-# (it's what shipped agents build against); the agent-builder image, the CI/
-# release workflows that install the CLI, and the build/scaffold test fixtures
-# must all match it.
-templ_canonical=$(grep -oE 'github.com/a-h/templ v[0-9]+\.[0-9]+\.[0-9]+' scaffold/templates/go.mod.tmpl | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | head -1)
-if [ -z "$templ_canonical" ]; then
-	err "scaffold/templates/go.mod.tmpl: missing 'github.com/a-h/templ vX.Y.Z' pin"
+# Locate versions.go: the sibling checkout in the monorepo, else the pinned
+# agentsdk in the module cache (a standalone airlock CI checkout resolves
+# agentsdk via the proxy, so the source lands there after `go mod download`).
+versions_go=""
+if [ -f ../agentsdk/scaffold/versions.go ]; then
+	versions_go=../agentsdk/scaffold/versions.go
 else
-	for f in Dockerfile.agent-builder builder/gomod_test.go scaffold/scaffold_integration_test.go .github/workflows/ci.yml .github/workflows/release.yml; do
-		# Every templ version token on a line that names templ or TEMPL_VERSION.
-		while IFS= read -r v; do
-			[ -z "$v" ] && continue
-			[ "$v" != "$templ_canonical" ] && err "$f: templ $v doesn't match scaffold pin $templ_canonical"
-		done < <(grep -hE 'a-h/templ|TEMPL_VERSION' "$f" 2>/dev/null | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | sort -u || true)
+	agentsdk_pin=$(awk '/airlockrun\/agentsdk / {print $2; exit}' go.mod)
+	gomodcache=$(go env GOMODCACHE 2>/dev/null || true)
+	cand="${gomodcache}/github.com/airlockrun/agentsdk@${agentsdk_pin}/scaffold/versions.go"
+	if [ -n "$gomodcache" ] && [ -n "$agentsdk_pin" ] && [ -f "$cand" ]; then
+		versions_go="$cand"
+	fi
+fi
+
+if [ -z "$versions_go" ]; then
+	err "cannot locate agentsdk scaffold versions.go (checked ../agentsdk and the module cache); check out the monorepo or run 'go mod download'"
+else
+	scaffold_const() { awk -v n="$1" '$1==n && $2=="=" {v=$3; gsub(/"/,"",v); print v; exit}' "$versions_go"; }
+	builder_arg() { awk -v p="^ARG ${1}=" '$0 ~ p {sub(p, ""); print; exit}' Dockerfile.agent-builder; }
+
+	# 1b: toolserver image ARGs == consts. ARG name : Go const name.
+	for pair in TEMPL_VERSION:TemplVersion TAILWIND_VERSION:TailwindVersion DAISYUI_VERSION:DaisyUIVersion; do
+		arg_name=${pair%%:*}
+		const_name=${pair##*:}
+		want=$(scaffold_const "$const_name")
+		got=$(builder_arg "$arg_name")
+		if [ -z "$want" ]; then
+			err "$versions_go: missing const $const_name"
+			continue
+		fi
+		if [ -z "$got" ]; then
+			err "Dockerfile.agent-builder: missing ARG $arg_name"
+			continue
+		fi
+		if [ "$got" != "$want" ]; then
+			err "Dockerfile.agent-builder $arg_name=$got doesn't match agentsdk scaffold const $const_name=$want"
+		fi
 	done
+
+	# 1c: every place that installs the templ CLI or fixtures a templ pin must
+	# match the const — the generator (CLI) and the linked runtime library must
+	# be the same version or generated *_templ.go calls symbols the lib lacks.
+	templ_canonical=$(scaffold_const TemplVersion)
+	if [ -z "$templ_canonical" ]; then
+		err "$versions_go: missing TemplVersion const"
+	else
+		for f in builder/gomod_test.go .github/workflows/ci.yml .github/workflows/release.yml; do
+			while IFS= read -r v; do
+				[ -z "$v" ] && continue
+				[ "$v" != "$templ_canonical" ] && err "$f: templ $v doesn't match agentsdk scaffold const TemplVersion $templ_canonical"
+			done < <(grep -hE 'a-h/templ|TEMPL_VERSION' "$f" 2>/dev/null | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | sort -u || true)
+		done
+	fi
 fi
 
 # --- 2. docker-compose.yml ghcr tags are internally consistent ---

@@ -10,10 +10,10 @@ import (
 	"path/filepath"
 
 	"github.com/airlockrun/agentsdk"
+	"github.com/airlockrun/agentsdk/scaffold"
 	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/container"
 	"github.com/airlockrun/airlock/db/dbq"
-	"github.com/airlockrun/airlock/scaffold"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"

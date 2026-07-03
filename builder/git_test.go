@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/airlockrun/airlock/scaffold"
+	"github.com/airlockrun/agentsdk/scaffold"
 )
 
 func TestInitAgentRepo(t *testing.T) {

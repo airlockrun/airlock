@@ -11,8 +11,8 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/airlockrun/agentsdk/scaffold"
 	"github.com/airlockrun/airlock/config"
-	"github.com/airlockrun/airlock/scaffold"
 	"go.uber.org/zap"
 )
 

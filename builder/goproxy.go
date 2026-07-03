@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/airlockrun/agentsdk"
+	"github.com/airlockrun/agentsdk/scaffold"
 	"github.com/airlockrun/goai"
 	"github.com/airlockrun/sol"
 	"golang.org/x/mod/modfile"
@@ -20,11 +21,11 @@ import (
 	"golang.org/x/mod/zip"
 )
 
-// buildGoVersion is the Go toolchain version stamped into scaffolded
-// agents' go.mod `go` directive and the Dockerfile `FROM golang:` tag.
-// 3-component form matches what `go mod tidy` rewrites the directive to on
-// Go 1.21+, so go.work/go.mod version checks don't trip.
-const buildGoVersion = "1.26.0"
+// buildGoVersion is the Go toolchain version stamped into scaffolded agents'
+// go.mod `go` directive and the Dockerfile `FROM golang:` tag. Sourced from the
+// scaffold package's const so airlock can't drift from the Go version a
+// scaffolded agent's own tooling pins.
+const buildGoVersion = scaffold.GoVersion
 
 // libProxyMod describes one airlock-owned lib served by the dev-only local
 // module proxy: the module path agents import, the subdirectory under

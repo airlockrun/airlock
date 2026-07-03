@@ -4,7 +4,7 @@
 # Produces two files, one per distributed binary:
 #   airlock/THIRD_PARTY_NOTICES.md
 #       — every module compiled into the airlock server binary.
-#   airlock/scaffold/templates/THIRD_PARTY_NOTICES.generated.md
+#   agentsdk/scaffold/templates/THIRD_PARTY_NOTICES.generated.md
 #       — every module compiled into an agent binary (agentsdk + its deps),
 #         plus Tailwind CSS + DaisyUI (their compiled CSS ships in the agent).
 #       The scaffold materializes this into each generated agent verbatim.
@@ -112,14 +112,14 @@ gen_go "$AIRLOCK" "./cmd/airlock" "github.com/airlockrun/airlock" \
 # Only when the agentsdk source is checked out alongside airlock (local dev /
 # the full monorepo). In an airlock-only checkout (CI) it's absent — the
 # committed scaffold notices stand, regenerated wherever agentsdk is present.
-AGENT_OUT="$AIRLOCK/scaffold/templates/THIRD_PARTY_NOTICES.generated.md"
+AGENT_OUT="$HQ/agentsdk/scaffold/templates/THIRD_PARTY_NOTICES.generated.md"
 if [ -d "$HQ/agentsdk" ]; then
 	gen_go "$HQ/agentsdk" "./..." "" "$AGENT_OUT" "airlock agent"
 
 	# Append the build-time CSS tooling whose compiled output is embedded +
-	# served by the agent (versions pinned in the scaffold Dockerfile).
-	TAILWIND_VERSION=$(grep -oE 'ARG TAILWIND_VERSION=\S+' "$AIRLOCK/scaffold/templates/Dockerfile.tmpl" | cut -d= -f2)
-	DAISYUI_VERSION=$(grep -oE 'ARG DAISYUI_VERSION=\S+' "$AIRLOCK/scaffold/templates/Dockerfile.tmpl" | cut -d= -f2)
+	# served by the agent (versions from the scaffold's version consts).
+	TAILWIND_VERSION=$(grep -oE 'TailwindVersion = "[^"]+"' "$HQ/agentsdk/scaffold/versions.go" | grep -oE '"[^"]+"' | tr -d '"')
+	DAISYUI_VERSION=$(grep -oE 'DaisyUIVersion = "[^"]+"' "$HQ/agentsdk/scaffold/versions.go" | grep -oE '"[^"]+"' | tr -d '"')
 	{
 		echo "The agent's stylesheet is compiled with the following tools; their"
 		echo "authored CSS is embedded in the compiled output the agent serves."

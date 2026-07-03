@@ -133,7 +133,10 @@ RUN git clone --depth 1 --branch ${DAISYUI_VERSION} --filter=blob:none --sparse 
 # language reference (control flow, escaping, script templates) matches the templ
 # the agent compiles with. The test -f guards against an upstream docs restructure
 # silently shipping an empty skill.
-COPY --chmod=0644 scaffold/skills/templ/SKILL.md /usr/local/lib/agent-skills/skills/templ/SKILL.md
+# SKILL.md ships in the agentsdk module (scaffold/skills/); prod materializes
+# agentsdk under /libs, so copy it from there rather than a build-context path.
+RUN mkdir -p /usr/local/lib/agent-skills/skills/templ && \
+    cp /libs/agentsdk/scaffold/skills/templ/SKILL.md /usr/local/lib/agent-skills/skills/templ/SKILL.md
 RUN git clone --depth 1 --branch ${TEMPL_VERSION} --filter=blob:none --sparse \
         https://github.com/a-h/templ.git /tmp/templ && \
     git -C /tmp/templ sparse-checkout set docs/docs/03-syntax-and-usage docs/docs/04-core-concepts && \
@@ -148,7 +151,8 @@ RUN git clone --depth 1 --branch ${TEMPL_VERSION} --filter=blob:none --sparse \
 # (HTMX_VERSION mirrors agentsdk.HTMXVersion). docs.md is the narrative guide,
 # reference.md the attribute/header/event index. ADD fails the build loud if the
 # tagged URL 404s, keeping the docs in lockstep with the served htmx.
-COPY --chmod=0644 scaffold/skills/htmx/SKILL.md /usr/local/lib/agent-skills/skills/htmx/SKILL.md
+RUN mkdir -p /usr/local/lib/agent-skills/skills/htmx && \
+    cp /libs/agentsdk/scaffold/skills/htmx/SKILL.md /usr/local/lib/agent-skills/skills/htmx/SKILL.md
 RUN mkdir -p /usr/local/lib/agent-skills/skills/htmx/reference
 ADD --chmod=0644 https://raw.githubusercontent.com/bigskysoftware/htmx/v${HTMX_VERSION}/www/content/docs.md      /usr/local/lib/agent-skills/skills/htmx/reference/docs.md
 ADD --chmod=0644 https://raw.githubusercontent.com/bigskysoftware/htmx/v${HTMX_VERSION}/www/content/reference.md /usr/local/lib/agent-skills/skills/htmx/reference/reference.md

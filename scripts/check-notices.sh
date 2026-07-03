@@ -12,7 +12,7 @@ AIRLOCK="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 HQ="$(cd "$AIRLOCK/.." && pwd)"
 
 files=("$AIRLOCK/THIRD_PARTY_NOTICES.md")
-[ -d "$HQ/agentsdk" ] && files+=("$AIRLOCK/scaffold/templates/THIRD_PARTY_NOTICES.generated.md")
+[ -d "$HQ/agentsdk" ] && files+=("$HQ/agentsdk/scaffold/templates/THIRD_PARTY_NOTICES.generated.md")
 
 tmp=$(mktemp -d)
 # Back up by index so the restore mapping is unambiguous.
