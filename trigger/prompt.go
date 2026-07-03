@@ -191,7 +191,7 @@ func (p *PromptProxy) HandleMessage(
 
 	// Forward to agent container — SessionStore handles message loading and persistence.
 	// CallerAccess is required for the agent's bind-time gating (admin-only
-	// JS bindings like requestUpgrade, queryDB, execDB). Web path does the
+	// JS bindings like requestUpgrade, queryDB). Web path does the
 	// same in api/conversations.go; without it the agent defaults to
 	// AccessUser and admin-only verbs ReferenceError when called from a
 	// bridge-triggered run.

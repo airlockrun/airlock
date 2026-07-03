@@ -629,7 +629,7 @@ func (h *conversationsHandler) NotifyUpgradeComplete(ctx context.Context, agentI
 		conv.ExternalID.Valid && conv.ExternalID.String != "" && h.bridgeMgr != nil
 
 	// CallerAccess survives the post-upgrade follow-up turn so admin-only
-	// JS bindings (requestUpgrade, queryDB, execDB) keep working — without
+	// JS bindings (requestUpgrade, queryDB) keep working — without
 	// it the agent defaults to AccessUser and the LLM's natural "let me
 	// retry requestUpgrade" crashes with ReferenceError.
 	input := agentsdk.PromptInput{
