@@ -262,7 +262,7 @@ const configSections = [
   { id: 'schedules',      label: 'Schedules',      component: markRaw(SchedulesTab) },
   { id: 'siblings',       label: 'Siblings',       component: markRaw(SiblingsTab), alwaysShow: true },
   { id: 'access',         label: 'Access',         component: markRaw(AccessTab), alwaysShow: true },
-  { id: 'source',         label: 'Source',         component: markRaw(SourceTab) },
+  { id: 'source',         label: 'Source',         component: markRaw(SourceTab), alwaysShow: true },
   { id: 'routes',         label: 'Routes',         component: markRaw(RoutesTab) },
   { id: 'tools',          label: 'Tools',          component: markRaw(ToolsTab) },
   { id: 'models',         label: 'Models',         component: markRaw(ModelsTab) },
