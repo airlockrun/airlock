@@ -14,6 +14,11 @@
 # automatically on airlock startup. Once healthy on the new tag, the previous
 # tag's four stack images are removed to reclaim disk.
 #
+# Self-update: after checking out the target, upgrade.sh re-execs the TARGET's
+# copy of itself to run the pull/up phase — so a fix to those steps in a new
+# release takes effect on the very upgrade that installs it (bash has already
+# loaded the old script into memory; it can't change its own running logic).
+#
 # Pre-releases are refused by default — they have no supported migration/upgrade
 # path. Pass --pre-release (or AIRLOCK_ALLOW_PRERELEASE=1) to opt in.
 #
@@ -96,10 +101,10 @@ detect_local_caddy() {
 	[ -f .env ] && grep -qE '^CADDY_IMAGE=airlock-caddy-local' .env && BUILD_CADDY=1
 }
 
-upgrade() {
-	need_cmd git || die "git is required"
-	need_cmd docker || die "docker is required"
-
+# Phase 1 — fetch, pick the target, confirm, checkout, then hand off to the
+# target's upgrade.sh for the apply phase (see the self-update note in the
+# header). Everything here runs from the CURRENTLY-installed upgrade.sh.
+upgrade_prepare() {
 	log "fetching tags in $INSTALL_DIR"
 	git fetch --tags --prune --quiet || die "git fetch failed"
 
@@ -126,7 +131,6 @@ upgrade() {
 		return 0
 	fi
 
-	detect_local_caddy
 	hr
 	echo "  Directory:  $INSTALL_DIR"
 	echo "  Current:    $current"
@@ -136,13 +140,33 @@ upgrade() {
 	warn "Back up Postgres first:  docker compose exec -T postgres pg_dump -U airlock airlock > airlock-backup.sql"
 
 	if [ "$DRY_RUN" = 1 ]; then
-		log "DRY RUN — would: git checkout $target; pull images; up -d. No changes made."
+		log "DRY RUN — would: git checkout $target; re-exec $target's upgrade.sh; pull images; up -d. No changes made."
 		return 0
 	fi
 	confirm "Proceed with the upgrade to $target?" || die "aborted."
 
 	log "checking out $target"
 	git checkout --quiet "$target" || die "checkout $target failed (commit or stash local changes first)"
+
+	# Hand off to the TARGET's upgrade.sh (just checked out) for the apply phase.
+	# This is what makes a fix to the pull/up steps in a new release take effect
+	# on the upgrade that installs it. AIRLOCK_UPGRADE_APPLY is the stable
+	# hand-off contract — keep the name stable across releases. AIRLOCK_UPGRADE_PREV
+	# carries the old tag (we're on the target after checkout, so `git describe`
+	# would no longer report it) for the image-prune step.
+	log "continuing with $target's upgrade.sh"
+	AIRLOCK_UPGRADE_APPLY="$target" AIRLOCK_UPGRADE_PREV="$current" \
+		exec bash "$INSTALL_DIR/upgrade.sh" "$@"
+}
+
+# Phase 2 — build caddy (if local), pull the release images, restart, wait
+# healthy, prune the old images. Runs from the TARGET's upgrade.sh (re-exec'd by
+# phase 1). Driven by the checked-out compose file, so it does the right thing
+# even if the hand-off env is stale; PREV only affects which old images get
+# pruned and the log lines.
+upgrade_apply() {
+	local target="$AIRLOCK_UPGRADE_APPLY" prev="${AIRLOCK_UPGRADE_PREV:-}"
+	detect_local_caddy
 
 	if [ "$BUILD_CADDY" = 1 ]; then
 		log "rebuilding the Cloudflare-plugin caddy image"
@@ -168,16 +192,15 @@ upgrade() {
 		sleep 3
 	done
 
-	# Reclaim disk: drop the previous tag's stack images now that we're healthy
-	# on $target. Only when $current is a real release tag (git describe gives a
-	# bare commit hash otherwise — nothing to map to an image tag, so skip).
-	# `|| true`: agent-base layers still referenced by running agents just keep
+	# Reclaim disk: drop the previous tag's stack images now that we're healthy.
+	# Only when $prev is a real release tag (a bare commit hash maps to no image
+	# tag). `|| true`: agent-base layers still referenced by running agents keep
 	# the layers and lose the tag, which is fine.
-	if [[ "$current" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$ ]]; then
-		log "removing previous version's images ($current)"
+	if [[ "$prev" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$ ]] && [ "$prev" != "$target" ]; then
+		log "removing previous version's images ($prev)"
 		local img
 		for img in airlock airlock-frontend airlock-agent-builder airlock-agent-base; do
-			docker rmi "ghcr.io/airlockrun/$img:$current" >/dev/null 2>&1 || true
+			docker rmi "ghcr.io/airlockrun/$img:$prev" >/dev/null 2>&1 || true
 		done
 	fi
 
@@ -189,7 +212,15 @@ upgrade() {
 main() {
 	parse_args "$@"
 	resolve_dir
-	upgrade
+	need_cmd git || die "git is required"
+	need_cmd docker || die "docker is required"
+	# Re-exec'd apply phase (phase 1 checked out the target and set this), or a
+	# fresh invocation that starts at phase 1.
+	if [ -n "${AIRLOCK_UPGRADE_APPLY:-}" ]; then
+		upgrade_apply
+	else
+		upgrade_prepare "$@"
+	fi
 }
 
 main "$@"
