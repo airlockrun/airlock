@@ -26,7 +26,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      # Drift check has no toolchain dependency; bash + awk only.
+      # check-versions.sh reads agentsdk/scaffold/versions.go (the frontend
+      # toolchain source of truth), so the agentsdk module must be in the cache.
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: fetch modules (agentsdk scaffold for the drift check)
+        run: go mod download github.com/airlockrun/agentsdk
       - name: check-versions
         run: ./scripts/check-versions.sh
 
