@@ -271,7 +271,10 @@ type ConfigSection = (typeof configSections)[number]
 
 // Activity (Runs + Builds) renders as the final section, but uses the same
 // counts machinery — visible when at least one of its inner lists has items.
-const activityVisible = computed(() => (counts.value.runs ?? 0) > 0 || (counts.value.builds ?? 0) > 0)
+// Activity (runs + builds) is admin-only: both lists span every user's runs
+// and the agent's build history, which non-admin members shouldn't see (the
+// API gates the same via AgentRunView / AgentBuildsView).
+const activityVisible = computed(() => isAgentAdmin.value && ((counts.value.runs ?? 0) > 0 || (counts.value.builds ?? 0) > 0))
 
 // Right-rail entries — only sections with content. Hides empty-but-mounted
 // sections from the rail (which itself still mounts so it can emit a count).
@@ -783,6 +786,7 @@ function openWeb() {
       </SectionCard>
 
       <SectionCard
+        v-if="isAgentAdmin"
         v-show="activityVisible"
         id="activity"
         title="Activity"

@@ -37,10 +37,10 @@ const (
 	AgentUpdate       Action = "agent.update"
 	AgentLifecycle    Action = "agent.lifecycle" // stop / start / suspend
 	AgentGit          Action = "agent.git"       // connect / disconnect / read git binding
-	AgentRunView      Action = "agent.run.view"  // runs list / get / logs
+	AgentRunView      Action = "agent.run.view"  // runs list / get / logs (admin: runs span all users)
 	AgentMembersView  Action = "agent.members.view"
 	AgentToolsView    Action = "agent.tools.view"
-	AgentBuildsView   Action = "agent.builds.view"  // builds list / get
+	AgentBuildsView   Action = "agent.builds.view"  // builds list / get / log stream (admin)
 	AgentConversation Action = "agent.conversation" // create / list web conversations
 	AgentModelsView   Action = "agent.models.view"
 	AgentClone        Action = "agent.clone" // fork this agent's code into a new agent (member of source; also needs TenantAgentClone)
@@ -95,10 +95,10 @@ var policy = map[Action]Requirement{
 	AgentUpdate:       {Axis: AxisAgent, Agent: agentsdk.AccessUser},
 	AgentLifecycle:    {Axis: AxisAgent, Agent: agentsdk.AccessUser},
 	AgentGit:          {Axis: AxisAgent, Agent: agentsdk.AccessUser},
-	AgentRunView:      {Axis: AxisAgent, Agent: agentsdk.AccessUser},
+	AgentRunView:      {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
 	AgentMembersView:  {Axis: AxisAgent, Agent: agentsdk.AccessUser},
 	AgentToolsView:    {Axis: AxisAgent, Agent: agentsdk.AccessUser},
-	AgentBuildsView:   {Axis: AxisAgent, Agent: agentsdk.AccessUser},
+	AgentBuildsView:   {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
 	AgentConversation: {Axis: AxisAgent, Agent: agentsdk.AccessUser},
 	AgentModelsView:   {Axis: AxisAgent, Agent: agentsdk.AccessUser},
 	AgentClone:        {Axis: AxisAgent, Agent: agentsdk.AccessUser},
