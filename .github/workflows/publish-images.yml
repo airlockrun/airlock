@@ -56,6 +56,16 @@ jobs:
         with:
           ref: ${{ inputs.version }}
 
+      # check-versions.sh reads agentsdk/scaffold/versions.go (the frontend
+      # toolchain source of truth after scaffold moved into agentsdk), which a
+      # standalone airlock checkout only has once the agentsdk module is cached.
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: fetch modules (agentsdk scaffold for the drift check)
+        run: go mod download github.com/airlockrun/agentsdk
+
       # Validate version invariants before building. Catches stale
       # Dockerfile.agent-builder ARG defaults vs go.mod and compose
       # `:vX.Y.Z` tags that don't match the release tag.
