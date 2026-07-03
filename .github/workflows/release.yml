@@ -54,6 +54,17 @@ jobs:
             echo "::error::tag $V already exists — bump to a new version"; exit 1
           fi
 
+      # setup-go + module fetch BEFORE the drift check: check-versions.sh reads
+      # agentsdk/scaffold/versions.go (single source of truth for the frontend
+      # toolchain versions), which a standalone airlock checkout only has once
+      # the agentsdk module is in the cache.
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: fetch modules (agentsdk scaffold for the drift check)
+        run: go mod download github.com/airlockrun/agentsdk
+
       - name: Drift check
         env:
           RELEASE_TAG: ${{ inputs.version }}
@@ -61,11 +72,6 @@ jobs:
 
       - name: Migration immutability
         run: ./scripts/check-migrations.sh
-
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-          cache: true
 
       # The scaffold integration test shells out to `templ generate`.
       - name: install templ
