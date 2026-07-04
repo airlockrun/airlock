@@ -271,3 +271,45 @@ func TestPushBranch_ConflictPreservesOnSideBranch(t *testing.T) {
 		t.Errorf("local working tree dirty after conflict reset:\n%s", status)
 	}
 }
+
+// TestPushBranch_RefusesUnrelatedRemote is the data-loss guardrail: a local
+// history unrelated to a populated remote (e.g. a fresh scaffold pointed at a
+// user's repo) must be refused, not rebased over — and the remote left intact.
+func TestPushBranch_RefusesUnrelatedRemote(t *testing.T) {
+	remote := makeBareRemote(t)
+	seedRemote(t, remote) // remote main = lineage A (README.md)
+
+	// A local repo with its own, unrelated history (fresh init, not cloned).
+	local := t.TempDir()
+	if err := runGit(local, "init", "-b", "main"); err != nil {
+		t.Fatal(err)
+	}
+	_ = runGit(local, "config", "user.email", "test@airlock")
+	_ = runGit(local, "config", "user.name", "Test")
+	if err := os.WriteFile(filepath.Join(local, "main.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := runGit(local, "add", "main.go"); err != nil {
+		t.Fatal(err)
+	}
+	if err := runGit(local, "commit", "-m", "scaffold"); err != nil {
+		t.Fatal(err)
+	}
+
+	err := pushBranch(context.Background(), local, remote, "main", "", "run-unrelated")
+	if err == nil {
+		t.Fatal("push to an unrelated populated remote should be refused, got nil")
+	}
+	if !strings.Contains(err.Error(), "unrelated") {
+		t.Errorf("error should explain the unrelated history, got: %v", err)
+	}
+
+	// The remote must be untouched: still the seeded content, not the scaffold.
+	check := cloneRemote(t, remote)
+	if _, err := os.Stat(filepath.Join(check, "README.md")); err != nil {
+		t.Errorf("remote README.md missing — the remote was clobbered: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(check, "main.go")); err == nil {
+		t.Error("remote has the local's main.go — the push overwrote it")
+	}
+}

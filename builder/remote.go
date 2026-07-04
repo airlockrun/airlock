@@ -118,10 +118,15 @@ func (b *BuildService) RemoteSharesHistory(ctx context.Context, agentID, remote,
 	if err := gitAuthed(ctx, repoPath, header, "fetch", "--no-tags", remote, branch); err != nil {
 		return false, fmt.Errorf("fetch remote: %s", strings.ReplaceAll(err.Error(), header, "[redacted]"))
 	}
-	// git merge-base exits 0 when a common ancestor exists, 1 when the histories
-	// are unrelated; any other exit code is a genuine error.
-	cmd := exec.CommandContext(ctx, "git", "merge-base", "HEAD", "FETCH_HEAD")
-	cmd.Dir = repoPath
+	return hasCommonAncestor(ctx, repoPath, "HEAD", "FETCH_HEAD")
+}
+
+// hasCommonAncestor reports whether two revs share history. git merge-base exits
+// 0 when a common ancestor exists, 1 when the histories are unrelated; any other
+// exit code is a genuine error.
+func hasCommonAncestor(ctx context.Context, dir, a, b string) (bool, error) {
+	cmd := exec.CommandContext(ctx, "git", "merge-base", a, b)
+	cmd.Dir = dir
 	cmd.Env = append(gitCleanEnv(), "GIT_TERMINAL_PROMPT=0")
 	if err := cmd.Run(); err != nil {
 		var ee *exec.ExitError
@@ -277,6 +282,18 @@ func pushBranch(ctx context.Context, repoPath, remote, branch, header, runID str
 	}
 	if err := gitAuthed(ctx, repoPath, header, "fetch", remote, branch); err != nil {
 		return fmt.Errorf("git fetch for rebase: %w", err)
+	}
+	// Safety net: never replay our commits onto a remote we don't share history
+	// with. That's how a fresh/scaffold agent pointed at a populated repo would
+	// overwrite it — refuse loudly instead of rebasing over someone else's code.
+	// The create/connect flows already route a populated remote to import; this
+	// guards the push layer so any future misdetection can't clobber a repo.
+	shared, sErr := hasCommonAncestor(ctx, repoPath, "HEAD", "FETCH_HEAD")
+	if sErr != nil {
+		return fmt.Errorf("verify shared history with %s: %w", remote, sErr)
+	}
+	if !shared {
+		return fmt.Errorf("refusing to push to %s: its history is unrelated to this agent's code — pushing would overwrite the existing repository. Attach an empty repo, or import this one (Source tab, or create-from-repo)", remote)
 	}
 	if rebaseErr := git(repoPath, "rebase", "FETCH_HEAD"); rebaseErr != nil {
 		_ = git(repoPath, "rebase", "--abort")
