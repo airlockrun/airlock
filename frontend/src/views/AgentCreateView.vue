@@ -483,7 +483,7 @@ onUnmounted(() => {
       <Fieldset legend="Connect a git repo (optional)" :toggleable="true" :collapsed="true">
         <div style="display: flex; flex-direction: column; gap: 1rem">
           <small style="color: var(--p-text-muted-color)">
-            Attach an empty external git repo to this agent. Airlock pushes the scaffold and codegen there, and pulls user pushes back. You can also do this later from the agent's <strong>Source</strong> tab.
+            Connect an external git repo. If it already has code, this agent is created from it (imported); if it's empty, Airlock pushes the scaffold + codegen there. Either way, pushes sync back. You can also do this later from the agent's <strong>Source</strong> tab.
           </small>
           <div>
             <label style="display: block; margin-bottom: 0.35rem; font-size: 0.85rem">Repo URL</label>

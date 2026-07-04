@@ -247,6 +247,14 @@ func (s *Service) Create(ctx context.Context, p authz.Principal, req CreateReque
 	}
 	var gitCredFK pgtype.UUID
 	gitRemoteURL := req.GitRemoteURL
+	gitBranch := strings.TrimSpace(req.GitDefaultBranch)
+	if gitBranch == "" {
+		gitBranch = "main"
+	}
+	// importFromRemote: the remote already has code on the target branch, so
+	// adopt it instead of scaffolding + pushing a fresh agent over it.
+	importFromRemote := false
+	remoteHeadSHA := ""
 	if req.GitRemoteURL != "" {
 		// Normalize/validate the scheme here too — the connect path did but
 		// create didn't, which is how SSH remotes (unusable with a PAT) slipped
@@ -271,6 +279,15 @@ func (s *Service) Create(ctx context.Context, p authz.Principal, req CreateReque
 			return dbq.Agent{}, service.Detail(service.ErrForbidden, "git credential does not belong to you")
 		}
 		gitCredFK = pgtype.UUID{Bytes: credID, Valid: true}
+		// Validate reachability up front (bad URL/token fails create, not the
+		// build) and detect empty→mirror vs populated→import.
+		state, ierr := s.builder.InspectRemote(ctx, gitRemoteURL, gitBranch, gitCredFK)
+		if ierr != nil {
+			s.logger.Warn("git create: inspect remote", zap.Error(ierr))
+			return dbq.Agent{}, service.Detail(service.ErrInvalidInput, "could not access %s with the selected credential — verify the URL and that the token has repo access", gitRemoteURL)
+		}
+		importFromRemote = state.HasBranch
+		remoteHeadSHA = state.HeadSHA
 	}
 	agent, err := q.CreateAgent(ctx, dbq.CreateAgentParams{
 		Name:             req.Name,
@@ -305,8 +322,39 @@ func (s *Service) Create(ctx context.Context, p authz.Principal, req CreateReque
 		Role:      "admin",
 	})
 	agentIDStr := uuid.UUID(agent.ID.Bytes).String()
+
+	// Import: the remote already has code, so connect + clone it in now
+	// (synchronously, like a clone — a failure rolls the create back cleanly),
+	// then build the imported HEAD below with SkipScaffold. An empty remote
+	// falls through to the scaffold build, which mirrors the new agent to it.
+	if importFromRemote {
+		secret, _ := randomHex(32)
+		if err := q.ConnectAgentGit(ctx, dbq.ConnectAgentGitParams{
+			ID:               agent.ID,
+			GitRemoteUrl:     gitRemoteURL,
+			GitCredentialID:  gitCredFK,
+			GitDefaultBranch: gitBranch,
+			GitWebhookSecret: secret,
+		}); err != nil {
+			_ = q.DeleteAgent(ctx, agent.ID)
+			s.logger.Error("git create import: connect", zap.Error(err))
+			return dbq.Agent{}, err
+		}
+		if err := s.builder.CloneRemoteIntoAgent(ctx, agentIDStr, gitRemoteURL, gitBranch, gitCredFK); err != nil {
+			_ = q.DeleteAgent(ctx, agent.ID)
+			s.logger.Error("git create import: clone", zap.String("agent", agentIDStr), zap.Error(err))
+			return dbq.Agent{}, service.Detail(service.ErrInvalidInput, "failed to import repository: %s", err.Error())
+		}
+		if remoteHeadSHA != "" {
+			_ = q.UpdateAgentGitLastSyncedRef(ctx, dbq.UpdateAgentGitLastSyncedRefParams{
+				ID:               agent.ID,
+				GitLastSyncedRef: remoteHeadSHA,
+			})
+		}
+	}
+
 	go func() {
-		_ = s.builder.Build(context.Background(), builder.BuildInput{
+		in := builder.BuildInput{
 			AgentID:              agentIDStr,
 			Name:                 req.Name,
 			Slug:                 req.Slug,
@@ -314,12 +362,19 @@ func (s *Service) Create(ctx context.Context, p authz.Principal, req CreateReque
 			InitiatorUserID:      pgUserID(p),
 			BuildProviderID:      buildProviderFK,
 			BuildModel:           req.BuildModel,
-			Instructions:         req.Instructions,
-			GitRemoteURL:         gitRemoteURL,
-			GitCredentialID:      gitCredFK,
-			GitDefaultBranch:     req.GitDefaultBranch,
 			SystemConversationID: req.SystemConversationID,
-		})
+		}
+		if importFromRemote {
+			// Build the cloned HEAD as-is: no scaffold over it, no codegen.
+			in.SkipScaffold = true
+		} else {
+			// Scaffold a fresh agent; Phase C2 mirrors it to the (empty) remote.
+			in.Instructions = req.Instructions
+			in.GitRemoteURL = gitRemoteURL
+			in.GitCredentialID = gitCredFK
+			in.GitDefaultBranch = gitBranch
+		}
+		_ = s.builder.Build(context.Background(), in)
 	}()
 	return agent, nil
 }
