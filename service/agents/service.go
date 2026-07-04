@@ -286,8 +286,20 @@ func (s *Service) Create(ctx context.Context, p authz.Principal, req CreateReque
 			s.logger.Warn("git create: inspect remote", zap.Error(ierr))
 			return dbq.Agent{}, service.Detail(service.ErrInvalidInput, "could not access %s with the selected credential — verify the URL and that the token has repo access", gitRemoteURL)
 		}
-		importFromRemote = state.HasBranch
-		remoteHeadSHA = state.HeadSHA
+		// A populated remote is imported regardless of which branch holds the
+		// code — adopt the remote's default branch when the requested one is
+		// absent (a repo on "master" must not fall through to scaffold+push).
+		importFromRemote = !state.Empty
+		if importFromRemote {
+			if b := state.ImportBranch(gitBranch); b != "" {
+				gitBranch = b
+			}
+			if state.HasBranch {
+				remoteHeadSHA = state.HeadSHA
+			} else {
+				remoteHeadSHA = state.DefaultHeadSHA
+			}
+		}
 	}
 	agent, err := q.CreateAgent(ctx, dbq.CreateAgentParams{
 		Name:             req.Name,
@@ -1224,16 +1236,24 @@ func (s *Service) ConnectGit(ctx context.Context, p authz.Principal, agentID uui
 		return GitConfig{}, service.Detail(service.ErrInvalidInput,
 			"could not access %s with the selected credential — verify the URL and that the token has repo access", remote)
 	}
-	// Decide what a populated target branch means for this agent:
+	// Decide what a populated remote means for this agent:
 	//   - never-built agent        → import (adopt the remote's code)
 	//   - built agent, shared hist. → reconnect (same repo; normal push/pull
 	//                                 reconciles — no import, no force)
 	//   - built agent, unrelated    → reject (a different repo; on a push
 	//                                 conflict the agent would adopt its code)
-	// An empty remote (or a remote without the target branch) always mirrors:
-	// the first push just creates/advances the branch.
+	// An empty remote always mirrors: the first push just creates the branch.
+	// A populated remote is handled on whichever branch holds the code — the
+	// requested one when present, else the remote's default.
+	effHeadSHA := state.HeadSHA
 	importing := false
-	if state.HasBranch {
+	if !state.Empty {
+		if b := state.ImportBranch(branch); b != "" {
+			branch = b
+		}
+		if !state.HasBranch {
+			effHeadSHA = state.DefaultHeadSHA
+		}
 		if agent.ImageRef == "" {
 			importing = true
 		} else {
@@ -1273,11 +1293,11 @@ func (s *Service) ConnectGit(ctx context.Context, p authz.Principal, agentID uui
 			s.logger.Error("git import: clone", zap.String("agent", agentID.String()), zap.Error(err))
 			return GitConfig{}, service.Detail(service.ErrInvalidInput, "failed to import repository: %s", err.Error())
 		}
-		if state.HeadSHA != "" {
+		if effHeadSHA != "" {
 			// Stamp the imported tip so the git poller doesn't see instant drift.
 			_ = q.UpdateAgentGitLastSyncedRef(ctx, dbq.UpdateAgentGitLastSyncedRefParams{
 				ID:               pgtype.UUID{Bytes: agentID, Valid: true},
-				GitLastSyncedRef: state.HeadSHA,
+				GitLastSyncedRef: effHeadSHA,
 			})
 		}
 		go func() {

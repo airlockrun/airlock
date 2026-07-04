@@ -20,9 +20,21 @@ import (
 
 // RemoteState summarizes a git remote as seen via ls-remote with a credential.
 type RemoteState struct {
-	Empty     bool   // the remote advertises no branches at all
-	HasBranch bool   // the requested branch exists on the remote
-	HeadSHA   string // tip SHA of the requested branch ("" when absent)
+	Empty          bool   // the remote advertises no branches at all
+	HasBranch      bool   // the requested branch exists on the remote
+	HeadSHA        string // tip SHA of the requested branch ("" when absent)
+	DefaultBranch  string // the remote's HEAD branch (from the symref), "" if none
+	DefaultHeadSHA string // tip SHA of the default branch ("" when unknown)
+}
+
+// ImportBranch returns the branch to adopt when importing: the requested one
+// when it exists on the remote, otherwise the remote's default branch. Empty
+// only when the remote has no branch to import.
+func (s RemoteState) ImportBranch(requested string) string {
+	if s.HasBranch {
+		return requested
+	}
+	return s.DefaultBranch
 }
 
 // InspectRemote validates that remote is reachable with credID and reports
@@ -47,7 +59,7 @@ func (b *BuildService) InspectRemote(ctx context.Context, remote, branch string,
 	}
 	defer os.RemoveAll(dir)
 
-	out, err := gitAuthedOutput(ctx, dir, header, "ls-remote", "--heads", remote)
+	out, err := gitAuthedOutput(ctx, dir, header, "ls-remote", "--symref", remote)
 	if err != nil {
 		// Redact the auth header defensively before the error escapes to logs.
 		return RemoteState{}, fmt.Errorf("%s", strings.ReplaceAll(err.Error(), header, "[redacted]"))
@@ -138,8 +150,10 @@ func hasCommonAncestor(ctx context.Context, dir, a, b string) (bool, error) {
 	return true, nil
 }
 
-// parseRemoteState interprets `git ls-remote --heads` output: empty when no
-// branches are advertised, plus the tip of the requested branch when present.
+// parseRemoteState interprets `git ls-remote --symref` output: the symref line
+// ("ref: refs/heads/<default>\tHEAD") gives the default branch, and each
+// "<sha>\trefs/heads/<name>" line a branch. Empty when no branch is advertised.
+// Only refs/heads/* count — HEAD and tags are ignored.
 func parseRemoteState(lsRemoteOutput, branch string) RemoteState {
 	if branch == "" {
 		branch = "main"
@@ -150,12 +164,26 @@ func parseRemoteState(lsRemoteOutput, branch string) RemoteState {
 		if line == "" {
 			continue
 		}
-		st.Empty = false
-		if strings.HasSuffix(line, "refs/heads/"+branch) {
-			st.HasBranch = true
-			if f := strings.Fields(line); len(f) > 0 {
-				st.HeadSHA = f[0]
+		// Symbolic-ref line for the default branch: "ref: refs/heads/main\tHEAD".
+		if strings.HasPrefix(line, "ref: ") {
+			f := strings.Fields(strings.TrimPrefix(line, "ref: "))
+			if len(f) >= 2 && f[1] == "HEAD" {
+				st.DefaultBranch = strings.TrimPrefix(f[0], "refs/heads/")
 			}
+			continue
+		}
+		f := strings.Fields(line)
+		if len(f) < 2 || !strings.HasPrefix(f[1], "refs/heads/") {
+			continue // HEAD dereference line, tags, etc.
+		}
+		st.Empty = false
+		name := strings.TrimPrefix(f[1], "refs/heads/")
+		if name == branch {
+			st.HasBranch = true
+			st.HeadSHA = f[0]
+		}
+		if name == st.DefaultBranch {
+			st.DefaultHeadSHA = f[0]
 		}
 	}
 	return st
