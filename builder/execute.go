@@ -178,6 +178,13 @@ func (b *BuildService) Execute(ctx context.Context, plan BuildPlan) (string, err
 	}
 	logLine := solLog
 
+	// Make an imported-from-git build legible: the repo was cloned in before the
+	// build (in the service, not this log), so without this the only git line
+	// would be the misleading "Pushing to..." below.
+	if plan.SkipScaffold && agent.GitRemoteUrl != "" {
+		logLine(fmt.Sprintf("Imported existing code from %s (scaffold skipped).", agent.GitRemoteUrl))
+	}
+
 	// The agent's exit-tool outcome (set after codegen runs), persisted on
 	// the build row and rendered as the "Result" alongside any infra error.
 	var exitStatus, exitMessage string
@@ -379,7 +386,14 @@ func (b *BuildService) Execute(ctx context.Context, plan BuildPlan) (string, err
 	// side branch (airlock/upgrade/{runID}) on the remote and resets
 	// main locally, so the agent stays on its previous image.
 	if agent.GitRemoteUrl != "" {
-		logLine(fmt.Sprintf("Pushing to %s...", agent.GitRemoteUrl))
+		// An imported/cloned repo is already in sync with the remote, so this
+		// push is a fast-forward no-op — say "Syncing" rather than "Pushing" so
+		// it doesn't read like the agent is overwriting the remote.
+		if plan.SkipScaffold {
+			logLine(fmt.Sprintf("Syncing with %s...", agent.GitRemoteUrl))
+		} else {
+			logLine(fmt.Sprintf("Pushing to %s...", agent.GitRemoteUrl))
+		}
 		pushErr := b.pushAgentRepo(ctx, agent, plan.RunID)
 		switch {
 		case pushErr == nil:
