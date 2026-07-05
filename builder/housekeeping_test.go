@@ -302,6 +302,25 @@ func TestCommitHousekeeping_CommitsOnlyChangedFiles(t *testing.T) {
 	}
 }
 
+func TestCommitHousekeepingConfiguresMissingIdentity(t *testing.T) {
+	repoPath, _ := scaffoldHousekeepingFixture(t)
+	unsetGitIdentity(repoPath)
+
+	if err := os.WriteFile(filepath.Join(repoPath, "Dockerfile"), []byte("FROM scratch\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := commitHousekeeping(repoPath, HousekeepingResult{DockerfileChanged: true}); err != nil {
+		t.Fatalf("commitHousekeeping: %v", err)
+	}
+	name, err := gitOutput(repoPath, "config", "--local", "user.name")
+	if err != nil {
+		t.Fatalf("git config user.name: %v", err)
+	}
+	if name != gitUserName {
+		t.Fatalf("user.name = %q, want %q", name, gitUserName)
+	}
+}
+
 func TestCommitHousekeeping_NoChangesIsNoop(t *testing.T) {
 	repoPath, _ := scaffoldHousekeepingFixture(t)
 	before, _ := gitOutput(repoPath, "rev-parse", "HEAD")

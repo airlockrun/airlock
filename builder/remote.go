@@ -97,6 +97,10 @@ func (b *BuildService) CloneRemoteIntoAgent(ctx context.Context, agentID, remote
 		_ = os.RemoveAll(repoPath)
 		return fmt.Errorf("clone: %s", strings.ReplaceAll(err.Error(), header, "[redacted]"))
 	}
+	if err := EnsureGitIdentity(repoPath); err != nil {
+		_ = os.RemoveAll(repoPath)
+		return err
+	}
 	if _, err := os.Stat(filepath.Join(repoPath, "go.mod")); err != nil {
 		_ = os.RemoveAll(repoPath)
 		return fmt.Errorf("imported repository has no go.mod at its root — not a valid agent project")

@@ -257,6 +257,9 @@ func commitHousekeeping(repoPath string, r HousekeepingResult) error {
 	if len(paths) == 0 {
 		return nil
 	}
+	if err := EnsureGitIdentity(repoPath); err != nil {
+		return err
+	}
 	if err := git(repoPath, append([]string{"add", "--"}, paths...)...); err != nil {
 		return fmt.Errorf("git add: %w", err)
 	}
