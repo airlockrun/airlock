@@ -167,6 +167,9 @@ message CreateAgentRequest {
   string git_remote_url = 9;
   string git_credential_id = 10;
   string git_default_branch = 11;  // empty → "main"
+  // When true, create only the draft agent row and grants; source upload will
+  // populate the repo and start the first build.
+  bool skip_initial_build = 12;
 }
 
 message CreateAgentResponse {

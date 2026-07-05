@@ -91,6 +91,7 @@ func (h *agentsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		GitRemoteURL:     req.GitRemoteUrl,
 		GitCredentialID:  req.GitCredentialId,
 		GitDefaultBranch: req.GitDefaultBranch,
+		SkipInitialBuild: req.SkipInitialBuild,
 	})
 	if err != nil {
 		writeAgentsError(w, err, "failed to create agent")

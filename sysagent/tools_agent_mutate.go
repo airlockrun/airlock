@@ -44,6 +44,7 @@ type createAgentInput struct {
 	GitRemoteURL     string `json:"git_remote_url,omitempty" jsonschema:"description=Optional git remote URL to bind on create."`
 	GitCredentialID  string `json:"git_credential_id,omitempty" jsonschema:"description=Git credential UUID — call list_git_credentials to pick one."`
 	GitDefaultBranch string `json:"git_default_branch,omitempty" jsonschema:"description=Optional default branch (defaults to main)."`
+	SkipInitialBuild bool   `json:"skip_initial_build,omitempty" jsonschema:"description=Create only the draft agent row; source upload starts the first build."`
 }
 
 func (s *Service) toolCreateAgent() tool.Tool {
@@ -64,6 +65,7 @@ func (s *Service) toolCreateAgent() tool.Tool {
 				GitRemoteURL:         in.GitRemoteURL,
 				GitCredentialID:      in.GitCredentialID,
 				GitDefaultBranch:     in.GitDefaultBranch,
+				SkipInitialBuild:     in.SkipInitialBuild,
 				SystemConversationID: conversationIDFromCtx(ctx),
 			})
 			if err != nil {
