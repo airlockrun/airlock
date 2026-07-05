@@ -90,6 +90,7 @@ type CreateRequest struct {
 	GitRemoteURL     string
 	GitCredentialID  string
 	GitDefaultBranch string
+	OneTimeGitImport bool
 	SkipInitialBuild bool
 	// SystemConversationID, when set (system-agent create_agent path),
 	// routes the build-completion outcome back to that conversation.
@@ -304,6 +305,9 @@ func (s *Service) Create(ctx context.Context, p authz.Principal, req CreateReque
 		// code — adopt the remote's default branch when the requested one is
 		// absent (a repo on "master" must not fall through to scaffold+push).
 		importFromRemote = !state.Empty
+		if state.Empty && req.OneTimeGitImport {
+			return dbq.Agent{}, service.Detail(service.ErrInvalidInput, "git remote has no code to import; enable git binding so Airlock can push a scaffold, or choose a populated repository")
+		}
 		if importFromRemote {
 			if b := state.ImportBranch(gitBranch); b != "" {
 				gitBranch = b
@@ -354,24 +358,26 @@ func (s *Service) Create(ctx context.Context, p authz.Principal, req CreateReque
 	// then build the imported HEAD below with SkipScaffold. An empty remote
 	// falls through to the scaffold build, which mirrors the new agent to it.
 	if importFromRemote {
-		secret, _ := randomHex(32)
-		if err := q.ConnectAgentGit(ctx, dbq.ConnectAgentGitParams{
-			ID:               agent.ID,
-			GitRemoteUrl:     gitRemoteURL,
-			GitCredentialID:  gitCredFK,
-			GitDefaultBranch: gitBranch,
-			GitWebhookSecret: secret,
-		}); err != nil {
-			_ = q.DeleteAgent(ctx, agent.ID)
-			s.logger.Error("git create import: connect", zap.Error(err))
-			return dbq.Agent{}, err
+		if !req.OneTimeGitImport {
+			secret, _ := randomHex(32)
+			if err := q.ConnectAgentGit(ctx, dbq.ConnectAgentGitParams{
+				ID:               agent.ID,
+				GitRemoteUrl:     gitRemoteURL,
+				GitCredentialID:  gitCredFK,
+				GitDefaultBranch: gitBranch,
+				GitWebhookSecret: secret,
+			}); err != nil {
+				_ = q.DeleteAgent(ctx, agent.ID)
+				s.logger.Error("git create import: connect", zap.Error(err))
+				return dbq.Agent{}, err
+			}
 		}
 		if err := s.builder.CloneRemoteIntoAgent(ctx, agentIDStr, gitRemoteURL, gitBranch, gitCredFK); err != nil {
 			_ = q.DeleteAgent(ctx, agent.ID)
 			s.logger.Error("git create import: clone", zap.String("agent", agentIDStr), zap.Error(err))
 			return dbq.Agent{}, service.Detail(service.ErrInvalidInput, "failed to import repository: %s", err.Error())
 		}
-		if remoteHeadSHA != "" {
+		if !req.OneTimeGitImport && remoteHeadSHA != "" {
 			_ = q.UpdateAgentGitLastSyncedRef(ctx, dbq.UpdateAgentGitLastSyncedRefParams{
 				ID:               agent.ID,
 				GitLastSyncedRef: remoteHeadSHA,

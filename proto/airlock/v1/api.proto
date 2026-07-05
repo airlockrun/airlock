@@ -147,6 +147,11 @@ message ListCatalogModelsResponse {
   repeated ModelInfo models = 1;
 }
 
+message GetAgentSDKInfoResponse {
+  string version = 1;
+  string command_import = 2;
+}
+
 // --- Agents ---
 
 message CreateAgentRequest {
@@ -170,6 +175,9 @@ message CreateAgentRequest {
   // When true, create only the draft agent row and grants; source upload will
   // populate the repo and start the first build.
   bool skip_initial_build = 12;
+  // For populated git imports, copy the code once without saving the remote
+  // as the agent's ongoing source. Empty remotes cannot use this mode.
+  bool one_time_git_import = 13;
 }
 
 message CreateAgentResponse {
