@@ -183,6 +183,31 @@ func TestSyncWorkdirToRepoAndCommit(t *testing.T) {
 	}
 }
 
+func TestCommitWorktreeConfiguresMissingIdentity(t *testing.T) {
+	repoPath := scaffoldedRepo(t)
+	unsetGitIdentity(repoPath)
+	if err := os.WriteFile(filepath.Join(repoPath, "identity.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, committed, err := CommitWorktree(repoPath, "identity test"); err != nil {
+		t.Fatalf("CommitWorktree: %v", err)
+	} else if !committed {
+		t.Fatal("expected CommitWorktree to create a commit")
+	}
+	email, err := gitOutput(repoPath, "config", "--local", "user.email")
+	if err != nil {
+		t.Fatalf("git config user.email: %v", err)
+	}
+	if email != gitUserEmail {
+		t.Fatalf("user.email = %q, want %q", email, gitUserEmail)
+	}
+}
+
+func unsetGitIdentity(repoPath string) {
+	_ = git(repoPath, "config", "--local", "--unset-all", "user.email")
+	_ = git(repoPath, "config", "--local", "--unset-all", "user.name")
+}
+
 func TestCommitWorktreeCleanTreeNoOp(t *testing.T) {
 	repoPath := scaffoldedRepo(t)
 	hash, committed, err := CommitWorktree(repoPath, "no changes")

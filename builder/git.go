@@ -15,6 +15,11 @@ import (
 	"github.com/airlockrun/agentsdk/scaffold"
 )
 
+const (
+	gitUserEmail = "airlock@localhost"
+	gitUserName  = "Airlock"
+)
+
 // Per-agent repo layout:
 //
 //	<basePath>/                     ← AgentReposPath
@@ -39,6 +44,9 @@ func AgentRepoPath(basePath, agentID string) string {
 func InitAgentRepo(basePath, agentID string) error {
 	path := AgentRepoPath(basePath, agentID)
 	if _, err := os.Stat(filepath.Join(path, ".git")); err == nil {
+		if err := EnsureGitIdentity(path); err != nil {
+			return err
+		}
 		return nil // already initialized
 	}
 
@@ -50,11 +58,8 @@ func InitAgentRepo(basePath, agentID string) error {
 		return fmt.Errorf("git init: %w", err)
 	}
 
-	if err := git(path, "config", "user.email", "airlock@localhost"); err != nil {
-		return fmt.Errorf("git config email: %w", err)
-	}
-	if err := git(path, "config", "user.name", "Airlock"); err != nil {
-		return fmt.Errorf("git config name: %w", err)
+	if err := EnsureGitIdentity(path); err != nil {
+		return err
 	}
 
 	// Bootstrap .gitignore just so the init commit has content; the
@@ -80,6 +85,9 @@ func InitAgentRepo(basePath, agentID string) error {
 // commit hash. Safe to call on retry — deletes a stale branch first.
 func CommitScaffold(repoPath string, data scaffold.ScaffoldData) (string, error) {
 	const branch = "build/init"
+	if err := EnsureGitIdentity(repoPath); err != nil {
+		return "", err
+	}
 
 	// Clean up stale branch from a previous failed build attempt.
 	// Must switch away from it first — can't delete the checked-out branch.
@@ -282,6 +290,9 @@ func SyncWorkdirToRepo(workDir, repoPath string, exclude []string) error {
 // Returns (HEAD, false, nil) without committing when the tree is clean, so
 // callers can fall through to "current HEAD is the source ref". No push.
 func CommitWorktree(repoPath, message string) (hash string, committed bool, err error) {
+	if err := EnsureGitIdentity(repoPath); err != nil {
+		return "", false, err
+	}
 	if err := git(repoPath, "add", "-A"); err != nil {
 		return "", false, fmt.Errorf("git add: %w", err)
 	}
@@ -473,10 +484,20 @@ func CopyAgentRepo(basePath, srcID, dstID string) error {
 	}
 	// Detach from the source path so the clone is standalone.
 	_ = git(dst, "remote", "remove", "origin")
-	if err := git(dst, "config", "user.email", "airlock@localhost"); err != nil {
+	if err := EnsureGitIdentity(dst); err != nil {
+		return err
+	}
+	return nil
+}
+
+// EnsureGitIdentity sets the local git committer identity Airlock uses for
+// repos it owns. It is safe to call repeatedly and never depends on global git
+// config, which is not present in production containers.
+func EnsureGitIdentity(repoPath string) error {
+	if err := git(repoPath, "config", "--local", "user.email", gitUserEmail); err != nil {
 		return fmt.Errorf("git config email: %w", err)
 	}
-	if err := git(dst, "config", "user.name", "Airlock"); err != nil {
+	if err := git(repoPath, "config", "--local", "user.name", gitUserName); err != nil {
 		return fmt.Errorf("git config name: %w", err)
 	}
 	return nil
