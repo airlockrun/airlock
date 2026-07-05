@@ -308,6 +308,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		// Agent Create flow can prefill system defaults; PUT stays admin-only.
 		r.Get("/settings", sysSettingsHandler.Get)
 		r.With(auth.RequireTenantRole(authz.RequiredTenantRole(authz.TenantSettingsUpdate))).Put("/settings", sysSettingsHandler.Update)
+		r.Get("/agent-sdk", getAgentSDKInfo)
 
 		// Provider management (admin/owner only)
 		r.Route("/providers", func(r chi.Router) {

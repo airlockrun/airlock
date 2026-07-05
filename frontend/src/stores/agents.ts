@@ -37,9 +37,9 @@ export const useAgentsStore = defineStore('agents', () => {
     execModel: string,
     execProviderId: string,
     instructions?: string,
-    git?: { remoteUrl: string; credentialId: string; defaultBranch?: string },
+    git?: { remoteUrl: string; credentialId: string; defaultBranch?: string; oneTimeImport?: boolean },
   ) {
-    const payload: Record<string, string> = {
+    const payload: Record<string, string | boolean> = {
       name,
       slug,
       buildModel,
@@ -52,6 +52,7 @@ export const useAgentsStore = defineStore('agents', () => {
       payload.gitRemoteUrl = git.remoteUrl
       payload.gitCredentialId = git.credentialId
       if (git.defaultBranch) payload.gitDefaultBranch = git.defaultBranch
+      if (git.oneTimeImport) payload.oneTimeGitImport = true
     }
     const { data } = await api.post('/api/v1/agents', payload)
     const agent = fromJson(CreateAgentResponseSchema, data).agent!
