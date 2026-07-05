@@ -1245,6 +1245,9 @@ type CreateAgentRequest struct {
 	GitRemoteUrl     string `protobuf:"bytes,9,opt,name=git_remote_url,json=gitRemoteUrl,proto3" json:"git_remote_url,omitempty"`
 	GitCredentialId  string `protobuf:"bytes,10,opt,name=git_credential_id,json=gitCredentialId,proto3" json:"git_credential_id,omitempty"`
 	GitDefaultBranch string `protobuf:"bytes,11,opt,name=git_default_branch,json=gitDefaultBranch,proto3" json:"git_default_branch,omitempty"` // empty → "main"
+	// When true, create only the draft agent row and grants; source upload will
+	// populate the repo and start the first build.
+	SkipInitialBuild bool `protobuf:"varint,12,opt,name=skip_initial_build,json=skipInitialBuild,proto3" json:"skip_initial_build,omitempty"`
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
@@ -1354,6 +1357,13 @@ func (x *CreateAgentRequest) GetGitDefaultBranch() string {
 		return x.GitDefaultBranch
 	}
 	return ""
+}
+
+func (x *CreateAgentRequest) GetSkipInitialBuild() bool {
+	if x != nil {
+		return x.SkipInitialBuild
+	}
+	return false
 }
 
 type CreateAgentResponse struct {
@@ -7617,7 +7627,7 @@ const file_airlock_v1_api_proto_rawDesc = "" +
 	"\x1cListCatalogProvidersResponse\x126\n" +
 	"\tproviders\x18\x01 \x03(\v2\x18.airlock.v1.ProviderInfoR\tproviders\"J\n" +
 	"\x19ListCatalogModelsResponse\x12-\n" +
-	"\x06models\x18\x01 \x03(\v2\x15.airlock.v1.ModelInfoR\x06models\"\x98\x03\n" +
+	"\x06models\x18\x01 \x03(\v2\x15.airlock.v1.ModelInfoR\x06models\"\xc6\x03\n" +
 	"\x12CreateAgentRequest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x12\n" +
 	"\x04slug\x18\x02 \x01(\tR\x04slug\x12 \n" +
@@ -7632,7 +7642,8 @@ const file_airlock_v1_api_proto_rawDesc = "" +
 	"\x0egit_remote_url\x18\t \x01(\tR\fgitRemoteUrl\x12*\n" +
 	"\x11git_credential_id\x18\n" +
 	" \x01(\tR\x0fgitCredentialId\x12,\n" +
-	"\x12git_default_branch\x18\v \x01(\tR\x10gitDefaultBranch\"B\n" +
+	"\x12git_default_branch\x18\v \x01(\tR\x10gitDefaultBranch\x12,\n" +
+	"\x12skip_initial_build\x18\f \x01(\bR\x10skipInitialBuild\"B\n" +
 	"\x13CreateAgentResponse\x12+\n" +
 	"\x05agent\x18\x01 \x01(\v2\x15.airlock.v1.AgentInfoR\x05agent\"C\n" +
 	"\x12ListAgentsResponse\x12-\n" +

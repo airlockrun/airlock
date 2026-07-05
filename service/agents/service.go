@@ -4,12 +4,17 @@
 package agents
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"path"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -85,6 +90,7 @@ type CreateRequest struct {
 	GitRemoteURL     string
 	GitCredentialID  string
 	GitDefaultBranch string
+	SkipInitialBuild bool
 	// SystemConversationID, when set (system-agent create_agent path),
 	// routes the build-completion outcome back to that conversation.
 	SystemConversationID string
@@ -152,6 +158,11 @@ type ConnectGitRequest struct {
 	CredentialID  string
 	DefaultBranch string
 }
+
+const (
+	sourceUploadMaxFiles             = 10000
+	sourceUploadMaxUncompressedBytes = 100 << 20 // 100 MiB
+)
 
 // --- helpers ---
 
@@ -256,6 +267,9 @@ func (s *Service) Create(ctx context.Context, p authz.Principal, req CreateReque
 	importFromRemote := false
 	remoteHeadSHA := ""
 	if req.GitRemoteURL != "" {
+		if req.SkipInitialBuild {
+			return dbq.Agent{}, service.Detail(service.ErrInvalidInput, "skip_initial_build cannot be combined with git_remote_url")
+		}
 		// Normalize/validate the scheme here too — the connect path did but
 		// create didn't, which is how SSH remotes (unusable with a PAT) slipped
 		// through and failed at push time.
@@ -365,6 +379,10 @@ func (s *Service) Create(ctx context.Context, p authz.Principal, req CreateReque
 		}
 	}
 
+	if req.SkipInitialBuild {
+		return agent, nil
+	}
+
 	go func() {
 		in := builder.BuildInput{
 			AgentID:              agentIDStr,
@@ -389,6 +407,169 @@ func (s *Service) Create(ctx context.Context, p authz.Principal, req CreateReque
 		_ = s.builder.Build(context.Background(), in)
 	}()
 	return agent, nil
+}
+
+// UploadSource replaces an agent's internal source tree with a gzipped tar
+// archive and starts a build from that committed source. The archive never
+// carries .git; Airlock owns the internal repository and commit history.
+func (s *Service) UploadSource(ctx context.Context, p authz.Principal, agentID uuid.UUID, archive io.Reader) error {
+	q := dbq.New(s.db.Pool())
+	agent, err := q.GetAgentByID(ctx, pgtype.UUID{Bytes: agentID, Valid: true})
+	if err != nil {
+		return service.ErrNotFound
+	}
+	if err := authz.Authorize(ctx, q, p, authz.AgentBuildManage, agentID); err != nil {
+		return err
+	}
+	if agent.Status == "building" {
+		return service.Detail(service.ErrConflict, "agent is already building")
+	}
+
+	workDir, err := os.MkdirTemp("", "airlock-source-*")
+	if err != nil {
+		return fmt.Errorf("create source temp dir: %w", err)
+	}
+	defer os.RemoveAll(workDir)
+
+	if err := extractSourceArchive(archive, workDir); err != nil {
+		return err
+	}
+	if _, err := os.Stat(filepath.Join(workDir, "go.mod")); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return service.Detail(service.ErrInvalidInput, "source archive must contain go.mod at the root")
+		}
+		return fmt.Errorf("stat go.mod: %w", err)
+	}
+
+	agentIDStr := agentID.String()
+	repoPath := s.builder.AgentRepoPath(agentIDStr)
+	if err := builder.InitAgentRepo(s.builder.ReposPath(), agentIDStr); err != nil {
+		return fmt.Errorf("init agent repo: %w", err)
+	}
+	if err := clearRepoWorktree(repoPath); err != nil {
+		return fmt.Errorf("clear agent repo: %w", err)
+	}
+	if err := builder.SyncWorkdirToRepo(workDir, repoPath, nil); err != nil {
+		return fmt.Errorf("sync source to repo: %w", err)
+	}
+	if _, _, err := builder.CommitWorktree(repoPath, "Upload source"); err != nil {
+		return fmt.Errorf("commit uploaded source: %w", err)
+	}
+
+	go func() {
+		if err := s.builder.Build(context.Background(), builder.BuildInput{
+			AgentID:          agentIDStr,
+			Name:             agent.Name,
+			Slug:             agent.Slug,
+			OwnerPrincipalID: uuid.UUID(agent.OwnerPrincipalID.Bytes).String(),
+			InitiatorUserID:  pgUserID(p),
+			BuildProviderID:  agent.BuildProviderID,
+			BuildModel:       agent.BuildModel,
+			SkipScaffold:     true,
+		}); err != nil {
+			s.logger.Error("source upload build", zap.String("agent", agentIDStr), zap.Error(err))
+		}
+	}()
+	return nil
+}
+
+func extractSourceArchive(r io.Reader, dst string) error {
+	gz, err := gzip.NewReader(r)
+	if err != nil {
+		return service.Detail(service.ErrInvalidInput, "source upload must be a gzipped tar archive")
+	}
+	defer gz.Close()
+
+	tr := tar.NewReader(gz)
+	var files int
+	var total int64
+	for {
+		h, err := tr.Next()
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return service.Detail(service.ErrInvalidInput, "read source archive: %s", err.Error())
+		}
+		rel, skip, err := cleanArchivePath(h.Name)
+		if err != nil {
+			return err
+		}
+		if skip {
+			continue
+		}
+		if h.Typeflag != tar.TypeDir {
+			files++
+			if files > sourceUploadMaxFiles {
+				return service.Detail(service.ErrInvalidInput, "source archive contains too many files")
+			}
+		}
+		target := filepath.Join(dst, filepath.FromSlash(rel))
+		switch h.Typeflag {
+		case tar.TypeDir:
+			if err := os.MkdirAll(target, h.FileInfo().Mode().Perm()); err != nil {
+				return fmt.Errorf("mkdir %s: %w", rel, err)
+			}
+		case tar.TypeReg, tar.TypeRegA:
+			if h.Size < 0 {
+				return service.Detail(service.ErrInvalidInput, "source archive contains invalid file size for %s", rel)
+			}
+			total += h.Size
+			if total > sourceUploadMaxUncompressedBytes {
+				return service.Detail(service.ErrInvalidInput, "source archive is too large")
+			}
+			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+				return fmt.Errorf("mkdir parent for %s: %w", rel, err)
+			}
+			out, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, h.FileInfo().Mode().Perm())
+			if err != nil {
+				return fmt.Errorf("create %s: %w", rel, err)
+			}
+			_, copyErr := io.Copy(out, tr)
+			closeErr := out.Close()
+			if copyErr != nil {
+				return fmt.Errorf("write %s: %w", rel, copyErr)
+			}
+			if closeErr != nil {
+				return fmt.Errorf("close %s: %w", rel, closeErr)
+			}
+		default:
+			return service.Detail(service.ErrInvalidInput, "source archive contains unsupported entry %s", rel)
+		}
+	}
+}
+
+func cleanArchivePath(name string) (rel string, skip bool, err error) {
+	if name == "" || strings.HasPrefix(name, "/") {
+		return "", false, service.Detail(service.ErrInvalidInput, "source archive contains invalid path %q", name)
+	}
+	clean := path.Clean(name)
+	if clean == "." || clean == "" {
+		return "", true, nil
+	}
+	if clean == ".." || strings.HasPrefix(clean, "../") {
+		return "", false, service.Detail(service.ErrInvalidInput, "source archive contains invalid path %q", name)
+	}
+	if first := strings.SplitN(clean, "/", 2)[0]; first == ".git" {
+		return "", true, nil
+	}
+	return clean, false, nil
+}
+
+func clearRepoWorktree(repoPath string) error {
+	entries, err := os.ReadDir(repoPath)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if entry.Name() == ".git" {
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(repoPath, entry.Name())); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // CloneRequest is the input to Clone.
