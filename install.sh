@@ -422,6 +422,7 @@ assemble_profiles() {
 	[ "$INFRA_S3" = bundled ] && PROFILES+=("bundled-s3")
 	[ "$TLS_MODE" = tunnel ] && PROFILES+=("tunnel")
 	[ -n "$BUILDKIT_HOST_VAL" ] && PROFILES+=("buildkit")
+	return 0
 }
 
 render_env() {
@@ -537,4 +538,6 @@ main() {
 	finish
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+	main "$@"
+fi
