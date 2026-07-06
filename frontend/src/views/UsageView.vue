@@ -31,7 +31,7 @@ const byUser = computed(() => usage.report?.byUser ?? [])
   <div>
     <h1 style="margin: 0; font-size: 1.5rem">Usage</h1>
     <p style="margin: 0 0 1.5rem; color: var(--p-text-muted-color); max-width: 48rem">
-      LLM token spend across every agent, from the durable ledger — usage from agents that have since
+      LLM token spend across every agent, from the durable ledger - usage from agents that have since
       been deleted is still counted (and marked).
     </p>
 
@@ -89,7 +89,7 @@ const byUser = computed(() => usage.report?.byUser ?? [])
           <Column header="Owner">
             <template #body="{ data }">
               <span v-if="data.ownerEmail">{{ data.ownerName || data.ownerEmail }}</span>
-              <span v-else style="color: var(--p-text-muted-color)">—</span>
+              <span v-else style="color: var(--p-text-muted-color)">-</span>
               <span v-if="data.ownerName && data.ownerEmail" style="display: block; font-size: 0.72rem; color: var(--p-text-muted-color)">{{ data.ownerEmail }}</span>
             </template>
           </Column>

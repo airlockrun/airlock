@@ -33,7 +33,7 @@ function isCeremonyAbort(err: any): boolean {
 }
 
 function fmt(ts?: { seconds: bigint }): string {
-  if (!ts || !ts.seconds) return '—'
+  if (!ts || !ts.seconds) return '-'
   return new Date(Number(ts.seconds) * 1000).toLocaleDateString()
 }
 
@@ -114,7 +114,7 @@ async function savePassword() {
     return
   }
   if (!scorePassword(password.value, [auth.user?.email ?? '']).ok) {
-    pwError.value = 'Password is too weak — choose a longer or less predictable one.'
+    pwError.value = 'Password is too weak - choose a longer or less predictable one.'
     return
   }
   pwLoading.value = true
@@ -362,7 +362,7 @@ function formatDateTime(ts: any): string {
           Every Telegram identity linked to a user in this tenant. Unlinking forces the user to re-run <code>/auth</code> in their bot to regain access.
         </span>
         <span v-else>
-          Your Telegram identities — used by bridge bots to recognise you. Unlinking forces you to re-run <code>/auth</code> in the bot the next time you DM it.
+          Your Telegram identities - used by bridge bots to recognise you. Unlinking forces you to re-run <code>/auth</code> in the bot the next time you DM it.
         </span>
       </template>
       <template #content>

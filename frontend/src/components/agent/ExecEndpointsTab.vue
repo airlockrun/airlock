@@ -98,7 +98,7 @@ async function save(ep: ExecEndpoint) {
 async function rotate(ep: ExecEndpoint) {
   try {
     await api.post(`/api/v1/agents/${props.agentId}/exec-endpoints/${ep.slug}/rotate-keypair`)
-    toast.add({ severity: 'success', summary: 'New keypair generated — copy the public key and update authorized_keys on the target', life: 5000 })
+    toast.add({ severity: 'success', summary: 'New keypair generated - copy the public key and update authorized_keys on the target', life: 5000 })
     await refresh()
   } catch (err: any) {
     toast.add({ severity: 'error', summary: err.response?.data?.error || 'Rotate failed', life: 5000 })
@@ -108,7 +108,7 @@ async function rotate(ep: ExecEndpoint) {
 async function unpin(ep: ExecEndpoint) {
   try {
     await api.post(`/api/v1/agents/${props.agentId}/exec-endpoints/${ep.slug}/unpin-host-key`)
-    toast.add({ severity: 'success', summary: 'Host key cleared — next connect will re-TOFU', life: 3000 })
+    toast.add({ severity: 'success', summary: 'Host key cleared - next connect will re-TOFU', life: 3000 })
     await refresh()
   } catch (err: any) {
     toast.add({ severity: 'error', summary: err.response?.data?.error || 'Unpin failed', life: 5000 })
@@ -142,7 +142,7 @@ async function copyPublicKey(ep: ExecEndpoint) {
     await navigator.clipboard.writeText(ep.publicKeyOpenssh)
     toast.add({ severity: 'success', summary: 'Public key copied', life: 2000 })
   } catch {
-    toast.add({ severity: 'warn', summary: 'Copy failed — select the key text and copy manually', life: 4000 })
+    toast.add({ severity: 'warn', summary: 'Copy failed - select the key text and copy manually', life: 4000 })
   }
 }
 
@@ -216,7 +216,7 @@ onMounted(async () => {
       <div v-if="ep.publicKeyOpenssh" v-show="!isCollapsed(ep.slug)" class="exec-section">
         <h4 style="margin: 0 0 0.5rem 0">Public key (paste into target's <code>~/.ssh/authorized_keys</code>)</h4>
         <p style="margin: 0 0 0.5rem 0; font-size: 0.75rem; color: var(--p-text-muted-color)">
-          Comment: <code>{{ ep.publicKeyComment }}</code> — useful for grepping
+          Comment: <code>{{ ep.publicKeyComment }}</code> - useful for grepping
           old keys out of authorized_keys after a rotation.
         </p>
         <div class="pubkey-box">

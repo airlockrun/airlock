@@ -73,7 +73,7 @@ function onDeleteGit(c: GitCredential) {
 
 function formatTimestamp(ts: any): string {
   if (ts && ts.seconds !== undefined) return new Date(Number(ts.seconds) * 1000).toLocaleString()
-  return '—'
+  return '-'
 }
 
 function usageNote(n: number): string {
@@ -129,7 +129,7 @@ onMounted(() => {
   <div style="max-width: 64rem">
     <h1 style="margin: 0; font-size: 1.5rem">Resources</h1>
     <p style="margin: 0 0 1.5rem; color: var(--p-text-muted-color); max-width: 48rem">
-      Credentials and integrations you own. One resource can back several of your agents — an agent
+      Credentials and integrations you own. One resource can back several of your agents - an agent
       binds it from its own configuration. Set up and reauthorize connections, MCP servers, and exec
       endpoints from each agent's detail page; this is your inventory across all of them.
     </p>

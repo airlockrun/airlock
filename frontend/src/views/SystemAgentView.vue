@@ -68,13 +68,13 @@ function fmtTime(ts?: { seconds?: bigint }): string {
 }
 
 function cost(v: number): string {
-  if (!v) return '—'
+  if (!v) return '-'
   return '$' + v.toFixed(v < 0.01 ? 4 : 2)
 }
 
 function snippet(s: string): string {
   const t = (s || '').trim()
-  if (!t) return '—'
+  if (!t) return '-'
   return t.length > 60 ? t.slice(0, 60) + '…' : t
 }
 

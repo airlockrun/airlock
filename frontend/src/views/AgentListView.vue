@@ -66,7 +66,7 @@ function goToAgent(id: string) {
         <template #content>
           <Tag value="Operator" severity="info" style="margin-bottom: 0.5rem" />
           <p style="font-size: 0.875rem; color: var(--p-text-muted-color); margin-top: 0.5rem">
-            Manage agents, bridges, connections, members and runs through chat — with your own permissions.
+            Manage agents, bridges, connections, members and runs through chat - with your own permissions.
           </p>
         </template>
       </Card>

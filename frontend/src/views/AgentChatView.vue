@@ -429,7 +429,7 @@ function formatTokens(n: number): string {
          user was scrolled into history. Clicking resets the window. -->
     <div v-if="chat.newMessagesPending" class="chat-jump-banner" @click="jumpToLatest">
       <i class="pi pi-arrow-down" />
-      <span>New messages — click to jump to latest</span>
+      <span>New messages - click to jump to latest</span>
     </div>
 
     <!-- Message area -->
@@ -444,7 +444,7 @@ function formatTokens(n: number): string {
             with <strong>{{ agentName || 'this agent' }}</strong>
           </p>
           <p class="chat-empty-sub">
-            Send a message to begin — it's saved as a new conversation once you do.
+            Send a message to begin - it's saved as a new conversation once you do.
           </p>
         </div>
 

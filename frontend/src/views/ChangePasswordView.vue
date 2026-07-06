@@ -27,7 +27,7 @@ async function onPasskey() {
   passkeyLoading.value = true
   try {
     await auth.registerPasskeyAndSecure('Passkey')
-    toast.add({ severity: 'success', summary: 'Passkey added — account secured', life: 3000 })
+    toast.add({ severity: 'success', summary: 'Passkey added - account secured', life: 3000 })
     router.push('/')
   } catch (err: any) {
     if (!isCeremonyAbort(err)) {
@@ -50,7 +50,7 @@ async function onSubmit() {
   }
   const email = auth.user?.email ?? ''
   if (!scorePassword(newPassword.value, [email]).ok) {
-    error.value = 'New password is too weak — choose a longer or less predictable one.'
+    error.value = 'New password is too weak - choose a longer or less predictable one.'
     return
   }
 

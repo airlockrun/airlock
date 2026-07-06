@@ -198,6 +198,7 @@ type SystemMessageInfo struct {
 	TokensOut     int32                  `protobuf:"varint,8,opt,name=tokens_out,json=tokensOut,proto3" json:"tokens_out,omitempty"`
 	CostEstimate  float64                `protobuf:"fixed64,9,opt,name=cost_estimate,json=costEstimate,proto3" json:"cost_estimate,omitempty"`
 	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,10,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	RunId         string                 `protobuf:"bytes,11,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -300,6 +301,13 @@ func (x *SystemMessageInfo) GetCreatedAt() *timestamppb.Timestamp {
 		return x.CreatedAt
 	}
 	return nil
+}
+
+func (x *SystemMessageInfo) GetRunId() string {
+	if x != nil {
+		return x.RunId
+	}
+	return ""
 }
 
 type CreateSystemConversationRequest struct {
@@ -500,7 +508,7 @@ type SystemRunInfo struct {
 	FinishedAt        *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=finished_at,json=finishedAt,proto3" json:"finished_at,omitempty"`
 	TriggerType       string                 `protobuf:"bytes,8,opt,name=trigger_type,json=triggerType,proto3" json:"trigger_type,omitempty"` // 'prompt' | 'bridge' | 'event'
 	LlmCostEstimate   float64                `protobuf:"fixed64,9,opt,name=llm_cost_estimate,json=llmCostEstimate,proto3" json:"llm_cost_estimate,omitempty"`
-	MessagePreview    string                 `protobuf:"bytes,10,opt,name=message_preview,json=messagePreview,proto3" json:"message_preview,omitempty"` // truncated operator message for the turn
+	MessagePreview    string                 `protobuf:"bytes,10,opt,name=message_preview,json=messagePreview,proto3" json:"message_preview,omitempty"` // first linked message for the turn, truncated by the UI
 	unknownFields     protoimpl.UnknownFields
 	sizeCache         protoimpl.SizeCache
 }
@@ -747,7 +755,7 @@ const file_airlock_v1_system_agent_proto_rawDesc = "" +
 	"\x11PendingSystemTool\x12\x17\n" +
 	"\acall_id\x18\x01 \x01(\tR\x06callId\x12\x1b\n" +
 	"\ttool_name\x18\x02 \x01(\tR\btoolName\x12\x1b\n" +
-	"\targs_json\x18\x03 \x01(\tR\bargsJson\"\xad\x02\n" +
+	"\targs_json\x18\x03 \x01(\tR\bargsJson\"\xc4\x02\n" +
 	"\x11SystemMessageInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x10\n" +
 	"\x03seq\x18\x02 \x01(\x03R\x03seq\x12\x12\n" +
@@ -761,7 +769,8 @@ const file_airlock_v1_system_agent_proto_rawDesc = "" +
 	"\rcost_estimate\x18\t \x01(\x01R\fcostEstimate\x129\n" +
 	"\n" +
 	"created_at\x18\n" +
-	" \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"7\n" +
+	" \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x12\x15\n" +
+	"\x06run_id\x18\v \x01(\tR\x05runId\"7\n" +
 	"\x1fCreateSystemConversationRequest\x12\x14\n" +
 	"\x05title\x18\x01 \x01(\tR\x05title\"j\n" +
 	" CreateSystemConversationResponse\x12F\n" +

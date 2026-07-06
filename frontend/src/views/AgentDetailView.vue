@@ -233,6 +233,7 @@ const navRef = ref<HTMLElement | null>(null)
 // page's vertical position.
 watch(activeSectionId, (id) => {
   if (!id) return
+  if (hashTargetID() && !hashScrollInProgress) history.replaceState(null, '', `#${encodeURIComponent(id)}`)
   nextTick(() => {
     const nav = navRef.value
     if (!nav) return
@@ -347,8 +348,8 @@ const statusTooltip = computed(() => {
   const status = agent.value?.status ?? ''
   const running = !!agent.value?.running
   if (status === 'active' && running) return 'A container is live'
-  if (status === 'active' && !running) return 'No container running — starts automatically on next use'
-  if (status === 'stopped') return 'Stopped — will not auto-resume; click Start'
+  if (status === 'active' && !running) return 'No container running - starts automatically on next use'
+  if (status === 'stopped') return 'Stopped - will not auto-resume; click Start'
   return ''
 })
 
@@ -381,6 +382,10 @@ function onVisibilityChange() {
 // so the highlight tracks the section the user is reading rather than the
 // one that's just scrolled into view at the bottom.
 let scrollObserver: IntersectionObserver | null = null
+let hashScrollTimer: number | null = null
+let hashScrollAttempts = 0
+let hashScrollInProgress = false
+
 function setupScrollSpy() {
   scrollObserver?.disconnect()
   scrollObserver = new IntersectionObserver(
@@ -400,6 +405,59 @@ function setupScrollSpy() {
   }
 }
 
+function hashTargetID(): string {
+  const hash = window.location.hash || route.hash
+  if (!hash.startsWith('#')) return ''
+  try {
+    return decodeURIComponent(hash.slice(1))
+  } catch {
+    return hash.slice(1)
+  }
+}
+
+function clearHashScrollTimer() {
+  if (hashScrollTimer !== null) {
+    window.clearTimeout(hashScrollTimer)
+    hashScrollTimer = null
+  }
+}
+
+function targetIsVisible(el: HTMLElement): boolean {
+  return el.getClientRects().length > 0
+}
+
+function tryScrollToHash() {
+  const id = hashTargetID()
+  if (!id) {
+    hashScrollInProgress = false
+    return
+  }
+  const el = document.getElementById(id)
+  if (el && targetIsVisible(el)) {
+    clearHashScrollTimer()
+    el.scrollIntoView({ behavior: 'auto', block: 'start' })
+    hashScrollInProgress = false
+    activeSectionId.value = id
+    return
+  }
+  if (hashScrollAttempts >= 40) {
+    hashScrollInProgress = false
+    return
+  }
+  hashScrollAttempts++
+  clearHashScrollTimer()
+  hashScrollTimer = window.setTimeout(() => {
+    void nextTick(() => window.requestAnimationFrame(tryScrollToHash))
+  }, 100)
+}
+
+function scheduleHashScroll(resetAttempts = false) {
+  if (!hashTargetID()) return
+  if (resetAttempts) hashScrollAttempts = 0
+  hashScrollInProgress = true
+  void nextTick(() => window.requestAnimationFrame(tryScrollToHash))
+}
+
 // Smooth-scroll on rail click; the URL still gets the hash (so middle-click
 // / copy-link still produces a permalink), but we suppress the default
 // hash-jump so the scroll is animated.
@@ -408,6 +466,7 @@ function scrollToSection(id: string, e: Event) {
   const el = document.getElementById(id)
   if (el) {
     el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    activeSectionId.value = id
     history.replaceState(null, '', `#${id}`)
   }
 }
@@ -455,6 +514,7 @@ onMounted(async () => {
   } finally {
     loading.value = false
   }
+  scheduleHashScroll(true)
   catalog.fetchConfiguredModels()
   loadSetupStatus()
 
@@ -550,19 +610,25 @@ onUnmounted(() => {
   unsubBuild?.()
   unsubSynced?.()
   scrollObserver?.disconnect()
+  clearHashScrollTimer()
   document.removeEventListener('visibilitychange', onVisibilityChange)
 })
 
 // Re-observe sections when their v-show flips (counts change can reveal a
 // previously hidden section). Watching visibleSections in a nextTick-safe
 // way keeps the rail's active-section highlight working as the page fills in.
-watch(visibleSections, () => setTimeout(setupScrollSpy, 0))
+watch([visibleSections, activityVisible, tabsKey], () => {
+  setTimeout(setupScrollSpy, 0)
+  scheduleHashScroll()
+})
+
+watch(() => route.hash, () => scheduleHashScroll(true))
 
 function confirmStop() {
   confirm.require({
     message:
       `Stop agent "${agent.value?.name}"? It will not auto-resume on the ` +
-      'next trigger — you\'ll have to click Start to bring it back.',
+      'next trigger - you\'ll have to click Start to bring it back.',
     header: 'Confirm Stop',
     icon: 'pi pi-exclamation-triangle',
     acceptClass: 'p-button-warning',
@@ -813,7 +879,7 @@ function openWeb() {
       <p style="margin-top: 0">Describe what to change or fix:</p>
       <Textarea v-model="upgradeDescription" rows="4" style="width: 100%" placeholder="e.g. Add a /history page that shows past voting rounds" autofocus />
       <small style="display: block; margin-top: 0.5rem; color: var(--p-text-muted-color)">
-        Leave empty to <strong>rebuild</strong> against the latest agentsdk — no code changes. If the SDK API changed and the code no longer compiles, the rebuild fails; add a description so the builder can adapt it.
+        Leave empty to <strong>rebuild</strong> against the latest agentsdk - no code changes. If the SDK API changed and the code no longer compiles, the rebuild fails; add a description so the builder can adapt it.
       </small>
       <template #footer>
         <Button label="Cancel" severity="secondary" text @click="showUpgradeDialog = false" />
@@ -850,7 +916,7 @@ function openWeb() {
       <div style="display: flex; flex-direction: column; gap: 1rem; margin-top: 0.25rem">
         <Message severity="info" :closable="false">
           Copies this agent's code and settings into a new agent you own. Its data,
-          secrets, connections and bridges are <strong>not</strong> copied — the clone
+          secrets, connections and bridges are <strong>not</strong> copied - the clone
           starts clean and builds fresh.
         </Message>
         <div>
@@ -875,7 +941,7 @@ function openWeb() {
       <div style="display: flex; flex-direction: column; gap: 1rem; margin-top: 0.25rem">
         <Message severity="warn" :closable="false">
           The new owner becomes admin and you lose access. Owner-scoped bindings
-          (connections, MCP/exec credentials, git credential, bridges) are unbound —
+          (connections, MCP/exec credentials, git credential, bridges) are unbound -
           the new owner reconnects their own.
         </Message>
         <div>

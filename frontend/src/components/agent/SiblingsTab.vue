@@ -194,7 +194,7 @@ onMounted(loadAll)
     <!-- Inbound: agents that can call this one -->
     <h3 style="margin-top: 2rem">Connected to this agent</h3>
     <p style="color: var(--p-text-muted-color); margin-top: 0">
-      Agents that have added this one to their address book — who can call this agent via A2A,
+      Agents that have added this one to their address book - who can call this agent via A2A,
       and the live max access each has.
     </p>
 
@@ -202,7 +202,7 @@ onMounted(loadAll)
       <Column field="slug" header="Slug" />
       <Column field="name" header="Name" />
       <Column header="Owner">
-        <template #body="{ data: s }">{{ s.ownerName || '—' }}</template>
+        <template #body="{ data: s }">{{ s.ownerName || '-' }}</template>
       </Column>
       <Column header="Max access">
         <template #body="{ data: s }">

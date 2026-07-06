@@ -64,7 +64,7 @@ func (s *Service) Compact(ctx context.Context, p authz.Principal, conversationID
 
 	compactBus := bus.New()
 	tools := s.buildToolSet(p)
-	store := newSessionStore(s.db, conversationID)
+	store := newSessionStore(s.db, conversationID, uuid.Nil)
 
 	solAgent := &agent.Agent{
 		Name:  "sysagent",

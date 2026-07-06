@@ -32,7 +32,7 @@ function mapSchedule(raw: Record<string, any>): Schedule {
 }
 
 function formatTimestamp(ts: string): string {
-  if (!ts) return '—'
+  if (!ts) return '-'
   return new Date(ts).toLocaleString()
 }
 
@@ -72,7 +72,7 @@ onMounted(async () => {
       <Column field="description" header="Description" />
       <Column header="Schedule">
         <template #body="{ data: s }">
-          {{ s.schedule || '—' }}
+          {{ s.schedule || '-' }}
         </template>
       </Column>
       <Column header="Next Fire">

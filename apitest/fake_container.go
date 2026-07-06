@@ -19,7 +19,7 @@ import (
 //
 // MarkBusy/MarkIdle increment counters tests can read to assert the
 // dispatcher correctly brackets every forwarded request — the reaper
-// invariant ([airlock/CLAUDE.md] Agent Execution).
+// invariant ([airlock/AGENTS.md] Agent Execution).
 type FakeContainerManager struct {
 	mu      sync.Mutex
 	servers map[uuid.UUID]*httptest.Server

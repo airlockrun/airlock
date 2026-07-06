@@ -55,7 +55,7 @@ onMounted(async () => {
       <Column field="verifyMode" header="Verify Mode" />
       <Column header="Secret">
         <template #body="{ data: wh }">
-          {{ wh.secret ? '••••••' : '—' }}
+          {{ wh.secret ? '••••••' : '-' }}
         </template>
       </Column>
       <Column header="Last Received">

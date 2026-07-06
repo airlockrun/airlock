@@ -147,7 +147,7 @@ async function nextStep() {
       return
     }
     if (!scorePassword(password.value, [email.value]).ok) {
-      error.value = 'Password is too weak — choose a longer or less predictable one.'
+      error.value = 'Password is too weak - choose a longer or less predictable one.'
       return
     }
   }

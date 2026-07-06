@@ -13,11 +13,11 @@ import (
 
 const appendSystemMessage = `-- name: AppendSystemMessage :one
 INSERT INTO system_messages (
-    conversation_id, role, source, content, parts, tokens_in, tokens_out, cost_estimate
+    conversation_id, role, source, content, parts, run_id, tokens_in, tokens_out, cost_estimate
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8
+    $1, $2, $3, $4, $5, $6, $7, $8, $9
 )
-RETURNING id, seq, conversation_id, role, source, content, parts, tokens_in, tokens_out, cost_estimate, created_at
+RETURNING id, seq, conversation_id, role, source, content, parts, run_id, tokens_in, tokens_out, cost_estimate, created_at
 `
 
 type AppendSystemMessageParams struct {
@@ -26,6 +26,7 @@ type AppendSystemMessageParams struct {
 	Source         string         `json:"source"`
 	Content        string         `json:"content"`
 	Parts          []byte         `json:"parts"`
+	RunID          pgtype.UUID    `json:"run_id"`
 	TokensIn       int32          `json:"tokens_in"`
 	TokensOut      int32          `json:"tokens_out"`
 	CostEstimate   pgtype.Numeric `json:"cost_estimate"`
@@ -43,6 +44,7 @@ func (q *Queries) AppendSystemMessage(ctx context.Context, arg AppendSystemMessa
 		arg.Source,
 		arg.Content,
 		arg.Parts,
+		arg.RunID,
 		arg.TokensIn,
 		arg.TokensOut,
 		arg.CostEstimate,
@@ -56,6 +58,7 @@ func (q *Queries) AppendSystemMessage(ctx context.Context, arg AppendSystemMessa
 		&i.Source,
 		&i.Content,
 		&i.Parts,
+		&i.RunID,
 		&i.TokensIn,
 		&i.TokensOut,
 		&i.CostEstimate,
@@ -113,16 +116,15 @@ func (q *Queries) CreateSystemConversation(ctx context.Context, arg CreateSystem
 }
 
 const createSystemRun = `-- name: CreateSystemRun :one
-INSERT INTO system_runs (conversation_id, user_id, trigger_type, message_preview)
-VALUES ($1, $2, $3, $4)
-RETURNING id, conversation_id, user_id, status, trigger_type, message_preview, error_message, llm_calls, llm_tokens_in, llm_tokens_out, llm_cost_estimate, started_at, finished_at
+INSERT INTO system_runs (conversation_id, user_id, trigger_type)
+VALUES ($1, $2, $3)
+RETURNING id, conversation_id, user_id, status, trigger_type, error_message, llm_calls, llm_tokens_in, llm_tokens_out, llm_cost_estimate, started_at, finished_at
 `
 
 type CreateSystemRunParams struct {
 	ConversationID pgtype.UUID `json:"conversation_id"`
 	UserID         pgtype.UUID `json:"user_id"`
 	TriggerType    string      `json:"trigger_type"`
-	MessagePreview string      `json:"message_preview"`
 }
 
 // Inserts a fresh run row at the start of a turn. The id becomes the
@@ -130,12 +132,7 @@ type CreateSystemRunParams struct {
 // text_delta/tool_call/tool_result events under one bubble — same
 // contract as agent chat's runs.id.
 func (q *Queries) CreateSystemRun(ctx context.Context, arg CreateSystemRunParams) (SystemRun, error) {
-	row := q.db.QueryRow(ctx, createSystemRun,
-		arg.ConversationID,
-		arg.UserID,
-		arg.TriggerType,
-		arg.MessagePreview,
-	)
+	row := q.db.QueryRow(ctx, createSystemRun, arg.ConversationID, arg.UserID, arg.TriggerType)
 	var i SystemRun
 	err := row.Scan(
 		&i.ID,
@@ -143,7 +140,6 @@ func (q *Queries) CreateSystemRun(ctx context.Context, arg CreateSystemRunParams
 		&i.UserID,
 		&i.Status,
 		&i.TriggerType,
-		&i.MessagePreview,
 		&i.ErrorMessage,
 		&i.LlmCalls,
 		&i.LlmTokensIn,
@@ -279,7 +275,7 @@ func (q *Queries) GetSystemConversationByID(ctx context.Context, id pgtype.UUID)
 }
 
 const getSystemRunByID = `-- name: GetSystemRunByID :one
-SELECT id, conversation_id, user_id, status, trigger_type, message_preview, error_message, llm_calls, llm_tokens_in, llm_tokens_out, llm_cost_estimate, started_at, finished_at FROM system_runs WHERE id = $1
+SELECT id, conversation_id, user_id, status, trigger_type, error_message, llm_calls, llm_tokens_in, llm_tokens_out, llm_cost_estimate, started_at, finished_at FROM system_runs WHERE id = $1
 `
 
 func (q *Queries) GetSystemRunByID(ctx context.Context, id pgtype.UUID) (SystemRun, error) {
@@ -291,7 +287,6 @@ func (q *Queries) GetSystemRunByID(ctx context.Context, id pgtype.UUID) (SystemR
 		&i.UserID,
 		&i.Status,
 		&i.TriggerType,
-		&i.MessagePreview,
 		&i.ErrorMessage,
 		&i.LlmCalls,
 		&i.LlmTokensIn,
@@ -381,7 +376,7 @@ func (q *Queries) ListSystemConversationsByUser(ctx context.Context, userID pgty
 }
 
 const listSystemMessagesByConversation = `-- name: ListSystemMessagesByConversation :many
-SELECT m.id, m.seq, m.conversation_id, m.role, m.source, m.content, m.parts, m.tokens_in, m.tokens_out, m.cost_estimate, m.created_at FROM system_messages m
+SELECT m.id, m.seq, m.conversation_id, m.role, m.source, m.content, m.parts, m.run_id, m.tokens_in, m.tokens_out, m.cost_estimate, m.created_at FROM system_messages m
 JOIN system_conversations c ON c.id = m.conversation_id
 WHERE m.conversation_id = $1
   AND (m.parts -> 0 ->> 'type') IS DISTINCT FROM 'checkpoint'
@@ -415,6 +410,7 @@ func (q *Queries) ListSystemMessagesByConversation(ctx context.Context, conversa
 			&i.Source,
 			&i.Content,
 			&i.Parts,
+			&i.RunID,
 			&i.TokensIn,
 			&i.TokensOut,
 			&i.CostEstimate,
@@ -431,7 +427,7 @@ func (q *Queries) ListSystemMessagesByConversation(ctx context.Context, conversa
 }
 
 const listSystemMessagesByConversationAfter = `-- name: ListSystemMessagesByConversationAfter :many
-SELECT id, seq, conversation_id, role, source, content, parts, tokens_in, tokens_out, cost_estimate, created_at FROM system_messages
+SELECT id, seq, conversation_id, role, source, content, parts, run_id, tokens_in, tokens_out, cost_estimate, created_at FROM system_messages
 WHERE conversation_id = $1 AND seq > $2
 ORDER BY seq ASC
 LIMIT $3
@@ -462,6 +458,7 @@ func (q *Queries) ListSystemMessagesByConversationAfter(ctx context.Context, arg
 			&i.Source,
 			&i.Content,
 			&i.Parts,
+			&i.RunID,
 			&i.TokensIn,
 			&i.TokensOut,
 			&i.CostEstimate,
@@ -478,7 +475,7 @@ func (q *Queries) ListSystemMessagesByConversationAfter(ctx context.Context, arg
 }
 
 const listSystemMessagesByConversationAll = `-- name: ListSystemMessagesByConversationAll :many
-SELECT id, seq, conversation_id, role, source, content, parts, tokens_in, tokens_out, cost_estimate, created_at FROM system_messages
+SELECT id, seq, conversation_id, role, source, content, parts, run_id, tokens_in, tokens_out, cost_estimate, created_at FROM system_messages
 WHERE conversation_id = $1
 ORDER BY seq ASC
 `
@@ -504,6 +501,7 @@ func (q *Queries) ListSystemMessagesByConversationAll(ctx context.Context, conve
 			&i.Source,
 			&i.Content,
 			&i.Parts,
+			&i.RunID,
 			&i.TokensIn,
 			&i.TokensOut,
 			&i.CostEstimate,
@@ -521,10 +519,18 @@ func (q *Queries) ListSystemMessagesByConversationAll(ctx context.Context, conve
 
 const listSystemRunsByUser = `-- name: ListSystemRunsByUser :many
 SELECT r.id, r.conversation_id, r.user_id, r.status, r.trigger_type,
-       r.message_preview, r.error_message, r.llm_cost_estimate,
+       COALESCE(preview.content, '') AS message_preview,
+       r.error_message, r.llm_cost_estimate,
        r.started_at, r.finished_at, c.title AS conversation_title
 FROM system_runs r
 JOIN system_conversations c ON c.id = r.conversation_id
+LEFT JOIN LATERAL (
+    SELECT m.content
+    FROM system_messages m
+    WHERE m.run_id = r.id AND m.content <> ''
+    ORDER BY CASE WHEN m.role IN ('user', 'system') THEN 0 ELSE 1 END, m.seq ASC
+    LIMIT 1
+) preview ON true
 WHERE r.user_id = $1
   AND ($2::timestamptz IS NULL OR r.started_at < $2)
 ORDER BY r.started_at DESC

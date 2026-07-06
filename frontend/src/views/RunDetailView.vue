@@ -212,7 +212,7 @@ onMounted(async () => {
     <Message v-if="run.errorMessage" severity="error" :closable="false" style="margin-bottom: 1rem">
       <div>{{ run.errorMessage }}</div>
       <div v-if="isPlatformError" style="font-size: 0.8rem; margin-top: 0.5rem; opacity: 0.85">
-        Platform error — provider, network, or auth failure upstream of the agent. Retrying may help; fixing the agent code won't.
+        Platform error - provider, network, or auth failure upstream of the agent. Retrying may help; fixing the agent code won't.
       </div>
       <pre v-if="run.panicTrace" style="white-space: pre-wrap; font-size: 0.8rem; margin-top: 0.5rem">{{ run.panicTrace }}</pre>
     </Message>

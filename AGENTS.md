@@ -7,7 +7,7 @@
 - **sqlc for queries.** All DB access goes through sqlc-generated code in `db/dbq/`. SQL lives in `db/queries/*.sql`.
 - **Capabilities live in `service/{domain}/`, not handlers.** Any operation a user can perform (read, mutate, list — anything authorization or audit cares about) belongs in a `service/{domain}` package. HTTP handlers in `api/` parse the request, build the `authz.Principal`, call the service, and serialize the result; they do not query the DB directly. Sysagent tools, A2A tools, scripts, and tests all hit the same service surface — one capability, one implementation, one gate. Direct `dbq` access from outside `service/` is reserved for narrow read-only lookups that carry no authorization concern (e.g. resolving a slug to an id, fetching a row purely for plumbing).
 - **Every service method gates through `authz.Authorize`.** No inline `IsAuthenticatedUser` / `TenantRole.AtLeast` / hand-rolled role checks in service bodies — every gate calls `authz.Authorize(ctx, q, p, Action, agentID)` with an `Action` that lives in `authz/policy.go`. Adding a new capability means adding an `Action` constant + policy-table entry first, then calling `Authorize`. This is what keeps the permission matrix in one editable place; an inline check is invisible to the policy table and creates the drift the table exists to prevent.
-- **Keep this file current.** When adding new packages, API endpoints, DB tables, or changing key architecture, update this CLAUDE.md to reflect the change.
+- **Keep this file current.** When adding new packages, API endpoints, DB tables, or changing key architecture, update this AGENTS.md to reflect the change.
 
 ## Architecture
 

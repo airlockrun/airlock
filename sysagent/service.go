@@ -100,7 +100,7 @@ type Deps struct {
 }
 
 // New wires the sysagent Service. Fail-loud on nil deps — every field
-// is required (CLAUDE.md rule).
+// is required (AGENTS.md rule).
 func New(d Deps) *Service {
 	if d.DB == nil {
 		panic("sysagent: db is required")

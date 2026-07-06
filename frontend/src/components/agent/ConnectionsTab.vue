@@ -93,7 +93,7 @@ async function copyCallback() {
     await navigator.clipboard.writeText(callbackUrl.value)
     toast.add({ severity: 'success', summary: 'Redirect URI copied', life: 2000 })
   } catch {
-    toast.add({ severity: 'warn', summary: 'Copy failed — select the URL and copy manually', life: 4000 })
+    toast.add({ severity: 'warn', summary: 'Copy failed - select the URL and copy manually', life: 4000 })
   }
 }
 
@@ -141,7 +141,7 @@ onMounted(async () => {
               v-if="conn.warnings.length"
               class="pi pi-exclamation-circle"
               style="color: var(--p-orange-500); cursor: pointer"
-              v-tooltip.top="'This connection has issues — click for details'"
+              v-tooltip.top="'This connection has issues - click for details'"
               @click="showWarnings($event, conn.warnings)"
             />
           </span>
@@ -149,7 +149,7 @@ onMounted(async () => {
       </Column>
       <Column header="Actions">
         <template #body="{ data: conn }">
-          <span v-if="isNoAuth(conn)" style="color: var(--p-text-muted-color); font-size: 0.85rem">—</span>
+          <span v-if="isNoAuth(conn)" style="color: var(--p-text-muted-color); font-size: 0.85rem">-</span>
           <Button v-else :label="conn.authorized ? 'Reconfigure' : 'Configure'" size="small" outlined @click="configure(conn)" />
         </template>
       </Column>
@@ -205,7 +205,7 @@ onMounted(async () => {
         </div>
         <Message v-if="selectedConn?.hasOauthApp" severity="info" :closable="false" style="font-size: 0.8rem">
           An OAuth app is already saved. Just click <strong>Reauthorize</strong> to
-          re-run sign-in with the existing credentials — you don't need to
+          re-run sign-in with the existing credentials - you don't need to
           re-enter anything. Fill the fields below only to replace the saved
           client ID / secret.
         </Message>

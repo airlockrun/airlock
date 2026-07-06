@@ -252,7 +252,6 @@ func (s *Service) startRun(ctx context.Context, p authz.Principal, conversationI
 		ConversationID: conversation.ID,
 		UserID:         pgtype.UUID{Bytes: p.UserID, Valid: true},
 		TriggerType:    systemTriggerType(input),
-		MessagePreview: truncate(input.Message, 120),
 	})
 	if err != nil {
 		return uuid.Nil, dbq.SystemConversation{}, fmt.Errorf("create system run: %w", err)
@@ -313,7 +312,7 @@ func (s *Service) runChat(ctx context.Context, p authz.Principal, conversation d
 	baseExec := tool.NewLocalExecutor(tools, nil)
 	exec := newGatedExecutor(baseExec)
 
-	store := newSessionStore(s.db, conversationID)
+	store := newSessionStore(s.db, conversationID, runID)
 
 	solAgent := &agent.Agent{
 		Name:         "sysagent",

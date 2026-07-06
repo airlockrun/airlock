@@ -35,7 +35,7 @@ const roleOptions = [
 const roleEnumToStr: Record<number, string> = { 1: 'admin', 2: 'manager', 3: 'user' }
 
 function formatDate(ts: { seconds?: bigint } | undefined): string {
-  if (!ts?.seconds) return '—'
+  if (!ts?.seconds) return '-'
   return new Date(Number(ts.seconds) * 1000).toLocaleDateString()
 }
 

@@ -48,7 +48,7 @@ function claim(a: AgentInfo) {
   if (!uid) return
   act(async () => {
     await store.claim(a.id, uid)
-    toast.add({ severity: 'success', summary: `Claimed ${a.name} — you're now an admin`, life: 4000 })
+    toast.add({ severity: 'success', summary: `Claimed ${a.name} - you're now an admin`, life: 4000 })
   }, 'Claim failed')
 }
 
@@ -73,7 +73,7 @@ function confirmDelete(a: AgentInfo) {
     <p style="margin: 0 0 1.5rem; color: var(--p-text-muted-color); max-width: 48rem">
       Every agent in this workspace, including ones you're not a member of. As an
       admin you can stop, start, or delete any agent here for governance. Reading
-      an agent's conversations or configuration still requires access — use
+      an agent's conversations or configuration still requires access - use
       <b>Claim</b> to add yourself as an admin first.
     </p>
 
@@ -108,7 +108,7 @@ function confirmDelete(a: AgentInfo) {
       <Column header="Owner">
         <template #body="{ data }">
           <span v-if="data.isOwner"><i class="pi pi-user" style="font-size: 0.7rem" /> You</span>
-          <span v-else style="color: var(--p-text-muted-color)">{{ data.ownerName || '—' }}</span>
+          <span v-else style="color: var(--p-text-muted-color)">{{ data.ownerName || '-' }}</span>
         </template>
       </Column>
       <Column header="Status">

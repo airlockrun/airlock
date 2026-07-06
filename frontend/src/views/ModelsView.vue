@@ -185,7 +185,7 @@ async function toggle(provider: Provider, model: ModelInfo, on: boolean) {
                   {{ fmtPrice(data.costOutput) }}
                 </div>
               </div>
-              <span v-else style="color: var(--p-text-muted-color)">—</span>
+              <span v-else style="color: var(--p-text-muted-color)">-</span>
             </template>
           </Column>
           <Column header="Allowed" style="width: 8rem">
