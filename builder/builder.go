@@ -375,7 +375,7 @@ func (b *BuildService) Build(_ context.Context, input BuildInput) error {
 			errMsg = "cancelled by user"
 			b.logger.Info("build cancelled", zap.String("agent_id", input.AgentID))
 		} else {
-			b.logger.Error("build failed", zap.String("agent_id", input.AgentID), zap.Error(err))
+			b.logger.Error("build failed", zap.String("agent_id", input.AgentID))
 		}
 		_ = q.UpdateAgentStatus(context.Background(), dbq.UpdateAgentStatusParams{
 			ID:           agent.ID,

@@ -25,7 +25,7 @@ func NewUsageHandler(svc *usagesvc.Service) *UsageHandler {
 func (h *UsageHandler) Get(w http.ResponseWriter, r *http.Request) {
 	days := int32(30)
 	if v := r.URL.Query().Get("days"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
+		if n, err := strconv.ParseInt(v, 10, 32); err == nil {
 			days = int32(n)
 		}
 	}

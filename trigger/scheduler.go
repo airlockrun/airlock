@@ -148,11 +148,11 @@ func (s *Scheduler) fire(ctx context.Context, f dbq.AgentScheduledFire) {
 		// A stopped / unbuilt agent is an expected state, not a fault.
 		if errors.Is(err, ErrAgentStopped) || errors.Is(err, ErrAgentNoImage) {
 			s.logger.Info("skipping fire for non-runnable agent",
-				zap.String("agent", agentID.String()), zap.String("slug", f.Slug), zap.Error(err))
+				zap.String("agent", agentID.String()), zap.String("slug", f.Slug))
 			return
 		}
 		s.logger.Error("scheduler: fire failed",
-			zap.String("agent", agentID.String()), zap.String("slug", f.Slug), zap.Error(err))
+			zap.String("agent", agentID.String()), zap.String("slug", f.Slug))
 		return
 	}
 	// Fire output is not delivered anywhere — drain and close.

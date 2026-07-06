@@ -155,7 +155,7 @@ func (b *BuildService) failRollback(dbCtx context.Context, agentPgUUID pgtype.UU
 		errMsg = "cancelled by user"
 		b.logger.Info("rollback cancelled", zap.String("agent_id", agentUUID.String()))
 	} else {
-		b.logger.Error("rollback failed", zap.String("agent_id", agentUUID.String()), zap.Error(runErr))
+		b.logger.Error("rollback failed", zap.String("agent_id", agentUUID.String()))
 	}
 	_ = q.UpdateAgentUpgradeStatus(dbCtx, dbq.UpdateAgentUpgradeStatusParams{
 		ID:            agentPgUUID,

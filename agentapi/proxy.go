@@ -19,7 +19,7 @@ import (
 	"go.uber.org/zap"
 )
 
-var proxyHTTPClient = &http.Client{Timeout: 30 * time.Second}
+var proxyHTTPClient = newPublicHTTPClient(30 * time.Second)
 
 // ServiceProxy handles POST /api/agent/proxy/{slug}.
 func (h *Handler) ServiceProxy(w http.ResponseWriter, r *http.Request) {
@@ -85,7 +85,11 @@ func (h *Handler) ServiceProxy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Build upstream request.
-	url := conn.BaseUrl + req.Path
+	upstreamURL, err := parsePublicHTTPURL(conn.BaseUrl + req.Path)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid upstream URL: "+err.Error())
+		return
+	}
 	var bodyReader io.Reader
 	if req.Body != "" {
 		bodyReader = strings.NewReader(req.Body)
@@ -95,7 +99,7 @@ func (h *Handler) ServiceProxy(w http.ResponseWriter, r *http.Request) {
 		method = "GET"
 	}
 
-	upstream, err := http.NewRequestWithContext(r.Context(), method, url, bodyReader)
+	upstream, err := http.NewRequestWithContext(r.Context(), method, upstreamURL.String(), bodyReader)
 	if err != nil {
 		writeJSONError(w, http.StatusBadRequest, fmt.Sprintf("invalid upstream request: %v", err))
 		return
