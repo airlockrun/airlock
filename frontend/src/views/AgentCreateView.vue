@@ -43,8 +43,8 @@ const name = ref('')
 const slug = ref('')
 const slugManual = ref(false)
 const instructions = ref('')
-const mode = ref<'airlock' | 'local'>('airlock')
-const sourceMode = ref<'generate' | 'git'>('generate')
+const mode = ref<'generate' | 'git' | 'local'>('generate')
+const modifyAfterImport = ref(false)
 
 // Optional external git remote attached on create. When gitRemoteUrl
 // is non-empty, gitCredentialId must also be set.
@@ -221,7 +221,10 @@ function onSlugInput() {
 const canSubmit = computed(() => {
   if (mode.value === 'local') return false
   if (!name.value || !slug.value) return false
-  if (sourceMode.value === 'git') return !!gitRemoteUrl.value.trim() && !!gitCredentialId.value
+  if (mode.value === 'git') {
+    if (!gitRemoteUrl.value.trim() || !gitCredentialId.value) return false
+    if (modifyAfterImport.value && !instructions.value.trim()) return false
+  }
   return true
 })
 
@@ -234,10 +237,12 @@ const versionedAirCommand = computed(() => {
 const localCreateCommands = computed(() => [
   `go run ${versionedAirCommand.value} init ${localDir.value} --airlock ${airlockURL.value}`,
   `cd ${localDir.value}`,
-  `go run ${sdkCommandImport.value} login ${airlockURL.value}`,
-  `go run ${sdkCommandImport.value} deploy --create --slug ${localDir.value}`,
+  'go mod tidy',
+  `go tool air login ${airlockURL.value}`,
+  'go tool air toolchain install',
+  `go tool air deploy --create --name ${JSON.stringify(name.value || localDir.value)}`,
 ].join('\n'))
-const localDeployCommand = computed(() => `go run ${sdkCommandImport.value} deploy`)
+const localDeployCommand = computed(() => 'go tool air deploy')
 
 // Build+Exec ride on the CreateAgent proto; the other six have to be pushed
 // via PUT /agents/{id}/models right after create because the create proto
@@ -326,8 +331,8 @@ async function onSubmit() {
       build.providerRowID,
       exec.modelName,
       exec.providerRowID,
-      instructions.value,
-      sourceMode.value === 'git' && gitRemoteUrl.value.trim()
+      mode.value === 'git' && !modifyAfterImport.value ? '' : instructions.value,
+      mode.value === 'git' && gitRemoteUrl.value.trim()
         ? {
             remoteUrl: gitRemoteUrl.value.trim(),
             credentialId: gitCredentialId.value,
@@ -408,19 +413,24 @@ onUnmounted(() => {
     <div class="create-header">
       <div>
         <h1>Create Agent</h1>
-        <p>Create and build source in Airlock, or initialize a local repo and deploy from your machine.</p>
+        <p>Start from instructions, import an existing Git repo, or initialize source locally and deploy from your machine.</p>
       </div>
     </div>
 
     <div class="mode-grid">
-      <button type="button" class="mode-card" :class="{ active: mode === 'airlock' }" @click="mode = 'airlock'">
-        <i class="pi pi-sparkles" />
-        <strong>Create In Airlock</strong>
-        <span>Generate a new agent or import an existing Git repo, then build and run it in Airlock.</span>
+      <button type="button" class="mode-card" :class="{ active: mode === 'generate' }" @click="mode = 'generate'">
+        <i class="pi pi-wand" />
+        <strong>Generate From Instructions</strong>
+        <span>Describe what you need. Airlock scaffolds the source and builds the first version.</span>
+      </button>
+      <button type="button" class="mode-card" :class="{ active: mode === 'git' }" @click="mode = 'git'">
+        <i class="pi pi-github" />
+        <strong>Import From Git</strong>
+        <span>Clone an existing repo, build it as-is, and optionally keep it connected for future sync.</span>
       </button>
       <button type="button" class="mode-card" :class="{ active: mode === 'local' }" @click="mode = 'local'">
         <i class="pi pi-desktop" />
-        <strong>Create Locally</strong>
+        <strong>Deploy From Local</strong>
         <span>Initialize an agent repo on your machine and deploy it with the Airlock CLI.</span>
       </button>
     </div>
@@ -431,7 +441,7 @@ onUnmounted(() => {
 
     <section v-if="mode === 'local'" class="local-panel">
       <div class="local-copy">
-        <h2>Create locally</h2>
+        <h2>Deploy from local source</h2>
         <p>Run these commands from the directory where you keep source code.</p>
         <pre><code>{{ localCreateCommands }}</code></pre>
       </div>
@@ -456,34 +466,15 @@ onUnmounted(() => {
         <small style="color: var(--p-text-muted-color)">URL-safe identifier, auto-generated from name.</small>
       </div>
 
-      <div class="source-card">
-        <div>
-          <h2>Source</h2>
-          <p>Choose whether Airlock starts from instructions or an existing repository.</p>
-        </div>
-        <div class="source-options">
-          <button type="button" class="source-option" :class="{ active: sourceMode === 'generate' }" :disabled="building" @click="sourceMode = 'generate'">
-            <i class="pi pi-wand" />
-            <span>
-              <strong>Generate From Instructions</strong>
-              <small>Airlock scaffolds the repo and builds the first version.</small>
-            </span>
-          </button>
-          <button type="button" class="source-option" :class="{ active: sourceMode === 'git' }" :disabled="building" @click="sourceMode = 'git'">
-            <i class="pi pi-github" />
-            <span>
-              <strong>Import From Git</strong>
-              <small>Adopt code from a repository, with optional ongoing sync.</small>
-            </span>
-          </button>
-        </div>
-      </div>
-
-      <Message v-if="sourceMode === 'git'" severity="secondary" :closable="false">
-        Airlock imports the selected branch. Keep the repository connected to enable future push/pull and webhook sync, or import once and let Airlock own the internal source after creation.
+      <Message v-if="mode === 'generate'" severity="secondary" :closable="false">
+        Airlock creates a new repo from your instructions, then opens the build page while it generates and compiles the first version.
       </Message>
 
-      <div v-if="sourceMode === 'git'" class="git-fields">
+      <Message v-if="mode === 'git'" severity="secondary" :closable="false">
+        Airlock imports the selected branch and builds it as-is. Keep the repository connected to enable future push/pull and webhook sync, or import once and let Airlock own the internal source after creation.
+      </Message>
+
+      <div v-if="mode === 'git'" class="git-fields">
         <div>
           <label style="display: block; margin-bottom: 0.35rem; font-size: 0.85rem">Repo URL</label>
           <InputText
@@ -516,6 +507,10 @@ onUnmounted(() => {
         <label class="check-row">
           <Checkbox v-model="keepGitBound" binary :disabled="building" />
           <span>Keep this Git repo connected after import</span>
+        </label>
+        <label class="check-row">
+          <Checkbox v-model="modifyAfterImport" binary :disabled="building" />
+          <span>Ask Airlock to modify the code after import</span>
         </label>
       </div>
 
@@ -597,25 +592,28 @@ onUnmounted(() => {
         </div>
       </Fieldset>
 
-      <div>
+      <div v-if="mode === 'generate' || (mode === 'git' && modifyAfterImport)">
         <label for="instructions" style="display: block; margin-bottom: 0.5rem; font-weight: 500">
-          {{ sourceMode === 'git' ? 'Build instructions for empty repos' : 'Instructions' }}
+          {{ mode === 'git' ? 'Change request' : 'Instructions' }}
         </label>
         <Textarea
           id="instructions"
           v-model="instructions"
           :auto-resize="true"
           rows="3"
-          :placeholder="sourceMode === 'git' ? 'Used only if the selected repository is empty and Airlock scaffolds the first commit.' : 'Describe what this agent should do and what tools it needs, e.g. &quot;Connect to Gmail and summarize my daily emails&quot;. Leave empty for a default agent.'"
+          :placeholder="mode === 'git' ? 'Example: Add a dashboard page for weekly presentation analytics.' : 'Describe what this agent should do and what tools it needs, e.g. &quot;Connect to Gmail and summarize my daily emails&quot;. Leave empty for a default agent.'"
           :disabled="building"
           style="width: 100%"
         />
+        <small v-if="mode === 'git'" style="color: var(--p-text-muted-color)">
+          Airlock imports the repo first, then applies this request during the build.
+        </small>
       </div>
 
       <Button
         v-if="!building"
         type="submit"
-        :label="sourceMode === 'git' ? 'Import Agent' : 'Create Agent'"
+        :label="mode === 'git' ? 'Import Agent' : 'Generate Agent'"
         icon="pi pi-plus"
         :loading="loading"
         :disabled="!canSubmit"
@@ -639,7 +637,7 @@ onUnmounted(() => {
 
 <style scoped>
 .create-page {
-  max-width: 74rem;
+  max-width: 54rem;
   display: flex;
   flex-direction: column;
   gap: 1.25rem;
@@ -658,7 +656,7 @@ onUnmounted(() => {
 
 .mode-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 1rem;
 }
 
@@ -691,76 +689,9 @@ onUnmounted(() => {
 }
 
 .create-form {
-  max-width: 42rem;
   display: flex;
   flex-direction: column;
   gap: 1.25rem;
-}
-
-.source-card {
-  border: 1px solid var(--p-content-border-color);
-  border-radius: 1rem;
-  padding: 1rem;
-  background: var(--p-content-background);
-  display: flex;
-  flex-direction: column;
-  gap: 0.85rem;
-}
-
-.source-card h2 {
-  margin: 0 0 0.25rem;
-  font-size: 1rem;
-}
-
-.source-card p {
-  margin: 0;
-  color: var(--p-text-muted-color);
-}
-
-.source-options {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.75rem;
-}
-
-.source-option {
-  border: 1px solid var(--p-content-border-color);
-  border-radius: 0.85rem;
-  background: color-mix(in srgb, var(--p-content-background) 92%, var(--p-primary-color));
-  color: var(--p-text-color);
-  padding: 0.85rem;
-  display: flex;
-  align-items: flex-start;
-  gap: 0.7rem;
-  text-align: left;
-  cursor: pointer;
-}
-
-.source-option:disabled {
-  cursor: not-allowed;
-  opacity: 0.65;
-}
-
-.source-option i {
-  color: var(--p-primary-color);
-  margin-top: 0.15rem;
-}
-
-.source-option span {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-}
-
-.source-option small {
-  color: var(--p-text-muted-color);
-  line-height: 1.35;
-}
-
-.source-option.active {
-  border-color: var(--p-primary-color);
-  box-shadow: 0 0 0 1px var(--p-primary-color);
-  background: color-mix(in srgb, var(--p-primary-color) 10%, var(--p-content-background));
 }
 
 .git-fields,
@@ -774,10 +705,6 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 0.6rem;
-}
-
-.local-panel {
-  max-width: 52rem;
 }
 
 .local-copy {
@@ -807,8 +734,7 @@ pre {
 }
 
 @media (max-width: 760px) {
-  .mode-grid,
-  .source-options {
+  .mode-grid {
     grid-template-columns: 1fr;
   }
 }
