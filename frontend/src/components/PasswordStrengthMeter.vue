@@ -15,7 +15,7 @@ const colors = ['#ef4444', '#f59e0b', '#eab308', '#22c55e', '#16a34a']
       <div class="fill" :style="{ width: ((s.score + 1) / 5) * 100 + '%', background: colors[s.score] }" />
     </div>
     <small :style="{ color: s.ok ? 'var(--p-text-muted-color)' : '#d97706' }">
-      {{ s.label }}<template v-if="s.warning"> — {{ s.warning }}</template>
+      {{ s.label }}<template v-if="s.warning"> - {{ s.warning }}</template>
     </small>
   </div>
 </template>

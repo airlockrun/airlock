@@ -20,7 +20,7 @@ type RunSummary struct {
 	ConversationTitle string
 	Status            string // 'running' | 'suspended' | 'complete' | 'error' | 'cancelled'
 	TriggerType       string // 'prompt' | 'bridge' | 'event'
-	MessagePreview    string // truncated operator message for the turn ('' for event/confirmation runs)
+	MessagePreview    string // first linked message for the turn ('' when no message is bound)
 	ErrorMessage      string
 	CostEstimate      float64
 	StartedAt         time.Time

@@ -37,7 +37,7 @@ var roleAllowedPkgs = []string{
 }
 
 // NoInlineRole flags references to auth.Role{Admin,Manager,User} from
-// outside the allowlist of packages above. The CLAUDE.md rule: every
+// outside the allowlist of packages above. The AGENTS.md rule: every
 // permission gate routes through authz.Authorize(action). Comparing a
 // principal's role to a constant in a service body is exactly the
 // drift this catches — frontend hides Bridges from manager while

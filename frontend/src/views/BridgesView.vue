@@ -127,7 +127,7 @@ async function copyDeepLink() {
     deepLinkCopied.value = true
     setTimeout(() => { deepLinkCopied.value = false }, 2000)
   } catch {
-    toast.add({ severity: 'error', summary: 'Copy failed — long-press the link to copy manually', life: 4000 })
+    toast.add({ severity: 'error', summary: 'Copy failed - long-press the link to copy manually', life: 4000 })
   }
 }
 
@@ -252,7 +252,7 @@ function confirmDelete(bridge: { id: string; name: string }) {
         <template #body="{ data }">
           <span v-if="data.isSystem" style="font-style: italic">System agent</span>
           <template v-else>
-            {{ agentsStore.agents.find(a => a.id === data.agentId)?.name || data.agentId || '—' }}
+            {{ agentsStore.agents.find(a => a.id === data.agentId)?.name || data.agentId || '-' }}
           </template>
         </template>
       </Column>
@@ -293,7 +293,7 @@ function confirmDelete(bridge: { id: string; name: string }) {
           We tried to open Telegram in a new tab. If that didn't work, tap the link below. The new bridge will appear in the list once the bot is created.
         </small>
         <Message severity="warn" :closable="false">
-          Keep the suggested bot <b>username</b> exactly as Telegram pre-fills it — airlock binds the new bot back to this workspace by that username, so changing it leaves the bot orphaned. You can freely edit the bot's display name.
+          Keep the suggested bot <b>username</b> exactly as Telegram pre-fills it - airlock binds the new bot back to this workspace by that username, so changing it leaves the bot orphaned. You can freely edit the bot's display name.
         </Message>
         <a
           :href="pendingDeepLink"
@@ -336,7 +336,7 @@ function confirmDelete(bridge: { id: string; name: string }) {
             </label>
           </div>
           <small style="color: var(--p-text-muted-color)">
-            Create-new opens Telegram with the airlock manager bot to walk through bot creation. Keep the suggested username unchanged — airlock uses it to bind the bot back.
+            Create-new opens Telegram with the airlock manager bot to walk through bot creation. Keep the suggested username unchanged - airlock uses it to bind the bot back.
           </small>
         </div>
         <div v-if="createTokenSource === 'paste'" style="display: flex; flex-direction: column; gap: 0.25rem">

@@ -21,7 +21,7 @@ import (
 
 // authorizeRead is the one read gate every method runs first. Gating
 // goes through authz.Authorize (TenantUserView), not an inline
-// IsAuthenticatedUser check — that's the rule (airlock/CLAUDE.md): no
+// IsAuthenticatedUser check — that's the rule (airlock/AGENTS.md): no
 // service method open-codes its level; every action sits in the
 // policy table so a single edit moves the bar everywhere.
 func (s *Service) authorizeRead(ctx context.Context, p authz.Principal) error {

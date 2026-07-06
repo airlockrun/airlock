@@ -21,18 +21,18 @@ function runStatusSeverity(status: string): string {
 }
 
 function formatTimestamp(ts: any): string {
-  if (!ts) return '—'
+  if (!ts) return '-'
   // Protobuf Timestamp has seconds (bigint or number) and nanos.
   if (ts.seconds !== undefined) {
     return new Date(Number(ts.seconds) * 1000).toLocaleString()
   }
   // Fallback for string timestamps.
   const d = new Date(ts)
-  return isNaN(d.getTime()) ? '—' : d.toLocaleString()
+  return isNaN(d.getTime()) ? '-' : d.toLocaleString()
 }
 
 function formatDuration(ms: number): string {
-  if (!ms) return '—'
+  if (!ms) return '-'
   if (ms < 1000) return `${ms}ms`
   const seconds = Math.floor(ms / 1000)
   if (seconds < 60) return `${seconds}s`
@@ -45,7 +45,7 @@ function formatDuration(ms: number): string {
 }
 
 function formatCost(cost: number): string {
-  if (!cost) return '—'
+  if (!cost) return '-'
   // Sub-cent costs (typical for nano/mini models) round to $0.00 with
   // 2 decimals — show 4 decimals below $1 so a 1K-in/500-out gpt-5-nano
   // call ($0.0003) doesn't read as zero.
@@ -113,7 +113,7 @@ onMounted(() => {
           <span v-if="run.sourceRef" style="font-family: monospace; font-size: 0.8rem">
             {{ run.sourceRef.slice(0, 8) }}
           </span>
-          <span v-else style="color: var(--p-text-muted-color)">—</span>
+          <span v-else style="color: var(--p-text-muted-color)">-</span>
         </template>
       </Column>
     </DataTable>

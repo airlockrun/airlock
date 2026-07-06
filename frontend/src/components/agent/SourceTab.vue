@@ -107,7 +107,7 @@ async function copyToClipboard(text: string, label: string) {
     await navigator.clipboard.writeText(text)
     toast.add({ severity: 'success', summary: `${label} copied`, life: 2000 })
   } catch {
-    toast.add({ severity: 'warn', summary: `Copy failed — select and copy ${label} manually`, life: 4000 })
+    toast.add({ severity: 'warn', summary: `Copy failed - select and copy ${label} manually`, life: 4000 })
   }
 }
 
@@ -123,7 +123,7 @@ onMounted(async () => {
     <!-- Internal mode -->
     <div v-if="!isConnected" style="display: flex; flex-direction: column; gap: 1rem">
       <Message severity="info" :closable="false">
-        This agent has no git remote. Connect one to clone the source to your laptop, edit there, and push changes back — airlock will rebuild on every push.
+        This agent has no git remote. Connect one to clone the source to your laptop, edit there, and push changes back - airlock will rebuild on every push.
       </Message>
       <div v-if="credsStore.credentials.length === 0">
         <p style="margin: 0 0 0.5rem">You don't have any git credentials yet.</p>
@@ -153,7 +153,7 @@ onMounted(async () => {
         </div>
         <div>
           <label style="display: block; font-size: 0.75rem; text-transform: uppercase; color: var(--p-text-muted-color); margin-bottom: 0.25rem">Credential</label>
-          <div>{{ cfg!.gitCredentialName || '—' }}</div>
+          <div>{{ cfg!.gitCredentialName || '-' }}</div>
         </div>
       </div>
 
@@ -189,7 +189,7 @@ onMounted(async () => {
           </div>
           <small style="color: var(--p-text-muted-color)">
             Content type: <code>application/json</code>. Event: just the <strong>push</strong> event (GitHub/GitLab/etc).
-            Other providers (Bitbucket, Gitea) aren't wired for signature verification yet — the polling fallback picks up pushes every 5 minutes.
+            Other providers (Bitbucket, Gitea) aren't wired for signature verification yet - the polling fallback picks up pushes every 5 minutes.
           </small>
         </div>
       </details>

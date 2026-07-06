@@ -1,7 +1,7 @@
 // Package lockout implements per-(email, ip) login throttling for the
 // airlock auth path. The mechanism is intentionally application-only —
 // per-IP rate limiting is the operator's reverse-proxy job. See
-// airlock/CLAUDE.md and the project README for the threat-model rationale.
+// airlock/AGENTS.md and the project README for the threat-model rationale.
 package lockout
 
 import "time"

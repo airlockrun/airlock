@@ -115,9 +115,9 @@ LIMIT 1;
 -- (left NULL for plain text answers). source distinguishes operator
 -- prompts ("") from system-injected events ("upgrade", "error", ...).
 INSERT INTO system_messages (
-    conversation_id, role, source, content, parts, tokens_in, tokens_out, cost_estimate
+    conversation_id, role, source, content, parts, run_id, tokens_in, tokens_out, cost_estimate
 ) VALUES (
-    @conversation_id, @role, @source, @content, @parts, @tokens_in, @tokens_out, @cost_estimate
+    @conversation_id, @role, @source, @content, @parts, @run_id, @tokens_in, @tokens_out, @cost_estimate
 )
 RETURNING *;
 
@@ -161,8 +161,8 @@ LIMIT @max_rows;
 -- run_id every WS event carries so the frontend can group
 -- text_delta/tool_call/tool_result events under one bubble — same
 -- contract as agent chat's runs.id.
-INSERT INTO system_runs (conversation_id, user_id, trigger_type, message_preview)
-VALUES (@conversation_id, @user_id, @trigger_type, @message_preview)
+INSERT INTO system_runs (conversation_id, user_id, trigger_type)
+VALUES (@conversation_id, @user_id, @trigger_type)
 RETURNING *;
 
 -- name: GetSystemRunByID :one
@@ -173,10 +173,18 @@ SELECT * FROM system_runs WHERE id = @id;
 -- JOINs system_conversations for the conversation title so the operator's
 -- activity view doesn't need a second per-row fetch.
 SELECT r.id, r.conversation_id, r.user_id, r.status, r.trigger_type,
-       r.message_preview, r.error_message, r.llm_cost_estimate,
+       COALESCE(preview.content, '') AS message_preview,
+       r.error_message, r.llm_cost_estimate,
        r.started_at, r.finished_at, c.title AS conversation_title
 FROM system_runs r
 JOIN system_conversations c ON c.id = r.conversation_id
+LEFT JOIN LATERAL (
+    SELECT m.content
+    FROM system_messages m
+    WHERE m.run_id = r.id AND m.content <> ''
+    ORDER BY CASE WHEN m.role IN ('user', 'system') THEN 0 ELSE 1 END, m.seq ASC
+    LIMIT 1
+) preview ON true
 WHERE r.user_id = @user_id
   AND (@cursor::timestamptz IS NULL OR r.started_at < @cursor)
 ORDER BY r.started_at DESC

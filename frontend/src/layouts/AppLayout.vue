@@ -34,7 +34,7 @@ watch(
     toast.add({
       severity: 'warn',
       summary: 'Link out of date',
-      detail: `No agent “${slug}” — it may have been renamed. Pick it from the list.`,
+      detail: `No agent “${slug}” - it may have been renamed. Pick it from the list.`,
       life: 6000,
     })
     const q = { ...route.query }

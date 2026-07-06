@@ -50,6 +50,7 @@ message SystemMessageInfo {
   int32 tokens_out = 8;
   double cost_estimate = 9;
   google.protobuf.Timestamp created_at = 10;
+  string run_id = 11;
 }
 
 // --- Requests / Responses ---
@@ -84,7 +85,7 @@ message SystemRunInfo {
   google.protobuf.Timestamp finished_at = 7;
   string trigger_type = 8;        // 'prompt' | 'bridge' | 'event'
   double llm_cost_estimate = 9;
-  string message_preview = 10;    // truncated operator message for the turn
+  string message_preview = 10;    // first linked message for the turn, truncated by the UI
 }
 
 // ListSystemRunsResponse is the activity view's page shape. next_cursor

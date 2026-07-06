@@ -189,7 +189,7 @@ function msgClassForSource(source: string): string {
           {{ isNew ? 'New conversation' : 'Conversation' }} with <strong>System Agent</strong>
         </p>
         <p class="chat-empty-sub">
-          Ask me anything — list your agents, trigger an upgrade, manage bridges, inspect runs. It's saved as a new conversation once you send.
+          Ask me anything - list your agents, trigger an upgrade, manage bridges, inspect runs. It's saved as a new conversation once you send.
         </p>
       </div>
 

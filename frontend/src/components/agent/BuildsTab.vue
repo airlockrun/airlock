@@ -34,18 +34,18 @@ function typeSeverity(type: string): string {
 }
 
 function formatCost(cost: number): string {
-  if (!cost) return '—'
+  if (!cost) return '-'
   if (cost < 1) return `$${cost.toFixed(4)}`
   return `$${cost.toFixed(2)}`
 }
 
 function formatTimestamp(ts: any): string {
-  if (!ts) return '—'
+  if (!ts) return '-'
   if (ts.seconds !== undefined) {
     return new Date(Number(ts.seconds) * 1000).toLocaleString()
   }
   const d = new Date(ts)
-  return isNaN(d.getTime()) ? '—' : d.toLocaleString()
+  return isNaN(d.getTime()) ? '-' : d.toLocaleString()
 }
 
 function shortHash(ref: string): string {
@@ -57,7 +57,7 @@ function buildLabel(b: AgentBuildInfo): string {
     const target = b.rollbackTargetSourceRef || b.rollbackTargetId
     return target ? `Rolled back to ${shortHash(target)}` : 'Rolled back (target deleted)'
   }
-  return b.instructions || '—'
+  return b.instructions || '-'
 }
 
 function canRollback(b: AgentBuildInfo): boolean {
@@ -78,7 +78,7 @@ function onRollback(b: AgentBuildInfo) {
     header: `Roll back to ${shortHash(b.sourceRef)}?`,
     message:
       'This reverses the agent to a previous build. Migrations will be ' +
-      'down-applied — data added by newer migrations may be lost. ' +
+      'down-applied - data added by newer migrations may be lost. ' +
       'Forward commits stay reachable via a pre-rollback branch. Continue?',
     icon: 'pi pi-exclamation-triangle',
     acceptLabel: 'Roll back',
@@ -160,7 +160,7 @@ onMounted(() => {
             <div v-if="b.errorMessage && b.errorMessage !== b.exitMessage" class="result-bad">
               <i class="pi pi-times" /> <span class="result-text">{{ b.errorMessage }}</span>
             </div>
-            <span v-if="!b.exitMessage && !b.errorMessage" style="color: var(--p-text-muted-color)">—</span>
+            <span v-if="!b.exitMessage && !b.errorMessage" style="color: var(--p-text-muted-color)">-</span>
           </div>
         </template>
       </Column>
@@ -171,7 +171,7 @@ onMounted(() => {
       </Column>
       <Column header="Model">
         <template #body="{ data: b }">
-          <span class="build-model">{{ b.buildModel || '—' }}</span>
+          <span class="build-model">{{ b.buildModel || '-' }}</span>
         </template>
       </Column>
       <Column header="Cost">

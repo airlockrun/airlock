@@ -31,10 +31,11 @@ import (
 type sessionStore struct {
 	d              *db.DB
 	conversationID uuid.UUID
+	runID          uuid.UUID
 }
 
-func newSessionStore(d *db.DB, conversationID uuid.UUID) *sessionStore {
-	return &sessionStore{d: d, conversationID: conversationID}
+func newSessionStore(d *db.DB, conversationID, runID uuid.UUID) *sessionStore {
+	return &sessionStore{d: d, conversationID: conversationID, runID: runID}
 }
 
 // Load returns the conversation's full message history as session.Message
@@ -60,7 +61,7 @@ func (s *sessionStore) Load(ctx context.Context) ([]session.Message, error) {
 func (s *sessionStore) Append(ctx context.Context, msgs []session.Message) error {
 	q := dbq.New(s.d.Pool())
 	for _, msg := range msgs {
-		if err := appendSessionMessage(ctx, q, s.conversationID, msg); err != nil {
+		if err := appendSessionMessage(ctx, q, s.conversationID, s.runID, msg); err != nil {
 			return err
 		}
 	}
@@ -214,7 +215,8 @@ func rowToSessionMessage(r dbq.SystemMessage) session.Message {
 // A session.Message that carries text + tool calls + tool results
 // expands into multiple rows (one per goai message slice element) so
 // the per-row role + parts reflect the canonical bubble layout.
-func appendSessionMessage(ctx context.Context, q *dbq.Queries, conversationID uuid.UUID, msg session.Message) error {
+func appendSessionMessage(ctx context.Context, q *dbq.Queries, conversationID, runID uuid.UUID, msg session.Message) error {
+	pgRunID := pgtype.UUID{Bytes: runID, Valid: runID != uuid.Nil}
 	goaiMsgs := session.MessageToGoAI(msg)
 	displayText := extractDisplayText(msg)
 	if len(goaiMsgs) == 0 {
@@ -225,6 +227,7 @@ func appendSessionMessage(ctx context.Context, q *dbq.Queries, conversationID uu
 			Role:           msg.Role,
 			Content:        displayText,
 			Parts:          nil,
+			RunID:          pgRunID,
 			TokensIn:       int32(msg.Tokens.Input),
 			TokensOut:      int32(msg.Tokens.Output),
 			CostEstimate:   pgNumericFromFloat(0),
@@ -241,6 +244,7 @@ func appendSessionMessage(ctx context.Context, q *dbq.Queries, conversationID uu
 			Role:           string(gm.Role),
 			Content:        displayText,
 			Parts:          partsJSON,
+			RunID:          pgRunID,
 			TokensIn:       int32(msg.Tokens.Input),
 			TokensOut:      int32(msg.Tokens.Output),
 			CostEstimate:   pgNumericFromFloat(0),

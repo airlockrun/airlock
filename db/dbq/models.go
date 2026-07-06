@@ -602,6 +602,7 @@ type SystemMessage struct {
 	Source         string             `json:"source"`
 	Content        string             `json:"content"`
 	Parts          []byte             `json:"parts"`
+	RunID          pgtype.UUID        `json:"run_id"`
 	TokensIn       int32              `json:"tokens_in"`
 	TokensOut      int32              `json:"tokens_out"`
 	CostEstimate   pgtype.Numeric     `json:"cost_estimate"`
@@ -614,7 +615,6 @@ type SystemRun struct {
 	UserID          pgtype.UUID        `json:"user_id"`
 	Status          string             `json:"status"`
 	TriggerType     string             `json:"trigger_type"`
-	MessagePreview  string             `json:"message_preview"`
 	ErrorMessage    string             `json:"error_message"`
 	LlmCalls        int32              `json:"llm_calls"`
 	LlmTokensIn     int64              `json:"llm_tokens_in"`

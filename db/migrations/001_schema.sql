@@ -863,6 +863,7 @@ CREATE TABLE public.system_messages (
     source text DEFAULT ''::text NOT NULL,
     content text DEFAULT ''::text NOT NULL,
     parts jsonb,
+    run_id uuid,
     tokens_in integer DEFAULT 0 NOT NULL,
     tokens_out integer DEFAULT 0 NOT NULL,
     cost_estimate numeric(10,6) DEFAULT 0 NOT NULL,
@@ -900,7 +901,6 @@ CREATE TABLE public.system_runs (
     user_id uuid NOT NULL,
     status text DEFAULT 'running'::text NOT NULL,
     trigger_type text NOT NULL,
-    message_preview text NOT NULL,
     error_message text DEFAULT ''::text NOT NULL,
     llm_calls integer DEFAULT 0 NOT NULL,
     llm_tokens_in bigint DEFAULT 0 NOT NULL,
@@ -2512,6 +2512,14 @@ ALTER TABLE ONLY public.system_conversations
 
 ALTER TABLE ONLY public.system_messages
     ADD CONSTRAINT system_messages_conversation_id_fkey FOREIGN KEY (conversation_id) REFERENCES public.system_conversations(id) ON DELETE CASCADE;
+
+
+--
+-- Name: system_messages system_messages_run_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.system_messages
+    ADD CONSTRAINT system_messages_run_id_fkey FOREIGN KEY (run_id) REFERENCES public.system_runs(id);
 
 
 --

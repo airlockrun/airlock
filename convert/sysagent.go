@@ -58,7 +58,7 @@ func PendingSystemToolFromCheckpoint(blob []byte) *airlockv1.PendingSystemTool {
 // system and agent surfaces identically off this shape.
 func SysMessageToProto(m dbq.SystemMessage) *airlockv1.SystemMessageInfo {
 	cost, _ := m.CostEstimate.Float64Value()
-	return &airlockv1.SystemMessageInfo{
+	out := &airlockv1.SystemMessageInfo{
 		Id:           uuid.UUID(m.ID.Bytes).String(),
 		Seq:          m.Seq,
 		Role:         m.Role,
@@ -70,4 +70,8 @@ func SysMessageToProto(m dbq.SystemMessage) *airlockv1.SystemMessageInfo {
 		CostEstimate: cost.Float64,
 		CreatedAt:    PgTimestampToProto(m.CreatedAt),
 	}
+	if m.RunID.Valid {
+		out.RunId = uuid.UUID(m.RunID.Bytes).String()
+	}
+	return out
 }

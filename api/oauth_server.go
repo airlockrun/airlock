@@ -42,7 +42,7 @@ type oauthServerHandler struct {
 
 	// dcrLimiter is an in-memory per-IP token-bucket rate limiter on
 	// /oauth/register (10 / hour / IP). NOT multi-replica safe —
-	// today airlock is single-replica per CLAUDE.md; when multi-replica
+	// today airlock is single-replica per AGENTS.md; when multi-replica
 	// lands, swap for a DB-backed sliding window using the auth_failures
 	// table pattern.
 	dcrLimiter *ipRateLimiter

@@ -117,40 +117,31 @@ const readonlyRows: { key: keyof AgentModelConfig; label: string; icon: string }
   { key: 'embeddingModel', label: 'Embedding', icon: 'pi pi-database' },
   { key: 'searchModel', label: 'Web Search', icon: 'pi pi-search' },
 ]
-// providerLabel resolves a providers-row UUID to its catalog id (e.g. "openai")
-// via the providers store. Empty when the row isn't loaded (read-only callers
-// never fetch providers) — callers then fall back to the bare model name.
-function providerLabel(rowID: string): string {
-  if (!rowID) return ''
-  return providers.providers.find(p => p.id === rowID)?.providerId || ''
-}
-
-// defaultLabel renders a ModelRef as "provider/model" (or just "model").
+// defaultLabel renders a ModelRef as just the model name.
 function defaultLabel(ref?: { model: string; providerId: string }): string {
   if (!ref?.model) return ''
-  const prov = providerLabel(ref.providerId)
-  return prov ? `${prov}/${ref.model}` : ref.model
+  return ref.model
 }
 
 // capabilityPlaceholder is the picker's placeholder for an unset override row:
-// names the inherited system default instead of a generic "inherit" string.
+// names the system Default when one is configured.
 function capabilityPlaceholder(key: keyof AgentModelConfig): string {
   const label = defaultLabel(config.value.systemDefaults?.[key as string])
-  return label ? `Default (${label})` : 'Inherit system default'
+  return label ? `Default (${label})` : 'Default'
 }
 
 // slotPlaceholder is the same, for a RegisterModel slot's picker: its resolved
 // model is the capability default when unbound.
 function slotPlaceholder(slot: ModelSlotInfo): string {
   const label = defaultLabel({ model: slot.resolvedModel, providerId: slot.resolvedProviderId })
-  return label ? `Default (${label})` : 'Inherit capability default'
+  return label ? `Default (${label})` : 'Default'
 }
 
 function currentModel(key: keyof AgentModelConfig): string {
   const set = (config.value as any)[key]
   if (set) return set
   const ref = config.value.systemDefaults?.[key as string]
-  return ref?.model ? `Inherits default · ${ref.model}` : 'Inherits system default'
+  return ref?.model ? `Default · ${ref.model}` : 'Default'
 }
 
 // --- Rows. Each binds to a capability-override field on `config`.
@@ -192,7 +183,7 @@ const overrideRows = computed<ConfigRow[]>(() => [
     key: 'sttModel',
     label: 'STT',
     icon: 'pi pi-microphone',
-    help: 'Speech-to-text — used by agent.TranscriptionModel and the VM transcribeAudio built-in.',
+    help: 'Speech-to-text - used by agent.TranscriptionModel and the VM transcribeAudio built-in.',
     options: groupModels(isTranscription),
     grouped: true,
   },
@@ -200,7 +191,7 @@ const overrideRows = computed<ConfigRow[]>(() => [
     key: 'ttsModel',
     label: 'TTS',
     icon: 'pi pi-volume-up',
-    help: 'Text-to-speech — used by agent.SpeechModel and the VM generateSpeech built-in.',
+    help: 'Text-to-speech - used by agent.SpeechModel and the VM generateSpeech built-in.',
     options: groupModels(isSpeech),
     grouped: true,
   },
@@ -208,7 +199,7 @@ const overrideRows = computed<ConfigRow[]>(() => [
     key: 'imageGenModel',
     label: 'Image Gen',
     icon: 'pi pi-palette',
-    help: 'Text-to-image — used by agent.ImageModel and the VM generateImage built-in.',
+    help: 'Text-to-image - used by agent.ImageModel and the VM generateImage built-in.',
     options: groupModels(isImageGen),
     grouped: true,
   },
@@ -216,7 +207,7 @@ const overrideRows = computed<ConfigRow[]>(() => [
     key: 'embeddingModel',
     label: 'Embedding',
     icon: 'pi pi-database',
-    help: 'Text embeddings — used by agent.EmbeddingModel and the VM embed built-in.',
+    help: 'Text embeddings - used by agent.EmbeddingModel and the VM embed built-in.',
     options: groupModels(isEmbedding),
     grouped: true,
   },
@@ -264,7 +255,7 @@ async function save() {
   try {
     // Picker values are packed "rowUUID|modelName" — split each into the
     // (provider FK, bare model name) pair the proto expects. Empty-empty
-    // ⇄ inherit; both halves move together.
+    // ⇄ Default; both halves move together.
     const split = (k: string) => splitModelValue(pickerValues.value[k] || '')
     const build = split('buildModel')
     const exec = split('execModel')
@@ -324,13 +315,13 @@ async function save() {
     <div>
       <h3 class="models-subhead">Capability overrides</h3>
       <p class="models-sub">
-        Override system defaults for this agent. Leave empty to inherit the system default for that capability.
+        Override system defaults for this agent. Leave empty for Default.
       </p>
       <div class="override-grid">
         <div
           v-for="row in overrideRows"
           :key="row.key as string"
-          style="display: flex; flex-direction: column; gap: 0.5rem"
+          class="model-field"
         >
           <label :for="`override-${row.key as string}`" style="font-weight: 500; display: flex; align-items: center; gap: 0.5rem">
             <i :class="row.icon" />
@@ -381,7 +372,7 @@ async function save() {
         <div
           v-for="slot in config.slots"
           :key="slot.slug"
-          style="display: flex; flex-direction: column; gap: 0.5rem; padding: 0.75rem; border: 1px solid var(--p-content-border-color); border-radius: var(--p-border-radius)"
+          class="model-slot-field"
         >
           <div style="display: flex; align-items: center; gap: 0.5rem">
             <span style="font-family: var(--p-font-family-monospace, monospace); font-weight: 600">{{ slot.slug }}</span>
@@ -440,7 +431,7 @@ async function save() {
             style="display: flex; align-items: center; gap: 0.5rem"
           >
             <span style="font-family: var(--p-font-family-monospace, monospace); font-weight: 600; min-width: 11rem">{{ slot.slug }}</span>
-            <span style="color: var(--p-text-muted-color)">{{ slot.assignedModel || (slot.resolvedModel ? `Inherits default · ${slot.resolvedModel}` : 'Inherits capability default') }}</span>
+            <span style="color: var(--p-text-muted-color)">{{ slot.assignedModel || (slot.resolvedModel ? `Default · ${slot.resolvedModel}` : 'Default') }}</span>
           </div>
         </div>
       </div>
@@ -463,14 +454,35 @@ async function save() {
    desktop so the eight slots fit in roughly half the width. */
 .override-grid {
   display: grid;
-  grid-template-columns: 1fr;
+  grid-template-columns: minmax(0, 1fr);
   gap: 1.25rem;
 }
 @media (min-width: 768px) {
   .override-grid {
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
     column-gap: 1.5rem;
   }
+}
+.model-field,
+.model-slot-field {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.model-slot-field {
+  padding: 0.75rem;
+  border: 1px solid var(--p-content-border-color);
+  border-radius: var(--p-border-radius);
+}
+:deep(.p-select) {
+  max-width: 100%;
+  min-width: 0;
+}
+:deep(.p-select-label) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 /* Pull the Save button up — the section gap leaves too much air above it. */
 .save-row {

@@ -6,7 +6,7 @@ import (
 )
 
 // UnknownIP is the bucket assigned to requests whose RemoteAddr cannot be
-// parsed. Aligns with the "fail loud" rule in airlock/CLAUDE.md: never
+// parsed. Aligns with the "fail loud" rule in airlock/AGENTS.md: never
 // silently skip the lockout — pool the unparseable requests instead.
 const UnknownIP = "unknown"
 

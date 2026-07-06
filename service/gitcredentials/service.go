@@ -109,7 +109,7 @@ func (s *Service) Create(ctx context.Context, p authz.Principal, req CreateReque
 		return Credential{}, service.Detail(service.ErrInvalidInput, "token is required")
 	}
 	// v1 only supports PAT; github_app is a v2 type. Reject unknowns
-	// rather than silently coercing — fail loud (airlock CLAUDE.md).
+	// rather than silently coercing — fail loud (airlock AGENTS.md).
 	credType := req.Type
 	if credType == "" {
 		credType = "pat"

@@ -11,8 +11,8 @@
 ## What to include
 
 - Affected version(s) and how you confirmed the issue is present.
-- Reproducer or proof-of-concept (steps, code, video — whatever makes it reproducible).
-- Impact assessment — what an attacker can actually do.
+- Reproducer or proof-of-concept (steps, code, video - whatever makes it reproducible).
+- Impact assessment - what an attacker can actually do.
 - Optional: a suggested fix.
 
 ## What you can expect
@@ -40,10 +40,10 @@
 
 ## Out of scope
 
-- DDoS / volumetric attacks — this is the operator's reverse proxy / CDN job, not airlock's.
-- Distributed brute force across many IPs against the lockout — **known gap**, will be addressed by MFA. See the [README](README.md) Security section.
-- Vulnerabilities in user-written agent code — that's the agent author's responsibility.
-- Vulnerabilities in upstream dependencies — report to the upstream project first; we'll bump once they patch.
+- DDoS / volumetric attacks - this is the operator's reverse proxy / CDN job, not airlock's.
+- Distributed brute force across many IPs against the lockout - **known gap**, will be addressed by MFA. See the [README](README.md) Security section.
+- Vulnerabilities in user-written agent code - that's the agent author's responsibility.
+- Vulnerabilities in upstream dependencies - report to the upstream project first; we'll bump once they patch.
 - Issues requiring physical access to the host or local privilege.
 - Self-XSS where the victim pastes malicious content into their own browser console.
 - Missing CSP / HSTS / security headers without a concrete exploitable impact.
@@ -62,7 +62,7 @@ Good-faith research conducted under this policy will not trigger legal action fr
 This safe harbor does **not** cover:
 
 - Testing against airlock instances you don't own (no probing of other operators' deployments).
-- Public disclosure before we've patched the issue, or 90 days from your initial report — whichever comes first.
+- Public disclosure before we've patched the issue, or 90 days from your initial report - whichever comes first.
 - Demanding payment or other consideration as a condition of disclosure.
 
 ## Bug bounty

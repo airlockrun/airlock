@@ -56,7 +56,7 @@ async function copyUrl(url: string) {
     await navigator.clipboard.writeText(url)
     toast.add({ severity: 'success', summary: 'URL copied', life: 2000 })
   } catch {
-    toast.add({ severity: 'warn', summary: 'Copy failed — select the URL and copy manually', life: 4000 })
+    toast.add({ severity: 'warn', summary: 'Copy failed - select the URL and copy manually', life: 4000 })
   }
 }
 

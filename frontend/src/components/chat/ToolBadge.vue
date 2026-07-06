@@ -112,7 +112,7 @@ const dotColor = computed(() => {
         :class="{ 'tool-pre-err': !!error }"
       >{{ clampedOutput.text }}</pre>
       <div v-if="clampedOutput.more" class="tool-badge-more">
-        … {{ clampedOutput.more }} more line{{ clampedOutput.more === 1 ? '' : 's' }} — click to expand
+        … {{ clampedOutput.more }} more line{{ clampedOutput.more === 1 ? '' : 's' }} - click to expand
       </div>
     </div>
 

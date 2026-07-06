@@ -40,7 +40,7 @@ function queryString(): string {
 onMounted(async () => {
   if (!query.value) {
     status.value = 'error'
-    errorMsg.value = 'Invalid link — missing parameters.'
+    errorMsg.value = 'Invalid link - missing parameters.'
     return
   }
   try {
