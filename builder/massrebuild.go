@@ -124,7 +124,7 @@ func (b *BuildService) rebuildOneAgent(agent dbq.Agent, instruction string) {
 	}
 	if _, err := b.Execute(ctx, plan); err != nil {
 		b.logger.Error("mass-rebuild: agent failed",
-			zap.String("agent_id", agentID), zap.Error(err))
+			zap.String("agent_id", agentID))
 		// Park the agent: stop the running container (if any) and flip
 		// status=stopped with the error preserved. The Upgrade flow
 		// would normally leave the old image running on failure; here

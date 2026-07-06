@@ -132,7 +132,7 @@ func (h *conversationsHandler) FeedConversations(w http.ResponseWriter, r *http.
 	p := principalFromRequest(r)
 	var limit int32
 	if raw := r.URL.Query().Get("limit"); raw != "" {
-		if n, err := strconv.Atoi(raw); err == nil {
+		if n, err := strconv.ParseInt(raw, 10, 32); err == nil {
 			limit = int32(n)
 		}
 	}

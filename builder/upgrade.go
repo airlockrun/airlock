@@ -221,7 +221,7 @@ func (b *BuildService) RunUpgrade(_ context.Context, input UpgradeInput) {
 			errMsg = "cancelled by user"
 			b.logger.Info("upgrade cancelled", zap.String("agent_id", input.AgentID))
 		} else {
-			b.logger.Error("upgrade failed", zap.String("agent_id", input.AgentID), zap.Error(runErr))
+			b.logger.Error("upgrade failed", zap.String("agent_id", input.AgentID))
 		}
 		_ = q.UpdateAgentUpgradeStatus(dbCtx, dbq.UpdateAgentUpgradeStatusParams{
 			ID:            agentPgUUID,

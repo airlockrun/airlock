@@ -1313,7 +1313,6 @@ func (s *Service) FireSchedule(ctx context.Context, p authz.Principal, agentID u
 	}
 	rc, runID, err := s.dispatcher.ForwardFire(ctx, agentID, "", slug, timeout)
 	if err != nil {
-		s.logger.Error("fire schedule", zap.Error(err))
 		return FireScheduleResult{}, err
 	}
 	io.Copy(io.Discard, rc)
