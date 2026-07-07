@@ -153,6 +153,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		panic("api: build webauthn from PUBLIC_URL: " + err.Error())
 	}
 	passkeyHandler := NewPasskeyHandler(passkeyssvc.New(cfg.DB, webAuthn, cfg.Logger.Named("passkeys")), cfg.DB, cfg.JWTSecret)
+	deviceLoginH := newDeviceLoginHandler(cfg.DB, cfg.JWTSecret, cfg.PublicURL)
 	providersHandler := NewProvidersHandler(providerssvc.New(cfg.DB, cfg.Secrets, cfg.Logger.Named("providers")))
 	gitCredsHandler := NewGitCredentialsHandler(gitcredssvc.New(cfg.DB, cfg.Secrets, cfg.Logger.Named("gitcredentials")))
 	gitWebhookHandler := NewGitWebhookHandler(cfg.DB, cfg.BuildService, cfg.Logger.Named("git-webhook"))
@@ -186,6 +187,8 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		r.Post("/activate", authHandler.Activate)
 		r.Post("/login", authHandler.Login)
 		r.Post("/refresh", authHandler.Refresh)
+		r.Post("/device/begin", deviceLoginH.Begin)
+		r.Post("/device/poll", deviceLoginH.Poll)
 
 		// Passkey login ceremony (public). Begin returns a challenge +
 		// ceremony id; finish verifies the assertion and issues tokens.
@@ -309,6 +312,9 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		r.Get("/settings", sysSettingsHandler.Get)
 		r.With(auth.RequireTenantRole(authz.RequiredTenantRole(authz.TenantSettingsUpdate))).Put("/settings", sysSettingsHandler.Update)
 		r.Get("/agent-sdk", getAgentSDKInfo)
+		r.Post("/device-login/inspect", deviceLoginH.Inspect)
+		r.Post("/device-login/approve", deviceLoginH.Approve)
+		r.Post("/device-login/deny", deviceLoginH.Deny)
 
 		// Provider management (admin/owner only)
 		r.Route("/providers", func(r chi.Router) {
