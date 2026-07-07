@@ -7,12 +7,24 @@
 # so the image build fails loud if daisyUI ever changes its output shape.
 set -eu
 
-MJS=/usr/local/lib/tailwind/daisyui.mjs
+cache=${XDG_CACHE_HOME:-${HOME:-/tmp}/.cache}/airlock/toolchain
+set -- "$cache"/daisyui/*/daisyui.mjs
+if [ ! -f "$1" ]; then
+  echo "daisyui-themes: daisyui.mjs missing from $cache" >&2
+  exit 1
+fi
+MJS=$1
+set -- "$cache"/tailwindcss/*/*/tailwindcss
+if [ ! -x "$1" ]; then
+  echo "daisyui-themes: tailwindcss missing from $cache" >&2
+  exit 1
+fi
+TAILWIND=$1
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
 printf '@import "tailwindcss";\n@plugin "%s" { themes: all; }\n' "$MJS" > "$tmp/in.css"
-tailwindcss -i "$tmp/in.css" -o "$tmp/out.css" --minify >/dev/null 2>&1
+"$TAILWIND" -i "$tmp/in.css" -o "$tmp/out.css" --minify >/dev/null 2>&1
 
 pairs=$(grep -oE '\[data-theme=[a-z]+\]\{color-scheme:[a-z]+' "$tmp/out.css" \
   | sed -E 's/.*\[data-theme=([a-z]+)\]\{color-scheme:([a-z]+)/\1 \2/' \
