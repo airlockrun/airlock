@@ -76,6 +76,7 @@ const router = createRouter({
         // user is logged in and a fresh grant is required. Auth guard
         // bounces unauthed users to /login?redirect=...
         { path: 'oauth/consent', name: 'oauth-consent', component: () => import('@/views/ConsentView.vue') },
+        { path: 'device-login', name: 'device-login', component: () => import('@/views/DeviceLoginView.vue') },
       ],
     },
 

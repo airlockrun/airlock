@@ -374,6 +374,23 @@ type Connection struct {
 	OwnerPrincipalID  pgtype.UUID        `json:"owner_principal_id"`
 }
 
+type DeviceLoginSession struct {
+	ID                  pgtype.UUID        `json:"id"`
+	DeviceCodeHash      string             `json:"device_code_hash"`
+	UserCodeHash        string             `json:"user_code_hash"`
+	UserCodeDisplay     string             `json:"user_code_display"`
+	ClientName          string             `json:"client_name"`
+	Status              string             `json:"status"`
+	UserID              pgtype.UUID        `json:"user_id"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+	ExpiresAt           pgtype.Timestamptz `json:"expires_at"`
+	ApprovedAt          pgtype.Timestamptz `json:"approved_at"`
+	DeniedAt            pgtype.Timestamptz `json:"denied_at"`
+	ConsumedAt          pgtype.Timestamptz `json:"consumed_at"`
+	LastPolledAt        pgtype.Timestamptz `json:"last_polled_at"`
+	PollIntervalSeconds int32              `json:"poll_interval_seconds"`
+}
+
 type GitCredential struct {
 	ID              pgtype.UUID        `json:"id"`
 	UserID          pgtype.UUID        `json:"user_id"`

@@ -43,6 +43,49 @@ message RefreshResponse {
   string access_token = 1;
 }
 
+message DeviceLoginBeginRequest {
+  string client_name = 1;
+}
+
+message DeviceLoginBeginResponse {
+  string device_code = 1;
+  string user_code = 2;
+  string verification_url = 3;
+  int32 expires_in_seconds = 4;
+  int32 poll_interval_seconds = 5;
+}
+
+message DeviceLoginPollRequest {
+  string device_code = 1;
+}
+
+message DeviceLoginPollResponse {
+  string status = 1; // pending, approved, denied, expired, slow_down
+  string access_token = 2;
+  string refresh_token = 3;
+  User user = 4;
+  int32 poll_interval_seconds = 5;
+}
+
+message DeviceLoginInspectRequest {
+  string user_code = 1;
+}
+
+message DeviceLoginInspectResponse {
+  string status = 1; // pending, approved, denied, expired
+  string user_code = 2;
+  string client_name = 3;
+  google.protobuf.Timestamp expires_at = 4;
+}
+
+message DeviceLoginApproveRequest {
+  string user_code = 1;
+}
+
+message DeviceLoginDenyRequest {
+  string user_code = 1;
+}
+
 // --- Activation (single-tenant setup) ---
 
 message ActivateRequest {

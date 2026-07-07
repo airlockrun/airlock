@@ -491,6 +491,29 @@ CREATE TABLE public.bridges (
 
 
 --
+-- Name: device_login_sessions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.device_login_sessions (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    device_code_hash text NOT NULL,
+    user_code_hash text NOT NULL,
+    user_code_display text NOT NULL,
+    client_name text NOT NULL,
+    status text NOT NULL,
+    user_id uuid,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    expires_at timestamp with time zone NOT NULL,
+    approved_at timestamp with time zone,
+    denied_at timestamp with time zone,
+    consumed_at timestamp with time zone,
+    last_polled_at timestamp with time zone,
+    poll_interval_seconds integer NOT NULL,
+    CONSTRAINT device_login_sessions_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'approved'::text, 'denied'::text])))
+);
+
+
+--
 -- Name: connections; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -1324,6 +1347,30 @@ ALTER TABLE ONLY public.git_credentials
 
 
 --
+-- Name: device_login_sessions device_login_sessions_device_code_hash_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.device_login_sessions
+    ADD CONSTRAINT device_login_sessions_device_code_hash_key UNIQUE (device_code_hash);
+
+
+--
+-- Name: device_login_sessions device_login_sessions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.device_login_sessions
+    ADD CONSTRAINT device_login_sessions_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: device_login_sessions device_login_sessions_user_code_hash_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.device_login_sessions
+    ADD CONSTRAINT device_login_sessions_user_code_hash_key UNIQUE (user_code_hash);
+
+
+--
 -- Name: git_credentials git_credentials_user_id_name_key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -1690,6 +1737,20 @@ CREATE UNIQUE INDEX idx_conversations_external ON public.agent_conversations USI
 --
 
 CREATE INDEX idx_git_credentials_user_id ON public.git_credentials USING btree (user_id);
+
+
+--
+-- Name: idx_device_login_sessions_expires_at; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_device_login_sessions_expires_at ON public.device_login_sessions USING btree (expires_at);
+
+
+--
+-- Name: idx_device_login_sessions_user_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_device_login_sessions_user_id ON public.device_login_sessions USING btree (user_id) WHERE (user_id IS NOT NULL);
 
 
 --
@@ -2384,6 +2445,14 @@ ALTER TABLE ONLY public.oauth_refresh_tokens
 
 ALTER TABLE ONLY public.oauth_refresh_tokens
     ADD CONSTRAINT oauth_refresh_tokens_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+
+
+--
+-- Name: device_login_sessions device_login_sessions_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.device_login_sessions
+    ADD CONSTRAINT device_login_sessions_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
 
 
 --
