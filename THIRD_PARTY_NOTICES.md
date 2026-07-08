@@ -676,7 +676,7 @@ SOFTWARE.
 
 
 ================================================================================
-github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.4
+github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.8
 ================================================================================
 
                                  Apache License
@@ -883,7 +883,7 @@ github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.4
 
 
 ================================================================================
-github.com/aws/aws-sdk-go-v2/config v1.32.7
+github.com/aws/aws-sdk-go-v2/config v1.32.10
 ================================================================================
 
                                  Apache License
@@ -1090,7 +1090,7 @@ github.com/aws/aws-sdk-go-v2/config v1.32.7
 
 
 ================================================================================
-github.com/aws/aws-sdk-go-v2/credentials v1.19.7
+github.com/aws/aws-sdk-go-v2/credentials v1.19.10
 ================================================================================
 
                                  Apache License
@@ -1297,7 +1297,7 @@ github.com/aws/aws-sdk-go-v2/credentials v1.19.7
 
 
 ================================================================================
-github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.18.17
+github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.18.18
 ================================================================================
 
                                  Apache License
@@ -1504,7 +1504,7 @@ github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.18.17
 
 
 ================================================================================
-github.com/aws/aws-sdk-go-v2/internal/configsources v1.4.17
+github.com/aws/aws-sdk-go-v2/internal/configsources v1.4.21
 ================================================================================
 
                                  Apache License
@@ -1711,7 +1711,7 @@ github.com/aws/aws-sdk-go-v2/internal/configsources v1.4.17
 
 
 ================================================================================
-github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.7.17
+github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.7.21
 ================================================================================
 
                                  Apache License
@@ -2125,7 +2125,7 @@ github.com/aws/aws-sdk-go-v2/internal/ini v1.8.4
 
 
 ================================================================================
-github.com/aws/aws-sdk-go-v2/internal/v4a v1.4.17
+github.com/aws/aws-sdk-go-v2/internal/v4a v1.4.22
 ================================================================================
 
                                  Apache License
@@ -2332,7 +2332,7 @@ github.com/aws/aws-sdk-go-v2/internal/v4a v1.4.17
 
 
 ================================================================================
-github.com/aws/aws-sdk-go-v2/service/internal/accept-encoding v1.13.4
+github.com/aws/aws-sdk-go-v2/service/internal/accept-encoding v1.13.7
 ================================================================================
 
                                  Apache License
@@ -2539,7 +2539,7 @@ github.com/aws/aws-sdk-go-v2/service/internal/accept-encoding v1.13.4
 
 
 ================================================================================
-github.com/aws/aws-sdk-go-v2/service/internal/checksum v1.9.8
+github.com/aws/aws-sdk-go-v2/service/internal/checksum v1.9.13
 ================================================================================
 
                                  Apache License
@@ -2746,7 +2746,7 @@ github.com/aws/aws-sdk-go-v2/service/internal/checksum v1.9.8
 
 
 ================================================================================
-github.com/aws/aws-sdk-go-v2/service/internal/presigned-url v1.13.17
+github.com/aws/aws-sdk-go-v2/service/internal/presigned-url v1.13.21
 ================================================================================
 
                                  Apache License
@@ -2953,7 +2953,7 @@ github.com/aws/aws-sdk-go-v2/service/internal/presigned-url v1.13.17
 
 
 ================================================================================
-github.com/aws/aws-sdk-go-v2/service/internal/s3shared v1.19.17
+github.com/aws/aws-sdk-go-v2/service/internal/s3shared v1.19.21
 ================================================================================
 
                                  Apache License
@@ -3160,7 +3160,7 @@ github.com/aws/aws-sdk-go-v2/service/internal/s3shared v1.19.17
 
 
 ================================================================================
-github.com/aws/aws-sdk-go-v2/service/s3 v1.96.0
+github.com/aws/aws-sdk-go-v2/service/s3 v1.97.3
 ================================================================================
 
                                  Apache License
@@ -3367,7 +3367,7 @@ github.com/aws/aws-sdk-go-v2/service/s3 v1.96.0
 
 
 ================================================================================
-github.com/aws/aws-sdk-go-v2/service/signin v1.0.5
+github.com/aws/aws-sdk-go-v2/service/signin v1.0.6
 ================================================================================
 
                                  Apache License
@@ -3574,7 +3574,7 @@ github.com/aws/aws-sdk-go-v2/service/signin v1.0.5
 
 
 ================================================================================
-github.com/aws/aws-sdk-go-v2/service/ssooidc v1.35.13
+github.com/aws/aws-sdk-go-v2/service/ssooidc v1.35.15
 ================================================================================
 
                                  Apache License
@@ -3781,7 +3781,7 @@ github.com/aws/aws-sdk-go-v2/service/ssooidc v1.35.13
 
 
 ================================================================================
-github.com/aws/aws-sdk-go-v2/service/sso v1.30.9
+github.com/aws/aws-sdk-go-v2/service/sso v1.30.11
 ================================================================================
 
                                  Apache License
@@ -3988,7 +3988,7 @@ github.com/aws/aws-sdk-go-v2/service/sso v1.30.9
 
 
 ================================================================================
-github.com/aws/aws-sdk-go-v2/service/sts v1.41.6
+github.com/aws/aws-sdk-go-v2/service/sts v1.41.7
 ================================================================================
 
                                  Apache License
@@ -4195,7 +4195,7 @@ github.com/aws/aws-sdk-go-v2/service/sts v1.41.6
 
 
 ================================================================================
-github.com/aws/aws-sdk-go-v2 v1.41.1
+github.com/aws/aws-sdk-go-v2 v1.41.5
 ================================================================================
 
                                  Apache License
@@ -4407,7 +4407,7 @@ Copyright 2014-2015 Stripe, Inc.
 
 
 ================================================================================
-github.com/aws/smithy-go v1.24.0
+github.com/aws/smithy-go v1.24.2
 ================================================================================
 
                                  Apache License
@@ -8563,7 +8563,7 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ================================================================================
-go.opentelemetry.io/otel/metric v1.41.0
+go.opentelemetry.io/otel/metric v1.44.0
 ================================================================================
                                  Apache License
                            Version 2.0, January 2004
@@ -8798,7 +8798,7 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ================================================================================
-go.opentelemetry.io/otel/trace v1.41.0
+go.opentelemetry.io/otel/trace v1.44.0
 ================================================================================
                                  Apache License
                            Version 2.0, January 2004
@@ -9033,7 +9033,7 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ================================================================================
-go.opentelemetry.io/otel v1.41.0
+go.opentelemetry.io/otel v1.44.0
 ================================================================================
                                  Apache License
                            Version 2.0, January 2004
@@ -9348,7 +9348,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 
 ================================================================================
-golang.org/x/image v0.39.0
+golang.org/x/image v0.41.0
 ================================================================================
 Copyright 2009 The Go Authors.
 
@@ -9412,7 +9412,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 
 ================================================================================
-golang.org/x/net v0.54.0
+golang.org/x/net v0.55.0
 ================================================================================
 Copyright 2009 The Go Authors.
 
