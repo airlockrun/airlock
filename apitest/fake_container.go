@@ -166,8 +166,11 @@ func (m *FakeContainerManager) MarkIdle(agentID uuid.UUID) {
 func (m *FakeContainerManager) StartToolserver(ctx context.Context, opts container.ToolserverOpts) (*container.Container, error) {
 	return nil, errors.New("apitest: StartToolserver not supported by FakeContainerManager")
 }
-func (m *FakeContainerManager) StopToolserver(ctx context.Context, name string) error  { return nil }
-func (m *FakeContainerManager) KillToolserver(ctx context.Context, name string) error  { return nil }
+func (m *FakeContainerManager) StopToolserver(ctx context.Context, name string) error { return nil }
+func (m *FakeContainerManager) KillToolserver(ctx context.Context, name string) error { return nil }
+func (m *FakeContainerManager) CaptureToolserverDiagnostics(ctx context.Context, name, reason string) error {
+	return nil
+}
 func (m *FakeContainerManager) RemoveImage(ctx context.Context, imageRef string) error { return nil }
 
 // LockSwap returns a no-op release fn — the apitest harness doesn't race

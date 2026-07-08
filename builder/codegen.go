@@ -34,6 +34,7 @@ func (b *BuildService) runCodegen(
 	testDBURL, testDBPSQL, testDBSchema string,
 	goProxyDir string,
 	logLine func(string),
+	runtimeLogLine func(string),
 	sink buildSink,
 ) (string, string, string, error) {
 	if plan.Instruction == "" {
@@ -81,22 +82,23 @@ func (b *BuildService) runCodegen(
 	}
 
 	solResult, err := b.runSolInProcess(ctx, solRunOpts{
-		WorkDir:         workDir,
-		AgentDir:        "/workspace",
-		AgentID:         agent.ID,
-		UserID:          buildSpendUser(plan, agent),
-		BuildID:         build.ID,
-		BuildType:       string(plan.Kind),
-		BuildProviderID: agent.BuildProviderID,
-		BuildModel:      agent.BuildModel,
-		Prompt:          codegenPrompt(plan, agent),
-		LocalTools:      localTools,
-		TestDBURL:       testDBURL,
-		TestDBPSQL:      testDBPSQL,
-		TestDBSchema:    testDBSchema,
-		GoProxyDir:      goProxyDir,
-		LogCallback:     logLine,
-		Sink:            sink,
+		WorkDir:            workDir,
+		AgentDir:           "/workspace",
+		AgentID:            agent.ID,
+		UserID:             buildSpendUser(plan, agent),
+		BuildID:            build.ID,
+		BuildType:          string(plan.Kind),
+		BuildProviderID:    agent.BuildProviderID,
+		BuildModel:         agent.BuildModel,
+		Prompt:             codegenPrompt(plan, agent),
+		LocalTools:         localTools,
+		TestDBURL:          testDBURL,
+		TestDBPSQL:         testDBPSQL,
+		TestDBSchema:       testDBSchema,
+		GoProxyDir:         goProxyDir,
+		LogCallback:        logLine,
+		RuntimeLogCallback: runtimeLogLine,
+		Sink:               sink,
 	})
 	if err != nil {
 		return "", "", "", fmt.Errorf("sol run: %w", err)

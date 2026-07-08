@@ -36,22 +36,23 @@ type buildSink interface {
 
 // solRunOpts configures an in-process Sol run with a remote toolserver.
 type solRunOpts struct {
-	WorkDir         string      // host path to the cloned per-agent repo
-	AgentDir        string      // container-side path (typically "/workspace")
-	AgentID         pgtype.UUID // owning agent — for the llm_usage row
-	UserID          pgtype.UUID // attributes build llm_usage to a user (initiator, or owner fallback)
-	BuildID         pgtype.UUID // agent_builds row this codegen attributes to
-	BuildType       string      // "build" | "upgrade" — llm_usage.call_kind
-	BuildProviderID pgtype.UUID // providers row FK; pairs with BuildModel
-	BuildModel      string      // bare model name (e.g. "gpt-5"); empty ⇄ FK invalid
-	Prompt          string      // prompt for the runner
-	LogCallback     func(line string)
-	Sink            buildSink // optional: receives structured live actions + todos
-	LocalTools      tool.Set  // optional in-process tools (e.g., set_agent_description)
-	TestDBURL       string    // test schema DB URL with search_path baked in
-	TestDBPSQL      string    // test schema DB URL without search_path (for psql)
-	TestDBSchema    string    // test schema name (for psql SET search_path)
-	GoProxyDir      string    // dev: host path to the generated lib proxy; empty in prod
+	WorkDir            string      // host path to the cloned per-agent repo
+	AgentDir           string      // container-side path (typically "/workspace")
+	AgentID            pgtype.UUID // owning agent — for the llm_usage row
+	UserID             pgtype.UUID // attributes build llm_usage to a user (initiator, or owner fallback)
+	BuildID            pgtype.UUID // agent_builds row this codegen attributes to
+	BuildType          string      // "build" | "upgrade" — llm_usage.call_kind
+	BuildProviderID    pgtype.UUID // providers row FK; pairs with BuildModel
+	BuildModel         string      // bare model name (e.g. "gpt-5"); empty ⇄ FK invalid
+	Prompt             string      // prompt for the runner
+	LogCallback        func(line string)
+	RuntimeLogCallback func(line string)
+	Sink               buildSink // optional: receives structured live actions + todos
+	LocalTools         tool.Set  // optional in-process tools (e.g., set_agent_description)
+	TestDBURL          string    // test schema DB URL with search_path baked in
+	TestDBPSQL         string    // test schema DB URL without search_path (for psql)
+	TestDBSchema       string    // test schema name (for psql SET search_path)
+	GoProxyDir         string    // dev: host path to the generated lib proxy; empty in prod
 }
 
 // solRunResult captures the outcome of an in-process Sol run. ExitStatus
@@ -187,10 +188,11 @@ func (b *BuildService) runSolInProcess(ctx context.Context, opts solRunOpts) (*s
 	// airlock owns the path; sol just scans whatever SKILLS_DIRS names.
 	toolEnv = append(toolEnv, "SKILLS_DIRS=/usr/local/lib/agent-skills")
 	tc, err := b.containers.StartToolserver(ctx, container.ToolserverOpts{
-		Image:   b.cfg.AgentBuilderImage,
-		Mounts:  mounts,
-		WorkDir: agentDir,
-		Env:     toolEnv,
+		Image:       b.cfg.AgentBuilderImage,
+		Mounts:      mounts,
+		WorkDir:     agentDir,
+		Env:         toolEnv,
+		LogCallback: opts.RuntimeLogCallback,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("start toolserver: %w", err)
@@ -234,6 +236,7 @@ func (b *BuildService) runSolInProcess(ctx context.Context, opts solRunOpts) (*s
 	wsURL := strings.Replace(tc.Endpoint, "http://", "ws://", 1) + "/ws"
 	transport, err := executor.NewWSTransport(wsURL)
 	if err != nil {
+		b.captureToolRuntimeDiagnostics(ctx, tc.Name, "failed to connect")
 		return nil, fmt.Errorf("connect to toolserver: %w", err)
 	}
 	defer transport.Close()
@@ -241,11 +244,13 @@ func (b *BuildService) runSolInProcess(ctx context.Context, opts solRunOpts) (*s
 	// Step 4: Fetch remote tools and set auto-approve rules.
 	remoteTools, err := transport.FetchTools(ctx)
 	if err != nil {
+		b.captureToolRuntimeDiagnostics(ctx, tc.Name, "failed during startup")
 		return nil, fmt.Errorf("fetch tools: %w", err)
 	}
 	if err := transport.SetRules(ctx, []bus.PermissionRule{
 		{Permission: "*", Pattern: "*", Action: "allow"},
 	}); err != nil {
+		b.captureToolRuntimeDiagnostics(ctx, tc.Name, "failed during startup")
 		return nil, fmt.Errorf("set rules: %w", err)
 	}
 
@@ -310,6 +315,9 @@ func (b *BuildService) runSolInProcess(ctx context.Context, opts solRunOpts) (*s
 
 	codegenStart := time.Now()
 	exitedResult, err := runner.RunUntilExit(ctx, opts.Prompt, sol.RunUntilExitOptions{MaxNudges: 2})
+	if executor.IsTransportError(err) {
+		b.captureToolRuntimeDiagnostics(ctx, tc.Name, "disconnected")
+	}
 	// Codegen LLM spend bypasses the runtime proxy (in-process runner,
 	// direct provider model), so record it straight into the ledger here
 	// — both the success and error paths, since a failed codegen still
@@ -344,6 +352,17 @@ func (b *BuildService) runSolInProcess(ctx context.Context, opts solRunOpts) (*s
 		out.ExitStatus, out.ExitMessage = exitState.Result()
 	}
 	return out, nil
+}
+
+func (b *BuildService) captureToolRuntimeDiagnostics(ctx context.Context, name, reason string) {
+	diagCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if ctx.Err() != nil {
+		return
+	}
+	if err := b.containers.CaptureToolserverDiagnostics(diagCtx, name, reason); err != nil {
+		b.logger.Warn("capture tool runtime diagnostics", zap.String("name", name), zap.String("reason", reason), zap.Error(err))
+	}
 }
 
 // recordBuildUsage writes the codegen run's LLM spend to the shared

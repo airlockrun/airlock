@@ -1,6 +1,8 @@
 package container
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -17,6 +19,7 @@ import (
 	dmount "github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/api/types/network"
 	dockerclient "github.com/docker/docker/client"
+	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/docker/go-connections/nat"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -24,16 +27,18 @@ import (
 
 // DockerManager implements ContainerManager using the Docker API.
 type DockerManager struct {
-	client       *dockerclient.Client
-	cfg          *config.Config
-	logger       *zap.Logger
-	mu           sync.Mutex
-	active       map[string]*Container // container name → Container
-	lastActivity map[string]time.Time  // container name → last use
-	inFlight     map[string]int        // container name → in-flight request count
-	idleTimeout  time.Duration
-	stopOnce     sync.Once
-	done         chan struct{}
+	client                 *dockerclient.Client
+	cfg                    *config.Config
+	logger                 *zap.Logger
+	mu                     sync.Mutex
+	active                 map[string]*Container // container name → Container
+	lastActivity           map[string]time.Time  // container name → last use
+	inFlight               map[string]int        // container name → in-flight request count
+	toolserverLogCallbacks map[string]func(string)
+	toolserverDiagCaptured map[string]bool
+	idleTimeout            time.Duration
+	stopOnce               sync.Once
+	done                   chan struct{}
 	// swapMu serializes the per-agent container-swap critical section
 	// (see LockSwap). One *sync.Mutex per agent ID, lazily created.
 	swapMu sync.Map // agentID(string) → *sync.Mutex
@@ -47,14 +52,16 @@ func NewDockerManager(cfg *config.Config, logger *zap.Logger) *DockerManager {
 	}
 
 	m := &DockerManager{
-		client:       cli,
-		cfg:          cfg,
-		logger:       logger,
-		active:       make(map[string]*Container),
-		lastActivity: make(map[string]time.Time),
-		inFlight:     make(map[string]int),
-		idleTimeout:  10 * time.Minute,
-		done:         make(chan struct{}),
+		client:                 cli,
+		cfg:                    cfg,
+		logger:                 logger,
+		active:                 make(map[string]*Container),
+		lastActivity:           make(map[string]time.Time),
+		inFlight:               make(map[string]int),
+		toolserverLogCallbacks: make(map[string]func(string)),
+		toolserverDiagCaptured: make(map[string]bool),
+		idleTimeout:            10 * time.Minute,
+		done:                   make(chan struct{}),
 	}
 
 	go m.reapIdleContainers()
@@ -446,9 +453,12 @@ func (m *DockerManager) StartToolserver(ctx context.Context, opts ToolserverOpts
 	if err != nil {
 		return nil, fmt.Errorf("start toolserver: %w", err)
 	}
+	m.setToolserverLogCallback(name, opts.LogCallback)
 
 	if err := m.waitHealthy(ctx, c, 15*time.Second); err != nil {
+		m.captureToolserverDiagnostics(context.Background(), name, "failed to start")
 		m.client.ContainerRemove(context.Background(), c.ID, dcontainer.RemoveOptions{Force: true})
+		m.clearToolserverDiagnostics(name)
 		return nil, fmt.Errorf("toolserver health check: %w", err)
 	}
 
@@ -458,6 +468,10 @@ func (m *DockerManager) StartToolserver(ctx context.Context, opts ToolserverOpts
 
 // StopToolserver stops and removes an ephemeral toolserver container.
 func (m *DockerManager) StopToolserver(ctx context.Context, name string) error {
+	if info, err := m.client.ContainerInspect(ctx, name); err == nil && info.State != nil && !info.State.Running {
+		m.captureToolserverDiagnostics(ctx, name, "exited unexpectedly")
+	}
+	defer m.clearToolserverDiagnostics(name)
 	timeout := 5
 	if err := m.client.ContainerStop(ctx, name, dcontainer.StopOptions{Timeout: &timeout}); err != nil {
 		m.logger.Warn("failed to stop toolserver", zap.String("name", name), zap.Error(err))
@@ -474,7 +488,159 @@ func (m *DockerManager) StopToolserver(ctx context.Context, name string) error {
 // which makes the cancel feel like it didn't take. Idempotent: returns
 // nil/NotFound if the container is already gone.
 func (m *DockerManager) KillToolserver(ctx context.Context, name string) error {
+	defer m.clearToolserverDiagnostics(name)
 	return m.client.ContainerRemove(ctx, name, dcontainer.RemoveOptions{Force: true})
+}
+
+// CaptureToolserverDiagnostics snapshots abnormal tool runtime state/logs.
+func (m *DockerManager) CaptureToolserverDiagnostics(ctx context.Context, name, reason string) error {
+	return m.captureToolserverDiagnostics(ctx, name, reason)
+}
+
+func (m *DockerManager) setToolserverLogCallback(name string, cb func(string)) {
+	if cb == nil {
+		return
+	}
+	m.mu.Lock()
+	m.toolserverLogCallbacks[name] = cb
+	m.mu.Unlock()
+}
+
+func (m *DockerManager) getToolserverLogCallback(name string) func(string) {
+	m.mu.Lock()
+	cb := m.toolserverLogCallbacks[name]
+	m.mu.Unlock()
+	return cb
+}
+
+func (m *DockerManager) clearToolserverDiagnostics(name string) {
+	m.mu.Lock()
+	delete(m.toolserverLogCallbacks, name)
+	delete(m.toolserverDiagCaptured, name)
+	m.mu.Unlock()
+}
+
+func (m *DockerManager) markToolserverDiagnosticsCaptured(name string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.toolserverDiagCaptured[name] {
+		return false
+	}
+	m.toolserverDiagCaptured[name] = true
+	return true
+}
+
+func (m *DockerManager) captureToolserverDiagnostics(ctx context.Context, name, reason string) error {
+	if !m.markToolserverDiagnosticsCaptured(name) {
+		return nil
+	}
+	cb := m.getToolserverLogCallback(name)
+	if cb == nil {
+		return nil
+	}
+
+	info, inspectErr := m.client.ContainerInspect(ctx, name)
+	if inspectErr != nil {
+		m.logger.Warn("inspect toolserver for diagnostics", zap.String("name", name), zap.Error(inspectErr))
+		cb("[error] build tool runtime failed; diagnostics unavailable")
+		return inspectErr
+	}
+
+	stateLine := toolserverStateLine(reason, info.State)
+	cb(stateLine)
+	if info.State != nil {
+		m.logger.Warn("toolserver diagnostics captured",
+			zap.String("name", name),
+			zap.String("reason", reason),
+			zap.String("status", string(info.State.Status)),
+			zap.Bool("running", info.State.Running),
+			zap.Int("exit_code", info.State.ExitCode),
+			zap.Bool("oom_killed", info.State.OOMKilled),
+			zap.String("state_error", info.State.Error),
+		)
+	} else {
+		m.logger.Warn("toolserver diagnostics captured", zap.String("name", name), zap.String("reason", reason))
+	}
+
+	lines, err := m.toolserverLogTail(ctx, name, 200)
+	if err != nil {
+		m.logger.Warn("read toolserver logs", zap.String("name", name), zap.Error(err))
+		return err
+	}
+	if len(lines) == 0 {
+		return nil
+	}
+	cb("[error] build tool runtime log tail:")
+	for _, line := range lines {
+		cb("[tool runtime] " + line)
+	}
+	return nil
+}
+
+func toolserverStateLine(reason string, state *dcontainer.State) string {
+	if reason == "" {
+		reason = "failed"
+	}
+	if state == nil {
+		return "[error] build tool runtime " + reason
+	}
+
+	parts := []string{"[error] build tool runtime " + reason}
+	if state.Running {
+		parts = append(parts, "still running")
+	} else {
+		parts = append(parts, "status="+string(state.Status))
+		parts = append(parts, fmt.Sprintf("exitCode=%d", state.ExitCode))
+	}
+	if state.OOMKilled {
+		parts = append(parts, "out of memory")
+	}
+	if state.Error != "" {
+		parts = append(parts, "error="+state.Error)
+	}
+	return strings.Join(parts, "; ")
+}
+
+func (m *DockerManager) toolserverLogTail(ctx context.Context, name string, tail int) ([]string, error) {
+	logs, err := m.client.ContainerLogs(ctx, name, dcontainer.LogsOptions{
+		ShowStdout: true,
+		ShowStderr: true,
+		Tail:       fmt.Sprintf("%d", tail),
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer logs.Close()
+
+	var buf bytes.Buffer
+	if _, err := stdcopy.StdCopy(&buf, &buf, logs); err != nil {
+		return nil, err
+	}
+
+	scanner := bufio.NewScanner(strings.NewReader(buf.String()))
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	var lines []string
+	for scanner.Scan() {
+		line := strings.TrimRight(scanner.Text(), "\r")
+		if line == "" {
+			continue
+		}
+		if isRoutineToolserverLogLine(line) {
+			continue
+		}
+		if len(line) > 4000 {
+			line = line[:4000] + "..."
+		}
+		lines = append(lines, line)
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	return lines, nil
+}
+
+func isRoutineToolserverLogLine(line string) bool {
+	return strings.Contains(line, "toolserver listening on") || strings.Contains(line, "shutting down...")
 }
 
 // buildAgentHostConfig assembles the hardened HostConfig for an agent
