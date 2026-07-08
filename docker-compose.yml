@@ -163,6 +163,8 @@ services:
       - "--addr"
       - "tcp://0.0.0.0:1234"
       - "--oci-worker-no-process-sandbox"
+      - "--oci-worker-gc"
+      - "--oci-worker-gc-keepstorage=${BUILDKIT_CACHE_LIMIT:-7GB}"
     security_opt:
       - seccomp=unconfined
       - apparmor=unconfined
@@ -407,7 +409,7 @@ networks:
 volumes:
   pgdata:
   rustfsdata:
-  buildkit-state:   # rootless buildkitd cache + state (persists build cache)
+  buildkit-state:   # rootless buildkitd cache + state (GC target: BUILDKIT_CACHE_LIMIT, default 7GB)
   caddy-data:    # CRITICAL: Let's Encrypt cert cache. Don't delete or you'll re-issue all certs and may hit rate limits.
   caddy-config:
   airlock-data:
