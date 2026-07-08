@@ -67,11 +67,6 @@ const editIsSystem = ref(false)
 const editType = ref('telegram')
 const editIsManager = ref(false)
 
-// Telegram is the only supported bridge platform.
-const bridgeTypes = [
-  { label: 'Telegram', value: 'telegram' },
-]
-
 onMounted(() => {
   store.fetchBridges()
   agentsStore.fetchAgents()
@@ -82,7 +77,7 @@ function openCreate() {
   pendingDeepLink.value = null
   deepLinkCopied.value = false
   createIsSystem.value = false
-  createTokenSource.value = 'paste'
+  createTokenSource.value = managerBotConfigured.value ? 'create_new' : 'paste'
   dialogVisible.value = true
 }
 
@@ -128,18 +123,6 @@ async function copyDeepLink() {
     setTimeout(() => { deepLinkCopied.value = false }, 2000)
   } catch {
     toast.add({ severity: 'error', summary: 'Copy failed - long-press the link to copy manually', life: 4000 })
-  }
-}
-
-function formatType(t: string): string {
-  if (!t) return 'unknown'
-  return t.charAt(0).toUpperCase() + t.slice(1)
-}
-
-function typeIcon(t: string): string {
-  switch (t) {
-    case 'telegram': return 'pi pi-send'
-    default: return 'pi pi-link'
   }
 }
 
@@ -218,8 +201,8 @@ function confirmDelete(bridge: { id: string; name: string }) {
     <!-- Loading skeletons -->
     <DataTable v-if="store.loading" :value="Array(5)">
       <Column header="Name"><template #body><Skeleton width="60%" /></template></Column>
-      <Column header="Type"><template #body><Skeleton width="4rem" /></template></Column>
       <Column header="Bot Username"><template #body><Skeleton width="40%" /></template></Column>
+      <Column header="Role"><template #body><Skeleton width="4rem" /></template></Column>
       <Column header="Agent"><template #body><Skeleton width="40%" /></template></Column>
       <Column header="Owner"><template #body><Skeleton width="40%" /></template></Column>
       <Column header="Status"><template #body><Skeleton width="4rem" /></template></Column>
@@ -234,20 +217,18 @@ function confirmDelete(bridge: { id: string; name: string }) {
         </div>
       </template>
       <Column field="name" header="Name" />
-      <Column header="Type">
+      <Column field="botUsername" header="Bot Username" />
+      <Column header="Role">
         <template #body="{ data }">
-          <div style="display: flex; gap: 0.35rem; align-items: center">
-            <Tag :value="formatType(data.type)" :icon="typeIcon(data.type)" severity="info" />
-            <Tag
-              v-if="data.isManager"
-              value="Manager"
-              :severity="data.managerError ? 'warn' : 'success'"
-              v-tooltip.top="data.managerError || 'Creates new bots via the deep-link flow'"
-            />
-          </div>
+          <Tag
+            v-if="data.isManager"
+            value="Manager"
+            :severity="data.managerError ? 'warn' : 'success'"
+            v-tooltip.top="data.managerError || 'Creates new bots via the deep-link flow'"
+          />
+          <span v-else style="color: var(--p-text-muted-color)">Agent bot</span>
         </template>
       </Column>
-      <Column field="botUsername" header="Bot Username" />
       <Column header="Agent">
         <template #body="{ data }">
           <span v-if="data.isSystem" style="font-style: italic">System agent</span>
@@ -315,39 +296,37 @@ function confirmDelete(bridge: { id: string; name: string }) {
         </div>
       </div>
       <div v-else style="display: flex; flex-direction: column; gap: 1rem; padding-top: 0.5rem">
-        <div style="display: flex; flex-direction: column; gap: 0.25rem">
-          <label for="bridgeType">Type</label>
-          <Select id="bridgeType" v-model="form.type" :options="bridgeTypes" optionLabel="label" optionValue="value" style="width: 100%" />
-        </div>
         <!-- Token source: paste an existing bot's token, or kick off
              the Telegram Managed Bots flow that creates a new bot.
              Hidden when the manager bot isn't configured — the
              create-new path has nothing to dispatch to. -->
         <div v-if="form.type === 'telegram' && managerBotConfigured" style="display: flex; flex-direction: column; gap: 0.5rem">
-          <label>Bot</label>
-          <div style="display: flex; gap: 1rem">
-            <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer">
-              <input type="radio" v-model="createTokenSource" value="paste" />
-              <span>Paste existing token</span>
-            </label>
-            <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer">
-              <input type="radio" v-model="createTokenSource" value="create_new" />
-              <span>Create new bot via Telegram</span>
-            </label>
+          <div class="bot-source-switch">
+            <button
+              type="button"
+              class="bot-source-option"
+              :class="{ active: createTokenSource === 'create_new' }"
+              @click="createTokenSource = 'create_new'"
+            >
+              <i class="pi pi-send" />
+              <span>Create in Telegram</span>
+            </button>
+            <button
+              type="button"
+              class="bot-source-option"
+              :class="{ active: createTokenSource === 'paste' }"
+              @click="createTokenSource = 'paste'"
+            >
+              <i class="pi pi-key" />
+              <span>Paste token</span>
+            </button>
           </div>
-          <small style="color: var(--p-text-muted-color)">
+          <small v-if="createTokenSource === 'create_new'" style="color: var(--p-text-muted-color)">
             Create-new opens Telegram with the airlock manager bot to walk through bot creation. Keep the suggested username unchanged - airlock uses it to bind the bot back.
           </small>
-        </div>
-        <div v-if="createTokenSource === 'paste'" style="display: flex; flex-direction: column; gap: 0.25rem">
-          <label for="bridgeToken">Token</label>
-          <Password id="bridgeToken" v-model="form.token" :feedback="false" toggleMask />
-          <small style="color: var(--p-text-muted-color)">The bridge name is taken from the bot's display name and kept in sync automatically.</small>
-        </div>
-        <div v-if="createTokenSource === 'create_new'" style="display: flex; flex-direction: column; gap: 0.25rem">
-          <label for="bridgeBotName">Bot name</label>
-          <InputText id="bridgeBotName" v-model="form.name" placeholder="My Telegram Bot" />
-          <small style="color: var(--p-text-muted-color)">Suggested name for the new bot. The bridge then mirrors the bot's display name.</small>
+          <small v-else style="color: var(--p-text-muted-color)">
+            Paste a token from BotFather for a bot you already created.
+          </small>
         </div>
         <!-- System bridge: admin-only. A system bridge isn't bound to
              an agent; inbound DMs route to the in-airlock sysagent
@@ -361,6 +340,38 @@ function confirmDelete(bridge: { id: string; name: string }) {
           </div>
           <ToggleSwitch v-model="createIsSystem" />
         </div>
+        <!-- A manager bridge is never agent-bound (it's the bot that creates
+             other bots): hide the agent picker when manager is on. Keep this
+             near the top so mobile keyboards don't obscure it. -->
+        <div v-if="!createIsSystem && !form.isManager" style="display: flex; flex-direction: column; gap: 0.25rem">
+          <label for="bridgeAgentId">Agent</label>
+          <Select
+            id="bridgeAgentId"
+            v-model="form.agentId"
+            :options="agentOptions"
+            optionLabel="name"
+            optionValue="id"
+            placeholder="Select an agent"
+            style="width: 100%"
+          >
+            <template #option="{ option }">
+              <div style="display: flex; flex-direction: column">
+                <span><span style="font-weight: 600">{{ option.name }}</span> <span style="color: var(--p-text-muted-color); font-size: 0.85em">{{ option.slug }}</span></span>
+                <small style="color: var(--p-text-muted-color)">{{ option.ownerName || 'unknown owner' }}{{ option.isOwner ? ' · you' : '' }}</small>
+              </div>
+            </template>
+          </Select>
+        </div>
+        <div v-if="createTokenSource === 'paste'" style="display: flex; flex-direction: column; gap: 0.25rem">
+          <label for="bridgeToken">Token</label>
+          <Password id="bridgeToken" v-model="form.token" :feedback="false" toggleMask />
+          <small style="color: var(--p-text-muted-color)">The bridge name is taken from the bot's display name and kept in sync automatically.</small>
+        </div>
+        <div v-if="createTokenSource === 'create_new'" style="display: flex; flex-direction: column; gap: 0.25rem">
+          <label for="bridgeBotName">Bot name</label>
+          <InputText id="bridgeBotName" v-model="form.name" placeholder="My Telegram Bot" />
+          <small style="color: var(--p-text-muted-color)">Suggested name for the new bot. The bridge then mirrors the bot's display name.</small>
+        </div>
         <!-- Manager capability: Telegram-only, admin-only. Lets this bot
              create new bots for users via the deep-link flow. The pasted
              token's bot must have can_manage_bots enabled in BotFather. -->
@@ -372,30 +383,6 @@ function confirmDelete(bridge: { id: string; name: string }) {
             </small>
           </div>
           <ToggleSwitch v-model="form.isManager" />
-        </div>
-        <!-- A manager bridge is never agent-bound (it's the bot that creates
-             other bots): hide the agent picker when manager is on. -->
-        <div v-if="!createIsSystem && !form.isManager" style="display: flex; flex-direction: column; gap: 0.25rem">
-          <label for="bridgeAgentId">Agent</label>
-          <Select
-            id="bridgeAgentId"
-            v-model="form.agentId"
-            :options="agentOptions"
-            optionLabel="name"
-            optionValue="id"
-            placeholder="Select an agent"
-            filter
-            :filterFields="['name', 'slug', 'ownerName']"
-            autoFilterFocus
-            style="width: 100%"
-          >
-            <template #option="{ option }">
-              <div style="display: flex; flex-direction: column">
-                <span><span style="font-weight: 600">{{ option.name }}</span> <span style="color: var(--p-text-muted-color); font-size: 0.85em">{{ option.slug }}</span></span>
-                <small style="color: var(--p-text-muted-color)">{{ option.ownerName || 'unknown owner' }}{{ option.isOwner ? ' · you' : '' }}</small>
-              </div>
-            </template>
-          </Select>
         </div>
       </div>
       <template #footer>
@@ -477,3 +464,47 @@ function confirmDelete(bridge: { id: string; name: string }) {
     </Dialog>
   </div>
 </template>
+
+<style scoped>
+.bot-source-switch {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+}
+
+.bot-source-option {
+  border: 1px solid var(--p-surface-border);
+  border-radius: 0.5rem;
+  background: var(--p-surface-0);
+  color: var(--p-text-color);
+  padding: 0.65rem 0.75rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  min-width: 0;
+}
+
+.bot-source-option span {
+  white-space: nowrap;
+}
+
+.bot-source-option.active {
+  border-color: var(--p-primary-color);
+  background: color-mix(in srgb, var(--p-primary-color) 12%, transparent);
+  color: var(--p-primary-color);
+}
+
+:root.dark .bot-source-option {
+  background: var(--p-surface-800);
+}
+
+@media (max-width: 420px) {
+  .bot-source-switch {
+    grid-template-columns: 1fr;
+  }
+}
+</style>

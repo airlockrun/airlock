@@ -5,7 +5,7 @@ import { fromJson, toJson } from '@bufbuild/protobuf'
 import { useAuthStore } from '@/stores/auth'
 import { useCatalogStore } from '@/stores/catalog'
 import { useProvidersStore } from '@/stores/providers'
-import { useModelGrantsStore } from '@/stores/modelGrants'
+import { useBridgesStore } from '@/stores/bridges'
 import {
   useModelCapabilities,
   isLanguage,
@@ -36,7 +36,7 @@ const auth = useAuthStore()
 const passkeys = usePasskeysStore()
 const catalog = useCatalogStore()
 const providersStore = useProvidersStore()
-const modelGrants = useModelGrantsStore()
+const bridgesStore = useBridgesStore()
 const toast = useToast()
 const { groupModels, searchModelOptions } = useModelCapabilities()
 
@@ -100,7 +100,7 @@ async function resumeSetup(step: number) {
     ])
   }
   if (step >= 3) {
-    await modelGrants.fetchGrants().catch(() => {})
+    await bridgesStore.fetchBridges().catch(() => {})
   }
   activeStep.value = step
 }
@@ -328,7 +328,7 @@ async function goToDefaults() {
 }
 
 function skipToDashboard() {
-  toast.add({ severity: 'info', summary: 'Setup skipped', detail: 'You can configure providers and defaults later in Settings.', life: 5000 })
+  toast.add({ severity: 'info', summary: 'Setup skipped', detail: 'You can configure providers, defaults, and Telegram later in Settings and Bridges.', life: 5000 })
   router.push('/')
 }
 
@@ -453,39 +453,40 @@ async function saveDefaults(): Promise<boolean> {
   }
 }
 
-// --- Step 4: Allow models (optional)
-// Configured providers × their catalog models, each with an allow toggle.
-// Defaults are always usable, so this is purely about which extra models the
-// team may assign; deny-by-default means nothing else is assignable until allowed.
-const allowGroups = computed(() =>
-  providersStore.providers
-    .filter(p => p.isEnabled)
-    .map(p => ({
-      provider: p,
-      models: catalog.models
-        .filter(m => m.providerId === p.providerId)
-        .sort((a, b) => a.id.localeCompare(b.id)),
-    }))
-    .filter(g => g.models.length > 0),
-)
-
 async function saveDefaultsAndContinue() {
   if (!(await saveDefaults())) return
-  await modelGrants.fetchGrants().catch(() => {})
+  await bridgesStore.fetchBridges().catch(() => {})
   activeStep.value = 3
 }
 
-async function toggleAllow(provider: { id: string }, model: { id: string }, on: boolean) {
+// --- Step 4: Telegram manager bot
+const managerBotToken = ref('')
+const managerBot = computed(() =>
+  bridgesStore.bridges.find(b => b.type === 'telegram' && b.isManager),
+)
+const managerBotConfigured = computed(() => !!managerBot.value)
+
+async function addManagerBot() {
+  error.value = ''
+  if (!managerBotToken.value) {
+    error.value = 'Paste the Telegram bot token first.'
+    return
+  }
+
+  loading.value = true
   try {
-    if (on) {
-      await modelGrants.grant(provider.id, model.id)
-    } else {
-      const id = modelGrants.grantId(provider.id, model.id)
-      if (id) await modelGrants.revoke(id)
-    }
+    await bridgesStore.createBridge({
+      type: 'telegram',
+      token: managerBotToken.value,
+      isManager: true,
+    })
+    managerBotToken.value = ''
+    toast.add({ severity: 'success', summary: 'Telegram manager bot added', life: 3000 })
+    await bridgesStore.fetchBridges()
   } catch (err: any) {
-    toast.add({ severity: 'error', summary: err.response?.data?.error || 'Update failed', life: 5000 })
-    await modelGrants.fetchGrants()
+    error.value = err.response?.data?.error || 'Failed to add Telegram manager bot.'
+  } finally {
+    loading.value = false
   }
 }
 
@@ -519,7 +520,7 @@ function finishActivation() {
           <Step :value="0">Account</Step>
           <Step :value="1">Providers</Step>
           <Step :value="2">Defaults</Step>
-          <Step :value="3">Models</Step>
+          <Step :value="3">Telegram</Step>
         </StepList>
         <StepPanels>
           <!-- Step 1: Admin Account -->
@@ -751,37 +752,54 @@ function finishActivation() {
             </div>
           </StepPanel>
 
-          <!-- Step 4: Allow Models -->
+          <!-- Step 4: Telegram manager bot -->
           <StepPanel :value="3">
             <div style="display: flex; flex-direction: column; gap: 1.25rem; padding-top: 1rem">
               <Message v-if="error" severity="error" :closable="false">{{ error }}</Message>
-              <p style="color: var(--p-text-muted-color); margin: 0">
-                Models are deny-by-default. Your default models above are always usable; allow any
-                extra models you want members to be able to assign to agents. You can change this
-                later under Models.
-              </p>
-
-              <div v-for="g in allowGroups" :key="g.provider.id" class="allow-group">
-                <div class="allow-group-title">{{ g.provider.displayName || g.provider.providerId }}</div>
-                <div v-for="m in g.models" :key="m.id" class="allow-row">
-                  <div style="display: flex; flex-direction: column">
-                    <span>{{ m.name }}</span>
-                    <span style="font-size: 0.72rem; color: var(--p-text-muted-color)">{{ m.id }}</span>
-                  </div>
-                  <ToggleSwitch
-                    :modelValue="modelGrants.isAllowed(g.provider.id, m.id)"
-                    @update:modelValue="(v: boolean) => toggleAllow(g.provider, m, v)"
-                  />
+              <div class="manager-setup-intro">
+                <div class="manager-setup-icon"><i class="pi pi-send" /></div>
+                <div style="display: flex; flex-direction: column; gap: 0.35rem">
+                  <h3 style="margin: 0">Add a Telegram manager bot</h3>
+                  <p style="color: var(--p-text-muted-color); margin: 0">
+                    The manager bot lets Airlock create new Telegram bots for agents through Telegram's managed-bots flow. It must be a Telegram bot with bot-management permission enabled.
+                  </p>
                 </div>
               </div>
 
-              <p v-if="!allowGroups.length" style="color: var(--p-text-muted-color); margin: 0">
-                No configured models to allow.
-              </p>
+              <Message v-if="managerBotConfigured" severity="success" :closable="false">
+                Manager bot configured: <b>{{ managerBot?.botUsername || managerBot?.name }}</b>
+                <span v-if="managerBot?.managerError"> - {{ managerBot.managerError }}</span>
+              </Message>
+
+              <div class="manager-guide">
+                <div class="manager-guide-title">Telegram setup checklist</div>
+                <ol>
+                  <li>Open <b>@BotFather</b> in Telegram and create a new bot, or choose an existing bot that should manage bot creation.</li>
+                  <li>Open that bot's settings in BotFather and enable the management permission for creating/managing bots. Telegram exposes this as <code>can_manage_bots</code>.</li>
+                  <li>Copy the bot token from BotFather and paste it below.</li>
+                  <li>Airlock verifies the token and refuses setup if Telegram has not granted <code>can_manage_bots</code>.</li>
+                </ol>
+              </div>
+
+              <div v-if="!managerBotConfigured" style="display: flex; flex-direction: column; gap: 0.75rem">
+                <FloatLabel variant="on">
+                  <Password id="manager-bot-token" v-model="managerBotToken" :feedback="false" toggleMask style="width: 100%" :input-style="{ width: '100%' }" />
+                  <label for="manager-bot-token">Telegram bot token</label>
+                </FloatLabel>
+                <small style="color: var(--p-text-muted-color)">
+                  The bot is saved as an unbound manager bridge. Agent bots can be created later from Bridges without pasting tokens manually.
+                </small>
+                <div style="display: flex; justify-content: flex-end">
+                  <Button label="Add manager bot" icon="pi pi-plus" :loading="loading" :disabled="!managerBotToken" @click="addManagerBot" />
+                </div>
+              </div>
 
               <div style="display: flex; justify-content: space-between; align-items: center; border-top: 1px solid var(--p-surface-border); padding-top: 1rem">
                 <Button label="Back" severity="secondary" text icon="pi pi-arrow-left" @click="activeStep = 2" />
-                <Button label="Finish" icon="pi pi-check" @click="finishActivation" />
+                <div style="display: flex; gap: 0.5rem">
+                  <Button v-if="!managerBotConfigured" label="Skip for now" severity="secondary" text @click="finishActivation" />
+                  <Button label="Finish" icon="pi pi-check" :disabled="!managerBotConfigured" @click="finishActivation" />
+                </div>
               </div>
             </div>
           </StepPanel>
@@ -859,22 +877,40 @@ function finishActivation() {
 :deep(.p-steplist)::-webkit-scrollbar {
   display: none; /* WebKit */
 }
-.allow-group {
+.manager-setup-intro {
   display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
+  gap: 0.85rem;
+  align-items: flex-start;
+  padding: 1rem;
+  border: 1px solid var(--p-surface-border);
+  border-radius: var(--p-border-radius);
+  background: color-mix(in srgb, var(--p-primary-color) 8%, transparent);
 }
-.allow-group-title {
-  font-weight: 500;
-  font-size: 0.85rem;
+.manager-setup-icon {
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  background: var(--p-primary-color);
+  color: var(--p-primary-contrast-color);
+  flex: 0 0 auto;
+}
+.manager-guide {
+  border: 1px solid var(--p-surface-border);
+  border-radius: var(--p-border-radius);
+  padding: 0.85rem 1rem;
+}
+.manager-guide-title {
+  font-weight: 600;
+  margin-bottom: 0.5rem;
+}
+.manager-guide ol {
+  margin: 0;
+  padding-left: 1.2rem;
   color: var(--p-text-muted-color);
-  border-bottom: 1px solid var(--p-surface-border);
-  padding-bottom: 0.25rem;
 }
-.allow-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0.35rem 0;
+.manager-guide li + li {
+  margin-top: 0.45rem;
 }
 </style>
