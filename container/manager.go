@@ -31,10 +31,11 @@ type AgentOpts struct {
 
 // ToolserverOpts configures an ephemeral toolserver container for build operations.
 type ToolserverOpts struct {
-	Image   string        // toolserver image (e.g., "agent-builder:v1.0.0")
-	Mounts  []mount.Mount // workspace bind mounts
-	WorkDir string        // -space-dir value inside the container
-	Env     []string      // additional environment variables
+	Image       string        // toolserver image (e.g., "agent-builder:v1.0.0")
+	Mounts      []mount.Mount // workspace bind mounts
+	WorkDir     string        // -space-dir value inside the container
+	Env         []string      // additional environment variables
+	LogCallback func(line string)
 }
 
 // ContainerManager manages the lifecycle of agent containers.
@@ -81,6 +82,10 @@ type ContainerManager interface {
 	// on the build-cancel path so an in-flight tool stops emitting logs
 	// the moment cancel hits, instead of after the 5s graceful timeout.
 	KillToolserver(ctx context.Context, name string) error
+
+	// CaptureToolserverDiagnostics snapshots abnormal runtime state/logs
+	// before the ephemeral toolserver container is removed.
+	CaptureToolserverDiagnostics(ctx context.Context, name, reason string) error
 
 	// RemoveImage removes a Docker image by reference (e.g., "agentID:hash").
 	RemoveImage(ctx context.Context, imageRef string) error

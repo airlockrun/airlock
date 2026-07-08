@@ -328,7 +328,7 @@ func (b *BuildService) Execute(ctx context.Context, plan BuildPlan) (string, err
 	testDBPSQL := b.agentDBURLBase(b.cfg.DBHostAgent, schemaName, dbPassword)
 
 	// ── Phase C: codegen (Sol) if Instruction is non-empty ─────────────
-	commitHash, exitStatus, exitMessage, codegenErr := b.runCodegen(ctx, plan, agent, build, agentID, agentUUID, testDBURL, testDBPSQL, cloneName, goProxyDir, solLog, bp)
+	commitHash, exitStatus, exitMessage, codegenErr := b.runCodegen(ctx, plan, agent, build, agentID, agentUUID, testDBURL, testDBPSQL, cloneName, goProxyDir, solLog, dockerLog, bp)
 	if codegenErr != nil {
 		// User cancelled mid-codegen: record it as cancelled (not failed) so
 		// the lifecycle event clears the "building" badge and the row reads
