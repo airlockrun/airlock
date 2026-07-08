@@ -5,3 +5,7 @@
 # doesn't break Vite at build time.
 ignoredBuiltDependencies:
   - esbuild
+
+overrides:
+  esbuild: 0.28.1
+  postcss: 8.5.15
