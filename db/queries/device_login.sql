@@ -1,10 +1,10 @@
 -- name: CreateDeviceLoginSession :one
 INSERT INTO device_login_sessions (
-    device_code_hash, user_code_hash, user_code_display, client_name,
+    device_code_hash, user_code_hash, user_code_display, client_name, device_name,
     status, expires_at, poll_interval_seconds
 )
 VALUES (
-    @device_code_hash, @user_code_hash, @user_code_display, @client_name,
+    @device_code_hash, @user_code_hash, @user_code_display, @client_name, @device_name,
     'pending', @expires_at, @poll_interval_seconds
 )
 RETURNING *;

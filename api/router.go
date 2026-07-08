@@ -187,6 +187,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		r.Post("/activate", authHandler.Activate)
 		r.Post("/login", authHandler.Login)
 		r.Post("/refresh", authHandler.Refresh)
+		r.Post("/logout", authHandler.Logout)
 		r.Post("/device/begin", deviceLoginH.Begin)
 		r.Post("/device/poll", deviceLoginH.Poll)
 
@@ -263,6 +264,8 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		r.Use(securedAccountGate)
 
 		r.Get("/me", authHandler.Me)
+		r.Get("/sessions", authHandler.ListSessions)
+		r.Delete("/sessions/{id}", authHandler.RevokeSession)
 
 		// Per-user passkeys + password. Self-service: any authenticated user
 		// manages their own; not admin-gated. The register endpoints are on

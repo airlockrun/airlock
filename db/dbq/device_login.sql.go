@@ -17,7 +17,7 @@ SET status = 'approved', user_id = $1, approved_at = now()
 WHERE user_code_hash = $2
   AND status = 'pending'
   AND expires_at > now()
-RETURNING id, device_code_hash, user_code_hash, user_code_display, client_name, status, user_id, created_at, expires_at, approved_at, denied_at, consumed_at, last_polled_at, poll_interval_seconds
+RETURNING id, device_code_hash, user_code_hash, user_code_display, client_name, device_name, status, user_id, created_at, expires_at, approved_at, denied_at, consumed_at, last_polled_at, poll_interval_seconds
 `
 
 type ApproveDeviceLoginParams struct {
@@ -34,6 +34,7 @@ func (q *Queries) ApproveDeviceLogin(ctx context.Context, arg ApproveDeviceLogin
 		&i.UserCodeHash,
 		&i.UserCodeDisplay,
 		&i.ClientName,
+		&i.DeviceName,
 		&i.Status,
 		&i.UserID,
 		&i.CreatedAt,
@@ -54,7 +55,7 @@ WHERE id = $1
   AND status = 'approved'
   AND consumed_at IS NULL
   AND expires_at > now()
-RETURNING id, device_code_hash, user_code_hash, user_code_display, client_name, status, user_id, created_at, expires_at, approved_at, denied_at, consumed_at, last_polled_at, poll_interval_seconds
+RETURNING id, device_code_hash, user_code_hash, user_code_display, client_name, device_name, status, user_id, created_at, expires_at, approved_at, denied_at, consumed_at, last_polled_at, poll_interval_seconds
 `
 
 func (q *Queries) ConsumeApprovedDeviceLogin(ctx context.Context, id pgtype.UUID) (DeviceLoginSession, error) {
@@ -66,6 +67,7 @@ func (q *Queries) ConsumeApprovedDeviceLogin(ctx context.Context, id pgtype.UUID
 		&i.UserCodeHash,
 		&i.UserCodeDisplay,
 		&i.ClientName,
+		&i.DeviceName,
 		&i.Status,
 		&i.UserID,
 		&i.CreatedAt,
@@ -81,14 +83,14 @@ func (q *Queries) ConsumeApprovedDeviceLogin(ctx context.Context, id pgtype.UUID
 
 const createDeviceLoginSession = `-- name: CreateDeviceLoginSession :one
 INSERT INTO device_login_sessions (
-    device_code_hash, user_code_hash, user_code_display, client_name,
+    device_code_hash, user_code_hash, user_code_display, client_name, device_name,
     status, expires_at, poll_interval_seconds
 )
 VALUES (
-    $1, $2, $3, $4,
-    'pending', $5, $6
+    $1, $2, $3, $4, $5,
+    'pending', $6, $7
 )
-RETURNING id, device_code_hash, user_code_hash, user_code_display, client_name, status, user_id, created_at, expires_at, approved_at, denied_at, consumed_at, last_polled_at, poll_interval_seconds
+RETURNING id, device_code_hash, user_code_hash, user_code_display, client_name, device_name, status, user_id, created_at, expires_at, approved_at, denied_at, consumed_at, last_polled_at, poll_interval_seconds
 `
 
 type CreateDeviceLoginSessionParams struct {
@@ -96,6 +98,7 @@ type CreateDeviceLoginSessionParams struct {
 	UserCodeHash        string             `json:"user_code_hash"`
 	UserCodeDisplay     string             `json:"user_code_display"`
 	ClientName          string             `json:"client_name"`
+	DeviceName          string             `json:"device_name"`
 	ExpiresAt           pgtype.Timestamptz `json:"expires_at"`
 	PollIntervalSeconds int32              `json:"poll_interval_seconds"`
 }
@@ -106,6 +109,7 @@ func (q *Queries) CreateDeviceLoginSession(ctx context.Context, arg CreateDevice
 		arg.UserCodeHash,
 		arg.UserCodeDisplay,
 		arg.ClientName,
+		arg.DeviceName,
 		arg.ExpiresAt,
 		arg.PollIntervalSeconds,
 	)
@@ -116,6 +120,7 @@ func (q *Queries) CreateDeviceLoginSession(ctx context.Context, arg CreateDevice
 		&i.UserCodeHash,
 		&i.UserCodeDisplay,
 		&i.ClientName,
+		&i.DeviceName,
 		&i.Status,
 		&i.UserID,
 		&i.CreatedAt,
@@ -147,7 +152,7 @@ SET status = 'denied', denied_at = now()
 WHERE user_code_hash = $1
   AND status = 'pending'
   AND expires_at > now()
-RETURNING id, device_code_hash, user_code_hash, user_code_display, client_name, status, user_id, created_at, expires_at, approved_at, denied_at, consumed_at, last_polled_at, poll_interval_seconds
+RETURNING id, device_code_hash, user_code_hash, user_code_display, client_name, device_name, status, user_id, created_at, expires_at, approved_at, denied_at, consumed_at, last_polled_at, poll_interval_seconds
 `
 
 func (q *Queries) DenyDeviceLogin(ctx context.Context, userCodeHash string) (DeviceLoginSession, error) {
@@ -159,6 +164,7 @@ func (q *Queries) DenyDeviceLogin(ctx context.Context, userCodeHash string) (Dev
 		&i.UserCodeHash,
 		&i.UserCodeDisplay,
 		&i.ClientName,
+		&i.DeviceName,
 		&i.Status,
 		&i.UserID,
 		&i.CreatedAt,
@@ -173,7 +179,7 @@ func (q *Queries) DenyDeviceLogin(ctx context.Context, userCodeHash string) (Dev
 }
 
 const getDeviceLoginByUserCodeHash = `-- name: GetDeviceLoginByUserCodeHash :one
-SELECT id, device_code_hash, user_code_hash, user_code_display, client_name, status, user_id, created_at, expires_at, approved_at, denied_at, consumed_at, last_polled_at, poll_interval_seconds FROM device_login_sessions WHERE user_code_hash = $1
+SELECT id, device_code_hash, user_code_hash, user_code_display, client_name, device_name, status, user_id, created_at, expires_at, approved_at, denied_at, consumed_at, last_polled_at, poll_interval_seconds FROM device_login_sessions WHERE user_code_hash = $1
 `
 
 func (q *Queries) GetDeviceLoginByUserCodeHash(ctx context.Context, userCodeHash string) (DeviceLoginSession, error) {
@@ -185,6 +191,7 @@ func (q *Queries) GetDeviceLoginByUserCodeHash(ctx context.Context, userCodeHash
 		&i.UserCodeHash,
 		&i.UserCodeDisplay,
 		&i.ClientName,
+		&i.DeviceName,
 		&i.Status,
 		&i.UserID,
 		&i.CreatedAt,
@@ -199,7 +206,7 @@ func (q *Queries) GetDeviceLoginByUserCodeHash(ctx context.Context, userCodeHash
 }
 
 const getDeviceLoginForPoll = `-- name: GetDeviceLoginForPoll :one
-SELECT id, device_code_hash, user_code_hash, user_code_display, client_name, status, user_id, created_at, expires_at, approved_at, denied_at, consumed_at, last_polled_at, poll_interval_seconds FROM device_login_sessions WHERE device_code_hash = $1
+SELECT id, device_code_hash, user_code_hash, user_code_display, client_name, device_name, status, user_id, created_at, expires_at, approved_at, denied_at, consumed_at, last_polled_at, poll_interval_seconds FROM device_login_sessions WHERE device_code_hash = $1
 `
 
 func (q *Queries) GetDeviceLoginForPoll(ctx context.Context, deviceCodeHash string) (DeviceLoginSession, error) {
@@ -211,6 +218,7 @@ func (q *Queries) GetDeviceLoginForPoll(ctx context.Context, deviceCodeHash stri
 		&i.UserCodeHash,
 		&i.UserCodeDisplay,
 		&i.ClientName,
+		&i.DeviceName,
 		&i.Status,
 		&i.UserID,
 		&i.CreatedAt,

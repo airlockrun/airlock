@@ -63,7 +63,7 @@ async function decide(decision: 'approve' | 'deny') {
     <Card class="device-login-card">
       <template #title>Sign in to Airlock CLI</template>
       <template #content>
-        <Message severity="info" :closable="false" class="mb-4">
+        <Message severity="info" :closable="false" class="device-login-info">
           Enter the code shown in your terminal. For security, Airlock does not accept login codes from links.
         </Message>
 
@@ -81,7 +81,7 @@ async function decide(decision: 'approve' | 'deny') {
           @keyup.enter="inspect"
         />
 
-        <Button label="Check code" class="mt-3" :disabled="!canInspect" :loading="inspecting" @click="inspect" />
+        <Button label="Check code" class="check-code-button" :disabled="!canInspect" :loading="inspecting" @click="inspect" />
 
         <div v-if="result" class="request-box">
           <div class="request-row">
@@ -91,6 +91,10 @@ async function decide(decision: 'approve' | 'deny') {
           <div class="request-row">
             <span>Requested by</span>
             <strong>{{ result.clientName || 'air CLI' }}</strong>
+          </div>
+          <div v-if="result.deviceName" class="request-row">
+            <span>Device</span>
+            <strong>{{ result.deviceName }}</strong>
           </div>
           <div class="request-row">
             <span>Account</span>
@@ -127,12 +131,18 @@ async function decide(decision: 'approve' | 'deny') {
   font-weight: 600;
   margin-bottom: 0.5rem;
 }
+.device-login-info {
+  margin-bottom: 1rem;
+}
 .code-input {
   width: 100%;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 1.35rem;
   letter-spacing: 0.12em;
   text-transform: uppercase;
+}
+.check-code-button {
+  margin-top: 0.75rem;
 }
 .request-box {
   margin-top: 1.25rem;

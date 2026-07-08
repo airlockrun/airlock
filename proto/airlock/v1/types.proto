@@ -579,6 +579,18 @@ message Passkey {
   bool backup_eligible = 5;
 }
 
+// UserSession is a first-party web or CLI login session. Refresh tokens are
+// stored server-side and can be revoked from the Security page or by logout.
+message UserSession {
+  string id = 1;
+  string kind = 2; // web, cli
+  string client_name = 3;
+  string device_name = 4;
+  google.protobuf.Timestamp created_at = 5;
+  google.protobuf.Timestamp last_used_at = 6;
+  google.protobuf.Timestamp expires_at = 7;
+}
+
 // AgentGitConfig describes an agent's external git remote connection.
 // All string fields are empty when the agent is in internal-only mode.
 message AgentGitConfig {

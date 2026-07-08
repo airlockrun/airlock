@@ -380,6 +380,7 @@ type DeviceLoginSession struct {
 	UserCodeHash        string             `json:"user_code_hash"`
 	UserCodeDisplay     string             `json:"user_code_display"`
 	ClientName          string             `json:"client_name"`
+	DeviceName          string             `json:"device_name"`
 	Status              string             `json:"status"`
 	UserID              pgtype.UUID        `json:"user_id"`
 	CreatedAt           pgtype.Timestamptz `json:"created_at"`
@@ -691,6 +692,19 @@ type User struct {
 	MustChangePassword bool               `json:"must_change_password"`
 	CreatedAt          pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
+}
+
+type UserSession struct {
+	ID               pgtype.UUID        `json:"id"`
+	UserID           pgtype.UUID        `json:"user_id"`
+	Kind             string             `json:"kind"`
+	ClientName       string             `json:"client_name"`
+	DeviceName       string             `json:"device_name"`
+	RefreshTokenHash []byte             `json:"refresh_token_hash"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	LastUsedAt       pgtype.Timestamptz `json:"last_used_at"`
+	ExpiresAt        pgtype.Timestamptz `json:"expires_at"`
+	RevokedAt        pgtype.Timestamptz `json:"revoked_at"`
 }
 
 type WebauthnCeremony struct {

@@ -43,8 +43,13 @@ message RefreshResponse {
   string access_token = 1;
 }
 
+message LogoutRequest {
+  string refresh_token = 1;
+}
+
 message DeviceLoginBeginRequest {
   string client_name = 1;
+  string device_name = 2;
 }
 
 message DeviceLoginBeginResponse {
@@ -76,6 +81,7 @@ message DeviceLoginInspectResponse {
   string user_code = 2;
   string client_name = 3;
   google.protobuf.Timestamp expires_at = 4;
+  string device_name = 5;
 }
 
 message DeviceLoginApproveRequest {
@@ -122,6 +128,10 @@ message ChangePasswordRequest {
 message ChangePasswordResponse {
   string access_token = 1;
   string refresh_token = 2;
+}
+
+message ListUserSessionsResponse {
+  repeated UserSession sessions = 1;
 }
 
 message ListUsersResponse {

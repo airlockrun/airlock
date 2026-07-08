@@ -500,6 +500,7 @@ CREATE TABLE public.device_login_sessions (
     user_code_hash text NOT NULL,
     user_code_display text NOT NULL,
     client_name text NOT NULL,
+    device_name text NOT NULL,
     status text NOT NULL,
     user_id uuid,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
@@ -510,6 +511,25 @@ CREATE TABLE public.device_login_sessions (
     last_polled_at timestamp with time zone,
     poll_interval_seconds integer NOT NULL,
     CONSTRAINT device_login_sessions_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'approved'::text, 'denied'::text])))
+);
+
+
+--
+-- Name: user_sessions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.user_sessions (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id uuid NOT NULL,
+    kind text NOT NULL,
+    client_name text NOT NULL,
+    device_name text NOT NULL,
+    refresh_token_hash bytea NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    last_used_at timestamp with time zone,
+    expires_at timestamp with time zone NOT NULL,
+    revoked_at timestamp with time zone,
+    CONSTRAINT user_sessions_kind_check CHECK ((kind = ANY (ARRAY['web'::text, 'cli'::text])))
 );
 
 
@@ -1459,6 +1479,22 @@ ALTER TABLE ONLY public.oauth_refresh_tokens
 
 
 --
+-- Name: user_sessions user_sessions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.user_sessions
+    ADD CONSTRAINT user_sessions_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: user_sessions user_sessions_refresh_token_hash_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.user_sessions
+    ADD CONSTRAINT user_sessions_refresh_token_hash_key UNIQUE (refresh_token_hash);
+
+
+--
 -- Name: oauth_states oauth_states_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -1835,6 +1871,13 @@ CREATE INDEX oauth_refresh_family_idx ON public.oauth_refresh_tokens USING btree
 --
 
 CREATE INDEX oauth_refresh_user_client_agent_idx ON public.oauth_refresh_tokens USING btree (user_id, client_id, agent_id);
+
+
+--
+-- Name: user_sessions_user_active_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX user_sessions_user_active_idx ON public.user_sessions USING btree (user_id, created_at DESC) WHERE (revoked_at IS NULL);
 
 
 --
@@ -2448,6 +2491,14 @@ ALTER TABLE ONLY public.oauth_refresh_tokens
 
 
 --
+-- Name: user_sessions user_sessions_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.user_sessions
+    ADD CONSTRAINT user_sessions_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+
+
+--
 -- Name: device_login_sessions device_login_sessions_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -2769,6 +2820,7 @@ DROP TABLE IF EXISTS public.oauth_clients CASCADE;
 DROP TABLE IF EXISTS public.oauth_grants CASCADE;
 DROP TABLE IF EXISTS public.oauth_refresh_tokens CASCADE;
 DROP TABLE IF EXISTS public.oauth_states CASCADE;
+DROP TABLE IF EXISTS public.user_sessions CASCADE;
 DROP TABLE IF EXISTS public.platform_identities CASCADE;
 DROP TABLE IF EXISTS public.principals CASCADE;
 DROP TABLE IF EXISTS public.providers CASCADE;

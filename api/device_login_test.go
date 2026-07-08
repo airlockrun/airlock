@@ -28,7 +28,7 @@ func TestDeviceLoginFlow(t *testing.T) {
 	}
 
 	inspect := deviceLoginInspect(t, h, user, begin.UserCode)
-	if inspect.Status != "pending" || inspect.UserCode != begin.UserCode {
+	if inspect.Status != "pending" || inspect.UserCode != begin.UserCode || inspect.DeviceName != "dev@workstation" {
 		t.Fatalf("inspect = %#v", inspect)
 	}
 
@@ -40,6 +40,13 @@ func TestDeviceLoginFlow(t *testing.T) {
 	poll := deviceLoginPoll(t, h, begin.DeviceCode)
 	if poll.Status != "approved" || poll.AccessToken == "" || poll.RefreshToken == "" || poll.User.GetEmail() == "" {
 		t.Fatalf("poll approved = %#v", poll)
+	}
+	sessions, err := dbq.New(testDB.Pool()).ListUserSessionsByUser(context.Background(), toPgUUID(user))
+	if err != nil {
+		t.Fatalf("ListUserSessionsByUser: %v", err)
+	}
+	if len(sessions) != 1 || sessions[0].Kind != userSessionKindCLI || sessions[0].DeviceName != "dev@workstation" {
+		t.Fatalf("sessions = %#v", sessions)
 	}
 
 	poll = deviceLoginPoll(t, h, begin.DeviceCode)
@@ -63,7 +70,7 @@ func seedDeviceLoginUser(t *testing.T) uuid.UUID {
 
 func deviceLoginBegin(t *testing.T, h *deviceLoginHandler) *airlockv1.DeviceLoginBeginResponse {
 	t.Helper()
-	body, err := protoMarshal.Marshal(&airlockv1.DeviceLoginBeginRequest{ClientName: "air CLI"})
+	body, err := protoMarshal.Marshal(&airlockv1.DeviceLoginBeginRequest{ClientName: "air CLI", DeviceName: "dev@workstation"})
 	if err != nil {
 		t.Fatal(err)
 	}
