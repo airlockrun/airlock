@@ -19,7 +19,6 @@ import (
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/airlockrun/airlock/secrets"
-	bridgessvc "github.com/airlockrun/airlock/service/bridges"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"
@@ -339,7 +338,11 @@ func (m *BridgeManager) Start(ctx context.Context) error {
 			continue
 		}
 		m.registerCommands(ctx, driver, decrypted)
-		m.registerWebAppMenuButton(ctx, driver, decrypted)
+		if !decrypted.AgentID.Valid {
+			m.clearWebAppMenuButton(ctx, driver, decrypted)
+		} else {
+			m.syncWebAppMenuButton(ctx, driver, decrypted)
+		}
 		m.startPoller(ctx, decrypted)
 	}
 
@@ -347,46 +350,89 @@ func (m *BridgeManager) Start(ctx context.Context) error {
 	return nil
 }
 
-// registerWebAppMenuButton configures the bot's persistent chat menu
-// button on Telegram bridges so users get a one-tap path into the
-// agent's HTML UI from inside Telegram. Auth happens transparently via
-// initData verification at the airlock proxy. Skipped for non-telegram
-// bridges, system bridges (no agent_id), and bridges with WebAppEnabled
-// disabled. Failures are logged but non-fatal — the bridge still works
-// for chat; users just don't get the button.
-func (m *BridgeManager) registerWebAppMenuButton(ctx context.Context, driver BridgeDriver, br dbq.Bridge) {
+// expectedWebAppMenuURL returns the Telegram Web App URL for an agent-bound
+// bridge. The URL opens the agent subdomain bootstrap path that verifies
+// Telegram initData and issues an agent-subdomain session cookie.
+func (m *BridgeManager) expectedWebAppMenuURL(ctx context.Context, br dbq.Bridge) (string, bool) {
 	if br.Type != "telegram" || !br.AgentID.Valid {
-		return
+		return "", false
 	}
-	tg, ok := driver.(*TelegramDriver)
-	if !ok {
-		return
-	}
-	settings := bridgessvc.DecodeSettings(br.Settings)
 	q := dbq.New(m.db.Pool())
 	agent, err := q.GetAgentByID(ctx, br.AgentID)
 	if err != nil {
 		m.logger.Warn("web-app menu button: agent lookup failed",
 			zap.String("bridge", br.Name),
 			zap.Error(err))
+		return "", false
+	}
+	return m.agentBaseURL(agent.Slug) + "/__air/tg/start?b=" + pgUUID(br.ID).String(), true
+}
+
+// syncWebAppMenuButton converges a Telegram bridge's persistent chat menu
+// button to the expected agent Web App URL. It reads Telegram state first and
+// only writes when the URL is absent or stale. Managed bridges skip this during
+// AddBridge because Telegram clients can race immediately after bot creation;
+// /start and reconciliation still repair the button.
+func (m *BridgeManager) syncWebAppMenuButton(ctx context.Context, driver BridgeDriver, br dbq.Bridge) {
+	url, ok := m.expectedWebAppMenuURL(ctx, br)
+	if !ok {
 		return
 	}
-	var url string
-	if settings.WebAppEnabled {
-		url = m.agentBaseURL(agent.Slug) + "/__air/tg/start?b=" + pgUUID(br.ID).String()
+	tg, ok := driver.(*TelegramDriver)
+	if !ok {
+		return
+	}
+	button, err := tg.GetMenuButton(ctx, br.BotTokenRef)
+	if err != nil {
+		m.logger.Warn("web-app menu button: getChatMenuButton failed",
+			zap.String("bridge", br.Name),
+			zap.Error(err))
+		return
+	}
+	if button.Type == "web_app" && button.WebAppURL == url {
+		return
 	}
 	if err := tg.SetMenuButton(ctx, br.BotTokenRef, url); err != nil {
 		m.logger.Warn("web-app menu button: setChatMenuButton failed",
 			zap.String("bridge", br.Name),
-			zap.Bool("enabled", settings.WebAppEnabled),
 			zap.String("url", url),
 			zap.Error(err))
 		return
 	}
 	m.logger.Info("web-app menu button registered",
 		zap.String("bridge", br.Name),
-		zap.Bool("enabled", settings.WebAppEnabled),
 		zap.String("url", url))
+}
+
+// clearWebAppMenuButton resets the Telegram menu button when a bridge no
+// longer targets an agent. Telegram stores the button server-side, so Airlock
+// must clear it when a bridge is rebound to system/unbound use.
+func (m *BridgeManager) clearWebAppMenuButton(ctx context.Context, driver BridgeDriver, br dbq.Bridge) {
+	if br.Type != "telegram" {
+		return
+	}
+	tg, ok := driver.(*TelegramDriver)
+	if !ok {
+		return
+	}
+	button, err := tg.GetMenuButton(ctx, br.BotTokenRef)
+	if err != nil {
+		m.logger.Warn("web-app menu button: getChatMenuButton failed before clear",
+			zap.String("bridge", br.Name),
+			zap.Error(err))
+		// A default write is safe and ensures stale state is cleared when the
+		// read path is unavailable but setChatMenuButton still works.
+	}
+	if err == nil && button.Type != "web_app" {
+		return
+	}
+	if err := tg.SetMenuButton(ctx, br.BotTokenRef, ""); err != nil {
+		m.logger.Warn("web-app menu button: clear failed",
+			zap.String("bridge", br.Name),
+			zap.Error(err))
+		return
+	}
+	m.logger.Info("web-app menu button cleared", zap.String("bridge", br.Name))
 }
 
 // registerCommands pushes the slash-command registry to drivers that
@@ -434,7 +480,11 @@ func (m *BridgeManager) AddBridge(bridgeID uuid.UUID) {
 		return
 	}
 	m.registerCommands(m.ctx, driver, br)
-	m.registerWebAppMenuButton(m.ctx, driver, br)
+	if !br.AgentID.Valid {
+		m.clearWebAppMenuButton(m.ctx, driver, br)
+	} else if !br.Managed {
+		m.syncWebAppMenuButton(m.ctx, driver, br)
+	}
 	// Stop any stale poller for the same bridge ID before starting a new one.
 	m.cancelPoller(bridgeID)
 	m.startPoller(m.ctx, br)
@@ -630,6 +680,9 @@ func (m *BridgeManager) HandleEvent(ctx context.Context, event BridgeEvent) erro
 		PlatformUserID: event.SenderID,
 	})
 	if idErr != nil {
+		if isStartCommand(event.Text) {
+			return m.handleAuthCommand(ctx, br, driver, event)
+		}
 		m.logger.Debug("dropping unlinked sender (bridge requires a linked identity)",
 			zap.String("bridge", br.Name),
 			zap.String("sender_id", event.SenderID),
@@ -637,6 +690,9 @@ func (m *BridgeManager) HandleEvent(ctx context.Context, event BridgeEvent) erro
 		return nil
 	}
 	userID := pgUUID(identity.UserID)
+	if isStartCommand(event.Text) {
+		m.syncWebAppMenuButton(ctx, driver, br)
+	}
 
 	// Resolve effective echo for this conversation from the user's
 	// per-channel override, falling back to the driver default.
@@ -879,15 +935,6 @@ func (m *BridgeManager) startPoller(parent context.Context, br dbq.Bridge) {
 				case <-ctx.Done():
 					return
 				case ev := <-msgEvents:
-					// Bind the web-app menu button on /start — not merely the
-					// first inbound, since a service message (managed_bot_created,
-					// etc.) can arrive before it. By /start the user is in the
-					// chat, so setChatMenuButton lands, sidestepping the
-					// create-time client race. Idempotent, so re-binding on a
-					// later /start is harmless.
-					if isStartCommand(ev.Text) {
-						m.registerWebAppMenuButton(ctx, driver, br)
-					}
 					if err := m.HandleEvent(ctx, ev); err != nil {
 						m.logger.Error("handle event failed",
 							zap.String("bridge", br.Name), zap.Error(err))
@@ -963,11 +1010,12 @@ func (m *BridgeManager) startPoller(parent context.Context, br dbq.Bridge) {
 			})
 
 			// Periodically re-sync the bot-controlled identity (display name +
-			// @handle, plus can_manage_bots for manager bridges) from getMe,
-			// interleaved between poll cycles — getMe doesn't conflict with
-			// getUpdates. Throttled to ~10 min; the zero lastIdentityCheck makes
-			// the first iteration run it.
-			m.reconcileBridgeIdentity(ctx, &br, &lastIdentityCheck)
+			// @handle, plus can_manage_bots for manager bridges) and repair the
+			// Telegram Web App menu button. Throttled to ~10 min; the zero
+			// lastIdentityCheck makes the first iteration run it.
+			if m.reconcileBridgeIdentity(ctx, &br, &lastIdentityCheck) {
+				m.syncWebAppMenuButton(ctx, driver, br)
+			}
 		}
 	}()
 }

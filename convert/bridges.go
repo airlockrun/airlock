@@ -8,10 +8,8 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// BridgeFieldsToProto packs the union of a Bridge row plus an
-// optional owner join into the wire BridgeInfo. The settings JSONB
-// is decoded via bridgessvc.DecodeSettings so every caller sees the
-// same defaulted view.
+// BridgeFieldsToProto packs the union of a Bridge row plus an optional owner
+// join into the wire BridgeInfo.
 func BridgeFieldsToProto(
 	id, agentID, ownerPrincipalID pgtype.UUID,
 	typ, name, botUsername, status string,

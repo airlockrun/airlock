@@ -76,17 +76,17 @@ func (m *BridgeManager) handleManagerBotCreated(ctx context.Context, br dbq.Brid
 // the admin's is_manager intent is never auto-flipped; manager behavior gates on
 // the live capability instead. last is the per-poller throttle timestamp
 // (zero → run on the first poll). Values are kept as-is on a getMe blip rather
-// than blanked.
-func (m *BridgeManager) reconcileBridgeIdentity(ctx context.Context, br *dbq.Bridge, last *time.Time) {
+// than blanked. Returns true when the throttle allowed a reconciliation pass.
+func (m *BridgeManager) reconcileBridgeIdentity(ctx context.Context, br *dbq.Bridge, last *time.Time) bool {
 	now := time.Now()
 	if !last.IsZero() && now.Sub(*last) < bridgeIdentityInterval {
-		return
+		return false
 	}
 	*last = now
 
 	tg, ok := m.drivers[br.Type].(*TelegramDriver)
 	if !ok {
-		return // Telegram is the only platform; defensive
+		return true // Telegram is the only platform; defensive
 	}
 	username, name, _, canManage, err := tg.GetMeFull(ctx, br.BotTokenRef)
 	q := dbq.New(m.db.Pool())
@@ -115,7 +115,7 @@ func (m *BridgeManager) reconcileBridgeIdentity(ctx context.Context, br *dbq.Bri
 	}
 
 	if !br.IsManager {
-		return
+		return true
 	}
 	mgrErr := ""
 	switch {
@@ -131,10 +131,11 @@ func (m *BridgeManager) reconcileBridgeIdentity(ctx context.Context, br *dbq.Bri
 	}); rerr != nil {
 		m.logger.Warn("reconcile manager bridge failed",
 			zap.String("bridge", br.Name), zap.Error(rerr))
-		return
+		return true
 	}
 	if mgrErr != "" {
 		m.logger.Warn("manager bridge capability degraded",
 			zap.String("bridge", br.Name), zap.String("error", mgrErr))
 	}
+	return true
 }

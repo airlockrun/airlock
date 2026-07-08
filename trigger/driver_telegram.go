@@ -576,6 +576,35 @@ func (d *TelegramDriver) GetManagedBotToken(ctx context.Context, managerToken st
 	return result.Result, nil
 }
 
+// TelegramMenuButton is the subset of Telegram's ChatMenuButton shape Airlock
+// needs to converge the persistent Web App entrypoint.
+type TelegramMenuButton struct {
+	Type      string
+	WebAppURL string
+}
+
+// GetMenuButton reads the bot's default chat menu button. Airlock uses the
+// default button rather than per-chat buttons, so chat_id is intentionally
+// omitted.
+func (d *TelegramDriver) GetMenuButton(ctx context.Context, token string) (TelegramMenuButton, error) {
+	var result struct {
+		OK     bool `json:"ok"`
+		Result struct {
+			Type   string `json:"type"`
+			WebApp struct {
+				URL string `json:"url"`
+			} `json:"web_app"`
+		} `json:"result"`
+	}
+	if err := d.callTelegramJSON(ctx, token, "getChatMenuButton", nil, &result); err != nil {
+		return TelegramMenuButton{}, err
+	}
+	if !result.OK {
+		return TelegramMenuButton{}, fmt.Errorf("telegram getChatMenuButton: not ok")
+	}
+	return TelegramMenuButton{Type: result.Result.Type, WebAppURL: result.Result.WebApp.URL}, nil
+}
+
 // SetMenuButton configures the bot's default chat menu button to launch
 // a Telegram Web App at the given URL. The button is persistent — it
 // shows for every private chat the bot is in, opens the URL in
