@@ -143,6 +143,21 @@ func TestSyncWorkdirToRepoAndCommit(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(workDir, "DIAGNOSTICS.md"), []byte("secret context"), 0o644); err != nil {
 		t.Fatalf("write DIAGNOSTICS.md: %v", err)
 	}
+	if err := os.MkdirAll(filepath.Join(workDir, ".airlock", "toolchain", "bin"), 0o755); err != nil {
+		t.Fatalf("mkdir toolchain: %v", err)
+	}
+	if err := os.Symlink("../cache/missing-tailwindcss", filepath.Join(workDir, ".airlock", "toolchain", "bin", "tailwindcss")); err != nil {
+		t.Fatalf("symlink toolchain tailwindcss: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(workDir, ".airlock", "local", "storage"), 0o755); err != nil {
+		t.Fatalf("mkdir local storage: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workDir, ".airlock", "local", "storage", "state.json"), []byte("{}"), 0o644); err != nil {
+		t.Fatalf("write local state: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workDir, ".airlock", "agent.toml"), []byte("slug = \"agent\"\n"), 0o644); err != nil {
+		t.Fatalf("write agent binding: %v", err)
+	}
 
 	if err := SyncWorkdirToRepo(workDir, repoPath, []string{"DIAGNOSTICS.md"}); err != nil {
 		t.Fatalf("SyncWorkdirToRepo: %v", err)
@@ -157,6 +172,18 @@ func TestSyncWorkdirToRepoAndCommit(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(repoPath, "DIAGNOSTICS.md")); !os.IsNotExist(err) {
 		t.Error("DIAGNOSTICS.md must not be mirrored into repo")
+	}
+	if _, err := os.Stat(filepath.Join(repoPath, ".airlock", "toolchain")); !os.IsNotExist(err) {
+		t.Errorf(".airlock/toolchain must not be mirrored into repo, stat err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(repoPath, ".airlock", "local")); !os.IsNotExist(err) {
+		t.Errorf(".airlock/local must not be mirrored into repo, stat err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(repoPath, ".airlock", "local", "storage")); !os.IsNotExist(err) {
+		t.Errorf(".airlock/local/storage must not be mirrored into repo, stat err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(repoPath, ".airlock", "agent.toml")); err != nil {
+		t.Errorf(".airlock/agent.toml should still be mirrored into repo: %v", err)
 	}
 
 	hash, committed, err := CommitWorktree(repoPath, "test change")
@@ -175,8 +202,20 @@ func TestSyncWorkdirToRepoAndCommit(t *testing.T) {
 	if strings.Contains(tracked, "DIAGNOSTICS.md") {
 		t.Error("DIAGNOSTICS.md leaked into the commit")
 	}
+	if strings.Contains(tracked, ".airlock/toolchain") {
+		t.Error(".airlock/toolchain leaked into the commit")
+	}
+	if strings.Contains(tracked, ".airlock/local") {
+		t.Error(".airlock/local leaked into the commit")
+	}
+	if strings.Contains(tracked, ".airlock/local/storage") {
+		t.Error(".airlock/local/storage leaked into the commit")
+	}
 	if !strings.Contains(tracked, "added.go") {
 		t.Error("added.go not tracked after commit")
+	}
+	if !strings.Contains(tracked, ".airlock/agent.toml") {
+		t.Error(".airlock/agent.toml not tracked after commit")
 	}
 	if strings.Contains(tracked, "go.mod") {
 		t.Error("go.mod deletion not committed")
