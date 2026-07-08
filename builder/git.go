@@ -238,13 +238,7 @@ func SyncWorkdirToRepo(workDir, repoPath string, exclude []string) error {
 		if rel == "." {
 			return nil
 		}
-		if firstPathSegment(rel) == ".git" { // defensive — workDir has none
-			if d.IsDir() {
-				return fs.SkipDir
-			}
-			return nil
-		}
-		if _, skip := ex[rel]; skip {
+		if skipWorkdirMirrorPath(rel, d.IsDir(), ex) {
 			if d.IsDir() {
 				return fs.SkipDir
 			}
@@ -275,7 +269,7 @@ func SyncWorkdirToRepo(workDir, repoPath string, exclude []string) error {
 		if rel == "" {
 			continue
 		}
-		_, excluded := ex[rel]
+		excluded := skipWorkdirMirrorPath(rel, false, ex)
 		_, statErr := os.Stat(filepath.Join(workDir, rel))
 		if excluded || errors.Is(statErr, fs.ErrNotExist) {
 			if rmErr := os.Remove(filepath.Join(repoPath, rel)); rmErr != nil && !errors.Is(rmErr, fs.ErrNotExist) {
@@ -284,6 +278,32 @@ func SyncWorkdirToRepo(workDir, repoPath string, exclude []string) error {
 		}
 	}
 	return nil
+}
+
+func skipWorkdirMirrorPath(rel string, isDir bool, exclude map[string]struct{}) bool {
+	if _, skip := exclude[rel]; skip {
+		return true
+	}
+	rel = filepath.ToSlash(rel)
+	if _, skip := exclude[rel]; skip {
+		return true
+	}
+	if rel == ".git" || strings.HasPrefix(rel, ".git/") {
+		return true
+	}
+	if rel == ".airlock/local" || strings.HasPrefix(rel, ".airlock/local/") {
+		return true
+	}
+	if rel == ".airlock/toolchain" || strings.HasPrefix(rel, ".airlock/toolchain/") {
+		return true
+	}
+	if isDir {
+		switch rel {
+		case "node_modules", ".cache", ".tmp":
+			return true
+		}
+	}
+	return false
 }
 
 // CommitWorktree stages and commits all changes in repoPath's working tree.
@@ -315,14 +335,6 @@ func CommitWorktree(repoPath, message string) (hash string, committed bool, err 
 		return "", false, fmt.Errorf("git rev-parse: %w", err)
 	}
 	return h, true, nil
-}
-
-// firstPathSegment returns the leading path component of a relative path.
-func firstPathSegment(rel string) string {
-	if i := strings.IndexByte(rel, filepath.Separator); i >= 0 {
-		return rel[:i]
-	}
-	return rel
 }
 
 // mirrorFile copies src to dst, creating parent dirs and preserving src's
