@@ -36,6 +36,13 @@ type Service struct {
 	logger    *zap.Logger
 }
 
+// Driver is the bot-platform adapter the bridges service calls when
+// configuring or registering a bridge. trigger.TelegramDriver implements this.
+type Driver interface {
+	GetMe(ctx context.Context, token string) (string, error)
+	Init(ctx context.Context, br *dbq.Bridge) error
+}
+
 func New(d *db.DB, enc secrets.Store, telegram Driver, bridgeMgr BridgeManager, logger *zap.Logger) *Service {
 	if d == nil {
 		panic("bridges: db is required")

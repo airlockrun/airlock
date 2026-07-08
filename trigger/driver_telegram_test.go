@@ -70,6 +70,63 @@ func TestTelegramGetChatNotOK(t *testing.T) {
 	}
 }
 
+func TestTelegramGetMenuButtonWebApp(t *testing.T) {
+	var lastMethod string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		lastMethod = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"ok": true,
+			"result": map[string]any{
+				"type": "web_app",
+				"text": "Open",
+				"web_app": map[string]any{
+					"url": "https://agent.example/__air/tg/start?b=bridge-id",
+				},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	td := NewTelegramDriverWithBaseURL(srv.URL, srv.Client())
+	button, err := td.GetMenuButton(context.Background(), "test-token")
+	if err != nil {
+		t.Fatalf("GetMenuButton: %v", err)
+	}
+	if button.Type != "web_app" {
+		t.Errorf("Type = %q, want web_app", button.Type)
+	}
+	if button.WebAppURL != "https://agent.example/__air/tg/start?b=bridge-id" {
+		t.Errorf("WebAppURL = %q", button.WebAppURL)
+	}
+	if !strings.HasSuffix(lastMethod, "/getChatMenuButton") {
+		t.Errorf("method path = %q, want .../getChatMenuButton", lastMethod)
+	}
+}
+
+func TestTelegramGetMenuButtonDefault(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"ok":     true,
+			"result": map[string]any{"type": "default"},
+		})
+	}))
+	defer srv.Close()
+
+	td := NewTelegramDriverWithBaseURL(srv.URL, srv.Client())
+	button, err := td.GetMenuButton(context.Background(), "test-token")
+	if err != nil {
+		t.Fatalf("GetMenuButton: %v", err)
+	}
+	if button.Type != "default" {
+		t.Errorf("Type = %q, want default", button.Type)
+	}
+	if button.WebAppURL != "" {
+		t.Errorf("WebAppURL = %q, want empty", button.WebAppURL)
+	}
+}
+
 // TestTelegramPollMediaExtraction verifies Poll() extracts voice, audio,
 // video_note, and video attachments from a single update batch and flags
 // voice notes for auto-transcription.
