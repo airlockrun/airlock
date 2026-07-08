@@ -26,6 +26,10 @@ github.com/airlockrun/agentsdk v0.4.0-rc.9 h1:YPtMa5PesMelZSqd0xlJskMX9dHZQwGZkj
 github.com/airlockrun/agentsdk v0.4.0-rc.9/go.mod h1:gMmEv618nJWdp4PE3jg188KtXorhsGM71LcT6moF7QM=
 github.com/airlockrun/agentsdk v0.4.0-rc.10 h1:qsTxjDHmMVaKywD5SLyOZl2qGsrxbasTa7oBD4OzReU=
 github.com/airlockrun/agentsdk v0.4.0-rc.10/go.mod h1:gMmEv618nJWdp4PE3jg188KtXorhsGM71LcT6moF7QM=
+github.com/airlockrun/agentsdk v0.4.0-rc.11 h1:d7GUefIfwuPrRqKBkPNRWD+zk+eOd6p4RjibiA2hCIc=
+github.com/airlockrun/agentsdk v0.4.0-rc.11/go.mod h1:gMmEv618nJWdp4PE3jg188KtXorhsGM71LcT6moF7QM=
+github.com/airlockrun/agentsdk v0.4.0-rc.12 h1:x4OjTpqGymtom3sj5CxjY76tVECcizDbdy53seLNtNk=
+github.com/airlockrun/agentsdk v0.4.0-rc.12/go.mod h1:gMmEv618nJWdp4PE3jg188KtXorhsGM71LcT6moF7QM=
 github.com/airlockrun/goai v0.1.5-rc.4 h1:GVkpkkZh98T2kbGYyxW7rQGrDIxvaNytJJOEom6y7pc=
 github.com/airlockrun/goai v0.1.5-rc.4/go.mod h1:bwFi12cS+TAyr8SjW7s48WMnsuKWx8PeNcxbIWJ4drM=
 github.com/airlockrun/goai v0.1.5-rc.6 h1:9auKfa49340Vz39oQN8P3k8oz8S4Yi9aSwL6btybE8g=
