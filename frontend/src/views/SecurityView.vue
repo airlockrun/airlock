@@ -8,8 +8,8 @@ import { useConfirm } from 'primevue/useconfirm'
 import PasswordStrengthMeter from '@/components/PasswordStrengthMeter.vue'
 import { scorePassword } from '@/composables/usePasswordStrength'
 import api from '@/api/client'
-import { ListPlatformIdentitiesResponseSchema } from '@/gen/airlock/v1/api_pb'
-import type { Passkey, PlatformIdentityInfo } from '@/gen/airlock/v1/types_pb'
+import { ListPlatformIdentitiesResponseSchema, ListUserSessionsResponseSchema } from '@/gen/airlock/v1/api_pb'
+import type { Passkey, PlatformIdentityInfo, UserSession } from '@/gen/airlock/v1/types_pb'
 
 const auth = useAuthStore()
 const store = usePasskeysStore()
@@ -23,6 +23,7 @@ onMounted(() => {
   store.fetchPasskeys().catch((e: any) => {
     error.value = e.response?.data?.error || 'Failed to load passkeys.'
   })
+  loadSessions()
   loadGrants()
   loadIdentities()
 })
@@ -195,6 +196,32 @@ function formatDate(iso: string): string {
   }
 }
 
+// --- Sessions (first-party web + CLI logins) ---
+const sessions = ref<UserSession[]>([])
+const sessionsLoading = ref(false)
+
+async function loadSessions() {
+  sessionsLoading.value = true
+  try {
+    const { data } = await api.get('/api/v1/sessions')
+    sessions.value = fromJson(ListUserSessionsResponseSchema, data).sessions
+  } catch {
+    sessions.value = []
+  } finally {
+    sessionsLoading.value = false
+  }
+}
+
+async function revokeSession(session: UserSession) {
+  try {
+    await api.delete(`/api/v1/sessions/${encodeURIComponent(session.id)}`)
+    sessions.value = sessions.value.filter(x => x.id !== session.id)
+    toast.add({ severity: 'success', summary: 'Session revoked', life: 2000 })
+  } catch (err: any) {
+    toast.add({ severity: 'error', summary: err?.response?.data?.error || 'revoke failed', life: 5000 })
+  }
+}
+
 // --- Linked accounts (platform_identities) ---
 // External accounts (Telegram) linked to this user. Regular users see only
 // their own; admins additionally see every link in the tenant with the owner
@@ -306,6 +333,51 @@ function formatDateTime(ts: any): string {
             <Button v-if="auth.user?.hasPassword" type="button" label="Remove password" severity="secondary" outlined @click="removePassword" />
           </div>
         </form>
+      </template>
+    </Card>
+
+    <Card>
+      <template #title>Sessions</template>
+      <template #subtitle>
+        Web and CLI sign-ins for your account. Revoking a session stops future refreshes;
+        access already issued may keep working for up to 15 minutes.
+      </template>
+      <template #content>
+        <div v-if="sessionsLoading" style="color: var(--p-text-muted-color)">Loading…</div>
+        <div v-else-if="sessions.length === 0" style="color: var(--p-text-muted-color)">
+          No active sessions.
+        </div>
+        <DataTable v-else :value="sessions" stripedRows size="small">
+          <Column header="Session">
+            <template #body="{ data }">
+              <div>{{ data.clientName || (data.kind === 'cli' ? 'air CLI' : 'Airlock Web') }}</div>
+              <small style="color: var(--p-text-muted-color)">{{ data.deviceName }}</small>
+            </template>
+          </Column>
+          <Column header="Kind">
+            <template #body="{ data }">
+              <Tag :value="data.kind" :severity="data.kind === 'cli' ? 'info' : 'secondary'" />
+            </template>
+          </Column>
+          <Column header="Last used">
+            <template #body="{ data }">{{ formatDateTime(data.lastUsedAt) || formatDateTime(data.createdAt) }}</template>
+          </Column>
+          <Column header="Expires">
+            <template #body="{ data }">{{ formatDateTime(data.expiresAt) }}</template>
+          </Column>
+          <Column header="">
+            <template #body="{ data }">
+              <Button
+                icon="pi pi-trash"
+                size="small"
+                severity="danger"
+                text
+                @click="revokeSession(data)"
+                v-tooltip.left="'Revoke session'"
+              />
+            </template>
+          </Column>
+        </DataTable>
       </template>
     </Card>
 

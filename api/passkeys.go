@@ -4,7 +4,6 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/convert"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
@@ -155,24 +154,18 @@ func (h *PasskeyHandler) LoginFinish(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	accessToken, err := auth.IssueToken(h.jwtSecret, res.UserID, res.Email, res.DisplayName, res.TenantRole, res.MustChangePassword)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal error")
-		return
-	}
-	refreshToken, err := auth.IssueRefreshToken(h.jwtSecret, res.UserID, res.Email, res.DisplayName, res.TenantRole, res.MustChangePassword)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal error")
-		return
-	}
-	setAirlockSessionCookie(w, accessToken)
-
 	// airlockvet:allow-dbq reason: pre-Principal passkey login — fetch the row for the response after the assertion proved identity
 	user, err := dbq.New(h.db.Pool()).GetUserByID(r.Context(), toPgUUID(res.UserID))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
+	accessToken, refreshToken, err := issueUserSessionTokens(r.Context(), h.db, h.jwtSecret, user, userSessionKindWeb, webClientName, sessionDeviceName(r))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	setAirlockSessionCookie(w, accessToken)
 	writeProto(w, http.StatusOK, &airlockv1.LoginResponse{
 		AccessToken:  accessToken,
 		RefreshToken: refreshToken,

@@ -52,6 +52,10 @@ func (h *deviceLoginHandler) Begin(w http.ResponseWriter, r *http.Request) {
 	if clientName == "" {
 		clientName = deviceLoginClientName
 	}
+	deviceName := strings.TrimSpace(req.DeviceName)
+	if deviceName == "" {
+		deviceName = "Unknown device"
+	}
 	deviceCode, err := randomURLToken(32)
 	if err != nil {
 		logFor(r).Error("generate device code", zap.Error(err))
@@ -71,6 +75,7 @@ func (h *deviceLoginHandler) Begin(w http.ResponseWriter, r *http.Request) {
 		UserCodeHash:        hashDeviceLoginCode(normalizeUserCode(userCode)),
 		UserCodeDisplay:     userCode,
 		ClientName:          clientName,
+		DeviceName:          limitSessionLabel(deviceName),
 		ExpiresAt:           pgtype.Timestamptz{Time: expiresAt, Valid: true},
 		PollIntervalSeconds: deviceLoginPollInterval,
 	})
@@ -158,13 +163,7 @@ func (h *deviceLoginHandler) finishApprovedPoll(w http.ResponseWriter, r *http.R
 		writeError(w, http.StatusUnauthorized, "invalid device login")
 		return
 	}
-	userID := pgUUID(user.ID)
-	accessToken, err := auth.IssueToken(h.jwtSecret, userID, user.Email, user.DisplayName, user.TenantRole, user.MustChangePassword)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal error")
-		return
-	}
-	refreshToken, err := auth.IssueRefreshToken(h.jwtSecret, userID, user.Email, user.DisplayName, user.TenantRole, user.MustChangePassword)
+	accessToken, refreshToken, err := issueUserSessionTokens(r.Context(), h.db, h.jwtSecret, user, userSessionKindCLI, consumed.ClientName, consumed.DeviceName)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
@@ -283,6 +282,7 @@ func deviceLoginInspectResponse(sess dbq.DeviceLoginSession, now time.Time) *air
 		Status:     status,
 		UserCode:   sess.UserCodeDisplay,
 		ClientName: sess.ClientName,
+		DeviceName: sess.DeviceName,
 		ExpiresAt:  timestamppb.New(sess.ExpiresAt.Time),
 	}
 }

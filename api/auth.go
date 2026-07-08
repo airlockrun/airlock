@@ -118,17 +118,9 @@ func (h *AuthHandler) Activate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	userID := pgUUID(user.ID)
-
-	accessToken, err := auth.IssueToken(h.jwtSecret, userID, user.Email, user.DisplayName, user.TenantRole, user.MustChangePassword)
+	accessToken, refreshToken, err := issueUserSessionTokens(ctx, h.db, h.jwtSecret, user, userSessionKindWeb, webClientName, sessionDeviceName(r))
 	if err != nil {
-		logFor(r).Error("issue access token failed", zap.Error(err))
-		writeError(w, http.StatusInternalServerError, "internal error")
-		return
-	}
-	refreshToken, err := auth.IssueRefreshToken(h.jwtSecret, userID, user.Email, user.DisplayName, user.TenantRole, user.MustChangePassword)
-	if err != nil {
-		logFor(r).Error("issue refresh token failed", zap.Error(err))
+		logFor(r).Error("issue session tokens failed", zap.Error(err))
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
@@ -245,17 +237,9 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		logFor(r).Warn("clear auth failures on success failed", zap.Error(err))
 	}
 
-	userID := pgUUID(user.ID)
-
-	accessToken, err := auth.IssueToken(h.jwtSecret, userID, user.Email, user.DisplayName, user.TenantRole, user.MustChangePassword)
+	accessToken, refreshToken, err := issueUserSessionTokens(ctx, h.db, h.jwtSecret, user, userSessionKindWeb, webClientName, sessionDeviceName(r))
 	if err != nil {
-		logFor(r).Error("issue access token failed", zap.Error(err))
-		writeError(w, http.StatusInternalServerError, "internal error")
-		return
-	}
-	refreshToken, err := auth.IssueRefreshToken(h.jwtSecret, userID, user.Email, user.DisplayName, user.TenantRole, user.MustChangePassword)
-	if err != nil {
-		logFor(r).Error("issue refresh token failed", zap.Error(err))
+		logFor(r).Error("issue session tokens failed", zap.Error(err))
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
@@ -325,52 +309,6 @@ func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
-	req := &airlockv1.RefreshRequest{}
-	if err := decodeProto(r, req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-	if req.RefreshToken == "" {
-		writeError(w, http.StatusBadRequest, "refresh_token is required")
-		return
-	}
-
-	claims, err := auth.ValidateToken(h.jwtSecret, req.RefreshToken)
-	if err != nil {
-		writeError(w, http.StatusUnauthorized, "invalid refresh token")
-		return
-	}
-
-	userID, err := parseUUID(claims.Subject)
-	if err != nil {
-		writeError(w, http.StatusUnauthorized, "invalid refresh token")
-		return
-	}
-
-	// Re-read the live user row so the new access token reflects the current
-	// role and must_change_password — securing the account (set password /
-	// register passkey) clears the flag in the DB, and the next refresh is what
-	// releases the secured-account gate.
-	// airlockvet:allow-dbq reason: pre-Principal bootstrap (activate/login/refresh) — runs before authz can apply, gated by HMAC / activation token / password
-	user, err := dbq.New(h.db.Pool()).GetUserByID(r.Context(), toPgUUID(userID))
-	if err != nil {
-		writeError(w, http.StatusUnauthorized, "invalid refresh token")
-		return
-	}
-
-	accessToken, err := auth.IssueToken(h.jwtSecret, userID, user.Email, user.DisplayName, user.TenantRole, user.MustChangePassword)
-	if err != nil {
-		logFor(r).Error("issue access token failed", zap.Error(err))
-		writeError(w, http.StatusInternalServerError, "internal error")
-		return
-	}
-
-	writeProto(w, http.StatusOK, &airlockv1.RefreshResponse{
-		AccessToken: accessToken,
-	})
-}
-
 // ChangePassword updates the current user's password and clears the must_change_password flag.
 func (h *AuthHandler) ChangePassword(w http.ResponseWriter, r *http.Request) {
 	claims := auth.ClaimsFromContext(r.Context())
@@ -437,15 +375,10 @@ func (h *AuthHandler) ChangePassword(w http.ResponseWriter, r *http.Request) {
 
 	// Issue new tokens with the forced-change flag cleared — the password was
 	// just rotated, so the account is secured.
-	accessToken, err := auth.IssueToken(h.jwtSecret, userID, user.Email, user.DisplayName, user.TenantRole, false)
+	user.MustChangePassword = false
+	accessToken, refreshToken, err := issueUserSessionTokens(ctx, h.db, h.jwtSecret, user, userSessionKindWeb, webClientName, sessionDeviceName(r))
 	if err != nil {
-		logFor(r).Error("issue access token failed", zap.Error(err))
-		writeError(w, http.StatusInternalServerError, "internal error")
-		return
-	}
-	refreshToken, err := auth.IssueRefreshToken(h.jwtSecret, userID, user.Email, user.DisplayName, user.TenantRole, false)
-	if err != nil {
-		logFor(r).Error("issue refresh token failed", zap.Error(err))
+		logFor(r).Error("issue session tokens failed", zap.Error(err))
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}

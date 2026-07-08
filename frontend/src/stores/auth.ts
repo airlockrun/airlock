@@ -127,6 +127,10 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   function logout() {
+    const refreshToken = localStorage.getItem('refresh_token')
+    if (refreshToken) {
+      api.post('/auth/logout', { refreshToken }).catch(() => {})
+    }
     user.value = null
     tenantPermissions.value = new Set()
     localStorage.removeItem('access_token')
