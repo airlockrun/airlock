@@ -98,4 +98,40 @@ assert_file_matches() {
 	fi
 )
 
+(
+	cd "$TMP_DIR"
+	source "$ROOT_DIR/install.sh"
+
+	log() { :; }
+	warn() { :; }
+	is_cloudflare() { return 1; }
+	host_public_ip() { printf '203.0.113.10'; }
+	resolves_to() { return 0; }
+
+	ask() {
+		case "$1" in
+			'Do you have a domain to use? (y/n)') printf 'y' ;;
+			'Domain (e.g. airlock.example.com)') printf 'airlock.example.com' ;;
+			*) fail "unexpected ask prompt: $1" ;;
+		esac
+	}
+
+	confirm() {
+		case "$1" in
+			'Advanced TLS? (bring-your-own cert, or sit behind your own reverse proxy)') return 1 ;;
+			*) fail "unexpected confirm prompt: $1" ;;
+		esac
+	}
+
+	OS=linux
+	FORCE_LOCAL=0
+
+	set +e
+	( choose_mode ) >/tmp/airlock-install-test.out 2>/tmp/airlock-install-test.err
+	status=$?
+	set -e
+	[ "$status" -ne 0 ] || fail 'public non-Cloudflare domain selected an automatic TLS mode'
+	grep -Fq 'No automatic TLS mode available for airlock.example.com' /tmp/airlock-install-test.err || fail 'missing non-Cloudflare TLS failure guidance'
+)
+
 printf 'install_test: ok\n'

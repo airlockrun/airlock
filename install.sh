@@ -9,7 +9,7 @@
 #
 # Takes a fresh Linux VPS (or macOS for local/tunnel) from nothing to a running,
 # hardened airlock: installs Docker, generates secrets, verifies the domain,
-# picks a TLS_MODE (ondemand / wildcard / tunnel / internal / manual / proxy)
+# picks a TLS_MODE (wildcard / tunnel / internal / manual / proxy)
 # and infra (Postgres and object store each bundled or external, independently),
 # writes a single .env, and brings the stack up. Missing optional prereqs degrade
 # gracefully ("drop caps") — only a missing Docker hard-fails.
@@ -32,7 +32,7 @@ set -uo pipefail
 RELEASE_TAG="${AIRLOCK_TAG:-v0.4.0-rc.27}"
 REPO_URL="https://github.com/airlockrun/airlock.git"
 INSTALL_DIR="${HOME}/airlock"
-TLS_MODE=""        # ondemand|wildcard|tunnel|internal|manual|proxy — decided interactively
+TLS_MODE=""        # wildcard|tunnel|internal|manual|proxy — decided interactively
 INFRA_DB="bundled" # bundled | external (Postgres)
 INFRA_S3="bundled" # bundled | external (object store)
 FORCE=0
@@ -373,7 +373,7 @@ choose_mode() {
 	fi
 
 	[ "$public" = n ] && die "Host not publicly reachable and not using a tunnel. Re-run with a Cloudflare Tunnel, on a public host, or --local."
-	TLS_MODE=ondemand  # public + on-demand HTTP-01
+	die "No automatic TLS mode available for $DOMAIN. Re-run and choose Advanced TLS for manual/proxy mode, or use a Cloudflare-managed domain for wildcard/tunnel mode."
 }
 
 # Postgres and the object store are chosen independently — bundle one and BYO

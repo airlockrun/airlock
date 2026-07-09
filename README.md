@@ -60,7 +60,7 @@ make dev                                # infra up + pnpm watch + airlock serve
 
 **No vite dev server.** The dev server is a chronic CVE surface (HMR WebSocket file-read, `/@fs/...` filesystem access, etc.) - exposing it on a shared dev server with a real domain is asking for trouble. `vite build --watch` gives you the compiler without the server: edits trigger a sub-second rebuild, you refresh the browser manually. Worth it.
 
-The dev preset uses `TLS_MODE=internal` (Caddy's local CA - works offline, browsers warn until you `caddy trust`). For real Let's Encrypt certs on a shared dev box, switch `TLS_MODE` (ondemand/wildcard) and set `DOMAIN` to a public name - same knobs as the production stack.
+The dev preset uses `TLS_MODE=internal` (Caddy's local CA - works offline, browsers warn until you `caddy trust`). For real TLS on a shared dev box, switch `TLS_MODE` to `wildcard`, `manual`, `proxy`, or `tunnel` and set `DOMAIN` to a public name - same knobs as the production stack.
 
 ## Updating
 
@@ -110,9 +110,9 @@ Migrations run automatically on airlock startup. Always `pg_dump` before a major
                                     └─────────┬──────────┘
                                               │ 80/443
                                   ┌───────────▼───────────┐
-                                  │        Caddy          │  on-demand TLS,
-                                  │ (TLS + reverse proxy) │  validated via
-                                  └─┬─────┬───────────────┘  /caddy/ask
+                                  │        Caddy          │
+                                  │ (TLS + reverse proxy) │
+                                  └─┬─────┬───────────────┘
               ┌─────────────────────┘     │                    
               │                           │                    
    ┌──────────▼──────────┐    ┌───────────▼───────────┐    ┌──────────────────┐

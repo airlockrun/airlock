@@ -643,16 +643,6 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		})
 	})
 
-	// Caddy on-demand TLS validation (no auth — called by Caddy internally)
-	if cfg.AgentDomain != "" {
-		caddyH := &CaddyAskHandler{
-			db:          cfg.DB,
-			agentDomain: cfg.AgentDomain,
-			logger:      cfg.Logger.Named("caddy"),
-		}
-		r.Get("/caddy/ask", caddyH.Ask)
-	}
-
 	// Public webhook ingress (no auth — verification is per-webhook via hmac/token)
 	if cfg.Dispatcher != nil {
 		wh := &webhookIngressHandler{
