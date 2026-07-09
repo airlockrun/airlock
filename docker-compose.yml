@@ -2,11 +2,11 @@
 #
 #   1. cp .env.example .env
 #   2. Edit .env: set DOMAIN, generate ENCRYPTION_KEY / JWT_SECRET / S3_SECRET_KEY
-#   3. Add wildcard DNS A record: *.${DOMAIN} → <server IP>
+#   3. Add DNS A records: ${DOMAIN} and *.${DOMAIN} → <server IP>
 #   4. docker compose up -d
 #
 # Everything that used to be a separate overlay file is now an .env knob:
-#   TLS_MODE          ondemand | wildcard | tunnel | internal | manual | proxy
+#   TLS_MODE          wildcard | tunnel | internal | manual | proxy
 #                     → selects caddy/Caddyfile.<mode>
 #   COMPOSE_PROFILES  bundled-db (postgres) | bundled-s3 (rustfs) |
 #                     tunnel (cloudflared) | buildkit (rootless builder) —
@@ -344,9 +344,9 @@ services:
       # network; native dev repoints AIRLOCK_UPSTREAM at host.docker.internal).
       AIRLOCK_UPSTREAM: ${AIRLOCK_UPSTREAM:-airlock:8080}
       S3_UPSTREAM: ${S3_UPSTREAM:-rustfs:9000}
-      # Optional Let's Encrypt contact (ondemand/wildcard). Comment-trick:
+      # Optional Let's Encrypt contact (wildcard). Comment-trick:
       # expands to an `email <addr>` directive when ACME_EMAIL is set, empty
-      # otherwise — see caddy/Caddyfile.ondemand's global block.
+      # otherwise — see caddy/Caddyfile.wildcard's global block.
       ACME_EMAIL_LINE: ${ACME_EMAIL:+email ${ACME_EMAIL}}
       # SPA serving (see caddy/routes.caddy). Prod defaults reverse-proxy the
       # frontend container; .env.dev.example flips these to static file serving
@@ -359,7 +359,7 @@ services:
       # manual (BYO cert) mode — paths inside the mounted cert dir (/certs)
       TLS_CERT_FILE: ${TLS_CERT_FILE:-/certs/cert.pem}
       TLS_KEY_FILE: ${TLS_KEY_FILE:-/certs/key.pem}
-    command: caddy run --config /etc/caddy/Caddyfile.${TLS_MODE:-ondemand} --adapter caddyfile
+    command: caddy run --config /etc/caddy/Caddyfile.${TLS_MODE:?set TLS_MODE in .env} --adapter caddyfile
     extra_hosts:
       # Lets the in-container caddy reach a native airlock binary on the host
       # (`make dev`). Harmless in a full-container deploy.
