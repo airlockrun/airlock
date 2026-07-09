@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # Airlock in-place upgrade.
 #
-# Run it from an existing install (the directory install.sh cloned into, or any
-# airlock checkout):
+# Run it from an existing install checkout:
 #   ./upgrade.sh                 # upgrade to the latest STABLE release
 #   ./upgrade.sh --pre-release   # upgrade to the latest release INCLUDING rc's
 #   ./upgrade.sh --tag v0.4.2    # upgrade to a specific tag
@@ -23,8 +22,6 @@
 # path. Pass --pre-release (or AIRLOCK_ALLOW_PRERELEASE=1) to opt in.
 #
 # Flags:
-#   --dir <path>     install dir (default: current dir if it's an airlock
-#                    checkout, else ~/airlock)
 #   --tag <tag>      upgrade to this exact tag (instead of "latest")
 #   --pre-release    allow upgrading to a pre-release (rc/alpha/beta/dev).
 #                    Without it, only stable vX.Y.Z tags are considered.
@@ -35,7 +32,6 @@
 # guarded with explicit `|| die`.
 set -uo pipefail
 
-INSTALL_DIR="${HOME}/airlock"
 TARGET_TAG=""
 ALLOW_PRERELEASE=0   # --pre-release / AIRLOCK_ALLOW_PRERELEASE
 ASSUME_YES=0
@@ -60,7 +56,6 @@ is_prerelease() { [[ "$1" =~ -(rc|alpha|beta|dev)\.[0-9]+$ ]]; }
 parse_args() {
 	while [ $# -gt 0 ]; do
 		case "$1" in
-			--dir) INSTALL_DIR="$2"; shift 2 ;;
 			--tag) TARGET_TAG="$2"; shift 2 ;;
 			--pre-release) ALLOW_PRERELEASE=1; shift ;;
 			--yes|-y) ASSUME_YES=1; shift ;;
@@ -71,15 +66,10 @@ parse_args() {
 	done
 }
 
-# Locate the install: prefer the current dir if it's an airlock checkout (same
-# heuristic as install.sh), else --dir / the default.
 resolve_dir() {
-	if [ -f docker-compose.yml ] && [ -f Dockerfile.airlock ] && [ -d .git ]; then
-		INSTALL_DIR="$(pwd)"
-	fi
-	[ -d "$INSTALL_DIR/.git" ] || die "no airlock checkout at $INSTALL_DIR (use --dir, or run from your install directory)"
-	[ -f "$INSTALL_DIR/docker-compose.yml" ] || die "$INSTALL_DIR is not an airlock checkout (no docker-compose.yml)"
-	cd "$INSTALL_DIR" || die "cannot cd into $INSTALL_DIR"
+	[ -d .git ] || die "run upgrade.sh from an airlock install checkout"
+	[ -f docker-compose.yml ] || die "run upgrade.sh from an airlock install checkout (no docker-compose.yml)"
+	[ -f Dockerfile.airlock ] || die "run upgrade.sh from an airlock install checkout (no Dockerfile.airlock)"
 }
 
 # Highest release tag. Stable = vX.Y.Z with no suffix; pre-release adds the
@@ -105,7 +95,7 @@ detect_local_caddy() {
 # target's upgrade.sh for the apply phase (see the self-update note in the
 # header). Everything here runs from the CURRENTLY-installed upgrade.sh.
 upgrade_prepare() {
-	log "fetching tags in $INSTALL_DIR"
+	log "fetching tags in $(pwd)"
 	git fetch --tags --prune --quiet || die "git fetch failed"
 
 	local current target
@@ -132,7 +122,7 @@ upgrade_prepare() {
 	fi
 
 	hr
-	echo "  Directory:  $INSTALL_DIR"
+	echo "  Directory:  $(pwd)"
 	echo "  Current:    $current"
 	echo "  Target:     $target"
 	hr
@@ -156,7 +146,7 @@ upgrade_prepare() {
 	# would no longer report it) for the image-prune step.
 	log "continuing with $target's upgrade.sh"
 	AIRLOCK_UPGRADE_APPLY="$target" AIRLOCK_UPGRADE_PREV="$current" \
-		exec bash "$INSTALL_DIR/upgrade.sh" "$@"
+		exec bash "./upgrade.sh" "$@"
 }
 
 # Phase 2 — build caddy (if local), pull the release images, restart, wait
