@@ -25,6 +25,11 @@ assert_file_matches() {
 	grep -Eq "$pattern" "$file" || fail "$file missing pattern: $pattern"
 }
 
+assert_file_not_contains() {
+	local file="$1" needle="$2"
+	! grep -Fqx "$needle" "$file" || fail "$file unexpectedly contains line: $needle"
+}
+
 (
 	cd "$TMP_DIR"
 	source "$ROOT_DIR/install.sh"
@@ -51,7 +56,7 @@ assert_file_matches() {
 
 	ask_secret() {
 		case "$1" in
-			'Cloudflare Tunnel token (Zero-Trust > Tunnels)') printf 'test-tunnel-token' ;;
+			'Cloudflare Tunnel token or docker run command (Zero-Trust > Tunnels)') printf 'docker run cloudflare/cloudflared:latest tunnel --no-autoupdate run --token test-tunnel-token' ;;
 			*) fail "unexpected secret prompt: $1" ;;
 		esac
 	}
@@ -84,18 +89,66 @@ assert_file_matches() {
 
 	assert_file_contains .env 'TLS_MODE=tunnel'
 	assert_file_contains .env 'DOMAIN=airlock.example.com'
-	assert_file_contains .env 'COMPOSE_PROFILES=bundled-db,bundled-s3,tunnel'
+	assert_file_contains .env 'COMPOSE_PROJECT_NAME=airlock'
+	assert_file_contains .env 'COMPOSE_PROFILES=bundled-db,bundled-s3,caddy-private,cloudflared'
+	assert_file_contains .env 'AIRLOCK_INSTANCE_ID=airlock'
+	assert_file_contains .env 'DOCKER_NETWORK=airlock'
+	assert_file_contains .env 'AGENT_NETWORK=airlock-agents'
+	assert_file_contains .env 'AGENT_CODEGEN_VOLUME=airlock-data'
 	assert_file_contains .env 'TUNNEL_TOKEN=test-tunnel-token'
-	assert_file_contains .env 'HTTP_PORT=127.0.0.1:8080'
-	assert_file_contains .env 'HTTPS_PORT=127.0.0.1:8443'
+	assert_file_not_contains .env 'HTTP_PORT=127.0.0.1:8080'
+	assert_file_not_contains .env 'HTTPS_PORT=127.0.0.1:8443'
 	assert_file_matches .env '^POSTGRES_PASSWORD=secret-[0-9]+$'
 	assert_file_matches .env '^S3_SECRET_KEY=secret-[0-9]+$'
 
 	if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
 		services=$(docker compose --env-file .env -f "$ROOT_DIR/docker-compose.yml" config --services)
 		printf '%s\n' "$services" | grep -Fx cloudflared >/dev/null || fail 'compose config did not enable cloudflared service'
-		printf '%s\n' "$services" | grep -Fx caddy >/dev/null || fail 'compose config did not include caddy service'
+		printf '%s\n' "$services" | grep -Fx caddy-private >/dev/null || fail 'compose config did not include private caddy service'
+		! printf '%s\n' "$services" | grep -Fx caddy >/dev/null || fail 'compose config enabled published caddy service in tunnel mode'
 	fi
+)
+
+(
+	cd "$TMP_DIR"
+	source "$ROOT_DIR/install.sh"
+
+	log() { :; }
+	warn() { :; }
+
+	secret_i=0
+	gen_secret() {
+		secret_i=$((secret_i + 1))
+		printf 'secret-%d' "$secret_i"
+	}
+
+	parse_args --instance-id airlock2 --force
+	validate_instance_id
+	set_default_install_dir
+	assert_eq 'airlock2' "$INSTANCE_ID" 'instance id'
+	assert_eq "$HOME/airlock2" "$INSTALL_DIR" 'instance install dir'
+	assert_eq 'tok1' "$(parse_tunnel_token 'tok1')" 'raw tunnel token parse'
+	assert_eq 'tok2' "$(parse_tunnel_token 'docker run cloudflare/cloudflared:latest tunnel --no-autoupdate run --token tok2')" 'docker tunnel token parse'
+	assert_eq 'tok3' "$(parse_tunnel_token 'cloudflared tunnel run --token=tok3')" 'equals tunnel token parse'
+
+	TLS_MODE=internal
+	DOMAIN=airlock.localhost
+	INFRA_DB=bundled
+	INFRA_S3=bundled
+	FORCE=1
+	DRY_RUN=0
+	ENV_EXTRA=()
+	PROFILES=()
+	BUILDKIT_HOST_VAL=''
+	assemble_profiles
+	render_env
+
+	assert_file_contains .env 'COMPOSE_PROJECT_NAME=airlock2'
+	assert_file_contains .env 'COMPOSE_PROFILES=bundled-db,bundled-s3,caddy-published'
+	assert_file_contains .env 'AIRLOCK_INSTANCE_ID=airlock2'
+	assert_file_contains .env 'DOCKER_NETWORK=airlock2'
+	assert_file_contains .env 'AGENT_NETWORK=airlock2-agents'
+	assert_file_contains .env 'AGENT_CODEGEN_VOLUME=airlock2-data'
 )
 
 (
@@ -198,6 +251,7 @@ assert_file_matches() {
 	render_env
 
 	assert_file_contains .env 'TLS_MODE=wildcard'
+	assert_file_contains .env 'COMPOSE_PROFILES=bundled-db,bundled-s3,caddy-published'
 	assert_file_contains .env 'CADDY_IMAGE=airlock-caddy-local'
 	assert_file_contains .env 'DNS_PROVIDER=cloudflare'
 	assert_file_contains .env 'DNS_API_TOKEN=test-dns-token'

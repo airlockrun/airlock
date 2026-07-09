@@ -141,10 +141,30 @@ agent containers and images.
 Namespacing the agent layer (containers / images / build caches / buildx
 builder) is handled in code. Running a full second *stack* additionally needs
 its own infra so it doesn't collide on Docker's other shared namespaces:
-distinct Docker networks (`DOCKER_NETWORK` / `AGENT_NETWORK`), a distinct
-`airlock-data` volume + `AGENT_CODEGEN_VOLUME`, its own postgres/rustfs volumes
-(auto project-prefixed by compose), and distinct host ports for caddy
-(`HTTP_PORT` / `HTTPS_PORT`). All of those are already env/compose-driven.
+`COMPOSE_PROJECT_NAME`, distinct Docker networks (`DOCKER_NETWORK` /
+`AGENT_NETWORK`), and a distinct codegen volume (`AGENT_CODEGEN_VOLUME`).
+`install.sh --instance-id <id>` writes those values together. The id must use
+lowercase letters, numbers, underscores, or dashes, and start with a letter or
+number:
+
+```env
+COMPOSE_PROJECT_NAME=<id>
+AIRLOCK_INSTANCE_ID=<id>
+DOCKER_NETWORK=<id>
+AGENT_NETWORK=<id>-agents
+AGENT_CODEGEN_VOLUME=<id>-data
+```
+
+Published Caddy installs also need distinct host ports (`HTTP_PORT` /
+`HTTPS_PORT`). Tunnel installs use the `caddy-private,cloudflared` profiles and
+do not publish Caddy host ports. Bundled Postgres/RustFS still publish
+loopback-only convenience ports for native access; co-located stacks using the
+bundled services should set distinct `DB_PORT_HOST`, `S3_PORT_HOST`, and
+`S3_CONSOLE_PORT_HOST` values.
+
+Each installed instance is its own git checkout and `.env`. This lets instances
+run and upgrade on separate release tracks. Run `install.sh` and `upgrade.sh`
+from the checkout for the instance you are changing.
 
 The Kubernetes path solves the same problem natively with a namespace per
 instance behind the same `container.ContainerManager` interface;

@@ -42,7 +42,7 @@ docker compose exec airlock cat /var/lib/airlock/activation_code.txt
 
 Open [https://airlock.localhost:24443](https://airlock.localhost:24443), accept the browser warning on the first visit, paste the activation code. `*.localhost` resolves to 127.0.0.1 automatically (RFC 6761) in every modern browser, so per-agent subdomains route to your machine without any DNS or `/etc/hosts` work. `TLS_MODE=internal` makes Caddy use its built-in local CA, so you don't need a real domain or Let's Encrypt - run `docker compose exec caddy caddy trust` once to silence the warning permanently. The `:24443`/`:24080` ports keep it off whatever you have on 80/443; change `HTTP_PORT` / `HTTPS_PORT` (and the `:port` in `PUBLIC_URL` / `S3_URL_PUBLIC`) if 24xxx is taken too.
 
-For a true one-command try-out, `./install.sh --local` writes this `.env` (with generated secrets) and brings the stack up for you.
+For a true one-command try-out, `./install.sh --local` writes this `.env` (with generated secrets) and brings the stack up for you. `./install.sh --instance-id airlock2` uses `~/airlock2` when it needs to clone, so a second instance has its own checkout and `.env`.
 
 ## Develop against airlock from source
 
@@ -64,9 +64,10 @@ The dev preset uses `TLS_MODE=internal` (Caddy's local CA - works offline, brows
 
 ## Updating
 
-From an existing install, `upgrade.sh` fetches tags, checks out the newest
-release, pulls its images, and brings the stack back up. The deployment mode
-lives entirely in your `.env` (`TLS_MODE`, `COMPOSE_PROFILES`, endpoints), which
+From an existing install checkout, `upgrade.sh` fetches tags, checks out the
+newest release, pulls its images, and brings the stack back up. Run it from the
+checkout for the instance you are upgrading. The deployment mode lives entirely
+in that checkout's `.env` (`TLS_MODE`, `COMPOSE_PROFILES`, endpoints), which
 docker compose reads automatically, so the upgrade is mode-agnostic:
 
 ```bash
