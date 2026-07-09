@@ -291,7 +291,7 @@ clone_repo() {
 # .env lines in ENV_EXTRA[] and compose profiles in PROFILES[].
 declare -a ENV_EXTRA=()
 declare -a PROFILES=()
-BUILD_CADDY=0   # wildcard mode: build the local Cloudflare-plugin caddy image
+BUILD_CADDY=0   # wildcard mode: build the local DNS-plugin caddy image
 
 choose_mode() {
 	if [ "$FORCE_LOCAL" = 1 ]; then TLS_MODE=internal; DOMAIN=airlock.localhost; return; fi
@@ -347,7 +347,7 @@ choose_mode() {
 			TLS_MODE=wildcard
 			CF_AUTO_DNS=1
 			BUILD_CADDY=1
-			ENV_EXTRA+=("CLOUDFLARE_API_TOKEN=$CF_TOKEN")
+			ENV_EXTRA+=("DNS_PROVIDER=cloudflare" "DNS_API_TOKEN=$CF_TOKEN")
 			log "will create A $DOMAIN and A *.$DOMAIN → $PUBLIC_IP, and issue a *.$DOMAIN cert."
 			return
 		fi
@@ -358,7 +358,7 @@ choose_mode() {
 			cf_token_hint
 			CF_TOKEN=$(ask_secret "Cloudflare API token")
 			[ -n "$CF_TOKEN" ] || die "token required for wildcard mode"
-			ENV_EXTRA+=("CLOUDFLARE_API_TOKEN=$CF_TOKEN")
+			ENV_EXTRA+=("DNS_PROVIDER=cloudflare" "DNS_API_TOKEN=$CF_TOKEN")
 			return
 		fi
 		if [ "$public" = n ] && confirm "This host isn't publicly reachable — serve it via a Cloudflare Tunnel?"; then
@@ -473,7 +473,7 @@ bring_up() {
 	# Profiles + TLS_MODE + CADDY_IMAGE all live in .env, which docker compose
 	# reads automatically — no -f or --profile flags. Prod pulls the published
 	# ghcr images; --no-build errors loudly if a release image is missing (the
-	# tag isn't published). The Cloudflare-plugin caddy image is the one local
+	# tag isn't published). The DNS-plugin caddy image is the one local
 	# build (wildcard mode), done below.
 	local cmd=(docker compose up -d --no-build)
 
@@ -484,7 +484,7 @@ bring_up() {
 		return
 	fi
 	if [ "$BUILD_CADDY" = 1 ]; then
-		log "building the Cloudflare-plugin caddy image"
+		log "building the DNS-plugin caddy image"
 		docker build -f caddy/Dockerfile -t airlock-caddy-local . || die "caddy image build failed"
 	fi
 	log "starting the stack (profiles: $(IFS=,; printf '%s' "${PROFILES[*]:-none}"))"

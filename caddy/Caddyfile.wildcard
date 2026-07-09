@@ -1,24 +1,22 @@
-# TLS_MODE=wildcard — Cloudflare DNS-01 wildcard cert.
+# TLS_MODE=wildcard - DNS-01 wildcard cert.
 #
-# Uses the Cloudflare DNS plugin (caddy/Dockerfile builds caddy with it; set
-# CADDY_IMAGE to that local tag) to obtain a single `*.{$DOMAIN}` cert via
-# DNS-01. New agent subdomains need NO per-host issuance, sidestepping the
-# Let's Encrypt rate limit that on-demand HTTP-01 hits above ~30 agents.
-# Requires CLOUDFLARE_API_TOKEN (Zone:DNS:Edit + Zone:Read on the zone) in .env.
+# Uses a Caddy DNS plugin (caddy/Dockerfile builds caddy with the enabled
+# providers; set CADDY_IMAGE to that local tag) to obtain a single
+# `*.{$DOMAIN}` cert via DNS-01. New agent subdomains need no per-host issuance.
+# Requires DNS_PROVIDER and DNS_API_TOKEN in .env for token-based providers.
 #
-# Per-agent `*.{$DOMAIN}` TLS is terminated here by Caddy's wildcard cert — no
+# Per-agent `*.{$DOMAIN}` TLS is terminated here by Caddy's wildcard cert - no
 # inbound :80 needed for issuance.
-
 {
 	# Set ACME_EMAIL in .env for cert-expiry notices (empty otherwise).
 	{$ACME_EMAIL_LINE}
 }
 
-# Shared TLS automation: DNS-01 via Cloudflare. resolvers pins a public resolver
+# Shared TLS automation: DNS-01. resolvers pins a public resolver
 # for the propagation check so it doesn't depend on the host's.
-(cf_tls) {
+(dns_tls) {
 	tls {
-		dns cloudflare {$CLOUDFLARE_API_TOKEN}
+		dns {$DNS_PROVIDER} {$DNS_API_TOKEN}
 		resolvers 1.1.1.1
 	}
 }
@@ -30,16 +28,16 @@ import routes.caddy
 }
 
 {$DOMAIN} {
-	import cf_tls
+	import dns_tls
 	import apex_routes
 }
 
 s3.{$DOMAIN} {
-	import cf_tls
+	import dns_tls
 	import s3_routes
 }
 
 *.{$DOMAIN} {
-	import cf_tls
+	import dns_tls
 	import proxy_airlock
 }

@@ -169,7 +169,7 @@ upgrade_apply() {
 	detect_local_caddy
 
 	if [ "$BUILD_CADDY" = 1 ]; then
-		log "rebuilding the Cloudflare-plugin caddy image"
+		log "rebuilding the DNS-plugin caddy image"
 		docker build -f caddy/Dockerfile -t airlock-caddy-local . || die "caddy image build failed"
 	fi
 
