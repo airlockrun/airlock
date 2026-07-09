@@ -3,7 +3,6 @@ package builder
 import (
 	"context"
 	"encoding/json"
-	"strings"
 	"testing"
 
 	"github.com/airlockrun/goai/tool"
@@ -16,17 +15,21 @@ func TestNewExitTool(t *testing.T) {
 		status  string
 		wantErr bool
 	}{
-		{name: "success accepted", status: "success"},
-		{name: "refused accepted", status: "refused"},
+		{name: "success accepted", status: exitStatusSuccess},
+		{name: "error accepted", status: exitStatusError},
+		{name: "refused accepted", status: exitStatusRefused},
 		{name: "unknown rejected", status: "bogus", wantErr: true},
 		{name: "empty rejected", status: "", wantErr: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			state := &soltools.ExitState{}
-			et := newExitTool(state)
-			in, _ := json.Marshal(exitToolInput{Status: tt.status, Message: "msg"})
-			_, err := et.Execute(context.Background(), in, tool.CallOptions{})
+			exit := newExitTool(state)
+			in, err := json.Marshal(exitToolInput{Status: tt.status, Message: "msg"})
+			if err != nil {
+				t.Fatalf("marshal input: %v", err)
+			}
+			_, err = exit.Execute(context.Background(), in, tool.CallOptions{})
 			if tt.wantErr {
 				if err == nil {
 					t.Fatalf("status %q: want error, got nil", tt.status)
@@ -50,38 +53,27 @@ func TestNewExitTool(t *testing.T) {
 	}
 }
 
-// First exit-error call is challenged (no termination, pushback message);
-// the second terminates. success and refused always terminate on the
-// first call (covered above).
-func TestNewExitTool_ErrorIsChallengedThenAccepted(t *testing.T) {
-	state := &soltools.ExitState{}
-	et := newExitTool(state)
-	in, _ := json.Marshal(exitToolInput{Status: "error", Message: "stuck"})
+func TestExitToolErrorTerminatesOnFirstCall(t *testing.T) {
+	var state soltools.ExitState
+	exit := newExitTool(&state)
 
-	first, err := et.Execute(context.Background(), in, tool.CallOptions{})
+	input, err := json.Marshal(exitToolInput{Status: exitStatusError, Message: "blocked"})
 	if err != nil {
-		t.Fatalf("first error call returned err: %v", err)
+		t.Fatalf("marshal input: %v", err)
 	}
-	if state.Called() {
-		t.Fatal("first error call set ExitState; expected pushback (no termination)")
-	}
-	if !strings.Contains(first.Output, "Before exiting with error") {
-		t.Errorf("first error output missing pushback prefix; got: %q", first.Output)
-	}
-
-	second, err := et.Execute(context.Background(), in, tool.CallOptions{})
+	result, err := exit.Execute(context.Background(), input, tool.CallOptions{})
 	if err != nil {
-		t.Fatalf("second error call returned err: %v", err)
+		t.Fatalf("exit execute: %v", err)
+	}
+	if result.Title != "exit:error" {
+		t.Fatalf("title = %q, want exit:error", result.Title)
 	}
 	if !state.Called() {
-		t.Fatal("second error call did not set ExitState; expected termination")
+		t.Fatal("exit state was not called")
 	}
-	gotStatus, gotMsg := state.Result()
-	if gotStatus != "error" || gotMsg != "stuck" {
-		t.Fatalf("Result() = (%q, %q), want (\"error\", \"stuck\")", gotStatus, gotMsg)
-	}
-	if !strings.Contains(second.Output, "Run terminated") {
-		t.Errorf("second error output should announce termination; got: %q", second.Output)
+	status, message := state.Result()
+	if status != exitStatusError || message != "blocked" {
+		t.Fatalf("state result = (%q, %q), want (%q, %q)", status, message, exitStatusError, "blocked")
 	}
 }
 
