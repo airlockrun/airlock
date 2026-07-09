@@ -19,7 +19,7 @@
 # First launch pulls airlock, frontend, agent-builder, and agent-base images
 # from ghcr.io — no local builds. The `build:` blocks are a dev fallback for
 # working against this repo. (TLS_MODE=wildcard is the one mode that needs a
-# local build: caddy with the Cloudflare DNS plugin — see caddy/Dockerfile +
+# local build: caddy with DNS provider plugins — see caddy/Dockerfile +
 # CADDY_IMAGE.)
 #
 # Get the first-run activation code:
@@ -324,7 +324,7 @@ services:
 
   caddy:
     # Stock caddy for every TLS_MODE except wildcard, which needs the
-    # Cloudflare DNS plugin — install.sh builds caddy/Dockerfile and sets
+    # DNS provider plugin — install.sh builds caddy/Dockerfile and sets
     # CADDY_IMAGE to that local tag.
     image: ${CADDY_IMAGE:-caddy:2-alpine}
     # No depends_on: caddy reverse-proxies on demand (returns 502 until an
@@ -354,8 +354,9 @@ services:
       SPA_ROOT_LINE: "${SPA_ROOT_LINE:-#}"
       SPA_SERVE_LINE: "${SPA_SERVE_LINE:-reverse_proxy frontend:80}"
       SPA_SERVE_LINE2: "${SPA_SERVE_LINE2:-#}"
-      # wildcard mode
-      CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN:-}
+      # wildcard mode (DNS-01)
+      DNS_PROVIDER: ${DNS_PROVIDER:-}
+      DNS_API_TOKEN: ${DNS_API_TOKEN:-}
       # manual (BYO cert) mode — paths inside the mounted cert dir (/certs)
       TLS_CERT_FILE: ${TLS_CERT_FILE:-/certs/cert.pem}
       TLS_KEY_FILE: ${TLS_KEY_FILE:-/certs/key.pem}

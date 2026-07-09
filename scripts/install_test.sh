@@ -134,4 +134,74 @@ assert_file_matches() {
 	grep -Fq 'No automatic TLS mode available for airlock.example.com' /tmp/airlock-install-test.err || fail 'missing non-Cloudflare TLS failure guidance'
 )
 
+(
+	cd "$TMP_DIR"
+	source "$ROOT_DIR/install.sh"
+
+	log() { :; }
+	warn() { :; }
+	is_cloudflare() { return 0; }
+	host_public_ip() { printf '203.0.113.10'; }
+	resolves_to() { return 0; }
+	cf_token_hint() { :; }
+	ensure_jq() { :; }
+	cf_verify_token() { return 0; }
+
+	secret_i=0
+	gen_secret() {
+		secret_i=$((secret_i + 1))
+		printf 'secret-%d' "$secret_i"
+	}
+
+	ask() {
+		case "$1" in
+			'Do you have a domain to use? (y/n)') printf 'y' ;;
+			'Domain (e.g. airlock.example.com)') printf 'airlock.example.com' ;;
+			*) fail "unexpected ask prompt: $1" ;;
+		esac
+	}
+
+	ask_secret() {
+		case "$1" in
+			'Cloudflare API token') printf 'test-dns-token' ;;
+			*) fail "unexpected secret prompt: $1" ;;
+		esac
+	}
+
+	confirm() {
+		case "$1" in
+			'Advanced TLS? (bring-your-own cert, or sit behind your own reverse proxy)') return 1 ;;
+			'Auto-configure DNS records + wildcard TLS with a Cloudflare API token?') return 0 ;;
+			'Use the bundled Postgres (pgvector)?') return 0 ;;
+			'Use the bundled object store (RustFS)?') return 0 ;;
+			*) fail "unexpected confirm prompt: $1" ;;
+		esac
+	}
+
+	OS=linux
+	FORCE_LOCAL=0
+	FORCE=1
+	DRY_RUN=0
+	ENV_EXTRA=()
+	PROFILES=()
+	BUILDKIT_HOST_VAL=''
+	CF_TOKEN=''
+	CF_AUTO_DNS=0
+	BUILD_CADDY=0
+
+	choose_mode
+	assert_eq 'wildcard' "$TLS_MODE" 'TLS mode'
+	assert_eq '1' "$CF_AUTO_DNS" 'Cloudflare auto DNS flag'
+
+	choose_infra
+	assemble_profiles
+	render_env
+
+	assert_file_contains .env 'TLS_MODE=wildcard'
+	assert_file_contains .env 'CADDY_IMAGE=airlock-caddy-local'
+	assert_file_contains .env 'DNS_PROVIDER=cloudflare'
+	assert_file_contains .env 'DNS_API_TOKEN=test-dns-token'
+	assert_file_contains .env 'DOMAIN=airlock.example.com'
+)
+
 printf 'install_test: ok\n'
