@@ -53,6 +53,20 @@ confirm() {
 need_cmd() { command -v "$1" >/dev/null 2>&1; }
 is_prerelease() { [[ "$1" =~ -(rc|alpha|beta|dev)\.[0-9]+$ ]]; }
 
+ensure_docker_access() {
+	docker info >/dev/null 2>&1 || docker_access_error
+	docker compose version >/dev/null 2>&1 || die "Docker Compose v2 is required — install Docker Compose, then re-run."
+}
+
+docker_access_error() {
+	local user
+	user=$(id -un)
+	if [ "$(id -u)" -ne 0 ] && need_cmd getent && getent group docker >/dev/null 2>&1 && ! id -nG "$user" | tr ' ' '\n' | grep -Fxq docker; then
+		die "Docker is installed, but $user cannot access it. Run 'sudo usermod -aG docker $user', log out and back in, then re-run."
+	fi
+	die "Docker is installed but not reachable. Start the Docker daemon and check this user's access to /var/run/docker.sock, then re-run."
+}
+
 parse_args() {
 	while [ $# -gt 0 ]; do
 		case "$1" in
@@ -204,6 +218,7 @@ main() {
 	resolve_dir
 	need_cmd git || die "git is required"
 	need_cmd docker || die "docker is required"
+	ensure_docker_access
 	# Re-exec'd apply phase (phase 1 checked out the target and set this), or a
 	# fresh invocation that starts at phase 1.
 	if [ -n "${AIRLOCK_UPGRADE_APPLY:-}" ]; then
