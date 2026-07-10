@@ -70,11 +70,10 @@ func (b *BuildService) RebuildAllOnSDKChange(ctx context.Context) {
 		return
 	}
 
-	// No local pool — Execute's shared buildSem caps concurrency across
-	// the whole service. Fanning out one goroutine per agent here just
-	// lines them up behind that semaphore; the limit is enforced once,
-	// centrally, and a manually-triggered upgrade landing mid-rebuild
-	// queues fairly with the rest.
+	// No local pool: Execute's buildSem caps concurrency on this worker
+	// replica. Fanning out one goroutine per agent lines them up before any
+	// source lock or database connection is acquired. A manually triggered
+	// upgrade landing mid-rebuild queues on the same capacity gate.
 	b.logger.Info("mass-rebuild: starting")
 	var wg sync.WaitGroup
 	for _, agent := range agents {

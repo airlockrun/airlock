@@ -57,13 +57,10 @@ type BuildService struct {
 	mu       sync.Mutex
 	inFlight map[string]*buildHandle // agentID → handle for cancel + wait
 
-	// buildSem caps concurrent in-flight builds across the whole
-	// service. Every pipeline path — initial build, manual upgrade,
-	// rollback, mass-rebuild — acquires one slot inside Execute. Sized
-	// at NumCPU/2 by default (Go compilation is RAM-hungry; running
-	// every core in parallel reliably OOMs small VPSes); operator
-	// override via AIRLOCK_BUILD_PARALLELISM. Sized once at New() so
-	// the limit can't drift mid-run.
+	// buildSem caps concurrent builds on this worker replica. Every pipeline
+	// path acquires a slot before touching the database or source tree. It is
+	// sized at NumCPU/2 by default; AIRLOCK_BUILD_PARALLELISM overrides it.
+	// Per-agent PostgreSQL advisory locks provide cross-replica correctness.
 	buildSem chan struct{}
 }
 

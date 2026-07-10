@@ -95,10 +95,10 @@ Runtime state surfaced to the operator is the `(agents.status, container running
 `/stop` sets status=stopped (no auto-resume); `/suspend` kills the container but leaves status=active (auto-resume on next trigger); `/start` flips stopped→active and starts the container.
 
 ### Build Concurrency
-All build paths (initial build, manual upgrade, rollback, mass-rebuild) acquire a single shared semaphore inside `builder.Execute`. Default size `max(1, NumCPU/2)`; override via `AIRLOCK_BUILD_PARALLELISM`. The `agent_builds` row is created before the semaphore wait, so a queued build is visible as `status=building` immediately; cancellation while queued is honored via the same ctx that drives the cancel button.
+All build paths (initial build, manual upgrade, rollback, mass-rebuild) acquire one worker-local semaphore inside `builder.Execute`. Default size `max(1, NumCPU/2)`; override via `AIRLOCK_BUILD_PARALLELISM`. Capacity is acquired before any database connection or source lock, so queued builds consume no shared resources. PostgreSQL advisory locks serialize each agent's source across replicas after a worker has capacity; multiple Kubernetes build workers retain independent capacity based on their own CPU allocation.
 
 ### SDK Bump Mass Rebuild
-On startup `builder.RebuildAllOnSDKChange` compares the airlock-bundled `agentsdk.Version` to `system_settings.last_seen_sdk_version`. On drift it iterates every `image_ref != ''` agent (status in active/stopped) and fans out one goroutine per agent calling `Execute(BuildPlan{Kind:upgrade, Instruction:""})` — the shared build semaphore (above) caps concurrency. Failures park the agent: `status=stopped` + `error_message` + container killed. `last_seen_sdk_version` is stamped only after the whole batch completes.
+On startup `builder.RebuildAllOnSDKChange` compares the airlock-bundled `agentsdk.Version` to `system_settings.last_seen_sdk_version`. On drift it iterates every `image_ref != ''` agent (status in active/stopped) and fans out one goroutine per agent calling `Execute(BuildPlan{Kind:upgrade, Instruction:""})` — the worker-local build semaphore (above) caps concurrency. Failures park the agent: `status=stopped` + `error_message` + container killed. `last_seen_sdk_version` is stamped only after the whole batch completes.
 
 ### Message Flow (Web)
 1. `POST /agents/{id}/prompt` → upload files to S3 → start container → forward to agent
