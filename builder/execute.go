@@ -74,19 +74,31 @@ func (bp *buildPublisher) OnTodos(todosJSON []byte, done, total int) {
 // the caller can plumb it into the originating conversation. Empty
 // string is fine when no Sol ran.
 func (b *BuildService) Execute(ctx context.Context, plan BuildPlan) (string, error) {
-	q := dbq.New(b.db.Pool())
 	agent := plan.Agent
 	agentID := uuidString(agent.ID)
 	agentUUID := uuid.UUID(agent.ID.Bytes)
+	if agent.GitMode == "read_only" && plan.Instruction != "" {
+		return "", errors.New("agent uses read-only Git; push source changes to the connected repository")
+	}
+
+	// Capacity is local to this build-worker replica. Acquire it before any
+	// database connection or source lock so queued builds consume no shared
+	// resources. The per-agent advisory lock below provides cross-replica
+	// correctness once this worker has capacity to run the build.
+	select {
+	case b.buildSem <- struct{}{}:
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
+	defer func() { <-b.buildSem }()
+
 	repoPath := b.AgentRepoPath(agentID)
+	q := dbq.New(b.db.Pool())
 	sourceLock, err := b.AcquireSourceLock(ctx, agentID)
 	if err != nil {
 		return "", err
 	}
 	defer sourceLock.Unlock()
-	if agent.GitMode == "read_only" && plan.Instruction != "" {
-		return "", errors.New("agent uses read-only Git; push source changes to the connected repository")
-	}
 
 	// Unwind any half-finished git state from a prior build that was
 	// killed mid-operation (e.g. agent-builder container stopped between
@@ -244,24 +256,6 @@ func (b *BuildService) Execute(ctx context.Context, plan BuildPlan) (string, err
 		completeBuild("cancelled", "cancelled by user", "", "", "")
 		return "", ctx.Err()
 	}
-
-	// ── Concurrency gate ───────────────────────────────────────────────
-	//
-	// One semaphore for every build that runs anywhere in airlock —
-	// initial builds, manual upgrades, rollbacks, mass-rebuild fanout.
-	// Sized at New() from runtime.NumCPU()/2 (or AIRLOCK_BUILD_PARALLELISM).
-	// The agent_builds row already exists and shows status="building" —
-	// from the operator's POV the build is queued; that's accurate
-	// enough without inventing a new status. Cancellation while
-	// queued is honored: ctx.Done() is the SAME context the cancel
-	// button drives.
-	select {
-	case b.buildSem <- struct{}{}:
-	case <-ctx.Done():
-		completeBuild("cancelled", "cancelled while queued", "", "", "")
-		return "", ctx.Err()
-	}
-	defer func() { <-b.buildSem }()
 
 	// ── Phase B: reposition the repo (rollback only) ───────────────────
 	if plan.StartCommit != "" {

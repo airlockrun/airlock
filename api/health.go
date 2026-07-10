@@ -31,11 +31,7 @@ func newHealthHandler(d *db.DB, s3 *storage.S3Client, logger *zap.Logger) *healt
 // if both reachable; 503 + status="degraded" otherwise. Per-subsystem booleans
 // in the response body show which dep is down.
 func (h *healthHandler) Check(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
-	defer cancel()
-
-	dbOK := h.db.Pool().Ping(ctx) == nil
-	s3OK := h.s3.Ping(ctx) == nil
+	dbOK, s3OK := probeHealth(r.Context(), 2*time.Second, h.db.Pool().Ping, h.s3.Ping)
 
 	status := "ok"
 	httpStatus := http.StatusOK
@@ -50,4 +46,19 @@ func (h *healthHandler) Check(w http.ResponseWriter, r *http.Request) {
 		Db:     dbOK,
 		S3:     s3OK,
 	})
+}
+
+func probeHealth(ctx context.Context, timeout time.Duration, dbPing, s3Ping func(context.Context) error) (bool, bool) {
+	ping := func(fn func(context.Context) error) <-chan bool {
+		result := make(chan bool, 1)
+		go func() {
+			probeCtx, cancel := context.WithTimeout(ctx, timeout)
+			defer cancel()
+			result <- fn(probeCtx) == nil
+		}()
+		return result
+	}
+	dbResult := ping(dbPing)
+	s3Result := ping(s3Ping)
+	return <-dbResult, <-s3Result
 }
