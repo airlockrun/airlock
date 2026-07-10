@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Airlock turnkey installer.
 #
-#   curl -fsSL https://raw.githubusercontent.com/airlockrun/airlock/v0.4.0-rc.29/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/airlockrun/airlock/v0.4.0-rc.30/install.sh | bash
 #
 # Or inspect first (recommended):
-#   curl -fsSL https://raw.githubusercontent.com/airlockrun/airlock/v0.4.0-rc.29/install.sh -o install.sh
+#   curl -fsSL https://raw.githubusercontent.com/airlockrun/airlock/v0.4.0-rc.30/install.sh -o install.sh
 #   less install.sh && bash install.sh
 #
 # Takes a fresh Linux VPS (or macOS for local/tunnel) from nothing to a running,
@@ -32,7 +32,7 @@
 # mutating commands are guarded with explicit `|| die`.
 set -uo pipefail
 
-RELEASE_TAG="${AIRLOCK_TAG:-v0.4.0-rc.29}"
+RELEASE_TAG="${AIRLOCK_TAG:-v0.4.0-rc.30}"
 REPO_URL="https://github.com/airlockrun/airlock.git"
 INSTALL_DIR=""
 TLS_MODE=""        # wildcard|tunnel|internal|manual|proxy — decided interactively
