@@ -180,7 +180,11 @@ ensure_base_tools() {
 
 ensure_docker() {
 	if need_cmd docker; then
-		if docker info >/dev/null 2>&1; then log "docker present"; return; fi
+		if docker info >/dev/null 2>&1; then
+			if [ "$(id -u)" -eq 0 ] && [ -n "${SUDO_USER:-}" ]; then ensure_invoking_user_docker_access; fi
+			log "docker present"
+			return
+		fi
 		if [ "$OS" = macos ]; then
 			die "Docker Desktop is installed but not running or not accessible — start it, then re-run."
 		fi
@@ -198,12 +202,37 @@ ensure_docker() {
 	docker info >/dev/null 2>&1 || docker_access_error
 }
 
-docker_access_error() {
+docker_invoking_user() {
+	if [ "$(id -u)" -eq 0 ] && [ -n "${SUDO_USER:-}" ]; then printf '%s' "$SUDO_USER"; else id -un; fi
+}
+
+docker_user_in_group() {
+	id -nG "$1" | tr ' ' '\n' | grep -Fxq docker
+}
+
+docker_current_session_in_group() {
+	id -nG | tr ' ' '\n' | grep -Fxq docker
+}
+
+ensure_invoking_user_docker_access() {
+	[ "$OS" = linux ] || return 0
 	local user
-	user=$(id -un)
-	if [ "$(id -u)" -ne 0 ] && need_cmd getent && getent group docker >/dev/null 2>&1 && ! id -nG "$user" | tr ' ' '\n' | grep -Fxq docker; then
-		die "Docker is installed, but $user cannot access it. Run 'sudo usermod -aG docker $user', log out and back in, then re-run."
+	user=$(docker_invoking_user)
+	[ "$user" = root ] && return 0
+	need_cmd getent && getent group docker >/dev/null 2>&1 || die "Docker installed without a docker group — check the Docker installation, then re-run."
+	if docker_user_in_group "$user"; then
+		if [ "$(id -u)" -ne 0 ] && ! docker_current_session_in_group; then
+			die "$user is already in the docker group, but this login session has not picked it up. Sign out and back in, then re-run."
+		fi
+		return 0
 	fi
+	confirm "Add $user to the docker group? Docker group access is root-equivalent." || die "Docker group access is required to continue."
+	as_root usermod -aG docker "$user" || die "could not add $user to the docker group"
+	die "Added $user to the docker group. Sign out and back in, then re-run the installer."
+}
+
+docker_access_error() {
+	if [ "$(id -u)" -ne 0 ] || [ -n "${SUDO_USER:-}" ]; then ensure_invoking_user_docker_access; fi
 	die "Docker is installed but not reachable. Check that the daemon is running and that this user can access /var/run/docker.sock, then re-run."
 }
 
@@ -358,14 +387,14 @@ choose_mode() {
 		case "$adv" in
 			proxy)
 				TLS_MODE=proxy
-				warn "Your proxy must terminate a *.$DOMAIN wildcard cert and forward apex / *. / s3. → caddy's HTTP port (loopback 8080)."
+				warn "Your proxy must terminate a *.$DOMAIN wildcard cert and forward $DOMAIN and *.$DOMAIN → caddy's HTTP port (loopback 8080)."
 				local cidr; cidr=$(ask "  Trusted proxy CIDR (e.g. 10.0.0.0/8, or * to trust all)" "*")
 				ENV_EXTRA+=("HTTP_PORT=127.0.0.1:8080" "HTTPS_PORT=127.0.0.1:8443")
 				ENV_EXTRA+=("REVERSE_PROXY_TRUSTED_PROXIES=$cidr" "PUBLIC_URL=https://$DOMAIN")
 				return ;;
 			*)
 				TLS_MODE=manual
-				warn "Provide a WILDCARD cert (apex + *.$DOMAIN + s3.$DOMAIN). A single-host cert breaks per-agent routing."
+				warn "Provide a WILDCARD cert covering $DOMAIN and *.$DOMAIN. A single-host cert breaks per-agent routing."
 				local cdir; cdir=$(ask "  Host cert dir holding cert.pem + key.pem" "./certs")
 				ENV_EXTRA+=("TLS_CERT_DIR=$cdir")
 				return ;;
@@ -415,7 +444,7 @@ choose_mode() {
 			tok=$(parse_tunnel_token "$tok_input")
 			[ -n "$tok" ] || die "tunnel token required for tunnel mode"
 			ENV_EXTRA+=("TUNNEL_TOKEN=$tok")
-			warn "In the CF dashboard, route $DOMAIN, *.$DOMAIN, s3.$DOMAIN → http://caddy:80 for this tunnel."
+			warn "In the CF dashboard, route $DOMAIN and *.$DOMAIN → http://caddy:80 for this tunnel."
 			return
 		fi
 	fi

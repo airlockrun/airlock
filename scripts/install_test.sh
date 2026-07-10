@@ -258,4 +258,37 @@ assert_file_not_contains() {
 	assert_file_contains .env 'DOMAIN=airlock.example.com'
 )
 
+(
+	source "$ROOT_DIR/install.sh"
+
+	id() {
+		case "$1" in
+			-u) printf '1000' ;;
+			-un) printf 'alice' ;;
+			-nG) printf 'users' ;;
+			*) fail "unexpected id arguments: $*" ;;
+		esac
+	}
+	getent() { [ "$1" = group ] && [ "$2" = docker ]; }
+	confirm() {
+		assert_eq 'Add alice to the docker group? Docker group access is root-equivalent.' "$1" 'docker group prompt'
+		return 0
+	}
+	as_root() {
+		assert_eq 'usermod -aG docker alice' "$*" 'docker group enrollment'
+	}
+	die() {
+		die_message="$*"
+		return 1
+	}
+
+	OS=linux
+	set +e
+	ensure_invoking_user_docker_access
+	status=$?
+	set -e
+	assert_eq '1' "$status" 'docker group enrollment exit status'
+	assert_eq 'Added alice to the docker group. Sign out and back in, then re-run the installer.' "$die_message" 'docker group enrollment guidance'
+)
+
 printf 'install_test: ok\n'
