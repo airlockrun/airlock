@@ -26,7 +26,6 @@
 #                    Refused by default — pre-releases have no supported
 #                    upgrade/migration path. (env: AIRLOCK_ALLOW_PRERELEASE=1)
 #   --dry-run        print decisions + .env + compose command, change nothing
-#   --yes            assume yes for non-destructive prompts (non-interactive)
 # Note: intentionally NOT `set -e` — this script uses many `cond && action`
 # branches where a false condition is normal flow, not an error. Critical
 # mutating commands are guarded with explicit `|| die`.
@@ -40,7 +39,6 @@ INFRA_DB="bundled" # bundled | external (Postgres)
 INFRA_S3="bundled" # bundled | external (object store)
 FORCE=0
 DRY_RUN=0
-ASSUME_YES=0
 FORCE_LOCAL=0
 ALLOW_PRERELEASE=0  # --pre-release / AIRLOCK_ALLOW_PRERELEASE: install an rc/alpha/beta/dev tag
 INSTANCE_ID="airlock"
@@ -54,7 +52,6 @@ die()  { err "$*"; exit 1; }
 hr()   { printf '%s\n' "------------------------------------------------------------"; }
 ask() { # ask "prompt" "default" -> echoes answer
 	local prompt="$1" default="${2:-}" reply
-	if [ "$ASSUME_YES" = 1 ]; then printf '%s' "$default"; return; fi
 	if [ -n "$default" ]; then printf '%s [%s]: ' "$prompt" "$default" >&2; else printf '%s: ' "$prompt" >&2; fi
 	read -r reply </dev/tty || reply=""
 	printf '%s' "${reply:-$default}"
@@ -75,7 +72,6 @@ ask_secret() { # ask_secret "prompt" -> echoes (input masked with asterisks)
 	printf '%s' "$reply"
 }
 confirm() { # confirm "prompt" [default:n] -> 0 if yes
-	[ "$ASSUME_YES" = 1 ] && return 0
 	local def="${2:-n}" hint="y/N"
 	[ "$def" = y ] && hint="Y/n"
 	local reply; reply=$(ask "$1 ($hint)" "$def"); case "$reply" in [yY]*) return 0;; *) return 1;; esac
@@ -294,7 +290,6 @@ parse_args() {
 			--force) FORCE=1; shift ;;
 			--dry-run) DRY_RUN=1; shift ;;
 			--pre-release) ALLOW_PRERELEASE=1; shift ;;
-			--yes|-y) ASSUME_YES=1; shift ;;
 			-h|--help) grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
 			*) die "unknown flag: $1" ;;
 		esac
@@ -498,6 +493,7 @@ render_env() {
 		[ "$BUILD_CADDY" = 1 ] && echo "CADDY_IMAGE=airlock-caddy-local"
 		[ -n "$BUILDKIT_HOST_VAL" ] && echo "BUILDKIT_HOST=$BUILDKIT_HOST_VAL"
 		local kv; for kv in "${ENV_EXTRA[@]:-}"; do [ -n "$kv" ] && echo "$kv"; done
+		true
 	)"
 	if [ "$DRY_RUN" = 1 ]; then
 		log "DRY RUN — .env that would be written (secrets redacted):"
