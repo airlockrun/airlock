@@ -79,6 +79,14 @@ func (b *BuildService) Execute(ctx context.Context, plan BuildPlan) (string, err
 	agentID := uuidString(agent.ID)
 	agentUUID := uuid.UUID(agent.ID.Bytes)
 	repoPath := b.AgentRepoPath(agentID)
+	sourceLock, err := b.AcquireSourceLock(ctx, agentID)
+	if err != nil {
+		return "", err
+	}
+	defer sourceLock.Unlock()
+	if agent.GitMode == "read_only" && plan.Instruction != "" {
+		return "", errors.New("agent uses read-only Git; push source changes to the connected repository")
+	}
 
 	// Unwind any half-finished git state from a prior build that was
 	// killed mid-operation (e.g. agent-builder container stopped between
@@ -281,7 +289,7 @@ func (b *BuildService) Execute(ctx context.Context, plan BuildPlan) (string, err
 	// chore lands on top of any Phase B rollback reset and is visible to
 	// Sol's workdir clone in Phase C. Skipped for BuildKindBuild because
 	// prepareNewAgent's scaffold already wrote canonical state.
-	if plan.Kind != BuildKindBuild {
+	if plan.Kind != BuildKindBuild && agent.GitMode != "read_only" {
 		hk, err := runHousekeeping(ctx, repoPath, scaffold.ScaffoldData{
 			AgentID:         agentID,
 			Module:          "agent",
@@ -385,7 +393,7 @@ func (b *BuildService) Execute(ctx context.Context, plan BuildPlan) (string, err
 	// docker build time. A conflict preserves the codegen commit on a
 	// side branch (airlock/upgrade/{runID}) on the remote and resets
 	// main locally, so the agent stays on its previous image.
-	if agent.GitRemoteUrl != "" {
+	if agent.GitRemoteUrl != "" && agent.GitMode != "read_only" {
 		// An imported/cloned repo is already in sync with the remote, so this
 		// push is a fast-forward no-op — say "Syncing" rather than "Pushing" so
 		// it doesn't read like the agent is overwriting the remote.
@@ -412,17 +420,8 @@ func (b *BuildService) Execute(ctx context.Context, plan BuildPlan) (string, err
 			failInfra(pushErr, commitHash, "")
 			return "", pushErr
 		default:
-			// Transport / auth / 5xx / rate-limit / anything else
-			// non-conflict: the local merge succeeded, the image will
-			// build, the agent will run. Log loud and continue so a
-			// flaky remote doesn't block deployment. The next build
-			// after recovery picks up the same commit and retries the
-			// push automatically.
-			b.logger.Warn("push to remote failed; continuing with local-only build",
-				zap.String("agent_id", agentID),
-				zap.String("remote", agent.GitRemoteUrl),
-				zap.Error(pushErr))
-			logLine(fmt.Sprintf("Push to %s failed (%s); continuing with local-only build. Next build retries.", agent.GitRemoteUrl, pushErr))
+			failInfra(pushErr, commitHash, "")
+			return "", pushErr
 		}
 	}
 

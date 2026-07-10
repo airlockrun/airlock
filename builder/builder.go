@@ -262,6 +262,7 @@ type BuildInput struct {
 	GitRemoteURL     string
 	GitCredentialID  pgtype.UUID
 	GitDefaultBranch string // defaults to "main" when empty
+	GitMode          string
 
 	// SystemConversationID, when set, is the system-agent conversation that
 	// triggered this build via create_agent. On completion the build outcome
@@ -329,6 +330,9 @@ func (b *BuildService) Build(_ context.Context, input BuildInput) error {
 	// Phase C2 (post-merge push) sees it and pushes the scaffold +
 	// codegen to the remote in one shot.
 	if input.GitRemoteURL != "" {
+		if input.GitMode != "read_write" && input.GitMode != "read_only" {
+			return fmt.Errorf("git mode must be read_write or read_only when a remote is configured")
+		}
 		branch := input.GitDefaultBranch
 		if branch == "" {
 			branch = "main"
@@ -343,6 +347,7 @@ func (b *BuildService) Build(_ context.Context, input BuildInput) error {
 			GitCredentialID:  input.GitCredentialID,
 			GitDefaultBranch: branch,
 			GitWebhookSecret: secret,
+			GitMode:          input.GitMode,
 		}); err != nil {
 			return fmt.Errorf("connect agent git: %w", err)
 		}

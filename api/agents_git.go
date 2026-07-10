@@ -26,6 +26,7 @@ func (h *agentsHandler) ConnectGit(w http.ResponseWriter, r *http.Request) {
 		RemoteURL:     req.GitRemoteUrl,
 		CredentialID:  req.GitCredentialId,
 		DefaultBranch: req.DefaultBranch,
+		Mode:          req.GitMode,
 	})
 	if err != nil {
 		writeAgentsError(w, err, "failed to connect git remote")
@@ -80,6 +81,7 @@ func (h *agentsHandler) buildGitConfigProto(agentID string, cfg agentssvc.GitCon
 		GitCredentialName: cfg.CredentialName,
 		DefaultBranch:     cfg.DefaultBranch,
 		LastSyncedRef:     cfg.LastSyncedRef,
+		GitMode:           cfg.Mode,
 	}
 	if cfg.RemoteURL != "" {
 		out.WebhookUrl = strings.TrimRight(h.publicURL, "/") + "/webhooks/git/" + agentID

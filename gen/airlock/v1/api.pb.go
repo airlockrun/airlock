@@ -1844,11 +1844,12 @@ type CreateAgentRequest struct {
 	// When true, create only the draft agent row and grants; source upload will
 	// populate the repo and start the first build.
 	SkipInitialBuild bool `protobuf:"varint,12,opt,name=skip_initial_build,json=skipInitialBuild,proto3" json:"skip_initial_build,omitempty"`
-	// For populated git imports, copy the code once without saving the remote
-	// as the agent's ongoing source. Empty remotes cannot use this mode.
-	OneTimeGitImport bool `protobuf:"varint,13,opt,name=one_time_git_import,json=oneTimeGitImport,proto3" json:"one_time_git_import,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// "read_write" keeps a writable remote connected, "read_only" keeps Git
+	// authoritative without Airlock pushes, and "import_once" copies populated
+	// source without retaining the remote.
+	GitMode       string `protobuf:"bytes,14,opt,name=git_mode,json=gitMode,proto3" json:"git_mode,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *CreateAgentRequest) Reset() {
@@ -1965,11 +1966,11 @@ func (x *CreateAgentRequest) GetSkipInitialBuild() bool {
 	return false
 }
 
-func (x *CreateAgentRequest) GetOneTimeGitImport() bool {
+func (x *CreateAgentRequest) GetGitMode() string {
 	if x != nil {
-		return x.OneTimeGitImport
+		return x.GitMode
 	}
-	return false
+	return ""
 }
 
 type CreateAgentResponse struct {
@@ -5676,6 +5677,7 @@ type ConnectAgentGitRequest struct {
 	GitRemoteUrl    string                 `protobuf:"bytes,1,opt,name=git_remote_url,json=gitRemoteUrl,proto3" json:"git_remote_url,omitempty"`
 	GitCredentialId string                 `protobuf:"bytes,2,opt,name=git_credential_id,json=gitCredentialId,proto3" json:"git_credential_id,omitempty"`
 	DefaultBranch   string                 `protobuf:"bytes,3,opt,name=default_branch,json=defaultBranch,proto3" json:"default_branch,omitempty"` // empty → "main"
+	GitMode         string                 `protobuf:"bytes,4,opt,name=git_mode,json=gitMode,proto3" json:"git_mode,omitempty"`                   // "read_write" | "read_only"
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -5727,6 +5729,13 @@ func (x *ConnectAgentGitRequest) GetGitCredentialId() string {
 func (x *ConnectAgentGitRequest) GetDefaultBranch() string {
 	if x != nil {
 		return x.DefaultBranch
+	}
+	return ""
+}
+
+func (x *ConnectAgentGitRequest) GetGitMode() string {
+	if x != nil {
+		return x.GitMode
 	}
 	return ""
 }
@@ -8276,7 +8285,7 @@ const file_airlock_v1_api_proto_rawDesc = "" +
 	"\x06models\x18\x01 \x03(\v2\x15.airlock.v1.ModelInfoR\x06models\"Z\n" +
 	"\x17GetAgentSDKInfoResponse\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\tR\aversion\x12%\n" +
-	"\x0ecommand_import\x18\x02 \x01(\tR\rcommandImport\"\xf5\x03\n" +
+	"\x0ecommand_import\x18\x02 \x01(\tR\rcommandImport\"\xe7\x03\n" +
 	"\x12CreateAgentRequest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x12\n" +
 	"\x04slug\x18\x02 \x01(\tR\x04slug\x12 \n" +
@@ -8292,8 +8301,8 @@ const file_airlock_v1_api_proto_rawDesc = "" +
 	"\x11git_credential_id\x18\n" +
 	" \x01(\tR\x0fgitCredentialId\x12,\n" +
 	"\x12git_default_branch\x18\v \x01(\tR\x10gitDefaultBranch\x12,\n" +
-	"\x12skip_initial_build\x18\f \x01(\bR\x10skipInitialBuild\x12-\n" +
-	"\x13one_time_git_import\x18\r \x01(\bR\x10oneTimeGitImport\"B\n" +
+	"\x12skip_initial_build\x18\f \x01(\bR\x10skipInitialBuild\x12\x19\n" +
+	"\bgit_mode\x18\x0e \x01(\tR\agitModeJ\x04\b\r\x10\x0e\"B\n" +
 	"\x13CreateAgentResponse\x12+\n" +
 	"\x05agent\x18\x01 \x01(\v2\x15.airlock.v1.AgentInfoR\x05agent\"C\n" +
 	"\x12ListAgentsResponse\x12-\n" +
@@ -8554,11 +8563,12 @@ const file_airlock_v1_api_proto_rawDesc = "" +
 	"\x14RenamePasskeyRequest\x12#\n" +
 	"\rfriendly_name\x18\x01 \x01(\tR\ffriendlyName\"0\n" +
 	"\x12SetPasswordRequest\x12\x1a\n" +
-	"\bpassword\x18\x01 \x01(\tR\bpassword\"\x91\x01\n" +
+	"\bpassword\x18\x01 \x01(\tR\bpassword\"\xac\x01\n" +
 	"\x16ConnectAgentGitRequest\x12$\n" +
 	"\x0egit_remote_url\x18\x01 \x01(\tR\fgitRemoteUrl\x12*\n" +
 	"\x11git_credential_id\x18\x02 \x01(\tR\x0fgitCredentialId\x12%\n" +
-	"\x0edefault_branch\x18\x03 \x01(\tR\rdefaultBranch\"M\n" +
+	"\x0edefault_branch\x18\x03 \x01(\tR\rdefaultBranch\x12\x19\n" +
+	"\bgit_mode\x18\x04 \x01(\tR\agitMode\"M\n" +
 	"\x17ConnectAgentGitResponse\x122\n" +
 	"\x06config\x18\x01 \x01(\v2\x1a.airlock.v1.AgentGitConfigR\x06config\"O\n" +
 	"\x19GetAgentGitConfigResponse\x122\n" +

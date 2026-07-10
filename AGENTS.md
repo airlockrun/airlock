@@ -71,6 +71,12 @@ anchor/            Anchor container support
 3. Build events streamed via WebSocket to subscribed clients
 4. Agent image tagged as `{agentID}:{commitHash[:12]}`
 
+### Agent Source Synchronization
+- Airlock's internal per-agent Git repo is the source served by `HEAD|GET|PUT /api/v1/agents/{id}/source`. The endpoint uses a canonical content hash as an ETag; CLI deploys send `If-Match` so stale workspaces cannot overwrite codegen or another user's deploy.
+- `air deploy`, `air pull`, and `air clone` synchronize the canonical source set without requiring external Git. Workspace binding and last-seen state live in `.airlock/local/agent.toml`, which is excluded from source archives.
+- Persistent Git bindings have an explicit `read_write` or `read_only` mode. Git is authoritative in both modes. Read/write operations must push before a build succeeds; read-only bindings only pull/rebuild and reject Airlock codegen, source upload, and source rollback. `import_once` is a create action that does not retain a Git binding.
+- Every source mutation acquires the per-agent PostgreSQL advisory source lock, including builds/codegen, source uploads, Git clone/pull, and rollback execution.
+
 ### Agent Execution
 - Agent containers are long-running Docker containers (one per agent, reused if healthy)
 - Started on demand via `dispatcher.EnsureRunning()`

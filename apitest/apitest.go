@@ -113,6 +113,7 @@ type Harness struct {
 	Hub            *realtime.Hub
 	PubSub         *realtime.PubSub
 	Dispatcher     *trigger.Dispatcher
+	BuildService   *builder.BuildService
 	JWTSecret      string
 }
 
@@ -138,17 +139,18 @@ func Setup(t *testing.T) *Harness {
 	logger := zaptest.NewLogger(t).Named("apitest")
 
 	cfg := &config.Config{
-		DatabaseURL:   pkgState.dsn,
-		JWTSecret:     JWTSecret,
-		S3URL:         pkgState.s3Params.Endpoint,
-		S3AccessKey:   pkgState.s3Params.AccessKey,
-		S3SecretKey:   pkgState.s3Params.SecretKey,
-		S3Bucket:      pkgState.s3Params.Bucket,
-		S3Region:      pkgState.s3Params.Region,
-		PublicURL:     "http://apitest.local",
-		AgentScheme:   "http",
-		AgentDomain:   "apitest.local",
-		EncryptionKey: EncryptionKey,
+		DatabaseURL:    pkgState.dsn,
+		JWTSecret:      JWTSecret,
+		S3URL:          pkgState.s3Params.Endpoint,
+		S3AccessKey:    pkgState.s3Params.AccessKey,
+		S3SecretKey:    pkgState.s3Params.SecretKey,
+		S3Bucket:       pkgState.s3Params.Bucket,
+		S3Region:       pkgState.s3Params.Region,
+		PublicURL:      "http://apitest.local",
+		AgentScheme:    "http",
+		AgentDomain:    "apitest.local",
+		AgentReposPath: t.TempDir(),
+		EncryptionKey:  EncryptionKey,
 	}
 
 	s3Client := storage.NewS3Client(cfg)
@@ -229,6 +231,7 @@ func Setup(t *testing.T) *Harness {
 		Hub:            hub,
 		PubSub:         pubsub,
 		Dispatcher:     dispatcher,
+		BuildService:   buildSvc,
 		JWTSecret:      cfg.JWTSecret,
 	}
 }

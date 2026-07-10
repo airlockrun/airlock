@@ -67,6 +67,10 @@ func (b *BuildService) Rollback(_ context.Context, in RollbackInput) {
 		})
 		return
 	}
+	if agent.GitMode == "read_only" {
+		b.failRollback(dbCtx, agentPgUUID, agentUUID, in.ConversationID, in.SystemConversationID, errors.New("agent uses read-only Git; rollbacks must be pushed to the connected repository"))
+		return
+	}
 
 	targetID := mustParseUUID(in.BuildID)
 	target, err := q.GetAgentBuild(ctx, targetID)

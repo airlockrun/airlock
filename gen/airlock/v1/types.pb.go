@@ -3521,6 +3521,7 @@ type AgentGitConfig struct {
 	WebhookUrl        string                 `protobuf:"bytes,6,opt,name=webhook_url,json=webhookUrl,proto3" json:"webhook_url,omitempty"`          // fully-qualified URL the user pastes into their git provider
 	WebhookSecret     string                 `protobuf:"bytes,7,opt,name=webhook_secret,json=webhookSecret,proto3" json:"webhook_secret,omitempty"` // shown so the user can paste it into their provider settings
 	LastSyncedRef     string                 `protobuf:"bytes,8,opt,name=last_synced_ref,json=lastSyncedRef,proto3" json:"last_synced_ref,omitempty"`
+	GitMode           string                 `protobuf:"bytes,9,opt,name=git_mode,json=gitMode,proto3" json:"git_mode,omitempty"` // "read_write" | "read_only"
 	unknownFields     protoimpl.UnknownFields
 	sizeCache         protoimpl.SizeCache
 }
@@ -3607,6 +3608,13 @@ func (x *AgentGitConfig) GetWebhookSecret() string {
 func (x *AgentGitConfig) GetLastSyncedRef() string {
 	if x != nil {
 		return x.LastSyncedRef
+	}
+	return ""
+}
+
+func (x *AgentGitConfig) GetGitMode() string {
+	if x != nil {
+		return x.GitMode
 	}
 	return ""
 }
@@ -4931,7 +4939,7 @@ const file_airlock_v1_types_proto_rawDesc = "" +
 	"\flast_used_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
 	"lastUsedAt\x129\n" +
 	"\n" +
-	"expires_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\"\xc4\x02\n" +
+	"expires_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\"\xdf\x02\n" +
 	"\x0eAgentGitConfig\x12\x19\n" +
 	"\bagent_id\x18\x01 \x01(\tR\aagentId\x12$\n" +
 	"\x0egit_remote_url\x18\x02 \x01(\tR\fgitRemoteUrl\x12*\n" +
@@ -4941,7 +4949,8 @@ const file_airlock_v1_types_proto_rawDesc = "" +
 	"\vwebhook_url\x18\x06 \x01(\tR\n" +
 	"webhookUrl\x12%\n" +
 	"\x0ewebhook_secret\x18\a \x01(\tR\rwebhookSecret\x12&\n" +
-	"\x0flast_synced_ref\x18\b \x01(\tR\rlastSyncedRef\"\xfc\x02\n" +
+	"\x0flast_synced_ref\x18\b \x01(\tR\rlastSyncedRef\x12\x19\n" +
+	"\bgit_mode\x18\t \x01(\tR\agitMode\"\xfc\x02\n" +
 	"\rMCPServerInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04slug\x18\x02 \x01(\tR\x04slug\x12\x12\n" +
