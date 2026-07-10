@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/airlockrun/agentsdk"
+	"github.com/airlockrun/agentsdk/sourcebundle"
 	"github.com/airlockrun/airlock/authz"
 	"github.com/airlockrun/airlock/builder"
 	"github.com/airlockrun/airlock/container"
@@ -90,7 +91,7 @@ type CreateRequest struct {
 	GitRemoteURL     string
 	GitCredentialID  string
 	GitDefaultBranch string
-	OneTimeGitImport bool
+	GitMode          string
 	SkipInitialBuild bool
 	// SystemConversationID, when set (system-agent create_agent path),
 	// routes the build-completion outcome back to that conversation.
@@ -151,6 +152,7 @@ type GitConfig struct {
 	DefaultBranch  string
 	WebhookSecret  string
 	LastSyncedRef  string
+	Mode           string
 }
 
 // ConnectGitRequest is the input to ConnectGit.
@@ -158,11 +160,23 @@ type ConnectGitRequest struct {
 	RemoteURL     string
 	CredentialID  string
 	DefaultBranch string
+	Mode          string
 }
 
 const (
 	sourceUploadMaxFiles             = 10000
 	sourceUploadMaxUncompressedBytes = 100 << 20 // 100 MiB
+)
+
+var (
+	ErrSourcePreconditionRequired = errors.New("source precondition required")
+	ErrSourceStateMismatch        = errors.New("source state mismatch")
+)
+
+const (
+	GitModeReadWrite  = "read_write"
+	GitModeReadOnly   = "read_only"
+	GitModeImportOnce = "import_once"
 )
 
 // --- helpers ---
@@ -259,6 +273,7 @@ func (s *Service) Create(ctx context.Context, p authz.Principal, req CreateReque
 	}
 	var gitCredFK pgtype.UUID
 	gitRemoteURL := req.GitRemoteURL
+	gitMode := strings.TrimSpace(req.GitMode)
 	gitBranch := strings.TrimSpace(req.GitDefaultBranch)
 	if gitBranch == "" {
 		gitBranch = "main"
@@ -268,6 +283,11 @@ func (s *Service) Create(ctx context.Context, p authz.Principal, req CreateReque
 	importFromRemote := false
 	remoteHeadSHA := ""
 	if req.GitRemoteURL != "" {
+		switch gitMode {
+		case GitModeReadWrite, GitModeReadOnly, GitModeImportOnce:
+		default:
+			return dbq.Agent{}, service.Detail(service.ErrInvalidInput, "git_mode must be read_write, read_only, or import_once")
+		}
 		if req.SkipInitialBuild {
 			return dbq.Agent{}, service.Detail(service.ErrInvalidInput, "skip_initial_build cannot be combined with git_remote_url")
 		}
@@ -305,8 +325,8 @@ func (s *Service) Create(ctx context.Context, p authz.Principal, req CreateReque
 		// code — adopt the remote's default branch when the requested one is
 		// absent (a repo on "master" must not fall through to scaffold+push).
 		importFromRemote = !state.Empty
-		if state.Empty && req.OneTimeGitImport {
-			return dbq.Agent{}, service.Detail(service.ErrInvalidInput, "git remote has no code to import; enable git binding so Airlock can push a scaffold, or choose a populated repository")
+		if state.Empty && gitMode != GitModeReadWrite {
+			return dbq.Agent{}, service.Detail(service.ErrInvalidInput, "git remote has no code to import; read_only and import_once require a populated repository")
 		}
 		if importFromRemote {
 			if b := state.ImportBranch(gitBranch); b != "" {
@@ -318,6 +338,13 @@ func (s *Service) Create(ctx context.Context, p authz.Principal, req CreateReque
 				remoteHeadSHA = state.DefaultHeadSHA
 			}
 		}
+		if gitMode == GitModeReadWrite {
+			if err := s.builder.ValidateRemoteWrite(ctx, gitRemoteURL, gitBranch, gitCredFK, state.Empty); err != nil {
+				return dbq.Agent{}, service.Detail(service.ErrInvalidInput, "read_write Git requires a credential that can push %s: %s", gitBranch, err.Error())
+			}
+		}
+	} else if gitMode != "" {
+		return dbq.Agent{}, service.Detail(service.ErrInvalidInput, "git_mode requires git_remote_url")
 	}
 	agent, err := q.CreateAgent(ctx, dbq.CreateAgentParams{
 		Name:             req.Name,
@@ -358,7 +385,7 @@ func (s *Service) Create(ctx context.Context, p authz.Principal, req CreateReque
 	// then build the imported HEAD below with SkipScaffold. An empty remote
 	// falls through to the scaffold build, which mirrors the new agent to it.
 	if importFromRemote {
-		if !req.OneTimeGitImport {
+		if gitMode != GitModeImportOnce {
 			secret, _ := randomHex(32)
 			if err := q.ConnectAgentGit(ctx, dbq.ConnectAgentGitParams{
 				ID:               agent.ID,
@@ -366,6 +393,7 @@ func (s *Service) Create(ctx context.Context, p authz.Principal, req CreateReque
 				GitCredentialID:  gitCredFK,
 				GitDefaultBranch: gitBranch,
 				GitWebhookSecret: secret,
+				GitMode:          gitMode,
 			}); err != nil {
 				_ = q.DeleteAgent(ctx, agent.ID)
 				s.logger.Error("git create import: connect", zap.Error(err))
@@ -377,7 +405,7 @@ func (s *Service) Create(ctx context.Context, p authz.Principal, req CreateReque
 			s.logger.Error("git create import: clone", zap.String("agent", agentIDStr), zap.Error(err))
 			return dbq.Agent{}, service.Detail(service.ErrInvalidInput, "failed to import repository: %s", err.Error())
 		}
-		if !req.OneTimeGitImport && remoteHeadSHA != "" {
+		if gitMode != GitModeImportOnce && remoteHeadSHA != "" {
 			_ = q.UpdateAgentGitLastSyncedRef(ctx, dbq.UpdateAgentGitLastSyncedRefParams{
 				ID:               agent.ID,
 				GitLastSyncedRef: remoteHeadSHA,
@@ -409,57 +437,138 @@ func (s *Service) Create(ctx context.Context, p authz.Principal, req CreateReque
 			in.GitRemoteURL = gitRemoteURL
 			in.GitCredentialID = gitCredFK
 			in.GitDefaultBranch = gitBranch
+			in.GitMode = gitMode
 		}
 		_ = s.builder.Build(context.Background(), in)
 	}()
 	return agent, nil
 }
 
+// SourceState returns the canonical content state of the agent's internal HEAD.
+func (s *Service) SourceState(ctx context.Context, p authz.Principal, agentID uuid.UUID) (string, error) {
+	q := dbq.New(s.db.Pool())
+	if _, err := q.GetAgentByID(ctx, pgtype.UUID{Bytes: agentID, Valid: true}); err != nil {
+		return "", service.ErrNotFound
+	}
+	if err := authz.Authorize(ctx, q, p, authz.AgentBuildManage, agentID); err != nil {
+		return "", err
+	}
+	lock, err := s.builder.AcquireSourceLock(ctx, agentID.String())
+	if err != nil {
+		return "", err
+	}
+	defer lock.Unlock()
+	return sourceState(s.builder.AgentRepoPath(agentID.String()))
+}
+
+// DownloadSource writes the canonical source archive and returns its state.
+func (s *Service) DownloadSource(ctx context.Context, p authz.Principal, agentID uuid.UUID, w io.Writer) (string, error) {
+	q := dbq.New(s.db.Pool())
+	if _, err := q.GetAgentByID(ctx, pgtype.UUID{Bytes: agentID, Valid: true}); err != nil {
+		return "", service.ErrNotFound
+	}
+	if err := authz.Authorize(ctx, q, p, authz.AgentBuildManage, agentID); err != nil {
+		return "", err
+	}
+	lock, err := s.builder.AcquireSourceLock(ctx, agentID.String())
+	if err != nil {
+		return "", err
+	}
+	defer lock.Unlock()
+	repoPath := s.builder.AgentRepoPath(agentID.String())
+	state, err := sourceState(repoPath)
+	if err != nil {
+		return "", err
+	}
+	if state == "" {
+		return "", service.Detail(service.ErrConflict, "agent has no source yet")
+	}
+	writtenState, err := sourcebundle.WriteArchive(w, repoPath)
+	if err != nil {
+		return "", fmt.Errorf("archive source: %w", err)
+	}
+	if writtenState != state {
+		return "", fmt.Errorf("source changed while archiving: %s != %s", writtenState, state)
+	}
+	return state, nil
+}
+
 // UploadSource replaces an agent's internal source tree with a gzipped tar
-// archive and starts a build from that committed source. The archive never
-// carries .git; Airlock owns the internal repository and commit history.
-func (s *Service) UploadSource(ctx context.Context, p authz.Principal, agentID uuid.UUID, archive io.Reader) error {
+// archive and starts a build from that committed source. expectedState is the
+// state last observed by the caller; force explicitly bypasses that check.
+func (s *Service) UploadSource(ctx context.Context, p authz.Principal, agentID uuid.UUID, archive io.Reader, expectedState string, force bool) (string, error) {
 	q := dbq.New(s.db.Pool())
 	agent, err := q.GetAgentByID(ctx, pgtype.UUID{Bytes: agentID, Valid: true})
 	if err != nil {
-		return service.ErrNotFound
+		return "", service.ErrNotFound
 	}
 	if err := authz.Authorize(ctx, q, p, authz.AgentBuildManage, agentID); err != nil {
-		return err
+		return "", err
 	}
 	if agent.Status == "building" {
-		return service.Detail(service.ErrConflict, "agent is already building")
+		return "", service.Detail(service.ErrConflict, "agent is already building")
 	}
+	if agent.GitMode == GitModeReadOnly {
+		return "", service.Detail(service.ErrConflict, "agent uses read-only Git; push source changes to the connected repository")
+	}
+	lock, err := s.builder.AcquireSourceLock(ctx, agentID.String())
+	if err != nil {
+		return "", err
+	}
+	defer lock.Unlock()
 
 	workDir, err := os.MkdirTemp("", "airlock-source-*")
 	if err != nil {
-		return fmt.Errorf("create source temp dir: %w", err)
+		return "", fmt.Errorf("create source temp dir: %w", err)
 	}
 	defer os.RemoveAll(workDir)
 
 	if err := extractSourceArchive(archive, workDir); err != nil {
-		return err
+		return "", err
 	}
 	if _, err := os.Stat(filepath.Join(workDir, "go.mod")); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return service.Detail(service.ErrInvalidInput, "source archive must contain go.mod at the root")
+			return "", service.Detail(service.ErrInvalidInput, "source archive must contain go.mod at the root")
 		}
-		return fmt.Errorf("stat go.mod: %w", err)
+		return "", fmt.Errorf("stat go.mod: %w", err)
 	}
 
 	agentIDStr := agentID.String()
 	repoPath := s.builder.AgentRepoPath(agentIDStr)
+	uploadedState, err := sourcebundle.Digest(workDir)
+	if err != nil {
+		return "", err
+	}
+	currentState, err := sourceState(repoPath)
+	if err != nil {
+		return "", err
+	}
+	if !force {
+		switch {
+		case currentState != "" && expectedState == "":
+			return "", ErrSourcePreconditionRequired
+		case expectedState != currentState:
+			return "", ErrSourceStateMismatch
+		}
+	}
+	if currentState != "" && uploadedState == currentState {
+		return currentState, nil
+	}
 	if err := builder.InitAgentRepo(s.builder.ReposPath(), agentIDStr); err != nil {
-		return fmt.Errorf("init agent repo: %w", err)
+		return "", fmt.Errorf("init agent repo: %w", err)
 	}
-	if err := clearRepoWorktree(repoPath); err != nil {
-		return fmt.Errorf("clear agent repo: %w", err)
-	}
-	if err := builder.SyncWorkdirToRepo(workDir, repoPath, nil); err != nil {
-		return fmt.Errorf("sync source to repo: %w", err)
+	if err := sourcebundle.Mirror(workDir, repoPath); err != nil {
+		return "", fmt.Errorf("sync source to repo: %w", err)
 	}
 	if _, _, err := builder.CommitWorktree(repoPath, "Upload source"); err != nil {
-		return fmt.Errorf("commit uploaded source: %w", err)
+		return "", fmt.Errorf("commit uploaded source: %w", err)
+	}
+	newState, err := sourceState(repoPath)
+	if err != nil {
+		return "", err
+	}
+	if newState != uploadedState {
+		return "", fmt.Errorf("committed source state %s, want %s", newState, uploadedState)
 	}
 
 	go func() {
@@ -476,7 +585,21 @@ func (s *Service) UploadSource(ctx context.Context, p authz.Principal, agentID u
 			s.logger.Error("source upload build", zap.String("agent", agentIDStr), zap.Error(err))
 		}
 	}()
-	return nil
+	return newState, nil
+}
+
+func sourceState(repoPath string) (string, error) {
+	if _, err := os.Stat(filepath.Join(repoPath, "go.mod")); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", nil
+		}
+		return "", err
+	}
+	state, err := sourcebundle.Digest(repoPath)
+	if err != nil {
+		return "", fmt.Errorf("hash source: %w", err)
+	}
+	return state, nil
 }
 
 func extractSourceArchive(r io.Reader, dst string) error {
@@ -556,26 +679,10 @@ func cleanArchivePath(name string) (rel string, skip bool, err error) {
 	if clean == ".." || strings.HasPrefix(clean, "../") {
 		return "", false, service.Detail(service.ErrInvalidInput, "source archive contains invalid path %q", name)
 	}
-	if first := strings.SplitN(clean, "/", 2)[0]; first == ".git" {
+	if first := strings.SplitN(clean, "/", 2)[0]; first == ".git" || first == ".airlock" {
 		return "", true, nil
 	}
 	return clean, false, nil
-}
-
-func clearRepoWorktree(repoPath string) error {
-	entries, err := os.ReadDir(repoPath)
-	if err != nil {
-		return err
-	}
-	for _, entry := range entries {
-		if entry.Name() == ".git" {
-			continue
-		}
-		if err := os.RemoveAll(filepath.Join(repoPath, entry.Name())); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 // CloneRequest is the input to Clone.
@@ -1374,6 +1481,10 @@ func (s *Service) ConnectGit(ctx context.Context, p authz.Principal, agentID uui
 	if nerr != nil {
 		return GitConfig{}, service.Detail(service.ErrInvalidInput, "%s", nerr.Error())
 	}
+	mode := strings.TrimSpace(req.Mode)
+	if mode != GitModeReadWrite && mode != GitModeReadOnly {
+		return GitConfig{}, service.Detail(service.ErrInvalidInput, "git_mode must be read_write or read_only")
+	}
 	credIDStr := strings.TrimSpace(req.CredentialID)
 	if credIDStr == "" {
 		return GitConfig{}, service.Detail(service.ErrInvalidInput, "git_credential_id is required")
@@ -1422,6 +1533,9 @@ func (s *Service) ConnectGit(ctx context.Context, p authz.Principal, agentID uui
 		return GitConfig{}, service.Detail(service.ErrInvalidInput,
 			"could not access %s with the selected credential — verify the URL and that the token has repo access", remote)
 	}
+	if mode == GitModeReadOnly && state.Empty {
+		return GitConfig{}, service.Detail(service.ErrInvalidInput, "read_only Git requires a populated repository")
+	}
 	// Decide what a populated remote means for this agent:
 	//   - never-built agent        → import (adopt the remote's code)
 	//   - built agent, shared hist. → reconnect (same repo; normal push/pull
@@ -1440,7 +1554,7 @@ func (s *Service) ConnectGit(ctx context.Context, p authz.Principal, agentID uui
 		if !state.HasBranch {
 			effHeadSHA = state.DefaultHeadSHA
 		}
-		if agent.ImageRef == "" {
+		if agent.ImageRef == "" || mode == GitModeReadOnly {
 			importing = true
 		} else {
 			shared, herr := s.builder.RemoteSharesHistory(ctx, agentID.String(), remote, branch, pgtype.UUID{Bytes: credID, Valid: true})
@@ -1454,6 +1568,11 @@ func (s *Service) ConnectGit(ctx context.Context, p authz.Principal, agentID uui
 			}
 		}
 	}
+	if mode == GitModeReadWrite {
+		if err := s.builder.ValidateRemoteWrite(ctx, remote, branch, pgtype.UUID{Bytes: credID, Valid: true}, state.Empty); err != nil {
+			return GitConfig{}, service.Detail(service.ErrInvalidInput, "read_write Git requires a credential that can push %s: %s", branch, err.Error())
+		}
+	}
 	secret, err := randomHex(32)
 	if err != nil {
 		s.logger.Error("generate webhook secret", zap.Error(err))
@@ -1465,6 +1584,7 @@ func (s *Service) ConnectGit(ctx context.Context, p authz.Principal, agentID uui
 		GitCredentialID:  pgtype.UUID{Bytes: credID, Valid: true},
 		GitDefaultBranch: branch,
 		GitWebhookSecret: secret,
+		GitMode:          mode,
 	}); err != nil {
 		s.logger.Error("connect agent git", zap.Error(err))
 		return GitConfig{}, err
@@ -1508,6 +1628,8 @@ func (s *Service) ConnectGit(ctx context.Context, p authz.Principal, agentID uui
 		CredentialName: cred.Name,
 		DefaultBranch:  branch,
 		WebhookSecret:  secret,
+		LastSyncedRef:  effHeadSHA,
+		Mode:           mode,
 	}, nil
 }
 
@@ -1547,6 +1669,7 @@ func (s *Service) GetGitConfig(ctx context.Context, p authz.Principal, agentID u
 		DefaultBranch: cfg.GitDefaultBranch,
 		WebhookSecret: cfg.GitWebhookSecret,
 		LastSyncedRef: cfg.GitLastSyncedRef,
+		Mode:          cfg.GitMode,
 	}
 	if cfg.GitCredentialID.Valid {
 		out.CredentialID = uuid.UUID(cfg.GitCredentialID.Bytes).String()

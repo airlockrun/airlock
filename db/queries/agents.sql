@@ -18,7 +18,8 @@ INSERT INTO agents (
     tts_model, image_gen_model, embedding_model, search_model,
     source_ref, image_ref, db_schema, db_password, sdk_version,
     instructions, error_message, emoji,
-    git_remote_url, git_default_branch, git_webhook_secret, git_last_synced_ref
+    git_remote_url, git_default_branch, git_webhook_secret, git_last_synced_ref,
+    git_mode
 )
 SELECT
     p.id, @name, @slug, @owner_principal_id, @description, @config, 'draft',
@@ -29,7 +30,7 @@ SELECT
     '', '', '', '',
     '', '', '', '', '',
     '[]'::jsonb, '', '',
-    '', '', '', ''
+    '', '', '', '', ''
 FROM p
 RETURNING *;
 

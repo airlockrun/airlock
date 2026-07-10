@@ -16,8 +16,9 @@ UPDATE agents SET
     git_remote_url     = $1,
     git_credential_id  = $2,
     git_default_branch = $3,
-    git_webhook_secret = $4
-WHERE id = $5
+    git_webhook_secret = $4,
+    git_mode           = $5
+WHERE id = $6
 `
 
 type ConnectAgentGitParams struct {
@@ -25,6 +26,7 @@ type ConnectAgentGitParams struct {
 	GitCredentialID  pgtype.UUID `json:"git_credential_id"`
 	GitDefaultBranch string      `json:"git_default_branch"`
 	GitWebhookSecret string      `json:"git_webhook_secret"`
+	GitMode          string      `json:"git_mode"`
 	ID               pgtype.UUID `json:"id"`
 }
 
@@ -34,6 +36,7 @@ func (q *Queries) ConnectAgentGit(ctx context.Context, arg ConnectAgentGitParams
 		arg.GitCredentialID,
 		arg.GitDefaultBranch,
 		arg.GitWebhookSecret,
+		arg.GitMode,
 		arg.ID,
 	)
 	return err
@@ -45,7 +48,8 @@ UPDATE agents SET
     git_credential_id   = NULL,
     git_default_branch  = '',
     git_webhook_secret  = '',
-    git_last_synced_ref = ''
+    git_last_synced_ref = '',
+    git_mode            = ''
 WHERE id = $1
 `
 
@@ -59,7 +63,7 @@ func (q *Queries) DisconnectAgentGit(ctx context.Context, id pgtype.UUID) error 
 
 const getAgentGitConfig = `-- name: GetAgentGitConfig :one
 SELECT a.id, a.git_remote_url, a.git_credential_id, a.git_default_branch,
-       a.git_webhook_secret, a.git_last_synced_ref,
+       a.git_webhook_secret, a.git_last_synced_ref, a.git_mode,
        c.name AS credential_name
 FROM agents a
 LEFT JOIN git_credentials c ON a.git_credential_id = c.id
@@ -73,6 +77,7 @@ type GetAgentGitConfigRow struct {
 	GitDefaultBranch string      `json:"git_default_branch"`
 	GitWebhookSecret string      `json:"git_webhook_secret"`
 	GitLastSyncedRef string      `json:"git_last_synced_ref"`
+	GitMode          string      `json:"git_mode"`
 	CredentialName   pgtype.Text `json:"credential_name"`
 }
 
@@ -89,6 +94,7 @@ func (q *Queries) GetAgentGitConfig(ctx context.Context, id pgtype.UUID) (GetAge
 		&i.GitDefaultBranch,
 		&i.GitWebhookSecret,
 		&i.GitLastSyncedRef,
+		&i.GitMode,
 		&i.CredentialName,
 	)
 	return i, err
@@ -96,7 +102,7 @@ func (q *Queries) GetAgentGitConfig(ctx context.Context, id pgtype.UUID) (GetAge
 
 const listAgentsForGitPolling = `-- name: ListAgentsForGitPolling :many
 SELECT id, git_remote_url, git_default_branch, git_last_synced_ref,
-       git_credential_id
+       git_credential_id, git_mode
 FROM agents
 WHERE git_remote_url != ''
   AND git_credential_id IS NOT NULL
@@ -110,6 +116,7 @@ type ListAgentsForGitPollingRow struct {
 	GitDefaultBranch string      `json:"git_default_branch"`
 	GitLastSyncedRef string      `json:"git_last_synced_ref"`
 	GitCredentialID  pgtype.UUID `json:"git_credential_id"`
+	GitMode          string      `json:"git_mode"`
 }
 
 // 5-min polling fallback: returns agents with a remote + credential
@@ -131,6 +138,7 @@ func (q *Queries) ListAgentsForGitPolling(ctx context.Context) ([]ListAgentsForG
 			&i.GitDefaultBranch,
 			&i.GitLastSyncedRef,
 			&i.GitCredentialID,
+			&i.GitMode,
 		); err != nil {
 			return nil, err
 		}

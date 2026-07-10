@@ -55,6 +55,7 @@ type Agent struct {
 	GitDefaultBranch     string             `json:"git_default_branch"`
 	GitWebhookSecret     string             `json:"git_webhook_secret"`
 	GitLastSyncedRef     string             `json:"git_last_synced_ref"`
+	GitMode              string             `json:"git_mode"`
 }
 
 type AgentBuild struct {

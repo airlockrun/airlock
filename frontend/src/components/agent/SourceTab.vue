@@ -29,6 +29,11 @@ const dialogVisible = ref(false)
 const remoteUrl = ref('')
 const credentialId = ref('')
 const branch = ref('main')
+const gitMode = ref<'read_write' | 'read_only'>('read_write')
+const gitModeOptions = [
+  { label: 'Read/write - Airlock may push code changes', value: 'read_write' },
+  { label: 'Read-only - Git is authoritative', value: 'read_only' },
+]
 
 const isConnected = computed(() => !!cfg.value?.gitRemoteUrl)
 
@@ -46,6 +51,7 @@ function openConnect() {
   remoteUrl.value = ''
   credentialId.value = credsStore.credentials[0]?.id ?? ''
   branch.value = 'main'
+  gitMode.value = 'read_write'
   dialogVisible.value = true
 }
 
@@ -57,6 +63,7 @@ async function connect() {
       gitRemoteUrl: remoteUrl.value.trim(),
       gitCredentialId: credentialId.value,
       defaultBranch: branch.value.trim() || 'main',
+      gitMode: gitMode.value,
     })
     const { data } = await api.post(
       `/api/v1/agents/${props.agentId}/git/connect`,
@@ -163,6 +170,11 @@ onMounted(async () => {
       </div>
 
       <div>
+        <label style="display: block; font-size: 0.75rem; text-transform: uppercase; color: var(--p-text-muted-color); margin-bottom: 0.25rem">Mode</label>
+        <div>{{ cfg!.gitMode === 'read_only' ? 'Read-only' : 'Read/write' }}</div>
+      </div>
+
+      <div>
         <label style="display: block; font-size: 0.75rem; text-transform: uppercase; color: var(--p-text-muted-color); margin-bottom: 0.25rem">Clone command</label>
         <div style="display: flex; align-items: center; gap: 0.5rem">
           <code class="code-chip">{{ cloneCmd }}</code>
@@ -224,6 +236,20 @@ onMounted(async () => {
           <InputText id="branch" v-model="branch" style="width: 100%" />
           <label for="branch">Default branch</label>
         </FloatLabel>
+        <FloatLabel variant="on">
+          <Select
+            id="git-mode"
+            v-model="gitMode"
+            :options="gitModeOptions"
+            option-label="label"
+            option-value="value"
+            style="width: 100%"
+          />
+          <label for="git-mode">Source mode</label>
+        </FloatLabel>
+        <Message v-if="gitMode === 'read_only'" severity="warn" :closable="false" style="font-size: 0.8rem">
+          Git is authoritative. Connecting replaces the agent's source with this branch and disables Airlock codegen, local deploys, and source rollbacks.
+        </Message>
         <div style="display: flex; justify-content: flex-end; gap: 0.5rem">
           <Button label="Cancel" severity="secondary" text @click="dialogVisible = false" />
           <Button

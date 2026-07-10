@@ -228,9 +228,11 @@ message CreateAgentRequest {
   // When true, create only the draft agent row and grants; source upload will
   // populate the repo and start the first build.
   bool skip_initial_build = 12;
-  // For populated git imports, copy the code once without saving the remote
-  // as the agent's ongoing source. Empty remotes cannot use this mode.
-  bool one_time_git_import = 13;
+  reserved 13;
+  // "read_write" keeps a writable remote connected, "read_only" keeps Git
+  // authoritative without Airlock pushes, and "import_once" copies populated
+  // source without retaining the remote.
+  string git_mode = 14;
 }
 
 message CreateAgentResponse {
@@ -735,6 +737,7 @@ message ConnectAgentGitRequest {
   string git_remote_url = 1;
   string git_credential_id = 2;
   string default_branch = 3;       // empty → "main"
+  string git_mode = 4;             // "read_write" | "read_only"
 }
 
 message ConnectAgentGitResponse {

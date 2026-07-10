@@ -291,10 +291,7 @@ func skipWorkdirMirrorPath(rel string, isDir bool, exclude map[string]struct{}) 
 	if rel == ".git" || strings.HasPrefix(rel, ".git/") {
 		return true
 	}
-	if rel == ".airlock/local" || strings.HasPrefix(rel, ".airlock/local/") {
-		return true
-	}
-	if rel == ".airlock/toolchain" || strings.HasPrefix(rel, ".airlock/toolchain/") {
+	if rel == ".airlock" || strings.HasPrefix(rel, ".airlock/") {
 		return true
 	}
 	if isDir {

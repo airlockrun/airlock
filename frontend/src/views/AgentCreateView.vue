@@ -44,14 +44,18 @@ const slug = ref('')
 const slugManual = ref(false)
 const instructions = ref('')
 const mode = ref<'generate' | 'git' | 'local'>('generate')
-const modifyAfterImport = ref(false)
 
 // Optional external git remote attached on create. When gitRemoteUrl
 // is non-empty, gitCredentialId must also be set.
 const gitRemoteUrl = ref('')
 const gitCredentialId = ref('')
 const gitDefaultBranch = ref('main')
-const keepGitBound = ref(true)
+const gitMode = ref<'read_write' | 'read_only' | 'import_once'>('read_write')
+const gitModeOptions = [
+  { label: 'Read/write - Airlock may push code changes', value: 'read_write' },
+  { label: 'Read-only - Git is authoritative', value: 'read_only' },
+  { label: 'Import once - Airlock owns the copied source', value: 'import_once' },
+]
 const loading = ref(false)
 const building = ref(false)
 const buildError = ref('')
@@ -223,7 +227,6 @@ const canSubmit = computed(() => {
   if (!name.value || !slug.value) return false
   if (mode.value === 'git') {
     if (!gitRemoteUrl.value.trim() || !gitCredentialId.value) return false
-    if (modifyAfterImport.value && !instructions.value.trim()) return false
   }
   return true
 })
@@ -331,13 +334,13 @@ async function onSubmit() {
       build.providerRowID,
       exec.modelName,
       exec.providerRowID,
-      mode.value === 'git' && !modifyAfterImport.value ? '' : instructions.value,
+      mode.value === 'git' ? '' : instructions.value,
       mode.value === 'git' && gitRemoteUrl.value.trim()
         ? {
             remoteUrl: gitRemoteUrl.value.trim(),
             credentialId: gitCredentialId.value,
             defaultBranch: gitDefaultBranch.value.trim() || 'main',
-            oneTimeImport: !keepGitBound.value,
+            mode: gitMode.value,
           }
         : undefined,
     )
@@ -447,7 +450,7 @@ onUnmounted(() => {
       </div>
       <div class="local-copy">
         <h2>Future deploys</h2>
-        <p>After `.airlock/agent.toml` contains the Airlock URL and agent ID, deploy with no arguments.</p>
+        <p>After `.airlock/local/agent.toml` contains the Airlock URL and agent ID, deploy with no arguments.</p>
         <pre><code>{{ localDeployCommand }}</code></pre>
       </div>
     </section>
@@ -471,7 +474,7 @@ onUnmounted(() => {
       </Message>
 
       <Message v-if="mode === 'git'" severity="secondary" :closable="false">
-        Airlock imports the selected branch and builds it as-is. Keep the repository connected to enable future push/pull and webhook sync, or import once and let Airlock own the internal source after creation.
+        Airlock imports the selected branch and builds it as-is. Choose whether Airlock may push code changes, only follows Git, or copies the source once.
       </Message>
 
       <div v-if="mode === 'git'" class="git-fields">
@@ -504,14 +507,23 @@ onUnmounted(() => {
           <label style="display: block; margin-bottom: 0.35rem; font-size: 0.85rem">Default branch</label>
           <InputText v-model="gitDefaultBranch" :disabled="building" style="width: 100%" />
         </div>
-        <label class="check-row">
-          <Checkbox v-model="keepGitBound" binary :disabled="building" />
-          <span>Keep this Git repo connected after import</span>
-        </label>
-        <label class="check-row">
-          <Checkbox v-model="modifyAfterImport" binary :disabled="building" />
-          <span>Ask Airlock to modify the code after import</span>
-        </label>
+        <div>
+          <label style="display: block; margin-bottom: 0.35rem; font-size: 0.85rem">Source mode</label>
+          <Select
+            v-model="gitMode"
+            :options="gitModeOptions"
+            option-label="label"
+            option-value="value"
+            :disabled="building"
+            style="width: 100%"
+          />
+          <small v-if="gitMode === 'read_only'" style="color: var(--p-text-muted-color)">
+            Git always wins. Airlock polls and rebuilds this branch, but codegen, local deploys, and source rollbacks are disabled.
+          </small>
+          <small v-else-if="gitMode === 'import_once'" style="color: var(--p-text-muted-color)">
+            The repository is copied once and then disconnected. Airlock-managed codegen and local deploys remain available.
+          </small>
+        </div>
       </div>
 
       <!-- Core models: Build + Exec, both optional -->
@@ -592,7 +604,7 @@ onUnmounted(() => {
         </div>
       </Fieldset>
 
-      <div v-if="mode === 'generate' || (mode === 'git' && modifyAfterImport)">
+      <div v-if="mode === 'generate'">
         <label for="instructions" style="display: block; margin-bottom: 0.5rem; font-weight: 500">
           {{ mode === 'git' ? 'Change request' : 'Instructions' }}
         </label>

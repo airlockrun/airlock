@@ -602,6 +602,7 @@ message AgentGitConfig {
   string webhook_url = 6;          // fully-qualified URL the user pastes into their git provider
   string webhook_secret = 7;       // shown so the user can paste it into their provider settings
   string last_synced_ref = 8;
+  string git_mode = 9;              // "read_write" | "read_only"
 }
 
 // MCPServerInfo is one row from ListMCPServers — agent-declared MCP

@@ -68,12 +68,61 @@ func (b *BuildService) InspectRemote(ctx context.Context, remote, branch string,
 	return parseRemoteState(out, branch), nil
 }
 
+// ValidateRemoteWrite verifies that credID can push the selected branch without
+// changing the remote. It clones populated remotes and creates an ephemeral
+// commit for empty remotes, then uses git push --dry-run.
+func (b *BuildService) ValidateRemoteWrite(ctx context.Context, remote, branch string, credID pgtype.UUID, empty bool) error {
+	q := dbq.New(b.db.Pool())
+	auth, err := resolveGitAuth(ctx, q, b.encryptor, credID)
+	if err != nil {
+		return err
+	}
+	header, err := auth.ExtraHeader(ctx)
+	if err != nil {
+		return err
+	}
+	if branch == "" {
+		branch = "main"
+	}
+	root, err := os.MkdirTemp("", "airlock-git-write-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(root)
+	repo := filepath.Join(root, "repo")
+	if empty {
+		if err := os.Mkdir(repo, 0o755); err != nil {
+			return err
+		}
+		if err := git(repo, "init", "--initial-branch", branch); err != nil {
+			return err
+		}
+		if err := EnsureGitIdentity(repo); err != nil {
+			return err
+		}
+		if err := git(repo, "commit", "--allow-empty", "-m", "Airlock write permission probe"); err != nil {
+			return err
+		}
+	} else if err := gitAuthed(ctx, root, header, "clone", "--depth", "1", "--branch", branch, "--single-branch", remote, repo); err != nil {
+		return fmt.Errorf("clone for write check: %w", err)
+	}
+	if err := gitAuthed(ctx, repo, header, "push", "--dry-run", remote, "HEAD:refs/heads/"+branch); err != nil {
+		return fmt.Errorf("credential cannot push branch %s: %w", branch, err)
+	}
+	return nil
+}
+
 // CloneRemoteIntoAgent clones remote's branch into the agent's repo path so a
 // not-yet-built agent can adopt an existing external codebase (import). It
 // replaces any existing repo dir and verifies the result is a Go project. The
 // caller triggers a SkipScaffold build afterwards to compile the imported HEAD —
 // re-scaffolding would clobber the imported files, exactly as for a clone.
 func (b *BuildService) CloneRemoteIntoAgent(ctx context.Context, agentID, remote, branch string, credID pgtype.UUID) error {
+	lock, err := b.AcquireSourceLock(ctx, agentID)
+	if err != nil {
+		return err
+	}
+	defer lock.Unlock()
 	q := dbq.New(b.db.Pool())
 	auth, err := resolveGitAuth(ctx, q, b.encryptor, credID)
 	if err != nil {
@@ -351,6 +400,11 @@ func (b *BuildService) PullAgentRepo(ctx context.Context, agent dbq.Agent) (stri
 	if agent.GitRemoteUrl == "" {
 		return "", fmt.Errorf("agent has no git remote configured")
 	}
+	lock, err := b.AcquireSourceLock(ctx, uuidString(agent.ID))
+	if err != nil {
+		return "", err
+	}
+	defer lock.Unlock()
 	q := dbq.New(b.db.Pool())
 	auth, err := resolveGitAuth(ctx, q, b.encryptor, agent.GitCredentialID)
 	if err != nil {

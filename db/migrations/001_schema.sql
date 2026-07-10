@@ -417,10 +417,12 @@ CREATE TABLE public.agents (
     allow_oauth_mcp_prompt boolean NOT NULL,
     allow_public_mcp_prompt boolean NOT NULL,
     git_remote_url text NOT NULL,
+    git_mode text NOT NULL,
     git_credential_id uuid,
     git_default_branch text NOT NULL,
     git_webhook_secret text NOT NULL,
     git_last_synced_ref text NOT NULL,
+    CONSTRAINT agents_git_mode_check CHECK ((((git_remote_url = ''::text) AND (git_mode = ''::text)) OR ((git_remote_url <> ''::text) AND (git_mode = ANY (ARRAY['read_write'::text, 'read_only'::text]))))),
     CONSTRAINT agents_upgrade_status_check CHECK ((upgrade_status = ANY (ARRAY['idle'::text, 'queued'::text, 'building'::text, 'failed'::text])))
 );
 
