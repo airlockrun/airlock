@@ -7,6 +7,7 @@
 #   make dev
 
 SHELL := bash
+DEV_COMPOSE := docker compose -f docker-compose.yml -f docker-compose.dev.yml
 
 .PHONY: dev dev-up dev-down watch
 
@@ -15,10 +16,10 @@ SHELL := bash
 # postgres/rustfs come from the bundled-db profile in .env; naming them here also
 # starts them regardless. Caddy reads SPA_*/AIRLOCK_UPSTREAM from .env.
 dev-up:
-	docker compose up -d postgres rustfs caddy
+	$(DEV_COMPOSE) up -d postgres rustfs caddy
 
 dev-down:
-	docker compose stop postgres rustfs caddy
+	$(DEV_COMPOSE) stop postgres rustfs caddy
 
 # Full loop: infra up, then frontend watch in the background + airlock in the
 # foreground. Ctrl-C stops both. Reads .env so the native binary gets the same

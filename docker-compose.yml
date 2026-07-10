@@ -96,10 +96,6 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-airlock}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-airlock}
       POSTGRES_DB: ${POSTGRES_DB:-airlock}
-    # Loopback-only host port so a native dev binary (`make dev`) can reach
-    # the DB at 127.0.0.1. Not exposed off-host — safe in prod.
-    ports:
-      - "127.0.0.1:${DB_PORT_HOST:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
       # First-boot bootstrap: creates the create_agent_role() helper
@@ -125,10 +121,6 @@ services:
     # and BYO the other. For an external S3/RustFS, drop bundled-s3 from
     # COMPOSE_PROFILES and set S3_URL / S3_URL_PUBLIC in .env.
     profiles: ["bundled-s3"]
-    # Loopback-only host ports so a native dev binary can reach S3 + console.
-    ports:
-      - "127.0.0.1:${S3_PORT_HOST:-9090}:9000"   # S3 API
-      - "127.0.0.1:${S3_CONSOLE_PORT_HOST:-9001}:9001"   # Console UI
     environment:
       RUSTFS_ADDRESS: "0.0.0.0:9000"
       RUSTFS_CONSOLE_ADDRESS: "0.0.0.0:9001"

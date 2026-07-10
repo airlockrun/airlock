@@ -157,10 +157,9 @@ AGENT_CODEGEN_VOLUME=<id>-data
 
 Published Caddy installs also need distinct host ports (`HTTP_PORT` /
 `HTTPS_PORT`). Tunnel installs use the `caddy-private,cloudflared` profiles and
-do not publish Caddy host ports. Bundled Postgres/RustFS still publish
-loopback-only convenience ports for native access; co-located stacks using the
-bundled services should set distinct `DB_PORT_HOST`, `S3_PORT_HOST`, and
-`S3_CONSOLE_PORT_HOST` values.
+do not publish Caddy host ports. Bundled Postgres and RustFS stay on the Docker
+network in normal deployments. `make dev` applies `docker-compose.dev.yml` to
+publish loopback ports for the native development process.
 
 Each installed instance is its own git checkout and `.env`. This lets instances
 run and upgrade on separate release tracks. Run `install.sh` and `upgrade.sh`
