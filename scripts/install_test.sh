@@ -291,4 +291,11 @@ assert_file_not_contains() {
 	assert_eq 'Added alice to the docker group. Sign out and back in, then re-run the installer.' "$die_message" 'docker group enrollment guidance'
 )
 
+set +e
+pipe_output=$(bash -s -- --not-a-real-flag < "$ROOT_DIR/install.sh" 2>&1)
+pipe_status=$?
+set -e
+assert_eq '1' "$pipe_status" 'piped installer exit status'
+printf '%s' "$pipe_output" | grep -Fq 'unknown flag: --not-a-real-flag' || fail 'piped installer did not reach argument parsing'
+
 printf 'install_test: ok\n'
