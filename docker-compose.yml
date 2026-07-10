@@ -394,8 +394,8 @@ services:
 
   # Cloudflare Tunnel sidecar — only with COMPOSE_PROFILES=cloudflared (TLS_MODE=
   # tunnel). Dials out to Cloudflare and forwards public hostnames to caddy
-  # over the tunnel; CF terminates TLS at its edge. Route DOMAIN / *.DOMAIN /
-  # s3.DOMAIN → http://caddy:80 in the CF Zero-Trust dashboard.
+  # over the tunnel; CF terminates TLS at its edge. Route DOMAIN and *.DOMAIN
+  # to http://caddy:80 in the CF Zero-Trust dashboard.
   cloudflared:
     image: cloudflare/cloudflared:latest
     profiles: ["cloudflared"]
