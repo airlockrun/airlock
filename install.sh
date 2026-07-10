@@ -152,11 +152,15 @@ resolves_to() { # resolves_to <name> <ip> -> 0 if <name> A-record == <ip>
 # ---------- prereqs ----------
 need_cmd() { command -v "$1" >/dev/null 2>&1; }
 
+as_root() {
+	if [ "$(id -u)" -eq 0 ]; then "$@"; else sudo "$@"; fi
+}
+
 install_pkg() { # best-effort install of a package by name
 	local pkg="$1"
 	case "$DISTRO" in
-		debian) sudo "$PKG" update -y >/dev/null 2>&1 || true; sudo "$PKG" install -y "$pkg" ;;
-		rhel)   sudo "$PKG" install -y "$pkg" ;;
+		debian) as_root "$PKG" update -y >/dev/null 2>&1 || true; as_root "$PKG" install -y "$pkg" ;;
+		rhel)   as_root "$PKG" install -y "$pkg" ;;
 		*) return 1 ;;
 	esac
 }
@@ -175,14 +179,32 @@ ensure_base_tools() {
 }
 
 ensure_docker() {
-	if need_cmd docker && docker info >/dev/null 2>&1; then log "docker present"; return; fi
+	if need_cmd docker; then
+		if docker info >/dev/null 2>&1; then log "docker present"; return; fi
+		if [ "$OS" = macos ]; then
+			die "Docker Desktop is installed but not running or not accessible — start it, then re-run."
+		fi
+		log "starting Docker"
+		as_root systemctl enable --now docker 2>/dev/null || true
+		if docker info >/dev/null 2>&1; then log "docker present"; return; fi
+		docker_access_error
+	fi
 	if [ "$OS" = macos ]; then
 		die "Docker Desktop is required on macOS — install it (https://docs.docker.com/desktop/install/mac-install/) and start it, then re-run."
 	fi
 	log "installing Docker (get.docker.com)"
-	curl -fsSL https://get.docker.com | sudo sh || die "Docker install failed"
-	sudo systemctl enable --now docker 2>/dev/null || true
-	docker info >/dev/null 2>&1 || die "docker installed but not runnable — check the daemon / your user's docker group, then re-run"
+	curl -fsSL https://get.docker.com | as_root sh || die "Docker install failed"
+	as_root systemctl enable --now docker 2>/dev/null || true
+	docker info >/dev/null 2>&1 || docker_access_error
+}
+
+docker_access_error() {
+	local user
+	user=$(id -un)
+	if [ "$(id -u)" -ne 0 ] && need_cmd getent && getent group docker >/dev/null 2>&1 && ! id -nG "$user" | tr ' ' '\n' | grep -Fxq docker; then
+		die "Docker is installed, but $user cannot access it. Run 'sudo usermod -aG docker $user', log out and back in, then re-run."
+	fi
+	die "Docker is installed but not reachable. Check that the daemon is running and that this user can access /var/run/docker.sock, then re-run."
 }
 
 # ---------- rootless buildkit host prep ("drop caps" if unsatisfiable) ----------
