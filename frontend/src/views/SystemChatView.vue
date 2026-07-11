@@ -119,7 +119,7 @@ async function send() {
       router.replace(`/system/chat/${cid}`)
     }
   } catch (err: any) {
-    composer.value = text
+    composer.value = composer.value ? `${text}\n${composer.value}` : text
     toast.add({ severity: 'error', summary: 'Send failed', detail: err?.message, life: 5000 })
   }
 }
@@ -143,12 +143,11 @@ async function reject() {
 }
 
 function onKeydown(e: KeyboardEvent) {
-  // Desktop: Enter sends, Shift+Enter inserts a newline. Touch keyboards
-  // (coarse pointer) let Enter be a newline — the on-screen Send button
-  // submits — so dumping multi-line text on mobile doesn't fire early. Skip
-  // IME composition so selecting a candidate with Enter never sends.
+  // Desktop: Enter sends, Shift+Enter inserts a newline. Mobile keyboards let
+  // Enter be a newline and use the on-screen Send button. Pointer capabilities
+  // do not identify mobile devices because touch-enabled desktops are common.
   if (e.key !== 'Enter' || e.shiftKey || e.isComposing) return
-  if (window.matchMedia?.('(pointer: coarse)').matches) return
+  if (/Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent)) return
   e.preventDefault()
   send()
 }
@@ -295,7 +294,7 @@ function msgClassForSource(source: string): string {
         <Textarea
           ref="composerRef"
           v-model="composer"
-          :disabled="sys.sending || !!sys.pendingConfirmation"
+          :disabled="!!sys.pendingConfirmation"
           :placeholder="sys.pendingConfirmation ? 'Approve or reject the pending tool call above first.' : 'Ask me anything…'"
           autoResize
           rows="1"

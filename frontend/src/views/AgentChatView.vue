@@ -268,7 +268,7 @@ async function send() {
   } catch (err: any) {
     // Restore the composer so the user doesn't lose their text/attachments
     // on a rejected send (e.g. 409 when the agent is stopped).
-    messageInput.value = text
+    messageInput.value = messageInput.value ? `${text}\n${messageInput.value}` : text
     attachedFiles.value = sentFiles
     toast.add({ severity: 'error', summary: err.response?.data?.error || 'Send failed', life: 5000 })
   }
@@ -319,12 +319,11 @@ async function reject() {
 }
 
 function onKeydown(e: KeyboardEvent) {
-  // Desktop: Enter sends, Shift+Enter inserts a newline. Touch keyboards
-  // (coarse pointer) let Enter be a newline — the on-screen Send button
-  // submits — so dumping multi-line text on mobile doesn't fire early. Skip
-  // IME composition so selecting a candidate with Enter never sends.
+  // Desktop: Enter sends, Shift+Enter inserts a newline. Mobile keyboards let
+  // Enter be a newline and use the on-screen Send button. Pointer capabilities
+  // do not identify mobile devices because touch-enabled desktops are common.
   if (e.key !== 'Enter' || e.shiftKey || e.isComposing) return
-  if (window.matchMedia?.('(pointer: coarse)').matches) return
+  if (/Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent)) return
   e.preventDefault()
   send()
 }
@@ -736,7 +735,7 @@ function formatTokens(n: number): string {
           :placeholder="agentStopped ? 'Agent is stopped' : 'Type a message...'"
           :auto-resize="true"
           rows="1"
-          :disabled="chat.sending || agentStopped"
+          :disabled="agentStopped"
           @keydown="onKeydown"
         />
         <Button
