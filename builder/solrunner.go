@@ -156,7 +156,7 @@ func (b *BuildService) runSolInProcess(ctx context.Context, opts solRunOpts) (*s
 	mounts := []dmount.Mount{workspaceMount}
 	if b.cfg.AgentLibsPathExplicit {
 		// Dev: overlay the live lib trees read-only at /libs so the codegen
-		// LLM reads the current agentsdk/goai/sol source + llms.md guide
+		// LLM reads the current agentsdk/goai/sol source + REFERENCE.md guide
 		// (the prompt instructs it to). This is docs/reference only — go
 		// resolution goes through the proxy below, not /libs (the committed
 		// go.mod has no replaces pointing here). Prod uses the agent-builder
