@@ -98,9 +98,8 @@ func TestListCapabilitiesShape(t *testing.T) {
 	}
 	// The search overlay contributes the Responses API web_search tool
 	// (ExtraCapabilities + SearchBackend = "openai"), so "search" must be
-	// present. Transcription and speech are NOT: sol no longer enumerates
-	// OpenAI's audio models (they're absent from both models.dev and
-	// OpenRouter), so those capabilities are gone from the native provider.
+	// present. Model-derived capabilities remain dynamic because models.dev
+	// can add or remove modality-specific entries independently of Airlock.
 	hasCap := func(c string) bool {
 		for _, x := range openai.Capabilities {
 			if x == c {
@@ -111,11 +110,6 @@ func TestListCapabilitiesShape(t *testing.T) {
 	}
 	if !hasCap("search") {
 		t.Errorf("openai capabilities missing \"search\"; got %v", openai.Capabilities)
-	}
-	for _, gone := range []string{"transcription", "speech"} {
-		if hasCap(gone) {
-			t.Errorf("openai should no longer expose %q (dropped with goai enumeration); got %v", gone, openai.Capabilities)
-		}
 	}
 
 	brave, ok := byID["brave"]
