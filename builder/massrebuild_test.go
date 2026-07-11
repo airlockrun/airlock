@@ -39,7 +39,7 @@ func TestSDKMigrationInstruction(t *testing.T) {
 	if instr == "" {
 		t.Fatal("breaking bump should yield a migration instruction")
 	}
-	for _, want := range []string{"0.3.1-rc.6", "0.4.0-rc.1", "llms.md"} {
+	for _, want := range []string{"0.3.1-rc.6", "0.4.0-rc.1", "REFERENCE.md"} {
 		if !strings.Contains(instr, want) {
 			t.Errorf("instruction missing %q:\n%s", want, instr)
 		}

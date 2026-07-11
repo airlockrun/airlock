@@ -182,14 +182,14 @@ func envInt(name string) int {
 // SDK series changed in a breaking way, or "" to keep the bare-recompile path.
 // On a breaking bump a plain recompile fails on removed API; routing through
 // codegen lets the builder adapt the agent's source to the new API. Generic by
-// design: the builder reads /libs/agentsdk/llms.md (always current) for specifics.
+// design: the builder reads /libs/agentsdk/REFERENCE.md (always current) for specifics.
 func sdkMigrationInstruction(from, to string) string {
 	if !sdkSeriesChanged(from, to) {
 		return ""
 	}
 	return fmt.Sprintf("The agentsdk was upgraded from v%s to v%s — a breaking "+
 		"release. Make the agent compile against the new SDK: read "+
-		"/libs/agentsdk/llms.md first, then migrate every tool registration and "+
+		"/libs/agentsdk/REFERENCE.md first, then migrate every tool registration and "+
 		"any agent-code model-generation calls to the current API. Change only "+
 		"what the new SDK requires — preserve all behavior, tool names, schemas, "+
 		"and unrelated code.", from, to)

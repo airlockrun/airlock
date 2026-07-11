@@ -402,7 +402,7 @@ func (b *BuildService) Build(_ context.Context, input BuildInput) error {
 // buildCodegenPrompt is the user-turn message for a fresh build. The
 // scaffold is empty, so this is a from-scratch implementation request —
 // not a spec the model should reconcile a tree against. The agentsdk
-// reference lives at /libs/agentsdk/llms.md and is pulled in by the
+// reference lives at /libs/agentsdk/REFERENCE.md and is pulled in by the
 // system prompt's First Step; this message is just the task.
 func buildCodegenPrompt(agent dbq.Agent, instructions string) string {
 	return fmt.Sprintf(`Build a new agent from scratch in the scaffolded workspace.
