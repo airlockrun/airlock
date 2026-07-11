@@ -20,7 +20,7 @@ HQ="$(cd "$AIRLOCK/.." && pwd)"
 
 # Modules whose license text the matcher can't auto-identify but which have been
 # manually vetted as permissive. One module path per line.
-VETTED=""
+VETTED="github.com/davecgh/go-spew"
 
 violations=$(mktemp)
 trap 'rm -f "$violations"' EXIT
