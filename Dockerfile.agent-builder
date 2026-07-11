@@ -41,17 +41,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 #
 # sudo is unrestricted (NOPASSWD: ALL) and that is the honest config —
 # it is NOT a privilege boundary. run-setup execs an LLM-authored
-# /workspace/setup.sh as root, so the codegen agent has root in this
+# setup.sh from the current workspace as root, so the codegen agent has root in this
 # container by design (it must, to install build dependencies). The
 # real boundary is the container itself: ephemeral, one per build, no
 # --privileged, no docker socket, no host mounts. World-writable
 # account files change nothing — the agent already has effective root
 # here, and the base image's /etc/shadow holds no real password
-# hashes. run-setup stays as a fixed-path convenience the build prompt
+# hashes. run-setup stays as a convenience the build prompt
 # points at for applying setup.sh.
 COPY --chmod=0755 scripts/agent-builder-entrypoint.sh /usr/local/bin/agent-builder-entrypoint
 RUN chmod 0666 /etc/passwd /etc/shadow && \
-    printf '#!/bin/bash\nset -euo pipefail\nexec bash /workspace/setup.sh "$@"\n' \
+    printf '#!/bin/bash\nset -euo pipefail\nexec bash ./setup.sh "$@"\n' \
         > /usr/local/bin/run-setup && \
     chmod 0755 /usr/local/bin/run-setup && \
     echo 'ALL ALL=(root) NOPASSWD: ALL' \
