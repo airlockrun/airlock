@@ -184,7 +184,7 @@ func (b *BuildService) runSolInProcess(ctx context.Context, opts solRunOpts) (*s
 		toolEnv = append(toolEnv, "GOPROXY=file:///goproxy,https://proxy.golang.org")
 	}
 	// Point the toolserver's skill registry at the platform skill roots baked
-	// into the agent-builder image (currently the version-pinned daisyUI skill).
+	// into the agent-builder image from agentsdk's version-matched bundle.
 	// airlock owns the path; sol just scans whatever SKILLS_DIRS names.
 	toolEnv = append(toolEnv, "SKILLS_DIRS=/usr/local/lib/agent-skills")
 	tc, err := b.containers.StartToolserver(ctx, container.ToolserverOpts{
