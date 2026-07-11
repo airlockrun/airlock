@@ -75,7 +75,7 @@ fi
 	confirm() {
 		case "$1" in
 			'Advanced TLS? (bring-your-own cert, or sit behind your own reverse proxy)') return 1 ;;
-			"This host isn't publicly reachable — serve it via a Cloudflare Tunnel?") return 0 ;;
+			"This host isn't publicly reachable — serve it via a Cloudflare Tunnel?") assert_eq 'y' "${2:-}" 'tunnel prompt default'; return 0 ;;
 			'Use the bundled Postgres (pgvector)?') return 0 ;;
 			'Use the bundled object store (RustFS)?') return 0 ;;
 			*) fail "unexpected confirm prompt: $1" ;;
@@ -119,6 +119,28 @@ fi
 		! printf '%s\n' "$services" | grep -Fx caddy >/dev/null || fail 'compose config enabled published caddy service in tunnel mode'
 	fi
 )
+
+(
+	source "$ROOT_DIR/install.sh"
+	assert_eq '2' "$(detect_wsl_version '5.15.167.4-microsoft-standard-WSL2')" 'WSL2 detection'
+	assert_eq '1' "$(detect_wsl_version '4.4.0-19041-Microsoft')" 'WSL1 detection'
+	assert_eq '0' "$(detect_wsl_version '6.8.0-57-generic')" 'non-WSL detection'
+)
+
+set +e
+wsl_docker_output=$(
+	ROOT_DIR="$ROOT_DIR" bash -c '
+		source "$ROOT_DIR/install.sh"
+		WSL_VERSION=2
+		need_cmd() { return 1; }
+		confirm() { return 1; }
+		ensure_docker
+	' 2>&1
+)
+wsl_docker_status=$?
+set -e
+assert_eq '1' "$wsl_docker_status" 'declined WSL Docker install status'
+printf '%s' "$wsl_docker_output" | grep -Fq "Enable Docker Desktop's WSL integration" || fail 'missing WSL Docker Desktop guidance'
 
 (
 	cd "$TMP_DIR"

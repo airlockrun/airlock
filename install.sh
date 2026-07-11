@@ -42,6 +42,7 @@ DRY_RUN=0
 FORCE_LOCAL=0
 ALLOW_PRERELEASE=0  # --pre-release / AIRLOCK_ALLOW_PRERELEASE: install an rc/alpha/beta/dev tag
 INSTANCE_ID="airlock"
+WSL_VERSION=0
 
 # ---------- output helpers ----------
 BOLD=$'\033[1m'; RED=$'\033[31m'; GRN=$'\033[32m'; YLW=$'\033[33m'; NC=$'\033[0m'
@@ -117,6 +118,7 @@ detect_os() { # sets OS, DISTRO, PKG
 		Darwin) OS=macos ;;
 		*) die "unsupported OS: $(uname -s) (Linux or macOS only)" ;;
 	esac
+	WSL_VERSION=$(detect_wsl_version "$(uname -r)")
 	DISTRO=""; PKG=""
 	if [ "$OS" = linux ] && [ -r /etc/os-release ]; then
 		. /etc/os-release
@@ -126,6 +128,14 @@ detect_os() { # sets OS, DISTRO, PKG
 			*) DISTRO=unknown ;;
 		esac
 	fi
+}
+
+detect_wsl_version() {
+	case "${1,,}" in
+		*microsoft-standard-wsl2*) printf '2' ;;
+		*microsoft*) printf '1' ;;
+		*) printf '0' ;;
+	esac
 }
 
 is_cloudflare() { # is_cloudflare <domain> -> 0 if the zone's NS are Cloudflare
@@ -184,6 +194,17 @@ ensure_base_tools() {
 }
 
 ensure_docker() {
+	if [ "$WSL_VERSION" = 2 ] && { ! need_cmd docker || ! docker info >/dev/null 2>&1; }; then
+		warn "Docker is not reachable from WSL2. Docker Desktop with WSL integration is the recommended setup."
+		if ! confirm "Install a separate Docker Engine inside this WSL2 distro instead?"; then
+			die "Enable Docker Desktop's WSL integration for this distro, verify 'docker info' works here, then re-run."
+		fi
+		log "installing Docker inside WSL2"
+		curl -fsSL https://get.docker.com | as_root sh || die "Docker install failed"
+		as_root systemctl enable --now docker 2>/dev/null || true
+		docker info >/dev/null 2>&1 || docker_access_error
+		return
+	fi
 	if need_cmd docker; then
 		if docker info >/dev/null 2>&1; then
 			if [ "$(id -u)" -eq 0 ] && [ -n "${SUDO_USER:-}" ]; then ensure_invoking_user_docker_access; fi
@@ -442,7 +463,7 @@ choose_mode() {
 			ENV_EXTRA+=("DNS_PROVIDER=cloudflare" "DNS_API_TOKEN=$CF_TOKEN")
 			return
 		fi
-		if [ "$public" = n ] && confirm "This host isn't publicly reachable — serve it via a Cloudflare Tunnel?"; then
+		if [ "$public" = n ] && confirm "This host isn't publicly reachable — serve it via a Cloudflare Tunnel?" y; then
 			TLS_MODE=tunnel
 			local tok_input tok
 			tok_input=$(ask_secret "Cloudflare Tunnel token or docker run command (Zero-Trust > Tunnels)")
