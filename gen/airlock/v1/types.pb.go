@@ -665,12 +665,9 @@ type ModelInfo struct {
 	OutputLimit  int32                  `protobuf:"varint,7,opt,name=output_limit,json=outputLimit,proto3" json:"output_limit,omitempty"`
 	CostInput    float64                `protobuf:"fixed64,8,opt,name=cost_input,json=costInput,proto3" json:"cost_input,omitempty"`
 	CostOutput   float64                `protobuf:"fixed64,9,opt,name=cost_output,json=costOutput,proto3" json:"cost_output,omitempty"`
-	// Kind is the model's primary purpose, sourced from goai's typed lists.
-	// One of "language", "embedding", "image", "speech", "transcription",
-	// "reranking", or "" when sol has no goai coverage for the provider —
-	// currently the openai-compat bucket (groq, xai, cerebras, fireworks,
-	// etc.), all of which ship language models, so clients can safely
-	// treat empty as "language" for filtering purposes.
+	// Kind is the model's primary purpose as published by the catalog. One of
+	// "language", "embedding", "image", "audio", "video", "speech",
+	// "transcription", or "reranking".
 	Kind string `protobuf:"bytes,10,opt,name=kind,proto3" json:"kind,omitempty"`
 	// Per-model capability flags computed by sol's CapabilitiesFromModel
 	// (kind-derived plus modality-derived). The strings match

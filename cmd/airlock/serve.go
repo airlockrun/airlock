@@ -69,11 +69,8 @@ func runServe(_ []string) {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	// Kick off the models.dev catalog refresher: synchronous cache hydrate
-	// (from /root/.cache/sol/models.json baked into the image, or builtin
-	// fallback), then a background goroutine that does an immediate fetch
-	// + 12h periodic refresh. Must run before any handler can reach the
-	// catalog so the first capabilities request doesn't see stale data.
+	// The embedded Sol catalog is available synchronously. Refresh it from the
+	// Airlock catalog immediately and then every 12 hours.
 	solprovider.StartPeriodicRefresh(ctx)
 
 	// Connect to database

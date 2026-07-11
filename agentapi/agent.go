@@ -819,7 +819,7 @@ func (h *Handler) resolveAgentCapabilities(ctx context.Context, q *dbq.Queries, 
 	}
 
 	// Chat-model modalities: same agent → default fallback for the
-	// exec slot, then look up the model in the models.dev catalog.
+	// exec slot, then look up the model in the active catalog.
 	execModel := ag.ExecModel
 	var execProvider pgtype.UUID = ag.ExecProviderID
 	if execModel == "" || !execProvider.Valid {

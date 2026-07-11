@@ -349,12 +349,9 @@ export type ModelInfo = Message<"airlock.v1.ModelInfo"> & {
   costOutput: number;
 
   /**
-   * Kind is the model's primary purpose, sourced from goai's typed lists.
-   * One of "language", "embedding", "image", "speech", "transcription",
-   * "reranking", or "" when sol has no goai coverage for the provider —
-   * currently the openai-compat bucket (groq, xai, cerebras, fireworks,
-   * etc.), all of which ship language models, so clients can safely
-   * treat empty as "language" for filtering purposes.
+   * Kind is the model's primary purpose as published by the catalog. One of
+   * "language", "embedding", "image", "audio", "video", "speech",
+   * "transcription", or "reranking".
    *
    * @generated from field: string kind = 10;
    */

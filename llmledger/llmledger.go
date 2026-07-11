@@ -122,7 +122,7 @@ func Record(ctx context.Context, q *dbq.Queries, logger *zap.Logger, c Capture) 
 }
 
 // cost returns (cost_input, cost_output) in dollars. Token-priced models
-// use the sol/provider (models.dev) catalog. Non-token units (image /
+// use the Sol provider catalog. Non-token units (image /
 // audio-second / character) are deliberately not priced — there is no
 // catalog rate and a hand-maintained rate table proved to be worse than
 // none (an empty table silently yields 0 anyway); they are recorded with

@@ -291,7 +291,7 @@ func tryExecProviderSearch(
 	}), nil
 }
 
-// loadBaseOnce returns the raw models.dev provider map (pre-overlay) so we
+// loadBaseOnce returns the source provider map (pre-overlay) so we
 // can tell catalog-only overlay entries apart from LLM providers that
 // happen to offer search. LoadProviders is already memoized, so this is
 // cheap to call per request.

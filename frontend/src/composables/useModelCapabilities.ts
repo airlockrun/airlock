@@ -29,12 +29,10 @@ export function splitModelValue(v: string): { providerRowID: string; modelName: 
   return { providerRowID: v.slice(0, idx), modelName: v.slice(idx + 1) }
 }
 
-// Kind predicates — primary axis for picker filtering. Empty kind means
-// sol classified the model as a plain language model (chat models + the
-// openai-compat bucket: groq, xai, cerebras, fireworks, etc.), so isLanguage
-// treats empty as language; the other kind predicates require an exact match.
+// Kind predicates are the primary axis for picker filtering. The catalog
+// publishes an explicit kind for every model.
 export function isLanguage(m: CatalogModel): boolean {
-  return !m.kind || m.kind === 'language'
+  return m.kind === 'language'
 }
 export function isEmbedding(m: CatalogModel): boolean {
   return m.kind === 'embedding'
