@@ -28,7 +28,7 @@ onMounted(async () => {
 // and per-model caps (vision, …) — so a query like "transcription" or "vision"
 // surfaces those models, not just name matches.
 function modelHaystack(m: ModelInfo): string {
-  const caps = [m.kind || 'language', ...m.caps]
+  const caps = [m.kind, ...m.caps]
   if (m.toolCall) caps.push('tools')
   return [m.name, m.id, ...caps].join(' ').toLowerCase()
 }

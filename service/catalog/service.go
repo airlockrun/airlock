@@ -1,5 +1,4 @@
-// Package catalog owns the read-only LLM catalog: providers + models
-// (merged from models.dev with the hand-maintained overlay) + the
+// Package catalog owns the read-only provider/model catalog and the
 // per-provider capability matrix the Settings UI renders.
 //
 // Every method gates through authz against TenantCatalogView (currently
@@ -36,17 +35,15 @@ func New(d *db.DB, logger *zap.Logger) *Service {
 	return &Service{db: d, logger: logger}
 }
 
-// Provider is one entry from the upstream catalog (models.dev) — the
+// Provider is one entry from the source catalog — the
 // list a user picks from when adding a provider row.
 type Provider struct {
 	ID   string
 	Name string
 }
 
-// Model is one model from the merged catalog (models.dev + overlay).
-// The overlay surfaces entries like OpenAI Whisper / TTS-1 that
-// models.dev doesn't carry, so picker dropdowns and the capability
-// matrix see the same model list.
+// Model is one model from the active catalog. Picker dropdowns and the
+// capability matrix consume the same model list.
 type Model struct {
 	ID           string
 	Name         string
@@ -67,10 +64,9 @@ type Model struct {
 // (a tool-driven web-search model). It's the single source of truth for the
 // capability gate behind both the system-default and per-agent model pickers;
 // the predicates mirror the frontend (useModelCapabilities). An unknown
-// capability imposes no requirement. Empty kind is the openai-compat bucket,
-// treated as a language/text model.
+// capability imposes no requirement.
 func ModelMeetsCapability(m Model, capability string) (ok bool, reason string) {
-	isLanguage := m.Kind == "" || m.Kind == "language"
+	isLanguage := m.Kind == "language"
 	hasCap := func(c string) bool {
 		for _, x := range m.Caps {
 			if x == c {
@@ -118,8 +114,8 @@ func ModelMeetsCapability(m Model, capability string) (ok bool, reason string) {
 
 // ProviderCapability is one row in the capability matrix Settings
 // renders. Configured = the user has an enabled providers row for it;
-// CatalogOnly = the provider lives only in the overlay (not in the
-// models.dev base), so it isn't a candidate for normal "add provider"
+// CatalogOnly = the provider is a Sol-owned search-only entry, so it isn't a
+// candidate for normal "add provider"
 // flows.
 type ProviderCapability struct {
 	ProviderID   string
@@ -129,7 +125,7 @@ type ProviderCapability struct {
 	CatalogOnly  bool
 }
 
-// ListProviders returns the raw models.dev provider list (no overlay),
+// ListProviders returns the source provider list without Sol-owned overlays,
 // sorted by ID. Used to populate the "add provider" picker.
 func (s *Service) ListProviders(ctx context.Context, p authz.Principal) ([]Provider, error) {
 	q := dbq.New(s.db.Pool())
@@ -157,7 +153,7 @@ type ListModelsOptions struct {
 	ConfiguredOnly bool
 }
 
-// ListModels returns the merged catalog (models.dev + overlay) sorted
+// ListModels returns the enriched catalog sorted
 // by (provider, model). Use ConfiguredOnly to mask out catalog entries
 // the operator hasn't enabled — the only filter that touches the DB.
 func (s *Service) ListModels(ctx context.Context, p authz.Principal, opts ListModelsOptions) ([]Model, error) {
