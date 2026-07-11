@@ -428,7 +428,7 @@ onMounted(() => {
           </a>
         </div>
 
-        <!-- App context: conversations + slim nav (Agents, User) -->
+        <!-- App context: conversations + slim nav (Cyborg Agents, User) -->
         <template v-else>
           <div class="sidebar-conv">
             <button class="sidebar-new" @click="openNewMenu">
@@ -482,7 +482,7 @@ onMounted(() => {
               @click.prevent="navigateTo('/agents')"
             >
               <span class="pi pi-box" />
-              <span>Agents</span>
+              <span>Cyborg Agents</span>
             </a>
             <a class="sidebar-item" @click="toggleUserMenu">
               <span class="pi pi-user" />
@@ -558,7 +558,7 @@ onMounted(() => {
               @click.prevent="navigateTo('/agents')"
             >
               <span class="pi pi-box" />
-              <span>Agents</span>
+              <span>Cyborg Agents</span>
             </a>
             <a class="sidebar-item" @click="toggleUserMenu">
               <span class="pi pi-user" />
@@ -898,7 +898,7 @@ onMounted(() => {
 
 /* The drawer content is a flex column (set via the Drawer's pt, since it's
    teleported out of this scoped tree): the conversation list fills the slack
-   and the Agents/User nav pins to the bottom (via sidebar-nav margin-top:auto)
+   and the Cyborg Agents/User nav pins to the bottom (via sidebar-nav margin-top:auto)
    rather than trailing the list mid-drawer. */
 .drawer-conv {
   flex: 1;

@@ -653,6 +653,7 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   gap: 1.25rem;
+  padding-top: 0.5rem;
 }
 
 .create-header h1 {
