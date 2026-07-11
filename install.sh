@@ -57,17 +57,22 @@ ask() { # ask "prompt" "default" -> echoes answer
 	printf '%s' "${reply:-$default}"
 }
 ask_secret() { # ask_secret "prompt" -> echoes (input masked with asterisks)
-	local prompt="$1" reply='' char
+	local prompt="$1" reply='' char tty_state
 	printf '%s: ' "$prompt" >&2
-	# Read char-by-char so we can echo a '*' per keystroke (plain `read -s` shows
-	# nothing, leaving the user unsure input is registering). Handles backspace.
-	while IFS= read -rsn1 char </dev/tty; do
+	# Keep echo disabled for the whole read. Toggling it for every character lets
+	# a terminal echo pieces of a queued paste between reads.
+	tty_state=$(stty -g </dev/tty) || die "could not read terminal state"
+	stty -echo </dev/tty || die "could not disable terminal echo"
+	trap 'stty "$tty_state" </dev/tty 2>/dev/null || true; trap - HUP INT TERM; return 130' HUP INT TERM
+	while IFS= read -rn1 char </dev/tty; do
 		case "$char" in
 			'') break ;;                                   # Enter
 			$'\x7f'|$'\b') [ -n "$reply" ] && { reply="${reply%?}"; printf '\b \b' >&2; } ;;
 			*) reply="$reply$char"; printf '*' >&2 ;;
 		esac
 	done
+	stty "$tty_state" </dev/tty
+	trap - HUP INT TERM
 	printf '\n' >&2
 	printf '%s' "$reply"
 }

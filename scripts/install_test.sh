@@ -30,6 +30,17 @@ assert_file_not_contains() {
 	! grep -Fqx "$needle" "$file" || fail "$file unexpectedly contains line: $needle"
 }
 
+if command -v script >/dev/null 2>&1; then
+	secret='docker run cloudflare/cloudflared:latest tunnel --no-autoupdate run --token pasted-secret-token'
+	secret_output="$TMP_DIR/secret-output"
+	{
+		sleep 1
+		printf '%s\n' "$secret"
+	} | script -qfec "bash -c 'source \"$ROOT_DIR/install.sh\"; value=\$(ask_secret \"Secret\"); printf \"VALUE_LENGTH=%s\\n\" \"\${#value}\"'" /dev/null >"$secret_output" 2>&1
+	! grep -Fq 'pasted-secret-token' "$secret_output" || fail 'masked paste leaked secret text'
+	grep -Fq "VALUE_LENGTH=${#secret}" "$secret_output" || fail 'masked paste did not preserve the complete value'
+fi
+
 (
 	cd "$TMP_DIR"
 	source "$ROOT_DIR/install.sh"
