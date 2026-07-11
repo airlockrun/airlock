@@ -1,6 +1,9 @@
 import { ref, watchEffect } from 'vue'
 
-const isDark = ref(localStorage.getItem('theme') !== 'light')
+const savedTheme = localStorage.getItem('theme')
+const isDark = ref(
+  savedTheme ? savedTheme === 'dark' : window.matchMedia('(prefers-color-scheme: dark)').matches,
+)
 
 watchEffect(() => {
   document.documentElement.classList.toggle('dark', isDark.value)
