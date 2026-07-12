@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"golang.org/x/mod/semver"
 )
 
 // agentSDKRequireLine matches the agent's require entry for agentsdk —
@@ -18,13 +20,13 @@ import (
 // Replace directives (`github.com/airlockrun/agentsdk => /libs/agentsdk`)
 // are not matched because the trailing `v[^\s]+` requires a version
 // token, not `=>`.
-var agentSDKRequireLine = regexp.MustCompile(`(?m)^([\t ]*(?:require[\t ]+)?github\.com/airlockrun/agentsdk[\t ]+)v[^\s]+`)
+var agentSDKRequireLine = regexp.MustCompile(`(?m)^([\t ]*(?:require[\t ]+)?github\.com/airlockrun/agentsdk[\t ]+)(v[^\s]+)`)
 
-// bumpAgentSDKRequire rewrites the agent's go.mod `require` line for
-// github.com/airlockrun/agentsdk to the given version. This is the version
-// the build resolves: the published v<const> in prod, the content-addressed
-// v<const>-dev<hash> the dev proxy serves in dev. Keeping the require line in
-// sync also gives editor tooling (gopls, jump-to-definition) an accurate pin.
+// bumpAgentSDKRequire ensures the agent's go.mod can build against Airlock's SDK
+// series. Production preserves a same-series requirement that is at least as
+// new as Airlock's pin; older or incompatible requirements are rewritten.
+// Development always uses the exact content-addressed version served by its
+// local module proxy.
 //
 // Implemented as a regex edit on go.mod rather than shelling out to
 // `go mod edit`: the airlock container that runs the upgrade flow ships
@@ -42,8 +44,12 @@ func bumpAgentSDKRequire(ctx context.Context, agentDir, version string) error {
 	}
 
 	v := "v" + strings.TrimPrefix(version, "v")
-	if !agentSDKRequireLine.Match(body) {
+	current, ok := agentSDKRequireVersion(body)
+	if !ok {
 		return fmt.Errorf("%s: no require directive for github.com/airlockrun/agentsdk", gomod)
+	}
+	if !strings.Contains(v, "-dev") && compatibleAgentSDKRequire(current, v) {
+		return nil
 	}
 	updated := agentSDKRequireLine.ReplaceAll(body, []byte("${1}"+v))
 
@@ -54,4 +60,26 @@ func bumpAgentSDKRequire(ctx context.Context, agentDir, version string) error {
 		return fmt.Errorf("write %s: %w", gomod, err)
 	}
 	return nil
+}
+
+func agentSDKRequireVersion(gomod []byte) (string, bool) {
+	match := agentSDKRequireLine.FindSubmatch(gomod)
+	if match == nil {
+		return "", false
+	}
+	return string(match[2]), true
+}
+
+func compatibleAgentSDKRequire(current, target string) bool {
+	if !semver.IsValid(current) || !semver.IsValid(target) {
+		return false
+	}
+	return semver.MajorMinor(current) == semver.MajorMinor(target) && semver.Compare(current, target) >= 0
+}
+
+func newerCompatibleAgentSDKRequire(current, target string) bool {
+	if strings.Contains(target, "-dev") || !compatibleAgentSDKRequire(current, target) {
+		return false
+	}
+	return semver.Compare(current, target) > 0
 }

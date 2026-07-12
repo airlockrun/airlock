@@ -244,6 +244,43 @@ func TestRunHousekeeping_BumpsStaleAgentSDKRequire(t *testing.T) {
 	}
 }
 
+func TestRunHousekeeping_NewerCompatibleSDKOwnsManagedFiles(t *testing.T) {
+	ctx := context.Background()
+	repoPath, data := scaffoldHousekeepingFixture(t)
+	gomod := filepath.Join(repoPath, "go.mod")
+	body, _ := os.ReadFile(gomod)
+	body = []byte(strings.Replace(string(body), "agentsdk v"+agentsdk.Version, "agentsdk v0.4.0-rc.20", 1))
+	if err := os.WriteFile(gomod, body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	data.AgentSDKVersion = "v0.4.0-rc.18"
+	dockerfile := filepath.Join(repoPath, "Dockerfile")
+	if err := os.WriteFile(dockerfile, []byte("newer managed Dockerfile\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	goWork := filepath.Join(repoPath, "go.work")
+	if err := os.WriteFile(goWork, []byte("go 1.26.0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := runHousekeeping(ctx, repoPath, data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Changed() {
+		t.Fatalf("older Airlock changed newer managed source: %+v", res)
+	}
+	if got, _ := os.ReadFile(dockerfile); string(got) != "newer managed Dockerfile\n" {
+		t.Fatalf("Dockerfile was rewritten by older Airlock:\n%s", got)
+	}
+	if got, _ := os.ReadFile(gomod); !strings.Contains(string(got), "agentsdk v0.4.0-rc.20") {
+		t.Fatalf("newer SDK requirement was rewritten:\n%s", got)
+	}
+	if _, err := os.Stat(goWork); !os.IsNotExist(err) {
+		t.Fatalf("local go.work was not removed: %v", err)
+	}
+}
+
 func TestRunHousekeeping_NoGoModSkipsSilently(t *testing.T) {
 	ctx := context.Background()
 	base := t.TempDir()

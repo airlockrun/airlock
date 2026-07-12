@@ -32,8 +32,10 @@ func (r HousekeepingResult) Changed() bool {
 // own multi-module setup; keeping it ignored stops it leaking into a push.
 var gitignoreManagedLines = []string{"go.work", "go.work.sum"}
 
-// runHousekeeping rewrites the airlock-managed files in repoPath to match
-// the current airlock binary's idea of canonical state:
+// runHousekeeping rewrites the airlock-managed files in repoPath to match the
+// current Airlock binary's canonical state. When the repo already requires a
+// newer compatible production SDK, persisted files are left to that newer
+// release so an older remote cannot churn a multi-remote workspace:
 //   - Dockerfile: regenerated from scaffold/templates/Dockerfile.tmpl
 //   - AGENTS.md: regenerated from scaffold/templates/AGENTS.md.tmpl —
 //     airlock-managed doc, overwritten so agents pick up doc updates
@@ -43,12 +45,13 @@ var gitignoreManagedLines = []string{"go.work", "go.work.sum"}
 //     overwritten from the embedded template so the bundled licenses stay
 //     current. Distinct from the conventional THIRD_PARTY_NOTICES.md, which is
 //     left for the user's own notices.
-//   - go.mod: the agentsdk `require` pinned to data.AgentSDKVersion — the
-//     published v<const> in prod, the content-addressed v<const>-dev<hash>
-//     in dev (regex edit — agentsdk is the only owned lib the agent requires
-//     directly; goai/sol are indirect and resolved by `go mod tidy` via the
-//     build's module proxy). No `go mod edit` shell-out, so this works in
-//     the prod airlock container which has no Go toolchain.
+//   - go.mod: in production, an agentsdk requirement from the same major/minor
+//     series at or above data.AgentSDKVersion is preserved; older or
+//     incompatible versions are raised to Airlock's pin. Development pins the
+//     exact content-addressed v<const>-dev<hash> served by its module proxy.
+//     agentsdk is the only owned lib the agent requires directly; goai/sol are
+//     indirect and resolved by `go mod tidy`. No `go mod edit` shell-out is
+//     needed, so this works in the Airlock image without a Go toolchain.
 //
 // The working tree is mutated in place. The caller is responsible for
 // committing the changes (read HousekeepingResult.Changed and run a chore
@@ -79,6 +82,19 @@ func runHousekeeping(ctx context.Context, repoPath string, data scaffold.Scaffol
 		}
 	}
 
+	goModBody, err := os.ReadFile(goModPath)
+	if err != nil {
+		return res, fmt.Errorf("read go.mod: %w", err)
+	}
+	currentSDK, ok := agentSDKRequireVersion(goModBody)
+	if !ok {
+		return res, fmt.Errorf("%s: no require directive for github.com/airlockrun/agentsdk", goModPath)
+	}
+	targetSDK := "v" + strings.TrimPrefix(data.AgentSDKVersion, "v")
+	if newerCompatibleAgentSDKRequire(currentSDK, targetSDK) {
+		return res, nil
+	}
+
 	dockerfileChanged, err := rewriteDockerfile(repoPath, data)
 	if err != nil {
 		return res, fmt.Errorf("rewrite Dockerfile: %w", err)
@@ -103,10 +119,7 @@ func runHousekeeping(ctx context.Context, repoPath string, data scaffold.Scaffol
 	}
 	res.NoticesChanged = noticesChanged
 
-	before, err := os.ReadFile(goModPath)
-	if err != nil {
-		return res, fmt.Errorf("read go.mod: %w", err)
-	}
+	before := goModBody
 	if err := bumpAgentSDKRequire(ctx, repoPath, data.AgentSDKVersion); err != nil {
 		return res, fmt.Errorf("bump agentsdk require: %w", err)
 	}

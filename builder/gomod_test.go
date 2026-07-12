@@ -82,6 +82,88 @@ func TestBumpAgentSDKRequire_IdempotentAtTarget(t *testing.T) {
 	}
 }
 
+func TestBumpAgentSDKRequire_PreservesNewerCompatibleVersion(t *testing.T) {
+	body := strings.Replace(sampleGoMod, "agentsdk v0.1.0", "agentsdk v0.4.0-rc.20", 1)
+	dir := writeGoMod(t, body)
+	if err := bumpAgentSDKRequire(context.Background(), dir, "v0.4.0-rc.18"); err != nil {
+		t.Fatalf("bump: %v", err)
+	}
+	got, _ := os.ReadFile(filepath.Join(dir, "go.mod"))
+	if string(got) != body {
+		t.Fatalf("newer compatible requirement was rewritten:\n%s", got)
+	}
+}
+
+func TestBumpAgentSDKRequire_UpgradesOlderCompatibleVersion(t *testing.T) {
+	body := strings.Replace(sampleGoMod, "agentsdk v0.1.0", "agentsdk v0.4.0-rc.18", 1)
+	dir := writeGoMod(t, body)
+	if err := bumpAgentSDKRequire(context.Background(), dir, "v0.4.0-rc.20"); err != nil {
+		t.Fatalf("bump: %v", err)
+	}
+	got, _ := os.ReadFile(filepath.Join(dir, "go.mod"))
+	if !strings.Contains(string(got), "agentsdk v0.4.0-rc.20") {
+		t.Fatalf("older compatible requirement not upgraded:\n%s", got)
+	}
+}
+
+func TestBumpAgentSDKRequire_DevVersionIsExact(t *testing.T) {
+	body := strings.Replace(sampleGoMod, "agentsdk v0.1.0", "agentsdk v0.4.0-rc.21", 1)
+	dir := writeGoMod(t, body)
+	want := "v0.4.0-rc.20-devabc123"
+	if err := bumpAgentSDKRequire(context.Background(), dir, want); err != nil {
+		t.Fatalf("bump: %v", err)
+	}
+	got, _ := os.ReadFile(filepath.Join(dir, "go.mod"))
+	if !strings.Contains(string(got), "agentsdk "+want) {
+		t.Fatalf("development requirement not pinned exactly:\n%s", got)
+	}
+}
+
+func TestCompatibleAgentSDKRequire(t *testing.T) {
+	tests := []struct {
+		current string
+		target  string
+		want    bool
+	}{
+		{current: "v0.4.0-rc.20", target: "v0.4.0-rc.18", want: true},
+		{current: "v0.4.1", target: "v0.4.0", want: true},
+		{current: "v0.4.0-rc.18", target: "v0.4.0-rc.20", want: false},
+		{current: "v0.5.0", target: "v0.4.9", want: false},
+		{current: "invalid", target: "v0.4.0", want: false},
+	}
+	for _, tt := range tests {
+		name := tt.current + "_to_" + tt.target
+		t.Run(name, func(t *testing.T) {
+			if got := compatibleAgentSDKRequire(tt.current, tt.target); got != tt.want {
+				t.Errorf("compatibleAgentSDKRequire(%q, %q) = %v, want %v", tt.current, tt.target, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestNewerCompatibleAgentSDKRequire(t *testing.T) {
+	tests := []struct {
+		current string
+		target  string
+		want    bool
+	}{
+		{current: "v0.4.0-rc.20", target: "v0.4.0-rc.18", want: true},
+		{current: "v0.4.1", target: "v0.4.0", want: true},
+		{current: "v0.4.0-rc.20", target: "v0.4.0-rc.20", want: false},
+		{current: "v0.4.0-rc.18", target: "v0.4.0-rc.20", want: false},
+		{current: "v0.5.0", target: "v0.4.9", want: false},
+		{current: "v0.4.0-rc.21", target: "v0.4.0-rc.20-devabc", want: false},
+	}
+	for _, tt := range tests {
+		name := tt.current + "_over_" + tt.target
+		t.Run(name, func(t *testing.T) {
+			if got := newerCompatibleAgentSDKRequire(tt.current, tt.target); got != tt.want {
+				t.Errorf("newerCompatibleAgentSDKRequire(%q, %q) = %v, want %v", tt.current, tt.target, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestBumpAgentSDKRequire_StandaloneRequire(t *testing.T) {
 	body := `module example.com/myagent
 
