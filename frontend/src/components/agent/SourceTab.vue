@@ -8,11 +8,12 @@ import { useGitCredentialsStore } from '@/stores/gitCredentials'
 import {
   ConnectAgentGitRequestSchema,
   ConnectAgentGitResponseSchema,
+  GetAgentSDKInfoResponseSchema,
   GetAgentGitConfigResponseSchema,
 } from '@/gen/airlock/v1/api_pb'
 import type { AgentGitConfig } from '@/gen/airlock/v1/types_pb'
 
-const props = defineProps<{ agentId: string }>()
+const props = defineProps<{ agentId: string; agentSlug: string }>()
 const emit = defineEmits<{ populated: [count: number] }>()
 
 const credsStore = useGitCredentialsStore()
@@ -26,6 +27,9 @@ watch(cfg, (v) => emit('populated', v?.gitRemoteUrl ? 1 : 0), { immediate: true 
 const loading = ref(true)
 const connecting = ref(false)
 const dialogVisible = ref(false)
+const airlockURL = ref('')
+const sdkVersion = ref('')
+const sdkCommandImport = ref('')
 const remoteUrl = ref('')
 const credentialId = ref('')
 const branch = ref('main')
@@ -119,9 +123,23 @@ async function copyToClipboard(text: string, label: string) {
 }
 
 const cloneCmd = computed(() => (cfg.value ? `git clone ${cfg.value.gitRemoteUrl}` : ''))
+const versionedAirCommand = computed(() => `${sdkCommandImport.value}@v${sdkVersion.value}`)
+const airLoginCmd = computed(() => `go run ${versionedAirCommand.value} login ${airlockURL.value}`)
+const airCloneCmd = computed(() =>
+  `go run ${versionedAirCommand.value} clone ${props.agentSlug} ./${props.agentSlug} --url ${airlockURL.value}`,
+)
+const airDeployCmd = computed(() => `cd ${props.agentSlug}\ngo tool air deploy`)
+
+async function loadAgentSDKInfo() {
+  const { data } = await api.get('/api/v1/agent-sdk')
+  const info = fromJson(GetAgentSDKInfoResponseSchema, data)
+  airlockURL.value = info.airlockUrl
+  sdkVersion.value = info.version
+  sdkCommandImport.value = info.commandImport
+}
 
 onMounted(async () => {
-  await Promise.all([reload(), credsStore.fetchCredentials()])
+  await Promise.all([reload(), credsStore.fetchCredentials(), loadAgentSDKInfo()])
 })
 </script>
 
@@ -130,8 +148,26 @@ onMounted(async () => {
     <!-- Internal mode -->
     <div v-if="!isConnected" style="display: flex; flex-direction: column; gap: 1rem">
       <Message severity="info" :closable="false">
-        This agent has no git remote. Connect one to clone the source to your laptop, edit there, and push changes back - airlock will rebuild on every push.
+        This agent has no git remote. Connect one for a Git-based workflow, or use the Air CLI to work with Airlock's source directly.
       </Message>
+      <div v-if="agentSlug && airlockURL && sdkVersion && sdkCommandImport" style="display: flex; flex-direction: column; gap: 0.5rem">
+        <strong>Air CLI</strong>
+        <p style="margin: 0; color: var(--p-text-muted-color)">
+          Run the versioned CLI to log in and clone the agent. Inside the cloned repository, use <code>go tool air</code> to deploy changes.
+        </p>
+        <div style="display: flex; align-items: center; gap: 0.5rem">
+          <code class="code-chip">{{ airLoginCmd }}</code>
+          <Button icon="pi pi-copy" text size="small" @click="copyToClipboard(airLoginCmd, 'Login command')" />
+        </div>
+        <div style="display: flex; align-items: center; gap: 0.5rem">
+          <code class="code-chip">{{ airCloneCmd }}</code>
+          <Button icon="pi pi-copy" text size="small" @click="copyToClipboard(airCloneCmd, 'Clone command')" />
+        </div>
+        <div style="display: flex; align-items: center; gap: 0.5rem">
+          <code class="code-chip" style="white-space: pre-wrap">{{ airDeployCmd }}</code>
+          <Button icon="pi pi-copy" text size="small" @click="copyToClipboard(airDeployCmd, 'Deploy command')" />
+        </div>
+      </div>
       <div v-if="credsStore.credentials.length === 0">
         <p style="margin: 0 0 0.5rem">You don't have any git credentials yet.</p>
         <router-link to="/settings/git-credentials">

@@ -25,7 +25,6 @@ func scaffoldHousekeepingFixture(t *testing.T) (repoPath string, data scaffold.S
 	repoPath = AgentRepoPath(base, agentID)
 	data = scaffold.ScaffoldData{
 		AgentID:         agentID,
-		Module:          "agent",
 		GoVersion:       buildGoVersion,
 		AgentSDKVersion: "v" + agentsdk.Version,
 		AgentBaseImage:  "airlock-agent-base:test",
@@ -290,7 +289,7 @@ func TestRunHousekeeping_NoGoModSkipsSilently(t *testing.T) {
 	repoPath := AgentRepoPath(base, "fresh-no-gomod")
 
 	res, err := runHousekeeping(ctx, repoPath, scaffold.ScaffoldData{
-		AgentID: "fresh-no-gomod", Module: "agent",
+		AgentID:   "fresh-no-gomod",
 		GoVersion: buildGoVersion, AgentSDKVersion: "v0.0.0",
 		AgentBaseImage: "base:test",
 	})

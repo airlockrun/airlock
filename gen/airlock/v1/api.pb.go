@@ -1774,6 +1774,7 @@ type GetAgentSDKInfoResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Version       string                 `protobuf:"bytes,1,opt,name=version,proto3" json:"version,omitempty"`
 	CommandImport string                 `protobuf:"bytes,2,opt,name=command_import,json=commandImport,proto3" json:"command_import,omitempty"`
+	AirlockUrl    string                 `protobuf:"bytes,3,opt,name=airlock_url,json=airlockUrl,proto3" json:"airlock_url,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1818,6 +1819,13 @@ func (x *GetAgentSDKInfoResponse) GetVersion() string {
 func (x *GetAgentSDKInfoResponse) GetCommandImport() string {
 	if x != nil {
 		return x.CommandImport
+	}
+	return ""
+}
+
+func (x *GetAgentSDKInfoResponse) GetAirlockUrl() string {
+	if x != nil {
+		return x.AirlockUrl
 	}
 	return ""
 }
@@ -8282,10 +8290,12 @@ const file_airlock_v1_api_proto_rawDesc = "" +
 	"\x1cListCatalogProvidersResponse\x126\n" +
 	"\tproviders\x18\x01 \x03(\v2\x18.airlock.v1.ProviderInfoR\tproviders\"J\n" +
 	"\x19ListCatalogModelsResponse\x12-\n" +
-	"\x06models\x18\x01 \x03(\v2\x15.airlock.v1.ModelInfoR\x06models\"Z\n" +
+	"\x06models\x18\x01 \x03(\v2\x15.airlock.v1.ModelInfoR\x06models\"{\n" +
 	"\x17GetAgentSDKInfoResponse\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\tR\aversion\x12%\n" +
-	"\x0ecommand_import\x18\x02 \x01(\tR\rcommandImport\"\xe7\x03\n" +
+	"\x0ecommand_import\x18\x02 \x01(\tR\rcommandImport\x12\x1f\n" +
+	"\vairlock_url\x18\x03 \x01(\tR\n" +
+	"airlockUrl\"\xe7\x03\n" +
 	"\x12CreateAgentRequest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x12\n" +
 	"\x04slug\x18\x02 \x01(\tR\x04slug\x12 \n" +
