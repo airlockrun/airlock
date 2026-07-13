@@ -175,7 +175,6 @@ func (b *BuildService) WarmBuildCache(ctx context.Context) {
 	// Materialize a real scaffold — same templates as actual agent builds.
 	if err := scaffold.Materialize(dir, scaffold.ScaffoldData{
 		AgentID:         "cache-warm",
-		Module:          "agent",
 		GoVersion:       buildGoVersion,
 		AgentSDKVersion: sdkVer,
 		AgentBaseImage:  b.cfg.AgentBaseImage,
@@ -277,7 +276,6 @@ func (b *BuildService) WarmRuntimeCaches(ctx context.Context) {
 
 	if err := scaffold.Materialize(dir, scaffold.ScaffoldData{
 		AgentID:         "runtime-warm",
-		Module:          "agent",
 		GoVersion:       buildGoVersion,
 		AgentSDKVersion: sdkVer,
 		AgentBaseImage:  b.cfg.AgentBaseImage,

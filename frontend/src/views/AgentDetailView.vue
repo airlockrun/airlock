@@ -226,6 +226,7 @@ const activeSectionId = ref<string>('')
 
 // The sticky section nav; horizontally scrollable on narrow viewports.
 const navRef = ref<HTMLElement | null>(null)
+const mainRef = ref<HTMLElement | null>(null)
 
 // Keep the highlighted tab visible as scrollspy moves it: on mobile the nav
 // is horizontally truncated and the active tab can sit off-screen, so center
@@ -382,7 +383,9 @@ function onVisibilityChange() {
 // so the highlight tracks the section the user is reading rather than the
 // one that's just scrolled into view at the bottom.
 let scrollObserver: IntersectionObserver | null = null
+let hashLayoutObserver: ResizeObserver | null = null
 let hashScrollTimer: number | null = null
+let hashScrollSettleTimer: number | null = null
 let hashScrollAttempts = 0
 let hashScrollInProgress = false
 
@@ -422,6 +425,29 @@ function clearHashScrollTimer() {
   }
 }
 
+function clearHashScrollSettleTimer() {
+  if (hashScrollSettleTimer !== null) {
+    window.clearTimeout(hashScrollSettleTimer)
+    hashScrollSettleTimer = null
+  }
+}
+
+function settleHashScroll() {
+  clearHashScrollSettleTimer()
+  hashScrollSettleTimer = window.setTimeout(() => {
+    hashScrollSettleTimer = null
+    hashScrollInProgress = false
+  }, 300)
+}
+
+function setupHashLayoutObserver() {
+  hashLayoutObserver?.disconnect()
+  hashLayoutObserver = new ResizeObserver(() => {
+    if (hashTargetID()) scheduleHashScroll()
+  })
+  if (mainRef.value) hashLayoutObserver.observe(mainRef.value)
+}
+
 function targetIsVisible(el: HTMLElement): boolean {
   return el.getClientRects().length > 0
 }
@@ -429,6 +455,7 @@ function targetIsVisible(el: HTMLElement): boolean {
 function tryScrollToHash() {
   const id = hashTargetID()
   if (!id) {
+    clearHashScrollSettleTimer()
     hashScrollInProgress = false
     return
   }
@@ -436,8 +463,8 @@ function tryScrollToHash() {
   if (el && targetIsVisible(el)) {
     clearHashScrollTimer()
     el.scrollIntoView({ behavior: 'auto', block: 'start' })
-    hashScrollInProgress = false
     activeSectionId.value = id
+    settleHashScroll()
     return
   }
   if (hashScrollAttempts >= 40) {
@@ -454,6 +481,7 @@ function tryScrollToHash() {
 function scheduleHashScroll(resetAttempts = false) {
   if (!hashTargetID()) return
   if (resetAttempts) hashScrollAttempts = 0
+  clearHashScrollSettleTimer()
   hashScrollInProgress = true
   void nextTick(() => window.requestAnimationFrame(tryScrollToHash))
 }
@@ -514,6 +542,8 @@ onMounted(async () => {
   } finally {
     loading.value = false
   }
+  await nextTick()
+  setupHashLayoutObserver()
   scheduleHashScroll(true)
   catalog.fetchConfiguredModels()
   loadSetupStatus()
@@ -610,7 +640,9 @@ onUnmounted(() => {
   unsubBuild?.()
   unsubSynced?.()
   scrollObserver?.disconnect()
+  hashLayoutObserver?.disconnect()
   clearHashScrollTimer()
+  clearHashScrollSettleTimer()
   document.removeEventListener('visibilitychange', onVisibilityChange)
 })
 
@@ -618,7 +650,10 @@ onUnmounted(() => {
 // previously hidden section). Watching visibleSections in a nextTick-safe
 // way keeps the rail's active-section highlight working as the page fills in.
 watch([visibleSections, activityVisible, tabsKey], () => {
-  setTimeout(setupScrollSpy, 0)
+  setTimeout(() => {
+    setupScrollSpy()
+    setupHashLayoutObserver()
+  }, 0)
   scheduleHashScroll()
 })
 
@@ -839,7 +874,7 @@ function openWeb() {
     <!-- Single inline scroll: each configuration domain is a SectionCard;
          Activity (Runs + Builds) is the final section. Sections hide
          themselves when their tab reports zero items via @populated. -->
-    <div class="agent-page-main" :key="tabsKey">
+    <div ref="mainRef" class="agent-page-main" :key="tabsKey">
       <SectionCard
         v-for="s in configSections"
         v-show="(!(s as any).adminOnly || isAgentAdmin) && ((s as any).alwaysShow || (counts[s.id] ?? 0) > 0)"
@@ -848,7 +883,13 @@ function openWeb() {
         :title="s.label"
         :badge="badgeFor(s)"
       >
-        <component :is="s.component" :agent-id="agentId" :your-access="s.id === 'models' ? (agent?.yourAccess ?? '') : undefined" @populated="onPopulated(s.id, $event)" />
+        <component
+          :is="s.component"
+          :agent-id="agentId"
+          :your-access="s.id === 'models' ? (agent?.yourAccess ?? '') : undefined"
+          v-bind="s.id === 'source' ? { agentSlug: agent?.slug ?? '' } : {}"
+          @populated="onPopulated(s.id, $event)"
+        />
       </SectionCard>
 
       <SectionCard

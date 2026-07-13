@@ -62,6 +62,7 @@ const buildError = ref('')
 const buildAgentId = ref('')
 const sdkVersion = ref('')
 const sdkCommandImport = ref('github.com/airlockrun/agentsdk/cmd/air')
+const airlockURL = ref('')
 
 // All 8 capability override slots — empty = live system Default.
 // Mirrors the AgentModelConfig proto field names so this object can be
@@ -122,6 +123,7 @@ onMounted(async () => {
     const info = fromJson(GetAgentSDKInfoResponseSchema, data)
     sdkVersion.value = info.version || ''
     sdkCommandImport.value = info.commandImport || sdkCommandImport.value
+    airlockURL.value = info.airlockUrl
   } catch { /* command block falls back to the unversioned module path */ }
 })
 
@@ -232,7 +234,6 @@ const canSubmit = computed(() => {
 })
 
 const localDir = computed(() => slug.value || 'my-agent')
-const airlockURL = computed(() => window.location.origin)
 const versionedAirCommand = computed(() => {
   const suffix = sdkVersion.value ? `@v${sdkVersion.value}` : ''
   return `${sdkCommandImport.value}${suffix}`
@@ -240,7 +241,6 @@ const versionedAirCommand = computed(() => {
 const localCreateCommands = computed(() => [
   `go run ${versionedAirCommand.value} init ${localDir.value} --airlock ${airlockURL.value}`,
   `cd ${localDir.value}`,
-  'go mod tidy',
   `go tool air login ${airlockURL.value}`,
   'go tool air toolchain install',
   `go tool air deploy --create --name ${JSON.stringify(name.value || localDir.value)}`,

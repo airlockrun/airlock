@@ -286,7 +286,6 @@ func (b *BuildService) Execute(ctx context.Context, plan BuildPlan) (string, err
 	if plan.Kind != BuildKindBuild && agent.GitMode != "read_only" {
 		hk, err := runHousekeeping(ctx, repoPath, scaffold.ScaffoldData{
 			AgentID:         agentID,
-			Module:          "agent",
 			GoVersion:       buildGoVersion,
 			AgentSDKVersion: sdkVer,
 			AgentBaseImage:  b.cfg.AgentBaseImage,
@@ -447,7 +446,6 @@ func (b *BuildService) Execute(ctx context.Context, plan BuildPlan) (string, err
 	defer os.RemoveAll(dockerfileDir)
 	if err := scaffold.GenerateDockerfile(dockerfileDir, scaffold.ScaffoldData{
 		AgentID:         agentID,
-		Module:          "agent",
 		GoVersion:       buildGoVersion,
 		AgentSDKVersion: sdkVer,
 		AgentBaseImage:  b.cfg.AgentBaseImage,
@@ -600,7 +598,6 @@ func (b *BuildService) prepareNewAgent(ctx context.Context, q *dbq.Queries, agen
 		}
 		data := scaffold.ScaffoldData{
 			AgentID:         agentID,
-			Module:          "agent",
 			GoVersion:       buildGoVersion,
 			AgentSDKVersion: sdkVer,
 			AgentBaseImage:  b.cfg.AgentBaseImage,
