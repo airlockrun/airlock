@@ -42,7 +42,7 @@ docker compose exec airlock cat /var/lib/airlock/activation_code.txt
 
 Open [https://airlock.localhost:24443](https://airlock.localhost:24443), accept the browser warning on the first visit, paste the activation code. `*.localhost` resolves to 127.0.0.1 automatically (RFC 6761) in every modern browser, so per-agent subdomains route to your machine without any DNS or `/etc/hosts` work. `TLS_MODE=internal` makes Caddy use its built-in local CA, so you don't need a real domain or Let's Encrypt - run `docker compose exec caddy caddy trust` once to silence the warning permanently. The `:24443`/`:24080` ports keep it off whatever you have on 80/443; change `HTTP_PORT` / `HTTPS_PORT` (and the `:port` in `PUBLIC_URL` / `S3_URL_PUBLIC`) if 24xxx is taken too.
 
-For a true one-command try-out, `./install.sh --local` writes this `.env` (with generated secrets) and brings the stack up for you. `./install.sh --instance-id airlock2` uses `~/airlock2` when it needs to clone, so a second instance has its own checkout and `.env`.
+With Docker Engine or Docker Desktop running and Compose v2 available (`docker info` and `docker compose version` must work), `./install.sh --local` writes this `.env` with generated secrets and brings the stack up for you. The installer never installs or starts Docker. `./install.sh --instance-id airlock2` uses `~/airlock2` when it needs to clone, so a second instance has its own checkout and `.env`.
 
 ## Develop against airlock from source
 

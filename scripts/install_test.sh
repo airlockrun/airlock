@@ -133,14 +133,13 @@ wsl_docker_output=$(
 		source "$ROOT_DIR/install.sh"
 		WSL_VERSION=2
 		need_cmd() { return 1; }
-		confirm() { return 1; }
 		ensure_docker
 	' 2>&1
 )
 wsl_docker_status=$?
 set -e
-assert_eq '1' "$wsl_docker_status" 'declined WSL Docker install status'
-printf '%s' "$wsl_docker_output" | grep -Fq "Enable Docker Desktop's WSL integration" || fail 'missing WSL Docker Desktop guidance'
+assert_eq '1' "$wsl_docker_status" 'missing WSL Docker status'
+printf '%s' "$wsl_docker_output" | grep -Fq "enable WSL integration" || fail 'missing WSL Docker Desktop guidance'
 
 (
 	cd "$TMP_DIR"
@@ -291,37 +290,36 @@ printf '%s' "$wsl_docker_output" | grep -Fq "Enable Docker Desktop's WSL integra
 	assert_file_contains .env 'DOMAIN=airlock.example.com'
 )
 
+slow_docker_dir="$TMP_DIR/slow-docker"
+mkdir -p "$slow_docker_dir"
+cat >"$slow_docker_dir/docker" <<'EOF'
+#!/usr/bin/env bash
+if [ "${1:-}" = info ]; then exec sleep 30; fi
+exit 0
+EOF
+chmod +x "$slow_docker_dir/docker"
+set +e
+slow_docker_output=$(
+	PATH="$slow_docker_dir:$PATH" ROOT_DIR="$ROOT_DIR" bash -c '
+		source "$ROOT_DIR/install.sh"
+		OS=linux
+		WSL_VERSION=0
+		DOCKER_INFO_TIMEOUT=1
+		ensure_docker
+	' 2>&1
+)
+slow_docker_status=$?
+set -e
+assert_eq '1' "$slow_docker_status" 'slow Docker status'
+printf '%s' "$slow_docker_output" | grep -Fq 'not reachable within 1s' || fail 'Docker probe did not time out promptly'
+
 (
 	source "$ROOT_DIR/install.sh"
-
-	id() {
-		case "$1" in
-			-u) printf '1000' ;;
-			-un) printf 'alice' ;;
-			-nG) printf 'users' ;;
-			*) fail "unexpected id arguments: $*" ;;
-		esac
-	}
-	getent() { [ "$1" = group ] && [ "$2" = docker ]; }
-	confirm() {
-		assert_eq 'Add alice to the docker group? Docker group access is root-equivalent.' "$1" 'docker group prompt'
-		return 0
-	}
-	as_root() {
-		assert_eq 'usermod -aG docker alice' "$*" 'docker group enrollment'
-	}
-	die() {
-		die_message="$*"
-		return 1
-	}
-
 	OS=linux
-	set +e
-	ensure_invoking_user_docker_access
-	status=$?
-	set -e
-	assert_eq '1' "$status" 'docker group enrollment exit status'
-	assert_eq 'Added alice to the docker group. Sign out and back in, then re-run the installer.' "$die_message" 'docker group enrollment guidance'
+	WSL_VERSION=2
+	warn() { :; }
+	confirm() { fail 'WSL BuildKit check requested a host mutation'; }
+	assert_eq '' "$(ensure_buildkit_capable)" 'WSL BuildKit fallback'
 )
 
 set +e
