@@ -318,8 +318,12 @@ printf '%s' "$slow_docker_output" | grep -Fq 'not reachable within 1s' || fail '
 	OS=linux
 	WSL_VERSION=2
 	warn() { :; }
-	confirm() { fail 'WSL BuildKit check requested a host mutation'; }
-	assert_eq '' "$(ensure_buildkit_capable)" 'WSL BuildKit fallback'
+	docker() {
+		assert_eq "info --format {{.OperatingSystem}}" "$*" 'Docker Desktop detection command'
+		printf 'Docker Desktop'
+	}
+	confirm() { fail 'Docker Desktop BuildKit check requested a host mutation'; }
+	assert_eq 'tcp://buildkitd:1234' "$(ensure_buildkit_capable)" 'Docker Desktop BuildKit endpoint'
 )
 
 set +e

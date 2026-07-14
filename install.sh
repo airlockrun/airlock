@@ -233,12 +233,25 @@ docker_info_works() {
 	wait "$pid"
 }
 
+docker_daemon_is_desktop() {
+	case "$(docker info --format '{{.OperatingSystem}}' 2>/dev/null)" in
+		Docker\ Desktop*) return 0 ;;
+		*) return 1 ;;
+	esac
+}
+
 # ---------- rootless buildkit host prep ("drop caps" if unsatisfiable) ----------
 # Echoes "unix:///run/buildkit/buildkitd.sock" if rootless buildkit is usable,
 # else empty (legacy host docker build).
 ensure_buildkit_capable() {
 	[ "$OS" = macos ] && { printf ''; return; }  # Docker Desktop VM = already isolated; keep it simple
-	[ "$WSL_VERSION" != 0 ] && { warn "WSL detected — rootless BuildKit host checks do not apply to Docker Desktop; using host Docker builds"; printf ''; return; }
+	if [ "$WSL_VERSION" != 0 ] && docker_daemon_is_desktop; then
+		# The daemon runs in Docker Desktop's VM, so WSL's /dev/fuse and sysctls
+		# say nothing about its capabilities. Docker Desktop supports the same
+		# rootless BuildKit container configured in docker-compose.yml.
+		printf 'tcp://buildkitd:1234'
+		return
+	fi
 	[ -e /dev/fuse ] || { warn "no /dev/fuse — rootless BuildKit unavailable; using legacy host build"; printf ''; return; }
 	local sysctl_path=/proc/sys/kernel/apparmor_restrict_unprivileged_userns
 	if [ -r "$sysctl_path" ] && [ "$(cat "$sysctl_path")" = "1" ]; then
