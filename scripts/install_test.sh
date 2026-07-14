@@ -222,6 +222,7 @@ printf '%s' "$wsl_docker_output" | grep -Fq "enable WSL integration" || fail 'mi
 	assert_file_contains .env 'DOCKER_NETWORK=airlock2'
 	assert_file_contains .env 'AGENT_NETWORK=airlock2-agents'
 	assert_file_contains .env 'AGENT_CODEGEN_VOLUME=airlock2-data'
+	assert_file_contains .env 'DOCKER_SOCKET_PATH=/var/run/docker.sock'
 	assert_file_contains .env 'HTTP_PORT=42080'
 	assert_file_contains .env 'PUBLIC_URL=http://localhost:42080'
 	assert_file_contains .env 'S3_URL_PUBLIC=http://s3.localhost:42080'
@@ -238,6 +239,9 @@ printf '%s' "$wsl_docker_output" | grep -Fq "enable WSL integration" || fail 'mi
 			assert_eq '42080' "$(jq -r '.services["caddy-local"].ports[0].published' <<<"$config")" 'local caddy published port'
 			assert_eq '80' "$(jq -r '.services["caddy-local"].ports[0].target' <<<"$config")" 'local caddy target port'
 			assert_eq '1' "$(jq -r '.services["caddy-local"].ports | length' <<<"$config")" 'local caddy port count'
+			assert_eq '/var/run/docker.sock' "$(jq -r '.services.airlock.volumes[] | select(.target == "/var/run/docker.sock") | .source' <<<"$config")" 'default Docker socket source'
+			custom_config=$(DOCKER_SOCKET_PATH=/run/user/1000/docker.sock docker compose --env-file .env -f "$ROOT_DIR/docker-compose.yml" config --format json)
+			assert_eq '/run/user/1000/docker.sock' "$(jq -r '.services.airlock.volumes[] | select(.target == "/var/run/docker.sock") | .source' <<<"$custom_config")" 'custom Docker socket source'
 		fi
 	fi
 )

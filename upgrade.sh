@@ -64,7 +64,7 @@ docker_access_error() {
 	if [ "$(id -u)" -ne 0 ] && need_cmd getent && getent group docker >/dev/null 2>&1 && ! id -nG "$user" | tr ' ' '\n' | grep -Fxq docker; then
 		die "Docker is installed, but $user cannot access it. Run 'sudo usermod -aG docker $user', log out and back in, then re-run."
 	fi
-	die "Docker is installed but not reachable. Start the Docker daemon and check this user's access to /var/run/docker.sock, then re-run."
+	die "Docker is installed but not reachable. Start the Docker daemon and check this user's access to the configured Docker endpoint, then re-run."
 }
 
 parse_args() {
