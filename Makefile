@@ -13,13 +13,16 @@ DEV_COMPOSE := docker compose -f docker-compose.yml -f docker-compose.dev.yml
 
 # Bundled infra + ingress only (containers). airlock + frontend stay off because
 # they aren't in this service list — they run natively via `make dev` below.
-# postgres/rustfs come from the bundled-db profile in .env; naming them here also
-# starts them regardless. Caddy reads SPA_*/AIRLOCK_UPSTREAM from .env.
+# postgres/rustfs come from the bundled profiles in .env. The ingress services
+# are selected by COMPOSE_PROFILES, so the native workflow supports every
+# ingress mode without hard-coding one Caddy service.
 dev-up:
-	$(DEV_COMPOSE) up -d postgres rustfs caddy
+	@ingress="$$( $(DEV_COMPOSE) config --services | grep -E '^(caddy|caddy-local|caddy-private|cloudflared)$$' | tr '\n' ' ' )"; \
+	$(DEV_COMPOSE) up -d postgres rustfs $$ingress
 
 dev-down:
-	$(DEV_COMPOSE) stop postgres rustfs caddy
+	@ingress="$$( $(DEV_COMPOSE) config --services | grep -E '^(caddy|caddy-local|caddy-private|cloudflared)$$' | tr '\n' ' ' )"; \
+	$(DEV_COMPOSE) stop postgres rustfs $$ingress
 
 # Full loop: infra up, then frontend watch in the background + airlock in the
 # foreground. Ctrl-C stops both. Reads .env so the native binary gets the same

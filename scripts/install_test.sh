@@ -122,6 +122,45 @@ fi
 
 (
 	source "$ROOT_DIR/install.sh"
+
+	warn() { :; }
+	ask() {
+		case "$1" in
+			'Do you have a domain to use? (y/n)') printf 'n' ;;
+			*) fail "unexpected ask prompt: $1" ;;
+		esac
+	}
+	confirm() {
+		assert_eq 'Install loopback-only local mode instead? It is accessible only from this machine' "$1" 'local confirmation prompt'
+		assert_eq 'n' "${2:-}" 'local confirmation default'
+		return 0
+	}
+
+	FORCE_LOCAL=0
+	choose_mode
+	assert_eq 'local' "$TLS_MODE" 'confirmed local TLS mode'
+	assert_eq 'localhost' "$DOMAIN" 'confirmed local domain'
+)
+
+(
+	source "$ROOT_DIR/install.sh"
+
+	ask() { printf 'n'; }
+	confirm() { return 1; }
+	FORCE_LOCAL=0
+	output=$(
+		(
+			choose_mode
+			printf 'unexpected continuation\n'
+		) 2>&1
+	)
+	! grep -Fq 'unexpected continuation' <<<"$output" || fail 'declining local mode continued installation'
+	grep -Fq 'Installation stopped before configuration was written or services were started.' <<<"$output" || fail 'missing clean cancellation guidance'
+	grep -Fq 'Configure a domain, then run the installer again.' <<<"$output" || fail 'missing domain guidance after cancellation'
+)
+
+(
+	source "$ROOT_DIR/install.sh"
 	assert_eq '2' "$(detect_wsl_version '5.15.167.4-microsoft-standard-WSL2')" 'WSL2 detection'
 	assert_eq '1' "$(detect_wsl_version '4.4.0-19041-Microsoft')" 'WSL1 detection'
 	assert_eq '0' "$(detect_wsl_version '6.8.0-57-generic')" 'non-WSL detection'
@@ -154,19 +193,20 @@ printf '%s' "$wsl_docker_output" | grep -Fq "enable WSL integration" || fail 'mi
 		printf 'secret-%d' "$secret_i"
 	}
 
-	parse_args --instance-id airlock2 --force
+	parse_args --instance-id airlock2 --local --force
 	validate_instance_id
 	set_default_install_dir
 	assert_eq 'airlock2' "$INSTANCE_ID" 'instance id'
 	assert_eq "$HOME/airlock2" "$INSTALL_DIR" 'instance install dir'
+	assert_eq '1' "$FORCE_LOCAL" 'local flag'
 	assert_eq 'tok1' "$(parse_tunnel_token 'tok1')" 'raw tunnel token parse'
 	assert_eq 'tok2' "$(parse_tunnel_token 'docker run cloudflare/cloudflared:latest tunnel --no-autoupdate run --token tok2')" 'docker tunnel token parse'
 	assert_eq 'tok3' "$(parse_tunnel_token 'cloudflared tunnel run --token=tok3')" 'equals tunnel token parse'
 
-	TLS_MODE=internal
-	DOMAIN=airlock.localhost
-	INFRA_DB=bundled
-	INFRA_S3=bundled
+	choose_mode
+	assert_eq 'local' "$TLS_MODE" 'local TLS mode'
+	assert_eq 'localhost' "$DOMAIN" 'local domain'
+	choose_infra
 	FORCE=1
 	DRY_RUN=0
 	ENV_EXTRA=()
@@ -176,11 +216,30 @@ printf '%s' "$wsl_docker_output" | grep -Fq "enable WSL integration" || fail 'mi
 	render_env
 
 	assert_file_contains .env 'COMPOSE_PROJECT_NAME=airlock2'
-	assert_file_contains .env 'COMPOSE_PROFILES=bundled-db,bundled-s3,caddy-published'
+	assert_file_contains .env 'TLS_MODE=local'
+	assert_file_contains .env 'COMPOSE_PROFILES=bundled-db,bundled-s3,caddy-local'
 	assert_file_contains .env 'AIRLOCK_INSTANCE_ID=airlock2'
 	assert_file_contains .env 'DOCKER_NETWORK=airlock2'
 	assert_file_contains .env 'AGENT_NETWORK=airlock2-agents'
 	assert_file_contains .env 'AGENT_CODEGEN_VOLUME=airlock2-data'
+	assert_file_contains .env 'HTTP_PORT=42080'
+	assert_file_contains .env 'PUBLIC_URL=http://localhost:42080'
+	assert_file_contains .env 'S3_URL_PUBLIC=http://s3.localhost:42080'
+	assert_file_contains .env 'FORCE_INLINE_ATTACHMENTS=true'
+	! grep -Eq '^HTTPS_PORT=' .env || fail '.env unexpectedly publishes an HTTPS port in local mode'
+
+	if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
+		services=$(docker compose --env-file .env -f "$ROOT_DIR/docker-compose.yml" config --services)
+		printf '%s\n' "$services" | grep -Fx caddy-local >/dev/null || fail 'compose config did not enable local caddy service'
+		! printf '%s\n' "$services" | grep -Fx caddy >/dev/null || fail 'compose config enabled TLS caddy service in local mode'
+		if command -v jq >/dev/null 2>&1; then
+			config=$(docker compose --env-file .env -f "$ROOT_DIR/docker-compose.yml" config --format json)
+			assert_eq '127.0.0.1' "$(jq -r '.services["caddy-local"].ports[0].host_ip' <<<"$config")" 'local caddy host IP'
+			assert_eq '42080' "$(jq -r '.services["caddy-local"].ports[0].published' <<<"$config")" 'local caddy published port'
+			assert_eq '80' "$(jq -r '.services["caddy-local"].ports[0].target' <<<"$config")" 'local caddy target port'
+			assert_eq '1' "$(jq -r '.services["caddy-local"].ports | length' <<<"$config")" 'local caddy port count'
+		fi
+	fi
 )
 
 (

@@ -165,7 +165,7 @@ func (h *PasskeyHandler) LoginFinish(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	setAirlockSessionCookie(w, accessToken)
+	setAirlockSessionCookie(w, r, accessToken)
 	writeProto(w, http.StatusOK, &airlockv1.LoginResponse{
 		AccessToken:  accessToken,
 		RefreshToken: refreshToken,

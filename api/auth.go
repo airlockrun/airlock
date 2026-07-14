@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/airlockrun/airlock/auth"
@@ -251,7 +252,7 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	// fetch calls. SameSite=Lax is required so the cross-site redirect
 	// from a Claude Desktop loopback page back to /oauth/authorize
 	// still carries the cookie; Strict would block the flow.
-	setAirlockSessionCookie(w, accessToken)
+	setAirlockSessionCookie(w, r, accessToken)
 
 	writeProto(w, http.StatusOK, &airlockv1.LoginResponse{
 		AccessToken:  accessToken,
@@ -265,14 +266,16 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 // token (15min); the cookie expires and the user re-logs in if
 // /authorize is hit after expiry. Distinct from the __air_session
 // cookie in relay.go (agent subdomain proxy).
-func setAirlockSessionCookie(w http.ResponseWriter, accessToken string) {
+func setAirlockSessionCookie(w http.ResponseWriter, r *http.Request, accessToken string) {
+	secure := strings.HasPrefix(r.URL.Scheme, "https") || r.TLS != nil ||
+		r.Header.Get("X-Forwarded-Proto") == "https"
 	http.SetCookie(w, &http.Cookie{
 		Name:     "airlock_session",
 		Value:    accessToken,
 		Path:     "/",
 		MaxAge:   int(auth.AccessTokenDuration.Seconds()),
 		HttpOnly: true,
-		Secure:   true,
+		Secure:   secure,
 		SameSite: http.SameSiteLaxMode,
 	})
 }

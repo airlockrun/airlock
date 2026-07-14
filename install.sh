@@ -9,7 +9,7 @@
 #
 # Takes a Linux VPS (or macOS for local/tunnel) with Docker already running to a
 # hardened airlock: generates secrets, verifies the domain,
-# picks a TLS_MODE (wildcard / tunnel / internal / manual / proxy)
+# picks a TLS_MODE (local / wildcard / tunnel / manual / proxy)
 # and infra (Postgres and object store each bundled or external, independently),
 # writes a single .env, and brings the stack up. Missing optional prereqs degrade
 # gracefully ("drop caps") — only a missing Docker hard-fails.
@@ -34,7 +34,7 @@ set -uo pipefail
 RELEASE_TAG="${AIRLOCK_TAG:-v0.4.0-rc.44}"
 REPO_URL="https://github.com/airlockrun/airlock.git"
 INSTALL_DIR=""
-TLS_MODE=""        # wildcard|tunnel|internal|manual|proxy — decided interactively
+TLS_MODE=""        # local|wildcard|tunnel|manual|proxy — decided interactively
 INFRA_DB="bundled" # bundled | external (Postgres)
 INFRA_S3="bundled" # bundled | external (object store)
 FORCE=0
@@ -381,13 +381,18 @@ declare -a PROFILES=()
 BUILD_CADDY=0   # wildcard mode: build the local DNS-plugin caddy image
 
 choose_mode() {
-	if [ "$FORCE_LOCAL" = 1 ]; then TLS_MODE=internal; DOMAIN=airlock.localhost; return; fi
+	if [ "$FORCE_LOCAL" = 1 ]; then TLS_MODE=local; DOMAIN=localhost; return; fi
 	local has_domain; has_domain=$(ask "Do you have a domain to use? (y/n)" "y")
 	case "$has_domain" in
 		[nN]*)
-			warn "No domain → internal mode (airlock.localhost, local CA, inline attachments)."
-			warn "For a public deployment, get a domain (any registrar) and re-run."
-			TLS_MODE=internal; DOMAIN=airlock.localhost; return ;;
+			warn "Remote access needs a domain for the dashboard and wildcard agent subdomains."
+			warn "Register one with any registrar or use a domain you control. Cloudflare DNS supports automatic DNS records and wildcard TLS; manual certificates and an existing reverse proxy are also supported."
+			if confirm "Install loopback-only local mode instead? It is accessible only from this machine" n; then
+				TLS_MODE=local; DOMAIN=localhost; return
+			fi
+			log "Installation stopped before configuration was written or services were started."
+			log "Configure a domain, then run the installer again."
+			exit 0 ;;
 	esac
 	DOMAIN=$(ask "Domain (e.g. airlock.example.com)" "")
 	[ -n "$DOMAIN" ] || die "domain required (or run with --local)"
@@ -468,7 +473,7 @@ choose_mode() {
 # the other freely (e.g. bundled pgvector + external AWS S3). Each "external"
 # answer fills ENV_EXTRA with endpoints and drops its bundled-* profile.
 choose_infra() {
-	if [ "$TLS_MODE" = internal ]; then INFRA_DB=bundled; INFRA_S3=bundled; return; fi  # laptop = all bundled
+	if [ "$TLS_MODE" = local ]; then INFRA_DB=bundled; INFRA_S3=bundled; return; fi  # laptop = all bundled
 
 	# --- Postgres ---
 	if confirm "Use the bundled Postgres (pgvector)?" y; then
@@ -510,6 +515,8 @@ assemble_profiles() {
 	[ "$INFRA_S3" = bundled ] && PROFILES+=("bundled-s3")
 	if [ "$TLS_MODE" = tunnel ]; then
 		PROFILES+=("caddy-private" "cloudflared")
+	elif [ "$TLS_MODE" = local ]; then
+		PROFILES+=("caddy-local")
 	else
 		PROFILES+=("caddy-published")
 	fi
@@ -542,12 +549,11 @@ render_env() {
 			echo "S3_ACCESS_KEY=airlock"
 			echo "S3_SECRET_KEY=$(gen_secret)"
 		fi
-		if [ "$TLS_MODE" = internal ]; then
-			echo "DOMAIN=airlock.localhost"
-			echo "HTTP_PORT=24080"
-			echo "HTTPS_PORT=24443"
-			echo "PUBLIC_URL=https://airlock.localhost:24443"
-			echo "S3_URL_PUBLIC=https://s3.airlock.localhost:24443"
+		if [ "$TLS_MODE" = local ]; then
+			echo "DOMAIN=localhost"
+			echo "HTTP_PORT=42080"
+			echo "PUBLIC_URL=http://localhost:42080"
+			echo "S3_URL_PUBLIC=http://s3.localhost:42080"
 			echo "FORCE_INLINE_ATTACHMENTS=true"
 		else
 			echo "DOMAIN=$DOMAIN"
@@ -602,7 +608,7 @@ finish() {
 	hr
 	log "airlock is up."
 	local url; case "$TLS_MODE" in
-		internal) url="https://airlock.localhost:24443" ;;
+		local) url="http://localhost:42080" ;;
 		*) url="https://$DOMAIN" ;;
 	esac
 	echo "  URL:            $url"
@@ -631,7 +637,7 @@ main() {
 	choose_infra
 	cf_setup_dns   # create A records via the CF token when auto-DNS was chosen
 	BUILDKIT_HOST_VAL=""
-	if [ "$TLS_MODE" != internal ]; then BUILDKIT_HOST_VAL="$(ensure_buildkit_capable)"; fi
+	if [ "$TLS_MODE" != local ]; then BUILDKIT_HOST_VAL="$(ensure_buildkit_capable)"; fi
 	assemble_profiles
 	render_env
 	bring_up

@@ -124,6 +124,25 @@ func TestLoadCustomServerAddr(t *testing.T) {
 	}
 }
 
+func TestLoadAgentHostGateway(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("AGENT_HOST_GATEWAY", "true")
+	if c := Load(); !c.AgentHostGateway {
+		t.Error("AgentHostGateway = false, want true")
+	}
+}
+
+func TestLocalAgentBaseURL(t *testing.T) {
+	c := &Config{
+		AgentScheme: "http",
+		AgentPort:   "42080",
+		AgentDomain: "localhost",
+	}
+	if got, want := c.AgentBaseURL("notes"), "http://notes.localhost:42080"; got != want {
+		t.Errorf("AgentBaseURL() = %q, want %q", got, want)
+	}
+}
+
 func TestLoadPanicsOnMissingDatabaseURL(t *testing.T) {
 	setRequiredEnv(t)
 	os.Unsetenv("DATABASE_URL")
