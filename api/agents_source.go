@@ -93,7 +93,8 @@ func (h *agentsHandler) UploadSource(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	force := strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Airlock-Force")), "true")
-	state, err := h.svc.UploadSource(r.Context(), p, agentID, body, expectedState, force)
+	commitMessage := r.Header.Get("X-Airlock-Commit-Message")
+	state, err := h.svc.UploadSource(r.Context(), p, agentID, body, expectedState, commitMessage, force)
 	if errors.Is(err, agentssvc.ErrSourcePreconditionRequired) {
 		h.setSourceGitHeaders(w, r, p, agentID)
 		writeError(w, http.StatusPreconditionRequired, "source state is required; pull or clone the current source before deploying")

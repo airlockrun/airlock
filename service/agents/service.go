@@ -496,7 +496,7 @@ func (s *Service) DownloadSource(ctx context.Context, p authz.Principal, agentID
 // UploadSource replaces an agent's internal source tree with a gzipped tar
 // archive and starts a build from that committed source. expectedState is the
 // state last observed by the caller; force explicitly bypasses that check.
-func (s *Service) UploadSource(ctx context.Context, p authz.Principal, agentID uuid.UUID, archive io.Reader, expectedState string, force bool) (string, error) {
+func (s *Service) UploadSource(ctx context.Context, p authz.Principal, agentID uuid.UUID, archive io.Reader, expectedState, rawCommitMessage string, force bool) (string, error) {
 	q := dbq.New(s.db.Pool())
 	agent, err := q.GetAgentByID(ctx, pgtype.UUID{Bytes: agentID, Valid: true})
 	if err != nil {
@@ -504,6 +504,10 @@ func (s *Service) UploadSource(ctx context.Context, p authz.Principal, agentID u
 	}
 	if err := authz.Authorize(ctx, q, p, authz.AgentBuildManage, agentID); err != nil {
 		return "", err
+	}
+	commitMessage, err := sourceCommitMessage(rawCommitMessage)
+	if err != nil {
+		return "", service.Detail(service.ErrInvalidInput, "%s", err)
 	}
 	if agent.Status == "building" {
 		return "", service.Detail(service.ErrConflict, "agent is already building")
@@ -560,7 +564,7 @@ func (s *Service) UploadSource(ctx context.Context, p authz.Principal, agentID u
 	if err := sourcebundle.Mirror(workDir, repoPath); err != nil {
 		return "", fmt.Errorf("sync source to repo: %w", err)
 	}
-	if _, _, err := builder.CommitWorktree(repoPath, "Upload source"); err != nil {
+	if _, _, err := builder.CommitWorktree(repoPath, commitMessage); err != nil {
 		return "", fmt.Errorf("commit uploaded source: %w", err)
 	}
 	newState, err := sourceState(repoPath)
@@ -586,6 +590,25 @@ func (s *Service) UploadSource(ctx context.Context, p authz.Principal, agentID u
 		}
 	}()
 	return newState, nil
+}
+
+const maxSourceCommitMessageBytes = 200
+
+func sourceCommitMessage(raw string) (string, error) {
+	if raw == "" {
+		return "Upload source", nil
+	}
+	message := strings.TrimSpace(raw)
+	if message == "" {
+		return "", errors.New("source commit message must not be blank")
+	}
+	if strings.ContainsAny(message, "\r\n") {
+		return "", errors.New("source commit message must be a single line")
+	}
+	if len(message) > maxSourceCommitMessageBytes {
+		return "", fmt.Errorf("source commit message is %d bytes; maximum is %d", len(message), maxSourceCommitMessageBytes)
+	}
+	return message, nil
 }
 
 func sourceState(repoPath string) (string, error) {
