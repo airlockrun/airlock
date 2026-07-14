@@ -49,11 +49,10 @@ what no honest agent uses, so there is no usability cost:
   agent *before* infra, so the host survives collective overcommit
   **without** capping how many agents run (which would break usability).
 - **Default seccomp** - left in place (not `unconfined`).
-- **host-gateway dropped in prod** - `host.docker.internal:host-gateway`
-  is added only in dev (`AgentLibsPathExplicit`, where airlock runs on the
-  host and agents reach it that way). In prod, agents reach airlock by
-  service DNS (`API_URL_AGENT`), so the alias - and the host reachability
-  it grants - is omitted.
+- **host-gateway is explicit** - `AGENT_HOST_GATEWAY=true` adds
+  `host.docker.internal:host-gateway` when Airlock runs natively and agents
+  call it through the host. Container deployments omit the alias and its host
+  reachability; agents use service DNS through `API_URL_AGENT`.
 
 ### Tier 2 - operator-configurable (generous / off by default)
 
@@ -156,10 +155,12 @@ AGENT_CODEGEN_VOLUME=<id>-data
 ```
 
 Published Caddy installs also need distinct host ports (`HTTP_PORT` /
-`HTTPS_PORT`). Tunnel installs use the `caddy-private,cloudflared` profiles and
-do not publish Caddy host ports. Bundled Postgres and RustFS stay on the Docker
-network in normal deployments. `make dev` applies `docker-compose.dev.yml` to
-publish loopback ports for the native development process.
+`HTTPS_PORT`). Local installs publish only `HTTP_PORT` through the `caddy-local`
+profile and bind it to 127.0.0.1. Tunnel installs use the
+`caddy-private,cloudflared` profiles and do not publish Caddy host ports.
+Bundled Postgres and RustFS stay on the Docker network in normal deployments.
+`make dev` applies `docker-compose.dev.yml` to publish loopback ports for the
+native development process.
 
 Each installed instance is its own git checkout and `.env`. This lets instances
 run and upgrade on separate release tracks. Run `install.sh` and `upgrade.sh`

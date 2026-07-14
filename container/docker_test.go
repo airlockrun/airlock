@@ -44,10 +44,14 @@ func TestBuildAgentHostConfig(t *testing.T) {
 		t.Errorf("Runtime = %q, want \"\" (Docker default)", hc.Runtime)
 	}
 
-	// Dev: host-gateway alias present so agents reach host-run airlock.
-	dev := buildAgentHostConfig(&config.Config{AgentLibsPathExplicit: true})
+	// Native mode: host-gateway alias present so agents reach host-run airlock.
+	dev := buildAgentHostConfig(&config.Config{AgentHostGateway: true})
 	if len(dev.ExtraHosts) != 1 || dev.ExtraHosts[0] != "host.docker.internal:host-gateway" {
 		t.Errorf("dev ExtraHosts = %v, want [host.docker.internal:host-gateway]", dev.ExtraHosts)
+	}
+	liveLibs := buildAgentHostConfig(&config.Config{AgentLibsPathExplicit: true})
+	if len(liveLibs.ExtraHosts) != 0 {
+		t.Errorf("live libs ExtraHosts = %v, want none without AGENT_HOST_GATEWAY", liveLibs.ExtraHosts)
 	}
 
 	// Memory cap applied (and swap pinned to it) only when configured.

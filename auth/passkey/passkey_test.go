@@ -11,6 +11,7 @@ func TestNew(t *testing.T) {
 		wantErr    bool
 	}{
 		{"localhost dev", "http://localhost:8080", "localhost", "http://localhost:8080", false},
+		{"local mode", "http://localhost:42080", "localhost", "http://localhost:42080", false},
 		{"https host", "https://airlock.example.com", "airlock.example.com", "https://airlock.example.com", false},
 		{"https host with port", "https://airlock.example.com:8443", "airlock.example.com", "https://airlock.example.com:8443", false},
 		{"no host", "not-a-url", "", "", true},

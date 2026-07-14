@@ -33,14 +33,15 @@ If you just want to kick the tires before standing up a real server:
 
 ```bash
 cp .env.example .env
-# Edit .env for laptop mode (see the [laptop] section): DOMAIN=airlock.localhost,
-# TLS_MODE=internal, HTTP_PORT=24080, HTTPS_PORT=24443, the matching PUBLIC_URL /
-# S3_URL_PUBLIC, FORCE_INLINE_ATTACHMENTS=true. Generate the three secrets too.
+# Edit .env for laptop mode (see the [laptop] section): DOMAIN=localhost,
+# TLS_MODE=local, COMPOSE_PROFILES=bundled-db,bundled-s3,caddy-local,
+# HTTP_PORT=42080, matching PUBLIC_URL / S3_URL_PUBLIC, and
+# FORCE_INLINE_ATTACHMENTS=true. Generate the three secrets too.
 docker compose up -d
 docker compose exec airlock cat /var/lib/airlock/activation_code.txt
 ```
 
-Open [https://airlock.localhost:24443](https://airlock.localhost:24443), accept the browser warning on the first visit, paste the activation code. `*.localhost` resolves to 127.0.0.1 automatically (RFC 6761) in every modern browser, so per-agent subdomains route to your machine without any DNS or `/etc/hosts` work. `TLS_MODE=internal` makes Caddy use its built-in local CA, so you don't need a real domain or Let's Encrypt - run `docker compose exec caddy caddy trust` once to silence the warning permanently. The `:24443`/`:24080` ports keep it off whatever you have on 80/443; change `HTTP_PORT` / `HTTPS_PORT` (and the `:port` in `PUBLIC_URL` / `S3_URL_PUBLIC`) if 24xxx is taken too.
+Open [http://localhost:42080](http://localhost:42080) and paste the activation code. The apex uses `localhost` because command-line and OS resolvers do not consistently synthesize names such as `airlock.localhost`; browsers still resolve `*.localhost` for S3 and per-agent routes. Compose binds port 42080 to `127.0.0.1`, making this mode reachable only from the same machine. Change `HTTP_PORT` and the matching port in `PUBLIC_URL` / `S3_URL_PUBLIC` if 42080 is occupied. Use a public TLS, tunnel, manual-certificate, or proxy mode for LAN or remote access.
 
 With Docker Engine or Docker Desktop running and Compose v2 available (`docker info` and `docker compose version` must work), `./install.sh --local` writes this `.env` with generated secrets and brings the stack up for you. The installer never installs or starts Docker. `./install.sh --instance-id airlock2` uses `~/airlock2` when it needs to clone, so a second instance has its own checkout and `.env`.
 
@@ -50,17 +51,16 @@ If you're hacking on airlock itself (Go backend, Vue frontend, agent build pipel
 
 ```bash
 cp .env.dev.example .env
-# Edit .env: set AGENT_LIBS_PATH, and DOMAIN to suit your setup (airlock.localhost
-# for laptop-only; 1.2.3.4.nip.io for a shared dev server reachable elsewhere).
+# Optionally set AGENT_LIBS_PATH to use live agentsdk/goai/sol source.
 cd frontend && pnpm install && cd ..   # one-time
 make dev                                # infra up + pnpm watch + airlock serve
 ```
 
-`make dev` brings up postgres + rustfs + caddy as containers (the `bundled-db` profile, with DB / S3 ports on `127.0.0.1` so the native binary connects), then runs the frontend watcher in the background and `go run ./cmd/airlock serve` in the foreground - Ctrl-C stops both. The in-container `airlock` and `frontend` simply aren't in that service list, so they never start. Caddy serves the SPA from `frontend/dist` as static files (`SPA_*` env in the dev preset) and proxies API/WS traffic through `host.docker.internal` to your `go run` backend. Prefer separate terminals? `make dev-up` then run the two processes yourself (`make watch` is the frontend half).
+`make dev` brings up Postgres, RustFS, and the ingress services selected by `COMPOSE_PROFILES` as containers. The native binary reaches Postgres and RustFS through uncommon loopback ports, then the Make target runs the frontend watcher in the background and `go run ./cmd/airlock serve` in the foreground. Ctrl-C stops both native processes. Caddy serves the SPA from `frontend/dist` and proxies API/WS traffic through `host.docker.internal` to the native backend. Prefer separate terminals? Run `make dev-up`, then start the two processes yourself (`make watch` is the frontend half).
 
 **No vite dev server.** The dev server is a chronic CVE surface (HMR WebSocket file-read, `/@fs/...` filesystem access, etc.) - exposing it on a shared dev server with a real domain is asking for trouble. `vite build --watch` gives you the compiler without the server: edits trigger a sub-second rebuild, you refresh the browser manually. Worth it.
 
-The dev preset uses `TLS_MODE=internal` (Caddy's local CA - works offline, browsers warn until you `caddy trust`). For real TLS on a shared dev box, switch `TLS_MODE` to `wildcard`, `manual`, `proxy`, or `tunnel` and set `DOMAIN` to a public name - same knobs as the production stack.
+The dev preset defaults to loopback-only `TLS_MODE=local`, but ingress is independent of source development. Switch the ingress block to `wildcard`, `manual`, `proxy`, or `tunnel` when developing through a public domain or shared host. `AGENT_LIBS_PATH` independently controls whether agent builds use live owned-library source.
 
 ## Updating
 

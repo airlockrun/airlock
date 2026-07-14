@@ -102,6 +102,9 @@ type Config struct {
 	// collective pressure without a per-agent cap. Set via
 	// AGENT_MEMORY_LIMIT (e.g. "512m", "2g").
 	AgentMemoryLimitBytes int64
+	// AgentHostGateway lets agent containers resolve host.docker.internal
+	// when Airlock itself runs on the host rather than in Compose.
+	AgentHostGateway bool
 
 	// --- Build pipeline ---
 	// AgentReposPath is the base directory holding per-agent git repos.
@@ -214,6 +217,7 @@ func Load() *Config {
 		InstanceID:            requireEnv("AIRLOCK_INSTANCE_ID"),
 		AgentRuntime:          resolveAgentRuntime(),
 		AgentMemoryLimitBytes: parseSizeBytes(os.Getenv("AGENT_MEMORY_LIMIT")),
+		AgentHostGateway:      envBoolOr("AGENT_HOST_GATEWAY", false),
 
 		// Build pipeline
 		AgentReposPath:        envOr("AGENT_REPOS_PATH", "/var/lib/airlock/agents"),

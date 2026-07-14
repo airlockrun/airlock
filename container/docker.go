@@ -662,10 +662,8 @@ func isRoutineToolserverLogLine(line string) bool {
 //
 // Default seccomp is intentionally left in place (not unconfined).
 //
-// The host-gateway alias is added only in dev (AgentLibsPathExplicit),
-// where airlock runs on the host and agents reach it via
-// host.docker.internal. In prod agents reach airlock by service DNS, so
-// the alias — and the host reachability it grants — is omitted.
+// The host-gateway alias is explicit because host access depends on where
+// Airlock runs, not where agent library source comes from.
 func buildAgentHostConfig(cfg *config.Config) *dcontainer.HostConfig {
 	hc := &dcontainer.HostConfig{
 		CapDrop:     []string{"ALL"},
@@ -682,7 +680,7 @@ func buildAgentHostConfig(cfg *config.Config) *dcontainer.HostConfig {
 		hc.Resources.Memory = cfg.AgentMemoryLimitBytes
 		hc.Resources.MemorySwap = cfg.AgentMemoryLimitBytes
 	}
-	if cfg.AgentLibsPathExplicit {
+	if cfg.AgentHostGateway {
 		hc.ExtraHosts = []string{"host.docker.internal:host-gateway"}
 	}
 	return hc

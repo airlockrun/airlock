@@ -3,9 +3,8 @@
 services:
   postgres:
     ports:
-      - "127.0.0.1:${DB_PORT_HOST:-5432}:5432"
+      - "127.0.0.1:${DB_PORT_HOST:?set DB_PORT_HOST for native development}:5432"
 
   rustfs:
     ports:
-      - "127.0.0.1:${S3_PORT_HOST:-9090}:9000"
-      - "127.0.0.1:${S3_CONSOLE_PORT_HOST:-9001}:9001"
+      - "127.0.0.1:${S3_PORT_HOST:?set S3_PORT_HOST for native development}:9000"

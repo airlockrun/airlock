@@ -96,7 +96,7 @@ func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 	}
 	// airlockvet:allow-dbq reason: pre-Principal refresh records first-party session use after token authentication
 	_ = q.TouchUserSession(r.Context(), sess.ID)
-	setAirlockSessionCookie(w, accessToken)
+	setAirlockSessionCookie(w, r, accessToken)
 	writeProto(w, http.StatusOK, &airlockv1.RefreshResponse{AccessToken: accessToken})
 }
 
