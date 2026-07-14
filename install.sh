@@ -7,8 +7,8 @@
 #   curl -fsSL https://raw.githubusercontent.com/airlockrun/airlock/v0.4.0-rc.43/install.sh -o install.sh
 #   less install.sh && bash install.sh
 #
-# Takes a fresh Linux VPS (or macOS for local/tunnel) from nothing to a running,
-# hardened airlock: installs Docker, generates secrets, verifies the domain,
+# Takes a Linux VPS (or macOS for local/tunnel) with Docker already running to a
+# hardened airlock: generates secrets, verifies the domain,
 # picks a TLS_MODE (wildcard / tunnel / internal / manual / proxy)
 # and infra (Postgres and object store each bundled or external, independently),
 # writes a single .env, and brings the stack up. Missing optional prereqs degrade
@@ -43,6 +43,7 @@ FORCE_LOCAL=0
 ALLOW_PRERELEASE=0  # --pre-release / AIRLOCK_ALLOW_PRERELEASE: install an rc/alpha/beta/dev tag
 INSTANCE_ID="airlock"
 WSL_VERSION=0
+DOCKER_INFO_TIMEOUT=5
 
 # ---------- output helpers ----------
 BOLD=$'\033[1m'; RED=$'\033[31m'; GRN=$'\033[32m'; YLW=$'\033[33m'; NC=$'\033[0m'
@@ -194,72 +195,42 @@ ensure_base_tools() {
 }
 
 ensure_docker() {
-	if [ "$WSL_VERSION" = 2 ] && { ! need_cmd docker || ! docker info >/dev/null 2>&1; }; then
-		warn "Docker is not reachable from WSL2. Docker Desktop with WSL integration is the recommended setup."
-		if ! confirm "Install a separate Docker Engine inside this WSL2 distro instead?"; then
-			die "Enable Docker Desktop's WSL integration for this distro, verify 'docker info' works here, then re-run."
-		fi
-		log "installing Docker inside WSL2"
-		curl -fsSL https://get.docker.com | as_root sh || die "Docker install failed"
-		as_root systemctl enable --now docker 2>/dev/null || true
-		docker info >/dev/null 2>&1 || docker_access_error
-		return
-	fi
-	if need_cmd docker; then
-		if docker info >/dev/null 2>&1; then
-			if [ "$(id -u)" -eq 0 ] && [ -n "${SUDO_USER:-}" ]; then ensure_invoking_user_docker_access; fi
-			log "docker present"
-			return
+	if ! need_cmd docker; then
+		if [ "$WSL_VERSION" = 2 ]; then
+			die "Docker is required. Install and start Docker Desktop, enable WSL integration for this distro, and verify 'docker info' works here."
 		fi
 		if [ "$OS" = macos ]; then
-			die "Docker Desktop is installed but not running or not accessible — start it, then re-run."
+			die "Docker Desktop is required — install and start it (https://docs.docker.com/desktop/install/mac-install/), then verify 'docker info'."
 		fi
-		log "starting Docker"
-		as_root systemctl enable --now docker 2>/dev/null || true
-		if docker info >/dev/null 2>&1; then log "docker present"; return; fi
-		docker_access_error
+		die "Docker Engine is required — install and start it (https://docs.docker.com/engine/install/), then verify 'docker info' as this user."
 	fi
-	if [ "$OS" = macos ]; then
-		die "Docker Desktop is required on macOS — install it (https://docs.docker.com/desktop/install/mac-install/) and start it, then re-run."
-	fi
-	log "installing Docker (get.docker.com)"
-	curl -fsSL https://get.docker.com | as_root sh || die "Docker install failed"
-	as_root systemctl enable --now docker 2>/dev/null || true
-	docker info >/dev/null 2>&1 || docker_access_error
-}
-
-docker_invoking_user() {
-	if [ "$(id -u)" -eq 0 ] && [ -n "${SUDO_USER:-}" ]; then printf '%s' "$SUDO_USER"; else id -un; fi
-}
-
-docker_user_in_group() {
-	id -nG "$1" | tr ' ' '\n' | grep -Fxq docker
-}
-
-docker_current_session_in_group() {
-	id -nG | tr ' ' '\n' | grep -Fxq docker
-}
-
-ensure_invoking_user_docker_access() {
-	[ "$OS" = linux ] || return 0
-	local user
-	user=$(docker_invoking_user)
-	[ "$user" = root ] && return 0
-	need_cmd getent && getent group docker >/dev/null 2>&1 || die "Docker installed without a docker group — check the Docker installation, then re-run."
-	if docker_user_in_group "$user"; then
-		if [ "$(id -u)" -ne 0 ] && ! docker_current_session_in_group; then
-			die "$user is already in the docker group, but this login session has not picked it up. Sign out and back in, then re-run."
+	if ! docker_info_works; then
+		if [ "$WSL_VERSION" = 2 ]; then
+			die "Docker is not reachable. Start Docker Desktop, enable WSL integration for this distro, and verify 'docker info' works here."
 		fi
-		return 0
+		if [ "$OS" = macos ]; then
+			die "Docker is not reachable. Start Docker Desktop and verify 'docker info' works, then re-run."
+		fi
+		die "Docker is not reachable within ${DOCKER_INFO_TIMEOUT}s. Start the daemon and verify 'docker info' works as this user, then re-run."
 	fi
-	confirm "Add $user to the docker group? Docker group access is root-equivalent." || die "Docker group access is required to continue."
-	as_root usermod -aG docker "$user" || die "could not add $user to the docker group"
-	die "Added $user to the docker group. Sign out and back in, then re-run the installer."
+	docker compose version >/dev/null 2>&1 || die "Docker Compose v2 is required — install it and verify 'docker compose version', then re-run."
+	log "docker present"
 }
 
-docker_access_error() {
-	if [ "$(id -u)" -ne 0 ] || [ -n "${SUDO_USER:-}" ]; then ensure_invoking_user_docker_access; fi
-	die "Docker is installed but not reachable. Check that the daemon is running and that this user can access /var/run/docker.sock, then re-run."
+docker_info_works() {
+	local pid deadline
+	docker info >/dev/null 2>&1 &
+	pid=$!
+	deadline=$((SECONDS + DOCKER_INFO_TIMEOUT))
+	while kill -0 "$pid" 2>/dev/null; do
+		if [ "$SECONDS" -ge "$deadline" ]; then
+			kill "$pid" 2>/dev/null || true
+			wait "$pid" 2>/dev/null || true
+			return 1
+		fi
+		sleep 0.1
+	done
+	wait "$pid"
 }
 
 # ---------- rootless buildkit host prep ("drop caps" if unsatisfiable) ----------
@@ -267,6 +238,7 @@ docker_access_error() {
 # else empty (legacy host docker build).
 ensure_buildkit_capable() {
 	[ "$OS" = macos ] && { printf ''; return; }  # Docker Desktop VM = already isolated; keep it simple
+	[ "$WSL_VERSION" != 0 ] && { warn "WSL detected — rootless BuildKit host checks do not apply to Docker Desktop; using host Docker builds"; printf ''; return; }
 	[ -e /dev/fuse ] || { warn "no /dev/fuse — rootless BuildKit unavailable; using legacy host build"; printf ''; return; }
 	local sysctl_path=/proc/sys/kernel/apparmor_restrict_unprivileged_userns
 	if [ -r "$sysctl_path" ] && [ "$(cat "$sysctl_path")" = "1" ]; then
@@ -639,8 +611,8 @@ main() {
 		die "$RELEASE_TAG is a pre-release — not for production (migrations/upgrade path are not finalized for pre-releases). Pass --pre-release (or AIRLOCK_ALLOW_PRERELEASE=1) to install it anyway, or use a stable --tag."
 	fi
 	log "airlock installer — OS=$OS DISTRO=${DISTRO:-n/a} tag=$RELEASE_TAG"
-	ensure_base_tools
 	ensure_docker
+	ensure_base_tools
 	clone_repo
 	choose_mode
 	choose_infra
