@@ -128,8 +128,9 @@ label (value = `AIRLOCK_INSTANCE_ID`), and prefixes container, image-cache, and
 buildx-builder names with the same id. Every container/image **list and prune**
 call filters on that label, so an instance only ever sees and only ever reaps
 its own resources. This is what makes it safe to run, e.g., a prod stack
-alongside a dev one on the same host Docker daemon (the dev native binary and a
-prod compose both bind `/var/run/docker.sock`).
+alongside a dev one on the same host Docker daemon. Compose mounts
+`DOCKER_SOCKET_PATH` at `/var/run/docker.sock` inside Airlock; native processes
+use their configured Docker client endpoint directly.
 
 **The contract:** `AIRLOCK_INSTANCE_ID` is required (the compose/.env files
 supply it; default `airlock`). The default is fine for a *single* instance.

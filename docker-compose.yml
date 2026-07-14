@@ -345,8 +345,11 @@ services:
       # Persistent: activation_code.txt, libs cache extracted from agent-builder.
       - airlock-data:/var/lib/airlock
       # Required for launching agent containers. This grants root-equivalent
-      # on the host — standard for any orchestrator that manages containers.
-      - /var/run/docker.sock:/var/run/docker.sock
+      # on the selected daemon. The container path stays stable when the host
+      # uses a rootless or otherwise non-standard Docker socket.
+      - type: bind
+        source: ${DOCKER_SOCKET_PATH:-/var/run/docker.sock}
+        target: /var/run/docker.sock
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8080/health >/dev/null || exit 1"]
       interval: 10s

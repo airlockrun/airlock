@@ -26,6 +26,8 @@
 #                    Refused by default — pre-releases have no supported
 #                    upgrade/migration path. (env: AIRLOCK_ALLOW_PRERELEASE=1)
 #   --dry-run        print decisions + .env + compose command, change nothing
+# Environment:
+#   DOCKER_SOCKET_PATH  host Docker socket mounted into Airlock
 # Note: intentionally NOT `set -e` — this script uses many `cond && action`
 # branches where a false condition is normal flow, not an error. Critical
 # mutating commands are guarded with explicit `|| die`.
@@ -540,6 +542,7 @@ render_env() {
 		echo "DOCKER_NETWORK=$INSTANCE_ID"
 		echo "AGENT_NETWORK=$INSTANCE_ID-agents"
 		echo "AGENT_CODEGEN_VOLUME=$INSTANCE_ID-data"
+		echo "DOCKER_SOCKET_PATH=${DOCKER_SOCKET_PATH:-/var/run/docker.sock}"
 		echo "ENCRYPTION_KEY=$(gen_secret)"
 		echo "JWT_SECRET=$(gen_secret)"
 		# Bundled infra needs generated creds; external supplies its own via
