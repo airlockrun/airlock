@@ -20,9 +20,10 @@ if ! getent passwd "$uid" >/dev/null 2>&1; then
     echo "builder:*:20000:0:99999:7:::" >> /etc/shadow
 fi
 
-# The container starts in the mounted agent repo. Project the image's
-# version-matched frontend cache before tool execution so codegen never needs
-# to discover or install infrastructure itself.
-air toolchain install
+# The container starts in the mounted agent repo. Reconcile the module first so
+# module-local tools resolve on a fresh scaffold, then project the image's
+# version-matched frontend cache before tool execution.
+go mod tidy
+go tool air toolchain install
 
 exec "$@"

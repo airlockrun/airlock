@@ -415,6 +415,7 @@ func (m *DockerManager) StartToolserver(ctx context.Context, opts ToolserverOpts
 		"GOCACHE=/tmp/go-cache",
 		"GOMODCACHE=/tmp/go-mod",
 		"GONOSUMDB=*",
+		"GOSUMDB=off",
 		"GOFLAGS=-buildvcs=false",
 	)
 
