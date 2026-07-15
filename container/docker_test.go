@@ -1,12 +1,79 @@
 package container
 
 import (
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/airlockrun/airlock/config"
 	"github.com/google/uuid"
 )
+
+func TestAgentBuilderEntrypointPreparesOnlyToolserver(t *testing.T) {
+	script, err := filepath.Abs(filepath.Join("..", "scripts", "agent-builder-entrypoint.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("image carrier", func(t *testing.T) {
+		cmd := exec.Command(script, "true")
+		cmd.Dir = t.TempDir()
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("entrypoint true: %v\n%s", err, out)
+		} else if len(out) != 0 {
+			t.Fatalf("entrypoint true output = %q, want none", out)
+		}
+	})
+
+	t.Run("toolserver requires module", func(t *testing.T) {
+		cmd := exec.Command(script, "toolserver")
+		cmd.Dir = t.TempDir()
+		out, err := cmd.CombinedOutput()
+		if err == nil {
+			t.Fatal("entrypoint toolserver without go.mod succeeded")
+		}
+		if !strings.Contains(string(out), "toolserver workspace has no go.mod") {
+			t.Fatalf("entrypoint error = %q", out)
+		}
+	})
+
+	t.Run("toolserver prepares workspace", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module agent\n\ngo 1.26.0\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		binDir := filepath.Join(dir, "bin")
+		if err := os.Mkdir(binDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		logPath := filepath.Join(dir, "commands.log")
+		for name, body := range map[string]string{
+			"go":         "#!/bin/sh\nprintf 'go %s\\n' \"$*\" >> \"$ENTRYPOINT_LOG\"\n",
+			"toolserver": "#!/bin/sh\nprintf 'toolserver %s\\n' \"$*\" >> \"$ENTRYPOINT_LOG\"\n",
+		} {
+			if err := os.WriteFile(filepath.Join(binDir, name), []byte(body), 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+		cmd := exec.Command(script, "toolserver", "-space-dir", dir)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(), "PATH="+binDir+":"+os.Getenv("PATH"), "ENTRYPOINT_LOG="+logPath)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("entrypoint toolserver: %v\n%s", err, out)
+		}
+		got, err := os.ReadFile(logPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := "go mod tidy\ngo tool air toolchain install\ntoolserver -space-dir " + dir + "\n"
+		if string(got) != want {
+			t.Fatalf("commands:\n%s\nwant:\n%s", got, want)
+		}
+	})
+}
 
 func TestBuildAgentHostConfig(t *testing.T) {
 	// Baseline (prod-shape): no dev flag, no memory cap, default runtime.
