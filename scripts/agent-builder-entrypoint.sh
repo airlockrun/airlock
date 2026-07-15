@@ -20,10 +20,17 @@ if ! getent passwd "$uid" >/dev/null 2>&1; then
     echo "builder:*:20000:0:99999:7:::" >> /etc/shadow
 fi
 
-# The container starts in the mounted agent repo. Reconcile the module first so
-# module-local tools resolve on a fresh scaffold, then project the image's
-# version-matched frontend cache before tool execution.
-go mod tidy
-go tool air toolchain install
+# Compose also starts this image with `true` as an image-carrier dependency.
+# Only a real toolserver process has an agent workspace to prepare.
+if [ "${1##*/}" = "toolserver" ]; then
+    if [ ! -f go.mod ]; then
+        echo "agent-builder: toolserver workspace has no go.mod" >&2
+        exit 1
+    fi
+    # Reconcile the module first so module-local tools resolve on a fresh
+    # scaffold, then project the version-matched frontend cache.
+    go mod tidy
+    go tool air toolchain install
+fi
 
 exec "$@"
