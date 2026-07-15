@@ -419,10 +419,11 @@ func (m *DockerManager) StartToolserver(ctx context.Context, opts ToolserverOpts
 	)
 
 	containerCfg := &dcontainer.Config{
-		Image: opts.Image,
-		Env:   env,
-		Cmd:   cmd,
-		User:  fmt.Sprintf("%d:%d", uid, gid),
+		Image:      opts.Image,
+		Env:        env,
+		Cmd:        cmd,
+		User:       fmt.Sprintf("%d:%d", uid, gid),
+		WorkingDir: opts.WorkDir,
 		ExposedPorts: nat.PortSet{
 			"8080/tcp": struct{}{},
 		},

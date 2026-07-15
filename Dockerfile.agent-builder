@@ -78,8 +78,9 @@ RUN mkdir -p /libs && \
     chmod -R u+w /libs && \
     rm -rf /tmp/libs-fetch "$(go env GOMODCACHE)"
 
-# Build the four CLI binaries straight from /libs/ source so the version the
-# CLI is is the version the lib is.
+# Build CLI binaries straight from /libs/ source so every command matches the
+# library version and scaffold contract baked into this image.
+RUN cd /libs/agentsdk && go build -o /usr/local/bin/air ./cmd/air
 RUN cd /libs/sol   && go build -o /usr/local/bin/sol        ./cmd/sol && \
                       go build -o /usr/local/bin/toolserver ./cmd/toolserver
 RUN cd /libs/goose && go build -o /usr/local/bin/goose      ./cmd/goose

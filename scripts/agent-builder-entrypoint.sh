@@ -19,4 +19,10 @@ if ! getent passwd "$uid" >/dev/null 2>&1; then
     echo "builder:x:${uid}:${gid}::/tmp/sol-home:/bin/bash" >> /etc/passwd
     echo "builder:*:20000:0:99999:7:::" >> /etc/shadow
 fi
+
+# The container starts in the mounted agent repo. Project the image's
+# version-matched frontend cache before tool execution so codegen never needs
+# to discover or install infrastructure itself.
+air toolchain install
+
 exec "$@"
