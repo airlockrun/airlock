@@ -3,7 +3,7 @@ package agentapi
 import (
 	"net/http"
 
-	"github.com/airlockrun/agentsdk"
+	"github.com/airlockrun/agentsdk/wire"
 )
 
 var (
@@ -25,14 +25,14 @@ func badWrite(w http.ResponseWriter) {
 	writeJSON(w, 200, localSealRequest{Plaintext: "x"}) // want `writeJSON body uses type localSealRequest declared in agentapi/.*`
 }
 
-// OK: type from agentsdk.
+// OK: type from agentsdk/wire.
 func okRead(r *http.Request) {
-	var req agentsdk.SealRequest
+	var req wire.SealRequest
 	_ = readJSON(r, &req)
 }
 
 func okWrite(w http.ResponseWriter) {
-	writeJSON(w, 200, agentsdk.SealResponse{Sealed: "x"})
+	writeJSON(w, 200, wire.SealResponse{Sealed: "x"})
 }
 
 // OK: anonymous shape — error envelopes, ad-hoc acks, etc.

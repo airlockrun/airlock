@@ -433,17 +433,17 @@ func CleanWorktree(repoPath string) error {
 }
 
 // MigrationVersionAt returns the highest goose version number among
-// files in migrations/ at the given commit. Goose's contract is "all
+// files in db/migrations/ at the given commit. Goose's contract is "all
 // migrations get applied to head", so this is the version a deployed
 // container ends up at — the answer rollback needs to give goose as
-// its down-to target. Returns 0 when migrations/ is empty or absent.
+// its down-to target. Returns 0 when db/migrations/ is empty or absent.
 //
 // Parses the leading NNNN_ prefix from each filename (goose's required
 // naming convention). Non-numeric files (README, etc.) are skipped.
 func MigrationVersionAt(repoPath, commit string) (int, error) {
-	out, err := gitOutput(repoPath, "ls-tree", "-r", "--name-only", commit, "--", "migrations/")
+	out, err := gitOutput(repoPath, "ls-tree", "-r", "--name-only", commit, "--", "db/migrations/")
 	if err != nil {
-		return 0, fmt.Errorf("git ls-tree migrations/ at %s: %w", commit, err)
+		return 0, fmt.Errorf("git ls-tree db/migrations/ at %s: %w", commit, err)
 	}
 	max := 0
 	for _, line := range strings.Split(out, "\n") {

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/airlockrun/agentsdk"
+	"github.com/airlockrun/agentsdk/wire"
 	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/authz"
 	"github.com/airlockrun/airlock/db"
@@ -269,8 +270,8 @@ func (h *Handler) StorageInfo(w http.ResponseWriter, r *http.Request) {
 		filename = origFilename
 	}
 
-	writeJSON(w, http.StatusOK, agentsdk.FileInfo{
-		Path:         agentsdk.FilePath(req.Path),
+	writeJSON(w, http.StatusOK, wire.FileInfo{
+		Path:         req.Path,
 		Filename:     filename,
 		ContentType:  ct,
 		Size:         info.Size,
@@ -292,7 +293,7 @@ func (h *Handler) StorageInfo(w http.ResponseWriter, r *http.Request) {
 // signal instead of a working URL that 404s when followed.
 func (h *Handler) StorageShare(w http.ResponseWriter, r *http.Request) {
 	agentID := auth.AgentIDFromContext(r.Context())
-	var req agentsdk.ShareFileRequest
+	var req wire.ShareFileRequest
 	if err := readJSON(r, &req); err != nil || req.Path == "" {
 		writeJSONError(w, http.StatusBadRequest, "path is required")
 		return
@@ -325,7 +326,7 @@ func (h *Handler) StorageShare(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, agentsdk.ShareFileResponse{
+	writeJSON(w, http.StatusOK, wire.ShareFileResponse{
 		URL:         url,
 		ExpiresAtMs: time.Now().Add(expiry).UnixMilli(),
 	})
@@ -459,7 +460,7 @@ func (h *Handler) StorageList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	files := make([]agentsdk.FileInfo, 0, len(objects))
+	files := make([]wire.FileInfo, 0, len(objects))
 	listPrefix := ""
 	if path != "" {
 		listPrefix = strings.TrimSuffix(path, "/") + "/"
@@ -475,8 +476,8 @@ func (h *Handler) StorageList(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 		}
-		files = append(files, agentsdk.FileInfo{
-			Path:         agentsdk.FilePath(filePath),
+		files = append(files, wire.FileInfo{
+			Path:         filePath,
 			Filename:     pathBase(filePath),
 			Size:         obj.Size,
 			LastModified: obj.LastModified,
@@ -494,5 +495,5 @@ func pathBase(p string) string {
 	return p
 }
 
-// (kept for compile-time; time import used by StorageInfo via agentsdk.FileInfo.LastModified — remove if unused)
+// (kept for compile-time; time import used by StorageInfo via wire.FileInfo.LastModified — remove if unused)
 var _ = time.Time{}

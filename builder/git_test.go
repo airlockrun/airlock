@@ -380,18 +380,36 @@ func TestMigrationVersionAt(t *testing.T) {
 		t.Fatalf("commit A: got v=%d err=%v, want 0,nil", v, err)
 	}
 
-	// Commit B: add 0001 + 0003 migrations and a README (skip non-numeric).
-	mig := filepath.Join(repoPath, "migrations")
+	// A root migrations directory is not the canonical agent migration path.
+	rootMig := filepath.Join(repoPath, "migrations")
+	if err := os.MkdirAll(rootMig, 0o755); err != nil {
+		t.Fatalf("mkdir root migrations: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(rootMig, "0099_wrong_path.sql"), []byte("-- ignored"), 0o644); err != nil {
+		t.Fatalf("write root migration: %v", err)
+	}
+	if err := git(repoPath, "add", "migrations"); err != nil {
+		t.Fatalf("git add root migrations: %v", err)
+	}
+	if err := git(repoPath, "commit", "-m", "add noncanonical migrations"); err != nil {
+		t.Fatalf("git commit: %v", err)
+	}
+	if v, err := MigrationVersionAt(repoPath, "HEAD"); err != nil || v != 0 {
+		t.Fatalf("root migrations: got v=%d err=%v, want 0,nil", v, err)
+	}
+
+	// Commit B: add canonical 0001 + 0003 migrations and a README.
+	mig := filepath.Join(repoPath, "db", "migrations")
 	if err := os.MkdirAll(mig, 0o755); err != nil {
-		t.Fatalf("mkdir migrations: %v", err)
+		t.Fatalf("mkdir db/migrations: %v", err)
 	}
 	for _, name := range []string{"0001_init.sql", "0003_users.go", "README.md"} {
 		if err := os.WriteFile(filepath.Join(mig, name), []byte("-- "+name), 0o644); err != nil {
 			t.Fatalf("write %s: %v", name, err)
 		}
 	}
-	if err := git(repoPath, "add", "migrations"); err != nil {
-		t.Fatalf("git add migrations: %v", err)
+	if err := git(repoPath, "add", "db/migrations"); err != nil {
+		t.Fatalf("git add db/migrations: %v", err)
 	}
 	if err := git(repoPath, "commit", "-m", "add migrations"); err != nil {
 		t.Fatalf("git commit: %v", err)

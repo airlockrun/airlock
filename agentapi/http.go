@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/airlockrun/agentsdk"
+	"github.com/airlockrun/agentsdk/wire"
 	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/storage"
 	"github.com/airlockrun/sol/webfetch"
@@ -38,7 +38,7 @@ const (
 // AgentHTTP handles POST /api/agent/http — raw HTTP proxy for public URLs.
 // No auth injection (use proxy/{slug} for authenticated connections).
 func (h *Handler) AgentHTTP(w http.ResponseWriter, r *http.Request) {
-	var req agentsdk.HTTPRequest
+	var req wire.HTTPRequest
 	if err := readJSON(r, &req); err != nil {
 		writeJSONError(w, http.StatusBadRequest, "invalid request body")
 		return
@@ -117,7 +117,7 @@ func (h *Handler) AgentHTTP(w http.ResponseWriter, r *http.Request) {
 			writeJSONError(w, http.StatusInternalServerError, "failed to save response")
 			return
 		}
-		writeJSON(w, http.StatusOK, agentsdk.HTTPResponse{
+		writeJSON(w, http.StatusOK, wire.HTTPResponse{
 			Status:      resp.StatusCode,
 			Headers:     headers,
 			ContentType: ct,
@@ -145,7 +145,7 @@ func (h *Handler) AgentHTTP(w http.ResponseWriter, r *http.Request) {
 			writeJSONError(w, http.StatusInternalServerError, "failed to save response")
 			return
 		}
-		writeJSON(w, http.StatusOK, agentsdk.HTTPResponse{
+		writeJSON(w, http.StatusOK, wire.HTTPResponse{
 			Status:      resp.StatusCode,
 			Headers:     headers,
 			ContentType: ct,
@@ -187,7 +187,7 @@ func (h *Handler) AgentHTTP(w http.ResponseWriter, r *http.Request) {
 				writeJSONError(w, http.StatusInternalServerError, "failed to save response")
 				return
 			}
-			writeJSON(w, http.StatusOK, agentsdk.HTTPResponse{
+			writeJSON(w, http.StatusOK, wire.HTTPResponse{
 				Status:      resp.StatusCode,
 				Headers:     headers,
 				ContentType: ct,
@@ -198,7 +198,7 @@ func (h *Handler) AgentHTTP(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
-		writeJSON(w, http.StatusOK, agentsdk.HTTPResponse{
+		writeJSON(w, http.StatusOK, wire.HTTPResponse{
 			Status:      resp.StatusCode,
 			Headers:     headers,
 			ContentType: ct,
@@ -234,7 +234,7 @@ func (h *Handler) AgentHTTP(w http.ResponseWriter, r *http.Request) {
 			writeJSONError(w, http.StatusInternalServerError, "failed to save response")
 			return
 		}
-		writeJSON(w, http.StatusOK, agentsdk.HTTPResponse{
+		writeJSON(w, http.StatusOK, wire.HTTPResponse{
 			Status:      resp.StatusCode,
 			Headers:     headers,
 			ContentType: ct,
@@ -246,7 +246,7 @@ func (h *Handler) AgentHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, agentsdk.HTTPResponse{
+	writeJSON(w, http.StatusOK, wire.HTTPResponse{
 		Status:      resp.StatusCode,
 		Headers:     headers,
 		ContentType: ct,

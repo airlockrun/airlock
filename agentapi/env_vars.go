@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"regexp"
 
-	"github.com/airlockrun/agentsdk"
+	"github.com/airlockrun/agentsdk/wire"
 	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/go-chi/chi/v5"
@@ -29,7 +29,7 @@ func (h *Handler) UpsertEnvVar(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "slug is required")
 		return
 	}
-	var req agentsdk.EnvVarDef
+	var req wire.EnvVarDef
 	if err := readJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
@@ -92,5 +92,5 @@ func (h *Handler) GetEnvVarValue(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "decryption failed")
 		return
 	}
-	writeJSON(w, http.StatusOK, agentsdk.EnvVarValueResponse{Value: value})
+	writeJSON(w, http.StatusOK, wire.EnvVarValueResponse{Value: value})
 }

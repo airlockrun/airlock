@@ -68,10 +68,10 @@ for lib in agentsdk goai sol; do
 	fi
 done
 
-# --- 1b/1c. Frontend toolchain versions match the agentsdk scaffold consts ---
+# --- 1b/1c. Build toolchain versions match the agentsdk scaffold consts ---
 #
 # agentsdk/scaffold/versions.go is the single source of truth for the templ/
-# tailwind/daisyui versions a scaffolded agent pins — its templates render from
+# sqlc/tailwind/daisyui versions a scaffolded agent pins — its templates render from
 # those consts, so a materialized agent can't drift from them. The toolserver
 # image (Dockerfile.agent-builder) bakes the same toolchain as literal ARGs for
 # its iterative codegen loop, and the CI/release workflows install the templ CLI
@@ -100,7 +100,7 @@ else
 	builder_arg() { awk -v p="^ARG ${1}=" '$0 ~ p {sub(p, ""); print; exit}' Dockerfile.agent-builder; }
 
 	# 1b: toolserver image ARGs == consts. ARG name : Go const name.
-	for pair in TEMPL_VERSION:TemplVersion TAILWIND_VERSION:TailwindVersion DAISYUI_VERSION:DaisyUIVersion; do
+	for pair in TEMPL_VERSION:TemplVersion SQLC_VERSION:SQLCVersion TAILWIND_VERSION:TailwindVersion DAISYUI_VERSION:DaisyUIVersion; do
 		arg_name=${pair%%:*}
 		const_name=${pair##*:}
 		want=$(scaffold_const "$const_name")

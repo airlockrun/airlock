@@ -6,7 +6,7 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/airlockrun/agentsdk"
+	"github.com/airlockrun/agentsdk/wire"
 	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/airlockrun/airlock/execproxy"
@@ -33,7 +33,7 @@ func (h *Handler) AgentExec(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req agentsdk.ExecRequest
+	var req wire.ExecRequest
 	if err := readJSON(r, &req); err != nil {
 		writeJSONError(w, http.StatusBadRequest, "invalid request body")
 		return

@@ -9,7 +9,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/airlockrun/agentsdk"
+	"github.com/airlockrun/agentsdk/wire"
 	"github.com/airlockrun/airlock/attachref"
 	"github.com/airlockrun/airlock/audio"
 	"github.com/airlockrun/airlock/auth"
@@ -29,7 +29,7 @@ func (h *Handler) LLMStream(w http.ResponseWriter, r *http.Request) {
 	runIDHdr := r.Header.Get("X-Airlock-Run-ID")
 	ctx := r.Context()
 
-	var req agentsdk.LLMProxyRequest
+	var req wire.LLMProxyRequest
 	if err := readJSON(r, &req); err != nil {
 		writeJSONError(w, http.StatusBadRequest, "invalid request body")
 		return
@@ -303,7 +303,7 @@ func (h *Handler) ImageGenerate(w http.ResponseWriter, r *http.Request) {
 	runIDHdr := r.Header.Get("X-Airlock-Run-ID")
 	ctx := r.Context()
 
-	var req agentsdk.ModelProxyRequest
+	var req wire.ModelProxyRequest
 	if err := readJSON(r, &req); err != nil {
 		writeJSONError(w, http.StatusBadRequest, "invalid request body")
 		return
@@ -359,7 +359,7 @@ func (h *Handler) Embed(w http.ResponseWriter, r *http.Request) {
 	runIDHdr := r.Header.Get("X-Airlock-Run-ID")
 	ctx := r.Context()
 
-	var req agentsdk.ModelProxyRequest
+	var req wire.ModelProxyRequest
 	if err := readJSON(r, &req); err != nil {
 		writeJSONError(w, http.StatusBadRequest, "invalid request body")
 		return
@@ -408,7 +408,7 @@ func (h *Handler) SpeechGenerate(w http.ResponseWriter, r *http.Request) {
 	runIDHdr := r.Header.Get("X-Airlock-Run-ID")
 	ctx := r.Context()
 
-	var req agentsdk.ModelProxyRequest
+	var req wire.ModelProxyRequest
 	if err := readJSON(r, &req); err != nil {
 		writeJSONError(w, http.StatusBadRequest, "invalid request body")
 		return
@@ -462,7 +462,7 @@ func (h *Handler) Transcribe(w http.ResponseWriter, r *http.Request) {
 	runIDHdr := r.Header.Get("X-Airlock-Run-ID")
 	ctx := r.Context()
 
-	var req agentsdk.ModelProxyRequest
+	var req wire.ModelProxyRequest
 	if err := readJSON(r, &req); err != nil {
 		writeJSONError(w, http.StatusBadRequest, "invalid request body")
 		return

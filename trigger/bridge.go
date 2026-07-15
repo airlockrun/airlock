@@ -15,7 +15,7 @@ import (
 	"encoding/hex"
 	"strconv"
 
-	"github.com/airlockrun/agentsdk"
+	"github.com/airlockrun/agentsdk/wire"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/airlockrun/airlock/secrets"
@@ -809,7 +809,7 @@ func buildAuthExternalURL(publicURL, hmacSecret, platform, bridgeID, platformUse
 
 // SendParts sends display parts to a bridge conversation.
 // Looks up the bridge, decrypts the token, and delegates to the driver.
-func (m *BridgeManager) SendParts(ctx context.Context, bridgeID uuid.UUID, externalID string, parts []agentsdk.DisplayPart) error {
+func (m *BridgeManager) SendParts(ctx context.Context, bridgeID uuid.UUID, externalID string, parts []wire.DisplayPart) error {
 	q := dbq.New(m.db.Pool())
 	br, err := q.GetBridgeByID(ctx, toPgUUID(bridgeID))
 	if err != nil {
@@ -839,7 +839,7 @@ func (m *BridgeManager) SendParts(ctx context.Context, bridgeID uuid.UUID, exter
 
 // SendMessage sends a text message to a bridge conversation. Convenience wrapper.
 func (m *BridgeManager) SendMessage(ctx context.Context, bridgeID uuid.UUID, externalID, text string) error {
-	return m.SendParts(ctx, bridgeID, externalID, []agentsdk.DisplayPart{{Type: "text", Text: text}})
+	return m.SendParts(ctx, bridgeID, externalID, []wire.DisplayPart{{Type: "text", Text: text}})
 }
 
 // StreamToBridge is the single bridge-delivery primitive the completion-resume

@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/airlockrun/agentsdk"
+	"github.com/airlockrun/agentsdk/wire"
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/airlockrun/airlock/storage"
 	"github.com/google/uuid"
@@ -486,11 +486,11 @@ func schemaHasAgentMarker(schema map[string]any) bool {
 // shape. The MCP `tools/list` schema only advertises inline-upload (see
 // handleToolsList); agent callers use agentsdk's promptAgentInput which
 // only emits {path}-shape.
-func (s *MCPServer) materializePromptFiles(ctx context.Context, h *Handler, q *dbq.Queries, target dbq.Agent, principal MCPPrincipal, scopeKey string, raws []json.RawMessage) ([]agentsdk.FileInfo, *materializeError) {
+func (s *MCPServer) materializePromptFiles(ctx context.Context, h *Handler, q *dbq.Queries, target dbq.Agent, principal MCPPrincipal, scopeKey string, raws []json.RawMessage) ([]wire.FileInfo, *materializeError) {
 	if len(raws) == 0 {
 		return nil, nil
 	}
-	out := make([]agentsdk.FileInfo, 0, len(raws))
+	out := make([]wire.FileInfo, 0, len(raws))
 	targetID := uuid.UUID(target.ID.Bytes)
 	isAgent := principal.Kind == MCPPrincipalAgent && principal.CallerAgentID != uuid.Nil
 	for i, raw := range raws {
@@ -535,7 +535,7 @@ func (s *MCPServer) materializePromptFiles(ctx context.Context, h *Handler, q *d
 // uploadInlineFile decodes base64 bytes from an external MCP client and
 // PUTs them into agents/{target}/__incoming/<scope>/. Returns the
 // FileInfo to surface in PromptInput.Files.
-func (s *MCPServer) uploadInlineFile(ctx context.Context, h *Handler, targetID uuid.UUID, scopeKey string, i int, probe map[string]any) (agentsdk.FileInfo, *materializeError) {
+func (s *MCPServer) uploadInlineFile(ctx context.Context, h *Handler, targetID uuid.UUID, scopeKey string, i int, probe map[string]any) (wire.FileInfo, *materializeError) {
 	filename, _ := probe["filename"].(string)
 	if filename == "" {
 		filename = "upload.bin"
@@ -544,10 +544,10 @@ func (s *MCPServer) uploadInlineFile(ctx context.Context, h *Handler, targetID u
 	dataStr, _ := probe["data"].(string)
 	rawBytes, err := base64.StdEncoding.DecodeString(dataStr)
 	if err != nil {
-		return agentsdk.FileInfo{}, &materializeError{Code: rpcErrInvalidParams, Message: fmt.Sprintf("files[%d]: invalid base64: %s", i, err)}
+		return wire.FileInfo{}, &materializeError{Code: rpcErrInvalidParams, Message: fmt.Sprintf("files[%d]: invalid base64: %s", i, err)}
 	}
 	if len(rawBytes) > maxInlineResourceBytes {
-		return agentsdk.FileInfo{}, &materializeError{Code: rpcErrInvalidParams, Message: fmt.Sprintf("files[%d] exceeds %d-byte inline cap", i, maxInlineResourceBytes)}
+		return wire.FileInfo{}, &materializeError{Code: rpcErrInvalidParams, Message: fmt.Sprintf("files[%d] exceeds %d-byte inline cap", i, maxInlineResourceBytes)}
 	}
 	dstPath := incomingDir + "/" + scopeKey + "/" + uuid.NewString() + "-" + safeFilename(filename)
 	dstKey := "agents/" + targetID.String() + "/" + dstPath
@@ -556,10 +556,10 @@ func (s *MCPServer) uploadInlineFile(ctx context.Context, h *Handler, targetID u
 		meta["content-type"] = mimeType
 	}
 	if err := h.s3.PutObjectWithMetadata(ctx, dstKey, bytes.NewReader(rawBytes), int64(len(rawBytes)), meta); err != nil {
-		return agentsdk.FileInfo{}, &materializeError{Code: rpcErrServerError, Message: fmt.Sprintf("files[%d]: upload: %s", i, err)}
+		return wire.FileInfo{}, &materializeError{Code: rpcErrServerError, Message: fmt.Sprintf("files[%d]: upload: %s", i, err)}
 	}
-	return agentsdk.FileInfo{
-		Path:        agentsdk.FilePath(dstPath),
+	return wire.FileInfo{
+		Path:        dstPath,
 		Filename:    filename,
 		ContentType: mimeType,
 		Size:        int64(len(rawBytes)),
@@ -570,15 +570,15 @@ func (s *MCPServer) uploadInlineFile(ctx context.Context, h *Handler, targetID u
 // it into agents/{target}/__incoming/<scope>/, and builds a FileInfo
 // from S3 truth. Caller LLM only supplies path — every other field is
 // derived here.
-func (s *MCPServer) copyAgentFile(ctx context.Context, h *Handler, targetID, callerAgentID uuid.UUID, scopeKey string, i int, pathStr string) (agentsdk.FileInfo, *materializeError) {
+func (s *MCPServer) copyAgentFile(ctx context.Context, h *Handler, targetID, callerAgentID uuid.UUID, scopeKey string, i int, pathStr string) (wire.FileInfo, *materializeError) {
 	cleaned, err := storage.CleanAgentPath(pathStr)
 	if err != nil {
-		return agentsdk.FileInfo{}, &materializeError{Code: rpcErrInvalidParams, Message: fmt.Sprintf("files[%d]: invalid path: %s", i, err)}
+		return wire.FileInfo{}, &materializeError{Code: rpcErrInvalidParams, Message: fmt.Sprintf("files[%d]: invalid path: %s", i, err)}
 	}
 	srcKey := "agents/" + callerAgentID.String() + "/" + cleaned
 	info, contentType, headErr := h.s3.HeadObject(ctx, srcKey)
 	if headErr != nil {
-		return agentsdk.FileInfo{}, &materializeError{Code: rpcErrInvalidParams, Message: fmt.Sprintf("files[%d]: source not found in your bucket: %s", i, cleaned)}
+		return wire.FileInfo{}, &materializeError{Code: rpcErrInvalidParams, Message: fmt.Sprintf("files[%d]: source not found in your bucket: %s", i, cleaned)}
 	}
 	filename := info.Metadata["filename"]
 	if filename == "" {
@@ -587,10 +587,10 @@ func (s *MCPServer) copyAgentFile(ctx context.Context, h *Handler, targetID, cal
 	dstPath := incomingDir + "/" + scopeKey + "/" + uuid.NewString() + "-" + filename
 	dstKey := "agents/" + targetID.String() + "/" + dstPath
 	if err := h.s3.CopyObject(ctx, srcKey, dstKey); err != nil {
-		return agentsdk.FileInfo{}, &materializeError{Code: rpcErrServerError, Message: fmt.Sprintf("files[%d]: cross-agent copy: %s", i, err)}
+		return wire.FileInfo{}, &materializeError{Code: rpcErrServerError, Message: fmt.Sprintf("files[%d]: cross-agent copy: %s", i, err)}
 	}
-	return agentsdk.FileInfo{
-		Path:         agentsdk.FilePath(dstPath),
+	return wire.FileInfo{
+		Path:         dstPath,
 		Filename:     filename,
 		ContentType:  contentType,
 		Size:         info.Size,

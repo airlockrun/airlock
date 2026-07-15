@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/airlockrun/agentsdk"
+	"github.com/airlockrun/agentsdk/wire"
 	"github.com/airlockrun/airlock/authz"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
@@ -33,14 +34,14 @@ type PostDeps struct {
 type PostOpts struct {
 	AgentID        uuid.UUID
 	ConversationID uuid.UUID
-	RunID          uuid.UUID              // zero = no run linkage
-	Role           string                 // "assistant", "system"
-	Text           string                 // plain text content
-	Parts          []agentsdk.DisplayPart // rich content (optional)
-	Source         string                 // "notification", "system", etc.
-	Ephemeral      bool                   // stored for UI but excluded from LLM context
-	TriggerLLM     bool                   // forward to agent for a response turn
-	LLMMessage     string                 // message text for the LLM turn (if TriggerLLM)
+	RunID          uuid.UUID          // zero = no run linkage
+	Role           string             // "assistant", "system"
+	Text           string             // plain text content
+	Parts          []wire.DisplayPart // rich content (optional)
+	Source         string             // "notification", "system", etc.
+	Ephemeral      bool               // stored for UI but excluded from LLM context
+	TriggerLLM     bool               // forward to agent for a response turn
+	LLMMessage     string             // message text for the LLM turn (if TriggerLLM)
 }
 
 // PostToConversation stores a message, delivers it via the appropriate channel
@@ -66,7 +67,7 @@ func PostToConversation(ctx context.Context, deps PostDeps, opts PostOpts) error
 	// row has the content) until the page is refreshed.
 	parts := opts.Parts
 	if len(parts) == 0 && text != "" {
-		parts = []agentsdk.DisplayPart{{Type: "text", Text: text}}
+		parts = []wire.DisplayPart{{Type: "text", Text: text}}
 	}
 	var partsJSON []byte
 	if len(parts) > 0 {
@@ -126,11 +127,11 @@ func PostToConversation(ctx context.Context, deps PostDeps, opts PostOpts) error
 		// follow-up turns. Without this the agent defaults to AccessUser
 		// and admin verbs ReferenceError on the next turn.
 		access := authz.UserPrincipal(pgUUID(conv.UserID), "").EffectiveAgentAccess(ctx, q, opts.AgentID)
-		input := agentsdk.PromptInput{
+		input := wire.PromptInput{
 			Message:        opts.LLMMessage,
 			ConversationID: opts.ConversationID.String(),
 			Source:         opts.Source,
-			CallerAccess:   access,
+			CallerAccess:   wire.Access(access),
 			DirectTools:    access == agentsdk.AccessPublic,
 		}
 
@@ -153,7 +154,7 @@ func PostToConversation(ctx context.Context, deps PostDeps, opts PostOpts) error
 			}()
 			responseText, _, _, _ := trigger.StreamNDJSONResponse(rc, runID.String(), respEvents)
 			if responseText != "" {
-				parts := []agentsdk.DisplayPart{{Type: "text", Text: responseText}}
+				parts := []wire.DisplayPart{{Type: "text", Text: responseText}}
 				_ = deps.BridgeMgr.SendParts(ctx, pgUUID(conv.BridgeID), conv.ExternalID.String, parts)
 			}
 		} else {
@@ -214,11 +215,11 @@ func presignSource(ctx context.Context, s3Client *storage.S3Client, logger *zap.
 // resolveDisplayParts converts S3 source keys to short-lived presigned URLs
 // so browser or bridge clients can fetch media directly. Parts that already
 // have a URL or no S3 source are returned unchanged.
-func resolveDisplayParts(ctx context.Context, s3Client *storage.S3Client, logger *zap.Logger, parts []agentsdk.DisplayPart) []agentsdk.DisplayPart {
+func resolveDisplayParts(ctx context.Context, s3Client *storage.S3Client, logger *zap.Logger, parts []wire.DisplayPart) []wire.DisplayPart {
 	if s3Client == nil {
 		return parts
 	}
-	out := make([]agentsdk.DisplayPart, len(parts))
+	out := make([]wire.DisplayPart, len(parts))
 	copy(out, parts)
 	for i := range out {
 		p := &out[i]

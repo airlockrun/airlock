@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/airlockrun/agentsdk"
+	"github.com/airlockrun/agentsdk/wire"
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/jackc/pgx/v5/pgtype"
 )
@@ -29,7 +29,7 @@ const FilesManifestSource = "llm"
 // the manifest is model-only and must never reach a human WS or bridge
 // channel. Sol's same-role coalescer folds it together with the user's
 // actual message for providers that reject consecutive user turns.
-func PostFilesManifest(ctx context.Context, q *dbq.Queries, convID pgtype.UUID, files []agentsdk.FileInfo) error {
+func PostFilesManifest(ctx context.Context, q *dbq.Queries, convID pgtype.UUID, files []wire.FileInfo) error {
 	if len(files) == 0 {
 		return nil
 	}

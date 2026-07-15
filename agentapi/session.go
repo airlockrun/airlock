@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/airlockrun/agentsdk"
+	"github.com/airlockrun/agentsdk/wire"
 	"github.com/airlockrun/airlock/attachref"
 	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/convert"
@@ -269,7 +269,7 @@ func (h *Handler) SessionCompact(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req agentsdk.SessionCompactRequest
+	var req wire.SessionCompactRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSONError(w, http.StatusBadRequest, "invalid request body")
 		return

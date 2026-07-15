@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"sort"
 
-	"github.com/airlockrun/agentsdk"
+	"github.com/airlockrun/agentsdk/wire"
 	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
@@ -25,7 +25,7 @@ var errNoSearchProvider = errors.New("no search provider configured")
 // Search handles POST /api/agent/search — proxies web search requests
 // from agent containers without exposing API keys.
 func (h *Handler) Search(w http.ResponseWriter, r *http.Request) {
-	var req agentsdk.SearchProxyRequest
+	var req wire.SearchProxyRequest
 	if err := readJSON(r, &req); err != nil {
 		writeJSONError(w, http.StatusBadRequest, "invalid request body")
 		return

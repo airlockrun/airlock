@@ -2,11 +2,12 @@ package agentapi
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
 
-	"github.com/airlockrun/agentsdk"
+	"github.com/airlockrun/agentsdk/wire"
 	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/builder"
 	"github.com/airlockrun/airlock/db/dbq"
@@ -16,18 +17,18 @@ import (
 // formatRunLogs renders structured log entries into the flat text shape
 // stored in runs.stdout_log. Levels above info get a "[level] " prefix so
 // the run-detail UI can pick them out without a schema migration.
-func formatRunLogs(logs []agentsdk.LogEntry) string {
+func formatRunLogs(logs []wire.LogEntry) string {
 	if len(logs) == 0 {
 		return ""
 	}
 	parts := make([]string, len(logs))
 	for i, l := range logs {
 		switch l.Level {
-		case agentsdk.LogLevelDebug:
+		case wire.LogLevelDebug:
 			parts[i] = "[debug] " + l.Message
-		case agentsdk.LogLevelWarn:
+		case wire.LogLevelWarn:
 			parts[i] = "[warn] " + l.Message
-		case agentsdk.LogLevelError:
+		case wire.LogLevelError:
 			parts[i] = "[error] " + l.Message
 		default:
 			parts[i] = l.Message
@@ -40,7 +41,7 @@ func formatRunLogs(logs []agentsdk.LogEntry) string {
 func (h *Handler) RunComplete(w http.ResponseWriter, r *http.Request) {
 	agentID := auth.AgentIDFromContext(r.Context())
 
-	var req agentsdk.RunCompleteRequest
+	var req wire.RunCompleteRequest
 	if err := readJSON(r, &req); err != nil {
 		writeJSONError(w, http.StatusBadRequest, "invalid request body")
 		return
@@ -64,7 +65,12 @@ func (h *Handler) RunComplete(w http.ResponseWriter, r *http.Request) {
 	// The SDK already truncates on its side; we re-enforce here so
 	// the runs.actions JSONB invariant holds regardless of SDK
 	// version or bypass path.
-	actions := truncateActionsJSON(req.Actions)
+	actionsJSON, err := json.Marshal(req.Actions)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid actions")
+		return
+	}
+	actions := truncateActionsJSON(actionsJSON)
 	if err := q.UpsertRunComplete(r.Context(), dbq.UpsertRunCompleteParams{
 		ID:           toPgUUID(runUUID),
 		AgentID:      toPgUUID(agentID),

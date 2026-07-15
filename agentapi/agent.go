@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/airlockrun/agentsdk"
+	"github.com/airlockrun/agentsdk/wire"
 	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/builder"
 	"github.com/airlockrun/airlock/compat"
@@ -119,14 +120,14 @@ type ExecDialerService interface {
 
 // BridgePartsDeliverer is the subset of trigger.BridgeManager needed for message delivery.
 type BridgePartsDeliverer interface {
-	SendParts(ctx context.Context, bridgeID uuid.UUID, externalID string, parts []agentsdk.DisplayPart) error
+	SendParts(ctx context.Context, bridgeID uuid.UUID, externalID string, parts []wire.DisplayPart) error
 }
 
 // recordConnectionNeed upserts the agent's connection need, carrying the full
 // declared template as spec so the resource can be instantiated from it on
 // configure. It does not create or bind a resource — that happens when a user
 // configures credentials.
-func (h *Handler) recordConnectionNeed(ctx context.Context, q *dbq.Queries, agentID uuid.UUID, slug string, def agentsdk.ConnectionDef, scopes string, authInjection, authParams, headers []byte) error {
+func (h *Handler) recordConnectionNeed(ctx context.Context, q *dbq.Queries, agentID uuid.UUID, slug string, def wire.ConnectionDef, scopes string, authInjection, authParams, headers []byte) error {
 	spec, err := json.Marshal(map[string]any{
 		"name":               def.Name,
 		"auth_mode":          string(def.AuthMode),
@@ -161,7 +162,7 @@ func (h *Handler) recordConnectionNeed(ctx context.Context, q *dbq.Queries, agen
 func (h *Handler) CreateRun(w http.ResponseWriter, r *http.Request) {
 	agentID := auth.AgentIDFromContext(r.Context())
 
-	var req agentsdk.CreateRunRequest
+	var req wire.CreateRunRequest
 	if err := readJSON(r, &req); err != nil {
 		writeJSONError(w, http.StatusBadRequest, "invalid request body")
 		return
@@ -190,7 +191,7 @@ func (h *Handler) CreateRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, agentsdk.CreateRunResponse{
+	writeJSON(w, http.StatusOK, wire.CreateRunResponse{
 		RunID: pgUUID(run.ID).String(),
 	})
 }
@@ -224,7 +225,7 @@ func (h *Handler) Sync(w http.ResponseWriter, r *http.Request) {
 	agentID := auth.AgentIDFromContext(r.Context())
 	pgAgentID := toPgUUID(agentID)
 
-	var req agentsdk.SyncRequest
+	var req wire.SyncRequest
 	if err := readJSON(r, &req); err != nil {
 		writeJSONError(w, http.StatusBadRequest, "invalid request body")
 		return
@@ -499,7 +500,7 @@ func (h *Handler) Sync(w http.ResponseWriter, r *http.Request) {
 		}
 		need, nerr := q.GetResourceNeed(ctx, dbq.GetResourceNeedParams{AgentID: pgAgentID, Type: "mcp_server", Slug: mcp.Slug})
 		bound := nerr == nil && need.BoundMcpID.Valid
-		if bound || mcp.AuthMode == agentsdk.MCPAuthNone || mcp.AuthMode == "" {
+		if bound || mcp.AuthMode == wire.MCPAuthNone || mcp.AuthMode == "" {
 			srv, err := q.UpsertMCPServer(ctx, dbq.UpsertMCPServerParams{
 				AgentID:       pgAgentID,
 				Slug:          mcp.Slug,
@@ -575,7 +576,7 @@ func (h *Handler) Sync(w http.ResponseWriter, r *http.Request) {
 		// has no configure step (no credentials to own), so it is auto-created +
 		// bound here. Credential-bearing connections wait for a user to
 		// configure, which creates the resource owned by that user.
-		if bound || c.AuthMode == agentsdk.ConnectionAuthNone {
+		if bound || c.AuthMode == wire.ConnectionAuthNone {
 			conn, err := q.UpsertConnection(ctx, dbq.UpsertConnectionParams{
 				AgentID: pgAgentID, Slug: c.Slug, Name: c.Name, Description: c.Description, LlmHint: c.LLMHint,
 				AuthMode: string(c.AuthMode), AuthUrl: c.AuthURL, TokenUrl: c.TokenURL, BaseUrl: c.BaseURL,
@@ -693,16 +694,16 @@ func (h *Handler) Sync(w http.ResponseWriter, r *http.Request) {
 	// build a parallel promptpkg.MCPServerStatus list here — the agent
 	// composes its own MCP status lines from MCPAuthStatus + MCPSchemas.
 	_ = serverBySlug // retained for readability of the loop below
-	var mcpAuthStatus []agentsdk.MCPAuthStatus
-	mcpSchemas := make(map[string][]agentsdk.MCPToolSchema)
+	var mcpAuthStatus []wire.MCPAuthStatus
+	mcpSchemas := make(map[string][]wire.MCPToolSchema)
 	for _, s := range mcpStatuses {
 		mcpAuthStatus = append(mcpAuthStatus, s.MCPAuthStatus)
 		if srv, ok := serverBySlug[s.Slug]; ok && len(srv.ToolSchemas) > 0 {
 			var stored []mcpToolInfo
 			if err := json.Unmarshal(srv.ToolSchemas, &stored); err == nil {
-				schemas := make([]agentsdk.MCPToolSchema, len(stored))
+				schemas := make([]wire.MCPToolSchema, len(stored))
 				for i, t := range stored {
-					schemas[i] = agentsdk.MCPToolSchema{
+					schemas[i] = wire.MCPToolSchema{
 						ServerSlug:  s.Slug,
 						Name:        t.Name,
 						Description: t.Description,
@@ -768,8 +769,8 @@ func (h *Handler) Sync(w http.ResponseWriter, r *http.Request) {
 		// false). The template will emit a minimal prompt.
 	}
 
-	writeJSON(w, http.StatusOK, agentsdk.SyncResponse{
-		PromptData: agentsdk.PromptData{
+	writeJSON(w, http.StatusOK, wire.SyncResponse{
+		PromptData: wire.PromptData{
 			AgentDashboardURL:   h.publicURL + "/agents/" + agentID.String(),
 			AgentRouteURL:       routeURL,
 			Siblings:            siblings,
@@ -795,7 +796,7 @@ func (h *Handler) Sync(w http.ResponseWriter, r *http.Request) {
 // Errors from GetSystemSettings are returned for logging; the
 // returned Capabilities is still meaningful (slots that ONLY rely
 // on agent overrides will resolve correctly).
-func (h *Handler) resolveAgentCapabilities(ctx context.Context, q *dbq.Queries, ag dbq.Agent) (agentsdk.Capabilities, []string, error) {
+func (h *Handler) resolveAgentCapabilities(ctx context.Context, q *dbq.Queries, ag dbq.Agent) (wire.Capabilities, []string, error) {
 	settings, sErr := q.GetSystemSettings(ctx)
 	hasDefault := sErr == nil
 
@@ -809,7 +810,7 @@ func (h *Handler) resolveAgentCapabilities(ctx context.Context, q *dbq.Queries, 
 		return false
 	}
 
-	caps := agentsdk.Capabilities{
+	caps := wire.Capabilities{
 		Vision:        bound(ag.VisionProviderID, ag.VisionModel, settings.DefaultVisionProviderID, settings.DefaultVisionModel),
 		Transcription: bound(ag.SttProviderID, ag.SttModel, settings.DefaultSttProviderID, settings.DefaultSttModel),
 		Speech:        bound(ag.TtsProviderID, ag.TtsModel, settings.DefaultTtsProviderID, settings.DefaultTtsModel),
@@ -849,7 +850,7 @@ func (h *Handler) resolveAgentCapabilities(ctx context.Context, q *dbq.Queries, 
 // (synced from the sibling agentsdk's own RegisterTool calls). The
 // built-in `prompt` meta-tool is added by the agent-side renderer
 // (it's the same shape for every sibling, no per-row data).
-func (h *Handler) buildSiblingInfos(ctx context.Context, q *dbq.Queries, parentAgentID pgtype.UUID) ([]agentsdk.SiblingInfo, error) {
+func (h *Handler) buildSiblingInfos(ctx context.Context, q *dbq.Queries, parentAgentID pgtype.UUID) ([]wire.SiblingInfo, error) {
 	rows, err := q.ListSiblings(ctx, parentAgentID)
 	if err != nil {
 		return nil, fmt.Errorf("list siblings: %w", err)
@@ -857,22 +858,22 @@ func (h *Handler) buildSiblingInfos(ctx context.Context, q *dbq.Queries, parentA
 	if len(rows) == 0 {
 		return nil, nil
 	}
-	out := make([]agentsdk.SiblingInfo, 0, len(rows))
+	out := make([]wire.SiblingInfo, 0, len(rows))
 	for _, r := range rows {
 		toolRows, err := q.ListAgentTools(ctx, r.ID)
 		if err != nil {
 			return nil, fmt.Errorf("list tools for sibling %s: %w", r.Slug, err)
 		}
-		tools := make([]agentsdk.MCPToolSchema, len(toolRows))
+		tools := make([]wire.MCPToolSchema, len(toolRows))
 		for i, t := range toolRows {
-			tools[i] = agentsdk.MCPToolSchema{
+			tools[i] = wire.MCPToolSchema{
 				ServerSlug:  r.Slug,
 				Name:        t.Name,
 				Description: t.Description,
 				InputSchema: t.InputSchema,
 			}
 		}
-		out = append(out, agentsdk.SiblingInfo{
+		out = append(out, wire.SiblingInfo{
 			ID:          uuid.UUID(r.ID.Bytes),
 			Slug:        r.Slug,
 			Name:        r.Name,

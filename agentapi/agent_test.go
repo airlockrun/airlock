@@ -9,7 +9,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/airlockrun/agentsdk"
+	"github.com/airlockrun/agentsdk/wire"
 	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/crypto"
 	"github.com/airlockrun/airlock/db"
@@ -178,14 +178,14 @@ func TestUpsertConnection(t *testing.T) {
 	ah := testAgentHandler()
 	agentID := createTestAgent(t)
 
-	def := agentsdk.ConnectionDef{
+	def := wire.ConnectionDef{
 		Slug:        "github",
 		Name:        "GitHub",
 		Description: "GitHub API access",
-		AuthMode:    agentsdk.ConnectionAuthOAuth,
+		AuthMode:    wire.ConnectionAuthOAuth,
 		AuthURL:     "https://github.com/login/oauth/authorize",
 		BaseURL:     "https://api.github.com",
-		AuthInjection: agentsdk.AuthInjection{
+		AuthInjection: wire.AuthInjection{
 			Type: "bearer",
 		},
 	}
@@ -195,7 +195,7 @@ func TestUpsertConnection(t *testing.T) {
 		r.Put("/api/agent/sync", ah.Sync)
 	})
 
-	req := agentRequest(t, "PUT", "/api/agent/sync", agentID, agentsdk.SyncRequest{Connections: []agentsdk.ConnectionDef{def}})
+	req := agentRequest(t, "PUT", "/api/agent/sync", agentID, wire.SyncRequest{Connections: []wire.ConnectionDef{def}})
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
@@ -205,7 +205,7 @@ func TestUpsertConnection(t *testing.T) {
 
 	// Re-sync with a changed description — should be idempotent.
 	def.Description = "Updated description"
-	req = agentRequest(t, "PUT", "/api/agent/sync", agentID, agentsdk.SyncRequest{Connections: []agentsdk.ConnectionDef{def}})
+	req = agentRequest(t, "PUT", "/api/agent/sync", agentID, wire.SyncRequest{Connections: []wire.ConnectionDef{def}})
 	rec = httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
@@ -219,12 +219,12 @@ func TestSync(t *testing.T) {
 	ah := testAgentHandler()
 	agentID := createTestAgent(t)
 
-	syncReq := agentsdk.SyncRequest{
-		Webhooks: []agentsdk.WebhookDef{
+	syncReq := wire.SyncRequest{
+		Webhooks: []wire.WebhookDef{
 			{Path: "/webhook/github", Verify: "hmac", Header: "X-Hub-Signature-256"},
 			{Path: "/webhook/stripe", Verify: "hmac", Header: "Stripe-Signature"},
 		},
-		ScheduleHandlers: []agentsdk.ScheduleHandlerDef{
+		ScheduleHandlers: []wire.ScheduleHandlerDef{
 			{Slug: "daily-digest", Kind: "cron", Recurrence: "0 9 * * *"},
 		},
 	}
@@ -242,7 +242,7 @@ func TestSync(t *testing.T) {
 	}
 
 	// Sync again with fewer items — stale ones should be deleted.
-	syncReq.Webhooks = []agentsdk.WebhookDef{
+	syncReq.Webhooks = []wire.WebhookDef{
 		{Path: "/webhook/github", Verify: "hmac", Header: "X-Hub-Signature-256"},
 	}
 	syncReq.ScheduleHandlers = nil
@@ -275,14 +275,14 @@ func TestRunComplete(t *testing.T) {
 	})
 	q := dbq.New(testDB.Pool())
 
-	logs := []agentsdk.LogEntry{
-		{Level: agentsdk.LogLevelInfo, Message: "line 1"},
-		{Level: agentsdk.LogLevelWarn, Message: "line 2"},
+	logs := []wire.LogEntry{
+		{Level: wire.LogLevelInfo, Message: "line 1"},
+		{Level: wire.LogLevelWarn, Message: "line 2"},
 	}
 
 	check := func(status string) {
 		runID := uuid.New()
-		body := agentsdk.RunCompleteRequest{RunID: runID.String(), Status: status, Logs: logs}
+		body := wire.RunCompleteRequest{RunID: runID.String(), Status: status, Logs: logs}
 		req := agentRequest(t, "POST", "/api/agent/run/complete", agentID, body)
 		rec := httptest.NewRecorder()
 		router.ServeHTTP(rec, req)

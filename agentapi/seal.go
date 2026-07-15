@@ -3,7 +3,7 @@ package agentapi
 import (
 	"net/http"
 
-	"github.com/airlockrun/agentsdk"
+	"github.com/airlockrun/agentsdk/wire"
 	"github.com/airlockrun/airlock/auth"
 	"go.uber.org/zap"
 )
@@ -22,7 +22,7 @@ import (
 // Seal handles POST /api/agent/seal.
 func (h *Handler) Seal(w http.ResponseWriter, r *http.Request) {
 	agentID := auth.AgentIDFromContext(r.Context())
-	var req agentsdk.SealRequest
+	var req wire.SealRequest
 	if err := readJSON(r, &req); err != nil {
 		writeJSONError(w, http.StatusBadRequest, "invalid request body")
 		return
@@ -37,7 +37,7 @@ func (h *Handler) Seal(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusInternalServerError, "seal failed")
 		return
 	}
-	writeJSON(w, http.StatusOK, agentsdk.SealResponse{Sealed: sealed})
+	writeJSON(w, http.StatusOK, wire.SealResponse{Sealed: sealed})
 }
 
 // Unseal handles POST /api/agent/unseal. A decrypt failure is a 400, not a
@@ -45,7 +45,7 @@ func (h *Handler) Seal(w http.ResponseWriter, r *http.Request) {
 // corrupted blob — a bad request, not a server fault.
 func (h *Handler) Unseal(w http.ResponseWriter, r *http.Request) {
 	agentID := auth.AgentIDFromContext(r.Context())
-	var req agentsdk.UnsealRequest
+	var req wire.UnsealRequest
 	if err := readJSON(r, &req); err != nil {
 		writeJSONError(w, http.StatusBadRequest, "invalid request body")
 		return
@@ -59,5 +59,5 @@ func (h *Handler) Unseal(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusBadRequest, "unseal failed: value is not sealed for this agent or is corrupt")
 		return
 	}
-	writeJSON(w, http.StatusOK, agentsdk.UnsealResponse{Plaintext: plaintext})
+	writeJSON(w, http.StatusOK, wire.UnsealResponse{Plaintext: plaintext})
 }

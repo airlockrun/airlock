@@ -3,7 +3,7 @@ package agentapi
 import (
 	"net/http"
 
-	"github.com/airlockrun/agentsdk"
+	"github.com/airlockrun/agentsdk/wire"
 	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/go-chi/chi/v5"
@@ -18,7 +18,7 @@ import (
 func (h *Handler) CreateScheduledFire(w http.ResponseWriter, r *http.Request) {
 	agentID := auth.AgentIDFromContext(r.Context())
 
-	var req agentsdk.ScheduleAtRequest
+	var req wire.ScheduleAtRequest
 	if err := readJSON(r, &req); err != nil {
 		writeJSONError(w, http.StatusBadRequest, "invalid request body")
 		return
@@ -89,9 +89,9 @@ func (h *Handler) ListScheduledFires(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusInternalServerError, "failed to list")
 		return
 	}
-	fires := make([]agentsdk.ScheduledFire, len(rows))
+	fires := make([]wire.ScheduledFire, len(rows))
 	for i, f := range rows {
-		fires[i] = agentsdk.ScheduledFire{
+		fires[i] = wire.ScheduledFire{
 			ID:         uuid.UUID(f.ID.Bytes).String(),
 			Slug:       f.Slug,
 			Kind:       f.Source,

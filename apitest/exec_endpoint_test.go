@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/airlockrun/agentsdk"
+	"github.com/airlockrun/agentsdk/wire"
 	"github.com/airlockrun/airlock/apitest"
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/google/uuid"
@@ -32,10 +32,10 @@ func TestExecEndpoint_DeclarationUpsertPreservesOperatorConfig(t *testing.T) {
 	ownerToken := apitest.IssueUserToken(t, h, owner, "owner@apitest.local", "user")
 
 	// First declaration from the agent.
-	declareExecEndpoint(t, h, agentToken, "ci", agentsdk.ExecEndpointDef{
+	declareExecEndpoint(t, h, agentToken, "ci", wire.ExecEndpointDef{
 		Description: "Self-hosted CI runner",
 		LLMHint:     "use kick-build",
-		Access:      agentsdk.AccessAdmin,
+		Access:      wire.AccessAdmin,
 	})
 
 	// Operator configures host / port / user via the admin API. This is
@@ -52,10 +52,10 @@ func TestExecEndpoint_DeclarationUpsertPreservesOperatorConfig(t *testing.T) {
 	// Re-declare with a different description and llmHint. This
 	// simulates a container restart after the agent author edited
 	// main.go.
-	declareExecEndpoint(t, h, agentToken, "ci", agentsdk.ExecEndpointDef{
+	declareExecEndpoint(t, h, agentToken, "ci", wire.ExecEndpointDef{
 		Description: "Self-hosted CI runner (renamed)",
 		LLMHint:     "use kick-build --branch <name>",
-		Access:      agentsdk.AccessAdmin,
+		Access:      wire.AccessAdmin,
 	})
 
 	q := dbq.New(h.DB.Pool())
@@ -103,9 +103,9 @@ func TestExecEndpoint_ConfigureGeneratesKeypair(t *testing.T) {
 	agentToken := apitest.IssueAgentToken(t, h, agentID)
 	ownerToken := apitest.IssueUserToken(t, h, owner, "owner@apitest.local", "user")
 
-	declareExecEndpoint(t, h, agentToken, "ci", agentsdk.ExecEndpointDef{
+	declareExecEndpoint(t, h, agentToken, "ci", wire.ExecEndpointDef{
 		Description: "Self-hosted CI runner",
-		Access:      agentsdk.AccessAdmin,
+		Access:      wire.AccessAdmin,
 	})
 
 	resp := h.Do(h.NewRequest(http.MethodPut,
@@ -174,9 +174,9 @@ func TestExecEndpoint_EndToEnd(t *testing.T) {
 	agentToken := apitest.IssueAgentToken(t, h, agentID)
 	ownerToken := apitest.IssueUserToken(t, h, owner, "owner@apitest.local", "user")
 
-	declareExecEndpoint(t, h, agentToken, "vps", agentsdk.ExecEndpointDef{
+	declareExecEndpoint(t, h, agentToken, "vps", wire.ExecEndpointDef{
 		Description: "VPS",
-		Access:      agentsdk.AccessAdmin,
+		Access:      wire.AccessAdmin,
 	})
 
 	sshHost, sshPort := sshSrv.Addr()
@@ -253,9 +253,9 @@ func TestExecEndpoint_UnconfiguredReturns4xx(t *testing.T) {
 
 	// Case 1: slug declared by the agent as a need but never configured by the
 	// operator → the resource was never created/bound → 404 (not bound).
-	declareExecEndpoint(t, h, agentToken, "vps", agentsdk.ExecEndpointDef{
+	declareExecEndpoint(t, h, agentToken, "vps", wire.ExecEndpointDef{
 		Description: "Not yet configured",
-		Access:      agentsdk.AccessAdmin,
+		Access:      wire.AccessAdmin,
 	})
 	resp := h.Do(h.NewRequest(http.MethodPost,
 		"/api/agent/exec/vps",
@@ -298,9 +298,9 @@ func TestExecEndpoint_TestConnection(t *testing.T) {
 	agentToken := apitest.IssueAgentToken(t, h, agentID)
 	ownerToken := apitest.IssueUserToken(t, h, owner, "owner@apitest.local", "user")
 
-	declareExecEndpoint(t, h, agentToken, "vps", agentsdk.ExecEndpointDef{
+	declareExecEndpoint(t, h, agentToken, "vps", wire.ExecEndpointDef{
 		Description: "VPS",
-		Access:      agentsdk.AccessAdmin,
+		Access:      wire.AccessAdmin,
 	})
 
 	sshHost, sshPort := sshSrv.Addr()
@@ -354,10 +354,10 @@ func TestExecEndpoint_TestConnection(t *testing.T) {
 // the per-slug PUT is gone. A re-sync of the same endpoint preserves the
 // operator-configured columns (the UpsertExecEndpointDeclaration ON CONFLICT
 // clause).
-func declareExecEndpoint(t *testing.T, h *apitest.Harness, agentToken, slug string, def agentsdk.ExecEndpointDef) {
+func declareExecEndpoint(t *testing.T, h *apitest.Harness, agentToken, slug string, def wire.ExecEndpointDef) {
 	t.Helper()
 	def.Slug = slug
-	body := agentsdk.SyncRequest{ExecEndpoints: []agentsdk.ExecEndpointDef{def}}
+	body := wire.SyncRequest{ExecEndpoints: []wire.ExecEndpointDef{def}}
 	resp := h.Do(h.NewRequest(http.MethodPut, "/api/agent/sync", agentToken, asJSON(t, body)))
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("sync exec-endpoint %s: status %d, body %s",
