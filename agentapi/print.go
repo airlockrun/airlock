@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/airlockrun/agentsdk"
+	"github.com/airlockrun/agentsdk/wire"
 	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/go-chi/chi/v5"
@@ -23,7 +23,7 @@ func (h *Handler) Print(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	agentID := auth.AgentIDFromContext(ctx)
 
-	var req agentsdk.PrintRequest
+	var req wire.PrintRequest
 	if err := readJSON(r, &req); err != nil {
 		writeJSONError(w, http.StatusBadRequest, "invalid request body")
 		return
@@ -39,7 +39,7 @@ func (h *Handler) Print(w http.ResponseWriter, r *http.Request) {
 	// Process parts: upload bytes, copy tmp files to permanent media location.
 	for i := range req.Parts {
 		p := &req.Parts[i]
-		agentsdk.ResolveDisplayPart(p)
+		wire.ResolveDisplayPart(p)
 
 		mediaPrefix := "agents/" + agentID.String() + "/media/" + mediaID + "/"
 
@@ -219,7 +219,7 @@ func (h *Handler) Print(w http.ResponseWriter, r *http.Request) {
 }
 
 // ExtractTextSummary builds a text summary from display parts for the content column.
-func ExtractTextSummary(parts []agentsdk.DisplayPart) string {
+func ExtractTextSummary(parts []wire.DisplayPart) string {
 	var sb strings.Builder
 	for _, p := range parts {
 		switch p.Type {

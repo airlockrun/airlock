@@ -13,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/airlockrun/agentsdk"
+	"github.com/airlockrun/agentsdk/wire"
 	"github.com/airlockrun/airlock/audio"
 	"github.com/airlockrun/airlock/convert"
 	"github.com/airlockrun/airlock/db"
@@ -158,15 +159,15 @@ func (p *PromptProxy) HandleMessage(
 	userMessage = p.transcribeVoiceNotes(ctx, userMessage, files, paths)
 
 	// Store attached files in agent's S3 prefix and build FileInfo entries.
-	var fileInfos []agentsdk.FileInfo
+	var fileInfos []wire.FileInfo
 	for i, f := range files {
 		s3Key := "agents/" + agentID.String() + "/" + paths[i]
 		if err := p.s3.PutObject(ctx, s3Key, bytes.NewReader(f.Data), int64(len(f.Data))); err != nil {
 			p.logger.Error("store bridge file failed", zap.String("path", paths[i]), zap.Error(err))
 			continue
 		}
-		fileInfos = append(fileInfos, agentsdk.FileInfo{
-			Path:        agentsdk.FilePath(paths[i]),
+		fileInfos = append(fileInfos, wire.FileInfo{
+			Path:        paths[i],
 			Filename:    f.Filename,
 			ContentType: f.ContentType,
 			Size:        int64(len(f.Data)),
@@ -195,13 +196,13 @@ func (p *PromptProxy) HandleMessage(
 	// same in api/conversations.go; without it the agent defaults to
 	// AccessUser and admin-only verbs ReferenceError when called from a
 	// bridge-triggered run.
-	input := agentsdk.PromptInput{
+	input := wire.PromptInput{
 		Message:        userMessage,
 		ConversationID: convert.PgUUIDToString(conversationID),
 		Files:          fileInfos,
 		Instructions:   instructions,
 		ForceCompact:   forceCompact,
-		CallerAccess:   access,
+		CallerAccess:   wire.Access(access),
 		// Public-tier callers get a typed-tool surface (no JS sandbox, no
 		// TS manifest). The flag is wire-level so future trigger paths
 		// (e.g. trusted server triggers that want a typed surface) can
@@ -316,11 +317,11 @@ func (p *PromptProxy) HandleCallback(
 	// Same CallerAccess plumbing as HandleMessage above — admin-only
 	// bindings need it to survive the resume turn too.
 	access := bridgePrincipal(userID).EffectiveAgentAccess(ctx, q, agentID)
-	input := agentsdk.PromptInput{
+	input := wire.PromptInput{
 		ConversationID: convert.PgUUIDToString(convID),
 		ResumeRunID:    runIDStr,
 		Approved:       &approved,
-		CallerAccess:   access,
+		CallerAccess:   wire.Access(access),
 		DirectTools:    access == agentsdk.AccessPublic,
 	}
 	if !approved {

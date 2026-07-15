@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/airlockrun/agentsdk"
+	"github.com/airlockrun/agentsdk/wire"
 	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/authz"
 	"github.com/airlockrun/airlock/config"
@@ -356,7 +357,7 @@ func (d *Dispatcher) ForwardFire(ctx context.Context, agentID uuid.UUID, fireID,
 // the prompt input to the agent container. Returns the response body stream
 // (NDJSON) and the run ID. userID is the prompting user (anchor for A2A
 // VisibleSiblings); pass nil for anonymous/system runs.
-func (d *Dispatcher) ForwardPrompt(ctx context.Context, agentID uuid.UUID, input agentsdk.PromptInput, bridgeID *uuid.UUID, userID *uuid.UUID) (io.ReadCloser, uuid.UUID, error) {
+func (d *Dispatcher) ForwardPrompt(ctx context.Context, agentID uuid.UUID, input wire.PromptInput, bridgeID *uuid.UUID, userID *uuid.UUID) (io.ReadCloser, uuid.UUID, error) {
 	c, err := d.EnsureRunning(ctx, agentID)
 	if err != nil {
 		return nil, uuid.Nil, err
@@ -412,7 +413,7 @@ func (d *Dispatcher) ForwardPrompt(ctx context.Context, agentID uuid.UUID, input
 // original user (the human at the top of the chain — propagated through
 // every A2A hop via the conversation's user_id), used for both the new
 // run's VisibleSiblings computation and audit.
-func (d *Dispatcher) ForwardA2APrompt(ctx context.Context, agentID uuid.UUID, parentRunID uuid.UUID, callerAccess agentsdk.Access, userID *uuid.UUID, input agentsdk.PromptInput) (io.ReadCloser, uuid.UUID, error) {
+func (d *Dispatcher) ForwardA2APrompt(ctx context.Context, agentID uuid.UUID, parentRunID uuid.UUID, callerAccess agentsdk.Access, userID *uuid.UUID, input wire.PromptInput) (io.ReadCloser, uuid.UUID, error) {
 	c, err := d.EnsureRunning(ctx, agentID)
 	if err != nil {
 		return nil, uuid.Nil, err
@@ -423,7 +424,7 @@ func (d *Dispatcher) ForwardA2APrompt(ctx context.Context, agentID uuid.UUID, pa
 		return nil, uuid.Nil, fmt.Errorf("compute visible siblings: %w", err)
 	}
 	input.VisibleSiblings = visible
-	input.CallerAccess = callerAccess
+	input.CallerAccess = wire.Access(callerAccess)
 	input.DirectTools = callerAccess == agentsdk.AccessPublic
 
 	// A2A runs deliver to the calling agent, not a human channel.
@@ -472,7 +473,7 @@ func (d *Dispatcher) ForwardA2APrompt(ctx context.Context, agentID uuid.UUID, pa
 // fingerprint so the agent can detect a stale sync cache and self-heal (see
 // AgentConfigHash). Best-effort: a lookup failure leaves the field empty, which
 // the agent reads as "no check" — it never blocks or fails the dispatch.
-func (d *Dispatcher) stampSyncHash(ctx context.Context, agentID uuid.UUID, input *agentsdk.PromptInput) {
+func (d *Dispatcher) stampSyncHash(ctx context.Context, agentID uuid.UUID, input *wire.PromptInput) {
 	ag, err := dbq.New(d.db.Pool()).GetAgentByID(ctx, toPgUUID(agentID))
 	if err != nil {
 		d.logger.Warn("stamp sync hash: load agent",

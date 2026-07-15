@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/airlockrun/agentsdk"
+	"github.com/airlockrun/agentsdk/wire"
 	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/airlockrun/airlock/oauth"
@@ -26,7 +26,7 @@ func (h *Handler) ServiceProxy(w http.ResponseWriter, r *http.Request) {
 	agentID := auth.AgentIDFromContext(r.Context())
 	slug := chi.URLParam(r, "slug")
 
-	var req agentsdk.ProxyRequest
+	var req wire.ProxyRequest
 	if err := readJSON(r, &req); err != nil {
 		writeJSONError(w, http.StatusBadRequest, "invalid request body")
 		return
@@ -53,7 +53,7 @@ func (h *Handler) ServiceProxy(w http.ResponseWriter, r *http.Request) {
 	// auth_mode='none' connections proxy without credentials — no token
 	// lookup, no decrypt, no injection. Public APIs (MediaWiki, etc.)
 	// declared with ConnectionAuthNone land here.
-	noAuth := conn.AuthMode == string(agentsdk.ConnectionAuthNone)
+	noAuth := conn.AuthMode == string(wire.ConnectionAuthNone)
 
 	// Resolve credentials (skipped for auth_mode='none'). EnsureConnectionToken
 	// renews an expired access token on demand, under a row lock, so a lapsed
@@ -191,23 +191,23 @@ func decodeConnHeaders(raw []byte) map[string]string {
 
 // InjectAuth adds credentials to the upstream request based on the auth injection config.
 func InjectAuth(req *http.Request, authInjectionJSON []byte, creds string) {
-	var injection agentsdk.AuthInjection
+	var injection wire.AuthInjection
 	if err := json.Unmarshal(authInjectionJSON, &injection); err != nil {
 		return
 	}
 
 	switch injection.Type {
-	case agentsdk.AuthInjectBearer:
+	case wire.AuthInjectBearer:
 		req.Header.Set("Authorization", "Bearer "+creds)
-	case agentsdk.AuthInjectAPIKey:
+	case wire.AuthInjectAPIKey:
 		name := injection.Name
 		if name == "" {
 			name = "X-API-Key"
 		}
 		req.Header.Set(name, creds)
-	case agentsdk.AuthInjectPathPrefix:
+	case wire.AuthInjectPathPrefix:
 		req.URL.Path = "/" + creds + req.URL.Path
-	case agentsdk.AuthInjectQueryParam:
+	case wire.AuthInjectQueryParam:
 		name := injection.Name
 		if name == "" {
 			name = "token"

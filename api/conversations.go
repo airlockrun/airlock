@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/airlockrun/agentsdk"
+	"github.com/airlockrun/agentsdk/wire"
 	"github.com/airlockrun/airlock/agentapi"
 	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/authz"
@@ -390,7 +391,7 @@ func (h *conversationsHandler) Prompt(w http.ResponseWriter, r *http.Request) {
 	// Resolve uploaded file paths to FileInfo entries. Original filename
 	// rides as S3 metadata (set during upload); fall back to basename when
 	// it isn't there (e.g. files written by run_js).
-	var fileInfos []agentsdk.FileInfo
+	var fileInfos []wire.FileInfo
 	for _, filePath := range req.FilePaths {
 		s3Key := "agents/" + agentID.String() + "/" + filePath
 		info, ct, err := h.s3.HeadObject(ctx, s3Key)
@@ -402,8 +403,8 @@ func (h *conversationsHandler) Prompt(w http.ResponseWriter, r *http.Request) {
 		if origFilename, ok := info.Metadata["filename"]; ok && origFilename != "" {
 			filename = origFilename
 		}
-		fileInfos = append(fileInfos, agentsdk.FileInfo{
-			Path:        agentsdk.FilePath(filePath),
+		fileInfos = append(fileInfos, wire.FileInfo{
+			Path:        filePath,
 			Filename:    filename,
 			ContentType: ct,
 			Size:        info.Size,
@@ -414,7 +415,7 @@ func (h *conversationsHandler) Prompt(w http.ResponseWriter, r *http.Request) {
 	// so the user can see what they attached after the input chips clear.
 	// Posted before the dispatcher so it sorts ahead of the assistant turn.
 	if len(fileInfos) > 0 {
-		parts := make([]agentsdk.DisplayPart, 0, len(fileInfos))
+		parts := make([]wire.DisplayPart, 0, len(fileInfos))
 		for _, fi := range fileInfos {
 			partType := "file"
 			switch {
@@ -425,7 +426,7 @@ func (h *conversationsHandler) Prompt(w http.ResponseWriter, r *http.Request) {
 			case strings.HasPrefix(fi.ContentType, "video/"):
 				partType = "video"
 			}
-			parts = append(parts, agentsdk.DisplayPart{
+			parts = append(parts, wire.DisplayPart{
 				Type:     partType,
 				Source:   "agents/" + agentID.String() + "/" + string(fi.Path),
 				Filename: fi.Filename,
@@ -465,13 +466,13 @@ func (h *conversationsHandler) Prompt(w http.ResponseWriter, r *http.Request) {
 
 	// Build prompt input — SessionStore in agent container handles message
 	// loading and persistence. Airlock just sends the new user message.
-	input := agentsdk.PromptInput{
+	input := wire.PromptInput{
 		Message:        req.Message,
 		ConversationID: convIDStr,
 		Files:          fileInfos,
 		Instructions:   instructions,
 		ForceCompact:   forceCompact,
-		CallerAccess:   access,
+		CallerAccess:   wire.Access(access),
 		DirectTools:    access == agentsdk.AccessPublic,
 	}
 	if forceCompact {
@@ -632,11 +633,11 @@ func (h *conversationsHandler) NotifyUpgradeComplete(ctx context.Context, agentI
 	// JS bindings (requestUpgrade, queryDB) keep working — without
 	// it the agent defaults to AccessUser and the LLM's natural "let me
 	// retry requestUpgrade" crashes with ReferenceError.
-	input := agentsdk.PromptInput{
+	input := wire.PromptInput{
 		Message:        llmText,
 		ConversationID: conversationID,
 		Source:         source,
-		CallerAccess:   access,
+		CallerAccess:   wire.Access(access),
 		DirectTools:    access == agentsdk.AccessPublic,
 	}
 
@@ -645,7 +646,7 @@ func (h *conversationsHandler) NotifyUpgradeComplete(ctx context.Context, agentI
 	// notification channel — their user already knows they triggered the
 	// upgrade; just streaming the agent's follow-up is enough.
 	if !isBridge {
-		partsJSON, _ := json.Marshal([]agentsdk.DisplayPart{{Type: "text", Text: llmText}})
+		partsJSON, _ := json.Marshal([]wire.DisplayPart{{Type: "text", Text: llmText}})
 		_ = h.pubsub.Publish(context.Background(), agentID, realtime.NewEnvelope("notification", agentID.String(), &airlockv1.NotificationEvent{
 			AgentId:        agentID.String(),
 			ConversationId: conversationID,

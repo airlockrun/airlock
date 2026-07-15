@@ -9,7 +9,7 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/airlockrun/agentsdk"
+	"github.com/airlockrun/agentsdk/wire"
 	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/airlockrun/airlock/oauth"
@@ -29,7 +29,7 @@ func (h *Handler) MCPToolCall(w http.ResponseWriter, r *http.Request) {
 	agentID := auth.AgentIDFromContext(r.Context())
 	slug := chi.URLParam(r, "slug")
 
-	var req agentsdk.MCPToolCallRequest
+	var req wire.MCPToolCallRequest
 	if err := readJSON(r, &req); err != nil {
 		writeJSONError(w, http.StatusBadRequest, "invalid request body")
 		return
@@ -76,8 +76,8 @@ func (h *Handler) MCPToolCall(w http.ResponseWriter, r *http.Request) {
 	result, err := callMCPTool(r.Context(), server.Url, server.AuthInjection, creds, req)
 	if err != nil {
 		h.logger.Error("MCP tool call failed", zap.String("slug", slug), zap.String("tool", req.Tool), zap.Error(err))
-		writeJSON(w, http.StatusOK, agentsdk.MCPToolCallResponse{
-			Content: []agentsdk.MCPContent{{Type: "text", Text: "MCP error: " + err.Error()}},
+		writeJSON(w, http.StatusOK, wire.MCPToolCallResponse{
+			Content: []wire.MCPContent{{Type: "text", Text: "MCP error: " + err.Error()}},
 			IsError: true,
 		})
 		return
@@ -88,7 +88,7 @@ func (h *Handler) MCPToolCall(w http.ResponseWriter, r *http.Request) {
 
 // mcpServerStatus holds auth status and tool count for an MCP server.
 type mcpServerStatus struct {
-	agentsdk.MCPAuthStatus
+	wire.MCPAuthStatus
 	ToolCount int
 }
 
@@ -105,9 +105,9 @@ func (h *Handler) discoverAllMCPStatus(
 	for _, server := range servers {
 		if server.AccessTokenRef == "" {
 			result = append(result, mcpServerStatus{
-				MCPAuthStatus: agentsdk.MCPAuthStatus{
+				MCPAuthStatus: wire.MCPAuthStatus{
 					Slug:       server.Slug,
-					AuthMode:   agentsdk.MCPAuth(server.AuthMode),
+					AuthMode:   wire.MCPAuth(server.AuthMode),
 					Authorized: false,
 					AuthURL:    buildMCPAuthURL(h.publicURL, agentID, server.Slug, server.AuthMode),
 				},
@@ -125,9 +125,9 @@ func (h *Handler) discoverAllMCPStatus(
 		if err != nil {
 			h.logger.Warn("MCP tool discovery failed", zap.String("slug", server.Slug), zap.Error(err))
 			result = append(result, mcpServerStatus{
-				MCPAuthStatus: agentsdk.MCPAuthStatus{
+				MCPAuthStatus: wire.MCPAuthStatus{
 					Slug:       server.Slug,
-					AuthMode:   agentsdk.MCPAuth(server.AuthMode),
+					AuthMode:   wire.MCPAuth(server.AuthMode),
 					Authorized: true,
 				},
 			})
@@ -144,9 +144,9 @@ func (h *Handler) discoverAllMCPStatus(
 		})
 
 		result = append(result, mcpServerStatus{
-			MCPAuthStatus: agentsdk.MCPAuthStatus{
+			MCPAuthStatus: wire.MCPAuthStatus{
 				Slug:         server.Slug,
-				AuthMode:     agentsdk.MCPAuth(server.AuthMode),
+				AuthMode:     wire.MCPAuth(server.AuthMode),
 				Authorized:   true,
 				Instructions: instructions,
 			},
@@ -158,7 +158,7 @@ func (h *Handler) discoverAllMCPStatus(
 }
 
 // callMCPTool does a stateless MCP interaction: connect → initialize → tools/call → disconnect.
-func callMCPTool(ctx context.Context, serverURL string, authInjection []byte, creds string, req agentsdk.MCPToolCallRequest) (*agentsdk.MCPToolCallResponse, error) {
+func callMCPTool(ctx context.Context, serverURL string, authInjection []byte, creds string, req wire.MCPToolCallRequest) (*wire.MCPToolCallResponse, error) {
 	connectURL, headers, err := applyMCPAuth(serverURL, authInjection, creds)
 	if err != nil {
 		return nil, err
@@ -190,22 +190,22 @@ func callMCPTool(ctx context.Context, serverURL string, authInjection []byte, cr
 		}
 	}
 	if targetTool == nil {
-		return &agentsdk.MCPToolCallResponse{
-			Content: []agentsdk.MCPContent{{Type: "text", Text: fmt.Sprintf("tool %q not found on MCP server", req.Tool)}},
+		return &wire.MCPToolCallResponse{
+			Content: []wire.MCPContent{{Type: "text", Text: fmt.Sprintf("tool %q not found on MCP server", req.Tool)}},
 			IsError: true,
 		}, nil
 	}
 
 	result, err := targetTool.Execute(ctx, req.Arguments, tool.CallOptions{})
 	if err != nil {
-		return &agentsdk.MCPToolCallResponse{
-			Content: []agentsdk.MCPContent{{Type: "text", Text: err.Error()}},
+		return &wire.MCPToolCallResponse{
+			Content: []wire.MCPContent{{Type: "text", Text: err.Error()}},
 			IsError: true,
 		}, nil
 	}
 
-	return &agentsdk.MCPToolCallResponse{
-		Content: []agentsdk.MCPContent{{Type: "text", Text: result.Output}},
+	return &wire.MCPToolCallResponse{
+		Content: []wire.MCPContent{{Type: "text", Text: result.Output}},
 	}, nil
 }
 
@@ -270,21 +270,21 @@ func applyMCPAuth(serverURL string, authInjection []byte, creds string) (string,
 		return serverURL, headers, nil
 	}
 
-	var injection agentsdk.AuthInjection
+	var injection wire.AuthInjection
 	if len(authInjection) > 0 {
 		_ = json.Unmarshal(authInjection, &injection)
 	}
 
 	switch injection.Type {
-	case "", agentsdk.AuthInjectBearer:
+	case "", wire.AuthInjectBearer:
 		headers["Authorization"] = "Bearer " + creds
-	case agentsdk.AuthInjectAPIKey:
+	case wire.AuthInjectAPIKey:
 		name := injection.Name
 		if name == "" {
 			name = "X-API-Key"
 		}
 		headers[name] = creds
-	case agentsdk.AuthInjectQueryParam:
+	case wire.AuthInjectQueryParam:
 		u, err := url.Parse(serverURL)
 		if err != nil {
 			return "", nil, fmt.Errorf("parse MCP URL: %w", err)
@@ -297,7 +297,7 @@ func applyMCPAuth(serverURL string, authInjection []byte, creds string) (string,
 		q.Set(name, creds)
 		u.RawQuery = q.Encode()
 		serverURL = u.String()
-	case agentsdk.AuthInjectPathPrefix:
+	case wire.AuthInjectPathPrefix:
 		u, err := url.Parse(serverURL)
 		if err != nil {
 			return "", nil, fmt.Errorf("parse MCP URL: %w", err)

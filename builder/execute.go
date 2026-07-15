@@ -345,9 +345,12 @@ func (b *BuildService) Execute(ctx context.Context, plan BuildPlan) (string, err
 		buildStatus := "failed"
 		failKind := "infra"
 		var refErr *RefusedError
+		var verificationErr *codegenVerificationError
 		if errors.As(codegenErr, &refErr) {
 			buildStatus = "refused"
 			failKind = ""
+		} else if errors.As(codegenErr, &verificationErr) {
+			failKind = "code"
 		} else if exitStatus == exitStatusError {
 			// The agent ran and reported its own failure via the exit tool —
 			// code-domain; the next upgrade's codegen should see it.

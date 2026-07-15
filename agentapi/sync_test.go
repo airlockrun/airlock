@@ -6,7 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/airlockrun/agentsdk"
+	"github.com/airlockrun/agentsdk/wire"
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -27,8 +27,8 @@ func TestSync_ModelSlotsReconciliation(t *testing.T) {
 	})
 
 	// First sync — declare two slots.
-	syncReq := agentsdk.SyncRequest{
-		ModelSlots: []agentsdk.ModelSlotDef{
+	syncReq := wire.SyncRequest{
+		ModelSlots: []wire.ModelSlotDef{
 			{Slug: "summarize", Capability: "text", Description: "v1"},
 			{Slug: "poster", Capability: "image"},
 		},
@@ -58,8 +58,8 @@ func TestSync_ModelSlotsReconciliation(t *testing.T) {
 	}
 
 	// Resync — update summarize's description + drop poster + add thumbnail.
-	syncReq = agentsdk.SyncRequest{
-		ModelSlots: []agentsdk.ModelSlotDef{
+	syncReq = wire.SyncRequest{
+		ModelSlots: []wire.ModelSlotDef{
 			{Slug: "summarize", Capability: "text", Description: "v2"},
 			{Slug: "thumbnail", Capability: "image"},
 		},

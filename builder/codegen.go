@@ -2,10 +2,12 @@ package builder
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/airlockrun/airlock/db/dbq"
@@ -44,17 +46,13 @@ func (b *BuildService) runCodegen(
 	repoPath := b.AgentRepoPath(agentID)
 	branch := codegenBranchName(plan)
 
-	if err := CreateBranch(repoPath, branch); err != nil {
-		return "", "", "", fmt.Errorf("create %s branch: %w", branch, err)
-	}
-
 	workDir, err := b.makeCodegenTempDir("airlock-codegen-*")
 	if err != nil {
 		return "", "", "", fmt.Errorf("create temp dir: %w", err)
 	}
 	defer os.RemoveAll(workDir)
 
-	if err := MaterializeBranch(repoPath, branch, workDir); err != nil {
+	if err := MaterializeBranch(repoPath, "HEAD", workDir); err != nil {
 		return "", "", "", fmt.Errorf("materialize agent repo: %w", err)
 	}
 	// Lib resolution: the toolserver gets GOPROXY pointed at the dev lib
@@ -99,6 +97,9 @@ func (b *BuildService) runCodegen(
 		LogCallback:        logLine,
 		RuntimeLogCallback: runtimeLogLine,
 		Sink:               sink,
+		Verify: func(ctx context.Context, executor tool.Executor) error {
+			return verifyGeneratedCode(ctx, executor, logLine)
+		},
 	})
 	if err != nil {
 		return "", "", "", fmt.Errorf("sol run: %w", err)
@@ -134,8 +135,17 @@ func (b *BuildService) runCodegen(
 		return "", exitStatusError, solResult.ExitMessage, errors.New(solResult.ExitMessage)
 	}
 	logLine(fmt.Sprintf("[exit] success: %s", solResult.ExitMessage))
+	if solResult.VerifyError != nil {
+		return "", exitStatusSuccess, solResult.ExitMessage, solResult.VerifyError
+	}
 
 	commitMsg := codegenCommitMessage(plan, agentID, solResult.ExitMessage)
+
+	// The canonical repo stays untouched until the isolated workspace passes
+	// deterministic build and test verification.
+	if err := CreateBranch(repoPath, branch); err != nil {
+		return "", "", "", fmt.Errorf("create %s branch: %w", branch, err)
+	}
 
 	// Mirror the agent's edits into the per-agent repo (excluding the
 	// airlock-injected DIAGNOSTICS.md) and commit them host-side. The agent
@@ -157,6 +167,75 @@ func (b *BuildService) runCodegen(
 		return "", "", "", fmt.Errorf("merge codegen: %w", err)
 	}
 	return hash, exitStatusSuccess, solResult.ExitMessage, nil
+}
+
+type codegenVerificationError struct {
+	command string
+	output  string
+}
+
+func (e *codegenVerificationError) Error() string {
+	if e.output == "" {
+		return fmt.Sprintf("generated code verification failed: %s", e.command)
+	}
+	return fmt.Sprintf("generated code verification failed: %s\n%s", e.command, e.output)
+}
+
+// verifyGeneratedCode runs the SDK-owned build chain in the toolserver while
+// its workspace still points at the isolated codegen tree. That command owns
+// generation, tests, and final compilation.
+func verifyGeneratedCode(ctx context.Context, executor tool.Executor, logLine func(string)) error {
+	const command = "go tool air build"
+	logLine("[verify] " + command)
+	output, status, err := runVerificationCommand(ctx, executor, "airlock-codegen-build", command)
+	if output != "" {
+		for _, line := range strings.Split(strings.TrimSuffix(output, "\n"), "\n") {
+			logLine("[verify] " + line)
+		}
+	}
+	if err != nil {
+		return fmt.Errorf("generated code verification could not run %s: %w", command, err)
+	}
+	if status != 0 {
+		return &codegenVerificationError{command: command, output: strings.TrimSpace(output)}
+	}
+	return nil
+}
+
+const verificationExitMarker = "__AIRLOCK_VERIFY_EXIT__="
+
+func runVerificationCommand(ctx context.Context, executor tool.Executor, callID, command string) (string, int, error) {
+	// Put the status marker before command output so it survives the bash tool's
+	// head-oriented output truncation even when compiler diagnostics are large.
+	script := fmt.Sprintf("output=$(mktemp)\n%s >\"$output\" 2>&1\nstatus=$?\nprintf '%s%%d\\n' \"$status\"\ncat \"$output\"\nrm -f \"$output\"\nexit \"$status\"", command, verificationExitMarker)
+	input, err := json.Marshal(map[string]any{
+		"command":     script,
+		"timeout":     600000,
+		"description": "Verify generated agent code",
+	})
+	if err != nil {
+		return "", 0, fmt.Errorf("encode bash request: %w", err)
+	}
+	resp, err := executor.Execute(ctx, tool.Request{
+		ToolCallID: callID,
+		ToolName:   "bash",
+		Input:      input,
+	})
+	if err != nil {
+		return "", 0, err
+	}
+	if resp.IsError || resp.Denied {
+		return resp.Output, 0, fmt.Errorf("bash tool: %s", strings.TrimSpace(resp.Error+" "+resp.DeniedReason))
+	}
+	marker, output, ok := strings.Cut(resp.Output, "\n")
+	if !ok || !strings.HasPrefix(marker, verificationExitMarker) {
+		return resp.Output, 0, errors.New("bash tool response missing exit status")
+	}
+	status, err := strconv.Atoi(strings.TrimPrefix(marker, verificationExitMarker))
+	if err != nil {
+		return output, 0, fmt.Errorf("parse bash exit status: %w", err)
+	}
+	return output, status, nil
 }
 
 // buildSpendUser picks the user to attribute this build's codegen LLM spend

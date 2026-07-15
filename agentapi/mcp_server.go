@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/airlockrun/agentsdk"
+	"github.com/airlockrun/agentsdk/wire"
 	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/convert"
 	"github.com/airlockrun/airlock/db/dbq"
@@ -567,7 +568,7 @@ func (s *MCPServer) handlePromptCall(ctx context.Context, w http.ResponseWriter,
 	// Materialization happens after conversation validation below so we
 	// can scope inbound files by conv-{id} when a valid conversation is
 	// in play. Files placeholder for the post-validation call site.
-	var files []agentsdk.FileInfo
+	var files []wire.FileInfo
 
 	// Cron / webhook agents can't A2A in v1 — no original user.
 	if principal.Kind == MCPPrincipalAgent && principal.UserID == uuid.Nil {
@@ -690,7 +691,7 @@ func (s *MCPServer) handlePromptCall(ctx context.Context, w http.ResponseWriter,
 
 	// Build PromptInput. CallerAccess and VisibleSiblings are filled
 	// by ForwardA2APrompt; we just supply the message + files.
-	input := agentsdk.PromptInput{
+	input := wire.PromptInput{
 		Message:        promptArgs.Message,
 		ConversationID: convID,
 		ResumeRunID:    promptArgs.TaskID,

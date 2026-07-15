@@ -12,14 +12,14 @@ import (
 // agentapiPkgPath is the airlock-side package that hosts /api/agent
 // handlers. Wire-body types passed through readJSON / writeJSON here
 // must NOT be declared inside the package itself — the contract lives
-// in agentsdk (both airlock and user-built agents import it), so a
+// in agentsdk/wire (both airlock and user-built agents import it), so a
 // local re-declaration silently breaks drift detection on field add.
 // Declared as a var so tests can point it at a fixture package.
 var agentapiPkgPath = "github.com/airlockrun/airlock/agentapi"
 
 // AgentWire flags readJSON / writeJSON calls in airlock/agentapi/
 // whose body argument is a type declared inside agentapi/. Body types
-// from agentsdk (the SDK that user-built agents and airlock both
+// from agentsdk/wire (the package that user-built agents and airlock both
 // import) are required; anonymous shapes like map[string]any pass too,
 // as do generated proto types. The point is to keep the wire contract
 // in one declaration site so the agent SDK and airlock can never
@@ -29,7 +29,7 @@ var agentapiPkgPath = "github.com/airlockrun/airlock/agentapi"
 // on the same line or the line above the offending call.
 var AgentWire = &analysis.Analyzer{
 	Name:     "agentwire",
-	Doc:      "report readJSON/writeJSON calls in airlock/agentapi/ whose body type is declared inside agentapi/; wire shapes must live in agentsdk so the SDK and airlock share one declaration",
+	Doc:      "report readJSON/writeJSON calls in airlock/agentapi/ whose body type is declared inside agentapi/; wire shapes must live in agentsdk/wire so the SDK and airlock share one declaration",
 	Requires: []*analysis.Analyzer{inspect.Analyzer},
 	Run:      runAgentWire,
 }
@@ -76,7 +76,7 @@ func runAgentWire(pass *analysis.Pass) (any, error) {
 			return // declared elsewhere — agentsdk, proto, stdlib are all fine
 		}
 		pass.Reportf(call.Pos(),
-			"%s body uses type %s declared in agentapi/: move the type to agentsdk so the SDK and airlock share one declaration (or annotate with `// airlockvet:allow-agentwire reason: …`)",
+			"%s body uses type %s declared in agentapi/: move the type to agentsdk/wire so the SDK and airlock share one declaration (or annotate with `// airlockvet:allow-agentwire reason: …`)",
 			kind, obj.Name())
 	})
 	return nil, nil

@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/airlockrun/agentsdk"
+	"github.com/airlockrun/agentsdk/wire"
 	"github.com/airlockrun/airlock/db/dbq"
 	"go.uber.org/zap"
 )
@@ -749,7 +749,7 @@ func (d *TelegramDriver) keepTyping(ctx context.Context, token string, chatID in
 
 // SendParts sends display parts to a Telegram chat.
 // Renders each part appropriately: text → sendMessage, image → sendPhoto, file → sendDocument.
-func (d *TelegramDriver) SendParts(ctx context.Context, token string, chatID int64, parts []agentsdk.DisplayPart) error {
+func (d *TelegramDriver) SendParts(ctx context.Context, token string, chatID int64, parts []wire.DisplayPart) error {
 	var textBuf strings.Builder
 	var lastErr error
 

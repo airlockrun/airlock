@@ -11,6 +11,9 @@
 #
 # Cross-module dev (live edits) uses hq/Dockerfile.agent-builder instead.
 
+ARG SQLC_VERSION=1.30.0
+FROM sqlc/sqlc:${SQLC_VERSION} AS sqlc
+
 FROM golang:1.26-trixie
 
 ENV XDG_CACHE_HOME=/var/agent/cache
@@ -22,8 +25,9 @@ ARG GOOSE_VERSION=v3.27.1
 ARG TEMPL_VERSION=v0.3.1020
 ARG TAILWIND_VERSION=v4.1.0
 ARG DAISYUI_VERSION=v5.5.23
+ARG SQLC_VERSION=1.30.0
 
-COPY --from=sqlc/sqlc:latest /workspace/sqlc /usr/local/bin/sqlc
+COPY --from=sqlc /workspace/sqlc /usr/local/bin/sqlc
 RUN apt-get update && apt-get install -y --no-install-recommends \
         git ripgrep postgresql-client curl ca-certificates sudo && \
     rm -rf /var/lib/apt/lists/*
@@ -87,6 +91,8 @@ RUN cd /libs/templ && go build -o /usr/local/bin/templ      ./cmd/templ
 
 # Tailwind v4 standalone — Rust binary, no Node. The air CLI projects it
 # into each repo's .airlock/toolchain before running the build chain.
+RUN mkdir -p ${XDG_CACHE_HOME}/airlock/toolchain/sqlc/${SQLC_VERSION}/linux-amd64 && \
+    cp /usr/local/bin/sqlc ${XDG_CACHE_HOME}/airlock/toolchain/sqlc/${SQLC_VERSION}/linux-amd64/sqlc
 RUN mkdir -p ${XDG_CACHE_HOME}/airlock/toolchain/tailwindcss/${TAILWIND_VERSION}/linux-amd64
 ADD --chmod=0755 https://github.com/tailwindlabs/tailwindcss/releases/download/${TAILWIND_VERSION}/tailwindcss-linux-x64 ${XDG_CACHE_HOME}/airlock/toolchain/tailwindcss/${TAILWIND_VERSION}/linux-amd64/tailwindcss
 

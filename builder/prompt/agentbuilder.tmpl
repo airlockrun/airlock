@@ -59,13 +59,13 @@ Before calling `exit`, the code must compile:
 go tool air build
 ```
 
-`go tool air build` reconciles module sums, generates templ output, compiles Tailwind and DaisyUI, and verifies the Go binary without leaving it in the workspace. Re-run it after modifying a `.templ`, `styles/app.css`, or Go source.
+`go tool air build` reconciles module sums, conditionally generates sqlc output, generates templ output, compiles Tailwind and DaisyUI, runs `go test -count=1 ./...`, and verifies the Go binary without leaving it in the workspace. Re-run it after modifying a query, `.templ`, `styles/app.css`, or Go source.
 
 Generated-file policy is fixed:
 
-- `*_templ.go` and `views/static/app.css` are disposable, gitignored build outputs. Leave the copies produced by `go tool air build` in the workspace so subsequent builds and tests can use them. Never edit them and do not delete them as cleanup. Airlock housekeeping removes tracked copies, and source commits ignore generated copies.
+- `*_templ.go`, `views/static/app.css`, sqlc output under `internal/db/`, and a root `agent` binary are disposable, gitignored build outputs. Leave generated copies in the workspace so subsequent builds and tests can use them. Never edit them and do not delete them as cleanup. Airlock housekeeping removes tracked copies, and source commits ignore generated copies. `internal/db/doc.go` is preserved as package documentation.
 - `.airlock/toolchain/` is disposable, gitignored local infrastructure. Leave it in place; Airlock excludes it from source commits.
-- `internal/db/` is committed source. Run `sqlc generate` if and only if you created or changed `db/queries/*.sql`, and leave the resulting `internal/db/` changes in the tree. The Docker build does not run sqlc.
+- sqlc runs automatically when `db/queries/*.sql` exists. Commit query inputs, not generated database code.
 
 # Workspace hygiene
 

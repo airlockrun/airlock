@@ -20,7 +20,9 @@ func TestAgentBuilderPromptUsesSDKBuildCommand(t *testing.T) {
 	for _, want := range []string{
 		"do not delete them as cleanup",
 		"source commits ignore generated copies",
-		"`internal/db/` is committed source",
+		"sqlc runs automatically",
+		"`internal/db/doc.go` is preserved",
+		"go test -count=1 ./...",
 	} {
 		if !strings.Contains(prompt.String(), want) {
 			t.Errorf("builder prompt missing generated-file rule %q", want)

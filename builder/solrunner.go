@@ -3,6 +3,7 @@ package builder
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"sort"
@@ -47,12 +48,13 @@ type solRunOpts struct {
 	Prompt             string      // prompt for the runner
 	LogCallback        func(line string)
 	RuntimeLogCallback func(line string)
-	Sink               buildSink // optional: receives structured live actions + todos
-	LocalTools         tool.Set  // optional in-process tools (e.g., set_agent_description)
-	TestDBURL          string    // test schema DB URL with search_path baked in
-	TestDBPSQL         string    // test schema DB URL without search_path (for psql)
-	TestDBSchema       string    // test schema name (for psql SET search_path)
-	GoProxyDir         string    // dev: host path to the generated lib proxy; empty in prod
+	Sink               buildSink                                  // optional: receives structured live actions + todos
+	LocalTools         tool.Set                                   // optional in-process tools (e.g., set_agent_description)
+	TestDBURL          string                                     // test schema DB URL with search_path baked in
+	TestDBPSQL         string                                     // test schema DB URL without search_path (for psql)
+	TestDBSchema       string                                     // test schema name (for psql SET search_path)
+	GoProxyDir         string                                     // dev: host path to the generated lib proxy; empty in prod
+	Verify             func(context.Context, tool.Executor) error // required isolated-workspace verification
 }
 
 // solRunResult captures the outcome of an in-process Sol run. ExitStatus
@@ -66,6 +68,7 @@ type solRunResult struct {
 	ExitCalled  bool
 	ExitStatus  string // "success", "error", or "refused" when ExitCalled
 	ExitMessage string
+	VerifyError error
 	Nudges      int
 }
 
@@ -73,6 +76,9 @@ type solRunResult struct {
 // and returns the result. The toolserver provides filesystem tools (read, write,
 // bash, etc.) while the LLM loop runs in the Airlock process.
 func (b *BuildService) runSolInProcess(ctx context.Context, opts solRunOpts) (*solRunResult, error) {
+	if opts.Verify == nil {
+		return nil, errors.New("codegen verification callback is required")
+	}
 	// Fall back to the system-wide default build model when no per-agent
 	// override has been set. Live inheritance — no snapshot at agent create.
 	if !opts.BuildProviderID.Valid || opts.BuildModel == "" {
@@ -350,6 +356,9 @@ func (b *BuildService) runSolInProcess(ctx context.Context, opts solRunOpts) (*s
 	if exitState.Called() {
 		out.ExitCalled = true
 		out.ExitStatus, out.ExitMessage = exitState.Result()
+	}
+	if out.ExitStatus == exitStatusSuccess {
+		out.VerifyError = opts.Verify(ctx, remoteExec)
 	}
 	return out, nil
 }

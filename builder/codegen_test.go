@@ -1,8 +1,12 @@
 package builder
 
 import (
+	"context"
+	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/airlockrun/goai/tool"
 )
 
 func TestStripMarkdown(t *testing.T) {
@@ -53,3 +57,82 @@ func TestCodegenCommitMessageStripsMarkdown(t *testing.T) {
 		t.Errorf("link text was dropped: %s", msg)
 	}
 }
+
+func TestVerifyGeneratedCodeRunsSDKBuild(t *testing.T) {
+	executor := &verificationExecutor{
+		responses: []tool.Response{
+			{Output: verificationExitMarker + "0\nbuild and tests ok\n"},
+		},
+	}
+	var logs []string
+	if err := verifyGeneratedCode(context.Background(), executor, func(line string) {
+		logs = append(logs, line)
+	}); err != nil {
+		t.Fatalf("verifyGeneratedCode: %v", err)
+	}
+
+	want := []string{"go tool air build"}
+	if len(executor.commands) != len(want) {
+		t.Fatalf("commands = %q, want %q", executor.commands, want)
+	}
+	for i := range want {
+		if executor.commands[i] != want[i] {
+			t.Errorf("command %d = %q, want %q", i, executor.commands[i], want[i])
+		}
+	}
+	joined := strings.Join(logs, "\n")
+	for _, text := range []string{"[verify] go tool air build", "[verify] build and tests ok"} {
+		if !strings.Contains(joined, text) {
+			t.Errorf("verification logs missing %q:\n%s", text, joined)
+		}
+	}
+}
+
+func TestVerifyGeneratedCodeStopsAfterBuildFailure(t *testing.T) {
+	executor := &verificationExecutor{responses: []tool.Response{{
+		Output: verificationExitMarker + "1\n./main.go:12: undefined: missing\nExit code: exit status 1",
+	}}}
+	var logs []string
+	err := verifyGeneratedCode(context.Background(), executor, func(line string) {
+		logs = append(logs, line)
+	})
+	if err == nil {
+		t.Fatal("verifyGeneratedCode succeeded, want failure")
+	}
+	if len(executor.commands) != 1 || executor.commands[0] != "go tool air build" {
+		t.Fatalf("commands = %q, want only SDK build", executor.commands)
+	}
+	for _, text := range []string{"go tool air build", "./main.go:12: undefined: missing"} {
+		if !strings.Contains(err.Error(), text) {
+			t.Errorf("error missing %q: %v", text, err)
+		}
+	}
+	if !strings.Contains(strings.Join(logs, "\n"), "undefined: missing") {
+		t.Errorf("verification logs lack compiler diagnostic: %q", logs)
+	}
+}
+
+type verificationExecutor struct {
+	responses []tool.Response
+	commands  []string
+}
+
+func (e *verificationExecutor) Execute(_ context.Context, req tool.Request) (tool.Response, error) {
+	var input struct {
+		Command string `json:"command"`
+	}
+	if err := json.Unmarshal(req.Input, &input); err != nil {
+		return tool.Response{}, err
+	}
+	for _, command := range []string{"go tool air build"} {
+		if strings.Contains(input.Command, command) {
+			e.commands = append(e.commands, command)
+			break
+		}
+	}
+	response := e.responses[0]
+	e.responses = e.responses[1:]
+	return response, nil
+}
+
+func (*verificationExecutor) Tools() []tool.Info { return nil }
