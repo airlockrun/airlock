@@ -8,8 +8,8 @@ import (
 	"testing"
 )
 
-// fixed go.mod body used across the cases below — mirrors the layout
-// scaffold/go.mod.tmpl produces (require block + replace block).
+// fixed go.mod body used across the cases below. The replace block verifies
+// that module reconciliation only changes managed requirements and tools.
 const sampleGoMod = `module example.com/myagent
 
 go 1.26.0
@@ -20,6 +20,8 @@ require (
 )
 
 tool github.com/a-h/templ/cmd/templ
+
+tool github.com/airlockrun/agentsdk/cmd/air
 
 replace (
 	github.com/airlockrun/agentsdk => /libs/agentsdk
@@ -36,9 +38,9 @@ func writeGoMod(t *testing.T, body string) string {
 	return dir
 }
 
-func TestBumpAgentSDKRequire_Bumps(t *testing.T) {
+func TestReconcileAgentGoMod_Bumps(t *testing.T) {
 	dir := writeGoMod(t, sampleGoMod)
-	if err := bumpAgentSDKRequire(context.Background(), dir, "v0.2.0"); err != nil {
+	if err := reconcileAgentGoMod(context.Background(), dir, "v0.2.0"); err != nil {
 		t.Fatalf("bump: %v", err)
 	}
 	got, err := os.ReadFile(filepath.Join(dir, "go.mod"))
@@ -58,10 +60,10 @@ func TestBumpAgentSDKRequire_Bumps(t *testing.T) {
 	}
 }
 
-func TestBumpAgentSDKRequire_AcceptsBareVersion(t *testing.T) {
+func TestReconcileAgentGoMod_AcceptsBareVersion(t *testing.T) {
 	dir := writeGoMod(t, sampleGoMod)
-	// No leading 'v' — bumpAgentSDKRequire normalizes.
-	if err := bumpAgentSDKRequire(context.Background(), dir, "0.2.0"); err != nil {
+	// No leading 'v' — reconcileAgentGoMod normalizes.
+	if err := reconcileAgentGoMod(context.Background(), dir, "0.2.0"); err != nil {
 		t.Fatalf("bump: %v", err)
 	}
 	got, _ := os.ReadFile(filepath.Join(dir, "go.mod"))
@@ -70,9 +72,9 @@ func TestBumpAgentSDKRequire_AcceptsBareVersion(t *testing.T) {
 	}
 }
 
-func TestBumpAgentSDKRequire_IdempotentAtTarget(t *testing.T) {
+func TestReconcileAgentGoMod_IdempotentAtTarget(t *testing.T) {
 	dir := writeGoMod(t, sampleGoMod)
-	if err := bumpAgentSDKRequire(context.Background(), dir, "v0.1.0"); err != nil {
+	if err := reconcileAgentGoMod(context.Background(), dir, "v0.1.0"); err != nil {
 		t.Fatalf("bump: %v", err)
 	}
 	// Body should be byte-identical to the input.
@@ -82,10 +84,10 @@ func TestBumpAgentSDKRequire_IdempotentAtTarget(t *testing.T) {
 	}
 }
 
-func TestBumpAgentSDKRequire_PreservesNewerCompatibleVersion(t *testing.T) {
+func TestReconcileAgentGoMod_PreservesNewerCompatibleVersion(t *testing.T) {
 	body := strings.Replace(sampleGoMod, "agentsdk v0.1.0", "agentsdk v0.4.0-rc.20", 1)
 	dir := writeGoMod(t, body)
-	if err := bumpAgentSDKRequire(context.Background(), dir, "v0.4.0-rc.18"); err != nil {
+	if err := reconcileAgentGoMod(context.Background(), dir, "v0.4.0-rc.18"); err != nil {
 		t.Fatalf("bump: %v", err)
 	}
 	got, _ := os.ReadFile(filepath.Join(dir, "go.mod"))
@@ -94,10 +96,10 @@ func TestBumpAgentSDKRequire_PreservesNewerCompatibleVersion(t *testing.T) {
 	}
 }
 
-func TestBumpAgentSDKRequire_UpgradesOlderCompatibleVersion(t *testing.T) {
+func TestReconcileAgentGoMod_UpgradesOlderCompatibleVersion(t *testing.T) {
 	body := strings.Replace(sampleGoMod, "agentsdk v0.1.0", "agentsdk v0.4.0-rc.18", 1)
 	dir := writeGoMod(t, body)
-	if err := bumpAgentSDKRequire(context.Background(), dir, "v0.4.0-rc.20"); err != nil {
+	if err := reconcileAgentGoMod(context.Background(), dir, "v0.4.0-rc.20"); err != nil {
 		t.Fatalf("bump: %v", err)
 	}
 	got, _ := os.ReadFile(filepath.Join(dir, "go.mod"))
@@ -106,11 +108,11 @@ func TestBumpAgentSDKRequire_UpgradesOlderCompatibleVersion(t *testing.T) {
 	}
 }
 
-func TestBumpAgentSDKRequire_DevVersionIsExact(t *testing.T) {
+func TestReconcileAgentGoMod_DevVersionIsExact(t *testing.T) {
 	body := strings.Replace(sampleGoMod, "agentsdk v0.1.0", "agentsdk v0.4.0-rc.21", 1)
 	dir := writeGoMod(t, body)
 	want := "v0.4.0-rc.20-devabc123"
-	if err := bumpAgentSDKRequire(context.Background(), dir, want); err != nil {
+	if err := reconcileAgentGoMod(context.Background(), dir, want); err != nil {
 		t.Fatalf("bump: %v", err)
 	}
 	got, _ := os.ReadFile(filepath.Join(dir, "go.mod"))
@@ -164,7 +166,7 @@ func TestNewerCompatibleAgentSDKRequire(t *testing.T) {
 	}
 }
 
-func TestBumpAgentSDKRequire_StandaloneRequire(t *testing.T) {
+func TestReconcileAgentGoMod_StandaloneRequire(t *testing.T) {
 	body := `module example.com/myagent
 
 go 1.26.0
@@ -172,7 +174,7 @@ go 1.26.0
 require github.com/airlockrun/agentsdk v0.1.0
 `
 	dir := writeGoMod(t, body)
-	if err := bumpAgentSDKRequire(context.Background(), dir, "v0.2.0"); err != nil {
+	if err := reconcileAgentGoMod(context.Background(), dir, "v0.2.0"); err != nil {
 		t.Fatalf("bump: %v", err)
 	}
 	got, _ := os.ReadFile(filepath.Join(dir, "go.mod"))
@@ -181,7 +183,7 @@ require github.com/airlockrun/agentsdk v0.1.0
 	}
 }
 
-func TestBumpAgentSDKRequire_MissingRequire(t *testing.T) {
+func TestReconcileAgentGoMod_MissingRequire(t *testing.T) {
 	body := `module example.com/myagent
 
 go 1.26.0
@@ -189,11 +191,29 @@ go 1.26.0
 require github.com/foo/bar v1.0.0
 `
 	dir := writeGoMod(t, body)
-	err := bumpAgentSDKRequire(context.Background(), dir, "v0.2.0")
+	err := reconcileAgentGoMod(context.Background(), dir, "v0.2.0")
 	if err == nil {
 		t.Fatal("expected error for missing agentsdk require")
 	}
 	if !strings.Contains(err.Error(), "no require directive") {
 		t.Fatalf("error should explain the cause, got %v", err)
+	}
+}
+
+func TestReconcileAgentGoMod_AddsBuildTools(t *testing.T) {
+	body := strings.ReplaceAll(sampleGoMod, "\ntool github.com/a-h/templ/cmd/templ\n", "")
+	body = strings.ReplaceAll(body, "\ntool github.com/airlockrun/agentsdk/cmd/air\n", "")
+	dir := writeGoMod(t, body)
+	if err := reconcileAgentGoMod(context.Background(), dir, "v0.1.0"); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(dir, "go.mod"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tool := range agentModuleTools {
+		if !strings.Contains(string(got), tool) {
+			t.Errorf("go.mod missing tool %s:\n%s", tool, got)
+		}
 	}
 }

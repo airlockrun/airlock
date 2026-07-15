@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 
+	"golang.org/x/mod/modfile"
 	"golang.org/x/mod/semver"
 )
 
@@ -22,21 +23,23 @@ import (
 // token, not `=>`.
 var agentSDKRequireLine = regexp.MustCompile(`(?m)^([\t ]*(?:require[\t ]+)?github\.com/airlockrun/agentsdk[\t ]+)(v[^\s]+)`)
 
-// bumpAgentSDKRequire ensures the agent's go.mod can build against Airlock's SDK
-// series. Production preserves a same-series requirement that is at least as
-// new as Airlock's pin; older or incompatible requirements are rewritten.
-// Development always uses the exact content-addressed version served by its
-// local module proxy.
+var agentModuleTools = []string{
+	"github.com/a-h/templ/cmd/templ",
+	"github.com/airlockrun/agentsdk/cmd/air",
+}
+
+// reconcileAgentGoMod ensures the agent's go.mod can build against Airlock's
+// SDK series and exposes the module-local tools required by the build chain.
+// Production preserves a same-series requirement that is at least as new as
+// Airlock's pin; older or incompatible requirements are rewritten. Development
+// always uses the exact content-addressed version served by its module proxy.
 //
-// Implemented as a regex edit on go.mod rather than shelling out to
-// `go mod edit`: the airlock container that runs the upgrade flow ships
-// only the airlock binary, not the Go toolchain, so an exec of `go` would
-// fail with `executable file not found in $PATH`. The require directive
-// format is stable and trivial to rewrite directly.
+// Implemented with a narrow requirement edit plus x/mod parsing rather than
+// shelling out to `go mod edit`: the Airlock container that runs the upgrade
+// flow ships only the Airlock binary, not the Go toolchain.
 //
-// Idempotent: a no-op (no error) if the require line is already at the
-// target version.
-func bumpAgentSDKRequire(ctx context.Context, agentDir, version string) error {
+// Idempotent when the requirement and tool directives are already canonical.
+func reconcileAgentGoMod(ctx context.Context, agentDir, version string) error {
 	gomod := filepath.Join(agentDir, "go.mod")
 	body, err := os.ReadFile(gomod)
 	if err != nil {
@@ -48,13 +51,37 @@ func bumpAgentSDKRequire(ctx context.Context, agentDir, version string) error {
 	if !ok {
 		return fmt.Errorf("%s: no require directive for github.com/airlockrun/agentsdk", gomod)
 	}
-	if !strings.Contains(v, "-dev") && compatibleAgentSDKRequire(current, v) {
-		return nil
+	updated := body
+	if strings.Contains(v, "-dev") || !compatibleAgentSDKRequire(current, v) {
+		updated = agentSDKRequireLine.ReplaceAll(body, []byte("${1}"+v))
 	}
-	updated := agentSDKRequireLine.ReplaceAll(body, []byte("${1}"+v))
 
+	mf, err := modfile.Parse(gomod, updated, nil)
+	if err != nil {
+		return fmt.Errorf("parse %s: %w", gomod, err)
+	}
+	present := make(map[string]bool, len(mf.Tool))
+	for _, tool := range mf.Tool {
+		present[tool.Path] = true
+	}
+	toolsChanged := false
+	for _, tool := range agentModuleTools {
+		if present[tool] {
+			continue
+		}
+		if err := mf.AddTool(tool); err != nil {
+			return fmt.Errorf("add tool %s: %w", tool, err)
+		}
+		toolsChanged = true
+	}
+	if toolsChanged {
+		updated, err = mf.Format()
+		if err != nil {
+			return fmt.Errorf("format %s: %w", gomod, err)
+		}
+	}
 	if string(updated) == string(body) {
-		return nil // already at target version
+		return nil
 	}
 	if err := os.WriteFile(gomod, updated, 0o644); err != nil {
 		return fmt.Errorf("write %s: %w", gomod, err)

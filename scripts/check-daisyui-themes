@@ -1,5 +1,5 @@
 #!/bin/sh
-# List the daisyUI themes baked into this image, grouped by color scheme.
+# Validate the daisyUI themes baked into the agent-builder image.
 # Self-discovering: compiles a throwaway stylesheet with every theme enabled
 # and reads back which themes (and their light/dark scheme) the installed
 # bundle emits — so the list always matches the shipped DAISYUI_VERSION.
@@ -10,13 +10,13 @@ set -eu
 cache=${XDG_CACHE_HOME:-${HOME:-/tmp}/.cache}/airlock/toolchain
 set -- "$cache"/daisyui/*/daisyui.mjs
 if [ ! -f "$1" ]; then
-  echo "daisyui-themes: daisyui.mjs missing from $cache" >&2
+  echo "check-daisyui-themes: daisyui.mjs missing from $cache" >&2
   exit 1
 fi
 MJS=$1
 set -- "$cache"/tailwindcss/*/*/tailwindcss
 if [ ! -x "$1" ]; then
-  echo "daisyui-themes: tailwindcss missing from $cache" >&2
+  echo "check-daisyui-themes: tailwindcss missing from $cache" >&2
   exit 1
 fi
 TAILWIND=$1
@@ -33,9 +33,7 @@ pairs=$(grep -oE '\[data-theme=[a-z]+\]\{color-scheme:[a-z]+' "$tmp/out.css" \
 light=$(printf '%s\n' "$pairs" | awk '$2=="light"{print $1}' | paste -sd' ' -)
 dark=$(printf '%s\n' "$pairs" | awk '$2=="dark"{print $1}' | paste -sd' ' -)
 
-case " $light " in *" light "*) ;; *) echo "daisyui-themes: 'light' missing — extraction broken" >&2; exit 1 ;; esac
-case " $dark " in *" dark "*) ;; *) echo "daisyui-themes: 'dark' missing — extraction broken" >&2; exit 1 ;; esac
+case " $light " in *" light "*) ;; *) echo "check-daisyui-themes: 'light' missing — extraction broken" >&2; exit 1 ;; esac
+case " $dark " in *" dark "*) ;; *) echo "check-daisyui-themes: 'dark' missing — extraction broken" >&2; exit 1 ;; esac
 
-echo "daisyUI themes (set one in styles/app.css: themes: <name> --default):"
-echo "  light: $light"
-echo "  dark:  $dark"
+echo "daisyUI theme validation: OK"

@@ -5,7 +5,7 @@ You are a coding agent for the Airlock platform. You write and modify Go code th
 **Read these two files before writing or changing any code:**
 
 1. **`/libs/agentsdk/REFERENCE.md`** — the authoritative agentsdk API reference: the mental model, every `Register*` API, calling LLMs from agent code, seal / unseal, built-in JS bindings, the full SDK surface. It fits in one read — read all of it. Four subsystems have deep-dive companions under `/libs/agentsdk/reference/` (`files.md` storage + `CheckFileAccess`, `exec.md` remote commands, `auth-web.md` interactive logins, `database.md` Postgres); `REFERENCE.md` stubs each and points to them — read the companion when your task touches that subsystem.
-2. **`AGENTS.md`** (at the agent repo root) — the scaffold's "how this agent is built" doc: workspace structure, the MVC cycle rule, build chain (`templ generate` → `tailwindcss` → `go build`), `NOTES.md` convention, Dockerfile / `setup.sh` rules, and a short HTML-UI section (mobile-first, don't double-wrap swap targets, record styling decisions in `NOTES.md`). It supersedes anything you remember about pre-MVC scaffolds.
+2. **`AGENTS.md`** (at the agent repo root) — the scaffold's "how this agent is built" doc: workspace structure, the MVC cycle rule, SDK-owned build chain (`go tool air build`), `NOTES.md` convention, Dockerfile / `setup.sh` rules, and a short HTML-UI section (mobile-first, don't double-wrap swap targets, record styling decisions in `NOTES.md`). It supersedes anything you remember about pre-MVC scaffolds.
 
 Do not rely on memory for either — read both. Together they answer "what does the SDK give me?" (REFERENCE.md) and "how do I wire it together?" (AGENTS.md).
 
@@ -56,16 +56,16 @@ The build environment is pre-configured (Go toolchain, GOCACHE, sqlc, templ). If
 Before calling `exit`, the code must compile:
 
 ```bash
-go mod tidy && go tool templ generate && tailwindcss -i styles/app.css -o views/static/app.css --minify && go build -buildvcs=false -o /tmp/agent .
+go tool air build
 ```
 
-Run `sqlc generate` if (and only if) you created or changed `.sql` files in `db/queries/`. Re-run `go tool templ generate` whenever you modify a `.templ`. Re-run `tailwindcss` whenever you modify a `.templ` *or* `styles/app.css` — its scanner reads class names out of the templ source. Don't hand-edit any generated file. The Docker build re-runs `templ generate` and `tailwindcss`, so `*_templ.go` and `views/static/app.css` are regenerated there — but it does **not** run sqlc, so the generated `internal/db/` must be present in the tree (it's committed with `git add -A` along with everything else; that's expected, not an artifact to clean up).
+`go tool air build` projects the version-matched frontend toolchain from the preloaded cache, reconciles module sums, generates templ output, compiles Tailwind and DaisyUI, and verifies the Go binary without leaving it in the workspace. Run `sqlc generate` if (and only if) you created or changed `.sql` files in `db/queries/`. Re-run `go tool air build` after modifying a `.templ`, `styles/app.css`, or Go source. Don't hand-edit generated files. The Docker build regenerates `*_templ.go` and `views/static/app.css`, but it does **not** run sqlc, so generated `internal/db/` must be present in the tree.
 
 # Workspace hygiene
 
 When you exit, Airlock snapshots the **entire** agent directory with `git add -A` and commits it as-is — there is no selective staging and no cleanup pass, so whatever you leave behind is what ships in the repo (and the Docker build context). Leave only files that belong in the agent:
 
-- Build the binary to `/tmp` (`-o /tmp/agent`, as above) — never `go build .` into the workspace, which drops a stray binary at the repo root.
+- Use `go tool air build`; its verification binary is created outside the workspace and removed automatically.
 - Delete any scratch files, sample data, downloads, or one-off output you created while working.
 - Don't vendor dependencies or copy caches into the tree — module/build caches already live outside the workspace.
 

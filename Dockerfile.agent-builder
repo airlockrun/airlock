@@ -98,12 +98,10 @@ ADD --chmod=0644 https://github.com/saadeghi/daisyui/releases/download/${DAISYUI
 ADD --chmod=0644 https://github.com/saadeghi/daisyui/releases/download/${DAISYUI_VERSION}/daisyui-theme.mjs ${XDG_CACHE_HOME}/airlock/toolchain/daisyui/${DAISYUI_VERSION}/daisyui-theme.mjs
 RUN chmod -R a+rwX ${XDG_CACHE_HOME}/airlock/toolchain
 
-# daisyui-themes — lists the themes the installed bundle ships, grouped
-# light/dark. The codegen agent runs it via the bash tool to pick a built-in
-# theme. Smoke-test it at build time: it exits non-zero unless it lists both a
-# light and a dark theme, so a daisyUI output-shape change fails the build loud.
-COPY --chmod=0755 scripts/daisyui-themes /usr/local/bin/daisyui-themes
-RUN daisyui-themes
+# Validate that the installed bundle emits both light and dark built-in themes.
+# Theme authoring guidance comes from the version-matched daisyui-config skill.
+COPY --chmod=0755 scripts/check-daisyui-themes /tmp/check-daisyui-themes
+RUN /tmp/check-daisyui-themes && rm /tmp/check-daisyui-themes
 
 # Version-matched coding skills ship in agentsdk so Airlock codegen and external
 # harnesses consume one checked-in bundle. Fail the image build if that bundle is
