@@ -47,7 +47,7 @@ func (h *Handler) RequestConnection(ctx context.Context, agentID uuid.UUID, slug
 		}
 	}
 
-	upstreamURL, err := connectionUpstreamURL(conn.BaseUrl, req.Path)
+	upstreamURL, err := connectionUpstreamURL(h.httpNetwork, conn.BaseUrl, req.Path)
 	if err != nil {
 		return integrationservice.ConnectionResult{}, service.Detail(service.ErrInvalidInput, "invalid upstream URL: %v", err)
 	}
@@ -73,7 +73,7 @@ func (h *Handler) RequestConnection(ctx context.Context, agentID uuid.UUID, slug
 		InjectAuth(upstream, conn.AuthInjection, creds)
 	}
 
-	resp, err := proxyHTTPClient.Do(upstream)
+	resp, err := h.httpNetwork.client(30 * time.Second).Do(upstream)
 	if err != nil {
 		return integrationservice.ConnectionResult{}, fmt.Errorf("upstream request: %w", err)
 	}

@@ -181,26 +181,27 @@ func Setup(t *testing.T) *Harness {
 	scheduler := trigger.NewScheduler(dispatcher, database, logger.Named("scheduler"))
 
 	router := api.NewRouter(api.RouterConfig{
-		DB:             database,
-		JWTSecret:      cfg.JWTSecret,
-		PublicURL:      cfg.PublicURL,
-		OAuthClient:    oauth.NewClient(),
-		TelegramDriver: telegram,
-		Secrets:        secretStore,
-		S3Client:       s3Client,
-		BuildService:   buildSvc,
-		Dispatcher:     dispatcher,
-		Scheduler:      scheduler,
-		BridgeManager:  bridgeMgr,
-		Containers:     fakeContainers,
-		PromptProxy:    prompter,
-		Hub:            hub,
-		PubSub:         pubsub,
-		Handler:        wsHandler,
-		AgentDomain:    cfg.AgentDomain,
-		AgentBaseURL:   cfg.AgentBaseURL, // method value
-		RealIP:         api.ParseRealIPConfig("", 1),
-		Logger:         logger,
+		DB:               database,
+		JWTSecret:        cfg.JWTSecret,
+		PublicURL:        cfg.PublicURL,
+		OAuthClient:      oauth.NewClient(),
+		TelegramDriver:   telegram,
+		Secrets:          secretStore,
+		S3Client:         s3Client,
+		BuildService:     buildSvc,
+		Dispatcher:       dispatcher,
+		Scheduler:        scheduler,
+		BridgeManager:    bridgeMgr,
+		Containers:       fakeContainers,
+		PromptProxy:      prompter,
+		Hub:              hub,
+		PubSub:           pubsub,
+		Handler:          wsHandler,
+		AgentDomain:      cfg.AgentDomain,
+		AgentBaseURL:     cfg.AgentBaseURL, // method value
+		HTTPPrivateCIDRs: cfg.AgentHTTPPrivateCIDRs,
+		RealIP:           api.ParseRealIPConfig("", 1),
+		Logger:           logger,
 	})
 
 	srv := httptest.NewServer(router)

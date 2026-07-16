@@ -1,6 +1,7 @@
 package config
 
 import (
+	"net/netip"
 	"os"
 	"testing"
 )
@@ -130,6 +131,73 @@ func TestLoadAgentHostGateway(t *testing.T) {
 	if c := Load(); !c.AgentHostGateway {
 		t.Error("AgentHostGateway = false, want true")
 	}
+}
+
+func TestLoadAgentHTTPPrivateCIDRs(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("AGENT_HTTP_PRIVATE_CIDRS", "10.0.0.0/8,100.64.0.0/10")
+
+	got := Load().AgentHTTPPrivateCIDRs
+	want := []netip.Prefix{
+		netip.MustParsePrefix("10.0.0.0/8"),
+		netip.MustParsePrefix("100.64.0.0/10"),
+	}
+	if len(got) != len(want) {
+		t.Fatalf("AgentHTTPPrivateCIDRs has %d prefixes, want %d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("AgentHTTPPrivateCIDRs[%d] = %s, want %s", i, got[i], want[i])
+		}
+	}
+}
+
+func TestParseCIDREnv(t *testing.T) {
+	t.Run("default", func(t *testing.T) {
+		const key = "AIRLOCK_TEST_DEFAULT_CIDRS"
+		got := parseCIDREnv(key, "0.0.0.0/0, ::/0")
+		want := []netip.Prefix{
+			netip.MustParsePrefix("0.0.0.0/0"),
+			netip.MustParsePrefix("::/0"),
+		}
+		if len(got) != len(want) {
+			t.Fatalf("parseCIDREnv() returned %d prefixes, want %d", len(got), len(want))
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Errorf("parseCIDREnv()[%d] = %s, want %s", i, got[i], want[i])
+			}
+		}
+	})
+
+	t.Run("explicit empty", func(t *testing.T) {
+		const key = "AIRLOCK_TEST_EMPTY_CIDRS"
+		t.Setenv(key, "")
+		if got := parseCIDREnv(key, defaultAgentHTTPPrivateCIDRs); len(got) != 0 {
+			t.Fatalf("parseCIDREnv() returned %v, want no prefixes", got)
+		}
+	})
+
+	t.Run("canonicalizes", func(t *testing.T) {
+		const key = "AIRLOCK_TEST_MASKED_CIDRS"
+		t.Setenv(key, "192.168.1.42/24")
+		got := parseCIDREnv(key, "")
+		want := netip.MustParsePrefix("192.168.1.0/24")
+		if len(got) != 1 || got[0] != want {
+			t.Fatalf("parseCIDREnv() = %v, want [%s]", got, want)
+		}
+	})
+
+	t.Run("invalid", func(t *testing.T) {
+		const key = "AIRLOCK_TEST_INVALID_CIDRS"
+		t.Setenv(key, "192.168.1.0/24,not-a-cidr")
+		defer func() {
+			if recover() == nil {
+				t.Fatal("parseCIDREnv() did not panic")
+			}
+		}()
+		parseCIDREnv(key, "")
+	})
 }
 
 func TestLocalAgentBaseURL(t *testing.T) {

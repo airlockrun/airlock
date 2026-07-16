@@ -226,6 +226,7 @@ func runServe(_ []string) {
 		AgentBaseURL:           cfg.AgentBaseURL,
 		LLMProxyURL:            cfg.LLMProxyURL,
 		ForceInlineAttachments: cfg.ForceInlineAttachments,
+		HTTPPrivateCIDRs:       cfg.AgentHTTPPrivateCIDRs,
 		ActivationCodeFile:     cfg.ActivationCodeFile,
 		RealIP:                 realIPCfg,
 		Logger:                 logger,

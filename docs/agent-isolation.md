@@ -53,6 +53,16 @@ what no honest agent uses, so there is no usability cost:
   `host.docker.internal:host-gateway` when Airlock runs natively and agents
   call it through the host. Container deployments omit the alias and its host
   reachability; agents use service DNS through `API_URL_AGENT`.
+- **Brokered HTTP destination policy** - agent `httpRequest` and connection
+  calls are dialed by the Airlock process. Public addresses are always allowed;
+  `AGENT_HTTP_PRIVATE_CIDRS` controls non-public destinations and defaults to
+  `0.0.0.0/0,::/0`, allowing routable LAN, Docker, and VPN services. Set it to
+  an empty value for public-only brokered HTTP, or list narrower CIDRs such as
+  `192.168.1.0/24,100.64.0.0/10,fd00::/8`. Every DNS result is checked when
+  dialing. Localhost, loopback IPs, link-local addresses (including cloud
+  metadata), multicast, and unspecified addresses are always blocked. A host
+  service must listen on a LAN/VPN or host-gateway address rather than only on
+  Airlock's localhost.
 
 ### Tier 2 - operator-configurable (generous / off by default)
 
@@ -93,6 +103,11 @@ operator owns - **recommended, not enforced by airlock**:
   the convenient host route, but a hard block of `169.254.169.254` (cloud
   credential endpoint) needs a host iptables/nftables rule or IMDSv2
   hop-limit=1.
+- **Direct agent and other server-side egress** - `AGENT_HTTP_PRIVATE_CIDRS`
+  governs only Airlock's brokered `httpRequest` and connection clients. Agent
+  Go code, MCP, OAuth, credential tests, exec endpoints, webfetch, Git, and LLM
+  provider clients use their own network paths. Apply host firewall and network
+  policy when those paths need destination restrictions.
 - **Rootless BuildKit** - *shipped (prod, opt-in via `BUILDKIT_HOST`).* The
   prod compose runs a `moby/buildkit:rootless` daemon, and airlock builds
   agent images through it via a remote buildx builder (`builder.buildImage`)

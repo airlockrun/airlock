@@ -75,9 +75,10 @@ func testEncryptor() secrets.Store {
 
 func testAgentHandler() *Handler {
 	return &Handler{
-		db:        testDB,
-		encryptor: testEncryptor(),
-		logger:    zap.NewNop(),
+		db:          testDB,
+		encryptor:   testEncryptor(),
+		httpNetwork: newHTTPNetworkPolicy(nil),
+		logger:      zap.NewNop(),
 		// Mirrors config.Config.AgentBaseURL's shape. Required: the
 		// prompt-data path (agent.go) calls this unconditionally and a
 		// nil func field panics.
