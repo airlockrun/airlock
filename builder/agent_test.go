@@ -22,10 +22,19 @@ func TestAgentBuilderPromptUsesSDKBuildCommand(t *testing.T) {
 		"source commits ignore generated copies",
 		"sqlc runs automatically",
 		"`internal/db/doc.go` is preserved",
-		"go test -count=1 ./...",
+		"go test -p=1 -count=1 ./...",
+		"direct constructor injection",
+		"`newAgent` is the composition root",
+		"must never import a package that imports that domain",
+		"never use package-level globals or service locators",
 	} {
 		if !strings.Contains(prompt.String(), want) {
 			t.Errorf("builder prompt missing generated-file rule %q", want)
+		}
+	}
+	for _, stale := range []string{"Agent.Deps", "GetDeps["} {
+		if strings.Contains(prompt.String(), stale) {
+			t.Errorf("builder prompt contains stale dependency API %q", stale)
 		}
 	}
 }

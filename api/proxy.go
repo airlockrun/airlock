@@ -118,6 +118,7 @@ func SubdomainProxy(agentDomain string, database *db.DB, s3 *storage.S3Client, d
 		var userID uuid.UUID
 		var userEmail string
 		var userDisplayName string
+		callerAccess := agentsdk.AccessPublic
 
 		if !isAssetGET {
 			// Look up the registered route — match exact paths first, then parameterized patterns.
@@ -147,6 +148,18 @@ func SubdomainProxy(agentDomain string, database *db.DB, s3 *storage.S3Client, d
 					rejectOrRedirect(w, r, publicURL)
 					return
 				}
+				// Preserve optional authenticated identity on public routes so
+				// handlers can offer richer behavior without requiring login.
+				if claims, ok := validateSubdomainAuth(r, jwtSecret); ok {
+					uid, err := uuid.Parse(claims.Subject)
+					if err == nil {
+						p := authz.UserPrincipal(uid, auth.Role(claims.TenantRole))
+						callerAccess = p.EffectiveAgentAccess(r.Context(), q, agentID)
+						userID = uid
+						userEmail = claims.Email
+						userDisplayName = claims.DisplayName
+					}
+				}
 
 			case "user", "admin":
 				claims, ok := validateSubdomainAuth(r, jwtSecret)
@@ -164,7 +177,8 @@ func SubdomainProxy(agentDomain string, database *db.DB, s3 *storage.S3Client, d
 					required = agentsdk.AccessAdmin
 				}
 				p := authz.UserPrincipal(uid, auth.Role(claims.TenantRole))
-				if !authz.AccessAtLeast(p.EffectiveAgentAccess(r.Context(), q, uuid.UUID(agent.ID.Bytes)), required) {
+				callerAccess = p.EffectiveAgentAccess(r.Context(), q, agentID)
+				if !authz.AccessAtLeast(callerAccess, required) {
 					log.Warn("user lacks required agent access", zap.String("user_id", uid.String()), zap.String("required", string(required)))
 					writeError(w, http.StatusForbidden, "forbidden")
 					return
@@ -197,25 +211,31 @@ func SubdomainProxy(agentDomain string, database *db.DB, s3 *storage.S3Client, d
 		}
 
 		proxy := &httputil.ReverseProxy{
-			Director: func(req *http.Request) {
-				req.URL.Scheme = target.Scheme
-				req.URL.Host = target.Host
-				// Keep the original path and query string.
-				req.Host = target.Host
+			Rewrite: func(req *httputil.ProxyRequest) {
+				// Rewrite runs after Go strips inbound hop-by-hop headers, so a
+				// client cannot nominate trusted headers in Connection and have
+				// them removed after Airlock sets their authoritative values.
+				req.SetURL(target)
+				req.Out.Host = target.Host
+				req.SetXForwarded()
 
 				// Authenticate to the container.
-				req.Header.Set("Authorization", "Bearer "+ctr.Token)
+				req.Out.Header.Set("Authorization", "Bearer "+ctr.Token)
 
 				// Forward client IP to the agent container.
-				req.Header.Set("X-Forwarded-For", r.RemoteAddr)
-				req.Header.Set("X-Real-IP", r.RemoteAddr)
+				req.Out.Header.Set("X-Real-IP", r.RemoteAddr)
 
-				// Pass identity headers for authenticated requests.
+				// Replace caller-controlled identity and access headers with
+				// values established by Airlock.
+				req.Out.Header.Del("X-User-ID")
+				req.Out.Header.Del("X-User-Email")
+				req.Out.Header.Del("X-User-Name")
+				req.Out.Header.Set("X-Caller-Access", string(callerAccess))
 				if userID != uuid.Nil {
-					req.Header.Set("X-User-ID", userID.String())
-					req.Header.Set("X-User-Email", userEmail)
+					req.Out.Header.Set("X-User-ID", userID.String())
+					req.Out.Header.Set("X-User-Email", userEmail)
 					if userDisplayName != "" {
-						req.Header.Set("X-User-Name", userDisplayName)
+						req.Out.Header.Set("X-User-Name", userDisplayName)
 					}
 				}
 			},
