@@ -41,8 +41,14 @@ CREATE TABLE public.agent_builds (
     exit_status text NOT NULL,
     exit_message text NOT NULL,
     failure_kind text DEFAULT ''::text NOT NULL,
-    build_model text NOT NULL
+    build_model text NOT NULL,
+    integration_token_hash bytea,
+    integration_token_expires_at timestamp with time zone
 );
+
+CREATE UNIQUE INDEX agent_builds_integration_token_hash_idx
+    ON public.agent_builds USING btree (integration_token_hash)
+    WHERE (integration_token_hash IS NOT NULL);
 
 
 --

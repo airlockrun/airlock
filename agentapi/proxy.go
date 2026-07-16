@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -20,6 +21,24 @@ import (
 )
 
 var proxyHTTPClient = newPublicHTTPClient(30 * time.Second)
+
+func connectionUpstreamURL(baseURL, path string) (*url.URL, error) {
+	if !strings.HasPrefix(path, "/") {
+		return nil, errors.New("path must start with /")
+	}
+	base, err := parsePublicHTTPURL(baseURL)
+	if err != nil {
+		return nil, err
+	}
+	upstream, err := parsePublicHTTPURL(strings.TrimRight(baseURL, "/") + path)
+	if err != nil {
+		return nil, err
+	}
+	if !sameHTTPOrigin(base, upstream) {
+		return nil, errors.New("path changed the configured connection origin")
+	}
+	return upstream, nil
+}
 
 // ServiceProxy handles POST /api/agent/proxy/{slug}.
 func (h *Handler) ServiceProxy(w http.ResponseWriter, r *http.Request) {
@@ -85,7 +104,7 @@ func (h *Handler) ServiceProxy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Build upstream request.
-	upstreamURL, err := parsePublicHTTPURL(conn.BaseUrl + req.Path)
+	upstreamURL, err := connectionUpstreamURL(conn.BaseUrl, req.Path)
 	if err != nil {
 		writeJSONError(w, http.StatusBadRequest, "invalid upstream URL: "+err.Error())
 		return

@@ -13,15 +13,16 @@ import (
 type Axis int
 
 const (
-	AxisAgent  Axis = iota // requires a per-agent access level
-	AxisTenant             // requires a tenant role
+	AxisAgent       Axis = iota // requires a per-agent access level
+	AxisTenant                  // requires a tenant role
+	AxisIntegration             // agent admin or active codegen build for this agent
 )
 
-// Requirement is the minimum access an action needs. Exactly one of
-// Agent/Tenant is meaningful, per Axis.
+// Requirement is the minimum access an action needs. Agent is meaningful for
+// agent and integration axes; Tenant is meaningful for the tenant axis.
 type Requirement struct {
 	Axis   Axis
-	Agent  agentsdk.Access // AxisAgent
+	Agent  agentsdk.Access // AxisAgent / AxisIntegration
 	Tenant auth.Role       // AxisTenant
 }
 
@@ -46,16 +47,17 @@ const (
 	AgentClone        Action = "agent.clone" // fork this agent's code into a new agent (member of source; also needs TenantAgentClone)
 
 	// Agent axis — owner (AccessAdmin) required.
-	AgentDelete        Action = "agent.delete"
-	AgentBuildManage   Action = "agent.build.manage" // upgrade / rollback / cancel build
-	AgentMembersManage Action = "agent.members.manage"
-	AgentWebhooksView  Action = "agent.webhooks.view"
-	AgentSchedulesView Action = "agent.schedules.view"
-	AgentScheduleFire  Action = "agent.schedule.fire"
-	AgentConnections   Action = "agent.connections"    // credentials / MCP / env-vars
-	AgentExecEndpoints Action = "agent.exec_endpoints" // SSH exec-endpoint config
-	AgentSiblings      Action = "agent.siblings"
-	AgentModelsUpdate  Action = "agent.models.update"
+	AgentDelete            Action = "agent.delete"
+	AgentBuildManage       Action = "agent.build.manage" // upgrade / rollback / cancel build
+	AgentMembersManage     Action = "agent.members.manage"
+	AgentWebhooksView      Action = "agent.webhooks.view"
+	AgentSchedulesView     Action = "agent.schedules.view"
+	AgentScheduleFire      Action = "agent.schedule.fire"
+	AgentConnections       Action = "agent.connections"    // credentials / MCP / env-vars
+	AgentExecEndpoints     Action = "agent.exec_endpoints" // SSH exec-endpoint config
+	AgentSiblings          Action = "agent.siblings"
+	AgentModelsUpdate      Action = "agent.models.update"
+	AgentIntegrationInvoke Action = "agent.integration.invoke"
 
 	// Tenant axis.
 	TenantCatalogView         Action = "tenant.catalog.view"           // read providers/models/capabilities catalog: user+
@@ -103,16 +105,17 @@ var policy = map[Action]Requirement{
 	AgentModelsView:   {Axis: AxisAgent, Agent: agentsdk.AccessUser},
 	AgentClone:        {Axis: AxisAgent, Agent: agentsdk.AccessUser},
 
-	AgentDelete:        {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
-	AgentBuildManage:   {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
-	AgentMembersManage: {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
-	AgentWebhooksView:  {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
-	AgentSchedulesView: {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
-	AgentScheduleFire:  {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
-	AgentConnections:   {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
-	AgentExecEndpoints: {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
-	AgentSiblings:      {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
-	AgentModelsUpdate:  {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
+	AgentDelete:            {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
+	AgentBuildManage:       {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
+	AgentMembersManage:     {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
+	AgentWebhooksView:      {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
+	AgentSchedulesView:     {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
+	AgentScheduleFire:      {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
+	AgentConnections:       {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
+	AgentExecEndpoints:     {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
+	AgentSiblings:          {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
+	AgentModelsUpdate:      {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
+	AgentIntegrationInvoke: {Axis: AxisIntegration, Agent: agentsdk.AccessAdmin},
 
 	TenantCatalogView:         {Axis: AxisTenant, Tenant: auth.RoleUser},
 	TenantUserView:            {Axis: AxisTenant, Tenant: auth.RoleUser},

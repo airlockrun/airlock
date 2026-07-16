@@ -32,7 +32,7 @@ auth/passkey/      WebAuthn (go-webauthn) relying-party builder + webauthn.User 
 auth/lockout/      Per-(email, ip) login throttling — Policy, IP normalization,
                    constant-time response padding for the Login handler.
 authz/             The single authorization layer. Principal (registered /
-                   anonymous / trigger), EffectiveAgentAccess (the one
+                   anonymous / trigger / codegen), EffectiveAgentAccess (the one
                    agent_members resolver), AccessAtLeast (the one ladder
                    ranking), a central Action→Requirement policy map, and
                    Authorize. Every surface (HTTP handlers, bridges, A2A/MCP)
@@ -42,7 +42,7 @@ apperr/            Leaf package: the sentinel errors (ErrForbidden, …), Detail
                    wrapper, and HTTPStatus mapping. service.ErrX are aliases of
                    these so authz can return them without an import cycle.
 db/                Postgres — migrations, sqlc queries, connection pool with RLS cleanup
-  migrations/      SQL migration files (001_schema.up.sql)
+  migrations/      Ordered goose SQL migrations
   queries/         sqlc SQL files (agents.sql, messages.sql, etc.)
   dbq/             sqlc-generated Go code (models, queries)
 config/            Environment-based config (DATABASE_URL, JWT_SECRET, S3_*, ENCRYPTION_KEY, etc.)
@@ -146,6 +146,16 @@ flag and the gate releases).
 - `GET|POST|PUT session/{convID}/messages` — conversation history (SessionStore)
 - `POST run/complete`, `GET run/{runID}/checkpoint` — run lifecycle
 - `POST publish`, `POST|DELETE subscribe` — topic pub/sub
+
+### Development integrations
+
+`/api/v1/agents/{agentID}/integrations/*` accepts a user JWT and requires
+agent-admin access. `/api/codegen/integrations/*` accepts only the active
+build's opaque integration token. Both surfaces call the same gated service and
+can list configured resources, invoke bound HTTP connections, run bound SSH
+exec endpoints, and inspect/call bound MCP servers. The codegen token hash and
+expiry live on `agent_builds`, are cleared when Sol exits, and are not accepted
+by `/api/v1` or `/api/agent`.
 
 ### Webhook Ingress: `/webhooks/{agentID}/{path}` (no auth, verified per-webhook)
 

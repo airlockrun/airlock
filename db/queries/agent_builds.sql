@@ -37,8 +37,41 @@ UPDATE agent_builds SET
     exit_status = COALESCE(@exit_status, ''),
     exit_message = COALESCE(@exit_message, ''),
     failure_kind = COALESCE(@failure_kind, ''),
+    integration_token_hash = NULL,
+    integration_token_expires_at = NULL,
     finished_at = now()
 WHERE id = @id;
+
+-- name: SetAgentBuildIntegrationToken :execrows
+UPDATE agent_builds SET
+    integration_token_hash = @integration_token_hash,
+    integration_token_expires_at = @integration_token_expires_at
+WHERE id = @id
+  AND status = 'building';
+
+-- name: ClearAgentBuildIntegrationToken :exec
+UPDATE agent_builds SET
+    integration_token_hash = NULL,
+    integration_token_expires_at = NULL
+WHERE id = @id;
+
+-- name: GetAgentBuildByIntegrationToken :one
+SELECT id, agent_id
+FROM agent_builds
+WHERE integration_token_hash = @integration_token_hash
+  AND integration_token_expires_at > now()
+  AND status = 'building';
+
+-- name: AgentBuildIntegrationActive :one
+SELECT EXISTS (
+    SELECT 1
+    FROM agent_builds
+    WHERE id = @id
+      AND agent_id = @agent_id
+      AND integration_token_hash IS NOT NULL
+      AND integration_token_expires_at > now()
+      AND status = 'building'
+)::boolean;
 
 -- name: SetAgentBuildModel :exec
 -- Records the LLM model resolved for this build's codegen. Written once the
@@ -89,5 +122,7 @@ LIMIT 50;
 UPDATE agent_builds SET
     status = 'failed',
     error_message = 'interrupted by Airlock restart',
+    integration_token_hash = NULL,
+    integration_token_expires_at = NULL,
     finished_at = now()
 WHERE status = 'building';

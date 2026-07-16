@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Airlock turnkey installer.
 #
-#   curl -fsSL https://raw.githubusercontent.com/airlockrun/airlock/v0.4.0-rc.48/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/airlockrun/airlock/v0.4.0-rc.49/install.sh | bash
 #
 # Or inspect first (recommended):
-#   curl -fsSL https://raw.githubusercontent.com/airlockrun/airlock/v0.4.0-rc.48/install.sh -o install.sh
+#   curl -fsSL https://raw.githubusercontent.com/airlockrun/airlock/v0.4.0-rc.49/install.sh -o install.sh
 #   less install.sh && bash install.sh
 #
 # Takes a Linux VPS (or macOS for local/tunnel) with Docker already running to a
@@ -33,7 +33,7 @@
 # mutating commands are guarded with explicit `|| die`.
 set -uo pipefail
 
-RELEASE_TAG="${AIRLOCK_TAG:-v0.4.0-rc.48}"
+RELEASE_TAG="${AIRLOCK_TAG:-v0.4.0-rc.49}"
 REPO_URL="https://github.com/airlockrun/airlock.git"
 INSTALL_DIR=""
 TLS_MODE=""        # local|wildcard|tunnel|manual|proxy — decided interactively

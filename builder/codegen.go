@@ -9,12 +9,15 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/airlockrun/goai/tool"
 	sol "github.com/airlockrun/sol"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
+	"go.uber.org/zap"
 )
 
 // runCodegen is Execute's Phase C: optional Sol invocation. Returns
@@ -71,13 +74,43 @@ func (b *BuildService) runCodegen(
 		return "", "", "", ctx.Err()
 	}
 
-	localTools := tool.Set{}
-	if plan.Kind == BuildKindBuild {
-		// Only the fresh-build flow currently registers MCP-probe — it's
-		// useful when the LLM is wiring up integrations for the first
-		// time. Upgrade/rollback keep the existing toolset.
-		localTools.Add(newMCPProbeTool())
+	token, tokenHash, err := auth.NewIntegrationToken()
+	if err != nil {
+		return "", "", "", fmt.Errorf("generate integration token: %w", err)
 	}
+	q := dbq.New(b.db.Pool())
+	rows, err := q.SetAgentBuildIntegrationToken(ctx, dbq.SetAgentBuildIntegrationTokenParams{
+		IntegrationTokenHash: tokenHash,
+		IntegrationTokenExpiresAt: pgtype.Timestamptz{
+			Time:  time.Now().Add(2 * time.Hour),
+			Valid: true,
+		},
+		ID: build.ID,
+	})
+	if err != nil {
+		return "", "", "", fmt.Errorf("store integration token: %w", err)
+	}
+	if rows != 1 {
+		return "", "", "", errors.New("store integration token: build is not active")
+	}
+	tokenActive := true
+	clearIntegrationToken := func() error {
+		if !tokenActive {
+			return nil
+		}
+		clearCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := q.ClearAgentBuildIntegrationToken(clearCtx, build.ID); err != nil {
+			return err
+		}
+		tokenActive = false
+		return nil
+	}
+	defer func() {
+		if clearErr := clearIntegrationToken(); clearErr != nil {
+			b.logger.Error("clear integration token", zap.String("build_id", uuid.UUID(build.ID.Bytes).String()), zap.Error(clearErr))
+		}
+	}()
 
 	solResult, err := b.runSolInProcess(ctx, solRunOpts{
 		WorkDir:            workDir,
@@ -89,7 +122,8 @@ func (b *BuildService) runCodegen(
 		BuildProviderID:    agent.BuildProviderID,
 		BuildModel:         agent.BuildModel,
 		Prompt:             codegenPrompt(plan, agent),
-		LocalTools:         localTools,
+		LocalTools:         tool.Set{},
+		IntegrationToken:   token,
 		TestDBURL:          testDBURL,
 		TestDBPSQL:         testDBPSQL,
 		TestDBSchema:       testDBSchema,
@@ -101,6 +135,9 @@ func (b *BuildService) runCodegen(
 			return verifyGeneratedCode(ctx, executor, logLine)
 		},
 	})
+	if clearErr := clearIntegrationToken(); clearErr != nil {
+		return "", "", "", fmt.Errorf("clear integration token: %w", clearErr)
+	}
 	if err != nil {
 		return "", "", "", fmt.Errorf("sol run: %w", err)
 	}

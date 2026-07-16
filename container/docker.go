@@ -450,6 +450,9 @@ func (m *DockerManager) StartToolserver(ctx context.Context, opts ToolserverOpts
 	hostCfg := &dcontainer.HostConfig{
 		Mounts: mounts,
 	}
+	if m.cfg.AgentHostGateway {
+		hostCfg.ExtraHosts = []string{"host.docker.internal:host-gateway"}
+	}
 
 	c, err := m.createAndStart(ctx, name, containerCfg, hostCfg, m.cfg.DockerNetwork)
 	if err != nil {

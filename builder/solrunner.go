@@ -24,6 +24,7 @@ import (
 	soltools "github.com/airlockrun/sol/tools"
 	"github.com/airlockrun/sol/websearch"
 	dmount "github.com/docker/docker/api/types/mount"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"
 )
@@ -53,6 +54,7 @@ type solRunOpts struct {
 	TestDBURL          string                                     // test schema DB URL with search_path baked in
 	TestDBPSQL         string                                     // test schema DB URL without search_path (for psql)
 	TestDBSchema       string                                     // test schema name (for psql SET search_path)
+	IntegrationToken   string                                     // build-bound credential for go tool air integration commands
 	GoProxyDir         string                                     // dev: host path to the generated lib proxy; empty in prod
 	Verify             func(context.Context, tool.Executor) error // required isolated-workspace verification
 }
@@ -78,6 +80,9 @@ type solRunResult struct {
 func (b *BuildService) runSolInProcess(ctx context.Context, opts solRunOpts) (*solRunResult, error) {
 	if opts.Verify == nil {
 		return nil, errors.New("codegen verification callback is required")
+	}
+	if opts.IntegrationToken == "" || !opts.AgentID.Valid {
+		return nil, errors.New("codegen integration credentials are required")
 	}
 	// Fall back to the system-wide default build model when no per-agent
 	// override has been set. Live inheritance — no snapshot at agent create.
@@ -132,6 +137,11 @@ func (b *BuildService) runSolInProcess(ctx context.Context, opts solRunOpts) (*s
 			"TEST_DB_SCHEMA="+opts.TestDBSchema,
 		)
 	}
+	toolEnv = append(toolEnv,
+		"AIRLOCK_API_URL="+b.cfg.APIURLAgent,
+		"AIRLOCK_AGENT_ID="+uuid.UUID(opts.AgentID.Bytes).String(),
+		"AIRLOCK_INTEGRATION_TOKEN="+opts.IntegrationToken,
+	)
 	// Workspace mount: in compose/docker-in-docker mode (when codegen
 	// volume is configured), mount the named volume that contains
 	// AgentCodegenPath so the daemon resolves both ends through the
