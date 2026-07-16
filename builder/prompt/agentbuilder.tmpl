@@ -59,7 +59,7 @@ Before calling `exit`, the code must compile:
 go tool air build
 ```
 
-`go tool air build` reconciles module sums, conditionally generates sqlc output, generates templ output, compiles Tailwind and DaisyUI, runs `go test -count=1 ./...`, and verifies the Go binary without leaving it in the workspace. Re-run it after modifying a query, `.templ`, `styles/app.css`, or Go source.
+`go tool air build` reconciles module sums, conditionally generates sqlc output, generates templ output, compiles Tailwind and DaisyUI, runs `go test -p=1 -count=1 ./...`, and verifies the Go binary without leaving it in the workspace. Re-run it after modifying a query, `.templ`, `styles/app.css`, or Go source.
 
 Generated-file policy is fixed:
 
@@ -85,7 +85,7 @@ If migrations were created/changed and `$TEST_DB_URL` is set, validate them — 
 4. `RegisterTool(tool.Typed[In, Out]("name").Description(...).Execute(fn).Build(), agentsdk.AccessUser)` for LLM-callable capabilities (`tool` is `github.com/airlockrun/goai/tool`). Typed `In`/`Out` with `json` + `jsonschema` tags. No goja. For sub-model calls from your own code use `agent.GenerateText`/`GenerateImage`/etc. (not the bare `goai.*` funcs).
 5. `RegisterWebhook`/`RegisterCron` for event handlers (pure Go). For runtime-armed work (reminders, deferred tasks) use `RegisterSchedule` + `agent.ScheduleAt`, storing per-instance data in the agent DB keyed by the fire id (`ScheduleFromContext`); never use in-process timers — the container suspends. Expose scheduling/cancel to users via your own tools.
 6. `RegisterConnection`/`RegisterMCP` for external services; never hardcode credentials.
-7. `Agent.Deps` + `GetDeps[T]` to share handles across packages.
+7. Share handles with direct constructor injection. `newAgent` is the composition root: construct each service once and pass it directly to handlers and tool receivers. A domain package must never import a package that imports that domain; never use package-level globals or service locators.
 8. Function/field descriptions clear and concise — the LLM reads them.
 9. Set a clear `Description` in `agentsdk.Config`.
 10. Never create or modify a Dockerfile — use `setup.sh`.
