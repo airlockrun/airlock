@@ -2,9 +2,10 @@ package api
 
 import (
 	"context"
-	"github.com/airlockrun/airlock/agentapi"
 	"net/http"
+	"net/netip"
 
+	"github.com/airlockrun/airlock/agentapi"
 	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/auth/passkey"
 	"github.com/airlockrun/airlock/authz"
@@ -101,6 +102,8 @@ type RouterConfig struct {
 	// provider URL capability. Useful when the public URL isn't reachable
 	// from the model provider (e.g. localhost without a tunnel).
 	ForceInlineAttachments bool
+	// Non-public CIDRs available to Airlock-brokered agent HTTP calls.
+	HTTPPrivateCIDRs []netip.Prefix
 
 	// Path to the on-disk activation code file — cleared after Activate
 	// succeeds so the one-time secret doesn't linger on disk.
@@ -676,6 +679,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		AgentBaseURL:           cfg.AgentBaseURL,
 		LLMProxyURL:            cfg.LLMProxyURL,
 		ForceInlineAttachments: cfg.ForceInlineAttachments,
+		HTTPPrivateCIDRs:       cfg.HTTPPrivateCIDRs,
 		JWTSecret:              cfg.JWTSecret,
 		Dispatcher:             cfg.Dispatcher,
 		ExecDialer:             execDialer,

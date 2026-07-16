@@ -35,7 +35,7 @@ const (
 	httpMaxHTMLBytes = 10 * 1024 * 1024 // 10 MB
 )
 
-// AgentHTTP handles POST /api/agent/http — raw HTTP proxy for public URLs.
+// AgentHTTP handles POST /api/agent/http — raw HTTP proxy for permitted URLs.
 // No auth injection (use proxy/{slug} for authenticated connections).
 func (h *Handler) AgentHTTP(w http.ResponseWriter, r *http.Request) {
 	var req wire.HTTPRequest
@@ -66,7 +66,7 @@ func (h *Handler) AgentHTTP(w http.ResponseWriter, r *http.Request) {
 		bodyReader = strings.NewReader(req.Body)
 	}
 
-	upstreamURL, err := parsePublicHTTPURL(req.URL)
+	upstreamURL, err := h.httpNetwork.parseHTTPURL(req.URL)
 	if err != nil {
 		writeJSONError(w, http.StatusBadRequest, "invalid request URL: "+err.Error())
 		return
@@ -86,7 +86,7 @@ func (h *Handler) AgentHTTP(w http.ResponseWriter, r *http.Request) {
 		upstream.Header.Set(k, v)
 	}
 
-	client := newPublicHTTPClient(time.Duration(timeout) * time.Second)
+	client := h.httpNetwork.client(time.Duration(timeout) * time.Second)
 	resp, err := client.Do(upstream)
 	if err != nil {
 		h.logger.Error("agent HTTP request failed", zap.String("url", req.URL), zap.Error(err))

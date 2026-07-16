@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Airlock turnkey installer.
 #
-#   curl -fsSL https://raw.githubusercontent.com/airlockrun/airlock/v0.4.0-rc.50/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/airlockrun/airlock/v0.4.0-rc.51/install.sh | bash
 #
 # Or inspect first (recommended):
-#   curl -fsSL https://raw.githubusercontent.com/airlockrun/airlock/v0.4.0-rc.50/install.sh -o install.sh
+#   curl -fsSL https://raw.githubusercontent.com/airlockrun/airlock/v0.4.0-rc.51/install.sh -o install.sh
 #   less install.sh && bash install.sh
 #
 # Takes a Linux VPS (or macOS for local/tunnel) with Docker already running to a
@@ -33,7 +33,7 @@
 # mutating commands are guarded with explicit `|| die`.
 set -uo pipefail
 
-RELEASE_TAG="${AIRLOCK_TAG:-v0.4.0-rc.50}"
+RELEASE_TAG="${AIRLOCK_TAG:-v0.4.0-rc.51}"
 REPO_URL="https://github.com/airlockrun/airlock.git"
 INSTALL_DIR=""
 TLS_MODE=""        # local|wildcard|tunnel|manual|proxy — decided interactively
@@ -541,6 +541,7 @@ render_env() {
 		echo "AIRLOCK_INSTANCE_ID=$INSTANCE_ID"
 		echo "DOCKER_NETWORK=$INSTANCE_ID"
 		echo "AGENT_NETWORK=$INSTANCE_ID-agents"
+		echo "AGENT_HTTP_PRIVATE_CIDRS=0.0.0.0/0,::/0"
 		echo "AGENT_CODEGEN_VOLUME=$INSTANCE_ID-data"
 		echo "DOCKER_SOCKET_PATH=${DOCKER_SOCKET_PATH:-/var/run/docker.sock}"
 		echo "ENCRYPTION_KEY=$(gen_secret)"

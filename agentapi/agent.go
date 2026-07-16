@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/netip"
 	"strings"
 
 	"github.com/airlockrun/agentsdk"
@@ -49,6 +50,7 @@ type Handler struct {
 	jwtSecret              string                   // shared with auth middleware; read by mcp_server.go to validate incoming A2A JWTs
 	dispatcher             *trigger.Dispatcher      // forward-prompt + ensure-running for A2A
 	execDialer             ExecDialerService        // SSH dialer for RegisterExecEndpoint; nil-safe via implements-or-stub adapter
+	httpNetwork            *httpNetworkPolicy
 	logger                 *zap.Logger
 }
 
@@ -71,6 +73,7 @@ type Config struct {
 	JWTSecret              string
 	Dispatcher             *trigger.Dispatcher
 	ExecDialer             ExecDialerService
+	HTTPPrivateCIDRs       []netip.Prefix
 	Logger                 *zap.Logger
 }
 
@@ -105,6 +108,7 @@ func New(c Config) *Handler {
 		jwtSecret:              c.JWTSecret,
 		dispatcher:             c.Dispatcher,
 		execDialer:             c.ExecDialer,
+		httpNetwork:            newHTTPNetworkPolicy(c.HTTPPrivateCIDRs),
 		logger:                 c.Logger,
 	}
 }

@@ -170,7 +170,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.agent-builder
-    image: ghcr.io/airlockrun/airlock-agent-builder:v0.4.0-rc.50
+    image: ghcr.io/airlockrun/airlock-agent-builder:v0.4.0-rc.51
     command: ["true"]
     restart: "no"
 
@@ -178,7 +178,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.agent-base
-    image: ghcr.io/airlockrun/airlock-agent-base:v0.4.0-rc.50
+    image: ghcr.io/airlockrun/airlock-agent-base:v0.4.0-rc.51
     command: ["true"]
     restart: "no"
 
@@ -221,7 +221,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.airlock
-    image: ghcr.io/airlockrun/airlock:v0.4.0-rc.50
+    image: ghcr.io/airlockrun/airlock:v0.4.0-rc.51
     depends_on:
       # required:false — when a service's profile is inactive (external Postgres
       # via bundled-db off, external S3 via bundled-s3 off) it doesn't start and
@@ -309,6 +309,10 @@ services:
       # the network names in the `networks:` block below.
       DOCKER_NETWORK: ${DOCKER_NETWORK:-airlock}
       AGENT_NETWORK: ${AGENT_NETWORK:-airlock-agents}
+      # Airlock-brokered httpRequest and connection calls may reach public
+      # addresses plus these non-public CIDRs. An explicitly empty value keeps
+      # brokered HTTP public-only. Loopback and link-local stay blocked.
+      AGENT_HTTP_PRIVATE_CIDRS: "${AGENT_HTTP_PRIVATE_CIDRS-0.0.0.0/0,::/0}"
       # Rootless agent image builds. Empty by default → legacy host
       # `docker build` (works everywhere). install.sh sets BUILDKIT_HOST to the
       # buildkitd socket and enables the `buildkit` profile when the host
@@ -365,7 +369,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.frontend
-    image: ghcr.io/airlockrun/airlock-frontend:v0.4.0-rc.50
+    image: ghcr.io/airlockrun/airlock-frontend:v0.4.0-rc.51
     restart: unless-stopped
 
   caddy:

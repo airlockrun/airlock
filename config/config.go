@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net/netip"
 	"net/url"
 	"os"
 	"strconv"
@@ -15,8 +16,9 @@ import (
 // drift becomes impossible in prod. Self-host operators can still override via
 // AGENT_BUILDER_IMAGE / AGENT_BASE_IMAGE if they need a custom build.
 const (
-	DefaultAgentBuilderImage = "ghcr.io/airlockrun/airlock-agent-builder:v" + airlock.Version
-	DefaultAgentBaseImage    = "ghcr.io/airlockrun/airlock-agent-base:v" + airlock.Version
+	DefaultAgentBuilderImage     = "ghcr.io/airlockrun/airlock-agent-builder:v" + airlock.Version
+	DefaultAgentBaseImage        = "ghcr.io/airlockrun/airlock-agent-base:v" + airlock.Version
+	defaultAgentHTTPPrivateCIDRs = "0.0.0.0/0,::/0"
 )
 
 // LabelInstance is the Docker label key stamped on every container and agent
@@ -70,6 +72,11 @@ type Config struct {
 	// frontend) so a malicious agent can't reach infra services it doesn't
 	// need. See docs/agent-isolation.md.
 	AgentNetwork string
+	// AgentHTTPPrivateCIDRs controls which non-public addresses Airlock may dial
+	// for brokered agent httpRequest and connection calls. Public addresses are
+	// always allowed; loopback, link-local, multicast, and unspecified addresses
+	// are always blocked.
+	AgentHTTPPrivateCIDRs []netip.Prefix
 
 	// --- Encryption ---
 	// AES-256-GCM for provider API keys, webhook secrets, tokens at rest.
@@ -206,6 +213,10 @@ func Load() *Config {
 		AgentDomain:   resolveAgentDomain(),
 		DockerNetwork: os.Getenv("DOCKER_NETWORK"),
 		AgentNetwork:  envOr("AGENT_NETWORK", os.Getenv("DOCKER_NETWORK")),
+		AgentHTTPPrivateCIDRs: parseCIDREnv(
+			"AGENT_HTTP_PRIVATE_CIDRS",
+			defaultAgentHTTPPrivateCIDRs,
+		),
 
 		// Encryption
 		EncryptionKey:    requireEnv("ENCRYPTION_KEY"),
@@ -366,6 +377,29 @@ func envBoolOr(key string, fallback bool) bool {
 		panic(fmt.Sprintf("environment variable %s: invalid bool %q", key, v))
 	}
 	return b
+}
+
+func parseCIDREnv(key, fallback string) []netip.Prefix {
+	raw, ok := os.LookupEnv(key)
+	if !ok {
+		raw = fallback
+	}
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return []netip.Prefix{}
+	}
+
+	parts := strings.Split(raw, ",")
+	prefixes := make([]netip.Prefix, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		prefix, err := netip.ParsePrefix(part)
+		if err != nil {
+			panic(fmt.Sprintf("environment variable %s: invalid CIDR %q", key, part))
+		}
+		prefixes = append(prefixes, prefix.Masked())
+	}
+	return prefixes
 }
 
 // resolveAgentDomain returns AGENT_DOMAIN when explicitly set, otherwise
