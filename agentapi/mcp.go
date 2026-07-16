@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/airlockrun/agentsdk/wire"
@@ -56,20 +57,23 @@ func (h *Handler) MCPToolCall(w http.ResponseWriter, r *http.Request) {
 	// expired token is renewed here under a row lock, so it self-heals on this
 	// call instead of waiting for the background tick. Only an unrecoverable
 	// server (no token / no refresh token / provider-revoked) returns 402.
-	creds, err := oauth.EnsureMCPServerToken(r.Context(), h.db, h.encryptor, h.oauthClient, h.logger, server.ID, time.Now())
-	switch {
-	case errors.Is(err, oauth.ErrNeedsReauth):
-		writeJSON(w, http.StatusPaymentRequired, map[string]string{
-			"error":   "auth_required",
-			"slug":    server.Slug,
-			"authUrl": buildMCPAuthURL(h.publicURL, agentID, slug, server.AuthMode),
-			"message": fmt.Sprintf("MCP server %q needs authorization", server.Name),
-		})
-		return
-	case err != nil:
-		h.logger.Warn("resolve MCP token failed", zap.String("slug", slug), zap.Error(err))
-		writeJSONError(w, http.StatusBadGateway, "failed to obtain MCP credentials")
-		return
+	var creds string
+	if server.AuthMode != string(wire.MCPAuthNone) {
+		creds, err = oauth.EnsureMCPServerToken(r.Context(), h.db, h.encryptor, h.oauthClient, h.logger, server.ID, time.Now())
+		switch {
+		case errors.Is(err, oauth.ErrNeedsReauth):
+			writeJSON(w, http.StatusPaymentRequired, map[string]string{
+				"error":   "auth_required",
+				"slug":    server.Slug,
+				"authUrl": buildMCPAuthURL(h.publicURL, agentID, slug, server.AuthMode),
+				"message": fmt.Sprintf("MCP server %q needs authorization", server.Name),
+			})
+			return
+		case err != nil:
+			h.logger.Warn("resolve MCP token failed", zap.String("slug", slug), zap.Error(err))
+			writeJSONError(w, http.StatusBadGateway, "failed to obtain MCP credentials")
+			return
+		}
 	}
 
 	// Stateless MCP call.
@@ -103,7 +107,8 @@ func (h *Handler) discoverAllMCPStatus(
 	var result []mcpServerStatus
 
 	for _, server := range servers {
-		if server.AccessTokenRef == "" {
+		noAuth := server.AuthMode == string(wire.MCPAuthNone)
+		if !noAuth && server.AccessTokenRef == "" {
 			result = append(result, mcpServerStatus{
 				MCPAuthStatus: wire.MCPAuthStatus{
 					Slug:       server.Slug,
@@ -115,10 +120,14 @@ func (h *Handler) discoverAllMCPStatus(
 			continue
 		}
 
-		creds, err := h.encryptor.Get(ctx, "mcp/"+pgUUID(server.ID).String()+"/access_token", server.AccessTokenRef)
-		if err != nil {
-			h.logger.Error("decrypt MCP credentials failed", zap.String("slug", server.Slug), zap.Error(err))
-			continue
+		var creds string
+		if !noAuth {
+			var err error
+			creds, err = h.encryptor.Get(ctx, "mcp/"+pgUUID(server.ID).String()+"/access_token", server.AccessTokenRef)
+			if err != nil {
+				h.logger.Error("decrypt MCP credentials failed", zap.String("slug", server.Slug), zap.Error(err))
+				continue
+			}
 		}
 
 		tools, instructions, err := DiscoverMCPTools(ctx, server.Url, server.AuthInjection, creds)
@@ -204,9 +213,20 @@ func callMCPTool(ctx context.Context, serverURL string, authInjection []byte, cr
 		}, nil
 	}
 
-	return &wire.MCPToolCallResponse{
-		Content: []wire.MCPContent{{Type: "text", Text: result.Output}},
-	}, nil
+	content := make([]wire.MCPContent, 0, 1+len(result.Attachments))
+	if result.Output != "" {
+		content = append(content, wire.MCPContent{Type: "text", Text: result.Output})
+	}
+	for _, attachment := range result.Attachments {
+		kind := "resource"
+		if strings.HasPrefix(attachment.MimeType, "image/") {
+			kind = "image"
+		}
+		content = append(content, wire.MCPContent{
+			Type: kind, Name: attachment.Filename, MimeType: attachment.MimeType, Data: attachment.Data,
+		})
+	}
+	return &wire.MCPToolCallResponse{Content: content}, nil
 }
 
 // DiscoverMCPTools connects to an MCP server, lists tools, and disconnects.

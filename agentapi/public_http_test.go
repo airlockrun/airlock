@@ -2,6 +2,7 @@ package agentapi
 
 import (
 	"net/netip"
+	"net/url"
 	"testing"
 )
 
@@ -27,6 +28,31 @@ func TestParsePublicHTTPURL(t *testing.T) {
 				t.Fatalf("parsePublicHTTPURL() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+func TestSameHTTPOrigin(t *testing.T) {
+	parse := func(raw string) *url.URL {
+		u, err := url.Parse(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return u
+	}
+	tests := []struct {
+		a, b string
+		want bool
+	}{
+		{"https://example.com/start", "https://example.com/next", true},
+		{"https://example.com/start", "https://example.com:443/next", true},
+		{"https://example.com/start", "http://example.com/next", false},
+		{"https://example.com/start", "https://other.example/next", false},
+		{"https://example.com/start", "https://example.com:8443/next", false},
+	}
+	for _, tt := range tests {
+		if got := sameHTTPOrigin(parse(tt.a), parse(tt.b)); got != tt.want {
+			t.Errorf("sameHTTPOrigin(%q, %q) = %v, want %v", tt.a, tt.b, got, tt.want)
+		}
 	}
 }
 

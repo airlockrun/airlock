@@ -31,6 +31,9 @@ const (
 	// KindTrigger — no human at all (cron/webhook). Cannot delegate as a
 	// user; agent-axis actions and A2A initiation are denied.
 	KindTrigger
+	// KindCodegen is an active agent build using its narrow integration
+	// credential. It has no tenant or ordinary agent standing.
+	KindCodegen
 )
 
 // Principal is the caller identity threaded through every gated call.
@@ -45,6 +48,11 @@ type Principal struct {
 	// system-agent delegation). Audit/logging only — authorization
 	// evaluates the delegated principal as the originating user, no more.
 	OnBehalfOfAgent uuid.UUID
+
+	// BuildID and CodegenAgentID are set only for KindCodegen. The integration
+	// policy verifies both against the active build row on every service call.
+	BuildID        uuid.UUID
+	CodegenAgentID uuid.UUID
 }
 
 // UserPrincipal builds a registered-user principal. A uuid.Nil id yields
@@ -61,6 +69,12 @@ func AnonymousPrincipal() Principal {
 // TriggerPrincipal builds a non-human trigger principal (cron/webhook).
 func TriggerPrincipal() Principal {
 	return Principal{Kind: KindTrigger}
+}
+
+// CodegenPrincipal builds the narrow principal admitted only by integration
+// policy actions while its build credential remains active.
+func CodegenPrincipal(buildID, agentID uuid.UUID) Principal {
+	return Principal{Kind: KindCodegen, BuildID: buildID, CodegenAgentID: agentID}
 }
 
 // IsAuthenticatedUser reports whether the principal is a registered user

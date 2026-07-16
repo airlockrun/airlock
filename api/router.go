@@ -25,6 +25,7 @@ import (
 	gitcredssvc "github.com/airlockrun/airlock/service/gitcredentials"
 	grantssvc "github.com/airlockrun/airlock/service/grants"
 	identitysvc "github.com/airlockrun/airlock/service/identity"
+	integrationssvc "github.com/airlockrun/airlock/service/integrations"
 	managedbotssvc "github.com/airlockrun/airlock/service/managedbots"
 	memberssvc "github.com/airlockrun/airlock/service/members"
 	modelssvc "github.com/airlockrun/airlock/service/models"
@@ -679,6 +680,18 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		Dispatcher:             cfg.Dispatcher,
 		ExecDialer:             execDialer,
 		Logger:                 cfg.Logger.Named("agent-api"),
+	})
+	integrationsH := newIntegrationsHandler(integrationssvc.New(cfg.DB, ah))
+	r.Route("/api/v1/agents/{agentID}/integrations", func(r chi.Router) {
+		r.Use(auth.Middleware(cfg.JWTSecret))
+		r.Use(identityLogger)
+		r.Use(securedAccountGate)
+		r.Use(integrationUserContext)
+		mountIntegrationRoutes(r, integrationsH)
+	})
+	r.Route("/api/codegen/integrations", func(r chi.Router) {
+		r.Use(codegenIntegrationAuth(cfg.DB))
+		mountIntegrationRoutes(r, integrationsH)
 	})
 	// Silence "unused" if dbq import only used by helper agentapi.NewTOFUPinner.
 	_ = dbq.New

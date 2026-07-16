@@ -6,6 +6,7 @@ import (
 	"github.com/airlockrun/airlock/apperr"
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // Authorize is the single gate. It looks the action up in the policy
@@ -36,6 +37,27 @@ func Authorize(ctx context.Context, q *dbq.Queries, p Principal, a Action, agent
 			return apperr.ErrForbidden
 		}
 		return nil
+	case AxisIntegration:
+		if p.Kind == KindCodegen {
+			if p.BuildID == uuid.Nil || p.CodegenAgentID == uuid.Nil || p.CodegenAgentID != agentID {
+				return apperr.ErrForbidden
+			}
+			active, err := q.AgentBuildIntegrationActive(ctx, dbq.AgentBuildIntegrationActiveParams{
+				ID:      dbqUUID(p.BuildID),
+				AgentID: dbqUUID(agentID),
+			})
+			if err != nil || !active {
+				return apperr.ErrForbidden
+			}
+			return nil
+		}
+		if p.Kind == KindRegisteredUser && p.UserID == uuid.Nil {
+			return apperr.ErrUnauthorized
+		}
+		if !AccessAtLeast(p.EffectiveAgentAccess(ctx, q, agentID), req.Agent) {
+			return apperr.ErrForbidden
+		}
+		return nil
 	default: // AxisAgent
 		// Preserve the "no JWT" 401 for a registered-user principal that
 		// somehow carries no UserID; anonymous/trigger resolve to public
@@ -48,6 +70,10 @@ func Authorize(ctx context.Context, q *dbq.Queries, p Principal, a Action, agent
 		}
 		return nil
 	}
+}
+
+func dbqUUID(id uuid.UUID) pgtype.UUID {
+	return pgtype.UUID{Bytes: id, Valid: true}
 }
 
 // unauthenticatedOrForbidden distinguishes "no credentials at all" (401)

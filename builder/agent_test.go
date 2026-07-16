@@ -27,12 +27,15 @@ func TestAgentBuilderPromptUsesSDKBuildCommand(t *testing.T) {
 		"`newAgent` is the composition root",
 		"must never import a package that imports that domain",
 		"never use package-level globals or service locators",
+		"go tool air integrations list",
+		"go tool air mcp probe <url>",
+		"Never run `go tool air deploy`",
 	} {
 		if !strings.Contains(prompt.String(), want) {
 			t.Errorf("builder prompt missing generated-file rule %q", want)
 		}
 	}
-	for _, stale := range []string{"Agent.Deps", "GetDeps["} {
+	for _, stale := range []string{"Agent.Deps", "GetDeps[", "mcp_probe"} {
 		if strings.Contains(prompt.String(), stale) {
 			t.Errorf("builder prompt contains stale dependency API %q", stale)
 		}

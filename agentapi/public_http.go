@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"strings"
 	"time"
 )
 
@@ -18,7 +19,32 @@ var (
 )
 
 func newPublicHTTPClient(timeout time.Duration) *http.Client {
-	return &http.Client{Timeout: timeout, Transport: publicHTTPTransport}
+	return &http.Client{
+		Timeout:   timeout,
+		Transport: publicHTTPTransport,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) > 0 && !sameHTTPOrigin(via[0].URL, req.URL) {
+				return http.ErrUseLastResponse
+			}
+			return nil
+		},
+	}
+}
+
+func sameHTTPOrigin(a, b *url.URL) bool {
+	return strings.EqualFold(a.Scheme, b.Scheme) &&
+		strings.EqualFold(a.Hostname(), b.Hostname()) &&
+		effectivePort(a) == effectivePort(b)
+}
+
+func effectivePort(u *url.URL) string {
+	if port := u.Port(); port != "" {
+		return port
+	}
+	if strings.EqualFold(u.Scheme, "https") {
+		return "443"
+	}
+	return "80"
 }
 
 func newPublicHTTPTransport() *http.Transport {

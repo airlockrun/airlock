@@ -11,6 +11,42 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const agentBuildIntegrationActive = `-- name: AgentBuildIntegrationActive :one
+SELECT EXISTS (
+    SELECT 1
+    FROM agent_builds
+    WHERE id = $1
+      AND agent_id = $2
+      AND integration_token_hash IS NOT NULL
+      AND integration_token_expires_at > now()
+      AND status = 'building'
+)::boolean
+`
+
+type AgentBuildIntegrationActiveParams struct {
+	ID      pgtype.UUID `json:"id"`
+	AgentID pgtype.UUID `json:"agent_id"`
+}
+
+func (q *Queries) AgentBuildIntegrationActive(ctx context.Context, arg AgentBuildIntegrationActiveParams) (bool, error) {
+	row := q.db.QueryRow(ctx, agentBuildIntegrationActive, arg.ID, arg.AgentID)
+	var column_1 bool
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
+const clearAgentBuildIntegrationToken = `-- name: ClearAgentBuildIntegrationToken :exec
+UPDATE agent_builds SET
+    integration_token_hash = NULL,
+    integration_token_expires_at = NULL
+WHERE id = $1
+`
+
+func (q *Queries) ClearAgentBuildIntegrationToken(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, clearAgentBuildIntegrationToken, id)
+	return err
+}
+
 const createAgentBuild = `-- name: CreateAgentBuild :one
 INSERT INTO agent_builds (
     agent_id, type, status, instructions,
@@ -24,7 +60,7 @@ VALUES (
     0, 0, 0, 0, 0,
     $4, '', '[]', '', '', ''
 )
-RETURNING id, agent_id, type, status, instructions, source_ref, image_ref, sol_log, docker_log, log_seq, error_message, started_at, finished_at, llm_calls, llm_tokens_in, llm_tokens_out, llm_tokens_cached, llm_cost_estimate, rollback_target_id, sdk_version, todos, exit_status, exit_message, failure_kind, build_model
+RETURNING id, agent_id, type, status, instructions, source_ref, image_ref, sol_log, docker_log, log_seq, error_message, started_at, finished_at, llm_calls, llm_tokens_in, llm_tokens_out, llm_tokens_cached, llm_cost_estimate, rollback_target_id, sdk_version, todos, exit_status, exit_message, failure_kind, build_model, integration_token_hash, integration_token_expires_at
 `
 
 type CreateAgentBuildParams struct {
@@ -73,12 +109,14 @@ func (q *Queries) CreateAgentBuild(ctx context.Context, arg CreateAgentBuildPara
 		&i.ExitMessage,
 		&i.FailureKind,
 		&i.BuildModel,
+		&i.IntegrationTokenHash,
+		&i.IntegrationTokenExpiresAt,
 	)
 	return i, err
 }
 
 const getAgentBuild = `-- name: GetAgentBuild :one
-SELECT id, agent_id, type, status, instructions, source_ref, image_ref, sol_log, docker_log, log_seq, error_message, started_at, finished_at, llm_calls, llm_tokens_in, llm_tokens_out, llm_tokens_cached, llm_cost_estimate, rollback_target_id, sdk_version, todos, exit_status, exit_message, failure_kind, build_model FROM agent_builds WHERE id = $1
+SELECT id, agent_id, type, status, instructions, source_ref, image_ref, sol_log, docker_log, log_seq, error_message, started_at, finished_at, llm_calls, llm_tokens_in, llm_tokens_out, llm_tokens_cached, llm_cost_estimate, rollback_target_id, sdk_version, todos, exit_status, exit_message, failure_kind, build_model, integration_token_hash, integration_token_expires_at FROM agent_builds WHERE id = $1
 `
 
 func (q *Queries) GetAgentBuild(ctx context.Context, id pgtype.UUID) (AgentBuild, error) {
@@ -110,12 +148,34 @@ func (q *Queries) GetAgentBuild(ctx context.Context, id pgtype.UUID) (AgentBuild
 		&i.ExitMessage,
 		&i.FailureKind,
 		&i.BuildModel,
+		&i.IntegrationTokenHash,
+		&i.IntegrationTokenExpiresAt,
 	)
 	return i, err
 }
 
+const getAgentBuildByIntegrationToken = `-- name: GetAgentBuildByIntegrationToken :one
+SELECT id, agent_id
+FROM agent_builds
+WHERE integration_token_hash = $1
+  AND integration_token_expires_at > now()
+  AND status = 'building'
+`
+
+type GetAgentBuildByIntegrationTokenRow struct {
+	ID      pgtype.UUID `json:"id"`
+	AgentID pgtype.UUID `json:"agent_id"`
+}
+
+func (q *Queries) GetAgentBuildByIntegrationToken(ctx context.Context, integrationTokenHash []byte) (GetAgentBuildByIntegrationTokenRow, error) {
+	row := q.db.QueryRow(ctx, getAgentBuildByIntegrationToken, integrationTokenHash)
+	var i GetAgentBuildByIntegrationTokenRow
+	err := row.Scan(&i.ID, &i.AgentID)
+	return i, err
+}
+
 const getLatestBuildForAgent = `-- name: GetLatestBuildForAgent :one
-SELECT id, agent_id, type, status, instructions, source_ref, image_ref, sol_log, docker_log, log_seq, error_message, started_at, finished_at, llm_calls, llm_tokens_in, llm_tokens_out, llm_tokens_cached, llm_cost_estimate, rollback_target_id, sdk_version, todos, exit_status, exit_message, failure_kind, build_model FROM agent_builds WHERE agent_id = $1 ORDER BY started_at DESC LIMIT 1
+SELECT id, agent_id, type, status, instructions, source_ref, image_ref, sol_log, docker_log, log_seq, error_message, started_at, finished_at, llm_calls, llm_tokens_in, llm_tokens_out, llm_tokens_cached, llm_cost_estimate, rollback_target_id, sdk_version, todos, exit_status, exit_message, failure_kind, build_model, integration_token_hash, integration_token_expires_at FROM agent_builds WHERE agent_id = $1 ORDER BY started_at DESC LIMIT 1
 `
 
 func (q *Queries) GetLatestBuildForAgent(ctx context.Context, agentID pgtype.UUID) (AgentBuild, error) {
@@ -147,6 +207,8 @@ func (q *Queries) GetLatestBuildForAgent(ctx context.Context, agentID pgtype.UUI
 		&i.ExitMessage,
 		&i.FailureKind,
 		&i.BuildModel,
+		&i.IntegrationTokenHash,
+		&i.IntegrationTokenExpiresAt,
 	)
 	return i, err
 }
@@ -231,6 +293,8 @@ const resetStuckAgentBuilds = `-- name: ResetStuckAgentBuilds :exec
 UPDATE agent_builds SET
     status = 'failed',
     error_message = 'interrupted by Airlock restart',
+    integration_token_hash = NULL,
+    integration_token_expires_at = NULL,
     finished_at = now()
 WHERE status = 'building'
 `
@@ -238,6 +302,28 @@ WHERE status = 'building'
 func (q *Queries) ResetStuckAgentBuilds(ctx context.Context) error {
 	_, err := q.db.Exec(ctx, resetStuckAgentBuilds)
 	return err
+}
+
+const setAgentBuildIntegrationToken = `-- name: SetAgentBuildIntegrationToken :execrows
+UPDATE agent_builds SET
+    integration_token_hash = $1,
+    integration_token_expires_at = $2
+WHERE id = $3
+  AND status = 'building'
+`
+
+type SetAgentBuildIntegrationTokenParams struct {
+	IntegrationTokenHash      []byte             `json:"integration_token_hash"`
+	IntegrationTokenExpiresAt pgtype.Timestamptz `json:"integration_token_expires_at"`
+	ID                        pgtype.UUID        `json:"id"`
+}
+
+func (q *Queries) SetAgentBuildIntegrationToken(ctx context.Context, arg SetAgentBuildIntegrationTokenParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setAgentBuildIntegrationToken, arg.IntegrationTokenHash, arg.IntegrationTokenExpiresAt, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const setAgentBuildModel = `-- name: SetAgentBuildModel :exec
@@ -267,6 +353,8 @@ UPDATE agent_builds SET
     exit_status = COALESCE($6, ''),
     exit_message = COALESCE($7, ''),
     failure_kind = COALESCE($8, ''),
+    integration_token_hash = NULL,
+    integration_token_expires_at = NULL,
     finished_at = now()
 WHERE id = $9
 `

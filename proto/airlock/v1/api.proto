@@ -1000,6 +1000,81 @@ message ListNeedsResponse {
   repeated NeedInfo needs = 1;
 }
 
+// --- Development integration access ---
+
+message IntegrationInfo {
+  string type = 1;
+  string slug = 2;
+  string description = 3;
+  bool configured = 4;
+}
+
+message ListIntegrationsResponse {
+  repeated IntegrationInfo integrations = 1;
+}
+
+message IntegrationHTTPHeader {
+  string name = 1;
+  repeated string values = 2;
+}
+
+message InvokeConnectionRequest {
+  string method = 1;
+  string path = 2;
+  bytes body = 3;
+  map<string, string> headers = 4;
+}
+
+message InvokeConnectionResponse {
+  int32 status_code = 1;
+  repeated IntegrationHTTPHeader headers = 2;
+  bytes body = 3;
+}
+
+message InvokeExecRequest {
+  string command = 1;
+  repeated string args = 2;
+  bytes stdin = 3;
+  int64 timeout_ms = 4;
+}
+
+message InvokeExecResponse {
+  bytes stdout = 1;
+  bytes stderr = 2;
+  int32 exit_code = 3;
+  int64 duration_ms = 4;
+}
+
+message IntegrationMCPTool {
+  string name = 1;
+  string description = 2;
+  bytes input_schema_json = 3;
+}
+
+message ListIntegrationMCPToolsResponse {
+  repeated IntegrationMCPTool tools = 1;
+  string instructions = 2;
+}
+
+message InvokeMCPToolRequest {
+  string tool = 1;
+  bytes arguments_json = 2;
+}
+
+message IntegrationMCPContent {
+  string type = 1;
+  string text = 2;
+  string uri = 3;
+  string name = 4;
+  string mime_type = 5;
+  string data = 6;
+}
+
+message InvokeMCPToolResponse {
+  repeated IntegrationMCPContent content = 1;
+  bool is_error = 2;
+}
+
 // CandidateInfo is an existing resource whose shape matches a need (bindable for reuse).
 message CandidateInfo {
   string resource_id = 1;
