@@ -10,6 +10,8 @@ github.com/Microsoft/go-winio v0.6.2 h1:F2VQgta7ecxGYO8k3ZZz3RS8fVIXVxONVUPlNERo
 github.com/Microsoft/go-winio v0.6.2/go.mod h1:yd8OoFMLzJbo9gZq8j5qaps8bJ9aShtEA8Ipt1oGCvU=
 github.com/airlockrun/agentsdk v0.4.0-rc.26 h1:aM8pqHjcP40iP3KCp9AmzV09/ETeP+LitcxKDvIHcpo=
 github.com/airlockrun/agentsdk v0.4.0-rc.26/go.mod h1:3z90yIzUDLqgdwBdwJN0eZqz92TsGyRyXUGAaDIpZaQ=
+github.com/airlockrun/agentsdk v0.4.0-rc.28 h1:GgFsNbCTE7CV5v1b8vHpRaXLxDCL+1yKEC0Y/BL2OoU=
+github.com/airlockrun/agentsdk v0.4.0-rc.28/go.mod h1:gM7lBvw1Aq05eQqhcp5+r6y2l8SyzaZP7iYvauu1p4M=
 github.com/airlockrun/goai v0.1.5-rc.9 h1:fgOZcNPpNO2LMb/rfbN0d/Ic8yDiLHxYqj6P/htUmj4=
 github.com/airlockrun/goai v0.1.5-rc.9/go.mod h1:bwFi12cS+TAyr8SjW7s48WMnsuKWx8PeNcxbIWJ4drM=
 github.com/airlockrun/sol v0.1.8-rc.9 h1:+q4mHnGjiwdpcNGPV5/et+tOoVdz4xss/XXWiuhGVXg=
