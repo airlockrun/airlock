@@ -243,6 +243,7 @@ type BuildInput struct {
 	BuildProviderID  pgtype.UUID // providers row FK; pairs with BuildModel
 	BuildModel       string      // bare model name; "" + invalid FK ⇄ inherit system default
 	Instructions     string      // optional: when non-empty, run Sol code generation after scaffold
+	Message          string      // optional build description persisted without invoking Sol
 
 	// SkipScaffold, when true, provisions the agent's DB schema but does NOT
 	// re-run the scaffold (CommitScaffold/MergeBranch/CleanWorktree) that
@@ -367,6 +368,7 @@ func (b *BuildService) Build(_ context.Context, input BuildInput) error {
 		Agent:           agent,
 		Kind:            BuildKindBuild,
 		Instruction:     input.Instructions,
+		Message:         input.Message,
 		SkipScaffold:    input.SkipScaffold,
 		Reason:          "manual",
 		RunID:           uuid.New().String(),

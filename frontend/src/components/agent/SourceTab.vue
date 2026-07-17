@@ -128,7 +128,9 @@ const airLoginCmd = computed(() => `go run ${versionedAirCommand.value} login ${
 const airCloneCmd = computed(() =>
   `go run ${versionedAirCommand.value} clone ${props.agentSlug} ./${props.agentSlug} --url ${airlockURL.value}`,
 )
-const airDeployCmd = computed(() => `cd ${props.agentSlug}\ngo tool air deploy`)
+const airDeployCmd = computed(() =>
+  `cd ${props.agentSlug}\ngo tool air deploy -m "Describe this deployment"`,
+)
 
 async function loadAgentSDKInfo() {
   const { data } = await api.get('/api/v1/agent-sdk')

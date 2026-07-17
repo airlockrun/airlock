@@ -27,6 +27,8 @@ const (
 //   - Instruction: empty = no Sol invocation (bare rebuild / pure
 //     rollback); non-empty = Sol runs with this as the user-turn prompt
 //     and the string is also persisted on agent_builds.instructions.
+//   - Message: optional operator-facing build description persisted on
+//     agent_builds.instructions without invoking Sol.
 //   - RollbackTargetID: rollback only — points the new agent_builds row
 //     at the build we're rolling back to (UI uses it for the label).
 //   - Diagnostics: upgrade auto_fix only — writes DIAGNOSTICS.md into
@@ -39,6 +41,7 @@ type BuildPlan struct {
 	PreserveBranch string
 
 	Instruction string
+	Message     string
 
 	// SkipScaffold (BuildKindBuild only) provisions the DB schema but skips the
 	// scaffold overwrite — used by clone, whose repo arrives already-complete.

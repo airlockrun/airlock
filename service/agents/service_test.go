@@ -12,7 +12,7 @@ func TestSourceCommitMessage(t *testing.T) {
 		want    string
 		wantErr bool
 	}{
-		{name: "default", want: "Upload source"},
+		{name: "missing", wantErr: true},
 		{name: "custom", raw: "  Add reminders  ", want: "Add reminders"},
 		{name: "blank", raw: " ", wantErr: true},
 		{name: "multiline", raw: "first\nsecond", wantErr: true},
