@@ -579,6 +579,27 @@ func (s *Service) UploadSource(ctx context.Context, p authz.Principal, agentID u
 	if currentState != "" && uploadedState == currentState {
 		return currentState, nil
 	}
+
+	initialBuild := agent.ImageRef == ""
+	upgradeLocked := false
+	if !initialBuild {
+		if err := s.builder.AcquireUpgradeLock(ctx, agentIDStr); err != nil {
+			if errors.Is(err, builder.ErrUpgradeInProgress) {
+				return "", service.Detail(service.ErrConflict, "agent upgrade is already in progress")
+			}
+			return "", fmt.Errorf("reserve source deploy build: %w", err)
+		}
+		upgradeLocked = true
+		defer func() {
+			if upgradeLocked {
+				if err := q.UpdateAgentUpgradeStatus(context.Background(), dbq.UpdateAgentUpgradeStatusParams{
+					ID: agent.ID, UpgradeStatus: agent.UpgradeStatus, ErrorMessage: agent.ErrorMessage,
+				}); err != nil {
+					s.logger.Error("release source deploy upgrade lock", zap.String("agent", agentIDStr), zap.Error(err))
+				}
+			}
+		}()
+	}
 	if err := builder.InitAgentRepo(s.builder.ReposPath(), agentIDStr); err != nil {
 		return "", fmt.Errorf("init agent repo: %w", err)
 	}
@@ -596,32 +617,40 @@ func (s *Service) UploadSource(ctx context.Context, p authz.Principal, agentID u
 		return "", fmt.Errorf("committed source state %s, want %s", newState, uploadedState)
 	}
 
-	go func() {
-		if err := s.builder.Build(context.Background(), builder.BuildInput{
-			AgentID:          agentIDStr,
-			Name:             agent.Name,
-			Slug:             agent.Slug,
-			OwnerPrincipalID: uuid.UUID(agent.OwnerPrincipalID.Bytes).String(),
-			InitiatorUserID:  pgUserID(p),
-			BuildProviderID:  agent.BuildProviderID,
-			BuildModel:       agent.BuildModel,
-			SkipScaffold:     true,
-		}); err != nil {
-			s.logger.Error("source upload build", zap.String("agent", agentIDStr), zap.Error(err))
-		}
-	}()
+	if initialBuild {
+		go func() {
+			if err := s.builder.Build(context.Background(), builder.BuildInput{
+				AgentID:          agentIDStr,
+				Name:             agent.Name,
+				Slug:             agent.Slug,
+				OwnerPrincipalID: uuid.UUID(agent.OwnerPrincipalID.Bytes).String(),
+				InitiatorUserID:  pgUserID(p),
+				BuildProviderID:  agent.BuildProviderID,
+				BuildModel:       agent.BuildModel,
+				SkipScaffold:     true,
+				Message:          commitMessage,
+			}); err != nil {
+				s.logger.Error("source upload build", zap.String("agent", agentIDStr), zap.Error(err))
+			}
+		}()
+	} else {
+		go s.builder.RunUpgrade(context.Background(), builder.UpgradeInput{
+			AgentID:         agentIDStr,
+			InitiatorUserID: pgUserID(p),
+			Reason:          "source_deploy",
+			Message:         commitMessage,
+		})
+		upgradeLocked = false
+	}
 	return newState, nil
 }
 
 const maxSourceCommitMessageBytes = 200
 
 func sourceCommitMessage(raw string) (string, error) {
-	if raw == "" {
-		return "Upload source", nil
-	}
 	message := strings.TrimSpace(raw)
 	if message == "" {
-		return "", errors.New("source commit message must not be blank")
+		return "", errors.New("source commit message is required")
 	}
 	if strings.ContainsAny(message, "\r\n") {
 		return "", errors.New("source commit message must be a single line")

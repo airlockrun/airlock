@@ -185,10 +185,14 @@ func (b *BuildService) Execute(ctx context.Context, plan BuildPlan) (string, err
 	}
 
 	// ── Phase A4: agent_builds row ─────────────────────────────────────
+	buildInstructions := plan.Instruction
+	if plan.Message != "" {
+		buildInstructions = plan.Message
+	}
 	build, err := q.CreateAgentBuild(ctx, dbq.CreateAgentBuildParams{
 		AgentID:          agent.ID,
 		Type:             string(plan.Kind),
-		Instructions:     plan.Instruction,
+		Instructions:     buildInstructions,
 		RollbackTargetID: plan.RollbackTargetID,
 	})
 	if err != nil {

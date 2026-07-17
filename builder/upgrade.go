@@ -58,8 +58,9 @@ type UpgradeInput struct {
 	AgentID              string
 	InitiatorUserID      pgtype.UUID // user who triggered the upgrade; attributes codegen spend (falls back to owner)
 	RunID                string      // the run that triggered the upgrade
-	Reason               string      // "llm_request", "auto_fix", "manual"
+	Reason               string      // "llm_request", "auto_fix", "manual", "source_deploy"
 	Description          string      // what to change
+	Message              string      // build description persisted without invoking codegen
 	ConversationID       string      // conversation that triggered the upgrade (for post-upgrade reply)
 	SystemConversationID string      // system-agent conversation that triggered the upgrade (mutually exclusive with ConversationID)
 	ErrorMessage         string      // from failed run (auto_fix)
@@ -192,6 +193,7 @@ func (b *BuildService) RunUpgrade(_ context.Context, input UpgradeInput) {
 		Agent:           agent,
 		Kind:            BuildKindUpgrade,
 		Instruction:     strings.TrimSpace(input.Description),
+		Message:         strings.TrimSpace(input.Message),
 		Reason:          input.Reason,
 		RunID:           input.RunID,
 		ConversationID:  input.ConversationID,
@@ -221,7 +223,7 @@ func (b *BuildService) RunUpgrade(_ context.Context, input UpgradeInput) {
 			errMsg = "cancelled by user"
 			b.logger.Info("upgrade cancelled", zap.String("agent_id", input.AgentID))
 		} else {
-			b.logger.Error("upgrade failed", zap.String("agent_id", input.AgentID))
+			b.logger.Error("upgrade failed", zap.String("agent_id", input.AgentID), zap.Error(runErr))
 		}
 		_ = q.UpdateAgentUpgradeStatus(dbCtx, dbq.UpdateAgentUpgradeStatusParams{
 			ID:            agentPgUUID,

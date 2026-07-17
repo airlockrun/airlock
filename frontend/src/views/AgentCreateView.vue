@@ -273,9 +273,9 @@ const localCreateCommands = computed(() => [
   '# Run the complete local build and fix every failure before deploying.',
   '',
   'go tool air build',
-  `go tool air deploy --create --name ${JSON.stringify(name.value || localDir.value)}`,
+  `go tool air deploy --create --name ${JSON.stringify(name.value || localDir.value)} -m "Initial implementation"`,
 ].join('\n'))
-const localDeployCommand = computed(() => 'go tool air deploy')
+const localDeployCommand = computed(() => 'go tool air deploy -m "Describe this deployment"')
 
 async function copyToClipboard(text: string, label: string) {
   try {
