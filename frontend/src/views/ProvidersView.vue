@@ -20,7 +20,7 @@ const capabilityMeta: Record<Capability, { label: string; icon: string; descript
   speech:        { label: 'Speech',        icon: 'pi pi-volume-up',   description: 'Text-to-speech (text in → audio out).' },
   image_gen:     { label: 'Image gen',     icon: 'pi pi-palette',     description: 'Text-to-image generation.' },
   embedding:     { label: 'Embedding',     icon: 'pi pi-database',    description: 'Text → vector embeddings.' },
-  search:        { label: 'Web search',    icon: 'pi pi-search',      description: 'Live web search for agents.' },
+  search:        { label: 'Web search',    icon: 'pi pi-search',      description: 'Live web search for apps.' },
 }
 
 const dialogVisible = ref(false)

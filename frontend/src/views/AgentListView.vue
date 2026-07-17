@@ -26,8 +26,8 @@ function goToAgent(id: string) {
 <template>
   <div>
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem">
-      <h1 style="margin: 0; font-size: 1.5rem">Agents</h1>
-      <Button label="Create Agent" icon="pi pi-plus" @click="router.push('/agents/create')" />
+      <h1 style="margin: 0; font-size: 1.5rem">Apps</h1>
+      <Button label="Create App" icon="pi pi-plus" @click="router.push('/agents/create')" />
     </div>
 
     <!-- Loading skeletons -->
@@ -45,8 +45,8 @@ function goToAgent(id: string) {
     <Card v-else-if="store.agents.length === 0" style="text-align: center; padding: 2rem">
       <template #content>
         <i class="pi pi-box" style="font-size: 3rem; color: var(--p-surface-400); margin-bottom: 1rem" />
-        <p style="color: var(--p-text-muted-color)">No agents yet. Create your first agent to get started.</p>
-        <Button label="Create Agent" icon="pi pi-plus" @click="router.push('/agents/create')" style="margin-top: 1rem" />
+        <p style="color: var(--p-text-muted-color)">No apps yet. Create your first app to get started.</p>
+        <Button label="Create App" icon="pi pi-plus" @click="router.push('/agents/create')" style="margin-top: 1rem" />
       </template>
     </Card>
 
@@ -59,14 +59,14 @@ function goToAgent(id: string) {
         <template #title>
           <div style="display: flex; align-items: center; gap: 0.5rem; font-size: 1.1rem">
             <span style="font-size: 1.3rem; line-height: 1">⚙️</span>
-            System Agent
+            Airlock Assistant
           </div>
         </template>
         <template #subtitle>operator</template>
         <template #content>
           <Tag value="Operator" severity="info" style="margin-bottom: 0.5rem" />
           <p style="font-size: 0.875rem; color: var(--p-text-muted-color); margin-top: 0.5rem">
-            Manage agents, bridges, connections, members and runs through chat - with your own permissions.
+            Manage apps, bridges, connections, members and runs through chat - with your own permissions.
           </p>
         </template>
       </Card>
@@ -119,7 +119,7 @@ function goToAgent(id: string) {
         style="color: var(--p-text-muted-color); font-size: 0.875rem; text-decoration: none; display: inline-flex; align-items: center; gap: 0.4rem"
       >
         <i class="pi pi-th-large" style="font-size: 0.8rem" />
-        Manage all agents in this workspace
+        Manage all apps in this workspace
         <i class="pi pi-arrow-right" style="font-size: 0.7rem" />
       </router-link>
     </div>

@@ -440,7 +440,7 @@ function formatTokens(n: number): string {
           <i class="pi pi-comments" />
           <p class="chat-empty-title">
             {{ isNewConversation ? 'New conversation' : 'Conversation' }}
-            with <strong>{{ agentName || 'this agent' }}</strong>
+            with <strong>{{ agentName || 'this app' }}</strong>
           </p>
           <p class="chat-empty-sub">
             Send a message to begin - it's saved as a new conversation once you do.
@@ -706,7 +706,7 @@ function formatTokens(n: number): string {
 
       <!-- Stopped-agent banner: chatting is blocked until an admin starts it -->
       <div v-if="agentStopped" class="composer-stopped">
-        <span style="font-size: 0.875rem">This agent is stopped. Start it to chat.</span>
+        <span style="font-size: 0.875rem">This app is stopped. Start it to chat.</span>
         <Button
           label="Start"
           icon="pi pi-play"
@@ -732,7 +732,7 @@ function formatTokens(n: number): string {
         <Textarea
           ref="messageInputRef"
           v-model="messageInput"
-          :placeholder="agentStopped ? 'Agent is stopped' : 'Type a message...'"
+          :placeholder="agentStopped ? 'App is stopped' : 'Type a message...'"
           :auto-resize="true"
           rows="1"
           :disabled="agentStopped"

@@ -165,7 +165,7 @@ onMounted(async () => {
 <template>
   <div>
     <div v-if="!loading && endpoints.length === 0" style="text-align: center; padding: 2rem; color: var(--p-text-muted-color)">
-      No exec endpoints registered. Add a <code>RegisterExecEndpoint</code> call to your agent's <code>main()</code> to declare one.
+      No exec endpoints registered. Add a <code>RegisterExecEndpoint</code> call to your app's <code>main()</code> to declare one.
     </div>
 
     <div v-for="ep in endpoints" :key="ep.slug" class="exec-endpoint-card">

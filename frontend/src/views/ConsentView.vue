@@ -101,7 +101,7 @@ onMounted(fetchContext)
         <div v-if="!error">
           <p>
             <strong>{{ clientInfo?.name || clientId }}</strong>
-            is requesting access to your agent
+            is requesting access to your app
             <strong>{{ agentInfo?.name || agentIdentifier }}</strong>
             <span v-if="agentInfo?.slug && agentInfo.slug !== agentInfo.name">
               (<code>{{ agentInfo.slug }}</code>)
@@ -110,8 +110,8 @@ onMounted(fetchContext)
 
           <p style="margin-top: 1rem">It will be able to:</p>
           <ul>
-            <li>Send prompts and call the tools this agent exposes (scope <code>{{ scope }}</code>).</li>
-            <li>Read your conversations with this agent.</li>
+            <li>Send prompts and call the tools this app exposes (scope <code>{{ scope }}</code>).</li>
+            <li>Read your conversations with this app.</li>
           </ul>
 
           <Message severity="info" :closable="false" style="margin-top: 1rem">

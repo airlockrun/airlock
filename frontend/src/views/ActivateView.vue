@@ -384,7 +384,7 @@ interface DefaultRow {
 }
 
 const defaultRows = computed<DefaultRow[]>(() => [
-  { key: 'defaultBuildModel',     label: 'Build Model',      icon: 'pi pi-hammer',     help: 'Used by Sol to generate agent code.', options: groupModels(isLanguage),                                            grouped: true },
+  { key: 'defaultBuildModel',     label: 'Build Model',      icon: 'pi pi-hammer',     help: 'Used by Sol to generate app code.', options: groupModels(isLanguage),                                            grouped: true },
   { key: 'defaultExecModel',      label: 'Execution (Text)', icon: 'pi pi-align-left', help: 'Runtime default for LLM calls.',      options: groupModels(isLanguage),                                            grouped: true },
   { key: 'defaultVisionModel',    label: 'Vision',           icon: 'pi pi-image',      help: 'Image → text.',                       options: groupModels((m: CatalogModel) => isLanguage(m) && hasCap(m, 'vision')), grouped: true },
   { key: 'defaultSttModel',       label: 'STT',              icon: 'pi pi-microphone', help: 'Speech-to-text.',                     options: groupModels(isTranscription),                                       grouped: true },
@@ -696,7 +696,7 @@ function finishActivation() {
             <div style="display: flex; flex-direction: column; gap: 1.25rem; padding-top: 1rem">
               <Message v-if="error" severity="error" :closable="false">{{ error }}</Message>
               <p style="color: var(--p-text-muted-color); margin: 0">
-                Pick a default model for each capability. Agents inherit these unless they override. You can change them anytime under Settings.
+                Pick a default model for each capability. Apps inherit these unless they override. You can change them anytime under Settings.
               </p>
 
               <div
@@ -761,7 +761,7 @@ function finishActivation() {
                 <div style="display: flex; flex-direction: column; gap: 0.35rem">
                   <h3 style="margin: 0">Add a Telegram manager bot</h3>
                   <p style="color: var(--p-text-muted-color); margin: 0">
-                    The manager bot lets Airlock create new Telegram bots for agents through Telegram's managed-bots flow. It must be a Telegram bot with bot-management permission enabled.
+                    The manager bot lets Airlock create new Telegram bots for apps through Telegram's managed-bots flow. It must be a Telegram bot with bot-management permission enabled.
                   </p>
                 </div>
               </div>
@@ -787,7 +787,7 @@ function finishActivation() {
                   <label for="manager-bot-token">Telegram bot token</label>
                 </FloatLabel>
                 <small style="color: var(--p-text-muted-color)">
-                  The bot is saved as an unbound manager bridge. Agent bots can be created later from Bridges without pasting tokens manually.
+                  The bot is saved as an unbound manager bridge. App bots can be created later from Bridges without pasting tokens manually.
                 </small>
                 <div style="display: flex; justify-content: flex-end">
                   <Button label="Add manager bot" icon="pi pi-plus" :loading="loading" :disabled="!managerBotToken" @click="addManagerBot" />

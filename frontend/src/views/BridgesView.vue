@@ -152,7 +152,7 @@ async function onEdit() {
   const isManagerEdit = editType.value === 'telegram' && auth.can('tenant.manager_bot.config') && editIsManager.value
   // A manager or system bridge isn't agent-bound; otherwise an agent is required.
   if (!editIsSystem.value && !isManagerEdit && !editAgentID.value) {
-    toast.add({ severity: 'error', summary: 'Pick an agent, or enable System / Manager bridge', life: 4000 })
+    toast.add({ severity: 'error', summary: 'Pick an app, or enable System / Manager bridge', life: 4000 })
     return
   }
   try {
@@ -203,7 +203,7 @@ function confirmDelete(bridge: { id: string; name: string }) {
       <Column header="Name"><template #body><Skeleton width="60%" /></template></Column>
       <Column header="Bot Username"><template #body><Skeleton width="40%" /></template></Column>
       <Column header="Role"><template #body><Skeleton width="4rem" /></template></Column>
-      <Column header="Agent"><template #body><Skeleton width="40%" /></template></Column>
+      <Column header="App"><template #body><Skeleton width="40%" /></template></Column>
       <Column header="Owner"><template #body><Skeleton width="40%" /></template></Column>
       <Column header="Status"><template #body><Skeleton width="4rem" /></template></Column>
       <Column header="Actions"><template #body><Skeleton width="3rem" /></template></Column>
@@ -226,12 +226,12 @@ function confirmDelete(bridge: { id: string; name: string }) {
             :severity="data.managerError ? 'warn' : 'success'"
             v-tooltip.top="data.managerError || 'Creates new bots via the deep-link flow'"
           />
-          <span v-else style="color: var(--p-text-muted-color)">Agent bot</span>
+          <span v-else style="color: var(--p-text-muted-color)">App bot</span>
         </template>
       </Column>
-      <Column header="Agent">
+      <Column header="App">
         <template #body="{ data }">
-          <span v-if="data.isSystem" style="font-style: italic">System agent</span>
+          <span v-if="data.isSystem" style="font-style: italic">Airlock Assistant</span>
           <template v-else>
             {{ agentsStore.agents.find(a => a.id === data.agentId)?.name || data.agentId || '-' }}
           </template>
@@ -335,7 +335,7 @@ function confirmDelete(bridge: { id: string; name: string }) {
           <div>
             <div style="font-weight: 600">System bridge</div>
             <small style="color: var(--p-text-muted-color)">
-              Routes inbound DMs to the airlock system agent instead of an agent. Admin-only.
+              Routes inbound DMs to the Airlock Assistant instead of an app. Admin-only.
             </small>
           </div>
           <ToggleSwitch v-model="createIsSystem" />
@@ -344,14 +344,14 @@ function confirmDelete(bridge: { id: string; name: string }) {
              other bots): hide the agent picker when manager is on. Keep this
              near the top so mobile keyboards don't obscure it. -->
         <div v-if="!createIsSystem && !form.isManager" style="display: flex; flex-direction: column; gap: 0.25rem">
-          <label for="bridgeAgentId">Agent</label>
+          <label for="bridgeAgentId">App</label>
           <Select
             id="bridgeAgentId"
             v-model="form.agentId"
             :options="agentOptions"
             optionLabel="name"
             optionValue="id"
-            placeholder="Select an agent"
+            placeholder="Select an app"
             style="width: 100%"
           >
             <template #option="{ option }">
@@ -409,7 +409,7 @@ function confirmDelete(bridge: { id: string; name: string }) {
           <div>
             <div style="font-weight: 600">System bridge</div>
             <small style="color: var(--p-text-muted-color)">
-              Routes inbound DMs to the airlock system agent instead of an agent. Admin-only.
+              Routes inbound DMs to the Airlock Assistant instead of an app. Admin-only.
             </small>
           </div>
           <ToggleSwitch v-model="editIsSystem" />
@@ -433,14 +433,14 @@ function confirmDelete(bridge: { id: string; name: string }) {
         <template v-if="!editIsSystem && !editIsManager">
         <!-- Agent binding -->
         <div style="display: flex; flex-direction: column; gap: 0.25rem">
-          <label for="editAgent">Agent</label>
+          <label for="editAgent">App</label>
           <Select
             id="editAgent"
             v-model="editAgentID"
             :options="agentOptions"
             optionLabel="name"
             optionValue="id"
-            placeholder="Select an agent"
+            placeholder="Select an app"
             filter
             :filterFields="['name', 'slug', 'ownerName']"
             autoFilterFocus

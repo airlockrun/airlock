@@ -185,10 +185,10 @@ function msgClassForSource(source: string): string {
       >
         <i class="pi pi-cog" />
         <p class="chat-empty-title">
-          {{ isNew ? 'New conversation' : 'Conversation' }} with <strong>System Agent</strong>
+          {{ isNew ? 'New conversation' : 'Conversation' }} with <strong>the Airlock Assistant</strong>
         </p>
         <p class="chat-empty-sub">
-          Ask me anything - list your agents, trigger an upgrade, manage bridges, inspect runs. It's saved as a new conversation once you send.
+          Ask me anything - list your apps, trigger an upgrade, manage bridges, inspect runs. It's saved as a new conversation once you send.
         </p>
       </div>
 

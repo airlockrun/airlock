@@ -82,7 +82,7 @@ async function saveRename() {
     const updated = await agentsStore.renameAgent(agent.value.id, name, slug)
     agent.value = updated
     renameOpen.value = false
-    toast.add({ severity: 'success', summary: 'Agent renamed', life: 2500 })
+    toast.add({ severity: 'success', summary: 'App renamed', life: 2500 })
     // Repaint the address bar to the new slug (same cosmetic mechanism
     // as the router's vanity-URL afterEach; route.params.id stays UUID).
     const parts = window.location.pathname.split('/')
@@ -139,7 +139,7 @@ async function saveClone() {
   try {
     const clone = await agentsStore.cloneAgent(agent.value.id, name, slug)
     cloneOpen.value = false
-    toast.add({ severity: 'success', summary: 'Agent cloned', detail: 'Building your copy…', life: 3000 })
+    toast.add({ severity: 'success', summary: 'App cloned', detail: 'Building your copy…', life: 3000 })
     router.push(`/agents/${clone.slug}`)
   } catch (e: any) {
     const status = e?.response?.status
@@ -536,7 +536,7 @@ onMounted(async () => {
     )
     webUrl.value = base && hasHome ? base + '/' : null
   } catch {
-    toast.add({ severity: 'error', summary: 'Agent not found', life: 3000 })
+    toast.add({ severity: 'error', summary: 'App not found', life: 3000 })
     router.push('/agents')
     return
   } finally {
@@ -612,7 +612,7 @@ onMounted(async () => {
       toast.add({
         severity: 'warn',
         summary: 'Request declined',
-        detail: payload.error || "Outside the agent builder's scope",
+        detail: payload.error || "Outside the app builder's scope",
         life: 8000,
       })
       tabsKey.value++
@@ -630,7 +630,7 @@ onMounted(async () => {
     toast.add({
       severity: 'success',
       summary: 'Synced',
-      detail: `${agent.value?.slug ?? 'Agent'} synced`,
+      detail: `${agent.value?.slug ?? 'App'} synced`,
       life: 2500,
     })
   })
@@ -662,7 +662,7 @@ watch(() => route.hash, () => scheduleHashScroll(true))
 function confirmStop() {
   confirm.require({
     message:
-      `Stop agent "${agent.value?.name}"? It will not auto-resume on the ` +
+      `Stop app "${agent.value?.name}"? It will not auto-resume on the ` +
       'next trigger - you\'ll have to click Start to bring it back.',
     header: 'Confirm Stop',
     icon: 'pi pi-exclamation-triangle',
@@ -674,7 +674,7 @@ function confirmStop() {
           agent.value.status = 'stopped'
           agent.value.running = false
         }
-        toast.add({ severity: 'success', summary: 'Agent stopped', life: 3000 })
+        toast.add({ severity: 'success', summary: 'App stopped', life: 3000 })
       } catch (err: any) {
         toast.add({ severity: 'error', summary: err.response?.data?.error || 'Stop failed', life: 5000 })
       }
@@ -688,7 +688,7 @@ async function doSuspend() {
     if (agent.value) agent.value.running = false
     toast.add({
       severity: 'info',
-      summary: 'Agent suspended',
+      summary: 'App suspended',
       detail: 'Auto-resumes on the next trigger.',
       life: 3000,
     })
@@ -701,7 +701,7 @@ async function doStart() {
   try {
     await api.post(`/api/v1/agents/${agentId}/start`, {})
     if (agent.value) agent.value.status = 'active'
-    toast.add({ severity: 'success', summary: 'Agent started', life: 3000 })
+    toast.add({ severity: 'success', summary: 'App started', life: 3000 })
   } catch (err: any) {
     toast.add({ severity: 'error', summary: err.response?.data?.error || 'Start failed', life: 5000 })
   }
@@ -709,14 +709,14 @@ async function doStart() {
 
 function confirmDelete() {
   confirm.require({
-    message: `Delete agent "${agent.value?.name}"? This cannot be undone.`,
+    message: `Delete app "${agent.value?.name}"? This cannot be undone.`,
     header: 'Confirm Delete',
     icon: 'pi pi-exclamation-triangle',
     acceptClass: 'p-button-danger',
     accept: async () => {
       try {
         await api.delete(`/api/v1/agents/${agentId}`)
-        toast.add({ severity: 'success', summary: 'Agent deleted', life: 3000 })
+        toast.add({ severity: 'success', summary: 'App deleted', life: 3000 })
         router.push('/agents')
       } catch (err: any) {
         toast.add({ severity: 'error', summary: err.response?.data?.error || 'Delete failed', life: 5000 })
@@ -792,7 +792,7 @@ function openWeb() {
             rounded
             size="small"
             severity="secondary"
-            aria-label="Rename agent"
+            aria-label="Rename app"
             v-tooltip.bottom="'Rename'"
             @click="openRename"
           />
@@ -916,7 +916,7 @@ function openWeb() {
     </div>
 
     <!-- Upgrade dialog -->
-    <Dialog v-model:visible="showUpgradeDialog" :header="rebuildMode ? 'Rebuild Agent' : 'Upgrade Agent'" modal style="width: 30rem">
+    <Dialog v-model:visible="showUpgradeDialog" :header="rebuildMode ? 'Rebuild App' : 'Upgrade App'" modal style="width: 30rem">
       <p style="margin-top: 0">Describe what to change or fix:</p>
       <Textarea v-model="upgradeDescription" rows="4" style="width: 100%" placeholder="e.g. Add a /history page that shows past voting rounds" autofocus />
       <small style="display: block; margin-top: 0.5rem; color: var(--p-text-muted-color)">
@@ -928,7 +928,7 @@ function openWeb() {
       </template>
     </Dialog>
 
-    <Dialog v-model:visible="renameOpen" header="Rename agent" modal style="width: 28rem">
+    <Dialog v-model:visible="renameOpen" header="Rename app" modal style="width: 28rem">
       <div style="display: flex; flex-direction: column; gap: 1rem; margin-top: 0.25rem">
         <div>
           <label style="display: block; margin-bottom: 0.35rem; font-size: 0.85rem">Name</label>
@@ -953,10 +953,10 @@ function openWeb() {
       </template>
     </Dialog>
 
-    <Dialog v-model:visible="cloneOpen" header="Clone agent" modal style="width: 28rem">
+    <Dialog v-model:visible="cloneOpen" header="Clone app" modal style="width: 28rem">
       <div style="display: flex; flex-direction: column; gap: 1rem; margin-top: 0.25rem">
         <Message severity="info" :closable="false">
-          Copies this agent's code and settings into a new agent you own. Its data,
+          Copies this app's code and settings into a new app you own. Its data,
           secrets, connections and bridges are <strong>not</strong> copied - the clone
           starts clean and builds fresh.
         </Message>

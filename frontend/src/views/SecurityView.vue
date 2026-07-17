@@ -385,7 +385,7 @@ function formatDateTime(ts: any): string {
     <Card>
       <template #title>Authorized apps</template>
       <template #subtitle>
-        External MCP clients (Claude Desktop, VSCode, Codex, …) that you've authorized to talk to your agents.
+        External MCP clients (Claude Desktop, VSCode, Codex, …) that you've authorized to talk to your apps.
         Revoking immediately stops future requests; tokens already issued may keep working for up to 15 minutes
         until their access token naturally expires.
       </template>
@@ -396,7 +396,7 @@ function formatDateTime(ts: any): string {
         </div>
         <DataTable v-else :value="grants" stripedRows size="small">
           <Column field="clientName" header="App" />
-          <Column header="Agent">
+          <Column header="App">
             <template #body="{ data }">
               <RouterLink :to="`/agents/${data.agentId}`">{{ data.agentName }}</RouterLink>
               <span style="color: var(--p-text-muted-color); margin-left: 0.5rem">

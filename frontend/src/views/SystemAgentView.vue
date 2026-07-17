@@ -103,12 +103,12 @@ onMounted(load)
       <div>
         <div style="display: flex; align-items: center; gap: 0.75rem">
           <h1 style="margin: 0; font-size: 1.875rem; font-weight: 700; line-height: 1.2">
-            <span style="margin-right: 0.4rem">⚙️</span>System Agent
+            <span style="margin-right: 0.4rem">⚙️</span>Airlock Assistant
           </h1>
           <Tag value="Operator" severity="info" />
         </div>
         <p style="margin: 0.25rem 0 0; color: var(--p-text-muted-color); font-size: 0.9rem">
-          In-airlock chat for managing agents, bridges, connections, members, and runs through your own permissions.
+          In-Airlock chat for managing apps, bridges, connections, members, and runs through your own permissions.
         </p>
       </div>
       <div style="display: flex; gap: 0.5rem">

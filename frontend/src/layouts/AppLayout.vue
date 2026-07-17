@@ -34,7 +34,7 @@ watch(
     toast.add({
       severity: 'warn',
       summary: 'Link out of date',
-      detail: `No agent “${slug}” - it may have been renamed. Pick it from the list.`,
+      detail: `No app “${slug}” - it may have been renamed. Pick it from the list.`,
       life: 6000,
     })
     const q = { ...route.query }
@@ -69,7 +69,7 @@ const settingsSections = computed(() => {
     items.push({ label: 'Users', icon: 'pi pi-users', route: '/users' })
   }
   if (auth.can('tenant.agent.list_all')) {
-    items.push({ label: 'Manage agents', icon: 'pi pi-th-large', route: '/settings/agents' })
+    items.push({ label: 'Manage apps', icon: 'pi pi-th-large', route: '/settings/agents' })
   }
   return items
 })
@@ -151,13 +151,13 @@ const agentLastUsedSec = computed(() => {
 const agentMenuItems = computed(() => {
   const items: any[] = [
     {
-      label: 'System Agent',
+      label: 'Airlock Assistant',
       icon: 'pi pi-cog',
       command: startSystemChat,
     },
   ]
   if (agentsStore.agents.length === 0) {
-    items.push({ label: 'No agents yet', disabled: true })
+    items.push({ label: 'No apps yet', disabled: true })
     return items
   }
   const ranked = [...agentsStore.agents].sort(
@@ -175,7 +175,7 @@ const agentMenuItems = computed(() => {
   }
   // Shortcut to the full agents page (and any agents past what's handy to
   // scroll here).
-  items.push({ label: 'All agents', icon: 'pi pi-th-large', command: () => navigateTo('/agents') })
+  items.push({ label: 'All apps', icon: 'pi pi-th-large', command: () => navigateTo('/agents') })
   return items
 })
 function openNewMenu(event: Event) {
@@ -213,7 +213,7 @@ const agentNameById = computed(() => {
   return m
 })
 function agentName(agentId: string): string {
-  return agentNameById.value.get(agentId) || 'Agent'
+  return agentNameById.value.get(agentId) || 'App'
 }
 const agentEmojiById = computed(() => {
   const m = new Map<string, string>()
@@ -356,7 +356,7 @@ const headerTitle = computed<string>(() => {
   }
   if (/^\/system\/chat(?:\/[^/]+)?$/.test(route.path)) {
     const title = activeTitle()
-    return title ? `System: ${title}` : 'System'
+    return title ? `Airlock Assistant: ${title}` : 'Airlock Assistant'
   }
   return inSettings.value ? 'Settings' : 'Airlock'
 })
@@ -456,7 +456,7 @@ onMounted(() => {
                       <span v-if="agentEmoji(item.agentId!)">{{ agentEmoji(item.agentId!) }} </span>{{ agentName(item.agentId!) }}
                     </template>
                     <template v-else>
-                      <span>⚙️ System Agent</span>
+                      <span>⚙️ Airlock Assistant</span>
                       <i v-if="item.status === 'awaiting_confirmation'" class="pi pi-exclamation-circle" style="color: var(--p-yellow-500); margin-left: 0.25rem" />
                     </template>
                   </span>
@@ -482,7 +482,7 @@ onMounted(() => {
               @click.prevent="navigateTo('/agents')"
             >
               <span class="pi pi-box" />
-              <span>Cyborg Agents</span>
+              <span>Cyborg Apps</span>
             </a>
             <a class="sidebar-item" @click="toggleUserMenu">
               <span class="pi pi-user" />
@@ -536,7 +536,7 @@ onMounted(() => {
                       <span v-if="agentEmoji(item.agentId!)">{{ agentEmoji(item.agentId!) }} </span>{{ agentName(item.agentId!) }}
                     </template>
                     <template v-else>
-                      <span>⚙️ System Agent</span>
+                      <span>⚙️ Airlock Assistant</span>
                       <i v-if="item.status === 'awaiting_confirmation'" class="pi pi-exclamation-circle" style="color: var(--p-yellow-500); margin-left: 0.25rem" />
                     </template>
                   </span>
@@ -558,7 +558,7 @@ onMounted(() => {
               @click.prevent="navigateTo('/agents')"
             >
               <span class="pi pi-box" />
-              <span>Cyborg Agents</span>
+              <span>Cyborg Apps</span>
             </a>
             <a class="sidebar-item" @click="toggleUserMenu">
               <span class="pi pi-user" />

@@ -212,7 +212,7 @@ onMounted(async () => {
     <Message v-if="run.errorMessage" severity="error" :closable="false" style="margin-bottom: 1rem">
       <div>{{ run.errorMessage }}</div>
       <div v-if="isPlatformError" style="font-size: 0.8rem; margin-top: 0.5rem; opacity: 0.85">
-        Platform error - provider, network, or auth failure upstream of the agent. Retrying may help; fixing the agent code won't.
+        Platform error - provider, network, or auth failure upstream of the app. Retrying may help; fixing the app code won't.
       </div>
       <pre v-if="run.panicTrace" style="white-space: pre-wrap; font-size: 0.8rem; margin-top: 0.5rem">{{ run.panicTrace }}</pre>
     </Message>
@@ -239,10 +239,10 @@ onMounted(async () => {
       <Button label="Fix this error" icon="pi pi-wrench" severity="warn" @click="fixDialogVisible = true" />
     </div>
 
-    <Dialog v-model:visible="fixDialogVisible" header="Fix Agent Error" modal style="width: 32rem">
+    <Dialog v-model:visible="fixDialogVisible" header="Fix App Error" modal style="width: 32rem">
       <div style="display: flex; flex-direction: column; gap: 1rem; padding-top: 0.5rem">
         <p style="font-size: 0.85rem; color: var(--p-text-muted-color); margin: 0">
-          The full run context (messages, actions, errors) will be passed to the build agent.
+          The full run context (messages, actions, errors) will be passed to the app builder.
         </p>
         <Textarea
           v-model="fixInstructions"
