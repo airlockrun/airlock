@@ -90,9 +90,10 @@ func TestSubdomainProxyForwardsAuthoritativeCallerHeaders(t *testing.T) {
 	}
 
 	for path, access := range map[string]string{
-		"/public": "public",
-		"/user":   "user",
-		"/admin":  "admin",
+		"/public":        "public",
+		"/static/{name}": "public",
+		"/user":          "user",
+		"/admin":         "admin",
 	} {
 		if err := q.UpsertRoute(ctx, dbq.UpsertRouteParams{
 			AgentID: agent.ID, Path: path, Method: http.MethodGet, Access: access, Description: "test route",
@@ -161,6 +162,32 @@ func TestSubdomainProxyForwardsAuthoritativeCallerHeaders(t *testing.T) {
 	}
 	ownerToken := issueToken(t, owner)
 	memberToken := issueToken(t, member)
+	issueSubdomainToken := func(t *testing.T, user dbq.User, accessToken string) string {
+		t.Helper()
+		claims, err := auth.ValidateUserAccessToken(testJWTSecret, accessToken)
+		if err != nil {
+			t.Fatalf("ValidateUserAccessToken: %v", err)
+		}
+		token, err := auth.IssueSubdomainToken(
+			testJWTSecret, agentID, pgUUID(user.ID), uuid.MustParse(claims.SessionID),
+			user.Email, user.DisplayName, user.TenantRole, user.AuthEpoch,
+		)
+		if err != nil {
+			t.Fatalf("IssueSubdomainToken: %v", err)
+		}
+		return token
+	}
+	ownerSubdomainToken := issueSubdomainToken(t, owner, ownerToken)
+	memberSubdomainToken := issueSubdomainToken(t, member, memberToken)
+	unrelated, err := q.CreateUser(ctx, dbq.CreateUserParams{
+		Email:       "proxy-unrelated@example.com",
+		DisplayName: "Proxy Unrelated",
+		TenantRole:  "admin",
+	})
+	if err != nil {
+		t.Fatalf("CreateUser(unrelated): %v", err)
+	}
+	unrelatedSubdomainToken := issueSubdomainToken(t, unrelated, issueToken(t, unrelated))
 
 	tests := []struct {
 		name     string
@@ -172,6 +199,7 @@ func TestSubdomainProxyForwardsAuthoritativeCallerHeaders(t *testing.T) {
 		userName string
 	}{
 		{name: "public route", path: "/public", access: "public"},
+		{name: "public static route", path: "/static/app.css", access: "public"},
 		{name: "authenticated public route retains effective access", path: "/public", token: ownerToken, access: "admin", userID: ownerID.String(), email: owner.Email, userName: owner.DisplayName},
 		{name: "public asset", path: "/__air/assets/htmx.min.js", access: "public"},
 		{name: "user route gets effective admin access", path: "/user", token: ownerToken, access: "admin", userID: ownerID.String(), email: owner.Email, userName: owner.DisplayName},
@@ -219,14 +247,6 @@ func TestSubdomainProxyForwardsAuthoritativeCallerHeaders(t *testing.T) {
 		})
 	}
 
-	ownerClaims, err := auth.ValidateUserAccessToken(testJWTSecret, ownerToken)
-	if err != nil {
-		t.Fatalf("ValidateUserAccessToken: %v", err)
-	}
-	subdomainToken, err := auth.IssueSubdomainToken(testJWTSecret, agentID, ownerID, uuid.MustParse(ownerClaims.SessionID), "owner@example.com", "Owner", "user", 0)
-	if err != nil {
-		t.Fatalf("IssueSubdomainToken: %v", err)
-	}
 	for _, tt := range []struct {
 		name   string
 		origin string
@@ -247,7 +267,7 @@ func TestSubdomainProxyForwardsAuthoritativeCallerHeaders(t *testing.T) {
 			if tt.bearer {
 				req.Header.Set("Authorization", "Bearer "+ownerToken)
 			} else {
-				req.AddCookie(&http.Cookie{Name: relayCookieName, Value: subdomainToken})
+				req.AddCookie(&http.Cookie{Name: relayCookieName, Value: ownerSubdomainToken})
 			}
 			rec := httptest.NewRecorder()
 			handler.ServeHTTP(rec, req)
@@ -269,12 +289,47 @@ func TestSubdomainProxyForwardsAuthoritativeCallerHeaders(t *testing.T) {
 	if err := q.UpdateAgentA2ASettings(ctx, dbq.UpdateAgentA2ASettingsParams{ID: agent.ID}); err != nil {
 		t.Fatalf("disable public routes: %v", err)
 	}
-	req := httptest.NewRequest(http.MethodGet, "http://"+agent.Slug+".agents.test/__air/assets/htmx.min.js", nil)
-	req.Host = agent.Slug + ".agents.test"
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("public asset with public routes disabled: status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	for _, tt := range []struct {
+		name       string
+		path       string
+		token      string
+		wantStatus int
+		wantAccess string
+	}{
+		{name: "member public route", path: "/public", token: memberSubdomainToken, wantStatus: http.StatusNoContent, wantAccess: "user"},
+		{name: "member static asset", path: "/static/app.css", token: memberSubdomainToken, wantStatus: http.StatusNoContent, wantAccess: "user"},
+		{name: "owner framework asset", path: "/__air/assets/htmx.min.js", token: ownerSubdomainToken, wantStatus: http.StatusNoContent, wantAccess: "admin"},
+		{name: "anonymous static asset", path: "/static/app.css", wantStatus: http.StatusUnauthorized},
+		{name: "anonymous framework asset", path: "/__air/assets/htmx.min.js", wantStatus: http.StatusUnauthorized},
+		{name: "authenticated non-member static asset", path: "/static/app.css", token: unrelatedSubdomainToken, wantStatus: http.StatusUnauthorized},
+	} {
+		t.Run("public routes disabled/"+tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "http://"+agent.Slug+".agents.test"+tt.path, nil)
+			req.Host = agent.Slug + ".agents.test"
+			if strings.HasPrefix(tt.path, "/static/") {
+				req.Header.Set("Accept", "text/css,*/*;q=0.1")
+			}
+			if tt.token != "" {
+				req.AddCookie(&http.Cookie{Name: relayCookieName, Value: tt.token})
+			}
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			if rec.Code != tt.wantStatus {
+				t.Fatalf("status = %d, want %d; body: %s", rec.Code, tt.wantStatus, rec.Body.String())
+			}
+			if tt.wantStatus == http.StatusNoContent {
+				forwarded := <-requests
+				if got := forwarded.Header.Get("X-Caller-Access"); got != tt.wantAccess {
+					t.Fatalf("X-Caller-Access = %q, want %q", got, tt.wantAccess)
+				}
+				return
+			}
+			select {
+			case <-requests:
+				t.Fatal("rejected request reached agent")
+			default:
+			}
+		})
 	}
 }
 
