@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -19,6 +20,38 @@ func TestMiddlewareNoHeader(t *testing.T) {
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+}
+
+func TestRequireRecentAuthentication(t *testing.T) {
+	userID := uuid.New()
+	tests := []struct {
+		name       string
+		authTime   time.Time
+		mustChange bool
+		want       int
+	}{
+		{name: "recent", authTime: time.Now(), want: http.StatusNoContent},
+		{name: "stale", authTime: time.Now().Add(-RecentAuthenticationWindow - time.Minute), want: http.StatusForbidden},
+		{name: "forced securing flow", authTime: time.Now().Add(-time.Hour), mustChange: true, want: http.StatusNoContent},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			token, err := IssueUserAccessToken(testSecret, userID, "test@example.com", "", "user", tt.mustChange, uuid.New(), 0, tt.authTime)
+			if err != nil {
+				t.Fatal(err)
+			}
+			handler := Middleware(testSecret)(RequireRecentAuthentication(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusNoContent)
+			})))
+			req := httptest.NewRequest(http.MethodPost, "/", nil)
+			req.Header.Set("Authorization", "Bearer "+token)
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			if rec.Code != tt.want {
+				t.Errorf("status=%d want=%d", rec.Code, tt.want)
+			}
+		})
 	}
 }
 
@@ -60,6 +93,35 @@ func TestMiddlewareValidToken(t *testing.T) {
 	}
 	if gotClaims.Email != "test@example.com" {
 		t.Errorf("Email = %q, want %q", gotClaims.Email, "test@example.com")
+	}
+}
+
+func TestMiddlewareRejectsOtherTokenProfiles(t *testing.T) {
+	userID := uuid.New()
+	agentID := uuid.New()
+	oauthToken, _ := IssueOAuthAccessToken(testSecret, userID, "test@example.com", "user", "client", "mcp", "https://example.test/mcp", 0)
+	agentToken, _ := IssueAgentToken(testSecret, agentID, 1)
+	subdomainToken, _ := IssueSubdomainToken(testSecret, agentID, userID, uuid.New(), "test@example.com", "", "user", 0)
+	refreshToken, _ := IssueRefreshToken(testSecret, userID, "test@example.com", "", "user", false)
+
+	for name, token := range map[string]string{
+		"OAuth":     oauthToken,
+		"agent":     agentToken,
+		"subdomain": subdomainToken,
+		"refresh":   refreshToken,
+	} {
+		t.Run(name, func(t *testing.T) {
+			handler := Middleware(testSecret)(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+				t.Fatal("handler should not be called")
+			}))
+			req := httptest.NewRequest(http.MethodGet, "/", nil)
+			req.Header.Set("Authorization", "Bearer "+token)
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			if rec.Code != http.StatusUnauthorized {
+				t.Errorf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
+			}
+		})
 	}
 }
 

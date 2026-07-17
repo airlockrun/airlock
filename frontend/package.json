@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "pnpm run notices && vue-tsc --noEmit && vite build",
+    "test": "vitest run",
     "watch": "vite build --watch",
     "typecheck": "vue-tsc --noEmit",
     "preview": "vite preview",
@@ -20,6 +21,7 @@
     "@zxcvbn-ts/core": "^4.1.1",
     "@zxcvbn-ts/language-common": "^4.1.1",
     "axios": "^1.18.1",
+    "dompurify": "^3.4.12",
     "marked": "^17.0.0",
     "pinia": "^3.0.0",
     "primeicons": "^7.0.0",
@@ -32,9 +34,11 @@
     "@types/node": "^24.0.0",
     "@vitejs/plugin-vue": "^6.0.0",
     "@vue/tsconfig": "^0.8.0",
+    "jsdom": "^29.1.1",
     "typescript": "~5.9.0",
     "unplugin-vue-components": "^32.0.0",
     "vite": "^8.0.16",
+    "vitest": "^4.1.10",
     "vue-tsc": "^3.0.0"
   }
 }

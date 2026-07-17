@@ -28,7 +28,9 @@ import (
 	"github.com/airlockrun/airlock/container"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
+	"github.com/airlockrun/airlock/secrets"
 	"github.com/airlockrun/airlock/service"
+	modelssvc "github.com/airlockrun/airlock/service/models"
 	"github.com/airlockrun/airlock/trigger"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -47,10 +49,11 @@ type Service struct {
 	dispatcher *trigger.Dispatcher
 	containers container.ContainerManager
 	bridgeMgr  BridgeStopper
+	secrets    secrets.Store
 	logger     *zap.Logger
 }
 
-func New(d *db.DB, build *builder.BuildService, dispatcher *trigger.Dispatcher, containers container.ContainerManager, bridgeMgr BridgeStopper, logger *zap.Logger) *Service {
+func New(d *db.DB, build *builder.BuildService, dispatcher *trigger.Dispatcher, containers container.ContainerManager, bridgeMgr BridgeStopper, secretStore secrets.Store, logger *zap.Logger) *Service {
 	if d == nil {
 		panic("agents: db is required")
 	}
@@ -66,12 +69,15 @@ func New(d *db.DB, build *builder.BuildService, dispatcher *trigger.Dispatcher, 
 	if bridgeMgr == nil {
 		panic("agents: bridge manager is required")
 	}
+	if secretStore == nil {
+		panic("agents: secrets store is required")
+	}
 	if logger == nil {
 		panic("agents: logger is required")
 	}
 	return &Service{
 		db: d, builder: build, dispatcher: dispatcher,
-		containers: containers, bridgeMgr: bridgeMgr, logger: logger,
+		containers: containers, bridgeMgr: bridgeMgr, secrets: secretStore, logger: logger,
 	}
 }
 
@@ -271,6 +277,12 @@ func (s *Service) Create(ctx context.Context, p authz.Principal, req CreateReque
 	if (req.ExecModel != "") != execProviderFK.Valid {
 		return dbq.Agent{}, service.Detail(service.ErrInvalidInput, "exec_model and exec_provider_id must be set or unset together")
 	}
+	if err := modelssvc.CheckEntitled(ctx, q, p, buildProviderFK, req.BuildModel); err != nil {
+		return dbq.Agent{}, err
+	}
+	if err := modelssvc.CheckEntitled(ctx, q, p, execProviderFK, req.ExecModel); err != nil {
+		return dbq.Agent{}, err
+	}
 	var gitCredFK pgtype.UUID
 	gitRemoteURL := req.GitRemoteURL
 	gitMode := strings.TrimSpace(req.GitMode)
@@ -386,13 +398,22 @@ func (s *Service) Create(ctx context.Context, p authz.Principal, req CreateReque
 	// falls through to the scaffold build, which mirrors the new agent to it.
 	if importFromRemote {
 		if gitMode != GitModeImportOnce {
-			secret, _ := randomHex(32)
+			secret, err := randomHex(32)
+			if err != nil {
+				_ = q.DeleteAgent(ctx, agent.ID)
+				return dbq.Agent{}, err
+			}
+			storedSecret, err := s.secrets.Put(ctx, gitWebhookSecretRef(uuid.UUID(agent.ID.Bytes)), secret)
+			if err != nil {
+				_ = q.DeleteAgent(ctx, agent.ID)
+				return dbq.Agent{}, err
+			}
 			if err := q.ConnectAgentGit(ctx, dbq.ConnectAgentGitParams{
 				ID:               agent.ID,
 				GitRemoteUrl:     gitRemoteURL,
 				GitCredentialID:  gitCredFK,
 				GitDefaultBranch: gitBranch,
-				GitWebhookSecret: secret,
+				GitWebhookSecret: storedSecret,
 				GitMode:          gitMode,
 			}); err != nil {
 				_ = q.DeleteAgent(ctx, agent.ID)
@@ -742,6 +763,23 @@ func (s *Service) Clone(ctx context.Context, p authz.Principal, sourceID uuid.UU
 	if src.SourceRef == "" {
 		return dbq.Agent{}, service.Detail(service.ErrInvalidInput, "source agent has no built code to clone yet")
 	}
+	for _, pair := range []struct {
+		provider pgtype.UUID
+		model    string
+	}{
+		{src.BuildProviderID, src.BuildModel},
+		{src.ExecProviderID, src.ExecModel},
+		{src.SttProviderID, src.SttModel},
+		{src.VisionProviderID, src.VisionModel},
+		{src.TtsProviderID, src.TtsModel},
+		{src.ImageGenProviderID, src.ImageGenModel},
+		{src.EmbeddingProviderID, src.EmbeddingModel},
+		{src.SearchProviderID, src.SearchModel},
+	} {
+		if err := modelssvc.CheckEntitled(ctx, q, p, pair.provider, pair.model); err != nil {
+			return dbq.Agent{}, err
+		}
+	}
 
 	agent, err := q.CreateAgent(ctx, dbq.CreateAgentParams{
 		Name:             req.Name,
@@ -903,8 +941,8 @@ func (s *Service) buildListItems(ctx context.Context, q *dbq.Queries, p authz.Pr
 	return out
 }
 
-// Get returns the agent detail bundle: agent + connections + webhooks
-// + crons + routes + running flag. Any agent member can read.
+// Get returns the member-readable agent detail. Agent-admin collections are
+// included only when the caller satisfies their corresponding policy action.
 func (s *Service) Get(ctx context.Context, p authz.Principal, agentID uuid.UUID) (Detail, error) {
 	q := dbq.New(s.db.Pool())
 	pgID := pgtype.UUID{Bytes: agentID, Valid: true}
@@ -915,10 +953,28 @@ func (s *Service) Get(ctx context.Context, p authz.Principal, agentID uuid.UUID)
 	if err := authz.Authorize(ctx, q, p, authz.AgentGet, agentID); err != nil {
 		return Detail{}, err
 	}
-	conns, _ := q.ListConnectionNeedsByAgent(ctx, pgID)
-	webhooks, _ := q.ListWebhooksByAgentWithStatus(ctx, pgID)
-	schedules, _ := q.ListSchedulesWithNextFire(ctx, pgID)
-	routes, _ := q.ListRoutesByAgent(ctx, pgID)
+	var conns []dbq.ListConnectionNeedsByAgentRow
+	if authz.Authorize(ctx, q, p, authz.AgentConnections, agentID) == nil {
+		conns, _ = q.ListConnectionNeedsByAgent(ctx, pgID)
+	}
+	var webhooks []dbq.ListWebhooksByAgentWithStatusRow
+	if authz.Authorize(ctx, q, p, authz.AgentWebhooksView, agentID) == nil {
+		webhooks, err = q.ListWebhooksByAgentWithStatus(ctx, pgID)
+		if err != nil {
+			return Detail{}, err
+		}
+		if err := s.decryptWebhookRows(ctx, webhooks); err != nil {
+			return Detail{}, err
+		}
+	}
+	var schedules []dbq.ListSchedulesWithNextFireRow
+	if authz.Authorize(ctx, q, p, authz.AgentSchedulesView, agentID) == nil {
+		schedules, _ = q.ListSchedulesWithNextFire(ctx, pgID)
+	}
+	var routes []dbq.AgentRoute
+	if authz.Authorize(ctx, q, p, authz.AgentRoutesView, agentID) == nil {
+		routes, _ = q.ListRoutesByAgent(ctx, pgID)
+	}
 	ownerID := uuid.UUID(agent.OwnerPrincipalID.Bytes)
 	isOwner := false
 	if agent.OwnerPrincipalID.Valid {
@@ -1026,6 +1082,9 @@ func (s *Service) Delete(ctx context.Context, p authz.Principal, agentID uuid.UU
 	}
 	if err := authorizeGovernance(ctx, q, p, authz.AgentDelete, authz.TenantAgentDeleteAny, agentID); err != nil {
 		return err
+	}
+	if _, err := q.IncrementAgentTokenVersion(ctx, agent.ID); err != nil {
+		return fmt.Errorf("revoke agent token before delete: %w", err)
 	}
 	s.builder.CancelBuildAndWait(agentID.String(), 30*time.Second)
 	if bridgeIDs, err := q.ListBridgesByAgentID(ctx, pgtype.UUID{Bytes: agentID, Valid: true}); err == nil {
@@ -1146,14 +1205,16 @@ func (s *Service) Stop(ctx context.Context, p authz.Principal, agentID uuid.UUID
 	if err := authorizeGovernance(ctx, q, p, authz.AgentLifecycle, authz.TenantAgentLifecycleAny, agentID); err != nil {
 		return err
 	}
+	if _, err := q.StopAgentAndRotateToken(ctx, dbq.StopAgentAndRotateTokenParams{
+		ID: pgtype.UUID{Bytes: agentID, Valid: true},
+	}); err != nil {
+		s.logger.Error("stop and revoke agent", zap.Error(err))
+		return err
+	}
 	if err := s.containers.StopAgent(ctx, agentID); err != nil {
 		s.logger.Error("stop agent", zap.Error(err))
 		return err
 	}
-	_ = q.UpdateAgentStatus(ctx, dbq.UpdateAgentStatusParams{
-		ID:     pgtype.UUID{Bytes: agentID, Valid: true},
-		Status: "stopped",
-	})
 	return nil
 }
 
@@ -1194,6 +1255,10 @@ func (s *Service) Suspend(ctx context.Context, p authz.Principal, agentID uuid.U
 		return service.ErrNotFound
 	}
 	if err := authorizeGovernance(ctx, q, p, authz.AgentLifecycle, authz.TenantAgentLifecycleAny, agentID); err != nil {
+		return err
+	}
+	if _, err := q.IncrementAgentTokenVersion(ctx, pgtype.UUID{Bytes: agentID, Valid: true}); err != nil {
+		s.logger.Error("revoke agent token before suspend", zap.Error(err))
 		return err
 	}
 	if err := s.containers.StopAgent(ctx, agentID); err != nil {
@@ -1389,7 +1454,26 @@ func (s *Service) ListWebhooks(ctx context.Context, p authz.Principal, agentID u
 		s.logger.Error("list webhooks", zap.Error(err))
 		return nil, err
 	}
+	if err := s.decryptWebhookRows(ctx, rows); err != nil {
+		return nil, err
+	}
 	return rows, nil
+}
+
+func (s *Service) decryptWebhookRows(ctx context.Context, rows []dbq.ListWebhooksByAgentWithStatusRow) error {
+	for i := range rows {
+		if rows[i].Secret == "" {
+			continue
+		}
+		webhookID := uuid.UUID(rows[i].ID.Bytes)
+		plain, err := s.secrets.Get(ctx, "webhook/"+webhookID.String()+"/secret", rows[i].Secret)
+		if err != nil {
+			s.logger.Error("decrypt webhook secret for list", zap.String("webhook", webhookID.String()), zap.Error(err))
+			return err
+		}
+		rows[i].Secret = plain
+	}
+	return nil
 }
 
 // ListSchedules returns the agent's schedule handlers (crons + schedules) with
@@ -1601,12 +1685,17 @@ func (s *Service) ConnectGit(ctx context.Context, p authz.Principal, agentID uui
 		s.logger.Error("generate webhook secret", zap.Error(err))
 		return GitConfig{}, err
 	}
+	storedSecret, err := s.secrets.Put(ctx, gitWebhookSecretRef(agentID), secret)
+	if err != nil {
+		s.logger.Error("encrypt webhook secret", zap.Error(err))
+		return GitConfig{}, err
+	}
 	if err := q.ConnectAgentGit(ctx, dbq.ConnectAgentGitParams{
 		ID:               pgtype.UUID{Bytes: agentID, Valid: true},
 		GitRemoteUrl:     remote,
 		GitCredentialID:  pgtype.UUID{Bytes: credID, Valid: true},
 		GitDefaultBranch: branch,
-		GitWebhookSecret: secret,
+		GitWebhookSecret: storedSecret,
 		GitMode:          mode,
 	}); err != nil {
 		s.logger.Error("connect agent git", zap.Error(err))
@@ -1690,15 +1779,29 @@ func (s *Service) GetGitConfig(ctx context.Context, p authz.Principal, agentID u
 	out := GitConfig{
 		RemoteURL:     cfg.GitRemoteUrl,
 		DefaultBranch: cfg.GitDefaultBranch,
-		WebhookSecret: cfg.GitWebhookSecret,
 		LastSyncedRef: cfg.GitLastSyncedRef,
 		Mode:          cfg.GitMode,
+	}
+	if cfg.GitWebhookSecret != "" {
+		if secrets.IsEnvelope(cfg.GitWebhookSecret) {
+			out.WebhookSecret, err = s.secrets.Get(ctx, gitWebhookSecretRef(agentID), cfg.GitWebhookSecret)
+		} else {
+			out.WebhookSecret = cfg.GitWebhookSecret
+		}
+		if err != nil {
+			s.logger.Error("decrypt git webhook secret", zap.Error(err))
+			return GitConfig{}, err
+		}
 	}
 	if cfg.GitCredentialID.Valid {
 		out.CredentialID = uuid.UUID(cfg.GitCredentialID.Bytes).String()
 		out.CredentialName = cfg.CredentialName.String
 	}
 	return out, nil
+}
+
+func gitWebhookSecretRef(agentID uuid.UUID) string {
+	return "agent/" + agentID.String() + "/git_webhook_secret"
 }
 
 // pgUserID converts a principal's user id to a pgtype.UUID, marking it

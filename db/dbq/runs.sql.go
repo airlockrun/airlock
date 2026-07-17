@@ -11,6 +11,31 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const claimMCPTaskResume = `-- name: ClaimMCPTaskResume :execrows
+UPDATE runs SET status = 'success'
+WHERE id = $1
+  AND agent_id = $2
+  AND status = 'suspended'
+  AND trigger_type = 'a2a'
+  AND trigger_ref = $3
+`
+
+type ClaimMCPTaskResumeParams struct {
+	ID         pgtype.UUID `json:"id"`
+	AgentID    pgtype.UUID `json:"agent_id"`
+	TriggerRef string      `json:"trigger_ref"`
+}
+
+// A suspended MCP task is single-use. The conversation reference is part of
+// the CAS so a stale or inconsistent context/task pair cannot consume it.
+func (q *Queries) ClaimMCPTaskResume(ctx context.Context, arg ClaimMCPTaskResumeParams) (int64, error) {
+	result, err := q.db.Exec(ctx, claimMCPTaskResume, arg.ID, arg.AgentID, arg.TriggerRef)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const compactOldRuns = `-- name: CompactOldRuns :execrows
 UPDATE runs SET
     input_payload = '{}'::jsonb,
@@ -301,12 +326,59 @@ func (q *Queries) GetRunByID(ctx context.Context, id pgtype.UUID) (Run, error) {
 	return i, err
 }
 
-const getRunCheckpoint = `-- name: GetRunCheckpoint :one
-SELECT checkpoint FROM runs WHERE id = $1
+const getRunByIDAndAgent = `-- name: GetRunByIDAndAgent :one
+SELECT id, agent_id, bridge_id, status, trigger_type, trigger_ref, source_ref, input_payload, actions, llm_calls, llm_tokens_in, llm_tokens_out, llm_cost_estimate, duration_ms, stdout_log, error_message, error_kind, exit_code, panic_trace, checkpoint, compacted, started_at, finished_at, parent_run_id, llm_tokens_cached FROM runs WHERE id = $1 AND agent_id = $2
 `
 
-func (q *Queries) GetRunCheckpoint(ctx context.Context, id pgtype.UUID) ([]byte, error) {
-	row := q.db.QueryRow(ctx, getRunCheckpoint, id)
+type GetRunByIDAndAgentParams struct {
+	ID      pgtype.UUID `json:"id"`
+	AgentID pgtype.UUID `json:"agent_id"`
+}
+
+func (q *Queries) GetRunByIDAndAgent(ctx context.Context, arg GetRunByIDAndAgentParams) (Run, error) {
+	row := q.db.QueryRow(ctx, getRunByIDAndAgent, arg.ID, arg.AgentID)
+	var i Run
+	err := row.Scan(
+		&i.ID,
+		&i.AgentID,
+		&i.BridgeID,
+		&i.Status,
+		&i.TriggerType,
+		&i.TriggerRef,
+		&i.SourceRef,
+		&i.InputPayload,
+		&i.Actions,
+		&i.LlmCalls,
+		&i.LlmTokensIn,
+		&i.LlmTokensOut,
+		&i.LlmCostEstimate,
+		&i.DurationMs,
+		&i.StdoutLog,
+		&i.ErrorMessage,
+		&i.ErrorKind,
+		&i.ExitCode,
+		&i.PanicTrace,
+		&i.Checkpoint,
+		&i.Compacted,
+		&i.StartedAt,
+		&i.FinishedAt,
+		&i.ParentRunID,
+		&i.LlmTokensCached,
+	)
+	return i, err
+}
+
+const getRunCheckpoint = `-- name: GetRunCheckpoint :one
+SELECT checkpoint FROM runs WHERE id = $1 AND agent_id = $2
+`
+
+type GetRunCheckpointParams struct {
+	ID      pgtype.UUID `json:"id"`
+	AgentID pgtype.UUID `json:"agent_id"`
+}
+
+func (q *Queries) GetRunCheckpoint(ctx context.Context, arg GetRunCheckpointParams) ([]byte, error) {
+	row := q.db.QueryRow(ctx, getRunCheckpoint, arg.ID, arg.AgentID)
 	var checkpoint []byte
 	err := row.Scan(&checkpoint)
 	return checkpoint, err
@@ -507,14 +579,50 @@ func (q *Queries) ResetStuckRuns(ctx context.Context, errorMessage string) error
 	return err
 }
 
-const resolveSuspendedRun = `-- name: ResolveSuspendedRun :exec
+const resolveSuspendedRun = `-- name: ResolveSuspendedRun :execrows
 UPDATE runs SET status = 'success', finished_at = now()
 WHERE id = $1 AND status = 'suspended'
 `
 
-func (q *Queries) ResolveSuspendedRun(ctx context.Context, id pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, resolveSuspendedRun, id)
-	return err
+func (q *Queries) ResolveSuspendedRun(ctx context.Context, id pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, resolveSuspendedRun, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const rollbackMCPTaskResume = `-- name: RollbackMCPTaskResume :execrows
+UPDATE runs AS resumed SET status = 'suspended'
+WHERE resumed.id = $1
+  AND resumed.agent_id = $2
+  AND resumed.status = 'success'
+  AND resumed.trigger_type = 'a2a'
+  AND resumed.trigger_ref = $3
+  AND NOT EXISTS (
+      SELECT 1 FROM runs AS successor
+      WHERE successor.agent_id = resumed.agent_id
+        AND successor.trigger_type = 'a2a'
+        AND successor.trigger_ref = resumed.trigger_ref
+        AND successor.input_payload->>'resumeRunId' = resumed.id::text
+  )
+`
+
+type RollbackMCPTaskResumeParams struct {
+	ID         pgtype.UUID `json:"id"`
+	AgentID    pgtype.UUID `json:"agent_id"`
+	TriggerRef string      `json:"trigger_ref"`
+}
+
+// Restore a claimed task only when dispatch did not create a successor. Once a
+// successor row exists, that run owns the resume attempt even if forwarding it
+// to the agent later fails.
+func (q *Queries) RollbackMCPTaskResume(ctx context.Context, arg RollbackMCPTaskResumeParams) (int64, error) {
+	result, err := q.db.Exec(ctx, rollbackMCPTaskResume, arg.ID, arg.AgentID, arg.TriggerRef)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const updateRunCheckpoint = `-- name: UpdateRunCheckpoint :exec
@@ -616,7 +724,7 @@ func (q *Queries) UpdateRunStatus(ctx context.Context, arg UpdateRunStatusParams
 	return err
 }
 
-const upsertRunComplete = `-- name: UpsertRunComplete :exec
+const upsertRunComplete = `-- name: UpsertRunComplete :execrows
 INSERT INTO runs (
     id, agent_id, status, error_message, error_kind, actions,
     stdout_log, panic_trace, input_payload, source_ref,
@@ -640,6 +748,7 @@ ON CONFLICT (id) DO UPDATE SET
     panic_trace = EXCLUDED.panic_trace,
     finished_at = now(),
     duration_ms = EXTRACT(EPOCH FROM (now() - runs.started_at))::integer * 1000
+WHERE runs.agent_id = EXCLUDED.agent_id
 `
 
 type UpsertRunCompleteParams struct {
@@ -658,8 +767,8 @@ type UpsertRunCompleteParams struct {
 // trigger_type/trigger_ref/source_ref placeholders apply only when the
 // row is brand-new — the agent's r.Complete arrives without trigger
 // context; the dispatcher's CreateRun would have set the real values.
-func (q *Queries) UpsertRunComplete(ctx context.Context, arg UpsertRunCompleteParams) error {
-	_, err := q.db.Exec(ctx, upsertRunComplete,
+func (q *Queries) UpsertRunComplete(ctx context.Context, arg UpsertRunCompleteParams) (int64, error) {
+	result, err := q.db.Exec(ctx, upsertRunComplete,
 		arg.ID,
 		arg.AgentID,
 		arg.Status,
@@ -669,5 +778,8 @@ func (q *Queries) UpsertRunComplete(ctx context.Context, arg UpsertRunCompletePa
 		arg.StdoutLog,
 		arg.PanicTrace,
 	)
-	return err
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }

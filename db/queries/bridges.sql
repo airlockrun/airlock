@@ -1,6 +1,6 @@
 -- name: CreateBridge :one
-INSERT INTO bridges (type, name, bot_token_ref, bot_username, agent_id, owner_principal_id, is_system, is_manager, managed, telegram_bot_user_id, status, config, settings)
-VALUES (@type, @name, @bot_token_ref, @bot_username, @agent_id, @owner_principal_id, @is_system, @is_manager, @managed, @telegram_bot_user_id, 'active', '{}'::jsonb, '{}'::jsonb)
+INSERT INTO bridges (id, type, name, bot_token_ref, bot_username, agent_id, owner_principal_id, is_system, is_manager, managed, telegram_bot_user_id, status, config, settings)
+VALUES (@id, @type, @name, @bot_token_ref, @bot_username, @agent_id, @owner_principal_id, @is_system, @is_manager, @managed, @telegram_bot_user_id, 'active', '{}'::jsonb, '{}'::jsonb)
 RETURNING *;
 
 -- name: GetBridgeByID :one

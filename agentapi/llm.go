@@ -18,16 +18,38 @@ import (
 	"github.com/airlockrun/goai/model"
 	"github.com/airlockrun/goai/stream"
 	solprovider "github.com/airlockrun/sol/provider"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"
 )
+
+func (h *Handler) validateRunHeader(w http.ResponseWriter, r *http.Request, agentID uuid.UUID, value string) bool {
+	if value == "" {
+		return true
+	}
+	runID, err := parseUUID(value)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid X-Airlock-Run-ID")
+		return false
+	}
+	if _, err := dbq.New(h.db.Pool()).GetRunByIDAndAgent(r.Context(), dbq.GetRunByIDAndAgentParams{
+		ID: toPgUUID(runID), AgentID: toPgUUID(agentID),
+	}); err != nil {
+		writeJSONError(w, http.StatusNotFound, "run not found")
+		return false
+	}
+	return true
+}
 
 // LLMStream handles POST /api/agent/llm/stream.
 func (h *Handler) LLMStream(w http.ResponseWriter, r *http.Request) {
 	agentID := auth.AgentIDFromContext(r.Context())
 	runIDHdr := r.Header.Get("X-Airlock-Run-ID")
 	ctx := r.Context()
+	if !h.validateRunHeader(w, r, agentID, runIDHdr) {
+		return
+	}
 
 	var req wire.LLMProxyRequest
 	if err := readJSON(r, &req); err != nil {
@@ -301,6 +323,9 @@ func (h *Handler) modelForCapability(ctx context.Context, q *dbq.Queries, agentI
 func (h *Handler) ImageGenerate(w http.ResponseWriter, r *http.Request) {
 	agentID := auth.AgentIDFromContext(r.Context())
 	runIDHdr := r.Header.Get("X-Airlock-Run-ID")
+	if !h.validateRunHeader(w, r, agentID, runIDHdr) {
+		return
+	}
 	ctx := r.Context()
 
 	var req wire.ModelProxyRequest
@@ -357,6 +382,9 @@ func (h *Handler) ImageGenerate(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) Embed(w http.ResponseWriter, r *http.Request) {
 	agentID := auth.AgentIDFromContext(r.Context())
 	runIDHdr := r.Header.Get("X-Airlock-Run-ID")
+	if !h.validateRunHeader(w, r, agentID, runIDHdr) {
+		return
+	}
 	ctx := r.Context()
 
 	var req wire.ModelProxyRequest
@@ -406,6 +434,9 @@ func (h *Handler) Embed(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) SpeechGenerate(w http.ResponseWriter, r *http.Request) {
 	agentID := auth.AgentIDFromContext(r.Context())
 	runIDHdr := r.Header.Get("X-Airlock-Run-ID")
+	if !h.validateRunHeader(w, r, agentID, runIDHdr) {
+		return
+	}
 	ctx := r.Context()
 
 	var req wire.ModelProxyRequest
@@ -460,6 +491,9 @@ func (h *Handler) SpeechGenerate(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) Transcribe(w http.ResponseWriter, r *http.Request) {
 	agentID := auth.AgentIDFromContext(r.Context())
 	runIDHdr := r.Header.Get("X-Airlock-Run-ID")
+	if !h.validateRunHeader(w, r, agentID, runIDHdr) {
+		return
+	}
 	ctx := r.Context()
 
 	var req wire.ModelProxyRequest

@@ -1,6 +1,9 @@
 package api
 
 import (
+	"crypto/hmac"
+	"fmt"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -15,6 +18,7 @@ import (
 	"github.com/airlockrun/airlock/service"
 	"github.com/airlockrun/airlock/storage"
 	"github.com/airlockrun/airlock/trigger"
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 )
@@ -35,42 +39,14 @@ func SubdomainProxy(agentDomain string, database *db.DB, s3 *storage.S3Client, d
 		panic("api: SubdomainProxy called with nil bridgeMgr")
 	}
 
-	suffix := "." + agentDomain
-
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Strip port from Host header (e.g. "foo.lvh.me:8080" → "foo.lvh.me").
-		host := r.Host
-		if colon := strings.LastIndex(host, ":"); colon != -1 {
-			host = host[:colon]
-		}
-
-		// Check whether Host is a subdomain of agentDomain.
-		if !strings.HasSuffix(host, suffix) {
-			inner.ServeHTTP(w, r)
-			return
-		}
-
-		slug := strings.TrimSuffix(host, suffix)
-		if slug == "" {
-			// Bare domain (no subdomain) → pass through.
-			inner.ServeHTTP(w, r)
-			return
-		}
-
-		// Reserved subdomains — not valid agent slugs.
-		switch slug {
-		case "api", "s3":
+		slug, ok := agentSlugFromHost(r.Host, agentDomain)
+		if !ok {
 			inner.ServeHTTP(w, r)
 			return
 		}
 
 		log := logFor(r).Named("proxy").With(zap.String("slug", slug))
-
-		// Auth relay callback — exchange relay code for session cookie.
-		if r.URL.Path == "/__air/callback" {
-			handleRelayCallback(w, r, jwtSecret, log)
-			return
-		}
 
 		q := dbq.New(database.Pool())
 
@@ -81,6 +57,10 @@ func SubdomainProxy(agentDomain string, database *db.DB, s3 *storage.S3Client, d
 			return
 		}
 		agentID := pgUUID(agent.ID)
+		if r.URL.Path == "/__air/callback" {
+			handleRelayCallback(w, r, database, jwtSecret, agentID, log)
+			return
+		}
 
 		// Telegram Web App auto-auth intercepts. /start serves the
 		// bootstrap stub the menu button opens; /auth verifies initData
@@ -92,7 +72,7 @@ func SubdomainProxy(agentDomain string, database *db.DB, s3 *storage.S3Client, d
 				handleTGWebAppStart(w, r, publicURL)
 				return
 			}
-			handleTGWebAppAuth(r.Context(), w, r, jwtSecret, agentID, bridgeMgr, q, log)
+			handleTGWebAppAuth(r.Context(), w, r, jwtSecret, agentID, bridgeMgr, database, log)
 			return
 		}
 
@@ -119,20 +99,40 @@ func SubdomainProxy(agentDomain string, database *db.DB, s3 *storage.S3Client, d
 		var userEmail string
 		var userDisplayName string
 		callerAccess := agentsdk.AccessPublic
+		cookieAuthenticated := false
 
-		if !isAssetGET {
-			// Look up the registered route — match exact paths first, then parameterized patterns.
+		if isAssetGET {
+			if claims, ok, fromCookie := validateSubdomainAuth(r, q, jwtSecret, agentID); ok {
+				cookieAuthenticated = fromCookie
+				uid, err := uuid.Parse(claims.Subject)
+				if err == nil {
+					p := authz.UserPrincipal(uid, auth.Role(claims.TenantRole))
+					callerAccess = p.EffectiveAgentAccess(r.Context(), q, agentID)
+					userID = uid
+					userEmail = claims.Email
+					userDisplayName = claims.DisplayName
+				}
+			}
+			if !agent.AllowPublicRoutes && !authz.AccessAtLeast(callerAccess, agentsdk.AccessUser) {
+				rejectOrRedirect(w, r, publicURL)
+				return
+			}
+		} else {
+			// Build the same ServeMux pattern set used by the agent before
+			// selecting the route whose access policy applies.
 			// airlockvet:allow-dbq reason: pure routing-table plumbing; authorization happens below per route.Access
-			routes, err := q.ListRoutesByAgentAndMethod(r.Context(), dbq.ListRoutesByAgentAndMethodParams{
-				AgentID: agent.ID,
-				Method:  r.Method,
-			})
+			routes, err := q.ListRoutesByAgent(r.Context(), agent.ID)
 			if err != nil {
 				log.Debug("no routes found", zap.Error(err))
 				writeError(w, http.StatusNotFound, "route not found")
 				return
 			}
-			route, ok := matchRoute(routes, r.URL.Path)
+			route, ok, err := matchRoute(routes, r)
+			if err != nil {
+				log.Error("invalid or ambiguous route table", zap.Error(err))
+				writeError(w, http.StatusInternalServerError, "misconfigured routes")
+				return
+			}
 			if !ok {
 				log.Debug("no route matched")
 				writeError(w, http.StatusNotFound, "route not found")
@@ -150,7 +150,8 @@ func SubdomainProxy(agentDomain string, database *db.DB, s3 *storage.S3Client, d
 				}
 				// Preserve optional authenticated identity on public routes so
 				// handlers can offer richer behavior without requiring login.
-				if claims, ok := validateSubdomainAuth(r, jwtSecret); ok {
+				if claims, ok, fromCookie := validateSubdomainAuth(r, q, jwtSecret, agentID); ok {
+					cookieAuthenticated = fromCookie
 					uid, err := uuid.Parse(claims.Subject)
 					if err == nil {
 						p := authz.UserPrincipal(uid, auth.Role(claims.TenantRole))
@@ -162,11 +163,12 @@ func SubdomainProxy(agentDomain string, database *db.DB, s3 *storage.S3Client, d
 				}
 
 			case "user", "admin":
-				claims, ok := validateSubdomainAuth(r, jwtSecret)
+				claims, ok, fromCookie := validateSubdomainAuth(r, q, jwtSecret, agentID)
 				if !ok {
 					rejectOrRedirect(w, r, publicURL)
 					return
 				}
+				cookieAuthenticated = fromCookie
 				uid, err := uuid.Parse(claims.Subject)
 				if err != nil {
 					rejectOrRedirect(w, r, publicURL)
@@ -192,6 +194,10 @@ func SubdomainProxy(agentDomain string, database *db.DB, s3 *storage.S3Client, d
 				writeError(w, http.StatusInternalServerError, "misconfigured route")
 				return
 			}
+		}
+		if cookieAuthenticated && unsafeMethod(r.Method) && r.Header.Get("Origin") != requestOrigin(r) {
+			writeError(w, http.StatusForbidden, "origin mismatch")
+			return
 		}
 
 		// Ensure agent container is running.
@@ -221,6 +227,7 @@ func SubdomainProxy(agentDomain string, database *db.DB, s3 *storage.S3Client, d
 
 				// Authenticate to the container.
 				req.Out.Header.Set("Authorization", "Bearer "+ctr.Token)
+				stripReservedAuthCookies(req.Out.Header)
 
 				// Forward client IP to the agent container.
 				req.Out.Header.Set("X-Real-IP", r.RemoteAddr)
@@ -239,6 +246,10 @@ func SubdomainProxy(agentDomain string, database *db.DB, s3 *storage.S3Client, d
 					}
 				}
 			},
+			ModifyResponse: func(resp *http.Response) error {
+				stripReservedSetCookies(resp.Header)
+				return nil
+			},
 			ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 				log.Error("proxy error", zap.Error(err))
 				writeError(w, http.StatusBadGateway, "proxy error")
@@ -246,8 +257,11 @@ func SubdomainProxy(agentDomain string, database *db.DB, s3 *storage.S3Client, d
 		}
 
 		// Sliding window: refresh session cookie on every successful proxied request.
-		if cookie, err := r.Cookie(relayCookieName); err == nil {
-			setSessionCookie(w, r, cookie.Value)
+		if cookieAuthenticated {
+			cookie, err := r.Cookie(relayCookieName)
+			if err == nil {
+				setSessionCookie(w, r, cookie.Value)
+			}
 		}
 
 		log.Debug("proxying request", zap.String("target", ctr.Endpoint))
@@ -255,73 +269,105 @@ func SubdomainProxy(agentDomain string, database *db.DB, s3 *storage.S3Client, d
 	})
 }
 
-// matchRoute finds the best matching route for a request path.
-// Exact matches take priority over parameterized patterns.
-// Parameterized segments like {slug} match a single path segment.
-func matchRoute(routes []dbq.AgentRoute, reqPath string) (dbq.AgentRoute, bool) {
-	// First pass: exact match.
-	for _, r := range routes {
-		if r.Path == reqPath {
-			return r, true
+// matchRoute delegates parsing, precedence, HEAD-to-GET behavior, and wildcard
+// semantics to the same net/http ServeMux implementation used by the agent.
+func matchRoute(routes []dbq.AgentRoute, req *http.Request) (selected dbq.AgentRoute, ok bool, err error) {
+	mux := http.NewServeMux()
+	byPattern := make(map[string]dbq.AgentRoute, len(routes))
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			selected = dbq.AgentRoute{}
+			ok = false
+			err = fmt.Errorf("register route pattern: %v", recovered)
 		}
+	}()
+	for _, route := range routes {
+		pattern := route.Method + " " + route.Path
+		mux.HandleFunc(pattern, func(http.ResponseWriter, *http.Request) {})
+		byPattern[pattern] = route
 	}
-
-	// Second pass: pattern match ({param} segments).
-	reqParts := strings.Split(reqPath, "/")
-	for _, r := range routes {
-		if !strings.Contains(r.Path, "{") {
-			continue
-		}
-		routeParts := strings.Split(r.Path, "/")
-		if len(routeParts) != len(reqParts) {
-			continue
-		}
-		match := true
-		for i := range routeParts {
-			if strings.HasPrefix(routeParts[i], "{") && strings.HasSuffix(routeParts[i], "}") {
-				continue // wildcard segment matches anything
-			}
-			if routeParts[i] != reqParts[i] {
-				match = false
-				break
-			}
-		}
-		if match {
-			return r, true
-		}
-	}
-
-	return dbq.AgentRoute{}, false
+	_, pattern := mux.Handler(req)
+	selected, ok = byPattern[pattern]
+	return selected, ok, nil
 }
 
 // handleRelayCallback exchanges a relay code for a session cookie.
 // GET /__air/callback?code=xxx&return=/path
-func handleRelayCallback(w http.ResponseWriter, r *http.Request, jwtSecret string, log *zap.Logger) {
+func handleRelayCallback(w http.ResponseWriter, r *http.Request, database *db.DB, jwtSecret string, targetAgentID uuid.UUID, log *zap.Logger) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
 	code := r.URL.Query().Get("code")
 	returnPath := r.URL.Query().Get("return")
 	if code == "" || returnPath == "" {
 		writeError(w, http.StatusBadRequest, "missing code or return parameter")
 		return
 	}
+	if !validRelayReturnPath(returnPath) {
+		writeError(w, http.StatusBadRequest, "invalid return parameter")
+		return
+	}
+	clearRelayNonceCookie(w, r)
 
-	claims, err := validateRelayCode(jwtSecret, code)
+	// airlockvet:allow-dbq reason: callback authentication is an opaque, one-time DB exchange; DELETE RETURNING is the authorization gate
+	row, err := dbq.New(database.Pool()).ConsumeRelayCode(r.Context(), hashToken(code))
 	if err != nil {
-		log.Warn("relay code validation failed", zap.Error(err))
+		log.Warn("relay code consumption failed", zap.Error(err))
 		writeError(w, http.StatusUnauthorized, "invalid or expired relay code")
 		return
 	}
+	nonce, err := r.Cookie(relayNonceCookieName(r))
+	if err != nil || nonce.Value == "" {
+		writeError(w, http.StatusUnauthorized, "invalid or expired relay code")
+		return
+	}
+	if !hmac.Equal(row.NonceHash, hashToken(nonce.Value)) {
+		writeError(w, http.StatusUnauthorized, "invalid or expired relay code")
+		return
+	}
+	live, err := auth.ResolveLiveUserClaims(r.Context(), dbq.New(database.Pool()), &auth.Claims{
+		RegisteredClaims: jwt.RegisteredClaims{Subject: pgUUID(row.UserID).String()},
+		SessionID:        pgUUID(row.SessionID).String(),
+		AuthEpoch:        row.AuthEpoch,
+	}, true)
+	if err != nil || live.MustChangePassword {
+		writeError(w, http.StatusUnauthorized, "invalid or expired relay code")
+		return
+	}
+	claims := &relayClaims{
+		UserID:       pgUUID(row.UserID).String(),
+		SessionID:    pgUUID(row.SessionID).String(),
+		Email:        live.Email,
+		TenantRole:   live.TenantRole,
+		AuthEpoch:    row.AuthEpoch,
+		AgentID:      pgUUID(row.AgentID).String(),
+		TargetOrigin: row.TargetOrigin,
+		ReturnPath:   row.ReturnPath,
+	}
 
 	// Verify targetOrigin matches the current request host.
-	requestOrigin := requestScheme(r) + "://" + r.Host
-	if claims.TargetOrigin != requestOrigin {
+	actualOrigin := requestOrigin(r)
+	if claims.TargetOrigin != actualOrigin {
 		log.Warn("relay code target origin mismatch",
 			zap.String("expected", claims.TargetOrigin),
-			zap.String("actual", requestOrigin))
+			zap.String("actual", actualOrigin))
 		writeError(w, http.StatusBadRequest, "origin mismatch")
 		return
 	}
+	if claims.ReturnPath != returnPath {
+		writeError(w, http.StatusBadRequest, "return mismatch")
+		return
+	}
+	if claims.AgentID != targetAgentID.String() {
+		log.Warn("relay code target agent mismatch",
+			zap.String("expected", claims.AgentID),
+			zap.String("actual", targetAgentID.String()))
+		writeError(w, http.StatusBadRequest, "agent mismatch")
+		return
+	}
 
-	if err := issueSessionCookie(w, r, jwtSecret, claims); err != nil {
+	if err := issueSessionCookie(w, r, jwtSecret, targetAgentID, claims); err != nil {
 		log.Error("failed to issue session cookie", zap.Error(err))
 		writeError(w, http.StatusInternalServerError, "auth failed")
 		return
@@ -330,22 +376,28 @@ func handleRelayCallback(w http.ResponseWriter, r *http.Request, jwtSecret strin
 	http.Redirect(w, r, returnPath, http.StatusFound)
 }
 
-// validateSubdomainAuth tries Authorization header first, then session cookie.
-func validateSubdomainAuth(r *http.Request, jwtSecret string) (*auth.Claims, bool) {
-	// Try Bearer token (API clients).
-	if claims, ok := validateBearerToken(r, jwtSecret); ok {
-		return claims, true
+// validateSubdomainAuth accepts an explicit user bearer or an agent-bound
+// session cookie. An explicit Authorization header never falls back to a
+// cookie.
+func validateSubdomainAuth(r *http.Request, q *dbq.Queries, jwtSecret string, targetAgentID uuid.UUID) (*auth.Claims, bool, bool) {
+	if r.Header.Get("Authorization") != "" {
+		claims, ok := validateBearerToken(r, q, jwtSecret)
+		return claims, ok, false
 	}
 	// Try session cookie (browser clients).
 	cookie, err := r.Cookie(relayCookieName)
 	if err != nil {
-		return nil, false
+		return nil, false, false
 	}
-	claims, err := auth.ValidateToken(jwtSecret, cookie.Value)
+	claims, err := auth.ValidateSubdomainToken(jwtSecret, cookie.Value, targetAgentID)
 	if err != nil {
-		return nil, false
+		return nil, false, false
 	}
-	return claims, true
+	claims, err = auth.ResolveLiveUserClaims(r.Context(), q, claims, true)
+	if err != nil || claims.MustChangePassword {
+		return nil, false, false
+	}
+	return claims, true, true
 }
 
 // rejectOrRedirect returns 401 for API/htmx clients or serves a stub
@@ -370,17 +422,89 @@ func rejectOrRedirect(w http.ResponseWriter, r *http.Request, publicURL string) 
 }
 
 // validateBearerToken extracts and validates a JWT from the Authorization header.
-func validateBearerToken(r *http.Request, jwtSecret string) (*auth.Claims, bool) {
+func validateBearerToken(r *http.Request, q *dbq.Queries, jwtSecret string) (*auth.Claims, bool) {
 	header := r.Header.Get("Authorization")
 	if header == "" || !strings.HasPrefix(header, "Bearer ") {
 		return nil, false
 	}
 	token := strings.TrimPrefix(header, "Bearer ")
-	claims, err := auth.ValidateToken(jwtSecret, token)
+	claims, err := auth.ValidateUserAccessToken(jwtSecret, token)
 	if err != nil {
 		return nil, false
 	}
+	claims, err = auth.ResolveLiveUserClaims(r.Context(), q, claims, true)
+	if err != nil || claims.MustChangePassword {
+		return nil, false
+	}
 	return claims, true
+}
+
+func agentSlugFromHost(host, agentDomain string) (string, bool) {
+	host = strings.ToLower(strings.TrimSuffix(host, "."))
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = strings.TrimSuffix(h, ".")
+	} else if strings.Contains(host, ":") {
+		return "", false
+	}
+	domain := strings.ToLower(strings.TrimSuffix(agentDomain, "."))
+	if domain == "" || strings.Contains(domain, ":") {
+		return "", false
+	}
+	slug, ok := strings.CutSuffix(host, "."+domain)
+	if !ok || slug == "" || strings.Contains(slug, ".") {
+		return "", false
+	}
+	switch slug {
+	case "api", "s3":
+		return "", false
+	}
+	return slug, true
+}
+
+func stripReservedAuthCookies(header http.Header) {
+	values := header.Values("Cookie")
+	if len(values) == 0 {
+		return
+	}
+	header.Del("Cookie")
+	kept := make([]string, 0)
+	for _, value := range values {
+		for part := range strings.SplitSeq(value, ";") {
+			part = strings.TrimSpace(part)
+			name, _, ok := strings.Cut(part, "=")
+			if part == "" || ok && reservedAuthCookie(name) {
+				continue
+			}
+			kept = append(kept, part)
+		}
+	}
+	if len(kept) != 0 {
+		header.Set("Cookie", strings.Join(kept, "; "))
+	}
+}
+
+func stripReservedSetCookies(header http.Header) {
+	values := header.Values("Set-Cookie")
+	header.Del("Set-Cookie")
+	for _, value := range values {
+		name, _, ok := strings.Cut(value, "=")
+		if ok && reservedAuthCookie(strings.TrimSpace(name)) {
+			continue
+		}
+		header.Add("Set-Cookie", value)
+	}
+}
+
+func reservedAuthCookie(name string) bool {
+	return name == relayCookieName || name == relayNonceName || name == relayDevNonceName || name == accessCookieName || name == refreshCookieName
+}
+
+func unsafeMethod(method string) bool {
+	return method != http.MethodGet && method != http.MethodHead && method != http.MethodOptions && method != http.MethodTrace
+}
+
+func requestOrigin(r *http.Request) string {
+	return requestScheme(r) + "://" + strings.ToLower(r.Host)
 }
 
 // requestScheme returns "https" or "http" based on the request.

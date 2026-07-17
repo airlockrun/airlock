@@ -41,6 +41,8 @@ message RefreshRequest {
 
 message RefreshResponse {
   string access_token = 1;
+  // Replacement for CLI sessions. Browser sessions receive it in the HttpOnly cookie.
+  string refresh_token = 2;
 }
 
 message LogoutRequest {
@@ -774,6 +776,7 @@ message SetEnvVarValueRequest {
 
 message GenerateRelayCodeRequest {
   string return_url = 1;
+  string nonce = 2;
 }
 
 message GenerateRelayCodeResponse {

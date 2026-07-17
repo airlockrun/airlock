@@ -13,20 +13,27 @@
 import routes.caddy
 
 (proxy_airlock) {
-	reverse_proxy {$AIRLOCK_UPSTREAM}
+	reverse_proxy {$AIRLOCK_UPSTREAM} {
+		header_up X-Airlock-Proxy-Auth {$REVERSE_PROXY_AUTH_SECRET}
+	}
 }
 
 {$DOMAIN} {
 	tls {$TLS_CERT_FILE} {$TLS_KEY_FILE}
+	import https_security_headers
 	import apex_routes
 }
 
 s3.{$DOMAIN} {
 	tls {$TLS_CERT_FILE} {$TLS_KEY_FILE}
+	import https_security_headers
 	import s3_routes
 }
 
 *.{$DOMAIN} {
+	request_header -X-Airlock-Proxy-Auth
 	tls {$TLS_CERT_FILE} {$TLS_KEY_FILE}
+	import baseline_security_headers
+	import https_security_headers
 	import proxy_airlock
 }

@@ -1,8 +1,5 @@
 -- +goose Up
--- Squashed 0.4 baseline. Folds the historical 001 + 002 into a single
--- schema migration (003 was a one-time monorepo-split code migration, removed).
--- 0.4 is a clean slate: there is no in-place upgrade path from 0.3.x.
--- Generated from goose-applied 001+002 via pg_dump --schema-only.
+-- Consolidated 0.4 schema baseline.
 
 --
 --
@@ -428,6 +425,7 @@ CREATE TABLE public.agents (
     git_default_branch text NOT NULL,
     git_webhook_secret text NOT NULL,
     git_last_synced_ref text NOT NULL,
+    agent_token_version bigint NOT NULL,
     CONSTRAINT agents_git_mode_check CHECK ((((git_remote_url = ''::text) AND (git_mode = ''::text)) OR ((git_remote_url <> ''::text) AND (git_mode = ANY (ARRAY['read_write'::text, 'read_only'::text]))))),
     CONSTRAINT agents_upgrade_status_check CHECK ((upgrade_status = ANY (ARRAY['idle'::text, 'queued'::text, 'building'::text, 'failed'::text])))
 );
@@ -518,6 +516,7 @@ CREATE TABLE public.device_login_sessions (
     consumed_at timestamp with time zone,
     last_polled_at timestamp with time zone,
     poll_interval_seconds integer NOT NULL,
+    approved_auth_epoch bigint,
     CONSTRAINT device_login_sessions_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'approved'::text, 'denied'::text])))
 );
 
@@ -532,12 +531,14 @@ CREATE TABLE public.user_sessions (
     kind text NOT NULL,
     client_name text NOT NULL,
     device_name text NOT NULL,
-    refresh_token_hash bytea NOT NULL,
+    refresh_token_hash bytea,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     last_used_at timestamp with time zone,
     expires_at timestamp with time zone NOT NULL,
     revoked_at timestamp with time zone,
-    CONSTRAINT user_sessions_kind_check CHECK ((kind = ANY (ARRAY['web'::text, 'cli'::text])))
+    authenticated_at timestamp with time zone NOT NULL,
+    CONSTRAINT user_sessions_kind_check CHECK ((kind = ANY (ARRAY['web'::text, 'cli'::text, 'telegram'::text]))),
+    CONSTRAINT user_sessions_refresh_binding_check CHECK ((((kind = 'telegram'::text) AND (refresh_token_hash IS NULL)) OR ((kind = ANY (ARRAY['web'::text, 'cli'::text])) AND (refresh_token_hash IS NOT NULL))))
 );
 
 
@@ -701,7 +702,11 @@ CREATE TABLE public.oauth_clients (
     token_endpoint_auth_method text NOT NULL,
     scope text NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    last_used_at timestamp with time zone
+    last_used_at timestamp with time zone,
+    CONSTRAINT oauth_clients_auth_method_check CHECK ((token_endpoint_auth_method = 'none'::text)),
+    CONSTRAINT oauth_clients_grant_types_check CHECK (((grant_types <@ ARRAY['authorization_code'::text, 'refresh_token'::text]) AND (cardinality(grant_types) > 0))),
+    CONSTRAINT oauth_clients_response_types_check CHECK (((response_types <@ ARRAY['code'::text]) AND (cardinality(response_types) > 0))),
+    CONSTRAINT oauth_clients_scope_check CHECK ((scope = 'mcp'::text))
 );
 
 
@@ -750,7 +755,9 @@ CREATE TABLE public.oauth_states (
     code_verifier text NOT NULL,
     redirect_uri text NOT NULL,
     expires_at timestamp with time zone NOT NULL,
-    created_at timestamp with time zone DEFAULT now() NOT NULL
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    user_id uuid NOT NULL,
+    resource_id uuid NOT NULL
 );
 
 
@@ -898,7 +905,9 @@ CREATE TABLE public.system_conversations (
     source text DEFAULT 'web'::text NOT NULL,
     bridge_id uuid,
     external_id text,
-    CONSTRAINT system_conversations_status_check CHECK ((status = ANY (ARRAY['active'::text, 'awaiting_confirmation'::text])))
+    suspended_run_id uuid,
+    CONSTRAINT system_conversations_status_check CHECK ((status = ANY (ARRAY['active'::text, 'awaiting_confirmation'::text]))),
+    CONSTRAINT system_conversations_suspension_check CHECK ((((status = 'active'::text) AND (checkpoint IS NULL) AND (suspended_run_id IS NULL)) OR ((status = 'awaiting_confirmation'::text) AND (checkpoint IS NOT NULL) AND (suspended_run_id IS NOT NULL))))
 );
 
 
@@ -1033,7 +1042,8 @@ CREATE TABLE public.users (
     oidc_sub text NOT NULL,
     must_change_password boolean NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    updated_at timestamp with time zone DEFAULT now() NOT NULL
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    auth_epoch bigint NOT NULL
 );
 
 
@@ -1071,6 +1081,85 @@ CREATE TABLE public.webauthn_credentials (
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     last_used_at timestamp with time zone
 );
+
+
+--
+-- Security coordination state
+--
+
+CREATE TABLE public.identity_link_challenges (
+    token_hash text PRIMARY KEY,
+    user_id uuid NOT NULL,
+    platform text NOT NULL,
+    bridge_id uuid NOT NULL,
+    platform_user_id text NOT NULL,
+    expires_at timestamp with time zone NOT NULL,
+    consumed_at timestamp with time zone,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+CREATE INDEX identity_link_challenges_expires_idx
+    ON public.identity_link_challenges (expires_at);
+
+CREATE TABLE public.mcp_active_requests (
+    target_agent_id uuid NOT NULL,
+    principal_identity text NOT NULL,
+    request_id jsonb NOT NULL,
+    run_id uuid,
+    expires_at timestamp with time zone NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    PRIMARY KEY (target_agent_id, principal_identity, request_id),
+    UNIQUE (run_id),
+    CONSTRAINT mcp_active_requests_request_id_check CHECK ((jsonb_typeof(request_id) = ANY (ARRAY['string'::text, 'number'::text])))
+);
+
+CREATE INDEX mcp_active_requests_expires_idx
+    ON public.mcp_active_requests (expires_at);
+
+CREATE TABLE public.oauth_consent_transactions (
+    transaction_id uuid PRIMARY KEY,
+    binding_hash bytea NOT NULL UNIQUE CHECK (octet_length(binding_hash) = 32),
+    user_id uuid NOT NULL,
+    client_id text NOT NULL,
+    agent_id uuid NOT NULL,
+    expires_at timestamp with time zone NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+CREATE INDEX oauth_consent_transactions_expires_idx
+    ON public.oauth_consent_transactions (expires_at);
+
+CREATE INDEX oauth_consent_transactions_grant_idx
+    ON public.oauth_consent_transactions (user_id, client_id, agent_id);
+
+CREATE TABLE public.oauth_dcr_attempts (
+    ip_address text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+CREATE INDEX oauth_dcr_attempts_ip_created_idx
+    ON public.oauth_dcr_attempts (ip_address, created_at);
+
+CREATE TABLE public.relay_codes (
+    code_hash bytea PRIMARY KEY,
+    nonce_hash bytea NOT NULL,
+    user_id uuid NOT NULL,
+    email text NOT NULL,
+    tenant_role text NOT NULL,
+    auth_epoch bigint NOT NULL,
+    agent_id uuid NOT NULL,
+    target_origin text NOT NULL,
+    return_path text NOT NULL,
+    expires_at timestamp with time zone NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    session_id uuid NOT NULL
+);
+
+CREATE INDEX relay_codes_expires_idx ON public.relay_codes (expires_at);
+
+CREATE UNIQUE INDEX oauth_refresh_parent_unique_idx
+    ON public.oauth_refresh_tokens (parent_token_hash)
+    WHERE parent_token_hash IS NOT NULL;
 
 
 --
@@ -1676,6 +1765,43 @@ ALTER TABLE ONLY public.webauthn_credentials
 
 ALTER TABLE ONLY public.webauthn_credentials
     ADD CONSTRAINT webauthn_credentials_pkey PRIMARY KEY (id);
+
+
+ALTER TABLE ONLY public.identity_link_challenges
+    ADD CONSTRAINT identity_link_challenges_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+
+ALTER TABLE ONLY public.identity_link_challenges
+    ADD CONSTRAINT identity_link_challenges_bridge_id_fkey FOREIGN KEY (bridge_id) REFERENCES public.bridges(id) ON DELETE CASCADE;
+
+ALTER TABLE ONLY public.mcp_active_requests
+    ADD CONSTRAINT mcp_active_requests_target_agent_id_fkey FOREIGN KEY (target_agent_id) REFERENCES public.agents(id) ON DELETE CASCADE;
+
+ALTER TABLE ONLY public.mcp_active_requests
+    ADD CONSTRAINT mcp_active_requests_run_id_fkey FOREIGN KEY (run_id) REFERENCES public.runs(id) ON DELETE CASCADE;
+
+ALTER TABLE ONLY public.oauth_consent_transactions
+    ADD CONSTRAINT oauth_consent_transactions_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+
+ALTER TABLE ONLY public.oauth_consent_transactions
+    ADD CONSTRAINT oauth_consent_transactions_client_id_fkey FOREIGN KEY (client_id) REFERENCES public.oauth_clients(client_id) ON DELETE CASCADE;
+
+ALTER TABLE ONLY public.oauth_consent_transactions
+    ADD CONSTRAINT oauth_consent_transactions_agent_id_fkey FOREIGN KEY (agent_id) REFERENCES public.agents(id) ON DELETE CASCADE;
+
+ALTER TABLE ONLY public.relay_codes
+    ADD CONSTRAINT relay_codes_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+
+ALTER TABLE ONLY public.relay_codes
+    ADD CONSTRAINT relay_codes_agent_id_fkey FOREIGN KEY (agent_id) REFERENCES public.agents(id) ON DELETE CASCADE;
+
+ALTER TABLE ONLY public.relay_codes
+    ADD CONSTRAINT relay_codes_session_id_fkey FOREIGN KEY (session_id) REFERENCES public.user_sessions(id) ON DELETE CASCADE;
+
+ALTER TABLE ONLY public.oauth_states
+    ADD CONSTRAINT oauth_states_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+
+ALTER TABLE ONLY public.system_conversations
+    ADD CONSTRAINT system_conversations_suspended_run_id_fkey FOREIGN KEY (suspended_run_id) REFERENCES public.system_runs(id) ON DELETE SET NULL;
 
 
 --
@@ -2795,6 +2921,11 @@ INSERT INTO system_settings (
 ) VALUES (true, '', '', '', '', '', '', '', '', '');
 
 -- +goose Down
+DROP TABLE IF EXISTS public.identity_link_challenges CASCADE;
+DROP TABLE IF EXISTS public.mcp_active_requests CASCADE;
+DROP TABLE IF EXISTS public.oauth_consent_transactions CASCADE;
+DROP TABLE IF EXISTS public.oauth_dcr_attempts CASCADE;
+DROP TABLE IF EXISTS public.relay_codes CASCADE;
 DROP TABLE IF EXISTS public.agent_builds CASCADE;
 DROP TABLE IF EXISTS public.agent_conversations CASCADE;
 DROP TABLE IF EXISTS public.agent_directories CASCADE;

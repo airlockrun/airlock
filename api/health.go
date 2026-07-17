@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/airlockrun/airlock/db"
@@ -15,6 +16,21 @@ type healthHandler struct {
 	db     *db.DB
 	s3     *storage.S3Client
 	logger *zap.Logger
+	cache  healthProbeCache
+}
+
+type healthProbeResult struct {
+	dbOK bool
+	s3OK bool
+}
+
+type healthProbeCache struct {
+	mu       sync.Mutex
+	result   healthProbeResult
+	expires  time.Time
+	inFlight chan struct{}
+	ttl      time.Duration
+	probe    func() healthProbeResult
 }
 
 func newHealthHandler(d *db.DB, s3 *storage.S3Client, logger *zap.Logger) *healthHandler {
@@ -24,14 +40,21 @@ func newHealthHandler(d *db.DB, s3 *storage.S3Client, logger *zap.Logger) *healt
 	if s3 == nil {
 		panic("api: healthHandler requires S3Client")
 	}
-	return &healthHandler{db: d, s3: s3, logger: logger}
+	h := &healthHandler{db: d, s3: s3, logger: logger}
+	h.cache.ttl = 5 * time.Second
+	h.cache.probe = func() healthProbeResult {
+		dbOK, s3OK := probeHealth(context.Background(), 2*time.Second, h.db.Pool().Ping, h.s3.Ping)
+		return healthProbeResult{dbOK: dbOK, s3OK: s3OK}
+	}
+	return h
 }
 
 // Check probes Postgres and S3 with a short timeout. Returns 200 + status="ok"
 // if both reachable; 503 + status="degraded" otherwise. Per-subsystem booleans
 // in the response body show which dep is down.
 func (h *healthHandler) Check(w http.ResponseWriter, r *http.Request) {
-	dbOK, s3OK := probeHealth(r.Context(), 2*time.Second, h.db.Pool().Ping, h.s3.Ping)
+	result := h.cache.get()
+	dbOK, s3OK := result.dbOK, result.s3OK
 
 	status := "ok"
 	httpStatus := http.StatusOK
@@ -46,6 +69,37 @@ func (h *healthHandler) Check(w http.ResponseWriter, r *http.Request) {
 		Db:     dbOK,
 		S3:     s3OK,
 	})
+}
+
+func (c *healthProbeCache) get() healthProbeResult {
+	c.mu.Lock()
+	if time.Now().Before(c.expires) {
+		result := c.result
+		c.mu.Unlock()
+		return result
+	}
+	if c.inFlight != nil {
+		wait := c.inFlight
+		c.mu.Unlock()
+		<-wait
+		c.mu.Lock()
+		result := c.result
+		c.mu.Unlock()
+		return result
+	}
+	c.inFlight = make(chan struct{})
+	done := c.inFlight
+	c.mu.Unlock()
+
+	result := c.probe()
+
+	c.mu.Lock()
+	c.result = result
+	c.expires = time.Now().Add(c.ttl)
+	c.inFlight = nil
+	close(done)
+	c.mu.Unlock()
+	return result
 }
 
 func probeHealth(ctx context.Context, timeout time.Duration, dbPing, s3Ping func(context.Context) error) (bool, bool) {

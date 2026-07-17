@@ -65,7 +65,8 @@ The dev preset defaults to loopback-only `TLS_MODE=local`, but ingress is indepe
 ## Updating
 
 From an existing install checkout, `upgrade.sh` fetches tags, checks out the
-newest release, pulls its images, and brings the stack back up. Run it from the
+newest release, pulls its images, runs the one-time stop-all secret envelope
+maintenance pass when required, and brings the stack back up. Run it from the
 checkout for the instance you are upgrading. The deployment mode lives entirely
 in that checkout's `.env` (`TLS_MODE`, `COMPOSE_PROFILES`, endpoints), which
 docker compose reads automatically, so the upgrade is mode-agnostic:
@@ -76,11 +77,17 @@ cd airlock
 ./upgrade.sh --tag v0.4.2    # or pin a specific release
 ```
 
+The maintenance pass stops the Compose Airlock service and asks you to confirm
+that every other replica sharing its database is stopped. `--yes` asserts that
+there are no such external replicas. Multi-host and orchestrated deployments
+must follow [`docs/secret-storage.md`](docs/secret-storage.md) and must not use a
+rolling upgrade for the envelope migration.
+
 By default it only considers stable `vX.Y.Z` releases. Pre-releases have no
 supported migration path, so opting into one is explicit - `./upgrade.sh
 --pre-release` (or `AIRLOCK_ALLOW_PRERELEASE=1`).
 
-Or do it by hand:
+Or do it by hand after following the stop-all migration procedure:
 
 ```bash
 cd airlock
@@ -89,7 +96,15 @@ git checkout vX.Y.Z          # check the release notes for breaking changes firs
 docker compose pull && docker compose up -d
 ```
 
-Migrations run automatically on airlock startup. Always `pg_dump` before a major version bump if you care about your data.
+Schema migrations run automatically on airlock startup. Secret format migration
+requires `ENCRYPTION_KEY_REWRAP=true` and the stop-all procedure. Always
+`pg_dump` before a major version bump if you care about your data.
+
+Bundled-Postgres upgrades transition weak/default credentials while the current
+stack is still running; if that preflight cannot reach Postgres, the upgrade
+stops with recovery instructions before taking services down. Encryption-key
+rotation is a separate stop-all procedure documented in
+[`docs/secret-storage.md`](docs/secret-storage.md).
 
 ## What it does
 
@@ -129,7 +144,9 @@ Migrations run automatically on airlock startup. Always `pg_dump` before a major
                        └──────────────┘  └────────────┘
 ```
 
-Agents launched by airlock join the same Docker network and reach `airlock:8080`, `postgres:5432`, `rustfs:9000` by service name.
+Each runtime agent gets an internal Docker network containing only that agent,
+Airlock, and its Postgres endpoint. Direct internet, host/private/metadata, and
+sibling-agent traffic has no route; outbound HTTP is brokered through Airlock.
 
 ## License
 

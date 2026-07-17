@@ -94,6 +94,20 @@ watch(
 )
 
 const userMenuRef = ref()
+async function logout() {
+  try {
+    await auth.logout()
+  } catch (err: any) {
+    toast.add({
+      severity: 'error',
+      summary: err.response?.data?.error || 'Logout failed',
+      life: 5000,
+    })
+    return
+  }
+  await router.push('/login')
+}
+
 // Computed so the theme row's label/icon track the current mode. The Settings
 // entry lands on Security — the first universal Settings section.
 const userMenuItems = computed(() => [
@@ -110,10 +124,7 @@ const userMenuItems = computed(() => [
   {
     label: 'Logout',
     icon: 'pi pi-sign-out',
-    command: () => {
-      auth.logout()
-      router.push('/login')
-    },
+    command: logout,
   },
 ])
 

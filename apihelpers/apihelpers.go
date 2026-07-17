@@ -11,7 +11,9 @@
 package apihelpers
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"unicode/utf8"
@@ -22,6 +24,10 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 )
+
+const MaxRequestBodyBytes int64 = 4 << 20
+
+var ErrRequestBodyTooLarge = errors.New("request body too large")
 
 // ProtoMarshal is the shared protojson encoder. UseProtoNames=false
 // emits camelCase (matching the frontend convention) and
@@ -61,7 +67,7 @@ func WriteError(w http.ResponseWriter, status int, msg string) {
 // ProtoUnmarshal options. Closes r.Body when done.
 func DecodeProto(r *http.Request, msg proto.Message) error {
 	defer r.Body.Close()
-	b, err := io.ReadAll(r.Body)
+	b, err := readBody(r)
 	if err != nil {
 		return err
 	}
@@ -82,7 +88,35 @@ func WriteJSON(w http.ResponseWriter, status int, v any) {
 // done.
 func ReadJSON(r *http.Request, v any) error {
 	defer r.Body.Close()
-	return json.NewDecoder(r.Body).Decode(v)
+	b, err := readBody(r)
+	if err != nil {
+		return err
+	}
+	dec := json.NewDecoder(bytes.NewReader(b))
+	if err := dec.Decode(v); err != nil {
+		return err
+	}
+	if err := dec.Decode(&struct{}{}); err != io.EOF {
+		if err == nil {
+			return errors.New("request body must contain a single JSON value")
+		}
+		return err
+	}
+	return nil
+}
+
+func readBody(r *http.Request) ([]byte, error) {
+	if r.ContentLength > MaxRequestBodyBytes {
+		return nil, ErrRequestBodyTooLarge
+	}
+	b, err := io.ReadAll(io.LimitReader(r.Body, MaxRequestBodyBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(b)) > MaxRequestBodyBytes {
+		return nil, ErrRequestBodyTooLarge
+	}
+	return b, nil
 }
 
 // WriteJSONError is WriteError's non-proto twin: a JSON

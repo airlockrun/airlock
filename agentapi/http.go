@@ -66,7 +66,7 @@ func (h *Handler) AgentHTTP(w http.ResponseWriter, r *http.Request) {
 		bodyReader = strings.NewReader(req.Body)
 	}
 
-	upstreamURL, err := h.httpNetwork.parseHTTPURL(req.URL)
+	upstreamURL, err := h.httpNetwork.ParseURL(req.URL)
 	if err != nil {
 		writeJSONError(w, http.StatusBadRequest, "invalid request URL: "+err.Error())
 		return
@@ -86,7 +86,7 @@ func (h *Handler) AgentHTTP(w http.ResponseWriter, r *http.Request) {
 		upstream.Header.Set(k, v)
 	}
 
-	client := h.httpNetwork.client(time.Duration(timeout) * time.Second)
+	client := h.httpNetwork.Client(time.Duration(timeout) * time.Second)
 	resp, err := client.Do(upstream)
 	if err != nil {
 		h.logger.Error("agent HTTP request failed", zap.String("url", req.URL), zap.Error(err))

@@ -3,10 +3,35 @@ INSERT INTO platform_identities (user_id, platform, platform_user_id)
 VALUES (@user_id, @platform, @platform_user_id)
 RETURNING *;
 
--- name: UpsertPlatformIdentity :one
+-- name: CreatePlatformIdentityIfUnlinked :execrows
 INSERT INTO platform_identities (user_id, platform, platform_user_id)
 VALUES (@user_id, @platform, @platform_user_id)
-ON CONFLICT (platform, platform_user_id) DO UPDATE SET user_id = EXCLUDED.user_id
+ON CONFLICT (platform, platform_user_id) DO NOTHING;
+
+-- name: CreateIdentityLinkChallenge :one
+INSERT INTO identity_link_challenges (
+    token_hash, user_id, platform, bridge_id, platform_user_id, expires_at
+)
+VALUES (@token_hash, @user_id, @platform, @bridge_id, @platform_user_id, @expires_at)
+ON CONFLICT (token_hash) DO UPDATE SET token_hash = EXCLUDED.token_hash
+WHERE identity_link_challenges.consumed_at IS NULL
+  AND identity_link_challenges.user_id = EXCLUDED.user_id
+  AND identity_link_challenges.platform = EXCLUDED.platform
+  AND identity_link_challenges.bridge_id = EXCLUDED.bridge_id
+  AND identity_link_challenges.platform_user_id = EXCLUDED.platform_user_id
+  AND identity_link_challenges.expires_at = EXCLUDED.expires_at
+RETURNING *;
+
+-- name: ConsumeIdentityLinkChallenge :one
+UPDATE identity_link_challenges
+SET consumed_at = now()
+WHERE token_hash = @token_hash
+  AND user_id = @user_id
+  AND platform = @platform
+  AND bridge_id = @bridge_id
+  AND platform_user_id = @platform_user_id
+  AND consumed_at IS NULL
+  AND expires_at > now()
 RETURNING *;
 
 -- name: GetPlatformIdentity :one

@@ -64,7 +64,7 @@ func RegisterClient(ctx context.Context, httpClient *http.Client, registrationEn
 		return nil, errors.New("redirectURI is required")
 	}
 	if httpClient == nil {
-		httpClient = http.DefaultClient
+		panic("oauth: HTTP client is required")
 	}
 
 	body := RegisterClientRequest{
@@ -93,7 +93,13 @@ func RegisterClient(ctx context.Context, httpClient *http.Client, registrationEn
 	}
 	defer resp.Body.Close()
 
-	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 64*1024+1))
+	if err != nil {
+		return nil, fmt.Errorf("read registration response: %w", err)
+	}
+	if len(respBody) > 64*1024 {
+		return nil, errors.New("registration response exceeds 65536 bytes")
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("registration endpoint %s returned status %d: %s", registrationEndpoint, resp.StatusCode, string(respBody))
 	}
@@ -104,6 +110,9 @@ func RegisterClient(ctx context.Context, httpClient *http.Client, registrationEn
 	}
 	if out.ClientID == "" {
 		return nil, fmt.Errorf("registration response missing client_id (body: %s)", string(respBody))
+	}
+	if out.TokenEndpointAuthMethod != "" && out.TokenEndpointAuthMethod != "client_secret_basic" && out.TokenEndpointAuthMethod != "none" {
+		return nil, fmt.Errorf("registration response selected unsupported token_endpoint_auth_method %q", out.TokenEndpointAuthMethod)
 	}
 	return &out, nil
 }

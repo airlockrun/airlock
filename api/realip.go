@@ -1,42 +1,46 @@
 package api
 
 import (
+	"crypto/sha256"
+	"crypto/subtle"
 	"net"
 	"net/http"
 	"strings"
 )
 
+const proxyAuthHeader = "X-Airlock-Proxy-Auth"
+
 // RealIPConfig configures the real IP extraction middleware.
 type RealIPConfig struct {
-	// TrustedProxies is a list of CIDR ranges whose X-Forwarded-For / X-Real-IP
-	// headers are trusted. If empty, no headers are trusted and r.RemoteAddr is
-	// used as-is. A single entry of "*" trusts all sources.
-	TrustedProxies []*net.IPNet
+	// TrustedPeers limits which immediate network peers may present authenticated
+	// forwarding headers. The shared secret remains required for every match.
+	TrustedPeers []*net.IPNet
 
-	// TrustAll is set when the configured value is "*".
-	TrustAll bool
+	proxyAuthHash [sha256.Size]byte
 
-	// Limit is how many rightmost entries in X-Forwarded-For to walk.
+	// Limit selects the exact rightmost entry in X-Forwarded-For.
 	// Default: 1 (single proxy).
 	Limit int
 }
 
 // ParseRealIPConfig builds a RealIPConfig from the raw env values.
-// trustedProxies is a comma-separated list of CIDRs or "*".
+// trustedPeers is a comma-separated list of immediate-peer CIDRs.
 // limit is the number of proxy hops (minimum 1).
-func ParseRealIPConfig(trustedProxies string, limit int) *RealIPConfig {
+func ParseRealIPConfig(trustedPeers string, limit int, proxyAuthSecret string) *RealIPConfig {
+	if proxyAuthSecret == "" {
+		panic("REVERSE_PROXY_AUTH_SECRET is required")
+	}
 	if limit < 1 {
-		limit = 1
+		panic("REVERSE_PROXY_LIMIT must be at least 1")
 	}
 
-	cfg := &RealIPConfig{Limit: limit}
+	cfg := &RealIPConfig{
+		Limit:         limit,
+		proxyAuthHash: sha256.Sum256([]byte(proxyAuthSecret)),
+	}
 
-	raw := strings.TrimSpace(trustedProxies)
+	raw := strings.TrimSpace(trustedPeers)
 	if raw == "" {
-		return cfg
-	}
-	if raw == "*" {
-		cfg.TrustAll = true
 		return cfg
 	}
 
@@ -55,24 +59,21 @@ func ParseRealIPConfig(trustedProxies string, limit int) *RealIPConfig {
 		}
 		_, cidr, err := net.ParseCIDR(entry)
 		if err != nil {
-			panic("REVERSE_PROXY_TRUSTED_PROXIES: invalid CIDR " + entry + ": " + err.Error())
+			panic("REVERSE_PROXY_TRUSTED_PEERS: invalid CIDR " + entry + ": " + err.Error())
 		}
-		cfg.TrustedProxies = append(cfg.TrustedProxies, cidr)
+		cfg.TrustedPeers = append(cfg.TrustedPeers, cidr)
 	}
 	return cfg
 }
 
 // Enabled returns true if any proxy trust is configured.
 func (c *RealIPConfig) Enabled() bool {
-	return c.TrustAll || len(c.TrustedProxies) > 0
+	return len(c.TrustedPeers) > 0
 }
 
-// isTrusted checks whether ip falls within any trusted CIDR.
-func (c *RealIPConfig) isTrusted(ip net.IP) bool {
-	if c.TrustAll {
-		return true
-	}
-	for _, cidr := range c.TrustedProxies {
+// isTrustedPeer checks whether ip falls within an eligible direct-peer CIDR.
+func (c *RealIPConfig) isTrustedPeer(ip net.IP) bool {
+	for _, cidr := range c.TrustedPeers {
 		if cidr.Contains(ip) {
 			return true
 		}
@@ -80,76 +81,68 @@ func (c *RealIPConfig) isTrusted(ip net.IP) bool {
 	return false
 }
 
-// RealIP returns middleware that overwrites r.RemoteAddr with the client's
-// real IP extracted from X-Real-IP or X-Forwarded-For, but only when the
-// direct connection comes from a trusted proxy.
+func (c *RealIPConfig) authenticates(value string) bool {
+	got := sha256.Sum256([]byte(value))
+	return subtle.ConstantTimeCompare(got[:], c.proxyAuthHash[:]) == 1
+}
+
+// RealIP returns middleware that canonicalizes r.RemoteAddr to an IP and,
+// when the direct peer is trusted, replaces it with the forwarded client IP.
+// Forwarding headers are removed before downstream handlers run so
+// r.RemoteAddr remains the only client-IP source inside the application.
 func RealIP(cfg *RealIPConfig) func(http.Handler) http.Handler {
-	if cfg == nil || !cfg.Enabled() {
-		// No trusted proxies configured — pass through unchanged.
-		return func(next http.Handler) http.Handler { return next }
+	if cfg == nil {
+		panic("api.RealIP: nil config")
 	}
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Parse the direct peer IP from r.RemoteAddr (ip:port).
 			peerIP := parseRemoteAddr(r.RemoteAddr)
-			if peerIP == nil || !cfg.isTrusted(peerIP) {
-				// Direct connection is not from a trusted proxy — don't
-				// trust any forwarded headers.
-				next.ServeHTTP(w, r)
-				return
+			proxyAuth := r.Header.Get(proxyAuthHeader)
+			r.Header.Del(proxyAuthHeader)
+			if peerIP != nil {
+				r.RemoteAddr = peerIP.String()
 			}
 
-			// Try X-Real-IP first (single value, set by first proxy).
-			if rip := r.Header.Get("X-Real-IP"); rip != "" {
-				if ip := net.ParseIP(strings.TrimSpace(rip)); ip != nil {
-					r.RemoteAddr = ip.String()
-					next.ServeHTTP(w, r)
-					return
+			if peerIP != nil && cfg.isTrustedPeer(peerIP) && cfg.authenticates(proxyAuth) {
+				// X-Forwarded-For is preferred because conforming proxies append
+				// to it. X-Real-IP is accepted only as a single-hop fallback.
+				if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+					if clientIP := extractFromXFF(xff, cfg); clientIP != "" {
+						r.RemoteAddr = clientIP
+					}
+				} else if rip := r.Header.Get("X-Real-IP"); rip != "" {
+					if ip := net.ParseIP(strings.TrimSpace(rip)); ip != nil {
+						r.RemoteAddr = ip.String()
+					}
 				}
 			}
 
-			// Walk X-Forwarded-For right-to-left, skipping trusted proxies,
-			// up to cfg.Limit hops.
-			if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-				if clientIP := extractFromXFF(xff, cfg); clientIP != "" {
-					r.RemoteAddr = clientIP
-				}
-			}
-
+			r.Header.Del("Forwarded")
+			r.Header.Del("X-Forwarded-For")
+			r.Header.Del("X-Real-IP")
 			next.ServeHTTP(w, r)
 		})
 	}
 }
 
-// extractFromXFF walks the X-Forwarded-For chain right-to-left.
-// It skips trusted proxy IPs and returns the first untrusted IP,
-// stopping after cfg.Limit hops.
+// extractFromXFF returns the configured rightmost hop. Caddy sanitizes an
+// untrusted incoming chain before appending its peer, so a fixed hop count
+// cannot be moved by a client-controlled prefix.
 func extractFromXFF(xff string, cfg *RealIPConfig) string {
 	parts := strings.Split(xff, ",")
-
-	// Walk right-to-left.
-	hops := 0
-	for i := len(parts) - 1; i >= 0; i-- {
-		candidate := strings.TrimSpace(parts[i])
-		if candidate == "" {
-			continue
-		}
-		ip := net.ParseIP(candidate)
+	ips := make([]net.IP, len(parts))
+	for i, part := range parts {
+		ip := net.ParseIP(strings.TrimSpace(part))
 		if ip == nil {
-			continue
+			return ""
 		}
-		hops++
-		if hops > cfg.Limit {
-			break
-		}
-		if !cfg.isTrusted(ip) {
-			return ip.String()
-		}
+		ips[i] = ip
 	}
-
-	// All entries were trusted proxies (or empty) — no client IP found.
-	return ""
+	if len(ips) < cfg.Limit {
+		return ""
+	}
+	return ips[len(ips)-cfg.Limit].String()
 }
 
 // parseRemoteAddr extracts the IP from a host:port string.

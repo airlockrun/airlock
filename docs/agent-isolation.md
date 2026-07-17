@@ -31,9 +31,9 @@ Two facts shape everything below:
 
 ### Tier 1 - shipped by default (invisible to legitimate agents)
 
-Applied to every agent runtime container by
-`container.buildAgentHostConfig` (`container/docker.go`). These strip only
-what no honest agent uses, so there is no usability cost:
+Runtime hardening is assembled in `container/docker.go`; brokered destination
+checks live in `networkpolicy`, and Compose supplies trusted dependency labels.
+These controls remove paths no honest runtime agent needs:
 
 - **`CapDrop: ALL`** - the agent serves HTTP on `:8080` and shells out to
   nothing (exec runs in the separate toolserver), so it needs no Linux
@@ -53,16 +53,41 @@ what no honest agent uses, so there is no usability cost:
   `host.docker.internal:host-gateway` when Airlock runs natively and agents
   call it through the host. Container deployments omit the alias and its host
   reachability; agents use service DNS through `API_URL_AGENT`.
-- **Brokered HTTP destination policy** - agent `httpRequest` and connection
-  calls are dialed by the Airlock process. Public addresses are always allowed;
-  `AGENT_HTTP_PRIVATE_CIDRS` controls non-public destinations and defaults to
-  `0.0.0.0/0,::/0`, allowing routable LAN, Docker, and VPN services. Set it to
-  an empty value for public-only brokered HTTP, or list narrower CIDRs such as
-  `192.168.1.0/24,100.64.0.0/10,fd00::/8`. Every DNS result is checked when
-  dialing. Localhost, loopback IPs, link-local addresses (including cloud
-  metadata), multicast, and unspecified addresses are always blocked. A host
-  service must listen on a LAN/VPN or host-gateway address rather than only on
-  Airlock's localhost.
+- **Brokered HTTP destination policy** - agent `httpRequest`, connection, MCP,
+  and outbound OAuth calls are dialed by the Airlock process through one
+  transport. Public HTTPS addresses are always allowed; `AGENT_HTTP_PRIVATE_CIDRS`
+  controls non-public destinations and defaults to public-only. List explicit
+  CIDRs such as `192.168.1.0/24,100.64.0.0/10,fd00::/8` for required LAN, VPN,
+  or Docker services. Every DNS result and redirect is checked. Link-local
+  addresses (including cloud metadata), multicast, and unspecified addresses
+  are always blocked. Loopback HTTP is available only when `PUBLIC_URL`
+  explicitly configures a localhost development instance.
+- **Codegen workspace isolation** - each ephemeral toolserver mounts only its
+  own subdirectory from the named codegen volume. It cannot read activation
+  data, cached libraries, agent repositories, or another build workspace from
+  Airlock's persistent volume.
+- **Per-agent internal networks** - with `AGENT_NETWORK_PER_AGENT=true`, Airlock
+  creates a Docker `Internal` bridge for each runtime and attaches only trusted
+  dependency containers carrying the instance-scoped
+  `run.airlock.agent-network-access` label. Runtime containers never join the
+  shared `AGENT_NETWORK`; that internal network is only a dependency-discovery
+  seed. Each agent can reach the `airlock` API alias and its scoped Postgres
+  endpoint, but has no route to the host, cloud metadata, private networks, the
+  public internet, infrastructure services, or sibling agents. Legitimate
+  outbound HTTP uses Airlock's brokered APIs and destination policy.
+- **Replica-safe network lifecycle** - deterministic network names and labels
+  make creation idempotent. Start, stop, idle reap, and reconciliation hold a
+  per-agent PostgreSQL advisory lock before attaching or detaching endpoints,
+  so multiple Airlock replicas sharing the Docker daemon cannot race cleanup.
+  Startup and periodic reconciliation attach replacement dependency containers
+  after replica/Postgres restarts. Networks are removed after the runtime exits;
+  a network with an unexpected endpoint is retained rather than destructively
+  pruned.
+- **External Postgres relay** - the `external-db` Compose profile runs a
+  fixed-destination TCP relay. It is the only external-DB endpoint attached to
+  each internal agent network, and it forwards bytes only to `DB_HOST:DB_PORT`.
+  TLS and the per-agent Postgres role remain end-to-end; agents connect to
+  `postgres-agent-relay:5432` through `DB_HOST_AGENT` / `DB_PORT_AGENT`.
 
 ### Tier 2 - operator-configurable (generous / off by default)
 
@@ -81,33 +106,29 @@ what no honest agent uses, so there is no usability cost:
   top. Requires `runsc` installed and registered as a Docker runtime on the
   host (`AGENT_SANDBOX` unset → default `runc`).
 
-## Residual risk & deploy-level follow-ups (not in code)
+## Residual risk and deployment prerequisites
 
-Tier 1 gets you to "an agent needs a kernel 0-day to touch the host, and
-can't reach infra/siblings." Closing the rest is deployment topology the
-operator owns - **recommended, not enforced by airlock**:
+The Compose deployment requires a Docker daemon that supports dynamic container
+attachment to local bridge networks and allows Airlock to use its Docker API socket.
+Docker Engine and Docker Desktop provide these capabilities.
 
-- **Network segmentation** - *partially shipped.* Agent runtime containers
-  attach to a dedicated `AGENT_NETWORK` (`AGENT_NETWORK` env; prod compose
-  sets it to `airlock-agents`) carrying only **airlock + postgres** -
-  rustfs, caddy, the frontend, and build containers are excluded, so an
-  agent can't reach them. Postgres reachability is by design (scoped
-  per-agent schema + role via `AIRLOCK_DB_URL`); S3 goes through airlock's
-  storage API and presigned public URLs, never direct. Agents keep internet
-  egress (bridge NAT). **Residual:** agents on the shared `agents` network
-  can still reach *each other* - accepted, because A2A is proxied through
-  airlock and an agent's `:8080` is JWT-gated; full sibling isolation would
-  need a network per agent. Dev leaves `AGENT_NETWORK` unset (agents stay on
-  the single dev network - the dev box is the trusted operator's).
-- **Metadata egress firewall** - dropping the host-gateway alias removes
-  the convenient host route, but a hard block of `169.254.169.254` (cloud
-  credential endpoint) needs a host iptables/nftables rule or IMDSv2
-  hop-limit=1.
-- **Direct agent and other server-side egress** - `AGENT_HTTP_PRIVATE_CIDRS`
-  governs only Airlock's brokered `httpRequest` and connection clients. Agent
-  Go code, MCP, OAuth, credential tests, exec endpoints, webfetch, Git, and LLM
-  provider clients use their own network paths. Apply host firewall and network
-  policy when those paths need destination restrictions.
+- **Native development** - a host process cannot be attached to a Docker
+  internal bridge. `.env.dev.example` therefore sets
+  `AGENT_NETWORK_PER_AGENT=false`; runtime agents use the shared development
+  network and host gateway. Do not use native mode for mutually untrusted
+  agents. Run Airlock through Compose to enforce runtime network isolation.
+- **Non-Compose deployments** - containers that agents must reach need both the
+  instance-valued `run.airlock.agent-network-access` label and a comma-separated
+  `run.airlock.agent-network-aliases` label, and must join the internal
+  `AGENT_NETWORK` seed. Airlock fails agent startup when no trusted dependency
+  is available or a managed network does not match the required internal
+  bridge/labels. Managed isolation is the application default; explicitly set
+  `AGENT_NETWORK_PER_AGENT=false` only for trusted native development.
+- **Other server-side egress** - `AGENT_HTTP_PRIVATE_CIDRS` governs Airlock's
+  brokered HTTP, connection, MCP, outbound OAuth, and credential-test clients.
+  Build toolservers, Git, LLM provider clients, and exec endpoints run on
+  separate trusted-server paths; apply deployment egress policy to those paths
+  when required.
 - **Rootless BuildKit** - *shipped (prod, opt-in via `BUILDKIT_HOST`).* The
   prod compose runs a `moby/buildkit:rootless` daemon, and airlock builds
   agent images through it via a remote buildx builder (`builder.buildImage`)
@@ -173,7 +194,25 @@ AGENT_CODEGEN_VOLUME=<id>-data
 Published Caddy installs also need distinct host ports (`HTTP_PORT` /
 `HTTPS_PORT`). Local installs publish only `HTTP_PORT` through the `caddy-local`
 profile and bind it to 127.0.0.1. Tunnel installs use the
-`caddy-private,cloudflared` profiles and do not publish Caddy host ports.
+`caddy-private,cloudflared` profiles and do not publish Caddy host ports. Their
+Cloudflare ingress uses a fixed-address internal bridge so Caddy can trust only
+the cloudflared peer. Co-located tunnel instances must use non-overlapping
+subnets and addresses, for example:
+
+```env
+TUNNEL_INGRESS_NETWORK=<id>-tunnel-ingress
+TUNNEL_INGRESS_SUBNET=172.31.254.0/29
+TUNNEL_CLOUDFLARED_IP=172.31.254.2
+TUNNEL_CADDY_IP=172.31.254.3
+```
+
+Export these variables in the shell before running `install.sh` to have the
+generated `.env` carry them through. Set them directly in `.env` before
+upgrading an existing co-located tunnel. Each tunnel's Cloudflare
+public-hostname routes target `http://caddy:80`; cloudflared resolves that name
+only on the internal ingress bridge. Caddy remains on the infrastructure
+network for outbound access to Airlock, the frontend, and bundled S3, but its
+tunnel listener binds only to `TUNNEL_CADDY_IP`.
 Bundled Postgres and RustFS stay on the Docker network in normal deployments.
 `make dev` applies `docker-compose.dev.yml` to publish loopback ports for the
 native development process.

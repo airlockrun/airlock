@@ -4,7 +4,9 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/config"
@@ -12,6 +14,7 @@ import (
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/airlockrun/airlock/trigger"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"
 )
 
@@ -97,10 +100,21 @@ func TestSubdomainProxyForwardsAuthoritativeCallerHeaders(t *testing.T) {
 			t.Fatalf("UpsertRoute(%s): %v", path, err)
 		}
 	}
+	if err := q.UpsertRoute(ctx, dbq.UpsertRouteParams{
+		AgentID: agent.ID, Path: "/user", Method: http.MethodPost, Access: "user", Description: "test mutation",
+	}); err != nil {
+		t.Fatalf("UpsertRoute(POST /user): %v", err)
+	}
 
 	requests := make(chan *http.Request, 6)
 	agentServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests <- r.Clone(r.Context())
+		http.SetCookie(w, &http.Cookie{Name: relayCookieName, Value: "collision", Path: "/"})
+		http.SetCookie(w, &http.Cookie{Name: relayNonceName, Value: "collision", Path: "/"})
+		http.SetCookie(w, &http.Cookie{Name: relayDevNonceName, Value: "collision", Path: "/"})
+		http.SetCookie(w, &http.Cookie{Name: accessCookieName, Value: "collision", Path: "/"})
+		http.SetCookie(w, &http.Cookie{Name: refreshCookieName, Value: "collision", Path: "/"})
+		http.SetCookie(w, &http.Cookie{Name: "agent_cookie", Value: "preserved", Path: "/"})
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	defer agentServer.Close()
@@ -120,14 +134,33 @@ func TestSubdomainProxyForwardsAuthoritativeCallerHeaders(t *testing.T) {
 		testJWTSecret, "https://airlock.test", http.NotFoundHandler(),
 	)
 
-	ownerToken, err := auth.IssueToken(testJWTSecret, ownerID, "owner@example.com", "Owner", "user", false)
+	owner, err := q.GetUserByID(ctx, toPgUUID(ownerID))
 	if err != nil {
-		t.Fatalf("IssueToken(owner): %v", err)
+		t.Fatalf("GetUserByID(owner): %v", err)
 	}
-	memberToken, err := auth.IssueToken(testJWTSecret, pgUUID(member.ID), member.Email, "", "admin", false)
-	if err != nil {
-		t.Fatalf("IssueToken(member): %v", err)
+	issueToken := func(t *testing.T, user dbq.User) string {
+		t.Helper()
+		now := time.Now()
+		session, err := q.CreateUserSession(ctx, dbq.CreateUserSessionParams{
+			UserID:           user.ID,
+			Kind:             "web",
+			ClientName:       "proxy test",
+			DeviceName:       "proxy test",
+			RefreshTokenHash: []byte(uuid.NewString()),
+			AuthenticatedAt:  pgtype.Timestamptz{Time: now, Valid: true},
+			ExpiresAt:        pgtype.Timestamptz{Time: now.Add(time.Hour), Valid: true},
+		})
+		if err != nil {
+			t.Fatalf("CreateUserSession: %v", err)
+		}
+		token, err := auth.IssueUserAccessToken(testJWTSecret, pgUUID(user.ID), user.Email, user.DisplayName, user.TenantRole, user.MustChangePassword, pgUUID(session.ID), user.AuthEpoch, now)
+		if err != nil {
+			t.Fatalf("IssueUserAccessToken: %v", err)
+		}
+		return token
 	}
+	ownerToken := issueToken(t, owner)
+	memberToken := issueToken(t, member)
 
 	tests := []struct {
 		name     string
@@ -139,11 +172,11 @@ func TestSubdomainProxyForwardsAuthoritativeCallerHeaders(t *testing.T) {
 		userName string
 	}{
 		{name: "public route", path: "/public", access: "public"},
-		{name: "authenticated public route retains effective access", path: "/public", token: ownerToken, access: "admin", userID: ownerID.String(), email: "owner@example.com", userName: "Owner"},
+		{name: "authenticated public route retains effective access", path: "/public", token: ownerToken, access: "admin", userID: ownerID.String(), email: owner.Email, userName: owner.DisplayName},
 		{name: "public asset", path: "/__air/assets/htmx.min.js", access: "public"},
-		{name: "user route gets effective admin access", path: "/user", token: ownerToken, access: "admin", userID: ownerID.String(), email: "owner@example.com", userName: "Owner"},
-		{name: "tenant admin gets agent user access", path: "/user", token: memberToken, access: "user", userID: pgUUID(member.ID).String(), email: member.Email},
-		{name: "admin route", path: "/admin", token: ownerToken, access: "admin", userID: ownerID.String(), email: "owner@example.com", userName: "Owner"},
+		{name: "user route gets effective admin access", path: "/user", token: ownerToken, access: "admin", userID: ownerID.String(), email: owner.Email, userName: owner.DisplayName},
+		{name: "tenant admin gets agent user access", path: "/user", token: memberToken, access: "user", userID: pgUUID(member.ID).String(), email: member.Email, userName: member.DisplayName},
+		{name: "admin route", path: "/admin", token: ownerToken, access: "admin", userID: ownerID.String(), email: owner.Email, userName: owner.DisplayName},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -154,6 +187,7 @@ func TestSubdomainProxyForwardsAuthoritativeCallerHeaders(t *testing.T) {
 			req.Header.Set("X-User-ID", uuid.NewString())
 			req.Header.Set("X-User-Email", "spoof@example.com")
 			req.Header.Set("X-User-Name", "Spoofed")
+			req.Header.Set("Cookie", relayCookieName+"=secret; "+relayNonceName+"=nonce; "+relayDevNonceName+"=devnonce; "+accessCookieName+"=platform; "+refreshCookieName+"=refresh; agent_cookie=request-value")
 			if tt.token != "" {
 				req.Header.Set("Authorization", "Bearer "+tt.token)
 			}
@@ -174,6 +208,227 @@ func TestSubdomainProxyForwardsAuthoritativeCallerHeaders(t *testing.T) {
 				if got := forwarded.Header.Get(header); got != want {
 					t.Errorf("%s = %q, want %q", header, got, want)
 				}
+			}
+			if got := forwarded.Header.Get("Cookie"); got != "agent_cookie=request-value" {
+				t.Errorf("Cookie = %q, want agent-owned cookie only", got)
+			}
+			setCookies := rec.Header().Values("Set-Cookie")
+			if len(setCookies) != 1 || !strings.HasPrefix(setCookies[0], "agent_cookie=preserved") {
+				t.Errorf("Set-Cookie = %v, want agent-owned cookie only", setCookies)
+			}
+		})
+	}
+
+	ownerClaims, err := auth.ValidateUserAccessToken(testJWTSecret, ownerToken)
+	if err != nil {
+		t.Fatalf("ValidateUserAccessToken: %v", err)
+	}
+	subdomainToken, err := auth.IssueSubdomainToken(testJWTSecret, agentID, ownerID, uuid.MustParse(ownerClaims.SessionID), "owner@example.com", "Owner", "user", 0)
+	if err != nil {
+		t.Fatalf("IssueSubdomainToken: %v", err)
+	}
+	for _, tt := range []struct {
+		name   string
+		origin string
+		bearer bool
+		want   int
+	}{
+		{name: "cookie exact origin", origin: "http://" + agent.Slug + ".agents.test", want: http.StatusNoContent},
+		{name: "cookie missing origin", want: http.StatusForbidden},
+		{name: "cookie sibling origin", origin: "http://sibling.agents.test", want: http.StatusForbidden},
+		{name: "user bearer is exempt", bearer: true, want: http.StatusNoContent},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "http://"+agent.Slug+".agents.test/user", nil)
+			req.Host = agent.Slug + ".agents.test"
+			if tt.origin != "" {
+				req.Header.Set("Origin", tt.origin)
+			}
+			if tt.bearer {
+				req.Header.Set("Authorization", "Bearer "+ownerToken)
+			} else {
+				req.AddCookie(&http.Cookie{Name: relayCookieName, Value: subdomainToken})
+			}
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			if rec.Code != tt.want {
+				t.Fatalf("status = %d, want %d; body: %s", rec.Code, tt.want, rec.Body.String())
+			}
+			if tt.want == http.StatusNoContent {
+				<-requests
+			} else {
+				select {
+				case <-requests:
+					t.Fatal("rejected request reached agent")
+				default:
+				}
+			}
+		})
+	}
+
+	if err := q.UpdateAgentA2ASettings(ctx, dbq.UpdateAgentA2ASettingsParams{ID: agent.ID}); err != nil {
+		t.Fatalf("disable public routes: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "http://"+agent.Slug+".agents.test/__air/assets/htmx.min.js", nil)
+	req.Host = agent.Slug + ".agents.test"
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("public asset with public routes disabled: status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+}
+
+func TestMatchRouteUsesServeMuxGrammar(t *testing.T) {
+	routes := []dbq.AgentRoute{
+		{Method: http.MethodGet, Path: "/files/{path...}", Access: "user"},
+		{Method: http.MethodGet, Path: "/files/{name}", Access: "admin"},
+		{Method: http.MethodGet, Path: "/files/static", Access: "admin"},
+		{Method: http.MethodPost, Path: "/files/{path...}", Access: "public"},
+	}
+	for _, tc := range []struct {
+		name   string
+		method string
+		path   string
+		access string
+	}{
+		{name: "literal precedence", method: http.MethodGet, path: "/files/static", access: "admin"},
+		{name: "multi wildcard", method: http.MethodGet, path: "/files/a/b", access: "user"},
+		{name: "method", method: http.MethodPost, path: "/files/a", access: "public"},
+		{name: "head uses get", method: http.MethodHead, path: "/files/a/b", access: "user"},
+		{name: "escaped slash stays in segment", method: http.MethodGet, path: "/files/a%2Fb", access: "admin"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(tc.method, "http://agent.test"+tc.path, nil)
+			route, ok, err := matchRoute(routes, req)
+			if err != nil || !ok || route.Access != tc.access {
+				t.Fatalf("matchRoute = (%q, %v, %v), want access %q", route.Access, ok, err, tc.access)
+			}
+		})
+	}
+}
+
+func TestMatchRouteRejectsAmbiguousPatterns(t *testing.T) {
+	routes := []dbq.AgentRoute{
+		{Method: http.MethodGet, Path: "/users/{id}"},
+		{Method: http.MethodGet, Path: "/users/{name}"},
+	}
+	req := httptest.NewRequest(http.MethodGet, "http://agent.test/users/42", nil)
+	if _, _, err := matchRoute(routes, req); err == nil {
+		t.Fatal("matchRoute accepted ambiguous patterns")
+	}
+}
+
+func TestValidateSubdomainAuthSeparatesBearerAndCookieProfiles(t *testing.T) {
+	skipIfNoDB(t)
+	agentID, userID := testAgentAndUser(t)
+	otherAgentID := uuid.New()
+	now := time.Now()
+	session, err := dbq.New(testDB.Pool()).CreateUserSession(context.Background(), dbq.CreateUserSessionParams{
+		UserID:           toPgUUID(userID),
+		Kind:             "web",
+		ClientName:       "test",
+		DeviceName:       "test",
+		RefreshTokenHash: []byte(uuid.NewString()),
+		AuthenticatedAt:  pgtype.Timestamptz{Time: now, Valid: true},
+		ExpiresAt:        pgtype.Timestamptz{Time: now.Add(time.Hour), Valid: true},
+	})
+	if err != nil {
+		t.Fatalf("CreateUserSession: %v", err)
+	}
+	userToken, _ := auth.IssueUserAccessToken(testJWTSecret, userID, "user@example.com", "User", "user", false, pgUUID(session.ID), 0, now)
+	oauthToken, _ := auth.IssueOAuthAccessToken(testJWTSecret, userID, "user@example.com", "user", "client", "mcp", "https://example.test/mcp", 0)
+	agentToken, _ := auth.IssueAgentToken(testJWTSecret, agentID, 1)
+	subdomainToken, _ := auth.IssueSubdomainToken(testJWTSecret, agentID, userID, pgUUID(session.ID), "user@example.com", "User", "user", 0)
+	forcedUserToken, _ := auth.IssueUserAccessToken(testJWTSecret, userID, "user@example.com", "User", "user", true, pgUUID(session.ID), 0, now)
+	q := dbq.New(testDB.Pool())
+
+	for name, tc := range map[string]struct {
+		bearer string
+		cookie string
+		target uuid.UUID
+		want   bool
+	}{
+		"user bearer":                  {bearer: userToken, target: agentID, want: true},
+		"OAuth bearer":                 {bearer: oauthToken, target: agentID},
+		"agent bearer":                 {bearer: agentToken, target: agentID},
+		"subdomain bearer":             {bearer: subdomainToken, target: agentID},
+		"target subdomain cookie":      {cookie: subdomainToken, target: agentID, want: true},
+		"wrong subdomain cookie":       {cookie: subdomainToken, target: otherAgentID},
+		"user token cookie":            {cookie: userToken, target: agentID},
+		"OAuth token cookie":           {cookie: oauthToken, target: agentID},
+		"agent token cookie":           {cookie: agentToken, target: agentID},
+		"stale forced user bearer":     {bearer: forcedUserToken, target: agentID, want: true},
+		"invalid bearer blocks cookie": {bearer: oauthToken, cookie: subdomainToken, target: agentID},
+	} {
+		t.Run(name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "https://agent.example.test/", nil)
+			if tc.bearer != "" {
+				req.Header.Set("Authorization", "Bearer "+tc.bearer)
+			}
+			if tc.cookie != "" {
+				req.AddCookie(&http.Cookie{Name: relayCookieName, Value: tc.cookie})
+			}
+			_, ok, _ := validateSubdomainAuth(req, q, testJWTSecret, tc.target)
+			if ok != tc.want {
+				t.Errorf("validateSubdomainAuth() = %v, want %v", ok, tc.want)
+			}
+		})
+	}
+
+	if rows, err := q.RevokeUserSessionByID(context.Background(), dbq.RevokeUserSessionByIDParams{ID: session.ID, UserID: toPgUUID(userID)}); err != nil || rows != 1 {
+		t.Fatalf("RevokeUserSessionByID = (%d, %v)", rows, err)
+	}
+	revokedCookieReq := httptest.NewRequest(http.MethodGet, "https://agent.example.test/", nil)
+	revokedCookieReq.AddCookie(&http.Cookie{Name: relayCookieName, Value: subdomainToken})
+	if _, ok, _ := validateSubdomainAuth(revokedCookieReq, q, testJWTSecret, agentID); ok {
+		t.Fatal("subdomain cookie remained valid after per-session revoke")
+	}
+
+	if _, err := q.AdvanceUserAuthEpochAndRevokeSessions(context.Background(), dbq.AdvanceUserAuthEpochAndRevokeSessionsParams{
+		ID: toPgUUID(userID),
+	}); err != nil {
+		t.Fatalf("AdvanceUserAuthEpochAndRevokeSessions: %v", err)
+	}
+	for name, tc := range map[string]struct {
+		bearer string
+		cookie string
+	}{
+		"revoked user bearer":      {bearer: userToken},
+		"revoked subdomain cookie": {cookie: subdomainToken},
+	} {
+		t.Run(name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "https://agent.example.test/", nil)
+			if tc.bearer != "" {
+				req.Header.Set("Authorization", "Bearer "+tc.bearer)
+			}
+			if tc.cookie != "" {
+				req.AddCookie(&http.Cookie{Name: relayCookieName, Value: tc.cookie})
+			}
+			if _, ok, _ := validateSubdomainAuth(req, q, testJWTSecret, agentID); ok {
+				t.Fatal("revoked authentication was accepted")
+			}
+		})
+	}
+}
+
+func TestAgentSlugFromHost(t *testing.T) {
+	for name, tc := range map[string]struct {
+		host string
+		want string
+		ok   bool
+	}{
+		"exact subdomain":  {host: "demo.agents.test", want: "demo", ok: true},
+		"port":             {host: "demo.agents.test:8443", want: "demo", ok: true},
+		"case":             {host: "Demo.Agents.Test", want: "demo", ok: true},
+		"nested label":     {host: "evil.demo.agents.test"},
+		"suffix confusion": {host: "demo.agents.test.evil"},
+		"reserved":         {host: "api.agents.test"},
+		"bare domain":      {host: "agents.test"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, ok := agentSlugFromHost(tc.host, "agents.test")
+			if got != tc.want || ok != tc.ok {
+				t.Errorf("agentSlugFromHost(%q) = (%q, %v), want (%q, %v)", tc.host, got, ok, tc.want, tc.ok)
 			}
 		})
 	}

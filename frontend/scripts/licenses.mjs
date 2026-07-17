@@ -17,9 +17,14 @@ const ALLOW = new Set([
   'MIT', 'ISC', '0BSD', 'BSD', 'BSD-2-Clause', 'BSD-3-Clause',
   'Apache-2.0', 'Unlicense', 'CC0-1.0', 'BlueOak-1.0.0', 'Python-2.0',
 ])
+const ALLOW_EXPRESSIONS = new Set([
+  // DOMPurify offers Apache-2.0 as a permissive licensing option.
+  '(MPL-2.0 OR Apache-2.0)',
+])
 
 // An SPDX expression is allowed only if every component is on the allowlist.
 function allowed(expr) {
+  if (ALLOW_EXPRESSIONS.has(expr)) return true
   const parts = expr.split(/\s+(?:AND|OR)\s+|[()]/).map(s => s.trim()).filter(Boolean)
   return parts.length > 0 && parts.every(p => ALLOW.has(p))
 }

@@ -128,7 +128,7 @@ func (s *Service) CreateSession(ctx context.Context, p authz.Principal, req Crea
 		// time, but we want to fail fast at session-create time so a
 		// user can't burn a manager-bot create round-trip on an
 		// unauthorized agent.
-		if err := authz.Authorize(ctx, q, p, authz.TenantBridgeCreate, req.AgentID); err != nil {
+		if err := authz.Authorize(ctx, q, p, authz.AgentManagedBotCreate, req.AgentID); err != nil {
 			return SessionCreated{}, service.ErrForbidden
 		}
 	}

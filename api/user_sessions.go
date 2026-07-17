@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -15,22 +16,26 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"go.uber.org/zap"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const (
-	userSessionKindWeb = "web"
-	userSessionKindCLI = "cli"
-	webClientName      = "Airlock Web"
-	cliClientName      = "air CLI"
+	userSessionKindWeb      = "web"
+	userSessionKindCLI      = "cli"
+	userSessionKindTelegram = "telegram"
+	webClientName           = "Airlock Web"
+	cliClientName           = "air CLI"
+	accessCookieName        = "airlock_session"
+	refreshCookieName       = "airlock_refresh"
 )
 
 func issueUserSessionTokens(ctx context.Context, database *db.DB, jwtSecret string, user dbq.User, kind, clientName, deviceName string) (accessToken, refreshToken string, err error) {
+	return issueUserSessionTokensWithQueries(ctx, dbq.New(database.Pool()), jwtSecret, user, kind, clientName, deviceName)
+}
+
+func issueUserSessionTokensWithQueries(ctx context.Context, q *dbq.Queries, jwtSecret string, user dbq.User, kind, clientName, deviceName string) (accessToken, refreshToken string, err error) {
 	userID := pgUUID(user.ID)
-	accessToken, err = auth.IssueToken(jwtSecret, userID, user.Email, user.DisplayName, user.TenantRole, user.MustChangePassword)
-	if err != nil {
-		return "", "", err
-	}
 	refreshToken, err = newRefreshToken()
 	if err != nil {
 		return "", "", err
@@ -42,14 +47,21 @@ func issueUserSessionTokens(ctx context.Context, database *db.DB, jwtSecret stri
 		deviceName = "Unknown device"
 	}
 	// airlockvet:allow-dbq reason: pre-Principal login/device-login creates a first-party session after credentials or browser approval prove identity
-	_, err = dbq.New(database.Pool()).CreateUserSession(ctx, dbq.CreateUserSessionParams{
+	now := time.Now()
+	// airlockvet:allow-dbq reason: credential proof precedes creation of the Principal's revocable first-party session
+	session, err := q.CreateUserSession(ctx, dbq.CreateUserSessionParams{
 		UserID:           user.ID,
 		Kind:             kind,
 		ClientName:       limitSessionLabel(clientName),
 		DeviceName:       limitSessionLabel(deviceName),
 		RefreshTokenHash: hashToken(refreshToken),
-		ExpiresAt:        pgtype.Timestamptz{Time: time.Now().Add(auth.RefreshTokenDuration), Valid: true},
+		AuthenticatedAt:  pgtype.Timestamptz{Time: now, Valid: true},
+		ExpiresAt:        pgtype.Timestamptz{Time: now.Add(auth.RefreshTokenDuration), Valid: true},
 	})
+	if err != nil {
+		return "", "", err
+	}
+	accessToken, err = auth.IssueUserAccessToken(jwtSecret, userID, user.Email, user.DisplayName, user.TenantRole, user.MustChangePassword, pgUUID(session.ID), user.AuthEpoch, now)
 	if err != nil {
 		return "", "", err
 	}
@@ -57,19 +69,33 @@ func issueUserSessionTokens(ctx context.Context, database *db.DB, jwtSecret stri
 }
 
 func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Pragma", "no-cache")
+	r.Body = http.MaxBytesReader(w, r.Body, 4<<10)
 	req := &airlockv1.RefreshRequest{}
 	if err := decodeProto(r, req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if req.RefreshToken == "" {
+	refreshToken, err := h.browserRefreshToken(r, req.RefreshToken)
+	if err != nil {
+		writeError(w, http.StatusForbidden, "bad origin")
+		return
+	}
+	if refreshToken == "" {
 		writeError(w, http.StatusBadRequest, "refresh_token is required")
 		return
 	}
 
-	q := dbq.New(h.db.Pool())
+	tx, err := h.db.Pool().Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	defer tx.Rollback(r.Context())
+	q := dbq.New(tx)
 	// airlockvet:allow-dbq reason: pre-Principal refresh authenticates by high-entropy opaque refresh token hash
-	sess, err := q.GetActiveUserSessionByRefreshHash(r.Context(), hashToken(req.RefreshToken))
+	sess, err := q.GetActiveUserSessionByRefreshHashForUpdate(r.Context(), hashToken(refreshToken))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			writeError(w, http.StatusUnauthorized, "invalid refresh token")
@@ -88,29 +114,154 @@ func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	userID := pgUUID(user.ID)
-	accessToken, err := auth.IssueToken(h.jwtSecret, userID, user.Email, user.DisplayName, user.TenantRole, user.MustChangePassword)
+	replacementRefreshToken := ""
+	if sess.Kind == userSessionKindWeb || sess.Kind == userSessionKindCLI {
+		replacementRefreshToken, err = newRefreshToken()
+		if err != nil {
+			logFor(r).Error("generate replacement refresh token failed", zap.Error(err))
+			writeError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+		// airlockvet:allow-dbq reason: pre-Principal refresh atomically replaces the authenticated session's opaque token while its row is locked
+		rows, err := q.RotateUserSessionRefreshToken(r.Context(), dbq.RotateUserSessionRefreshTokenParams{
+			RefreshTokenHash: hashToken(replacementRefreshToken),
+			ID:               sess.ID,
+		})
+		if err != nil || rows != 1 {
+			logFor(r).Error("rotate refresh token failed", zap.Int64("rows", rows), zap.Error(err))
+			writeError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+	} else {
+		// airlockvet:allow-dbq reason: pre-Principal refresh records non-refreshable session use after token authentication
+		if err := q.TouchUserSession(r.Context(), sess.ID); err != nil {
+			writeError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+	}
+	accessToken, err := auth.IssueUserAccessToken(h.jwtSecret, userID, user.Email, user.DisplayName, user.TenantRole, user.MustChangePassword, pgUUID(sess.ID), user.AuthEpoch, sess.AuthenticatedAt.Time)
 	if err != nil {
 		logFor(r).Error("issue access token failed")
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	// airlockvet:allow-dbq reason: pre-Principal refresh records first-party session use after token authentication
-	_ = q.TouchUserSession(r.Context(), sess.ID)
-	setAirlockSessionCookie(w, r, accessToken)
-	writeProto(w, http.StatusOK, &airlockv1.RefreshResponse{AccessToken: accessToken})
+	if err := tx.Commit(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	if sess.Kind == userSessionKindWeb {
+		setWebSessionCookies(w, h.publicURL, accessToken, replacementRefreshToken)
+	}
+	resp := &airlockv1.RefreshResponse{AccessToken: accessToken}
+	if sess.Kind == userSessionKindCLI {
+		resp.RefreshToken = replacementRefreshToken
+	}
+	writeProto(w, http.StatusOK, resp)
 }
 
 func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	r.Body = http.MaxBytesReader(w, r.Body, 4<<10)
 	req := &airlockv1.LogoutRequest{}
 	if err := decodeProto(r, req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if req.RefreshToken != "" {
-		// airlockvet:allow-dbq reason: logout authenticates the revocation target by opaque refresh token hash and is intentionally idempotent
-		_, _ = dbq.New(h.db.Pool()).RevokeUserSessionByRefreshHash(r.Context(), hashToken(req.RefreshToken))
+	refreshToken, err := h.browserRefreshToken(r, req.RefreshToken)
+	if err != nil {
+		writeError(w, http.StatusForbidden, "bad origin")
+		return
 	}
+	if refreshToken != "" {
+		// airlockvet:allow-dbq reason: logout authenticates the revocation target by opaque refresh token hash and is intentionally idempotent
+		if _, err := dbq.New(h.db.Pool()).RevokeUserSessionByRefreshHash(r.Context(), hashToken(refreshToken)); err != nil {
+			logFor(r).Error("revoke user session during logout failed", zap.Error(err))
+			writeError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+	}
+	clearWebSessionCookies(w, h.publicURL)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func setWebSessionCookies(w http.ResponseWriter, publicURL, accessToken, refreshToken string) {
+	secure := configuredOriginURL(publicURL).Scheme == "https"
+	http.SetCookie(w, &http.Cookie{
+		Name:     accessCookieName,
+		Value:    accessToken,
+		Path:     "/",
+		MaxAge:   int(auth.AccessTokenDuration.Seconds()),
+		HttpOnly: true,
+		Secure:   secure,
+		SameSite: http.SameSiteLaxMode,
+	})
+	http.SetCookie(w, &http.Cookie{
+		Name:     refreshCookieName,
+		Value:    refreshToken,
+		Path:     "/auth",
+		MaxAge:   int(auth.RefreshTokenDuration.Seconds()),
+		HttpOnly: true,
+		Secure:   secure,
+		SameSite: http.SameSiteStrictMode,
+	})
+}
+
+func clearWebSessionCookies(w http.ResponseWriter, publicURL string) {
+	secure := configuredOriginURL(publicURL).Scheme == "https"
+	for _, cookie := range []*http.Cookie{
+		{
+			Name:     accessCookieName,
+			Value:    "",
+			Path:     "/",
+			MaxAge:   -1,
+			Expires:  time.Unix(1, 0),
+			HttpOnly: true,
+			Secure:   secure,
+			SameSite: http.SameSiteLaxMode,
+		},
+		{
+			Name:     refreshCookieName,
+			Value:    "",
+			Path:     "/auth",
+			MaxAge:   -1,
+			Expires:  time.Unix(1, 0),
+			HttpOnly: true,
+			Secure:   secure,
+			SameSite: http.SameSiteStrictMode,
+		},
+	} {
+		http.SetCookie(w, cookie)
+	}
+}
+
+func (h *AuthHandler) browserRefreshToken(r *http.Request, bodyToken string) (string, error) {
+	cookie, err := r.Cookie(refreshCookieName)
+	if err == nil {
+		if r.Header.Get("Origin") != configuredOrigin(h.publicURL) {
+			return "", errors.New("origin mismatch")
+		}
+		return cookie.Value, nil
+	}
+	if !errors.Is(err, http.ErrNoCookie) {
+		return "", err
+	}
+	if bodyToken == "" && r.Header.Get("Origin") != configuredOrigin(h.publicURL) {
+		return "", errors.New("origin mismatch")
+	}
+	return bodyToken, nil
+}
+
+func configuredOrigin(publicURL string) string {
+	u := configuredOriginURL(publicURL)
+	return u.Scheme + "://" + u.Host
+}
+
+func configuredOriginURL(publicURL string) *url.URL {
+	u, err := url.Parse(publicURL)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		panic("api: PUBLIC_URL must be an absolute HTTP(S) URL")
+	}
+	return u
 }
 
 func (h *AuthHandler) ListSessions(w http.ResponseWriter, r *http.Request) {

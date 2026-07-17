@@ -1,6 +1,13 @@
 package agentapi
 
-import "testing"
+import (
+	"context"
+	"errors"
+	"testing"
+
+	"github.com/airlockrun/airlock/db/dbq"
+	"github.com/jackc/pgx/v5"
+)
 
 func TestParseByteRange(t *testing.T) {
 	const size = 100
@@ -46,5 +53,57 @@ func TestParseByteRangeEmptyObject(t *testing.T) {
 	}
 	if _, _, ok := parseByteRange("bytes=-5", 0); ok {
 		t.Fatal("a suffix range against a zero-length object must be unsatisfiable")
+	}
+}
+
+func TestGetDirectoryByPathMatchesPathSegments(t *testing.T) {
+	skipIfNoDB(t)
+	agentID, _ := testAgentAndUser(t)
+	q := dbq.New(testDB.Pool())
+	ctx := context.Background()
+
+	for _, path := range []string{"foo", "foo/bar"} {
+		if err := q.UpsertDirectory(ctx, dbq.UpsertDirectoryParams{
+			AgentID:     toPgUUID(agentID),
+			Path:        path,
+			ReadAccess:  "public",
+			WriteAccess: "admin",
+			ListAccess:  "user",
+			Scope:       "agent",
+		}); err != nil {
+			t.Fatalf("UpsertDirectory(%q): %v", path, err)
+		}
+	}
+
+	tests := []struct {
+		name     string
+		path     string
+		wantPath string
+		wantNone bool
+	}{
+		{name: "exact", path: "foo", wantPath: "foo"},
+		{name: "child", path: "foo/file.txt", wantPath: "foo"},
+		{name: "longest nested", path: "foo/bar/file.txt", wantPath: "foo/bar"},
+		{name: "partial segment", path: "foobar/file.txt", wantNone: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir, err := q.GetDirectoryByPath(ctx, dbq.GetDirectoryByPathParams{
+				AgentID: toPgUUID(agentID),
+				Path:    tt.path,
+			})
+			if tt.wantNone {
+				if !errors.Is(err, pgx.ErrNoRows) {
+					t.Fatalf("GetDirectoryByPath(%q) error = %v, want pgx.ErrNoRows", tt.path, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("GetDirectoryByPath(%q): %v", tt.path, err)
+			}
+			if dir.Path != tt.wantPath {
+				t.Fatalf("GetDirectoryByPath(%q).Path = %q, want %q", tt.path, dir.Path, tt.wantPath)
+			}
+		})
 	}
 }

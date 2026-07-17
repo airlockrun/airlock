@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	"github.com/airlockrun/airlock/auth"
+	"github.com/airlockrun/airlock/db/dbq"
+	"github.com/google/uuid"
 )
 
 // relayCookieName must match api/relay.go's session-cookie name —
@@ -18,16 +20,20 @@ const relayCookieName = "__air_session"
 // validateSubdomainAuth tries the Authorization header first, then
 // the relay session cookie. The api/proxy.go entry point and the
 // agentapi/storage.go internal helpers both call it.
-func validateSubdomainAuth(r *http.Request, jwtSecret string) (*auth.Claims, bool) {
-	if claims, ok := validateBearerToken(r, jwtSecret); ok {
-		return claims, true
+func validateSubdomainAuth(r *http.Request, q *dbq.Queries, jwtSecret string, targetAgentID uuid.UUID) (*auth.Claims, bool) {
+	if r.Header.Get("Authorization") != "" {
+		return validateBearerToken(r, q, jwtSecret)
 	}
 	cookie, err := r.Cookie(relayCookieName)
 	if err != nil {
 		return nil, false
 	}
-	claims, err := auth.ValidateToken(jwtSecret, cookie.Value)
+	claims, err := auth.ValidateSubdomainToken(jwtSecret, cookie.Value, targetAgentID)
 	if err != nil {
+		return nil, false
+	}
+	claims, err = auth.ResolveLiveUserClaims(r.Context(), q, claims, true)
+	if err != nil || claims.MustChangePassword {
 		return nil, false
 	}
 	return claims, true
@@ -50,14 +56,18 @@ func rejectOrRedirect(w http.ResponseWriter, r *http.Request, publicURL string) 
 	writeError(w, http.StatusUnauthorized, "unauthorized")
 }
 
-func validateBearerToken(r *http.Request, jwtSecret string) (*auth.Claims, bool) {
+func validateBearerToken(r *http.Request, q *dbq.Queries, jwtSecret string) (*auth.Claims, bool) {
 	header := r.Header.Get("Authorization")
 	if header == "" || !strings.HasPrefix(header, "Bearer ") {
 		return nil, false
 	}
 	token := strings.TrimPrefix(header, "Bearer ")
-	claims, err := auth.ValidateToken(jwtSecret, token)
+	claims, err := auth.ValidateUserAccessToken(jwtSecret, token)
 	if err != nil {
+		return nil, false
+	}
+	claims, err = auth.ResolveLiveUserClaims(r.Context(), q, claims, true)
+	if err != nil || claims.MustChangePassword {
 		return nil, false
 	}
 	return claims, true

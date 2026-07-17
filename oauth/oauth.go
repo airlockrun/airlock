@@ -9,12 +9,12 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"strings"
-	"time"
 )
 
 // TokenResponse represents the response from an OAuth token endpoint.
@@ -27,14 +27,32 @@ type TokenResponse struct {
 
 // Client handles OAuth 2.0 operations.
 type Client struct {
-	httpClient *http.Client
+	httpClient             *http.Client
+	allowInsecureLocalhost bool
 }
 
 // NewClient creates a new OAuth client.
-func NewClient() *Client {
-	return &Client{
-		httpClient: &http.Client{Timeout: 30 * time.Second},
+func NewClient(httpClient *http.Client, allowInsecureLocalhost bool) *Client {
+	if httpClient == nil {
+		panic("oauth: HTTP client is required")
 	}
+	return &Client{httpClient: httpClient, allowInsecureLocalhost: allowInsecureLocalhost}
+}
+
+var reservedAuthParams = map[string]struct{}{
+	"client_id": {}, "redirect_uri": {}, "state": {}, "response_type": {},
+	"code_challenge": {}, "code_challenge_method": {},
+}
+
+// ValidateAuthParams rejects parameters that could replace OAuth's identity,
+// callback, CSRF, response type, or PKCE binding.
+func ValidateAuthParams(params map[string]string) error {
+	for key := range params {
+		if _, reserved := reservedAuthParams[strings.ToLower(strings.TrimSpace(key))]; reserved {
+			return fmt.Errorf("OAuth authorization parameter %q is reserved", key)
+		}
+	}
+	return nil
 }
 
 // GeneratePKCE generates a PKCE code verifier and S256 challenge.
@@ -62,9 +80,15 @@ func GenerateState() (string, error) {
 // extraParams are provider-specific query parameters merged in last —
 // e.g. access_type=offline to request a refresh token.
 func (c *Client) BuildAuthURL(authURL, clientID, redirectURI, state, codeChallenge, scopes string, extraParams map[string]string) (string, error) {
+	if err := ValidateAuthParams(extraParams); err != nil {
+		return "", err
+	}
 	u, err := url.Parse(authURL)
 	if err != nil {
 		return "", fmt.Errorf("parse authorization url: %w", err)
+	}
+	if !validHTTPSURL(u) && !(c.allowInsecureLocalhost && validSecureURL(u)) {
+		return "", errors.New("authorization URL must be an absolute HTTPS URL")
 	}
 
 	q := u.Query()
@@ -86,6 +110,10 @@ func (c *Client) BuildAuthURL(authURL, clientID, redirectURI, state, codeChallen
 	return u.String(), nil
 }
 
+func validHTTPSURL(u *url.URL) bool {
+	return u != nil && u.Scheme == "https" && u.Hostname() != "" && u.User == nil && u.Fragment == ""
+}
+
 // ExchangeCode exchanges an authorization code for tokens.
 func (c *Client) ExchangeCode(ctx context.Context, tokenURL, code, codeVerifier, redirectURI, clientID, clientSecret string) (*TokenResponse, error) {
 	data := url.Values{}
@@ -95,11 +123,7 @@ func (c *Client) ExchangeCode(ctx context.Context, tokenURL, code, codeVerifier,
 	data.Set("client_id", clientID)
 	data.Set("code_verifier", codeVerifier)
 
-	if clientSecret != "" {
-		data.Set("client_secret", clientSecret)
-	}
-
-	return c.tokenRequest(ctx, tokenURL, data)
+	return c.tokenRequest(ctx, tokenURL, data, clientID, clientSecret)
 }
 
 // RefreshToken uses a refresh token to obtain a new access token.
@@ -109,21 +133,23 @@ func (c *Client) RefreshToken(ctx context.Context, tokenURL, refreshToken, clien
 	data.Set("refresh_token", refreshToken)
 	data.Set("client_id", clientID)
 
-	if clientSecret != "" {
-		data.Set("client_secret", clientSecret)
-	}
-
-	return c.tokenRequest(ctx, tokenURL, data)
+	return c.tokenRequest(ctx, tokenURL, data, clientID, clientSecret)
 }
 
 // tokenRequest makes a POST request to a token endpoint and parses the response.
-func (c *Client) tokenRequest(ctx context.Context, tokenURL string, data url.Values) (*TokenResponse, error) {
+func (c *Client) tokenRequest(ctx context.Context, tokenURL string, data url.Values, clientID, clientSecret string) (*TokenResponse, error) {
+	if clientSecret != "" {
+		data.Del("client_id")
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, tokenURL, strings.NewReader(data.Encode()))
 	if err != nil {
 		return nil, fmt.Errorf("create token request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
+	if clientSecret != "" {
+		req.SetBasicAuth(clientID, clientSecret)
+	}
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -131,9 +157,12 @@ func (c *Client) tokenRequest(ctx context.Context, tokenURL string, data url.Val
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxOAuthResponseBytes+1))
 	if err != nil {
 		return nil, fmt.Errorf("read token response: %w", err)
+	}
+	if len(body) > maxOAuthResponseBytes {
+		return nil, fmt.Errorf("token response exceeds %d bytes", maxOAuthResponseBytes)
 	}
 
 	// RFC 6749 §5.2 errors arrive as 400 + JSON `{"error":"…"}`. Try to
@@ -154,13 +183,13 @@ func (c *Client) tokenRequest(ctx context.Context, tokenURL string, data url.Val
 	jsonErr := json.Unmarshal(body, &tokenResp)
 	if jsonErr == nil && tokenResp.Error != "" {
 		return nil, &OAuthError{
-			Code:        tokenResp.Error,
-			Description: tokenResp.ErrorDesc,
+			Code:        limitedErrorBody([]byte(tokenResp.Error)),
+			Description: limitedErrorBody([]byte(tokenResp.ErrorDesc)),
 		}
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("token request failed with status %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("token request failed with status %d: %s", resp.StatusCode, limitedErrorBody(body))
 	}
 
 	if jsonErr != nil {
@@ -177,6 +206,16 @@ func (c *Client) tokenRequest(ctx context.Context, tokenURL string, data url.Val
 		TokenType:    tokenResp.TokenType,
 		ExpiresIn:    tokenResp.ExpiresIn,
 	}, nil
+}
+
+const maxOAuthResponseBytes = 1 << 20
+
+func limitedErrorBody(body []byte) string {
+	const limit = 4096
+	if len(body) > limit {
+		body = body[:limit]
+	}
+	return string(body)
 }
 
 // OAuthError represents an error returned by the OAuth provider.

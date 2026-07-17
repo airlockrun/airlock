@@ -34,6 +34,7 @@ func newLockoutAuthHandler(t *testing.T) *AuthHandler {
 	return &AuthHandler{
 		db:            testDB,
 		jwtSecret:     "test-secret-key-for-auth-lockout",
+		publicURL:     "http://localhost",
 		logger:        zap.NewNop(),
 		lockoutPolicy: fastLockoutPolicy,
 	}

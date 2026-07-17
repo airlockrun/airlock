@@ -14,18 +14,23 @@ type Container struct {
 	Name     string // Human-readable name
 	Endpoint string // HTTP endpoint (e.g., "http://172.17.0.2:8080")
 	Token    string // Bearer token for authenticating requests to this container
+	AgentID  uuid.UUID
 	// Image is the tag the container was started with, copied from
 	// Docker's Config.Image at inspect time. StartAgent compares this
 	// against opts.Image to detect a stale running container after a
 	// build/rollback swap — adopting one with the wrong image would
 	// silently keep the agent on the old code.
 	Image string
+	// Network is the Docker network selected when the runtime was created.
+	// Managed isolation uses it to reject containers left on a shared network.
+	Network string
 }
 
 // AgentOpts configures an agent container.
 type AgentOpts struct {
 	AgentID uuid.UUID
 	Image   string            // Docker image to run (e.g., "my-agent:abc123")
+	Token   string            // Versioned agent JWT issued from the live agent row
 	Env     map[string]string // Additional environment variables
 }
 

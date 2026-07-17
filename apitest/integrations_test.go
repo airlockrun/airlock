@@ -37,7 +37,7 @@ func TestIntegrationAccess_UserAndCodegen(t *testing.T) {
 	}
 	resp.Body.Close()
 
-	oauthToken, err := auth.IssueOAuthAccessToken(h.JWTSecret, owner, "owner@apitest.local", "user", "client", "mcp", "https://example.com/mcp")
+	oauthToken, err := auth.IssueOAuthAccessToken(h.JWTSecret, owner, "owner@apitest.local", "user", "client", "mcp", "https://example.com/mcp", 0)
 	if err != nil {
 		t.Fatalf("IssueOAuthAccessToken() error: %v", err)
 	}

@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"slices"
 	"strings"
@@ -57,6 +58,9 @@ func DiscoverProtectedResource(ctx context.Context, httpClient *http.Client, ser
 	if err != nil {
 		return nil, fmt.Errorf("parse server URL: %w", err)
 	}
+	if !validSecureURL(parsed) {
+		return nil, errors.New("server URL must be an absolute HTTPS URL")
+	}
 
 	// Try path-aware well-known first: /.well-known/oauth-protected-resource/{path}
 	path := strings.TrimRight(parsed.Path, "/")
@@ -64,6 +68,9 @@ func DiscoverProtectedResource(ctx context.Context, httpClient *http.Client, ser
 		wellKnown := fmt.Sprintf("%s://%s/.well-known/oauth-protected-resource%s", parsed.Scheme, parsed.Host, path)
 		meta, err := fetchJSON[ProtectedResourceMeta](ctx, httpClient, wellKnown)
 		if err == nil {
+			if err := validateProtectedResourceMeta(meta, parsed); err != nil {
+				return nil, err
+			}
 			return meta, nil
 		}
 	}
@@ -73,6 +80,9 @@ func DiscoverProtectedResource(ctx context.Context, httpClient *http.Client, ser
 	meta, err := fetchJSON[ProtectedResourceMeta](ctx, httpClient, wellKnown)
 	if err != nil {
 		return nil, fmt.Errorf("%w: protected resource metadata not found at %s: %v", ErrDiscoveryFailed, serverURL, err)
+	}
+	if err := validateProtectedResourceMeta(meta, parsed); err != nil {
+		return nil, err
 	}
 
 	return meta, nil
@@ -85,13 +95,16 @@ func FetchAuthServerMetadata(ctx context.Context, httpClient *http.Client, authS
 	if err != nil {
 		return nil, fmt.Errorf("parse auth server URL: %w", err)
 	}
+	if !validSecureURL(parsed) {
+		return nil, errors.New("authorization server URL must be an absolute HTTPS URL")
+	}
 
 	// Try RFC 8414 path-aware: /.well-known/oauth-authorization-server/{path}
 	path := strings.TrimRight(parsed.Path, "/")
 	if path != "" && path != "/" {
 		wellKnown := fmt.Sprintf("%s://%s/.well-known/oauth-authorization-server%s", parsed.Scheme, parsed.Host, path)
 		meta, err := fetchJSON[AuthServerMeta](ctx, httpClient, wellKnown)
-		if err == nil && meta.AuthorizationEndpoint != "" && meta.TokenEndpoint != "" {
+		if err == nil && validateAuthServerMeta(meta, parsed) == nil {
 			return meta, nil
 		}
 	}
@@ -99,7 +112,7 @@ func FetchAuthServerMetadata(ctx context.Context, httpClient *http.Client, authS
 	// Try RFC 8414 root: /.well-known/oauth-authorization-server
 	wellKnown := fmt.Sprintf("%s://%s/.well-known/oauth-authorization-server", parsed.Scheme, parsed.Host)
 	meta, err := fetchJSON[AuthServerMeta](ctx, httpClient, wellKnown)
-	if err == nil && meta.AuthorizationEndpoint != "" && meta.TokenEndpoint != "" {
+	if err == nil && validateAuthServerMeta(meta, parsed) == nil {
 		return meta, nil
 	}
 
@@ -109,8 +122,8 @@ func FetchAuthServerMetadata(ctx context.Context, httpClient *http.Client, authS
 	if err != nil {
 		return nil, fmt.Errorf("%w: auth server metadata not found at %s", ErrDiscoveryFailed, authServerURL)
 	}
-	if meta.AuthorizationEndpoint == "" || meta.TokenEndpoint == "" {
-		return nil, fmt.Errorf("%w: incomplete auth server metadata at %s", ErrDiscoveryFailed, authServerURL)
+	if err := validateAuthServerMeta(meta, parsed); err != nil {
+		return nil, fmt.Errorf("%w: invalid auth server metadata at %s: %v", ErrDiscoveryFailed, authServerURL, err)
 	}
 
 	return meta, nil
@@ -171,6 +184,9 @@ func DiscoverUpstream(ctx context.Context, httpClient *http.Client, serverURL st
 
 // fetchJSON performs a GET request and decodes the JSON response into T.
 func fetchJSON[T any](ctx context.Context, httpClient *http.Client, rawURL string) (*T, error) {
+	if httpClient == nil {
+		panic("oauth: HTTP client is required")
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
@@ -187,9 +203,12 @@ func fetchJSON[T any](ctx context.Context, httpClient *http.Client, rawURL strin
 		return nil, fmt.Errorf("unexpected status %d from %s", resp.StatusCode, rawURL)
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxOAuthResponseBytes+1))
 	if err != nil {
 		return nil, fmt.Errorf("read body: %w", err)
+	}
+	if len(body) > maxOAuthResponseBytes {
+		return nil, fmt.Errorf("response from %s exceeds %d bytes", rawURL, maxOAuthResponseBytes)
 	}
 
 	var result T
@@ -198,4 +217,82 @@ func fetchJSON[T any](ctx context.Context, httpClient *http.Client, rawURL strin
 	}
 
 	return &result, nil
+}
+
+func validateProtectedResourceMeta(meta *ProtectedResourceMeta, requested *url.URL) error {
+	resource, err := url.Parse(meta.Resource)
+	if err != nil || !validSecureURL(resource) || !sameOrigin(resource, requested) {
+		return fmt.Errorf("%w: protected resource metadata has invalid resource", ErrDiscoveryFailed)
+	}
+	if len(meta.AuthorizationServers) == 0 {
+		return fmt.Errorf("%w: no authorization servers listed in protected resource metadata", ErrDiscoveryFailed)
+	}
+	for _, raw := range meta.AuthorizationServers {
+		u, err := url.Parse(raw)
+		if err != nil || !validSecureURL(u) {
+			return fmt.Errorf("%w: invalid authorization server URL", ErrDiscoveryFailed)
+		}
+	}
+	return nil
+}
+
+func validateAuthServerMeta(meta *AuthServerMeta, requested *url.URL) error {
+	issuer, err := url.Parse(meta.Issuer)
+	if err != nil || !validSecureURL(issuer) || normalizeURL(issuer) != normalizeURL(requested) {
+		return errors.New("issuer does not match the requested authorization server")
+	}
+	for name, raw := range map[string]string{
+		"authorization_endpoint": meta.AuthorizationEndpoint,
+		"token_endpoint":         meta.TokenEndpoint,
+	} {
+		u, err := url.Parse(raw)
+		if err != nil || !validSecureURL(u) {
+			return fmt.Errorf("%s is invalid", name)
+		}
+	}
+	if meta.RegistrationEndpoint != "" {
+		u, err := url.Parse(meta.RegistrationEndpoint)
+		if err != nil || !validSecureURL(u) {
+			return errors.New("registration_endpoint is invalid")
+		}
+	}
+	return nil
+}
+
+func validSecureURL(u *url.URL) bool {
+	if u == nil || u.Hostname() == "" || u.User != nil || u.Fragment != "" {
+		return false
+	}
+	return u.Scheme == "https" || (u.Scheme == "http" && isLocalhost(u.Hostname()))
+}
+
+func isLocalhost(host string) bool {
+	host = strings.TrimSuffix(strings.ToLower(host), ".")
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
+		return true
+	}
+	ip, err := netip.ParseAddr(host)
+	return err == nil && ip.IsLoopback()
+}
+
+func sameOrigin(a, b *url.URL) bool {
+	return strings.EqualFold(a.Scheme, b.Scheme) && strings.EqualFold(a.Hostname(), b.Hostname()) && port(a) == port(b)
+}
+
+func port(u *url.URL) string {
+	if u.Port() != "" {
+		return u.Port()
+	}
+	if u.Scheme == "https" {
+		return "443"
+	}
+	return "80"
+}
+
+func normalizeURL(u *url.URL) string {
+	copy := *u
+	copy.RawQuery = ""
+	copy.Fragment = ""
+	copy.Path = strings.TrimRight(copy.Path, "/")
+	return copy.String()
 }

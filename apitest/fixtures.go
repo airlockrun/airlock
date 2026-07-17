@@ -3,6 +3,7 @@ package apitest
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/db/dbq"
@@ -15,11 +16,12 @@ import (
 // dispatcher.EnsureRunning skips the build path; db_password seeded
 // with an encrypted dummy so the dispatcher's decrypt step succeeds.
 type AgentOpts struct {
-	Name            string
-	Slug            string
-	OwnerID         uuid.UUID
-	AllowPublicMCP  bool
-	AllowPublicChat bool
+	Name              string
+	Slug              string
+	OwnerID           uuid.UUID
+	AllowPublicMCP    bool
+	AllowPublicChat   bool
+	AllowPublicRoutes bool
 	// Stopped parks the agent at status='stopped' (image_ref still set) so
 	// EnsureRunning refuses it — used to exercise the not-runnable paths.
 	Stopped bool
@@ -98,9 +100,10 @@ func CreateAgent(t *testing.T, h *Harness, opts AgentOpts) uuid.UUID {
 		        image_ref='apitest:stub',
 		        db_password=$3,
 		        allow_public_mcp=$4,
-		        allow_public_mcp_prompt=$5
+		        allow_public_mcp_prompt=$5,
+		        allow_public_routes=$6
 		  WHERE id=$1`,
-		row.ID, status, encryptedPW, opts.AllowPublicMCP, opts.AllowPublicChat,
+		row.ID, status, encryptedPW, opts.AllowPublicMCP, opts.AllowPublicChat, opts.AllowPublicRoutes,
 	); err != nil {
 		t.Fatalf("apitest: stamp agent status: %v", err)
 	}
@@ -123,23 +126,60 @@ func AddAgentMember(t *testing.T, h *Harness, agentID, userID uuid.UUID, role st
 	}
 }
 
-// IssueUserToken mints a user-scoped JWT with the harness JWT secret.
-// Pass the result as Authorization: Bearer or as the ?token= query
-// parameter on the WS upgrade.
+// AddSibling declares a caller-to-target A2A edge authorized by a grant the
+// target already has for authorizingGranteeID.
+func AddSibling(t *testing.T, h *Harness, callerID, targetID, authorizingGranteeID uuid.UUID, maxAccess string) {
+	t.Helper()
+	err := dbq.New(h.DB.Pool()).AddSibling(context.Background(), dbq.AddSiblingParams{
+		ParentAgentID:        pgtype.UUID{Bytes: callerID, Valid: true},
+		SiblingAgentID:       pgtype.UUID{Bytes: targetID, Valid: true},
+		MaxAccess:            maxAccess,
+		AuthorizingGranteeID: pgtype.UUID{Bytes: authorizingGranteeID, Valid: true},
+	})
+	if err != nil {
+		t.Fatalf("apitest: AddSibling: %v", err)
+	}
+}
+
+// IssueUserToken creates an active first-party session and mints its access
+// JWT with the harness JWT secret.
 func IssueUserToken(t *testing.T, h *Harness, userID uuid.UUID, email, role string) string {
 	t.Helper()
-	tok, err := auth.IssueToken(h.JWTSecret, userID, email, "", role, false)
+	q := dbq.New(h.DB.Pool())
+	ctx := context.Background()
+	user, err := q.GetUserByID(ctx, pgtype.UUID{Bytes: userID, Valid: true})
+	if err != nil {
+		t.Fatalf("apitest: GetUserByID: %v", err)
+	}
+	now := time.Now()
+	session, err := q.CreateUserSession(ctx, dbq.CreateUserSessionParams{
+		UserID:           user.ID,
+		Kind:             "web",
+		ClientName:       "apitest",
+		DeviceName:       "apitest",
+		RefreshTokenHash: []byte(uuid.NewString()),
+		AuthenticatedAt:  pgtype.Timestamptz{Time: now, Valid: true},
+		ExpiresAt:        pgtype.Timestamptz{Time: now.Add(auth.RefreshTokenDuration), Valid: true},
+	})
+	if err != nil {
+		t.Fatalf("apitest: CreateUserSession: %v", err)
+	}
+	tok, err := auth.IssueUserAccessToken(h.JWTSecret, userID, email, user.DisplayName, role, user.MustChangePassword, uuid.UUID(session.ID.Bytes), user.AuthEpoch, now)
 	if err != nil {
 		t.Fatalf("apitest: IssueUserToken: %v", err)
 	}
 	return tok
 }
 
-// IssueAgentToken mints an agent JWT (100-year lifetime). Used by
+// IssueAgentToken mints an agent JWT at the row's live token version. Used by
 // tests driving /api/agent/* endpoints directly.
 func IssueAgentToken(t *testing.T, h *Harness, agentID uuid.UUID) string {
 	t.Helper()
-	tok, err := auth.IssueAgentToken(h.JWTSecret, agentID)
+	state, err := dbq.New(h.DB.Pool()).GetAgentTokenAuth(context.Background(), pgtype.UUID{Bytes: agentID, Valid: true})
+	if err != nil {
+		t.Fatalf("apitest: GetAgentTokenAuth: %v", err)
+	}
+	tok, err := auth.IssueAgentToken(h.JWTSecret, agentID, state.AgentTokenVersion)
 	if err != nil {
 		t.Fatalf("apitest: IssueAgentToken: %v", err)
 	}

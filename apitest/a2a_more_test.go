@@ -144,6 +144,7 @@ func TestIntegration_A2A_CancelCascade(t *testing.T) {
 	owner := apitest.CreateUser(t, h, "owner", "user")
 	callerAgent := apitest.CreateAgent(t, h, apitest.AgentOpts{OwnerID: owner, Slug: "casc-caller"})
 	targetAgent := apitest.CreateAgent(t, h, apitest.AgentOpts{OwnerID: owner, Slug: "casc-target"})
+	apitest.AddSibling(t, h, callerAgent, targetAgent, owner, "admin")
 
 	// Target blocks until its request ctx cancels — closing targetCtxDone
 	// when that happens. The cancel cascade closing target's outbound HTTP

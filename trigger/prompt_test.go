@@ -3,13 +3,96 @@ package trigger
 import (
 	"context"
 	"errors"
+	"io"
 	"strings"
+	"sync"
 	"testing"
 
+	"github.com/airlockrun/agentsdk/wire"
+	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/airlockrun/goai/model"
 	"github.com/airlockrun/goai/testutil"
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"
 )
+
+type recordingPromptDispatcher struct {
+	mu     sync.Mutex
+	inputs []wire.PromptInput
+}
+
+func (d *recordingPromptDispatcher) CancelRun(uuid.UUID) bool { return false }
+
+func (d *recordingPromptDispatcher) ForwardPrompt(_ context.Context, _ uuid.UUID, input wire.PromptInput, _ *uuid.UUID, _ *uuid.UUID) (io.ReadCloser, uuid.UUID, error) {
+	d.mu.Lock()
+	d.inputs = append(d.inputs, input)
+	d.mu.Unlock()
+	return io.NopCloser(strings.NewReader("{\"type\":\"finish\",\"data\":{}}\n")), uuid.New(), nil
+}
+
+func (d *recordingPromptDispatcher) snapshot() []wire.PromptInput {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return append([]wire.PromptInput(nil), d.inputs...)
+}
+
+type bridgeSuspensionFixture struct {
+	agentID  uuid.UUID
+	bridgeID uuid.UUID
+	userID   uuid.UUID
+	external string
+	convID   uuid.UUID
+	runID    uuid.UUID
+}
+
+func seedBridgeSuspension(t *testing.T) bridgeSuspensionFixture {
+	t.Helper()
+	ctx := context.Background()
+	q := dbq.New(triggerTestDB.Pool())
+	suffix := uuid.New().String()[:8]
+	user, err := q.CreateUser(ctx, dbq.CreateUserParams{
+		Email: "trigger-" + suffix + "@example.com", DisplayName: "Trigger User", TenantRole: "user",
+	})
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	agent, err := q.CreateAgent(ctx, dbq.CreateAgentParams{
+		Name: "trigger-" + suffix, Slug: "trigger-" + suffix, OwnerPrincipalID: user.ID, Config: []byte("{}"),
+	})
+	if err != nil {
+		t.Fatalf("CreateAgent: %v", err)
+	}
+	bridgeID := uuid.New()
+	if _, err := q.CreateBridge(ctx, dbq.CreateBridgeParams{
+		ID: toPgUUID(bridgeID), Type: "telegram", Name: "bridge-" + suffix,
+		AgentID: agent.ID, OwnerPrincipalID: user.ID,
+	}); err != nil {
+		t.Fatalf("CreateBridge: %v", err)
+	}
+	external := "chat-" + suffix
+	conv, err := q.GetOrCreateBridgeAuthedConversation(ctx, dbq.GetOrCreateBridgeAuthedConversationParams{
+		AgentID: agent.ID, UserID: user.ID, Title: "callback", BridgeID: toPgUUID(bridgeID),
+		ExternalID: pgtype.Text{String: external, Valid: true},
+	})
+	if err != nil {
+		t.Fatalf("GetOrCreateBridgeAuthedConversation: %v", err)
+	}
+	run, err := q.CreateRun(ctx, dbq.CreateRunParams{
+		AgentID: agent.ID, BridgeID: toPgUUID(bridgeID), InputPayload: []byte("{}"),
+		TriggerType: "prompt", TriggerRef: uuid.UUID(conv.ID.Bytes).String(),
+	})
+	if err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+	if _, err := triggerTestDB.Pool().Exec(ctx, "UPDATE runs SET status = 'suspended' WHERE id = $1", run.ID); err != nil {
+		t.Fatalf("suspend run: %v", err)
+	}
+	return bridgeSuspensionFixture{
+		agentID: uuid.UUID(agent.ID.Bytes), bridgeID: bridgeID, userID: uuid.UUID(user.ID.Bytes),
+		external: external, convID: uuid.UUID(conv.ID.Bytes), runID: uuid.UUID(run.ID.Bytes),
+	}
+}
 
 func TestStreamNDJSONResponse(t *testing.T) {
 	t.Run("text deltas collected and forwarded", func(t *testing.T) {
@@ -269,4 +352,193 @@ func TestTranscribeVoiceNotes(t *testing.T) {
 			t.Errorf("userMessage = %q, want hi", got)
 		}
 	})
+}
+
+func TestHandleCallbackConcurrentDispatchesOnce(t *testing.T) {
+	skipIfNoTriggerDB(t)
+	for _, action := range []string{"approve", "deny"} {
+		t.Run(action, func(t *testing.T) {
+			fixture := seedBridgeSuspension(t)
+			dispatcher := &recordingPromptDispatcher{}
+			proxy := &PromptProxy{dispatcher: dispatcher, db: triggerTestDB, logger: zap.NewNop()}
+
+			type result struct {
+				stale bool
+				err   error
+			}
+			results := make(chan result, 2)
+			start := make(chan struct{})
+			for range 2 {
+				go func() {
+					<-start
+					events := make(chan ResponseEvent, 4)
+					stale, err := proxy.HandleCallback(
+						context.Background(), fixture.agentID, fixture.bridgeID, fixture.userID,
+						fixture.external, action+":"+fixture.runID.String(), events,
+					)
+					results <- result{stale: stale, err: err}
+				}()
+			}
+			close(start)
+
+			staleCount := 0
+			for range 2 {
+				got := <-results
+				if got.err != nil {
+					t.Fatalf("HandleCallback: %v", got.err)
+				}
+				if got.stale {
+					staleCount++
+				}
+			}
+			if staleCount != 1 {
+				t.Fatalf("stale callbacks = %d, want 1", staleCount)
+			}
+			inputs := dispatcher.snapshot()
+			if len(inputs) != 1 {
+				t.Fatalf("dispatched prompts = %d, want 1", len(inputs))
+			}
+			if inputs[0].ConversationID != fixture.convID.String() || inputs[0].ResumeRunID != fixture.runID.String() {
+				t.Fatalf("dispatched input = %+v, want original conversation and run", inputs[0])
+			}
+			wantApproved := action == "approve"
+			if inputs[0].Approved == nil || *inputs[0].Approved != wantApproved {
+				t.Fatalf("Approved = %v, want %v", inputs[0].Approved, wantApproved)
+			}
+		})
+	}
+}
+
+func TestHandleCallbackRequiresOriginalBridgeConversationIdentity(t *testing.T) {
+	skipIfNoTriggerDB(t)
+
+	tests := []struct {
+		name   string
+		mutate func(*testing.T, bridgeSuspensionFixture)
+		call   func(bridgeSuspensionFixture) (uuid.UUID, uuid.UUID, uuid.UUID, string)
+	}{
+		{
+			name: "agent",
+			call: func(f bridgeSuspensionFixture) (uuid.UUID, uuid.UUID, uuid.UUID, string) {
+				return uuid.New(), f.bridgeID, f.userID, f.external
+			},
+		},
+		{
+			name: "source",
+			mutate: func(t *testing.T, f bridgeSuspensionFixture) {
+				if _, err := triggerTestDB.Pool().Exec(context.Background(), "UPDATE agent_conversations SET source = 'web' WHERE id = $1", f.convID); err != nil {
+					t.Fatalf("change conversation source: %v", err)
+				}
+			},
+		},
+		{
+			name: "bridge",
+			call: func(f bridgeSuspensionFixture) (uuid.UUID, uuid.UUID, uuid.UUID, string) {
+				return f.agentID, uuid.New(), f.userID, f.external
+			},
+		},
+		{
+			name: "external id",
+			call: func(f bridgeSuspensionFixture) (uuid.UUID, uuid.UUID, uuid.UUID, string) {
+				return f.agentID, f.bridgeID, f.userID, "another-chat"
+			},
+		},
+		{
+			name: "user",
+			call: func(f bridgeSuspensionFixture) (uuid.UUID, uuid.UUID, uuid.UUID, string) {
+				return f.agentID, f.bridgeID, uuid.New(), f.external
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fixture := seedBridgeSuspension(t)
+			if tt.mutate != nil {
+				tt.mutate(t, fixture)
+			}
+			var conversationsBefore int
+			if err := triggerTestDB.Pool().QueryRow(context.Background(), "SELECT count(*) FROM agent_conversations").Scan(&conversationsBefore); err != nil {
+				t.Fatalf("count conversations: %v", err)
+			}
+			agentID, bridgeID, userID, external := fixture.agentID, fixture.bridgeID, fixture.userID, fixture.external
+			if tt.call != nil {
+				agentID, bridgeID, userID, external = tt.call(fixture)
+			}
+			dispatcher := &recordingPromptDispatcher{}
+			proxy := &PromptProxy{dispatcher: dispatcher, db: triggerTestDB, logger: zap.NewNop()}
+			events := make(chan ResponseEvent, 4)
+			stale, err := proxy.HandleCallback(context.Background(), agentID, bridgeID, userID, external, "deny:"+fixture.runID.String(), events)
+			if err != nil {
+				t.Fatalf("HandleCallback: %v", err)
+			}
+			if !stale {
+				t.Fatal("HandleCallback accepted mismatched callback identity")
+			}
+			if got := len(dispatcher.snapshot()); got != 0 {
+				t.Fatalf("dispatched prompts = %d, want 0", got)
+			}
+			var conversationsAfter int
+			if err := triggerTestDB.Pool().QueryRow(context.Background(), "SELECT count(*) FROM agent_conversations").Scan(&conversationsAfter); err != nil {
+				t.Fatalf("count conversations after callback: %v", err)
+			}
+			if conversationsAfter != conversationsBefore {
+				t.Fatalf("conversation count = %d, want %d", conversationsAfter, conversationsBefore)
+			}
+			run, err := dbq.New(triggerTestDB.Pool()).GetRunByID(context.Background(), toPgUUID(fixture.runID))
+			if err != nil {
+				t.Fatalf("GetRunByID: %v", err)
+			}
+			if run.Status != "suspended" {
+				t.Fatalf("run status = %q, want suspended", run.Status)
+			}
+		})
+	}
+}
+
+func TestHandleMessageConcurrentAutoDenyResumesOnce(t *testing.T) {
+	skipIfNoTriggerDB(t)
+	fixture := seedBridgeSuspension(t)
+	dispatcher := &recordingPromptDispatcher{}
+	proxy := &PromptProxy{dispatcher: dispatcher, db: triggerTestDB, logger: zap.NewNop()}
+
+	errs := make(chan error, 2)
+	start := make(chan struct{})
+	for i := range 2 {
+		go func(i int) {
+			<-start
+			events := make(chan ResponseEvent, 4)
+			_, err := proxy.HandleMessage(
+				context.Background(), fixture.agentID, fixture.bridgeID, fixture.userID,
+				fixture.external, true, "message "+string(rune('a'+i)), nil, nil, events,
+			)
+			errs <- err
+		}(i)
+	}
+	close(start)
+	for range 2 {
+		if err := <-errs; err != nil {
+			t.Fatalf("HandleMessage: %v", err)
+		}
+	}
+
+	inputs := dispatcher.snapshot()
+	if len(inputs) != 2 {
+		t.Fatalf("dispatched prompts = %d, want 2", len(inputs))
+	}
+	resumes := 0
+	for _, input := range inputs {
+		if input.ResumeRunID == "" {
+			if input.Approved != nil {
+				t.Fatalf("plain prompt has approval decision: %+v", input)
+			}
+			continue
+		}
+		resumes++
+		if input.ResumeRunID != fixture.runID.String() || input.Approved == nil || *input.Approved {
+			t.Fatalf("auto-deny input = %+v", input)
+		}
+	}
+	if resumes != 1 {
+		t.Fatalf("resume dispatches = %d, want 1", resumes)
+	}
 }

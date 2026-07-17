@@ -368,7 +368,7 @@ func ServeStoragePath(w http.ResponseWriter, r *http.Request, database *db.DB, s
 	case string(agentsdk.AccessPublic):
 		// no auth check
 	case string(agentsdk.AccessUser):
-		claims, ok := validateSubdomainAuth(r, jwtSecret)
+		claims, ok := validateSubdomainAuth(r, q, jwtSecret, agentID)
 		if !ok {
 			rejectOrRedirect(w, r, publicURL)
 			return
@@ -384,7 +384,7 @@ func ServeStoragePath(w http.ResponseWriter, r *http.Request, database *db.DB, s
 			return
 		}
 	case string(agentsdk.AccessAdmin):
-		claims, ok := validateSubdomainAuth(r, jwtSecret)
+		claims, ok := validateSubdomainAuth(r, q, jwtSecret, agentID)
 		if !ok {
 			rejectOrRedirect(w, r, publicURL)
 			return

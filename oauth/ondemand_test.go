@@ -18,6 +18,8 @@ import (
 // resolveToken; the embedded nil interface covers the rest of the surface.
 type identityStore struct{ secrets.Store }
 
+func testOAuthClient() *Client { return NewClient(http.DefaultClient, true) }
+
 func (identityStore) Get(_ context.Context, _, stored string) (string, error) { return stored, nil }
 func (identityStore) Put(_ context.Context, _, plaintext string) (string, error) {
 	return plaintext, nil
@@ -42,7 +44,7 @@ func baseRow(tokenURL string, expiresAt pgtype.Timestamptz, refreshRef string) t
 func TestResolveToken_NoAccessToken_NeedsReauth(t *testing.T) {
 	row := baseRow("", tsTime(time.Hour), "refresh-cipher")
 	row.accessRef = ""
-	_, persist, err := resolveToken(context.Background(), identityStore{}, NewClient(), zap.NewNop(), row, time.Now(), failUpdate(t), failClear(t))
+	_, persist, err := resolveToken(context.Background(), identityStore{}, testOAuthClient(), zap.NewNop(), row, time.Now(), failUpdate(t), failClear(t))
 	if !errors.Is(err, ErrNeedsReauth) {
 		t.Fatalf("err = %v, want ErrNeedsReauth", err)
 	}
@@ -53,7 +55,7 @@ func TestResolveToken_NoAccessToken_NeedsReauth(t *testing.T) {
 
 func TestResolveToken_Valid_ReturnsCurrent(t *testing.T) {
 	row := baseRow("", tsTime(time.Hour), "refresh-cipher")
-	tok, persist, err := resolveToken(context.Background(), identityStore{}, NewClient(), zap.NewNop(), row, time.Now(), failUpdate(t), failClear(t))
+	tok, persist, err := resolveToken(context.Background(), identityStore{}, testOAuthClient(), zap.NewNop(), row, time.Now(), failUpdate(t), failClear(t))
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
@@ -67,7 +69,7 @@ func TestResolveToken_Valid_ReturnsCurrent(t *testing.T) {
 
 func TestResolveToken_Expired_NoRefreshToken_NeedsReauth(t *testing.T) {
 	row := baseRow("", tsTime(-time.Minute), "")
-	_, persist, err := resolveToken(context.Background(), identityStore{}, NewClient(), zap.NewNop(), row, time.Now(), failUpdate(t), failClear(t))
+	_, persist, err := resolveToken(context.Background(), identityStore{}, testOAuthClient(), zap.NewNop(), row, time.Now(), failUpdate(t), failClear(t))
 	if !errors.Is(err, ErrNeedsReauth) {
 		t.Fatalf("err = %v, want ErrNeedsReauth", err)
 	}
@@ -90,7 +92,7 @@ func TestResolveToken_Expired_RefreshSuccess(t *testing.T) {
 	}
 
 	row := baseRow(srv.URL, tsTime(-time.Minute), "old-refresh")
-	tok, persist, err := resolveToken(context.Background(), identityStore{}, NewClient(), zap.NewNop(), row, time.Now(), update, failClear(t))
+	tok, persist, err := resolveToken(context.Background(), identityStore{}, testOAuthClient(), zap.NewNop(), row, time.Now(), update, failClear(t))
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
@@ -122,7 +124,7 @@ func TestResolveToken_Expired_RefreshKeepsOldRefreshToken(t *testing.T) {
 		return nil
 	}
 	row := baseRow(srv.URL, tsTime(-time.Minute), "old-refresh")
-	if _, _, err := resolveToken(context.Background(), identityStore{}, NewClient(), zap.NewNop(), row, time.Now(), update, failClear(t)); err != nil {
+	if _, _, err := resolveToken(context.Background(), identityStore{}, testOAuthClient(), zap.NewNop(), row, time.Now(), update, failClear(t)); err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
 	if gotRefresh != "old-refresh" {
@@ -141,7 +143,7 @@ func TestResolveToken_Expired_InvalidGrant_ClearsAndNeedsReauth(t *testing.T) {
 	clear := func(_ context.Context) error { cleared = true; return nil }
 
 	row := baseRow(srv.URL, tsTime(-time.Minute), "old-refresh")
-	_, persist, err := resolveToken(context.Background(), identityStore{}, NewClient(), zap.NewNop(), row, time.Now(), failUpdate(t), clear)
+	_, persist, err := resolveToken(context.Background(), identityStore{}, testOAuthClient(), zap.NewNop(), row, time.Now(), failUpdate(t), clear)
 	if !errors.Is(err, ErrNeedsReauth) {
 		t.Fatalf("err = %v, want ErrNeedsReauth", err)
 	}
@@ -161,7 +163,7 @@ func TestResolveToken_Expired_TransientError_NotReauth(t *testing.T) {
 	defer srv.Close()
 
 	row := baseRow(srv.URL, tsTime(-time.Minute), "old-refresh")
-	_, persist, err := resolveToken(context.Background(), identityStore{}, NewClient(), zap.NewNop(), row, time.Now(), failUpdate(t), failClear(t))
+	_, persist, err := resolveToken(context.Background(), identityStore{}, testOAuthClient(), zap.NewNop(), row, time.Now(), failUpdate(t), failClear(t))
 	if err == nil {
 		t.Fatal("expected a transient error")
 	}

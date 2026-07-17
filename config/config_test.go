@@ -65,6 +65,8 @@ func setRequiredEnv(t *testing.T) {
 	t.Setenv("S3_ACCESS_KEY", "minioadmin")
 	t.Setenv("S3_SECRET_KEY", "minioadmin")
 	t.Setenv("AIRLOCK_INSTANCE_ID", "airlock")
+	t.Setenv("REVERSE_PROXY_AUTH_SECRET", "test-reverse-proxy-auth-secret-32-bytes")
+	t.Setenv("AGENT_NETWORK_PER_AGENT", "false")
 	// Subdomain routing is load-bearing — resolveAgentDomain panics if
 	// neither AGENT_DOMAIN nor PUBLIC_URL is set, so seed one for tests.
 	t.Setenv("AGENT_DOMAIN", "test.airlock.local")
@@ -84,6 +86,41 @@ func TestAgentNetworkFallback(t *testing.T) {
 	t.Setenv("AGENT_NETWORK", "agents")
 	if c := Load(); c.AgentNetwork != "agents" {
 		t.Errorf("AgentNetwork (set) = %q, want agents", c.AgentNetwork)
+	}
+}
+
+func TestAgentNetworkPerAgent(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("DOCKER_NETWORK", "airlock")
+	t.Setenv("AGENT_NETWORK", "airlock-agents")
+	t.Setenv("AGENT_NETWORK_PER_AGENT", "true")
+	if c := Load(); !c.AgentNetworkPerAgent {
+		t.Fatal("AgentNetworkPerAgent = false, want true")
+	}
+}
+
+func TestAgentNetworkPerAgentRequiresSeedNetwork(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("DOCKER_NETWORK", "")
+	t.Setenv("AGENT_NETWORK", "")
+	t.Setenv("AGENT_NETWORK_PER_AGENT", "true")
+	defer func() {
+		if recover() == nil {
+			t.Fatal("Load did not panic without AGENT_NETWORK")
+		}
+	}()
+	Load()
+}
+
+func TestAgentDatabasePort(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("DB_PORT", "6432")
+	if c := Load(); c.DBPortAgent != "6432" {
+		t.Fatalf("DBPortAgent without override = %q, want 6432", c.DBPortAgent)
+	}
+	t.Setenv("DB_PORT_AGENT", "5432")
+	if c := Load(); c.DBPortAgent != "5432" {
+		t.Fatalf("DBPortAgent with override = %q, want 5432", c.DBPortAgent)
 	}
 }
 
@@ -109,6 +146,15 @@ func TestLoad(t *testing.T) {
 	}
 	if c.DBHostAgent != "postgres" {
 		t.Errorf("DBHostAgent = %q, want %q", c.DBHostAgent, "postgres")
+	}
+	if c.DBPortAgent != "5432" {
+		t.Errorf("DBPortAgent = %q, want %q", c.DBPortAgent, "5432")
+	}
+	if c.ReverseProxyAuthSecret != "test-reverse-proxy-auth-secret-32-bytes" {
+		t.Errorf("ReverseProxyAuthSecret = %q", c.ReverseProxyAuthSecret)
+	}
+	if c.ReverseProxyTrustedPeers != defaultTrustedProxyPeers {
+		t.Errorf("ReverseProxyTrustedPeers = %q, want %q", c.ReverseProxyTrustedPeers, defaultTrustedProxyPeers)
 	}
 	if c.OIDCEnabled() {
 		t.Error("OIDCEnabled() = true, want false when env vars not set")
@@ -271,6 +317,14 @@ func TestLoadPanicsOnMissingEncryptionKey(t *testing.T) {
 	Load()
 }
 
+func TestLoadEncryptionKeyRewrapDefaultsFalse(t *testing.T) {
+	setRequiredEnv(t)
+	os.Unsetenv("ENCRYPTION_KEY_REWRAP")
+	if Load().EncryptionKeyRewrap {
+		t.Fatal("EncryptionKeyRewrap defaults true")
+	}
+}
+
 func TestLoadPanicsOnMissingS3URL(t *testing.T) {
 	setRequiredEnv(t)
 	os.Unsetenv("S3_URL")
@@ -293,4 +347,120 @@ func TestOIDCEnabled(t *testing.T) {
 	if !c.OIDCEnabled() {
 		t.Error("OIDCEnabled() = false, want true when OIDC env vars are set")
 	}
+}
+
+func TestValidateDeployment(t *testing.T) {
+	const (
+		strongJWT = "0123456789abcdef0123456789abcdef"
+		devKey    = "00000000000000000000000000000000000000000000000000000000deadbeef"
+	)
+	tests := []struct {
+		name      string
+		publicURL string
+		tlsMode   string
+		jwt       string
+		key       string
+		panics    bool
+	}{
+		{"local development secrets", "http://localhost:8080", "local", "dev", devKey, false},
+		{"loopback address", "http://127.0.0.1:8080", "", "dev", devKey, false},
+		{"production https", "https://airlock.example.com", "wildcard", strongJWT, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", false},
+		{"proxy with exact trust", "https://airlock.example.com", "proxy", strongJWT, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", false},
+		{"public URL path", "https://airlock.example.com/app", "wildcard", strongJWT, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", true},
+		{"production http", "http://airlock.example.com", "proxy", strongJWT, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", true},
+		{"local mode on public host", "https://airlock.example.com", "local", strongJWT, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", true},
+		{"short production jwt", "https://airlock.example.com", "manual", "short", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", true},
+		{"development encryption key in production", "https://airlock.example.com", "tunnel", strongJWT, devKey, true},
+		{"unknown tls mode", "https://airlock.example.com", "magic", strongJWT, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			trusted := ""
+			if tt.name == "proxy with exact trust" {
+				trusted = "10.0.0.5/32"
+			}
+			c := &Config{
+				PublicURL:                tt.publicURL,
+				TLSMode:                  tt.tlsMode,
+				JWTSecret:                tt.jwt,
+				EncryptionKey:            tt.key,
+				ReverseProxyAuthSecret:   "test-reverse-proxy-auth-secret-32-bytes",
+				ReverseProxyTrustedPeers: defaultTrustedProxyPeers,
+				ReverseProxyLimit:        1,
+				CaddyTrustedProxies:      trusted,
+			}
+			panicked := false
+			func() {
+				defer func() { panicked = recover() != nil }()
+				validateDeployment(c)
+			}()
+			if panicked != tt.panics {
+				t.Fatalf("validateDeployment() panicked = %v, want %v", panicked, tt.panics)
+			}
+		})
+	}
+}
+
+func TestValidateDeploymentRejectsUnsafeProxyTrust(t *testing.T) {
+	for _, trusted := range []string{"", "*", "0.0.0.0/0", "::/0", "not-a-cidr"} {
+		t.Run(trusted, func(t *testing.T) {
+			defer func() {
+				if recover() == nil {
+					t.Fatalf("validateDeployment accepted proxy trust %q", trusted)
+				}
+			}()
+			validateDeployment(&Config{
+				PublicURL:                "https://airlock.example.com",
+				TLSMode:                  "proxy",
+				JWTSecret:                "0123456789abcdef0123456789abcdef",
+				EncryptionKey:            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+				ReverseProxyAuthSecret:   "test-reverse-proxy-auth-secret-32-bytes",
+				ReverseProxyTrustedPeers: defaultTrustedProxyPeers,
+				ReverseProxyLimit:        1,
+				CaddyTrustedProxies:      trusted,
+			})
+		})
+	}
+}
+
+func TestValidateDeploymentRejectsUnsafeProxyAuthentication(t *testing.T) {
+	tests := []struct {
+		name   string
+		secret string
+		peers  string
+		limit  int
+	}{
+		{"short secret", "short", defaultTrustedProxyPeers, 1},
+		{"missing peers", "test-reverse-proxy-auth-secret-32-bytes", "", 1},
+		{"wildcard peer", "test-reverse-proxy-auth-secret-32-bytes", "0.0.0.0/0", 1},
+		{"invalid peer", "test-reverse-proxy-auth-secret-32-bytes", "not-a-cidr", 1},
+		{"invalid limit", "test-reverse-proxy-auth-secret-32-bytes", defaultTrustedProxyPeers, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			defer func() {
+				if recover() == nil {
+					t.Fatal("validateDeployment accepted unsafe proxy authentication")
+				}
+			}()
+			validateDeployment(&Config{
+				PublicURL:                "http://localhost:8080",
+				EncryptionKey:            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+				ReverseProxyAuthSecret:   tt.secret,
+				ReverseProxyTrustedPeers: tt.peers,
+				ReverseProxyLimit:        tt.limit,
+			})
+		})
+	}
+}
+
+func TestValidateDeploymentAllowsFormatRewrapWithCurrentKey(t *testing.T) {
+	validateDeployment(&Config{
+		PublicURL:                "http://localhost:8080",
+		EncryptionKey:            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		ReverseProxyAuthSecret:   "test-reverse-proxy-auth-secret-32-bytes",
+		ReverseProxyTrustedPeers: defaultTrustedProxyPeers,
+		ReverseProxyLimit:        1,
+		EncryptionKeyRewrap:      true,
+	})
 }

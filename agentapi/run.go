@@ -71,7 +71,7 @@ func (h *Handler) RunComplete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	actions := truncateActionsJSON(actionsJSON)
-	if err := q.UpsertRunComplete(r.Context(), dbq.UpsertRunCompleteParams{
+	rows, err := q.UpsertRunComplete(r.Context(), dbq.UpsertRunCompleteParams{
 		ID:           toPgUUID(runUUID),
 		AgentID:      toPgUUID(agentID),
 		Status:       req.Status,
@@ -80,9 +80,14 @@ func (h *Handler) RunComplete(w http.ResponseWriter, r *http.Request) {
 		Actions:      actions,
 		StdoutLog:    formatRunLogs(req.Logs),
 		PanicTrace:   req.PanicTrace,
-	}); err != nil {
+	})
+	if err != nil {
 		h.logger.Error("upsert run complete failed", zap.Error(err))
 		writeJSONError(w, http.StatusInternalServerError, "failed to record run completion")
+		return
+	}
+	if rows == 0 {
+		writeJSONError(w, http.StatusNotFound, "run not found")
 		return
 	}
 
@@ -145,6 +150,7 @@ func (h *Handler) RunComplete(w http.ResponseWriter, r *http.Request) {
 
 // GetCheckpoint handles GET /api/agent/run/{runID}/checkpoint.
 func (h *Handler) GetCheckpoint(w http.ResponseWriter, r *http.Request) {
+	agentID := auth.AgentIDFromContext(r.Context())
 	runID, err := parseUUID(r.PathValue("runID"))
 	if err != nil {
 		writeJSONError(w, http.StatusBadRequest, "invalid run_id")
@@ -152,7 +158,9 @@ func (h *Handler) GetCheckpoint(w http.ResponseWriter, r *http.Request) {
 	}
 
 	q := dbq.New(h.db.Pool())
-	row, err := q.GetRunCheckpoint(r.Context(), toPgUUID(runID))
+	row, err := q.GetRunCheckpoint(r.Context(), dbq.GetRunCheckpointParams{
+		ID: toPgUUID(runID), AgentID: toPgUUID(agentID),
+	})
 	if err != nil {
 		writeJSONError(w, http.StatusNotFound, "run not found")
 		return
@@ -185,11 +193,19 @@ func (h *Handler) Upgrade(w http.ResponseWriter, r *http.Request) {
 	// requested this upgrade; the builder falls back to the agent owner when
 	// no conversation is bound.
 	if req.ConversationID != "" {
-		if cu, perr := parseUUID(req.ConversationID); perr == nil {
-			if conv, cerr := dbq.New(h.db.Pool()).GetConversationByID(r.Context(), toPgUUID(cu)); cerr == nil {
-				input.InitiatorUserID = conv.UserID
-			}
+		cu, err := parseUUID(req.ConversationID)
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "invalid conversationId")
+			return
 		}
+		conv, err := dbq.New(h.db.Pool()).GetConversationByIDAndAgent(r.Context(), dbq.GetConversationByIDAndAgentParams{
+			ID: toPgUUID(cu), AgentID: toPgUUID(agentID),
+		})
+		if err != nil {
+			writeJSONError(w, http.StatusNotFound, "conversation not found")
+			return
+		}
+		input.InitiatorUserID = conv.UserID
 	}
 
 	if err := h.builder.AcquireUpgradeLock(r.Context(), input.AgentID); err != nil {

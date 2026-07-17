@@ -24,6 +24,7 @@ import (
 	"github.com/airlockrun/goai/mcp"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"
 	"google.golang.org/protobuf/proto"
@@ -173,18 +174,18 @@ func (s *MCPServer) serveDispatch(w http.ResponseWriter, r *http.Request, h *Han
 	case "notifications/initialized":
 		w.WriteHeader(http.StatusAccepted)
 	case "notifications/cancelled":
-		s.handleCancelled(msg)
+		s.handleCancelled(ctx, q, target, principal, msg)
 		w.WriteHeader(http.StatusAccepted)
 	case "tools/list":
 		s.handleToolsList(ctx, w, q, target, access, principal, msg)
 	case "tools/call":
 		s.handleToolsCall(ctx, w, r, h, q, target, access, principal, msg)
 	case "resources/list":
-		s.handleResourcesList(ctx, w, h, q, target, access, msg)
+		s.handleResourcesList(ctx, w, h, q, target, access, principal, msg)
 	case "resources/read":
-		s.handleResourcesRead(ctx, w, h, q, target, access, msg)
+		s.handleResourcesRead(ctx, w, h, q, target, access, principal, msg)
 	case "resources/templates/list":
-		s.handleResourcesTemplatesList(ctx, w, q, target, access, msg)
+		s.handleResourcesTemplatesList(ctx, w, q, target, access, principal, msg)
 	default:
 		writeJSONRPCError(w, msg.ID, rpcErrMethodNotFound, "unknown method: "+msg.Method)
 	}
@@ -203,11 +204,11 @@ func resolveAgent(ctx context.Context, q *dbq.Queries, identifier string) (dbq.A
 //     401 + WWW-Authenticate handshake; the /public-mcp handler accepts
 //     it as-is.
 //   - Agent JWT → MCPPrincipalAgent (A2A path; X-Run-ID required).
-//   - OAuth access token (JWT with client_id claim) → MCPPrincipalOAuthClient.
+//   - OAuth MCP access token → MCPPrincipalOAuthClient.
 //     Audience binding (aud == this agent's canonical resource URL) is
 //     verified here so the MCP handler's access-ladder code stays
 //     unchanged. Mandatory `mcp` scope check.
-//   - Plain user JWT → MCPPrincipalUser (web SPA path, unchanged).
+//   - User access token → MCPPrincipalUser (web SPA path).
 //
 // targetAgentID is the agent the request is hitting; needed for the
 // OAuth audience check. publicURL is the canonical origin used to
@@ -229,6 +230,10 @@ func resolvePrincipal(ctx context.Context, r *http.Request, q *dbq.Queries, jwtS
 		if err != nil {
 			return MCPPrincipal{}, errors.New("invalid agent claim")
 		}
+		callerState, err := q.GetAgentTokenAuth(ctx, toPgUUID(callerAgentID))
+		if err != nil || (callerState.Status != "active" && callerState.Status != "building") || callerState.AgentTokenVersion != claims.TokenVersion {
+			return MCPPrincipal{}, errors.New("agent token revoked")
+		}
 		runIDStr := r.Header.Get("X-Run-ID")
 		if runIDStr == "" {
 			return MCPPrincipal{}, errors.New("agent JWT requires X-Run-ID header")
@@ -238,7 +243,7 @@ func resolvePrincipal(ctx context.Context, r *http.Request, q *dbq.Queries, jwtS
 			return MCPPrincipal{}, errors.New("invalid X-Run-ID")
 		}
 		run, err := q.GetRunByID(ctx, pgtype.UUID{Bytes: parentRunID, Valid: true})
-		if err != nil || uuid.UUID(run.AgentID.Bytes) != callerAgentID {
+		if err != nil || uuid.UUID(run.AgentID.Bytes) != callerAgentID || run.Status != "running" {
 			return MCPPrincipal{}, errors.New("X-Run-ID not accessible")
 		}
 		userID, err := chaseOriginalUser(ctx, q, run)
@@ -253,25 +258,27 @@ func resolvePrincipal(ctx context.Context, r *http.Request, q *dbq.Queries, jwtS
 		}, nil
 	}
 
-	// Parse as a user/OAuth JWT — the wire shape is the same; the
-	// presence of the ClientID claim picks OAuth, absence picks the
-	// legacy web-login path. See auth/jwt.go for the invariant.
-	claims, err := auth.ValidateToken(jwtSecret, token)
-	if err != nil {
-		return MCPPrincipal{}, errInvalidToken
-	}
-	userID, err := uuid.Parse(claims.Subject)
-	if err != nil {
-		return MCPPrincipal{}, errors.New("invalid user claim")
+	if claims, err := auth.ValidateUserAccessToken(jwtSecret, token); err == nil {
+		claims, err = auth.ResolveLiveUserClaims(ctx, q, claims, true)
+		if err != nil {
+			return MCPPrincipal{}, errInvalidToken
+		}
+		if claims.MustChangePassword {
+			return MCPPrincipal{}, errInvalidToken
+		}
+		userID, err := uuid.Parse(claims.Subject)
+		if err != nil {
+			return MCPPrincipal{}, errors.New("invalid user claim")
+		}
+		return MCPPrincipal{Kind: MCPPrincipalUser, UserID: userID}, nil
 	}
 
-	if claims.ClientID != "" {
-		// OAuth access token. Audience MUST be the canonical URL for
-		// THIS agent — `aud` reflects the agent the token was issued
-		// for. Scope must include `mcp`.
-		canonAud := fmt.Sprintf("%s/api/agent/%s/mcp", strings.TrimRight(publicURL, "/"), targetAgentID.String())
-		if !auth.AudienceContains(claims.Audience, canonAud) {
-			return MCPPrincipal{}, errAudienceMismatch
+	canonAud := fmt.Sprintf("%s/api/agent/%s/mcp", strings.TrimRight(publicURL, "/"), targetAgentID.String())
+	claims, oauthErr := auth.ValidateOAuthAccessToken(jwtSecret, token, canonAud)
+	if oauthErr == nil {
+		userID, err := uuid.Parse(claims.Subject)
+		if err != nil {
+			return MCPPrincipal{}, errors.New("invalid user claim")
 		}
 		if !auth.ScopeContains(claims.Scope, "mcp") {
 			return MCPPrincipal{}, errInsufficientScope
@@ -281,15 +288,29 @@ func resolvePrincipal(ctx context.Context, r *http.Request, q *dbq.Queries, jwtS
 		if _, err := q.GetOAuthClient(ctx, claims.ClientID); err != nil {
 			return MCPPrincipal{}, errClientRevoked
 		}
+		user, err := q.GetUserByID(ctx, toPgUUID(userID))
+		if err != nil || user.MustChangePassword || user.AuthEpoch != claims.AuthEpoch {
+			return MCPPrincipal{}, errInvalidToken
+		}
+		grant, err := q.GetActiveGrant(ctx, dbq.GetActiveGrantParams{
+			UserID: toPgUUID(userID), ClientID: claims.ClientID, AgentID: toPgUUID(targetAgentID),
+		})
+		if err != nil {
+			return MCPPrincipal{}, errClientRevoked
+		}
+		if !auth.ScopeContains(grant.Scope, "mcp") {
+			return MCPPrincipal{}, errInsufficientScope
+		}
 		return MCPPrincipal{
 			Kind:     MCPPrincipalOAuthClient,
 			UserID:   userID,
 			ClientID: claims.ClientID,
 		}, nil
 	}
-
-	// Plain user JWT (web SPA).
-	return MCPPrincipal{Kind: MCPPrincipalUser, UserID: userID}, nil
+	if errors.Is(oauthErr, auth.ErrInvalidAudience) {
+		return MCPPrincipal{}, errAudienceMismatch
+	}
+	return MCPPrincipal{}, errInvalidToken
 }
 
 // Sentinel errors so the MCP handler can map each one to the
@@ -428,11 +449,61 @@ func (s *MCPServer) handleInitialize(w http.ResponseWriter, target dbq.Agent, ms
 	writeJSONRPCResult(w, msg.ID, result)
 }
 
-func (s *MCPServer) handleCancelled(_ jsonrpcMessage) {
-	// MCP `notifications/cancelled` carries `{requestId}` but our
-	// run-cancel path keys on the HTTP connection closing, which fires
-	// automatically when the JSON-RPC peer disconnects. The
-	// notification is purely advisory.
+func (s *MCPServer) handleCancelled(ctx context.Context, q *dbq.Queries, target dbq.Agent, principal MCPPrincipal, msg jsonrpcMessage) {
+	principalIdentity, ok := continuationPrincipalKey(principal)
+	if !ok {
+		return
+	}
+	defer func() {
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		if _, err := q.CleanupExpiredMCPActiveRequests(cleanupCtx); err != nil {
+			s.logger.Warn("mcp: clean active requests", zap.Error(err))
+		}
+	}()
+	var params struct {
+		RequestID json.RawMessage `json:"requestId"`
+	}
+	if err := json.Unmarshal(msg.Params, &params); err != nil {
+		return
+	}
+	requestID, err := normalizeMCPRequestID(params.RequestID)
+	if err != nil {
+		return
+	}
+	runID, err := q.ConsumeMCPActiveRequest(ctx, dbq.ConsumeMCPActiveRequestParams{
+		TargetAgentID:     target.ID,
+		PrincipalIdentity: principalIdentity,
+		RequestID:         requestID,
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return
+	}
+	if err != nil {
+		s.logger.Warn("mcp: consume cancellation", zap.Error(err), zap.String("agent_id", uuid.UUID(target.ID.Bytes).String()))
+		return
+	}
+	if runID.Valid {
+		s.dispatcher.CancelRun(uuid.UUID(runID.Bytes))
+	}
+}
+
+func normalizeMCPRequestID(raw json.RawMessage) ([]byte, error) {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		return nil, err
+	}
+	if err := decoder.Decode(new(any)); !errors.Is(err, io.EOF) {
+		return nil, errors.New("invalid JSON-RPC request ID")
+	}
+	switch value.(type) {
+	case string, json.Number:
+		return json.Marshal(value)
+	default:
+		return nil, errors.New("JSON-RPC request ID must be a string or number")
+	}
 }
 
 func (s *MCPServer) handleToolsList(ctx context.Context, w http.ResponseWriter, q *dbq.Queries, target dbq.Agent, access agentsdk.Access, principal MCPPrincipal, msg jsonrpcMessage) {
@@ -513,6 +584,10 @@ func promptAllowed(target dbq.Agent, principal MCPPrincipal) bool {
 }
 
 func (s *MCPServer) handleToolsCall(ctx context.Context, w http.ResponseWriter, r *http.Request, h *Handler, q *dbq.Queries, target dbq.Agent, access agentsdk.Access, principal MCPPrincipal, msg jsonrpcMessage) {
+	if _, err := normalizeMCPRequestID(msg.ID); err != nil {
+		writeJSONRPCError(w, msg.ID, rpcErrInvalidRequest, "tools/call requires a string or number id")
+		return
+	}
 	var params struct {
 		Name      string          `json:"name"`
 		Arguments json.RawMessage `json:"arguments"`
@@ -543,6 +618,48 @@ func (s *MCPServer) handleToolsCall(ctx context.Context, w http.ResponseWriter, 
 // notifications/progress messages. A final response (or error) lands
 // on the same SSE channel when the run terminates.
 func (s *MCPServer) handlePromptCall(ctx context.Context, w http.ResponseWriter, r *http.Request, h *Handler, q *dbq.Queries, target dbq.Agent, access agentsdk.Access, principal MCPPrincipal, msg jsonrpcMessage, args json.RawMessage) {
+	requestID, err := normalizeMCPRequestID(msg.ID)
+	if err != nil {
+		writeJSONRPCError(w, msg.ID, rpcErrInvalidRequest, "prompt requires a string or number id")
+		return
+	}
+	principalIdentity, authenticated := continuationPrincipalKey(principal)
+	timeout := trigger.PromptHTTPCeiling
+	reservationPending := false
+	if authenticated {
+		reserved, err := q.ReserveMCPActiveRequest(ctx, dbq.ReserveMCPActiveRequestParams{
+			TargetAgentID:     target.ID,
+			PrincipalIdentity: principalIdentity,
+			RequestID:         requestID,
+			TtlSeconds:        int32(timeout / time.Second),
+		})
+		if err != nil || reserved != 1 {
+			if err != nil {
+				s.logger.Error("mcp: reserve active request", zap.Error(err))
+			}
+			writeJSONRPCError(w, msg.ID, rpcErrServerError, "request id is already active")
+			return
+		}
+		reservationPending = true
+		defer func() {
+			if !reservationPending {
+				return
+			}
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			defer cleanupCancel()
+			if err := q.ReleaseMCPActiveRequestReservation(cleanupCtx, dbq.ReleaseMCPActiveRequestReservationParams{
+				TargetAgentID:     target.ID,
+				PrincipalIdentity: principalIdentity,
+				RequestID:         requestID,
+			}); err != nil {
+				s.logger.Warn("mcp: release active request reservation", zap.Error(err))
+			}
+		}()
+		if _, err := q.CleanupExpiredMCPActiveRequests(ctx); err != nil {
+			s.logger.Warn("mcp: clean active requests", zap.Error(err))
+		}
+	}
+
 	// files: accept either legacy {path, filename, contentType, size}
 	// (A2A caller / web-uploaded refs) or new inline {filename, mimeType,
 	// data} (external MCP uploads). Discriminate by presence of `data`.
@@ -580,38 +697,8 @@ func (s *MCPServer) handlePromptCall(ctx context.Context, w http.ResponseWriter,
 	// to it. Merge "doesn't exist" and "not accessible" into one
 	// error (don't leak existence).
 	if promptArgs.ContextID != "" {
-		convID, err := uuid.Parse(promptArgs.ContextID)
-		if err != nil {
-			writeJSONRPCError(w, msg.ID, rpcErrInvalidParams, "invalid contextId format")
-			return
-		}
-		conv, err := q.GetConversationByID(ctx, pgtype.UUID{Bytes: convID, Valid: true})
-		// Source gate: A2A may only ever continue an A2A thread. A
-		// contextId pointing at this agent's web or bridge conversation
-		// (even one the same user owns) must NOT be resumable over A2A —
-		// that would let a sibling agent read and inject turns into the
-		// human's real web/bridge chat. Merge wrong-agent and
-		// wrong-surface into the one not-accessible error (don't leak
-		// which conversations exist on which surface).
-		if err != nil || uuid.UUID(conv.AgentID.Bytes) != uuid.UUID(target.ID.Bytes) || conv.Source != "a2a" {
-			writeJSONRPCError(w, msg.ID, rpcErrInvalidParams, "contextId not accessible — it must be a contextId this agent returned to you from a prior call. Do not pass your own run/conversation id or a fabricated value. Retry with contextId omitted to start a fresh thread.")
-			return
-		}
-		// The conversation must belong to the same principal that is
-		// continuing it — no cross-user (or user↔anon) A2A thread
-		// resumption. Owned conv → caller must be that exact user.
-		// Anonymous conv (no owner) → only an anonymous caller may
-		// continue it. Per-anon-identity gating for bridge callers
-		// (external_user_id, possibly a group-chat id) is deferred —
-		// see todo/a2a-anon-conversation-gating.md; today all anon
-		// callers are one tier.
-		if conv.UserID.Valid {
-			if principal.UserID == uuid.Nil || uuid.UUID(conv.UserID.Bytes) != principal.UserID {
-				writeJSONRPCError(w, msg.ID, rpcErrInvalidParams, "contextId not accessible — it must be a contextId this agent returned to you from a prior call. Do not pass your own run/conversation id or a fabricated value. Retry with contextId omitted to start a fresh thread.")
-				return
-			}
-		} else if principal.UserID != uuid.Nil {
-			writeJSONRPCError(w, msg.ID, rpcErrInvalidParams, "contextId not accessible — it must be a contextId this agent returned to you from a prior call. Do not pass your own run/conversation id or a fabricated value. Retry with contextId omitted to start a fresh thread.")
+		if _, err := getBoundMCPConversation(ctx, q, uuid.UUID(target.ID.Bytes), principal, promptArgs.ContextID); err != nil {
+			writeJSONRPCError(w, msg.ID, rpcErrInvalidParams, "contextId not accessible — it must be a contextId this agent returned to this caller from a prior call. Retry with contextId omitted to start a fresh thread.")
 			return
 		}
 	}
@@ -622,19 +709,8 @@ func (s *MCPServer) handlePromptCall(ctx context.Context, w http.ResponseWriter,
 	// not-yours into one error (don't leak existence).
 	var taskRun dbq.Run
 	if promptArgs.TaskID != "" {
-		taskUUID, err := uuid.Parse(promptArgs.TaskID)
+		tr, _, err := getBoundMCPTask(ctx, q, uuid.UUID(target.ID.Bytes), principal, promptArgs.TaskID, promptArgs.ContextID)
 		if err != nil {
-			writeJSONRPCError(w, msg.ID, rpcErrInvalidParams, "invalid taskId format")
-			return
-		}
-		tr, err := q.GetRunByID(ctx, pgtype.UUID{Bytes: taskUUID, Valid: true})
-		// Surface gate: a taskId must reference an A2A run on this agent.
-		// A web/bridge run's trigger_ref is its own web/bridge
-		// conversation id; without this check, `convID =
-		// taskRun.TriggerRef` below would resume the human's real
-		// web/bridge thread over A2A. Merge wrong-agent and
-		// wrong-surface into the one not-accessible error.
-		if err != nil || uuid.UUID(tr.AgentID.Bytes) != uuid.UUID(target.ID.Bytes) || tr.TriggerType != "a2a" {
 			writeJSONRPCError(w, msg.ID, rpcErrInvalidParams, "taskId not accessible — it must be a taskId this agent returned to you with state=input-required. Do not invent one; omit taskId unless you are resuming such a task.")
 			return
 		}
@@ -658,10 +734,20 @@ func (s *MCPServer) handlePromptCall(ctx context.Context, w http.ResponseWriter,
 		if principal.UserID != uuid.Nil {
 			convUser = pgtype.UUID{Bytes: principal.UserID, Valid: true}
 		}
-		conv, cerr := q.CreateA2AConversation(ctx, dbq.CreateA2AConversationParams{
-			AgentID: pgtype.UUID{Bytes: uuid.UUID(target.ID.Bytes), Valid: true},
-			UserID:  convUser,
-			Title:   truncate(promptArgs.Message, 100),
+		metadata := []byte(`{}`)
+		if principal.Kind != MCPPrincipalAnon {
+			boundMetadata, metadataErr := continuationMetadata(principal)
+			if metadataErr != nil {
+				writeJSONRPCError(w, msg.ID, rpcErrInvalidParams, "caller cannot create a resumable context")
+				return
+			}
+			metadata = boundMetadata
+		}
+		conv, cerr := q.CreateMCPA2AConversation(ctx, dbq.CreateMCPA2AConversationParams{
+			AgentID:  pgtype.UUID{Bytes: uuid.UUID(target.ID.Bytes), Valid: true},
+			UserID:   convUser,
+			Title:    truncate(promptArgs.Message, 100),
+			Metadata: metadata,
 		})
 		if cerr != nil {
 			writeJSONRPCError(w, msg.ID, rpcErrServerError, "create a2a conversation: "+cerr.Error())
@@ -722,9 +808,31 @@ func (s *MCPServer) handlePromptCall(ctx context.Context, w http.ResponseWriter,
 	// Bridge timeouts: the chat-prompt context timeout is the cap on
 	// any A2A prompt as well. Bound the underlying ctx so even if the
 	// caller hangs, the server eventually surrenders the run.
-	timeout := trigger.PromptHTTPCeiling
 	cctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+
+	taskClaimed := false
+	if promptArgs.TaskID != "" {
+		if err := claimMCPTaskResume(cctx, q, taskRun); err != nil {
+			writeJSONRPCError(w, msg.ID, rpcErrInvalidParams, "taskId not accessible — it must be a taskId this agent returned to you with state=input-required. Do not invent one; omit taskId unless you are resuming such a task.")
+			return
+		}
+		taskClaimed = true
+		defer func() {
+			if !taskClaimed {
+				return
+			}
+			rollbackCtx, rollbackCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			defer rollbackCancel()
+			if _, err := q.RollbackMCPTaskResume(rollbackCtx, dbq.RollbackMCPTaskResumeParams{
+				ID:         taskRun.ID,
+				AgentID:    taskRun.AgentID,
+				TriggerRef: taskRun.TriggerRef,
+			}); err != nil {
+				s.logger.Warn("mcp: rollback task resume", zap.Error(err), zap.String("task_id", promptArgs.TaskID))
+			}
+		}()
+	}
 
 	rc, runID, err := s.dispatcher.ForwardA2APrompt(cctx, uuid.UUID(target.ID.Bytes), parentRunID, access, userID, input)
 	if err != nil {
@@ -741,7 +849,46 @@ func (s *MCPServer) handlePromptCall(ctx context.Context, w http.ResponseWriter,
 		writeJSONRPCError(w, msg.ID, rpcErrServerError, "forward prompt: "+err.Error())
 		return
 	}
+	taskClaimed = false
 	defer rc.Close()
+
+	if authenticated {
+		activated, err := q.ActivateMCPActiveRequest(cctx, dbq.ActivateMCPActiveRequestParams{
+			TargetAgentID:     target.ID,
+			PrincipalIdentity: principalIdentity,
+			RequestID:         requestID,
+			RunID:             toPgUUID(runID),
+		})
+		if err != nil || activated != 1 {
+			s.dispatcher.CancelRun(runID)
+			if err != nil {
+				s.logger.Error("mcp: activate active request", zap.Error(err), zap.String("run_id", runID.String()))
+				writeJSONRPCError(w, msg.ID, rpcErrServerError, "activate request cancellation")
+				return
+			}
+			writeJSONRPCError(w, msg.ID, rpcErrServerError, "cancelled by client")
+			return
+		}
+		reservationPending = false
+
+		watchCtx, stopWatch := context.WithCancel(cctx)
+		watchDone := make(chan struct{})
+		go s.watchMCPActiveRequest(watchCtx, q, target.ID, principalIdentity, requestID, runID, cancel, watchDone)
+		defer func() {
+			stopWatch()
+			<-watchDone
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			defer cleanupCancel()
+			if err := q.DeleteMCPActiveRequest(cleanupCtx, dbq.DeleteMCPActiveRequestParams{
+				TargetAgentID:     target.ID,
+				PrincipalIdentity: principalIdentity,
+				RequestID:         requestID,
+				RunID:             toPgUUID(runID),
+			}); err != nil {
+				s.logger.Warn("mcp: remove active request", zap.Error(err), zap.String("run_id", runID.String()))
+			}
+		}()
+	}
 
 	// Build parentInfo so each NDJSON event from the child run also
 	// mirrors onto the parent's WS topic with a SubagentInfo tag —
@@ -943,12 +1090,26 @@ func (s *MCPServer) handlePromptCall(ctx context.Context, w http.ResponseWriter,
 			})
 		}
 	}
+	if authenticated && finalErr == "" {
+		if _, err := q.GetMCPActiveRequest(cctx, dbq.GetMCPActiveRequestParams{
+			TargetAgentID:     target.ID,
+			PrincipalIdentity: principalIdentity,
+			RequestID:         requestID,
+			RunID:             toPgUUID(runID),
+		}); errors.Is(err, pgx.ErrNoRows) {
+			finalErr = "cancelled by client"
+		}
+	}
 
 	// Bound timeout outcome: ctx done before the agent finished. Emit
 	// the timeout error and ensure the run is cancelled. The disconnect
 	// goroutine above already does the cancel; we just emit the error.
 	if cctx.Err() != nil && finalErr == "" {
-		finalErr = "task exceeded sync timeout; cancelled"
+		if errors.Is(cctx.Err(), context.DeadlineExceeded) {
+			finalErr = "task exceeded sync timeout; cancelled"
+		} else {
+			finalErr = "cancelled by client"
+		}
 	}
 
 	// Hard failure / cancel stays on the JSON-RPC error channel — that
@@ -1007,10 +1168,14 @@ func (s *MCPServer) handlePromptCall(ctx context.Context, w http.ResponseWriter,
 		artifacts = []a2aArtifact{}
 	}
 	a2aMeta := map[string]any{
-		"taskId":    runID.String(),
-		"contextId": contextID,
 		"state":     state,
 		"artifacts": artifacts,
+	}
+	// Public MCP has no stable caller identity. Fresh anonymous prompts remain
+	// available, but no continuation handles are issued or accepted.
+	if principal.Kind != MCPPrincipalAnon {
+		a2aMeta["taskId"] = runID.String()
+		a2aMeta["contextId"] = contextID
 	}
 	// On input-required, carry the leaf gate detail (which sibling
 	// wants to do what) so the caller's promptAgent tool can stamp it
@@ -1028,6 +1193,36 @@ func (s *MCPServer) handlePromptCall(ctx context.Context, w http.ResponseWriter,
 		},
 	})
 	writeSSEJSONRPCResult(w, flusher, msg.ID, resultPayload)
+}
+
+func (s *MCPServer) watchMCPActiveRequest(ctx context.Context, q *dbq.Queries, targetAgentID pgtype.UUID, principalIdentity string, requestID []byte, runID uuid.UUID, cancel context.CancelFunc, done chan<- struct{}) {
+	defer close(done)
+	ticker := time.NewTicker(250 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			_, err := q.GetMCPActiveRequest(ctx, dbq.GetMCPActiveRequestParams{
+				TargetAgentID:     targetAgentID,
+				PrincipalIdentity: principalIdentity,
+				RequestID:         requestID,
+				RunID:             toPgUUID(runID),
+			})
+			switch {
+			case err == nil:
+				continue
+			case errors.Is(err, pgx.ErrNoRows):
+				cancel()
+				return
+			case ctx.Err() != nil:
+				return
+			default:
+				s.logger.Warn("mcp: watch active request", zap.Error(err), zap.String("run_id", runID.String()))
+			}
+		}
+	}
 }
 
 // handleUserToolCall forwards a user-registered tool call to the
@@ -1221,9 +1416,3 @@ func writeSSEJSONRPCError(w http.ResponseWriter, flusher http.Flusher, id json.R
 		flusher.Flush()
 	}
 }
-
-// Compile-time guard against unused imports (convert + time are used
-// in helpers that may be inlined; keep visible so a refactor that
-// trims them throws a build error rather than silent drift).
-var _ = convert.PgUUIDToString
-var _ = time.Second

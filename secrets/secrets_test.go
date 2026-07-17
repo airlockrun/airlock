@@ -37,7 +37,7 @@ func TestLocalStoreRoundTrip(t *testing.T) {
 	}
 }
 
-func TestLocalStoreRefIgnored(t *testing.T) {
+func TestLocalStoreBindsRef(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 
@@ -46,13 +46,57 @@ func TestLocalStoreRefIgnored(t *testing.T) {
 		t.Fatalf("Put: %v", err)
 	}
 
-	// LocalStore decrypts regardless of ref — the ciphertext is self-contained.
-	plain, err := s.Get(ctx, "ref-b", stored)
-	if err != nil {
-		t.Fatalf("Get with different ref: %v", err)
+	if _, err := s.Get(ctx, "ref-b", stored); err == nil {
+		t.Fatal("Get with different ref succeeded")
 	}
-	if plain != "secret" {
-		t.Fatalf("plaintext mismatch: got %q", plain)
+}
+
+func TestLocalStoreRewrapsUnenvelopedCiphertext(t *testing.T) {
+	key := make([]byte, 32)
+	enc := crypto.New(key)
+	legacy, err := enc.Encrypt("secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := NewLocal(enc)
+
+	stored, changed, err := s.Rewrap(context.Background(), "ref-a", legacy)
+	if err != nil {
+		t.Fatalf("Rewrap: %v", err)
+	}
+	if !changed {
+		t.Fatal("Rewrap changed = false")
+	}
+	if _, err := s.Get(context.Background(), "ref-b", stored); err == nil {
+		t.Fatal("rewrapped ciphertext was not bound to ref")
+	}
+	plain, err := s.Get(context.Background(), "ref-a", stored)
+	if err != nil || plain != "secret" {
+		t.Fatalf("Get rewrapped = %q, %v", plain, err)
+	}
+}
+
+func TestLocalStoreRewrapsEnvelopeToCurrentKey(t *testing.T) {
+	oldKey := make([]byte, 32)
+	newKey := make([]byte, 32)
+	for i := range oldKey {
+		oldKey[i], newKey[i] = 1, 2
+	}
+	oldStore := NewLocal(crypto.New(oldKey))
+	stored, err := oldStore.Put(context.Background(), "ref-a", "secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rotatingStore := NewLocal(crypto.New(newKey, oldKey))
+	got, changed, err := rotatingStore.Rewrap(context.Background(), "ref-a", stored)
+	if err != nil || !changed || got == stored {
+		t.Fatalf("rotation Rewrap = (%q, %v, %v), want changed", got, changed, err)
+	}
+}
+
+func TestLocalStoreRejectsPlaintext(t *testing.T) {
+	if _, err := newTestStore(t).Get(context.Background(), "ref-a", "plain-secret"); err == nil {
+		t.Fatal("Get accepted plaintext")
 	}
 }
 

@@ -15,6 +15,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/auth/passkey"
@@ -101,6 +102,9 @@ func (s *Service) RegisterBegin(ctx context.Context, p authz.Principal) (ceremon
 	if err = authz.Authorize(ctx, q, p, authz.TenantSelfPasskeyManage, uuid.Nil); err != nil {
 		return "", nil, err
 	}
+	if err = requireRecentAuthentication(ctx, true); err != nil {
+		return "", nil, err
+	}
 	user, _, err := s.loadWebauthnUser(ctx, q, p.UserID)
 	if err != nil {
 		return "", nil, err
@@ -132,6 +136,9 @@ func (s *Service) RegisterFinish(ctx context.Context, p authz.Principal, ceremon
 	if err := authz.Authorize(ctx, q, p, authz.TenantSelfPasskeyManage, uuid.Nil); err != nil {
 		return Passkey{}, err
 	}
+	if err := requireRecentAuthentication(ctx, true); err != nil {
+		return Passkey{}, err
+	}
 	session, row, err := s.consumeCeremony(ctx, q, ceremonyID, "register")
 	if err != nil {
 		return Passkey{}, err
@@ -152,16 +159,31 @@ func (s *Service) RegisterFinish(ctx context.Context, p authz.Principal, ceremon
 	if name == "" {
 		name = "Passkey"
 	}
-	created, err := q.CreateCredential(ctx, credToParams(p.UserID, name, cred))
+	tx, err := s.db.Pool().Begin(ctx)
+	if err != nil {
+		return Passkey{}, err
+	}
+	defer tx.Rollback(ctx)
+	qtx := q.WithTx(tx)
+	created, err := qtx.CreateCredential(ctx, credToParams(p.UserID, name, cred))
 	if err != nil {
 		s.logger.Error("create credential failed", zap.Error(err))
 		return Passkey{}, err
 	}
 	if dbUser.MustChangePassword {
-		if err := q.ClearMustChangePassword(ctx, pgtype.UUID{Bytes: p.UserID, Valid: true}); err != nil {
+		if err := qtx.ClearMustChangePassword(ctx, pgtype.UUID{Bytes: p.UserID, Valid: true}); err != nil {
 			s.logger.Error("clear must_change_password failed", zap.Error(err))
 			return Passkey{}, err
 		}
+	}
+	if _, err := qtx.AdvanceUserAuthEpochAndRevokeSessions(ctx, dbq.AdvanceUserAuthEpochAndRevokeSessionsParams{
+		ID:                pgtype.UUID{Bytes: p.UserID, Valid: true},
+		PreserveSessionID: preserveSessionID(ctx),
+	}); err != nil {
+		return Passkey{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Passkey{}, err
 	}
 	return passkeyDTO(created), nil
 }
@@ -170,6 +192,9 @@ func (s *Service) RegisterFinish(ctx context.Context, p authz.Principal, ceremon
 func (s *Service) Rename(ctx context.Context, p authz.Principal, id uuid.UUID, name string) error {
 	q := dbq.New(s.db.Pool())
 	if err := authz.Authorize(ctx, q, p, authz.TenantSelfPasskeyManage, uuid.Nil); err != nil {
+		return err
+	}
+	if err := requireRecentAuthentication(ctx, false); err != nil {
 		return err
 	}
 	name = strings.TrimSpace(name)
@@ -191,6 +216,9 @@ func (s *Service) Delete(ctx context.Context, p authz.Principal, id uuid.UUID) e
 	if err := authz.Authorize(ctx, q, p, authz.TenantSelfPasskeyManage, uuid.Nil); err != nil {
 		return err
 	}
+	if err := requireRecentAuthentication(ctx, false); err != nil {
+		return err
+	}
 	count, err := q.CountCredentialsByUserID(ctx, pgtype.UUID{Bytes: p.UserID, Valid: true})
 	if err != nil {
 		return err
@@ -202,10 +230,25 @@ func (s *Service) Delete(ctx context.Context, p authz.Principal, id uuid.UUID) e
 	if count <= 1 && !hasPassword {
 		return service.Detail(service.ErrInvalidInput, "cannot remove your last sign-in credential; add a password or another passkey first")
 	}
-	return q.DeleteCredential(ctx, dbq.DeleteCredentialParams{
+	tx, err := s.db.Pool().Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	qtx := q.WithTx(tx)
+	if err := qtx.DeleteCredential(ctx, dbq.DeleteCredentialParams{
 		ID:     pgtype.UUID{Bytes: id, Valid: true},
 		UserID: pgtype.UUID{Bytes: p.UserID, Valid: true},
-	})
+	}); err != nil {
+		return err
+	}
+	if _, err := qtx.AdvanceUserAuthEpochAndRevokeSessions(ctx, dbq.AdvanceUserAuthEpochAndRevokeSessionsParams{
+		ID:                pgtype.UUID{Bytes: p.UserID, Valid: true},
+		PreserveSessionID: preserveSessionID(ctx),
+	}); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 // SetPassword sets or replaces the caller's password (strength-checked) and
@@ -213,6 +256,9 @@ func (s *Service) Delete(ctx context.Context, p authz.Principal, id uuid.UUID) e
 func (s *Service) SetPassword(ctx context.Context, p authz.Principal, password string) error {
 	q := dbq.New(s.db.Pool())
 	if err := authz.Authorize(ctx, q, p, authz.TenantSelfPasskeyManage, uuid.Nil); err != nil {
+		return err
+	}
+	if err := requireRecentAuthentication(ctx, true); err != nil {
 		return err
 	}
 	user, err := q.GetUserByID(ctx, pgtype.UUID{Bytes: p.UserID, Valid: true})
@@ -227,10 +273,12 @@ func (s *Service) SetPassword(ctx context.Context, p authz.Principal, password s
 		s.logger.Error("hash password failed", zap.Error(err))
 		return err
 	}
-	return q.UpdateUserPassword(ctx, dbq.UpdateUserPasswordParams{
-		PasswordHash: pgtype.Text{String: hash, Valid: true},
-		ID:           pgtype.UUID{Bytes: p.UserID, Valid: true},
+	_, err = q.UpdateUserPasswordAndRevokeSessions(ctx, dbq.UpdateUserPasswordAndRevokeSessionsParams{
+		PasswordHash:      pgtype.Text{String: hash, Valid: true},
+		ID:                pgtype.UUID{Bytes: p.UserID, Valid: true},
+		PreserveSessionID: preserveSessionID(ctx),
 	})
+	return err
 }
 
 // RemovePassword clears the caller's password, refusing if it would leave no
@@ -238,6 +286,9 @@ func (s *Service) SetPassword(ctx context.Context, p authz.Principal, password s
 func (s *Service) RemovePassword(ctx context.Context, p authz.Principal) error {
 	q := dbq.New(s.db.Pool())
 	if err := authz.Authorize(ctx, q, p, authz.TenantSelfPasskeyManage, uuid.Nil); err != nil {
+		return err
+	}
+	if err := requireRecentAuthentication(ctx, false); err != nil {
 		return err
 	}
 	hasPassword, err := s.userHasPassword(ctx, q, p.UserID)
@@ -254,40 +305,24 @@ func (s *Service) RemovePassword(ctx context.Context, p authz.Principal) error {
 	if count == 0 {
 		return service.Detail(service.ErrInvalidInput, "cannot remove your password without a passkey; register one first")
 	}
-	return q.ClearUserPassword(ctx, pgtype.UUID{Bytes: p.UserID, Valid: true})
+	_, err = q.ClearUserPasswordAndRevokeSessions(ctx, dbq.ClearUserPasswordAndRevokeSessionsParams{
+		ID:                pgtype.UUID{Bytes: p.UserID, Valid: true},
+		PreserveSessionID: preserveSessionID(ctx),
+	})
+	return err
 }
 
-// LoginBegin starts a login ceremony. An empty email starts a usernameless
-// (discoverable) login; a known email scopes to that user's credentials. An
-// unknown email falls back to discoverable so the response shape doesn't reveal
-// whether the account exists.
-func (s *Service) LoginBegin(ctx context.Context, email string) (ceremonyID string, options *protocol.CredentialAssertion, err error) {
+// LoginBegin starts a usernameless ceremony. Login options are always
+// discoverable so neither the response nor the authenticator credential list
+// reveals whether a submitted email exists or has passkeys.
+func (s *Service) LoginBegin(ctx context.Context, _ string) (ceremonyID string, options *protocol.CredentialAssertion, err error) {
 	q := dbq.New(s.db.Pool())
-	email = strings.TrimSpace(email)
-
-	var (
-		session *webauthn.SessionData
-		userID  uuid.UUID
-	)
-	if email != "" {
-		// airlockvet:allow-dbq reason: pre-Principal passkey login — runs before authz can apply, gated by the WebAuthn assertion at finish
-		if u, gErr := q.GetUserByEmail(ctx, email); gErr == nil {
-			user, _, lErr := s.loadWebauthnUser(ctx, q, uuid.UUID(u.ID.Bytes))
-			if lErr != nil {
-				return "", nil, lErr
-			}
-			options, session, err = s.webAuthn.BeginLogin(user)
-			userID = uuid.UUID(u.ID.Bytes)
-		}
-	}
-	if session == nil {
-		options, session, err = s.webAuthn.BeginDiscoverableLogin()
-	}
+	options, session, err := s.webAuthn.BeginDiscoverableLogin()
 	if err != nil {
 		s.logger.Error("begin login failed", zap.Error(err))
 		return "", nil, err
 	}
-	id, err := s.createCeremony(ctx, q, userID, "login", session)
+	id, err := s.createCeremony(ctx, q, uuid.Nil, "login", session)
 	if err != nil {
 		return "", nil, err
 	}
@@ -403,6 +438,28 @@ func (s *Service) userHasPassword(ctx context.Context, q *dbq.Queries, userID uu
 		return false, service.ErrNotFound
 	}
 	return u.PasswordHash.Valid && u.PasswordHash.String != "", nil
+}
+
+func preserveSessionID(ctx context.Context) pgtype.UUID {
+	id := auth.SessionIDFromContext(ctx)
+	if id == uuid.Nil {
+		return pgtype.UUID{}
+	}
+	return pgtype.UUID{Bytes: id, Valid: true}
+}
+
+func requireRecentAuthentication(ctx context.Context, allowForcedSecuring bool) error {
+	claims := auth.ClaimsFromContext(ctx)
+	if claims == nil {
+		return service.Detail(service.ErrForbidden, "recent authentication required")
+	}
+	if allowForcedSecuring && claims.MustChangePassword {
+		return nil
+	}
+	if claims.AuthTime == nil || time.Since(claims.AuthTime.Time) > auth.RecentAuthenticationWindow || claims.AuthTime.Time.After(time.Now().Add(time.Minute)) {
+		return service.Detail(service.ErrForbidden, "recent authentication required")
+	}
+	return nil
 }
 
 func (s *Service) createCeremony(ctx context.Context, q *dbq.Queries, userID uuid.UUID, kind string, session *webauthn.SessionData) (string, error) {

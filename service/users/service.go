@@ -7,7 +7,7 @@ package users
 
 import (
 	"context"
-	"errors"
+	"fmt"
 
 	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/authz"
@@ -216,7 +216,8 @@ func (s *Service) Create(ctx context.Context, p authz.Principal, req CreateReque
 }
 
 // UpdateRole changes a user's tenant role. Admin-gated. Refuses the
-// self-change case (callers can't demote themselves out of admin).
+// self-change case (callers can't demote themselves out of admin) and refuses
+// to demote the last admin.
 // ErrInvalidInput on unknown role; ErrNotFound when the user is gone.
 func (s *Service) UpdateRole(ctx context.Context, p authz.Principal, targetID uuid.UUID, role string) error {
 	q := dbq.New(s.db.Pool())
@@ -229,22 +230,41 @@ func (s *Service) UpdateRole(ctx context.Context, p authz.Principal, targetID uu
 	if !validTenantRole(role) {
 		return service.Detail(service.ErrInvalidInput, "tenant_role must be user|manager|admin")
 	}
-	if _, err := q.GetUserByID(ctx, pgtype.UUID{Bytes: targetID, Valid: true}); err != nil {
+	tx, err := s.db.Pool().Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	qtx := q.WithTx(tx)
+	if err := qtx.LockUsersForAdminMutation(ctx); err != nil {
+		return err
+	}
+	target, err := qtx.GetUserByID(ctx, pgtype.UUID{Bytes: targetID, Valid: true})
+	if err != nil {
 		return service.ErrNotFound
 	}
-	if err := q.UpdateUserRole(ctx, dbq.UpdateUserRoleParams{
+	if target.TenantRole == "admin" && role != "admin" {
+		count, err := qtx.CountTenantAdmins(ctx)
+		if err != nil {
+			return err
+		}
+		if count <= 1 {
+			return service.Detail(ErrLastAdmin, "cannot demote the last admin")
+		}
+	}
+	if err := qtx.UpdateUserRole(ctx, dbq.UpdateUserRoleParams{
 		ID:         pgtype.UUID{Bytes: targetID, Valid: true},
 		TenantRole: role,
 	}); err != nil {
 		s.logger.Error("users: update role failed", zap.Error(err))
 		return err
 	}
-	return nil
+	return tx.Commit(ctx)
 }
 
 // ErrLastAdmin — the one named guard Delete enforces beyond the
 // generic ones. Wraps ErrInvalidInput so HTTPStatus maps to 400.
-var ErrLastAdmin = errors.New("cannot delete the last admin")
+var ErrLastAdmin = fmt.Errorf("cannot remove the last admin: %w", service.ErrInvalidInput)
 
 // Delete removes a user. Admin-gated. Refuses self-deletion and
 // refuses deletion of the last remaining admin (would lock the
@@ -257,25 +277,8 @@ func (s *Service) Delete(ctx context.Context, p authz.Principal, targetID uuid.U
 	if p.UserID == targetID {
 		return service.Detail(service.ErrInvalidInput, "cannot delete yourself")
 	}
-	target, err := q.GetUserByID(ctx, pgtype.UUID{Bytes: targetID, Valid: true})
-	if err != nil {
+	if _, err := q.GetUserByID(ctx, pgtype.UUID{Bytes: targetID, Valid: true}); err != nil {
 		return service.ErrNotFound
-	}
-	if target.TenantRole == "admin" {
-		rows, err := q.ListUsers(ctx)
-		if err != nil {
-			s.logger.Error("users: list (last-admin check) failed", zap.Error(err))
-			return err
-		}
-		count := 0
-		for _, u := range rows {
-			if u.TenantRole == "admin" {
-				count++
-			}
-		}
-		if count <= 1 {
-			return service.Detail(ErrLastAdmin, "cannot delete the last admin")
-		}
 	}
 	// Pre-stop the user's bridge pollers. The DB CASCADE on
 	// bridges.owner_id removes the rows during DeleteUser; if we don't
@@ -289,11 +292,33 @@ func (s *Service) Delete(ctx context.Context, p authz.Principal, targetID uuid.U
 				zap.String("user_id", targetID.String()), zap.Error(err))
 		}
 	}
-	if err := q.DeleteUser(ctx, pgtype.UUID{Bytes: targetID, Valid: true}); err != nil {
+	tx, err := s.db.Pool().Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	qtx := q.WithTx(tx)
+	if err := qtx.LockUsersForAdminMutation(ctx); err != nil {
+		return err
+	}
+	target, err := qtx.GetUserByID(ctx, pgtype.UUID{Bytes: targetID, Valid: true})
+	if err != nil {
+		return service.ErrNotFound
+	}
+	if target.TenantRole == "admin" {
+		count, err := qtx.CountTenantAdmins(ctx)
+		if err != nil {
+			return err
+		}
+		if count <= 1 {
+			return service.Detail(ErrLastAdmin, "cannot delete the last admin")
+		}
+	}
+	if err := qtx.DeleteUser(ctx, pgtype.UUID{Bytes: targetID, Valid: true}); err != nil {
 		s.logger.Error("users: delete failed", zap.Error(err))
 		return err
 	}
-	return nil
+	return tx.Commit(ctx)
 }
 
 func validTenantRole(s string) bool {

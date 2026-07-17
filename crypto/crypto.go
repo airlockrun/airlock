@@ -5,16 +5,23 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
+	"strings"
 )
 
-// Encryptor encrypts and decrypts data using AES-256-GCM with versioned keys.
-// The version byte prefix allows decryption with old keys during rotation.
+const ciphertextPrefix = "airlock-crypto:v2:"
+
+// Encryptor encrypts and decrypts data using AES-256-GCM with stable key IDs.
+// It also decodes the positional version-byte compatibility format.
 type Encryptor struct {
-	currentVersion byte
-	keys           map[byte]cipher.AEAD // version → GCM cipher
+	currentKeyID   string
+	keys           map[string]cipher.AEAD
+	positionalKeys map[byte]cipher.AEAD
 }
 
 // New creates an Encryptor. currentKey is the active encryption key (32 bytes for AES-256).
@@ -22,24 +29,43 @@ type Encryptor struct {
 // Panics if any key is not exactly 32 bytes.
 func New(currentKey []byte, oldKeys ...[]byte) *Encryptor {
 	e := &Encryptor{
-		keys: make(map[byte]cipher.AEAD, 1+len(oldKeys)),
+		currentKeyID:   KeyID(currentKey),
+		keys:           make(map[string]cipher.AEAD, 1+len(oldKeys)),
+		positionalKeys: make(map[byte]cipher.AEAD, 1+len(oldKeys)),
 	}
 
-	// Old keys get versions 0, 1, 2, ... in order provided
+	// Positional ciphertext addresses keys by a one-byte version. The primary
+	// format addresses keys by their stable digest ID.
 	for i, key := range oldKeys {
-		version := byte(i)
-		e.keys[version] = mustGCM(key)
+		if i >= 255 {
+			panic("crypto: too many old encryption keys")
+		}
+		gcm := mustGCM(key)
+		e.keys[KeyID(key)] = gcm
+		e.positionalKeys[byte(i)] = gcm
 	}
-
-	// Current key gets the next version
-	e.currentVersion = byte(len(oldKeys))
-	e.keys[e.currentVersion] = mustGCM(currentKey)
+	currentGCM := mustGCM(currentKey)
+	e.keys[e.currentKeyID] = currentGCM
+	e.positionalKeys[byte(len(oldKeys))] = currentGCM
 
 	return e
 }
 
-// Encrypt encrypts plaintext and returns a base64-encoded string containing:
-// version byte + nonce + ciphertext.
+// KeyID returns a stable, non-secret identifier for a key. The truncated
+// SHA-256 digest remains the same regardless of key-ring ordering.
+func KeyID(key []byte) string {
+	if len(key) != 32 {
+		panic(fmt.Sprintf("encryption key must be 32 bytes, got %d", len(key)))
+	}
+	digest := sha256.Sum256(key)
+	return hex.EncodeToString(digest[:16])
+}
+
+// CurrentKeyID identifies the key used for new ciphertext.
+func (e *Encryptor) CurrentKeyID() string { return e.currentKeyID }
+
+// Encrypt encrypts plaintext into a key-ID envelope containing a nonce and
+// authenticated ciphertext.
 func (e *Encryptor) Encrypt(plaintext string) (string, error) {
 	return e.EncryptWithAAD(plaintext, "")
 }
@@ -50,7 +76,7 @@ func (e *Encryptor) Encrypt(plaintext string) (string, error) {
 // ciphertext to a context (e.g. an agent ID) so it can't be decrypted under a
 // different context. aad="" is byte-identical to Encrypt (no binding).
 func (e *Encryptor) EncryptWithAAD(plaintext, aad string) (string, error) {
-	gcm := e.keys[e.currentVersion]
+	gcm := e.keys[e.currentKeyID]
 	nonce := make([]byte, gcm.NonceSize())
 	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
 		return "", fmt.Errorf("generate nonce: %w", err)
@@ -58,13 +84,11 @@ func (e *Encryptor) EncryptWithAAD(plaintext, aad string) (string, error) {
 
 	ciphertext := gcm.Seal(nil, nonce, []byte(plaintext), aadBytes(aad))
 
-	// Encode: version + nonce + ciphertext
-	buf := make([]byte, 0, 1+len(nonce)+len(ciphertext))
-	buf = append(buf, e.currentVersion)
+	buf := make([]byte, 0, len(nonce)+len(ciphertext))
 	buf = append(buf, nonce...)
 	buf = append(buf, ciphertext...)
 
-	return base64.StdEncoding.EncodeToString(buf), nil
+	return ciphertextPrefix + e.currentKeyID + ":" + base64.RawStdEncoding.EncodeToString(buf), nil
 }
 
 // Decrypt decodes a base64-encoded string and decrypts it using the key
@@ -77,6 +101,30 @@ func (e *Encryptor) Decrypt(encoded string) (string, error) {
 // returns an error when aad doesn't match the value used at encryption time
 // (the GCM auth tag fails to verify) — that mismatch is the binding guarantee.
 func (e *Encryptor) DecryptWithAAD(encoded, aad string) (string, error) {
+	if strings.HasPrefix(encoded, ciphertextPrefix) {
+		return e.decryptStable(encoded, aad)
+	}
+	return e.decryptPositional(encoded, aad)
+}
+
+func (e *Encryptor) decryptStable(encoded, aad string) (string, error) {
+	rest := strings.TrimPrefix(encoded, ciphertextPrefix)
+	keyID, payload, ok := strings.Cut(rest, ":")
+	if !ok || keyID == "" || payload == "" {
+		return "", errors.New("invalid ciphertext envelope")
+	}
+	gcm, ok := e.keys[keyID]
+	if !ok {
+		return "", fmt.Errorf("unknown key ID %q", keyID)
+	}
+	raw, err := base64.RawStdEncoding.DecodeString(payload)
+	if err != nil {
+		return "", fmt.Errorf("base64 decode: %w", err)
+	}
+	return open(gcm, raw, aad)
+}
+
+func (e *Encryptor) decryptPositional(encoded, aad string) (string, error) {
 	raw, err := base64.StdEncoding.DecodeString(encoded)
 	if err != nil {
 		return "", fmt.Errorf("base64 decode: %w", err)
@@ -87,20 +135,20 @@ func (e *Encryptor) DecryptWithAAD(encoded, aad string) (string, error) {
 	}
 
 	version := raw[0]
-	gcm, ok := e.keys[version]
+	gcm, ok := e.positionalKeys[version]
 	if !ok {
 		return "", fmt.Errorf("unknown key version %d", version)
 	}
 
+	return open(gcm, raw[1:], aad)
+}
+
+func open(gcm cipher.AEAD, raw []byte, aad string) (string, error) {
 	nonceSize := gcm.NonceSize()
-	if len(raw) < 1+nonceSize {
-		return "", fmt.Errorf("ciphertext too short for nonce")
+	if len(raw) < nonceSize {
+		return "", errors.New("ciphertext too short for nonce")
 	}
-
-	nonce := raw[1 : 1+nonceSize]
-	ciphertext := raw[1+nonceSize:]
-
-	plaintext, err := gcm.Open(nil, nonce, ciphertext, aadBytes(aad))
+	plaintext, err := gcm.Open(nil, raw[:nonceSize], raw[nonceSize:], aadBytes(aad))
 	if err != nil {
 		return "", fmt.Errorf("decrypt: %w", err)
 	}
@@ -108,10 +156,20 @@ func (e *Encryptor) DecryptWithAAD(encoded, aad string) (string, error) {
 	return string(plaintext), nil
 }
 
-// aadBytes maps an empty aad to a nil slice so Encrypt/Decrypt (aad="")
-// produce and accept exactly the same ciphertext as before AAD support — GCM
-// treats nil and empty additionalData identically, but nil keeps pre-AAD
-// ciphertexts decryptable and the intent explicit.
+// NeedsRewrap reports whether encoded uses the positional format or a non-current
+// key. It validates only the envelope; Rewrap callers still authenticate it by
+// decrypting before replacing persisted data.
+func (e *Encryptor) NeedsRewrap(encoded string) bool {
+	if !strings.HasPrefix(encoded, ciphertextPrefix) {
+		return true
+	}
+	rest := strings.TrimPrefix(encoded, ciphertextPrefix)
+	keyID, _, ok := strings.Cut(rest, ":")
+	return !ok || keyID != e.currentKeyID
+}
+
+// aadBytes maps an empty AAD to nil. GCM treats nil and empty additional data
+// identically, and the positional compatibility format uses nil.
 func aadBytes(aad string) []byte {
 	if aad == "" {
 		return nil

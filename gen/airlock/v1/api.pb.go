@@ -323,8 +323,10 @@ func (x *RefreshRequest) GetRefreshToken() string {
 }
 
 type RefreshResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	AccessToken   string                 `protobuf:"bytes,1,opt,name=access_token,json=accessToken,proto3" json:"access_token,omitempty"`
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	AccessToken string                 `protobuf:"bytes,1,opt,name=access_token,json=accessToken,proto3" json:"access_token,omitempty"`
+	// Replacement for CLI sessions. Browser sessions receive it in the HttpOnly cookie.
+	RefreshToken  string `protobuf:"bytes,2,opt,name=refresh_token,json=refreshToken,proto3" json:"refresh_token,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -362,6 +364,13 @@ func (*RefreshResponse) Descriptor() ([]byte, []int) {
 func (x *RefreshResponse) GetAccessToken() string {
 	if x != nil {
 		return x.AccessToken
+	}
+	return ""
+}
+
+func (x *RefreshResponse) GetRefreshToken() string {
+	if x != nil {
+		return x.RefreshToken
 	}
 	return ""
 }
@@ -6023,6 +6032,7 @@ func (x *SetEnvVarValueRequest) GetValue() string {
 type GenerateRelayCodeRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	ReturnUrl     string                 `protobuf:"bytes,1,opt,name=return_url,json=returnUrl,proto3" json:"return_url,omitempty"`
+	Nonce         string                 `protobuf:"bytes,2,opt,name=nonce,proto3" json:"nonce,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -6060,6 +6070,13 @@ func (*GenerateRelayCodeRequest) Descriptor() ([]byte, []int) {
 func (x *GenerateRelayCodeRequest) GetReturnUrl() string {
 	if x != nil {
 		return x.ReturnUrl
+	}
+	return ""
+}
+
+func (x *GenerateRelayCodeRequest) GetNonce() string {
+	if x != nil {
+		return x.Nonce
 	}
 	return ""
 }
@@ -8920,9 +8937,10 @@ const file_airlock_v1_api_proto_rawDesc = "" +
 	"\rrefresh_token\x18\x02 \x01(\tR\frefreshToken\x12$\n" +
 	"\x04user\x18\x03 \x01(\v2\x10.airlock.v1.UserR\x04user\"5\n" +
 	"\x0eRefreshRequest\x12#\n" +
-	"\rrefresh_token\x18\x01 \x01(\tR\frefreshToken\"4\n" +
+	"\rrefresh_token\x18\x01 \x01(\tR\frefreshToken\"Y\n" +
 	"\x0fRefreshResponse\x12!\n" +
-	"\faccess_token\x18\x01 \x01(\tR\vaccessToken\"4\n" +
+	"\faccess_token\x18\x01 \x01(\tR\vaccessToken\x12#\n" +
+	"\rrefresh_token\x18\x02 \x01(\tR\frefreshToken\"4\n" +
 	"\rLogoutRequest\x12#\n" +
 	"\rrefresh_token\x18\x01 \x01(\tR\frefreshToken\"[\n" +
 	"\x17DeviceLoginBeginRequest\x12\x1f\n" +
@@ -9320,10 +9338,11 @@ const file_airlock_v1_api_proto_rawDesc = "" +
 	"\x13ListEnvVarsResponse\x121\n" +
 	"\benv_vars\x18\x01 \x03(\v2\x16.airlock.v1.EnvVarInfoR\aenvVars\"-\n" +
 	"\x15SetEnvVarValueRequest\x12\x14\n" +
-	"\x05value\x18\x01 \x01(\tR\x05value\"9\n" +
+	"\x05value\x18\x01 \x01(\tR\x05value\"O\n" +
 	"\x18GenerateRelayCodeRequest\x12\x1d\n" +
 	"\n" +
-	"return_url\x18\x01 \x01(\tR\treturnUrl\"R\n" +
+	"return_url\x18\x01 \x01(\tR\treturnUrl\x12\x14\n" +
+	"\x05nonce\x18\x02 \x01(\tR\x05nonce\"R\n" +
 	"\x19GenerateRelayCodeResponse\x12\x12\n" +
 	"\x04code\x18\x01 \x01(\tR\x04code\x12!\n" +
 	"\fcallback_url\x18\x02 \x01(\tR\vcallbackUrl\"K\n" +

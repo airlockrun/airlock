@@ -209,7 +209,7 @@ func (h *conversationsHandler) ListConversationMessages(w http.ResponseWriter, r
 		writeError(w, http.StatusBadRequest, "invalid conversation ID")
 		return
 	}
-	page, err := h.svc.ListMessages(ctx, convID,
+	page, err := h.svc.ListMessages(ctx, principalFromRequest(r), convID,
 		r.URL.Query().Get("before"),
 		r.URL.Query().Get("after"),
 		r.URL.Query().Get("limit"),
@@ -323,6 +323,17 @@ func (h *conversationsHandler) Prompt(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "message is required")
 		return
 	}
+	p := principalFromRequest(r)
+	if err := h.svc.Authorize(ctx, p, agentID); err != nil {
+		writeConvError(w, err, "failed to authorize conversation")
+		return
+	}
+	for _, filePath := range req.FilePaths {
+		if cleaned, err := storage.CleanAgentPath(filePath); err != nil || cleaned != filePath {
+			writeError(w, http.StatusBadRequest, "invalid attachment path")
+			return
+		}
+	}
 
 	q := dbq.New(h.db.Pool())
 
@@ -338,12 +349,8 @@ func (h *conversationsHandler) Prompt(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "invalid conversation ID")
 			return
 		}
-		// airlockvet:allow-dbq reason: ownership enforced inline below (agent+user+source=web) before returning the row
-		existing, gerr := q.GetConversationByID(ctx, toPgUUID(cid))
-		if gerr != nil ||
-			uuid.UUID(existing.AgentID.Bytes) != agentID ||
-			!existing.UserID.Valid || uuid.UUID(existing.UserID.Bytes) != userID ||
-			existing.Source != "web" {
+		existing, gerr := h.svc.OwnedConversation(ctx, p, cid)
+		if gerr != nil || uuid.UUID(existing.AgentID.Bytes) != agentID || existing.Source != "web" {
 			writeError(w, http.StatusNotFound, "conversation not found")
 			return
 		}
@@ -496,6 +503,19 @@ func (h *conversationsHandler) Prompt(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusConflict, werr.Error())
 			return
 		}
+		// airlockvet:allow-dbq reason: claims the awaited suspended run; caller already proven owner of the conversation
+		resolved, rerr := q.ResolveSuspendedRun(ctx, run.ID)
+		if rerr != nil {
+			h.convLocks.Unlock(convIDStr)
+			h.logger.Error("resolve suspended run", zap.Error(rerr))
+			writeError(w, http.StatusInternalServerError, "failed to resolve confirmation")
+			return
+		}
+		if resolved != 1 {
+			h.convLocks.Unlock(convIDStr)
+			writeError(w, http.StatusConflict, "confirmation has already been resolved")
+			return
+		}
 		input.ResumeRunID = req.ResumeRunId
 		input.Approved = req.Approved
 		// On deny, sol persists the re-reason nudge ("Rejected by user.")
@@ -506,8 +526,6 @@ func (h *conversationsHandler) Prompt(w http.ResponseWriter, r *http.Request) {
 		if req.Approved != nil && !*req.Approved {
 			input.Source = "control"
 		}
-		// airlockvet:allow-dbq reason: marks the awaited suspended run resolved; caller already proven owner of the conversation
-		_ = q.ResolveSuspendedRun(ctx, run.ID)
 	} else if req.Approved != nil {
 		h.convLocks.Unlock(convIDStr)
 		writeError(w, http.StatusBadRequest, "resume_run_id is required for a confirmation response")
@@ -517,20 +535,27 @@ func (h *conversationsHandler) Prompt(w http.ResponseWriter, r *http.Request) {
 		// resume_run_id attached. The client is supposed to carry the id from
 		// the confirmation event (or restore it on conversation load), but a
 		// dropped WS event on a flaky link leaves the gate unknown to the
-		// client, so it sends a plain prompt. Mirror the bridge path
-		// ([trigger/prompt.go:314]): resolve the pending run as denied and
-		// re-reason the new message in it. Without this the suspended turn's
+		// client, so it sends a plain prompt. Resolve the pending run as denied
+		// and re-reason the new message in it. Without this the suspended turn's
 		// tool-call is orphaned (an assistant tool_calls message with no tool
 		// result), which permanently 400s the conversation on OpenAI-compatible
-		// providers ("tool message must follow tool_calls"). The conversation
-		// lock guarantees the run is durably suspended by the time we get here.
+		// providers ("tool message must follow tool_calls"). Only the CAS winner
+		// attaches resume fields; another replica forwards its text as a new turn.
 		// airlockvet:allow-dbq reason: resolves a stranded suspended run; caller already proven owner of the conversation
 		if suspendedRun, err := q.GetLatestSuspendedRunByConversation(ctx, convIDStr); err == nil {
-			input.ResumeRunID = convert.PgUUIDToString(suspendedRun.ID)
-			approved := false
-			input.Approved = &approved
 			// airlockvet:allow-dbq reason: resolves a stranded suspended run; caller already proven owner of the conversation
-			_ = q.ResolveSuspendedRun(ctx, suspendedRun.ID)
+			resolved, rerr := q.ResolveSuspendedRun(ctx, suspendedRun.ID)
+			if rerr != nil {
+				h.convLocks.Unlock(convIDStr)
+				h.logger.Error("auto-deny suspended run", zap.Error(rerr))
+				writeError(w, http.StatusInternalServerError, "failed to resolve pending confirmation")
+				return
+			}
+			if resolved == 1 {
+				input.ResumeRunID = convert.PgUUIDToString(suspendedRun.ID)
+				approved := false
+				input.Approved = &approved
+			}
 		}
 	}
 
@@ -617,15 +642,20 @@ func (h *conversationsHandler) NotifyUpgradeComplete(ctx context.Context, agentI
 	// (web pubsub vs bridge SendParts) and resolves CallerAccess.
 	q := dbq.New(h.db.Pool())
 	access := agentsdk.AccessPublic
-	var conv dbq.AgentConversation
 	convUUID, err := uuid.Parse(conversationID)
-	if err == nil {
-		// airlockvet:allow-dbq reason: NotifyUpgradeComplete is builder→airlock-internal — no user request to authorize; the conversation row is read solely to pick the delivery channel
-		if loaded, lerr := q.GetConversationByID(ctx, toPgUUID(convUUID)); lerr == nil {
-			conv = loaded
-			access = authz.UserPrincipal(pgUUID(conv.UserID), "").EffectiveAgentAccess(ctx, q, agentID)
-		}
+	if err != nil {
+		h.convLocks.Unlock(conversationID)
+		return errors.New("invalid conversation ID")
 	}
+	// airlockvet:allow-dbq reason: NotifyUpgradeComplete is builder→airlock-internal and binds the supplied conversation to the build's agent before dispatch
+	conv, err := q.GetConversationByIDAndAgent(ctx, dbq.GetConversationByIDAndAgentParams{
+		ID: toPgUUID(convUUID), AgentID: toPgUUID(agentID),
+	})
+	if err != nil {
+		h.convLocks.Unlock(conversationID)
+		return errors.New("conversation not found")
+	}
+	access = authz.UserPrincipal(pgUUID(conv.UserID), "").EffectiveAgentAccess(ctx, q, agentID)
 	isBridge := conv.Source == "bridge" && conv.BridgeID.Valid &&
 		conv.ExternalID.Valid && conv.ExternalID.String != "" && h.bridgeMgr != nil
 
@@ -721,6 +751,10 @@ func (h *conversationsHandler) UploadFile(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, "invalid agent ID")
 		return
 	}
+	if err := h.svc.Authorize(r.Context(), principalFromRequest(r), agentID); err != nil {
+		writeConvError(w, err, "failed to authorize upload")
+		return
+	}
 
 	// Limit upload size to 50MB.
 	r.Body = http.MaxBytesReader(w, r.Body, 50<<20)
@@ -741,7 +775,12 @@ func (h *conversationsHandler) UploadFile(w http.ResponseWriter, r *http.Request
 		ct = "application/octet-stream"
 	}
 
-	path := "tmp/" + uuid.New().String()[:8] + "-" + header.Filename
+	rawPath := "tmp/" + uuid.New().String()[:8] + "-" + header.Filename
+	path, err := storage.CleanAgentPath(rawPath)
+	if err != nil || path != rawPath {
+		writeError(w, http.StatusBadRequest, "invalid filename")
+		return
+	}
 	s3Key := "agents/" + agentID.String() + "/" + path
 	if err := h.s3.PutObjectWithMetadata(r.Context(), s3Key, file, header.Size, map[string]string{
 		"filename":     header.Filename,

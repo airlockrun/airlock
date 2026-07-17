@@ -52,6 +52,7 @@ async function confirmAdd() {
   error.value = ''
   try {
     await store.addPasskey(newName.value.trim() || 'Passkey')
+    await auth.refresh()
     addDialog.value = false
     toast.add({ severity: 'success', summary: 'Passkey added', life: 3000 })
   } catch (err: any) {
@@ -94,6 +95,7 @@ function remove(pk: Passkey) {
     accept: async () => {
       try {
         await store.deletePasskey(pk.id)
+        await auth.refresh()
         toast.add({ severity: 'success', summary: 'Passkey deleted', life: 3000 })
       } catch (err: any) {
         toast.add({ severity: 'error', summary: err.response?.data?.error || 'Delete failed', life: 5000 })
@@ -121,6 +123,7 @@ async function savePassword() {
   pwLoading.value = true
   try {
     await store.setPassword(password.value)
+    await auth.refresh()
     if (auth.user) auth.user.hasPassword = true
     password.value = ''
     confirmPassword.value = ''
@@ -141,6 +144,7 @@ function removePassword() {
     accept: async () => {
       try {
         await store.removePassword()
+        await auth.refresh()
         if (auth.user) auth.user.hasPassword = false
         toast.add({ severity: 'success', summary: 'Password removed', life: 3000 })
       } catch (err: any) {
@@ -270,6 +274,9 @@ function formatDateTime(ts: any): string {
 <template>
   <div style="display: flex; flex-direction: column; gap: 1.5rem; max-width: 48rem">
     <h1 style="margin: 0; font-size: 1.5rem">Security</h1>
+    <Message severity="info" :closable="false">
+      Credential changes require a sign-in within the last 10 minutes. Sign out and sign in again if Airlock asks for recent authentication.
+    </Message>
 
     <Card>
       <template #title>
@@ -339,8 +346,7 @@ function formatDateTime(ts: any): string {
     <Card>
       <template #title>Sessions</template>
       <template #subtitle>
-        Web and CLI sign-ins for your account. Revoking a session stops future refreshes;
-        access already issued may keep working for up to 15 minutes.
+        Web and CLI sign-ins for your account. Revoking a session invalidates its access and refresh credentials immediately.
       </template>
       <template #content>
         <div v-if="sessionsLoading" style="color: var(--p-text-muted-color)">Loading…</div>

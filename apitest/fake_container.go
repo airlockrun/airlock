@@ -114,7 +114,7 @@ func (m *FakeContainerManager) StartAgent(ctx context.Context, opts container.Ag
 		ID:       "fake-" + opts.AgentID.String(),
 		Name:     "fake-" + opts.AgentID.String(),
 		Endpoint: srv.URL,
-		Token:    m.tokens[opts.AgentID],
+		Token:    opts.Token,
 	}, nil
 }
 

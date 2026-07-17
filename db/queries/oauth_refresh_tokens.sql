@@ -11,13 +11,14 @@ VALUES (
 -- name: GetRefreshTokenByHash :one
 SELECT * FROM oauth_refresh_tokens WHERE token_hash = $1;
 
--- name: MarkRefreshConsumed :exec
--- Records that this token was just used to mint a new one. The next
--- /token attempt on the same token sees consumed_at IS NOT NULL and
--- triggers reuse-detection (RevokeRefreshFamily).
+-- name: GetRefreshTokenByHashForUpdate :one
+SELECT * FROM oauth_refresh_tokens WHERE token_hash = $1 FOR UPDATE;
+
+-- name: MarkRefreshConsumed :one
 UPDATE oauth_refresh_tokens
 SET consumed_at = now()
-WHERE token_hash = @token_hash;
+WHERE token_hash = @token_hash AND consumed_at IS NULL
+RETURNING *;
 
 -- name: RevokeRefreshFamily :execrows
 -- Reuse detection: nukes every still-rotatable token in the family.

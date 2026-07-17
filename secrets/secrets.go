@@ -6,17 +6,21 @@
 // resource columns. A future enterprise build can swap in a Vault-backed
 // implementation without touching call sites.
 //
-// The ref argument on every method names the secret with a path-like
-// identifier — e.g. "connection/<id>/access_token". LocalStore ignores it
-// (the ciphertext is self-contained), but call sites should pass a stable,
-// unique ref so a future remote store can route to the correct location.
+// The ref argument on every method names the secret with a stable path-like
+// identifier, e.g. "connection/<id>/access_token". LocalStore authenticates
+// the ref as AES-GCM additional data, preventing ciphertext from being moved
+// between resource fields.
 package secrets
 
 import (
 	"context"
+	"errors"
+	"strings"
 
 	"github.com/airlockrun/airlock/crypto"
 )
+
+const localEnvelopePrefix = "airlock-secret:v1:"
 
 // Store is the interface for storing and retrieving secret material.
 type Store interface {
@@ -25,8 +29,12 @@ type Store interface {
 	// callers — its format depends on the implementation.
 	Put(ctx context.Context, ref, plaintext string) (string, error)
 
-	// Get returns the plaintext given a value previously returned by Put.
+	// Get returns the plaintext for a value returned by Put.
 	Get(ctx context.Context, ref, stored string) (string, error)
+
+	// Rewrap returns stored in the ref-bound envelope under the current key.
+	// Callers persist the result only during an explicit stop-all migration.
+	Rewrap(ctx context.Context, ref, stored string) (rewrapped string, changed bool, err error)
 
 	// Seal encrypts plaintext bound to aad and returns an opaque sealed
 	// value. Open returns the plaintext only when given the identical aad —
@@ -41,9 +49,7 @@ type Store interface {
 	Open(ctx context.Context, aad, sealed string) (string, error)
 }
 
-// LocalStore implements Store using AES-256-GCM with versioned keys.
-// ref is accepted for API symmetry but ignored — the ciphertext blob is
-// self-contained.
+// LocalStore implements Store using AES-256-GCM with stable key IDs.
 type LocalStore struct {
 	enc *crypto.Encryptor
 }
@@ -56,12 +62,42 @@ func NewLocal(enc *crypto.Encryptor) *LocalStore {
 	return &LocalStore{enc: enc}
 }
 
-func (l *LocalStore) Put(_ context.Context, _, plaintext string) (string, error) {
-	return l.enc.Encrypt(plaintext)
+func (l *LocalStore) Put(_ context.Context, ref, plaintext string) (string, error) {
+	if ref == "" {
+		return "", errors.New("secrets: ref is required")
+	}
+	stored, err := l.enc.EncryptWithAAD(plaintext, ref)
+	if err != nil {
+		return "", err
+	}
+	return localEnvelopePrefix + stored, nil
 }
 
-func (l *LocalStore) Get(_ context.Context, _, stored string) (string, error) {
+func (l *LocalStore) Get(_ context.Context, ref, stored string) (string, error) {
+	if strings.HasPrefix(stored, localEnvelopePrefix) {
+		if ref == "" {
+			return "", errors.New("secrets: ref is required")
+		}
+		return l.enc.DecryptWithAAD(strings.TrimPrefix(stored, localEnvelopePrefix), ref)
+	}
+	// Unwrapped compatibility ciphertext carries no authenticated ref.
 	return l.enc.Decrypt(stored)
+}
+
+func (l *LocalStore) Rewrap(ctx context.Context, ref, stored string) (string, bool, error) {
+	if strings.HasPrefix(stored, localEnvelopePrefix) && !l.enc.NeedsRewrap(strings.TrimPrefix(stored, localEnvelopePrefix)) {
+		// Authenticate the ref even when no write is needed.
+		if _, err := l.Get(ctx, ref, stored); err != nil {
+			return "", false, err
+		}
+		return stored, false, nil
+	}
+	plaintext, err := l.Get(ctx, ref, stored)
+	if err != nil {
+		return "", false, err
+	}
+	rewrapped, err := l.Put(ctx, ref, plaintext)
+	return rewrapped, err == nil, err
 }
 
 func (l *LocalStore) Seal(_ context.Context, aad, plaintext string) (string, error) {

@@ -57,6 +57,8 @@ const (
 	AgentExecEndpoints     Action = "agent.exec_endpoints" // SSH exec-endpoint config
 	AgentSiblings          Action = "agent.siblings"
 	AgentModelsUpdate      Action = "agent.models.update"
+	AgentRoutesView        Action = "agent.routes.view"
+	AgentManagedBotCreate  Action = "agent.managed_bot.create"
 	AgentIntegrationInvoke Action = "agent.integration.invoke"
 
 	// Tenant axis.
@@ -115,6 +117,8 @@ var policy = map[Action]Requirement{
 	AgentExecEndpoints:     {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
 	AgentSiblings:          {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
 	AgentModelsUpdate:      {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
+	AgentRoutesView:        {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
+	AgentManagedBotCreate:  {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
 	AgentIntegrationInvoke: {Axis: AxisIntegration, Agent: agentsdk.AccessAdmin},
 
 	TenantCatalogView:         {Axis: AxisTenant, Tenant: auth.RoleUser},

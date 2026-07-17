@@ -7,22 +7,17 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"strings"
 	"time"
 
 	"github.com/airlockrun/agentsdk/wire"
 	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/airlockrun/airlock/oauth"
-	"github.com/airlockrun/goai/mcp"
-	"github.com/airlockrun/goai/tool"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"go.uber.org/zap"
 )
-
-var MCPHTTPClient = &http.Client{Timeout: 60 * time.Second}
 
 // MCPToolCall handles POST /api/agent/mcp/{slug}/tools/call.
 // Stateless: connect → initialize → tools/call → disconnect.
@@ -77,7 +72,7 @@ func (h *Handler) MCPToolCall(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Stateless MCP call.
-	result, err := callMCPTool(r.Context(), server.Url, server.AuthInjection, creds, req)
+	result, err := callMCPTool(r.Context(), h.httpNetwork.Client(60*time.Second), server.Url, server.AuthInjection, creds, req)
 	if err != nil {
 		h.logger.Error("MCP tool call failed", zap.String("slug", slug), zap.String("tool", req.Tool), zap.Error(err))
 		writeJSON(w, http.StatusOK, wire.MCPToolCallResponse{
@@ -130,7 +125,7 @@ func (h *Handler) discoverAllMCPStatus(
 			}
 		}
 
-		tools, instructions, err := DiscoverMCPTools(ctx, server.Url, server.AuthInjection, creds)
+		tools, instructions, err := DiscoverMCPTools(ctx, h.httpNetwork.Client(60*time.Second), server.Url, server.AuthInjection, creds)
 		if err != nil {
 			h.logger.Warn("MCP tool discovery failed", zap.String("slug", server.Slug), zap.Error(err))
 			result = append(result, mcpServerStatus{
@@ -167,45 +162,33 @@ func (h *Handler) discoverAllMCPStatus(
 }
 
 // callMCPTool does a stateless MCP interaction: connect → initialize → tools/call → disconnect.
-func callMCPTool(ctx context.Context, serverURL string, authInjection []byte, creds string, req wire.MCPToolCallRequest) (*wire.MCPToolCallResponse, error) {
+func callMCPTool(ctx context.Context, httpClient *http.Client, serverURL string, authInjection []byte, creds string, req wire.MCPToolCallRequest) (*wire.MCPToolCallResponse, error) {
 	connectURL, headers, err := applyMCPAuth(serverURL, authInjection, creds)
 	if err != nil {
 		return nil, err
 	}
 
-	client := mcp.NewClient()
-	defer client.DisconnectAll()
-
-	if err := client.Connect(ctx, mcp.ServerConfig{
-		Name:      "proxy",
-		Transport: "http",
-		URL:       connectURL,
-		Headers:   headers,
-	}); err != nil {
+	client, err := connectMCPHTTP(ctx, httpClient, connectURL, headers)
+	if err != nil {
 		return nil, fmt.Errorf("MCP connect: %w", err)
 	}
+	defer client.Close()
 
-	// Find the tool and call it.
-	tools := client.GetTools()
-	// The tool name in the MCP server might be prefixed with "proxy_" by goai/mcp.
-	// We need to find the tool by its original name.
-	var targetTool *tool.Tool
-	for _, t := range tools {
-		// goai/mcp prefixes tool names with "{serverName}_", so our tool is "proxy_{originalName}".
-		expectedName := "proxy_" + req.Tool
-		if t.Name == expectedName {
-			targetTool = &t
+	found := false
+	for _, candidate := range client.tools {
+		if candidate.Name == req.Tool {
+			found = true
 			break
 		}
 	}
-	if targetTool == nil {
+	if !found {
 		return &wire.MCPToolCallResponse{
 			Content: []wire.MCPContent{{Type: "text", Text: fmt.Sprintf("tool %q not found on MCP server", req.Tool)}},
 			IsError: true,
 		}, nil
 	}
 
-	result, err := targetTool.Execute(ctx, req.Arguments, tool.CallOptions{})
+	result, err := client.CallTool(ctx, req.Tool, req.Arguments)
 	if err != nil {
 		return &wire.MCPToolCallResponse{
 			Content: []wire.MCPContent{{Type: "text", Text: err.Error()}},
@@ -213,59 +196,25 @@ func callMCPTool(ctx context.Context, serverURL string, authInjection []byte, cr
 		}, nil
 	}
 
-	content := make([]wire.MCPContent, 0, 1+len(result.Attachments))
-	if result.Output != "" {
-		content = append(content, wire.MCPContent{Type: "text", Text: result.Output})
-	}
-	for _, attachment := range result.Attachments {
-		kind := "resource"
-		if strings.HasPrefix(attachment.MimeType, "image/") {
-			kind = "image"
-		}
-		content = append(content, wire.MCPContent{
-			Type: kind, Name: attachment.Filename, MimeType: attachment.MimeType, Data: attachment.Data,
-		})
-	}
-	return &wire.MCPToolCallResponse{Content: content}, nil
+	return result, nil
 }
 
-// DiscoverMCPTools connects to an MCP server, lists tools, and disconnects.
 // DiscoverMCPTools connects to a remote MCP server and returns its tool
 // schemas plus the server-level `instructions` it advertised in the
 // initialize result (empty when the server set none).
-func DiscoverMCPTools(ctx context.Context, serverURL string, authInjection []byte, creds string) ([]mcpToolInfo, string, error) {
+func DiscoverMCPTools(ctx context.Context, httpClient *http.Client, serverURL string, authInjection []byte, creds string) ([]mcpToolInfo, string, error) {
 	connectURL, headers, err := applyMCPAuth(serverURL, authInjection, creds)
 	if err != nil {
 		return nil, "", err
 	}
 
-	client := mcp.NewClient()
-	defer client.DisconnectAll()
-
-	if err := client.Connect(ctx, mcp.ServerConfig{
-		Name:      "discovery",
-		Transport: "http",
-		URL:       connectURL,
-		Headers:   headers,
-	}); err != nil {
+	client, err := connectMCPHTTP(ctx, httpClient, connectURL, headers)
+	if err != nil {
 		return nil, "", fmt.Errorf("MCP connect for discovery: %w", err)
 	}
+	defer client.Close()
 
-	tools := client.GetTools()
-	result := make([]mcpToolInfo, 0, len(tools))
-	for _, t := range tools.Ordered(nil) {
-		// Strip the "discovery_" prefix added by goai/mcp.
-		name := t.Name
-		if len("discovery_") < len(name) && name[:len("discovery_")] == "discovery_" {
-			name = name[len("discovery_"):]
-		}
-		result = append(result, mcpToolInfo{
-			Name:        name,
-			Description: t.Description,
-			InputSchema: t.InputSchema,
-		})
-	}
-	return result, client.GetServerInstructions("discovery"), nil
+	return client.tools, client.instructions, nil
 }
 
 // mcpToolInfo is the internal representation of a discovered MCP tool.
@@ -276,8 +225,8 @@ type mcpToolInfo struct {
 }
 
 // DiscoverMCPAuth runs RFC 9728/8414 discovery on an MCP server URL.
-func DiscoverMCPAuth(ctx context.Context, serverURL string) (*oauth.DiscoveryResult, error) {
-	return oauth.DiscoverUpstream(ctx, MCPHTTPClient, serverURL)
+func DiscoverMCPAuth(ctx context.Context, httpClient *http.Client, serverURL string) (*oauth.DiscoveryResult, error) {
+	return oauth.DiscoverUpstream(ctx, httpClient, serverURL)
 }
 
 // applyMCPAuth shapes (url, headers) for an outbound MCP HTTP call given the

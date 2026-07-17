@@ -4,13 +4,57 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/config"
+	"github.com/docker/docker/api/types/network"
 	"github.com/google/uuid"
 )
+
+func TestReusableAgentToken(t *testing.T) {
+	const secret = "container-token-test-secret"
+	agentID := uuid.New()
+	tokenV1, err := auth.IssueAgentToken(secret, agentID, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sameVersion, err := auth.IssueAgentToken(secret, agentID, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tokenV2, err := auth.IssueAgentToken(secret, agentID, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherAgent, err := auth.IssueAgentToken(secret, uuid.New(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !reusableAgentToken(secret, tokenV1, sameVersion, time.Now()) {
+		t.Fatal("same-profile, same-version token was not reusable")
+	}
+	if reusableAgentToken(secret, tokenV1, tokenV2, time.Now()) {
+		t.Fatal("cross-version token was reusable")
+	}
+	if reusableAgentToken(secret, tokenV1, otherAgent, time.Now()) {
+		t.Fatal("cross-agent token was reusable")
+	}
+	claims, err := auth.ValidateAgentToken(secret, tokenV1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reusableAgentToken(secret, tokenV1, sameVersion, claims.ExpiresAt.Time.Add(-auth.AgentTokenRotationWindow+time.Second)) {
+		t.Fatal("token inside the proactive rotation window was reusable")
+	}
+	if reusableAgentToken(secret, "", sameVersion, time.Now()) {
+		t.Fatal("container token without the required profile was reusable")
+	}
+}
 
 func TestAgentBuilderEntrypointPreparesOnlyToolserver(t *testing.T) {
 	script, err := filepath.Abs(filepath.Join("..", "scripts", "agent-builder-entrypoint.sh"))
@@ -135,6 +179,26 @@ func TestBuildAgentHostConfig(t *testing.T) {
 	}
 }
 
+func TestBuildToolserverHostConfig(t *testing.T) {
+	hc := buildToolserverHostConfig(&config.Config{AgentMemoryLimitBytes: 512 << 20}, nil)
+	if hc.Init == nil || !*hc.Init {
+		t.Fatal("Init is not enabled")
+	}
+	if hc.PidsLimit == nil || *hc.PidsLimit != 2048 {
+		t.Fatalf("PidsLimit = %v, want 2048", hc.PidsLimit)
+	}
+	if hc.CPUShares != 512 || hc.OomScoreAdj != 500 {
+		t.Fatalf("resources = CPU %d OOM %d", hc.CPUShares, hc.OomScoreAdj)
+	}
+	if hc.Memory != 512<<20 || hc.MemorySwap != 512<<20 {
+		t.Fatalf("memory = (%d, %d)", hc.Memory, hc.MemorySwap)
+	}
+	wantDrops := []string{"AUDIT_WRITE", "KILL", "MKNOD", "NET_BIND_SERVICE", "NET_RAW"}
+	if !slices.Equal(hc.CapDrop, wantDrops) {
+		t.Fatalf("CapDrop = %v, want %v", hc.CapDrop, wantDrops)
+	}
+}
+
 func TestNetworkConfig(t *testing.T) {
 	// Named network → single endpoint attachment.
 	nc := networkConfig("agents")
@@ -148,6 +212,72 @@ func TestNetworkConfig(t *testing.T) {
 	// Empty network → no endpoints (daemon default network).
 	if got := networkConfig(""); len(got.EndpointsConfig) != 0 {
 		t.Errorf("empty network: EndpointsConfig = %v, want none", got.EndpointsConfig)
+	}
+}
+
+func TestAgentNetworkCreateOptions(t *testing.T) {
+	agentID := uuid.New().String()
+	got := agentNetworkCreateOptions("prod", agentID)
+	if got.Driver != "bridge" || !got.Internal {
+		t.Fatalf("network policy = driver %q internal %v", got.Driver, got.Internal)
+	}
+	wantLabels := map[string]string{
+		labelInstance: "prod",
+		labelResource: resourceAgentNet,
+		labelAgentID:  agentID,
+	}
+	for key, want := range wantLabels {
+		if got.Labels[key] != want {
+			t.Errorf("label %s = %q, want %q", key, got.Labels[key], want)
+		}
+	}
+	if len(got.Labels) != len(wantLabels) {
+		t.Errorf("labels = %v, want only %v", got.Labels, wantLabels)
+	}
+}
+
+func TestValidateAgentNetwork(t *testing.T) {
+	agentID := uuid.New().String()
+	valid := network.Inspect{
+		Name:     "prod-agent-net-" + agentID,
+		Driver:   "bridge",
+		Internal: true,
+		Labels:   agentNetworkCreateOptions("prod", agentID).Labels,
+	}
+	if err := validateAgentNetwork(valid, "prod", agentID); err != nil {
+		t.Fatalf("valid network rejected: %v", err)
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(*network.Inspect)
+	}{
+		{"external", func(n *network.Inspect) { n.Internal = false }},
+		{"wrong driver", func(n *network.Inspect) { n.Driver = "overlay" }},
+		{"wrong instance", func(n *network.Inspect) { n.Labels[labelInstance] = "other" }},
+		{"wrong agent", func(n *network.Inspect) { n.Labels[labelAgentID] = uuid.NewString() }},
+		{"wrong resource", func(n *network.Inspect) { n.Labels[labelResource] = "other" }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			candidate := valid
+			candidate.Labels = map[string]string{}
+			for key, value := range valid.Labels {
+				candidate.Labels[key] = value
+			}
+			tt.mutate(&candidate)
+			if err := validateAgentNetwork(candidate, "prod", agentID); err == nil {
+				t.Fatal("invalid network accepted")
+			}
+		})
+	}
+}
+
+func TestAgentNetworkName(t *testing.T) {
+	agentID := uuid.MustParse("12345678-1234-1234-1234-123456789abc")
+	m := &DockerManager{cfg: &config.Config{InstanceID: "prod"}}
+	if got, want := m.agentNetworkName(agentID), "prod-agent-net-12345678-1234-1234-1234-123456789abc"; got != want {
+		t.Fatalf("agentNetworkName() = %q, want %q", got, want)
 	}
 }
 

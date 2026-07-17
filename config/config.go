@@ -1,7 +1,9 @@
 package config
 
 import (
+	"encoding/hex"
 	"fmt"
+	"net"
 	"net/netip"
 	"net/url"
 	"os"
@@ -18,7 +20,8 @@ import (
 const (
 	DefaultAgentBuilderImage     = "ghcr.io/airlockrun/airlock-agent-builder:v" + airlock.Version
 	DefaultAgentBaseImage        = "ghcr.io/airlockrun/airlock-agent-base:v" + airlock.Version
-	defaultAgentHTTPPrivateCIDRs = "0.0.0.0/0,::/0"
+	defaultAgentHTTPPrivateCIDRs = ""
+	defaultTrustedProxyPeers     = "127.0.0.0/8,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,fc00::/7"
 )
 
 // LabelInstance is the Docker label key stamped on every container and agent
@@ -28,6 +31,15 @@ const (
 // Defined here (imported by both container and builder) so the build-time
 // --label and the prune-time filter can never drift apart.
 const LabelInstance = "run.airlock.instance"
+
+// LabelAgentNetworkAccess marks trusted containers that Airlock may attach to
+// managed per-agent networks. The value is the owning InstanceID. Aliases are
+// supplied per endpoint because aliases from the seed network do not carry over
+// when Docker connects a container to another network.
+const (
+	LabelAgentNetworkAccess  = "run.airlock.agent-network-access"
+	LabelAgentNetworkAliases = "run.airlock.agent-network-aliases"
+)
 
 type Config struct {
 	// --- Core ---
@@ -52,11 +64,13 @@ type Config struct {
 	DBHost      string // Airlock process → Postgres (e.g. "localhost")
 	DBHostAgent string // Agent containers → Postgres via Docker network (e.g. "postgres")
 	DBPort      string
+	DBPortAgent string // Agent containers → Postgres/relay port
 	DBName      string
 	DBSSLMode   string // "disable" for dev, "require" for prod
 
 	// --- Networking ---
 	PublicURL   string // Public base URL (OAuth callbacks, auth links, e.g. "https://dev.airlock.run")
+	TLSMode     string // optional deployment ingress mode: local, wildcard, tunnel, manual, or proxy
 	APIURLAgent string // Agent containers → Airlock API (e.g. "http://host.docker.internal:8080"). Intentionally independent of PublicURL/AgentDomain — it's the internal container→airlock callback, not a public URL.
 	AgentDomain string // Subdomain routing (e.g. "dev.airlock.run" → {slug}.dev.airlock.run)
 	// AgentScheme/AgentPort are derived once from PublicURL (see Load).
@@ -66,23 +80,27 @@ type Config struct {
 	AgentScheme   string // "http" | "https"
 	AgentPort     string // explicit non-default port, else ""
 	DockerNetwork string // Docker network for infra + toolserver/build containers (e.g. "airlock-dev")
-	// AgentNetwork is the Docker network agent RUNTIME containers attach to.
-	// Defaults to DockerNetwork when AGENT_NETWORK is unset. Prod sets it to
-	// an isolated network carrying only airlock + postgres (not rustfs/caddy/
-	// frontend) so a malicious agent can't reach infra services it doesn't
-	// need. See docs/agent-isolation.md.
+	// AgentNetwork is the trusted dependency-discovery network when managed
+	// per-agent networking is enabled. Shared/native mode attaches runtimes to
+	// it directly. It defaults to DockerNetwork when AGENT_NETWORK is unset.
 	AgentNetwork string
+	// AgentNetworkPerAgent creates an internal Docker network for each runtime
+	// and attaches only trusted dependencies discovered on AgentNetwork. Native
+	// development leaves this false because the Airlock process runs on the host.
+	AgentNetworkPerAgent bool
 	// AgentHTTPPrivateCIDRs controls which non-public addresses Airlock may dial
-	// for brokered agent httpRequest and connection calls. Public addresses are
-	// always allowed; loopback, link-local, multicast, and unspecified addresses
-	// are always blocked.
+	// for brokered agent HTTP, connection, MCP, and outbound OAuth calls. Public
+	// HTTPS addresses are always allowed; link-local, multicast, and unspecified
+	// addresses are blocked. Loopback is available only on a localhost
+	// development instance.
 	AgentHTTPPrivateCIDRs []netip.Prefix
 
 	// --- Encryption ---
 	// AES-256-GCM for provider API keys, webhook secrets, tokens at rest.
 	// Generate with: openssl rand -hex 32
-	EncryptionKey    string // hex-encoded 32-byte key (required)
-	EncryptionKeyOld string // hex-encoded 32-byte key (optional, for rotation)
+	EncryptionKey       string // hex-encoded 32-byte key (required)
+	EncryptionKeyOld    string // hex-encoded 32-byte key (optional, for rotation)
+	EncryptionKeyRewrap bool   // migrate formats and re-encrypt persisted values during an explicit stop-all operation
 
 	// --- Containers ---
 	ContainerRuntime string // "docker"
@@ -165,8 +183,10 @@ type Config struct {
 	AgentCodegenVolume string
 
 	// --- Reverse proxy ---
-	ReverseProxyTrustedProxies string // comma-separated CIDRs, "*" = trust all (default: trust none)
-	ReverseProxyLimit          int    // how many proxy hops to trust in X-Forwarded-For (default: 1)
+	ReverseProxyAuthSecret   string // shared only with the deployment's Caddy process
+	ReverseProxyTrustedPeers string // comma-separated immediate-peer CIDRs
+	ReverseProxyLimit        int    // exact rightmost X-Forwarded-For hop to use (default: 1)
+	CaddyTrustedProxies      string // space-separated external ingress CIDRs for TLS_MODE=proxy
 
 	// --- Optional ---
 	WorkDir                string // temp directory for agent tool execution
@@ -204,23 +224,30 @@ func Load() *Config {
 		DBHost:      envOr("DB_HOST", "localhost"),
 		DBHostAgent: envOr("DB_HOST_AGENT", "postgres"),
 		DBPort:      envOr("DB_PORT", "5432"),
+		DBPortAgent: envOr("DB_PORT_AGENT", envOr("DB_PORT", "5432")),
 		DBName:      envOr("DB_NAME", "airlock"),
 		DBSSLMode:   envOr("DB_SSL_MODE", "require"),
 
 		// Networking
 		PublicURL:     envOr("PUBLIC_URL", "http://localhost:8080"),
+		TLSMode:       os.Getenv("TLS_MODE"),
 		APIURLAgent:   envOr("API_URL_AGENT", "http://localhost:8080"),
 		AgentDomain:   resolveAgentDomain(),
 		DockerNetwork: os.Getenv("DOCKER_NETWORK"),
 		AgentNetwork:  envOr("AGENT_NETWORK", os.Getenv("DOCKER_NETWORK")),
+		AgentNetworkPerAgent: envBoolOr(
+			"AGENT_NETWORK_PER_AGENT",
+			true,
+		),
 		AgentHTTPPrivateCIDRs: parseCIDREnv(
 			"AGENT_HTTP_PRIVATE_CIDRS",
 			defaultAgentHTTPPrivateCIDRs,
 		),
 
 		// Encryption
-		EncryptionKey:    requireEnv("ENCRYPTION_KEY"),
-		EncryptionKeyOld: os.Getenv("ENCRYPTION_KEY_OLD"),
+		EncryptionKey:       requireEnv("ENCRYPTION_KEY"),
+		EncryptionKeyOld:    os.Getenv("ENCRYPTION_KEY_OLD"),
+		EncryptionKeyRewrap: envBoolOr("ENCRYPTION_KEY_REWRAP", false),
 
 		// Containers
 		ContainerRuntime:      envOr("CONTAINER_RUNTIME", "docker"),
@@ -248,8 +275,10 @@ func Load() *Config {
 		AgentCodegenVolume: os.Getenv("AGENT_CODEGEN_VOLUME"),
 
 		// Reverse proxy
-		ReverseProxyTrustedProxies: os.Getenv("REVERSE_PROXY_TRUSTED_PROXIES"),
-		ReverseProxyLimit:          envIntOr("REVERSE_PROXY_LIMIT", 1),
+		ReverseProxyAuthSecret:   requireEnv("REVERSE_PROXY_AUTH_SECRET"),
+		ReverseProxyTrustedPeers: envOr("REVERSE_PROXY_TRUSTED_PEERS", defaultTrustedProxyPeers),
+		ReverseProxyLimit:        envIntOr("REVERSE_PROXY_LIMIT", 1),
+		CaddyTrustedProxies:      os.Getenv("CADDY_TRUSTED_PROXIES"),
 
 		// Optional
 		WorkDir:                envOr("WORK_DIR", "/tmp/airlock-spaces"),
@@ -263,8 +292,126 @@ func Load() *Config {
 		OIDCClientSecret: os.Getenv("OIDC_CLIENT_SECRET"),
 		OIDCRedirectURL:  os.Getenv("OIDC_REDIRECT_URL"),
 	}
+	validateDeployment(c)
 	c.AgentScheme, c.AgentPort = agentSchemePort(c.PublicURL)
 	return c
+}
+
+func validateDeployment(c *Config) {
+	u, err := url.Parse(c.PublicURL)
+	if err != nil || u.Hostname() == "" || (u.Scheme != "http" && u.Scheme != "https") {
+		panic(fmt.Sprintf("config: PUBLIC_URL %q must be an absolute http or https URL", c.PublicURL))
+	}
+	if u.User != nil || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" {
+		panic(fmt.Sprintf("config: PUBLIC_URL %q must contain only scheme and authority", c.PublicURL))
+	}
+
+	local := isLocalHostname(u.Hostname())
+	switch c.TLSMode {
+	case "", "wildcard", "tunnel", "manual", "proxy":
+	case "local":
+		if !local {
+			panic("config: TLS_MODE=local requires PUBLIC_URL to use localhost or a loopback IP")
+		}
+	default:
+		panic(fmt.Sprintf("config: unsupported TLS_MODE %q", c.TLSMode))
+	}
+	if !local && u.Scheme != "https" {
+		panic("config: non-local PUBLIC_URL must use https")
+	}
+	if c.AgentNetworkPerAgent && c.AgentNetwork == "" {
+		panic("config: AGENT_NETWORK is required when AGENT_NETWORK_PER_AGENT=true")
+	}
+
+	key, err := hex.DecodeString(c.EncryptionKey)
+	if err != nil || len(key) != 32 {
+		panic("config: ENCRYPTION_KEY must be 64 hexadecimal characters")
+	}
+	if c.EncryptionKeyOld != "" {
+		oldKey, err := hex.DecodeString(c.EncryptionKeyOld)
+		if err != nil || len(oldKey) != 32 {
+			panic("config: ENCRYPTION_KEY_OLD must be 64 hexadecimal characters")
+		}
+	}
+	if len(c.ReverseProxyAuthSecret) < 32 {
+		panic("config: REVERSE_PROXY_AUTH_SECRET must be at least 32 characters")
+	}
+	trustedPeers := strings.TrimSpace(c.ReverseProxyTrustedPeers)
+	if trustedPeers == "" {
+		panic("config: REVERSE_PROXY_TRUSTED_PEERS must contain at least one narrow CIDR")
+	}
+	for _, entry := range strings.Split(trustedPeers, ",") {
+		entry = strings.TrimSpace(entry)
+		if entry == "*" {
+			panic("config: REVERSE_PROXY_TRUSTED_PEERS does not allow wildcard trust")
+		}
+		if !strings.Contains(entry, "/") {
+			if net.ParseIP(entry) == nil {
+				panic(fmt.Sprintf("config: invalid trusted peer address %q", entry))
+			}
+			continue
+		}
+		_, network, err := net.ParseCIDR(entry)
+		if err != nil {
+			panic(fmt.Sprintf("config: invalid trusted peer CIDR %q", entry))
+		}
+		ones, _ := network.Mask.Size()
+		if ones == 0 {
+			panic("config: REVERSE_PROXY_TRUSTED_PEERS does not allow wildcard trust")
+		}
+	}
+	if c.ReverseProxyLimit < 1 {
+		panic("config: REVERSE_PROXY_LIMIT must be at least 1")
+	}
+	if c.TLSMode == "proxy" {
+		trusted := strings.TrimSpace(c.CaddyTrustedProxies)
+		if trusted == "" {
+			panic("config: TLS_MODE=proxy requires CADDY_TRUSTED_PROXIES to name the exact ingress proxy address or narrow CIDR")
+		}
+		for _, entry := range strings.Fields(trusted) {
+			entry = strings.TrimSpace(entry)
+			if entry == "*" {
+				panic("config: TLS_MODE=proxy does not allow wildcard proxy trust")
+			}
+			if !strings.Contains(entry, "/") {
+				ip := net.ParseIP(entry)
+				if ip == nil {
+					panic(fmt.Sprintf("config: invalid trusted proxy address %q", entry))
+				}
+				continue
+			}
+			_, network, err := net.ParseCIDR(entry)
+			if err != nil {
+				panic(fmt.Sprintf("config: invalid trusted proxy CIDR %q", entry))
+			}
+			ones, _ := network.Mask.Size()
+			if ones == 0 {
+				panic("config: TLS_MODE=proxy does not allow wildcard proxy trust")
+			}
+		}
+	}
+
+	if local {
+		return
+	}
+	if len(c.JWTSecret) < 32 {
+		panic("config: JWT_SECRET must be at least 32 characters outside local development")
+	}
+	if c.JWTSecret == "local-jwt-not-for-production-use-only-replace-for-any-real-deploy" {
+		panic("config: development JWT_SECRET cannot be used outside local development")
+	}
+	if c.EncryptionKey == "00000000000000000000000000000000000000000000000000000000deadbeef" {
+		panic("config: development ENCRYPTION_KEY cannot be used outside local development")
+	}
+}
+
+func isLocalHostname(host string) bool {
+	host = strings.TrimSuffix(strings.ToLower(host), ".")
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // agentSchemePort returns the scheme + optional explicit port that

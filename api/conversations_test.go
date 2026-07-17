@@ -12,6 +12,7 @@ import (
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 	convsvc "github.com/airlockrun/airlock/service/conversations"
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -183,6 +184,155 @@ func TestListConversationMessages_RequiresDirection(t *testing.T) {
 
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400", rec.Code)
+	}
+}
+
+func TestListConversationMessages_RejectsOtherUserAndA2ASource(t *testing.T) {
+	skipIfNoDB(t)
+	agentID, ownerID := testAgentAndUser(t)
+	convID := testConversation(t, agentID, ownerID)
+	_, otherUserID := testAgentAndUser(t)
+
+	q := dbq.New(testDB.Pool())
+	a2a, err := q.CreateA2AConversation(context.Background(), dbq.CreateA2AConversationParams{
+		AgentID: toPgUUID(agentID), UserID: toPgUUID(ownerID), Title: "internal",
+	})
+	if err != nil {
+		t.Fatalf("CreateA2AConversation: %v", err)
+	}
+
+	ch := newTestConvHandler()
+	router := userRouter(func(r chi.Router) {
+		r.Get("/api/v1/conversations/{convID}/messages", ch.ListConversationMessages)
+	})
+
+	tests := []struct {
+		name   string
+		convID string
+		userID string
+	}{
+		{name: "other user", convID: convID.String(), userID: otherUserID.String()},
+		{name: "a2a source", convID: pgUUID(a2a.ID).String(), userID: ownerID.String()},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			uid, err := uuid.Parse(tt.userID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			req := userRequestJSON(t, "GET", "/api/v1/conversations/"+tt.convID+"/messages?after=0", uid, nil)
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, req)
+			if rec.Code != http.StatusNotFound {
+				t.Errorf("status = %d, want 404; body: %s", rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
+func TestPromptRejectsAnotherMembersConversation(t *testing.T) {
+	skipIfNoDB(t)
+	agentID, ownerID := testAgentAndUser(t)
+	convID := testConversation(t, agentID, ownerID)
+	_, otherUserID := testAgentAndUser(t)
+	if err := dbq.New(testDB.Pool()).UpsertAgentGrant(context.Background(), dbq.UpsertAgentGrantParams{
+		AgentID: toPgUUID(agentID), GranteeID: toPgUUID(otherUserID), Role: "user",
+	}); err != nil {
+		t.Fatalf("UpsertAgentGrant: %v", err)
+	}
+
+	ch := newTestConvHandler()
+	router := userRouter(func(r chi.Router) {
+		r.Post("/api/v1/agents/{agentID}/prompt", ch.Prompt)
+	})
+	req := userRequestJSON(t, http.MethodPost, "/api/v1/agents/"+agentID.String()+"/prompt", otherUserID, map[string]any{
+		"message": "stolen", "conversationId": convID.String(),
+	})
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404; body: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestPromptAndUploadRequireCurrentAgentAccess(t *testing.T) {
+	skipIfNoDB(t)
+	agentID, _ := testAgentAndUser(t)
+	_, otherUserID := testAgentAndUser(t)
+
+	ch := newTestConvHandler()
+	router := userRouter(func(r chi.Router) {
+		r.Post("/api/v1/agents/{agentID}/prompt", ch.Prompt)
+		r.Post("/api/v1/agents/{agentID}/files", ch.UploadFile)
+	})
+	tests := []struct {
+		name string
+		path string
+		body any
+	}{
+		{name: "prompt", path: "/prompt", body: map[string]string{"message": "hello"}},
+		{name: "upload", path: "/files"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := userRequestJSON(t, http.MethodPost, "/api/v1/agents/"+agentID.String()+tt.path, otherUserID, tt.body)
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, req)
+			if rec.Code != http.StatusForbidden {
+				t.Errorf("status = %d, want 403; body: %s", rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
+func TestPromptRejectsExistingConversationAfterAccessRevoked(t *testing.T) {
+	skipIfNoDB(t)
+	agentID, userID := testAgentAndUser(t)
+	convID := testConversation(t, agentID, userID)
+	q := dbq.New(testDB.Pool())
+	if err := q.DeleteAgentGrant(context.Background(), dbq.DeleteAgentGrantParams{
+		AgentID: toPgUUID(agentID), GranteeID: toPgUUID(userID),
+	}); err != nil {
+		t.Fatalf("DeleteAgentGrant: %v", err)
+	}
+
+	ch := newTestConvHandler()
+	router := userRouter(func(r chi.Router) {
+		r.Post("/api/v1/agents/{agentID}/prompt", ch.Prompt)
+	})
+	req := userRequestJSON(t, http.MethodPost, "/api/v1/agents/"+agentID.String()+"/prompt", userID, map[string]string{
+		"message": "hello", "conversationId": convID.String(),
+	})
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want 403; body: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestPromptRejectsInvalidAttachmentPathBeforeCreatingConversation(t *testing.T) {
+	skipIfNoDB(t)
+	agentID, userID := testAgentAndUser(t)
+	ch := newTestConvHandler()
+	router := userRouter(func(r chi.Router) {
+		r.Post("/api/v1/agents/{agentID}/prompt", ch.Prompt)
+	})
+	req := userRequestJSON(t, http.MethodPost, "/api/v1/agents/"+agentID.String()+"/prompt", userID, map[string]any{
+		"message": "hello", "filePaths": []string{"tmp/../other-agent/file"},
+	})
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body: %s", rec.Code, rec.Body.String())
+	}
+	rows, err := dbq.New(testDB.Pool()).ListConversationsByAgent(context.Background(), dbq.ListConversationsByAgentParams{
+		AgentID: toPgUUID(agentID), UserID: toPgUUID(userID),
+	})
+	if err != nil {
+		t.Fatalf("ListConversationsByAgent: %v", err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("invalid attachment created %d conversations", len(rows))
 	}
 }
 

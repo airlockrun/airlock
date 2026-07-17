@@ -5,10 +5,11 @@
 #   3. Add DNS A records: ${DOMAIN} and *.${DOMAIN} → <server IP>
 #   4. docker compose up -d
 #
-# Everything that used to be a separate overlay file is now an .env knob:
+# Deployment variants are selected through these .env knobs:
 #   TLS_MODE          local | wildcard | tunnel | manual | proxy
 #                     → selects caddy/Caddyfile.<mode>
 #   COMPOSE_PROFILES  bundled-db (postgres) | bundled-s3 (rustfs) |
+#                     external-db (fixed-destination agent Postgres relay) |
 #                     caddy-local (loopback HTTP) | caddy-published (host ports) |
 #                     caddy-private (Docker network only) |
 #                     cloudflared (Cloudflare Tunnel) | buildkit (rootless builder) —
@@ -43,6 +44,15 @@ x-caddy-common: &caddy-common
     # network; native dev repoints AIRLOCK_UPSTREAM at host.docker.internal).
     AIRLOCK_UPSTREAM: ${AIRLOCK_UPSTREAM:-airlock:8080}
     S3_UPSTREAM: ${S3_UPSTREAM:-rustfs:9000}
+    # Shared only by Caddy and Airlock. Caddy overwrites the request header
+    # before proxying so callers cannot forge forwarding-header trust.
+    REVERSE_PROXY_AUTH_SECRET: "${REVERSE_PROXY_AUTH_SECRET:?REVERSE_PROXY_AUTH_SECRET is required — generate one with openssl rand -hex 32}"
+    # TLS_MODE=proxy only: exact external ingress addresses, space-separated.
+    CADDY_TRUSTED_PROXIES: "${CADDY_TRUSTED_PROXIES:-}"
+    # TLS_MODE=tunnel only: fixed peers on the dedicated internal ingress
+    # bridge. Caddy trusts CF-Connecting-IP only from the cloudflared /32.
+    TUNNEL_CLOUDFLARED_IP: "${TUNNEL_CLOUDFLARED_IP:-172.31.255.2}"
+    TUNNEL_CADDY_IP: "${TUNNEL_CADDY_IP:-172.31.255.3}"
     # Optional Let's Encrypt contact (wildcard). Comment-trick:
     # expands to an `email <addr>` directive when ACME_EMAIL is set, empty
     # otherwise — see caddy/Caddyfile.wildcard's global block.
@@ -90,13 +100,16 @@ services:
     # Bundled Postgres only runs when the `bundled-db` profile is active
     # (the .env.example default). To use an external Postgres, drop
     # bundled-db from COMPOSE_PROFILES and set DATABASE_URL / DB_HOST /
-    # DB_HOST_AGENT in .env — this service then never starts and airlock
-    # talks to your instance.
+    # DB_HOST_AGENT / DB_PORT_AGENT in .env. This service then stays inactive
+    # and Airlock talks to the external instance.
     profiles: ["bundled-db"]
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-airlock}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-airlock}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
+      AIRLOCK_DB_PASSWORD: ${AIRLOCK_DB_PASSWORD:-}
       POSTGRES_DB: ${POSTGRES_DB:-airlock}
+    entrypoint: ["/airlock/check-postgres-passwords.sh"]
+    command: ["postgres"]
     volumes:
       - pgdata:/var/lib/postgresql/data
       # First-boot bootstrap: creates the create_agent_role() helper
@@ -104,6 +117,7 @@ services:
       # postgres image runs files in /docker-entrypoint-initdb.d/
       # exactly once when the data dir is empty.
       - ./db/init:/docker-entrypoint-initdb.d:ro
+      - ./db/check-postgres-passwords.sh:/airlock/check-postgres-passwords.sh:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-airlock}"]
       interval: 5s
@@ -113,6 +127,42 @@ services:
     # On both networks: infra (airlock process) + agents (per-agent scoped
     # DB access). rustfs/caddy/frontend stay off `agents`.
     networks: [default, agents]
+    labels:
+      run.airlock.agent-network-access: ${AIRLOCK_INSTANCE_ID:-airlock}
+      run.airlock.agent-network-aliases: postgres
+
+  postgres-bootstrap:
+    image: pgvector/pgvector:pg17
+    profiles: ["bundled-db"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGHOST: postgres
+      PGPASSWORD: ${POSTGRES_PASSWORD:-}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
+      POSTGRES_USER: ${POSTGRES_USER:-airlock}
+      POSTGRES_DB: ${POSTGRES_DB:-airlock}
+      AIRLOCK_DB_PASSWORD: ${AIRLOCK_DB_PASSWORD:-}
+    entrypoint: ["/bin/bash", "/bootstrap/01-create-agent-role-fn.sh"]
+    volumes:
+      - ./db/init:/bootstrap:ro
+    restart: "no"
+
+  # Fixed-destination relay for external Postgres. Runtime agents remain on
+  # internal per-agent networks and can reach only this listener; TLS and the
+  # scoped Postgres role continue end-to-end through the byte relay.
+  postgres-agent-relay:
+    image: alpine/socat:1.8.0.3
+    profiles: ["external-db"]
+    command:
+      - "TCP-LISTEN:5432,fork,reuseaddr"
+      - "TCP:${DB_HOST:-postgres}:${DB_PORT:-5432}"
+    restart: unless-stopped
+    networks: [default, agents]
+    labels:
+      run.airlock.agent-network-access: ${AIRLOCK_INSTANCE_ID:-airlock}
+      run.airlock.agent-network-aliases: postgres-agent-relay
 
   # RustFS — S3-compatible object store. Airlock auto-creates the bucket
   # on first connect, so no init sidecar is needed.
@@ -231,6 +281,9 @@ services:
       postgres:
         condition: service_healthy
         required: false
+      postgres-bootstrap:
+        condition: service_completed_successfully
+        required: false
       rustfs:
         condition: service_healthy
         required: false
@@ -242,13 +295,14 @@ services:
       # DATABASE_URL defaults to the bundled Postgres; set it in .env to point
       # at an external instance. DB_HOST / DB_HOST_AGENT / DB_SSL_MODE feed the
       # per-agent schema DSNs (assembled separately from DATABASE_URL).
-      DATABASE_URL: "${DATABASE_URL:-postgres://${POSTGRES_USER:-airlock}:${POSTGRES_PASSWORD:-airlock}@${DB_HOST:-postgres}:5432/${POSTGRES_DB:-airlock}?sslmode=${DB_SSL_MODE:-disable}}"
+      DATABASE_URL: "${DATABASE_URL:-postgres://airlock_app:${AIRLOCK_DB_PASSWORD:-}@${DB_HOST:-postgres}:5432/${POSTGRES_DB:-airlock}?sslmode=${DB_SSL_MODE:-disable}}"
 
       # Per-agent schema connections (agents reach Postgres at the same
       # hostname inside the network).
       DB_HOST: ${DB_HOST:-postgres}
       DB_HOST_AGENT: ${DB_HOST_AGENT:-postgres}
       DB_PORT: "${DB_PORT:-5432}"
+      DB_PORT_AGENT: "${DB_PORT_AGENT:-5432}"
       DB_NAME: ${POSTGRES_DB:-airlock}
       DB_SSL_MODE: ${DB_SSL_MODE:-disable}
 
@@ -283,6 +337,10 @@ services:
       JWT_SECRET: "${JWT_SECRET:?JWT_SECRET is required — generate one with openssl rand -hex 32}"
       ENCRYPTION_KEY: "${ENCRYPTION_KEY:?ENCRYPTION_KEY is required — generate one with openssl rand -hex 32}"
       ENCRYPTION_KEY_OLD: ${ENCRYPTION_KEY_OLD:-}
+      # Maintenance-only stop-all migration. Normal startup never rewrites
+      # persisted secret formats or key IDs.
+      ENCRYPTION_KEY_REWRAP: "${ENCRYPTION_KEY_REWRAP:-false}"
+      REVERSE_PROXY_AUTH_SECRET: "${REVERSE_PROXY_AUTH_SECRET:?REVERSE_PROXY_AUTH_SECRET is required — generate one with openssl rand -hex 32}"
 
       # Public URL + agent subdomain routing.
       # PUBLIC_URL defaults to https://${DOMAIN} for the standard prod
@@ -291,6 +349,7 @@ services:
       # from this when building per-agent {slug}.AGENT_DOMAIN URLs so
       # signed asset URLs match what Caddy actually serves.
       PUBLIC_URL: "${PUBLIC_URL:-https://${DOMAIN:?DOMAIN is required — your public domain like airlock.example.com}}"
+      TLS_MODE: ${TLS_MODE}
       AGENT_DOMAIN: ${DOMAIN}
       API_URL_AGENT: ${API_URL_AGENT:-http://airlock:8080}
 
@@ -302,17 +361,15 @@ services:
       # (e.g. INSTANCE_ID=prod in that stack's .env).
       AIRLOCK_INSTANCE_ID: ${AIRLOCK_INSTANCE_ID:-airlock}
 
-      # Container orchestration networks. DOCKER_NETWORK carries infra +
-      # toolserver/build containers. AGENT_NETWORK carries agent runtime
-      # containers — an isolated net with only airlock + postgres, so a
-      # malicious agent can't reach rustfs/caddy/frontend. Both must match
-      # the network names in the `networks:` block below.
+      # Container orchestration networks. DOCKER_NETWORK carries infra and
+      # toolserver/build containers. AGENT_NETWORK is the internal dependency
+      # seed; each runtime gets its own internal managed network.
       DOCKER_NETWORK: ${DOCKER_NETWORK:-airlock}
       AGENT_NETWORK: ${AGENT_NETWORK:-airlock-agents}
-      # Airlock-brokered httpRequest and connection calls may reach public
-      # addresses plus these non-public CIDRs. An explicitly empty value keeps
-      # brokered HTTP public-only. Loopback and link-local stay blocked.
-      AGENT_HTTP_PRIVATE_CIDRS: "${AGENT_HTTP_PRIVATE_CIDRS-0.0.0.0/0,::/0}"
+      AGENT_NETWORK_PER_AGENT: "${AGENT_NETWORK_PER_AGENT:-true}"
+      # Brokered HTTP, connection, MCP, and outbound OAuth calls may reach
+      # public addresses plus explicitly configured non-public CIDRs.
+      AGENT_HTTP_PRIVATE_CIDRS: "${AGENT_HTTP_PRIVATE_CIDRS-}"
       # Rootless agent image builds. Empty by default → legacy host
       # `docker build` (works everywhere). install.sh sets BUILDKIT_HOST to the
       # buildkitd socket and enables the `buildkit` profile when the host
@@ -339,12 +396,12 @@ services:
       AGENT_CODEGEN_PATH: /var/lib/airlock/codegen
       AGENT_CODEGEN_VOLUME: ${AGENT_CODEGEN_VOLUME:-airlock-data}
 
-      # Trust the Caddy container that fronts us. Docker's default bridge
-      # CIDR (172.16.0.0/12) covers all compose-created networks. For
-      # TLS_MODE=proxy add your external proxy's CIDR here (or "*") so airlock
-      # trusts its X-Forwarded-* headers and keeps signing https:// URLs.
-      REVERSE_PROXY_TRUSTED_PROXIES: "${REVERSE_PROXY_TRUSTED_PROXIES:-172.16.0.0/12}"
+      # The secret is the primary trust signal. This CIDR list is a second,
+      # immediate-peer restriction covering native loopback and normal Docker
+      # bridge ranges; untrusted containers do not know the secret.
+      REVERSE_PROXY_TRUSTED_PEERS: "${REVERSE_PROXY_TRUSTED_PEERS:-127.0.0.0/8,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,fc00::/7}"
       REVERSE_PROXY_LIMIT: "${REVERSE_PROXY_LIMIT:-1}"
+      CADDY_TRUSTED_PROXIES: "${CADDY_TRUSTED_PROXIES:-}"
     volumes:
       # Persistent: activation_code.txt, libs cache extracted from agent-builder.
       - airlock-data:/var/lib/airlock
@@ -364,6 +421,9 @@ services:
     # On both networks: infra (reach rustfs/caddy/postgres) + agents (so
     # agent containers can reach airlock:8080 on the isolated net).
     networks: [default, agents]
+    labels:
+      run.airlock.agent-network-access: ${AIRLOCK_INSTANCE_ID:-airlock}
+      run.airlock.agent-network-aliases: airlock
 
   frontend:
     build:
@@ -397,11 +457,17 @@ services:
       default:
         aliases:
           - caddy
+      tunnel-ingress:
+        ipv4_address: ${TUNNEL_CADDY_IP:-172.31.255.3}
+        aliases:
+          - caddy
 
   # Cloudflare Tunnel sidecar — only with COMPOSE_PROFILES=cloudflared (TLS_MODE=
   # tunnel). Dials out to Cloudflare and forwards public hostnames to caddy
-  # over the tunnel; CF terminates TLS at its edge. Route DOMAIN and *.DOMAIN
-  # to http://caddy:80 in the CF Zero-Trust dashboard.
+  # over a dedicated internal bridge; CF terminates TLS at its edge. Its other
+  # network provides internet egress without exposing the infrastructure
+  # network. Route DOMAIN, *.DOMAIN, and s3.DOMAIN to http://caddy:80 in the CF
+  # Zero-Trust dashboard.
   cloudflared:
     image: cloudflare/cloudflared:latest
     profiles: ["cloudflared"]
@@ -411,20 +477,32 @@ services:
     # cloudflared exits with a clear error on an empty token.
     command: ["tunnel", "--no-autoupdate", "run", "--token", "${TUNNEL_TOKEN:-}"]
     restart: unless-stopped
-    networks: [default]
+    networks:
+      tunnel-ingress:
+        ipv4_address: ${TUNNEL_CLOUDFLARED_IP:-172.31.255.2}
+      tunnel-egress:
+        gw_priority: 1
 
-# Two networks. `default` (airlock) carries all infra. `agents` carries
-# ONLY airlock + postgres — agent runtime containers attach here (via
-# AGENT_NETWORK), so a malicious agent can reach airlock's API and its
-# scoped DB but NOT rustfs, caddy, the frontend, or build containers.
-# Toolserver/build containers stay on `default` (DOCKER_NETWORK). Agents
-# still get internet egress (bridge NAT) for legitimate outbound calls.
+# `default` (airlock) carries all infra. `agents` carries
+# only trusted dependency containers. Airlock creates one internal bridge per
+# runtime and attaches the labeled dependencies from `agents`; runtimes never
+# join this shared seed network. Toolserver/build containers stay on `default`.
+# Tunnel mode adds an internal, fixed-address ingress bridge shared only by
+# Caddy and cloudflared plus a cloudflared-only egress bridge.
 # See airlock/docs/agent-isolation.md.
 networks:
   default:
     name: ${DOCKER_NETWORK:-airlock}
   agents:
     name: ${AGENT_NETWORK:-airlock-agents}
+    internal: true
+  tunnel-ingress:
+    name: ${TUNNEL_INGRESS_NETWORK:-airlock-tunnel-ingress}
+    internal: true
+    ipam:
+      config:
+        - subnet: ${TUNNEL_INGRESS_SUBNET:-172.31.255.0/29}
+  tunnel-egress:
 
 volumes:
   pgdata:

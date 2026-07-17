@@ -35,7 +35,7 @@ import (
 // v1: no pagination — agents typically have well under 1000 files. If a
 // directory exceeds 10k entries we cap and document. Pagination via
 // nextCursor can be added when actual usage hits the cap.
-func (s *MCPServer) handleResourcesList(ctx context.Context, w http.ResponseWriter, h *Handler, q *dbq.Queries, target dbq.Agent, access agentsdk.Access, msg jsonrpcMessage) {
+func (s *MCPServer) handleResourcesList(ctx context.Context, w http.ResponseWriter, h *Handler, q *dbq.Queries, target dbq.Agent, access agentsdk.Access, principal MCPPrincipal, msg jsonrpcMessage) {
 	dirs, err := q.ListDirectoriesByAgent(ctx, target.ID)
 	if err != nil {
 		s.logger.Error("mcp resources: list dirs", zap.Error(err))
@@ -51,6 +51,7 @@ func (s *MCPServer) handleResourcesList(ctx context.Context, w http.ResponseWrit
 	const perDirCap = 10000
 	out := make([]entry, 0, 64)
 	agentPrefix := "agents/" + uuid.UUID(target.ID.Bytes).String() + "/"
+	authorizer := newMCPResourceAuthorizer(ctx, q, uuid.UUID(target.ID.Bytes), principal)
 	for _, dir := range dirs {
 		if !accessSatisfies(string(access), dir.ListAccess) {
 			continue
@@ -73,6 +74,9 @@ func (s *MCPServer) handleResourcesList(ctx context.Context, w http.ResponseWrit
 		}
 		for _, obj := range objs {
 			rel := strings.TrimPrefix(obj.Key, agentPrefix)
+			if !authorizer.allows(dir, rel) {
+				continue
+			}
 			out = append(out, entry{
 				URI:      "agent://" + rel,
 				Name:     filepath.Base(rel),
@@ -88,7 +92,7 @@ func (s *MCPServer) handleResourcesList(ctx context.Context, w http.ResponseWrit
 // handleResourcesRead returns the bytes of one resource. For ≤10MB
 // files, inline base64. For larger files, return a friendly text +
 // _meta.airlock.run/downloadUrl presigned URL.
-func (s *MCPServer) handleResourcesRead(ctx context.Context, w http.ResponseWriter, h *Handler, q *dbq.Queries, target dbq.Agent, access agentsdk.Access, msg jsonrpcMessage) {
+func (s *MCPServer) handleResourcesRead(ctx context.Context, w http.ResponseWriter, h *Handler, q *dbq.Queries, target dbq.Agent, access agentsdk.Access, principal MCPPrincipal, msg jsonrpcMessage) {
 	var params struct {
 		URI string `json:"uri"`
 	}
@@ -128,7 +132,8 @@ func (s *MCPServer) handleResourcesRead(ctx context.Context, w http.ResponseWrit
 		bestLen = len(d.Path)
 		ownerDir = d
 	}
-	if ownerDir == nil || !accessSatisfies(string(access), ownerDir.ReadAccess) {
+	if ownerDir == nil || !accessSatisfies(string(access), ownerDir.ReadAccess) ||
+		!newMCPResourceAuthorizer(ctx, q, uuid.UUID(target.ID.Bytes), principal).allows(*ownerDir, cleaned) {
 		writeJSONRPCError(w, msg.ID, rpcErrInvalidParams, "resource not found")
 		return
 	}
@@ -188,7 +193,7 @@ func (s *MCPServer) handleResourcesRead(ctx context.Context, w http.ResponseWrit
 
 // handleResourcesTemplatesList returns one URI template per visible
 // directory so clients can show a tree view of the agent's namespace.
-func (s *MCPServer) handleResourcesTemplatesList(ctx context.Context, w http.ResponseWriter, q *dbq.Queries, target dbq.Agent, access agentsdk.Access, msg jsonrpcMessage) {
+func (s *MCPServer) handleResourcesTemplatesList(ctx context.Context, w http.ResponseWriter, q *dbq.Queries, target dbq.Agent, access agentsdk.Access, principal MCPPrincipal, msg jsonrpcMessage) {
 	dirs, err := q.ListDirectoriesByAgent(ctx, target.ID)
 	if err != nil {
 		writeJSONRPCError(w, msg.ID, rpcErrServerError, "list directories: "+err.Error())
@@ -204,6 +209,9 @@ func (s *MCPServer) handleResourcesTemplatesList(ctx context.Context, w http.Res
 		if !accessSatisfies(string(access), dir.ListAccess) {
 			continue
 		}
+		if dir.Scope != "" && principal.Kind == MCPPrincipalAnon {
+			continue
+		}
 		if dir.Path == "__incoming" {
 			continue
 		}
@@ -215,6 +223,111 @@ func (s *MCPServer) handleResourcesTemplatesList(ctx context.Context, w http.Res
 	}
 	result, _ := json.Marshal(map[string]any{"resourceTemplates": out})
 	writeJSONRPCResult(w, msg.ID, result)
+}
+
+type mcpResourceAuthorizer struct {
+	ctx          context.Context
+	q            *dbq.Queries
+	targetID     uuid.UUID
+	principal    MCPPrincipal
+	conversation map[uuid.UUID]bool
+	run          map[uuid.UUID]bool
+}
+
+func newMCPResourceAuthorizer(ctx context.Context, q *dbq.Queries, targetID uuid.UUID, principal MCPPrincipal) *mcpResourceAuthorizer {
+	return &mcpResourceAuthorizer{
+		ctx: ctx, q: q, targetID: targetID, principal: principal,
+		conversation: make(map[uuid.UUID]bool), run: make(map[uuid.UUID]bool),
+	}
+}
+
+func (a *mcpResourceAuthorizer) allows(dir dbq.AgentDirectory, path string) bool {
+	if dir.Scope == "" {
+		return true
+	}
+	if a.principal.Kind == MCPPrincipalAnon {
+		return false
+	}
+	prefix := dir.Path + "/"
+	if !strings.HasPrefix(path, prefix) {
+		return false
+	}
+	segment, _, ok := strings.Cut(strings.TrimPrefix(path, prefix), "/")
+	if !ok {
+		return false
+	}
+	switch dir.Scope {
+	case "user":
+		id, ok := strings.CutPrefix(segment, "user-")
+		return ok && a.principal.UserID != uuid.Nil && id == a.principal.UserID.String()
+	case "conv":
+		id, ok := strings.CutPrefix(segment, "conv-")
+		if !ok {
+			return false
+		}
+		convID, err := uuid.Parse(id)
+		return err == nil && a.conversationAllowed(convID)
+	case "run":
+		id, ok := strings.CutPrefix(segment, "run-")
+		if !ok {
+			return false
+		}
+		runID, err := uuid.Parse(id)
+		return err == nil && a.runAllowed(runID)
+	default:
+		return false
+	}
+}
+
+func (a *mcpResourceAuthorizer) conversationAllowed(id uuid.UUID) bool {
+	if allowed, ok := a.conversation[id]; ok {
+		return allowed
+	}
+	a.conversation[id] = false
+	conv, err := a.q.GetConversationByIDAndAgent(a.ctx, dbq.GetConversationByIDAndAgentParams{
+		ID: toPgUUID(id), AgentID: toPgUUID(a.targetID),
+	})
+	if err != nil || !conv.UserID.Valid || uuid.UUID(conv.UserID.Bytes) != a.principal.UserID {
+		return false
+	}
+	allowed := conv.Source == "a2a" && conversationBoundToPrincipal(conv, a.targetID, a.principal)
+	if conv.Source != "a2a" {
+		allowed = a.principal.Kind == MCPPrincipalUser
+	}
+	a.conversation[id] = allowed
+	return allowed
+}
+
+func (a *mcpResourceAuthorizer) runAllowed(id uuid.UUID) bool {
+	if allowed, ok := a.run[id]; ok {
+		return allowed
+	}
+	a.run[id] = false
+	if a.principal.Kind == MCPPrincipalAgent {
+		if id != a.principal.ParentRunID {
+			return false
+		}
+		run, err := a.q.GetRunByID(a.ctx, toPgUUID(id))
+		if err != nil || run.Status != "running" || uuid.UUID(run.AgentID.Bytes) != a.principal.CallerAgentID {
+			return false
+		}
+		userID, err := chaseOriginalUser(a.ctx, a.q, run)
+		allowed := err == nil && userID == a.principal.UserID
+		a.run[id] = allowed
+		return allowed
+	}
+	run, err := a.q.GetRunByIDAndAgent(a.ctx, dbq.GetRunByIDAndAgentParams{
+		ID: toPgUUID(id), AgentID: toPgUUID(a.targetID),
+	})
+	if err != nil || run.TriggerRef == "" {
+		return false
+	}
+	convID, err := uuid.Parse(run.TriggerRef)
+	if err != nil || !a.conversationAllowed(convID) {
+		return false
+	}
+	a.run[id] = true
+	return true
 }
 
 // mimeFromName guesses content-type from extension. Used purely as a UI

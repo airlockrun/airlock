@@ -11,6 +11,34 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const advanceUserAuthEpochAndRevokeSessions = `-- name: AdvanceUserAuthEpochAndRevokeSessions :one
+WITH updated AS (
+    UPDATE users
+    SET auth_epoch = auth_epoch + 1, updated_at = now()
+    WHERE users.id = $1
+    RETURNING users.auth_epoch
+), revoked AS (
+    UPDATE user_sessions
+    SET revoked_at = now()
+    WHERE user_id = $1
+      AND revoked_at IS NULL
+      AND ($2::uuid IS NULL OR user_sessions.id != $2::uuid)
+)
+SELECT auth_epoch FROM updated
+`
+
+type AdvanceUserAuthEpochAndRevokeSessionsParams struct {
+	ID                pgtype.UUID `json:"id"`
+	PreserveSessionID pgtype.UUID `json:"preserve_session_id"`
+}
+
+func (q *Queries) AdvanceUserAuthEpochAndRevokeSessions(ctx context.Context, arg AdvanceUserAuthEpochAndRevokeSessionsParams) (int64, error) {
+	row := q.db.QueryRow(ctx, advanceUserAuthEpochAndRevokeSessions, arg.ID, arg.PreserveSessionID)
+	var auth_epoch int64
+	err := row.Scan(&auth_epoch)
+	return auth_epoch, err
+}
+
 const clearMustChangePassword = `-- name: ClearMustChangePassword :exec
 UPDATE users SET must_change_password = false, updated_at = now() WHERE id = $1
 `
@@ -22,24 +50,54 @@ func (q *Queries) ClearMustChangePassword(ctx context.Context, id pgtype.UUID) e
 	return err
 }
 
-const clearUserPassword = `-- name: ClearUserPassword :exec
-UPDATE users SET password_hash = NULL, updated_at = now() WHERE id = $1
+const clearUserPasswordAndRevokeSessions = `-- name: ClearUserPasswordAndRevokeSessions :one
+WITH updated AS (
+    UPDATE users
+    SET password_hash = NULL, auth_epoch = auth_epoch + 1, updated_at = now()
+    WHERE users.id = $1
+    RETURNING users.auth_epoch
+), revoked AS (
+    UPDATE user_sessions
+    SET revoked_at = now()
+    WHERE user_id = $1
+      AND revoked_at IS NULL
+      AND ($2::uuid IS NULL OR user_sessions.id != $2::uuid)
+)
+SELECT auth_epoch FROM updated
 `
+
+type ClearUserPasswordAndRevokeSessionsParams struct {
+	ID                pgtype.UUID `json:"id"`
+	PreserveSessionID pgtype.UUID `json:"preserve_session_id"`
+}
 
 // Remove the password credential (passkey-only). Guarded by the
 // last-credential check in service/passkeys.
-func (q *Queries) ClearUserPassword(ctx context.Context, id pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, clearUserPassword, id)
-	return err
+func (q *Queries) ClearUserPasswordAndRevokeSessions(ctx context.Context, arg ClearUserPasswordAndRevokeSessionsParams) (int64, error) {
+	row := q.db.QueryRow(ctx, clearUserPasswordAndRevokeSessions, arg.ID, arg.PreserveSessionID)
+	var auth_epoch int64
+	err := row.Scan(&auth_epoch)
+	return auth_epoch, err
+}
+
+const countTenantAdmins = `-- name: CountTenantAdmins :one
+SELECT count(*) FROM users WHERE tenant_role = 'admin'
+`
+
+func (q *Queries) CountTenantAdmins(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, countTenantAdmins)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
 }
 
 const createUser = `-- name: CreateUser :one
 WITH p AS (
     INSERT INTO principals (kind) VALUES ('user') RETURNING id
 )
-INSERT INTO users (id, email, display_name, password_hash, tenant_role, oidc_sub, must_change_password)
-SELECT p.id, $1, $2, $3, $4, $5, $6 FROM p
-RETURNING id, email, display_name, tenant_role, password_hash, oidc_sub, must_change_password, created_at, updated_at
+INSERT INTO users (id, email, display_name, password_hash, tenant_role, oidc_sub, must_change_password, auth_epoch)
+SELECT p.id, $1, $2, $3, $4, $5, $6, 0 FROM p
+RETURNING id, email, display_name, tenant_role, password_hash, oidc_sub, must_change_password, created_at, updated_at, auth_epoch
 `
 
 type CreateUserParams struct {
@@ -74,12 +132,23 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 		&i.MustChangePassword,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.AuthEpoch,
 	)
 	return i, err
 }
 
 const deleteUser = `-- name: DeleteUser :exec
-DELETE FROM principals WHERE id = $1
+WITH updated AS (
+    UPDATE users
+    SET auth_epoch = auth_epoch + 1, updated_at = now()
+    WHERE users.id = $1
+    RETURNING users.id
+), revoked AS (
+    UPDATE user_sessions
+    SET revoked_at = now()
+    WHERE user_id = (SELECT id FROM updated) AND revoked_at IS NULL
+)
+DELETE FROM principals WHERE id = (SELECT id FROM updated)
 `
 
 // Delete through the principal: ON DELETE CASCADE removes the users row plus
@@ -90,7 +159,7 @@ func (q *Queries) DeleteUser(ctx context.Context, id pgtype.UUID) error {
 }
 
 const getUserByEmail = `-- name: GetUserByEmail :one
-SELECT id, email, display_name, tenant_role, password_hash, oidc_sub, must_change_password, created_at, updated_at FROM users WHERE email = $1
+SELECT id, email, display_name, tenant_role, password_hash, oidc_sub, must_change_password, created_at, updated_at, auth_epoch FROM users WHERE email = $1
 `
 
 func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error) {
@@ -106,12 +175,13 @@ func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error
 		&i.MustChangePassword,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.AuthEpoch,
 	)
 	return i, err
 }
 
 const getUserByID = `-- name: GetUserByID :one
-SELECT id, email, display_name, tenant_role, password_hash, oidc_sub, must_change_password, created_at, updated_at FROM users WHERE id = $1
+SELECT id, email, display_name, tenant_role, password_hash, oidc_sub, must_change_password, created_at, updated_at, auth_epoch FROM users WHERE id = $1
 `
 
 func (q *Queries) GetUserByID(ctx context.Context, id pgtype.UUID) (User, error) {
@@ -127,12 +197,35 @@ func (q *Queries) GetUserByID(ctx context.Context, id pgtype.UUID) (User, error)
 		&i.MustChangePassword,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.AuthEpoch,
+	)
+	return i, err
+}
+
+const getUserByIDForUpdate = `-- name: GetUserByIDForUpdate :one
+SELECT id, email, display_name, tenant_role, password_hash, oidc_sub, must_change_password, created_at, updated_at, auth_epoch FROM users WHERE id = $1 FOR UPDATE
+`
+
+func (q *Queries) GetUserByIDForUpdate(ctx context.Context, id pgtype.UUID) (User, error) {
+	row := q.db.QueryRow(ctx, getUserByIDForUpdate, id)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.Email,
+		&i.DisplayName,
+		&i.TenantRole,
+		&i.PasswordHash,
+		&i.OidcSub,
+		&i.MustChangePassword,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.AuthEpoch,
 	)
 	return i, err
 }
 
 const getUserByOIDCSub = `-- name: GetUserByOIDCSub :one
-SELECT id, email, display_name, tenant_role, password_hash, oidc_sub, must_change_password, created_at, updated_at FROM users WHERE oidc_sub = $1 AND oidc_sub != ''
+SELECT id, email, display_name, tenant_role, password_hash, oidc_sub, must_change_password, created_at, updated_at, auth_epoch FROM users WHERE oidc_sub = $1 AND oidc_sub != ''
 `
 
 func (q *Queries) GetUserByOIDCSub(ctx context.Context, oidcSub string) (User, error) {
@@ -148,12 +241,13 @@ func (q *Queries) GetUserByOIDCSub(ctx context.Context, oidcSub string) (User, e
 		&i.MustChangePassword,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.AuthEpoch,
 	)
 	return i, err
 }
 
 const listUsers = `-- name: ListUsers :many
-SELECT id, email, display_name, tenant_role, password_hash, oidc_sub, must_change_password, created_at, updated_at FROM users ORDER BY created_at
+SELECT id, email, display_name, tenant_role, password_hash, oidc_sub, must_change_password, created_at, updated_at, auth_epoch FROM users ORDER BY created_at
 `
 
 func (q *Queries) ListUsers(ctx context.Context) ([]User, error) {
@@ -175,6 +269,7 @@ func (q *Queries) ListUsers(ctx context.Context) ([]User, error) {
 			&i.MustChangePassword,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.AuthEpoch,
 		); err != nil {
 			return nil, err
 		}
@@ -186,8 +281,28 @@ func (q *Queries) ListUsers(ctx context.Context) ([]User, error) {
 	return items, nil
 }
 
+const lockUsersForAdminMutation = `-- name: LockUsersForAdminMutation :exec
+LOCK TABLE users IN EXCLUSIVE MODE
+`
+
+func (q *Queries) LockUsersForAdminMutation(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, lockUsersForAdminMutation)
+	return err
+}
+
 const setTempPassword = `-- name: SetTempPassword :exec
-UPDATE users SET password_hash = $1, must_change_password = true, updated_at = now() WHERE id = $2
+WITH updated AS (
+    UPDATE users
+    SET password_hash = $1,
+        must_change_password = true,
+        auth_epoch = auth_epoch + 1,
+        updated_at = now()
+    WHERE users.id = $2
+    RETURNING users.id
+)
+UPDATE user_sessions
+SET revoked_at = now()
+WHERE user_id = (SELECT id FROM updated) AND revoked_at IS NULL
 `
 
 type SetTempPasswordParams struct {
@@ -217,30 +332,56 @@ func (q *Queries) UpdateUserNameEmail(ctx context.Context, arg UpdateUserNameEma
 	return err
 }
 
-const updateUserPassword = `-- name: UpdateUserPassword :exec
-UPDATE users SET password_hash = $1, must_change_password = false, updated_at = now() WHERE id = $2
+const updateUserPasswordAndRevokeSessions = `-- name: UpdateUserPasswordAndRevokeSessions :one
+WITH updated AS (
+    UPDATE users
+    SET password_hash = $1,
+        must_change_password = false,
+        auth_epoch = auth_epoch + 1,
+        updated_at = now()
+    WHERE users.id = $2
+    RETURNING users.auth_epoch
+), revoked AS (
+    UPDATE user_sessions
+    SET revoked_at = now()
+    WHERE user_id = $2
+      AND revoked_at IS NULL
+      AND ($3::uuid IS NULL OR user_sessions.id != $3::uuid)
+)
+SELECT auth_epoch FROM updated
 `
 
-type UpdateUserPasswordParams struct {
-	PasswordHash pgtype.Text `json:"password_hash"`
-	ID           pgtype.UUID `json:"id"`
+type UpdateUserPasswordAndRevokeSessionsParams struct {
+	PasswordHash      pgtype.Text `json:"password_hash"`
+	ID                pgtype.UUID `json:"id"`
+	PreserveSessionID pgtype.UUID `json:"preserve_session_id"`
 }
 
-func (q *Queries) UpdateUserPassword(ctx context.Context, arg UpdateUserPasswordParams) error {
-	_, err := q.db.Exec(ctx, updateUserPassword, arg.PasswordHash, arg.ID)
-	return err
+func (q *Queries) UpdateUserPasswordAndRevokeSessions(ctx context.Context, arg UpdateUserPasswordAndRevokeSessionsParams) (int64, error) {
+	row := q.db.QueryRow(ctx, updateUserPasswordAndRevokeSessions, arg.PasswordHash, arg.ID, arg.PreserveSessionID)
+	var auth_epoch int64
+	err := row.Scan(&auth_epoch)
+	return auth_epoch, err
 }
 
 const updateUserRole = `-- name: UpdateUserRole :exec
-UPDATE users SET tenant_role = $2, updated_at = now() WHERE id = $1
+WITH updated AS (
+    UPDATE users
+    SET tenant_role = $1, auth_epoch = auth_epoch + 1, updated_at = now()
+    WHERE users.id = $2
+    RETURNING users.id
+)
+UPDATE user_sessions
+SET revoked_at = now()
+WHERE user_id = (SELECT id FROM updated) AND revoked_at IS NULL
 `
 
 type UpdateUserRoleParams struct {
-	ID         pgtype.UUID `json:"id"`
 	TenantRole string      `json:"tenant_role"`
+	ID         pgtype.UUID `json:"id"`
 }
 
 func (q *Queries) UpdateUserRole(ctx context.Context, arg UpdateUserRoleParams) error {
-	_, err := q.db.Exec(ctx, updateUserRole, arg.ID, arg.TenantRole)
+	_, err := q.db.Exec(ctx, updateUserRole, arg.TenantRole, arg.ID)
 	return err
 }

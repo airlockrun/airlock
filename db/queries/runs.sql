@@ -46,7 +46,7 @@ UPDATE runs SET
     duration_ms = EXTRACT(EPOCH FROM (now() - started_at))::integer * 1000
 WHERE id = @id;
 
--- name: UpsertRunComplete :exec
+-- name: UpsertRunComplete :execrows
 -- Recovery path: row may not exist if CreateRun never landed. All
 -- "starts empty" fields (llm counters, compacted) passed explicitly.
 -- trigger_type/trigger_ref/source_ref placeholders apply only when the
@@ -74,10 +74,42 @@ ON CONFLICT (id) DO UPDATE SET
     stdout_log = EXCLUDED.stdout_log,
     panic_trace = EXCLUDED.panic_trace,
     finished_at = now(),
-    duration_ms = EXTRACT(EPOCH FROM (now() - runs.started_at))::integer * 1000;
+    duration_ms = EXTRACT(EPOCH FROM (now() - runs.started_at))::integer * 1000
+WHERE runs.agent_id = EXCLUDED.agent_id;
 
 -- name: GetRunByID :one
 SELECT * FROM runs WHERE id = $1;
+
+-- name: GetRunByIDAndAgent :one
+SELECT * FROM runs WHERE id = @id AND agent_id = @agent_id;
+
+-- name: ClaimMCPTaskResume :execrows
+-- A suspended MCP task is single-use. The conversation reference is part of
+-- the CAS so a stale or inconsistent context/task pair cannot consume it.
+UPDATE runs SET status = 'success'
+WHERE id = @id
+  AND agent_id = @agent_id
+  AND status = 'suspended'
+  AND trigger_type = 'a2a'
+  AND trigger_ref = @trigger_ref;
+
+-- name: RollbackMCPTaskResume :execrows
+-- Restore a claimed task only when dispatch did not create a successor. Once a
+-- successor row exists, that run owns the resume attempt even if forwarding it
+-- to the agent later fails.
+UPDATE runs AS resumed SET status = 'suspended'
+WHERE resumed.id = @id
+  AND resumed.agent_id = @agent_id
+  AND resumed.status = 'success'
+  AND resumed.trigger_type = 'a2a'
+  AND resumed.trigger_ref = @trigger_ref
+  AND NOT EXISTS (
+      SELECT 1 FROM runs AS successor
+      WHERE successor.agent_id = resumed.agent_id
+        AND successor.trigger_type = 'a2a'
+        AND successor.trigger_ref = resumed.trigger_ref
+        AND successor.input_payload->>'resumeRunId' = resumed.id::text
+  );
 
 -- name: ListRunsByAgent :many
 SELECT * FROM runs
@@ -124,7 +156,7 @@ LIMIT 1;
 SELECT * FROM runs WHERE id = @id AND status = 'suspended';
 
 -- name: GetRunCheckpoint :one
-SELECT checkpoint FROM runs WHERE id = @id;
+SELECT checkpoint FROM runs WHERE id = @id AND agent_id = @agent_id;
 
 -- name: UpdateRunCheckpoint :exec
 UPDATE runs SET checkpoint = @checkpoint WHERE id = @id;
@@ -161,7 +193,7 @@ UPDATE runs SET
     duration_ms = COALESCE(NULLIF(duration_ms, 0), EXTRACT(EPOCH FROM (now() - started_at))::integer * 1000)
 WHERE id = @id AND status = 'running';
 
--- name: ResolveSuspendedRun :exec
+-- name: ResolveSuspendedRun :execrows
 UPDATE runs SET status = 'success', finished_at = now()
 WHERE id = @id AND status = 'suspended';
 
@@ -194,4 +226,3 @@ UPDATE runs SET
 WHERE finished_at IS NOT NULL
     AND finished_at < @cutoff
     AND compacted = false;
-

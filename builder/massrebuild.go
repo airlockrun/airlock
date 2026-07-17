@@ -130,9 +130,8 @@ func (b *BuildService) rebuildOneAgent(agent dbq.Agent, instruction string) {
 		// we want the operator's attention, so the agent goes offline
 		// until they explicitly act.
 		_ = b.containers.StopAgent(dbCtx, agentUUID)
-		_ = q.UpdateAgentStatus(dbCtx, dbq.UpdateAgentStatusParams{
+		_, _ = q.StopAgentAndRotateToken(dbCtx, dbq.StopAgentAndRotateTokenParams{
 			ID:           agent.ID,
-			Status:       "stopped",
 			ErrorMessage: "rebuild against airlock " + agentsdk.Version + " failed: " + err.Error(),
 		})
 		_ = q.UpdateAgentUpgradeStatus(dbCtx, dbq.UpdateAgentUpgradeStatusParams{

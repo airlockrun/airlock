@@ -316,11 +316,15 @@ func (b *BuildService) Build(_ context.Context, input BuildInput) error {
 		}
 	}
 
-	if err := q.UpdateAgentStatus(ctx, dbq.UpdateAgentStatusParams{
-		ID:     agent.ID,
-		Status: "building",
-	}); err != nil {
-		return fmt.Errorf("update status to building: %w", err)
+	rows, err := q.StartInitialAgentBuild(ctx, dbq.StartInitialAgentBuildParams{
+		ID:                agent.ID,
+		AgentTokenVersion: agent.AgentTokenVersion,
+	})
+	if err != nil {
+		return fmt.Errorf("start initial build: %w", err)
+	}
+	if rows != 1 {
+		return ErrDeploymentConflict
 	}
 
 	// Attach the optional external git remote BEFORE Execute runs, so
@@ -338,12 +342,16 @@ func (b *BuildService) Build(_ context.Context, input BuildInput) error {
 		if err != nil {
 			return fmt.Errorf("generate webhook secret: %w", err)
 		}
+		storedSecret, err := b.encryptor.Put(ctx, "agent/"+uuid.UUID(agent.ID.Bytes).String()+"/git_webhook_secret", secret)
+		if err != nil {
+			return fmt.Errorf("encrypt webhook secret: %w", err)
+		}
 		if err := q.ConnectAgentGit(ctx, dbq.ConnectAgentGitParams{
 			ID:               agent.ID,
 			GitRemoteUrl:     input.GitRemoteURL,
 			GitCredentialID:  input.GitCredentialID,
 			GitDefaultBranch: branch,
-			GitWebhookSecret: secret,
+			GitWebhookSecret: storedSecret,
 			GitMode:          input.GitMode,
 		}); err != nil {
 			return fmt.Errorf("connect agent git: %w", err)
@@ -372,17 +380,22 @@ func (b *BuildService) Build(_ context.Context, input BuildInput) error {
 	}
 	summary, err := b.Execute(ctx, plan)
 	if err != nil {
-		status, errMsg := "failed", err.Error()
+		errMsg := err.Error()
 		if errors.Is(err, context.Canceled) {
 			errMsg = "cancelled by user"
 			b.logger.Info("build cancelled", zap.String("agent_id", input.AgentID))
 		} else {
 			b.logger.Error("build failed", zap.String("agent_id", input.AgentID))
 		}
-		_ = q.UpdateAgentStatus(context.Background(), dbq.UpdateAgentStatusParams{
-			ID:           agent.ID,
-			Status:       status,
-			ErrorMessage: errMsg,
+		failureTokenVersion := agent.AgentTokenVersion
+		var attemptErr *deploymentAttemptError
+		if errors.As(err, &attemptErr) {
+			failureTokenVersion = attemptErr.tokenVersion
+		}
+		_, _ = q.FailInitialAgentBuild(context.Background(), dbq.FailInitialAgentBuildParams{
+			ID:                agent.ID,
+			ErrorMessage:      errMsg,
+			AgentTokenVersion: failureTokenVersion,
 		})
 		// Cancellation already surfaced via the build view toast; don't post.
 		if !errors.Is(err, context.Canceled) {
@@ -526,7 +539,7 @@ func (b *BuildService) ensureAgentRole(ctx context.Context, schemaName, password
 func (b *BuildService) roleAuthenticates(ctx context.Context, roleName, password string) bool {
 	cctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	conn, err := pgx.Connect(cctx, b.agentDBURLBase(b.cfg.DBHost, roleName, password))
+	conn, err := pgx.Connect(cctx, b.agentDBURLBase(b.cfg.DBHost, b.cfg.DBPort, roleName, password))
 	if err != nil {
 		return false
 	}
@@ -557,7 +570,7 @@ func newDBPassword() (string, error) {
 // references the `vector` type errors "type vector does not exist".
 func (b *BuildService) agentDBURL(roleName, password, schemaName string) string {
 	return fmt.Sprintf("postgres://%s:%s@%s:%s/%s?search_path=%s&sslmode=%s",
-		roleName, url.QueryEscape(password), b.cfg.DBHostAgent, b.cfg.DBPort,
+		roleName, url.QueryEscape(password), b.cfg.DBHostAgent, b.cfg.DBPortAgent,
 		b.cfg.DBName, schemaName+",public", b.cfg.DBSSLMode)
 }
 
@@ -571,9 +584,9 @@ func (b *BuildService) agentDBURLLocal(roleName, password, schemaName string) st
 
 // agentDBURLBase builds a Postgres connection URL without search_path.
 // Used for psql which doesn't support search_path as a URI parameter.
-func (b *BuildService) agentDBURLBase(host, roleName, password string) string {
+func (b *BuildService) agentDBURLBase(host, port, roleName, password string) string {
 	return fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=%s",
-		roleName, url.QueryEscape(password), host, b.cfg.DBPort,
+		roleName, url.QueryEscape(password), host, port,
 		b.cfg.DBName, b.cfg.DBSSLMode)
 }
 

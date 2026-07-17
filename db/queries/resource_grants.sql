@@ -30,8 +30,16 @@ ON CONFLICT (git_credential_id, grantee_id) WHERE git_credential_id IS NOT NULL
 DO UPDATE SET capabilities = EXCLUDED.capabilities
 RETURNING *;
 
--- name: RevokeResourceGrant :exec
-DELETE FROM resource_grants WHERE id = @id;
+-- name: RevokeResourceGrant :execrows
+DELETE FROM resource_grants
+WHERE id = @id
+  AND CASE @resource_type::text
+      WHEN 'connection' THEN connection_id = @resource_id
+      WHEN 'mcp_server' THEN mcp_server_id = @resource_id
+      WHEN 'exec_endpoint' THEN exec_endpoint_id = @resource_id
+      WHEN 'git_credential' THEN git_credential_id = @resource_id
+      ELSE false
+  END;
 
 -- Per-resource grant lists, used both to render "who can this resource is
 -- shared with" and to evaluate HasResourceCapability for a caller.

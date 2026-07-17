@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
@@ -29,7 +30,8 @@ type WSClient struct {
 	t      *testing.T
 }
 
-// Connect dials srv.URL/ws?token=<jwt>[&since=<seq>], performs the
+// Connect dials srv.URL/ws[?since=<seq>] with the HttpOnly-cookie equivalent,
+// performs the
 // WebSocket upgrade, and starts a background goroutine that reads
 // envelopes into a buffered channel. The connection closes via
 // t.Cleanup; tests do not call Close directly.
@@ -37,15 +39,19 @@ func Connect(t *testing.T, srv *httptest.Server, jwt string, since uint64) *WSCl
 	t.Helper()
 	wsURL := strings.Replace(srv.URL, "http", "ws", 1) + "/ws"
 	q := url.Values{}
-	q.Set("token", jwt)
 	if since > 0 {
 		q.Set("since", fmt.Sprintf("%d", since))
 	}
-	wsURL += "?" + q.Encode()
+	if len(q) > 0 {
+		wsURL += "?" + q.Encode()
+	}
 
 	dialCtx, dialCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer dialCancel()
-	conn, _, err := websocket.Dial(dialCtx, wsURL, nil)
+	conn, _, err := websocket.Dial(dialCtx, wsURL, &websocket.DialOptions{HTTPHeader: http.Header{
+		"Cookie": {"airlock_session=" + jwt},
+		"Origin": {"http://apitest.local"},
+	}})
 	if err != nil {
 		t.Fatalf("apitest: ws dial: %v", err)
 	}

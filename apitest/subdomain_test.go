@@ -25,8 +25,9 @@ func TestIntegration_Subdomain(t *testing.T) {
 
 	owner := apitest.CreateUser(t, h, "owner", "user")
 	agentID := apitest.CreateAgent(t, h, apitest.AgentOpts{
-		OwnerID: owner,
-		Slug:    "subdom",
+		OwnerID:           owner,
+		Slug:              "subdom",
+		AllowPublicRoutes: true,
 	})
 
 	// Upstream: mirror the request path so we can assert it survived.

@@ -46,6 +46,8 @@ ALLOW_PRERELEASE=0  # --pre-release / AIRLOCK_ALLOW_PRERELEASE: install an rc/al
 INSTANCE_ID="airlock"
 WSL_VERSION=0
 DOCKER_INFO_TIMEOUT=5
+HEALTH_ATTEMPTS="${AIRLOCK_HEALTH_ATTEMPTS:-60}"
+HEALTH_INTERVAL="${AIRLOCK_HEALTH_INTERVAL:-3}"
 
 # ---------- output helpers ----------
 BOLD=$'\033[1m'; RED=$'\033[31m'; GRN=$'\033[32m'; YLW=$'\033[33m'; NC=$'\033[0m'
@@ -92,6 +94,14 @@ gen_secret() { openssl rand -hex 32; }
 validate_instance_id() {
 	[[ "$INSTANCE_ID" =~ ^[a-z0-9][a-z0-9_-]*$ ]] \
 		|| die "invalid --instance-id '$INSTANCE_ID' (use lowercase letters, numbers, underscore, or dash; start with a letter or number)"
+}
+
+validate_proxy_trust() {
+	local value="${1//[[:space:]]/}"
+	[ -n "$value" ] || die "proxy mode requires the exact address or narrow CIDR of your ingress proxy"
+	if [[ ",$value," =~ ,(\*|0\.0\.0\.0/0|::/0), ]]; then
+		die "proxy mode does not allow wildcard proxy trust; enter the exact proxy address or narrow CIDR"
+	fi
 }
 
 parse_tunnel_token() {
@@ -406,9 +416,10 @@ choose_mode() {
 			proxy)
 				TLS_MODE=proxy
 				warn "Your proxy must terminate a *.$DOMAIN wildcard cert and forward $DOMAIN and *.$DOMAIN → caddy's HTTP port (loopback 8080)."
-				local cidr; cidr=$(ask "  Trusted proxy CIDR (e.g. 10.0.0.0/8, or * to trust all)" "*")
+				local cidr; cidr=$(ask "  Exact trusted proxy address or CIDR (e.g. 10.0.0.5/32)" "")
+				validate_proxy_trust "$cidr"
 				ENV_EXTRA+=("HTTP_PORT=127.0.0.1:8080" "HTTPS_PORT=127.0.0.1:8443")
-				ENV_EXTRA+=("REVERSE_PROXY_TRUSTED_PROXIES=$cidr" "PUBLIC_URL=https://$DOMAIN")
+				ENV_EXTRA+=("CADDY_TRUSTED_PROXIES=$cidr" "REVERSE_PROXY_LIMIT=2" "PUBLIC_URL=https://$DOMAIN")
 				return ;;
 			*)
 				TLS_MODE=manual
@@ -483,12 +494,14 @@ choose_infra() {
 	else
 		INFRA_DB=external
 		warn "External Postgres: run db/init/*.sql on it once (create_agent_role() helper + the vector extension)."
-		local db dbhost
+		local db dbhost dbport
 		db=$(ask "DATABASE_URL (postgres://user:pass@host:5432/airlock?sslmode=require)" "")
 		[ -n "$db" ] || die "DATABASE_URL required for external Postgres"
 		ENV_EXTRA+=("DATABASE_URL=$db")
 		dbhost=$(printf '%s' "$db" | sed -E 's#^[^@]*@([^:/]+).*#\1#')
-		[ -n "$dbhost" ] && ENV_EXTRA+=("DB_HOST=$dbhost" "DB_HOST_AGENT=$dbhost")
+		dbport=$(printf '%s' "$db" | sed -nE 's#^[^@]*@[^:/]+:([0-9]+)/.*#\1#p')
+		dbport="${dbport:-5432}"
+		[ -n "$dbhost" ] && ENV_EXTRA+=("DB_HOST=$dbhost" "DB_PORT=$dbport" "DB_HOST_AGENT=postgres-agent-relay" "DB_PORT_AGENT=5432")
 		printf '%s' "$db" | grep -q 'sslmode=require' && ENV_EXTRA+=("DB_SSL_MODE=require")
 	fi
 
@@ -514,6 +527,7 @@ choose_infra() {
 assemble_profiles() {
 	PROFILES=()
 	[ "$INFRA_DB" = bundled ] && PROFILES+=("bundled-db")
+	[ "$INFRA_DB" = external ] && PROFILES+=("external-db")
 	[ "$INFRA_S3" = bundled ] && PROFILES+=("bundled-s3")
 	if [ "$TLS_MODE" = tunnel ]; then
 		PROFILES+=("caddy-private" "cloudflared")
@@ -541,14 +555,21 @@ render_env() {
 		echo "AIRLOCK_INSTANCE_ID=$INSTANCE_ID"
 		echo "DOCKER_NETWORK=$INSTANCE_ID"
 		echo "AGENT_NETWORK=$INSTANCE_ID-agents"
-		echo "AGENT_HTTP_PRIVATE_CIDRS=0.0.0.0/0,::/0"
+		echo "AGENT_NETWORK_PER_AGENT=true"
+		echo "AGENT_HTTP_PRIVATE_CIDRS="
 		echo "AGENT_CODEGEN_VOLUME=$INSTANCE_ID-data"
 		echo "DOCKER_SOCKET_PATH=${DOCKER_SOCKET_PATH:-/var/run/docker.sock}"
 		echo "ENCRYPTION_KEY=$(gen_secret)"
+		echo "ENCRYPTION_KEY_REWRAP=false"
+		echo "AIRLOCK_SECRET_ENVELOPE_V1_MIGRATED=true"
 		echo "JWT_SECRET=$(gen_secret)"
+		echo "REVERSE_PROXY_AUTH_SECRET=$(gen_secret)"
 		# Bundled infra needs generated creds; external supplies its own via
 		# ENV_EXTRA (DATABASE_URL carries Postgres creds; S3_* the object store).
-		[ "$INFRA_DB" = bundled ] && echo "POSTGRES_PASSWORD=$(gen_secret)"
+		if [ "$INFRA_DB" = bundled ]; then
+			echo "POSTGRES_PASSWORD=$(gen_secret)"
+			echo "AIRLOCK_DB_PASSWORD=$(gen_secret)"
+		fi
 		if [ "$INFRA_S3" = bundled ]; then
 			echo "S3_ACCESS_KEY=airlock"
 			echo "S3_SECRET_KEY=$(gen_secret)"
@@ -561,6 +582,12 @@ render_env() {
 			echo "FORCE_INLINE_ATTACHMENTS=true"
 		else
 			echo "DOMAIN=$DOMAIN"
+		fi
+		if [ "$TLS_MODE" = tunnel ]; then
+			echo "TUNNEL_INGRESS_NETWORK=${TUNNEL_INGRESS_NETWORK:-$INSTANCE_ID-tunnel-ingress}"
+			echo "TUNNEL_INGRESS_SUBNET=${TUNNEL_INGRESS_SUBNET:-172.31.255.0/29}"
+			echo "TUNNEL_CLOUDFLARED_IP=${TUNNEL_CLOUDFLARED_IP:-172.31.255.2}"
+			echo "TUNNEL_CADDY_IP=${TUNNEL_CADDY_IP:-172.31.255.3}"
 		fi
 		[ "$BUILD_CADDY" = 1 ] && echo "CADDY_IMAGE=airlock-caddy-local"
 		[ -n "$BUILDKIT_HOST_VAL" ] && echo "BUILDKIT_HOST=$BUILDKIT_HOST_VAL"
@@ -602,13 +629,19 @@ bring_up() {
 	fi
 }
 
+wait_for_airlock() {
+	local i
+	for ((i = 1; i <= HEALTH_ATTEMPTS; i++)); do
+		docker compose exec -T airlock wget -qO- http://localhost:8080/health >/dev/null 2>&1 && return 0
+		[ "$i" -lt "$HEALTH_ATTEMPTS" ] && sleep "$HEALTH_INTERVAL"
+	done
+	return 1
+}
+
 finish() {
 	[ "$DRY_RUN" = 1 ] && return
 	log "waiting for airlock to become healthy..."
-	local i; for i in $(seq 1 60); do
-		docker compose exec -T airlock wget -qO- http://localhost:8080/health >/dev/null 2>&1 && break
-		sleep 3
-	done
+	wait_for_airlock || die "airlock did not become healthy; inspect 'docker compose ps' and 'docker compose logs airlock'"
 	hr
 	log "airlock is up."
 	local url; case "$TLS_MODE" in

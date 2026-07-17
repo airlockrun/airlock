@@ -157,7 +157,18 @@ func (s *Service) RevokeResourceGrant(ctx context.Context, p authz.Principal, re
 	if !p.HasResourceCapability(owner, grants, authz.CapManage) {
 		return service.Detail(service.ErrForbidden, "you do not have manage access to this resource")
 	}
-	return q.RevokeResourceGrant(ctx, pg(grantID))
+	deleted, err := q.RevokeResourceGrant(ctx, dbq.RevokeResourceGrantParams{
+		ID:           pg(grantID),
+		ResourceType: resourceType,
+		ResourceID:   pg(resourceID),
+	})
+	if err != nil {
+		return err
+	}
+	if deleted == 0 {
+		return service.ErrNotFound
+	}
+	return nil
 }
 
 // ListResourceGrants returns a resource's grants. The caller must hold view on

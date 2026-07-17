@@ -10,6 +10,11 @@ RETURNING *;
 -- name: GetSystemConversationByID :one
 SELECT * FROM system_conversations WHERE id = @id;
 
+-- name: GetSystemConversationByIDForUpdate :one
+-- Serializes checkpoint claims across replicas. The caller keeps the lock
+-- through the exact suspended-run CAS and successor insert.
+SELECT * FROM system_conversations WHERE id = @id FOR UPDATE;
+
 -- name: ListSystemConversationsByUser :many
 -- Web-UI sidebar. Bridge-routed threads (source='bridge') are
 -- intentionally hidden — they live on Telegram, the operator can't
@@ -32,23 +37,37 @@ WHERE id = @id AND user_id = @user_id;
 -- rewrite the title.
 UPDATE system_conversations SET updated_at = now() WHERE id = @id;
 
--- name: SetSystemConversationCheckpoint :exec
+-- name: SetSystemConversationCheckpoint :execrows
 -- Stash the sol SuspensionContext (pending tool calls + completed
--- results) and flip the conversation to 'awaiting_confirmation'. The
--- resume path reads checkpoint back, executes the gated tools per the
--- approve/deny flag, and calls ClearSystemConversationCheckpoint.
+-- results), bind it to the run that produced it, and flip the conversation
+-- to 'awaiting_confirmation'. The caller holds the conversation row lock and
+-- commits this alongside SuspendSystemRun.
 UPDATE system_conversations
 SET status = 'awaiting_confirmation',
     checkpoint = @checkpoint,
+    suspended_run_id = @suspended_run_id,
     updated_at = now()
-WHERE id = @id;
+WHERE id = @id AND status = 'active';
 
 -- name: ClearSystemConversationCheckpoint :exec
 UPDATE system_conversations
 SET status = 'active',
     checkpoint = NULL,
+    suspended_run_id = NULL,
     updated_at = now()
 WHERE id = @id;
+
+-- name: ClaimSystemConversationCheckpoint :execrows
+-- Clears only the checkpoint bound to the run the caller has already CASed.
+-- A replay or a reply to an older checkpoint affects no rows.
+UPDATE system_conversations
+SET status = 'active',
+    checkpoint = NULL,
+    suspended_run_id = NULL,
+    updated_at = now()
+WHERE id = @id
+  AND status = 'awaiting_confirmation'
+  AND suspended_run_id = @suspended_run_id;
 
 -- name: SetSystemConversationContextCheckpoint :exec
 -- Compaction pointer: advances the context window so subsequent
@@ -167,6 +186,22 @@ RETURNING *;
 
 -- name: GetSystemRunByID :one
 SELECT * FROM system_runs WHERE id = @id;
+
+-- name: SuspendSystemRun :execrows
+UPDATE system_runs
+SET status = 'suspended'
+WHERE id = @id
+  AND conversation_id = @conversation_id
+  AND status = 'running';
+
+-- name: ResolveSuspendedSystemRun :execrows
+-- Confirmation checkpoints are single-use. The conversation id participates
+-- in the CAS so a run from another conversation cannot be consumed.
+UPDATE system_runs
+SET status = 'complete', finished_at = now()
+WHERE id = @id
+  AND conversation_id = @conversation_id
+  AND status = 'suspended';
 
 -- name: ListSystemRunsByUser :many
 -- Caller's runs across all their conversations, paginated by started_at.

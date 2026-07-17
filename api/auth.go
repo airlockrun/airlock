@@ -1,10 +1,10 @@
 package api
 
 import (
+	"crypto/subtle"
 	"net/http"
 	"os"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/airlockrun/airlock/auth"
@@ -22,15 +22,17 @@ type AuthHandler struct {
 	db                 *db.DB
 	jwtSecret          string
 	activationCodeFile string // set to remove the on-disk activation code after successful activation
+	publicURL          string
 	logger             *zap.Logger
 	lockoutPolicy      lockout.Policy
 }
 
-func NewAuthHandler(database *db.DB, jwtSecret, activationCodeFile string, logger *zap.Logger) *AuthHandler {
+func NewAuthHandler(database *db.DB, jwtSecret, activationCodeFile, publicURL string, logger *zap.Logger) *AuthHandler {
 	return &AuthHandler{
 		db:                 database,
 		jwtSecret:          jwtSecret,
 		activationCodeFile: activationCodeFile,
+		publicURL:          publicURL,
 		logger:             logger,
 		lockoutPolicy:      lockout.Default,
 	}
@@ -50,43 +52,6 @@ func (h *AuthHandler) Activate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	q := dbq.New(h.db.Pool())
-
-	// airlockvet:allow-dbq reason: pre-Principal bootstrap (activate/login/refresh) — runs before authz can apply, gated by HMAC / activation token / password
-	exists, err := q.TenantExists(ctx)
-	if err != nil {
-		logFor(r).Error("check tenant exists failed", zap.Error(err))
-		writeError(w, http.StatusInternalServerError, "internal error")
-		return
-	}
-	if exists {
-		writeError(w, http.StatusConflict, "already activated")
-		return
-	}
-
-	// Validate activation code if one has been generated.
-	// airlockvet:allow-dbq reason: pre-Principal bootstrap (activate/login/refresh) — runs before authz can apply, gated by HMAC / activation token / password
-	settings, err := q.GetSystemSettings(ctx)
-	if err != nil {
-		logFor(r).Error("get system settings failed", zap.Error(err))
-		writeError(w, http.StatusInternalServerError, "internal error")
-		return
-	}
-	if settings.ActivationCode.Valid && req.ActivationCode != settings.ActivationCode.String {
-		writeError(w, http.StatusForbidden, "invalid activation code")
-		return
-	}
-
-	// airlockvet:allow-dbq reason: pre-Principal bootstrap (activate/login/refresh) — runs before authz can apply, gated by HMAC / activation token / password
-	tenant, err := q.CreateTenant(ctx, dbq.CreateTenantParams{
-		Name:     "Airlock",
-		Slug:     "default",
-		Settings: []byte("{}"),
-	})
-	if err != nil {
-		writeError(w, http.StatusConflict, "tenant already exists")
-		return
-	}
 
 	// Password is optional: the first admin may activate passkey-only and
 	// enroll a passkey immediately after (the SPA drives that with the token
@@ -106,6 +71,49 @@ func (h *AuthHandler) Activate(w http.ResponseWriter, r *http.Request) {
 		passwordHash = pgtype.Text{String: hash, Valid: true}
 	}
 
+	tx, err := h.db.Pool().Begin(ctx)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	defer tx.Rollback(ctx)
+	q := dbq.New(tx)
+
+	// airlockvet:allow-dbq reason: pre-Principal bootstrap is serialized by the system-settings row and gated by the activation code
+	settings, err := q.GetSystemSettingsForActivation(ctx)
+	if err != nil {
+		logFor(r).Error("lock activation settings failed", zap.Error(err))
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	// airlockvet:allow-dbq reason: pre-Principal bootstrap checks whether the singleton tenant has already been created
+	exists, err := q.TenantExists(ctx)
+	if err != nil {
+		logFor(r).Error("check tenant exists failed", zap.Error(err))
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	if exists {
+		writeError(w, http.StatusConflict, "already activated")
+		return
+	}
+	if !settings.ActivationCode.Valid || subtle.ConstantTimeCompare([]byte(req.ActivationCode), []byte(settings.ActivationCode.String)) != 1 {
+		writeError(w, http.StatusForbidden, "invalid activation code")
+		return
+	}
+
+	// airlockvet:allow-dbq reason: pre-Principal bootstrap creates the singleton tenant inside the activation transaction
+	tenant, err := q.CreateTenant(ctx, dbq.CreateTenantParams{
+		Name:     "Airlock",
+		Slug:     "default",
+		Settings: []byte("{}"),
+	})
+	if err != nil {
+		logFor(r).Error("create tenant failed", zap.Error(err))
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+
 	// airlockvet:allow-dbq reason: pre-Principal bootstrap (activate/login/refresh) — runs before authz can apply, gated by HMAC / activation token / password
 	user, err := q.CreateUser(ctx, dbq.CreateUserParams{
 		Email:              req.Email,
@@ -119,16 +127,24 @@ func (h *AuthHandler) Activate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	accessToken, refreshToken, err := issueUserSessionTokens(ctx, h.db, h.jwtSecret, user, userSessionKindWeb, webClientName, sessionDeviceName(r))
+	accessToken, refreshToken, err := issueUserSessionTokensWithQueries(ctx, q, h.jwtSecret, user, userSessionKindWeb, webClientName, sessionDeviceName(r))
 	if err != nil {
 		logFor(r).Error("issue session tokens failed", zap.Error(err))
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-
-	// Consume the activation code now that setup is complete.
-	// airlockvet:allow-dbq reason: pre-Principal bootstrap (activate/login/refresh) — runs before authz can apply, gated by HMAC / activation token / password
-	_ = q.ClearActivationCode(ctx)
+	// airlockvet:allow-dbq reason: activation code consumption commits atomically with tenant, admin, and first session creation
+	if err := q.ClearActivationCode(ctx); err != nil {
+		logFor(r).Error("consume activation code failed", zap.Error(err))
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
+		logFor(r).Error("commit activation failed", zap.Error(err))
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	setWebSessionCookies(w, h.publicURL, accessToken, refreshToken)
 	if h.activationCodeFile != "" {
 		if err := os.Remove(h.activationCodeFile); err != nil && !os.IsNotExist(err) {
 			h.logger.Warn("failed to remove activation code file", zap.String("path", h.activationCodeFile), zap.Error(err))
@@ -137,7 +153,7 @@ func (h *AuthHandler) Activate(w http.ResponseWriter, r *http.Request) {
 
 	writeProto(w, http.StatusCreated, &airlockv1.RegisterResponse{
 		AccessToken:  accessToken,
-		RefreshToken: refreshToken,
+		RefreshToken: "",
 		User:         convert.UserToProto(user),
 		Tenant:       convert.TenantToProto(tenant),
 	})
@@ -245,38 +261,12 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Mirror the access token into an HttpOnly cookie so top-level
-	// browser navigations to /oauth/authorize can authenticate the
-	// user without the SPA having to inject the bearer. The SPA still
-	// reads from localStorage; the cookie is dead weight on its
-	// fetch calls. SameSite=Lax is required so the cross-site redirect
-	// from a Claude Desktop loopback page back to /oauth/authorize
-	// still carries the cookie; Strict would block the flow.
-	setAirlockSessionCookie(w, r, accessToken)
+	setWebSessionCookies(w, h.publicURL, accessToken, refreshToken)
 
 	writeProto(w, http.StatusOK, &airlockv1.LoginResponse{
 		AccessToken:  accessToken,
-		RefreshToken: refreshToken,
+		RefreshToken: "",
 		User:         convert.UserToProto(user),
-	})
-}
-
-// setAirlockSessionCookie writes the airlock_session cookie used by
-// the /oauth/authorize browser flow. Same lifetime as the access
-// token (15min); the cookie expires and the user re-logs in if
-// /authorize is hit after expiry. Distinct from the __air_session
-// cookie in relay.go (agent subdomain proxy).
-func setAirlockSessionCookie(w http.ResponseWriter, r *http.Request, accessToken string) {
-	secure := strings.HasPrefix(r.URL.Scheme, "https") || r.TLS != nil ||
-		r.Header.Get("X-Forwarded-Proto") == "https"
-	http.SetCookie(w, &http.Cookie{
-		Name:     "airlock_session",
-		Value:    accessToken,
-		Path:     "/",
-		MaxAge:   int(auth.AccessTokenDuration.Seconds()),
-		HttpOnly: true,
-		Secure:   secure,
-		SameSite: http.SameSiteLaxMode,
 	})
 }
 
@@ -367,10 +357,11 @@ func (h *AuthHandler) ChangePassword(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// airlockvet:allow-dbq reason: pre-Principal bootstrap (activate/login/refresh) — runs before authz can apply, gated by HMAC / activation token / password
-	if err := q.UpdateUserPassword(ctx, dbq.UpdateUserPasswordParams{
+	authEpoch, err := q.UpdateUserPasswordAndRevokeSessions(ctx, dbq.UpdateUserPasswordAndRevokeSessionsParams{
 		PasswordHash: pgtype.Text{String: newHash, Valid: true},
 		ID:           toPgUUID(userID),
-	}); err != nil {
+	})
+	if err != nil {
 		logFor(r).Error("update password failed", zap.Error(err))
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
@@ -379,15 +370,17 @@ func (h *AuthHandler) ChangePassword(w http.ResponseWriter, r *http.Request) {
 	// Issue new tokens with the forced-change flag cleared — the password was
 	// just rotated, so the account is secured.
 	user.MustChangePassword = false
+	user.AuthEpoch = authEpoch
 	accessToken, refreshToken, err := issueUserSessionTokens(ctx, h.db, h.jwtSecret, user, userSessionKindWeb, webClientName, sessionDeviceName(r))
 	if err != nil {
 		logFor(r).Error("issue session tokens failed", zap.Error(err))
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
+	setWebSessionCookies(w, h.publicURL, accessToken, refreshToken)
 
 	writeProto(w, http.StatusOK, &airlockv1.ChangePasswordResponse{
 		AccessToken:  accessToken,
-		RefreshToken: refreshToken,
+		RefreshToken: "",
 	})
 }

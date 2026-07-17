@@ -96,6 +96,9 @@ func Verify(initData, botToken string, maxAge time.Duration, now time.Time) (Use
 		return User{}, fmt.Errorf("tgwebapp: parse auth_date: %w", err)
 	}
 	authDate := time.Unix(authDateUnix, 0)
+	if authDate.After(now) {
+		return User{}, fmt.Errorf("tgwebapp: auth_date is in the future by %s", authDate.Sub(now))
+	}
 	if now.Sub(authDate) > maxAge {
 		return User{}, fmt.Errorf("tgwebapp: auth_date expired (age %s, max %s)", now.Sub(authDate), maxAge)
 	}

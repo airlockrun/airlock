@@ -67,10 +67,37 @@ func (q *Queries) AppendSystemMessage(ctx context.Context, arg AppendSystemMessa
 	return i, err
 }
 
+const claimSystemConversationCheckpoint = `-- name: ClaimSystemConversationCheckpoint :execrows
+UPDATE system_conversations
+SET status = 'active',
+    checkpoint = NULL,
+    suspended_run_id = NULL,
+    updated_at = now()
+WHERE id = $1
+  AND status = 'awaiting_confirmation'
+  AND suspended_run_id = $2
+`
+
+type ClaimSystemConversationCheckpointParams struct {
+	ID             pgtype.UUID `json:"id"`
+	SuspendedRunID pgtype.UUID `json:"suspended_run_id"`
+}
+
+// Clears only the checkpoint bound to the run the caller has already CASed.
+// A replay or a reply to an older checkpoint affects no rows.
+func (q *Queries) ClaimSystemConversationCheckpoint(ctx context.Context, arg ClaimSystemConversationCheckpointParams) (int64, error) {
+	result, err := q.db.Exec(ctx, claimSystemConversationCheckpoint, arg.ID, arg.SuspendedRunID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const clearSystemConversationCheckpoint = `-- name: ClearSystemConversationCheckpoint :exec
 UPDATE system_conversations
 SET status = 'active',
     checkpoint = NULL,
+    suspended_run_id = NULL,
     updated_at = now()
 WHERE id = $1
 `
@@ -84,7 +111,7 @@ const createSystemConversation = `-- name: CreateSystemConversation :one
 
 INSERT INTO system_conversations (user_id, title)
 VALUES ($1, $2)
-RETURNING id, user_id, title, status, checkpoint, context_checkpoint_message_id, settings, created_at, updated_at, source, bridge_id, external_id
+RETURNING id, user_id, title, status, checkpoint, context_checkpoint_message_id, settings, created_at, updated_at, source, bridge_id, external_id, suspended_run_id
 `
 
 type CreateSystemConversationParams struct {
@@ -111,6 +138,7 @@ func (q *Queries) CreateSystemConversation(ctx context.Context, arg CreateSystem
 		&i.Source,
 		&i.BridgeID,
 		&i.ExternalID,
+		&i.SuspendedRunID,
 	)
 	return i, err
 }
@@ -170,7 +198,7 @@ INSERT INTO system_conversations (user_id, bridge_id, source, title, external_id
 VALUES ($1, $2, 'bridge', $3, $4)
 ON CONFLICT (user_id, bridge_id) WHERE bridge_id IS NOT NULL
 DO UPDATE SET external_id = EXCLUDED.external_id
-RETURNING id, user_id, title, status, checkpoint, context_checkpoint_message_id, settings, created_at, updated_at, source, bridge_id, external_id
+RETURNING id, user_id, title, status, checkpoint, context_checkpoint_message_id, settings, created_at, updated_at, source, bridge_id, external_id, suspended_run_id
 `
 
 type EnsureSystemConversationForBridgeParams struct {
@@ -209,6 +237,7 @@ func (q *Queries) EnsureSystemConversationForBridge(ctx context.Context, arg Ens
 		&i.Source,
 		&i.BridgeID,
 		&i.ExternalID,
+		&i.SuspendedRunID,
 	)
 	return i, err
 }
@@ -251,7 +280,7 @@ func (q *Queries) GetLatestSuspendedSystemRun(ctx context.Context, conversationI
 }
 
 const getSystemConversationByID = `-- name: GetSystemConversationByID :one
-SELECT id, user_id, title, status, checkpoint, context_checkpoint_message_id, settings, created_at, updated_at, source, bridge_id, external_id FROM system_conversations WHERE id = $1
+SELECT id, user_id, title, status, checkpoint, context_checkpoint_message_id, settings, created_at, updated_at, source, bridge_id, external_id, suspended_run_id FROM system_conversations WHERE id = $1
 `
 
 func (q *Queries) GetSystemConversationByID(ctx context.Context, id pgtype.UUID) (SystemConversation, error) {
@@ -270,6 +299,34 @@ func (q *Queries) GetSystemConversationByID(ctx context.Context, id pgtype.UUID)
 		&i.Source,
 		&i.BridgeID,
 		&i.ExternalID,
+		&i.SuspendedRunID,
+	)
+	return i, err
+}
+
+const getSystemConversationByIDForUpdate = `-- name: GetSystemConversationByIDForUpdate :one
+SELECT id, user_id, title, status, checkpoint, context_checkpoint_message_id, settings, created_at, updated_at, source, bridge_id, external_id, suspended_run_id FROM system_conversations WHERE id = $1 FOR UPDATE
+`
+
+// Serializes checkpoint claims across replicas. The caller keeps the lock
+// through the exact suspended-run CAS and successor insert.
+func (q *Queries) GetSystemConversationByIDForUpdate(ctx context.Context, id pgtype.UUID) (SystemConversation, error) {
+	row := q.db.QueryRow(ctx, getSystemConversationByIDForUpdate, id)
+	var i SystemConversation
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.Title,
+		&i.Status,
+		&i.Checkpoint,
+		&i.ContextCheckpointMessageID,
+		&i.Settings,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Source,
+		&i.BridgeID,
+		&i.ExternalID,
+		&i.SuspendedRunID,
 	)
 	return i, err
 }
@@ -331,7 +388,7 @@ func (q *Queries) InsertSystemAuditPending(ctx context.Context, arg InsertSystem
 }
 
 const listSystemConversationsByUser = `-- name: ListSystemConversationsByUser :many
-SELECT id, user_id, title, status, checkpoint, context_checkpoint_message_id, settings, created_at, updated_at, source, bridge_id, external_id FROM system_conversations
+SELECT id, user_id, title, status, checkpoint, context_checkpoint_message_id, settings, created_at, updated_at, source, bridge_id, external_id, suspended_run_id FROM system_conversations
 WHERE user_id = $1 AND source = 'web'
 ORDER BY updated_at DESC
 `
@@ -364,6 +421,7 @@ func (q *Queries) ListSystemConversationsByUser(ctx context.Context, userID pgty
 			&i.Source,
 			&i.BridgeID,
 			&i.ExternalID,
+			&i.SuspendedRunID,
 		); err != nil {
 			return nil, err
 		}
@@ -609,26 +667,54 @@ func (q *Queries) RenameSystemConversation(ctx context.Context, arg RenameSystem
 	return err
 }
 
-const setSystemConversationCheckpoint = `-- name: SetSystemConversationCheckpoint :exec
+const resolveSuspendedSystemRun = `-- name: ResolveSuspendedSystemRun :execrows
+UPDATE system_runs
+SET status = 'complete', finished_at = now()
+WHERE id = $1
+  AND conversation_id = $2
+  AND status = 'suspended'
+`
+
+type ResolveSuspendedSystemRunParams struct {
+	ID             pgtype.UUID `json:"id"`
+	ConversationID pgtype.UUID `json:"conversation_id"`
+}
+
+// Confirmation checkpoints are single-use. The conversation id participates
+// in the CAS so a run from another conversation cannot be consumed.
+func (q *Queries) ResolveSuspendedSystemRun(ctx context.Context, arg ResolveSuspendedSystemRunParams) (int64, error) {
+	result, err := q.db.Exec(ctx, resolveSuspendedSystemRun, arg.ID, arg.ConversationID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const setSystemConversationCheckpoint = `-- name: SetSystemConversationCheckpoint :execrows
 UPDATE system_conversations
 SET status = 'awaiting_confirmation',
     checkpoint = $1,
+    suspended_run_id = $2,
     updated_at = now()
-WHERE id = $2
+WHERE id = $3 AND status = 'active'
 `
 
 type SetSystemConversationCheckpointParams struct {
-	Checkpoint []byte      `json:"checkpoint"`
-	ID         pgtype.UUID `json:"id"`
+	Checkpoint     []byte      `json:"checkpoint"`
+	SuspendedRunID pgtype.UUID `json:"suspended_run_id"`
+	ID             pgtype.UUID `json:"id"`
 }
 
 // Stash the sol SuspensionContext (pending tool calls + completed
-// results) and flip the conversation to 'awaiting_confirmation'. The
-// resume path reads checkpoint back, executes the gated tools per the
-// approve/deny flag, and calls ClearSystemConversationCheckpoint.
-func (q *Queries) SetSystemConversationCheckpoint(ctx context.Context, arg SetSystemConversationCheckpointParams) error {
-	_, err := q.db.Exec(ctx, setSystemConversationCheckpoint, arg.Checkpoint, arg.ID)
-	return err
+// results), bind it to the run that produced it, and flip the conversation
+// to 'awaiting_confirmation'. The caller holds the conversation row lock and
+// commits this alongside SuspendSystemRun.
+func (q *Queries) SetSystemConversationCheckpoint(ctx context.Context, arg SetSystemConversationCheckpointParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setSystemConversationCheckpoint, arg.Checkpoint, arg.SuspendedRunID, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const setSystemConversationContextCheckpoint = `-- name: SetSystemConversationContextCheckpoint :exec
@@ -649,6 +735,27 @@ type SetSystemConversationContextCheckpointParams struct {
 func (q *Queries) SetSystemConversationContextCheckpoint(ctx context.Context, arg SetSystemConversationContextCheckpointParams) error {
 	_, err := q.db.Exec(ctx, setSystemConversationContextCheckpoint, arg.CheckpointMessageID, arg.ID)
 	return err
+}
+
+const suspendSystemRun = `-- name: SuspendSystemRun :execrows
+UPDATE system_runs
+SET status = 'suspended'
+WHERE id = $1
+  AND conversation_id = $2
+  AND status = 'running'
+`
+
+type SuspendSystemRunParams struct {
+	ID             pgtype.UUID `json:"id"`
+	ConversationID pgtype.UUID `json:"conversation_id"`
+}
+
+func (q *Queries) SuspendSystemRun(ctx context.Context, arg SuspendSystemRunParams) (int64, error) {
+	result, err := q.db.Exec(ctx, suspendSystemRun, arg.ID, arg.ConversationID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const touchSystemConversation = `-- name: TouchSystemConversation :exec

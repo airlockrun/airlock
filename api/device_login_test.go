@@ -6,12 +6,15 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/db/dbq"
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 func TestDeviceLoginFlow(t *testing.T) {
@@ -36,6 +39,13 @@ func TestDeviceLoginFlow(t *testing.T) {
 	if approved.Status != "approved" {
 		t.Fatalf("approved status = %q", approved.Status)
 	}
+	approvedRow, err := dbq.New(testDB.Pool()).GetDeviceLoginByUserCodeHash(context.Background(), hashDeviceLoginCode(normalizeUserCode(begin.UserCode)))
+	if err != nil {
+		t.Fatalf("GetDeviceLoginByUserCodeHash: %v", err)
+	}
+	if !approvedRow.ApprovedAuthEpoch.Valid || approvedRow.ApprovedAuthEpoch.Int64 != 0 {
+		t.Fatalf("approved_auth_epoch = %#v, want 0", approvedRow.ApprovedAuthEpoch)
+	}
 
 	poll := deviceLoginPoll(t, h, begin.DeviceCode)
 	if poll.Status != "approved" || poll.AccessToken == "" || poll.RefreshToken == "" || poll.User.GetEmail() == "" {
@@ -52,6 +62,123 @@ func TestDeviceLoginFlow(t *testing.T) {
 	poll = deviceLoginPoll(t, h, begin.DeviceCode)
 	if poll.Status == "approved" {
 		t.Fatalf("device login was consumed more than once: %#v", poll)
+	}
+}
+
+func TestDeviceLoginCredentialRecoveryInvalidatesApproval(t *testing.T) {
+	skipIfNoDB(t)
+	h := newDeviceLoginHandler(testDB, testJWTSecret, "https://airlock.example.com")
+	user := seedDeviceLoginUser(t)
+	begin := deviceLoginBegin(t, h)
+	deviceLoginApprove(t, h, user, begin.UserCode)
+
+	if err := dbq.New(testDB.Pool()).SetTempPassword(context.Background(), dbq.SetTempPasswordParams{
+		PasswordHash: pgtype.Text{String: "recovered", Valid: true},
+		ID:           toPgUUID(user),
+	}); err != nil {
+		t.Fatalf("SetTempPassword: %v", err)
+	}
+	poll := deviceLoginPoll(t, h, begin.DeviceCode)
+	if poll.Status != "expired" || poll.AccessToken != "" || poll.RefreshToken != "" {
+		t.Fatalf("poll after credential recovery = %#v", poll)
+	}
+	sessions, err := dbq.New(testDB.Pool()).ListUserSessionsByUser(context.Background(), toPgUUID(user))
+	if err != nil {
+		t.Fatalf("ListUserSessionsByUser: %v", err)
+	}
+	if len(sessions) != 0 {
+		t.Fatalf("credential recovery handoff created sessions: %#v", sessions)
+	}
+}
+
+func TestDeviceLoginRecoveryWinsBlockedPollRace(t *testing.T) {
+	skipIfNoDB(t)
+	h := newDeviceLoginHandler(testDB, testJWTSecret, "https://airlock.example.com")
+	user := seedDeviceLoginUser(t)
+	begin := deviceLoginBegin(t, h)
+	deviceLoginApprove(t, h, user, begin.UserCode)
+
+	tx, err := testDB.Pool().Begin(context.Background())
+	if err != nil {
+		t.Fatalf("begin recovery: %v", err)
+	}
+	defer tx.Rollback(context.Background())
+	if err := dbq.New(tx).SetTempPassword(context.Background(), dbq.SetTempPasswordParams{
+		PasswordHash: pgtype.Text{String: "recovered", Valid: true},
+		ID:           toPgUUID(user),
+	}); err != nil {
+		t.Fatalf("SetTempPassword: %v", err)
+	}
+
+	body, err := protoMarshal.Marshal(&airlockv1.DeviceLoginPollRequest{DeviceCode: begin.DeviceCode})
+	if err != nil {
+		t.Fatalf("marshal poll: %v", err)
+	}
+	result := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		rec := httptest.NewRecorder()
+		h.Poll(rec, httptest.NewRequest(http.MethodPost, "/auth/device/poll", bytes.NewReader(body)))
+		result <- rec
+	}()
+	// The poll claims the device row, then blocks acquiring the user row held
+	// by credential recovery. Committing makes the advanced epoch visible to
+	// the consume query's locked recheck.
+	time.Sleep(100 * time.Millisecond)
+	if err := tx.Commit(context.Background()); err != nil {
+		t.Fatalf("commit recovery: %v", err)
+	}
+	rec := <-result
+	if rec.Code != http.StatusOK {
+		t.Fatalf("racing poll status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var poll airlockv1.DeviceLoginPollResponse
+	decodeProtoResp(t, rec, &poll)
+	if poll.Status != "expired" || poll.AccessToken != "" || poll.RefreshToken != "" {
+		t.Fatalf("racing poll after recovery = %#v", &poll)
+	}
+}
+
+func TestDeviceLoginConcurrentPollSingleWinner(t *testing.T) {
+	skipIfNoDB(t)
+	h := newDeviceLoginHandler(testDB, testJWTSecret, "https://airlock.example.com")
+	user := seedDeviceLoginUser(t)
+	begin := deviceLoginBegin(t, h)
+	deviceLoginApprove(t, h, user, begin.UserCode)
+	body, err := protoMarshal.Marshal(&airlockv1.DeviceLoginPollRequest{DeviceCode: begin.DeviceCode})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	start := make(chan struct{})
+	recorders := make([]*httptest.ResponseRecorder, 2)
+	var wg sync.WaitGroup
+	for i := range recorders {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			recorders[i] = httptest.NewRecorder()
+			h.Poll(recorders[i], httptest.NewRequest(http.MethodPost, "/auth/device/poll", bytes.NewReader(body)))
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	statuses := map[string]int{}
+	for _, rec := range recorders {
+		if rec.Code != http.StatusOK {
+			t.Fatalf("poll status=%d body=%s", rec.Code, rec.Body.String())
+		}
+		var response airlockv1.DeviceLoginPollResponse
+		decodeProtoResp(t, rec, &response)
+		statuses[response.Status]++
+	}
+	if statuses["approved"] != 1 || statuses["slow_down"] != 1 {
+		t.Fatalf("poll statuses = %v", statuses)
+	}
+	sessions, err := dbq.New(testDB.Pool()).ListUserSessionsByUser(context.Background(), toPgUUID(user))
+	if err != nil || len(sessions) != 1 {
+		t.Fatalf("sessions=%#v err=%v", sessions, err)
 	}
 }
 

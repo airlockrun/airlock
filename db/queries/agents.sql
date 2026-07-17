@@ -19,18 +19,18 @@ INSERT INTO agents (
     source_ref, image_ref, db_schema, db_password, sdk_version,
     instructions, error_message, emoji,
     git_remote_url, git_default_branch, git_webhook_secret, git_last_synced_ref,
-    git_mode
+    git_mode, agent_token_version
 )
 SELECT
     p.id, @name, @slug, @owner_principal_id, @description, @config, 'draft',
     'idle', true,
-    true, false, true,
+    true, false, false,
     false, false,
     '', '', '', '',
     '', '', '', '',
     '', '', '', '', '',
     '[]'::jsonb, '', '',
-    '', '', '', '', ''
+    '', '', '', '', '', 1
 FROM p
 RETURNING *;
 
@@ -39,6 +39,54 @@ SELECT * FROM agents WHERE id = $1;
 
 -- name: GetAgentBySlug :one
 SELECT * FROM agents WHERE slug = $1;
+
+-- name: GetAgentTokenAuth :one
+SELECT status, agent_token_version FROM agents WHERE id = $1;
+
+-- name: IncrementAgentTokenVersion :one
+UPDATE agents
+SET agent_token_version = agent_token_version + 1,
+    updated_at = now()
+WHERE id = $1
+RETURNING agent_token_version;
+
+-- name: StopAgentAndRotateToken :one
+UPDATE agents
+SET status = 'stopped',
+    error_message = @error_message,
+    agent_token_version = agent_token_version + 1,
+    updated_at = now()
+WHERE id = $1
+RETURNING agent_token_version;
+
+-- name: StartInitialAgentBuild :execrows
+UPDATE agents
+SET status = 'building',
+    error_message = '',
+    updated_at = now()
+WHERE id = @id
+  AND agent_token_version = @agent_token_version
+  AND status IN ('draft', 'failed');
+
+-- name: FailInitialAgentBuild :execrows
+UPDATE agents
+SET status = 'failed',
+    error_message = @error_message,
+    updated_at = now()
+WHERE id = @id
+  AND agent_token_version = @agent_token_version
+  AND status = 'building';
+
+-- name: FinalizeAgentDeployment :execrows
+UPDATE agents
+SET source_ref = @source_ref,
+    image_ref = @image_ref,
+    status = @next_status,
+    error_message = '',
+    updated_at = now()
+WHERE id = @id
+  AND agent_token_version = @agent_token_version
+  AND status = @expected_status;
 
 -- name: UpdateAgentStatus :exec
 UPDATE agents SET status = @status, error_message = @error_message, updated_at = now() WHERE id = @id;

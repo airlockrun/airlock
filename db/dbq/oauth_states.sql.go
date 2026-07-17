@@ -20,14 +20,40 @@ func (q *Queries) CleanupExpiredOAuthStates(ctx context.Context) error {
 	return err
 }
 
+const consumeOAuthState = `-- name: ConsumeOAuthState :one
+DELETE FROM oauth_states
+WHERE state = $1 AND expires_at > now()
+RETURNING state, agent_id, slug, source_type, code_verifier, redirect_uri, expires_at, created_at, user_id, resource_id
+`
+
+func (q *Queries) ConsumeOAuthState(ctx context.Context, state string) (OauthState, error) {
+	row := q.db.QueryRow(ctx, consumeOAuthState, state)
+	var i OauthState
+	err := row.Scan(
+		&i.State,
+		&i.AgentID,
+		&i.Slug,
+		&i.SourceType,
+		&i.CodeVerifier,
+		&i.RedirectUri,
+		&i.ExpiresAt,
+		&i.CreatedAt,
+		&i.UserID,
+		&i.ResourceID,
+	)
+	return i, err
+}
+
 const createOAuthState = `-- name: CreateOAuthState :exec
-INSERT INTO oauth_states (state, agent_id, slug, code_verifier, redirect_uri, expires_at, source_type)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
+INSERT INTO oauth_states (state, agent_id, user_id, resource_id, slug, code_verifier, redirect_uri, expires_at, source_type)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 `
 
 type CreateOAuthStateParams struct {
 	State        string             `json:"state"`
 	AgentID      pgtype.UUID        `json:"agent_id"`
+	UserID       pgtype.UUID        `json:"user_id"`
+	ResourceID   pgtype.UUID        `json:"resource_id"`
 	Slug         string             `json:"slug"`
 	CodeVerifier string             `json:"code_verifier"`
 	RedirectUri  string             `json:"redirect_uri"`
@@ -39,6 +65,8 @@ func (q *Queries) CreateOAuthState(ctx context.Context, arg CreateOAuthStatePara
 	_, err := q.db.Exec(ctx, createOAuthState,
 		arg.State,
 		arg.AgentID,
+		arg.UserID,
+		arg.ResourceID,
 		arg.Slug,
 		arg.CodeVerifier,
 		arg.RedirectUri,
@@ -46,33 +74,4 @@ func (q *Queries) CreateOAuthState(ctx context.Context, arg CreateOAuthStatePara
 		arg.SourceType,
 	)
 	return err
-}
-
-const deleteOAuthState = `-- name: DeleteOAuthState :exec
-DELETE FROM oauth_states WHERE state = $1
-`
-
-func (q *Queries) DeleteOAuthState(ctx context.Context, state string) error {
-	_, err := q.db.Exec(ctx, deleteOAuthState, state)
-	return err
-}
-
-const getOAuthState = `-- name: GetOAuthState :one
-SELECT state, agent_id, slug, source_type, code_verifier, redirect_uri, expires_at, created_at FROM oauth_states WHERE state = $1 AND expires_at > now()
-`
-
-func (q *Queries) GetOAuthState(ctx context.Context, state string) (OauthState, error) {
-	row := q.db.QueryRow(ctx, getOAuthState, state)
-	var i OauthState
-	err := row.Scan(
-		&i.State,
-		&i.AgentID,
-		&i.Slug,
-		&i.SourceType,
-		&i.CodeVerifier,
-		&i.RedirectUri,
-		&i.ExpiresAt,
-		&i.CreatedAt,
-	)
-	return i, err
 }

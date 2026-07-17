@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/airlockrun/airlock/db/dbq"
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 	identitysvc "github.com/airlockrun/airlock/service/identity"
 	"github.com/airlockrun/airlock/trigger"
@@ -58,16 +59,16 @@ func testIdentityHandlerWithTelegram(srv *httptest.Server) *identityHandler {
 func createTestBridgeWithToken(t *testing.T, rawToken, botUsername string) uuid.UUID {
 	t.Helper()
 	ctx := context.Background()
-	enc, err := testEncryptor().Put(ctx, "bridge/new/bot_token", rawToken)
+	bridgeID := uuid.New()
+	enc, err := testEncryptor().Put(ctx, "bridge/"+bridgeID.String()+"/bot_token", rawToken)
 	if err != nil {
 		t.Fatalf("encrypt token: %v", err)
 	}
-	var bridgeID uuid.UUID
-	err = testDB.Pool().QueryRow(ctx,
-		`INSERT INTO bridges (type, name, bot_token_ref, bot_username, status, is_system, config, settings)
-		 VALUES ('telegram', $1, $2, $3, 'active', false, '{}'::jsonb, '{}'::jsonb) RETURNING id`,
-		"preview-"+uuid.New().String()[:8], enc, botUsername,
-	).Scan(&bridgeID)
+	_, err = testDB.Pool().Exec(ctx,
+		`INSERT INTO bridges (id, type, name, bot_token_ref, bot_username, status, is_system, config, settings)
+		 VALUES ($1, 'telegram', $2, $3, $4, 'active', false, '{}'::jsonb, '{}'::jsonb)`,
+		bridgeID, "preview-"+uuid.New().String()[:8], enc, botUsername,
+	)
 	if err != nil {
 		t.Fatalf("insert bridge: %v", err)
 	}
@@ -75,11 +76,66 @@ func createTestBridgeWithToken(t *testing.T, rawToken, botUsername string) uuid.
 }
 
 func signAuthExternal(platform, bridgeID, uid string) (ts, sig string) {
-	tsVal := strconv.FormatInt(time.Now().Unix(), 10)
+	return signAuthExternalAt(platform, bridgeID, uid, time.Now().Unix())
+}
+
+func signAuthExternalAt(platform, bridgeID, uid string, unixTime int64) (ts, sig string) {
+	tsVal := strconv.FormatInt(unixTime, 10)
 	payload := platform + ":" + bridgeID + ":" + uid + ":" + tsVal
 	mac := hmac.New(sha256.New, []byte(testHMACSecret))
 	mac.Write([]byte(payload))
 	return tsVal, hex.EncodeToString(mac.Sum(nil))
+}
+
+func TestLinkIdentityCannotTransferExistingIdentity(t *testing.T) {
+	skipIfNoDB(t)
+	ctx := context.Background()
+	q := dbq.New(testDB.Pool())
+	_, ownerID := testAgentAndUser(t)
+	other, err := q.CreateUser(ctx, dbq.CreateUserParams{
+		Email: "identity-other-" + uuid.NewString()[:8] + "@example.com", DisplayName: "Other", TenantRole: "user",
+	})
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	const uid = "transfer-blocked"
+	if _, err := q.CreatePlatformIdentity(ctx, dbq.CreatePlatformIdentityParams{
+		UserID: toPgUUID(ownerID), Platform: "telegram", PlatformUserID: uid,
+	}); err != nil {
+		t.Fatalf("CreatePlatformIdentity: %v", err)
+	}
+
+	telegramSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"ok": false})
+	}))
+	defer telegramSrv.Close()
+	ih := testIdentityHandlerWithTelegram(telegramSrv)
+	bridgeID := createTestBridgeWithToken(t, "fake-token", "transfer_bot").String()
+	ts, sig := signAuthExternalAt("telegram", bridgeID, uid, time.Now().Unix()+1)
+	query := fmt.Sprintf("platform=telegram&bridge=%s&uid=%s&ts=%s&sig=%s", bridgeID, uid, ts, sig)
+	router := userRouter(func(r chi.Router) {
+		r.Get("/api/v1/link-identity/preview", ih.LinkIdentityPreview)
+		r.Post("/api/v1/link-identity", ih.LinkIdentity)
+	})
+	otherID := pgUUID(other.ID)
+	preview := httptest.NewRecorder()
+	router.ServeHTTP(preview, userRequestJSON(t, "GET", "/api/v1/link-identity/preview?"+query, otherID, nil))
+	if preview.Code != http.StatusOK {
+		t.Fatalf("preview: status = %d; body: %s", preview.Code, preview.Body.String())
+	}
+	linked := httptest.NewRecorder()
+	router.ServeHTTP(linked, userRequestJSON(t, "POST", "/api/v1/link-identity?"+query, otherID, nil))
+	if linked.Code != http.StatusConflict {
+		t.Fatalf("transfer attempt: status = %d, want 409; body: %s", linked.Code, linked.Body.String())
+	}
+	identity, err := q.GetPlatformIdentity(ctx, dbq.GetPlatformIdentityParams{Platform: "telegram", PlatformUserID: uid})
+	if err != nil {
+		t.Fatalf("GetPlatformIdentity: %v", err)
+	}
+	if got := pgUUID(identity.UserID); got != ownerID {
+		t.Fatalf("identity owner = %s, want %s", got, ownerID)
+	}
 }
 
 func TestAuthExternalRedirects(t *testing.T) {
@@ -105,13 +161,19 @@ func TestAuthExternalRedirects(t *testing.T) {
 
 func TestLinkIdentity(t *testing.T) {
 	skipIfNoDB(t)
-	ih := testIdentityHandler()
 	_, userID := testAgentAndUser(t)
 
-	const bridgeID = "00000000-0000-0000-0000-000000000001"
+	telegramSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"ok": false})
+	}))
+	defer telegramSrv.Close()
+	ih := testIdentityHandlerWithTelegram(telegramSrv)
+	bridgeID := createTestBridgeWithToken(t, "fake-token", "link_bot").String()
 	const platformUID = "99001122"
 
 	linkRouter := userRouter(func(r chi.Router) {
+		r.Get("/api/v1/link-identity/preview", ih.LinkIdentityPreview)
 		r.Post("/api/v1/link-identity", ih.LinkIdentity)
 	})
 	listRouter := userRouter(func(r chi.Router) {
@@ -125,11 +187,22 @@ func TestLinkIdentity(t *testing.T) {
 		ts, sig := signAuthExternal("telegram", bridgeID, platformUID)
 		url := fmt.Sprintf("/api/v1/link-identity?platform=telegram&bridge=%s&uid=%s&ts=%s&sig=%s",
 			bridgeID, platformUID, ts, sig)
+		previewReq := userRequestJSON(t, "GET", strings.Replace(url, "/link-identity?", "/link-identity/preview?", 1), userID, nil)
+		previewRec := httptest.NewRecorder()
+		linkRouter.ServeHTTP(previewRec, previewReq)
+		if previewRec.Code != http.StatusOK {
+			t.Fatalf("LinkIdentityPreview: status = %d; body: %s", previewRec.Code, previewRec.Body.String())
+		}
 		req := userRequestJSON(t, "POST", url, userID, nil)
 		rec := httptest.NewRecorder()
 		linkRouter.ServeHTTP(rec, req)
 		if rec.Code != http.StatusNoContent {
 			t.Fatalf("LinkIdentity: status = %d, want 204; body: %s", rec.Code, rec.Body.String())
+		}
+		replay := httptest.NewRecorder()
+		linkRouter.ServeHTTP(replay, userRequestJSON(t, "POST", url, userID, nil))
+		if replay.Code != http.StatusBadRequest {
+			t.Fatalf("replayed LinkIdentity: status = %d, want 400", replay.Code)
 		}
 	})
 

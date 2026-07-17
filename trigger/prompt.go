@@ -23,17 +23,23 @@ import (
 	"github.com/airlockrun/goai/message"
 	"github.com/airlockrun/goai/model"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"
 )
 
 // PromptProxy manages conversation history and forwards prompts to agent containers.
 type PromptProxy struct {
-	dispatcher           *Dispatcher
+	dispatcher           promptDispatcher
 	db                   *db.DB
 	s3                   *storage.S3Client
 	logger               *zap.Logger
 	resolveTranscription TranscriptionResolver
+}
+
+type promptDispatcher interface {
+	RunCanceler
+	ForwardPrompt(context.Context, uuid.UUID, wire.PromptInput, *uuid.UUID, *uuid.UUID) (io.ReadCloser, uuid.UUID, error)
 }
 
 // NewPromptProxy creates a PromptProxy. The resolver is invoked to obtain the
@@ -213,16 +219,21 @@ func (p *PromptProxy) HandleMessage(
 		input.Message = ""
 	}
 
-	// Parity with the web path ([api/conversations.go:396-400]): if there's a
-	// suspended run (pending permission check), free-text messages resolve it
-	// as denied and the new message is re-reasoned in the same run.
+	// If there's a suspended run (pending permission check), a free-text message
+	// claims it as denied and is re-reasoned in the same run.
 	// Conversation-scoped so a bridge message never resolves a sibling-
 	// delegated (source='a2a') suspension that belongs to another surface.
 	if suspendedRun, err := q.GetLatestSuspendedRunByConversation(ctx, convert.PgUUIDToString(conversationID)); err == nil {
-		input.ResumeRunID = convert.PgUUIDToString(suspendedRun.ID)
-		approved := false
-		input.Approved = &approved
-		_ = q.ResolveSuspendedRun(ctx, suspendedRun.ID)
+		resolved, rerr := q.ResolveSuspendedRun(ctx, suspendedRun.ID)
+		if rerr != nil {
+			close(events)
+			return "", fmt.Errorf("auto-deny suspended run: %w", rerr)
+		}
+		if resolved == 1 {
+			input.ResumeRunID = convert.PgUUIDToString(suspendedRun.ID)
+			approved := false
+			input.Approved = &approved
+		}
 	}
 
 	var userIDPtr *uuid.UUID
@@ -257,9 +268,9 @@ func (p *PromptProxy) HandleMessage(
 //	"approve:<runID>"  — resume with Approved=true, no prompt
 //	"deny:<runID>"     — resume with Approved=false + a "Rejected by user." prompt
 //
-// If the referenced run is no longer suspended (e.g. already resolved via web),
-// emits a single "info" event and returns — the driver's AnswerCallbackQuery
-// should still fire to clear the spinner.
+// If the referenced run is no longer suspended or does not match the callback's
+// bridge conversation identity, emits one "info" event and returns so the
+// driver's AnswerCallbackQuery can clear the spinner.
 func (p *PromptProxy) HandleCallback(
 	ctx context.Context,
 	agentID, bridgeID, userID uuid.UUID,
@@ -280,45 +291,54 @@ func (p *PromptProxy) HandleCallback(
 	}
 
 	run, err := q.GetSuspendedRunByID(ctx, toPgUUID(runID))
-	if err != nil || uuid.UUID(run.AgentID.Bytes) != agentID {
-		// Stale button — the run was already resolved (web / another tap),
-		// or the callback names a run that doesn't belong to this bridge's
-		// agent. Either way there's nothing for this agent to resolve, and
-		// we must not resolve/resume another agent's run.
-		events <- ResponseEvent{Type: "info", Text: "This confirmation has already been resolved."}
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return staleCallback(events)
+		}
 		close(events)
-		return true, nil
+		return false, fmt.Errorf("get suspended run: %w", err)
+	}
+	if uuid.UUID(run.AgentID.Bytes) != agentID ||
+		run.TriggerType != "prompt" ||
+		!run.BridgeID.Valid || uuid.UUID(run.BridgeID.Bytes) != bridgeID {
+		return staleCallback(events)
+	}
+	convID, err := uuid.Parse(run.TriggerRef)
+	if err != nil {
+		close(events)
+		return false, fmt.Errorf("invalid suspended run conversation reference: %w", err)
+	}
+	conv, err := q.GetConversationByID(ctx, toPgUUID(convID))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return staleCallback(events)
+		}
+		close(events)
+		return false, fmt.Errorf("get suspended run conversation: %w", err)
+	}
+	if uuid.UUID(conv.AgentID.Bytes) != agentID ||
+		conv.Source != "bridge" ||
+		!conv.BridgeID.Valid || uuid.UUID(conv.BridgeID.Bytes) != bridgeID ||
+		!conv.ExternalID.Valid || conv.ExternalID.String != externalID ||
+		!conv.UserID.Valid || uuid.UUID(conv.UserID.Bytes) != userID {
+		return staleCallback(events)
 	}
 
-	if err := q.ResolveSuspendedRun(ctx, toPgUUID(runID)); err != nil {
+	resolved, err := q.ResolveSuspendedRun(ctx, run.ID)
+	if err != nil {
 		close(events)
 		return false, fmt.Errorf("resolve suspended run: %w", err)
 	}
-
-	// Look up the conversation so SessionStore on the agent side persists
-	// messages into the right thread.
-	if externalID == "" {
-		close(events)
-		return false, fmt.Errorf("bridge conversation requires external_id")
+	if resolved != 1 {
+		return staleCallback(events)
 	}
-	conv, err := q.GetOrCreateBridgeAuthedConversation(ctx, dbq.GetOrCreateBridgeAuthedConversationParams{
-		AgentID:    toPgUUID(agentID),
-		UserID:     toPgUUID(userID),
-		BridgeID:   toPgUUID(bridgeID),
-		ExternalID: pgtype.Text{String: externalID, Valid: true},
-	})
-	if err != nil {
-		close(events)
-		return false, fmt.Errorf("get conversation: %w", err)
-	}
-	convID := conv.ID
 
 	approved := action == "approve"
 	// Same CallerAccess plumbing as HandleMessage above — admin-only
 	// bindings need it to survive the resume turn too.
 	access := bridgePrincipal(userID).EffectiveAgentAccess(ctx, q, agentID)
 	input := wire.PromptInput{
-		ConversationID: convert.PgUUIDToString(convID),
+		ConversationID: convID.String(),
 		ResumeRunID:    runIDStr,
 		Approved:       &approved,
 		CallerAccess:   wire.Access(access),
@@ -349,6 +369,12 @@ func (p *PromptProxy) HandleCallback(
 		return false, fmt.Errorf("stream response: %w", err)
 	}
 	return false, nil
+}
+
+func staleCallback(events chan<- ResponseEvent) (bool, error) {
+	events <- ResponseEvent{Type: "info", Text: "This confirmation has already been resolved."}
+	close(events)
+	return true, nil
 }
 
 // parseCallbackData splits "approve:<runID>" / "deny:<runID>" payloads.

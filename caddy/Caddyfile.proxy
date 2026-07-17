@@ -6,33 +6,43 @@
 # still does all internal Host routing; it does NOT issue certs. We force
 # X-Forwarded-Proto=https because the external edge is always HTTPS — that's
 # what airlock signs PUBLIC_URL / presigned URLs against. Also set
-# REVERSE_PROXY_TRUSTED_PROXIES in .env to the proxy's CIDR so airlock trusts
-# the forwarded headers.
+# CADDY_TRUSTED_PROXIES in .env names that proxy's exact address or narrow CIDR.
+# Caddy rejects client-supplied XFF prefixes by parsing the trusted chain from
+# right to left, then appends the external proxy peer for Airlock.
 #
 # Per-agent `*.{$DOMAIN}` TLS is terminated by YOUR proxy, which therefore must
 # hold a wildcard `*.{$DOMAIN}` cert (a single-host cert breaks per-agent
 # {slug}.{$DOMAIN} routing) and forward apex + *. + s3. to caddy's HTTP port.
-
 {
 	auto_https off
+	servers {
+		trusted_proxies static {$CADDY_TRUSTED_PROXIES}
+		trusted_proxies_strict
+	}
 }
 
 import routes.caddy
 
 (proxy_airlock) {
 	reverse_proxy {$AIRLOCK_UPSTREAM} {
+		header_up X-Airlock-Proxy-Auth {$REVERSE_PROXY_AUTH_SECRET}
 		header_up X-Forwarded-Proto https
 	}
 }
 
 http://{$DOMAIN} {
+	import https_security_headers
 	import apex_routes
 }
 
 http://s3.{$DOMAIN} {
+	import https_security_headers
 	import s3_routes
 }
 
 http://*.{$DOMAIN} {
+	request_header -X-Airlock-Proxy-Auth
+	import baseline_security_headers
+	import https_security_headers
 	import proxy_airlock
 }

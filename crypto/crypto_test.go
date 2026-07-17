@@ -1,6 +1,7 @@
 package crypto
 
 import (
+	"encoding/base64"
 	"testing"
 )
 
@@ -131,6 +132,55 @@ func TestKeyRotation(t *testing.T) {
 	_, err = oldEnc.Decrypt(encrypted2)
 	if err == nil {
 		t.Error("expected error decrypting new ciphertext with old encryptor")
+	}
+}
+
+func TestStableKeyIDSurvivesRingReordering(t *testing.T) {
+	keyA := testKey(0xA1)
+	keyB := testKey(0xB2)
+	keyC := testKey(0xC3)
+
+	enc := New(keyC, keyA, keyB)
+	stored, err := enc.Encrypt("secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if enc.NeedsRewrap(stored) {
+		t.Fatal("current ciphertext unexpectedly needs rewrap")
+	}
+
+	reordered := New(keyA, keyC, keyB)
+	got, err := reordered.Decrypt(stored)
+	if err != nil {
+		t.Fatalf("Decrypt after key-ring reorder: %v", err)
+	}
+	if got != "secret" {
+		t.Fatalf("Decrypt = %q, want secret", got)
+	}
+	if !reordered.NeedsRewrap(stored) {
+		t.Fatal("ciphertext under a non-current key must need rewrap")
+	}
+}
+
+func TestPositionalCiphertextRemainsDecryptable(t *testing.T) {
+	oldKey := testKey(0xA4)
+	newKey := testKey(0xB5)
+	oldGCM := mustGCM(oldKey)
+	nonce := make([]byte, oldGCM.NonceSize())
+	positional := append([]byte{0}, nonce...)
+	positional = append(positional, oldGCM.Seal(nil, nonce, []byte("compatibility"), nil)...)
+	encoded := base64.StdEncoding.EncodeToString(positional)
+
+	enc := New(newKey, oldKey)
+	got, err := enc.Decrypt(encoded)
+	if err != nil {
+		t.Fatalf("Decrypt positional ciphertext: %v", err)
+	}
+	if got != "compatibility" {
+		t.Fatalf("Decrypt positional ciphertext = %q", got)
+	}
+	if !enc.NeedsRewrap(encoded) {
+		t.Fatal("positional ciphertext must need rewrap")
 	}
 }
 

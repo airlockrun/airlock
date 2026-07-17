@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/airlockrun/agentsdk"
 	"github.com/airlockrun/agentsdk/scaffold"
@@ -35,6 +36,26 @@ type buildPublisher struct {
 	tasksDone  int32
 	tasksTotal int32
 }
+
+// ErrDeploymentConflict means another lifecycle operation changed the agent
+// after this build observed its state. The caller must leave the live lifecycle
+// status untouched.
+var ErrDeploymentConflict = errors.New("agent deployment cancelled by a concurrent lifecycle change")
+
+type deploymentQueries interface {
+	IncrementAgentTokenVersion(context.Context, pgtype.UUID) (int64, error)
+	FinalizeAgentDeployment(context.Context, dbq.FinalizeAgentDeploymentParams) (int64, error)
+}
+
+// deploymentAttemptError carries the token version reserved by Phase F so an
+// initial build can mark itself failed without racing a later Stop rotation.
+type deploymentAttemptError struct {
+	err          error
+	tokenVersion int64
+}
+
+func (e *deploymentAttemptError) Error() string { return e.err.Error() }
+func (e *deploymentAttemptError) Unwrap() error { return e.err }
 
 // OnTodos persists the todo snapshot, streams it on the per-build topic, and
 // pushes the task progress onto the agent topic for the "Building N/M" badge.
@@ -326,7 +347,7 @@ func (b *BuildService) Execute(ctx context.Context, plan BuildPlan) (string, err
 	}()
 
 	testDBURL := b.agentDBURL(schemaName, dbPassword, cloneName)
-	testDBPSQL := b.agentDBURLBase(b.cfg.DBHostAgent, schemaName, dbPassword)
+	testDBPSQL := b.agentDBURLBase(b.cfg.DBHostAgent, b.cfg.DBPortAgent, schemaName, dbPassword)
 
 	// ── Phase C: codegen (Sol) if Instruction is non-empty ─────────────
 	commitHash, exitStatus, exitMessage, codegenErr := b.runCodegen(ctx, plan, agent, build, agentID, agentUUID, testDBURL, testDBPSQL, cloneName, goProxyDir, solLog, dockerLog, bp)
@@ -514,7 +535,7 @@ func (b *BuildService) Execute(ctx context.Context, plan BuildPlan) (string, err
 	}
 
 	// ── Phase F: swap the container ────────────────────────────────────
-	// The stop → start → UpdateAgentRefs sequence is the only window
+	// The stop → start → FinalizeAgentDeployment sequence is the only window
 	// where the running container can disagree with agents.image_ref.
 	// LockSwap serialises this with EnsureRunning so a concurrent
 	// trigger can't slip in and start the OLD image while we're
@@ -522,58 +543,114 @@ func (b *BuildService) Execute(ctx context.Context, plan BuildPlan) (string, err
 	// codegen, image build, and migration validation already ran
 	// without the lock above.
 	publishPhase("deploy")
-	unlockSwap := b.containers.LockSwap(agentUUID)
-	logLine("Starting agent container...")
-	if agent.ImageRef != "" {
-		_ = b.containers.StopAgent(ctx, agentUUID)
-	}
-	agentToken, err := auth.IssueAgentToken(b.cfg.JWTSecret, agentUUID)
-	if err != nil {
-		unlockSwap()
-		failInfra(err, commitHash, imageTag)
-		return "", fmt.Errorf("issue agent token: %w", err)
-	}
+	logLine("Deploying agent image...")
 	agentDBURL := b.agentDBURL(schemaName, dbPassword, schemaName)
-	if _, err := b.containers.StartAgent(ctx, container.AgentOpts{
-		AgentID: agentUUID,
-		Image:   imageTag,
-		Env: map[string]string{
-			"AIRLOCK_AGENT_ID":    agentID,
-			"AIRLOCK_API_URL":     b.cfg.APIURLAgent,
-			"AIRLOCK_DB_URL":      agentDBURL,
-			"AIRLOCK_AGENT_TOKEN": agentToken,
-		},
-	}); err != nil {
-		unlockSwap()
-		failInfra(err, commitHash, imageTag)
-		return "", fmt.Errorf("start agent: %w", err)
+	if err := b.deployAgent(ctx, q, plan, agentDBURL, commitHash, imageTag); err != nil {
+		if errors.Is(err, ErrDeploymentConflict) {
+			completeBuild("cancelled", err.Error(), "", commitHash, imageTag)
+		} else {
+			failInfra(err, commitHash, imageTag)
+		}
+		return "", err
 	}
 
-	// ── Phase G+H: update agent + complete build row ───────────────────
-	if plan.Kind == BuildKindBuild {
-		if err := q.UpdateAgentStatus(ctx, dbq.UpdateAgentStatusParams{
-			ID:     agent.ID,
-			Status: "active",
-		}); err != nil {
-			unlockSwap()
-			return "", fmt.Errorf("update status to active: %w", err)
-		}
-	}
-	if err := q.UpdateAgentRefs(ctx, dbq.UpdateAgentRefsParams{
-		ID:        agent.ID,
-		SourceRef: commitHash,
-		ImageRef:  imageTag,
-	}); err != nil {
-		unlockSwap()
-		return "", fmt.Errorf("update refs: %w", err)
-	}
-	unlockSwap()
+	// ── Phase G+H: complete build row ──────────────────────────────────
 	completeBuild("complete", "", "", commitHash, imageTag)
 
 	if exitMessage == "" && plan.Kind == BuildKindUpgrade && plan.Instruction == "" {
 		exitMessage = "Rebuilt against the current agentsdk (no code changes)."
 	}
 	return exitMessage, nil
+}
+
+func (b *BuildService) deployAgent(ctx context.Context, q deploymentQueries, plan BuildPlan, agentDBURL, sourceRef, imageRef string) error {
+	agent := plan.Agent
+	agentID := uuidString(agent.ID)
+	agentUUID := uuid.UUID(agent.ID.Bytes)
+	expectedStatus := agent.Status
+	nextStatus := agent.Status
+	startContainer := true
+
+	switch plan.Kind {
+	case BuildKindBuild:
+		expectedStatus = "building"
+		nextStatus = "active"
+	case BuildKindUpgrade, BuildKindRollback:
+		switch agent.Status {
+		case "active":
+		case "failed":
+			nextStatus = "active"
+		case "stopped":
+			startContainer = false
+		default:
+			return fmt.Errorf("%w: cannot deploy %s agent from status %q", ErrDeploymentConflict, plan.Kind, agent.Status)
+		}
+	default:
+		return fmt.Errorf("unknown build kind %q", plan.Kind)
+	}
+
+	unlockSwap := b.containers.LockSwap(agentUUID)
+	defer unlockSwap()
+
+	tokenVersion, err := q.IncrementAgentTokenVersion(ctx, agent.ID)
+	if err != nil {
+		return fmt.Errorf("rotate agent token: %w", err)
+	}
+	attemptErr := func(err error) error {
+		return &deploymentAttemptError{err: err, tokenVersion: tokenVersion}
+	}
+
+	if startContainer {
+		if agent.ImageRef != "" {
+			_ = b.containers.StopAgent(ctx, agentUUID)
+		}
+		agentToken, err := auth.IssueAgentToken(b.cfg.JWTSecret, agentUUID, tokenVersion)
+		if err != nil {
+			return attemptErr(fmt.Errorf("issue agent token: %w", err))
+		}
+		if _, err := b.containers.StartAgent(ctx, container.AgentOpts{
+			AgentID: agentUUID,
+			Image:   imageRef,
+			Token:   agentToken,
+			Env: map[string]string{
+				"AIRLOCK_AGENT_ID": agentID,
+				"AIRLOCK_API_URL":  b.cfg.APIURLAgent,
+				"AIRLOCK_DB_URL":   agentDBURL,
+			},
+		}); err != nil {
+			return attemptErr(fmt.Errorf("start agent: %w", err))
+		}
+	}
+
+	rows, err := q.FinalizeAgentDeployment(ctx, dbq.FinalizeAgentDeploymentParams{
+		ID:                agent.ID,
+		SourceRef:         sourceRef,
+		ImageRef:          imageRef,
+		NextStatus:        nextStatus,
+		AgentTokenVersion: tokenVersion,
+		ExpectedStatus:    expectedStatus,
+	})
+	if err == nil && rows == 1 {
+		return nil
+	}
+
+	var stopErr error
+	if startContainer {
+		stopCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		stopErr = b.containers.StopAgent(stopCtx, agentUUID)
+	}
+	if err != nil {
+		if stopErr != nil {
+			err = errors.Join(err, fmt.Errorf("stop rejected deployment: %w", stopErr))
+		}
+		return attemptErr(fmt.Errorf("finalize agent deployment: %w", err))
+	}
+	conflictErr := error(ErrDeploymentConflict)
+	if stopErr != nil {
+		conflictErr = errors.Join(conflictErr, fmt.Errorf("stop rejected deployment: %w", stopErr))
+	}
+	return attemptErr(conflictErr)
 }
 
 // prepareNewAgent runs the build-only setup: initialize the per-agent

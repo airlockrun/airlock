@@ -13,6 +13,7 @@ import (
 	"github.com/airlockrun/agentsdk/wire"
 	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/db/dbq"
+	"github.com/airlockrun/airlock/networkpolicy"
 	"github.com/airlockrun/airlock/oauth"
 	"github.com/airlockrun/sol/webfetch"
 	"github.com/go-chi/chi/v5"
@@ -20,19 +21,19 @@ import (
 	"go.uber.org/zap"
 )
 
-func connectionUpstreamURL(policy *httpNetworkPolicy, baseURL, path string) (*url.URL, error) {
+func connectionUpstreamURL(policy *networkpolicy.Policy, baseURL, path string) (*url.URL, error) {
 	if !strings.HasPrefix(path, "/") {
 		return nil, errors.New("path must start with /")
 	}
-	base, err := policy.parseHTTPURL(baseURL)
+	base, err := policy.ParseURL(baseURL)
 	if err != nil {
 		return nil, err
 	}
-	upstream, err := policy.parseHTTPURL(strings.TrimRight(baseURL, "/") + path)
+	upstream, err := policy.ParseURL(strings.TrimRight(baseURL, "/") + path)
 	if err != nil {
 		return nil, err
 	}
-	if !sameHTTPOrigin(base, upstream) {
+	if !networkpolicy.SameOrigin(base, upstream) {
 		return nil, errors.New("path changed the configured connection origin")
 	}
 	return upstream, nil
@@ -141,7 +142,7 @@ func (h *Handler) ServiceProxy(w http.ResponseWriter, r *http.Request) {
 		InjectAuth(upstream, conn.AuthInjection, creds)
 	}
 
-	resp, err := h.httpNetwork.client(30 * time.Second).Do(upstream)
+	resp, err := h.httpNetwork.Client(30 * time.Second).Do(upstream)
 	if err != nil {
 		h.logger.Error("proxy upstream request failed", zap.Error(err))
 		writeJSONError(w, http.StatusBadGateway, "upstream request failed")

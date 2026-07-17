@@ -28,6 +28,13 @@ func (h *Handler) SessionLoad(w http.ResponseWriter, r *http.Request) {
 	}
 
 	q := dbq.New(h.db.Pool())
+	agentID := auth.AgentIDFromContext(r.Context())
+	if _, err := q.GetConversationByIDAndAgent(r.Context(), dbq.GetConversationByIDAndAgentParams{
+		ID: toPgUUID(convID), AgentID: toPgUUID(agentID),
+	}); err != nil {
+		writeJSONError(w, http.StatusNotFound, "conversation not found")
+		return
+	}
 	dbMsgs, err := q.ListSessionMessagesByConversation(r.Context(), toPgUUID(convID))
 	if err != nil {
 		h.logger.Error("session load failed", zap.Error(err))
@@ -81,6 +88,13 @@ func (h *Handler) SessionAppend(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusBadRequest, "invalid conversation ID")
 		return
 	}
+	agentID := auth.AgentIDFromContext(r.Context())
+	if _, err := dbq.New(h.db.Pool()).GetConversationByIDAndAgent(r.Context(), dbq.GetConversationByIDAndAgentParams{
+		ID: toPgUUID(convID), AgentID: toPgUUID(agentID),
+	}); err != nil {
+		writeJSONError(w, http.StatusNotFound, "conversation not found")
+		return
+	}
 
 	var msgs []session.Message
 	if err := json.NewDecoder(r.Body).Decode(&msgs); err != nil {
@@ -90,8 +104,17 @@ func (h *Handler) SessionAppend(w http.ResponseWriter, r *http.Request) {
 
 	var runID pgtype.UUID
 	if rid := r.URL.Query().Get("runId"); rid != "" {
-		if parsed, err := parseUUID(rid); err == nil {
-			runID = toPgUUID(parsed)
+		parsed, err := parseUUID(rid)
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "invalid runId")
+			return
+		}
+		runID = toPgUUID(parsed)
+		if _, err := dbq.New(h.db.Pool()).GetRunByIDAndAgent(r.Context(), dbq.GetRunByIDAndAgentParams{
+			ID: runID, AgentID: toPgUUID(agentID),
+		}); err != nil {
+			writeJSONError(w, http.StatusNotFound, "run not found")
+			return
 		}
 	}
 	source := r.URL.Query().Get("source")
@@ -123,7 +146,6 @@ func (h *Handler) SessionAppend(w http.ResponseWriter, r *http.Request) {
 	// Mutates msgs in place — sets Source to llm/agents/<id>/K and keeps
 	// the sentinel in Image/Data so future loads can re-resolve without
 	// reading Source.
-	agentID := auth.AgentIDFromContext(r.Context())
 	if err := attachref.ResolveForStorage(r.Context(), h.s3, agentID, msgs); err != nil {
 		h.logger.Error("session append: attachref resolve failed — batch rolling back",
 			append(logFields, zap.Error(err))...)
@@ -268,6 +290,13 @@ func (h *Handler) SessionCompact(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusBadRequest, "invalid conversation ID")
 		return
 	}
+	agentID := auth.AgentIDFromContext(r.Context())
+	if _, err := dbq.New(h.db.Pool()).GetConversationByIDAndAgent(r.Context(), dbq.GetConversationByIDAndAgentParams{
+		ID: toPgUUID(convID), AgentID: toPgUUID(agentID),
+	}); err != nil {
+		writeJSONError(w, http.StatusNotFound, "conversation not found")
+		return
+	}
 
 	var req wire.SessionCompactRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -301,7 +330,6 @@ func (h *Handler) SessionCompact(w http.ResponseWriter, r *http.Request) {
 
 	// Canonicalize s3ref: sentinels in the summary (defensive — summaries
 	// are typically text-only but future agent tools might attach).
-	agentID := auth.AgentIDFromContext(r.Context())
 	if err := attachref.ResolveForStorage(r.Context(), h.s3, agentID, req.Summary); err != nil {
 		h.logger.Error("session compact: attachref resolve failed — rolling back",
 			append(logFields, zap.Error(err))...)

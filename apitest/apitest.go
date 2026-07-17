@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/airlockrun/airlock/api"
 	"github.com/airlockrun/airlock/builder"
@@ -14,6 +15,7 @@ import (
 	"github.com/airlockrun/airlock/crypto"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbtest"
+	"github.com/airlockrun/airlock/networkpolicy"
 	"github.com/airlockrun/airlock/oauth"
 	"github.com/airlockrun/airlock/realtime"
 	"github.com/airlockrun/airlock/secrets"
@@ -180,28 +182,29 @@ func Setup(t *testing.T) *Harness {
 	)
 	scheduler := trigger.NewScheduler(dispatcher, database, logger.Named("scheduler"))
 
+	httpNetwork := networkpolicy.New(cfg.AgentHTTPPrivateCIDRs, true)
 	router := api.NewRouter(api.RouterConfig{
-		DB:               database,
-		JWTSecret:        cfg.JWTSecret,
-		PublicURL:        cfg.PublicURL,
-		OAuthClient:      oauth.NewClient(),
-		TelegramDriver:   telegram,
-		Secrets:          secretStore,
-		S3Client:         s3Client,
-		BuildService:     buildSvc,
-		Dispatcher:       dispatcher,
-		Scheduler:        scheduler,
-		BridgeManager:    bridgeMgr,
-		Containers:       fakeContainers,
-		PromptProxy:      prompter,
-		Hub:              hub,
-		PubSub:           pubsub,
-		Handler:          wsHandler,
-		AgentDomain:      cfg.AgentDomain,
-		AgentBaseURL:     cfg.AgentBaseURL, // method value
-		HTTPPrivateCIDRs: cfg.AgentHTTPPrivateCIDRs,
-		RealIP:           api.ParseRealIPConfig("", 1),
-		Logger:           logger,
+		DB:             database,
+		JWTSecret:      cfg.JWTSecret,
+		PublicURL:      cfg.PublicURL,
+		OAuthClient:    oauth.NewClient(httpNetwork.Client(30*time.Second), true),
+		TelegramDriver: telegram,
+		Secrets:        secretStore,
+		S3Client:       s3Client,
+		BuildService:   buildSvc,
+		Dispatcher:     dispatcher,
+		Scheduler:      scheduler,
+		BridgeManager:  bridgeMgr,
+		Containers:     fakeContainers,
+		PromptProxy:    prompter,
+		Hub:            hub,
+		PubSub:         pubsub,
+		Handler:        wsHandler,
+		AgentDomain:    cfg.AgentDomain,
+		AgentBaseURL:   cfg.AgentBaseURL, // method value
+		HTTPNetwork:    httpNetwork,
+		RealIP:         api.ParseRealIPConfig("", 1, "apitest-reverse-proxy-secret-32-bytes"),
+		Logger:         logger,
 	})
 
 	srv := httptest.NewServer(router)

@@ -38,6 +38,7 @@ func TestIntegration_A2A_HappyPath(t *testing.T) {
 	owner := apitest.CreateUser(t, h, "owner", "user")
 	callerAgent := apitest.CreateAgent(t, h, apitest.AgentOpts{OwnerID: owner, Slug: "caller"})
 	targetAgent := apitest.CreateAgent(t, h, apitest.AgentOpts{OwnerID: owner, Slug: "target"})
+	apitest.AddSibling(t, h, callerAgent, targetAgent, owner, "admin")
 
 	// Target upstream — streams a small canned NDJSON sequence.
 	targetUpstream := apitest.NewUpstream().

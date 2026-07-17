@@ -3,6 +3,8 @@ package api
 import (
 	"context"
 	"errors"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -25,6 +27,43 @@ func TestProbeHealthUsesIndependentTimeouts(t *testing.T) {
 	}
 	if !s3OK {
 		t.Error("s3OK = false, want true")
+	}
+}
+
+func TestHealthProbeCacheCoalescesAndCaches(t *testing.T) {
+	var calls atomic.Int32
+	release := make(chan struct{})
+	cache := healthProbeCache{
+		ttl: time.Minute,
+		probe: func() healthProbeResult {
+			calls.Add(1)
+			<-release
+			return healthProbeResult{dbOK: true, s3OK: true}
+		},
+	}
+
+	const requests = 20
+	var wg sync.WaitGroup
+	wg.Add(requests)
+	for range requests {
+		go func() {
+			defer wg.Done()
+			if got := cache.get(); !got.dbOK || !got.s3OK {
+				t.Errorf("cache.get() = %+v", got)
+			}
+		}()
+	}
+	for calls.Load() == 0 {
+		time.Sleep(time.Millisecond)
+	}
+	close(release)
+	wg.Wait()
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("probe calls = %d, want 1", got)
+	}
+	cache.get()
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("cached probe calls = %d, want 1", got)
 	}
 }
 

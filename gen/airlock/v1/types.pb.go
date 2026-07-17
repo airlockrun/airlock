@@ -3412,12 +3412,13 @@ func (x *Passkey) GetBackupEligible() bool {
 	return false
 }
 
-// UserSession is a first-party web or CLI login session. Refresh tokens are
-// stored server-side and can be revoked from the Security page or by logout.
+// UserSession is a bounded first-party login session. Web and CLI sessions
+// have server-side refresh credentials; Telegram sessions do not. Every kind
+// can be revoked from the Security page.
 type UserSession struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	Kind          string                 `protobuf:"bytes,2,opt,name=kind,proto3" json:"kind,omitempty"` // web, cli
+	Kind          string                 `protobuf:"bytes,2,opt,name=kind,proto3" json:"kind,omitempty"` // web, cli, telegram
 	ClientName    string                 `protobuf:"bytes,3,opt,name=client_name,json=clientName,proto3" json:"client_name,omitempty"`
 	DeviceName    string                 `protobuf:"bytes,4,opt,name=device_name,json=deviceName,proto3" json:"device_name,omitempty"`
 	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`

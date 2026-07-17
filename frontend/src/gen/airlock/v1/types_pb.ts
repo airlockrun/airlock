@@ -1957,8 +1957,9 @@ export const PasskeySchema: GenMessage<Passkey> = /*@__PURE__*/
   messageDesc(file_airlock_v1_types, 30);
 
 /**
- * UserSession is a first-party web or CLI login session. Refresh tokens are
- * stored server-side and can be revoked from the Security page or by logout.
+ * UserSession is a bounded first-party login session. Web and CLI sessions
+ * have server-side refresh credentials; Telegram sessions do not. Every kind
+ * can be revoked from the Security page.
  *
  * @generated from message airlock.v1.UserSession
  */
@@ -1969,7 +1970,7 @@ export type UserSession = Message<"airlock.v1.UserSession"> & {
   id: string;
 
   /**
-   * web, cli
+   * web, cli, telegram
    *
    * @generated from field: string kind = 2;
    */

@@ -8,3 +8,8 @@ services:
   rustfs:
     ports:
       - "127.0.0.1:${S3_PORT_HOST:?set S3_PORT_HOST for native development}:9000"
+
+# Runtime agents join the regular development network because the native
+# Airlock process cannot be attached to a Docker-internal per-agent bridge.
+# .env.dev.example sets AGENT_NETWORK_PER_AGENT=false and leaves AGENT_NETWORK
+# unset so container.Config falls back to DOCKER_NETWORK.
