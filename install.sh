@@ -587,7 +587,6 @@ render_env() {
 		echo "DOCKER_SOCKET_PATH=${DOCKER_SOCKET_PATH:-/var/run/docker.sock}"
 		echo "ENCRYPTION_KEY=$(gen_secret)"
 		echo "ENCRYPTION_KEY_REWRAP=false"
-		echo "AIRLOCK_SECRET_ENVELOPE_V1_MIGRATED=true"
 		echo "JWT_SECRET=$(gen_secret)"
 		echo "REVERSE_PROXY_AUTH_SECRET=$(gen_secret)"
 		# Bundled infra needs generated creds; external supplies its own via
