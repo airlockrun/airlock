@@ -43,7 +43,7 @@ const name = ref('')
 const slug = ref('')
 const slugManual = ref(false)
 const instructions = ref('')
-const mode = ref<'generate' | 'git' | 'local'>('local')
+const mode = ref<'generate' | 'git' | 'local'>('generate')
 
 // Optional external git remote attached on create. When gitRemoteUrl
 // is non-empty, gitCredentialId must also be set.
@@ -455,20 +455,20 @@ onUnmounted(() => {
     <div class="create-header">
       <div>
         <h1>Create App</h1>
-        <p>Build from local source, generate from instructions, or import an existing Git repository.</p>
+        <p>Generate from instructions, build from local source, or import an existing Git repository.</p>
       </div>
     </div>
 
     <div class="mode-grid">
-      <button type="button" class="mode-card" :class="{ active: mode === 'local' }" @click="mode = 'local'">
-        <i class="pi pi-desktop" />
-        <strong>Deploy From Local Source</strong>
-        <span>Use OpenCode or another coding assistant to build locally and deploy with the Airlock CLI.</span>
-      </button>
       <button type="button" class="mode-card" :class="{ active: mode === 'generate' }" @click="mode = 'generate'">
         <i class="pi pi-sparkles" />
         <strong>Generate From Instructions</strong>
         <span>Describe what you need. Airlock generates the source and builds the first version.</span>
+      </button>
+      <button type="button" class="mode-card" :class="{ active: mode === 'local' }" @click="mode = 'local'">
+        <i class="pi pi-desktop" />
+        <strong>Deploy From Local Source</strong>
+        <span>Use OpenCode or another coding assistant to build locally and deploy with the Airlock CLI.</span>
       </button>
       <button type="button" class="mode-card" :class="{ active: mode === 'git' }" @click="mode = 'git'">
         <i class="pi pi-github" />
