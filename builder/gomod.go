@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/airlockrun/agentsdk/scaffold"
 	"golang.org/x/mod/modfile"
 	"golang.org/x/mod/semver"
 )
@@ -29,7 +30,8 @@ var agentModuleTools = []string{
 }
 
 // reconcileAgentGoMod ensures the agent's go.mod can build against Airlock's
-// SDK series and exposes the module-local tools required by the build chain.
+// SDK series, pins the scaffold's Go and templ versions, and exposes the
+// module-local tools required by the build chain.
 // Production preserves a same-series requirement that is at least as new as
 // Airlock's pin; older or incompatible requirements are rewritten. Development
 // always uses the exact content-addressed version served by its module proxy.
@@ -38,7 +40,8 @@ var agentModuleTools = []string{
 // shelling out to `go mod edit`: the Airlock container that runs the upgrade
 // flow ships only the Airlock binary, not the Go toolchain.
 //
-// Idempotent when the requirement and tool directives are already canonical.
+// Idempotent when the Go version, requirements, and tool directives are already
+// canonical.
 func reconcileAgentGoMod(ctx context.Context, agentDir, version string) error {
 	gomod := filepath.Join(agentDir, "go.mod")
 	body, err := os.ReadFile(gomod)
@@ -60,11 +63,16 @@ func reconcileAgentGoMod(ctx context.Context, agentDir, version string) error {
 	if err != nil {
 		return fmt.Errorf("parse %s: %w", gomod, err)
 	}
+	if err := mf.AddGoStmt(scaffold.GoVersion); err != nil {
+		return fmt.Errorf("set Go version: %w", err)
+	}
+	if err := mf.AddRequire("github.com/a-h/templ", scaffold.TemplVersion); err != nil {
+		return fmt.Errorf("require templ %s: %w", scaffold.TemplVersion, err)
+	}
 	present := make(map[string]bool, len(mf.Tool))
 	for _, tool := range mf.Tool {
 		present[tool.Path] = true
 	}
-	toolsChanged := false
 	for _, tool := range agentModuleTools {
 		if present[tool] {
 			continue
@@ -72,13 +80,10 @@ func reconcileAgentGoMod(ctx context.Context, agentDir, version string) error {
 		if err := mf.AddTool(tool); err != nil {
 			return fmt.Errorf("add tool %s: %w", tool, err)
 		}
-		toolsChanged = true
 	}
-	if toolsChanged {
-		updated, err = mf.Format()
-		if err != nil {
-			return fmt.Errorf("format %s: %w", gomod, err)
-		}
+	updated, err = mf.Format()
+	if err != nil {
+		return fmt.Errorf("format %s: %w", gomod, err)
 	}
 	if string(updated) == string(body) {
 		return nil
