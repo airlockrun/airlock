@@ -411,7 +411,8 @@ onMounted(() => {
               aria-label="Back"
               @click="router.push(back)"
             />
-            <span class="bar-brand">{{ isChat ? 'Airlock' : headerTitle }}</span>
+            <RouterLink v-if="!inSettings" class="bar-brand bar-brand-link" to="/agents">Airlock</RouterLink>
+            <span v-else class="bar-brand">{{ headerTitle }}</span>
           </div>
           <!-- Chat title, aligned with the message column on desktop. -->
           <span v-if="isChat" class="bar-chat-title" :title="headerTitle">{{ headerTitle }}</span>
@@ -668,6 +669,15 @@ onMounted(() => {
 
 .bar-chat-title {
   flex: 1;
+}
+
+.bar-brand-link {
+  color: inherit;
+  text-decoration: none;
+}
+
+.bar-brand-link:hover {
+  text-decoration: underline;
 }
 
 /* Trim the icon buttons + avatar so they don't re-inflate the bar. */
