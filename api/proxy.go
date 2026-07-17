@@ -142,14 +142,7 @@ func SubdomainProxy(agentDomain string, database *db.DB, s3 *storage.S3Client, d
 			// Enforce access control based on route.Access.
 			switch route.Access {
 			case "public":
-				// No auth required — but the agent's allow_public_routes
-				// toggle can close the anonymous public-route surface.
-				if !agent.AllowPublicRoutes {
-					rejectOrRedirect(w, r, publicURL)
-					return
-				}
 				// Preserve optional authenticated identity on public routes so
-				// handlers can offer richer behavior without requiring login.
 				if claims, ok, fromCookie := validateSubdomainAuth(r, q, jwtSecret, agentID); ok {
 					cookieAuthenticated = fromCookie
 					uid, err := uuid.Parse(claims.Subject)
@@ -160,6 +153,13 @@ func SubdomainProxy(agentDomain string, database *db.DB, s3 *storage.S3Client, d
 						userEmail = claims.Email
 						userDisplayName = claims.DisplayName
 					}
+				}
+				// The toggle closes only the anonymous public-route surface.
+				// Authenticated app members still need public-tier assets and
+				// endpoints used by their user/admin pages.
+				if !agent.AllowPublicRoutes && !authz.AccessAtLeast(callerAccess, agentsdk.AccessUser) {
+					rejectOrRedirect(w, r, publicURL)
+					return
 				}
 
 			case "user", "admin":
