@@ -86,11 +86,12 @@ func (a *AgentSlashConv) Clear(ctx context.Context, convID pgtype.UUID) (bool, e
 
 	suspensionCleared := false
 	if sus, err := a.q.GetLatestSuspendedRunByConversation(ctx, uuid.UUID(convID.Bytes).String()); err == nil {
-		if rerr := a.q.ResolveSuspendedRun(ctx, sus.ID); rerr != nil {
+		resolved, rerr := a.q.ResolveSuspendedRun(ctx, sus.ID)
+		if rerr != nil {
 			if a.logger != nil {
 				a.logger.Warn("resolve suspended run during /clear", zap.Error(rerr))
 			}
-		} else {
+		} else if resolved == 1 {
 			suspensionCleared = true
 		}
 	}

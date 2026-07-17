@@ -1,7 +1,7 @@
 import { ref, computed } from 'vue'
 import { defineStore } from 'pinia'
 import { fromJson } from '@bufbuild/protobuf'
-import api, { isAuthRejection } from '@/api/client'
+import api, { clearAccessToken, isAuthRejection, refreshAccessToken, setAccessToken } from '@/api/client'
 import { passkeyLogin, registerPasskey } from '@/api/passkeys'
 import { ws } from '@/api/ws'
 import type { User } from '@/gen/airlock/v1/types_pb'
@@ -10,7 +10,6 @@ import {
   LoginResponseSchema,
   MeResponseSchema,
   RegisterResponseSchema,
-  RefreshResponseSchema,
   ChangePasswordResponseSchema,
 } from '@/gen/airlock/v1/api_pb'
 
@@ -39,8 +38,10 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   async function init() {
-    const refreshToken = localStorage.getItem('refresh_token')
-    if (!refreshToken) return
+    // Token material belongs in memory or HttpOnly cookies, never persistent
+    // browser storage.
+    localStorage.removeItem('access_token')
+    localStorage.removeItem('refresh_token')
     try {
       await refresh()
       await fetchMe()
@@ -48,12 +49,10 @@ export const useAuthStore = defineStore('auth', () => {
     } catch (err) {
       // Only evict credentials when the server actively rejected the
       // refresh token (401/403). A transport error or 5xx is a server
-      // restart / Caddy upstream-down — keep the tokens so the next
-      // page action after recovery just works, instead of bouncing the
-      // user to /login on every reload during a deploy.
+      // restart / Caddy upstream-down. The HttpOnly refresh cookie remains
+      // available for the next initialization or request after recovery.
       if (isAuthRejection(err)) {
-        localStorage.removeItem('access_token')
-        localStorage.removeItem('refresh_token')
+        clearAccessToken()
       }
     }
   }
@@ -61,8 +60,7 @@ export const useAuthStore = defineStore('auth', () => {
   async function login(email: string, password: string) {
     const { data } = await api.post('/auth/login', { email, password })
     const response = fromJson(LoginResponseSchema, data)
-    localStorage.setItem('access_token', response.accessToken)
-    localStorage.setItem('refresh_token', response.refreshToken)
+    setAccessToken(response.accessToken)
     user.value = response.user ?? null
     // LoginResponse doesn't carry permissions; pull them so nav/route
     // guards work on the first navigation after login.
@@ -74,8 +72,7 @@ export const useAuthStore = defineStore('auth', () => {
   // usernameless (discoverable) login; a provided email scopes to that account.
   async function loginWithPasskey(email?: string) {
     const response = await passkeyLogin(email)
-    localStorage.setItem('access_token', response.accessToken)
-    localStorage.setItem('refresh_token', response.refreshToken)
+    setAccessToken(response.accessToken)
     user.value = response.user ?? null
     await fetchMe()
     connectWS()
@@ -94,19 +91,14 @@ export const useAuthStore = defineStore('auth', () => {
   async function activate(email: string, password: string, displayName: string, activationCode?: string) {
     const { data } = await api.post('/auth/activate', { email, password, displayName, activationCode })
     const response = fromJson(RegisterResponseSchema, data)
-    localStorage.setItem('access_token', response.accessToken)
-    localStorage.setItem('refresh_token', response.refreshToken)
+    setAccessToken(response.accessToken)
     user.value = response.user ?? null
     await fetchMe()
     connectWS()
   }
 
   async function refresh() {
-    const refreshToken = localStorage.getItem('refresh_token')
-    if (!refreshToken) throw new Error('no refresh token')
-    const { data } = await api.post('/auth/refresh', { refreshToken })
-    const response = fromJson(RefreshResponseSchema, data)
-    localStorage.setItem('access_token', response.accessToken)
+    await refreshAccessToken()
   }
 
   async function fetchMe() {
@@ -119,30 +111,22 @@ export const useAuthStore = defineStore('auth', () => {
   async function changePassword(currentPassword: string, newPassword: string) {
     const { data } = await api.post('/auth/change-password', { currentPassword, newPassword })
     const response = fromJson(ChangePasswordResponseSchema, data)
-    localStorage.setItem('access_token', response.accessToken)
-    localStorage.setItem('refresh_token', response.refreshToken)
+    setAccessToken(response.accessToken)
     if (user.value) {
       user.value.mustChangePassword = false
     }
   }
 
-  function logout() {
-    const refreshToken = localStorage.getItem('refresh_token')
-    if (refreshToken) {
-      api.post('/auth/logout', { refreshToken }).catch(() => {})
-    }
+  async function logout() {
+    await api.post('/auth/logout', {})
     user.value = null
     tenantPermissions.value = new Set()
-    localStorage.removeItem('access_token')
-    localStorage.removeItem('refresh_token')
+    clearAccessToken()
     ws.disconnect()
   }
 
   function connectWS() {
-    const token = localStorage.getItem('access_token')
-    if (token) {
-      ws.connect(token)
-    }
+    ws.connect()
   }
 
   return {

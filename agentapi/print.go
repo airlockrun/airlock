@@ -9,6 +9,7 @@ import (
 	"github.com/airlockrun/agentsdk/wire"
 	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/db/dbq"
+	"github.com/airlockrun/airlock/storage"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -34,6 +35,47 @@ func (h *Handler) Print(w http.ResponseWriter, r *http.Request) {
 	}
 
 	q := dbq.New(h.db.Pool())
+	var runUUID uuid.UUID
+	if req.RunID != "" {
+		parsed, err := parseUUID(req.RunID)
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "invalid runId")
+			return
+		}
+		if _, err := q.GetRunByIDAndAgent(ctx, dbq.GetRunByIDAndAgentParams{
+			ID: toPgUUID(parsed), AgentID: toPgUUID(agentID),
+		}); err != nil {
+			writeJSONError(w, http.StatusNotFound, "run not found")
+			return
+		}
+		runUUID = parsed
+	}
+
+	var topic dbq.AgentTopic
+	var directConvID uuid.UUID
+	if req.Topic != "" {
+		var err error
+		topic, err = q.GetTopicBySlug(ctx, dbq.GetTopicBySlugParams{
+			AgentID: toPgUUID(agentID), Slug: req.Topic,
+		})
+		if err != nil {
+			writeJSONError(w, http.StatusNotFound, "topic not found")
+			return
+		}
+	} else if req.ConversationID != "" {
+		var err error
+		directConvID, err = parseUUID(req.ConversationID)
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "invalid conversationId")
+			return
+		}
+		if _, err := q.GetConversationByIDAndAgent(ctx, dbq.GetConversationByIDAndAgentParams{
+			ID: toPgUUID(directConvID), AgentID: toPgUUID(agentID),
+		}); err != nil {
+			writeJSONError(w, http.StatusNotFound, "conversation not found")
+			return
+		}
+	}
 	mediaID := uuid.New().String()[:12]
 
 	// Process parts: upload bytes, copy tmp files to permanent media location.
@@ -48,6 +90,10 @@ func (h *Handler) Print(w http.ResponseWriter, r *http.Request) {
 			filename := p.Filename
 			if filename == "" {
 				filename = "file"
+			}
+			if !validMediaFilename(filename) {
+				writeJSONError(w, http.StatusBadRequest, "invalid filename")
+				return
 			}
 			key := mediaPrefix + filename
 			if err := h.s3.PutObject(ctx, key, bytes.NewReader(p.Data), int64(len(p.Data))); err != nil {
@@ -70,6 +116,10 @@ func (h *Handler) Print(w http.ResponseWriter, r *http.Request) {
 			// key. Strip a stray leading '/' so the LLM-supplied path
 			// can't double-slash the S3 key.
 			srcPath := strings.TrimPrefix(p.Source, "/")
+			if cleaned, err := storage.CleanAgentPath(srcPath); err != nil || cleaned != srcPath {
+				writeJSONError(w, http.StatusBadRequest, "invalid source path")
+				return
+			}
 			srcKey, err := agentStorageKey(agentID, srcPath)
 			if err != nil {
 				writeJSONError(w, http.StatusBadRequest, "invalid source path: "+err.Error())
@@ -78,6 +128,10 @@ func (h *Handler) Print(w http.ResponseWriter, r *http.Request) {
 			filename := p.Filename
 			if filename == "" {
 				filename = filepath.Base(srcPath)
+			}
+			if !validMediaFilename(filename) {
+				writeJSONError(w, http.StatusBadRequest, "invalid filename")
+				return
 			}
 			dstKey := mediaPrefix + filename
 			if err := h.s3.CopyObject(ctx, srcKey, dstKey); err != nil {
@@ -100,6 +154,11 @@ func (h *Handler) Print(w http.ResponseWriter, r *http.Request) {
 				writeJSONError(w, http.StatusBadRequest, "file source must be in this agent's namespace: "+p.Source)
 				return
 			}
+			tail := strings.TrimPrefix(p.Source, expected)
+			if cleaned, err := storage.CleanAgentPath(tail); err != nil || cleaned != tail {
+				writeJSONError(w, http.StatusBadRequest, "invalid file source")
+				return
+			}
 			if _, _, err := h.s3.HeadObject(ctx, p.Source); err != nil {
 				writeJSONError(w, http.StatusBadRequest, "file source does not exist: "+p.Source)
 				return
@@ -109,14 +168,6 @@ func (h *Handler) Print(w http.ResponseWriter, r *http.Request) {
 
 	// Build text summary for the content column.
 	textSummary := ExtractTextSummary(req.Parts)
-
-	// Parse optional run linkage so ephemeral notifications sort after their run's assistant messages.
-	var runUUID uuid.UUID
-	if req.RunID != "" {
-		if parsed, err := parseUUID(req.RunID); err == nil {
-			runUUID = parsed
-		}
-	}
 
 	// Build deps for PostToConversation.
 	deps := PostDeps{
@@ -129,16 +180,6 @@ func (h *Handler) Print(w http.ResponseWriter, r *http.Request) {
 
 	// Route to conversations.
 	if req.Topic != "" {
-		// Topic publish. Load the topic to honor its per_user guard.
-		topic, err := q.GetTopicBySlug(ctx, dbq.GetTopicBySlugParams{
-			AgentID: toPgUUID(agentID),
-			Slug:    req.Topic,
-		})
-		if err != nil {
-			h.logger.Warn("print: topic not found", zap.String("slug", req.Topic), zap.Error(err))
-			writeJSONError(w, http.StatusNotFound, "topic not found")
-			return
-		}
 		if topic.PerUser && req.UserID == "" {
 			// A per_user topic forbids broadcast — it would leak across users.
 			writeJSONError(w, http.StatusBadRequest, "per-user topic requires a target user")
@@ -147,6 +188,7 @@ func (h *Handler) Print(w http.ResponseWriter, r *http.Request) {
 
 		// Find subscribed conversations — all, or just the target user's.
 		var rows []pgtype.UUID
+		var err error
 		if req.UserID != "" {
 			uid, perr := parseUUID(req.UserID)
 			if perr != nil {
@@ -194,14 +236,9 @@ func (h *Handler) Print(w http.ResponseWriter, r *http.Request) {
 		}
 	} else if req.ConversationID != "" {
 		// Direct output() — single conversation, ephemeral.
-		convID, err := parseUUID(req.ConversationID)
-		if err != nil {
-			writeJSONError(w, http.StatusBadRequest, "invalid conversationId")
-			return
-		}
 		if err := PostToConversation(ctx, deps, PostOpts{
 			AgentID:        agentID,
-			ConversationID: convID,
+			ConversationID: directConvID,
 			RunID:          runUUID,
 			Role:           "assistant",
 			Text:           textSummary,
@@ -250,6 +287,11 @@ func agentMediaKey(agentID uuid.UUID, mediaID, filename string) string {
 	return "agents/" + agentID.String() + "/media/" + mediaID + "/" + filename
 }
 
+func validMediaFilename(filename string) bool {
+	cleaned, err := storage.CleanAgentPath(filename)
+	return err == nil && cleaned == filename && !strings.Contains(filename, "/")
+}
+
 // TopicSubscribe handles POST /api/agent/topic/{slug}/subscribe.
 // Subscribes the given conversation to the agent's topic.
 func (h *Handler) TopicSubscribe(w http.ResponseWriter, r *http.Request) {
@@ -277,6 +319,12 @@ func (h *Handler) TopicSubscribe(w http.ResponseWriter, r *http.Request) {
 	}
 
 	q := dbq.New(h.db.Pool())
+	if _, err := q.GetConversationByIDAndAgent(ctx, dbq.GetConversationByIDAndAgentParams{
+		ID: toPgUUID(convUUID), AgentID: toPgUUID(agentID),
+	}); err != nil {
+		writeJSONError(w, http.StatusNotFound, "conversation not found")
+		return
+	}
 
 	topic, err := q.GetTopicBySlug(ctx, dbq.GetTopicBySlugParams{
 		AgentID: toPgUUID(agentID),
@@ -326,6 +374,12 @@ func (h *Handler) TopicUnsubscribe(w http.ResponseWriter, r *http.Request) {
 	}
 
 	q := dbq.New(h.db.Pool())
+	if _, err := q.GetConversationByIDAndAgent(ctx, dbq.GetConversationByIDAndAgentParams{
+		ID: toPgUUID(convUUID), AgentID: toPgUUID(agentID),
+	}); err != nil {
+		writeJSONError(w, http.StatusNotFound, "conversation not found")
+		return
+	}
 
 	topic, err := q.GetTopicBySlug(ctx, dbq.GetTopicBySlugParams{
 		AgentID: toPgUUID(agentID),

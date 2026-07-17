@@ -3,7 +3,7 @@ package api
 import (
 	"context"
 	"net/http"
-	"net/netip"
+	"time"
 
 	"github.com/airlockrun/airlock/agentapi"
 	"github.com/airlockrun/airlock/auth"
@@ -14,6 +14,7 @@ import (
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/airlockrun/airlock/execproxy"
+	"github.com/airlockrun/airlock/networkpolicy"
 	"github.com/airlockrun/airlock/oauth"
 	"github.com/airlockrun/airlock/realtime"
 	"github.com/airlockrun/airlock/secrets"
@@ -103,7 +104,7 @@ type RouterConfig struct {
 	// from the model provider (e.g. localhost without a tunnel).
 	ForceInlineAttachments bool
 	// Non-public CIDRs available to Airlock-brokered agent HTTP calls.
-	HTTPPrivateCIDRs []netip.Prefix
+	HTTPNetwork *networkpolicy.Policy
 
 	// Path to the on-disk activation code file — cleared after Activate
 	// succeeds so the one-time secret doesn't linger on disk.
@@ -117,6 +118,9 @@ type RouterConfig struct {
 }
 
 func NewRouter(cfg RouterConfig) http.Handler {
+	if cfg.HTTPNetwork == nil {
+		panic("api: HTTP network policy is required")
+	}
 	if cfg.Secrets == nil {
 		panic("api: RouterConfig.Encryptor is required")
 	}
@@ -132,14 +136,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	// Cross-cutting middleware (RequestID, RealIP, requestLogger, recoverers)
 	// is applied on the outer wrapper below, so it covers both the chi-routed
 	// platform API and the SubdomainProxy-intercepted agent traffic.
-	r.Use(cors.Handler(cors.Options{
-		AllowedOrigins:   []string{"*"},
-		AllowedMethods:   []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
-		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type"},
-		ExposedHeaders:   []string{"Link"},
-		AllowCredentials: true,
-		MaxAge:           300,
-	}))
+	r.Use(cors.Handler(platformCORSOptions(cfg.PublicURL)))
 
 	// SSH dialer for RegisterExecEndpoint. Owns a per-process *ssh.Client
 	// cache + background reaper; lives for the lifetime of the server.
@@ -151,16 +148,16 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		cfg.Logger,
 	)
 
-	authHandler := NewAuthHandler(cfg.DB, cfg.JWTSecret, cfg.ActivationCodeFile, cfg.Logger.Named("auth"))
+	authHandler := NewAuthHandler(cfg.DB, cfg.JWTSecret, cfg.ActivationCodeFile, cfg.PublicURL, cfg.Logger.Named("auth"))
 	webAuthn, err := passkey.New(cfg.PublicURL)
 	if err != nil {
 		panic("api: build webauthn from PUBLIC_URL: " + err.Error())
 	}
-	passkeyHandler := NewPasskeyHandler(passkeyssvc.New(cfg.DB, webAuthn, cfg.Logger.Named("passkeys")), cfg.DB, cfg.JWTSecret)
+	passkeyHandler := NewPasskeyHandler(passkeyssvc.New(cfg.DB, webAuthn, cfg.Logger.Named("passkeys")), cfg.DB, cfg.JWTSecret, cfg.PublicURL)
 	deviceLoginH := newDeviceLoginHandler(cfg.DB, cfg.JWTSecret, cfg.PublicURL)
 	providersHandler := NewProvidersHandler(providerssvc.New(cfg.DB, cfg.Secrets, cfg.Logger.Named("providers")))
 	gitCredsHandler := NewGitCredentialsHandler(gitcredssvc.New(cfg.DB, cfg.Secrets, cfg.Logger.Named("gitcredentials")))
-	gitWebhookHandler := NewGitWebhookHandler(cfg.DB, cfg.BuildService, cfg.Logger.Named("git-webhook"))
+	gitWebhookHandler := NewGitWebhookHandler(cfg.DB, cfg.BuildService, cfg.Secrets, cfg.Logger.Named("git-webhook"))
 	usersHandler := NewUsersHandler(cfg.DB, userssvc.New(cfg.DB, cfg.BridgeManager, cfg.Logger.Named("users")))
 	grantsHandler := NewGrantsHandler(grantssvc.New(cfg.DB, cfg.Logger.Named("grants")))
 	needsHandler := NewNeedsHandler(needssvc.NewService(cfg.DB, cfg.Logger.Named("needs")))
@@ -174,12 +171,13 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	healthH := newHealthHandler(cfg.DB, cfg.S3Client, cfg.Logger.Named("health"))
 	r.Get("/health", healthH.Check)
 
-	// WebSocket endpoint (public, auth via query param)
-	wsHandler := NewWSHandler(cfg.DB, cfg.Hub, cfg.Handler, cfg.JWTSecret, cfg.Logger.Named("ws"))
+	// WebSocket endpoint authenticates with the HttpOnly access cookie and an
+	// exact configured Origin before upgrading.
+	wsHandler := NewWSHandler(cfg.DB, cfg.Hub, cfg.Handler, cfg.JWTSecret, cfg.PublicURL, cfg.Logger.Named("ws"))
 	r.Get("/ws", wsHandler.Upgrade)
 
 	relayH := &relayHandler{
-		jwtSecret:   cfg.JWTSecret,
+		db:          cfg.DB,
 		agentDomain: cfg.AgentDomain,
 		publicURL:   cfg.PublicURL,
 		logger:      cfg.Logger.Named("relay"),
@@ -203,6 +201,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		// Authenticated: change password, relay code
 		r.Group(func(r chi.Router) {
 			r.Use(auth.Middleware(cfg.JWTSecret))
+			r.Use(auth.LiveSessionMiddleware(cfg.DB))
 			r.Post("/change-password", authHandler.ChangePassword)
 			r.Post("/relay-code", relayH.GenerateCode)
 		})
@@ -212,7 +211,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	// takes function-typed deps for MCP discovery + auth injection so it
 	// doesn't have to depend on the goai/mcp client directly.
 	credSvcDiscovery := func(ctx context.Context, serverURL string, authInjection []byte, creds string) ([]connsvc.ToolInfo, string, error) {
-		tools, instructions, err := agentapi.DiscoverMCPTools(ctx, serverURL, authInjection, creds)
+		tools, instructions, err := agentapi.DiscoverMCPTools(ctx, cfg.HTTPNetwork.Client(60*time.Second), serverURL, authInjection, creds)
 		if err != nil {
 			return nil, "", err
 		}
@@ -230,9 +229,11 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		cfg.Dispatcher.RefreshAgent,
 		cfg.Logger.Named("credentials"),
 		credSvcDiscovery,
-		agentapi.DiscoverMCPAuth,
+		func(ctx context.Context, serverURL string) (*oauth.DiscoveryResult, error) {
+			return agentapi.DiscoverMCPAuth(ctx, cfg.HTTPNetwork.Client(30*time.Second), serverURL)
+		},
 		agentapi.InjectAuth,
-		agentapi.MCPHTTPClient,
+		cfg.HTTPNetwork.Client(30*time.Second),
 	))
 	brH := newBridgeHandler(bridgessvc.New(
 		cfg.DB, cfg.Secrets, cfg.TelegramDriver,
@@ -262,6 +263,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	// Authenticated API routes
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Use(auth.Middleware(cfg.JWTSecret))
+		r.Use(auth.LiveSessionMiddleware(cfg.DB))
 		r.Use(identityLogger)
 		// Block a must_change_password user from everything except the
 		// account-securing endpoints until they secure the account.
@@ -277,13 +279,13 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		// passkey to secure the account.
 		r.Route("/me/passkeys", func(r chi.Router) {
 			r.Get("/", passkeyHandler.List)
-			r.Post("/register/begin", passkeyHandler.RegisterBegin)
-			r.Post("/register/finish", passkeyHandler.RegisterFinish)
-			r.Patch("/{id}", passkeyHandler.Rename)
-			r.Delete("/{id}", passkeyHandler.Delete)
+			r.With(auth.RequireRecentAuthentication).Post("/register/begin", passkeyHandler.RegisterBegin)
+			r.With(auth.RequireRecentAuthentication).Post("/register/finish", passkeyHandler.RegisterFinish)
+			r.With(auth.RequireRecentAuthentication).Patch("/{id}", passkeyHandler.Rename)
+			r.With(auth.RequireRecentAuthentication).Delete("/{id}", passkeyHandler.Delete)
 		})
-		r.Post("/me/password", passkeyHandler.SetPassword)
-		r.Delete("/me/password", passkeyHandler.RemovePassword)
+		r.With(auth.RequireRecentAuthentication).Post("/me/password", passkeyHandler.SetPassword)
+		r.With(auth.RequireRecentAuthentication).Delete("/me/password", passkeyHandler.RemovePassword)
 
 		// Per-user git credentials (PATs for accessing external git
 		// remotes attached to agents). Self-service: any authenticated
@@ -379,6 +381,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 			agentssvc.New(
 				cfg.DB, cfg.BuildService, cfg.Dispatcher,
 				cfg.Containers, cfg.BridgeManager,
+				cfg.Secrets,
 				cfg.Logger.Named("agents"),
 			),
 			memberssvc.New(cfg.DB, cfg.Logger.Named("members")),
@@ -438,6 +441,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 			Agents: agentssvc.New(
 				cfg.DB, cfg.BuildService, cfg.Dispatcher,
 				cfg.Containers, cfg.BridgeManager,
+				cfg.Secrets,
 				cfg.Logger.Named("sysagent-agents"),
 			),
 			Bridges: bridgessvc.New(
@@ -448,7 +452,11 @@ func NewRouter(cfg RouterConfig) http.Handler {
 			Conns: connsvc.New(
 				cfg.DB, cfg.Secrets, cfg.OAuthClient, cfg.PublicURL,
 				cfg.Dispatcher.RefreshAgent, cfg.Logger.Named("sysagent-conns"),
-				credSvcDiscovery, agentapi.DiscoverMCPAuth, agentapi.InjectAuth, agentapi.MCPHTTPClient,
+				credSvcDiscovery,
+				func(ctx context.Context, serverURL string) (*oauth.DiscoveryResult, error) {
+					return agentapi.DiscoverMCPAuth(ctx, cfg.HTTPNetwork.Client(30*time.Second), serverURL)
+				},
+				agentapi.InjectAuth, cfg.HTTPNetwork.Client(30*time.Second),
 			),
 			Execs:       execsvc.New(cfg.DB.Pool(), cfg.Secrets, execDialer, cfg.Logger.Named("sysagent-execs")),
 			GitCreds:    gitcredssvc.New(cfg.DB, cfg.Secrets, cfg.Logger.Named("sysagent-gitcreds")),
@@ -679,7 +687,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		AgentBaseURL:           cfg.AgentBaseURL,
 		LLMProxyURL:            cfg.LLMProxyURL,
 		ForceInlineAttachments: cfg.ForceInlineAttachments,
-		HTTPPrivateCIDRs:       cfg.HTTPPrivateCIDRs,
+		HTTPNetwork:            cfg.HTTPNetwork,
 		JWTSecret:              cfg.JWTSecret,
 		Dispatcher:             cfg.Dispatcher,
 		ExecDialer:             execDialer,
@@ -688,6 +696,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	integrationsH := newIntegrationsHandler(integrationssvc.New(cfg.DB, ah))
 	r.Route("/api/v1/agents/{agentID}/integrations", func(r chi.Router) {
 		r.Use(auth.Middleware(cfg.JWTSecret))
+		r.Use(auth.LiveSessionMiddleware(cfg.DB))
 		r.Use(identityLogger)
 		r.Use(securedAccountGate)
 		r.Use(integrationUserContext)
@@ -727,7 +736,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	r.Post("/oauth/token", oauthH.Token)
 
 	r.Route("/api/agent", func(r chi.Router) {
-		r.Use(auth.AgentMiddleware(cfg.JWTSecret))
+		r.Use(auth.AgentMiddleware(cfg.JWTSecret, dbq.New(cfg.DB.Pool())))
 		r.Post("/exec/{slug}", ah.AgentExec)
 		r.Put("/sync", ah.Sync)
 		r.Post("/llm/stream", ah.LLMStream)
@@ -789,4 +798,15 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	handler = chimw.RequestID(handler)
 	handler = chimw.Recoverer(handler)
 	return handler
+}
+
+func platformCORSOptions(publicURL string) cors.Options {
+	return cors.Options{
+		AllowedOrigins:   []string{configuredOrigin(publicURL)},
+		AllowedMethods:   []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
+		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type"},
+		ExposedHeaders:   []string{"Link"},
+		AllowCredentials: true,
+		MaxAge:           300,
+	}
 }

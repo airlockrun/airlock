@@ -16,9 +16,10 @@ SELECT * FROM agent_directories WHERE agent_id = $1 ORDER BY path;
 
 -- name: GetDirectoryByPath :one
 -- Longest-prefix match for nested registrations. Returns the most-specific
--- directory whose path is a prefix of the requested path.
+-- directory matching the requested path on an exact segment boundary.
 SELECT * FROM agent_directories
-WHERE agent_id = @agent_id AND @path::text LIKE path || '%'
+WHERE agent_id = @agent_id
+  AND (@path::text = path OR @path::text LIKE path || '/%')
 ORDER BY length(path) DESC LIMIT 1;
 
 -- name: DeleteDirectoriesByAgentExcept :exec

@@ -56,7 +56,8 @@ const listSubscribedConversations = `-- name: ListSubscribedConversations :many
 SELECT ts.conversation_id
 FROM topic_subscriptions ts
 JOIN agent_topics at ON at.id = ts.topic_id
-WHERE at.agent_id = $1 AND at.slug = $2
+JOIN agent_conversations c ON c.id = ts.conversation_id
+WHERE at.agent_id = $1 AND at.slug = $2 AND c.agent_id = $1
 `
 
 type ListSubscribedConversationsParams struct {
@@ -89,7 +90,8 @@ SELECT ts.conversation_id
 FROM topic_subscriptions ts
 JOIN agent_topics at ON at.id = ts.topic_id
 JOIN agent_conversations c ON c.id = ts.conversation_id
-WHERE at.agent_id = $1 AND at.slug = $2 AND c.user_id = $3
+WHERE at.agent_id = $1 AND at.slug = $2
+  AND c.agent_id = $1 AND c.user_id = $3
 `
 
 type ListSubscribedConversationsForUserParams struct {

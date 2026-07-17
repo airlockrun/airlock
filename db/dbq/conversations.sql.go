@@ -48,6 +48,46 @@ func (q *Queries) CreateA2AConversation(ctx context.Context, arg CreateA2AConver
 	return i, err
 }
 
+const createMCPA2AConversation = `-- name: CreateMCPA2AConversation :one
+INSERT INTO agent_conversations (agent_id, user_id, source, title, metadata, settings)
+VALUES ($1, $2, 'a2a', $3, $4, '{}'::jsonb)
+RETURNING id, agent_id, bridge_id, user_id, source, external_id, title, metadata, settings, context_checkpoint_message_id, created_at, updated_at
+`
+
+type CreateMCPA2AConversationParams struct {
+	AgentID  pgtype.UUID `json:"agent_id"`
+	UserID   pgtype.UUID `json:"user_id"`
+	Title    string      `json:"title"`
+	Metadata []byte      `json:"metadata"`
+}
+
+// MCP continuations carry a server-generated principal binding in metadata.
+// Callers cannot choose this value; subsequent context/task access must match it.
+func (q *Queries) CreateMCPA2AConversation(ctx context.Context, arg CreateMCPA2AConversationParams) (AgentConversation, error) {
+	row := q.db.QueryRow(ctx, createMCPA2AConversation,
+		arg.AgentID,
+		arg.UserID,
+		arg.Title,
+		arg.Metadata,
+	)
+	var i AgentConversation
+	err := row.Scan(
+		&i.ID,
+		&i.AgentID,
+		&i.BridgeID,
+		&i.UserID,
+		&i.Source,
+		&i.ExternalID,
+		&i.Title,
+		&i.Metadata,
+		&i.Settings,
+		&i.ContextCheckpointMessageID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const createWebConversation = `-- name: CreateWebConversation :one
 INSERT INTO agent_conversations (agent_id, user_id, source, title, metadata, settings)
 VALUES ($1, $2, 'web', $3, '{}'::jsonb, '{}'::jsonb)
@@ -119,6 +159,36 @@ SELECT id, agent_id, bridge_id, user_id, source, external_id, title, metadata, s
 
 func (q *Queries) GetConversationByID(ctx context.Context, id pgtype.UUID) (AgentConversation, error) {
 	row := q.db.QueryRow(ctx, getConversationByID, id)
+	var i AgentConversation
+	err := row.Scan(
+		&i.ID,
+		&i.AgentID,
+		&i.BridgeID,
+		&i.UserID,
+		&i.Source,
+		&i.ExternalID,
+		&i.Title,
+		&i.Metadata,
+		&i.Settings,
+		&i.ContextCheckpointMessageID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getConversationByIDAndAgent = `-- name: GetConversationByIDAndAgent :one
+SELECT id, agent_id, bridge_id, user_id, source, external_id, title, metadata, settings, context_checkpoint_message_id, created_at, updated_at FROM agent_conversations
+WHERE id = $1 AND agent_id = $2
+`
+
+type GetConversationByIDAndAgentParams struct {
+	ID      pgtype.UUID `json:"id"`
+	AgentID pgtype.UUID `json:"agent_id"`
+}
+
+func (q *Queries) GetConversationByIDAndAgent(ctx context.Context, arg GetConversationByIDAndAgentParams) (AgentConversation, error) {
+	row := q.db.QueryRow(ctx, getConversationByIDAndAgent, arg.ID, arg.AgentID)
 	var i AgentConversation
 	err := row.Scan(
 		&i.ID,

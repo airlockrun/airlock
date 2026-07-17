@@ -29,6 +29,13 @@ INSERT INTO agent_conversations (agent_id, user_id, source, title, metadata, set
 VALUES (@agent_id, @user_id, 'a2a', @title, '{}'::jsonb, '{}'::jsonb)
 RETURNING *;
 
+-- name: CreateMCPA2AConversation :one
+-- MCP continuations carry a server-generated principal binding in metadata.
+-- Callers cannot choose this value; subsequent context/task access must match it.
+INSERT INTO agent_conversations (agent_id, user_id, source, title, metadata, settings)
+VALUES (@agent_id, @user_id, 'a2a', @title, @metadata, '{}'::jsonb)
+RETURNING *;
+
 -- name: DeleteExpiredAnonA2AConversations :execrows
 -- Sweeper: anonymous A2A conversations (no owning user, minted for
 -- unauthenticated external-MCP callers) have no UI to resume them and
@@ -80,6 +87,10 @@ LIMIT @lim;
 
 -- name: GetConversationByID :one
 SELECT * FROM agent_conversations WHERE id = $1;
+
+-- name: GetConversationByIDAndAgent :one
+SELECT * FROM agent_conversations
+WHERE id = @id AND agent_id = @agent_id;
 
 -- name: GetConversationBySource :one
 -- Non-creating lookup used by the bridge manager when it needs to read

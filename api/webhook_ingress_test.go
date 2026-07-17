@@ -6,10 +6,23 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
+
+func TestReadWebhookBodyLimit(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/webhooks/id/path", strings.NewReader(strings.Repeat("x", int(maxWebhookBodyBytes)+1)))
+	_, err := readWebhookBody(httptest.NewRecorder(), req)
+	var maxErr *http.MaxBytesError
+	if !errors.As(err, &maxErr) {
+		t.Fatalf("readWebhookBody() error = %v, want *http.MaxBytesError", err)
+	}
+}
 
 func TestVerifyHMAC(t *testing.T) {
 	secret := []byte("test-secret-key")

@@ -9,11 +9,13 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/airlockrun/airlock/agentapi"
 	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/db/dbq"
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
+	"github.com/airlockrun/airlock/networkpolicy"
 	"github.com/airlockrun/airlock/oauth"
 	connsvc "github.com/airlockrun/airlock/service/connections"
 	"github.com/go-chi/chi/v5"
@@ -24,8 +26,10 @@ import (
 // --- test helpers for user-authenticated routes ---
 
 func testCredentialHandler() *credentialHandler {
+	httpNetwork := networkpolicy.New(nil, true)
+	httpClient := httpNetwork.Client(30 * time.Second)
 	disc := func(ctx context.Context, serverURL string, authInjection []byte, creds string) ([]connsvc.ToolInfo, string, error) {
-		tools, instructions, err := agentapi.DiscoverMCPTools(ctx, serverURL, authInjection, creds)
+		tools, instructions, err := agentapi.DiscoverMCPTools(ctx, httpClient, serverURL, authInjection, creds)
 		if err != nil {
 			return nil, "", err
 		}
@@ -37,9 +41,11 @@ func testCredentialHandler() *credentialHandler {
 	}
 	noopRefresh := func(ctx context.Context, agentID uuid.UUID) error { return nil }
 	return newCredentialHandler(connsvc.New(
-		testDB, testEncryptor(), oauth.NewClient(),
+		testDB, testEncryptor(), oauth.NewClient(httpClient, true),
 		"http://localhost:8080", noopRefresh, zap.NewNop(),
-		disc, agentapi.DiscoverMCPAuth, agentapi.InjectAuth, agentapi.MCPHTTPClient,
+		disc, func(ctx context.Context, serverURL string) (*oauth.DiscoveryResult, error) {
+			return agentapi.DiscoverMCPAuth(ctx, httpClient, serverURL)
+		}, agentapi.InjectAuth, httpClient,
 	))
 }
 
@@ -366,8 +372,9 @@ func TestOAuthCallbackFlow(t *testing.T) {
 
 	// Set OAuth app credentials.
 	enc := testEncryptor()
-	encClientID, _ := enc.Put(context.Background(), "test/client_id", "mock-client-id")
-	encClientSecret, _ := enc.Put(context.Background(), "test/client_secret", "mock-client-secret")
+	connRef := "connection/" + pgUUID(conn.ID).String()
+	encClientID, _ := enc.Put(context.Background(), connRef+"/client_id", "mock-client-id")
+	encClientSecret, _ := enc.Put(context.Background(), connRef+"/client_secret", "mock-client-secret")
 	if err := q.UpdateConnectionOAuthAppByID(context.Background(), dbq.UpdateConnectionOAuthAppByIDParams{
 		ID:           conn.ID,
 		ClientID:     encClientID,
@@ -386,6 +393,18 @@ func TestOAuthCallbackFlow(t *testing.T) {
 	})
 
 	var state string
+	t.Run("start rejects off-origin completion redirect", func(t *testing.T) {
+		startBody := map[string]string{
+			"agent_id": agentID.String(), "slug": "mock-oauth", "redirect_uri": "https://attacker.example/steal",
+		}
+		req := userRequestJSON(t, "POST", "/api/v1/credentials/oauth/start", userID, startBody)
+		rec := httptest.NewRecorder()
+		startRouter.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400; body: %s", rec.Code, rec.Body.String())
+		}
+	})
+
 	t.Run("start returns state", func(t *testing.T) {
 		startBody := map[string]string{"agent_id": agentID.String(), "slug": "mock-oauth"}
 		req := userRequestJSON(t, "POST", "/api/v1/credentials/oauth/start", userID, startBody)
@@ -416,6 +435,16 @@ func TestOAuthCallbackFlow(t *testing.T) {
 		callbackRouter.ServeHTTP(rec, req)
 		if rec.Code != http.StatusFound {
 			t.Fatalf("status = %d, want 302; body: %s", rec.Code, rec.Body.String())
+		}
+	})
+
+	t.Run("callback rejects state replay", func(t *testing.T) {
+		callbackURL := fmt.Sprintf("/api/v1/credentials/oauth/callback?code=replayed-code&state=%s", state)
+		req := httptest.NewRequest("GET", callbackURL, nil)
+		rec := httptest.NewRecorder()
+		callbackRouter.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400; body: %s", rec.Code, rec.Body.String())
 		}
 	})
 

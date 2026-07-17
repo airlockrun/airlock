@@ -23,7 +23,7 @@ cmd/airlock/       Multi-command binary. Subcommands:
                                                   to stdout); break-glass for a locked-out
                                                   user, including a passkey-only admin.
 api/               HTTP handlers (chi router) + WebSocket upgrade
-auth/              JWT (HS256), middleware, RBAC (admin/manager/user), bcrypt +
+auth/              Profile-separated JWTs (exact HS256), middleware, RBAC (admin/manager/user), bcrypt +
                    zxcvbn password strength (ValidatePasswordStrength), temp-password
                    generation. Claims.MustChangePassword drives the secured-account gate.
 auth/passkey/      WebAuthn (go-webauthn) relying-party builder + webauthn.User adapter.
@@ -114,12 +114,17 @@ On startup `builder.RebuildAllOnSDKChange` compares the airlock-bundled `agentsd
 ## API Structure
 
 ### Public: `/auth`
-`POST status|activate|login|refresh|change-password`. `activate` accepts an empty
+`POST status|activate|login|refresh|logout|change-password`. Browser refresh and
+logout use the host-only HttpOnly `airlock_refresh` cookie with an exact
+`PUBLIC_URL` Origin check. `activate` accepts an empty
 password (passkey-only first admin). Passkey login: `POST passkey/login/begin|finish`
 — begin/finish exchange raw WebAuthn JSON (browser attestation/assertion), not proto;
 finish issues the same tokens as password login.
 
-### Authenticated: `/api/v1` (JWT middleware + secured-account gate)
+### Authenticated: `/api/v1` (JWT + live DB session middleware + secured-account gate)
+User access JWTs carry `sid`, `auth_epoch`, and `auth_time`. Every request checks
+that the session remains active and replaces role/account-security claims from
+the live user row before authorization.
 The secured-account gate (`securedAccountGate`) blocks a `MustChangePassword` principal
 from everything except `GET /me`, `POST /me/password`, and `POST /me/passkeys/register/*`
 until they set a password or register a passkey (then `/auth/refresh` re-reads the cleared
@@ -160,7 +165,7 @@ by `/api/v1` or `/api/agent`.
 ### Webhook Ingress: `/webhooks/{agentID}/{path}` (no auth, verified per-webhook)
 
 ### Health: `/health` (no auth)
-`GET /health` — 200 + `{status: "ok", db: true, s3: true}` if Postgres + S3 reachable; 503 + `status: "degraded"` with per-subsystem booleans otherwise. For reverse proxies and orchestrator probes.
+`GET /health` — 200 + `{status: "ok", db: true, s3: true}` if Postgres + S3 reachable; 503 + `status: "degraded"` with per-subsystem booleans otherwise. Concurrent public requests share one probe and reuse its result for five seconds.
 
 ## Database
 
@@ -174,9 +179,12 @@ Postgres with sqlc. Key tables:
 - `agent_members` — sharing/permissions
 - `connections` — OAuth/API integrations (encrypted credentials)
 - `agent_exec_endpoints` — remote command targets (SSH today; transport pluggable). Operator-configured host/port/user + airlock-generated ED25519 keypair (private key in secrets store) + TOFU-pinned host key. Declared by the agent via `RegisterExecEndpoint`.
-- `bridges`, `platform_identities` — chat platform integrations (Telegram)
+- `bridges`, `platform_identities`, `identity_link_challenges` — chat platform integrations and one-time identity-link confirmation state
 - `runs` — execution history (trigger, status, input/output, timeline)
 - `oauth_states` — OAuth flow state tokens
+- `oauth_clients`, `oauth_grants`, `oauth_authz_codes`, `oauth_refresh_tokens` — inbound MCP OAuth registrations, consent, single-use codes, and transactionally rotated refresh families
+- `oauth_dcr_attempts` — one-hour DB-backed dynamic-client-registration rate-limit buckets keyed by trusted normalized client IP
+- `device_login_sessions`, `user_sessions`, `relay_codes` — short-lived CLI/subdomain handoffs and revocable first-party web/CLI/Telegram sessions; relay codes are hash-persisted, preserve their originating session, and are atomically consumed
 - `auth_failures`, `auth_lockouts` — per-(email, ip) login throttle (see `auth/lockout/`)
 - `webauthn_credentials` — registered passkeys (one row per authenticator per user)
 - `webauthn_ceremonies` — short-lived, single-use WebAuthn challenge state (begin→finish), GC'd by InboundOAuthGC
@@ -202,7 +210,10 @@ Tenant role does **not** grant agent access. A tenant `admin` with no `agent_mem
 
 ## WebSocket
 
-`GET /ws?token=<jwt>` → upgrade → Hub manages connections + topic subscriptions.
+`GET /ws` authenticates with the HttpOnly `airlock_session` access cookie,
+requires an exact `PUBLIC_URL` Origin, and closes at the token expiry. Hub then
+manages connections + topic subscriptions. Query-token authentication is not
+accepted.
 
 Envelope format: `{type, requestId, topicId, payload}`. Topic = agent UUID.
 
@@ -212,16 +223,33 @@ Replay buffer (100 messages) per topic for late subscribers.
 
 ## Security
 
-- JWT HS256 tokens: 15min access, 7d refresh. Agent tokens: 100-year.
+- JWT profiles use exact HS256 plus profile-specific issuer, audience, and
+  `token_use`: user access and OAuth MCP access tokens are 15min, versioned
+  agent tokens are 7d with proactive container rotation, and agent-bound
+  subdomain tokens are 1h and require their originating live user session on every proxy/storage request. Agent API requests also require a live active/building
+  agent row whose `agent_token_version` exactly matches the token. First-party refresh
+  tokens are opaque, DB-backed, and expire after 7d.
+- Browser refresh tokens are opaque, DB-backed values stored only in a
+  host-only HttpOnly SameSite cookie. Browser access tokens live in frontend
+  memory and are mirrored to the HttpOnly `airlock_session` cookie for OAuth
+  navigation and WebSockets. Role, deletion, credential, auth-epoch, and session
+  revocation changes invalidate first-party access immediately on the next
+  request.
 - Login: passkeys (WebAuthn, phishing-resistant) are primary; a strong password
   (zxcvbn score ≥ 3, enforced identically on the frontend meter) is an optional
   alternative. Passkeys require user verification + resident keys (usernameless
   sign-in). WebAuthn needs HTTPS in production (localhost is exempt for dev); the
   RP ID is the PUBLIC_URL host, so changing that host invalidates enrolled passkeys.
 - AES-256-GCM encryption at rest for API keys, secrets, tokens. Versioned keys for rotation.
+- Persisted Store values use ref-bound versioned envelopes with stable key IDs.
+  Normal startup never rewrites stored values. `ENCRYPTION_KEY_REWRAP=true` is a
+  coordinated stop-all maintenance mode that migrates formats and keys in one
+  advisory-locked transaction before serving. Unenveloped plaintext compatibility
+  is restricted to `agents.git_webhook_secret`. Procedures are in
+  `docs/secret-storage.md`.
 - Webhook verification: none, HMAC, or token-based.
 - Agent containers get scoped DB credentials (per-agent schema) and bearer token.
-- Agent runtime containers are hardened by default in `container.buildAgentHostConfig` (CapDrop:ALL, no-new-privileges, PidsLimit, lower CPUShares, OomScoreAdj so agents OOM before infra). Native Airlock sets `AGENT_HOST_GATEWAY=true` so agents can resolve the host explicitly; container deployments omit that reachability. Airlock-brokered `httpRequest` and connection calls use `AGENT_HTTP_PRIVATE_CIDRS` for non-public destinations while always blocking localhost and link-local addresses. Optional `AGENT_MEMORY_LIMIT` and `AGENT_SANDBOX=gvisor` (runsc) — see `docs/agent-isolation.md`.
+- Agent runtime containers are hardened by default in `container.buildAgentHostConfig` (CapDrop:ALL, no-new-privileges, PidsLimit, lower CPUShares, OomScoreAdj so agents OOM before infra). Compose enables managed per-agent Docker `Internal` networks; only instance-labeled Airlock/Postgres endpoints attach, and PostgreSQL advisory locks serialize lifecycle changes across replicas. This blocks direct public/private/host/metadata egress and sibling traffic; outbound HTTP is brokered through Airlock. External Postgres uses the fixed-destination `postgres-agent-relay`. Native Airlock explicitly uses shared development networking because a host process cannot attach to an internal Docker bridge. Airlock-brokered HTTP, connection, MCP, and outbound OAuth calls share one DNS-validating transport and use `AGENT_HTTP_PRIVATE_CIDRS` for non-public destinations. Optional `AGENT_MEMORY_LIMIT` and `AGENT_SANDBOX=gvisor` (runsc) — see `docs/agent-isolation.md`.
 - **Instance namespacing.** Every Docker resource airlock owns (agent/builder container names, agent image labels, build-cache volumes, buildx builder) is namespaced by `AIRLOCK_INSTANCE_ID` (required; default `airlock`) via the `config.LabelInstance` (`run.airlock.instance`) label. All container/image list+prune calls filter on that label, so instances sharing one Docker daemon never reap each other's resources. **Co-locating instances on one daemon requires a DISTINCT `AIRLOCK_INSTANCE_ID` per instance** plus matching compose namespaces (`COMPOSE_PROJECT_NAME`, `DOCKER_NETWORK`, `AGENT_NETWORK`, `AGENT_CODEGEN_VOLUME`); `install.sh --instance-id <id>` writes those together. See `docs/agent-isolation.md`.
 - OIDC enterprise support via build tag.
 
@@ -236,7 +264,7 @@ Vue 3 (Composition API) + TypeScript + Vite + Pinia + PrimeVue + Protobuf (`@buf
 ```
 frontend/src/
   api/
-    client.ts          Axios HTTP client — Bearer token injection, auto-refresh on 401
+    client.ts          Axios HTTP client — in-memory Bearer injection, cookie refresh on 401
     ws.ts              AirlockWS — single-topic WebSocket with auto-reconnect (1s→30s backoff)
     proto.ts           Protobuf unwrap utilities
   stores/              Pinia stores (one per domain)

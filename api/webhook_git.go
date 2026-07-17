@@ -15,6 +15,7 @@ import (
 	"github.com/airlockrun/airlock/builder"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
+	"github.com/airlockrun/airlock/secrets"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -31,11 +32,15 @@ import (
 type GitWebhookHandler struct {
 	db      *db.DB
 	builder *builder.BuildService
+	secrets secrets.Store
 	logger  *zap.Logger
 }
 
-func NewGitWebhookHandler(database *db.DB, b *builder.BuildService, logger *zap.Logger) *GitWebhookHandler {
-	return &GitWebhookHandler{db: database, builder: b, logger: logger}
+func NewGitWebhookHandler(database *db.DB, b *builder.BuildService, secretStore secrets.Store, logger *zap.Logger) *GitWebhookHandler {
+	if database == nil || b == nil || secretStore == nil || logger == nil {
+		panic("api: git webhook handler requires DB, builder, secrets store, and logger")
+	}
+	return &GitWebhookHandler{db: database, builder: b, secrets: secretStore, logger: logger}
 }
 
 // gitPushPayload covers the subset of fields we read from both GitHub
@@ -71,6 +76,13 @@ func (h *GitWebhookHandler) Handle(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusNotFound, "agent has no git remote configured")
 		return
 	}
+	secret, err := gitWebhookSecret(r.Context(), h.secrets, "agent/"+agentID.String()+"/git_webhook_secret", agent.GitWebhookSecret)
+	if err != nil {
+		h.logger.Error("decrypt git webhook secret", zap.String("agent", agentID.String()), zap.Error(err))
+		// airlockvet:allow-writejson reason: external git provider expects JSON error body
+		writeJSONError(w, http.StatusInternalServerError, "webhook not configured")
+		return
+	}
 
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 5<<20))
 	if err != nil {
@@ -83,7 +95,7 @@ func (h *GitWebhookHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	// for routing only; the secret check is what actually authenticates.
 	switch {
 	case r.Header.Get("X-Hub-Signature-256") != "" || r.Header.Get("X-GitHub-Event") != "":
-		if err := verifyGitHubSignature(body, r.Header.Get("X-Hub-Signature-256"), agent.GitWebhookSecret); err != nil {
+		if err := verifyGitHubSignature(body, r.Header.Get("X-Hub-Signature-256"), secret); err != nil {
 			h.logger.Warn("github webhook signature verify failed",
 				zap.String("agent", agentID.String()), zap.Error(err))
 			// airlockvet:allow-writejson reason: external git provider expects JSON error body
@@ -96,7 +108,7 @@ func (h *GitWebhookHandler) Handle(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	case r.Header.Get("X-Gitlab-Token") != "" || r.Header.Get("X-Gitlab-Event") != "":
-		if subtle.ConstantTimeCompare([]byte(r.Header.Get("X-Gitlab-Token")), []byte(agent.GitWebhookSecret)) != 1 {
+		if subtle.ConstantTimeCompare([]byte(r.Header.Get("X-Gitlab-Token")), []byte(secret)) != 1 {
 			h.logger.Warn("gitlab webhook token mismatch", zap.String("agent", agentID.String()))
 			// airlockvet:allow-writejson reason: external git provider expects JSON error body
 			writeJSONError(w, http.StatusUnauthorized, "invalid token")
@@ -137,6 +149,16 @@ func (h *GitWebhookHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	go h.runWebhookBuild(agent, agentID)
 
 	w.WriteHeader(http.StatusAccepted)
+}
+
+// gitWebhookSecret reads this column's schema-defined unenveloped plaintext
+// value during the coordinated envelope rollout. Generic secret reads remain
+// strict and never treat decryption failures as plaintext.
+func gitWebhookSecret(ctx context.Context, store secrets.Store, ref, stored string) (string, error) {
+	if !secrets.IsEnvelope(stored) {
+		return stored, nil
+	}
+	return store.Get(ctx, ref, stored)
 }
 
 // runWebhookBuild pulls + kicks off the upgrade in the background.

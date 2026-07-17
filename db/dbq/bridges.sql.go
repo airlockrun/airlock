@@ -12,12 +12,13 @@ import (
 )
 
 const createBridge = `-- name: CreateBridge :one
-INSERT INTO bridges (type, name, bot_token_ref, bot_username, agent_id, owner_principal_id, is_system, is_manager, managed, telegram_bot_user_id, status, config, settings)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'active', '{}'::jsonb, '{}'::jsonb)
+INSERT INTO bridges (id, type, name, bot_token_ref, bot_username, agent_id, owner_principal_id, is_system, is_manager, managed, telegram_bot_user_id, status, config, settings)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'active', '{}'::jsonb, '{}'::jsonb)
 RETURNING id, agent_id, owner_principal_id, type, name, bot_username, status, is_system, config, settings, bot_token_ref, last_polled_at, created_at, updated_at, managed, telegram_bot_user_id, is_manager, manager_error
 `
 
 type CreateBridgeParams struct {
+	ID                pgtype.UUID `json:"id"`
 	Type              string      `json:"type"`
 	Name              string      `json:"name"`
 	BotTokenRef       string      `json:"bot_token_ref"`
@@ -32,6 +33,7 @@ type CreateBridgeParams struct {
 
 func (q *Queries) CreateBridge(ctx context.Context, arg CreateBridgeParams) (Bridge, error) {
 	row := q.db.QueryRow(ctx, createBridge,
+		arg.ID,
 		arg.Type,
 		arg.Name,
 		arg.BotTokenRef,

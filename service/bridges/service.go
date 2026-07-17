@@ -237,13 +237,15 @@ func (s *Service) Create(ctx context.Context, p authz.Principal, req CreateReque
 		}
 	}
 
-	encToken, err := s.encryptor.Put(ctx, "bridge/new/bot_token", req.Token)
+	bridgeID := uuid.New()
+	encToken, err := s.encryptor.Put(ctx, "bridge/"+bridgeID.String()+"/bot_token", req.Token)
 	if err != nil {
 		s.logger.Error("encrypt token failed", zap.Error(err))
 		return Result{}, err
 	}
 	ownerID := pgtype.UUID{Bytes: p.UserID, Valid: true}
 	br, err := q.CreateBridge(ctx, dbq.CreateBridgeParams{
+		ID:                pgtype.UUID{Bytes: bridgeID, Valid: true},
 		Type:              bridgeType,
 		Name:              bridgeName,
 		BotTokenRef:       encToken,
@@ -322,7 +324,8 @@ func (s *Service) CreateFromManagedSession(ctx context.Context, in ManagedSessio
 	if err != nil {
 		return Result{}, service.Detail(service.ErrInvalidInput, "invalid bot token: %v", err)
 	}
-	encToken, err := s.encryptor.Put(ctx, "bridge/new/bot_token", in.RawToken)
+	bridgeID := uuid.New()
+	encToken, err := s.encryptor.Put(ctx, "bridge/"+bridgeID.String()+"/bot_token", in.RawToken)
 	if err != nil {
 		s.logger.Error("encrypt managed bot token failed", zap.Error(err))
 		return Result{}, err
@@ -349,6 +352,7 @@ func (s *Service) CreateFromManagedSession(ctx context.Context, in ManagedSessio
 	}
 
 	br, err := q.CreateBridge(ctx, dbq.CreateBridgeParams{
+		ID:                pgtype.UUID{Bytes: bridgeID, Valid: true},
 		Type:              "telegram",
 		Name:              name,
 		BotTokenRef:       encToken,

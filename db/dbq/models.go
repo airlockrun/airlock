@@ -56,6 +56,7 @@ type Agent struct {
 	GitDefaultBranch     string             `json:"git_default_branch"`
 	GitWebhookSecret     string             `json:"git_webhook_secret"`
 	GitLastSyncedRef     string             `json:"git_last_synced_ref"`
+	AgentTokenVersion    int64              `json:"agent_token_version"`
 }
 
 type AgentBuild struct {
@@ -393,6 +394,7 @@ type DeviceLoginSession struct {
 	ConsumedAt          pgtype.Timestamptz `json:"consumed_at"`
 	LastPolledAt        pgtype.Timestamptz `json:"last_polled_at"`
 	PollIntervalSeconds int32              `json:"poll_interval_seconds"`
+	ApprovedAuthEpoch   pgtype.Int8        `json:"approved_auth_epoch"`
 }
 
 type GitCredential struct {
@@ -411,6 +413,17 @@ type Group struct {
 	Name        string      `json:"name"`
 	Description string      `json:"description"`
 	Builtin     bool        `json:"builtin"`
+}
+
+type IdentityLinkChallenge struct {
+	TokenHash      string             `json:"token_hash"`
+	UserID         pgtype.UUID        `json:"user_id"`
+	Platform       string             `json:"platform"`
+	BridgeID       pgtype.UUID        `json:"bridge_id"`
+	PlatformUserID string             `json:"platform_user_id"`
+	ExpiresAt      pgtype.Timestamptz `json:"expires_at"`
+	ConsumedAt     pgtype.Timestamptz `json:"consumed_at"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 }
 
 type LlmUsage struct {
@@ -457,6 +470,15 @@ type ManagedBotSession struct {
 	SystemConversationID pgtype.UUID        `json:"system_conversation_id"`
 }
 
+type McpActiveRequest struct {
+	TargetAgentID     pgtype.UUID        `json:"target_agent_id"`
+	PrincipalIdentity string             `json:"principal_identity"`
+	RequestID         []byte             `json:"request_id"`
+	RunID             pgtype.UUID        `json:"run_id"`
+	ExpiresAt         pgtype.Timestamptz `json:"expires_at"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+}
+
 type ModelGrant struct {
 	ID        pgtype.UUID        `json:"id"`
 	CatalogID pgtype.UUID        `json:"provider_id"`
@@ -488,6 +510,21 @@ type OauthClient struct {
 	Scope                   string             `json:"scope"`
 	CreatedAt               pgtype.Timestamptz `json:"created_at"`
 	LastUsedAt              pgtype.Timestamptz `json:"last_used_at"`
+}
+
+type OauthConsentTransaction struct {
+	TransactionID pgtype.UUID        `json:"transaction_id"`
+	BindingHash   []byte             `json:"binding_hash"`
+	UserID        pgtype.UUID        `json:"user_id"`
+	ClientID      string             `json:"client_id"`
+	AgentID       pgtype.UUID        `json:"agent_id"`
+	ExpiresAt     pgtype.Timestamptz `json:"expires_at"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+}
+
+type OauthDcrAttempt struct {
+	IpAddress string             `json:"ip_address"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
 }
 
 type OauthGrant struct {
@@ -522,6 +559,8 @@ type OauthState struct {
 	RedirectUri  string             `json:"redirect_uri"`
 	ExpiresAt    pgtype.Timestamptz `json:"expires_at"`
 	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	UserID       pgtype.UUID        `json:"user_id"`
+	ResourceID   pgtype.UUID        `json:"resource_id"`
 }
 
 type PlatformIdentity struct {
@@ -548,6 +587,21 @@ type Provider struct {
 	ApiKey      string             `json:"api_key"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+}
+
+type RelayCode struct {
+	CodeHash     []byte             `json:"code_hash"`
+	NonceHash    []byte             `json:"nonce_hash"`
+	UserID       pgtype.UUID        `json:"user_id"`
+	Email        string             `json:"email"`
+	TenantRole   string             `json:"tenant_role"`
+	AuthEpoch    int64              `json:"auth_epoch"`
+	AgentID      pgtype.UUID        `json:"agent_id"`
+	TargetOrigin string             `json:"target_origin"`
+	ReturnPath   string             `json:"return_path"`
+	ExpiresAt    pgtype.Timestamptz `json:"expires_at"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	SessionID    pgtype.UUID        `json:"session_id"`
 }
 
 type ResourceGrant struct {
@@ -613,6 +667,7 @@ type SystemConversation struct {
 	Source                     string             `json:"source"`
 	BridgeID                   pgtype.UUID        `json:"bridge_id"`
 	ExternalID                 pgtype.Text        `json:"external_id"`
+	SuspendedRunID             pgtype.UUID        `json:"suspended_run_id"`
 }
 
 type SystemMessage struct {
@@ -695,6 +750,7 @@ type User struct {
 	MustChangePassword bool               `json:"must_change_password"`
 	CreatedAt          pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
+	AuthEpoch          int64              `json:"auth_epoch"`
 }
 
 type UserSession struct {
@@ -708,6 +764,7 @@ type UserSession struct {
 	LastUsedAt       pgtype.Timestamptz `json:"last_used_at"`
 	ExpiresAt        pgtype.Timestamptz `json:"expires_at"`
 	RevokedAt        pgtype.Timestamptz `json:"revoked_at"`
+	AuthenticatedAt  pgtype.Timestamptz `json:"authenticated_at"`
 }
 
 type WebauthnCeremony struct {

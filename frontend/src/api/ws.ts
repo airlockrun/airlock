@@ -4,9 +4,11 @@
  * Subscriptions are server-driven: the backend auto-subscribes this socket
  * to every agent the authenticated user is a member of on connect. The
  * client never sends subscribe/unsubscribe messages — any durable access
- * change goes through agent_members in the DB and takes effect on the next
- * WS reconnect.
+ * change goes through agent_grants in the DB; the server closes the socket so
+ * this client reconnects with the current subscription set.
  */
+
+import { isAuthRejection, refreshAccessToken } from '@/api/client'
 
 export interface SubagentInfo {
   agentId: string
@@ -47,27 +49,14 @@ export class AirlockWS {
   // delta replay. Resets to 0 on full page reload (new instance) — a
   // fresh load DB-loads anyway, so no replay is correct there.
   private lastSeq = 0
-  // Single in-flight refresh promise so concurrent reconnect attempts and
-  // axios interceptor refreshes don't both POST /auth/refresh. The axios
-  // interceptor manages its own promise; we don't share it (keeps ws.ts
-  // self-contained), but the refresh endpoint itself is idempotent enough
-  // that two concurrent calls just produce two access tokens — last write
-  // to localStorage wins, both work until expiry.
-  private refreshPromise: Promise<void> | null = null
   // Per-build topics the client has dynamically subscribed to (Build page
   // open). Re-sent on every (re)connect so a drop mid-build resubscribes.
   private buildSubs = new Set<string>()
 
-  /**
-   * Open the socket. Token argument is ignored — the connection always reads
-   * the current access token from localStorage at handshake time so a token
-   * refreshed by the REST interceptor (or by ws's own pre-connect refresh)
-   * is picked up automatically. The argument stays in the signature so
-   * existing call sites keep compiling.
-   */
-  connect(_token?: string) {
+  /** Open the socket using the same-origin HttpOnly access cookie. */
+  connect() {
     this.shouldReconnect = true
-    void this.doConnect()
+    void this.doConnect(false)
   }
 
   disconnect() {
@@ -85,7 +74,7 @@ export class AirlockWS {
    * Called after actions that mutate membership (e.g., creating an agent).
    */
   reconnect() {
-    if (!localStorage.getItem('access_token')) return
+    if (!this.shouldReconnect) return
     if (this.socket) {
       // Detach handlers BEFORE close() so the old socket's onclose doesn't
       // schedule another doConnect on top of this manual reconnect — that
@@ -94,7 +83,7 @@ export class AirlockWS {
       this.socket.close()
       this.socket = null
     }
-    void this.doConnect()
+    void this.doConnect(false)
   }
 
   private detach(sock: WebSocket) {
@@ -142,37 +131,24 @@ export class AirlockWS {
     this.send('unsubscribe.build', { buildId })
   }
 
-  private async doConnect() {
-    // Read fresh — REST interceptor or our own pre-connect refresh may have
-    // rotated this since the last connect.
-    let token = localStorage.getItem('access_token')
-    if (!token) return
-
-    // Server validates the token at handshake time only. If the cached
-    // token is expired (typical after a long background tab + network
-    // blip), the WS handshake 401s and we'd loop forever with the same
-    // dead token. Refresh first when it's within 30s of expiry.
-    if (this.tokenExpiringSoon(token)) {
+  private async doConnect(refreshFirst: boolean) {
+    if (refreshFirst) {
       try {
-        await this.ensureFreshToken()
-        token = localStorage.getItem('access_token')
-        if (!token) return
+        await refreshAccessToken()
       } catch (err) {
         // Only treat a 401/403 from the server as "refresh token is
         // dead." A transport error or 5xx (Caddy 502/503 while airlock
         // is restarting) is transient — keep the reconnect loop alive
         // with backoff so the WS comes back as soon as the server does,
         // and keep credentials so a subsequent REST call works too.
-        if (refreshIsAuthRejection(err)) {
+        if (isAuthRejection(err)) {
           this.shouldReconnect = false
-          localStorage.removeItem('access_token')
-          localStorage.removeItem('refresh_token')
           return
         }
         // Transient: fall through into the reconnect-with-backoff path
         // below by faking an onclose-style retry.
         if (this.shouldReconnect) {
-          setTimeout(() => void this.doConnect(), this.reconnectDelay)
+          setTimeout(() => void this.doConnect(true), this.reconnectDelay)
           this.reconnectDelay = Math.min(this.reconnectDelay * 2, this.maxReconnectDelay)
         }
         return
@@ -180,13 +156,13 @@ export class AirlockWS {
     }
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const since = this.lastSeq > 0 ? `&since=${this.lastSeq}` : ''
-    const url = `${protocol}//${window.location.host}/ws?token=${token}${since}`
+    const since = this.lastSeq > 0 ? `?since=${this.lastSeq}` : ''
+    const url = `${protocol}//${window.location.host}/ws${since}`
     this.socket = new WebSocket(url)
 
     this.socket.onopen = () => {
       this.reconnectDelay = 1000
-      console.log('[ws] connected to', url.replace(/token=[^&]+/, 'token=***'))
+      console.log('[ws] connected')
       // Re-arm any dynamic per-build subscriptions across a reconnect.
       for (const id of this.buildSubs) this.send('subscribe.build', { buildId: id })
       this.emit('_connected', null)
@@ -210,7 +186,7 @@ export class AirlockWS {
       this.emit('_disconnected', null)
       if (this.shouldReconnect) {
         console.log('[ws] reconnecting in', this.reconnectDelay, 'ms')
-        setTimeout(() => void this.doConnect(), this.reconnectDelay)
+        setTimeout(() => void this.doConnect(true), this.reconnectDelay)
         this.reconnectDelay = Math.min(this.reconnectDelay * 2, this.maxReconnectDelay)
       }
     }
@@ -230,64 +206,6 @@ export class AirlockWS {
     }
   }
 
-  /**
-   * Returns true if the JWT's `exp` claim is within 30s of now (or the
-   * token is unparseable, in which case treat as expired so we attempt a
-   * refresh rather than handshaking with garbage).
-   */
-  private tokenExpiringSoon(token: string): boolean {
-    try {
-      const [, payload] = token.split('.')
-      if (!payload) return true
-      // base64url → base64
-      const b64 = payload.replace(/-/g, '+').replace(/_/g, '/')
-      const json = atob(b64.padEnd(b64.length + ((4 - (b64.length % 4)) % 4), '='))
-      const claims = JSON.parse(json) as { exp?: number }
-      if (typeof claims.exp !== 'number') return true
-      return claims.exp * 1000 - Date.now() < 30_000
-    } catch {
-      return true
-    }
-  }
-
-  /**
-   * POST /auth/refresh and overwrite localStorage.access_token. Coalesces
-   * concurrent calls onto a single in-flight promise so two reconnect
-   * attempts (or a reconnect racing the REST interceptor) don't double-fire.
-   * Throws RefreshError carrying the HTTP status (or undefined for transport
-   * errors) so the caller can distinguish auth rejection from transient
-   * outage.
-   */
-  private ensureFreshToken(): Promise<void> {
-    if (this.refreshPromise) return this.refreshPromise
-    const refreshToken = localStorage.getItem('refresh_token')
-    if (!refreshToken) return Promise.reject(new RefreshError('no refresh token'))
-    this.refreshPromise = fetch('/auth/refresh', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ refreshToken }),
-    })
-      .then(async (res) => {
-        if (!res.ok) throw new RefreshError(`refresh failed: ${res.status}`, res.status)
-        const data = (await res.json()) as { accessToken?: string }
-        if (!data.accessToken) throw new RefreshError('refresh response missing accessToken')
-        localStorage.setItem('access_token', data.accessToken)
-      })
-      .finally(() => {
-        this.refreshPromise = null
-      })
-    return this.refreshPromise
-  }
-}
-
-class RefreshError extends Error {
-  constructor(message: string, public status?: number) {
-    super(message)
-  }
-}
-
-function refreshIsAuthRejection(err: unknown): boolean {
-  return err instanceof RefreshError && (err.status === 401 || err.status === 403)
 }
 
 /** Singleton WebSocket instance. */

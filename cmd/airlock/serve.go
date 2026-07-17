@@ -21,6 +21,7 @@ import (
 	"github.com/airlockrun/airlock/crypto"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
+	"github.com/airlockrun/airlock/networkpolicy"
 	"github.com/airlockrun/airlock/oauth"
 	"github.com/airlockrun/airlock/realtime"
 	"github.com/airlockrun/airlock/secrets"
@@ -29,6 +30,7 @@ import (
 	solprovider "github.com/airlockrun/sol/provider"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"golang.org/x/sync/errgroup"
@@ -86,8 +88,8 @@ func runServe(_ []string) {
 	// public_url / agent_domain are env-only (PUBLIC_URL / AGENT_DOMAIN in
 	// config.go), shared with the bundled Caddy via .env — no DB seeding.
 
-	// Ensure an activation code exists on first run — generate if missing,
-	// log it, and write to a file for docker-compose users to `cat`.
+	// Ensure an activation code exists on first run, then write it to a
+	// mode-0600 file for docker-compose users to read.
 	// Safe to run from multiple replicas: SetActivationCode only writes
 	// when the column is NULL, and we always re-read the winning value.
 	if err := ensureActivationCode(ctx, database, cfg.ActivationCodeFile, logger); err != nil {
@@ -102,7 +104,7 @@ func runServe(_ []string) {
 	logger.Info("s3 connected")
 
 	// Container manager
-	containers := container.NewDockerManager(cfg, logger.Named("container"))
+	containers := container.NewDockerManager(cfg, database.Pool(), logger.Named("container"))
 	defer containers.Close()
 	logger.Info("docker manager ready")
 
@@ -133,7 +135,14 @@ func runServe(_ []string) {
 		oldKeys = append(oldKeys, oldKey)
 	}
 	secretStore := secrets.NewLocal(crypto.New(encKey, oldKeys...))
-	logger.Info("encryption configured")
+	rewrapped, err := rewrapStoredSecrets(ctx, database.Pool(), secretStore, cfg.EncryptionKeyRewrap)
+	if err != nil {
+		logger.Fatal("secret storage migration failed", zap.Error(err))
+	}
+	logger.Info("encryption configured",
+		zap.String("active_key_id", crypto.KeyID(encKey)),
+		zap.Bool("rewrap_enabled", cfg.EncryptionKeyRewrap),
+		zap.Int64("rewrapped_secrets", rewrapped))
 
 	// Build service
 	buildSvc := builder.New(cfg, database, containers, secretStore, logger.Named("builder"))
@@ -143,19 +152,24 @@ func runServe(_ []string) {
 	logger.Info("build service ready")
 
 	// Prune orphaned containers, stale images, and dead monorepo dirs on startup.
+	var recreateAgentRuntimes []uuid.UUID
 	{
 		q := dbq.New(database.Pool())
 		agents, err := q.ListAgents(ctx)
 		if err != nil {
 			logger.Fatal("list agents for prune failed", zap.Error(err))
 		}
-		validAgents := make(map[string]string, len(agents))
+		validAgents := make(map[string]container.AgentRuntimeSpec, len(agents))
 		for _, a := range agents {
 			id := uuid.UUID(a.ID.Bytes).String()
-			validAgents[id] = a.ImageRef
+			validAgents[id] = container.AgentRuntimeSpec{Image: a.ImageRef, TokenVersion: a.AgentTokenVersion, Status: a.Status}
 		}
-		containers.PruneAgentResources(ctx, validAgents)
-		pruneAgentRepos(buildSvc.ReposPath(), validAgents, logger.Named("prune"))
+		recreateAgentRuntimes = containers.PruneAgentResources(ctx, validAgents)
+		validAgentImages := make(map[string]string, len(validAgents))
+		for id, spec := range validAgents {
+			validAgentImages[id] = spec.Image
+		}
+		pruneAgentRepos(buildSvc.ReposPath(), validAgentImages, logger.Named("prune"))
 	}
 
 	// Warm Docker build cache in background — first agent build will be faster.
@@ -183,6 +197,17 @@ func runServe(_ []string) {
 
 	// Trigger system
 	dispatcher := trigger.NewDispatcher(cfg, database, containers, secretStore, logger.Named("dispatcher"))
+	var recreateGroup errgroup.Group
+	recreateGroup.SetLimit(8)
+	for _, agentID := range recreateAgentRuntimes {
+		recreateGroup.Go(func() error {
+			if _, err := dispatcher.EnsureRunning(ctx, agentID); err != nil {
+				logger.Error("recreate stale agent runtime", zap.String("agent_id", agentID.String()), zap.Error(err))
+			}
+			return nil
+		})
+	}
+	_ = recreateGroup.Wait()
 	transcriptionResolver := trigger.NewTranscriptionResolver(database, secretStore)
 	prompter := trigger.NewPromptProxy(dispatcher, database, s3Client, transcriptionResolver, logger.Named("prompt-proxy"))
 	telegramDriver := trigger.NewTelegramDriver(logger.Named("telegram"))
@@ -192,14 +217,15 @@ func runServe(_ []string) {
 	bridgeMgr := trigger.NewBridgeManager(drivers, prompter, database, secretStore, cfg.JWTSecret, cfg.PublicURL, cfg.AgentBaseURL, logger.Named("bridges"))
 	scheduler := trigger.NewScheduler(dispatcher, database, logger.Named("scheduler"))
 
-	// OAuth client (used by credential endpoints and refresh job)
-	oauthClient := oauth.NewClient()
+	// OAuth, MCP, and connection calls share one outbound policy transport.
+	httpNetwork := networkpolicy.New(cfg.AgentHTTPPrivateCIDRs, networkpolicy.AllowsLocalhostDevelopment(cfg.PublicURL))
+	oauthClient := oauth.NewClient(httpNetwork.Client(30*time.Second), networkpolicy.AllowsLocalhostDevelopment(cfg.PublicURL))
 
 	// Reverse proxy real IP config
-	realIPCfg := api.ParseRealIPConfig(cfg.ReverseProxyTrustedProxies, cfg.ReverseProxyLimit)
+	realIPCfg := api.ParseRealIPConfig(cfg.ReverseProxyTrustedPeers, cfg.ReverseProxyLimit, cfg.ReverseProxyAuthSecret)
 	if realIPCfg.Enabled() {
 		logger.Info("real IP extraction enabled",
-			zap.String("trusted_proxies", cfg.ReverseProxyTrustedProxies),
+			zap.String("trusted_peers", cfg.ReverseProxyTrustedPeers),
 			zap.Int("limit", cfg.ReverseProxyLimit),
 		)
 	}
@@ -226,7 +252,7 @@ func runServe(_ []string) {
 		AgentBaseURL:           cfg.AgentBaseURL,
 		LLMProxyURL:            cfg.LLMProxyURL,
 		ForceInlineAttachments: cfg.ForceInlineAttachments,
-		HTTPPrivateCIDRs:       cfg.AgentHTTPPrivateCIDRs,
+		HTTPNetwork:            httpNetwork,
 		ActivationCodeFile:     cfg.ActivationCodeFile,
 		RealIP:                 realIPCfg,
 		Logger:                 logger,
@@ -234,8 +260,15 @@ func runServe(_ []string) {
 
 	// Start HTTP server
 	srv := &http.Server{
-		Addr:    cfg.ServerAddr,
-		Handler: router,
+		Addr:              cfg.ServerAddr,
+		Handler:           router,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       2 * time.Minute,
+		IdleTimeout:       2 * time.Minute,
+		MaxHeaderBytes:    64 << 10,
+		// Streaming NDJSON and WebSocket connections do not have a fixed
+		// response lifetime, so a server-wide WriteTimeout is unsafe.
+		WriteTimeout: 0,
 	}
 	defer srv.Close()
 
@@ -354,9 +387,16 @@ func runServe(_ []string) {
 	logger.Info("stopping server")
 }
 
+func rewrapStoredSecrets(ctx context.Context, pool *pgxpool.Pool, store secrets.Store, enabled bool) (int64, error) {
+	if !enabled {
+		return 0, nil
+	}
+	return secrets.RewrapDatabase(ctx, pool, store)
+}
+
 // ensureActivationCode runs on startup. If the system isn't activated yet,
-// it guarantees an activation code exists in DB (generating one if missing),
-// logs it, and writes it to filePath so `docker compose` users can grab it
+// it guarantees an activation code exists in DB (generating one if missing)
+// and writes it to filePath so `docker compose` users can grab it
 // with a single `cat`. On a fresh first run the file is created; on a
 // subsequent restart where a code already exists, the file is overwritten
 // with the same value (in case someone deleted it). Once a tenant exists,
@@ -402,9 +442,7 @@ func ensureActivationCode(ctx context.Context, database *db.DB, filePath string,
 	}
 
 	code := settings.ActivationCode.String
-	logger.Warn("activation code ready — use it to create the first admin user",
-		zap.String("code", code),
-		zap.String("file", filePath))
+	logger.Info("activation code file ready", zap.String("file", filePath))
 
 	if filePath != "" {
 		if err := os.MkdirAll(filepath.Dir(filePath), 0o755); err != nil {

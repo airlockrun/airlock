@@ -37,11 +37,13 @@ WHERE at.agent_id = @agent_id AND ts.conversation_id = @conversation_id;
 SELECT ts.conversation_id
 FROM topic_subscriptions ts
 JOIN agent_topics at ON at.id = ts.topic_id
-WHERE at.agent_id = @agent_id AND at.slug = @slug;
+JOIN agent_conversations c ON c.id = ts.conversation_id
+WHERE at.agent_id = @agent_id AND at.slug = @slug AND c.agent_id = @agent_id;
 
 -- name: ListSubscribedConversationsForUser :many
 SELECT ts.conversation_id
 FROM topic_subscriptions ts
 JOIN agent_topics at ON at.id = ts.topic_id
 JOIN agent_conversations c ON c.id = ts.conversation_id
-WHERE at.agent_id = @agent_id AND at.slug = @slug AND c.user_id = @user_id;
+WHERE at.agent_id = @agent_id AND at.slug = @slug
+  AND c.agent_id = @agent_id AND c.user_id = @user_id;

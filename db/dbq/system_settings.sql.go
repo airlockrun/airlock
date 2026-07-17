@@ -55,6 +55,40 @@ func (q *Queries) GetSystemSettings(ctx context.Context) (SystemSetting, error) 
 	return i, err
 }
 
+const getSystemSettingsForActivation = `-- name: GetSystemSettingsForActivation :one
+SELECT id, default_build_provider_id, default_build_model, default_exec_provider_id, default_exec_model, default_stt_provider_id, default_stt_model, default_vision_provider_id, default_vision_model, default_tts_provider_id, default_tts_model, default_image_gen_provider_id, default_image_gen_model, default_embedding_provider_id, default_embedding_model, default_search_provider_id, default_search_model, activation_code, created_at, updated_at, last_seen_sdk_version FROM system_settings WHERE id = true FOR UPDATE
+`
+
+// Serializes first-admin activation across replicas.
+func (q *Queries) GetSystemSettingsForActivation(ctx context.Context) (SystemSetting, error) {
+	row := q.db.QueryRow(ctx, getSystemSettingsForActivation)
+	var i SystemSetting
+	err := row.Scan(
+		&i.ID,
+		&i.DefaultBuildProviderID,
+		&i.DefaultBuildModel,
+		&i.DefaultExecProviderID,
+		&i.DefaultExecModel,
+		&i.DefaultSttProviderID,
+		&i.DefaultSttModel,
+		&i.DefaultVisionProviderID,
+		&i.DefaultVisionModel,
+		&i.DefaultTtsProviderID,
+		&i.DefaultTtsModel,
+		&i.DefaultImageGenProviderID,
+		&i.DefaultImageGenModel,
+		&i.DefaultEmbeddingProviderID,
+		&i.DefaultEmbeddingModel,
+		&i.DefaultSearchProviderID,
+		&i.DefaultSearchModel,
+		&i.ActivationCode,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.LastSeenSdkVersion,
+	)
+	return i, err
+}
+
 const setActivationCode = `-- name: SetActivationCode :execrows
 UPDATE system_settings
 SET activation_code = $1, updated_at = now()

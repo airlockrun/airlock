@@ -73,7 +73,7 @@ func (h *Handler) RequestConnection(ctx context.Context, agentID uuid.UUID, slug
 		InjectAuth(upstream, conn.AuthInjection, creds)
 	}
 
-	resp, err := h.httpNetwork.client(30 * time.Second).Do(upstream)
+	resp, err := h.httpNetwork.Client(30 * time.Second).Do(upstream)
 	if err != nil {
 		return integrationservice.ConnectionResult{}, fmt.Errorf("upstream request: %w", err)
 	}
@@ -172,7 +172,7 @@ func (h *Handler) CallMCPTool(ctx context.Context, agentID uuid.UUID, slug strin
 			return wire.MCPToolCallResponse{}, fmt.Errorf("resolve MCP credentials: %w", err)
 		}
 	}
-	result, err := callMCPTool(ctx, server.Url, server.AuthInjection, creds, req)
+	result, err := callMCPTool(ctx, h.httpNetwork.Client(60*time.Second), server.Url, server.AuthInjection, creds, req)
 	if err != nil {
 		return wire.MCPToolCallResponse{}, err
 	}

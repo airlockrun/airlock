@@ -30,6 +30,7 @@ const codeChallenge = computed(() => String(q.value.code_challenge ?? ''))
 const codeChallengeMethod = computed(() => String(q.value.code_challenge_method ?? ''))
 const scope = computed(() => String(q.value.scope ?? 'mcp'))
 const resource = computed(() => String(q.value.resource ?? ''))
+const consentToken = computed(() => String(q.value.consent_token ?? ''))
 
 // Derive the agent slug/UUID from the resource URL so we can fetch
 // the human-readable name. The resource URL is
@@ -72,6 +73,7 @@ async function decide(decision: 'approve' | 'deny') {
       code_challenge_method: codeChallengeMethod.value,
       scope: scope.value,
       resource: resource.value,
+      consent_token: consentToken.value,
     })
     if (data?.redirect_to) {
       // Top-level navigation so the OAuth client (which is listening

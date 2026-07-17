@@ -142,7 +142,7 @@ func (q *Queries) DeleteExpiredCeremonies(ctx context.Context) error {
 }
 
 const getUserByCredentialID = `-- name: GetUserByCredentialID :one
-SELECT users.id, users.email, users.display_name, users.tenant_role, users.password_hash, users.oidc_sub, users.must_change_password, users.created_at, users.updated_at FROM users
+SELECT users.id, users.email, users.display_name, users.tenant_role, users.password_hash, users.oidc_sub, users.must_change_password, users.created_at, users.updated_at, users.auth_epoch FROM users
 JOIN webauthn_credentials c ON c.user_id = users.id
 WHERE c.credential_id = $1
 `
@@ -162,6 +162,7 @@ func (q *Queries) GetUserByCredentialID(ctx context.Context, credentialID []byte
 		&i.MustChangePassword,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.AuthEpoch,
 	)
 	return i, err
 }

@@ -50,9 +50,18 @@ func PostToConversation(ctx context.Context, deps PostDeps, opts PostOpts) error
 	q := dbq.New(deps.DB.Pool())
 
 	// Load conversation to determine delivery channel.
-	conv, err := q.GetConversationByID(ctx, toPgUUID(opts.ConversationID))
+	conv, err := q.GetConversationByIDAndAgent(ctx, dbq.GetConversationByIDAndAgentParams{
+		ID: toPgUUID(opts.ConversationID), AgentID: toPgUUID(opts.AgentID),
+	})
 	if err != nil {
 		return err
+	}
+	if opts.RunID != uuid.Nil {
+		if _, err := q.GetRunByIDAndAgent(ctx, dbq.GetRunByIDAndAgentParams{
+			ID: toPgUUID(opts.RunID), AgentID: toPgUUID(opts.AgentID),
+		}); err != nil {
+			return err
+		}
 	}
 
 	// Build text summary if not provided.

@@ -49,9 +49,8 @@ type GetSiblingMaxAccessParams struct {
 }
 
 // The per-edge max_access ceiling for a (parent → sibling) pair, read at
-// A2A call time to cap the caller's effective access. No row means the
-// target is not a declared sibling of the caller (a raw MCP call outside
-// the address book) — the caller treats that as "no extra cap".
+// A2A call time to admit the call and cap its effective access. No row means
+// the target is not a declared sibling and the call is denied.
 func (q *Queries) GetSiblingMaxAccess(ctx context.Context, arg GetSiblingMaxAccessParams) (string, error) {
 	row := q.db.QueryRow(ctx, getSiblingMaxAccess, arg.ParentAgentID, arg.SiblingAgentID)
 	var max_access string

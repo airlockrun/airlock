@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
+	"errors"
 	"io"
 	"net/http"
 	"strconv"
@@ -26,6 +27,8 @@ type webhookIngressHandler struct {
 	encryptor  secrets.Store
 	logger     *zap.Logger
 }
+
+const maxWebhookBodyBytes int64 = 5 << 20
 
 // HandleWebhook handles POST /webhooks/{agentID}/{path}.
 // This is a public endpoint — no JWT auth required.
@@ -56,14 +59,19 @@ func (h *webhookIngressHandler) HandleWebhook(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	// Read the request body.
-	body, err := io.ReadAll(r.Body)
+	// Bound public ingress before signature verification or forwarding.
+	body, err := readWebhookBody(w, r)
 	if err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			// airlockvet:allow-writejson reason: external public webhook endpoint — signature-gated, no JWT/Principal; provider expects JSON error envelopes
+			writeJSONError(w, http.StatusRequestEntityTooLarge, "request body too large")
+			return
+		}
 		// airlockvet:allow-writejson reason: external public webhook endpoint — signature-gated, no JWT/Principal; provider expects JSON error envelopes
 		writeJSONError(w, http.StatusBadRequest, "failed to read body")
 		return
 	}
-	r.Body.Close()
 
 	// Verify the request based on the webhook's verify mode.
 	if wh.VerifyMode != "" && wh.VerifyMode != "none" {
@@ -147,6 +155,11 @@ func (h *webhookIngressHandler) HandleWebhook(w http.ResponseWriter, r *http.Req
 	w.Header().Set("Content-Type", "application/x-ndjson")
 	w.WriteHeader(http.StatusOK)
 	io.Copy(w, rc)
+}
+
+func readWebhookBody(w http.ResponseWriter, r *http.Request) ([]byte, error) {
+	defer r.Body.Close()
+	return io.ReadAll(http.MaxBytesReader(w, r.Body, maxWebhookBodyBytes))
 }
 
 // verifyHMAC checks an HMAC-SHA256 signature. The sigHeader value can be

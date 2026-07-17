@@ -14,13 +14,16 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
 
+	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/authz"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
+	"github.com/airlockrun/airlock/networkpolicy"
 	"github.com/airlockrun/airlock/oauth"
 	"github.com/airlockrun/airlock/secrets"
 	"github.com/airlockrun/airlock/service"
@@ -280,6 +283,10 @@ func (s *Service) OAuthStart(ctx context.Context, p authz.Principal, agentID uui
 	if conn.ClientID == "" {
 		return "", service.Detail(service.ErrInvalidInput, "OAuth app not configured. Set client_id and client_secret first.")
 	}
+	completionRedirect, err := s.completionRedirect(redirectURI, agentID)
+	if err != nil {
+		return "", service.Detail(service.ErrInvalidInput, "invalid completion redirect: %v", err)
+	}
 	connRef := "connection/" + uuid.UUID(conn.ID.Bytes).String()
 	clientID, err := s.encryptor.Get(ctx, connRef+"/client_id", conn.ClientID)
 	if err != nil {
@@ -299,8 +306,8 @@ func (s *Service) OAuthStart(ctx context.Context, p authz.Principal, agentID uui
 		return "", err
 	}
 	if err := q.CreateOAuthState(ctx, dbq.CreateOAuthStateParams{
-		State: state, AgentID: toPg(agentID), Slug: slug,
-		CodeVerifier: encVerifier, RedirectUri: redirectURI,
+		State: state, AgentID: toPg(agentID), UserID: toPg(p.UserID), ResourceID: conn.ID, Slug: slug,
+		CodeVerifier: encVerifier, RedirectUri: completionRedirect,
 		ExpiresAt:  pgtype.Timestamptz{Time: time.Now().Add(10 * time.Minute), Valid: true},
 		SourceType: "connection",
 	}); err != nil {
@@ -335,6 +342,68 @@ var ErrOAuthMissingParams = service.Detail(service.ErrInvalidInput, "missing cod
 // ErrOAuthInvalidState is returned for an unknown or expired state row.
 var ErrOAuthInvalidState = service.Detail(service.ErrInvalidInput, "invalid or expired state")
 
+type oauthCallbackResource struct {
+	tokenURL        string
+	clientIDEnc     string
+	clientSecretEnc string
+	resourceID      pgtype.UUID
+	sourceRef       string
+}
+
+// liveOAuthCallbackResource re-establishes the initiating user's current
+// identity and the state's exact agent resource binding. OAuth callbacks carry
+// no live session, so the consumed state is identity input, not authorization.
+func (s *Service) liveOAuthCallbackResource(ctx context.Context, q *dbq.Queries, oauthState dbq.OauthState) (oauthCallbackResource, error) {
+	if !oauthState.AgentID.Valid || !oauthState.UserID.Valid || !oauthState.ResourceID.Valid {
+		return oauthCallbackResource{}, ErrOAuthInvalidState
+	}
+	agentID := uuid.UUID(oauthState.AgentID.Bytes)
+	userID := uuid.UUID(oauthState.UserID.Bytes)
+	if agentID == uuid.Nil || userID == uuid.Nil || uuid.UUID(oauthState.ResourceID.Bytes) == uuid.Nil {
+		return oauthCallbackResource{}, ErrOAuthInvalidState
+	}
+	user, err := q.GetUserByID(ctx, oauthState.UserID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return oauthCallbackResource{}, service.ErrForbidden
+		}
+		return oauthCallbackResource{}, err
+	}
+	principal := authz.UserPrincipal(userID, auth.Role(user.TenantRole))
+	if err := authz.Authorize(ctx, q, principal, authz.AgentConnections, agentID); err != nil {
+		return oauthCallbackResource{}, err
+	}
+
+	switch oauthState.SourceType {
+	case "mcp":
+		srv, err := s.resolveMCP(ctx, q, agentID, oauthState.Slug)
+		if err != nil {
+			return oauthCallbackResource{}, err
+		}
+		if srv.ID != oauthState.ResourceID || (srv.AuthMode != "oauth" && srv.AuthMode != "oauth_discovery") {
+			return oauthCallbackResource{}, ErrOAuthInvalidState
+		}
+		return oauthCallbackResource{
+			tokenURL: srv.TokenUrl, clientIDEnc: srv.ClientID, clientSecretEnc: srv.ClientSecret,
+			resourceID: srv.ID, sourceRef: "mcp/" + uuid.UUID(srv.ID.Bytes).String(),
+		}, nil
+	case "connection":
+		conn, err := s.resolveConn(ctx, q, agentID, oauthState.Slug)
+		if err != nil {
+			return oauthCallbackResource{}, err
+		}
+		if conn.ID != oauthState.ResourceID || conn.AuthMode != "oauth" {
+			return oauthCallbackResource{}, ErrOAuthInvalidState
+		}
+		return oauthCallbackResource{
+			tokenURL: conn.TokenUrl, clientIDEnc: conn.ClientID, clientSecretEnc: conn.ClientSecret,
+			resourceID: conn.ID, sourceRef: "connection/" + uuid.UUID(conn.ID.Bytes).String(),
+		}, nil
+	default:
+		return oauthCallbackResource{}, ErrOAuthInvalidState
+	}
+}
+
 // OAuthCallback handles the provider's redirect after consent. Returns
 // the URL to redirect the browser to (either the original redirect_uri
 // success page, or that URL with error params if the exchange failed).
@@ -343,12 +412,16 @@ func (s *Service) OAuthCallback(ctx context.Context, code, state string) (OAuthC
 		return OAuthCallbackResult{}, ErrOAuthMissingParams
 	}
 	q := dbq.New(s.db.Pool())
-	oauthState, err := q.GetOAuthState(ctx, state)
+	oauthState, err := q.ConsumeOAuthState(ctx, state)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return OAuthCallbackResult{}, ErrOAuthInvalidState
 		}
 		s.logger.Error("get oauth state failed", zap.Error(err))
+		return OAuthCallbackResult{}, err
+	}
+	resource, err := s.liveOAuthCallbackResource(ctx, q, oauthState)
+	if err != nil {
 		return OAuthCallbackResult{}, err
 	}
 	agentID := uuid.UUID(oauthState.AgentID.Bytes)
@@ -357,55 +430,32 @@ func (s *Service) OAuthCallback(ctx context.Context, code, state string) (OAuthC
 		s.logger.Error("decrypt verifier failed", zap.Error(err))
 		return OAuthCallbackResult{}, err
 	}
-	var tokenURL, clientIDEnc, clientSecretEnc, sourceRef string
-	var resourceID pgtype.UUID
-	if oauthState.SourceType == "mcp" {
-		srv, err := s.resolveMCP(ctx, q, agentID, oauthState.Slug)
-		if err != nil {
-			s.logger.Error("get MCP server for callback failed", zap.Error(err))
-			return OAuthCallbackResult{}, err
-		}
-		tokenURL = srv.TokenUrl
-		clientIDEnc = srv.ClientID
-		clientSecretEnc = srv.ClientSecret
-		resourceID = srv.ID
-		sourceRef = "mcp/" + uuid.UUID(srv.ID.Bytes).String()
-	} else {
-		conn, err := s.resolveConn(ctx, q, agentID, oauthState.Slug)
-		if err != nil {
-			s.logger.Error("get connection for callback failed", zap.Error(err))
-			return OAuthCallbackResult{}, err
-		}
-		tokenURL = conn.TokenUrl
-		clientIDEnc = conn.ClientID
-		clientSecretEnc = conn.ClientSecret
-		resourceID = conn.ID
-		sourceRef = "connection/" + uuid.UUID(conn.ID.Bytes).String()
-	}
-	clientID, err := s.encryptor.Get(ctx, sourceRef+"/client_id", clientIDEnc)
+	clientID, err := s.encryptor.Get(ctx, resource.sourceRef+"/client_id", resource.clientIDEnc)
 	if err != nil {
 		s.logger.Error("decrypt client_id failed", zap.Error(err))
 		return OAuthCallbackResult{}, err
 	}
-	clientSecret, err := s.encryptor.Get(ctx, sourceRef+"/client_secret", clientSecretEnc)
+	clientSecret, err := s.encryptor.Get(ctx, resource.sourceRef+"/client_secret", resource.clientSecretEnc)
 	if err != nil {
 		s.logger.Error("decrypt client_secret failed", zap.Error(err))
 		return OAuthCallbackResult{}, err
 	}
 	callbackURL := s.publicURL + "/api/v1/credentials/oauth/callback"
-	tokenResp, err := s.oauthClient.ExchangeCode(ctx, tokenURL, code, verifier, callbackURL, clientID, clientSecret)
+	tokenResp, err := s.oauthClient.ExchangeCode(ctx, resource.tokenURL, code, verifier, callbackURL, clientID, clientSecret)
 	if err != nil {
 		s.logger.Error("token exchange failed", zap.Error(err))
-		redir := s.defaultRedirectURI(oauthState.RedirectUri, agentID)
-		return OAuthCallbackResult{RedirectURL: redir + "?error=exchange_failed&message=" + err.Error()}, nil
+		return OAuthCallbackResult{RedirectURL: oauthErrorRedirect(oauthState.RedirectUri, err)}, nil
 	}
-	encAccessToken, err := s.encryptor.Put(ctx, sourceRef+"/access_token", tokenResp.AccessToken)
+	if _, err := s.liveOAuthCallbackResource(ctx, q, oauthState); err != nil {
+		return OAuthCallbackResult{}, err
+	}
+	encAccessToken, err := s.encryptor.Put(ctx, resource.sourceRef+"/access_token", tokenResp.AccessToken)
 	if err != nil {
 		return OAuthCallbackResult{}, err
 	}
 	var encRefreshToken string
 	if tokenResp.RefreshToken != "" {
-		encRefreshToken, err = s.encryptor.Put(ctx, sourceRef+"/refresh_token", tokenResp.RefreshToken)
+		encRefreshToken, err = s.encryptor.Put(ctx, resource.sourceRef+"/refresh_token", tokenResp.RefreshToken)
 		if err != nil {
 			return OAuthCallbackResult{}, err
 		}
@@ -416,7 +466,7 @@ func (s *Service) OAuthCallback(ctx context.Context, code, state string) (OAuthC
 	}
 	if oauthState.SourceType == "mcp" {
 		if err := q.UpdateMCPServerCredentialsByID(ctx, dbq.UpdateMCPServerCredentialsByIDParams{
-			ID:             resourceID,
+			ID:             resource.resourceID,
 			AccessTokenRef: encAccessToken, TokenExpiresAt: expiresAt, RefreshToken: encRefreshToken,
 		}); err != nil {
 			s.logger.Error("store MCP credentials failed", zap.Error(err))
@@ -425,25 +475,57 @@ func (s *Service) OAuthCallback(ctx context.Context, code, state string) (OAuthC
 		s.refreshMCPAfterAuth(ctx, agentID, oauthState.Slug, tokenResp.AccessToken)
 	} else {
 		if err := q.UpdateConnectionCredentialsByID(ctx, dbq.UpdateConnectionCredentialsByIDParams{
-			ID:             resourceID,
+			ID:             resource.resourceID,
 			AccessTokenRef: encAccessToken, TokenExpiresAt: expiresAt, RefreshToken: encRefreshToken,
 		}); err != nil {
 			s.logger.Error("store credentials failed", zap.Error(err))
 			return OAuthCallbackResult{}, err
 		}
 	}
-	_ = q.DeleteOAuthState(ctx, state)
-	return OAuthCallbackResult{RedirectURL: s.defaultRedirectURI(oauthState.RedirectUri, agentID)}, nil
+	return OAuthCallbackResult{RedirectURL: oauthState.RedirectUri}, nil
 }
 
 // PublicURL exposes the configured public URL for handler URL synthesis.
 func (s *Service) PublicURL() string { return s.publicURL }
 
-func (s *Service) defaultRedirectURI(stateRedirect string, agentID uuid.UUID) string {
-	if stateRedirect != "" {
-		return stateRedirect
+func (s *Service) completionRedirect(raw string, agentID uuid.UUID) (string, error) {
+	base, err := url.Parse(s.publicURL)
+	if err != nil || !base.IsAbs() || base.Hostname() == "" {
+		return "", errors.New("configured public URL is invalid")
 	}
-	return fmt.Sprintf("%s/agents/%s", s.publicURL, agentID)
+	if raw == "" {
+		raw = fmt.Sprintf("/agents/%s", agentID)
+	}
+	target, err := url.Parse(raw)
+	if err != nil || target.User != nil {
+		return "", errors.New("redirect URL is invalid")
+	}
+	if !target.IsAbs() {
+		if !strings.HasPrefix(raw, "/") || strings.HasPrefix(raw, "//") {
+			return "", errors.New("relative redirect must start with one slash")
+		}
+		target = base.ResolveReference(target)
+	}
+	if !networkpolicy.SameOrigin(base, target) {
+		return "", errors.New("redirect must have the Airlock origin")
+	}
+	return target.String(), nil
+}
+
+func oauthErrorRedirect(raw string, exchangeErr error) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		panic("connections: validated OAuth redirect is invalid")
+	}
+	query := u.Query()
+	query.Set("error", "exchange_failed")
+	message := exchangeErr.Error()
+	if len(message) > 1024 {
+		message = message[:1024]
+	}
+	query.Set("message", message)
+	u.RawQuery = query.Encode()
+	return u.String()
 }
 
 // refreshMCPAfterAuth re-discovers tools for a freshly-authorized MCP
@@ -614,14 +696,23 @@ func (s *Service) TestCredential(ctx context.Context, p authz.Principal, agentID
 	if conn.TestPath == "" {
 		return TestResult{Success: true, Message: "no test endpoint configured for this connection"}, nil
 	}
+	if !strings.HasPrefix(conn.TestPath, "/") || strings.HasPrefix(conn.TestPath, "//") {
+		return TestResult{}, service.Detail(service.ErrInvalidInput, "connection test path must start with one slash")
+	}
 	testURL := conn.BaseUrl + conn.TestPath
+	baseURL, err := url.Parse(conn.BaseUrl)
+	if err != nil {
+		return TestResult{}, service.Detail(service.ErrInvalidInput, "invalid connection base URL")
+	}
 	upstream, err := http.NewRequestWithContext(ctx, "GET", testURL, nil)
 	if err != nil {
 		return TestResult{}, service.Detail(service.ErrInvalidInput, "invalid test URL")
 	}
+	if !networkpolicy.SameOrigin(baseURL, upstream.URL) {
+		return TestResult{}, service.Detail(service.ErrInvalidInput, "connection test path changed the configured origin")
+	}
 	s.injectAuth(upstream, conn.AuthInjection, creds)
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(upstream)
+	resp, err := s.mcpHTTP.Do(upstream)
 	if err != nil {
 		return TestResult{Success: false, Message: fmt.Sprintf("request failed: %v", err)}, nil
 	}
@@ -860,6 +951,10 @@ func (s *Service) MCPOAuthStart(ctx context.Context, p authz.Principal, agentID 
 	if srv.AuthMode != "oauth" && srv.AuthMode != "oauth_discovery" {
 		return "", service.Detail(service.ErrInvalidInput, "MCP server is not OAuth")
 	}
+	completionRedirect, err := s.completionRedirect(redirectURI, agentID)
+	if err != nil {
+		return "", service.Detail(service.ErrInvalidInput, "invalid completion redirect: %v", err)
+	}
 	if err := q.ClearMCPServerCredentialsByID(ctx, srv.ID); err != nil {
 		s.logger.Error("clear stale MCP credentials failed", zap.Error(err))
 		return "", err
@@ -902,6 +997,9 @@ func (s *Service) MCPOAuthStart(ctx context.Context, p authz.Principal, agentID 
 			return "", service.Detail(service.ErrInvalidInput,
 				"dynamic client registration failed: %s. Switch this MCP server's auth_mode to `oauth` and paste credentials manually.", derr.Error())
 		}
+		if dcr.TokenEndpointAuthMethod == "none" {
+			dcr.ClientSecret = ""
+		}
 		srvRef := "mcp/" + uuid.UUID(srv.ID.Bytes).String()
 		encClientID, err := s.encryptor.Put(ctx, srvRef+"/client_id", dcr.ClientID)
 		if err != nil {
@@ -943,8 +1041,8 @@ func (s *Service) MCPOAuthStart(ctx context.Context, p authz.Principal, agentID 
 		return "", err
 	}
 	if err := q.CreateOAuthState(ctx, dbq.CreateOAuthStateParams{
-		State: state, AgentID: toPg(agentID), Slug: slug,
-		CodeVerifier: encVerifier, RedirectUri: redirectURI,
+		State: state, AgentID: toPg(agentID), UserID: toPg(p.UserID), ResourceID: srv.ID, Slug: slug,
+		CodeVerifier: encVerifier, RedirectUri: completionRedirect,
 		ExpiresAt:  pgtype.Timestamptz{Time: time.Now().Add(10 * time.Minute), Valid: true},
 		SourceType: "mcp",
 	}); err != nil {

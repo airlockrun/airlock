@@ -1,6 +1,10 @@
 -- name: GetSystemSettings :one
 SELECT * FROM system_settings WHERE id = true;
 
+-- name: GetSystemSettingsForActivation :one
+-- Serializes first-admin activation across replicas.
+SELECT * FROM system_settings WHERE id = true FOR UPDATE;
+
 -- name: SetActivationCode :execrows
 -- Sets the activation code only if one hasn't been set yet.
 -- Returns rows affected: 0 means another writer already set it.

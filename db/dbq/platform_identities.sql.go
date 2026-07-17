@@ -11,6 +11,96 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const consumeIdentityLinkChallenge = `-- name: ConsumeIdentityLinkChallenge :one
+UPDATE identity_link_challenges
+SET consumed_at = now()
+WHERE token_hash = $1
+  AND user_id = $2
+  AND platform = $3
+  AND bridge_id = $4
+  AND platform_user_id = $5
+  AND consumed_at IS NULL
+  AND expires_at > now()
+RETURNING token_hash, user_id, platform, bridge_id, platform_user_id, expires_at, consumed_at, created_at
+`
+
+type ConsumeIdentityLinkChallengeParams struct {
+	TokenHash      string      `json:"token_hash"`
+	UserID         pgtype.UUID `json:"user_id"`
+	Platform       string      `json:"platform"`
+	BridgeID       pgtype.UUID `json:"bridge_id"`
+	PlatformUserID string      `json:"platform_user_id"`
+}
+
+func (q *Queries) ConsumeIdentityLinkChallenge(ctx context.Context, arg ConsumeIdentityLinkChallengeParams) (IdentityLinkChallenge, error) {
+	row := q.db.QueryRow(ctx, consumeIdentityLinkChallenge,
+		arg.TokenHash,
+		arg.UserID,
+		arg.Platform,
+		arg.BridgeID,
+		arg.PlatformUserID,
+	)
+	var i IdentityLinkChallenge
+	err := row.Scan(
+		&i.TokenHash,
+		&i.UserID,
+		&i.Platform,
+		&i.BridgeID,
+		&i.PlatformUserID,
+		&i.ExpiresAt,
+		&i.ConsumedAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const createIdentityLinkChallenge = `-- name: CreateIdentityLinkChallenge :one
+INSERT INTO identity_link_challenges (
+    token_hash, user_id, platform, bridge_id, platform_user_id, expires_at
+)
+VALUES ($1, $2, $3, $4, $5, $6)
+ON CONFLICT (token_hash) DO UPDATE SET token_hash = EXCLUDED.token_hash
+WHERE identity_link_challenges.consumed_at IS NULL
+  AND identity_link_challenges.user_id = EXCLUDED.user_id
+  AND identity_link_challenges.platform = EXCLUDED.platform
+  AND identity_link_challenges.bridge_id = EXCLUDED.bridge_id
+  AND identity_link_challenges.platform_user_id = EXCLUDED.platform_user_id
+  AND identity_link_challenges.expires_at = EXCLUDED.expires_at
+RETURNING token_hash, user_id, platform, bridge_id, platform_user_id, expires_at, consumed_at, created_at
+`
+
+type CreateIdentityLinkChallengeParams struct {
+	TokenHash      string             `json:"token_hash"`
+	UserID         pgtype.UUID        `json:"user_id"`
+	Platform       string             `json:"platform"`
+	BridgeID       pgtype.UUID        `json:"bridge_id"`
+	PlatformUserID string             `json:"platform_user_id"`
+	ExpiresAt      pgtype.Timestamptz `json:"expires_at"`
+}
+
+func (q *Queries) CreateIdentityLinkChallenge(ctx context.Context, arg CreateIdentityLinkChallengeParams) (IdentityLinkChallenge, error) {
+	row := q.db.QueryRow(ctx, createIdentityLinkChallenge,
+		arg.TokenHash,
+		arg.UserID,
+		arg.Platform,
+		arg.BridgeID,
+		arg.PlatformUserID,
+		arg.ExpiresAt,
+	)
+	var i IdentityLinkChallenge
+	err := row.Scan(
+		&i.TokenHash,
+		&i.UserID,
+		&i.Platform,
+		&i.BridgeID,
+		&i.PlatformUserID,
+		&i.ExpiresAt,
+		&i.ConsumedAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const createPlatformIdentity = `-- name: CreatePlatformIdentity :one
 INSERT INTO platform_identities (user_id, platform, platform_user_id)
 VALUES ($1, $2, $3)
@@ -34,6 +124,26 @@ func (q *Queries) CreatePlatformIdentity(ctx context.Context, arg CreatePlatform
 		&i.CreatedAt,
 	)
 	return i, err
+}
+
+const createPlatformIdentityIfUnlinked = `-- name: CreatePlatformIdentityIfUnlinked :execrows
+INSERT INTO platform_identities (user_id, platform, platform_user_id)
+VALUES ($1, $2, $3)
+ON CONFLICT (platform, platform_user_id) DO NOTHING
+`
+
+type CreatePlatformIdentityIfUnlinkedParams struct {
+	UserID         pgtype.UUID `json:"user_id"`
+	Platform       string      `json:"platform"`
+	PlatformUserID string      `json:"platform_user_id"`
+}
+
+func (q *Queries) CreatePlatformIdentityIfUnlinked(ctx context.Context, arg CreatePlatformIdentityIfUnlinkedParams) (int64, error) {
+	result, err := q.db.Exec(ctx, createPlatformIdentityIfUnlinked, arg.UserID, arg.Platform, arg.PlatformUserID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const deletePlatformIdentityAny = `-- name: DeletePlatformIdentityAny :exec
@@ -168,30 +278,4 @@ func (q *Queries) ListPlatformIdentitiesByUser(ctx context.Context, userID pgtyp
 		return nil, err
 	}
 	return items, nil
-}
-
-const upsertPlatformIdentity = `-- name: UpsertPlatformIdentity :one
-INSERT INTO platform_identities (user_id, platform, platform_user_id)
-VALUES ($1, $2, $3)
-ON CONFLICT (platform, platform_user_id) DO UPDATE SET user_id = EXCLUDED.user_id
-RETURNING id, user_id, platform, platform_user_id, created_at
-`
-
-type UpsertPlatformIdentityParams struct {
-	UserID         pgtype.UUID `json:"user_id"`
-	Platform       string      `json:"platform"`
-	PlatformUserID string      `json:"platform_user_id"`
-}
-
-func (q *Queries) UpsertPlatformIdentity(ctx context.Context, arg UpsertPlatformIdentityParams) (PlatformIdentity, error) {
-	row := q.db.QueryRow(ctx, upsertPlatformIdentity, arg.UserID, arg.Platform, arg.PlatformUserID)
-	var i PlatformIdentity
-	err := row.Scan(
-		&i.ID,
-		&i.UserID,
-		&i.Platform,
-		&i.PlatformUserID,
-		&i.CreatedAt,
-	)
-	return i, err
 }

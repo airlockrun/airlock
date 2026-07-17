@@ -25,20 +25,20 @@ INSERT INTO agents (
     source_ref, image_ref, db_schema, db_password, sdk_version,
     instructions, error_message, emoji,
     git_remote_url, git_default_branch, git_webhook_secret, git_last_synced_ref,
-    git_mode
+    git_mode, agent_token_version
 )
 SELECT
     p.id, $1, $2, $3, $4, $5, 'draft',
     'idle', true,
-    true, false, true,
+    true, false, false,
     false, false,
     '', '', '', '',
     '', '', '', '',
     '', '', '', '', '',
     '[]'::jsonb, '', '',
-    '', '', '', '', ''
+    '', '', '', '', '', 1
 FROM p
-RETURNING id, owner_principal_id, slug, name, description, status, upgrade_status, auto_fix, build_provider_id, build_model, exec_provider_id, exec_model, stt_provider_id, stt_model, vision_provider_id, vision_model, tts_provider_id, tts_model, image_gen_provider_id, image_gen_model, embedding_provider_id, embedding_model, search_provider_id, search_model, source_ref, image_ref, db_schema, db_password, sdk_version, config, instructions, error_message, created_at, updated_at, mcp_enabled, allow_public_mcp, allow_public_routes, tools_hash, emoji, allow_oauth_mcp_prompt, allow_public_mcp_prompt, git_remote_url, git_mode, git_credential_id, git_default_branch, git_webhook_secret, git_last_synced_ref
+RETURNING id, owner_principal_id, slug, name, description, status, upgrade_status, auto_fix, build_provider_id, build_model, exec_provider_id, exec_model, stt_provider_id, stt_model, vision_provider_id, vision_model, tts_provider_id, tts_model, image_gen_provider_id, image_gen_model, embedding_provider_id, embedding_model, search_provider_id, search_model, source_ref, image_ref, db_schema, db_password, sdk_version, config, instructions, error_message, created_at, updated_at, mcp_enabled, allow_public_mcp, allow_public_routes, tools_hash, emoji, allow_oauth_mcp_prompt, allow_public_mcp_prompt, git_remote_url, git_mode, git_credential_id, git_default_branch, git_webhook_secret, git_last_synced_ref, agent_token_version
 `
 
 type CreateAgentParams struct {
@@ -113,6 +113,7 @@ func (q *Queries) CreateAgent(ctx context.Context, arg CreateAgentParams) (Agent
 		&i.GitDefaultBranch,
 		&i.GitWebhookSecret,
 		&i.GitLastSyncedRef,
+		&i.AgentTokenVersion,
 	)
 	return i, err
 }
@@ -128,8 +129,68 @@ func (q *Queries) DeleteAgent(ctx context.Context, id pgtype.UUID) error {
 	return err
 }
 
+const failInitialAgentBuild = `-- name: FailInitialAgentBuild :execrows
+UPDATE agents
+SET status = 'failed',
+    error_message = $1,
+    updated_at = now()
+WHERE id = $2
+  AND agent_token_version = $3
+  AND status = 'building'
+`
+
+type FailInitialAgentBuildParams struct {
+	ErrorMessage      string      `json:"error_message"`
+	ID                pgtype.UUID `json:"id"`
+	AgentTokenVersion int64       `json:"agent_token_version"`
+}
+
+func (q *Queries) FailInitialAgentBuild(ctx context.Context, arg FailInitialAgentBuildParams) (int64, error) {
+	result, err := q.db.Exec(ctx, failInitialAgentBuild, arg.ErrorMessage, arg.ID, arg.AgentTokenVersion)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const finalizeAgentDeployment = `-- name: FinalizeAgentDeployment :execrows
+UPDATE agents
+SET source_ref = $1,
+    image_ref = $2,
+    status = $3,
+    error_message = '',
+    updated_at = now()
+WHERE id = $4
+  AND agent_token_version = $5
+  AND status = $6
+`
+
+type FinalizeAgentDeploymentParams struct {
+	SourceRef         string      `json:"source_ref"`
+	ImageRef          string      `json:"image_ref"`
+	NextStatus        string      `json:"next_status"`
+	ID                pgtype.UUID `json:"id"`
+	AgentTokenVersion int64       `json:"agent_token_version"`
+	ExpectedStatus    string      `json:"expected_status"`
+}
+
+func (q *Queries) FinalizeAgentDeployment(ctx context.Context, arg FinalizeAgentDeploymentParams) (int64, error) {
+	result, err := q.db.Exec(ctx, finalizeAgentDeployment,
+		arg.SourceRef,
+		arg.ImageRef,
+		arg.NextStatus,
+		arg.ID,
+		arg.AgentTokenVersion,
+		arg.ExpectedStatus,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const getAgentByID = `-- name: GetAgentByID :one
-SELECT id, owner_principal_id, slug, name, description, status, upgrade_status, auto_fix, build_provider_id, build_model, exec_provider_id, exec_model, stt_provider_id, stt_model, vision_provider_id, vision_model, tts_provider_id, tts_model, image_gen_provider_id, image_gen_model, embedding_provider_id, embedding_model, search_provider_id, search_model, source_ref, image_ref, db_schema, db_password, sdk_version, config, instructions, error_message, created_at, updated_at, mcp_enabled, allow_public_mcp, allow_public_routes, tools_hash, emoji, allow_oauth_mcp_prompt, allow_public_mcp_prompt, git_remote_url, git_mode, git_credential_id, git_default_branch, git_webhook_secret, git_last_synced_ref FROM agents WHERE id = $1
+SELECT id, owner_principal_id, slug, name, description, status, upgrade_status, auto_fix, build_provider_id, build_model, exec_provider_id, exec_model, stt_provider_id, stt_model, vision_provider_id, vision_model, tts_provider_id, tts_model, image_gen_provider_id, image_gen_model, embedding_provider_id, embedding_model, search_provider_id, search_model, source_ref, image_ref, db_schema, db_password, sdk_version, config, instructions, error_message, created_at, updated_at, mcp_enabled, allow_public_mcp, allow_public_routes, tools_hash, emoji, allow_oauth_mcp_prompt, allow_public_mcp_prompt, git_remote_url, git_mode, git_credential_id, git_default_branch, git_webhook_secret, git_last_synced_ref, agent_token_version FROM agents WHERE id = $1
 `
 
 func (q *Queries) GetAgentByID(ctx context.Context, id pgtype.UUID) (Agent, error) {
@@ -183,12 +244,13 @@ func (q *Queries) GetAgentByID(ctx context.Context, id pgtype.UUID) (Agent, erro
 		&i.GitDefaultBranch,
 		&i.GitWebhookSecret,
 		&i.GitLastSyncedRef,
+		&i.AgentTokenVersion,
 	)
 	return i, err
 }
 
 const getAgentBySlug = `-- name: GetAgentBySlug :one
-SELECT id, owner_principal_id, slug, name, description, status, upgrade_status, auto_fix, build_provider_id, build_model, exec_provider_id, exec_model, stt_provider_id, stt_model, vision_provider_id, vision_model, tts_provider_id, tts_model, image_gen_provider_id, image_gen_model, embedding_provider_id, embedding_model, search_provider_id, search_model, source_ref, image_ref, db_schema, db_password, sdk_version, config, instructions, error_message, created_at, updated_at, mcp_enabled, allow_public_mcp, allow_public_routes, tools_hash, emoji, allow_oauth_mcp_prompt, allow_public_mcp_prompt, git_remote_url, git_mode, git_credential_id, git_default_branch, git_webhook_secret, git_last_synced_ref FROM agents WHERE slug = $1
+SELECT id, owner_principal_id, slug, name, description, status, upgrade_status, auto_fix, build_provider_id, build_model, exec_provider_id, exec_model, stt_provider_id, stt_model, vision_provider_id, vision_model, tts_provider_id, tts_model, image_gen_provider_id, image_gen_model, embedding_provider_id, embedding_model, search_provider_id, search_model, source_ref, image_ref, db_schema, db_password, sdk_version, config, instructions, error_message, created_at, updated_at, mcp_enabled, allow_public_mcp, allow_public_routes, tools_hash, emoji, allow_oauth_mcp_prompt, allow_public_mcp_prompt, git_remote_url, git_mode, git_credential_id, git_default_branch, git_webhook_secret, git_last_synced_ref, agent_token_version FROM agents WHERE slug = $1
 `
 
 func (q *Queries) GetAgentBySlug(ctx context.Context, slug string) (Agent, error) {
@@ -242,6 +304,7 @@ func (q *Queries) GetAgentBySlug(ctx context.Context, slug string) (Agent, error
 		&i.GitDefaultBranch,
 		&i.GitWebhookSecret,
 		&i.GitLastSyncedRef,
+		&i.AgentTokenVersion,
 	)
 	return i, err
 }
@@ -260,6 +323,37 @@ func (q *Queries) GetAgentForUpgrade(ctx context.Context, id pgtype.UUID) (GetAg
 	var i GetAgentForUpgradeRow
 	err := row.Scan(&i.ID, &i.UpgradeStatus)
 	return i, err
+}
+
+const getAgentTokenAuth = `-- name: GetAgentTokenAuth :one
+SELECT status, agent_token_version FROM agents WHERE id = $1
+`
+
+type GetAgentTokenAuthRow struct {
+	Status            string `json:"status"`
+	AgentTokenVersion int64  `json:"agent_token_version"`
+}
+
+func (q *Queries) GetAgentTokenAuth(ctx context.Context, id pgtype.UUID) (GetAgentTokenAuthRow, error) {
+	row := q.db.QueryRow(ctx, getAgentTokenAuth, id)
+	var i GetAgentTokenAuthRow
+	err := row.Scan(&i.Status, &i.AgentTokenVersion)
+	return i, err
+}
+
+const incrementAgentTokenVersion = `-- name: IncrementAgentTokenVersion :one
+UPDATE agents
+SET agent_token_version = agent_token_version + 1,
+    updated_at = now()
+WHERE id = $1
+RETURNING agent_token_version
+`
+
+func (q *Queries) IncrementAgentTokenVersion(ctx context.Context, id pgtype.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, incrementAgentTokenVersion, id)
+	var agent_token_version int64
+	err := row.Scan(&agent_token_version)
+	return agent_token_version, err
 }
 
 const listActiveAgentIDs = `-- name: ListActiveAgentIDs :many
@@ -289,7 +383,7 @@ func (q *Queries) ListActiveAgentIDs(ctx context.Context) ([]pgtype.UUID, error)
 }
 
 const listAgents = `-- name: ListAgents :many
-SELECT id, owner_principal_id, slug, name, description, status, upgrade_status, auto_fix, build_provider_id, build_model, exec_provider_id, exec_model, stt_provider_id, stt_model, vision_provider_id, vision_model, tts_provider_id, tts_model, image_gen_provider_id, image_gen_model, embedding_provider_id, embedding_model, search_provider_id, search_model, source_ref, image_ref, db_schema, db_password, sdk_version, config, instructions, error_message, created_at, updated_at, mcp_enabled, allow_public_mcp, allow_public_routes, tools_hash, emoji, allow_oauth_mcp_prompt, allow_public_mcp_prompt, git_remote_url, git_mode, git_credential_id, git_default_branch, git_webhook_secret, git_last_synced_ref FROM agents ORDER BY created_at DESC
+SELECT id, owner_principal_id, slug, name, description, status, upgrade_status, auto_fix, build_provider_id, build_model, exec_provider_id, exec_model, stt_provider_id, stt_model, vision_provider_id, vision_model, tts_provider_id, tts_model, image_gen_provider_id, image_gen_model, embedding_provider_id, embedding_model, search_provider_id, search_model, source_ref, image_ref, db_schema, db_password, sdk_version, config, instructions, error_message, created_at, updated_at, mcp_enabled, allow_public_mcp, allow_public_routes, tools_hash, emoji, allow_oauth_mcp_prompt, allow_public_mcp_prompt, git_remote_url, git_mode, git_credential_id, git_default_branch, git_webhook_secret, git_last_synced_ref, agent_token_version FROM agents ORDER BY created_at DESC
 `
 
 func (q *Queries) ListAgents(ctx context.Context) ([]Agent, error) {
@@ -349,6 +443,7 @@ func (q *Queries) ListAgents(ctx context.Context) ([]Agent, error) {
 			&i.GitDefaultBranch,
 			&i.GitWebhookSecret,
 			&i.GitLastSyncedRef,
+			&i.AgentTokenVersion,
 		); err != nil {
 			return nil, err
 		}
@@ -361,7 +456,7 @@ func (q *Queries) ListAgents(ctx context.Context) ([]Agent, error) {
 }
 
 const listAgentsVisibleToUser = `-- name: ListAgentsVisibleToUser :many
-SELECT DISTINCT a.id, a.owner_principal_id, a.slug, a.name, a.description, a.status, a.upgrade_status, a.auto_fix, a.build_provider_id, a.build_model, a.exec_provider_id, a.exec_model, a.stt_provider_id, a.stt_model, a.vision_provider_id, a.vision_model, a.tts_provider_id, a.tts_model, a.image_gen_provider_id, a.image_gen_model, a.embedding_provider_id, a.embedding_model, a.search_provider_id, a.search_model, a.source_ref, a.image_ref, a.db_schema, a.db_password, a.sdk_version, a.config, a.instructions, a.error_message, a.created_at, a.updated_at, a.mcp_enabled, a.allow_public_mcp, a.allow_public_routes, a.tools_hash, a.emoji, a.allow_oauth_mcp_prompt, a.allow_public_mcp_prompt, a.git_remote_url, a.git_mode, a.git_credential_id, a.git_default_branch, a.git_webhook_secret, a.git_last_synced_ref FROM agents a
+SELECT DISTINCT a.id, a.owner_principal_id, a.slug, a.name, a.description, a.status, a.upgrade_status, a.auto_fix, a.build_provider_id, a.build_model, a.exec_provider_id, a.exec_model, a.stt_provider_id, a.stt_model, a.vision_provider_id, a.vision_model, a.tts_provider_id, a.tts_model, a.image_gen_provider_id, a.image_gen_model, a.embedding_provider_id, a.embedding_model, a.search_provider_id, a.search_model, a.source_ref, a.image_ref, a.db_schema, a.db_password, a.sdk_version, a.config, a.instructions, a.error_message, a.created_at, a.updated_at, a.mcp_enabled, a.allow_public_mcp, a.allow_public_routes, a.tools_hash, a.emoji, a.allow_oauth_mcp_prompt, a.allow_public_mcp_prompt, a.git_remote_url, a.git_mode, a.git_credential_id, a.git_default_branch, a.git_webhook_secret, a.git_last_synced_ref, a.agent_token_version FROM agents a
 JOIN agent_grants g ON g.agent_id = a.id AND g.grantee_id = ANY ($1::uuid[])
 ORDER BY a.created_at DESC
 `
@@ -427,6 +522,7 @@ func (q *Queries) ListAgentsVisibleToUser(ctx context.Context, granteeIds []pgty
 			&i.GitDefaultBranch,
 			&i.GitWebhookSecret,
 			&i.GitLastSyncedRef,
+			&i.AgentTokenVersion,
 		); err != nil {
 			return nil, err
 		}
@@ -439,7 +535,7 @@ func (q *Queries) ListAgentsVisibleToUser(ctx context.Context, granteeIds []pgty
 }
 
 const listRebuildableAgents = `-- name: ListRebuildableAgents :many
-SELECT id, owner_principal_id, slug, name, description, status, upgrade_status, auto_fix, build_provider_id, build_model, exec_provider_id, exec_model, stt_provider_id, stt_model, vision_provider_id, vision_model, tts_provider_id, tts_model, image_gen_provider_id, image_gen_model, embedding_provider_id, embedding_model, search_provider_id, search_model, source_ref, image_ref, db_schema, db_password, sdk_version, config, instructions, error_message, created_at, updated_at, mcp_enabled, allow_public_mcp, allow_public_routes, tools_hash, emoji, allow_oauth_mcp_prompt, allow_public_mcp_prompt, git_remote_url, git_mode, git_credential_id, git_default_branch, git_webhook_secret, git_last_synced_ref FROM agents
+SELECT id, owner_principal_id, slug, name, description, status, upgrade_status, auto_fix, build_provider_id, build_model, exec_provider_id, exec_model, stt_provider_id, stt_model, vision_provider_id, vision_model, tts_provider_id, tts_model, image_gen_provider_id, image_gen_model, embedding_provider_id, embedding_model, search_provider_id, search_model, source_ref, image_ref, db_schema, db_password, sdk_version, config, instructions, error_message, created_at, updated_at, mcp_enabled, allow_public_mcp, allow_public_routes, tools_hash, emoji, allow_oauth_mcp_prompt, allow_public_mcp_prompt, git_remote_url, git_mode, git_credential_id, git_default_branch, git_webhook_secret, git_last_synced_ref, agent_token_version FROM agents
 WHERE image_ref <> '' AND status IN ('active', 'stopped')
 ORDER BY created_at ASC
 `
@@ -508,6 +604,7 @@ func (q *Queries) ListRebuildableAgents(ctx context.Context) ([]Agent, error) {
 			&i.GitDefaultBranch,
 			&i.GitWebhookSecret,
 			&i.GitLastSyncedRef,
+			&i.AgentTokenVersion,
 		); err != nil {
 			return nil, err
 		}
@@ -572,6 +669,51 @@ func (q *Queries) ResolvePrincipalNames(ctx context.Context, ids []pgtype.UUID) 
 		return nil, err
 	}
 	return items, nil
+}
+
+const startInitialAgentBuild = `-- name: StartInitialAgentBuild :execrows
+UPDATE agents
+SET status = 'building',
+    error_message = '',
+    updated_at = now()
+WHERE id = $1
+  AND agent_token_version = $2
+  AND status IN ('draft', 'failed')
+`
+
+type StartInitialAgentBuildParams struct {
+	ID                pgtype.UUID `json:"id"`
+	AgentTokenVersion int64       `json:"agent_token_version"`
+}
+
+func (q *Queries) StartInitialAgentBuild(ctx context.Context, arg StartInitialAgentBuildParams) (int64, error) {
+	result, err := q.db.Exec(ctx, startInitialAgentBuild, arg.ID, arg.AgentTokenVersion)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const stopAgentAndRotateToken = `-- name: StopAgentAndRotateToken :one
+UPDATE agents
+SET status = 'stopped',
+    error_message = $2,
+    agent_token_version = agent_token_version + 1,
+    updated_at = now()
+WHERE id = $1
+RETURNING agent_token_version
+`
+
+type StopAgentAndRotateTokenParams struct {
+	ID           pgtype.UUID `json:"id"`
+	ErrorMessage string      `json:"error_message"`
+}
+
+func (q *Queries) StopAgentAndRotateToken(ctx context.Context, arg StopAgentAndRotateTokenParams) (int64, error) {
+	row := q.db.QueryRow(ctx, stopAgentAndRotateToken, arg.ID, arg.ErrorMessage)
+	var agent_token_version int64
+	err := row.Scan(&agent_token_version)
+	return agent_token_version, err
 }
 
 const updateAgentA2ASettings = `-- name: UpdateAgentA2ASettings :exec
@@ -683,7 +825,7 @@ UPDATE agents SET
     auto_fix = $3,
     updated_at = now()
 WHERE id = $4
-RETURNING id, owner_principal_id, slug, name, description, status, upgrade_status, auto_fix, build_provider_id, build_model, exec_provider_id, exec_model, stt_provider_id, stt_model, vision_provider_id, vision_model, tts_provider_id, tts_model, image_gen_provider_id, image_gen_model, embedding_provider_id, embedding_model, search_provider_id, search_model, source_ref, image_ref, db_schema, db_password, sdk_version, config, instructions, error_message, created_at, updated_at, mcp_enabled, allow_public_mcp, allow_public_routes, tools_hash, emoji, allow_oauth_mcp_prompt, allow_public_mcp_prompt, git_remote_url, git_mode, git_credential_id, git_default_branch, git_webhook_secret, git_last_synced_ref
+RETURNING id, owner_principal_id, slug, name, description, status, upgrade_status, auto_fix, build_provider_id, build_model, exec_provider_id, exec_model, stt_provider_id, stt_model, vision_provider_id, vision_model, tts_provider_id, tts_model, image_gen_provider_id, image_gen_model, embedding_provider_id, embedding_model, search_provider_id, search_model, source_ref, image_ref, db_schema, db_password, sdk_version, config, instructions, error_message, created_at, updated_at, mcp_enabled, allow_public_mcp, allow_public_routes, tools_hash, emoji, allow_oauth_mcp_prompt, allow_public_mcp_prompt, git_remote_url, git_mode, git_credential_id, git_default_branch, git_webhook_secret, git_last_synced_ref, agent_token_version
 `
 
 type UpdateAgentFieldsParams struct {
@@ -753,6 +895,7 @@ func (q *Queries) UpdateAgentFields(ctx context.Context, arg UpdateAgentFieldsPa
 		&i.GitDefaultBranch,
 		&i.GitWebhookSecret,
 		&i.GitLastSyncedRef,
+		&i.AgentTokenVersion,
 	)
 	return i, err
 }

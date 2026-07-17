@@ -86,18 +86,51 @@ func (q *Queries) GetRefreshTokenByHash(ctx context.Context, tokenHash []byte) (
 	return i, err
 }
 
-const markRefreshConsumed = `-- name: MarkRefreshConsumed :exec
-UPDATE oauth_refresh_tokens
-SET consumed_at = now()
-WHERE token_hash = $1
+const getRefreshTokenByHashForUpdate = `-- name: GetRefreshTokenByHashForUpdate :one
+SELECT token_hash, user_id, client_id, agent_id, scope, family_id, parent_token_hash, expires_at, consumed_at, created_at FROM oauth_refresh_tokens WHERE token_hash = $1 FOR UPDATE
 `
 
-// Records that this token was just used to mint a new one. The next
-// /token attempt on the same token sees consumed_at IS NOT NULL and
-// triggers reuse-detection (RevokeRefreshFamily).
-func (q *Queries) MarkRefreshConsumed(ctx context.Context, tokenHash []byte) error {
-	_, err := q.db.Exec(ctx, markRefreshConsumed, tokenHash)
-	return err
+func (q *Queries) GetRefreshTokenByHashForUpdate(ctx context.Context, tokenHash []byte) (OauthRefreshToken, error) {
+	row := q.db.QueryRow(ctx, getRefreshTokenByHashForUpdate, tokenHash)
+	var i OauthRefreshToken
+	err := row.Scan(
+		&i.TokenHash,
+		&i.UserID,
+		&i.ClientID,
+		&i.AgentID,
+		&i.Scope,
+		&i.FamilyID,
+		&i.ParentTokenHash,
+		&i.ExpiresAt,
+		&i.ConsumedAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const markRefreshConsumed = `-- name: MarkRefreshConsumed :one
+UPDATE oauth_refresh_tokens
+SET consumed_at = now()
+WHERE token_hash = $1 AND consumed_at IS NULL
+RETURNING token_hash, user_id, client_id, agent_id, scope, family_id, parent_token_hash, expires_at, consumed_at, created_at
+`
+
+func (q *Queries) MarkRefreshConsumed(ctx context.Context, tokenHash []byte) (OauthRefreshToken, error) {
+	row := q.db.QueryRow(ctx, markRefreshConsumed, tokenHash)
+	var i OauthRefreshToken
+	err := row.Scan(
+		&i.TokenHash,
+		&i.UserID,
+		&i.ClientID,
+		&i.AgentID,
+		&i.Scope,
+		&i.FamilyID,
+		&i.ParentTokenHash,
+		&i.ExpiresAt,
+		&i.ConsumedAt,
+		&i.CreatedAt,
+	)
+	return i, err
 }
 
 const revokeRefreshFamily = `-- name: RevokeRefreshFamily :execrows

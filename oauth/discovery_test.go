@@ -11,10 +11,11 @@ import (
 
 func TestDiscoverUpstream(t *testing.T) {
 	mux := http.NewServeMux()
+	var testServerURL string
 
 	mux.HandleFunc("/.well-known/oauth-protected-resource", func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(ProtectedResourceMeta{
-			Resource:             "https://mcp.example.com",
+			Resource:             testServerURL + "/mcp",
 			AuthorizationServers: []string{"https://auth.example.com"},
 			ScopesSupported:      []string{"read", "write"},
 		})
@@ -22,7 +23,7 @@ func TestDiscoverUpstream(t *testing.T) {
 
 	mux.HandleFunc("/.well-known/oauth-authorization-server", func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(AuthServerMeta{
-			Issuer:                        "https://auth.example.com",
+			Issuer:                        testServerURL,
 			AuthorizationEndpoint:         "https://auth.example.com/authorize",
 			TokenEndpoint:                 "https://auth.example.com/token",
 			RegistrationEndpoint:          "https://auth.example.com/register",
@@ -32,6 +33,7 @@ func TestDiscoverUpstream(t *testing.T) {
 
 	ts := httptest.NewServer(mux)
 	defer ts.Close()
+	testServerURL = ts.URL
 
 	// DiscoverUpstream expects the auth server URL to match, but in tests the
 	// protected resource metadata points to https://auth.example.com which
@@ -44,8 +46,8 @@ func TestDiscoverUpstream(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if meta.Resource != "https://mcp.example.com" {
-			t.Errorf("resource = %q, want https://mcp.example.com", meta.Resource)
+		if meta.Resource != ts.URL+"/mcp" {
+			t.Errorf("resource = %q, want %s/mcp", meta.Resource, ts.URL)
 		}
 		if len(meta.AuthorizationServers) != 1 {
 			t.Fatalf("expected 1 auth server, got %d", len(meta.AuthorizationServers))
@@ -112,15 +114,17 @@ func TestDiscoverUpstream(t *testing.T) {
 
 	t.Run("FetchAuthServerMetadata_OIDCFallback", func(t *testing.T) {
 		oidcMux := http.NewServeMux()
+		var oidcServerURL string
 		oidcMux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, r *http.Request) {
 			json.NewEncoder(w).Encode(AuthServerMeta{
-				Issuer:                "https://oidc.example.com",
+				Issuer:                oidcServerURL,
 				AuthorizationEndpoint: "https://oidc.example.com/authorize",
 				TokenEndpoint:         "https://oidc.example.com/token",
 			})
 		})
 		oidcServer := httptest.NewServer(oidcMux)
 		defer oidcServer.Close()
+		oidcServerURL = oidcServer.URL
 
 		meta, err := FetchAuthServerMetadata(ctx, oidcServer.Client(), oidcServer.URL)
 		if err != nil {

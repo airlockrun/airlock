@@ -97,6 +97,17 @@ func TestVerify_Expired(t *testing.T) {
 	}
 }
 
+func TestVerify_FutureAuthDate(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	data := sign(t, testBotToken, map[string]string{
+		"auth_date": strconv.FormatInt(now.Add(time.Second).Unix(), 10),
+		"user":      `{"id":42}`,
+	})
+	if _, err := Verify(data, testBotToken, 5*time.Minute, now); err == nil {
+		t.Fatal("expected future auth_date error, got nil")
+	}
+}
+
 func TestVerify_MissingFields(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	cases := []struct {

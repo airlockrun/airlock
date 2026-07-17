@@ -27,7 +27,8 @@ func (q *Queries) DeleteDirectoriesByAgentExcept(ctx context.Context, arg Delete
 
 const getDirectoryByPath = `-- name: GetDirectoryByPath :one
 SELECT id, agent_id, path, read_access, write_access, list_access, description, llm_hint, retention_hours, created_at, updated_at, scope FROM agent_directories
-WHERE agent_id = $1 AND $2::text LIKE path || '%'
+WHERE agent_id = $1
+  AND ($2::text = path OR $2::text LIKE path || '/%')
 ORDER BY length(path) DESC LIMIT 1
 `
 
@@ -37,7 +38,7 @@ type GetDirectoryByPathParams struct {
 }
 
 // Longest-prefix match for nested registrations. Returns the most-specific
-// directory whose path is a prefix of the requested path.
+// directory matching the requested path on an exact segment boundary.
 func (q *Queries) GetDirectoryByPath(ctx context.Context, arg GetDirectoryByPathParams) (AgentDirectory, error) {
 	row := q.db.QueryRow(ctx, getDirectoryByPath, arg.AgentID, arg.Path)
 	var i AgentDirectory

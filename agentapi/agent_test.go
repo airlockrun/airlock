@@ -15,6 +15,7 @@ import (
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/airlockrun/airlock/db/dbtest"
+	"github.com/airlockrun/airlock/networkpolicy"
 	"github.com/airlockrun/airlock/secrets"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -77,7 +78,7 @@ func testAgentHandler() *Handler {
 	return &Handler{
 		db:          testDB,
 		encryptor:   testEncryptor(),
-		httpNetwork: newHTTPNetworkPolicy(nil),
+		httpNetwork: networkpolicy.New(nil, false),
 		logger:      zap.NewNop(),
 		// Mirrors config.Config.AgentBaseURL's shape. Required: the
 		// prompt-data path (agent.go) calls this unconditionally and a
@@ -89,7 +90,7 @@ func testAgentHandler() *Handler {
 // testRouter creates a chi router with AgentMiddleware and the given routes.
 func testRouter(ah *Handler, setup func(r chi.Router)) http.Handler {
 	r := chi.NewRouter()
-	r.Use(auth.AgentMiddleware(testJWTSecret))
+	r.Use(auth.AgentMiddleware(testJWTSecret, dbq.New(testDB.Pool())))
 	setup(r)
 	return r
 }
@@ -105,7 +106,11 @@ func agentRequest(t *testing.T, method, path string, agentID uuid.UUID, body any
 	req := httptest.NewRequest(method, path, &buf)
 	req.Header.Set("Content-Type", "application/json")
 
-	token, err := auth.IssueAgentToken(testJWTSecret, agentID)
+	state, err := dbq.New(testDB.Pool()).GetAgentTokenAuth(context.Background(), toPgUUID(agentID))
+	if err != nil {
+		t.Fatalf("GetAgentTokenAuth: %v", err)
+	}
+	token, err := auth.IssueAgentToken(testJWTSecret, agentID, state.AgentTokenVersion)
 	if err != nil {
 		t.Fatalf("IssueAgentToken: %v", err)
 	}
@@ -137,6 +142,9 @@ func testAgentAndUser(t *testing.T) (agentID, userID uuid.UUID) {
 	})
 	if err != nil {
 		t.Fatalf("CreateAgent: %v", err)
+	}
+	if err := q.UpdateAgentStatus(ctx, dbq.UpdateAgentStatusParams{ID: agent.ID, Status: "active"}); err != nil {
+		t.Fatalf("UpdateAgentStatus: %v", err)
 	}
 
 	// Owner becomes agent admin — mirrors the Create handler.
@@ -264,6 +272,18 @@ func TestSync(t *testing.T) {
 	}
 	if len(webhooks) != 1 {
 		t.Errorf("webhooks count = %d, want 1", len(webhooks))
+	}
+	if len(webhooks) == 1 {
+		if webhooks[0].Secret == "" {
+			t.Fatal("webhook secret was not persisted")
+		}
+		plain, err := ah.encryptor.Get(context.Background(), "webhook/"+pgUUID(webhooks[0].ID).String()+"/secret", webhooks[0].Secret)
+		if err != nil {
+			t.Fatalf("decrypt persisted webhook secret: %v", err)
+		}
+		if len(plain) != 64 {
+			t.Fatalf("webhook secret length = %d, want 64", len(plain))
+		}
 	}
 }
 

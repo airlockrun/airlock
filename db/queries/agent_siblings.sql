@@ -31,9 +31,8 @@ WHERE parent_agent_id = @parent_agent_id AND sibling_agent_id = @sibling_agent_i
 
 -- name: GetSiblingMaxAccess :one
 -- The per-edge max_access ceiling for a (parent → sibling) pair, read at
--- A2A call time to cap the caller's effective access. No row means the
--- target is not a declared sibling of the caller (a raw MCP call outside
--- the address book) — the caller treats that as "no extra cap".
+-- A2A call time to admit the call and cap its effective access. No row means
+-- the target is not a declared sibling and the call is denied.
 SELECT max_access FROM agent_siblings
 WHERE parent_agent_id = @parent_agent_id AND sibling_agent_id = @sibling_agent_id;
 

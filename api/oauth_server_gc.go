@@ -9,16 +9,20 @@ import (
 	"go.uber.org/zap"
 )
 
-// InboundOAuthGC sweeps expired authorization codes, expired/
-// long-consumed refresh tokens, ancient grants, and expired WebAuthn
-// login/registration ceremonies. Mirrors
+// InboundOAuthGC sweeps expired authorization codes and consent transactions,
+// expired/long-consumed refresh tokens, ancient grants, inactive OAuth clients,
+// expired WebAuthn ceremonies, device-login handoffs, first-party sessions, and
+// DCR rate-limit buckets. Mirrors
 // oauth.RefreshJob in cadence — 5min ticker, started from
 // cmd/airlock/serve.go and stopped via ctx cancellation.
 //
 // The query files document the retention rules:
 //   - authz codes: hard delete past expires_at (60s TTL).
+//   - consent transactions: hard delete past expires_at (10min TTL).
 //   - refresh tokens: past expires_at OR consumed >7d ago.
 //   - grants: revoked-or-expired more than 1y ago.
+//   - clients: never used after 24h or inactive for 180d, when unreferenced by
+//     active authorization state or retained refresh material.
 //
 // Each tick is idempotent and safe to call from multiple replicas
 // (the DELETE is row-level; concurrent deletes harmlessly target
@@ -66,6 +70,12 @@ func (j *InboundOAuthGC) sweep(ctx context.Context) {
 		j.logger.Debug("gc: authz codes", zap.Int64("deleted", n))
 	}
 	// airlockvet:allow-dbq reason: startup garbage-collection sweep — no caller Principal, runs as airlock-internal housekeeping
+	if n, err := q.CleanupExpiredOAuthConsentTransactions(ctx); err != nil {
+		j.logger.Warn("gc: oauth consent transactions", zap.Error(err))
+	} else if n > 0 {
+		j.logger.Debug("gc: oauth consent transactions", zap.Int64("deleted", n))
+	}
+	// airlockvet:allow-dbq reason: startup garbage-collection sweep — no caller Principal, runs as airlock-internal housekeeping
 	if n, err := q.CleanupExpiredRefreshTokens(ctx); err != nil {
 		j.logger.Warn("gc: refresh tokens", zap.Error(err))
 	} else if n > 0 {
@@ -80,5 +90,30 @@ func (j *InboundOAuthGC) sweep(ctx context.Context) {
 	// airlockvet:allow-dbq reason: startup garbage-collection sweep — no caller Principal, runs as airlock-internal housekeeping
 	if err := q.DeleteExpiredCeremonies(ctx); err != nil {
 		j.logger.Warn("gc: webauthn ceremonies", zap.Error(err))
+	}
+	// airlockvet:allow-dbq reason: startup garbage-collection sweep — no caller Principal, runs as airlock-internal housekeeping
+	if n, err := q.DeleteExpiredDeviceLoginSessions(ctx); err != nil {
+		j.logger.Warn("gc: device login sessions", zap.Error(err))
+	} else if n > 0 {
+		j.logger.Debug("gc: device login sessions", zap.Int64("deleted", n))
+	}
+	// airlockvet:allow-dbq reason: startup garbage-collection sweep — no caller Principal, runs as airlock-internal housekeeping
+	if n, err := q.CleanupExpiredUserSessions(ctx); err != nil {
+		j.logger.Warn("gc: user sessions", zap.Error(err))
+	} else if n > 0 {
+		j.logger.Debug("gc: user sessions", zap.Int64("deleted", n))
+	}
+	// airlockvet:allow-dbq reason: startup garbage-collection sweep — no caller Principal, runs as airlock-internal housekeeping
+	if n, err := q.CleanupOAuthDCRAttempts(ctx); err != nil {
+		j.logger.Warn("gc: oauth DCR attempts", zap.Error(err))
+	} else if n > 0 {
+		j.logger.Debug("gc: oauth DCR attempts", zap.Int64("deleted", n))
+	}
+	// Client pruning runs last so expired dependent rows are removed first.
+	// airlockvet:allow-dbq reason: startup garbage-collection sweep — no caller Principal, runs as airlock-internal housekeeping
+	if n, err := q.CleanupInactiveOAuthClients(ctx); err != nil {
+		j.logger.Warn("gc: oauth clients", zap.Error(err))
+	} else if n > 0 {
+		j.logger.Debug("gc: oauth clients", zap.Int64("deleted", n))
 	}
 }

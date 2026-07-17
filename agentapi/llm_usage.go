@@ -78,14 +78,18 @@ func (h *Handler) recordLLMUsage(agentID uuid.UUID, runIDHeader string, c llmUsa
 
 	if runIDHeader != "" {
 		if ru, err := parseUUID(runIDHeader); err == nil {
-			if run, rerr := q.GetRunByID(ctx, toPgUUID(ru)); rerr == nil {
+			if run, rerr := q.GetRunByIDAndAgent(ctx, dbq.GetRunByIDAndAgentParams{
+				ID: toPgUUID(ru), AgentID: toPgUUID(agentID),
+			}); rerr == nil {
 				runID = toPgUUID(ru)
 				callKind = run.TriggerType
 				// Chat-attached runs (prompt/a2a/bridge) carry the
 				// conversation id in trigger_ref; cron/webhook/code use a
 				// non-uuid ref and resolve to no conversation (correct).
 				if cu, perr := parseUUID(run.TriggerRef); perr == nil {
-					if conv, cerr := q.GetConversationByID(ctx, toPgUUID(cu)); cerr == nil {
+					if conv, cerr := q.GetConversationByIDAndAgent(ctx, dbq.GetConversationByIDAndAgentParams{
+						ID: toPgUUID(cu), AgentID: toPgUUID(agentID),
+					}); cerr == nil {
 						convID = conv.ID
 						userID = conv.UserID
 					}

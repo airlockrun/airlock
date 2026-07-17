@@ -43,6 +43,9 @@ func newDeviceLoginHandler(database *db.DB, jwtSecret, publicURL string) *device
 }
 
 func (h *deviceLoginHandler) Begin(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Pragma", "no-cache")
+	r.Body = http.MaxBytesReader(w, r.Body, 4<<10)
 	req := &airlockv1.DeviceLoginBeginRequest{}
 	if err := decodeProto(r, req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -52,6 +55,7 @@ func (h *deviceLoginHandler) Begin(w http.ResponseWriter, r *http.Request) {
 	if clientName == "" {
 		clientName = deviceLoginClientName
 	}
+	clientName = limitSessionLabel(clientName)
 	deviceName := strings.TrimSpace(req.DeviceName)
 	if deviceName == "" {
 		deviceName = "Unknown device"
@@ -94,39 +98,42 @@ func (h *deviceLoginHandler) Begin(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *deviceLoginHandler) Poll(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Pragma", "no-cache")
+	r.Body = http.MaxBytesReader(w, r.Body, 4<<10)
 	req := &airlockv1.DeviceLoginPollRequest{}
 	if err := decodeProto(r, req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if req.DeviceCode == "" {
+	if req.DeviceCode == "" || len(req.DeviceCode) > 128 {
 		writeError(w, http.StatusBadRequest, "device_code is required")
 		return
 	}
 	q := dbq.New(h.db.Pool())
 	// airlockvet:allow-dbq reason: pre-Principal polling uses a high-entropy device code hash and only releases tokens after authenticated approval
-	sess, err := q.GetDeviceLoginForPoll(r.Context(), hashDeviceLoginCode(req.DeviceCode))
+	codeHash := hashDeviceLoginCode(req.DeviceCode)
+	// airlockvet:allow-dbq reason: device-code polling atomically enforces cadence before any Principal exists
+	sess, err := q.ClaimDeviceLoginPoll(r.Context(), codeHash)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			writeProto(w, http.StatusOK, &airlockv1.DeviceLoginPollResponse{Status: "expired", PollIntervalSeconds: deviceLoginPollInterval})
+			// airlockvet:allow-dbq reason: device-code polling reads only its hash-bound public status before any Principal exists
+			sess, err = q.GetDeviceLoginForPoll(r.Context(), codeHash)
+			if errors.Is(err, pgx.ErrNoRows) || (err == nil && isDeviceLoginExpired(sess, time.Now())) {
+				writeProto(w, http.StatusOK, &airlockv1.DeviceLoginPollResponse{Status: "expired", PollIntervalSeconds: deviceLoginPollInterval})
+				return
+			}
+			if err != nil {
+				logFor(r).Error("poll device login after cadence miss", zap.Error(err))
+				writeError(w, http.StatusInternalServerError, "internal error")
+				return
+			}
+			writeProto(w, http.StatusOK, &airlockv1.DeviceLoginPollResponse{Status: "slow_down", PollIntervalSeconds: sess.PollIntervalSeconds})
 			return
 		}
 		logFor(r).Error("poll device login", zap.Error(err))
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
-	}
-	now := time.Now()
-	if isDeviceLoginExpired(sess, now) {
-		writeProto(w, http.StatusOK, &airlockv1.DeviceLoginPollResponse{Status: "expired", PollIntervalSeconds: sess.PollIntervalSeconds})
-		return
-	}
-	if sess.LastPolledAt.Valid && now.Sub(sess.LastPolledAt.Time) < time.Duration(sess.PollIntervalSeconds)*time.Second {
-		writeProto(w, http.StatusOK, &airlockv1.DeviceLoginPollResponse{Status: "slow_down", PollIntervalSeconds: sess.PollIntervalSeconds})
-		return
-	}
-	// airlockvet:allow-dbq reason: pre-Principal polling records cadence for a high-entropy device code before returning any user data
-	if err := q.MarkDeviceLoginPolled(r.Context(), sess.ID); err != nil {
-		logFor(r).Warn("mark device login polled", zap.Error(err))
 	}
 	switch sess.Status {
 	case "pending":
@@ -141,7 +148,13 @@ func (h *deviceLoginHandler) Poll(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *deviceLoginHandler) finishApprovedPoll(w http.ResponseWriter, r *http.Request, sess dbq.DeviceLoginSession) {
-	q := dbq.New(h.db.Pool())
+	tx, err := h.db.Pool().Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	defer tx.Rollback(r.Context())
+	q := dbq.New(tx)
 	// airlockvet:allow-dbq reason: pre-Principal polling consumes an already authenticated approval using a high-entropy device code
 	consumed, err := q.ConsumeApprovedDeviceLogin(r.Context(), sess.ID)
 	if err != nil {
@@ -163,8 +176,13 @@ func (h *deviceLoginHandler) finishApprovedPoll(w http.ResponseWriter, r *http.R
 		writeError(w, http.StatusUnauthorized, "invalid device login")
 		return
 	}
-	accessToken, refreshToken, err := issueUserSessionTokens(r.Context(), h.db, h.jwtSecret, user, userSessionKindCLI, consumed.ClientName, consumed.DeviceName)
+	accessToken, refreshToken, err := issueUserSessionTokensWithQueries(r.Context(), q, h.jwtSecret, user, userSessionKindCLI, consumed.ClientName, consumed.DeviceName)
 	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		logFor(r).Error("commit device login", zap.Error(err))
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
@@ -178,6 +196,7 @@ func (h *deviceLoginHandler) finishApprovedPoll(w http.ResponseWriter, r *http.R
 }
 
 func (h *deviceLoginHandler) Inspect(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 4<<10)
 	req := &airlockv1.DeviceLoginInspectRequest{}
 	if err := decodeProto(r, req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -191,6 +210,7 @@ func (h *deviceLoginHandler) Inspect(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *deviceLoginHandler) Approve(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 4<<10)
 	req := &airlockv1.DeviceLoginApproveRequest{}
 	if err := decodeProto(r, req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -219,6 +239,7 @@ func (h *deviceLoginHandler) Approve(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *deviceLoginHandler) Deny(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 4<<10)
 	req := &airlockv1.DeviceLoginDenyRequest{}
 	if err := decodeProto(r, req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -306,6 +327,12 @@ func validateUserCode(w http.ResponseWriter, code string) (string, bool) {
 	if len(normalized) != 8 {
 		writeError(w, http.StatusBadRequest, "device login code must be 8 characters")
 		return "", false
+	}
+	for _, c := range normalized {
+		if !strings.ContainsRune("23456789ABCDEFGHJKLMNPQRSTUVWXYZ", c) {
+			writeError(w, http.StatusBadRequest, "device login code contains invalid characters")
+			return "", false
+		}
 	}
 	return hashDeviceLoginCode(normalized), true
 }

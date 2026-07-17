@@ -68,6 +68,11 @@ func verifyLinkSignature(platform, bridgeID, uid, ts, sig, secret string) string
 	return ""
 }
 
+func identityLinkChallengeHash(platform, bridgeID, uid, ts, sig string) string {
+	sum := sha256.Sum256([]byte(platform + ":" + bridgeID + ":" + uid + ":" + ts + ":" + sig))
+	return hex.EncodeToString(sum[:])
+}
+
 // AuthExternal handles GET /auth-external — redirects to frontend for identity linking.
 // The frontend handles auth and calls the LinkIdentity API endpoint.
 func (h *identityHandler) AuthExternal(w http.ResponseWriter, r *http.Request) {
@@ -100,9 +105,11 @@ func (h *identityHandler) LinkIdentityPreview(w http.ResponseWriter, r *http.Req
 	}
 
 	res, err := h.svc.Preview(r.Context(), principalFromRequest(r), identitysvc.PreviewInput{
-		Platform: platform,
-		BridgeID: bridgeID,
-		UID:      uid,
+		Platform:      platform,
+		BridgeID:      bridgeID,
+		UID:           uid,
+		ChallengeHash: identityLinkChallengeHash(platform, bridgeIDStr, uid, ts, sig),
+		ExpiresAt:     time.Unix(mustLinkTimestamp(ts), 0).Add(10 * time.Minute),
 	})
 	if err != nil {
 		writeServiceError(w, err, "failed to load link preview")
@@ -138,11 +145,29 @@ func (h *identityHandler) LinkIdentity(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
-	if err := h.svc.Link(r.Context(), principalFromRequest(r), platform, uid); err != nil {
+	bridgeID, err := parseUUID(bridgeIDStr)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid bridge id")
+		return
+	}
+	if err := h.svc.Link(r.Context(), principalFromRequest(r), identitysvc.LinkInput{
+		Platform:      platform,
+		BridgeID:      bridgeID,
+		UID:           uid,
+		ChallengeHash: identityLinkChallengeHash(platform, bridgeIDStr, uid, ts, sig),
+	}); err != nil {
 		writeServiceError(w, err, "failed to link identity")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func mustLinkTimestamp(ts string) int64 {
+	v, err := strconv.ParseInt(ts, 10, 64)
+	if err != nil {
+		panic("identity link timestamp was not verified")
+	}
+	return v
 }
 
 // ListIdentities handles GET /api/v1/identities.

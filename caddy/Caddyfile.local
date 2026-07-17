@@ -6,7 +6,9 @@
 import routes.caddy
 
 (proxy_airlock) {
-	reverse_proxy {$AIRLOCK_UPSTREAM}
+	reverse_proxy {$AIRLOCK_UPSTREAM} {
+		header_up X-Airlock-Proxy-Auth {$REVERSE_PROXY_AUTH_SECRET}
+	}
 }
 
 http://{$DOMAIN} {
@@ -18,5 +20,7 @@ http://s3.{$DOMAIN} {
 }
 
 http://*.{$DOMAIN} {
+	request_header -X-Airlock-Proxy-Auth
+	import baseline_security_headers
 	import proxy_airlock
 }

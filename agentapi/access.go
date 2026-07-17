@@ -2,6 +2,7 @@ package agentapi
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -9,7 +10,6 @@ import (
 	"github.com/airlockrun/airlock/authz"
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 )
 
 // MCPPrincipalKind discriminates how a caller hit the A2A MCP endpoint.
@@ -54,6 +54,136 @@ var ErrMCPUnauthenticated = errors.New("mcp: unauthenticated and target disallow
 // access ladder rejects them (e.g. non-member on a non-member-closed
 // target). The handler maps this to HTTP 403.
 var ErrMCPForbidden = errors.New("mcp: access denied for target agent")
+
+var errMCPObjectNotAccessible = errors.New("mcp: object not accessible")
+
+type mcpConversationMetadata struct {
+	Principal string `json:"mcpPrincipal"`
+}
+
+// continuationPrincipalKey binds an MCP-created conversation to the complete
+// request identity. Agent callers are run-bound; OAuth callers are client-bound.
+// Anonymous callers have no stable identity and therefore cannot continue.
+func continuationPrincipalKey(principal MCPPrincipal) (string, bool) {
+	switch principal.Kind {
+	case MCPPrincipalUser:
+		if principal.UserID != uuid.Nil {
+			return "user/" + principal.UserID.String(), true
+		}
+	case MCPPrincipalOAuthClient:
+		if principal.UserID != uuid.Nil && principal.ClientID != "" {
+			return "oauth/" + principal.UserID.String() + "/" + principal.ClientID, true
+		}
+	case MCPPrincipalAgent:
+		if principal.UserID != uuid.Nil && principal.CallerAgentID != uuid.Nil && principal.ParentRunID != uuid.Nil {
+			return "agent/" + principal.UserID.String() + "/" + principal.CallerAgentID.String() + "/" + principal.ParentRunID.String(), true
+		}
+	}
+	return "", false
+}
+
+func continuationMetadata(principal MCPPrincipal) ([]byte, error) {
+	key, ok := continuationPrincipalKey(principal)
+	if !ok {
+		return nil, errMCPObjectNotAccessible
+	}
+	return json.Marshal(mcpConversationMetadata{Principal: key})
+}
+
+func conversationBoundToPrincipal(conv dbq.AgentConversation, targetID uuid.UUID, principal MCPPrincipal) bool {
+	if !conv.AgentID.Valid || uuid.UUID(conv.AgentID.Bytes) != targetID || conv.Source != "a2a" {
+		return false
+	}
+	key, ok := continuationPrincipalKey(principal)
+	if !ok {
+		return false
+	}
+	if !conv.UserID.Valid || uuid.UUID(conv.UserID.Bytes) != principal.UserID {
+		return false
+	}
+	var metadata mcpConversationMetadata
+	return json.Unmarshal(conv.Metadata, &metadata) == nil && metadata.Principal == key
+}
+
+func getBoundMCPConversation(ctx context.Context, q *dbq.Queries, targetID uuid.UUID, principal MCPPrincipal, contextID string) (dbq.AgentConversation, error) {
+	id, err := uuid.Parse(contextID)
+	if err != nil {
+		return dbq.AgentConversation{}, errMCPObjectNotAccessible
+	}
+	conv, err := q.GetConversationByIDAndAgent(ctx, dbq.GetConversationByIDAndAgentParams{
+		ID: toPgUUID(id), AgentID: toPgUUID(targetID),
+	})
+	if err != nil || !conversationBoundToPrincipal(conv, targetID, principal) {
+		return dbq.AgentConversation{}, errMCPObjectNotAccessible
+	}
+	return conv, nil
+}
+
+func getBoundMCPTask(ctx context.Context, q *dbq.Queries, targetID uuid.UUID, principal MCPPrincipal, taskID, contextID string) (dbq.Run, dbq.AgentConversation, error) {
+	id, err := uuid.Parse(taskID)
+	if err != nil {
+		return dbq.Run{}, dbq.AgentConversation{}, errMCPObjectNotAccessible
+	}
+	run, err := q.GetRunByIDAndAgent(ctx, dbq.GetRunByIDAndAgentParams{
+		ID: toPgUUID(id), AgentID: toPgUUID(targetID),
+	})
+	if err != nil || run.Status != "suspended" || run.TriggerType != "a2a" || run.TriggerRef == "" {
+		return dbq.Run{}, dbq.AgentConversation{}, errMCPObjectNotAccessible
+	}
+	if contextID != "" && contextID != run.TriggerRef {
+		return dbq.Run{}, dbq.AgentConversation{}, errMCPObjectNotAccessible
+	}
+	if principal.Kind == MCPPrincipalAgent {
+		if !run.ParentRunID.Valid {
+			return dbq.Run{}, dbq.AgentConversation{}, errMCPObjectNotAccessible
+		}
+		originalParentID := uuid.UUID(run.ParentRunID.Bytes)
+		boundPrincipal := principal
+		boundPrincipal.ParentRunID = originalParentID
+		conv, err := getBoundMCPConversation(ctx, q, targetID, boundPrincipal, run.TriggerRef)
+		if err != nil || !agentRunCanResumeTask(ctx, q, principal, originalParentID) {
+			return dbq.Run{}, dbq.AgentConversation{}, errMCPObjectNotAccessible
+		}
+		return run, conv, nil
+	} else if run.ParentRunID.Valid {
+		return dbq.Run{}, dbq.AgentConversation{}, errMCPObjectNotAccessible
+	}
+	conv, err := getBoundMCPConversation(ctx, q, targetID, principal, run.TriggerRef)
+	if err != nil {
+		return dbq.Run{}, dbq.AgentConversation{}, errMCPObjectNotAccessible
+	}
+	return run, conv, nil
+}
+
+func claimMCPTaskResume(ctx context.Context, q *dbq.Queries, run dbq.Run) error {
+	claimed, err := q.ClaimMCPTaskResume(ctx, dbq.ClaimMCPTaskResumeParams{
+		ID:         run.ID,
+		AgentID:    run.AgentID,
+		TriggerRef: run.TriggerRef,
+	})
+	if err != nil || claimed != 1 {
+		return errMCPObjectNotAccessible
+	}
+	return nil
+}
+
+func agentRunCanResumeTask(ctx context.Context, q *dbq.Queries, principal MCPPrincipal, originalParentID uuid.UUID) bool {
+	if principal.ParentRunID == originalParentID {
+		return true
+	}
+	current, err := q.GetRunByID(ctx, toPgUUID(principal.ParentRunID))
+	if err != nil || current.Status != "running" || uuid.UUID(current.AgentID.Bytes) != principal.CallerAgentID {
+		return false
+	}
+	userID, err := chaseOriginalUser(ctx, q, current)
+	if err != nil || userID != principal.UserID {
+		return false
+	}
+	var input struct {
+		ResumeRunID string `json:"resumeRunId"`
+	}
+	return json.Unmarshal(current.InputPayload, &input) == nil && input.ResumeRunID == originalParentID.String()
+}
 
 // computeA2ACallerAccess resolves the caller's effective access on the
 // target agent's MCP endpoint off the grant ladder: a caller is admitted
@@ -115,23 +245,17 @@ func computeA2ACallerAccess(ctx context.Context, q *dbq.Queries, target dbq.Agen
 			return "", ErrMCPForbidden
 		}
 		entitlement := authz.MinAccess(userAccess, ownerAccess)
-		// Per-edge max_access cap the operator set when adding the sibling.
-		// Absent (a raw MCP call outside the caller's address book) means no
-		// extra cap, preserving the owner/user-floored entitlement.
-		maxAccess := agentsdk.AccessAdmin
+		// The declared sibling edge is both an admission requirement and the
+		// operator-set max_access cap. Raw MCP calls outside the caller's
+		// address book have no delegation authority.
 		edge, err := q.GetSiblingMaxAccess(ctx, dbq.GetSiblingMaxAccessParams{
 			ParentAgentID:  toPgUUID(principal.CallerAgentID),
 			SiblingAgentID: target.ID,
 		})
-		switch {
-		case err == nil:
-			maxAccess = agentsdk.Access(edge)
-		case errors.Is(err, pgx.ErrNoRows):
-			// no declared edge — leave maxAccess at AccessAdmin (no cap)
-		default:
+		if err != nil {
 			return "", fmt.Errorf("%w: read sibling edge", ErrMCPForbidden)
 		}
-		return authz.MinAccess(entitlement, maxAccess), nil
+		return authz.MinAccess(entitlement, agentsdk.Access(edge)), nil
 
 	default:
 		return "", fmt.Errorf("%w: unknown principal kind", ErrMCPForbidden)

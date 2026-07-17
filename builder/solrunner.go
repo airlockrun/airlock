@@ -142,29 +142,23 @@ func (b *BuildService) runSolInProcess(ctx context.Context, opts solRunOpts) (*s
 		"AIRLOCK_AGENT_ID="+uuid.UUID(opts.AgentID.Bytes).String(),
 		"AIRLOCK_INTEGRATION_TOKEN="+opts.IntegrationToken,
 	)
-	// Workspace mount: in compose/docker-in-docker mode (when codegen
-	// volume is configured), mount the named volume that contains
-	// AgentCodegenPath so the daemon resolves both ends through the
-	// same managed volume — the sibling sees opts.WorkDir at the same
-	// absolute path airlock used. In dev/host mode, bind-mount
-	// opts.WorkDir at /workspace as before.
-	//
-	// agentDir is the working directory inside the sibling. With
-	// per-agent repos callers pass "/workspace" (the cloned repo's
-	// root); in volume mode the /workspace prefix is rewritten to the
-	// absolute workspace path on the host volume.
+	// Workspace mount: in compose/docker-in-docker mode, mount only this
+	// build's subdirectory from the shared codegen volume. The toolserver
+	// must not see activation data, cached libraries, or other workspaces in
+	// the same persistent volume. Native development uses a direct bind.
 	var workspaceMount dmount.Mount
 	agentDir := opts.AgentDir
 	if b.cfg.AgentCodegenVolume != "" && b.cfg.AgentCodegenPath != "" {
-		workspaceMount = dmount.Mount{
-			Type:   dmount.TypeVolume,
-			Source: b.cfg.AgentCodegenVolume,
-			Target: filepath.Dir(b.cfg.AgentCodegenPath),
+		volumeRoot := filepath.Dir(b.cfg.AgentCodegenPath)
+		subpath, err := filepath.Rel(volumeRoot, opts.WorkDir)
+		if err != nil || subpath == "." || subpath == ".." || strings.HasPrefix(subpath, ".."+string(filepath.Separator)) {
+			return nil, fmt.Errorf("toolserver workspace %q is outside codegen volume root %q", opts.WorkDir, volumeRoot)
 		}
-		// Replace the conventional "/workspace" prefix with the actual
-		// path on the volume. agents/<id> joins to <workDir>/agents/<id>.
-		if strings.HasPrefix(agentDir, "/workspace") {
-			agentDir = opts.WorkDir + strings.TrimPrefix(agentDir, "/workspace")
+		workspaceMount = dmount.Mount{
+			Type:          dmount.TypeVolume,
+			Source:        b.cfg.AgentCodegenVolume,
+			Target:        "/workspace",
+			VolumeOptions: &dmount.VolumeOptions{Subpath: filepath.ToSlash(subpath)},
 		}
 	} else {
 		workspaceMount = dmount.Mount{Type: dmount.TypeBind, Source: opts.WorkDir, Target: "/workspace"}

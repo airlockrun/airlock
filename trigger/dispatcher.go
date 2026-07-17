@@ -248,10 +248,10 @@ func (d *Dispatcher) EnsureRunning(ctx context.Context, agentID uuid.UUID) (*con
 	// Build agent environment.
 	schemaName := "agent_" + sanitizeUUID(agentID.String())
 	agentDBURL := fmt.Sprintf("postgres://%s:%s@%s:%s/%s?search_path=%s&sslmode=%s",
-		schemaName, url.QueryEscape(dbPassword), d.cfg.DBHostAgent, d.cfg.DBPort,
+		schemaName, url.QueryEscape(dbPassword), d.cfg.DBHostAgent, d.cfg.DBPortAgent,
 		d.cfg.DBName, schemaName, d.cfg.DBSSLMode)
 
-	agentToken, err := auth.IssueAgentToken(d.cfg.JWTSecret, agentID)
+	agentToken, err := auth.IssueAgentToken(d.cfg.JWTSecret, agentID, agent.AgentTokenVersion)
 	if err != nil {
 		return nil, fmt.Errorf("issue agent token: %w", err)
 	}
@@ -276,11 +276,11 @@ func (d *Dispatcher) EnsureRunning(ctx context.Context, agentID uuid.UUID) (*con
 	c, err := d.containers.StartAgent(ctx, container.AgentOpts{
 		AgentID: agentID,
 		Image:   agent.ImageRef,
+		Token:   agentToken,
 		Env: map[string]string{
-			"AIRLOCK_AGENT_ID":    agentID.String(),
-			"AIRLOCK_API_URL":     d.cfg.APIURLAgent,
-			"AIRLOCK_DB_URL":      agentDBURL,
-			"AIRLOCK_AGENT_TOKEN": agentToken,
+			"AIRLOCK_AGENT_ID": agentID.String(),
+			"AIRLOCK_API_URL":  d.cfg.APIURLAgent,
+			"AIRLOCK_DB_URL":   agentDBURL,
 		},
 	})
 	if err != nil {
@@ -565,16 +565,15 @@ func (d *Dispatcher) RefreshAgent(ctx context.Context, agentID uuid.UUID) error 
 	if c == nil {
 		return nil
 	}
-	// inspectExisting doesn't populate Token; mint one for this call.
-	token, err := auth.IssueAgentToken(d.cfg.JWTSecret, agentID)
+	c, err = d.EnsureRunning(ctx, agentID)
 	if err != nil {
-		return fmt.Errorf("issue agent token: %w", err)
+		return fmt.Errorf("refresh agent runtime: %w", err)
 	}
 	req, err := http.NewRequestWithContext(ctx, "POST", c.Endpoint+"/refresh", nil)
 	if err != nil {
 		return fmt.Errorf("create refresh request: %w", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Authorization", "Bearer "+c.Token)
 
 	// Synchronous: the agent runs sync inside its handler and only returns
 	// once a.systemPrompt + a.mcpSchemas are updated. Generous timeout

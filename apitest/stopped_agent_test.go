@@ -56,6 +56,7 @@ func TestIntegration_StoppedAgent_Surfaces(t *testing.T) {
 
 	t.Run("A2A prompt returns JSON-RPC error naming the target", func(t *testing.T) {
 		caller := apitest.CreateAgent(t, h, apitest.AgentOpts{OwnerID: owner, Slug: "stopped-caller"})
+		apitest.AddSibling(t, h, caller, agentID, owner, "admin")
 		// Parent conversation + run so the agent JWT principal resolves.
 		conv, err := q.CreateWebConversation(t.Context(), dbq.CreateWebConversationParams{
 			AgentID: pgtype.UUID{Bytes: caller, Valid: true},

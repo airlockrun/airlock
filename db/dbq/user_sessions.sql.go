@@ -27,12 +27,12 @@ func (q *Queries) CleanupExpiredUserSessions(ctx context.Context) (int64, error)
 
 const createUserSession = `-- name: CreateUserSession :one
 INSERT INTO user_sessions (
-    user_id, kind, client_name, device_name, refresh_token_hash, expires_at
+    user_id, kind, client_name, device_name, refresh_token_hash, authenticated_at, expires_at
 )
 VALUES (
-    $1, $2, $3, $4, $5, $6
+    $1, $2, $3, $4, $5, $6, $7
 )
-RETURNING id, user_id, kind, client_name, device_name, refresh_token_hash, created_at, last_used_at, expires_at, revoked_at
+RETURNING id, user_id, kind, client_name, device_name, refresh_token_hash, created_at, last_used_at, expires_at, revoked_at, authenticated_at
 `
 
 type CreateUserSessionParams struct {
@@ -41,6 +41,7 @@ type CreateUserSessionParams struct {
 	ClientName       string             `json:"client_name"`
 	DeviceName       string             `json:"device_name"`
 	RefreshTokenHash []byte             `json:"refresh_token_hash"`
+	AuthenticatedAt  pgtype.Timestamptz `json:"authenticated_at"`
 	ExpiresAt        pgtype.Timestamptz `json:"expires_at"`
 }
 
@@ -51,6 +52,7 @@ func (q *Queries) CreateUserSession(ctx context.Context, arg CreateUserSessionPa
 		arg.ClientName,
 		arg.DeviceName,
 		arg.RefreshTokenHash,
+		arg.AuthenticatedAt,
 		arg.ExpiresAt,
 	)
 	var i UserSession
@@ -65,12 +67,13 @@ func (q *Queries) CreateUserSession(ctx context.Context, arg CreateUserSessionPa
 		&i.LastUsedAt,
 		&i.ExpiresAt,
 		&i.RevokedAt,
+		&i.AuthenticatedAt,
 	)
 	return i, err
 }
 
 const getActiveUserSessionByRefreshHash = `-- name: GetActiveUserSessionByRefreshHash :one
-SELECT id, user_id, kind, client_name, device_name, refresh_token_hash, created_at, last_used_at, expires_at, revoked_at FROM user_sessions
+SELECT id, user_id, kind, client_name, device_name, refresh_token_hash, created_at, last_used_at, expires_at, revoked_at, authenticated_at FROM user_sessions
 WHERE refresh_token_hash = $1
   AND revoked_at IS NULL
   AND expires_at > now()
@@ -90,12 +93,77 @@ func (q *Queries) GetActiveUserSessionByRefreshHash(ctx context.Context, refresh
 		&i.LastUsedAt,
 		&i.ExpiresAt,
 		&i.RevokedAt,
+		&i.AuthenticatedAt,
+	)
+	return i, err
+}
+
+const getActiveUserSessionByRefreshHashForUpdate = `-- name: GetActiveUserSessionByRefreshHashForUpdate :one
+SELECT id, user_id, kind, client_name, device_name, refresh_token_hash, created_at, last_used_at, expires_at, revoked_at, authenticated_at FROM user_sessions
+WHERE refresh_token_hash = $1
+  AND revoked_at IS NULL
+  AND expires_at > now()
+FOR UPDATE
+`
+
+func (q *Queries) GetActiveUserSessionByRefreshHashForUpdate(ctx context.Context, refreshTokenHash []byte) (UserSession, error) {
+	row := q.db.QueryRow(ctx, getActiveUserSessionByRefreshHashForUpdate, refreshTokenHash)
+	var i UserSession
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.Kind,
+		&i.ClientName,
+		&i.DeviceName,
+		&i.RefreshTokenHash,
+		&i.CreatedAt,
+		&i.LastUsedAt,
+		&i.ExpiresAt,
+		&i.RevokedAt,
+		&i.AuthenticatedAt,
+	)
+	return i, err
+}
+
+const getLiveUserForSession = `-- name: GetLiveUserForSession :one
+SELECT users.id, users.email, users.display_name, users.tenant_role, users.password_hash, users.oidc_sub, users.must_change_password, users.created_at, users.updated_at, users.auth_epoch
+FROM users
+JOIN user_sessions ON user_sessions.user_id = users.id
+WHERE user_sessions.id = $1
+  AND user_sessions.user_id = $2
+  AND user_sessions.revoked_at IS NULL
+  AND user_sessions.expires_at > now()
+`
+
+type GetLiveUserForSessionParams struct {
+	SessionID pgtype.UUID `json:"session_id"`
+	UserID    pgtype.UUID `json:"user_id"`
+}
+
+type GetLiveUserForSessionRow struct {
+	User User `json:"user"`
+}
+
+func (q *Queries) GetLiveUserForSession(ctx context.Context, arg GetLiveUserForSessionParams) (GetLiveUserForSessionRow, error) {
+	row := q.db.QueryRow(ctx, getLiveUserForSession, arg.SessionID, arg.UserID)
+	var i GetLiveUserForSessionRow
+	err := row.Scan(
+		&i.User.ID,
+		&i.User.Email,
+		&i.User.DisplayName,
+		&i.User.TenantRole,
+		&i.User.PasswordHash,
+		&i.User.OidcSub,
+		&i.User.MustChangePassword,
+		&i.User.CreatedAt,
+		&i.User.UpdatedAt,
+		&i.User.AuthEpoch,
 	)
 	return i, err
 }
 
 const listUserSessionsByUser = `-- name: ListUserSessionsByUser :many
-SELECT id, user_id, kind, client_name, device_name, refresh_token_hash, created_at, last_used_at, expires_at, revoked_at FROM user_sessions
+SELECT id, user_id, kind, client_name, device_name, refresh_token_hash, created_at, last_used_at, expires_at, revoked_at, authenticated_at FROM user_sessions
 WHERE user_id = $1
   AND revoked_at IS NULL
   AND expires_at > now()
@@ -122,6 +190,7 @@ func (q *Queries) ListUserSessionsByUser(ctx context.Context, userID pgtype.UUID
 			&i.LastUsedAt,
 			&i.ExpiresAt,
 			&i.RevokedAt,
+			&i.AuthenticatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -169,10 +238,33 @@ func (q *Queries) RevokeUserSessionByRefreshHash(ctx context.Context, refreshTok
 	return result.RowsAffected(), nil
 }
 
+const rotateUserSessionRefreshToken = `-- name: RotateUserSessionRefreshToken :execrows
+UPDATE user_sessions
+SET refresh_token_hash = $1,
+    last_used_at = now()
+WHERE id = $2
+  AND kind IN ('web', 'cli')
+  AND revoked_at IS NULL
+  AND expires_at > now()
+`
+
+type RotateUserSessionRefreshTokenParams struct {
+	RefreshTokenHash []byte      `json:"refresh_token_hash"`
+	ID               pgtype.UUID `json:"id"`
+}
+
+func (q *Queries) RotateUserSessionRefreshToken(ctx context.Context, arg RotateUserSessionRefreshTokenParams) (int64, error) {
+	result, err := q.db.Exec(ctx, rotateUserSessionRefreshToken, arg.RefreshTokenHash, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const touchUserSession = `-- name: TouchUserSession :exec
 UPDATE user_sessions
 SET last_used_at = now()
-WHERE id = $1
+WHERE id = $1 AND revoked_at IS NULL AND expires_at > now()
 `
 
 func (q *Queries) TouchUserSession(ctx context.Context, id pgtype.UUID) error {

@@ -3,15 +3,20 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"mime"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/airlockrun/airlock/auth"
+	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/airlockrun/airlock/trigger"
 	"github.com/airlockrun/airlock/trigger/tgwebapp"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"
 )
 
@@ -20,14 +25,9 @@ const (
 	// payload. Telegram clients refresh initData on each open; an old
 	// payload presented later is a replay attempt.
 	tgInitDataMaxAge = 5 * time.Minute
-
-	// tgSessionTTL is the lifetime of the JWT issued after a successful
-	// initData verification. Shorter than the relay-issued JWT (7d)
-	// because initData has weaker replay guarantees than an interactive
-	// password login. The cookie's sliding Max-Age (relayCookieMaxAge,
-	// 15 min) still controls per-request refresh.
-	tgSessionTTL = 1 * time.Hour
 )
+
+var errTelegramPasswordChangeRequired = errors.New("password change required")
 
 // tgAuthRequest is the body of POST /__air/tg/auth.
 type tgAuthRequest struct {
@@ -64,10 +64,7 @@ const tgWebAppStubHTML = `<!doctype html>
         location.replace(ret);
         return;
       }
-      // Distinct guidance per failure — the old single message wrongly told
-      // everyone to run /auth. Only 403 (unlinked user) actually needs it;
-      // 401 is a stale/expired initData (e.g. the app sat backgrounded past
-      // the freshness window) and just needs a reopen.
+      // Only an unlinked user needs /auth. Stale initData needs a reopen.
       if (r.status === 403) {
         fail("Run /auth in the bridge bot first, then reopen this page.");
       } else if (r.status === 401) {
@@ -89,8 +86,15 @@ const tgWebAppStubHTML = `<!doctype html>
 // renderTGWebAppStub writes the bootstrap stub with publicURL+currentURL
 // pre-substituted into the non-Telegram fallback.
 func renderTGWebAppStub(w http.ResponseWriter, r *http.Request, publicURL string) {
+	nonce, err := newRelaySecret()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to start authentication")
+		return
+	}
+	setRelayNonceCookie(w, r, nonce)
 	currentURL := requestScheme(r) + "://" + r.Host + r.RequestURI
-	fallback := publicURL + "/auth/relay?return=" + currentURL
+	query := url.Values{"return": {currentURL}, "nonce": {nonce}}
+	fallback := publicURL + "/auth/relay?" + query.Encode()
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	// Don't 200 — match rejectOrRedirect's spirit: this IS the
@@ -129,11 +133,20 @@ func handleTGWebAppAuth(
 	jwtSecret string,
 	agentID uuid.UUID,
 	bridgeMgr *trigger.BridgeManager,
-	q *dbq.Queries,
+	database *db.DB,
 	log *zap.Logger,
 ) {
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if r.Header.Get("Origin") != requestOrigin(r) {
+		writeError(w, http.StatusForbidden, "origin mismatch")
+		return
+	}
+	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if err != nil || mediaType != "application/json" {
+		writeError(w, http.StatusUnsupportedMediaType, "content type must be application/json")
 		return
 	}
 	var req tgAuthRequest
@@ -157,6 +170,7 @@ func handleTGWebAppAuth(
 		writeError(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
+	q := dbq.New(database.Pool())
 
 	tgUser, err := tgwebapp.Verify(req.InitData, botToken, tgInitDataMaxAge, time.Now())
 	if err != nil {
@@ -178,22 +192,61 @@ func handleTGWebAppAuth(
 		return
 	}
 
-	// airlockvet:allow-dbq reason: pre-auth user fetch needed to build the JWT (email + tenant_role claims). Same justification as GetPlatformIdentity above.
-	user, err := q.GetUserByID(ctx, identity.UserID)
+	token, err := issueTelegramSubdomainSession(ctx, database, jwtSecret, agentID, identity.UserID)
 	if err != nil {
-		log.Error("tg webapp: user lookup failed", zap.Error(err))
-		writeError(w, http.StatusInternalServerError, "auth failed")
-		return
-	}
-
-	token, err := auth.IssueTokenWithDuration(jwtSecret, uuid.UUID(user.ID.Bytes), user.Email, user.DisplayName, user.TenantRole, user.MustChangePassword, tgSessionTTL)
-	if err != nil {
+		if errors.Is(err, errTelegramPasswordChangeRequired) {
+			writeError(w, http.StatusForbidden, "password change required")
+			return
+		}
 		log.Error("tg webapp: issue session token failed", zap.Error(err))
 		writeError(w, http.StatusInternalServerError, "auth failed")
 		return
 	}
 	setSessionCookie(w, r, token)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func issueTelegramSubdomainSession(ctx context.Context, database *db.DB, jwtSecret string, agentID uuid.UUID, userID pgtype.UUID) (string, error) {
+	tx, err := database.Pool().Begin(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback(ctx)
+	q := dbq.New(tx)
+
+	// Locking the user serializes session creation with credential changes. The
+	// session gets the current epoch, and a following credential change advances
+	// that epoch and revokes the session.
+	// airlockvet:allow-dbq reason: HMAC-verified Telegram identity is the authentication gate; the user lock binds session creation to current credential state
+	user, err := q.GetUserByIDForUpdate(ctx, userID)
+	if err != nil {
+		return "", err
+	}
+	if user.MustChangePassword {
+		return "", errTelegramPasswordChangeRequired
+	}
+	now := time.Now()
+	// airlockvet:allow-dbq reason: HMAC-verified Telegram identity creates a bounded non-refreshable first-party session
+	session, err := q.CreateUserSession(ctx, dbq.CreateUserSessionParams{
+		UserID:           user.ID,
+		Kind:             userSessionKindTelegram,
+		ClientName:       "Telegram Web App",
+		DeviceName:       "Telegram",
+		RefreshTokenHash: nil,
+		AuthenticatedAt:  pgtype.Timestamptz{Time: now, Valid: true},
+		ExpiresAt:        pgtype.Timestamptz{Time: now.Add(auth.SubdomainTokenDuration), Valid: true},
+	})
+	if err != nil {
+		return "", err
+	}
+	token, err := auth.IssueSubdomainToken(jwtSecret, agentID, pgUUID(user.ID), pgUUID(session.ID), user.Email, user.DisplayName, user.TenantRole, user.AuthEpoch)
+	if err != nil {
+		return "", err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return "", err
+	}
+	return token, nil
 }
 
 // pathIsTGWebApp reports whether the request targets the TG Web App

@@ -300,11 +300,28 @@ func (q *Queries) ListMCPServerGrants(ctx context.Context, mcpServerID pgtype.UU
 	return items, nil
 }
 
-const revokeResourceGrant = `-- name: RevokeResourceGrant :exec
-DELETE FROM resource_grants WHERE id = $1
+const revokeResourceGrant = `-- name: RevokeResourceGrant :execrows
+DELETE FROM resource_grants
+WHERE id = $1
+  AND CASE $2::text
+      WHEN 'connection' THEN connection_id = $3
+      WHEN 'mcp_server' THEN mcp_server_id = $3
+      WHEN 'exec_endpoint' THEN exec_endpoint_id = $3
+      WHEN 'git_credential' THEN git_credential_id = $3
+      ELSE false
+  END
 `
 
-func (q *Queries) RevokeResourceGrant(ctx context.Context, id pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, revokeResourceGrant, id)
-	return err
+type RevokeResourceGrantParams struct {
+	ID           pgtype.UUID `json:"id"`
+	ResourceType string      `json:"resource_type"`
+	ResourceID   pgtype.UUID `json:"resource_id"`
+}
+
+func (q *Queries) RevokeResourceGrant(ctx context.Context, arg RevokeResourceGrantParams) (int64, error) {
+	result, err := q.db.Exec(ctx, revokeResourceGrant, arg.ID, arg.ResourceType, arg.ResourceID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }

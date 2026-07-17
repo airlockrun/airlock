@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { marked } from 'marked'
+import { renderMarkdown } from '@/composables/useMarkdown'
 import ImageAlbum from './ImageAlbum.vue'
 
 export interface DisplayPart {
@@ -59,10 +59,6 @@ const blocks = computed<Block[]>(() => {
   flush()
   return out
 })
-
-function renderMarkdown(src: string): string {
-  return marked.parse(src || '') as string
-}
 
 function fileSizeLabel(p: DisplayPart): string {
   return p.filename || 'file'

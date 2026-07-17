@@ -2,12 +2,14 @@ package agentapi
 
 import (
 	"context"
+	"sync"
 	"testing"
 
 	"github.com/airlockrun/agentsdk"
 	"github.com/airlockrun/airlock/authz"
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // makeUser inserts a standalone user and returns its id — used for a
@@ -73,7 +75,7 @@ func TestComputeA2ACallerAccess_AgentDelegation(t *testing.T) {
 		{name: "edge caps admin down to user", driverRole: "admin", ownerRole: "admin", edge: "user", want: agentsdk.AccessUser},
 		{name: "edge admin leaves entitlement intact", driverRole: "admin", ownerRole: "admin", edge: "admin", want: agentsdk.AccessAdmin},
 		{name: "owner floor below edge wins", driverRole: "admin", ownerRole: "user", edge: "admin", want: agentsdk.AccessUser},
-		{name: "no edge means no extra cap", driverRole: "admin", ownerRole: "admin", edge: "", want: agentsdk.AccessAdmin},
+		{name: "undeclared edge is forbidden", driverRole: "admin", ownerRole: "admin", edge: "", wantErr: true},
 		{name: "explicit public grant admitted, capped", driverRole: "public", ownerRole: "admin", edge: "user", want: agentsdk.AccessPublic},
 		{name: "driver lacks grant -> forbidden", driverRole: "", ownerRole: "admin", edge: "", wantErr: true},
 		{name: "owner lacks grant -> forbidden", driverRole: "admin", ownerRole: "", edge: "", wantErr: true},
@@ -122,6 +124,34 @@ func TestComputeA2ACallerAccess_AgentDelegation(t *testing.T) {
 	}
 }
 
+func TestComputeA2ACallerAccess_RemovedEdgeDenied(t *testing.T) {
+	skipIfNoDB(t)
+	ctx := context.Background()
+	q := dbq.New(testDB.Pool())
+	callerID, callerOwner := testAgentAndUser(t)
+	targetID, _ := testAgentAndUser(t)
+	driver := makeUser(t)
+	grantAccess(t, targetID, driver, "admin")
+	grantAccess(t, targetID, callerOwner, "admin")
+	addSiblingEdge(t, callerID, targetID, callerOwner, "admin")
+	target, err := q.GetAgentByID(ctx, toPgUUID(targetID))
+	if err != nil {
+		t.Fatalf("GetAgentByID: %v", err)
+	}
+	principal := MCPPrincipal{Kind: MCPPrincipalAgent, UserID: driver, CallerAgentID: callerID}
+	if _, err := computeA2ACallerAccess(ctx, q, target, principal); err != nil {
+		t.Fatalf("declared edge denied: %v", err)
+	}
+	if err := q.RemoveSibling(ctx, dbq.RemoveSiblingParams{
+		ParentAgentID: toPgUUID(callerID), SiblingAgentID: toPgUUID(targetID),
+	}); err != nil {
+		t.Fatalf("RemoveSibling: %v", err)
+	}
+	if _, err := computeA2ACallerAccess(ctx, q, target, principal); err == nil {
+		t.Fatal("removed sibling edge retained A2A access")
+	}
+}
+
 // TestComputeA2ACallerAccess_UserGrantGate pins the user/OAuth path: a
 // registered caller is admitted only if a grant matches their grantee-set —
 // a direct grant or the All-Users group (incl. an explicit 'public' grant).
@@ -161,4 +191,263 @@ func TestComputeA2ACallerAccess_UserGrantGate(t *testing.T) {
 			t.Fatalf("got (%q, %v), want (public, nil)", got, err)
 		}
 	})
+}
+
+func createBoundMCPConversation(t *testing.T, agentID uuid.UUID, principal MCPPrincipal) dbq.AgentConversation {
+	t.Helper()
+	metadata, err := continuationMetadata(principal)
+	if err != nil {
+		t.Fatalf("continuationMetadata: %v", err)
+	}
+	conv, err := dbq.New(testDB.Pool()).CreateMCPA2AConversation(context.Background(), dbq.CreateMCPA2AConversationParams{
+		AgentID: toPgUUID(agentID), UserID: toPgUUID(principal.UserID), Title: "bound", Metadata: metadata,
+	})
+	if err != nil {
+		t.Fatalf("CreateMCPA2AConversation: %v", err)
+	}
+	return conv
+}
+
+func createTestRun(t *testing.T, agentID uuid.UUID, parentRunID pgtype.UUID, triggerType, triggerRef string) dbq.Run {
+	t.Helper()
+	run, err := dbq.New(testDB.Pool()).CreateRun(context.Background(), dbq.CreateRunParams{
+		AgentID: toPgUUID(agentID), ParentRunID: parentRunID, InputPayload: []byte(`{}`),
+		SourceRef: "", TriggerType: triggerType, TriggerRef: triggerRef,
+	})
+	if err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+	return run
+}
+
+func TestMCPContinuationPrincipalAndTaskIsolation(t *testing.T) {
+	skipIfNoDB(t)
+	ctx := context.Background()
+	q := dbq.New(testDB.Pool())
+	targetID, _ := testAgentAndUser(t)
+	callerID, _ := testAgentAndUser(t)
+	userID := makeUser(t)
+	parentConv, err := q.CreateWebConversation(ctx, dbq.CreateWebConversationParams{
+		AgentID: toPgUUID(callerID), UserID: toPgUUID(userID), Title: "parent",
+	})
+	if err != nil {
+		t.Fatalf("CreateWebConversation: %v", err)
+	}
+	parent := createTestRun(t, callerID, pgtype.UUID{}, "prompt", pgUUID(parentConv.ID).String())
+	principal := MCPPrincipal{
+		Kind: MCPPrincipalAgent, UserID: userID, CallerAgentID: callerID, ParentRunID: pgUUID(parent.ID),
+	}
+	conv := createBoundMCPConversation(t, targetID, principal)
+	convID := pgUUID(conv.ID).String()
+	child := createTestRun(t, targetID, parent.ID, "a2a", convID)
+	if _, err := testDB.Pool().Exec(ctx, `UPDATE runs SET status = 'suspended' WHERE id = $1`, child.ID); err != nil {
+		t.Fatalf("suspend child: %v", err)
+	}
+
+	if _, err := getBoundMCPConversation(ctx, q, targetID, principal, convID); err != nil {
+		t.Fatalf("bound conversation denied: %v", err)
+	}
+	if _, _, err := getBoundMCPTask(ctx, q, targetID, principal, pgUUID(child.ID).String(), convID); err != nil {
+		t.Fatalf("bound suspended task denied: %v", err)
+	}
+	resumeParent, err := q.CreateRun(ctx, dbq.CreateRunParams{
+		AgentID: toPgUUID(callerID), InputPayload: []byte(`{"resumeRunId":"` + pgUUID(parent.ID).String() + `"}`),
+		SourceRef: "", TriggerType: "prompt", TriggerRef: pgUUID(parentConv.ID).String(),
+	})
+	if err != nil {
+		t.Fatalf("CreateRun resume parent: %v", err)
+	}
+	resumePrincipal := principal
+	resumePrincipal.ParentRunID = pgUUID(resumeParent.ID)
+	if _, _, err := getBoundMCPTask(ctx, q, targetID, resumePrincipal, pgUUID(child.ID).String(), ""); err != nil {
+		t.Fatalf("linked running resume parent denied: %v", err)
+	}
+
+	tests := []struct {
+		name      string
+		principal MCPPrincipal
+		contextID string
+	}{
+		{name: "other user", principal: MCPPrincipal{Kind: MCPPrincipalAgent, UserID: makeUser(t), CallerAgentID: callerID, ParentRunID: pgUUID(parent.ID)}, contextID: convID},
+		{name: "other parent run", principal: MCPPrincipal{Kind: MCPPrincipalAgent, UserID: userID, CallerAgentID: callerID, ParentRunID: uuid.New()}, contextID: convID},
+		{name: "other caller agent", principal: MCPPrincipal{Kind: MCPPrincipalAgent, UserID: userID, CallerAgentID: uuid.New(), ParentRunID: pgUUID(parent.ID)}, contextID: convID},
+		{name: "anonymous", principal: MCPPrincipal{Kind: MCPPrincipalAnon}, contextID: convID},
+		{name: "mismatched context", principal: principal, contextID: uuid.NewString()},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, _, err := getBoundMCPTask(ctx, q, targetID, tc.principal, pgUUID(child.ID).String(), tc.contextID); err == nil {
+				t.Fatal("cross-principal task resume allowed")
+			}
+		})
+	}
+	unchanged, err := q.GetRunByID(ctx, child.ID)
+	if err != nil {
+		t.Fatalf("GetRunByID after denied resumes: %v", err)
+	}
+	if unchanged.Status != "suspended" {
+		t.Fatalf("denied context/task pair changed status to %q", unchanged.Status)
+	}
+
+	if _, err := testDB.Pool().Exec(ctx, `UPDATE runs SET status = 'success' WHERE id = $1`, child.ID); err != nil {
+		t.Fatalf("complete child: %v", err)
+	}
+	if _, _, err := getBoundMCPTask(ctx, q, targetID, principal, pgUUID(child.ID).String(), convID); err == nil {
+		t.Fatal("terminal task resume allowed")
+	}
+}
+
+func TestMCPTaskResumeClaimIsSingleUse(t *testing.T) {
+	skipIfNoDB(t)
+	ctx := context.Background()
+	q := dbq.New(testDB.Pool())
+	targetID, _ := testAgentAndUser(t)
+	userID := makeUser(t)
+	principal := MCPPrincipal{Kind: MCPPrincipalUser, UserID: userID}
+	conv := createBoundMCPConversation(t, targetID, principal)
+	convID := pgUUID(conv.ID).String()
+	task := createTestRun(t, targetID, pgtype.UUID{}, "a2a", convID)
+	if _, err := testDB.Pool().Exec(ctx, `UPDATE runs SET status = 'suspended' WHERE id = $1`, task.ID); err != nil {
+		t.Fatalf("suspend task: %v", err)
+	}
+
+	const contenders = 16
+	start := make(chan struct{})
+	results := make(chan error, contenders)
+	var wg sync.WaitGroup
+	for range contenders {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			run, _, err := getBoundMCPTask(ctx, q, targetID, principal, pgUUID(task.ID).String(), convID)
+			if err == nil {
+				err = claimMCPTaskResume(ctx, q, run)
+			}
+			results <- err
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+	successes := 0
+	for err := range results {
+		if err == nil {
+			successes++
+		}
+	}
+	if successes != 1 {
+		t.Fatalf("successful concurrent claims = %d, want 1", successes)
+	}
+	run, err := q.GetRunByID(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("GetRunByID: %v", err)
+	}
+	if run.Status != "success" {
+		t.Fatalf("claimed task status = %q, want success", run.Status)
+	}
+}
+
+func TestMCPTaskResumeRollbackRequiresNoSuccessor(t *testing.T) {
+	skipIfNoDB(t)
+	ctx := context.Background()
+	q := dbq.New(testDB.Pool())
+	targetID, _ := testAgentAndUser(t)
+	userID := makeUser(t)
+	principal := MCPPrincipal{Kind: MCPPrincipalUser, UserID: userID}
+	conv := createBoundMCPConversation(t, targetID, principal)
+	convID := pgUUID(conv.ID).String()
+	task := createTestRun(t, targetID, pgtype.UUID{}, "a2a", convID)
+	if _, err := testDB.Pool().Exec(ctx, `UPDATE runs SET status = 'suspended' WHERE id = $1`, task.ID); err != nil {
+		t.Fatalf("suspend task: %v", err)
+	}
+	run, _, err := getBoundMCPTask(ctx, q, targetID, principal, pgUUID(task.ID).String(), convID)
+	if err != nil {
+		t.Fatalf("get task: %v", err)
+	}
+	if err := claimMCPTaskResume(ctx, q, run); err != nil {
+		t.Fatalf("claim task: %v", err)
+	}
+	params := dbq.RollbackMCPTaskResumeParams{ID: task.ID, AgentID: toPgUUID(targetID), TriggerRef: convID}
+	rolledBack, err := q.RollbackMCPTaskResume(ctx, params)
+	if err != nil || rolledBack != 1 {
+		t.Fatalf("rollback without successor = (%d, %v), want (1, nil)", rolledBack, err)
+	}
+
+	run, _, err = getBoundMCPTask(ctx, q, targetID, principal, pgUUID(task.ID).String(), convID)
+	if err != nil {
+		t.Fatalf("get rolled-back task: %v", err)
+	}
+	if err := claimMCPTaskResume(ctx, q, run); err != nil {
+		t.Fatalf("reclaim task: %v", err)
+	}
+	resumePayload := []byte(`{"resumeRunId":"` + pgUUID(task.ID).String() + `"}`)
+	if _, err := q.CreateRun(ctx, dbq.CreateRunParams{
+		AgentID: toPgUUID(targetID), InputPayload: resumePayload, SourceRef: "",
+		TriggerType: "a2a", TriggerRef: convID,
+	}); err != nil {
+		t.Fatalf("CreateRun successor: %v", err)
+	}
+	rolledBack, err = q.RollbackMCPTaskResume(ctx, params)
+	if err != nil || rolledBack != 0 {
+		t.Fatalf("rollback with successor = (%d, %v), want (0, nil)", rolledBack, err)
+	}
+	claimed, err := q.GetRunByID(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("GetRunByID claimed task: %v", err)
+	}
+	if claimed.Status != "success" {
+		t.Fatalf("task with successor status = %q, want success", claimed.Status)
+	}
+}
+
+func TestMCPDirectoryScopeIsolation(t *testing.T) {
+	skipIfNoDB(t)
+	ctx := context.Background()
+	q := dbq.New(testDB.Pool())
+	targetID, _ := testAgentAndUser(t)
+	userID := makeUser(t)
+	otherUserID := makeUser(t)
+	principal := MCPPrincipal{Kind: MCPPrincipalUser, UserID: userID}
+	userDir := dbq.AgentDirectory{Path: "private", Scope: "user"}
+	if !newMCPResourceAuthorizer(ctx, q, targetID, principal).allows(userDir, "private/user-"+userID.String()+"/mine.txt") {
+		t.Fatal("own user-scoped resource denied")
+	}
+	if newMCPResourceAuthorizer(ctx, q, targetID, principal).allows(userDir, "private/user-"+otherUserID.String()+"/theirs.txt") {
+		t.Fatal("cross-user resource allowed")
+	}
+	if newMCPResourceAuthorizer(ctx, q, targetID, MCPPrincipal{Kind: MCPPrincipalAnon}).allows(userDir, "private/user-"+userID.String()+"/mine.txt") {
+		t.Fatal("anonymous scoped resource allowed")
+	}
+
+	conv, err := q.CreateWebConversation(ctx, dbq.CreateWebConversationParams{
+		AgentID: toPgUUID(targetID), UserID: toPgUUID(userID), Title: "owned",
+	})
+	if err != nil {
+		t.Fatalf("CreateWebConversation: %v", err)
+	}
+	otherConv, err := q.CreateWebConversation(ctx, dbq.CreateWebConversationParams{
+		AgentID: toPgUUID(targetID), UserID: toPgUUID(otherUserID), Title: "other",
+	})
+	if err != nil {
+		t.Fatalf("CreateWebConversation other: %v", err)
+	}
+	convDir := dbq.AgentDirectory{Path: "threads", Scope: "conv"}
+	authorizer := newMCPResourceAuthorizer(ctx, q, targetID, principal)
+	if !authorizer.allows(convDir, "threads/conv-"+pgUUID(conv.ID).String()+"/mine.txt") {
+		t.Fatal("owned conversation resource denied")
+	}
+	if authorizer.allows(convDir, "threads/conv-"+pgUUID(otherConv.ID).String()+"/theirs.txt") {
+		t.Fatal("cross-conversation resource allowed")
+	}
+
+	run := createTestRun(t, targetID, pgtype.UUID{}, "prompt", pgUUID(conv.ID).String())
+	otherRun := createTestRun(t, targetID, pgtype.UUID{}, "prompt", pgUUID(otherConv.ID).String())
+	runDir := dbq.AgentDirectory{Path: "jobs", Scope: "run"}
+	if !authorizer.allows(runDir, "jobs/run-"+pgUUID(run.ID).String()+"/mine.txt") {
+		t.Fatal("owned run resource denied")
+	}
+	if authorizer.allows(runDir, "jobs/run-"+pgUUID(otherRun.ID).String()+"/theirs.txt") {
+		t.Fatal("cross-run resource allowed")
+	}
 }

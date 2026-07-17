@@ -108,15 +108,15 @@ func TestResolveModel_Precedence(t *testing.T) {
 	agentID := createTestAgent(t)
 	q := dbq.New(testDB.Pool())
 
-	ciphertext, err := ah.encryptor.Put(ctx, "provider/openai/api_key", "sk-test")
+	provUUID := uuid.New()
+	ciphertext, err := ah.encryptor.Put(ctx, "provider/"+provUUID.String()+"/api_key", "sk-test")
 	if err != nil {
 		t.Fatalf("encrypt: %v", err)
 	}
-	var provUUID uuid.UUID
 	if err := testDB.Pool().QueryRow(ctx,
-		`INSERT INTO providers (provider_id, slug, display_name, api_key, base_url, is_enabled)
-		 VALUES ('openai', 'openai', 'OpenAI', $1, 'https://api.openai.com', true) RETURNING id`,
-		ciphertext,
+		`INSERT INTO providers (id, provider_id, slug, display_name, api_key, base_url, is_enabled)
+		 VALUES ($1, 'openai', 'openai', 'OpenAI', $2, 'https://api.openai.com', true) RETURNING id`,
+		provUUID, ciphertext,
 	).Scan(&provUUID); err != nil {
 		t.Fatalf("insert provider: %v", err)
 	}

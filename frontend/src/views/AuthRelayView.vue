@@ -8,13 +8,14 @@ const error = ref('')
 
 onMounted(async () => {
   const returnUrl = route.query.return as string
-  if (!returnUrl) {
-    error.value = 'Missing return URL.'
+  const nonce = route.query.nonce as string
+  if (!returnUrl || !nonce) {
+    error.value = 'Missing relay parameters.'
     return
   }
 
   try {
-    const { data } = await api.post('/auth/relay-code', { returnUrl })
+    const { data } = await api.post('/auth/relay-code', { returnUrl, nonce })
     window.location.href = data.callbackUrl
   } catch (err: any) {
     error.value = err.response?.data?.error || 'Failed to authenticate.'

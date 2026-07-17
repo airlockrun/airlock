@@ -12,12 +12,17 @@ import (
 )
 
 const approveDeviceLogin = `-- name: ApproveDeviceLogin :one
-UPDATE device_login_sessions
-SET status = 'approved', user_id = $1, approved_at = now()
-WHERE user_code_hash = $2
-  AND status = 'pending'
-  AND expires_at > now()
-RETURNING id, device_code_hash, user_code_hash, user_code_display, client_name, device_name, status, user_id, created_at, expires_at, approved_at, denied_at, consumed_at, last_polled_at, poll_interval_seconds
+UPDATE device_login_sessions AS login
+SET status = 'approved',
+    user_id = users.id,
+    approved_auth_epoch = users.auth_epoch,
+    approved_at = now()
+FROM users
+WHERE users.id = $1
+  AND login.user_code_hash = $2
+  AND login.status = 'pending'
+  AND login.expires_at > now()
+RETURNING login.id, login.device_code_hash, login.user_code_hash, login.user_code_display, login.client_name, login.device_name, login.status, login.user_id, login.created_at, login.expires_at, login.approved_at, login.denied_at, login.consumed_at, login.last_polled_at, login.poll_interval_seconds, login.approved_auth_epoch
 `
 
 type ApproveDeviceLoginParams struct {
@@ -44,18 +49,64 @@ func (q *Queries) ApproveDeviceLogin(ctx context.Context, arg ApproveDeviceLogin
 		&i.ConsumedAt,
 		&i.LastPolledAt,
 		&i.PollIntervalSeconds,
+		&i.ApprovedAuthEpoch,
+	)
+	return i, err
+}
+
+const claimDeviceLoginPoll = `-- name: ClaimDeviceLoginPoll :one
+UPDATE device_login_sessions
+SET last_polled_at = now()
+WHERE device_code_hash = $1
+  AND expires_at > now()
+  AND (
+    last_polled_at IS NULL
+    OR last_polled_at <= now() - make_interval(secs => poll_interval_seconds)
+  )
+RETURNING id, device_code_hash, user_code_hash, user_code_display, client_name, device_name, status, user_id, created_at, expires_at, approved_at, denied_at, consumed_at, last_polled_at, poll_interval_seconds, approved_auth_epoch
+`
+
+func (q *Queries) ClaimDeviceLoginPoll(ctx context.Context, deviceCodeHash string) (DeviceLoginSession, error) {
+	row := q.db.QueryRow(ctx, claimDeviceLoginPoll, deviceCodeHash)
+	var i DeviceLoginSession
+	err := row.Scan(
+		&i.ID,
+		&i.DeviceCodeHash,
+		&i.UserCodeHash,
+		&i.UserCodeDisplay,
+		&i.ClientName,
+		&i.DeviceName,
+		&i.Status,
+		&i.UserID,
+		&i.CreatedAt,
+		&i.ExpiresAt,
+		&i.ApprovedAt,
+		&i.DeniedAt,
+		&i.ConsumedAt,
+		&i.LastPolledAt,
+		&i.PollIntervalSeconds,
+		&i.ApprovedAuthEpoch,
 	)
 	return i, err
 }
 
 const consumeApprovedDeviceLogin = `-- name: ConsumeApprovedDeviceLogin :one
-UPDATE device_login_sessions
+WITH approved AS (
+    SELECT login.id
+    FROM device_login_sessions AS login
+    JOIN users ON users.id = login.user_id
+    WHERE login.id = $1
+      AND login.status = 'approved'
+      AND login.consumed_at IS NULL
+      AND login.expires_at > now()
+      AND login.approved_auth_epoch = users.auth_epoch
+    FOR UPDATE OF login, users
+)
+UPDATE device_login_sessions AS login
 SET consumed_at = now()
-WHERE id = $1
-  AND status = 'approved'
-  AND consumed_at IS NULL
-  AND expires_at > now()
-RETURNING id, device_code_hash, user_code_hash, user_code_display, client_name, device_name, status, user_id, created_at, expires_at, approved_at, denied_at, consumed_at, last_polled_at, poll_interval_seconds
+FROM approved
+WHERE login.id = approved.id
+RETURNING login.id, login.device_code_hash, login.user_code_hash, login.user_code_display, login.client_name, login.device_name, login.status, login.user_id, login.created_at, login.expires_at, login.approved_at, login.denied_at, login.consumed_at, login.last_polled_at, login.poll_interval_seconds, login.approved_auth_epoch
 `
 
 func (q *Queries) ConsumeApprovedDeviceLogin(ctx context.Context, id pgtype.UUID) (DeviceLoginSession, error) {
@@ -77,6 +128,7 @@ func (q *Queries) ConsumeApprovedDeviceLogin(ctx context.Context, id pgtype.UUID
 		&i.ConsumedAt,
 		&i.LastPolledAt,
 		&i.PollIntervalSeconds,
+		&i.ApprovedAuthEpoch,
 	)
 	return i, err
 }
@@ -90,7 +142,7 @@ VALUES (
     $1, $2, $3, $4, $5,
     'pending', $6, $7
 )
-RETURNING id, device_code_hash, user_code_hash, user_code_display, client_name, device_name, status, user_id, created_at, expires_at, approved_at, denied_at, consumed_at, last_polled_at, poll_interval_seconds
+RETURNING id, device_code_hash, user_code_hash, user_code_display, client_name, device_name, status, user_id, created_at, expires_at, approved_at, denied_at, consumed_at, last_polled_at, poll_interval_seconds, approved_auth_epoch
 `
 
 type CreateDeviceLoginSessionParams struct {
@@ -130,6 +182,7 @@ func (q *Queries) CreateDeviceLoginSession(ctx context.Context, arg CreateDevice
 		&i.ConsumedAt,
 		&i.LastPolledAt,
 		&i.PollIntervalSeconds,
+		&i.ApprovedAuthEpoch,
 	)
 	return i, err
 }
@@ -152,7 +205,7 @@ SET status = 'denied', denied_at = now()
 WHERE user_code_hash = $1
   AND status = 'pending'
   AND expires_at > now()
-RETURNING id, device_code_hash, user_code_hash, user_code_display, client_name, device_name, status, user_id, created_at, expires_at, approved_at, denied_at, consumed_at, last_polled_at, poll_interval_seconds
+RETURNING id, device_code_hash, user_code_hash, user_code_display, client_name, device_name, status, user_id, created_at, expires_at, approved_at, denied_at, consumed_at, last_polled_at, poll_interval_seconds, approved_auth_epoch
 `
 
 func (q *Queries) DenyDeviceLogin(ctx context.Context, userCodeHash string) (DeviceLoginSession, error) {
@@ -174,12 +227,13 @@ func (q *Queries) DenyDeviceLogin(ctx context.Context, userCodeHash string) (Dev
 		&i.ConsumedAt,
 		&i.LastPolledAt,
 		&i.PollIntervalSeconds,
+		&i.ApprovedAuthEpoch,
 	)
 	return i, err
 }
 
 const getDeviceLoginByUserCodeHash = `-- name: GetDeviceLoginByUserCodeHash :one
-SELECT id, device_code_hash, user_code_hash, user_code_display, client_name, device_name, status, user_id, created_at, expires_at, approved_at, denied_at, consumed_at, last_polled_at, poll_interval_seconds FROM device_login_sessions WHERE user_code_hash = $1
+SELECT id, device_code_hash, user_code_hash, user_code_display, client_name, device_name, status, user_id, created_at, expires_at, approved_at, denied_at, consumed_at, last_polled_at, poll_interval_seconds, approved_auth_epoch FROM device_login_sessions WHERE user_code_hash = $1
 `
 
 func (q *Queries) GetDeviceLoginByUserCodeHash(ctx context.Context, userCodeHash string) (DeviceLoginSession, error) {
@@ -201,12 +255,13 @@ func (q *Queries) GetDeviceLoginByUserCodeHash(ctx context.Context, userCodeHash
 		&i.ConsumedAt,
 		&i.LastPolledAt,
 		&i.PollIntervalSeconds,
+		&i.ApprovedAuthEpoch,
 	)
 	return i, err
 }
 
 const getDeviceLoginForPoll = `-- name: GetDeviceLoginForPoll :one
-SELECT id, device_code_hash, user_code_hash, user_code_display, client_name, device_name, status, user_id, created_at, expires_at, approved_at, denied_at, consumed_at, last_polled_at, poll_interval_seconds FROM device_login_sessions WHERE device_code_hash = $1
+SELECT id, device_code_hash, user_code_hash, user_code_display, client_name, device_name, status, user_id, created_at, expires_at, approved_at, denied_at, consumed_at, last_polled_at, poll_interval_seconds, approved_auth_epoch FROM device_login_sessions WHERE device_code_hash = $1
 `
 
 func (q *Queries) GetDeviceLoginForPoll(ctx context.Context, deviceCodeHash string) (DeviceLoginSession, error) {
@@ -228,17 +283,7 @@ func (q *Queries) GetDeviceLoginForPoll(ctx context.Context, deviceCodeHash stri
 		&i.ConsumedAt,
 		&i.LastPolledAt,
 		&i.PollIntervalSeconds,
+		&i.ApprovedAuthEpoch,
 	)
 	return i, err
-}
-
-const markDeviceLoginPolled = `-- name: MarkDeviceLoginPolled :exec
-UPDATE device_login_sessions
-SET last_polled_at = now()
-WHERE id = $1
-`
-
-func (q *Queries) MarkDeviceLoginPolled(ctx context.Context, id pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, markDeviceLoginPolled, id)
-	return err
 }

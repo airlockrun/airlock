@@ -16,13 +16,23 @@ export function isAuthRejection(err: unknown): boolean {
 const api = axios.create({
   baseURL: '/',
   headers: { 'Content-Type': 'application/json' },
+  withCredentials: true,
 })
 
-// Attach Bearer token to every request.
+let accessToken: string | null = null
+
+export function setAccessToken(token: string | null) {
+  accessToken = token
+}
+
+export function clearAccessToken() {
+  accessToken = null
+}
+
+// Attach the in-memory Bearer token to every API request.
 api.interceptors.request.use((config) => {
-  const token = localStorage.getItem('access_token')
-  if (token) {
-    config.headers.Authorization = `Bearer ${token}`
+  if (accessToken) {
+    config.headers.Authorization = `Bearer ${accessToken}`
   }
   return config
 })
@@ -41,14 +51,8 @@ api.interceptors.response.use(
     }
 
     original._retry = true
-    if (!refreshPromise) {
-      refreshPromise = refreshAccessToken().finally(() => {
-        refreshPromise = null
-      })
-    }
-
     try {
-      const newToken = await refreshPromise
+      const newToken = await refreshAccessToken()
       original.headers.Authorization = `Bearer ${newToken}`
       return api(original)
     } catch (refreshErr) {
@@ -57,8 +61,7 @@ api.interceptors.response.use(
       // (Caddy 502/503 during an airlock restart) is transient — keep
       // the tokens so the next request after recovery works.
       if (isAuthRejection(refreshErr)) {
-        localStorage.removeItem('access_token')
-        localStorage.removeItem('refresh_token')
+        clearAccessToken()
         window.location.href = '/login'
       }
       return Promise.reject(error)
@@ -66,15 +69,19 @@ api.interceptors.response.use(
   },
 )
 
-async function refreshAccessToken(): Promise<string> {
-  const refreshToken = localStorage.getItem('refresh_token')
-  if (!refreshToken) {
-    throw new Error('no refresh token')
+export function refreshAccessToken(): Promise<string> {
+  if (!refreshPromise) {
+    refreshPromise = axios.post('/auth/refresh', {}, { withCredentials: true })
+      .then(({ data }) => {
+        const response = fromJson(RefreshResponseSchema, data)
+        setAccessToken(response.accessToken)
+        return response.accessToken
+      })
+      .finally(() => {
+        refreshPromise = null
+      })
   }
-  const { data } = await axios.post('/auth/refresh', { refreshToken })
-  const response = fromJson(RefreshResponseSchema, data)
-  localStorage.setItem('access_token', response.accessToken)
-  return response.accessToken
+  return refreshPromise
 }
 
 export default api

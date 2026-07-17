@@ -22,16 +22,17 @@ type PasskeyHandler struct {
 	svc       *passkeyssvc.Service
 	db        *db.DB
 	jwtSecret string
+	publicURL string
 }
 
-func NewPasskeyHandler(svc *passkeyssvc.Service, database *db.DB, jwtSecret string) *PasskeyHandler {
+func NewPasskeyHandler(svc *passkeyssvc.Service, database *db.DB, jwtSecret, publicURL string) *PasskeyHandler {
 	if svc == nil {
 		panic("api: passkey service is required")
 	}
 	if database == nil {
 		panic("api: passkey handler db is required")
 	}
-	return &PasskeyHandler{svc: svc, db: database, jwtSecret: jwtSecret}
+	return &PasskeyHandler{svc: svc, db: database, jwtSecret: jwtSecret, publicURL: publicURL}
 }
 
 // --- Authenticated self-service ---
@@ -165,10 +166,10 @@ func (h *PasskeyHandler) LoginFinish(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	setAirlockSessionCookie(w, r, accessToken)
+	setWebSessionCookies(w, h.publicURL, accessToken, refreshToken)
 	writeProto(w, http.StatusOK, &airlockv1.LoginResponse{
 		AccessToken:  accessToken,
-		RefreshToken: refreshToken,
+		RefreshToken: "",
 		User:         convert.UserToProto(user),
 	})
 }

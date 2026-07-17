@@ -8,6 +8,7 @@ package identity
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/airlockrun/airlock/authz"
 	"github.com/airlockrun/airlock/db"
@@ -66,9 +67,11 @@ func (s *Service) authorize(ctx context.Context, p authz.Principal) error {
 // verified the HMAC signature: which bridge / platform, the external
 // uid, and the user's airlock-side principal.
 type PreviewInput struct {
-	Platform string
-	BridgeID uuid.UUID
-	UID      string
+	Platform      string
+	BridgeID      uuid.UUID
+	UID           string
+	ChallengeHash string
+	ExpiresAt     time.Time
 }
 
 // PreviewResult is the projection the handler turns into the proto
@@ -87,6 +90,9 @@ func (s *Service) Preview(ctx context.Context, p authz.Principal, in PreviewInpu
 	if err := s.authorize(ctx, p); err != nil {
 		return PreviewResult{}, err
 	}
+	if in.Platform == "" || in.BridgeID == uuid.Nil || in.UID == "" || in.ChallengeHash == "" || in.ExpiresAt.IsZero() {
+		return PreviewResult{}, service.Detail(service.ErrInvalidInput, "invalid identity link challenge")
+	}
 	q := dbq.New(s.db.Pool())
 	br, err := q.GetBridgeByID(ctx, pgtype.UUID{Bytes: in.BridgeID, Valid: true})
 	if err != nil {
@@ -104,6 +110,20 @@ func (s *Service) Preview(ctx context.Context, p authz.Principal, in PreviewInpu
 		BridgeName:       br.Name,
 		BotUsername:      br.BotUsername,
 		CurrentUserEmail: user.Email,
+	}
+	if _, err := q.CreateIdentityLinkChallenge(ctx, dbq.CreateIdentityLinkChallengeParams{
+		TokenHash:      in.ChallengeHash,
+		UserID:         pgtype.UUID{Bytes: p.UserID, Valid: true},
+		Platform:       in.Platform,
+		BridgeID:       pgtype.UUID{Bytes: in.BridgeID, Valid: true},
+		PlatformUserID: in.UID,
+		ExpiresAt:      pgtype.Timestamptz{Time: in.ExpiresAt, Valid: true},
+	}); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return PreviewResult{}, service.Detail(service.ErrConflict, "identity link challenge is unavailable")
+		}
+		s.logger.Error("create identity link challenge failed", zap.Error(err))
+		return PreviewResult{}, err
 	}
 	// Best-effort: decrypt the bridge bot token and ask the platform
 	// driver to resolve the external user's display info so the confirm
@@ -124,18 +144,56 @@ func (s *Service) Preview(ctx context.Context, p authz.Principal, in PreviewInpu
 	return res, nil
 }
 
-func (s *Service) Link(ctx context.Context, p authz.Principal, platform, uid string) error {
+type LinkInput struct {
+	Platform      string
+	BridgeID      uuid.UUID
+	UID           string
+	ChallengeHash string
+}
+
+func (s *Service) Link(ctx context.Context, p authz.Principal, in LinkInput) error {
 	if err := s.authorize(ctx, p); err != nil {
 		return err
 	}
+	if in.Platform == "" || in.BridgeID == uuid.Nil || in.UID == "" || in.ChallengeHash == "" {
+		return service.Detail(service.ErrInvalidInput, "invalid identity link challenge")
+	}
 	q := dbq.New(s.db.Pool())
-	if _, err := q.UpsertPlatformIdentity(ctx, dbq.UpsertPlatformIdentityParams{
-		UserID:         pgtype.UUID{Bytes: p.UserID, Valid: true},
-		Platform:       platform,
-		PlatformUserID: uid,
-	}); err != nil {
-		s.logger.Error("upsert platform identity failed", zap.Error(err))
+	tx, err := s.db.Pool().Begin(ctx)
+	if err != nil {
 		return err
+	}
+	defer tx.Rollback(ctx)
+	qtx := q.WithTx(tx)
+	userID := pgtype.UUID{Bytes: p.UserID, Valid: true}
+	if _, err := qtx.ConsumeIdentityLinkChallenge(ctx, dbq.ConsumeIdentityLinkChallengeParams{
+		TokenHash:      in.ChallengeHash,
+		UserID:         userID,
+		Platform:       in.Platform,
+		BridgeID:       pgtype.UUID{Bytes: in.BridgeID, Valid: true},
+		PlatformUserID: in.UID,
+	}); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return service.Detail(service.ErrInvalidInput, "identity link challenge is expired or already used")
+		}
+		return err
+	}
+	if _, err := qtx.CreatePlatformIdentityIfUnlinked(ctx, dbq.CreatePlatformIdentityIfUnlinkedParams{
+		UserID: userID, Platform: in.Platform, PlatformUserID: in.UID,
+	}); err != nil {
+		return err
+	}
+	identity, err := qtx.GetPlatformIdentity(ctx, dbq.GetPlatformIdentityParams{
+		Platform: in.Platform, PlatformUserID: in.UID,
+	})
+	if err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	if !identity.UserID.Valid || uuid.UUID(identity.UserID.Bytes) != p.UserID {
+		return service.Detail(service.ErrConflict, "identity is already linked to another user")
 	}
 	return nil
 }

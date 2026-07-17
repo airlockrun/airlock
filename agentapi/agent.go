@@ -2,10 +2,11 @@ package agentapi
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/netip"
 	"strings"
 
 	"github.com/airlockrun/agentsdk"
@@ -17,6 +18,7 @@ import (
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/airlockrun/airlock/execproxy"
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
+	"github.com/airlockrun/airlock/networkpolicy"
 	"github.com/airlockrun/airlock/oauth"
 	"github.com/airlockrun/airlock/realtime"
 	"github.com/airlockrun/airlock/secrets"
@@ -50,7 +52,7 @@ type Handler struct {
 	jwtSecret              string                   // shared with auth middleware; read by mcp_server.go to validate incoming A2A JWTs
 	dispatcher             *trigger.Dispatcher      // forward-prompt + ensure-running for A2A
 	execDialer             ExecDialerService        // SSH dialer for RegisterExecEndpoint; nil-safe via implements-or-stub adapter
-	httpNetwork            *httpNetworkPolicy
+	httpNetwork            *networkpolicy.Policy
 	logger                 *zap.Logger
 }
 
@@ -73,7 +75,7 @@ type Config struct {
 	JWTSecret              string
 	Dispatcher             *trigger.Dispatcher
 	ExecDialer             ExecDialerService
-	HTTPPrivateCIDRs       []netip.Prefix
+	HTTPNetwork            *networkpolicy.Policy
 	Logger                 *zap.Logger
 }
 
@@ -83,6 +85,9 @@ func New(c Config) *Handler {
 	if c.DB == nil {
 		panic("agentapi: db is required")
 	}
+	if c.Encryptor == nil {
+		panic("agentapi: encryptor is required")
+	}
 	if c.PubSub == nil {
 		panic("agentapi: pubsub is required")
 	}
@@ -91,6 +96,9 @@ func New(c Config) *Handler {
 	}
 	if c.Logger == nil {
 		panic("agentapi: logger is required")
+	}
+	if c.HTTPNetwork == nil {
+		panic("agentapi: HTTP network policy is required")
 	}
 	return &Handler{
 		db:                     c.DB,
@@ -108,7 +116,7 @@ func New(c Config) *Handler {
 		jwtSecret:              c.JWTSecret,
 		dispatcher:             c.Dispatcher,
 		execDialer:             c.ExecDialer,
-		httpNetwork:            newHTTPNetworkPolicy(c.HTTPPrivateCIDRs),
+		httpNetwork:            c.HTTPNetwork,
 		logger:                 c.Logger,
 	}
 }
@@ -370,6 +378,37 @@ func (h *Handler) Sync(w http.ResponseWriter, r *http.Request) {
 			h.logger.Error("upsert webhook failed", zap.Error(err))
 			writeJSONError(w, http.StatusInternalServerError, "failed to sync webhooks")
 			return
+		}
+		if wh.Verify != "" && wh.Verify != "none" {
+			row, err := q.GetWebhookByAgentAndPath(ctx, dbq.GetWebhookByAgentAndPathParams{
+				AgentID: pgAgentID,
+				Path:    wh.Path,
+			})
+			if err != nil {
+				h.logger.Error("load webhook after upsert failed", zap.Error(err))
+				writeJSONError(w, http.StatusInternalServerError, "failed to sync webhooks")
+				return
+			}
+			if row.Secret == "" {
+				secretBytes := make([]byte, 32)
+				if _, err := rand.Read(secretBytes); err != nil {
+					h.logger.Error("generate webhook secret failed", zap.Error(err))
+					writeJSONError(w, http.StatusInternalServerError, "failed to sync webhooks")
+					return
+				}
+				ref := "webhook/" + pgUUID(row.ID).String() + "/secret"
+				stored, err := h.encryptor.Put(ctx, ref, hex.EncodeToString(secretBytes))
+				if err != nil {
+					h.logger.Error("encrypt webhook secret failed", zap.Error(err))
+					writeJSONError(w, http.StatusInternalServerError, "failed to sync webhooks")
+					return
+				}
+				if err := q.UpdateWebhookSecret(ctx, dbq.UpdateWebhookSecretParams{ID: row.ID, Secret: stored}); err != nil {
+					h.logger.Error("persist webhook secret failed", zap.Error(err))
+					writeJSONError(w, http.StatusInternalServerError, "failed to sync webhooks")
+					return
+				}
+			}
 		}
 		paths[i] = wh.Path
 	}

@@ -28,8 +28,32 @@
 	{$SPA_SERVE_LINE2}
 }
 
+(baseline_security_headers) {
+	header {
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+		X-Frame-Options "DENY"
+	}
+}
+
+(dashboard_security_headers) {
+	import baseline_security_headers
+	header {
+		Content-Security-Policy "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob: http: https:; media-src 'self' blob: http: https:; connect-src 'self' ws://{$DOMAIN} wss://{$DOMAIN}; form-action 'self'; worker-src 'self' blob:"
+		Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=(), publickey-credentials-get=(self), publickey-credentials-create=(self)"
+	}
+}
+
+(https_security_headers) {
+	header Strict-Transport-Security "max-age=31536000; includeSubDomains"
+}
+
 # Apex domain: dashboard SPA + airlock REST/WebSocket API.
 (apex_routes) {
+	request_header -X-Airlock-Proxy-Auth
+	import dashboard_security_headers
+
 	# /auth/relay is a frontend SPA route — the landing page for the
 	# subdomain relay-login flow. Matched BEFORE @backend so the /auth/*
 	# matcher doesn't swallow it. The backend serves POST /auth/relay-code,
@@ -75,6 +99,8 @@
 # invalidate the signature when RustFS recomputes it. Preserve the original
 # Host so RustFS sees what airlock signed.
 (s3_routes) {
+	request_header -X-Airlock-Proxy-Auth
+	import baseline_security_headers
 	reverse_proxy {$S3_UPSTREAM} {
 		header_up Host {host}
 	}

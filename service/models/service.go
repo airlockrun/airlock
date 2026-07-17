@@ -202,8 +202,10 @@ func (s *Service) Update(ctx context.Context, p authz.Principal, agentID uuid.UU
 		if err != nil {
 			return State{}, err
 		}
-		if err := s.checkModelAllowed(ctx, q, p, fk, item.p.Model, current[item.name].fk, current[item.name].model); err != nil {
-			return State{}, err
+		if fk != current[item.name].fk || item.p.Model != current[item.name].model {
+			if err := CheckEntitled(ctx, q, p, fk, item.p.Model); err != nil {
+				return State{}, err
+			}
 		}
 		if err := validateCapability(fk, item.p.Model, pairCapability(item.name)); err != nil {
 			return State{}, err
@@ -258,8 +260,10 @@ func (s *Service) Update(ctx context.Context, p authz.Principal, agentID uuid.UU
 		if err != nil {
 			return State{}, err
 		}
-		if err := s.checkModelAllowed(ctx, q, p, fk, slot.Model, cur.fk, cur.model); err != nil {
-			return State{}, err
+		if fk != cur.fk || slot.Model != cur.model {
+			if err := CheckEntitled(ctx, q, p, fk, slot.Model); err != nil {
+				return State{}, err
+			}
 		}
 		// The slot's declared capability (agentsdk vocab) governs the model.
 		if err := validateCapability(fk, slot.Model, cur.capability); err != nil {
@@ -352,22 +356,18 @@ func (s *Service) capabilityValidator(ctx context.Context, p authz.Principal) (f
 	}, nil
 }
 
-// checkModelAllowed enforces model deny-by-default at assignment time: a
-// (provider, model) the assigner is setting must be a configured system default
-// or carry a grant matching the assigner's grantee set. This holds for admins
-// too — to use a model on an agent, allow it first (grant it, which targets the
-// All-Users group and so lands in every grantee set, admins included). An unset
-// or unchanged pair is always allowed, so an existing agent is never locked out
-// of the model it already runs — only switching TO a new, non-allowed model is
-// gated.
-func (s *Service) checkModelAllowed(ctx context.Context, q *dbq.Queries, p authz.Principal, fk pgtype.UUID, model string, curFK pgtype.UUID, curModel string) error {
+// CheckEntitled enforces model deny-by-default at every assignment entry point.
+// A configured system default or a grant matching the caller's grantee set is
+// required. An unset pair inherits the system default and needs no entitlement.
+func CheckEntitled(ctx context.Context, q *dbq.Queries, p authz.Principal, fk pgtype.UUID, model string) error {
 	if !fk.Valid || model == "" {
 		return nil
 	}
-	if fk == curFK && model == curModel {
-		return nil
+	ok, err := q.IsSystemDefaultModel(ctx, dbq.IsSystemDefaultModelParams{CatalogID: fk, Model: model})
+	if err != nil {
+		return err
 	}
-	if ok, err := q.IsSystemDefaultModel(ctx, dbq.IsSystemDefaultModelParams{CatalogID: fk, Model: model}); err == nil && ok {
+	if ok {
 		return nil
 	}
 	if set := p.GranteeSet(); len(set) > 0 {
@@ -375,9 +375,13 @@ func (s *Service) checkModelAllowed(ctx context.Context, q *dbq.Queries, p authz
 		for i, id := range set {
 			grantees[i] = pgtype.UUID{Bytes: id, Valid: true}
 		}
-		if n, err := q.CountMatchingModelGrants(ctx, dbq.CountMatchingModelGrantsParams{
+		n, err := q.CountMatchingModelGrants(ctx, dbq.CountMatchingModelGrantsParams{
 			CatalogID: fk, Model: model, GranteeIds: grantees,
-		}); err == nil && n > 0 {
+		})
+		if err != nil {
+			return err
+		}
+		if n > 0 {
 			return nil
 		}
 	}

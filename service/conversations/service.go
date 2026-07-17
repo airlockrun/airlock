@@ -52,6 +52,11 @@ func New(d *db.DB, s3 *storage.S3Client, logger *zap.Logger, extractKeys KeyExtr
 
 func toPg(id uuid.UUID) pgtype.UUID { return pgtype.UUID{Bytes: id, Valid: true} }
 
+// Authorize requires current conversation access to an agent.
+func (s *Service) Authorize(ctx context.Context, p authz.Principal, agentID uuid.UUID) error {
+	return authz.Authorize(ctx, dbq.New(s.db.Pool()), p, authz.AgentConversation, agentID)
+}
+
 // Create makes a new web conversation thread. Requires membership of the
 // agent (AccessUser).
 func (s *Service) Create(ctx context.Context, p authz.Principal, agentID uuid.UUID, title string) (dbq.AgentConversation, error) {
@@ -200,16 +205,11 @@ type Detail struct {
 // invisible from the web. Both fail with ErrNotFound (don't leak which
 // conversations exist on which surface).
 func (s *Service) Get(ctx context.Context, p authz.Principal, convID uuid.UUID) (Detail, error) {
-	if !p.IsAuthenticatedUser() {
-		return Detail{}, service.ErrUnauthorized
+	conv, err := s.OwnedConversation(ctx, p, convID)
+	if err != nil {
+		return Detail{}, err
 	}
 	q := dbq.New(s.db.Pool())
-	conv, err := q.GetConversationByID(ctx, toPg(convID))
-	if err != nil ||
-		!conv.UserID.Valid || uuid.UUID(conv.UserID.Bytes) != p.UserID ||
-		conv.Source == "a2a" {
-		return Detail{}, service.ErrNotFound
-	}
 	msgs, err := q.ListMessagesByConversation(ctx, toPg(convID))
 	if err != nil {
 		s.logger.Error("list messages", zap.Error(err))
@@ -307,12 +307,14 @@ type MessagePage struct {
 
 // ListMessages returns messages before or after a sequence number for
 // infinite scroll. Exactly one of `before` or `after` must be non-empty;
-// `limit` is clamped to 1..500 with a default of 100. The caller does
-// the owner gate via ownedConversation upstream — this method assumes
-// the conversation has already been authorized.
-func (s *Service) ListMessages(ctx context.Context, convID uuid.UUID, before, after string, limitParam string) (MessagePage, error) {
+// `limit` is clamped to 1..500 with a default of 100. Owner and surface
+// checks happen before any message query.
+func (s *Service) ListMessages(ctx context.Context, p authz.Principal, convID uuid.UUID, before, after string, limitParam string) (MessagePage, error) {
 	if (before == "") == (after == "") {
 		return MessagePage{}, service.Detail(service.ErrInvalidInput, "exactly one of before or after is required")
+	}
+	if _, err := s.OwnedConversation(ctx, p, convID); err != nil {
+		return MessagePage{}, err
 	}
 	limit := int32(100)
 	if limitParam != "" {
@@ -363,16 +365,11 @@ func (s *Service) ListMessages(ctx context.Context, convID uuid.UUID, before, af
 // attachment blobs its messages referenced. Owner + surface gated like
 // Get; the S3 cleanup is best-effort.
 func (s *Service) Delete(ctx context.Context, p authz.Principal, convID uuid.UUID) error {
-	if !p.IsAuthenticatedUser() {
-		return service.ErrUnauthorized
+	conv, err := s.OwnedConversation(ctx, p, convID)
+	if err != nil {
+		return err
 	}
 	q := dbq.New(s.db.Pool())
-	conv, err := q.GetConversationByID(ctx, toPg(convID))
-	if err != nil ||
-		!conv.UserID.Valid || uuid.UUID(conv.UserID.Bytes) != p.UserID ||
-		conv.Source == "a2a" {
-		return service.ErrNotFound
-	}
 	agentID := convert.PgUUIDToString(conv.AgentID)
 	if s.s3 == nil || s.extractKeys == nil {
 		// Best-effort cleanup disabled (no s3 client wired) — proceed to row delete.
@@ -415,6 +412,9 @@ func (s *Service) OwnedConversation(ctx context.Context, p authz.Principal, conv
 		!conv.UserID.Valid || uuid.UUID(conv.UserID.Bytes) != p.UserID ||
 		conv.Source == "a2a" {
 		return dbq.AgentConversation{}, service.ErrNotFound
+	}
+	if err := authz.Authorize(ctx, dbq.New(s.db.Pool()), p, authz.AgentConversation, uuid.UUID(conv.AgentID.Bytes)); err != nil {
+		return dbq.AgentConversation{}, err
 	}
 	return conv, nil
 }
