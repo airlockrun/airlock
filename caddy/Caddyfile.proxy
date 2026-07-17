@@ -2,7 +2,7 @@
 #
 # An external proxy you already run terminates TLS for {$DOMAIN}, *.{$DOMAIN},
 # and s3.{$DOMAIN} and forwards them as plain HTTP to this caddy's HTTP port
-# (docker-compose.yml binds it to loopback: HTTP_PORT=127.0.0.1:8080). caddy
+# (docker-compose.yml binds it to loopback: PROXY_HTTP_PORT=4280). caddy
 # still does all internal Host routing; it does NOT issue certs. We force
 # X-Forwarded-Proto=https because the external edge is always HTTPS — that's
 # what airlock signs PUBLIC_URL / presigned URLs against. Also set

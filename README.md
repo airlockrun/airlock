@@ -43,7 +43,7 @@ docker compose exec airlock cat /var/lib/airlock/activation_code.txt
 
 Open [http://localhost:42080](http://localhost:42080) and paste the activation code. The apex uses `localhost` because command-line and OS resolvers do not consistently synthesize names such as `airlock.localhost`; browsers still resolve `*.localhost` for S3 and per-agent routes. Compose binds port 42080 to `127.0.0.1`, making this mode reachable only from the same machine. Change `HTTP_PORT` and the matching port in `PUBLIC_URL` / `S3_URL_PUBLIC` if 42080 is occupied. Use a public TLS, tunnel, manual-certificate, or proxy mode for LAN or remote access.
 
-With Docker Engine or Docker Desktop running and Compose v2 available (`docker info` and `docker compose version` must work), `./install.sh --local` writes this `.env` with generated secrets and brings the stack up for you. The installer never installs or starts Docker. `./install.sh --instance-id airlock2` uses `~/airlock2` when it needs to clone, so a second instance has its own checkout and `.env`.
+With Docker Engine or Docker Desktop running and Compose v2 available (`docker info` and `docker compose version` must work), `./install.sh --local` writes this `.env` with generated secrets and brings the stack up for you. Use `./install.sh --proxy` when an existing nginx or Traefik instance terminates wildcard TLS; the installer asks which loopback port and ingress address Caddy should trust. The installer never installs or starts Docker. `./install.sh --instance-id airlock2` uses `~/airlock2` when it needs to clone, so a second instance has its own checkout and `.env`.
 
 ## Develop against airlock from source
 
