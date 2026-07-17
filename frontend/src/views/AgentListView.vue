@@ -41,16 +41,7 @@ function goToAgent(id: string) {
       </Card>
     </div>
 
-    <!-- Empty state -->
-    <Card v-else-if="store.agents.length === 0" style="text-align: center; padding: 2rem">
-      <template #content>
-        <i class="pi pi-box" style="font-size: 3rem; color: var(--p-surface-400); margin-bottom: 1rem" />
-        <p style="color: var(--p-text-muted-color)">No apps yet. Create your first app to get started.</p>
-        <Button label="Create App" icon="pi pi-plus" @click="router.push('/agents/create')" style="margin-top: 1rem" />
-      </template>
-    </Card>
-
-    <!-- Agent grid — system agent is pinned first as a special tile. -->
+    <!-- App grid — Airlock Assistant is pinned first even when there are no apps. -->
     <div v-else style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 1rem">
       <Card
         style="cursor: pointer; border: 1px solid var(--p-primary-200)"
@@ -68,6 +59,13 @@ function goToAgent(id: string) {
           <p style="font-size: 0.875rem; color: var(--p-text-muted-color); margin-top: 0.5rem">
             Manage apps, bridges, connections, members and runs through chat - with your own permissions.
           </p>
+        </template>
+      </Card>
+      <Card v-if="store.agents.length === 0" style="text-align: center; padding: 2rem">
+        <template #content>
+          <i class="pi pi-box" style="font-size: 3rem; color: var(--p-surface-400); margin-bottom: 1rem" />
+          <p style="color: var(--p-text-muted-color)">No apps yet. Create your first app to get started.</p>
+          <Button label="Create App" icon="pi pi-plus" @click="router.push('/agents/create')" style="margin-top: 1rem" />
         </template>
       </Card>
       <Card
