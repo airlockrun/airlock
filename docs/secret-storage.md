@@ -34,15 +34,9 @@ do not understand the envelope cannot read migrated values.
 5. Set `ENCRYPTION_KEY_REWRAP=false` and restart every replica on the maintenance
    release. Do not add replicas running a release that cannot read envelopes.
 
-The bundled `upgrade.sh` performs these stop, migrate, and restart steps. It
-requires confirmation that replicas outside its Compose project are stopped.
-Using `--yes` asserts that the Compose service is the only replica sharing the
-database. After success it records `AIRLOCK_SECRET_ENVELOPE_V1_MIGRATED=true` in
-`.env`, so later upgrades do not repeat the one-time maintenance pass. Fresh
-installs write this marker because their databases contain no compatibility
-values. Do not set the marker on an existing database until the migration has
-succeeded. Orchestrated and multi-host deployments must perform the steps above
-instead of treating the release as a rolling upgrade.
+Run this procedure explicitly and independently from release upgrades. Every
+deployment topology, including Compose, must verify that all replicas sharing
+the database are stopped before enabling maintenance mode.
 
 ## Rotate the key
 

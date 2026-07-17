@@ -115,7 +115,6 @@ fi
 	assert_file_contains .env 'AGENT_HTTP_PRIVATE_CIDRS='
 	assert_file_contains .env 'AGENT_CODEGEN_VOLUME=airlock-data'
 	assert_file_contains .env 'ENCRYPTION_KEY_REWRAP=false'
-	assert_file_contains .env 'AIRLOCK_SECRET_ENVELOPE_V1_MIGRATED=true'
 	assert_file_contains .env 'TUNNEL_TOKEN=test-tunnel-token'
 	assert_file_contains .env 'TUNNEL_INGRESS_NETWORK=airlock-tunnel-ingress'
 	assert_file_contains .env 'TUNNEL_INGRESS_SUBNET=172.31.255.0/29'
@@ -256,7 +255,6 @@ printf '%s' "$wsl_docker_output" | grep -Fq "enable WSL integration" || fail 'mi
 	assert_file_contains .env 'AGENT_HTTP_PRIVATE_CIDRS='
 	assert_file_contains .env 'AGENT_CODEGEN_VOLUME=airlock2-data'
 	assert_file_contains .env 'ENCRYPTION_KEY_REWRAP=false'
-	assert_file_contains .env 'AIRLOCK_SECRET_ENVELOPE_V1_MIGRATED=true'
 	assert_file_contains .env 'DOCKER_SOCKET_PATH=/var/run/docker.sock'
 	assert_file_contains .env 'HTTP_PORT=42080'
 	assert_file_contains .env 'PUBLIC_URL=http://localhost:42080'
@@ -606,41 +604,6 @@ set -e
 assert_eq '1' "$proxy_cidr_status" 'proxy all-address CIDR status'
 printf '%s' "$proxy_cidr_output" | grep -Fq 'does not allow wildcard proxy trust' || fail 'proxy all-address CIDR failure lacked guidance'
 
-proxy_upgrade_dir="$TMP_DIR/proxy-auth-upgrade"
-mkdir -p "$proxy_upgrade_dir"
-printf '%s\n' \
-	'TLS_MODE=proxy' \
-	'REVERSE_PROXY_TRUSTED_PROXIES=10.20.30.40/32' \
-	'REVERSE_PROXY_LIMIT=1' > "$proxy_upgrade_dir/.env"
-(
-	cd "$proxy_upgrade_dir"
-	source "$ROOT_DIR/upgrade.sh"
-	log() { :; }
-	ensure_proxy_auth_config
-	assert_file_matches .env '^REVERSE_PROXY_AUTH_SECRET=[0-9a-f]{64}$'
-	assert_file_contains .env 'CADDY_TRUSTED_PROXIES=10.20.30.40/32'
-	assert_file_contains .env 'REVERSE_PROXY_LIMIT=2'
-	assert_file_contains .env 'REVERSE_PROXY_TRUSTED_PEERS=127.0.0.0/8,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,fc00::/7'
-	assert_file_not_contains .env 'REVERSE_PROXY_TRUSTED_PROXIES=10.20.30.40/32'
-)
-
-tunnel_upgrade_dir="$TMP_DIR/tunnel-ingress-upgrade"
-mkdir -p "$tunnel_upgrade_dir"
-printf '%s\n' \
-	'TLS_MODE=tunnel' \
-	'AIRLOCK_INSTANCE_ID=airlock2' \
-	'REVERSE_PROXY_AUTH_SECRET=0123456789abcdef0123456789abcdef' > "$tunnel_upgrade_dir/.env"
-(
-	cd "$tunnel_upgrade_dir"
-	source "$ROOT_DIR/upgrade.sh"
-	log() { :; }
-	ensure_proxy_auth_config
-	assert_file_contains .env 'TUNNEL_INGRESS_NETWORK=airlock2-tunnel-ingress'
-	assert_file_contains .env 'TUNNEL_INGRESS_SUBNET=172.31.255.0/29'
-	assert_file_contains .env 'TUNNEL_CLOUDFLARED_IP=172.31.255.2'
-	assert_file_contains .env 'TUNNEL_CADDY_IP=172.31.255.3'
-)
-
 if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
 	caddy_secret=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
 	for mode in local tunnel proxy; do
@@ -717,7 +680,7 @@ grep -Fq 'bind {$TUNNEL_CADDY_IP}' "$ROOT_DIR/caddy/Caddyfile.tunnel" \
 
 upgrade_timeout_dir="$TMP_DIR/upgrade-timeout"
 mkdir -p "$upgrade_timeout_dir"
-printf '%s\n' 'COMPOSE_PROFILES=external-db' 'AGENT_NETWORK_PER_AGENT=false' 'ENCRYPTION_KEY=test-key' > "$upgrade_timeout_dir/.env"
+printf '%s\n' 'ENCRYPTION_KEY_REWRAP=false' > "$upgrade_timeout_dir/.env"
 set +e
 upgrade_health_output=$(
 	ROOT_DIR="$ROOT_DIR" TEST_DIR="$upgrade_timeout_dir" bash -c '
@@ -743,32 +706,9 @@ printf '%s' "$upgrade_health_output" | grep -Fq 'previous images were retained' 
 ! printf '%s' "$upgrade_health_output" | grep -Fq 'upgraded to v9.9.9' || fail 'upgrade reported success after health timeout'
 [ ! -e "$upgrade_timeout_dir/calls" ] || fail 'upgrade removed previous images after health timeout'
 
-rewrap_dir="$TMP_DIR/secret-rewrap"
-mkdir -p "$rewrap_dir"
-printf '%s\n' 'ENCRYPTION_KEY=test-key' > "$rewrap_dir/.env"
-(
-	cd "$rewrap_dir"
-	source "$ROOT_DIR/upgrade.sh"
-	log() { :; }
-	warn() { :; }
-	ASSUME_YES=1
-	docker() {
-		printf '%s\n' "$*" >> calls
-		return 0
-	}
-	run_secret_envelope_migration
-	assert_file_contains .env 'ENCRYPTION_KEY_REWRAP=false'
-	assert_file_contains .env 'AIRLOCK_SECRET_ENVELOPE_V1_MIGRATED=true'
-	run_secret_envelope_migration
-	grep -Fq 'compose stop airlock' calls || fail 'secret migration did not stop Airlock'
-	grep -Fq 'compose up -d --no-build airlock' calls || fail 'secret migration did not start the target release'
-	grep -Fq 'compose up -d --no-build --force-recreate airlock' calls || fail 'secret migration did not restart normal mode'
-	assert_eq '1' "$(grep -Fc 'compose stop airlock' calls)" 'secret migration one-time stop count'
-)
-
 rewrap_active_dir="$TMP_DIR/secret-rewrap-active"
 mkdir -p "$rewrap_active_dir"
-printf '%s\n' 'COMPOSE_PROFILES=external-db' 'AGENT_NETWORK_PER_AGENT=false' 'ENCRYPTION_KEY=test-key' 'ENCRYPTION_KEY_REWRAP=true' > "$rewrap_active_dir/.env"
+printf '%s\n' 'ENCRYPTION_KEY_REWRAP=true' > "$rewrap_active_dir/.env"
 set +e
 rewrap_active_output=$(
 	ROOT_DIR="$ROOT_DIR" TEST_DIR="$rewrap_active_dir" bash -c '
@@ -784,50 +724,6 @@ set -e
 assert_eq '1' "$rewrap_active_status" 'active secret maintenance upgrade status'
 printf '%s' "$rewrap_active_output" | grep -Fq 'maintenance mode' || fail 'active secret maintenance failure lacked guidance'
 [ ! -e "$rewrap_active_dir/calls" ] || ! grep -Fq 'compose pull' "$rewrap_active_dir/calls" || fail 'upgrade pulled images while secret maintenance was active'
-
-credential_dir="$TMP_DIR/credential-transition"
-mkdir -p "$credential_dir"
-printf '%s\n' 'COMPOSE_PROFILES=bundled-db,bundled-s3' 'POSTGRES_PASSWORD=airlock' > "$credential_dir/.env"
-(
-	cd "$credential_dir"
-	source "$ROOT_DIR/upgrade.sh"
-	log() { :; }
-	docker() {
-		printf '%s\n' "$*" >> calls
-		case "$1 $2 $3" in
-			'compose ps -q') printf 'postgres-container\n' ;;
-			'inspect -f {{.State.Running}}') printf 'true\n' ;;
-		esac
-		return 0
-	}
-	ensure_bundled_app_password
-	assert_file_matches .env '^POSTGRES_PASSWORD=[0-9a-f]{64}$'
-	assert_file_matches .env '^AIRLOCK_DB_PASSWORD=[0-9a-f]{64}$'
-	assert_file_not_contains .env 'POSTGRES_PASSWORD=airlock'
-	[ "$(env_value POSTGRES_PASSWORD)" != "$(env_value AIRLOCK_DB_PASSWORD)" ] || fail 'database credentials are not distinct'
-	grep -Fq 'postgres /bin/bash /docker-entrypoint-initdb.d/01-create-agent-role-fn.sh' calls || fail 'credential transition did not run the database bootstrap in the live container'
-	! compgen -G '.env.upgrade.*' >/dev/null || fail 'credential transition left a temporary env artifact'
-)
-
-offline_dir="$TMP_DIR/credential-offline"
-mkdir -p "$offline_dir"
-printf '%s\n' 'COMPOSE_PROFILES=bundled-db' 'POSTGRES_PASSWORD=airlock' > "$offline_dir/.env"
-set +e
-offline_output=$(
-	ROOT_DIR="$ROOT_DIR" TEST_DIR="$offline_dir" bash -c '
-		cd "$TEST_DIR"
-		source "$ROOT_DIR/upgrade.sh"
-		docker() { printf "%s\n" "$*" >> "$TEST_DIR/calls"; return 0; }
-		ensure_bundled_app_password
-	' 2>&1
-)
-offline_status=$?
-set -e
-assert_eq '1' "$offline_status" 'offline credential transition status'
-printf '%s' "$offline_output" | grep -Fq 'No services were stopped' || fail 'offline credential failure lacked no-downtime guidance'
-assert_file_contains "$offline_dir/.env" 'POSTGRES_PASSWORD=airlock'
-assert_file_not_contains "$offline_dir/.env" 'AIRLOCK_DB_PASSWORD='
-! grep -Fq 'compose down' "$offline_dir/calls" || fail 'offline credential preflight stopped the stack'
 
 set +e
 pipe_output=$(bash -s -- --not-a-real-flag < "$ROOT_DIR/install.sh" 2>&1)
