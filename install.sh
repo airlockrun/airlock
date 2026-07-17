@@ -21,6 +21,7 @@
 #                    resources (default: airlock; clone dir ~/airlock for the
 #                    default instance, ~/<id> otherwise)
 #   --local          force local mode (no domain)
+#   --proxy          force external reverse-proxy mode
 #   --force          overwrite an existing .env
 #   --pre-release    allow installing a pre-release tag (rc/alpha/beta/dev).
 #                    Refused by default — pre-releases have no supported
@@ -42,6 +43,7 @@ INFRA_S3="bundled" # bundled | external (object store)
 FORCE=0
 DRY_RUN=0
 FORCE_LOCAL=0
+FORCE_PROXY=0
 ALLOW_PRERELEASE=0  # --pre-release / AIRLOCK_ALLOW_PRERELEASE: install an rc/alpha/beta/dev tag
 INSTANCE_ID="airlock"
 WSL_VERSION=0
@@ -102,6 +104,12 @@ validate_proxy_trust() {
 	if [[ ",$value," =~ ,(\*|0\.0\.0\.0/0|::/0), ]]; then
 		die "proxy mode does not allow wildcard proxy trust; enter the exact proxy address or narrow CIDR"
 	fi
+}
+
+validate_proxy_port() {
+	local value="$1"
+	[[ "$value" =~ ^[0-9]+$ ]] || die "proxy port must be a number between 1 and 65535"
+	((10#$value >= 1 && 10#$value <= 65535)) || die "proxy port must be a number between 1 and 65535"
 }
 
 parse_tunnel_token() {
@@ -361,6 +369,7 @@ parse_args() {
 			--tag) RELEASE_TAG="$2"; shift 2 ;;
 			--instance-id) INSTANCE_ID="$2"; shift 2 ;;
 			--local) FORCE_LOCAL=1; shift ;;
+			--proxy) FORCE_PROXY=1; shift ;;
 			--force) FORCE=1; shift ;;
 			--dry-run) DRY_RUN=1; shift ;;
 			--pre-release) ALLOW_PRERELEASE=1; shift ;;
@@ -368,6 +377,7 @@ parse_args() {
 			*) die "unknown flag: $1" ;;
 		esac
 	done
+	[ "$FORCE_LOCAL" != 1 ] || [ "$FORCE_PROXY" != 1 ] || die "--local and --proxy cannot be combined"
 }
 
 clone_repo() {
@@ -392,8 +402,27 @@ declare -a ENV_EXTRA=()
 declare -a PROFILES=()
 BUILD_CADDY=0   # wildcard mode: build the local DNS-plugin caddy image
 
+choose_proxy_mode() {
+	TLS_MODE=proxy
+	local port cidr
+	port=$(ask "  Caddy loopback HTTP port" "4280")
+	validate_proxy_port "$port"
+	port=$((10#$port))
+	warn "Your proxy must terminate a *.$DOMAIN wildcard cert and forward $DOMAIN and *.$DOMAIN to 127.0.0.1:$port."
+	cidr=$(ask "  Exact trusted proxy address or CIDR (e.g. 10.0.0.5/32)" "")
+	validate_proxy_trust "$cidr"
+	ENV_EXTRA+=("PROXY_HTTP_PORT=$port")
+	ENV_EXTRA+=("CADDY_TRUSTED_PROXIES=$cidr" "REVERSE_PROXY_LIMIT=2" "PUBLIC_URL=https://$DOMAIN")
+}
+
 choose_mode() {
 	if [ "$FORCE_LOCAL" = 1 ]; then TLS_MODE=local; DOMAIN=localhost; return; fi
+	if [ "$FORCE_PROXY" = 1 ]; then
+		DOMAIN=$(ask "Domain (e.g. airlock.example.com)" "")
+		[ -n "$DOMAIN" ] || die "domain required for --proxy"
+		choose_proxy_mode
+		return
+	fi
 	local has_domain; has_domain=$(ask "Do you have a domain to use? (y/n)" "y")
 	case "$has_domain" in
 		[nN]*)
@@ -414,12 +443,7 @@ choose_mode() {
 		local adv; adv=$(ask "  Which? [manual = BYO cert / proxy = behind nginx]" "manual")
 		case "$adv" in
 			proxy)
-				TLS_MODE=proxy
-				warn "Your proxy must terminate a *.$DOMAIN wildcard cert and forward $DOMAIN and *.$DOMAIN → caddy's HTTP port (loopback 8080)."
-				local cidr; cidr=$(ask "  Exact trusted proxy address or CIDR (e.g. 10.0.0.5/32)" "")
-				validate_proxy_trust "$cidr"
-				ENV_EXTRA+=("HTTP_PORT=127.0.0.1:8080" "HTTPS_PORT=127.0.0.1:8443")
-				ENV_EXTRA+=("CADDY_TRUSTED_PROXIES=$cidr" "REVERSE_PROXY_LIMIT=2" "PUBLIC_URL=https://$DOMAIN")
+				choose_proxy_mode
 				return ;;
 			*)
 				TLS_MODE=manual
@@ -533,6 +557,8 @@ assemble_profiles() {
 		PROFILES+=("caddy-private" "cloudflared")
 	elif [ "$TLS_MODE" = local ]; then
 		PROFILES+=("caddy-local")
+	elif [ "$TLS_MODE" = proxy ]; then
+		PROFILES+=("caddy-proxy")
 	else
 		PROFILES+=("caddy-published")
 	fi

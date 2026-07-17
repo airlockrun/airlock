@@ -289,6 +289,94 @@ printf '%s' "$wsl_docker_output" | grep -Fq "enable WSL integration" || fail 'mi
 	fi
 )
 
+proxy_install_dir="$TMP_DIR/proxy-install"
+mkdir -p "$proxy_install_dir"
+(
+	cd "$proxy_install_dir"
+	source "$ROOT_DIR/install.sh"
+
+	log() { :; }
+	warn() { :; }
+	secret_i=0
+	gen_secret() {
+		secret_i=$((secret_i + 1))
+		printf 'secret-%d' "$secret_i"
+	}
+	ask() {
+		case "$1" in
+			'Domain (e.g. airlock.example.com)') printf 'airlock.example.com' ;;
+			'  Caddy loopback HTTP port')
+				assert_eq '4280' "$2" 'proxy port default'
+				printf '4380'
+				;;
+			'  Exact trusted proxy address or CIDR (e.g. 10.0.0.5/32)') printf '10.20.30.40/32' ;;
+			*) fail "unexpected proxy ask prompt: $1" ;;
+		esac
+	}
+	confirm() {
+		case "$1" in
+			'Use the bundled Postgres (pgvector)?'|'Use the bundled object store (RustFS)?') return 0 ;;
+			*) fail "unexpected proxy confirm prompt: $1" ;;
+		esac
+	}
+
+	parse_args --proxy --force
+	assert_eq '1' "$FORCE_PROXY" 'proxy flag'
+	choose_mode
+	assert_eq 'proxy' "$TLS_MODE" 'proxy TLS mode'
+	assert_eq 'airlock.example.com' "$DOMAIN" 'proxy domain'
+	choose_infra
+	BUILDKIT_HOST_VAL=''
+	assemble_profiles
+	render_env
+
+	assert_file_contains .env 'TLS_MODE=proxy'
+	assert_file_contains .env 'COMPOSE_PROFILES=bundled-db,bundled-s3,caddy-proxy'
+	assert_file_contains .env 'DOMAIN=airlock.example.com'
+	assert_file_contains .env 'PROXY_HTTP_PORT=4380'
+	assert_file_contains .env 'CADDY_TRUSTED_PROXIES=10.20.30.40/32'
+	assert_file_contains .env 'REVERSE_PROXY_LIMIT=2'
+	assert_file_contains .env 'PUBLIC_URL=https://airlock.example.com'
+	! grep -Eq '^HTTPS_PORT=' .env || fail '.env unexpectedly publishes an HTTPS port in proxy mode'
+
+	if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
+		services=$(docker compose --env-file .env -f "$ROOT_DIR/docker-compose.yml" config --services)
+		printf '%s\n' "$services" | grep -Fx caddy-proxy >/dev/null || fail 'compose config did not enable proxy caddy service'
+		! printf '%s\n' "$services" | grep -Fx caddy >/dev/null || fail 'compose config enabled TLS caddy service in proxy mode'
+		if command -v jq >/dev/null 2>&1; then
+			config=$(docker compose --env-file .env -f "$ROOT_DIR/docker-compose.yml" config --format json)
+			assert_eq '127.0.0.1' "$(jq -r '.services["caddy-proxy"].ports[0].host_ip' <<<"$config")" 'proxy caddy host IP'
+			assert_eq '4380' "$(jq -r '.services["caddy-proxy"].ports[0].published' <<<"$config")" 'proxy caddy published port'
+			assert_eq '80' "$(jq -r '.services["caddy-proxy"].ports[0].target' <<<"$config")" 'proxy caddy target port'
+			assert_eq '1' "$(jq -r '.services["caddy-proxy"].ports | length' <<<"$config")" 'proxy caddy port count'
+		fi
+	fi
+)
+
+set +e
+proxy_flag_conflict_output=$(
+	ROOT_DIR="$ROOT_DIR" bash -c '
+		source "$ROOT_DIR/install.sh"
+		parse_args --local --proxy
+	' 2>&1
+)
+proxy_flag_conflict_status=$?
+set -e
+assert_eq '1' "$proxy_flag_conflict_status" 'proxy/local conflict status'
+printf '%s' "$proxy_flag_conflict_output" | grep -Fq -- '--local and --proxy cannot be combined' || fail 'proxy/local conflict lacked guidance'
+
+set +e
+proxy_port_output=$(
+	ROOT_DIR="$ROOT_DIR" bash -c '
+		source "$ROOT_DIR/install.sh"
+		validate_proxy_port 70000
+	' 2>&1
+)
+proxy_port_status=$?
+set -e
+assert_eq '1' "$proxy_port_status" 'invalid proxy port status'
+printf '%s' "$proxy_port_output" | grep -Fq 'proxy port must be a number between 1 and 65535' || fail 'invalid proxy port lacked guidance'
+
 (
 	cd "$TMP_DIR"
 	source "$ROOT_DIR/install.sh"
@@ -492,6 +580,7 @@ proxy_wildcard_output=$(
 				"Do you have a domain to use? (y/n)") printf y ;;
 				"Domain (e.g. airlock.example.com)") printf airlock.example.com ;;
 				"  Which? [manual = BYO cert / proxy = behind nginx]") printf proxy ;;
+				"  Caddy loopback HTTP port") printf 4280 ;;
 				"  Exact trusted proxy address or CIDR (e.g. 10.0.0.5/32)") printf "*" ;;
 			esac
 		}
