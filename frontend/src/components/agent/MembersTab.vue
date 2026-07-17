@@ -101,7 +101,7 @@ async function addMember() {
 
 function confirmRemove(member: Member) {
   confirm.require({
-    message: `Remove ${memberLabel(member)} from this agent?`,
+    message: `Remove ${memberLabel(member)} from this app?`,
     header: 'Confirm Removal',
     acceptLabel: 'Remove',
     rejectLabel: 'Cancel',

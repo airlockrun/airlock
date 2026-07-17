@@ -55,7 +55,7 @@ async function save() {
 function onDeleteGit(c: GitCredential) {
   confirm.require({
     header: `Delete "${c.name}"?`,
-    message: 'Agents using this credential will lose access to their git remote until you attach a different one.',
+    message: 'Apps using this credential will lose access to their git remote until you attach a different one.',
     icon: 'pi pi-exclamation-triangle',
     acceptLabel: 'Delete',
     rejectLabel: 'Cancel',
@@ -78,7 +78,7 @@ function formatTimestamp(ts: any): string {
 
 function usageNote(n: number): string {
   if (n === 0) return ''
-  return ` ${n} agent${n === 1 ? '' : 's'} using it will need to be reconfigured.`
+  return ` ${n} app${n === 1 ? '' : 's'} using it will need to be reconfigured.`
 }
 
 function onRevoke(res: any) {
@@ -129,9 +129,9 @@ onMounted(() => {
   <div style="max-width: 64rem">
     <h1 style="margin: 0; font-size: 1.5rem">Resources</h1>
     <p style="margin: 0 0 1.5rem; color: var(--p-text-muted-color); max-width: 48rem">
-      Credentials and integrations you own. One resource can back several of your agents - an agent
+      Credentials and integrations you own. One resource can back several of your apps - an app
       binds it from its own configuration. Set up and reauthorize connections, MCP servers, and exec
-      endpoints from each agent's detail page; this is your inventory across all of them.
+      endpoints from each app's detail page; this is your inventory across all of them.
     </p>
 
     <!-- Connections / MCP / Exec inventory -->
@@ -147,7 +147,7 @@ onMounted(() => {
           <template #empty>
             <div style="text-align: center; padding: 2rem; color: var(--p-text-muted-color)">
               You don't own any connections, MCP servers, or exec endpoints yet. They're created when you
-              configure an agent's credentials.
+              configure an app's credentials.
             </div>
           </template>
           <Column header="Type" style="width: 12rem">
@@ -176,7 +176,7 @@ onMounted(() => {
           </Column>
           <Column header="Used by" style="width: 9rem">
             <template #body="{ data }">
-              <span v-if="data.agentCount > 0">{{ data.agentCount }} agent{{ data.agentCount === 1 ? '' : 's' }}</span>
+              <span v-if="data.agentCount > 0">{{ data.agentCount }} app{{ data.agentCount === 1 ? '' : 's' }}</span>
               <span v-else style="color: var(--p-text-muted-color); font-style: italic">unused</span>
             </template>
           </Column>
@@ -219,13 +219,13 @@ onMounted(() => {
         </div>
       </template>
       <template #subtitle>
-        Personal access tokens for connecting agents to external git remotes (GitHub, GitLab, Bitbucket, self-hosted).
+        Personal access tokens for connecting apps to external git remotes (GitHub, GitLab, Bitbucket, self-hosted).
       </template>
       <template #content>
         <DataTable v-if="!git.loading || git.credentials.length > 0" :value="git.credentials" stripedRows size="small">
           <template #empty>
             <div style="text-align: center; padding: 2rem; color: var(--p-text-muted-color)">
-              No git credentials yet. Add a PAT to connect an agent to an external repo.
+              No git credentials yet. Add a PAT to connect an app to an external repo.
             </div>
           </template>
           <Column field="name" header="Name" />

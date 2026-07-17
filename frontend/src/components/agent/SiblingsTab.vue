@@ -128,7 +128,7 @@ async function saveEdit() {
 
 function confirmRemove(s: Sibling) {
   confirm.require({
-    message: `Remove ${s.name} from this agent's address book? This agent's LLM will lose its agent_${s.slug} binding on the next build.`,
+    message: `Remove ${s.name} from this app's address book? This app's LLM will lose its agent_${s.slug} binding on the next build.`,
     header: 'Remove sibling',
     icon: 'pi pi-exclamation-triangle',
     accept: async () => {
@@ -149,10 +149,10 @@ onMounted(loadAll)
 <template>
   <div>
     <!-- Outbound: sibling address book -->
-    <h3 style="margin-top: 0">Sibling agents</h3>
+    <h3 style="margin-top: 0">Sibling apps</h3>
     <p style="color: var(--p-text-muted-color); margin-top: 0">
-      This agent will be able to call the other agents listed here. Max access caps what this
-      agent can do on each; it auto-downgrades (and the row drops) if the target's owner lowers
+      This app will be able to call the other apps listed here. Max access caps what this
+      app can do on each; it auto-downgrades (and the row drops) if the target's owner lowers
       or revokes access.
     </p>
 
@@ -185,16 +185,16 @@ onMounted(loadAll)
         </template>
       </Column>
     </DataTable>
-    <p v-else style="color: var(--p-text-muted-color)">No sibling agents yet.</p>
+    <p v-else style="color: var(--p-text-muted-color)">No sibling apps yet.</p>
 
     <div style="margin-top: 1rem">
       <Button label="Add sibling" icon="pi pi-plus" size="small" :disabled="addable.length === 0" @click="showAddDialog = true" />
     </div>
 
     <!-- Inbound: agents that can call this one -->
-    <h3 style="margin-top: 2rem">Connected to this agent</h3>
+    <h3 style="margin-top: 2rem">Connected to this app</h3>
     <p style="color: var(--p-text-muted-color); margin-top: 0">
-      Agents that have added this one to their address book - who can call this agent via A2A,
+      Apps that have added this one to their address book - who can call this app via A2A,
       and the live max access each has.
     </p>
 
@@ -210,19 +210,19 @@ onMounted(loadAll)
         </template>
       </Column>
     </DataTable>
-    <p v-else-if="!loading" style="color: var(--p-text-muted-color)">No agents call this one.</p>
+    <p v-else-if="!loading" style="color: var(--p-text-muted-color)">No apps call this one.</p>
 
     <Dialog v-model:visible="showAddDialog" header="Add sibling" modal :style="{ width: '32rem' }">
       <p style="margin-top: 0; color: var(--p-text-muted-color)">
-        Agents this agent's owner has access to.
+        Apps this app's owner has access to.
       </p>
-      <label style="display: block; font-weight: 600; margin-bottom: 0.25rem">Agent</label>
+      <label style="display: block; font-weight: 600; margin-bottom: 0.25rem">App</label>
       <Select
         v-model="selectedSiblingId"
         :options="addable"
         optionLabel="name"
         optionValue="id"
-        placeholder="Pick an agent"
+        placeholder="Pick an app"
         style="width: 100%"
         :pt="{ overlay: { style: 'max-width: 95vw' } }"
       >
@@ -249,8 +249,8 @@ onMounted(loadAll)
         style="width: 100%"
       />
       <p style="color: var(--p-text-muted-color); font-size: 0.85em; margin-top: 0.5rem">
-        The ceiling for what this agent can do when it calls the sibling. The real access is still
-        floored by the driving user's and this agent's owner's access on the target.
+        The ceiling for what this app can do when it calls the sibling. The real access is still
+        floored by the driving user's and this app's owner's access on the target.
       </p>
       <template #footer>
         <Button label="Cancel" severity="secondary" text @click="showAddDialog = false" />

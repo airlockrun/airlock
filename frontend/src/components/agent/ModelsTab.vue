@@ -159,7 +159,7 @@ const overrideRows = computed<ConfigRow[]>(() => [
     key: 'buildModel',
     label: 'Build Model',
     icon: 'pi pi-hammer',
-    help: 'Override the system default build model for this agent.',
+    help: 'Override the system default build model for this app.',
     options: groupModels(isLanguage),
     grouped: true,
   },
@@ -167,7 +167,7 @@ const overrideRows = computed<ConfigRow[]>(() => [
     key: 'execModel',
     label: 'Execution Model (Text)',
     icon: 'pi pi-align-left',
-    help: 'Runtime default when the agent makes text LLM calls without a specific slug.',
+    help: 'Runtime default when the app makes text LLM calls without a specific slug.',
     options: groupModels(isLanguage),
     grouped: true,
   },
@@ -315,7 +315,7 @@ async function save() {
     <div>
       <h3 class="models-subhead">Capability overrides</h3>
       <p class="models-sub">
-        Override system defaults for this agent. Leave empty for Default.
+        Override system defaults for this app. Leave empty for Default.
       </p>
       <div class="override-grid">
         <div
@@ -366,7 +366,7 @@ async function save() {
     <div v-if="config.slots.length > 0">
       <h3 class="models-subhead">Model slots</h3>
       <p class="models-sub">
-        Named slots the agent declared via <code>RegisterModel</code>. Assigning a model binds the slot directly; empty falls through to the capability override above, then the system default.
+        Named slots the app declared via <code>RegisterModel</code>. Assigning a model binds the slot directly; empty falls through to the capability override above, then the system default.
       </p>
       <div style="display: flex; flex-direction: column; gap: 1rem">
         <div
@@ -408,7 +408,7 @@ async function save() {
       <div>
         <h3 class="models-subhead">Models</h3>
         <p class="models-sub">
-          Models configured for this agent. Editing requires manager access and agent-admin.
+          Models configured for this app. Editing requires manager access and app admin.
         </p>
         <div style="display: flex; flex-direction: column; gap: 0.75rem">
           <div

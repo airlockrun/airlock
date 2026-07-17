@@ -43,7 +43,7 @@ const name = ref('')
 const slug = ref('')
 const slugManual = ref(false)
 const instructions = ref('')
-const mode = ref<'generate' | 'git' | 'local'>('generate')
+const mode = ref<'generate' | 'git' | 'local'>('local')
 
 // Optional external git remote attached on create. When gitRemoteUrl
 // is non-empty, gitCredentialId must also be set.
@@ -63,6 +63,8 @@ const buildAgentId = ref('')
 const sdkVersion = ref('')
 const sdkCommandImport = ref('github.com/airlockrun/agentsdk/cmd/air')
 const airlockURL = ref('')
+const sdkInfoLoading = ref(true)
+const sdkInfoError = ref('')
 
 // All 8 capability override slots — empty = live system Default.
 // Mirrors the AgentModelConfig proto field names so this object can be
@@ -121,10 +123,17 @@ onMounted(async () => {
   try {
     const { data } = await api.get('/api/v1/agent-sdk')
     const info = fromJson(GetAgentSDKInfoResponseSchema, data)
-    sdkVersion.value = info.version || ''
-    sdkCommandImport.value = info.commandImport || sdkCommandImport.value
+    if (!info.version || !info.commandImport || !info.airlockUrl) {
+      throw new Error('incomplete Agent SDK metadata')
+    }
+    sdkVersion.value = info.version
+    sdkCommandImport.value = info.commandImport
     airlockURL.value = info.airlockUrl
-  } catch { /* command block falls back to the unversioned module path */ }
+  } catch {
+    sdkInfoError.value = 'Could not load the local setup commands. Refresh the page to try again.'
+  } finally {
+    sdkInfoLoading.value = false
+  }
 })
 
 interface OverrideRow {
@@ -141,7 +150,7 @@ const coreRows = computed<OverrideRow[]>(() => [
     key: 'buildModel',
     label: 'Build Model',
     icon: 'pi pi-hammer',
-    help: 'Used by Sol to generate this agent\'s code. Leave empty for Default.',
+    help: 'Used by Sol to generate this app\'s code. Leave empty for Default.',
     options: groupModels(isLanguage),
     grouped: true,
   },
@@ -233,19 +242,49 @@ const canSubmit = computed(() => {
   return true
 })
 
-const localDir = computed(() => slug.value || 'my-agent')
+const localDir = computed(() => slug.value || 'my-app')
+const localSetupReady = computed(() => !!sdkVersion.value && !!sdkCommandImport.value && !!airlockURL.value)
 const versionedAirCommand = computed(() => {
-  const suffix = sdkVersion.value ? `@v${sdkVersion.value}` : ''
-  return `${sdkCommandImport.value}${suffix}`
+  return `${sdkCommandImport.value}@v${sdkVersion.value}`
 })
 const localCreateCommands = computed(() => [
+  '# CODING ASSISTANT: STOP. Do not run anything yet.',
+  '# First ask the user:',
+  '# - What should this app do?',
+  '# - What should it be called?',
+  '# Update the folder and app name below to match their answers.',
+  '',
   `go run ${versionedAirCommand.value} init ${localDir.value} --airlock ${airlockURL.value}`,
   `cd ${localDir.value}`,
-  `go tool air login ${airlockURL.value}`,
+  '',
+  '# Show the user the login URL and code.',
+  '# Do not continue until they approve the login in their browser.',
+  '# If they are already logged in, this command will confirm it and continue.',
+  `go tool air login ${airlockURL.value} --wait`,
+  '',
   'go tool air toolchain install',
+  '',
+  '# Review every command available in this version of the Air CLI.',
+  'go tool air help',
+  '',
+  '# CODING ASSISTANT: Create the app the user described now.',
+  '# Read AGENTS.md and .airlock/toolchain/skills/agentsdk/SKILL.md first.',
+  '# Implement the requested behavior. Do not deploy the generic scaffold.',
+  '# Run the complete local build and fix every failure before deploying.',
+  '',
+  'go tool air build',
   `go tool air deploy --create --name ${JSON.stringify(name.value || localDir.value)}`,
 ].join('\n'))
 const localDeployCommand = computed(() => 'go tool air deploy')
+
+async function copyToClipboard(text: string, label: string) {
+  try {
+    await navigator.clipboard.writeText(text)
+    toast.add({ severity: 'success', summary: `${label} copied`, life: 2000 })
+  } catch {
+    toast.add({ severity: 'warn', summary: `Copy failed - select and copy ${label.toLowerCase()} manually`, life: 4000 })
+  }
+}
 
 // Build+Exec ride on the CreateAgent proto; the other six have to be pushed
 // via PUT /agents/{id}/models right after create because the create proto
@@ -261,7 +300,7 @@ const hasAdvancedOverrides = computed(() =>
 
 function onBuildDone(agentId: string) {
   stopPolling()
-  toast.add({ severity: 'success', summary: 'Agent built successfully', life: 3000 })
+  toast.add({ severity: 'success', summary: 'App built successfully', life: 3000 })
   router.push(`/agents/${agentId}`)
 }
 
@@ -372,7 +411,7 @@ async function onSubmit() {
         // pair that did go through. Tell the user the rest didn't stick.
         toast.add({
           severity: 'warn',
-          summary: 'Agent created - advanced model overrides not saved',
+          summary: 'App created - advanced model overrides not saved',
           detail: err.response?.data?.error || String(err),
           life: 6000,
         })
@@ -400,7 +439,7 @@ async function onSubmit() {
     startPolling(agent.id)
   } catch (err: any) {
     loading.value = false
-    toast.add({ severity: 'error', summary: err.response?.data?.error || 'Failed to create agent', life: 5000 })
+    toast.add({ severity: 'error', summary: err.response?.data?.error || 'Failed to create app', life: 5000 })
   }
 }
 
@@ -415,42 +454,62 @@ onUnmounted(() => {
   <div class="create-page">
     <div class="create-header">
       <div>
-        <h1>Create Agent</h1>
-        <p>Start from instructions, import an existing Git repo, or initialize source locally and deploy from your machine.</p>
+        <h1>Create App</h1>
+        <p>Build from local source, generate from instructions, or import an existing Git repository.</p>
       </div>
     </div>
 
     <div class="mode-grid">
+      <button type="button" class="mode-card" :class="{ active: mode === 'local' }" @click="mode = 'local'">
+        <i class="pi pi-desktop" />
+        <strong>Deploy From Local Source</strong>
+        <span>Use OpenCode or another coding assistant to build locally and deploy with the Airlock CLI.</span>
+      </button>
       <button type="button" class="mode-card" :class="{ active: mode === 'generate' }" @click="mode = 'generate'">
-        <i class="pi pi-wand" />
+        <i class="pi pi-sparkles" />
         <strong>Generate From Instructions</strong>
-        <span>Describe what you need. Airlock scaffolds the source and builds the first version.</span>
+        <span>Describe what you need. Airlock generates the source and builds the first version.</span>
       </button>
       <button type="button" class="mode-card" :class="{ active: mode === 'git' }" @click="mode = 'git'">
         <i class="pi pi-github" />
         <strong>Import From Git</strong>
         <span>Clone an existing repo, build it as-is, and optionally keep it connected for future sync.</span>
       </button>
-      <button type="button" class="mode-card" :class="{ active: mode === 'local' }" @click="mode = 'local'">
-        <i class="pi pi-desktop" />
-        <strong>Deploy From Local</strong>
-        <span>Initialize an agent repo on your machine and deploy it with the Airlock CLI.</span>
-      </button>
     </div>
 
     <Message v-if="mode === 'local'" severity="info" :closable="false">
-      This option does not create an agent yet. The first deploy command creates the agent and writes a stable local binding.
+      <strong>Using a coding assistant?</strong>
+      Copy the entire setup below into OpenCode, Claude Code, Codex, Cursor, or another coding assistant.
+      It will ask what you want to build, help choose a name, and guide you through setup and deployment.
     </Message>
 
-    <section v-if="mode === 'local'" class="local-panel">
+    <Message v-if="mode === 'local' && sdkInfoError" severity="error" :closable="false">
+      {{ sdkInfoError }}
+    </Message>
+
+    <section v-if="mode === 'local' && sdkInfoLoading" class="local-panel">
+      <Skeleton height="18rem" border-radius="1rem" />
+    </section>
+
+    <section v-else-if="mode === 'local' && localSetupReady" class="local-panel">
       <div class="local-copy">
-        <h2>Deploy from local source</h2>
-        <p>Run these commands from the directory where you keep source code.</p>
+        <div class="local-copy-header">
+          <div>
+            <h2>Create with a coding assistant or terminal</h2>
+            <p>Paste the whole block into your coding assistant, or run it section by section in a terminal.</p>
+          </div>
+          <Button label="Copy setup" icon="pi pi-copy" outlined size="small" @click="copyToClipboard(localCreateCommands, 'Setup instructions')" />
+        </div>
         <pre><code>{{ localCreateCommands }}</code></pre>
       </div>
       <div class="local-copy">
-        <h2>Future deploys</h2>
-        <p>After `.airlock/local/agent.toml` contains the Airlock URL and agent ID, deploy with no arguments.</p>
+        <div class="local-copy-header">
+          <div>
+            <h2>Future deploys</h2>
+            <p>After `.airlock/local/agent.toml` contains the Airlock URL and app ID, deploy with no arguments.</p>
+          </div>
+          <Button label="Copy command" icon="pi pi-copy" outlined size="small" @click="copyToClipboard(localDeployCommand, 'Deploy command')" />
+        </div>
         <pre><code>{{ localDeployCommand }}</code></pre>
       </div>
     </section>
@@ -458,7 +517,7 @@ onUnmounted(() => {
     <form v-else @submit.prevent="onSubmit" class="create-form">
       <FloatLabel variant="on">
         <InputText id="agent-name" v-model="name" style="width: 100%" :disabled="building" />
-        <label for="agent-name">Agent Name</label>
+        <label for="agent-name">App Name</label>
       </FloatLabel>
 
       <div>
@@ -482,7 +541,7 @@ onUnmounted(() => {
           <label style="display: block; margin-bottom: 0.35rem; font-size: 0.85rem">Repo URL</label>
           <InputText
             v-model="gitRemoteUrl"
-            placeholder="https://github.com/you/your-agent.git"
+            placeholder="https://github.com/you/your-app.git"
             :disabled="building"
             autocomplete="off"
             style="width: 100%"
@@ -613,7 +672,7 @@ onUnmounted(() => {
           v-model="instructions"
           :auto-resize="true"
           rows="3"
-          :placeholder="mode === 'git' ? 'Example: Add a dashboard page for weekly presentation analytics.' : 'Describe what this agent should do and what tools it needs, e.g. &quot;Connect to Gmail and summarize my daily emails&quot;. Leave empty for a default agent.'"
+          :placeholder="mode === 'git' ? 'Example: Add a dashboard page for weekly presentation analytics.' : 'Describe what this app should do and what tools it needs, e.g. &quot;Connect to Gmail and summarize my daily emails&quot;. Leave empty for a default app.'"
           :disabled="building"
           style="width: 100%"
         />
@@ -625,7 +684,7 @@ onUnmounted(() => {
       <Button
         v-if="!building"
         type="submit"
-        :label="mode === 'git' ? 'Import Agent' : 'Generate Agent'"
+        :label="mode === 'git' ? 'Import App' : 'Generate App'"
         icon="pi pi-plus"
         :loading="loading"
         :disabled="!canSubmit"
@@ -733,8 +792,20 @@ onUnmounted(() => {
 }
 
 .local-copy p {
-  margin: 0 0 0.75rem;
+  margin: 0;
   color: var(--p-text-muted-color);
+}
+
+.local-copy-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.75rem;
+}
+
+.local-copy-header .p-button {
+  flex: 0 0 auto;
 }
 
 pre {
@@ -749,6 +820,15 @@ pre {
 @media (max-width: 760px) {
   .mode-grid {
     grid-template-columns: 1fr;
+  }
+
+  .local-copy-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .local-copy-header .p-button {
+    align-self: flex-start;
   }
 }
 </style>

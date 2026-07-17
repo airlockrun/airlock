@@ -96,7 +96,7 @@ async function toggle(provider: Provider, model: ModelInfo, on: boolean) {
   if (agentCount > 0) {
     confirm.require({
       header: 'Disable model',
-      message: `${agentCount} agent${agentCount === 1 ? '' : 's'} use this model as a configured override. Disabling it will reset ${agentCount === 1 ? 'it' : 'them'} to the workspace default. Continue?`,
+      message: `${agentCount} app${agentCount === 1 ? '' : 's'} use this model as a configured override. Disabling it will reset ${agentCount === 1 ? 'it' : 'them'} to the workspace default. Continue?`,
       icon: 'pi pi-exclamation-triangle',
       acceptLabel: 'Disable',
       rejectLabel: 'Cancel',
@@ -116,7 +116,7 @@ async function toggle(provider: Provider, model: ModelInfo, on: boolean) {
       <Tag :value="`${allowedCount} allowed`" severity="success" />
     </div>
     <p style="margin: 0 0 1.5rem; color: var(--p-text-muted-color); max-width: 48rem">
-      Models are deny-by-default: an agent can only be assigned a model you allow here.
+      Models are deny-by-default: an app can only be assigned a model you allow here.
       Your configured <b>default</b> models are always usable regardless of this list.
       Allowing a model makes it available to everyone in this workspace.
     </p>

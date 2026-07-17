@@ -54,7 +54,7 @@ function claim(a: AgentInfo) {
 
 function confirmDelete(a: AgentInfo) {
   confirm.require({
-    header: 'Delete agent',
+    header: 'Delete app',
     message: `Permanently delete "${a.name}" (owned by ${a.ownerName || 'unknown'})? This removes its container, image, data, and history. This cannot be undone.`,
     icon: 'pi pi-exclamation-triangle',
     acceptProps: { severity: 'danger', label: 'Delete' },
@@ -67,13 +67,13 @@ function confirmDelete(a: AgentInfo) {
 <template>
   <div>
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem">
-      <h1 style="margin: 0; font-size: 1.5rem">Manage agents</h1>
+      <h1 style="margin: 0; font-size: 1.5rem">Manage apps</h1>
       <Tag :value="`${store.agents.length} total`" severity="secondary" />
     </div>
     <p style="margin: 0 0 1.5rem; color: var(--p-text-muted-color); max-width: 48rem">
-      Every agent in this workspace, including ones you're not a member of. As an
-      admin you can stop, start, or delete any agent here for governance. Reading
-      an agent's conversations or configuration still requires access - use
+      Every app in this workspace, including ones you're not a member of. As an
+      admin you can stop, start, or delete any app here for governance. Reading
+      an app's conversations or configuration still requires access - use
       <b>Claim</b> to add yourself as an admin first.
     </p>
 
@@ -89,11 +89,11 @@ function confirmDelete(a: AgentInfo) {
     </div>
 
     <Message v-else-if="store.agents.length === 0" severity="info" :closable="false">
-      No agents in this workspace yet.
+      No apps in this workspace yet.
     </Message>
 
     <DataTable v-else :value="rows" stripedRows size="small">
-      <Column header="Agent">
+      <Column header="App">
         <template #body="{ data }">
           <div style="display: flex; align-items: center; gap: 0.5rem">
             <span v-if="data.emoji" style="font-size: 1.1rem; line-height: 1">{{ data.emoji }}</span>
@@ -153,7 +153,7 @@ function confirmDelete(a: AgentInfo) {
             <Button
               v-if="canDelete"
               icon="pi pi-trash" size="small" severity="danger" text
-              aria-label="Delete agent" @click="confirmDelete(data)"
+              aria-label="Delete app" @click="confirmDelete(data)"
             />
           </div>
         </template>

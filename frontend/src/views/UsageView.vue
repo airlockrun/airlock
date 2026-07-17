@@ -31,7 +31,7 @@ const byUser = computed(() => usage.report?.byUser ?? [])
   <div>
     <h1 style="margin: 0; font-size: 1.5rem">Usage</h1>
     <p style="margin: 0 0 1.5rem; color: var(--p-text-muted-color); max-width: 48rem">
-      LLM token spend across every agent, from the durable ledger - usage from agents that have since
+      LLM token spend across every app, from the durable ledger - usage from apps that have since
       been deleted is still counted (and marked).
     </p>
 
@@ -71,13 +71,13 @@ const byUser = computed(() => usage.report?.byUser ?? [])
 
     <!-- By agent -->
     <Card style="margin-bottom: 1.5rem">
-      <template #title>By agent</template>
+      <template #title>By app</template>
       <template #content>
         <DataTable :value="byAgent" :loading="usage.loading" stripedRows size="small">
           <template #empty>
             <div style="text-align: center; padding: 1.5rem; color: var(--p-text-muted-color)">No usage in this window.</div>
           </template>
-          <Column header="Agent">
+          <Column header="App">
             <template #body="{ data }">
               <div style="display: flex; align-items: center; gap: 0.4rem">
                 <span style="font-weight: 500">{{ data.agentName }}</span>

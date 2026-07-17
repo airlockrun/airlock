@@ -91,7 +91,7 @@ function disconnect() {
   confirm.require({
     header: 'Disconnect remote?',
     message:
-      'The agent returns to internal-only mode. Future codegen commits stay local; ' +
+      'The app returns to internal-only mode. Future codegen commits stay local; ' +
       'webhook pushes from your remote are ignored. The local repo + image are untouched.',
     icon: 'pi pi-exclamation-triangle',
     acceptLabel: 'Disconnect',
@@ -148,12 +148,12 @@ onMounted(async () => {
     <!-- Internal mode -->
     <div v-if="!isConnected" style="display: flex; flex-direction: column; gap: 1rem">
       <Message severity="info" :closable="false">
-        This agent has no git remote. Connect one for a Git-based workflow, or use the Air CLI to work with Airlock's source directly.
+        This app has no git remote. Connect one for a Git-based workflow, or use the Air CLI to work with Airlock's source directly.
       </Message>
       <div v-if="agentSlug && airlockURL && sdkVersion && sdkCommandImport" style="display: flex; flex-direction: column; gap: 0.5rem">
         <strong>Air CLI</strong>
         <p style="margin: 0; color: var(--p-text-muted-color)">
-          Run the versioned CLI to log in and clone the agent. Inside the cloned repository, use <code>go tool air</code> to deploy changes.
+          Run the versioned CLI to log in and clone the app. Inside the cloned repository, use <code>go tool air</code> to deploy changes.
         </p>
         <div style="display: flex; align-items: center; gap: 0.5rem">
           <code class="code-chip">{{ airLoginCmd }}</code>
@@ -251,10 +251,10 @@ onMounted(async () => {
     <Dialog v-model:visible="dialogVisible" header="Connect a git remote" modal style="width: 32rem">
       <div style="display: flex; flex-direction: column; gap: 1.25rem; padding-top: 0.5rem">
         <Message severity="info" :closable="false" style="font-size: 0.8rem">
-          Create an empty repo on your git provider, paste its HTTPS clone URL below, and pick a credential. Airlock will push the agent's current state to it and use that repo as the source of truth.
+          Create an empty repo on your git provider, paste its HTTPS clone URL below, and pick a credential. Airlock will push the app's current state to it and use that repo as the source of truth.
         </Message>
         <FloatLabel variant="on">
-          <InputText id="remote-url" v-model="remoteUrl" style="width: 100%" placeholder="https://github.com/your-org/your-agent.git" autocomplete="off" />
+          <InputText id="remote-url" v-model="remoteUrl" style="width: 100%" placeholder="https://github.com/your-org/your-app.git" autocomplete="off" />
           <label for="remote-url">Remote URL</label>
         </FloatLabel>
         <FloatLabel variant="on">
@@ -284,7 +284,7 @@ onMounted(async () => {
           <label for="git-mode">Source mode</label>
         </FloatLabel>
         <Message v-if="gitMode === 'read_only'" severity="warn" :closable="false" style="font-size: 0.8rem">
-          Git is authoritative. Connecting replaces the agent's source with this branch and disables Airlock codegen, local deploys, and source rollbacks.
+          Git is authoritative. Connecting replaces the app's source with this branch and disables Airlock codegen, local deploys, and source rollbacks.
         </Message>
         <div style="display: flex; justify-content: flex-end; gap: 0.5rem">
           <Button label="Cancel" severity="secondary" text @click="dialogVisible = false" />

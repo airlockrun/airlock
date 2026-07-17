@@ -102,7 +102,7 @@ const defaultRows = computed<DefaultRow[]>(() => [
     key: 'defaultBuildModel',
     label: 'Build Model',
     icon: 'pi pi-hammer',
-    help: 'Used by Sol for agent code generation and upgrades.',
+    help: 'Used by Sol for app code generation and upgrades.',
     options: groupModels(isLanguage),
     placeholder: 'Select default build model',
   },
@@ -110,7 +110,7 @@ const defaultRows = computed<DefaultRow[]>(() => [
     key: 'defaultExecModel',
     label: 'Execution Model (Text)',
     icon: 'pi pi-align-left',
-    help: 'Runtime default when agents make language-model calls.',
+    help: 'Runtime default when apps make language-model calls.',
     options: groupModels(isLanguage),
     placeholder: 'Select default execution model',
   },
@@ -126,7 +126,7 @@ const defaultRows = computed<DefaultRow[]>(() => [
     key: 'defaultSttModel',
     label: 'STT',
     icon: 'pi pi-microphone',
-    help: 'Telegram voice notes are auto-transcribed with this model before being sent to agents. Leave empty to disable.',
+    help: 'Telegram voice notes are auto-transcribed with this model before being sent to apps. Leave empty to disable.',
     options: groupModels(isTranscription),
     placeholder: 'Select speech-to-text model',
   },
@@ -227,7 +227,7 @@ async function saveDefaults() {
     <Card v-if="auth.can('tenant.settings.update')" style="margin-bottom: 1.5rem">
       <template #title>Default Models</template>
       <template #subtitle>
-        Per-capability defaults. Used wherever the system needs a model for a capability and no agent-specific override is set.
+        Per-capability defaults. Used wherever the system needs a model for a capability and no app-specific override is set.
       </template>
       <template #content>
         <div style="display: flex; flex-direction: column; gap: 1.25rem">

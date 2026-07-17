@@ -91,8 +91,8 @@ async function save() {
 async function clearValue(ev: EnvVar) {
   confirm.require({
     message: ev.isSecret
-      ? `Clear the configured value for ${ev.slug}? The agent will fail to read this until you set a new value.`
-      : `Clear the configured value for ${ev.slug}? The agent will fall back to the default ("${ev.defaultValue ?? ''}").`,
+      ? `Clear the configured value for ${ev.slug}? The app will fail to read this until you set a new value.`
+      : `Clear the configured value for ${ev.slug}? The app will fall back to the default ("${ev.defaultValue ?? ''}").`,
     header: 'Clear value',
     icon: 'pi pi-exclamation-triangle',
     rejectProps: { label: 'Cancel', severity: 'secondary', outlined: true },

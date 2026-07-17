@@ -67,16 +67,16 @@ onMounted(loadSettings)
   <div>
     <h3 style="margin-top: 0">Access</h3>
     <p style="color: var(--p-text-muted-color); margin-top: 0">
-      How this agent can be reached from outside. Who can use it is set under <strong>Members</strong>.
+      How this app can be reached from outside. Who can use it is set under <strong>Members</strong>.
     </p>
 
     <div style="display: flex; flex-direction: column; gap: 1.25rem">
       <div>
         <label style="display: flex; align-items: center; gap: 0.75rem">
           <ToggleSwitch v-model="settings.mcpEnabled" :disabled="loading" />
-          <span>Let other apps connect to this agent (MCP)</span>
+          <span>Let other apps connect to this app (MCP)</span>
         </label>
-        <small class="hint">For tools like Claude Desktop and other agents.</small>
+        <small class="hint">For tools like Claude Desktop and other apps.</small>
         <div v-if="settings.mcpEnabled" class="url-line">
           <div class="url-label">Connection URL</div>
           <span class="copy-uri" role="button" tabindex="0" v-tooltip.bottom="'Click to copy'"
@@ -108,7 +108,7 @@ onMounted(loadSettings)
           <ToggleSwitch v-model="settings.allowPublicRoutes" :disabled="loading" />
           <span>Allow public web pages without signing in</span>
         </label>
-        <small class="hint">Lets anyone open this agent's pages marked public.</small>
+        <small class="hint">Lets anyone open this app's pages marked public.</small>
       </div>
 
       <div>

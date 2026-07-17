@@ -145,13 +145,13 @@ function cancel() {
       <template v-else-if="status === 'success'">
         <i class="pi pi-check-circle" style="font-size: 2rem; color: var(--p-green-500); margin-bottom: 1rem" />
         <p>Account linked successfully! You can close this page and return to {{ platformLabel }}.</p>
-        <Button label="Go to Agents" style="margin-top: 1rem" @click="router.push('/agents')" />
+        <Button label="Go to Apps" style="margin-top: 1rem" @click="router.push('/agents')" />
       </template>
 
       <template v-else>
         <i class="pi pi-times-circle" style="font-size: 2rem; color: var(--p-red-500); margin-bottom: 1rem" />
         <p>{{ errorMsg }}</p>
-        <Button label="Go to Agents" severity="secondary" style="margin-top: 1rem" @click="router.push('/agents')" />
+        <Button label="Go to Apps" severity="secondary" style="margin-top: 1rem" @click="router.push('/agents')" />
       </template>
     </div>
   </div>
