@@ -57,10 +57,11 @@ var gitignoreManagedLines = append([]string{
 //     series at or above data.AgentSDKVersion is preserved; older or
 //     incompatible versions are raised to Airlock's pin. Development pins the
 //     exact content-addressed v<const>-dev<hash> served by its module proxy.
-//     The templ and air module tools are required. agentsdk is the only owned
-//     lib the agent requires directly; goai/sol are indirect and resolved by
-//     `go mod tidy`. No `go mod edit` shell-out is needed, so this works in the
-//     Airlock image without a Go toolchain.
+//     The Go directive, templ requirement, and templ/air module tools match the
+//     scaffold. agentsdk is the only owned lib the agent requires directly;
+//     goai/sol are indirect and resolved by `go mod tidy`. No `go mod edit`
+//     shell-out is needed, so this works in the Airlock image without a Go
+//     toolchain.
 //
 // The working tree is mutated in place. The caller is responsible for
 // committing the changes (read HousekeepingResult.Changed and run a chore

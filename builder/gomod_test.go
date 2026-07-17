@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/airlockrun/agentsdk/scaffold"
 )
 
 // fixed go.mod body used across the cases below. The replace block verifies
@@ -178,7 +180,7 @@ require github.com/airlockrun/agentsdk v0.1.0
 		t.Fatalf("bump: %v", err)
 	}
 	got, _ := os.ReadFile(filepath.Join(dir, "go.mod"))
-	if !strings.Contains(string(got), "require github.com/airlockrun/agentsdk v0.2.0") {
+	if !strings.Contains(string(got), "github.com/airlockrun/agentsdk v0.2.0") {
 		t.Fatalf("standalone require not bumped:\n%s", got)
 	}
 }
@@ -214,6 +216,27 @@ func TestReconcileAgentGoMod_AddsBuildTools(t *testing.T) {
 	for _, tool := range agentModuleTools {
 		if !strings.Contains(string(got), tool) {
 			t.Errorf("go.mod missing tool %s:\n%s", tool, got)
+		}
+	}
+}
+
+func TestReconcileAgentGoMod_PinsScaffoldVersions(t *testing.T) {
+	body := strings.Replace(sampleGoMod, "go 1.26.0", "go 1.25.0", 1)
+	body = strings.Replace(body, "github.com/a-h/templ "+scaffold.TemplVersion, "github.com/a-h/templ "+"v0."+"2.0", 1)
+	dir := writeGoMod(t, body)
+	if err := reconcileAgentGoMod(context.Background(), dir, "v0.1.0"); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(dir, "go.mod"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"go " + scaffold.GoVersion,
+		"github.com/a-h/templ " + scaffold.TemplVersion,
+	} {
+		if !strings.Contains(string(got), want) {
+			t.Errorf("go.mod missing %q:\n%s", want, got)
 		}
 	}
 }
