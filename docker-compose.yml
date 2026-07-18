@@ -339,8 +339,8 @@ services:
       JWT_SECRET: "${JWT_SECRET:?JWT_SECRET is required — generate one with openssl rand -hex 32}"
       ENCRYPTION_KEY: "${ENCRYPTION_KEY:?ENCRYPTION_KEY is required — generate one with openssl rand -hex 32}"
       ENCRYPTION_KEY_OLD: ${ENCRYPTION_KEY_OLD:-}
-      # Maintenance-only stop-all migration. Normal startup never rewrites
-      # persisted secret formats or key IDs.
+      # Maintenance-only stop-all key rotation. Normal startup never rewrites
+      # persisted secret key IDs.
       ENCRYPTION_KEY_REWRAP: "${ENCRYPTION_KEY_REWRAP:-false}"
       REVERSE_PROXY_AUTH_SECRET: "${REVERSE_PROXY_AUTH_SECRET:?REVERSE_PROXY_AUTH_SECRET is required — generate one with openssl rand -hex 32}"
 

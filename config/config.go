@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"encoding/hex"
 	"fmt"
 	"net"
@@ -100,7 +101,7 @@ type Config struct {
 	// Generate with: openssl rand -hex 32
 	EncryptionKey       string // hex-encoded 32-byte key (required)
 	EncryptionKeyOld    string // hex-encoded 32-byte key (optional, for rotation)
-	EncryptionKeyRewrap bool   // migrate formats and re-encrypt persisted values during an explicit stop-all operation
+	EncryptionKeyRewrap bool   // re-encrypt persisted values during an explicit stop-all key rotation
 
 	// --- Containers ---
 	ContainerRuntime string // "docker"
@@ -332,6 +333,12 @@ func validateDeployment(c *Config) {
 		if err != nil || len(oldKey) != 32 {
 			panic("config: ENCRYPTION_KEY_OLD must be 64 hexadecimal characters")
 		}
+		if bytes.Equal(key, oldKey) {
+			panic("config: ENCRYPTION_KEY_OLD must differ from ENCRYPTION_KEY")
+		}
+	}
+	if c.EncryptionKeyRewrap && c.EncryptionKeyOld == "" {
+		panic("config: ENCRYPTION_KEY_OLD is required when ENCRYPTION_KEY_REWRAP=true")
 	}
 	if len(c.ReverseProxyAuthSecret) < 32 {
 		panic("config: REVERSE_PROXY_AUTH_SECRET must be at least 32 characters")

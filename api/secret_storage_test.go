@@ -4,25 +4,37 @@ import (
 	"context"
 	"testing"
 
+	"github.com/airlockrun/airlock/crypto"
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/airlockrun/airlock/secrets"
 )
 
-func TestRewrapDatabaseEncryptsGitWebhookSecret(t *testing.T) {
+func TestRewrapDatabaseRotatesSecrets(t *testing.T) {
 	skipIfNoDB(t)
 	ctx := context.Background()
 	agentID, _ := testAgentAndUser(t)
 	q := dbq.New(testDB.Pool())
+	oldKey := make([]byte, 32)
+	newKey := make([]byte, 32)
+	for i := range oldKey {
+		oldKey[i], newKey[i] = 1, 2
+	}
+	ref := "agent/" + agentID.String() + "/git_webhook_secret"
+	oldStore := secrets.NewLocal(crypto.New(oldKey))
+	stored, err := oldStore.Put(ctx, ref, "webhook-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := q.ConnectAgentGit(ctx, dbq.ConnectAgentGitParams{
 		ID:               toPgUUID(agentID),
 		GitRemoteUrl:     "https://example.test/repo.git",
 		GitDefaultBranch: "main",
-		GitWebhookSecret: "plain-secret",
+		GitWebhookSecret: stored,
 		GitMode:          "read_only",
 	}); err != nil {
 		t.Fatal(err)
 	}
-	store := testEncryptor()
+	store := secrets.NewLocal(crypto.New(newKey, oldKey))
 	type result struct {
 		changed int64
 		err     error
@@ -52,12 +64,15 @@ func TestRewrapDatabaseEncryptsGitWebhookSecret(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !secrets.IsEnvelope(agent.GitWebhookSecret) {
-		t.Fatalf("git webhook secret is not enveloped: %q", agent.GitWebhookSecret)
+	if agent.GitWebhookSecret == stored {
+		t.Fatal("git webhook secret was not re-encrypted")
 	}
-	plain, err := store.Get(ctx, "agent/"+agentID.String()+"/git_webhook_secret", agent.GitWebhookSecret)
-	if err != nil || plain != "plain-secret" {
+	plain, err := store.Get(ctx, ref, agent.GitWebhookSecret)
+	if err != nil || plain != "webhook-secret" {
 		t.Fatalf("decrypted = %q, %v", plain, err)
+	}
+	if _, err := oldStore.Get(ctx, ref, agent.GitWebhookSecret); err == nil {
+		t.Fatal("rotated secret remains decryptable by the old key")
 	}
 	changed, err = secrets.RewrapDatabase(ctx, testDB.Pool(), store)
 	if err != nil || changed != 0 {
@@ -65,16 +80,26 @@ func TestRewrapDatabaseEncryptsGitWebhookSecret(t *testing.T) {
 	}
 }
 
-func TestRewrapDatabaseRollsBackOnGenericPlaintext(t *testing.T) {
+func TestRewrapDatabaseRollsBackOnInvalidEnvelope(t *testing.T) {
 	skipIfNoDB(t)
 	ctx := context.Background()
 	agentID, _ := testAgentAndUser(t)
 	q := dbq.New(testDB.Pool())
+	oldKey := make([]byte, 32)
+	newKey := make([]byte, 32)
+	for i := range oldKey {
+		oldKey[i], newKey[i] = 1, 2
+	}
+	ref := "agent/" + agentID.String() + "/git_webhook_secret"
+	stored, err := secrets.NewLocal(crypto.New(oldKey)).Put(ctx, ref, "webhook-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := q.ConnectAgentGit(ctx, dbq.ConnectAgentGitParams{
 		ID:               toPgUUID(agentID),
 		GitRemoteUrl:     "https://example.test/repo.git",
 		GitDefaultBranch: "main",
-		GitWebhookSecret: "plain-git-secret",
+		GitWebhookSecret: stored,
 		GitMode:          "read_only",
 	}); err != nil {
 		t.Fatal(err)
@@ -83,14 +108,14 @@ func TestRewrapDatabaseRollsBackOnGenericPlaintext(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := secrets.RewrapDatabase(ctx, testDB.Pool(), testEncryptor()); err == nil {
-		t.Fatal("RewrapDatabase accepted generic plaintext")
+	if _, err := secrets.RewrapDatabase(ctx, testDB.Pool(), secrets.NewLocal(crypto.New(newKey, oldKey))); err == nil {
+		t.Fatal("RewrapDatabase accepted an invalid envelope")
 	}
 	agent, err := q.GetAgentByID(ctx, toPgUUID(agentID))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if agent.GitWebhookSecret != "plain-git-secret" {
+	if agent.GitWebhookSecret != stored {
 		t.Fatalf("git webhook secret changed after rollback: %q", agent.GitWebhookSecret)
 	}
 	if agent.DbPassword != "generic-plaintext" {

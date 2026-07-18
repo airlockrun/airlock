@@ -74,14 +74,13 @@ func (l *LocalStore) Put(_ context.Context, ref, plaintext string) (string, erro
 }
 
 func (l *LocalStore) Get(_ context.Context, ref, stored string) (string, error) {
-	if strings.HasPrefix(stored, localEnvelopePrefix) {
-		if ref == "" {
-			return "", errors.New("secrets: ref is required")
-		}
-		return l.enc.DecryptWithAAD(strings.TrimPrefix(stored, localEnvelopePrefix), ref)
+	if !strings.HasPrefix(stored, localEnvelopePrefix) {
+		return "", errors.New("secrets: invalid stored secret envelope")
 	}
-	// Unwrapped compatibility ciphertext carries no authenticated ref.
-	return l.enc.Decrypt(stored)
+	if ref == "" {
+		return "", errors.New("secrets: ref is required")
+	}
+	return l.enc.DecryptWithAAD(strings.TrimPrefix(stored, localEnvelopePrefix), ref)
 }
 
 func (l *LocalStore) Rewrap(ctx context.Context, ref, stored string) (string, bool, error) {

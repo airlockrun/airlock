@@ -12,12 +12,11 @@ import (
 
 const rewrapAdvisoryLockSeed int64 = 0x736563726574
 
-// RewrapDatabase upgrades persisted Store values to the ref-bound envelope
-// under the active key. It is an explicit stop-all migration and must not be
-// called during normal startup.
+// RewrapDatabase re-encrypts persisted Store values under the active key. It is
+// an explicit stop-all key rotation and must not be called during normal startup.
 //
 // The transaction makes the scan atomic, and its advisory lock serializes
-// accidental concurrent migration replicas before either can serve.
+// accidental concurrent rotation replicas before either can serve.
 func RewrapDatabase(ctx context.Context, pool *pgxpool.Pool, store Store) (int64, error) {
 	if pool == nil || store == nil {
 		panic("secrets: RewrapDatabase requires a pool and store")
@@ -27,7 +26,7 @@ func RewrapDatabase(ctx context.Context, pool *pgxpool.Pool, store Store) (int64
 		return 0, fmt.Errorf("begin secret rewrap: %w", err)
 	}
 	defer tx.Rollback(context.Background())
-	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('airlock-secret-envelope-v1', $1))`, rewrapAdvisoryLockSeed); err != nil {
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('airlock-secret-rewrap', $1))`, rewrapAdvisoryLockSeed); err != nil {
 		return 0, fmt.Errorf("acquire secret rewrap lock: %w", err)
 	}
 
@@ -38,16 +37,7 @@ func RewrapDatabase(ctx context.Context, pool *pgxpool.Pool, store Store) (int64
 	}
 	var changed int64
 	for _, row := range rows {
-		var next string
-		var needsUpdate bool
-		if row.Kind == "agent" && row.Field == "git_webhook_secret" && !IsEnvelope(row.Stored) {
-			// This field's unenveloped schema is plaintext. No other secret field
-			// receives plaintext compatibility behavior.
-			next, err = store.Put(ctx, row.Ref, row.Stored)
-			needsUpdate = err == nil
-		} else {
-			next, needsUpdate, err = store.Rewrap(ctx, row.Ref, row.Stored)
-		}
+		next, needsUpdate, err := store.Rewrap(ctx, row.Ref, row.Stored)
 		if err != nil {
 			return 0, fmt.Errorf("rewrap %s %s %s: %w", row.Kind, row.RowKey, row.Field, err)
 		}
@@ -64,11 +54,6 @@ func RewrapDatabase(ctx context.Context, pool *pgxpool.Pool, store Store) (int64
 		return 0, fmt.Errorf("commit secret rewrap: %w", err)
 	}
 	return changed, nil
-}
-
-// IsEnvelope reports whether stored uses the ref-bound Store format.
-func IsEnvelope(stored string) bool {
-	return len(stored) >= len(localEnvelopePrefix) && stored[:len(localEnvelopePrefix)] == localEnvelopePrefix
 }
 
 func persistRewrapped(ctx context.Context, q *dbq.Queries, row dbq.ListStoredSecretsRow, next string) (int64, error) {

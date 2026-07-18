@@ -89,8 +89,8 @@ git checkout vX.Y.Z          # check the release notes for breaking changes firs
 docker compose pull && docker compose up -d
 ```
 
-Schema migrations run automatically on airlock startup. Secret format migration
-and encryption-key rotation are separate stop-all procedures documented in
+Schema migrations run automatically on airlock startup. Encryption-key rotation
+is a separate stop-all procedure documented in
 [`docs/secret-storage.md`](docs/secret-storage.md).
 Always `pg_dump` before a major version bump if you care about your data.
 

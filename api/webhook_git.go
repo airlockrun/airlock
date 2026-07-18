@@ -76,7 +76,7 @@ func (h *GitWebhookHandler) Handle(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusNotFound, "agent has no git remote configured")
 		return
 	}
-	secret, err := gitWebhookSecret(r.Context(), h.secrets, "agent/"+agentID.String()+"/git_webhook_secret", agent.GitWebhookSecret)
+	secret, err := h.secrets.Get(r.Context(), "agent/"+agentID.String()+"/git_webhook_secret", agent.GitWebhookSecret)
 	if err != nil {
 		h.logger.Error("decrypt git webhook secret", zap.String("agent", agentID.String()), zap.Error(err))
 		// airlockvet:allow-writejson reason: external git provider expects JSON error body
@@ -149,16 +149,6 @@ func (h *GitWebhookHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	go h.runWebhookBuild(agent, agentID)
 
 	w.WriteHeader(http.StatusAccepted)
-}
-
-// gitWebhookSecret reads this column's schema-defined unenveloped plaintext
-// value during the coordinated envelope rollout. Generic secret reads remain
-// strict and never treat decryption failures as plaintext.
-func gitWebhookSecret(ctx context.Context, store secrets.Store, ref, stored string) (string, error) {
-	if !secrets.IsEnvelope(stored) {
-		return stored, nil
-	}
-	return store.Get(ctx, ref, stored)
 }
 
 // runWebhookBuild pulls + kicks off the upgrade in the background.

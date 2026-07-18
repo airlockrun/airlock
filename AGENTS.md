@@ -242,12 +242,11 @@ Replay buffer (100 messages) per topic for late subscribers.
   sign-in). WebAuthn needs HTTPS in production (localhost is exempt for dev); the
   RP ID is the PUBLIC_URL host, so changing that host invalidates enrolled passkeys.
 - AES-256-GCM encryption at rest for API keys, secrets, tokens. Versioned keys for rotation.
-- Persisted Store values use ref-bound versioned envelopes with stable key IDs.
-  Normal startup never rewrites stored values. `ENCRYPTION_KEY_REWRAP=true` is a
-  coordinated stop-all maintenance mode that migrates formats and keys in one
-  advisory-locked transaction before serving. Unenveloped plaintext compatibility
-  is restricted to `agents.git_webhook_secret`. Procedures are in
-  `docs/secret-storage.md`.
+- Persisted Store values require ref-bound `airlock-secret:v1` envelopes containing
+  `airlock-crypto:v2` ciphertext with stable key IDs. `ENCRYPTION_KEY_REWRAP=true`
+  is a coordinated stop-all key-rotation mode that re-encrypts every database
+  secret under the active key in one advisory-locked transaction before serving.
+  Procedures are in `docs/secret-storage.md`.
 - Webhook verification: none, HMAC, or token-based.
 - Agent containers get scoped DB credentials (per-agent schema) and bearer token.
 - Agent runtime containers are hardened by default in `container.buildAgentHostConfig` (CapDrop:ALL, no-new-privileges, PidsLimit, lower CPUShares, OomScoreAdj so agents OOM before infra). Compose enables managed per-agent Docker `Internal` networks; only instance-labeled Airlock/Postgres endpoints attach, and PostgreSQL advisory locks serialize lifecycle changes across replicas. This blocks direct public/private/host/metadata egress and sibling traffic; outbound HTTP is brokered through Airlock. External Postgres uses the fixed-destination `postgres-agent-relay`. Native Airlock explicitly uses shared development networking because a host process cannot attach to an internal Docker bridge. Airlock-brokered HTTP, connection, MCP, and outbound OAuth calls share one DNS-validating transport and use `AGENT_HTTP_PRIVATE_CIDRS` for non-public destinations. Optional `AGENT_MEMORY_LIMIT` and `AGENT_SANDBOX=gvisor` (runsc) — see `docs/agent-isolation.md`.

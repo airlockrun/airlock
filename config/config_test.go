@@ -454,10 +454,43 @@ func TestValidateDeploymentRejectsUnsafeProxyAuthentication(t *testing.T) {
 	}
 }
 
-func TestValidateDeploymentAllowsFormatRewrapWithCurrentKey(t *testing.T) {
+func TestValidateDeploymentRewrapRequiresOldKey(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("validateDeployment accepted key rotation without an old key")
+		}
+	}()
 	validateDeployment(&Config{
 		PublicURL:                "http://localhost:8080",
 		EncryptionKey:            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		ReverseProxyAuthSecret:   "test-reverse-proxy-auth-secret-32-bytes",
+		ReverseProxyTrustedPeers: defaultTrustedProxyPeers,
+		ReverseProxyLimit:        1,
+		EncryptionKeyRewrap:      true,
+	})
+}
+
+func TestValidateDeploymentRejectsDuplicateOldKey(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("validateDeployment accepted the active key as the old key")
+		}
+	}()
+	validateDeployment(&Config{
+		PublicURL:                "http://localhost:8080",
+		EncryptionKey:            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		EncryptionKeyOld:         "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		ReverseProxyAuthSecret:   "test-reverse-proxy-auth-secret-32-bytes",
+		ReverseProxyTrustedPeers: defaultTrustedProxyPeers,
+		ReverseProxyLimit:        1,
+	})
+}
+
+func TestValidateDeploymentAllowsKeyRotation(t *testing.T) {
+	validateDeployment(&Config{
+		PublicURL:                "http://localhost:8080",
+		EncryptionKey:            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		EncryptionKeyOld:         "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
 		ReverseProxyAuthSecret:   "test-reverse-proxy-auth-secret-32-bytes",
 		ReverseProxyTrustedPeers: defaultTrustedProxyPeers,
 		ReverseProxyLimit:        1,
