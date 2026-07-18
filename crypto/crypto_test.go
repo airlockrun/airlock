@@ -1,9 +1,6 @@
 package crypto
 
-import (
-	"encoding/base64"
-	"testing"
-)
+import "testing"
 
 func testKey(fill byte) []byte {
 	key := make([]byte, 32)
@@ -39,32 +36,18 @@ func TestAADBinding(t *testing.T) {
 	}
 
 	// Empty aad must also fail against an aad-bound ciphertext.
-	if _, err := enc.Decrypt(sealed); err == nil {
-		t.Error("Decrypt (empty aad) of an aad-bound ciphertext should fail")
+	if _, err := enc.DecryptWithAAD(sealed, ""); err == nil {
+		t.Error("DecryptWithAAD with empty aad of an aad-bound ciphertext should fail")
 	}
 }
 
-func TestEmptyAADMatchesPlainEncrypt(t *testing.T) {
+func TestAADRequired(t *testing.T) {
 	enc := New(testKey(0xCD))
-	const pt = "plain-config-value-987654321"
-
-	// A value sealed with empty aad decrypts via plain Decrypt, and vice
-	// versa — guarantees pre-AAD ciphertexts stay readable.
-	sealed, err := enc.EncryptWithAAD(pt, "")
-	if err != nil {
-		t.Fatalf("EncryptWithAAD(\"\"): %v", err)
+	if _, err := enc.EncryptWithAAD("secret", ""); err == nil {
+		t.Fatal("EncryptWithAAD accepted empty aad")
 	}
-	got, err := enc.Decrypt(sealed)
-	if err != nil {
-		t.Fatalf("Decrypt: %v", err)
-	}
-	if got != pt {
-		t.Fatalf("= %q, want %q", got, pt)
-	}
-
-	enc2, _ := enc.Encrypt(pt)
-	if got, err := enc.DecryptWithAAD(enc2, ""); err != nil || got != pt {
-		t.Fatalf("DecryptWithAAD(\"\") of Encrypt output = %q, err %v", got, err)
+	if _, err := enc.DecryptWithAAD("airlock-crypto:v2:key:ciphertext", ""); err == nil {
+		t.Fatal("DecryptWithAAD accepted empty aad")
 	}
 }
 
@@ -72,7 +55,7 @@ func TestRoundTrip(t *testing.T) {
 	enc := New(testKey(0xAA))
 	plaintext := "sk-secret-api-key-12345"
 
-	encrypted, err := enc.Encrypt(plaintext)
+	encrypted, err := enc.EncryptWithAAD(plaintext, "provider/test/api_key")
 	if err != nil {
 		t.Fatalf("Encrypt: %v", err)
 	}
@@ -81,7 +64,7 @@ func TestRoundTrip(t *testing.T) {
 		t.Fatal("encrypted should differ from plaintext")
 	}
 
-	decrypted, err := enc.Decrypt(encrypted)
+	decrypted, err := enc.DecryptWithAAD(encrypted, "provider/test/api_key")
 	if err != nil {
 		t.Fatalf("Decrypt: %v", err)
 	}
@@ -97,7 +80,7 @@ func TestKeyRotation(t *testing.T) {
 
 	// Encrypt with old key
 	oldEnc := New(oldKey)
-	encrypted, err := oldEnc.Encrypt("secret")
+	encrypted, err := oldEnc.EncryptWithAAD("secret", "ref-a")
 	if err != nil {
 		t.Fatalf("Encrypt with old key: %v", err)
 	}
@@ -106,7 +89,7 @@ func TestKeyRotation(t *testing.T) {
 	newEnc := New(newKey, oldKey)
 
 	// Should decrypt old ciphertext
-	decrypted, err := newEnc.Decrypt(encrypted)
+	decrypted, err := newEnc.DecryptWithAAD(encrypted, "ref-a")
 	if err != nil {
 		t.Fatalf("Decrypt old ciphertext with new encryptor: %v", err)
 	}
@@ -115,12 +98,12 @@ func TestKeyRotation(t *testing.T) {
 	}
 
 	// New encryptions use new key
-	encrypted2, err := newEnc.Encrypt("new-secret")
+	encrypted2, err := newEnc.EncryptWithAAD("new-secret", "ref-a")
 	if err != nil {
 		t.Fatalf("Encrypt with new key: %v", err)
 	}
 
-	decrypted2, err := newEnc.Decrypt(encrypted2)
+	decrypted2, err := newEnc.DecryptWithAAD(encrypted2, "ref-a")
 	if err != nil {
 		t.Fatalf("Decrypt new ciphertext: %v", err)
 	}
@@ -129,7 +112,7 @@ func TestKeyRotation(t *testing.T) {
 	}
 
 	// Old encryptor cannot decrypt new ciphertext (unknown version)
-	_, err = oldEnc.Decrypt(encrypted2)
+	_, err = oldEnc.DecryptWithAAD(encrypted2, "ref-a")
 	if err == nil {
 		t.Error("expected error decrypting new ciphertext with old encryptor")
 	}
@@ -141,7 +124,7 @@ func TestStableKeyIDSurvivesRingReordering(t *testing.T) {
 	keyC := testKey(0xC3)
 
 	enc := New(keyC, keyA, keyB)
-	stored, err := enc.Encrypt("secret")
+	stored, err := enc.EncryptWithAAD("secret", "ref-a")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,7 +133,7 @@ func TestStableKeyIDSurvivesRingReordering(t *testing.T) {
 	}
 
 	reordered := New(keyA, keyC, keyB)
-	got, err := reordered.Decrypt(stored)
+	got, err := reordered.DecryptWithAAD(stored, "ref-a")
 	if err != nil {
 		t.Fatalf("Decrypt after key-ring reorder: %v", err)
 	}
@@ -162,25 +145,10 @@ func TestStableKeyIDSurvivesRingReordering(t *testing.T) {
 	}
 }
 
-func TestPositionalCiphertextRemainsDecryptable(t *testing.T) {
-	oldKey := testKey(0xA4)
-	newKey := testKey(0xB5)
-	oldGCM := mustGCM(oldKey)
-	nonce := make([]byte, oldGCM.NonceSize())
-	positional := append([]byte{0}, nonce...)
-	positional = append(positional, oldGCM.Seal(nil, nonce, []byte("compatibility"), nil)...)
-	encoded := base64.StdEncoding.EncodeToString(positional)
-
-	enc := New(newKey, oldKey)
-	got, err := enc.Decrypt(encoded)
-	if err != nil {
-		t.Fatalf("Decrypt positional ciphertext: %v", err)
-	}
-	if got != "compatibility" {
-		t.Fatalf("Decrypt positional ciphertext = %q", got)
-	}
-	if !enc.NeedsRewrap(encoded) {
-		t.Fatal("positional ciphertext must need rewrap")
+func TestDecryptRejectsUnknownEnvelope(t *testing.T) {
+	enc := New(testKey(0xA4))
+	if _, err := enc.DecryptWithAAD("AA==", "ref-a"); err == nil {
+		t.Fatal("DecryptWithAAD accepted ciphertext without the current envelope")
 	}
 }
 
@@ -196,12 +164,12 @@ func TestBadKeyPanics(t *testing.T) {
 func TestEmptyPlaintext(t *testing.T) {
 	enc := New(testKey(0xCC))
 
-	encrypted, err := enc.Encrypt("")
+	encrypted, err := enc.EncryptWithAAD("", "ref-a")
 	if err != nil {
 		t.Fatalf("Encrypt empty: %v", err)
 	}
 
-	decrypted, err := enc.Decrypt(encrypted)
+	decrypted, err := enc.DecryptWithAAD(encrypted, "ref-a")
 	if err != nil {
 		t.Fatalf("Decrypt empty: %v", err)
 	}
@@ -214,13 +182,13 @@ func TestDecryptBadInput(t *testing.T) {
 	enc := New(testKey(0xDD))
 
 	// Not base64
-	_, err := enc.Decrypt("not-valid-base64!!!")
+	_, err := enc.DecryptWithAAD("not-valid-base64!!!", "ref-a")
 	if err == nil {
 		t.Error("expected error for non-base64 input")
 	}
 
 	// Too short
-	_, err = enc.Decrypt("")
+	_, err = enc.DecryptWithAAD("", "ref-a")
 	if err == nil {
 		t.Error("expected error for empty input")
 	}
@@ -229,15 +197,15 @@ func TestDecryptBadInput(t *testing.T) {
 func TestDifferentPlaintextsProduceDifferentCiphertexts(t *testing.T) {
 	enc := New(testKey(0xEE))
 
-	a, _ := enc.Encrypt("alpha")
-	b, _ := enc.Encrypt("beta")
+	a, _ := enc.EncryptWithAAD("alpha", "ref-a")
+	b, _ := enc.EncryptWithAAD("beta", "ref-a")
 
 	if a == b {
 		t.Error("different plaintexts should produce different ciphertexts")
 	}
 
 	// Same plaintext encrypted twice should also differ (random nonce)
-	c, _ := enc.Encrypt("alpha")
+	c, _ := enc.EncryptWithAAD("alpha", "ref-a")
 	if a == c {
 		t.Error("same plaintext encrypted twice should produce different ciphertexts")
 	}

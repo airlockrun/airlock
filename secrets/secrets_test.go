@@ -51,28 +51,13 @@ func TestLocalStoreBindsRef(t *testing.T) {
 	}
 }
 
-func TestLocalStoreRewrapsUnenvelopedCiphertext(t *testing.T) {
-	key := make([]byte, 32)
-	enc := crypto.New(key)
-	legacy, err := enc.Encrypt("secret")
-	if err != nil {
-		t.Fatal(err)
+func TestLocalStoreRejectsMissingEnvelope(t *testing.T) {
+	s := newTestStore(t)
+	if _, err := s.Get(context.Background(), "ref-a", "airlock-crypto:v2:key:ciphertext"); err == nil {
+		t.Fatal("Get accepted a secret without the Store envelope")
 	}
-	s := NewLocal(enc)
-
-	stored, changed, err := s.Rewrap(context.Background(), "ref-a", legacy)
-	if err != nil {
-		t.Fatalf("Rewrap: %v", err)
-	}
-	if !changed {
-		t.Fatal("Rewrap changed = false")
-	}
-	if _, err := s.Get(context.Background(), "ref-b", stored); err == nil {
-		t.Fatal("rewrapped ciphertext was not bound to ref")
-	}
-	plain, err := s.Get(context.Background(), "ref-a", stored)
-	if err != nil || plain != "secret" {
-		t.Fatalf("Get rewrapped = %q, %v", plain, err)
+	if _, _, err := s.Rewrap(context.Background(), "ref-a", "airlock-crypto:v2:key:ciphertext"); err == nil {
+		t.Fatal("Rewrap accepted a secret without the Store envelope")
 	}
 }
 

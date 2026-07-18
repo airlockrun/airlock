@@ -16,8 +16,8 @@ import (
 //
 // The ciphertext is bound to the agent via AAD = the agent ID taken from the
 // authenticated agent JWT — NEVER from the request — so one agent cannot
-// unseal another agent's sealed value even if the ciphertext leaks. See
-// crypto.EncryptWithAAD.
+// unseal another agent's sealed value even if the ciphertext leaks. The secret
+// store's Seal method enforces the binding.
 
 // Seal handles POST /api/agent/seal.
 func (h *Handler) Seal(w http.ResponseWriter, r *http.Request) {

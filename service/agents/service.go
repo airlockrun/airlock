@@ -1812,11 +1812,7 @@ func (s *Service) GetGitConfig(ctx context.Context, p authz.Principal, agentID u
 		Mode:          cfg.GitMode,
 	}
 	if cfg.GitWebhookSecret != "" {
-		if secrets.IsEnvelope(cfg.GitWebhookSecret) {
-			out.WebhookSecret, err = s.secrets.Get(ctx, gitWebhookSecretRef(agentID), cfg.GitWebhookSecret)
-		} else {
-			out.WebhookSecret = cfg.GitWebhookSecret
-		}
+		out.WebhookSecret, err = s.secrets.Get(ctx, gitWebhookSecretRef(agentID), cfg.GitWebhookSecret)
 		if err != nil {
 			s.logger.Error("decrypt git webhook secret", zap.Error(err))
 			return GitConfig{}, err
