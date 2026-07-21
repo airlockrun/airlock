@@ -56,9 +56,9 @@ These controls remove paths no honest runtime agent needs:
 - **Brokered HTTP destination policy** - agent `httpRequest`, connection, MCP,
   and outbound OAuth calls are dialed by the Airlock process through one
   transport. Public HTTPS addresses are always allowed; `AGENT_HTTP_PRIVATE_CIDRS`
-  controls non-public destinations and defaults to public-only. List explicit
-  CIDRs such as `192.168.1.0/24,100.64.0.0/10,fd00::/8` for required LAN, VPN,
-  or Docker services. Every DNS result and redirect is checked. Link-local
+  controls non-public destinations. An unset value is public-only; installer-generated
+  configuration allows RFC1918 IPv4, Tailscale/CGNAT, and IPv6 ULA networks.
+  Every DNS result and redirect is checked. Link-local
   addresses (including cloud metadata), multicast, and unspecified addresses
   are always blocked. Loopback HTTP is available only when `PUBLIC_URL`
   explicitly configures a localhost development instance.

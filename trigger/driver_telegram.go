@@ -612,9 +612,8 @@ func (d *TelegramDriver) GetMenuButton(ctx context.Context, token string) (Teleg
 // can authenticate the user automatically.
 //
 // Passing url=="" clears the bot back to Telegram's default menu (the
-// commands list). Called once on bridge activation / token refresh; not
-// idempotent at the Telegram side (each call re-publishes the button)
-// but cheap and safe to call repeatedly.
+// commands list). Each call re-publishes the button at Telegram, but repeated
+// writes of the same value are safe.
 func (d *TelegramDriver) SetMenuButton(ctx context.Context, token, url string) error {
 	var menuButton map[string]any
 	if url == "" {

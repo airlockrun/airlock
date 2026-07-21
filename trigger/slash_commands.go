@@ -38,9 +38,8 @@ type RunCanceler interface {
 	CancelRun(runID uuid.UUID) bool
 }
 
-// isStartCommand reports whether text is the /start command (tolerating a
-// @botname suffix or a deep-link payload). Used to bind the web-app menu button
-// on the user's actual /start rather than an earlier service message.
+// isStartCommand reports whether text is the /start command, tolerating a
+// Telegram @botname suffix or deep-link payload.
 func isStartCommand(text string) bool {
 	fields := strings.Fields(strings.TrimSpace(text))
 	if len(fields) == 0 {
@@ -151,7 +150,11 @@ func TrySlashCommand(
 	}
 
 	parts := strings.SplitN(trimmed, " ", 2)
-	name := strings.ToLower(strings.TrimPrefix(parts[0], "/"))
+	name := strings.TrimPrefix(parts[0], "/")
+	if at := strings.IndexByte(name, '@'); at >= 0 {
+		name = name[:at]
+	}
+	name = strings.ToLower(name)
 	args := ""
 	if len(parts) > 1 {
 		args = strings.TrimSpace(parts[1])

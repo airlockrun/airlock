@@ -499,7 +499,14 @@ func TestHandleMessageConcurrentAutoDenyResumesOnce(t *testing.T) {
 	skipIfNoTriggerDB(t)
 	fixture := seedBridgeSuspension(t)
 	dispatcher := &recordingPromptDispatcher{}
-	proxy := &PromptProxy{dispatcher: dispatcher, db: triggerTestDB, logger: zap.NewNop()}
+	proxy := &PromptProxy{
+		dispatcher: dispatcher,
+		db:         triggerTestDB,
+		agentBaseURL: func(slug string) string {
+			return "https://" + slug + ".agents.example"
+		},
+		logger: zap.NewNop(),
+	}
 
 	errs := make(chan error, 2)
 	start := make(chan struct{})
