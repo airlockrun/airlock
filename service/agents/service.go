@@ -1129,7 +1129,9 @@ func (s *Service) Delete(ctx context.Context, p authz.Principal, agentID uuid.UU
 			s.bridgeMgr.RemoveBridge(bridgeUUID)
 		}
 	}
-	_ = s.containers.StopAgent(ctx, agentID)
+	if err := s.containers.StopAgent(ctx, agentID); err != nil {
+		return fmt.Errorf("stop agent before delete: %w", err)
+	}
 	if agent.ImageRef != "" {
 		_ = s.containers.RemoveImage(ctx, agent.ImageRef)
 	}

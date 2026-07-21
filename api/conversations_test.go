@@ -24,9 +24,10 @@ import (
 // surface (Create, List, Get, ListMessages, Topics) doesn't need them.
 func newTestConvHandler() *conversationsHandler {
 	return &conversationsHandler{
-		svc:    convsvc.New(testDB, nil, zap.NewNop(), nil),
-		db:     testDB,
-		logger: zap.NewNop(),
+		svc:          convsvc.New(testDB, nil, zap.NewNop(), nil),
+		db:           testDB,
+		agentBaseURL: func(slug string) string { return "https://" + slug + ".agents.example" },
+		logger:       zap.NewNop(),
 	}
 }
 

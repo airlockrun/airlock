@@ -35,6 +35,7 @@ type PromptProxy struct {
 	s3                   *storage.S3Client
 	logger               *zap.Logger
 	resolveTranscription TranscriptionResolver
+	agentBaseURL         func(slug string) string
 }
 
 type promptDispatcher interface {
@@ -45,13 +46,18 @@ type promptDispatcher interface {
 // NewPromptProxy creates a PromptProxy. The resolver is invoked to obtain the
 // admin-configured transcription model when a voice note arrives; pass nil to
 // disable auto-transcription (voice notes flow through as plain attachments).
-func NewPromptProxy(dispatcher *Dispatcher, database *db.DB, s3 *storage.S3Client, resolveTranscription TranscriptionResolver, logger *zap.Logger) *PromptProxy {
+// agentBaseURL builds the canonical external web URL included in /start.
+func NewPromptProxy(dispatcher *Dispatcher, database *db.DB, s3 *storage.S3Client, resolveTranscription TranscriptionResolver, agentBaseURL func(string) string, logger *zap.Logger) *PromptProxy {
+	if agentBaseURL == nil {
+		panic("trigger: NewPromptProxy called with nil agentBaseURL")
+	}
 	return &PromptProxy{
 		dispatcher:           dispatcher,
 		db:                   database,
 		s3:                   s3,
 		logger:               logger,
 		resolveTranscription: resolveTranscription,
+		agentBaseURL:         agentBaseURL,
 	}
 }
 
@@ -129,7 +135,7 @@ func (p *PromptProxy) HandleMessage(
 	// the agent with ForceCompact=true so Sol's Runner.Compact produces the
 	// reply via its usual streaming path.
 	var forceCompact bool
-	slashConv := NewAgentSlashConv(q, p.dispatcher, p.logger, agentID)
+	slashConv := NewAgentSlashConv(q, p.dispatcher, p.logger, agentID, p.agentBaseURL)
 	if cmd, err := TrySlashCommand(ctx, slashConv, conversationID, access, userMessage); err != nil {
 		close(events)
 		return "", fmt.Errorf("slash command: %w", err)

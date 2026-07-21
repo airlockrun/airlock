@@ -582,7 +582,7 @@ render_env() {
 		echo "DOCKER_NETWORK=$INSTANCE_ID"
 		echo "AGENT_NETWORK=$INSTANCE_ID-agents"
 		echo "AGENT_NETWORK_PER_AGENT=true"
-		echo "AGENT_HTTP_PRIVATE_CIDRS="
+		echo "AGENT_HTTP_PRIVATE_CIDRS=10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10,fc00::/7"
 		echo "AGENT_CODEGEN_VOLUME=$INSTANCE_ID-data"
 		echo "DOCKER_SOCKET_PATH=${DOCKER_SOCKET_PATH:-/var/run/docker.sock}"
 		echo "ENCRYPTION_KEY=$(gen_secret)"

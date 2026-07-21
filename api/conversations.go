@@ -32,16 +32,17 @@ import (
 )
 
 type conversationsHandler struct {
-	svc         *convsvc.Service
-	runsSvc     *runssvc.Service
-	db          *db.DB
-	dispatcher  *trigger.Dispatcher
-	promptProxy *trigger.PromptProxy
-	bridgeMgr   *trigger.BridgeManager
-	pubsub      *realtime.PubSub
-	s3          *storage.S3Client
-	convLocks   *convMutexMap
-	logger      *zap.Logger
+	svc          *convsvc.Service
+	runsSvc      *runssvc.Service
+	db           *db.DB
+	dispatcher   *trigger.Dispatcher
+	promptProxy  *trigger.PromptProxy
+	bridgeMgr    *trigger.BridgeManager
+	pubsub       *realtime.PubSub
+	s3           *storage.S3Client
+	convLocks    *convMutexMap
+	agentBaseURL func(slug string) string
+	logger       *zap.Logger
 }
 
 func writeConvError(w http.ResponseWriter, err error, fallback string) {
@@ -379,7 +380,7 @@ func (h *conversationsHandler) Prompt(w http.ResponseWriter, r *http.Request) {
 	// we fall through to the normal forward-to-agent path.
 	access := principalFromRequest(r).EffectiveAgentAccess(ctx, q, agentID)
 	var forceCompact bool
-	slashConv := trigger.NewAgentSlashConv(q, h.dispatcher, h.logger, agentID)
+	slashConv := trigger.NewAgentSlashConv(q, h.dispatcher, h.logger, agentID, h.agentBaseURL)
 	if cmd, err := trigger.TrySlashCommand(ctx, slashConv, convID, access, req.Message); err != nil {
 		h.logger.Error("slash command failed", zap.Error(err))
 		writeError(w, http.StatusInternalServerError, "command failed")

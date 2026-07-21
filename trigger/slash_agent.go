@@ -16,19 +16,29 @@ import (
 // /compact forwards to the agent container (sets ForwardAsCompact);
 // every other command operates locally against the airlock DB.
 type AgentSlashConv struct {
-	q        *dbq.Queries
-	canceler RunCanceler
-	logger   *zap.Logger
-	agentID  uuid.UUID
+	q            *dbq.Queries
+	canceler     RunCanceler
+	logger       *zap.Logger
+	agentID      uuid.UUID
+	agentBaseURL func(slug string) string
 }
 
 // NewAgentSlashConv builds an adapter for the agent-conversation path.
 // canceler dispatches /cancel into the agent dispatcher; nil yields the
 // "Nothing to cancel" path on restart (no live in-memory state). agentID
-// identifies the bound agent so /start can name it even before any
+// identifies the bound agent so /start can name and link it even before any
 // conversation exists (slash commands don't create one).
-func NewAgentSlashConv(q *dbq.Queries, canceler RunCanceler, logger *zap.Logger, agentID uuid.UUID) *AgentSlashConv {
-	return &AgentSlashConv{q: q, canceler: canceler, logger: logger, agentID: agentID}
+func NewAgentSlashConv(q *dbq.Queries, canceler RunCanceler, logger *zap.Logger, agentID uuid.UUID, agentBaseURL func(string) string) *AgentSlashConv {
+	if agentBaseURL == nil {
+		panic("trigger: NewAgentSlashConv called with nil agentBaseURL")
+	}
+	return &AgentSlashConv{
+		q:            q,
+		canceler:     canceler,
+		logger:       logger,
+		agentID:      agentID,
+		agentBaseURL: agentBaseURL,
+	}
 }
 
 // Cancel — q.GetLatestRunningPromptRun then dispatcher.CancelRun. The
@@ -150,15 +160,23 @@ func (a *AgentSlashConv) Echo(ctx context.Context, convID pgtype.UUID, args stri
 	return next, nil
 }
 
-// Start greets the user and names the bound agent. Resolved from agentID, not
-// the conversation — /start runs before any conversation exists. Access is not
-// consulted: every linked user is welcome (a member can hold Public access).
+// Start greets the user and links the bound agent's web app. The agent is
+// resolved from agentID because /start runs before any conversation exists.
+// Access is not consulted: every linked user is welcome.
 func (a *AgentSlashConv) Start(ctx context.Context, convID pgtype.UUID) string {
 	name := "this agent"
-	if ag, err := a.q.GetAgentByID(ctx, toPgUUID(a.agentID)); err == nil && ag.Name != "" {
-		name = ag.Name
+	url := ""
+	if ag, err := a.q.GetAgentByID(ctx, toPgUUID(a.agentID)); err == nil {
+		if ag.Name != "" {
+			name = ag.Name
+		}
+		url = a.agentBaseURL(ag.Slug) + "/"
 	}
-	return "👋 Hi! You're connected to " + name + ". Send me a message to get started."
+	reply := "👋 Hi! You're connected to " + name + ". Send me a message to get started."
+	if url != "" {
+		reply += "\n\nOpen the web app: " + url
+	}
+	return reply
 }
 
 // conversationSettings is the typed view over agent_conversations.settings.

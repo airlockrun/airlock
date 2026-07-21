@@ -28,6 +28,7 @@ type FakeContainerManager struct {
 	idleCnt map[uuid.UUID]int
 	stopped map[string]bool
 	starts  map[uuid.UUID]int
+	stopErr map[uuid.UUID]error
 }
 
 func NewFakeContainerManager() *FakeContainerManager {
@@ -38,6 +39,7 @@ func NewFakeContainerManager() *FakeContainerManager {
 		idleCnt: make(map[uuid.UUID]int),
 		stopped: make(map[string]bool),
 		starts:  make(map[uuid.UUID]int),
+		stopErr: make(map[uuid.UUID]error),
 	}
 }
 
@@ -98,6 +100,18 @@ func (m *FakeContainerManager) StartCount(agentID uuid.UUID) int {
 	return m.starts[agentID]
 }
 
+// SetStopError configures StopAgent to fail for an agent. Passing nil clears
+// the failure so tests can exercise a successful retry.
+func (m *FakeContainerManager) SetStopError(agentID uuid.UUID, err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err == nil {
+		delete(m.stopErr, agentID)
+		return
+	}
+	m.stopErr[agentID] = err
+}
+
 var errAgentNotRegistered = errors.New("apitest: agent not registered with FakeContainerManager")
 
 // --- container.ContainerManager implementation ---
@@ -147,7 +161,7 @@ func (m *FakeContainerManager) StopAgent(ctx context.Context, agentID uuid.UUID)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.stopped[agentID.String()] = true
-	return nil
+	return m.stopErr[agentID]
 }
 
 func (m *FakeContainerManager) MarkBusy(agentID uuid.UUID) {

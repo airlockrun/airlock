@@ -209,7 +209,7 @@ func runServe(_ []string) {
 	}
 	_ = recreateGroup.Wait()
 	transcriptionResolver := trigger.NewTranscriptionResolver(database, secretStore)
-	prompter := trigger.NewPromptProxy(dispatcher, database, s3Client, transcriptionResolver, logger.Named("prompt-proxy"))
+	prompter := trigger.NewPromptProxy(dispatcher, database, s3Client, transcriptionResolver, cfg.AgentBaseURL, logger.Named("prompt-proxy"))
 	telegramDriver := trigger.NewTelegramDriver(logger.Named("telegram"))
 	drivers := map[string]trigger.BridgeDriver{
 		"telegram": telegramDriver,

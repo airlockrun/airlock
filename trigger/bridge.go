@@ -370,9 +370,8 @@ func (m *BridgeManager) expectedWebAppMenuURL(ctx context.Context, br dbq.Bridge
 
 // syncWebAppMenuButton converges a Telegram bridge's persistent chat menu
 // button to the expected agent Web App URL. It reads Telegram state first and
-// only writes when the URL is absent or stale. Managed bridges skip this during
-// AddBridge because Telegram clients can race immediately after bot creation;
-// /start and reconciliation still repair the button.
+// only writes when the URL is absent or stale. A failed read does not suppress
+// the idempotent write, so newly created bridges still attempt setup immediately.
 func (m *BridgeManager) syncWebAppMenuButton(ctx context.Context, driver BridgeDriver, br dbq.Bridge) {
 	url, ok := m.expectedWebAppMenuURL(ctx, br)
 	if !ok {
@@ -387,9 +386,8 @@ func (m *BridgeManager) syncWebAppMenuButton(ctx context.Context, driver BridgeD
 		m.logger.Warn("web-app menu button: getChatMenuButton failed",
 			zap.String("bridge", br.Name),
 			zap.Error(err))
-		return
 	}
-	if button.Type == "web_app" && button.WebAppURL == url {
+	if err == nil && button.Type == "web_app" && button.WebAppURL == url {
 		return
 	}
 	if err := tg.SetMenuButton(ctx, br.BotTokenRef, url); err != nil {
@@ -482,7 +480,7 @@ func (m *BridgeManager) AddBridge(bridgeID uuid.UUID) {
 	m.registerCommands(m.ctx, driver, br)
 	if !br.AgentID.Valid {
 		m.clearWebAppMenuButton(m.ctx, driver, br)
-	} else if !br.Managed {
+	} else {
 		m.syncWebAppMenuButton(m.ctx, driver, br)
 	}
 	// Stop any stale poller for the same bridge ID before starting a new one.
@@ -690,9 +688,6 @@ func (m *BridgeManager) HandleEvent(ctx context.Context, event BridgeEvent) erro
 		return nil
 	}
 	userID := pgUUID(identity.UserID)
-	if isStartCommand(event.Text) {
-		m.syncWebAppMenuButton(ctx, driver, br)
-	}
 
 	// Resolve effective echo for this conversation from the user's
 	// per-channel override, falling back to the driver default.

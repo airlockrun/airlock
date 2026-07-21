@@ -173,7 +173,7 @@ func Setup(t *testing.T) *Harness {
 	wsHandler := realtime.NewHandler(database, hub, pubsub, logger.Named("ws-handler"))
 	dispatcher := trigger.NewDispatcher(cfg, database, fakeContainers, secretStore, logger.Named("dispatcher"))
 	transcription := trigger.NewTranscriptionResolver(database, secretStore)
-	prompter := trigger.NewPromptProxy(dispatcher, database, s3Client, transcription, logger.Named("prompt-proxy"))
+	prompter := trigger.NewPromptProxy(dispatcher, database, s3Client, transcription, cfg.AgentBaseURL, logger.Named("prompt-proxy"))
 	telegram := trigger.NewTelegramDriver(logger.Named("telegram"))
 	bridgeMgr := trigger.NewBridgeManager(
 		map[string]trigger.BridgeDriver{"telegram": telegram},

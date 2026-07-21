@@ -395,15 +395,16 @@ func NewRouter(cfg RouterConfig) http.Handler {
 				func(parts []byte, agentID string) []string {
 					return agentapi.ExtractCanonicalKeys(parts, agentID)
 				}),
-			runsSvc:     runsService,
-			db:          cfg.DB,
-			dispatcher:  cfg.Dispatcher,
-			promptProxy: cfg.PromptProxy,
-			bridgeMgr:   cfg.BridgeManager,
-			pubsub:      cfg.PubSub,
-			s3:          cfg.S3Client,
-			convLocks:   newConvMutexMap(),
-			logger:      cfg.Logger.Named("conversations"),
+			runsSvc:      runsService,
+			db:           cfg.DB,
+			dispatcher:   cfg.Dispatcher,
+			promptProxy:  cfg.PromptProxy,
+			bridgeMgr:    cfg.BridgeManager,
+			pubsub:       cfg.PubSub,
+			s3:           cfg.S3Client,
+			convLocks:    newConvMutexMap(),
+			agentBaseURL: cfg.AgentBaseURL,
+			logger:       cfg.Logger.Named("conversations"),
 		}
 		mH := newModelsHandler(modelssvc.New(cfg.DB, catalogsvc.New(cfg.DB, cfg.Logger.Named("models-catalog")), cfg.Dispatcher.RefreshAgent, cfg.Logger.Named("models")))
 		r.Get("/models/allowed", mH.AllowedModels)
