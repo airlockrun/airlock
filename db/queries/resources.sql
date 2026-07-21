@@ -53,7 +53,7 @@ SELECT * FROM agent_exec_endpoints WHERE id = @id FOR UPDATE;
 
 -- name: ListAvailableConnections :many
 SELECT c.id, c.slug, c.name, c.display_name, c.auth_mode,
-       (c.auth_mode = 'none' OR c.access_token_ref != '')::boolean AS authorized,
+       (c.auth_mode = 'none' OR (c.access_token_ref != '' AND (c.auth_mode <> 'oauth' OR c.scopes_verified)))::boolean AS authorized,
        c.created_at,
        (SELECT count(*) FROM agent_resource_needs n WHERE n.bound_connection_id = c.id)::int AS agent_count,
        (CASE WHEN c.owner_principal_id = ANY (@principal_ids::uuid[])
@@ -72,7 +72,7 @@ ORDER BY c.display_name, c.slug;
 
 -- name: ListAvailableMCPServers :many
 SELECT m.id, m.slug, m.name, m.display_name, m.auth_mode,
-       (m.auth_mode = 'none' OR m.access_token_ref != '')::boolean AS authorized,
+       (m.auth_mode = 'none' OR (m.access_token_ref != '' AND (m.auth_mode NOT IN ('oauth', 'oauth_discovery') OR m.scopes_verified)))::boolean AS authorized,
        m.created_at,
        (SELECT count(*) FROM agent_resource_needs n WHERE n.bound_mcp_id = m.id)::int AS agent_count,
        (CASE WHEN m.owner_principal_id = ANY (@principal_ids::uuid[])

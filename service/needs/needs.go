@@ -43,9 +43,6 @@ func resourceSlug(id uuid.UUID) string {
 // resources; OAuth resources stay provisional until callback succeeds.
 func CreateForNeed(ctx context.Context, q *dbq.Queries, p authz.Principal, agentID uuid.UUID, typ, slug, displayName string, createNew bool) (uuid.UUID, error) {
 	displayName = strings.TrimSpace(displayName)
-	if createNew && displayName == "" {
-		return uuid.Nil, service.Detail(service.ErrInvalidInput, "display name is required")
-	}
 	need, err := q.GetResourceNeedForUpdate(ctx, dbq.GetResourceNeedForUpdateParams{AgentID: pg(agentID), Type: typ, Slug: slug})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -81,15 +78,6 @@ func CreateForNeed(ctx context.Context, q *dbq.Queries, p authz.Principal, agent
 			SetupInstructions string          `json:"setup_instructions"`
 		}
 		_ = json.Unmarshal(need.Spec, &spec)
-		if displayName == "" && !createNew {
-			displayName = strings.TrimSpace(spec.Name)
-			if displayName == "" {
-				displayName = strings.TrimSpace(need.Description)
-			}
-			if displayName == "" {
-				displayName = slug
-			}
-		}
 		if displayName == "" {
 			return uuid.Nil, service.Detail(service.ErrInvalidInput, "display name is required")
 		}
@@ -142,15 +130,6 @@ func CreateForNeed(ctx context.Context, q *dbq.Queries, p authz.Principal, agent
 			Access        string          `json:"access"`
 		}
 		_ = json.Unmarshal(need.Spec, &spec)
-		if displayName == "" && !createNew {
-			displayName = strings.TrimSpace(spec.Name)
-			if displayName == "" {
-				displayName = strings.TrimSpace(need.Description)
-			}
-			if displayName == "" {
-				displayName = slug
-			}
-		}
 		if displayName == "" {
 			return uuid.Nil, service.Detail(service.ErrInvalidInput, "display name is required")
 		}
@@ -185,12 +164,6 @@ func CreateForNeed(ctx context.Context, q *dbq.Queries, p authz.Principal, agent
 	case "exec_endpoint":
 		if need.BoundExecID.Valid && !createNew {
 			return uuid.UUID(need.BoundExecID.Bytes), nil
-		}
-		if displayName == "" && !createNew {
-			displayName = strings.TrimSpace(need.Description)
-			if displayName == "" {
-				displayName = slug
-			}
 		}
 		if displayName == "" {
 			return uuid.Nil, service.Detail(service.ErrInvalidInput, "display name is required")

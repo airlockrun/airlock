@@ -184,6 +184,7 @@ CREATE TABLE public.agent_mcp_servers (
     pending_client_id text NOT NULL,
     pending_client_secret text NOT NULL,
     CONSTRAINT agent_mcp_servers_lifecycle_check CHECK ((lifecycle = ANY (ARRAY['provisional'::text, 'active'::text]))),
+    CONSTRAINT agent_mcp_servers_oauth_scopes_verified_check CHECK (((auth_mode <> ALL (ARRAY['oauth'::text, 'oauth_discovery'::text])) OR ((access_token_ref = ''::text) AND (refresh_token = ''::text)) OR scopes_verified)),
     CONSTRAINT agent_mcp_servers_display_name_check CHECK ((btrim(display_name) <> ''::text))
 );
 
@@ -593,6 +594,7 @@ CREATE TABLE public.connections (
     pending_client_id text NOT NULL,
     pending_client_secret text NOT NULL,
     CONSTRAINT connections_lifecycle_check CHECK ((lifecycle = ANY (ARRAY['provisional'::text, 'active'::text]))),
+    CONSTRAINT connections_oauth_scopes_verified_check CHECK (((auth_mode <> 'oauth'::text) OR ((access_token_ref = ''::text) AND (refresh_token = ''::text)) OR scopes_verified)),
     CONSTRAINT connections_display_name_check CHECK ((btrim(display_name) <> ''::text))
 );
 

@@ -41,8 +41,8 @@ authz/             The single authorization layer. Principal (registered /
 apperr/            Leaf package: the sentinel errors (ErrForbidden, …), Detail
                    wrapper, and HTTPStatus mapping. service.ErrX are aliases of
                    these so authz can return them without an import cycle.
-db/                Postgres — migrations, sqlc queries, connection pool with RLS cleanup
-  migrations/      Ordered goose SQL migrations
+db/                Postgres — schema baseline, sqlc queries, connection pool with RLS cleanup
+  migrations/      Fresh-database goose baseline (`001_schema.sql`)
   queries/         sqlc SQL files (agents.sql, messages.sql, etc.)
   dbq/             sqlc-generated Go code (models, queries)
 config/            Environment-based config (DATABASE_URL, JWT_SECRET, S3_*, ENCRYPTION_KEY, etc.)
@@ -175,7 +175,8 @@ by `/api/v1` or `/api/agent`.
 
 ## Database
 
-Postgres with sqlc. Key tables:
+Postgres with sqlc. Fresh databases are created from the single `001_schema.sql`
+baseline. Key tables:
 - `tenants`, `users` — single-tenant, RBAC roles
 - `providers` — LLM provider catalog (encrypted API keys)
 - `agents` — status lifecycle (draft→building→active→failed), config JSONB, build/exec models
@@ -183,7 +184,7 @@ Postgres with sqlc. Key tables:
 - `agent_webhooks`, `agent_routes`, `agent_topics` (+ `per_user` for personal feeds) — trigger definitions
 - `agent_schedule_handlers` (cron+schedule defs, `kind`), `agent_scheduled_fires` (due-table, `FOR UPDATE SKIP LOCKED` poller) — unified scheduler
 - `agent_members` — sharing/permissions
-- `connections`, `agent_mcp_servers`, `agent_exec_endpoints` — reusable principal-owned resources with immutable server-generated concrete slugs and a required non-unique user-controlled `display_name`; `resource_grants` supplies independent view/bind/manage capabilities and `agent_resource_needs` binds agent-local type/slug handles to resources. OAuth rows carry active/provisional lifecycle, canonical granted scopes, and an authorization revision.
+- `connections`, `agent_mcp_servers`, `agent_exec_endpoints` — reusable principal-owned resources with immutable server-generated concrete slugs and a required non-unique user-controlled `display_name`; `resource_grants` supplies independent view/bind/manage capabilities and `agent_resource_needs` binds agent-local type/slug handles to resources. OAuth rows carry active/provisional lifecycle, provider-verified canonical granted scopes, pending client credentials, and an authorization revision.
 - `agent_exec_endpoints` — remote command targets (SSH today; transport pluggable). Operator-configured host/port/user + airlock-generated ED25519 keypair (private key in secrets store) + TOFU-pinned host key. Declared by the agent via `RegisterExecEndpoint`.
 - `bridges`, `platform_identities`, `identity_link_challenges` — chat platform integrations and one-time identity-link confirmation state
 - `runs` — execution history (trigger, status, input/output, timeline)
@@ -225,7 +226,7 @@ need, not the resource.
 
 ### Resource OAuth Lifecycle
 - Agent sync writes only `agent_resource_needs`. It never creates, rewrites, or clears a shared concrete resource.
-- Scope declarations and grants are canonical sorted sets. Runtime resolution checks each binding against that need's current required scopes.
+- Scope declarations and provider-verified grants are canonical sorted sets. OAuth readiness, runtime resolution, inventory authorization, and refresh require `scopes_verified` and check each binding against the need's current required scopes.
 - New OAuth resources are durable `provisional` rows tied to one need. Inventory, candidates, runtime, and refresh queries expose only `active` rows.
 - OAuth state records the target need/resource, requested union, initiating user, and resource authorization revision. A start advances the revision, so only the latest callback can write.
 - Callback rechecks the live user, agent-admin access, resource bind/manage capabilities, need compatibility, revision, and current union under locks. It activates and binds in the same transaction only after a covering grant.

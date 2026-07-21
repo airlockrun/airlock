@@ -724,14 +724,13 @@ func (s *Service) OAuthCallback(ctx context.Context, code, stateToken, providerE
 	return OAuthCallbackResult{RedirectURL: u.String()}, nil
 }
 
-// OAuthStart keeps the existing endpoint compatible while routing through the
-// need-aware authorization lifecycle.
+// OAuthStart routes connection authorization through the need-aware lifecycle.
 func (s *Service) OAuthStart(ctx context.Context, p authz.Principal, agentID uuid.UUID, slug, redirectURI string) (string, error) {
 	started, err := s.StartAuthorizationForNeed(ctx, p, agentID, "connection", slug, uuid.Nil, "", redirectURI, false)
 	return started.AuthorizeURL, err
 }
 
-// MCPOAuthStart keeps the MCP endpoint compatible with the same lifecycle.
+// MCPOAuthStart routes MCP authorization through the need-aware lifecycle.
 func (s *Service) MCPOAuthStart(ctx context.Context, p authz.Principal, agentID uuid.UUID, slug, redirectURI string) (string, error) {
 	started, err := s.StartAuthorizationForNeed(ctx, p, agentID, "mcp_server", slug, uuid.Nil, "", redirectURI, false)
 	return started.AuthorizeURL, err

@@ -347,7 +347,9 @@ SELECT
     COALESCE(c.setup_instructions, n.spec->>'setup_instructions', '') AS setup_instructions,
     (COALESCE(c.auth_mode, n.spec->>'auth_mode', '') = 'none' OR
         (COALESCE(c.access_token_ref, '') != '' AND
-         string_to_array(COALESCE(n.expected_scopes, ''), ' ') <@ string_to_array(COALESCE(c.granted_scopes, ''), ' ')))::boolean AS authorized,
+         (COALESCE(c.auth_mode, n.spec->>'auth_mode', '') <> 'oauth' OR
+          (COALESCE(c.scopes_verified, false) AND
+           string_to_array(COALESCE(n.expected_scopes, ''), ' ') <@ string_to_array(COALESCE(c.granted_scopes, ''), ' ')))))::boolean AS authorized,
     (COALESCE(c.client_id, '') != '')::boolean AS has_oauth_app,
     (COALESCE(c.refresh_token, '') != '')::boolean AS has_refresh_token,
     (n.bound_connection_id IS NOT NULL)::boolean AS bound,
@@ -422,6 +424,7 @@ SELECT c.id, c.slug, c.name, c.auth_mode, c.token_url,
 FROM connections c
 WHERE c.auth_mode = 'oauth'
   AND c.lifecycle = 'active'
+  AND c.scopes_verified
   AND c.access_token_ref != ''
   AND c.refresh_token != ''
   AND c.token_expires_at IS NOT NULL
