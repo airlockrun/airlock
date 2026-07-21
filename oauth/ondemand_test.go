@@ -31,13 +31,14 @@ func tsTime(d time.Duration) pgtype.Timestamptz {
 
 func baseRow(tokenURL string, expiresAt pgtype.Timestamptz, refreshRef string) tokenRow {
 	return tokenRow{
-		refPrefix:    "connection",
-		accessRef:    "access-cipher",
-		refreshRef:   refreshRef,
-		clientIDRef:  "cid",
-		clientSecRef: "csec",
-		tokenURL:     tokenURL,
-		expiresAt:    expiresAt,
+		refPrefix:      "connection",
+		accessRef:      "access-cipher",
+		refreshRef:     refreshRef,
+		clientIDRef:    "cid",
+		clientSecRef:   "csec",
+		tokenURL:       tokenURL,
+		expiresAt:      expiresAt,
+		scopesVerified: true,
 	}
 }
 
@@ -80,14 +81,14 @@ func TestResolveToken_ValidRejectsInsufficientScopes(t *testing.T) {
 	}
 }
 
-func TestResolveToken_GrandfatheredUnverifiedScopesRemainUsable(t *testing.T) {
+func TestResolveToken_UnverifiedScopesRequireReauthorization(t *testing.T) {
 	row := baseRow("", tsTime(time.Hour), "refresh-cipher")
 	row.grantedScopes = "read write"
 	row.requiredScopes = "write"
 	row.scopesVerified = false
-	token, _, err := resolveToken(context.Background(), identityStore{}, testOAuthClient(), zap.NewNop(), row, time.Now(), failUpdate(t), failClear(t))
-	if err != nil || token != "access-cipher" {
-		t.Fatalf("resolveToken() token=%q err=%v", token, err)
+	_, persist, err := resolveToken(context.Background(), identityStore{}, testOAuthClient(), zap.NewNop(), row, time.Now(), failUpdate(t), failClear(t))
+	if !errors.Is(err, ErrNeedsReauth) || persist {
+		t.Fatalf("resolveToken() persist=%v err=%v, want read-only ErrNeedsReauth", persist, err)
 	}
 }
 
@@ -143,8 +144,9 @@ func TestResolveToken_Expired_RefreshKeepsOldRefreshToken(t *testing.T) {
 	defer srv.Close()
 
 	var gotRefresh string
-	update := func(_ context.Context, _ string, _ pgtype.Timestamptz, refreshRef, _ string, _ bool) error {
-		gotRefresh = refreshRef
+	var gotVerified bool
+	update := func(_ context.Context, _ string, _ pgtype.Timestamptz, refreshRef, _ string, verified bool) error {
+		gotRefresh, gotVerified = refreshRef, verified
 		return nil
 	}
 	row := baseRow(srv.URL, tsTime(-time.Minute), "old-refresh")
@@ -153,6 +155,9 @@ func TestResolveToken_Expired_RefreshKeepsOldRefreshToken(t *testing.T) {
 	}
 	if gotRefresh != "old-refresh" {
 		t.Errorf("persisted refresh = %q, want old-refresh (unchanged)", gotRefresh)
+	}
+	if !gotVerified {
+		t.Error("refresh response without scope must preserve verified scope state")
 	}
 }
 

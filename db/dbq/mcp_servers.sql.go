@@ -345,7 +345,7 @@ SELECT
 FROM agent_resource_needs n
 JOIN agent_mcp_servers m ON m.id = n.bound_mcp_id
 WHERE n.agent_id = $1 AND n.type = 'mcp_server' AND m.lifecycle = 'active'
-  AND (m.auth_mode = 'none' OR string_to_array(n.expected_scopes, ' ') <@ string_to_array(m.granted_scopes, ' '))
+  AND (m.auth_mode NOT IN ('oauth', 'oauth_discovery') OR (m.scopes_verified AND string_to_array(n.expected_scopes, ' ') <@ string_to_array(m.granted_scopes, ' ')))
 ORDER BY n.slug
 `
 
@@ -398,6 +398,7 @@ SELECT m.id, m.slug, m.name, m.auth_mode, m.token_url,
 FROM agent_mcp_servers m
 WHERE m.auth_mode IN ('oauth', 'oauth_discovery')
   AND m.lifecycle = 'active'
+  AND m.scopes_verified
   AND m.access_token_ref != ''
   AND m.refresh_token != ''
   AND m.token_expires_at IS NOT NULL
@@ -472,7 +473,9 @@ SELECT
     COALESCE(m.tool_schemas, '[]'::jsonb) AS tool_schemas,
     (COALESCE(m.auth_mode, n.spec->>'auth_mode', '') = 'none' OR
         (COALESCE(m.access_token_ref, '') != '' AND
-         string_to_array(COALESCE(n.expected_scopes, ''), ' ') <@ string_to_array(COALESCE(m.granted_scopes, ''), ' ')))::boolean AS authorized,
+         (COALESCE(m.auth_mode, n.spec->>'auth_mode', '') NOT IN ('oauth', 'oauth_discovery') OR
+          (COALESCE(m.scopes_verified, false) AND
+           string_to_array(COALESCE(n.expected_scopes, ''), ' ') <@ string_to_array(COALESCE(m.granted_scopes, ''), ' ')))))::boolean AS authorized,
     (COALESCE(m.client_id, '') != '')::boolean AS has_oauth_app,
     (n.bound_mcp_id IS NOT NULL)::boolean AS bound,
     m.token_expires_at AS token_expires_at,

@@ -438,18 +438,20 @@ const lockQualifyingConnectionBindings = `-- name: LockQualifyingConnectionBindi
 SELECT n.id FROM agent_resource_needs n
 JOIN agents a ON a.id = n.agent_id
 WHERE n.bound_connection_id = $1 AND a.status = 'active'
-  AND string_to_array(n.expected_scopes, ' ') <@ string_to_array($2::text, ' ')
+  AND $2::boolean
+  AND string_to_array(n.expected_scopes, ' ') <@ string_to_array($3::text, ' ')
 ORDER BY n.id
 FOR UPDATE OF n
 `
 
 type LockQualifyingConnectionBindingsParams struct {
-	ResourceID    pgtype.UUID `json:"resource_id"`
-	GrantedScopes string      `json:"granted_scopes"`
+	ResourceID     pgtype.UUID `json:"resource_id"`
+	ScopesVerified bool        `json:"scopes_verified"`
+	GrantedScopes  string      `json:"granted_scopes"`
 }
 
 func (q *Queries) LockQualifyingConnectionBindings(ctx context.Context, arg LockQualifyingConnectionBindingsParams) ([]pgtype.UUID, error) {
-	rows, err := q.db.Query(ctx, lockQualifyingConnectionBindings, arg.ResourceID, arg.GrantedScopes)
+	rows, err := q.db.Query(ctx, lockQualifyingConnectionBindings, arg.ResourceID, arg.ScopesVerified, arg.GrantedScopes)
 	if err != nil {
 		return nil, err
 	}
@@ -472,18 +474,20 @@ const lockQualifyingMCPBindings = `-- name: LockQualifyingMCPBindings :many
 SELECT n.id FROM agent_resource_needs n
 JOIN agents a ON a.id = n.agent_id
 WHERE n.bound_mcp_id = $1 AND a.status = 'active'
-  AND string_to_array(n.expected_scopes, ' ') <@ string_to_array($2::text, ' ')
+  AND $2::boolean
+  AND string_to_array(n.expected_scopes, ' ') <@ string_to_array($3::text, ' ')
 ORDER BY n.id
 FOR UPDATE OF n
 `
 
 type LockQualifyingMCPBindingsParams struct {
-	ResourceID    pgtype.UUID `json:"resource_id"`
-	GrantedScopes string      `json:"granted_scopes"`
+	ResourceID     pgtype.UUID `json:"resource_id"`
+	ScopesVerified bool        `json:"scopes_verified"`
+	GrantedScopes  string      `json:"granted_scopes"`
 }
 
 func (q *Queries) LockQualifyingMCPBindings(ctx context.Context, arg LockQualifyingMCPBindingsParams) ([]pgtype.UUID, error) {
-	rows, err := q.db.Query(ctx, lockQualifyingMCPBindings, arg.ResourceID, arg.GrantedScopes)
+	rows, err := q.db.Query(ctx, lockQualifyingMCPBindings, arg.ResourceID, arg.ScopesVerified, arg.GrantedScopes)
 	if err != nil {
 		return nil, err
 	}
@@ -595,7 +599,7 @@ SELECT c.id, c.slug, c.name, c.display_name, c.description, c.llm_hint, c.access
 JOIN connections c ON c.id = n.bound_connection_id
 WHERE n.agent_id = $1 AND n.type = 'connection' AND n.slug = $2
   AND c.lifecycle = 'active'
-  AND (c.auth_mode <> 'oauth' OR string_to_array(n.expected_scopes, ' ') <@ string_to_array(c.granted_scopes, ' '))
+  AND (c.auth_mode <> 'oauth' OR (c.scopes_verified AND string_to_array(n.expected_scopes, ' ') <@ string_to_array(c.granted_scopes, ' ')))
 `
 
 type ResolveBoundConnectionParams struct {
@@ -606,9 +610,6 @@ type ResolveBoundConnectionParams struct {
 // Runtime resolution: a need's slug resolves to its bound resource row. The
 // credential proxy then keys off the resolved resource's own id/owner, never
 // the calling agent — that is what lets one resource back many agents.
-// scopes_verified is intentionally not consulted here. Rows migrated with an
-// existing binding may keep using their assumed declared grant, while every
-// new candidate/bind path requires a provider-verified grant.
 func (q *Queries) ResolveBoundConnection(ctx context.Context, arg ResolveBoundConnectionParams) (Connection, error) {
 	row := q.db.QueryRow(ctx, resolveBoundConnection, arg.AgentID, arg.Slug)
 	var i Connection
@@ -693,7 +694,7 @@ SELECT m.id, m.slug, m.name, m.display_name, m.access, m.url, m.auth_mode, m.aut
 JOIN agent_mcp_servers m ON m.id = n.bound_mcp_id
 WHERE n.agent_id = $1 AND n.type = 'mcp_server' AND n.slug = $2
   AND m.lifecycle = 'active'
-  AND (m.auth_mode NOT IN ('oauth', 'oauth_discovery') OR string_to_array(n.expected_scopes, ' ') <@ string_to_array(m.granted_scopes, ' '))
+  AND (m.auth_mode NOT IN ('oauth', 'oauth_discovery') OR (m.scopes_verified AND string_to_array(n.expected_scopes, ' ') <@ string_to_array(m.granted_scopes, ' ')))
 `
 
 type ResolveBoundMCPServerParams struct {
@@ -701,7 +702,6 @@ type ResolveBoundMCPServerParams struct {
 	Slug    string      `json:"slug"`
 }
 
-// See ResolveBoundConnection: this is the grandfathered runtime path only.
 func (q *Queries) ResolveBoundMCPServer(ctx context.Context, arg ResolveBoundMCPServerParams) (AgentMcpServer, error) {
 	row := q.db.QueryRow(ctx, resolveBoundMCPServer, arg.AgentID, arg.Slug)
 	var i AgentMcpServer

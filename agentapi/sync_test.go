@@ -243,7 +243,7 @@ func TestSyncScopeExpansionOnlyMakesChangedBindingUnready(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := q.UpdateConnectionCredentialsByID(ctx, dbq.UpdateConnectionCredentialsByIDParams{
-		ID: resource.ID, AccessTokenRef: "existing-token", GrantedScopes: "read",
+		ID: resource.ID, AccessTokenRef: "existing-token", GrantedScopes: "read", ScopesVerified: true,
 	}); err != nil {
 		t.Fatal(err)
 	}

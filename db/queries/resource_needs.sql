@@ -42,22 +42,18 @@ FOR UPDATE;
 -- the calling agent — that is what lets one resource back many agents.
 
 -- name: ResolveBoundConnection :one
--- scopes_verified is intentionally not consulted here. Rows migrated with an
--- existing binding may keep using their assumed declared grant, while every
--- new candidate/bind path requires a provider-verified grant.
 SELECT c.* FROM agent_resource_needs n
 JOIN connections c ON c.id = n.bound_connection_id
 WHERE n.agent_id = @agent_id AND n.type = 'connection' AND n.slug = @slug
   AND c.lifecycle = 'active'
-  AND (c.auth_mode <> 'oauth' OR string_to_array(n.expected_scopes, ' ') <@ string_to_array(c.granted_scopes, ' '));
+  AND (c.auth_mode <> 'oauth' OR (c.scopes_verified AND string_to_array(n.expected_scopes, ' ') <@ string_to_array(c.granted_scopes, ' ')));
 
 -- name: ResolveBoundMCPServer :one
--- See ResolveBoundConnection: this is the grandfathered runtime path only.
 SELECT m.* FROM agent_resource_needs n
 JOIN agent_mcp_servers m ON m.id = n.bound_mcp_id
 WHERE n.agent_id = @agent_id AND n.type = 'mcp_server' AND n.slug = @slug
   AND m.lifecycle = 'active'
-  AND (m.auth_mode NOT IN ('oauth', 'oauth_discovery') OR string_to_array(n.expected_scopes, ' ') <@ string_to_array(m.granted_scopes, ' '));
+  AND (m.auth_mode NOT IN ('oauth', 'oauth_discovery') OR (m.scopes_verified AND string_to_array(n.expected_scopes, ' ') <@ string_to_array(m.granted_scopes, ' ')));
 
 -- name: ResolveBoundExecEndpoint :one
 SELECT e.* FROM agent_resource_needs n
@@ -135,6 +131,7 @@ FOR UPDATE;
 SELECT n.id FROM agent_resource_needs n
 JOIN agents a ON a.id = n.agent_id
 WHERE n.bound_connection_id = @resource_id AND a.status = 'active'
+  AND @scopes_verified::boolean
   AND string_to_array(n.expected_scopes, ' ') <@ string_to_array(@granted_scopes::text, ' ')
 ORDER BY n.id
 FOR UPDATE OF n;
@@ -143,6 +140,7 @@ FOR UPDATE OF n;
 SELECT n.id FROM agent_resource_needs n
 JOIN agents a ON a.id = n.agent_id
 WHERE n.bound_mcp_id = @resource_id AND a.status = 'active'
+  AND @scopes_verified::boolean
   AND string_to_array(n.expected_scopes, ' ') <@ string_to_array(@granted_scopes::text, ' ')
 ORDER BY n.id
 FOR UPDATE OF n;

@@ -411,7 +411,7 @@ func TestNeeds_OAuthScopeReadinessAndBindCapabilities(t *testing.T) {
 	readyID := seedOAuthConnection(t, h, ownerAgent, "ready", "read write", "read write")
 	missingID := seedOAuthConnection(t, h, ownerAgent, "missing", "read", "read")
 	unverifiedID := seedOAuthConnection(t, h, ownerAgent, "unverified", "read write", "read write")
-	if _, err := h.DB.Pool().Exec(t.Context(), `UPDATE connections SET scopes_verified=false WHERE id=$1`, pgUUID(unverifiedID)); err != nil {
+	if _, err := h.DB.Pool().Exec(t.Context(), `UPDATE connections SET access_token_ref='', refresh_token='', scopes_verified=false WHERE id=$1`, pgUUID(unverifiedID)); err != nil {
 		t.Fatal(err)
 	}
 	seedConnectionNeed(t, h, targetAgent, "documents", "read write")
@@ -444,7 +444,7 @@ func TestNeeds_OAuthScopeReadinessAndBindCapabilities(t *testing.T) {
 		t.Fatalf("underscoped candidate = %+v", got)
 	}
 	if got := byID[unverifiedID.String()]; got == nil || got.Readiness != "scope_upgrade_requires_manager" || len(got.MissingScopes) != 0 {
-		t.Fatalf("unverified migrated candidate = %+v", got)
+		t.Fatalf("unverified candidate = %+v", got)
 	}
 
 	bind := func(id uuid.UUID) int {
@@ -662,10 +662,10 @@ func TestCredentialConfigureConcurrentCreateUsesOneResource(t *testing.T) {
 	}
 }
 
-func TestLegacyConfigureDerivesInitialDisplayNames(t *testing.T) {
+func TestCredentialConfigurationRequiresDisplayNameForCreation(t *testing.T) {
 	h := apitest.Setup(t)
-	owner := apitest.CreateUser(t, h, "legacy-display-owner", "user")
-	token := apitest.IssueUserToken(t, h, owner, "legacy-display-owner@apitest.local", "user")
+	owner := apitest.CreateUser(t, h, "display-owner", "user")
+	token := apitest.IssueUserToken(t, h, owner, "display-owner@apitest.local", "user")
 	agentID := apitest.CreateAgent(t, h, apitest.AgentOpts{OwnerID: owner})
 	q := dbq.New(h.DB.Pool())
 	needs := []dbq.UpsertResourceNeedParams{
@@ -682,20 +682,34 @@ func TestLegacyConfigureDerivesInitialDisplayNames(t *testing.T) {
 	}
 
 	requests := []struct {
-		method string
-		path   string
-		body   any
+		method      string
+		path        string
+		displayName string
+		body        any
 	}{
-		{http.MethodPost, "/api/v1/agents/" + agentID.String() + "/credentials/token", &airlockv1.SetAPIKeyRequest{ApiKey: "secret"}},
-		{http.MethodPut, "/api/v1/agents/" + agentID.String() + "/credentials/oauth/oauth-app", &airlockv1.SetOAuthAppRequest{ClientId: "client", ClientSecret: "secret"}},
-		{http.MethodPost, "/api/v1/agents/" + agentID.String() + "/mcp-servers/mcp-token/credentials", &airlockv1.SetAPIKeyRequest{ApiKey: "secret"}},
-		{http.MethodPut, "/api/v1/agents/" + agentID.String() + "/mcp-servers/mcp-oauth/credentials/oauth-app", &airlockv1.SetOAuthAppRequest{ClientId: "client", ClientSecret: "secret"}},
-		{http.MethodPut, "/api/v1/agents/" + agentID.String() + "/exec-endpoints/shell", &airlockv1.ConfigureExecEndpointRequest{Host: "host.example", SshUser: "deploy"}},
+		{http.MethodPost, "/api/v1/agents/" + agentID.String() + "/credentials/token", "Token connection", &airlockv1.SetAPIKeyRequest{ApiKey: "secret"}},
+		{http.MethodPut, "/api/v1/agents/" + agentID.String() + "/credentials/oauth/oauth-app", "OAuth connection", &airlockv1.SetOAuthAppRequest{ClientId: "client", ClientSecret: "secret"}},
+		{http.MethodPost, "/api/v1/agents/" + agentID.String() + "/mcp-servers/mcp-token/credentials", "Token MCP", &airlockv1.SetAPIKeyRequest{ApiKey: "secret"}},
+		{http.MethodPut, "/api/v1/agents/" + agentID.String() + "/mcp-servers/mcp-oauth/credentials/oauth-app", "OAuth MCP", &airlockv1.SetOAuthAppRequest{ClientId: "client", ClientSecret: "secret"}},
+		{http.MethodPut, "/api/v1/agents/" + agentID.String() + "/exec-endpoints/shell", "Shell", &airlockv1.ConfigureExecEndpointRequest{Host: "host.example", SshUser: "deploy"}},
 	}
 	for _, request := range requests {
 		resp := h.Do(h.NewRequest(request.method, request.path, token, request.body))
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("blank display name %s %s = %d, want 400: %s", request.method, request.path, resp.StatusCode, h.ReadBody(resp))
+		}
+		resp.Body.Close()
+		switch body := request.body.(type) {
+		case *airlockv1.SetAPIKeyRequest:
+			body.DisplayName = request.displayName
+		case *airlockv1.SetOAuthAppRequest:
+			body.DisplayName = request.displayName
+		case *airlockv1.ConfigureExecEndpointRequest:
+			body.DisplayName = request.displayName
+		}
+		resp = h.Do(h.NewRequest(request.method, request.path, token, request.body))
 		if resp.StatusCode != http.StatusOK {
-			t.Fatalf("%s %s = %d: %s", request.method, request.path, resp.StatusCode, h.ReadBody(resp))
+			t.Fatalf("named creation %s %s = %d: %s", request.method, request.path, resp.StatusCode, h.ReadBody(resp))
 		}
 		resp.Body.Close()
 	}
@@ -716,14 +730,14 @@ func TestLegacyConfigureDerivesInitialDisplayNames(t *testing.T) {
 			t.Fatalf("connection %s display name = %q, want %q (err=%v)", slug, row.DisplayName, want, err)
 		}
 	}
-	assertConnectionName("token", "Declared API", false)
-	assertConnectionName("oauth", "Declared OAuth", true)
+	assertConnectionName("token", "Token connection", false)
+	assertConnectionName("oauth", "OAuth connection", true)
 
 	for _, tc := range []struct {
 		slug        string
 		want        string
 		provisional bool
-	}{{"mcp-token", "Declared Token MCP", false}, {"mcp-oauth", "Declared OAuth MCP", true}} {
+	}{{"mcp-token", "Token MCP", false}, {"mcp-oauth", "OAuth MCP", true}} {
 		need, err := q.GetResourceNeed(t.Context(), dbq.GetResourceNeedParams{AgentID: pgUUID(agentID), Type: "mcp_server", Slug: tc.slug})
 		if err != nil {
 			t.Fatal(err)
@@ -739,8 +753,11 @@ func TestLegacyConfigureDerivesInitialDisplayNames(t *testing.T) {
 		}
 	}
 	exec, err := q.ResolveBoundExecEndpoint(t.Context(), dbq.ResolveBoundExecEndpointParams{AgentID: pgUUID(agentID), Slug: "shell"})
-	if err != nil || exec.DisplayName != "Remote shell" {
-		t.Fatalf("exec display name = %q, want Remote shell (err=%v)", exec.DisplayName, err)
+	if err != nil || exec.DisplayName != "Shell" {
+		t.Fatalf("exec display name = %q, want Shell (err=%v)", exec.DisplayName, err)
+	}
+	if resp := h.Do(h.NewRequest(http.MethodPost, "/api/v1/agents/"+agentID.String()+"/credentials/token", token, &airlockv1.SetAPIKeyRequest{ApiKey: "replacement"})); resp.StatusCode != http.StatusOK {
+		t.Fatalf("blank display name for existing binding = %d, want 200", resp.StatusCode)
 	}
 
 	if resp := h.Do(h.NewRequest(http.MethodPost, "/api/v1/agents/"+agentID.String()+"/credentials/token", token, &airlockv1.SetAPIKeyRequest{ApiKey: "secret", CreateNew: true})); resp.StatusCode != http.StatusBadRequest {
@@ -764,21 +781,21 @@ func TestRuntimeRejectsInsufficientOAuthBinding(t *testing.T) {
 	}
 }
 
-func TestRuntimeGrandfathersExistingUnverifiedOAuthBinding(t *testing.T) {
+func TestRuntimeRejectsUnverifiedOAuthBinding(t *testing.T) {
 	h := apitest.Setup(t)
-	owner := apitest.CreateUser(t, h, "runtime-grandfather-owner", "user")
+	owner := apitest.CreateUser(t, h, "runtime-unverified-owner", "user")
 	agentID := apitest.CreateAgent(t, h, apitest.AgentOpts{OwnerID: owner})
-	resourceID := seedOAuthConnection(t, h, agentID, "runtime-grandfather", "read write", "read write")
-	seedConnectionNeed(t, h, agentID, "runtime-grandfather", "read write")
+	resourceID := seedOAuthConnection(t, h, agentID, "runtime-unverified", "read write", "read write")
+	seedConnectionNeed(t, h, agentID, "runtime-unverified", "read write")
 	q := dbq.New(h.DB.Pool())
-	if _, err := q.BindConnectionNeed(t.Context(), dbq.BindConnectionNeedParams{AgentID: pgUUID(agentID), Slug: "runtime-grandfather", ResourceID: pgUUID(resourceID)}); err != nil {
+	if _, err := q.BindConnectionNeed(t.Context(), dbq.BindConnectionNeedParams{AgentID: pgUUID(agentID), Slug: "runtime-unverified", ResourceID: pgUUID(resourceID)}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.DB.Pool().Exec(t.Context(), `UPDATE connections SET scopes_verified=false WHERE id=$1`, pgUUID(resourceID)); err != nil {
+	if _, err := h.DB.Pool().Exec(t.Context(), `UPDATE connections SET access_token_ref='', refresh_token='', scopes_verified=false WHERE id=$1`, pgUUID(resourceID)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := q.ResolveBoundConnection(t.Context(), dbq.ResolveBoundConnectionParams{AgentID: pgUUID(agentID), Slug: "runtime-grandfather"}); err != nil {
-		t.Fatalf("grandfathered binding did not resolve: %v", err)
+	if _, err := q.ResolveBoundConnection(t.Context(), dbq.ResolveBoundConnectionParams{AgentID: pgUUID(agentID), Slug: "runtime-unverified"}); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("runtime resolution error = %v, want no rows", err)
 	}
 }
 

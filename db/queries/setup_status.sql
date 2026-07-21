@@ -15,7 +15,8 @@ SELECT
           AND n.required
           AND (n.bound_connection_id IS NULL
             OR (c.auth_mode != 'none' AND (c.access_token_ref = ''
-              OR (c.auth_mode = 'oauth' AND NOT (string_to_array(n.expected_scopes, ' ') <@ string_to_array(c.granted_scopes, ' ')))))))
+              OR (c.auth_mode = 'oauth' AND (NOT c.scopes_verified
+                OR NOT (string_to_array(n.expected_scopes, ' ') <@ string_to_array(c.granted_scopes, ' '))))))))
         AS connections,
     (SELECT COUNT(*)::int FROM agent_resource_needs n
         LEFT JOIN agent_mcp_servers m ON m.id = n.bound_mcp_id
@@ -23,7 +24,8 @@ SELECT
           AND n.required
           AND (n.bound_mcp_id IS NULL
             OR (m.auth_mode != 'none' AND (m.access_token_ref = ''
-              OR (m.auth_mode IN ('oauth', 'oauth_discovery') AND NOT (string_to_array(n.expected_scopes, ' ') <@ string_to_array(m.granted_scopes, ' ')))))))
+              OR (m.auth_mode IN ('oauth', 'oauth_discovery') AND (NOT m.scopes_verified
+                OR NOT (string_to_array(n.expected_scopes, ' ') <@ string_to_array(m.granted_scopes, ' '))))))))
         AS mcp_servers,
     (SELECT COUNT(*)::int FROM agent_env_vars e
         WHERE e.agent_id = $1

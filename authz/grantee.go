@@ -14,7 +14,7 @@ const (
 	CapManage = "manage"
 )
 
-// Built-in group principal ids (seeded in migration 002). They let a grant
+// Built-in group principal ids in the schema baseline. They let a grant
 // target a tenant role ("all managers") without a stored-membership table: the
 // resolver expands a caller into the role-groups it belongs to. admin ⊇
 // manager ⊇ user, so a higher role inherits the lower groups' grants.

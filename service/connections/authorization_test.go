@@ -126,7 +126,7 @@ func newAuthorizationFixture(t *testing.T, existing bool) *authorizationFixture 
 			t.Fatal(err)
 		}
 		if err := f.queries.UpdateConnectionCredentialsByID(ctx, dbq.UpdateConnectionCredentialsByIDParams{
-			ID: resource.ID, AccessTokenRef: oldAccess, RefreshToken: oldRefresh, GrantedScopes: "read",
+			ID: resource.ID, AccessTokenRef: oldAccess, RefreshToken: oldRefresh, GrantedScopes: "read", ScopesVerified: true,
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -160,7 +160,7 @@ func prepareRefreshFixture(t *testing.T) *authorizationFixture {
 	}
 	if err := f.queries.UpdateConnectionCredentialsByID(t.Context(), dbq.UpdateConnectionCredentialsByIDParams{
 		ID: resource.ID, AccessTokenRef: resource.AccessTokenRef, RefreshToken: resource.RefreshToken,
-		GrantedScopes: "read", TokenExpiresAt: pgtype.Timestamptz{Time: time.Now().Add(-time.Minute), Valid: true},
+		GrantedScopes: "read", ScopesVerified: true, TokenExpiresAt: pgtype.Timestamptz{Time: time.Now().Add(-time.Minute), Valid: true},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -306,8 +306,8 @@ func TestExistingOAuthExpansionBindsAtomically(t *testing.T) {
 	}
 	access, _ := callbackTestEncryptor().Get(t.Context(), "connection/"+f.resourceID.String()+"/access_token", resource.AccessTokenRef)
 	refresh, _ := callbackTestEncryptor().Get(t.Context(), "connection/"+f.resourceID.String()+"/refresh_token", resource.RefreshToken)
-	if access != "new-access" || refresh != "old-refresh" || resource.GrantedScopes != "read write" {
-		t.Fatalf("stored credential: access=%q refresh=%q scopes=%q", access, refresh, resource.GrantedScopes)
+	if access != "new-access" || refresh != "old-refresh" || resource.GrantedScopes != "read write" || !resource.ScopesVerified {
+		t.Fatalf("stored credential: access=%q refresh=%q scopes=%q verified=%v", access, refresh, resource.GrantedScopes, resource.ScopesVerified)
 	}
 	need, err := f.queries.GetResourceNeed(t.Context(), dbq.GetResourceNeedParams{AgentID: pgUUID(f.agentID), Type: "connection", Slug: f.targetSlug})
 	if err != nil || !need.BoundConnectionID.Valid || uuid.UUID(need.BoundConnectionID.Bytes) != f.resourceID {

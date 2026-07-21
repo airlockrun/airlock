@@ -56,7 +56,7 @@ func resolveToken(
 ) (token string, persist bool, err error) {
 	ref := row.refPrefix + "/" + uuid.UUID(row.id.Bytes).String()
 
-	if row.accessRef == "" {
+	if row.accessRef == "" || !row.scopesVerified {
 		return "", false, ErrNeedsReauth
 	}
 
@@ -130,7 +130,7 @@ func resolveToken(
 	if err := update(ctx, encAccess, expiresAt, encRefresh, grantedScopes, scopesVerified); err != nil {
 		return "", false, fmt.Errorf("persist refreshed credentials: %w", err)
 	}
-	if row.requiredScopes != "" && !CoversScopes(row.requiredScopes, grantedScopes) {
+	if !scopesVerified || row.requiredScopes != "" && !CoversScopes(row.requiredScopes, grantedScopes) {
 		return "", true, ErrNeedsReauth
 	}
 	return resp.AccessToken, true, nil
@@ -160,7 +160,7 @@ func ensureConnectionToken(ctx context.Context, database *db.DB, enc secrets.Sto
 			return "", false, err
 		}
 		bindings, err := q.LockQualifyingConnectionBindings(ctx, dbq.LockQualifyingConnectionBindingsParams{
-			ResourceID: connectionID, GrantedScopes: conn.GrantedScopes,
+			ResourceID: connectionID, GrantedScopes: conn.GrantedScopes, ScopesVerified: conn.ScopesVerified,
 		})
 		if err != nil {
 			return "", false, err
@@ -223,9 +223,6 @@ func ensureConnectionToken(ctx context.Context, database *db.DB, enc secrets.Sto
 // EnsureConnectionToken resolves a token for an already-resolved runtime
 // binding. It locks and rereads the target need before the resource row, so a
 // concurrent sync scope expansion is observed before a valid token is returned.
-// scopes_verified is intentionally not required here: migrated bindings are
-// grandfathered under their assumed declared grant. New candidate reuse and
-// BindExisting require a provider-verified grant before creating a binding.
 func EnsureConnectionToken(ctx context.Context, database *db.DB, enc secrets.Store, client *Client, logger *zap.Logger, agentID pgtype.UUID, needSlug string, connectionID pgtype.UUID, refreshIfBefore time.Time) (string, error) {
 	token, _, err := ensureConnectionToken(ctx, database, enc, client, logger, connectionID, agentID, needSlug, refreshIfBefore, false)
 	return token, err
@@ -256,7 +253,7 @@ func ensureMCPServerToken(ctx context.Context, database *db.DB, enc secrets.Stor
 			return "", false, err
 		}
 		bindings, err := q.LockQualifyingMCPBindings(ctx, dbq.LockQualifyingMCPBindingsParams{
-			ResourceID: serverID, GrantedScopes: srv.GrantedScopes,
+			ResourceID: serverID, GrantedScopes: srv.GrantedScopes, ScopesVerified: srv.ScopesVerified,
 		})
 		if err != nil {
 			return "", false, err
@@ -317,7 +314,7 @@ func ensureMCPServerToken(ctx context.Context, database *db.DB, enc secrets.Stor
 }
 
 // EnsureMCPServerToken resolves a token for an already-resolved runtime binding
-// with the same locked need recheck and grandfathering as EnsureConnectionToken.
+// with the same locked need recheck as EnsureConnectionToken.
 func EnsureMCPServerToken(ctx context.Context, database *db.DB, enc secrets.Store, client *Client, logger *zap.Logger, agentID pgtype.UUID, needSlug string, serverID pgtype.UUID, refreshIfBefore time.Time) (string, error) {
 	token, _, err := ensureMCPServerToken(ctx, database, enc, client, logger, serverID, agentID, needSlug, refreshIfBefore, false)
 	return token, err
