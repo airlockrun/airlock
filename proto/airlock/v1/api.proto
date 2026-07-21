@@ -563,11 +563,15 @@ message ListConnectionsResponse {
 
 message SetAPIKeyRequest {
   string api_key = 1;
+  string display_name = 2; // required when this call provisions a resource
+  bool create_new = 3; // create and atomically replace the current binding
 }
 
 message SetOAuthAppRequest {
   string client_id = 1;
   string client_secret = 2;
+  string display_name = 3; // required when this call provisions a resource
+  bool create_new = 4; // stage the app on a distinct provisional resource
 }
 
 message OAuthStartRequest {
@@ -578,6 +582,22 @@ message OAuthStartRequest {
 
 message OAuthStartResponse {
   string authorize_url = 1;
+}
+
+message StartAuthorizationForNeedRequest {
+  string agent_id = 1;
+  string type = 2; // connection | mcp_server
+  string slug = 3; // agent-local need slug
+  string resource_id = 4; // existing candidate; empty selects a provisional resource for the need
+  string display_name = 5; // required when a provisional resource must be created
+  string redirect_uri = 6;
+  bool create_new = 7; // authorize a distinct provisional resource, then switch on success
+}
+
+message StartAuthorizationForNeedResponse {
+  string authorize_url = 1;
+  string resource_id = 2;
+  string status = 3; // authorization_started
 }
 
 message CredentialStatusResponse {
@@ -820,6 +840,8 @@ message ConfigureExecEndpointRequest {
   string host = 1;
   int32 port = 2;
   string ssh_user = 3;
+  string display_name = 4; // required when this call provisions a resource
+  bool create_new = 5; // create/configure and atomically replace the binding
 }
 
 message ConfigureExecEndpointResponse {
@@ -865,6 +887,7 @@ message GrantResourceRequest {
 message ResourceGrantInfo {
   string grantee_id = 1;
   repeated string capabilities = 2;
+  string id = 3;
 }
 
 message ListResourceGrantsResponse {
@@ -914,10 +937,11 @@ message ListAllowedModelsResponse {
   repeated AllowedModel models = 2;
 }
 
-// ── Owner resource inventory (per-user Resources view) ──
+// ── Resource inventory (per-user Resources view) ──
 
-// OwnedResourceInfo is one resource a principal owns, across all of their
-// agents, with how many agents currently bind it. No secret material.
+// OwnedResourceInfo is one resource a principal owns or can access through a
+// grant, with how many agents currently bind it. No secret material. name is
+// the immutable declaration/provider name; display_name is user-controlled.
 message OwnedResourceInfo {
   string id = 1;
   string type = 2;  // connection | mcp_server | exec_endpoint
@@ -928,10 +952,29 @@ message OwnedResourceInfo {
   int32 agent_count = 7;     // how many of the owner's agents bind this resource
   google.protobuf.Timestamp created_at = 8;
   google.protobuf.Timestamp last_used_at = 9;
+  string display_name = 10;
+  repeated string capabilities = 11;  // subset of view | bind | manage
 }
 
 message ListOwnedResourcesResponse {
   repeated OwnedResourceInfo resources = 1;
+}
+
+message RenameResourceRequest {
+  string display_name = 1;
+}
+
+message ResourceConsumerInfo {
+  string agent_id = 1;
+  string agent_name = 2;
+  string agent_slug = 3;
+  string need_type = 4;
+  string need_slug = 5;
+  bool can_access_agent = 6;
+}
+
+message ListResourceConsumersResponse {
+  repeated ResourceConsumerInfo consumers = 1;
 }
 
 // ── LLM spend ledger rollups (admin Usage view) ──
@@ -1083,6 +1126,14 @@ message CandidateInfo {
   string resource_id = 1;
   string name = 2;
   string slug = 3;
+  string display_name = 4;
+  string readiness = 5; // ready | authorization_required | scope_upgrade_required | scope_upgrade_requires_manager
+  bool authorized = 6;
+  bool configured = 7;
+  int32 agent_count = 8;
+  repeated string required_scopes = 9;
+  repeated string missing_scopes = 10;
+  repeated string capabilities = 11;
 }
 
 message ListCandidatesResponse {
@@ -1091,6 +1142,10 @@ message ListCandidatesResponse {
 
 message BindNeedRequest {
   string resource_id = 1;
+}
+
+message CreateForNeedRequest {
+  string display_name = 1;
 }
 
 message CreateForNeedResponse {

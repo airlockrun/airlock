@@ -92,6 +92,7 @@ func registerTestConnection(t *testing.T, agentID uuid.UUID, slug, authMode stri
 		AgentID:       toPgUUID(agentID),
 		Slug:          slug,
 		Name:          "Test " + slug,
+		DisplayName:   "Test " + slug,
 		AuthMode:      authMode,
 		AuthUrl:       "https://provider.example.com/authorize",
 		TokenUrl:      "https://provider.example.com/token",
@@ -108,11 +109,11 @@ func registerTestConnection(t *testing.T, agentID uuid.UUID, slug, authMode stri
 	if err := q.UpsertResourceNeed(context.Background(), dbq.UpsertResourceNeedParams{
 		AgentID: toPgUUID(agentID), Type: "connection", Slug: slug, Description: "Test " + slug,
 		SetupInstructions: "", ExpectedUrl: "https://api.example.com", ExpectedScopes: "read write",
-		Spec: []byte("{}"),
+		Spec: []byte(`{"base_url":"https://api.example.com","auth_mode":"` + authMode + `","scopes":"read write","auth_injection":{"type":"bearer"},"auth_params":{},"headers":{}}`),
 	}); err != nil {
 		t.Fatalf("upsert connection need: %v", err)
 	}
-	if err := q.BindConnectionNeed(context.Background(), dbq.BindConnectionNeedParams{
+	if _, err := q.BindConnectionNeed(context.Background(), dbq.BindConnectionNeedParams{
 		AgentID: toPgUUID(agentID), Slug: slug, ResourceID: conn.ID,
 	}); err != nil {
 		t.Fatalf("bind connection need: %v", err)
@@ -346,6 +347,7 @@ func TestOAuthCallbackFlow(t *testing.T) {
 		AgentID:       toPgUUID(agentID),
 		Slug:          "mock-oauth",
 		Name:          "Mock OAuth",
+		DisplayName:   "Mock OAuth",
 		AuthMode:      "oauth",
 		AuthUrl:       mockProvider.URL + "/authorize",
 		TokenUrl:      mockProvider.URL + "/token",
@@ -360,11 +362,11 @@ func TestOAuthCallbackFlow(t *testing.T) {
 	}
 	if err := q.UpsertResourceNeed(context.Background(), dbq.UpsertResourceNeedParams{
 		AgentID: toPgUUID(agentID), Type: "connection", Slug: "mock-oauth", Description: "Mock OAuth",
-		SetupInstructions: "", ExpectedUrl: mockProvider.URL, ExpectedScopes: "", Spec: []byte("{}"),
+		SetupInstructions: "", ExpectedUrl: mockProvider.URL, ExpectedScopes: "", Spec: []byte(`{"base_url":"` + mockProvider.URL + `","auth_mode":"oauth","auth_injection":{"type":"bearer"},"auth_params":{},"headers":{}}`),
 	}); err != nil {
 		t.Fatalf("upsert connection need: %v", err)
 	}
-	if err := q.BindConnectionNeed(context.Background(), dbq.BindConnectionNeedParams{
+	if _, err := q.BindConnectionNeed(context.Background(), dbq.BindConnectionNeedParams{
 		AgentID: toPgUUID(agentID), Slug: "mock-oauth", ResourceID: conn.ID,
 	}); err != nil {
 		t.Fatalf("bind connection need: %v", err)
@@ -375,7 +377,7 @@ func TestOAuthCallbackFlow(t *testing.T) {
 	connRef := "connection/" + pgUUID(conn.ID).String()
 	encClientID, _ := enc.Put(context.Background(), connRef+"/client_id", "mock-client-id")
 	encClientSecret, _ := enc.Put(context.Background(), connRef+"/client_secret", "mock-client-secret")
-	if err := q.UpdateConnectionOAuthAppByID(context.Background(), dbq.UpdateConnectionOAuthAppByIDParams{
+	if _, err := q.StageConnectionOAuthAppByID(context.Background(), dbq.StageConnectionOAuthAppByIDParams{
 		ID:           conn.ID,
 		ClientID:     encClientID,
 		ClientSecret: encClientSecret,

@@ -23,6 +23,8 @@ type TokenResponse struct {
 	RefreshToken string
 	TokenType    string
 	ExpiresIn    int64 // seconds
+	Scope        string
+	ScopePresent bool
 }
 
 // Client handles OAuth 2.0 operations.
@@ -41,7 +43,7 @@ func NewClient(httpClient *http.Client, allowInsecureLocalhost bool) *Client {
 
 var reservedAuthParams = map[string]struct{}{
 	"client_id": {}, "redirect_uri": {}, "state": {}, "response_type": {},
-	"code_challenge": {}, "code_challenge_method": {},
+	"code_challenge": {}, "code_challenge_method": {}, "scope": {},
 }
 
 // ValidateAuthParams rejects parameters that could replace OAuth's identity,
@@ -99,7 +101,7 @@ func (c *Client) BuildAuthURL(authURL, clientID, redirectURI, state, codeChallen
 	q.Set("code_challenge", codeChallenge)
 	q.Set("code_challenge_method", "S256")
 
-	if scopes != "" {
+	if scopes = CanonicalScopes(scopes); scopes != "" {
 		q.Set("scope", scopes)
 	}
 	for k, v := range extraParams {
@@ -173,12 +175,13 @@ func (c *Client) tokenRequest(ctx context.Context, tokenURL string, data url.Val
 	// through to the opaque "status %d" error if the body doesn't carry a
 	// recognisable OAuth error code.
 	var tokenResp struct {
-		AccessToken  string `json:"access_token"`
-		RefreshToken string `json:"refresh_token"`
-		TokenType    string `json:"token_type"`
-		ExpiresIn    int64  `json:"expires_in"`
-		Error        string `json:"error"`
-		ErrorDesc    string `json:"error_description"`
+		AccessToken  string  `json:"access_token"`
+		RefreshToken string  `json:"refresh_token"`
+		TokenType    string  `json:"token_type"`
+		ExpiresIn    int64   `json:"expires_in"`
+		Scope        *string `json:"scope"`
+		Error        string  `json:"error"`
+		ErrorDesc    string  `json:"error_description"`
 	}
 	jsonErr := json.Unmarshal(body, &tokenResp)
 	if jsonErr == nil && tokenResp.Error != "" {
@@ -200,12 +203,17 @@ func (c *Client) tokenRequest(ctx context.Context, tokenURL string, data url.Val
 		return nil, fmt.Errorf("no access token in response")
 	}
 
-	return &TokenResponse{
+	result := &TokenResponse{
 		AccessToken:  tokenResp.AccessToken,
 		RefreshToken: tokenResp.RefreshToken,
 		TokenType:    tokenResp.TokenType,
 		ExpiresIn:    tokenResp.ExpiresIn,
-	}, nil
+	}
+	if tokenResp.Scope != nil {
+		result.Scope = CanonicalScopes(*tokenResp.Scope)
+		result.ScopePresent = true
+	}
+	return result, nil
 }
 
 const maxOAuthResponseBytes = 1 << 20

@@ -32,7 +32,7 @@ export async function startOAuth(agentId: string, slug: string) {
 // the path doesn't follow the /agents/{id}/... shape we fall back to
 // the bare detail URL — the connection authorization is per-agent so
 // the detail page is always a reasonable landing spot.
-function canonicalAgentURL(agentId: string): string {
+export function canonicalAgentURL(agentId: string): string {
   const url = new URL(window.location.href)
   const parts = url.pathname.split('/')
   if (parts[1] === 'agents' && parts.length > 2 && parts[2] !== agentId) {

@@ -1,6 +1,5 @@
-// Package connections owns per-agent credential management:
-// connections (API key / OAuth), MCP servers, env vars, and the
-// aggregate setup-status signal.
+// Package connections owns reusable connection and MCP credentials, their
+// need-aware OAuth lifecycle, agent env vars, and aggregate setup status.
 //
 // Authorization uses the standard agent-admin gate (agent_members.role
 // = 'admin'), the same ladder used by members, siblings, and agent
@@ -19,7 +18,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/authz"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
@@ -124,7 +122,17 @@ func toPg(id uuid.UUID) pgtype.UUID { return pgtype.UUID{Bytes: id, Valid: true}
 // the resource an agent reaches through its need's binding. Credential ops then
 // address the resource by its id. An unbound need is "not found".
 func (s *Service) resolveConn(ctx context.Context, q *dbq.Queries, agentID uuid.UUID, slug string) (dbq.Connection, error) {
-	conn, err := q.ResolveBoundConnection(ctx, dbq.ResolveBoundConnectionParams{AgentID: toPg(agentID), Slug: slug})
+	need, err := q.GetResourceNeed(ctx, dbq.GetResourceNeedParams{AgentID: toPg(agentID), Type: "connection", Slug: slug})
+	if err == nil && !need.BoundConnectionID.Valid {
+		err = pgx.ErrNoRows
+	}
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return dbq.Connection{}, service.Detail(service.ErrNotFound, "connection not found")
+		}
+		return dbq.Connection{}, err
+	}
+	conn, err := q.GetConnectionByID(ctx, need.BoundConnectionID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return dbq.Connection{}, service.Detail(service.ErrNotFound, "connection not found")
 	}
@@ -132,7 +140,17 @@ func (s *Service) resolveConn(ctx context.Context, q *dbq.Queries, agentID uuid.
 }
 
 func (s *Service) resolveMCP(ctx context.Context, q *dbq.Queries, agentID uuid.UUID, slug string) (dbq.AgentMcpServer, error) {
-	srv, err := q.ResolveBoundMCPServer(ctx, dbq.ResolveBoundMCPServerParams{AgentID: toPg(agentID), Slug: slug})
+	need, err := q.GetResourceNeed(ctx, dbq.GetResourceNeedParams{AgentID: toPg(agentID), Type: "mcp_server", Slug: slug})
+	if err == nil && !need.BoundMcpID.Valid {
+		err = pgx.ErrNoRows
+	}
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return dbq.AgentMcpServer{}, service.Detail(service.ErrNotFound, "MCP server not found")
+		}
+		return dbq.AgentMcpServer{}, err
+	}
+	srv, err := q.GetMCPServerByID(ctx, need.BoundMcpID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return dbq.AgentMcpServer{}, service.Detail(service.ErrNotFound, "MCP server not found")
 	}
@@ -214,9 +232,10 @@ type EnvVar struct {
 
 // SetupCounts is the body of SetupStatus.
 type SetupCounts struct {
-	Connections int32
-	MCPServers  int32
-	EnvVars     int32
+	Connections   int32
+	MCPServers    int32
+	EnvVars       int32
+	ExecEndpoints int32
 }
 
 // --- connections ---
@@ -225,22 +244,36 @@ type SetupCounts struct {
 // declared need, creating it — owned by the configuring principal — and binding
 // it on first credential configuration (idempotent if already bound). The
 // provisioning is the shared needs.CreateForNeed step.
-func (s *Service) ensureBoundConnection(ctx context.Context, q *dbq.Queries, p authz.Principal, agentID uuid.UUID, slug string) error {
-	_, err := needs.CreateForNeed(ctx, q, p, agentID, "connection", slug)
-	return err
+func (s *Service) ensureBoundConnection(ctx context.Context, q *dbq.Queries, p authz.Principal, agentID uuid.UUID, slug, displayName string, createNew bool) (uuid.UUID, error) {
+	return needs.CreateForNeed(ctx, q, p, agentID, "connection", slug, displayName, createNew)
 }
 
 // SetOAuthApp persists encrypted client_id/client_secret for a connection.
-func (s *Service) SetOAuthApp(ctx context.Context, p authz.Principal, agentID uuid.UUID, slug, clientID, clientSecret string) (Status, error) {
-	q := dbq.New(s.db.Pool())
+func (s *Service) SetOAuthApp(ctx context.Context, p authz.Principal, agentID uuid.UUID, slug, displayName, clientID, clientSecret string, createNew bool) (Status, error) {
+	tx, err := s.db.Pool().Begin(ctx)
+	if err != nil {
+		return Status{}, err
+	}
+	defer tx.Rollback(ctx)
+	q := dbq.New(tx)
+	if _, err := q.GetAgentByIDForUpdate(ctx, toPg(agentID)); err != nil {
+		return Status{}, service.ErrNotFound
+	}
 	if err := authz.Authorize(ctx, q, p, authz.AgentConnections, agentID); err != nil {
 		return Status{}, err
 	}
-	if err := s.ensureBoundConnection(ctx, q, p, agentID, slug); err != nil {
+	resourceID, err := s.ensureBoundConnection(ctx, q, p, agentID, slug, displayName, createNew)
+	if err != nil {
 		return Status{}, err
 	}
-	conn, err := s.resolveConn(ctx, q, agentID, slug)
+	conn, err := q.GetConnectionByIDForUpdate(ctx, toPg(resourceID))
 	if err != nil {
+		return Status{}, err
+	}
+	if err := authz.AuthorizeResource(ctx, q, p, authz.ResourceManage, "connection", resourceID); err != nil {
+		return Status{}, err
+	}
+	if err := authz.AuthorizeResource(ctx, q, p, authz.ResourceBind, "connection", resourceID); err != nil {
 		return Status{}, err
 	}
 	if conn.AuthMode != "oauth" {
@@ -257,77 +290,16 @@ func (s *Service) SetOAuthApp(ctx context.Context, p authz.Principal, agentID uu
 		s.logger.Error("encrypt client_secret failed", zap.Error(err))
 		return Status{}, err
 	}
-	if err := q.UpdateConnectionOAuthAppByID(ctx, dbq.UpdateConnectionOAuthAppByIDParams{
+	if _, err := q.StageConnectionOAuthAppByID(ctx, dbq.StageConnectionOAuthAppByIDParams{
 		ID: conn.ID, ClientID: encClientID, ClientSecret: encClientSecret,
 	}); err != nil {
 		s.logger.Error("update oauth app failed", zap.Error(err))
 		return Status{}, err
 	}
-	return Status{Slug: slug, Name: conn.Name, AuthMode: "oauth", Authorized: false}, nil
-}
-
-// OAuthStart generates a PKCE pair + state row and returns the
-// authorize URL the user should redirect to.
-func (s *Service) OAuthStart(ctx context.Context, p authz.Principal, agentID uuid.UUID, slug, redirectURI string) (string, error) {
-	q := dbq.New(s.db.Pool())
-	if err := authz.Authorize(ctx, q, p, authz.AgentConnections, agentID); err != nil {
-		return "", err
+	if err := tx.Commit(ctx); err != nil {
+		return Status{}, err
 	}
-	conn, err := s.resolveConn(ctx, q, agentID, slug)
-	if err != nil {
-		return "", err
-	}
-	if conn.AuthMode != "oauth" {
-		return "", service.Detail(service.ErrInvalidInput, "connection is not OAuth")
-	}
-	if conn.ClientID == "" {
-		return "", service.Detail(service.ErrInvalidInput, "OAuth app not configured. Set client_id and client_secret first.")
-	}
-	completionRedirect, err := s.completionRedirect(redirectURI, agentID)
-	if err != nil {
-		return "", service.Detail(service.ErrInvalidInput, "invalid completion redirect: %v", err)
-	}
-	connRef := "connection/" + uuid.UUID(conn.ID.Bytes).String()
-	clientID, err := s.encryptor.Get(ctx, connRef+"/client_id", conn.ClientID)
-	if err != nil {
-		s.logger.Error("decrypt client_id failed", zap.Error(err))
-		return "", err
-	}
-	verifier, challenge, err := oauth.GeneratePKCE()
-	if err != nil {
-		return "", err
-	}
-	state, err := oauth.GenerateState()
-	if err != nil {
-		return "", err
-	}
-	encVerifier, err := s.encryptor.Put(ctx, "oauth_state/"+state+"/code_verifier", verifier)
-	if err != nil {
-		return "", err
-	}
-	if err := q.CreateOAuthState(ctx, dbq.CreateOAuthStateParams{
-		State: state, AgentID: toPg(agentID), UserID: toPg(p.UserID), ResourceID: conn.ID, Slug: slug,
-		CodeVerifier: encVerifier, RedirectUri: completionRedirect,
-		ExpiresAt:  pgtype.Timestamptz{Time: time.Now().Add(10 * time.Minute), Valid: true},
-		SourceType: "connection",
-	}); err != nil {
-		return "", err
-	}
-	authParams := map[string]string{"access_type": "offline", "prompt": "consent"}
-	if len(conn.AuthParams) > 0 {
-		var override map[string]string
-		if jsonErr := json.Unmarshal(conn.AuthParams, &override); jsonErr == nil {
-			for k, v := range override {
-				if v == "" {
-					delete(authParams, k)
-					continue
-				}
-				authParams[k] = v
-			}
-		}
-	}
-	callbackURL := s.publicURL + "/api/v1/credentials/oauth/callback"
-	return s.oauthClient.BuildAuthURL(conn.AuthUrl, clientID, callbackURL, state, challenge, conn.Scopes, authParams)
+	return Status{Slug: slug, Name: conn.Name, AuthMode: "oauth", Authorized: conn.AccessTokenRef != ""}, nil
 }
 
 // OAuthCallbackResult tells the caller where to redirect the browser
@@ -341,149 +313,6 @@ var ErrOAuthMissingParams = service.Detail(service.ErrInvalidInput, "missing cod
 
 // ErrOAuthInvalidState is returned for an unknown or expired state row.
 var ErrOAuthInvalidState = service.Detail(service.ErrInvalidInput, "invalid or expired state")
-
-type oauthCallbackResource struct {
-	tokenURL        string
-	clientIDEnc     string
-	clientSecretEnc string
-	resourceID      pgtype.UUID
-	sourceRef       string
-}
-
-// liveOAuthCallbackResource re-establishes the initiating user's current
-// identity and the state's exact agent resource binding. OAuth callbacks carry
-// no live session, so the consumed state is identity input, not authorization.
-func (s *Service) liveOAuthCallbackResource(ctx context.Context, q *dbq.Queries, oauthState dbq.OauthState) (oauthCallbackResource, error) {
-	if !oauthState.AgentID.Valid || !oauthState.UserID.Valid || !oauthState.ResourceID.Valid {
-		return oauthCallbackResource{}, ErrOAuthInvalidState
-	}
-	agentID := uuid.UUID(oauthState.AgentID.Bytes)
-	userID := uuid.UUID(oauthState.UserID.Bytes)
-	if agentID == uuid.Nil || userID == uuid.Nil || uuid.UUID(oauthState.ResourceID.Bytes) == uuid.Nil {
-		return oauthCallbackResource{}, ErrOAuthInvalidState
-	}
-	user, err := q.GetUserByID(ctx, oauthState.UserID)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return oauthCallbackResource{}, service.ErrForbidden
-		}
-		return oauthCallbackResource{}, err
-	}
-	principal := authz.UserPrincipal(userID, auth.Role(user.TenantRole))
-	if err := authz.Authorize(ctx, q, principal, authz.AgentConnections, agentID); err != nil {
-		return oauthCallbackResource{}, err
-	}
-
-	switch oauthState.SourceType {
-	case "mcp":
-		srv, err := s.resolveMCP(ctx, q, agentID, oauthState.Slug)
-		if err != nil {
-			return oauthCallbackResource{}, err
-		}
-		if srv.ID != oauthState.ResourceID || (srv.AuthMode != "oauth" && srv.AuthMode != "oauth_discovery") {
-			return oauthCallbackResource{}, ErrOAuthInvalidState
-		}
-		return oauthCallbackResource{
-			tokenURL: srv.TokenUrl, clientIDEnc: srv.ClientID, clientSecretEnc: srv.ClientSecret,
-			resourceID: srv.ID, sourceRef: "mcp/" + uuid.UUID(srv.ID.Bytes).String(),
-		}, nil
-	case "connection":
-		conn, err := s.resolveConn(ctx, q, agentID, oauthState.Slug)
-		if err != nil {
-			return oauthCallbackResource{}, err
-		}
-		if conn.ID != oauthState.ResourceID || conn.AuthMode != "oauth" {
-			return oauthCallbackResource{}, ErrOAuthInvalidState
-		}
-		return oauthCallbackResource{
-			tokenURL: conn.TokenUrl, clientIDEnc: conn.ClientID, clientSecretEnc: conn.ClientSecret,
-			resourceID: conn.ID, sourceRef: "connection/" + uuid.UUID(conn.ID.Bytes).String(),
-		}, nil
-	default:
-		return oauthCallbackResource{}, ErrOAuthInvalidState
-	}
-}
-
-// OAuthCallback handles the provider's redirect after consent. Returns
-// the URL to redirect the browser to (either the original redirect_uri
-// success page, or that URL with error params if the exchange failed).
-func (s *Service) OAuthCallback(ctx context.Context, code, state string) (OAuthCallbackResult, error) {
-	if code == "" || state == "" {
-		return OAuthCallbackResult{}, ErrOAuthMissingParams
-	}
-	q := dbq.New(s.db.Pool())
-	oauthState, err := q.ConsumeOAuthState(ctx, state)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return OAuthCallbackResult{}, ErrOAuthInvalidState
-		}
-		s.logger.Error("get oauth state failed", zap.Error(err))
-		return OAuthCallbackResult{}, err
-	}
-	resource, err := s.liveOAuthCallbackResource(ctx, q, oauthState)
-	if err != nil {
-		return OAuthCallbackResult{}, err
-	}
-	agentID := uuid.UUID(oauthState.AgentID.Bytes)
-	verifier, err := s.encryptor.Get(ctx, "oauth_state/"+state+"/code_verifier", oauthState.CodeVerifier)
-	if err != nil {
-		s.logger.Error("decrypt verifier failed", zap.Error(err))
-		return OAuthCallbackResult{}, err
-	}
-	clientID, err := s.encryptor.Get(ctx, resource.sourceRef+"/client_id", resource.clientIDEnc)
-	if err != nil {
-		s.logger.Error("decrypt client_id failed", zap.Error(err))
-		return OAuthCallbackResult{}, err
-	}
-	clientSecret, err := s.encryptor.Get(ctx, resource.sourceRef+"/client_secret", resource.clientSecretEnc)
-	if err != nil {
-		s.logger.Error("decrypt client_secret failed", zap.Error(err))
-		return OAuthCallbackResult{}, err
-	}
-	callbackURL := s.publicURL + "/api/v1/credentials/oauth/callback"
-	tokenResp, err := s.oauthClient.ExchangeCode(ctx, resource.tokenURL, code, verifier, callbackURL, clientID, clientSecret)
-	if err != nil {
-		s.logger.Error("token exchange failed", zap.Error(err))
-		return OAuthCallbackResult{RedirectURL: oauthErrorRedirect(oauthState.RedirectUri, err)}, nil
-	}
-	if _, err := s.liveOAuthCallbackResource(ctx, q, oauthState); err != nil {
-		return OAuthCallbackResult{}, err
-	}
-	encAccessToken, err := s.encryptor.Put(ctx, resource.sourceRef+"/access_token", tokenResp.AccessToken)
-	if err != nil {
-		return OAuthCallbackResult{}, err
-	}
-	var encRefreshToken string
-	if tokenResp.RefreshToken != "" {
-		encRefreshToken, err = s.encryptor.Put(ctx, resource.sourceRef+"/refresh_token", tokenResp.RefreshToken)
-		if err != nil {
-			return OAuthCallbackResult{}, err
-		}
-	}
-	var expiresAt pgtype.Timestamptz
-	if tokenResp.ExpiresIn > 0 {
-		expiresAt = pgtype.Timestamptz{Time: time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second), Valid: true}
-	}
-	if oauthState.SourceType == "mcp" {
-		if err := q.UpdateMCPServerCredentialsByID(ctx, dbq.UpdateMCPServerCredentialsByIDParams{
-			ID:             resource.resourceID,
-			AccessTokenRef: encAccessToken, TokenExpiresAt: expiresAt, RefreshToken: encRefreshToken,
-		}); err != nil {
-			s.logger.Error("store MCP credentials failed", zap.Error(err))
-			return OAuthCallbackResult{}, err
-		}
-		s.refreshMCPAfterAuth(ctx, agentID, oauthState.Slug, tokenResp.AccessToken)
-	} else {
-		if err := q.UpdateConnectionCredentialsByID(ctx, dbq.UpdateConnectionCredentialsByIDParams{
-			ID:             resource.resourceID,
-			AccessTokenRef: encAccessToken, TokenExpiresAt: expiresAt, RefreshToken: encRefreshToken,
-		}); err != nil {
-			s.logger.Error("store credentials failed", zap.Error(err))
-			return OAuthCallbackResult{}, err
-		}
-	}
-	return OAuthCallbackResult{RedirectURL: oauthState.RedirectUri}, nil
-}
 
 // PublicURL exposes the configured public URL for handler URL synthesis.
 func (s *Service) PublicURL() string { return s.publicURL }
@@ -510,22 +339,6 @@ func (s *Service) completionRedirect(raw string, agentID uuid.UUID) (string, err
 		return "", errors.New("redirect must have the Airlock origin")
 	}
 	return target.String(), nil
-}
-
-func oauthErrorRedirect(raw string, exchangeErr error) string {
-	u, err := url.Parse(raw)
-	if err != nil {
-		panic("connections: validated OAuth redirect is invalid")
-	}
-	query := u.Query()
-	query.Set("error", "exchange_failed")
-	message := exchangeErr.Error()
-	if len(message) > 1024 {
-		message = message[:1024]
-	}
-	query.Set("message", message)
-	u.RawQuery = query.Encode()
-	return u.String()
 }
 
 // refreshMCPAfterAuth re-discovers tools for a freshly-authorized MCP
@@ -555,16 +368,28 @@ func (s *Service) refreshMCPAfterAuth(ctx context.Context, agentID uuid.UUID, sl
 }
 
 // SetAPIKey stores an encrypted API key for a non-OAuth connection.
-func (s *Service) SetAPIKey(ctx context.Context, p authz.Principal, agentID uuid.UUID, slug, apiKey string) (Status, error) {
-	q := dbq.New(s.db.Pool())
+func (s *Service) SetAPIKey(ctx context.Context, p authz.Principal, agentID uuid.UUID, slug, displayName, apiKey string, createNew bool) (Status, error) {
+	tx, err := s.db.Pool().Begin(ctx)
+	if err != nil {
+		return Status{}, err
+	}
+	defer tx.Rollback(ctx)
+	q := dbq.New(tx)
+	if _, err := q.GetAgentByIDForUpdate(ctx, toPg(agentID)); err != nil {
+		return Status{}, service.ErrNotFound
+	}
 	if err := authz.Authorize(ctx, q, p, authz.AgentConnections, agentID); err != nil {
 		return Status{}, err
 	}
-	if err := s.ensureBoundConnection(ctx, q, p, agentID, slug); err != nil {
+	resourceID, err := s.ensureBoundConnection(ctx, q, p, agentID, slug, displayName, createNew)
+	if err != nil {
 		return Status{}, err
 	}
-	conn, err := s.resolveConn(ctx, q, agentID, slug)
+	conn, err := q.GetConnectionByID(ctx, toPg(resourceID))
 	if err != nil {
+		return Status{}, err
+	}
+	if err := authz.AuthorizeResource(ctx, q, p, authz.ResourceManage, "connection", resourceID); err != nil {
 		return Status{}, err
 	}
 	if conn.AuthMode == "oauth" {
@@ -576,9 +401,12 @@ func (s *Service) SetAPIKey(ctx context.Context, p authz.Principal, agentID uuid
 		return Status{}, err
 	}
 	if err := q.UpdateConnectionCredentialsByID(ctx, dbq.UpdateConnectionCredentialsByIDParams{
-		ID: conn.ID, AccessTokenRef: encKey,
+		ID: conn.ID, AccessTokenRef: encKey, GrantedScopes: "", ScopesVerified: false,
 	}); err != nil {
 		s.logger.Error("store API key failed", zap.Error(err))
+		return Status{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
 		return Status{}, err
 	}
 	return Status{Slug: slug, Name: conn.Name, AuthMode: conn.AuthMode, Authorized: true}, nil
@@ -587,7 +415,7 @@ func (s *Service) SetAPIKey(ctx context.Context, p authz.Principal, agentID uuid
 // ListConnections returns every connection registered against the agent.
 func (s *Service) ListConnections(ctx context.Context, p authz.Principal, agentID uuid.UUID) (ConnectionsList, error) {
 	q := dbq.New(s.db.Pool())
-	if err := authz.Authorize(ctx, q, p, authz.AgentConnections, agentID); err != nil {
+	if err := authz.Authorize(ctx, q, p, authz.AgentGet, agentID); err != nil {
 		return ConnectionsList{}, err
 	}
 	rows, err := q.ListConnectionNeedsByAgent(ctx, toPg(agentID))
@@ -619,7 +447,7 @@ func (s *Service) ListConnections(ctx context.Context, p authz.Principal, agentI
 // CredentialStatus returns the current authorization state of one slug.
 func (s *Service) CredentialStatus(ctx context.Context, p authz.Principal, agentID uuid.UUID, slug string) (Status, error) {
 	q := dbq.New(s.db.Pool())
-	if err := authz.Authorize(ctx, q, p, authz.AgentConnections, agentID); err != nil {
+	if err := authz.Authorize(ctx, q, p, authz.AgentGet, agentID); err != nil {
 		return Status{}, err
 	}
 	conn, err := q.ResolveBoundConnection(ctx, dbq.ResolveBoundConnectionParams{AgentID: toPg(agentID), Slug: slug})
@@ -647,7 +475,7 @@ func (s *Service) RevokeCredential(ctx context.Context, p authz.Principal, agent
 	if err := authz.Authorize(ctx, q, p, authz.AgentConnections, agentID); err != nil {
 		return err
 	}
-	conn, err := q.ResolveBoundConnection(ctx, dbq.ResolveBoundConnectionParams{AgentID: toPg(agentID), Slug: slug})
+	conn, err := s.resolveConn(ctx, q, agentID, slug)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil // nothing bound, nothing to revoke
 	}
@@ -655,9 +483,16 @@ func (s *Service) RevokeCredential(ctx context.Context, p authz.Principal, agent
 		s.logger.Error("resolve connection failed", zap.Error(err))
 		return err
 	}
-	if err := q.ClearConnectionCredentialsByID(ctx, conn.ID); err != nil {
+	if err := authz.AuthorizeResource(ctx, q, p, authz.ResourceManage, "connection", uuid.UUID(conn.ID.Bytes)); err != nil {
+		return err
+	}
+	affected, err := q.ClearConnectionCredentialsByID(ctx, conn.ID)
+	if err != nil {
 		s.logger.Error("revoke credential failed", zap.Error(err))
 		return err
+	}
+	if affected != 1 {
+		return service.ErrNotFound
 	}
 	return nil
 }
@@ -737,7 +572,7 @@ func (s *Service) TestCredential(ctx context.Context, p authz.Principal, agentID
 // ListMCPServers returns all MCP servers + tool counts for the agent.
 func (s *Service) ListMCPServers(ctx context.Context, p authz.Principal, agentID uuid.UUID) ([]MCPServer, error) {
 	q := dbq.New(s.db.Pool())
-	if err := authz.Authorize(ctx, q, p, authz.AgentConnections, agentID); err != nil {
+	if err := authz.Authorize(ctx, q, p, authz.AgentGet, agentID); err != nil {
 		return nil, err
 	}
 	rows, err := q.ListMCPNeedsByAgent(ctx, toPg(agentID))
@@ -776,7 +611,7 @@ func (s *Service) ListMCPServers(ctx context.Context, p authz.Principal, agentID
 // MCPCredentialStatus returns the auth state for an MCP server.
 func (s *Service) MCPCredentialStatus(ctx context.Context, p authz.Principal, agentID uuid.UUID, slug string) (MCPStatus, error) {
 	q := dbq.New(s.db.Pool())
-	if err := authz.Authorize(ctx, q, p, authz.AgentConnections, agentID); err != nil {
+	if err := authz.Authorize(ctx, q, p, authz.AgentGet, agentID); err != nil {
 		return MCPStatus{}, err
 	}
 	srv, err := q.ResolveBoundMCPServer(ctx, dbq.ResolveBoundMCPServerParams{AgentID: toPg(agentID), Slug: slug})
@@ -794,16 +629,28 @@ func (s *Service) MCPCredentialStatus(ctx context.Context, p authz.Principal, ag
 }
 
 // SetMCPToken stores an encrypted token and re-discovers tools.
-func (s *Service) SetMCPToken(ctx context.Context, p authz.Principal, agentID uuid.UUID, slug, apiKey string) (MCPStatus, error) {
-	q := dbq.New(s.db.Pool())
+func (s *Service) SetMCPToken(ctx context.Context, p authz.Principal, agentID uuid.UUID, slug, displayName, apiKey string, createNew bool) (MCPStatus, error) {
+	tx, err := s.db.Pool().Begin(ctx)
+	if err != nil {
+		return MCPStatus{}, err
+	}
+	defer tx.Rollback(ctx)
+	q := dbq.New(tx)
+	if _, err := q.GetAgentByIDForUpdate(ctx, toPg(agentID)); err != nil {
+		return MCPStatus{}, service.ErrNotFound
+	}
 	if err := authz.Authorize(ctx, q, p, authz.AgentConnections, agentID); err != nil {
 		return MCPStatus{}, err
 	}
-	if _, err := needs.CreateForNeed(ctx, q, p, agentID, "mcp_server", slug); err != nil {
+	resourceID, err := needs.CreateForNeed(ctx, q, p, agentID, "mcp_server", slug, displayName, createNew)
+	if err != nil {
 		return MCPStatus{}, err
 	}
-	srv, err := s.resolveMCP(ctx, q, agentID, slug)
+	srv, err := q.GetMCPServerByID(ctx, toPg(resourceID))
 	if err != nil {
+		return MCPStatus{}, err
+	}
+	if err := authz.AuthorizeResource(ctx, q, p, authz.ResourceManage, "mcp_server", resourceID); err != nil {
 		return MCPStatus{}, err
 	}
 	if srv.AuthMode == "oauth" || srv.AuthMode == "oauth_discovery" {
@@ -815,9 +662,12 @@ func (s *Service) SetMCPToken(ctx context.Context, p authz.Principal, agentID uu
 		return MCPStatus{}, err
 	}
 	if err := q.UpdateMCPServerCredentialsByID(ctx, dbq.UpdateMCPServerCredentialsByIDParams{
-		ID: srv.ID, AccessTokenRef: encKey,
+		ID: srv.ID, AccessTokenRef: encKey, GrantedScopes: "", ScopesVerified: false,
 	}); err != nil {
 		s.logger.Error("store MCP token failed", zap.Error(err))
+		return MCPStatus{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
 		return MCPStatus{}, err
 	}
 	s.refreshMCPAfterAuth(ctx, agentID, slug, apiKey)
@@ -830,7 +680,7 @@ func (s *Service) RevokeMCPCredential(ctx context.Context, p authz.Principal, ag
 	if err := authz.Authorize(ctx, q, p, authz.AgentConnections, agentID); err != nil {
 		return err
 	}
-	srv, err := q.ResolveBoundMCPServer(ctx, dbq.ResolveBoundMCPServerParams{AgentID: toPg(agentID), Slug: slug})
+	srv, err := s.resolveMCP(ctx, q, agentID, slug)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil // nothing bound, nothing to revoke
 	}
@@ -838,9 +688,16 @@ func (s *Service) RevokeMCPCredential(ctx context.Context, p authz.Principal, ag
 		s.logger.Error("resolve MCP server failed", zap.Error(err))
 		return err
 	}
-	if err := q.ClearMCPServerCredentialsByID(ctx, srv.ID); err != nil {
+	if err := authz.AuthorizeResource(ctx, q, p, authz.ResourceManage, "mcp_server", uuid.UUID(srv.ID.Bytes)); err != nil {
+		return err
+	}
+	affected, err := q.ClearMCPServerCredentialsByID(ctx, srv.ID)
+	if err != nil {
 		s.logger.Error("revoke MCP credential failed", zap.Error(err))
 		return err
+	}
+	if affected != 1 {
+		return service.ErrNotFound
 	}
 	return nil
 }
@@ -881,12 +738,15 @@ func (s *Service) RevokeMCPOAuthApp(ctx context.Context, p authz.Principal, agen
 	if err := authz.Authorize(ctx, q, p, authz.AgentConnections, agentID); err != nil {
 		return err
 	}
-	srv, err := q.ResolveBoundMCPServer(ctx, dbq.ResolveBoundMCPServerParams{AgentID: toPg(agentID), Slug: slug})
+	srv, err := s.resolveMCP(ctx, q, agentID, slug)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil // nothing bound, nothing to revoke
 	}
 	if err != nil {
 		s.logger.Error("resolve MCP server failed", zap.Error(err))
+		return err
+	}
+	if err := authz.AuthorizeResource(ctx, q, p, authz.ResourceManage, "mcp_server", uuid.UUID(srv.ID.Bytes)); err != nil {
 		return err
 	}
 	if err := q.ClearMCPServerOAuthAppByID(ctx, srv.ID); err != nil {
@@ -897,16 +757,31 @@ func (s *Service) RevokeMCPOAuthApp(ctx context.Context, p authz.Principal, agen
 }
 
 // SetMCPOAuthApp stores encrypted client_id/client_secret for an MCP server.
-func (s *Service) SetMCPOAuthApp(ctx context.Context, p authz.Principal, agentID uuid.UUID, slug, clientID, clientSecret string) (MCPStatus, error) {
-	q := dbq.New(s.db.Pool())
+func (s *Service) SetMCPOAuthApp(ctx context.Context, p authz.Principal, agentID uuid.UUID, slug, displayName, clientID, clientSecret string, createNew bool) (MCPStatus, error) {
+	tx, err := s.db.Pool().Begin(ctx)
+	if err != nil {
+		return MCPStatus{}, err
+	}
+	defer tx.Rollback(ctx)
+	q := dbq.New(tx)
+	if _, err := q.GetAgentByIDForUpdate(ctx, toPg(agentID)); err != nil {
+		return MCPStatus{}, service.ErrNotFound
+	}
 	if err := authz.Authorize(ctx, q, p, authz.AgentConnections, agentID); err != nil {
 		return MCPStatus{}, err
 	}
-	if _, err := needs.CreateForNeed(ctx, q, p, agentID, "mcp_server", slug); err != nil {
+	resourceID, err := needs.CreateForNeed(ctx, q, p, agentID, "mcp_server", slug, displayName, createNew)
+	if err != nil {
 		return MCPStatus{}, err
 	}
-	srv, err := s.resolveMCP(ctx, q, agentID, slug)
+	srv, err := q.GetMCPServerByIDForUpdate(ctx, toPg(resourceID))
 	if err != nil {
+		return MCPStatus{}, err
+	}
+	if err := authz.AuthorizeResource(ctx, q, p, authz.ResourceManage, "mcp_server", resourceID); err != nil {
+		return MCPStatus{}, err
+	}
+	if err := authz.AuthorizeResource(ctx, q, p, authz.ResourceBind, "mcp_server", resourceID); err != nil {
 		return MCPStatus{}, err
 	}
 	if srv.AuthMode != "oauth" && srv.AuthMode != "oauth_discovery" {
@@ -923,133 +798,16 @@ func (s *Service) SetMCPOAuthApp(ctx context.Context, p authz.Principal, agentID
 		s.logger.Error("encrypt client_secret failed", zap.Error(err))
 		return MCPStatus{}, err
 	}
-	if err := q.UpdateMCPServerOAuthAppByID(ctx, dbq.UpdateMCPServerOAuthAppByIDParams{
+	if _, err := q.StageMCPServerOAuthAppByID(ctx, dbq.StageMCPServerOAuthAppByIDParams{
 		ID: srv.ID, ClientID: encClientID, ClientSecret: encClientSecret,
 	}); err != nil {
 		s.logger.Error("update MCP OAuth app failed", zap.Error(err))
 		return MCPStatus{}, err
 	}
-	return MCPStatus{Slug: srv.Slug, Name: srv.Name, AuthMode: srv.AuthMode, Authorized: false}, nil
-}
-
-// MCPOAuthStart kicks off the OAuth dance for an MCP server. Includes
-// lazy URL re-discovery and lazy DCR for oauth_discovery mode.
-func (s *Service) MCPOAuthStart(ctx context.Context, p authz.Principal, agentID uuid.UUID, slug, redirectURI string) (string, error) {
-	q := dbq.New(s.db.Pool())
-	if err := authz.Authorize(ctx, q, p, authz.AgentConnections, agentID); err != nil {
-		return "", err
+	if err := tx.Commit(ctx); err != nil {
+		return MCPStatus{}, err
 	}
-	// oauth_discovery can reach Authorize as the first configure action (DCR needs
-	// no client paste), so make sure the resource is instantiated + bound first.
-	if _, err := needs.CreateForNeed(ctx, q, p, agentID, "mcp_server", slug); err != nil {
-		return "", err
-	}
-	srv, err := s.resolveMCP(ctx, q, agentID, slug)
-	if err != nil {
-		return "", err
-	}
-	if srv.AuthMode != "oauth" && srv.AuthMode != "oauth_discovery" {
-		return "", service.Detail(service.ErrInvalidInput, "MCP server is not OAuth")
-	}
-	completionRedirect, err := s.completionRedirect(redirectURI, agentID)
-	if err != nil {
-		return "", service.Detail(service.ErrInvalidInput, "invalid completion redirect: %v", err)
-	}
-	if err := q.ClearMCPServerCredentialsByID(ctx, srv.ID); err != nil {
-		s.logger.Error("clear stale MCP credentials failed", zap.Error(err))
-		return "", err
-	}
-	needsDiscovery := srv.AuthMode == "oauth_discovery" &&
-		(srv.AuthUrl == "" || srv.TokenUrl == "" ||
-			(srv.ClientID == "" && srv.RegistrationEndpoint == ""))
-	if needsDiscovery {
-		result, derr := s.discoverAuth(ctx, srv.Url)
-		if derr != nil {
-			s.logger.Warn("MCP discovery retry failed", zap.String("slug", slug), zap.Error(derr))
-			return "", service.Detail(service.ErrInvalidInput, "OAuth discovery failed: %s. The server's RFC 8414 metadata is unreachable or malformed; switch this MCP server's auth_mode to `oauth` and paste credentials manually.", derr.Error())
-		}
-		if result.AuthorizationURL != "" {
-			srv.AuthUrl = result.AuthorizationURL
-		}
-		if result.TokenURL != "" {
-			srv.TokenUrl = result.TokenURL
-		}
-		if result.RegistrationEndpoint != "" {
-			srv.RegistrationEndpoint = result.RegistrationEndpoint
-		}
-		if err := q.UpdateMCPServerDiscoveryByID(ctx, dbq.UpdateMCPServerDiscoveryByIDParams{
-			ID:      srv.ID,
-			AuthUrl: srv.AuthUrl, TokenUrl: srv.TokenUrl, RegistrationEndpoint: srv.RegistrationEndpoint,
-		}); err != nil {
-			s.logger.Error("persist re-discovery failed", zap.Error(err))
-			return "", err
-		}
-	}
-	if srv.ClientID == "" && srv.AuthMode == "oauth_discovery" {
-		if srv.RegistrationEndpoint == "" {
-			return "", service.Detail(service.ErrInvalidInput,
-				"server does not advertise an RFC 7591 registration endpoint. Switch this MCP server's auth_mode to `oauth` and paste credentials manually.")
-		}
-		callbackURL := s.publicURL + "/api/v1/credentials/oauth/callback"
-		dcr, derr := oauth.RegisterClient(ctx, s.mcpHTTP, srv.RegistrationEndpoint, "airlock:"+srv.Name, callbackURL, srv.Scopes)
-		if derr != nil {
-			s.logger.Warn("MCP DCR failed", zap.String("slug", slug), zap.Error(derr))
-			return "", service.Detail(service.ErrInvalidInput,
-				"dynamic client registration failed: %s. Switch this MCP server's auth_mode to `oauth` and paste credentials manually.", derr.Error())
-		}
-		if dcr.TokenEndpointAuthMethod == "none" {
-			dcr.ClientSecret = ""
-		}
-		srvRef := "mcp/" + uuid.UUID(srv.ID.Bytes).String()
-		encClientID, err := s.encryptor.Put(ctx, srvRef+"/client_id", dcr.ClientID)
-		if err != nil {
-			s.logger.Error("encrypt DCR client_id failed", zap.Error(err))
-			return "", err
-		}
-		encClientSecret, err := s.encryptor.Put(ctx, srvRef+"/client_secret", dcr.ClientSecret)
-		if err != nil {
-			s.logger.Error("encrypt DCR client_secret failed", zap.Error(err))
-			return "", err
-		}
-		if err := q.UpdateMCPServerOAuthAppByID(ctx, dbq.UpdateMCPServerOAuthAppByIDParams{
-			ID:       srv.ID,
-			ClientID: encClientID, ClientSecret: encClientSecret,
-		}); err != nil {
-			s.logger.Error("persist DCR client failed", zap.Error(err))
-			return "", err
-		}
-		srv.ClientID = encClientID
-	}
-	if srv.ClientID == "" {
-		return "", service.Detail(service.ErrInvalidInput, "OAuth app not configured. Set client_id and client_secret first.")
-	}
-	clientID, err := s.encryptor.Get(ctx, "mcp/"+uuid.UUID(srv.ID.Bytes).String()+"/client_id", srv.ClientID)
-	if err != nil {
-		s.logger.Error("decrypt client_id failed", zap.Error(err))
-		return "", err
-	}
-	verifier, challenge, err := oauth.GeneratePKCE()
-	if err != nil {
-		return "", err
-	}
-	state, err := oauth.GenerateState()
-	if err != nil {
-		return "", err
-	}
-	encVerifier, err := s.encryptor.Put(ctx, "oauth_state/"+state+"/code_verifier", verifier)
-	if err != nil {
-		return "", err
-	}
-	if err := q.CreateOAuthState(ctx, dbq.CreateOAuthStateParams{
-		State: state, AgentID: toPg(agentID), UserID: toPg(p.UserID), ResourceID: srv.ID, Slug: slug,
-		CodeVerifier: encVerifier, RedirectUri: completionRedirect,
-		ExpiresAt:  pgtype.Timestamptz{Time: time.Now().Add(10 * time.Minute), Valid: true},
-		SourceType: "mcp",
-	}); err != nil {
-		return "", err
-	}
-	callbackURL := s.publicURL + "/api/v1/credentials/oauth/callback"
-	return s.oauthClient.BuildAuthURL(srv.AuthUrl, clientID, callbackURL, state, challenge, srv.Scopes, nil)
+	return MCPStatus{Slug: srv.Slug, Name: srv.Name, AuthMode: srv.AuthMode, Authorized: srv.AccessTokenRef != ""}, nil
 }
 
 // --- env vars ---
@@ -1061,7 +819,7 @@ func envVarRef(id, slug string) string { return "agent/env-var/" + id + "/" + sl
 // (secrets stay write-only and return Value="").
 func (s *Service) ListEnvVars(ctx context.Context, p authz.Principal, agentID uuid.UUID) ([]EnvVar, error) {
 	q := dbq.New(s.db.Pool())
-	if err := authz.Authorize(ctx, q, p, authz.AgentConnections, agentID); err != nil {
+	if err := authz.Authorize(ctx, q, p, authz.AgentGet, agentID); err != nil {
 		return nil, err
 	}
 	rows, err := q.ListAgentEnvVars(ctx, toPg(agentID))
@@ -1150,7 +908,7 @@ func (s *Service) ClearEnvVarValue(ctx context.Context, p authz.Principal, agent
 // SetupStatus returns aggregate "needs operator action" counts.
 func (s *Service) SetupStatus(ctx context.Context, p authz.Principal, agentID uuid.UUID) (SetupCounts, error) {
 	q := dbq.New(s.db.Pool())
-	if err := authz.Authorize(ctx, q, p, authz.AgentConnections, agentID); err != nil {
+	if err := authz.Authorize(ctx, q, p, authz.AgentGet, agentID); err != nil {
 		return SetupCounts{}, err
 	}
 	row, err := q.AgentSetupStatus(ctx, toPg(agentID))
@@ -1159,8 +917,9 @@ func (s *Service) SetupStatus(ctx context.Context, p authz.Principal, agentID uu
 		return SetupCounts{}, err
 	}
 	return SetupCounts{
-		Connections: row.Connections,
-		MCPServers:  row.McpServers,
-		EnvVars:     row.EnvVars,
+		Connections:   row.Connections,
+		MCPServers:    row.McpServers,
+		EnvVars:       row.EnvVars,
+		ExecEndpoints: row.ExecEndpoints,
 	}, nil
 }

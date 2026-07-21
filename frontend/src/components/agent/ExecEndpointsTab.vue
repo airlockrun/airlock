@@ -1,316 +1,294 @@
 <script setup lang="ts">
-import { ref, onMounted, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
+import { fromJson } from '@bufbuild/protobuf'
+import { useConfirm } from 'primevue/useconfirm'
 import { useToast } from 'primevue/usetoast'
 import api from '@/api/client'
+import type { ExecEndpointInfo, ExecEndpointTestResult } from '@/gen/airlock/v1/types_pb'
+import type { NeedInfo } from '@/gen/airlock/v1/api_pb'
+import { ListExecEndpointsResponseSchema, TestExecEndpointResponseSchema } from '@/gen/airlock/v1/api_pb'
+import { useAgentResources } from '@/composables/useAgentResources'
+import { hasCapability, resourceLabel } from '@/utils/resources'
+import ResourceBindingDialog from './ResourceBindingDialog.vue'
+import { serializeExecEndpointRequest } from '@/utils/resourceRequests'
 
-interface ExecEndpoint {
-  id: string
-  slug: string
-  description: string
-  llmHint: string
-  access: string
-  transport: string
-  host: string
-  port: number
-  sshUser: string
-  publicKeyOpenssh: string
-  publicKeyComment: string
-  hostKeyFingerprint: string
-  hostKeyPinnedAt: string
-  lastUsedAt: string
-}
-
-interface TestResult {
-  ok: boolean
-  exitCode: number
-  durationMs: number
-  stdout?: string
-  stderr?: string
-  error?: string
-}
-
-const props = defineProps<{ agentId: string }>()
-const emit = defineEmits<{ populated: [count: number] }>()
-
+const props = withDefaults(defineProps<{ agentId: string; yourAccess?: string }>(), { yourAccess: '' })
+const emit = defineEmits<{ populated: [count: number]; mutated: [] }>()
 const toast = useToast()
-const endpoints = ref<ExecEndpoint[]>([])
-watch(endpoints, (v) => emit('populated', v.length), { immediate: true })
+const confirm = useConfirm()
+const resources = useAgentResources(props.agentId)
+const endpoints = ref<ExecEndpointInfo[]>([])
 const loading = ref(true)
-
-// Per-row config form state. Keyed by slug so multiple rows can be
-// configured concurrently without crosstalk.
+const loadError = ref('')
+const bindingOpen = ref(false)
+const selectedNeed = ref<NeedInfo | null>(null)
 const formHost = ref<Record<string, string>>({})
 const formPort = ref<Record<string, number>>({})
 const formUser = ref<Record<string, string>>({})
 const saving = ref<Record<string, boolean>>({})
 const testing = ref<Record<string, boolean>>({})
-const lastTest = ref<Record<string, TestResult | null>>({})
-
-// Per-endpoint collapse. Endpoints start collapsed and show a header
-// preview (slug + description + status + user@host:port summary) — the
-// full configuration form is vertically heavy and most agents have one or
-// two endpoints, so the section's overview reads better as a compact list.
+const lastTest = ref<Record<string, ExecEndpointTestResult | null>>({})
 const collapsed = ref<Record<string, boolean>>({})
-function toggleCollapse(slug: string) {
-  collapsed.value[slug] = !(collapsed.value[slug] ?? true)
+
+const needs = computed(() => resources.needs.value.filter((need) => need.type === 'exec_endpoint'))
+watch(needs, (rows) => emit('populated', rows.length), { immediate: true })
+const endpointsBySlug = computed(() => new Map(endpoints.value.map((endpoint) => [endpoint.slug, endpoint])))
+const canAdmin = computed(() => props.yourAccess === 'admin')
+
+function endpoint(need: NeedInfo): ExecEndpointInfo | undefined { return endpointsBySlug.value.get(need.slug) }
+function canManage(need: NeedInfo): boolean {
+  const resource = resources.resourceFor(need)
+  return !!resource && hasCapability(resource.capabilities, 'manage')
 }
-function isCollapsed(slug: string): boolean {
-  return collapsed.value[slug] ?? true
+function displayName(need: NeedInfo): string {
+  const resource = resources.resourceFor(need)
+  return resource ? resourceLabel(resource) : need.description || need.slug
 }
-function endpointPreview(ep: ExecEndpoint): string {
-  const user = ep.sshUser || formUser.value[ep.slug] || ''
-  const host = ep.host || formHost.value[ep.slug] || ''
-  const port = ep.port || formPort.value[ep.slug] || 22
-  if (!host) return 'not configured'
-  return `${user ? user + '@' : ''}${host}${port && port !== 22 ? ':' + port : ''}`
+function isCollapsed(slug: string): boolean { return collapsed.value[slug] ?? true }
+function toggle(slug: string) { collapsed.value[slug] = !isCollapsed(slug) }
+function preview(need: NeedInfo): string {
+  const ep = endpoint(need)
+  const host = ep?.host || formHost.value[need.slug] || ''
+  const user = ep?.sshUser || formUser.value[need.slug] || ''
+  const port = ep?.port || formPort.value[need.slug] || 22
+  return host ? `${user ? `${user}@` : ''}${host}${port !== 22 ? `:${port}` : ''}` : 'not configured'
+}
+function status(need: NeedInfo): { label: string; severity: string } {
+  if (!need.bound) return { label: 'Unbound', severity: 'warn' }
+  const ep = endpoint(need)
+  if (!ep?.host) return { label: 'Needs setup', severity: 'warn' }
+  if (!ep.publicKeyOpenssh) return { label: 'No keypair', severity: 'warn' }
+  if (!ep.hostKeyFingerprint) return { label: 'Awaiting first connect', severity: 'info' }
+  return { label: 'Ready', severity: 'success' }
+}
+function impactWarning(need: NeedInfo): string {
+  const resource = resources.resourceFor(need)
+  return resource && resource.agentCount > 1
+    ? `Host, key, and endpoint changes affect all ${resource.agentCount} apps using this shared resource.`
+    : ''
 }
 
 async function refresh() {
-  const { data } = await api.get(`/api/v1/agents/${props.agentId}/exec-endpoints`)
-  endpoints.value = (data?.endpoints || []) as ExecEndpoint[]
-  // Seed per-row form values from current row state.
+  const [response] = await Promise.all([
+    api.get(`/api/v1/agents/${props.agentId}/exec-endpoints`),
+    resources.refresh(),
+  ])
+  endpoints.value = fromJson(ListExecEndpointsResponseSchema, response.data).endpoints
   for (const ep of endpoints.value) {
-    if (!(ep.slug in formHost.value)) {
-      formHost.value[ep.slug] = ep.host
-      formPort.value[ep.slug] = ep.port || 22
-      formUser.value[ep.slug] = ep.sshUser
-    }
+    formHost.value[ep.slug] = ep.host
+    formPort.value[ep.slug] = ep.port || 22
+    formUser.value[ep.slug] = ep.sshUser
   }
 }
 
-async function save(ep: ExecEndpoint) {
-  saving.value[ep.slug] = true
-  try {
-    await api.put(`/api/v1/agents/${props.agentId}/exec-endpoints/${ep.slug}`, {
-      host: formHost.value[ep.slug],
-      port: formPort.value[ep.slug],
-      sshUser: formUser.value[ep.slug],
-    })
-    toast.add({ severity: 'success', summary: 'Saved', life: 2000 })
-    await refresh()
-  } catch (err: any) {
-    toast.add({ severity: 'error', summary: err.response?.data?.error || 'Save failed', life: 5000 })
-  } finally {
-    saving.value[ep.slug] = false
-  }
-}
-
-async function rotate(ep: ExecEndpoint) {
-  try {
-    await api.post(`/api/v1/agents/${props.agentId}/exec-endpoints/${ep.slug}/rotate-keypair`)
-    toast.add({ severity: 'success', summary: 'New keypair generated - copy the public key and update authorized_keys on the target', life: 5000 })
-    await refresh()
-  } catch (err: any) {
-    toast.add({ severity: 'error', summary: err.response?.data?.error || 'Rotate failed', life: 5000 })
-  }
-}
-
-async function unpin(ep: ExecEndpoint) {
-  try {
-    await api.post(`/api/v1/agents/${props.agentId}/exec-endpoints/${ep.slug}/unpin-host-key`)
-    toast.add({ severity: 'success', summary: 'Host key cleared - next connect will re-TOFU', life: 3000 })
-    await refresh()
-  } catch (err: any) {
-    toast.add({ severity: 'error', summary: err.response?.data?.error || 'Unpin failed', life: 5000 })
-  }
-}
-
-async function testConnection(ep: ExecEndpoint) {
-  testing.value[ep.slug] = true
-  lastTest.value[ep.slug] = null
-  try {
-    const { data } = await api.post(`/api/v1/agents/${props.agentId}/exec-endpoints/${ep.slug}/test`)
-    const result = (data?.result ?? {}) as TestResult
-    lastTest.value[ep.slug] = result
-    if (result.ok) {
-      toast.add({ severity: 'success', summary: `Connection OK (${result.durationMs}ms)`, life: 3000 })
-    } else if (result.error) {
-      toast.add({ severity: 'error', summary: result.error, life: 6000 })
-    } else {
-      toast.add({ severity: 'warn', summary: `Exit ${result.exitCode}`, life: 4000 })
-    }
-    await refresh() // host-key may have been pinned on first success
-  } catch (err: any) {
-    toast.add({ severity: 'error', summary: err.response?.data?.error || 'Test failed', life: 5000 })
-  } finally {
-    testing.value[ep.slug] = false
-  }
-}
-
-async function copyPublicKey(ep: ExecEndpoint) {
-  try {
-    await navigator.clipboard.writeText(ep.publicKeyOpenssh)
-    toast.add({ severity: 'success', summary: 'Public key copied', life: 2000 })
-  } catch {
-    toast.add({ severity: 'warn', summary: 'Copy failed - select the key text and copy manually', life: 4000 })
-  }
-}
-
-function statusFor(ep: ExecEndpoint): { label: string; severity: string } {
-  if (!ep.transport || !ep.host) return { label: 'Not configured', severity: 'warn' }
-  if (!ep.publicKeyOpenssh) return { label: 'No keypair', severity: 'warn' }
-  if (!ep.hostKeyFingerprint) return { label: 'Awaiting first connect (TOFU)', severity: 'info' }
-  return { label: 'Configured', severity: 'success' }
-}
-
-onMounted(async () => {
+async function load() {
+  loading.value = true
+  loadError.value = ''
   try {
     await refresh()
+  } catch (error: any) {
+    loadError.value = error.response?.data?.error || error.message || 'Failed to load exec endpoints'
+    emit('populated', 1)
   } finally {
     loading.value = false
   }
-})
+}
+
+function openSetup(need: NeedInfo) { selectedNeed.value = need; bindingOpen.value = true }
+
+async function save(need: NeedInfo) {
+  saving.value[need.slug] = true
+  try {
+    await api.put(`/api/v1/agents/${props.agentId}/exec-endpoints/${encodeURIComponent(need.slug)}`, serializeExecEndpointRequest({
+      host: formHost.value[need.slug],
+      port: formPort.value[need.slug],
+      sshUser: formUser.value[need.slug],
+      displayName: '',
+      createNew: false,
+    }))
+    await refresh()
+    emit('mutated')
+    toast.add({ severity: 'success', summary: 'Endpoint saved', life: 2500 })
+  } catch (error: any) {
+    toast.add({ severity: 'error', summary: error.response?.data?.error || 'Save failed', life: 5000 })
+  } finally {
+    saving.value[need.slug] = false
+  }
+}
+
+async function rotate(need: NeedInfo) {
+  try {
+    await api.post(`/api/v1/agents/${props.agentId}/exec-endpoints/${encodeURIComponent(need.slug)}/rotate-keypair`)
+    await refresh()
+    emit('mutated')
+    toast.add({ severity: 'success', summary: 'New keypair generated', detail: 'Update authorized_keys on every target using this resource.', life: 6000 })
+  } catch (error: any) {
+    toast.add({ severity: 'error', summary: error.response?.data?.error || 'Rotate failed', life: 5000 })
+  }
+}
+
+async function unpin(need: NeedInfo) {
+  try {
+    await api.post(`/api/v1/agents/${props.agentId}/exec-endpoints/${encodeURIComponent(need.slug)}/unpin-host-key`)
+    await refresh()
+    emit('mutated')
+    toast.add({ severity: 'success', summary: 'Host key cleared', detail: 'The next connection will pin the presented key.', life: 4000 })
+  } catch (error: any) {
+    toast.add({ severity: 'error', summary: error.response?.data?.error || 'Unpin failed', life: 5000 })
+  }
+}
+
+async function testConnection(need: NeedInfo) {
+  testing.value[need.slug] = true
+  lastTest.value[need.slug] = null
+  try {
+    const { data } = await api.post(`/api/v1/agents/${props.agentId}/exec-endpoints/${encodeURIComponent(need.slug)}/test`)
+    const result = fromJson(TestExecEndpointResponseSchema, data).result
+    if (!result) throw new Error('No test result returned')
+    lastTest.value[need.slug] = result
+    if (result.ok) toast.add({ severity: 'success', summary: `Connection OK (${result.durationMs.toString()}ms)`, life: 3000 })
+    else toast.add({ severity: 'error', summary: result.error || `Exit ${result.exitCode}`, life: 6000 })
+    await refresh()
+  } catch (error: any) {
+    toast.add({ severity: 'error', summary: error.response?.data?.error || 'Test failed', life: 5000 })
+  } finally {
+    testing.value[need.slug] = false
+  }
+}
+
+async function copyKey(need: NeedInfo) {
+  const key = endpoint(need)?.publicKeyOpenssh
+  if (!key) return
+  try {
+    await navigator.clipboard.writeText(key)
+    toast.add({ severity: 'success', summary: 'Public key copied', life: 2000 })
+  } catch {
+    toast.add({ severity: 'warn', summary: 'Copy failed - select and copy the key manually', life: 4000 })
+  }
+}
+
+function disconnect(need: NeedInfo) {
+  confirm.require({
+    header: 'Disconnect from this app?',
+    message: `${displayName(need)} and its SSH configuration stay available to other apps.`,
+    acceptLabel: 'Disconnect from this app',
+    rejectLabel: 'Cancel',
+    accept: async () => {
+      try {
+        await resources.unbind(need)
+        await refresh()
+        emit('mutated')
+        toast.add({ severity: 'success', summary: 'Exec resource disconnected from this app', life: 3000 })
+      } catch (error: any) {
+        toast.add({ severity: 'error', summary: error.response?.data?.error || 'Disconnect failed', life: 5000 })
+      }
+    },
+  })
+}
+
+async function changed() { await refresh(); emit('mutated') }
+async function configureBound(need: NeedInfo) {
+  selectedNeed.value = need
+  try {
+    await refresh()
+    collapsed.value[need.slug] = false
+  } catch (error: any) {
+    toast.add({ severity: 'error', summary: error.response?.data?.error || error.message || 'Failed to load endpoint setup', life: 6000 })
+  }
+}
+
+onMounted(load)
 </script>
 
 <template>
-  <div>
-    <div v-if="!loading && endpoints.length === 0" style="text-align: center; padding: 2rem; color: var(--p-text-muted-color)">
-      No exec endpoints registered. Add a <code>RegisterExecEndpoint</code> call to your app's <code>main()</code> to declare one.
+  <Message v-if="loadError" severity="error" :closable="false">
+    <div class="load-error"><span>{{ loadError }}</span><Button label="Retry" icon="pi pi-refresh" size="small" outlined @click="load" /></div>
+  </Message>
+  <div v-else-if="!loading && needs.length === 0" class="empty">
+    No exec endpoints registered. Add a <code>RegisterExecEndpoint</code> call to declare one.
+  </div>
+  <div v-for="need in loadError ? [] : needs" :key="need.slug" class="exec-card">
+    <div class="exec-header" :class="{ clickable: need.bound }" @click="need.bound && toggle(need.slug)">
+      <i v-if="need.bound" class="pi" :class="isCollapsed(need.slug) ? 'pi-chevron-right' : 'pi-chevron-down'" />
+      <div class="header-main">
+        <h3>{{ displayName(need) }}</h3>
+        <div class="secondary">App handle: <code>{{ need.slug }}</code><span v-if="need.description"> · {{ need.description }}</span></div>
+        <code v-if="need.bound && isCollapsed(need.slug)" class="preview">{{ preview(need) }}</code>
+      </div>
+      <Tag :value="status(need).label" :severity="status(need).severity" />
     </div>
 
-    <div v-for="ep in endpoints" :key="ep.slug" class="exec-endpoint-card">
-      <div class="exec-header" @click="toggleCollapse(ep.slug)">
-        <i
-          class="pi exec-chevron"
-          :class="isCollapsed(ep.slug) ? 'pi-chevron-right' : 'pi-chevron-down'"
-        />
-        <div style="flex: 1; min-width: 0">
-          <h3 style="margin: 0">{{ ep.slug }}</h3>
-          <p style="margin: 0.25rem 0; color: var(--p-text-muted-color); font-size: 0.85rem">{{ ep.description }}</p>
-          <p
-            v-if="isCollapsed(ep.slug)"
-            style="margin: 0.25rem 0 0; font-size: 0.8rem; color: var(--p-text-muted-color)"
-          >
-            <code>{{ endpointPreview(ep) }}</code>
-          </p>
-        </div>
-        <div style="display: flex; align-items: center; gap: 0.75rem">
-          <Tag :value="statusFor(ep).label" :severity="statusFor(ep).severity" />
-          <span style="font-size: 0.75rem; color: var(--p-text-muted-color)">access: {{ ep.access }}</span>
-        </div>
-      </div>
-
-      <div v-show="!isCollapsed(ep.slug)" class="exec-form">
-        <div class="form-row">
-          <label>Transport</label>
-          <span style="font-size: 0.85rem">SSH (only supported transport)</span>
-        </div>
-        <div class="form-row">
-          <label>Host</label>
-          <InputText v-model="formHost[ep.slug]" placeholder="e.g. vps.example.com or 10.0.0.5" style="flex: 1" />
-        </div>
-        <div class="form-row">
-          <label>Port</label>
-          <InputNumber v-model="formPort[ep.slug]" :min="1" :max="65535" :useGrouping="false" style="width: 8rem" />
-        </div>
-        <div class="form-row">
-          <label>User</label>
-          <InputText v-model="formUser[ep.slug]" placeholder="root" style="flex: 1" />
-        </div>
-        <div style="display: flex; gap: 0.5rem; margin-top: 0.5rem">
-          <Button label="Save" size="small" :loading="saving[ep.slug]" @click="save(ep)" />
-          <Button v-if="ep.publicKeyOpenssh" label="Test connection" size="small" outlined :loading="testing[ep.slug]" @click="testConnection(ep)" />
-        </div>
-      </div>
-
-      <div v-if="ep.publicKeyOpenssh" v-show="!isCollapsed(ep.slug)" class="exec-section">
-        <h4 style="margin: 0 0 0.5rem 0">Public key (paste into target's <code>~/.ssh/authorized_keys</code>)</h4>
-        <p style="margin: 0 0 0.5rem 0; font-size: 0.75rem; color: var(--p-text-muted-color)">
-          Comment: <code>{{ ep.publicKeyComment }}</code> - useful for grepping
-          old keys out of authorized_keys after a rotation.
-        </p>
-        <div class="pubkey-box">
-          <code>{{ ep.publicKeyOpenssh }}</code>
-        </div>
-        <div style="display: flex; gap: 0.5rem; margin-top: 0.5rem">
-          <Button label="Copy" icon="pi pi-copy" size="small" outlined @click="copyPublicKey(ep)" />
-          <Button label="Rotate keypair" icon="pi pi-refresh" size="small" severity="secondary" outlined @click="rotate(ep)" />
-        </div>
-      </div>
-
-      <div v-if="ep.hostKeyFingerprint" v-show="!isCollapsed(ep.slug)" class="exec-section">
-        <h4 style="margin: 0 0 0.5rem 0">Host key</h4>
-        <p style="margin: 0; font-size: 0.85rem">
-          Fingerprint: <code>{{ ep.hostKeyFingerprint }}</code>
-          <span v-if="ep.hostKeyPinnedAt" style="color: var(--p-text-muted-color); margin-left: 0.5rem">
-            (pinned {{ ep.hostKeyPinnedAt }})
-          </span>
-        </p>
-        <div style="margin-top: 0.5rem">
-          <Button label="Unpin & re-TOFU" icon="pi pi-unlock" size="small" severity="secondary" outlined @click="unpin(ep)" />
-        </div>
-      </div>
-
-      <div v-if="lastTest[ep.slug]" v-show="!isCollapsed(ep.slug)" class="exec-section">
-        <h4 style="margin: 0 0 0.5rem 0">Last test result</h4>
-        <pre class="code-chip" style="margin: 0; padding: 0.75rem; font-size: 0.8rem; white-space: pre-wrap">{{ JSON.stringify(lastTest[ep.slug], null, 2) }}</pre>
-      </div>
+    <div v-if="canAdmin" class="resource-actions">
+      <Button v-if="!need.bound" label="Set up" size="small" @click="openSetup(need)" />
+      <template v-else>
+        <Button label="Switch resource" size="small" text @click="openSetup(need)" />
+        <Button label="Disconnect from this app" size="small" text severity="danger" @click="disconnect(need)" />
+      </template>
     </div>
 
-    <div v-if="loading" style="padding: 1rem">
-      <Skeleton height="6rem" />
+    <div v-if="need.bound && !isCollapsed(need.slug)" class="endpoint-body">
+      <Message v-if="impactWarning(need) && canManage(need)" severity="warn" :closable="false">{{ impactWarning(need) }}</Message>
+      <Message v-if="!canManage(need)" severity="info" :closable="false">You can use this endpoint through the app, but only a resource manager can change its SSH configuration.</Message>
+      <template v-if="canManage(need)">
+        <div class="form-row"><label>Transport</label><span>SSH</span></div>
+        <div class="form-row"><label>Host</label><InputText v-model="formHost[need.slug]" placeholder="vps.example.com" /></div>
+        <div class="form-row"><label>Port</label><InputNumber v-model="formPort[need.slug]" :min="1" :max="65535" :use-grouping="false" /></div>
+        <div class="form-row"><label>User</label><InputText v-model="formUser[need.slug]" placeholder="root" /></div>
+        <div class="button-row">
+          <Button label="Save" size="small" :loading="saving[need.slug]" @click="save(need)" />
+          <Button v-if="endpoint(need)?.publicKeyOpenssh" label="Test connection" size="small" outlined :loading="testing[need.slug]" @click="testConnection(need)" />
+        </div>
+      </template>
+
+      <div v-if="endpoint(need)?.publicKeyOpenssh" class="exec-section">
+        <h4>Public key</h4>
+        <p class="secondary">Paste into the target's <code>~/.ssh/authorized_keys</code>. Comment: <code>{{ endpoint(need)?.publicKeyComment }}</code></p>
+        <div class="pubkey"><code>{{ endpoint(need)?.publicKeyOpenssh }}</code></div>
+        <div v-if="canManage(need)" class="button-row">
+          <Button label="Copy" icon="pi pi-copy" size="small" outlined @click="copyKey(need)" />
+          <Button label="Rotate keypair" icon="pi pi-refresh" size="small" severity="secondary" outlined @click="rotate(need)" />
+        </div>
+      </div>
+      <div v-if="endpoint(need)?.hostKeyFingerprint" class="exec-section">
+        <h4>Host key</h4>
+        <p>Fingerprint: <code>{{ endpoint(need)?.hostKeyFingerprint }}</code></p>
+        <Button v-if="canManage(need)" label="Unpin and trust on next connect" size="small" severity="secondary" outlined @click="unpin(need)" />
+      </div>
+      <pre v-if="lastTest[need.slug]" class="test-result">{{ JSON.stringify(lastTest[need.slug], (_, value) => typeof value === 'bigint' ? value.toString() : value, 2) }}</pre>
     </div>
   </div>
+  <div v-if="loading"><Skeleton height="7rem" /></div>
+
+  <ResourceBindingDialog
+    v-model:visible="bindingOpen"
+    :agent-id="agentId"
+    :need="selectedNeed"
+    auth-mode="none"
+    @changed="changed"
+    @configure="configureBound"
+  />
 </template>
 
 <style scoped>
-.exec-endpoint-card {
-  border: 1px solid var(--p-surface-200);
-  border-radius: 0.5rem;
-  padding: 1.25rem;
-  margin-bottom: 1rem;
-  background: var(--p-surface-50);
-}
-:root.dark .exec-endpoint-card {
-  background: var(--p-surface-900);
-  border-color: var(--p-surface-700);
-}
-.exec-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 0.75rem;
-  margin-bottom: 1rem;
-  cursor: pointer;
-  user-select: none;
-}
-.exec-chevron {
-  font-size: 0.75rem;
-  color: var(--p-text-muted-color);
-  margin-top: 0.35rem;
-}
-.exec-form {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-  margin-bottom: 1rem;
-}
-.form-row {
-  display: flex;
-  align-items: center;
-  gap: 1rem;
-}
-.form-row label {
-  width: 6rem;
-  font-size: 0.85rem;
-  color: var(--p-text-muted-color);
-}
-.exec-section {
-  margin-top: 1rem;
-  padding-top: 1rem;
-  border-top: 1px dashed var(--p-surface-200);
-}
-:root.dark .exec-section {
-  border-top-color: var(--p-surface-700);
-}
-.pubkey-box {
-  background: var(--p-surface-100);
-  border-radius: 0.3rem;
-  padding: 0.75rem;
-  font-size: 0.78rem;
-  word-break: break-all;
-}
-:root.dark .pubkey-box {
-  background: var(--p-surface-800);
+.empty { text-align: center; padding: 2rem; color: var(--p-text-muted-color); }
+.exec-card { border: 1px solid var(--p-content-border-color); border-radius: 0.65rem; padding: 1rem; margin-bottom: 0.85rem; }
+.exec-header { display: flex; align-items: flex-start; gap: 0.75rem; }
+.exec-header.clickable { cursor: pointer; }
+.exec-header > .pi { margin-top: 0.35rem; color: var(--p-text-muted-color); font-size: 0.75rem; }
+.header-main { flex: 1; min-width: 0; }
+.header-main h3, .exec-section h4 { margin: 0; }
+.secondary, .preview { color: var(--p-text-muted-color); font-size: 0.8rem; }
+.preview { display: block; margin-top: 0.35rem; }
+.resource-actions, .button-row { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.75rem; }
+.endpoint-body { display: flex; flex-direction: column; gap: 0.65rem; margin-top: 1rem; padding-top: 1rem; border-top: 1px dashed var(--p-content-border-color); }
+.form-row { display: grid; grid-template-columns: 6rem minmax(0, 1fr); align-items: center; gap: 0.75rem; }
+.form-row label { color: var(--p-text-muted-color); font-size: 0.85rem; }
+.exec-section { padding-top: 0.85rem; margin-top: 0.35rem; border-top: 1px dashed var(--p-content-border-color); }
+.exec-section p { margin: 0.4rem 0; }
+.pubkey, .test-result { padding: 0.75rem; border-radius: 0.4rem; background: var(--p-surface-100); word-break: break-all; overflow-x: auto; }
+.load-error { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; }
+:root.dark .pubkey, :root.dark .test-result { background: var(--p-surface-800); }
+@media (max-width: 38rem) {
+  .form-row { grid-template-columns: 1fr; gap: 0.25rem; }
 }
 </style>

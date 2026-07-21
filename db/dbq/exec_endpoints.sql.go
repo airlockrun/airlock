@@ -55,6 +55,60 @@ func (q *Queries) ConfigureExecEndpointSSHByID(ctx context.Context, arg Configur
 	return err
 }
 
+const createExecEndpoint = `-- name: CreateExecEndpoint :one
+INSERT INTO agent_exec_endpoints (
+    id, owner_principal_id, slug, display_name, description, llm_hint, access
+) VALUES (
+    $1, $2, $3, $4, $5, $6, $7
+)
+RETURNING id, slug, display_name, description, llm_hint, access, transport, host, port, ssh_user, private_key_ref, public_key_openssh, public_key_comment, host_key_openssh, host_key_pinned_at, last_used_at, created_at, updated_at, owner_principal_id
+`
+
+type CreateExecEndpointParams struct {
+	ID               pgtype.UUID `json:"id"`
+	OwnerPrincipalID pgtype.UUID `json:"owner_principal_id"`
+	Slug             string      `json:"slug"`
+	DisplayName      string      `json:"display_name"`
+	Description      string      `json:"description"`
+	LlmHint          string      `json:"llm_hint"`
+	Access           string      `json:"access"`
+}
+
+func (q *Queries) CreateExecEndpoint(ctx context.Context, arg CreateExecEndpointParams) (AgentExecEndpoint, error) {
+	row := q.db.QueryRow(ctx, createExecEndpoint,
+		arg.ID,
+		arg.OwnerPrincipalID,
+		arg.Slug,
+		arg.DisplayName,
+		arg.Description,
+		arg.LlmHint,
+		arg.Access,
+	)
+	var i AgentExecEndpoint
+	err := row.Scan(
+		&i.ID,
+		&i.Slug,
+		&i.DisplayName,
+		&i.Description,
+		&i.LlmHint,
+		&i.Access,
+		&i.Transport,
+		&i.Host,
+		&i.Port,
+		&i.SshUser,
+		&i.PrivateKeyRef,
+		&i.PublicKeyOpenssh,
+		&i.PublicKeyComment,
+		&i.HostKeyOpenssh,
+		&i.HostKeyPinnedAt,
+		&i.LastUsedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.OwnerPrincipalID,
+	)
+	return i, err
+}
+
 const listExecNeedsByAgent = `-- name: ListExecNeedsByAgent :many
 SELECT
     n.slug AS slug,
@@ -212,19 +266,20 @@ func (q *Queries) UpdateExecEndpointOwnerByID(ctx context.Context, arg UpdateExe
 
 const upsertExecEndpointDeclaration = `-- name: UpsertExecEndpointDeclaration :one
 
-INSERT INTO agent_exec_endpoints (owner_principal_id, slug, description, llm_hint, access)
-VALUES ((SELECT owner_principal_id FROM agents WHERE agents.id = $1), $2, $3, $4, $5)
+INSERT INTO agent_exec_endpoints (owner_principal_id, slug, display_name, description, llm_hint, access)
+VALUES ((SELECT owner_principal_id FROM agents WHERE agents.id = $1), $2, $3, $4, $5, $6)
 ON CONFLICT (owner_principal_id, slug) DO UPDATE SET
     description = EXCLUDED.description,
     llm_hint    = EXCLUDED.llm_hint,
     access      = EXCLUDED.access,
     updated_at  = now()
-RETURNING id, slug, description, llm_hint, access, transport, host, port, ssh_user, private_key_ref, public_key_openssh, public_key_comment, host_key_openssh, host_key_pinned_at, last_used_at, created_at, updated_at, owner_principal_id
+RETURNING id, slug, display_name, description, llm_hint, access, transport, host, port, ssh_user, private_key_ref, public_key_openssh, public_key_comment, host_key_openssh, host_key_pinned_at, last_used_at, created_at, updated_at, owner_principal_id
 `
 
 type UpsertExecEndpointDeclarationParams struct {
 	AgentID     pgtype.UUID `json:"agent_id"`
 	Slug        string      `json:"slug"`
+	DisplayName string      `json:"display_name"`
 	Description string      `json:"description"`
 	LlmHint     string      `json:"llm_hint"`
 	Access      string      `json:"access"`
@@ -245,6 +300,7 @@ func (q *Queries) UpsertExecEndpointDeclaration(ctx context.Context, arg UpsertE
 	row := q.db.QueryRow(ctx, upsertExecEndpointDeclaration,
 		arg.AgentID,
 		arg.Slug,
+		arg.DisplayName,
 		arg.Description,
 		arg.LlmHint,
 		arg.Access,
@@ -253,6 +309,7 @@ func (q *Queries) UpsertExecEndpointDeclaration(ctx context.Context, arg UpsertE
 	err := row.Scan(
 		&i.ID,
 		&i.Slug,
+		&i.DisplayName,
 		&i.Description,
 		&i.LlmHint,
 		&i.Access,

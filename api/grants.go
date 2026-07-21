@@ -80,7 +80,7 @@ func (h *GrantsHandler) ListResourceGrants(w http.ResponseWriter, r *http.Reques
 	}
 	out := make([]*airlockv1.ResourceGrantInfo, len(grants))
 	for i, g := range grants {
-		out[i] = &airlockv1.ResourceGrantInfo{GranteeId: g.GranteeID.String(), Capabilities: g.Capabilities}
+		out[i] = &airlockv1.ResourceGrantInfo{Id: g.ID.String(), GranteeId: g.GranteeID.String(), Capabilities: g.Capabilities}
 	}
 	writeProto(w, http.StatusOK, &airlockv1.ListResourceGrantsResponse{Grants: out})
 }

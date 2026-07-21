@@ -141,7 +141,8 @@ async function loadAgentSDKInfo() {
 }
 
 onMounted(async () => {
-  await Promise.all([reload(), credsStore.fetchCredentials(), loadAgentSDKInfo()])
+  void credsStore.fetchCredentials().catch(() => {})
+  await Promise.all([reload(), loadAgentSDKInfo()])
 })
 </script>
 
@@ -170,7 +171,14 @@ onMounted(async () => {
           <Button icon="pi pi-copy" text size="small" @click="copyToClipboard(airDeployCmd, 'Deploy command')" />
         </div>
       </div>
-      <div v-if="credsStore.credentials.length === 0">
+      <Skeleton v-if="credsStore.loading" height="2.5rem" />
+      <Message v-else-if="credsStore.error" severity="error" :closable="false">
+        <div class="load-error">
+          <span>{{ credsStore.error }}</span>
+          <Button label="Retry" icon="pi pi-refresh" size="small" outlined @click="credsStore.fetchCredentials().catch(() => {})" />
+        </div>
+      </Message>
+      <div v-else-if="credsStore.credentials.length === 0">
         <p style="margin: 0 0 0.5rem">You don't have any git credentials yet.</p>
         <router-link to="/settings/git-credentials">
           <Button label="Add a PAT in Settings" icon="pi pi-plus" outlined size="small" />
@@ -312,5 +320,12 @@ onMounted(async () => {
 .code-chip {
   flex: 1;
   padding: 0.4rem 0.6rem;
+}
+
+.load-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
 }
 </style>

@@ -2,15 +2,19 @@
 import { ref } from 'vue'
 import { useToast } from 'primevue/usetoast'
 import api from '@/api/client'
+import { serializeAPIKeyRequest } from '@/utils/resourceRequests'
 
 const props = withDefaults(defineProps<{
   agentId: string
   slug: string
   name: string
   basePath?: string
+  warning?: string
 }>(), {
   basePath: 'credentials',
+  warning: '',
 })
+const emit = defineEmits<{ saved: [] }>()
 
 const visible = defineModel<boolean>('visible', { default: false })
 const toast = useToast()
@@ -25,12 +29,11 @@ async function save() {
     const path = props.basePath === 'credentials'
       ? `/api/v1/agents/${props.agentId}/credentials/${props.slug}`
       : `/api/v1/agents/${props.agentId}/${props.basePath}/${props.slug}/credentials`
-    await api.post(path, {
-      apiKey: apiKey.value,
-    })
+    await api.post(path, serializeAPIKeyRequest(apiKey.value, '', false))
     toast.add({ severity: 'success', summary: `${props.name} configured`, life: 3000 })
     visible.value = false
     apiKey.value = ''
+    emit('saved')
   } catch (err: any) {
     toast.add({ severity: 'error', summary: err.response?.data?.error || 'Failed to save credential', life: 5000 })
   } finally {
@@ -46,7 +49,7 @@ async function test() {
       : `/api/v1/agents/${props.agentId}/${props.basePath}/${props.slug}/credentials/test`
     // Send the typed token if any so the test runs against what the user
     // is about to save, not the stale stored credential.
-    const body = apiKey.value ? { apiKey: apiKey.value } : undefined
+    const body = apiKey.value ? serializeAPIKeyRequest(apiKey.value, '', false) : undefined
     const resp = await api.post(testPath, body)
     if (resp.data?.success === false) {
       toast.add({ severity: 'error', summary: resp.data.message || 'Connection test failed', life: 5000 })
@@ -62,8 +65,9 @@ async function test() {
 </script>
 
 <template>
-  <Dialog v-model:visible="visible" :header="`Configure ${name}`" modal style="width: 28rem">
+  <Dialog v-model:visible="visible" :header="`Configure ${name}`" modal :style="{ width: 'min(28rem, calc(100vw - 2rem))' }">
     <div style="display: flex; flex-direction: column; gap: 1.25rem; padding-top: 0.5rem">
+      <Message v-if="warning" severity="warn" :closable="false">{{ warning }}</Message>
       <FloatLabel variant="on">
         <Password id="cred-key" v-model="apiKey" :feedback="false" toggle-mask style="width: 100%" :input-style="{ width: '100%' }" />
         <label for="cred-key">API Key</label>

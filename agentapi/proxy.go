@@ -67,7 +67,6 @@ func (h *Handler) ServiceProxy(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusInternalServerError, "failed to get connection")
 		return
 	}
-
 	// auth_mode='none' connections proxy without credentials — no token
 	// lookup, no decrypt, no injection. Public APIs (MediaWiki, etc.)
 	// declared with ConnectionAuthNone land here.
@@ -82,7 +81,7 @@ func (h *Handler) ServiceProxy(w http.ResponseWriter, r *http.Request) {
 	// carries only slug/connName, not a raw OAuth URL.
 	var creds string
 	if !noAuth {
-		token, err := oauth.EnsureConnectionToken(r.Context(), h.db, h.encryptor, h.oauthClient, h.logger, conn.ID, time.Now())
+		token, err := oauth.EnsureConnectionToken(r.Context(), h.db, h.encryptor, h.oauthClient, h.logger, toPgUUID(agentID), slug, conn.ID, time.Now())
 		switch {
 		case errors.Is(err, oauth.ErrNeedsReauth):
 			writeJSON(w, http.StatusPaymentRequired, map[string]string{

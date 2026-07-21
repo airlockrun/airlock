@@ -34,9 +34,11 @@ type Dialer interface {
 // generic so the constructor matches the existing handler-side pattern.
 type Pool interface {
 	dbq.DBTX
+	Begin(ctx context.Context) (pgx.Tx, error)
 }
 
 type Service struct {
+	pool    Pool
 	queries *dbq.Queries
 	secrets secrets.Store
 	dialer  Dialer
@@ -57,6 +59,7 @@ func New(pool Pool, store secrets.Store, dialer Dialer, logger *zap.Logger) *Ser
 		panic("execendpoints: logger is required")
 	}
 	return &Service{
+		pool:    pool,
 		queries: dbq.New(pool),
 		secrets: store,
 		dialer:  dialer,
@@ -80,9 +83,11 @@ func (s *Service) resolveEndpoint(ctx context.Context, agentID uuid.UUID, slug s
 
 // ConfigureRequest is the input for Configure. Port=0 defaults to 22.
 type ConfigureRequest struct {
-	Host    string
-	Port    int32
-	SSHUser string
+	Host        string
+	Port        int32
+	SSHUser     string
+	DisplayName string
+	CreateNew   bool
 }
 
 // TestResult is the parsed outcome of running `whoami` over the
@@ -99,7 +104,7 @@ type TestResult struct {
 // List returns every exec-endpoint need the agent declares, joined to its bound
 // resource (if configured) — keyed by the agent's need slug.
 func (s *Service) List(ctx context.Context, p authz.Principal, agentID uuid.UUID) ([]dbq.ListExecNeedsByAgentRow, error) {
-	if err := authz.Authorize(ctx, s.queries, p, authz.AgentExecEndpoints, agentID); err != nil {
+	if err := authz.Authorize(ctx, s.queries, p, authz.AgentGet, agentID); err != nil {
 		return nil, err
 	}
 	rows, err := s.queries.ListExecNeedsByAgent(ctx, pgtype.UUID{Bytes: agentID, Valid: true})
@@ -110,24 +115,12 @@ func (s *Service) List(ctx context.Context, p authz.Principal, agentID uuid.UUID
 	return rows, nil
 }
 
-// ensureExecEndpoint makes sure a configured exec-endpoint resource exists for
-// the agent's declared need, creating it — owned by the configuring principal —
-// and binding it on first configure (idempotent if already bound). The
-// provisioning is the shared needs.CreateForNeed step.
-func (s *Service) ensureExecEndpoint(ctx context.Context, p authz.Principal, agentID uuid.UUID, slug string) error {
-	_, err := needs.CreateForNeed(ctx, s.queries, p, agentID, "exec_endpoint", slug)
-	return err
-}
-
 // Configure persists host/port/user for a declared endpoint and generates a
 // keypair on first configure. The exec-endpoint resource is created (owned by
 // the configuring principal) and bound to the agent's need on first configure.
 // ErrInvalidInput for bad input, ErrNotFound when the slug wasn't declared.
 func (s *Service) Configure(ctx context.Context, p authz.Principal, agentID uuid.UUID, slug string, req ConfigureRequest) (dbq.AgentExecEndpoint, error) {
 	if err := authz.Authorize(ctx, s.queries, p, authz.AgentExecEndpoints, agentID); err != nil {
-		return dbq.AgentExecEndpoint{}, err
-	}
-	if err := s.ensureExecEndpoint(ctx, p, agentID, slug); err != nil {
 		return dbq.AgentExecEndpoint{}, err
 	}
 	if strings.TrimSpace(req.Host) == "" {
@@ -139,7 +132,23 @@ func (s *Service) Configure(ctx context.Context, p authz.Principal, agentID uuid
 	if req.Port == 0 {
 		req.Port = 22
 	}
-	ep, err := s.resolveEndpoint(ctx, agentID, slug)
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return dbq.AgentExecEndpoint{}, err
+	}
+	defer tx.Rollback(ctx)
+	q := dbq.New(tx)
+	if _, err := q.GetAgentByIDForUpdate(ctx, pgtype.UUID{Bytes: agentID, Valid: true}); err != nil {
+		return dbq.AgentExecEndpoint{}, service.ErrNotFound
+	}
+	if err := authz.Authorize(ctx, q, p, authz.AgentExecEndpoints, agentID); err != nil {
+		return dbq.AgentExecEndpoint{}, err
+	}
+	resourceID, err := needs.CreateForNeed(ctx, q, p, agentID, "exec_endpoint", slug, req.DisplayName, req.CreateNew)
+	if err != nil {
+		return dbq.AgentExecEndpoint{}, err
+	}
+	ep, err := q.GetExecEndpointByIDForUpdate(ctx, pgtype.UUID{Bytes: resourceID, Valid: true})
 	if err != nil {
 		if errors.Is(err, service.ErrNotFound) {
 			return dbq.AgentExecEndpoint{}, service.Detail(service.ErrNotFound, "exec endpoint not declared by the agent")
@@ -147,7 +156,10 @@ func (s *Service) Configure(ctx context.Context, p authz.Principal, agentID uuid
 		s.logger.Error("get exec endpoint", zap.Error(err))
 		return dbq.AgentExecEndpoint{}, err
 	}
-	if err := s.queries.ConfigureExecEndpointSSHByID(ctx, dbq.ConfigureExecEndpointSSHByIDParams{
+	if err := authz.AuthorizeResource(ctx, q, p, authz.ResourceManage, "exec_endpoint", resourceID); err != nil {
+		return dbq.AgentExecEndpoint{}, err
+	}
+	if err := q.ConfigureExecEndpointSSHByID(ctx, dbq.ConfigureExecEndpointSSHByIDParams{
 		ID:      ep.ID,
 		Host:    pgtype.Text{String: req.Host, Valid: true},
 		Port:    pgtype.Int4{Int32: req.Port, Valid: true},
@@ -157,16 +169,18 @@ func (s *Service) Configure(ctx context.Context, p authz.Principal, agentID uuid
 		return dbq.AgentExecEndpoint{}, err
 	}
 	if !ep.PrivateKeyRef.Valid || ep.PrivateKeyRef.String == "" {
-		if _, err := s.generateAndStoreKeypair(ctx, agentID, slug); err != nil {
+		if _, err := s.generateAndStoreKeypair(ctx, q, agentID, slug, ep); err != nil {
 			s.logger.Error("keypair generation on configure", zap.Error(err))
 			// No sentinel: surface as a plain error so HTTPStatus returns 500.
 			// The handler renders "configured but keypair generation failed".
 			return dbq.AgentExecEndpoint{}, errKeypairAfterConfigure
 		}
 	}
+	if err := tx.Commit(ctx); err != nil {
+		return dbq.AgentExecEndpoint{}, err
+	}
 	s.dialer.EvictCache(uuid.UUID(ep.ID.Bytes))
-	refreshed, _ := s.resolveEndpoint(ctx, agentID, slug)
-	return refreshed, nil
+	return s.resolveEndpoint(ctx, agentID, slug)
 }
 
 // RotateKeypair mints a new ED25519 keypair, replaces the secrets-store
@@ -182,13 +196,15 @@ func (s *Service) RotateKeypair(ctx context.Context, p authz.Principal, agentID 
 		}
 		return dbq.AgentExecEndpoint{}, err
 	}
-	if _, err := s.generateAndStoreKeypair(ctx, agentID, slug); err != nil {
+	if err := authz.AuthorizeResource(ctx, s.queries, p, authz.ResourceManage, "exec_endpoint", uuid.UUID(ep.ID.Bytes)); err != nil {
+		return dbq.AgentExecEndpoint{}, err
+	}
+	if _, err := s.generateAndStoreKeypair(ctx, s.queries, agentID, slug, ep); err != nil {
 		s.logger.Error("keypair rotation", zap.Error(err))
 		return dbq.AgentExecEndpoint{}, err
 	}
 	s.dialer.EvictCache(uuid.UUID(ep.ID.Bytes))
-	refreshed, _ := s.resolveEndpoint(ctx, agentID, slug)
-	return refreshed, nil
+	return s.resolveEndpoint(ctx, agentID, slug)
 }
 
 // UnpinHostKey clears the TOFU-pinned host key on this endpoint; the
@@ -202,6 +218,9 @@ func (s *Service) UnpinHostKey(ctx context.Context, p authz.Principal, agentID u
 		if !errors.Is(err, service.ErrNotFound) {
 			s.logger.Error("get exec endpoint", zap.Error(err))
 		}
+		return err
+	}
+	if err := authz.AuthorizeResource(ctx, s.queries, p, authz.ResourceManage, "exec_endpoint", uuid.UUID(ep.ID.Bytes)); err != nil {
 		return err
 	}
 	if err := s.queries.ClearExecEndpointHostKeyByID(ctx, ep.ID); err != nil {
@@ -220,6 +239,9 @@ func (s *Service) Test(ctx context.Context, p authz.Principal, agentID uuid.UUID
 	}
 	ep, err := s.resolveEndpoint(ctx, agentID, slug)
 	if err != nil {
+		return TestResult{}, err
+	}
+	if err := authz.AuthorizeResource(ctx, s.queries, p, authz.ResourceManage, "exec_endpoint", uuid.UUID(ep.ID.Bytes)); err != nil {
 		return TestResult{}, err
 	}
 	const capPerStream = 4 * 1024
@@ -244,12 +266,8 @@ func (s *Service) Test(ctx context.Context, p authz.Principal, agentID uuid.UUID
 
 // generateAndStoreKeypair mints + persists a new ED25519 keypair, then
 // updates the endpoint row to reference it.
-func (s *Service) generateAndStoreKeypair(ctx context.Context, agentID uuid.UUID, slug string) (string, error) {
+func (s *Service) generateAndStoreKeypair(ctx context.Context, q *dbq.Queries, agentID uuid.UUID, slug string, ep dbq.AgentExecEndpoint) (string, error) {
 	kp, err := execproxy.GenerateED25519(agentID.String()[:8], slug)
-	if err != nil {
-		return "", err
-	}
-	ep, err := s.resolveEndpoint(ctx, agentID, slug)
 	if err != nil {
 		return "", err
 	}
@@ -258,7 +276,7 @@ func (s *Service) generateAndStoreKeypair(ctx context.Context, agentID uuid.UUID
 	if err != nil {
 		return "", err
 	}
-	if err := s.queries.SetExecEndpointKeypairByID(ctx, dbq.SetExecEndpointKeypairByIDParams{
+	if err := q.SetExecEndpointKeypairByID(ctx, dbq.SetExecEndpointKeypairByIDParams{
 		ID:               ep.ID,
 		PrivateKeyRef:    pgtype.Text{String: ref, Valid: true},
 		PublicKeyOpenssh: pgtype.Text{String: strings.TrimRight(kp.PublicOpenSSH, "\n"), Valid: true},

@@ -16,15 +16,9 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-// TestExecEndpoint_DeclarationUpsertPreservesOperatorConfig drives the
-// agent-side sync path: declaring an exec endpoint in the sync batch
-// writes the declaration fields but never touches the operator-configured
-// host / user / keypair / host-key columns.
-//
-// This is the load-bearing invariant: a container restart with a
-// modified description must NOT wipe the operator's config and force
-// them to re-paste authorized_keys.
-func TestExecEndpoint_DeclarationUpsertPreservesOperatorConfig(t *testing.T) {
+// TestExecEndpoint_SyncUpdatesNeedWithoutMutatingResource verifies that sync
+// owns the declaration while the concrete shared resource remains immutable.
+func TestExecEndpoint_SyncUpdatesNeedWithoutMutatingResource(t *testing.T) {
 	h := apitest.Setup(t)
 	owner := apitest.CreateUser(t, h, "owner", "user")
 	agentID := apitest.CreateAgent(t, h, apitest.AgentOpts{OwnerID: owner})
@@ -40,7 +34,7 @@ func TestExecEndpoint_DeclarationUpsertPreservesOperatorConfig(t *testing.T) {
 
 	// Operator configures host / port / user via the admin API. This is
 	// the row state we need to survive subsequent re-syncs.
-	configureBody := map[string]any{"host": "vps.example.com", "port": 2222, "sshUser": "deploy"}
+	configureBody := map[string]any{"host": "vps.example.com", "port": 2222, "sshUser": "deploy", "displayName": "CI runner"}
 	resp := h.Do(h.NewRequest(http.MethodPut,
 		"/api/v1/agents/"+agentID.String()+"/exec-endpoints/ci",
 		ownerToken, asJSON(t, configureBody)))
@@ -67,14 +61,19 @@ func TestExecEndpoint_DeclarationUpsertPreservesOperatorConfig(t *testing.T) {
 		t.Fatalf("get row: %v", err)
 	}
 
-	// Declaration fields updated.
-	if row.Description != "Self-hosted CI runner (renamed)" {
-		t.Errorf("description = %q, want updated", row.Description)
+	if row.Description != "Self-hosted CI runner" {
+		t.Errorf("resource description = %q, want immutable declaration snapshot", row.Description)
 	}
-	if row.LlmHint != "use kick-build --branch <name>" {
-		t.Errorf("llm_hint = %q, want updated", row.LlmHint)
+	if row.LlmHint != "use kick-build" {
+		t.Errorf("resource llm_hint = %q, want immutable declaration snapshot", row.LlmHint)
 	}
-	// Operator config preserved.
+	need, err := q.GetResourceNeed(context.Background(), dbq.GetResourceNeedParams{AgentID: pgUUID(agentID), Type: "exec_endpoint", Slug: "ci"})
+	if err != nil {
+		t.Fatalf("get need: %v", err)
+	}
+	if need.Description != "Self-hosted CI runner (renamed)" || !strings.Contains(string(need.Spec), "kick-build --branch") {
+		t.Errorf("need declaration was not refreshed: %+v", need)
+	}
 	if row.Host.String != "vps.example.com" {
 		t.Errorf("host = %q, want preserved 'vps.example.com'", row.Host.String)
 	}
@@ -111,7 +110,7 @@ func TestExecEndpoint_ConfigureGeneratesKeypair(t *testing.T) {
 	resp := h.Do(h.NewRequest(http.MethodPut,
 		"/api/v1/agents/"+agentID.String()+"/exec-endpoints/ci",
 		ownerToken,
-		asJSON(t, map[string]any{"host": "127.0.0.1", "port": 2222, "sshUser": "deploy"})))
+		asJSON(t, map[string]any{"host": "127.0.0.1", "port": 2222, "sshUser": "deploy", "displayName": "CI runner"})))
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("configure: status %d, body %s", resp.StatusCode, h.ReadBody(resp))
 	}
@@ -183,7 +182,7 @@ func TestExecEndpoint_EndToEnd(t *testing.T) {
 	configResp := h.Do(h.NewRequest(http.MethodPut,
 		"/api/v1/agents/"+agentID.String()+"/exec-endpoints/vps",
 		ownerToken,
-		asJSON(t, map[string]any{"host": sshHost, "port": sshPort, "sshUser": "deploy"})))
+		asJSON(t, map[string]any{"host": sshHost, "port": sshPort, "sshUser": "deploy", "displayName": "VPS"})))
 	if configResp.StatusCode != http.StatusOK {
 		t.Fatalf("configure: status %d, body %s", configResp.StatusCode, h.ReadBody(configResp))
 	}
@@ -307,7 +306,7 @@ func TestExecEndpoint_TestConnection(t *testing.T) {
 	configResp := h.Do(h.NewRequest(http.MethodPut,
 		"/api/v1/agents/"+agentID.String()+"/exec-endpoints/vps",
 		ownerToken,
-		asJSON(t, map[string]any{"host": sshHost, "port": sshPort, "sshUser": "deploy"})))
+		asJSON(t, map[string]any{"host": sshHost, "port": sshPort, "sshUser": "deploy", "displayName": "VPS"})))
 	if configResp.StatusCode != http.StatusOK {
 		t.Fatalf("configure: %d %s", configResp.StatusCode, h.ReadBody(configResp))
 	}
@@ -344,6 +343,39 @@ func TestExecEndpoint_TestConnection(t *testing.T) {
 	}
 	if !strings.Contains(out.Stdout, "deploy") {
 		t.Errorf("stdout %q didn't contain 'deploy'", out.Stdout)
+	}
+}
+
+func TestExecEndpoint_SharedMutationsRequireResourceManage(t *testing.T) {
+	h := apitest.Setup(t)
+	owner := apitest.CreateUser(t, h, "exec-manage-owner", "user")
+	coadmin := apitest.CreateUser(t, h, "exec-manage-coadmin", "user")
+	agentID := apitest.CreateAgent(t, h, apitest.AgentOpts{OwnerID: owner})
+	apitest.AddAgentMember(t, h, agentID, coadmin, "admin")
+	agentToken := apitest.IssueAgentToken(t, h, agentID)
+	ownerToken := apitest.IssueUserToken(t, h, owner, "exec-manage-owner@apitest.local", "user")
+	coadminToken := apitest.IssueUserToken(t, h, coadmin, "exec-manage-coadmin@apitest.local", "user")
+	declareExecEndpoint(t, h, agentToken, "shell", wire.ExecEndpointDef{Description: "Shared shell", Access: wire.AccessAdmin})
+	base := "/api/v1/agents/" + agentID.String() + "/exec-endpoints/shell"
+	body := map[string]any{"host": "host.example", "port": 22, "sshUser": "deploy", "displayName": "Shell"}
+	resp := h.Do(h.NewRequest(http.MethodPut, base, ownerToken, asJSON(t, body)))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("owner configure: %d %s", resp.StatusCode, h.ReadBody(resp))
+	}
+	for _, tc := range []struct {
+		method string
+		path   string
+		body   any
+	}{
+		{method: http.MethodPut, path: "", body: asJSON(t, body)},
+		{method: http.MethodPost, path: "/rotate-keypair"},
+		{method: http.MethodPost, path: "/unpin-host-key"},
+		{method: http.MethodPost, path: "/test"},
+	} {
+		resp := h.Do(h.NewRequest(tc.method, base+tc.path, coadminToken, tc.body))
+		if resp.StatusCode != http.StatusForbidden {
+			t.Errorf("%s %s = %d, want 403", tc.method, tc.path, resp.StatusCode)
+		}
 	}
 }
 

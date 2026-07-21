@@ -67,6 +67,30 @@ func TestResolveToken_Valid_ReturnsCurrent(t *testing.T) {
 	}
 }
 
+func TestResolveToken_ValidRejectsInsufficientScopes(t *testing.T) {
+	row := baseRow("", tsTime(time.Hour), "refresh-cipher")
+	row.grantedScopes = "read"
+	row.requiredScopes = "read write"
+	_, persist, err := resolveToken(context.Background(), identityStore{}, testOAuthClient(), zap.NewNop(), row, time.Now(), failUpdate(t), failClear(t))
+	if !errors.Is(err, ErrNeedsReauth) {
+		t.Fatalf("err = %v, want ErrNeedsReauth", err)
+	}
+	if persist {
+		t.Error("persist = true, want false")
+	}
+}
+
+func TestResolveToken_GrandfatheredUnverifiedScopesRemainUsable(t *testing.T) {
+	row := baseRow("", tsTime(time.Hour), "refresh-cipher")
+	row.grantedScopes = "read write"
+	row.requiredScopes = "write"
+	row.scopesVerified = false
+	token, _, err := resolveToken(context.Background(), identityStore{}, testOAuthClient(), zap.NewNop(), row, time.Now(), failUpdate(t), failClear(t))
+	if err != nil || token != "access-cipher" {
+		t.Fatalf("resolveToken() token=%q err=%v", token, err)
+	}
+}
+
 func TestResolveToken_Expired_NoRefreshToken_NeedsReauth(t *testing.T) {
 	row := baseRow("", tsTime(-time.Minute), "")
 	_, persist, err := resolveToken(context.Background(), identityStore{}, testOAuthClient(), zap.NewNop(), row, time.Now(), failUpdate(t), failClear(t))
@@ -86,7 +110,7 @@ func TestResolveToken_Expired_RefreshSuccess(t *testing.T) {
 	defer srv.Close()
 
 	var gotAccess, gotRefresh string
-	update := func(_ context.Context, accessRef string, _ pgtype.Timestamptz, refreshRef string) error {
+	update := func(_ context.Context, accessRef string, _ pgtype.Timestamptz, refreshRef, _ string, _ bool) error {
 		gotAccess, gotRefresh = accessRef, refreshRef
 		return nil
 	}
@@ -119,7 +143,7 @@ func TestResolveToken_Expired_RefreshKeepsOldRefreshToken(t *testing.T) {
 	defer srv.Close()
 
 	var gotRefresh string
-	update := func(_ context.Context, _ string, _ pgtype.Timestamptz, refreshRef string) error {
+	update := func(_ context.Context, _ string, _ pgtype.Timestamptz, refreshRef, _ string, _ bool) error {
 		gotRefresh = refreshRef
 		return nil
 	}
@@ -129,6 +153,30 @@ func TestResolveToken_Expired_RefreshKeepsOldRefreshToken(t *testing.T) {
 	}
 	if gotRefresh != "old-refresh" {
 		t.Errorf("persisted refresh = %q, want old-refresh (unchanged)", gotRefresh)
+	}
+}
+
+func TestResolveToken_ExplicitNarrowedScopePersistsAndRejects(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"access_token":"new-access","scope":"read","expires_in":3600}`))
+	}))
+	defer srv.Close()
+
+	var gotScopes string
+	var gotVerified bool
+	update := func(_ context.Context, _ string, _ pgtype.Timestamptz, _ string, scopes string, verified bool) error {
+		gotScopes, gotVerified = scopes, verified
+		return nil
+	}
+	row := baseRow(srv.URL, tsTime(-time.Minute), "old-refresh")
+	row.grantedScopes = "read write"
+	row.requiredScopes = "write"
+	_, persist, err := resolveToken(context.Background(), identityStore{}, testOAuthClient(), zap.NewNop(), row, time.Now(), update, failClear(t))
+	if !errors.Is(err, ErrNeedsReauth) || !persist {
+		t.Fatalf("resolveToken() persist=%v err=%v, want persisted ErrNeedsReauth", persist, err)
+	}
+	if gotScopes != "read" || !gotVerified {
+		t.Fatalf("persisted scope=%q verified=%v", gotScopes, gotVerified)
 	}
 }
 
@@ -175,8 +223,8 @@ func TestResolveToken_Expired_TransientError_NotReauth(t *testing.T) {
 	}
 }
 
-func failUpdate(t *testing.T) func(context.Context, string, pgtype.Timestamptz, string) error {
-	return func(context.Context, string, pgtype.Timestamptz, string) error {
+func failUpdate(t *testing.T) func(context.Context, string, pgtype.Timestamptz, string, string, bool) error {
+	return func(context.Context, string, pgtype.Timestamptz, string, string, bool) error {
 		t.Helper()
 		t.Error("update called unexpectedly")
 		return nil

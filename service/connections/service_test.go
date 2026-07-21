@@ -19,7 +19,6 @@ import (
 	"github.com/airlockrun/airlock/db/dbtest"
 	"github.com/airlockrun/airlock/oauth"
 	"github.com/airlockrun/airlock/secrets"
-	servicepkg "github.com/airlockrun/airlock/service"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"
@@ -116,7 +115,7 @@ func newOAuthCallbackFixtureWithExchange(t *testing.T, duringExchange func(*oaut
 		}
 	}
 	conn, err := q.UpsertConnection(ctx, dbq.UpsertConnectionParams{
-		AgentID: agent.ID, Slug: "oauth", Name: "OAuth", AuthMode: "oauth",
+		AgentID: agent.ID, Slug: "oauth", Name: "OAuth", DisplayName: "OAuth", AuthMode: "oauth",
 		AuthUrl: f.provider.URL + "/authorize", TokenUrl: f.provider.URL + "/token", BaseUrl: f.provider.URL,
 		AuthInjection: []byte(`{"type":"bearer"}`), Config: []byte("{}"), AuthParams: []byte("{}"), Headers: []byte("{}"),
 	})
@@ -125,12 +124,17 @@ func newOAuthCallbackFixtureWithExchange(t *testing.T, duringExchange func(*oaut
 	}
 	if err := q.UpsertResourceNeed(ctx, dbq.UpsertResourceNeedParams{
 		AgentID: agent.ID, Type: "connection", Slug: "oauth", Description: "OAuth",
-		ExpectedUrl: f.provider.URL, Spec: []byte("{}"),
+		ExpectedUrl: f.provider.URL, Spec: []byte(`{"base_url":"` + f.provider.URL + `","auth_mode":"oauth","auth_injection":{"type":"bearer"},"auth_params":{},"headers":{}}`),
 	}); err != nil {
 		t.Fatalf("create resource need: %v", err)
 	}
-	if err := q.BindConnectionNeed(ctx, dbq.BindConnectionNeedParams{AgentID: agent.ID, Slug: "oauth", ResourceID: conn.ID}); err != nil {
+	if _, err := q.BindConnectionNeed(ctx, dbq.BindConnectionNeedParams{AgentID: agent.ID, Slug: "oauth", ResourceID: conn.ID}); err != nil {
 		t.Fatalf("bind connection: %v", err)
+	}
+	if _, err := q.CreateConnectionGrant(ctx, dbq.CreateConnectionGrantParams{
+		ConnectionID: conn.ID, GranteeID: user.ID, Capabilities: []string{"bind", "manage"},
+	}); err != nil {
+		t.Fatalf("grant resource authorization: %v", err)
 	}
 
 	enc := callbackTestEncryptor()
@@ -144,10 +148,13 @@ func newOAuthCallbackFixtureWithExchange(t *testing.T, duringExchange func(*oaut
 	if err != nil {
 		t.Fatalf("encrypt client secret: %v", err)
 	}
-	if err := q.UpdateConnectionOAuthAppByID(ctx, dbq.UpdateConnectionOAuthAppByIDParams{
+	if _, err := q.StageConnectionOAuthAppByID(ctx, dbq.StageConnectionOAuthAppByIDParams{
 		ID: conn.ID, ClientID: clientID, ClientSecret: clientSecret,
 	}); err != nil {
 		t.Fatalf("store OAuth app: %v", err)
+	}
+	if _, err := callbackTestDB.Pool().Exec(ctx, `UPDATE connections SET client_id=pending_client_id, client_secret=pending_client_secret, pending_client_id='', pending_client_secret='' WHERE id=$1`, conn.ID); err != nil {
+		t.Fatalf("activate OAuth app fixture: %v", err)
 	}
 
 	f.userID = uuid.UUID(user.ID.Bytes)
@@ -177,7 +184,7 @@ func newOAuthCallbackFixtureWithExchange(t *testing.T, duringExchange func(*oaut
 
 func (f *oauthCallbackFixture) callback(t *testing.T) error {
 	t.Helper()
-	_, err := f.service.OAuthCallback(t.Context(), "authorization-code", f.state)
+	_, err := f.service.OAuthCallback(t.Context(), "authorization-code", f.state, "", "")
 	return err
 }
 
@@ -214,20 +221,6 @@ func TestCompletionRedirect(t *testing.T) {
 	}
 }
 
-func TestOAuthErrorRedirectEncodesMessage(t *testing.T) {
-	got := oauthErrorRedirect("https://airlock.example/agents/1?existing=value", errors.New("bad code & state=stolen"))
-	parsed, err := url.Parse(got)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if parsed.Query().Get("message") != "bad code & state=stolen" {
-		t.Fatalf("message = %q", parsed.Query().Get("message"))
-	}
-	if parsed.Query().Get("existing") != "value" {
-		t.Fatalf("existing query parameter was lost: %q", got)
-	}
-}
-
 func TestOAuthCallbackRejectsMembershipRemovalOrDemotion(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -255,8 +248,8 @@ func TestOAuthCallbackRejectsMembershipRemovalOrDemotion(t *testing.T) {
 			if err := tc.change(t.Context(), f); err != nil {
 				t.Fatalf("change membership: %v", err)
 			}
-			if err := f.callback(t); !errors.Is(err, servicepkg.ErrForbidden) {
-				t.Fatalf("OAuthCallback() error = %v, want forbidden", err)
+			if err := f.callback(t); err != nil {
+				t.Fatalf("OAuthCallback() error = %v", err)
 			}
 			f.assertNoExchangeOrCredential(t, f.resourceID)
 		})
@@ -277,20 +270,20 @@ func TestOAuthCallbackRejectsDeletedUser(t *testing.T) {
 func TestOAuthCallbackRejectsResourceSubstitution(t *testing.T) {
 	f := newOAuthCallbackFixture(t)
 	replacement, err := f.queries.UpsertConnection(t.Context(), dbq.UpsertConnectionParams{
-		AgentID: testPGUUID(f.agentID), Slug: "replacement", Name: "Replacement", AuthMode: "oauth",
+		AgentID: testPGUUID(f.agentID), Slug: "replacement", Name: "Replacement", DisplayName: "Replacement", AuthMode: "oauth",
 		AuthUrl: f.provider.URL + "/authorize", TokenUrl: f.provider.URL + "/token", BaseUrl: f.provider.URL,
 		AuthInjection: []byte(`{"type":"bearer"}`), Config: []byte("{}"), AuthParams: []byte("{}"), Headers: []byte("{}"),
 	})
 	if err != nil {
 		t.Fatalf("create replacement connection: %v", err)
 	}
-	if err := f.queries.BindConnectionNeed(t.Context(), dbq.BindConnectionNeedParams{
+	if _, err := f.queries.BindConnectionNeed(t.Context(), dbq.BindConnectionNeedParams{
 		AgentID: testPGUUID(f.agentID), Slug: "oauth", ResourceID: replacement.ID,
 	}); err != nil {
 		t.Fatalf("substitute bound connection: %v", err)
 	}
-	if err := f.callback(t); !errors.Is(err, ErrOAuthInvalidState) {
-		t.Fatalf("OAuthCallback() error = %v, want invalid state", err)
+	if err := f.callback(t); err != nil {
+		t.Fatalf("OAuthCallback() error = %v", err)
 	}
 	f.assertNoExchangeOrCredential(t, f.resourceID)
 	f.assertNoExchangeOrCredential(t, uuid.UUID(replacement.ID.Bytes))
@@ -298,11 +291,13 @@ func TestOAuthCallbackRejectsResourceSubstitution(t *testing.T) {
 
 func TestOAuthCallbackRejectsDeletedResource(t *testing.T) {
 	f := newOAuthCallbackFixture(t)
-	if err := f.queries.DeleteConnectionByID(t.Context(), testPGUUID(f.resourceID)); err != nil {
+	if affected, err := f.queries.DeleteConnectionByID(t.Context(), testPGUUID(f.resourceID)); err != nil {
 		t.Fatalf("delete connection: %v", err)
+	} else if affected != 1 {
+		t.Fatalf("delete connection affected %d rows, want 1", affected)
 	}
-	if err := f.callback(t); !errors.Is(err, servicepkg.ErrNotFound) {
-		t.Fatalf("OAuthCallback() error = %v, want not found", err)
+	if err := f.callback(t); err != nil {
+		t.Fatalf("OAuthCallback() error = %v", err)
 	}
 	if got := f.exchanges.Load(); got != 0 {
 		t.Fatalf("token exchanges = %d, want 0", got)
@@ -317,8 +312,8 @@ func TestOAuthCallbackRechecksAuthorizationBeforeCredentialWrite(t *testing.T) {
 			t.Errorf("remove membership during exchange: %v", err)
 		}
 	})
-	if err := f.callback(t); !errors.Is(err, servicepkg.ErrForbidden) {
-		t.Fatalf("OAuthCallback() error = %v, want forbidden", err)
+	if err := f.callback(t); err != nil {
+		t.Fatalf("OAuthCallback() error = %v", err)
 	}
 	if got := f.exchanges.Load(); got != 1 {
 		t.Fatalf("token exchanges = %d, want 1", got)

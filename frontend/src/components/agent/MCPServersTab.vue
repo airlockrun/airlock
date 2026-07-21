@@ -1,349 +1,255 @@
 <script setup lang="ts">
-import { ref, onMounted, computed, watch } from 'vue'
-import { useToast } from 'primevue/usetoast'
+import { computed, onMounted, ref, watch } from 'vue'
+import { fromJson } from '@bufbuild/protobuf'
 import { useConfirm } from 'primevue/useconfirm'
+import { useToast } from 'primevue/usetoast'
 import api from '@/api/client'
+import type { MCPServerInfo } from '@/gen/airlock/v1/types_pb'
+import type { NeedInfo } from '@/gen/airlock/v1/api_pb'
+import { ListMCPServersResponseSchema } from '@/gen/airlock/v1/api_pb'
+import { useAgentResources } from '@/composables/useAgentResources'
+import { hasCapability, resourceLabel } from '@/utils/resources'
+import { serializeOAuthAppRequest } from '@/utils/resourceRequests'
 import CredentialDialog from './CredentialDialog.vue'
+import ResourceBindingDialog from './ResourceBindingDialog.vue'
 
-interface MCPServer {
-  id: string
-  slug: string
-  name: string
-  url: string
-  authMode: string
-  authorized: boolean
-  hasOauthApp: boolean
-  toolCount: number
-  authUrl?: string
-  tokenExpiresAt?: string
-  lastSyncedAt?: string
-}
-
-const props = defineProps<{ agentId: string }>()
-const emit = defineEmits<{ populated: [count: number] }>()
-
+const props = withDefaults(defineProps<{ agentId: string; yourAccess?: string }>(), { yourAccess: '' })
+const emit = defineEmits<{ populated: [count: number]; mutated: [] }>()
 const toast = useToast()
 const confirm = useConfirm()
-const servers = ref<MCPServer[]>([])
-watch(servers, (v) => emit('populated', v.length), { immediate: true })
+const resources = useAgentResources(props.agentId)
+const definitions = ref<MCPServerInfo[]>([])
 const loading = ref(true)
-const credDialogVisible = ref(false)
-const oauthAppDialogVisible = ref(false)
-const selectedServer = ref<MCPServer | null>(null)
-const oauthClientId = ref('')
-const oauthClientSecret = ref('')
-const oauthSaving = ref(false)
+const loadError = ref('')
 const callbackUrl = ref('')
+const bindingOpen = ref(false)
+const credentialOpen = ref(false)
+const oauthAppOpen = ref(false)
+const selectedNeed = ref<NeedInfo | null>(null)
+const clientId = ref('')
+const clientSecret = ref('')
+const saving = ref(false)
 
-// Per-server PrimeVue Menu refs (overflow ⋮ button). Map keyed by slug
-// so each row owns its own menu instance — sharing one would mis-route
-// clicks since the menu's positioning is anchored to its `toggle()`
-// caller's event target, not to a logical "current row".
-const overflowMenus = ref<Record<string, any>>({})
-function setOverflowMenu(slug: string, el: any) {
-  if (el) overflowMenus.value[slug] = el
+const needs = computed(() => resources.needs.value.filter((need) => need.type === 'mcp_server'))
+watch(needs, (rows) => emit('populated', rows.length), { immediate: true })
+const definitionsBySlug = computed(() => new Map(definitions.value.map((row) => [row.slug, row])))
+const selectedDefinition = computed(() => selectedNeed.value ? definitionsBySlug.value.get(selectedNeed.value.slug) : undefined)
+const selectedResource = computed(() => selectedNeed.value ? resources.resourceFor(selectedNeed.value) : undefined)
+const canAdmin = computed(() => props.yourAccess === 'admin')
+
+function definition(need: NeedInfo): MCPServerInfo | undefined { return definitionsBySlug.value.get(need.slug) }
+function boundName(need: NeedInfo): string {
+  const resource = resources.resourceFor(need)
+  return resource ? resourceLabel(resource) : definition(need)?.name || 'Bound resource'
+}
+function canManage(need: NeedInfo): boolean {
+  const resource = resources.resourceFor(need)
+  return !!resource && hasCapability(resource.capabilities, 'manage')
+}
+function canAuthorize(need: NeedInfo): boolean {
+  const resource = resources.resourceFor(need)
+  return !!resource && hasCapability(resource.capabilities, 'bind') && hasCapability(resource.capabilities, 'manage')
+}
+function sharedWarning(need: NeedInfo): string {
+  const resource = resources.resourceFor(need)
+  return resource && resource.agentCount > 1
+    ? `Token or OAuth changes affect all ${resource.agentCount} apps using this shared MCP resource.`
+    : ''
+}
+function authLabel(mode: string): string {
+  if (mode === 'oauth_discovery') return 'OAuth (automatic)'
+  if (mode === 'oauth') return 'OAuth'
+  if (mode === 'token') return 'Token'
+  if (mode === 'none') return 'No authentication'
+  return mode
 }
 
-// Pulled from each server row at click time so the menu items can
-// branch on the row's authMode/authorized state without rebinding the
-// `model` prop per click.
-const menuTargetServer = ref<MCPServer | null>(null)
-
-const overflowItems = computed(() => {
-  const srv = menuTargetServer.value
-  if (!srv) return []
-  const items: any[] = []
-
-  if (srv.authorized) {
-    items.push({
-      label: 'Disconnect',
-      icon: 'pi pi-sign-out',
-      command: () => disconnect(srv),
-    })
-  }
-
-  // OAuth-app reset: relabels per mode. For oauth_discovery this forces
-  // a fresh DCR on next Authorize; for oauth it lets the operator paste
-  // a new client_id/secret. Either way it wipes the existing OAuth app
-  // config + any credentials tied to it (the old creds would 401 since
-  // they belong to the old client_id at the provider).
-  if (srv.authMode === 'oauth_discovery' && srv.hasOauthApp) {
-    items.push({
-      label: 'Re-register OAuth client',
-      icon: 'pi pi-refresh',
-      command: () => resetOAuthApp(srv),
-    })
-  }
-  if (srv.authMode === 'oauth') {
-    items.push({
-      label: srv.hasOauthApp ? 'Edit OAuth app' : 'Set OAuth app',
-      icon: 'pi pi-pencil',
-      command: () => editOAuthApp(srv),
-    })
-  }
-
-  return items
-})
-
-function primaryAction(srv: MCPServer) {
-  selectedServer.value = srv
-  if (srv.authMode === 'oauth_discovery') {
-    // Backend handles RFC 7591 DCR if no client_id is stored. If DCR
-    // fails we get a 400 with a clear remediation message — surfaced
-    // as a toast by startMCPOAuth.
-    startMCPOAuth()
-  } else if (srv.authMode === 'oauth') {
-    if (srv.hasOauthApp) {
-      // OAuth app already configured — just run the flow.
-      startMCPOAuth()
-    } else {
-      // First-time configuration — paste client_id/secret.
-      oauthClientId.value = ''
-      oauthClientSecret.value = ''
-      oauthAppDialogVisible.value = true
-    }
-  } else {
-    credDialogVisible.value = true
-  }
+async function refresh() {
+  const [response] = await Promise.all([
+    api.get(`/api/v1/agents/${props.agentId}/mcp-servers`),
+    resources.refresh(),
+  ])
+  const parsed = fromJson(ListMCPServersResponseSchema, response.data)
+  definitions.value = parsed.mcpServers
+  callbackUrl.value = parsed.oauthCallbackUrl
 }
 
-function openOverflow(event: Event, srv: MCPServer) {
-  menuTargetServer.value = srv
-  overflowMenus.value[srv.slug]?.toggle(event)
-}
-
-async function disconnect(srv: MCPServer) {
-  confirm.require({
-    message: `Sign out of ${srv.name || srv.slug}? Tokens are discarded; OAuth app config stays.`,
-    header: 'Disconnect',
-    icon: 'pi pi-sign-out',
-    rejectProps: { label: 'Cancel', severity: 'secondary', outlined: true },
-    acceptProps: { label: 'Disconnect' },
-    accept: async () => {
-      try {
-        await api.delete(`/api/v1/agents/${props.agentId}/mcp-servers/${srv.slug}/credentials`)
-        srv.authorized = false
-        toast.add({ severity: 'success', summary: `Disconnected from ${srv.name || srv.slug}`, life: 3000 })
-      } catch (err: any) {
-        toast.add({ severity: 'error', summary: err.response?.data?.error || 'Disconnect failed', life: 5000 })
-      }
-    },
-  })
-}
-
-async function resetOAuthApp(srv: MCPServer) {
-  confirm.require({
-    message: `Re-register OAuth client for ${srv.name || srv.slug}? Existing client and tokens will be discarded.`,
-    header: 'Re-register OAuth client',
-    icon: 'pi pi-refresh',
-    rejectProps: { label: 'Cancel', severity: 'secondary', outlined: true },
-    acceptProps: { label: 'Re-register' },
-    accept: async () => {
-      try {
-        await api.delete(`/api/v1/agents/${props.agentId}/mcp-servers/${srv.slug}/credentials/oauth-app`)
-        srv.hasOauthApp = false
-        srv.authorized = false
-        toast.add({ severity: 'success', summary: 'OAuth client cleared. Click Authorize to register a new one.', life: 4000 })
-      } catch (err: any) {
-        toast.add({ severity: 'error', summary: err.response?.data?.error || 'Reset failed', life: 5000 })
-      }
-    },
-  })
-}
-
-async function editOAuthApp(srv: MCPServer) {
-  // For `oauth` (manual) — wipe the old app first so the dialog isn't
-  // ambiguous about whether saving "edits" or "replaces". The backend
-  // path is the same as a fresh Set OAuth app from there.
+async function load() {
+  loading.value = true
+  loadError.value = ''
   try {
-    if (srv.hasOauthApp) {
-      await api.delete(`/api/v1/agents/${props.agentId}/mcp-servers/${srv.slug}/credentials/oauth-app`)
-      srv.hasOauthApp = false
-      srv.authorized = false
-    }
-    selectedServer.value = srv
-    oauthClientId.value = ''
-    oauthClientSecret.value = ''
-    oauthAppDialogVisible.value = true
-  } catch (err: any) {
-    toast.add({ severity: 'error', summary: err.response?.data?.error || 'Failed to reset OAuth app', life: 5000 })
+    await refresh()
+  } catch (error: any) {
+    loadError.value = error.response?.data?.error || error.message || 'Failed to load MCP servers'
+    emit('populated', 1)
+  } finally {
+    loading.value = false
+  }
+}
+
+function openSetup(need: NeedInfo) { selectedNeed.value = need; bindingOpen.value = true }
+function configureToken(need: NeedInfo) { selectedNeed.value = need; credentialOpen.value = true }
+function configureOAuthApp(need: NeedInfo) {
+  if (!canAuthorize(need)) return
+  selectedNeed.value = need
+  clientId.value = ''
+  clientSecret.value = ''
+  oauthAppOpen.value = true
+}
+
+async function configureBound(need: NeedInfo) {
+  try {
+    await refresh()
+    configureToken(need)
+  } catch (error: any) {
+    toast.add({ severity: 'error', summary: error.response?.data?.error || error.message || 'Failed to load resource setup', life: 6000 })
+  }
+}
+
+async function reauthorize(need: NeedInfo) {
+  const resource = resources.resourceFor(need)
+  if (!resource) return
+  try {
+    await resources.startAuthorization(need, { resourceId: resource.id, displayName: '', createNew: false })
+  } catch (error: any) {
+    toast.add({ severity: 'error', summary: error.response?.data?.error || error.message || 'Authorization failed', life: 6000 })
   }
 }
 
 async function saveOAuthApp() {
-  if (!selectedServer.value || !oauthClientId.value || !oauthClientSecret.value) return
-  oauthSaving.value = true
+  const need = selectedNeed.value
+  const resource = selectedResource.value
+  if (!need || !resource || !canAuthorize(need) || !clientId.value || !clientSecret.value) return
+  saving.value = true
   try {
-    await api.put(`/api/v1/agents/${props.agentId}/mcp-servers/${selectedServer.value.slug}/credentials/oauth-app`, {
-      clientId: oauthClientId.value,
-      clientSecret: oauthClientSecret.value,
-    })
-    toast.add({ severity: 'success', summary: 'OAuth app saved. Starting authorization...', life: 3000 })
-    oauthAppDialogVisible.value = false
-    selectedServer.value.hasOauthApp = true
-    startMCPOAuth()
-  } catch (err: any) {
-    toast.add({ severity: 'error', summary: err.response?.data?.error || 'Failed to save OAuth app', life: 5000 })
+    await api.put(
+      `/api/v1/agents/${props.agentId}/mcp-servers/${encodeURIComponent(need.slug)}/credentials/oauth-app`,
+      serializeOAuthAppRequest(clientId.value, clientSecret.value, '', false),
+    )
+    oauthAppOpen.value = false
+    await resources.startAuthorization(need, { resourceId: resource.id, displayName: '', createNew: false })
+  } catch (error: any) {
+    toast.add({ severity: 'error', summary: error.response?.data?.error || error.message || 'OAuth setup failed', life: 6000 })
   } finally {
-    oauthSaving.value = false
+    saving.value = false
   }
 }
 
-async function startMCPOAuth() {
-  if (!selectedServer.value) return
-  try {
-    const { data } = await api.post('/api/v1/credentials/mcp/oauth/start', {
-      agentId: props.agentId,
-      slug: selectedServer.value.slug,
-    })
-    if (data.authorizeUrl) {
-      window.location.href = data.authorizeUrl
-    }
-  } catch (err: any) {
-    toast.add({ severity: 'error', summary: err.response?.data?.error || 'OAuth start failed', life: 5000 })
-  }
+function disconnect(need: NeedInfo) {
+  confirm.require({
+    header: 'Disconnect from this app?',
+    message: `${boundName(need)} stays available to other apps. Its stored credentials are not cleared.`,
+    acceptLabel: 'Disconnect from this app',
+    rejectLabel: 'Cancel',
+    accept: async () => {
+      try {
+        await resources.unbind(need)
+        await refresh()
+        emit('mutated')
+        toast.add({ severity: 'success', summary: 'MCP resource disconnected from this app', life: 3000 })
+      } catch (error: any) {
+        toast.add({ severity: 'error', summary: error.response?.data?.error || 'Disconnect failed', life: 5000 })
+      }
+    },
+  })
 }
 
-function authModeLabel(mode: string): string {
-  switch (mode) {
-    case 'oauth_discovery': return 'OAuth (auto)'
-    case 'oauth': return 'OAuth'
-    case 'token': return 'Token'
-    case 'none': return 'None'
-    default: return mode
-  }
-}
+async function changed() { await refresh(); emit('mutated') }
 
-function primaryLabel(srv: MCPServer): string {
-  if (srv.authMode === 'token') return srv.authorized ? 'Update token' : 'Set token'
-  if (srv.authorized) return 'Reauthorize'
-  return 'Authorize'
-}
-
-// Whether this server has any overflow-menu items right now. Used to
-// hide the ⋮ button when it would open an empty dropdown — e.g.
-// oauth_discovery + !hasOauthApp + !authorized has nothing to offer
-// beyond the primary Authorize button.
-function hasOverflow(srv: MCPServer): boolean {
-  if (srv.authorized) return true                                // Disconnect
-  if (srv.authMode === 'oauth_discovery' && srv.hasOauthApp) return true  // Re-register
-  if (srv.authMode === 'oauth') return true                      // Set/Edit OAuth app
-  return false
-}
-
-onMounted(async () => {
-  try {
-    const { data } = await api.get(`/api/v1/agents/${props.agentId}/mcp-servers`)
-    servers.value = data.mcpServers || []
-    callbackUrl.value = data.oauthCallbackUrl ?? ''
-  } finally {
-    loading.value = false
-  }
-})
+onMounted(load)
 </script>
 
 <template>
-  <div>
-    <DataTable v-if="!loading" :value="servers" stripedRows>
-      <template #empty>
-        <div style="text-align: center; padding: 2rem; color: var(--p-text-muted-color)">
-          No MCP servers registered.
-        </div>
+  <Message v-if="loadError" severity="error" :closable="false">
+    <div class="load-error"><span>{{ loadError }}</span><Button label="Retry" icon="pi pi-refresh" size="small" outlined @click="load" /></div>
+  </Message>
+  <DataTable v-else-if="!loading" :value="needs" stripedRows responsive-layout="scroll">
+    <template #empty><div class="empty">No MCP servers registered.</div></template>
+    <Column header="MCP server">
+      <template #body="{ data: need }">
+        <div class="primary-name">{{ need.bound ? boundName(need) : (definition(need)?.name || need.slug) }}</div>
+        <div class="secondary">App handle: <code>{{ need.slug }}</code></div>
+        <div v-if="definition(need)?.url" class="secondary url">{{ definition(need)?.url }}</div>
       </template>
-      <Column field="name" header="Name">
-        <template #body="{ data: srv }">
-          <div>
-            <strong>{{ srv.name || srv.slug }}</strong>
-            <div style="font-size: 0.8rem; color: var(--p-text-muted-color); word-break: break-all">{{ srv.url }}</div>
-          </div>
-        </template>
-      </Column>
-      <Column header="Auth Mode">
-        <template #body="{ data: srv }">
-          {{ authModeLabel(srv.authMode) }}
-        </template>
-      </Column>
-      <Column header="Tools">
-        <template #body="{ data: srv }">
-          {{ srv.toolCount || 0 }}
-        </template>
-      </Column>
-      <Column header="Status">
-        <template #body="{ data: srv }">
-          <Tag v-if="srv.authMode === 'none'" value="No Auth" severity="secondary" />
-          <Tag v-else-if="srv.authorized" value="Authorized" severity="success" />
-          <Tag v-else value="Needs Setup" severity="warn" />
-        </template>
-      </Column>
-      <Column header="Actions">
-        <template #body="{ data: srv }">
-          <div v-if="srv.authMode !== 'none'" style="display: flex; gap: 0.25rem; align-items: center">
+    </Column>
+    <Column header="Authentication"><template #body="{ data: need }">{{ authLabel(definition(need)?.authMode || '') }}</template></Column>
+    <Column header="Tools"><template #body="{ data: need }">{{ definition(need)?.toolCount || 0 }}</template></Column>
+    <Column header="Binding"><template #body="{ data: need }"><Tag :value="need.bound ? 'Bound' : 'Unbound'" :severity="need.bound ? 'success' : 'warn'" /></template></Column>
+    <Column header="Status">
+      <template #body="{ data: need }">
+        <Tag
+          v-if="need.bound"
+          :value="definition(need)?.authMode === 'none' ? 'Ready' : (definition(need)?.authorized ? 'Ready' : 'Needs setup')"
+          :severity="definition(need)?.authMode === 'none' || definition(need)?.authorized ? 'success' : 'warn'"
+        />
+        <span v-else class="secondary">Not connected</span>
+      </template>
+    </Column>
+    <Column header="Actions">
+      <template #body="{ data: need }">
+        <div v-if="canAdmin" class="actions">
+          <Button v-if="!need.bound" label="Set up" size="small" @click="openSetup(need)" />
+          <template v-else>
             <Button
-              :label="primaryLabel(srv)"
+              v-if="['oauth', 'oauth_discovery'].includes(definition(need)?.authMode || '') && canAuthorize(need)"
+              label="Reauthorize"
               size="small"
               outlined
-              @click="primaryAction(srv)"
+              @click="reauthorize(need)"
             />
-            <Button
-              v-if="hasOverflow(srv)"
-              icon="pi pi-ellipsis-v"
-              size="small"
-              text
-              severity="secondary"
-              aria-label="More actions"
-              @click="(e) => openOverflow(e, srv)"
-            />
-            <Menu
-              v-if="hasOverflow(srv)"
-              :ref="(el) => setOverflowMenu(srv.slug, el)"
-              :model="overflowItems"
-              :popup="true"
-            />
-          </div>
-        </template>
-      </Column>
-    </DataTable>
-
-    <DataTable v-else :value="[{}, {}, {}]">
-      <Column header="Name"><template #body><Skeleton /></template></Column>
-      <Column header="Auth Mode"><template #body><Skeleton width="5rem" /></template></Column>
-      <Column header="Tools"><template #body><Skeleton width="3rem" /></template></Column>
-      <Column header="Status"><template #body><Skeleton width="5rem" /></template></Column>
-      <Column header="Actions"><template #body><Skeleton width="6rem" /></template></Column>
-    </DataTable>
-
-    <!-- Token/API key dialog (reuse CredentialDialog) -->
-    <CredentialDialog
-      v-if="selectedServer"
-      v-model:visible="credDialogVisible"
-      :agent-id="props.agentId"
-      :slug="selectedServer.slug"
-      :name="selectedServer.name"
-      base-path="mcp-servers"
-    />
-
-    <!-- OAuth app paste dialog (oauth mode only) -->
-    <Dialog v-model:visible="oauthAppDialogVisible" :header="`Configure ${selectedServer?.name ?? 'MCP OAuth'}`" modal style="width: 28rem">
-      <div style="display: flex; flex-direction: column; gap: 1.25rem; padding-top: 0.5rem">
-        <p style="font-size: 0.85rem; color: var(--p-text-muted-color); margin: 0">
-          Enter OAuth2 client credentials for this MCP server.
-        </p>
-        <div style="font-size: 0.8rem">
-          <span style="color: var(--p-text-muted-color)">Redirect URI: </span>
-          <code style="user-select: all; word-break: break-all">{{ callbackUrl }}</code>
+            <Button v-if="definition(need)?.authMode === 'token' && canManage(need)" label="Configure token" size="small" outlined @click="configureToken(need)" />
+            <Button v-if="definition(need)?.authMode === 'oauth' && canAuthorize(need)" label="OAuth app" size="small" text @click="configureOAuthApp(need)" />
+            <Button label="Switch resource" size="small" text @click="openSetup(need)" />
+            <Button label="Disconnect from this app" size="small" text severity="danger" @click="disconnect(need)" />
+          </template>
         </div>
-        <FloatLabel variant="on">
-          <InputText id="mcp-oauth-client-id" v-model="oauthClientId" style="width: 100%" />
-          <label for="mcp-oauth-client-id">Client ID</label>
-        </FloatLabel>
-        <FloatLabel variant="on">
-          <Password id="mcp-oauth-client-secret" v-model="oauthClientSecret" :feedback="false" toggle-mask style="width: 100%" :input-style="{ width: '100%' }" />
-          <label for="mcp-oauth-client-secret">Client Secret</label>
-        </FloatLabel>
-        <div style="display: flex; justify-content: flex-end; gap: 0.5rem">
-          <Button label="Save & Authorize" :loading="oauthSaving" @click="saveOAuthApp" :disabled="!oauthClientId || !oauthClientSecret" />
-        </div>
+        <span v-else class="secondary">View only</span>
+      </template>
+    </Column>
+  </DataTable>
+  <div v-else class="skeletons"><Skeleton v-for="i in 3" :key="i" height="3rem" /></div>
+
+  <ResourceBindingDialog
+    v-model:visible="bindingOpen"
+    :agent-id="agentId"
+    :need="selectedNeed"
+    :auth-mode="selectedDefinition?.authMode"
+    :callback-url="callbackUrl"
+    @changed="changed"
+    @configure="configureBound"
+  />
+  <CredentialDialog
+    v-if="selectedNeed"
+    v-model:visible="credentialOpen"
+    :agent-id="agentId"
+    :slug="selectedNeed.slug"
+    :name="selectedResource ? resourceLabel(selectedResource) : selectedNeed.slug"
+    base-path="mcp-servers"
+    :warning="sharedWarning(selectedNeed)"
+    @saved="changed"
+  />
+  <Dialog v-model:visible="oauthAppOpen" header="Replace MCP OAuth app" modal :style="{ width: 'min(30rem, calc(100vw - 2rem))' }">
+    <div class="oauth-form">
+      <Message v-if="selectedNeed && sharedWarning(selectedNeed)" severity="warn" :closable="false">{{ sharedWarning(selectedNeed) }}</Message>
+      <p class="secondary">After saving, you will authorize the shared resource again. Existing credentials remain active until authorization succeeds.</p>
+      <div class="secondary">Redirect URI: <code class="url">{{ callbackUrl }}</code></div>
+      <InputText v-model="clientId" placeholder="Client ID" />
+      <Password v-model="clientSecret" placeholder="Client secret" :feedback="false" toggle-mask fluid />
+      <div class="dialog-actions">
+        <Button label="Cancel" text severity="secondary" @click="oauthAppOpen = false" />
+        <Button label="Save and authorize" :loading="saving" :disabled="!clientId || !clientSecret" @click="saveOAuthApp" />
       </div>
-    </Dialog>
-  </div>
+    </div>
+  </Dialog>
 </template>
+
+<style scoped>
+.empty { text-align: center; padding: 2rem; color: var(--p-text-muted-color); }
+.primary-name { font-weight: 600; }
+.secondary { color: var(--p-text-muted-color); font-size: 0.8rem; }
+.url { word-break: break-all; }
+.actions { display: flex; flex-wrap: wrap; gap: 0.25rem; }
+.skeletons, .oauth-form { display: flex; flex-direction: column; gap: 0.75rem; }
+.dialog-actions { display: flex; justify-content: flex-end; gap: 0.5rem; }
+.load-error { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; }
+</style>

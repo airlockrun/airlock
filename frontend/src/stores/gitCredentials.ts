@@ -12,13 +12,18 @@ import { create } from '@bufbuild/protobuf'
 
 export const useGitCredentialsStore = defineStore('gitCredentials', () => {
   const credentials = ref<GitCredential[]>([])
-  const loading = ref(false)
+  const loading = ref(true)
+  const error = ref('')
 
   async function fetchCredentials() {
     loading.value = true
+    error.value = ''
     try {
       const { data } = await api.get('/api/v1/me/git/credentials')
       credentials.value = fromJson(ListGitCredentialsResponseSchema, data).credentials
+    } catch (cause: any) {
+      error.value = cause?.response?.data?.error || cause?.message || 'Failed to load git credentials'
+      throw cause
     } finally {
       loading.value = false
     }
@@ -40,5 +45,5 @@ export const useGitCredentialsStore = defineStore('gitCredentials', () => {
     credentials.value = credentials.value.filter((c) => c.id !== id)
   }
 
-  return { credentials, loading, fetchCredentials, createCredential, deleteCredential }
+  return { credentials, loading, error, fetchCredentials, createCredential, deleteCredential }
 })

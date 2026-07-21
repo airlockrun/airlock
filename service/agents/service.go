@@ -1188,6 +1188,17 @@ func (s *Service) TransferOwnership(ctx context.Context, p authz.Principal, agen
 	}
 	defer tx.Rollback(ctx)
 	qtx := q.WithTx(tx)
+	agent, err = qtx.GetAgentByIDForUpdate(ctx, agent.ID)
+	if err != nil {
+		return dbq.Agent{}, service.ErrNotFound
+	}
+	oldOwnerID = uuid.UUID(agent.OwnerPrincipalID.Bytes)
+	if err := authz.AuthorizeOwnedResource(ctx, qtx, p, oldOwnerID, authz.TenantAgentTransferAny); err != nil {
+		return dbq.Agent{}, err
+	}
+	if _, err := qtx.LockResourceNeedsByAgent(ctx, agent.ID); err != nil {
+		return dbq.Agent{}, err
+	}
 	newOwnerPG := pgtype.UUID{Bytes: newOwnerID, Valid: true}
 	if err := qtx.UpdateAgentOwner(ctx, dbq.UpdateAgentOwnerParams{ID: agent.ID, OwnerPrincipalID: newOwnerPG}); err != nil {
 		return dbq.Agent{}, err

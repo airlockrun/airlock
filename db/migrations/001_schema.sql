@@ -114,6 +114,7 @@ CREATE TABLE public.agent_env_vars (
 CREATE TABLE public.agent_exec_endpoints (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
     slug text NOT NULL,
+    display_name text NOT NULL,
     description text NOT NULL,
     llm_hint text NOT NULL,
     access text NOT NULL,
@@ -129,7 +130,8 @@ CREATE TABLE public.agent_exec_endpoints (
     last_used_at timestamp with time zone,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    owner_principal_id uuid NOT NULL
+    owner_principal_id uuid NOT NULL,
+    CONSTRAINT agent_exec_endpoints_display_name_check CHECK ((btrim(display_name) <> ''::text))
 );
 
 
@@ -154,6 +156,7 @@ CREATE TABLE public.agent_mcp_servers (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
     slug text NOT NULL,
     name text NOT NULL,
+    display_name text NOT NULL,
     access text NOT NULL,
     url text NOT NULL,
     auth_mode text NOT NULL,
@@ -172,7 +175,16 @@ CREATE TABLE public.agent_mcp_servers (
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     server_instructions text NOT NULL,
-    owner_principal_id uuid NOT NULL
+    owner_principal_id uuid NOT NULL,
+    lifecycle text NOT NULL,
+    granted_scopes text NOT NULL,
+    scopes_verified boolean NOT NULL,
+    authorization_revision bigint NOT NULL,
+    provisional_need_id uuid,
+    pending_client_id text NOT NULL,
+    pending_client_secret text NOT NULL,
+    CONSTRAINT agent_mcp_servers_lifecycle_check CHECK ((lifecycle = ANY (ARRAY['provisional'::text, 'active'::text]))),
+    CONSTRAINT agent_mcp_servers_display_name_check CHECK ((btrim(display_name) <> ''::text))
 );
 
 
@@ -550,6 +562,7 @@ CREATE TABLE public.connections (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
     slug text NOT NULL,
     name text NOT NULL,
+    display_name text NOT NULL,
     description text NOT NULL,
     llm_hint text NOT NULL,
     access text NOT NULL,
@@ -571,7 +584,16 @@ CREATE TABLE public.connections (
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     auth_params jsonb NOT NULL,
     headers jsonb NOT NULL,
-    owner_principal_id uuid NOT NULL
+    owner_principal_id uuid NOT NULL,
+    lifecycle text NOT NULL,
+    granted_scopes text NOT NULL,
+    scopes_verified boolean NOT NULL,
+    authorization_revision bigint NOT NULL,
+    provisional_need_id uuid,
+    pending_client_id text NOT NULL,
+    pending_client_secret text NOT NULL,
+    CONSTRAINT connections_lifecycle_check CHECK ((lifecycle = ANY (ARRAY['provisional'::text, 'active'::text]))),
+    CONSTRAINT connections_display_name_check CHECK ((btrim(display_name) <> ''::text))
 );
 
 
@@ -757,7 +779,12 @@ CREATE TABLE public.oauth_states (
     expires_at timestamp with time zone NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     user_id uuid NOT NULL,
-    resource_id uuid NOT NULL
+    resource_id uuid NOT NULL,
+    need_id uuid NOT NULL,
+    requested_scopes text NOT NULL,
+    authorization_revision bigint NOT NULL,
+    expected_prior_resource_id uuid,
+    uses_pending_client boolean NOT NULL
 );
 
 
@@ -1270,6 +1297,9 @@ ALTER TABLE ONLY public.agent_mcp_servers
 ALTER TABLE ONLY public.agent_mcp_servers
     ADD CONSTRAINT agent_mcp_servers_pkey PRIMARY KEY (id);
 
+ALTER TABLE ONLY public.agent_mcp_servers
+    ADD CONSTRAINT agent_mcp_servers_provisional_need_owner_key UNIQUE (provisional_need_id, owner_principal_id);
+
 
 --
 -- Name: agent_messages agent_messages_pkey; Type: CONSTRAINT; Schema: public; Owner: -
@@ -1453,6 +1483,9 @@ ALTER TABLE ONLY public.connections
 
 ALTER TABLE ONLY public.connections
     ADD CONSTRAINT connections_pkey PRIMARY KEY (id);
+
+ALTER TABLE ONLY public.connections
+    ADD CONSTRAINT connections_provisional_need_owner_key UNIQUE (provisional_need_id, owner_principal_id);
 
 
 --
@@ -1799,6 +1832,9 @@ ALTER TABLE ONLY public.relay_codes
 
 ALTER TABLE ONLY public.oauth_states
     ADD CONSTRAINT oauth_states_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+
+ALTER TABLE ONLY public.oauth_states
+    ADD CONSTRAINT oauth_states_need_id_fkey FOREIGN KEY (need_id) REFERENCES public.agent_resource_needs(id) ON DELETE CASCADE;
 
 ALTER TABLE ONLY public.system_conversations
     ADD CONSTRAINT system_conversations_suspended_run_id_fkey FOREIGN KEY (suspended_run_id) REFERENCES public.system_runs(id) ON DELETE SET NULL;
@@ -2207,6 +2243,9 @@ ALTER TABLE ONLY public.agent_grants
 ALTER TABLE ONLY public.agent_mcp_servers
     ADD CONSTRAINT agent_mcp_servers_owner_principal_id_fkey FOREIGN KEY (owner_principal_id) REFERENCES public.principals(id) ON DELETE CASCADE;
 
+ALTER TABLE ONLY public.agent_mcp_servers
+    ADD CONSTRAINT agent_mcp_servers_provisional_need_id_fkey FOREIGN KEY (provisional_need_id) REFERENCES public.agent_resource_needs(id) ON DELETE CASCADE;
+
 
 --
 -- Name: agent_messages agent_messages_conversation_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
@@ -2454,6 +2493,9 @@ ALTER TABLE ONLY public.bridges
 
 ALTER TABLE ONLY public.connections
     ADD CONSTRAINT connections_owner_principal_id_fkey FOREIGN KEY (owner_principal_id) REFERENCES public.principals(id) ON DELETE CASCADE;
+
+ALTER TABLE ONLY public.connections
+    ADD CONSTRAINT connections_provisional_need_id_fkey FOREIGN KEY (provisional_need_id) REFERENCES public.agent_resource_needs(id) ON DELETE CASCADE;
 
 
 --

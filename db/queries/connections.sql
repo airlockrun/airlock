@@ -10,8 +10,8 @@
 -- scopes change, clear access_token_ref so the user must re-authorize with the
 -- new scopes. Credential fields are seeded empty on insert; ON CONFLICT
 -- preserves an existing access_token_ref unless scopes changed.
-INSERT INTO connections (owner_principal_id, slug, name, description, llm_hint, auth_mode, auth_url, token_url, base_url, scopes, auth_injection, setup_instructions, test_path, config, auth_params, headers, access, client_id, client_secret, access_token_ref, refresh_token)
-VALUES ((SELECT owner_principal_id FROM agents WHERE agents.id = @agent_id), @slug, @name, @description, @llm_hint, @auth_mode, @auth_url, @token_url, @base_url, @scopes, @auth_injection, @setup_instructions, @test_path, @config, @auth_params, @headers, @access, '', '', '', '')
+INSERT INTO connections (owner_principal_id, slug, name, display_name, description, llm_hint, auth_mode, auth_url, token_url, base_url, scopes, auth_injection, setup_instructions, test_path, config, auth_params, headers, access, client_id, client_secret, access_token_ref, refresh_token, lifecycle, granted_scopes, scopes_verified, authorization_revision, pending_client_id, pending_client_secret)
+VALUES ((SELECT owner_principal_id FROM agents WHERE agents.id = @agent_id), @slug, @name, @display_name, @description, @llm_hint, @auth_mode, @auth_url, @token_url, @base_url, @scopes, @auth_injection, @setup_instructions, @test_path, @config, @auth_params, @headers, @access, '', '', '', '', 'active', '', false, 0, '', '')
 ON CONFLICT (owner_principal_id, slug) DO UPDATE SET
     name = EXCLUDED.name,
     description = EXCLUDED.description,
@@ -34,6 +34,23 @@ ON CONFLICT (owner_principal_id, slug) DO UPDATE SET
     updated_at = now()
 RETURNING *;
 
+-- name: CreateConnection :one
+INSERT INTO connections (
+    id, owner_principal_id, slug, name, display_name, description, llm_hint,
+    auth_mode, auth_url, token_url, base_url, scopes, auth_injection,
+    setup_instructions, test_path, config, auth_params, headers, access,
+    client_id, client_secret, access_token_ref, refresh_token, lifecycle,
+    granted_scopes, scopes_verified, authorization_revision, provisional_need_id,
+    pending_client_id, pending_client_secret
+) VALUES (
+    @id, @owner_principal_id, @slug, @name, @display_name, @description, @llm_hint,
+    @auth_mode, @auth_url, @token_url, @base_url, @scopes, @auth_injection,
+    @setup_instructions, @test_path, @config, @auth_params, @headers, @access,
+    '', '', '', '', @lifecycle, '', false, 0, @provisional_need_id, '', ''
+)
+ON CONFLICT (provisional_need_id, owner_principal_id) DO NOTHING
+RETURNING *;
+
 -- name: ListConnectionNeedsByAgent :many
 -- The agent's connection needs joined to their bound resource (if any). The
 -- agent's local handle is the NEED slug; an unconfigured need surfaces with its
@@ -50,13 +67,15 @@ SELECT
     COALESCE(c.base_url, n.spec->>'base_url', '') AS base_url,
     COALESCE(c.scopes, n.spec->>'scopes', '') AS scopes,
     COALESCE(c.setup_instructions, n.spec->>'setup_instructions', '') AS setup_instructions,
-    (COALESCE(c.auth_mode, n.spec->>'auth_mode', '') = 'none' OR COALESCE(c.access_token_ref, '') != '')::boolean AS authorized,
+    (COALESCE(c.auth_mode, n.spec->>'auth_mode', '') = 'none' OR
+        (COALESCE(c.access_token_ref, '') != '' AND
+         string_to_array(COALESCE(n.expected_scopes, ''), ' ') <@ string_to_array(COALESCE(c.granted_scopes, ''), ' ')))::boolean AS authorized,
     (COALESCE(c.client_id, '') != '')::boolean AS has_oauth_app,
     (COALESCE(c.refresh_token, '') != '')::boolean AS has_refresh_token,
     (n.bound_connection_id IS NOT NULL)::boolean AS bound,
     c.token_expires_at AS token_expires_at
 FROM agent_resource_needs n
-LEFT JOIN connections c ON c.id = n.bound_connection_id
+LEFT JOIN connections c ON c.id = n.bound_connection_id AND c.lifecycle = 'active'
 WHERE n.agent_id = @agent_id AND n.type = 'connection'
 ORDER BY n.slug;
 
@@ -78,24 +97,68 @@ UPDATE connections SET
     access_token_ref = @access_token_ref,
     token_expires_at = @token_expires_at,
     refresh_token = @refresh_token,
+    granted_scopes = @granted_scopes,
+    scopes_verified = @scopes_verified,
     updated_at = now()
 WHERE id = @id;
 
--- name: ClearConnectionCredentialsByID :exec
+-- name: ClearConnectionCredentialsByID :execrows
 UPDATE connections SET
     access_token_ref = '',
     refresh_token = '',
     token_expires_at = NULL,
+    granted_scopes = '',
+    scopes_verified = false,
+    pending_client_id = '',
+    pending_client_secret = '',
+    authorization_revision = authorization_revision + 1,
     updated_at = now()
 WHERE id = @id;
 
--- name: UpdateConnectionOAuthAppByID :exec
--- User enters OAuth client_id + client_secret.
+-- name: StageConnectionOAuthAppByID :one
 UPDATE connections SET
-    client_id = @client_id,
-    client_secret = @client_secret,
+    pending_client_id = @client_id,
+    pending_client_secret = @client_secret,
+    authorization_revision = authorization_revision + 1,
     updated_at = now()
-WHERE id = @id;
+WHERE id = @id
+RETURNING authorization_revision;
+
+-- name: ClearPendingConnectionOAuthApp :execrows
+UPDATE connections SET pending_client_id = '', pending_client_secret = '', updated_at = now()
+WHERE id = @id AND authorization_revision = @authorization_revision;
+
+-- name: GetProvisionalConnectionForNeedOwner :one
+SELECT * FROM connections
+WHERE provisional_need_id = @need_id AND owner_principal_id = @owner_principal_id AND lifecycle = 'provisional'
+ORDER BY created_at DESC
+LIMIT 1;
+
+-- name: AdvanceConnectionAuthorizationRevision :one
+UPDATE connections
+SET authorization_revision = authorization_revision + 1, updated_at = now()
+WHERE id = @id
+RETURNING authorization_revision;
+
+-- name: ActivateConnectionWithCredentials :execrows
+UPDATE connections SET
+    access_token_ref = @access_token_ref,
+    token_expires_at = @token_expires_at,
+    refresh_token = @refresh_token,
+    granted_scopes = @granted_scopes,
+    scopes_verified = true,
+    client_id = CASE WHEN @uses_pending_client::boolean THEN pending_client_id ELSE client_id END,
+    client_secret = CASE WHEN @uses_pending_client::boolean THEN pending_client_secret ELSE client_secret END,
+    pending_client_id = CASE WHEN @uses_pending_client::boolean THEN '' ELSE pending_client_id END,
+    pending_client_secret = CASE WHEN @uses_pending_client::boolean THEN '' ELSE pending_client_secret END,
+    lifecycle = 'active',
+    provisional_need_id = NULL,
+    updated_at = now()
+WHERE id = @id AND authorization_revision = @authorization_revision;
+
+-- name: DeleteProvisionalConnection :execrows
+DELETE FROM connections
+WHERE id = @id AND lifecycle = 'provisional' AND authorization_revision = @authorization_revision;
 
 -- name: ListExpiringConnections :many
 -- For the refresh job: OAuth tokens expiring within the buffer window that back
@@ -103,9 +166,10 @@ WHERE id = @id;
 -- or stopped agents doesn't need a pre-warmed token).
 SELECT c.id, c.slug, c.name, c.auth_mode, c.token_url,
        c.client_id, c.client_secret, c.access_token_ref, c.refresh_token,
-       c.token_expires_at, c.scopes
+       c.token_expires_at, c.scopes, c.granted_scopes, c.scopes_verified
 FROM connections c
 WHERE c.auth_mode = 'oauth'
+  AND c.lifecycle = 'active'
   AND c.access_token_ref != ''
   AND c.refresh_token != ''
   AND c.token_expires_at IS NOT NULL
@@ -114,4 +178,5 @@ WHERE c.auth_mode = 'oauth'
       SELECT 1 FROM agent_resource_needs n
       JOIN agents a ON a.id = n.agent_id
       WHERE n.bound_connection_id = c.id AND a.status = 'active'
-  );
+        AND string_to_array(n.expected_scopes, ' ') <@ string_to_array(c.granted_scopes, ' ')
+   );

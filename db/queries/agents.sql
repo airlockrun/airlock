@@ -37,6 +37,12 @@ RETURNING *;
 -- name: GetAgentByID :one
 SELECT * FROM agents WHERE id = $1;
 
+-- name: GetAgentByIDForUpdate :one
+SELECT * FROM agents WHERE id = $1 FOR UPDATE;
+
+-- name: LockAgentsByID :many
+SELECT id FROM agents WHERE id = ANY (@ids::uuid[]) ORDER BY id FOR UPDATE;
+
 -- name: GetAgentBySlug :one
 SELECT * FROM agents WHERE slug = $1;
 

@@ -86,7 +86,7 @@ func (h *execEndpointsHandler) Configure(w http.ResponseWriter, r *http.Request)
 	}
 	p := principalFromRequest(r)
 	ep, err := h.svc.Configure(r.Context(), p, agentID, slug, execsvc.ConfigureRequest{
-		Host: req.Host, Port: req.Port, SSHUser: req.SshUser,
+		Host: req.Host, Port: req.Port, SSHUser: req.SshUser, DisplayName: req.DisplayName, CreateNew: req.CreateNew,
 	})
 	if err != nil {
 		writeExecError(w, err, "failed to configure exec endpoint")

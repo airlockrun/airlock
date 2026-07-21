@@ -2,6 +2,7 @@ package agentapi
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -10,6 +11,7 @@ import (
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
 // TestSync_ModelSlotsReconciliation verifies the sync handler upserts new
@@ -222,4 +224,102 @@ func TestResolveModel_Precedence(t *testing.T) {
 			t.Error("expected error when all tiers empty for image capability")
 		}
 	})
+}
+
+func TestSyncScopeExpansionOnlyMakesChangedBindingUnready(t *testing.T) {
+	skipIfNoDB(t)
+	ctx := context.Background()
+	ah := testAgentHandler()
+	firstAgent := createTestAgent(t)
+	secondAgent := createTestAgent(t)
+	q := dbq.New(testDB.Pool())
+	resource, err := q.UpsertConnection(ctx, dbq.UpsertConnectionParams{
+		AgentID: toPgUUID(firstAgent), Slug: "shared", Name: "Shared", DisplayName: "Shared",
+		AuthMode: "oauth", AuthUrl: "https://provider.example/authorize", TokenUrl: "https://provider.example/token",
+		BaseUrl: "https://api.example.com", Scopes: "read", AuthInjection: []byte(`{"type":"bearer"}`),
+		Config: []byte("{}"), AuthParams: []byte("{}"), Headers: []byte("{}"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := q.UpdateConnectionCredentialsByID(ctx, dbq.UpdateConnectionCredentialsByIDParams{
+		ID: resource.ID, AccessTokenRef: "existing-token", GrantedScopes: "read",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	baseSpec := []byte(`{"name":"Shared","base_url":"https://api.example.com","auth_mode":"oauth","scopes":"read","auth_injection":{"type":"bearer"},"auth_params":{},"headers":{}}`)
+	for _, agentID := range []uuid.UUID{firstAgent, secondAgent} {
+		if err := q.UpsertResourceNeed(ctx, dbq.UpsertResourceNeedParams{
+			AgentID: toPgUUID(agentID), Type: "connection", Slug: "shared", Description: "Shared",
+			ExpectedUrl: "https://api.example.com", ExpectedScopes: "read", Spec: baseSpec,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := q.BindConnectionNeed(ctx, dbq.BindConnectionNeedParams{AgentID: toPgUUID(agentID), Slug: "shared", ResourceID: resource.ID}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	router := testRouter(ah, func(r chi.Router) { r.Put("/api/agent/sync", ah.Sync) })
+	definition := wire.ConnectionDef{
+		Slug: "shared", Name: "Shared", AuthMode: wire.ConnectionAuthOAuth,
+		AuthURL: "https://provider.example/authorize", TokenURL: "https://provider.example/token",
+		BaseURL: "https://api.example.com", Scopes: []string{"write", "read", "write"},
+		AuthInjection: wire.AuthInjection{Type: wire.AuthInjectBearer},
+	}
+	req := agentRequest(t, http.MethodPut, "/api/agent/sync", firstAgent, wire.SyncRequest{Connections: []wire.ConnectionDef{definition}})
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("sync status = %d: %s", rec.Code, rec.Body.String())
+	}
+	unchanged, err := q.GetConnectionByID(ctx, resource.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unchanged.Scopes != "read" || unchanged.GrantedScopes != "read" || unchanged.AccessTokenRef != "existing-token" {
+		t.Fatalf("sync mutated shared resource: %+v", unchanged)
+	}
+	firstNeed, err := q.GetResourceNeed(ctx, dbq.GetResourceNeedParams{AgentID: toPgUUID(firstAgent), Type: "connection", Slug: "shared"})
+	if err != nil || firstNeed.ExpectedScopes != "read write" {
+		t.Fatalf("expanded need = %+v, %v", firstNeed, err)
+	}
+	if _, err := q.ResolveBoundConnection(ctx, dbq.ResolveBoundConnectionParams{AgentID: toPgUUID(firstAgent), Slug: "shared"}); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("expanded binding resolution error = %v, want no rows", err)
+	}
+	if _, err := q.ResolveBoundConnection(ctx, dbq.ResolveBoundConnectionParams{AgentID: toPgUUID(secondAgent), Slug: "shared"}); err != nil {
+		t.Fatalf("unchanged binding became unready: %v", err)
+	}
+}
+
+func TestSyncCanonicalizesConnectionAndMCPScopes(t *testing.T) {
+	skipIfNoDB(t)
+	ah := testAgentHandler()
+	agentID := createTestAgent(t)
+	router := testRouter(ah, func(r chi.Router) { r.Put("/api/agent/sync", ah.Sync) })
+	req := agentRequest(t, http.MethodPut, "/api/agent/sync", agentID, wire.SyncRequest{
+		Connections: []wire.ConnectionDef{{
+			Slug: "connection", Name: "Connection", AuthMode: wire.ConnectionAuthOAuth,
+			BaseURL: "https://api.example.com", Scopes: []string{"write", "read", "write"},
+		}},
+		MCPServers: []wire.MCPDef{{
+			Slug: "mcp", Name: "MCP", URL: "https://mcp.example.com", AuthMode: wire.MCPAuthOAuth,
+			Scopes: []string{"write", "read", "write"},
+		}},
+	})
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("sync status = %d: %s", rec.Code, rec.Body.String())
+	}
+	q := dbq.New(testDB.Pool())
+	for _, typ := range []string{"connection", "mcp_server"} {
+		slug := "connection"
+		if typ == "mcp_server" {
+			slug = "mcp"
+		}
+		need, err := q.GetResourceNeed(t.Context(), dbq.GetResourceNeedParams{AgentID: toPgUUID(agentID), Type: typ, Slug: slug})
+		if err != nil || need.ExpectedScopes != "read write" {
+			t.Fatalf("%s scopes = %q, err=%v", typ, need.ExpectedScopes, err)
+		}
+	}
 }

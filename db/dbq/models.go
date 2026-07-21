@@ -135,6 +135,7 @@ type AgentEnvVar struct {
 type AgentExecEndpoint struct {
 	ID               pgtype.UUID        `json:"id"`
 	Slug             string             `json:"slug"`
+	DisplayName      string             `json:"display_name"`
 	Description      string             `json:"description"`
 	LlmHint          string             `json:"llm_hint"`
 	Access           string             `json:"access"`
@@ -161,28 +162,36 @@ type AgentGrant struct {
 }
 
 type AgentMcpServer struct {
-	ID                   pgtype.UUID        `json:"id"`
-	Slug                 string             `json:"slug"`
-	Name                 string             `json:"name"`
-	Access               string             `json:"access"`
-	Url                  string             `json:"url"`
-	AuthMode             string             `json:"auth_mode"`
-	AuthUrl              string             `json:"auth_url"`
-	TokenUrl             string             `json:"token_url"`
-	RegistrationEndpoint string             `json:"registration_endpoint"`
-	Scopes               string             `json:"scopes"`
-	AuthInjection        []byte             `json:"auth_injection"`
-	ToolSchemas          []byte             `json:"tool_schemas"`
-	ClientID             string             `json:"client_id"`
-	ClientSecret         string             `json:"client_secret"`
-	AccessTokenRef       string             `json:"access_token_ref"`
-	RefreshToken         string             `json:"refresh_token"`
-	TokenExpiresAt       pgtype.Timestamptz `json:"token_expires_at"`
-	LastSyncedAt         pgtype.Timestamptz `json:"last_synced_at"`
-	CreatedAt            pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt            pgtype.Timestamptz `json:"updated_at"`
-	ServerInstructions   string             `json:"server_instructions"`
-	OwnerPrincipalID     pgtype.UUID        `json:"owner_principal_id"`
+	ID                    pgtype.UUID        `json:"id"`
+	Slug                  string             `json:"slug"`
+	Name                  string             `json:"name"`
+	DisplayName           string             `json:"display_name"`
+	Access                string             `json:"access"`
+	Url                   string             `json:"url"`
+	AuthMode              string             `json:"auth_mode"`
+	AuthUrl               string             `json:"auth_url"`
+	TokenUrl              string             `json:"token_url"`
+	RegistrationEndpoint  string             `json:"registration_endpoint"`
+	Scopes                string             `json:"scopes"`
+	AuthInjection         []byte             `json:"auth_injection"`
+	ToolSchemas           []byte             `json:"tool_schemas"`
+	ClientID              string             `json:"client_id"`
+	ClientSecret          string             `json:"client_secret"`
+	AccessTokenRef        string             `json:"access_token_ref"`
+	RefreshToken          string             `json:"refresh_token"`
+	TokenExpiresAt        pgtype.Timestamptz `json:"token_expires_at"`
+	LastSyncedAt          pgtype.Timestamptz `json:"last_synced_at"`
+	CreatedAt             pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt             pgtype.Timestamptz `json:"updated_at"`
+	ServerInstructions    string             `json:"server_instructions"`
+	OwnerPrincipalID      pgtype.UUID        `json:"owner_principal_id"`
+	Lifecycle             string             `json:"lifecycle"`
+	GrantedScopes         string             `json:"granted_scopes"`
+	ScopesVerified        bool               `json:"scopes_verified"`
+	AuthorizationRevision int64              `json:"authorization_revision"`
+	ProvisionalNeedID     pgtype.UUID        `json:"provisional_need_id"`
+	PendingClientID       string             `json:"pending_client_id"`
+	PendingClientSecret   string             `json:"pending_client_secret"`
 }
 
 type AgentMessage struct {
@@ -351,31 +360,39 @@ type Bridge struct {
 }
 
 type Connection struct {
-	ID                pgtype.UUID        `json:"id"`
-	Slug              string             `json:"slug"`
-	Name              string             `json:"name"`
-	Description       string             `json:"description"`
-	LlmHint           string             `json:"llm_hint"`
-	Access            string             `json:"access"`
-	AuthMode          string             `json:"auth_mode"`
-	AuthUrl           string             `json:"auth_url"`
-	TokenUrl          string             `json:"token_url"`
-	BaseUrl           string             `json:"base_url"`
-	Scopes            string             `json:"scopes"`
-	AuthInjection     []byte             `json:"auth_injection"`
-	TestPath          string             `json:"test_path"`
-	SetupInstructions string             `json:"setup_instructions"`
-	Config            []byte             `json:"config"`
-	ClientID          string             `json:"client_id"`
-	ClientSecret      string             `json:"client_secret"`
-	AccessTokenRef    string             `json:"access_token_ref"`
-	RefreshToken      string             `json:"refresh_token"`
-	TokenExpiresAt    pgtype.Timestamptz `json:"token_expires_at"`
-	CreatedAt         pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
-	AuthParams        []byte             `json:"auth_params"`
-	Headers           []byte             `json:"headers"`
-	OwnerPrincipalID  pgtype.UUID        `json:"owner_principal_id"`
+	ID                    pgtype.UUID        `json:"id"`
+	Slug                  string             `json:"slug"`
+	Name                  string             `json:"name"`
+	DisplayName           string             `json:"display_name"`
+	Description           string             `json:"description"`
+	LlmHint               string             `json:"llm_hint"`
+	Access                string             `json:"access"`
+	AuthMode              string             `json:"auth_mode"`
+	AuthUrl               string             `json:"auth_url"`
+	TokenUrl              string             `json:"token_url"`
+	BaseUrl               string             `json:"base_url"`
+	Scopes                string             `json:"scopes"`
+	AuthInjection         []byte             `json:"auth_injection"`
+	TestPath              string             `json:"test_path"`
+	SetupInstructions     string             `json:"setup_instructions"`
+	Config                []byte             `json:"config"`
+	ClientID              string             `json:"client_id"`
+	ClientSecret          string             `json:"client_secret"`
+	AccessTokenRef        string             `json:"access_token_ref"`
+	RefreshToken          string             `json:"refresh_token"`
+	TokenExpiresAt        pgtype.Timestamptz `json:"token_expires_at"`
+	CreatedAt             pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt             pgtype.Timestamptz `json:"updated_at"`
+	AuthParams            []byte             `json:"auth_params"`
+	Headers               []byte             `json:"headers"`
+	OwnerPrincipalID      pgtype.UUID        `json:"owner_principal_id"`
+	Lifecycle             string             `json:"lifecycle"`
+	GrantedScopes         string             `json:"granted_scopes"`
+	ScopesVerified        bool               `json:"scopes_verified"`
+	AuthorizationRevision int64              `json:"authorization_revision"`
+	ProvisionalNeedID     pgtype.UUID        `json:"provisional_need_id"`
+	PendingClientID       string             `json:"pending_client_id"`
+	PendingClientSecret   string             `json:"pending_client_secret"`
 }
 
 type DeviceLoginSession struct {
@@ -551,16 +568,21 @@ type OauthRefreshToken struct {
 }
 
 type OauthState struct {
-	State        string             `json:"state"`
-	AgentID      pgtype.UUID        `json:"agent_id"`
-	Slug         string             `json:"slug"`
-	SourceType   string             `json:"source_type"`
-	CodeVerifier string             `json:"code_verifier"`
-	RedirectUri  string             `json:"redirect_uri"`
-	ExpiresAt    pgtype.Timestamptz `json:"expires_at"`
-	CreatedAt    pgtype.Timestamptz `json:"created_at"`
-	UserID       pgtype.UUID        `json:"user_id"`
-	ResourceID   pgtype.UUID        `json:"resource_id"`
+	State                   string             `json:"state"`
+	AgentID                 pgtype.UUID        `json:"agent_id"`
+	Slug                    string             `json:"slug"`
+	SourceType              string             `json:"source_type"`
+	CodeVerifier            string             `json:"code_verifier"`
+	RedirectUri             string             `json:"redirect_uri"`
+	ExpiresAt               pgtype.Timestamptz `json:"expires_at"`
+	CreatedAt               pgtype.Timestamptz `json:"created_at"`
+	UserID                  pgtype.UUID        `json:"user_id"`
+	ResourceID              pgtype.UUID        `json:"resource_id"`
+	NeedID                  pgtype.UUID        `json:"need_id"`
+	RequestedScopes         string             `json:"requested_scopes"`
+	AuthorizationRevision   int64              `json:"authorization_revision"`
+	ExpectedPriorResourceID pgtype.UUID        `json:"expected_prior_resource_id"`
+	UsesPendingClient       bool               `json:"uses_pending_client"`
 }
 
 type PlatformIdentity struct {

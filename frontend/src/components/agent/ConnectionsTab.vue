@@ -1,256 +1,276 @@
 <script setup lang="ts">
-import { ref, onMounted, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
+import { fromJson } from '@bufbuild/protobuf'
+import { useConfirm } from 'primevue/useconfirm'
 import { useToast } from 'primevue/usetoast'
 import api from '@/api/client'
-import { startOAuth } from '@/composables/useOAuth'
+import type { ConnectionInfo } from '@/gen/airlock/v1/types_pb'
+import type { NeedInfo } from '@/gen/airlock/v1/api_pb'
+import { ListConnectionsResponseSchema } from '@/gen/airlock/v1/api_pb'
+import { useAgentResources } from '@/composables/useAgentResources'
+import { hasCapability, resourceLabel } from '@/utils/resources'
+import { serializeOAuthAppRequest } from '@/utils/resourceRequests'
 import CredentialDialog from './CredentialDialog.vue'
+import ResourceBindingDialog from './ResourceBindingDialog.vue'
 
-interface Connection {
-  name: string
-  slug: string
-  authMode: string
-  authorized: boolean
-  hasOauthApp: boolean
-  setupInstructions: string
-  warnings: string[]
-}
-
-const props = defineProps<{ agentId: string }>()
-const emit = defineEmits<{ populated: [count: number] }>()
-
+const props = withDefaults(defineProps<{ agentId: string; yourAccess?: string }>(), { yourAccess: '' })
+const emit = defineEmits<{ populated: [count: number]; mutated: [] }>()
 const toast = useToast()
-const connections = ref<Connection[]>([])
-watch(connections, (v) => emit('populated', v.length), { immediate: true })
+const confirm = useConfirm()
+const resources = useAgentResources(props.agentId)
+const definitions = ref<ConnectionInfo[]>([])
 const loading = ref(true)
-const credDialogVisible = ref(false)
-const oauthAppDialogVisible = ref(false)
-const selectedConn = ref<Connection | null>(null)
+const loadError = ref('')
+const callbackUrl = ref('')
+const bindingOpen = ref(false)
+const credentialOpen = ref(false)
+const oauthAppOpen = ref(false)
+const selectedNeed = ref<NeedInfo | null>(null)
 const oauthClientId = ref('')
 const oauthClientSecret = ref('')
-const oauthSaving = ref(false)
-const callbackUrl = ref('')
+const saving = ref(false)
 
-// Connection health warnings, shown behind a (!) indicator in the table.
-const warnPopover = ref()
-const activeWarnings = ref<string[]>([])
-function showWarnings(event: Event, warnings: string[]) {
-  activeWarnings.value = warnings
-  warnPopover.value?.toggle(event)
+const needs = computed(() => resources.needs.value.filter((need) => need.type === 'connection'))
+watch(needs, (rows) => emit('populated', rows.length), { immediate: true })
+const definitionsBySlug = computed(() => new Map(definitions.value.map((row) => [row.slug, row])))
+const selectedDefinition = computed(() => selectedNeed.value ? definitionsBySlug.value.get(selectedNeed.value.slug) : undefined)
+const selectedResource = computed(() => selectedNeed.value ? resources.resourceFor(selectedNeed.value) : undefined)
+const canAdmin = computed(() => props.yourAccess === 'admin')
+
+function definition(need: NeedInfo): ConnectionInfo | undefined { return definitionsBySlug.value.get(need.slug) }
+function boundName(need: NeedInfo): string {
+  const resource = resources.resourceFor(need)
+  return resource ? resourceLabel(resource) : definition(need)?.name || 'Bound resource'
+}
+function canManage(need: NeedInfo): boolean {
+  const resource = resources.resourceFor(need)
+  return !!resource && hasCapability(resource.capabilities, 'manage')
+}
+function canAuthorize(need: NeedInfo): boolean {
+  const resource = resources.resourceFor(need)
+  return !!resource && hasCapability(resource.capabilities, 'bind') && hasCapability(resource.capabilities, 'manage')
+}
+function sharedWarning(need: NeedInfo): string {
+  const resource = resources.resourceFor(need)
+  if (!resource || resource.agentCount < 2) return ''
+  return `Credential changes affect all ${resource.agentCount} apps using this shared resource.`
+}
+function authLabel(mode: string): string {
+  if (mode === 'oauth') return 'OAuth'
+  if (mode === 'api_key') return 'API key'
+  if (mode === 'none') return 'No authentication'
+  return mode
 }
 
-function configure(conn: Connection) {
-  if (conn.authMode === 'oauth') {
-    selectedConn.value = conn
-    oauthClientId.value = ''
-    oauthClientSecret.value = ''
-    oauthAppDialogVisible.value = true
-  } else {
-    selectedConn.value = conn
-    credDialogVisible.value = true
-  }
+async function refresh() {
+  const [response] = await Promise.all([
+    api.get(`/api/v1/agents/${props.agentId}/connections`),
+    resources.refresh(),
+  ])
+  const parsed = fromJson(ListConnectionsResponseSchema, response.data)
+  definitions.value = parsed.connections
+  callbackUrl.value = parsed.oauthCallbackUrl
 }
 
-// auth_mode='none' connections don't need credentials — the backend always
-// flags them authorized, but we also hide the Configure button and use a
-// different status label so the operator isn't nudged into a no-op dialog.
-function isNoAuth(conn: Connection) {
-  return conn.authMode === 'none'
-}
-
-async function saveOAuthApp() {
-  if (!selectedConn.value || !oauthClientId.value || !oauthClientSecret.value) return
-  oauthSaving.value = true
+async function load() {
+  loading.value = true
+  loadError.value = ''
   try {
-    await api.put(`/api/v1/agents/${props.agentId}/credentials/${selectedConn.value.slug}/oauth-app`, {
-      clientId: oauthClientId.value,
-      clientSecret: oauthClientSecret.value,
-    })
-    toast.add({ severity: 'success', summary: 'OAuth app saved. Starting authorization...', life: 3000 })
-    oauthAppDialogVisible.value = false
-    // Update local state and start OAuth flow.
-    selectedConn.value.hasOauthApp = true
-    startOAuth(props.agentId, selectedConn.value.slug).catch((err: any) => {
-      toast.add({ severity: 'error', summary: err.message || 'OAuth failed', life: 5000 })
-    })
-  } catch (err: any) {
-    toast.add({ severity: 'error', summary: err.response?.data?.error || 'Failed to save OAuth app', life: 5000 })
-  } finally {
-    oauthSaving.value = false
-  }
-}
-
-function reauthorize() {
-  if (!selectedConn.value) return
-  oauthAppDialogVisible.value = false
-  startOAuth(props.agentId, selectedConn.value.slug).catch((err: any) => {
-    toast.add({ severity: 'error', summary: err.message || 'OAuth failed', life: 5000 })
-  })
-}
-
-async function copyCallback() {
-  if (!callbackUrl.value) return
-  try {
-    await navigator.clipboard.writeText(callbackUrl.value)
-    toast.add({ severity: 'success', summary: 'Redirect URI copied', life: 2000 })
-  } catch {
-    toast.add({ severity: 'warn', summary: 'Copy failed - select the URL and copy manually', life: 4000 })
-  }
-}
-
-function mapConnection(raw: Record<string, any>): Connection {
-  return {
-    name: raw.name ?? '',
-    slug: raw.slug ?? '',
-    authMode: raw.authMode ?? raw.auth_mode ?? '',
-    authorized: raw.authorized ?? false,
-    hasOauthApp: raw.hasOauthApp ?? raw.has_oauth_app ?? false,
-    setupInstructions: raw.setupInstructions ?? raw.setup_instructions ?? '',
-    warnings: raw.warnings ?? [],
-  }
-}
-
-onMounted(async () => {
-  try {
-    const { data } = await api.get(`/api/v1/agents/${props.agentId}/connections`)
-    connections.value = (data.connections || []).map(mapConnection)
-    callbackUrl.value = data.oauthCallbackUrl ?? data.oauth_callback_url ?? ''
+    await refresh()
+  } catch (error: any) {
+    loadError.value = error.response?.data?.error || error.message || 'Failed to load connections'
+    emit('populated', 1)
   } finally {
     loading.value = false
   }
-})
+}
+
+function openSetup(need: NeedInfo) {
+  selectedNeed.value = need
+  bindingOpen.value = true
+}
+
+function configure(need: NeedInfo) {
+  selectedNeed.value = need
+  const row = definition(need)
+  if (row?.authMode === 'oauth') {
+    if (!canAuthorize(need)) return
+    oauthClientId.value = ''
+    oauthClientSecret.value = ''
+    oauthAppOpen.value = true
+  } else {
+    credentialOpen.value = true
+  }
+}
+
+async function configureBound(need: NeedInfo) {
+  try {
+    await refresh()
+    configure(need)
+  } catch (error: any) {
+    toast.add({ severity: 'error', summary: error.response?.data?.error || error.message || 'Failed to load resource setup', life: 6000 })
+  }
+}
+
+async function reauthorize(need: NeedInfo) {
+  const resource = resources.resourceFor(need)
+  if (!resource) return
+  try {
+    await resources.startAuthorization(need, { resourceId: resource.id, displayName: '', createNew: false })
+  } catch (error: any) {
+    toast.add({ severity: 'error', summary: error.response?.data?.error || error.message || 'Authorization failed', life: 6000 })
+  }
+}
+
+async function saveOAuthApp() {
+  const need = selectedNeed.value
+  const resource = selectedResource.value
+  if (!need || !resource || !canAuthorize(need) || !oauthClientId.value || !oauthClientSecret.value) return
+  saving.value = true
+  try {
+    await api.put(
+      `/api/v1/agents/${props.agentId}/credentials/${encodeURIComponent(need.slug)}/oauth-app`,
+      serializeOAuthAppRequest(oauthClientId.value, oauthClientSecret.value, '', false),
+    )
+    oauthAppOpen.value = false
+    await resources.startAuthorization(need, { resourceId: resource.id, displayName: '', createNew: false })
+  } catch (error: any) {
+    toast.add({ severity: 'error', summary: error.response?.data?.error || error.message || 'OAuth setup failed', life: 6000 })
+  } finally {
+    saving.value = false
+  }
+}
+
+function disconnect(need: NeedInfo) {
+  confirm.require({
+    header: 'Disconnect from this app?',
+    message: `${boundName(need)} stays available to other apps. Its stored credentials are not cleared.`,
+    acceptLabel: 'Disconnect from this app',
+    rejectLabel: 'Cancel',
+    accept: async () => {
+      try {
+        await resources.unbind(need)
+        await refresh()
+        emit('mutated')
+        toast.add({ severity: 'success', summary: 'Resource disconnected from this app', life: 3000 })
+      } catch (error: any) {
+        toast.add({ severity: 'error', summary: error.response?.data?.error || 'Disconnect failed', life: 5000 })
+      }
+    },
+  })
+}
+
+async function changed() {
+  await refresh()
+  emit('mutated')
+}
+
+onMounted(load)
 </script>
 
 <template>
-  <div>
-    <DataTable v-if="!loading" :value="connections" stripedRows>
-      <template #empty>
-        <div style="text-align: center; padding: 2rem; color: var(--p-text-muted-color)">
-          No connections registered.
-        </div>
+  <Message v-if="loadError" severity="error" :closable="false">
+    <div class="load-error"><span>{{ loadError }}</span><Button label="Retry" icon="pi pi-refresh" size="small" outlined @click="load" /></div>
+  </Message>
+  <DataTable v-else-if="!loading" :value="needs" stripedRows responsive-layout="scroll">
+    <template #empty><div class="empty">No connections registered.</div></template>
+    <Column header="Connection">
+      <template #body="{ data: need }">
+        <div class="primary-name">{{ need.bound ? boundName(need) : (definition(need)?.name || need.slug) }}</div>
+        <div class="secondary">App handle: <code>{{ need.slug }}</code><span v-if="need.description"> · {{ need.description }}</span></div>
       </template>
-      <Column field="name" header="Name" />
-      <Column field="authMode" header="Auth Mode" />
-      <Column header="Status">
-        <template #body="{ data: conn }">
-          <span style="display: inline-flex; align-items: center; gap: 0.4rem">
-            <Tag
-              :value="isNoAuth(conn) ? 'No auth required' : (conn.authorized ? 'Authorized' : 'Needs Setup')"
-              :severity="isNoAuth(conn) ? 'info' : (conn.authorized ? 'success' : 'warn')"
+    </Column>
+    <Column header="Authentication"><template #body="{ data: need }">{{ authLabel(definition(need)?.authMode || '') }}</template></Column>
+    <Column header="Binding">
+      <template #body="{ data: need }">
+        <Tag :value="need.bound ? 'Bound' : 'Unbound'" :severity="need.bound ? 'success' : 'warn'" />
+      </template>
+    </Column>
+    <Column header="Status">
+      <template #body="{ data: need }">
+        <Tag
+          v-if="need.bound"
+          :value="definition(need)?.authMode === 'none' ? 'Ready' : (definition(need)?.authorized ? 'Ready' : 'Needs setup')"
+          :severity="definition(need)?.authMode === 'none' || definition(need)?.authorized ? 'success' : 'warn'"
+        />
+        <span v-else class="secondary">Not connected</span>
+      </template>
+    </Column>
+    <Column header="Actions">
+      <template #body="{ data: need }">
+        <div v-if="canAdmin" class="actions">
+          <Button v-if="!need.bound" label="Set up" size="small" @click="openSetup(need)" />
+          <template v-else>
+            <Button
+              v-if="definition(need)?.authMode === 'oauth' && canAuthorize(need)"
+              label="Reauthorize"
+              size="small"
+              outlined
+              @click="reauthorize(need)"
             />
-            <i
-              v-if="conn.warnings.length"
-              class="pi pi-exclamation-circle"
-              style="color: var(--p-orange-500); cursor: pointer"
-              v-tooltip.top="'This connection has issues - click for details'"
-              @click="showWarnings($event, conn.warnings)"
+            <Button
+              v-if="definition(need)?.authMode === 'oauth' && canAuthorize(need)"
+              label="OAuth app"
+              size="small"
+              text
+              @click="configure(need)"
             />
-          </span>
-        </template>
-      </Column>
-      <Column header="Actions">
-        <template #body="{ data: conn }">
-          <span v-if="isNoAuth(conn)" style="color: var(--p-text-muted-color); font-size: 0.85rem">-</span>
-          <Button v-else :label="conn.authorized ? 'Reconfigure' : 'Configure'" size="small" outlined @click="configure(conn)" />
-        </template>
-      </Column>
-    </DataTable>
-
-    <DataTable v-else :value="[{}, {}, {}]">
-      <Column header="Name">
-        <template #body><Skeleton /></template>
-      </Column>
-      <Column header="Auth Mode">
-        <template #body><Skeleton /></template>
-      </Column>
-      <Column header="Status">
-        <template #body><Skeleton width="5rem" /></template>
-      </Column>
-      <Column header="Actions">
-        <template #body><Skeleton width="6rem" /></template>
-      </Column>
-    </DataTable>
-
-    <Popover ref="warnPopover">
-      <ul style="margin: 0; padding-left: 1.1rem; max-width: 24rem; font-size: 0.85rem">
-        <li v-for="(w, i) in activeWarnings" :key="i" style="margin: 0.2rem 0">{{ w }}</li>
-      </ul>
-    </Popover>
-
-    <CredentialDialog
-      v-if="selectedConn"
-      v-model:visible="credDialogVisible"
-      :agent-id="props.agentId"
-      :slug="selectedConn.slug"
-      :name="selectedConn.name"
-    />
-
-    <Dialog v-model:visible="oauthAppDialogVisible" :header="`Configure ${selectedConn?.name ?? 'OAuth'}`" modal style="width: 28rem">
-      <div style="display: flex; flex-direction: column; gap: 1.25rem; padding-top: 0.5rem">
-        <p style="font-size: 0.85rem; color: var(--p-text-muted-color); margin: 0">
-          {{ selectedConn?.setupInstructions || 'Enter your OAuth2 client credentials.' }}
-        </p>
-        <div style="font-size: 0.8rem">
-          <span style="color: var(--p-text-muted-color)">Redirect URI: </span>
-          <span
-            class="copy-uri"
-            role="button"
-            tabindex="0"
-            v-tooltip.bottom="'Click to copy'"
-            @click="copyCallback"
-            @keydown.enter="copyCallback"
-          >
-            <code style="word-break: break-all">{{ callbackUrl }}</code>
-            <i class="pi pi-copy" style="font-size: 0.75rem; opacity: 0.6" />
-          </span>
+            <Button
+              v-else-if="definition(need)?.authMode !== 'none' && canManage(need)"
+              label="Configure"
+              size="small"
+              outlined
+              @click="configure(need)"
+            />
+            <Button label="Switch resource" size="small" text @click="openSetup(need)" />
+            <Button label="Disconnect from this app" size="small" text severity="danger" @click="disconnect(need)" />
+          </template>
         </div>
-        <Message v-if="selectedConn?.hasOauthApp" severity="info" :closable="false" style="font-size: 0.8rem">
-          An OAuth app is already saved. Just click <strong>Reauthorize</strong> to
-          re-run sign-in with the existing credentials - you don't need to
-          re-enter anything. Fill the fields below only to replace the saved
-          client ID / secret.
-        </Message>
-        <FloatLabel variant="on">
-          <InputText id="oauth-client-id" v-model="oauthClientId" style="width: 100%" />
-          <label for="oauth-client-id">{{ selectedConn?.hasOauthApp ? 'New Client ID (optional)' : 'Client ID' }}</label>
-        </FloatLabel>
-        <FloatLabel variant="on">
-          <Password id="oauth-client-secret" v-model="oauthClientSecret" :feedback="false" toggle-mask style="width: 100%" :input-style="{ width: '100%' }" />
-          <label for="oauth-client-secret">{{ selectedConn?.hasOauthApp ? 'New Client Secret (optional)' : 'Client Secret' }}</label>
-        </FloatLabel>
-        <div style="display: flex; justify-content: flex-end; gap: 0.5rem">
-          <Button
-            :label="selectedConn?.hasOauthApp ? 'Replace credentials' : 'Save & Authorize'"
-            :severity="selectedConn?.hasOauthApp ? 'secondary' : undefined"
-            :outlined="selectedConn?.hasOauthApp"
-            :loading="oauthSaving"
-            :disabled="!oauthClientId || !oauthClientSecret"
-            @click="saveOAuthApp"
-          />
-          <Button
-            v-if="selectedConn?.hasOauthApp"
-            label="Reauthorize"
-            icon="pi pi-refresh"
-            @click="reauthorize"
-          />
-        </div>
+        <span v-else class="secondary">View only</span>
+      </template>
+    </Column>
+  </DataTable>
+  <div v-else class="skeletons"><Skeleton v-for="i in 3" :key="i" height="3rem" /></div>
+
+  <ResourceBindingDialog
+    v-model:visible="bindingOpen"
+    :agent-id="agentId"
+    :need="selectedNeed"
+    :auth-mode="selectedDefinition?.authMode"
+    :setup-instructions="selectedDefinition?.setupInstructions"
+    :callback-url="callbackUrl"
+    @changed="changed"
+    @configure="configureBound"
+  />
+  <CredentialDialog
+    v-if="selectedNeed"
+    v-model:visible="credentialOpen"
+    :agent-id="agentId"
+    :slug="selectedNeed.slug"
+    :name="selectedResource ? resourceLabel(selectedResource) : selectedNeed.slug"
+    :warning="sharedWarning(selectedNeed)"
+    @saved="changed"
+  />
+  <Dialog v-model:visible="oauthAppOpen" header="Replace OAuth app credentials" modal :style="{ width: 'min(30rem, calc(100vw - 2rem))' }">
+    <div class="oauth-form">
+      <Message v-if="selectedNeed && sharedWarning(selectedNeed)" severity="warn" :closable="false">{{ sharedWarning(selectedNeed) }}</Message>
+      <p class="secondary">After saving, you will authorize the resource again. Existing credentials remain active until authorization succeeds.</p>
+      <InputText v-model="oauthClientId" placeholder="Client ID" />
+      <Password v-model="oauthClientSecret" placeholder="Client secret" :feedback="false" toggle-mask fluid />
+      <div class="dialog-actions">
+        <Button label="Cancel" text severity="secondary" @click="oauthAppOpen = false" />
+        <Button label="Save and authorize" :loading="saving" :disabled="!oauthClientId || !oauthClientSecret" @click="saveOAuthApp" />
       </div>
-    </Dialog>
-  </div>
+    </div>
+  </Dialog>
 </template>
 
 <style scoped>
-.copy-uri {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-  cursor: pointer;
-  border-radius: 0.3rem;
-  padding: 0.05rem 0.25rem;
-}
-.copy-uri:hover {
-  background: var(--p-surface-100);
-}
-:root.dark .copy-uri:hover {
-  background: var(--p-surface-800);
-}
+.empty { text-align: center; padding: 2rem; color: var(--p-text-muted-color); }
+.primary-name { font-weight: 600; }
+.secondary { color: var(--p-text-muted-color); font-size: 0.8rem; }
+.actions { display: flex; flex-wrap: wrap; gap: 0.25rem; }
+.skeletons, .oauth-form { display: flex; flex-direction: column; gap: 0.75rem; }
+.dialog-actions { display: flex; justify-content: flex-end; gap: 0.5rem; }
+.load-error { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; }
 </style>

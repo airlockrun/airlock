@@ -25,14 +25,17 @@ var ErrNeedsReauth = errors.New("oauth: re-authorization required")
 // an MCP server) needed to validate or refresh its access token. The *Ref
 // fields are encrypted secret references resolved through secrets.Store.
 type tokenRow struct {
-	id           pgtype.UUID
-	refPrefix    string // "connection" | "mcp" — secret-ref namespace
-	accessRef    string
-	refreshRef   string
-	clientIDRef  string
-	clientSecRef string
-	tokenURL     string
-	expiresAt    pgtype.Timestamptz
+	id             pgtype.UUID
+	refPrefix      string // "connection" | "mcp" — secret-ref namespace
+	accessRef      string
+	refreshRef     string
+	clientIDRef    string
+	clientSecRef   string
+	tokenURL       string
+	expiresAt      pgtype.Timestamptz
+	grantedScopes  string
+	scopesVerified bool
+	requiredScopes string
 }
 
 // resolveToken returns a valid plaintext access token for row, refreshing it
@@ -48,7 +51,7 @@ func resolveToken(
 	logger *zap.Logger,
 	row tokenRow,
 	refreshIfBefore time.Time,
-	update func(ctx context.Context, accessRef string, expiresAt pgtype.Timestamptz, refreshRef string) error,
+	update func(ctx context.Context, accessRef string, expiresAt pgtype.Timestamptz, refreshRef, grantedScopes string, scopesVerified bool) error,
 	clear func(ctx context.Context) error,
 ) (token string, persist bool, err error) {
 	ref := row.refPrefix + "/" + uuid.UUID(row.id.Bytes).String()
@@ -59,6 +62,9 @@ func resolveToken(
 
 	// Still valid → hand back the current token; no write.
 	if !row.expiresAt.Valid || row.expiresAt.Time.After(refreshIfBefore) {
+		if row.requiredScopes != "" && !CoversScopes(row.requiredScopes, row.grantedScopes) {
+			return "", false, ErrNeedsReauth
+		}
 		tok, derr := enc.Get(ctx, ref+"/access_token", row.accessRef)
 		if derr != nil {
 			return "", false, fmt.Errorf("decrypt access token: %w", derr)
@@ -115,8 +121,17 @@ func resolveToken(
 	if resp.ExpiresIn > 0 {
 		expiresAt = pgtype.Timestamptz{Time: time.Now().Add(time.Duration(resp.ExpiresIn) * time.Second), Valid: true}
 	}
-	if err := update(ctx, encAccess, expiresAt, encRefresh); err != nil {
+	grantedScopes := row.grantedScopes
+	scopesVerified := row.scopesVerified
+	if resp.ScopePresent {
+		grantedScopes = CanonicalScopes(resp.Scope)
+		scopesVerified = true
+	}
+	if err := update(ctx, encAccess, expiresAt, encRefresh, grantedScopes, scopesVerified); err != nil {
 		return "", false, fmt.Errorf("persist refreshed credentials: %w", err)
+	}
+	if row.requiredScopes != "" && !CoversScopes(row.requiredScopes, grantedScopes) {
+		return "", true, ErrNeedsReauth
 	}
 	return resp.AccessToken, true, nil
 }
@@ -129,84 +144,187 @@ func resolveToken(
 // concurrent callers serialize and see the freshly written token instead of
 // double-refreshing. Returns ErrNeedsReauth when re-authorization is required;
 // a wrapped error for transient refresh failures.
-func EnsureConnectionToken(ctx context.Context, database *db.DB, enc secrets.Store, client *Client, logger *zap.Logger, connectionID pgtype.UUID, refreshIfBefore time.Time) (string, error) {
+func ensureConnectionToken(ctx context.Context, database *db.DB, enc secrets.Store, client *Client, logger *zap.Logger, connectionID, agentID pgtype.UUID, needSlug string, refreshIfBefore time.Time, requireEligibleBinding bool) (string, bool, error) {
 	tx, err := database.Pool().Begin(ctx)
 	if err != nil {
-		return "", fmt.Errorf("begin tx: %w", err)
+		return "", false, fmt.Errorf("begin tx: %w", err)
 	}
 	defer tx.Rollback(ctx)
 
 	q := dbq.New(tx)
-	conn, err := q.GetConnectionByIDForUpdate(ctx, connectionID)
+	var conn dbq.Connection
+	requiredScopes := ""
+	if requireEligibleBinding {
+		conn, err = q.GetConnectionByID(ctx, connectionID)
+		if err != nil {
+			return "", false, err
+		}
+		bindings, err := q.LockQualifyingConnectionBindings(ctx, dbq.LockQualifyingConnectionBindingsParams{
+			ResourceID: connectionID, GrantedScopes: conn.GrantedScopes,
+		})
+		if err != nil {
+			return "", false, err
+		}
+		if len(bindings) == 0 {
+			return "", false, nil
+		}
+	} else {
+		need, err := q.GetResourceNeedForUpdate(ctx, dbq.GetResourceNeedForUpdateParams{AgentID: agentID, Type: "connection", Slug: needSlug})
+		if err != nil {
+			return "", false, err
+		}
+		if !need.BoundConnectionID.Valid || need.BoundConnectionID != connectionID {
+			return "", false, ErrNeedsReauth
+		}
+		requiredScopes = need.ExpectedScopes
+	}
+	conn, err = q.GetConnectionByIDForUpdate(ctx, connectionID)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 
 	token, persist, rerr := resolveToken(ctx, enc, client, logger, tokenRow{
-		id:           conn.ID,
-		refPrefix:    "connection",
-		accessRef:    conn.AccessTokenRef,
-		refreshRef:   conn.RefreshToken,
-		clientIDRef:  conn.ClientID,
-		clientSecRef: conn.ClientSecret,
-		tokenURL:     conn.TokenUrl,
-		expiresAt:    conn.TokenExpiresAt,
+		id:             conn.ID,
+		refPrefix:      "connection",
+		accessRef:      conn.AccessTokenRef,
+		refreshRef:     conn.RefreshToken,
+		clientIDRef:    conn.ClientID,
+		clientSecRef:   conn.ClientSecret,
+		tokenURL:       conn.TokenUrl,
+		expiresAt:      conn.TokenExpiresAt,
+		grantedScopes:  conn.GrantedScopes,
+		scopesVerified: conn.ScopesVerified,
+		requiredScopes: requiredScopes,
 	}, refreshIfBefore,
-		func(ctx context.Context, accessRef string, expiresAt pgtype.Timestamptz, refreshRef string) error {
+		func(ctx context.Context, accessRef string, expiresAt pgtype.Timestamptz, refreshRef, grantedScopes string, scopesVerified bool) error {
 			return q.UpdateConnectionCredentialsByID(ctx, dbq.UpdateConnectionCredentialsByIDParams{
-				ID: connectionID, AccessTokenRef: accessRef, TokenExpiresAt: expiresAt, RefreshToken: refreshRef,
+				ID: connectionID, AccessTokenRef: accessRef, TokenExpiresAt: expiresAt, RefreshToken: refreshRef, GrantedScopes: grantedScopes, ScopesVerified: scopesVerified,
 			})
 		},
 		func(ctx context.Context) error {
-			return q.ClearConnectionCredentialsByID(ctx, connectionID)
+			affected, err := q.ClearConnectionCredentialsByID(ctx, connectionID)
+			if err != nil {
+				return err
+			}
+			if affected != 1 {
+				return errors.New("oauth: connection not found while clearing credentials")
+			}
+			return nil
 		},
 	)
 	if persist {
 		if cerr := tx.Commit(ctx); cerr != nil {
-			return "", fmt.Errorf("commit: %w", cerr)
+			return "", false, fmt.Errorf("commit: %w", cerr)
 		}
 	}
-	return token, rerr
+	return token, true, rerr
+}
+
+// EnsureConnectionToken resolves a token for an already-resolved runtime
+// binding. It locks and rereads the target need before the resource row, so a
+// concurrent sync scope expansion is observed before a valid token is returned.
+// scopes_verified is intentionally not required here: migrated bindings are
+// grandfathered under their assumed declared grant. New candidate reuse and
+// BindExisting require a provider-verified grant before creating a binding.
+func EnsureConnectionToken(ctx context.Context, database *db.DB, enc secrets.Store, client *Client, logger *zap.Logger, agentID pgtype.UUID, needSlug string, connectionID pgtype.UUID, refreshIfBefore time.Time) (string, error) {
+	token, _, err := ensureConnectionToken(ctx, database, enc, client, logger, connectionID, agentID, needSlug, refreshIfBefore, false)
+	return token, err
+}
+
+// RefreshConnectionTokenIfEligible refreshes only while at least one active,
+// scope-ready binding remains locked in the same transaction.
+func RefreshConnectionTokenIfEligible(ctx context.Context, database *db.DB, enc secrets.Store, client *Client, logger *zap.Logger, connectionID pgtype.UUID, refreshIfBefore time.Time) (bool, error) {
+	_, eligible, err := ensureConnectionToken(ctx, database, enc, client, logger, connectionID, pgtype.UUID{}, "", refreshIfBefore, true)
+	return eligible, err
 }
 
 // EnsureMCPServerToken is the MCP-server analogue of EnsureConnectionToken,
 // operating on the agent_mcp_servers table and the "mcp" secret namespace.
-func EnsureMCPServerToken(ctx context.Context, database *db.DB, enc secrets.Store, client *Client, logger *zap.Logger, serverID pgtype.UUID, refreshIfBefore time.Time) (string, error) {
+func ensureMCPServerToken(ctx context.Context, database *db.DB, enc secrets.Store, client *Client, logger *zap.Logger, serverID, agentID pgtype.UUID, needSlug string, refreshIfBefore time.Time, requireEligibleBinding bool) (string, bool, error) {
 	tx, err := database.Pool().Begin(ctx)
 	if err != nil {
-		return "", fmt.Errorf("begin tx: %w", err)
+		return "", false, fmt.Errorf("begin tx: %w", err)
 	}
 	defer tx.Rollback(ctx)
 
 	q := dbq.New(tx)
-	srv, err := q.GetMCPServerByIDForUpdate(ctx, serverID)
+	var srv dbq.AgentMcpServer
+	requiredScopes := ""
+	if requireEligibleBinding {
+		srv, err = q.GetMCPServerByID(ctx, serverID)
+		if err != nil {
+			return "", false, err
+		}
+		bindings, err := q.LockQualifyingMCPBindings(ctx, dbq.LockQualifyingMCPBindingsParams{
+			ResourceID: serverID, GrantedScopes: srv.GrantedScopes,
+		})
+		if err != nil {
+			return "", false, err
+		}
+		if len(bindings) == 0 {
+			return "", false, nil
+		}
+	} else {
+		need, err := q.GetResourceNeedForUpdate(ctx, dbq.GetResourceNeedForUpdateParams{AgentID: agentID, Type: "mcp_server", Slug: needSlug})
+		if err != nil {
+			return "", false, err
+		}
+		if !need.BoundMcpID.Valid || need.BoundMcpID != serverID {
+			return "", false, ErrNeedsReauth
+		}
+		requiredScopes = need.ExpectedScopes
+	}
+	srv, err = q.GetMCPServerByIDForUpdate(ctx, serverID)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 
 	token, persist, rerr := resolveToken(ctx, enc, client, logger, tokenRow{
-		id:           srv.ID,
-		refPrefix:    "mcp",
-		accessRef:    srv.AccessTokenRef,
-		refreshRef:   srv.RefreshToken,
-		clientIDRef:  srv.ClientID,
-		clientSecRef: srv.ClientSecret,
-		tokenURL:     srv.TokenUrl,
-		expiresAt:    srv.TokenExpiresAt,
+		id:             srv.ID,
+		refPrefix:      "mcp",
+		accessRef:      srv.AccessTokenRef,
+		refreshRef:     srv.RefreshToken,
+		clientIDRef:    srv.ClientID,
+		clientSecRef:   srv.ClientSecret,
+		tokenURL:       srv.TokenUrl,
+		expiresAt:      srv.TokenExpiresAt,
+		grantedScopes:  srv.GrantedScopes,
+		scopesVerified: srv.ScopesVerified,
+		requiredScopes: requiredScopes,
 	}, refreshIfBefore,
-		func(ctx context.Context, accessRef string, expiresAt pgtype.Timestamptz, refreshRef string) error {
+		func(ctx context.Context, accessRef string, expiresAt pgtype.Timestamptz, refreshRef, grantedScopes string, scopesVerified bool) error {
 			return q.UpdateMCPServerCredentialsByID(ctx, dbq.UpdateMCPServerCredentialsByIDParams{
-				ID: serverID, AccessTokenRef: accessRef, TokenExpiresAt: expiresAt, RefreshToken: refreshRef,
+				ID: serverID, AccessTokenRef: accessRef, TokenExpiresAt: expiresAt, RefreshToken: refreshRef, GrantedScopes: grantedScopes, ScopesVerified: scopesVerified,
 			})
 		},
 		func(ctx context.Context) error {
-			return q.ClearMCPServerCredentialsByID(ctx, serverID)
+			affected, err := q.ClearMCPServerCredentialsByID(ctx, serverID)
+			if err != nil {
+				return err
+			}
+			if affected != 1 {
+				return errors.New("oauth: MCP server not found while clearing credentials")
+			}
+			return nil
 		},
 	)
 	if persist {
 		if cerr := tx.Commit(ctx); cerr != nil {
-			return "", fmt.Errorf("commit: %w", cerr)
+			return "", false, fmt.Errorf("commit: %w", cerr)
 		}
 	}
-	return token, rerr
+	return token, true, rerr
+}
+
+// EnsureMCPServerToken resolves a token for an already-resolved runtime binding
+// with the same locked need recheck and grandfathering as EnsureConnectionToken.
+func EnsureMCPServerToken(ctx context.Context, database *db.DB, enc secrets.Store, client *Client, logger *zap.Logger, agentID pgtype.UUID, needSlug string, serverID pgtype.UUID, refreshIfBefore time.Time) (string, error) {
+	token, _, err := ensureMCPServerToken(ctx, database, enc, client, logger, serverID, agentID, needSlug, refreshIfBefore, false)
+	return token, err
+}
+
+// RefreshMCPServerTokenIfEligible is the background-refresh MCP equivalent.
+func RefreshMCPServerTokenIfEligible(ctx context.Context, database *db.DB, enc secrets.Store, client *Client, logger *zap.Logger, serverID pgtype.UUID, refreshIfBefore time.Time) (bool, error) {
+	_, eligible, err := ensureMCPServerToken(ctx, database, enc, client, logger, serverID, pgtype.UUID{}, "", refreshIfBefore, true)
+	return eligible, err
 }

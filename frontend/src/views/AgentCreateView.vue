@@ -102,7 +102,7 @@ onMounted(async () => {
   // the providers list before the model dropdowns render.
   providers.fetchProviders()
   modelsAllowed.fetchAllowed()
-  gitCredsStore.fetchCredentials()
+  void gitCredsStore.fetchCredentials().catch(() => {})
   try {
     const { data } = await api.get('/api/v1/settings')
     const resp = fromJson(GetSystemSettingsResponseSchema, data)
@@ -241,6 +241,10 @@ const canSubmit = computed(() => {
   }
   return true
 })
+
+function retryGitCredentials() {
+  void gitCredsStore.fetchCredentials().catch(() => {})
+}
 
 const localDir = computed(() => slug.value || 'my-app')
 const localSetupReady = computed(() => !!sdkVersion.value && !!sdkCommandImport.value && !!airlockURL.value)
@@ -549,7 +553,15 @@ onUnmounted(() => {
         </div>
         <div>
           <label style="display: block; margin-bottom: 0.35rem; font-size: 0.85rem">Credential</label>
+          <Skeleton v-if="gitCredsStore.loading" height="2.5rem" />
+          <Message v-else-if="gitCredsStore.error" severity="error" :closable="false">
+            <div class="load-error">
+              <span>{{ gitCredsStore.error }}</span>
+              <Button label="Retry" icon="pi pi-refresh" size="small" outlined @click="retryGitCredentials" />
+            </div>
+          </Message>
           <Select
+            v-else
             v-model="gitCredentialId"
             :options="gitCredsStore.credentials"
             option-label="name"
@@ -558,7 +570,7 @@ onUnmounted(() => {
             :disabled="building"
             style="width: 100%"
           />
-          <small v-if="gitCredsStore.credentials.length === 0" style="color: var(--p-text-muted-color)">
+          <small v-if="!gitCredsStore.loading && !gitCredsStore.error && gitCredsStore.credentials.length === 0" style="color: var(--p-text-muted-color)">
             No credentials yet - <router-link to="/settings/git-credentials">add a PAT in Settings</router-link>.
           </small>
         </div>
@@ -771,6 +783,13 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   gap: 1rem;
+}
+
+.load-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
 }
 
 .check-row {

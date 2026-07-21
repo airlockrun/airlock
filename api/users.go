@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 
+	"github.com/airlockrun/airlock/authz"
 	"github.com/airlockrun/airlock/convert"
 	"github.com/airlockrun/airlock/db"
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
@@ -43,10 +44,9 @@ func (h *UsersHandler) List(w http.ResponseWriter, r *http.Request) {
 	writeProto(w, http.StatusOK, &airlockv1.ListUsersResponse{Users: pbUsers})
 }
 
-// ListSelectable returns a slim user directory (id/email/display_name) for
-// member-picker dropdowns. Service gates on TenantUserView so any
-// authenticated user can read it — agent admins who aren't tenant
-// admins still need this list to invite members.
+// ListSelectable returns a slim user and built-in role-group directory for
+// grantee picker dropdowns. Service gates on TenantUserView so any authenticated
+// user can read it — resource and agent managers need the directory to share.
 func (h *UsersHandler) ListSelectable(w http.ResponseWriter, r *http.Request) {
 	p := principalFromRequest(r)
 	users, err := h.users.List(r.Context(), p)
@@ -55,13 +55,19 @@ func (h *UsersHandler) ListSelectable(w http.ResponseWriter, r *http.Request) {
 		writeUsersError(w, err, "list selectable users")
 		return
 	}
-	out := make([]*airlockv1.UserSummary, len(users))
-	for i, u := range users {
-		out[i] = &airlockv1.UserSummary{
+	out := make([]*airlockv1.UserSummary, 0, len(users)+3)
+	out = append(out,
+		&airlockv1.UserSummary{Id: authz.GroupUser.String(), DisplayName: "All users", Kind: "group"},
+		&airlockv1.UserSummary{Id: authz.GroupManager.String(), DisplayName: "All managers", Kind: "group"},
+		&airlockv1.UserSummary{Id: authz.GroupAdmin.String(), DisplayName: "All admins", Kind: "group"},
+	)
+	for _, u := range users {
+		out = append(out, &airlockv1.UserSummary{
 			Id:          u.ID.String(),
 			Email:       u.Email,
 			DisplayName: u.DisplayName,
-		}
+			Kind:        "user",
+		})
 	}
 	writeProto(w, http.StatusOK, &airlockv1.ListSelectableUsersResponse{Users: out})
 }

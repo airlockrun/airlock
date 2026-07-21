@@ -33,6 +33,7 @@ func New(database *db.DB, logger *zap.Logger) *Service {
 
 // ResourceGrant is a capability grant on a resource.
 type ResourceGrant struct {
+	ID           uuid.UUID
 	GranteeID    uuid.UUID
 	Capabilities []string
 }
@@ -51,84 +52,25 @@ func validCaps(caps []string) bool {
 	return true
 }
 
-// ownerAndGrants returns the resource's owner principal and its existing grants
-// for the capability check. resourceType is connection|mcp_server|
-// exec_endpoint|git_credential.
-func (s *Service) ownerAndGrants(ctx context.Context, q *dbq.Queries, resourceType string, id uuid.UUID) (uuid.UUID, []authz.Grant, error) {
-	var (
-		owner pgtype.UUID
-		raw   []rawGrant
-		err   error
-	)
-	switch resourceType {
-	case "connection":
-		owner, err = q.GetConnectionOwner(ctx, pg(id))
-		if err == nil {
-			rows, e := q.ListConnectionGrants(ctx, pg(id))
-			err = e
-			for _, r := range rows {
-				raw = append(raw, rawGrant{r.GranteeID, r.Capabilities})
-			}
-		}
-	case "mcp_server":
-		owner, err = q.GetMCPServerOwner(ctx, pg(id))
-		if err == nil {
-			rows, e := q.ListMCPServerGrants(ctx, pg(id))
-			err = e
-			for _, r := range rows {
-				raw = append(raw, rawGrant{r.GranteeID, r.Capabilities})
-			}
-		}
-	case "exec_endpoint":
-		owner, err = q.GetExecEndpointOwner(ctx, pg(id))
-		if err == nil {
-			rows, e := q.ListExecEndpointGrants(ctx, pg(id))
-			err = e
-			for _, r := range rows {
-				raw = append(raw, rawGrant{r.GranteeID, r.Capabilities})
-			}
-		}
-	case "git_credential":
-		owner, err = q.GetGitCredentialOwner(ctx, pg(id))
-		if err == nil {
-			rows, e := q.ListGitCredentialGrants(ctx, pg(id))
-			err = e
-			for _, r := range rows {
-				raw = append(raw, rawGrant{r.GranteeID, r.Capabilities})
-			}
-		}
-	default:
-		return uuid.Nil, nil, service.Detail(service.ErrInvalidInput, "unknown resource type %q", resourceType)
-	}
-	if err != nil {
-		return uuid.Nil, nil, service.ErrNotFound
-	}
-	grants := make([]authz.Grant, len(raw))
-	for i, r := range raw {
-		grants[i] = authz.Grant{GranteeID: uuid.UUID(r.grantee.Bytes), Capabilities: r.caps}
-	}
-	return uuid.UUID(owner.Bytes), grants, nil
-}
-
-type rawGrant struct {
-	grantee pgtype.UUID
-	caps    []string
-}
-
 // GrantResource grants capabilities on a resource to a grantee. The caller must
 // hold the manage capability on the resource.
 func (s *Service) GrantResource(ctx context.Context, p authz.Principal, resourceType string, resourceID, granteeID uuid.UUID, caps []string) error {
-	if !validCaps(caps) {
-		return service.Detail(service.ErrInvalidInput, "capabilities must be a non-empty subset of view/bind/manage")
-	}
-	q := dbq.New(s.db.Pool())
-	owner, grants, err := s.ownerAndGrants(ctx, q, resourceType, resourceID)
+	tx, err := s.db.Pool().Begin(ctx)
 	if err != nil {
 		return err
 	}
-	if !p.HasResourceCapability(owner, grants, authz.CapManage) {
-		return service.Detail(service.ErrForbidden, "you do not have manage access to this resource")
+	defer tx.Rollback(ctx)
+	q := dbq.New(tx)
+	if err := authz.LockResource(ctx, q, resourceType, resourceID); err != nil {
+		return err
 	}
+	if err := authz.AuthorizeResource(ctx, q, p, authz.ResourceManage, resourceType, resourceID); err != nil {
+		return err
+	}
+	if !validCaps(caps) {
+		return service.Detail(service.ErrInvalidInput, "capabilities must be a non-empty subset of view/bind/manage")
+	}
+	err = nil
 	switch resourceType {
 	case "connection":
 		_, err = q.CreateConnectionGrant(ctx, dbq.CreateConnectionGrantParams{ConnectionID: pg(resourceID), GranteeID: pg(granteeID), Capabilities: caps})
@@ -143,19 +85,23 @@ func (s *Service) GrantResource(ctx context.Context, p authz.Principal, resource
 		s.logger.Error("create resource grant", zap.Error(err))
 		return err
 	}
-	return nil
+	return tx.Commit(ctx)
 }
 
 // RevokeResourceGrant deletes a grant by id. The caller must hold manage on the
 // resource the grant belongs to.
 func (s *Service) RevokeResourceGrant(ctx context.Context, p authz.Principal, resourceType string, resourceID, grantID uuid.UUID) error {
-	q := dbq.New(s.db.Pool())
-	owner, grants, err := s.ownerAndGrants(ctx, q, resourceType, resourceID)
+	tx, err := s.db.Pool().Begin(ctx)
 	if err != nil {
 		return err
 	}
-	if !p.HasResourceCapability(owner, grants, authz.CapManage) {
-		return service.Detail(service.ErrForbidden, "you do not have manage access to this resource")
+	defer tx.Rollback(ctx)
+	q := dbq.New(tx)
+	if err := authz.LockResource(ctx, q, resourceType, resourceID); err != nil {
+		return err
+	}
+	if err := authz.AuthorizeResource(ctx, q, p, authz.ResourceManage, resourceType, resourceID); err != nil {
+		return err
 	}
 	deleted, err := q.RevokeResourceGrant(ctx, dbq.RevokeResourceGrantParams{
 		ID:           pg(grantID),
@@ -168,23 +114,50 @@ func (s *Service) RevokeResourceGrant(ctx context.Context, p authz.Principal, re
 	if deleted == 0 {
 		return service.ErrNotFound
 	}
-	return nil
+	return tx.Commit(ctx)
 }
 
-// ListResourceGrants returns a resource's grants. The caller must hold view on
-// the resource.
+// ListResourceGrants returns a resource's grants. Sharing metadata is visible
+// only to callers who can manage that resource.
 func (s *Service) ListResourceGrants(ctx context.Context, p authz.Principal, resourceType string, resourceID uuid.UUID) ([]ResourceGrant, error) {
 	q := dbq.New(s.db.Pool())
-	owner, grants, err := s.ownerAndGrants(ctx, q, resourceType, resourceID)
-	if err != nil {
+	if err := authz.AuthorizeResource(ctx, q, p, authz.ResourceManage, resourceType, resourceID); err != nil {
 		return nil, err
 	}
-	if !p.HasResourceCapability(owner, grants, authz.CapView) {
-		return nil, service.Detail(service.ErrForbidden, "you do not have view access to this resource")
-	}
-	out := make([]ResourceGrant, len(grants))
-	for i, g := range grants {
-		out[i] = ResourceGrant{GranteeID: g.GranteeID, Capabilities: g.Capabilities}
+	var out []ResourceGrant
+	switch resourceType {
+	case "connection":
+		rows, err := q.ListConnectionGrants(ctx, pg(resourceID))
+		if err != nil {
+			return nil, err
+		}
+		for _, row := range rows {
+			out = append(out, ResourceGrant{ID: uuid.UUID(row.ID.Bytes), GranteeID: uuid.UUID(row.GranteeID.Bytes), Capabilities: row.Capabilities})
+		}
+	case "mcp_server":
+		rows, err := q.ListMCPServerGrants(ctx, pg(resourceID))
+		if err != nil {
+			return nil, err
+		}
+		for _, row := range rows {
+			out = append(out, ResourceGrant{ID: uuid.UUID(row.ID.Bytes), GranteeID: uuid.UUID(row.GranteeID.Bytes), Capabilities: row.Capabilities})
+		}
+	case "exec_endpoint":
+		rows, err := q.ListExecEndpointGrants(ctx, pg(resourceID))
+		if err != nil {
+			return nil, err
+		}
+		for _, row := range rows {
+			out = append(out, ResourceGrant{ID: uuid.UUID(row.ID.Bytes), GranteeID: uuid.UUID(row.GranteeID.Bytes), Capabilities: row.Capabilities})
+		}
+	case "git_credential":
+		rows, err := q.ListGitCredentialGrants(ctx, pg(resourceID))
+		if err != nil {
+			return nil, err
+		}
+		for _, row := range rows {
+			out = append(out, ResourceGrant{ID: uuid.UUID(row.ID.Bytes), GranteeID: uuid.UUID(row.GranteeID.Bytes), Capabilities: row.Capabilities})
+		}
 	}
 	return out, nil
 }

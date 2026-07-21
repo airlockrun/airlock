@@ -11,39 +11,47 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const deleteConnectionByID = `-- name: DeleteConnectionByID :exec
+const deleteConnectionByID = `-- name: DeleteConnectionByID :execrows
 
 DELETE FROM connections WHERE id = $1
 `
 
-// Owner-initiated deletes from the Resources view. Grants cascade with the row
-// and any binding need's pointer is nulled (ON DELETE SET NULL), so dependent
-// agents fall back to an unbound need rather than a dangling reference.
-func (q *Queries) DeleteConnectionByID(ctx context.Context, id pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, deleteConnectionByID, id)
-	return err
+// Grants cascade with a deleted resource and bindings become unbound through
+// ON DELETE SET NULL.
+func (q *Queries) DeleteConnectionByID(ctx context.Context, id pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteConnectionByID, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
-const deleteExecEndpointByID = `-- name: DeleteExecEndpointByID :exec
+const deleteExecEndpointByID = `-- name: DeleteExecEndpointByID :execrows
 DELETE FROM agent_exec_endpoints WHERE id = $1
 `
 
-func (q *Queries) DeleteExecEndpointByID(ctx context.Context, id pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, deleteExecEndpointByID, id)
-	return err
+func (q *Queries) DeleteExecEndpointByID(ctx context.Context, id pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteExecEndpointByID, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
-const deleteMCPServerByID = `-- name: DeleteMCPServerByID :exec
+const deleteMCPServerByID = `-- name: DeleteMCPServerByID :execrows
 DELETE FROM agent_mcp_servers WHERE id = $1
 `
 
-func (q *Queries) DeleteMCPServerByID(ctx context.Context, id pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, deleteMCPServerByID, id)
-	return err
+func (q *Queries) DeleteMCPServerByID(ctx context.Context, id pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteMCPServerByID, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const getConnectionByID = `-- name: GetConnectionByID :one
-SELECT id, slug, name, description, llm_hint, access, auth_mode, auth_url, token_url, base_url, scopes, auth_injection, test_path, setup_instructions, config, client_id, client_secret, access_token_ref, refresh_token, token_expires_at, created_at, updated_at, auth_params, headers, owner_principal_id FROM connections WHERE id = $1
+SELECT id, slug, name, display_name, description, llm_hint, access, auth_mode, auth_url, token_url, base_url, scopes, auth_injection, test_path, setup_instructions, config, client_id, client_secret, access_token_ref, refresh_token, token_expires_at, created_at, updated_at, auth_params, headers, owner_principal_id, lifecycle, granted_scopes, scopes_verified, authorization_revision, provisional_need_id, pending_client_id, pending_client_secret FROM connections WHERE id = $1
 `
 
 func (q *Queries) GetConnectionByID(ctx context.Context, id pgtype.UUID) (Connection, error) {
@@ -53,6 +61,7 @@ func (q *Queries) GetConnectionByID(ctx context.Context, id pgtype.UUID) (Connec
 		&i.ID,
 		&i.Slug,
 		&i.Name,
+		&i.DisplayName,
 		&i.Description,
 		&i.LlmHint,
 		&i.Access,
@@ -75,12 +84,19 @@ func (q *Queries) GetConnectionByID(ctx context.Context, id pgtype.UUID) (Connec
 		&i.AuthParams,
 		&i.Headers,
 		&i.OwnerPrincipalID,
+		&i.Lifecycle,
+		&i.GrantedScopes,
+		&i.ScopesVerified,
+		&i.AuthorizationRevision,
+		&i.ProvisionalNeedID,
+		&i.PendingClientID,
+		&i.PendingClientSecret,
 	)
 	return i, err
 }
 
 const getExecEndpointByID = `-- name: GetExecEndpointByID :one
-SELECT id, slug, description, llm_hint, access, transport, host, port, ssh_user, private_key_ref, public_key_openssh, public_key_comment, host_key_openssh, host_key_pinned_at, last_used_at, created_at, updated_at, owner_principal_id FROM agent_exec_endpoints WHERE id = $1
+SELECT id, slug, display_name, description, llm_hint, access, transport, host, port, ssh_user, private_key_ref, public_key_openssh, public_key_comment, host_key_openssh, host_key_pinned_at, last_used_at, created_at, updated_at, owner_principal_id FROM agent_exec_endpoints WHERE id = $1
 `
 
 func (q *Queries) GetExecEndpointByID(ctx context.Context, id pgtype.UUID) (AgentExecEndpoint, error) {
@@ -89,6 +105,38 @@ func (q *Queries) GetExecEndpointByID(ctx context.Context, id pgtype.UUID) (Agen
 	err := row.Scan(
 		&i.ID,
 		&i.Slug,
+		&i.DisplayName,
+		&i.Description,
+		&i.LlmHint,
+		&i.Access,
+		&i.Transport,
+		&i.Host,
+		&i.Port,
+		&i.SshUser,
+		&i.PrivateKeyRef,
+		&i.PublicKeyOpenssh,
+		&i.PublicKeyComment,
+		&i.HostKeyOpenssh,
+		&i.HostKeyPinnedAt,
+		&i.LastUsedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.OwnerPrincipalID,
+	)
+	return i, err
+}
+
+const getExecEndpointByIDForUpdate = `-- name: GetExecEndpointByIDForUpdate :one
+SELECT id, slug, display_name, description, llm_hint, access, transport, host, port, ssh_user, private_key_ref, public_key_openssh, public_key_comment, host_key_openssh, host_key_pinned_at, last_used_at, created_at, updated_at, owner_principal_id FROM agent_exec_endpoints WHERE id = $1 FOR UPDATE
+`
+
+func (q *Queries) GetExecEndpointByIDForUpdate(ctx context.Context, id pgtype.UUID) (AgentExecEndpoint, error) {
+	row := q.db.QueryRow(ctx, getExecEndpointByIDForUpdate, id)
+	var i AgentExecEndpoint
+	err := row.Scan(
+		&i.ID,
+		&i.Slug,
+		&i.DisplayName,
 		&i.Description,
 		&i.LlmHint,
 		&i.Access,
@@ -110,7 +158,7 @@ func (q *Queries) GetExecEndpointByID(ctx context.Context, id pgtype.UUID) (Agen
 }
 
 const getMCPServerByID = `-- name: GetMCPServerByID :one
-SELECT id, slug, name, access, url, auth_mode, auth_url, token_url, registration_endpoint, scopes, auth_injection, tool_schemas, client_id, client_secret, access_token_ref, refresh_token, token_expires_at, last_synced_at, created_at, updated_at, server_instructions, owner_principal_id FROM agent_mcp_servers WHERE id = $1
+SELECT id, slug, name, display_name, access, url, auth_mode, auth_url, token_url, registration_endpoint, scopes, auth_injection, tool_schemas, client_id, client_secret, access_token_ref, refresh_token, token_expires_at, last_synced_at, created_at, updated_at, server_instructions, owner_principal_id, lifecycle, granted_scopes, scopes_verified, authorization_revision, provisional_need_id, pending_client_id, pending_client_secret FROM agent_mcp_servers WHERE id = $1
 `
 
 func (q *Queries) GetMCPServerByID(ctx context.Context, id pgtype.UUID) (AgentMcpServer, error) {
@@ -120,6 +168,7 @@ func (q *Queries) GetMCPServerByID(ctx context.Context, id pgtype.UUID) (AgentMc
 		&i.ID,
 		&i.Slug,
 		&i.Name,
+		&i.DisplayName,
 		&i.Access,
 		&i.Url,
 		&i.AuthMode,
@@ -139,20 +188,264 @@ func (q *Queries) GetMCPServerByID(ctx context.Context, id pgtype.UUID) (AgentMc
 		&i.UpdatedAt,
 		&i.ServerInstructions,
 		&i.OwnerPrincipalID,
+		&i.Lifecycle,
+		&i.GrantedScopes,
+		&i.ScopesVerified,
+		&i.AuthorizationRevision,
+		&i.ProvisionalNeedID,
+		&i.PendingClientID,
+		&i.PendingClientSecret,
 	)
 	return i, err
 }
 
-const listConnectionsByOwners = `-- name: ListConnectionsByOwners :many
+const listAvailableConnections = `-- name: ListAvailableConnections :many
 
-SELECT id, slug, name, description, llm_hint, access, auth_mode, auth_url, token_url, base_url, scopes, auth_injection, test_path, setup_instructions, config, client_id, client_secret, access_token_ref, refresh_token, token_expires_at, created_at, updated_at, auth_params, headers, owner_principal_id FROM connections WHERE owner_principal_id = ANY ($1::uuid[]) ORDER BY name
+SELECT c.id, c.slug, c.name, c.display_name, c.auth_mode,
+       (c.auth_mode = 'none' OR c.access_token_ref != '')::boolean AS authorized,
+       c.created_at,
+       (SELECT count(*) FROM agent_resource_needs n WHERE n.bound_connection_id = c.id)::int AS agent_count,
+       (CASE WHEN c.owner_principal_id = ANY ($1::uuid[])
+           THEN ARRAY['view', 'bind', 'manage']::text[]
+           ELSE ARRAY(
+               SELECT DISTINCT capability
+               FROM resource_grants g, unnest(g.capabilities) AS capability
+               WHERE g.connection_id = c.id AND g.grantee_id = ANY ($1::uuid[])
+               ORDER BY capability
+           )
+       END)::text[] AS capabilities
+FROM connections c
+WHERE c.lifecycle = 'active' AND (c.owner_principal_id = ANY ($1::uuid[])
+   OR EXISTS (SELECT 1 FROM resource_grants g WHERE g.connection_id = c.id AND g.grantee_id = ANY ($1::uuid[])))
+ORDER BY c.display_name, c.slug
 `
 
-// Resource lookups for the need bind/list surface: list a principal-set's
-// resources of a type (candidates for reuse), and fetch one by id (for the
-// shape-compatibility check before binding).
-func (q *Queries) ListConnectionsByOwners(ctx context.Context, ownerIds []pgtype.UUID) ([]Connection, error) {
-	rows, err := q.db.Query(ctx, listConnectionsByOwners, ownerIds)
+type ListAvailableConnectionsRow struct {
+	ID           pgtype.UUID        `json:"id"`
+	Slug         string             `json:"slug"`
+	Name         string             `json:"name"`
+	DisplayName  string             `json:"display_name"`
+	AuthMode     string             `json:"auth_mode"`
+	Authorized   bool               `json:"authorized"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	AgentCount   int32              `json:"agent_count"`
+	Capabilities []string           `json:"capabilities"`
+}
+
+// Inventory includes owned resources and resources shared with any principal in
+// the caller's grantee set. Owners implicitly hold every capability.
+func (q *Queries) ListAvailableConnections(ctx context.Context, principalIds []pgtype.UUID) ([]ListAvailableConnectionsRow, error) {
+	rows, err := q.db.Query(ctx, listAvailableConnections, principalIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListAvailableConnectionsRow{}
+	for rows.Next() {
+		var i ListAvailableConnectionsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Slug,
+			&i.Name,
+			&i.DisplayName,
+			&i.AuthMode,
+			&i.Authorized,
+			&i.CreatedAt,
+			&i.AgentCount,
+			&i.Capabilities,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAvailableExecEndpoints = `-- name: ListAvailableExecEndpoints :many
+SELECT e.id, e.slug, e.display_name,
+       (e.transport IS NOT NULL)::boolean AS configured,
+       e.created_at, e.last_used_at,
+       (SELECT count(*) FROM agent_resource_needs n WHERE n.bound_exec_id = e.id)::int AS agent_count,
+       (CASE WHEN e.owner_principal_id = ANY ($1::uuid[])
+           THEN ARRAY['view', 'bind', 'manage']::text[]
+           ELSE ARRAY(
+               SELECT DISTINCT capability
+               FROM resource_grants g, unnest(g.capabilities) AS capability
+               WHERE g.exec_endpoint_id = e.id AND g.grantee_id = ANY ($1::uuid[])
+               ORDER BY capability
+           )
+       END)::text[] AS capabilities
+FROM agent_exec_endpoints e
+WHERE e.owner_principal_id = ANY ($1::uuid[])
+   OR EXISTS (SELECT 1 FROM resource_grants g WHERE g.exec_endpoint_id = e.id AND g.grantee_id = ANY ($1::uuid[]))
+ORDER BY e.display_name, e.slug
+`
+
+type ListAvailableExecEndpointsRow struct {
+	ID           pgtype.UUID        `json:"id"`
+	Slug         string             `json:"slug"`
+	DisplayName  string             `json:"display_name"`
+	Configured   bool               `json:"configured"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	LastUsedAt   pgtype.Timestamptz `json:"last_used_at"`
+	AgentCount   int32              `json:"agent_count"`
+	Capabilities []string           `json:"capabilities"`
+}
+
+func (q *Queries) ListAvailableExecEndpoints(ctx context.Context, principalIds []pgtype.UUID) ([]ListAvailableExecEndpointsRow, error) {
+	rows, err := q.db.Query(ctx, listAvailableExecEndpoints, principalIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListAvailableExecEndpointsRow{}
+	for rows.Next() {
+		var i ListAvailableExecEndpointsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Slug,
+			&i.DisplayName,
+			&i.Configured,
+			&i.CreatedAt,
+			&i.LastUsedAt,
+			&i.AgentCount,
+			&i.Capabilities,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAvailableMCPServers = `-- name: ListAvailableMCPServers :many
+SELECT m.id, m.slug, m.name, m.display_name, m.auth_mode,
+       (m.auth_mode = 'none' OR m.access_token_ref != '')::boolean AS authorized,
+       m.created_at,
+       (SELECT count(*) FROM agent_resource_needs n WHERE n.bound_mcp_id = m.id)::int AS agent_count,
+       (CASE WHEN m.owner_principal_id = ANY ($1::uuid[])
+           THEN ARRAY['view', 'bind', 'manage']::text[]
+           ELSE ARRAY(
+               SELECT DISTINCT capability
+               FROM resource_grants g, unnest(g.capabilities) AS capability
+               WHERE g.mcp_server_id = m.id AND g.grantee_id = ANY ($1::uuid[])
+               ORDER BY capability
+           )
+       END)::text[] AS capabilities
+FROM agent_mcp_servers m
+WHERE m.lifecycle = 'active' AND (m.owner_principal_id = ANY ($1::uuid[])
+   OR EXISTS (SELECT 1 FROM resource_grants g WHERE g.mcp_server_id = m.id AND g.grantee_id = ANY ($1::uuid[])))
+ORDER BY m.display_name, m.slug
+`
+
+type ListAvailableMCPServersRow struct {
+	ID           pgtype.UUID        `json:"id"`
+	Slug         string             `json:"slug"`
+	Name         string             `json:"name"`
+	DisplayName  string             `json:"display_name"`
+	AuthMode     string             `json:"auth_mode"`
+	Authorized   bool               `json:"authorized"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	AgentCount   int32              `json:"agent_count"`
+	Capabilities []string           `json:"capabilities"`
+}
+
+func (q *Queries) ListAvailableMCPServers(ctx context.Context, principalIds []pgtype.UUID) ([]ListAvailableMCPServersRow, error) {
+	rows, err := q.db.Query(ctx, listAvailableMCPServers, principalIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListAvailableMCPServersRow{}
+	for rows.Next() {
+		var i ListAvailableMCPServersRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Slug,
+			&i.Name,
+			&i.DisplayName,
+			&i.AuthMode,
+			&i.Authorized,
+			&i.CreatedAt,
+			&i.AgentCount,
+			&i.Capabilities,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listConnectionConsumers = `-- name: ListConnectionConsumers :many
+SELECT a.id AS agent_id, a.name AS agent_name, a.slug AS agent_slug,
+       n.type AS need_type, n.slug AS need_slug
+FROM agent_resource_needs n
+JOIN agents a ON a.id = n.agent_id
+WHERE n.bound_connection_id = $1
+ORDER BY a.name, n.slug
+`
+
+type ListConnectionConsumersRow struct {
+	AgentID   pgtype.UUID `json:"agent_id"`
+	AgentName string      `json:"agent_name"`
+	AgentSlug string      `json:"agent_slug"`
+	NeedType  string      `json:"need_type"`
+	NeedSlug  string      `json:"need_slug"`
+}
+
+func (q *Queries) ListConnectionConsumers(ctx context.Context, resourceID pgtype.UUID) ([]ListConnectionConsumersRow, error) {
+	rows, err := q.db.Query(ctx, listConnectionConsumers, resourceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListConnectionConsumersRow{}
+	for rows.Next() {
+		var i ListConnectionConsumersRow
+		if err := rows.Scan(
+			&i.AgentID,
+			&i.AgentName,
+			&i.AgentSlug,
+			&i.NeedType,
+			&i.NeedSlug,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listConnectionsAvailableToPrincipal = `-- name: ListConnectionsAvailableToPrincipal :many
+
+SELECT c.id, c.slug, c.name, c.display_name, c.description, c.llm_hint, c.access, c.auth_mode, c.auth_url, c.token_url, c.base_url, c.scopes, c.auth_injection, c.test_path, c.setup_instructions, c.config, c.client_id, c.client_secret, c.access_token_ref, c.refresh_token, c.token_expires_at, c.created_at, c.updated_at, c.auth_params, c.headers, c.owner_principal_id, c.lifecycle, c.granted_scopes, c.scopes_verified, c.authorization_revision, c.provisional_need_id, c.pending_client_id, c.pending_client_secret
+FROM connections c
+WHERE c.lifecycle = 'active' AND (c.owner_principal_id = ANY ($1::uuid[])
+   OR EXISTS (
+       SELECT 1 FROM resource_grants g
+       WHERE g.connection_id = c.id
+         AND g.grantee_id = ANY ($1::uuid[])
+         AND 'bind' = ANY (g.capabilities)
+   ))
+ORDER BY c.display_name, c.slug
+`
+
+// Resource lookups for reusable resource inventory and binding.
+func (q *Queries) ListConnectionsAvailableToPrincipal(ctx context.Context, principalIds []pgtype.UUID) ([]Connection, error) {
+	rows, err := q.db.Query(ctx, listConnectionsAvailableToPrincipal, principalIds)
 	if err != nil {
 		return nil, err
 	}
@@ -164,6 +457,7 @@ func (q *Queries) ListConnectionsByOwners(ctx context.Context, ownerIds []pgtype
 			&i.ID,
 			&i.Slug,
 			&i.Name,
+			&i.DisplayName,
 			&i.Description,
 			&i.LlmHint,
 			&i.Access,
@@ -186,6 +480,13 @@ func (q *Queries) ListConnectionsByOwners(ctx context.Context, ownerIds []pgtype
 			&i.AuthParams,
 			&i.Headers,
 			&i.OwnerPrincipalID,
+			&i.Lifecycle,
+			&i.GrantedScopes,
+			&i.ScopesVerified,
+			&i.AuthorizationRevision,
+			&i.ProvisionalNeedID,
+			&i.PendingClientID,
+			&i.PendingClientSecret,
 		); err != nil {
 			return nil, err
 		}
@@ -197,12 +498,64 @@ func (q *Queries) ListConnectionsByOwners(ctx context.Context, ownerIds []pgtype
 	return items, nil
 }
 
-const listExecEndpointsByOwners = `-- name: ListExecEndpointsByOwners :many
-SELECT id, slug, description, llm_hint, access, transport, host, port, ssh_user, private_key_ref, public_key_openssh, public_key_comment, host_key_openssh, host_key_pinned_at, last_used_at, created_at, updated_at, owner_principal_id FROM agent_exec_endpoints WHERE owner_principal_id = ANY ($1::uuid[]) ORDER BY slug
+const listExecEndpointConsumers = `-- name: ListExecEndpointConsumers :many
+SELECT a.id AS agent_id, a.name AS agent_name, a.slug AS agent_slug,
+       n.type AS need_type, n.slug AS need_slug
+FROM agent_resource_needs n
+JOIN agents a ON a.id = n.agent_id
+WHERE n.bound_exec_id = $1
+ORDER BY a.name, n.slug
 `
 
-func (q *Queries) ListExecEndpointsByOwners(ctx context.Context, ownerIds []pgtype.UUID) ([]AgentExecEndpoint, error) {
-	rows, err := q.db.Query(ctx, listExecEndpointsByOwners, ownerIds)
+type ListExecEndpointConsumersRow struct {
+	AgentID   pgtype.UUID `json:"agent_id"`
+	AgentName string      `json:"agent_name"`
+	AgentSlug string      `json:"agent_slug"`
+	NeedType  string      `json:"need_type"`
+	NeedSlug  string      `json:"need_slug"`
+}
+
+func (q *Queries) ListExecEndpointConsumers(ctx context.Context, resourceID pgtype.UUID) ([]ListExecEndpointConsumersRow, error) {
+	rows, err := q.db.Query(ctx, listExecEndpointConsumers, resourceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListExecEndpointConsumersRow{}
+	for rows.Next() {
+		var i ListExecEndpointConsumersRow
+		if err := rows.Scan(
+			&i.AgentID,
+			&i.AgentName,
+			&i.AgentSlug,
+			&i.NeedType,
+			&i.NeedSlug,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listExecEndpointsAvailableToPrincipal = `-- name: ListExecEndpointsAvailableToPrincipal :many
+SELECT e.id, e.slug, e.display_name, e.description, e.llm_hint, e.access, e.transport, e.host, e.port, e.ssh_user, e.private_key_ref, e.public_key_openssh, e.public_key_comment, e.host_key_openssh, e.host_key_pinned_at, e.last_used_at, e.created_at, e.updated_at, e.owner_principal_id
+FROM agent_exec_endpoints e
+WHERE e.owner_principal_id = ANY ($1::uuid[])
+   OR EXISTS (
+       SELECT 1 FROM resource_grants g
+       WHERE g.exec_endpoint_id = e.id
+         AND g.grantee_id = ANY ($1::uuid[])
+         AND 'bind' = ANY (g.capabilities)
+   )
+ORDER BY e.display_name, e.slug
+`
+
+func (q *Queries) ListExecEndpointsAvailableToPrincipal(ctx context.Context, principalIds []pgtype.UUID) ([]AgentExecEndpoint, error) {
+	rows, err := q.db.Query(ctx, listExecEndpointsAvailableToPrincipal, principalIds)
 	if err != nil {
 		return nil, err
 	}
@@ -213,6 +566,7 @@ func (q *Queries) ListExecEndpointsByOwners(ctx context.Context, ownerIds []pgty
 		if err := rows.Scan(
 			&i.ID,
 			&i.Slug,
+			&i.DisplayName,
 			&i.Description,
 			&i.LlmHint,
 			&i.Access,
@@ -240,12 +594,64 @@ func (q *Queries) ListExecEndpointsByOwners(ctx context.Context, ownerIds []pgty
 	return items, nil
 }
 
-const listMCPServersByOwners = `-- name: ListMCPServersByOwners :many
-SELECT id, slug, name, access, url, auth_mode, auth_url, token_url, registration_endpoint, scopes, auth_injection, tool_schemas, client_id, client_secret, access_token_ref, refresh_token, token_expires_at, last_synced_at, created_at, updated_at, server_instructions, owner_principal_id FROM agent_mcp_servers WHERE owner_principal_id = ANY ($1::uuid[]) ORDER BY name
+const listMCPServerConsumers = `-- name: ListMCPServerConsumers :many
+SELECT a.id AS agent_id, a.name AS agent_name, a.slug AS agent_slug,
+       n.type AS need_type, n.slug AS need_slug
+FROM agent_resource_needs n
+JOIN agents a ON a.id = n.agent_id
+WHERE n.bound_mcp_id = $1
+ORDER BY a.name, n.slug
 `
 
-func (q *Queries) ListMCPServersByOwners(ctx context.Context, ownerIds []pgtype.UUID) ([]AgentMcpServer, error) {
-	rows, err := q.db.Query(ctx, listMCPServersByOwners, ownerIds)
+type ListMCPServerConsumersRow struct {
+	AgentID   pgtype.UUID `json:"agent_id"`
+	AgentName string      `json:"agent_name"`
+	AgentSlug string      `json:"agent_slug"`
+	NeedType  string      `json:"need_type"`
+	NeedSlug  string      `json:"need_slug"`
+}
+
+func (q *Queries) ListMCPServerConsumers(ctx context.Context, resourceID pgtype.UUID) ([]ListMCPServerConsumersRow, error) {
+	rows, err := q.db.Query(ctx, listMCPServerConsumers, resourceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListMCPServerConsumersRow{}
+	for rows.Next() {
+		var i ListMCPServerConsumersRow
+		if err := rows.Scan(
+			&i.AgentID,
+			&i.AgentName,
+			&i.AgentSlug,
+			&i.NeedType,
+			&i.NeedSlug,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listMCPServersAvailableToPrincipal = `-- name: ListMCPServersAvailableToPrincipal :many
+SELECT m.id, m.slug, m.name, m.display_name, m.access, m.url, m.auth_mode, m.auth_url, m.token_url, m.registration_endpoint, m.scopes, m.auth_injection, m.tool_schemas, m.client_id, m.client_secret, m.access_token_ref, m.refresh_token, m.token_expires_at, m.last_synced_at, m.created_at, m.updated_at, m.server_instructions, m.owner_principal_id, m.lifecycle, m.granted_scopes, m.scopes_verified, m.authorization_revision, m.provisional_need_id, m.pending_client_id, m.pending_client_secret
+FROM agent_mcp_servers m
+WHERE m.lifecycle = 'active' AND (m.owner_principal_id = ANY ($1::uuid[])
+   OR EXISTS (
+       SELECT 1 FROM resource_grants g
+       WHERE g.mcp_server_id = m.id
+         AND g.grantee_id = ANY ($1::uuid[])
+         AND 'bind' = ANY (g.capabilities)
+   ))
+ORDER BY m.display_name, m.slug
+`
+
+func (q *Queries) ListMCPServersAvailableToPrincipal(ctx context.Context, principalIds []pgtype.UUID) ([]AgentMcpServer, error) {
+	rows, err := q.db.Query(ctx, listMCPServersAvailableToPrincipal, principalIds)
 	if err != nil {
 		return nil, err
 	}
@@ -257,6 +663,7 @@ func (q *Queries) ListMCPServersByOwners(ctx context.Context, ownerIds []pgtype.
 			&i.ID,
 			&i.Slug,
 			&i.Name,
+			&i.DisplayName,
 			&i.Access,
 			&i.Url,
 			&i.AuthMode,
@@ -276,6 +683,13 @@ func (q *Queries) ListMCPServersByOwners(ctx context.Context, ownerIds []pgtype.
 			&i.UpdatedAt,
 			&i.ServerInstructions,
 			&i.OwnerPrincipalID,
+			&i.Lifecycle,
+			&i.GrantedScopes,
+			&i.ScopesVerified,
+			&i.AuthorizationRevision,
+			&i.ProvisionalNeedID,
+			&i.PendingClientID,
+			&i.PendingClientSecret,
 		); err != nil {
 			return nil, err
 		}
@@ -287,148 +701,53 @@ func (q *Queries) ListMCPServersByOwners(ctx context.Context, ownerIds []pgtype.
 	return items, nil
 }
 
-const listOwnedConnections = `-- name: ListOwnedConnections :many
-
-SELECT c.id, c.slug, c.name, c.auth_mode,
-       (c.auth_mode = 'none' OR c.access_token_ref != '')::boolean AS authorized,
-       c.created_at,
-       (SELECT count(*) FROM agent_resource_needs n WHERE n.bound_connection_id = c.id)::int AS agent_count
-FROM connections c
-WHERE c.owner_principal_id = ANY ($1::uuid[])
-ORDER BY c.name
+const renameConnection = `-- name: RenameConnection :execrows
+UPDATE connections SET display_name = $1, updated_at = now() WHERE id = $2
 `
 
-type ListOwnedConnectionsRow struct {
-	ID         pgtype.UUID        `json:"id"`
-	Slug       string             `json:"slug"`
-	Name       string             `json:"name"`
-	AuthMode   string             `json:"auth_mode"`
-	Authorized bool               `json:"authorized"`
-	CreatedAt  pgtype.Timestamptz `json:"created_at"`
-	AgentCount int32              `json:"agent_count"`
+type RenameConnectionParams struct {
+	DisplayName string      `json:"display_name"`
+	ID          pgtype.UUID `json:"id"`
 }
 
-// Owner-scoped resource listings for the per-user Resources view: every
-// resource a principal owns, with how many agents currently bind it
-// (agent_count) so the operator can see what's shared and what's orphaned.
-func (q *Queries) ListOwnedConnections(ctx context.Context, ownerIds []pgtype.UUID) ([]ListOwnedConnectionsRow, error) {
-	rows, err := q.db.Query(ctx, listOwnedConnections, ownerIds)
+func (q *Queries) RenameConnection(ctx context.Context, arg RenameConnectionParams) (int64, error) {
+	result, err := q.db.Exec(ctx, renameConnection, arg.DisplayName, arg.ID)
 	if err != nil {
-		return nil, err
+		return 0, err
 	}
-	defer rows.Close()
-	items := []ListOwnedConnectionsRow{}
-	for rows.Next() {
-		var i ListOwnedConnectionsRow
-		if err := rows.Scan(
-			&i.ID,
-			&i.Slug,
-			&i.Name,
-			&i.AuthMode,
-			&i.Authorized,
-			&i.CreatedAt,
-			&i.AgentCount,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
+	return result.RowsAffected(), nil
 }
 
-const listOwnedExecEndpoints = `-- name: ListOwnedExecEndpoints :many
-SELECT e.id, e.slug,
-       (e.transport IS NOT NULL)::boolean AS configured,
-       e.created_at, e.last_used_at,
-       (SELECT count(*) FROM agent_resource_needs n WHERE n.bound_exec_id = e.id)::int AS agent_count
-FROM agent_exec_endpoints e
-WHERE e.owner_principal_id = ANY ($1::uuid[])
-ORDER BY e.slug
+const renameExecEndpoint = `-- name: RenameExecEndpoint :execrows
+UPDATE agent_exec_endpoints SET display_name = $1, updated_at = now() WHERE id = $2
 `
 
-type ListOwnedExecEndpointsRow struct {
-	ID         pgtype.UUID        `json:"id"`
-	Slug       string             `json:"slug"`
-	Configured bool               `json:"configured"`
-	CreatedAt  pgtype.Timestamptz `json:"created_at"`
-	LastUsedAt pgtype.Timestamptz `json:"last_used_at"`
-	AgentCount int32              `json:"agent_count"`
+type RenameExecEndpointParams struct {
+	DisplayName string      `json:"display_name"`
+	ID          pgtype.UUID `json:"id"`
 }
 
-func (q *Queries) ListOwnedExecEndpoints(ctx context.Context, ownerIds []pgtype.UUID) ([]ListOwnedExecEndpointsRow, error) {
-	rows, err := q.db.Query(ctx, listOwnedExecEndpoints, ownerIds)
+func (q *Queries) RenameExecEndpoint(ctx context.Context, arg RenameExecEndpointParams) (int64, error) {
+	result, err := q.db.Exec(ctx, renameExecEndpoint, arg.DisplayName, arg.ID)
 	if err != nil {
-		return nil, err
+		return 0, err
 	}
-	defer rows.Close()
-	items := []ListOwnedExecEndpointsRow{}
-	for rows.Next() {
-		var i ListOwnedExecEndpointsRow
-		if err := rows.Scan(
-			&i.ID,
-			&i.Slug,
-			&i.Configured,
-			&i.CreatedAt,
-			&i.LastUsedAt,
-			&i.AgentCount,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
+	return result.RowsAffected(), nil
 }
 
-const listOwnedMCPServers = `-- name: ListOwnedMCPServers :many
-SELECT m.id, m.slug, m.name, m.auth_mode,
-       (m.access_token_ref != '')::boolean AS authorized,
-       m.created_at,
-       (SELECT count(*) FROM agent_resource_needs n WHERE n.bound_mcp_id = m.id)::int AS agent_count
-FROM agent_mcp_servers m
-WHERE m.owner_principal_id = ANY ($1::uuid[])
-ORDER BY m.name
+const renameMCPServer = `-- name: RenameMCPServer :execrows
+UPDATE agent_mcp_servers SET display_name = $1, updated_at = now() WHERE id = $2
 `
 
-type ListOwnedMCPServersRow struct {
-	ID         pgtype.UUID        `json:"id"`
-	Slug       string             `json:"slug"`
-	Name       string             `json:"name"`
-	AuthMode   string             `json:"auth_mode"`
-	Authorized bool               `json:"authorized"`
-	CreatedAt  pgtype.Timestamptz `json:"created_at"`
-	AgentCount int32              `json:"agent_count"`
+type RenameMCPServerParams struct {
+	DisplayName string      `json:"display_name"`
+	ID          pgtype.UUID `json:"id"`
 }
 
-func (q *Queries) ListOwnedMCPServers(ctx context.Context, ownerIds []pgtype.UUID) ([]ListOwnedMCPServersRow, error) {
-	rows, err := q.db.Query(ctx, listOwnedMCPServers, ownerIds)
+func (q *Queries) RenameMCPServer(ctx context.Context, arg RenameMCPServerParams) (int64, error) {
+	result, err := q.db.Exec(ctx, renameMCPServer, arg.DisplayName, arg.ID)
 	if err != nil {
-		return nil, err
+		return 0, err
 	}
-	defer rows.Close()
-	items := []ListOwnedMCPServersRow{}
-	for rows.Next() {
-		var i ListOwnedMCPServersRow
-		if err := rows.Scan(
-			&i.ID,
-			&i.Slug,
-			&i.Name,
-			&i.AuthMode,
-			&i.Authorized,
-			&i.CreatedAt,
-			&i.AgentCount,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
+	return result.RowsAffected(), nil
 }

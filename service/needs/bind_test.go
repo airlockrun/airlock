@@ -43,20 +43,8 @@ func TestMatchesConnection(t *testing.T) {
 
 	fewer := base
 	fewer.Scopes = "read"
-	if matchesConnection(spec, fewer) {
-		t.Error("expected no match: candidate missing the 'write' scope")
-	}
-}
-
-func TestScopesSubset(t *testing.T) {
-	if !scopesSubset("read,write", "read,write,admin") {
-		t.Error("need ⊆ have should hold")
-	}
-	if scopesSubset("read,delete", "read,write") {
-		t.Error("missing 'delete' should fail")
-	}
-	if !scopesSubset("", "anything") {
-		t.Error("empty need is always satisfied")
+	if !matchesConnection(spec, fewer) {
+		t.Error("scope readiness must not affect structural compatibility")
 	}
 }
 
