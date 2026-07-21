@@ -18,7 +18,7 @@ interface Member {
 const GROUP_USER_ID = '00000000-0000-0000-0000-0000000000a3'
 const ALL_USERS_LABEL = 'All users'
 
-const props = defineProps<{ agentId: string }>()
+const props = withDefaults(defineProps<{ agentId: string; yourAccess?: string }>(), { yourAccess: '' })
 const emit = defineEmits<{ populated: [count: number] }>()
 const confirm = useConfirm()
 const toast = useToast()
@@ -27,6 +27,7 @@ const usersStore = useUsersStore()
 const members = ref<Member[]>([])
 watch(members, (v) => emit('populated', v.length), { immediate: true })
 const loading = ref(true)
+const canAdmin = computed(() => props.yourAccess === 'admin')
 
 const showAddDialog = ref(false)
 const selectedUserId = ref('')
@@ -47,6 +48,7 @@ const availableUsers = computed(() => {
     out.push({ id: GROUP_USER_ID, email: '', displayName: ALL_USERS_LABEL, label: ALL_USERS_LABEL })
   }
   for (const u of usersStore.selectable) {
+    if (u.kind === 'group') continue
     if (memberIds.has(u.id)) continue
     out.push({ id: u.id, email: u.email, displayName: u.displayName, label: u.displayName ? `${u.displayName} (${u.email})` : u.email })
   }
@@ -117,7 +119,7 @@ function confirmRemove(member: Member) {
 }
 
 onMounted(async () => {
-  usersStore.fetchSelectable()
+  if (canAdmin.value) usersStore.fetchSelectable()
   try {
     const { data } = await api.get(`/api/v1/agents/${props.agentId}/members`)
     members.value = (data.members || []).map(mapMember)
@@ -149,7 +151,7 @@ onMounted(async () => {
           <Tag :value="member.role" :severity="roleSeverity(member.role)" />
         </template>
       </Column>
-      <Column header="Remove">
+      <Column v-if="canAdmin" header="Remove">
         <template #body="{ data: member }">
           <Button
             icon="pi pi-trash"
@@ -172,16 +174,16 @@ onMounted(async () => {
       <Column header="Role">
         <template #body><Skeleton width="4rem" /></template>
       </Column>
-      <Column header="Remove">
+      <Column v-if="canAdmin" header="Remove">
         <template #body><Skeleton width="2rem" /></template>
       </Column>
     </DataTable>
 
-    <div style="margin-top: 0.75rem">
+    <div v-if="canAdmin" style="margin-top: 0.75rem">
       <Button label="Add Member" icon="pi pi-plus" size="small" @click="showAddDialog = true" />
     </div>
 
-    <Dialog v-model:visible="showAddDialog" header="Add Member" modal :style="{ width: '28rem' }">
+    <Dialog v-if="canAdmin" v-model:visible="showAddDialog" header="Add Member" modal :style="{ width: '28rem' }">
       <div style="display: flex; flex-direction: column; gap: 1rem; padding-top: 0.5rem">
         <div style="display: flex; flex-direction: column; gap: 0.25rem">
           <label for="member-user">User</label>

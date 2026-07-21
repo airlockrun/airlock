@@ -249,6 +249,66 @@ func (q *Queries) GetAgentByID(ctx context.Context, id pgtype.UUID) (Agent, erro
 	return i, err
 }
 
+const getAgentByIDForUpdate = `-- name: GetAgentByIDForUpdate :one
+SELECT id, owner_principal_id, slug, name, description, status, upgrade_status, auto_fix, build_provider_id, build_model, exec_provider_id, exec_model, stt_provider_id, stt_model, vision_provider_id, vision_model, tts_provider_id, tts_model, image_gen_provider_id, image_gen_model, embedding_provider_id, embedding_model, search_provider_id, search_model, source_ref, image_ref, db_schema, db_password, sdk_version, config, instructions, error_message, created_at, updated_at, mcp_enabled, allow_public_mcp, allow_public_routes, tools_hash, emoji, allow_oauth_mcp_prompt, allow_public_mcp_prompt, git_remote_url, git_mode, git_credential_id, git_default_branch, git_webhook_secret, git_last_synced_ref, agent_token_version FROM agents WHERE id = $1 FOR UPDATE
+`
+
+func (q *Queries) GetAgentByIDForUpdate(ctx context.Context, id pgtype.UUID) (Agent, error) {
+	row := q.db.QueryRow(ctx, getAgentByIDForUpdate, id)
+	var i Agent
+	err := row.Scan(
+		&i.ID,
+		&i.OwnerPrincipalID,
+		&i.Slug,
+		&i.Name,
+		&i.Description,
+		&i.Status,
+		&i.UpgradeStatus,
+		&i.AutoFix,
+		&i.BuildProviderID,
+		&i.BuildModel,
+		&i.ExecProviderID,
+		&i.ExecModel,
+		&i.SttProviderID,
+		&i.SttModel,
+		&i.VisionProviderID,
+		&i.VisionModel,
+		&i.TtsProviderID,
+		&i.TtsModel,
+		&i.ImageGenProviderID,
+		&i.ImageGenModel,
+		&i.EmbeddingProviderID,
+		&i.EmbeddingModel,
+		&i.SearchProviderID,
+		&i.SearchModel,
+		&i.SourceRef,
+		&i.ImageRef,
+		&i.DbSchema,
+		&i.DbPassword,
+		&i.SdkVersion,
+		&i.Config,
+		&i.Instructions,
+		&i.ErrorMessage,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.McpEnabled,
+		&i.AllowPublicMcp,
+		&i.AllowPublicRoutes,
+		&i.ToolsHash,
+		&i.Emoji,
+		&i.AllowOauthMcpPrompt,
+		&i.AllowPublicMcpPrompt,
+		&i.GitRemoteUrl,
+		&i.GitMode,
+		&i.GitCredentialID,
+		&i.GitDefaultBranch,
+		&i.GitWebhookSecret,
+		&i.GitLastSyncedRef,
+		&i.AgentTokenVersion,
+	)
+	return i, err
+}
+
 const getAgentBySlug = `-- name: GetAgentBySlug :one
 SELECT id, owner_principal_id, slug, name, description, status, upgrade_status, auto_fix, build_provider_id, build_model, exec_provider_id, exec_model, stt_provider_id, stt_model, vision_provider_id, vision_model, tts_provider_id, tts_model, image_gen_provider_id, image_gen_model, embedding_provider_id, embedding_model, search_provider_id, search_model, source_ref, image_ref, db_schema, db_password, sdk_version, config, instructions, error_message, created_at, updated_at, mcp_enabled, allow_public_mcp, allow_public_routes, tools_hash, emoji, allow_oauth_mcp_prompt, allow_public_mcp_prompt, git_remote_url, git_mode, git_credential_id, git_default_branch, git_webhook_secret, git_last_synced_ref, agent_token_version FROM agents WHERE slug = $1
 `
@@ -609,6 +669,30 @@ func (q *Queries) ListRebuildableAgents(ctx context.Context) ([]Agent, error) {
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const lockAgentsByID = `-- name: LockAgentsByID :many
+SELECT id FROM agents WHERE id = ANY ($1::uuid[]) ORDER BY id FOR UPDATE
+`
+
+func (q *Queries) LockAgentsByID(ctx context.Context, ids []pgtype.UUID) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, lockAgentsByID, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []pgtype.UUID{}
+	for rows.Next() {
+		var id pgtype.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

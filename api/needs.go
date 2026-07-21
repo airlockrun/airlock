@@ -60,9 +60,27 @@ func (h *NeedsHandler) ListCandidates(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]*airlockv1.CandidateInfo, len(cands))
 	for i, c := range cands {
-		out[i] = &airlockv1.CandidateInfo{ResourceId: c.ResourceID.String(), Name: c.Name, Slug: c.Slug}
+		out[i] = &airlockv1.CandidateInfo{
+			ResourceId: c.ResourceID.String(), Name: c.Name, DisplayName: c.DisplayName, Slug: c.Slug,
+			Readiness: c.Readiness, Authorized: c.Authorized, Configured: c.Configured,
+			AgentCount: c.AgentCount, RequiredScopes: c.Required, MissingScopes: c.Missing, Capabilities: c.Capabilities,
+		}
 	}
 	writeProto(w, http.StatusOK, &airlockv1.ListCandidatesResponse{Candidates: out})
+}
+
+// UnbindNeed handles DELETE /api/v1/agents/{agentID}/needs/{type}/{slug}/bind.
+func (h *NeedsHandler) UnbindNeed(w http.ResponseWriter, r *http.Request) {
+	agentID, err := uuid.Parse(chi.URLParam(r, "agentID"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid agent ID")
+		return
+	}
+	if err := h.svc.Unbind(r.Context(), principalFromRequest(r), agentID, chi.URLParam(r, "type"), chi.URLParam(r, "slug")); err != nil {
+		writeServiceError(w, err, "failed to unbind resource")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // BindNeed handles POST /api/v1/agents/{agentID}/needs/{type}/{slug}/bind.
@@ -96,7 +114,12 @@ func (h *NeedsHandler) CreateForNeed(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid agent ID")
 		return
 	}
-	id, err := h.svc.CreateResourceForNeed(r.Context(), principalFromRequest(r), agentID, chi.URLParam(r, "type"), chi.URLParam(r, "slug"))
+	req := &airlockv1.CreateForNeedRequest{}
+	if err := decodeProto(r, req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	id, err := h.svc.CreateResourceForNeed(r.Context(), principalFromRequest(r), agentID, chi.URLParam(r, "type"), chi.URLParam(r, "slug"), req.DisplayName)
 	if err != nil {
 		writeServiceError(w, err, "failed to create resource")
 		return

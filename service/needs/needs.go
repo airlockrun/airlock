@@ -12,9 +12,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 
 	"github.com/airlockrun/airlock/authz"
 	"github.com/airlockrun/airlock/db/dbq"
+	"github.com/airlockrun/airlock/oauth"
 	"github.com/airlockrun/airlock/service"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -30,14 +32,21 @@ func jsonOr(b json.RawMessage) []byte {
 	return b
 }
 
+func resourceSlug(id uuid.UUID) string {
+	return "res-" + strings.ReplaceAll(id.String(), "-", "")
+}
+
 // CreateForNeed instantiates the resource an agent's need declares — from the
 // need's frozen spec — as a NEW resource owned by p, and binds it to the need.
-// Idempotent: if the need is already bound it returns the bound resource id
-// without creating anything. Callers authorize before calling; this is the pure
-// provisioning step shared by lazy create-on-configure and the explicit
-// "set up a new resource" action.
-func CreateForNeed(ctx context.Context, q *dbq.Queries, p authz.Principal, agentID uuid.UUID, typ, slug string) (uuid.UUID, error) {
-	need, err := q.GetResourceNeed(ctx, dbq.GetResourceNeedParams{AgentID: pg(agentID), Type: typ, Slug: slug})
+// Unless createNew is set, an existing binding is targeted. createNew always
+// instantiates a UUID-named resource and replaces the binding for non-OAuth
+// resources; OAuth resources stay provisional until callback succeeds.
+func CreateForNeed(ctx context.Context, q *dbq.Queries, p authz.Principal, agentID uuid.UUID, typ, slug, displayName string, createNew bool) (uuid.UUID, error) {
+	displayName = strings.TrimSpace(displayName)
+	if createNew && displayName == "" {
+		return uuid.Nil, service.Detail(service.ErrInvalidInput, "display name is required")
+	}
+	need, err := q.GetResourceNeedForUpdate(ctx, dbq.GetResourceNeedForUpdateParams{AgentID: pg(agentID), Type: typ, Slug: slug})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return uuid.Nil, service.Detail(service.ErrNotFound, "resource %q not declared by the agent", slug)
@@ -45,10 +54,17 @@ func CreateForNeed(ctx context.Context, q *dbq.Queries, p authz.Principal, agent
 		return uuid.Nil, err
 	}
 	owner := pg(p.UserID)
+	id := uuid.New()
+	concreteSlug := resourceSlug(id)
 	switch typ {
 	case "connection":
-		if need.BoundConnectionID.Valid {
+		if need.BoundConnectionID.Valid && !createNew {
 			return uuid.UUID(need.BoundConnectionID.Bytes), nil
+		}
+		if provisional, err := q.GetProvisionalConnectionForNeedOwner(ctx, dbq.GetProvisionalConnectionForNeedOwnerParams{NeedID: need.ID, OwnerPrincipalID: owner}); err == nil {
+			return uuid.UUID(provisional.ID.Bytes), nil
+		} else if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return uuid.Nil, err
 		}
 		var spec struct {
 			Name              string          `json:"name"`
@@ -65,28 +81,55 @@ func CreateForNeed(ctx context.Context, q *dbq.Queries, p authz.Principal, agent
 			SetupInstructions string          `json:"setup_instructions"`
 		}
 		_ = json.Unmarshal(need.Spec, &spec)
-		conn, err := q.UpsertConnection(ctx, dbq.UpsertConnectionParams{
-			AgentID: pg(agentID), Slug: slug, Name: spec.Name, Description: need.Description, LlmHint: spec.LLMHint,
+		if displayName == "" && !createNew {
+			displayName = strings.TrimSpace(spec.Name)
+			if displayName == "" {
+				displayName = strings.TrimSpace(need.Description)
+			}
+			if displayName == "" {
+				displayName = slug
+			}
+		}
+		if displayName == "" {
+			return uuid.Nil, service.Detail(service.ErrInvalidInput, "display name is required")
+		}
+		lifecycle := "active"
+		var provisionalNeedID pgtype.UUID
+		if spec.AuthMode == "oauth" {
+			lifecycle = "provisional"
+			provisionalNeedID = need.ID
+		}
+		conn, err := q.CreateConnection(ctx, dbq.CreateConnectionParams{
+			ID: pg(id), OwnerPrincipalID: owner, Slug: concreteSlug, Name: spec.Name, DisplayName: displayName, Description: need.Description, LlmHint: spec.LLMHint,
 			AuthMode: spec.AuthMode, AuthUrl: spec.AuthURL, TokenUrl: spec.TokenURL, BaseUrl: spec.BaseURL,
-			Scopes: spec.Scopes, AuthInjection: jsonOr(spec.AuthInjection), SetupInstructions: spec.SetupInstructions,
+			Scopes: oauth.CanonicalScopes(spec.Scopes), AuthInjection: jsonOr(spec.AuthInjection), SetupInstructions: spec.SetupInstructions,
 			Config: []byte("{}"), AuthParams: jsonOr(spec.AuthParams), Headers: jsonOr(spec.Headers), Access: spec.Access,
+			Lifecycle: lifecycle, ProvisionalNeedID: provisionalNeedID,
 		})
+		if errors.Is(err, pgx.ErrNoRows) && provisionalNeedID.Valid {
+			conn, err = q.GetProvisionalConnectionForNeedOwner(ctx, dbq.GetProvisionalConnectionForNeedOwnerParams{NeedID: need.ID, OwnerPrincipalID: owner})
+		}
 		if err != nil {
 			return uuid.Nil, err
 		}
-		if p.UserID != uuid.Nil {
-			if err := q.UpdateConnectionOwnerByID(ctx, dbq.UpdateConnectionOwnerByIDParams{ID: conn.ID, OwnerPrincipalID: owner}); err != nil {
-				return uuid.Nil, err
-			}
+		if lifecycle == "provisional" {
+			return uuid.UUID(conn.ID.Bytes), nil
 		}
-		if err := q.BindConnectionNeed(ctx, dbq.BindConnectionNeedParams{AgentID: pg(agentID), Slug: slug, ResourceID: conn.ID}); err != nil {
+		if affected, err := q.ReplaceConnectionNeedBinding(ctx, dbq.ReplaceConnectionNeedBindingParams{NeedID: need.ID, ResourceID: conn.ID, ExpectedResourceID: need.BoundConnectionID}); err != nil {
 			return uuid.Nil, err
+		} else if affected != 1 {
+			return uuid.Nil, service.ErrNotFound
 		}
 		return uuid.UUID(conn.ID.Bytes), nil
 
 	case "mcp_server":
-		if need.BoundMcpID.Valid {
+		if need.BoundMcpID.Valid && !createNew {
 			return uuid.UUID(need.BoundMcpID.Bytes), nil
+		}
+		if provisional, err := q.GetProvisionalMCPServerForNeedOwner(ctx, dbq.GetProvisionalMCPServerForNeedOwnerParams{NeedID: need.ID, OwnerPrincipalID: owner}); err == nil {
+			return uuid.UUID(provisional.ID.Bytes), nil
+		} else if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return uuid.Nil, err
 		}
 		var spec struct {
 			Name          string          `json:"name"`
@@ -99,27 +142,58 @@ func CreateForNeed(ctx context.Context, q *dbq.Queries, p authz.Principal, agent
 			Access        string          `json:"access"`
 		}
 		_ = json.Unmarshal(need.Spec, &spec)
-		srv, err := q.UpsertMCPServer(ctx, dbq.UpsertMCPServerParams{
-			AgentID: pg(agentID), Slug: slug, Name: spec.Name, Url: spec.URL, AuthMode: spec.AuthMode,
-			AuthUrl: spec.AuthURL, TokenUrl: spec.TokenURL, RegistrationEndpoint: "", Scopes: spec.Scopes,
+		if displayName == "" && !createNew {
+			displayName = strings.TrimSpace(spec.Name)
+			if displayName == "" {
+				displayName = strings.TrimSpace(need.Description)
+			}
+			if displayName == "" {
+				displayName = slug
+			}
+		}
+		if displayName == "" {
+			return uuid.Nil, service.Detail(service.ErrInvalidInput, "display name is required")
+		}
+		lifecycle := "active"
+		var provisionalNeedID pgtype.UUID
+		if spec.AuthMode == "oauth" || spec.AuthMode == "oauth_discovery" {
+			lifecycle = "provisional"
+			provisionalNeedID = need.ID
+		}
+		srv, err := q.CreateMCPServer(ctx, dbq.CreateMCPServerParams{
+			ID: pg(id), OwnerPrincipalID: owner, Slug: concreteSlug, Name: spec.Name, DisplayName: displayName, Url: spec.URL, AuthMode: spec.AuthMode,
+			AuthUrl: spec.AuthURL, TokenUrl: spec.TokenURL, RegistrationEndpoint: "", Scopes: oauth.CanonicalScopes(spec.Scopes),
 			Access: spec.Access, AuthInjection: jsonOr(spec.AuthInjection),
+			Lifecycle: lifecycle, ProvisionalNeedID: provisionalNeedID,
 		})
+		if errors.Is(err, pgx.ErrNoRows) && provisionalNeedID.Valid {
+			srv, err = q.GetProvisionalMCPServerForNeedOwner(ctx, dbq.GetProvisionalMCPServerForNeedOwnerParams{NeedID: need.ID, OwnerPrincipalID: owner})
+		}
 		if err != nil {
 			return uuid.Nil, err
 		}
-		if p.UserID != uuid.Nil {
-			if err := q.UpdateMCPServerOwnerByID(ctx, dbq.UpdateMCPServerOwnerByIDParams{ID: srv.ID, OwnerPrincipalID: owner}); err != nil {
-				return uuid.Nil, err
-			}
+		if lifecycle == "provisional" {
+			return uuid.UUID(srv.ID.Bytes), nil
 		}
-		if err := q.BindMCPServerNeed(ctx, dbq.BindMCPServerNeedParams{AgentID: pg(agentID), Slug: slug, ResourceID: srv.ID}); err != nil {
+		if affected, err := q.ReplaceMCPServerNeedBinding(ctx, dbq.ReplaceMCPServerNeedBindingParams{NeedID: need.ID, ResourceID: srv.ID, ExpectedResourceID: need.BoundMcpID}); err != nil {
 			return uuid.Nil, err
+		} else if affected != 1 {
+			return uuid.Nil, service.ErrNotFound
 		}
 		return uuid.UUID(srv.ID.Bytes), nil
 
 	case "exec_endpoint":
-		if need.BoundExecID.Valid {
+		if need.BoundExecID.Valid && !createNew {
 			return uuid.UUID(need.BoundExecID.Bytes), nil
+		}
+		if displayName == "" && !createNew {
+			displayName = strings.TrimSpace(need.Description)
+			if displayName == "" {
+				displayName = slug
+			}
+		}
+		if displayName == "" {
+			return uuid.Nil, service.Detail(service.ErrInvalidInput, "display name is required")
 		}
 		var spec struct {
 			LLMHint string `json:"llm_hint"`
@@ -130,19 +204,16 @@ func CreateForNeed(ctx context.Context, q *dbq.Queries, p authz.Principal, agent
 		if access == "" {
 			access = "admin"
 		}
-		ep, err := q.UpsertExecEndpointDeclaration(ctx, dbq.UpsertExecEndpointDeclarationParams{
-			AgentID: pg(agentID), Slug: slug, Description: need.Description, LlmHint: spec.LLMHint, Access: access,
+		ep, err := q.CreateExecEndpoint(ctx, dbq.CreateExecEndpointParams{
+			ID: pg(id), OwnerPrincipalID: owner, Slug: concreteSlug, DisplayName: displayName, Description: need.Description, LlmHint: spec.LLMHint, Access: access,
 		})
 		if err != nil {
 			return uuid.Nil, err
 		}
-		if p.UserID != uuid.Nil {
-			if err := q.UpdateExecEndpointOwnerByID(ctx, dbq.UpdateExecEndpointOwnerByIDParams{ID: ep.ID, OwnerPrincipalID: owner}); err != nil {
-				return uuid.Nil, err
-			}
-		}
-		if err := q.BindExecEndpointNeed(ctx, dbq.BindExecEndpointNeedParams{AgentID: pg(agentID), Slug: slug, ResourceID: ep.ID}); err != nil {
+		if affected, err := q.ReplaceExecEndpointNeedBinding(ctx, dbq.ReplaceExecEndpointNeedBindingParams{NeedID: need.ID, ResourceID: ep.ID, ExpectedResourceID: need.BoundExecID}); err != nil {
 			return uuid.Nil, err
+		} else if affected != 1 {
+			return uuid.Nil, service.ErrNotFound
 		}
 		return uuid.UUID(ep.ID.Bytes), nil
 

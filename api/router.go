@@ -160,7 +160,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	gitWebhookHandler := NewGitWebhookHandler(cfg.DB, cfg.BuildService, cfg.Secrets, cfg.Logger.Named("git-webhook"))
 	usersHandler := NewUsersHandler(cfg.DB, userssvc.New(cfg.DB, cfg.BridgeManager, cfg.Logger.Named("users")))
 	grantsHandler := NewGrantsHandler(grantssvc.New(cfg.DB, cfg.Logger.Named("grants")))
-	needsHandler := NewNeedsHandler(needssvc.NewService(cfg.DB, cfg.Logger.Named("needs")))
+	needsHandler := NewNeedsHandler(needssvc.NewService(cfg.DB, cfg.Dispatcher.RefreshAgent, cfg.Logger.Named("needs")))
 	resourcesHandler := NewResourcesHandler(resourcessvc.New(cfg.DB, cfg.Logger.Named("resources")))
 	usageHandler := NewUsageHandler(usagesvc.New(cfg.DB, cfg.Logger.Named("usage")))
 	settingsSvc := settingssvc.New(cfg.DB, catalogsvc.New(cfg.DB, cfg.Logger.Named("settings-catalog")), cfg.Logger.Named("settings"))
@@ -345,15 +345,18 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		r.Get("/agents/{agentID}/needs", needsHandler.ListNeeds)
 		r.Get("/agents/{agentID}/needs/{type}/{slug}/candidates", needsHandler.ListCandidates)
 		r.Post("/agents/{agentID}/needs/{type}/{slug}/bind", needsHandler.BindNeed)
+		r.Delete("/agents/{agentID}/needs/{type}/{slug}/bind", needsHandler.UnbindNeed)
 		r.Post("/agents/{agentID}/needs/{type}/{slug}/create", needsHandler.CreateForNeed)
 
 		// Resource grants — sharing a user-owned resource. Authorized by the
-		// manage/view capability on the resource (in the service), so no tenant
+		// manage capability on the resource (in the service), so no tenant
 		// middleware here.
 		r.Get("/resources", resourcesHandler.List)
 		r.Get("/usage", usageHandler.Get)
 		r.Post("/resources/{type}/{id}/revoke", resourcesHandler.Revoke)
+		r.Patch("/resources/{type}/{id}", resourcesHandler.Rename)
 		r.Delete("/resources/{type}/{id}", resourcesHandler.Delete)
+		r.Get("/resources/{type}/{id}/consumers", resourcesHandler.Consumers)
 		r.Get("/resources/{type}/{id}/grants", grantsHandler.ListResourceGrants)
 		r.Post("/resources/{type}/{id}/grants", grantsHandler.GrantResource)
 		r.Delete("/resources/{type}/{id}/grants/{grantID}", grantsHandler.RevokeResourceGrant)
@@ -375,6 +378,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		// Credential management
 		r.Post("/credentials/oauth/start", credH.OAuthStart)
 		r.Post("/credentials/mcp/oauth/start", credH.MCPOAuthStart)
+		r.Post("/resource-authorizations/start", credH.StartAuthorizationForNeed)
 
 		// Agent management (Phase 6)
 		agH := newAgentsHandler(

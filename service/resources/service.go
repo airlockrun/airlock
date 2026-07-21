@@ -1,37 +1,44 @@
-// Package resources owns the per-user, owner-scoped view of the sluggable
-// proxy resources (connections, MCP servers, exec endpoints): the list of
-// resources a principal owns, across all of their agents, with how many agents
-// currently bind each one. It is read-only — resources are created and
-// credentialed from an agent's needs (see service/needs); this surface is the
-// owner's inventory, the connection/exec analogue of the git-credentials list.
+// Package resources owns the per-user inventory and management surface for
+// reusable connections, MCP servers, and exec endpoints.
 package resources
 
 import (
 	"context"
-	"errors"
+	"strings"
 
 	"github.com/airlockrun/airlock/authz"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/airlockrun/airlock/service"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"
 )
 
-// Resource is the wire shape for one owned resource. No secret material is
-// carried — only what the owner inventory renders.
+// Resource is one resource available to the caller through ownership or a
+// grant. It carries no secret material.
 type Resource struct {
-	ID         uuid.UUID
-	Type       string // connection | mcp_server | exec_endpoint
-	Slug       string
-	Name       string
-	AuthMode   string
-	Authorized bool
-	AgentCount int32
-	CreatedAt  pgtype.Timestamptz
-	LastUsedAt pgtype.Timestamptz
+	ID           uuid.UUID
+	Type         string // connection | mcp_server | exec_endpoint
+	Slug         string
+	Name         string
+	DisplayName  string
+	AuthMode     string
+	Authorized   bool
+	AgentCount   int32
+	Capabilities []string
+	CreatedAt    pgtype.Timestamptz
+	LastUsedAt   pgtype.Timestamptz
+}
+
+// Consumer identifies an agent need bound to a resource.
+type Consumer struct {
+	AgentID        uuid.UUID
+	AgentName      string
+	AgentSlug      string
+	NeedType       string
+	NeedSlug       string
+	CanAccessAgent bool
 }
 
 type Service struct {
@@ -49,59 +56,53 @@ func New(d *db.DB, logger *zap.Logger) *Service {
 	return &Service{db: d, logger: logger}
 }
 
-// List returns every connection / MCP server / exec endpoint owned by the
-// caller's grantee set, with the agent-bind count for each. Self-scoped: the
-// owner filter is the caller's own grantee set, so there is no cross-owner
-// exposure and no agent-axis gate.
+// List returns resources available through ownership or a resource grant and
+// exposes the caller's capabilities on each one.
 func (s *Service) List(ctx context.Context, p authz.Principal) ([]Resource, error) {
-	if !p.IsAuthenticatedUser() {
-		return nil, service.ErrUnauthorized
-	}
-	owners := ownerSet(p)
 	q := dbq.New(s.db.Pool())
-
-	conns, err := q.ListOwnedConnections(ctx, owners)
-	if err != nil {
-		s.logger.Error("list owned connections failed", zap.Error(err))
+	if err := authz.Authorize(ctx, q, p, authz.ResourceInventoryView, uuid.Nil); err != nil {
 		return nil, err
 	}
-	mcps, err := q.ListOwnedMCPServers(ctx, owners)
+	principals := principalSet(p)
+	conns, err := q.ListAvailableConnections(ctx, principals)
 	if err != nil {
-		s.logger.Error("list owned MCP servers failed", zap.Error(err))
+		s.logger.Error("list available connections failed", zap.Error(err))
 		return nil, err
 	}
-	execs, err := q.ListOwnedExecEndpoints(ctx, owners)
+	mcps, err := q.ListAvailableMCPServers(ctx, principals)
 	if err != nil {
-		s.logger.Error("list owned exec endpoints failed", zap.Error(err))
+		s.logger.Error("list available MCP servers failed", zap.Error(err))
+		return nil, err
+	}
+	execs, err := q.ListAvailableExecEndpoints(ctx, principals)
+	if err != nil {
+		s.logger.Error("list available exec endpoints failed", zap.Error(err))
 		return nil, err
 	}
 
 	out := make([]Resource, 0, len(conns)+len(mcps)+len(execs))
 	for _, c := range conns {
 		out = append(out, Resource{
-			ID: uuid.UUID(c.ID.Bytes), Type: "connection", Slug: c.Slug, Name: c.Name,
-			AuthMode: c.AuthMode, Authorized: c.Authorized, AgentCount: c.AgentCount, CreatedAt: c.CreatedAt,
+			ID: uuid.UUID(c.ID.Bytes), Type: "connection", Slug: c.Slug, Name: c.Name, DisplayName: c.DisplayName,
+			AuthMode: c.AuthMode, Authorized: c.Authorized, AgentCount: c.AgentCount, Capabilities: c.Capabilities, CreatedAt: c.CreatedAt,
 		})
 	}
 	for _, m := range mcps {
 		out = append(out, Resource{
-			ID: uuid.UUID(m.ID.Bytes), Type: "mcp_server", Slug: m.Slug, Name: m.Name,
-			AuthMode: m.AuthMode, Authorized: m.Authorized, AgentCount: m.AgentCount, CreatedAt: m.CreatedAt,
+			ID: uuid.UUID(m.ID.Bytes), Type: "mcp_server", Slug: m.Slug, Name: m.Name, DisplayName: m.DisplayName,
+			AuthMode: m.AuthMode, Authorized: m.Authorized, AgentCount: m.AgentCount, Capabilities: m.Capabilities, CreatedAt: m.CreatedAt,
 		})
 	}
 	for _, e := range execs {
 		out = append(out, Resource{
-			ID: uuid.UUID(e.ID.Bytes), Type: "exec_endpoint", Slug: e.Slug, Name: e.Slug,
-			Authorized: e.Configured, AgentCount: e.AgentCount, CreatedAt: e.CreatedAt, LastUsedAt: e.LastUsedAt,
+			ID: uuid.UUID(e.ID.Bytes), Type: "exec_endpoint", Slug: e.Slug, Name: e.Slug, DisplayName: e.DisplayName,
+			Authorized: e.Configured, AgentCount: e.AgentCount, Capabilities: e.Capabilities, CreatedAt: e.CreatedAt, LastUsedAt: e.LastUsedAt,
 		})
 	}
 	return out, nil
 }
 
-// ownerSet maps the caller's grantee set to the owner_principal_id filter. In
-// OSS resources are user-owned, so this is effectively the caller's user id;
-// the grantee set keeps it forward-compatible with group ownership.
-func ownerSet(p authz.Principal) []pgtype.UUID {
+func principalSet(p authz.Principal) []pgtype.UUID {
 	set := p.GranteeSet()
 	out := make([]pgtype.UUID, len(set))
 	for i, id := range set {
@@ -110,77 +111,164 @@ func ownerSet(p authz.Principal) []pgtype.UUID {
 	return out
 }
 
-// requireOwner resolves the resource's owner and verifies the caller owns it
-// (its owner is in the caller's grantee set). Not-found maps to ErrNotFound; a
-// live row the caller doesn't own maps to ErrForbidden.
-func (s *Service) requireOwner(ctx context.Context, q *dbq.Queries, p authz.Principal, typ string, id uuid.UUID) error {
+// Consumers lists every agent need bound to a resource. Resource view
+// capability is required; agent membership is not, because the grant controls
+// visibility of this resource-level relationship.
+func (s *Service) Consumers(ctx context.Context, p authz.Principal, typ string, id uuid.UUID) ([]Consumer, error) {
+	q := dbq.New(s.db.Pool())
+	if err := authz.AuthorizeResource(ctx, q, p, authz.ResourceView, typ, id); err != nil {
+		return nil, err
+	}
 	pgID := pgtype.UUID{Bytes: id, Valid: true}
-	var owner pgtype.UUID
-	var err error
+	var out []Consumer
 	switch typ {
 	case "connection":
-		owner, err = q.GetConnectionOwner(ctx, pgID)
+		rows, err := q.ListConnectionConsumers(ctx, pgID)
+		if err != nil {
+			return nil, err
+		}
+		for _, row := range rows {
+			canAccess := authz.Authorize(ctx, q, p, authz.AgentGet, uuid.UUID(row.AgentID.Bytes)) == nil
+			out = append(out, Consumer{uuid.UUID(row.AgentID.Bytes), row.AgentName, row.AgentSlug, row.NeedType, row.NeedSlug, canAccess})
+		}
 	case "mcp_server":
-		owner, err = q.GetMCPServerOwner(ctx, pgID)
+		rows, err := q.ListMCPServerConsumers(ctx, pgID)
+		if err != nil {
+			return nil, err
+		}
+		for _, row := range rows {
+			canAccess := authz.Authorize(ctx, q, p, authz.AgentGet, uuid.UUID(row.AgentID.Bytes)) == nil
+			out = append(out, Consumer{uuid.UUID(row.AgentID.Bytes), row.AgentName, row.AgentSlug, row.NeedType, row.NeedSlug, canAccess})
+		}
 	case "exec_endpoint":
-		owner, err = q.GetExecEndpointOwner(ctx, pgID)
+		rows, err := q.ListExecEndpointConsumers(ctx, pgID)
+		if err != nil {
+			return nil, err
+		}
+		for _, row := range rows {
+			canAccess := authz.Authorize(ctx, q, p, authz.AgentGet, uuid.UUID(row.AgentID.Bytes)) == nil
+			out = append(out, Consumer{uuid.UUID(row.AgentID.Bytes), row.AgentName, row.AgentSlug, row.NeedType, row.NeedSlug, canAccess})
+		}
+	default:
+		return nil, service.Detail(service.ErrInvalidInput, "unknown resource type %q", typ)
+	}
+	return out, nil
+}
+
+// Rename updates a resource's non-unique user-controlled display name.
+func (s *Service) Rename(ctx context.Context, p authz.Principal, typ string, id uuid.UUID, displayName string) error {
+	tx, err := s.db.Pool().Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	q := dbq.New(s.db.Pool()).WithTx(tx)
+	if err := authz.AuthorizeResource(ctx, q, p, authz.ResourceManage, typ, id); err != nil {
+		return err
+	}
+	displayName = strings.TrimSpace(displayName)
+	if displayName == "" {
+		return service.Detail(service.ErrInvalidInput, "display name is required")
+	}
+	pgID := pgtype.UUID{Bytes: id, Valid: true}
+	var affected int64
+	switch typ {
+	case "connection":
+		affected, err = q.RenameConnection(ctx, dbq.RenameConnectionParams{ID: pgID, DisplayName: displayName})
+	case "mcp_server":
+		affected, err = q.RenameMCPServer(ctx, dbq.RenameMCPServerParams{ID: pgID, DisplayName: displayName})
+	case "exec_endpoint":
+		affected, err = q.RenameExecEndpoint(ctx, dbq.RenameExecEndpointParams{ID: pgID, DisplayName: displayName})
 	default:
 		return service.Detail(service.ErrInvalidInput, "unknown resource type %q", typ)
-	}
-	if errors.Is(err, pgx.ErrNoRows) {
-		return service.Detail(service.ErrNotFound, "resource not found")
 	}
 	if err != nil {
 		return err
 	}
-	for _, g := range p.GranteeSet() {
-		if owner.Valid && uuid.UUID(owner.Bytes) == g {
-			return nil
-		}
+	if affected != 1 {
+		return service.ErrNotFound
 	}
-	return service.Detail(service.ErrForbidden, "you do not own that resource")
+	return tx.Commit(ctx)
 }
 
-// Revoke clears the stored credentials of an owned connection or MCP server,
-// affecting every agent that binds it. Exec endpoints carry no credentials.
+// Revoke clears stored credentials. Resource manage capability is required.
 func (s *Service) Revoke(ctx context.Context, p authz.Principal, typ string, id uuid.UUID) error {
-	if !p.IsAuthenticatedUser() {
-		return service.ErrUnauthorized
+	tx, err := s.db.Pool().Begin(ctx)
+	if err != nil {
+		return err
 	}
-	q := dbq.New(s.db.Pool())
-	if err := s.requireOwner(ctx, q, p, typ, id); err != nil {
+	defer tx.Rollback(ctx)
+	q := dbq.New(s.db.Pool()).WithTx(tx)
+	if err := authz.AuthorizeResource(ctx, q, p, authz.ResourceManage, typ, id); err != nil {
 		return err
 	}
 	pgID := pgtype.UUID{Bytes: id, Valid: true}
+	var affected int64
 	switch typ {
 	case "connection":
-		return q.ClearConnectionCredentialsByID(ctx, pgID)
+		affected, err = q.ClearConnectionCredentialsByID(ctx, pgID)
 	case "mcp_server":
-		return q.ClearMCPServerCredentialsByID(ctx, pgID)
+		affected, err = q.ClearMCPServerCredentialsByID(ctx, pgID)
 	default:
 		return service.Detail(service.ErrInvalidInput, "%s resources have no credentials to revoke", typ)
 	}
+	if err != nil {
+		return err
+	}
+	if affected != 1 {
+		return service.ErrNotFound
+	}
+	return tx.Commit(ctx)
 }
 
-// Delete removes an owned resource. Its grants cascade and any binding need's
-// pointer is nulled, so dependent agents fall back to an unbound need.
+// Delete removes a resource. Grants cascade and bound needs become unbound.
 func (s *Service) Delete(ctx context.Context, p authz.Principal, typ string, id uuid.UUID) error {
-	if !p.IsAuthenticatedUser() {
-		return service.ErrUnauthorized
+	tx, err := s.db.Pool().Begin(ctx)
+	if err != nil {
+		return err
 	}
-	q := dbq.New(s.db.Pool())
-	if err := s.requireOwner(ctx, q, p, typ, id); err != nil {
+	defer tx.Rollback(ctx)
+	q := dbq.New(s.db.Pool()).WithTx(tx)
+	if err := authz.AuthorizeResource(ctx, q, p, authz.ResourceManage, typ, id); err != nil {
 		return err
 	}
 	pgID := pgtype.UUID{Bytes: id, Valid: true}
 	switch typ {
 	case "connection":
-		return q.DeleteConnectionByID(ctx, pgID)
+		if _, err := q.LockConnectionBindings(ctx, pgID); err != nil {
+			return err
+		}
 	case "mcp_server":
-		return q.DeleteMCPServerByID(ctx, pgID)
+		if _, err := q.LockMCPBindings(ctx, pgID); err != nil {
+			return err
+		}
 	case "exec_endpoint":
-		return q.DeleteExecEndpointByID(ctx, pgID)
+		if _, err := q.LockExecBindings(ctx, pgID); err != nil {
+			return err
+		}
 	default:
 		return service.Detail(service.ErrInvalidInput, "unknown resource type %q", typ)
 	}
+	if err := authz.LockResource(ctx, q, typ, id); err != nil {
+		return err
+	}
+	if err := authz.AuthorizeResource(ctx, q, p, authz.ResourceManage, typ, id); err != nil {
+		return err
+	}
+	var affected int64
+	switch typ {
+	case "connection":
+		affected, err = q.DeleteConnectionByID(ctx, pgID)
+	case "mcp_server":
+		affected, err = q.DeleteMCPServerByID(ctx, pgID)
+	case "exec_endpoint":
+		affected, err = q.DeleteExecEndpointByID(ctx, pgID)
+	}
+	if err != nil {
+		return err
+	}
+	if affected != 1 {
+		return service.ErrNotFound
+	}
+	return tx.Commit(ctx)
 }

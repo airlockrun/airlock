@@ -26,19 +26,38 @@ SELECT * FROM agent_resource_needs WHERE agent_id = @agent_id ORDER BY type, slu
 SELECT * FROM agent_resource_needs
 WHERE agent_id = @agent_id AND type = @type AND slug = @slug;
 
+-- name: GetResourceNeedForUpdate :one
+SELECT * FROM agent_resource_needs
+WHERE agent_id = @agent_id AND type = @type AND slug = @slug
+FOR UPDATE;
+
+-- name: LockResourceNeedsByAgent :many
+SELECT id FROM agent_resource_needs
+WHERE agent_id = @agent_id
+ORDER BY id
+FOR UPDATE;
+
 -- Runtime resolution: a need's slug resolves to its bound resource row. The
 -- credential proxy then keys off the resolved resource's own id/owner, never
 -- the calling agent — that is what lets one resource back many agents.
 
 -- name: ResolveBoundConnection :one
+-- scopes_verified is intentionally not consulted here. Rows migrated with an
+-- existing binding may keep using their assumed declared grant, while every
+-- new candidate/bind path requires a provider-verified grant.
 SELECT c.* FROM agent_resource_needs n
 JOIN connections c ON c.id = n.bound_connection_id
-WHERE n.agent_id = @agent_id AND n.type = 'connection' AND n.slug = @slug;
+WHERE n.agent_id = @agent_id AND n.type = 'connection' AND n.slug = @slug
+  AND c.lifecycle = 'active'
+  AND (c.auth_mode <> 'oauth' OR string_to_array(n.expected_scopes, ' ') <@ string_to_array(c.granted_scopes, ' '));
 
 -- name: ResolveBoundMCPServer :one
+-- See ResolveBoundConnection: this is the grandfathered runtime path only.
 SELECT m.* FROM agent_resource_needs n
 JOIN agent_mcp_servers m ON m.id = n.bound_mcp_id
-WHERE n.agent_id = @agent_id AND n.type = 'mcp_server' AND n.slug = @slug;
+WHERE n.agent_id = @agent_id AND n.type = 'mcp_server' AND n.slug = @slug
+  AND m.lifecycle = 'active'
+  AND (m.auth_mode NOT IN ('oauth', 'oauth_discovery') OR string_to_array(n.expected_scopes, ' ') <@ string_to_array(m.granted_scopes, ' '));
 
 -- name: ResolveBoundExecEndpoint :one
 SELECT e.* FROM agent_resource_needs n
@@ -47,19 +66,34 @@ WHERE n.agent_id = @agent_id AND n.type = 'exec_endpoint' AND n.slug = @slug;
 
 -- Binding management (operator selects/creates a resource for a need).
 
--- name: BindConnectionNeed :exec
+-- name: BindConnectionNeed :execrows
 UPDATE agent_resource_needs SET bound_connection_id = @resource_id
 WHERE agent_id = @agent_id AND type = 'connection' AND slug = @slug;
 
--- name: BindMCPServerNeed :exec
+-- name: ReplaceConnectionNeedBinding :execrows
+UPDATE agent_resource_needs SET bound_connection_id = @resource_id
+WHERE id = @need_id
+  AND bound_connection_id IS NOT DISTINCT FROM sqlc.narg(expected_resource_id)::uuid;
+
+-- name: BindMCPServerNeed :execrows
 UPDATE agent_resource_needs SET bound_mcp_id = @resource_id
 WHERE agent_id = @agent_id AND type = 'mcp_server' AND slug = @slug;
 
--- name: BindExecEndpointNeed :exec
+-- name: ReplaceMCPServerNeedBinding :execrows
+UPDATE agent_resource_needs SET bound_mcp_id = @resource_id
+WHERE id = @need_id
+  AND bound_mcp_id IS NOT DISTINCT FROM sqlc.narg(expected_resource_id)::uuid;
+
+-- name: BindExecEndpointNeed :execrows
 UPDATE agent_resource_needs SET bound_exec_id = @resource_id
 WHERE agent_id = @agent_id AND type = 'exec_endpoint' AND slug = @slug;
 
--- name: UnbindResourceNeed :exec
+-- name: ReplaceExecEndpointNeedBinding :execrows
+UPDATE agent_resource_needs SET bound_exec_id = @resource_id
+WHERE id = @need_id
+  AND bound_exec_id IS NOT DISTINCT FROM sqlc.narg(expected_resource_id)::uuid;
+
+-- name: UnbindResourceNeed :execrows
 UPDATE agent_resource_needs
 SET bound_connection_id = NULL, bound_mcp_id = NULL, bound_exec_id = NULL
 WHERE agent_id = @agent_id AND type = @type AND slug = @slug;
@@ -71,3 +105,64 @@ WHERE agent_id = @agent_id AND type = @type AND slug = @slug;
 UPDATE agent_resource_needs
 SET bound_connection_id = NULL, bound_mcp_id = NULL, bound_exec_id = NULL
 WHERE agent_id = @agent_id;
+
+-- name: ListRequiredConnectionScopes :many
+SELECT expected_scopes FROM agent_resource_needs
+WHERE bound_connection_id = @resource_id OR id = @target_need_id
+ORDER BY id;
+
+-- name: ListRequiredMCPScopes :many
+SELECT expected_scopes FROM agent_resource_needs
+WHERE bound_mcp_id = @resource_id OR id = @target_need_id
+ORDER BY id;
+
+-- OAuth transactions lock the target agent first, then these need rows by UUID,
+-- then the resource row, and finally the initiating user. The locked scope union
+-- cannot change underneath callback validation.
+-- name: LockConnectionAuthorizationNeeds :many
+SELECT * FROM agent_resource_needs
+WHERE bound_connection_id = @resource_id OR id = @target_need_id
+ORDER BY id
+FOR UPDATE;
+
+-- name: LockMCPAuthorizationNeeds :many
+SELECT * FROM agent_resource_needs
+WHERE bound_mcp_id = @resource_id OR id = @target_need_id
+ORDER BY id
+FOR UPDATE;
+
+-- name: LockQualifyingConnectionBindings :many
+SELECT n.id FROM agent_resource_needs n
+JOIN agents a ON a.id = n.agent_id
+WHERE n.bound_connection_id = @resource_id AND a.status = 'active'
+  AND string_to_array(n.expected_scopes, ' ') <@ string_to_array(@granted_scopes::text, ' ')
+ORDER BY n.id
+FOR UPDATE OF n;
+
+-- name: LockQualifyingMCPBindings :many
+SELECT n.id FROM agent_resource_needs n
+JOIN agents a ON a.id = n.agent_id
+WHERE n.bound_mcp_id = @resource_id AND a.status = 'active'
+  AND string_to_array(n.expected_scopes, ' ') <@ string_to_array(@granted_scopes::text, ' ')
+ORDER BY n.id
+FOR UPDATE OF n;
+
+-- Resource deletion takes bound need rows before the resource row so it uses
+-- the same need -> resource order as bind, callback, and token resolution.
+-- name: LockConnectionBindings :many
+SELECT id FROM agent_resource_needs
+WHERE bound_connection_id = @resource_id
+ORDER BY id
+FOR UPDATE;
+
+-- name: LockMCPBindings :many
+SELECT id FROM agent_resource_needs
+WHERE bound_mcp_id = @resource_id
+ORDER BY id
+FOR UPDATE;
+
+-- name: LockExecBindings :many
+SELECT id FROM agent_resource_needs
+WHERE bound_exec_id = @resource_id
+ORDER BY id
+FOR UPDATE;

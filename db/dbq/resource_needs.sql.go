@@ -11,7 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const bindConnectionNeed = `-- name: BindConnectionNeed :exec
+const bindConnectionNeed = `-- name: BindConnectionNeed :execrows
 
 UPDATE agent_resource_needs SET bound_connection_id = $1
 WHERE agent_id = $2 AND type = 'connection' AND slug = $3
@@ -24,12 +24,15 @@ type BindConnectionNeedParams struct {
 }
 
 // Binding management (operator selects/creates a resource for a need).
-func (q *Queries) BindConnectionNeed(ctx context.Context, arg BindConnectionNeedParams) error {
-	_, err := q.db.Exec(ctx, bindConnectionNeed, arg.ResourceID, arg.AgentID, arg.Slug)
-	return err
+func (q *Queries) BindConnectionNeed(ctx context.Context, arg BindConnectionNeedParams) (int64, error) {
+	result, err := q.db.Exec(ctx, bindConnectionNeed, arg.ResourceID, arg.AgentID, arg.Slug)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
-const bindExecEndpointNeed = `-- name: BindExecEndpointNeed :exec
+const bindExecEndpointNeed = `-- name: BindExecEndpointNeed :execrows
 UPDATE agent_resource_needs SET bound_exec_id = $1
 WHERE agent_id = $2 AND type = 'exec_endpoint' AND slug = $3
 `
@@ -40,12 +43,15 @@ type BindExecEndpointNeedParams struct {
 	Slug       string      `json:"slug"`
 }
 
-func (q *Queries) BindExecEndpointNeed(ctx context.Context, arg BindExecEndpointNeedParams) error {
-	_, err := q.db.Exec(ctx, bindExecEndpointNeed, arg.ResourceID, arg.AgentID, arg.Slug)
-	return err
+func (q *Queries) BindExecEndpointNeed(ctx context.Context, arg BindExecEndpointNeedParams) (int64, error) {
+	result, err := q.db.Exec(ctx, bindExecEndpointNeed, arg.ResourceID, arg.AgentID, arg.Slug)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
-const bindMCPServerNeed = `-- name: BindMCPServerNeed :exec
+const bindMCPServerNeed = `-- name: BindMCPServerNeed :execrows
 UPDATE agent_resource_needs SET bound_mcp_id = $1
 WHERE agent_id = $2 AND type = 'mcp_server' AND slug = $3
 `
@@ -56,9 +62,12 @@ type BindMCPServerNeedParams struct {
 	Slug       string      `json:"slug"`
 }
 
-func (q *Queries) BindMCPServerNeed(ctx context.Context, arg BindMCPServerNeedParams) error {
-	_, err := q.db.Exec(ctx, bindMCPServerNeed, arg.ResourceID, arg.AgentID, arg.Slug)
-	return err
+func (q *Queries) BindMCPServerNeed(ctx context.Context, arg BindMCPServerNeedParams) (int64, error) {
+	result, err := q.db.Exec(ctx, bindMCPServerNeed, arg.ResourceID, arg.AgentID, arg.Slug)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const deleteResourceNeedsByAgentTypeExcept = `-- name: DeleteResourceNeedsByAgentTypeExcept :exec
@@ -110,6 +119,102 @@ func (q *Queries) GetResourceNeed(ctx context.Context, arg GetResourceNeedParams
 	return i, err
 }
 
+const getResourceNeedForUpdate = `-- name: GetResourceNeedForUpdate :one
+SELECT id, agent_id, type, slug, description, setup_instructions, expected_url, expected_scopes, spec, required, bound_connection_id, bound_mcp_id, bound_exec_id, created_at FROM agent_resource_needs
+WHERE agent_id = $1 AND type = $2 AND slug = $3
+FOR UPDATE
+`
+
+type GetResourceNeedForUpdateParams struct {
+	AgentID pgtype.UUID `json:"agent_id"`
+	Type    string      `json:"type"`
+	Slug    string      `json:"slug"`
+}
+
+func (q *Queries) GetResourceNeedForUpdate(ctx context.Context, arg GetResourceNeedForUpdateParams) (AgentResourceNeed, error) {
+	row := q.db.QueryRow(ctx, getResourceNeedForUpdate, arg.AgentID, arg.Type, arg.Slug)
+	var i AgentResourceNeed
+	err := row.Scan(
+		&i.ID,
+		&i.AgentID,
+		&i.Type,
+		&i.Slug,
+		&i.Description,
+		&i.SetupInstructions,
+		&i.ExpectedUrl,
+		&i.ExpectedScopes,
+		&i.Spec,
+		&i.Required,
+		&i.BoundConnectionID,
+		&i.BoundMcpID,
+		&i.BoundExecID,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const listRequiredConnectionScopes = `-- name: ListRequiredConnectionScopes :many
+SELECT expected_scopes FROM agent_resource_needs
+WHERE bound_connection_id = $1 OR id = $2
+ORDER BY id
+`
+
+type ListRequiredConnectionScopesParams struct {
+	ResourceID   pgtype.UUID `json:"resource_id"`
+	TargetNeedID pgtype.UUID `json:"target_need_id"`
+}
+
+func (q *Queries) ListRequiredConnectionScopes(ctx context.Context, arg ListRequiredConnectionScopesParams) ([]string, error) {
+	rows, err := q.db.Query(ctx, listRequiredConnectionScopes, arg.ResourceID, arg.TargetNeedID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var expected_scopes string
+		if err := rows.Scan(&expected_scopes); err != nil {
+			return nil, err
+		}
+		items = append(items, expected_scopes)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listRequiredMCPScopes = `-- name: ListRequiredMCPScopes :many
+SELECT expected_scopes FROM agent_resource_needs
+WHERE bound_mcp_id = $1 OR id = $2
+ORDER BY id
+`
+
+type ListRequiredMCPScopesParams struct {
+	ResourceID   pgtype.UUID `json:"resource_id"`
+	TargetNeedID pgtype.UUID `json:"target_need_id"`
+}
+
+func (q *Queries) ListRequiredMCPScopes(ctx context.Context, arg ListRequiredMCPScopesParams) ([]string, error) {
+	rows, err := q.db.Query(ctx, listRequiredMCPScopes, arg.ResourceID, arg.TargetNeedID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var expected_scopes string
+		if err := rows.Scan(&expected_scopes); err != nil {
+			return nil, err
+		}
+		items = append(items, expected_scopes)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listResourceNeedsByAgent = `-- name: ListResourceNeedsByAgent :many
 SELECT id, agent_id, type, slug, description, setup_instructions, expected_url, expected_scopes, spec, required, bound_connection_id, bound_mcp_id, bound_exec_id, created_at FROM agent_resource_needs WHERE agent_id = $1 ORDER BY type, slug
 `
@@ -149,11 +254,348 @@ func (q *Queries) ListResourceNeedsByAgent(ctx context.Context, agentID pgtype.U
 	return items, nil
 }
 
+const lockConnectionAuthorizationNeeds = `-- name: LockConnectionAuthorizationNeeds :many
+SELECT id, agent_id, type, slug, description, setup_instructions, expected_url, expected_scopes, spec, required, bound_connection_id, bound_mcp_id, bound_exec_id, created_at FROM agent_resource_needs
+WHERE bound_connection_id = $1 OR id = $2
+ORDER BY id
+FOR UPDATE
+`
+
+type LockConnectionAuthorizationNeedsParams struct {
+	ResourceID   pgtype.UUID `json:"resource_id"`
+	TargetNeedID pgtype.UUID `json:"target_need_id"`
+}
+
+// OAuth transactions lock the target agent first, then these need rows by UUID,
+// then the resource row, and finally the initiating user. The locked scope union
+// cannot change underneath callback validation.
+func (q *Queries) LockConnectionAuthorizationNeeds(ctx context.Context, arg LockConnectionAuthorizationNeedsParams) ([]AgentResourceNeed, error) {
+	rows, err := q.db.Query(ctx, lockConnectionAuthorizationNeeds, arg.ResourceID, arg.TargetNeedID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []AgentResourceNeed{}
+	for rows.Next() {
+		var i AgentResourceNeed
+		if err := rows.Scan(
+			&i.ID,
+			&i.AgentID,
+			&i.Type,
+			&i.Slug,
+			&i.Description,
+			&i.SetupInstructions,
+			&i.ExpectedUrl,
+			&i.ExpectedScopes,
+			&i.Spec,
+			&i.Required,
+			&i.BoundConnectionID,
+			&i.BoundMcpID,
+			&i.BoundExecID,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const lockConnectionBindings = `-- name: LockConnectionBindings :many
+SELECT id FROM agent_resource_needs
+WHERE bound_connection_id = $1
+ORDER BY id
+FOR UPDATE
+`
+
+// Resource deletion takes bound need rows before the resource row so it uses
+// the same need -> resource order as bind, callback, and token resolution.
+func (q *Queries) LockConnectionBindings(ctx context.Context, resourceID pgtype.UUID) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, lockConnectionBindings, resourceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []pgtype.UUID{}
+	for rows.Next() {
+		var id pgtype.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const lockExecBindings = `-- name: LockExecBindings :many
+SELECT id FROM agent_resource_needs
+WHERE bound_exec_id = $1
+ORDER BY id
+FOR UPDATE
+`
+
+func (q *Queries) LockExecBindings(ctx context.Context, resourceID pgtype.UUID) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, lockExecBindings, resourceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []pgtype.UUID{}
+	for rows.Next() {
+		var id pgtype.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const lockMCPAuthorizationNeeds = `-- name: LockMCPAuthorizationNeeds :many
+SELECT id, agent_id, type, slug, description, setup_instructions, expected_url, expected_scopes, spec, required, bound_connection_id, bound_mcp_id, bound_exec_id, created_at FROM agent_resource_needs
+WHERE bound_mcp_id = $1 OR id = $2
+ORDER BY id
+FOR UPDATE
+`
+
+type LockMCPAuthorizationNeedsParams struct {
+	ResourceID   pgtype.UUID `json:"resource_id"`
+	TargetNeedID pgtype.UUID `json:"target_need_id"`
+}
+
+func (q *Queries) LockMCPAuthorizationNeeds(ctx context.Context, arg LockMCPAuthorizationNeedsParams) ([]AgentResourceNeed, error) {
+	rows, err := q.db.Query(ctx, lockMCPAuthorizationNeeds, arg.ResourceID, arg.TargetNeedID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []AgentResourceNeed{}
+	for rows.Next() {
+		var i AgentResourceNeed
+		if err := rows.Scan(
+			&i.ID,
+			&i.AgentID,
+			&i.Type,
+			&i.Slug,
+			&i.Description,
+			&i.SetupInstructions,
+			&i.ExpectedUrl,
+			&i.ExpectedScopes,
+			&i.Spec,
+			&i.Required,
+			&i.BoundConnectionID,
+			&i.BoundMcpID,
+			&i.BoundExecID,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const lockMCPBindings = `-- name: LockMCPBindings :many
+SELECT id FROM agent_resource_needs
+WHERE bound_mcp_id = $1
+ORDER BY id
+FOR UPDATE
+`
+
+func (q *Queries) LockMCPBindings(ctx context.Context, resourceID pgtype.UUID) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, lockMCPBindings, resourceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []pgtype.UUID{}
+	for rows.Next() {
+		var id pgtype.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const lockQualifyingConnectionBindings = `-- name: LockQualifyingConnectionBindings :many
+SELECT n.id FROM agent_resource_needs n
+JOIN agents a ON a.id = n.agent_id
+WHERE n.bound_connection_id = $1 AND a.status = 'active'
+  AND string_to_array(n.expected_scopes, ' ') <@ string_to_array($2::text, ' ')
+ORDER BY n.id
+FOR UPDATE OF n
+`
+
+type LockQualifyingConnectionBindingsParams struct {
+	ResourceID    pgtype.UUID `json:"resource_id"`
+	GrantedScopes string      `json:"granted_scopes"`
+}
+
+func (q *Queries) LockQualifyingConnectionBindings(ctx context.Context, arg LockQualifyingConnectionBindingsParams) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, lockQualifyingConnectionBindings, arg.ResourceID, arg.GrantedScopes)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []pgtype.UUID{}
+	for rows.Next() {
+		var id pgtype.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const lockQualifyingMCPBindings = `-- name: LockQualifyingMCPBindings :many
+SELECT n.id FROM agent_resource_needs n
+JOIN agents a ON a.id = n.agent_id
+WHERE n.bound_mcp_id = $1 AND a.status = 'active'
+  AND string_to_array(n.expected_scopes, ' ') <@ string_to_array($2::text, ' ')
+ORDER BY n.id
+FOR UPDATE OF n
+`
+
+type LockQualifyingMCPBindingsParams struct {
+	ResourceID    pgtype.UUID `json:"resource_id"`
+	GrantedScopes string      `json:"granted_scopes"`
+}
+
+func (q *Queries) LockQualifyingMCPBindings(ctx context.Context, arg LockQualifyingMCPBindingsParams) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, lockQualifyingMCPBindings, arg.ResourceID, arg.GrantedScopes)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []pgtype.UUID{}
+	for rows.Next() {
+		var id pgtype.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const lockResourceNeedsByAgent = `-- name: LockResourceNeedsByAgent :many
+SELECT id FROM agent_resource_needs
+WHERE agent_id = $1
+ORDER BY id
+FOR UPDATE
+`
+
+func (q *Queries) LockResourceNeedsByAgent(ctx context.Context, agentID pgtype.UUID) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, lockResourceNeedsByAgent, agentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []pgtype.UUID{}
+	for rows.Next() {
+		var id pgtype.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const replaceConnectionNeedBinding = `-- name: ReplaceConnectionNeedBinding :execrows
+UPDATE agent_resource_needs SET bound_connection_id = $1
+WHERE id = $2
+  AND bound_connection_id IS NOT DISTINCT FROM $3::uuid
+`
+
+type ReplaceConnectionNeedBindingParams struct {
+	ResourceID         pgtype.UUID `json:"resource_id"`
+	NeedID             pgtype.UUID `json:"need_id"`
+	ExpectedResourceID pgtype.UUID `json:"expected_resource_id"`
+}
+
+func (q *Queries) ReplaceConnectionNeedBinding(ctx context.Context, arg ReplaceConnectionNeedBindingParams) (int64, error) {
+	result, err := q.db.Exec(ctx, replaceConnectionNeedBinding, arg.ResourceID, arg.NeedID, arg.ExpectedResourceID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const replaceExecEndpointNeedBinding = `-- name: ReplaceExecEndpointNeedBinding :execrows
+UPDATE agent_resource_needs SET bound_exec_id = $1
+WHERE id = $2
+  AND bound_exec_id IS NOT DISTINCT FROM $3::uuid
+`
+
+type ReplaceExecEndpointNeedBindingParams struct {
+	ResourceID         pgtype.UUID `json:"resource_id"`
+	NeedID             pgtype.UUID `json:"need_id"`
+	ExpectedResourceID pgtype.UUID `json:"expected_resource_id"`
+}
+
+func (q *Queries) ReplaceExecEndpointNeedBinding(ctx context.Context, arg ReplaceExecEndpointNeedBindingParams) (int64, error) {
+	result, err := q.db.Exec(ctx, replaceExecEndpointNeedBinding, arg.ResourceID, arg.NeedID, arg.ExpectedResourceID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const replaceMCPServerNeedBinding = `-- name: ReplaceMCPServerNeedBinding :execrows
+UPDATE agent_resource_needs SET bound_mcp_id = $1
+WHERE id = $2
+  AND bound_mcp_id IS NOT DISTINCT FROM $3::uuid
+`
+
+type ReplaceMCPServerNeedBindingParams struct {
+	ResourceID         pgtype.UUID `json:"resource_id"`
+	NeedID             pgtype.UUID `json:"need_id"`
+	ExpectedResourceID pgtype.UUID `json:"expected_resource_id"`
+}
+
+func (q *Queries) ReplaceMCPServerNeedBinding(ctx context.Context, arg ReplaceMCPServerNeedBindingParams) (int64, error) {
+	result, err := q.db.Exec(ctx, replaceMCPServerNeedBinding, arg.ResourceID, arg.NeedID, arg.ExpectedResourceID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const resolveBoundConnection = `-- name: ResolveBoundConnection :one
 
-SELECT c.id, c.slug, c.name, c.description, c.llm_hint, c.access, c.auth_mode, c.auth_url, c.token_url, c.base_url, c.scopes, c.auth_injection, c.test_path, c.setup_instructions, c.config, c.client_id, c.client_secret, c.access_token_ref, c.refresh_token, c.token_expires_at, c.created_at, c.updated_at, c.auth_params, c.headers, c.owner_principal_id FROM agent_resource_needs n
+SELECT c.id, c.slug, c.name, c.display_name, c.description, c.llm_hint, c.access, c.auth_mode, c.auth_url, c.token_url, c.base_url, c.scopes, c.auth_injection, c.test_path, c.setup_instructions, c.config, c.client_id, c.client_secret, c.access_token_ref, c.refresh_token, c.token_expires_at, c.created_at, c.updated_at, c.auth_params, c.headers, c.owner_principal_id, c.lifecycle, c.granted_scopes, c.scopes_verified, c.authorization_revision, c.provisional_need_id, c.pending_client_id, c.pending_client_secret FROM agent_resource_needs n
 JOIN connections c ON c.id = n.bound_connection_id
 WHERE n.agent_id = $1 AND n.type = 'connection' AND n.slug = $2
+  AND c.lifecycle = 'active'
+  AND (c.auth_mode <> 'oauth' OR string_to_array(n.expected_scopes, ' ') <@ string_to_array(c.granted_scopes, ' '))
 `
 
 type ResolveBoundConnectionParams struct {
@@ -164,6 +606,9 @@ type ResolveBoundConnectionParams struct {
 // Runtime resolution: a need's slug resolves to its bound resource row. The
 // credential proxy then keys off the resolved resource's own id/owner, never
 // the calling agent — that is what lets one resource back many agents.
+// scopes_verified is intentionally not consulted here. Rows migrated with an
+// existing binding may keep using their assumed declared grant, while every
+// new candidate/bind path requires a provider-verified grant.
 func (q *Queries) ResolveBoundConnection(ctx context.Context, arg ResolveBoundConnectionParams) (Connection, error) {
 	row := q.db.QueryRow(ctx, resolveBoundConnection, arg.AgentID, arg.Slug)
 	var i Connection
@@ -171,6 +616,7 @@ func (q *Queries) ResolveBoundConnection(ctx context.Context, arg ResolveBoundCo
 		&i.ID,
 		&i.Slug,
 		&i.Name,
+		&i.DisplayName,
 		&i.Description,
 		&i.LlmHint,
 		&i.Access,
@@ -193,12 +639,19 @@ func (q *Queries) ResolveBoundConnection(ctx context.Context, arg ResolveBoundCo
 		&i.AuthParams,
 		&i.Headers,
 		&i.OwnerPrincipalID,
+		&i.Lifecycle,
+		&i.GrantedScopes,
+		&i.ScopesVerified,
+		&i.AuthorizationRevision,
+		&i.ProvisionalNeedID,
+		&i.PendingClientID,
+		&i.PendingClientSecret,
 	)
 	return i, err
 }
 
 const resolveBoundExecEndpoint = `-- name: ResolveBoundExecEndpoint :one
-SELECT e.id, e.slug, e.description, e.llm_hint, e.access, e.transport, e.host, e.port, e.ssh_user, e.private_key_ref, e.public_key_openssh, e.public_key_comment, e.host_key_openssh, e.host_key_pinned_at, e.last_used_at, e.created_at, e.updated_at, e.owner_principal_id FROM agent_resource_needs n
+SELECT e.id, e.slug, e.display_name, e.description, e.llm_hint, e.access, e.transport, e.host, e.port, e.ssh_user, e.private_key_ref, e.public_key_openssh, e.public_key_comment, e.host_key_openssh, e.host_key_pinned_at, e.last_used_at, e.created_at, e.updated_at, e.owner_principal_id FROM agent_resource_needs n
 JOIN agent_exec_endpoints e ON e.id = n.bound_exec_id
 WHERE n.agent_id = $1 AND n.type = 'exec_endpoint' AND n.slug = $2
 `
@@ -214,6 +667,7 @@ func (q *Queries) ResolveBoundExecEndpoint(ctx context.Context, arg ResolveBound
 	err := row.Scan(
 		&i.ID,
 		&i.Slug,
+		&i.DisplayName,
 		&i.Description,
 		&i.LlmHint,
 		&i.Access,
@@ -235,9 +689,11 @@ func (q *Queries) ResolveBoundExecEndpoint(ctx context.Context, arg ResolveBound
 }
 
 const resolveBoundMCPServer = `-- name: ResolveBoundMCPServer :one
-SELECT m.id, m.slug, m.name, m.access, m.url, m.auth_mode, m.auth_url, m.token_url, m.registration_endpoint, m.scopes, m.auth_injection, m.tool_schemas, m.client_id, m.client_secret, m.access_token_ref, m.refresh_token, m.token_expires_at, m.last_synced_at, m.created_at, m.updated_at, m.server_instructions, m.owner_principal_id FROM agent_resource_needs n
+SELECT m.id, m.slug, m.name, m.display_name, m.access, m.url, m.auth_mode, m.auth_url, m.token_url, m.registration_endpoint, m.scopes, m.auth_injection, m.tool_schemas, m.client_id, m.client_secret, m.access_token_ref, m.refresh_token, m.token_expires_at, m.last_synced_at, m.created_at, m.updated_at, m.server_instructions, m.owner_principal_id, m.lifecycle, m.granted_scopes, m.scopes_verified, m.authorization_revision, m.provisional_need_id, m.pending_client_id, m.pending_client_secret FROM agent_resource_needs n
 JOIN agent_mcp_servers m ON m.id = n.bound_mcp_id
 WHERE n.agent_id = $1 AND n.type = 'mcp_server' AND n.slug = $2
+  AND m.lifecycle = 'active'
+  AND (m.auth_mode NOT IN ('oauth', 'oauth_discovery') OR string_to_array(n.expected_scopes, ' ') <@ string_to_array(m.granted_scopes, ' '))
 `
 
 type ResolveBoundMCPServerParams struct {
@@ -245,6 +701,7 @@ type ResolveBoundMCPServerParams struct {
 	Slug    string      `json:"slug"`
 }
 
+// See ResolveBoundConnection: this is the grandfathered runtime path only.
 func (q *Queries) ResolveBoundMCPServer(ctx context.Context, arg ResolveBoundMCPServerParams) (AgentMcpServer, error) {
 	row := q.db.QueryRow(ctx, resolveBoundMCPServer, arg.AgentID, arg.Slug)
 	var i AgentMcpServer
@@ -252,6 +709,7 @@ func (q *Queries) ResolveBoundMCPServer(ctx context.Context, arg ResolveBoundMCP
 		&i.ID,
 		&i.Slug,
 		&i.Name,
+		&i.DisplayName,
 		&i.Access,
 		&i.Url,
 		&i.AuthMode,
@@ -271,6 +729,13 @@ func (q *Queries) ResolveBoundMCPServer(ctx context.Context, arg ResolveBoundMCP
 		&i.UpdatedAt,
 		&i.ServerInstructions,
 		&i.OwnerPrincipalID,
+		&i.Lifecycle,
+		&i.GrantedScopes,
+		&i.ScopesVerified,
+		&i.AuthorizationRevision,
+		&i.ProvisionalNeedID,
+		&i.PendingClientID,
+		&i.PendingClientSecret,
 	)
 	return i, err
 }
@@ -289,7 +754,7 @@ func (q *Queries) UnbindAllResourceNeedsByAgent(ctx context.Context, agentID pgt
 	return err
 }
 
-const unbindResourceNeed = `-- name: UnbindResourceNeed :exec
+const unbindResourceNeed = `-- name: UnbindResourceNeed :execrows
 UPDATE agent_resource_needs
 SET bound_connection_id = NULL, bound_mcp_id = NULL, bound_exec_id = NULL
 WHERE agent_id = $1 AND type = $2 AND slug = $3
@@ -301,9 +766,12 @@ type UnbindResourceNeedParams struct {
 	Slug    string      `json:"slug"`
 }
 
-func (q *Queries) UnbindResourceNeed(ctx context.Context, arg UnbindResourceNeedParams) error {
-	_, err := q.db.Exec(ctx, unbindResourceNeed, arg.AgentID, arg.Type, arg.Slug)
-	return err
+func (q *Queries) UnbindResourceNeed(ctx context.Context, arg UnbindResourceNeedParams) (int64, error) {
+	result, err := q.db.Exec(ctx, unbindResourceNeed, arg.AgentID, arg.Type, arg.Slug)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const upsertResourceNeed = `-- name: UpsertResourceNeed :exec

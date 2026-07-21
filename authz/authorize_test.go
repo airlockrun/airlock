@@ -44,6 +44,28 @@ func TestAuthorize_TenantAxis(t *testing.T) {
 	}
 }
 
+func TestAuthorize_AuthenticatedAxis(t *testing.T) {
+	uid := uuid.New()
+	tests := []struct {
+		name    string
+		p       Principal
+		wantErr error
+	}{
+		{"registered user", UserPrincipal(uid, auth.RoleUser), nil},
+		{"missing credentials", UserPrincipal(uuid.Nil, auth.RoleUser), apperr.ErrUnauthorized},
+		{"anonymous", AnonymousPrincipal(), apperr.ErrForbidden},
+		{"trigger", TriggerPrincipal(), apperr.ErrForbidden},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := Authorize(context.Background(), nil, tt.p, ResourceInventoryView, uuid.Nil)
+			if !errors.Is(err, tt.wantErr) {
+				t.Errorf("Authorize() = %v, want %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestAuthorizeOwnedResource(t *testing.T) {
 	owner := uuid.New()
 	other := uuid.New()

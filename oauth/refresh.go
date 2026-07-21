@@ -72,7 +72,7 @@ func (j *RefreshJob) refreshOnce(ctx context.Context) {
 		if conn.RefreshToken == "" {
 			continue
 		}
-		_, err := EnsureConnectionToken(ctx, j.db, j.encryptor, j.client, j.logger, conn.ID, refreshIfBefore)
+		_, err := RefreshConnectionTokenIfEligible(ctx, j.db, j.encryptor, j.client, j.logger, conn.ID, refreshIfBefore)
 		if err != nil && !errors.Is(err, ErrNeedsReauth) {
 			j.logger.Warn("token refresh failed",
 				zap.String("kind", "connection"),
@@ -88,7 +88,7 @@ func (j *RefreshJob) refreshOnce(ctx context.Context) {
 		if srv.RefreshToken == "" {
 			continue
 		}
-		_, err := EnsureMCPServerToken(ctx, j.db, j.encryptor, j.client, j.logger, srv.ID, refreshIfBefore)
+		_, err := RefreshMCPServerTokenIfEligible(ctx, j.db, j.encryptor, j.client, j.logger, srv.ID, refreshIfBefore)
 		if err != nil && !errors.Is(err, ErrNeedsReauth) {
 			j.logger.Warn("token refresh failed",
 				zap.String("kind", "mcp"),
@@ -99,5 +99,11 @@ func (j *RefreshJob) refreshOnce(ctx context.Context) {
 	// Cleanup expired OAuth states.
 	if err := q.CleanupExpiredOAuthStates(ctx); err != nil {
 		j.logger.Error("cleanup expired oauth states failed", zap.Error(err))
+	}
+	if err := q.CleanupAbandonedProvisionalConnections(ctx); err != nil {
+		j.logger.Error("cleanup abandoned provisional connections failed", zap.Error(err))
+	}
+	if err := q.CleanupAbandonedProvisionalMCPServers(ctx); err != nil {
+		j.logger.Error("cleanup abandoned provisional MCP servers failed", zap.Error(err))
 	}
 }

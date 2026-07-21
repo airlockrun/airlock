@@ -10,9 +10,10 @@ import (
 // counters into the wire SetupCountsInfo.
 func SetupCountsToProto(c connsvc.SetupCounts) *airlockv1.SetupCountsInfo {
 	return &airlockv1.SetupCountsInfo{
-		Connections: c.Connections,
-		McpServers:  c.MCPServers,
-		EnvVars:     c.EnvVars,
+		Connections:   c.Connections,
+		McpServers:    c.MCPServers,
+		EnvVars:       c.EnvVars,
+		ExecEndpoints: c.ExecEndpoints,
 	}
 }
 

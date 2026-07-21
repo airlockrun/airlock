@@ -47,14 +47,13 @@ func (h *Handler) MCPToolCall(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusInternalServerError, "failed to get MCP server")
 		return
 	}
-
 	// Resolve credentials with on-demand refresh (see ServiceProxy): an
 	// expired token is renewed here under a row lock, so it self-heals on this
 	// call instead of waiting for the background tick. Only an unrecoverable
 	// server (no token / no refresh token / provider-revoked) returns 402.
 	var creds string
 	if server.AuthMode != string(wire.MCPAuthNone) {
-		creds, err = oauth.EnsureMCPServerToken(r.Context(), h.db, h.encryptor, h.oauthClient, h.logger, server.ID, time.Now())
+		creds, err = oauth.EnsureMCPServerToken(r.Context(), h.db, h.encryptor, h.oauthClient, h.logger, toPgUUID(agentID), slug, server.ID, time.Now())
 		switch {
 		case errors.Is(err, oauth.ErrNeedsReauth):
 			writeJSON(w, http.StatusPaymentRequired, map[string]string{

@@ -11,8 +11,8 @@ import { useAgentsStore } from '@/stores/agents'
 import { useAuthStore } from '@/stores/auth'
 import { useUsersStore } from '@/stores/users'
 import { useAgentStatus } from '@/composables/useAgentStatus'
-import type { AgentInfo } from '@/gen/airlock/v1/types_pb'
-import { GetAgentDetailResponseSchema } from '@/gen/airlock/v1/api_pb'
+import type { AgentInfo, SetupCountsInfo } from '@/gen/airlock/v1/types_pb'
+import { ConnectionSetupStatusResponseSchema, GetAgentDetailResponseSchema } from '@/gen/airlock/v1/api_pb'
 import ConnectionsTab from '@/components/agent/ConnectionsTab.vue'
 import ExecEndpointsTab from '@/components/agent/ExecEndpointsTab.vue'
 import WebhooksTab from '@/components/agent/WebhooksTab.vue'
@@ -32,6 +32,7 @@ import SectionCard from '@/components/agent/SectionCard.vue'
 import { useBuildsStore } from '@/stores/builds'
 import { buildBadgeText } from '@/utils/buildBadge'
 import { markRaw } from 'vue'
+import { oauthCallbackNotice, setupSummary } from '@/utils/resources'
 
 const route = useRoute()
 const router = useRouter()
@@ -157,7 +158,7 @@ const transferOpen = ref(false)
 const transferTarget = ref('')
 const transferring = ref(false)
 const transferUsers = computed(() =>
-  usersStore.selectable.map((u) => ({
+  usersStore.selectable.filter((u) => u.kind !== 'group').map((u) => ({
     id: u.id,
     label: u.displayName ? `${u.displayName} (${u.email})` : u.email,
   })),
@@ -259,7 +260,7 @@ const configSections = [
   { id: 'connections',    label: 'Connections',    component: markRaw(ConnectionsTab),   needsSetupKey: 'connections' as const },
   { id: 'mcp-servers',    label: 'MCP Servers',    component: markRaw(MCPServersTab),    needsSetupKey: 'mcpServers' as const },
   { id: 'env-vars',       label: 'Environment',    component: markRaw(EnvVarsTab),       needsSetupKey: 'envVars' as const },
-  { id: 'exec-endpoints', label: 'Exec Endpoints', component: markRaw(ExecEndpointsTab) },
+  { id: 'exec-endpoints', label: 'Exec Endpoints', component: markRaw(ExecEndpointsTab), needsSetupKey: 'execEndpoints' as const },
   { id: 'webhooks',       label: 'Webhooks',       component: markRaw(WebhooksTab) },
   { id: 'schedules',      label: 'Schedules',      component: markRaw(SchedulesTab) },
   { id: 'siblings',       label: 'Siblings',       component: markRaw(SiblingsTab), alwaysShow: true },
@@ -299,7 +300,7 @@ const visibleSections = computed(() =>
 function badgeFor(section: ConfigSection): string | undefined {
   const s = setupStatus.value
   if (!s || !('needsSetupKey' in section)) return undefined
-  const key = (section as { needsSetupKey?: keyof SetupStatus }).needsSetupKey
+  const key = (section as { needsSetupKey?: keyof SetupCountsInfo }).needsSetupKey
   if (!key) return undefined
   const n = s[key]
   if (typeof n !== 'number' || n <= 0) return undefined
@@ -321,27 +322,31 @@ const actionItems = computed(() => {
   //   Stopped   = status=stopped → offer Start (resumes)
   // 'failed' agents still offer Start in case the operator wants to
   // try the existing image; status flips to active on success.
-  const status = agent.value?.status ?? ''
-  const running = !!agent.value?.running
-  if (status === 'active') {
-    if (running) {
-      items.push({ label: 'Suspend', icon: 'pi pi-pause', command: () => doSuspend() })
-      items.push({ label: 'Stop', icon: 'pi pi-stop', command: () => confirmStop() })
-    } else {
+  if (isAgentAdmin.value) {
+    const status = agent.value?.status ?? ''
+    const running = !!agent.value?.running
+    if (status === 'active') {
+      if (running) {
+        items.push({ label: 'Suspend', icon: 'pi pi-pause', command: () => doSuspend() })
+        items.push({ label: 'Stop', icon: 'pi pi-stop', command: () => confirmStop() })
+      } else {
+        items.push({ label: 'Start', icon: 'pi pi-play', command: () => doStart() })
+        items.push({ label: 'Stop', icon: 'pi pi-stop', command: () => confirmStop() })
+      }
+    } else if (status === 'stopped' || status === 'failed') {
       items.push({ label: 'Start', icon: 'pi pi-play', command: () => doStart() })
-      items.push({ label: 'Stop', icon: 'pi pi-stop', command: () => confirmStop() })
     }
-  } else if (status === 'stopped' || status === 'failed') {
-    items.push({ label: 'Start', icon: 'pi pi-play', command: () => doStart() })
+    items.push({ label: 'Upgrade', icon: 'pi pi-arrow-up', command: () => doUpgrade() })
   }
-  items.push({ label: 'Upgrade', icon: 'pi pi-arrow-up', command: () => doUpgrade() })
   if (canClone.value) {
     items.push({ label: 'Clone', icon: 'pi pi-copy', command: () => openClone() })
   }
   if (canTransfer.value) {
     items.push({ label: 'Transfer ownership', icon: 'pi pi-user-edit', command: () => openTransfer() })
   }
-  items.push({ label: 'Delete', icon: 'pi pi-trash', command: () => confirmDelete() })
+  if (isAgentAdmin.value) {
+    items.push({ label: 'Delete', icon: 'pi pi-trash', command: () => confirmDelete() })
+  }
   return items
 })
 
@@ -354,26 +359,47 @@ const statusTooltip = computed(() => {
   return ''
 })
 
-interface SetupStatus {
-  connections: number
-  mcpServers: number
-  envVars: number
-}
-const setupStatus = ref<SetupStatus | null>(null)
+const setupStatus = ref<SetupCountsInfo | null>(null)
 
 async function loadSetupStatus() {
   try {
     const { data } = await api.get(`/api/v1/agents/${agentId}/setup-status`)
-    setupStatus.value = (data?.counts ?? null) as SetupStatus | null
+    setupStatus.value = fromJson(ConnectionSetupStatusResponseSchema, data).counts ?? null
   } catch {
     // Non-fatal — header just won't show the badge.
     setupStatus.value = null
   }
 }
 
-// Refresh setup-status when the page regains visibility — operator switched
-// to another tab/window and may have changed something. The single-scroll
-// layout removed the tab-switch refresh point this watch used to hook into.
+function handleOAuthCallback() {
+  const status = typeof route.query.oauth_status === 'string' ? route.query.oauth_status : ''
+  if (!status) return
+  const message = typeof route.query.message === 'string' ? route.query.message : ''
+  const resourceID = typeof route.query.resource_id === 'string' ? route.query.resource_id : ''
+  const notice = oauthCallbackNotice(status, message, resourceID)
+  toast.add({
+    severity: notice.severity,
+    summary: notice.summary,
+    detail: notice.detail,
+    life: notice.severity === 'success' ? 4500 : 8000,
+  })
+
+  const url = new URL(window.location.href)
+  url.searchParams.delete('oauth_status')
+  url.searchParams.delete('message')
+  url.searchParams.delete('resource_id')
+  history.replaceState(history.state, '', url.pathname + url.search + url.hash)
+  tabsKey.value++
+  void loadSetupStatus()
+}
+
+function onResourceMutation() {
+  tabsKey.value++
+  void loadSetupStatus()
+}
+
+// Refresh setup status when the page regains visibility because resource setup
+// may change while this tab is hidden.
 function onVisibilityChange() {
   if (document.visibilityState === 'visible') loadSetupStatus()
 }
@@ -500,20 +526,11 @@ function scrollToSection(id: string, e: Event) {
 }
 
 const setupTotal = computed(() => {
-  const s = setupStatus.value
-  if (!s) return 0
-  return (s.connections ?? 0) + (s.mcpServers ?? 0) + (s.envVars ?? 0)
+  return setupSummary(setupStatus.value).total
 })
 
 const setupTooltip = computed(() => {
-  const s = setupStatus.value
-  const total = setupTotal.value
-  if (!s || total === 0) return ''
-  const parts: string[] = []
-  if (s.connections) parts.push(`${s.connections} connection${s.connections === 1 ? '' : 's'}`)
-  if (s.mcpServers) parts.push(`${s.mcpServers} MCP server${s.mcpServers === 1 ? '' : 's'}`)
-  if (s.envVars) parts.push(`${s.envVars} env var${s.envVars === 1 ? '' : 's'}`)
-  return `${parts.join(', ')} need${total === 1 ? 's' : ''} setup`
+  return setupSummary(setupStatus.value).tooltip
 })
 
 let unsubBuild: (() => void) | null = null
@@ -547,6 +564,7 @@ onMounted(async () => {
   scheduleHashScroll(true)
   catalog.fetchConfiguredModels()
   loadSetupStatus()
+  handleOAuthCallback()
 
   // If a build is currently in progress, grab its id so the build badge can
   // link to the dedicated Build page.
@@ -816,7 +834,7 @@ function openWeb() {
       <div style="display: flex; gap: 0.5rem">
         <Button label="Chat" icon="pi pi-comments" @click="goToChat" />
         <Button v-if="webUrl" label="Web" icon="pi pi-external-link" severity="secondary" outlined @click="openWeb" />
-        <SplitButton label="Actions" :model="actionItems" severity="secondary" />
+        <SplitButton v-if="actionItems.length" label="Actions" :model="actionItems" severity="secondary" />
       </div>
     </div>
 
@@ -886,9 +904,10 @@ function openWeb() {
         <component
           :is="s.component"
           :agent-id="agentId"
-          :your-access="s.id === 'models' ? (agent?.yourAccess ?? '') : undefined"
+          :your-access="['members', 'connections', 'mcp-servers', 'exec-endpoints', 'models'].includes(s.id) ? (agent?.yourAccess ?? '') : undefined"
           v-bind="s.id === 'source' ? { agentSlug: agent?.slug ?? '' } : {}"
           @populated="onPopulated(s.id, $event)"
+          @mutated="onResourceMutation"
         />
       </SectionCard>
 

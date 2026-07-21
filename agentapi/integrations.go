@@ -34,11 +34,10 @@ func (h *Handler) RequestConnection(ctx context.Context, agentID uuid.UUID, slug
 	if err != nil {
 		return integrationservice.ConnectionResult{}, err
 	}
-
 	noAuth := conn.AuthMode == string(wire.ConnectionAuthNone)
 	var creds string
 	if !noAuth {
-		creds, err = oauth.EnsureConnectionToken(ctx, h.db, h.encryptor, h.oauthClient, h.logger, conn.ID, time.Now())
+		creds, err = oauth.EnsureConnectionToken(ctx, h.db, h.encryptor, h.oauthClient, h.logger, toPgUUID(agentID), slug, conn.ID, time.Now())
 		if errors.Is(err, oauth.ErrNeedsReauth) {
 			return integrationservice.ConnectionResult{}, service.Detail(service.ErrConflict, "connection %q needs authorization", slug)
 		}
@@ -164,7 +163,7 @@ func (h *Handler) CallMCPTool(ctx context.Context, agentID uuid.UUID, slug strin
 	}
 	var creds string
 	if server.AuthMode != string(wire.MCPAuthNone) {
-		creds, err = oauth.EnsureMCPServerToken(ctx, h.db, h.encryptor, h.oauthClient, h.logger, server.ID, time.Now())
+		creds, err = oauth.EnsureMCPServerToken(ctx, h.db, h.encryptor, h.oauthClient, h.logger, toPgUUID(agentID), slug, server.ID, time.Now())
 		if errors.Is(err, oauth.ErrNeedsReauth) {
 			return wire.MCPToolCallResponse{}, service.Detail(service.ErrConflict, "MCP server %q needs authorization", slug)
 		}

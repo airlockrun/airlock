@@ -45,13 +45,16 @@ func TestIntegration_AgentEndpointGates(t *testing.T) {
 		// member-level reads: members may read, non-members are refused.
 		{"members", "/members", http.StatusOK, http.StatusOK, http.StatusForbidden},
 		{"tools", "/tools", http.StatusOK, http.StatusOK, http.StatusForbidden},
+		{"connections", "/connections", http.StatusOK, http.StatusOK, http.StatusForbidden},
+		{"mcp-servers", "/mcp-servers", http.StatusOK, http.StatusOK, http.StatusForbidden},
+		{"exec-endpoints", "/exec-endpoints", http.StatusOK, http.StatusOK, http.StatusForbidden},
+		{"setup-status", "/setup-status", http.StatusOK, http.StatusOK, http.StatusForbidden},
 		// admin-only reads: even a 'user' member is refused. Runs span every
 		// user's runs and builds are the agent's build history — both admin-only.
 		{"runs", "/runs", http.StatusOK, http.StatusForbidden, http.StatusForbidden},
 		{"builds", "/builds", http.StatusOK, http.StatusForbidden, http.StatusForbidden},
 		{"webhooks", "/webhooks", http.StatusOK, http.StatusForbidden, http.StatusForbidden},
 		{"schedules", "/schedules", http.StatusOK, http.StatusForbidden, http.StatusForbidden},
-		{"exec-endpoints", "/exec-endpoints", http.StatusOK, http.StatusForbidden, http.StatusForbidden},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

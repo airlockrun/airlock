@@ -89,7 +89,15 @@ func (s *Service) Add(ctx context.Context, p authz.Principal, agentID, granteeID
 	if !p.IsAuthenticatedUser() {
 		return service.ErrUnauthorized
 	}
-	q := dbq.New(s.db.Pool())
+	tx, err := s.db.Pool().Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	q := dbq.New(tx)
+	if _, err := q.GetAgentByIDForUpdate(ctx, pgtype.UUID{Bytes: agentID, Valid: true}); err != nil {
+		return service.ErrNotFound
+	}
 	// Grantee must be an existing user or the built-in `user` group.
 	if granteeID != authz.GroupUser {
 		if _, err := q.GetUserByID(ctx, pgtype.UUID{Bytes: granteeID, Valid: true}); err != nil {
@@ -114,7 +122,7 @@ func (s *Service) Add(ctx context.Context, p authz.Principal, agentID, granteeID
 		s.logger.Error("add agent grant", zap.Error(err))
 		return err
 	}
-	return nil
+	return tx.Commit(ctx)
 }
 
 // ErrCannotRemoveOwner — sentinel for the one-of-a-kind 400 "cannot remove the
@@ -127,13 +135,18 @@ var ErrCannotRemoveOwner = fmt.Errorf("cannot remove agent owner: %w", service.E
 // group grantee (e.g. All users) is never the owner, so it removes like any
 // other grant.
 func (s *Service) Remove(ctx context.Context, p authz.Principal, agentID, granteeID uuid.UUID) error {
-	q := dbq.New(s.db.Pool())
-	if err := authz.Authorize(ctx, q, p, authz.AgentMembersManage, agentID); err != nil {
+	tx, err := s.db.Pool().Begin(ctx)
+	if err != nil {
 		return err
 	}
-	agent, err := q.GetAgentByID(ctx, pgtype.UUID{Bytes: agentID, Valid: true})
+	defer tx.Rollback(ctx)
+	q := dbq.New(tx)
+	agent, err := q.GetAgentByIDForUpdate(ctx, pgtype.UUID{Bytes: agentID, Valid: true})
 	if err != nil {
 		return service.ErrNotFound
+	}
+	if err := authz.Authorize(ctx, q, p, authz.AgentMembersManage, agentID); err != nil {
+		return err
 	}
 	if uuid.UUID(agent.OwnerPrincipalID.Bytes) == granteeID {
 		return ErrCannotRemoveOwner
@@ -145,7 +158,7 @@ func (s *Service) Remove(ctx context.Context, p authz.Principal, agentID, grante
 		s.logger.Error("remove agent grant", zap.Error(err))
 		return err
 	}
-	return nil
+	return tx.Commit(ctx)
 }
 
 // IsCannotRemoveOwner is a typed helper so handlers can pick the specific 400

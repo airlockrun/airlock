@@ -11,13 +11,21 @@
 -- columns (transport, host, port, ssh_user, private_key_ref, public_key_*,
 -- host_key_*) are left untouched so re-syncing a running agent does not nuke
 -- its operator config.
-INSERT INTO agent_exec_endpoints (owner_principal_id, slug, description, llm_hint, access)
-VALUES ((SELECT owner_principal_id FROM agents WHERE agents.id = @agent_id), @slug, @description, @llm_hint, @access)
+INSERT INTO agent_exec_endpoints (owner_principal_id, slug, display_name, description, llm_hint, access)
+VALUES ((SELECT owner_principal_id FROM agents WHERE agents.id = @agent_id), @slug, @display_name, @description, @llm_hint, @access)
 ON CONFLICT (owner_principal_id, slug) DO UPDATE SET
     description = EXCLUDED.description,
     llm_hint    = EXCLUDED.llm_hint,
     access      = EXCLUDED.access,
     updated_at  = now()
+RETURNING *;
+
+-- name: CreateExecEndpoint :one
+INSERT INTO agent_exec_endpoints (
+    id, owner_principal_id, slug, display_name, description, llm_hint, access
+) VALUES (
+    @id, @owner_principal_id, @slug, @display_name, @description, @llm_hint, @access
+)
 RETURNING *;
 
 -- name: ListExecNeedsByAgent :many

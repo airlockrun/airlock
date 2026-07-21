@@ -75,7 +75,7 @@ func (h *credentialHandler) SetOAuthApp(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	p := principalFromRequest(r)
-	st, err := h.svc.SetOAuthApp(r.Context(), p, agentID, slug, req.ClientId, req.ClientSecret)
+	st, err := h.svc.SetOAuthApp(r.Context(), p, agentID, slug, req.DisplayName, req.ClientId, req.ClientSecret, req.CreateNew)
 	if err != nil {
 		writeConnError(w, err, "failed to update OAuth app")
 		return
@@ -104,12 +104,43 @@ func (h *credentialHandler) OAuthStart(w http.ResponseWriter, r *http.Request) {
 	writeProto(w, http.StatusOK, &airlockv1.OAuthStartResponse{AuthorizeUrl: authURL})
 }
 
+// StartAuthorizationForNeed starts authorization for an existing candidate or
+// for the caller's hidden provisional resource.
+func (h *credentialHandler) StartAuthorizationForNeed(w http.ResponseWriter, r *http.Request) {
+	var req airlockv1.StartAuthorizationForNeedRequest
+	if err := decodeProto(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	agentID, err := parseUUID(req.AgentId)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid agent_id")
+		return
+	}
+	resourceID := uuid.Nil
+	if req.ResourceId != "" {
+		resourceID, err = parseUUID(req.ResourceId)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid resource_id")
+			return
+		}
+	}
+	started, err := h.svc.StartAuthorizationForNeed(r.Context(), principalFromRequest(r), agentID, req.Type, req.Slug, resourceID, req.DisplayName, req.RedirectUri, req.CreateNew)
+	if err != nil {
+		writeConnError(w, err, "failed to start OAuth authorization")
+		return
+	}
+	writeProto(w, http.StatusOK, &airlockv1.StartAuthorizationForNeedResponse{
+		AuthorizeUrl: started.AuthorizeURL, ResourceId: started.ResourceID.String(), Status: "authorization_started",
+	})
+}
+
 // OAuthCallback handles GET /api/v1/credentials/oauth/callback. No JWT —
 // called by the provider's redirect.
 func (h *credentialHandler) OAuthCallback(w http.ResponseWriter, r *http.Request) {
 	code := r.URL.Query().Get("code")
 	state := r.URL.Query().Get("state")
-	res, err := h.svc.OAuthCallback(r.Context(), code, state)
+	res, err := h.svc.OAuthCallback(r.Context(), code, state, r.URL.Query().Get("error"), r.URL.Query().Get("error_description"))
 	if err != nil {
 		if errors.Is(err, connsvc.ErrOAuthMissingParams) {
 			http.Error(w, "missing code or state parameter", http.StatusBadRequest)
@@ -138,7 +169,7 @@ func (h *credentialHandler) SetAPIKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := principalFromRequest(r)
-	st, err := h.svc.SetAPIKey(r.Context(), p, agentID, slug, req.ApiKey)
+	st, err := h.svc.SetAPIKey(r.Context(), p, agentID, slug, req.DisplayName, req.ApiKey, req.CreateNew)
 	if err != nil {
 		writeConnError(w, err, "failed to store API key")
 		return

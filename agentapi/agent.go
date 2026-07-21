@@ -510,29 +510,37 @@ func (h *Handler) Sync(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Upsert MCP servers, then delete stale.
+	// Resource-need mutations share the agent -> ordered need -> resource lock
+	// hierarchy with operator binding and OAuth transactions. Keeping all three
+	// declaration types in one short transaction also makes scope expansion
+	// visible atomically to runtime token checks.
+	needsTx, err := h.db.Pool().Begin(ctx)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "failed to begin resource sync")
+		return
+	}
+	defer needsTx.Rollback(ctx)
+	needsQ := dbq.New(needsTx)
+	if _, err := needsQ.GetAgentByIDForUpdate(ctx, pgAgentID); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "failed to lock agent for resource sync")
+		return
+	}
 	mcpSlugs := make([]string, len(req.MCPServers))
 	for i, mcp := range req.MCPServers {
-		scopes := ""
-		if len(mcp.Scopes) > 0 {
-			b, _ := json.Marshal(mcp.Scopes)
-			scopes = string(b)
-		}
+		scopes := oauth.CanonicalScopeSet(mcp.Scopes)
 		authInjection, err := json.Marshal(mcp.AuthInjection)
 		if err != nil {
 			writeJSONError(w, http.StatusBadRequest, "invalid auth_injection for MCP "+mcp.Slug)
 			return
 		}
-		// Record the agent's need (spec = declared template). The resource is
-		// created (owned by the configuring user) when a user configures
-		// credentials; a no-auth MCP server has no configure step, so it is
-		// auto-created + bound here. A bound resource has its declaration
-		// refreshed.
+		// Sync owns only the agent-local declaration. Resource authorization and
+		// bindings are operator-managed state and are never changed here.
 		mcpSpec, _ := json.Marshal(map[string]any{
 			"name": mcp.Name, "url": mcp.URL, "auth_mode": string(mcp.AuthMode),
 			"auth_url": mcp.AuthURL, "token_url": mcp.TokenURL, "scopes": scopes,
 			"auth_injection": json.RawMessage(authInjection), "access": string(mcp.Access),
 		})
-		if err := q.UpsertResourceNeed(ctx, dbq.UpsertResourceNeedParams{
+		if err := needsQ.UpsertResourceNeed(ctx, dbq.UpsertResourceNeedParams{
 			AgentID: pgAgentID, Type: "mcp_server", Slug: mcp.Slug,
 			Description: mcp.Name, SetupInstructions: "", ExpectedUrl: mcp.URL,
 			ExpectedScopes: scopes, Spec: mcpSpec,
@@ -541,40 +549,12 @@ func (h *Handler) Sync(w http.ResponseWriter, r *http.Request) {
 			writeJSONError(w, http.StatusInternalServerError, "failed to sync MCP servers")
 			return
 		}
-		need, nerr := q.GetResourceNeed(ctx, dbq.GetResourceNeedParams{AgentID: pgAgentID, Type: "mcp_server", Slug: mcp.Slug})
-		bound := nerr == nil && need.BoundMcpID.Valid
-		if bound || mcp.AuthMode == wire.MCPAuthNone || mcp.AuthMode == "" {
-			srv, err := q.UpsertMCPServer(ctx, dbq.UpsertMCPServerParams{
-				AgentID:       pgAgentID,
-				Slug:          mcp.Slug,
-				Name:          mcp.Name,
-				Url:           mcp.URL,
-				AuthMode:      string(mcp.AuthMode),
-				AuthUrl:       mcp.AuthURL,
-				TokenUrl:      mcp.TokenURL,
-				Scopes:        scopes,
-				Access:        string(mcp.Access),
-				AuthInjection: authInjection,
-			})
-			if err != nil {
-				h.logger.Error("upsert MCP server failed", zap.Error(err))
-				writeJSONError(w, http.StatusInternalServerError, "failed to sync MCP servers")
-				return
-			}
-			if !bound {
-				if err := q.BindMCPServerNeed(ctx, dbq.BindMCPServerNeedParams{AgentID: pgAgentID, Slug: mcp.Slug, ResourceID: srv.ID}); err != nil {
-					h.logger.Error("bind mcp need failed", zap.Error(err))
-					writeJSONError(w, http.StatusInternalServerError, "failed to sync MCP servers")
-					return
-				}
-			}
-		}
 		mcpSlugs[i] = mcp.Slug
 	}
 	// Drop needs for slugs the agent no longer declares. The backing MCP server
 	// resource is owner-owned and shared, so it is not deleted here — it outlives
 	// this agent's declaration and may back another agent's binding.
-	if err := q.DeleteResourceNeedsByAgentTypeExcept(ctx, dbq.DeleteResourceNeedsByAgentTypeExceptParams{
+	if err := needsQ.DeleteResourceNeedsByAgentTypeExcept(ctx, dbq.DeleteResourceNeedsByAgentTypeExceptParams{
 		AgentID: pgAgentID, Type: "mcp_server", Slugs: mcpSlugs,
 	}); err != nil {
 		h.logger.Error("delete stale mcp needs failed", zap.Error(err))
@@ -582,10 +562,8 @@ func (h *Handler) Sync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Connections: record the agent's need. The resource is created (owned by
-	// the configuring user) when a user first sets credentials — sync never
-	// auto-creates it. If one is already bound, refresh its declaration fields
-	// (UpsertConnection preserves the stored credentials).
+	// Connections are declarations only. A sync can make one binding unready by
+	// expanding its need scopes, but cannot mutate the shared resource.
 	connSlugs := make([]string, len(req.Connections))
 	for i, c := range req.Connections {
 		authInjection, err := json.Marshal(c.AuthInjection)
@@ -607,41 +585,15 @@ func (h *Handler) Sync(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		scopes := strings.Join(c.Scopes, ",")
-		if err := h.recordConnectionNeed(ctx, q, agentID, c.Slug, c, scopes, authInjection, authParams, headers); err != nil {
+		scopes := oauth.CanonicalScopeSet(c.Scopes)
+		if err := h.recordConnectionNeed(ctx, needsQ, agentID, c.Slug, c, scopes, authInjection, authParams, headers); err != nil {
 			h.logger.Error("record connection need failed", zap.Error(err))
 			writeJSONError(w, http.StatusInternalServerError, "failed to sync connections")
 			return
 		}
-		need, nerr := q.GetResourceNeed(ctx, dbq.GetResourceNeedParams{AgentID: pgAgentID, Type: "connection", Slug: c.Slug})
-		bound := nerr == nil && need.BoundConnectionID.Valid
-		// A bound resource gets its declaration refreshed; a no-auth connection
-		// has no configure step (no credentials to own), so it is auto-created +
-		// bound here. Credential-bearing connections wait for a user to
-		// configure, which creates the resource owned by that user.
-		if bound || c.AuthMode == wire.ConnectionAuthNone {
-			conn, err := q.UpsertConnection(ctx, dbq.UpsertConnectionParams{
-				AgentID: pgAgentID, Slug: c.Slug, Name: c.Name, Description: c.Description, LlmHint: c.LLMHint,
-				AuthMode: string(c.AuthMode), AuthUrl: c.AuthURL, TokenUrl: c.TokenURL, BaseUrl: c.BaseURL,
-				Scopes: scopes, AuthInjection: authInjection, SetupInstructions: c.SetupInstructions,
-				Config: []byte("{}"), AuthParams: authParams, Headers: headers, Access: string(c.Access),
-			})
-			if err != nil {
-				h.logger.Error("upsert connection failed", zap.Error(err))
-				writeJSONError(w, http.StatusInternalServerError, "failed to sync connections")
-				return
-			}
-			if !bound {
-				if err := q.BindConnectionNeed(ctx, dbq.BindConnectionNeedParams{AgentID: pgAgentID, Slug: c.Slug, ResourceID: conn.ID}); err != nil {
-					h.logger.Error("bind no-auth connection failed", zap.Error(err))
-					writeJSONError(w, http.StatusInternalServerError, "failed to sync connections")
-					return
-				}
-			}
-		}
 		connSlugs[i] = c.Slug
 	}
-	if err := q.DeleteResourceNeedsByAgentTypeExcept(ctx, dbq.DeleteResourceNeedsByAgentTypeExceptParams{
+	if err := needsQ.DeleteResourceNeedsByAgentTypeExcept(ctx, dbq.DeleteResourceNeedsByAgentTypeExceptParams{
 		AgentID: pgAgentID, Type: "connection", Slugs: connSlugs,
 	}); err != nil {
 		h.logger.Error("delete stale connection needs failed", zap.Error(err))
@@ -649,10 +601,8 @@ func (h *Handler) Sync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Exec endpoints: record the agent's need. The resource is created (owned
-	// by the configuring user) on first operator configure — sync never
-	// auto-creates it. If one is already bound, refresh its declaration fields
-	// (preserving the operator-configured columns).
+	// Exec endpoints are also declaration-only; operator configuration owns the
+	// concrete resource.
 	execSlugs := make([]string, len(req.ExecEndpoints))
 	for i, e := range req.ExecEndpoints {
 		access := string(e.Access)
@@ -660,7 +610,7 @@ func (h *Handler) Sync(w http.ResponseWriter, r *http.Request) {
 			access = string(agentsdk.AccessAdmin)
 		}
 		execSpec, _ := json.Marshal(map[string]any{"llm_hint": e.LLMHint, "access": access})
-		if err := q.UpsertResourceNeed(ctx, dbq.UpsertResourceNeedParams{
+		if err := needsQ.UpsertResourceNeed(ctx, dbq.UpsertResourceNeedParams{
 			AgentID: pgAgentID, Type: "exec_endpoint", Slug: e.Slug, Description: e.Description,
 			SetupInstructions: "", ExpectedUrl: "", ExpectedScopes: "", Spec: execSpec,
 		}); err != nil {
@@ -668,23 +618,17 @@ func (h *Handler) Sync(w http.ResponseWriter, r *http.Request) {
 			writeJSONError(w, http.StatusInternalServerError, "failed to sync exec endpoints")
 			return
 		}
-		need, nerr := q.GetResourceNeed(ctx, dbq.GetResourceNeedParams{AgentID: pgAgentID, Type: "exec_endpoint", Slug: e.Slug})
-		if nerr == nil && need.BoundExecID.Valid {
-			if _, err := q.UpsertExecEndpointDeclaration(ctx, dbq.UpsertExecEndpointDeclarationParams{
-				AgentID: pgAgentID, Slug: e.Slug, Description: e.Description, LlmHint: e.LLMHint, Access: access,
-			}); err != nil {
-				h.logger.Error("refresh exec declaration failed", zap.Error(err))
-				writeJSONError(w, http.StatusInternalServerError, "failed to sync exec endpoints")
-				return
-			}
-		}
 		execSlugs[i] = e.Slug
 	}
-	if err := q.DeleteResourceNeedsByAgentTypeExcept(ctx, dbq.DeleteResourceNeedsByAgentTypeExceptParams{
+	if err := needsQ.DeleteResourceNeedsByAgentTypeExcept(ctx, dbq.DeleteResourceNeedsByAgentTypeExceptParams{
 		AgentID: pgAgentID, Type: "exec_endpoint", Slugs: execSlugs,
 	}); err != nil {
 		h.logger.Error("delete stale exec needs failed", zap.Error(err))
 		writeJSONError(w, http.StatusInternalServerError, "failed to sync exec endpoints")
+		return
+	}
+	if err := needsTx.Commit(ctx); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "failed to commit resource sync")
 		return
 	}
 

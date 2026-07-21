@@ -27,6 +27,11 @@ func Authorize(ctx context.Context, q *dbq.Queries, p Principal, a Action, agent
 		panic("authz: unknown action " + string(a))
 	}
 	switch req.Axis {
+	case AxisAuthenticated:
+		if !p.IsAuthenticatedUser() {
+			return unauthenticatedOrForbidden(p)
+		}
+		return nil
 	case AxisTenant:
 		// Tenant actions require a real registered user; anonymous and
 		// trigger principals have no tenant standing.

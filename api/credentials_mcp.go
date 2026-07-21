@@ -62,7 +62,7 @@ func (h *credentialHandler) SetMCPToken(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	p := principalFromRequest(r)
-	st, err := h.svc.SetMCPToken(r.Context(), p, agentID, slug, req.ApiKey)
+	st, err := h.svc.SetMCPToken(r.Context(), p, agentID, slug, req.DisplayName, req.ApiKey, req.CreateNew)
 	if err != nil {
 		writeConnError(w, err, "failed to store token")
 		return
@@ -133,7 +133,7 @@ func (h *credentialHandler) SetMCPOAuthApp(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	p := principalFromRequest(r)
-	st, err := h.svc.SetMCPOAuthApp(r.Context(), p, agentID, slug, req.ClientId, req.ClientSecret)
+	st, err := h.svc.SetMCPOAuthApp(r.Context(), p, agentID, slug, req.DisplayName, req.ClientId, req.ClientSecret, req.CreateNew)
 	if err != nil {
 		writeConnError(w, err, "failed to update OAuth app")
 		return

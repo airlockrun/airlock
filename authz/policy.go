@@ -7,15 +7,16 @@ import (
 	"github.com/airlockrun/airlock/auth"
 )
 
-// Axis is the permission axis an action gates on. The two axes are
-// independent (see airlock/AGENTS.md "Permission Model"): agent access
-// comes from agent_grants, tenant role from the user record/JWT.
+// Axis is the permission axis an action gates on. Agent access and tenant role
+// are independent (see airlock/AGENTS.md "Permission Model"); authenticated
+// actions establish identity before a domain-specific capability check.
 type Axis int
 
 const (
-	AxisAgent       Axis = iota // requires a per-agent access level
-	AxisTenant                  // requires a tenant role
-	AxisIntegration             // agent admin or active codegen build for this agent
+	AxisAgent         Axis = iota // requires a per-agent access level
+	AxisTenant                    // requires a tenant role
+	AxisIntegration               // agent admin or active codegen build for this agent
+	AxisAuthenticated             // requires a registered user; another gate applies domain capability
 )
 
 // Requirement is the minimum access an action needs. Agent is meaningful for
@@ -87,6 +88,10 @@ const (
 	TenantIdentityManage      Action = "tenant.identity.manage"     // link / list / unlink caller's own platform identities: user+
 	TenantIdentityManageAll   Action = "tenant.identity.manage_all" // list / unlink any user's platform identities: admin
 	TenantSelfPasskeyManage   Action = "tenant.self.passkey.manage" // register / list / rename / delete the caller's own passkeys + set/remove own password: user+
+	ResourceInventoryView     Action = "resource.inventory.view"    // list resources available through ownership or grants: user+
+	ResourceView              Action = "resource.view"              // authenticated precondition; resource capability checked by AuthorizeResource
+	ResourceBind              Action = "resource.bind"              // authenticated precondition; resource capability checked by AuthorizeResource
+	ResourceManage            Action = "resource.manage"            // authenticated precondition; resource capability checked by AuthorizeResource
 	TenantGroupView           Action = "tenant.group.view"          // list groups + their grants: admin
 	TenantModelGrantManage    Action = "tenant.model_grant.manage"  // grant/revoke which (provider, model) a group may use: admin
 	TenantUsageView           Action = "tenant.usage.view"          // read the LLM spend ledger rollups (billing/usage): admin
@@ -146,6 +151,10 @@ var policy = map[Action]Requirement{
 	TenantIdentityManage:      {Axis: AxisTenant, Tenant: auth.RoleUser},
 	TenantIdentityManageAll:   {Axis: AxisTenant, Tenant: auth.RoleAdmin},
 	TenantSelfPasskeyManage:   {Axis: AxisTenant, Tenant: auth.RoleUser},
+	ResourceInventoryView:     {Axis: AxisAuthenticated},
+	ResourceView:              {Axis: AxisAuthenticated},
+	ResourceBind:              {Axis: AxisAuthenticated},
+	ResourceManage:            {Axis: AxisAuthenticated},
 	TenantGroupView:           {Axis: AxisTenant, Tenant: auth.RoleAdmin},
 	TenantModelGrantManage:    {Axis: AxisTenant, Tenant: auth.RoleAdmin},
 	TenantUsageView:           {Axis: AxisTenant, Tenant: auth.RoleAdmin},

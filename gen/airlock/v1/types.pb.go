@@ -337,14 +337,15 @@ func (x *User) GetHasPassword() bool {
 	return false
 }
 
-// UserSummary is a slim user view used for member-picker dropdowns.
+// UserSummary is a slim grantee view used for user/group picker dropdowns.
 // Returned to any authenticated user — no admin gate — so it intentionally
-// omits oidc_sub / must_change_password / role.
+// omits account security and tenant-role details.
 type UserSummary struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	Email         string                 `protobuf:"bytes,2,opt,name=email,proto3" json:"email,omitempty"`
 	DisplayName   string                 `protobuf:"bytes,3,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
+	Kind          string                 `protobuf:"bytes,4,opt,name=kind,proto3" json:"kind,omitempty"` // "user" or "group"
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -396,6 +397,13 @@ func (x *UserSummary) GetEmail() string {
 func (x *UserSummary) GetDisplayName() string {
 	if x != nil {
 		return x.DisplayName
+	}
+	return ""
+}
+
+func (x *UserSummary) GetKind() string {
+	if x != nil {
+		return x.Kind
 	}
 	return ""
 }
@@ -4516,6 +4524,7 @@ type SetupCountsInfo struct {
 	Connections   int32                  `protobuf:"varint,1,opt,name=connections,proto3" json:"connections,omitempty"`
 	McpServers    int32                  `protobuf:"varint,2,opt,name=mcp_servers,json=mcpServers,proto3" json:"mcp_servers,omitempty"`
 	EnvVars       int32                  `protobuf:"varint,3,opt,name=env_vars,json=envVars,proto3" json:"env_vars,omitempty"`
+	ExecEndpoints int32                  `protobuf:"varint,4,opt,name=exec_endpoints,json=execEndpoints,proto3" json:"exec_endpoints,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -4571,6 +4580,13 @@ func (x *SetupCountsInfo) GetEnvVars() int32 {
 	return 0
 }
 
+func (x *SetupCountsInfo) GetExecEndpoints() int32 {
+	if x != nil {
+		return x.ExecEndpoints
+	}
+	return 0
+}
+
 var File_airlock_v1_types_proto protoreflect.FileDescriptor
 
 const file_airlock_v1_types_proto_rawDesc = "" +
@@ -4600,11 +4616,12 @@ const file_airlock_v1_types_proto_rawDesc = "" +
 	"\n" +
 	"updated_at\x18\t \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x12!\n" +
 	"\fhas_password\x18\n" +
-	" \x01(\bR\vhasPassword\"V\n" +
+	" \x01(\bR\vhasPassword\"j\n" +
 	"\vUserSummary\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
 	"\x05email\x18\x02 \x01(\tR\x05email\x12!\n" +
-	"\fdisplay_name\x18\x03 \x01(\tR\vdisplayName\"\xc8\x02\n" +
+	"\fdisplay_name\x18\x03 \x01(\tR\vdisplayName\x12\x12\n" +
+	"\x04kind\x18\x04 \x01(\tR\x04kind\"\xc8\x02\n" +
 	"\bProvider\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1f\n" +
 	"\vprovider_id\x18\x02 \x01(\tR\n" +
@@ -5043,12 +5060,13 @@ const file_airlock_v1_types_proto_rawDesc = "" +
 	"durationMs\x12\x16\n" +
 	"\x06stdout\x18\x04 \x01(\tR\x06stdout\x12\x16\n" +
 	"\x06stderr\x18\x05 \x01(\tR\x06stderr\x12\x14\n" +
-	"\x05error\x18\x06 \x01(\tR\x05error\"o\n" +
+	"\x05error\x18\x06 \x01(\tR\x05error\"\x96\x01\n" +
 	"\x0fSetupCountsInfo\x12 \n" +
 	"\vconnections\x18\x01 \x01(\x05R\vconnections\x12\x1f\n" +
 	"\vmcp_servers\x18\x02 \x01(\x05R\n" +
 	"mcpServers\x12\x19\n" +
-	"\benv_vars\x18\x03 \x01(\x05R\aenvVars*o\n" +
+	"\benv_vars\x18\x03 \x01(\x05R\aenvVars\x12%\n" +
+	"\x0eexec_endpoints\x18\x04 \x01(\x05R\rexecEndpoints*o\n" +
 	"\n" +
 	"TenantRole\x12\x1b\n" +
 	"\x17TENANT_ROLE_UNSPECIFIED\x10\x00\x12\x15\n" +

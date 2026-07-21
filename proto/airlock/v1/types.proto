@@ -63,13 +63,14 @@ message User {
   bool has_password = 10;
 }
 
-// UserSummary is a slim user view used for member-picker dropdowns.
+// UserSummary is a slim grantee view used for user/group picker dropdowns.
 // Returned to any authenticated user — no admin gate — so it intentionally
-// omits oidc_sub / must_change_password / role.
+// omits account security and tenant-role details.
 message UserSummary {
   string id = 1;
   string email = 2;
   string display_name = 3;
+  string kind = 4; // "user" or "group"
 }
 
 // Provider represents a configured LLM provider with encrypted API key.
@@ -745,4 +746,5 @@ message SetupCountsInfo {
   int32 connections = 1;
   int32 mcp_servers = 2;
   int32 env_vars = 3;
+  int32 exec_endpoints = 4;
 }

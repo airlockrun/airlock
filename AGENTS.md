@@ -59,6 +59,9 @@ storage/           S3 client (PutObject, GetObject, presigned URLs) — talks to
 crypto/            AES-256-GCM encryption with key rotation (provider keys, webhook secrets, tokens)
 convert/           Type conversion helpers
 oauth/             OAuth credential flow management
+service/resources/ Reusable connection/MCP/exec inventory, rename, consumer listing,
+                   and capability-gated mutations
+service/needs/     Agent resource declarations plus create/bind/unbind lifecycle
 gen/airlock/v1/    Protobuf-generated Go types (from proto/)
 anchor/            Anchor container support
 ```
@@ -135,7 +138,9 @@ flag and the gate releases).
 - **Conversations**: CRUD per agent (one DM per user+agent)
 - **Runs**: List, detail, logs (streaming), cancel
 - **Webhooks/Crons**: List, manual fire
-- **Credentials**: OAuth flow (start/callback), API keys (get/set/revoke/test)
+- **Credentials**: Need-aware OAuth authorization (existing-resource scope expansion or hidden provisional creation), callback activation/binding, API keys (get/set/revoke/test)
+- **Resources**: Inventory includes owned and granted connections/MCP servers/exec endpoints with caller capabilities; rename, consumers, grants, revoke, and delete are resource-capability gated
+- **Resource needs**: Agent needs list, grant-aware candidates with structural/scope readiness, create/bind, authorization-before-binding, and agent-admin-only unbind
 - **Members**: Agent sharing (add/remove users)
 - **Providers**: LLM provider config (admin only)
 - **Users**: User management (admin only)
@@ -178,7 +183,7 @@ Postgres with sqlc. Key tables:
 - `agent_webhooks`, `agent_routes`, `agent_topics` (+ `per_user` for personal feeds) — trigger definitions
 - `agent_schedule_handlers` (cron+schedule defs, `kind`), `agent_scheduled_fires` (due-table, `FOR UPDATE SKIP LOCKED` poller) — unified scheduler
 - `agent_members` — sharing/permissions
-- `connections` — OAuth/API integrations (encrypted credentials)
+- `connections`, `agent_mcp_servers`, `agent_exec_endpoints` — reusable principal-owned resources with immutable server-generated concrete slugs and a required non-unique user-controlled `display_name`; `resource_grants` supplies independent view/bind/manage capabilities and `agent_resource_needs` binds agent-local type/slug handles to resources. OAuth rows carry active/provisional lifecycle, canonical granted scopes, and an authorization revision.
 - `agent_exec_endpoints` — remote command targets (SSH today; transport pluggable). Operator-configured host/port/user + airlock-generated ED25519 keypair (private key in secrets store) + TOFU-pinned host key. Declared by the agent via `RegisterExecEndpoint`.
 - `bridges`, `platform_identities`, `identity_link_challenges` — chat platform integrations and one-time identity-link confirmation state
 - `runs` — execution history (trigger, status, input/output, timeline)
@@ -208,6 +213,25 @@ Two independent axes. Don't conflate them.
 Canonical constants: `agentsdk.Access` (`AccessAdmin` / `AccessUser` / `AccessPublic`). Already used for `RouteOpts.Access` on agent-registered custom routes; reuse for any new per-agent permission check (slash commands, etc.) rather than inventing a parallel enum.
 
 Tenant role does **not** grant agent access. A tenant `admin` with no `agent_members` row for agent X has `AccessPublic` on that agent, the same as any other non-member. The only shortcut is that tenant admins can typically add themselves as members; the enforcement still goes through `agent_members`.
+
+**Resource capabilities** — what a principal can do with a reusable connection,
+MCP server, or exec endpoint. Owners implicitly hold all capabilities;
+`resource_grants` can independently grant `view`, `bind`, and `manage` to users
+or built-in role groups. Binding a scope-ready resource requires agent-admin
+access and resource `bind`. Extending OAuth scopes also requires resource
+`manage`; callback rechecks both capabilities and atomically stores the grant
+and binding. Unbinding requires only agent-admin because it changes the agent
+need, not the resource.
+
+### Resource OAuth Lifecycle
+- Agent sync writes only `agent_resource_needs`. It never creates, rewrites, or clears a shared concrete resource.
+- Scope declarations and grants are canonical sorted sets. Runtime resolution checks each binding against that need's current required scopes.
+- New OAuth resources are durable `provisional` rows tied to one need. Inventory, candidates, runtime, and refresh queries expose only `active` rows.
+- OAuth state records the target need/resource, requested union, initiating user, and resource authorization revision. A start advances the revision, so only the latest callback can write.
+- Callback rechecks the live user, agent-admin access, resource bind/manage capabilities, need compatibility, revision, and current union under locks. It activates and binds in the same transaction only after a covering grant.
+- Agent-scoped resource mutations lock the agent first, then target and scope-participating needs by UUID, then the resource, and finally the initiating user where needed. Resource deletion locks bound needs by UUID before the resource. Resource-grant mutations lock only the resource before grant rows, and member mutations lock the agent first, so callback authorization remains valid through credential replacement without reverse lock edges.
+- Denial, provider failure, partial grants, invalidated callbacks, and expiry preserve active credentials. Current provisional attempts are deleted locally; GC removes expired or abandoned provisional rows.
+- Background refresh scans only active resources with active scope-ready bindings and locks qualifying binding rows again before refreshing. Zero-binding resources retain encrypted credentials without background work.
 
 ## WebSocket
 

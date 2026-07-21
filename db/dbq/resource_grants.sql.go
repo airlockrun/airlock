@@ -183,10 +183,11 @@ func (q *Queries) GetMCPServerOwner(ctx context.Context, id pgtype.UUID) (pgtype
 
 const listConnectionGrants = `-- name: ListConnectionGrants :many
 
-SELECT grantee_id, capabilities FROM resource_grants WHERE connection_id = $1
+SELECT id, grantee_id, capabilities FROM resource_grants WHERE connection_id = $1
 `
 
 type ListConnectionGrantsRow struct {
+	ID           pgtype.UUID `json:"id"`
 	GranteeID    pgtype.UUID `json:"grantee_id"`
 	Capabilities []string    `json:"capabilities"`
 }
@@ -202,7 +203,7 @@ func (q *Queries) ListConnectionGrants(ctx context.Context, connectionID pgtype.
 	items := []ListConnectionGrantsRow{}
 	for rows.Next() {
 		var i ListConnectionGrantsRow
-		if err := rows.Scan(&i.GranteeID, &i.Capabilities); err != nil {
+		if err := rows.Scan(&i.ID, &i.GranteeID, &i.Capabilities); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -214,10 +215,11 @@ func (q *Queries) ListConnectionGrants(ctx context.Context, connectionID pgtype.
 }
 
 const listExecEndpointGrants = `-- name: ListExecEndpointGrants :many
-SELECT grantee_id, capabilities FROM resource_grants WHERE exec_endpoint_id = $1
+SELECT id, grantee_id, capabilities FROM resource_grants WHERE exec_endpoint_id = $1
 `
 
 type ListExecEndpointGrantsRow struct {
+	ID           pgtype.UUID `json:"id"`
 	GranteeID    pgtype.UUID `json:"grantee_id"`
 	Capabilities []string    `json:"capabilities"`
 }
@@ -231,7 +233,7 @@ func (q *Queries) ListExecEndpointGrants(ctx context.Context, execEndpointID pgt
 	items := []ListExecEndpointGrantsRow{}
 	for rows.Next() {
 		var i ListExecEndpointGrantsRow
-		if err := rows.Scan(&i.GranteeID, &i.Capabilities); err != nil {
+		if err := rows.Scan(&i.ID, &i.GranteeID, &i.Capabilities); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -243,10 +245,11 @@ func (q *Queries) ListExecEndpointGrants(ctx context.Context, execEndpointID pgt
 }
 
 const listGitCredentialGrants = `-- name: ListGitCredentialGrants :many
-SELECT grantee_id, capabilities FROM resource_grants WHERE git_credential_id = $1
+SELECT id, grantee_id, capabilities FROM resource_grants WHERE git_credential_id = $1
 `
 
 type ListGitCredentialGrantsRow struct {
+	ID           pgtype.UUID `json:"id"`
 	GranteeID    pgtype.UUID `json:"grantee_id"`
 	Capabilities []string    `json:"capabilities"`
 }
@@ -260,7 +263,7 @@ func (q *Queries) ListGitCredentialGrants(ctx context.Context, gitCredentialID p
 	items := []ListGitCredentialGrantsRow{}
 	for rows.Next() {
 		var i ListGitCredentialGrantsRow
-		if err := rows.Scan(&i.GranteeID, &i.Capabilities); err != nil {
+		if err := rows.Scan(&i.ID, &i.GranteeID, &i.Capabilities); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -272,10 +275,11 @@ func (q *Queries) ListGitCredentialGrants(ctx context.Context, gitCredentialID p
 }
 
 const listMCPServerGrants = `-- name: ListMCPServerGrants :many
-SELECT grantee_id, capabilities FROM resource_grants WHERE mcp_server_id = $1
+SELECT id, grantee_id, capabilities FROM resource_grants WHERE mcp_server_id = $1
 `
 
 type ListMCPServerGrantsRow struct {
+	ID           pgtype.UUID `json:"id"`
 	GranteeID    pgtype.UUID `json:"grantee_id"`
 	Capabilities []string    `json:"capabilities"`
 }
@@ -289,7 +293,7 @@ func (q *Queries) ListMCPServerGrants(ctx context.Context, mcpServerID pgtype.UU
 	items := []ListMCPServerGrantsRow{}
 	for rows.Next() {
 		var i ListMCPServerGrantsRow
-		if err := rows.Scan(&i.GranteeID, &i.Capabilities); err != nil {
+		if err := rows.Scan(&i.ID, &i.GranteeID, &i.Capabilities); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -298,6 +302,42 @@ func (q *Queries) ListMCPServerGrants(ctx context.Context, mcpServerID pgtype.UU
 		return nil, err
 	}
 	return items, nil
+}
+
+const lockConnectionResource = `-- name: LockConnectionResource :exec
+SELECT id FROM connections WHERE id = $1 FOR UPDATE
+`
+
+func (q *Queries) LockConnectionResource(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, lockConnectionResource, id)
+	return err
+}
+
+const lockExecEndpointResource = `-- name: LockExecEndpointResource :exec
+SELECT id FROM agent_exec_endpoints WHERE id = $1 FOR UPDATE
+`
+
+func (q *Queries) LockExecEndpointResource(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, lockExecEndpointResource, id)
+	return err
+}
+
+const lockGitCredentialResource = `-- name: LockGitCredentialResource :exec
+SELECT id FROM git_credentials WHERE id = $1 FOR UPDATE
+`
+
+func (q *Queries) LockGitCredentialResource(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, lockGitCredentialResource, id)
+	return err
+}
+
+const lockMCPServerResource = `-- name: LockMCPServerResource :exec
+SELECT id FROM agent_mcp_servers WHERE id = $1 FOR UPDATE
+`
+
+func (q *Queries) LockMCPServerResource(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, lockMCPServerResource, id)
+	return err
 }
 
 const revokeResourceGrant = `-- name: RevokeResourceGrant :execrows

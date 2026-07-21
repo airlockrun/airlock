@@ -9,7 +9,7 @@ import (
 )
 
 func TestBuildAuthURLRejectsReservedParams(t *testing.T) {
-	reserved := []string{"client_id", "redirect_uri", "state", "response_type", "code_challenge", "code_challenge_method"}
+	reserved := []string{"client_id", "redirect_uri", "state", "response_type", "code_challenge", "code_challenge_method", "scope"}
 	for _, key := range reserved {
 		t.Run(key, func(t *testing.T) {
 			client := NewClient(http.DefaultClient, false)
