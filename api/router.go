@@ -256,6 +256,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	// Public endpoints (no JWT required)
 	r.Get("/api/v1/credentials/oauth/callback", credH.OAuthCallback)
 	r.Get("/auth-external", idH.AuthExternal)
+	r.Get("/.well-known/airlock-agent-sdk", getAgentSDKInfo(cfg.PublicURL))
 
 	// OAuth Authorization Server handler — built once and reused by
 	// both the top-level unauthenticated routes (/.well-known, /oauth/*)

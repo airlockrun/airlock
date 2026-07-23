@@ -79,7 +79,7 @@ anchor/            Anchor container support
 ### Agent Source Synchronization
 - Airlock's internal per-agent Git repo is the source served by `HEAD|GET|PUT /api/v1/agents/{id}/source`. The endpoint uses a canonical content hash as an ETag; CLI deploys send `If-Match` so stale workspaces cannot overwrite codegen or another user's deploy.
 - Source uploads require a single-line build message. Uploads for apps with a deployed image reserve the upgrade lock before committing source and run through the upgrade pipeline without invoking codegen; the message is stored on the build record.
-- `air deploy`, `air pull`, and `air clone` synchronize the canonical source set without requiring external Git. Workspace binding and last-seen state live in `.airlock/local/agent.toml`, which is excluded from source archives.
+- `go tool air deploy`, `go tool air pull`, and the global `airlock clone` launcher synchronize the canonical source set without requiring external Git. Workspace binding and last-seen state live in `.airlock/local/agent.toml`, which is excluded from source archives.
 - Persistent Git bindings have an explicit `read_write` or `read_only` mode. Git is authoritative in both modes. Read/write operations must push before a build succeeds; read-only bindings only pull/rebuild and reject Airlock codegen, source upload, and source rollback. `import_once` is a create action that does not retain a Git binding.
 - Every source mutation acquires the per-agent PostgreSQL advisory source lock, including builds/codegen, source uploads, Git clone/pull, and rollback execution.
 
@@ -174,6 +174,9 @@ by `/api/v1` or `/api/agent`.
 
 ### Health: `/health` (no auth)
 `GET /health` — 200 + `{status: "ok", db: true, s3: true}` if Postgres + S3 reachable; 503 + `status: "degraded"` with per-subsystem booleans otherwise. Concurrent public requests share one probe and reuse its result for five seconds.
+
+### SDK bootstrap metadata (no auth)
+`GET /.well-known/airlock-agent-sdk` — the Agent SDK version, module-tool import, global launcher import, and canonical Airlock URL used by `airlock init|clone` before device login.
 
 ## Database
 

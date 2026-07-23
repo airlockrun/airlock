@@ -206,6 +206,7 @@ message GetAgentSDKInfoResponse {
   string version = 1;
   string command_import = 2;
   string airlock_url = 3;
+  string launcher_import = 4;
 }
 
 // --- Agents ---
