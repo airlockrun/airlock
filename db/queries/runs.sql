@@ -7,12 +7,14 @@
 INSERT INTO runs (
     agent_id, bridge_id, parent_run_id, status, error_kind,
     input_payload, source_ref, trigger_type, trigger_ref,
+    caller_user_id, caller_conversation_id, caller_access,
     actions, llm_calls, llm_tokens_in, llm_tokens_out, llm_tokens_cached, llm_cost_estimate,
     stdout_log, error_message, panic_trace, compacted
 )
 VALUES (
     @agent_id, @bridge_id, @parent_run_id, 'running', '',
     @input_payload, @source_ref, @trigger_type, @trigger_ref,
+    @caller_user_id, @caller_conversation_id, @caller_access,
     '[]'::jsonb, 0, 0, 0, 0, 0,
     '', '', '', false
 )
@@ -56,6 +58,7 @@ INSERT INTO runs (
     id, agent_id, status, error_message, error_kind, actions,
     stdout_log, panic_trace, input_payload, source_ref,
     trigger_type, trigger_ref, finished_at, duration_ms,
+    caller_user_id, caller_conversation_id, caller_access,
     llm_calls, llm_tokens_in, llm_tokens_out, llm_tokens_cached, llm_cost_estimate,
     compacted
 )
@@ -63,6 +66,7 @@ VALUES (
     @id, @agent_id, @status, @error_message, @error_kind, @actions,
     @stdout_log, @panic_trace, '{}'::jsonb, '',
     'prompt', '', now(), 0,
+    NULL, NULL, 'public',
     0, 0, 0, 0, 0,
     false
 )

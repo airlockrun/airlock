@@ -28,7 +28,7 @@ func (q *Queries) DeleteDirectoriesByAgentExcept(ctx context.Context, arg Delete
 const getDirectoryByPath = `-- name: GetDirectoryByPath :one
 SELECT id, agent_id, path, read_access, write_access, list_access, description, llm_hint, retention_hours, created_at, updated_at, scope FROM agent_directories
 WHERE agent_id = $1
-  AND ($2::text = path OR $2::text LIKE path || '/%')
+  AND ($2::text = path OR left($2::text, length(path) + 1) = path || '/')
 ORDER BY length(path) DESC LIMIT 1
 `
 

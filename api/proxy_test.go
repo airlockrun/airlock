@@ -12,6 +12,7 @@ import (
 	"github.com/airlockrun/airlock/config"
 	"github.com/airlockrun/airlock/container"
 	"github.com/airlockrun/airlock/db/dbq"
+	agentstoragesvc "github.com/airlockrun/airlock/service/agentstorage"
 	"github.com/airlockrun/airlock/trigger"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -131,7 +132,7 @@ func TestSubdomainProxyForwardsAuthoritativeCallerHeaders(t *testing.T) {
 		DBSSLMode: "disable",
 	}, testDB, containers, enc, zap.NewNop())
 	handler := SubdomainProxy(
-		"agents.test", testDB, nil, dispatcher, &trigger.BridgeManager{},
+		"agents.test", testDB, nil, agentstoragesvc.New(testDB), dispatcher, &trigger.BridgeManager{},
 		testJWTSecret, "https://airlock.test", http.NotFoundHandler(),
 	)
 

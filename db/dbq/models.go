@@ -261,15 +261,25 @@ type AgentScheduleHandler struct {
 }
 
 type AgentScheduledFire struct {
-	ID         pgtype.UUID        `json:"id"`
-	AgentID    pgtype.UUID        `json:"agent_id"`
-	Source     string             `json:"source"`
-	Slug       string             `json:"slug"`
-	FireAt     pgtype.Timestamptz `json:"fire_at"`
-	Recurrence string             `json:"recurrence"`
-	TimeoutMs  int64              `json:"timeout_ms"`
-	Status     string             `json:"status"`
-	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+	ID             pgtype.UUID        `json:"id"`
+	AgentID        pgtype.UUID        `json:"agent_id"`
+	Source         string             `json:"source"`
+	Slug           string             `json:"slug"`
+	FireAt         pgtype.Timestamptz `json:"fire_at"`
+	Recurrence     string             `json:"recurrence"`
+	TimeoutMs      int64              `json:"timeout_ms"`
+	Status         string             `json:"status"`
+	Attempt        int32              `json:"attempt"`
+	MaxAttempts    int32              `json:"max_attempts"`
+	LeaseOwner     pgtype.UUID        `json:"lease_owner"`
+	LeaseToken     pgtype.UUID        `json:"lease_token"`
+	LeaseExpiresAt pgtype.Timestamptz `json:"lease_expires_at"`
+	NextAttemptAt  pgtype.Timestamptz `json:"next_attempt_at"`
+	StartedAt      pgtype.Timestamptz `json:"started_at"`
+	CompletedAt    pgtype.Timestamptz `json:"completed_at"`
+	LastError      string             `json:"last_error"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
 }
 
 type AgentSibling struct {
@@ -638,31 +648,34 @@ type ResourceGrant struct {
 }
 
 type Run struct {
-	ID              pgtype.UUID        `json:"id"`
-	AgentID         pgtype.UUID        `json:"agent_id"`
-	BridgeID        pgtype.UUID        `json:"bridge_id"`
-	Status          string             `json:"status"`
-	TriggerType     string             `json:"trigger_type"`
-	TriggerRef      string             `json:"trigger_ref"`
-	SourceRef       string             `json:"source_ref"`
-	InputPayload    []byte             `json:"input_payload"`
-	Actions         []byte             `json:"actions"`
-	LlmCalls        int32              `json:"llm_calls"`
-	LlmTokensIn     int32              `json:"llm_tokens_in"`
-	LlmTokensOut    int32              `json:"llm_tokens_out"`
-	LlmCostEstimate pgtype.Numeric     `json:"llm_cost_estimate"`
-	DurationMs      pgtype.Int4        `json:"duration_ms"`
-	StdoutLog       string             `json:"stdout_log"`
-	ErrorMessage    string             `json:"error_message"`
-	ErrorKind       string             `json:"error_kind"`
-	ExitCode        pgtype.Int4        `json:"exit_code"`
-	PanicTrace      string             `json:"panic_trace"`
-	Checkpoint      []byte             `json:"checkpoint"`
-	Compacted       bool               `json:"compacted"`
-	StartedAt       pgtype.Timestamptz `json:"started_at"`
-	FinishedAt      pgtype.Timestamptz `json:"finished_at"`
-	ParentRunID     pgtype.UUID        `json:"parent_run_id"`
-	LlmTokensCached int32              `json:"llm_tokens_cached"`
+	ID                   pgtype.UUID        `json:"id"`
+	AgentID              pgtype.UUID        `json:"agent_id"`
+	BridgeID             pgtype.UUID        `json:"bridge_id"`
+	Status               string             `json:"status"`
+	TriggerType          string             `json:"trigger_type"`
+	TriggerRef           string             `json:"trigger_ref"`
+	SourceRef            string             `json:"source_ref"`
+	InputPayload         []byte             `json:"input_payload"`
+	Actions              []byte             `json:"actions"`
+	LlmCalls             int32              `json:"llm_calls"`
+	LlmTokensIn          int32              `json:"llm_tokens_in"`
+	LlmTokensOut         int32              `json:"llm_tokens_out"`
+	LlmCostEstimate      pgtype.Numeric     `json:"llm_cost_estimate"`
+	DurationMs           pgtype.Int4        `json:"duration_ms"`
+	StdoutLog            string             `json:"stdout_log"`
+	ErrorMessage         string             `json:"error_message"`
+	ErrorKind            string             `json:"error_kind"`
+	ExitCode             pgtype.Int4        `json:"exit_code"`
+	PanicTrace           string             `json:"panic_trace"`
+	Checkpoint           []byte             `json:"checkpoint"`
+	Compacted            bool               `json:"compacted"`
+	StartedAt            pgtype.Timestamptz `json:"started_at"`
+	FinishedAt           pgtype.Timestamptz `json:"finished_at"`
+	ParentRunID          pgtype.UUID        `json:"parent_run_id"`
+	LlmTokensCached      int32              `json:"llm_tokens_cached"`
+	CallerUserID         pgtype.UUID        `json:"caller_user_id"`
+	CallerConversationID pgtype.UUID        `json:"caller_conversation_id"`
+	CallerAccess         string             `json:"caller_access"`
 }
 
 type SystemAudit struct {

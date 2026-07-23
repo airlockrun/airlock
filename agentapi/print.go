@@ -9,6 +9,7 @@ import (
 	"github.com/airlockrun/agentsdk/wire"
 	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/db/dbq"
+	agentstoragesvc "github.com/airlockrun/airlock/service/agentstorage"
 	"github.com/airlockrun/airlock/storage"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -103,28 +104,19 @@ func (h *Handler) Print(w http.ResponseWriter, r *http.Request) {
 			}
 			p.Source = key
 			p.Data = nil // Don't store bytes in the message
-		} else if p.Source != "" && !strings.HasPrefix(p.Source, "agents/") {
-			// Source is an agent-relative storage path (e.g. "tmp/foo.png"
-			// or a path in an agent-registered directory like "media/foo");
-			// copy to permanent media location. The previous bare "media/"
-			// shortcut was unsafe — it conflated airlock-managed permanent
-			// tails with paths inside an agent-registered "media/"
-			// directory, leaving p.Source as the bare "media/<file>" that
-			// the URL signer then treated as a bucket-root key (broken
-			// link). Routing media/ through the same copy path as tmp/
-			// produces a proper absolute agents/{id}/media/<mediaID>/...
-			// key. Strip a stray leading '/' so the LLM-supplied path
-			// can't double-slash the S3 key.
-			srcPath := strings.TrimPrefix(p.Source, "/")
-			if cleaned, err := storage.CleanAgentPath(srcPath); err != nil || cleaned != srcPath {
+		} else if p.Source != "" {
+			// Source paths are untrusted run output. Resolve against the run's
+			// durable principal snapshot before copying into trusted media.
+			if runUUID == uuid.Nil || strings.HasPrefix(p.Source, "agents/") {
 				writeJSONError(w, http.StatusBadRequest, "invalid source path")
 				return
 			}
-			srcKey, err := agentStorageKey(agentID, srcPath)
+			resolved, err := h.files.ResolveForRun(ctx, agentID, runUUID, p.Source, agentstoragesvc.OperationRead)
 			if err != nil {
-				writeJSONError(w, http.StatusBadRequest, "invalid source path: "+err.Error())
+				writeJSONError(w, http.StatusNotFound, "file source not found")
 				return
 			}
+			srcPath := resolved.Relative
 			filename := p.Filename
 			if filename == "" {
 				filename = filepath.Base(srcPath)
@@ -134,35 +126,12 @@ func (h *Handler) Print(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			dstKey := mediaPrefix + filename
-			if err := h.s3.CopyObject(ctx, srcKey, dstKey); err != nil {
+			if err := h.s3.CopyObject(ctx, resolved.S3Key, dstKey); err != nil {
 				h.logger.Error("copy file to media", zap.String("src", p.Source), zap.Error(err))
 				writeJSONError(w, http.StatusInternalServerError, "failed to copy file")
 				return
 			}
 			p.Source = dstKey
-		} else if p.Source != "" {
-			// Absolute "agents/..." key — already-permanent re-share, no
-			// copy. Two guards: (1) require it to be THIS agent's key
-			// (defence in depth — there's no legitimate cross-agent
-			// re-share via output, and it would bypass the other
-			// agent's directory access controls). (2) HeadObject so a
-			// hallucinated or swept-out key fails loud here instead of
-			// being persisted as a broken link the URL signer happily
-			// emits.
-			expected := "agents/" + agentID.String() + "/"
-			if !strings.HasPrefix(p.Source, expected) {
-				writeJSONError(w, http.StatusBadRequest, "file source must be in this agent's namespace: "+p.Source)
-				return
-			}
-			tail := strings.TrimPrefix(p.Source, expected)
-			if cleaned, err := storage.CleanAgentPath(tail); err != nil || cleaned != tail {
-				writeJSONError(w, http.StatusBadRequest, "invalid file source")
-				return
-			}
-			if _, _, err := h.s3.HeadObject(ctx, p.Source); err != nil {
-				writeJSONError(w, http.StatusBadRequest, "file source does not exist: "+p.Source)
-				return
-			}
 		}
 	}
 

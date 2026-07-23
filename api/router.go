@@ -19,6 +19,7 @@ import (
 	"github.com/airlockrun/airlock/realtime"
 	"github.com/airlockrun/airlock/secrets"
 	agentssvc "github.com/airlockrun/airlock/service/agents"
+	agentstoragesvc "github.com/airlockrun/airlock/service/agentstorage"
 	bridgessvc "github.com/airlockrun/airlock/service/bridges"
 	catalogsvc "github.com/airlockrun/airlock/service/catalog"
 	connsvc "github.com/airlockrun/airlock/service/connections"
@@ -162,6 +163,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	grantsHandler := NewGrantsHandler(grantssvc.New(cfg.DB, cfg.Logger.Named("grants")))
 	needsHandler := NewNeedsHandler(needssvc.NewService(cfg.DB, cfg.Dispatcher.RefreshAgent, cfg.Logger.Named("needs")))
 	resourcesHandler := NewResourcesHandler(resourcessvc.New(cfg.DB, cfg.Logger.Named("resources")))
+	fileService := agentstoragesvc.New(cfg.DB)
 	usageHandler := NewUsageHandler(usagesvc.New(cfg.DB, cfg.Logger.Named("usage")))
 	settingsSvc := settingssvc.New(cfg.DB, catalogsvc.New(cfg.DB, cfg.Logger.Named("settings-catalog")), cfg.Logger.Named("settings"))
 	sysSettingsHandler := newSettingsHandler(settingsHandlerDeps{Svc: settingsSvc})
@@ -684,6 +686,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		Encryptor:              cfg.Secrets,
 		OAuthClient:            cfg.OAuthClient,
 		S3:                     cfg.S3Client,
+		Files:                  fileService,
 		Builder:                cfg.BuildService,
 		PubSub:                 cfg.PubSub,
 		BridgeMgr:              cfg.BridgeManager,
@@ -795,7 +798,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	//   zapRecoverer      catches handler panics with full request context
 	var handler http.Handler = r
 	if cfg.AgentDomain != "" {
-		handler = SubdomainProxy(cfg.AgentDomain, cfg.DB, cfg.S3Client, cfg.Dispatcher, cfg.BridgeManager, cfg.JWTSecret, cfg.PublicURL, r)
+		handler = SubdomainProxy(cfg.AgentDomain, cfg.DB, cfg.S3Client, fileService, cfg.Dispatcher, cfg.BridgeManager, cfg.JWTSecret, cfg.PublicURL, r)
 	}
 	handler = zapRecoverer(handler)
 	handler = requestLogger(cfg.Logger)(handler)

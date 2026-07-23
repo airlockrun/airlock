@@ -61,6 +61,8 @@ convert/           Type conversion helpers
 oauth/             OAuth credential flow management
 service/resources/ Reusable connection/MCP/exec inventory, rename, consumer listing,
                    and capability-gated mutations
+service/agentstorage/ Canonical untrusted file-path resolution using directory ACLs
+                   and exact user/conversation/run scope identities
 service/needs/     Agent resource declarations plus create/bind/unbind lifecycle
 gen/airlock/v1/    Protobuf-generated Go types (from proto/)
 anchor/            Anchor container support
@@ -112,7 +114,7 @@ On startup `builder.RebuildAllOnSDKChange` compares the airlock-bundled `agentsd
 
 ### Trigger System
 - **Webhooks**: `POST /webhooks/{agentID}/{path}` → verify (none/hmac/token/bearer/ed25519) → forward to agent
-- **Schedules** (crons + dynamic): one unified substrate. `agent_schedule_handlers` holds synced handler defs (`kind` = `cron` | `schedule`); `agent_scheduled_fires` is the due-table a single airlock poller drains every 30s with `FOR UPDATE SKIP LOCKED` (replica-safe; agents stay suspended until a fire is due). `trigger.Scheduler` re-arms recurring crons in-tx (robfig is now a next-time parser only) and `ReconcileAgent` re-seeds cron fires on sync. Fires `POST /fire/{slug}` via `Dispatcher.ForwardFire` (X-Fire-ID header). Agents arm one-shots via `POST /api/agent/schedules` (`ScheduleAt`); the operator cron surface (`ListCrons`/`FireCron`/`CronInfo`) is backed by `kind='cron'` rows.
+- **Schedules** (crons + dynamic): one unified at-least-once substrate. `agent_schedule_handlers` holds synced handler defs (`kind` = `cron` | `schedule`); `agent_scheduled_fires` holds immutable occurrences with durable leases, attempt counts, retries, and terminal states. Every Airlock replica claims due work with `FOR UPDATE SKIP LOCKED`, commits ownership before dispatch, and acknowledges with the lease token only after `/fire/{slug}` returns a typed success. Cron claims transactionally create a distinct successor occurrence. Agents arm idempotent one-shots with caller-owned UUIDs via `ScheduleAt`; operator manual fire queues a durable `manual` cron occurrence.
 - **Bridges**: Chat platform integrations (Telegram) — poll for messages, forward via PromptProxy, stream response back
 
 ## API Structure

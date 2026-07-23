@@ -288,7 +288,7 @@ type fireScheduleInput struct {
 
 func (s *Service) toolFireSchedule() tool.Tool {
 	return tool.New("fire_schedule").
-		Description(`Manually fire one of the agent's declared schedule handlers (cron or schedule). Returns {run_id} so the operator can follow the run.`).
+		Description(`Queue a durable manual occurrence of one declared cron handler. Returns {occurrence_id}.`).
 		SchemaFromStruct(fireScheduleInput{}).
 		Execute(func(ctx context.Context, raw json.RawMessage, _ tool.CallOptions) (tool.Result, error) {
 			var in fireScheduleInput
@@ -304,7 +304,7 @@ func (s *Service) toolFireSchedule() tool.Tool {
 			if err != nil {
 				return errResult(err), nil
 			}
-			return okResult(&airlockv1.FireScheduleResponse{RunId: out.RunID.String()})
+			return okResult(&airlockv1.FireScheduleResponse{OccurrenceId: out.OccurrenceID.String()})
 		}).
 		Build()
 }

@@ -80,7 +80,7 @@ func seedBridgeSuspension(t *testing.T) bridgeSuspensionFixture {
 	}
 	run, err := q.CreateRun(ctx, dbq.CreateRunParams{
 		AgentID: agent.ID, BridgeID: toPgUUID(bridgeID), InputPayload: []byte("{}"),
-		TriggerType: "prompt", TriggerRef: uuid.UUID(conv.ID.Bytes).String(),
+		TriggerType: "prompt", TriggerRef: uuid.UUID(conv.ID.Bytes).String(), CallerAccess: "user",
 	})
 	if err != nil {
 		t.Fatalf("CreateRun: %v", err)

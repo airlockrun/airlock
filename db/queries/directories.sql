@@ -19,7 +19,7 @@ SELECT * FROM agent_directories WHERE agent_id = $1 ORDER BY path;
 -- directory matching the requested path on an exact segment boundary.
 SELECT * FROM agent_directories
 WHERE agent_id = @agent_id
-  AND (@path::text = path OR @path::text LIKE path || '/%')
+  AND (@path::text = path OR left(@path::text, length(path) + 1) = path || '/')
 ORDER BY length(path) DESC LIMIT 1;
 
 -- name: DeleteDirectoriesByAgentExcept :exec

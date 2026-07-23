@@ -1,6 +1,7 @@
 package agentapi
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,6 +15,8 @@ import (
 	"github.com/airlockrun/airlock/authz"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
+	"github.com/airlockrun/airlock/service"
+	agentstoragesvc "github.com/airlockrun/airlock/service/agentstorage"
 	"github.com/airlockrun/airlock/storage"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -334,9 +337,9 @@ func (h *Handler) StorageShare(w http.ResponseWriter, r *http.Request) {
 
 // ServeStoragePath serves reads from a registered directory on the
 // subdomain proxy's /__air/storage{path} endpoint, gating by the
-// directory's read_access:
+// directory's read_access and exact scope identity:
 //
-//   - "public" — served unauthenticated (any browser can fetch the URL)
+//   - "public" — served unauthenticated when the directory is unscoped
 //   - "user"   — requires a valid __air_session cookie + agent membership
 //   - "admin"  — requires admin role on the agent
 //   - unknown  — 404
@@ -346,71 +349,41 @@ func (h *Handler) StorageShare(w http.ResponseWriter, r *http.Request) {
 // logged in, the user lands back on the same URL with a session cookie
 // set and the file streams.
 //
-// Unknown agent/path returns 404 — we deliberately don't distinguish
-// "not authorized" from "not found" so URL-guessing leaks no info.
-func ServeStoragePath(w http.ResponseWriter, r *http.Request, database *db.DB, s3 *storage.S3Client, agentID uuid.UUID, path, jwtSecret, publicURL string, logger *zap.Logger) {
+// Denied and unknown paths return the same response after authentication so
+// URL guessing does not reveal whether an object exists.
+func ServeStoragePath(w http.ResponseWriter, r *http.Request, database *db.DB, s3 *storage.S3Client, files *agentstoragesvc.Service, agentID uuid.UUID, path, jwtSecret, publicURL string, logger *zap.Logger) {
 	path = strings.TrimPrefix(path, "/")
 	if path == "" {
 		http.NotFound(w, r)
 		return
 	}
 	q := dbq.New(database.Pool())
-	dir, err := q.GetDirectoryByPath(r.Context(), dbq.GetDirectoryByPathParams{
-		AgentID: toPgUUID(agentID),
-		Path:    path,
-	})
-	if err != nil {
-		http.NotFound(w, r)
-		return
-	}
-
-	switch dir.ReadAccess {
-	case string(agentsdk.AccessPublic):
-		// no auth check
-	case string(agentsdk.AccessUser):
+	caller := agentstoragesvc.Caller{Principal: authz.AnonymousPrincipal(), Access: agentsdk.AccessPublic}
+	resolved, err := files.Resolve(r.Context(), caller, agentID, path, agentstoragesvc.OperationRead)
+	if errors.Is(err, service.ErrNotFound) {
 		claims, ok := validateSubdomainAuth(r, q, jwtSecret, agentID)
 		if !ok {
 			rejectOrRedirect(w, r, publicURL)
 			return
 		}
-		uid, err := uuid.Parse(claims.Subject)
-		if err != nil {
+		uid, parseErr := uuid.Parse(claims.Subject)
+		if parseErr != nil {
 			rejectOrRedirect(w, r, publicURL)
 			return
 		}
-		access := authz.UserPrincipal(uid, "").EffectiveAgentAccess(r.Context(), q, agentID)
-		if !authz.AccessAtLeast(access, agentsdk.AccessUser) {
-			http.NotFound(w, r)
-			return
+		principal := authz.UserPrincipal(uid, auth.Role(claims.TenantRole))
+		caller = agentstoragesvc.Caller{
+			Principal: principal,
+			Access:    principal.EffectiveAgentAccess(r.Context(), q, agentID),
+			UserID:    uid,
 		}
-	case string(agentsdk.AccessAdmin):
-		claims, ok := validateSubdomainAuth(r, q, jwtSecret, agentID)
-		if !ok {
-			rejectOrRedirect(w, r, publicURL)
-			return
-		}
-		uid, err := uuid.Parse(claims.Subject)
-		if err != nil {
-			rejectOrRedirect(w, r, publicURL)
-			return
-		}
-		access := authz.UserPrincipal(uid, "").EffectiveAgentAccess(r.Context(), q, agentID)
-		if !authz.AccessAtLeast(access, agentsdk.AccessAdmin) {
-			http.NotFound(w, r)
-			return
-		}
-	default:
-		// Unknown / unrecognized read_access — fail closed.
-		http.NotFound(w, r)
-		return
+		resolved, err = files.Resolve(r.Context(), caller, agentID, path, agentstoragesvc.OperationRead)
 	}
-
-	s3Key, err := agentStorageKey(agentID, path)
 	if err != nil {
 		http.NotFound(w, r)
 		return
 	}
-	reader, err := s3.GetObject(r.Context(), s3Key)
+	reader, err := s3.GetObject(r.Context(), resolved.S3Key)
 	if err != nil {
 		http.NotFound(w, r)
 		return
@@ -420,7 +393,7 @@ func ServeStoragePath(w http.ResponseWriter, r *http.Request, database *db.DB, s
 	// Surface stored content-type and original filename when available so
 	// browsers render images inline and downloads keep their original
 	// names.
-	if info, ct, err := s3.HeadObject(r.Context(), s3Key); err == nil {
+	if info, ct, err := s3.HeadObject(r.Context(), resolved.S3Key); err == nil {
 		if ct != "" {
 			w.Header().Set("Content-Type", ct)
 		}

@@ -69,7 +69,7 @@ func TestGetDirectoryByPathMatchesPathSegments(t *testing.T) {
 			ReadAccess:  "public",
 			WriteAccess: "admin",
 			ListAccess:  "user",
-			Scope:       "agent",
+			Scope:       "",
 		}); err != nil {
 			t.Fatalf("UpsertDirectory(%q): %v", path, err)
 		}

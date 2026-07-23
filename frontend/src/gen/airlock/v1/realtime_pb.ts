@@ -422,4 +422,3 @@ export type NotificationEvent = Message<"airlock.v1.NotificationEvent"> & {
  */
 export const NotificationEventSchema: GenMessage<NotificationEvent> = /*@__PURE__*/
   messageDesc(file_airlock_v1_realtime, 13);
-

@@ -22,6 +22,7 @@ import (
 	"github.com/airlockrun/airlock/oauth"
 	"github.com/airlockrun/airlock/realtime"
 	"github.com/airlockrun/airlock/secrets"
+	agentstoragesvc "github.com/airlockrun/airlock/service/agentstorage"
 	"github.com/airlockrun/airlock/storage"
 	"github.com/airlockrun/airlock/trigger"
 	solprovider "github.com/airlockrun/sol/provider"
@@ -33,7 +34,7 @@ import (
 // scheduleReconciler is the subset of trigger.Scheduler the Sync handler needs:
 // re-seed cron fire rows and orphan removed schedules after a sync.
 type scheduleReconciler interface {
-	ReconcileAgent(ctx context.Context, agentID uuid.UUID) error
+	ReconcileAgent(ctx context.Context, agentID uuid.UUID, handlers []wire.ScheduleHandlerDef) error
 }
 
 type Handler struct {
@@ -41,10 +42,11 @@ type Handler struct {
 	encryptor              secrets.Store
 	oauthClient            *oauth.Client
 	s3                     *storage.S3Client
+	files                  *agentstoragesvc.Service
 	builder                *builder.BuildService
 	pubsub                 *realtime.PubSub
 	bridgeMgr              BridgePartsDeliverer // for output()/topic bridge delivery
-	scheduler              scheduleReconciler   // nil until trigger system is wired
+	scheduler              scheduleReconciler
 	publicURL              string
 	agentBaseURL           func(slug string) string // {scheme}://{slug}.{domain}[:port] — from config.Config (single source)
 	llmProxyURL            string                   // optional: route LLM calls through this proxy
@@ -64,6 +66,7 @@ type Config struct {
 	Encryptor              secrets.Store
 	OAuthClient            *oauth.Client
 	S3                     *storage.S3Client
+	Files                  *agentstoragesvc.Service
 	Builder                *builder.BuildService
 	PubSub                 *realtime.PubSub
 	BridgeMgr              BridgePartsDeliverer
@@ -100,11 +103,18 @@ func New(c Config) *Handler {
 	if c.HTTPNetwork == nil {
 		panic("agentapi: HTTP network policy is required")
 	}
+	if c.Files == nil {
+		panic("agentapi: file service is required")
+	}
+	if c.Scheduler == nil {
+		panic("agentapi: scheduler is required")
+	}
 	return &Handler{
 		db:                     c.DB,
 		encryptor:              c.Encryptor,
 		oauthClient:            c.OAuthClient,
 		s3:                     c.S3,
+		files:                  c.Files,
 		builder:                c.Builder,
 		pubsub:                 c.PubSub,
 		bridgeMgr:              c.BridgeMgr,
@@ -182,6 +192,30 @@ func (h *Handler) CreateRun(w http.ResponseWriter, r *http.Request) {
 	if req.TriggerType == "" {
 		req.TriggerType = "code"
 	}
+	if req.CallerAccess == "" {
+		req.CallerAccess = wire.Access(agentsdk.AccessPublic)
+	}
+	if req.CallerAccess != wire.Access(agentsdk.AccessPublic) && req.CallerAccess != wire.Access(agentsdk.AccessUser) && req.CallerAccess != wire.Access(agentsdk.AccessAdmin) {
+		writeJSONError(w, http.StatusBadRequest, "invalid callerAccess")
+		return
+	}
+	var callerUserID, callerConversationID pgtype.UUID
+	if req.UserID != "" {
+		id, err := parseUUID(req.UserID)
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "invalid userId")
+			return
+		}
+		callerUserID = toPgUUID(id)
+	}
+	if req.ConversationID != "" {
+		id, err := parseUUID(req.ConversationID)
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "invalid conversationId")
+			return
+		}
+		callerConversationID = toPgUUID(id)
+	}
 
 	q := dbq.New(h.db.Pool())
 
@@ -191,11 +225,14 @@ func (h *Handler) CreateRun(w http.ResponseWriter, r *http.Request) {
 	}
 
 	run, err := q.CreateRun(r.Context(), dbq.CreateRunParams{
-		AgentID:      toPgUUID(agentID),
-		InputPayload: []byte("{}"),
-		SourceRef:    sourceRef,
-		TriggerType:  req.TriggerType,
-		TriggerRef:   req.TriggerRef,
+		AgentID:              toPgUUID(agentID),
+		InputPayload:         []byte("{}"),
+		SourceRef:            sourceRef,
+		TriggerType:          req.TriggerType,
+		TriggerRef:           req.TriggerRef,
+		CallerUserID:         callerUserID,
+		CallerConversationID: callerConversationID,
+		CallerAccess:         string(req.CallerAccess),
 	})
 	if err != nil {
 		h.logger.Error("create run failed", zap.Error(err))
@@ -421,41 +458,10 @@ func (h *Handler) Sync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Upsert schedule handlers (crons + schedules), then delete stale.
-	handlerSlugs := make([]string, len(req.ScheduleHandlers))
-	for i, sh := range req.ScheduleHandlers {
-		timeoutMs := sh.TimeoutMs
-		if timeoutMs == 0 {
-			timeoutMs = 120000
-		}
-		if err := q.UpsertScheduleHandler(ctx, dbq.UpsertScheduleHandlerParams{
-			AgentID:     pgAgentID,
-			Slug:        sh.Slug,
-			Kind:        sh.Kind,
-			Recurrence:  sh.Recurrence,
-			TimeoutMs:   timeoutMs,
-			Description: sh.Description,
-		}); err != nil {
-			h.logger.Error("upsert schedule handler failed", zap.Error(err))
-			writeJSONError(w, http.StatusInternalServerError, "failed to sync schedules")
-			return
-		}
-		handlerSlugs[i] = sh.Slug
-	}
-	if err := q.DeleteScheduleHandlersByAgentExcept(ctx, dbq.DeleteScheduleHandlersByAgentExceptParams{
-		AgentID: pgAgentID,
-		Slugs:   handlerSlugs,
-	}); err != nil {
-		h.logger.Error("delete stale schedule handlers failed", zap.Error(err))
-		writeJSONError(w, http.StatusInternalServerError, "failed to sync schedules")
+	if err := h.scheduler.ReconcileAgent(ctx, agentID, req.ScheduleHandlers); err != nil {
+		h.logger.Error("reconcile scheduler failed", zap.Error(err))
+		writeJSONError(w, http.StatusInternalServerError, "failed to reconcile schedules")
 		return
-	}
-
-	// Reconcile fire rows: re-seed cron fires, orphan removed schedules.
-	if h.scheduler != nil {
-		if err := h.scheduler.ReconcileAgent(ctx, agentID); err != nil {
-			h.logger.Error("reconcile scheduler failed", zap.Error(err))
-		}
 	}
 
 	// Upsert routes, then delete stale.
@@ -635,6 +641,13 @@ func (h *Handler) Sync(w http.ResponseWriter, r *http.Request) {
 	// Upsert directories, then delete stale.
 	dirPaths := make([]string, len(req.Directories))
 	for i, d := range req.Directories {
+		canonical, pathErr := storage.CleanAgentPath(d.Path)
+		if pathErr != nil || canonical != d.Path ||
+			!validDirectoryAccess(d.Read) || !validDirectoryAccess(d.Write) || !validDirectoryAccess(d.List) ||
+			!validDirectoryScope(d.Scope) || d.RetentionHours < 0 {
+			writeJSONError(w, http.StatusBadRequest, "invalid directory declaration: "+d.Path)
+			return
+		}
 		if err := q.UpsertDirectory(ctx, dbq.UpsertDirectoryParams{
 			AgentID:        pgAgentID,
 			Path:           d.Path,
@@ -772,6 +785,14 @@ func (h *Handler) Sync(w http.ResponseWriter, r *http.Request) {
 		MCPSchemas:        mcpSchemas,
 		PublicStorageBase: publicStorageBase,
 	})
+}
+
+func validDirectoryAccess(access wire.Access) bool {
+	return access == wire.Access(agentsdk.AccessPublic) || access == wire.Access(agentsdk.AccessUser) || access == wire.Access(agentsdk.AccessAdmin)
+}
+
+func validDirectoryScope(scope wire.DirectoryScope) bool {
+	return scope == "" || scope == "user" || scope == "conv" || scope == "run"
 }
 
 // resolveAgentCapabilities walks the agent's six optional model

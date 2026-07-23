@@ -4045,7 +4045,7 @@ func (x *ListToolsResponse) GetTools() []*ToolInfo {
 
 type FireScheduleResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	RunId         string                 `protobuf:"bytes,1,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
+	OccurrenceId  string                 `protobuf:"bytes,1,opt,name=occurrence_id,json=occurrenceId,proto3" json:"occurrence_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -4080,9 +4080,9 @@ func (*FireScheduleResponse) Descriptor() ([]byte, []int) {
 	return file_airlock_v1_api_proto_rawDescGZIP(), []int{68}
 }
 
-func (x *FireScheduleResponse) GetRunId() string {
+func (x *FireScheduleResponse) GetOccurrenceId() string {
 	if x != nil {
-		return x.RunId
+		return x.OccurrenceId
 	}
 	return ""
 }
@@ -9714,9 +9714,9 @@ const file_airlock_v1_api_proto_rawDesc = "" +
 	"\x15ListSchedulesResponse\x126\n" +
 	"\tschedules\x18\x01 \x03(\v2\x18.airlock.v1.ScheduleInfoR\tschedules\"?\n" +
 	"\x11ListToolsResponse\x12*\n" +
-	"\x05tools\x18\x01 \x03(\v2\x14.airlock.v1.ToolInfoR\x05tools\"-\n" +
-	"\x14FireScheduleResponse\x12\x15\n" +
-	"\x06run_id\x18\x01 \x01(\tR\x05runId\"D\n" +
+	"\x05tools\x18\x01 \x03(\v2\x14.airlock.v1.ToolInfoR\x05tools\";\n" +
+	"\x14FireScheduleResponse\x12#\n" +
+	"\roccurrence_id\x18\x01 \x01(\tR\foccurrenceId\"D\n" +
 	"\x15AddAgentMemberRequest\x12\x17\n" +
 	"\auser_id\x18\x01 \x01(\tR\x06userId\x12\x12\n" +
 	"\x04role\x18\x02 \x01(\tR\x04role\"\xc6\x01\n" +

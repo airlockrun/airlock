@@ -10,6 +10,7 @@ import (
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/airlockrun/sol/session"
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 )
 
 func TestSessionEndpointsRejectOtherAgentConversation(t *testing.T) {
@@ -63,7 +64,7 @@ func TestRunEndpointsRejectOtherAgentRun(t *testing.T) {
 	otherConvID := testConversation(t, otherAgentID, otherUserID)
 	q := dbq.New(testDB.Pool())
 	run, err := q.CreateRun(context.Background(), dbq.CreateRunParams{
-		AgentID: toPgUUID(ownerAgentID), InputPayload: []byte("{}"), SourceRef: "", TriggerType: "code", TriggerRef: "",
+		AgentID: toPgUUID(ownerAgentID), InputPayload: []byte("{}"), SourceRef: "", TriggerType: "code", TriggerRef: "", CallerAccess: "public",
 	})
 	if err != nil {
 		t.Fatalf("CreateRun: %v", err)
@@ -118,6 +119,47 @@ func TestRunEndpointsRejectOtherAgentRun(t *testing.T) {
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("llm status = %d, want 404; body: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestPrintRejectsCrossScopeSource(t *testing.T) {
+	skipIfNoDB(t)
+	ah := testAgentHandler()
+	agentID, userID := testAgentAndUser(t)
+	conversationID := testConversation(t, agentID, userID)
+	q := dbq.New(testDB.Pool())
+	if err := q.UpsertDirectory(context.Background(), dbq.UpsertDirectoryParams{
+		AgentID: toPgUUID(agentID), Path: "private", ReadAccess: "user", WriteAccess: "user", ListAccess: "user", Scope: "user",
+	}); err != nil {
+		t.Fatalf("UpsertDirectory: %v", err)
+	}
+	run, err := q.CreateRun(context.Background(), dbq.CreateRunParams{
+		AgentID:              toPgUUID(agentID),
+		InputPayload:         []byte("{}"),
+		TriggerType:          "prompt",
+		TriggerRef:           conversationID.String(),
+		CallerUserID:         toPgUUID(userID),
+		CallerConversationID: toPgUUID(conversationID),
+		CallerAccess:         "user",
+	})
+	if err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+
+	router := testRouter(ah, func(r chi.Router) { r.Post("/api/agent/print", ah.Print) })
+	req := agentRequest(t, http.MethodPost, "/api/agent/print", agentID, wire.PrintRequest{
+		RunID:          pgUUID(run.ID).String(),
+		ConversationID: conversationID.String(),
+		Parts: []wire.DisplayPart{{
+			Type:     "file",
+			Source:   "private/user-" + uuid.NewString() + "/secret.txt",
+			Filename: "secret.txt",
+		}},
+	})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404; body=%s", w.Code, w.Body.String())
 	}
 }
 

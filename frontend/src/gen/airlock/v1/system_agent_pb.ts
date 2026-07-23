@@ -391,4 +391,3 @@ export type SystemPromptRequest = Message<"airlock.v1.SystemPromptRequest"> & {
  */
 export const SystemPromptRequestSchema: GenMessage<SystemPromptRequest> = /*@__PURE__*/
   messageDesc(file_airlock_v1_system_agent, 9);
-

@@ -2688,4 +2688,3 @@ export enum MessageRole {
  */
 export const MessageRoleSchema: GenEnum<MessageRole> = /*@__PURE__*/
   enumDesc(file_airlock_v1_types, 1);
-

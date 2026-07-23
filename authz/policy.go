@@ -46,6 +46,7 @@ const (
 	AgentConversation Action = "agent.conversation" // create / list web conversations
 	AgentModelsView   Action = "agent.models.view"
 	AgentClone        Action = "agent.clone" // fork this agent's code into a new agent (member of source; also needs TenantAgentClone)
+	AgentFileResolve  Action = "agent.file.resolve"
 
 	// Agent axis — owner (AccessAdmin) required.
 	AgentDelete            Action = "agent.delete"
@@ -111,6 +112,7 @@ var policy = map[Action]Requirement{
 	AgentConversation: {Axis: AxisAgent, Agent: agentsdk.AccessUser},
 	AgentModelsView:   {Axis: AxisAgent, Agent: agentsdk.AccessUser},
 	AgentClone:        {Axis: AxisAgent, Agent: agentsdk.AccessUser},
+	AgentFileResolve:  {Axis: AxisAgent, Agent: agentsdk.AccessPublic},
 
 	AgentDelete:            {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
 	AgentBuildManage:       {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
