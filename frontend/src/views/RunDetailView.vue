@@ -177,7 +177,7 @@ onMounted(async () => {
                enrichMessages from the persisted rows' parts). Render in
                order; mirrors AgentChatView so the audit view matches what
                the user saw live. -->
-          <div v-else-if="msg.content || (msg as any).blocks?.length" :style="{ display: 'flex', justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start' }">
+          <div v-else-if="!(msg as any)._hidden && (msg.content || (msg as any).blocks?.length)" :style="{ display: 'flex', justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start' }">
             <div :class="['run-msg', msg.role === 'user' ? 'run-msg-user' : 'run-msg-assistant']">
               <div v-if="(msg as any).blocks?.length" :style="{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }">
                 <template v-for="(b, bi) in (msg as any).blocks" :key="bi">

@@ -424,6 +424,10 @@ function msgClassForSource(source: string): string {
   margin-bottom: -0.5rem;
 }
 
+.msg-row-user + .msg-row-user {
+  margin-top: 0;
+}
+
 /* Don't pull the very first bubble up — system chat has no top sentinel, so a
    first-message user bubble would otherwise be dragged under the top bar. */
 .msg-row-user:first-child {

@@ -1,4 +1,4 @@
-import { ref, reactive } from 'vue'
+import { ref, shallowRef, reactive } from 'vue'
 import { defineStore } from 'pinia'
 import { fromJson } from '@bufbuild/protobuf'
 import api from '@/api/client'
@@ -89,15 +89,16 @@ export const useChatStore = defineStore('chat', () => {
   // with stale tool output. Bounded growth: we only ever add the current
   // runId, and there's at most one in-flight run per conversation.
   const cancelledRunIds = new Set<string>()
-  // /compact spawns a real run, but the only meaningful UI output is the
-  // checkpoint divider that the backend inserts into the DB. The streamed
-  // text-delta ("Context compacted. N tokens freed.") would otherwise land
-  // as a regular assistant bubble. When this is set, run.text_delta is
-  // ignored and run.complete refetches from the DB so the divider shows.
-  const compactRunInFlight = ref(false)
-  // Buffers the agent's "Context compacted. N tokens freed." text so we can
-  // extract tokensFreed and push a synthetic divider on run.complete.
-  const compactReplyBuffer = ref('')
+  // /compact spawns a real run, but the only meaningful UI output is its
+  // checkpoint divider. The request starts before its run ID is known, so
+  // run.started or the POST response binds the state to that exact run.
+  // Object identity keeps a late request failure from clearing another run.
+  interface CompactRunState {
+    runId: string | null
+    replyBuffer: string
+    terminal: boolean
+  }
+  const compactRun = shallowRef<CompactRunState | null>(null)
   // Set by tool-call/tool-result; consumed by the next text-delta to insert
   // a \n separator between text blocks across LLM steps. Mirrors how
   // enrichMessages joins persisted per-step rows on refetch.
@@ -109,6 +110,10 @@ export const useChatStore = defineStore('chat', () => {
   function extractTokensFreed(text: string): number {
     const m = text.match(/(\d+)\s+tokens?\s+freed/i)
     return m ? Number(m[1]) || 0 : 0
+  }
+
+  function isCompactRun(runId: string): boolean {
+    return compactRun.value?.runId === runId
   }
 
   // Sliding-window pagination state. hasOlder means messages exist older
@@ -190,6 +195,9 @@ export const useChatStore = defineStore('chat', () => {
       onRunMessage('run.started', (payload) => {
         const ev = tryFromJson<RunStartedEvent>(RunStartedEventSchema, payload)
         if (!ev || cancelledRunIds.has(ev.runId)) return
+        if (compactRun.value && compactRun.value.runId === null) {
+          compactRun.value.runId = ev.runId
+        }
         currentRunId.value = ev.runId
         streamingText.value = ''
         activeToolCalls.clear()
@@ -199,11 +207,11 @@ export const useChatStore = defineStore('chat', () => {
       onRunMessage('run.text_delta', (payload) => {
         const ev = tryFromJson<TextDeltaEvent>(TextDeltaEventSchema, payload)
         if (!ev || !isActiveRun(ev.runId)) return
-        if (compactRunInFlight.value) {
+        if (isCompactRun(ev.runId)) {
           // Buffer the agent's "Context compacted. N tokens freed." line so
           // we can pull tokensFreed out for the synthetic divider, but
           // don't surface it as a streaming bubble.
-          compactReplyBuffer.value += ev.text
+          compactRun.value!.replyBuffer += ev.text
           return
         }
         // Ordered live blocks: a tool roundtrip (textBlockBoundary) or a
@@ -295,13 +303,15 @@ export const useChatStore = defineStore('chat', () => {
         // Don't finalize if awaiting confirmation — run is suspended, not complete.
         if (pendingConfirmation.value) return
         console.log('[chat] run.complete', { runId: ev.runId, textLen: streamingText.value.length })
-        if (compactRunInFlight.value) {
+        if (isCompactRun(ev.runId)) {
+          if (sendingTimeout) { clearTimeout(sendingTimeout); sendingTimeout = null }
           // Push a synthetic divider locally that mirrors the row the
           // backend persisted in SessionCompact. We avoid a full
           // loadConversation here because it re-runs enrichMessages, which
           // splits previously-bundled run_js tool bubbles (one persisted
           // assistant row per LLM step in the loop).
-          const tokensFreed = extractTokensFreed(compactReplyBuffer.value)
+          const state = compactRun.value!
+          const tokensFreed = extractTokensFreed(state.replyBuffer)
           const stamp = ev.runId || Date.now().toString()
           messages.value.push({
             $typeName: 'airlock.v1.AgentMessageInfo',
@@ -312,8 +322,8 @@ export const useChatStore = defineStore('chat', () => {
             parts: JSON.stringify([{ type: 'checkpoint', kind: 'compact', tokensFreed }]),
             costEstimate: 0,
           } as any)
-          compactRunInFlight.value = false
-          compactReplyBuffer.value = ''
+          state.terminal = true
+          compactRun.value = null
           streamingText.value = ''
           activeToolCalls.clear()
           streamingBlocks.value = []
@@ -333,7 +343,10 @@ export const useChatStore = defineStore('chat', () => {
         // matching the shape airlock persists to agent_messages on RunComplete.
         // The persisted row arrives via DB fetch on refresh; this synth makes
         // the live experience match without waiting.
-        compactRunInFlight.value = false
+        if (isCompactRun(ev.runId)) {
+          compactRun.value!.terminal = true
+          compactRun.value = null
+        }
         finalizeMessage()
         const errText = ev.error || 'Run failed.'
         messages.value.push({
@@ -595,13 +608,12 @@ export const useChatStore = defineStore('chat', () => {
       error: '',
       status: 'confirmation',
     })
-    // Anchor the inline confirmation box to the assistant message bearing
-    // this tool call, if the thread has one — and hide that message, since
-    // it renders via activeToolCalls instead.
+    // Anchor the inline confirmation box to the persisted assistant message
+    // bearing this tool call. The view renders the gate beside that block;
+    // keeping the message visible also preserves text from the suspended turn.
     let anchored = false
     for (let i = msgs.length - 1; i >= 0; i--) {
       if (msgs[i].role === 'assistant' && (msgs[i] as any).blocks?.some((b: any) => b.kind === 'tool' && b.toolCallId === pc.toolCallId)) {
-        ;(msgs[i] as any)._hidden = true
         anchored = true
         break
       }
@@ -793,11 +805,14 @@ export const useChatStore = defineStore('chat', () => {
     // the conversation's latest suspended one — present for approve/deny and
     // for free-text typed while a confirmation is still pending.
     const resumeRunId = pendingConfirmation.value?.runId
-    // Slash commands (/clear, /compact, ...) are handled synchronously by
-    // Airlock — no run is created and no optimistic user bubble should appear.
+    // Slash commands do not get an optimistic user bubble. Most complete
+    // synchronously; /compact is the run-producing exception.
     const isSlashCommand = !isResume && text.trim().startsWith('/')
-    compactRunInFlight.value = !isResume && /^\/compact(\s|$)/.test(text.trim())
-    if (compactRunInFlight.value) compactReplyBuffer.value = ''
+    const compactRequest: CompactRunState | null =
+      !isResume && /^\/compact(\s|$)/i.test(text.trim())
+        ? { runId: null, replyBuffer: '', terminal: false }
+        : null
+    if (!isResume) compactRun.value = compactRequest
 
     if (isResume) {
       // The suspended run's partial turn (assistant text + the tool call
@@ -884,25 +899,33 @@ export const useChatStore = defineStore('chat', () => {
       const response = fromJson(PromptResponseSchema, data)
       console.log('[chat] prompt response', { runId: response.runId, conversationId: response.conversationId, commandReply: response.commandReply })
 
-      // Slash-command path: empty run_id + a command_reply. Reload messages
-      // to pick up any checkpoint markers or other backend-inserted rows.
-      if (!response.runId && response.commandReply) {
-        sending.value = false
-        await reloadCurrentThread()
-        return
-      }
-
-      currentRunId.value = response.runId
       if (response.conversationId) {
         conversationId.value = response.conversationId
-        // First message of a new thread — pull the freshly-created row
-        // (with its server-assigned title) into both the per-agent list
-        // and the global sidebar.
+        // A command can mint the first thread without starting a run. Adopt it
+        // before the synchronous-command return so reload and both switchers
+        // can see the newly created conversation.
         if (wasNew) {
           await refreshConversations(agentId)
           void useConversationFeedStore().loadFirst()
         }
       }
+
+      // Slash-command path: empty run_id + a command_reply. Reload messages
+      // to pick up any checkpoint markers or other backend-inserted rows.
+      if (!response.runId && response.commandReply) {
+        if (compactRun.value === compactRequest) compactRun.value = null
+        sending.value = false
+        await reloadCurrentThread()
+        return
+      }
+
+      if (compactRequest && compactRun.value === compactRequest) {
+        compactRequest.runId = response.runId
+      }
+      // A fast compact run can finish over WS before the POST response is
+      // delivered. Its terminal handler already finalized the UI.
+      if (compactRequest?.terminal) return
+      currentRunId.value = response.runId
 
       // Safety timeout: if run.complete/run.error never arrives (e.g., WS down),
       // unblock the input so the user isn't stuck.
@@ -915,6 +938,7 @@ export const useChatStore = defineStore('chat', () => {
       // toast the backend's message (e.g. the 409 "agent is stopped"
       // notice) and restore the composer text.
       sending.value = false
+      if (compactRun.value === compactRequest) compactRun.value = null
       if (optimisticID) {
         messages.value = messages.value.filter(m => m.id !== optimisticID)
       }
@@ -933,6 +957,7 @@ export const useChatStore = defineStore('chat', () => {
     activeToolCalls.clear()
     streamingBlocks.value = []
     pendingConfirmation.value = null
+    compactRun.value = null
     currentRunId.value = null
     sending.value = false
     hasOlder.value = false
