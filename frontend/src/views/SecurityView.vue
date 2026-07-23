@@ -16,6 +16,28 @@ const store = usePasskeysStore()
 const toast = useToast()
 const confirm = useConfirm()
 
+const displayName = ref(auth.user?.displayName ?? '')
+const profileSaving = ref(false)
+const normalizedDisplayName = computed(() => displayName.value.trim())
+const profileSaveDisabled = computed(() =>
+  profileSaving.value ||
+  normalizedDisplayName.value === '' ||
+  normalizedDisplayName.value === auth.user?.displayName,
+)
+
+async function saveProfile() {
+  profileSaving.value = true
+  try {
+    await auth.updateDisplayName(displayName.value)
+    displayName.value = auth.user?.displayName ?? ''
+    toast.add({ severity: 'success', summary: 'Display name updated', life: 3000 })
+  } catch (err: any) {
+    toast.add({ severity: 'error', summary: err.response?.data?.error || 'Failed to update display name.', life: 4000 })
+  } finally {
+    profileSaving.value = false
+  }
+}
+
 const adding = ref(false)
 const error = ref('')
 
@@ -274,6 +296,23 @@ function formatDateTime(ts: any): string {
 <template>
   <div style="display: flex; flex-direction: column; gap: 1.5rem; max-width: 48rem">
     <h1 style="margin: 0; font-size: 1.5rem">Security</h1>
+
+    <Card>
+      <template #title>Profile</template>
+      <template #subtitle>
+        This name identifies you throughout Airlock.
+      </template>
+      <template #content>
+        <form @submit.prevent="saveProfile" style="display: flex; flex-wrap: wrap; align-items: flex-start; gap: 0.75rem; max-width: 30rem">
+          <FloatLabel variant="on" style="flex: 1 1 16rem; min-width: 0">
+            <InputText id="profile-display-name" v-model="displayName" autocomplete="name" style="width: 100%" />
+            <label for="profile-display-name">Display name</label>
+          </FloatLabel>
+          <Button type="submit" label="Save" :loading="profileSaving" :disabled="profileSaveDisabled" />
+        </form>
+      </template>
+    </Card>
+
     <Message severity="info" :closable="false">
       Credential changes require a sign-in within the last 10 minutes. Sign out and sign in again if Airlock asks for recent authentication.
     </Message>

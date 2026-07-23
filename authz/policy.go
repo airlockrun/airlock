@@ -88,6 +88,7 @@ const (
 	TenantSettingsUpdate      Action = "tenant.settings.update"
 	TenantIdentityManage      Action = "tenant.identity.manage"     // link / list / unlink caller's own platform identities: user+
 	TenantIdentityManageAll   Action = "tenant.identity.manage_all" // list / unlink any user's platform identities: admin
+	TenantSelfProfileUpdate   Action = "tenant.self.profile.update" // update the caller's own profile: user+
 	TenantSelfPasskeyManage   Action = "tenant.self.passkey.manage" // register / list / rename / delete the caller's own passkeys + set/remove own password: user+
 	ResourceInventoryView     Action = "resource.inventory.view"    // list resources available through ownership or grants: user+
 	ResourceView              Action = "resource.view"              // authenticated precondition; resource capability checked by AuthorizeResource
@@ -152,6 +153,7 @@ var policy = map[Action]Requirement{
 	TenantSettingsUpdate:      {Axis: AxisTenant, Tenant: auth.RoleAdmin},
 	TenantIdentityManage:      {Axis: AxisTenant, Tenant: auth.RoleUser},
 	TenantIdentityManageAll:   {Axis: AxisTenant, Tenant: auth.RoleAdmin},
+	TenantSelfProfileUpdate:   {Axis: AxisTenant, Tenant: auth.RoleUser},
 	TenantSelfPasskeyManage:   {Axis: AxisTenant, Tenant: auth.RoleUser},
 	ResourceInventoryView:     {Axis: AxisAuthenticated},
 	ResourceView:              {Axis: AxisAuthenticated},

@@ -127,5 +127,7 @@ WITH updated AS (
 )
 DELETE FROM principals WHERE id = (SELECT id FROM updated);
 
--- name: UpdateUserNameEmail :exec
-UPDATE users SET display_name = $2, email = $3, updated_at = now() WHERE id = $1;
+-- name: UpdateUserDisplayName :execrows
+UPDATE users
+SET display_name = @display_name, updated_at = now()
+WHERE id = @id;

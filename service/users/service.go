@@ -1,13 +1,14 @@
 // Package users owns the tenant-wide user directory: reads (List /
-// ListDetail / Get / Lookup) at TenantUserView, and admin mutators
-// (Create / UpdateRole / Delete) at TenantUserManage. Every method
-// gates through authz.Authorize so the policy table is the one place
-// the access matrix is editable.
+// ListDetail / Get / Lookup) at TenantUserView, self-service display-name
+// updates at TenantSelfProfileUpdate, and admin mutators (Create / UpdateRole /
+// Delete) at TenantUserManage. Every method gates through authz.Authorize so
+// the policy table is the one place the access matrix is editable.
 package users
 
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/authz"
@@ -213,6 +214,34 @@ func (s *Service) Create(ctx context.Context, p authz.Principal, req CreateReque
 		return Detail{}, "", service.Detail(service.ErrConflict, "user already exists")
 	}
 	return detailFromRow(row), tempPassword, nil
+}
+
+// UpdateOwnDisplayName changes the authenticated user's display name without
+// changing credentials, authorization state, or sessions.
+func (s *Service) UpdateOwnDisplayName(ctx context.Context, p authz.Principal, displayName string) error {
+	q := dbq.New(s.db.Pool())
+	if err := authz.Authorize(ctx, q, p, authz.TenantSelfProfileUpdate, uuid.Nil); err != nil {
+		return err
+	}
+	displayName = strings.TrimSpace(displayName)
+	if displayName == "" {
+		return service.Detail(service.ErrInvalidInput, "display name is required")
+	}
+	rows, err := q.UpdateUserDisplayName(ctx, dbq.UpdateUserDisplayNameParams{
+		ID:          pgtype.UUID{Bytes: p.UserID, Valid: true},
+		DisplayName: displayName,
+	})
+	if err != nil {
+		s.logger.Error("users: update own display name failed", zap.Error(err))
+		return err
+	}
+	if rows == 0 {
+		return service.ErrNotFound
+	}
+	if rows != 1 {
+		return fmt.Errorf("users: update own display name affected %d rows", rows)
+	}
+	return nil
 }
 
 // UpdateRole changes a user's tenant role. Admin-gated. Refuses the

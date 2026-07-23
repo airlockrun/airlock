@@ -1,6 +1,6 @@
 import { ref, computed } from 'vue'
 import { defineStore } from 'pinia'
-import { fromJson } from '@bufbuild/protobuf'
+import { create, fromJson, toJson } from '@bufbuild/protobuf'
 import api, { clearAccessToken, isAuthRejection, refreshAccessToken, setAccessToken } from '@/api/client'
 import { passkeyLogin, registerPasskey } from '@/api/passkeys'
 import { ws } from '@/api/ws'
@@ -11,6 +11,7 @@ import {
   MeResponseSchema,
   RegisterResponseSchema,
   ChangePasswordResponseSchema,
+  UpdateMeRequestSchema,
 } from '@/gen/airlock/v1/api_pb'
 
 export const useAuthStore = defineStore('auth', () => {
@@ -117,6 +118,13 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
+  async function updateDisplayName(displayName: string) {
+    const normalized = displayName.trim()
+    const request = create(UpdateMeRequestSchema, { displayName: normalized })
+    await api.patch('/api/v1/me', toJson(UpdateMeRequestSchema, request))
+    if (user.value) user.value.displayName = normalized
+  }
+
   async function logout() {
     await api.post('/auth/logout', {})
     user.value = null
@@ -145,6 +153,7 @@ export const useAuthStore = defineStore('auth', () => {
     refresh,
     fetchMe,
     changePassword,
+    updateDisplayName,
     logout,
   }
 })
