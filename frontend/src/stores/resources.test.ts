@@ -37,26 +37,4 @@ describe('resources store', () => {
     expect(store.error).toBe('network down')
   })
 
-  it('serializes resource grant capabilities and identifiers', async () => {
-    post.mockResolvedValueOnce({})
-    const store = useResourcesStore()
-
-    await store.grant('mcp_server', 'resource-1', 'group-1', ['view', 'bind'])
-
-    expect(post).toHaveBeenCalledWith('/api/v1/resources/mcp_server/resource-1/grants', {
-      resourceType: 'mcp_server',
-      resourceId: 'resource-1',
-      granteeId: 'group-1',
-      capabilities: ['view', 'bind'],
-    })
-  })
-
-  it('uses the returned grant id when revoking access', async () => {
-    remove.mockResolvedValueOnce({})
-    const store = useResourcesStore()
-
-    await store.revokeGrant('connection', 'resource-1', 'grant-9')
-
-    expect(remove).toHaveBeenCalledWith('/api/v1/resources/connection/resource-1/grants/grant-9')
-  })
 })

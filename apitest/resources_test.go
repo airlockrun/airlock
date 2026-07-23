@@ -60,6 +60,24 @@ func seedConnection(t *testing.T, h *apitest.Harness, agentID uuid.UUID, slug st
 	return uuid.UUID(conn.ID.Bytes)
 }
 
+func seedConnectionGrant(t *testing.T, h *apitest.Harness, connectionID, granteeID uuid.UUID, capabilities ...string) uuid.UUID {
+	t.Helper()
+	id := uuid.New()
+	if _, err := h.DB.Pool().Exec(t.Context(),
+		`INSERT INTO resource_grants (id, connection_id, grantee_id, capabilities) VALUES ($1, $2, $3, $4)`,
+		id, connectionID, granteeID, capabilities); err != nil {
+		t.Fatalf("seed connection grant: %v", err)
+	}
+	return id
+}
+
+func deleteResourceGrant(t *testing.T, h *apitest.Harness, id uuid.UUID) {
+	t.Helper()
+	if _, err := h.DB.Pool().Exec(t.Context(), `DELETE FROM resource_grants WHERE id=$1`, id); err != nil {
+		t.Fatalf("delete resource grant: %v", err)
+	}
+}
+
 func listResources(t *testing.T, h *apitest.Harness, token string) *airlockv1.ListOwnedResourcesResponse {
 	t.Helper()
 	resp := h.Do(h.NewRequest(http.MethodGet, "/api/v1/resources", token, nil))
@@ -184,12 +202,7 @@ func TestResources_RenameRequiresManageAndAllowsDuplicates(t *testing.T) {
 	if code := rename(managerTok, firstID, "Shared name"); code != http.StatusForbidden {
 		t.Fatalf("rename without manage: want 403, got %d", code)
 	}
-	q := dbq.New(h.DB.Pool())
-	if _, err := q.CreateConnectionGrant(context.Background(), dbq.CreateConnectionGrantParams{
-		ConnectionID: pgUUID(firstID), GranteeID: pgUUID(manager), Capabilities: []string{"manage"},
-	}); err != nil {
-		t.Fatalf("grant manage: %v", err)
-	}
+	seedConnectionGrant(t, h, firstID, manager, "manage")
 	if code := rename(managerTok, firstID, "  Shared name  "); code != http.StatusNoContent {
 		t.Fatalf("granted rename: want 204, got %d", code)
 	}
@@ -227,13 +240,7 @@ func TestResources_ConsumersRequireViewCapability(t *testing.T) {
 	if code := h.Do(h.NewRequest(http.MethodGet, path, viewerTok, nil)).StatusCode; code != http.StatusForbidden {
 		t.Fatalf("consumers without view: want 403, got %d", code)
 	}
-	q := dbq.New(h.DB.Pool())
-	grant, err := q.CreateConnectionGrant(context.Background(), dbq.CreateConnectionGrantParams{
-		ConnectionID: pgUUID(connID), GranteeID: pgUUID(viewer), Capabilities: []string{"view"},
-	})
-	if err != nil {
-		t.Fatalf("grant view: %v", err)
-	}
+	seedConnectionGrant(t, h, connID, viewer, "view")
 	resp := h.Do(h.NewRequest(http.MethodGet, path, viewerTok, nil))
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("consumers with view: status %d, body %s", resp.StatusCode, h.ReadBody(resp))
@@ -250,22 +257,11 @@ func TestResources_ConsumersRequireViewCapability(t *testing.T) {
 	if consumer.CanAccessAgent {
 		t.Error("resource viewer without agent membership was marked accessible")
 	}
-	grantsPath := "/api/v1/resources/connection/" + connID.String() + "/grants"
-	if code := h.Do(h.NewRequest(http.MethodGet, grantsPath, viewerTok, nil)).StatusCode; code != http.StatusForbidden {
-		t.Fatalf("grant list with view only: want 403, got %d", code)
-	}
 	ownerResp := h.Do(h.NewRequest(http.MethodGet, path, ownerTok, nil))
 	ownerConsumers := &airlockv1.ListResourceConsumersResponse{}
 	h.DecodeProto(ownerResp, ownerConsumers)
 	if len(ownerConsumers.Consumers) != 1 || !ownerConsumers.Consumers[0].CanAccessAgent {
 		t.Fatalf("agent owner accessibility missing: %+v", ownerConsumers.Consumers)
-	}
-
-	grantsResp := h.Do(h.NewRequest(http.MethodGet, grantsPath, ownerTok, nil))
-	grants := &airlockv1.ListResourceGrantsResponse{}
-	h.DecodeProto(grantsResp, grants)
-	if len(grants.Grants) != 1 || grants.Grants[0].Id != uuid.UUID(grant.ID.Bytes).String() {
-		t.Errorf("grant ID missing from response: %+v", grants.Grants)
 	}
 }
 
@@ -292,12 +288,7 @@ func TestNeeds_GrantBasedCandidatesBindingAndUnbind(t *testing.T) {
 	if code := bind(); code != http.StatusForbidden {
 		t.Fatalf("bind without resource grant: want 403, got %d", code)
 	}
-	grant, err := q.CreateConnectionGrant(context.Background(), dbq.CreateConnectionGrantParams{
-		ConnectionID: pgUUID(connID), GranteeID: pgUUID(consumer), Capabilities: []string{"bind"},
-	})
-	if err != nil {
-		t.Fatalf("grant bind: %v", err)
-	}
+	grantID := seedConnectionGrant(t, h, connID, consumer, "bind")
 
 	candidatesResp := h.Do(h.NewRequest(http.MethodGet, basePath+"/candidates", consumerTok, nil))
 	if candidatesResp.StatusCode != http.StatusOK {
@@ -316,11 +307,7 @@ func TestNeeds_GrantBasedCandidatesBindingAndUnbind(t *testing.T) {
 		t.Fatalf("bind with resource grant: want 204, got %d", code)
 	}
 
-	if _, err := q.RevokeResourceGrant(context.Background(), dbq.RevokeResourceGrantParams{
-		ID: grant.ID, ResourceType: "connection", ResourceID: pgUUID(connID),
-	}); err != nil {
-		t.Fatalf("revoke bind grant: %v", err)
-	}
+	deleteResourceGrant(t, h, grantID)
 	if code := h.Do(h.NewRequest(http.MethodDelete, basePath+"/bind", consumerTok, nil)).StatusCode; code != http.StatusNoContent {
 		t.Fatalf("unbind without resource permission: want 204, got %d", code)
 	}
@@ -417,11 +404,7 @@ func TestNeeds_OAuthScopeReadinessAndBindCapabilities(t *testing.T) {
 	seedConnectionNeed(t, h, targetAgent, "documents", "read write")
 	q := dbq.New(h.DB.Pool())
 	for _, id := range []uuid.UUID{readyID, missingID, unverifiedID} {
-		if _, err := q.CreateConnectionGrant(context.Background(), dbq.CreateConnectionGrantParams{
-			ConnectionID: pgUUID(id), GranteeID: pgUUID(consumer), Capabilities: []string{"bind"},
-		}); err != nil {
-			t.Fatalf("grant bind: %v", err)
-		}
+		seedConnectionGrant(t, h, id, consumer, "bind")
 	}
 	base := "/api/v1/agents/" + targetAgent.String() + "/needs/connection/documents"
 	resp := h.Do(h.NewRequest(http.MethodGet, base+"/candidates", consumerToken, nil))
@@ -1133,86 +1116,6 @@ func TestRuntimeMCPScopeEnforcementThroughAgentHandler(t *testing.T) {
 	}
 }
 
-func TestResourceGrantMutationAPI(t *testing.T) {
-	h := apitest.Setup(t)
-	owner := apitest.CreateUser(t, h, "grant-api-owner", "user")
-	delegate := apitest.CreateUser(t, h, "grant-api-delegate", "user")
-	viewer := apitest.CreateUser(t, h, "grant-api-viewer", "user")
-	ownerToken := apitest.IssueUserToken(t, h, owner, "grant-api-owner@apitest.local", "user")
-	delegateToken := apitest.IssueUserToken(t, h, delegate, "grant-api-delegate@apitest.local", "user")
-	agentID := apitest.CreateAgent(t, h, apitest.AgentOpts{OwnerID: owner})
-	firstID := seedConnection(t, h, agentID, "grant-first", false)
-	secondID := seedConnection(t, h, agentID, "grant-second", false)
-	path := "/api/v1/resources/connection/" + firstID.String() + "/grants"
-	grant := func(token string, grantee uuid.UUID, caps ...string) int {
-		resp := h.Do(h.NewRequest(http.MethodPost, path, token, &airlockv1.GrantResourceRequest{GranteeId: grantee.String(), Capabilities: caps}))
-		resp.Body.Close()
-		return resp.StatusCode
-	}
-	if got := grant(ownerToken, viewer, "invalid"); got != http.StatusBadRequest {
-		t.Fatalf("invalid capability status = %d, want 400", got)
-	}
-	if got := grant(ownerToken, delegate, "manage"); got != http.StatusNoContent {
-		t.Fatalf("delegate manage create = %d", got)
-	}
-	if got := grant(ownerToken, authz.GroupUser, "view"); got != http.StatusNoContent {
-		t.Fatalf("group grant create = %d", got)
-	}
-	if got := grant(ownerToken, authz.GroupUser, "view", "bind"); got != http.StatusNoContent {
-		t.Fatalf("group grant update = %d", got)
-	}
-	if got := grant(delegateToken, viewer, "view", "bind"); got != http.StatusNoContent {
-		t.Fatalf("delegated grant create = %d", got)
-	}
-	if got := grant(delegateToken, viewer, "manage"); got != http.StatusNoContent {
-		t.Fatalf("delegated grant update = %d", got)
-	}
-
-	resp := h.Do(h.NewRequest(http.MethodGet, path, delegateToken, nil))
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("delegated list = %d %s", resp.StatusCode, h.ReadBody(resp))
-	}
-	listed := &airlockv1.ListResourceGrantsResponse{}
-	h.DecodeProto(resp, listed)
-	if len(listed.Grants) != 3 {
-		t.Fatalf("listed grants = %+v", listed.Grants)
-	}
-	var viewerGrantID, groupGrantID string
-	for _, item := range listed.Grants {
-		if item.GranteeId == viewer.String() {
-			viewerGrantID = item.Id
-			if len(item.Capabilities) != 1 || item.Capabilities[0] != "manage" {
-				t.Fatalf("updated viewer grant = %+v", item)
-			}
-		}
-		if item.GranteeId == authz.GroupUser.String() {
-			groupGrantID = item.Id
-			if len(item.Capabilities) != 2 || item.Capabilities[0] != "view" || item.Capabilities[1] != "bind" {
-				t.Fatalf("updated group grant = %+v", item)
-			}
-		}
-	}
-	if viewerGrantID == "" || groupGrantID == "" {
-		t.Fatalf("grant IDs not listed: viewer=%q group=%q", viewerGrantID, groupGrantID)
-	}
-	wrongPath := "/api/v1/resources/connection/" + secondID.String() + "/grants/" + viewerGrantID
-	wrong := h.Do(h.NewRequest(http.MethodDelete, wrongPath, ownerToken, nil))
-	wrong.Body.Close()
-	if wrong.StatusCode != http.StatusNotFound {
-		t.Fatalf("wrong-resource revoke = %d, want 404", wrong.StatusCode)
-	}
-	remove := h.Do(h.NewRequest(http.MethodDelete, path+"/"+viewerGrantID, delegateToken, nil))
-	remove.Body.Close()
-	if remove.StatusCode != http.StatusNoContent {
-		t.Fatalf("delegated revoke = %d, want 204", remove.StatusCode)
-	}
-	remove = h.Do(h.NewRequest(http.MethodDelete, path+"/"+groupGrantID, delegateToken, nil))
-	remove.Body.Close()
-	if remove.StatusCode != http.StatusNoContent {
-		t.Fatalf("delegated group revoke = %d, want 204", remove.StatusCode)
-	}
-}
-
 func TestAgentUserCannotMutateNeedsDespiteResourceGrants(t *testing.T) {
 	h := apitest.Setup(t)
 	owner := apitest.CreateUser(t, h, "need-gate-owner", "user")
@@ -1223,11 +1126,7 @@ func TestAgentUserCannotMutateNeedsDespiteResourceGrants(t *testing.T) {
 	resourceID := seedOAuthConnection(t, h, agentID, "need-gate-resource", "read", "read")
 	seedConnectionNeed(t, h, agentID, "need-gate", "read")
 	q := dbq.New(h.DB.Pool())
-	if _, err := q.CreateConnectionGrant(t.Context(), dbq.CreateConnectionGrantParams{
-		ConnectionID: pgUUID(resourceID), GranteeID: pgUUID(member), Capabilities: []string{"view", "bind", "manage"},
-	}); err != nil {
-		t.Fatal(err)
-	}
+	seedConnectionGrant(t, h, resourceID, member, "view", "bind", "manage")
 	if _, err := q.BindConnectionNeed(t.Context(), dbq.BindConnectionNeedParams{AgentID: pgUUID(agentID), Slug: "need-gate", ResourceID: pgUUID(resourceID)}); err != nil {
 		t.Fatal(err)
 	}

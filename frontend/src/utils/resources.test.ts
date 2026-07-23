@@ -55,10 +55,10 @@ describe('resource inventory status', () => {
 })
 
 describe('resource detail capabilities', () => {
-  it('loads consumers only with view and grants only with manage', () => {
-    expect(resourceDetailAccess(['bind'])).toEqual({ consumers: false, grants: false })
-    expect(resourceDetailAccess(['view'])).toEqual({ consumers: true, grants: false })
-    expect(resourceDetailAccess(['manage'])).toEqual({ consumers: false, grants: true })
+  it('loads consumers only with view access', () => {
+    expect(resourceDetailAccess(['bind'])).toEqual({ consumers: false })
+    expect(resourceDetailAccess(['view'])).toEqual({ consumers: true })
+    expect(resourceDetailAccess(['manage'])).toEqual({ consumers: false })
   })
 })
 

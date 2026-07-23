@@ -131,9 +131,9 @@ func newOAuthCallbackFixtureWithExchange(t *testing.T, duringExchange func(*oaut
 	if _, err := q.BindConnectionNeed(ctx, dbq.BindConnectionNeedParams{AgentID: agent.ID, Slug: "oauth", ResourceID: conn.ID}); err != nil {
 		t.Fatalf("bind connection: %v", err)
 	}
-	if _, err := q.CreateConnectionGrant(ctx, dbq.CreateConnectionGrantParams{
-		ConnectionID: conn.ID, GranteeID: user.ID, Capabilities: []string{"bind", "manage"},
-	}); err != nil {
+	if _, err := callbackTestDB.Pool().Exec(ctx,
+		`INSERT INTO resource_grants (connection_id, grantee_id, capabilities) VALUES ($1, $2, ARRAY['bind', 'manage'])`,
+		conn.ID, user.ID); err != nil {
 		t.Fatalf("grant resource authorization: %v", err)
 	}
 

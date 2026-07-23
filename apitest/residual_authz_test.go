@@ -13,7 +13,6 @@ import (
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/airlockrun/airlock/service"
 	agentssvc "github.com/airlockrun/airlock/service/agents"
-	grantssvc "github.com/airlockrun/airlock/service/grants"
 	identitysvc "github.com/airlockrun/airlock/service/identity"
 	managedbotssvc "github.com/airlockrun/airlock/service/managedbots"
 	userssvc "github.com/airlockrun/airlock/service/users"
@@ -124,35 +123,6 @@ func TestManagedBotSessionRequiresTargetAgentAdmin(t *testing.T) {
 	})
 	if !errors.Is(err, service.ErrForbidden) {
 		t.Fatalf("member managed-bot session error = %v, want forbidden", err)
-	}
-}
-
-func TestResourceGrantRevokeBindsRouteResource(t *testing.T) {
-	h := apitest.Setup(t)
-	owner := apitest.CreateUser(t, h, "grant-owner", "user")
-	resourceA, resourceB, grantB := uuid.New(), uuid.New(), uuid.New()
-	ctx := context.Background()
-	for _, id := range []uuid.UUID{resourceA, resourceB} {
-		if _, err := h.DB.Pool().Exec(ctx,
-			`INSERT INTO git_credentials (id, user_id, type, name, token_ref, github_install_id) VALUES ($1, $2, 'token', $3, 'ref', '')`, id, owner, id.String()); err != nil {
-			t.Fatalf("insert git credential: %v", err)
-		}
-	}
-	if _, err := h.DB.Pool().Exec(ctx,
-		`INSERT INTO resource_grants (id, git_credential_id, grantee_id, capabilities) VALUES ($1, $2, $3, ARRAY['view'])`, grantB, resourceB, authz.GroupUser); err != nil {
-		t.Fatalf("insert resource grant: %v", err)
-	}
-	svc := grantssvc.New(h.DB, zap.NewNop())
-	err := svc.RevokeResourceGrant(ctx, authz.UserPrincipal(owner, auth.RoleUser), "git_credential", resourceA, grantB)
-	if !errors.Is(err, service.ErrNotFound) {
-		t.Fatalf("cross-resource revoke error = %v, want not found", err)
-	}
-	var exists bool
-	if err := h.DB.Pool().QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM resource_grants WHERE id=$1)`, grantB).Scan(&exists); err != nil {
-		t.Fatalf("check resource grant: %v", err)
-	}
-	if !exists {
-		t.Fatal("cross-resource revoke deleted the grant")
 	}
 }
 

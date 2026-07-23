@@ -78,10 +78,9 @@ export function resourceLabel(resource: Pick<OwnedResourceInfo, 'displayName' | 
   return resource.displayName || resource.name || resource.slug
 }
 
-export function resourceDetailAccess(capabilities: string[]): { consumers: boolean; grants: boolean } {
+export function resourceDetailAccess(capabilities: string[]): { consumers: boolean } {
   return {
     consumers: hasCapability(capabilities, 'view'),
-    grants: hasCapability(capabilities, 'manage'),
   }
 }
 

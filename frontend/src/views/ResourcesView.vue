@@ -1,17 +1,15 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useConfirm } from 'primevue/useconfirm'
 import { useToast } from 'primevue/usetoast'
-import type { OwnedResourceInfo, ResourceConsumerInfo, ResourceGrantInfo } from '@/gen/airlock/v1/api_pb'
+import type { OwnedResourceInfo, ResourceConsumerInfo } from '@/gen/airlock/v1/api_pb'
 import type { GitCredential } from '@/gen/airlock/v1/types_pb'
 import { useResourcesStore } from '@/stores/resources'
 import { useGitCredentialsStore } from '@/stores/gitCredentials'
-import { useUsersStore } from '@/stores/users'
 import { hasCapability, resourceDetailAccess, resourceLabel, resourceStatus } from '@/utils/resources'
 
 const resources = useResourcesStore()
 const git = useGitCredentialsStore()
-const users = useUsersStore()
 const confirm = useConfirm()
 const toast = useToast()
 
@@ -27,43 +25,20 @@ const sortedResources = computed(() => [...resources.resources].sort((a, b) =>
 const detailOpen = ref(false)
 const selected = ref<OwnedResourceInfo | null>(null)
 const consumers = ref<ResourceConsumerInfo[]>([])
-const grants = ref<ResourceGrantInfo[]>([])
 const consumersLoading = ref(false)
 const consumersError = ref('')
-const grantsLoading = ref(false)
-const grantsError = ref('')
 const editingId = ref('')
 const editName = ref('')
 const renaming = ref(false)
-const grantGrantee = ref('')
-const grantCapabilities = ref<string[]>(['view'])
-const grantSaving = ref(false)
-const capabilityOptions = [
-  { label: 'View', value: 'view' },
-  { label: 'Bind', value: 'bind' },
-  { label: 'Manage', value: 'manage' },
-]
 
 const canManageSelected = computed(() => !!selected.value && hasCapability(selected.value.capabilities, 'manage'))
 const detailAccess = computed(() => resourceDetailAccess(selected.value?.capabilities ?? []))
-const granteeById = computed(() => new Map(users.selectable.map((user) => [user.id, user])))
-const granteeOptions = computed(() => users.selectable.map((user) => ({
-  id: user.id,
-  label: user.kind === 'group'
-    ? user.displayName
-    : user.displayName ? `${user.displayName} (${user.email})` : user.email,
-})))
 
 function errorMessage(error: any, fallback: string): string {
   return error?.response?.data?.error || fallback
 }
 function capabilityLabel(capability: string): string {
   return capability.charAt(0).toUpperCase() + capability.slice(1)
-}
-function granteeLabel(id: string): string {
-  const grantee = granteeById.value.get(id)
-  if (!grantee) return id
-  return grantee.kind === 'group' ? grantee.displayName : grantee.displayName || grantee.email
 }
 function consumerSummary(): string {
   if (!detailAccess.value.consumers || consumersError.value) return 'This affects every app using it.'
@@ -86,34 +61,12 @@ async function loadConsumers(resource: OwnedResourceInfo) {
   }
 }
 
-async function loadGrants(resource: OwnedResourceInfo) {
-  if (!resourceDetailAccess(resource.capabilities).grants) return
-  grantsLoading.value = true
-  grantsError.value = ''
-  grants.value = []
-  try {
-    const [loaded] = await Promise.all([
-      resources.fetchGrants(resource.type, resource.id),
-      users.fetchSelectable(),
-    ])
-    if (selected.value?.id === resource.id) grants.value = loaded
-  } catch (error: any) {
-    if (selected.value?.id === resource.id) grantsError.value = errorMessage(error, 'Failed to load sharing')
-  } finally {
-    if (selected.value?.id === resource.id) grantsLoading.value = false
-  }
-}
-
 async function loadDetail(resource: OwnedResourceInfo) {
   selected.value = resource
   detailOpen.value = true
   consumers.value = []
-  grants.value = []
   consumersError.value = ''
-  grantsError.value = ''
-  grantGrantee.value = ''
-  grantCapabilities.value = ['view']
-  await Promise.all([loadConsumers(resource), loadGrants(resource)])
+  await loadConsumers(resource)
 }
 
 function beginRename(resource: OwnedResourceInfo) {
@@ -135,46 +88,6 @@ async function saveRename(resource: OwnedResourceInfo) {
   } finally {
     renaming.value = false
   }
-}
-
-watch(grantGrantee, (id) => {
-  const existing = grants.value.find((grant) => grant.granteeId === id)
-  grantCapabilities.value = existing ? [...existing.capabilities] : ['view']
-})
-
-async function saveGrant() {
-  const resource = selected.value
-  if (!resource || !resourceDetailAccess(resource.capabilities).grants || !grantGrantee.value || !grantCapabilities.value.length) return
-  grantSaving.value = true
-  try {
-    await resources.grant(resource.type, resource.id, grantGrantee.value, grantCapabilities.value)
-    grants.value = await resources.fetchGrants(resource.type, resource.id)
-    toast.add({ severity: 'success', summary: 'Sharing updated', life: 2500 })
-  } catch (error: any) {
-    toast.add({ severity: 'error', summary: errorMessage(error, 'Failed to update sharing'), life: 5000 })
-  } finally {
-    grantSaving.value = false
-  }
-}
-
-function revokeGrant(grant: ResourceGrantInfo) {
-  const resource = selected.value
-  if (!resource || !resourceDetailAccess(resource.capabilities).grants) return
-  confirm.require({
-    header: 'Revoke shared access?',
-    message: `Remove ${granteeLabel(grant.granteeId)}'s ${grant.capabilities.join(', ')} access? Existing app bindings are not removed.`,
-    acceptLabel: 'Revoke access',
-    rejectLabel: 'Cancel',
-    accept: async () => {
-      try {
-        await resources.revokeGrant(resource.type, resource.id, grant.id)
-        grants.value = await resources.fetchGrants(resource.type, resource.id)
-        toast.add({ severity: 'success', summary: 'Shared access revoked', life: 2500 })
-      } catch (error: any) {
-        toast.add({ severity: 'error', summary: errorMessage(error, 'Failed to revoke access'), life: 5000 })
-      }
-    },
-  })
 }
 
 function signOut(resource: OwnedResourceInfo) {
@@ -200,7 +113,7 @@ function signOut(resource: OwnedResourceInfo) {
 function deleteResource(resource: OwnedResourceInfo) {
   confirm.require({
     header: `Delete ${resourceLabel(resource)}?`,
-    message: `This permanently deletes the resource, removes its grants, and disconnects every app. ${consumerSummary()}`,
+    message: `This permanently deletes the resource and disconnects every app. ${consumerSummary()}`,
     icon: 'pi pi-exclamation-triangle',
     acceptLabel: 'Delete resource',
     rejectLabel: 'Cancel',
@@ -271,7 +184,7 @@ onMounted(() => {
 <template>
   <div class="resources-page">
     <h1>Resources</h1>
-    <p class="intro">Reusable connections, MCP servers, and exec endpoints available through ownership or sharing. Credentials stay hidden; apps bind resources from their own setup.</p>
+    <p class="intro">Reusable connections, MCP servers, and exec endpoints available to you. Credentials stay hidden; apps bind resources from their own setup.</p>
 
     <Card class="inventory-card">
       <template #title>Connections, MCP servers and exec endpoints</template>
@@ -380,36 +293,9 @@ onMounted(() => {
           </div>
         </section>
 
-        <section>
-          <h3>Sharing</h3>
-          <Message v-if="!detailAccess.grants" severity="secondary" :closable="false">Sharing details are unavailable without manage access.</Message>
-          <Skeleton v-else-if="grantsLoading" height="10rem" />
-          <Message v-else-if="grantsError" severity="error" :closable="false">
-            <div class="load-error">
-              <span>{{ grantsError }}</span>
-              <Button label="Retry" icon="pi pi-refresh" size="small" outlined @click="loadGrants(selected)" />
-            </div>
-          </Message>
-          <template v-else-if="canManageSelected">
-            <p class="muted">View reveals metadata. Bind lets someone connect it to apps they administer. Manage lets them rename, reconfigure, sign out, delete, and share it.</p>
-            <div class="grant-editor">
-              <Select v-model="grantGrantee" :options="granteeOptions" option-label="label" option-value="id" placeholder="Select user or group" filter />
-              <SelectButton v-model="grantCapabilities" :options="capabilityOptions" option-label="label" option-value="value" multiple />
-              <Button label="Save access" :loading="grantSaving" :disabled="!grantGrantee || !grantCapabilities.length" @click="saveGrant" />
-            </div>
-            <div v-if="grants.length" class="grant-list">
-              <div v-for="grant in grants" :key="grant.id" class="grant-row">
-                <span><i :class="granteeById.get(grant.granteeId)?.kind === 'group' ? 'pi pi-users' : 'pi pi-user'" /> {{ granteeLabel(grant.granteeId) }}</span>
-                <span class="capabilities"><Tag v-for="capability in grant.capabilities" :key="capability" :value="capabilityLabel(capability)" severity="secondary" /></span>
-                <Button icon="pi pi-trash" size="small" text severity="danger" aria-label="Revoke grant" @click="revokeGrant(grant)" />
-              </div>
-            </div>
-          </template>
-        </section>
-
         <section v-if="canManageSelected" class="danger-zone">
           <h3>Resource actions</h3>
-          <p class="muted">Disconnecting one app only removes that app's binding. Signing out or deleting here affects the shared resource and every consuming app.</p>
+          <p class="muted">Disconnecting one app only removes that app's binding. Signing out or deleting here affects the resource and every consuming app.</p>
           <div class="danger-actions">
             <Button v-if="selected.type !== 'exec_endpoint' && selected.authMode !== 'none'" label="Sign out resource" icon="pi pi-sign-out" severity="secondary" outlined @click="signOut(selected)" />
             <Button label="Delete resource" icon="pi pi-trash" severity="danger" outlined @click="deleteResource(selected)" />
@@ -449,20 +335,17 @@ h1 { margin: 0; font-size: 1.5rem; }
 .detail-body section { padding-top: 1rem; border-top: 1px solid var(--p-content-border-color); }
 .detail-body h3 { margin: 0 0 0.6rem; font-size: 1rem; }
 .detail-body p { margin: 0 0 0.8rem; }
-.consumer-list, .grant-list { display: flex; flex-direction: column; gap: 0.4rem; }
-.consumer-row, .grant-row { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; padding: 0.65rem; border: 1px solid var(--p-content-border-color); border-radius: 0.5rem; color: inherit; text-decoration: none; }
+.consumer-list { display: flex; flex-direction: column; gap: 0.4rem; }
+.consumer-row { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; padding: 0.65rem; border: 1px solid var(--p-content-border-color); border-radius: 0.5rem; color: inherit; text-decoration: none; }
 .consumer-link:hover { border-color: var(--p-primary-color); }
 .consumer-row > span:first-child { display: flex; flex-direction: column; }
 .consumer-row small { color: var(--p-text-muted-color); }
 .need-type { color: var(--p-text-muted-color); font-size: 0.8rem; text-align: right; }
-.grant-editor { display: grid; grid-template-columns: minmax(12rem, 1fr) auto auto; align-items: center; gap: 0.6rem; margin-bottom: 0.8rem; }
-.grant-row > :first-child { flex: 1; }
 .danger-zone { border-top-color: var(--p-red-300) !important; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 0.5rem; }
 .load-error { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; }
 @media (max-width: 44rem) {
-  .grant-editor { grid-template-columns: 1fr; }
-  .consumer-row, .grant-row { align-items: flex-start; flex-wrap: wrap; }
+  .consumer-row { align-items: flex-start; flex-wrap: wrap; }
   .need-type { text-align: left; width: 100%; }
   .danger-actions { align-items: stretch; flex-direction: column; }
   .danger-actions :deep(.p-button) { width: 100%; }

@@ -874,26 +874,7 @@ message HealthResponse {
   bool s3 = 3;        // S3/MinIO reachable
 }
 
-// ── Resource & model grants ──
-
-// GrantResourceRequest shares a user-owned resource with a principal (a user id
-// or a built-in role-group id). Gated by the manage capability on the resource.
-message GrantResourceRequest {
-  string resource_type = 1;  // connection | mcp_server | exec_endpoint | git_credential
-  string resource_id = 2;
-  string grantee_id = 3;
-  repeated string capabilities = 4;  // subset of view | bind | manage
-}
-
-message ResourceGrantInfo {
-  string grantee_id = 1;
-  repeated string capabilities = 2;
-  string id = 3;
-}
-
-message ListResourceGrantsResponse {
-  repeated ResourceGrantInfo grants = 1;
-}
+// ── Model grants ──
 
 // GrantModelRequest entitles a grantee to assign a (provider, model). Admin-only.
 message GrantModelRequest {

@@ -141,7 +141,7 @@ flag and the gate releases).
 - **Runs**: List, detail, logs (streaming), cancel
 - **Webhooks/Crons**: List, manual fire
 - **Credentials**: Need-aware OAuth authorization (existing-resource scope expansion or hidden provisional creation), callback activation/binding, API keys (get/set/revoke/test)
-- **Resources**: Inventory includes owned and granted connections/MCP servers/exec endpoints with caller capabilities; rename, consumers, grants, revoke, and delete are resource-capability gated
+- **Resources**: Inventory includes available connections/MCP servers/exec endpoints with caller capabilities; rename, consumers, revoke, and delete are resource-capability gated
 - **Resource needs**: Agent needs list, grant-aware candidates with structural/scope readiness, create/bind, authorization-before-binding, and agent-admin-only unbind
 - **Members**: Agent sharing (add/remove users)
 - **Providers**: LLM provider config (admin only)
@@ -227,7 +227,8 @@ or built-in role groups. Binding a scope-ready resource requires agent-admin
 access and resource `bind`. Extending OAuth scopes also requires resource
 `manage`; callback rechecks both capabilities and atomically stores the grant
 and binding. Unbinding requires only agent-admin because it changes the agent
-need, not the resource.
+need, not the resource. The open-source API evaluates stored resource grants but
+does not expose grant administration.
 
 ### Resource OAuth Lifecycle
 - Agent sync writes only `agent_resource_needs`. It never creates, rewrites, or clears a shared concrete resource.
@@ -235,7 +236,7 @@ need, not the resource.
 - New OAuth resources are durable `provisional` rows tied to one need. Inventory, candidates, runtime, and refresh queries expose only `active` rows.
 - OAuth state records the target need/resource, requested union, initiating user, and resource authorization revision. A start advances the revision, so only the latest callback can write.
 - Callback rechecks the live user, agent-admin access, resource bind/manage capabilities, need compatibility, revision, and current union under locks. It activates and binds in the same transaction only after a covering grant.
-- Agent-scoped resource mutations lock the agent first, then target and scope-participating needs by UUID, then the resource, and finally the initiating user where needed. Resource deletion locks bound needs by UUID before the resource. Resource-grant mutations lock only the resource before grant rows, and member mutations lock the agent first, so callback authorization remains valid through credential replacement without reverse lock edges.
+- Agent-scoped resource mutations lock the agent first, then target and scope-participating needs by UUID, then the resource, and finally the initiating user where needed. Resource deletion locks bound needs by UUID before the resource. Member mutations lock the agent first, so callback authorization remains valid through credential replacement without reverse lock edges.
 - Denial, provider failure, partial grants, invalidated callbacks, and expiry preserve active credentials. Current provisional attempts are deleted locally; GC removes expired or abandoned provisional rows.
 - Background refresh scans only active resources with active scope-ready bindings and locks qualifying binding rows again before refreshing. Zero-binding resources retain encrypted credentials without background work.
 
