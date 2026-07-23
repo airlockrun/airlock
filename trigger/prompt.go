@@ -662,6 +662,22 @@ func StreamNDJSONResponse(body io.Reader, runID string, events chan<- ResponseEv
 			sb.WriteString(delta.Text)
 			events <- ResponseEvent{Type: "text-delta", Text: delta.Text}
 
+		case "compaction_started":
+			events <- ResponseEvent{Type: "compaction_started", RunID: runID}
+
+		case "compaction_finished":
+			var finished struct {
+				TokensFreed int    `json:"tokensFreed"`
+				Error       string `json:"error"`
+			}
+			json.Unmarshal(event.Data, &finished)
+			events <- ResponseEvent{
+				Type:            "compaction_finished",
+				RunID:           runID,
+				TokensFreed:     finished.TokensFreed,
+				CompactionError: finished.Error,
+			}
+
 		case "messages":
 			var msgs []message.Message
 			if json.Unmarshal(event.Data, &msgs) == nil {

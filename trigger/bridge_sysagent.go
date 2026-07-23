@@ -93,6 +93,19 @@ func (b *bridgeSink) OnPermissionAsked(p bus.PermissionAskedPayload) {
 	}
 }
 
+func (b *bridgeSink) OnAutomaticCompactionStarted(bus.AutomaticCompactionStartedPayload) {
+	b.out <- ResponseEvent{Type: "compaction_started", RunID: b.runID}
+}
+
+func (b *bridgeSink) OnAutomaticCompactionFinished(p bus.AutomaticCompactionFinishedPayload) {
+	b.out <- ResponseEvent{
+		Type:            "compaction_finished",
+		RunID:           b.runID,
+		TokensFreed:     p.TokensFreed,
+		CompactionError: p.Error,
+	}
+}
+
 func (b *bridgeSink) OnSuspension(_ *sol.SuspensionContext) {
 	// Confirmation is already delivered via OnPermissionAsked above;
 	// suspension itself doesn't surface as a separate bridge event.

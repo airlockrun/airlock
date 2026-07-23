@@ -43,6 +43,19 @@ func decodeToolOutput(raw json.RawMessage) (text, outcome, errText string) {
 	return text, outcome, ""
 }
 
+func newCompactionFinishedEvent(runID string, raw json.RawMessage) *airlockv1.CompactionFinishedEvent {
+	var finished struct {
+		TokensFreed int32  `json:"tokensFreed"`
+		Error       string `json:"error"`
+	}
+	json.Unmarshal(raw, &finished)
+	return &airlockv1.CompactionFinishedEvent{
+		RunId:       runID,
+		TokensFreed: finished.TokensFreed,
+		Error:       finished.Error,
+	}
+}
+
 // runStatusForFallback returns the runs row's current status string, or
 // "" if it can't be read. Used to decide whether PublishRunEvents should
 // emit a fallback run.complete after the agent stream ends mid-flight.
@@ -157,6 +170,14 @@ func PublishRunEvents(
 				RunId: runID.String(),
 				Text:  delta.Text,
 			})
+
+		case "compaction_started":
+			mirror("run.compaction_started", &airlockv1.CompactionStartedEvent{
+				RunId: runID.String(),
+			})
+
+		case "compaction_finished":
+			mirror("run.compaction_finished", newCompactionFinishedEvent(runID.String(), event.Data))
 
 		case "tool-call":
 			var tc struct {

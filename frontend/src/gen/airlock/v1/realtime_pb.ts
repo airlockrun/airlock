@@ -12,7 +12,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file airlock/v1/realtime.proto.
  */
 export const file_airlock_v1_realtime: GenFile = /*@__PURE__*/
-  fileDesc("ChlhaXJsb2NrL3YxL3JlYWx0aW1lLnByb3RvEgphaXJsb2NrLnYxIhsKCkVycm9yRXZlbnQSDQoFZXJyb3IYASABKAkiEQoPU3Vic2NyaWJlZEV2ZW50IjgKEEFnZW50U3RhdHVzRXZlbnQSJAoFYWdlbnQYASABKAsyFS5haXJsb2NrLnYxLkFnZW50SW5mbyJMCg9SdW5TdGFydGVkRXZlbnQSDgoGcnVuX2lkGAEgASgJEhAKCGFnZW50X2lkGAIgASgJEhcKD2NvbnZlcnNhdGlvbl9pZBgDIAEoCSIuCg5UZXh0RGVsdGFFdmVudBIOCgZydW5faWQYASABKAkSDAoEdGV4dBgCIAEoCSJXCg1Ub29sQ2FsbEV2ZW50Eg4KBnJ1bl9pZBgBIAEoCRIUCgx0b29sX2NhbGxfaWQYAiABKAkSEQoJdG9vbF9uYW1lGAMgASgJEg0KBWlucHV0GAQgASgJInoKD1Rvb2xSZXN1bHRFdmVudBIOCgZydW5faWQYASABKAkSFAoMdG9vbF9jYWxsX2lkGAIgASgJEhEKCXRvb2xfbmFtZRgDIAEoCRIOCgZvdXRwdXQYBCABKAkSDQoFZXJyb3IYBSABKAkSDwoHb3V0Y29tZRgGIAEoCSKKAQoZQ29uZmlybWF0aW9uUmVxdWlyZWRFdmVudBIOCgZydW5faWQYASABKAkSEgoKcGVybWlzc2lvbhgCIAEoCRIQCghwYXR0ZXJucxgDIAMoCRIMCgRjb2RlGAQgASgJEhQKDHRvb2xfY2FsbF9pZBgFIAEoCRITCgtkZXNjcmlwdGlvbhgGIAEoCSIzChFSdW5TdXNwZW5kZWRFdmVudBIOCgZydW5faWQYASABKAkSDgoGcmVhc29uGAIgASgJImAKEFJ1bkNvbXBsZXRlRXZlbnQSDgoGcnVuX2lkGAEgASgJEhUKDWZpbmlzaF9yZWFzb24YAiABKAkSEQoJdG9rZW5zX2luGAMgASgFEhIKCnRva2Vuc19vdXQYBCABKAUiLgoNUnVuRXJyb3JFdmVudBIOCgZydW5faWQYASABKAkSDQoFZXJyb3IYAiABKAkiKQoVU3Vic2NyaWJlQnVpbGRSZXF1ZXN0EhAKCGJ1aWxkX2lkGAEgASgJIisKF1Vuc3Vic2NyaWJlQnVpbGRSZXF1ZXN0EhAKCGJ1aWxkX2lkGAEgASgJInEKEU5vdGlmaWNhdGlvbkV2ZW50EhAKCGFnZW50X2lkGAEgASgJEhcKD2NvbnZlcnNhdGlvbl9pZBgCIAEoCRINCgV0b3BpYxgDIAEoCRISCgpwYXJ0c19qc29uGAQgASgJEg4KBnNvdXJjZRgFIAEoCUI4WjZnaXRodWIuY29tL2FpcmxvY2tydW4vYWlybG9jay9nZW4vYWlybG9jay92MTthaXJsb2NrdjFiBnByb3RvMw", [file_airlock_v1_types]);
+  fileDesc("ChlhaXJsb2NrL3YxL3JlYWx0aW1lLnByb3RvEgphaXJsb2NrLnYxIhsKCkVycm9yRXZlbnQSDQoFZXJyb3IYASABKAkiEQoPU3Vic2NyaWJlZEV2ZW50IjgKEEFnZW50U3RhdHVzRXZlbnQSJAoFYWdlbnQYASABKAsyFS5haXJsb2NrLnYxLkFnZW50SW5mbyJMCg9SdW5TdGFydGVkRXZlbnQSDgoGcnVuX2lkGAEgASgJEhAKCGFnZW50X2lkGAIgASgJEhcKD2NvbnZlcnNhdGlvbl9pZBgDIAEoCSIuCg5UZXh0RGVsdGFFdmVudBIOCgZydW5faWQYASABKAkSDAoEdGV4dBgCIAEoCSIoChZDb21wYWN0aW9uU3RhcnRlZEV2ZW50Eg4KBnJ1bl9pZBgBIAEoCSJOChdDb21wYWN0aW9uRmluaXNoZWRFdmVudBIOCgZydW5faWQYASABKAkSFAoMdG9rZW5zX2ZyZWVkGAIgASgFEg0KBWVycm9yGAMgASgJIlcKDVRvb2xDYWxsRXZlbnQSDgoGcnVuX2lkGAEgASgJEhQKDHRvb2xfY2FsbF9pZBgCIAEoCRIRCgl0b29sX25hbWUYAyABKAkSDQoFaW5wdXQYBCABKAkiegoPVG9vbFJlc3VsdEV2ZW50Eg4KBnJ1bl9pZBgBIAEoCRIUCgx0b29sX2NhbGxfaWQYAiABKAkSEQoJdG9vbF9uYW1lGAMgASgJEg4KBm91dHB1dBgEIAEoCRINCgVlcnJvchgFIAEoCRIPCgdvdXRjb21lGAYgASgJIooBChlDb25maXJtYXRpb25SZXF1aXJlZEV2ZW50Eg4KBnJ1bl9pZBgBIAEoCRISCgpwZXJtaXNzaW9uGAIgASgJEhAKCHBhdHRlcm5zGAMgAygJEgwKBGNvZGUYBCABKAkSFAoMdG9vbF9jYWxsX2lkGAUgASgJEhMKC2Rlc2NyaXB0aW9uGAYgASgJIjMKEVJ1blN1c3BlbmRlZEV2ZW50Eg4KBnJ1bl9pZBgBIAEoCRIOCgZyZWFzb24YAiABKAkiYAoQUnVuQ29tcGxldGVFdmVudBIOCgZydW5faWQYASABKAkSFQoNZmluaXNoX3JlYXNvbhgCIAEoCRIRCgl0b2tlbnNfaW4YAyABKAUSEgoKdG9rZW5zX291dBgEIAEoBSIuCg1SdW5FcnJvckV2ZW50Eg4KBnJ1bl9pZBgBIAEoCRINCgVlcnJvchgCIAEoCSIpChVTdWJzY3JpYmVCdWlsZFJlcXVlc3QSEAoIYnVpbGRfaWQYASABKAkiKwoXVW5zdWJzY3JpYmVCdWlsZFJlcXVlc3QSEAoIYnVpbGRfaWQYASABKAkicQoRTm90aWZpY2F0aW9uRXZlbnQSEAoIYWdlbnRfaWQYASABKAkSFwoPY29udmVyc2F0aW9uX2lkGAIgASgJEg0KBXRvcGljGAMgASgJEhIKCnBhcnRzX2pzb24YBCABKAkSDgoGc291cmNlGAUgASgJQjhaNmdpdGh1Yi5jb20vYWlybG9ja3J1bi9haXJsb2NrL2dlbi9haXJsb2NrL3YxO2FpcmxvY2t2MWIGcHJvdG8z", [file_airlock_v1_types]);
 
 /**
  * ErrorEvent carries a WebSocket error message.
@@ -121,6 +121,54 @@ export const TextDeltaEventSchema: GenMessage<TextDeltaEvent> = /*@__PURE__*/
   messageDesc(file_airlock_v1_realtime, 4);
 
 /**
+ * CompactionStartedEvent marks the start of an automatic context compaction.
+ *
+ * @generated from message airlock.v1.CompactionStartedEvent
+ */
+export type CompactionStartedEvent = Message<"airlock.v1.CompactionStartedEvent"> & {
+  /**
+   * @generated from field: string run_id = 1;
+   */
+  runId: string;
+};
+
+/**
+ * Describes the message airlock.v1.CompactionStartedEvent.
+ * Use `create(CompactionStartedEventSchema)` to create a new message.
+ */
+export const CompactionStartedEventSchema: GenMessage<CompactionStartedEvent> = /*@__PURE__*/
+  messageDesc(file_airlock_v1_realtime, 5);
+
+/**
+ * CompactionFinishedEvent describes the result of an automatic context compaction.
+ *
+ * @generated from message airlock.v1.CompactionFinishedEvent
+ */
+export type CompactionFinishedEvent = Message<"airlock.v1.CompactionFinishedEvent"> & {
+  /**
+   * @generated from field: string run_id = 1;
+   */
+  runId: string;
+
+  /**
+   * @generated from field: int32 tokens_freed = 2;
+   */
+  tokensFreed: number;
+
+  /**
+   * @generated from field: string error = 3;
+   */
+  error: string;
+};
+
+/**
+ * Describes the message airlock.v1.CompactionFinishedEvent.
+ * Use `create(CompactionFinishedEventSchema)` to create a new message.
+ */
+export const CompactionFinishedEventSchema: GenMessage<CompactionFinishedEvent> = /*@__PURE__*/
+  messageDesc(file_airlock_v1_realtime, 6);
+
+/**
  * ToolCallEvent signals a tool call is ready for execution.
  *
  * @generated from message airlock.v1.ToolCallEvent
@@ -154,7 +202,7 @@ export type ToolCallEvent = Message<"airlock.v1.ToolCallEvent"> & {
  * Use `create(ToolCallEventSchema)` to create a new message.
  */
 export const ToolCallEventSchema: GenMessage<ToolCallEvent> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_realtime, 5);
+  messageDesc(file_airlock_v1_realtime, 7);
 
 /**
  * ToolResultEvent carries the result (or error) of a tool execution.
@@ -205,7 +253,7 @@ export type ToolResultEvent = Message<"airlock.v1.ToolResultEvent"> & {
  * Use `create(ToolResultEventSchema)` to create a new message.
  */
 export const ToolResultEventSchema: GenMessage<ToolResultEvent> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_realtime, 6);
+  messageDesc(file_airlock_v1_realtime, 8);
 
 /**
  * ConfirmationRequiredEvent signals the user must approve an action.
@@ -254,7 +302,7 @@ export type ConfirmationRequiredEvent = Message<"airlock.v1.ConfirmationRequired
  * Use `create(ConfirmationRequiredEventSchema)` to create a new message.
  */
 export const ConfirmationRequiredEventSchema: GenMessage<ConfirmationRequiredEvent> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_realtime, 7);
+  messageDesc(file_airlock_v1_realtime, 9);
 
 /**
  * RunSuspendedEvent signals the run is suspended (e.g. awaiting approval).
@@ -278,7 +326,7 @@ export type RunSuspendedEvent = Message<"airlock.v1.RunSuspendedEvent"> & {
  * Use `create(RunSuspendedEventSchema)` to create a new message.
  */
 export const RunSuspendedEventSchema: GenMessage<RunSuspendedEvent> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_realtime, 8);
+  messageDesc(file_airlock_v1_realtime, 10);
 
 /**
  * RunCompleteEvent signals the run has finished.
@@ -312,7 +360,7 @@ export type RunCompleteEvent = Message<"airlock.v1.RunCompleteEvent"> & {
  * Use `create(RunCompleteEventSchema)` to create a new message.
  */
 export const RunCompleteEventSchema: GenMessage<RunCompleteEvent> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_realtime, 9);
+  messageDesc(file_airlock_v1_realtime, 11);
 
 /**
  * RunErrorEvent signals an error during the run.
@@ -336,7 +384,7 @@ export type RunErrorEvent = Message<"airlock.v1.RunErrorEvent"> & {
  * Use `create(RunErrorEventSchema)` to create a new message.
  */
 export const RunErrorEventSchema: GenMessage<RunErrorEvent> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_realtime, 10);
+  messageDesc(file_airlock_v1_realtime, 12);
 
 /**
  * SubscribeBuildRequest asks the hub to subscribe this connection to a
@@ -357,7 +405,7 @@ export type SubscribeBuildRequest = Message<"airlock.v1.SubscribeBuildRequest"> 
  * Use `create(SubscribeBuildRequestSchema)` to create a new message.
  */
 export const SubscribeBuildRequestSchema: GenMessage<SubscribeBuildRequest> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_realtime, 11);
+  messageDesc(file_airlock_v1_realtime, 13);
 
 /**
  * UnsubscribeBuildRequest drops the per-build subscription (sent on unmount).
@@ -376,7 +424,7 @@ export type UnsubscribeBuildRequest = Message<"airlock.v1.UnsubscribeBuildReques
  * Use `create(UnsubscribeBuildRequestSchema)` to create a new message.
  */
 export const UnsubscribeBuildRequestSchema: GenMessage<UnsubscribeBuildRequest> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_realtime, 12);
+  messageDesc(file_airlock_v1_realtime, 14);
 
 /**
  * NotificationEvent carries an output() or topic publish notification.
@@ -421,4 +469,4 @@ export type NotificationEvent = Message<"airlock.v1.NotificationEvent"> & {
  * Use `create(NotificationEventSchema)` to create a new message.
  */
 export const NotificationEventSchema: GenMessage<NotificationEvent> = /*@__PURE__*/
-  messageDesc(file_airlock_v1_realtime, 13);
+  messageDesc(file_airlock_v1_realtime, 15);

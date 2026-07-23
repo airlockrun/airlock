@@ -207,6 +207,40 @@ func (q *Queries) GetConversationByIDAndAgent(ctx context.Context, arg GetConver
 	return i, err
 }
 
+const getConversationByIDAndAgentForUpdate = `-- name: GetConversationByIDAndAgentForUpdate :one
+SELECT id, agent_id, bridge_id, user_id, source, external_id, title, metadata, settings, context_checkpoint_message_id, created_at, updated_at FROM agent_conversations
+WHERE id = $1 AND agent_id = $2
+FOR UPDATE
+`
+
+type GetConversationByIDAndAgentForUpdateParams struct {
+	ID      pgtype.UUID `json:"id"`
+	AgentID pgtype.UUID `json:"agent_id"`
+}
+
+// Session writes lock the parent row before inspecting context state. Child
+// inserts take a foreign-key key-share lock, so this also orders every message
+// insert against checkpoint advancement across replicas.
+func (q *Queries) GetConversationByIDAndAgentForUpdate(ctx context.Context, arg GetConversationByIDAndAgentForUpdateParams) (AgentConversation, error) {
+	row := q.db.QueryRow(ctx, getConversationByIDAndAgentForUpdate, arg.ID, arg.AgentID)
+	var i AgentConversation
+	err := row.Scan(
+		&i.ID,
+		&i.AgentID,
+		&i.BridgeID,
+		&i.UserID,
+		&i.Source,
+		&i.ExternalID,
+		&i.Title,
+		&i.Metadata,
+		&i.Settings,
+		&i.ContextCheckpointMessageID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getConversationBySource = `-- name: GetConversationBySource :one
 SELECT id, agent_id, bridge_id, user_id, source, external_id, title, metadata, settings, context_checkpoint_message_id, created_at, updated_at FROM agent_conversations
 WHERE agent_id = $1 AND user_id = $2 AND source = $3

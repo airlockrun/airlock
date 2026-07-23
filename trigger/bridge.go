@@ -57,16 +57,18 @@ func pickConfirmationBody(m map[string]any) string {
 // ResponseEvent represents an NDJSON event from the agent response stream,
 // forwarded to the bridge driver for progressive delivery.
 type ResponseEvent struct {
-	Type       string // "run_started", "text-delta", "tool-call", "tool-result", "confirmation_required", "info"
-	Text       string // for text-delta / info: the delta text or info message
-	ToolCallID string // for tool_call/tool_result
-	ToolName   string // for tool_call/tool_result
-	ToolInput  string // for tool_call: the tool arguments
-	ToolOutput string // for tool_result: the tool output
-	ToolError  string // for tool_result: error message if failed
-	Raw        []byte // full NDJSON line (for non-text events drivers may need)
+	Type            string // "run_started", "text-delta", "tool-call", "tool-result", "confirmation_required", "compaction_started", "compaction_finished", "info"
+	Text            string // for text-delta / info: the delta text or info message
+	ToolCallID      string // for tool_call/tool_result
+	ToolName        string // for tool_call/tool_result
+	ToolInput       string // for tool_call: the tool arguments
+	ToolOutput      string // for tool_result: the tool output
+	ToolError       string // for tool_result: error message if failed
+	TokensFreed     int    // for compaction_finished
+	CompactionError string // for compaction_finished
+	Raw             []byte // full NDJSON line (for non-text events drivers may need)
 
-	// Populated when Type == "run_started" or "confirmation_required":
+	// Populated for run and compaction lifecycle events and confirmations.
 	RunID      string
 	Permission string
 	Patterns   []string

@@ -113,6 +113,34 @@ func (q *Queries) GetConversationIDByRun(ctx context.Context, runID pgtype.UUID)
 	return conversation_id, err
 }
 
+const getSessionContextRevision = `-- name: GetSessionContextRevision :one
+SELECT GREATEST(
+  COALESCE((SELECT seq FROM agent_messages WHERE id = c.context_checkpoint_message_id), 0),
+  COALESCE((
+    SELECT MAX(m.seq)
+    FROM agent_messages m
+    WHERE m.conversation_id = c.id
+      AND NOT m.ephemeral
+      AND m.source <> 'checkpoint'
+      AND (
+        c.context_checkpoint_message_id IS NULL
+        OR m.seq >= (SELECT seq FROM agent_messages WHERE id = c.context_checkpoint_message_id)
+      )
+  ), 0)
+)::bigint
+FROM agent_conversations c
+WHERE c.id = $1
+`
+
+// Opaque SessionStore revision. Including the active checkpoint seq prevents
+// an empty post-clear context from reusing revision zero.
+func (q *Queries) GetSessionContextRevision(ctx context.Context, id pgtype.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, getSessionContextRevision, id)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const listAllMessagesByConversation = `-- name: ListAllMessagesByConversation :many
 SELECT id, seq, conversation_id, run_id, role, source, content, parts, file_keys, cost_estimate, ephemeral, created_at FROM agent_messages
 WHERE conversation_id = $1
@@ -122,7 +150,7 @@ ORDER BY
   seq ASC
 `
 
-// UI loading — includes all messages. Run-grouped: rows that share a run_id
+// Persistence scan including model-only and UI-only rows. Run-grouped rows
 // stay together in the slot of the run's first message; tiebreak by ephemeral
 // (non-ephemeral first) then seq.
 func (q *Queries) ListAllMessagesByConversation(ctx context.Context, conversationID pgtype.UUID) ([]AgentMessage, error) {
@@ -162,6 +190,7 @@ const listMessagesBackward = `-- name: ListMessagesBackward :many
 SELECT id, seq, conversation_id, run_id, role, source, content, parts, file_keys, cost_estimate, ephemeral, created_at FROM (
     SELECT id, seq, conversation_id, run_id, role, source, content, parts, file_keys, cost_estimate, ephemeral, created_at FROM agent_messages
     WHERE conversation_id = $1
+      AND source <> 'compaction'
       AND seq < $2
     ORDER BY seq DESC
     LIMIT $3
@@ -175,8 +204,9 @@ type ListMessagesBackwardParams struct {
 	Lim            int32       `json:"lim"`
 }
 
-// Older page for infinite-scroll-up. Returns up to @lim messages with seq
-// strictly less than @before, back in chronological order for easy prepend.
+// Older human transcript page for infinite-scroll-up. Returns up to @lim
+// display messages with seq strictly less than @before, back in chronological
+// order for easy prepend.
 func (q *Queries) ListMessagesBackward(ctx context.Context, arg ListMessagesBackwardParams) ([]AgentMessage, error) {
 	rows, err := q.db.Query(ctx, listMessagesBackward, arg.ConversationID, arg.Before, arg.Lim)
 	if err != nil {
@@ -214,14 +244,16 @@ const listMessagesByConversation = `-- name: ListMessagesByConversation :many
 SELECT id, seq, conversation_id, run_id, role, source, content, parts, file_keys, cost_estimate, ephemeral, created_at FROM (
     SELECT id, seq, conversation_id, run_id, role, source, content, parts, file_keys, cost_estimate, ephemeral, created_at FROM agent_messages
     WHERE conversation_id = $1
+      AND source <> 'compaction'
     ORDER BY seq DESC
     LIMIT 101
 ) t
 ORDER BY seq ASC
 `
 
-// Initial UI page: the 100 most recent messages, returned in chronological
-// order. The handler overfetches by one (LIMIT 101) so it can report
+// Initial human transcript page: the 100 most recent display messages,
+// returned in chronological order. Model-only compaction rows are projected
+// out by source. The handler overfetches by one (LIMIT 101) so it can report
 // has_older_messages without a second COUNT query; the extra row is trimmed
 // before the response is built. Ordering is by seq (monotonic insertion
 // order) — created_at alone ties when multiple rows are inserted in one
@@ -301,6 +333,7 @@ func (q *Queries) ListMessagesByRun(ctx context.Context, runID pgtype.UUID) ([]A
 const listMessagesForward = `-- name: ListMessagesForward :many
 SELECT id, seq, conversation_id, run_id, role, source, content, parts, file_keys, cost_estimate, ephemeral, created_at FROM agent_messages
 WHERE conversation_id = $1
+  AND source <> 'compaction'
   AND seq > $2
 ORDER BY seq ASC
 LIMIT $3
@@ -312,8 +345,9 @@ type ListMessagesForwardParams struct {
 	Lim            int32       `json:"lim"`
 }
 
-// Newer page for scroll-down after eviction. Returns up to @lim messages with
-// seq strictly greater than @after, in chronological order.
+// Newer human transcript page for scroll-down after eviction. Returns up to
+// @lim display messages with seq strictly greater than @after, in
+// chronological order.
 func (q *Queries) ListMessagesForward(ctx context.Context, arg ListMessagesForwardParams) ([]AgentMessage, error) {
 	rows, err := q.db.Query(ctx, listMessagesForward, arg.ConversationID, arg.After, arg.Lim)
 	if err != nil {

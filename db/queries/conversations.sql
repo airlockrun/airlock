@@ -92,6 +92,14 @@ SELECT * FROM agent_conversations WHERE id = $1;
 SELECT * FROM agent_conversations
 WHERE id = @id AND agent_id = @agent_id;
 
+-- name: GetConversationByIDAndAgentForUpdate :one
+-- Session writes lock the parent row before inspecting context state. Child
+-- inserts take a foreign-key key-share lock, so this also orders every message
+-- insert against checkpoint advancement across replicas.
+SELECT * FROM agent_conversations
+WHERE id = @id AND agent_id = @agent_id
+FOR UPDATE;
+
 -- name: GetConversationBySource :one
 -- Non-creating lookup used by the bridge manager when it needs to read
 -- per-chat settings before any new conversation row would be created.
