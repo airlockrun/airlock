@@ -151,12 +151,11 @@ function parseParts(parts: unknown): any[] | null {
 }
 
 export function enrichMessages(msgs: AgentMessageInfo[]): AgentMessageInfo[] {
-  // source="llm": model-only context (e.g. the attached-files manifest)
-  // persisted into the conversation but never meant for the human. Hide
-  // it everywhere a transcript renders — same _hidden affordance folded
-  // rows use.
+  // Model-only context and compaction internals are persisted into the
+  // conversation but never meant for the human. Hide them everywhere a
+  // transcript renders using the same _hidden affordance as folded rows.
   for (const msg of msgs) {
-    if (msg.source === 'llm') (msg as any)._hidden = true
+    if (msg.source === 'llm' || msg.source === 'compaction') (msg as any)._hidden = true
   }
 
   // Pass 1: walk each assistant row's ordered parts into an ordered

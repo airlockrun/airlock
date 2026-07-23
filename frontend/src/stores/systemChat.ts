@@ -95,6 +95,7 @@ function enrichMessages(rows: SystemMessageInfo[]): DisplayMessage[] {
     parts: m.parts,
     content: m.content,
     costEstimate: m.costEstimate,
+    _hidden: m.source === 'llm' || m.source === 'compaction',
   }))
 
   // Pass 1: parse parts on each row, build per-row blocks, register

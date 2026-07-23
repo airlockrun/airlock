@@ -11,6 +11,7 @@ import api from '@/api/client'
 import MessageParts from '@/components/chat/MessageParts.vue'
 import ToolBadge from '@/components/chat/ToolBadge.vue'
 import { buildBadgeText } from '@/utils/buildBadge'
+import { matchingWebSlashCommands, type WebSlashCommand } from '@/utils/slashCommands'
 
 const route = useRoute()
 const router = useRouter()
@@ -60,6 +61,22 @@ async function startAgent() {
 const isNewConversation = computed(() => !chat.conversationId)
 const messageInput = ref('')
 const messageInputRef = ref<any>(null)
+const selectedSlashCommand = ref(0)
+const slashMenuDismissed = ref(false)
+const slashCommandMatches = computed(() =>
+  slashMenuDismissed.value ? [] : matchingWebSlashCommands(messageInput.value),
+)
+
+watch(messageInput, () => {
+  selectedSlashCommand.value = 0
+  slashMenuDismissed.value = false
+}, { flush: 'sync' })
+
+function selectSlashCommand(command: WebSlashCommand) {
+  messageInput.value = `/${command.name}`
+  slashMenuDismissed.value = true
+  nextTick(() => messageInputRef.value?.$el?.focus())
+}
 
 // PrimeVue's autoResize only recomputes on a real `input` event, so clearing
 // the model in code (e.g. after send) leaves a multi-line box stretched. Reset
@@ -71,6 +88,7 @@ function resetComposerHeight() {
   })
 }
 const scrollContainer = ref<HTMLElement | null>(null)
+const chatComposer = ref<HTMLElement | null>(null)
 const topSentinel = ref<HTMLElement | null>(null)
 const bottomSentinel = ref<HTMLElement | null>(null)
 const attachedFiles = ref<{ path: string; filename: string }[]>([])
@@ -78,6 +96,14 @@ const fileInput = ref<HTMLInputElement | null>(null)
 const uploading = ref(false)
 let topObserver: IntersectionObserver | null = null
 let bottomObserver: IntersectionObserver | null = null
+let composerObserver: ResizeObserver | null = null
+
+function syncComposerInset() {
+  if (!scrollContainer.value || !chatComposer.value) return
+  const pinned = scrollContainer.value.scrollHeight - scrollContainer.value.scrollTop - scrollContainer.value.clientHeight <= 2
+  scrollContainer.value.style.setProperty('--chat-composer-height', `${chatComposer.value.offsetHeight}px`)
+  if (pinned) requestAnimationFrame(scrollToBottom)
+}
 
 async function reload() {
   try {
@@ -121,6 +147,9 @@ onMounted(async () => {
 
   await reload()
   setupSentinelObservers()
+  composerObserver = new ResizeObserver(syncComposerInset)
+  if (chatComposer.value) composerObserver.observe(chatComposer.value)
+  syncComposerInset()
 
   // Mobile soft keyboard: opening/closing resizes the visual viewport. The
   // send-time autoscroll runs while the keyboard is still up (short viewport);
@@ -171,6 +200,7 @@ watch(
 onUnmounted(() => {
   topObserver?.disconnect()
   bottomObserver?.disconnect()
+  composerObserver?.disconnect()
   const vv = window.visualViewport
   if (vv) vv.removeEventListener('resize', onViewportResize)
   else window.removeEventListener('resize', onViewportResize)
@@ -319,6 +349,35 @@ async function reject() {
 }
 
 function onKeydown(e: KeyboardEvent) {
+  const commands = slashCommandMatches.value
+  if (commands.length > 0) {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      selectedSlashCommand.value = (selectedSlashCommand.value + 1) % commands.length
+      return
+    }
+    if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      selectedSlashCommand.value = (selectedSlashCommand.value - 1 + commands.length) % commands.length
+      return
+    }
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      slashMenuDismissed.value = true
+      return
+    }
+    if (e.key === 'Tab') {
+      e.preventDefault()
+      selectSlashCommand(commands[selectedSlashCommand.value])
+      return
+    }
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && messageInput.value.toLowerCase() !== `/${commands[selectedSlashCommand.value].name}`) {
+      e.preventDefault()
+      selectSlashCommand(commands[selectedSlashCommand.value])
+      return
+    }
+  }
+
   // Desktop: Enter sends, Shift+Enter inserts a newline. Mobile keyboards let
   // Enter be a newline and use the on-screen Send button. Pointer capabilities
   // do not identify mobile devices because touch-enabled desktops are common.
@@ -578,16 +637,28 @@ function formatTokens(n: number): string {
                     v-html="renderMarkdown(b.text)"
                     class="chat-bubble"
                   />
-                  <ToolBadge
-                    v-else-if="b.kind === 'tool'"
-                    :label="b.label"
-                    :tool-name="b.toolName"
-                    :input="b.input"
-                    :description="b.description"
-                    :output="b.output"
-                    :error="b.error"
-                    :outcome="b.outcome"
-                  />
+                  <template v-else-if="b.kind === 'tool'">
+                    <ToolBadge
+                      :label="b.label"
+                      :tool-name="b.toolName"
+                      :input="b.input"
+                      :description="b.description"
+                      :output="b.output"
+                      :error="b.error"
+                      :outcome="b.outcome"
+                      :status="chat.pendingConfirmation?.toolCallId === b.toolCallId ? 'confirmation' : undefined"
+                      :force-expanded="chat.pendingConfirmation?.toolCallId === b.toolCallId"
+                    />
+                    <div v-if="chat.pendingConfirmation?.toolCallId === b.toolCallId" class="confirmation-box">
+                      <div style="display: flex; align-items: center; justify-content: space-between">
+                        <span style="font-size: 0.8rem; font-weight: 500">Allow this action?</span>
+                        <div style="display: flex; gap: 0.5rem">
+                          <Button label="Reject" severity="secondary" size="small" @click="reject" />
+                          <Button label="Approve" severity="success" size="small" @click="approve" />
+                        </div>
+                      </div>
+                    </div>
+                  </template>
                 </template>
               </div>
               <div
@@ -692,7 +763,7 @@ function formatTokens(n: number): string {
          scrolls behind it and fades out into the gradient, so the transcript
          disappears under the input instead of peeking around it. No top
          divider — the fade is the separation. -->
-    <div class="chat-composer">
+    <div ref="chatComposer" class="chat-composer">
       <!-- Attached files -->
       <div v-if="attachedFiles.length" class="composer-files">
         <Chip
@@ -716,35 +787,53 @@ function formatTokens(n: number): string {
         />
       </div>
 
-      <!-- Input box: attach + textarea + send all live inside one rounded box -->
-      <div class="composer-box">
-        <input ref="fileInput" type="file" multiple hidden @change="onFileSelect" />
-        <Button
-          class="composer-btn"
-          icon="pi pi-paperclip"
-          severity="secondary"
-          text
-          rounded
-          :disabled="chat.sending || uploading || agentStopped"
-          :loading="uploading"
-          @click="fileInput?.click()"
-        />
-        <Textarea
-          ref="messageInputRef"
-          v-model="messageInput"
-          :placeholder="agentStopped ? 'App is stopped' : 'Type a message...'"
-          :auto-resize="true"
-          rows="1"
-          :disabled="agentStopped"
-          @keydown="onKeydown"
-        />
-        <Button
-          class="composer-btn"
-          icon="pi pi-send"
-          rounded
-          :disabled="!messageInput.trim() || chat.sending || agentStopped"
-          @click="send"
-        />
+      <div class="composer-input">
+        <div v-if="slashCommandMatches.length" class="slash-command-menu" role="listbox" aria-label="Chat commands">
+          <button
+            v-for="(command, index) in slashCommandMatches"
+            :key="command.name"
+            type="button"
+            role="option"
+            :aria-selected="index === selectedSlashCommand"
+            :class="['slash-command-option', { selected: index === selectedSlashCommand }]"
+            @mouseenter="selectedSlashCommand = index"
+            @pointerdown.prevent="selectSlashCommand(command)"
+          >
+            <code>/{{ command.name }}</code>
+            <span>{{ command.description }}</span>
+          </button>
+        </div>
+
+        <!-- Input box: attach + textarea + send all live inside one rounded box -->
+        <div class="composer-box">
+          <input ref="fileInput" type="file" multiple hidden @change="onFileSelect" />
+          <Button
+            class="composer-btn"
+            icon="pi pi-paperclip"
+            severity="secondary"
+            text
+            rounded
+            :disabled="chat.sending || uploading || agentStopped"
+            :loading="uploading"
+            @click="fileInput?.click()"
+          />
+          <Textarea
+            ref="messageInputRef"
+            v-model="messageInput"
+            :placeholder="agentStopped ? 'App is stopped' : 'Type a message...'"
+            :auto-resize="true"
+            rows="1"
+            :disabled="agentStopped"
+            @keydown="onKeydown"
+          />
+          <Button
+            class="composer-btn"
+            icon="pi pi-send"
+            rounded
+            :disabled="!messageInput.trim() || chat.sending || agentStopped"
+            @click="send"
+          />
+        </div>
       </div>
     </div>
   </div>
@@ -889,6 +978,10 @@ function formatTokens(n: number): string {
   margin-bottom: -0.5rem;
 }
 
+.msg-row-user + .msg-row-user {
+  margin-top: 0;
+}
+
 /* Don't pull the very first bubble up — the negative top margin would drag it
    under the top bar. Only tighten between siblings. */
 .msg-row-user:first-child {
@@ -960,7 +1053,7 @@ function formatTokens(n: number): string {
   gap: 1rem;
   /* Bottom space so the last message can scroll clear of the floating
      composer instead of sitting permanently behind it. */
-  padding: 0.25rem 1rem 3.75rem;
+  padding: 0.25rem 1rem calc(var(--chat-composer-height, 3.75rem) + 0.75rem);
 }
 
 /* Floating composer overlaid on the bottom of the scroll area. */
@@ -1000,6 +1093,58 @@ function formatTokens(n: number): string {
   border: 1px solid var(--p-surface-300);
   border-radius: 6px;
   background: var(--p-surface-100);
+}
+
+.slash-command-menu {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 0.5rem);
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 0.25rem;
+  border: 1px solid var(--p-surface-300);
+  border-radius: 0.75rem;
+  background: var(--p-content-background);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14);
+}
+
+.composer-input {
+  position: relative;
+}
+
+:root.dark .slash-command-menu {
+  border-color: var(--p-surface-600);
+}
+
+.slash-command-option {
+  display: grid;
+  grid-template-columns: minmax(5rem, auto) 1fr;
+  gap: 0.75rem;
+  align-items: baseline;
+  width: 100%;
+  padding: 0.55rem 0.65rem;
+  border: 0;
+  border-radius: 0.5rem;
+  background: transparent;
+  color: var(--p-text-color);
+  text-align: left;
+  cursor: pointer;
+}
+
+.slash-command-option.selected {
+  background: var(--p-content-hover-background);
+}
+
+.slash-command-option code {
+  color: var(--p-primary-color);
+  font-weight: 600;
+}
+
+.slash-command-option span {
+  color: var(--p-text-muted-color);
+  font-size: 0.8rem;
 }
 
 :root.dark .composer-stopped {
