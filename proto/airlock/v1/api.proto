@@ -1133,3 +1133,7 @@ message CreateForNeedRequest {
 message CreateForNeedResponse {
   string resource_id = 1;
 }
+
+message UpdateMeRequest {
+  string display_name = 1;
+}

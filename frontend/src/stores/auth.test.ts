@@ -2,14 +2,15 @@ import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { User } from '@/gen/airlock/v1/types_pb'
 
-const { post, clearAccessToken, disconnect } = vi.hoisted(() => ({
+const { patch, post, clearAccessToken, disconnect } = vi.hoisted(() => ({
+  patch: vi.fn(),
   post: vi.fn(),
   clearAccessToken: vi.fn(),
   disconnect: vi.fn(),
 }))
 
 vi.mock('@/api/client', () => ({
-  default: { post: post, get: vi.fn() },
+  default: { patch, post, get: vi.fn() },
   clearAccessToken,
   isAuthRejection: vi.fn(),
   refreshAccessToken: vi.fn(),
@@ -69,5 +70,34 @@ describe('auth logout', () => {
     expect(auth.tenantPermissions).toEqual(new Set())
     expect(clearAccessToken).toHaveBeenCalledOnce()
     expect(disconnect).toHaveBeenCalledOnce()
+  })
+})
+
+describe('auth profile', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.clearAllMocks()
+  })
+
+  it('updates the local display name after the backend succeeds', async () => {
+    const auth = useAuthStore()
+    auth.user = { displayName: 'Old Name' } as User
+    patch.mockResolvedValueOnce({})
+
+    await auth.updateDisplayName('  New Name  ')
+
+    expect(patch).toHaveBeenCalledWith('/api/v1/me', { displayName: 'New Name' })
+    expect(auth.user.displayName).toBe('New Name')
+  })
+
+  it('preserves the local display name when the backend rejects the update', async () => {
+    const auth = useAuthStore()
+    auth.user = { displayName: 'Old Name' } as User
+    const failure = new Error('backend unavailable')
+    patch.mockRejectedValueOnce(failure)
+
+    await expect(auth.updateDisplayName('New Name')).rejects.toBe(failure)
+
+    expect(auth.user.displayName).toBe('Old Name')
   })
 })

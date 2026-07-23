@@ -317,19 +317,23 @@ func (q *Queries) SetTempPassword(ctx context.Context, arg SetTempPasswordParams
 	return err
 }
 
-const updateUserNameEmail = `-- name: UpdateUserNameEmail :exec
-UPDATE users SET display_name = $2, email = $3, updated_at = now() WHERE id = $1
+const updateUserDisplayName = `-- name: UpdateUserDisplayName :execrows
+UPDATE users
+SET display_name = $1, updated_at = now()
+WHERE id = $2
 `
 
-type UpdateUserNameEmailParams struct {
-	ID          pgtype.UUID `json:"id"`
+type UpdateUserDisplayNameParams struct {
 	DisplayName string      `json:"display_name"`
-	Email       string      `json:"email"`
+	ID          pgtype.UUID `json:"id"`
 }
 
-func (q *Queries) UpdateUserNameEmail(ctx context.Context, arg UpdateUserNameEmailParams) error {
-	_, err := q.db.Exec(ctx, updateUserNameEmail, arg.ID, arg.DisplayName, arg.Email)
-	return err
+func (q *Queries) UpdateUserDisplayName(ctx context.Context, arg UpdateUserDisplayNameParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updateUserDisplayName, arg.DisplayName, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const updateUserPasswordAndRevokeSessions = `-- name: UpdateUserPasswordAndRevokeSessions :one

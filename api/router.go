@@ -273,6 +273,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		r.Use(securedAccountGate)
 
 		r.Get("/me", authHandler.Me)
+		r.Patch("/me", usersHandler.UpdateMe)
 		r.Get("/sessions", authHandler.ListSessions)
 		r.Delete("/sessions/{id}", authHandler.RevokeSession)
 

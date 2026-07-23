@@ -145,7 +145,7 @@ flag and the gate releases).
 - **Resource needs**: Agent needs list, grant-aware candidates with structural/scope readiness, create/bind, authorization-before-binding, and agent-admin-only unbind
 - **Members**: Agent sharing (add/remove users)
 - **Providers**: LLM provider config (admin only)
-- **Users**: User management (admin only)
+- **Users**: Self-service display-name updates; user management (admin only)
 - **Bridges**: Chat platform integrations
 - **Catalog**: Available providers and models
 
@@ -249,7 +249,7 @@ accepted.
 
 Envelope format: `{type, requestId, topicId, payload}`. Topic = agent UUID.
 
-Event types: `subscribe`, `agent.build`, `agent.build.log`, `agent.synced`, `run.text_delta`, `run.tool_call`, `run.tool_result`, `run.confirmation_required`, `run.complete`, `run.error`.
+Event types: `subscribe`, `agent.build`, `agent.build.log`, `agent.synced`, `run.text_delta`, `run.compaction_started`, `run.compaction_finished`, `run.tool_call`, `run.tool_result`, `run.confirmation_required`, `run.complete`, `run.error`.
 
 Replay buffer (100 messages) per topic for late subscribers.
 

@@ -97,6 +97,21 @@ func (h *UsersHandler) Create(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// UpdateMe changes the authenticated user's display name.
+func (h *UsersHandler) UpdateMe(w http.ResponseWriter, r *http.Request) {
+	req := &airlockv1.UpdateMeRequest{}
+	if err := decodeProto(r, req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if err := h.users.UpdateOwnDisplayName(r.Context(), principalFromRequest(r), req.DisplayName); err != nil {
+		logFor(r).Error("update own display name failed", zap.Error(err))
+		writeUsersError(w, err, "update profile")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // UpdateRole changes a user's tenant role.
 func (h *UsersHandler) UpdateRole(w http.ResponseWriter, r *http.Request) {
 	targetID, err := parseUUID(chi.URLParam(r, "userID"))
