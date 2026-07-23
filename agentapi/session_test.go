@@ -190,6 +190,7 @@ func TestClearCommand_ResolvesSuspendedRun(t *testing.T) {
 		InputPayload: []byte("{}"),
 		SourceRef:    "",
 		TriggerType:  "prompt",
+		CallerAccess: "user",
 		// trigger_ref carries the conversation id — that's how the
 		// conversation-scoped suspended-run lookup (and thus /clear)
 		// finds this run. Empty here means /clear can't resolve it.

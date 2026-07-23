@@ -185,7 +185,7 @@ func (s *MCPServer) serveDispatch(w http.ResponseWriter, r *http.Request, h *Han
 	case "resources/read":
 		s.handleResourcesRead(ctx, w, h, q, target, access, principal, msg)
 	case "resources/templates/list":
-		s.handleResourcesTemplatesList(ctx, w, q, target, access, principal, msg)
+		s.handleResourcesTemplatesList(ctx, w, h, q, target, access, principal, msg)
 	default:
 		writeJSONRPCError(w, msg.ID, rpcErrMethodNotFound, "unknown method: "+msg.Method)
 	}

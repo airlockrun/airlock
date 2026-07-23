@@ -14,7 +14,6 @@ func TestCleanAgentPath(t *testing.T) {
 		{"nested", "a/b/c/d.txt", "a/b/c/d.txt", false},
 		{"single-segment", "file.bin", "file.bin", false},
 		{"dot-folder", "uploads/.hidden", "uploads/.hidden", false},
-		{"trailing-dot-segment", "a/b/.", "a/b", false}, // path.Clean reduces
 		// Invalid
 		{"empty", "", "", true},
 		{"nul", "foo\x00bar", "", true},
@@ -26,6 +25,11 @@ func TestCleanAgentPath(t *testing.T) {
 		{"only-dotdot", "..", "", true},
 		{"only-dot", ".", "", true},
 		{"leading-slash-after-clean", "./../foo", "", true},
+		{"nested-traversal", "public/../private/secret", "", true},
+		{"dot-segment", "a/./b", "", true},
+		{"trailing-dot-segment", "a/b/.", "", true},
+		{"trailing-dotdot-segment", "a/b/..", "", true},
+		{"trailing-slash", "a/b/", "", true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

@@ -17,6 +17,7 @@ import (
 	"github.com/airlockrun/airlock/db/dbtest"
 	"github.com/airlockrun/airlock/networkpolicy"
 	"github.com/airlockrun/airlock/secrets"
+	agentstoragesvc "github.com/airlockrun/airlock/service/agentstorage"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -77,6 +78,8 @@ func testEncryptor() secrets.Store {
 func testAgentHandler() *Handler {
 	return &Handler{
 		db:          testDB,
+		files:       agentstoragesvc.New(testDB),
+		scheduler:   testScheduleReconciler{},
 		encryptor:   testEncryptor(),
 		httpNetwork: networkpolicy.New(nil, false),
 		logger:      zap.NewNop(),
@@ -85,6 +88,12 @@ func testAgentHandler() *Handler {
 		// nil func field panics.
 		agentBaseURL: func(slug string) string { return "http://" + slug + ".localhost" },
 	}
+}
+
+type testScheduleReconciler struct{}
+
+func (testScheduleReconciler) ReconcileAgent(context.Context, uuid.UUID, []wire.ScheduleHandlerDef) error {
+	return nil
 }
 
 // testRouter creates a chi router with AgentMiddleware and the given routes.

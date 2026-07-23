@@ -11,8 +11,10 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const cancelScheduledFire = `-- name: CancelScheduledFire :exec
-DELETE FROM agent_scheduled_fires WHERE id = $1 AND agent_id = $2
+const cancelScheduledFire = `-- name: CancelScheduledFire :execrows
+UPDATE agent_scheduled_fires
+SET status = 'cancelled', completed_at = now(), updated_at = now()
+WHERE id = $1 AND agent_id = $2 AND status = 'pending'
 `
 
 type CancelScheduledFireParams struct {
@@ -20,21 +22,41 @@ type CancelScheduledFireParams struct {
 	AgentID pgtype.UUID `json:"agent_id"`
 }
 
-func (q *Queries) CancelScheduledFire(ctx context.Context, arg CancelScheduledFireParams) error {
-	_, err := q.db.Exec(ctx, cancelScheduledFire, arg.ID, arg.AgentID)
-	return err
+func (q *Queries) CancelScheduledFire(ctx context.Context, arg CancelScheduledFireParams) (int64, error) {
+	result, err := q.db.Exec(ctx, cancelScheduledFire, arg.ID, arg.AgentID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const claimDueScheduledFires = `-- name: ClaimDueScheduledFires :many
-SELECT id, agent_id, source, slug, fire_at, recurrence, timeout_ms, status, created_at FROM agent_scheduled_fires
-WHERE status = 'pending' AND fire_at <= now()
-ORDER BY fire_at
-LIMIT $1
-FOR UPDATE SKIP LOCKED
+WITH due AS (
+    SELECT agent_id, id
+    FROM agent_scheduled_fires
+    WHERE (status = 'pending' AND next_attempt_at <= now())
+       OR (status = 'leased' AND lease_expires_at <= now() AND attempt < max_attempts)
+    ORDER BY next_attempt_at, fire_at
+    LIMIT $2
+    FOR UPDATE SKIP LOCKED
+)
+UPDATE agent_scheduled_fires f
+SET status = 'leased', attempt = f.attempt + 1,
+    lease_owner = $1, lease_token = gen_random_uuid(),
+    lease_expires_at = now() + make_interval(secs => ((GREATEST(f.timeout_ms, 120000) / 1000)::int + 120)),
+    started_at = COALESCE(f.started_at, now()), updated_at = now()
+FROM due
+WHERE f.agent_id = due.agent_id AND f.id = due.id
+RETURNING f.id, f.agent_id, f.source, f.slug, f.fire_at, f.recurrence, f.timeout_ms, f.status, f.attempt, f.max_attempts, f.lease_owner, f.lease_token, f.lease_expires_at, f.next_attempt_at, f.started_at, f.completed_at, f.last_error, f.created_at, f.updated_at
 `
 
-func (q *Queries) ClaimDueScheduledFires(ctx context.Context, limit int32) ([]AgentScheduledFire, error) {
-	rows, err := q.db.Query(ctx, claimDueScheduledFires, limit)
+type ClaimDueScheduledFiresParams struct {
+	LeaseOwner pgtype.UUID `json:"lease_owner"`
+	BatchSize  int32       `json:"batch_size"`
+}
+
+func (q *Queries) ClaimDueScheduledFires(ctx context.Context, arg ClaimDueScheduledFiresParams) ([]AgentScheduledFire, error) {
+	rows, err := q.db.Query(ctx, claimDueScheduledFires, arg.LeaseOwner, arg.BatchSize)
 	if err != nil {
 		return nil, err
 	}
@@ -51,7 +73,17 @@ func (q *Queries) ClaimDueScheduledFires(ctx context.Context, limit int32) ([]Ag
 			&i.Recurrence,
 			&i.TimeoutMs,
 			&i.Status,
+			&i.Attempt,
+			&i.MaxAttempts,
+			&i.LeaseOwner,
+			&i.LeaseToken,
+			&i.LeaseExpiresAt,
+			&i.NextAttemptAt,
+			&i.StartedAt,
+			&i.CompletedAt,
+			&i.LastError,
 			&i.CreatedAt,
+			&i.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -63,48 +95,194 @@ func (q *Queries) ClaimDueScheduledFires(ctx context.Context, limit int32) ([]Ag
 	return items, nil
 }
 
-const deletePendingCronFires = `-- name: DeletePendingCronFires :exec
-DELETE FROM agent_scheduled_fires
-WHERE agent_id = $1 AND source = 'cron' AND status = 'pending'
+const completeScheduledFire = `-- name: CompleteScheduledFire :execrows
+UPDATE agent_scheduled_fires
+SET status = 'succeeded', completed_at = now(), last_error = '', updated_at = now(),
+    lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL
+WHERE id = $1 AND agent_id = $2 AND status = 'leased' AND lease_token = $3
 `
 
-func (q *Queries) DeletePendingCronFires(ctx context.Context, agentID pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, deletePendingCronFires, agentID)
-	return err
+type CompleteScheduledFireParams struct {
+	ID         pgtype.UUID `json:"id"`
+	AgentID    pgtype.UUID `json:"agent_id"`
+	LeaseToken pgtype.UUID `json:"lease_token"`
 }
 
-const insertScheduledFire = `-- name: InsertScheduledFire :one
-INSERT INTO agent_scheduled_fires (agent_id, source, slug, fire_at, recurrence, timeout_ms, status)
-VALUES ($1, $2, $3, $4, $5, $6, 'pending')
-RETURNING id
+func (q *Queries) CompleteScheduledFire(ctx context.Context, arg CompleteScheduledFireParams) (int64, error) {
+	result, err := q.db.Exec(ctx, completeScheduledFire, arg.ID, arg.AgentID, arg.LeaseToken)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const failExpiredScheduledFires = `-- name: FailExpiredScheduledFires :execrows
+UPDATE agent_scheduled_fires
+SET status = 'failed', completed_at = now(), last_error = 'delivery lease expired after final attempt', updated_at = now(),
+    lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL
+WHERE status = 'leased' AND lease_expires_at <= now() AND attempt >= max_attempts
+`
+
+func (q *Queries) FailExpiredScheduledFires(ctx context.Context) (int64, error) {
+	result, err := q.db.Exec(ctx, failExpiredScheduledFires)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const failScheduledFire = `-- name: FailScheduledFire :execrows
+UPDATE agent_scheduled_fires
+SET status = 'failed', completed_at = now(), last_error = $1, updated_at = now(),
+    lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL
+WHERE id = $2 AND agent_id = $3 AND status = 'leased' AND lease_token = $4
+`
+
+type FailScheduledFireParams struct {
+	LastError  string      `json:"last_error"`
+	ID         pgtype.UUID `json:"id"`
+	AgentID    pgtype.UUID `json:"agent_id"`
+	LeaseToken pgtype.UUID `json:"lease_token"`
+}
+
+func (q *Queries) FailScheduledFire(ctx context.Context, arg FailScheduledFireParams) (int64, error) {
+	result, err := q.db.Exec(ctx, failScheduledFire,
+		arg.LastError,
+		arg.ID,
+		arg.AgentID,
+		arg.LeaseToken,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const getScheduledFire = `-- name: GetScheduledFire :one
+SELECT id, agent_id, source, slug, fire_at, recurrence, timeout_ms, status, attempt, max_attempts, lease_owner, lease_token, lease_expires_at, next_attempt_at, started_at, completed_at, last_error, created_at, updated_at FROM agent_scheduled_fires WHERE id = $1 AND agent_id = $2
+`
+
+type GetScheduledFireParams struct {
+	ID      pgtype.UUID `json:"id"`
+	AgentID pgtype.UUID `json:"agent_id"`
+}
+
+func (q *Queries) GetScheduledFire(ctx context.Context, arg GetScheduledFireParams) (AgentScheduledFire, error) {
+	row := q.db.QueryRow(ctx, getScheduledFire, arg.ID, arg.AgentID)
+	var i AgentScheduledFire
+	err := row.Scan(
+		&i.ID,
+		&i.AgentID,
+		&i.Source,
+		&i.Slug,
+		&i.FireAt,
+		&i.Recurrence,
+		&i.TimeoutMs,
+		&i.Status,
+		&i.Attempt,
+		&i.MaxAttempts,
+		&i.LeaseOwner,
+		&i.LeaseToken,
+		&i.LeaseExpiresAt,
+		&i.NextAttemptAt,
+		&i.StartedAt,
+		&i.CompletedAt,
+		&i.LastError,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const insertScheduledFire = `-- name: InsertScheduledFire :execrows
+INSERT INTO agent_scheduled_fires (
+    id, agent_id, source, slug, fire_at, recurrence, timeout_ms, status,
+    attempt, max_attempts, next_attempt_at, last_error
+)
+VALUES (
+    $1, $2, $3, $4, $5, $6, $7, 'pending',
+    0, $8, $5, ''
+)
+ON CONFLICT DO NOTHING
 `
 
 type InsertScheduledFireParams struct {
-	AgentID    pgtype.UUID        `json:"agent_id"`
-	Source     string             `json:"source"`
-	Slug       string             `json:"slug"`
-	FireAt     pgtype.Timestamptz `json:"fire_at"`
-	Recurrence string             `json:"recurrence"`
-	TimeoutMs  int64              `json:"timeout_ms"`
+	ID          pgtype.UUID        `json:"id"`
+	AgentID     pgtype.UUID        `json:"agent_id"`
+	Source      string             `json:"source"`
+	Slug        string             `json:"slug"`
+	FireAt      pgtype.Timestamptz `json:"fire_at"`
+	Recurrence  string             `json:"recurrence"`
+	TimeoutMs   int64              `json:"timeout_ms"`
+	MaxAttempts int32              `json:"max_attempts"`
 }
 
-func (q *Queries) InsertScheduledFire(ctx context.Context, arg InsertScheduledFireParams) (pgtype.UUID, error) {
-	row := q.db.QueryRow(ctx, insertScheduledFire,
+func (q *Queries) InsertScheduledFire(ctx context.Context, arg InsertScheduledFireParams) (int64, error) {
+	result, err := q.db.Exec(ctx, insertScheduledFire,
+		arg.ID,
 		arg.AgentID,
 		arg.Source,
 		arg.Slug,
 		arg.FireAt,
 		arg.Recurrence,
 		arg.TimeoutMs,
+		arg.MaxAttempts,
 	)
-	var id pgtype.UUID
-	err := row.Scan(&id)
-	return id, err
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const listPendingCronFires = `-- name: ListPendingCronFires :many
+SELECT id, agent_id, source, slug, fire_at, recurrence, timeout_ms, status, attempt, max_attempts, lease_owner, lease_token, lease_expires_at, next_attempt_at, started_at, completed_at, last_error, created_at, updated_at FROM agent_scheduled_fires
+WHERE agent_id = $1 AND source = 'cron' AND status = 'pending'
+ORDER BY fire_at
+`
+
+func (q *Queries) ListPendingCronFires(ctx context.Context, agentID pgtype.UUID) ([]AgentScheduledFire, error) {
+	rows, err := q.db.Query(ctx, listPendingCronFires, agentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []AgentScheduledFire{}
+	for rows.Next() {
+		var i AgentScheduledFire
+		if err := rows.Scan(
+			&i.ID,
+			&i.AgentID,
+			&i.Source,
+			&i.Slug,
+			&i.FireAt,
+			&i.Recurrence,
+			&i.TimeoutMs,
+			&i.Status,
+			&i.Attempt,
+			&i.MaxAttempts,
+			&i.LeaseOwner,
+			&i.LeaseToken,
+			&i.LeaseExpiresAt,
+			&i.NextAttemptAt,
+			&i.StartedAt,
+			&i.CompletedAt,
+			&i.LastError,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listScheduledFires = `-- name: ListScheduledFires :many
-SELECT id, agent_id, source, slug, fire_at, recurrence, timeout_ms, status, created_at FROM agent_scheduled_fires
-WHERE agent_id = $1 AND status = 'pending'
+SELECT id, agent_id, source, slug, fire_at, recurrence, timeout_ms, status, attempt, max_attempts, lease_owner, lease_token, lease_expires_at, next_attempt_at, started_at, completed_at, last_error, created_at, updated_at FROM agent_scheduled_fires
+WHERE agent_id = $1 AND status IN ('pending', 'leased')
   AND ($2::text = '' OR slug = $2)
 ORDER BY fire_at
 `
@@ -132,7 +310,17 @@ func (q *Queries) ListScheduledFires(ctx context.Context, arg ListScheduledFires
 			&i.Recurrence,
 			&i.TimeoutMs,
 			&i.Status,
+			&i.Attempt,
+			&i.MaxAttempts,
+			&i.LeaseOwner,
+			&i.LeaseToken,
+			&i.LeaseExpiresAt,
+			&i.NextAttemptAt,
+			&i.StartedAt,
+			&i.CompletedAt,
+			&i.LastError,
 			&i.CreatedAt,
+			&i.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -144,22 +332,8 @@ func (q *Queries) ListScheduledFires(ctx context.Context, arg ListScheduledFires
 	return items, nil
 }
 
-const markScheduledFire = `-- name: MarkScheduledFire :exec
-UPDATE agent_scheduled_fires SET status = $1 WHERE id = $2
-`
-
-type MarkScheduledFireParams struct {
-	Status string      `json:"status"`
-	ID     pgtype.UUID `json:"id"`
-}
-
-func (q *Queries) MarkScheduledFire(ctx context.Context, arg MarkScheduledFireParams) error {
-	_, err := q.db.Exec(ctx, markScheduledFire, arg.Status, arg.ID)
-	return err
-}
-
 const orphanMissingScheduleFires = `-- name: OrphanMissingScheduleFires :exec
-UPDATE agent_scheduled_fires SET status = 'orphaned'
+UPDATE agent_scheduled_fires SET status = 'orphaned', completed_at = now(), updated_at = now()
 WHERE agent_id = $1 AND status = 'pending' AND source = 'schedule'
   AND slug != ALL($2::text[])
 `
@@ -174,16 +348,52 @@ func (q *Queries) OrphanMissingScheduleFires(ctx context.Context, arg OrphanMiss
 	return err
 }
 
-const rescheduleFire = `-- name: RescheduleFire :exec
-UPDATE agent_scheduled_fires SET fire_at = $1 WHERE id = $2
+const renewScheduledFireLease = `-- name: RenewScheduledFireLease :execrows
+UPDATE agent_scheduled_fires
+SET lease_expires_at = now() + make_interval(secs => ((GREATEST(timeout_ms, 120000) / 1000)::int + 120)),
+    updated_at = now()
+WHERE id = $1 AND agent_id = $2 AND status = 'leased' AND lease_token = $3
 `
 
-type RescheduleFireParams struct {
-	FireAt pgtype.Timestamptz `json:"fire_at"`
-	ID     pgtype.UUID        `json:"id"`
+type RenewScheduledFireLeaseParams struct {
+	ID         pgtype.UUID `json:"id"`
+	AgentID    pgtype.UUID `json:"agent_id"`
+	LeaseToken pgtype.UUID `json:"lease_token"`
 }
 
-func (q *Queries) RescheduleFire(ctx context.Context, arg RescheduleFireParams) error {
-	_, err := q.db.Exec(ctx, rescheduleFire, arg.FireAt, arg.ID)
-	return err
+func (q *Queries) RenewScheduledFireLease(ctx context.Context, arg RenewScheduledFireLeaseParams) (int64, error) {
+	result, err := q.db.Exec(ctx, renewScheduledFireLease, arg.ID, arg.AgentID, arg.LeaseToken)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const retryScheduledFire = `-- name: RetryScheduledFire :execrows
+UPDATE agent_scheduled_fires
+SET status = 'pending', next_attempt_at = now() + make_interval(secs => $1::int),
+    last_error = $2, updated_at = now(), lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL
+WHERE id = $3 AND agent_id = $4 AND status = 'leased' AND lease_token = $5 AND attempt < max_attempts
+`
+
+type RetryScheduledFireParams struct {
+	BackoffSeconds int32       `json:"backoff_seconds"`
+	LastError      string      `json:"last_error"`
+	ID             pgtype.UUID `json:"id"`
+	AgentID        pgtype.UUID `json:"agent_id"`
+	LeaseToken     pgtype.UUID `json:"lease_token"`
+}
+
+func (q *Queries) RetryScheduledFire(ctx context.Context, arg RetryScheduledFireParams) (int64, error) {
+	result, err := q.db.Exec(ctx, retryScheduledFire,
+		arg.BackoffSeconds,
+		arg.LastError,
+		arg.ID,
+		arg.AgentID,
+		arg.LeaseToken,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }

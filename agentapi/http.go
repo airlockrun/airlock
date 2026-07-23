@@ -14,6 +14,7 @@ import (
 
 	"github.com/airlockrun/agentsdk/wire"
 	"github.com/airlockrun/airlock/auth"
+	agentstoragesvc "github.com/airlockrun/airlock/service/agentstorage"
 	"github.com/airlockrun/airlock/storage"
 	"github.com/airlockrun/sol/webfetch"
 	"github.com/google/uuid"
@@ -106,14 +107,19 @@ func (h *Handler) AgentHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Explicit saveAs — stream directly to S3 (binary-safe, unbounded size).
 	if req.SaveAs != "" {
-		s3Key, err := agentStorageKey(agentID, req.SaveAs)
+		runID, err := uuid.Parse(req.RunID)
 		if err != nil {
-			writeJSONError(w, http.StatusBadRequest, "invalid saveAs: "+err.Error())
+			writeJSONError(w, http.StatusBadRequest, "runId is required for saveAs")
 			return
 		}
-		size, preview, err := streamSaveToS3(r.Context(), h.s3, s3Key, resp.Body, binary)
+		resolved, err := h.files.ResolveForRun(r.Context(), agentID, runID, req.SaveAs, agentstoragesvc.OperationWrite)
 		if err != nil {
-			h.logger.Error("saveAs: S3 put failed", zap.String("key", s3Key), zap.Error(err))
+			writeJSONError(w, http.StatusNotFound, "saveAs path not found")
+			return
+		}
+		size, preview, err := streamSaveToS3(r.Context(), h.s3, resolved.S3Key, resp.Body, binary)
+		if err != nil {
+			h.logger.Error("saveAs: S3 put failed", zap.String("key", resolved.S3Key), zap.Error(err))
 			writeJSONError(w, http.StatusInternalServerError, "failed to save response")
 			return
 		}
@@ -123,8 +129,8 @@ func (h *Handler) AgentHTTP(w http.ResponseWriter, r *http.Request) {
 			ContentType: ct,
 			Size:        size,
 			BodyPreview: preview,
-			SavedTo:     req.SaveAs,
-			Note:        fmt.Sprintf("%d bytes saved to %s.", size, req.SaveAs),
+			SavedTo:     resolved.Relative,
+			Note:        fmt.Sprintf("%d bytes saved to %s.", size, resolved.Relative),
 		})
 		return
 	}

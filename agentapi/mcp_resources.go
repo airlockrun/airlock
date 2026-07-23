@@ -7,11 +7,14 @@ import (
 	"io"
 	"net/http"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/airlockrun/agentsdk"
+	"github.com/airlockrun/airlock/authz"
 	"github.com/airlockrun/airlock/db/dbq"
+	agentstoragesvc "github.com/airlockrun/airlock/service/agentstorage"
 	"github.com/airlockrun/airlock/storage"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -36,9 +39,11 @@ import (
 // directory exceeds 10k entries we cap and document. Pagination via
 // nextCursor can be added when actual usage hits the cap.
 func (s *MCPServer) handleResourcesList(ctx context.Context, w http.ResponseWriter, h *Handler, q *dbq.Queries, target dbq.Agent, access agentsdk.Access, principal MCPPrincipal, msg jsonrpcMessage) {
-	dirs, err := q.ListDirectoriesByAgent(ctx, target.ID)
+	targetID := uuid.UUID(target.ID.Bytes)
+	caller := mcpFileCaller(access, principal)
+	roots, err := h.files.ListRoots(ctx, caller, targetID)
 	if err != nil {
-		s.logger.Error("mcp resources: list dirs", zap.Error(err))
+		s.logger.Error("mcp resources: resolve list roots", zap.Error(err))
 		writeJSONRPCError(w, msg.ID, rpcErrServerError, "list directories: "+err.Error())
 		return
 	}
@@ -49,19 +54,10 @@ func (s *MCPServer) handleResourcesList(ctx context.Context, w http.ResponseWrit
 		Size     int64  `json:"size,omitempty"`
 	}
 	const perDirCap = 10000
-	out := make([]entry, 0, 64)
-	agentPrefix := "agents/" + uuid.UUID(target.ID.Bytes).String() + "/"
-	authorizer := newMCPResourceAuthorizer(ctx, q, uuid.UUID(target.ID.Bytes), principal)
-	for _, dir := range dirs {
-		if !accessSatisfies(string(access), dir.ListAccess) {
-			continue
-		}
-		// Hide framework-internal A2A inbox even to admins — it's not
-		// useful to browse and only contains transient files.
-		if dir.Path == "__incoming" {
-			continue
-		}
-		prefix := agentPrefix + dir.Path + "/"
+	agentPrefix := "agents/" + targetID.String() + "/"
+	objects := make(map[string]storage.ObjectInfo)
+	for _, root := range roots {
+		prefix := root.S3Key + "/"
 		objs, err := h.s3.ListObjects(ctx, prefix)
 		if err != nil {
 			s.logger.Warn("mcp resources: list objects", zap.String("prefix", prefix), zap.Error(err))
@@ -69,21 +65,28 @@ func (s *MCPServer) handleResourcesList(ctx context.Context, w http.ResponseWrit
 		}
 		if len(objs) > perDirCap {
 			s.logger.Warn("mcp resources: directory exceeds cap",
-				zap.String("dir", dir.Path), zap.Int("count", len(objs)), zap.Int("cap", perDirCap))
+				zap.String("dir", root.DirectoryPath), zap.Int("count", len(objs)), zap.Int("cap", perDirCap))
 			objs = objs[:perDirCap]
 		}
 		for _, obj := range objs {
 			rel := strings.TrimPrefix(obj.Key, agentPrefix)
-			if !authorizer.allows(dir, rel) {
-				continue
-			}
-			out = append(out, entry{
-				URI:      "agent://" + rel,
-				Name:     filepath.Base(rel),
-				MimeType: mimeFromName(rel),
-				Size:     obj.Size,
-			})
+			objects[rel] = obj
 		}
+	}
+	paths := make([]string, 0, len(objects))
+	for path := range objects {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	visible, err := h.files.FilterList(ctx, caller, targetID, paths)
+	if err != nil {
+		writeJSONRPCError(w, msg.ID, rpcErrServerError, "authorize directory listing")
+		return
+	}
+	out := make([]entry, 0, len(visible))
+	for _, path := range visible {
+		obj := objects[path.Relative]
+		out = append(out, entry{URI: "agent://" + path.Relative, Name: filepath.Base(path.Relative), MimeType: mimeFromName(path.Relative), Size: obj.Size})
 	}
 	result, _ := json.Marshal(map[string]any{"resources": out})
 	writeJSONRPCResult(w, msg.ID, result)
@@ -104,42 +107,13 @@ func (s *MCPServer) handleResourcesRead(ctx context.Context, w http.ResponseWrit
 	if path == params.URI {
 		// Some clients may pass the bare path. Accept that too.
 	}
-	cleaned, err := storage.CleanAgentPath(path)
+	resolved, err := h.files.Resolve(ctx, mcpFileCaller(access, principal), uuid.UUID(target.ID.Bytes), path, agentstoragesvc.OperationRead)
 	if err != nil {
-		writeJSONRPCError(w, msg.ID, rpcErrInvalidParams, "invalid uri path: "+err.Error())
-		return
-	}
-
-	// Access check: find the longest-prefix directory whose read_access
-	// the caller satisfies. Reject otherwise. We treat "no matching
-	// readable directory" as 404 so URL-guessing leaks no info.
-	dirs, err := q.ListDirectoriesByAgent(ctx, target.ID)
-	if err != nil {
-		s.logger.Error("mcp resources: list dirs for read", zap.Error(err))
-		writeJSONRPCError(w, msg.ID, rpcErrServerError, "list directories")
-		return
-	}
-	var ownerDir *dbq.AgentDirectory
-	var bestLen int
-	for i := range dirs {
-		d := &dirs[i]
-		if !strings.HasPrefix(cleaned, d.Path+"/") && cleaned != d.Path {
-			continue
-		}
-		if len(d.Path) <= bestLen {
-			continue
-		}
-		bestLen = len(d.Path)
-		ownerDir = d
-	}
-	if ownerDir == nil || !accessSatisfies(string(access), ownerDir.ReadAccess) ||
-		!newMCPResourceAuthorizer(ctx, q, uuid.UUID(target.ID.Bytes), principal).allows(*ownerDir, cleaned) {
 		writeJSONRPCError(w, msg.ID, rpcErrInvalidParams, "resource not found")
 		return
 	}
 
-	s3Key := "agents/" + uuid.UUID(target.ID.Bytes).String() + "/" + cleaned
-	info, ct, err := h.s3.HeadObject(ctx, s3Key)
+	info, ct, err := h.s3.HeadObject(ctx, resolved.S3Key)
 	if err != nil {
 		writeJSONRPCError(w, msg.ID, rpcErrInvalidParams, "resource not found")
 		return
@@ -149,7 +123,7 @@ func (s *MCPServer) handleResourcesRead(ctx context.Context, w http.ResponseWrit
 	// stub. Spec-compliant clients that ignore _meta still get a useful
 	// message; ones that read _meta open the URL directly.
 	if info.Size > int64(maxInlineResourceBytes) {
-		url, perr := h.s3.PublicPresignGetURL(ctx, s3Key, presignedURLTTL)
+		url, perr := h.s3.PublicPresignGetURL(ctx, resolved.S3Key, presignedURLTTL)
 		var stub string
 		meta := map[string]any{"airlock.run/size": info.Size}
 		if perr == nil {
@@ -171,7 +145,7 @@ func (s *MCPServer) handleResourcesRead(ctx context.Context, w http.ResponseWrit
 		return
 	}
 
-	reader, err := h.s3.GetObject(ctx, s3Key)
+	reader, err := h.s3.GetObject(ctx, resolved.S3Key)
 	if err != nil {
 		writeJSONRPCError(w, msg.ID, rpcErrServerError, "fetch: "+err.Error())
 		return
@@ -193,8 +167,8 @@ func (s *MCPServer) handleResourcesRead(ctx context.Context, w http.ResponseWrit
 
 // handleResourcesTemplatesList returns one URI template per visible
 // directory so clients can show a tree view of the agent's namespace.
-func (s *MCPServer) handleResourcesTemplatesList(ctx context.Context, w http.ResponseWriter, q *dbq.Queries, target dbq.Agent, access agentsdk.Access, principal MCPPrincipal, msg jsonrpcMessage) {
-	dirs, err := q.ListDirectoriesByAgent(ctx, target.ID)
+func (s *MCPServer) handleResourcesTemplatesList(ctx context.Context, w http.ResponseWriter, h *Handler, q *dbq.Queries, target dbq.Agent, access agentsdk.Access, principal MCPPrincipal, msg jsonrpcMessage) {
+	roots, err := h.files.ListRoots(ctx, mcpFileCaller(access, principal), uuid.UUID(target.ID.Bytes))
 	if err != nil {
 		writeJSONRPCError(w, msg.ID, rpcErrServerError, "list directories: "+err.Error())
 		return
@@ -204,130 +178,27 @@ func (s *MCPServer) handleResourcesTemplatesList(ctx context.Context, w http.Res
 		Name        string `json:"name"`
 		Description string `json:"description,omitempty"`
 	}
-	out := make([]tmpl, 0, len(dirs))
-	for _, dir := range dirs {
-		if !accessSatisfies(string(access), dir.ListAccess) {
-			continue
-		}
-		if dir.Scope != "" && principal.Kind == MCPPrincipalAnon {
-			continue
-		}
-		if dir.Path == "__incoming" {
-			continue
-		}
+	out := make([]tmpl, 0, len(roots))
+	for _, root := range roots {
 		out = append(out, tmpl{
-			URITemplate: "agent://" + dir.Path + "/{filename}",
-			Name:        dir.Path,
-			Description: dir.Description,
+			URITemplate: "agent://" + root.Relative + "/{filename}",
+			Name:        root.DirectoryPath,
+			Description: root.Description,
 		})
 	}
 	result, _ := json.Marshal(map[string]any{"resourceTemplates": out})
 	writeJSONRPCResult(w, msg.ID, result)
 }
 
-type mcpResourceAuthorizer struct {
-	ctx          context.Context
-	q            *dbq.Queries
-	targetID     uuid.UUID
-	principal    MCPPrincipal
-	conversation map[uuid.UUID]bool
-	run          map[uuid.UUID]bool
-}
-
-func newMCPResourceAuthorizer(ctx context.Context, q *dbq.Queries, targetID uuid.UUID, principal MCPPrincipal) *mcpResourceAuthorizer {
-	return &mcpResourceAuthorizer{
-		ctx: ctx, q: q, targetID: targetID, principal: principal,
-		conversation: make(map[uuid.UUID]bool), run: make(map[uuid.UUID]bool),
+func mcpFileCaller(access agentsdk.Access, principal MCPPrincipal) agentstoragesvc.Caller {
+	caller := agentstoragesvc.Caller{Access: access, UserID: principal.UserID, ParentRunID: principal.ParentRunID}
+	if principal.Kind == MCPPrincipalAnon {
+		caller.Principal = authz.AnonymousPrincipal()
+		return caller
 	}
-}
-
-func (a *mcpResourceAuthorizer) allows(dir dbq.AgentDirectory, path string) bool {
-	if dir.Scope == "" {
-		return true
-	}
-	if a.principal.Kind == MCPPrincipalAnon {
-		return false
-	}
-	prefix := dir.Path + "/"
-	if !strings.HasPrefix(path, prefix) {
-		return false
-	}
-	segment, _, ok := strings.Cut(strings.TrimPrefix(path, prefix), "/")
-	if !ok {
-		return false
-	}
-	switch dir.Scope {
-	case "user":
-		id, ok := strings.CutPrefix(segment, "user-")
-		return ok && a.principal.UserID != uuid.Nil && id == a.principal.UserID.String()
-	case "conv":
-		id, ok := strings.CutPrefix(segment, "conv-")
-		if !ok {
-			return false
-		}
-		convID, err := uuid.Parse(id)
-		return err == nil && a.conversationAllowed(convID)
-	case "run":
-		id, ok := strings.CutPrefix(segment, "run-")
-		if !ok {
-			return false
-		}
-		runID, err := uuid.Parse(id)
-		return err == nil && a.runAllowed(runID)
-	default:
-		return false
-	}
-}
-
-func (a *mcpResourceAuthorizer) conversationAllowed(id uuid.UUID) bool {
-	if allowed, ok := a.conversation[id]; ok {
-		return allowed
-	}
-	a.conversation[id] = false
-	conv, err := a.q.GetConversationByIDAndAgent(a.ctx, dbq.GetConversationByIDAndAgentParams{
-		ID: toPgUUID(id), AgentID: toPgUUID(a.targetID),
-	})
-	if err != nil || !conv.UserID.Valid || uuid.UUID(conv.UserID.Bytes) != a.principal.UserID {
-		return false
-	}
-	allowed := conv.Source == "a2a" && conversationBoundToPrincipal(conv, a.targetID, a.principal)
-	if conv.Source != "a2a" {
-		allowed = a.principal.Kind == MCPPrincipalUser
-	}
-	a.conversation[id] = allowed
-	return allowed
-}
-
-func (a *mcpResourceAuthorizer) runAllowed(id uuid.UUID) bool {
-	if allowed, ok := a.run[id]; ok {
-		return allowed
-	}
-	a.run[id] = false
-	if a.principal.Kind == MCPPrincipalAgent {
-		if id != a.principal.ParentRunID {
-			return false
-		}
-		run, err := a.q.GetRunByID(a.ctx, toPgUUID(id))
-		if err != nil || run.Status != "running" || uuid.UUID(run.AgentID.Bytes) != a.principal.CallerAgentID {
-			return false
-		}
-		userID, err := chaseOriginalUser(a.ctx, a.q, run)
-		allowed := err == nil && userID == a.principal.UserID
-		a.run[id] = allowed
-		return allowed
-	}
-	run, err := a.q.GetRunByIDAndAgent(a.ctx, dbq.GetRunByIDAndAgentParams{
-		ID: toPgUUID(id), AgentID: toPgUUID(a.targetID),
-	})
-	if err != nil || run.TriggerRef == "" {
-		return false
-	}
-	convID, err := uuid.Parse(run.TriggerRef)
-	if err != nil || !a.conversationAllowed(convID) {
-		return false
-	}
-	a.run[id] = true
-	return true
+	caller.Principal = authz.UserPrincipal(principal.UserID, "")
+	caller.Principal.OnBehalfOfAgent = principal.CallerAgentID
+	return caller
 }
 
 // mimeFromName guesses content-type from extension. Used purely as a UI

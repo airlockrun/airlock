@@ -144,10 +144,9 @@ type Detail struct {
 	Routes      []dbq.AgentRoute                       `json:"routes"`
 }
 
-// FireScheduleResult is the output of FireSchedule — the run ID for the SPA to
-// subscribe to.
+// FireScheduleResult identifies the durable manual cron occurrence.
 type FireScheduleResult struct {
-	RunID uuid.UUID
+	OccurrenceID uuid.UUID
 }
 
 // GitConfig is the read-side view of the agent's external git binding.
@@ -1548,9 +1547,8 @@ func (s *Service) ListTools(ctx context.Context, p authz.Principal, agentID uuid
 	return rows, nil
 }
 
-// FireSchedule manually fires a registered handler (cron or schedule) once and
-// returns the run ID after draining the response body. No fire id is passed —
-// a manual fire carries no per-instance data. Requires agent-admin.
+// FireSchedule queues a durable manual occurrence of a cron handler. Runtime
+// one-shot handlers require caller-owned domain data and cannot be fired here.
 func (s *Service) FireSchedule(ctx context.Context, p authz.Principal, agentID uuid.UUID, slug string) (FireScheduleResult, error) {
 	q := dbq.New(s.db.Pool())
 	if err := authz.Authorize(ctx, q, p, authz.AgentScheduleFire, agentID); err != nil {
@@ -1560,20 +1558,20 @@ func (s *Service) FireSchedule(ctx context.Context, p authz.Principal, agentID u
 		AgentID: pgtype.UUID{Bytes: agentID, Valid: true},
 		Slug:    slug,
 	})
-	if err != nil {
+	if err != nil || handler.Kind != "cron" || !handler.Enabled {
 		return FireScheduleResult{}, service.ErrNotFound
 	}
-	timeout := time.Duration(handler.TimeoutMs) * time.Millisecond
-	if timeout == 0 {
-		timeout = 2 * time.Minute
-	}
-	rc, runID, err := s.dispatcher.ForwardFire(ctx, agentID, "", slug, timeout)
+	occurrenceID := uuid.New()
+	fireAt := time.Now().UTC().Truncate(time.Microsecond)
+	_, err = q.InsertScheduledFire(ctx, dbq.InsertScheduledFireParams{
+		ID: pgtype.UUID{Bytes: occurrenceID, Valid: true}, AgentID: pgtype.UUID{Bytes: agentID, Valid: true},
+		Source: "manual", Slug: slug, FireAt: pgtype.Timestamptz{Time: fireAt, Valid: true},
+		Recurrence: "", TimeoutMs: handler.TimeoutMs, MaxAttempts: 5,
+	})
 	if err != nil {
 		return FireScheduleResult{}, err
 	}
-	io.Copy(io.Discard, rc)
-	rc.Close()
-	return FireScheduleResult{RunID: runID}, nil
+	return FireScheduleResult{OccurrenceID: occurrenceID}, nil
 }
 
 // ListBuilds returns the agent's build history (latest 50). Requires

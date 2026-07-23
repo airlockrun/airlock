@@ -101,7 +101,7 @@ func TestForwardWebhook(t *testing.T) {
 	}
 
 	body := []byte(`{"event":"push"}`)
-	rc, err := d.forward(context.Background(), uuid.New(), cm.container, "POST", "/webhook/github", body, uuid.New(), nil, nil, nil, "", 2*time.Minute)
+	rc, err := d.forward(context.Background(), uuid.New(), cm.container, "POST", "/webhook/github", body, uuid.New(), nil, nil, nil, 2*time.Minute)
 	if err != nil {
 		t.Fatalf("forward: %v", err)
 	}
@@ -138,7 +138,7 @@ func TestForwardSetsBridgeIDHeader(t *testing.T) {
 	}
 
 	bridgeID := uuid.New()
-	rc, err := d.forward(context.Background(), uuid.New(), cm.container, "POST", "/prompt", nil, uuid.New(), &bridgeID, nil, nil, "", 5*time.Minute)
+	rc, err := d.forward(context.Background(), uuid.New(), cm.container, "POST", "/prompt", nil, uuid.New(), &bridgeID, nil, nil, 5*time.Minute)
 	if err != nil {
 		t.Fatalf("forward: %v", err)
 	}
@@ -167,7 +167,7 @@ func TestForwardReturnsErrorOnBadStatus(t *testing.T) {
 		containers: cm,
 	}
 
-	_, err := d.forward(context.Background(), uuid.New(), cm.container, "POST", "/fire/daily", nil, uuid.New(), nil, nil, nil, "", 2*time.Minute)
+	_, err := d.forward(context.Background(), uuid.New(), cm.container, "POST", "/fire/daily", nil, uuid.New(), nil, nil, nil, 2*time.Minute)
 	if err == nil {
 		t.Fatal("expected error for 500 response")
 	}

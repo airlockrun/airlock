@@ -71,6 +71,7 @@ func TestIntegration_StoppedAgent_Surfaces(t *testing.T) {
 			InputPayload: []byte(`{}`),
 			TriggerType:  "prompt",
 			TriggerRef:   uuid.UUID(conv.ID.Bytes).String(),
+			CallerAccess: "admin",
 		})
 		if err != nil {
 			t.Fatalf("CreateRun: %v", err)

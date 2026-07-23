@@ -106,6 +106,9 @@ func (c *mcpHTTPClient) listTools(ctx context.Context) error {
 	}
 	byName := make(map[string]mcpToolInfo, len(response.Tools))
 	for _, tool := range response.Tools {
+		if _, exists := byName[tool.Name]; exists {
+			return fmt.Errorf("MCP tools/list returned duplicate tool name %q", tool.Name)
+		}
 		byName[tool.Name] = tool
 	}
 	names := make([]string, 0, len(byName))

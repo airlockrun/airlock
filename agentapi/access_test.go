@@ -212,7 +212,7 @@ func createTestRun(t *testing.T, agentID uuid.UUID, parentRunID pgtype.UUID, tri
 	t.Helper()
 	run, err := dbq.New(testDB.Pool()).CreateRun(context.Background(), dbq.CreateRunParams{
 		AgentID: toPgUUID(agentID), ParentRunID: parentRunID, InputPayload: []byte(`{}`),
-		SourceRef: "", TriggerType: triggerType, TriggerRef: triggerRef,
+		SourceRef: "", TriggerType: triggerType, TriggerRef: triggerRef, CallerAccess: "public",
 	})
 	if err != nil {
 		t.Fatalf("CreateRun: %v", err)
@@ -252,7 +252,7 @@ func TestMCPContinuationPrincipalAndTaskIsolation(t *testing.T) {
 	}
 	resumeParent, err := q.CreateRun(ctx, dbq.CreateRunParams{
 		AgentID: toPgUUID(callerID), InputPayload: []byte(`{"resumeRunId":"` + pgUUID(parent.ID).String() + `"}`),
-		SourceRef: "", TriggerType: "prompt", TriggerRef: pgUUID(parentConv.ID).String(),
+		SourceRef: "", TriggerType: "prompt", TriggerRef: pgUUID(parentConv.ID).String(), CallerAccess: "public",
 	})
 	if err != nil {
 		t.Fatalf("CreateRun resume parent: %v", err)
@@ -384,7 +384,7 @@ func TestMCPTaskResumeRollbackRequiresNoSuccessor(t *testing.T) {
 	resumePayload := []byte(`{"resumeRunId":"` + pgUUID(task.ID).String() + `"}`)
 	if _, err := q.CreateRun(ctx, dbq.CreateRunParams{
 		AgentID: toPgUUID(targetID), InputPayload: resumePayload, SourceRef: "",
-		TriggerType: "a2a", TriggerRef: convID,
+		TriggerType: "a2a", TriggerRef: convID, CallerAccess: "public",
 	}); err != nil {
 		t.Fatalf("CreateRun successor: %v", err)
 	}
@@ -398,56 +398,5 @@ func TestMCPTaskResumeRollbackRequiresNoSuccessor(t *testing.T) {
 	}
 	if claimed.Status != "success" {
 		t.Fatalf("task with successor status = %q, want success", claimed.Status)
-	}
-}
-
-func TestMCPDirectoryScopeIsolation(t *testing.T) {
-	skipIfNoDB(t)
-	ctx := context.Background()
-	q := dbq.New(testDB.Pool())
-	targetID, _ := testAgentAndUser(t)
-	userID := makeUser(t)
-	otherUserID := makeUser(t)
-	principal := MCPPrincipal{Kind: MCPPrincipalUser, UserID: userID}
-	userDir := dbq.AgentDirectory{Path: "private", Scope: "user"}
-	if !newMCPResourceAuthorizer(ctx, q, targetID, principal).allows(userDir, "private/user-"+userID.String()+"/mine.txt") {
-		t.Fatal("own user-scoped resource denied")
-	}
-	if newMCPResourceAuthorizer(ctx, q, targetID, principal).allows(userDir, "private/user-"+otherUserID.String()+"/theirs.txt") {
-		t.Fatal("cross-user resource allowed")
-	}
-	if newMCPResourceAuthorizer(ctx, q, targetID, MCPPrincipal{Kind: MCPPrincipalAnon}).allows(userDir, "private/user-"+userID.String()+"/mine.txt") {
-		t.Fatal("anonymous scoped resource allowed")
-	}
-
-	conv, err := q.CreateWebConversation(ctx, dbq.CreateWebConversationParams{
-		AgentID: toPgUUID(targetID), UserID: toPgUUID(userID), Title: "owned",
-	})
-	if err != nil {
-		t.Fatalf("CreateWebConversation: %v", err)
-	}
-	otherConv, err := q.CreateWebConversation(ctx, dbq.CreateWebConversationParams{
-		AgentID: toPgUUID(targetID), UserID: toPgUUID(otherUserID), Title: "other",
-	})
-	if err != nil {
-		t.Fatalf("CreateWebConversation other: %v", err)
-	}
-	convDir := dbq.AgentDirectory{Path: "threads", Scope: "conv"}
-	authorizer := newMCPResourceAuthorizer(ctx, q, targetID, principal)
-	if !authorizer.allows(convDir, "threads/conv-"+pgUUID(conv.ID).String()+"/mine.txt") {
-		t.Fatal("owned conversation resource denied")
-	}
-	if authorizer.allows(convDir, "threads/conv-"+pgUUID(otherConv.ID).String()+"/theirs.txt") {
-		t.Fatal("cross-conversation resource allowed")
-	}
-
-	run := createTestRun(t, targetID, pgtype.UUID{}, "prompt", pgUUID(conv.ID).String())
-	otherRun := createTestRun(t, targetID, pgtype.UUID{}, "prompt", pgUUID(otherConv.ID).String())
-	runDir := dbq.AgentDirectory{Path: "jobs", Scope: "run"}
-	if !authorizer.allows(runDir, "jobs/run-"+pgUUID(run.ID).String()+"/mine.txt") {
-		t.Fatal("owned run resource denied")
-	}
-	if authorizer.allows(runDir, "jobs/run-"+pgUUID(otherRun.ID).String()+"/theirs.txt") {
-		t.Fatal("cross-run resource allowed")
 	}
 }

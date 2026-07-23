@@ -457,7 +457,7 @@ func (h *agentsHandler) FireSchedule(w http.ResponseWriter, r *http.Request) {
 		writeAgentsError(w, err, "failed to fire schedule")
 		return
 	}
-	writeProto(w, http.StatusOK, &airlockv1.FireScheduleResponse{RunId: res.RunID.String()})
+	writeProto(w, http.StatusAccepted, &airlockv1.FireScheduleResponse{OccurrenceId: res.OccurrenceID.String()})
 }
 
 // ListBuilds handles GET /api/v1/agents/{agentID}/builds.

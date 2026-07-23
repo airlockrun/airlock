@@ -16,6 +16,7 @@ import (
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/airlockrun/airlock/service"
+	agentstoragesvc "github.com/airlockrun/airlock/service/agentstorage"
 	"github.com/airlockrun/airlock/storage"
 	"github.com/airlockrun/airlock/trigger"
 	"github.com/golang-jwt/jwt/v5"
@@ -31,12 +32,15 @@ import (
 // bridgeMgr is required for the Telegram Web App auto-auth flow: the
 // /__air/tg/auth intercept verifies initData against the bridge's bot
 // token, which bridgeMgr decrypts on demand.
-func SubdomainProxy(agentDomain string, database *db.DB, s3 *storage.S3Client, dispatcher *trigger.Dispatcher, bridgeMgr *trigger.BridgeManager, jwtSecret, publicURL string, inner http.Handler) http.Handler {
+func SubdomainProxy(agentDomain string, database *db.DB, s3 *storage.S3Client, files *agentstoragesvc.Service, dispatcher *trigger.Dispatcher, bridgeMgr *trigger.BridgeManager, jwtSecret, publicURL string, inner http.Handler) http.Handler {
 	if agentDomain == "" {
 		panic("api: SubdomainProxy called with empty agentDomain")
 	}
 	if bridgeMgr == nil {
 		panic("api: SubdomainProxy called with nil bridgeMgr")
+	}
+	if files == nil {
+		panic("api: SubdomainProxy called with nil file service")
 	}
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -83,7 +87,7 @@ func SubdomainProxy(agentDomain string, database *db.DB, s3 *storage.S3Client, d
 		// session cookie (rejectOrRedirect on miss kicks off login flow).
 		if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/__air/storage/") {
 			path := strings.TrimPrefix(r.URL.Path, "/__air/storage")
-			agentapi.ServeStoragePath(w, r, database, s3, agentID, path, jwtSecret, publicURL, log)
+			agentapi.ServeStoragePath(w, r, database, s3, files, agentID, path, jwtSecret, publicURL, log)
 			return
 		}
 

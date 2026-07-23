@@ -85,7 +85,10 @@ CREATE TABLE public.agent_directories (
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     scope text NOT NULL,
-    CONSTRAINT agent_directories_path_check CHECK (((path !~ '^/'::text) AND (path !~ '/$'::text) AND (path <> ''::text)))
+    CONSTRAINT agent_directories_access_check CHECK (((read_access = ANY (ARRAY['admin'::text, 'user'::text, 'public'::text])) AND (write_access = ANY (ARRAY['admin'::text, 'user'::text, 'public'::text])) AND (list_access = ANY (ARRAY['admin'::text, 'user'::text, 'public'::text])))),
+    CONSTRAINT agent_directories_path_check CHECK (((path !~ '^/'::text) AND (path !~ '/$'::text) AND (path <> ''::text))),
+    CONSTRAINT agent_directories_retention_check CHECK ((retention_hours >= 0)),
+    CONSTRAINT agent_directories_scope_check CHECK ((scope = ANY (ARRAY[''::text, 'user'::text, 'conv'::text, 'run'::text])))
 );
 
 
@@ -298,7 +301,10 @@ CREATE TABLE public.agent_schedule_handlers (
     description text NOT NULL,
     last_fired_at timestamp with time zone,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    updated_at timestamp with time zone DEFAULT now() NOT NULL
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT agent_schedule_handlers_kind_check CHECK ((kind = ANY (ARRAY['cron'::text, 'schedule'::text]))),
+    CONSTRAINT agent_schedule_handlers_recurrence_check CHECK ((((kind = 'cron'::text) AND (recurrence <> ''::text)) OR ((kind = 'schedule'::text) AND (recurrence = ''::text)))),
+    CONSTRAINT agent_schedule_handlers_timeout_check CHECK ((timeout_ms > 0))
 );
 
 
@@ -307,7 +313,7 @@ CREATE TABLE public.agent_schedule_handlers (
 --
 
 CREATE TABLE public.agent_scheduled_fires (
-    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    id uuid NOT NULL,
     agent_id uuid NOT NULL,
     source text NOT NULL,
     slug text NOT NULL,
@@ -315,7 +321,20 @@ CREATE TABLE public.agent_scheduled_fires (
     recurrence text NOT NULL,
     timeout_ms bigint NOT NULL,
     status text NOT NULL,
-    created_at timestamp with time zone DEFAULT now() NOT NULL
+    attempt integer NOT NULL,
+    max_attempts integer NOT NULL,
+    lease_owner uuid,
+    lease_token uuid,
+    lease_expires_at timestamp with time zone,
+    next_attempt_at timestamp with time zone NOT NULL,
+    started_at timestamp with time zone,
+    completed_at timestamp with time zone,
+    last_error text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT agent_scheduled_fires_attempt_check CHECK (((attempt >= 0) AND (max_attempts > 0) AND (attempt <= max_attempts))),
+    CONSTRAINT agent_scheduled_fires_source_check CHECK ((source = ANY (ARRAY['cron'::text, 'schedule'::text, 'manual'::text]))),
+    CONSTRAINT agent_scheduled_fires_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'leased'::text, 'succeeded'::text, 'failed'::text, 'orphaned'::text, 'cancelled'::text])))
 );
 
 
@@ -878,7 +897,11 @@ CREATE TABLE public.runs (
     started_at timestamp with time zone DEFAULT now() NOT NULL,
     finished_at timestamp with time zone,
     parent_run_id uuid,
-    llm_tokens_cached integer NOT NULL
+    llm_tokens_cached integer NOT NULL,
+    caller_user_id uuid,
+    caller_conversation_id uuid,
+    caller_access text NOT NULL,
+    CONSTRAINT runs_caller_access_check CHECK ((caller_access = ANY (ARRAY['admin'::text, 'user'::text, 'public'::text])))
 );
 
 
@@ -1372,7 +1395,7 @@ ALTER TABLE ONLY public.agent_schedule_handlers
 --
 
 ALTER TABLE ONLY public.agent_scheduled_fires
-    ADD CONSTRAINT agent_scheduled_fires_pkey PRIMARY KEY (id);
+    ADD CONSTRAINT agent_scheduled_fires_pkey PRIMARY KEY (agent_id, id);
 
 
 --
@@ -1853,7 +1876,9 @@ CREATE INDEX agent_grants_grantee_idx ON public.agent_grants USING btree (grante
 -- Name: agent_scheduled_fires_due_idx; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX agent_scheduled_fires_due_idx ON public.agent_scheduled_fires USING btree (status, fire_at);
+CREATE INDEX agent_scheduled_fires_due_idx ON public.agent_scheduled_fires USING btree (status, next_attempt_at);
+
+CREATE UNIQUE INDEX agent_scheduled_fires_cron_occurrence_idx ON public.agent_scheduled_fires USING btree (agent_id, slug, fire_at) WHERE (source = 'cron'::text);
 
 
 --

@@ -70,6 +70,7 @@ func TestIntegration_A2A_HappyPath(t *testing.T) {
 		InputPayload: []byte(`{}`),
 		TriggerType:  "prompt",
 		TriggerRef:   uuid.UUID(parentConv.ID.Bytes).String(),
+		CallerAccess: "admin",
 	})
 	if err != nil {
 		t.Fatalf("CreateRun: %v", err)

@@ -121,6 +121,32 @@ func TestMCPHTTPClientSession(t *testing.T) {
 	}
 }
 
+func TestMCPHTTPClientRejectsDuplicateToolNames(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		var request struct {
+			ID json.RawMessage `json:"id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatal(err)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"jsonrpc": "2.0",
+			"id":      request.ID,
+			"result": map[string]any{"tools": []map[string]any{
+				{"name": "lookup"},
+				{"name": "lookup"},
+			}},
+		})
+	}))
+	defer server.Close()
+
+	client := &mcpHTTPClient{client: server.Client(), url: server.URL}
+	if err := client.listTools(t.Context()); err == nil || !strings.Contains(err.Error(), "duplicate tool name") {
+		t.Fatalf("listTools() error = %v", err)
+	}
+}
+
 func TestParseMCPSSE(t *testing.T) {
 	stream := "event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":7,\"result\":{\"tools\":[]}}\n\n"
 	result, err := parseMCPSSE(responseLimitReader{reader: bufio.NewReader(strings.NewReader(stream))}, 7)

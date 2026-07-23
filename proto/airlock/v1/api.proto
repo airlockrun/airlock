@@ -529,7 +529,7 @@ message ListToolsResponse {
 }
 
 message FireScheduleResponse {
-  string run_id = 1;
+  string occurrence_id = 1;
 }
 
 // --- Agent Members ---

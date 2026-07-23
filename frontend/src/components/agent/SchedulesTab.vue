@@ -39,7 +39,7 @@ function formatTimestamp(ts: string): string {
 async function fireNow(s: Schedule) {
   try {
     await api.post(`/api/v1/agents/${props.agentId}/schedules/${s.slug}/fire`)
-    toast.add({ severity: 'success', summary: 'Fired', detail: `Schedule "${s.slug}" fired successfully.`, life: 3000 })
+    toast.add({ severity: 'success', summary: 'Queued', detail: `Cron "${s.slug}" was queued for delivery.`, life: 3000 })
   } catch {
     toast.add({ severity: 'error', summary: 'Error', detail: `Failed to fire schedule "${s.slug}".`, life: 5000 })
   }
@@ -87,7 +87,7 @@ onMounted(async () => {
       </Column>
       <Column header="Fire Now">
         <template #body="{ data: s }">
-          <Button label="Fire Now" size="small" severity="warn" outlined @click="fireNow(s)" />
+          <Button v-if="s.kind === 'cron'" label="Fire Now" size="small" severity="warn" outlined @click="fireNow(s)" />
         </template>
       </Column>
     </DataTable>

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"path"
 	"strings"
+	"unicode/utf8"
 )
 
 // CleanAgentPath validates and canonicalizes a tenant-relative storage path.
@@ -24,8 +25,8 @@ func CleanAgentPath(p string) (string, error) {
 	if p == "" {
 		return "", errors.New("empty path")
 	}
-	if strings.ContainsRune(p, 0) {
-		return "", errors.New("nul byte in path")
+	if !utf8.ValidString(p) {
+		return "", errors.New("invalid utf-8 in path")
 	}
 	if strings.ContainsRune(p, '\\') {
 		return "", errors.New("backslash in path")
@@ -42,6 +43,14 @@ func CleanAgentPath(p string) (string, error) {
 	}
 	if strings.HasPrefix(cleaned, "/") {
 		return "", errors.New("absolute path after clean")
+	}
+	if cleaned != p {
+		return "", errors.New("path is not canonical")
+	}
+	for _, r := range p {
+		if r < 0x20 || r == 0x7f {
+			return "", errors.New("control character in path")
+		}
 	}
 	return cleaned, nil
 }

@@ -313,44 +313,56 @@ func (d *Dispatcher) ForwardWebhook(ctx context.Context, agentID uuid.UUID, path
 		return nil, uuid.Nil, err
 	}
 
-	runID, err := d.createRun(ctx, agentID, bridgeID, nil, body, "webhook", path)
+	runID, err := d.createRun(ctx, agentID, bridgeID, nil, nil, agentsdk.AccessPublic, body, "webhook", path)
 	if err != nil {
 		return nil, uuid.Nil, err
 	}
 
-	rc, err := d.forward(ctx, agentID, c, "POST", "/webhook/"+path, body, runID, bridgeID, nil, nil, "", timeout)
+	rc, err := d.forward(ctx, agentID, c, "POST", "/webhook/"+path, body, runID, bridgeID, nil, nil, timeout)
 	if err != nil {
 		return nil, uuid.Nil, err
 	}
 	return rc, runID, nil
 }
 
-// ForwardFire ensures the agent is running, creates a run record, and POSTs to
-// the agent's /fire/{slug} endpoint for a scheduler-driven cron/schedule fire.
-// fireID (the agent_scheduled_fires row id) rides X-Fire-ID so a schedule
-// handler can look up its per-instance data; pass "" for a manual cron fire
-// with no row. Returns the response body stream and the run ID.
-func (d *Dispatcher) ForwardFire(ctx context.Context, agentID uuid.UUID, fireID, slug string, timeout time.Duration) (io.ReadCloser, uuid.UUID, error) {
+// ForwardFire creates one run attempt and returns the handler's typed
+// acknowledgement after /fire/{slug} completes.
+func (d *Dispatcher) ForwardFire(ctx context.Context, agentID uuid.UUID, event wire.ScheduleFireRequest, timeout time.Duration) (wire.ScheduleFireResponse, uuid.UUID, error) {
 	c, err := d.EnsureRunning(ctx, agentID)
 	if err != nil {
-		return nil, uuid.Nil, err
+		return wire.ScheduleFireResponse{}, uuid.Nil, err
+	}
+	body, err := json.Marshal(event)
+	if err != nil {
+		return wire.ScheduleFireResponse{}, uuid.Nil, fmt.Errorf("marshal schedule event: %w", err)
 	}
 
-	runID, err := d.createRun(ctx, agentID, nil, nil, nil, "schedule", slug)
+	runID, err := d.createRun(ctx, agentID, nil, nil, nil, agentsdk.AccessPublic, body, "schedule", event.Slug)
 	if err != nil {
-		return nil, uuid.Nil, err
+		return wire.ScheduleFireResponse{}, uuid.Nil, err
 	}
 
 	cancelCtx, cancel := context.WithCancel(ctx)
 	d.registerInFlight(runID, cancel)
 
-	rc, err := d.forward(cancelCtx, agentID, c, "POST", "/fire/"+slug, nil, runID, nil, nil, nil, fireID, timeout)
+	rc, err := d.forward(cancelCtx, agentID, c, "POST", "/fire/"+event.Slug, body, runID, nil, nil, nil, timeout)
 	if err != nil {
 		d.deregisterInFlight(runID)
 		cancel()
-		return nil, uuid.Nil, err
+		return wire.ScheduleFireResponse{}, runID, err
 	}
-	return &runBodyCloser{ReadCloser: rc, dispatcher: d, runID: runID}, runID, nil
+	defer cancel()
+	defer d.deregisterInFlight(runID)
+	defer rc.Close()
+	var result wire.ScheduleFireResponse
+	decoder := json.NewDecoder(io.LimitReader(rc, 64<<10))
+	if err := decoder.Decode(&result); err != nil {
+		return wire.ScheduleFireResponse{}, runID, fmt.Errorf("decode schedule response: %w", err)
+	}
+	if result.Status != "success" && result.Status != "error" && result.Status != "timeout" {
+		return wire.ScheduleFireResponse{}, runID, fmt.Errorf("invalid schedule response status %q", result.Status)
+	}
+	return result, runID, nil
 }
 
 // ForwardPrompt ensures the agent is running, creates a run record, and POSTs
@@ -384,7 +396,7 @@ func (d *Dispatcher) ForwardPrompt(ctx context.Context, agentID uuid.UUID, input
 		return nil, uuid.Nil, fmt.Errorf("marshal prompt input: %w", err)
 	}
 
-	runID, err := d.createRun(ctx, agentID, bridgeID, nil, payload, "prompt", input.ConversationID)
+	runID, err := d.createRun(ctx, agentID, bridgeID, nil, userID, agentsdk.Access(input.CallerAccess), payload, "prompt", input.ConversationID)
 	if err != nil {
 		return nil, uuid.Nil, err
 	}
@@ -396,7 +408,7 @@ func (d *Dispatcher) ForwardPrompt(ctx context.Context, agentID uuid.UUID, input
 	cancelCtx, cancel := context.WithCancel(ctx)
 	d.registerInFlight(runID, cancel)
 
-	rc, err := d.forward(cancelCtx, agentID, c, "POST", "/prompt", payload, runID, bridgeID, nil, userID, "", PromptHTTPCeiling)
+	rc, err := d.forward(cancelCtx, agentID, c, "POST", "/prompt", payload, runID, bridgeID, nil, userID, PromptHTTPCeiling)
 	if err != nil {
 		d.deregisterInFlight(runID)
 		cancel()
@@ -452,7 +464,7 @@ func (d *Dispatcher) ForwardA2APrompt(ctx context.Context, agentID uuid.UUID, pa
 	if parentRunID != uuid.Nil {
 		parentRunIDPtr = &parentRunID
 	}
-	runID, err := d.createRun(ctx, agentID, nil, parentRunIDPtr, payload, "a2a", input.ConversationID)
+	runID, err := d.createRun(ctx, agentID, nil, parentRunIDPtr, userID, callerAccess, payload, "a2a", input.ConversationID)
 	if err != nil {
 		return nil, uuid.Nil, err
 	}
@@ -460,7 +472,7 @@ func (d *Dispatcher) ForwardA2APrompt(ctx context.Context, agentID uuid.UUID, pa
 	cancelCtx, cancel := context.WithCancel(ctx)
 	d.registerInFlight(runID, cancel)
 
-	rc, err := d.forward(cancelCtx, agentID, c, "POST", "/prompt", payload, runID, nil, parentRunIDPtr, userID, "", PromptHTTPCeiling)
+	rc, err := d.forward(cancelCtx, agentID, c, "POST", "/prompt", payload, runID, nil, parentRunIDPtr, userID, PromptHTTPCeiling)
 	if err != nil {
 		d.deregisterInFlight(runID)
 		cancel()
@@ -516,7 +528,7 @@ func (d *Dispatcher) computeVisibleSiblings(ctx context.Context, agentID uuid.UU
 }
 
 // createRun inserts a new run record and returns its ID.
-func (d *Dispatcher) createRun(ctx context.Context, agentID uuid.UUID, bridgeID *uuid.UUID, parentRunID *uuid.UUID, inputPayload []byte, triggerType, triggerRef string) (uuid.UUID, error) {
+func (d *Dispatcher) createRun(ctx context.Context, agentID uuid.UUID, bridgeID, parentRunID, userID *uuid.UUID, callerAccess agentsdk.Access, inputPayload []byte, triggerType, triggerRef string) (uuid.UUID, error) {
 	q := dbq.New(d.db.Pool())
 
 	var pgBridgeID pgtype.UUID
@@ -526,6 +538,21 @@ func (d *Dispatcher) createRun(ctx context.Context, agentID uuid.UUID, bridgeID 
 	var pgParentRunID pgtype.UUID
 	if parentRunID != nil {
 		pgParentRunID = toPgUUID(*parentRunID)
+	}
+	var pgUserID pgtype.UUID
+	if userID != nil {
+		pgUserID = toPgUUID(*userID)
+	}
+	var pgConversationID pgtype.UUID
+	if triggerType == "prompt" || triggerType == "a2a" {
+		conversationID, err := uuid.Parse(triggerRef)
+		if err != nil {
+			return uuid.Nil, fmt.Errorf("parse run conversation: %w", err)
+		}
+		pgConversationID = toPgUUID(conversationID)
+	}
+	if callerAccess == "" {
+		callerAccess = agentsdk.AccessPublic
 	}
 	if inputPayload == nil {
 		inputPayload = []byte("{}")
@@ -538,13 +565,16 @@ func (d *Dispatcher) createRun(ctx context.Context, agentID uuid.UUID, bridgeID 
 	}
 
 	run, err := q.CreateRun(ctx, dbq.CreateRunParams{
-		AgentID:      toPgUUID(agentID),
-		BridgeID:     pgBridgeID,
-		ParentRunID:  pgParentRunID,
-		InputPayload: inputPayload,
-		SourceRef:    sourceRef,
-		TriggerType:  triggerType,
-		TriggerRef:   triggerRef,
+		AgentID:              toPgUUID(agentID),
+		BridgeID:             pgBridgeID,
+		ParentRunID:          pgParentRunID,
+		InputPayload:         inputPayload,
+		SourceRef:            sourceRef,
+		TriggerType:          triggerType,
+		TriggerRef:           triggerRef,
+		CallerUserID:         pgUserID,
+		CallerConversationID: pgConversationID,
+		CallerAccess:         string(callerAccess),
 	})
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("create run: %w", err)
@@ -601,7 +631,7 @@ func (d *Dispatcher) RefreshAgent(ctx context.Context, agentID uuid.UUID) error 
 // directories. Both are nil for the web / bridge / cron / webhook
 // flows that pre-existed scoping (those handlers pass principal via
 // PromptInput / conversation lookups).
-func (d *Dispatcher) forward(ctx context.Context, agentID uuid.UUID, c *container.Container, method, path string, body []byte, runID uuid.UUID, bridgeID, parentRunID, userID *uuid.UUID, fireID string, timeout time.Duration) (io.ReadCloser, error) {
+func (d *Dispatcher) forward(ctx context.Context, agentID uuid.UUID, c *container.Container, method, path string, body []byte, runID uuid.UUID, bridgeID, parentRunID, userID *uuid.UUID, timeout time.Duration) (io.ReadCloser, error) {
 	var bodyReader io.Reader
 	if body != nil {
 		bodyReader = bytes.NewReader(body)
@@ -622,9 +652,6 @@ func (d *Dispatcher) forward(ctx context.Context, agentID uuid.UUID, c *containe
 	}
 	if userID != nil && *userID != uuid.Nil {
 		req.Header.Set("X-User-ID", userID.String())
-	}
-	if fireID != "" {
-		req.Header.Set("X-Fire-ID", fireID)
 	}
 
 	// Hold the container busy for the whole life of this request so the
