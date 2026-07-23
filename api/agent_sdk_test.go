@@ -8,7 +8,7 @@ import (
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 )
 
-func TestGetAgentSDKInfoIncludesAirlockURL(t *testing.T) {
+func TestGetAgentSDKInfo(t *testing.T) {
 	const publicURL = "https://airlock.example.com"
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/agent-sdk", nil)
@@ -22,5 +22,8 @@ func TestGetAgentSDKInfoIncludesAirlockURL(t *testing.T) {
 	decodeProtoResp(t, rec, &resp)
 	if resp.AirlockUrl != publicURL {
 		t.Fatalf("airlock URL = %q, want %q", resp.AirlockUrl, publicURL)
+	}
+	if resp.Version == "" || resp.CommandImport != "github.com/airlockrun/agentsdk/cmd/air" || resp.LauncherImport != "github.com/airlockrun/agentsdk/cmd/airlock" {
+		t.Fatalf("SDK info = %#v", &resp)
 	}
 }

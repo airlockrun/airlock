@@ -5,6 +5,7 @@ import { useConfirm } from 'primevue/useconfirm'
 import { useToast } from 'primevue/usetoast'
 import api from '@/api/client'
 import { useGitCredentialsStore } from '@/stores/gitCredentials'
+import { airlockCloneCommand, airlockInstallCommand } from '@/utils/airCommands'
 import {
   ConnectAgentGitRequestSchema,
   ConnectAgentGitResponseSchema,
@@ -29,7 +30,7 @@ const connecting = ref(false)
 const dialogVisible = ref(false)
 const airlockURL = ref('')
 const sdkVersion = ref('')
-const sdkCommandImport = ref('')
+const launcherImport = ref('')
 const remoteUrl = ref('')
 const credentialId = ref('')
 const branch = ref('main')
@@ -123,10 +124,9 @@ async function copyToClipboard(text: string, label: string) {
 }
 
 const cloneCmd = computed(() => (cfg.value ? `git clone ${cfg.value.gitRemoteUrl}` : ''))
-const versionedAirCommand = computed(() => `${sdkCommandImport.value}@v${sdkVersion.value}`)
-const airLoginCmd = computed(() => `go run ${versionedAirCommand.value} login ${airlockURL.value}`)
+const airInstallCmd = computed(() => airlockInstallCommand(launcherImport.value, sdkVersion.value))
 const airCloneCmd = computed(() =>
-  `go run ${versionedAirCommand.value} clone ${props.agentSlug} ./${props.agentSlug} --url ${airlockURL.value}`,
+  airlockCloneCommand(props.agentSlug, props.agentSlug, airlockURL.value),
 )
 const airDeployCmd = computed(() =>
   `cd ${props.agentSlug}\ngo tool air deploy -m "Describe this deployment"`,
@@ -137,7 +137,7 @@ async function loadAgentSDKInfo() {
   const info = fromJson(GetAgentSDKInfoResponseSchema, data)
   airlockURL.value = info.airlockUrl
   sdkVersion.value = info.version
-  sdkCommandImport.value = info.commandImport
+  launcherImport.value = info.launcherImport
 }
 
 onMounted(async () => {
@@ -153,14 +153,14 @@ onMounted(async () => {
       <Message severity="info" :closable="false">
         This app has no git remote. Connect one for a Git-based workflow, or use the Air CLI to work with Airlock's source directly.
       </Message>
-      <div v-if="agentSlug && airlockURL && sdkVersion && sdkCommandImport" style="display: flex; flex-direction: column; gap: 0.5rem">
+      <div v-if="agentSlug && airlockURL && sdkVersion && launcherImport" style="display: flex; flex-direction: column; gap: 0.5rem">
         <strong>Air CLI</strong>
         <p style="margin: 0; color: var(--p-text-muted-color)">
-          Run the versioned CLI to log in and clone the app. Inside the cloned repository, use <code>go tool air</code> to deploy changes.
+          Install the launcher once, then clone the app. The launcher selects this Airlock's CLI version and opens login when needed. Inside the cloned repository, use <code>go tool air</code> to deploy changes.
         </p>
         <div style="display: flex; align-items: center; gap: 0.5rem">
-          <code class="code-chip">{{ airLoginCmd }}</code>
-          <Button icon="pi pi-copy" text size="small" @click="copyToClipboard(airLoginCmd, 'Login command')" />
+          <code class="code-chip">{{ airInstallCmd }}</code>
+          <Button icon="pi pi-copy" text size="small" @click="copyToClipboard(airInstallCmd, 'Install command')" />
         </div>
         <div style="display: flex; align-items: center; gap: 0.5rem">
           <code class="code-chip">{{ airCloneCmd }}</code>

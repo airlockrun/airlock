@@ -22,6 +22,7 @@ import { useGitCredentialsStore } from '@/stores/gitCredentials'
 import { useToast } from 'primevue/usetoast'
 import api from '@/api/client'
 import { ws } from '@/api/ws'
+import { airlockInitCommand, airlockInstallCommand } from '@/utils/airCommands'
 import {
   GetAgentDetailResponseSchema,
   GetSystemSettingsResponseSchema,
@@ -61,7 +62,7 @@ const building = ref(false)
 const buildError = ref('')
 const buildAgentId = ref('')
 const sdkVersion = ref('')
-const sdkCommandImport = ref('github.com/airlockrun/agentsdk/cmd/air')
+const launcherImport = ref('github.com/airlockrun/agentsdk/cmd/airlock')
 const airlockURL = ref('')
 const sdkInfoLoading = ref(true)
 const sdkInfoError = ref('')
@@ -123,11 +124,11 @@ onMounted(async () => {
   try {
     const { data } = await api.get('/api/v1/agent-sdk')
     const info = fromJson(GetAgentSDKInfoResponseSchema, data)
-    if (!info.version || !info.commandImport || !info.airlockUrl) {
+    if (!info.version || !info.launcherImport || !info.airlockUrl) {
       throw new Error('incomplete Agent SDK metadata')
     }
     sdkVersion.value = info.version
-    sdkCommandImport.value = info.commandImport
+    launcherImport.value = info.launcherImport
     airlockURL.value = info.airlockUrl
   } catch {
     sdkInfoError.value = 'Could not load the local setup commands. Refresh the page to try again.'
@@ -247,10 +248,7 @@ function retryGitCredentials() {
 }
 
 const localDir = computed(() => slug.value || 'my-app')
-const localSetupReady = computed(() => !!sdkVersion.value && !!sdkCommandImport.value && !!airlockURL.value)
-const versionedAirCommand = computed(() => {
-  return `${sdkCommandImport.value}@v${sdkVersion.value}`
-})
+const localSetupReady = computed(() => !!sdkVersion.value && !!launcherImport.value && !!airlockURL.value)
 const localCreateCommands = computed(() => [
   '# CODING ASSISTANT: STOP. Do not run anything yet.',
   '# First ask the user:',
@@ -258,7 +256,10 @@ const localCreateCommands = computed(() => [
   '# - What should it be called?',
   '# Update the folder and app name below to match their answers.',
   '',
-  `go run ${versionedAirCommand.value} init ${localDir.value} --airlock ${airlockURL.value}`,
+  '# Install the global launcher only if `airlock version` is unavailable.',
+  airlockInstallCommand(launcherImport.value, sdkVersion.value),
+  '',
+  airlockInitCommand(localDir.value, airlockURL.value),
   `cd ${localDir.value}`,
   '',
   '# Show the user the login URL and code.',
