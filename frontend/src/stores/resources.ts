@@ -2,11 +2,10 @@ import { ref } from 'vue'
 import { defineStore } from 'pinia'
 import { fromJson } from '@bufbuild/protobuf'
 import api from '@/api/client'
-import type { OwnedResourceInfo, ResourceConsumerInfo, ResourceGrantInfo } from '@/gen/airlock/v1/api_pb'
+import type { OwnedResourceInfo, ResourceConsumerInfo } from '@/gen/airlock/v1/api_pb'
 import {
   ListOwnedResourcesResponseSchema,
   ListResourceConsumersResponseSchema,
-  ListResourceGrantsResponseSchema,
 } from '@/gen/airlock/v1/api_pb'
 
 export const useResourcesStore = defineStore('resources', () => {
@@ -37,27 +36,9 @@ export const useResourcesStore = defineStore('resources', () => {
     return fromJson(ListResourceConsumersResponseSchema, data).consumers
   }
 
-  async function fetchGrants(type: string, id: string): Promise<ResourceGrantInfo[]> {
-    const { data } = await api.get(`${path(type, id)}/grants`)
-    return fromJson(ListResourceGrantsResponseSchema, data).grants
-  }
-
   async function rename(type: string, id: string, displayName: string) {
     await api.patch(path(type, id), { displayName })
     await fetchResources()
-  }
-
-  async function grant(type: string, id: string, granteeId: string, capabilities: string[]) {
-    await api.post(`${path(type, id)}/grants`, {
-      resourceType: type,
-      resourceId: id,
-      granteeId,
-      capabilities,
-    })
-  }
-
-  async function revokeGrant(type: string, id: string, grantId: string) {
-    await api.delete(`${path(type, id)}/grants/${grantId}`)
   }
 
   async function revoke(type: string, id: string) {
@@ -76,10 +57,7 @@ export const useResourcesStore = defineStore('resources', () => {
     error,
     fetchResources,
     fetchConsumers,
-    fetchGrants,
     rename,
-    grant,
-    revokeGrant,
     revoke,
     remove,
   }

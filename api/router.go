@@ -351,18 +351,14 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		r.Delete("/agents/{agentID}/needs/{type}/{slug}/bind", needsHandler.UnbindNeed)
 		r.Post("/agents/{agentID}/needs/{type}/{slug}/create", needsHandler.CreateForNeed)
 
-		// Resource grants — sharing a user-owned resource. Authorized by the
-		// manage capability on the resource (in the service), so no tenant
-		// middleware here.
+		// Reusable resource inventory and lifecycle. Each service method checks
+		// the caller's effective resource capabilities.
 		r.Get("/resources", resourcesHandler.List)
 		r.Get("/usage", usageHandler.Get)
 		r.Post("/resources/{type}/{id}/revoke", resourcesHandler.Revoke)
 		r.Patch("/resources/{type}/{id}", resourcesHandler.Rename)
 		r.Delete("/resources/{type}/{id}", resourcesHandler.Delete)
 		r.Get("/resources/{type}/{id}/consumers", resourcesHandler.Consumers)
-		r.Get("/resources/{type}/{id}/grants", grantsHandler.ListResourceGrants)
-		r.Post("/resources/{type}/{id}/grants", grantsHandler.GrantResource)
-		r.Delete("/resources/{type}/{id}/grants/{grantID}", grantsHandler.RevokeResourceGrant)
 
 		// Model entitlements (admin only).
 		r.Route("/model-grants", func(r chi.Router) {

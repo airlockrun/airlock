@@ -11,130 +11,6 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const createConnectionGrant = `-- name: CreateConnectionGrant :one
-
-INSERT INTO resource_grants (connection_id, grantee_id, capabilities)
-VALUES ($1, $2, $3)
-ON CONFLICT (connection_id, grantee_id) WHERE connection_id IS NOT NULL
-DO UPDATE SET capabilities = EXCLUDED.capabilities
-RETURNING id, connection_id, mcp_server_id, exec_endpoint_id, git_credential_id, grantee_id, capabilities, created_at
-`
-
-type CreateConnectionGrantParams struct {
-	ConnectionID pgtype.UUID `json:"connection_id"`
-	GranteeID    pgtype.UUID `json:"grantee_id"`
-	Capabilities []string    `json:"capabilities"`
-}
-
-// Management-plane capability grants on user-owned resources. The owner holds
-// view/bind/manage implicitly (see authz.HasResourceCapability); these rows
-// extend capabilities to other principals (users or built-in role-groups).
-func (q *Queries) CreateConnectionGrant(ctx context.Context, arg CreateConnectionGrantParams) (ResourceGrant, error) {
-	row := q.db.QueryRow(ctx, createConnectionGrant, arg.ConnectionID, arg.GranteeID, arg.Capabilities)
-	var i ResourceGrant
-	err := row.Scan(
-		&i.ID,
-		&i.ConnectionID,
-		&i.McpServerID,
-		&i.ExecEndpointID,
-		&i.GitCredentialID,
-		&i.GranteeID,
-		&i.Capabilities,
-		&i.CreatedAt,
-	)
-	return i, err
-}
-
-const createExecEndpointGrant = `-- name: CreateExecEndpointGrant :one
-INSERT INTO resource_grants (exec_endpoint_id, grantee_id, capabilities)
-VALUES ($1, $2, $3)
-ON CONFLICT (exec_endpoint_id, grantee_id) WHERE exec_endpoint_id IS NOT NULL
-DO UPDATE SET capabilities = EXCLUDED.capabilities
-RETURNING id, connection_id, mcp_server_id, exec_endpoint_id, git_credential_id, grantee_id, capabilities, created_at
-`
-
-type CreateExecEndpointGrantParams struct {
-	ExecEndpointID pgtype.UUID `json:"exec_endpoint_id"`
-	GranteeID      pgtype.UUID `json:"grantee_id"`
-	Capabilities   []string    `json:"capabilities"`
-}
-
-func (q *Queries) CreateExecEndpointGrant(ctx context.Context, arg CreateExecEndpointGrantParams) (ResourceGrant, error) {
-	row := q.db.QueryRow(ctx, createExecEndpointGrant, arg.ExecEndpointID, arg.GranteeID, arg.Capabilities)
-	var i ResourceGrant
-	err := row.Scan(
-		&i.ID,
-		&i.ConnectionID,
-		&i.McpServerID,
-		&i.ExecEndpointID,
-		&i.GitCredentialID,
-		&i.GranteeID,
-		&i.Capabilities,
-		&i.CreatedAt,
-	)
-	return i, err
-}
-
-const createGitCredentialGrant = `-- name: CreateGitCredentialGrant :one
-INSERT INTO resource_grants (git_credential_id, grantee_id, capabilities)
-VALUES ($1, $2, $3)
-ON CONFLICT (git_credential_id, grantee_id) WHERE git_credential_id IS NOT NULL
-DO UPDATE SET capabilities = EXCLUDED.capabilities
-RETURNING id, connection_id, mcp_server_id, exec_endpoint_id, git_credential_id, grantee_id, capabilities, created_at
-`
-
-type CreateGitCredentialGrantParams struct {
-	GitCredentialID pgtype.UUID `json:"git_credential_id"`
-	GranteeID       pgtype.UUID `json:"grantee_id"`
-	Capabilities    []string    `json:"capabilities"`
-}
-
-func (q *Queries) CreateGitCredentialGrant(ctx context.Context, arg CreateGitCredentialGrantParams) (ResourceGrant, error) {
-	row := q.db.QueryRow(ctx, createGitCredentialGrant, arg.GitCredentialID, arg.GranteeID, arg.Capabilities)
-	var i ResourceGrant
-	err := row.Scan(
-		&i.ID,
-		&i.ConnectionID,
-		&i.McpServerID,
-		&i.ExecEndpointID,
-		&i.GitCredentialID,
-		&i.GranteeID,
-		&i.Capabilities,
-		&i.CreatedAt,
-	)
-	return i, err
-}
-
-const createMCPServerGrant = `-- name: CreateMCPServerGrant :one
-INSERT INTO resource_grants (mcp_server_id, grantee_id, capabilities)
-VALUES ($1, $2, $3)
-ON CONFLICT (mcp_server_id, grantee_id) WHERE mcp_server_id IS NOT NULL
-DO UPDATE SET capabilities = EXCLUDED.capabilities
-RETURNING id, connection_id, mcp_server_id, exec_endpoint_id, git_credential_id, grantee_id, capabilities, created_at
-`
-
-type CreateMCPServerGrantParams struct {
-	McpServerID  pgtype.UUID `json:"mcp_server_id"`
-	GranteeID    pgtype.UUID `json:"grantee_id"`
-	Capabilities []string    `json:"capabilities"`
-}
-
-func (q *Queries) CreateMCPServerGrant(ctx context.Context, arg CreateMCPServerGrantParams) (ResourceGrant, error) {
-	row := q.db.QueryRow(ctx, createMCPServerGrant, arg.McpServerID, arg.GranteeID, arg.Capabilities)
-	var i ResourceGrant
-	err := row.Scan(
-		&i.ID,
-		&i.ConnectionID,
-		&i.McpServerID,
-		&i.ExecEndpointID,
-		&i.GitCredentialID,
-		&i.GranteeID,
-		&i.Capabilities,
-		&i.CreatedAt,
-	)
-	return i, err
-}
-
 const getConnectionOwner = `-- name: GetConnectionOwner :one
 
 SELECT owner_principal_id FROM connections WHERE id = $1
@@ -192,8 +68,8 @@ type ListConnectionGrantsRow struct {
 	Capabilities []string    `json:"capabilities"`
 }
 
-// Per-resource grant lists, used both to render "who can this resource is
-// shared with" and to evaluate HasResourceCapability for a caller.
+// Stored capability grants are read by resource authorization. The owner holds
+// view/bind/manage implicitly (see authz.HasResourceCapability).
 func (q *Queries) ListConnectionGrants(ctx context.Context, connectionID pgtype.UUID) ([]ListConnectionGrantsRow, error) {
 	rows, err := q.db.Query(ctx, listConnectionGrants, connectionID)
 	if err != nil {
@@ -338,30 +214,4 @@ SELECT id FROM agent_mcp_servers WHERE id = $1 FOR UPDATE
 func (q *Queries) LockMCPServerResource(ctx context.Context, id pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, lockMCPServerResource, id)
 	return err
-}
-
-const revokeResourceGrant = `-- name: RevokeResourceGrant :execrows
-DELETE FROM resource_grants
-WHERE id = $1
-  AND CASE $2::text
-      WHEN 'connection' THEN connection_id = $3
-      WHEN 'mcp_server' THEN mcp_server_id = $3
-      WHEN 'exec_endpoint' THEN exec_endpoint_id = $3
-      WHEN 'git_credential' THEN git_credential_id = $3
-      ELSE false
-  END
-`
-
-type RevokeResourceGrantParams struct {
-	ID           pgtype.UUID `json:"id"`
-	ResourceType string      `json:"resource_type"`
-	ResourceID   pgtype.UUID `json:"resource_id"`
-}
-
-func (q *Queries) RevokeResourceGrant(ctx context.Context, arg RevokeResourceGrantParams) (int64, error) {
-	result, err := q.db.Exec(ctx, revokeResourceGrant, arg.ID, arg.ResourceType, arg.ResourceID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
 }
