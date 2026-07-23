@@ -36,6 +36,18 @@ message TextDeltaEvent {
   string text = 2;
 }
 
+// CompactionStartedEvent marks the start of an automatic context compaction.
+message CompactionStartedEvent {
+  string run_id = 1;
+}
+
+// CompactionFinishedEvent describes the result of an automatic context compaction.
+message CompactionFinishedEvent {
+  string run_id = 1;
+  int32 tokens_freed = 2;
+  string error = 3;
+}
+
 // ToolCallEvent signals a tool call is ready for execution.
 message ToolCallEvent {
   string run_id = 1;

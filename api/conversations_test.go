@@ -91,6 +91,78 @@ func TestGetConversation_PaginationFlag(t *testing.T) {
 	}
 }
 
+func TestConversationTranscriptExcludesCompactionRows(t *testing.T) {
+	skipIfNoDB(t)
+	agentID, userID := testAgentAndUser(t)
+	convID := testConversation(t, agentID, userID)
+	q := dbq.New(testDB.Pool())
+	var visibleSeqs []int64
+	for i, source := range []string{"user", "compaction", "user", "compaction", "user"} {
+		row, err := q.CreateMessage(context.Background(), dbq.CreateMessageParams{
+			ConversationID: toPgUUID(convID), Role: "assistant", Content: "message " + strconv.Itoa(i), Source: source,
+		})
+		if err != nil {
+			t.Fatalf("create message %d: %v", i, err)
+		}
+		if source != "compaction" {
+			visibleSeqs = append(visibleSeqs, row.Seq)
+		}
+	}
+
+	ch := newTestConvHandler()
+	router := userRouter(func(r chi.Router) {
+		r.Get("/api/v1/conversations/{convID}", ch.GetConversation)
+		r.Get("/api/v1/conversations/{convID}/messages", ch.ListConversationMessages)
+	})
+
+	getReq := userRequestJSON(t, http.MethodGet, "/api/v1/conversations/"+convID.String(), userID, nil)
+	getRec := httptest.NewRecorder()
+	router.ServeHTTP(getRec, getReq)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("get status = %d; body: %s", getRec.Code, getRec.Body.String())
+	}
+	var detail airlockv1.GetConversationResponse
+	if err := protojson.Unmarshal(getRec.Body.Bytes(), &detail); err != nil {
+		t.Fatalf("decode detail: %v", err)
+	}
+	if len(detail.Messages) != 3 {
+		t.Fatalf("detail messages = %d, want 3", len(detail.Messages))
+	}
+	for _, msg := range detail.Messages {
+		if msg.Source == "compaction" {
+			t.Fatal("detail exposed a compaction row")
+		}
+	}
+
+	tests := []struct {
+		name string
+		path string
+	}{
+		{name: "forward", path: "?after=" + strconv.FormatInt(visibleSeqs[0], 10) + "&limit=1"},
+		{name: "backward", path: "?before=" + strconv.FormatInt(visibleSeqs[2], 10) + "&limit=1"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := userRequestJSON(t, http.MethodGet, "/api/v1/conversations/"+convID.String()+"/messages"+tt.path, userID, nil)
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d; body: %s", rec.Code, rec.Body.String())
+			}
+			var page airlockv1.PaginatedMessagesResponse
+			if err := protojson.Unmarshal(rec.Body.Bytes(), &page); err != nil {
+				t.Fatalf("decode page: %v", err)
+			}
+			if len(page.Messages) != 1 || page.Messages[0].Seq != visibleSeqs[1] {
+				t.Fatalf("page messages = %#v, want visible middle seq %d", page.Messages, visibleSeqs[1])
+			}
+			if !page.HasMore {
+				t.Error("has_more = false, want true")
+			}
+		})
+	}
+}
+
 // TestListConversationMessages_Backward asserts the `before` cursor returns
 // older messages in chronological order, with has_more set when even older
 // messages remain.

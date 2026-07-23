@@ -6,9 +6,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/airlockrun/agentsdk"
+	"github.com/airlockrun/agentsdk/wire"
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/airlockrun/airlock/trigger"
 	"github.com/airlockrun/sol/session"
@@ -37,7 +39,7 @@ func testConversation(t *testing.T, agentID, userID uuid.UUID) uuid.UUID {
 // TestSessionCompact_InsertsMarkerAndAdvancesCheckpoint verifies that after
 // SessionCompact:
 //  1. A checkpoint-marker message exists with source='checkpoint'.
-//  2. Summary messages are inserted.
+//  2. Summary messages are inserted with source='compaction'.
 //  3. The conversation's context_checkpoint_message_id points at the first
 //     summary row.
 //  4. Pre-existing messages remain in the DB.
@@ -66,23 +68,35 @@ func TestSessionCompact_InsertsMarkerAndAdvancesCheckpoint(t *testing.T) {
 	}
 
 	router := testRouter(ah, func(r chi.Router) {
+		r.Get("/api/agent/session/{convID}/messages", ah.SessionLoad)
 		r.Post("/api/agent/session/{convID}/compact", ah.SessionCompact)
 	})
+	loadReq := agentRequest(t, http.MethodGet, "/api/agent/session/"+convID.String()+"/messages", agentID, nil)
+	loadRec := httptest.NewRecorder()
+	router.ServeHTTP(loadRec, loadReq)
+	if loadRec.Code != http.StatusOK {
+		t.Fatalf("load status = %d; body: %s", loadRec.Code, loadRec.Body.String())
+	}
+	var loaded wire.SessionLoadResponse
+	if err := json.NewDecoder(loadRec.Body).Decode(&loaded); err != nil {
+		t.Fatalf("decode load: %v", err)
+	}
 
 	summary := []session.Message{
 		{Role: "user", Content: "original user message"},
 		{Role: "assistant", Content: "summary of prior conversation", Summary: true},
 		{Role: "user", Content: "Continue if you have next steps"},
 	}
-	req := agentRequest(t, "POST", "/api/agent/session/"+convID.String()+"/compact", agentID, map[string]any{
-		"summary":     summary,
-		"tokensFreed": 12345,
+	req := agentRequest(t, http.MethodPost, "/api/agent/session/"+convID.String()+"/compact", agentID, wire.SessionCompactRequest{
+		Summary:     summary,
+		TokensFreed: 12345,
+		Revision:    loaded.Revision,
 	})
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusNoContent {
-		t.Fatalf("status = %d, want 204; body: %s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rec.Code, rec.Body.String())
 	}
 
 	// All messages stay in DB.
@@ -97,8 +111,12 @@ func TestSessionCompact_InsertsMarkerAndAdvancesCheckpoint(t *testing.T) {
 
 	// One checkpoint-marker row exists with embedded tokensFreed metadata.
 	var markerCount int
+	var compactionCount int
 	var markerFound bool
 	for _, m := range allMsgs {
+		if m.Source == "compaction" {
+			compactionCount++
+		}
 		if m.Source == "checkpoint" {
 			markerCount++
 			markerFound = true
@@ -124,6 +142,9 @@ func TestSessionCompact_InsertsMarkerAndAdvancesCheckpoint(t *testing.T) {
 	if markerCount != 1 {
 		t.Errorf("marker count = %d, want 1", markerCount)
 	}
+	if compactionCount != len(summary) {
+		t.Errorf("compaction rows = %d, want %d", compactionCount, len(summary))
+	}
 
 	// Checkpoint pointer is set.
 	conv, err := q.GetConversationByID(ctx, toPgUUID(convID))
@@ -145,6 +166,26 @@ func TestSessionCompact_InsertsMarkerAndAdvancesCheckpoint(t *testing.T) {
 	}
 	if sessionMsgs[0].Content != "original user message" {
 		t.Errorf("first session message content = %q, want 'original user message'", sessionMsgs[0].Content)
+	}
+	for i, msg := range sessionMsgs {
+		if msg.Source != "compaction" {
+			t.Errorf("session message %d source = %q, want compaction", i, msg.Source)
+		}
+	}
+
+	// The HTTP model load includes model-only compaction rows even though the
+	// human transcript projection hides them.
+	loadReq = agentRequest(t, http.MethodGet, "/api/agent/session/"+convID.String()+"/messages", agentID, nil)
+	loadRec = httptest.NewRecorder()
+	router.ServeHTTP(loadRec, loadReq)
+	if loadRec.Code != http.StatusOK {
+		t.Fatalf("post-compact load status = %d; body: %s", loadRec.Code, loadRec.Body.String())
+	}
+	if err := json.NewDecoder(loadRec.Body).Decode(&loaded); err != nil {
+		t.Fatalf("decode post-compact load: %v", err)
+	}
+	if len(loaded.Messages) != len(summary) {
+		t.Fatalf("post-compact model messages = %d, want %d", len(loaded.Messages), len(summary))
 	}
 }
 
@@ -261,13 +302,171 @@ func TestSessionLoad_NoCheckpointReturnsAll(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
-	var msgs []session.Message
-	if err := json.NewDecoder(rec.Body).Decode(&msgs); err != nil {
+	var response wire.SessionLoadResponse
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if len(msgs) != 2 {
-		t.Errorf("msgs = %d, want 2", len(msgs))
+	if len(response.Messages) != 2 {
+		t.Errorf("msgs = %d, want 2", len(response.Messages))
 	}
+	if response.Revision == "" {
+		t.Error("revision is empty")
+	}
+}
+
+func TestSessionCompactRejectsSnapshotStaleAfterAppend(t *testing.T) {
+	skipIfNoDB(t)
+	ah := testAgentHandler()
+	agentID, userID := testAgentAndUser(t)
+	convID := testConversation(t, agentID, userID)
+	q := dbq.New(testDB.Pool())
+	if _, err := q.CreateMessage(context.Background(), dbq.CreateMessageParams{
+		ConversationID: toPgUUID(convID), Role: "user", Content: "before snapshot", Source: "user",
+	}); err != nil {
+		t.Fatalf("seed message: %v", err)
+	}
+
+	router := testRouter(ah, func(r chi.Router) {
+		r.Get("/api/agent/session/{convID}/messages", ah.SessionLoad)
+		r.Post("/api/agent/session/{convID}/messages", ah.SessionAppend)
+		r.Post("/api/agent/session/{convID}/compact", ah.SessionCompact)
+	})
+	load := loadSession(t, router, agentID, convID)
+
+	appendReq := agentRequest(t, http.MethodPost, "/api/agent/session/"+convID.String()+"/messages", agentID, wire.SessionAppendRequest{
+		Messages: []session.Message{{Role: "assistant", Content: "appended after snapshot"}},
+		Revision: load.Revision,
+	})
+	appendRec := httptest.NewRecorder()
+	router.ServeHTTP(appendRec, appendReq)
+	if appendRec.Code != http.StatusOK {
+		t.Fatalf("append status = %d; body: %s", appendRec.Code, appendRec.Body.String())
+	}
+	var appendResponse wire.SessionAppendResponse
+	if err := json.NewDecoder(appendRec.Body).Decode(&appendResponse); err != nil {
+		t.Fatalf("decode append response: %v", err)
+	}
+	if appendResponse.Revision == "" || appendResponse.Revision == load.Revision {
+		t.Fatalf("append revision = %q, want a new non-empty revision", appendResponse.Revision)
+	}
+
+	compactReq := agentRequest(t, http.MethodPost, "/api/agent/session/"+convID.String()+"/compact", agentID, wire.SessionCompactRequest{
+		Summary:  []session.Message{{Role: "assistant", Content: "stale summary"}},
+		Revision: load.Revision,
+	})
+	compactRec := httptest.NewRecorder()
+	router.ServeHTTP(compactRec, compactReq)
+	if compactRec.Code != http.StatusConflict {
+		t.Fatalf("compact status = %d, want 409; body: %s", compactRec.Code, compactRec.Body.String())
+	}
+
+	conv, err := q.GetConversationByID(context.Background(), toPgUUID(convID))
+	if err != nil {
+		t.Fatalf("get conversation: %v", err)
+	}
+	if conv.ContextCheckpointMessageID.Valid {
+		t.Fatal("stale compaction advanced the checkpoint")
+	}
+	current := loadSession(t, router, agentID, convID)
+	if len(current.Messages) != 2 || current.Messages[1].Content != "appended after snapshot" {
+		t.Fatalf("model context after conflict = %#v", current.Messages)
+	}
+}
+
+func TestSessionWritesRequireRevision(t *testing.T) {
+	skipIfNoDB(t)
+	ah := testAgentHandler()
+	agentID, userID := testAgentAndUser(t)
+	convID := testConversation(t, agentID, userID)
+	router := testRouter(ah, func(r chi.Router) {
+		r.Post("/api/agent/session/{convID}/messages", ah.SessionAppend)
+		r.Post("/api/agent/session/{convID}/compact", ah.SessionCompact)
+	})
+
+	tests := []struct {
+		name string
+		path string
+		body any
+	}{
+		{name: "append", path: "/messages", body: wire.SessionAppendRequest{Messages: []session.Message{{Role: "user", Content: "message"}}}},
+		{name: "compact", path: "/compact", body: wire.SessionCompactRequest{Summary: []session.Message{{Role: "assistant", Content: "summary"}}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := agentRequest(t, http.MethodPost, "/api/agent/session/"+convID.String()+tt.path, agentID, tt.body)
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, req)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400; body: %s", rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
+func TestSessionAppendSerializesConcurrentRevisions(t *testing.T) {
+	skipIfNoDB(t)
+	ah := testAgentHandler()
+	agentID, userID := testAgentAndUser(t)
+	convID := testConversation(t, agentID, userID)
+	router := testRouter(ah, func(r chi.Router) {
+		r.Get("/api/agent/session/{convID}/messages", ah.SessionLoad)
+		r.Post("/api/agent/session/{convID}/messages", ah.SessionAppend)
+	})
+	revision := loadSession(t, router, agentID, convID).Revision
+
+	recorders := []*httptest.ResponseRecorder{httptest.NewRecorder(), httptest.NewRecorder()}
+	requests := make([]*http.Request, 2)
+	for i := range requests {
+		requests[i] = agentRequest(t, http.MethodPost, "/api/agent/session/"+convID.String()+"/messages", agentID, wire.SessionAppendRequest{
+			Messages: []session.Message{{Role: "assistant", Content: "candidate"}},
+			Revision: revision,
+		})
+	}
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := range requests {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			router.ServeHTTP(recorders[i], requests[i])
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	statuses := map[int]int{}
+	for _, rec := range recorders {
+		statuses[rec.Code]++
+	}
+	if statuses[http.StatusOK] != 1 || statuses[http.StatusConflict] != 1 {
+		t.Fatalf("statuses = %v, want one 200 and one 409", statuses)
+	}
+	rows, err := dbq.New(testDB.Pool()).ListAllMessagesByConversation(context.Background(), toPgUUID(convID))
+	if err != nil {
+		t.Fatalf("list messages: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("persisted messages = %d, want 1", len(rows))
+	}
+}
+
+func loadSession(t *testing.T, router http.Handler, agentID, convID uuid.UUID) wire.SessionLoadResponse {
+	t.Helper()
+	req := agentRequest(t, http.MethodGet, "/api/agent/session/"+convID.String()+"/messages", agentID, nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("load status = %d; body: %s", rec.Code, rec.Body.String())
+	}
+	var response wire.SessionLoadResponse
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatalf("decode load response: %v", err)
+	}
+	if response.Revision == "" {
+		t.Fatal("load revision is empty")
+	}
+	return response
 }
 
 // TestSessionLoad_TiedTimestampOrdersBySeq verifies that messages persisted

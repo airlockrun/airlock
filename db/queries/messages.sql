@@ -7,8 +7,9 @@ VALUES (@conversation_id, @role, @content, @parts, COALESCE(@cost_estimate, 0), 
 RETURNING *;
 
 -- name: ListMessagesByConversation :many
--- Initial UI page: the 100 most recent messages, returned in chronological
--- order. The handler overfetches by one (LIMIT 101) so it can report
+-- Initial human transcript page: the 100 most recent display messages,
+-- returned in chronological order. Model-only compaction rows are projected
+-- out by source. The handler overfetches by one (LIMIT 101) so it can report
 -- has_older_messages without a second COUNT query; the extra row is trimmed
 -- before the response is built. Ordering is by seq (monotonic insertion
 -- order) — created_at alone ties when multiple rows are inserted in one
@@ -16,17 +17,20 @@ RETURNING *;
 SELECT * FROM (
     SELECT * FROM agent_messages
     WHERE conversation_id = $1
+      AND source <> 'compaction'
     ORDER BY seq DESC
     LIMIT 101
 ) t
 ORDER BY seq ASC;
 
 -- name: ListMessagesBackward :many
--- Older page for infinite-scroll-up. Returns up to @lim messages with seq
--- strictly less than @before, back in chronological order for easy prepend.
+-- Older human transcript page for infinite-scroll-up. Returns up to @lim
+-- display messages with seq strictly less than @before, back in chronological
+-- order for easy prepend.
 SELECT * FROM (
     SELECT * FROM agent_messages
     WHERE conversation_id = @conversation_id
+      AND source <> 'compaction'
       AND seq < @before
     ORDER BY seq DESC
     LIMIT @lim
@@ -34,16 +38,18 @@ SELECT * FROM (
 ORDER BY seq ASC;
 
 -- name: ListMessagesForward :many
--- Newer page for scroll-down after eviction. Returns up to @lim messages with
--- seq strictly greater than @after, in chronological order.
+-- Newer human transcript page for scroll-down after eviction. Returns up to
+-- @lim display messages with seq strictly greater than @after, in
+-- chronological order.
 SELECT * FROM agent_messages
 WHERE conversation_id = @conversation_id
+  AND source <> 'compaction'
   AND seq > @after
 ORDER BY seq ASC
 LIMIT @lim;
 
 -- name: ListAllMessagesByConversation :many
--- UI loading — includes all messages. Run-grouped: rows that share a run_id
+-- Persistence scan including model-only and UI-only rows. Run-grouped rows
 -- stay together in the slot of the run's first message; tiebreak by ephemeral
 -- (non-ephemeral first) then seq.
 SELECT * FROM agent_messages
@@ -70,6 +76,26 @@ WHERE m.conversation_id = $1
     )
   )
 ORDER BY m.seq ASC;
+
+-- name: GetSessionContextRevision :one
+-- Opaque SessionStore revision. Including the active checkpoint seq prevents
+-- an empty post-clear context from reusing revision zero.
+SELECT GREATEST(
+  COALESCE((SELECT seq FROM agent_messages WHERE id = c.context_checkpoint_message_id), 0),
+  COALESCE((
+    SELECT MAX(m.seq)
+    FROM agent_messages m
+    WHERE m.conversation_id = c.id
+      AND NOT m.ephemeral
+      AND m.source <> 'checkpoint'
+      AND (
+        c.context_checkpoint_message_id IS NULL
+        OR m.seq >= (SELECT seq FROM agent_messages WHERE id = c.context_checkpoint_message_id)
+      )
+  ), 0)
+)::bigint
+FROM agent_conversations c
+WHERE c.id = $1;
 
 -- name: ListMessagesByRun :many
 SELECT * FROM agent_messages

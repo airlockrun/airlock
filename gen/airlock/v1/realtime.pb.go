@@ -262,6 +262,112 @@ func (x *TextDeltaEvent) GetText() string {
 	return ""
 }
 
+// CompactionStartedEvent marks the start of an automatic context compaction.
+type CompactionStartedEvent struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	RunId         string                 `protobuf:"bytes,1,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CompactionStartedEvent) Reset() {
+	*x = CompactionStartedEvent{}
+	mi := &file_airlock_v1_realtime_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CompactionStartedEvent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CompactionStartedEvent) ProtoMessage() {}
+
+func (x *CompactionStartedEvent) ProtoReflect() protoreflect.Message {
+	mi := &file_airlock_v1_realtime_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CompactionStartedEvent.ProtoReflect.Descriptor instead.
+func (*CompactionStartedEvent) Descriptor() ([]byte, []int) {
+	return file_airlock_v1_realtime_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *CompactionStartedEvent) GetRunId() string {
+	if x != nil {
+		return x.RunId
+	}
+	return ""
+}
+
+// CompactionFinishedEvent describes the result of an automatic context compaction.
+type CompactionFinishedEvent struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	RunId         string                 `protobuf:"bytes,1,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
+	TokensFreed   int32                  `protobuf:"varint,2,opt,name=tokens_freed,json=tokensFreed,proto3" json:"tokens_freed,omitempty"`
+	Error         string                 `protobuf:"bytes,3,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CompactionFinishedEvent) Reset() {
+	*x = CompactionFinishedEvent{}
+	mi := &file_airlock_v1_realtime_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CompactionFinishedEvent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CompactionFinishedEvent) ProtoMessage() {}
+
+func (x *CompactionFinishedEvent) ProtoReflect() protoreflect.Message {
+	mi := &file_airlock_v1_realtime_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CompactionFinishedEvent.ProtoReflect.Descriptor instead.
+func (*CompactionFinishedEvent) Descriptor() ([]byte, []int) {
+	return file_airlock_v1_realtime_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *CompactionFinishedEvent) GetRunId() string {
+	if x != nil {
+		return x.RunId
+	}
+	return ""
+}
+
+func (x *CompactionFinishedEvent) GetTokensFreed() int32 {
+	if x != nil {
+		return x.TokensFreed
+	}
+	return 0
+}
+
+func (x *CompactionFinishedEvent) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
 // ToolCallEvent signals a tool call is ready for execution.
 type ToolCallEvent struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -275,7 +381,7 @@ type ToolCallEvent struct {
 
 func (x *ToolCallEvent) Reset() {
 	*x = ToolCallEvent{}
-	mi := &file_airlock_v1_realtime_proto_msgTypes[5]
+	mi := &file_airlock_v1_realtime_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -287,7 +393,7 @@ func (x *ToolCallEvent) String() string {
 func (*ToolCallEvent) ProtoMessage() {}
 
 func (x *ToolCallEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_airlock_v1_realtime_proto_msgTypes[5]
+	mi := &file_airlock_v1_realtime_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -300,7 +406,7 @@ func (x *ToolCallEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ToolCallEvent.ProtoReflect.Descriptor instead.
 func (*ToolCallEvent) Descriptor() ([]byte, []int) {
-	return file_airlock_v1_realtime_proto_rawDescGZIP(), []int{5}
+	return file_airlock_v1_realtime_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *ToolCallEvent) GetRunId() string {
@@ -348,7 +454,7 @@ type ToolResultEvent struct {
 
 func (x *ToolResultEvent) Reset() {
 	*x = ToolResultEvent{}
-	mi := &file_airlock_v1_realtime_proto_msgTypes[6]
+	mi := &file_airlock_v1_realtime_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -360,7 +466,7 @@ func (x *ToolResultEvent) String() string {
 func (*ToolResultEvent) ProtoMessage() {}
 
 func (x *ToolResultEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_airlock_v1_realtime_proto_msgTypes[6]
+	mi := &file_airlock_v1_realtime_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -373,7 +479,7 @@ func (x *ToolResultEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ToolResultEvent.ProtoReflect.Descriptor instead.
 func (*ToolResultEvent) Descriptor() ([]byte, []int) {
-	return file_airlock_v1_realtime_proto_rawDescGZIP(), []int{6}
+	return file_airlock_v1_realtime_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *ToolResultEvent) GetRunId() string {
@@ -437,7 +543,7 @@ type ConfirmationRequiredEvent struct {
 
 func (x *ConfirmationRequiredEvent) Reset() {
 	*x = ConfirmationRequiredEvent{}
-	mi := &file_airlock_v1_realtime_proto_msgTypes[7]
+	mi := &file_airlock_v1_realtime_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -449,7 +555,7 @@ func (x *ConfirmationRequiredEvent) String() string {
 func (*ConfirmationRequiredEvent) ProtoMessage() {}
 
 func (x *ConfirmationRequiredEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_airlock_v1_realtime_proto_msgTypes[7]
+	mi := &file_airlock_v1_realtime_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -462,7 +568,7 @@ func (x *ConfirmationRequiredEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConfirmationRequiredEvent.ProtoReflect.Descriptor instead.
 func (*ConfirmationRequiredEvent) Descriptor() ([]byte, []int) {
-	return file_airlock_v1_realtime_proto_rawDescGZIP(), []int{7}
+	return file_airlock_v1_realtime_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *ConfirmationRequiredEvent) GetRunId() string {
@@ -518,7 +624,7 @@ type RunSuspendedEvent struct {
 
 func (x *RunSuspendedEvent) Reset() {
 	*x = RunSuspendedEvent{}
-	mi := &file_airlock_v1_realtime_proto_msgTypes[8]
+	mi := &file_airlock_v1_realtime_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -530,7 +636,7 @@ func (x *RunSuspendedEvent) String() string {
 func (*RunSuspendedEvent) ProtoMessage() {}
 
 func (x *RunSuspendedEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_airlock_v1_realtime_proto_msgTypes[8]
+	mi := &file_airlock_v1_realtime_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -543,7 +649,7 @@ func (x *RunSuspendedEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RunSuspendedEvent.ProtoReflect.Descriptor instead.
 func (*RunSuspendedEvent) Descriptor() ([]byte, []int) {
-	return file_airlock_v1_realtime_proto_rawDescGZIP(), []int{8}
+	return file_airlock_v1_realtime_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *RunSuspendedEvent) GetRunId() string {
@@ -573,7 +679,7 @@ type RunCompleteEvent struct {
 
 func (x *RunCompleteEvent) Reset() {
 	*x = RunCompleteEvent{}
-	mi := &file_airlock_v1_realtime_proto_msgTypes[9]
+	mi := &file_airlock_v1_realtime_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -585,7 +691,7 @@ func (x *RunCompleteEvent) String() string {
 func (*RunCompleteEvent) ProtoMessage() {}
 
 func (x *RunCompleteEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_airlock_v1_realtime_proto_msgTypes[9]
+	mi := &file_airlock_v1_realtime_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -598,7 +704,7 @@ func (x *RunCompleteEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RunCompleteEvent.ProtoReflect.Descriptor instead.
 func (*RunCompleteEvent) Descriptor() ([]byte, []int) {
-	return file_airlock_v1_realtime_proto_rawDescGZIP(), []int{9}
+	return file_airlock_v1_realtime_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *RunCompleteEvent) GetRunId() string {
@@ -640,7 +746,7 @@ type RunErrorEvent struct {
 
 func (x *RunErrorEvent) Reset() {
 	*x = RunErrorEvent{}
-	mi := &file_airlock_v1_realtime_proto_msgTypes[10]
+	mi := &file_airlock_v1_realtime_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -652,7 +758,7 @@ func (x *RunErrorEvent) String() string {
 func (*RunErrorEvent) ProtoMessage() {}
 
 func (x *RunErrorEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_airlock_v1_realtime_proto_msgTypes[10]
+	mi := &file_airlock_v1_realtime_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -665,7 +771,7 @@ func (x *RunErrorEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RunErrorEvent.ProtoReflect.Descriptor instead.
 func (*RunErrorEvent) Descriptor() ([]byte, []int) {
-	return file_airlock_v1_realtime_proto_rawDescGZIP(), []int{10}
+	return file_airlock_v1_realtime_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *RunErrorEvent) GetRunId() string {
@@ -694,7 +800,7 @@ type SubscribeBuildRequest struct {
 
 func (x *SubscribeBuildRequest) Reset() {
 	*x = SubscribeBuildRequest{}
-	mi := &file_airlock_v1_realtime_proto_msgTypes[11]
+	mi := &file_airlock_v1_realtime_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -706,7 +812,7 @@ func (x *SubscribeBuildRequest) String() string {
 func (*SubscribeBuildRequest) ProtoMessage() {}
 
 func (x *SubscribeBuildRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_airlock_v1_realtime_proto_msgTypes[11]
+	mi := &file_airlock_v1_realtime_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -719,7 +825,7 @@ func (x *SubscribeBuildRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SubscribeBuildRequest.ProtoReflect.Descriptor instead.
 func (*SubscribeBuildRequest) Descriptor() ([]byte, []int) {
-	return file_airlock_v1_realtime_proto_rawDescGZIP(), []int{11}
+	return file_airlock_v1_realtime_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *SubscribeBuildRequest) GetBuildId() string {
@@ -739,7 +845,7 @@ type UnsubscribeBuildRequest struct {
 
 func (x *UnsubscribeBuildRequest) Reset() {
 	*x = UnsubscribeBuildRequest{}
-	mi := &file_airlock_v1_realtime_proto_msgTypes[12]
+	mi := &file_airlock_v1_realtime_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -751,7 +857,7 @@ func (x *UnsubscribeBuildRequest) String() string {
 func (*UnsubscribeBuildRequest) ProtoMessage() {}
 
 func (x *UnsubscribeBuildRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_airlock_v1_realtime_proto_msgTypes[12]
+	mi := &file_airlock_v1_realtime_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -764,7 +870,7 @@ func (x *UnsubscribeBuildRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UnsubscribeBuildRequest.ProtoReflect.Descriptor instead.
 func (*UnsubscribeBuildRequest) Descriptor() ([]byte, []int) {
-	return file_airlock_v1_realtime_proto_rawDescGZIP(), []int{12}
+	return file_airlock_v1_realtime_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *UnsubscribeBuildRequest) GetBuildId() string {
@@ -788,7 +894,7 @@ type NotificationEvent struct {
 
 func (x *NotificationEvent) Reset() {
 	*x = NotificationEvent{}
-	mi := &file_airlock_v1_realtime_proto_msgTypes[13]
+	mi := &file_airlock_v1_realtime_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -800,7 +906,7 @@ func (x *NotificationEvent) String() string {
 func (*NotificationEvent) ProtoMessage() {}
 
 func (x *NotificationEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_airlock_v1_realtime_proto_msgTypes[13]
+	mi := &file_airlock_v1_realtime_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -813,7 +919,7 @@ func (x *NotificationEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NotificationEvent.ProtoReflect.Descriptor instead.
 func (*NotificationEvent) Descriptor() ([]byte, []int) {
-	return file_airlock_v1_realtime_proto_rawDescGZIP(), []int{13}
+	return file_airlock_v1_realtime_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *NotificationEvent) GetAgentId() string {
@@ -869,7 +975,13 @@ const file_airlock_v1_realtime_proto_rawDesc = "" +
 	"\x0fconversation_id\x18\x03 \x01(\tR\x0econversationId\";\n" +
 	"\x0eTextDeltaEvent\x12\x15\n" +
 	"\x06run_id\x18\x01 \x01(\tR\x05runId\x12\x12\n" +
-	"\x04text\x18\x02 \x01(\tR\x04text\"{\n" +
+	"\x04text\x18\x02 \x01(\tR\x04text\"/\n" +
+	"\x16CompactionStartedEvent\x12\x15\n" +
+	"\x06run_id\x18\x01 \x01(\tR\x05runId\"i\n" +
+	"\x17CompactionFinishedEvent\x12\x15\n" +
+	"\x06run_id\x18\x01 \x01(\tR\x05runId\x12!\n" +
+	"\ftokens_freed\x18\x02 \x01(\x05R\vtokensFreed\x12\x14\n" +
+	"\x05error\x18\x03 \x01(\tR\x05error\"{\n" +
 	"\rToolCallEvent\x12\x15\n" +
 	"\x06run_id\x18\x01 \x01(\tR\x05runId\x12 \n" +
 	"\ftool_call_id\x18\x02 \x01(\tR\n" +
@@ -930,26 +1042,28 @@ func file_airlock_v1_realtime_proto_rawDescGZIP() []byte {
 	return file_airlock_v1_realtime_proto_rawDescData
 }
 
-var file_airlock_v1_realtime_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
+var file_airlock_v1_realtime_proto_msgTypes = make([]protoimpl.MessageInfo, 16)
 var file_airlock_v1_realtime_proto_goTypes = []any{
 	(*ErrorEvent)(nil),                // 0: airlock.v1.ErrorEvent
 	(*SubscribedEvent)(nil),           // 1: airlock.v1.SubscribedEvent
 	(*AgentStatusEvent)(nil),          // 2: airlock.v1.AgentStatusEvent
 	(*RunStartedEvent)(nil),           // 3: airlock.v1.RunStartedEvent
 	(*TextDeltaEvent)(nil),            // 4: airlock.v1.TextDeltaEvent
-	(*ToolCallEvent)(nil),             // 5: airlock.v1.ToolCallEvent
-	(*ToolResultEvent)(nil),           // 6: airlock.v1.ToolResultEvent
-	(*ConfirmationRequiredEvent)(nil), // 7: airlock.v1.ConfirmationRequiredEvent
-	(*RunSuspendedEvent)(nil),         // 8: airlock.v1.RunSuspendedEvent
-	(*RunCompleteEvent)(nil),          // 9: airlock.v1.RunCompleteEvent
-	(*RunErrorEvent)(nil),             // 10: airlock.v1.RunErrorEvent
-	(*SubscribeBuildRequest)(nil),     // 11: airlock.v1.SubscribeBuildRequest
-	(*UnsubscribeBuildRequest)(nil),   // 12: airlock.v1.UnsubscribeBuildRequest
-	(*NotificationEvent)(nil),         // 13: airlock.v1.NotificationEvent
-	(*AgentInfo)(nil),                 // 14: airlock.v1.AgentInfo
+	(*CompactionStartedEvent)(nil),    // 5: airlock.v1.CompactionStartedEvent
+	(*CompactionFinishedEvent)(nil),   // 6: airlock.v1.CompactionFinishedEvent
+	(*ToolCallEvent)(nil),             // 7: airlock.v1.ToolCallEvent
+	(*ToolResultEvent)(nil),           // 8: airlock.v1.ToolResultEvent
+	(*ConfirmationRequiredEvent)(nil), // 9: airlock.v1.ConfirmationRequiredEvent
+	(*RunSuspendedEvent)(nil),         // 10: airlock.v1.RunSuspendedEvent
+	(*RunCompleteEvent)(nil),          // 11: airlock.v1.RunCompleteEvent
+	(*RunErrorEvent)(nil),             // 12: airlock.v1.RunErrorEvent
+	(*SubscribeBuildRequest)(nil),     // 13: airlock.v1.SubscribeBuildRequest
+	(*UnsubscribeBuildRequest)(nil),   // 14: airlock.v1.UnsubscribeBuildRequest
+	(*NotificationEvent)(nil),         // 15: airlock.v1.NotificationEvent
+	(*AgentInfo)(nil),                 // 16: airlock.v1.AgentInfo
 }
 var file_airlock_v1_realtime_proto_depIdxs = []int32{
-	14, // 0: airlock.v1.AgentStatusEvent.agent:type_name -> airlock.v1.AgentInfo
+	16, // 0: airlock.v1.AgentStatusEvent.agent:type_name -> airlock.v1.AgentInfo
 	1,  // [1:1] is the sub-list for method output_type
 	1,  // [1:1] is the sub-list for method input_type
 	1,  // [1:1] is the sub-list for extension type_name
@@ -969,7 +1083,7 @@ func file_airlock_v1_realtime_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_airlock_v1_realtime_proto_rawDesc), len(file_airlock_v1_realtime_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   14,
+			NumMessages:   16,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

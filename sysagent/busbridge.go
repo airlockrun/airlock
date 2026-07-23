@@ -25,8 +25,9 @@ import (
 // per-conversation routing.
 //
 // The proto event shapes are the SAME ones agent chat uses
-// (TextDeltaEvent / ToolCallEvent / ToolResultEvent /
-// ConfirmationRequiredEvent / RunCompleteEvent), so the frontend
+// (TextDeltaEvent / CompactionStartedEvent / CompactionFinishedEvent /
+// ToolCallEvent / ToolResultEvent / ConfirmationRequiredEvent /
+// RunCompleteEvent), so the frontend
 // chat store handles agent and sysagent surfaces with one codepath.
 //
 // PermissionAsked dedupe: the in-process PermissionManager fires the
@@ -132,6 +133,20 @@ func (s *pubsubSink) OnPermissionAsked(p bus.PermissionAskedPayload) {
 		Patterns:    p.Patterns,
 		Code:        code,
 		Description: desc,
+	})
+}
+
+func (s *pubsubSink) OnAutomaticCompactionStarted(bus.AutomaticCompactionStartedPayload) {
+	s.publish("run.compaction_started", &airlockv1.CompactionStartedEvent{
+		RunId: s.runID,
+	})
+}
+
+func (s *pubsubSink) OnAutomaticCompactionFinished(p bus.AutomaticCompactionFinishedPayload) {
+	s.publish("run.compaction_finished", &airlockv1.CompactionFinishedEvent{
+		RunId:       s.runID,
+		TokensFreed: int32(p.TokensFreed),
+		Error:       p.Error,
 	})
 }
 

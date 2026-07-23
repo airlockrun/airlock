@@ -92,3 +92,10 @@ func TestDecodeToolOutput(t *testing.T) {
 		})
 	}
 }
+
+func TestNewCompactionFinishedEvent(t *testing.T) {
+	event := newCompactionFinishedEvent("run-123", json.RawMessage(`{"tokensFreed":27,"error":"store failed"}`))
+	if event.RunId != "run-123" || event.TokensFreed != 27 || event.Error != "store failed" {
+		t.Fatalf("event = %+v", event)
+	}
+}

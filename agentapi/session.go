@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/airlockrun/agentsdk/wire"
@@ -14,6 +15,7 @@ import (
 	"github.com/airlockrun/goai/message"
 	"github.com/airlockrun/sol/session"
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"
 )
@@ -27,7 +29,15 @@ func (h *Handler) SessionLoad(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	q := dbq.New(h.db.Pool())
+	tx, err := h.db.Pool().BeginTx(r.Context(), pgx.TxOptions{IsoLevel: pgx.RepeatableRead})
+	if err != nil {
+		h.logger.Error("session load: begin tx", zap.Error(err))
+		writeJSONError(w, http.StatusInternalServerError, "failed to begin transaction")
+		return
+	}
+	defer tx.Rollback(r.Context())
+
+	q := dbq.New(h.db.Pool()).WithTx(tx)
 	agentID := auth.AgentIDFromContext(r.Context())
 	if _, err := q.GetConversationByIDAndAgent(r.Context(), dbq.GetConversationByIDAndAgentParams{
 		ID: toPgUUID(convID), AgentID: toPgUUID(agentID),
@@ -77,7 +87,22 @@ func (h *Handler) SessionLoad(w http.ResponseWriter, r *http.Request) {
 		msgs = append(msgs, dbMessageToSession(m))
 	}
 
-	writeJSON(w, http.StatusOK, msgs)
+	revision, err := q.GetSessionContextRevision(r.Context(), toPgUUID(convID))
+	if err != nil {
+		h.logger.Error("session revision load failed", zap.Error(err))
+		writeJSONError(w, http.StatusInternalServerError, "failed to load session revision")
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		h.logger.Error("session load: commit tx", zap.Error(err))
+		writeJSONError(w, http.StatusInternalServerError, "failed to load messages")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, wire.SessionLoadResponse{
+		Messages: msgs,
+		Revision: formatSessionRevision(revision),
+	})
 }
 
 // SessionAppend handles POST /api/agent/session/{convID}/messages.
@@ -96,11 +121,16 @@ func (h *Handler) SessionAppend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var msgs []session.Message
-	if err := json.NewDecoder(r.Body).Decode(&msgs); err != nil {
+	var req wire.SessionAppendRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSONError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	if req.Revision == "" {
+		writeJSONError(w, http.StatusBadRequest, "revision is required")
+		return
+	}
+	msgs := req.Messages
 
 	var runID pgtype.UUID
 	if rid := r.URL.Query().Get("runId"); rid != "" {
@@ -154,6 +184,22 @@ func (h *Handler) SessionAppend(w http.ResponseWriter, r *http.Request) {
 	}
 
 	q := dbq.New(h.db.Pool()).WithTx(tx)
+	if _, err := q.GetConversationByIDAndAgentForUpdate(r.Context(), dbq.GetConversationByIDAndAgentForUpdateParams{
+		ID: toPgUUID(convID), AgentID: toPgUUID(agentID),
+	}); err != nil {
+		writeJSONError(w, http.StatusNotFound, "conversation not found")
+		return
+	}
+	currentRevision, err := q.GetSessionContextRevision(r.Context(), toPgUUID(convID))
+	if err != nil {
+		h.logger.Error("session append: load revision", append(logFields, zap.Error(err))...)
+		writeJSONError(w, http.StatusInternalServerError, "failed to load session revision")
+		return
+	}
+	if req.Revision != formatSessionRevision(currentRevision) {
+		writeJSONError(w, http.StatusConflict, "session revision conflict")
+		return
+	}
 
 	// Write-time tool-pairing invariant. A role=tool message whose
 	// originating assistant tool-call was never persisted (e.g. the
@@ -269,6 +315,13 @@ func (h *Handler) SessionAppend(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	newRevision, err := q.GetSessionContextRevision(r.Context(), toPgUUID(convID))
+	if err != nil {
+		h.logger.Error("session append: load new revision", append(logFields, zap.Error(err))...)
+		writeJSONError(w, http.StatusInternalServerError, "failed to load session revision")
+		return
+	}
+
 	if err := tx.Commit(r.Context()); err != nil {
 		h.logger.Error("session append: commit tx — batch rolled back",
 			append(logFields, zap.Error(err), zap.Bool("ctxCancelled", r.Context().Err() != nil))...)
@@ -276,7 +329,7 @@ func (h *Handler) SessionAppend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.WriteHeader(http.StatusNoContent)
+	writeJSON(w, http.StatusOK, wire.SessionAppendResponse{Revision: formatSessionRevision(newRevision)})
 }
 
 // SessionCompact handles POST /api/agent/session/{convID}/compact.
@@ -307,6 +360,10 @@ func (h *Handler) SessionCompact(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusBadRequest, "summary must not be empty")
 		return
 	}
+	if req.Revision == "" {
+		writeJSONError(w, http.StatusBadRequest, "revision is required")
+		return
+	}
 
 	pgConvID := toPgUUID(convID)
 	logFields := []zap.Field{
@@ -327,6 +384,22 @@ func (h *Handler) SessionCompact(w http.ResponseWriter, r *http.Request) {
 	defer tx.Rollback(r.Context())
 
 	q := dbq.New(h.db.Pool()).WithTx(tx)
+	if _, err := q.GetConversationByIDAndAgentForUpdate(r.Context(), dbq.GetConversationByIDAndAgentForUpdateParams{
+		ID: pgConvID, AgentID: toPgUUID(agentID),
+	}); err != nil {
+		writeJSONError(w, http.StatusNotFound, "conversation not found")
+		return
+	}
+	currentRevision, err := q.GetSessionContextRevision(r.Context(), pgConvID)
+	if err != nil {
+		h.logger.Error("session compact: load revision", append(logFields, zap.Error(err))...)
+		writeJSONError(w, http.StatusInternalServerError, "failed to load session revision")
+		return
+	}
+	if req.Revision != formatSessionRevision(currentRevision) {
+		writeJSONError(w, http.StatusConflict, "session revision conflict")
+		return
+	}
 
 	// Canonicalize s3ref: sentinels in the summary (defensive — summaries
 	// are typically text-only but future agent tools might attach).
@@ -344,7 +417,7 @@ func (h *Handler) SessionCompact(w http.ResponseWriter, r *http.Request) {
 		"kind":        "compact",
 		"tokensFreed": req.TokensFreed,
 	}})
-	marker, err := q.CreateMessage(r.Context(), dbq.CreateMessageParams{
+	_, err = q.CreateMessage(r.Context(), dbq.CreateMessageParams{
 		ConversationID: pgConvID,
 		Role:           "system",
 		Content:        "",
@@ -363,7 +436,7 @@ func (h *Handler) SessionCompact(w http.ResponseWriter, r *http.Request) {
 	//    checkpoint target so that Sol's next Load returns [summary..., continue].
 	var firstSummaryID pgtype.UUID
 	for i, msg := range req.Summary {
-		id, err := storeSessionMessageReturningID(r.Context(), q, pgConvID, pgtype.UUID{}, "", msg)
+		id, err := storeSessionMessageReturningID(r.Context(), q, pgConvID, pgtype.UUID{}, "compaction", msg)
 		if err != nil {
 			h.logger.Error("session compact: insert summary failed — rolling back",
 				append(logFields,
@@ -397,6 +470,12 @@ func (h *Handler) SessionCompact(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusInternalServerError, "failed to set checkpoint")
 		return
 	}
+	newRevision, err := q.GetSessionContextRevision(r.Context(), pgConvID)
+	if err != nil {
+		h.logger.Error("session compact: load new revision", append(logFields, zap.Error(err))...)
+		writeJSONError(w, http.StatusInternalServerError, "failed to load session revision")
+		return
+	}
 
 	if err := tx.Commit(r.Context()); err != nil {
 		h.logger.Error("session compact: commit tx — batch rolled back",
@@ -409,8 +488,11 @@ func (h *Handler) SessionCompact(w http.ResponseWriter, r *http.Request) {
 	// pre-checkpoint messages is orphaned on S3. Diff and schedule delete.
 	h.cleanupOrphanedAttachments(r.Context(), agentID.String(), pgConvID, firstSummaryID)
 
-	_ = marker
-	w.WriteHeader(http.StatusNoContent)
+	writeJSON(w, http.StatusOK, wire.SessionCompactResponse{Revision: formatSessionRevision(newRevision)})
+}
+
+func formatSessionRevision(seq int64) string {
+	return strconv.FormatInt(seq, 10)
 }
 
 // cleanupOrphanedAttachments scans the conversation's messages and deletes

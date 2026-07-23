@@ -11,6 +11,90 @@ import (
 	"github.com/airlockrun/airlock/db/dbq"
 )
 
+func TestTelegramSendStreamCompactionNotices(t *testing.T) {
+	tests := []struct {
+		name   string
+		events []ResponseEvent
+		want   []string
+	}{
+		{
+			name: "success",
+			events: []ResponseEvent{
+				{Type: "text-delta", Text: "Before compaction."},
+				{Type: "compaction_started"},
+				{Type: "text-delta", Text: "After compaction."},
+				{Type: "compaction_finished", TokensFreed: 2},
+				{Type: "text-delta", Text: "Final answer."},
+			},
+			want: []string{
+				"Before compaction.",
+				"Compacting context...",
+				"After compaction.",
+				"Context compacted. 2 tokens freed.",
+				"Final answer.",
+			},
+		},
+		{
+			name: "failure",
+			events: []ResponseEvent{
+				{Type: "text-delta", Text: "Working."},
+				{Type: "compaction_started"},
+				{Type: "text-delta", Text: "Still working."},
+				{Type: "compaction_finished", CompactionError: "model unavailable"},
+			},
+			want: []string{
+				"Working.",
+				"Compacting context...",
+				"Still working.",
+				"Context compaction failed: model unavailable",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var messages []string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if strings.HasSuffix(r.URL.Path, "/sendRichMessage") {
+					var body struct {
+						RichMessage struct {
+							Markdown string `json:"markdown"`
+						} `json:"rich_message"`
+					}
+					if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+						t.Errorf("decode sendRichMessage: %v", err)
+					}
+					messages = append(messages, body.RichMessage.Markdown)
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"ok":     true,
+					"result": map[string]any{"message_id": len(messages)},
+				})
+			}))
+			defer server.Close()
+
+			driver := NewTelegramDriverWithBaseURL(server.URL, server.Client())
+			events := make(chan ResponseEvent, len(tt.events))
+			for _, event := range tt.events {
+				events <- event
+			}
+			close(events)
+			if _, err := driver.SendStream(context.Background(), dbq.Bridge{BotTokenRef: "test-token"}, "42", false, events); err != nil {
+				t.Fatalf("SendStream: %v", err)
+			}
+			if len(messages) != len(tt.want) {
+				t.Fatalf("messages = %q, want %q", messages, tt.want)
+			}
+			for i := range tt.want {
+				if messages[i] != tt.want[i] {
+					t.Errorf("message[%d] = %q, want %q", i, messages[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
 func TestTelegramGetChat(t *testing.T) {
 	var lastMethod, lastBody string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

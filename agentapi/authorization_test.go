@@ -33,7 +33,7 @@ func TestSessionEndpointsRejectOtherAgentConversation(t *testing.T) {
 		body   any
 	}{
 		{name: "load", method: http.MethodGet, path: "/messages"},
-		{name: "append", method: http.MethodPost, path: "/messages", body: []session.Message{{Role: "user", Content: "stolen"}}},
+		{name: "append", method: http.MethodPost, path: "/messages", body: wire.SessionAppendRequest{Messages: []session.Message{{Role: "user", Content: "stolen"}}, Revision: "0"}},
 		{name: "compact", method: http.MethodPost, path: "/compact", body: wire.SessionCompactRequest{Summary: []session.Message{{Role: "assistant", Content: "stolen"}}}},
 	}
 	for _, tt := range tests {
@@ -106,7 +106,9 @@ func TestRunEndpointsRejectOtherAgentRun(t *testing.T) {
 		t.Errorf("checkpoint status = %d, want 404; body: %s", rec.Code, rec.Body.String())
 	}
 
-	req = agentRequest(t, http.MethodPost, "/api/agent/session/"+otherConvID.String()+"/messages?runId="+pgUUID(run.ID).String(), otherAgentID, []session.Message{{Role: "user", Content: "stolen run"}})
+	req = agentRequest(t, http.MethodPost, "/api/agent/session/"+otherConvID.String()+"/messages?runId="+pgUUID(run.ID).String(), otherAgentID, wire.SessionAppendRequest{
+		Messages: []session.Message{{Role: "user", Content: "stolen run"}}, Revision: "0",
+	})
 	rec = httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusNotFound {

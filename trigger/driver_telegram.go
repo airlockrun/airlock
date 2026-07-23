@@ -359,6 +359,27 @@ func (d *TelegramDriver) SendStream(ctx context.Context, br dbq.Bridge, external
 		case "text-delta":
 			sb.WriteString(ev.Text)
 
+		case "compaction_started":
+			flushText()
+			_, _ = d.sendRichMessage(ctx, token, chatID, "Compacting context...", nil)
+
+		case "compaction_finished":
+			flushText()
+			var notice string
+			if ev.CompactionError != "" {
+				notice = "Context compaction failed: " + ev.CompactionError
+			} else {
+				switch ev.TokensFreed {
+				case 0:
+					notice = "Context compacted. No tokens freed."
+				case 1:
+					notice = "Context compacted. 1 token freed."
+				default:
+					notice = fmt.Sprintf("Context compacted. %d tokens freed.", ev.TokensFreed)
+				}
+			}
+			_, _ = d.sendRichMessage(ctx, token, chatID, notice, nil)
+
 		case "tool-call":
 			// When echo is off, tool-call bubbles are suppressed — in quiet
 			// mode the user only sees errors and final text. Flush pending

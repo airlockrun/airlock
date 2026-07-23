@@ -193,6 +193,32 @@ func TestStreamNDJSONResponse(t *testing.T) {
 		}
 	})
 
+	t.Run("compaction lifecycle forwarded with typed fields", func(t *testing.T) {
+		ndjson := `{"type":"compaction_started","data":{}}
+{"type":"compaction_finished","data":{"tokensFreed":12,"error":"store failed"}}
+`
+		events := make(chan ResponseEvent, 16)
+		_, _, _, err := StreamNDJSONResponse(strings.NewReader(ndjson), "run-compaction", events)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		var received []ResponseEvent
+		for event := range events {
+			received = append(received, event)
+		}
+		if len(received) != 3 {
+			t.Fatalf("received %d events, want 3", len(received))
+		}
+		if received[1].Type != "compaction_started" || received[1].RunID != "run-compaction" {
+			t.Errorf("started = %+v", received[1])
+		}
+		finished := received[2]
+		if finished.Type != "compaction_finished" || finished.RunID != "run-compaction" || finished.TokensFreed != 12 || finished.CompactionError != "store failed" {
+			t.Errorf("finished = %+v", finished)
+		}
+	})
+
 	t.Run("empty stream", func(t *testing.T) {
 		events := make(chan ResponseEvent, 16)
 		text, _, usage, err := StreamNDJSONResponse(strings.NewReader(""), "run-4", events)
