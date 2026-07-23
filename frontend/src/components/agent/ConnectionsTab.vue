@@ -29,6 +29,8 @@ const selectedNeed = ref<NeedInfo | null>(null)
 const oauthClientId = ref('')
 const oauthClientSecret = ref('')
 const saving = ref(false)
+const actionMenu = ref()
+const actionNeed = ref<NeedInfo | null>(null)
 
 const needs = computed(() => resources.needs.value.filter((need) => need.type === 'connection'))
 watch(needs, (rows) => emit('populated', rows.length), { immediate: true })
@@ -60,6 +62,24 @@ function authLabel(mode: string): string {
   if (mode === 'api_key') return 'API key'
   if (mode === 'none') return 'No authentication'
   return mode
+}
+
+const actionMenuItems = computed(() => {
+  const need = actionNeed.value
+  if (!need) return []
+  const items: any[] = []
+  if (definition(need)?.authMode === 'oauth' && canAuthorize(need)) {
+    items.push({ label: 'OAuth app', icon: 'pi pi-key', command: () => configure(need) })
+  }
+  items.push({ label: 'Switch resource', icon: 'pi pi-sync', command: () => openSetup(need) })
+  items.push({ separator: true })
+  items.push({ label: 'Disconnect from this app', icon: 'pi pi-unlink', danger: true, command: () => disconnect(need) })
+  return items
+})
+
+function openActionMenu(event: Event, need: NeedInfo) {
+  actionNeed.value = need
+  actionMenu.value.toggle(event)
 }
 
 async function refresh() {
@@ -172,31 +192,27 @@ onMounted(load)
   <Message v-if="loadError" severity="error" :closable="false">
     <div class="load-error"><span>{{ loadError }}</span><Button label="Retry" icon="pi pi-refresh" size="small" outlined @click="load" /></div>
   </Message>
-  <DataTable v-else-if="!loading" :value="needs" stripedRows responsive-layout="scroll">
+  <DataTable v-else-if="!loading" :value="needs" class="connections-table" stripedRows responsive-layout="scroll" :table-style="{ minWidth: '46rem' }">
     <template #empty><div class="empty">No connections registered.</div></template>
-    <Column header="Connection">
+    <Column header="Connection" style="min-width: 20rem">
       <template #body="{ data: need }">
         <div class="primary-name">{{ need.bound ? boundName(need) : (definition(need)?.name || need.slug) }}</div>
         <div class="secondary">App handle: <code>{{ need.slug }}</code><span v-if="need.description"> · {{ need.description }}</span></div>
       </template>
     </Column>
-    <Column header="Authentication"><template #body="{ data: need }">{{ authLabel(definition(need)?.authMode || '') }}</template></Column>
-    <Column header="Binding">
+    <Column header="Authentication" style="width: 10rem"><template #body="{ data: need }">{{ authLabel(definition(need)?.authMode || '') }}</template></Column>
+    <Column header="State" style="width: 11rem">
       <template #body="{ data: need }">
-        <Tag :value="need.bound ? 'Bound' : 'Unbound'" :severity="need.bound ? 'success' : 'warn'" />
+        <div class="state-cell">
+          <Tag
+            :value="!need.bound ? 'Unbound' : (definition(need)?.authMode === 'none' || definition(need)?.authorized ? 'Ready' : 'Needs setup')"
+            :severity="!need.bound || (definition(need)?.authMode !== 'none' && !definition(need)?.authorized) ? 'warn' : 'success'"
+          />
+          <span class="secondary">{{ need.bound ? 'Bound to this app' : 'No resource selected' }}</span>
+        </div>
       </template>
     </Column>
-    <Column header="Status">
-      <template #body="{ data: need }">
-        <Tag
-          v-if="need.bound"
-          :value="definition(need)?.authMode === 'none' ? 'Ready' : (definition(need)?.authorized ? 'Ready' : 'Needs setup')"
-          :severity="definition(need)?.authMode === 'none' || definition(need)?.authorized ? 'success' : 'warn'"
-        />
-        <span v-else class="secondary">Not connected</span>
-      </template>
-    </Column>
-    <Column header="Actions">
+    <Column header="Actions" style="width: 13rem" header-style="text-align: right" body-style="text-align: right">
       <template #body="{ data: need }">
         <div v-if="canAdmin" class="actions">
           <Button v-if="!need.bound" label="Set up" size="small" @click="openSetup(need)" />
@@ -209,21 +225,13 @@ onMounted(load)
               @click="reauthorize(need)"
             />
             <Button
-              v-if="definition(need)?.authMode === 'oauth' && canAuthorize(need)"
-              label="OAuth app"
-              size="small"
-              text
-              @click="configure(need)"
-            />
-            <Button
               v-else-if="definition(need)?.authMode !== 'none' && canManage(need)"
               label="Configure"
               size="small"
               outlined
               @click="configure(need)"
             />
-            <Button label="Switch resource" size="small" text @click="openSetup(need)" />
-            <Button label="Disconnect from this app" size="small" text severity="danger" @click="disconnect(need)" />
+            <Button icon="pi pi-ellipsis-v" size="small" text rounded aria-label="More connection actions" @click="openActionMenu($event, need)" />
           </template>
         </div>
         <span v-else class="secondary">View only</span>
@@ -231,6 +239,14 @@ onMounted(load)
     </Column>
   </DataTable>
   <div v-else class="skeletons"><Skeleton v-for="i in 3" :key="i" height="3rem" /></div>
+  <Menu ref="actionMenu" :model="actionMenuItems" :popup="true">
+    <template #item="{ item, props: menuProps }">
+      <a v-bind="menuProps.action" :class="{ 'danger-menu-item': item.danger }">
+        <span :class="item.icon" />
+        <span>{{ item.label }}</span>
+      </a>
+    </template>
+  </Menu>
 
   <ResourceBindingDialog
     v-model:visible="bindingOpen"
@@ -267,9 +283,13 @@ onMounted(load)
 
 <style scoped>
 .empty { text-align: center; padding: 2rem; color: var(--p-text-muted-color); }
-.primary-name { font-weight: 600; }
-.secondary { color: var(--p-text-muted-color); font-size: 0.8rem; }
-.actions { display: flex; flex-wrap: wrap; gap: 0.25rem; }
+.primary-name { font-weight: 600; line-height: 1.3; }
+.secondary { color: var(--p-text-muted-color); font-size: 0.8rem; line-height: 1.35; }
+.state-cell { display: flex; flex-direction: column; align-items: flex-start; gap: 0.35rem; }
+.actions { display: flex; flex-wrap: nowrap; align-items: center; justify-content: flex-end; gap: 0.35rem; }
+.danger-menu-item { color: var(--p-red-400) !important; }
+.connections-table :deep(th:last-child .p-datatable-column-header-content) { justify-content: flex-end; }
+.connections-table :deep(td) { vertical-align: middle; }
 .skeletons, .oauth-form { display: flex; flex-direction: column; gap: 0.75rem; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 0.5rem; }
 .load-error { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; }
