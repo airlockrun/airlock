@@ -16,6 +16,7 @@ import { join } from 'node:path'
 const ALLOW = new Set([
   'MIT', 'ISC', '0BSD', 'BSD', 'BSD-2-Clause', 'BSD-3-Clause',
   'Apache-2.0', 'Unlicense', 'CC0-1.0', 'BlueOak-1.0.0', 'Python-2.0',
+  'OFL-1.1',
 ])
 const ALLOW_EXPRESSIONS = new Set([
   // DOMPurify offers Apache-2.0 as a permissive licensing option.

@@ -23,6 +23,7 @@ const AirlockPreset = definePreset(Aura, {
 })
 import ToastService from 'primevue/toastservice'
 import ConfirmationService from 'primevue/confirmationservice'
+import '@fontsource-variable/inter/wght.css'
 import 'primeicons/primeicons.css'
 import './style.css'
 
