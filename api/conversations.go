@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"path/filepath"
 	"strconv"
@@ -260,7 +261,7 @@ const (
 // awaitSuspendedRun resolves the run a confirmation response names, scoped to
 // this conversation, tolerating the race where the approval beats the agent's
 // suspend write. Returns an error (surfaced as 409 → a UI toast) if the run
-// belongs elsewhere, has already finished, or never suspends before the
+// belongs elsewhere, has already finished, or never becomes resumable before the
 // deadline. Validating trigger_ref == this web conversation also rejects
 // resuming a sibling-delegated (source='a2a') suspension on the same agent.
 func (h *conversationsHandler) awaitSuspendedRun(ctx context.Context, q *dbq.Queries, runIDStr string, conv dbq.AgentConversation, agentID uuid.UUID) (dbq.Run, error) {
@@ -281,21 +282,26 @@ func (h *conversationsHandler) awaitSuspendedRun(ctx context.Context, q *dbq.Que
 		}
 		switch run.Status {
 		case "suspended":
+			if err := agentapi.ValidateSuspendedCheckpoint(run.Checkpoint); err != nil {
+				return dbq.Run{}, fmt.Errorf("run checkpoint is invalid: %w", err)
+			}
 			return run, nil
 		case "running":
-			// Still in flight — the suspend write hasn't landed yet (or it
-			// won't). Wait until the deadline, then give up.
-			if time.Now().After(deadline) {
-				return dbq.Run{}, errors.New("run did not suspend in time; try again")
-			}
-			select {
-			case <-ctx.Done():
-				return dbq.Run{}, ctx.Err()
-			case <-time.After(resumeWaitInterval):
-			}
 		default:
 			// success / error / failed / cancelled — already terminal.
 			return dbq.Run{}, errors.New("run already finished; nothing to confirm")
+		}
+
+		// The resumable state consists of status='suspended' and a checkpoint.
+		// A running row or an incomplete suspended row can become resumable
+		// while the completion transaction is still in flight on another replica.
+		if time.Now().After(deadline) {
+			return dbq.Run{}, errors.New("run did not become resumable in time; try again")
+		}
+		select {
+		case <-ctx.Done():
+			return dbq.Run{}, ctx.Err()
+		case <-time.After(resumeWaitInterval):
 		}
 	}
 }
@@ -497,6 +503,7 @@ func (h *conversationsHandler) Prompt(w http.ResponseWriter, r *http.Request) {
 	// guessing the conversation's latest suspended one. awaitSuspendedRun
 	// also tolerates the race where the approval beats the agent's async
 	// suspend write. An explicit approve/deny must name its run.
+	var claimedResume *dbq.Run
 	if req.ResumeRunId != "" {
 		run, werr := h.awaitSuspendedRun(ctx, q, req.ResumeRunId, conv, agentID)
 		if werr != nil {
@@ -517,6 +524,7 @@ func (h *conversationsHandler) Prompt(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusConflict, "confirmation has already been resolved")
 			return
 		}
+		claimedResume = &run
 		input.ResumeRunID = req.ResumeRunId
 		input.Approved = req.Approved
 		// On deny, sol persists the re-reason nudge ("Rejected by user.")
@@ -544,6 +552,11 @@ func (h *conversationsHandler) Prompt(w http.ResponseWriter, r *http.Request) {
 		// attaches resume fields; another replica forwards its text as a new turn.
 		// airlockvet:allow-dbq reason: resolves a stranded suspended run; caller already proven owner of the conversation
 		if suspendedRun, err := q.GetLatestSuspendedRunByConversation(ctx, convIDStr); err == nil {
+			if err := agentapi.ValidateSuspendedCheckpoint(suspendedRun.Checkpoint); err != nil {
+				h.convLocks.Unlock(convIDStr)
+				writeError(w, http.StatusConflict, "pending run checkpoint is invalid")
+				return
+			}
 			// airlockvet:allow-dbq reason: resolves a stranded suspended run; caller already proven owner of the conversation
 			resolved, rerr := q.ResolveSuspendedRun(ctx, suspendedRun.ID)
 			if rerr != nil {
@@ -553,6 +566,7 @@ func (h *conversationsHandler) Prompt(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if resolved == 1 {
+				claimedResume = &suspendedRun
 				input.ResumeRunID = convert.PgUUIDToString(suspendedRun.ID)
 				approved := false
 				input.Approved = &approved
@@ -565,6 +579,20 @@ func (h *conversationsHandler) Prompt(w http.ResponseWriter, r *http.Request) {
 	// since we stream it in a goroutine after returning 200 to the client.
 	rc, runID, err := h.dispatcher.ForwardPrompt(context.Background(), agentID, input, nil, &userID)
 	if err != nil {
+		if claimedResume != nil {
+			rollbackCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			// airlockvet:allow-dbq reason: restores the owned conversation's claimed run only when no successor resume exists
+			rolledBack, rollbackErr := q.RollbackPromptRunResume(rollbackCtx, dbq.RollbackPromptRunResumeParams{
+				ID: claimedResume.ID, AgentID: toPgUUID(agentID), TriggerRef: convIDStr,
+			})
+			cancel()
+			if rollbackErr != nil {
+				h.logger.Error("rollback failed prompt resume", zap.Error(rollbackErr))
+			} else if rolledBack == 0 {
+				h.logger.Info("prompt resume remains resolved because a successor owns it",
+					zap.String("resume_run_id", convert.PgUUIDToString(claimedResume.ID)))
+			}
+		}
 		h.convLocks.Unlock(convIDStr)
 		if status, msg, ok := notRunnableResponse(err); ok {
 			writeError(w, status, msg)

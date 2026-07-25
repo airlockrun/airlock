@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/airlockrun/airlock/db/dbq"
@@ -406,6 +407,138 @@ func TestPromptRejectsInvalidAttachmentPathBeforeCreatingConversation(t *testing
 	}
 	if len(rows) != 0 {
 		t.Fatalf("invalid attachment created %d conversations", len(rows))
+	}
+}
+
+func TestAwaitSuspendedRunRequiresCheckpoint(t *testing.T) {
+	skipIfNoDB(t)
+	agentID, userID := testAgentAndUser(t)
+	convID := testConversation(t, agentID, userID)
+	q := dbq.New(testDB.Pool())
+	ctx := context.Background()
+	conv, err := q.GetConversationByID(ctx, toPgUUID(convID))
+	if err != nil {
+		t.Fatalf("GetConversationByID: %v", err)
+	}
+	run, err := q.CreateRun(ctx, dbq.CreateRunParams{
+		AgentID:      toPgUUID(agentID),
+		InputPayload: []byte(`{}`),
+		SourceRef:    "",
+		TriggerType:  "prompt",
+		TriggerRef:   convID.String(),
+		CallerAccess: "user",
+	})
+	if err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+	if err := q.UpdateRunComplete(ctx, dbq.UpdateRunCompleteParams{
+		ID: run.ID, Status: "suspended", Actions: []byte(`[]`),
+	}); err != nil {
+		t.Fatalf("UpdateRunComplete: %v", err)
+	}
+
+	h := newTestConvHandler()
+	waitCtx, cancel := context.WithTimeout(ctx, 20*time.Millisecond)
+	defer cancel()
+	if _, err := h.awaitSuspendedRun(waitCtx, q, pgUUID(run.ID).String(), conv, agentID); err == nil {
+		t.Fatal("awaitSuspendedRun accepted a suspended run without a checkpoint")
+	}
+
+	for _, checkpoint := range [][]byte{
+		[]byte(`{}`),
+		[]byte(`[]`),
+		[]byte(`"checkpoint"`),
+		[]byte(`{"suspensionContext":null}`),
+		[]byte(`{"suspensionContext":{"reason":""}}`),
+		[]byte(`{"suspensionContext":{"reason":"confirmation"}}`),
+	} {
+		if err := q.UpdateRunCheckpoint(ctx, dbq.UpdateRunCheckpointParams{ID: run.ID, Checkpoint: checkpoint}); err != nil {
+			t.Fatalf("UpdateRunCheckpoint(%s): %v", checkpoint, err)
+		}
+		if _, err := h.awaitSuspendedRun(ctx, q, pgUUID(run.ID).String(), conv, agentID); err == nil {
+			t.Fatalf("awaitSuspendedRun accepted invalid checkpoint %s", checkpoint)
+		}
+	}
+
+	checkpoint := []byte(`{"messages":[],"suspensionContext":{"reason":"permission"}}`)
+	if err := q.UpdateRunCheckpoint(ctx, dbq.UpdateRunCheckpointParams{ID: run.ID, Checkpoint: checkpoint}); err != nil {
+		t.Fatalf("UpdateRunCheckpoint: %v", err)
+	}
+	got, err := h.awaitSuspendedRun(ctx, q, pgUUID(run.ID).String(), conv, agentID)
+	if err != nil {
+		t.Fatalf("awaitSuspendedRun with checkpoint: %v", err)
+	}
+	if got.Status != "suspended" || len(got.Checkpoint) == 0 {
+		t.Fatalf("resumable run = status %q checkpoint %s", got.Status, got.Checkpoint)
+	}
+}
+
+func TestRollbackPromptRunResumeRequiresNoSuccessor(t *testing.T) {
+	skipIfNoDB(t)
+	agentID, userID := testAgentAndUser(t)
+	convID := testConversation(t, agentID, userID)
+	q := dbq.New(testDB.Pool())
+	ctx := context.Background()
+	createSuspended := func(t *testing.T) dbq.Run {
+		t.Helper()
+		run, err := q.CreateRun(ctx, dbq.CreateRunParams{
+			AgentID: toPgUUID(agentID), InputPayload: []byte(`{}`), SourceRef: "",
+			TriggerType: "prompt", TriggerRef: convID.String(), CallerAccess: "user",
+		})
+		if err != nil {
+			t.Fatalf("CreateRun: %v", err)
+		}
+		if err := q.UpdateRunComplete(ctx, dbq.UpdateRunCompleteParams{ID: run.ID, Status: "suspended", Actions: []byte(`[]`)}); err != nil {
+			t.Fatalf("UpdateRunComplete: %v", err)
+		}
+		if rows, err := q.ResolveSuspendedRun(ctx, run.ID); err != nil || rows != 1 {
+			t.Fatalf("ResolveSuspendedRun: rows=%d err=%v", rows, err)
+		}
+		return run
+	}
+	rollback := func(t *testing.T, run dbq.Run) int64 {
+		t.Helper()
+		rows, err := q.RollbackPromptRunResume(ctx, dbq.RollbackPromptRunResumeParams{
+			ID: run.ID, AgentID: toPgUUID(agentID), TriggerRef: convID.String(),
+		})
+		if err != nil {
+			t.Fatalf("RollbackPromptRunResume: %v", err)
+		}
+		return rows
+	}
+
+	withoutSuccessor := createSuspended(t)
+	if rows := rollback(t, withoutSuccessor); rows != 1 {
+		t.Fatalf("rollback without successor rows = %d, want 1", rows)
+	}
+	stored, err := q.GetRunByID(ctx, withoutSuccessor.ID)
+	if err != nil {
+		t.Fatalf("GetRunByID: %v", err)
+	}
+	if stored.Status != "suspended" || stored.FinishedAt.Valid {
+		t.Fatalf("rolled-back run = status %q finished_at valid %v", stored.Status, stored.FinishedAt.Valid)
+	}
+
+	withSuccessor := createSuspended(t)
+	if _, err := q.CreateRun(ctx, dbq.CreateRunParams{
+		AgentID:      toPgUUID(agentID),
+		InputPayload: []byte(`{"resumeRunId":"` + pgUUID(withSuccessor.ID).String() + `"}`),
+		SourceRef:    "",
+		TriggerType:  "prompt",
+		TriggerRef:   convID.String(),
+		CallerAccess: "user",
+	}); err != nil {
+		t.Fatalf("CreateRun successor: %v", err)
+	}
+	if rows := rollback(t, withSuccessor); rows != 0 {
+		t.Fatalf("rollback with successor rows = %d, want 0", rows)
+	}
+	stored, err = q.GetRunByID(ctx, withSuccessor.ID)
+	if err != nil {
+		t.Fatalf("GetRunByID: %v", err)
+	}
+	if stored.Status != "success" {
+		t.Fatalf("successor-owned run status = %q, want success", stored.Status)
 	}
 }
 

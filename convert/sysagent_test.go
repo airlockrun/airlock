@@ -1,6 +1,12 @@
 package convert
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/airlockrun/airlock/db/dbq"
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
+)
 
 // TestPendingSystemToolFromCheckpoint verifies the LLM's pending tool
 // call (stored as the sol.SuspensionContext JSON blob on the
@@ -45,4 +51,23 @@ func TestPendingSystemToolFromCheckpoint(t *testing.T) {
 			t.Errorf("malformed JSON should return nil, got %+v", got)
 		}
 	})
+}
+
+func TestSysConversationToProtoPendingToolRunID(t *testing.T) {
+	conversationID := uuid.New()
+	userID := uuid.New()
+	runID := uuid.New()
+	got := SysConversationToProto(dbq.SystemConversation{
+		ID:             pgtype.UUID{Bytes: conversationID, Valid: true},
+		UserID:         pgtype.UUID{Bytes: userID, Valid: true},
+		Status:         "awaiting_confirmation",
+		Checkpoint:     []byte(`{"pendingToolCalls":[{"id":"call-1","name":"delete_agent","input":{"agent":"bot"}}]}`),
+		SuspendedRunID: pgtype.UUID{Bytes: runID, Valid: true},
+	})
+	if got.PendingTool == nil {
+		t.Fatal("PendingTool is nil")
+	}
+	if got.PendingTool.RunId != runID.String() {
+		t.Fatalf("PendingTool.RunId = %q, want %q", got.PendingTool.RunId, runID)
+	}
 }

@@ -23,6 +23,9 @@ func SysConversationToProto(t dbq.SystemConversation) *airlockv1.SystemConversat
 	}
 	if t.Status == "awaiting_confirmation" && len(t.Checkpoint) > 0 {
 		info.PendingTool = PendingSystemToolFromCheckpoint(t.Checkpoint)
+		if info.PendingTool != nil && t.SuspendedRunID.Valid {
+			info.PendingTool.RunId = uuid.UUID(t.SuspendedRunID.Bytes).String()
+		}
 	}
 	return info
 }

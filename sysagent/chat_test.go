@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -13,8 +14,14 @@ import (
 	"github.com/airlockrun/airlock/authz"
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/airlockrun/airlock/service"
+	"github.com/airlockrun/goai"
+	"github.com/airlockrun/goai/stream"
+	"github.com/airlockrun/goai/testutil"
+	"github.com/airlockrun/goai/tool"
 	"github.com/airlockrun/sol"
+	"github.com/airlockrun/sol/agent"
 	"github.com/airlockrun/sol/bus"
+	"github.com/airlockrun/sol/session"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"
@@ -79,6 +86,220 @@ func TestIsDoomLoopSuspension(t *testing.T) {
 		})
 	}
 }
+
+func TestDispatchResumeRequiresSeparateApprovals(t *testing.T) {
+	calls := []stream.ToolCall{
+		{ID: "gated-a", Name: "gated_a", Input: json.RawMessage(`{"n":1}`)},
+		{ID: "safe", Name: "safe", Input: json.RawMessage(`{"n":2}`)},
+		{ID: "gated-b", Name: "gated_b", Input: json.RawMessage(`{"n":3}`)},
+		{ID: "tail", Name: "tail", Input: json.RawMessage(`{"n":4}`)},
+	}
+	var effects, order []string
+	tools := permissionResumeTools(&effects)
+	store := &permissionResumeStore{
+		messages: []session.Message{session.FromGoAIMessage(goai.NewAssistantMessageWithParts(
+			goai.ToolCallPart{ID: calls[0].ID, Name: calls[0].Name, Input: calls[0].Input},
+			goai.ToolCallPart{ID: calls[1].ID, Name: calls[1].Name, Input: calls[1].Input},
+			goai.ToolCallPart{ID: calls[2].ID, Name: calls[2].Name, Input: calls[2].Input},
+			goai.ToolCallPart{ID: calls[3].ID, Name: calls[3].Name, Input: calls[3].Input},
+		))},
+		order: &order,
+	}
+	model := testutil.NewMockLanguageModel(testutil.MockLanguageModelOptions{
+		StreamResponse: testutil.MockTextResponse("complete", testutil.MockUsage(1, 1)),
+	})
+
+	firstRunner := newPermissionResumeRunner(tools, store, model, &order)
+	first := permissionCheckpoint(t, "gated-a", calls)
+	result, err := (&Service{}).dispatchResume(context.Background(), firstRunner, first, true)
+	if err != nil {
+		t.Fatalf("dispatchResume first approval: %v", err)
+	}
+	if result.Status != sol.RunSuspended || result.SuspensionContext == nil || result.SuspensionContext.ToolCallID != "gated-b" {
+		t.Fatalf("first result = %#v, want suspension at gated-b", result)
+	}
+	if !reflect.DeepEqual(effects, []string{"gated_a", "safe"}) {
+		t.Fatalf("effects after first approval = %v", effects)
+	}
+	if len(model.DoStreamCalls) != 0 {
+		t.Fatalf("model calls after later gate = %d, want 0", len(model.DoStreamCalls))
+	}
+	wantFirstOrder := []string{
+		"load", "persist:gated-a", "result:gated-a",
+		"persist:safe", "result:safe", "permission:gated-b",
+	}
+	if !reflect.DeepEqual(order, wantFirstOrder) {
+		t.Fatalf("first approval order = %v, want %v", order, wantFirstOrder)
+	}
+
+	order = nil
+	secondRunner := newPermissionResumeRunner(tools, store, model, &order)
+	second := permissionConversation(t, result.SuspensionContext)
+	result, err = (&Service{}).dispatchResume(context.Background(), secondRunner, second, true)
+	if err != nil {
+		t.Fatalf("dispatchResume second approval: %v", err)
+	}
+	if result.Status != sol.RunCompleted {
+		t.Fatalf("second result status = %s, want completed", result.Status)
+	}
+	if !reflect.DeepEqual(effects, []string{"gated_a", "safe", "gated_b", "tail"}) {
+		t.Fatalf("effects after second approval = %v", effects)
+	}
+	if len(model.DoStreamCalls) != 1 {
+		t.Fatalf("model calls after second approval = %d, want 1", len(model.DoStreamCalls))
+	}
+	wantSecondOrder := []string{
+		"load", "persist:gated-b", "result:gated-b",
+		"persist:tail", "result:tail", "load",
+	}
+	if !reflect.DeepEqual(order, wantSecondOrder) {
+		t.Fatalf("second approval order = %v, want %v", order, wantSecondOrder)
+	}
+}
+
+func TestDispatchResumeDenialSkipsOrderedTail(t *testing.T) {
+	calls := []stream.ToolCall{
+		{ID: "gated-a", Name: "gated_a"},
+		{ID: "safe", Name: "safe"},
+		{ID: "gated-b", Name: "gated_b"},
+	}
+	var effects, order []string
+	tools := permissionResumeTools(&effects)
+	store := &permissionResumeStore{
+		messages: permissionAssistantHistory(calls),
+		order:    &order,
+	}
+	model := testutil.NewMockLanguageModel(testutil.MockLanguageModelOptions{
+		StreamResponse: testutil.MockTextResponse("denied", testutil.MockUsage(1, 1)),
+	})
+	runner := newPermissionResumeRunner(tools, store, model, &order)
+
+	result, err := (&Service{}).dispatchResume(context.Background(), runner, permissionCheckpoint(t, "gated-a", calls), false)
+	if err != nil {
+		t.Fatalf("dispatchResume denial: %v", err)
+	}
+	if result.Status != sol.RunCompleted {
+		t.Fatalf("result status = %s, want completed", result.Status)
+	}
+	if len(effects) != 0 {
+		t.Fatalf("denial executed tools: %v", effects)
+	}
+	if len(model.DoStreamCalls) != 1 {
+		t.Fatalf("model calls = %d, want 1", len(model.DoStreamCalls))
+	}
+	var resultIDs []string
+	for _, entry := range order {
+		if strings.HasPrefix(entry, "result:") {
+			resultIDs = append(resultIDs, strings.TrimPrefix(entry, "result:"))
+		}
+	}
+	if !reflect.DeepEqual(resultIDs, []string{"gated-a", "safe", "gated-b"}) {
+		t.Fatalf("denial result order = %v", resultIDs)
+	}
+	wantReasons := map[string]string{
+		"gated-a": "Execution was denied by the user.",
+		"safe":    "This tool was not executed because an earlier tool call in the same ordered batch was denied by the user.",
+		"gated-b": "This tool was not executed because an earlier tool call in the same ordered batch was denied by the user.",
+	}
+	for _, msg := range store.messages {
+		if msg.Role != "tool" || len(msg.Parts) == 0 || msg.Parts[0].Tool == nil {
+			continue
+		}
+		part := msg.Parts[0].Tool
+		if part.Outcome != "denied" {
+			t.Errorf("tool %s outcome = %q, want denied", part.CallID, part.Outcome)
+		}
+		if part.Output != wantReasons[part.CallID] {
+			t.Errorf("tool %s reason = %q, want %q", part.CallID, part.Output, wantReasons[part.CallID])
+		}
+	}
+}
+
+func permissionAssistantHistory(calls []stream.ToolCall) []session.Message {
+	parts := make([]goai.Part, len(calls))
+	for i, call := range calls {
+		parts[i] = goai.ToolCallPart{ID: call.ID, Name: call.Name, Input: call.Input}
+	}
+	return []session.Message{session.FromGoAIMessage(goai.NewAssistantMessageWithParts(parts...))}
+}
+
+func permissionResumeTools(effects *[]string) tool.Set {
+	build := func(name string) tool.Tool {
+		return tool.New(name).Description(name).Execute(func(_ context.Context, _ json.RawMessage, _ tool.CallOptions) (tool.Result, error) {
+			*effects = append(*effects, name)
+			return tool.Result{Output: name + " complete"}, nil
+		}).Build()
+	}
+	return tool.Set{
+		"gated_a": build("gated_a"),
+		"safe":    build("safe"),
+		"gated_b": build("gated_b"),
+		"tail":    build("tail"),
+	}
+}
+
+func newPermissionResumeRunner(tools tool.Set, store session.SessionStore, model stream.Model, order *[]string) *sol.Runner {
+	exec := newGatedExecutor(tool.NewLocalExecutor(tools, nil))
+	exec.isDestructive = func(name string) bool { return name == "gated_a" || name == "gated_b" }
+	runBus := bus.New()
+	runBus.Subscribe(bus.StreamToolResult, func(event bus.Event) {
+		result := event.Properties.(stream.ToolResultEvent)
+		*order = append(*order, "result:"+result.ToolCallID)
+	})
+	runBus.Subscribe(bus.PermissionAsked, func(event bus.Event) {
+		asked := event.Properties.(bus.PermissionAskedPayload)
+		*order = append(*order, "permission:"+asked.ToolCallID)
+	})
+	return sol.NewRunner(sol.RunnerOptions{
+		Agent:        &agent.Agent{Name: "sysagent", Tools: tools, MaxSteps: 5},
+		Executor:     exec,
+		SessionStore: store,
+		Model:        model,
+		Bus:          runBus,
+		Quiet:        true,
+	})
+}
+
+func permissionCheckpoint(t *testing.T, currentID string, calls []stream.ToolCall) dbq.SystemConversation {
+	t.Helper()
+	return permissionConversation(t, &sol.SuspensionContext{
+		Reason:           "permission",
+		Data:             &bus.ErrPermissionNeeded{Permission: "test", ToolCallID: currentID},
+		ToolCallID:       currentID,
+		PendingToolCalls: calls,
+	})
+}
+
+func permissionConversation(t *testing.T, suspension *sol.SuspensionContext) dbq.SystemConversation {
+	t.Helper()
+	checkpoint, err := json.Marshal(suspension)
+	if err != nil {
+		t.Fatalf("marshal permission checkpoint: %v", err)
+	}
+	return dbq.SystemConversation{Checkpoint: checkpoint}
+}
+
+type permissionResumeStore struct {
+	messages []session.Message
+	order    *[]string
+}
+
+func (s *permissionResumeStore) Load(context.Context) ([]session.Message, error) {
+	*s.order = append(*s.order, "load")
+	return append([]session.Message(nil), s.messages...), nil
+}
+
+func (s *permissionResumeStore) Append(_ context.Context, messages []session.Message) error {
+	for _, msg := range messages {
+		if len(msg.Parts) > 0 && msg.Parts[0].Tool != nil {
+			*s.order = append(*s.order, "persist:"+msg.Parts[0].Tool.CallID)
+		}
+	}
+	s.messages = append(s.messages, messages...)
+	return nil
+}
+
+func (*permissionResumeStore) Compact(context.Context, []session.Message, int) error { return nil }
 
 type suspendedSystemFixture struct {
 	service        *Service

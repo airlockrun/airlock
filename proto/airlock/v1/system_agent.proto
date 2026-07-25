@@ -31,6 +31,7 @@ message PendingSystemTool {
   string call_id = 1;
   string tool_name = 2;
   string args_json = 3;
+  string run_id = 4;
 }
 
 // SystemMessageInfo mirrors AgentMessageInfo so the existing frontend

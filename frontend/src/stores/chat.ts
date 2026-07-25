@@ -800,6 +800,8 @@ export const useChatStore = defineStore('chat', () => {
   async function sendMessage(agentId: string, text: string, approved?: boolean, filePaths?: string[]) {
     boundAgentId.value = agentId
     const isResume = approved !== undefined
+    const confirmationToRestore = isResume ? pendingConfirmation.value : null
+    const runIdToRestore = isResume ? currentRunId.value : null
     // The run this confirmation belongs to (from the run.confirmation_required
     // event). Sent so the backend resumes THIS exact run rather than guessing
     // the conversation's latest suspended one — present for approve/deny and
@@ -872,9 +874,10 @@ export const useChatStore = defineStore('chat', () => {
       // refresh. Mirror what the backend will store so the muted label
       // shows immediately; loadConversation later replaces the array
       // wholesale (no dedup needed).
+      optimisticID = `pending-control-${Date.now()}`
       messages.value.push({
         $typeName: 'airlock.v1.AgentMessageInfo',
-        id: `pending-control-${Date.now()}`,
+        id: optimisticID,
         role: 'user',
         source: 'control',
         content: text,
@@ -941,6 +944,27 @@ export const useChatStore = defineStore('chat', () => {
       if (compactRun.value === compactRequest) compactRun.value = null
       if (optimisticID) {
         messages.value = messages.value.filter(m => m.id !== optimisticID)
+      }
+      if (isResume) {
+        try {
+          const { data } = await api.get(`/api/v1/conversations/${conversationId.value}`)
+          const resp = fromJson(GetConversationResponseSchema, data)
+          if (resp.pendingConfirmation) {
+            restorePendingConfirmation(resp.pendingConfirmation, messages.value)
+            currentRunId.value = resp.pendingConfirmation.runId || null
+            sending.value = false
+          } else {
+            const failedRunId = confirmationToRestore?.runId || runIdToRestore
+            pendingConfirmation.value = null
+            if (!currentRunId.value || currentRunId.value === failedRunId) {
+              currentRunId.value = resp.inFlightRunId || null
+            }
+            sending.value = currentRunId.value !== null
+          }
+        } catch {
+          pendingConfirmation.value = confirmationToRestore
+          currentRunId.value = runIdToRestore
+        }
       }
       throw err
     }

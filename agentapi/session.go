@@ -52,34 +52,29 @@ func (h *Handler) SessionLoad(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Belt-and-suspenders, BOTH orphan directions. Either shape makes the
-	// next LLM turn 400 at the provider and, because the conversation is
-	// permanent, poisons every subsequent prompt until repaired. We
-	// degrade in-memory and stay live; the warn logs surface that a
-	// durable write-path invariant was missed.
-	//
-	// 1. tool-result with no preceding tool-call → insert a synthetic
-	//    assistant tool-call before it. Runs first so the synthesized
-	//    calls are visible to the forward pass below.
-	if fixed, repaired := reconcileDanglingToolResults(toPgUUID(convID), dbMsgs); len(repaired) > 0 {
-		for _, op := range repaired {
-			h.logger.Warn("dangling tool_result surfaced at SessionLoad — assistant tool_call was never persisted",
-				zap.String("conversation_id", convID.String()),
-				zap.String("tool_call_id", op.ToolCallID),
-				zap.String("tool_name", op.ToolName))
-		}
-		dbMsgs = fixed
+	// Provider APIs require every assistant tool-call turn to be followed
+	// immediately by all of its tool results. Normalize the in-memory load so
+	// interrupted writes and late results cannot poison subsequent prompts.
+	fixed, danglingResults, missingResults, err := normalizeToolOrdering(toPgUUID(convID), dbMsgs)
+	if err != nil {
+		h.logger.Error("session load: invalid tool message history",
+			zap.String("conversation_id", convID.String()),
+			zap.Error(err))
+		writeJSONError(w, http.StatusInternalServerError, "invalid tool message history")
+		return
 	}
-
-	// 2. tool-call with no matching tool-result → synthesize the result.
-	if orphans := detectOrphanToolCalls(dbMsgs); len(orphans) > 0 {
-		for _, op := range orphans {
-			h.logger.Warn("unpaired tool_call surfaced at SessionLoad — RunComplete synthesis missed",
-				zap.String("conversation_id", convID.String()),
-				zap.String("tool_call_id", op.ToolCallID),
-				zap.String("tool_name", op.ToolName))
-			dbMsgs = append(dbMsgs, orphanToolResultMessage(toPgUUID(convID), op))
-		}
+	dbMsgs = fixed
+	for _, op := range danglingResults {
+		h.logger.Warn("dangling tool_result surfaced at SessionLoad — assistant tool_call was never persisted",
+			zap.String("conversation_id", convID.String()),
+			zap.String("tool_call_id", op.ToolCallID),
+			zap.String("tool_name", op.ToolName))
+	}
+	for _, op := range missingResults {
+		h.logger.Warn("unpaired tool_call surfaced at SessionLoad — RunComplete synthesis missed",
+			zap.String("conversation_id", convID.String()),
+			zap.String("tool_call_id", op.ToolCallID),
+			zap.String("tool_name", op.ToolName))
 	}
 
 	msgs := make([]session.Message, 0, len(dbMsgs))
