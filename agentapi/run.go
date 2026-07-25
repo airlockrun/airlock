@@ -1,16 +1,19 @@
 package agentapi
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
+	"reflect"
 	"strings"
 
 	"github.com/airlockrun/agentsdk/wire"
 	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/builder"
 	"github.com/airlockrun/airlock/db/dbq"
+	"github.com/jackc/pgx/v5"
 	"go.uber.org/zap"
 )
 
@@ -60,7 +63,7 @@ func (h *Handler) RunComplete(w http.ResponseWriter, r *http.Request) {
 	//
 	// agentsdk classifies the error structurally (by call-site, not regex)
 	// and sends the kind in req.ErrorKind. We trust it as-is.
-	q := dbq.New(h.db.Pool())
+	//
 	// Authoritative cap on per-action stdout/stderr in the audit log.
 	// The SDK already truncates on its side; we re-enforce here so
 	// the runs.actions JSONB invariant holds regardless of SDK
@@ -71,7 +74,26 @@ func (h *Handler) RunComplete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	actions := truncateActionsJSON(actionsJSON)
-	rows, err := q.UpsertRunComplete(r.Context(), dbq.UpsertRunCompleteParams{
+	checkpoint := bytes.TrimSpace(req.Checkpoint)
+	if req.Status == "suspended" {
+		if err := ValidateSuspendedCheckpoint(checkpoint); err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
+
+	// The suspended status and its checkpoint form one resumable state. Keep
+	// both writes in one transaction so a concurrent confirmation cannot
+	// observe status='suspended' before the checkpoint is available.
+	tx, err := h.db.Pool().Begin(r.Context())
+	if err != nil {
+		h.logger.Error("begin run completion transaction failed", zap.Error(err))
+		writeJSONError(w, http.StatusInternalServerError, "failed to record run completion")
+		return
+	}
+	defer tx.Rollback(r.Context())
+	qtx := dbq.New(h.db.Pool()).WithTx(tx)
+	rows, err := qtx.UpsertRunComplete(r.Context(), dbq.UpsertRunCompleteParams{
 		ID:           toPgUUID(runUUID),
 		AgentID:      toPgUUID(agentID),
 		Status:       req.Status,
@@ -80,6 +102,7 @@ func (h *Handler) RunComplete(w http.ResponseWriter, r *http.Request) {
 		Actions:      actions,
 		StdoutLog:    formatRunLogs(req.Logs),
 		PanicTrace:   req.PanicTrace,
+		Checkpoint:   checkpoint,
 	})
 	if err != nil {
 		h.logger.Error("upsert run complete failed", zap.Error(err))
@@ -87,15 +110,49 @@ func (h *Handler) RunComplete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if rows == 0 {
-		writeJSONError(w, http.StatusNotFound, "run not found")
+		stored, getErr := qtx.GetRunByIDAndAgent(r.Context(), dbq.GetRunByIDAndAgentParams{
+			ID: toPgUUID(runUUID), AgentID: toPgUUID(agentID),
+		})
+		switch {
+		case errors.Is(getErr, pgx.ErrNoRows):
+			writeJSONError(w, http.StatusNotFound, "run not found")
+		case getErr != nil:
+			h.logger.Error("load existing run completion failed", zap.Error(getErr))
+			writeJSONError(w, http.StatusInternalServerError, "failed to record run completion")
+		case runCompletionMatches(stored, req, actions, checkpoint):
+			w.WriteHeader(http.StatusOK)
+		default:
+			writeJSONError(w, http.StatusConflict, "run already completed")
+		}
 		return
 	}
+	if err := tx.Commit(r.Context()); err != nil {
+		h.logger.Error("commit run completion transaction failed", zap.Error(err))
+		writeJSONError(w, http.StatusInternalServerError, "failed to record run completion")
+		return
+	}
+	q := dbq.New(h.db.Pool())
 
-	// Persist the error as a synthetic assistant message in the conversation
-	// (if the run is conversation-attached) so the chat surface keeps the
-	// banner after refresh. WS already paints it transiently. Cron- or
-	// webhook-triggered runs that never wrote a message return no rows from
-	// GetConversationIDByRun and we skip silently.
+	// Aggregate LLM telemetry (tokens, cost, call count) onto the run row
+	// from the llm_usage ledger (the proxy writes one row per model
+	// round-trip with cost already computed). Non-fatal — the run is
+	// already marked complete; a failed rollup just means the run-list
+	// shows zeros until the next idempotent recompute.
+	if err := q.UpdateRunLLMStats(r.Context(), toPgUUID(runUUID)); err != nil {
+		h.logger.Error("aggregate run llm stats failed", zap.Error(err))
+	}
+
+	// Tool-call/tool-result pairing invariant: provider APIs reject the next
+	// LLM turn if any assistant tool_use isn't followed by a matching
+	// tool_result. Cancel, deadline-exceeded, and panic-mid-tool all leave
+	// orphans. Synthesize them here so the conversation is safe to feed
+	// back to the LLM. SessionLoad has a belt-and-suspenders fallback.
+	if req.Status != "success" && req.Status != "suspended" {
+		SynthesizeOrphanToolResults(r.Context(), q, runUUID, req.Status, h.logger)
+	}
+
+	// Persist the error after orphan synthesis so provider history remains
+	// assistant tool-call -> synthetic tool result -> assistant error.
 	if req.Status == "error" && req.Error != "" {
 		convID, lookupErr := q.GetConversationIDByRun(r.Context(), toPgUUID(runUUID))
 		if lookupErr == nil && convID.Valid {
@@ -111,34 +168,6 @@ func (h *Handler) RunComplete(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Aggregate LLM telemetry (tokens, cost, call count) onto the run row
-	// from the llm_usage ledger (the proxy writes one row per model
-	// round-trip with cost already computed). Non-fatal — the run is
-	// already marked complete; a failed rollup just means the run-list
-	// shows zeros until the next idempotent recompute.
-	if err := q.UpdateRunLLMStats(r.Context(), toPgUUID(runUUID)); err != nil {
-		h.logger.Error("aggregate run llm stats failed", zap.Error(err))
-	}
-
-	// Store checkpoint for suspended runs.
-	if len(req.Checkpoint) > 0 {
-		if err := q.UpdateRunCheckpoint(r.Context(), dbq.UpdateRunCheckpointParams{
-			ID:         toPgUUID(runUUID),
-			Checkpoint: req.Checkpoint,
-		}); err != nil {
-			h.logger.Error("store checkpoint failed", zap.Error(err))
-		}
-	}
-
-	// Tool-call/tool-result pairing invariant: provider APIs reject the next
-	// LLM turn if any assistant tool_use isn't followed by a matching
-	// tool_result. Cancel, deadline-exceeded, and panic-mid-tool all leave
-	// orphans. Synthesize them here so the conversation is safe to feed
-	// back to the LLM. SessionLoad has a belt-and-suspenders fallback.
-	if req.Status != "success" && req.Status != "suspended" {
-		SynthesizeOrphanToolResults(r.Context(), q, runUUID, req.Status, h.logger)
-	}
-
 	// Publish terminal WS event so the live UI flips when the streaming
 	// /prompt connection died (cancel, network blip, container restart).
 	// Duplicates PublishRunEvents in the happy path; the chat store
@@ -146,6 +175,27 @@ func (h *Handler) RunComplete(w http.ResponseWriter, r *http.Request) {
 	PublishRunTerminal(r.Context(), h.pubsub, agentID, runUUID, req.Status, req.Error)
 
 	w.WriteHeader(http.StatusOK)
+}
+
+func runCompletionMatches(run dbq.Run, req wire.RunCompleteRequest, actions, checkpoint []byte) bool {
+	return run.Status == req.Status &&
+		run.ErrorMessage == req.Error &&
+		run.ErrorKind == req.ErrorKind &&
+		run.StdoutLog == formatRunLogs(req.Logs) &&
+		run.PanicTrace == req.PanicTrace &&
+		jsonEqual(run.Actions, actions) &&
+		jsonEqual(run.Checkpoint, checkpoint)
+}
+
+func jsonEqual(a, b []byte) bool {
+	if len(bytes.TrimSpace(a)) == 0 || len(bytes.TrimSpace(b)) == 0 {
+		return len(bytes.TrimSpace(a)) == 0 && len(bytes.TrimSpace(b)) == 0
+	}
+	var av, bv any
+	if json.Unmarshal(a, &av) != nil || json.Unmarshal(b, &bv) != nil {
+		return false
+	}
+	return reflect.DeepEqual(av, bv)
 }
 
 // GetCheckpoint handles GET /api/agent/run/{runID}/checkpoint.

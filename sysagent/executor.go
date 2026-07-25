@@ -12,17 +12,16 @@ import (
 //
 //  1. Tool fires; if isDestructive(name) → pm.Ask(...).
 //  2. Ask checks PermissionManager rules for {permission=<toolName>,
-//     pattern=*}. If a matching "allow" rule exists (set by the
-//     resume path after the user approved), proceed.
+//     pattern=*}. During permission resolution, Sol grants only the current
+//     approved call and evaluates later calls under the normal manager.
 //  3. Otherwise Ask returns *bus.ErrPermissionNeeded. The error
 //     propagates through Sol's runner, which suspends the run with
 //     RunResult.Status = RunSuspended + a SuspensionContext.
 //  4. The chat loop persists the SuspensionContext to
 //     system_conversations.checkpoint, emits a confirmation_required
 //     event, and returns. UI shows Approve/Deny.
-//  5. On Approve, the resume path adds an "allow" rule, executes the
-//     gated tools with the permissive PM (sol's pending-tool-call
-//     resolution), persists results, then Runner.Continue.
+//  5. On Approve, Sol executes the current call and the ordered tail until
+//     another gate is reached, persisting and publishing each result.
 //
 // Non-destructive tools delegate straight to the base.
 type gatedExecutor struct {

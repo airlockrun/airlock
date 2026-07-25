@@ -56,7 +56,7 @@ WHERE id = @id;
 -- context; the dispatcher's CreateRun would have set the real values.
 INSERT INTO runs (
     id, agent_id, status, error_message, error_kind, actions,
-    stdout_log, panic_trace, input_payload, source_ref,
+    stdout_log, panic_trace, checkpoint, input_payload, source_ref,
     trigger_type, trigger_ref, finished_at, duration_ms,
     caller_user_id, caller_conversation_id, caller_access,
     llm_calls, llm_tokens_in, llm_tokens_out, llm_tokens_cached, llm_cost_estimate,
@@ -64,7 +64,7 @@ INSERT INTO runs (
 )
 VALUES (
     @id, @agent_id, @status, @error_message, @error_kind, @actions,
-    @stdout_log, @panic_trace, '{}'::jsonb, '',
+    @stdout_log, @panic_trace, @checkpoint, '{}'::jsonb, '',
     'prompt', '', now(), 0,
     NULL, NULL, 'public',
     0, 0, 0, 0, 0,
@@ -77,9 +77,11 @@ ON CONFLICT (id) DO UPDATE SET
     actions = EXCLUDED.actions,
     stdout_log = EXCLUDED.stdout_log,
     panic_trace = EXCLUDED.panic_trace,
+    checkpoint = EXCLUDED.checkpoint,
     finished_at = now(),
     duration_ms = EXTRACT(EPOCH FROM (now() - runs.started_at))::integer * 1000
-WHERE runs.agent_id = EXCLUDED.agent_id;
+WHERE runs.agent_id = EXCLUDED.agent_id
+  AND runs.status = 'running';
 
 -- name: GetRunByID :one
 SELECT * FROM runs WHERE id = $1;
@@ -200,6 +202,24 @@ WHERE id = @id AND status = 'running';
 -- name: ResolveSuspendedRun :execrows
 UPDATE runs SET status = 'success', finished_at = now()
 WHERE id = @id AND status = 'suspended';
+
+-- name: RollbackPromptRunResume :execrows
+-- Restore a claimed prompt suspension only when dispatch did not create a
+-- successor. A successor carrying resumeRunId owns the attempt even if its
+-- subsequent container request fails.
+UPDATE runs AS resumed SET status = 'suspended', finished_at = NULL
+WHERE resumed.id = @id
+  AND resumed.agent_id = @agent_id
+  AND resumed.status = 'success'
+  AND resumed.trigger_type = 'prompt'
+  AND resumed.trigger_ref = @trigger_ref
+  AND NOT EXISTS (
+      SELECT 1 FROM runs AS successor
+      WHERE successor.agent_id = resumed.agent_id
+        AND successor.trigger_type = 'prompt'
+        AND successor.trigger_ref = resumed.trigger_ref
+        AND successor.input_payload->>'resumeRunId' = resumed.id::text
+  );
 
 -- name: ResetStuckRuns :exec
 UPDATE runs SET

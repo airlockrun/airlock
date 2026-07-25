@@ -14,14 +14,12 @@ import (
 	"github.com/airlockrun/airlock/realtime"
 	"github.com/airlockrun/airlock/service"
 	servicemodels "github.com/airlockrun/airlock/service/models"
-	"github.com/airlockrun/goai"
 	"github.com/airlockrun/goai/stream"
 	"github.com/airlockrun/goai/tool"
 	"github.com/airlockrun/sol"
 	"github.com/airlockrun/sol/agent"
 	"github.com/airlockrun/sol/bus"
 	"github.com/airlockrun/sol/eventstream"
-	"github.com/airlockrun/sol/session"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -338,6 +336,7 @@ func (s *Service) runChat(ctx context.Context, p authz.Principal, conversation d
 		sink = newPubSubSink(s.pubsub, conversationID, runID, p.UserID, s.logger)
 		unsub := sink.Forward(runBus)
 		defer unsub()
+		sink.OnRunStarted()
 	}
 
 	if extraSink != nil {
@@ -390,22 +389,12 @@ func (s *Service) runChat(ctx context.Context, p authz.Principal, conversation d
 	// builder so the post-build notification routes back here.
 	turnCtx := withConversationID(withPrincipal(ctx, p), conversationID)
 
-	// Pick the sink the resume path fans tool-result events into:
-	// the bridge translator when this is a bridge-originated turn,
-	// otherwise the WS pubsub sink. Same shape, different consumer.
-	var resumeSink eventstream.Sink
-	if bridgeMode {
-		resumeSink = extraSink
-	} else {
-		resumeSink = sink
-	}
-
 	var result *sol.RunResult
 	switch {
 	case input.Approved != nil && conversation.Status == "awaiting_confirmation":
-		// Approve/deny path. Resolve the previously-gated tool calls
-		// per the checkpoint, persist their results, then Continue.
-		result, err = s.dispatchResume(turnCtx, runner, tools, store, conversation, *input.Approved, resumeSink)
+		// Approve/deny path. Resolve only the checkpoint's current gate;
+		// Sol executes the ordered tail until another gate is reached.
+		result, err = s.dispatchResume(turnCtx, runner, conversation, *input.Approved)
 
 	case input.Message != "" && conversation.Status == "active":
 		// Fresh operator turn.
@@ -416,7 +405,7 @@ func (s *Service) runChat(ctx context.Context, p authz.Principal, conversation d
 		// Approve/Reject. Deny the dangling confirmation (closing the pending
 		// tool call) and run the new message — same policy a normal agent
 		// already applies, so the thread can't wedge.
-		result, err = s.healSuspensionThenRun(turnCtx, runner, tools, store, conversation, input.Message, resumeSink)
+		result, err = s.healSuspensionThenRun(turnCtx, runner, conversation, input.Message)
 
 	case input.Message == "" && input.Approved == nil:
 		// Auto-resume after a system-injected user message (e.g.
@@ -501,17 +490,10 @@ func (s *Service) runChat(ctx context.Context, p authz.Principal, conversation d
 	}
 }
 
-// dispatchResume resolves a pending confirmation: executes (or
-// denies) every gated tool from the saved SuspensionContext, persists
-// the synthetic tool-result messages to the session store, then
-// Continues the runner so the LLM sees the resolved history.
-//
-// Sysagent-specific (NOT shared with agentsdk): permission rules are
-// added per-tool-name from the pending calls, never a blanket allow.
-// The gate happens at the executor wrapper layer (tool name driven),
-// so a narrow rule is exactly the right escape hatch — no risk of
-// authorising something the user didn't approve.
-func (s *Service) dispatchResume(ctx context.Context, runner *sol.Runner, tools tool.Set, store session.SessionStore, conversation dbq.SystemConversation, approved bool, sink eventstream.Sink) (*sol.RunResult, error) {
+// dispatchResume resolves the current confirmation from the saved checkpoint.
+// Sol persists and publishes each result before continuing through the ordered
+// tool-call batch. A later gate suspends this run without invoking the model.
+func (s *Service) dispatchResume(ctx context.Context, runner *sol.Runner, conversation dbq.SystemConversation, approved bool) (*sol.RunResult, error) {
 	var sc sol.SuspensionContext
 	if len(conversation.Checkpoint) == 0 {
 		return nil, service.Detail(service.ErrConflict,
@@ -530,8 +512,15 @@ func (s *Service) dispatchResume(ctx context.Context, runner *sol.Runner, tools 
 		return &sol.RunResult{Status: sol.RunCancelled}, nil
 	}
 
-	if err := s.resolvePendingToolCalls(ctx, tools, store, sc.PendingToolCalls, approved, sink); err != nil {
-		return nil, fmt.Errorf("resolve pending tool calls: %w", err)
+	resolution, err := runner.ResolvePermissionSuspension(ctx, &sc, approved)
+	if err != nil {
+		return nil, fmt.Errorf("resolve permission suspension: %w", err)
+	}
+	if resolution.SuspensionContext != nil {
+		return &sol.RunResult{
+			Status:            sol.RunSuspended,
+			SuspensionContext: resolution.SuspensionContext,
+		}, nil
 	}
 	// Run("") on a fresh Runner loads history from the SessionStore
 	// (which now includes the synthetic tool-result messages we just
@@ -551,18 +540,18 @@ func (s *Service) dispatchResume(ctx context.Context, runner *sol.Runner, tools 
 // unanswered tool call as denied before running the new message. This keeps
 // the tool-call history valid and prevents an awaiting_confirmation thread
 // from becoming wedged.
-func (s *Service) healSuspensionThenRun(ctx context.Context, runner *sol.Runner, tools tool.Set, store session.SessionStore, conversation dbq.SystemConversation, prompt string, sink eventstream.Sink) (*sol.RunResult, error) {
+func (s *Service) healSuspensionThenRun(ctx context.Context, runner *sol.Runner, conversation dbq.SystemConversation, prompt string) (*sol.RunResult, error) {
 	if len(conversation.Checkpoint) > 0 {
 		var sc sol.SuspensionContext
 		if err := json.Unmarshal(conversation.Checkpoint, &sc); err != nil {
 			return nil, fmt.Errorf("decode checkpoint: %w", err)
 		}
-		// A doom-loop suspension has no real pending tool call to close — just
-		// drop it. Otherwise deny the pending calls so the unanswered tool_call
-		// gets a (denied) result before the new user message in history.
+		// A doom-loop suspension has no real pending tool call to close. Sol
+		// denies the current call and marks the ordered tail skipped before the
+		// new user message is added to history.
 		if !isDoomLoopSuspension(sc) {
-			if err := s.resolvePendingToolCalls(ctx, tools, store, sc.PendingToolCalls, false, sink); err != nil {
-				return nil, fmt.Errorf("resolve pending tool calls: %w", err)
+			if _, err := runner.ResolvePermissionSuspension(ctx, &sc, false); err != nil {
+				return nil, fmt.Errorf("resolve permission suspension: %w", err)
 			}
 		}
 	}
@@ -583,86 +572,6 @@ func isDoomLoopSuspension(sc sol.SuspensionContext) bool {
 	}
 	perm, _ := m["permission"].(string)
 	return perm == "doom_loop"
-}
-
-// resolvePendingToolCalls is sysagent's tailored counterpart to
-// agentsdk's run_js resolve. Differences from the agentsdk version:
-//
-//   - Permission rules are per-tool-name from the pending calls
-//     (`{Permission: tc.Name, Pattern: "*", Action: "allow"}`), not a
-//     blanket `*/*`. The gate is the tool name, so a narrow rule is
-//     the right escape hatch.
-//   - Events emit through pubsubSink (not an HTTP NDJSON writer).
-//   - Deny message includes the tool name so the LLM gets useful
-//     context when it apologises.
-//
-// Sol's PermissionManager is owned by the Runner. We use a SEPARATE
-// permBus here so resolve-time permission events don't leak onto the
-// runner's bus and stream out as extra confirmation events.
-func (s *Service) resolvePendingToolCalls(ctx context.Context, tools tool.Set, store session.SessionStore, pending []stream.ToolCall, approved bool, sink eventstream.Sink) error {
-	permBus := bus.New()
-	pm := bus.NewPermissionManager(permBus)
-	for _, tc := range pending {
-		pm.AddRule(bus.PermissionRule{
-			Permission: tc.Name,
-			Pattern:    "*",
-			Action:     "allow",
-		})
-	}
-	toolCtx := bus.WithBus(ctx, permBus)
-	toolCtx = bus.WithPermissionManager(toolCtx, pm)
-
-	var resultMsgs []session.Message
-	for _, tc := range pending {
-		var toolOut goai.ToolResultOutput
-
-		if approved {
-			t, ok := tools[tc.Name]
-			if !ok {
-				toolOut = goai.ErrorTextOutput{Value: "unknown tool " + tc.Name}
-			} else {
-				result, terr := t.Execute(toolCtx, tc.Input, tool.CallOptions{ToolCallID: tc.ID})
-				if terr != nil {
-					toolOut = tool.OutputForError(terr)
-				} else {
-					toolOut = tool.SuccessOutput(result)
-				}
-			}
-		} else {
-			toolOut = goai.ExecutionDeniedOutput{
-				Reason: "Operator denied this " + tc.Name + " call.",
-			}
-		}
-
-		if sink != nil {
-			sink.OnToolResult(stream.ToolResultEvent{
-				ToolCallID: tc.ID,
-				ToolName:   tc.Name,
-				Output:     toolOut,
-			})
-		}
-
-		resultMsgs = append(resultMsgs, session.Message{
-			Role: "tool",
-			Parts: []session.Part{{
-				Type: "tool",
-				Tool: &session.ToolPart{
-					CallID:  tc.ID,
-					Name:    tc.Name,
-					Output:  goai.ToolOutputWire(toolOut),
-					Status:  "completed",
-					Outcome: goai.ToolOutcome(toolOut),
-				},
-			}},
-		})
-	}
-
-	if len(resultMsgs) > 0 {
-		if err := store.Append(ctx, resultMsgs); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 // persistSuspension atomically marks the producing run suspended and binds its

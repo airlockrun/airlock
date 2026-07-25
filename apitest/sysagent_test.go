@@ -1,11 +1,15 @@
 package apitest_test
 
 import (
+	"context"
 	"net/http"
 	"testing"
 
 	"github.com/airlockrun/airlock/apitest"
+	"github.com/airlockrun/airlock/db/dbq"
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // TestIntegration_SystemConversations_CRUD covers the per-user
@@ -152,6 +156,51 @@ func TestIntegration_SystemConversations_OwnershipIsolation(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("alice get her own conv after bob's failed attempts = %d, want 200", resp.StatusCode)
+	}
+}
+
+func TestIntegration_SystemConversation_PendingToolCarriesRunID(t *testing.T) {
+	h := apitest.Setup(t)
+	userID := apitest.CreateUser(t, h, "pending-run", "user")
+	token := apitest.IssueUserToken(t, h, userID, "pending-run@apitest.local", "user")
+
+	req := h.NewRequest(http.MethodPost, "/api/v1/system/conversations", token, &airlockv1.CreateSystemConversationRequest{})
+	resp := h.Do(req)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create = %d, want 201; body=%s", resp.StatusCode, h.ReadBody(resp))
+	}
+	var created airlockv1.CreateSystemConversationResponse
+	h.DecodeProto(resp, &created)
+	conversationID := uuid.MustParse(created.Conversation.Id)
+
+	q := dbq.New(h.DB.Pool())
+	run, err := q.CreateSystemRun(context.Background(), dbq.CreateSystemRunParams{
+		ConversationID: pgtype.UUID{Bytes: conversationID, Valid: true},
+		UserID:         pgtype.UUID{Bytes: userID, Valid: true},
+		TriggerType:    "prompt",
+	})
+	if err != nil {
+		t.Fatalf("CreateSystemRun: %v", err)
+	}
+	checkpoint := []byte(`{"pendingToolCalls":[{"id":"call-1","name":"delete_agent","input":{"agent":"bot"}}]}`)
+	rows, err := q.SetSystemConversationCheckpoint(context.Background(), dbq.SetSystemConversationCheckpointParams{
+		ID:             pgtype.UUID{Bytes: conversationID, Valid: true},
+		Checkpoint:     checkpoint,
+		SuspendedRunID: run.ID,
+	})
+	if err != nil || rows != 1 {
+		t.Fatalf("SetSystemConversationCheckpoint: rows=%d err=%v", rows, err)
+	}
+
+	req = h.NewRequest(http.MethodGet, "/api/v1/system/conversations/"+conversationID.String(), token, nil)
+	resp = h.Do(req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("get = %d, want 200; body=%s", resp.StatusCode, h.ReadBody(resp))
+	}
+	var detail airlockv1.GetSystemConversationResponse
+	h.DecodeProto(resp, &detail)
+	if detail.Conversation.GetPendingTool().GetRunId() != uuid.UUID(run.ID.Bytes).String() {
+		t.Fatalf("pending run_id = %q, want %q", detail.Conversation.GetPendingTool().GetRunId(), uuid.UUID(run.ID.Bytes))
 	}
 }
 

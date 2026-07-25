@@ -35,7 +35,7 @@ import (
 // (intended for the toolserver case where the two buses are
 // separate). Dedupe by toolCallID so a single confirmation lands.
 type pubsubSink struct {
-	pubsub         *realtime.PubSub
+	pubsub         envelopePublisher
 	conversationID uuid.UUID // chat conversation; rides on envelope.ConversationID
 	userID         uuid.UUID // WS topic — every sysagent event publishes here
 	runID          string
@@ -44,7 +44,11 @@ type pubsubSink struct {
 	seenPerm map[string]struct{}
 }
 
-func newPubSubSink(pubsub *realtime.PubSub, conversationID, runID, userID uuid.UUID, logger *zap.Logger) *pubsubSink {
+type envelopePublisher interface {
+	Publish(context.Context, uuid.UUID, realtime.Envelope) error
+}
+
+func newPubSubSink(pubsub envelopePublisher, conversationID, runID, userID uuid.UUID, logger *zap.Logger) *pubsubSink {
 	return &pubsubSink{
 		pubsub:         pubsub,
 		conversationID: conversationID,
@@ -74,6 +78,14 @@ func (s *pubsubSink) publish(eventType string, payload proto.Message) {
 			zap.String("conversation", s.conversationID.String()),
 			zap.Error(err))
 	}
+}
+
+func (s *pubsubSink) OnRunStarted() {
+	s.publish("run.started", &airlockv1.RunStartedEvent{
+		RunId:          s.runID,
+		AgentId:        s.conversationID.String(),
+		ConversationId: s.conversationID.String(),
+	})
 }
 
 func (s *pubsubSink) OnTextDelta(e stream.TextDeltaEvent) {
@@ -125,15 +137,31 @@ func (s *pubsubSink) OnPermissionAsked(p bus.PermissionAskedPayload) {
 		}
 		s.seenPerm[p.ToolCallID] = struct{}{}
 	}
-	code, _ := p.Metadata["code"].(string)
+	s.publish("run.confirmation_required", confirmationRequiredEvent(s.runID, p))
+}
+
+func confirmationRequiredEvent(runID string, p bus.PermissionAskedPayload) *airlockv1.ConfirmationRequiredEvent {
+	code, hasCode := p.Metadata["code"].(string)
+	if !hasCode {
+		switch args := p.Metadata["args"].(type) {
+		case string:
+			code = args
+		case nil:
+		default:
+			if encoded, err := json.Marshal(args); err == nil {
+				code = string(encoded)
+			}
+		}
+	}
 	desc, _ := p.Metadata["description"].(string)
-	s.publish("run.confirmation_required", &airlockv1.ConfirmationRequiredEvent{
-		RunId:       s.runID,
+	return &airlockv1.ConfirmationRequiredEvent{
+		RunId:       runID,
 		Permission:  p.Permission,
 		Patterns:    p.Patterns,
 		Code:        code,
+		ToolCallId:  p.ToolCallID,
 		Description: desc,
-	})
+	}
 }
 
 func (s *pubsubSink) OnAutomaticCompactionStarted(bus.AutomaticCompactionStartedPayload) {

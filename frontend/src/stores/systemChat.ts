@@ -280,6 +280,20 @@ export const useSystemChatStore = defineStore('systemChat', () => {
           tc.output = ev.output
           tc.error = ev.error
           tc.status = status
+          return
+        }
+        // Resume results can arrive after the suspended batch was finalized.
+        // Patch that persisted-shaped block so the next gate stays in place.
+        for (let i = messages.value.length - 1; i >= 0; i--) {
+          const hit = messages.value[i].blocks?.find(
+            (block): block is ToolBlock => block.kind === 'tool' && block.toolCallId === ev.toolCallId,
+          )
+          if (hit) {
+            hit.output = ev.output
+            hit.error = ev.error
+            hit.outcome = (ev.outcome as ToolBlock['outcome']) || ''
+            break
+          }
         }
       }),
       onConversationMessage('run.confirmation_required', (payload) => {
@@ -409,6 +423,24 @@ export const useSystemChatStore = defineStore('systemChat', () => {
     sending.value = false
   }
 
+  function restorePendingConfirmation(info: SystemConversationInfo): boolean {
+    const pending = info.status === 'awaiting_confirmation' ? info.pendingTool : undefined
+    if (!pending) {
+      pendingConfirmation.value = null
+      return false
+    }
+    pendingConfirmation.value = {
+      runId: pending.runId,
+      toolName: pending.toolName,
+      argsJson: pending.argsJson,
+      toolCallId: pending.callId,
+      description: toolDescription(pending.argsJson),
+    }
+    currentRunId.value = pending.runId || null
+    sending.value = false
+    return true
+  }
+
   async function createConversation(title?: string): Promise<SystemConversationInfo> {
     const payload: Record<string, any> = {}
     if (title) payload.title = title
@@ -440,16 +472,7 @@ export const useSystemChatStore = defineStore('systemChat', () => {
       const resp = fromJson(GetSystemConversationResponseSchema, data)
       conversation.value = resp.conversation || null
       messages.value = enrichMessages(resp.messages)
-      if (conversation.value?.status === 'awaiting_confirmation' && conversation.value.pendingTool) {
-        const pt = conversation.value.pendingTool
-        pendingConfirmation.value = {
-          runId: '',
-          toolName: pt.toolName,
-          argsJson: pt.argsJson,
-          toolCallId: pt.callId,
-          description: toolDescription(pt.argsJson),
-        }
-      }
+      if (conversation.value) restorePendingConfirmation(conversation.value)
       // No explicit WS subscribe — the user's UUID topic is auto-subscribed
       // on WS connect (api/ws.go), so every sysagent event for any of this
       // user's conversations is already arriving on the socket. onConversationMessage
@@ -478,6 +501,8 @@ export const useSystemChatStore = defineStore('systemChat', () => {
   // the server-side conversation has been minted on first send.
   async function sendPrompt(text: string, approved?: boolean): Promise<string> {
     const isResume = approved !== undefined
+    const confirmationToRestore = isResume ? pendingConfirmation.value : null
+    const runIdToRestore = isResume ? currentRunId.value : null
     const wasNew = !conversationId.value
     if (wasNew && isResume) throw new Error('cannot resume without an active conversation')
     if (wasNew) {
@@ -539,6 +564,22 @@ export const useSystemChatStore = defineStore('systemChat', () => {
       sending.value = false
       // Roll back optimistic user row on send failure.
       messages.value = messages.value.filter(m => !m.id.startsWith('pending-'))
+      if (isResume) {
+        try {
+          const { data } = await api.get(`/api/v1/system/conversations/${conversationId.value}`)
+          const resp = fromJson(GetSystemConversationResponseSchema, data)
+          conversation.value = resp.conversation || null
+          if (!conversation.value || !restorePendingConfirmation(conversation.value)) {
+            const failedRunId = confirmationToRestore?.runId || runIdToRestore
+            pendingConfirmation.value = null
+            if (!currentRunId.value || currentRunId.value === failedRunId) currentRunId.value = null
+            sending.value = currentRunId.value !== null
+          }
+        } catch {
+          pendingConfirmation.value = confirmationToRestore
+          currentRunId.value = runIdToRestore
+        }
+      }
       throw err
     }
   }

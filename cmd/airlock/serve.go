@@ -773,9 +773,8 @@ func anonConvPruner(
 // will tear down naturally when the cancel context fires or the user clicks
 // Cancel. Synthesize orphan tool_results so the next LLM turn doesn't 400 on
 // unpaired tool_use, and publish a synthetic run.complete WS event so any live
-// UI that was watching unblocks. If the agent's r.Complete eventually arrives,
-// UpsertRunComplete is idempotent and the late truth overwrites — frontend
-// re-paints.
+// UI that was watching unblocks. The sweeper's terminal write wins over a
+// delayed agent completion, so an orphaned run cannot be reopened.
 func sweeper(
 	ctx context.Context,
 	lgr *zap.Logger,

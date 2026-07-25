@@ -495,7 +495,7 @@ func TestSessionLoad_TiedTimestampOrdersBySeq(t *testing.T) {
 		parts string
 	}{
 		{"assistant", `[{"type":"tool-call","toolCallId":"toolu_TIE","toolName":"run_js","args":{"code":"1"}}]`},
-		{"tool", `[{"type":"tool-result","toolCallId":"toolu_TIE","toolName":"run_js","result":"ok"}]`},
+		{"tool", `[{"type":"tool-result","toolCallId":"toolu_TIE","toolName":"run_js","output":{"type":"text","value":"ok"}}]`},
 		{"assistant", ""},
 	}
 	for _, r := range rows {

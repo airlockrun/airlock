@@ -657,6 +657,39 @@ func (q *Queries) RollbackMCPTaskResume(ctx context.Context, arg RollbackMCPTask
 	return result.RowsAffected(), nil
 }
 
+const rollbackPromptRunResume = `-- name: RollbackPromptRunResume :execrows
+UPDATE runs AS resumed SET status = 'suspended', finished_at = NULL
+WHERE resumed.id = $1
+  AND resumed.agent_id = $2
+  AND resumed.status = 'success'
+  AND resumed.trigger_type = 'prompt'
+  AND resumed.trigger_ref = $3
+  AND NOT EXISTS (
+      SELECT 1 FROM runs AS successor
+      WHERE successor.agent_id = resumed.agent_id
+        AND successor.trigger_type = 'prompt'
+        AND successor.trigger_ref = resumed.trigger_ref
+        AND successor.input_payload->>'resumeRunId' = resumed.id::text
+  )
+`
+
+type RollbackPromptRunResumeParams struct {
+	ID         pgtype.UUID `json:"id"`
+	AgentID    pgtype.UUID `json:"agent_id"`
+	TriggerRef string      `json:"trigger_ref"`
+}
+
+// Restore a claimed prompt suspension only when dispatch did not create a
+// successor. A successor carrying resumeRunId owns the attempt even if its
+// subsequent container request fails.
+func (q *Queries) RollbackPromptRunResume(ctx context.Context, arg RollbackPromptRunResumeParams) (int64, error) {
+	result, err := q.db.Exec(ctx, rollbackPromptRunResume, arg.ID, arg.AgentID, arg.TriggerRef)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const updateRunCheckpoint = `-- name: UpdateRunCheckpoint :exec
 UPDATE runs SET checkpoint = $1 WHERE id = $2
 `
@@ -759,7 +792,7 @@ func (q *Queries) UpdateRunStatus(ctx context.Context, arg UpdateRunStatusParams
 const upsertRunComplete = `-- name: UpsertRunComplete :execrows
 INSERT INTO runs (
     id, agent_id, status, error_message, error_kind, actions,
-    stdout_log, panic_trace, input_payload, source_ref,
+    stdout_log, panic_trace, checkpoint, input_payload, source_ref,
     trigger_type, trigger_ref, finished_at, duration_ms,
     caller_user_id, caller_conversation_id, caller_access,
     llm_calls, llm_tokens_in, llm_tokens_out, llm_tokens_cached, llm_cost_estimate,
@@ -767,7 +800,7 @@ INSERT INTO runs (
 )
 VALUES (
     $1, $2, $3, $4, $5, $6,
-    $7, $8, '{}'::jsonb, '',
+    $7, $8, $9, '{}'::jsonb, '',
     'prompt', '', now(), 0,
     NULL, NULL, 'public',
     0, 0, 0, 0, 0,
@@ -780,9 +813,11 @@ ON CONFLICT (id) DO UPDATE SET
     actions = EXCLUDED.actions,
     stdout_log = EXCLUDED.stdout_log,
     panic_trace = EXCLUDED.panic_trace,
+    checkpoint = EXCLUDED.checkpoint,
     finished_at = now(),
     duration_ms = EXTRACT(EPOCH FROM (now() - runs.started_at))::integer * 1000
 WHERE runs.agent_id = EXCLUDED.agent_id
+  AND runs.status = 'running'
 `
 
 type UpsertRunCompleteParams struct {
@@ -794,6 +829,7 @@ type UpsertRunCompleteParams struct {
 	Actions      []byte      `json:"actions"`
 	StdoutLog    string      `json:"stdout_log"`
 	PanicTrace   string      `json:"panic_trace"`
+	Checkpoint   []byte      `json:"checkpoint"`
 }
 
 // Recovery path: row may not exist if CreateRun never landed. All
@@ -811,6 +847,7 @@ func (q *Queries) UpsertRunComplete(ctx context.Context, arg UpsertRunCompletePa
 		arg.Actions,
 		arg.StdoutLog,
 		arg.PanicTrace,
+		arg.Checkpoint,
 	)
 	if err != nil {
 		return 0, err

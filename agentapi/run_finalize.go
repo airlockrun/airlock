@@ -3,11 +3,14 @@ package agentapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/airlockrun/airlock/db/dbq"
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 	"github.com/airlockrun/airlock/realtime"
+	"github.com/airlockrun/goai/message"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"
@@ -22,13 +25,13 @@ import (
 //
 // Maps airlock-side status strings to WS event types:
 //   - "error" / "failed" / "timeout" → run.error
-//   - everything else (success, tool_errors, cancelled, suspended) → run.complete
+//   - everything else (success, tool_errors, cancelled) -> run.complete
 //
 // Idempotent at the client: chat.ts ignores events for runIDs already
 // finalized locally, so a duplicate from the happy-path NDJSON + this helper
 // is harmless.
 func PublishRunTerminal(ctx context.Context, pubsub *realtime.PubSub, agentID, runID uuid.UUID, status, errMsg string) {
-	if pubsub == nil {
+	if pubsub == nil || status == "suspended" {
 		return
 	}
 	topicID := agentID.String()
@@ -77,7 +80,10 @@ func SynthesizeOrphanToolResults(ctx context.Context, q *dbq.Queries, runID uuid
 			"type":       "tool-result",
 			"toolCallId": o.ToolCallID,
 			"toolName":   o.ToolName,
-			"result":     output,
+			"output": map[string]any{
+				"type":  "error-text",
+				"value": output,
+			},
 		}})
 		if err != nil {
 			continue
@@ -114,110 +120,344 @@ func orphanResultText(status string) string {
 	}
 }
 
-// pairsAndOrphans walks a slice of message rows in order and returns the set
-// of toolCallIds for tool-call parts that don't have a paired tool-result
-// later in the slice. Used by SessionLoad as a defense-in-depth check.
-// Returns slice of {toolCallId, toolName} for each orphan.
 type orphanPair struct {
 	ToolCallID string
 	ToolName   string
 }
 
-func detectOrphanToolCalls(parts []dbq.AgentMessage) []orphanPair {
-	results := map[string]struct{}{}
-	type call struct {
-		id   string
-		name string
-	}
-	var calls []call
-
-	for _, m := range parts {
-		if len(m.Parts) == 0 {
-			continue
-		}
-		var arr []map[string]any
-		if err := json.Unmarshal(m.Parts, &arr); err != nil {
-			continue
-		}
-		for _, p := range arr {
-			t, _ := p["type"].(string)
-			id, _ := p["toolCallId"].(string)
-			if id == "" {
-				continue
-			}
-			switch t {
-			case "tool-call":
-				name, _ := p["toolName"].(string)
-				calls = append(calls, call{id: id, name: name})
-			case "tool-result":
-				results[id] = struct{}{}
-			}
-		}
-	}
-
-	var orphans []orphanPair
-	for _, c := range calls {
-		if _, ok := results[c.id]; !ok {
-			orphans = append(orphans, orphanPair{ToolCallID: c.id, ToolName: c.name})
-		}
-	}
-	return orphans
+type rawToolPart struct {
+	Pair orphanPair
+	Raw  json.RawMessage
 }
 
-// reconcileDanglingToolResults is the inverse of detectOrphanToolCalls:
-// it repairs tool-result parts whose toolCallId has NO preceding
-// tool-call. That orphan shape is produced when a tool-result is
-// persisted without its originating assistant tool-call message (e.g. a
-// run that yielded mid-tool before the assistant turn was written — the
-// delegated-suspension defect). Providers reject a role=tool message
-// with no matching tool_use, so it poisons every subsequent turn exactly
-// like the forward orphan.
-//
-// The repair inserts a synthetic assistant message carrying the missing
-// tool-call(s) immediately BEFORE the offending tool message, restoring
-// a provider-valid assistant→tool pair without dropping the result's
-// content. Returns the corrected slice (input untouched) plus one
-// orphanPair per repair for logging/surfacing. In-memory only on the
-// load path, same contract as orphanToolResultMessage.
-func reconcileDanglingToolResults(convID pgtype.UUID, msgs []dbq.AgentMessage) ([]dbq.AgentMessage, []orphanPair) {
-	seenCalls := map[string]struct{}{}
-	out := make([]dbq.AgentMessage, 0, len(msgs))
-	var repaired []orphanPair
+type toolResultPart struct {
+	rawToolPart
+	Row  *toolResultRow
+	Used bool
+}
 
-	for _, m := range msgs {
-		var arr []map[string]any
-		if len(m.Parts) > 0 {
-			_ = json.Unmarshal(m.Parts, &arr)
+type toolResultRow struct {
+	Message    dbq.AgentMessage
+	Extras     []json.RawMessage
+	ExtrasUsed bool
+	Rewritten  bool
+}
+
+type toolCallTurn struct {
+	Calls   []orphanPair
+	Results []*toolResultPart
+}
+
+// normalizeToolOrdering returns a provider-valid model history. Every real
+// result is moved directly behind its originating assistant turn, missing
+// results are synthesized there, and result rows with no call get a synthetic
+// assistant turn at their original position. Provider-valid canonical
+// histories are returned unchanged.
+func normalizeToolOrdering(convID pgtype.UUID, msgs []dbq.AgentMessage) ([]dbq.AgentMessage, []orphanPair, []orphanPair, error) {
+	valid, err := toolOrderingValid(msgs)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if valid {
+		return msgs, nil, nil, nil
+	}
+
+	turns := make(map[int]*toolCallTurn)
+	resultsByID := make(map[string][]*toolResultPart)
+	resultsByRow := make(map[int][]*toolResultPart)
+	for i, msg := range msgs {
+		if msg.Role == "assistant" {
+			calls, _ := parseToolParts(msg.Parts, "tool-call")
+			if len(calls) > 0 {
+				turn := &toolCallTurn{Calls: make([]orphanPair, len(calls))}
+				for j, call := range calls {
+					turn.Calls[j] = call.Pair
+				}
+				turns[i] = turn
+			}
 		}
+		if msg.Role == "tool" {
+			row, results, err := parseToolResultRow(msg)
+			if err != nil {
+				return nil, nil, nil, fmt.Errorf("tool message %d: %w", i, err)
+			}
+			for _, result := range results {
+				part := &toolResultPart{rawToolPart: result, Row: row}
+				resultsByID[result.Pair.ToolCallID] = append(resultsByID[result.Pair.ToolCallID], part)
+				resultsByRow[i] = append(resultsByRow[i], part)
+			}
+		}
+	}
 
-		var missing []orphanPair
-		for _, p := range arr {
-			t, _ := p["type"].(string)
-			id, _ := p["toolCallId"].(string)
-			if id == "" {
+	resultCursor := make(map[string]int)
+	for i := range msgs {
+		turn := turns[i]
+		if turn == nil {
+			continue
+		}
+		turn.Results = make([]*toolResultPart, len(turn.Calls))
+		for j, call := range turn.Calls {
+			available := resultsByID[call.ToolCallID]
+			cursor := resultCursor[call.ToolCallID]
+			if cursor >= len(available) {
 				continue
 			}
-			switch t {
-			case "tool-call":
-				seenCalls[id] = struct{}{}
-			case "tool-result":
-				if _, ok := seenCalls[id]; !ok {
-					name, _ := p["toolName"].(string)
-					missing = append(missing, orphanPair{ToolCallID: id, ToolName: name})
-					// Mark satisfied: the synthetic call below covers it,
-					// and a later duplicate result mustn't re-trigger.
-					seenCalls[id] = struct{}{}
+			turn.Results[j] = available[cursor]
+			available[cursor].Used = true
+			resultCursor[call.ToolCallID] = cursor + 1
+		}
+	}
+
+	out := make([]dbq.AgentMessage, 0, len(msgs))
+	var danglingResults []orphanPair
+	var missingResults []orphanPair
+	for i, msg := range msgs {
+		if turn := turns[i]; turn != nil {
+			out = append(out, msg)
+			for j, call := range turn.Calls {
+				if result := turn.Results[j]; result != nil {
+					out = append(out, toolResultMessage(result))
+					continue
 				}
+				out = append(out, orphanToolResultMessage(convID, call))
+				missingResults = append(missingResults, call)
 			}
+			continue
+		}
+		if msg.Role != "tool" {
+			out = append(out, msg)
+			continue
 		}
 
-		if len(missing) > 0 {
-			out = append(out, synthAssistantToolCallMessage(convID, missing))
-			repaired = append(repaired, missing...)
+		var extras []*toolResultPart
+		for _, result := range resultsByRow[i] {
+			if !result.Used {
+				extras = append(extras, result)
+			}
 		}
-		out = append(out, m)
+		if len(extras) == 0 {
+			continue
+		}
+		calls := make([]orphanPair, len(extras))
+		for j, result := range extras {
+			calls[j] = result.Pair
+		}
+		out = append(out, synthAssistantToolCallMessage(convID, calls))
+		for _, result := range extras {
+			out = append(out, toolResultMessage(result))
+		}
+		danglingResults = append(danglingResults, calls...)
 	}
-	return out, repaired
+	return out, danglingResults, missingResults, nil
+}
+
+func toolOrderingValid(msgs []dbq.AgentMessage) (bool, error) {
+	var pending []orphanPair
+	for i, msg := range msgs {
+		if len(pending) > 0 {
+			if msg.Role != "tool" {
+				return false, nil
+			}
+			row, results, err := parseToolResultRow(msg)
+			if err != nil {
+				return false, fmt.Errorf("tool message %d: %w", i, err)
+			}
+			if row.Rewritten {
+				return false, nil
+			}
+			for _, result := range results {
+				if len(pending) == 0 || result.Pair.ToolCallID != pending[0].ToolCallID {
+					return false, nil
+				}
+				pending = pending[1:]
+			}
+			continue
+		}
+		if msg.Role == "tool" {
+			if _, _, err := parseToolResultRow(msg); err != nil {
+				return false, fmt.Errorf("tool message %d: %w", i, err)
+			}
+			return false, nil
+		}
+		if msg.Role != "assistant" {
+			continue
+		}
+		calls, _ := parseToolParts(msg.Parts, "tool-call")
+		for _, call := range calls {
+			pending = append(pending, call.Pair)
+		}
+	}
+	return len(pending) == 0, nil
+}
+
+func parseToolParts(parts []byte, wantType string) ([]rawToolPart, bool) {
+	if len(parts) == 0 {
+		return nil, true
+	}
+	var rawParts []json.RawMessage
+	if err := json.Unmarshal(parts, &rawParts); err != nil {
+		return nil, false
+	}
+	parsed := make([]rawToolPart, 0, len(rawParts))
+	for _, raw := range rawParts {
+		var part struct {
+			Type       string `json:"type"`
+			ToolCallID string `json:"toolCallId"`
+			ToolName   string `json:"toolName"`
+		}
+		if err := json.Unmarshal(raw, &part); err != nil {
+			continue
+		}
+		if part.Type == wantType && part.ToolCallID != "" {
+			parsed = append(parsed, rawToolPart{
+				Pair: orphanPair{ToolCallID: part.ToolCallID, ToolName: part.ToolName},
+				Raw:  raw,
+			})
+		}
+	}
+	return parsed, true
+}
+
+func parseToolResultRow(msg dbq.AgentMessage) (*toolResultRow, []rawToolPart, error) {
+	if len(msg.Parts) == 0 {
+		return nil, nil, errors.New("tool message has no parts")
+	}
+	var rawParts []json.RawMessage
+	if err := json.Unmarshal(msg.Parts, &rawParts); err != nil {
+		return nil, nil, fmt.Errorf("invalid parts: %w", err)
+	}
+	row := &toolResultRow{Message: msg}
+	normalizedParts := make([]json.RawMessage, 0, len(rawParts))
+	var results []rawToolPart
+	for _, raw := range rawParts {
+		var part struct {
+			Type       string `json:"type"`
+			ToolCallID string `json:"toolCallId"`
+			ToolName   string `json:"toolName"`
+		}
+		if err := json.Unmarshal(raw, &part); err != nil {
+			return nil, nil, fmt.Errorf("invalid part: %w", err)
+		}
+		if part.Type != "tool-result" {
+			row.Extras = append(row.Extras, raw)
+			normalizedParts = append(normalizedParts, raw)
+			continue
+		}
+		if part.ToolCallID == "" {
+			return nil, nil, errors.New("tool-result part has no toolCallId")
+		}
+		normalized, rewritten, err := normalizePersistedToolResult(raw)
+		if err != nil {
+			return nil, nil, err
+		}
+		if rewritten {
+			row.Rewritten = true
+			raw = normalized
+		}
+		normalizedParts = append(normalizedParts, raw)
+		results = append(results, rawToolPart{
+			Pair: orphanPair{ToolCallID: part.ToolCallID, ToolName: part.ToolName},
+			Raw:  raw,
+		})
+	}
+	if row.Rewritten {
+		row.Message.Parts, _ = json.Marshal(normalizedParts)
+	}
+	var content message.Content
+	if err := json.Unmarshal(row.Message.Parts, &content); err != nil {
+		return nil, nil, fmt.Errorf("invalid parts: %w", err)
+	}
+	if len(results) == 0 {
+		return nil, nil, errors.New("tool message has no tool-result parts")
+	}
+	return row, results, nil
+}
+
+func normalizePersistedToolResult(raw json.RawMessage) (json.RawMessage, bool, error) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return nil, false, fmt.Errorf("invalid tool-result part: %w", err)
+	}
+	_, hasOutput := fields["output"]
+	resultRaw, hasResult := fields["result"]
+	if hasOutput {
+		if hasResult {
+			return nil, false, errors.New("tool-result part has both output and result")
+		}
+		return raw, false, nil
+	}
+	if !hasResult {
+		return nil, false, errors.New("tool-result part has neither output nor result")
+	}
+
+	var result string
+	if err := json.Unmarshal(resultRaw, &result); err != nil {
+		return nil, false, fmt.Errorf("tool-result result must be a string: %w", err)
+	}
+	isError := false
+	if isErrorRaw, ok := fields["isError"]; ok {
+		var value *bool
+		if err := json.Unmarshal(isErrorRaw, &value); err != nil || value == nil {
+			return nil, false, errors.New("tool-result isError must be a boolean")
+		}
+		isError = *value
+	}
+
+	var output message.ToolResultOutput = message.TextOutput{Value: result}
+	if isError {
+		output = message.ErrorTextOutput{Value: result}
+	}
+	outputRaw, err := message.MarshalOutput(output)
+	if err != nil {
+		return nil, false, fmt.Errorf("marshal tool-result output: %w", err)
+	}
+	fields["output"] = outputRaw
+	delete(fields, "result")
+	delete(fields, "isError")
+	normalized, err := json.Marshal(fields)
+	if err != nil {
+		return nil, false, fmt.Errorf("marshal tool-result part: %w", err)
+	}
+	return normalized, true, nil
+}
+
+func toolResultMessage(result *toolResultPart) dbq.AgentMessage {
+	msg := result.Row.Message
+	parts := []json.RawMessage{result.Raw}
+	if !result.Row.ExtrasUsed {
+		parts = append(parts, result.Row.Extras...)
+		result.Row.ExtrasUsed = true
+	}
+	msg.Parts, _ = json.Marshal(parts)
+	return msg
+}
+
+// ValidateSuspendedCheckpoint validates the wire fields Airlock needs before a
+// suspended run can become resumable. It intentionally does not depend on Sol.
+func ValidateSuspendedCheckpoint(checkpoint []byte) error {
+	var wire struct {
+		SuspensionContext *struct {
+			Reason string `json:"reason"`
+		} `json:"suspensionContext"`
+	}
+	if len(checkpoint) == 0 {
+		return errors.New("checkpoint is required")
+	}
+	if err := json.Unmarshal(checkpoint, &wire); err != nil {
+		return fmt.Errorf("checkpoint must be a JSON object: %w", err)
+	}
+	if wire.SuspensionContext == nil {
+		return errors.New("checkpoint suspensionContext is required")
+	}
+	reason := strings.TrimSpace(wire.SuspensionContext.Reason)
+	switch reason {
+	case "permission", "delegated":
+		return nil
+	case "":
+		return errors.New("checkpoint suspensionContext reason is required")
+	default:
+		return fmt.Errorf("checkpoint suspensionContext reason %q is not supported", reason)
+	}
 }
 
 // synthAssistantToolCallMessage returns a synthetic assistant message
@@ -233,7 +473,7 @@ func synthAssistantToolCallMessage(convID pgtype.UUID, ops []orphanPair) dbq.Age
 			"type":       "tool-call",
 			"toolCallId": op.ToolCallID,
 			"toolName":   op.ToolName,
-			"input":      map[string]any{},
+			"args":       map[string]any{},
 		})
 	}
 	parts, _ := json.Marshal(arr)
@@ -256,7 +496,7 @@ func orphanToolResultMessage(convID pgtype.UUID, op orphanPair) dbq.AgentMessage
 		"toolCallId": op.ToolCallID,
 		"toolName":   op.ToolName,
 		"output": map[string]any{
-			"type":  "text",
+			"type":  "error-text",
 			"value": "Tool result missing — likely an interrupted earlier run.",
 		},
 	}})
@@ -268,7 +508,3 @@ func orphanToolResultMessage(convID pgtype.UUID, op orphanPair) dbq.AgentMessage
 		Source:         "synthetic",
 	}
 }
-
-// Compile-time assertion that the struct fields we touch are all present
-// in the generated dbq.AgentMessage. Catches schema drift early.
-var _ = func() any { return fmt.Sprintf("%T", dbq.AgentMessage{}) }
