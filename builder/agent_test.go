@@ -29,6 +29,9 @@ func TestAgentBuilderPromptUsesSDKBuildCommand(t *testing.T) {
 		"never use package-level globals or service locators",
 		"go tool air integrations list",
 		"go tool air mcp probe <url>",
+		"Use `MCPAuthOAuthDiscovery` only when `auth.dynamicClientRegistration` is `advertised`",
+		"`MCPAuthOAuth` with the reported endpoints is likely",
+		"If auth is `unknown`, consult current server documentation instead of guessing",
 		"Never run `go tool air deploy`",
 	} {
 		if !strings.Contains(prompt.String(), want) {

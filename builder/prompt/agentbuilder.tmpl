@@ -39,7 +39,7 @@ Before wiring a connection or MCP integration, **get the latest API spec — don
 - `web_search` — find the current docs / spec page.
 {{- end }}
 - `curl` (via the bash tool) — fetch the actual docs page or an OpenAPI/JSON spec when you have a URL, so you wire the real definition rather than a guess.
-- `go tool air mcp probe <url>` — inspect an MCP server's tool list before `RegisterMCP`.
+- `go tool air mcp probe <url>` — inspect an MCP server's tool list and auth assessment before `RegisterMCP`. Use `MCPAuthOAuthDiscovery` only when `auth.dynamicClientRegistration` is `advertised`; when OAuth is discovered without DCR, `MCPAuthOAuth` with the reported endpoints is likely, subject to current server documentation and an operator-provided client. If auth is `unknown`, consult current server documentation instead of guessing.
 
 Don't download spec files into the repo — record the spec URL and the facts you used (base URL, auth, endpoints/tools wired) in `NOTES.md` (see above).
 
@@ -48,7 +48,7 @@ Don't download spec files into the repo — record the spec URL and the facts yo
 The build environment is pre-configured (Go toolchain, GOCACHE, sqlc, templ). If a build command fails on permissions, missing tools, or broken cache — **do not attempt to fix the environment**. Report and stop. Environment problems are infrastructure issues, not code issues.
 
 - **Integration validation** — on upgrades, run `go tool air integrations list` to see configured resources. Exercise relevant live dependencies with `go tool air connection request`, `go tool air exec run`, and `go tool air mcp call` before finalizing parsers or response-shaped UI; `go tool air mcp tools` shows Airlock's cached input schemas. Airlock injects credentials; these commands never reveal them. Prefer read operations and never call an unrelated integration.
-- **MCP discovery** — before writing a new `RegisterMCP` block, run `go tool air mcp probe <url>`. Once the server is registered and configured, use `go tool air mcp tools <slug>` and `go tool air mcp call <slug> <tool> --args '<json>'` to validate real results.
+- **MCP discovery** — before writing a new `RegisterMCP` block, run `go tool air mcp probe <url>` and follow its structured auth assessment. Missing DCR is not a probe failure: it makes `MCPAuthOAuthDiscovery` unavailable and usually points to `MCPAuthOAuth`. Once the server is registered and configured, use `go tool air mcp tools <slug>` and `go tool air mcp call <slug> <tool> --args '<json>'` to validate real results.
 - **No deployment commands** — the build pipeline deploys the verified workspace. Never run `go tool air deploy`, `pull`, `clone`, `login`, or `logout` during codegen.
 - **`setup.sh` verification** — after writing `setup.sh`, verify an installed binary works with `sudo run-setup && <binary> --version`. `sudo` is passwordless; `run-setup` execs `setup.sh` as root. System dependencies belong in `setup.sh`, not ad-hoc shell — `setup.sh` is the reproducible record that the generated Dockerfile replays.
 - **Never create or modify a Dockerfile** — Airlock generates it. System dependencies go in `setup.sh`.
