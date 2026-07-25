@@ -22,6 +22,8 @@
 #                    default instance, ~/<id> otherwise)
 #   --local          force local mode (no domain)
 #   --proxy          force external reverse-proxy mode
+#   --manual         force bring-your-own-certificate mode
+#   --cloudflared    force Cloudflare Tunnel mode
 #   --force          overwrite an existing .env
 #   --pre-release    allow installing a pre-release tag (rc/alpha/beta/dev).
 #                    Refused by default — pre-releases have no supported
@@ -44,6 +46,8 @@ FORCE=0
 DRY_RUN=0
 FORCE_LOCAL=0
 FORCE_PROXY=0
+FORCE_MANUAL=0
+FORCE_CLOUDFLARED=0
 ALLOW_PRERELEASE=0  # --pre-release / AIRLOCK_ALLOW_PRERELEASE: install an rc/alpha/beta/dev tag
 INSTANCE_ID="airlock"
 WSL_VERSION=0
@@ -370,6 +374,8 @@ parse_args() {
 			--instance-id) INSTANCE_ID="$2"; shift 2 ;;
 			--local) FORCE_LOCAL=1; shift ;;
 			--proxy) FORCE_PROXY=1; shift ;;
+			--manual) FORCE_MANUAL=1; shift ;;
+			--cloudflared) FORCE_CLOUDFLARED=1; shift ;;
 			--force) FORCE=1; shift ;;
 			--dry-run) DRY_RUN=1; shift ;;
 			--pre-release) ALLOW_PRERELEASE=1; shift ;;
@@ -377,7 +383,8 @@ parse_args() {
 			*) die "unknown flag: $1" ;;
 		esac
 	done
-	[ "$FORCE_LOCAL" != 1 ] || [ "$FORCE_PROXY" != 1 ] || die "--local and --proxy cannot be combined"
+	((FORCE_LOCAL + FORCE_PROXY + FORCE_MANUAL + FORCE_CLOUDFLARED <= 1)) \
+		|| die "--local, --proxy, --manual, and --cloudflared are mutually exclusive"
 }
 
 clone_repo() {
@@ -415,12 +422,40 @@ choose_proxy_mode() {
 	ENV_EXTRA+=("CADDY_TRUSTED_PROXIES=$cidr" "REVERSE_PROXY_LIMIT=2" "PUBLIC_URL=https://$DOMAIN")
 }
 
+choose_manual_mode() {
+	TLS_MODE=manual
+	warn "Provide a WILDCARD cert covering $DOMAIN and *.$DOMAIN. A single-host cert breaks per-agent routing."
+	local cdir; cdir=$(ask "  Host cert dir holding cert.pem + key.pem" "./certs")
+	ENV_EXTRA+=("TLS_CERT_DIR=$cdir")
+}
+
+choose_cloudflared_mode() {
+	TLS_MODE=tunnel
+	local tok_input tok
+	tok_input=$(ask_secret "Cloudflare Tunnel token or docker run command (Zero-Trust > Tunnels)")
+	tok=$(parse_tunnel_token "$tok_input")
+	ENV_EXTRA+=("TUNNEL_TOKEN=$tok")
+	warn "In the CF dashboard, route $DOMAIN and *.$DOMAIN → http://caddy:80 for this tunnel."
+}
+
 choose_mode() {
 	if [ "$FORCE_LOCAL" = 1 ]; then TLS_MODE=local; DOMAIN=localhost; return; fi
 	if [ "$FORCE_PROXY" = 1 ]; then
 		DOMAIN=$(ask "Domain (e.g. airlock.example.com)" "")
 		[ -n "$DOMAIN" ] || die "domain required for --proxy"
 		choose_proxy_mode
+		return
+	fi
+	if [ "$FORCE_MANUAL" = 1 ]; then
+		DOMAIN=$(ask "Domain (e.g. airlock.example.com)" "")
+		[ -n "$DOMAIN" ] || die "domain required for --manual"
+		choose_manual_mode
+		return
+	fi
+	if [ "$FORCE_CLOUDFLARED" = 1 ]; then
+		DOMAIN=$(ask "Domain (e.g. airlock.example.com)" "")
+		[ -n "$DOMAIN" ] || die "domain required for --cloudflared"
+		choose_cloudflared_mode
 		return
 	fi
 	local has_domain; has_domain=$(ask "Do you have a domain to use? (y/n)" "y")
@@ -446,10 +481,7 @@ choose_mode() {
 				choose_proxy_mode
 				return ;;
 			*)
-				TLS_MODE=manual
-				warn "Provide a WILDCARD cert covering $DOMAIN and *.$DOMAIN. A single-host cert breaks per-agent routing."
-				local cdir; cdir=$(ask "  Host cert dir holding cert.pem + key.pem" "./certs")
-				ENV_EXTRA+=("TLS_CERT_DIR=$cdir")
+				choose_manual_mode
 				return ;;
 		esac
 	fi
@@ -491,13 +523,7 @@ choose_mode() {
 			return
 		fi
 		if [ "$public" = n ] && confirm "This host isn't publicly reachable — serve it via a Cloudflare Tunnel?" y; then
-			TLS_MODE=tunnel
-			local tok_input tok
-			tok_input=$(ask_secret "Cloudflare Tunnel token or docker run command (Zero-Trust > Tunnels)")
-			tok=$(parse_tunnel_token "$tok_input")
-			[ -n "$tok" ] || die "tunnel token required for tunnel mode"
-			ENV_EXTRA+=("TUNNEL_TOKEN=$tok")
-			warn "In the CF dashboard, route $DOMAIN and *.$DOMAIN → http://caddy:80 for this tunnel."
+			choose_cloudflared_mode
 			return
 		fi
 	fi

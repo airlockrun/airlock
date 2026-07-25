@@ -351,17 +351,126 @@ mkdir -p "$proxy_install_dir"
 	fi
 )
 
-set +e
-proxy_flag_conflict_output=$(
-	ROOT_DIR="$ROOT_DIR" bash -c '
-		source "$ROOT_DIR/install.sh"
-		parse_args --local --proxy
-	' 2>&1
+manual_install_dir="$TMP_DIR/manual-install"
+mkdir -p "$manual_install_dir/provided-certs"
+(
+	cd "$manual_install_dir"
+	source "$ROOT_DIR/install.sh"
+
+	log() { :; }
+	warn() { :; }
+	secret_i=0
+	gen_secret() {
+		secret_i=$((secret_i + 1))
+		printf 'secret-%d' "$secret_i"
+	}
+	ask() {
+		case "$1" in
+			'Domain (e.g. airlock.example.com)') printf 'airlock.example.com' ;;
+			'  Host cert dir holding cert.pem + key.pem')
+				assert_eq './certs' "$2" 'manual cert dir default'
+				printf '%s/provided-certs' "$manual_install_dir"
+				;;
+			*) fail "unexpected manual ask prompt: $1" ;;
+		esac
+	}
+	confirm() {
+		case "$1" in
+			'Use the bundled Postgres (pgvector)?'|'Use the bundled object store (RustFS)?') return 0 ;;
+			*) fail "unexpected manual confirm prompt: $1" ;;
+		esac
+	}
+
+	parse_args --manual --force
+	assert_eq '1' "$FORCE_MANUAL" 'manual flag'
+	choose_mode
+	assert_eq 'manual' "$TLS_MODE" 'manual TLS mode'
+	assert_eq 'airlock.example.com' "$DOMAIN" 'manual domain'
+	choose_infra
+	BUILDKIT_HOST_VAL=''
+	assemble_profiles
+	render_env
+
+	assert_file_contains .env 'TLS_MODE=manual'
+	assert_file_contains .env 'COMPOSE_PROFILES=bundled-db,bundled-s3,caddy-published'
+	assert_file_contains .env 'DOMAIN=airlock.example.com'
+	assert_file_contains .env "TLS_CERT_DIR=$manual_install_dir/provided-certs"
+
+	if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
+		services=$(docker compose --env-file .env -f "$ROOT_DIR/docker-compose.yml" config --services)
+		printf '%s\n' "$services" | grep -Fx caddy >/dev/null || fail 'compose config did not enable published caddy service in manual mode'
+		if command -v jq >/dev/null 2>&1; then
+			config=$(docker compose --env-file .env -f "$ROOT_DIR/docker-compose.yml" config --format json)
+			assert_eq "$manual_install_dir/provided-certs" "$(jq -r '.services.caddy.volumes[] | select(.target == "/certs") | .source' <<<"$config")" 'manual certificate mount source'
+		fi
+	fi
 )
-proxy_flag_conflict_status=$?
-set -e
-assert_eq '1' "$proxy_flag_conflict_status" 'proxy/local conflict status'
-printf '%s' "$proxy_flag_conflict_output" | grep -Fq -- '--local and --proxy cannot be combined' || fail 'proxy/local conflict lacked guidance'
+
+cloudflared_install_dir="$TMP_DIR/cloudflared-install"
+mkdir -p "$cloudflared_install_dir"
+(
+	cd "$cloudflared_install_dir"
+	source "$ROOT_DIR/install.sh"
+
+	log() { :; }
+	warn() { :; }
+	secret_i=0
+	gen_secret() {
+		secret_i=$((secret_i + 1))
+		printf 'secret-%d' "$secret_i"
+	}
+	ask() {
+		case "$1" in
+			'Domain (e.g. airlock.example.com)') printf 'airlock.example.com' ;;
+			*) fail "unexpected cloudflared ask prompt: $1" ;;
+		esac
+	}
+	ask_secret() {
+		case "$1" in
+			'Cloudflare Tunnel token or docker run command (Zero-Trust > Tunnels)') printf 'docker run cloudflare/cloudflared:latest tunnel --token forced-tunnel-token' ;;
+			*) fail "unexpected cloudflared secret prompt: $1" ;;
+		esac
+	}
+	confirm() {
+		case "$1" in
+			'Use the bundled Postgres (pgvector)?'|'Use the bundled object store (RustFS)?') return 0 ;;
+			*) fail "unexpected cloudflared confirm prompt: $1" ;;
+		esac
+	}
+
+	parse_args --cloudflared --force
+	assert_eq '1' "$FORCE_CLOUDFLARED" 'cloudflared flag'
+	choose_mode
+	assert_eq 'tunnel' "$TLS_MODE" 'cloudflared TLS mode'
+	assert_eq 'airlock.example.com' "$DOMAIN" 'cloudflared domain'
+	choose_infra
+	BUILDKIT_HOST_VAL=''
+	assemble_profiles
+	render_env
+
+	assert_file_contains .env 'TLS_MODE=tunnel'
+	assert_file_contains .env 'COMPOSE_PROFILES=bundled-db,bundled-s3,caddy-private,cloudflared'
+	assert_file_contains .env 'DOMAIN=airlock.example.com'
+	assert_file_contains .env 'TUNNEL_TOKEN=forced-tunnel-token'
+)
+
+for mode_flags in \
+	'--local --proxy' \
+	'--local --manual' \
+	'--local --cloudflared' \
+	'--proxy --manual' \
+	'--proxy --cloudflared' \
+	'--manual --cloudflared'; do
+	set +e
+	mode_conflict_output=$(ROOT_DIR="$ROOT_DIR" MODE_FLAGS="$mode_flags" bash -c '
+		source "$ROOT_DIR/install.sh"
+		parse_args $MODE_FLAGS
+	' 2>&1)
+	mode_conflict_status=$?
+	set -e
+	assert_eq '1' "$mode_conflict_status" "$mode_flags conflict status"
+	printf '%s' "$mode_conflict_output" | grep -Fq -- 'mutually exclusive' || fail "$mode_flags conflict lacked guidance"
+done
 
 set +e
 proxy_port_output=$(
