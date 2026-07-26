@@ -12,24 +12,6 @@ Airlock is a self-hosted platform for creating and deploying AI-native apps. Bui
 - [Agent SDK and CLI](https://airlock.run/docs/agentsdk/)
 - [Releases](https://github.com/airlockrun/airlock/releases)
 
-## Installation
-
-Follow the [installation guide](https://airlock.run/docs/installation/) or run the pinned installer:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/airlockrun/airlock/v0.4.0/install.sh | bash
-```
-
-To inspect the installer first:
-
-```bash
-git clone https://github.com/airlockrun/airlock.git
-cd airlock
-git checkout v0.4.0
-less install.sh
-./install.sh
-```
-
 ## Development
 
 Development requires Go 1.26+, Docker with Compose v2, and pnpm. Start from the development environment preset:
