@@ -11,7 +11,8 @@ code** - Go the LLM/codegen wrote, plus whatever `setup.sh` installs -
 that runs in a container on the operator's machine. So users are the
 threat source, and the assets to protect are: the **host**, **other
 users' data**, and the **operator's secrets** (encryption key, DB
-credentials, provider keys).
+credentials, provider keys). OSS runtimes intentionally retain unrestricted
+outbound network access; direct egress is not part of this containment boundary.
 
 The container is the trust boundary. The design assumes an agent may try
 to escape to the host, fork-bomb / OOM / disk-fill it, reach the cloud
@@ -33,7 +34,8 @@ Two facts shape everything below:
 
 Runtime hardening is assembled in `container/docker.go`; brokered destination
 checks live in `networkpolicy`, and Compose supplies trusted dependency labels.
-These controls remove paths no honest runtime agent needs:
+These controls harden runtime execution without restricting legitimate direct
+outbound traffic:
 
 - **`CapDrop: ALL`** - the agent serves HTTP on `:8080` and shells out to
   nothing (exec runs in the separate toolserver), so it needs no Linux
@@ -66,15 +68,17 @@ These controls remove paths no honest runtime agent needs:
   own subdirectory from the named codegen volume. It cannot read activation
   data, cached libraries, agent repositories, or another build workspace from
   Airlock's persistent volume.
-- **Per-agent internal networks** - with `AGENT_NETWORK_PER_AGENT=true`, Airlock
-  creates a Docker `Internal` bridge for each runtime and attaches only trusted
-  dependency containers carrying the instance-scoped
+- **Per-agent runtime networks** - with `AGENT_NETWORK_PER_AGENT=true`, Airlock
+  creates an internet-capable Docker bridge for each runtime and attaches only
+  trusted dependency containers carrying the instance-scoped
   `run.airlock.agent-network-access` label. Runtime containers never join the
   shared `AGENT_NETWORK`; that internal network is only a dependency-discovery
   seed. Each agent can reach the `airlock` API alias and its scoped Postgres
-  endpoint, but has no route to the host, cloud metadata, private networks, the
-  public internet, infrastructure services, or sibling agents. Legitimate
-  outbound HTTP uses Airlock's brokered APIs and destination policy.
+  endpoint and has unrestricted direct outbound access. Separate bridges keep
+  runtimes out of each other's Docker network and service-discovery namespace.
+  Trusted dependency endpoints use a lower gateway priority so these bridges do
+  not replace Airlock or Postgres's existing default route. Brokered HTTP remains
+  available for managed credentials and checked destinations.
 - **Replica-safe network lifecycle** - deterministic network names and labels
   make creation idempotent. Start, stop, idle reap, and reconciliation hold a
   per-agent PostgreSQL advisory lock before attaching or detaching endpoints,
@@ -84,8 +88,8 @@ These controls remove paths no honest runtime agent needs:
   a network with an unexpected endpoint is retained rather than destructively
   pruned.
 - **External Postgres relay** - the `external-db` Compose profile runs a
-  fixed-destination TCP relay. It is the only external-DB endpoint attached to
-  each internal agent network, and it forwards bytes only to `DB_HOST:DB_PORT`.
+  fixed-destination TCP relay. It is the configured external-DB endpoint attached
+  to each agent network, and it forwards bytes only to `DB_HOST:DB_PORT`.
   TLS and the per-agent Postgres role remain end-to-end; agents connect to
   `postgres-agent-relay:5432` through `DB_HOST_AGENT` / `DB_PORT_AGENT`.
 
@@ -112,23 +116,27 @@ The Compose deployment requires a Docker daemon that supports dynamic container
 attachment to local bridge networks and allows Airlock to use its Docker API socket.
 Docker Engine and Docker Desktop provide these capabilities.
 
-- **Native development** - a host process cannot be attached to a Docker
-  internal bridge. `.env.dev.example` therefore sets
+- **Native development** - a host process cannot be attached to a Docker bridge
+  managed by the containerized Airlock process. `.env.dev.example` therefore sets
   `AGENT_NETWORK_PER_AGENT=false`; runtime agents use the shared development
-  network and host gateway. Do not use native mode for mutually untrusted
-  agents. Run Airlock through Compose to enforce runtime network isolation.
+  `DOCKER_NETWORK` and host gateway.
 - **Non-Compose deployments** - containers that agents must reach need both the
   instance-valued `run.airlock.agent-network-access` label and a comma-separated
   `run.airlock.agent-network-aliases` label, and must join the internal
   `AGENT_NETWORK` seed. Airlock fails agent startup when no trusted dependency
-  is available or a managed network does not match the required internal
-  bridge/labels. Managed isolation is the application default; explicitly set
-  `AGENT_NETWORK_PER_AGENT=false` only for trusted native development.
+  is available or a managed network does not match the required bridge/labels.
+  Managed per-agent networking is the application default; explicitly set
+  `AGENT_NETWORK_PER_AGENT=false` only for native development.
 - **Other server-side egress** - `AGENT_HTTP_PRIVATE_CIDRS` governs Airlock's
   brokered HTTP, connection, MCP, outbound OAuth, and credential-test clients.
   Build toolservers, Git, LLM provider clients, and exec endpoints run on
   separate trusted-server paths; apply deployment egress policy to those paths
   when required.
+- **Runtime egress** - OSS agent code can reach public, private, host, and cloud
+  metadata destinations directly when routing permits. `AGENT_HTTP_PRIVATE_CIDRS`
+  applies only to Airlock-brokered requests and does not constrain a runtime's
+  own clients. Importing distributions can supply a stricter
+  `container.RuntimeNetworkPolicy` at composition time.
 - **Rootless BuildKit** - *shipped (prod, opt-in via `BUILDKIT_HOST`).* The
   prod compose runs a `moby/buildkit:rootless` daemon, and airlock builds
   agent images through it via a remote buildx builder (`builder.buildImage`)

@@ -217,8 +217,8 @@ func TestNetworkConfig(t *testing.T) {
 
 func TestAgentNetworkCreateOptions(t *testing.T) {
 	agentID := uuid.New().String()
-	got := agentNetworkCreateOptions("prod", agentID)
-	if got.Driver != "bridge" || !got.Internal {
+	got := agentNetworkCreateOptions("prod", agentID, false)
+	if got.Driver != "bridge" || got.Internal {
 		t.Fatalf("network policy = driver %q internal %v", got.Driver, got.Internal)
 	}
 	wantLabels := map[string]string{
@@ -241,18 +241,23 @@ func TestValidateAgentNetwork(t *testing.T) {
 	valid := network.Inspect{
 		Name:     "prod-agent-net-" + agentID,
 		Driver:   "bridge",
-		Internal: true,
-		Labels:   agentNetworkCreateOptions("prod", agentID).Labels,
+		Internal: false,
+		Labels:   agentNetworkCreateOptions("prod", agentID, false).Labels,
 	}
-	if err := validateAgentNetwork(valid, "prod", agentID); err != nil {
+	if err := validateAgentNetwork(valid, "prod", agentID, false); err != nil {
 		t.Fatalf("valid network rejected: %v", err)
+	}
+	isolated := valid
+	isolated.Internal = true
+	if err := validateAgentNetwork(isolated, "prod", agentID, true); err != nil {
+		t.Fatalf("valid internal network rejected: %v", err)
 	}
 
 	tests := []struct {
 		name   string
 		mutate func(*network.Inspect)
 	}{
-		{"external", func(n *network.Inspect) { n.Internal = false }},
+		{"internal mismatch", func(n *network.Inspect) { n.Internal = true }},
 		{"wrong driver", func(n *network.Inspect) { n.Driver = "overlay" }},
 		{"wrong instance", func(n *network.Inspect) { n.Labels[labelInstance] = "other" }},
 		{"wrong agent", func(n *network.Inspect) { n.Labels[labelAgentID] = uuid.NewString() }},
@@ -266,10 +271,26 @@ func TestValidateAgentNetwork(t *testing.T) {
 				candidate.Labels[key] = value
 			}
 			tt.mutate(&candidate)
-			if err := validateAgentNetwork(candidate, "prod", agentID); err == nil {
+			if err := validateAgentNetwork(candidate, "prod", agentID, false); err == nil {
 				t.Fatal("invalid network accepted")
 			}
 		})
+	}
+}
+
+func TestDirectRuntimeNetworkPolicy(t *testing.T) {
+	if (DirectRuntimeNetworkPolicy{}).Internal(uuid.New()) {
+		t.Fatal("OSS runtime network must permit direct egress")
+	}
+}
+
+func TestAgentDependencyEndpointSettings(t *testing.T) {
+	got := agentDependencyEndpointSettings([]string{"airlock"})
+	if !slices.Equal(got.Aliases, []string{"airlock"}) {
+		t.Fatalf("Aliases = %v, want [airlock]", got.Aliases)
+	}
+	if got.GwPriority != -1 {
+		t.Fatalf("GwPriority = %d, want -1", got.GwPriority)
 	}
 }
 
@@ -278,6 +299,23 @@ func TestAgentNetworkName(t *testing.T) {
 	m := &DockerManager{cfg: &config.Config{InstanceID: "prod"}}
 	if got, want := m.agentNetworkName(agentID), "prod-agent-net-12345678-1234-1234-1234-123456789abc"; got != want {
 		t.Fatalf("agentNetworkName() = %q, want %q", got, want)
+	}
+}
+
+func TestAgentRuntimeNetworkName(t *testing.T) {
+	agentID := uuid.MustParse("12345678-1234-1234-1234-123456789abc")
+	m := &DockerManager{cfg: &config.Config{
+		InstanceID:           "prod",
+		DockerNetwork:        "airlock",
+		AgentNetwork:         "airlock-agents",
+		AgentNetworkPerAgent: true,
+	}}
+	if got, want := m.agentRuntimeNetworkName(agentID), "prod-agent-net-12345678-1234-1234-1234-123456789abc"; got != want {
+		t.Fatalf("managed agentRuntimeNetworkName() = %q, want %q", got, want)
+	}
+	m.cfg.AgentNetworkPerAgent = false
+	if got, want := m.agentRuntimeNetworkName(agentID), "airlock"; got != want {
+		t.Fatalf("shared agentRuntimeNetworkName() = %q, want %q", got, want)
 	}
 }
 

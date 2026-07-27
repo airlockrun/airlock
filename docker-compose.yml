@@ -365,7 +365,7 @@ services:
 
       # Container orchestration networks. DOCKER_NETWORK carries infra and
       # toolserver/build containers. AGENT_NETWORK is the internal dependency
-      # seed; each runtime gets its own internal managed network.
+      # seed; each runtime gets its own internet-capable managed network.
       DOCKER_NETWORK: ${DOCKER_NETWORK:-airlock}
       AGENT_NETWORK: ${AGENT_NETWORK:-airlock-agents}
       AGENT_NETWORK_PER_AGENT: "${AGENT_NETWORK_PER_AGENT:-true}"
@@ -421,7 +421,7 @@ services:
       start_period: 30s
     restart: unless-stopped
     # On both networks: infra (reach rustfs/caddy/postgres) + agents (so
-    # agent containers can reach airlock:8080 on the isolated net).
+    # agent containers can reach airlock:8080 on their managed networks).
     networks: [default, agents]
     labels:
       run.airlock.agent-network-access: ${AIRLOCK_INSTANCE_ID:-airlock}
@@ -492,9 +492,10 @@ services:
         gw_priority: 1
 
 # `default` (airlock) carries all infra. `agents` carries
-# only trusted dependency containers. Airlock creates one internal bridge per
-# runtime and attaches the labeled dependencies from `agents`; runtimes never
-# join this shared seed network. Toolserver/build containers stay on `default`.
+# only trusted dependency containers. Airlock creates one internet-capable
+# bridge per runtime and attaches the labeled dependencies from `agents`;
+# runtimes never join this shared seed network. Toolserver/build containers stay
+# on `default`.
 # Tunnel mode adds an internal, fixed-address ingress bridge shared only by
 # Caddy and cloudflared plus a cloudflared-only egress bridge.
 # See airlock/docs/agent-isolation.md.
