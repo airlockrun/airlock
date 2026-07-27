@@ -3,8 +3,8 @@ import { airlockCloneCommand, airlockInitCommand, airlockInstallCommand } from '
 
 describe('Air CLI commands', () => {
   it('installs the versioned global launcher', () => {
-    expect(airlockInstallCommand('github.com/airlockrun/agentsdk/cmd/airlock', '0.4.1-alpha.1')).toBe(
-      'go install github.com/airlockrun/agentsdk/cmd/airlock@v0.4.1-alpha.1',
+    expect(airlockInstallCommand('github.com/airlockrun/agentsdk/cmd/airlock', '0.4.1')).toBe(
+      'go install github.com/airlockrun/agentsdk/cmd/airlock@v0.4.1',
     )
   })
 
