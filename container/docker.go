@@ -32,6 +32,7 @@ type DockerManager struct {
 	cfg                    *config.Config
 	logger                 *zap.Logger
 	pool                   *pgxpool.Pool
+	networkPolicy          RuntimeNetworkPolicy
 	mu                     sync.Mutex
 	active                 map[string]*Container // container name → Container
 	lastActivity           map[string]time.Time  // container name → last use
@@ -47,9 +48,12 @@ type DockerManager struct {
 }
 
 // NewDockerManager creates a Docker-based ContainerManager.
-func NewDockerManager(cfg *config.Config, pool *pgxpool.Pool, logger *zap.Logger) *DockerManager {
+func NewDockerManager(cfg *config.Config, pool *pgxpool.Pool, networkPolicy RuntimeNetworkPolicy, logger *zap.Logger) *DockerManager {
 	if pool == nil {
 		panic("container: database pool is required")
+	}
+	if networkPolicy == nil {
+		panic("container: runtime network policy is required")
 	}
 	cli, err := dockerclient.NewClientWithOpts(dockerclient.FromEnv, dockerclient.WithAPIVersionNegotiation())
 	if err != nil {
@@ -61,6 +65,7 @@ func NewDockerManager(cfg *config.Config, pool *pgxpool.Pool, logger *zap.Logger
 		cfg:                    cfg,
 		logger:                 logger,
 		pool:                   pool,
+		networkPolicy:          networkPolicy,
 		active:                 make(map[string]*Container),
 		lastActivity:           make(map[string]time.Time),
 		inFlight:               make(map[string]int),
@@ -251,6 +256,13 @@ func (m *DockerManager) agentNetworkName(agentID uuid.UUID) string {
 	return m.cfg.InstanceID + "-agent-net-" + agentID.String()
 }
 
+func (m *DockerManager) agentRuntimeNetworkName(agentID uuid.UUID) string {
+	if m.cfg.AgentNetworkPerAgent {
+		return m.agentNetworkName(agentID)
+	}
+	return m.cfg.DockerNetwork
+}
+
 // StartAgent implements ContainerManager.
 func (m *DockerManager) StartAgent(ctx context.Context, opts AgentOpts) (*Container, error) {
 	desiredClaims, err := auth.ValidateAgentToken(m.cfg.JWTSecret, opts.Token)
@@ -267,9 +279,8 @@ func (m *DockerManager) StartAgent(ctx context.Context, opts AgentOpts) (*Contai
 	defer unlock()
 
 	name := m.agentName(opts.AgentID)
-	networkName := m.cfg.AgentNetwork
+	networkName := m.agentRuntimeNetworkName(opts.AgentID)
 	if m.cfg.AgentNetworkPerAgent {
-		networkName = m.agentNetworkName(opts.AgentID)
 		if err := m.ensureAgentNetwork(ctx, opts.AgentID); err != nil {
 			return nil, fmt.Errorf("prepare agent network: %w", err)
 		}
@@ -286,7 +297,7 @@ func (m *DockerManager) StartAgent(ctx context.Context, opts AgentOpts) (*Contai
 	}
 	runtimeMatch := func(c *Container) bool {
 		return imageMatch(c.Image) &&
-			(!m.cfg.AgentNetworkPerAgent || c.Network == networkName) &&
+			(networkName == "" || c.Network == networkName) &&
 			reusableAgentToken(m.cfg.JWTSecret, c.Token, opts.Token, time.Now())
 	}
 
@@ -841,10 +852,10 @@ func networkConfig(networkName string) *network.NetworkingConfig {
 	return netCfg
 }
 
-func agentNetworkCreateOptions(instanceID, agentID string) network.CreateOptions {
+func agentNetworkCreateOptions(instanceID, agentID string, internal bool) network.CreateOptions {
 	return network.CreateOptions{
 		Driver:   "bridge",
-		Internal: true,
+		Internal: internal,
 		Labels: map[string]string{
 			labelInstance: instanceID,
 			labelResource: resourceAgentNet,
@@ -853,14 +864,31 @@ func agentNetworkCreateOptions(instanceID, agentID string) network.CreateOptions
 	}
 }
 
-func validateAgentNetwork(info network.Inspect, instanceID, agentID string) error {
-	if info.Driver != "bridge" || !info.Internal ||
+func validateAgentNetworkIdentity(info network.Inspect, instanceID, agentID string) error {
+	if info.Driver != "bridge" ||
 		info.Labels[labelInstance] != instanceID ||
 		info.Labels[labelResource] != resourceAgentNet ||
 		info.Labels[labelAgentID] != agentID {
 		return fmt.Errorf("network %s does not match managed agent network policy", info.Name)
 	}
 	return nil
+}
+
+func validateAgentNetwork(info network.Inspect, instanceID, agentID string, internal bool) error {
+	if err := validateAgentNetworkIdentity(info, instanceID, agentID); err != nil {
+		return err
+	}
+	if info.Internal != internal {
+		return fmt.Errorf("network %s internal=%t, want %t", info.Name, info.Internal, internal)
+	}
+	return nil
+}
+
+func agentDependencyEndpointSettings(aliases []string) *network.EndpointSettings {
+	return &network.EndpointSettings{
+		Aliases:    aliases,
+		GwPriority: -1,
+	}
 }
 
 func (m *DockerManager) lockAgentNetwork(ctx context.Context, agentID uuid.UUID) (func(), error) {
@@ -907,19 +935,39 @@ func (m *DockerManager) agentNetworkDependencies(ctx context.Context, runningOnl
 
 func (m *DockerManager) ensureAgentNetwork(ctx context.Context, agentID uuid.UUID) error {
 	name := m.agentNetworkName(agentID)
+	internal := m.networkPolicy.Internal(agentID)
 	info, err := m.client.NetworkInspect(ctx, name, network.InspectOptions{})
+	if err == nil {
+		if err := validateAgentNetworkIdentity(info, m.cfg.InstanceID, agentID.String()); err != nil {
+			return err
+		}
+		if info.Internal != internal {
+			// Network mutability is deliberately narrow in Docker. Disconnect all
+			// endpoints and recreate the owned network when a distribution's
+			// policy changes. StartAgent will replace the now-disconnected runtime.
+			for id := range info.Containers {
+				if err := m.client.NetworkDisconnect(ctx, info.ID, id, true); err != nil && !cerrdefs.IsNotFound(err) {
+					return fmt.Errorf("disconnect endpoint %s from network %s: %w", id, name, err)
+				}
+			}
+			if err := m.client.NetworkRemove(ctx, info.ID); err != nil && !cerrdefs.IsNotFound(err) {
+				return fmt.Errorf("remove network %s for policy change: %w", name, err)
+			}
+			err = cerrdefs.ErrNotFound
+		}
+	}
 	if cerrdefs.IsNotFound(err) {
-		if _, err = m.client.NetworkCreate(ctx, name, agentNetworkCreateOptions(m.cfg.InstanceID, agentID.String())); err != nil {
+		if _, err = m.client.NetworkCreate(ctx, name, agentNetworkCreateOptions(m.cfg.InstanceID, agentID.String(), internal)); err != nil {
 			if !cerrdefs.IsAlreadyExists(err) {
-				return fmt.Errorf("create internal network %s: %w", name, err)
+				return fmt.Errorf("create managed network %s: %w", name, err)
 			}
 		}
 		info, err = m.client.NetworkInspect(ctx, name, network.InspectOptions{})
 	}
 	if err != nil {
-		return fmt.Errorf("inspect internal network %s: %w", name, err)
+		return fmt.Errorf("inspect managed network %s: %w", name, err)
 	}
-	if err := validateAgentNetwork(info, m.cfg.InstanceID, agentID.String()); err != nil {
+	if err := validateAgentNetwork(info, m.cfg.InstanceID, agentID.String(), internal); err != nil {
 		return err
 	}
 
@@ -940,7 +988,7 @@ func (m *DockerManager) ensureAgentNetwork(ctx context.Context, agentID uuid.UUI
 		if len(aliases) == 0 {
 			return fmt.Errorf("agent network dependency %s has no %s label", id, config.LabelAgentNetworkAliases)
 		}
-		if err := m.client.NetworkConnect(ctx, info.ID, id, &network.EndpointSettings{Aliases: aliases}); err != nil {
+		if err := m.client.NetworkConnect(ctx, info.ID, id, agentDependencyEndpointSettings(aliases)); err != nil {
 			return fmt.Errorf("connect dependency %s to network %s: %w", id, name, err)
 		}
 	}
@@ -956,7 +1004,7 @@ func (m *DockerManager) cleanupAgentNetwork(ctx context.Context, agentID uuid.UU
 	if err != nil {
 		return err
 	}
-	if err := validateAgentNetwork(info, m.cfg.InstanceID, agentID.String()); err != nil {
+	if err := validateAgentNetworkIdentity(info, m.cfg.InstanceID, agentID.String()); err != nil {
 		return err
 	}
 	dependencies, err := m.agentNetworkDependencies(ctx, false)

@@ -83,10 +83,10 @@ type Config struct {
 	DockerNetwork string // Docker network for infra + toolserver/build containers (e.g. "airlock-dev")
 	// AgentNetwork is the trusted dependency-discovery network when managed
 	// per-agent networking is enabled. Shared/native mode attaches runtimes to
-	// it directly. It defaults to DockerNetwork when AGENT_NETWORK is unset.
+	// DockerNetwork. It defaults to DockerNetwork when AGENT_NETWORK is unset.
 	AgentNetwork string
-	// AgentNetworkPerAgent creates an internal Docker network for each runtime
-	// and attaches only trusted dependencies discovered on AgentNetwork. Native
+	// AgentNetworkPerAgent creates a managed Docker network for each runtime and
+	// attaches only trusted dependencies discovered on AgentNetwork. Native
 	// development leaves this false because the Airlock process runs on the host.
 	AgentNetworkPerAgent bool
 	// AgentHTTPPrivateCIDRs controls which non-public addresses Airlock may dial

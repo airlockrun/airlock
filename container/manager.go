@@ -8,6 +8,21 @@ import (
 	"github.com/google/uuid"
 )
 
+// RuntimeNetworkPolicy selects the Docker network boundary for an agent
+// runtime. The OSS server supplies DirectRuntimeNetworkPolicy; distributions
+// that require stricter containment can inject their own policy.
+type RuntimeNetworkPolicy interface {
+	Internal(agentID uuid.UUID) bool
+}
+
+// DirectRuntimeNetworkPolicy keeps managed per-agent networks internet-capable.
+// Per-agent networks still separate runtimes from one another.
+type DirectRuntimeNetworkPolicy struct{}
+
+func (DirectRuntimeNetworkPolicy) Internal(uuid.UUID) bool {
+	return false
+}
+
 // Container represents a running container.
 type Container struct {
 	ID       string // Docker container ID

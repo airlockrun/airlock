@@ -104,7 +104,7 @@ func runServe(_ []string) {
 	logger.Info("s3 connected")
 
 	// Container manager
-	containers := container.NewDockerManager(cfg, database.Pool(), logger.Named("container"))
+	containers := container.NewDockerManager(cfg, database.Pool(), container.DirectRuntimeNetworkPolicy{}, logger.Named("container"))
 	defer containers.Close()
 	logger.Info("docker manager ready")
 
