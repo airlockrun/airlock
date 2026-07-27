@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/airlockrun/airlock/networkpolicy"
 	"github.com/google/uuid"
 )
 
@@ -26,6 +27,22 @@ func setSystemDefaultModel(t *testing.T, capabilitySuffix string, providerRowID 
 		_, _ = testDB.Pool().Exec(context.Background(),
 			"UPDATE system_settings SET "+modelCol+" = '', "+fkCol+" = NULL WHERE id = true")
 	})
+}
+
+func TestLanguageModelOptionsProviderHTTPClient(t *testing.T) {
+	h := &Handler{httpNetwork: networkpolicy.New(nil, false)}
+	compat := h.languageModelOptions(resolvedModel{providerID: "openai-compatible"})
+	if compat.HTTPClient == nil {
+		t.Fatal("openai-compatible HTTP client is nil")
+	}
+	if compat.HTTPClient.Timeout != 0 {
+		t.Fatalf("openai-compatible HTTP client timeout = %s, want no client-wide timeout", compat.HTTPClient.Timeout)
+	}
+
+	hosted := h.languageModelOptions(resolvedModel{providerID: "openai"})
+	if hosted.HTTPClient != nil {
+		t.Fatalf("hosted provider HTTP client = %p, want nil", hosted.HTTPClient)
+	}
 }
 
 func TestResolveModel(t *testing.T) {
@@ -120,13 +137,13 @@ func TestResolveModel(t *testing.T) {
 				setAgentExecModel(t, agentID.String(), openaiID, tc.execModel)
 			}
 
-			provID, provSlug, modelID, apiKey, _, err := ah.resolveModel(
+			resolved, err := ah.resolveModel(
 				context.Background(), agentID.String(), tc.slug, tc.capability)
 
 			if tc.wantErrSubs != "" {
 				if err == nil {
 					t.Fatalf("expected error containing %q, got success (provider=%s model=%s)",
-						tc.wantErrSubs, provID, modelID)
+						tc.wantErrSubs, resolved.providerID, resolved.modelID)
 				}
 				if !strings.Contains(err.Error(), tc.wantErrSubs) {
 					t.Fatalf("error %q does not contain %q", err.Error(), tc.wantErrSubs)
@@ -137,17 +154,17 @@ func TestResolveModel(t *testing.T) {
 			if err != nil {
 				t.Fatalf("resolveModel: %v", err)
 			}
-			if provID != tc.wantProv {
-				t.Errorf("providerID = %q, want %q", provID, tc.wantProv)
+			if resolved.providerID != tc.wantProv {
+				t.Errorf("providerID = %q, want %q", resolved.providerID, tc.wantProv)
 			}
-			if modelID != tc.wantModel {
-				t.Errorf("modelID = %q, want %q", modelID, tc.wantModel)
+			if resolved.modelID != tc.wantModel {
+				t.Errorf("modelID = %q, want %q", resolved.modelID, tc.wantModel)
 			}
-			if provSlug != "default" {
-				t.Errorf("providerSlug = %q, want %q", provSlug, "default")
+			if resolved.providerSlug != "default" {
+				t.Errorf("providerSlug = %q, want %q", resolved.providerSlug, "default")
 			}
-			if apiKey != "sk-test" {
-				t.Errorf("apiKey = %q, want sk-test (decrypt failed?)", apiKey)
+			if resolved.apiKey != "sk-test" {
+				t.Errorf("apiKey = %q, want sk-test (decrypt failed?)", resolved.apiKey)
 			}
 		})
 	}

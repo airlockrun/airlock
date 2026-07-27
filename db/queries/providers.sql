@@ -9,6 +9,9 @@ RETURNING *;
 -- name: GetProviderByID :one
 SELECT * FROM providers WHERE id = $1;
 
+-- name: LockProvidersByID :many
+SELECT id FROM providers WHERE id = ANY (@ids::uuid[]) ORDER BY id FOR UPDATE;
+
 -- name: ListProviders :many
 SELECT * FROM providers ORDER BY provider_id, slug;
 

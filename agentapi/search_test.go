@@ -151,6 +151,39 @@ func TestResolveSearchTier3_None(t *testing.T) {
 	}
 }
 
+func TestExplicitSearchConfigurationFailsClosed(t *testing.T) {
+	skipIfNoDB(t)
+	ctx := context.Background()
+	agentID, _ := testAgentAndUser(t)
+	q := dbq.New(testDB.Pool())
+	enc := testEncryptor()
+
+	unsupportedID := seedEnabledProvider(t, "anthropic", "Anthropic", "ant-secret")
+	if _, err := testDB.Pool().Exec(ctx,
+		`UPDATE agents SET search_provider_id = $1, search_model = '' WHERE id = $2`,
+		unsupportedID, agentID,
+	); err != nil {
+		t.Fatalf("configure unsupported search provider: %v", err)
+	}
+	if _, err := tryConfiguredSearch(ctx, q, enc, agentID.String()); err == nil {
+		t.Fatal("unsupported configured search provider returned nil error")
+	}
+
+	braveID := seedEnabledProvider(t, "brave", "Brave Search", "brave-secret")
+	if _, err := testDB.Pool().Exec(ctx,
+		`UPDATE agents SET search_provider_id = $1, search_model = '' WHERE id = $2`,
+		braveID, agentID,
+	); err != nil {
+		t.Fatalf("configure search provider: %v", err)
+	}
+	if _, err := testDB.Pool().Exec(ctx, `UPDATE providers SET is_enabled = false WHERE id = $1`, braveID); err != nil {
+		t.Fatalf("disable search provider: %v", err)
+	}
+	if _, err := tryConfiguredSearch(ctx, q, enc, agentID.String()); err == nil {
+		t.Fatal("disabled configured search provider returned nil error")
+	}
+}
+
 // TestResolveSearchTier2_PreferCatalogOnly: both xai (LLM w/ search) and
 // brave (catalog-only search) are configured; the agent's exec_model is
 // anthropic (no search in overlay → tier 1 doesn't fire). Brave must win

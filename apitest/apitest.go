@@ -163,9 +163,11 @@ func Setup(t *testing.T) *Harness {
 
 	encKey := mustHex(EncryptionKey)
 	secretStore := secrets.NewLocal(crypto.New(encKey))
+	httpNetwork := networkpolicy.New(cfg.AgentHTTPPrivateCIDRs, true)
+	providerEndpointHTTPClient := httpNetwork.ProviderEndpointClient(0)
 
 	fakeContainers := NewFakeContainerManager()
-	buildSvc := builder.New(cfg, database, fakeContainers, secretStore, logger.Named("builder"))
+	buildSvc := builder.New(cfg, database, fakeContainers, secretStore, providerEndpointHTTPClient, logger.Named("builder"))
 	hub := realtime.NewHub(logger.Named("hub"))
 	pubsub := realtime.NewPubSub(hub, logger.Named("pubsub"))
 	buildSvc.SetEventPublisher(realtime.NewBuildEventPublisher(pubsub, hub))
@@ -182,29 +184,29 @@ func Setup(t *testing.T) *Harness {
 	)
 	scheduler := trigger.NewScheduler(dispatcher, database, logger.Named("scheduler"))
 
-	httpNetwork := networkpolicy.New(cfg.AgentHTTPPrivateCIDRs, true)
 	router := api.NewRouter(api.RouterConfig{
-		DB:             database,
-		JWTSecret:      cfg.JWTSecret,
-		PublicURL:      cfg.PublicURL,
-		OAuthClient:    oauth.NewClient(httpNetwork.Client(30*time.Second), true),
-		TelegramDriver: telegram,
-		Secrets:        secretStore,
-		S3Client:       s3Client,
-		BuildService:   buildSvc,
-		Dispatcher:     dispatcher,
-		Scheduler:      scheduler,
-		BridgeManager:  bridgeMgr,
-		Containers:     fakeContainers,
-		PromptProxy:    prompter,
-		Hub:            hub,
-		PubSub:         pubsub,
-		Handler:        wsHandler,
-		AgentDomain:    cfg.AgentDomain,
-		AgentBaseURL:   cfg.AgentBaseURL, // method value
-		HTTPNetwork:    httpNetwork,
-		RealIP:         api.ParseRealIPConfig("", 1, "apitest-reverse-proxy-secret-32-bytes"),
-		Logger:         logger,
+		DB:                         database,
+		JWTSecret:                  cfg.JWTSecret,
+		PublicURL:                  cfg.PublicURL,
+		OAuthClient:                oauth.NewClient(httpNetwork.Client(30*time.Second), true),
+		TelegramDriver:             telegram,
+		Secrets:                    secretStore,
+		S3Client:                   s3Client,
+		BuildService:               buildSvc,
+		Dispatcher:                 dispatcher,
+		Scheduler:                  scheduler,
+		BridgeManager:              bridgeMgr,
+		Containers:                 fakeContainers,
+		PromptProxy:                prompter,
+		Hub:                        hub,
+		PubSub:                     pubsub,
+		Handler:                    wsHandler,
+		AgentDomain:                cfg.AgentDomain,
+		AgentBaseURL:               cfg.AgentBaseURL, // method value
+		HTTPNetwork:                httpNetwork,
+		ProviderEndpointHTTPClient: providerEndpointHTTPClient,
+		RealIP:                     api.ParseRealIPConfig("", 1, "apitest-reverse-proxy-secret-32-bytes"),
+		Logger:                     logger,
 	})
 
 	srv := httptest.NewServer(router)

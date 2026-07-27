@@ -52,15 +52,17 @@ outbound traffic:
   **without** capping how many agents run (which would break usability).
 - **Default seccomp** - left in place (not `unconfined`).
 - **host-gateway is explicit** - `AGENT_HOST_GATEWAY=true` adds
-  `host.docker.internal:host-gateway` when Airlock runs natively and agents
-  call it through the host. Container deployments omit the alias and its host
-  reachability; agents use service DNS through `API_URL_AGENT`.
+  `host.docker.internal:host-gateway` to agent runtimes when native development
+  requires it. The Compose Airlock service also carries the alias so configured
+  Ollama and vLLM endpoints on the Docker host are reachable from Airlock.
 - **Brokered HTTP destination policy** - agent `httpRequest`, connection, MCP,
   and outbound OAuth calls are dialed by the Airlock process through one
-  transport. Public HTTPS addresses are always allowed; `AGENT_HTTP_PRIVATE_CIDRS`
-  controls non-public destinations. An unset value is public-only; installer-generated
-  configuration allows RFC1918 IPv4, Tailscale/CGNAT, and IPv6 ULA networks.
-  Every DNS result and redirect is checked. Link-local
+  policy. Public HTTPS addresses are always allowed; `AGENT_HTTP_PRIVATE_CIDRS`
+  controls non-public destinations. Configured model-provider endpoints may also
+  use HTTP when every dialed address is in those private CIDRs. An unset value is
+  public-HTTPS-only; installer-generated configuration allows RFC1918 IPv4,
+  Tailscale/CGNAT, and IPv6 ULA networks. Provider calls never follow redirects,
+  and DNS is resolved and filtered immediately before every new connection. Link-local
   addresses (including cloud metadata), multicast, and unspecified addresses
   are always blocked. Loopback HTTP is available only when `PUBLIC_URL`
   explicitly configures a localhost development instance.
@@ -128,10 +130,10 @@ Docker Engine and Docker Desktop provide these capabilities.
   Managed per-agent networking is the application default; explicitly set
   `AGENT_NETWORK_PER_AGENT=false` only for native development.
 - **Other server-side egress** - `AGENT_HTTP_PRIVATE_CIDRS` governs Airlock's
-  brokered HTTP, connection, MCP, outbound OAuth, and credential-test clients.
-  Build toolservers, Git, LLM provider clients, and exec endpoints run on
-  separate trusted-server paths; apply deployment egress policy to those paths
-  when required.
+  brokered HTTP, connection, MCP, outbound OAuth, credential-test, provider
+  discovery, and explicit OpenAI-compatible runtime clients. Hosted provider
+  packages, build toolservers, Git, and exec endpoints use separate trusted-server
+  paths; apply deployment egress policy to those paths when required.
 - **Runtime egress** - OSS agent code can reach public, private, host, and cloud
   metadata destinations directly when routing permits. `AGENT_HTTP_PRIVATE_CIDRS`
   applies only to Airlock-brokered requests and does not constrain a runtime's

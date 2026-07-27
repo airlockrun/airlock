@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
@@ -48,6 +49,7 @@ type BuildService struct {
 	db                    *db.DB
 	containers            container.ContainerManager
 	encryptor             secrets.Store
+	providerHTTPClient    *http.Client
 	events                EventPublisher
 	upgradeNotifier       PostUpgradeNotifier
 	upgradeSystemNotifier PostUpgradeSystemNotifier
@@ -74,7 +76,7 @@ type buildHandle struct {
 }
 
 // New creates a BuildService. Panics if any dependency is nil.
-func New(cfg *config.Config, database *db.DB, containers container.ContainerManager, encryptor secrets.Store, logger *zap.Logger) *BuildService {
+func New(cfg *config.Config, database *db.DB, containers container.ContainerManager, encryptor secrets.Store, providerHTTPClient *http.Client, logger *zap.Logger) *BuildService {
 	if cfg == nil {
 		panic("builder: cfg is nil")
 	}
@@ -87,20 +89,24 @@ func New(cfg *config.Config, database *db.DB, containers container.ContainerMana
 	if encryptor == nil {
 		panic("builder: encryptor is nil")
 	}
+	if providerHTTPClient == nil {
+		panic("builder: provider HTTP client is nil")
+	}
 	if logger == nil {
 		panic("builder: logger is nil")
 	}
 	parallelism := buildParallelism()
 	logger.Info("build concurrency limit", zap.Int("parallelism", parallelism))
 	return &BuildService{
-		cfg:        cfg,
-		db:         database,
-		containers: containers,
-		encryptor:  encryptor,
-		events:     noopPublisher{},
-		logger:     logger,
-		inFlight:   make(map[string]*buildHandle),
-		buildSem:   make(chan struct{}, parallelism),
+		cfg:                cfg,
+		db:                 database,
+		containers:         containers,
+		encryptor:          encryptor,
+		providerHTTPClient: providerHTTPClient,
+		events:             noopPublisher{},
+		logger:             logger,
+		inFlight:           make(map[string]*buildHandle),
+		buildSem:           make(chan struct{}, parallelism),
 	}
 }
 

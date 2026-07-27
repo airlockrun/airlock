@@ -58,7 +58,7 @@ func (h *Handler) LLMStream(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Resolve model: explicit slug > capability default > agent exec_model.
-	providerID, providerSlug, modelID, apiKey, baseURL, err := h.resolveModel(ctx, agentID.String(), req.Slug, req.Capability)
+	resolved, err := h.resolveModel(ctx, agentID.String(), req.Slug, req.Capability)
 	if err != nil {
 		h.logger.Error("resolve model failed", zap.Error(err))
 		writeJSONError(w, http.StatusBadRequest, err.Error())
@@ -74,13 +74,13 @@ func (h *Handler) LLMStream(w http.ResponseWriter, r *http.Request) {
 
 	// In dev mode, route LLM calls through the proxy (e.g. telescope).
 	if h.llmProxyURL != "" {
-		baseURL = h.llmProxyURL
+		resolved.baseURL = h.llmProxyURL
 	}
 
 	// Resolve s3ref: sentinels into URLs or base64 before the provider sees
 	// the messages. Providers continue to receive a standard URL-or-base64
 	// Image/Data string.
-	policy := solprovider.PolicyFor(providerID, modelID)
+	policy := solprovider.PolicyFor(resolved.providerID, resolved.modelID)
 	if h.forceInlineAttachments {
 		// Dev escape hatch: public URL isn't reachable from the model
 		// provider. Strip URL capability so the resolver falls through
@@ -95,15 +95,12 @@ func (h *Handler) LLMStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	model := solprovider.CreateModel(providerID, modelID, solprovider.Options{
-		APIKey:  apiKey,
-		BaseURL: baseURL,
-	})
+	model := solprovider.CreateModel(resolved.providerID, resolved.modelID, h.languageModelOptions(resolved))
 
 	capture := llmUsageCapture{
-		providerCatalogID: providerID,
-		providerSlug:      providerSlug,
-		model:             modelID,
+		providerCatalogID: resolved.providerID,
+		providerSlug:      resolved.providerSlug,
+		model:             resolved.modelID,
 		capability:        normalizeCapability(req.Capability),
 		slug:              req.Slug,
 	}
@@ -140,8 +137,8 @@ func (h *Handler) LLMStream(w http.ResponseWriter, r *http.Request) {
 		// to the agent as opaque NDJSON.
 		if ee, ok := event.Data.(stream.ErrorEvent); ok {
 			h.logger.Warn("LLM stream error",
-				zap.String("provider", providerID),
-				zap.String("model", modelID),
+				zap.String("provider", resolved.providerID),
+				zap.String("model", resolved.modelID),
 				zap.String("agent", agentID.String()),
 				zap.Error(ee.Error),
 			)
@@ -178,6 +175,19 @@ func (h *Handler) LLMStream(w http.ResponseWriter, r *http.Request) {
 	capture.fromStreamUsage(usageAcc)
 	capture.latency = time.Since(started)
 	h.recordLLMUsage(agentID, runIDHdr, capture)
+}
+
+func (h *Handler) languageModelOptions(resolved resolvedModel) solprovider.Options {
+	opts := solprovider.Options{
+		APIKey:                    resolved.apiKey,
+		BaseURL:                   resolved.baseURL,
+		IncludeUsage:              resolved.includeUsage,
+		SupportsStructuredOutputs: resolved.supportsStructuredOutputs,
+	}
+	if resolved.providerID == "openai-compatible" {
+		opts.HTTPClient = h.httpNetwork.ProviderEndpointClient(0)
+	}
+	return opts
 }
 
 // sanitizeEventData replaces empty json.RawMessage fields on stream
@@ -236,12 +246,22 @@ type ndJSONEvent struct {
 // Steps 1(unbound) and 2 then walk the agent's per-capability override pair,
 // then the system_settings capability default pair (modelForCapability).
 // Empty FK at every tier ⇒ "no model configured" error.
-func (h *Handler) resolveModel(ctx context.Context, agentID, slug, capability string) (providerID, providerSlug, modelID, apiKey, baseURL string, err error) {
+type resolvedModel struct {
+	providerID                string
+	providerSlug              string
+	modelID                   string
+	apiKey                    string
+	baseURL                   string
+	includeUsage              *bool
+	supportsStructuredOutputs *bool
+}
+
+func (h *Handler) resolveModel(ctx context.Context, agentID, slug, capability string) (resolvedModel, error) {
 	q := dbq.New(h.db.Pool())
 
 	agentUUID, parseErr := parseUUID(agentID)
 	if parseErr != nil {
-		return "", "", "", "", "", fmt.Errorf("invalid agent ID: %w", parseErr)
+		return resolvedModel{}, fmt.Errorf("invalid agent ID: %w", parseErr)
 	}
 	pgAgentID := toPgUUID(agentUUID)
 
@@ -257,9 +277,9 @@ func (h *Handler) resolveModel(ctx context.Context, agentID, slug, capability st
 		})
 		switch {
 		case errors.Is(slotErr, pgx.ErrNoRows):
-			return "", "", "", "", "", fmt.Errorf("model slug %q is not registered for this agent — declare it with RegisterModel", slug)
+			return resolvedModel{}, fmt.Errorf("model slug %q is not registered for this agent — declare it with RegisterModel", slug)
 		case slotErr != nil:
-			return "", "", "", "", "", fmt.Errorf("look up model slot %q: %w", slug, slotErr)
+			return resolvedModel{}, fmt.Errorf("look up model slot %q: %w", slug, slotErr)
 		case slot.AssignedProviderID.Valid && slot.AssignedModel != "":
 			providerRowID = slot.AssignedProviderID
 			modelName = slot.AssignedModel
@@ -272,29 +292,50 @@ func (h *Handler) resolveModel(ctx context.Context, agentID, slug, capability st
 	}
 
 	if !providerRowID.Valid || modelName == "" {
+		var err error
 		providerRowID, modelName, err = h.modelForCapability(ctx, q, pgAgentID, capability)
 		if err != nil {
-			return "", "", "", "", "", err
+			return resolvedModel{}, err
 		}
 	}
 	if !providerRowID.Valid || modelName == "" {
-		return "", "", "", "", "", fmt.Errorf("no model configured for capability %q — set one in admin Settings or the agent's Models tab", capability)
+		return resolvedModel{}, fmt.Errorf("no model configured for capability %q — set one in admin Settings or the agent's Models tab", capability)
 	}
 
 	// Load the providers row by FK so we get the catalog provider_id and
 	// API key without parsing strings.
 	p, dbErr := q.GetProviderByID(ctx, providerRowID)
 	if dbErr != nil {
-		return "", "", "", "", "", fmt.Errorf("provider row not found: %w", dbErr)
+		return resolvedModel{}, fmt.Errorf("provider row not found: %w", dbErr)
 	}
 	if !p.IsEnabled {
-		return "", "", "", "", "", fmt.Errorf("provider %q (%s) is disabled", p.CatalogID, p.Slug)
+		return resolvedModel{}, fmt.Errorf("provider %q (%s) is disabled", p.CatalogID, p.Slug)
 	}
-	decrypted, decErr := h.encryptor.Get(ctx, "provider/"+p.ID.String()+"/api_key", p.ApiKey)
-	if decErr != nil {
-		return "", "", "", "", "", fmt.Errorf("decrypt API key for %q (%s): %w", p.CatalogID, p.Slug, decErr)
+	var includeUsage *bool
+	var supportsStructuredOutputs *bool
+	if p.CatalogID == "openai-compatible" {
+		confirmed, modelErr := q.GetProviderModel(ctx, dbq.GetProviderModelParams{
+			ConfiguredProviderID: p.ID,
+			ModelID:              modelName,
+		})
+		if modelErr != nil {
+			return resolvedModel{}, fmt.Errorf("model %q is not confirmed for provider %q (%s): %w", modelName, p.CatalogID, p.Slug, modelErr)
+		}
+		includeUsage = &confirmed.IncludeUsage
+		supportsStructuredOutputs = &confirmed.StructuredOutputs
 	}
-	return p.CatalogID, p.Slug, modelName, decrypted, p.BaseUrl, nil
+	decrypted := ""
+	if p.ApiKey != "" {
+		decrypted, dbErr = h.encryptor.Get(ctx, "provider/"+p.ID.String()+"/api_key", p.ApiKey)
+		if dbErr != nil {
+			return resolvedModel{}, fmt.Errorf("decrypt API key for %q (%s): %w", p.CatalogID, p.Slug, dbErr)
+		}
+	}
+	return resolvedModel{
+		providerID: p.CatalogID, providerSlug: p.Slug, modelID: modelName,
+		apiKey: decrypted, baseURL: p.BaseUrl, includeUsage: includeUsage,
+		supportsStructuredOutputs: supportsStructuredOutputs,
+	}, nil
 }
 
 // modelForCapability picks the model for a capability using the tier-2 and
@@ -334,16 +375,16 @@ func (h *Handler) ImageGenerate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	providerID, providerSlug, modelID, apiKey, baseURL, err := h.resolveModel(ctx, agentID.String(), req.Slug, req.Capability)
+	resolved, err := h.resolveModel(ctx, agentID.String(), req.Slug, req.Capability)
 	if err != nil {
 		h.logger.Error("resolve image model failed", zap.Error(err))
 		writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	m := solprovider.CreateImageModel(providerID, modelID, solprovider.Options{APIKey: apiKey, BaseURL: baseURL})
+	m := solprovider.CreateImageModel(resolved.providerID, resolved.modelID, solprovider.Options{APIKey: resolved.apiKey, BaseURL: resolved.baseURL})
 	if m == nil {
-		writeJSONError(w, http.StatusBadRequest, fmt.Sprintf("provider %q does not support image generation", providerID))
+		writeJSONError(w, http.StatusBadRequest, fmt.Sprintf("provider %q does not support image generation", resolved.providerID))
 		return
 	}
 
@@ -353,7 +394,7 @@ func (h *Handler) ImageGenerate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	capture := llmUsageCapture{providerCatalogID: providerID, providerSlug: providerSlug, model: modelID, capability: "image", slug: req.Slug}
+	capture := llmUsageCapture{providerCatalogID: resolved.providerID, providerSlug: resolved.providerSlug, model: resolved.modelID, capability: "image", slug: req.Slug}
 	started := time.Now()
 	result, err := m.Generate(ctx, opts)
 	capture.latency = time.Since(started)
@@ -393,16 +434,16 @@ func (h *Handler) Embed(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	providerID, providerSlug, modelID, apiKey, baseURL, err := h.resolveModel(ctx, agentID.String(), req.Slug, req.Capability)
+	resolved, err := h.resolveModel(ctx, agentID.String(), req.Slug, req.Capability)
 	if err != nil {
 		h.logger.Error("resolve embedding model failed", zap.Error(err))
 		writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	m := solprovider.CreateEmbeddingModel(providerID, modelID, solprovider.Options{APIKey: apiKey, BaseURL: baseURL})
+	m := solprovider.CreateEmbeddingModel(resolved.providerID, resolved.modelID, solprovider.Options{APIKey: resolved.apiKey, BaseURL: resolved.baseURL})
 	if m == nil {
-		writeJSONError(w, http.StatusBadRequest, fmt.Sprintf("provider %q does not support embeddings", providerID))
+		writeJSONError(w, http.StatusBadRequest, fmt.Sprintf("provider %q does not support embeddings", resolved.providerID))
 		return
 	}
 
@@ -412,7 +453,7 @@ func (h *Handler) Embed(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	capture := llmUsageCapture{providerCatalogID: providerID, providerSlug: providerSlug, model: modelID, capability: "embedding", slug: req.Slug}
+	capture := llmUsageCapture{providerCatalogID: resolved.providerID, providerSlug: resolved.providerSlug, model: resolved.modelID, capability: "embedding", slug: req.Slug}
 	started := time.Now()
 	result, err := m.Embed(ctx, opts)
 	capture.latency = time.Since(started)
@@ -445,16 +486,16 @@ func (h *Handler) SpeechGenerate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	providerID, providerSlug, modelID, apiKey, baseURL, err := h.resolveModel(ctx, agentID.String(), req.Slug, req.Capability)
+	resolved, err := h.resolveModel(ctx, agentID.String(), req.Slug, req.Capability)
 	if err != nil {
 		h.logger.Error("resolve speech model failed", zap.Error(err))
 		writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	m := solprovider.CreateSpeechModel(providerID, modelID, solprovider.Options{APIKey: apiKey, BaseURL: baseURL})
+	m := solprovider.CreateSpeechModel(resolved.providerID, resolved.modelID, solprovider.Options{APIKey: resolved.apiKey, BaseURL: resolved.baseURL})
 	if m == nil {
-		writeJSONError(w, http.StatusBadRequest, fmt.Sprintf("provider %q does not support speech generation", providerID))
+		writeJSONError(w, http.StatusBadRequest, fmt.Sprintf("provider %q does not support speech generation", resolved.providerID))
 		return
 	}
 
@@ -464,7 +505,7 @@ func (h *Handler) SpeechGenerate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	capture := llmUsageCapture{providerCatalogID: providerID, providerSlug: providerSlug, model: modelID, capability: "speech", slug: req.Slug}
+	capture := llmUsageCapture{providerCatalogID: resolved.providerID, providerSlug: resolved.providerSlug, model: resolved.modelID, capability: "speech", slug: req.Slug}
 	started := time.Now()
 	result, err := m.Generate(ctx, opts)
 	capture.latency = time.Since(started)
@@ -502,16 +543,16 @@ func (h *Handler) Transcribe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	providerID, providerSlug, modelID, apiKey, baseURL, err := h.resolveModel(ctx, agentID.String(), req.Slug, req.Capability)
+	resolved, err := h.resolveModel(ctx, agentID.String(), req.Slug, req.Capability)
 	if err != nil {
 		h.logger.Error("resolve transcription model failed", zap.Error(err))
 		writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	m := solprovider.CreateTranscriptionModel(providerID, modelID, solprovider.Options{APIKey: apiKey, BaseURL: baseURL})
+	m := solprovider.CreateTranscriptionModel(resolved.providerID, resolved.modelID, solprovider.Options{APIKey: resolved.apiKey, BaseURL: resolved.baseURL})
 	if m == nil {
-		writeJSONError(w, http.StatusBadRequest, fmt.Sprintf("provider %q does not support transcription", providerID))
+		writeJSONError(w, http.StatusBadRequest, fmt.Sprintf("provider %q does not support transcription", resolved.providerID))
 		return
 	}
 
@@ -532,7 +573,7 @@ func (h *Handler) Transcribe(w http.ResponseWriter, r *http.Request) {
 		h.logger.Warn("transcription transcode failed — sending original bytes", zap.Error(tErr))
 	}
 
-	capture := llmUsageCapture{providerCatalogID: providerID, providerSlug: providerSlug, model: modelID, capability: "transcription", slug: req.Slug}
+	capture := llmUsageCapture{providerCatalogID: resolved.providerID, providerSlug: resolved.providerSlug, model: resolved.modelID, capability: "transcription", slug: req.Slug}
 	started := time.Now()
 	result, err := m.Transcribe(ctx, opts)
 	capture.latency = time.Since(started)

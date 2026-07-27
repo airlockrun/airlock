@@ -24,12 +24,12 @@ import (
 //
 // Best-effort: accounting must never break a turn that already ran. Uses a
 // fresh bounded ctx so a cancelled turn still records the tokens it burned.
-func (s *Service) recordSystemRunUsage(runID, userID uuid.UUID, providerCatalogID, model string, usage stream.Usage, errored bool) {
+func (s *Service) recordSystemRunUsage(runID, userID uuid.UUID, providerCatalogID, providerSlug, model string, usage stream.Usage, errored bool) {
 	c := llmledger.Capture{
 		SystemRunID:       pgtype.UUID{Bytes: runID, Valid: true},
 		UserID:            pgtype.UUID{Bytes: userID, Valid: true},
 		ProviderCatalogID: providerCatalogID,
-		ProviderSlug:      providerCatalogID,
+		ProviderSlug:      providerSlug,
 		Model:             model,
 		Capability:        "text",
 		CallKind:          "system",

@@ -3,12 +3,17 @@ package apitest_test
 import (
 	"context"
 	"net/http"
+	"sort"
 	"testing"
+	"time"
 
 	"github.com/airlockrun/airlock/apitest"
+	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/authz"
 	"github.com/airlockrun/airlock/db/dbq"
+	grantssvc "github.com/airlockrun/airlock/service/grants"
 	"github.com/google/uuid"
+	"go.uber.org/zap"
 )
 
 // seedGrantedModel creates an enabled provider and grants (provider, model) to
@@ -94,5 +99,81 @@ func TestRevokeModelGrant_LeavesSystemDefault(t *testing.T) {
 	}
 	if got := agentExecModel(t, h, agentID); got != "default-exec" {
 		t.Errorf("exec override = %q, want 'default-exec' (left untouched — still a default)", got)
+	}
+}
+
+func TestRevokeModelGrantLocksAgentsInUUIDOrder(t *testing.T) {
+	h := apitest.Setup(t)
+	admin := apitest.CreateUser(t, h, "ordering-admin", "admin")
+	provID, grantID := seedGrantedModel(t, h, "ordered-model")
+	agentIDs := []uuid.UUID{
+		apitest.CreateAgent(t, h, apitest.AgentOpts{OwnerID: admin, Slug: "ordered-one"}),
+		apitest.CreateAgent(t, h, apitest.AgentOpts{OwnerID: admin, Slug: "ordered-two"}),
+	}
+	for _, agentID := range agentIDs {
+		setAgentExec(t, h, agentID, provID, "ordered-model")
+	}
+	sort.Slice(agentIDs, func(i, j int) bool { return agentIDs[i].String() < agentIDs[j].String() })
+
+	blocker, err := h.DB.Pool().Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer blocker.Rollback(t.Context())
+	if _, err := blocker.Exec(t.Context(), `SELECT id FROM agents WHERE id=$1 FOR UPDATE`, agentIDs[0]); err != nil {
+		t.Fatalf("lock first agent: %v", err)
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- grantssvc.New(h.DB, zap.NewNop()).RevokeModelGrant(
+			context.Background(), authz.UserPrincipal(admin, auth.RoleAdmin), grantID,
+		)
+	}()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		var waiting bool
+		if err := h.DB.Pool().QueryRow(t.Context(), `
+			SELECT EXISTS (
+				SELECT 1 FROM pg_stat_activity
+				WHERE datname = current_database()
+				  AND pid <> pg_backend_pid()
+				  AND wait_event_type = 'Lock'
+				  AND query LIKE '%SELECT id FROM agents WHERE id = ANY%'
+			)`).Scan(&waiting); err != nil {
+			t.Fatalf("inspect lock wait: %v", err)
+		}
+		if waiting {
+			break
+		}
+		if time.Now().After(deadline) {
+			_ = blocker.Rollback(t.Context())
+			t.Fatal("revocation did not block while locking the first agent")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	probe, err := h.DB.Pool().Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := probe.Exec(t.Context(), `SELECT id FROM agents WHERE id=$1 FOR UPDATE NOWAIT`, agentIDs[1]); err != nil {
+		_ = probe.Rollback(t.Context())
+		_ = blocker.Rollback(t.Context())
+		t.Fatalf("later agent was locked before the lower UUID: %v", err)
+	}
+	if err := probe.Rollback(t.Context()); err != nil {
+		t.Fatalf("release probe lock: %v", err)
+	}
+	if err := blocker.Commit(t.Context()); err != nil {
+		t.Fatalf("release first agent: %v", err)
+	}
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("RevokeModelGrant: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("RevokeModelGrant deadlocked")
 	}
 }

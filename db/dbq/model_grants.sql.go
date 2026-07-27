@@ -309,6 +309,52 @@ func (q *Queries) IsSystemDefaultModel(ctx context.Context, arg IsSystemDefaultM
 	return exists, err
 }
 
+const listAgentIDsUsingModel = `-- name: ListAgentIDsUsingModel :many
+SELECT id FROM (
+    SELECT a.id FROM agents a WHERE
+         (a.build_provider_id     = $1 AND a.build_model     = $2)
+      OR (a.exec_provider_id      = $1 AND a.exec_model      = $2)
+      OR (a.stt_provider_id       = $1 AND a.stt_model       = $2)
+      OR (a.vision_provider_id    = $1 AND a.vision_model    = $2)
+      OR (a.tts_provider_id       = $1 AND a.tts_model       = $2)
+      OR (a.image_gen_provider_id = $1 AND a.image_gen_model = $2)
+      OR (a.embedding_provider_id = $1 AND a.embedding_model = $2)
+      OR (a.search_provider_id    = $1 AND a.search_model    = $2)
+    UNION
+    SELECT s.agent_id AS id FROM agent_model_slots s
+    WHERE s.assigned_provider_id = $1 AND s.assigned_model = $2
+) affected
+ORDER BY id
+`
+
+type ListAgentIDsUsingModelParams struct {
+	CatalogID pgtype.UUID `json:"provider_id"`
+	Model     string      `json:"model"`
+}
+
+// Grant revocation locks every affected agent before it locks the provider.
+// UNION removes agents referenced by more than one fixed override or slot;
+// ORDER BY makes the subsequent LockAgentsByID call deterministic.
+func (q *Queries) ListAgentIDsUsingModel(ctx context.Context, arg ListAgentIDsUsingModelParams) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, listAgentIDsUsingModel, arg.CatalogID, arg.Model)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []pgtype.UUID{}
+	for rows.Next() {
+		var id pgtype.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listModelGrants = `-- name: ListModelGrants :many
 SELECT mg.id, mg.provider_id, mg.model, mg.grantee_id, mg.created_at,
        p.provider_id AS provider_catalog, p.slug AS provider_slug
@@ -356,8 +402,9 @@ func (q *Queries) ListModelGrants(ctx context.Context) ([]ListModelGrantsRow, er
 }
 
 const listModelGrantsForGrantees = `-- name: ListModelGrantsForGrantees :many
-SELECT provider_id, model FROM model_grants
-WHERE grantee_id = ANY ($1::uuid[])
+SELECT mg.provider_id, mg.model FROM model_grants mg
+JOIN providers p ON p.id = mg.provider_id
+WHERE mg.grantee_id = ANY ($1::uuid[]) AND p.is_enabled
 `
 
 type ListModelGrantsForGranteesRow struct {

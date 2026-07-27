@@ -14,6 +14,25 @@ export type CatalogModel = {
 export type FlatOption = { label: string; value: string }
 export type GroupedOption = { label: string; items: FlatOption[] }
 
+export type ProviderModelRoute = { providerId: string; providerConfigId?: string }
+export type ConfiguredProviderRoute = {
+  id: string
+  providerId: string
+  slug: string
+  displayName: string
+  isEnabled: boolean
+}
+
+export function modelMatchesProvider(model: ProviderModelRoute, provider: ConfiguredProviderRoute): boolean {
+  if (model.providerConfigId) return model.providerConfigId === provider.id
+  return model.providerId === provider.providerId
+}
+
+export function providerModelGroupLabel(provider: ConfiguredProviderRoute): string {
+  const identity = `${provider.providerId}/${provider.slug}`
+  return provider.displayName ? `${provider.displayName} (${identity})` : identity
+}
+
 // Multi-key encoding: each picker option's `value` packs the providers row
 // UUID and the bare model name into one string ("rowUUID|modelName"). Pipe
 // is safe because UUIDs are hex-only and model IDs from models.dev never
@@ -78,21 +97,18 @@ export function useModelCapabilities(opts: ModelCapabilitiesOptions = {}) {
   const providers = useProvidersStore()
   const allowed = useModelsAllowedStore()
 
-  // groupModels fans out catalog models across every configured provider
-  // row that shares the model's catalog provider_id. Multiple keys per
-  // provider produce multiple groups: a model that exists once in the
-  // catalog under "openai" appears under both "openai/personal" and
-  // "openai/team-acme" if both rows are configured. The option `value`
-  // packs (row UUID, bare model name) so the submit path can route to
-  // the correct providers row.
+  // Static catalog models fan out to enabled rows sharing their provider_id.
+  // Endpoint-specific models carry providerConfigId and bind only to that row.
+  // The option value packs (row UUID, bare model name) so submission routes to
+  // the selected configured provider instance.
   function groupModels(accept: (m: CatalogModel) => boolean): GroupedOption[] {
     const groups: Record<string, FlatOption[]> = {}
     for (const m of catalog.models) {
       if (!accept(m)) continue
-      const rows = providers.providers.filter(p => p.providerId === m.providerId)
+      const rows = providers.providers.filter(p => p.isEnabled && modelMatchesProvider(m, p))
       for (const row of rows) {
         if (opts.restrictToAllowed && !allowed.isAllowed(row.id, m.id)) continue
-        const key = `${row.providerId}/${row.slug}`
+        const key = providerModelGroupLabel(row)
         if (!groups[key]) groups[key] = []
         groups[key].push({
           label: m.name || m.id,
@@ -122,16 +138,17 @@ export function useModelCapabilities(opts: ModelCapabilitiesOptions = {}) {
     }
     const groups: GroupedOption[] = []
     for (const row of providers.providers) {
+      if (!row.isEnabled) continue
       if (!searchCapable.has(row.providerId)) continue
       const items: FlatOption[] = [{ label: 'Provider default', value: packModelValue(row.id, '') }]
       for (const m of catalog.models) {
         // A search model must be tool-capable and text-in/text-out — the
         // backend runs web search by calling it with a search tool.
-        if (m.providerId !== row.providerId || !isToolTextModel(m)) continue
+        if (!modelMatchesProvider(m, row) || !isToolTextModel(m)) continue
         if (opts.restrictToAllowed && !allowed.isAllowed(row.id, m.id)) continue
         items.push({ label: m.name || m.id, value: packModelValue(row.id, m.id) })
       }
-      groups.push({ label: `${row.providerId}/${row.slug}`, items })
+      groups.push({ label: providerModelGroupLabel(row), items })
     }
     return groups.sort((a, b) => a.label.localeCompare(b.label))
   })

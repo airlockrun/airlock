@@ -7,6 +7,7 @@ package settings
 
 import (
 	"context"
+	"sort"
 
 	"github.com/airlockrun/airlock/apihelpers"
 	"github.com/airlockrun/airlock/authz"
@@ -14,6 +15,7 @@ import (
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/airlockrun/airlock/service"
 	"github.com/airlockrun/airlock/service/catalog"
+	solprovider "github.com/airlockrun/sol/provider"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"
@@ -94,7 +96,7 @@ func (s *Service) Update(ctx context.Context, p authz.Principal, req UpdateReque
 		// or unset. Search is the exception — the runtime picks the search
 		// backend off the provider's overlay capability, so the model
 		// field stays empty by design.
-		if slot.ModelRequired && (slot.Model != "") != fk.Valid {
+		if (slot.Model != "" && !fk.Valid) || (slot.ModelRequired && slot.Model == "" && fk.Valid) {
 			return dbq.SystemSetting{}, service.Detail(service.ErrInvalidInput,
 				"%s_model and %s_provider_id must be set or unset together", slot.Name, slot.Name)
 		}
@@ -102,14 +104,42 @@ func (s *Service) Update(ctx context.Context, p authz.Principal, req UpdateReque
 		models[slot.Name] = slot.Model
 	}
 
+	tx, err := s.db.Pool().Begin(ctx)
+	if err != nil {
+		return dbq.SystemSetting{}, err
+	}
+	defer tx.Rollback(ctx)
+	qtx := q.WithTx(tx)
+	providerIDs := make([]pgtype.UUID, 0, len(parsed))
+	seen := map[uuid.UUID]struct{}{}
+	for _, fk := range parsed {
+		if fk.Valid {
+			id := uuid.UUID(fk.Bytes)
+			if _, ok := seen[id]; !ok {
+				seen[id] = struct{}{}
+				providerIDs = append(providerIDs, fk)
+			}
+		}
+	}
+	sort.Slice(providerIDs, func(i, j int) bool {
+		return uuid.UUID(providerIDs[i].Bytes).String() < uuid.UUID(providerIDs[j].Bytes).String()
+	})
+	locked, err := qtx.LockProvidersByID(ctx, providerIDs)
+	if err != nil {
+		return dbq.SystemSetting{}, err
+	}
+	if len(locked) != len(providerIDs) {
+		return dbq.SystemSetting{}, service.Detail(service.ErrInvalidInput, "unknown provider for a default-model slot")
+	}
+
 	// Defense-in-depth: the UI only offers capability-matching models per slot,
 	// but a direct API call could send anything. Reject a model that lacks the
 	// capability its slot needs before it lands in system_settings.
-	if err := s.validateSlotCapabilities(ctx, p, req.Slots, parsed); err != nil {
+	if err := s.validateSlotCapabilities(ctx, qtx, p, req.Slots, parsed); err != nil {
 		return dbq.SystemSetting{}, err
 	}
 
-	row, err := q.UpdateSystemSettings(ctx, dbq.UpdateSystemSettingsParams{
+	row, err := qtx.UpdateSystemSettings(ctx, dbq.UpdateSystemSettingsParams{
 		DefaultBuildProviderID:     parsed["default_build"],
 		DefaultBuildModel:          models["default_build"],
 		DefaultExecProviderID:      parsed["default_exec"],
@@ -131,15 +161,17 @@ func (s *Service) Update(ctx context.Context, p authz.Principal, req UpdateReque
 		s.logger.Error("update system settings failed", zap.Error(err))
 		return dbq.SystemSetting{}, err
 	}
+	if err := tx.Commit(ctx); err != nil {
+		return dbq.SystemSetting{}, err
+	}
 	return row, nil
 }
 
-// validateSlotCapabilities checks every slot that names a model: the model must
-// exist in the catalog under that slot's provider row and satisfy the slot's
-// capability requirement. Slots with no model (unset, or search's
-// provider-default) are skipped. The catalog lookup is loaded once and indexed
-// by (catalog provider id, model id).
-func (s *Service) validateSlotCapabilities(ctx context.Context, p authz.Principal, slots []SlotUpdate, parsed map[string]pgtype.UUID) error {
+// validateSlotCapabilities checks every configured provider row and model.
+// Rows must be enabled; endpoint-specific models must be confirmed for that
+// exact row and satisfy the slot capability. Hosted provider-only search slots
+// use their backend default. The catalog is loaded once per update.
+func (s *Service) validateSlotCapabilities(ctx context.Context, q *dbq.Queries, p authz.Principal, slots []SlotUpdate, parsed map[string]pgtype.UUID) error {
 	type need struct {
 		name, model string
 		fk          uuid.UUID
@@ -148,7 +180,7 @@ func (s *Service) validateSlotCapabilities(ctx context.Context, p authz.Principa
 	fkSet := map[uuid.UUID]struct{}{}
 	for _, slot := range slots {
 		fk := parsed[slot.Name]
-		if slot.Model == "" || !fk.Valid {
+		if !fk.Valid {
 			continue
 		}
 		id := uuid.UUID(fk.Bytes)
@@ -159,14 +191,16 @@ func (s *Service) validateSlotCapabilities(ctx context.Context, p authz.Principa
 		return nil
 	}
 
-	q := dbq.New(s.db.Pool())
-	fkToCatalog := make(map[uuid.UUID]string, len(fkSet))
+	fkToProvider := make(map[uuid.UUID]dbq.Provider, len(fkSet))
 	for id := range fkSet {
 		row, err := q.GetProviderByID(ctx, pgtype.UUID{Bytes: id, Valid: true})
 		if err != nil {
 			return service.Detail(service.ErrInvalidInput, "unknown provider for a default-model slot")
 		}
-		fkToCatalog[id] = row.CatalogID
+		if !row.IsEnabled {
+			return service.Detail(service.ErrInvalidInput, "provider %q (%s) is disabled", row.CatalogID, row.Slug)
+		}
+		fkToProvider[id] = row
 	}
 
 	all, err := s.catalog.ListModels(ctx, p, catalog.ListModelsOptions{})
@@ -175,18 +209,53 @@ func (s *Service) validateSlotCapabilities(ctx context.Context, p authz.Principa
 	}
 	index := make(map[string]catalog.Model, len(all))
 	for _, m := range all {
-		index[m.ProviderID+"\x00"+m.ID] = m
+		key := m.ProviderID
+		if m.ProviderConfigID != "" {
+			key = m.ProviderConfigID
+		}
+		index[key+"\x00"+m.ID] = m
 	}
 
 	for _, n := range needs {
+		provider := fkToProvider[n.fk]
+		capability := slotCapability(n.name)
+		if n.model == "" {
+			if provider.CatalogID == "openai-compatible" {
+				return service.Detail(service.ErrInvalidInput, "%s: an openai-compatible model is required", n.name)
+			}
+			if capability == "search" && solprovider.SearchBackend(provider.CatalogID) == "" {
+				return service.Detail(service.ErrInvalidInput, "%s: provider %q does not provide a supported search backend", n.name, provider.CatalogID)
+			}
+			continue
+		}
+		if provider.CatalogID == "openai-compatible" {
+			confirmed, err := q.GetProviderModel(ctx, dbq.GetProviderModelParams{
+				ConfiguredProviderID: pgtype.UUID{Bytes: n.fk, Valid: true},
+				ModelID:              n.model,
+			})
+			if err != nil {
+				return service.Detail(service.ErrInvalidInput, "%s: model %q is not confirmed for provider %q", n.name, n.model, provider.Slug)
+			}
+			local := catalog.Model{ID: confirmed.ModelID, ProviderID: provider.CatalogID, Kind: "language", ToolCall: confirmed.ToolCall}
+			if confirmed.Vision {
+				local.Caps = []string{"text", "vision"}
+			} else {
+				local.Caps = []string{"text"}
+			}
+			if ok, reason := catalog.ModelMeetsCapability(local, capability); !ok {
+				return service.Detail(service.ErrInvalidInput, "%s: model %q %s", n.name, n.model, reason)
+			}
+			continue
+		}
 		// Capability is derived from the catalog; a model the catalog doesn't
 		// list (e.g. granted before models.dev caught up) can't be checked, so
 		// defer to the other gates rather than block.
-		m, ok := index[fkToCatalog[n.fk]+"\x00"+n.model]
+		key := provider.CatalogID
+		m, ok := index[key+"\x00"+n.model]
 		if !ok {
 			continue
 		}
-		if ok, reason := catalog.ModelMeetsCapability(m, slotCapability(n.name)); !ok {
+		if ok, reason := catalog.ModelMeetsCapability(m, capability); !ok {
 			return service.Detail(service.ErrInvalidInput, "%s: model %q %s", n.name, n.model, reason)
 		}
 	}

@@ -10,8 +10,19 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-// SystemDefault returns the (providerCatalogID, modelName, apiKey, baseURL)
-// tuple for one capability by reading the system_settings default pair and
+// ResolvedModel is a validated provider row plus the selected model and the
+// endpoint-specific OpenAI-compatible request behavior confirmed for that row.
+type ResolvedModel struct {
+	ProviderCatalogID         string
+	ProviderSlug              string
+	ModelName                 string
+	APIKey                    string
+	BaseURL                   string
+	IncludeUsage              *bool
+	SupportsStructuredOutputs *bool
+}
+
+// SystemDefault returns the resolved model for one capability by reading the default pair and
 // resolving the providers row. The agent-less counterpart to
 // (*agentHandler).resolveModel — same shape, same fail-loud error
 // messages, no agent-axis lookups. Used by callers that need a working
@@ -25,7 +36,7 @@ import (
 // api/agent_llm.go and this one read system_settings the same way, so
 // the shared part stays a free function rather than mutating Service's
 // dep set.
-func SystemDefault(ctx context.Context, d *db.DB, enc secrets.Store, capability string) (providerCatalogID, modelName, apiKey, baseURL string, err error) {
+func SystemDefault(ctx context.Context, d *db.DB, enc secrets.Store, capability string) (ResolvedModel, error) {
 	if d == nil {
 		panic("models.SystemDefault: db is required")
 	}
@@ -35,24 +46,48 @@ func SystemDefault(ctx context.Context, d *db.DB, enc secrets.Store, capability 
 	q := dbq.New(d.Pool())
 	settings, sErr := q.GetSystemSettings(ctx)
 	if sErr != nil {
-		return "", "", "", "", fmt.Errorf("get system settings: %w", sErr)
+		return ResolvedModel{}, fmt.Errorf("get system settings: %w", sErr)
 	}
 	providerRowID, modelName := systemCapabilityDefault(settings, capability)
 	if !providerRowID.Valid || modelName == "" {
-		return "", "", "", "", fmt.Errorf("no system-default model configured for capability %q — set one in admin Settings", capability)
+		return ResolvedModel{}, fmt.Errorf("no system-default model configured for capability %q — set one in admin Settings", capability)
 	}
 	p, dbErr := q.GetProviderByID(ctx, providerRowID)
 	if dbErr != nil {
-		return "", "", "", "", fmt.Errorf("provider row not found: %w", dbErr)
+		return ResolvedModel{}, fmt.Errorf("provider row not found: %w", dbErr)
 	}
 	if !p.IsEnabled {
-		return "", "", "", "", fmt.Errorf("provider %q (%s) is disabled", p.CatalogID, p.Slug)
+		return ResolvedModel{}, fmt.Errorf("provider %q (%s) is disabled", p.CatalogID, p.Slug)
 	}
-	decrypted, decErr := enc.Get(ctx, "provider/"+p.ID.String()+"/api_key", p.ApiKey)
-	if decErr != nil {
-		return "", "", "", "", fmt.Errorf("decrypt API key for %q (%s): %w", p.CatalogID, p.Slug, decErr)
+	var includeUsage *bool
+	var supportsStructuredOutputs *bool
+	if p.CatalogID == "openai-compatible" {
+		confirmed, err := q.GetProviderModel(ctx, dbq.GetProviderModelParams{
+			ConfiguredProviderID: p.ID,
+			ModelID:              modelName,
+		})
+		if err != nil {
+			return ResolvedModel{}, fmt.Errorf("model %q is not confirmed for provider %q (%s): %w", modelName, p.CatalogID, p.Slug, err)
+		}
+		includeUsage = &confirmed.IncludeUsage
+		supportsStructuredOutputs = &confirmed.StructuredOutputs
 	}
-	return p.CatalogID, modelName, decrypted, p.BaseUrl, nil
+	decrypted := ""
+	if p.ApiKey != "" {
+		decrypted, dbErr = enc.Get(ctx, "provider/"+p.ID.String()+"/api_key", p.ApiKey)
+		if dbErr != nil {
+			return ResolvedModel{}, fmt.Errorf("decrypt API key for %q (%s): %w", p.CatalogID, p.Slug, dbErr)
+		}
+	}
+	return ResolvedModel{
+		ProviderCatalogID:         p.CatalogID,
+		ProviderSlug:              p.Slug,
+		ModelName:                 modelName,
+		APIKey:                    decrypted,
+		BaseURL:                   p.BaseUrl,
+		IncludeUsage:              includeUsage,
+		SupportsStructuredOutputs: supportsStructuredOutputs,
+	}, nil
 }
 
 // systemCapabilityDefault returns the (provider FK, model name) pair

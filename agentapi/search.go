@@ -14,6 +14,7 @@ import (
 	"github.com/airlockrun/airlock/secrets"
 	solprovider "github.com/airlockrun/sol/provider"
 	"github.com/airlockrun/sol/websearch"
+	"github.com/jackc/pgx/v5"
 	"go.uber.org/zap"
 )
 
@@ -132,7 +133,13 @@ func resolveSearchClient(
 		if ranked[i].catalogOnly != ranked[j].catalogOnly {
 			return ranked[i].catalogOnly
 		}
-		return ranked[i].row.CatalogID < ranked[j].row.CatalogID
+		if ranked[i].row.CatalogID != ranked[j].row.CatalogID {
+			return ranked[i].row.CatalogID < ranked[j].row.CatalogID
+		}
+		if ranked[i].row.Slug != ranked[j].row.Slug {
+			return ranked[i].row.Slug < ranked[j].row.Slug
+		}
+		return ranked[i].row.ID.String() < ranked[j].row.ID.String()
 	})
 
 	for _, c := range ranked {
@@ -184,16 +191,25 @@ func trySlotSearch(
 		AgentID: toPgUUID(uid),
 		Slug:    slug,
 	})
-	if err != nil || !slot.AssignedProviderID.Valid {
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("look up search slot %q: %w", slug, err)
+	}
+	if !slot.AssignedProviderID.Valid {
 		return nil, nil
 	}
 	p, err := q.GetProviderByID(ctx, slot.AssignedProviderID)
-	if err != nil || !p.IsEnabled {
-		return nil, nil
+	if err != nil {
+		return nil, fmt.Errorf("look up provider for search slot %q: %w", slug, err)
+	}
+	if !p.IsEnabled {
+		return nil, fmt.Errorf("search slot %q is bound to disabled provider %q (%s)", slug, p.CatalogID, p.Slug)
 	}
 	backend := solprovider.SearchBackend(p.CatalogID)
 	if backend == "" {
-		return nil, nil
+		return nil, fmt.Errorf("search slot %q is bound to provider %q, which has no supported search backend", slug, p.CatalogID)
 	}
 	apiKey, err := enc.Get(ctx, "provider/"+p.ID.String()+"/api_key", p.ApiKey)
 	if err != nil {
@@ -223,25 +239,33 @@ func tryConfiguredSearch(
 		return nil, nil
 	}
 	agent, err := q.GetAgentByID(ctx, toPgUUID(uid))
-	if err != nil {
+	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("load agent search configuration: %w", err)
 	}
 	provFK, model := agent.SearchProviderID, agent.SearchModel
 	if !provFK.Valid {
-		if st, sErr := q.GetSystemSettings(ctx); sErr == nil {
-			provFK, model = st.DefaultSearchProviderID, st.DefaultSearchModel
+		st, err := q.GetSystemSettings(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("load system search configuration: %w", err)
 		}
+		provFK, model = st.DefaultSearchProviderID, st.DefaultSearchModel
 	}
 	if !provFK.Valid {
 		return nil, nil
 	}
 	p, err := q.GetProviderByID(ctx, provFK)
-	if err != nil || !p.IsEnabled {
-		return nil, nil
+	if err != nil {
+		return nil, fmt.Errorf("look up configured search provider: %w", err)
+	}
+	if !p.IsEnabled {
+		return nil, fmt.Errorf("configured search provider %q (%s) is disabled", p.CatalogID, p.Slug)
 	}
 	backend := solprovider.SearchBackend(p.CatalogID)
 	if backend == "" {
-		return nil, nil
+		return nil, fmt.Errorf("configured provider %q has no supported search backend", p.CatalogID)
 	}
 	apiKey, err := enc.Get(ctx, "provider/"+p.ID.String()+"/api_key", p.ApiKey)
 	if err != nil {

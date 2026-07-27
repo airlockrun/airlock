@@ -149,6 +149,31 @@ func TestUpdateModelConfig_AtomicReplaceAndSlotAssignment(t *testing.T) {
 	if len(all) != 1 {
 		t.Errorf("slots count = %d, want 1 (only summarize)", len(all))
 	}
+
+	invalid := &airlockv1.UpdateAgentModelConfigRequest{Config: &airlockv1.AgentModelConfig{
+		ExecModel: "gpt-4o-mini", ExecProviderId: prov,
+		Slots: []*airlockv1.ModelSlotInfo{{Slug: "summarize", AssignedModel: "gpt-4o", AssignedProviderId: "not-a-uuid"}},
+	}}
+	req = userRequestProto(t, http.MethodPut, "/api/v1/agents/"+agentID.String()+"/models", userID, invalid)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("invalid atomic PUT status = %d; body: %s", rec.Code, rec.Body.String())
+	}
+	agent, err = q.GetAgentByID(ctx, toPgUUID(agentID))
+	if err != nil {
+		t.Fatalf("GetAgentByID after invalid PUT: %v", err)
+	}
+	if agent.ExecModel != "gpt-4o" {
+		t.Fatalf("invalid slot changed fixed pair: exec=%q", agent.ExecModel)
+	}
+	slot, err = q.GetAgentModelSlot(ctx, dbq.GetAgentModelSlotParams{AgentID: toPgUUID(agentID), Slug: "summarize"})
+	if err != nil {
+		t.Fatalf("GetAgentModelSlot after invalid PUT: %v", err)
+	}
+	if slot.AssignedModel != "gpt-4o-mini" {
+		t.Fatalf("invalid slot changed assignment: %q", slot.AssignedModel)
+	}
 }
 
 // TestUpdateModelConfig_AdminOnly verifies a non-admin member cannot PUT.

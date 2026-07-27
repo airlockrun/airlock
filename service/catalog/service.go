@@ -35,8 +35,7 @@ func New(d *db.DB, logger *zap.Logger) *Service {
 	return &Service{db: d, logger: logger}
 }
 
-// Provider is one entry from the source catalog — the
-// list a user picks from when adding a provider row.
+// Provider is one entry in the configurable provider catalog.
 type Provider struct {
 	ID   string
 	Name string
@@ -45,17 +44,19 @@ type Provider struct {
 // Model is one model from the active catalog. Picker dropdowns and the
 // capability matrix consume the same model list.
 type Model struct {
-	ID           string
-	Name         string
-	ProviderID   string
-	Kind         string
-	ToolCall     bool
-	Reasoning    bool
-	Caps         []string
-	CostInput    float64
-	CostOutput   float64
-	ContextLimit int32
-	OutputLimit  int32
+	ID                string
+	Name              string
+	ProviderID        string
+	ProviderConfigID  string
+	Kind              string
+	ToolCall          bool
+	Reasoning         bool
+	Caps              []string
+	CostInput         float64
+	CostOutput        float64
+	ContextLimit      int32
+	OutputLimit       int32
+	StructuredOutputs bool
 }
 
 // ModelMeetsCapability reports whether m can serve the given capability and, if
@@ -105,8 +106,8 @@ func ModelMeetsCapability(m Model, capability string) (ok bool, reason string) {
 			return false, "is not a speech-to-text model"
 		}
 	case "search":
-		if !(m.ToolCall && hasCap("text")) {
-			return false, "must support tool calls and text input/output"
+		if solprovider.SearchBackend(m.ProviderID) == "" {
+			return false, "does not provide a supported search backend"
 		}
 	}
 	return true, ""
@@ -125,8 +126,8 @@ type ProviderCapability struct {
 	CatalogOnly  bool
 }
 
-// ListProviders returns the source provider list without Sol-owned overlays,
-// sorted by ID. Used to populate the "add provider" picker.
+// ListProviders returns hosted source providers plus the configurable
+// OpenAI-compatible provider, sorted by ID.
 func (s *Service) ListProviders(ctx context.Context, p authz.Principal) ([]Provider, error) {
 	q := dbq.New(s.db.Pool())
 	if err := authz.Authorize(ctx, q, p, authz.TenantCatalogView, uuid.Nil); err != nil {
@@ -139,6 +140,14 @@ func (s *Service) ListProviders(ctx context.Context, p authz.Principal) ([]Provi
 	}
 	out := make([]Provider, 0, len(providers))
 	for _, p := range providers {
+		out = append(out, Provider{ID: p.ID, Name: p.Name})
+	}
+	all, err := solprovider.AllProviders()
+	if err != nil {
+		s.logger.Error("load provider catalog failed", zap.Error(err))
+		return nil, err
+	}
+	if p, ok := all["openai-compatible"]; ok && providers["openai-compatible"] == nil {
 		out = append(out, Provider{ID: p.ID, Name: p.Name})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
@@ -210,9 +219,34 @@ func (s *Service) ListModels(ctx context.Context, p authz.Principal, opts ListMo
 			out = append(out, m)
 		}
 	}
+	localModels, err := q.ListEnabledProviderModels(ctx)
+	if err != nil {
+		s.logger.Error("list endpoint-specific models failed", zap.Error(err))
+		return nil, err
+	}
+	for _, model := range localModels {
+		configID := uuid.UUID(model.ConfiguredProviderID.Bytes).String()
+		if opts.ProviderFilter != "" && opts.ProviderFilter != model.ProviderCatalogID && opts.ProviderFilter != configID {
+			continue
+		}
+		caps := []string{"text"}
+		if model.Vision {
+			caps = append(caps, "vision")
+		}
+		out = append(out, Model{
+			ID: model.ModelID, Name: model.DisplayName,
+			ProviderID: model.ProviderCatalogID, ProviderConfigID: configID,
+			Kind: "language", ToolCall: model.ToolCall, Reasoning: model.Reasoning,
+			Caps: caps, ContextLimit: model.ContextLimit, OutputLimit: model.OutputLimit,
+			StructuredOutputs: model.StructuredOutputs,
+		})
+	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].ProviderID != out[j].ProviderID {
 			return out[i].ProviderID < out[j].ProviderID
+		}
+		if out[i].ProviderConfigID != out[j].ProviderConfigID {
+			return out[i].ProviderConfigID < out[j].ProviderConfigID
 		}
 		return out[i].ID < out[j].ID
 	})

@@ -57,7 +57,7 @@ func (s *Service) Compact(ctx context.Context, p authz.Principal, conversationID
 		return "", service.ErrNotFound
 	}
 
-	providerID, modelName, apiKey, baseURL, err := servicemodels.SystemDefault(ctx, s.db, s.encryptor, "text")
+	resolved, err := servicemodels.SystemDefault(ctx, s.db, s.encryptor, "text")
 	if err != nil {
 		return "", fmt.Errorf("no system-default LLM configured: %w", err)
 	}
@@ -68,7 +68,7 @@ func (s *Service) Compact(ctx context.Context, p authz.Principal, conversationID
 
 	solAgent := &agent.Agent{
 		Name:  "sysagent",
-		Model: providerID + "/" + modelName,
+		Model: resolved.ProviderCatalogID + "/" + resolved.ModelName,
 		// Compaction summarizes history; there's no live channel, so <env>
 		// carries only the date + (resolved) user, no platform.
 		SystemPrompt: SystemPrompt(s.envFor(ctx, p.UserID, "", conversationID), tools),
@@ -77,13 +77,16 @@ func (s *Service) Compact(ctx context.Context, p authz.Principal, conversationID
 	}
 
 	runner := sol.NewRunner(sol.RunnerOptions{
-		Agent:        solAgent,
-		APIKey:       apiKey,
-		BaseURL:      baseURL,
-		Bus:          compactBus,
-		SessionStore: store,
-		Executor:     tool.NewLocalExecutor(tools, nil),
-		Quiet:        true,
+		Agent:                     solAgent,
+		APIKey:                    resolved.APIKey,
+		BaseURL:                   resolved.BaseURL,
+		HTTPClient:                s.httpClientForProvider(resolved.ProviderCatalogID),
+		IncludeUsage:              resolved.IncludeUsage,
+		SupportsStructuredOutputs: resolved.SupportsStructuredOutputs,
+		Bus:                       compactBus,
+		SessionStore:              store,
+		Executor:                  tool.NewLocalExecutor(tools, nil),
+		Quiet:                     true,
 	})
 
 	result, err := runner.Compact(ctx)

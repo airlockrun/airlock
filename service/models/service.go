@@ -6,12 +6,14 @@ package models
 
 import (
 	"context"
+	"sort"
 
 	"github.com/airlockrun/airlock/authz"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/airlockrun/airlock/service"
 	"github.com/airlockrun/airlock/service/catalog"
+	solprovider "github.com/airlockrun/sol/provider"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"
@@ -162,6 +164,17 @@ func (s *Service) Update(ctx context.Context, p authz.Principal, agentID uuid.UU
 	if err := authz.Authorize(ctx, q, p, authz.AgentModelsUpdate, agentID); err != nil {
 		return State{}, err
 	}
+	tx, err := s.db.Pool().Begin(ctx)
+	if err != nil {
+		return State{}, err
+	}
+	defer tx.Rollback(ctx)
+	qtx := q.WithTx(tx)
+	agent, err = qtx.GetAgentByIDForUpdate(ctx, agent.ID)
+	if err != nil {
+		return State{}, err
+	}
+
 	pairs := []struct {
 		name string
 		p    Pair
@@ -188,53 +201,15 @@ func (s *Service) Update(ctx context.Context, p authz.Principal, agentID uuid.UU
 		"embedding": {agent.EmbeddingProviderID, agent.EmbeddingModel},
 		"search":    {agent.SearchProviderID, agent.SearchModel},
 	}
-	// Defense-in-depth: the UI only offers capability-matching models per slot,
-	// but a direct API call could send anything. validateCapability rejects a
-	// model that lacks the capability its slot needs before it's persisted.
-	validateCapability, err := s.capabilityValidator(ctx, p)
-	if err != nil {
-		return State{}, err
-	}
-
 	fks := make(map[string]pgtype.UUID, len(pairs))
 	for _, item := range pairs {
 		fk, err := parsePair(item.name, item.p, item.name == "search")
 		if err != nil {
 			return State{}, err
 		}
-		if fk != current[item.name].fk || item.p.Model != current[item.name].model {
-			if err := CheckEntitled(ctx, q, p, fk, item.p.Model); err != nil {
-				return State{}, err
-			}
-		}
-		if err := validateCapability(fk, item.p.Model, pairCapability(item.name)); err != nil {
-			return State{}, err
-		}
 		fks[item.name] = fk
 	}
-	if err := q.UpdateAgentModels(ctx, dbq.UpdateAgentModelsParams{
-		ID:                  agent.ID,
-		BuildProviderID:     fks["build"],
-		BuildModel:          req.Build.Model,
-		ExecProviderID:      fks["exec"],
-		ExecModel:           req.Exec.Model,
-		SttProviderID:       fks["stt"],
-		SttModel:            req.STT.Model,
-		VisionProviderID:    fks["vision"],
-		VisionModel:         req.Vision.Model,
-		TtsProviderID:       fks["tts"],
-		TtsModel:            req.TTS.Model,
-		ImageGenProviderID:  fks["image_gen"],
-		ImageGenModel:       req.ImageGen.Model,
-		EmbeddingProviderID: fks["embedding"],
-		EmbeddingModel:      req.Embedding.Model,
-		SearchProviderID:    fks["search"],
-		SearchModel:         req.Search.Model,
-	}); err != nil {
-		s.logger.Error("update agent models", zap.Error(err))
-		return State{}, err
-	}
-	existing, err := q.ListAgentModelSlots(ctx, agent.ID)
+	existing, err := qtx.ListAgentModelSlots(ctx, agent.ID)
 	if err != nil {
 		s.logger.Error("list model slots", zap.Error(err))
 		return State{}, err
@@ -251,6 +226,13 @@ func (s *Service) Update(ctx context.Context, p authz.Principal, agentID uuid.UU
 			capability string
 		}{slot.AssignedProviderID, slot.AssignedModel, slot.Capability}
 	}
+	type pendingSlot struct {
+		slug, model, capability string
+		fk                      pgtype.UUID
+		currentFK               pgtype.UUID
+		currentModel            string
+	}
+	pending := make([]pendingSlot, 0, len(req.Slots))
 	for _, slot := range req.Slots {
 		cur, ok := declared[slot.Slug]
 		if !ok {
@@ -260,25 +242,105 @@ func (s *Service) Update(ctx context.Context, p authz.Principal, agentID uuid.UU
 		if err != nil {
 			return State{}, err
 		}
-		if fk != cur.fk || slot.Model != cur.model {
-			if err := CheckEntitled(ctx, q, p, fk, slot.Model); err != nil {
+		pending = append(pending, pendingSlot{
+			slug: slot.Slug, model: slot.Model, capability: cur.capability,
+			fk: fk, currentFK: cur.fk, currentModel: cur.model,
+		})
+	}
+
+	providerSet := map[uuid.UUID]pgtype.UUID{}
+	for _, fk := range fks {
+		if fk.Valid {
+			providerSet[uuid.UUID(fk.Bytes)] = fk
+		}
+	}
+	for _, slot := range pending {
+		if slot.fk.Valid {
+			providerSet[uuid.UUID(slot.fk.Bytes)] = slot.fk
+		}
+	}
+	providerIDs := make([]pgtype.UUID, 0, len(providerSet))
+	for _, fk := range providerSet {
+		providerIDs = append(providerIDs, fk)
+	}
+	sort.Slice(providerIDs, func(i, j int) bool {
+		return uuid.UUID(providerIDs[i].Bytes).String() < uuid.UUID(providerIDs[j].Bytes).String()
+	})
+	locked, err := qtx.LockProvidersByID(ctx, providerIDs)
+	if err != nil {
+		return State{}, err
+	}
+	if len(locked) != len(providerIDs) {
+		return State{}, service.Detail(service.ErrInvalidInput, "unknown provider in model configuration")
+	}
+
+	// Validate the complete request while the agent and every selected provider
+	// row are locked. No assignment is written until all pairs and slots pass.
+	validateCapability, err := s.capabilityValidator(ctx, qtx, p)
+	if err != nil {
+		return State{}, err
+	}
+	for _, item := range pairs {
+		fk := fks[item.name]
+		if fk != current[item.name].fk || item.p.Model != current[item.name].model {
+			if err := CheckEntitled(ctx, qtx, p, fk, item.p.Model); err != nil {
 				return State{}, err
 			}
 		}
-		// The slot's declared capability (agentsdk vocab) governs the model.
-		if err := validateCapability(fk, slot.Model, cur.capability); err != nil {
+		if err := validateCapability(fk, item.p.Model, pairCapability(item.name)); err != nil {
 			return State{}, err
 		}
-		_ = q.SetAgentModelSlotAssignment(ctx, dbq.SetAgentModelSlotAssignmentParams{
-			AgentID:            agent.ID,
-			Slug:               slot.Slug,
-			AssignedProviderID: fk,
-			AssignedModel:      slot.Model,
-		})
 	}
-	agent, _ = q.GetAgentByID(ctx, agent.ID)
-	slots, _ := q.ListAgentModelSlots(ctx, agent.ID)
-	settings, _ := q.GetSystemSettings(ctx)
+	for _, slot := range pending {
+		if slot.fk != slot.currentFK || slot.model != slot.currentModel {
+			if err := CheckEntitled(ctx, qtx, p, slot.fk, slot.model); err != nil {
+				return State{}, err
+			}
+		}
+		if err := validateCapability(slot.fk, slot.model, slot.capability); err != nil {
+			return State{}, err
+		}
+	}
+
+	if err := qtx.UpdateAgentModels(ctx, dbq.UpdateAgentModelsParams{
+		ID:              agent.ID,
+		BuildProviderID: fks["build"], BuildModel: req.Build.Model,
+		ExecProviderID: fks["exec"], ExecModel: req.Exec.Model,
+		SttProviderID: fks["stt"], SttModel: req.STT.Model,
+		VisionProviderID: fks["vision"], VisionModel: req.Vision.Model,
+		TtsProviderID: fks["tts"], TtsModel: req.TTS.Model,
+		ImageGenProviderID: fks["image_gen"], ImageGenModel: req.ImageGen.Model,
+		EmbeddingProviderID: fks["embedding"], EmbeddingModel: req.Embedding.Model,
+		SearchProviderID: fks["search"], SearchModel: req.Search.Model,
+	}); err != nil {
+		s.logger.Error("update agent models", zap.Error(err))
+		return State{}, err
+	}
+	for _, slot := range pending {
+		if err := qtx.SetAgentModelSlotAssignment(ctx, dbq.SetAgentModelSlotAssignmentParams{
+			AgentID:            agent.ID,
+			Slug:               slot.slug,
+			AssignedProviderID: slot.fk,
+			AssignedModel:      slot.model,
+		}); err != nil {
+			return State{}, err
+		}
+	}
+	agent, err = qtx.GetAgentByID(ctx, agent.ID)
+	if err != nil {
+		return State{}, err
+	}
+	slots, err := qtx.ListAgentModelSlots(ctx, agent.ID)
+	if err != nil {
+		return State{}, err
+	}
+	settings, err := qtx.GetSystemSettings(ctx)
+	if err != nil {
+		return State{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return State{}, err
+	}
 
 	// Push a /refresh so the running container re-syncs its cached
 	// Capabilities/SupportedModalities immediately. Best-effort: a cold or
@@ -314,38 +376,68 @@ func pairCapability(name string) string {
 }
 
 // capabilityValidator loads the catalog once and returns a closure that checks
-// an assigned (provider FK, model) against a required capability — empty model
-// or FK is a no-op (inherit the default). The catalog index + per-FK catalog-id
-// lookups are cached across calls within one Update.
-func (s *Service) capabilityValidator(ctx context.Context, p authz.Principal) (func(fk pgtype.UUID, model, capability string) error, error) {
+// an assigned (provider FK, model) against a required capability. An empty FK
+// inherits the default; OpenAI-compatible rows require a confirmed model. The
+// catalog index and provider lookups are cached within one Update.
+func (s *Service) capabilityValidator(ctx context.Context, q *dbq.Queries, p authz.Principal) (func(fk pgtype.UUID, model, capability string) error, error) {
 	all, err := s.catalog.ListModels(ctx, p, catalog.ListModelsOptions{})
 	if err != nil {
 		return nil, err
 	}
 	index := make(map[string]catalog.Model, len(all))
 	for _, m := range all {
-		index[m.ProviderID+"\x00"+m.ID] = m
+		key := m.ProviderID
+		if m.ProviderConfigID != "" {
+			key = m.ProviderConfigID
+		}
+		index[key+"\x00"+m.ID] = m
 	}
-	q := dbq.New(s.db.Pool())
-	fkToCatalog := map[uuid.UUID]string{}
+	providers := map[uuid.UUID]dbq.Provider{}
 	return func(fk pgtype.UUID, model, capability string) error {
-		if model == "" || !fk.Valid {
+		if !fk.Valid {
 			return nil
 		}
 		id := uuid.UUID(fk.Bytes)
-		catID, ok := fkToCatalog[id]
+		row, ok := providers[id]
 		if !ok {
-			row, gerr := q.GetProviderByID(ctx, fk)
+			var gerr error
+			row, gerr = q.GetProviderByID(ctx, fk)
 			if gerr != nil {
 				return service.Detail(service.ErrInvalidInput, "unknown provider for model %q", model)
 			}
-			catID = row.CatalogID
-			fkToCatalog[id] = catID
+			providers[id] = row
+		}
+		if !row.IsEnabled {
+			return service.Detail(service.ErrInvalidInput, "provider %q (%s) is disabled", row.CatalogID, row.Slug)
+		}
+		if model == "" {
+			if row.CatalogID == "openai-compatible" {
+				return service.Detail(service.ErrInvalidInput, "an openai-compatible model is required")
+			}
+			if capability == "search" && solprovider.SearchBackend(row.CatalogID) == "" {
+				return service.Detail(service.ErrInvalidInput, "provider %q does not provide a supported search backend", row.CatalogID)
+			}
+			return nil
+		}
+		if row.CatalogID == "openai-compatible" {
+			confirmed, err := q.GetProviderModel(ctx, dbq.GetProviderModelParams{ConfiguredProviderID: fk, ModelID: model})
+			if err != nil {
+				return service.Detail(service.ErrInvalidInput, "model %q is not confirmed for provider %q", model, row.Slug)
+			}
+			local := catalog.Model{ID: model, ProviderID: row.CatalogID, Kind: "language", ToolCall: confirmed.ToolCall, Caps: []string{"text"}}
+			if confirmed.Vision {
+				local.Caps = append(local.Caps, "vision")
+			}
+			if ok, reason := catalog.ModelMeetsCapability(local, capability); !ok {
+				return service.Detail(service.ErrInvalidInput, "model %q %s", model, reason)
+			}
+			return nil
 		}
 		// Capability is derived from the catalog; a model the catalog doesn't
 		// list (e.g. granted before models.dev caught up) can't be checked, so
 		// defer to the other gates rather than block.
-		m, ok := index[catID+"\x00"+model]
+		key := row.CatalogID
+		m, ok := index[key+"\x00"+model]
 		if !ok {
 			return nil
 		}

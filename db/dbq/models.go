@@ -621,6 +621,21 @@ type Provider struct {
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
 }
 
+type ProviderModel struct {
+	ConfiguredProviderID pgtype.UUID        `json:"configured_provider_id"`
+	ModelID              string             `json:"model_id"`
+	DisplayName          string             `json:"display_name"`
+	ToolCall             bool               `json:"tool_call"`
+	Reasoning            bool               `json:"reasoning"`
+	Vision               bool               `json:"vision"`
+	ContextLimit         int32              `json:"context_limit"`
+	OutputLimit          int32              `json:"output_limit"`
+	StructuredOutputs    bool               `json:"structured_outputs"`
+	IncludeUsage         bool               `json:"include_usage"`
+	CreatedAt            pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt            pgtype.Timestamptz `json:"updated_at"`
+}
+
 type RelayCode struct {
 	CodeHash     []byte             `json:"code_hash"`
 	NonceHash    []byte             `json:"nonce_hash"`

@@ -421,10 +421,12 @@ func (b *BuildService) recordBuildUsage(opts solRunOpts, providerCatalogID, prov
 // the providers row UUID. The row UUID lives on the agent's *_provider_id
 // FK columns; we don't carry it here because callers already have it.
 type resolvedProvider struct {
-	CatalogID string
-	Slug      string
-	APIKey    string
-	BaseURL   string
+	CatalogID                 string
+	Slug                      string
+	APIKey                    string
+	BaseURL                   string
+	IncludeUsage              *bool
+	SupportsStructuredOutputs *bool
 }
 
 // resolveModel loads the providers row by FK, decrypts its API key, and
@@ -436,11 +438,32 @@ func (b *BuildService) resolveModel(ctx context.Context, providerRowID pgtype.UU
 	if err != nil {
 		return nil, nil, err
 	}
-	model := solprovider.CreateModel(rp.CatalogID, modelName, solprovider.Options{
-		APIKey:  rp.APIKey,
-		BaseURL: rp.BaseURL,
-	})
+	if rp.CatalogID == "openai-compatible" {
+		confirmed, err := dbq.New(b.db.Pool()).GetProviderModel(ctx, dbq.GetProviderModelParams{
+			ConfiguredProviderID: providerRowID,
+			ModelID:              modelName,
+		})
+		if err != nil {
+			return nil, nil, fmt.Errorf("model %q is not confirmed for provider %q (%s): %w", modelName, rp.CatalogID, rp.Slug, err)
+		}
+		rp.IncludeUsage = &confirmed.IncludeUsage
+		rp.SupportsStructuredOutputs = &confirmed.StructuredOutputs
+	}
+	model := solprovider.CreateModel(rp.CatalogID, modelName, b.languageModelOptions(rp))
 	return model, rp, nil
+}
+
+func (b *BuildService) languageModelOptions(rp *resolvedProvider) solprovider.Options {
+	opts := solprovider.Options{
+		APIKey:                    rp.APIKey,
+		BaseURL:                   rp.BaseURL,
+		IncludeUsage:              rp.IncludeUsage,
+		SupportsStructuredOutputs: rp.SupportsStructuredOutputs,
+	}
+	if rp.CatalogID == "openai-compatible" {
+		opts.HTTPClient = b.providerHTTPClient
+	}
+	return opts
 }
 
 // resolveProvider loads a providers row by FK, decrypts its API key, and
@@ -454,9 +477,12 @@ func (b *BuildService) resolveProvider(ctx context.Context, providerRowID pgtype
 	if !p.IsEnabled {
 		return nil, fmt.Errorf("provider %q (%s) is disabled", p.CatalogID, p.Slug)
 	}
-	apiKey, err := b.encryptor.Get(ctx, "provider/"+p.ID.String()+"/api_key", p.ApiKey)
-	if err != nil {
-		return nil, fmt.Errorf("decrypt API key for %q (%s): %w", p.CatalogID, p.Slug, err)
+	apiKey := ""
+	if p.ApiKey != "" {
+		apiKey, err = b.encryptor.Get(ctx, "provider/"+p.ID.String()+"/api_key", p.ApiKey)
+		if err != nil {
+			return nil, fmt.Errorf("decrypt API key for %q (%s): %w", p.CatalogID, p.Slug, err)
+		}
 	}
 
 	baseURL := p.BaseUrl
@@ -513,7 +539,13 @@ func (b *BuildService) resolveSearchTool(ctx context.Context, rp *resolvedProvid
 		if ranked[i].catalogOnly != ranked[j].catalogOnly {
 			return ranked[i].catalogOnly
 		}
-		return ranked[i].row.CatalogID < ranked[j].row.CatalogID
+		if ranked[i].row.CatalogID != ranked[j].row.CatalogID {
+			return ranked[i].row.CatalogID < ranked[j].row.CatalogID
+		}
+		if ranked[i].row.Slug != ranked[j].row.Slug {
+			return ranked[i].row.Slug < ranked[j].row.Slug
+		}
+		return ranked[i].row.ID.String() < ranked[j].row.ID.String()
 	})
 	for _, c := range ranked {
 		apiKey, err := b.encryptor.Get(ctx, "provider/"+c.row.ID.String()+"/api_key", c.row.ApiKey)
