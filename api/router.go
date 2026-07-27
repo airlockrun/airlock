@@ -106,6 +106,8 @@ type RouterConfig struct {
 	ForceInlineAttachments bool
 	// Non-public CIDRs available to Airlock-brokered agent HTTP calls.
 	HTTPNetwork *networkpolicy.Policy
+	// HTTP client for configured model-provider endpoints.
+	ProviderEndpointHTTPClient *http.Client
 
 	// Path to the on-disk activation code file — cleared after Activate
 	// succeeds so the one-time secret doesn't linger on disk.
@@ -121,6 +123,9 @@ type RouterConfig struct {
 func NewRouter(cfg RouterConfig) http.Handler {
 	if cfg.HTTPNetwork == nil {
 		panic("api: HTTP network policy is required")
+	}
+	if cfg.ProviderEndpointHTTPClient == nil {
+		panic("api: provider endpoint HTTP client is required")
 	}
 	if cfg.Secrets == nil {
 		panic("api: RouterConfig.Encryptor is required")
@@ -156,7 +161,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	}
 	passkeyHandler := NewPasskeyHandler(passkeyssvc.New(cfg.DB, webAuthn, cfg.Logger.Named("passkeys")), cfg.DB, cfg.JWTSecret, cfg.PublicURL)
 	deviceLoginH := newDeviceLoginHandler(cfg.DB, cfg.JWTSecret, cfg.PublicURL)
-	providersHandler := NewProvidersHandler(providerssvc.New(cfg.DB, cfg.Secrets, cfg.Logger.Named("providers")))
+	providersHandler := NewProvidersHandler(providerssvc.New(cfg.DB, cfg.Secrets, cfg.ProviderEndpointHTTPClient, cfg.Logger.Named("providers")))
 	gitCredsHandler := NewGitCredentialsHandler(gitcredssvc.New(cfg.DB, cfg.Secrets, cfg.Logger.Named("gitcredentials")))
 	gitWebhookHandler := NewGitWebhookHandler(cfg.DB, cfg.BuildService, cfg.Secrets, cfg.Logger.Named("git-webhook"))
 	usersHandler := NewUsersHandler(cfg.DB, userssvc.New(cfg.DB, cfg.BridgeManager, cfg.Logger.Named("users")))
@@ -340,6 +345,9 @@ func NewRouter(cfg RouterConfig) http.Handler {
 				r.Route("/{id}", func(r chi.Router) {
 					r.Patch("/", providersHandler.Update)
 					r.Delete("/", providersHandler.Delete)
+					r.Get("/models", providersHandler.ListModels)
+					r.Put("/models", providersHandler.ReplaceModels)
+					r.Post("/discover-models", providersHandler.DiscoverModels)
 				})
 			})
 		})
@@ -438,11 +446,12 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		// services are fresh instances (stateless wrappers; identical
 		// to the handler-owned ones above modulo logger name).
 		sysagentSvc := sysagent.New(sysagent.Deps{
-			DB:        cfg.DB,
-			Encryptor: cfg.Secrets,
-			PubSub:    cfg.PubSub,
-			PublicURL: cfg.PublicURL,
-			Logger:    cfg.Logger.Named("sysagent"),
+			DB:                 cfg.DB,
+			Encryptor:          cfg.Secrets,
+			PubSub:             cfg.PubSub,
+			PublicURL:          cfg.PublicURL,
+			ProviderHTTPClient: cfg.ProviderEndpointHTTPClient,
+			Logger:             cfg.Logger.Named("sysagent"),
 			Agents: agentssvc.New(
 				cfg.DB, cfg.BuildService, cfg.Dispatcher,
 				cfg.Containers, cfg.BridgeManager,

@@ -6,6 +6,7 @@ import { useProvidersStore } from '@/stores/providers'
 import { useCatalogStore } from '@/stores/catalog'
 import { useModelGrantsStore } from '@/stores/modelGrants'
 import type { ModelInfo, Provider } from '@/gen/airlock/v1/types_pb'
+import { modelMatchesProvider } from '@/composables/useModelCapabilities'
 
 const providers = useProvidersStore()
 const catalog = useCatalogStore()
@@ -43,14 +44,23 @@ const groups = computed(() => {
     .map((p) => ({
       provider: p,
       models: catalog.models
-        .filter((m) => m.providerId === p.providerId)
+        .filter((m) => modelMatchesProvider(m, p))
         .filter((m) => !q || modelHaystack(m).includes(q))
         .sort((a, b) => a.id.localeCompare(b.id)),
     }))
     .filter((g) => g.models.length > 0)
 })
 
-const allowedCount = computed(() => grants.grants.length)
+const allowedCount = computed(() => {
+  const current = new Set<string>()
+  for (const provider of providers.providers) {
+    if (!provider.isEnabled) continue
+    for (const model of catalog.models) {
+      if (modelMatchesProvider(model, provider)) current.add(`${provider.id}::${model.id}`)
+    }
+  }
+  return grants.grants.filter((grant) => current.has(`${grant.providerId}::${grant.model}`)).length
+})
 
 // Catalog costs are USD per 1M tokens. Trim trailing zeros so $3.00 reads
 // "$3" but $0.15 stays "$0.15"; 0 (unknown) renders as a dash by the caller.

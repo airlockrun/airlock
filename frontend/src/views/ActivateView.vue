@@ -29,6 +29,12 @@ import {
   UpdateSystemSettingsRequestSchema,
 } from '@/gen/airlock/v1/api_pb'
 import type { SystemSettingsInfo } from '@/gen/airlock/v1/types_pb'
+import {
+  OPENAI_COMPATIBLE_PROVIDER_ID,
+  isValidProviderSlug,
+  isValidProviderURL,
+  uniqueProviderSlug,
+} from '@/utils/providers'
 
 const router = useRouter()
 const route = useRoute()
@@ -64,6 +70,7 @@ const alreadyActivated = ref(false)
 const activationCodeRequired = ref(false)
 const loading = ref(false)
 const error = ref('')
+const providerSetupError = ref('')
 
 onMounted(async () => {
   catalog.fetchCatalogProviders()
@@ -91,18 +98,22 @@ onMounted(async () => {
 // resumeSetup loads the data the post-account steps need (normally fetched as
 // the operator advances) and jumps to the requested step after a refresh.
 async function resumeSetup(step: number) {
-  await catalog.fetchCapabilities()
+  activeStep.value = step
+  if (!(await refreshProviderSetup())) return
   if (step >= 2) {
-    await Promise.all([
-      catalog.fetchConfiguredModels(),
-      providersStore.fetchProviders(),
-      loadExistingDefaults(),
-    ])
+    try {
+      await Promise.all([
+        catalog.fetchConfiguredModels(),
+        loadExistingDefaults(),
+      ])
+    } catch (err: any) {
+      error.value = err.response?.data?.error || 'Setup data could not be loaded. Retry by returning to Providers and selecting Next.'
+      return
+    }
   }
   if (step >= 3) {
     await bridgesStore.fetchBridges().catch(() => {})
   }
-  activeStep.value = step
 }
 
 // --- Step 1: Admin account
@@ -153,6 +164,7 @@ async function nextStep() {
   }
 
   loading.value = true
+  let credentialReady = false
   try {
     if (!accountCreated.value) {
       // Creates the account AND authenticates the session; a passkey-only
@@ -175,8 +187,7 @@ async function nextStep() {
       await registerPasskey('Passkey')
       credentialSet.value = true
     }
-    catalog.fetchCapabilities()
-    activeStep.value = 1
+    credentialReady = true
   } catch (err: any) {
     if (err.response?.status === 409) {
       alreadyActivated.value = true
@@ -188,6 +199,12 @@ async function nextStep() {
   } finally {
     loading.value = false
   }
+  if (!credentialReady) return
+
+  // Account activation is complete before provider inventory is loaded. A
+  // transient inventory failure therefore remains a retryable setup error.
+  activeStep.value = 1
+  await refreshProviderSetup()
 }
 
 // --- Step 2: LLM Providers
@@ -207,28 +224,27 @@ const capabilityMeta: Record<Capability, { label: string; icon: string }> = {
 const providerID = ref('')
 const providerName = ref('')
 const providerSlug = ref('')
-// Mirrors ProvidersView: slug auto-tracks displayName until the user types
-// into the slug field manually. Same kebab-case rules as agent slugs.
 const slugManual = ref(false)
 const baseURL = ref('')
 const apiKey = ref('')
 
-function toSlug(s: string): string {
-  return s
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/(^-|-$)/g, '')
-}
-
 const providerCandidates = computed(() =>
   catalog.capabilities
-    .filter(p => !p.configured)
+    .filter(p => p.providerId !== OPENAI_COMPATIBLE_PROVIDER_ID)
     .map(p => ({
       id: p.providerId,
       name: p.displayName || p.providerId,
       capabilities: p.capabilities,
     }))
     .sort((a, b) => a.name.localeCompare(b.name))
+)
+
+const providerFormValid = computed(() =>
+  !!providerID.value &&
+  !!providerName.value.trim() &&
+  isValidProviderSlug(providerSlug.value) &&
+  isValidProviderURL(baseURL.value, false) &&
+  !!apiKey.value.trim(),
 )
 
 const selectedProviderCaps = computed<string[]>(() => {
@@ -257,12 +273,16 @@ function onProviderSelect(id: string) {
   const p = providerCandidates.value.find(c => c.id === id)
   if (p) {
     providerName.value = p.name
-    if (!slugManual.value) providerSlug.value = toSlug(p.name)
+    if (!slugManual.value) {
+      providerSlug.value = uniqueProviderSlug(id, id, providersStore.providers)
+    }
   }
 }
 
 function onProviderNameInput() {
-  if (!slugManual.value) providerSlug.value = toSlug(providerName.value)
+  if (!slugManual.value && providerID.value) {
+    providerSlug.value = uniqueProviderSlug(providerID.value, providerName.value, providersStore.providers)
+  }
 }
 
 function onSlugInput() {
@@ -278,14 +298,25 @@ function resetProviderForm() {
   apiKey.value = ''
 }
 
+async function refreshProviderSetup(): Promise<boolean> {
+  providerSetupError.value = ''
+  loading.value = true
+  try {
+    const [capabilitiesLoaded] = await Promise.all([catalog.fetchCapabilities(), providersStore.fetchProviders()])
+    if (!capabilitiesLoaded) throw new Error('Provider catalog could not be loaded.')
+    return true
+  } catch (err: any) {
+    providerSetupError.value = err.response?.data?.error || err.message || 'Provider options could not be loaded.'
+    return false
+  } finally {
+    loading.value = false
+  }
+}
+
 async function addProvider() {
   error.value = ''
-  if (!providerID.value || !apiKey.value) {
-    error.value = 'Provider and API key are required.'
-    return
-  }
-  if (!providerSlug.value) {
-    error.value = 'Slug is required.'
+  if (!providerFormValid.value) {
+    error.value = 'Enter a display name, valid unique-style slug, valid URL, and any required API key.'
     return
   }
 
@@ -300,7 +331,9 @@ async function addProvider() {
     })
     toast.add({ severity: 'success', summary: `Added ${providerName.value || providerID.value}`, life: 3000 })
     resetProviderForm()
-    await catalog.fetchCapabilities()
+    if (!(await catalog.fetchCapabilities())) {
+      providerSetupError.value = 'Provider catalog could not be refreshed.'
+    }
   } catch (err: any) {
     error.value = err.response?.data?.error || 'Failed to create provider.'
   } finally {
@@ -322,13 +355,15 @@ async function goToDefaults() {
       loadExistingDefaults(),
     ])
     activeStep.value = 2
+  } catch (err: any) {
+    error.value = err.response?.data?.error || err.message || 'Models and defaults could not be loaded. Try again.'
   } finally {
     loading.value = false
   }
 }
 
 function skipToDashboard() {
-  toast.add({ severity: 'info', summary: 'Setup skipped', detail: 'You can configure providers, defaults, and Telegram later in Settings and Bridges.', life: 5000 })
+  toast.add({ severity: 'info', summary: 'Setup skipped', detail: 'You can configure providers and local endpoints under Providers, defaults under Settings, and Telegram under Bridges.', life: 5000 })
   router.push('/')
 }
 
@@ -566,6 +601,15 @@ function finishActivation() {
           <StepPanel :value="1">
             <div style="display: flex; flex-direction: column; gap: 1.25rem; padding-top: 1rem">
               <Message v-if="error" severity="error" :closable="false">{{ error }}</Message>
+              <Message v-if="providerSetupError" severity="error" :closable="false">
+                <div class="retry-message">
+                  <span>Account setup is complete, but provider options could not be loaded: {{ providerSetupError }}</span>
+                  <Button label="Retry" icon="pi pi-refresh" size="small" severity="secondary" :loading="loading" @click="refreshProviderSetup" />
+                </div>
+              </Message>
+              <Message severity="info" :closable="false">
+                Local and OpenAI-compatible endpoints require model confirmation. Configure them after activation under <b>Providers</b>.
+              </Message>
 
               <!-- Capability coverage -->
               <div class="cap-matrix">
@@ -636,7 +680,10 @@ function finishActivation() {
                     <label for="prov-slug">Slug</label>
                   </FloatLabel>
                   <small style="color: var(--p-text-muted-color)">
-                    Disambiguates rows for the same provider (multi-key support).
+                    Unique within this provider type. Suggestions skip slugs already in use; manual edits are preserved.
+                  </small>
+                  <small v-if="providerSlug && !isValidProviderSlug(providerSlug)" class="field-error">
+                    Use 1-63 lowercase letters, numbers, and single hyphens.
                   </small>
                 </div>
                 <div style="display: flex; flex-direction: column; gap: 0.25rem">
@@ -644,6 +691,9 @@ function finishActivation() {
                     <InputText id="prov-url" v-model="baseURL" autocomplete="off" style="width: 100%" />
                     <label for="prov-url">Base URL (optional)</label>
                   </FloatLabel>
+                  <small v-if="!isValidProviderURL(baseURL, false)" class="field-error">
+                    Enter an absolute HTTP(S) URL without credentials, query, or fragment.
+                  </small>
                 </div>
                 <div style="display: flex; flex-direction: column; gap: 0.25rem">
                   <!-- type="text" + -webkit-text-security keeps the visual
@@ -664,6 +714,7 @@ function finishActivation() {
                     />
                     <label for="prov-key">API Key</label>
                   </FloatLabel>
+                  <small v-if="!apiKey" class="field-error">Hosted providers require an API key.</small>
                 </div>
                 <div style="display: flex; justify-content: flex-end">
                   <Button
@@ -671,7 +722,7 @@ function finishActivation() {
                     label="Add provider"
                     icon="pi pi-plus"
                     :loading="loading"
-                    :disabled="!providerID || !apiKey || !providerSlug"
+                    :disabled="!providerFormValid"
                     severity="secondary"
                   />
                 </div>
@@ -864,6 +915,16 @@ function finishActivation() {
   margin-top: 0.375rem;
   font-size: 0.75rem;
   color: var(--p-text-muted-color);
+}
+.field-error {
+  color: var(--p-red-500);
+  font-size: 0.8rem;
+}
+.retry-message {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
 }
 /* The step header may be wider than the card on narrow screens. Let it scroll
    horizontally but hide the scrollbar — the active step is auto-scrolled into

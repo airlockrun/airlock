@@ -347,7 +347,7 @@ func (s *Service) runChat(ctx context.Context, p authz.Principal, conversation d
 	// Resolve the LLM. system_settings.default_exec_* drives the
 	// "text" capability for sysagent — there's no per-agent override
 	// path since sysagent has no agent.
-	providerID, modelName, apiKey, baseURL, err := servicemodels.SystemDefault(ctx, s.db, s.encryptor, "text")
+	resolved, err := servicemodels.SystemDefault(ctx, s.db, s.encryptor, "text")
 	if err != nil {
 		s.finishRun(ctx, runID, "error", "no system-default LLM configured: "+err.Error())
 		s.publishRunError(conversationID, runID, p.UserID, "no system-default LLM configured: "+err.Error())
@@ -366,20 +366,23 @@ func (s *Service) runChat(ctx context.Context, p authz.Principal, conversation d
 
 	solAgent := &agent.Agent{
 		Name:         "sysagent",
-		Model:        providerID + "/" + modelName,
+		Model:        resolved.ProviderCatalogID + "/" + resolved.ModelName,
 		SystemPrompt: SystemPrompt(s.envFor(ctx, p.UserID, input.Platform, conversationID), tools),
 		Tools:        tools,
 		MaxSteps:     25,
 	}
 
 	runner := sol.NewRunner(sol.RunnerOptions{
-		Agent:        solAgent,
-		APIKey:       apiKey,
-		BaseURL:      baseURL,
-		Bus:          runBus,
-		SessionStore: store,
-		Executor:     exec,
-		Quiet:        true, // no stdout chatter — events flow through the sink
+		Agent:                     solAgent,
+		APIKey:                    resolved.APIKey,
+		BaseURL:                   resolved.BaseURL,
+		HTTPClient:                s.httpClientForProvider(resolved.ProviderCatalogID),
+		IncludeUsage:              resolved.IncludeUsage,
+		SupportsStructuredOutputs: resolved.SupportsStructuredOutputs,
+		Bus:                       runBus,
+		SessionStore:              store,
+		Executor:                  exec,
+		Quiet:                     true, // no stdout chatter — events flow through the sink
 	})
 
 	// Stash the principal + conversation id in ctx so tool bodies can read
@@ -438,7 +441,7 @@ func (s *Service) runChat(ctx context.Context, p authz.Principal, conversation d
 	// operator + this system run) and refresh the run's cost aggregate. Runs
 	// for every result state — the tokens were burned whether the turn
 	// completed, failed, or suspended mid-flight. Best-effort.
-	s.recordSystemRunUsage(runID, p.UserID, providerID, modelName, result.Usage, result.Status == sol.RunFailed)
+	s.recordSystemRunUsage(runID, p.UserID, resolved.ProviderCatalogID, resolved.ProviderSlug, resolved.ModelName, result.Usage, result.Status == sol.RunFailed)
 
 	// Result-level handling — RunResult.Status is what determines
 	// what we persist + which terminal event we emit.

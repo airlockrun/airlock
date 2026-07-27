@@ -38,8 +38,10 @@ export const useCatalogStore = defineStore('catalog', () => {
     try {
       const { data } = await api.get('/api/v1/catalog/capabilities')
       capabilities.value = fromJson(ListCapabilitiesResponseSchema, data).providers
+      return true
     } catch {
       // non-critical — matrix will be empty
+      return false
     }
   }
 

@@ -15,17 +15,19 @@ func CatalogProviderToProto(p catalogsvc.Provider) *airlockv1.ProviderInfo {
 // ModelInfo.
 func CatalogModelToProto(m catalogsvc.Model) *airlockv1.ModelInfo {
 	return &airlockv1.ModelInfo{
-		Id:           m.ID,
-		Name:         m.Name,
-		ProviderId:   m.ProviderID,
-		Kind:         m.Kind,
-		ToolCall:     m.ToolCall,
-		Reasoning:    m.Reasoning,
-		Caps:         m.Caps,
-		CostInput:    m.CostInput,
-		CostOutput:   m.CostOutput,
-		ContextLimit: m.ContextLimit,
-		OutputLimit:  m.OutputLimit,
+		Id:                m.ID,
+		Name:              m.Name,
+		ProviderId:        m.ProviderID,
+		ProviderConfigId:  m.ProviderConfigID,
+		Kind:              m.Kind,
+		ToolCall:          m.ToolCall,
+		Reasoning:         m.Reasoning,
+		Caps:              m.Caps,
+		CostInput:         m.CostInput,
+		CostOutput:        m.CostOutput,
+		ContextLimit:      m.ContextLimit,
+		OutputLimit:       m.OutputLimit,
+		StructuredOutputs: m.StructuredOutputs,
 	}
 }
 

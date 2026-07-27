@@ -43,18 +43,40 @@ func (s *Service) GrantModel(ctx context.Context, p authz.Principal, providerID 
 	if err := authz.Authorize(ctx, q, p, authz.TenantModelGrantManage, uuid.Nil); err != nil {
 		return err
 	}
-	if _, err := q.CreateModelGrant(ctx, dbq.CreateModelGrantParams{CatalogID: pg(providerID), Model: model, GranteeID: pg(granteeID)}); err != nil {
+	tx, err := s.db.Pool().Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	qtx := q.WithTx(tx)
+	provider, err := qtx.GetProviderByIDForUpdate(ctx, pg(providerID))
+	if err != nil {
+		return service.ErrNotFound
+	}
+	if !provider.IsEnabled {
+		return service.Detail(service.ErrInvalidInput, "provider %q (%s) is disabled", provider.CatalogID, provider.Slug)
+	}
+	if model == "" {
+		return service.Detail(service.ErrInvalidInput, "model is required")
+	}
+	if provider.CatalogID == "openai-compatible" {
+		if _, err := qtx.GetProviderModel(ctx, dbq.GetProviderModelParams{ConfiguredProviderID: pg(providerID), ModelID: model}); err != nil {
+			return service.Detail(service.ErrInvalidInput, "model %q is not confirmed for provider %q", model, provider.Slug)
+		}
+	}
+	if _, err := qtx.CreateModelGrant(ctx, dbq.CreateModelGrantParams{CatalogID: pg(providerID), Model: model, GranteeID: pg(granteeID)}); err != nil {
 		s.logger.Error("create model grant", zap.Error(err))
 		return err
 	}
-	return nil
+	return tx.Commit(ctx)
 }
 
 // RevokeModelGrant removes a model entitlement (disables the model). Tenant-
 // admin only. After revoking, any agent that pinned this (provider, model) as a
 // capability override or slot assignment is reset back to the workspace default
 // — unless the model is itself a configured system default, in which case it
-// stays usable and the overrides are left untouched. Runs in one transaction.
+// stays usable and the overrides are left untouched. A discovery race retries
+// before writes; the mutating attempt runs in one transaction.
 func (s *Service) RevokeModelGrant(ctx context.Context, p authz.Principal, grantID uuid.UUID) error {
 	q := dbq.New(s.db.Pool())
 	if err := authz.Authorize(ctx, q, p, authz.TenantModelGrantManage, uuid.Nil); err != nil {
@@ -64,26 +86,69 @@ func (s *Service) RevokeModelGrant(ctx context.Context, p authz.Principal, grant
 	if err != nil {
 		return service.ErrNotFound
 	}
-	tx, err := s.db.Pool().Begin(ctx)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(ctx)
-	qtx := q.WithTx(tx)
-	if err := qtx.RevokeModelGrant(ctx, pg(grantID)); err != nil {
-		return err
-	}
-	isDefault, err := qtx.IsSystemDefaultModel(ctx, dbq.IsSystemDefaultModelParams{CatalogID: grant.CatalogID, Model: grant.Model})
-	if err != nil {
-		return err
-	}
-	if !isDefault {
-		if err := clearAgentModelRefs(ctx, qtx, grant.CatalogID, grant.Model); err != nil {
-			s.logger.Error("reset agent overrides after model revoke", zap.Error(err))
+	for {
+		retry, err := s.revokeModelGrant(ctx, grantID, grant.CatalogID, grant.Model)
+		if err != nil {
 			return err
 		}
+		if !retry {
+			return nil
+		}
 	}
-	return tx.Commit(ctx)
+}
+
+func (s *Service) revokeModelGrant(ctx context.Context, grantID uuid.UUID, providerID pgtype.UUID, model string) (bool, error) {
+	tx, err := s.db.Pool().Begin(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback(ctx)
+	qtx := dbq.New(s.db.Pool()).WithTx(tx)
+	params := dbq.ListAgentIDsUsingModelParams{CatalogID: providerID, Model: model}
+	affected, err := qtx.ListAgentIDsUsingModel(ctx, params)
+	if err != nil {
+		return false, err
+	}
+	if _, err := qtx.LockAgentsByID(ctx, affected); err != nil {
+		return false, err
+	}
+	if _, err := qtx.GetProviderByIDForUpdate(ctx, providerID); err != nil {
+		return false, err
+	}
+
+	// An assignment to this pair can commit between discovery and the provider
+	// lock only if its transaction acquired the provider first. Retry without
+	// writing so every row cleared below was locked before the provider.
+	stable, err := qtx.ListAgentIDsUsingModel(ctx, params)
+	if err != nil {
+		return false, err
+	}
+	locked := make(map[[16]byte]struct{}, len(affected))
+	for _, id := range affected {
+		locked[id.Bytes] = struct{}{}
+	}
+	for _, id := range stable {
+		if _, ok := locked[id.Bytes]; !ok {
+			return true, nil
+		}
+	}
+	if err := qtx.RevokeModelGrant(ctx, pg(grantID)); err != nil {
+		return false, err
+	}
+	isDefault, err := qtx.IsSystemDefaultModel(ctx, dbq.IsSystemDefaultModelParams{CatalogID: providerID, Model: model})
+	if err != nil {
+		return false, err
+	}
+	if !isDefault {
+		if err := clearAgentModelRefs(ctx, qtx, providerID, model); err != nil {
+			s.logger.Error("reset agent overrides after model revoke", zap.Error(err))
+			return false, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return false, err
+	}
+	return false, nil
 }
 
 // ModelUsage reports how a (provider, model) is currently configured so the UI

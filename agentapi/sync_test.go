@@ -133,11 +133,11 @@ func TestResolveModel_Precedence(t *testing.T) {
 
 	resolveTextModel := func(t *testing.T, slug string) string {
 		t.Helper()
-		_, _, modelID, _, _, err := ah.resolveModel(ctx, agentID.String(), slug, "text")
+		resolved, err := ah.resolveModel(ctx, agentID.String(), slug, "text")
 		if err != nil {
 			t.Fatalf("resolveModel(slug=%q): %v", slug, err)
 		}
-		return modelID
+		return resolved.modelID
 	}
 
 	t.Run("tier-3 system default", func(t *testing.T) {
@@ -173,7 +173,7 @@ func TestResolveModel_Precedence(t *testing.T) {
 	})
 
 	t.Run("undeclared slug is a loud error", func(t *testing.T) {
-		if _, _, _, _, _, err := ah.resolveModel(ctx, agentID.String(), "brand-new-slug", "text"); err == nil {
+		if _, err := ah.resolveModel(ctx, agentID.String(), "brand-new-slug", "text"); err == nil {
 			t.Error("expected error for an unregistered slug, got nil")
 		}
 	})
@@ -196,12 +196,12 @@ func TestResolveModel_Precedence(t *testing.T) {
 		}); err != nil {
 			t.Fatalf("UpsertAgentModelSlot: %v", err)
 		}
-		_, _, modelID, _, _, err := ah.resolveModel(ctx, agentID.String(), "see-food", "text")
+		resolved, err := ah.resolveModel(ctx, agentID.String(), "see-food", "text")
 		if err != nil {
 			t.Fatalf("resolveModel(slug=see-food): %v", err)
 		}
-		if modelID != "system-vision" {
-			t.Errorf("modelID = %q, want %q (slot capability governs)", modelID, "system-vision")
+		if resolved.modelID != "system-vision" {
+			t.Errorf("modelID = %q, want %q (slot capability governs)", resolved.modelID, "system-vision")
 		}
 	})
 
@@ -220,7 +220,7 @@ func TestResolveModel_Precedence(t *testing.T) {
 	})
 
 	t.Run("all-empty capability errors", func(t *testing.T) {
-		if _, _, _, _, _, err := ah.resolveModel(ctx, agentID.String(), "", "image"); err == nil {
+		if _, err := ah.resolveModel(ctx, agentID.String(), "", "image"); err == nil {
 			t.Error("expected error when all tiers empty for image capability")
 		}
 	})

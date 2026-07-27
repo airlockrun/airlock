@@ -293,6 +293,8 @@ services:
         condition: service_completed_successfully
       agent-base-image:
         condition: service_completed_successfully
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
       # DATABASE_URL defaults to the bundled Postgres; set it in .env to point
       # at an external instance. DB_HOST / DB_HOST_AGENT / DB_SSL_MODE feed the
@@ -369,8 +371,8 @@ services:
       DOCKER_NETWORK: ${DOCKER_NETWORK:-airlock}
       AGENT_NETWORK: ${AGENT_NETWORK:-airlock-agents}
       AGENT_NETWORK_PER_AGENT: "${AGENT_NETWORK_PER_AGENT:-true}"
-      # Brokered HTTP, connection, MCP, and outbound OAuth calls may reach
-      # public addresses plus explicitly configured non-public CIDRs.
+      # Brokered clients may reach public HTTPS plus explicitly configured
+      # non-public CIDRs. Provider endpoints may use HTTP only in those CIDRs.
       AGENT_HTTP_PRIVATE_CIDRS: "${AGENT_HTTP_PRIVATE_CIDRS-}"
       # Rootless agent image builds. Empty by default → legacy host
       # `docker build` (works everywhere). install.sh sets BUILDKIT_HOST to the

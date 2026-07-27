@@ -186,10 +186,29 @@ message UpdateProviderRequest {
   // renames the row's slug. Conflicts with another row sharing the
   // (provider_id, slug) tuple are surfaced as 409.
   string slug = 5;
+  // Removes the stored credential. Only openai-compatible providers may clear
+  // their API key. Mutually exclusive with api_key.
+  bool clear_api_key = 6;
 }
 
 message UpdateProviderResponse {
   Provider provider = 1;
+}
+
+message ListProviderModelsResponse {
+  repeated ProviderModel models = 1;
+}
+
+message ReplaceProviderModelsRequest {
+  repeated ProviderModel models = 1;
+}
+
+message ReplaceProviderModelsResponse {
+  repeated ProviderModel models = 1;
+}
+
+message DiscoverProviderModelsResponse {
+  repeated ProviderModelCandidate candidates = 1;
 }
 
 // --- Catalog ---

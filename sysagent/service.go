@@ -2,6 +2,7 @@ package sysagent
 
 import (
 	"context"
+	"net/http"
 	"sync"
 
 	"github.com/airlockrun/airlock/db"
@@ -30,11 +31,12 @@ import (
 // across HTTP requests. Per-request state (Principal, conversation, message
 // history) lives on the chat loop, not here.
 type Service struct {
-	db        *db.DB
-	encryptor secrets.Store
-	pubsub    *realtime.PubSub
-	publicURL string
-	logger    *zap.Logger
+	db                 *db.DB
+	encryptor          secrets.Store
+	pubsub             *realtime.PubSub
+	publicURL          string
+	providerHTTPClient *http.Client
+	logger             *zap.Logger
 
 	// Per-domain services. The tool catalogue resolves these at
 	// registration time; no global lookups in tool bodies.
@@ -80,11 +82,12 @@ func (s *Service) SetBridgeResumer(r bridgeResumer) { s.bridgeResumer = r }
 // Deps bundles the dependencies New requires. Pulled out as a struct
 // so the call site stays readable as the service set grows.
 type Deps struct {
-	DB        *db.DB
-	Encryptor secrets.Store
-	PubSub    *realtime.PubSub
-	PublicURL string // base URL for deep-link tools (no trailing slash)
-	Logger    *zap.Logger
+	DB                 *db.DB
+	Encryptor          secrets.Store
+	PubSub             *realtime.PubSub
+	PublicURL          string // base URL for deep-link tools (no trailing slash)
+	ProviderHTTPClient *http.Client
+	Logger             *zap.Logger
 
 	Agents      *agentssvc.Service
 	Bridges     *bridgessvc.Service
@@ -114,6 +117,9 @@ func New(d Deps) *Service {
 	if d.PublicURL == "" {
 		panic("sysagent: public URL is required")
 	}
+	if d.ProviderHTTPClient == nil {
+		panic("sysagent: provider HTTP client is required")
+	}
 	if d.Logger == nil {
 		panic("sysagent: logger is required")
 	}
@@ -123,24 +129,32 @@ func New(d Deps) *Service {
 		panic("sysagent: every per-domain service is required")
 	}
 	return &Service{
-		db:          d.DB,
-		encryptor:   d.Encryptor,
-		pubsub:      d.PubSub,
-		publicURL:   d.PublicURL,
-		logger:      d.Logger,
-		agents:      d.Agents,
-		bridges:     d.Bridges,
-		catalog:     d.Catalog,
-		conns:       d.Conns,
-		execs:       d.Execs,
-		gitcreds:    d.GitCreds,
-		managedbots: d.ManagedBots,
-		members:     d.Members,
-		runs:        d.Runs,
-		siblings:    d.Siblings,
-		users:       d.Users,
-		activeRuns:  make(map[uuid.UUID]context.CancelFunc),
+		db:                 d.DB,
+		encryptor:          d.Encryptor,
+		pubsub:             d.PubSub,
+		publicURL:          d.PublicURL,
+		providerHTTPClient: d.ProviderHTTPClient,
+		logger:             d.Logger,
+		agents:             d.Agents,
+		bridges:            d.Bridges,
+		catalog:            d.Catalog,
+		conns:              d.Conns,
+		execs:              d.Execs,
+		gitcreds:           d.GitCreds,
+		managedbots:        d.ManagedBots,
+		members:            d.Members,
+		runs:               d.Runs,
+		siblings:           d.Siblings,
+		users:              d.Users,
+		activeRuns:         make(map[uuid.UUID]context.CancelFunc),
 	}
+}
+
+func (s *Service) httpClientForProvider(providerID string) *http.Client {
+	if providerID == "openai-compatible" {
+		return s.providerHTTPClient
+	}
+	return nil
 }
 
 // registerActiveRun stores the cancel func for an in-flight chat

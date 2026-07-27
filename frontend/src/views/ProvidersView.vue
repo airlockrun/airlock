@@ -4,6 +4,15 @@ import { useToast } from 'primevue/usetoast'
 import { useConfirm } from 'primevue/useconfirm'
 import { useProvidersStore } from '@/stores/providers'
 import { useCatalogStore } from '@/stores/catalog'
+import ProviderModelsDialog from '@/components/providers/ProviderModelsDialog.vue'
+import type { Provider } from '@/gen/airlock/v1/types_pb'
+import {
+  OPENAI_COMPATIBLE_PROVIDER_ID,
+  isValidProviderSlug,
+  isValidProviderURL,
+  setRowPending,
+  uniqueProviderSlug,
+} from '@/utils/providers'
 
 const store = useProvidersStore()
 const catalog = useCatalogStore()
@@ -27,25 +36,44 @@ const dialogVisible = ref(false)
 const editingId = ref<string | null>(null)
 const dialogCapabilityFilter = ref<Capability | null>(null)
 const form = ref({ providerId: '', slug: '', displayName: '', baseUrl: '', apiKey: '' })
-// Mirrors the agent-create slug control: slug auto-tracks displayName until
-// the user types into the slug field manually.
 const slugManual = ref(false)
+const creationPath = ref<'hosted' | 'local'>('hosted')
+const localPreset = ref('ollama')
+const togglingIds = ref<Set<string>>(new Set())
+const modelsVisible = ref(false)
+const modelsProvider = ref<Provider | null>(null)
 
-onMounted(() => {
-  store.fetchProviders()
-  catalog.fetchCapabilities()
+const creationPaths = [
+  { label: 'Hosted provider', value: 'hosted', icon: 'pi pi-cloud' },
+  { label: 'Local / OpenAI-compatible', value: 'local', icon: 'pi pi-server' },
+]
+const localPresets = [
+  { label: 'Ollama', value: 'ollama', url: 'http://host.docker.internal:11434/v1' },
+  { label: 'vLLM', value: 'vllm', url: 'http://host.docker.internal:8000/v1' },
+  { label: 'llama.cpp', value: 'llama-cpp', url: 'http://host.docker.internal:8080/v1' },
+  { label: 'LocalAI', value: 'localai', url: 'http://host.docker.internal:8080/v1' },
+  { label: 'Custom', value: 'custom', url: '' },
+]
+
+onMounted(async () => {
+  await Promise.all([store.fetchProviders(), catalog.fetchCapabilities(), catalog.fetchConfiguredModels()])
 })
 
-const coverageByCapability = computed<Record<Capability, typeof catalog.capabilities>>(() => {
-  const out: Record<string, typeof catalog.capabilities> = {}
+const coverageByCapability = computed<Record<Capability, Provider[]>>(() => {
+  const out: Record<string, Provider[]> = {}
   for (const cap of capabilityOrder) out[cap] = []
-  for (const p of catalog.capabilities) {
-    if (!p.configured) continue
-    for (const c of p.capabilities) {
-      if (out[c]) out[c].push(p)
+  for (const provider of store.providers) {
+    if (!provider.isEnabled) continue
+    const capabilities = provider.providerId === OPENAI_COMPATIBLE_PROVIDER_ID
+      ? [...new Set(catalog.models
+          .filter((model) => model.providerConfigId === provider.id)
+          .flatMap((model) => model.caps))]
+      : catalog.capabilities.find((item) => item.providerId === provider.providerId)?.capabilities ?? []
+    for (const capability of capabilities) {
+      if (out[capability]) out[capability].push(provider)
     }
   }
-  return out as Record<Capability, typeof catalog.capabilities>
+  return out as Record<Capability, Provider[]>
 })
 
 // For the Add Provider dialog: candidates = the full known provider catalog.
@@ -54,6 +82,7 @@ const coverageByCapability = computed<Record<Capability, typeof catalog.capabili
 const dialogCandidates = computed(() => {
   const filter = dialogCapabilityFilter.value
   return catalog.capabilities
+    .filter(p => p.providerId !== OPENAI_COMPATIBLE_PROVIDER_ID)
     .filter(p => !filter || p.capabilities.includes(filter))
     .map(p => ({
       id: p.providerId,
@@ -63,18 +92,31 @@ const dialogCandidates = computed(() => {
     .sort((a, b) => a.name.localeCompare(b.name))
 })
 
-// Same kebab logic as agent-create: lowercase, non-alphanumerics → "-",
-// trim leading/trailing hyphens. Used to auto-derive slug from displayName
-// until the user types into slug manually.
-function toSlug(s: string): string {
-  return s
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/(^-|-$)/g, '')
+const isLocal = computed(() => form.value.providerId === OPENAI_COMPATIBLE_PROVIDER_ID)
+const displayNameValid = computed(() => !!form.value.displayName.trim())
+const slugValid = computed(() => isValidProviderSlug(form.value.slug))
+const baseURLValid = computed(() => isValidProviderURL(form.value.baseUrl, isLocal.value))
+const apiKeyValid = computed(() => !!editingId.value || isLocal.value || !!form.value.apiKey.trim())
+const formValid = computed(() =>
+  !!form.value.providerId &&
+  displayNameValid.value &&
+  slugValid.value &&
+  baseURLValid.value &&
+  apiKeyValid.value,
+)
+
+function proposeSlug(preferred: string) {
+  if (slugManual.value || !form.value.providerId) return
+  form.value.slug = uniqueProviderSlug(
+    form.value.providerId,
+    preferred,
+    store.providers,
+    editingId.value ?? '',
+  )
 }
 
 function onDisplayNameInput() {
-  if (!slugManual.value) form.value.slug = toSlug(form.value.displayName)
+  proposeSlug(form.value.displayName)
 }
 
 function onSlugInput() {
@@ -86,6 +128,8 @@ function openCreate(capability?: Capability) {
   dialogCapabilityFilter.value = capability ?? null
   form.value = { providerId: '', slug: '', displayName: '', baseUrl: '', apiKey: '' }
   slugManual.value = false
+  creationPath.value = 'hosted'
+  localPreset.value = 'ollama'
   dialogVisible.value = true
 }
 
@@ -99,8 +143,6 @@ function openEdit(provider: { id: string; providerId: string; slug: string; disp
     baseUrl: provider.baseUrl,
     apiKey: '',
   }
-  // On edit the slug exists already; treat it as user-set so display-name
-  // edits don't clobber it.
   slugManual.value = true
   dialogVisible.value = true
 }
@@ -109,13 +151,27 @@ function onProviderSelect(id: string) {
   const match = dialogCandidates.value.find(c => c.id === id)
   if (match) {
     form.value.displayName = match.name
-    if (!slugManual.value) form.value.slug = toSlug(match.name)
+    proposeSlug(match.id)
   }
 }
 
+function onCreationPathChange(path: 'hosted' | 'local') {
+  slugManual.value = false
+  form.value = { providerId: '', slug: '', displayName: '', baseUrl: '', apiKey: '' }
+  if (path === 'local') onLocalPresetSelect(localPreset.value)
+}
+
+function onLocalPresetSelect(value: string) {
+  const preset = localPresets.find((item) => item.value === value)!
+  form.value.providerId = OPENAI_COMPATIBLE_PROVIDER_ID
+  form.value.displayName = preset.value === 'custom' ? 'Local model endpoint' : preset.label
+  form.value.baseUrl = preset.url
+  proposeSlug(form.value.displayName)
+}
+
 async function onSubmit() {
-  if (!form.value.slug) {
-    toast.add({ severity: 'error', summary: 'Slug is required', life: 3000 })
+  if (!formValid.value) {
+    toast.add({ severity: 'error', summary: 'Check the provider details', life: 3000 })
     return
   }
   try {
@@ -136,6 +192,55 @@ async function onSubmit() {
   } catch (err: any) {
     toast.add({ severity: 'error', summary: err.response?.data?.error || 'Operation failed', life: 5000 })
   }
+}
+
+function providerPending(id: string): boolean {
+  return togglingIds.value.has(id)
+}
+
+function markProviderPending(id: string, pending: boolean) {
+  togglingIds.value = setRowPending(togglingIds.value, id, pending)
+}
+
+async function toggleEnabled(provider: Provider, isEnabled: boolean) {
+  if (providerPending(provider.id) || provider.isEnabled === isEnabled) return
+  markProviderPending(provider.id, true)
+  try {
+    await store.updateProvider(provider.id, { isEnabled })
+    await catalog.fetchCapabilities()
+    toast.add({ severity: 'success', summary: isEnabled ? 'Provider enabled' : 'Provider disabled', life: 3000 })
+  } catch (err: any) {
+    toast.add({
+      severity: 'error',
+      summary: isEnabled ? 'Provider could not be enabled' : 'Provider could not be disabled',
+      detail: err.response?.data?.error || err.message || 'Status update failed',
+      life: 5000,
+    })
+  } finally {
+    markProviderPending(provider.id, false)
+  }
+}
+
+function requestToggleEnabled(provider: Provider, isEnabled: boolean) {
+  if (providerPending(provider.id) || provider.isEnabled === isEnabled) return
+  if (isEnabled) {
+    void toggleEnabled(provider, true)
+    return
+  }
+  confirm.require({
+    message: `Disable provider "${provider.displayName || provider.slug}"? Apps using it will be unable to make new model requests until it is enabled again.`,
+    header: 'Disable Provider',
+    icon: 'pi pi-exclamation-triangle',
+    acceptClass: 'p-button-danger',
+    acceptLabel: 'Disable',
+    rejectLabel: 'Cancel',
+    accept: () => void toggleEnabled(provider, false),
+  })
+}
+
+function openModels(provider: Provider) {
+  modelsProvider.value = provider
+  modelsVisible.value = true
 }
 
 function confirmDelete(provider: { id: string; displayName: string }) {
@@ -179,8 +284,8 @@ function confirmDelete(provider: { id: string; displayName: string }) {
               <template v-if="coverageByCapability[cap].length > 0">
                 <Tag
                   v-for="p in coverageByCapability[cap]"
-                  :key="p.providerId"
-                  :value="p.displayName || p.providerId"
+                  :key="p.id"
+                  :value="`${p.displayName || p.providerId} (${p.slug})`"
                   severity="success"
                   style="font-size: 0.75rem"
                 />
@@ -205,34 +310,57 @@ function confirmDelete(provider: { id: string; displayName: string }) {
 
     <!-- Loading skeletons -->
     <DataTable v-if="store.loading" :value="Array(5)">
-      <Column header="Display Name"><template #body><Skeleton width="60%" /></template></Column>
-      <Column header="Provider ID"><template #body><Skeleton width="40%" /></template></Column>
+      <Column header="Provider"><template #body><Skeleton width="60%" /></template></Column>
       <Column header="Base URL"><template #body><Skeleton width="70%" /></template></Column>
       <Column header="Status"><template #body><Skeleton width="4rem" /></template></Column>
       <Column header="Actions"><template #body><Skeleton width="5rem" /></template></Column>
     </DataTable>
 
     <!-- Configured providers table -->
-    <DataTable v-else :value="store.providers" stripedRows>
+    <DataTable v-else :value="store.providers" stripedRows scrollable class="providers-table">
       <template #empty>
         <div style="text-align: center; padding: 2rem; color: var(--p-text-muted-color)">
           No providers configured yet.
         </div>
       </template>
-      <Column field="displayName" header="Display Name" />
-      <Column field="providerId" header="Provider ID" />
-      <Column field="slug" header="Slug" />
-      <Column field="baseUrl" header="Base URL" />
+      <Column header="Provider">
+        <template #body="{ data }">
+          <div class="provider-identity">
+            <strong>{{ data.displayName || data.providerId }}</strong>
+            <span>{{ data.providerId }}/{{ data.slug }}</span>
+          </div>
+        </template>
+      </Column>
+      <Column field="baseUrl" header="Base URL">
+        <template #body="{ data }">
+          <span class="base-url">{{ data.baseUrl || 'Provider default' }}</span>
+        </template>
+      </Column>
       <Column header="Status">
         <template #body="{ data }">
-          <Tag :value="data.isEnabled ? 'Enabled' : 'Disabled'" :severity="data.isEnabled ? 'success' : 'secondary'" />
+          <div class="status-control">
+            <ToggleSwitch
+              :model-value="data.isEnabled"
+              :disabled="providerPending(data.id)"
+              @update:model-value="(value: boolean) => requestToggleEnabled(data, value)"
+            />
+            <span>{{ data.isEnabled ? 'Enabled' : 'Disabled' }}</span>
+          </div>
         </template>
       </Column>
       <Column header="Actions">
         <template #body="{ data }">
-          <div style="display: flex; gap: 0.5rem">
-            <Button icon="pi pi-pencil" severity="secondary" text rounded @click="openEdit(data)" />
-            <Button icon="pi pi-trash" severity="danger" text rounded @click="confirmDelete(data)" />
+          <div class="row-actions">
+            <Button
+              v-if="data.providerId === OPENAI_COMPATIBLE_PROVIDER_ID"
+              label="Models"
+              icon="pi pi-box"
+              severity="secondary"
+              text
+              @click="openModels(data)"
+            />
+            <Button icon="pi pi-pencil" aria-label="Edit provider" severity="secondary" text rounded @click="openEdit(data)" />
+            <Button icon="pi pi-trash" aria-label="Delete provider" severity="danger" text rounded @click="confirmDelete(data)" />
           </div>
         </template>
       </Column>
@@ -241,7 +369,13 @@ function confirmDelete(provider: { id: string; displayName: string }) {
     <!-- Create / Edit dialog. The wrapping <form autocomplete="off"> + per-
          field autocomplete="off" stops browsers from treating Display Name +
          API Key like a username/password pair and offering to save it. -->
-    <Dialog v-model:visible="dialogVisible" :header="editingId ? 'Edit Provider' : 'Add Provider'" modal style="width: 28rem">
+    <Dialog
+      v-model:visible="dialogVisible"
+      :header="editingId ? 'Edit Provider' : 'Add Provider'"
+      modal
+      style="width: 32rem; max-width: 96vw"
+      :breakpoints="{ '600px': '96vw' }"
+    >
       <form autocomplete="off" style="display: flex; flex-direction: column; gap: 1rem; padding-top: 0.5rem" @submit.prevent>
         <Message
           v-if="!editingId && dialogCapabilityFilter"
@@ -252,10 +386,25 @@ function confirmDelete(provider: { id: string; displayName: string }) {
           Showing providers that supply <b>{{ capabilityMeta[dialogCapabilityFilter].label }}</b>.
           <a href="#" style="margin-left: 0.5rem" @click.prevent="dialogCapabilityFilter = null">Show all</a>
         </Message>
+        <SelectButton
+          v-if="!editingId"
+          v-model="creationPath"
+          :options="creationPaths"
+          option-label="label"
+          option-value="value"
+          :allow-empty="false"
+          fluid
+          @update:model-value="onCreationPathChange"
+        >
+          <template #option="slotProps">
+            <i :class="slotProps.option.icon" />
+            <span>{{ slotProps.option.label }}</span>
+          </template>
+        </SelectButton>
         <div style="display: flex; flex-direction: column; gap: 0.25rem">
           <FloatLabel variant="on">
             <Select
-              v-if="!editingId"
+              v-if="!editingId && creationPath === 'hosted'"
               id="providerId"
               v-model="form.providerId"
               :options="dialogCandidates"
@@ -272,11 +421,30 @@ function confirmDelete(provider: { id: string; displayName: string }) {
             <label for="providerId">Provider</label>
           </FloatLabel>
         </div>
+        <div v-if="!editingId && creationPath === 'local'" style="display: flex; flex-direction: column; gap: 0.25rem">
+          <FloatLabel variant="on">
+            <Select
+              id="localPreset"
+              v-model="localPreset"
+              :options="localPresets"
+              option-label="label"
+              option-value="value"
+              style="width: 100%"
+              @update:model-value="onLocalPresetSelect"
+            />
+            <label for="localPreset">Endpoint preset</label>
+          </FloatLabel>
+          <small style="color: var(--p-text-muted-color)">Presets only fill this form. You can edit every value before creating the provider.</small>
+        </div>
+        <Message v-if="isLocal" severity="info" :closable="false">
+          The URL must be reachable from the Airlock server or container and include the OpenAI-compatible API root, usually <code>/v1</code>.
+        </Message>
         <div style="display: flex; flex-direction: column; gap: 0.25rem">
           <FloatLabel variant="on">
             <InputText id="displayName" v-model="form.displayName" autocomplete="off" style="width: 100%" @input="onDisplayNameInput" />
             <label for="displayName">Display Name</label>
           </FloatLabel>
+          <small v-if="form.displayName && !displayNameValid" class="field-error">Enter a display name.</small>
         </div>
         <div style="display: flex; flex-direction: column; gap: 0.25rem">
           <FloatLabel variant="on">
@@ -284,15 +452,18 @@ function confirmDelete(provider: { id: string; displayName: string }) {
             <label for="slug">Slug</label>
           </FloatLabel>
           <small style="color: var(--p-text-muted-color)">
-            Disambiguates rows for the same provider (e.g. <code>openai/personal</code> vs <code>openai/team-acme</code>).
+            Unique within this provider type. Suggested automatically; manual edits are preserved.
           </small>
+          <small v-if="form.slug && !slugValid" class="field-error">Use 1-63 lowercase letters, numbers, and single hyphens.</small>
         </div>
         <div style="display: flex; flex-direction: column; gap: 0.25rem">
           <FloatLabel variant="on">
             <InputText id="baseUrl" v-model="form.baseUrl" autocomplete="off" style="width: 100%" />
-            <label for="baseUrl">Base URL (optional)</label>
+            <label for="baseUrl">Base URL{{ isLocal ? '' : ' (optional)' }}</label>
           </FloatLabel>
-          <small style="color: var(--p-text-muted-color)">Leave blank for the provider default.</small>
+          <small v-if="!isLocal" style="color: var(--p-text-muted-color)">Leave blank for the provider default.</small>
+          <small v-if="form.baseUrl && !baseURLValid" class="field-error">Enter an absolute HTTP(S) URL without credentials, query, or fragment.</small>
+          <small v-else-if="isLocal && !form.baseUrl" class="field-error">A reachable API root URL is required.</small>
         </div>
         <div style="display: flex; flex-direction: column; gap: 0.25rem">
           <!-- type="text" + -webkit-text-security keeps the visual masking but
@@ -310,15 +481,20 @@ function confirmDelete(provider: { id: string; displayName: string }) {
               data-bwignore="true"
               style="width: 100%; -webkit-text-security: disc;"
             />
-            <label for="apiKey">API Key{{ editingId ? ' (leave blank to keep current)' : '' }}</label>
+            <label for="apiKey">
+              API Key{{ editingId ? ' (leave blank to keep current)' : isLocal ? ' (optional)' : '' }}
+            </label>
           </FloatLabel>
+          <small v-if="!apiKeyValid" class="field-error">Hosted providers require an API key.</small>
         </div>
       </form>
       <template #footer>
         <Button label="Cancel" severity="secondary" text @click="dialogVisible = false" />
-        <Button :label="editingId ? 'Update' : 'Create'" :disabled="!editingId && !form.providerId" @click="onSubmit" />
+        <Button :label="editingId ? 'Update' : 'Create'" :disabled="!formValid" @click="onSubmit" />
       </template>
     </Dialog>
+
+    <ProviderModelsDialog v-model:visible="modelsVisible" :provider="modelsProvider" />
   </div>
 </template>
 
@@ -351,5 +527,45 @@ function confirmDelete(provider: { id: string; displayName: string }) {
   color: var(--p-text-muted-color);
   font-style: italic;
   font-size: 0.85rem;
+}
+.provider-identity {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+.provider-identity span,
+.status-control span {
+  color: var(--p-text-muted-color);
+  font-size: 0.8rem;
+}
+.base-url {
+  overflow-wrap: anywhere;
+}
+.status-control,
+.row-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.row-actions {
+  white-space: nowrap;
+}
+.field-error {
+  color: var(--p-red-500);
+}
+:deep(.providers-table .p-datatable-table) {
+  min-width: 52rem;
+}
+@media (max-width: 600px) {
+  .cap-row {
+    grid-template-columns: 6.5rem 1fr;
+  }
+  .cap-action {
+    grid-column: 2;
+  }
+  :deep(.p-selectbutton) {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
 }
 </style>

@@ -33,12 +33,18 @@ type ipResolver interface {
 	LookupIPAddr(ctx context.Context, host string) ([]net.IPAddr, error)
 }
 
+type contextDialer interface {
+	DialContext(ctx context.Context, network, address string) (net.Conn, error)
+}
+
 // Policy validates URLs and supplies clients backed by one shared transport.
 type Policy struct {
 	privateCIDRs   []netip.Prefix
 	allowLocalhost bool
 	resolver       ipResolver
+	dialer         contextDialer
 	transport      *policyTransport
+	provider       *providerEndpointTransport
 }
 
 // New constructs an outbound policy. allowLocalhost is only for development
@@ -48,11 +54,19 @@ func New(privateCIDRs []netip.Prefix, allowLocalhost bool) *Policy {
 		privateCIDRs:   append([]netip.Prefix(nil), privateCIDRs...),
 		allowLocalhost: allowLocalhost,
 		resolver:       net.DefaultResolver,
+		dialer:         &net.Dialer{},
 	}
 	base := http.DefaultTransport.(*http.Transport).Clone()
 	base.Proxy = nil
 	base.DialContext = p.dialContext
 	p.transport = &policyTransport{policy: p, base: base}
+	providerHTTPS := http.DefaultTransport.(*http.Transport).Clone()
+	providerHTTPS.Proxy = nil
+	providerHTTPS.DialContext = p.dialContext
+	providerHTTP := http.DefaultTransport.(*http.Transport).Clone()
+	providerHTTP.Proxy = nil
+	providerHTTP.DialContext = p.dialProviderHTTPContext
+	p.provider = &providerEndpointTransport{policy: p, https: providerHTTPS, http: providerHTTP}
 	return p
 }
 
@@ -66,6 +80,22 @@ func (t *policyTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		return nil, err
 	}
 	return t.base.RoundTrip(req)
+}
+
+type providerEndpointTransport struct {
+	policy *Policy
+	https  *http.Transport
+	http   *http.Transport
+}
+
+func (t *providerEndpointTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if _, err := t.policy.parseProviderEndpointURL(req.URL.String()); err != nil {
+		return nil, err
+	}
+	if req.URL.Scheme == "http" {
+		return t.http.RoundTrip(req)
+	}
+	return t.https.RoundTrip(req)
 }
 
 // AllowsLocalhostDevelopment reports whether publicURL explicitly configures
@@ -94,6 +124,21 @@ func (p *Policy) Client(timeout time.Duration) *http.Client {
 				return errors.New("cross-origin redirect is not allowed")
 			}
 			return nil
+		},
+	}
+}
+
+// ProviderEndpointClient allows public HTTPS endpoints and HTTP or HTTPS
+// endpoints in explicitly configured private CIDRs. It never follows redirects.
+func (p *Policy) ProviderEndpointClient(timeout time.Duration) *http.Client {
+	if p == nil {
+		panic("networkpolicy: policy is required")
+	}
+	return &http.Client{
+		Timeout:   timeout,
+		Transport: p.provider,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return errors.New("redirects are not allowed")
 		},
 	}
 }
@@ -127,6 +172,33 @@ func (p *Policy) ParseURL(raw string) (*url.URL, error) {
 	return u, nil
 }
 
+func (p *Policy) parseProviderEndpointURL(raw string) (*url.URL, error) {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return nil, err
+	}
+	if u.Scheme == "https" {
+		return p.ParseURL(raw)
+	}
+	if u.Scheme != "http" {
+		return nil, fmt.Errorf("unsupported scheme %q", u.Scheme)
+	}
+	if u.Hostname() == "" {
+		return nil, errors.New("host is required")
+	}
+	if u.User != nil {
+		return nil, errors.New("userinfo is not allowed")
+	}
+	localhost := isLocalhostHost(u.Hostname())
+	if localhost && !p.allowLocalhost {
+		return nil, ErrDisallowedURL
+	}
+	if ip, err := netip.ParseAddr(u.Hostname()); err == nil && !p.allowsProviderHTTPAddr(ip, localhost) {
+		return nil, ErrDisallowedURL
+	}
+	return u, nil
+}
+
 // SameOrigin compares URL scheme, hostname, and effective port.
 func SameOrigin(a, b *url.URL) bool {
 	return strings.EqualFold(a.Scheme, b.Scheme) &&
@@ -144,6 +216,14 @@ func effectivePort(u *url.URL) string {
 }
 
 func (p *Policy) dialContext(ctx context.Context, network, address string) (net.Conn, error) {
+	return p.dialResolved(ctx, network, address, p.allowsAddr)
+}
+
+func (p *Policy) dialProviderHTTPContext(ctx context.Context, network, address string) (net.Conn, error) {
+	return p.dialResolved(ctx, network, address, p.allowsProviderHTTPAddr)
+}
+
+func (p *Policy) dialResolved(ctx context.Context, network, address string, allows func(netip.Addr, bool) bool) (net.Conn, error) {
 	host, port, err := net.SplitHostPort(address)
 	if err != nil {
 		return nil, err
@@ -163,10 +243,10 @@ func (p *Policy) dialContext(ctx context.Context, network, address string) (net.
 	var dialErr error
 	for _, ipAddr := range resolved {
 		addr, ok := netip.AddrFromSlice(ipAddr.IP)
-		if !ok || !p.allowsAddr(addr.Unmap(), localhost) {
+		if !ok || !allows(addr.Unmap(), localhost) {
 			continue
 		}
-		conn, err := (&net.Dialer{}).DialContext(ctx, network, net.JoinHostPort(addr.Unmap().String(), port))
+		conn, err := p.dialer.DialContext(ctx, network, net.JoinHostPort(addr.Unmap().String(), port))
 		if err == nil {
 			return conn, nil
 		}
@@ -176,6 +256,26 @@ func (p *Policy) dialContext(ctx context.Context, network, address string) (net.
 		return nil, dialErr
 	}
 	return nil, ErrDisallowedURL
+}
+
+func (p *Policy) allowsProviderHTTPAddr(addr netip.Addr, localhostName bool) bool {
+	addr = addr.Unmap()
+	if !addr.IsValid() || addr.IsLinkLocalUnicast() || addr.IsLinkLocalMulticast() ||
+		addr.IsMulticast() || addr.IsUnspecified() {
+		return false
+	}
+	if localhostName {
+		return p.allowLocalhost && addr.IsLoopback()
+	}
+	if addr.IsLoopback() || isPublicAddr(addr) {
+		return false
+	}
+	for _, prefix := range p.privateCIDRs {
+		if prefix.Contains(addr) {
+			return true
+		}
+	}
+	return false
 }
 
 func (p *Policy) allowsAddr(addr netip.Addr, localhostName bool) bool {

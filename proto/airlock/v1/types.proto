@@ -73,14 +73,15 @@ message UserSummary {
   string kind = 4; // "user" or "group"
 }
 
-// Provider represents a configured LLM provider with encrypted API key.
+// Provider represents a configured LLM provider. Configured keys are encrypted;
+// OpenAI-compatible endpoints may use no key.
 message Provider {
   string id = 1;
   string provider_id = 2;
   string display_name = 3;
   bool is_enabled = 4;
   string base_url = 5;
-  reserved 6; // was api_key_masked — keys are write-once and never returned
+  reserved 6;
   google.protobuf.Timestamp created_at = 7;
   google.protobuf.Timestamp updated_at = 8;
   // slug disambiguates rows that share a provider_id (multi-key
@@ -88,10 +89,30 @@ message Provider {
   // Auto-derived from display_name on the client (kebab-case); user
   // can override.
   string slug = 9;
-  // has_api_key reports that a key is configured, without ever sending it
-  // (keys are write-once + encrypted at rest). Lets the admin UI show a
-  // "configured" state and the create/edit form treat the key as set-once.
+  // has_api_key reports that an encrypted key is configured without sending it.
   bool has_api_key = 10;
+}
+
+// ProviderModel is a confirmed language model served by one configured
+// OpenAI-compatible provider row.
+message ProviderModel {
+  string model_id = 1;
+  string display_name = 2;
+  bool tool_call = 3;
+  bool reasoning = 4;
+  bool vision = 5;
+  int32 context_limit = 6;
+  int32 output_limit = 7;
+  bool structured_outputs = 8;
+  google.protobuf.Timestamp created_at = 9;
+  google.protobuf.Timestamp updated_at = 10;
+  bool include_usage = 11;
+}
+
+// ProviderModelCandidate is an endpoint-reported model ID. Discovery does not
+// infer capabilities and does not persist candidates.
+message ProviderModelCandidate {
+  string model_id = 1;
 }
 
 // ProviderInfo represents a known LLM provider from the catalog.
@@ -138,6 +159,10 @@ message ModelInfo {
   // frontend to compose sub-filters within a kind (e.g. vision picker =
   // language model with vision cap).
   repeated string caps = 11;
+  // provider_config_id identifies the configured providers row for models
+  // whose catalog is specific to one endpoint.
+  string provider_config_id = 12;
+  bool structured_outputs = 13;
 }
 
 // --- Agents ---

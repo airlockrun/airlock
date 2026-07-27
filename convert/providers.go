@@ -21,3 +21,19 @@ func ProviderToProto(p dbq.Provider) *airlockv1.Provider {
 		UpdatedAt:   PgTimestampToProto(p.UpdatedAt),
 	}
 }
+
+func ProviderModelToProto(m dbq.ProviderModel) *airlockv1.ProviderModel {
+	return &airlockv1.ProviderModel{
+		ModelId:           m.ModelID,
+		DisplayName:       m.DisplayName,
+		ToolCall:          m.ToolCall,
+		Reasoning:         m.Reasoning,
+		Vision:            m.Vision,
+		ContextLimit:      m.ContextLimit,
+		OutputLimit:       m.OutputLimit,
+		StructuredOutputs: m.StructuredOutputs,
+		IncludeUsage:      m.IncludeUsage,
+		CreatedAt:         PgTimestampToProto(m.CreatedAt),
+		UpdatedAt:         PgTimestampToProto(m.UpdatedAt),
+	}
+}

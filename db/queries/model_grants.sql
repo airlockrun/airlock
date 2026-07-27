@@ -23,8 +23,9 @@ ORDER BY p.provider_id, mg.model;
 -- grantee set — the models a non-admin caller may assign. Powers the model
 -- picker's allow-list (defaults aren't listed; the caller leaves a slot unset
 -- to fall back to the capability default).
-SELECT provider_id, model FROM model_grants
-WHERE grantee_id = ANY (@grantee_ids::uuid[]);
+SELECT mg.provider_id, mg.model FROM model_grants mg
+JOIN providers p ON p.id = mg.provider_id
+WHERE mg.grantee_id = ANY (@grantee_ids::uuid[]) AND p.is_enabled;
 
 -- name: CountMatchingModelGrants :one
 -- For the entitlement check: does any grant for this (provider, model) target a
@@ -72,6 +73,26 @@ SELECT count(*) FROM (
     SELECT s.agent_id FROM agent_model_slots s
     WHERE s.assigned_provider_id = @provider_id AND s.assigned_model = @model
 ) u;
+
+-- name: ListAgentIDsUsingModel :many
+-- Grant revocation locks every affected agent before it locks the provider.
+-- UNION removes agents referenced by more than one fixed override or slot;
+-- ORDER BY makes the subsequent LockAgentsByID call deterministic.
+SELECT id FROM (
+    SELECT a.id FROM agents a WHERE
+         (a.build_provider_id     = @provider_id AND a.build_model     = @model)
+      OR (a.exec_provider_id      = @provider_id AND a.exec_model      = @model)
+      OR (a.stt_provider_id       = @provider_id AND a.stt_model       = @model)
+      OR (a.vision_provider_id    = @provider_id AND a.vision_model    = @model)
+      OR (a.tts_provider_id       = @provider_id AND a.tts_model       = @model)
+      OR (a.image_gen_provider_id = @provider_id AND a.image_gen_model = @model)
+      OR (a.embedding_provider_id = @provider_id AND a.embedding_model = @model)
+      OR (a.search_provider_id    = @provider_id AND a.search_model    = @model)
+    UNION
+    SELECT s.agent_id AS id FROM agent_model_slots s
+    WHERE s.assigned_provider_id = @provider_id AND s.assigned_model = @model
+) affected
+ORDER BY id;
 
 -- Reset each capability override matching (provider, model) back to inherit
 -- (NULL provider + '' model → falls back to the workspace default). One

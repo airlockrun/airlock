@@ -144,8 +144,12 @@ func runServe(_ []string) {
 		zap.Bool("rewrap_enabled", cfg.EncryptionKeyRewrap),
 		zap.Int64("rewrapped_secrets", rewrapped))
 
+	// Provider endpoints share a DNS-validating client across in-process model calls.
+	httpNetwork := networkpolicy.New(cfg.AgentHTTPPrivateCIDRs, networkpolicy.AllowsLocalhostDevelopment(cfg.PublicURL))
+	providerEndpointHTTPClient := httpNetwork.ProviderEndpointClient(0)
+
 	// Build service
-	buildSvc := builder.New(cfg, database, containers, secretStore, logger.Named("builder"))
+	buildSvc := builder.New(cfg, database, containers, secretStore, providerEndpointHTTPClient, logger.Named("builder"))
 	if err := buildSvc.RecoverStuckOperations(ctx); err != nil {
 		logger.Fatal("build service recovery failed", zap.Error(err))
 	}
@@ -217,8 +221,7 @@ func runServe(_ []string) {
 	bridgeMgr := trigger.NewBridgeManager(drivers, prompter, database, secretStore, cfg.JWTSecret, cfg.PublicURL, cfg.AgentBaseURL, logger.Named("bridges"))
 	scheduler := trigger.NewScheduler(dispatcher, database, logger.Named("scheduler"))
 
-	// OAuth, MCP, and connection calls share one outbound policy transport.
-	httpNetwork := networkpolicy.New(cfg.AgentHTTPPrivateCIDRs, networkpolicy.AllowsLocalhostDevelopment(cfg.PublicURL))
+	// OAuth, MCP, and connection calls share the general outbound policy transport.
 	oauthClient := oauth.NewClient(httpNetwork.Client(30*time.Second), networkpolicy.AllowsLocalhostDevelopment(cfg.PublicURL))
 
 	// Reverse proxy real IP config
@@ -232,30 +235,31 @@ func runServe(_ []string) {
 
 	// Build router
 	router := api.NewRouter(api.RouterConfig{
-		DB:                     database,
-		JWTSecret:              cfg.JWTSecret,
-		PublicURL:              cfg.PublicURL,
-		OAuthClient:            oauthClient,
-		TelegramDriver:         telegramDriver,
-		Secrets:                secretStore,
-		S3Client:               s3Client,
-		BuildService:           buildSvc,
-		Dispatcher:             dispatcher,
-		Scheduler:              scheduler,
-		BridgeManager:          bridgeMgr,
-		Containers:             containers,
-		PromptProxy:            prompter,
-		Hub:                    hub,
-		PubSub:                 pubsub,
-		Handler:                wsHandler,
-		AgentDomain:            cfg.AgentDomain,
-		AgentBaseURL:           cfg.AgentBaseURL,
-		LLMProxyURL:            cfg.LLMProxyURL,
-		ForceInlineAttachments: cfg.ForceInlineAttachments,
-		HTTPNetwork:            httpNetwork,
-		ActivationCodeFile:     cfg.ActivationCodeFile,
-		RealIP:                 realIPCfg,
-		Logger:                 logger,
+		DB:                         database,
+		JWTSecret:                  cfg.JWTSecret,
+		PublicURL:                  cfg.PublicURL,
+		OAuthClient:                oauthClient,
+		TelegramDriver:             telegramDriver,
+		Secrets:                    secretStore,
+		S3Client:                   s3Client,
+		BuildService:               buildSvc,
+		Dispatcher:                 dispatcher,
+		Scheduler:                  scheduler,
+		BridgeManager:              bridgeMgr,
+		Containers:                 containers,
+		PromptProxy:                prompter,
+		Hub:                        hub,
+		PubSub:                     pubsub,
+		Handler:                    wsHandler,
+		AgentDomain:                cfg.AgentDomain,
+		AgentBaseURL:               cfg.AgentBaseURL,
+		LLMProxyURL:                cfg.LLMProxyURL,
+		ForceInlineAttachments:     cfg.ForceInlineAttachments,
+		HTTPNetwork:                httpNetwork,
+		ProviderEndpointHTTPClient: providerEndpointHTTPClient,
+		ActivationCodeFile:         cfg.ActivationCodeFile,
+		RealIP:                     realIPCfg,
+		Logger:                     logger,
 	})
 
 	// Start HTTP server

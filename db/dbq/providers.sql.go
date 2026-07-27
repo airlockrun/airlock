@@ -155,6 +155,30 @@ func (q *Queries) ListProvidersByCatalogID(ctx context.Context, providerID strin
 	return items, nil
 }
 
+const lockProvidersByID = `-- name: LockProvidersByID :many
+SELECT id FROM providers WHERE id = ANY ($1::uuid[]) ORDER BY id FOR UPDATE
+`
+
+func (q *Queries) LockProvidersByID(ctx context.Context, ids []pgtype.UUID) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, lockProvidersByID, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []pgtype.UUID{}
+	for rows.Next() {
+		var id pgtype.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const updateProvider = `-- name: UpdateProvider :one
 UPDATE providers
 SET display_name = COALESCE(NULLIF($1::text, ''), display_name),

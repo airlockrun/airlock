@@ -3,6 +3,7 @@ package apitest_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -102,6 +103,57 @@ func TestAgentCreateAndCloneRejectUngrantedModels(t *testing.T) {
 	clone := agentssvc.CloneRequest{Name: "Denied clone", Slug: "denied-clone"}
 	if _, err := svc.Clone(context.Background(), principal, sourceID, clone); !errors.Is(err, service.ErrForbidden) {
 		t.Fatalf("clone with ungranted model error = %v, want forbidden", err)
+	}
+}
+
+func TestAgentCreateAndCloneRejectUnsafeProviderModels(t *testing.T) {
+	tests := []struct {
+		name      string
+		catalogID string
+		enabled   bool
+		want      string
+	}{
+		{name: "disabled", catalogID: "openai", enabled: false, want: "is disabled"},
+		{name: "unconfirmed local model", catalogID: "openai-compatible", enabled: true, want: "is not confirmed"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := apitest.Setup(t)
+			manager := apitest.CreateUser(t, h, "unsafe-model-manager", "manager")
+			principal := authz.UserPrincipal(manager, auth.RoleManager)
+			providerID := uuid.New()
+			q := dbq.New(h.DB.Pool())
+			if _, err := q.CreateProvider(t.Context(), dbq.CreateProviderParams{
+				ID: pgUUID(providerID), CatalogID: tt.catalogID, Slug: "unsafe-provider", DisplayName: "Unsafe", ApiKey: "k", BaseUrl: "", IsEnabled: tt.enabled,
+			}); err != nil {
+				t.Fatalf("CreateProvider: %v", err)
+			}
+			const model = "unsafe-model"
+			if _, err := q.CreateModelGrant(t.Context(), dbq.CreateModelGrantParams{
+				CatalogID: pgUUID(providerID), Model: model, GranteeID: pgUUID(authz.GroupUser),
+			}); err != nil {
+				t.Fatalf("CreateModelGrant: %v", err)
+			}
+
+			svc := agentService(h)
+			_, err := svc.Create(t.Context(), principal, agentssvc.CreateRequest{
+				Name: "Unsafe create", Slug: "unsafe-create", BuildProviderID: providerID.String(), BuildModel: model, SkipInitialBuild: true,
+			})
+			if !errors.Is(err, service.ErrInvalidInput) || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("Create error = %v, want invalid input containing %q", err, tt.want)
+			}
+
+			sourceID := apitest.CreateAgent(t, h, apitest.AgentOpts{OwnerID: manager})
+			if _, err := h.DB.Pool().Exec(t.Context(),
+				`UPDATE agents SET source_ref='source', build_provider_id=$2, build_model=$3 WHERE id=$1`,
+				sourceID, providerID, model); err != nil {
+				t.Fatalf("set source model: %v", err)
+			}
+			_, err = svc.Clone(t.Context(), principal, sourceID, agentssvc.CloneRequest{Name: "Unsafe clone", Slug: "unsafe-clone"})
+			if !errors.Is(err, service.ErrInvalidInput) || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("Clone error = %v, want invalid input containing %q", err, tt.want)
+			}
+		})
 	}
 }
 

@@ -32,7 +32,9 @@ import (
 	"github.com/airlockrun/airlock/service"
 	modelssvc "github.com/airlockrun/airlock/service/models"
 	"github.com/airlockrun/airlock/trigger"
+	solprovider "github.com/airlockrun/sol/provider"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"
 )
@@ -206,6 +208,92 @@ func parseOptionalProviderID(s string) (pgtype.UUID, error) {
 	return pgtype.UUID{Bytes: id, Valid: true}, nil
 }
 
+type selectedModelPair struct {
+	name       string
+	providerID pgtype.UUID
+	model      string
+	search     bool
+}
+
+// lockAndValidateModelPairs applies the model-assignment lock protocol inside
+// the caller's transaction. Existing target/source agents are locked by the
+// caller before this function; providers are locked here in UUID order.
+func lockAndValidateModelPairs(ctx context.Context, q *dbq.Queries, p authz.Principal, pairs []selectedModelPair) error {
+	providerSet := make(map[uuid.UUID]pgtype.UUID)
+	for _, pair := range pairs {
+		if !pair.providerID.Valid {
+			if pair.model != "" {
+				return service.Detail(service.ErrInvalidInput, "%s_model and %s_provider_id must be set or unset together", pair.name, pair.name)
+			}
+			continue
+		}
+		if pair.model == "" && !pair.search {
+			return service.Detail(service.ErrInvalidInput, "%s_model and %s_provider_id must be set or unset together", pair.name, pair.name)
+		}
+		providerSet[uuid.UUID(pair.providerID.Bytes)] = pair.providerID
+	}
+	providerIDs := make([]pgtype.UUID, 0, len(providerSet))
+	for _, id := range providerSet {
+		providerIDs = append(providerIDs, id)
+	}
+	sort.Slice(providerIDs, func(i, j int) bool {
+		return uuid.UUID(providerIDs[i].Bytes).String() < uuid.UUID(providerIDs[j].Bytes).String()
+	})
+	locked, err := q.LockProvidersByID(ctx, providerIDs)
+	if err != nil {
+		return err
+	}
+	if len(locked) != len(providerIDs) {
+		return service.Detail(service.ErrInvalidInput, "unknown provider in model configuration")
+	}
+
+	providers := make(map[uuid.UUID]dbq.Provider, len(providerIDs))
+	for _, id := range providerIDs {
+		row, err := q.GetProviderByID(ctx, id)
+		if err != nil {
+			return err
+		}
+		providers[uuid.UUID(id.Bytes)] = row
+	}
+	for _, pair := range pairs {
+		if !pair.providerID.Valid {
+			continue
+		}
+		provider := providers[uuid.UUID(pair.providerID.Bytes)]
+		if !provider.IsEnabled {
+			return service.Detail(service.ErrInvalidInput, "provider %q (%s) is disabled", provider.CatalogID, provider.Slug)
+		}
+		if pair.search && solprovider.SearchBackend(provider.CatalogID) == "" {
+			return service.Detail(service.ErrInvalidInput, "provider %q does not provide a supported search backend", provider.CatalogID)
+		}
+		if provider.CatalogID == "openai-compatible" {
+			if pair.model == "" {
+				return service.Detail(service.ErrInvalidInput, "an openai-compatible model is required")
+			}
+			if _, err := q.GetProviderModel(ctx, dbq.GetProviderModelParams{
+				ConfiguredProviderID: pair.providerID,
+				ModelID:              pair.model,
+			}); err != nil {
+				if errors.Is(err, pgx.ErrNoRows) {
+					return service.Detail(service.ErrInvalidInput, "model %q is not confirmed for provider %q", pair.model, provider.Slug)
+				}
+				return err
+			}
+		}
+		if err := modelssvc.CheckEntitled(ctx, q, p, pair.providerID, pair.model); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func cleanupCreatedAgent(ctx context.Context, q *dbq.Queries, agentID pgtype.UUID, cause error) error {
+	if err := q.DeleteAgent(ctx, agentID); err != nil {
+		return errors.Join(cause, fmt.Errorf("delete incomplete agent: %w", err))
+	}
+	return cause
+}
+
 func randomHex(n int) (string, error) {
 	b := make([]byte, n)
 	if _, err := rand.Read(b); err != nil {
@@ -275,12 +363,6 @@ func (s *Service) Create(ctx context.Context, p authz.Principal, req CreateReque
 	}
 	if (req.ExecModel != "") != execProviderFK.Valid {
 		return dbq.Agent{}, service.Detail(service.ErrInvalidInput, "exec_model and exec_provider_id must be set or unset together")
-	}
-	if err := modelssvc.CheckEntitled(ctx, q, p, buildProviderFK, req.BuildModel); err != nil {
-		return dbq.Agent{}, err
-	}
-	if err := modelssvc.CheckEntitled(ctx, q, p, execProviderFK, req.ExecModel); err != nil {
-		return dbq.Agent{}, err
 	}
 	var gitCredFK pgtype.UUID
 	gitRemoteURL := req.GitRemoteURL
@@ -357,7 +439,21 @@ func (s *Service) Create(ctx context.Context, p authz.Principal, req CreateReque
 	} else if gitMode != "" {
 		return dbq.Agent{}, service.Detail(service.ErrInvalidInput, "git_mode requires git_remote_url")
 	}
-	agent, err := q.CreateAgent(ctx, dbq.CreateAgentParams{
+	tx, err := s.db.Pool().Begin(ctx)
+	if err != nil {
+		return dbq.Agent{}, err
+	}
+	defer tx.Rollback(ctx)
+	qtx := q.WithTx(tx)
+	// Providers are locked before inserting this brand-new target. No other
+	// transaction can address the target row until its generated UUID exists.
+	if err := lockAndValidateModelPairs(ctx, qtx, p, []selectedModelPair{
+		{name: "build", providerID: buildProviderFK, model: req.BuildModel},
+		{name: "exec", providerID: execProviderFK, model: req.ExecModel},
+	}); err != nil {
+		return dbq.Agent{}, err
+	}
+	agent, err := qtx.CreateAgent(ctx, dbq.CreateAgentParams{
 		Name:             req.Name,
 		Slug:             req.Slug,
 		OwnerPrincipalID: pgtype.UUID{Bytes: p.UserID, Valid: true},
@@ -372,23 +468,30 @@ func (s *Service) Create(ctx context.Context, p authz.Principal, req CreateReque
 		return dbq.Agent{}, err
 	}
 	if req.BuildModel != "" || req.ExecModel != "" {
-		_ = q.UpdateAgentModels(ctx, dbq.UpdateAgentModelsParams{
+		if err := qtx.UpdateAgentModels(ctx, dbq.UpdateAgentModelsParams{
 			ID:              agent.ID,
 			BuildProviderID: buildProviderFK,
 			BuildModel:      req.BuildModel,
 			ExecProviderID:  execProviderFK,
 			ExecModel:       req.ExecModel,
-		})
+		}); err != nil {
+			return dbq.Agent{}, err
+		}
 		agent.BuildProviderID = buildProviderFK
 		agent.BuildModel = req.BuildModel
 		agent.ExecProviderID = execProviderFK
 		agent.ExecModel = req.ExecModel
 	}
-	_ = q.UpsertAgentGrant(ctx, dbq.UpsertAgentGrantParams{
+	if err := qtx.UpsertAgentGrant(ctx, dbq.UpsertAgentGrantParams{
 		AgentID:   agent.ID,
 		GranteeID: pgtype.UUID{Bytes: p.UserID, Valid: true},
 		Role:      "admin",
-	})
+	}); err != nil {
+		return dbq.Agent{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return dbq.Agent{}, err
+	}
 	agentIDStr := uuid.UUID(agent.ID.Bytes).String()
 
 	// Import: the remote already has code, so connect + clone it in now
@@ -399,13 +502,11 @@ func (s *Service) Create(ctx context.Context, p authz.Principal, req CreateReque
 		if gitMode != GitModeImportOnce {
 			secret, err := randomHex(32)
 			if err != nil {
-				_ = q.DeleteAgent(ctx, agent.ID)
-				return dbq.Agent{}, err
+				return dbq.Agent{}, cleanupCreatedAgent(ctx, q, agent.ID, err)
 			}
 			storedSecret, err := s.secrets.Put(ctx, gitWebhookSecretRef(uuid.UUID(agent.ID.Bytes)), secret)
 			if err != nil {
-				_ = q.DeleteAgent(ctx, agent.ID)
-				return dbq.Agent{}, err
+				return dbq.Agent{}, cleanupCreatedAgent(ctx, q, agent.ID, err)
 			}
 			if err := q.ConnectAgentGit(ctx, dbq.ConnectAgentGitParams{
 				ID:               agent.ID,
@@ -415,21 +516,22 @@ func (s *Service) Create(ctx context.Context, p authz.Principal, req CreateReque
 				GitWebhookSecret: storedSecret,
 				GitMode:          gitMode,
 			}); err != nil {
-				_ = q.DeleteAgent(ctx, agent.ID)
 				s.logger.Error("git create import: connect", zap.Error(err))
-				return dbq.Agent{}, err
+				return dbq.Agent{}, cleanupCreatedAgent(ctx, q, agent.ID, err)
 			}
 		}
 		if err := s.builder.CloneRemoteIntoAgent(ctx, agentIDStr, gitRemoteURL, gitBranch, gitCredFK); err != nil {
-			_ = q.DeleteAgent(ctx, agent.ID)
 			s.logger.Error("git create import: clone", zap.String("agent", agentIDStr), zap.Error(err))
-			return dbq.Agent{}, service.Detail(service.ErrInvalidInput, "failed to import repository: %s", err.Error())
+			return dbq.Agent{}, cleanupCreatedAgent(ctx, q, agent.ID,
+				service.Detail(service.ErrInvalidInput, "failed to import repository: %s", err.Error()))
 		}
 		if gitMode != GitModeImportOnce && remoteHeadSHA != "" {
-			_ = q.UpdateAgentGitLastSyncedRef(ctx, dbq.UpdateAgentGitLastSyncedRefParams{
+			if err := q.UpdateAgentGitLastSyncedRef(ctx, dbq.UpdateAgentGitLastSyncedRefParams{
 				ID:               agent.ID,
 				GitLastSyncedRef: remoteHeadSHA,
-			})
+			}); err != nil {
+				return dbq.Agent{}, cleanupCreatedAgent(ctx, q, agent.ID, err)
+			}
 		}
 	}
 
@@ -778,38 +880,42 @@ func (s *Service) Clone(ctx context.Context, p authz.Principal, sourceID uuid.UU
 	if err := authz.Authorize(ctx, q, p, authz.AgentClone, sourceID); err != nil {
 		return dbq.Agent{}, service.Detail(err, "you must be a member of the agent to clone it")
 	}
-	src, err := q.GetAgentByID(ctx, pgtype.UUID{Bytes: sourceID, Valid: true})
-	if err != nil {
-		return dbq.Agent{}, service.ErrNotFound
-	}
 	if req.Name == "" {
 		return dbq.Agent{}, service.Detail(service.ErrInvalidInput, "name is required")
 	}
 	if !validAgentSlug(req.Slug) {
 		return dbq.Agent{}, service.Detail(service.ErrInvalidInput, "slug must be 2-63 lowercase kebab-case chars")
 	}
+	tx, err := s.db.Pool().Begin(ctx)
+	if err != nil {
+		return dbq.Agent{}, err
+	}
+	defer tx.Rollback(ctx)
+	qtx := q.WithTx(tx)
+	src, err := qtx.GetAgentByIDForUpdate(ctx, pgtype.UUID{Bytes: sourceID, Valid: true})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return dbq.Agent{}, service.ErrNotFound
+		}
+		return dbq.Agent{}, err
+	}
 	if src.SourceRef == "" {
 		return dbq.Agent{}, service.Detail(service.ErrInvalidInput, "source agent has no built code to clone yet")
 	}
-	for _, pair := range []struct {
-		provider pgtype.UUID
-		model    string
-	}{
-		{src.BuildProviderID, src.BuildModel},
-		{src.ExecProviderID, src.ExecModel},
-		{src.SttProviderID, src.SttModel},
-		{src.VisionProviderID, src.VisionModel},
-		{src.TtsProviderID, src.TtsModel},
-		{src.ImageGenProviderID, src.ImageGenModel},
-		{src.EmbeddingProviderID, src.EmbeddingModel},
-		{src.SearchProviderID, src.SearchModel},
-	} {
-		if err := modelssvc.CheckEntitled(ctx, q, p, pair.provider, pair.model); err != nil {
-			return dbq.Agent{}, err
-		}
+	if err := lockAndValidateModelPairs(ctx, qtx, p, []selectedModelPair{
+		{name: "build", providerID: src.BuildProviderID, model: src.BuildModel},
+		{name: "exec", providerID: src.ExecProviderID, model: src.ExecModel},
+		{name: "stt", providerID: src.SttProviderID, model: src.SttModel},
+		{name: "vision", providerID: src.VisionProviderID, model: src.VisionModel},
+		{name: "tts", providerID: src.TtsProviderID, model: src.TtsModel},
+		{name: "image_gen", providerID: src.ImageGenProviderID, model: src.ImageGenModel},
+		{name: "embedding", providerID: src.EmbeddingProviderID, model: src.EmbeddingModel},
+		{name: "search", providerID: src.SearchProviderID, model: src.SearchModel, search: true},
+	}); err != nil {
+		return dbq.Agent{}, err
 	}
 
-	agent, err := q.CreateAgent(ctx, dbq.CreateAgentParams{
+	agent, err := qtx.CreateAgent(ctx, dbq.CreateAgentParams{
 		Name:             req.Name,
 		Slug:             req.Slug,
 		OwnerPrincipalID: pgtype.UUID{Bytes: p.UserID, Valid: true},
@@ -824,13 +930,15 @@ func (s *Service) Clone(ctx context.Context, p authz.Principal, sourceID uuid.UU
 		return dbq.Agent{}, err
 	}
 	// Cloner becomes admin owner (column set at create + the grant).
-	_ = q.UpsertAgentGrant(ctx, dbq.UpsertAgentGrantParams{
+	if err := qtx.UpsertAgentGrant(ctx, dbq.UpsertAgentGrantParams{
 		AgentID:   agent.ID,
 		GranteeID: pgtype.UUID{Bytes: p.UserID, Valid: true},
 		Role:      "admin",
-	})
+	}); err != nil {
+		return dbq.Agent{}, err
+	}
 	// Authored config: models (tenant-wide providers stay valid), emoji, flags.
-	_ = q.UpdateAgentModels(ctx, dbq.UpdateAgentModelsParams{
+	if err := qtx.UpdateAgentModels(ctx, dbq.UpdateAgentModelsParams{
 		ID:              agent.ID,
 		BuildProviderID: src.BuildProviderID, BuildModel: src.BuildModel,
 		ExecProviderID: src.ExecProviderID, ExecModel: src.ExecModel,
@@ -840,20 +948,33 @@ func (s *Service) Clone(ctx context.Context, p authz.Principal, sourceID uuid.UU
 		ImageGenProviderID: src.ImageGenProviderID, ImageGenModel: src.ImageGenModel,
 		EmbeddingProviderID: src.EmbeddingProviderID, EmbeddingModel: src.EmbeddingModel,
 		SearchProviderID: src.SearchProviderID, SearchModel: src.SearchModel,
-	})
-	_ = q.UpdateAgentEmoji(ctx, dbq.UpdateAgentEmojiParams{ID: agent.ID, Emoji: src.Emoji})
-	_ = q.UpdateAgentA2ASettings(ctx, dbq.UpdateAgentA2ASettingsParams{
+	}); err != nil {
+		return dbq.Agent{}, err
+	}
+	if err := qtx.UpdateAgentEmoji(ctx, dbq.UpdateAgentEmojiParams{ID: agent.ID, Emoji: src.Emoji}); err != nil {
+		return dbq.Agent{}, err
+	}
+	if err := qtx.UpdateAgentA2ASettings(ctx, dbq.UpdateAgentA2ASettingsParams{
 		ID: agent.ID, McpEnabled: src.McpEnabled, AllowPublicMcp: src.AllowPublicMcp, AllowPublicRoutes: src.AllowPublicRoutes,
-	})
+	}); err != nil {
+		return dbq.Agent{}, err
+	}
+	agent, err = qtx.GetAgentByID(ctx, agent.ID)
+	if err != nil {
+		return dbq.Agent{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return dbq.Agent{}, err
+	}
 
 	newIDStr := uuid.UUID(agent.ID.Bytes).String()
 	// Copy the repo BEFORE build so InitAgentRepo no-ops and the build rebuilds
 	// the copied HEAD (empty Instructions ⇒ no codegen). Roll back the row if
 	// the copy fails so we never leave a codeless clone.
 	if err := builder.CopyAgentRepo(s.builder.ReposPath(), sourceID.String(), newIDStr); err != nil {
-		_ = q.DeleteAgent(ctx, agent.ID)
 		s.logger.Error("clone: copy repo", zap.Error(err))
-		return dbq.Agent{}, service.Detail(service.ErrConflict, "failed to copy agent code: %s", err.Error())
+		return dbq.Agent{}, cleanupCreatedAgent(ctx, q, agent.ID,
+			service.Detail(service.ErrConflict, "failed to copy agent code: %s", err.Error()))
 	}
 	go func() {
 		_ = s.builder.Build(context.Background(), builder.BuildInput{

@@ -41,8 +41,8 @@ authz/             The single authorization layer. Principal (registered /
 apperr/            Leaf package: the sentinel errors (ErrForbidden, …), Detail
                    wrapper, and HTTPStatus mapping. service.ErrX are aliases of
                    these so authz can return them without an import cycle.
-db/                Postgres — schema baseline, sqlc queries, connection pool with RLS cleanup
-  migrations/      Fresh-database goose baseline (`001_schema.sql`)
+db/                Postgres — goose migrations, sqlc queries, connection pool with RLS cleanup
+  migrations/      Ordered goose schema (`001_schema.sql`, then forward migrations)
   queries/         sqlc SQL files (agents.sql, messages.sql, etc.)
   dbq/             sqlc-generated Go code (models, queries)
 config/            Environment-based config (DATABASE_URL, JWT_SECRET, S3_*, ENCRYPTION_KEY, etc.)
@@ -64,6 +64,7 @@ service/resources/ Reusable connection/MCP/exec inventory, rename, consumer list
 service/agentstorage/ Canonical untrusted file-path resolution using directory ACLs
                    and exact user/conversation/run scope identities
 service/needs/     Agent resource declarations plus create/bind/unbind lifecycle
+service/providers/ Configured LLM providers, endpoint model confirmation, and bounded OpenAI-compatible discovery
 gen/airlock/v1/    Protobuf-generated Go types (from proto/)
 anchor/            Anchor container support
 ```
@@ -144,7 +145,7 @@ flag and the gate releases).
 - **Resources**: Inventory includes available connections/MCP servers/exec endpoints with caller capabilities; rename, consumers, revoke, and delete are resource-capability gated
 - **Resource needs**: Agent needs list, grant-aware candidates with structural/scope readiness, create/bind, authorization-before-binding, and agent-admin-only unbind
 - **Members**: Agent sharing (add/remove users)
-- **Providers**: LLM provider config (admin only)
+- **Providers**: LLM provider config plus confirmed model replacement and non-persisting discovery at `/providers/{id}/models` and `/providers/{id}/discover-models` (admin only)
 - **Users**: Self-service display-name updates; user management (admin only)
 - **Bridges**: Chat platform integrations
 - **Catalog**: Available providers and models
@@ -180,10 +181,11 @@ by `/api/v1` or `/api/agent`.
 
 ## Database
 
-Postgres with sqlc. Fresh databases are created from the single `001_schema.sql`
-baseline. Key tables:
+Postgres with sqlc. Goose applies the `001_schema.sql` baseline and ordered
+forward migrations. Key tables:
 - `tenants`, `users` — single-tenant, RBAC roles
-- `providers` — LLM provider catalog (encrypted API keys)
+- `providers` — configured LLM provider rows; hosted credentials are encrypted, while no-auth OpenAI-compatible rows store an explicit empty key
+- `provider_models` — confirmed language models and declared capabilities scoped to one configured OpenAI-compatible provider row
 - `agents` — status lifecycle (draft→building→active→failed), config JSONB, build/exec models
 - `agent_conversations`, `agent_messages` — DM threads with token tracking
 - `agent_webhooks`, `agent_routes`, `agent_topics` (+ `per_user` for personal feeds) — trigger definitions
@@ -201,6 +203,11 @@ baseline. Key tables:
 - `webauthn_credentials` — registered passkeys (one row per authenticator per user)
 - `webauthn_ceremonies` — short-lived, single-use WebAuthn challenge state (begin→finish), GC'd by InboundOAuthGC
 - `users.password_hash` is nullable: passkey-only users have no password
+
+### Model-assignment lock protocol
+- Transactions that can write or clear agent model references lock all existing affected `agents` rows first in sorted UUID order, then lock all selected `providers` rows in sorted UUID order. Grant revocation rechecks its affected-agent set after acquiring the provider and retries if an assignment committed during discovery.
+- Creating a brand-new agent locks and validates selected providers before inserting the target row. This is safe because the new row's UUID does not exist yet, so no concurrent transaction can address or lock it.
+- Provider-only mutations, including disabling a provider and replacing confirmed models, lock provider rows and do not acquire agent locks. Their reference checks remain compatible with the agent-before-provider order because they never add a reverse provider-to-agent lock edge.
 
 ## Permission Model
 
@@ -272,7 +279,7 @@ Replay buffer (100 messages) per topic for late subscribers.
   alternative. Passkeys require user verification + resident keys (usernameless
   sign-in). WebAuthn needs HTTPS in production (localhost is exempt for dev); the
   RP ID is the PUBLIC_URL host, so changing that host invalidates enrolled passkeys.
-- AES-256-GCM encryption at rest for API keys, secrets, tokens. Versioned keys for rotation.
+- AES-256-GCM encryption at rest for configured API keys, secrets, and tokens. No-auth OpenAI-compatible provider rows carry no ciphertext. Versioned keys support rotation.
 - Persisted Store values require ref-bound `airlock-secret:v1` envelopes containing
   `airlock-crypto:v2` ciphertext with stable key IDs. `ENCRYPTION_KEY_REWRAP=true`
   is a coordinated stop-all key-rotation mode that re-encrypts every database
@@ -280,7 +287,7 @@ Replay buffer (100 messages) per topic for late subscribers.
   Procedures are in `docs/secret-storage.md`.
 - Webhook verification: none, HMAC, or token-based.
 - Agent containers get scoped DB credentials (per-agent schema) and bearer token.
-- Agent runtime containers are hardened by default in `container.buildAgentHostConfig` (CapDrop:ALL, no-new-privileges, PidsLimit, lower CPUShares, OomScoreAdj so agents OOM before infra). Compose enables managed per-agent Docker networks; only instance-labeled Airlock/Postgres endpoints attach, and PostgreSQL advisory locks serialize lifecycle changes across replicas. OSS injects `container.DirectRuntimeNetworkPolicy`, so these networks allow unrestricted direct egress while retaining per-agent separation; brokered HTTP remains available for managed credentials and destination checks. External Postgres uses the fixed-destination `postgres-agent-relay`. Native Airlock explicitly uses shared development networking because a host process cannot attach to a managed Docker bridge. Airlock-brokered HTTP, connection, MCP, and outbound OAuth calls share one DNS-validating transport and use `AGENT_HTTP_PRIVATE_CIDRS` for non-public destinations. Importing distributions can inject a stricter `container.RuntimeNetworkPolicy`. Optional `AGENT_MEMORY_LIMIT` and `AGENT_SANDBOX=gvisor` (runsc) — see `docs/agent-isolation.md`.
+- Agent runtime containers are hardened by default in `container.buildAgentHostConfig` (CapDrop:ALL, no-new-privileges, PidsLimit, lower CPUShares, OomScoreAdj so agents OOM before infra). Compose enables managed per-agent Docker networks; only instance-labeled Airlock/Postgres endpoints attach, and PostgreSQL advisory locks serialize lifecycle changes across replicas. OSS injects `container.DirectRuntimeNetworkPolicy`, so these networks allow unrestricted direct egress while retaining per-agent separation; brokered HTTP remains available for managed credentials and destination checks. External Postgres uses the fixed-destination `postgres-agent-relay`. Native Airlock explicitly uses shared development networking because a host process cannot attach to a managed Docker bridge. Airlock-brokered HTTP, connection, MCP, and outbound OAuth calls use a DNS-validating transport. Explicit OpenAI-compatible discovery and runtime calls use a no-redirect provider transport that permits public HTTPS and HTTP/HTTPS addresses in `AGENT_HTTP_PRIVATE_CIDRS`; HTTP never dials public or special-use addresses. Importing distributions can inject a stricter `container.RuntimeNetworkPolicy`. Optional `AGENT_MEMORY_LIMIT` and `AGENT_SANDBOX=gvisor` (runsc) — see `docs/agent-isolation.md`.
 - **Instance namespacing.** Every Docker resource airlock owns (agent/builder container names, agent image labels, build-cache volumes, buildx builder) is namespaced by `AIRLOCK_INSTANCE_ID` (required; default `airlock`) via the `config.LabelInstance` (`run.airlock.instance`) label. All container/image list+prune calls filter on that label, so instances sharing one Docker daemon never reap each other's resources. **Co-locating instances on one daemon requires a DISTINCT `AIRLOCK_INSTANCE_ID` per instance** plus matching compose namespaces (`COMPOSE_PROJECT_NAME`, `DOCKER_NETWORK`, `AGENT_NETWORK`, `AGENT_CODEGEN_VOLUME`); `install.sh --instance-id <id>` writes those together. See `docs/agent-isolation.md`.
 - OIDC enterprise support via build tag.
 

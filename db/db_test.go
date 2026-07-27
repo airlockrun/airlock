@@ -106,8 +106,8 @@ func TestResourceLifecycleSchemaAndQueryContract(t *testing.T) {
 			migrationFiles = append(migrationFiles, entry.Name())
 		}
 	}
-	if len(migrationFiles) != 1 || migrationFiles[0] != "001_schema.sql" {
-		t.Fatalf("schema baseline migrations = %v, want [001_schema.sql]", migrationFiles)
+	if len(migrationFiles) != 2 || migrationFiles[0] != "001_schema.sql" || migrationFiles[1] != "002_provider_models.sql" {
+		t.Fatalf("schema migrations = %v, want [001_schema.sql 002_provider_models.sql]", migrationFiles)
 	}
 	contents, err := os.ReadFile("migrations/001_schema.sql")
 	if err != nil {
