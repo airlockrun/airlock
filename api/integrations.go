@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"sort"
@@ -93,7 +92,6 @@ func codegenIntegrationAuth(database *db.DB) func(http.Handler) http.Handler {
 func mountIntegrationRoutes(r chi.Router, h *integrationsHandler) {
 	r.Get("/", h.List)
 	r.Post("/connections/{slug}/request", h.RequestConnection)
-	r.Post("/exec/{slug}/run", h.RunExec)
 	r.Get("/mcp/{slug}/tools", h.ListMCPTools)
 	r.Post("/mcp/{slug}/call", h.CallMCPTool)
 }
@@ -152,29 +150,6 @@ func (h *integrationsHandler) RequestConnection(w http.ResponseWriter, r *http.R
 	writeProto(w, http.StatusOK, &airlockv1.InvokeConnectionResponse{StatusCode: int32(result.StatusCode), Headers: headers, Body: result.Body})
 }
 
-func (h *integrationsHandler) RunExec(w http.ResponseWriter, r *http.Request) {
-	ic, ok := integrationContextFromRequest(r)
-	if !ok {
-		writeServiceError(w, service.ErrUnauthorized, "integration authentication failed")
-		return
-	}
-	var req airlockv1.InvokeExecRequest
-	if err := decodeProto(r, &req); err != nil {
-		writeServiceError(w, service.Detail(service.ErrInvalidInput, "invalid request"), "invalid exec request")
-		return
-	}
-	result, err := h.svc.RunExec(r.Context(), ic.principal, ic.agentID, chi.URLParam(r, "slug"), wire.ExecRequest{
-		Command: req.Command, Args: req.Args, StdinB64: base64Encode(req.Stdin), TimeoutMs: req.TimeoutMs,
-	})
-	if err != nil {
-		writeServiceError(w, err, "exec request failed")
-		return
-	}
-	writeProto(w, http.StatusOK, &airlockv1.InvokeExecResponse{
-		Stdout: result.Stdout, Stderr: result.Stderr, ExitCode: int32(result.ExitCode), DurationMs: result.DurationMs,
-	})
-}
-
 func (h *integrationsHandler) ListMCPTools(w http.ResponseWriter, r *http.Request) {
 	ic, ok := integrationContextFromRequest(r)
 	if !ok {
@@ -229,11 +204,4 @@ func (h *integrationsHandler) CallMCPTool(w http.ResponseWriter, r *http.Request
 func integrationContextFromRequest(r *http.Request) (integrationContext, bool) {
 	ic, ok := r.Context().Value(integrationContextKey{}).(integrationContext)
 	return ic, ok
-}
-
-func base64Encode(value []byte) string {
-	if len(value) == 0 {
-		return ""
-	}
-	return base64.StdEncoding.EncodeToString(value)
 }

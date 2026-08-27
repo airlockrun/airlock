@@ -53,17 +53,14 @@ export function candidateAction(candidate: CandidateInfo, authMode: string): Can
   }
 }
 
-export function canCreateResourceForNeed(needType: string, authMode: string): boolean {
-  return needType === 'exec_endpoint' || authMode !== 'none'
+export function canCreateResourceForNeed(authMode: string): boolean {
+  return authMode !== 'none'
 }
 
 export function bindingDialogCompletion(
   action: 'bind' | 'configure' | 'create',
-  needType: string,
 ): BindingDialogCompletion {
-  return action === 'configure' || (action === 'create' && needType === 'exec_endpoint')
-    ? 'configure'
-    : 'changed'
+  return action === 'configure' ? 'configure' : 'changed'
 }
 
 export function resourceStatus(resource: OwnedResourceInfo): { label: string; severity: 'success' | 'warn' | 'secondary' } {
@@ -90,8 +87,7 @@ export function setupSummary(counts: SetupCountsInfo | null): { total: number; t
   if (counts.connections) parts.push(`${counts.connections} connection${counts.connections === 1 ? '' : 's'}`)
   if (counts.mcpServers) parts.push(`${counts.mcpServers} MCP server${counts.mcpServers === 1 ? '' : 's'}`)
   if (counts.envVars) parts.push(`${counts.envVars} env var${counts.envVars === 1 ? '' : 's'}`)
-  if (counts.execEndpoints) parts.push(`${counts.execEndpoints} exec endpoint${counts.execEndpoints === 1 ? '' : 's'}`)
-  const total = counts.connections + counts.mcpServers + counts.envVars + counts.execEndpoints
+  const total = counts.connections + counts.mcpServers + counts.envVars
   return {
     total,
     tooltip: total ? `${parts.join(', ')} need${total === 1 ? 's' : ''} setup` : '',

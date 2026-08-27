@@ -86,8 +86,6 @@ func persistRewrapped(ctx context.Context, q *dbq.Queries, row dbq.ListStoredSec
 		return q.RewrapMCPSecret(ctx, dbq.RewrapMCPSecretParams{NewStored: next, Field: row.Field, RowKey: pgID, OldStored: row.Stored})
 	case "git_credential":
 		return q.RewrapGitCredentialSecret(ctx, dbq.RewrapGitCredentialSecretParams{NewStored: next, RowKey: pgID, OldStored: row.Stored})
-	case "exec":
-		return q.RewrapExecSecret(ctx, dbq.RewrapExecSecretParams{NewStored: pgtype.Text{String: next, Valid: true}, RowKey: pgID, OldStored: pgtype.Text{String: row.Stored, Valid: true}})
 	case "oauth_state":
 		return q.RewrapOAuthStateSecret(ctx, dbq.RewrapOAuthStateSecretParams{NewStored: next, RowKey: row.RowKey, OldStored: row.Stored})
 	case "env_var":

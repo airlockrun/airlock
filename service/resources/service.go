@@ -1,5 +1,5 @@
 // Package resources owns the per-user inventory and management surface for
-// reusable connections, MCP servers, and exec endpoints.
+// reusable connections and MCP servers.
 package resources
 
 import (
@@ -19,7 +19,7 @@ import (
 // grant. It carries no secret material.
 type Resource struct {
 	ID           uuid.UUID
-	Type         string // connection | mcp_server | exec_endpoint
+	Type         string // connection | mcp_server
 	Slug         string
 	Name         string
 	DisplayName  string
@@ -28,7 +28,6 @@ type Resource struct {
 	AgentCount   int32
 	Capabilities []string
 	CreatedAt    pgtype.Timestamptz
-	LastUsedAt   pgtype.Timestamptz
 }
 
 // Consumer identifies an agent need bound to a resource.
@@ -74,13 +73,7 @@ func (s *Service) List(ctx context.Context, p authz.Principal) ([]Resource, erro
 		s.logger.Error("list available MCP servers failed", zap.Error(err))
 		return nil, err
 	}
-	execs, err := q.ListAvailableExecEndpoints(ctx, principals)
-	if err != nil {
-		s.logger.Error("list available exec endpoints failed", zap.Error(err))
-		return nil, err
-	}
-
-	out := make([]Resource, 0, len(conns)+len(mcps)+len(execs))
+	out := make([]Resource, 0, len(conns)+len(mcps))
 	for _, c := range conns {
 		out = append(out, Resource{
 			ID: uuid.UUID(c.ID.Bytes), Type: "connection", Slug: c.Slug, Name: c.Name, DisplayName: c.DisplayName,
@@ -91,12 +84,6 @@ func (s *Service) List(ctx context.Context, p authz.Principal) ([]Resource, erro
 		out = append(out, Resource{
 			ID: uuid.UUID(m.ID.Bytes), Type: "mcp_server", Slug: m.Slug, Name: m.Name, DisplayName: m.DisplayName,
 			AuthMode: m.AuthMode, Authorized: m.Authorized, AgentCount: m.AgentCount, Capabilities: m.Capabilities, CreatedAt: m.CreatedAt,
-		})
-	}
-	for _, e := range execs {
-		out = append(out, Resource{
-			ID: uuid.UUID(e.ID.Bytes), Type: "exec_endpoint", Slug: e.Slug, Name: e.Slug, DisplayName: e.DisplayName,
-			Authorized: e.Configured, AgentCount: e.AgentCount, Capabilities: e.Capabilities, CreatedAt: e.CreatedAt, LastUsedAt: e.LastUsedAt,
 		})
 	}
 	return out, nil
@@ -140,15 +127,6 @@ func (s *Service) Consumers(ctx context.Context, p authz.Principal, typ string, 
 			canAccess := authz.Authorize(ctx, q, p, authz.AgentGet, uuid.UUID(row.AgentID.Bytes)) == nil
 			out = append(out, Consumer{uuid.UUID(row.AgentID.Bytes), row.AgentName, row.AgentSlug, row.NeedType, row.NeedSlug, canAccess})
 		}
-	case "exec_endpoint":
-		rows, err := q.ListExecEndpointConsumers(ctx, pgID)
-		if err != nil {
-			return nil, err
-		}
-		for _, row := range rows {
-			canAccess := authz.Authorize(ctx, q, p, authz.AgentGet, uuid.UUID(row.AgentID.Bytes)) == nil
-			out = append(out, Consumer{uuid.UUID(row.AgentID.Bytes), row.AgentName, row.AgentSlug, row.NeedType, row.NeedSlug, canAccess})
-		}
 	default:
 		return nil, service.Detail(service.ErrInvalidInput, "unknown resource type %q", typ)
 	}
@@ -177,8 +155,6 @@ func (s *Service) Rename(ctx context.Context, p authz.Principal, typ string, id 
 		affected, err = q.RenameConnection(ctx, dbq.RenameConnectionParams{ID: pgID, DisplayName: displayName})
 	case "mcp_server":
 		affected, err = q.RenameMCPServer(ctx, dbq.RenameMCPServerParams{ID: pgID, DisplayName: displayName})
-	case "exec_endpoint":
-		affected, err = q.RenameExecEndpoint(ctx, dbq.RenameExecEndpointParams{ID: pgID, DisplayName: displayName})
 	default:
 		return service.Detail(service.ErrInvalidInput, "unknown resource type %q", typ)
 	}
@@ -242,10 +218,6 @@ func (s *Service) Delete(ctx context.Context, p authz.Principal, typ string, id 
 		if _, err := q.LockMCPBindings(ctx, pgID); err != nil {
 			return err
 		}
-	case "exec_endpoint":
-		if _, err := q.LockExecBindings(ctx, pgID); err != nil {
-			return err
-		}
 	default:
 		return service.Detail(service.ErrInvalidInput, "unknown resource type %q", typ)
 	}
@@ -261,8 +233,6 @@ func (s *Service) Delete(ctx context.Context, p authz.Principal, typ string, id 
 		affected, err = q.DeleteConnectionByID(ctx, pgID)
 	case "mcp_server":
 		affected, err = q.DeleteMCPServerByID(ctx, pgID)
-	case "exec_endpoint":
-		affected, err = q.DeleteExecEndpointByID(ctx, pgID)
 	}
 	if err != nil {
 		return err

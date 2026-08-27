@@ -3,7 +3,6 @@ package realtime
 import (
 	"context"
 
-	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/authz"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
@@ -14,11 +13,8 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 )
 
-// Handler routes inbound WebSocket messages. The WS upgrade handler
-// auto-subscribes new connections to every agent the user is a member of, so
-// the only inbound messages we accept are dynamic per-build subscriptions for
-// the Build page (which we don't want streaming to every member by default).
-// Anything else is logged and rejected.
+// Handler routes dynamic WebSocket subscriptions that require narrower access
+// than the agent topics installed by the WS upgrade handler.
 type Handler struct {
 	db     *db.DB
 	hub    *Hub
@@ -43,6 +39,10 @@ func (h *Handler) HandleMessage(conn *Conn, env Envelope) {
 		h.handleSubscribeBuild(conn, env)
 	case "unsubscribe.build":
 		h.handleUnsubscribeBuild(conn, env)
+	case "subscribe.jobs":
+		h.handleSubscribeJobs(conn, env)
+	case "unsubscribe.jobs":
+		h.handleUnsubscribeJobs(conn, env)
 	default:
 		conn.logger.Info("ws recv (rejected)", zap.String("type", env.Type))
 		conn.SendEnvelope(errorEnvelope(env.RequestID, "unexpected message type: "+env.Type))
@@ -79,9 +79,7 @@ func (h *Handler) handleSubscribeBuild(conn *Conn, env Envelope) {
 		return
 	}
 
-	// AgentBuildsView is agent-axis (resolved from agent_members), so an empty
-	// tenant role is fine here — only membership grants build visibility.
-	p := authz.UserPrincipal(conn.UserID, auth.Role(""))
+	p := authz.UserPrincipal(conn.UserID, conn.TenantRole)
 	if err := authz.Authorize(ctx, q, p, authz.AgentBuildsView, agentID); err != nil {
 		conn.SendEnvelope(errorEnvelope(env.RequestID, "forbidden"))
 		return
@@ -102,4 +100,46 @@ func (h *Handler) handleUnsubscribeBuild(conn *Conn, env Envelope) {
 		return
 	}
 	h.hub.Unsubscribe(conn, buildID)
+}
+
+func (h *Handler) handleSubscribeJobs(conn *Conn, env Envelope) {
+	var req airlockv1.SubscribeJobsRequest
+	if err := protojson.Unmarshal(env.Payload, &req); err != nil {
+		conn.SendEnvelope(errorEnvelope(env.RequestID, "invalid subscribe.jobs payload"))
+		return
+	}
+	agentID, err := uuid.Parse(req.AgentId)
+	if err != nil {
+		conn.SendEnvelope(errorEnvelope(env.RequestID, "invalid agent id"))
+		return
+	}
+
+	ctx := context.Background()
+	q := dbq.New(h.db.Pool())
+	p := authz.UserPrincipal(conn.UserID, conn.TenantRole)
+	if err := authz.Authorize(ctx, q, p, authz.AgentJobView, agentID); err != nil {
+		conn.SendEnvelope(errorEnvelope(env.RequestID, "forbidden"))
+		return
+	}
+
+	conn.TrackJobsSubscription(agentID)
+	topicID := JobsTopic(agentID)
+	h.hub.Subscribe(conn, topicID)
+	ack := NewEnvelope("jobs.subscribed", topicID.String(), &airlockv1.JobsSubscribedEvent{AgentId: agentID.String()})
+	ack.RequestID = env.RequestID
+	conn.SendEnvelope(ack)
+}
+
+// Leaving a topic is always allowed, including after access has been revoked.
+func (h *Handler) handleUnsubscribeJobs(conn *Conn, env Envelope) {
+	var req airlockv1.UnsubscribeJobsRequest
+	if err := protojson.Unmarshal(env.Payload, &req); err != nil {
+		return
+	}
+	agentID, err := uuid.Parse(req.AgentId)
+	if err != nil {
+		return
+	}
+	conn.UntrackJobsSubscription(agentID)
+	h.hub.Unsubscribe(conn, JobsTopic(agentID))
 }

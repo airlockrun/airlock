@@ -132,7 +132,7 @@ Docker Engine and Docker Desktop provide these capabilities.
 - **Other server-side egress** - `AGENT_HTTP_PRIVATE_CIDRS` governs Airlock's
   brokered HTTP, connection, MCP, outbound OAuth, credential-test, provider
   discovery, and explicit OpenAI-compatible runtime clients. Hosted provider
-  packages, build toolservers, Git, and exec endpoints use separate trusted-server
+  packages, build toolservers, and Git use separate trusted-server
   paths; apply deployment egress policy to those paths when required.
 - **Runtime egress** - OSS agent code can reach public, private, host, and cloud
   metadata destinations directly when routing permits. `AGENT_HTTP_PRIVATE_CIDRS`

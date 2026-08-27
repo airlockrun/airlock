@@ -9,7 +9,8 @@ import (
 
 // DB wraps a pgxpool.Pool.
 type DB struct {
-	pool *pgxpool.Pool
+	pool        *pgxpool.Pool
+	databaseURL string
 }
 
 // New creates a new DB, connecting to the given database URL.
@@ -22,7 +23,7 @@ func New(ctx context.Context, databaseURL string) *DB {
 		panic(fmt.Sprintf("db: failed to ping: %v", err))
 	}
 
-	return &DB{pool: pool}
+	return &DB{pool: pool, databaseURL: databaseURL}
 }
 
 // Close closes the connection pool.

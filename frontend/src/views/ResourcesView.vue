@@ -16,11 +16,10 @@ const toast = useToast()
 const typeMeta: Record<string, { label: string; icon: string }> = {
   connection: { label: 'Connection', icon: 'pi pi-link' },
   mcp_server: { label: 'MCP server', icon: 'pi pi-bolt' },
-  exec_endpoint: { label: 'Exec endpoint', icon: 'pi pi-desktop' },
 }
-const sortedResources = computed(() => [...resources.resources].sort((a, b) =>
-  a.type.localeCompare(b.type) || resourceLabel(a).localeCompare(resourceLabel(b)),
-))
+const sortedResources = computed(() => resources.resources
+  .filter((resource) => resource.type === 'connection' || resource.type === 'mcp_server')
+  .sort((a, b) => a.type.localeCompare(b.type) || resourceLabel(a).localeCompare(resourceLabel(b))))
 
 const detailOpen = ref(false)
 const selected = ref<OwnedResourceInfo | null>(null)
@@ -184,10 +183,10 @@ onMounted(() => {
 <template>
   <div class="resources-page">
     <h1>Resources</h1>
-    <p class="intro">Reusable connections, MCP servers, and exec endpoints available to you. Credentials stay hidden; apps bind resources from their own setup.</p>
+    <p class="intro">Reusable connections and MCP servers available to you. Credentials stay hidden; apps bind resources from their own setup.</p>
 
     <Card class="inventory-card">
-      <template #title>Connections, MCP servers and exec endpoints</template>
+      <template #title>Connections and MCP servers</template>
       <template #content>
         <Message v-if="resources.error" severity="error" :closable="false">
           <div class="load-error">
@@ -281,7 +280,7 @@ onMounted(() => {
           <div v-else-if="!consumers.length" class="empty compact">No apps currently use this resource.</div>
           <div v-else class="consumer-list">
             <template v-for="consumer in consumers" :key="`${consumer.agentId}:${consumer.needType}:${consumer.needSlug}`">
-              <RouterLink v-if="consumer.canAccessAgent" :to="{ name: 'agent-detail', params: { id: consumer.agentId }, hash: `#${consumer.needType === 'connection' ? 'connections' : consumer.needType === 'mcp_server' ? 'mcp-servers' : 'exec-endpoints'}` }" class="consumer-row consumer-link">
+              <RouterLink v-if="consumer.canAccessAgent" :to="{ name: 'agent-detail', params: { id: consumer.agentId }, hash: `#${consumer.needType === 'connection' ? 'connections' : 'mcp-servers'}` }" class="consumer-row consumer-link">
                 <span><strong>{{ consumer.agentName || consumer.agentSlug }}</strong><small>{{ consumer.agentSlug }}</small></span>
                 <span class="need-type">{{ typeMeta[consumer.needType]?.label || consumer.needType }} · <code>{{ consumer.needSlug }}</code></span>
               </RouterLink>
@@ -297,7 +296,7 @@ onMounted(() => {
           <h3>Resource actions</h3>
           <p class="muted">Disconnecting one app only removes that app's binding. Signing out or deleting here affects the resource and every consuming app.</p>
           <div class="danger-actions">
-            <Button v-if="selected.type !== 'exec_endpoint' && selected.authMode !== 'none'" label="Sign out resource" icon="pi pi-sign-out" severity="secondary" outlined @click="signOut(selected)" />
+            <Button v-if="selected.authMode !== 'none'" label="Sign out resource" icon="pi pi-sign-out" severity="secondary" outlined @click="signOut(selected)" />
             <Button label="Delete resource" icon="pi pi-trash" severity="danger" outlined @click="deleteResource(selected)" />
           </div>
         </section>

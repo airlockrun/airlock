@@ -31,6 +31,7 @@ func AgentToProto(a dbq.Agent) *airlockv1.AgentInfo {
 		BuildProviderId: PgUUIDToString(a.BuildProviderID),
 		ExecProviderId:  PgUUIDToString(a.ExecProviderID),
 		SourceRef:       a.SourceRef,
+		GitMode:         a.GitMode,
 	}
 }
 
@@ -136,19 +137,19 @@ func WebhookToProto(wh dbq.ListWebhooksByAgentWithStatusRow, publicURL, agentID 
 	}
 }
 
-// ScheduleToProto renders a schedule handler (cron or schedule) with its next
-// pending fire time for the operator-facing schedules list.
+// ScheduleToProto renders a job-backed cron for the operator schedule list.
 func ScheduleToProto(s dbq.ListSchedulesWithNextFireRow) *airlockv1.ScheduleInfo {
 	return &airlockv1.ScheduleInfo{
-		Id:          PgUUIDToString(s.ID),
-		Slug:        s.Slug,
-		Kind:        s.Kind,
-		Schedule:    s.Recurrence,
-		Description: s.Description,
-		Enabled:     s.Enabled,
-		LastFiredAt: PgTimestampToProto(s.LastFiredAt),
-		NextFireAt:  PgTimestampToProto(s.NextFireAt),
-		CreatedAt:   PgTimestampToProto(s.CreatedAt),
+		Id:             PgUUIDToString(s.ID),
+		Slug:           s.Slug,
+		Schedule:       s.Recurrence,
+		HandlerName:    s.HandlerName,
+		HandlerVersion: s.HandlerVersion,
+		Description:    s.Description,
+		Enabled:        s.Enabled,
+		LastFiredAt:    PgTimestampToProto(s.LastFiredAt),
+		NextFireAt:     PgTimestampToProto(s.NextFireAt),
+		CreatedAt:      PgTimestampToProto(s.CreatedAt),
 	}
 }
 
@@ -205,6 +206,7 @@ func AgentBuildListItemToProto(b dbq.ListAgentBuildsByAgentRow, rollbackTargetSo
 		ExitMessage:             b.ExitMessage,
 		FailureKind:             b.FailureKind,
 		BuildModel:              b.BuildModel,
+		DeploymentPhase:         AgentBuildDeploymentPhaseToProto(b.DeploymentPhase),
 	}
 }
 
@@ -212,12 +214,12 @@ func AgentBuildListItemToProto(b dbq.ListAgentBuildsByAgentRow, rollbackTargetSo
 // logs) to the wire AgentBuildInfo. rollbackTargetSourceRef is the
 // resolved target row's SourceRef when this build is a rollback,
 // blank otherwise.
-func AgentBuildDetailToProto(b dbq.AgentBuild, rollbackTargetSourceRef string) *airlockv1.AgentBuildInfo {
+func AgentBuildDetailToProto(b dbq.AgentBuild, rollbackTargetSourceRef string, agent dbq.Agent, blockers []dbq.SummarizeAgentBuildBlockingJobsRow) *airlockv1.AgentBuildInfo {
 	var rollbackTargetID string
 	if b.RollbackTargetID.Valid {
 		rollbackTargetID = PgUUIDToString(b.RollbackTargetID)
 	}
-	return &airlockv1.AgentBuildInfo{
+	out := &airlockv1.AgentBuildInfo{
 		Id:                      PgUUIDToString(b.ID),
 		AgentId:                 PgUUIDToString(b.AgentID),
 		Type:                    b.Type,
@@ -244,6 +246,43 @@ func AgentBuildDetailToProto(b dbq.AgentBuild, rollbackTargetSourceRef string) *
 		FailureKind:             b.FailureKind,
 		BuildModel:              b.BuildModel,
 		Todos:                   TodosFromJSON(b.Todos),
+		DeploymentPhase:         AgentBuildDeploymentPhaseToProto(b.DeploymentPhase),
+	}
+	if agent.JobDispatchPausedBuildID.Valid && agent.JobDispatchPausedBuildID.Bytes == b.ID.Bytes {
+		out.DeploymentPausedAt = PgTimestampToProto(agent.JobDispatchPausedAt)
+		out.DeploymentDrainDeadline = PgTimestampToProto(agent.JobDispatchPauseDeadline)
+	}
+	out.JobBlockers = make([]*airlockv1.AgentBuildJobBlockerSummary, len(blockers))
+	for i, blocker := range blockers {
+		out.JobBlockers[i] = &airlockv1.AgentBuildJobBlockerSummary{
+			HandlerName: blocker.HandlerName, HandlerVersion: blocker.HandlerVersion,
+			InputSchemaHash: blocker.InputSchemaHash, OutputSchemaHash: blocker.OutputSchemaHash,
+			QueuedCount: blocker.QueuedCount, RunningCount: blocker.RunningCount,
+		}
+	}
+	return out
+}
+
+func AgentBuildDeploymentPhaseToProto(phase string) airlockv1.AgentBuildDeploymentPhase {
+	switch phase {
+	case "building":
+		return airlockv1.AgentBuildDeploymentPhase_AGENT_BUILD_DEPLOYMENT_PHASE_BUILDING
+	case "manifest":
+		return airlockv1.AgentBuildDeploymentPhase_AGENT_BUILD_DEPLOYMENT_PHASE_MANIFEST
+	case "blocked":
+		return airlockv1.AgentBuildDeploymentPhase_AGENT_BUILD_DEPLOYMENT_PHASE_BLOCKED
+	case "paused":
+		return airlockv1.AgentBuildDeploymentPhase_AGENT_BUILD_DEPLOYMENT_PHASE_PAUSED
+	case "starting":
+		return airlockv1.AgentBuildDeploymentPhase_AGENT_BUILD_DEPLOYMENT_PHASE_STARTING
+	case "rollback":
+		return airlockv1.AgentBuildDeploymentPhase_AGENT_BUILD_DEPLOYMENT_PHASE_ROLLBACK
+	case "complete":
+		return airlockv1.AgentBuildDeploymentPhase_AGENT_BUILD_DEPLOYMENT_PHASE_COMPLETE
+	case "failed":
+		return airlockv1.AgentBuildDeploymentPhase_AGENT_BUILD_DEPLOYMENT_PHASE_FAILED
+	default:
+		panic(fmt.Sprintf("unknown agent build deployment phase %q", phase))
 	}
 }
 

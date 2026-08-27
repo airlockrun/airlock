@@ -32,25 +32,6 @@ func (q *Queries) BindConnectionNeed(ctx context.Context, arg BindConnectionNeed
 	return result.RowsAffected(), nil
 }
 
-const bindExecEndpointNeed = `-- name: BindExecEndpointNeed :execrows
-UPDATE agent_resource_needs SET bound_exec_id = $1
-WHERE agent_id = $2 AND type = 'exec_endpoint' AND slug = $3
-`
-
-type BindExecEndpointNeedParams struct {
-	ResourceID pgtype.UUID `json:"resource_id"`
-	AgentID    pgtype.UUID `json:"agent_id"`
-	Slug       string      `json:"slug"`
-}
-
-func (q *Queries) BindExecEndpointNeed(ctx context.Context, arg BindExecEndpointNeedParams) (int64, error) {
-	result, err := q.db.Exec(ctx, bindExecEndpointNeed, arg.ResourceID, arg.AgentID, arg.Slug)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
 const bindMCPServerNeed = `-- name: BindMCPServerNeed :execrows
 UPDATE agent_resource_needs SET bound_mcp_id = $1
 WHERE agent_id = $2 AND type = 'mcp_server' AND slug = $3
@@ -87,7 +68,7 @@ func (q *Queries) DeleteResourceNeedsByAgentTypeExcept(ctx context.Context, arg 
 }
 
 const getResourceNeed = `-- name: GetResourceNeed :one
-SELECT id, agent_id, type, slug, description, setup_instructions, expected_url, expected_scopes, spec, required, bound_connection_id, bound_mcp_id, bound_exec_id, created_at FROM agent_resource_needs
+SELECT id, agent_id, type, slug, description, setup_instructions, expected_url, expected_scopes, spec, required, bound_connection_id, bound_mcp_id, created_at FROM agent_resource_needs
 WHERE agent_id = $1 AND type = $2 AND slug = $3
 `
 
@@ -113,14 +94,13 @@ func (q *Queries) GetResourceNeed(ctx context.Context, arg GetResourceNeedParams
 		&i.Required,
 		&i.BoundConnectionID,
 		&i.BoundMcpID,
-		&i.BoundExecID,
 		&i.CreatedAt,
 	)
 	return i, err
 }
 
 const getResourceNeedForUpdate = `-- name: GetResourceNeedForUpdate :one
-SELECT id, agent_id, type, slug, description, setup_instructions, expected_url, expected_scopes, spec, required, bound_connection_id, bound_mcp_id, bound_exec_id, created_at FROM agent_resource_needs
+SELECT id, agent_id, type, slug, description, setup_instructions, expected_url, expected_scopes, spec, required, bound_connection_id, bound_mcp_id, created_at FROM agent_resource_needs
 WHERE agent_id = $1 AND type = $2 AND slug = $3
 FOR UPDATE
 `
@@ -147,7 +127,6 @@ func (q *Queries) GetResourceNeedForUpdate(ctx context.Context, arg GetResourceN
 		&i.Required,
 		&i.BoundConnectionID,
 		&i.BoundMcpID,
-		&i.BoundExecID,
 		&i.CreatedAt,
 	)
 	return i, err
@@ -216,7 +195,9 @@ func (q *Queries) ListRequiredMCPScopes(ctx context.Context, arg ListRequiredMCP
 }
 
 const listResourceNeedsByAgent = `-- name: ListResourceNeedsByAgent :many
-SELECT id, agent_id, type, slug, description, setup_instructions, expected_url, expected_scopes, spec, required, bound_connection_id, bound_mcp_id, bound_exec_id, created_at FROM agent_resource_needs WHERE agent_id = $1 ORDER BY type, slug
+SELECT id, agent_id, type, slug, description, setup_instructions, expected_url, expected_scopes, spec, required, bound_connection_id, bound_mcp_id, created_at FROM agent_resource_needs
+WHERE agent_id = $1 AND type IN ('connection', 'mcp_server')
+ORDER BY type, slug
 `
 
 func (q *Queries) ListResourceNeedsByAgent(ctx context.Context, agentID pgtype.UUID) ([]AgentResourceNeed, error) {
@@ -241,7 +222,6 @@ func (q *Queries) ListResourceNeedsByAgent(ctx context.Context, agentID pgtype.U
 			&i.Required,
 			&i.BoundConnectionID,
 			&i.BoundMcpID,
-			&i.BoundExecID,
 			&i.CreatedAt,
 		); err != nil {
 			return nil, err
@@ -255,7 +235,7 @@ func (q *Queries) ListResourceNeedsByAgent(ctx context.Context, agentID pgtype.U
 }
 
 const lockConnectionAuthorizationNeeds = `-- name: LockConnectionAuthorizationNeeds :many
-SELECT id, agent_id, type, slug, description, setup_instructions, expected_url, expected_scopes, spec, required, bound_connection_id, bound_mcp_id, bound_exec_id, created_at FROM agent_resource_needs
+SELECT id, agent_id, type, slug, description, setup_instructions, expected_url, expected_scopes, spec, required, bound_connection_id, bound_mcp_id, created_at FROM agent_resource_needs
 WHERE bound_connection_id = $1 OR id = $2
 ORDER BY id
 FOR UPDATE
@@ -291,7 +271,6 @@ func (q *Queries) LockConnectionAuthorizationNeeds(ctx context.Context, arg Lock
 			&i.Required,
 			&i.BoundConnectionID,
 			&i.BoundMcpID,
-			&i.BoundExecID,
 			&i.CreatedAt,
 		); err != nil {
 			return nil, err
@@ -333,35 +312,8 @@ func (q *Queries) LockConnectionBindings(ctx context.Context, resourceID pgtype.
 	return items, nil
 }
 
-const lockExecBindings = `-- name: LockExecBindings :many
-SELECT id FROM agent_resource_needs
-WHERE bound_exec_id = $1
-ORDER BY id
-FOR UPDATE
-`
-
-func (q *Queries) LockExecBindings(ctx context.Context, resourceID pgtype.UUID) ([]pgtype.UUID, error) {
-	rows, err := q.db.Query(ctx, lockExecBindings, resourceID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []pgtype.UUID{}
-	for rows.Next() {
-		var id pgtype.UUID
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		items = append(items, id)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const lockMCPAuthorizationNeeds = `-- name: LockMCPAuthorizationNeeds :many
-SELECT id, agent_id, type, slug, description, setup_instructions, expected_url, expected_scopes, spec, required, bound_connection_id, bound_mcp_id, bound_exec_id, created_at FROM agent_resource_needs
+SELECT id, agent_id, type, slug, description, setup_instructions, expected_url, expected_scopes, spec, required, bound_connection_id, bound_mcp_id, created_at FROM agent_resource_needs
 WHERE bound_mcp_id = $1 OR id = $2
 ORDER BY id
 FOR UPDATE
@@ -394,7 +346,6 @@ func (q *Queries) LockMCPAuthorizationNeeds(ctx context.Context, arg LockMCPAuth
 			&i.Required,
 			&i.BoundConnectionID,
 			&i.BoundMcpID,
-			&i.BoundExecID,
 			&i.CreatedAt,
 		); err != nil {
 			return nil, err
@@ -553,26 +504,6 @@ func (q *Queries) ReplaceConnectionNeedBinding(ctx context.Context, arg ReplaceC
 	return result.RowsAffected(), nil
 }
 
-const replaceExecEndpointNeedBinding = `-- name: ReplaceExecEndpointNeedBinding :execrows
-UPDATE agent_resource_needs SET bound_exec_id = $1
-WHERE id = $2
-  AND bound_exec_id IS NOT DISTINCT FROM $3::uuid
-`
-
-type ReplaceExecEndpointNeedBindingParams struct {
-	ResourceID         pgtype.UUID `json:"resource_id"`
-	NeedID             pgtype.UUID `json:"need_id"`
-	ExpectedResourceID pgtype.UUID `json:"expected_resource_id"`
-}
-
-func (q *Queries) ReplaceExecEndpointNeedBinding(ctx context.Context, arg ReplaceExecEndpointNeedBindingParams) (int64, error) {
-	result, err := q.db.Exec(ctx, replaceExecEndpointNeedBinding, arg.ResourceID, arg.NeedID, arg.ExpectedResourceID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
 const replaceMCPServerNeedBinding = `-- name: ReplaceMCPServerNeedBinding :execrows
 UPDATE agent_resource_needs SET bound_mcp_id = $1
 WHERE id = $2
@@ -651,44 +582,6 @@ func (q *Queries) ResolveBoundConnection(ctx context.Context, arg ResolveBoundCo
 	return i, err
 }
 
-const resolveBoundExecEndpoint = `-- name: ResolveBoundExecEndpoint :one
-SELECT e.id, e.slug, e.display_name, e.description, e.llm_hint, e.access, e.transport, e.host, e.port, e.ssh_user, e.private_key_ref, e.public_key_openssh, e.public_key_comment, e.host_key_openssh, e.host_key_pinned_at, e.last_used_at, e.created_at, e.updated_at, e.owner_principal_id FROM agent_resource_needs n
-JOIN agent_exec_endpoints e ON e.id = n.bound_exec_id
-WHERE n.agent_id = $1 AND n.type = 'exec_endpoint' AND n.slug = $2
-`
-
-type ResolveBoundExecEndpointParams struct {
-	AgentID pgtype.UUID `json:"agent_id"`
-	Slug    string      `json:"slug"`
-}
-
-func (q *Queries) ResolveBoundExecEndpoint(ctx context.Context, arg ResolveBoundExecEndpointParams) (AgentExecEndpoint, error) {
-	row := q.db.QueryRow(ctx, resolveBoundExecEndpoint, arg.AgentID, arg.Slug)
-	var i AgentExecEndpoint
-	err := row.Scan(
-		&i.ID,
-		&i.Slug,
-		&i.DisplayName,
-		&i.Description,
-		&i.LlmHint,
-		&i.Access,
-		&i.Transport,
-		&i.Host,
-		&i.Port,
-		&i.SshUser,
-		&i.PrivateKeyRef,
-		&i.PublicKeyOpenssh,
-		&i.PublicKeyComment,
-		&i.HostKeyOpenssh,
-		&i.HostKeyPinnedAt,
-		&i.LastUsedAt,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.OwnerPrincipalID,
-	)
-	return i, err
-}
-
 const resolveBoundMCPServer = `-- name: ResolveBoundMCPServer :one
 SELECT m.id, m.slug, m.name, m.display_name, m.access, m.url, m.auth_mode, m.auth_url, m.token_url, m.registration_endpoint, m.scopes, m.auth_injection, m.tool_schemas, m.client_id, m.client_secret, m.access_token_ref, m.refresh_token, m.token_expires_at, m.last_synced_at, m.created_at, m.updated_at, m.server_instructions, m.owner_principal_id, m.lifecycle, m.granted_scopes, m.scopes_verified, m.authorization_revision, m.provisional_need_id, m.pending_client_id, m.pending_client_secret FROM agent_resource_needs n
 JOIN agent_mcp_servers m ON m.id = n.bound_mcp_id
@@ -742,13 +635,13 @@ func (q *Queries) ResolveBoundMCPServer(ctx context.Context, arg ResolveBoundMCP
 
 const unbindAllResourceNeedsByAgent = `-- name: UnbindAllResourceNeedsByAgent :exec
 UPDATE agent_resource_needs
-SET bound_connection_id = NULL, bound_mcp_id = NULL, bound_exec_id = NULL
-WHERE agent_id = $1
+SET bound_connection_id = NULL, bound_mcp_id = NULL
+WHERE agent_id = $1 AND type IN ('connection', 'mcp_server')
 `
 
 // Clear every binding on an agent's needs (the need rows stay — they are the
-// code-synced manifest). Used on ownership transfer: the bound connection/MCP/
-// exec resources are the OLD owner's, and the new owner has no access to them.
+// code-synced manifest). Used on ownership transfer: the bound resources are
+// the OLD owner's, and the new owner has no access to them.
 func (q *Queries) UnbindAllResourceNeedsByAgent(ctx context.Context, agentID pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, unbindAllResourceNeedsByAgent, agentID)
 	return err
@@ -756,8 +649,9 @@ func (q *Queries) UnbindAllResourceNeedsByAgent(ctx context.Context, agentID pgt
 
 const unbindResourceNeed = `-- name: UnbindResourceNeed :execrows
 UPDATE agent_resource_needs
-SET bound_connection_id = NULL, bound_mcp_id = NULL, bound_exec_id = NULL
+SET bound_connection_id = NULL, bound_mcp_id = NULL
 WHERE agent_id = $1 AND type = $2 AND slug = $3
+  AND type IN ('connection', 'mcp_server')
 `
 
 type UnbindResourceNeedParams struct {

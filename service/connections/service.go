@@ -232,10 +232,9 @@ type EnvVar struct {
 
 // SetupCounts is the body of SetupStatus.
 type SetupCounts struct {
-	Connections   int32
-	MCPServers    int32
-	EnvVars       int32
-	ExecEndpoints int32
+	Connections int32
+	MCPServers  int32
+	EnvVars     int32
 }
 
 // --- connections ---
@@ -917,9 +916,8 @@ func (s *Service) SetupStatus(ctx context.Context, p authz.Principal, agentID uu
 		return SetupCounts{}, err
 	}
 	return SetupCounts{
-		Connections:   row.Connections,
-		MCPServers:    row.McpServers,
-		EnvVars:       row.EnvVars,
-		ExecEndpoints: row.ExecEndpoints,
+		Connections: row.Connections,
+		MCPServers:  row.McpServers,
+		EnvVars:     row.EnvVars,
 	}, nil
 }

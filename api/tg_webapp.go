@@ -35,29 +35,38 @@ type tgAuthRequest struct {
 	BridgeID string `json:"bridgeID"`
 }
 
-// tgWebAppStubHTML is served as the first response on a Telegram-WebApp
-// entry. JS reads Telegram.WebApp.initData and exchanges it for an
-// __air_session cookie via /__air/tg/auth. If the page isn't running
-// inside Telegram (no initData), it falls back to the standard relay
-// redirect — so this single stub doubles as the unauthenticated landing
-// page for both flows. The publicURL placeholder is substituted at
-// request time.
+// tgWebAppStubHTML is served as the first response on a Telegram Web App entry.
+// The inline bootstrap reads Telegram's tgWebAppData launch parameter directly
+// and exchanges it for an __air_session cookie via /__air/tg/auth. If no launch
+// data exists, it falls back to the standard relay redirect. No Telegram SDK is
+// needed for authentication.
 const tgWebAppStubHTML = `<!doctype html>
 <html><head><meta charset="utf-8"><title>Authenticating…</title>
-<script src="https://telegram.org/js/telegram-web-app.js"></script>
 </head><body>
 <script>
 (function() {
-  var tg = window.Telegram && window.Telegram.WebApp;
   var u = new URL(location.href);
   var ret = u.searchParams.get("return") || "/";
+  var initDataKey = "__air_tg_init_data";
   function fail(msg) { document.body.innerText = msg; }
-  if (tg && tg.initData) {
+  function telegramInitData() {
+    var hash = location.hash.replace(/^#/, "");
+    var query = hash.indexOf("?");
+    if (query >= 0) hash = hash.slice(query + 1);
+    var value = new URLSearchParams(hash).get("tgWebAppData");
+    if (value) {
+      try { sessionStorage.setItem(initDataKey, value); } catch (_) {}
+      return value;
+    }
+    try { return sessionStorage.getItem(initDataKey) || ""; } catch (_) { return ""; }
+  }
+  var initData = telegramInitData();
+  if (initData) {
     var b = u.searchParams.get("b") || localStorage.getItem("__air_tg_bridge");
     fetch("/__air/tg/auth", {
       method: "POST",
       headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({initData: tg.initData, bridgeID: b}),
+      body: JSON.stringify({initData: initData, bridgeID: b}),
     }).then(function(r) {
       if (r.ok) {
         if (b) localStorage.setItem("__air_tg_bridge", b);
@@ -92,8 +101,11 @@ func renderTGWebAppStub(w http.ResponseWriter, r *http.Request, publicURL string
 		return
 	}
 	setRelayNonceCookie(w, r, nonce)
-	currentURL := requestScheme(r) + "://" + r.Host + r.RequestURI
-	query := url.Values{"return": {currentURL}, "nonce": {nonce}}
+	returnURL := requestScheme(r) + "://" + r.Host + r.RequestURI
+	if r.URL.Path == "/__air/tg/start" {
+		returnURL = requestScheme(r) + "://" + r.Host + "/"
+	}
+	query := url.Values{"return": {returnURL}, "nonce": {nonce}}
 	fallback := publicURL + "/auth/relay?" + query.Encode()
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")

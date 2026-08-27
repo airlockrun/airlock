@@ -425,6 +425,12 @@ func (s *Service) runChat(ctx context.Context, p authz.Principal, conversation d
 			conversation.Status, input.Approved != nil, input.Message == "")
 	}
 
+	// Record model spend whenever Sol produced a result. Failed and cancelled
+	// turns can still contain completed provider usage.
+	if result != nil {
+		s.recordSystemRunUsage(runID, p.UserID, resolved.ProviderCatalogID, resolved.ProviderSlug, resolved.ModelName, result.Usage, result.Status == sol.RunFailed)
+	}
+
 	if err != nil {
 		s.logger.Error("sysagent: run failed",
 			zap.Stringer("conversation", conversationID),
@@ -436,12 +442,15 @@ func (s *Service) runChat(ctx context.Context, p authz.Principal, conversation d
 		}
 		return
 	}
-
-	// Record this turn's model spend to the shared ledger (attributed to the
-	// operator + this system run) and refresh the run's cost aggregate. Runs
-	// for every result state — the tokens were burned whether the turn
-	// completed, failed, or suspended mid-flight. Best-effort.
-	s.recordSystemRunUsage(runID, p.UserID, resolved.ProviderCatalogID, resolved.ProviderSlug, resolved.ModelName, result.Usage, result.Status == sol.RunFailed)
+	if result == nil {
+		err := errors.New("sysagent: sol returned no run result")
+		s.logger.Error("sysagent: run failed", zap.Stringer("conversation", conversationID), zap.Stringer("run", runID), zap.Error(err))
+		s.finishRun(ctx, runID, "error", err.Error())
+		if !bridgeMode {
+			s.publishRunError(conversationID, runID, p.UserID, err.Error())
+		}
+		return
+	}
 
 	// Result-level handling — RunResult.Status is what determines
 	// what we persist + which terminal event we emit.

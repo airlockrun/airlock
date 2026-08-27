@@ -294,6 +294,20 @@ func (h *Hub) SendToConnection(connID string, env Envelope) {
 	conn.SendEnvelope(env)
 }
 
+// ResyncAll asks every connected client to reload authoritative REST state.
+func (h *Hub) ResyncAll() {
+	h.mu.RLock()
+	targets := make([]*Conn, 0, len(h.conns))
+	for _, conn := range h.conns {
+		targets = append(targets, conn)
+	}
+	h.mu.RUnlock()
+
+	for _, conn := range targets {
+		conn.SendEnvelope(Envelope{Type: "resync"})
+	}
+}
+
 // ConnCount returns the number of active connections.
 func (h *Hub) ConnCount() int {
 	h.mu.RLock()

@@ -26,18 +26,6 @@ func (q *Queries) DeleteConnectionByID(ctx context.Context, id pgtype.UUID) (int
 	return result.RowsAffected(), nil
 }
 
-const deleteExecEndpointByID = `-- name: DeleteExecEndpointByID :execrows
-DELETE FROM agent_exec_endpoints WHERE id = $1
-`
-
-func (q *Queries) DeleteExecEndpointByID(ctx context.Context, id pgtype.UUID) (int64, error) {
-	result, err := q.db.Exec(ctx, deleteExecEndpointByID, id)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
 const deleteMCPServerByID = `-- name: DeleteMCPServerByID :execrows
 DELETE FROM agent_mcp_servers WHERE id = $1
 `
@@ -91,68 +79,6 @@ func (q *Queries) GetConnectionByID(ctx context.Context, id pgtype.UUID) (Connec
 		&i.ProvisionalNeedID,
 		&i.PendingClientID,
 		&i.PendingClientSecret,
-	)
-	return i, err
-}
-
-const getExecEndpointByID = `-- name: GetExecEndpointByID :one
-SELECT id, slug, display_name, description, llm_hint, access, transport, host, port, ssh_user, private_key_ref, public_key_openssh, public_key_comment, host_key_openssh, host_key_pinned_at, last_used_at, created_at, updated_at, owner_principal_id FROM agent_exec_endpoints WHERE id = $1
-`
-
-func (q *Queries) GetExecEndpointByID(ctx context.Context, id pgtype.UUID) (AgentExecEndpoint, error) {
-	row := q.db.QueryRow(ctx, getExecEndpointByID, id)
-	var i AgentExecEndpoint
-	err := row.Scan(
-		&i.ID,
-		&i.Slug,
-		&i.DisplayName,
-		&i.Description,
-		&i.LlmHint,
-		&i.Access,
-		&i.Transport,
-		&i.Host,
-		&i.Port,
-		&i.SshUser,
-		&i.PrivateKeyRef,
-		&i.PublicKeyOpenssh,
-		&i.PublicKeyComment,
-		&i.HostKeyOpenssh,
-		&i.HostKeyPinnedAt,
-		&i.LastUsedAt,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.OwnerPrincipalID,
-	)
-	return i, err
-}
-
-const getExecEndpointByIDForUpdate = `-- name: GetExecEndpointByIDForUpdate :one
-SELECT id, slug, display_name, description, llm_hint, access, transport, host, port, ssh_user, private_key_ref, public_key_openssh, public_key_comment, host_key_openssh, host_key_pinned_at, last_used_at, created_at, updated_at, owner_principal_id FROM agent_exec_endpoints WHERE id = $1 FOR UPDATE
-`
-
-func (q *Queries) GetExecEndpointByIDForUpdate(ctx context.Context, id pgtype.UUID) (AgentExecEndpoint, error) {
-	row := q.db.QueryRow(ctx, getExecEndpointByIDForUpdate, id)
-	var i AgentExecEndpoint
-	err := row.Scan(
-		&i.ID,
-		&i.Slug,
-		&i.DisplayName,
-		&i.Description,
-		&i.LlmHint,
-		&i.Access,
-		&i.Transport,
-		&i.Host,
-		&i.Port,
-		&i.SshUser,
-		&i.PrivateKeyRef,
-		&i.PublicKeyOpenssh,
-		&i.PublicKeyComment,
-		&i.HostKeyOpenssh,
-		&i.HostKeyPinnedAt,
-		&i.LastUsedAt,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.OwnerPrincipalID,
 	)
 	return i, err
 }
@@ -251,66 +177,6 @@ func (q *Queries) ListAvailableConnections(ctx context.Context, principalIds []p
 			&i.AuthMode,
 			&i.Authorized,
 			&i.CreatedAt,
-			&i.AgentCount,
-			&i.Capabilities,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listAvailableExecEndpoints = `-- name: ListAvailableExecEndpoints :many
-SELECT e.id, e.slug, e.display_name,
-       (e.transport IS NOT NULL)::boolean AS configured,
-       e.created_at, e.last_used_at,
-       (SELECT count(*) FROM agent_resource_needs n WHERE n.bound_exec_id = e.id)::int AS agent_count,
-       (CASE WHEN e.owner_principal_id = ANY ($1::uuid[])
-           THEN ARRAY['view', 'bind', 'manage']::text[]
-           ELSE ARRAY(
-               SELECT DISTINCT capability
-               FROM resource_grants g, unnest(g.capabilities) AS capability
-               WHERE g.exec_endpoint_id = e.id AND g.grantee_id = ANY ($1::uuid[])
-               ORDER BY capability
-           )
-       END)::text[] AS capabilities
-FROM agent_exec_endpoints e
-WHERE e.owner_principal_id = ANY ($1::uuid[])
-   OR EXISTS (SELECT 1 FROM resource_grants g WHERE g.exec_endpoint_id = e.id AND g.grantee_id = ANY ($1::uuid[]))
-ORDER BY e.display_name, e.slug
-`
-
-type ListAvailableExecEndpointsRow struct {
-	ID           pgtype.UUID        `json:"id"`
-	Slug         string             `json:"slug"`
-	DisplayName  string             `json:"display_name"`
-	Configured   bool               `json:"configured"`
-	CreatedAt    pgtype.Timestamptz `json:"created_at"`
-	LastUsedAt   pgtype.Timestamptz `json:"last_used_at"`
-	AgentCount   int32              `json:"agent_count"`
-	Capabilities []string           `json:"capabilities"`
-}
-
-func (q *Queries) ListAvailableExecEndpoints(ctx context.Context, principalIds []pgtype.UUID) ([]ListAvailableExecEndpointsRow, error) {
-	rows, err := q.db.Query(ctx, listAvailableExecEndpoints, principalIds)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []ListAvailableExecEndpointsRow{}
-	for rows.Next() {
-		var i ListAvailableExecEndpointsRow
-		if err := rows.Scan(
-			&i.ID,
-			&i.Slug,
-			&i.DisplayName,
-			&i.Configured,
-			&i.CreatedAt,
-			&i.LastUsedAt,
 			&i.AgentCount,
 			&i.Capabilities,
 		); err != nil {
@@ -498,102 +364,6 @@ func (q *Queries) ListConnectionsAvailableToPrincipal(ctx context.Context, princ
 	return items, nil
 }
 
-const listExecEndpointConsumers = `-- name: ListExecEndpointConsumers :many
-SELECT a.id AS agent_id, a.name AS agent_name, a.slug AS agent_slug,
-       n.type AS need_type, n.slug AS need_slug
-FROM agent_resource_needs n
-JOIN agents a ON a.id = n.agent_id
-WHERE n.bound_exec_id = $1
-ORDER BY a.name, n.slug
-`
-
-type ListExecEndpointConsumersRow struct {
-	AgentID   pgtype.UUID `json:"agent_id"`
-	AgentName string      `json:"agent_name"`
-	AgentSlug string      `json:"agent_slug"`
-	NeedType  string      `json:"need_type"`
-	NeedSlug  string      `json:"need_slug"`
-}
-
-func (q *Queries) ListExecEndpointConsumers(ctx context.Context, resourceID pgtype.UUID) ([]ListExecEndpointConsumersRow, error) {
-	rows, err := q.db.Query(ctx, listExecEndpointConsumers, resourceID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []ListExecEndpointConsumersRow{}
-	for rows.Next() {
-		var i ListExecEndpointConsumersRow
-		if err := rows.Scan(
-			&i.AgentID,
-			&i.AgentName,
-			&i.AgentSlug,
-			&i.NeedType,
-			&i.NeedSlug,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listExecEndpointsAvailableToPrincipal = `-- name: ListExecEndpointsAvailableToPrincipal :many
-SELECT e.id, e.slug, e.display_name, e.description, e.llm_hint, e.access, e.transport, e.host, e.port, e.ssh_user, e.private_key_ref, e.public_key_openssh, e.public_key_comment, e.host_key_openssh, e.host_key_pinned_at, e.last_used_at, e.created_at, e.updated_at, e.owner_principal_id
-FROM agent_exec_endpoints e
-WHERE e.owner_principal_id = ANY ($1::uuid[])
-   OR EXISTS (
-       SELECT 1 FROM resource_grants g
-       WHERE g.exec_endpoint_id = e.id
-         AND g.grantee_id = ANY ($1::uuid[])
-         AND 'bind' = ANY (g.capabilities)
-   )
-ORDER BY e.display_name, e.slug
-`
-
-func (q *Queries) ListExecEndpointsAvailableToPrincipal(ctx context.Context, principalIds []pgtype.UUID) ([]AgentExecEndpoint, error) {
-	rows, err := q.db.Query(ctx, listExecEndpointsAvailableToPrincipal, principalIds)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []AgentExecEndpoint{}
-	for rows.Next() {
-		var i AgentExecEndpoint
-		if err := rows.Scan(
-			&i.ID,
-			&i.Slug,
-			&i.DisplayName,
-			&i.Description,
-			&i.LlmHint,
-			&i.Access,
-			&i.Transport,
-			&i.Host,
-			&i.Port,
-			&i.SshUser,
-			&i.PrivateKeyRef,
-			&i.PublicKeyOpenssh,
-			&i.PublicKeyComment,
-			&i.HostKeyOpenssh,
-			&i.HostKeyPinnedAt,
-			&i.LastUsedAt,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-			&i.OwnerPrincipalID,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const listMCPServerConsumers = `-- name: ListMCPServerConsumers :many
 SELECT a.id AS agent_id, a.name AS agent_name, a.slug AS agent_slug,
        n.type AS need_type, n.slug AS need_slug
@@ -712,23 +482,6 @@ type RenameConnectionParams struct {
 
 func (q *Queries) RenameConnection(ctx context.Context, arg RenameConnectionParams) (int64, error) {
 	result, err := q.db.Exec(ctx, renameConnection, arg.DisplayName, arg.ID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
-const renameExecEndpoint = `-- name: RenameExecEndpoint :execrows
-UPDATE agent_exec_endpoints SET display_name = $1, updated_at = now() WHERE id = $2
-`
-
-type RenameExecEndpointParams struct {
-	DisplayName string      `json:"display_name"`
-	ID          pgtype.UUID `json:"id"`
-}
-
-func (q *Queries) RenameExecEndpoint(ctx context.Context, arg RenameExecEndpointParams) (int64, error) {
-	result, err := q.db.Exec(ctx, renameExecEndpoint, arg.DisplayName, arg.ID)
 	if err != nil {
 		return 0, err
 	}

@@ -76,8 +76,6 @@ func (s *Service) ListNeeds(ctx context.Context, p authz.Principal, agentID uuid
 			info.Bound, info.BoundResourceID = true, uuid.UUID(n.BoundConnectionID.Bytes)
 		case n.BoundMcpID.Valid:
 			info.Bound, info.BoundResourceID = true, uuid.UUID(n.BoundMcpID.Bytes)
-		case n.BoundExecID.Valid:
-			info.Bound, info.BoundResourceID = true, uuid.UUID(n.BoundExecID.Bytes)
 		}
 		out[i] = info
 	}
@@ -85,11 +83,13 @@ func (s *Service) ListNeeds(ctx context.Context, p authz.Principal, agentID uuid
 }
 
 // manageAction is the agent-axis gate for managing a resource type.
-func manageAction(typ string) authz.Action {
-	if typ == "exec_endpoint" {
-		return authz.AgentExecEndpoints
+func manageAction(typ string) (authz.Action, error) {
+	switch typ {
+	case "connection", "mcp_server":
+		return authz.AgentConnections, nil
+	default:
+		return "", service.Detail(service.ErrInvalidInput, "unknown resource type %q", typ)
 	}
-	return authz.AgentConnections
 }
 
 // jsonEqual compares two JSON blobs structurally — key order and whitespace
@@ -171,6 +171,10 @@ func (s *Service) granteeOwners(p authz.Principal) []pgtype.UUID {
 // CreateResourceForNeed instantiates a new resource for the need, owned by the
 // caller, and binds it. Agent-admin gated.
 func (s *Service) CreateResourceForNeed(ctx context.Context, p authz.Principal, agentID uuid.UUID, typ, slug, displayName string) (uuid.UUID, error) {
+	action, err := manageAction(typ)
+	if err != nil {
+		return uuid.Nil, err
+	}
 	tx, err := s.db.Pool().Begin(ctx)
 	if err != nil {
 		return uuid.Nil, err
@@ -180,7 +184,7 @@ func (s *Service) CreateResourceForNeed(ctx context.Context, p authz.Principal, 
 	if _, err := q.GetAgentByIDForUpdate(ctx, pg(agentID)); err != nil {
 		return uuid.Nil, notFoundOr(err)
 	}
-	if err := authz.Authorize(ctx, q, p, manageAction(typ), agentID); err != nil {
+	if err := authz.Authorize(ctx, q, p, action, agentID); err != nil {
 		return uuid.Nil, err
 	}
 	if typ == "mcp_server" {
@@ -210,8 +214,12 @@ func (s *Service) CreateResourceForNeed(ctx context.Context, p authz.Principal, 
 // ListCandidates returns the caller's resources (owned by its grantee set) whose
 // frozen shape matches the need — the resources it can bind for reuse.
 func (s *Service) ListCandidates(ctx context.Context, p authz.Principal, agentID uuid.UUID, typ, slug string) ([]Candidate, error) {
+	action, err := manageAction(typ)
+	if err != nil {
+		return nil, err
+	}
 	q := dbq.New(s.db.Pool())
-	if err := authz.Authorize(ctx, q, p, manageAction(typ), agentID); err != nil {
+	if err := authz.Authorize(ctx, q, p, action, agentID); err != nil {
 		return nil, err
 	}
 	need, err := q.GetResourceNeed(ctx, dbq.GetResourceNeedParams{AgentID: pg(agentID), Type: typ, Slug: slug})
@@ -280,22 +288,6 @@ func (s *Service) ListCandidates(ctx context.Context, p authz.Principal, agentID
 				out = append(out, candidate)
 			}
 		}
-	case "exec_endpoint":
-		rows, err := q.ListExecEndpointsAvailableToPrincipal(ctx, principals)
-		if err != nil {
-			return nil, err
-		}
-		for _, e := range rows {
-			consumers, err := q.ListExecEndpointConsumers(ctx, e.ID)
-			if err != nil {
-				return nil, err
-			}
-			candidate, err := build(uuid.UUID(e.ID.Bytes), e.Slug, e.DisplayName, e.Slug, "", "", true, e.Transport.Valid, int32(len(consumers)))
-			if err != nil {
-				return nil, err
-			}
-			out = append(out, candidate)
-		}
 	default:
 		return nil, service.Detail(service.ErrInvalidInput, "unknown resource type %q", typ)
 	}
@@ -305,6 +297,10 @@ func (s *Service) ListCandidates(ctx context.Context, p authz.Principal, agentID
 // BindExisting binds an existing resource after checking agent admin, resource
 // bind capability, and shape compatibility in one transaction.
 func (s *Service) BindExisting(ctx context.Context, p authz.Principal, agentID uuid.UUID, typ, slug string, resourceID uuid.UUID) error {
+	action, err := manageAction(typ)
+	if err != nil {
+		return err
+	}
 	tx, err := s.db.Pool().Begin(ctx)
 	if err != nil {
 		return err
@@ -314,7 +310,7 @@ func (s *Service) BindExisting(ctx context.Context, p authz.Principal, agentID u
 	if _, err := q.GetAgentByIDForUpdate(ctx, pg(agentID)); err != nil {
 		return notFoundOr(err)
 	}
-	if err := authz.Authorize(ctx, q, p, manageAction(typ), agentID); err != nil {
+	if err := authz.Authorize(ctx, q, p, action, agentID); err != nil {
 		return err
 	}
 	need, err := q.GetResourceNeedForUpdate(ctx, dbq.GetResourceNeedForUpdateParams{AgentID: pg(agentID), Type: typ, Slug: slug})
@@ -359,15 +355,6 @@ func (s *Service) BindExisting(ctx context.Context, p authz.Principal, agentID u
 			return service.Detail(service.ErrConflict, "MCP server requires OAuth authorization before binding")
 		}
 		affected, err = q.BindMCPServerNeed(ctx, dbq.BindMCPServerNeedParams{AgentID: pg(agentID), Slug: slug, ResourceID: pg(resourceID)})
-	case "exec_endpoint":
-		_, err := q.GetExecEndpointByIDForUpdate(ctx, pg(resourceID))
-		if err != nil {
-			return notFoundOr(err)
-		}
-		if err := authz.AuthorizeResource(ctx, q, p, authz.ResourceBind, typ, resourceID); err != nil {
-			return err
-		}
-		affected, err = q.BindExecEndpointNeed(ctx, dbq.BindExecEndpointNeedParams{AgentID: pg(agentID), Slug: slug, ResourceID: pg(resourceID)})
 	default:
 		return service.Detail(service.ErrInvalidInput, "unknown resource type %q", typ)
 	}
@@ -404,6 +391,10 @@ func contains(values []string, want string) bool {
 // Unbind clears one need's binding without mutating or authorizing against the
 // resource. The operation changes only the agent and requires agent admin.
 func (s *Service) Unbind(ctx context.Context, p authz.Principal, agentID uuid.UUID, typ, slug string) error {
+	action, err := manageAction(typ)
+	if err != nil {
+		return err
+	}
 	tx, err := s.db.Pool().Begin(ctx)
 	if err != nil {
 		return err
@@ -413,7 +404,7 @@ func (s *Service) Unbind(ctx context.Context, p authz.Principal, agentID uuid.UU
 	if _, err := q.GetAgentByIDForUpdate(ctx, pg(agentID)); err != nil {
 		return notFoundOr(err)
 	}
-	if err := authz.Authorize(ctx, q, p, manageAction(typ), agentID); err != nil {
+	if err := authz.Authorize(ctx, q, p, action, agentID); err != nil {
 		return err
 	}
 	if _, err := q.GetResourceNeedForUpdate(ctx, dbq.GetResourceNeedForUpdateParams{AgentID: pg(agentID), Type: typ, Slug: slug}); err != nil {

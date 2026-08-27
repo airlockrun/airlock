@@ -9,54 +9,57 @@ import (
 )
 
 type Agent struct {
-	ID                   pgtype.UUID        `json:"id"`
-	OwnerPrincipalID     pgtype.UUID        `json:"owner_principal_id"`
-	Slug                 string             `json:"slug"`
-	Name                 string             `json:"name"`
-	Description          string             `json:"description"`
-	Status               string             `json:"status"`
-	UpgradeStatus        string             `json:"upgrade_status"`
-	AutoFix              bool               `json:"auto_fix"`
-	BuildProviderID      pgtype.UUID        `json:"build_provider_id"`
-	BuildModel           string             `json:"build_model"`
-	ExecProviderID       pgtype.UUID        `json:"exec_provider_id"`
-	ExecModel            string             `json:"exec_model"`
-	SttProviderID        pgtype.UUID        `json:"stt_provider_id"`
-	SttModel             string             `json:"stt_model"`
-	VisionProviderID     pgtype.UUID        `json:"vision_provider_id"`
-	VisionModel          string             `json:"vision_model"`
-	TtsProviderID        pgtype.UUID        `json:"tts_provider_id"`
-	TtsModel             string             `json:"tts_model"`
-	ImageGenProviderID   pgtype.UUID        `json:"image_gen_provider_id"`
-	ImageGenModel        string             `json:"image_gen_model"`
-	EmbeddingProviderID  pgtype.UUID        `json:"embedding_provider_id"`
-	EmbeddingModel       string             `json:"embedding_model"`
-	SearchProviderID     pgtype.UUID        `json:"search_provider_id"`
-	SearchModel          string             `json:"search_model"`
-	SourceRef            string             `json:"source_ref"`
-	ImageRef             string             `json:"image_ref"`
-	DbSchema             string             `json:"db_schema"`
-	DbPassword           string             `json:"db_password"`
-	SdkVersion           string             `json:"sdk_version"`
-	Config               []byte             `json:"config"`
-	Instructions         []byte             `json:"instructions"`
-	ErrorMessage         string             `json:"error_message"`
-	CreatedAt            pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt            pgtype.Timestamptz `json:"updated_at"`
-	McpEnabled           bool               `json:"mcp_enabled"`
-	AllowPublicMcp       bool               `json:"allow_public_mcp"`
-	AllowPublicRoutes    bool               `json:"allow_public_routes"`
-	ToolsHash            []byte             `json:"tools_hash"`
-	Emoji                string             `json:"emoji"`
-	AllowOauthMcpPrompt  bool               `json:"allow_oauth_mcp_prompt"`
-	AllowPublicMcpPrompt bool               `json:"allow_public_mcp_prompt"`
-	GitRemoteUrl         string             `json:"git_remote_url"`
-	GitMode              string             `json:"git_mode"`
-	GitCredentialID      pgtype.UUID        `json:"git_credential_id"`
-	GitDefaultBranch     string             `json:"git_default_branch"`
-	GitWebhookSecret     string             `json:"git_webhook_secret"`
-	GitLastSyncedRef     string             `json:"git_last_synced_ref"`
-	AgentTokenVersion    int64              `json:"agent_token_version"`
+	ID                       pgtype.UUID        `json:"id"`
+	OwnerPrincipalID         pgtype.UUID        `json:"owner_principal_id"`
+	Slug                     string             `json:"slug"`
+	Name                     string             `json:"name"`
+	Description              string             `json:"description"`
+	Status                   string             `json:"status"`
+	UpgradeStatus            string             `json:"upgrade_status"`
+	AutoFix                  bool               `json:"auto_fix"`
+	BuildProviderID          pgtype.UUID        `json:"build_provider_id"`
+	BuildModel               string             `json:"build_model"`
+	ExecProviderID           pgtype.UUID        `json:"exec_provider_id"`
+	ExecModel                string             `json:"exec_model"`
+	SttProviderID            pgtype.UUID        `json:"stt_provider_id"`
+	SttModel                 string             `json:"stt_model"`
+	VisionProviderID         pgtype.UUID        `json:"vision_provider_id"`
+	VisionModel              string             `json:"vision_model"`
+	TtsProviderID            pgtype.UUID        `json:"tts_provider_id"`
+	TtsModel                 string             `json:"tts_model"`
+	ImageGenProviderID       pgtype.UUID        `json:"image_gen_provider_id"`
+	ImageGenModel            string             `json:"image_gen_model"`
+	EmbeddingProviderID      pgtype.UUID        `json:"embedding_provider_id"`
+	EmbeddingModel           string             `json:"embedding_model"`
+	SearchProviderID         pgtype.UUID        `json:"search_provider_id"`
+	SearchModel              string             `json:"search_model"`
+	SourceRef                string             `json:"source_ref"`
+	ImageRef                 string             `json:"image_ref"`
+	DbSchema                 string             `json:"db_schema"`
+	DbPassword               string             `json:"db_password"`
+	SdkVersion               string             `json:"sdk_version"`
+	Config                   []byte             `json:"config"`
+	Instructions             []byte             `json:"instructions"`
+	ErrorMessage             string             `json:"error_message"`
+	CreatedAt                pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt                pgtype.Timestamptz `json:"updated_at"`
+	McpEnabled               bool               `json:"mcp_enabled"`
+	AllowPublicMcp           bool               `json:"allow_public_mcp"`
+	AllowPublicRoutes        bool               `json:"allow_public_routes"`
+	ToolsHash                []byte             `json:"tools_hash"`
+	Emoji                    string             `json:"emoji"`
+	AllowOauthMcpPrompt      bool               `json:"allow_oauth_mcp_prompt"`
+	AllowPublicMcpPrompt     bool               `json:"allow_public_mcp_prompt"`
+	GitRemoteUrl             string             `json:"git_remote_url"`
+	GitMode                  string             `json:"git_mode"`
+	GitCredentialID          pgtype.UUID        `json:"git_credential_id"`
+	GitDefaultBranch         string             `json:"git_default_branch"`
+	GitWebhookSecret         string             `json:"git_webhook_secret"`
+	GitLastSyncedRef         string             `json:"git_last_synced_ref"`
+	AgentTokenVersion        int64              `json:"agent_token_version"`
+	JobDispatchPausedBuildID pgtype.UUID        `json:"job_dispatch_paused_build_id"`
+	JobDispatchPausedAt      pgtype.Timestamptz `json:"job_dispatch_paused_at"`
+	JobDispatchPauseDeadline pgtype.Timestamptz `json:"job_dispatch_pause_deadline"`
 }
 
 type AgentBuild struct {
@@ -87,6 +90,26 @@ type AgentBuild struct {
 	BuildModel                string             `json:"build_model"`
 	IntegrationTokenHash      []byte             `json:"integration_token_hash"`
 	IntegrationTokenExpiresAt pgtype.Timestamptz `json:"integration_token_expires_at"`
+	DeploymentPhase           string             `json:"deployment_phase"`
+	DeploymentTargetStatus    pgtype.Text        `json:"deployment_target_status"`
+	DeploymentToken           pgtype.UUID        `json:"deployment_token"`
+	JobManifestExtractedAt    pgtype.Timestamptz `json:"job_manifest_extracted_at"`
+	JobManifestDigest         pgtype.Text        `json:"job_manifest_digest"`
+	CancelRequestedAt         pgtype.Timestamptz `json:"cancel_requested_at"`
+}
+
+type AgentBuildJobHandler struct {
+	BuildID          pgtype.UUID `json:"build_id"`
+	Name             string      `json:"name"`
+	Version          int32       `json:"version"`
+	Description      string      `json:"description"`
+	TimeoutMs        int64       `json:"timeout_ms"`
+	MaxAttempts      int32       `json:"max_attempts"`
+	MaxConcurrency   int32       `json:"max_concurrency"`
+	InputSchema      []byte      `json:"input_schema"`
+	OutputSchema     []byte      `json:"output_schema"`
+	InputSchemaHash  string      `json:"input_schema_hash"`
+	OutputSchemaHash string      `json:"output_schema_hash"`
 }
 
 type AgentConversation struct {
@@ -132,33 +155,105 @@ type AgentEnvVar struct {
 	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
 }
 
-type AgentExecEndpoint struct {
-	ID               pgtype.UUID        `json:"id"`
-	Slug             string             `json:"slug"`
-	DisplayName      string             `json:"display_name"`
-	Description      string             `json:"description"`
-	LlmHint          string             `json:"llm_hint"`
-	Access           string             `json:"access"`
-	Transport        pgtype.Text        `json:"transport"`
-	Host             pgtype.Text        `json:"host"`
-	Port             pgtype.Int4        `json:"port"`
-	SshUser          pgtype.Text        `json:"ssh_user"`
-	PrivateKeyRef    pgtype.Text        `json:"private_key_ref"`
-	PublicKeyOpenssh pgtype.Text        `json:"public_key_openssh"`
-	PublicKeyComment pgtype.Text        `json:"public_key_comment"`
-	HostKeyOpenssh   pgtype.Text        `json:"host_key_openssh"`
-	HostKeyPinnedAt  pgtype.Timestamptz `json:"host_key_pinned_at"`
-	LastUsedAt       pgtype.Timestamptz `json:"last_used_at"`
-	CreatedAt        pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
-	OwnerPrincipalID pgtype.UUID        `json:"owner_principal_id"`
-}
-
 type AgentGrant struct {
 	AgentID   pgtype.UUID        `json:"agent_id"`
 	GranteeID pgtype.UUID        `json:"grantee_id"`
 	Role      string             `json:"role"`
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
+type AgentJob struct {
+	ID                      pgtype.UUID        `json:"id"`
+	AgentID                 pgtype.UUID        `json:"agent_id"`
+	HandlerName             string             `json:"handler_name"`
+	HandlerVersion          int32              `json:"handler_version"`
+	InputSchemaHash         string             `json:"input_schema_hash"`
+	OutputSchemaHash        string             `json:"output_schema_hash"`
+	SourceRunID             pgtype.UUID        `json:"source_run_id"`
+	CronID                  pgtype.UUID        `json:"cron_id"`
+	CronSlug                pgtype.Text        `json:"cron_slug"`
+	InitiatorKind           string             `json:"initiator_kind"`
+	InitiatorUserID         pgtype.UUID        `json:"initiator_user_id"`
+	InitiatorConversationID pgtype.UUID        `json:"initiator_conversation_id"`
+	InitiatorAccess         string             `json:"initiator_access"`
+	Status                  string             `json:"status"`
+	TimeoutMs               int64              `json:"timeout_ms"`
+	MaxAttempts             int32              `json:"max_attempts"`
+	AttemptLimit            int32              `json:"attempt_limit"`
+	AttemptCount            int32              `json:"attempt_count"`
+	NextAttemptAt           pgtype.Timestamptz `json:"next_attempt_at"`
+	ScheduledAt             pgtype.Timestamptz `json:"scheduled_at"`
+	InputPayload            []byte             `json:"input_payload"`
+	OutputPayload           []byte             `json:"output_payload"`
+	ProgressPhase           pgtype.Text        `json:"progress_phase"`
+	ProgressMessage         pgtype.Text        `json:"progress_message"`
+	ProgressCompleted       pgtype.Int8        `json:"progress_completed"`
+	ProgressTotal           pgtype.Int8        `json:"progress_total"`
+	ProgressAttempt         pgtype.Int4        `json:"progress_attempt"`
+	ProgressUpdatedAt       pgtype.Timestamptz `json:"progress_updated_at"`
+	LastError               pgtype.Text        `json:"last_error"`
+	CancelRequestedAt       pgtype.Timestamptz `json:"cancel_requested_at"`
+	CancelledByUserID       pgtype.UUID        `json:"cancelled_by_user_id"`
+	StartedAt               pgtype.Timestamptz `json:"started_at"`
+	CompletedAt             pgtype.Timestamptz `json:"completed_at"`
+	StateVersion            int64              `json:"state_version"`
+	CreatedAt               pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt               pgtype.Timestamptz `json:"updated_at"`
+}
+
+type AgentJobAttempt struct {
+	JobID             pgtype.UUID        `json:"job_id"`
+	AttemptNumber     int32              `json:"attempt_number"`
+	Status            string             `json:"status"`
+	RuntimeGeneration int64              `json:"runtime_generation"`
+	LeaseOwner        pgtype.UUID        `json:"lease_owner"`
+	LeaseToken        pgtype.UUID        `json:"lease_token"`
+	LeaseExpiresAt    pgtype.Timestamptz `json:"lease_expires_at"`
+	RunID             pgtype.UUID        `json:"run_id"`
+	ErrorKind         pgtype.Text        `json:"error_kind"`
+	ErrorMessage      pgtype.Text        `json:"error_message"`
+	LeasedAt          pgtype.Timestamptz `json:"leased_at"`
+	StartedAt         pgtype.Timestamptz `json:"started_at"`
+	CompletedAt       pgtype.Timestamptz `json:"completed_at"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
+}
+
+type AgentJobCron struct {
+	ID                pgtype.UUID        `json:"id"`
+	AgentID           pgtype.UUID        `json:"agent_id"`
+	Slug              string             `json:"slug"`
+	Schedule          string             `json:"schedule"`
+	Description       string             `json:"description"`
+	HandlerName       string             `json:"handler_name"`
+	HandlerVersion    int32              `json:"handler_version"`
+	InputSchemaHash   string             `json:"input_schema_hash"`
+	OutputSchemaHash  string             `json:"output_schema_hash"`
+	InputPayload      []byte             `json:"input_payload"`
+	AgentTokenVersion int64              `json:"agent_token_version"`
+	Enabled           bool               `json:"enabled"`
+	NextFireAt        pgtype.Timestamptz `json:"next_fire_at"`
+	LastFiredAt       pgtype.Timestamptz `json:"last_fired_at"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
+}
+
+type AgentJobHandler struct {
+	AgentID           pgtype.UUID        `json:"agent_id"`
+	Name              string             `json:"name"`
+	Version           int32              `json:"version"`
+	Description       string             `json:"description"`
+	TimeoutMs         int64              `json:"timeout_ms"`
+	MaxAttempts       int32              `json:"max_attempts"`
+	MaxConcurrency    int32              `json:"max_concurrency"`
+	InputSchema       []byte             `json:"input_schema"`
+	OutputSchema      []byte             `json:"output_schema"`
+	InputSchemaHash   string             `json:"input_schema_hash"`
+	OutputSchemaHash  string             `json:"output_schema_hash"`
+	AgentTokenVersion int64              `json:"agent_token_version"`
+	Active            bool               `json:"active"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
 }
 
 type AgentMcpServer struct {
@@ -231,7 +326,6 @@ type AgentResourceNeed struct {
 	Required          bool               `json:"required"`
 	BoundConnectionID pgtype.UUID        `json:"bound_connection_id"`
 	BoundMcpID        pgtype.UUID        `json:"bound_mcp_id"`
-	BoundExecID       pgtype.UUID        `json:"bound_exec_id"`
 	CreatedAt         pgtype.Timestamptz `json:"created_at"`
 }
 
@@ -244,42 +338,6 @@ type AgentRoute struct {
 	Description string             `json:"description"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
-}
-
-type AgentScheduleHandler struct {
-	ID          pgtype.UUID        `json:"id"`
-	AgentID     pgtype.UUID        `json:"agent_id"`
-	Slug        string             `json:"slug"`
-	Kind        string             `json:"kind"`
-	Recurrence  string             `json:"recurrence"`
-	Enabled     bool               `json:"enabled"`
-	TimeoutMs   int64              `json:"timeout_ms"`
-	Description string             `json:"description"`
-	LastFiredAt pgtype.Timestamptz `json:"last_fired_at"`
-	CreatedAt   pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
-}
-
-type AgentScheduledFire struct {
-	ID             pgtype.UUID        `json:"id"`
-	AgentID        pgtype.UUID        `json:"agent_id"`
-	Source         string             `json:"source"`
-	Slug           string             `json:"slug"`
-	FireAt         pgtype.Timestamptz `json:"fire_at"`
-	Recurrence     string             `json:"recurrence"`
-	TimeoutMs      int64              `json:"timeout_ms"`
-	Status         string             `json:"status"`
-	Attempt        int32              `json:"attempt"`
-	MaxAttempts    int32              `json:"max_attempts"`
-	LeaseOwner     pgtype.UUID        `json:"lease_owner"`
-	LeaseToken     pgtype.UUID        `json:"lease_token"`
-	LeaseExpiresAt pgtype.Timestamptz `json:"lease_expires_at"`
-	NextAttemptAt  pgtype.Timestamptz `json:"next_attempt_at"`
-	StartedAt      pgtype.Timestamptz `json:"started_at"`
-	CompletedAt    pgtype.Timestamptz `json:"completed_at"`
-	LastError      string             `json:"last_error"`
-	CreatedAt      pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
 }
 
 type AgentSibling struct {
@@ -655,7 +713,6 @@ type ResourceGrant struct {
 	ID              pgtype.UUID        `json:"id"`
 	ConnectionID    pgtype.UUID        `json:"connection_id"`
 	McpServerID     pgtype.UUID        `json:"mcp_server_id"`
-	ExecEndpointID  pgtype.UUID        `json:"exec_endpoint_id"`
 	GitCredentialID pgtype.UUID        `json:"git_credential_id"`
 	GranteeID       pgtype.UUID        `json:"grantee_id"`
 	Capabilities    []string           `json:"capabilities"`

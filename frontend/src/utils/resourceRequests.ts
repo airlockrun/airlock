@@ -1,6 +1,5 @@
 import { create, toJson } from '@bufbuild/protobuf'
 import {
-  ConfigureExecEndpointRequestSchema,
   SetAPIKeyRequestSchema,
   SetOAuthAppRequestSchema,
   StartAuthorizationForNeedRequestSchema,
@@ -34,20 +33,6 @@ export function serializeAuthorizationRequest(fields: {
   return toJson(
     StartAuthorizationForNeedRequestSchema,
     create(StartAuthorizationForNeedRequestSchema, fields),
-    { alwaysEmitImplicit: true },
-  )
-}
-
-export function serializeExecEndpointRequest(fields: {
-  host: string
-  port: number
-  sshUser: string
-  displayName: string
-  createNew: boolean
-}) {
-  return toJson(
-    ConfigureExecEndpointRequestSchema,
-    create(ConfigureExecEndpointRequestSchema, fields),
     { alwaysEmitImplicit: true },
   )
 }

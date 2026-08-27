@@ -7,9 +7,6 @@ SELECT id, grantee_id, capabilities FROM resource_grants WHERE connection_id = @
 -- name: ListMCPServerGrants :many
 SELECT id, grantee_id, capabilities FROM resource_grants WHERE mcp_server_id = @mcp_server_id;
 
--- name: ListExecEndpointGrants :many
-SELECT id, grantee_id, capabilities FROM resource_grants WHERE exec_endpoint_id = @exec_endpoint_id;
-
 -- name: ListGitCredentialGrants :many
 SELECT id, grantee_id, capabilities FROM resource_grants WHERE git_credential_id = @git_credential_id;
 
@@ -26,12 +23,6 @@ SELECT owner_principal_id FROM agent_mcp_servers WHERE id = @id;
 
 -- name: LockMCPServerResource :exec
 SELECT id FROM agent_mcp_servers WHERE id = @id FOR UPDATE;
-
--- name: GetExecEndpointOwner :one
-SELECT owner_principal_id FROM agent_exec_endpoints WHERE id = @id;
-
--- name: LockExecEndpointResource :exec
-SELECT id FROM agent_exec_endpoints WHERE id = @id FOR UPDATE;
 
 -- name: GetGitCredentialOwner :one
 SELECT user_id FROM git_credentials WHERE id = @id;

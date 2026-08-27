@@ -11,6 +11,23 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const cancelRun = `-- name: CancelRun :execrows
+UPDATE runs SET
+    status = 'cancelled',
+    error_message = 'cancelled by user',
+    finished_at = now(),
+    duration_ms = (EXTRACT(EPOCH FROM (now() - started_at)) * 1000)::integer
+WHERE id = $1 AND status = 'running'
+`
+
+func (q *Queries) CancelRun(ctx context.Context, id pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, cancelRun, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const claimMCPTaskResume = `-- name: ClaimMCPTaskResume :execrows
 UPDATE runs SET status = 'success'
 WHERE id = $1
@@ -37,22 +54,36 @@ func (q *Queries) ClaimMCPTaskResume(ctx context.Context, arg ClaimMCPTaskResume
 }
 
 const compactOldRuns = `-- name: CompactOldRuns :execrows
-UPDATE runs SET
+WITH candidates AS (
+    SELECT candidate_run.id
+    FROM runs candidate_run
+    WHERE candidate_run.status IN ('success', 'error', 'timeout', 'failed', 'cancelled')
+      AND candidate_run.finished_at < $1
+      AND candidate_run.compacted = false
+    ORDER BY candidate_run.finished_at, candidate_run.id
+    FOR UPDATE SKIP LOCKED
+    LIMIT LEAST($2::integer, 500)
+)
+UPDATE runs run SET
     input_payload = '{}'::jsonb,
     actions       = '[]'::jsonb,
     checkpoint    = NULL,
     stdout_log    = '',
     panic_trace   = '',
     compacted     = true
-WHERE finished_at IS NOT NULL
-    AND finished_at < $1
-    AND compacted = false
+FROM candidates
+WHERE run.id = candidates.id
 `
 
-// Nullify verbose fields on completed runs older than the cutoff.
+type CompactOldRunsParams struct {
+	Cutoff pgtype.Timestamptz `json:"cutoff"`
+	Lim    int32              `json:"lim"`
+}
+
+// Nullify verbose fields on terminal runs older than the cutoff.
 // Aggregates (token counts, cost, duration, timestamps, status, error) are preserved.
-func (q *Queries) CompactOldRuns(ctx context.Context, cutoff pgtype.Timestamptz) (int64, error) {
-	result, err := q.db.Exec(ctx, compactOldRuns, cutoff)
+func (q *Queries) CompactOldRuns(ctx context.Context, arg CompactOldRunsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, compactOldRuns, arg.Cutoff, arg.Lim)
 	if err != nil {
 		return 0, err
 	}
@@ -151,6 +182,48 @@ func (q *Queries) CreateRun(ctx context.Context, arg CreateRunParams) (Run, erro
 		&i.CallerAccess,
 	)
 	return i, err
+}
+
+const failRunDispatch = `-- name: FailRunDispatch :execrows
+UPDATE runs SET
+    status = 'error',
+    error_message = $1,
+    error_kind = 'platform',
+    finished_at = now(),
+    duration_ms = (EXTRACT(EPOCH FROM (now() - started_at)) * 1000)::integer
+WHERE id = $2 AND status = 'running'
+`
+
+type FailRunDispatchParams struct {
+	ErrorMessage string      `json:"error_message"`
+	ID           pgtype.UUID `json:"id"`
+}
+
+// Terminalize a run whose request could not establish a response stream from
+// the agent. The running-state CAS preserves whichever terminal state commits first.
+func (q *Queries) FailRunDispatch(ctx context.Context, arg FailRunDispatchParams) (int64, error) {
+	result, err := q.db.Exec(ctx, failRunDispatch, arg.ErrorMessage, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const failStuckRun = `-- name: FailStuckRun :execrows
+UPDATE runs
+SET status = 'error',
+    error_message = 'agent disconnected',
+    finished_at = now(),
+    duration_ms = (EXTRACT(EPOCH FROM (now() - started_at)) * 1000)::integer
+WHERE id = $1 AND status = 'running' AND trigger_type <> 'job'
+`
+
+func (q *Queries) FailStuckRun(ctx context.Context, id pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, failStuckRun, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const getDescendantRuns = `-- name: GetDescendantRuns :many
@@ -565,7 +638,7 @@ func (q *Queries) ListRunsByAgent(ctx context.Context, arg ListRunsByAgentParams
 
 const listStuckRuns = `-- name: ListStuckRuns :many
 SELECT id, agent_id FROM runs
-WHERE status = 'running' AND started_at < $1
+WHERE status = 'running' AND trigger_type <> 'job' AND started_at < $1
 `
 
 type ListStuckRunsRow struct {
@@ -576,7 +649,7 @@ type ListStuckRunsRow struct {
 // Runs presumed dead because they haven't seen a terminal status update
 // past the cutoff (started_at + outer dispatcher timeout + grace).
 // The sweeper marks them error/agent-disconnected, synthesizes orphan
-// tool-results, and publishes a synthetic run.complete WS event.
+// tool-results, and publishes a synthetic run.error WS event.
 func (q *Queries) ListStuckRuns(ctx context.Context, cutoff pgtype.Timestamptz) ([]ListStuckRunsRow, error) {
 	rows, err := q.db.Query(ctx, listStuckRuns, cutoff)
 	if err != nil {
@@ -595,20 +668,6 @@ func (q *Queries) ListStuckRuns(ctx context.Context, cutoff pgtype.Timestamptz) 
 		return nil, err
 	}
 	return items, nil
-}
-
-const resetStuckRuns = `-- name: ResetStuckRuns :exec
-UPDATE runs SET
-    status = 'failed',
-    error_message = $1,
-    finished_at = now(),
-    duration_ms = EXTRACT(EPOCH FROM (now() - started_at))::integer * 1000
-WHERE status = 'running'
-`
-
-func (q *Queries) ResetStuckRuns(ctx context.Context, errorMessage string) error {
-	_, err := q.db.Exec(ctx, resetStuckRuns, errorMessage)
-	return err
 }
 
 const resolveSuspendedRun = `-- name: ResolveSuspendedRun :execrows
@@ -713,7 +772,7 @@ UPDATE runs SET
     stdout_log = COALESCE($5, ''),
     panic_trace = COALESCE($6, ''),
     finished_at = now(),
-    duration_ms = EXTRACT(EPOCH FROM (now() - started_at))::integer * 1000
+    duration_ms = (EXTRACT(EPOCH FROM (now() - started_at)) * 1000)::integer
 WHERE id = $7
 `
 
@@ -775,7 +834,7 @@ const updateRunStatus = `-- name: UpdateRunStatus :exec
 UPDATE runs SET
     status = $1,
     finished_at = COALESCE(finished_at, now()),
-    duration_ms = COALESCE(NULLIF(duration_ms, 0), EXTRACT(EPOCH FROM (now() - started_at))::integer * 1000)
+    duration_ms = COALESCE(NULLIF(duration_ms, 0), (EXTRACT(EPOCH FROM (now() - started_at)) * 1000)::integer)
 WHERE id = $2 AND status = 'running'
 `
 
@@ -815,7 +874,7 @@ ON CONFLICT (id) DO UPDATE SET
     panic_trace = EXCLUDED.panic_trace,
     checkpoint = EXCLUDED.checkpoint,
     finished_at = now(),
-    duration_ms = EXTRACT(EPOCH FROM (now() - runs.started_at))::integer * 1000
+    duration_ms = (EXTRACT(EPOCH FROM (now() - runs.started_at)) * 1000)::integer
 WHERE runs.agent_id = EXCLUDED.agent_id
   AND runs.status = 'running'
 `

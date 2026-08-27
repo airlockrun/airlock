@@ -107,6 +107,10 @@ type ContainerManager interface {
 	// before the ephemeral toolserver container is removed.
 	CaptureToolserverDiagnostics(ctx context.Context, name, reason string) error
 
+	// InspectManifest runs a candidate image in manifest mode and returns the
+	// manifest written to stdout.
+	InspectManifest(ctx context.Context, imageRef string) ([]byte, error)
+
 	// RemoveImage removes a Docker image by reference (e.g., "agentID:hash").
 	RemoveImage(ctx context.Context, imageRef string) error
 

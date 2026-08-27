@@ -24,17 +24,6 @@ func (q *Queries) GetConnectionOwner(ctx context.Context, id pgtype.UUID) (pgtyp
 	return owner_principal_id, err
 }
 
-const getExecEndpointOwner = `-- name: GetExecEndpointOwner :one
-SELECT owner_principal_id FROM agent_exec_endpoints WHERE id = $1
-`
-
-func (q *Queries) GetExecEndpointOwner(ctx context.Context, id pgtype.UUID) (pgtype.UUID, error) {
-	row := q.db.QueryRow(ctx, getExecEndpointOwner, id)
-	var owner_principal_id pgtype.UUID
-	err := row.Scan(&owner_principal_id)
-	return owner_principal_id, err
-}
-
 const getGitCredentialOwner = `-- name: GetGitCredentialOwner :one
 SELECT user_id FROM git_credentials WHERE id = $1
 `
@@ -79,36 +68,6 @@ func (q *Queries) ListConnectionGrants(ctx context.Context, connectionID pgtype.
 	items := []ListConnectionGrantsRow{}
 	for rows.Next() {
 		var i ListConnectionGrantsRow
-		if err := rows.Scan(&i.ID, &i.GranteeID, &i.Capabilities); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listExecEndpointGrants = `-- name: ListExecEndpointGrants :many
-SELECT id, grantee_id, capabilities FROM resource_grants WHERE exec_endpoint_id = $1
-`
-
-type ListExecEndpointGrantsRow struct {
-	ID           pgtype.UUID `json:"id"`
-	GranteeID    pgtype.UUID `json:"grantee_id"`
-	Capabilities []string    `json:"capabilities"`
-}
-
-func (q *Queries) ListExecEndpointGrants(ctx context.Context, execEndpointID pgtype.UUID) ([]ListExecEndpointGrantsRow, error) {
-	rows, err := q.db.Query(ctx, listExecEndpointGrants, execEndpointID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []ListExecEndpointGrantsRow{}
-	for rows.Next() {
-		var i ListExecEndpointGrantsRow
 		if err := rows.Scan(&i.ID, &i.GranteeID, &i.Capabilities); err != nil {
 			return nil, err
 		}
@@ -186,15 +145,6 @@ SELECT id FROM connections WHERE id = $1 FOR UPDATE
 
 func (q *Queries) LockConnectionResource(ctx context.Context, id pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, lockConnectionResource, id)
-	return err
-}
-
-const lockExecEndpointResource = `-- name: LockExecEndpointResource :exec
-SELECT id FROM agent_exec_endpoints WHERE id = $1 FOR UPDATE
-`
-
-func (q *Queries) LockExecEndpointResource(ctx context.Context, id pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, lockExecEndpointResource, id)
 	return err
 }
 

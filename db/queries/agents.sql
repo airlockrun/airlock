@@ -65,14 +65,15 @@ SET status = 'stopped',
 WHERE id = $1
 RETURNING agent_token_version;
 
--- name: StartInitialAgentBuild :execrows
+-- name: StartInitialAgentBuild :one
 UPDATE agents
 SET status = 'building',
     error_message = '',
     updated_at = now()
 WHERE id = @id
   AND agent_token_version = @agent_token_version
-  AND status IN ('draft', 'failed');
+  AND status IN ('draft', 'failed')
+RETURNING *;
 
 -- name: FailInitialAgentBuild :execrows
 UPDATE agents
@@ -105,14 +106,6 @@ UPDATE agents SET upgrade_status = @upgrade_status, error_message = @error_messa
 
 -- name: GetAgentForUpgrade :one
 SELECT id, upgrade_status FROM agents WHERE id = $1 FOR UPDATE;
-
--- name: ResetStuckBuilds :exec
-UPDATE agents SET status = 'failed', error_message = @error_message, updated_at = now()
-WHERE status = 'building';
-
--- name: ResetStuckUpgrades :exec
-UPDATE agents SET upgrade_status = 'failed', updated_at = now()
-WHERE upgrade_status IN ('queued', 'building');
 
 -- name: UpdateAgentConfig :exec
 UPDATE agents SET config = @config, updated_at = now() WHERE id = @id;

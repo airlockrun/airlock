@@ -312,7 +312,7 @@ message CloneAgentResponse {
 
 // TransferAgentOwnershipRequest hands the agent to another tenant user. The new
 // owner gets admin membership; the old owner is removed. Owner-scoped bindings
-// (connections, MCP/exec, git credential, bridges) are unbound.
+// (connections, MCP servers, git credential, bridges) are unbound.
 message TransferAgentOwnershipRequest {
   string new_owner_id = 1;
 }
@@ -549,7 +549,7 @@ message ListToolsResponse {
 }
 
 message FireScheduleResponse {
-  string occurrence_id = 1;
+  string job_id = 1;
 }
 
 // --- Agent Members ---
@@ -850,32 +850,6 @@ message UpdateAgentSharingResponse {
   A2ASettings settings = 1;
 }
 
-// --- Exec endpoints ---
-
-message ListExecEndpointsResponse {
-  repeated ExecEndpointInfo endpoints = 1;
-}
-
-message ConfigureExecEndpointRequest {
-  string host = 1;
-  int32 port = 2;
-  string ssh_user = 3;
-  string display_name = 4; // required when this call provisions a resource
-  bool create_new = 5; // create/configure and atomically replace the binding
-}
-
-message ConfigureExecEndpointResponse {
-  ExecEndpointInfo endpoint = 1;
-}
-
-message RotateExecKeypairResponse {
-  ExecEndpointInfo endpoint = 1;
-}
-
-message TestExecEndpointResponse {
-  ExecEndpointTestResult result = 1;
-}
-
 // --- Connection setup status ---
 
 message ConnectionSetupStatusResponse {
@@ -891,6 +865,26 @@ message HealthResponse {
   string status = 1;  // "ok" | "degraded"
   bool db = 2;        // Postgres reachable
   bool s3 = 3;        // S3/MinIO reachable
+}
+
+// --- Background jobs ---
+
+message ListJobHandlersResponse {
+  repeated JobHandlerInfo handlers = 1;
+}
+
+message ListJobsResponse {
+  repeated JobInfo jobs = 1;
+  string next_cursor = 2;
+}
+
+message GetJobResponse {
+  JobInfo job = 1;
+  repeated JobAttemptInfo attempts = 2;
+}
+
+message RetryJobResponse {
+  JobInfo job = 1;
 }
 
 // ── Model grants ──
@@ -945,11 +939,11 @@ message ListAllowedModelsResponse {
 // the immutable declaration/provider name; display_name is user-controlled.
 message OwnedResourceInfo {
   string id = 1;
-  string type = 2;  // connection | mcp_server | exec_endpoint
+  string type = 2;  // connection | mcp_server
   string slug = 3;
   string name = 4;
   string auth_mode = 5;
-  bool authorized = 6;       // has usable credentials (or is configured, for exec)
+  bool authorized = 6;       // has usable credentials or requires none
   int32 agent_count = 7;     // how many of the owner's agents bind this resource
   google.protobuf.Timestamp created_at = 8;
   google.protobuf.Timestamp last_used_at = 9;
@@ -1036,7 +1030,7 @@ message GetUsageResponse {
 // ── Resource needs (agent manifest) + binding ──
 
 message NeedInfo {
-  string type = 1;  // connection | mcp_server | exec_endpoint
+  string type = 1;  // connection | mcp_server
   string slug = 2;
   string description = 3;
   bool bound = 4;
@@ -1076,20 +1070,6 @@ message InvokeConnectionResponse {
   int32 status_code = 1;
   repeated IntegrationHTTPHeader headers = 2;
   bytes body = 3;
-}
-
-message InvokeExecRequest {
-  string command = 1;
-  repeated string args = 2;
-  bytes stdin = 3;
-  int64 timeout_ms = 4;
-}
-
-message InvokeExecResponse {
-  bytes stdout = 1;
-  bytes stderr = 2;
-  int32 exit_code = 3;
-  int64 duration_ms = 4;
 }
 
 message IntegrationMCPTool {

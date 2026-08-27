@@ -220,6 +220,9 @@ message AgentInfo {
   // Distinct from your_access: a co-owner (agent_members admin) has admin
   // access but is_owner=false. Populated alongside owner_name.
   bool is_owner = 20;
+  // git_mode is empty for internal source, or "read_write" / "read_only" for
+  // a persistent external Git binding.
+  string git_mode = 21;
 }
 
 // RunInfo represents a single execution of an agent.
@@ -252,6 +255,30 @@ message RunInfo {
   // trigger_type is what fired the run: "prompt" (web chat), "bridge",
   // "code" (agent HTTP route), "webhook", "cron", or "a2a".
   string trigger_type = 19;
+}
+
+// AgentBuildDeploymentPhase is the persisted deployment state for a build.
+enum AgentBuildDeploymentPhase {
+  AGENT_BUILD_DEPLOYMENT_PHASE_UNSPECIFIED = 0;
+  AGENT_BUILD_DEPLOYMENT_PHASE_BUILDING = 1;
+  AGENT_BUILD_DEPLOYMENT_PHASE_MANIFEST = 2;
+  AGENT_BUILD_DEPLOYMENT_PHASE_BLOCKED = 3;
+  AGENT_BUILD_DEPLOYMENT_PHASE_PAUSED = 4;
+  AGENT_BUILD_DEPLOYMENT_PHASE_STARTING = 5;
+  AGENT_BUILD_DEPLOYMENT_PHASE_ROLLBACK = 6;
+  AGENT_BUILD_DEPLOYMENT_PHASE_COMPLETE = 7;
+  AGENT_BUILD_DEPLOYMENT_PHASE_FAILED = 8;
+}
+
+// AgentBuildJobBlockerSummary groups incompatible queued and running jobs by
+// their exact immutable handler contract.
+message AgentBuildJobBlockerSummary {
+  string handler_name = 1;
+  int32 handler_version = 2;
+  string input_schema_hash = 3;
+  string output_schema_hash = 4;
+  int64 queued_count = 5;
+  int64 running_count = 6;
 }
 
 // AgentBuildInfo represents a single build or upgrade of an agent.
@@ -317,6 +344,14 @@ message AgentBuildInfo {
   // when it inherits). Empty for rollbacks and for builds that failed before
   // model resolution. Shown in the builds list next to the cost.
   string build_model = 26;
+  AgentBuildDeploymentPhase deployment_phase = 27;
+  // Set while this build owns the agent's job-dispatch pause. The deadline is
+  // exactly two minutes after paused_at and bounds draining active attempts.
+  google.protobuf.Timestamp deployment_paused_at = 28;
+  google.protobuf.Timestamp deployment_drain_deadline = 29;
+  // Authoritative incompatible queued/running job counts. Detail responses
+  // populate these after the candidate manifest has been extracted.
+  repeated AgentBuildJobBlockerSummary job_blockers = 30;
 }
 
 // ConversationInfo represents an agent conversation.
@@ -362,19 +397,18 @@ message WebhookInfo {
   google.protobuf.Timestamp created_at = 8;
 }
 
-// ScheduleInfo represents one synced schedule handler — a recurring cron
-// (kind="cron") or a runtime-armed one-shot handler (kind="schedule") — enriched
-// with the next pending fire time.
+// ScheduleInfo represents one synced cron that materializes typed jobs.
 message ScheduleInfo {
   string id = 1;
   string slug = 2;
-  string schedule = 3;  // cron expression for kind="cron"; empty for "schedule"
+  string schedule = 3;
   string description = 4;
   google.protobuf.Timestamp last_fired_at = 5;
   google.protobuf.Timestamp created_at = 6;
-  string kind = 7;  // "cron" | "schedule"
-  google.protobuf.Timestamp next_fire_at = 8;  // earliest pending fire; null if none armed
+  string handler_name = 7;
+  google.protobuf.Timestamp next_fire_at = 8;
   bool enabled = 9;
+  int32 handler_version = 10;
 }
 
 // RouteInfo represents a code-synced HTTP route registration.
@@ -729,47 +763,88 @@ message A2ASettings {
   bool allow_public_routes = 4;
 }
 
-// ExecEndpointInfo is one row from ListExecEndpoints — the
-// operator-visible projection that strips the secrets-store
-// private-key reference and surfaces only the host-key SHA256
-// fingerprint (not the full blob).
-message ExecEndpointInfo {
-  string id = 1;
-  string slug = 2;
-  string description = 3;
-  string llm_hint = 4;
-  string access = 5;
-  string transport = 6;
-  string host = 7;
-  int32 port = 8;
-  string ssh_user = 9;
-  string public_key_openssh = 10;
-  string public_key_comment = 11;
-  string host_key_fingerprint = 12;
-  google.protobuf.Timestamp host_key_pinned_at = 13;
-  google.protobuf.Timestamp last_used_at = 14;
-}
-
-// ExecEndpointTestResult is the parsed outcome of running `whoami`
-// over the configured SSH transport. ok signals success at the
-// transport+auth+host-key layer; non-zero exit_code with ok=true
-// means the connection worked but the command failed.
-message ExecEndpointTestResult {
-  bool ok = 1;
-  int32 exit_code = 2;
-  int64 duration_ms = 3;
-  string stdout = 4;
-  string stderr = 5;
-  string error = 6;
-}
-
 // SetupCountsInfo aggregates the setup-completeness counters
 // across an agent's connections, MCP servers, and env vars. Used
 // by the agent-card progress bar to flag agents whose operator
 // hasn't finished setup.
 message SetupCountsInfo {
+  reserved 4;
+  reserved "exec_endpoints";
   int32 connections = 1;
   int32 mcp_servers = 2;
   int32 env_vars = 3;
-  int32 exec_endpoints = 4;
+}
+
+// JobHandlerInfo is one immutable background-job contract version declared by
+// an agent runtime.
+message JobHandlerInfo {
+  string agent_id = 1;
+  string name = 2;
+  int32 version = 3;
+  string description = 4;
+  int64 timeout_ms = 5;
+  int32 max_attempts = 6;
+  int32 max_concurrency = 7;
+  google.protobuf.Struct input_schema = 8;
+  google.protobuf.Struct output_schema = 9;
+  string input_schema_hash = 10;
+  string output_schema_hash = 11;
+  bool active = 12;
+  int64 runtime_generation = 13;
+  google.protobuf.Timestamp created_at = 14;
+  google.protobuf.Timestamp updated_at = 15;
+}
+
+// JobInfo is the operator-visible lifecycle of one durable background job.
+message JobProgressInfo {
+  string phase = 1;
+  string message = 2;
+  int64 completed = 3;
+  int64 total = 4;
+  int32 attempt = 5;
+  google.protobuf.Timestamp updated_at = 6;
+}
+
+message JobInfo {
+  string id = 1;
+  string agent_id = 2;
+  string handler_name = 3;
+  int32 handler_version = 4;
+  string source_run_id = 5;
+  string initiator_kind = 6;
+  string initiator_user_id = 7;
+  string initiator_access = 8;
+  string status = 9;
+  int64 timeout_ms = 10;
+  int32 max_attempts = 11;
+  int32 attempt_count = 12;
+  string input_json = 13;
+  string output_json = 14;
+  string last_error = 15;
+  google.protobuf.Timestamp cancel_requested_at = 16;
+  google.protobuf.Timestamp started_at = 17;
+  google.protobuf.Timestamp completed_at = 18;
+  google.protobuf.Timestamp created_at = 19;
+  google.protobuf.Timestamp updated_at = 20;
+  string cron_id = 21;
+  string cron_slug = 22;
+  google.protobuf.Timestamp scheduled_at = 23;
+  int32 attempt_limit = 24;
+  JobProgressInfo progress = 25;
+  int64 state_version = 26;
+  google.protobuf.Timestamp next_attempt_at = 27;
+}
+
+message JobAttemptInfo {
+  string job_id = 1;
+  int32 attempt_number = 2;
+  string status = 3;
+  int64 runtime_generation = 4;
+  string run_id = 5;
+  string error_kind = 6;
+  string error_message = 7;
+  google.protobuf.Timestamp leased_at = 8;
+  google.protobuf.Timestamp started_at = 9;
+  google.protobuf.Timestamp completed_at = 10;
+  google.protobuf.Timestamp lease_expires_at = 11;
 }

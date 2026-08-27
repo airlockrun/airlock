@@ -54,6 +54,7 @@ type BuildService struct {
 	upgradeNotifier       PostUpgradeNotifier
 	upgradeSystemNotifier PostUpgradeSystemNotifier
 	buildSystemNotifier   PostBuildSystemNotifier
+	jobWake               func()
 	logger                *zap.Logger
 
 	mu       sync.Mutex
@@ -146,6 +147,14 @@ func (b *BuildService) SetUpgradeSystemNotifier(n PostUpgradeSystemNotifier) {
 // BuildInput.SystemConversationID (system-agent create path only).
 func (b *BuildService) SetBuildSystemNotifier(n PostBuildSystemNotifier) {
 	b.buildSystemNotifier = n
+}
+
+// SetJobWake wires the local durable-job worker after trigger startup.
+func (b *BuildService) SetJobWake(wake func()) {
+	if wake == nil {
+		panic("builder: job wake is nil")
+	}
+	b.jobWake = wake
 }
 
 // notifyBuildOutcome posts an initial-build result into the originating
@@ -281,7 +290,7 @@ type BuildInput struct {
 // or create the agent row, flip agents.status to building, route
 // failures into agents.status=failed. Synchronous; caller runs in a
 // goroutine.
-func (b *BuildService) Build(_ context.Context, input BuildInput) error {
+func (b *BuildService) Build(_ context.Context, input BuildInput) (err error) {
 	ctx, cancel := b.startBuild(input.AgentID)
 	defer cancel()
 	defer b.finishBuild(input.AgentID)
@@ -294,8 +303,6 @@ func (b *BuildService) Build(_ context.Context, input BuildInput) error {
 	q := dbq.New(b.db.Pool())
 
 	var agent dbq.Agent
-	var err error
-
 	if input.AgentID != "" {
 		agent, err = q.GetAgentByID(ctx, mustParseUUID(input.AgentID))
 		if err != nil {
@@ -323,16 +330,25 @@ func (b *BuildService) Build(_ context.Context, input BuildInput) error {
 		}
 	}
 
-	rows, err := q.StartInitialAgentBuild(ctx, dbq.StartInitialAgentBuildParams{
+	agent, err = q.StartInitialAgentBuild(ctx, dbq.StartInitialAgentBuildParams{
 		ID:                agent.ID,
 		AgentTokenVersion: agent.AgentTokenVersion,
 	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrDeploymentConflict
+	}
 	if err != nil {
 		return fmt.Errorf("start initial build: %w", err)
 	}
-	if rows != 1 {
-		return ErrDeploymentConflict
-	}
+	reservedAgent := agent
+	reservationActive := true
+	defer func() {
+		if err != nil && reservationActive {
+			_, _ = q.FailInitialAgentBuild(context.Background(), dbq.FailInitialAgentBuildParams{
+				ID: reservedAgent.ID, ErrorMessage: err.Error(), AgentTokenVersion: reservedAgent.AgentTokenVersion,
+			})
+		}
+	}()
 
 	// Attach the optional external git remote BEFORE Execute runs, so
 	// Phase C2 (post-merge push) sees it and pushes the scaffold +
@@ -363,11 +379,12 @@ func (b *BuildService) Build(_ context.Context, input BuildInput) error {
 		}); err != nil {
 			return fmt.Errorf("connect agent git: %w", err)
 		}
-		// Re-read so plan.Agent below carries the new fields.
-		agent, err = q.GetAgentByID(ctx, agent.ID)
+		// Re-read so plan.Agent below carries the connected Git fields.
+		reloaded, err := q.GetAgentByID(ctx, agent.ID)
 		if err != nil {
 			return fmt.Errorf("reload agent after git connect: %w", err)
 		}
+		agent = reloaded
 	}
 
 	plan := BuildPlan{
@@ -386,6 +403,7 @@ func (b *BuildService) Build(_ context.Context, input BuildInput) error {
 			BuildModel:      input.BuildModel,
 		},
 	}
+	reservationActive = false
 	summary, err := b.Execute(ctx, plan)
 	if err != nil {
 		errMsg := err.Error()
@@ -616,7 +634,7 @@ func (b *BuildService) runDownToCheck(ctx context.Context, imageTag, dbURL strin
 	args := []string{
 		"run", "--rm",
 		"-e", fmt.Sprintf("AGENT_MIGRATE_DOWN_TO=%d", targetVersion),
-		"-e", "AIRLOCK_DB_URL=" + dbURL,
+		"-e", "AIRLOCK_DB_URL",
 		"-e", "AIRLOCK_AGENT_ID=rollback",
 		"-e", "AIRLOCK_API_URL=http://invalid-not-used-in-down-mode",
 		"-e", "AIRLOCK_AGENT_TOKEN=rollback",
@@ -627,9 +645,38 @@ func (b *BuildService) runDownToCheck(ctx context.Context, imageTag, dbURL strin
 	args = append(args, imageTag)
 
 	cmd := exec.CommandContext(ctx, "docker", args...)
+	cmd.Env = append(os.Environ(), "AIRLOCK_DB_URL="+dbURL)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("down-to %d failed: %w\n%s", targetVersion, err, string(out))
+	}
+	return nil
+}
+
+// runMigrateUp restores the live schema with the current image when a rollback
+// cutover cannot complete after applying down-migrations.
+func (b *BuildService) runMigrateUp(ctx context.Context, imageTag, dbURL string, logLine func(string)) error {
+	if imageTag == "" {
+		return errors.New("no current image to run up-migrations from")
+	}
+	logLine("Restoring current database migrations...")
+	args := []string{
+		"run", "--rm",
+		"-e", "AGENT_MIGRATE_UP_ONLY=1",
+		"-e", "AIRLOCK_DB_URL",
+		"-e", "AIRLOCK_AGENT_ID=rollback-recovery",
+		"-e", "AIRLOCK_API_URL=http://invalid-not-used-in-up-mode",
+		"-e", "AIRLOCK_AGENT_TOKEN=rollback-recovery",
+	}
+	if b.cfg.DockerNetwork != "" {
+		args = append(args, "--network", b.cfg.DockerNetwork)
+	}
+	args = append(args, imageTag)
+	cmd := exec.CommandContext(ctx, "docker", args...)
+	cmd.Env = append(os.Environ(), "AIRLOCK_DB_URL="+dbURL)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("migration restore failed: %w\n%s", err, string(out))
 	}
 	return nil
 }
@@ -648,7 +695,7 @@ func (b *BuildService) validateMigrations(ctx context.Context, imageTag, dbURL s
 	args := []string{
 		"run", "--rm",
 		"-e", "AGENT_VALIDATE_MIGRATIONS=1",
-		"-e", "AIRLOCK_DB_URL=" + dbURL,
+		"-e", "AIRLOCK_DB_URL",
 		"-e", "AIRLOCK_AGENT_ID=validate",
 		"-e", "AIRLOCK_API_URL=http://invalid-not-used-in-validate-mode",
 		"-e", "AIRLOCK_AGENT_TOKEN=validate",
@@ -659,76 +706,12 @@ func (b *BuildService) validateMigrations(ctx context.Context, imageTag, dbURL s
 	args = append(args, imageTag)
 
 	cmd := exec.CommandContext(ctx, "docker", args...)
+	cmd.Env = append(os.Environ(), "AIRLOCK_DB_URL="+dbURL)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("migration validation failed: %w\n%s", err, string(out))
 	}
 	logLine("Migrations validated successfully")
-	return nil
-}
-
-// cloneSchema creates a copy of an agent's schema for safe upgrade testing.
-// roleName is the agent's Postgres role to grant access to the clone.
-func (b *BuildService) cloneSchema(ctx context.Context, sourceSchema, cloneName, roleName string) error {
-	conn, err := b.db.Pool().Acquire(ctx)
-	if err != nil {
-		return fmt.Errorf("acquire conn: %w", err)
-	}
-	defer conn.Release()
-
-	// Create the clone schema
-	if _, err := conn.Exec(ctx, fmt.Sprintf("CREATE SCHEMA %s", cloneName)); err != nil {
-		return fmt.Errorf("create clone schema: %w", err)
-	}
-
-	// Get tables from source schema
-	rows, err := conn.Query(ctx,
-		"SELECT tablename FROM pg_tables WHERE schemaname = $1", sourceSchema)
-	if err != nil {
-		return fmt.Errorf("list tables: %w", err)
-	}
-	defer rows.Close()
-
-	var tables []string
-	for rows.Next() {
-		var t string
-		if err := rows.Scan(&t); err != nil {
-			return fmt.Errorf("scan table: %w", err)
-		}
-		tables = append(tables, t)
-	}
-
-	// Copy each table's structure and data
-	for _, t := range tables {
-		_, err := conn.Exec(ctx, fmt.Sprintf(
-			"CREATE TABLE %s.%s AS TABLE %s.%s",
-			cloneName, t, sourceSchema, t))
-		if err != nil {
-			return fmt.Errorf("clone table %s: %w", t, err)
-		}
-	}
-
-	// Transfer ownership to the agent role.
-	//
-	// GRANT ALL covers SELECT/INSERT/UPDATE/DELETE/TRUNCATE/REFERENCES/TRIGGER
-	// but NOT DROP TABLE — DDL on a table is gated on ownership in Postgres,
-	// not privileges. Without these ALTER OWNER calls the agent's migration
-	// validation (up → down → up) fails on the down step with
-	// "must be owner of table X (42501)" because the cloned tables are
-	// still owned by whoever the airlock pool connected as. Owning the
-	// schema also makes subsequent CREATE TABLE during the migration up
-	// inherit the agent role as owner, so newly-created and cloned tables
-	// are uniformly droppable on the way down.
-	if _, err := conn.Exec(ctx, fmt.Sprintf("ALTER SCHEMA %s OWNER TO %s", cloneName, roleName)); err != nil {
-		return fmt.Errorf("alter schema owner: %w", err)
-	}
-	for _, t := range tables {
-		if _, err := conn.Exec(ctx, fmt.Sprintf(
-			"ALTER TABLE %s.%s OWNER TO %s", cloneName, t, roleName)); err != nil {
-			return fmt.Errorf("alter table owner %s: %w", t, err)
-		}
-	}
-
 	return nil
 }
 
@@ -744,68 +727,139 @@ func (b *BuildService) dropSchemaClone(ctx context.Context, cloneName string) er
 	return err
 }
 
-// RecoverStuckOperations resets any builds or upgrades left in progress
-// after an unclean shutdown. Should be called on startup.
+// RecoverStuckOperations recovers builds whose source lock is not held by a
+// live replica. Active builds are skipped without waiting.
 func (b *BuildService) RecoverStuckOperations(ctx context.Context) error {
 	q := dbq.New(b.db.Pool())
-
-	msg := "interrupted by Airlock restart"
-	if err := q.ResetStuckBuilds(ctx, msg); err != nil {
-		return fmt.Errorf("reset stuck builds: %w", err)
+	builds, err := q.ListBuildingAgentBuilds(ctx)
+	if err != nil {
+		return fmt.Errorf("list building agent builds: %w", err)
 	}
-
-	if err := q.ResetStuckAgentBuilds(ctx); err != nil {
-		return fmt.Errorf("reset stuck agent builds: %w", err)
+	for _, listed := range builds {
+		agentID := uuidString(listed.AgentID)
+		lock, acquired, err := b.TryAcquireSourceLock(ctx, agentID)
+		if err != nil {
+			return fmt.Errorf("try recovery lock for agent %s: %w", agentID, err)
+		}
+		if !acquired {
+			continue
+		}
+		recoverErr := b.recoverAgentBuild(ctx, listed.AgentID, listed.ID)
+		lock.Unlock()
+		if recoverErr != nil {
+			return fmt.Errorf("recover build %s for agent %s: %w", uuidString(listed.ID), agentID, recoverErr)
+		}
 	}
-
-	if err := q.ResetStuckUpgrades(ctx); err != nil {
-		return fmt.Errorf("reset stuck upgrades: %w", err)
-	}
-
-	if err := q.ResetStuckRuns(ctx, msg); err != nil {
-		return fmt.Errorf("reset stuck runs: %w", err)
-	}
-
-	// Drop orphaned upgrade schema clones
-	if err := b.dropOrphanedSchemas(ctx); err != nil {
-		b.logger.Warn("failed to drop orphaned schemas", zap.Error(err))
-	}
-
 	return nil
 }
 
-// dropOrphanedSchemas drops upgrade schema clones left from crashed operations.
-func (b *BuildService) dropOrphanedSchemas(ctx context.Context) error {
-	conn, err := b.db.Pool().Acquire(ctx)
+func (b *BuildService) recoverAgentBuild(ctx context.Context, agentID, buildID pgtype.UUID) error {
+	q := dbq.New(b.db.Pool())
+	build, err := q.GetAgentBuild(ctx, buildID)
 	if err != nil {
-		return err
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		return fmt.Errorf("reload build: %w", err)
 	}
-	defer conn.Release()
+	if build.Status != "building" {
+		return nil
+	}
+	cloneName := schemaCloneName("agent_"+sanitizeUUID(uuidString(agentID)), uuid.UUID(build.ID.Bytes))
+	if err := b.dropSchemaCloneWithTimeout(cloneName); err != nil {
+		return fmt.Errorf("drop interrupted build schema clone: %w", err)
+	}
+	if build.DeploymentPhase == "complete" {
+		if _, err := q.CompleteRecoveredAgentBuild(ctx, dbq.CompleteRecoveredAgentBuildParams{BuildID: buildID, AgentID: agentID}); err != nil {
+			return fmt.Errorf("complete deployed build: %w", err)
+		}
+		return nil
+	}
 
-	rows, err := conn.Query(ctx,
-		"SELECT schema_name FROM information_schema.schemata WHERE schema_name LIKE 'agent_%_upgrade_%'")
+	agent, err := q.GetAgentByID(ctx, agentID)
 	if err != nil {
-		return err
+		return fmt.Errorf("reload agent: %w", err)
 	}
-	defer rows.Close()
-
-	var schemas []string
-	for rows.Next() {
-		var s string
-		if err := rows.Scan(&s); err != nil {
-			return err
+	if !agent.JobDispatchPausedBuildID.Valid && build.DeploymentPhase == "starting" && agent.Status == "stopped" {
+		runtimeLock, err := b.db.AcquireAdvisoryLock(ctx, "agent-runtime:"+uuidString(agent.ID))
+		if err != nil {
+			return fmt.Errorf("lock stopped agent runtime for recovery: %w", err)
 		}
-		schemas = append(schemas, s)
+		defer runtimeLock.Unlock()
+		if build.Type == string(BuildKindRollback) {
+			password, err := b.encryptor.Get(ctx, "agent/"+uuidString(agent.ID)+"/db_password", agent.DbPassword)
+			if err != nil {
+				return fmt.Errorf("decrypt stopped rollback database password: %w", err)
+			}
+			schema := "agent_" + sanitizeUUID(uuidString(agent.ID))
+			logLine := func(line string) {
+				b.logger.Info("recover stopped rollback", zap.String("agent", uuidString(agent.ID)), zap.String("message", line))
+			}
+			if err := b.runMigrateUp(ctx, agent.ImageRef, b.agentDBURL(schema, password, schema), logLine); err != nil {
+				return fmt.Errorf("restore stopped rollback migrations: %w", err)
+			}
+		}
+		rows, err := q.UpdateAgentBuildDeploymentPhase(ctx, dbq.UpdateAgentBuildDeploymentPhaseParams{
+			DeploymentPhase: "failed", BuildID: build.ID, AgentID: agent.ID, DeploymentToken: build.DeploymentToken,
+		})
+		if err != nil || rows != 1 {
+			if err == nil {
+				err = ErrDeploymentConflict
+			}
+			return fmt.Errorf("fail recovered stopped deployment: %w", err)
+		}
 	}
-
-	for _, s := range schemas {
-		b.logger.Info("dropping orphaned schema", zap.String("schema", s))
-		if _, err := conn.Exec(ctx, fmt.Sprintf("DROP SCHEMA %s CASCADE", s)); err != nil {
-			b.logger.Warn("failed to drop orphaned schema", zap.String("schema", s), zap.Error(err))
+	if agent.JobDispatchPausedBuildID.Valid && agent.JobDispatchPausedBuildID.Bytes == build.ID.Bytes {
+		switch build.DeploymentPhase {
+		case "paused", "starting", "rollback":
+			if agent.Status == "building" && agent.ImageRef != "" && build.Type != string(BuildKindBuild) {
+				agent.Status = "failed"
+			}
+			password, err := b.encryptor.Get(ctx, "agent/"+uuidString(agent.ID)+"/db_password", agent.DbPassword)
+			if err != nil {
+				return fmt.Errorf("decrypt agent database password: %w", err)
+			}
+			schema := "agent_" + sanitizeUUID(uuidString(agent.ID))
+			runtimeLock, err := b.db.AcquireAdvisoryLock(ctx, "agent-runtime:"+uuidString(agent.ID))
+			if err != nil {
+				return fmt.Errorf("lock agent runtime for recovery: %w", err)
+			}
+			if err := b.rollbackPausedDeployment(agent, build.ID, build.DeploymentToken, b.agentDBURL(schema, password, schema)); err != nil {
+				runtimeLock.Unlock()
+				return fmt.Errorf("roll back paused deployment: %w", err)
+			}
+			runtimeLock.Unlock()
 		}
 	}
 
-	return nil
+	const message = "interrupted by Airlock restart"
+	tx, err := b.db.Pool().Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin recovery: %w", err)
+	}
+	defer tx.Rollback(context.Background())
+	qtx := dbq.New(tx)
+	if _, err := qtx.GetAgentByIDForUpdate(ctx, agentID); err != nil {
+		return fmt.Errorf("lock recovered agent: %w", err)
+	}
+	if _, err := qtx.GetAgentBuildForDeployment(ctx, dbq.GetAgentBuildForDeploymentParams{BuildID: buildID, AgentID: agentID}); err != nil {
+		return fmt.Errorf("lock recovered build: %w", err)
+	}
+	rows, err := qtx.FailRecoveredAgentBuild(ctx, dbq.FailRecoveredAgentBuildParams{
+		ErrorMessage: message, BuildID: buildID, AgentID: agentID,
+	})
+	if err != nil {
+		return fmt.Errorf("fail interrupted build: %w", err)
+	}
+	if rows == 0 {
+		return tx.Commit(ctx)
+	}
+	if _, err := qtx.FailRecoveredAgentLifecycle(ctx, dbq.FailRecoveredAgentLifecycleParams{
+		ErrorMessage: message, AgentID: agentID, BuildID: buildID,
+	}); err != nil {
+		return fmt.Errorf("fail interrupted lifecycle: %w", err)
+	}
+	return tx.Commit(ctx)
 }
 
 // mustParseUUID converts a string to pgtype.UUID, panicking on failure.

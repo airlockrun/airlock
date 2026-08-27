@@ -69,11 +69,6 @@ SELECT kind, row_key, field, ref::text AS ref, stored FROM (
            'git_credential/' || id::text || '/token', token_ref
     FROM git_credentials
     UNION ALL
-    SELECT 'exec', id::text, 'private_key_ref',
-           'exec/' || id::text || '/private_key', private_key_ref
-    FROM agent_exec_endpoints
-    WHERE private_key_ref IS NOT NULL
-    UNION ALL
     SELECT 'oauth_state', state, 'code_verifier',
            'oauth_state/' || state || '/code_verifier', code_verifier
     FROM oauth_states
@@ -220,25 +215,6 @@ type RewrapEnvVarSecretParams struct {
 
 func (q *Queries) RewrapEnvVarSecret(ctx context.Context, arg RewrapEnvVarSecretParams) (int64, error) {
 	result, err := q.db.Exec(ctx, rewrapEnvVarSecret, arg.NewStored, arg.RowKey, arg.OldStored)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
-const rewrapExecSecret = `-- name: RewrapExecSecret :execrows
-UPDATE agent_exec_endpoints SET private_key_ref = $1
-WHERE id::text = $2 AND private_key_ref = $3
-`
-
-type RewrapExecSecretParams struct {
-	NewStored pgtype.Text `json:"new_stored"`
-	RowKey    pgtype.UUID `json:"row_key"`
-	OldStored pgtype.Text `json:"old_stored"`
-}
-
-func (q *Queries) RewrapExecSecret(ctx context.Context, arg RewrapExecSecretParams) (int64, error) {
-	result, err := q.db.Exec(ctx, rewrapExecSecret, arg.NewStored, arg.RowKey, arg.OldStored)
 	if err != nil {
 		return 0, err
 	}

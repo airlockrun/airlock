@@ -1,5 +1,5 @@
 // Package integrations provides authenticated development-time access to an
-// agent's bound connections, exec endpoints, and MCP servers.
+// agent's bound connections and MCP servers.
 package integrations
 
 import (
@@ -13,11 +13,10 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-// Backend executes already-authorized operations through Airlock's existing
-// credential and SSH brokers.
+// Backend executes already-authorized operations through Airlock's credential
+// brokers.
 type Backend interface {
 	RequestConnection(context.Context, uuid.UUID, string, wire.ProxyRequest) (ConnectionResult, error)
-	RunExec(context.Context, uuid.UUID, string, wire.ExecRequest) (ExecResult, error)
 	ListMCPTools(context.Context, uuid.UUID, string) (MCPTools, error)
 	CallMCPTool(context.Context, uuid.UUID, string, wire.MCPToolCallRequest) (wire.MCPToolCallResponse, error)
 }
@@ -50,13 +49,6 @@ type ConnectionResult struct {
 	Body       []byte
 }
 
-type ExecResult struct {
-	Stdout     []byte
-	Stderr     []byte
-	ExitCode   int
-	DurationMs int64
-}
-
 type MCPTools struct {
 	Tools        []wire.MCPToolSchema
 	Instructions string
@@ -76,22 +68,13 @@ func (s *Service) List(ctx context.Context, p authz.Principal, agentID uuid.UUID
 	if err != nil {
 		return nil, err
 	}
-	execEndpoints, err := q.ListExecNeedsByAgent(ctx, pgAgentID)
-	if err != nil {
-		return nil, err
-	}
-
-	out := make([]Info, 0, len(connections)+len(mcpServers)+len(execEndpoints))
+	out := make([]Info, 0, len(connections)+len(mcpServers))
 	for _, c := range connections {
 		out = append(out, Info{Type: "connection", Slug: c.Slug, Description: c.Description, Configured: c.Bound && c.Authorized})
 	}
 	for _, m := range mcpServers {
 		configured := m.Bound && (m.AuthMode == string(wire.MCPAuthNone) || m.Authorized)
 		out = append(out, Info{Type: "mcp_server", Slug: m.Slug, Description: m.Name, Configured: configured})
-	}
-	for _, e := range execEndpoints {
-		configured := e.Bound && e.Host.Valid && e.SshUser.Valid && e.PublicKeyOpenssh.Valid
-		out = append(out, Info{Type: "exec_endpoint", Slug: e.Slug, Description: e.Description, Configured: configured})
 	}
 	return out, nil
 }
@@ -101,13 +84,6 @@ func (s *Service) RequestConnection(ctx context.Context, p authz.Principal, agen
 		return ConnectionResult{}, err
 	}
 	return s.backend.RequestConnection(ctx, agentID, slug, req)
-}
-
-func (s *Service) RunExec(ctx context.Context, p authz.Principal, agentID uuid.UUID, slug string, req wire.ExecRequest) (ExecResult, error) {
-	if err := s.authorize(ctx, p, agentID); err != nil {
-		return ExecResult{}, err
-	}
-	return s.backend.RunExec(ctx, agentID, slug, req)
 }
 
 func (s *Service) ListMCPTools(ctx context.Context, p authz.Principal, agentID uuid.UUID, slug string) (MCPTools, error) {

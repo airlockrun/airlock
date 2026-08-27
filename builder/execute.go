@@ -2,8 +2,6 @@ package builder
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -12,9 +10,9 @@ import (
 
 	"github.com/airlockrun/agentsdk"
 	"github.com/airlockrun/agentsdk/scaffold"
-	"github.com/airlockrun/airlock/auth"
-	"github.com/airlockrun/airlock/container"
+	"github.com/airlockrun/agentsdk/wire"
 	"github.com/airlockrun/airlock/db/dbq"
+	jobssvc "github.com/airlockrun/airlock/service/jobs"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"
@@ -41,11 +39,6 @@ type buildPublisher struct {
 // after this build observed its state. The caller must leave the live lifecycle
 // status untouched.
 var ErrDeploymentConflict = errors.New("agent deployment cancelled by a concurrent lifecycle change")
-
-type deploymentQueries interface {
-	IncrementAgentTokenVersion(context.Context, pgtype.UUID) (int64, error)
-	FinalizeAgentDeployment(context.Context, dbq.FinalizeAgentDeploymentParams) (int64, error)
-}
 
 // deploymentAttemptError carries the token version reserved by Phase F so an
 // initial build can mark itself failed without racing a later Stop rotation.
@@ -98,9 +91,6 @@ func (b *BuildService) Execute(ctx context.Context, plan BuildPlan) (string, err
 	agent := plan.Agent
 	agentID := uuidString(agent.ID)
 	agentUUID := uuid.UUID(agent.ID.Bytes)
-	if agent.GitMode == "read_only" && plan.Instruction != "" {
-		return "", errors.New("agent uses read-only Git; push source changes to the connected repository")
-	}
 
 	// Capacity is local to this build-worker replica. Acquire it before any
 	// database connection or source lock so queued builds consume no shared
@@ -120,6 +110,14 @@ func (b *BuildService) Execute(ctx context.Context, plan BuildPlan) (string, err
 		return "", err
 	}
 	defer sourceLock.Unlock()
+	agent, err = q.GetAgentByID(ctx, agent.ID)
+	if err != nil {
+		return "", fmt.Errorf("reload agent under source lock: %w", err)
+	}
+	plan.Agent = agent
+	if agent.GitMode == "read_only" && plan.Instruction != "" {
+		return "", errors.New("agent uses read-only Git; push source changes to the connected repository")
+	}
 
 	// Unwind any half-finished git state from a prior build that was
 	// killed mid-operation (e.g. agent-builder container stopped between
@@ -130,6 +128,17 @@ func (b *BuildService) Execute(ctx context.Context, plan BuildPlan) (string, err
 	} else if recovered {
 		b.logger.Warn("recovered half-finished git state in agent repo",
 			zap.String("agent_id", agentID), zap.String("repo", repoPath))
+	}
+
+	var synchronizedSourceRef string
+	if shouldPullGitSource(agent, plan) {
+		synchronizedSourceRef, err = b.pullAgentRepoLocked(ctx, agent)
+		if err != nil {
+			return "", fmt.Errorf("refresh Git source: %w", err)
+		}
+		if plan.Kind == BuildKindBuild {
+			plan.SkipScaffold = true
+		}
 	}
 
 	// Dev: generate the local lib proxy once for this build — shared by
@@ -198,6 +207,8 @@ func (b *BuildService) Execute(ctx context.Context, plan BuildPlan) (string, err
 	if err != nil {
 		return "", fmt.Errorf("create build record: %w", err)
 	}
+	ctx, stopBuildCancellation := b.contextWithBuildCancellation(ctx, agent.ID, build.ID)
+	defer stopBuildCancellation()
 	buildUUID := uuid.UUID(build.ID.Bytes)
 	b.events.PublishBuildEvent(ctx, agentUUID, buildUUID, "started", "", "codegen", 0, 0)
 
@@ -222,11 +233,18 @@ func (b *BuildService) Execute(ctx context.Context, plan BuildPlan) (string, err
 		b.events.PublishBuildLogLine(ctx, agentUUID, buildUUID, seq, "docker", line)
 	}
 	logLine := solLog
+	if synchronizedSourceRef != "" {
+		branch := agent.GitDefaultBranch
+		if branch == "" {
+			branch = "main"
+		}
+		logLine(fmt.Sprintf("Pulled Git branch %s at %s.", branch, synchronizedSourceRef[:min(12, len(synchronizedSourceRef))]))
+	}
 
 	// Make an imported-from-git build legible: the repo was cloned in before the
 	// build (in the service, not this log), so without this the only git line
 	// would be the misleading "Pushing to..." below.
-	if plan.SkipScaffold && agent.GitRemoteUrl != "" {
+	if plan.SkipScaffold && agent.GitRemoteUrl != "" && agent.GitMode != "read_only" {
 		logLine(fmt.Sprintf("Imported existing code from %s (scaffold skipped).", agent.GitRemoteUrl))
 	}
 
@@ -330,22 +348,19 @@ func (b *BuildService) Execute(ctx context.Context, plan BuildPlan) (string, err
 
 	// ── Schema clone for codegen test DB + later validation ────────────
 	//
-	// Naming mirrors what the per-flow code used to pick. The build flow
-	// produces an empty schema (just-provisioned source); upgrade and
-	// rollback clone the live schema (which is at HEAD).
-	var cloneName string
-	switch plan.Kind {
-	case BuildKindBuild:
-		cloneName = fmt.Sprintf("agent_%s_test_%s", sanitizeUUID(agentID), randHex4())
-	case BuildKindUpgrade, BuildKindRollback:
-		cloneName = fmt.Sprintf("agent_%s_upgrade_%s", sanitizeUUID(agentID), sanitizeUUID(plan.RunID))
-	}
-	if err := b.cloneSchema(ctx, schemaName, cloneName, schemaName); err != nil {
+	// Initial builds clone their freshly provisioned empty schema. Upgrades and
+	// rollbacks clone the populated live schema at its current migration head.
+	cloneName := schemaCloneName(schemaName, buildUUID)
+	if err := b.cloneSchema(ctx, schemaName, cloneName, schemaName, dbPassword); err != nil {
 		failInfra(err, "", "")
 		return "", fmt.Errorf("clone schema: %w", err)
 	}
+	cloneCreated := true
 	defer func() {
-		if err := b.dropSchemaClone(context.Background(), cloneName); err != nil {
+		if !cloneCreated {
+			return
+		}
+		if err := b.dropSchemaCloneWithTimeout(cloneName); err != nil {
 			b.logger.Warn("failed to drop clone schema", zap.Error(err))
 		}
 	}()
@@ -423,9 +438,19 @@ func (b *BuildService) Execute(ctx context.Context, plan BuildPlan) (string, err
 		} else {
 			logLine(fmt.Sprintf("Pushing to %s...", agent.GitRemoteUrl))
 		}
-		pushErr := b.pushAgentRepo(ctx, agent, plan.RunID)
+		var pushErr error
+		if plan.Kind == BuildKindRollback {
+			pushErr = b.pushAgentRollback(ctx, agent)
+		} else {
+			pushErr = b.pushAgentRepo(ctx, agent, plan.RunID)
+		}
 		switch {
 		case pushErr == nil:
+			commitHash, err = gitOutput(repoPath, "rev-parse", "HEAD")
+			if err != nil {
+				failInfra(err, commitHash, "")
+				return "", fmt.Errorf("rev-parse pushed HEAD: %w", err)
+			}
 			if uerr := q.UpdateAgentGitLastSyncedRef(ctx, dbq.UpdateAgentGitLastSyncedRefParams{
 				ID:               agent.ID,
 				GitLastSyncedRef: commitHash,
@@ -511,6 +536,8 @@ func (b *BuildService) Execute(ctx context.Context, plan BuildPlan) (string, err
 	// migrations being reversed) can goose-down-to the target version.
 	// Same pre-flight envelope (run a one-shot container against a fresh
 	// schema clone), different env var.
+	var prepareCutover func(context.Context) error
+	var compensateCutover func(context.Context) error
 	if plan.Kind == BuildKindRollback {
 		targetVersion, vErr := MigrationVersionAt(repoPath, plan.StartCommit)
 		if vErr != nil {
@@ -522,9 +549,14 @@ func (b *BuildService) Execute(ctx context.Context, plan BuildPlan) (string, err
 			return "", fmt.Errorf("rollback pre-flight: %w", err)
 		}
 		liveDBURL := b.agentDBURL(schemaName, dbPassword, schemaName)
-		if err := b.runDownToCheck(ctx, agent.ImageRef, liveDBURL, targetVersion, logLine); err != nil {
-			failCode(err.Error(), commitHash, imageTag)
-			return "", fmt.Errorf("rollback apply: %w", err)
+		prepareCutover = func(cutoverCtx context.Context) error {
+			if err := b.runDownToCheck(cutoverCtx, agent.ImageRef, liveDBURL, targetVersion, logLine); err != nil {
+				return fmt.Errorf("rollback apply: %w", err)
+			}
+			return nil
+		}
+		compensateCutover = func(cutoverCtx context.Context) error {
+			return b.runMigrateUp(cutoverCtx, agent.ImageRef, liveDBURL, logLine)
 		}
 	} else {
 		if err := b.validateMigrations(ctx, imageTag, testDBURL, logLine); err != nil {
@@ -532,10 +564,41 @@ func (b *BuildService) Execute(ctx context.Context, plan BuildPlan) (string, err
 			return "", fmt.Errorf("migration validation: %w", err)
 		}
 	}
+	if err := b.dropSchemaCloneWithTimeout(cloneName); err != nil {
+		failInfra(err, commitHash, imageTag)
+		return "", fmt.Errorf("drop migration schema clone: %w", err)
+	}
+	cloneCreated = false
 
 	if ctx.Err() != nil {
 		completeBuild("cancelled", "cancelled by user", "", commitHash, imageTag)
 		return "", ctx.Err()
+	}
+
+	// Candidate declarations are extracted without runtime credentials before
+	// any live dispatch state changes. Job declarations are projected into the
+	// existing normalized contract used for deployment and startup sync.
+	manifestCtx, cancelManifest := context.WithTimeout(ctx, 30*time.Second)
+	manifestBytes, err := b.containers.InspectManifest(manifestCtx, imageTag)
+	cancelManifest()
+	if err != nil {
+		failInfra(fmt.Errorf("inspect candidate manifest: %w", err), commitHash, imageTag)
+		return "", fmt.Errorf("inspect candidate manifest: %w", err)
+	}
+	manifest, err := decodeAgentManifest(manifestBytes)
+	if err != nil {
+		failCode("invalid candidate manifest: "+err.Error(), commitHash, imageTag)
+		return "", fmt.Errorf("decode candidate manifest: %w", err)
+	}
+	jobManifest := wire.JobManifest{JobHandlers: manifest.JobHandlers, JobCrons: manifest.JobCrons}
+	normalizedManifest, manifestDigest, err := jobssvc.NormalizeJobManifest(jobManifest)
+	if err != nil {
+		failCode(err.Error(), commitHash, imageTag)
+		return "", err
+	}
+	if err := b.persistCandidateJobManifest(ctx, build.ID, agent.ID, commitHash, imageTag, normalizedManifest, manifestDigest); err != nil {
+		failCode(err.Error(), commitHash, imageTag)
+		return "", err
 	}
 
 	// ── Phase F: swap the container ────────────────────────────────────
@@ -549,8 +612,10 @@ func (b *BuildService) Execute(ctx context.Context, plan BuildPlan) (string, err
 	publishPhase("deploy")
 	logLine("Deploying agent image...")
 	agentDBURL := b.agentDBURL(schemaName, dbPassword, schemaName)
-	if err := b.deployAgent(ctx, q, plan, agentDBURL, commitHash, imageTag); err != nil {
-		if errors.Is(err, ErrDeploymentConflict) {
+	if err := b.deployCandidate(ctx, plan, build.ID, agentDBURL, commitHash, imageTag, exitStatus, exitMessage, prepareCutover, compensateCutover); err != nil {
+		if errors.Is(err, context.Canceled) {
+			completeBuild("cancelled", "cancelled by user", "", commitHash, imageTag)
+		} else if errors.Is(err, ErrDeploymentConflict) {
 			completeBuild("cancelled", err.Error(), "", commitHash, imageTag)
 		} else {
 			failInfra(err, commitHash, imageTag)
@@ -567,94 +632,14 @@ func (b *BuildService) Execute(ctx context.Context, plan BuildPlan) (string, err
 	return exitMessage, nil
 }
 
-func (b *BuildService) deployAgent(ctx context.Context, q deploymentQueries, plan BuildPlan, agentDBURL, sourceRef, imageRef string) error {
-	agent := plan.Agent
-	agentID := uuidString(agent.ID)
-	agentUUID := uuid.UUID(agent.ID.Bytes)
-	expectedStatus := agent.Status
-	nextStatus := agent.Status
-	startContainer := true
-
-	switch plan.Kind {
-	case BuildKindBuild:
-		expectedStatus = "building"
-		nextStatus = "active"
-	case BuildKindUpgrade, BuildKindRollback:
-		switch agent.Status {
-		case "active":
-		case "failed":
-			nextStatus = "active"
-		case "stopped":
-			startContainer = false
-		default:
-			return fmt.Errorf("%w: cannot deploy %s agent from status %q", ErrDeploymentConflict, plan.Kind, agent.Status)
-		}
-	default:
-		return fmt.Errorf("unknown build kind %q", plan.Kind)
+func shouldPullGitSource(agent dbq.Agent, plan BuildPlan) bool {
+	if agent.GitRemoteUrl == "" {
+		return false
 	}
-
-	unlockSwap := b.containers.LockSwap(agentUUID)
-	defer unlockSwap()
-
-	tokenVersion, err := q.IncrementAgentTokenVersion(ctx, agent.ID)
-	if err != nil {
-		return fmt.Errorf("rotate agent token: %w", err)
+	if agent.GitMode == "read_only" {
+		return plan.Kind != BuildKindRollback
 	}
-	attemptErr := func(err error) error {
-		return &deploymentAttemptError{err: err, tokenVersion: tokenVersion}
-	}
-
-	if startContainer {
-		if agent.ImageRef != "" {
-			_ = b.containers.StopAgent(ctx, agentUUID)
-		}
-		agentToken, err := auth.IssueAgentToken(b.cfg.JWTSecret, agentUUID, tokenVersion)
-		if err != nil {
-			return attemptErr(fmt.Errorf("issue agent token: %w", err))
-		}
-		if _, err := b.containers.StartAgent(ctx, container.AgentOpts{
-			AgentID: agentUUID,
-			Image:   imageRef,
-			Token:   agentToken,
-			Env: map[string]string{
-				"AIRLOCK_AGENT_ID": agentID,
-				"AIRLOCK_API_URL":  b.cfg.APIURLAgent,
-				"AIRLOCK_DB_URL":   agentDBURL,
-			},
-		}); err != nil {
-			return attemptErr(fmt.Errorf("start agent: %w", err))
-		}
-	}
-
-	rows, err := q.FinalizeAgentDeployment(ctx, dbq.FinalizeAgentDeploymentParams{
-		ID:                agent.ID,
-		SourceRef:         sourceRef,
-		ImageRef:          imageRef,
-		NextStatus:        nextStatus,
-		AgentTokenVersion: tokenVersion,
-		ExpectedStatus:    expectedStatus,
-	})
-	if err == nil && rows == 1 {
-		return nil
-	}
-
-	var stopErr error
-	if startContainer {
-		stopCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		stopErr = b.containers.StopAgent(stopCtx, agentUUID)
-	}
-	if err != nil {
-		if stopErr != nil {
-			err = errors.Join(err, fmt.Errorf("stop rejected deployment: %w", stopErr))
-		}
-		return attemptErr(fmt.Errorf("finalize agent deployment: %w", err))
-	}
-	conflictErr := error(ErrDeploymentConflict)
-	if stopErr != nil {
-		conflictErr = errors.Join(conflictErr, fmt.Errorf("stop rejected deployment: %w", stopErr))
-	}
-	return attemptErr(conflictErr)
+	return plan.Kind == BuildKindUpgrade && plan.Reason != "source_deploy"
 }
 
 // prepareNewAgent runs the build-only setup: initialize the per-agent
@@ -738,15 +723,6 @@ func (b *BuildService) prepareNewAgent(ctx context.Context, q *dbq.Queries, agen
 		return "", "", fmt.Errorf("provision agent db: %w", err)
 	}
 	return pw, schemaName, nil
-}
-
-// randHex4 returns 8 hex chars of entropy — used to disambiguate the
-// build-time schema clone name when multiple builds for the same agent
-// race (rare but possible during retries).
-func randHex4() string {
-	b := make([]byte, 4)
-	_, _ = rand.Read(b)
-	return hex.EncodeToString(b)
 }
 
 func min(a, b int) int {

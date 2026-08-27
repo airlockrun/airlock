@@ -15,7 +15,7 @@ import {
 import type { AgentGitConfig } from '@/gen/airlock/v1/types_pb'
 
 const props = defineProps<{ agentId: string; agentSlug: string }>()
-const emit = defineEmits<{ populated: [count: number] }>()
+const emit = defineEmits<{ populated: [count: number]; mutated: [gitMode: string] }>()
 
 const credsStore = useGitCredentialsStore()
 const confirm = useConfirm()
@@ -75,6 +75,7 @@ async function connect() {
       toJson(ConnectAgentGitRequestSchema, req),
     )
     cfg.value = fromJson(ConnectAgentGitResponseSchema, data).config ?? null
+    emit('mutated', cfg.value?.gitMode ?? '')
     toast.add({ severity: 'success', summary: 'Remote connected', life: 4000 })
     dialogVisible.value = false
   } catch (err: any) {
@@ -102,6 +103,7 @@ function disconnect() {
       try {
         await api.post(`/api/v1/agents/${props.agentId}/git/disconnect`)
         await reload()
+        emit('mutated', '')
         toast.add({ severity: 'info', summary: 'Remote disconnected', life: 3000 })
       } catch (err: any) {
         toast.add({

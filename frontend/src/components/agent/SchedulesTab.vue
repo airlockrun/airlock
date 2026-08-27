@@ -1,54 +1,46 @@
 <script setup lang="ts">
 import { ref, onMounted, watch } from 'vue'
+import { fromJson } from '@bufbuild/protobuf'
+import { timestampDate } from '@bufbuild/protobuf/wkt'
+import type { Timestamp } from '@bufbuild/protobuf/wkt'
+import { useRouter } from 'vue-router'
 import api from '@/api/client'
 import { useToast } from 'primevue/usetoast'
-
-interface Schedule {
-  slug: string
-  kind: string
-  description: string
-  schedule: string
-  lastFiredAt: string
-  nextFireAt: string
-}
+import type { ScheduleInfo } from '@/gen/airlock/v1/types_pb'
+import { FireScheduleResponseSchema, ListSchedulesResponseSchema } from '@/gen/airlock/v1/api_pb'
 
 const props = defineProps<{ agentId: string }>()
 const emit = defineEmits<{ populated: [count: number] }>()
 const toast = useToast()
+const router = useRouter()
 
-const schedules = ref<Schedule[]>([])
+const schedules = ref<ScheduleInfo[]>([])
 watch(schedules, (v) => emit('populated', v.length), { immediate: true })
 const loading = ref(true)
+const firing = ref<string | null>(null)
 
-function mapSchedule(raw: Record<string, any>): Schedule {
-  return {
-    slug: raw.slug ?? '',
-    kind: raw.kind ?? '',
-    description: raw.description ?? '',
-    schedule: raw.schedule ?? '',
-    lastFiredAt: raw.lastFiredAt ?? raw.last_fired_at ?? '',
-    nextFireAt: raw.nextFireAt ?? raw.next_fire_at ?? '',
-  }
+function formatTimestamp(ts?: Timestamp): string {
+  return ts ? timestampDate(ts).toLocaleString() : '-'
 }
 
-function formatTimestamp(ts: string): string {
-  if (!ts) return '-'
-  return new Date(ts).toLocaleString()
-}
-
-async function fireNow(s: Schedule) {
+async function fireNow(s: ScheduleInfo) {
+  firing.value = s.slug
   try {
-    await api.post(`/api/v1/agents/${props.agentId}/schedules/${s.slug}/fire`)
-    toast.add({ severity: 'success', summary: 'Queued', detail: `Cron "${s.slug}" was queued for delivery.`, life: 3000 })
+    const { data } = await api.post(`/api/v1/agents/${props.agentId}/schedules/${s.slug}/fire`)
+    const response = fromJson(FireScheduleResponseSchema, data)
+    toast.add({ severity: 'success', summary: 'Job queued', detail: `Cron "${s.slug}" created a background job.`, life: 3000 })
+    await router.push({ name: 'job-detail', params: { id: props.agentId, jobId: response.jobId } })
   } catch {
     toast.add({ severity: 'error', summary: 'Error', detail: `Failed to fire schedule "${s.slug}".`, life: 5000 })
+  } finally {
+    firing.value = null
   }
 }
 
 onMounted(async () => {
   try {
     const { data } = await api.get(`/api/v1/agents/${props.agentId}/schedules`)
-    schedules.value = (data.schedules || []).map(mapSchedule)
+    schedules.value = fromJson(ListSchedulesResponseSchema, data).schedules
   } finally {
     loading.value = false
   }
@@ -64,12 +56,12 @@ onMounted(async () => {
         </div>
       </template>
       <Column field="slug" header="Slug" />
-      <Column header="Kind">
+      <Column field="description" header="Description" />
+      <Column header="Job">
         <template #body="{ data: s }">
-          <Tag :value="s.kind" :severity="s.kind === 'cron' ? 'info' : 'secondary'" />
+          <code>{{ s.handlerName }}@v{{ s.handlerVersion }}</code>
         </template>
       </Column>
-      <Column field="description" header="Description" />
       <Column header="Schedule">
         <template #body="{ data: s }">
           {{ s.schedule || '-' }}
@@ -87,7 +79,7 @@ onMounted(async () => {
       </Column>
       <Column header="Fire Now">
         <template #body="{ data: s }">
-          <Button v-if="s.kind === 'cron'" label="Fire Now" size="small" severity="warn" outlined @click="fireNow(s)" />
+          <Button label="Fire Now" size="small" severity="warn" outlined :disabled="!s.enabled" :loading="firing === s.slug" @click="fireNow(s)" />
         </template>
       </Column>
     </DataTable>
@@ -96,8 +88,8 @@ onMounted(async () => {
       <Column header="Slug">
         <template #body><Skeleton /></template>
       </Column>
-      <Column header="Kind">
-        <template #body><Skeleton width="3rem" /></template>
+      <Column header="Job">
+        <template #body><Skeleton width="8rem" /></template>
       </Column>
       <Column header="Schedule">
         <template #body><Skeleton /></template>

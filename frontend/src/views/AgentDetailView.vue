@@ -14,7 +14,6 @@ import { useAgentStatus } from '@/composables/useAgentStatus'
 import type { AgentInfo, SetupCountsInfo } from '@/gen/airlock/v1/types_pb'
 import { ConnectionSetupStatusResponseSchema, GetAgentDetailResponseSchema } from '@/gen/airlock/v1/api_pb'
 import ConnectionsTab from '@/components/agent/ConnectionsTab.vue'
-import ExecEndpointsTab from '@/components/agent/ExecEndpointsTab.vue'
 import WebhooksTab from '@/components/agent/WebhooksTab.vue'
 import SchedulesTab from '@/components/agent/SchedulesTab.vue'
 import RoutesTab from '@/components/agent/RoutesTab.vue'
@@ -27,10 +26,12 @@ import AccessTab from '@/components/agent/AccessTab.vue'
 import ModelsTab from '@/components/agent/ModelsTab.vue'
 import RunsTab from '@/components/agent/RunsTab.vue'
 import BuildsTab from '@/components/agent/BuildsTab.vue'
+import JobsTab from '@/components/agent/JobsTab.vue'
 import SourceTab from '@/components/agent/SourceTab.vue'
 import SectionCard from '@/components/agent/SectionCard.vue'
 import { useBuildsStore } from '@/stores/builds'
 import { buildBadgeText } from '@/utils/buildBadge'
+import { applyAgentBuildEvent } from '@/utils/agentBuildLifecycle'
 import { markRaw } from 'vue'
 import { oauthCallbackNotice, setupSummary } from '@/utils/resources'
 
@@ -200,6 +201,7 @@ function saveTransfer() {
 
 const agentId = route.params.id as string
 const agent = ref<AgentInfo | null>(null)
+const isReadOnlyGit = computed(() => agent.value?.gitMode === 'read_only')
 const loading = ref(true)
 const activeBuildId = ref<string | undefined>(undefined)
 // External URL of the agent's web homepage (GET "/"), or null when it has none.
@@ -212,13 +214,13 @@ const buildBadgeLabel = computed(() => buildBadgeText(buildPhase.value, buildTas
 // Per-section item counts emitted by each *Tab component via @populated.
 // Sections (and their right-rail entries) only render when count > 0, so the
 // page shows just what's actually relevant to this agent. Activity below is
-// driven by the runs + builds counts together.
+// driven by the runs + builds + jobs counts together.
 const counts = ref<Record<string, number>>({})
 function onPopulated(id: string, n: number) {
   counts.value[id] = n
 }
 
-// Inner tab inside the Activity section: 0 = Runs, 1 = Builds.
+// Inner tab inside the Activity section: 0 = Runs, 1 = Builds, 2 = Jobs.
 const activityTab = ref(0)
 
 // Active section in the scroll viewport — drives the highlight in the
@@ -250,17 +252,14 @@ watch(activeSectionId, (id) => {
 
 // Configuration sections rendered inline inside the Configure tab, in the
 // order users typically walk through them: integrations → triggers →
-// sharing → source → registered surfaces. Exec Endpoints defaults collapsed
-// because its content (host/keys/pinning) is vertically heavy and most
-// agents have at most one. needsSetupKey ties a section to the field on
-// setupStatus that flags an unconfigured slot (see badgeFor below).
+// sharing → source → registered surfaces. needsSetupKey ties a section to the
+// field on setupStatus that flags an unconfigured slot (see badgeFor below).
 // markRaw skips deep reactivity on the component refs — they're constants.
 const configSections = [
   { id: 'members',        label: 'Members',        component: markRaw(MembersTab) },
   { id: 'connections',    label: 'Connections',    component: markRaw(ConnectionsTab),   needsSetupKey: 'connections' as const },
   { id: 'mcp-servers',    label: 'MCP Servers',    component: markRaw(MCPServersTab),    needsSetupKey: 'mcpServers' as const },
   { id: 'env-vars',       label: 'Environment',    component: markRaw(EnvVarsTab),       needsSetupKey: 'envVars' as const },
-  { id: 'exec-endpoints', label: 'Exec Endpoints', component: markRaw(ExecEndpointsTab), needsSetupKey: 'execEndpoints' as const },
   { id: 'webhooks',       label: 'Webhooks',       component: markRaw(WebhooksTab) },
   { id: 'schedules',      label: 'Schedules',      component: markRaw(SchedulesTab) },
   { id: 'siblings',       label: 'Siblings',       component: markRaw(SiblingsTab), alwaysShow: true },
@@ -272,12 +271,15 @@ const configSections = [
 ] as const
 type ConfigSection = (typeof configSections)[number]
 
-// Activity (Runs + Builds) renders as the final section, but uses the same
+// Activity (Runs + Builds + Jobs) renders as the final section, but uses the same
 // counts machinery — visible when at least one of its inner lists has items.
-// Activity (runs + builds) is admin-only: both lists span every user's runs
-// and the agent's build history, which non-admin members shouldn't see (the
-// API gates the same via AgentRunView / AgentBuildsView).
-const activityVisible = computed(() => isAgentAdmin.value && ((counts.value.runs ?? 0) > 0 || (counts.value.builds ?? 0) > 0))
+// Activity is admin-only: the lists span every user's runs, the agent's build
+// history, and operator job payloads, which non-admin members shouldn't see.
+const activityVisible = computed(() => isAgentAdmin.value && (
+  (counts.value.runs ?? 0) > 0 ||
+  (counts.value.builds ?? 0) > 0 ||
+  (counts.value.jobs ?? 0) > 0
+))
 
 // Right-rail entries — only sections with content. Hides empty-but-mounted
 // sections from the rail (which itself still mounts so it can emit a count).
@@ -336,7 +338,11 @@ const actionItems = computed(() => {
     } else if (status === 'stopped' || status === 'failed') {
       items.push({ label: 'Start', icon: 'pi pi-play', command: () => doStart() })
     }
-    items.push({ label: 'Upgrade', icon: 'pi pi-arrow-up', command: () => doUpgrade() })
+    items.push({
+      label: isReadOnlyGit.value ? 'Rebuild' : 'Upgrade',
+      icon: isReadOnlyGit.value ? 'pi pi-refresh' : 'pi pi-arrow-up',
+      command: () => doUpgrade(),
+    })
   }
   if (canClone.value) {
     items.push({ label: 'Clone', icon: 'pi pi-copy', command: () => openClone() })
@@ -393,7 +399,8 @@ function handleOAuthCallback() {
   void loadSetupStatus()
 }
 
-function onResourceMutation() {
+function onResourceMutation(gitMode?: string) {
+  if (gitMode !== undefined && agent.value) agent.value.gitMode = gitMode
   tabsKey.value++
   void loadSetupStatus()
 }
@@ -583,50 +590,22 @@ onMounted(async () => {
     buildTasksDone.value = payload.tasksDone ?? 0
     buildTasksTotal.value = payload.tasksTotal ?? 0
     buildPhase.value = payload.phase ?? ''
+    if (agent.value) applyAgentBuildEvent(agent.value, payload)
     if (payload.status === 'started') {
       // New build kicked off while we were watching; buildId already captured
-      // above. Mirror the server-side state transition so the build badge
-      // appears immediately instead of waiting for a page refresh.
-      if (agent.value) {
-        if (agent.value.status === 'draft' || agent.value.status === 'failed') {
-          agent.value.status = 'building'
-        } else {
-          agent.value.upgradeStatus = 'building'
-        }
-      }
+      // above. The reconciled state makes the badge appear immediately.
       return
     }
     if (payload.status === 'complete') {
-      if (agent.value) {
-        agent.value.status = 'active'
-        agent.value.upgradeStatus = 'idle'
-      }
       toast.add({ severity: 'success', summary: 'Build complete', life: 3000 })
       tabsKey.value++
     } else if (payload.status === 'failed') {
-      if (agent.value) {
-        agent.value.upgradeStatus = 'failed'
-        // Initial build that failed never reached active — drop it out of
-        // 'building' so the badge clears (mirrors the cancelled branch).
-        if (agent.value.status === 'building') agent.value.status = 'failed'
-      }
       toast.add({ severity: 'error', summary: payload.error || 'Build failed', life: 10000 })
       tabsKey.value++
     } else if (payload.status === 'cancelled') {
-      if (agent.value) {
-        agent.value.upgradeStatus = 'failed'
-        if (agent.value.status === 'building') agent.value.status = 'failed'
-      }
       toast.add({ severity: 'warn', summary: 'Build cancelled', life: 3000 })
       tabsKey.value++
     } else if (payload.status === 'refused') {
-      // The request was out of scope — the agent itself is untouched.
-      // An initial build still has no image, so it lands on 'failed';
-      // an upgrade just returns to idle.
-      if (agent.value) {
-        agent.value.upgradeStatus = 'idle'
-        if (agent.value.status === 'building') agent.value.status = 'failed'
-      }
       toast.add({
         severity: 'warn',
         summary: 'Request declined',
@@ -747,7 +726,7 @@ const showUpgradeDialog = ref(false)
 const upgradeDescription = ref('')
 // Empty description = bare rebuild (re-image current source against the
 // latest agentsdk, no code changes). Any text = a codegen upgrade.
-const rebuildMode = computed(() => upgradeDescription.value.trim() === '')
+const rebuildMode = computed(() => isReadOnlyGit.value || upgradeDescription.value.trim() === '')
 
 function doUpgrade() {
   upgradeDescription.value = ''
@@ -758,11 +737,13 @@ async function submitUpgrade() {
   showUpgradeDialog.value = false
   try {
     const wasRebuild = rebuildMode.value
-    await api.post(`/api/v1/agents/${agentId}/upgrade`, { description: upgradeDescription.value })
+    await api.post(`/api/v1/agents/${agentId}/upgrade`, {
+      description: isReadOnlyGit.value ? '' : upgradeDescription.value,
+    })
     if (agent.value) agent.value.upgradeStatus = 'queued'
     toast.add({ severity: 'info', summary: wasRebuild ? 'Rebuild queued' : 'Upgrade queued', life: 3000 })
   } catch (err: any) {
-    toast.add({ severity: 'error', summary: err.response?.data?.error || 'Upgrade failed', life: 5000 })
+    toast.add({ severity: 'error', summary: err.response?.data?.error || (isReadOnlyGit.value ? 'Rebuild failed' : 'Upgrade failed'), life: 5000 })
   }
 }
 
@@ -890,7 +871,7 @@ function openWeb() {
     </nav>
 
     <!-- Single inline scroll: each configuration domain is a SectionCard;
-         Activity (Runs + Builds) is the final section. Sections hide
+          Activity (Runs + Builds + Jobs) is the final section. Sections hide
          themselves when their tab reports zero items via @populated. -->
     <div ref="mainRef" class="agent-page-main" :key="tabsKey">
       <SectionCard
@@ -904,7 +885,7 @@ function openWeb() {
         <component
           :is="s.component"
           :agent-id="agentId"
-          :your-access="['members', 'connections', 'mcp-servers', 'exec-endpoints', 'models'].includes(s.id) ? (agent?.yourAccess ?? '') : undefined"
+          :your-access="['members', 'connections', 'mcp-servers', 'models'].includes(s.id) ? (agent?.yourAccess ?? '') : undefined"
           v-bind="s.id === 'source' ? { agentSlug: agent?.slug ?? '' } : {}"
           @populated="onPopulated(s.id, $event)"
           @mutated="onResourceMutation"
@@ -921,13 +902,22 @@ function openWeb() {
           <TabList>
             <Tab :value="0">Runs</Tab>
             <Tab :value="1">Builds</Tab>
+            <Tab :value="2">Jobs</Tab>
           </TabList>
           <TabPanels>
             <TabPanel :value="0">
               <RunsTab :agent-id="agentId" @populated="onPopulated('runs', $event)" />
             </TabPanel>
             <TabPanel :value="1">
-              <BuildsTab :agent-id="agentId" :current-source-ref="agent?.sourceRef ?? ''" @populated="onPopulated('builds', $event)" />
+              <BuildsTab
+                :agent-id="agentId"
+                :current-source-ref="agent?.sourceRef ?? ''"
+                :read-only-git="isReadOnlyGit"
+                @populated="onPopulated('builds', $event)"
+              />
+            </TabPanel>
+            <TabPanel :value="2">
+              <JobsTab :agent-id="agentId" @populated="onPopulated('jobs', $event)" />
             </TabPanel>
           </TabPanels>
         </Tabs>
@@ -936,11 +926,21 @@ function openWeb() {
 
     <!-- Upgrade dialog -->
     <Dialog v-model:visible="showUpgradeDialog" :header="rebuildMode ? 'Rebuild App' : 'Upgrade App'" modal style="width: 30rem">
-      <p style="margin-top: 0">Describe what to change or fix:</p>
-      <Textarea v-model="upgradeDescription" rows="4" style="width: 100%" placeholder="e.g. Add a /history page that shows past voting rounds" autofocus />
-      <small style="display: block; margin-top: 0.5rem; color: var(--p-text-muted-color)">
-        Leave empty to <strong>rebuild</strong> against the latest agentsdk - no code changes. If the SDK API changed and the code no longer compiles, the rebuild fails; add a description so the builder can adapt it.
-      </small>
+      <template v-if="isReadOnlyGit">
+        <p style="margin-top: 0">
+          Pull the latest commit from the configured Git branch and rebuild it against the current agentsdk.
+        </p>
+        <small style="display: block; color: var(--p-text-muted-color)">
+          Git remains authoritative. Airlock will not change or push source code.
+        </small>
+      </template>
+      <template v-else>
+        <p style="margin-top: 0">Describe what to change or fix:</p>
+        <Textarea v-model="upgradeDescription" rows="4" style="width: 100%" placeholder="e.g. Add a /history page that shows past voting rounds" autofocus />
+        <small style="display: block; margin-top: 0.5rem; color: var(--p-text-muted-color)">
+          Leave empty to <strong>rebuild</strong> against the latest agentsdk - no code changes. If the SDK API changed and the code no longer compiles, the rebuild fails; add a description so the builder can adapt it.
+        </small>
+      </template>
       <template #footer>
         <Button label="Cancel" severity="secondary" text @click="showUpgradeDialog = false" />
         <Button :label="rebuildMode ? 'Rebuild' : 'Upgrade'" :icon="rebuildMode ? 'pi pi-refresh' : 'pi pi-arrow-up'" @click="submitUpgrade" />
@@ -1001,7 +1001,7 @@ function openWeb() {
       <div style="display: flex; flex-direction: column; gap: 1rem; margin-top: 0.25rem">
         <Message severity="warn" :closable="false">
           The new owner becomes admin and you lose access. Owner-scoped bindings
-          (connections, MCP/exec credentials, git credential, bridges) are unbound -
+          (connections, MCP server credentials, git credential, bridges) are unbound -
           the new owner reconnects their own.
         </Message>
         <div>

@@ -24,6 +24,7 @@ const runId = route.params.runId as string
 const run = ref<RunInfo | null>(null)
 const runMessages = ref<AgentMessageInfo[]>([])
 const agentName = ref(agentId.slice(0, 8))
+const readOnlyGit = ref(false)
 const loading = ref(true)
 const fixInstructions = ref('')
 const fixDialogVisible = ref(false)
@@ -120,7 +121,10 @@ onMounted(async () => {
       runsStore.fetchRun(runId),
       api.get(`/api/v1/agents/${agentId}`).then(({ data }) => {
         const agent = fromJson(GetAgentDetailResponseSchema, data).agent
-        if (agent) agentName.value = agent.name
+        if (agent) {
+          agentName.value = agent.name
+          readOnlyGit.value = agent.gitMode === 'read_only'
+        }
       }).catch(() => {}),
     ])
     run.value = result.run
@@ -235,9 +239,12 @@ onMounted(async () => {
 
     <!-- Fix button — only for agent-code errors. Platform errors get the
          message panel above explaining why this workflow doesn't help. -->
-    <div v-if="hasErrors && !isPlatformError" style="margin-bottom: 1.5rem">
+    <div v-if="hasErrors && !isPlatformError && !readOnlyGit" style="margin-bottom: 1.5rem">
       <Button label="Fix this error" icon="pi pi-wrench" severity="warn" @click="fixDialogVisible = true" />
     </div>
+    <Message v-else-if="hasErrors && !isPlatformError && readOnlyGit" severity="info" :closable="false" style="margin-bottom: 1.5rem">
+      Push the fix to the connected Git repository, then rebuild the app.
+    </Message>
 
     <Dialog v-model:visible="fixDialogVisible" header="Fix App Error" modal style="width: 32rem">
       <div style="display: flex; flex-direction: column; gap: 1rem; padding-top: 0.5rem">

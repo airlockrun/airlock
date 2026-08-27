@@ -41,7 +41,9 @@ FROM alpine:3.21
 #   git             — manages the agent monorepo (git init/add/commit per
 #                     agent build). Default user.email/user.name set so
 #                     `git commit` doesn't error out on first use.
-RUN apk add --no-cache ca-certificates ffmpeg docker-cli docker-cli-buildx git wget \
+#   postgresql client — streams faithful agent-schema clones for migration
+#                     validation without persisting database dumps.
+RUN apk add --no-cache ca-certificates ffmpeg docker-cli docker-cli-buildx git postgresql17-client wget \
     && git config --global user.email "airlock@localhost" \
     && git config --global user.name "Airlock"
 

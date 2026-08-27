@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -25,6 +26,7 @@ import (
 	"github.com/airlockrun/airlock/oauth"
 	"github.com/airlockrun/airlock/realtime"
 	"github.com/airlockrun/airlock/secrets"
+	jobssvc "github.com/airlockrun/airlock/service/jobs"
 	"github.com/airlockrun/airlock/storage"
 	"github.com/airlockrun/airlock/trigger"
 	solprovider "github.com/airlockrun/sol/provider"
@@ -150,10 +152,6 @@ func runServe(_ []string) {
 
 	// Build service
 	buildSvc := builder.New(cfg, database, containers, secretStore, providerEndpointHTTPClient, logger.Named("builder"))
-	if err := buildSvc.RecoverStuckOperations(ctx); err != nil {
-		logger.Fatal("build service recovery failed", zap.Error(err))
-	}
-	logger.Info("build service ready")
 
 	// Prune orphaned containers, stale images, and dead monorepo dirs on startup.
 	var recreateAgentRuntimes []uuid.UUID
@@ -186,11 +184,11 @@ func runServe(_ []string) {
 	// re-image every agent against the new SDK. Failures park the agent
 	// (status=stopped + error_message) so the operator sees the breakage
 	// instead of finding a silently incompatible agent days later.
-	go buildSvc.RebuildAllOnSDKChange(context.Background())
 
 	// Create Hub and PubSub
 	hub := realtime.NewHub(logger.Named("hub"))
 	pubsub := realtime.NewPubSub(hub, logger.Named("pubsub"))
+	jobEventRelay := realtime.NewJobEventRelay(database.Pool(), hub, logger.Named("job-events"))
 	defer pubsub.Close()
 
 	// Wire build events to PubSub
@@ -219,7 +217,10 @@ func runServe(_ []string) {
 		"telegram": telegramDriver,
 	}
 	bridgeMgr := trigger.NewBridgeManager(drivers, prompter, database, secretStore, cfg.JWTSecret, cfg.PublicURL, cfg.AgentBaseURL, logger.Named("bridges"))
-	scheduler := trigger.NewScheduler(dispatcher, database, logger.Named("scheduler"))
+	jobWorker := trigger.NewJobWorker(dispatcher, database, logger.Named("job-worker"))
+	buildSvc.SetJobWake(jobWorker.Wake)
+	scheduler := trigger.NewScheduler(database, jobWorker.Wake, logger.Named("scheduler"))
+	jobsService := jobssvc.New(database, jobWorker.Wake, logger.Named("jobs"))
 
 	// OAuth, MCP, and connection calls share the general outbound policy transport.
 	oauthClient := oauth.NewClient(httpNetwork.Client(30*time.Second), networkpolicy.AllowsLocalhostDevelopment(cfg.PublicURL))
@@ -246,6 +247,7 @@ func runServe(_ []string) {
 		Dispatcher:                 dispatcher,
 		Scheduler:                  scheduler,
 		BridgeManager:              bridgeMgr,
+		Jobs:                       jobsService,
 		Containers:                 containers,
 		PromptProxy:                prompter,
 		Hub:                        hub,
@@ -275,12 +277,29 @@ func runServe(_ []string) {
 		WriteTimeout: 0,
 	}
 	defer srv.Close()
+	listener, err := net.Listen("tcp", cfg.ServerAddr)
+	if err != nil {
+		logger.Fatal("server listen failed", zap.Error(err))
+	}
+	defer listener.Close()
 
 	group, gctx := errgroup.WithContext(ctx)
+	jobCtx, stopJobWorker := context.WithCancel(context.Background())
+	jobDone := make(chan struct{})
+	group.Go(func() error {
+		defer close(jobDone)
+		return jobWorker.Run(jobCtx)
+	})
+	group.Go(func() error {
+		return scheduler.Run(gctx)
+	})
+	group.Go(func() error {
+		return jobEventRelay.Run(gctx)
+	})
 
 	group.Go(func() error {
 		logger.Info("server listening", zap.String("addr", cfg.ServerAddr))
-		if err := srv.ListenAndServe(); err != nil {
+		if err := srv.Serve(listener); err != nil {
 			if !errors.Is(err, context.Canceled) && !errors.Is(err, http.ErrServerClosed) {
 				return fmt.Errorf("could not run server: %w", err)
 			}
@@ -290,13 +309,13 @@ func runServe(_ []string) {
 
 		return nil
 	})
+	if err := buildSvc.RecoverStuckOperations(ctx); err != nil {
+		logger.Fatal("build service recovery failed", zap.Error(err))
+	}
+	logger.Info("build service ready")
+	go buildSvc.RebuildAllOnSDKChange(context.Background())
 
 	// Start background trigger services
-	if err := scheduler.Start(gctx); err != nil {
-		logger.Fatal("scheduler start failed", zap.Error(err))
-	}
-	defer scheduler.Stop()
-
 	if err := bridgeMgr.Start(gctx); err != nil {
 		logger.Fatal("bridge manager start failed", zap.Error(err))
 	}
@@ -332,9 +351,7 @@ func runServe(_ []string) {
 	})
 
 	group.Go(func() error {
-		const period = time.Hour * 24
-
-		return compacter(gctx, logger, queries, period)
+		return historyRetention(gctx, logger, queries)
 	})
 
 	group.Go(func() error {
@@ -372,6 +389,12 @@ func runServe(_ []string) {
 		select {
 		case <-ctx.Done():
 		case <-gctx.Done():
+		}
+		stopJobWorker()
+		select {
+		case <-jobDone:
+		case <-time.After(15 * time.Second):
+			logger.Warn("job worker graceful shutdown timed out")
 		}
 
 		sctx, scancel := context.WithTimeout(context.Background(), time.Second*10)
@@ -637,47 +660,82 @@ func collectObjectsToDelete(objects []storage.ObjectInfo, cutoff time.Time) []st
 	return result
 }
 
-// Runs compaction — nullify verbose JSONB/text on runs older than 30 days.
-// Aggregates (token counts, cost, duration, timestamps, status, error)
-// stay intact; verbose payload/actions/checkpoint/logs are dropped.
-func compacter(
+// historyRetention deletes terminal jobs and compacts verbose terminal run data
+// after 30 days. Each replica can sweep concurrently because the queries lock
+// ordered, bounded batches with SKIP LOCKED.
+func historyRetention(
 	ctx context.Context,
 	lgr *zap.Logger,
 	queries *dbq.Queries,
-	period time.Duration,
 ) error {
-	const days30 = 30 * 24 * time.Hour
+	if ctx == nil {
+		panic("expected context.Context but got nil")
+	}
+	if queries == nil {
+		panic("expected *dbq.Queries but got nil")
+	}
+	if lgr == nil {
+		panic("expected *zap.Logger but got nil")
+	}
 
+	const (
+		retention = 30 * 24 * time.Hour
+		period    = 24 * time.Hour
+		batchSize = 500
+	)
+
+	lgr = lgr.Named("history-retention")
 	ticker := time.NewTicker(period)
 	defer ticker.Stop()
 
-	if queries == nil {
-		return errors.New("expected *dbq.Queries but got nil")
-	}
-
-	lgr = lgr.Named("runs-compact")
-
 	for {
+		cutoff := pgtype.Timestamptz{
+			Time:  time.Now().Add(-retention),
+			Valid: true,
+		}
+
+		var pruned int64
+		for {
+			n, err := queries.PruneTerminalAgentJobs(ctx, dbq.PruneTerminalAgentJobsParams{
+				Cutoff: cutoff,
+				Lim:    batchSize,
+			})
+			if err != nil {
+				lgr.Error("prune terminal agent jobs failed", zap.Error(err))
+				break
+			}
+			pruned += n
+			if n < batchSize {
+				break
+			}
+		}
+		if pruned > 0 {
+			lgr.Info("pruned terminal agent jobs", zap.Int64("rows.count", pruned))
+		}
+
+		var compacted int64
+		for {
+			n, err := queries.CompactOldRuns(ctx, dbq.CompactOldRunsParams{
+				Cutoff: cutoff,
+				Lim:    batchSize,
+			})
+			if err != nil {
+				lgr.Error("compact terminal runs failed", zap.Error(err))
+				break
+			}
+			compacted += n
+			if n < batchSize {
+				break
+			}
+		}
+		if compacted > 0 {
+			lgr.Info("compacted terminal runs", zap.Int64("rows.count", compacted))
+		}
+
 		select {
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
-		}
-
-		cutoff := pgtype.Timestamptz{
-			Time:  time.Now().Add(-days30),
-			Valid: true,
-		}
-
-		n, err := queries.CompactOldRuns(ctx, cutoff)
-		if err != nil {
-			lgr.Error("compact old runs failed", zap.Error(err))
-
-			continue
-		}
-
-		if n > 0 {
-			lgr.Info("compacted old runs", zap.Int64("rows.count", n))
 		}
 	}
 }
@@ -848,18 +906,16 @@ func sweeper(
 				continue
 			}
 
-			agentapi.SynthesizeOrphanToolResults(ctx, queries, runUUID, "timeout", lgr)
-
-			err = queries.UpdateRunComplete(ctx, dbq.UpdateRunCompleteParams{
-				ID:           run.ID,
-				Status:       "error",
-				ErrorMessage: "agent disconnected",
-			})
+			updated, err := queries.FailStuckRun(ctx, run.ID)
 			if err != nil {
 				lgr.Error("failed to update run completed", zap.Error(err))
-
 				continue
 			}
+			if updated == 0 {
+				continue
+			}
+
+			agentapi.SynthesizeOrphanToolResults(ctx, queries, runUUID, "timeout", lgr)
 
 			agentapi.PublishRunTerminal(ctx, pubsub, agentUUID, runUUID, "error", "agent disconnected")
 

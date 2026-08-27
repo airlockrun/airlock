@@ -35,20 +35,13 @@ SELECT
         WHERE e.agent_id = $1
           AND e.value_ref = ''
           AND (e.is_secret OR e.default_value = ''))
-        AS env_vars,
-    (SELECT COUNT(*)::int FROM agent_resource_needs n
-        LEFT JOIN agent_exec_endpoints e ON e.id = n.bound_exec_id
-        WHERE n.agent_id = $1 AND n.type = 'exec_endpoint' AND n.required
-          AND (n.bound_exec_id IS NULL OR e.transport IS NULL OR e.host IS NULL
-            OR e.port IS NULL OR e.ssh_user IS NULL OR e.private_key_ref IS NULL))
-        AS exec_endpoints
+        AS env_vars
 `
 
 type AgentSetupStatusRow struct {
-	Connections   int32 `json:"connections"`
-	McpServers    int32 `json:"mcp_servers"`
-	EnvVars       int32 `json:"env_vars"`
-	ExecEndpoints int32 `json:"exec_endpoints"`
+	Connections int32 `json:"connections"`
+	McpServers  int32 `json:"mcp_servers"`
+	EnvVars     int32 `json:"env_vars"`
 }
 
 // Counts of registered slots that need operator action before the agent
@@ -65,11 +58,6 @@ type AgentSetupStatusRow struct {
 func (q *Queries) AgentSetupStatus(ctx context.Context, agentID pgtype.UUID) (AgentSetupStatusRow, error) {
 	row := q.db.QueryRow(ctx, agentSetupStatus, agentID)
 	var i AgentSetupStatusRow
-	err := row.Scan(
-		&i.Connections,
-		&i.McpServers,
-		&i.EnvVars,
-		&i.ExecEndpoints,
-	)
+	err := row.Scan(&i.Connections, &i.McpServers, &i.EnvVars)
 	return i, err
 }

@@ -123,6 +123,12 @@ func (b *BuildService) CloneRemoteIntoAgent(ctx context.Context, agentID, remote
 		return err
 	}
 	defer lock.Unlock()
+	return b.CloneRemoteIntoAgentLocked(ctx, agentID, remote, branch, credID)
+}
+
+// CloneRemoteIntoAgentLocked replaces an agent's repository with a remote
+// branch. The caller must hold the agent's source lock.
+func (b *BuildService) CloneRemoteIntoAgentLocked(ctx context.Context, agentID, remote, branch string, credID pgtype.UUID) error {
 	q := dbq.New(b.db.Pool())
 	auth, err := resolveGitAuth(ctx, q, b.encryptor, credID)
 	if err != nil {
@@ -138,21 +144,35 @@ func (b *BuildService) CloneRemoteIntoAgent(ctx context.Context, agentID, remote
 	if err := os.MkdirAll(b.ReposPath(), 0o755); err != nil {
 		return fmt.Errorf("ensure repos dir: %w", err)
 	}
-	repoPath := b.AgentRepoPath(agentID)
-	if err := os.RemoveAll(repoPath); err != nil {
-		return fmt.Errorf("clear repo path: %w", err)
+	stagingRoot, err := os.MkdirTemp(b.ReposPath(), ".airlock-import-*")
+	if err != nil {
+		return fmt.Errorf("create import staging directory: %w", err)
 	}
-	if err := gitAuthed(ctx, b.ReposPath(), header, "clone", "--branch", branch, "--single-branch", remote, repoPath); err != nil {
-		_ = os.RemoveAll(repoPath)
+	defer os.RemoveAll(stagingRoot)
+	stagedRepo := filepath.Join(stagingRoot, "repo")
+	repoPath := b.AgentRepoPath(agentID)
+	if err := gitAuthed(ctx, stagingRoot, header, "clone", "--branch", branch, "--single-branch", remote, stagedRepo); err != nil {
 		return fmt.Errorf("clone: %s", strings.ReplaceAll(err.Error(), header, "[redacted]"))
 	}
-	if err := EnsureGitIdentity(repoPath); err != nil {
-		_ = os.RemoveAll(repoPath)
+	if err := EnsureGitIdentity(stagedRepo); err != nil {
 		return err
 	}
-	if _, err := os.Stat(filepath.Join(repoPath, "go.mod")); err != nil {
-		_ = os.RemoveAll(repoPath)
+	if _, err := os.Stat(filepath.Join(stagedRepo, "go.mod")); err != nil {
 		return fmt.Errorf("imported repository has no go.mod at its root — not a valid agent project")
+	}
+	backupPath := filepath.Join(stagingRoot, "previous")
+	if _, err := os.Stat(repoPath); err == nil {
+		if err := os.Rename(repoPath, backupPath); err != nil {
+			return fmt.Errorf("preserve current agent repository: %w", err)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("inspect current agent repository: %w", err)
+	}
+	if err := os.Rename(stagedRepo, repoPath); err != nil {
+		if restoreErr := os.Rename(backupPath, repoPath); restoreErr != nil && !errors.Is(restoreErr, os.ErrNotExist) {
+			return fmt.Errorf("replace agent repository: %w (restore failed: %v)", err, restoreErr)
+		}
+		return fmt.Errorf("replace agent repository: %w", err)
 	}
 	return nil
 }
@@ -164,6 +184,11 @@ func (b *BuildService) CloneRemoteIntoAgent(ctx context.Context, agentID, remote
 // repo (dangerous — on a push conflict the agent resets its main to the remote's
 // unrelated code). The fetch only updates FETCH_HEAD; it never moves a branch.
 func (b *BuildService) RemoteSharesHistory(ctx context.Context, agentID, remote, branch string, credID pgtype.UUID) (bool, error) {
+	lock, err := b.AcquireSourceLock(ctx, agentID)
+	if err != nil {
+		return false, err
+	}
+	defer lock.Unlock()
 	q := dbq.New(b.db.Pool())
 	auth, err := resolveGitAuth(ctx, q, b.encryptor, credID)
 	if err != nil {
@@ -344,6 +369,37 @@ func (b *BuildService) pushAgentRepo(ctx context.Context, agent dbq.Agent, runID
 	return touchGitCredentialUsage(ctx, q, agent.GitCredentialID)
 }
 
+func (b *BuildService) pushAgentRollback(ctx context.Context, agent dbq.Agent) error {
+	if agent.GitLastSyncedRef == "" {
+		return errors.New("cannot roll back connected Git without a synchronized remote revision")
+	}
+	q := dbq.New(b.db.Pool())
+	auth, err := resolveGitAuth(ctx, q, b.encryptor, agent.GitCredentialID)
+	if err != nil {
+		return err
+	}
+	header, err := auth.ExtraHeader(ctx)
+	if err != nil {
+		return err
+	}
+	branch := agent.GitDefaultBranch
+	if branch == "" {
+		branch = "main"
+	}
+	if err := pushRollbackBranch(ctx, b.AgentRepoPath(uuidString(agent.ID)), agent.GitRemoteUrl, branch, header, agent.GitLastSyncedRef); err != nil {
+		return err
+	}
+	return touchGitCredentialUsage(ctx, q, agent.GitCredentialID)
+}
+
+func pushRollbackBranch(ctx context.Context, repoPath, remote, branch, header, expectedRemoteRef string) error {
+	lease := fmt.Sprintf("--force-with-lease=refs/heads/%s:%s", branch, expectedRemoteRef)
+	if err := gitAuthed(ctx, repoPath, header, "push", lease, remote, "HEAD:refs/heads/"+branch); err != nil {
+		return fmt.Errorf("git rollback push: %w", err)
+	}
+	return nil
+}
+
 // pushBranch runs the credentialed git-push pipeline against a remote:
 // try a fast-forward push; on rejection, fetch + rebase + retry; on
 // unresolvable rebase conflict, preserve the local commit on a side
@@ -391,20 +447,11 @@ func pushBranch(ctx context.Context, repoPath, remote, branch, header, runID str
 	return nil
 }
 
-// PullAgentRepo fetches the configured remote branch and fast-forwards
-// the local main to it. Used by the webhook receiver: when a user push
-// is announced, airlock pulls before enqueueing a rebuild so Execute
-// sees the new HEAD. Errors if the local working tree has uncommitted
-// changes (shouldn't happen in steady state).
-func (b *BuildService) PullAgentRepo(ctx context.Context, agent dbq.Agent) (string, error) {
+// pullAgentRepoLocked requires the caller to hold the per-agent source lock.
+func (b *BuildService) pullAgentRepoLocked(ctx context.Context, agent dbq.Agent) (string, error) {
 	if agent.GitRemoteUrl == "" {
-		return "", fmt.Errorf("agent has no git remote configured")
+		return "", errors.New("agent has no git remote configured")
 	}
-	lock, err := b.AcquireSourceLock(ctx, uuidString(agent.ID))
-	if err != nil {
-		return "", err
-	}
-	defer lock.Unlock()
 	q := dbq.New(b.db.Pool())
 	auth, err := resolveGitAuth(ctx, q, b.encryptor, agent.GitCredentialID)
 	if err != nil {
@@ -420,8 +467,25 @@ func (b *BuildService) PullAgentRepo(ctx context.Context, agent dbq.Agent) (stri
 	if branch == "" {
 		branch = "main"
 	}
+	hash, err := pullBranch(ctx, repoPath, agent.GitRemoteUrl, branch, header)
+	if err != nil {
+		return "", err
+	}
+	if err := q.UpdateAgentGitLastSyncedRef(ctx, dbq.UpdateAgentGitLastSyncedRefParams{
+		ID:               agent.ID,
+		GitLastSyncedRef: hash,
+	}); err != nil {
+		return "", fmt.Errorf("record synchronized git revision: %w", err)
+	}
+	if err := touchGitCredentialUsage(ctx, q, agent.GitCredentialID); err != nil {
+		// Best-effort — don't fail the pull on a usage-stamp error.
+		b.logger.Warn("touch git credential usage", zap.Error(err))
+	}
+	return hash, nil
+}
 
-	if err := gitAuthed(ctx, repoPath, header, "fetch", agent.GitRemoteUrl, branch); err != nil {
+func pullBranch(ctx context.Context, repoPath, remote, branch, header string) (string, error) {
+	if err := gitAuthed(ctx, repoPath, header, "fetch", remote, branch); err != nil {
 		return "", fmt.Errorf("git fetch: %w", err)
 	}
 	if err := git(repoPath, "reset", "--hard", "FETCH_HEAD"); err != nil {
@@ -431,17 +495,13 @@ func (b *BuildService) PullAgentRepo(ctx context.Context, agent dbq.Agent) (stri
 	if err != nil {
 		return "", fmt.Errorf("rev-parse HEAD: %w", err)
 	}
-	if err := touchGitCredentialUsage(ctx, q, agent.GitCredentialID); err != nil {
-		// Best-effort — don't fail the pull on a usage-stamp error.
-		b.logger.Warn("touch git credential usage", zap.Error(err))
-	}
 	return hash, nil
 }
 
 // gitAuthed runs a git command with -c http.extraheader=<header> so
 // the credential is passed via the Authorization HTTP header instead of
 // being embedded in the URL (where it would land in .git/config).
-func gitAuthed(_ context.Context, dir, header string, args ...string) error {
+func gitAuthed(ctx context.Context, dir, header string, args ...string) error {
 	full := args
 	// Skip the -c flag entirely when no header is supplied — covers
 	// unauthenticated transports (file://, ssh-with-agent) and keeps
@@ -450,7 +510,7 @@ func gitAuthed(_ context.Context, dir, header string, args ...string) error {
 	if header != "" {
 		full = append([]string{"-c", "http.extraheader=" + header}, args...)
 	}
-	cmd := exec.Command("git", full...)
+	cmd := exec.CommandContext(ctx, "git", full...)
 	cmd.Dir = dir
 	cmd.Env = append(gitCleanEnv(), "GIT_TERMINAL_PROMPT=0")
 	out, err := cmd.CombinedOutput()

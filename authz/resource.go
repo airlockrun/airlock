@@ -40,8 +40,6 @@ func LockResource(ctx context.Context, q *dbq.Queries, resourceType string, reso
 		return q.LockConnectionResource(ctx, id)
 	case "mcp_server":
 		return q.LockMCPServerResource(ctx, id)
-	case "exec_endpoint":
-		return q.LockExecEndpointResource(ctx, id)
 	case "git_credential":
 		return q.LockGitCredentialResource(ctx, id)
 	default:
@@ -103,15 +101,6 @@ func loadResourceAccess(ctx context.Context, q *dbq.Queries, resourceType string
 		owner, err = q.GetMCPServerOwner(ctx, id)
 		if err == nil {
 			rows, listErr := q.ListMCPServerGrants(ctx, id)
-			err = listErr
-			for _, row := range rows {
-				grants = append(grants, Grant{GranteeID: uuid.UUID(row.GranteeID.Bytes), Capabilities: row.Capabilities})
-			}
-		}
-	case "exec_endpoint":
-		owner, err = q.GetExecEndpointOwner(ctx, id)
-		if err == nil {
-			rows, listErr := q.ListExecEndpointGrants(ctx, id)
 			err = listErr
 			for _, row := range rows {
 				grants = append(grants, Grant{GranteeID: uuid.UUID(row.GranteeID.Bytes), Capabilities: row.Capabilities})

@@ -24,23 +24,37 @@ type Dispatcher interface {
 	CancelRun(runID uuid.UUID) bool
 }
 
-type Service struct {
-	db         *db.DB
-	dispatcher Dispatcher
-	logger     *zap.Logger
+type JobCanceller interface {
+	Cancel(context.Context, authz.Principal, uuid.UUID) (dbq.AgentJob, error)
 }
 
-func New(d *db.DB, dispatcher Dispatcher, logger *zap.Logger) *Service {
+type TerminalPublisher func(ctx context.Context, agentID, runID uuid.UUID, status, errMsg string)
+
+type Service struct {
+	db              *db.DB
+	dispatcher      Dispatcher
+	jobs            JobCanceller
+	publishTerminal TerminalPublisher
+	logger          *zap.Logger
+}
+
+func New(d *db.DB, dispatcher Dispatcher, jobs JobCanceller, publishTerminal TerminalPublisher, logger *zap.Logger) *Service {
 	if d == nil {
 		panic("runs: db is required")
 	}
 	if dispatcher == nil {
 		panic("runs: dispatcher is required")
 	}
+	if jobs == nil {
+		panic("runs: jobs service is required")
+	}
+	if publishTerminal == nil {
+		panic("runs: terminal publisher is required")
+	}
 	if logger == nil {
 		panic("runs: logger is required")
 	}
-	return &Service{db: d, dispatcher: dispatcher, logger: logger}
+	return &Service{db: d, dispatcher: dispatcher, jobs: jobs, publishTerminal: publishTerminal, logger: logger}
 }
 
 // ListResult bundles a page of runs with the cursor for the next page.
@@ -114,9 +128,9 @@ func (s *Service) Logs(ctx context.Context, p authz.Principal, runID uuid.UUID) 
 	return run.StdoutLog, nil
 }
 
-// Cancel signals the dispatcher (best-effort breaking the agent's
-// streaming response) and then marks the row cancelled in the DB,
-// idempotent with the agent's own r.Complete write. ErrNotFound for a
+// Cancel marks the row cancelled and then signals the dispatcher to break the
+// agent's streaming response. The running-state CAS determines which terminal
+// writer wins and lets the stream finalizer observe cancellation. ErrNotFound for a
 // missing run; ErrConflict if the run is already in a terminal state.
 // Authorized for agent admins, or the owner of the run's conversation
 // when the run was a web prompt (so a user can stop their own run).
@@ -132,12 +146,25 @@ func (s *Service) Cancel(ctx context.Context, p authz.Principal, runID uuid.UUID
 	if run.Status != "running" {
 		return service.ErrConflict
 	}
+	if run.TriggerType == "job" {
+		jobID, err := uuid.Parse(run.TriggerRef)
+		if err != nil {
+			return err
+		}
+		if _, err := s.jobs.Cancel(ctx, p, jobID); err != nil {
+			return err
+		}
+	}
+	rows, err := q.CancelRun(ctx, pgtype.UUID{Bytes: runID, Valid: true})
+	if err != nil {
+		s.logger.Error("cancel run", zap.Error(err))
+		return err
+	}
+	if rows == 0 {
+		return service.ErrConflict
+	}
 	s.dispatcher.CancelRun(runID)
-	_ = q.UpdateRunComplete(ctx, dbq.UpdateRunCompleteParams{
-		ID:           pgtype.UUID{Bytes: runID, Valid: true},
-		Status:       "cancelled",
-		ErrorMessage: "cancelled by user",
-	})
+	s.publishTerminal(ctx, uuid.UUID(run.AgentID.Bytes), runID, "cancelled", "cancelled by user")
 	return nil
 }
 

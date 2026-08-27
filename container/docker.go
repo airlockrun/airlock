@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -25,6 +27,10 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
 )
+
+// AgentStartupHealthTimeout bounds cold runtime initialization, including
+// migrations and process-local startup hooks that complete before readiness.
+const AgentStartupHealthTimeout = 2 * time.Minute
 
 // DockerManager implements ContainerManager using the Docker API.
 type DockerManager struct {
@@ -230,10 +236,17 @@ func (m *DockerManager) Close() {
 const labelInstance = config.LabelInstance
 
 const (
-	labelAgentID       = "run.airlock.agent"
-	labelResource      = "run.airlock.resource"
-	resourceAgentNet   = "agent-network"
-	agentNetworkLockID = int64(684163872)
+	labelAgentID           = "run.airlock.agent"
+	labelResource          = "run.airlock.resource"
+	resourceAgentNet       = "agent-network"
+	resourceManifest       = "manifest"
+	agentNetworkLockID     = int64(684163872)
+	maxManifestBytes       = 4 << 20
+	maxManifestStdoutBytes = maxManifestBytes + 1
+	maxManifestStderrBytes = 64 << 10
+	manifestMemoryBytes    = 256 << 20
+	manifestPidsLimit      = int64(256)
+	manifestCleanupTimeout = 10 * time.Second
 )
 
 // agentPrefix is the instance-scoped name prefix for agent runtime
@@ -322,7 +335,7 @@ func (m *DockerManager) StartAgent(ctx context.Context, opts AgentOpts) (*Contai
 
 	if c, err := m.inspectExisting(ctx, name); err == nil {
 		if runtimeMatch(c) {
-			if err := m.waitHealthy(ctx, c, 15*time.Second); err == nil {
+			if err := m.waitHealthy(ctx, c, AgentStartupHealthTimeout); err == nil {
 				m.mu.Lock()
 				m.active[name] = c
 				m.lastActivity[name] = time.Now()
@@ -384,7 +397,7 @@ func (m *DockerManager) StartAgent(ctx context.Context, opts AgentOpts) (*Contai
 	m.lastActivity[name] = time.Now()
 	m.mu.Unlock()
 
-	if err := m.waitHealthy(ctx, c, 15*time.Second); err != nil {
+	if err := m.waitHealthy(ctx, c, AgentStartupHealthTimeout); err != nil {
 		_ = m.client.ContainerRemove(context.Background(), c.ID, dcontainer.RemoveOptions{Force: true})
 		if m.cfg.AgentNetworkPerAgent {
 			_ = m.cleanupAgentNetwork(context.Background(), opts.AgentID)
@@ -518,6 +531,164 @@ func (m *DockerManager) StopAgent(ctx context.Context, agentID uuid.UUID) error 
 func (m *DockerManager) RemoveImage(ctx context.Context, imageRef string) error {
 	_, err := m.client.ImageRemove(ctx, imageRef, image.RemoveOptions{PruneChildren: true})
 	return err
+}
+
+// InspectManifest runs a candidate image without runtime credentials or
+// network access and returns its bounded stdout. The image entrypoint selects
+// the one-shot behavior from AIRLOCK_AGENT_MODE.
+func (m *DockerManager) InspectManifest(ctx context.Context, imageRef string) (manifest []byte, retErr error) {
+	if imageRef == "" {
+		return nil, errors.New("inspect manifest: image reference is required")
+	}
+	name := m.builderPrefix() + "manifest-" + uuid.NewString()
+	containerCfg := buildManifestContainerConfig(m.cfg.InstanceID, imageRef)
+	hostCfg := buildManifestHostConfig(m.cfg)
+	defer func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), manifestCleanupTimeout)
+		defer cancel()
+		if err := m.client.ContainerRemove(cleanupCtx, name, dcontainer.RemoveOptions{Force: true}); err != nil && !cerrdefs.IsNotFound(err) {
+			manifest = nil
+			retErr = errors.Join(retErr, fmt.Errorf("remove manifest container: %w", err))
+		}
+	}()
+
+	resp, err := m.client.ContainerCreate(ctx, containerCfg, hostCfg, nil, nil, name)
+	if err != nil {
+		return nil, fmt.Errorf("create manifest container: %w", err)
+	}
+
+	if err := m.client.ContainerStart(ctx, resp.ID, dcontainer.StartOptions{}); err != nil {
+		return nil, fmt.Errorf("start manifest container: %w", err)
+	}
+
+	statusCh, errCh := m.client.ContainerWait(ctx, resp.ID, dcontainer.WaitConditionNotRunning)
+	var status dcontainer.WaitResponse
+	select {
+	case <-ctx.Done():
+		return nil, fmt.Errorf("wait for manifest container: %w", ctx.Err())
+	case err := <-errCh:
+		if err == nil {
+			err = errors.New("Docker wait ended without a status")
+		}
+		return nil, fmt.Errorf("wait for manifest container: %w", err)
+	case waitStatus, ok := <-statusCh:
+		if !ok {
+			return nil, errors.New("wait for manifest container: Docker wait ended without a status")
+		}
+		status = waitStatus
+	}
+
+	stdout := &boundedBuffer{limit: maxManifestStdoutBytes}
+	stderr := &boundedBuffer{limit: maxManifestStderrBytes}
+	logs, err := m.client.ContainerLogs(ctx, resp.ID, dcontainer.LogsOptions{
+		ShowStdout: true,
+		ShowStderr: true,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("read manifest output: %w", err)
+	}
+	_, copyErr := stdcopy.StdCopy(stdout, stderr, logs)
+	closeErr := logs.Close()
+	if copyErr != nil {
+		return nil, manifestError(fmt.Errorf("read manifest output: %w", copyErr), stderr)
+	}
+	if closeErr != nil {
+		return nil, manifestError(fmt.Errorf("close manifest output: %w", closeErr), stderr)
+	}
+
+	if status.Error != nil {
+		return nil, manifestError(fmt.Errorf("manifest container wait: %s", status.Error.Message), stderr)
+	}
+	if status.StatusCode != 0 {
+		return nil, manifestError(fmt.Errorf("manifest container exited with code %d", status.StatusCode), stderr)
+	}
+	if err := validateManifestOutput(stdout.Bytes(), stdout.overflow); err != nil {
+		return nil, manifestError(err, stderr)
+	}
+	return stdout.Bytes(), nil
+}
+
+func buildManifestContainerConfig(instanceID, imageRef string) *dcontainer.Config {
+	return &dcontainer.Config{
+		Image: imageRef,
+		Env:   []string{"AIRLOCK_AGENT_MODE=manifest"},
+		Labels: map[string]string{
+			labelInstance: instanceID,
+			labelResource: resourceManifest,
+		},
+	}
+}
+
+func buildManifestHostConfig(cfg *config.Config) *dcontainer.HostConfig {
+	init := true
+	return &dcontainer.HostConfig{
+		Init:           &init,
+		NetworkMode:    dcontainer.NetworkMode("none"),
+		ReadonlyRootfs: true,
+		CapDrop:        []string{"ALL"},
+		SecurityOpt:    []string{"no-new-privileges"},
+		OomScoreAdj:    500,
+		Runtime:        cfg.AgentRuntime,
+		Resources: dcontainer.Resources{
+			Memory:     manifestMemoryBytes,
+			MemorySwap: manifestMemoryBytes,
+			PidsLimit:  ptrInt64(manifestPidsLimit),
+			CPUShares:  256,
+		},
+	}
+}
+
+func validateManifestOutput(stdout []byte, overflow bool) error {
+	if overflow || len(stdout) > maxManifestStdoutBytes ||
+		(len(stdout) == maxManifestStdoutBytes && stdout[len(stdout)-1] != '\n') {
+		return errors.New("manifest exceeds 4 MiB plus one trailing newline")
+	}
+	payload := stdout
+	if len(payload) > 0 && payload[len(payload)-1] == '\n' {
+		payload = payload[:len(payload)-1]
+	}
+	if len(payload) == 0 {
+		return errors.New("manifest output is empty")
+	}
+	if bytes.ContainsAny(payload, "\r\n") || !json.Valid(payload) {
+		return errors.New("manifest must be exactly one JSON document on one line")
+	}
+	return nil
+}
+
+func manifestError(err error, stderr *boundedBuffer) error {
+	diagnostic := strings.TrimSpace(string(stderr.Bytes()))
+	if stderr.overflow {
+		diagnostic += "\n[stderr truncated]"
+	}
+	if diagnostic == "" {
+		return err
+	}
+	return fmt.Errorf("%w; stderr: %q", err, diagnostic)
+}
+
+type boundedBuffer struct {
+	buf      bytes.Buffer
+	limit    int
+	overflow bool
+}
+
+func (b *boundedBuffer) Write(p []byte) (int, error) {
+	remaining := b.limit - b.buf.Len()
+	if remaining > 0 {
+		if remaining > len(p) {
+			remaining = len(p)
+		}
+		_, _ = b.buf.Write(p[:remaining])
+	}
+	if remaining < len(p) {
+		b.overflow = true
+	}
+	return len(p), nil
+}
+
+func (b *boundedBuffer) Bytes() []byte {
+	return b.buf.Bytes()
 }
 
 // StartToolserver starts an ephemeral toolserver container for build operations.

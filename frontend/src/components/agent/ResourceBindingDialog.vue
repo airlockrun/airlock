@@ -44,7 +44,7 @@ const clientSecret = ref('')
 const isOAuth = computed(() => props.authMode === 'oauth' || props.authMode === 'oauth_discovery')
 const isManualOAuth = computed(() => props.authMode === 'oauth')
 const isCredential = computed(() => props.authMode === 'api_key' || props.authMode === 'token')
-const canOfferCreate = computed(() => !!props.need && canCreateResourceForNeed(props.need.type, props.authMode))
+const canOfferCreate = computed(() => !!props.need && canCreateResourceForNeed(props.authMode))
 
 function errorMessage(error: any, fallback: string): string {
   return error?.response?.data?.error || error?.message || fallback
@@ -108,7 +108,7 @@ async function useCandidate(candidate: CandidateInfo) {
     }
     await binding.bind(props.need, candidate.resourceId)
     visible.value = false
-    const completion = bindingDialogCompletion(action.kind, props.need.type)
+    const completion = bindingDialogCompletion(action.kind)
     emitCompletion(completion, props.need)
     if (completion === 'changed') toast.add({ severity: 'success', summary: 'Resource connected', life: 3000 })
   } catch (error: any) {
@@ -121,7 +121,7 @@ async function useCandidate(candidate: CandidateInfo) {
 async function createNew() {
   const need = props.need
   const name = displayName.value.trim()
-  if (!need || !name || !canCreateResourceForNeed(need.type, props.authMode)) return
+  if (!need || !name || !canCreateResourceForNeed(props.authMode)) return
   busyId.value = 'new'
   try {
     if (isManualOAuth.value) {
@@ -146,7 +146,7 @@ async function createNew() {
       await binding.createForNeed(need, name)
     }
     visible.value = false
-    const completion = bindingDialogCompletion('create', need.type)
+    const completion = bindingDialogCompletion('create')
     emitCompletion(completion, need)
     if (completion === 'changed') toast.add({ severity: 'success', summary: 'Resource created and connected', life: 3000 })
   } catch (error: any) {
@@ -251,9 +251,6 @@ const canCreate = computed(() => {
         </div>
         <Message v-if="authMode === 'none'" severity="info" :closable="false">
           This integration does not require credentials. Creating it connects it immediately.
-        </Message>
-        <Message v-if="need.type === 'exec_endpoint'" severity="info" :closable="false">
-          After creation, configure its SSH host, user, and generated key in the normal endpoint form.
         </Message>
         <div class="dialog-actions">
           <Button label="Cancel" severity="secondary" text @click="visible = false" />

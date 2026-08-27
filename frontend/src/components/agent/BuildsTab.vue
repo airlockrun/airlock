@@ -6,7 +6,7 @@ import { useToast } from 'primevue/usetoast'
 import { useBuildsStore } from '@/stores/builds'
 import type { AgentBuildInfo } from '@/gen/airlock/v1/types_pb'
 
-const props = defineProps<{ agentId: string; currentSourceRef: string }>()
+const props = defineProps<{ agentId: string; currentSourceRef: string; readOnlyGit?: boolean }>()
 const emit = defineEmits<{ populated: [count: number] }>()
 const router = useRouter()
 const confirm = useConfirm()
@@ -62,6 +62,7 @@ function buildLabel(b: AgentBuildInfo): string {
 
 function canRollback(b: AgentBuildInfo): boolean {
   return (
+    !props.readOnlyGit &&
     b.status === 'complete' &&
     b.sourceRef !== '' &&
     b.sourceRef !== props.currentSourceRef &&

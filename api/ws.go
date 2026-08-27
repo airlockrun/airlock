@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/airlockrun/airlock/auth"
+	"github.com/airlockrun/airlock/authz"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/airlockrun/airlock/realtime"
@@ -55,9 +56,9 @@ func loadWSMemberships(ctx context.Context, q *dbq.Queries, userID uuid.UUID) (w
 
 // Upgrade handles GET /ws using the HttpOnly access cookie, upgrades to
 // WebSocket, and auto-subscribes the connection to every agent the user holds
-// an explicit per-user grant on (via agent_grants). The client does not issue
-// subscribe messages; a DB-backed monitor closes the connection when its
-// authorization or memberships change so reconnect rebuilds subscriptions.
+// an explicit per-user grant on (via agent_grants). Narrower topics are added
+// through authorized control messages; a DB-backed monitor closes the
+// connection when authorization or memberships change.
 func (h *WSHandler) Upgrade(w http.ResponseWriter, r *http.Request) {
 	if r.Header.Get("Origin") != configuredOrigin(h.publicURL) {
 		writeError(w, http.StatusForbidden, "bad origin")
@@ -109,7 +110,10 @@ func (h *WSHandler) Upgrade(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	conn := realtime.NewConn(ws, userID, claims.Email, h.logger)
+	// Use background context because r.Context() is cancelled when the handler
+	// returns, while the WebSocket connection remains active.
+	ctx, cancel := context.WithDeadline(context.Background(), claims.ExpiresAt.Time)
+	conn := realtime.NewConn(ws, userID, claims.Email, auth.Role(claims.TenantRole), cancel, h.logger)
 	// Replay cursor: max Envelope.Seq the client already processed.
 	// Absent/garbage → 0 → fresh connect, no replay (the client's
 	// normal initial DB load covers it). Must be set before Subscribe.
@@ -132,22 +136,17 @@ func (h *WSHandler) Upgrade(w http.ResponseWriter, r *http.Request) {
 		zap.Int("topics", len(memberships)+1),
 	)
 
-	// Use background context — r.Context() is cancelled when the handler returns,
-	// but the WebSocket connection outlives the HTTP handler.
-	ctx, cancel := context.WithDeadline(context.Background(), claims.ExpiresAt.Time)
-
 	go conn.WritePump(ctx)
-	go h.monitorAuthorization(ctx, cancel, claims, userID, memberships)
+	go h.monitorAuthorization(ctx, cancel, conn, claims, userID, memberships)
 	go func() {
-		defer cancel()
 		conn.ReadPump(ctx, h.handler.HandleMessage)
+		cancel()
 		h.hub.Unregister(conn)
-		conn.Close()
 		h.logger.Info("ws disconnected", zap.String("conn", conn.ID))
 	}()
 }
 
-func (h *WSHandler) monitorAuthorization(ctx context.Context, cancel context.CancelFunc, claims *auth.Claims, userID uuid.UUID, memberships wsMemberships) {
+func (h *WSHandler) monitorAuthorization(ctx context.Context, cancel context.CancelFunc, conn *realtime.Conn, claims *auth.Claims, userID uuid.UUID, memberships wsMemberships) {
 	ticker := time.NewTicker(h.pollEvery)
 	defer ticker.Stop()
 	q := dbq.New(h.db.Pool())
@@ -162,11 +161,25 @@ func (h *WSHandler) monitorAuthorization(ctx context.Context, cancel context.Can
 				cancel()
 				return
 			}
+			if auth.Role(live.TenantRole) != conn.TenantRole {
+				h.logger.Info("closing ws after tenant role changed", zap.String("uid", userID.String()))
+				cancel()
+				return
+			}
 			current, err := loadWSMemberships(ctx, q, userID)
 			if err != nil || !maps.Equal(memberships, current) {
 				h.logger.Info("closing ws after agent memberships changed", zap.String("uid", userID.String()), zap.Error(err))
 				cancel()
 				return
+			}
+			p := authz.UserPrincipal(userID, auth.Role(live.TenantRole))
+			for _, agentID := range conn.JobsSubscriptions() {
+				if err := authz.Authorize(ctx, q, p, authz.AgentJobView, agentID); err != nil {
+					h.logger.Info("closing ws after jobs subscription authorization changed",
+						zap.String("uid", userID.String()), zap.String("agent_id", agentID.String()), zap.Error(err))
+					cancel()
+					return
+				}
 			}
 		}
 	}

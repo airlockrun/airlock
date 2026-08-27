@@ -102,6 +102,24 @@ message RunErrorEvent {
   string error = 2;
 }
 
+// JobProgressEvent carries a job's latest operator-visible progress snapshot.
+message JobProgressEvent {
+  string agent_id = 1;
+  string job_id = 2;
+  int64 state_version = 3;
+  JobProgressInfo progress = 4;
+}
+
+// JobLifecycleEvent carries an operator-safe job summary without input/output.
+message JobLifecycleEvent {
+  JobInfo summary = 1;
+}
+
+// JobsSubscribedEvent confirms an agent's operator job topic is active.
+message JobsSubscribedEvent {
+  string agent_id = 1;
+}
+
 // --- Client → server control messages ---
 
 // SubscribeBuildRequest asks the hub to subscribe this connection to a
@@ -114,6 +132,16 @@ message SubscribeBuildRequest {
 // UnsubscribeBuildRequest drops the per-build subscription (sent on unmount).
 message UnsubscribeBuildRequest {
   string build_id = 1;
+}
+
+// SubscribeJobsRequest asks for operator job events on an agent-specific topic.
+message SubscribeJobsRequest {
+  string agent_id = 1;
+}
+
+// UnsubscribeJobsRequest drops an agent's operator job-event subscription.
+message UnsubscribeJobsRequest {
+  string agent_id = 1;
 }
 
 // --- Notification events ---

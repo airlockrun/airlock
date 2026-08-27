@@ -125,6 +125,15 @@ func (b *BuildService) AcquireUpgradeLock(ctx context.Context, agentID string) e
 		tx.Rollback(ctx)
 		return fmt.Errorf("get agent for upgrade: %w", err)
 	}
+	unresolvedDeployment, err := qtx.AgentHasUnresolvedDeployment(ctx, agentPgUUID)
+	if err != nil {
+		tx.Rollback(ctx)
+		return fmt.Errorf("check unresolved deployment: %w", err)
+	}
+	if unresolvedDeployment {
+		tx.Rollback(ctx)
+		return ErrUpgradeInProgress
+	}
 
 	if row.UpgradeStatus != "idle" && row.UpgradeStatus != "failed" {
 		tx.Rollback(ctx)

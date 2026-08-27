@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -16,25 +17,26 @@ import (
 	"github.com/airlockrun/airlock/compat"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
-	"github.com/airlockrun/airlock/execproxy"
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 	"github.com/airlockrun/airlock/networkpolicy"
 	"github.com/airlockrun/airlock/oauth"
 	"github.com/airlockrun/airlock/realtime"
 	"github.com/airlockrun/airlock/secrets"
 	agentstoragesvc "github.com/airlockrun/airlock/service/agentstorage"
+	jobssvc "github.com/airlockrun/airlock/service/jobs"
 	"github.com/airlockrun/airlock/storage"
 	"github.com/airlockrun/airlock/trigger"
 	solprovider "github.com/airlockrun/sol/provider"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"
 )
 
-// scheduleReconciler is the subset of trigger.Scheduler the Sync handler needs:
-// re-seed cron fire rows and orphan removed schedules after a sync.
+// scheduleReconciler is the subset of trigger.Scheduler the Sync handler needs.
 type scheduleReconciler interface {
-	ReconcileAgent(ctx context.Context, agentID uuid.UUID, handlers []wire.ScheduleHandlerDef) error
+	ReconcileAgentTx(ctx context.Context, tx pgx.Tx, agentID uuid.UUID, tokenVersion int64, definitions []wire.JobCronDef) error
+	Wake()
 }
 
 type Handler struct {
@@ -43,6 +45,7 @@ type Handler struct {
 	oauthClient            *oauth.Client
 	s3                     *storage.S3Client
 	files                  *agentstoragesvc.Service
+	jobs                   *jobssvc.Service
 	builder                *builder.BuildService
 	pubsub                 *realtime.PubSub
 	bridgeMgr              BridgePartsDeliverer // for output()/topic bridge delivery
@@ -53,7 +56,6 @@ type Handler struct {
 	forceInlineAttachments bool                     // dev escape hatch — ignore provider URL capability, send everything as base64
 	jwtSecret              string                   // shared with auth middleware; read by mcp_server.go to validate incoming A2A JWTs
 	dispatcher             *trigger.Dispatcher      // forward-prompt + ensure-running for A2A
-	execDialer             ExecDialerService        // SSH dialer for RegisterExecEndpoint; nil-safe via implements-or-stub adapter
 	httpNetwork            *networkpolicy.Policy
 	logger                 *zap.Logger
 }
@@ -67,6 +69,7 @@ type Config struct {
 	OAuthClient            *oauth.Client
 	S3                     *storage.S3Client
 	Files                  *agentstoragesvc.Service
+	Jobs                   *jobssvc.Service
 	Builder                *builder.BuildService
 	PubSub                 *realtime.PubSub
 	BridgeMgr              BridgePartsDeliverer
@@ -77,7 +80,6 @@ type Config struct {
 	ForceInlineAttachments bool
 	JWTSecret              string
 	Dispatcher             *trigger.Dispatcher
-	ExecDialer             ExecDialerService
 	HTTPNetwork            *networkpolicy.Policy
 	Logger                 *zap.Logger
 }
@@ -106,6 +108,9 @@ func New(c Config) *Handler {
 	if c.Files == nil {
 		panic("agentapi: file service is required")
 	}
+	if c.Jobs == nil {
+		panic("agentapi: jobs service is required")
+	}
 	if c.Scheduler == nil {
 		panic("agentapi: scheduler is required")
 	}
@@ -115,6 +120,7 @@ func New(c Config) *Handler {
 		oauthClient:            c.OAuthClient,
 		s3:                     c.S3,
 		files:                  c.Files,
+		jobs:                   c.Jobs,
 		builder:                c.Builder,
 		pubsub:                 c.PubSub,
 		bridgeMgr:              c.BridgeMgr,
@@ -125,19 +131,9 @@ func New(c Config) *Handler {
 		forceInlineAttachments: c.ForceInlineAttachments,
 		jwtSecret:              c.JWTSecret,
 		dispatcher:             c.Dispatcher,
-		execDialer:             c.ExecDialer,
 		httpNetwork:            c.HTTPNetwork,
 		logger:                 c.Logger,
 	}
-}
-
-// ExecDialerService is the subset of *execproxy.SSHDialer the agent
-// exec handler needs. Defined here so tests can stub it without
-// dragging in golang.org/x/crypto/ssh, and exported so router.go
-// can wire the concrete dialer through Config.
-type ExecDialerService interface {
-	Exec(ctx context.Context, ep *dbq.AgentExecEndpoint, req execproxy.ExecRequest, w http.ResponseWriter) error
-	EvictCache(id uuid.UUID)
 }
 
 // BridgePartsDeliverer is the subset of trigger.BridgeManager needed for message delivery.
@@ -191,6 +187,10 @@ func (h *Handler) CreateRun(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.TriggerType == "" {
 		req.TriggerType = "code"
+	}
+	if req.TriggerType != "code" && req.TriggerType != "background" {
+		writeJSONError(w, http.StatusBadRequest, "invalid triggerType")
+		return
 	}
 	if req.CallerAccess == "" {
 		req.CallerAccess = wire.Access(agentsdk.AccessPublic)
@@ -282,6 +282,21 @@ func (h *Handler) Sync(w http.ResponseWriter, r *http.Request) {
 
 	q := dbq.New(h.db.Pool())
 	ctx := r.Context()
+	jobHandlers, err := h.preflightJobHandlers(ctx, agentID, req.JobHandlers)
+	if err != nil {
+		h.writeJobHandlerSyncError(w, err)
+		return
+	}
+	req.JobHandlers = jobHandlers
+	for _, directory := range req.Directories {
+		canonical, pathErr := storage.CleanAgentPath(directory.Path)
+		if pathErr != nil || canonical != directory.Path ||
+			!validDirectoryAccess(directory.Read) || !validDirectoryAccess(directory.Write) || !validDirectoryAccess(directory.List) ||
+			!validDirectoryScope(directory.Scope) || directory.RetentionHours < 0 {
+			writeJSONError(w, http.StatusBadRequest, "invalid directory declaration: "+directory.Path)
+			return
+		}
+	}
 
 	// Validate the reported agentsdk version against what this airlock
 	// process was built against. A mismatch means the container image is
@@ -296,6 +311,20 @@ func (h *Handler) Sync(w http.ResponseWriter, r *http.Request) {
 			writeJSONError(w, http.StatusConflict, err.Error())
 			return
 		}
+	}
+	tokenVersion := auth.AgentTokenVersionFromContext(ctx)
+	if err := h.reconcileJobManifest(ctx, agentID, tokenVersion, req.JobHandlers, req.JobCrons); err != nil {
+		switch {
+		case errors.Is(err, trigger.ErrInvalidJobCron), errors.Is(err, jobssvc.ErrInvalidJobCron):
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+		case errors.Is(err, trigger.ErrStaleJobCrons):
+			writeJSONError(w, http.StatusUnauthorized, err.Error())
+		default:
+			h.writeJobHandlerSyncError(w, err)
+		}
+		return
+	}
+	if req.Version != "" {
 		_ = q.UpdateAgentSDKVersion(ctx, dbq.UpdateAgentSDKVersionParams{
 			ID:         pgAgentID,
 			SdkVersion: req.Version,
@@ -458,12 +487,6 @@ func (h *Handler) Sync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.scheduler.ReconcileAgent(ctx, agentID, req.ScheduleHandlers); err != nil {
-		h.logger.Error("reconcile scheduler failed", zap.Error(err))
-		writeJSONError(w, http.StatusInternalServerError, "failed to reconcile schedules")
-		return
-	}
-
 	// Upsert routes, then delete stale.
 	routeKeys := make([]string, len(req.Routes))
 	for i, rt := range req.Routes {
@@ -607,32 +630,6 @@ func (h *Handler) Sync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Exec endpoints are also declaration-only; operator configuration owns the
-	// concrete resource.
-	execSlugs := make([]string, len(req.ExecEndpoints))
-	for i, e := range req.ExecEndpoints {
-		access := string(e.Access)
-		if access == "" {
-			access = string(agentsdk.AccessAdmin)
-		}
-		execSpec, _ := json.Marshal(map[string]any{"llm_hint": e.LLMHint, "access": access})
-		if err := needsQ.UpsertResourceNeed(ctx, dbq.UpsertResourceNeedParams{
-			AgentID: pgAgentID, Type: "exec_endpoint", Slug: e.Slug, Description: e.Description,
-			SetupInstructions: "", ExpectedUrl: "", ExpectedScopes: "", Spec: execSpec,
-		}); err != nil {
-			h.logger.Error("record exec need failed", zap.Error(err))
-			writeJSONError(w, http.StatusInternalServerError, "failed to sync exec endpoints")
-			return
-		}
-		execSlugs[i] = e.Slug
-	}
-	if err := needsQ.DeleteResourceNeedsByAgentTypeExcept(ctx, dbq.DeleteResourceNeedsByAgentTypeExceptParams{
-		AgentID: pgAgentID, Type: "exec_endpoint", Slugs: execSlugs,
-	}); err != nil {
-		h.logger.Error("delete stale exec needs failed", zap.Error(err))
-		writeJSONError(w, http.StatusInternalServerError, "failed to sync exec endpoints")
-		return
-	}
 	if err := needsTx.Commit(ctx); err != nil {
 		writeJSONError(w, http.StatusInternalServerError, "failed to commit resource sync")
 		return
@@ -742,7 +739,6 @@ func (h *Handler) Sync(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusInternalServerError, "failed to load siblings")
 		return
 	}
-
 	// Public storage base — the prefix StorageHandle.URL joins with '/'
 	// and the storage path (e.g. "reports/q1.csv") to form a URL.
 	publicStorageBase := routeURL + "/__air/storage"

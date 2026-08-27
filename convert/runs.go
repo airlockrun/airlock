@@ -46,7 +46,12 @@ func JSONToStruct(data []byte) *structpb.Struct {
 	if len(data) == 0 || string(data) == "{}" || string(data) == "null" {
 		return nil
 	}
-	return AnyToStruct(data)
+	var value map[string]any
+	if err := json.Unmarshal(data, &value); err != nil {
+		return nil
+	}
+	result, _ := structpb.NewStruct(value)
+	return result
 }
 
 // JSONToListValue decodes a JSON array blob into a protobuf

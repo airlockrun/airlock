@@ -12,7 +12,6 @@ import (
 	bridgessvc "github.com/airlockrun/airlock/service/bridges"
 	catalogsvc "github.com/airlockrun/airlock/service/catalog"
 	connsvc "github.com/airlockrun/airlock/service/connections"
-	execsvc "github.com/airlockrun/airlock/service/execendpoints"
 	gitcredssvc "github.com/airlockrun/airlock/service/gitcredentials"
 	managedbotssvc "github.com/airlockrun/airlock/service/managedbots"
 	memberssvc "github.com/airlockrun/airlock/service/members"
@@ -44,7 +43,6 @@ type Service struct {
 	bridges     *bridgessvc.Service
 	catalog     *catalogsvc.Service
 	conns       *connsvc.Service
-	execs       *execsvc.Service
 	gitcreds    *gitcredssvc.Service
 	managedbots *managedbotssvc.Service
 	members     *memberssvc.Service
@@ -93,7 +91,6 @@ type Deps struct {
 	Bridges     *bridgessvc.Service
 	Catalog     *catalogsvc.Service
 	Conns       *connsvc.Service
-	Execs       *execsvc.Service
 	GitCreds    *gitcredssvc.Service
 	ManagedBots *managedbotssvc.Service
 	Members     *memberssvc.Service
@@ -124,7 +121,7 @@ func New(d Deps) *Service {
 		panic("sysagent: logger is required")
 	}
 	if d.Agents == nil || d.Bridges == nil || d.Catalog == nil || d.Conns == nil ||
-		d.Execs == nil || d.GitCreds == nil || d.ManagedBots == nil || d.Members == nil ||
+		d.GitCreds == nil || d.ManagedBots == nil || d.Members == nil ||
 		d.Runs == nil || d.Siblings == nil || d.Users == nil {
 		panic("sysagent: every per-domain service is required")
 	}
@@ -139,7 +136,6 @@ func New(d Deps) *Service {
 		bridges:            d.Bridges,
 		catalog:            d.Catalog,
 		conns:              d.Conns,
-		execs:              d.Execs,
 		gitcreds:           d.GitCreds,
 		managedbots:        d.ManagedBots,
 		members:            d.Members,

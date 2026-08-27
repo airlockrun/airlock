@@ -23,8 +23,8 @@ func NewResourcesHandler(svc *resourcessvc.Service) *ResourcesHandler {
 	return &ResourcesHandler{svc: svc}
 }
 
-// List handles GET /api/v1/resources — the connections / MCP servers / exec
-// endpoints available through ownership or grants, with caller capabilities.
+// List handles GET /api/v1/resources. It returns connections and MCP servers
+// available through ownership or grants, with caller capabilities.
 func (h *ResourcesHandler) List(w http.ResponseWriter, r *http.Request) {
 	rows, err := h.svc.List(r.Context(), principalFromRequest(r))
 	if err != nil {
@@ -44,7 +44,6 @@ func (h *ResourcesHandler) List(w http.ResponseWriter, r *http.Request) {
 			AgentCount:   res.AgentCount,
 			Capabilities: res.Capabilities,
 			CreatedAt:    convert.PgTimestampToProto(res.CreatedAt),
-			LastUsedAt:   convert.PgTimestampToProto(res.LastUsedAt),
 		}
 	}
 	writeProto(w, http.StatusOK, &airlockv1.ListOwnedResourcesResponse{Resources: out})

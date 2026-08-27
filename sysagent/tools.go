@@ -41,8 +41,6 @@ var destructiveTools = map[string]struct{}{
 	"revoke_mcp_credential":     {},
 	"revoke_mcp_oauth_app":      {},
 	"clear_env_var":             {},
-	"rotate_exec_keypair":       {},
-	"unpin_exec_host_key":       {},
 	"cancel_run":                {},
 	"add_sibling":               {},
 	"update_sibling_max_access": {},
@@ -108,7 +106,7 @@ func (s *Service) allTools() []tool.Tool {
 	out = append(out, s.agentMutateTools()...)
 	out = append(out, s.bridgeTools()...)
 	out = append(out, s.connectionTools()...)
-	out = append(out, s.envExecTools()...)
+	out = append(out, s.envVarTools()...)
 	out = append(out, s.runTools()...)
 	out = append(out, s.siblingMemberTools()...)
 	out = append(out, s.deepLinkTools()...)

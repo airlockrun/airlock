@@ -20,7 +20,9 @@ DELETE FROM agent_resource_needs
 WHERE agent_id = @agent_id AND type = @type AND slug <> ALL (@slugs::text[]);
 
 -- name: ListResourceNeedsByAgent :many
-SELECT * FROM agent_resource_needs WHERE agent_id = @agent_id ORDER BY type, slug;
+SELECT * FROM agent_resource_needs
+WHERE agent_id = @agent_id AND type IN ('connection', 'mcp_server')
+ORDER BY type, slug;
 
 -- name: GetResourceNeed :one
 SELECT * FROM agent_resource_needs
@@ -55,11 +57,6 @@ WHERE n.agent_id = @agent_id AND n.type = 'mcp_server' AND n.slug = @slug
   AND m.lifecycle = 'active'
   AND (m.auth_mode NOT IN ('oauth', 'oauth_discovery') OR (m.scopes_verified AND string_to_array(n.expected_scopes, ' ') <@ string_to_array(m.granted_scopes, ' ')));
 
--- name: ResolveBoundExecEndpoint :one
-SELECT e.* FROM agent_resource_needs n
-JOIN agent_exec_endpoints e ON e.id = n.bound_exec_id
-WHERE n.agent_id = @agent_id AND n.type = 'exec_endpoint' AND n.slug = @slug;
-
 -- Binding management (operator selects/creates a resource for a need).
 
 -- name: BindConnectionNeed :execrows
@@ -80,27 +77,19 @@ UPDATE agent_resource_needs SET bound_mcp_id = @resource_id
 WHERE id = @need_id
   AND bound_mcp_id IS NOT DISTINCT FROM sqlc.narg(expected_resource_id)::uuid;
 
--- name: BindExecEndpointNeed :execrows
-UPDATE agent_resource_needs SET bound_exec_id = @resource_id
-WHERE agent_id = @agent_id AND type = 'exec_endpoint' AND slug = @slug;
-
--- name: ReplaceExecEndpointNeedBinding :execrows
-UPDATE agent_resource_needs SET bound_exec_id = @resource_id
-WHERE id = @need_id
-  AND bound_exec_id IS NOT DISTINCT FROM sqlc.narg(expected_resource_id)::uuid;
-
 -- name: UnbindResourceNeed :execrows
 UPDATE agent_resource_needs
-SET bound_connection_id = NULL, bound_mcp_id = NULL, bound_exec_id = NULL
-WHERE agent_id = @agent_id AND type = @type AND slug = @slug;
+SET bound_connection_id = NULL, bound_mcp_id = NULL
+WHERE agent_id = @agent_id AND type = @type AND slug = @slug
+  AND type IN ('connection', 'mcp_server');
 
 -- name: UnbindAllResourceNeedsByAgent :exec
 -- Clear every binding on an agent's needs (the need rows stay — they are the
--- code-synced manifest). Used on ownership transfer: the bound connection/MCP/
--- exec resources are the OLD owner's, and the new owner has no access to them.
+-- code-synced manifest). Used on ownership transfer: the bound resources are
+-- the OLD owner's, and the new owner has no access to them.
 UPDATE agent_resource_needs
-SET bound_connection_id = NULL, bound_mcp_id = NULL, bound_exec_id = NULL
-WHERE agent_id = @agent_id;
+SET bound_connection_id = NULL, bound_mcp_id = NULL
+WHERE agent_id = @agent_id AND type IN ('connection', 'mcp_server');
 
 -- name: ListRequiredConnectionScopes :many
 SELECT expected_scopes FROM agent_resource_needs
@@ -156,11 +145,5 @@ FOR UPDATE;
 -- name: LockMCPBindings :many
 SELECT id FROM agent_resource_needs
 WHERE bound_mcp_id = @resource_id
-ORDER BY id
-FOR UPDATE;
-
--- name: LockExecBindings :many
-SELECT id FROM agent_resource_needs
-WHERE bound_exec_id = @resource_id
 ORDER BY id
 FOR UPDATE;

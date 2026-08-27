@@ -45,7 +45,7 @@ UPDATE runs SET
     stdout_log = COALESCE(@stdout_log, ''),
     panic_trace = COALESCE(@panic_trace, ''),
     finished_at = now(),
-    duration_ms = EXTRACT(EPOCH FROM (now() - started_at))::integer * 1000
+    duration_ms = (EXTRACT(EPOCH FROM (now() - started_at)) * 1000)::integer
 WHERE id = @id;
 
 -- name: UpsertRunComplete :execrows
@@ -79,7 +79,7 @@ ON CONFLICT (id) DO UPDATE SET
     panic_trace = EXCLUDED.panic_trace,
     checkpoint = EXCLUDED.checkpoint,
     finished_at = now(),
-    duration_ms = EXTRACT(EPOCH FROM (now() - runs.started_at))::integer * 1000
+    duration_ms = (EXTRACT(EPOCH FROM (now() - runs.started_at)) * 1000)::integer
 WHERE runs.agent_id = EXCLUDED.agent_id
   AND runs.status = 'running';
 
@@ -196,7 +196,26 @@ WHERE runs.id = @run_id;
 UPDATE runs SET
     status = @status,
     finished_at = COALESCE(finished_at, now()),
-    duration_ms = COALESCE(NULLIF(duration_ms, 0), EXTRACT(EPOCH FROM (now() - started_at))::integer * 1000)
+    duration_ms = COALESCE(NULLIF(duration_ms, 0), (EXTRACT(EPOCH FROM (now() - started_at)) * 1000)::integer)
+WHERE id = @id AND status = 'running';
+
+-- name: CancelRun :execrows
+UPDATE runs SET
+    status = 'cancelled',
+    error_message = 'cancelled by user',
+    finished_at = now(),
+    duration_ms = (EXTRACT(EPOCH FROM (now() - started_at)) * 1000)::integer
+WHERE id = @id AND status = 'running';
+
+-- name: FailRunDispatch :execrows
+-- Terminalize a run whose request could not establish a response stream from
+-- the agent. The running-state CAS preserves whichever terminal state commits first.
+UPDATE runs SET
+    status = 'error',
+    error_message = @error_message,
+    error_kind = 'platform',
+    finished_at = now(),
+    duration_ms = (EXTRACT(EPOCH FROM (now() - started_at)) * 1000)::integer
 WHERE id = @id AND status = 'running';
 
 -- name: ResolveSuspendedRun :execrows
@@ -221,32 +240,41 @@ WHERE resumed.id = @id
         AND successor.input_payload->>'resumeRunId' = resumed.id::text
   );
 
--- name: ResetStuckRuns :exec
-UPDATE runs SET
-    status = 'failed',
-    error_message = @error_message,
-    finished_at = now(),
-    duration_ms = EXTRACT(EPOCH FROM (now() - started_at))::integer * 1000
-WHERE status = 'running';
-
 -- name: ListStuckRuns :many
 -- Runs presumed dead because they haven't seen a terminal status update
 -- past the cutoff (started_at + outer dispatcher timeout + grace).
 -- The sweeper marks them error/agent-disconnected, synthesizes orphan
--- tool-results, and publishes a synthetic run.complete WS event.
+-- tool-results, and publishes a synthetic run.error WS event.
 SELECT id, agent_id FROM runs
-WHERE status = 'running' AND started_at < @cutoff;
+WHERE status = 'running' AND trigger_type <> 'job' AND started_at < @cutoff;
+
+-- name: FailStuckRun :execrows
+UPDATE runs
+SET status = 'error',
+    error_message = 'agent disconnected',
+    finished_at = now(),
+    duration_ms = (EXTRACT(EPOCH FROM (now() - started_at)) * 1000)::integer
+WHERE id = $1 AND status = 'running' AND trigger_type <> 'job';
 
 -- name: CompactOldRuns :execrows
--- Nullify verbose fields on completed runs older than the cutoff.
+-- Nullify verbose fields on terminal runs older than the cutoff.
 -- Aggregates (token counts, cost, duration, timestamps, status, error) are preserved.
-UPDATE runs SET
+WITH candidates AS (
+    SELECT candidate_run.id
+    FROM runs candidate_run
+    WHERE candidate_run.status IN ('success', 'error', 'timeout', 'failed', 'cancelled')
+      AND candidate_run.finished_at < @cutoff
+      AND candidate_run.compacted = false
+    ORDER BY candidate_run.finished_at, candidate_run.id
+    FOR UPDATE SKIP LOCKED
+    LIMIT LEAST(@lim::integer, 500)
+)
+UPDATE runs run SET
     input_payload = '{}'::jsonb,
     actions       = '[]'::jsonb,
     checkpoint    = NULL,
     stdout_log    = '',
     panic_trace   = '',
     compacted     = true
-WHERE finished_at IS NOT NULL
-    AND finished_at < @cutoff
-    AND compacted = false;
+FROM candidates
+WHERE run.id = candidates.id;

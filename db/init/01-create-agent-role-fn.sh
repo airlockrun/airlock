@@ -96,8 +96,8 @@ psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" \
 
     -- create_agent_role: SECURITY DEFINER bridge that lets the airlock
     -- service create per-agent roles without itself holding cluster-
-    -- wide CREATEROLE. The dev/host case (scripts/setup-db.sh) uses
-    -- the same function with the airlock_app role.
+    -- wide CREATEROLE. The Compose bootstrap invokes the same function
+    -- for development with the airlock_app role.
     --
     -- session_user (not current_user) is intentional: inside a
     -- SECURITY DEFINER function current_user is the function owner

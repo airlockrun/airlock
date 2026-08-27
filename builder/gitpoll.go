@@ -84,17 +84,8 @@ func (b *BuildService) pollOneAgent(ctx context.Context, row dbq.ListAgentsForGi
 		return // already in sync
 	}
 
-	// Drift detected — load full agent and enqueue an upgrade.
-	agent, err := q.GetAgentByID(ctx, row.ID)
-	if err != nil {
-		b.logger.Error("git poll: load agent", append(fields, zap.Error(err))...)
-		return
-	}
-	hash, err := b.PullAgentRepo(ctx, agent)
-	if err != nil {
-		b.logger.Warn("git poll: pull failed", append(fields, zap.Error(err))...)
-		return
-	}
+	// Drift detected. Execute pulls after reserving the lifecycle and source
+	// locks, so a skipped enqueue cannot acknowledge an undeployed commit.
 	if err := b.AcquireUpgradeLock(ctx, agentID); err != nil {
 		if !errors.Is(err, ErrUpgradeInProgress) {
 			b.logger.Error("git poll: upgrade lock", append(fields, zap.Error(err))...)
@@ -106,13 +97,13 @@ func (b *BuildService) pollOneAgent(ctx context.Context, row dbq.ListAgentsForGi
 		Reason:  "git_poll",
 	})
 	b.logger.Info("git poll: enqueued upgrade",
-		append(fields, zap.String("from", row.GitLastSyncedRef), zap.String("to", hash))...)
+		append(fields, zap.String("from", row.GitLastSyncedRef), zap.String("to", remoteSHA))...)
 }
 
 // gitAuthedOutput is gitAuthed but returns stdout (for ls-remote).
-func gitAuthedOutput(_ context.Context, dir, header string, args ...string) (string, error) {
+func gitAuthedOutput(ctx context.Context, dir, header string, args ...string) (string, error) {
 	full := append([]string{"-c", "http.extraheader=" + header}, args...)
-	return gitOutput(dir, full...)
+	return gitOutputContext(ctx, dir, full...)
 }
 
 // parseLsRemoteFirstSHA extracts the SHA from the first line of

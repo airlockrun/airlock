@@ -33,8 +33,7 @@ import (
 // request. Generous on purpose: prompt runs may legitimately stream for
 // many minutes (long tool chains, slow LLMs); the user cancels manually
 // via DELETE /api/v1/runs/{runID} when they want to stop earlier. Cron and
-// webhook callers pass their own (typically shorter) timeout to
-// ForwardFire/Webhook.
+// webhook callers pass their own (typically shorter) timeout.
 const PromptHTTPCeiling = 30 * time.Minute
 
 // Sentinel errors from EnsureRunning for agents that exist but aren't in a
@@ -47,7 +46,9 @@ var (
 	ErrAgentStopped = errors.New("agent is stopped")
 	// ErrAgentNoImage — the agent has never finished a build, so there is
 	// no container image to run.
-	ErrAgentNoImage = errors.New("agent has no image")
+	ErrAgentNoImage   = errors.New("agent has no image")
+	ErrAgentDeploying = errors.New("agent deployment is starting")
+	ErrJobLeaseLost   = errors.New("background job delivery lease lost")
 )
 
 // notRunnableBridgeReply maps a not-runnable sentinel to a chat-friendly
@@ -65,23 +66,22 @@ func notRunnableBridgeReply(err error) (reply string, ok bool) {
 	}
 }
 
-// runState tracks an in-flight run for cancellation. Cron, webhook, and
-// prompt runs all register their cancel func here so DELETE /runs/{id}
-// can abort them.
+// runState tracks an in-flight run for cancellation.
 type runState struct {
 	cancel context.CancelFunc
 }
 
 // Dispatcher ensures agent containers are running and forwards HTTP requests to them.
 type Dispatcher struct {
-	cfg        *config.Config
-	db         *db.DB
-	containers container.ContainerManager
-	encryptor  secrets.Store
-	logger     *zap.Logger
+	cfg                *config.Config
+	db                 *db.DB
+	containers         container.ContainerManager
+	encryptor          secrets.Store
+	logger             *zap.Logger
+	runtimeForwardGate func(context.Context, uuid.UUID) (bool, error)
 
-	// In-flight per-run state registry. Populated when ForwardPrompt /
-	// ForwardFire / ForwardWebhook starts streaming from the agent,
+	// In-flight per-run state registry. Populated when prompt, A2A, and job
+	// execution starts streaming from the agent,
 	// removed when the response body is closed (after publishRunEvents
 	// drains it). CancelRun(runID) fires the registered cancel func,
 	// which aborts the outbound HTTP request — the agent's r.Context()
@@ -92,15 +92,44 @@ type Dispatcher struct {
 }
 
 // NewDispatcher creates a Dispatcher.
-func NewDispatcher(cfg *config.Config, db *db.DB, containers container.ContainerManager, enc secrets.Store, logger *zap.Logger) *Dispatcher {
-	return &Dispatcher{
+func NewDispatcher(cfg *config.Config, database *db.DB, containers container.ContainerManager, enc secrets.Store, logger *zap.Logger) *Dispatcher {
+	d := &Dispatcher{
 		cfg:        cfg,
-		db:         db,
+		db:         database,
 		containers: containers,
 		encryptor:  enc,
 		logger:     logger,
 		inFlight:   make(map[uuid.UUID]*runState),
 	}
+	d.runtimeForwardGate = func(ctx context.Context, agentID uuid.UUID) (bool, error) {
+		tx, err := database.Pool().Begin(ctx)
+		if err != nil {
+			return false, err
+		}
+		defer tx.Rollback(ctx)
+		q := dbq.New(tx)
+		agent, err := q.GetAgentByIDForUpdate(ctx, toPgUUID(agentID))
+		if err != nil {
+			return false, err
+		}
+		blocked := false
+		if agent.JobDispatchPausedBuildID.Valid {
+			build, err := q.GetAgentBuildForDeployment(ctx, dbq.GetAgentBuildForDeploymentParams{
+				BuildID: agent.JobDispatchPausedBuildID, AgentID: agent.ID,
+			})
+			if err != nil {
+				return false, err
+			}
+			if build.DeploymentPhase == "starting" {
+				blocked = true
+			}
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return false, err
+		}
+		return blocked, nil
+	}
+	return d
 }
 
 // CancelRun aborts the in-flight outbound request for the given run, if any.
@@ -183,17 +212,18 @@ func (d *Dispatcher) deregisterInFlight(runID uuid.UUID) {
 	d.mu.Unlock()
 }
 
-// runBodyCloser wraps the agent's response body so closing it deregisters
-// the run from the cancel registry. Without this the registry would leak
-// entries for runs that finished naturally (no CancelRun call).
+// runBodyCloser owns the detached request context and cancel-registry entry.
+// Closing it releases both when a run finishes naturally.
 type runBodyCloser struct {
 	io.ReadCloser
 	dispatcher *Dispatcher
 	runID      uuid.UUID
+	cancel     context.CancelFunc
 }
 
 func (r *runBodyCloser) Close() error {
 	r.dispatcher.deregisterInFlight(r.runID)
+	r.cancel()
 	return r.ReadCloser.Close()
 }
 
@@ -215,6 +245,12 @@ func (b *busyCloser) Close() error {
 // EnsureRunning looks up the agent, decrypts its DB credentials, and starts
 // (or reconnects to) the agent container. Returns the running container.
 func (d *Dispatcher) EnsureRunning(ctx context.Context, agentID uuid.UUID) (*container.Container, error) {
+	runtimeLock, err := d.db.AcquireAdvisoryLock(ctx, "agent-runtime:"+agentID.String())
+	if err != nil {
+		return nil, fmt.Errorf("lock agent runtime: %w", err)
+	}
+	defer runtimeLock.Unlock()
+
 	// Hold the swap mutex for the whole GetAgent → StartAgent window so a
 	// concurrent build's Phase F can't slip in between the agent read
 	// and the StartAgent call, leaving us starting the OLD image while
@@ -223,8 +259,13 @@ func (d *Dispatcher) EnsureRunning(ctx context.Context, agentID uuid.UUID) (*con
 	unlockSwap := d.containers.LockSwap(agentID)
 	defer unlockSwap()
 
-	q := dbq.New(d.db.Pool())
-	agent, err := q.GetAgentByID(ctx, toPgUUID(agentID))
+	tx, err := d.db.Pool().Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("begin runtime start: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	q := dbq.New(tx)
+	agent, err := q.GetAgentByIDForUpdate(ctx, toPgUUID(agentID))
 	if err != nil {
 		return nil, fmt.Errorf("get agent: %w", err)
 	}
@@ -237,6 +278,20 @@ func (d *Dispatcher) EnsureRunning(ctx context.Context, agentID uuid.UUID) (*con
 	// silently bring it back up. Manual Start is the only way out.
 	if agent.Status == "stopped" {
 		return nil, ErrAgentStopped
+	}
+	if agent.JobDispatchPausedBuildID.Valid {
+		build, err := q.GetAgentBuildForDeployment(ctx, dbq.GetAgentBuildForDeploymentParams{
+			BuildID: agent.JobDispatchPausedBuildID, AgentID: agent.ID,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("get paused deployment: %w", err)
+		}
+		if build.DeploymentPhase == "starting" {
+			return nil, ErrAgentDeploying
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit runtime selection: %w", err)
 	}
 
 	// Decrypt DB password from its dedicated column.
@@ -286,7 +341,6 @@ func (d *Dispatcher) EnsureRunning(ctx context.Context, agentID uuid.UUID) (*con
 	if err != nil {
 		return nil, fmt.Errorf("start agent: %w", err)
 	}
-
 	return c, nil
 }
 
@@ -320,49 +374,129 @@ func (d *Dispatcher) ForwardWebhook(ctx context.Context, agentID uuid.UUID, path
 
 	rc, err := d.forward(ctx, agentID, c, "POST", "/webhook/"+path, body, runID, bridgeID, nil, nil, timeout)
 	if err != nil {
+		d.failRunDispatch(runID, err)
 		return nil, uuid.Nil, err
 	}
 	return rc, runID, nil
 }
 
-// ForwardFire creates one run attempt and returns the handler's typed
-// acknowledgement after /fire/{slug} completes.
-func (d *Dispatcher) ForwardFire(ctx context.Context, agentID uuid.UUID, event wire.ScheduleFireRequest, timeout time.Duration) (wire.ScheduleFireResponse, uuid.UUID, error) {
+// CreateRouteRun records trusted subdomain ingress after route authorization
+// has selected the effective user and access level.
+func (d *Dispatcher) CreateRouteRun(ctx context.Context, agentID uuid.UUID, userID *uuid.UUID, callerAccess agentsdk.Access, input []byte, routeRef string) (uuid.UUID, error) {
+	return d.createRun(ctx, agentID, nil, nil, userID, callerAccess, input, "route", routeRef)
+}
+
+// FailRouteRun terminalizes a route run when reverse proxying cannot establish
+// or maintain the request to the agent runtime.
+func (d *Dispatcher) FailRouteRun(runID uuid.UUID, err error) {
+	d.failRunDispatch(runID, err)
+}
+
+// ForwardJob attaches a run to a leased attempt before synchronously invoking
+// the exact registered handler version in the agent runtime.
+func (d *Dispatcher) ForwardJob(ctx context.Context, job dbq.AgentJob, attempt dbq.AgentJobAttempt) (wire.JobRunResponse, uuid.UUID, error) {
+	agentID := pgUUID(job.AgentID)
 	c, err := d.EnsureRunning(ctx, agentID)
 	if err != nil {
-		return wire.ScheduleFireResponse{}, uuid.Nil, err
-	}
-	body, err := json.Marshal(event)
-	if err != nil {
-		return wire.ScheduleFireResponse{}, uuid.Nil, fmt.Errorf("marshal schedule event: %w", err)
+		return wire.JobRunResponse{}, uuid.Nil, err
 	}
 
-	runID, err := d.createRun(ctx, agentID, nil, nil, nil, agentsdk.AccessPublic, body, "schedule", event.Slug)
+	var scheduledAt *time.Time
+	if job.ScheduledAt.Valid {
+		value := job.ScheduledAt.Time.UTC()
+		scheduledAt = &value
+	}
+	request := wire.JobRunRequest{
+		ID:                      pgUUID(job.ID).String(),
+		Name:                    job.HandlerName,
+		Version:                 job.HandlerVersion,
+		InputSchemaHash:         job.InputSchemaHash,
+		OutputSchemaHash:        job.OutputSchemaHash,
+		Attempt:                 attempt.AttemptNumber,
+		TimeoutMs:               job.TimeoutMs,
+		Input:                   job.InputPayload,
+		ScheduledAt:             scheduledAt,
+		InitiatorKind:           job.InitiatorKind,
+		InitiatorUserID:         optionalUUID(job.InitiatorUserID),
+		InitiatorConversationID: optionalUUID(job.InitiatorConversationID),
+		CallerAccess:            wire.Access(job.InitiatorAccess),
+	}
+	body, err := json.Marshal(request)
 	if err != nil {
-		return wire.ScheduleFireResponse{}, uuid.Nil, err
+		return wire.JobRunResponse{}, uuid.Nil, fmt.Errorf("marshal job delivery: %w", err)
 	}
 
-	cancelCtx, cancel := context.WithCancel(ctx)
+	tx, err := d.db.Pool().Begin(ctx)
+	if err != nil {
+		return wire.JobRunResponse{}, uuid.Nil, err
+	}
+	defer tx.Rollback(ctx)
+	q := dbq.New(tx)
+	agent, err := q.GetAgentByID(ctx, job.AgentID)
+	if err != nil {
+		return wire.JobRunResponse{}, uuid.Nil, fmt.Errorf("load agent for job run: %w", err)
+	}
+	if agent.AgentTokenVersion != attempt.RuntimeGeneration {
+		return wire.JobRunResponse{}, uuid.Nil, fmt.Errorf("job runtime generation changed from %d to %d", attempt.RuntimeGeneration, agent.AgentTokenVersion)
+	}
+	run, err := q.CreateRun(ctx, dbq.CreateRunParams{
+		AgentID:              job.AgentID,
+		InputPayload:         job.InputPayload,
+		SourceRef:            agent.SourceRef,
+		TriggerType:          "job",
+		TriggerRef:           pgUUID(job.ID).String(),
+		CallerUserID:         job.InitiatorUserID,
+		CallerConversationID: job.InitiatorConversationID,
+		CallerAccess:         job.InitiatorAccess,
+	})
+	if err != nil {
+		return wire.JobRunResponse{}, uuid.Nil, fmt.Errorf("create job run: %w", err)
+	}
+	runID := pgUUID(run.ID)
+	started, err := q.StartAgentJobAttempt(ctx, dbq.StartAgentJobAttemptParams{
+		RunID: run.ID, JobID: job.ID, AttemptNumber: attempt.AttemptNumber,
+		LeaseOwner: attempt.LeaseOwner, LeaseToken: attempt.LeaseToken,
+	})
+	if err != nil {
+		return wire.JobRunResponse{}, uuid.Nil, fmt.Errorf("attach job run: %w", err)
+	}
+	if started == 0 {
+		return wire.JobRunResponse{}, uuid.Nil, ErrJobLeaseLost
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return wire.JobRunResponse{}, uuid.Nil, err
+	}
+
+	deliveryCtx, cancel := context.WithCancel(ctx)
 	d.registerInFlight(runID, cancel)
-
-	rc, err := d.forward(cancelCtx, agentID, c, "POST", "/fire/"+event.Slug, body, runID, nil, nil, nil, timeout)
-	if err != nil {
-		d.deregisterInFlight(runID)
-		cancel()
-		return wire.ScheduleFireResponse{}, runID, err
-	}
 	defer cancel()
 	defer d.deregisterInFlight(runID)
-	defer rc.Close()
-	var result wire.ScheduleFireResponse
-	decoder := json.NewDecoder(io.LimitReader(rc, 64<<10))
-	if err := decoder.Decode(&result); err != nil {
-		return wire.ScheduleFireResponse{}, runID, fmt.Errorf("decode schedule response: %w", err)
+
+	timeout := time.Duration(job.TimeoutMs)*time.Millisecond + 30*time.Second
+	headers := make(http.Header)
+	headers.Set("X-Airlock-Job-Lease-Token", pgUUID(attempt.LeaseToken).String())
+	rc, err := d.forwardWithHeaders(deliveryCtx, agentID, c, "POST", fmt.Sprintf("/job/%s/%d", job.HandlerName, job.HandlerVersion), body, runID, nil, nil, nil, timeout, headers)
+	if err != nil {
+		d.failRunDispatch(runID, err)
+		return wire.JobRunResponse{}, runID, err
 	}
-	if result.Status != "success" && result.Status != "error" && result.Status != "timeout" {
-		return wire.ScheduleFireResponse{}, runID, fmt.Errorf("invalid schedule response status %q", result.Status)
+	defer rc.Close()
+	var result wire.JobRunResponse
+	decoder := json.NewDecoder(io.LimitReader(rc, 128<<10))
+	if err := decoder.Decode(&result); err != nil {
+		d.failRunDispatch(runID, err)
+		return wire.JobRunResponse{}, runID, fmt.Errorf("decode job response: %w", err)
+	}
+	if !validJobRunStatus(result.Status) {
+		err := fmt.Errorf("invalid job response status %q", result.Status)
+		d.failRunDispatch(runID, err)
+		return wire.JobRunResponse{}, runID, err
 	}
 	return result, runID, nil
+}
+
+func validJobRunStatus(status string) bool {
+	return status == "success" || status == "error" || status == "timeout" || status == "retry"
 }
 
 // ForwardPrompt ensures the agent is running, creates a run record, and POSTs
@@ -412,9 +546,10 @@ func (d *Dispatcher) ForwardPrompt(ctx context.Context, agentID uuid.UUID, input
 	if err != nil {
 		d.deregisterInFlight(runID)
 		cancel()
+		d.failRunDispatch(runID, err)
 		return nil, uuid.Nil, err
 	}
-	return &runBodyCloser{ReadCloser: rc, dispatcher: d, runID: runID}, runID, nil
+	return &runBodyCloser{ReadCloser: rc, dispatcher: d, runID: runID, cancel: cancel}, runID, nil
 }
 
 // ForwardA2APrompt is ForwardPrompt for the sibling-agent code path:
@@ -476,9 +611,10 @@ func (d *Dispatcher) ForwardA2APrompt(ctx context.Context, agentID uuid.UUID, pa
 	if err != nil {
 		d.deregisterInFlight(runID)
 		cancel()
+		d.failRunDispatch(runID, err)
 		return nil, uuid.Nil, err
 	}
-	return &runBodyCloser{ReadCloser: rc, dispatcher: d, runID: runID}, runID, nil
+	return &runBodyCloser{ReadCloser: rc, dispatcher: d, runID: runID, cancel: cancel}, runID, nil
 }
 
 // stampSyncHash sets input.ExpectedSyncHash to the agent's current config
@@ -582,6 +718,33 @@ func (d *Dispatcher) createRun(ctx context.Context, agentID uuid.UUID, bridgeID,
 	return pgUUID(run.ID), nil
 }
 
+// failRunDispatch terminalizes a run when forwarding fails before Airlock can
+// obtain a response stream. The forwarding context is commonly cancelled on
+// this path, so cleanup uses its own short-lived context. A concurrent agent
+// completion cannot be overwritten through the query's running-state CAS.
+func (d *Dispatcher) failRunDispatch(runID uuid.UUID, dispatchErr error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	q := dbq.New(d.db.Pool())
+	rows, err := q.FailRunDispatch(ctx, dbq.FailRunDispatchParams{
+		ID:           toPgUUID(runID),
+		ErrorMessage: dispatchErr.Error(),
+	})
+	if err != nil {
+		d.logger.Error("terminalize failed run dispatch",
+			zap.String("run_id", runID.String()), zap.Error(err))
+		return
+	}
+	if rows == 0 {
+		return
+	}
+	if err := q.UpdateRunLLMStats(ctx, toPgUUID(runID)); err != nil {
+		d.logger.Error("aggregate failed run dispatch llm stats",
+			zap.String("run_id", runID.String()), zap.Error(err))
+	}
+}
+
 // RefreshAgent triggers a synchronous re-sync on the agent container. Used
 // after server-side state changes the cached system prompt depends on
 // (typically MCP OAuth completion) so the running agent picks up new tools
@@ -632,6 +795,17 @@ func (d *Dispatcher) RefreshAgent(ctx context.Context, agentID uuid.UUID) error 
 // flows that pre-existed scoping (those handlers pass principal via
 // PromptInput / conversation lookups).
 func (d *Dispatcher) forward(ctx context.Context, agentID uuid.UUID, c *container.Container, method, path string, body []byte, runID uuid.UUID, bridgeID, parentRunID, userID *uuid.UUID, timeout time.Duration) (io.ReadCloser, error) {
+	return d.forwardWithHeaders(ctx, agentID, c, method, path, body, runID, bridgeID, parentRunID, userID, timeout, nil)
+}
+
+func (d *Dispatcher) forwardWithHeaders(ctx context.Context, agentID uuid.UUID, c *container.Container, method, path string, body []byte, runID uuid.UUID, bridgeID, parentRunID, userID *uuid.UUID, timeout time.Duration, headers http.Header) (io.ReadCloser, error) {
+	blocked, err := d.runtimeForwardGate(ctx, agentID)
+	if err != nil {
+		return nil, fmt.Errorf("lock agent forward: %w", err)
+	}
+	if blocked {
+		return nil, ErrAgentDeploying
+	}
 	var bodyReader io.Reader
 	if body != nil {
 		bodyReader = bytes.NewReader(body)
@@ -653,6 +827,11 @@ func (d *Dispatcher) forward(ctx context.Context, agentID uuid.UUID, c *containe
 	if userID != nil && *userID != uuid.Nil {
 		req.Header.Set("X-User-ID", userID.String())
 	}
+	for name, values := range headers {
+		for _, value := range values {
+			req.Header.Add(name, value)
+		}
+	}
 
 	// Hold the container busy for the whole life of this request so the
 	// idle reaper cannot stop it mid-run. MarkIdle fires on every exit
@@ -671,6 +850,13 @@ func (d *Dispatcher) forward(ctx context.Context, agentID uuid.UUID, c *containe
 		return nil, fmt.Errorf("agent returned %d: %s", resp.StatusCode, respBody)
 	}
 	return &busyCloser{ReadCloser: resp.Body, containers: d.containers, agentID: agentID}, nil
+}
+
+func optionalUUID(id pgtype.UUID) string {
+	if !id.Valid {
+		return ""
+	}
+	return pgUUID(id).String()
 }
 
 // --- helpers ---

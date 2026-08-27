@@ -56,11 +56,6 @@ SELECT kind, row_key, field, ref::text AS ref, stored FROM (
            'git_credential/' || id::text || '/token', token_ref
     FROM git_credentials
     UNION ALL
-    SELECT 'exec', id::text, 'private_key_ref',
-           'exec/' || id::text || '/private_key', private_key_ref
-    FROM agent_exec_endpoints
-    WHERE private_key_ref IS NOT NULL
-    UNION ALL
     SELECT 'oauth_state', state, 'code_verifier',
            'oauth_state/' || state || '/code_verifier', code_verifier
     FROM oauth_states
@@ -128,10 +123,6 @@ WHERE id::text = @row_key
 -- name: RewrapGitCredentialSecret :execrows
 UPDATE git_credentials SET token_ref = @new_stored
 WHERE id::text = @row_key AND token_ref = @old_stored;
-
--- name: RewrapExecSecret :execrows
-UPDATE agent_exec_endpoints SET private_key_ref = @new_stored
-WHERE id::text = @row_key AND private_key_ref = @old_stored;
 
 -- name: RewrapOAuthStateSecret :execrows
 UPDATE oauth_states SET code_verifier = @new_stored

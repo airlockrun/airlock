@@ -58,7 +58,7 @@ func newCompactionFinishedEvent(runID string, raw json.RawMessage) *airlockv1.Co
 
 // runStatusForFallback returns the runs row's current status string, or
 // "" if it can't be read. Used to decide whether PublishRunEvents should
-// emit a fallback run.complete after the agent stream ends mid-flight.
+// emit a fallback run.error after the agent stream ends mid-flight.
 // db may be nil in tests that don't wire a pool; treat that as "unknown"
 // and let the caller fall back to the conservative emit-anyway path.
 func runStatusForFallback(ctx context.Context, db *pgxpool.Pool, runID uuid.UUID) string {
@@ -332,19 +332,19 @@ func PublishRunEvents(
 	//
 	// Resolve the ambiguity by reading the run's current status. Anything
 	// non-'running' means somebody else owns the terminal event; emit
-	// nothing and log at INFO. 'running' is the genuine "agent died
-	// silently" case — keep the fallback so the UI unblocks.
+	// nothing and log at INFO. 'running' is the genuine "agent died silently"
+	// case and cannot establish successful completion.
 	if !sawFinish && !sawSuspended && !sawError {
 		status := runStatusForFallback(ctx, db, runID)
 		switch status {
 		case "", "running":
-			logger.Warn("agent stream ended without terminal event — emitting run.complete fallback",
+			logger.Warn("agent stream ended without terminal event; emitting run.error fallback",
 				zap.String("runId", runID.String()),
 				zap.String("agentId", agentID.String()),
 				zap.String("dbStatus", status))
-			mirror("run.complete", &airlockv1.RunCompleteEvent{
-				RunId:        runID.String(),
-				FinishReason: "stop",
+			mirror("run.error", &airlockv1.RunErrorEvent{
+				RunId: runID.String(),
+				Error: "agent stream ended without terminal event",
 			})
 		default:
 			logger.Info("agent stream ended without terminal event; run already finalized — skipping WS fallback",

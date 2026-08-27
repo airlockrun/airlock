@@ -143,23 +143,18 @@ func (h *GitWebhookHandler) Handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Pull then enqueue an upgrade. Both happen in a goroutine so the
-	// webhook respond fast; provider-side delivery latency budgets are
-	// usually 10s, far less than a build cycle.
-	go h.runWebhookBuild(agent, agentID)
+	// Reserve the upgrade in a goroutine so the webhook responds fast;
+	// provider-side delivery latency budgets are usually 10s, far less than
+	// a build cycle.
+	go h.runWebhookBuild(agentID)
 
 	w.WriteHeader(http.StatusAccepted)
 }
 
-// runWebhookBuild pulls + kicks off the upgrade in the background.
-func (h *GitWebhookHandler) runWebhookBuild(agent dbq.Agent, agentID uuid.UUID) {
+// runWebhookBuild reserves an upgrade in the background. The build pulls the
+// configured branch while holding its source lock.
+func (h *GitWebhookHandler) runWebhookBuild(agentID uuid.UUID) {
 	ctx := context.Background()
-	hash, err := h.builder.PullAgentRepo(ctx, agent)
-	if err != nil {
-		h.logger.Error("webhook pull failed",
-			zap.String("agent", agentID.String()), zap.Error(err))
-		return
-	}
 	if err := h.builder.AcquireUpgradeLock(ctx, agentID.String()); err != nil {
 		if !errors.Is(err, builder.ErrUpgradeInProgress) {
 			h.logger.Error("webhook upgrade lock failed",
@@ -171,8 +166,7 @@ func (h *GitWebhookHandler) runWebhookBuild(agent dbq.Agent, agentID uuid.UUID) 
 		AgentID: agentID.String(),
 		Reason:  "git_push",
 	})
-	h.logger.Info("webhook build enqueued",
-		zap.String("agent", agentID.String()), zap.String("head", hash))
+	h.logger.Info("webhook build enqueued", zap.String("agent", agentID.String()))
 }
 
 // verifyGitHubSignature checks X-Hub-Signature-256 against an HMAC-SHA256

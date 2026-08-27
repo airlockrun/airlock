@@ -11,6 +11,24 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const agentBuildCancellationRequested = `-- name: AgentBuildCancellationRequested :one
+SELECT (cancel_requested_at IS NOT NULL)::boolean
+FROM agent_builds
+WHERE id = $1 AND agent_id = $2 AND status = 'building'
+`
+
+type AgentBuildCancellationRequestedParams struct {
+	BuildID pgtype.UUID `json:"build_id"`
+	AgentID pgtype.UUID `json:"agent_id"`
+}
+
+func (q *Queries) AgentBuildCancellationRequested(ctx context.Context, arg AgentBuildCancellationRequestedParams) (bool, error) {
+	row := q.db.QueryRow(ctx, agentBuildCancellationRequested, arg.BuildID, arg.AgentID)
+	var column_1 bool
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const agentBuildIntegrationActive = `-- name: AgentBuildIntegrationActive :one
 SELECT EXISTS (
     SELECT 1
@@ -35,6 +53,67 @@ func (q *Queries) AgentBuildIntegrationActive(ctx context.Context, arg AgentBuil
 	return column_1, err
 }
 
+const agentHasUnresolvedDeployment = `-- name: AgentHasUnresolvedDeployment :one
+SELECT EXISTS (
+    SELECT 1
+    FROM agent_builds
+    WHERE agent_id = $1
+      AND status = 'building'
+      AND deployment_phase IN ('starting', 'rollback')
+)::boolean
+`
+
+func (q *Queries) AgentHasUnresolvedDeployment(ctx context.Context, agentID pgtype.UUID) (bool, error) {
+	row := q.db.QueryRow(ctx, agentHasUnresolvedDeployment, agentID)
+	var column_1 bool
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
+const beginAgentDeploymentCutover = `-- name: BeginAgentDeploymentCutover :one
+WITH phase AS (
+    UPDATE agent_builds build
+    SET deployment_phase = 'starting'
+    WHERE build.id = $1
+      AND build.agent_id = $2
+      AND build.deployment_token = $3
+      AND build.deployment_phase = 'paused'
+      AND build.cancel_requested_at IS NULL
+    RETURNING build.id
+), rotated AS (
+    UPDATE agents agent
+    SET agent_token_version = agent.agent_token_version + 1,
+        status = CASE WHEN agent.status = 'failed' THEN 'building' ELSE agent.status END,
+        updated_at = now()
+    FROM phase
+    WHERE agent.id = $2
+      AND agent.job_dispatch_paused_build_id = $1
+      AND agent.status = $4
+    RETURNING agent.agent_token_version
+)
+SELECT rotated.agent_token_version
+FROM rotated JOIN phase ON true
+`
+
+type BeginAgentDeploymentCutoverParams struct {
+	BuildID         pgtype.UUID `json:"build_id"`
+	AgentID         pgtype.UUID `json:"agent_id"`
+	DeploymentToken pgtype.UUID `json:"deployment_token"`
+	ExpectedStatus  string      `json:"expected_status"`
+}
+
+func (q *Queries) BeginAgentDeploymentCutover(ctx context.Context, arg BeginAgentDeploymentCutoverParams) (int64, error) {
+	row := q.db.QueryRow(ctx, beginAgentDeploymentCutover,
+		arg.BuildID,
+		arg.AgentID,
+		arg.DeploymentToken,
+		arg.ExpectedStatus,
+	)
+	var agent_token_version int64
+	err := row.Scan(&agent_token_version)
+	return agent_token_version, err
+}
+
 const clearAgentBuildIntegrationToken = `-- name: ClearAgentBuildIntegrationToken :exec
 UPDATE agent_builds SET
     integration_token_hash = NULL,
@@ -47,20 +126,50 @@ func (q *Queries) ClearAgentBuildIntegrationToken(ctx context.Context, id pgtype
 	return err
 }
 
+const completeRecoveredAgentBuild = `-- name: CompleteRecoveredAgentBuild :execrows
+UPDATE agent_builds
+SET status = 'complete',
+    error_message = '',
+    integration_token_hash = NULL,
+    integration_token_expires_at = NULL,
+    finished_at = now()
+WHERE id = $1
+  AND agent_id = $2
+  AND status = 'building'
+  AND deployment_phase = 'complete'
+  AND source_ref <> ''
+  AND image_ref <> ''
+`
+
+type CompleteRecoveredAgentBuildParams struct {
+	BuildID pgtype.UUID `json:"build_id"`
+	AgentID pgtype.UUID `json:"agent_id"`
+}
+
+func (q *Queries) CompleteRecoveredAgentBuild(ctx context.Context, arg CompleteRecoveredAgentBuildParams) (int64, error) {
+	result, err := q.db.Exec(ctx, completeRecoveredAgentBuild, arg.BuildID, arg.AgentID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const createAgentBuild = `-- name: CreateAgentBuild :one
 INSERT INTO agent_builds (
     agent_id, type, status, instructions,
     source_ref, image_ref, sol_log, docker_log, log_seq, error_message,
     llm_calls, llm_tokens_in, llm_tokens_out, llm_tokens_cached, llm_cost_estimate,
-    rollback_target_id, sdk_version, todos, exit_status, exit_message, build_model
+    rollback_target_id, sdk_version, todos, exit_status, exit_message, build_model,
+    deployment_phase
 )
 VALUES (
     $1, $2, 'building', $3,
     '', '', '', '', 0, '',
     0, 0, 0, 0, 0,
-    $4, '', '[]', '', '', ''
+    $4, '', '[]', '', '', '',
+    'building'
 )
-RETURNING id, agent_id, type, status, instructions, source_ref, image_ref, sol_log, docker_log, log_seq, error_message, started_at, finished_at, llm_calls, llm_tokens_in, llm_tokens_out, llm_tokens_cached, llm_cost_estimate, rollback_target_id, sdk_version, todos, exit_status, exit_message, failure_kind, build_model, integration_token_hash, integration_token_expires_at
+RETURNING id, agent_id, type, status, instructions, source_ref, image_ref, sol_log, docker_log, log_seq, error_message, started_at, finished_at, llm_calls, llm_tokens_in, llm_tokens_out, llm_tokens_cached, llm_cost_estimate, rollback_target_id, sdk_version, todos, exit_status, exit_message, failure_kind, build_model, integration_token_hash, integration_token_expires_at, deployment_phase, deployment_target_status, deployment_token, job_manifest_extracted_at, job_manifest_digest, cancel_requested_at
 `
 
 type CreateAgentBuildParams struct {
@@ -111,12 +220,300 @@ func (q *Queries) CreateAgentBuild(ctx context.Context, arg CreateAgentBuildPara
 		&i.BuildModel,
 		&i.IntegrationTokenHash,
 		&i.IntegrationTokenExpiresAt,
+		&i.DeploymentPhase,
+		&i.DeploymentTargetStatus,
+		&i.DeploymentToken,
+		&i.JobManifestExtractedAt,
+		&i.JobManifestDigest,
+		&i.CancelRequestedAt,
 	)
 	return i, err
 }
 
+const deleteAgentBuildJobHandlers = `-- name: DeleteAgentBuildJobHandlers :exec
+DELETE FROM agent_build_job_handlers candidate
+USING agent_builds build
+WHERE candidate.build_id = $1
+  AND build.id = candidate.build_id
+  AND build.job_manifest_extracted_at IS NULL
+`
+
+func (q *Queries) DeleteAgentBuildJobHandlers(ctx context.Context, buildID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, deleteAgentBuildJobHandlers, buildID)
+	return err
+}
+
+const failPausedAgentDeployment = `-- name: FailPausedAgentDeployment :execrows
+WITH resumed AS (
+    UPDATE agents agent
+    SET job_dispatch_paused_build_id = NULL,
+        job_dispatch_paused_at = NULL,
+        job_dispatch_pause_deadline = NULL,
+        status = CASE WHEN agent.status = 'building' THEN $4 ELSE agent.status END,
+        updated_at = now()
+    FROM agent_builds build
+    WHERE agent.id = $2
+      AND agent.job_dispatch_paused_build_id = $1
+      AND build.id = $1
+      AND build.agent_id = agent.id
+      AND build.deployment_token = $3
+      AND build.deployment_phase = 'rollback'
+    RETURNING agent.id
+)
+UPDATE agent_builds build
+SET deployment_phase = 'failed'
+FROM resumed
+WHERE build.id = $1
+  AND build.agent_id = $2
+  AND build.deployment_token = $3
+`
+
+type FailPausedAgentDeploymentParams struct {
+	BuildID         pgtype.UUID `json:"build_id"`
+	AgentID         pgtype.UUID `json:"agent_id"`
+	DeploymentToken pgtype.UUID `json:"deployment_token"`
+	RollbackStatus  string      `json:"rollback_status"`
+}
+
+func (q *Queries) FailPausedAgentDeployment(ctx context.Context, arg FailPausedAgentDeploymentParams) (int64, error) {
+	result, err := q.db.Exec(ctx, failPausedAgentDeployment,
+		arg.BuildID,
+		arg.AgentID,
+		arg.DeploymentToken,
+		arg.RollbackStatus,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const failRecoveredAgentBuild = `-- name: FailRecoveredAgentBuild :execrows
+UPDATE agent_builds
+SET status = 'failed',
+    error_message = $1,
+    integration_token_hash = NULL,
+    integration_token_expires_at = NULL,
+    deployment_phase = 'failed',
+    finished_at = now()
+WHERE id = $2
+  AND agent_id = $3
+  AND status = 'building'
+  AND deployment_phase <> 'complete'
+`
+
+type FailRecoveredAgentBuildParams struct {
+	ErrorMessage string      `json:"error_message"`
+	BuildID      pgtype.UUID `json:"build_id"`
+	AgentID      pgtype.UUID `json:"agent_id"`
+}
+
+func (q *Queries) FailRecoveredAgentBuild(ctx context.Context, arg FailRecoveredAgentBuildParams) (int64, error) {
+	result, err := q.db.Exec(ctx, failRecoveredAgentBuild, arg.ErrorMessage, arg.BuildID, arg.AgentID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const failRecoveredAgentLifecycle = `-- name: FailRecoveredAgentLifecycle :execrows
+UPDATE agents agent
+SET status = CASE WHEN build.type = 'build' THEN 'failed' ELSE agent.status END,
+    upgrade_status = CASE WHEN build.type IN ('upgrade', 'rollback') THEN 'failed' ELSE agent.upgrade_status END,
+    error_message = $1,
+    updated_at = now()
+FROM agent_builds build
+WHERE agent.id = $2
+  AND build.id = $3
+  AND build.agent_id = agent.id
+  AND build.status = 'failed'
+  AND build.error_message = $1
+  AND (
+      (build.type = 'build' AND agent.status = 'building')
+      OR (build.type IN ('upgrade', 'rollback') AND agent.upgrade_status IN ('queued', 'building'))
+  )
+  AND NOT EXISTS (
+      SELECT 1
+      FROM agent_builds active
+      WHERE active.agent_id = agent.id
+        AND active.status = 'building'
+  )
+`
+
+type FailRecoveredAgentLifecycleParams struct {
+	ErrorMessage string      `json:"error_message"`
+	AgentID      pgtype.UUID `json:"agent_id"`
+	BuildID      pgtype.UUID `json:"build_id"`
+}
+
+func (q *Queries) FailRecoveredAgentLifecycle(ctx context.Context, arg FailRecoveredAgentLifecycleParams) (int64, error) {
+	result, err := q.db.Exec(ctx, failRecoveredAgentLifecycle, arg.ErrorMessage, arg.AgentID, arg.BuildID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const finalizePausedAgentDeployment = `-- name: FinalizePausedAgentDeployment :execrows
+WITH finalized AS (
+    UPDATE agents agent
+    SET source_ref = $1,
+        image_ref = $2,
+        status = $9,
+        upgrade_status = 'idle',
+        error_message = '',
+        job_dispatch_paused_build_id = NULL,
+        job_dispatch_paused_at = NULL,
+        job_dispatch_pause_deadline = NULL,
+        updated_at = now()
+    FROM agent_builds build
+    WHERE agent.id = $7
+      AND agent.agent_token_version = $10
+      AND agent.job_dispatch_paused_build_id = $6
+      AND build.id = $6
+      AND build.agent_id = agent.id
+      AND build.deployment_token = $8
+      AND build.deployment_phase = 'starting'
+    RETURNING agent.id
+)
+UPDATE agent_builds build
+SET deployment_phase = 'complete',
+    status = 'complete',
+    source_ref = $1,
+    image_ref = $2,
+    sdk_version = $3,
+    exit_status = $4,
+    exit_message = $5,
+    error_message = '',
+    failure_kind = '',
+    integration_token_hash = NULL,
+    integration_token_expires_at = NULL,
+    finished_at = now()
+FROM finalized
+WHERE build.id = $6
+  AND build.agent_id = $7
+  AND build.deployment_token = $8
+`
+
+type FinalizePausedAgentDeploymentParams struct {
+	SourceRef         string      `json:"source_ref"`
+	ImageRef          string      `json:"image_ref"`
+	SdkVersion        string      `json:"sdk_version"`
+	ExitStatus        string      `json:"exit_status"`
+	ExitMessage       string      `json:"exit_message"`
+	BuildID           pgtype.UUID `json:"build_id"`
+	AgentID           pgtype.UUID `json:"agent_id"`
+	DeploymentToken   pgtype.UUID `json:"deployment_token"`
+	NextStatus        string      `json:"next_status"`
+	AgentTokenVersion int64       `json:"agent_token_version"`
+}
+
+func (q *Queries) FinalizePausedAgentDeployment(ctx context.Context, arg FinalizePausedAgentDeploymentParams) (int64, error) {
+	result, err := q.db.Exec(ctx, finalizePausedAgentDeployment,
+		arg.SourceRef,
+		arg.ImageRef,
+		arg.SdkVersion,
+		arg.ExitStatus,
+		arg.ExitMessage,
+		arg.BuildID,
+		arg.AgentID,
+		arg.DeploymentToken,
+		arg.NextStatus,
+		arg.AgentTokenVersion,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const finalizeStoppedAgentDeployment = `-- name: FinalizeStoppedAgentDeployment :one
+WITH deployed AS (
+    UPDATE agents agent
+    SET source_ref = $1,
+        image_ref = $2,
+        agent_token_version = agent.agent_token_version + 1,
+        upgrade_status = 'idle',
+        error_message = '',
+        updated_at = now()
+    FROM agent_builds build
+    WHERE agent.id = $3
+      AND agent.status = 'stopped'
+      AND agent.job_dispatch_paused_build_id IS NULL
+      AND build.id = $4
+      AND build.agent_id = agent.id
+      AND build.deployment_token = $5
+      AND build.deployment_phase = 'starting'
+      AND build.cancel_requested_at IS NULL
+      AND NOT EXISTS (
+          SELECT 1
+          FROM agent_jobs job
+          WHERE job.agent_id = agent.id
+            AND job.status IN ('queued', 'running')
+            AND NOT EXISTS (
+                SELECT 1
+                FROM agent_build_job_handlers candidate
+                WHERE candidate.build_id = build.id
+                  AND candidate.name = job.handler_name
+                  AND candidate.version = job.handler_version
+                  AND candidate.input_schema_hash = job.input_schema_hash
+                  AND candidate.output_schema_hash = job.output_schema_hash
+            )
+      )
+    RETURNING agent.agent_token_version
+), phase AS (
+    UPDATE agent_builds build
+    SET deployment_phase = 'complete',
+        status = 'complete',
+        source_ref = $1,
+        image_ref = $2,
+        sdk_version = $6,
+        exit_status = $7,
+        exit_message = $8,
+        error_message = '',
+        failure_kind = '',
+        integration_token_hash = NULL,
+        integration_token_expires_at = NULL,
+        finished_at = now()
+    FROM deployed
+    WHERE build.id = $4
+      AND build.agent_id = $3
+      AND build.deployment_token = $5
+    RETURNING build.id
+)
+SELECT deployed.agent_token_version
+FROM deployed JOIN phase ON true
+`
+
+type FinalizeStoppedAgentDeploymentParams struct {
+	SourceRef       string      `json:"source_ref"`
+	ImageRef        string      `json:"image_ref"`
+	AgentID         pgtype.UUID `json:"agent_id"`
+	BuildID         pgtype.UUID `json:"build_id"`
+	DeploymentToken pgtype.UUID `json:"deployment_token"`
+	SdkVersion      string      `json:"sdk_version"`
+	ExitStatus      string      `json:"exit_status"`
+	ExitMessage     string      `json:"exit_message"`
+}
+
+func (q *Queries) FinalizeStoppedAgentDeployment(ctx context.Context, arg FinalizeStoppedAgentDeploymentParams) (int64, error) {
+	row := q.db.QueryRow(ctx, finalizeStoppedAgentDeployment,
+		arg.SourceRef,
+		arg.ImageRef,
+		arg.AgentID,
+		arg.BuildID,
+		arg.DeploymentToken,
+		arg.SdkVersion,
+		arg.ExitStatus,
+		arg.ExitMessage,
+	)
+	var agent_token_version int64
+	err := row.Scan(&agent_token_version)
+	return agent_token_version, err
+}
+
 const getAgentBuild = `-- name: GetAgentBuild :one
-SELECT id, agent_id, type, status, instructions, source_ref, image_ref, sol_log, docker_log, log_seq, error_message, started_at, finished_at, llm_calls, llm_tokens_in, llm_tokens_out, llm_tokens_cached, llm_cost_estimate, rollback_target_id, sdk_version, todos, exit_status, exit_message, failure_kind, build_model, integration_token_hash, integration_token_expires_at FROM agent_builds WHERE id = $1
+SELECT id, agent_id, type, status, instructions, source_ref, image_ref, sol_log, docker_log, log_seq, error_message, started_at, finished_at, llm_calls, llm_tokens_in, llm_tokens_out, llm_tokens_cached, llm_cost_estimate, rollback_target_id, sdk_version, todos, exit_status, exit_message, failure_kind, build_model, integration_token_hash, integration_token_expires_at, deployment_phase, deployment_target_status, deployment_token, job_manifest_extracted_at, job_manifest_digest, cancel_requested_at FROM agent_builds WHERE id = $1
 `
 
 func (q *Queries) GetAgentBuild(ctx context.Context, id pgtype.UUID) (AgentBuild, error) {
@@ -150,6 +547,12 @@ func (q *Queries) GetAgentBuild(ctx context.Context, id pgtype.UUID) (AgentBuild
 		&i.BuildModel,
 		&i.IntegrationTokenHash,
 		&i.IntegrationTokenExpiresAt,
+		&i.DeploymentPhase,
+		&i.DeploymentTargetStatus,
+		&i.DeploymentToken,
+		&i.JobManifestExtractedAt,
+		&i.JobManifestDigest,
+		&i.CancelRequestedAt,
 	)
 	return i, err
 }
@@ -174,8 +577,61 @@ func (q *Queries) GetAgentBuildByIntegrationToken(ctx context.Context, integrati
 	return i, err
 }
 
+const getAgentBuildForDeployment = `-- name: GetAgentBuildForDeployment :one
+SELECT id, agent_id, type, status, instructions, source_ref, image_ref, sol_log, docker_log, log_seq, error_message, started_at, finished_at, llm_calls, llm_tokens_in, llm_tokens_out, llm_tokens_cached, llm_cost_estimate, rollback_target_id, sdk_version, todos, exit_status, exit_message, failure_kind, build_model, integration_token_hash, integration_token_expires_at, deployment_phase, deployment_target_status, deployment_token, job_manifest_extracted_at, job_manifest_digest, cancel_requested_at
+FROM agent_builds
+WHERE id = $1 AND agent_id = $2
+FOR UPDATE
+`
+
+type GetAgentBuildForDeploymentParams struct {
+	BuildID pgtype.UUID `json:"build_id"`
+	AgentID pgtype.UUID `json:"agent_id"`
+}
+
+func (q *Queries) GetAgentBuildForDeployment(ctx context.Context, arg GetAgentBuildForDeploymentParams) (AgentBuild, error) {
+	row := q.db.QueryRow(ctx, getAgentBuildForDeployment, arg.BuildID, arg.AgentID)
+	var i AgentBuild
+	err := row.Scan(
+		&i.ID,
+		&i.AgentID,
+		&i.Type,
+		&i.Status,
+		&i.Instructions,
+		&i.SourceRef,
+		&i.ImageRef,
+		&i.SolLog,
+		&i.DockerLog,
+		&i.LogSeq,
+		&i.ErrorMessage,
+		&i.StartedAt,
+		&i.FinishedAt,
+		&i.LlmCalls,
+		&i.LlmTokensIn,
+		&i.LlmTokensOut,
+		&i.LlmTokensCached,
+		&i.LlmCostEstimate,
+		&i.RollbackTargetID,
+		&i.SdkVersion,
+		&i.Todos,
+		&i.ExitStatus,
+		&i.ExitMessage,
+		&i.FailureKind,
+		&i.BuildModel,
+		&i.IntegrationTokenHash,
+		&i.IntegrationTokenExpiresAt,
+		&i.DeploymentPhase,
+		&i.DeploymentTargetStatus,
+		&i.DeploymentToken,
+		&i.JobManifestExtractedAt,
+		&i.JobManifestDigest,
+		&i.CancelRequestedAt,
+	)
+	return i, err
+}
+
 const getLatestBuildForAgent = `-- name: GetLatestBuildForAgent :one
-SELECT id, agent_id, type, status, instructions, source_ref, image_ref, sol_log, docker_log, log_seq, error_message, started_at, finished_at, llm_calls, llm_tokens_in, llm_tokens_out, llm_tokens_cached, llm_cost_estimate, rollback_target_id, sdk_version, todos, exit_status, exit_message, failure_kind, build_model, integration_token_hash, integration_token_expires_at FROM agent_builds WHERE agent_id = $1 ORDER BY started_at DESC LIMIT 1
+SELECT id, agent_id, type, status, instructions, source_ref, image_ref, sol_log, docker_log, log_seq, error_message, started_at, finished_at, llm_calls, llm_tokens_in, llm_tokens_out, llm_tokens_cached, llm_cost_estimate, rollback_target_id, sdk_version, todos, exit_status, exit_message, failure_kind, build_model, integration_token_hash, integration_token_expires_at, deployment_phase, deployment_target_status, deployment_token, job_manifest_extracted_at, job_manifest_digest, cancel_requested_at FROM agent_builds WHERE agent_id = $1 ORDER BY started_at DESC LIMIT 1
 `
 
 func (q *Queries) GetLatestBuildForAgent(ctx context.Context, agentID pgtype.UUID) (AgentBuild, error) {
@@ -209,14 +665,109 @@ func (q *Queries) GetLatestBuildForAgent(ctx context.Context, agentID pgtype.UUI
 		&i.BuildModel,
 		&i.IntegrationTokenHash,
 		&i.IntegrationTokenExpiresAt,
+		&i.DeploymentPhase,
+		&i.DeploymentTargetStatus,
+		&i.DeploymentToken,
+		&i.JobManifestExtractedAt,
+		&i.JobManifestDigest,
+		&i.CancelRequestedAt,
 	)
 	return i, err
+}
+
+const insertAgentBuildJobHandler = `-- name: InsertAgentBuildJobHandler :execrows
+INSERT INTO agent_build_job_handlers (
+    build_id, name, version, description, timeout_ms, max_attempts,
+    max_concurrency, input_schema, output_schema, input_schema_hash,
+    output_schema_hash
+)
+SELECT
+    $1, $2, $3, $4, $5, $6,
+    $7, $8, $9, $10,
+    $11
+FROM agent_builds build
+WHERE build.id = $1
+  AND build.job_manifest_extracted_at IS NULL
+`
+
+type InsertAgentBuildJobHandlerParams struct {
+	BuildID          pgtype.UUID `json:"build_id"`
+	Name             string      `json:"name"`
+	Version          int32       `json:"version"`
+	Description      string      `json:"description"`
+	TimeoutMs        int64       `json:"timeout_ms"`
+	MaxAttempts      int32       `json:"max_attempts"`
+	MaxConcurrency   int32       `json:"max_concurrency"`
+	InputSchema      []byte      `json:"input_schema"`
+	OutputSchema     []byte      `json:"output_schema"`
+	InputSchemaHash  string      `json:"input_schema_hash"`
+	OutputSchemaHash string      `json:"output_schema_hash"`
+}
+
+func (q *Queries) InsertAgentBuildJobHandler(ctx context.Context, arg InsertAgentBuildJobHandlerParams) (int64, error) {
+	result, err := q.db.Exec(ctx, insertAgentBuildJobHandler,
+		arg.BuildID,
+		arg.Name,
+		arg.Version,
+		arg.Description,
+		arg.TimeoutMs,
+		arg.MaxAttempts,
+		arg.MaxConcurrency,
+		arg.InputSchema,
+		arg.OutputSchema,
+		arg.InputSchemaHash,
+		arg.OutputSchemaHash,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const listAgentBuildJobHandlers = `-- name: ListAgentBuildJobHandlers :many
+SELECT build_id, name, version, description, timeout_ms, max_attempts, max_concurrency, input_schema, output_schema, input_schema_hash, output_schema_hash
+FROM agent_build_job_handlers
+WHERE build_id = $1
+ORDER BY name, version
+`
+
+func (q *Queries) ListAgentBuildJobHandlers(ctx context.Context, buildID pgtype.UUID) ([]AgentBuildJobHandler, error) {
+	rows, err := q.db.Query(ctx, listAgentBuildJobHandlers, buildID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []AgentBuildJobHandler{}
+	for rows.Next() {
+		var i AgentBuildJobHandler
+		if err := rows.Scan(
+			&i.BuildID,
+			&i.Name,
+			&i.Version,
+			&i.Description,
+			&i.TimeoutMs,
+			&i.MaxAttempts,
+			&i.MaxConcurrency,
+			&i.InputSchema,
+			&i.OutputSchema,
+			&i.InputSchemaHash,
+			&i.OutputSchemaHash,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listAgentBuildsByAgent = `-- name: ListAgentBuildsByAgent :many
 SELECT id, agent_id, type, status, instructions, error_message, source_ref, image_ref, started_at, finished_at,
        llm_calls, llm_tokens_in, llm_tokens_out, llm_tokens_cached, llm_cost_estimate,
-       rollback_target_id, sdk_version, exit_status, exit_message, failure_kind, build_model
+       rollback_target_id, sdk_version, exit_status, exit_message, failure_kind, build_model,
+       deployment_phase
 FROM agent_builds
 WHERE agent_id = $1
 ORDER BY started_at DESC
@@ -245,6 +796,7 @@ type ListAgentBuildsByAgentRow struct {
 	ExitMessage      string             `json:"exit_message"`
 	FailureKind      string             `json:"failure_kind"`
 	BuildModel       string             `json:"build_model"`
+	DeploymentPhase  string             `json:"deployment_phase"`
 }
 
 func (q *Queries) ListAgentBuildsByAgent(ctx context.Context, agentID pgtype.UUID) ([]ListAgentBuildsByAgentRow, error) {
@@ -278,6 +830,7 @@ func (q *Queries) ListAgentBuildsByAgent(ctx context.Context, agentID pgtype.UUI
 			&i.ExitMessage,
 			&i.FailureKind,
 			&i.BuildModel,
+			&i.DeploymentPhase,
 		); err != nil {
 			return nil, err
 		}
@@ -289,19 +842,278 @@ func (q *Queries) ListAgentBuildsByAgent(ctx context.Context, agentID pgtype.UUI
 	return items, nil
 }
 
-const resetStuckAgentBuilds = `-- name: ResetStuckAgentBuilds :exec
-UPDATE agent_builds SET
-    status = 'failed',
-    error_message = 'interrupted by Airlock restart',
-    integration_token_hash = NULL,
-    integration_token_expires_at = NULL,
-    finished_at = now()
+const listBuildingAgentBuilds = `-- name: ListBuildingAgentBuilds :many
+SELECT id, agent_id
+FROM agent_builds
 WHERE status = 'building'
+ORDER BY started_at, id
 `
 
-func (q *Queries) ResetStuckAgentBuilds(ctx context.Context) error {
-	_, err := q.db.Exec(ctx, resetStuckAgentBuilds)
-	return err
+type ListBuildingAgentBuildsRow struct {
+	ID      pgtype.UUID `json:"id"`
+	AgentID pgtype.UUID `json:"agent_id"`
+}
+
+func (q *Queries) ListBuildingAgentBuilds(ctx context.Context) ([]ListBuildingAgentBuildsRow, error) {
+	rows, err := q.db.Query(ctx, listBuildingAgentBuilds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListBuildingAgentBuildsRow{}
+	for rows.Next() {
+		var i ListBuildingAgentBuildsRow
+		if err := rows.Scan(&i.ID, &i.AgentID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listPausedAgentDeployments = `-- name: ListPausedAgentDeployments :many
+SELECT agent.id, agent.owner_principal_id, agent.slug, agent.name, agent.description, agent.status, agent.upgrade_status, agent.auto_fix, agent.build_provider_id, agent.build_model, agent.exec_provider_id, agent.exec_model, agent.stt_provider_id, agent.stt_model, agent.vision_provider_id, agent.vision_model, agent.tts_provider_id, agent.tts_model, agent.image_gen_provider_id, agent.image_gen_model, agent.embedding_provider_id, agent.embedding_model, agent.search_provider_id, agent.search_model, agent.source_ref, agent.image_ref, agent.db_schema, agent.db_password, agent.sdk_version, agent.config, agent.instructions, agent.error_message, agent.created_at, agent.updated_at, agent.mcp_enabled, agent.allow_public_mcp, agent.allow_public_routes, agent.tools_hash, agent.emoji, agent.allow_oauth_mcp_prompt, agent.allow_public_mcp_prompt, agent.git_remote_url, agent.git_mode, agent.git_credential_id, agent.git_default_branch, agent.git_webhook_secret, agent.git_last_synced_ref, agent.agent_token_version, agent.job_dispatch_paused_build_id, agent.job_dispatch_paused_at, agent.job_dispatch_pause_deadline, build.deployment_token, build.deployment_phase
+FROM agents agent
+JOIN agent_builds build ON build.id = agent.job_dispatch_paused_build_id
+                       AND build.agent_id = agent.id
+WHERE build.deployment_phase IN ('paused', 'starting', 'rollback')
+ORDER BY agent.id
+`
+
+type ListPausedAgentDeploymentsRow struct {
+	ID                       pgtype.UUID        `json:"id"`
+	OwnerPrincipalID         pgtype.UUID        `json:"owner_principal_id"`
+	Slug                     string             `json:"slug"`
+	Name                     string             `json:"name"`
+	Description              string             `json:"description"`
+	Status                   string             `json:"status"`
+	UpgradeStatus            string             `json:"upgrade_status"`
+	AutoFix                  bool               `json:"auto_fix"`
+	BuildProviderID          pgtype.UUID        `json:"build_provider_id"`
+	BuildModel               string             `json:"build_model"`
+	ExecProviderID           pgtype.UUID        `json:"exec_provider_id"`
+	ExecModel                string             `json:"exec_model"`
+	SttProviderID            pgtype.UUID        `json:"stt_provider_id"`
+	SttModel                 string             `json:"stt_model"`
+	VisionProviderID         pgtype.UUID        `json:"vision_provider_id"`
+	VisionModel              string             `json:"vision_model"`
+	TtsProviderID            pgtype.UUID        `json:"tts_provider_id"`
+	TtsModel                 string             `json:"tts_model"`
+	ImageGenProviderID       pgtype.UUID        `json:"image_gen_provider_id"`
+	ImageGenModel            string             `json:"image_gen_model"`
+	EmbeddingProviderID      pgtype.UUID        `json:"embedding_provider_id"`
+	EmbeddingModel           string             `json:"embedding_model"`
+	SearchProviderID         pgtype.UUID        `json:"search_provider_id"`
+	SearchModel              string             `json:"search_model"`
+	SourceRef                string             `json:"source_ref"`
+	ImageRef                 string             `json:"image_ref"`
+	DbSchema                 string             `json:"db_schema"`
+	DbPassword               string             `json:"db_password"`
+	SdkVersion               string             `json:"sdk_version"`
+	Config                   []byte             `json:"config"`
+	Instructions             []byte             `json:"instructions"`
+	ErrorMessage             string             `json:"error_message"`
+	CreatedAt                pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt                pgtype.Timestamptz `json:"updated_at"`
+	McpEnabled               bool               `json:"mcp_enabled"`
+	AllowPublicMcp           bool               `json:"allow_public_mcp"`
+	AllowPublicRoutes        bool               `json:"allow_public_routes"`
+	ToolsHash                []byte             `json:"tools_hash"`
+	Emoji                    string             `json:"emoji"`
+	AllowOauthMcpPrompt      bool               `json:"allow_oauth_mcp_prompt"`
+	AllowPublicMcpPrompt     bool               `json:"allow_public_mcp_prompt"`
+	GitRemoteUrl             string             `json:"git_remote_url"`
+	GitMode                  string             `json:"git_mode"`
+	GitCredentialID          pgtype.UUID        `json:"git_credential_id"`
+	GitDefaultBranch         string             `json:"git_default_branch"`
+	GitWebhookSecret         string             `json:"git_webhook_secret"`
+	GitLastSyncedRef         string             `json:"git_last_synced_ref"`
+	AgentTokenVersion        int64              `json:"agent_token_version"`
+	JobDispatchPausedBuildID pgtype.UUID        `json:"job_dispatch_paused_build_id"`
+	JobDispatchPausedAt      pgtype.Timestamptz `json:"job_dispatch_paused_at"`
+	JobDispatchPauseDeadline pgtype.Timestamptz `json:"job_dispatch_pause_deadline"`
+	DeploymentToken          pgtype.UUID        `json:"deployment_token"`
+	DeploymentPhase          string             `json:"deployment_phase"`
+}
+
+func (q *Queries) ListPausedAgentDeployments(ctx context.Context) ([]ListPausedAgentDeploymentsRow, error) {
+	rows, err := q.db.Query(ctx, listPausedAgentDeployments)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListPausedAgentDeploymentsRow{}
+	for rows.Next() {
+		var i ListPausedAgentDeploymentsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.OwnerPrincipalID,
+			&i.Slug,
+			&i.Name,
+			&i.Description,
+			&i.Status,
+			&i.UpgradeStatus,
+			&i.AutoFix,
+			&i.BuildProviderID,
+			&i.BuildModel,
+			&i.ExecProviderID,
+			&i.ExecModel,
+			&i.SttProviderID,
+			&i.SttModel,
+			&i.VisionProviderID,
+			&i.VisionModel,
+			&i.TtsProviderID,
+			&i.TtsModel,
+			&i.ImageGenProviderID,
+			&i.ImageGenModel,
+			&i.EmbeddingProviderID,
+			&i.EmbeddingModel,
+			&i.SearchProviderID,
+			&i.SearchModel,
+			&i.SourceRef,
+			&i.ImageRef,
+			&i.DbSchema,
+			&i.DbPassword,
+			&i.SdkVersion,
+			&i.Config,
+			&i.Instructions,
+			&i.ErrorMessage,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.McpEnabled,
+			&i.AllowPublicMcp,
+			&i.AllowPublicRoutes,
+			&i.ToolsHash,
+			&i.Emoji,
+			&i.AllowOauthMcpPrompt,
+			&i.AllowPublicMcpPrompt,
+			&i.GitRemoteUrl,
+			&i.GitMode,
+			&i.GitCredentialID,
+			&i.GitDefaultBranch,
+			&i.GitWebhookSecret,
+			&i.GitLastSyncedRef,
+			&i.AgentTokenVersion,
+			&i.JobDispatchPausedBuildID,
+			&i.JobDispatchPausedAt,
+			&i.JobDispatchPauseDeadline,
+			&i.DeploymentToken,
+			&i.DeploymentPhase,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const markAgentBuildJobManifestExtracted = `-- name: MarkAgentBuildJobManifestExtracted :execrows
+UPDATE agent_builds
+SET job_manifest_extracted_at = now(),
+    job_manifest_digest = $1,
+    source_ref = $2,
+    image_ref = $3
+WHERE id = $4
+  AND agent_id = $5
+  AND job_manifest_extracted_at IS NULL
+`
+
+type MarkAgentBuildJobManifestExtractedParams struct {
+	JobManifestDigest pgtype.Text `json:"job_manifest_digest"`
+	SourceRef         string      `json:"source_ref"`
+	ImageRef          string      `json:"image_ref"`
+	BuildID           pgtype.UUID `json:"build_id"`
+	AgentID           pgtype.UUID `json:"agent_id"`
+}
+
+func (q *Queries) MarkAgentBuildJobManifestExtracted(ctx context.Context, arg MarkAgentBuildJobManifestExtractedParams) (int64, error) {
+	result, err := q.db.Exec(ctx, markAgentBuildJobManifestExtracted,
+		arg.JobManifestDigest,
+		arg.SourceRef,
+		arg.ImageRef,
+		arg.BuildID,
+		arg.AgentID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const requestCurrentAgentBuildCancellation = `-- name: RequestCurrentAgentBuildCancellation :one
+WITH current_build AS MATERIALIZED (
+    SELECT build.id
+    FROM agent_builds build
+    JOIN agents agent ON agent.id = build.agent_id
+    WHERE build.agent_id = $1
+      AND build.status = 'building'
+      AND build.deployment_phase IN ('building', 'manifest', 'blocked', 'paused')
+      AND (
+          (build.type = 'build' AND agent.status = 'building')
+          OR (build.type IN ('upgrade', 'rollback') AND agent.upgrade_status IN ('queued', 'building'))
+      )
+    ORDER BY build.started_at DESC, build.id DESC
+    LIMIT 1
+)
+UPDATE agent_builds build
+SET cancel_requested_at = coalesce(build.cancel_requested_at, now())
+FROM current_build, agents agent
+WHERE build.id = current_build.id
+  AND build.agent_id = $1
+  AND build.status = 'building'
+  AND build.deployment_phase IN ('building', 'manifest', 'blocked', 'paused')
+  AND agent.id = build.agent_id
+  AND (
+      (build.type = 'build' AND agent.status = 'building')
+      OR (build.type IN ('upgrade', 'rollback') AND agent.upgrade_status IN ('queued', 'building'))
+  )
+RETURNING build.id
+`
+
+func (q *Queries) RequestCurrentAgentBuildCancellation(ctx context.Context, agentID pgtype.UUID) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, requestCurrentAgentBuildCancellation, agentID)
+	var id pgtype.UUID
+	err := row.Scan(&id)
+	return id, err
+}
+
+const setAgentBuildDeploymentTarget = `-- name: SetAgentBuildDeploymentTarget :execrows
+UPDATE agent_builds
+SET deployment_phase = $1,
+    deployment_target_status = $2,
+    deployment_token = $3
+WHERE id = $4
+  AND agent_id = $5
+  AND deployment_token IS NULL
+  AND cancel_requested_at IS NULL
+`
+
+type SetAgentBuildDeploymentTargetParams struct {
+	DeploymentPhase        string      `json:"deployment_phase"`
+	DeploymentTargetStatus pgtype.Text `json:"deployment_target_status"`
+	DeploymentToken        pgtype.UUID `json:"deployment_token"`
+	BuildID                pgtype.UUID `json:"build_id"`
+	AgentID                pgtype.UUID `json:"agent_id"`
+}
+
+func (q *Queries) SetAgentBuildDeploymentTarget(ctx context.Context, arg SetAgentBuildDeploymentTargetParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setAgentBuildDeploymentTarget,
+		arg.DeploymentPhase,
+		arg.DeploymentTargetStatus,
+		arg.DeploymentToken,
+		arg.BuildID,
+		arg.AgentID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const setAgentBuildIntegrationToken = `-- name: SetAgentBuildIntegrationToken :execrows
@@ -343,9 +1155,38 @@ func (q *Queries) SetAgentBuildModel(ctx context.Context, arg SetAgentBuildModel
 	return err
 }
 
+const setAgentDeploymentRollback = `-- name: SetAgentDeploymentRollback :execrows
+UPDATE agent_builds build
+SET deployment_phase = 'rollback'
+FROM agents agent
+WHERE build.id = $1
+  AND build.agent_id = $2
+  AND build.deployment_token = $3
+  AND build.deployment_phase IN ('paused', 'starting', 'rollback')
+  AND agent.id = build.agent_id
+  AND agent.job_dispatch_paused_build_id = build.id
+`
+
+type SetAgentDeploymentRollbackParams struct {
+	BuildID         pgtype.UUID `json:"build_id"`
+	AgentID         pgtype.UUID `json:"agent_id"`
+	DeploymentToken pgtype.UUID `json:"deployment_token"`
+}
+
+func (q *Queries) SetAgentDeploymentRollback(ctx context.Context, arg SetAgentDeploymentRollbackParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setAgentDeploymentRollback, arg.BuildID, arg.AgentID, arg.DeploymentToken)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const updateAgentBuildComplete = `-- name: UpdateAgentBuildComplete :exec
 UPDATE agent_builds SET
-    status = $1,
+    status = CASE
+        WHEN deployment_phase IN ('paused', 'starting', 'rollback') THEN status
+        ELSE $1
+    END,
     error_message = COALESCE($2, ''),
     source_ref = COALESCE($3, ''),
     image_ref = COALESCE($4, ''),
@@ -355,7 +1196,15 @@ UPDATE agent_builds SET
     failure_kind = COALESCE($8, ''),
     integration_token_hash = NULL,
     integration_token_expires_at = NULL,
-    finished_at = now()
+    finished_at = CASE
+        WHEN deployment_phase IN ('paused', 'starting', 'rollback') THEN finished_at
+        ELSE now()
+    END,
+    deployment_phase = CASE
+        WHEN $1 = 'complete' THEN 'complete'
+        WHEN deployment_phase IN ('paused', 'starting', 'rollback') THEN deployment_phase
+        ELSE 'failed'
+    END
 WHERE id = $9
 `
 
@@ -384,6 +1233,34 @@ func (q *Queries) UpdateAgentBuildComplete(ctx context.Context, arg UpdateAgentB
 		arg.ID,
 	)
 	return err
+}
+
+const updateAgentBuildDeploymentPhase = `-- name: UpdateAgentBuildDeploymentPhase :execrows
+UPDATE agent_builds
+SET deployment_phase = $1
+WHERE id = $2
+  AND agent_id = $3
+  AND deployment_token = $4
+`
+
+type UpdateAgentBuildDeploymentPhaseParams struct {
+	DeploymentPhase string      `json:"deployment_phase"`
+	BuildID         pgtype.UUID `json:"build_id"`
+	AgentID         pgtype.UUID `json:"agent_id"`
+	DeploymentToken pgtype.UUID `json:"deployment_token"`
+}
+
+func (q *Queries) UpdateAgentBuildDeploymentPhase(ctx context.Context, arg UpdateAgentBuildDeploymentPhaseParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updateAgentBuildDeploymentPhase,
+		arg.DeploymentPhase,
+		arg.BuildID,
+		arg.AgentID,
+		arg.DeploymentToken,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const updateAgentBuildLogs = `-- name: UpdateAgentBuildLogs :exec

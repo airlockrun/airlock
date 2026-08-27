@@ -2,6 +2,7 @@ package api
 
 import (
 	"crypto/hmac"
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
@@ -104,6 +105,7 @@ func SubdomainProxy(agentDomain string, database *db.DB, s3 *storage.S3Client, f
 		var userDisplayName string
 		callerAccess := agentsdk.AccessPublic
 		cookieAuthenticated := false
+		routeRef := ""
 
 		if isAssetGET {
 			if claims, ok, fromCookie := validateSubdomainAuth(r, q, jwtSecret, agentID); ok {
@@ -142,6 +144,7 @@ func SubdomainProxy(agentDomain string, database *db.DB, s3 *storage.S3Client, f
 				writeError(w, http.StatusNotFound, "route not found")
 				return
 			}
+			routeRef = route.Method + " " + route.Path
 
 			// Enforce access control based on route.Access.
 			switch route.Access {
@@ -211,6 +214,24 @@ func SubdomainProxy(agentDomain string, database *db.DB, s3 *storage.S3Client, f
 			writeError(w, http.StatusBadGateway, "agent unavailable")
 			return
 		}
+		var runID uuid.UUID
+		if !isAssetGET {
+			input, err := json.Marshal(map[string]string{"method": r.Method, "path": r.URL.Path})
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "failed to record route run")
+				return
+			}
+			var callerUserID *uuid.UUID
+			if userID != uuid.Nil {
+				callerUserID = &userID
+			}
+			runID, err = dispatcher.CreateRouteRun(r.Context(), agentID, callerUserID, callerAccess, input, routeRef)
+			if err != nil {
+				log.Error("create route run", zap.Error(err))
+				writeError(w, http.StatusInternalServerError, "failed to record route run")
+				return
+			}
+		}
 
 		// Build reverse proxy to the container endpoint.
 		target, err := url.Parse(ctr.Endpoint)
@@ -238,10 +259,16 @@ func SubdomainProxy(agentDomain string, database *db.DB, s3 *storage.S3Client, f
 
 				// Replace caller-controlled identity and access headers with
 				// values established by Airlock.
+				req.Out.Header.Del("X-Run-ID")
+				req.Out.Header.Del("X-Airlock-Run-ID")
+				req.Out.Header.Del("X-Parent-Run-ID")
 				req.Out.Header.Del("X-User-ID")
 				req.Out.Header.Del("X-User-Email")
 				req.Out.Header.Del("X-User-Name")
 				req.Out.Header.Set("X-Caller-Access", string(callerAccess))
+				if runID != uuid.Nil {
+					req.Out.Header.Set("X-Run-ID", runID.String())
+				}
 				if userID != uuid.Nil {
 					req.Out.Header.Set("X-User-ID", userID.String())
 					req.Out.Header.Set("X-User-Email", userEmail)
@@ -256,6 +283,9 @@ func SubdomainProxy(agentDomain string, database *db.DB, s3 *storage.S3Client, f
 			},
 			ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 				log.Error("proxy error", zap.Error(err))
+				if runID != uuid.Nil {
+					dispatcher.FailRouteRun(runID, err)
+				}
 				writeError(w, http.StatusBadGateway, "proxy error")
 			},
 		}
@@ -405,9 +435,9 @@ func validateSubdomainAuth(r *http.Request, q *dbq.Queries, jwtSecret string, ta
 }
 
 // rejectOrRedirect returns 401 for API/htmx clients or serves a stub
-// HTML page for browsers. The stub picks at runtime: if it loads inside
-// Telegram (window.Telegram.WebApp.initData present), it exchanges the
-// initData for a session cookie via /__air/tg/auth; otherwise it
+// HTML page for browsers. The stub picks at runtime: if Telegram launch data is
+// present in the URL fragment or this WebView's session storage, it exchanges
+// the initData for a session cookie via /__air/tg/auth; otherwise it
 // redirects to the main-domain auth relay. One unauthenticated
 // landing page covers both flows.
 func rejectOrRedirect(w http.ResponseWriter, r *http.Request, publicURL string) {

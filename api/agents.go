@@ -457,7 +457,7 @@ func (h *agentsHandler) FireSchedule(w http.ResponseWriter, r *http.Request) {
 		writeAgentsError(w, err, "failed to fire schedule")
 		return
 	}
-	writeProto(w, http.StatusAccepted, &airlockv1.FireScheduleResponse{OccurrenceId: res.OccurrenceID.String()})
+	writeProto(w, http.StatusAccepted, &airlockv1.FireScheduleResponse{JobId: res.JobID.String()})
 }
 
 // ListBuilds handles GET /api/v1/agents/{agentID}/builds.
@@ -490,13 +490,18 @@ func (h *agentsHandler) ListBuilds(w http.ResponseWriter, r *http.Request) {
 
 // GetBuild handles GET /api/v1/agents/{agentID}/builds/{buildID}.
 func (h *agentsHandler) GetBuild(w http.ResponseWriter, r *http.Request) {
+	agentID, err := parseUUID(chi.URLParam(r, "agentID"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid agent ID")
+		return
+	}
 	buildID, err := parseUUID(chi.URLParam(r, "buildID"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid build ID")
 		return
 	}
 	p := principalFromRequest(r)
-	res, err := h.svc.GetBuild(r.Context(), p, buildID)
+	res, err := h.svc.GetBuildForAgent(r.Context(), p, agentID, buildID)
 	if err != nil {
 		writeAgentsError(w, err, "failed to load build")
 		return
@@ -506,7 +511,7 @@ func (h *agentsHandler) GetBuild(w http.ResponseWriter, r *http.Request) {
 		rollbackTargetSourceRef = res.Target.SourceRef
 	}
 	writeProto(w, http.StatusOK, &airlockv1.GetAgentBuildResponse{
-		Build: convert.AgentBuildDetailToProto(res.Build, rollbackTargetSourceRef),
+		Build: convert.AgentBuildDetailToProto(res.Build, rollbackTargetSourceRef, res.Agent, res.Blockers),
 	})
 }
 

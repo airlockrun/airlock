@@ -731,6 +731,7 @@ func (h *conversationsHandler) NotifyUpgradeComplete(ctx context.Context, agentI
 		defer h.convLocks.Unlock(conversationID)
 		bgCtx := context.Background()
 		if isBridge {
+			defer rc.Close()
 			// Stream the follow-up to the chat through the shared
 			// StreamToBridge primitive — the same path an inbound bridge
 			// turn uses. Producer: StreamNDJSONResponse (NDJSON → events,

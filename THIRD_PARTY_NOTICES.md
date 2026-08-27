@@ -7,7 +7,7 @@ This lists the open-source software bundled in the distributed binary
 and reproduces each component's license (and NOTICE, where required).
 
 ================================================================================
-github.com/airlockrun/agentsdk
+github.com/airlockrun/agentsdk v0.5.0
 ================================================================================
 Copyright 2026 Oleg Karpov
 
@@ -216,7 +216,7 @@ Copyright 2026 Oleg Karpov
 
 
 ================================================================================
-github.com/airlockrun/goai
+github.com/airlockrun/goai v0.1.6
 ================================================================================
 Copyright 2026 Oleg Karpov
 
@@ -434,7 +434,7 @@ goai is distributed. See LICENSE for the full license text.
 
 
 ================================================================================
-github.com/airlockrun/sol
+github.com/airlockrun/sol v0.1.9
 ================================================================================
 Copyright 2026 Oleg Karpov
 

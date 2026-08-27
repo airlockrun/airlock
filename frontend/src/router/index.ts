@@ -60,6 +60,7 @@ const router = createRouter({
         { path: 'agents/:id/chat', name: 'agent-chat', component: () => import('@/views/AgentChatView.vue') },
         { path: 'agents/:id/runs/:runId', name: 'run-detail', component: () => import('@/views/RunDetailView.vue') },
         { path: 'agents/:id/builds/:buildId', name: 'build-detail', component: () => import('@/views/BuildDetailView.vue') },
+        { path: 'agents/:id/jobs/:jobId', name: 'job-detail', component: () => import('@/views/JobDetailView.vue') },
         { path: 'providers', name: 'providers', component: () => import('@/views/ProvidersView.vue'), meta: { requires: 'tenant.provider.manage' } },
         { path: 'models', name: 'models', component: () => import('@/views/ModelsView.vue'), meta: { requires: 'tenant.provider.manage' } },
         { path: 'usage', name: 'usage', component: () => import('@/views/UsageView.vue'), meta: { requires: 'tenant.usage.view' } },

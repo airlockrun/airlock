@@ -144,7 +144,7 @@ func (s *Service) toolListWebhooks() tool.Tool {
 
 func (s *Service) toolListSchedules() tool.Tool {
 	return tool.New("list_schedules").
-		Description(`List the agent's declared schedule handlers — crons (recurring) and schedules (runtime-armed) — with kind, schedule, next fire, and last-run state. Use fire_schedule to trigger one manually.`).
+		Description(`List the agent's recurring typed-job cron declarations with their target job contract, schedule, next occurrence, and last occurrence. Use fire_schedule to enqueue one manually.`).
 		SchemaFromStruct(agentSlugInput{}).
 		Execute(func(ctx context.Context, raw json.RawMessage, _ tool.CallOptions) (tool.Result, error) {
 			var in agentSlugInput
@@ -263,7 +263,7 @@ func (s *Service) toolGetBuild() tool.Tool {
 			if res.Target != nil {
 				rollbackTargetSourceRef = res.Target.SourceRef
 			}
-			return okResult(convert.AgentBuildDetailToProto(res.Build, rollbackTargetSourceRef))
+			return okResult(convert.AgentBuildDetailToProto(res.Build, rollbackTargetSourceRef, res.Agent, res.Blockers))
 		}).
 		Build()
 }

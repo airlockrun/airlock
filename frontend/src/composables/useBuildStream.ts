@@ -1,7 +1,7 @@
 import { ref, nextTick, onMounted, onUnmounted } from 'vue'
 import { ws } from '@/api/ws'
 import { useBuildsStore } from '@/stores/builds'
-import type { AgentBuildInfo, TodoItem } from '@/gen/airlock/v1/types_pb'
+import { AgentBuildDeploymentPhase, type AgentBuildInfo, type TodoItem } from '@/gen/airlock/v1/types_pb'
 
 // useBuildStream owns the per-build snapshot + live stream for the Build page.
 // It loads the REST snapshot (sol/docker log, todos), subscribes to the
@@ -67,9 +67,25 @@ export function useBuildStream(agentId: string, buildId: string) {
     }
   }
 
+  function persistedPhase(value: AgentBuildDeploymentPhase): string {
+    switch (value) {
+      case AgentBuildDeploymentPhase.MANIFEST: return 'manifest'
+      case AgentBuildDeploymentPhase.BLOCKED: return 'blocked'
+      case AgentBuildDeploymentPhase.PAUSED: return 'paused'
+      case AgentBuildDeploymentPhase.STARTING: return 'starting'
+      case AgentBuildDeploymentPhase.ROLLBACK: return 'rollback'
+      case AgentBuildDeploymentPhase.COMPLETE: return 'complete'
+      case AgentBuildDeploymentPhase.FAILED: return 'failed'
+      case AgentBuildDeploymentPhase.BUILDING: return 'building'
+      default: return ''
+    }
+  }
+
   async function refreshSnapshot() {
     try {
       build.value = await buildsStore.fetchBuild(agentId, buildId)
+      const snapshotPhase = persistedPhase(build.value.deploymentPhase)
+      if (snapshotPhase !== 'building' || !phase.value) phase.value = snapshotPhase
       if (build.value.todos?.length) todos.value = build.value.todos
     } catch {
       // tolerate (build may be mid-write)
@@ -80,6 +96,7 @@ export function useBuildStream(agentId: string, buildId: string) {
     try {
       const b = await buildsStore.fetchBuild(agentId, buildId)
       build.value = b
+      phase.value = persistedPhase(b.deploymentPhase)
       solLines.value = b.solLog ? b.solLog.split('\n').filter((l) => l.length > 0) : []
       dockerLines.value = b.dockerLog ? b.dockerLog.split('\n').filter((l) => l.length > 0) : []
       snapshotSeq.value = Number(b.logSeq || 0n)
@@ -118,5 +135,5 @@ export function useBuildStream(agentId: string, buildId: string) {
     for (const u of unsubs) u()
   })
 
-  return { build, solLines, dockerLines, todos, phase, loaded }
+  return { build, solLines, dockerLines, todos, phase, loaded, refreshSnapshot }
 }

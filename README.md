@@ -17,7 +17,7 @@ Airlock is a self-hosted platform for creating and deploying AI-native apps. Bui
 Follow the [installation guide](https://airlock.run/docs/installation/) or run the pinned installer:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/airlockrun/airlock/v0.4.1/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/airlockrun/airlock/v0.5.0/install.sh | bash
 ```
 
 To inspect the installer first:
@@ -25,7 +25,7 @@ To inspect the installer first:
 ```bash
 git clone https://github.com/airlockrun/airlock.git
 cd airlock
-git checkout v0.4.1
+git checkout v0.5.0
 less install.sh
 ./install.sh
 ```
@@ -52,7 +52,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines and [AGENTS.m
 
 ## License
 
-[AGPL-3.0](LICENSE). The community edition is fully usable when self-hosted. Some operational features, including SSO/OIDC and audit-log export, are available under a commercial license. Contact `hello@airlock.run` for commercial licensing.
+[AGPL-3.0](https://github.com/airlockrun/airlock/blob/main/LICENSE). The community edition is fully usable when self-hosted. Some operational features, including SSO/OIDC and audit-log export, are available under a commercial license. Contact `hello@airlock.run` for commercial licensing.
 
 The companion libraries are licensed under Apache-2.0.
 

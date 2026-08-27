@@ -3,6 +3,7 @@ package builder
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -597,7 +598,11 @@ func runGit(dir string, args ...string) error {
 
 // gitOutput runs a git command and returns its stdout.
 func gitOutput(dir string, args ...string) (string, error) {
-	cmd := exec.Command("git", args...)
+	return gitOutputContext(context.Background(), dir, args...)
+}
+
+func gitOutputContext(ctx context.Context, dir string, args ...string) (string, error) {
+	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir
 	cmd.Env = append(gitCleanEnv(), "GIT_TERMINAL_PROMPT=0")
 	out, err := cmd.Output()

@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/airlockrun/agentsdk/wire"
@@ -15,6 +17,7 @@ import (
 	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/airlockrun/airlock/modelresolve"
+	goaierrors "github.com/airlockrun/goai/errors"
 	"github.com/airlockrun/goai/model"
 	"github.com/airlockrun/goai/stream"
 	solprovider "github.com/airlockrun/sol/provider"
@@ -114,18 +117,34 @@ func (h *Handler) LLMStream(w http.ResponseWriter, r *http.Request) {
 		capture.finishReason = "stream-init-error"
 		capture.latency = time.Since(started)
 		h.recordLLMUsage(agentID, runIDHdr, capture)
-		writeJSONError(w, http.StatusBadGateway, "LLM stream failed")
+		setLLMStreamErrorHeaders(w.Header(), err)
+		writeJSONError(w, llmStreamErrorStatus(err), "LLM stream failed")
 		return
 	}
 
-	// Write NDJSON response.
+	// Some providers perform HTTP setup inside the returned stream. Hold their
+	// initial Start event until setup is confirmed so a pre-content ErrorEvent
+	// can still be returned as an HTTP error for the caller's retry policy.
+	pending, setupErr := awaitLLMStreamSetup(r.Context(), events)
+	if setupErr != nil {
+		h.logger.Error("LLM stream setup failed", zap.Error(setupErr))
+		capture.errored = true
+		capture.finishReason = "stream-init-error"
+		capture.latency = time.Since(started)
+		h.recordLLMUsage(agentID, runIDHdr, capture)
+		setLLMStreamErrorHeaders(w.Header(), setupErr)
+		writeJSONError(w, llmStreamErrorStatus(setupErr), "LLM stream failed")
+		return
+	}
+
+	// Write NDJSON response once provider setup has succeeded.
 	w.Header().Set("Content-Type", "application/x-ndjson")
 	w.WriteHeader(http.StatusOK)
 
 	bw := bufio.NewWriter(w)
 	flusher, canFlush := w.(http.Flusher)
 
-	for event := range events {
+	writeEvent := func(event stream.Event) {
 		nd := ndJSONEvent{
 			Type: string(event.Type),
 			Data: sanitizeEventData(event.Data),
@@ -162,7 +181,7 @@ func (h *Handler) LLMStream(w http.ResponseWriter, r *http.Request) {
 			h.logger.Error("marshal NDJSON event failed — skipping event",
 				zap.String("event_type", string(event.Type)),
 				zap.Error(err))
-			continue
+			return
 		}
 		bw.Write(line)
 		bw.WriteByte('\n')
@@ -171,10 +190,80 @@ func (h *Handler) LLMStream(w http.ResponseWriter, r *http.Request) {
 			flusher.Flush()
 		}
 	}
+	for _, event := range pending {
+		writeEvent(event)
+	}
+	for event := range events {
+		writeEvent(event)
+	}
 
 	capture.fromStreamUsage(usageAcc)
 	capture.latency = time.Since(started)
 	h.recordLLMUsage(agentID, runIDHdr, capture)
+}
+
+func llmStreamErrorStatus(err error) int {
+	var apiErr *goaierrors.APICallError
+	if errors.As(err, &apiErr) && apiErr.StatusCode >= 400 && apiErr.StatusCode <= 599 {
+		return apiErr.StatusCode
+	}
+	return http.StatusBadGateway
+}
+
+func llmStreamErrorRetryable(err error) bool {
+	var apiErr *goaierrors.APICallError
+	return errors.As(err, &apiErr) && apiErr.IsRetryable
+}
+
+func setLLMStreamErrorHeaders(header http.Header, err error) {
+	header.Set("X-Airlock-LLM-Retryable", strconv.FormatBool(llmStreamErrorRetryable(err)))
+	var apiErr *goaierrors.APICallError
+	if !errors.As(err, &apiErr) {
+		return
+	}
+	for name, value := range apiErr.ResponseHeaders {
+		if strings.EqualFold(name, "Retry-After") || strings.EqualFold(name, "Retry-After-Ms") {
+			header.Set(name, value)
+		}
+	}
+}
+
+func awaitLLMStreamSetup(ctx context.Context, events <-chan stream.Event) ([]stream.Event, error) {
+	if events == nil {
+		return nil, errors.New("LLM provider returned nil event stream")
+	}
+	var pending []stream.Event
+	for {
+		select {
+		case event, ok := <-events:
+			if !ok {
+				return pending, nil
+			}
+			if eventErr, ok := event.Data.(stream.ErrorEvent); ok {
+				go drainLLMStream(ctx, events)
+				return nil, eventErr.Error
+			}
+			pending = append(pending, event)
+			if event.Type != stream.EventStart {
+				return pending, nil
+			}
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+}
+
+func drainLLMStream(ctx context.Context, events <-chan stream.Event) {
+	for {
+		select {
+		case _, ok := <-events:
+			if !ok {
+				return
+			}
+		case <-ctx.Done():
+			return
+		}
+	}
 }
 
 func (h *Handler) languageModelOptions(resolved resolvedModel) solprovider.Options {

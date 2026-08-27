@@ -153,8 +153,8 @@ func PostToConversation(ctx context.Context, deps PostDeps, opts PostOpts) error
 		if err != nil {
 			return err
 		}
-
 		if isBridge {
+			defer rc.Close()
 			// Stream response, send final text to bridge.
 			respEvents := make(chan trigger.ResponseEvent, 64)
 			go func() {

@@ -4,7 +4,7 @@ Thanks for considering a contribution to airlock.
 
 ## License
 
-airlock is licensed under the [GNU Affero General Public License v3.0](LICENSE). By submitting a contribution, you agree it will be made available under the same license.
+airlock is licensed under the [GNU Affero General Public License v3.0](https://github.com/airlockrun/airlock/blob/main/LICENSE). By submitting a contribution, you agree it will be made available under the same license.
 
 This project is part of a multi-repo open-source effort. The companion libraries - [agentsdk](https://github.com/airlockrun/agentsdk), [goai](https://github.com/airlockrun/goai), and [sol](https://github.com/airlockrun/sol) - are licensed under Apache-2.0 and have their own CONTRIBUTING.md.
 

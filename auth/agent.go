@@ -126,3 +126,12 @@ func AgentIDFromContext(ctx interface{ Value(any) any }) uuid.UUID {
 	}
 	return id
 }
+
+// AgentTokenVersionFromContext returns the authenticated runtime generation.
+func AgentTokenVersionFromContext(ctx interface{ Value(any) any }) int64 {
+	claims, _ := ctx.Value(agentClaimsKey).(*AgentClaims)
+	if claims == nil {
+		return 0
+	}
+	return claims.TokenVersion
+}

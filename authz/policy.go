@@ -40,6 +40,7 @@ const (
 	AgentLifecycle    Action = "agent.lifecycle" // stop / start / suspend
 	AgentGit          Action = "agent.git"       // connect / disconnect / read git binding
 	AgentRunView      Action = "agent.run.view"  // runs list / get / logs (admin: runs span all users)
+	AgentJobView      Action = "agent.job.view"  // jobs and handler contracts span all users
 	AgentMembersView  Action = "agent.members.view"
 	AgentToolsView    Action = "agent.tools.view"
 	AgentBuildsView   Action = "agent.builds.view"  // builds list / get / log stream (admin)
@@ -55,13 +56,14 @@ const (
 	AgentWebhooksView      Action = "agent.webhooks.view"
 	AgentSchedulesView     Action = "agent.schedules.view"
 	AgentScheduleFire      Action = "agent.schedule.fire"
-	AgentConnections       Action = "agent.connections"    // credentials / MCP / env-vars
-	AgentExecEndpoints     Action = "agent.exec_endpoints" // SSH exec-endpoint config
+	AgentConnections       Action = "agent.connections" // credentials / MCP / env-vars
 	AgentSiblings          Action = "agent.siblings"
 	AgentModelsUpdate      Action = "agent.models.update"
 	AgentRoutesView        Action = "agent.routes.view"
 	AgentManagedBotCreate  Action = "agent.managed_bot.create"
 	AgentIntegrationInvoke Action = "agent.integration.invoke"
+	AgentJobCancel         Action = "agent.job.cancel"
+	AgentJobRetry          Action = "agent.job.retry"
 
 	// Tenant axis.
 	TenantCatalogView         Action = "tenant.catalog.view"           // read providers/models/capabilities catalog: user+
@@ -107,6 +109,7 @@ var policy = map[Action]Requirement{
 	AgentLifecycle:    {Axis: AxisAgent, Agent: agentsdk.AccessUser},
 	AgentGit:          {Axis: AxisAgent, Agent: agentsdk.AccessUser},
 	AgentRunView:      {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
+	AgentJobView:      {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
 	AgentMembersView:  {Axis: AxisAgent, Agent: agentsdk.AccessUser},
 	AgentToolsView:    {Axis: AxisAgent, Agent: agentsdk.AccessUser},
 	AgentBuildsView:   {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
@@ -122,12 +125,13 @@ var policy = map[Action]Requirement{
 	AgentSchedulesView:     {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
 	AgentScheduleFire:      {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
 	AgentConnections:       {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
-	AgentExecEndpoints:     {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
 	AgentSiblings:          {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
 	AgentModelsUpdate:      {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
 	AgentRoutesView:        {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
 	AgentManagedBotCreate:  {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
 	AgentIntegrationInvoke: {Axis: AxisIntegration, Agent: agentsdk.AccessAdmin},
+	AgentJobCancel:         {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
+	AgentJobRetry:          {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
 
 	TenantCatalogView:         {Axis: AxisTenant, Tenant: auth.RoleUser},
 	TenantUserView:            {Axis: AxisTenant, Tenant: auth.RoleUser},

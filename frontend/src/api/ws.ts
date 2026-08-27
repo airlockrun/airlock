@@ -1,11 +1,9 @@
 /**
  * WebSocket client for Airlock real-time events.
  *
- * Subscriptions are server-driven: the backend auto-subscribes this socket
- * to every agent the authenticated user is a member of on connect. The
- * client never sends subscribe/unsubscribe messages — any durable access
- * change goes through agent_grants in the DB; the server closes the socket so
- * this client reconnects with the current subscription set.
+ * The backend installs ordinary agent topics from current membership. Narrower
+ * build and operator-job topics are requested dynamically and rearmed after a
+ * reconnect.
  */
 
 import { isAuthRejection, refreshAccessToken } from '@/api/client'
@@ -52,6 +50,7 @@ export class AirlockWS {
   // Per-build topics the client has dynamically subscribed to (Build page
   // open). Re-sent on every (re)connect so a drop mid-build resubscribes.
   private buildSubs = new Set<string>()
+  private jobsSubs = new Set<string>()
 
   /** Open the socket using the same-origin HttpOnly access cookie. */
   connect() {
@@ -131,6 +130,18 @@ export class AirlockWS {
     this.send('unsubscribe.build', { buildId })
   }
 
+  /** Subscribe to operator-safe job events for an agent. */
+  subscribeJobs(agentId: string) {
+    this.jobsSubs.add(agentId)
+    this.send('subscribe.jobs', { agentId })
+  }
+
+  /** Drop an agent's operator-job subscription. */
+  unsubscribeJobs(agentId: string) {
+    this.jobsSubs.delete(agentId)
+    this.send('unsubscribe.jobs', { agentId })
+  }
+
   private async doConnect(refreshFirst: boolean) {
     if (refreshFirst) {
       try {
@@ -165,6 +176,7 @@ export class AirlockWS {
       console.log('[ws] connected')
       // Re-arm any dynamic per-build subscriptions across a reconnect.
       for (const id of this.buildSubs) this.send('subscribe.build', { buildId: id })
+      for (const id of this.jobsSubs) this.send('subscribe.jobs', { agentId: id })
       this.emit('_connected', null)
     }
 

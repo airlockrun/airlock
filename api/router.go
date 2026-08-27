@@ -13,7 +13,6 @@ import (
 	"github.com/airlockrun/airlock/container"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
-	"github.com/airlockrun/airlock/execproxy"
 	"github.com/airlockrun/airlock/networkpolicy"
 	"github.com/airlockrun/airlock/oauth"
 	"github.com/airlockrun/airlock/realtime"
@@ -24,11 +23,11 @@ import (
 	catalogsvc "github.com/airlockrun/airlock/service/catalog"
 	connsvc "github.com/airlockrun/airlock/service/connections"
 	convsvc "github.com/airlockrun/airlock/service/conversations"
-	execsvc "github.com/airlockrun/airlock/service/execendpoints"
 	gitcredssvc "github.com/airlockrun/airlock/service/gitcredentials"
 	grantssvc "github.com/airlockrun/airlock/service/grants"
 	identitysvc "github.com/airlockrun/airlock/service/identity"
 	integrationssvc "github.com/airlockrun/airlock/service/integrations"
+	jobssvc "github.com/airlockrun/airlock/service/jobs"
 	managedbotssvc "github.com/airlockrun/airlock/service/managedbots"
 	memberssvc "github.com/airlockrun/airlock/service/members"
 	modelssvc "github.com/airlockrun/airlock/service/models"
@@ -47,6 +46,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	chimw "github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 )
 
@@ -82,6 +82,7 @@ type RouterConfig struct {
 	Dispatcher    *trigger.Dispatcher
 	Scheduler     *trigger.Scheduler
 	BridgeManager *trigger.BridgeManager
+	Jobs          *jobssvc.Service
 
 	// Container manager
 	Containers container.ContainerManager
@@ -136,6 +137,9 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	if cfg.Handler == nil {
 		panic("api: RouterConfig.Handler is required")
 	}
+	if cfg.Jobs == nil {
+		panic("api: RouterConfig.Jobs is required")
+	}
 
 	r := chi.NewRouter()
 
@@ -143,16 +147,6 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	// is applied on the outer wrapper below, so it covers both the chi-routed
 	// platform API and the SubdomainProxy-intercepted agent traffic.
 	r.Use(cors.Handler(platformCORSOptions(cfg.PublicURL)))
-
-	// SSH dialer for RegisterExecEndpoint. Owns a per-process *ssh.Client
-	// cache + background reaper; lives for the lifetime of the server.
-	// Shared by the agent-internal /api/agent/exec handler and the
-	// operator-facing /api/v1/agents/{id}/exec-endpoints handlers.
-	execDialer := execproxy.NewSSHDialer(
-		cfg.Secrets,
-		agentapi.NewTOFUPinner(cfg.DB.Pool()),
-		cfg.Logger,
-	)
 
 	authHandler := NewAuthHandler(cfg.DB, cfg.JWTSecret, cfg.ActivationCodeFile, cfg.PublicURL, cfg.Logger.Named("auth"))
 	webAuthn, err := passkey.New(cfg.PublicURL)
@@ -394,14 +388,19 @@ func NewRouter(cfg RouterConfig) http.Handler {
 				cfg.DB, cfg.BuildService, cfg.Dispatcher,
 				cfg.Containers, cfg.BridgeManager,
 				cfg.Secrets,
+				cfg.Jobs.Wake,
 				cfg.Logger.Named("agents"),
 			),
 			memberssvc.New(cfg.DB, cfg.Logger.Named("members")),
 			cfg.PublicURL,
 			cfg.AgentBaseURL,
 		)
-		runsService := runssvc.New(cfg.DB, cfg.Dispatcher, cfg.Logger.Named("runs"))
+		publishRunTerminal := func(ctx context.Context, agentID, runID uuid.UUID, status, errMsg string) {
+			agentapi.PublishRunTerminal(ctx, cfg.PubSub, agentID, runID, status, errMsg)
+		}
+		runsService := runssvc.New(cfg.DB, cfg.Dispatcher, cfg.Jobs, publishRunTerminal, cfg.Logger.Named("runs"))
 		rH := newRunsHandler(runsService, cfg.S3Client, cfg.Logger.Named("runs"))
+		jobsH := newJobsHandler(cfg.Jobs)
 		cH := &conversationsHandler{
 			svc: convsvc.New(cfg.DB, cfg.S3Client, cfg.Logger.Named("conversations"),
 				func(parts []byte, agentID string) []string {
@@ -456,6 +455,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 				cfg.DB, cfg.BuildService, cfg.Dispatcher,
 				cfg.Containers, cfg.BridgeManager,
 				cfg.Secrets,
+				cfg.Jobs.Wake,
 				cfg.Logger.Named("sysagent-agents"),
 			),
 			Bridges: bridgessvc.New(
@@ -472,11 +472,10 @@ func NewRouter(cfg RouterConfig) http.Handler {
 				},
 				agentapi.InjectAuth, cfg.HTTPNetwork.Client(30*time.Second),
 			),
-			Execs:       execsvc.New(cfg.DB.Pool(), cfg.Secrets, execDialer, cfg.Logger.Named("sysagent-execs")),
 			GitCreds:    gitcredssvc.New(cfg.DB, cfg.Secrets, cfg.Logger.Named("sysagent-gitcreds")),
 			ManagedBots: managedBotsSvc,
 			Members:     memberssvc.New(cfg.DB, cfg.Logger.Named("sysagent-members")),
-			Runs:        runssvc.New(cfg.DB, cfg.Dispatcher, cfg.Logger.Named("sysagent-runs")),
+			Runs:        runssvc.New(cfg.DB, cfg.Dispatcher, cfg.Jobs, publishRunTerminal, cfg.Logger.Named("sysagent-runs")),
 			Siblings:    siblingssvc.New(cfg.DB, cfg.Dispatcher, cfg.Logger.Named("sysagent-siblings")),
 			Users:       userssvc.New(cfg.DB, cfg.BridgeManager, cfg.Logger.Named("sysagent-users")),
 		})
@@ -537,6 +536,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 
 				// Builds
 				r.Get("/builds", agH.ListBuilds)
+				r.Get("/builds/{buildID}/job-blockers", jobsH.ListBuildBlockers)
 				r.Get("/builds/{buildID}", agH.GetBuild)
 				r.Post("/builds/cancel", agH.CancelBuild)
 
@@ -547,6 +547,8 @@ func NewRouter(cfg RouterConfig) http.Handler {
 
 				// Runs
 				r.Get("/runs", rH.ListRuns)
+				r.Get("/jobs", jobsH.ListJobs)
+				r.Get("/job-handlers", jobsH.ListHandlers)
 
 				// Webhooks, Schedules & Functions
 				r.Get("/webhooks", agH.ListWebhooks)
@@ -579,17 +581,6 @@ func NewRouter(cfg RouterConfig) http.Handler {
 					r.Delete("/", credH.RevokeCredential)
 					r.Post("/test", credH.TestCredential)
 					r.Put("/oauth-app", credH.SetOAuthApp)
-				})
-
-				// Exec endpoints (operator-configured SSH targets the agent's
-				// RegisterExecEndpoint declares).
-				execEpH := newExecEndpointsHandler(execsvc.New(cfg.DB.Pool(), cfg.Secrets, execDialer, cfg.Logger))
-				r.Get("/exec-endpoints", execEpH.List)
-				r.Route("/exec-endpoints/{slug}", func(r chi.Router) {
-					r.Put("/", execEpH.Configure)
-					r.Post("/rotate-keypair", execEpH.RotateKeypair)
-					r.Post("/unpin-host-key", execEpH.UnpinHostKey)
-					r.Post("/test", execEpH.Test)
 				})
 
 				// MCP Servers
@@ -644,6 +635,9 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		r.Get("/runs/{runID}", rH.GetRun)
 		r.Get("/runs/{runID}/logs", rH.GetRunLogs)
 		r.Delete("/runs/{runID}", rH.CancelRun)
+		r.Get("/jobs/{jobID}", jobsH.GetJob)
+		r.Delete("/jobs/{jobID}", jobsH.CancelJob)
+		r.Post("/jobs/{jobID}/retry", jobsH.RetryJob)
 
 		// Bridge management
 		r.Route("/bridges", func(r chi.Router) {
@@ -694,6 +688,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		OAuthClient:            cfg.OAuthClient,
 		S3:                     cfg.S3Client,
 		Files:                  fileService,
+		Jobs:                   cfg.Jobs,
 		Builder:                cfg.BuildService,
 		PubSub:                 cfg.PubSub,
 		BridgeMgr:              cfg.BridgeManager,
@@ -705,7 +700,6 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		HTTPNetwork:            cfg.HTTPNetwork,
 		JWTSecret:              cfg.JWTSecret,
 		Dispatcher:             cfg.Dispatcher,
-		ExecDialer:             execDialer,
 		Logger:                 cfg.Logger.Named("agent-api"),
 	})
 	integrationsH := newIntegrationsHandler(integrationssvc.New(cfg.DB, ah))
@@ -721,9 +715,6 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		r.Use(codegenIntegrationAuth(cfg.DB))
 		mountIntegrationRoutes(r, integrationsH)
 	})
-	// Silence "unused" if dbq import only used by helper agentapi.NewTOFUPinner.
-	_ = dbq.New
-
 	// MCP server endpoint — A2A entry point + external MCP client
 	// entry point. Mounted at top level (outside the /api/agent
 	// agent-JWT route group) because its auth model is multi-principal
@@ -752,7 +743,6 @@ func NewRouter(cfg RouterConfig) http.Handler {
 
 	r.Route("/api/agent", func(r chi.Router) {
 		r.Use(auth.AgentMiddleware(cfg.JWTSecret, dbq.New(cfg.DB.Pool())))
-		r.Post("/exec/{slug}", ah.AgentExec)
 		r.Put("/sync", ah.Sync)
 		r.Post("/llm/stream", ah.LLMStream)
 		r.Post("/llm/image", ah.ImageGenerate)
@@ -778,9 +768,11 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		r.Get("/run/{runID}/checkpoint", ah.GetCheckpoint)
 		r.Post("/upgrade", ah.Upgrade)
 		r.Post("/print", ah.Print)
-		r.Post("/schedules", ah.CreateScheduledFire)
-		r.Get("/schedules", ah.ListScheduledFires)
-		r.Delete("/schedules/{id}", ah.CancelScheduledFire)
+		r.Post("/jobs", ah.EnqueueJob)
+		r.Get("/jobs", ah.ListJobs)
+		r.Get("/jobs/{jobID}", ah.GetJob)
+		r.Put("/jobs/{jobID}/progress", ah.UpdateJobProgress)
+		r.Delete("/jobs/{jobID}", ah.CancelJob)
 		r.Post("/topic/{slug}/subscribe", ah.TopicSubscribe)
 		r.Delete("/topic/{slug}/subscribe", ah.TopicUnsubscribe)
 		r.Post("/mcp/{slug}/tools/call", ah.MCPToolCall)

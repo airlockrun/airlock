@@ -6,16 +6,13 @@ import (
 )
 
 // truncateActionsJSON walks the actions array and trims any oversized
-// stdout/stderr string field (per action) to ExecRecordPreviewBytes,
+// stdout/stderr string field (per action) to ActionStringPreviewBytes,
 // stamped with a [truncated, original N bytes] marker. Returns the
 // rewritten bytes; on parse error it returns the input unchanged so a
 // malformed payload never blocks a run from being marked complete.
 //
-// Authoritative gate for actions JSONB size. The agent SDK already
-// truncates per-call in agentsdk/exec.go before sending — this enforces
-// the same invariant airlock-side so bypass scenarios (older SDK,
-// hand-inserted rows from migrations, future bugs) can't land
-// multi-MiB stdout in the audit log.
+// This is the authoritative gate for verbose stream-like fields in actions
+// JSONB, including payloads from independently versioned agent containers.
 func truncateActionsJSON(actionsJSON []byte) []byte {
 	if len(actionsJSON) == 0 {
 		return actionsJSON
@@ -29,12 +26,12 @@ func truncateActionsJSON(actionsJSON []byte) []byte {
 	changed := false
 	for _, action := range actions {
 		if req, _ := action["request"].(map[string]any); req != nil {
-			if truncateOversizeStringFields(req, ExecRecordPreviewBytes) {
+			if truncateOversizeStringFields(req, ActionStringPreviewBytes) {
 				changed = true
 			}
 		}
 		if resp, _ := action["response"].(map[string]any); resp != nil {
-			if truncateOversizeStringFields(resp, ExecRecordPreviewBytes) {
+			if truncateOversizeStringFields(resp, ActionStringPreviewBytes) {
 				changed = true
 			}
 		}

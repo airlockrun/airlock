@@ -337,7 +337,7 @@ const backTarget = computed<string | null>(() => {
 const back = computed<string | null>(() => {
   if (inSettings.value) return lastAppRoute.value || '/agents'
   if (backTarget.value) return backTarget.value
-  const m = /^\/agents\/([^/]+)\/(?:runs|builds)\/[^/]+$/.exec(route.path)
+  const m = /^\/agents\/([^/]+)\/(?:runs|builds|jobs)\/[^/]+$/.exec(route.path)
   if (m) return `/agents/${m[1]}`
   return null
 })
