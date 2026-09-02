@@ -1,6 +1,7 @@
 import { computed, ref } from 'vue'
 import { fromJson } from '@bufbuild/protobuf'
 import api from '@/api/client'
+import { useAirlockI18n } from '@/i18n'
 import type { CandidateInfo, NeedInfo, OwnedResourceInfo } from '@/gen/airlock/v1/api_pb'
 import {
   ListCandidatesResponseSchema,
@@ -18,6 +19,7 @@ export interface AuthorizationTarget {
 }
 
 export function useAgentResources(agentId: string) {
+  const { t } = useAirlockI18n()
   const needs = ref<NeedInfo[]>([])
   const inventory = ref<OwnedResourceInfo[]>([])
   const loading = ref(false)
@@ -36,7 +38,7 @@ export function useAgentResources(agentId: string) {
       needs.value = fromJson(ListNeedsResponseSchema, needsResponse.data).needs
       inventory.value = fromJson(ListOwnedResourcesResponseSchema, resourcesResponse.data).resources
     } catch (cause: any) {
-      error.value = cause?.response?.data?.error || cause?.message || 'Failed to load resources'
+      error.value = cause?.response?.data?.error || cause?.message || t('resources.errors.loadResources')
       throw cause
     } finally {
       loading.value = false
@@ -86,7 +88,7 @@ export function useAgentResources(agentId: string) {
       createNew: target.createNew,
     }))
     const response = fromJson(StartAuthorizationForNeedResponseSchema, data)
-    if (!response.authorizeUrl) throw new Error('No authorization URL returned')
+    if (!response.authorizeUrl) throw new Error(t('resources.errors.noAuthorizationUrl'))
     window.location.href = response.authorizeUrl
     return new Promise<never>(() => {})
   }

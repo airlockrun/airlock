@@ -10,6 +10,17 @@ import {
   RetryJobResponseSchema,
 } from '@/gen/airlock/v1/api_pb'
 
+type JobResponseMessageId =
+  | 'operations.job.response.missingJob'
+  | 'operations.job.response.retryMissingJob'
+
+export class JobResponseError extends Error {
+  constructor(readonly messageId: JobResponseMessageId) {
+    super(messageId)
+    this.name = 'JobResponseError'
+  }
+}
+
 export const useJobsStore = defineStore('jobs', () => {
   const jobs = ref<JobInfo[]>([])
   const listAgentId = ref('')
@@ -137,7 +148,7 @@ export const useJobsStore = defineStore('jobs', () => {
     try {
       const { data } = await api.get(`/api/v1/jobs/${jobId}`)
       const response = fromJson(GetJobResponseSchema, data)
-      if (!response.job) throw new Error('job response did not include a job')
+      if (!response.job) throw new JobResponseError('operations.job.response.missingJob')
 
       const incoming = response.job
       const currentDetail = job.value?.id === jobId ? job.value : null
@@ -165,7 +176,7 @@ export const useJobsStore = defineStore('jobs', () => {
   async function retry(jobId: string) {
     const { data } = await api.post(`/api/v1/jobs/${jobId}/retry`)
     const response = fromJson(RetryJobResponseSchema, data)
-    if (!response.job) throw new Error('retry response did not include a job')
+    if (!response.job) throw new JobResponseError('operations.job.response.retryMissingJob')
     const retried = response.job
     job.value = retried
     mergeListJob(retried)

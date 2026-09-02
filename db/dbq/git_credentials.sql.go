@@ -66,6 +66,18 @@ func (q *Queries) DeleteGitCredential(ctx context.Context, arg DeleteGitCredenti
 	return err
 }
 
+const deleteGitCredentialByID = `-- name: DeleteGitCredentialByID :execrows
+DELETE FROM git_credentials WHERE id = $1
+`
+
+func (q *Queries) DeleteGitCredentialByID(ctx context.Context, id pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteGitCredentialByID, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const getGitCredential = `-- name: GetGitCredential :one
 SELECT id, user_id, type, name, token_ref, github_install_id, created_at, last_used_at FROM git_credentials WHERE id = $1
 `

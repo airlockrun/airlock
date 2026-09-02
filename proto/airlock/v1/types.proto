@@ -591,6 +591,7 @@ message SystemSettingsInfo {
   // (BridgeInfo.is_manager) rather than a system_settings token.
   reserved 17, 18, 19;
   reserved "telegram_manager_bot_configured", "telegram_manager_bot_username", "telegram_manager_bot_error";
+  string ui_locale = 20;
 }
 
 // ManagedBotSessionRequest creates a session row that correlates an
@@ -622,6 +623,7 @@ message GitCredential {
   string github_install_id = 5;    // empty for type="pat"
   google.protobuf.Timestamp created_at = 6;
   google.protobuf.Timestamp last_used_at = 7;
+  repeated string capabilities = 8;
 }
 
 // Passkey is a registered WebAuthn credential for human login. The raw
@@ -773,6 +775,260 @@ message SetupCountsInfo {
   int32 connections = 1;
   int32 mcp_servers = 2;
   int32 env_vars = 3;
+  int32 connectors = 5;
+}
+
+message ConnectorPublishedCommandInfo {
+  string name = 1;
+  int32 revision = 2;
+  string description = 3;
+  string mode = 4;
+  string input_schema_hash = 5;
+  string output_schema_hash = 6;
+  string input_schema_json = 7;
+  string output_schema_json = 8;
+}
+
+message ConnectorPublishedDirectoryInfo {
+  string name = 1;
+  int32 revision = 2;
+  string description = 3;
+  bool read = 4;
+  bool write = 5;
+  bool list = 6;
+}
+
+message ConnectorInfo {
+  string id = 1;
+  string owner_principal_id = 2;
+  string slug = 3;
+  string kind = 4;
+  string contract_id = 5;
+  string name = 6;
+  string display_name = 7;
+  string description = 8;
+  int32 protocol_major = 9;
+  int32 protocol_minor = 10;
+  repeated string features = 11;
+  string artifact_version = 12;
+  string artifact_digest = 13;
+  string interface_json = 14;
+  string interface_hash = 15;
+  string readiness = 16;
+  string readiness_message = 17;
+  map<string, string> labels = 18;
+  string lifecycle = 19;
+  int32 agent_count = 20;
+  repeated string capabilities = 21;
+  google.protobuf.Timestamp last_seen_at = 22;
+  google.protobuf.Timestamp last_ready_at = 23;
+  google.protobuf.Timestamp created_at = 24;
+  google.protobuf.Timestamp updated_at = 25;
+  string owner_name = 26;
+  string owner_kind = 27;
+  bool online = 28;
+  repeated ConnectorPublishedCommandInfo commands = 29;
+  repeated ConnectorPublishedDirectoryInfo directories = 30;
+  string artifact_freshness = 31; // current | outdated | unknown | missing
+  string update_status = 32; // current | update_available | update_recommended | manual_update_required | unsupported_protocol
+  string latest_artifact_version = 33;
+  string latest_artifact_digest = 34;
+  string latest_interface_hash = 35;
+  google.protobuf.Timestamp latest_artifact_created_at = 36;
+  string host_id = 37;
+  string active_provenance = 38; // airlock | manual | none
+  string rollback_provenance = 39; // airlock | manual | none
+  string active_observation_state = 40; // pending | known | manual | invalid | removed
+  string rollback_observation_state = 41; // none | known | manual | invalid
+  uint64 inventory_revision = 42;
+  string observed_active_digest = 43;
+  string observed_active_manifest_json = 44;
+  string observed_active_manifest_hash = 45;
+  string observed_rollback_digest = 46;
+  string observed_rollback_manifest_json = 47;
+  string observed_rollback_manifest_hash = 48;
+}
+
+message HostInfo {
+  string id = 1;
+  string name = 2;
+  string platform = 3;
+  string architecture = 4;
+  string access_mode = 5; // full | update_only | none; reported by the host
+  string version = 6;
+  int32 protocol_version = 7;
+  string lifecycle = 8;
+  google.protobuf.Timestamp last_seen_at = 9;
+  google.protobuf.Timestamp created_at = 10;
+  google.protobuf.Timestamp updated_at = 11;
+  int32 connector_count = 12;
+  int32 active_job_count = 13;
+  string owner_user_id = 14;
+  string owner_name = 15;
+  repeated string capabilities = 16;
+}
+
+message HostManagementEventInfo {
+  int64 sequence = 1;
+  int64 attempt_sequence = 2;
+  string phase = 3;
+  string message = 4;
+  google.protobuf.Timestamp event_time = 5;
+  google.protobuf.Timestamp created_at = 6;
+}
+
+message HostManagementJobInfo {
+  string id = 1;
+  string host_id = 2;
+  string connector_id = 3;
+  string requested_by_user_id = 4;
+  string kind = 5;
+  string artifact_file_id = 6;
+  string input_json = 7;
+  string status = 8;
+  string output_json = 9;
+  string error_message = 10;
+  google.protobuf.Timestamp deadline_at = 11;
+  google.protobuf.Timestamp started_at = 12;
+  google.protobuf.Timestamp completed_at = 13;
+  google.protobuf.Timestamp created_at = 14;
+  google.protobuf.Timestamp updated_at = 15;
+}
+
+message ConnectorArtifactFileInfo {
+  string id = 1;
+  string platform = 2;
+  string filename = 3;
+  string sha256 = 4;
+  int64 size_bytes = 5;
+  string notices_sha256 = 6;
+  int64 notices_size_bytes = 7;
+}
+
+message ConnectorArtifactSetInfo {
+  string id = 1;
+  string build_id = 2;
+  string connector_slug = 3;
+  string source_ref = 4;
+  string kind = 5;
+  string contract_id = 6;
+  string name = 7;
+  string description = 8;
+  string artifact_version = 9;
+  int32 protocol_major = 10;
+  int32 protocol_minor = 11;
+  repeated string features = 12;
+  string interface_json = 13;
+  string interface_hash = 14;
+  string settings_json = 15;
+  repeated ConnectorArtifactFileInfo files = 16;
+  google.protobuf.Timestamp created_at = 17;
+  string artifact_digest = 18;
+  string service_mode = 19; // user | system; empty when authoritative metadata is unavailable
+}
+
+message ConnectorArtifactTargetInfo {
+  option deprecated = true;
+  string target = 1;
+  string os = 2;
+  string arch = 3;
+  string filename = 4;
+  int64 size_bytes = 5;
+  string sha256 = 6;
+}
+
+message ConnectorSettingInfo {
+  option deprecated = true;
+  string name = 1;
+  string kind = 2;
+  string description = 3;
+  bool required = 4;
+  string default_value = 5 [json_name = "default"];
+  repeated string enum_values = 6 [json_name = "enum"];
+}
+
+message ConnectorArtifactVersionInfo {
+  option deprecated = true;
+  string version = 1;
+  string source_commit = 2;
+  string build_id = 3;
+  google.protobuf.Timestamp created_at = 4;
+  bool compatible = 5;
+  bool latest_compatible = 6;
+  string artifact_digest = 7;
+  google.protobuf.Struct interface = 8;
+  repeated ConnectorSettingInfo settings = 9;
+  repeated string runtime_expectations = 10;
+  repeated string notices = 11;
+  repeated ConnectorArtifactTargetInfo targets = 12;
+}
+
+message ConnectorTargetGroupInfo {
+  string id = 1;
+  string owner_principal_id = 2;
+  string name = 3;
+  string description = 4;
+  string contract_id = 5;
+  google.protobuf.Timestamp created_at = 6;
+  google.protobuf.Timestamp updated_at = 7;
+  int32 member_count = 8;
+  int32 ready_member_count = 9;
+  repeated string capabilities = 10;
+}
+
+message ConnectorJobInfo {
+  string id = 1;
+  string connector_id = 2;
+  string agent_id = 3;
+  string need_id = 4;
+  string orchestration_id = 5;
+  int32 target_position = 6;
+  string operation_name = 7;
+  int32 operation_revision = 8;
+  string mode = 9;
+  string status = 10;
+  string input_json = 11;
+  string output_json = 12;
+  string error_code = 13;
+  string error_message = 14;
+  google.protobuf.Timestamp cancel_requested_at = 15;
+  google.protobuf.Timestamp deadline_at = 16;
+  google.protobuf.Timestamp started_at = 17;
+  google.protobuf.Timestamp completed_at = 18;
+  google.protobuf.Timestamp created_at = 19;
+  google.protobuf.Timestamp updated_at = 20;
+  string request_id = 21;
+  string input_schema_hash = 22;
+  string output_schema_hash = 23;
+  bool canary_cohort = 24;
+}
+
+message ConnectorOrchestrationInfo {
+  string id = 1;
+  string agent_id = 2;
+  string need_id = 3;
+  string target_group_id = 4;
+  string command_name = 5;
+  int32 command_revision = 6;
+  string strategy = 7;
+  string offline_policy = 8;
+  int32 max_concurrency = 9;
+  int32 batch_size = 10;
+  int32 canary_count = 11;
+  int32 quorum = 12;
+  string status = 13;
+  google.protobuf.Timestamp cancel_requested_at = 14;
+  google.protobuf.Timestamp deadline_at = 15;
+  google.protobuf.Timestamp started_at = 16;
+  google.protobuf.Timestamp completed_at = 17;
+  google.protobuf.Timestamp created_at = 18;
+  google.protobuf.Timestamp updated_at = 19;
+  string request_id = 20;
+  string command_mode = 21;
+  string input_schema_hash = 22;
+  string output_schema_hash = 23;
+  string canary_phase = 24;
+  int32 canary_succeeded_count = 25;
 }
 
 // JobHandlerInfo is one immutable background-job contract version declared by

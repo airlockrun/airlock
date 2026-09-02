@@ -11,19 +11,39 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const clearActivationCode = `-- name: ClearActivationCode :exec
+const completeActivation = `-- name: CompleteActivation :exec
 UPDATE system_settings
-SET activation_code = NULL, updated_at = now()
+SET activation_code = NULL, ui_locale = $1, updated_at = now()
 WHERE id = true
 `
 
-func (q *Queries) ClearActivationCode(ctx context.Context) error {
-	_, err := q.db.Exec(ctx, clearActivationCode)
+func (q *Queries) CompleteActivation(ctx context.Context, uiLocale string) error {
+	_, err := q.db.Exec(ctx, completeActivation, uiLocale)
 	return err
 }
 
+const getPublicSystemStatus = `-- name: GetPublicSystemStatus :one
+SELECT s.ui_locale, EXISTS(SELECT 1 FROM tenants) AS activated
+FROM system_settings s
+WHERE s.id = true
+`
+
+type GetPublicSystemStatusRow struct {
+	UiLocale  string `json:"ui_locale"`
+	Activated bool   `json:"activated"`
+}
+
+// Reads activation state and locale from one statement snapshot so concurrent
+// activation cannot expose a tenant paired with the pre-activation locale.
+func (q *Queries) GetPublicSystemStatus(ctx context.Context) (GetPublicSystemStatusRow, error) {
+	row := q.db.QueryRow(ctx, getPublicSystemStatus)
+	var i GetPublicSystemStatusRow
+	err := row.Scan(&i.UiLocale, &i.Activated)
+	return i, err
+}
+
 const getSystemSettings = `-- name: GetSystemSettings :one
-SELECT id, default_build_provider_id, default_build_model, default_exec_provider_id, default_exec_model, default_stt_provider_id, default_stt_model, default_vision_provider_id, default_vision_model, default_tts_provider_id, default_tts_model, default_image_gen_provider_id, default_image_gen_model, default_embedding_provider_id, default_embedding_model, default_search_provider_id, default_search_model, activation_code, created_at, updated_at, last_seen_sdk_version FROM system_settings WHERE id = true
+SELECT id, default_build_provider_id, default_build_model, default_exec_provider_id, default_exec_model, default_stt_provider_id, default_stt_model, default_vision_provider_id, default_vision_model, default_tts_provider_id, default_tts_model, default_image_gen_provider_id, default_image_gen_model, default_embedding_provider_id, default_embedding_model, default_search_provider_id, default_search_model, activation_code, created_at, updated_at, last_seen_sdk_version, ui_locale FROM system_settings WHERE id = true
 `
 
 func (q *Queries) GetSystemSettings(ctx context.Context) (SystemSetting, error) {
@@ -51,12 +71,13 @@ func (q *Queries) GetSystemSettings(ctx context.Context) (SystemSetting, error) 
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.LastSeenSdkVersion,
+		&i.UiLocale,
 	)
 	return i, err
 }
 
 const getSystemSettingsForActivation = `-- name: GetSystemSettingsForActivation :one
-SELECT id, default_build_provider_id, default_build_model, default_exec_provider_id, default_exec_model, default_stt_provider_id, default_stt_model, default_vision_provider_id, default_vision_model, default_tts_provider_id, default_tts_model, default_image_gen_provider_id, default_image_gen_model, default_embedding_provider_id, default_embedding_model, default_search_provider_id, default_search_model, activation_code, created_at, updated_at, last_seen_sdk_version FROM system_settings WHERE id = true FOR UPDATE
+SELECT id, default_build_provider_id, default_build_model, default_exec_provider_id, default_exec_model, default_stt_provider_id, default_stt_model, default_vision_provider_id, default_vision_model, default_tts_provider_id, default_tts_model, default_image_gen_provider_id, default_image_gen_model, default_embedding_provider_id, default_embedding_model, default_search_provider_id, default_search_model, activation_code, created_at, updated_at, last_seen_sdk_version, ui_locale FROM system_settings WHERE id = true FOR UPDATE
 `
 
 // Serializes first-admin activation across replicas.
@@ -85,6 +106,42 @@ func (q *Queries) GetSystemSettingsForActivation(ctx context.Context) (SystemSet
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.LastSeenSdkVersion,
+		&i.UiLocale,
+	)
+	return i, err
+}
+
+const getSystemSettingsForUpdate = `-- name: GetSystemSettingsForUpdate :one
+SELECT id, default_build_provider_id, default_build_model, default_exec_provider_id, default_exec_model, default_stt_provider_id, default_stt_model, default_vision_provider_id, default_vision_model, default_tts_provider_id, default_tts_model, default_image_gen_provider_id, default_image_gen_model, default_embedding_provider_id, default_embedding_model, default_search_provider_id, default_search_model, activation_code, created_at, updated_at, last_seen_sdk_version, ui_locale FROM system_settings WHERE id = true FOR UPDATE
+`
+
+// Serializes whole-row settings updates across replicas.
+func (q *Queries) GetSystemSettingsForUpdate(ctx context.Context) (SystemSetting, error) {
+	row := q.db.QueryRow(ctx, getSystemSettingsForUpdate)
+	var i SystemSetting
+	err := row.Scan(
+		&i.ID,
+		&i.DefaultBuildProviderID,
+		&i.DefaultBuildModel,
+		&i.DefaultExecProviderID,
+		&i.DefaultExecModel,
+		&i.DefaultSttProviderID,
+		&i.DefaultSttModel,
+		&i.DefaultVisionProviderID,
+		&i.DefaultVisionModel,
+		&i.DefaultTtsProviderID,
+		&i.DefaultTtsModel,
+		&i.DefaultImageGenProviderID,
+		&i.DefaultImageGenModel,
+		&i.DefaultEmbeddingProviderID,
+		&i.DefaultEmbeddingModel,
+		&i.DefaultSearchProviderID,
+		&i.DefaultSearchModel,
+		&i.ActivationCode,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.LastSeenSdkVersion,
+		&i.UiLocale,
 	)
 	return i, err
 }
@@ -137,9 +194,10 @@ SET default_build_provider_id     = $1,
     default_embedding_model       = $14,
     default_search_provider_id    = $15,
     default_search_model          = $16,
+    ui_locale                     = $17,
     updated_at = now()
 WHERE id = true
-RETURNING id, default_build_provider_id, default_build_model, default_exec_provider_id, default_exec_model, default_stt_provider_id, default_stt_model, default_vision_provider_id, default_vision_model, default_tts_provider_id, default_tts_model, default_image_gen_provider_id, default_image_gen_model, default_embedding_provider_id, default_embedding_model, default_search_provider_id, default_search_model, activation_code, created_at, updated_at, last_seen_sdk_version
+RETURNING id, default_build_provider_id, default_build_model, default_exec_provider_id, default_exec_model, default_stt_provider_id, default_stt_model, default_vision_provider_id, default_vision_model, default_tts_provider_id, default_tts_model, default_image_gen_provider_id, default_image_gen_model, default_embedding_provider_id, default_embedding_model, default_search_provider_id, default_search_model, activation_code, created_at, updated_at, last_seen_sdk_version, ui_locale
 `
 
 type UpdateSystemSettingsParams struct {
@@ -159,6 +217,7 @@ type UpdateSystemSettingsParams struct {
 	DefaultEmbeddingModel      string      `json:"default_embedding_model"`
 	DefaultSearchProviderID    pgtype.UUID `json:"default_search_provider_id"`
 	DefaultSearchModel         string      `json:"default_search_model"`
+	UiLocale                   string      `json:"ui_locale"`
 }
 
 // Each system default is a pair: a providers row FK (nullable) and the
@@ -181,6 +240,7 @@ func (q *Queries) UpdateSystemSettings(ctx context.Context, arg UpdateSystemSett
 		arg.DefaultEmbeddingModel,
 		arg.DefaultSearchProviderID,
 		arg.DefaultSearchModel,
+		arg.UiLocale,
 	)
 	var i SystemSetting
 	err := row.Scan(
@@ -205,6 +265,7 @@ func (q *Queries) UpdateSystemSettings(ctx context.Context, arg UpdateSystemSett
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.LastSeenSdkVersion,
+		&i.UiLocale,
 	)
 	return i, err
 }

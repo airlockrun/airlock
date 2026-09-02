@@ -4,10 +4,13 @@ import { useRouter } from 'vue-router'
 import { useAgentsStore } from '@/stores/agents'
 import { useAuthStore } from '@/stores/auth'
 import { useAgentStatus } from '@/composables/useAgentStatus'
+import { useAirlockI18n } from '@/i18n'
 
 const router = useRouter()
 const store = useAgentsStore()
 const auth = useAuthStore()
+const { t } = useAirlockI18n()
+const agentStatus = useAgentStatus()
 
 // Admins can administer every agent in the workspace, not just the ones they're
 // a member of. The grid above is the caller's working set; this points to the
@@ -26,8 +29,8 @@ function goToAgent(id: string) {
 <template>
   <div>
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem">
-      <h1 style="margin: 0; font-size: 1.5rem">Apps</h1>
-      <Button label="Create App" icon="pi pi-plus" @click="router.push('/agents/create')" />
+      <h1 style="margin: 0; font-size: 1.5rem">{{ t('agents.list.title') }}</h1>
+      <Button :label="t('agents.create.action')" icon="pi pi-plus" @click="router.push('/agents/create')" />
     </div>
 
     <!-- Loading skeletons -->
@@ -50,22 +53,22 @@ function goToAgent(id: string) {
         <template #title>
           <div style="display: flex; align-items: center; gap: 0.5rem; font-size: 1.1rem">
             <span style="font-size: 1.3rem; line-height: 1">⚙️</span>
-            Airlock Assistant
+            {{ t('agents.list.assistantName') }}
           </div>
         </template>
-        <template #subtitle>operator</template>
+        <template #subtitle>{{ t('agents.list.operatorSlug') }}</template>
         <template #content>
-          <Tag value="Operator" severity="info" style="margin-bottom: 0.5rem" />
+          <Tag :value="t('agents.list.operatorBadge')" severity="info" style="margin-bottom: 0.5rem" />
           <p style="font-size: 0.875rem; color: var(--p-text-muted-color); margin-top: 0.5rem">
-            Manage apps, bridges, connections, members and runs through chat - with your own permissions.
+            {{ t('agents.list.assistantDescription') }}
           </p>
         </template>
       </Card>
       <Card v-if="store.agents.length === 0" style="text-align: center; padding: 2rem">
         <template #content>
           <i class="pi pi-box" style="font-size: 3rem; color: var(--p-surface-400); margin-bottom: 1rem" />
-          <p style="color: var(--p-text-muted-color)">No apps yet. Create your first app to get started.</p>
-          <Button label="Create App" icon="pi pi-plus" @click="router.push('/agents/create')" style="margin-top: 1rem" />
+          <p style="color: var(--p-text-muted-color)">{{ t('agents.list.empty') }}</p>
+          <Button :label="t('agents.create.action')" icon="pi pi-plus" @click="router.push('/agents/create')" style="margin-top: 1rem" />
         </template>
       </Card>
       <Card
@@ -92,8 +95,8 @@ function goToAgent(id: string) {
         </template>
         <template #content>
           <Tag
-            :value="useAgentStatus(agent.status, agent.running).label"
-            :severity="useAgentStatus(agent.status, agent.running).severity"
+            :value="agentStatus(agent.status, agent.running).label"
+            :severity="agentStatus(agent.status, agent.running).severity"
             style="margin-bottom: 0.5rem"
           />
           <Message v-if="agent.errorMessage" severity="error" :closable="false" style="margin-top: 0.5rem; font-size: 0.8rem">
@@ -117,7 +120,7 @@ function goToAgent(id: string) {
         style="color: var(--p-text-muted-color); font-size: 0.875rem; text-decoration: none; display: inline-flex; align-items: center; gap: 0.4rem"
       >
         <i class="pi pi-th-large" style="font-size: 0.8rem" />
-        Manage all apps in this workspace
+        {{ t('agents.list.manageAll') }}
         <i class="pi pi-arrow-right" style="font-size: 0.7rem" />
       </router-link>
     </div>

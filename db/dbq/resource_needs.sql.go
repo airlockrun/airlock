@@ -14,7 +14,7 @@ import (
 const bindConnectionNeed = `-- name: BindConnectionNeed :execrows
 
 UPDATE agent_resource_needs SET bound_connection_id = $1
-WHERE agent_id = $2 AND type = 'connection' AND slug = $3
+WHERE agent_id = $2 AND type = 'connection' AND slug = $3 AND deleted_at IS NULL
 `
 
 type BindConnectionNeedParams struct {
@@ -32,9 +32,47 @@ func (q *Queries) BindConnectionNeed(ctx context.Context, arg BindConnectionNeed
 	return result.RowsAffected(), nil
 }
 
+const bindConnectorGroupNeed = `-- name: BindConnectorGroupNeed :execrows
+UPDATE agent_resource_needs SET bound_connector_group_id = $1, bound_connector_id = NULL
+WHERE agent_id = $2 AND type = 'connector' AND slug = $3 AND deleted_at IS NULL
+`
+
+type BindConnectorGroupNeedParams struct {
+	GroupID pgtype.UUID `json:"group_id"`
+	AgentID pgtype.UUID `json:"agent_id"`
+	Slug    string      `json:"slug"`
+}
+
+func (q *Queries) BindConnectorGroupNeed(ctx context.Context, arg BindConnectorGroupNeedParams) (int64, error) {
+	result, err := q.db.Exec(ctx, bindConnectorGroupNeed, arg.GroupID, arg.AgentID, arg.Slug)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const bindConnectorNeed = `-- name: BindConnectorNeed :execrows
+UPDATE agent_resource_needs SET bound_connector_id = $1, bound_connector_group_id = NULL
+WHERE agent_id = $2 AND type = 'connector' AND slug = $3 AND deleted_at IS NULL
+`
+
+type BindConnectorNeedParams struct {
+	ResourceID pgtype.UUID `json:"resource_id"`
+	AgentID    pgtype.UUID `json:"agent_id"`
+	Slug       string      `json:"slug"`
+}
+
+func (q *Queries) BindConnectorNeed(ctx context.Context, arg BindConnectorNeedParams) (int64, error) {
+	result, err := q.db.Exec(ctx, bindConnectorNeed, arg.ResourceID, arg.AgentID, arg.Slug)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const bindMCPServerNeed = `-- name: BindMCPServerNeed :execrows
 UPDATE agent_resource_needs SET bound_mcp_id = $1
-WHERE agent_id = $2 AND type = 'mcp_server' AND slug = $3
+WHERE agent_id = $2 AND type = 'mcp_server' AND slug = $3 AND deleted_at IS NULL
 `
 
 type BindMCPServerNeedParams struct {
@@ -51,9 +89,79 @@ func (q *Queries) BindMCPServerNeed(ctx context.Context, arg BindMCPServerNeedPa
 	return result.RowsAffected(), nil
 }
 
+const countNonterminalConnectorJobsForAgent = `-- name: CountNonterminalConnectorJobsForAgent :one
+SELECT count(*) FROM connector_jobs
+WHERE agent_id = $1
+  AND status IN ('held', 'queued', 'running', 'finalizing')
+`
+
+func (q *Queries) CountNonterminalConnectorJobsForAgent(ctx context.Context, agentID pgtype.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countNonterminalConnectorJobsForAgent, agentID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countNonterminalConnectorJobsForNeed = `-- name: CountNonterminalConnectorJobsForNeed :one
+SELECT count(*) FROM connector_jobs
+WHERE need_id = $1 AND status IN ('held', 'queued', 'running', 'finalizing')
+`
+
+func (q *Queries) CountNonterminalConnectorJobsForNeed(ctx context.Context, needID pgtype.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countNonterminalConnectorJobsForNeed, needID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countNonterminalConnectorJobsForNeedConnector = `-- name: CountNonterminalConnectorJobsForNeedConnector :one
+SELECT count(*) FROM connector_jobs
+WHERE need_id = $1 AND connector_id = $2
+  AND status IN ('held', 'queued', 'running', 'finalizing')
+`
+
+type CountNonterminalConnectorJobsForNeedConnectorParams struct {
+	NeedID      pgtype.UUID `json:"need_id"`
+	ConnectorID pgtype.UUID `json:"connector_id"`
+}
+
+func (q *Queries) CountNonterminalConnectorJobsForNeedConnector(ctx context.Context, arg CountNonterminalConnectorJobsForNeedConnectorParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countNonterminalConnectorJobsForNeedConnector, arg.NeedID, arg.ConnectorID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const deleteConnectorReservationsForNeed = `-- name: DeleteConnectorReservationsForNeed :execrows
+DELETE FROM connector_reservations WHERE need_id = $1
+`
+
+func (q *Queries) DeleteConnectorReservationsForNeed(ctx context.Context, needID pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteConnectorReservationsForNeed, needID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteResourceNeedsByAgentTypeExcept = `-- name: DeleteResourceNeedsByAgentTypeExcept :exec
-DELETE FROM agent_resource_needs
-WHERE agent_id = $1 AND type = $2 AND slug <> ALL ($3::text[])
+WITH stale_connector AS MATERIALIZED (
+    SELECT id FROM agent_resource_needs
+    WHERE agent_id = $1 AND type = 'connector' AND type = $2
+      AND slug <> ALL ($3::text[]) AND deleted_at IS NULL
+    ORDER BY id
+    FOR UPDATE
+), prepared AS (
+    SELECT id, prepare_connector_parent_deletion('need', id, false) FROM stale_connector
+), tombstoned AS (
+    UPDATE agent_resource_needs need
+    SET deleted_at = now(), bound_connector_id = NULL, bound_connector_group_id = NULL
+    FROM prepared
+    WHERE need.id = prepared.id
+)
+DELETE FROM agent_resource_needs need
+WHERE need.agent_id = $1 AND need.type = $2 AND need.type <> 'connector'
+  AND need.slug <> ALL ($3::text[])
 `
 
 type DeleteResourceNeedsByAgentTypeExceptParams struct {
@@ -67,9 +175,84 @@ func (q *Queries) DeleteResourceNeedsByAgentTypeExcept(ctx context.Context, arg 
 	return err
 }
 
+const deleteTerminalTombstonedConnectorNeedReservations = `-- name: DeleteTerminalTombstonedConnectorNeedReservations :execrows
+DELETE FROM connector_reservations reservation
+USING agent_resource_needs need
+WHERE reservation.need_id = need.id
+  AND need.deleted_at IS NOT NULL
+  AND NOT EXISTS (
+      SELECT 1 FROM connector_jobs job
+      WHERE job.need_id = need.id
+        AND job.status IN ('held', 'queued', 'running', 'finalizing')
+  )
+`
+
+func (q *Queries) DeleteTerminalTombstonedConnectorNeedReservations(ctx context.Context) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteTerminalTombstonedConnectorNeedReservations)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deleteTombstonedConnectorNeeds = `-- name: DeleteTombstonedConnectorNeeds :execrows
+WITH candidates AS (
+    SELECT need.id
+    FROM agent_resource_needs need
+    WHERE need.deleted_at IS NOT NULL
+      AND NOT EXISTS (SELECT 1 FROM connector_jobs job WHERE job.need_id = need.id)
+    ORDER BY need.deleted_at, need.id
+    FOR UPDATE SKIP LOCKED
+    LIMIT LEAST($1::integer, 100)
+)
+DELETE FROM agent_resource_needs need
+USING candidates
+WHERE need.id = candidates.id
+`
+
+func (q *Queries) DeleteTombstonedConnectorNeeds(ctx context.Context, lim int32) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteTombstonedConnectorNeeds, lim)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const getConnectorReservation = `-- name: GetConnectorReservation :one
+SELECT connector_id, need_id, connector_target_group_id, created_at FROM connector_reservations WHERE connector_id = $1
+`
+
+func (q *Queries) GetConnectorReservation(ctx context.Context, connectorID pgtype.UUID) (ConnectorReservation, error) {
+	row := q.db.QueryRow(ctx, getConnectorReservation, connectorID)
+	var i ConnectorReservation
+	err := row.Scan(
+		&i.ConnectorID,
+		&i.NeedID,
+		&i.ConnectorTargetGroupID,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const getConnectorReservationForUpdate = `-- name: GetConnectorReservationForUpdate :one
+SELECT connector_id, need_id, connector_target_group_id, created_at FROM connector_reservations WHERE connector_id = $1 FOR UPDATE
+`
+
+func (q *Queries) GetConnectorReservationForUpdate(ctx context.Context, connectorID pgtype.UUID) (ConnectorReservation, error) {
+	row := q.db.QueryRow(ctx, getConnectorReservationForUpdate, connectorID)
+	var i ConnectorReservation
+	err := row.Scan(
+		&i.ConnectorID,
+		&i.NeedID,
+		&i.ConnectorTargetGroupID,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const getResourceNeed = `-- name: GetResourceNeed :one
-SELECT id, agent_id, type, slug, description, setup_instructions, expected_url, expected_scopes, spec, required, bound_connection_id, bound_mcp_id, created_at FROM agent_resource_needs
-WHERE agent_id = $1 AND type = $2 AND slug = $3
+SELECT id, agent_id, type, slug, description, setup_instructions, expected_url, expected_scopes, spec, required, bound_connection_id, bound_mcp_id, created_at, bound_connector_id, bound_connector_group_id, deleted_at FROM agent_resource_needs
+WHERE agent_id = $1 AND type = $2 AND slug = $3 AND deleted_at IS NULL
 `
 
 type GetResourceNeedParams struct {
@@ -95,13 +278,16 @@ func (q *Queries) GetResourceNeed(ctx context.Context, arg GetResourceNeedParams
 		&i.BoundConnectionID,
 		&i.BoundMcpID,
 		&i.CreatedAt,
+		&i.BoundConnectorID,
+		&i.BoundConnectorGroupID,
+		&i.DeletedAt,
 	)
 	return i, err
 }
 
 const getResourceNeedForUpdate = `-- name: GetResourceNeedForUpdate :one
-SELECT id, agent_id, type, slug, description, setup_instructions, expected_url, expected_scopes, spec, required, bound_connection_id, bound_mcp_id, created_at FROM agent_resource_needs
-WHERE agent_id = $1 AND type = $2 AND slug = $3
+SELECT id, agent_id, type, slug, description, setup_instructions, expected_url, expected_scopes, spec, required, bound_connection_id, bound_mcp_id, created_at, bound_connector_id, bound_connector_group_id, deleted_at FROM agent_resource_needs
+WHERE agent_id = $1 AND type = $2 AND slug = $3 AND deleted_at IS NULL
 FOR UPDATE
 `
 
@@ -128,6 +314,9 @@ func (q *Queries) GetResourceNeedForUpdate(ctx context.Context, arg GetResourceN
 		&i.BoundConnectionID,
 		&i.BoundMcpID,
 		&i.CreatedAt,
+		&i.BoundConnectorID,
+		&i.BoundConnectorGroupID,
+		&i.DeletedAt,
 	)
 	return i, err
 }
@@ -195,20 +384,42 @@ func (q *Queries) ListRequiredMCPScopes(ctx context.Context, arg ListRequiredMCP
 }
 
 const listResourceNeedsByAgent = `-- name: ListResourceNeedsByAgent :many
-SELECT id, agent_id, type, slug, description, setup_instructions, expected_url, expected_scopes, spec, required, bound_connection_id, bound_mcp_id, created_at FROM agent_resource_needs
-WHERE agent_id = $1 AND type IN ('connection', 'mcp_server')
-ORDER BY type, slug
+SELECT need.id, need.agent_id, need.type, need.slug, need.description, need.setup_instructions, need.expected_url, need.expected_scopes, need.spec, need.required, need.bound_connection_id, need.bound_mcp_id, need.created_at, need.bound_connector_id, need.bound_connector_group_id, need.deleted_at, target_group.name AS bound_connector_group_name
+FROM agent_resource_needs need
+LEFT JOIN connector_target_groups target_group ON target_group.id = need.bound_connector_group_id
+WHERE need.agent_id = $1 AND need.type IN ('connection', 'mcp_server', 'connector') AND need.deleted_at IS NULL
+ORDER BY need.type, need.slug
 `
 
-func (q *Queries) ListResourceNeedsByAgent(ctx context.Context, agentID pgtype.UUID) ([]AgentResourceNeed, error) {
+type ListResourceNeedsByAgentRow struct {
+	ID                      pgtype.UUID        `json:"id"`
+	AgentID                 pgtype.UUID        `json:"agent_id"`
+	Type                    string             `json:"type"`
+	Slug                    string             `json:"slug"`
+	Description             string             `json:"description"`
+	SetupInstructions       string             `json:"setup_instructions"`
+	ExpectedUrl             string             `json:"expected_url"`
+	ExpectedScopes          string             `json:"expected_scopes"`
+	Spec                    []byte             `json:"spec"`
+	Required                bool               `json:"required"`
+	BoundConnectionID       pgtype.UUID        `json:"bound_connection_id"`
+	BoundMcpID              pgtype.UUID        `json:"bound_mcp_id"`
+	CreatedAt               pgtype.Timestamptz `json:"created_at"`
+	BoundConnectorID        pgtype.UUID        `json:"bound_connector_id"`
+	BoundConnectorGroupID   pgtype.UUID        `json:"bound_connector_group_id"`
+	DeletedAt               pgtype.Timestamptz `json:"deleted_at"`
+	BoundConnectorGroupName pgtype.Text        `json:"bound_connector_group_name"`
+}
+
+func (q *Queries) ListResourceNeedsByAgent(ctx context.Context, agentID pgtype.UUID) ([]ListResourceNeedsByAgentRow, error) {
 	rows, err := q.db.Query(ctx, listResourceNeedsByAgent, agentID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []AgentResourceNeed{}
+	items := []ListResourceNeedsByAgentRow{}
 	for rows.Next() {
-		var i AgentResourceNeed
+		var i ListResourceNeedsByAgentRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.AgentID,
@@ -223,6 +434,10 @@ func (q *Queries) ListResourceNeedsByAgent(ctx context.Context, agentID pgtype.U
 			&i.BoundConnectionID,
 			&i.BoundMcpID,
 			&i.CreatedAt,
+			&i.BoundConnectorID,
+			&i.BoundConnectorGroupID,
+			&i.DeletedAt,
+			&i.BoundConnectorGroupName,
 		); err != nil {
 			return nil, err
 		}
@@ -235,7 +450,7 @@ func (q *Queries) ListResourceNeedsByAgent(ctx context.Context, agentID pgtype.U
 }
 
 const lockConnectionAuthorizationNeeds = `-- name: LockConnectionAuthorizationNeeds :many
-SELECT id, agent_id, type, slug, description, setup_instructions, expected_url, expected_scopes, spec, required, bound_connection_id, bound_mcp_id, created_at FROM agent_resource_needs
+SELECT id, agent_id, type, slug, description, setup_instructions, expected_url, expected_scopes, spec, required, bound_connection_id, bound_mcp_id, created_at, bound_connector_id, bound_connector_group_id, deleted_at FROM agent_resource_needs
 WHERE bound_connection_id = $1 OR id = $2
 ORDER BY id
 FOR UPDATE
@@ -272,6 +487,9 @@ func (q *Queries) LockConnectionAuthorizationNeeds(ctx context.Context, arg Lock
 			&i.BoundConnectionID,
 			&i.BoundMcpID,
 			&i.CreatedAt,
+			&i.BoundConnectorID,
+			&i.BoundConnectorGroupID,
+			&i.DeletedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -312,8 +530,35 @@ func (q *Queries) LockConnectionBindings(ctx context.Context, resourceID pgtype.
 	return items, nil
 }
 
+const lockConnectorBindings = `-- name: LockConnectorBindings :many
+SELECT id FROM agent_resource_needs
+WHERE bound_connector_id = $1
+ORDER BY id
+FOR UPDATE
+`
+
+func (q *Queries) LockConnectorBindings(ctx context.Context, resourceID pgtype.UUID) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, lockConnectorBindings, resourceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []pgtype.UUID{}
+	for rows.Next() {
+		var id pgtype.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const lockMCPAuthorizationNeeds = `-- name: LockMCPAuthorizationNeeds :many
-SELECT id, agent_id, type, slug, description, setup_instructions, expected_url, expected_scopes, spec, required, bound_connection_id, bound_mcp_id, created_at FROM agent_resource_needs
+SELECT id, agent_id, type, slug, description, setup_instructions, expected_url, expected_scopes, spec, required, bound_connection_id, bound_mcp_id, created_at, bound_connector_id, bound_connector_group_id, deleted_at FROM agent_resource_needs
 WHERE bound_mcp_id = $1 OR id = $2
 ORDER BY id
 FOR UPDATE
@@ -347,6 +592,9 @@ func (q *Queries) LockMCPAuthorizationNeeds(ctx context.Context, arg LockMCPAuth
 			&i.BoundConnectionID,
 			&i.BoundMcpID,
 			&i.CreatedAt,
+			&i.BoundConnectorID,
+			&i.BoundConnectorGroupID,
+			&i.DeletedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -487,6 +735,7 @@ func (q *Queries) LockResourceNeedsByAgent(ctx context.Context, agentID pgtype.U
 const replaceConnectionNeedBinding = `-- name: ReplaceConnectionNeedBinding :execrows
 UPDATE agent_resource_needs SET bound_connection_id = $1
 WHERE id = $2
+  AND deleted_at IS NULL
   AND bound_connection_id IS NOT DISTINCT FROM $3::uuid
 `
 
@@ -507,6 +756,7 @@ func (q *Queries) ReplaceConnectionNeedBinding(ctx context.Context, arg ReplaceC
 const replaceMCPServerNeedBinding = `-- name: ReplaceMCPServerNeedBinding :execrows
 UPDATE agent_resource_needs SET bound_mcp_id = $1
 WHERE id = $2
+  AND deleted_at IS NULL
   AND bound_mcp_id IS NOT DISTINCT FROM $3::uuid
 `
 
@@ -524,11 +774,61 @@ func (q *Queries) ReplaceMCPServerNeedBinding(ctx context.Context, arg ReplaceMC
 	return result.RowsAffected(), nil
 }
 
+const reserveConnectorForNeed = `-- name: ReserveConnectorForNeed :exec
+INSERT INTO connector_reservations (connector_id, need_id)
+VALUES ($1, $2)
+`
+
+type ReserveConnectorForNeedParams struct {
+	ConnectorID pgtype.UUID `json:"connector_id"`
+	NeedID      pgtype.UUID `json:"need_id"`
+}
+
+func (q *Queries) ReserveConnectorForNeed(ctx context.Context, arg ReserveConnectorForNeedParams) error {
+	_, err := q.db.Exec(ctx, reserveConnectorForNeed, arg.ConnectorID, arg.NeedID)
+	return err
+}
+
+const reserveConnectorTargetGroupForNeed = `-- name: ReserveConnectorTargetGroupForNeed :many
+INSERT INTO connector_reservations (connector_id, need_id, connector_target_group_id)
+SELECT member.connector_id, $1, member.group_id
+FROM connector_target_group_members member
+WHERE member.group_id = $2
+ORDER BY member.connector_id
+RETURNING connector_id
+`
+
+type ReserveConnectorTargetGroupForNeedParams struct {
+	NeedID  pgtype.UUID `json:"need_id"`
+	GroupID pgtype.UUID `json:"group_id"`
+}
+
+func (q *Queries) ReserveConnectorTargetGroupForNeed(ctx context.Context, arg ReserveConnectorTargetGroupForNeedParams) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, reserveConnectorTargetGroupForNeed, arg.NeedID, arg.GroupID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []pgtype.UUID{}
+	for rows.Next() {
+		var connector_id pgtype.UUID
+		if err := rows.Scan(&connector_id); err != nil {
+			return nil, err
+		}
+		items = append(items, connector_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const resolveBoundConnection = `-- name: ResolveBoundConnection :one
 
 SELECT c.id, c.slug, c.name, c.display_name, c.description, c.llm_hint, c.access, c.auth_mode, c.auth_url, c.token_url, c.base_url, c.scopes, c.auth_injection, c.test_path, c.setup_instructions, c.config, c.client_id, c.client_secret, c.access_token_ref, c.refresh_token, c.token_expires_at, c.created_at, c.updated_at, c.auth_params, c.headers, c.owner_principal_id, c.lifecycle, c.granted_scopes, c.scopes_verified, c.authorization_revision, c.provisional_need_id, c.pending_client_id, c.pending_client_secret FROM agent_resource_needs n
 JOIN connections c ON c.id = n.bound_connection_id
 WHERE n.agent_id = $1 AND n.type = 'connection' AND n.slug = $2
+  AND n.deleted_at IS NULL
   AND c.lifecycle = 'active'
   AND (c.auth_mode <> 'oauth' OR (c.scopes_verified AND string_to_array(n.expected_scopes, ' ') <@ string_to_array(c.granted_scopes, ' ')))
 `
@@ -582,10 +882,125 @@ func (q *Queries) ResolveBoundConnection(ctx context.Context, arg ResolveBoundCo
 	return i, err
 }
 
+const resolveBoundConnector = `-- name: ResolveBoundConnector :one
+SELECT connector.id, connector.owner_principal_id, connector.slug, connector.kind, connector.contract_id, connector.name, connector.display_name, connector.description, connector.protocol_major, connector.protocol_minor, connector.features, connector.artifact_version, connector.artifact_digest, connector.interface_descriptor, connector.interface_hash, connector.readiness, connector.readiness_message, connector.labels, connector.lifecycle, connector.last_seen_at, connector.last_ready_at, connector.created_at, connector.updated_at, connector.storage_origins, connector.activation_manifest, connector.activation_manifest_hash, connector.service_mode, connector.artifact_set_id, connector.host_id, connector.rollback_artifact_set_id, connector.inventory_revision, connector.inventory_mutation_hash, connector.active_provenance, connector.rollback_provenance, connector.active_observation_state, connector.rollback_observation_state, connector.observed_active_digest, connector.observed_active_manifest, connector.observed_active_manifest_hash, connector.observed_rollback_digest, connector.observed_rollback_manifest, connector.observed_rollback_manifest_hash, need.id AS need_id, need.spec AS need_spec
+FROM agent_resource_needs need
+JOIN connector_resources connector ON connector.id = need.bound_connector_id
+WHERE need.agent_id = $1 AND need.type = 'connector' AND need.slug = $2
+  AND need.deleted_at IS NULL
+  AND connector.lifecycle = 'active'
+FOR KEY SHARE OF connector, need
+`
+
+type ResolveBoundConnectorParams struct {
+	AgentID pgtype.UUID `json:"agent_id"`
+	Slug    string      `json:"slug"`
+}
+
+type ResolveBoundConnectorRow struct {
+	ID                           pgtype.UUID        `json:"id"`
+	OwnerPrincipalID             pgtype.UUID        `json:"owner_principal_id"`
+	Slug                         string             `json:"slug"`
+	Kind                         pgtype.Text        `json:"kind"`
+	ContractID                   pgtype.Text        `json:"contract_id"`
+	Name                         pgtype.Text        `json:"name"`
+	DisplayName                  string             `json:"display_name"`
+	Description                  pgtype.Text        `json:"description"`
+	ProtocolMajor                pgtype.Int4        `json:"protocol_major"`
+	ProtocolMinor                pgtype.Int4        `json:"protocol_minor"`
+	Features                     []string           `json:"features"`
+	ArtifactVersion              pgtype.Text        `json:"artifact_version"`
+	ArtifactDigest               pgtype.Text        `json:"artifact_digest"`
+	InterfaceDescriptor          []byte             `json:"interface_descriptor"`
+	InterfaceHash                pgtype.Text        `json:"interface_hash"`
+	Readiness                    string             `json:"readiness"`
+	ReadinessMessage             pgtype.Text        `json:"readiness_message"`
+	Labels                       []byte             `json:"labels"`
+	Lifecycle                    string             `json:"lifecycle"`
+	LastSeenAt                   pgtype.Timestamptz `json:"last_seen_at"`
+	LastReadyAt                  pgtype.Timestamptz `json:"last_ready_at"`
+	CreatedAt                    pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt                    pgtype.Timestamptz `json:"updated_at"`
+	StorageOrigins               []string           `json:"storage_origins"`
+	ActivationManifest           []byte             `json:"activation_manifest"`
+	ActivationManifestHash       pgtype.Text        `json:"activation_manifest_hash"`
+	ServiceMode                  pgtype.Text        `json:"service_mode"`
+	ArtifactSetID                pgtype.UUID        `json:"artifact_set_id"`
+	HostID                       pgtype.UUID        `json:"host_id"`
+	RollbackArtifactSetID        pgtype.UUID        `json:"rollback_artifact_set_id"`
+	InventoryRevision            int64              `json:"inventory_revision"`
+	InventoryMutationHash        pgtype.Text        `json:"inventory_mutation_hash"`
+	ActiveProvenance             string             `json:"active_provenance"`
+	RollbackProvenance           string             `json:"rollback_provenance"`
+	ActiveObservationState       string             `json:"active_observation_state"`
+	RollbackObservationState     string             `json:"rollback_observation_state"`
+	ObservedActiveDigest         pgtype.Text        `json:"observed_active_digest"`
+	ObservedActiveManifest       []byte             `json:"observed_active_manifest"`
+	ObservedActiveManifestHash   pgtype.Text        `json:"observed_active_manifest_hash"`
+	ObservedRollbackDigest       pgtype.Text        `json:"observed_rollback_digest"`
+	ObservedRollbackManifest     []byte             `json:"observed_rollback_manifest"`
+	ObservedRollbackManifestHash pgtype.Text        `json:"observed_rollback_manifest_hash"`
+	NeedID                       pgtype.UUID        `json:"need_id"`
+	NeedSpec                     []byte             `json:"need_spec"`
+}
+
+func (q *Queries) ResolveBoundConnector(ctx context.Context, arg ResolveBoundConnectorParams) (ResolveBoundConnectorRow, error) {
+	row := q.db.QueryRow(ctx, resolveBoundConnector, arg.AgentID, arg.Slug)
+	var i ResolveBoundConnectorRow
+	err := row.Scan(
+		&i.ID,
+		&i.OwnerPrincipalID,
+		&i.Slug,
+		&i.Kind,
+		&i.ContractID,
+		&i.Name,
+		&i.DisplayName,
+		&i.Description,
+		&i.ProtocolMajor,
+		&i.ProtocolMinor,
+		&i.Features,
+		&i.ArtifactVersion,
+		&i.ArtifactDigest,
+		&i.InterfaceDescriptor,
+		&i.InterfaceHash,
+		&i.Readiness,
+		&i.ReadinessMessage,
+		&i.Labels,
+		&i.Lifecycle,
+		&i.LastSeenAt,
+		&i.LastReadyAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.StorageOrigins,
+		&i.ActivationManifest,
+		&i.ActivationManifestHash,
+		&i.ServiceMode,
+		&i.ArtifactSetID,
+		&i.HostID,
+		&i.RollbackArtifactSetID,
+		&i.InventoryRevision,
+		&i.InventoryMutationHash,
+		&i.ActiveProvenance,
+		&i.RollbackProvenance,
+		&i.ActiveObservationState,
+		&i.RollbackObservationState,
+		&i.ObservedActiveDigest,
+		&i.ObservedActiveManifest,
+		&i.ObservedActiveManifestHash,
+		&i.ObservedRollbackDigest,
+		&i.ObservedRollbackManifest,
+		&i.ObservedRollbackManifestHash,
+		&i.NeedID,
+		&i.NeedSpec,
+	)
+	return i, err
+}
+
 const resolveBoundMCPServer = `-- name: ResolveBoundMCPServer :one
 SELECT m.id, m.slug, m.name, m.display_name, m.access, m.url, m.auth_mode, m.auth_url, m.token_url, m.registration_endpoint, m.scopes, m.auth_injection, m.tool_schemas, m.client_id, m.client_secret, m.access_token_ref, m.refresh_token, m.token_expires_at, m.last_synced_at, m.created_at, m.updated_at, m.server_instructions, m.owner_principal_id, m.lifecycle, m.granted_scopes, m.scopes_verified, m.authorization_revision, m.provisional_need_id, m.pending_client_id, m.pending_client_secret FROM agent_resource_needs n
 JOIN agent_mcp_servers m ON m.id = n.bound_mcp_id
 WHERE n.agent_id = $1 AND n.type = 'mcp_server' AND n.slug = $2
+  AND n.deleted_at IS NULL
   AND m.lifecycle = 'active'
   AND (m.auth_mode NOT IN ('oauth', 'oauth_discovery') OR (m.scopes_verified AND string_to_array(n.expected_scopes, ' ') <@ string_to_array(m.granted_scopes, ' ')))
 `
@@ -634,9 +1049,15 @@ func (q *Queries) ResolveBoundMCPServer(ctx context.Context, arg ResolveBoundMCP
 }
 
 const unbindAllResourceNeedsByAgent = `-- name: UnbindAllResourceNeedsByAgent :exec
-UPDATE agent_resource_needs
+WITH released AS (
+    DELETE FROM connector_reservations reservation
+    USING agent_resource_needs need
+    WHERE reservation.need_id = need.id AND need.agent_id = $1
+)
+UPDATE agent_resource_needs need
 SET bound_connection_id = NULL, bound_mcp_id = NULL
-WHERE agent_id = $1 AND type IN ('connection', 'mcp_server')
+  , bound_connector_id = NULL, bound_connector_group_id = NULL
+WHERE need.agent_id = $1 AND need.type IN ('connection', 'mcp_server', 'connector')
 `
 
 // Clear every binding on an agent's needs (the need rows stay — they are the
@@ -650,8 +1071,9 @@ func (q *Queries) UnbindAllResourceNeedsByAgent(ctx context.Context, agentID pgt
 const unbindResourceNeed = `-- name: UnbindResourceNeed :execrows
 UPDATE agent_resource_needs
 SET bound_connection_id = NULL, bound_mcp_id = NULL
+  , bound_connector_id = NULL, bound_connector_group_id = NULL
 WHERE agent_id = $1 AND type = $2 AND slug = $3
-  AND type IN ('connection', 'mcp_server')
+  AND type IN ('connection', 'mcp_server', 'connector')
 `
 
 type UnbindResourceNeedParams struct {
@@ -680,7 +1102,8 @@ ON CONFLICT (agent_id, type, slug) DO UPDATE SET
     setup_instructions = EXCLUDED.setup_instructions,
     expected_url       = EXCLUDED.expected_url,
     expected_scopes    = EXCLUDED.expected_scopes,
-    spec               = EXCLUDED.spec
+    spec               = EXCLUDED.spec,
+    deleted_at         = NULL
 `
 
 type UpsertResourceNeedParams struct {

@@ -4,6 +4,7 @@ import { fromJson } from '@bufbuild/protobuf'
 import { useConfirm } from 'primevue/useconfirm'
 import { useToast } from 'primevue/usetoast'
 import api from '@/api/client'
+import { useAirlockI18n } from '@/i18n'
 import type { MCPServerInfo } from '@/gen/airlock/v1/types_pb'
 import type { NeedInfo } from '@/gen/airlock/v1/api_pb'
 import { ListMCPServersResponseSchema } from '@/gen/airlock/v1/api_pb'
@@ -17,6 +18,7 @@ const props = withDefaults(defineProps<{ agentId: string; yourAccess?: string }>
 const emit = defineEmits<{ populated: [count: number]; mutated: [] }>()
 const toast = useToast()
 const confirm = useConfirm()
+const { t, formatNumber } = useAirlockI18n()
 const resources = useAgentResources(props.agentId)
 const definitions = ref<MCPServerInfo[]>([])
 const loading = ref(true)
@@ -40,7 +42,7 @@ const canAdmin = computed(() => props.yourAccess === 'admin')
 function definition(need: NeedInfo): MCPServerInfo | undefined { return definitionsBySlug.value.get(need.slug) }
 function boundName(need: NeedInfo): string {
   const resource = resources.resourceFor(need)
-  return resource ? resourceLabel(resource) : definition(need)?.name || 'Bound resource'
+  return resource ? resourceLabel(resource) : definition(need)?.name || t('resources.connections.boundResource')
 }
 function canManage(need: NeedInfo): boolean {
   const resource = resources.resourceFor(need)
@@ -53,14 +55,17 @@ function canAuthorize(need: NeedInfo): boolean {
 function sharedWarning(need: NeedInfo): string {
   const resource = resources.resourceFor(need)
   return resource && resource.agentCount > 1
-    ? `Token or OAuth changes affect all ${resource.agentCount} apps using this shared MCP resource.`
+    ? t('resources.mcp.sharedWarning', {
+        count: resource.agentCount,
+        formattedCount: formatNumber(resource.agentCount),
+      })
     : ''
 }
 function authLabel(mode: string): string {
-  if (mode === 'oauth_discovery') return 'OAuth (automatic)'
-  if (mode === 'oauth') return 'OAuth'
-  if (mode === 'token') return 'Token'
-  if (mode === 'none') return 'No authentication'
+  if (mode === 'oauth_discovery') return t('resources.auth.oauthAutomatic')
+  if (mode === 'oauth') return t('resources.auth.oauth')
+  if (mode === 'token') return t('resources.auth.token')
+  if (mode === 'none') return t('resources.auth.none')
   return mode
 }
 
@@ -80,7 +85,7 @@ async function load() {
   try {
     await refresh()
   } catch (error: any) {
-    loadError.value = error.response?.data?.error || error.message || 'Failed to load MCP servers'
+    loadError.value = error.response?.data?.error || error.message || t('resources.errors.loadMcpServers')
     emit('populated', 1)
   } finally {
     loading.value = false
@@ -102,7 +107,7 @@ async function configureBound(need: NeedInfo) {
     await refresh()
     configureToken(need)
   } catch (error: any) {
-    toast.add({ severity: 'error', summary: error.response?.data?.error || error.message || 'Failed to load resource setup', life: 6000 })
+    toast.add({ severity: 'error', summary: error.response?.data?.error || error.message || t('resources.errors.loadResourceSetup'), life: 6000 })
   }
 }
 
@@ -112,7 +117,7 @@ async function reauthorize(need: NeedInfo) {
   try {
     await resources.startAuthorization(need, { resourceId: resource.id, displayName: '', createNew: false })
   } catch (error: any) {
-    toast.add({ severity: 'error', summary: error.response?.data?.error || error.message || 'Authorization failed', life: 6000 })
+    toast.add({ severity: 'error', summary: error.response?.data?.error || error.message || t('resources.errors.authorizationFailed'), life: 6000 })
   }
 }
 
@@ -129,7 +134,7 @@ async function saveOAuthApp() {
     oauthAppOpen.value = false
     await resources.startAuthorization(need, { resourceId: resource.id, displayName: '', createNew: false })
   } catch (error: any) {
-    toast.add({ severity: 'error', summary: error.response?.data?.error || error.message || 'OAuth setup failed', life: 6000 })
+    toast.add({ severity: 'error', summary: error.response?.data?.error || error.message || t('resources.errors.oauthSetupFailed'), life: 6000 })
   } finally {
     saving.value = false
   }
@@ -137,18 +142,18 @@ async function saveOAuthApp() {
 
 function disconnect(need: NeedInfo) {
   confirm.require({
-    header: 'Disconnect from this app?',
-    message: `${boundName(need)} stays available to other apps. Its stored credentials are not cleared.`,
-    acceptLabel: 'Disconnect from this app',
-    rejectLabel: 'Cancel',
+    header: t('resources.connections.disconnectHeader'),
+    message: t('resources.connections.disconnectNamed', { name: boundName(need) }),
+    acceptLabel: t('resources.actions.disconnectApp'),
+    rejectLabel: t('resources.actions.cancel'),
     accept: async () => {
       try {
         await resources.unbind(need)
         await refresh()
         emit('mutated')
-        toast.add({ severity: 'success', summary: 'MCP resource disconnected from this app', life: 3000 })
+        toast.add({ severity: 'success', summary: t('resources.mcp.disconnected'), life: 3000 })
       } catch (error: any) {
-        toast.add({ severity: 'error', summary: error.response?.data?.error || 'Disconnect failed', life: 5000 })
+        toast.add({ severity: 'error', summary: error.response?.data?.error || t('resources.errors.disconnectFailed'), life: 5000 })
       }
     },
   })
@@ -161,49 +166,49 @@ onMounted(load)
 
 <template>
   <Message v-if="loadError" severity="error" :closable="false">
-    <div class="load-error"><span>{{ loadError }}</span><Button label="Retry" icon="pi pi-refresh" size="small" outlined @click="load" /></div>
+    <div class="load-error"><span>{{ loadError }}</span><Button :label="t('resources.actions.retry')" icon="pi pi-refresh" size="small" outlined @click="load" /></div>
   </Message>
   <DataTable v-else-if="!loading" :value="needs" stripedRows responsive-layout="scroll">
-    <template #empty><div class="empty">No MCP servers registered.</div></template>
-    <Column header="MCP server">
+    <template #empty><div class="empty">{{ t('resources.mcp.empty') }}</div></template>
+    <Column :header="t('resources.types.mcpServer')">
       <template #body="{ data: need }">
         <div class="primary-name">{{ need.bound ? boundName(need) : (definition(need)?.name || need.slug) }}</div>
-        <div class="secondary">App handle: <code>{{ need.slug }}</code></div>
+        <div class="secondary">{{ t('resources.connections.appHandle', { slug: need.slug }) }}</div>
         <div v-if="definition(need)?.url" class="secondary url">{{ definition(need)?.url }}</div>
       </template>
     </Column>
-    <Column header="Authentication"><template #body="{ data: need }">{{ authLabel(definition(need)?.authMode || '') }}</template></Column>
-    <Column header="Tools"><template #body="{ data: need }">{{ definition(need)?.toolCount || 0 }}</template></Column>
-    <Column header="Binding"><template #body="{ data: need }"><Tag :value="need.bound ? 'Bound' : 'Unbound'" :severity="need.bound ? 'success' : 'warn'" /></template></Column>
-    <Column header="Status">
+    <Column :header="t('resources.connections.authentication')"><template #body="{ data: need }">{{ authLabel(definition(need)?.authMode || '') }}</template></Column>
+    <Column :header="t('resources.mcp.tools')"><template #body="{ data: need }">{{ formatNumber(definition(need)?.toolCount || 0) }}</template></Column>
+    <Column :header="t('resources.mcp.binding')"><template #body="{ data: need }"><Tag :value="need.bound ? t('resources.status.bound') : t('resources.status.unbound')" :severity="need.bound ? 'success' : 'warn'" /></template></Column>
+    <Column :header="t('resources.inventory.status')">
       <template #body="{ data: need }">
         <Tag
           v-if="need.bound"
-          :value="definition(need)?.authMode === 'none' ? 'Ready' : (definition(need)?.authorized ? 'Ready' : 'Needs setup')"
+          :value="definition(need)?.authMode === 'none' ? t('resources.status.ready') : (definition(need)?.authorized ? t('resources.status.ready') : t('resources.status.needsSetup'))"
           :severity="definition(need)?.authMode === 'none' || definition(need)?.authorized ? 'success' : 'warn'"
         />
-        <span v-else class="secondary">Not connected</span>
+        <span v-else class="secondary">{{ t('resources.status.notConnected') }}</span>
       </template>
     </Column>
-    <Column header="Actions">
+    <Column :header="t('resources.bridges.actions')">
       <template #body="{ data: need }">
         <div v-if="canAdmin" class="actions">
-          <Button v-if="!need.bound" label="Set up" size="small" @click="openSetup(need)" />
+          <Button v-if="!need.bound" :label="t('resources.actions.setUp')" size="small" @click="openSetup(need)" />
           <template v-else>
             <Button
               v-if="['oauth', 'oauth_discovery'].includes(definition(need)?.authMode || '') && canAuthorize(need)"
-              label="Reauthorize"
+              :label="t('resources.actions.reauthorize')"
               size="small"
               outlined
               @click="reauthorize(need)"
             />
-            <Button v-if="definition(need)?.authMode === 'token' && canManage(need)" label="Configure token" size="small" outlined @click="configureToken(need)" />
-            <Button v-if="definition(need)?.authMode === 'oauth' && canAuthorize(need)" label="OAuth app" size="small" text @click="configureOAuthApp(need)" />
-            <Button label="Switch resource" size="small" text @click="openSetup(need)" />
-            <Button label="Disconnect from this app" size="small" text severity="danger" @click="disconnect(need)" />
+            <Button v-if="definition(need)?.authMode === 'token' && canManage(need)" :label="t('resources.actions.configureToken')" size="small" outlined @click="configureToken(need)" />
+            <Button v-if="definition(need)?.authMode === 'oauth' && canAuthorize(need)" :label="t('resources.actions.oauthApp')" size="small" text @click="configureOAuthApp(need)" />
+            <Button :label="t('resources.actions.switchResource')" size="small" text @click="openSetup(need)" />
+            <Button :label="t('resources.actions.disconnectApp')" size="small" text severity="danger" @click="disconnect(need)" />
           </template>
         </div>
-        <span v-else class="secondary">View only</span>
+        <span v-else class="secondary">{{ t('resources.connections.viewOnly') }}</span>
       </template>
     </Column>
   </DataTable>
@@ -228,16 +233,16 @@ onMounted(load)
     :warning="sharedWarning(selectedNeed)"
     @saved="changed"
   />
-  <Dialog v-model:visible="oauthAppOpen" header="Replace MCP OAuth app" modal :style="{ width: 'min(30rem, calc(100vw - 2rem))' }">
+  <Dialog v-model:visible="oauthAppOpen" :header="t('resources.auth.replaceMcpOAuthApp')" modal :style="{ width: 'min(30rem, calc(100vw - 2rem))' }">
     <div class="oauth-form">
       <Message v-if="selectedNeed && sharedWarning(selectedNeed)" severity="warn" :closable="false">{{ sharedWarning(selectedNeed) }}</Message>
-      <p class="secondary">After saving, you will authorize the shared resource again. Existing credentials remain active until authorization succeeds.</p>
-      <div class="secondary">Redirect URI: <code class="url">{{ callbackUrl }}</code></div>
-      <InputText v-model="clientId" placeholder="Client ID" />
-      <Password v-model="clientSecret" placeholder="Client secret" :feedback="false" toggle-mask fluid />
+      <p class="secondary">{{ t('resources.auth.reauthorizeSharedAfterSave') }}</p>
+      <div class="secondary">{{ t('resources.auth.redirectUri', { uri: callbackUrl }) }}</div>
+      <InputText v-model="clientId" :placeholder="t('resources.auth.clientId')" />
+      <Password v-model="clientSecret" :placeholder="t('resources.auth.clientSecret')" :feedback="false" toggle-mask fluid />
       <div class="dialog-actions">
-        <Button label="Cancel" text severity="secondary" @click="oauthAppOpen = false" />
-        <Button label="Save and authorize" :loading="saving" :disabled="!clientId || !clientSecret" @click="saveOAuthApp" />
+        <Button :label="t('resources.actions.cancel')" text severity="secondary" @click="oauthAppOpen = false" />
+        <Button :label="t('resources.actions.saveAndAuthorize')" :loading="saving" :disabled="!clientId || !clientSecret" @click="saveOAuthApp" />
       </div>
     </div>
   </Dialog>

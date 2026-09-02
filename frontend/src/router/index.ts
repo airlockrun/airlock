@@ -78,6 +78,9 @@ const router = createRouter({
         // bounces unauthed users to /login?redirect=...
         { path: 'oauth/consent', name: 'oauth-consent', component: () => import('@/views/ConsentView.vue') },
         { path: 'device-login', name: 'device-login', component: () => import('@/views/DeviceLoginView.vue') },
+        { path: 'hosts/connect', name: 'host-enrollment', component: () => import('@/views/HostEnrollmentView.vue') },
+        { path: 'settings/hosts', redirect: '/settings/resources' },
+        { path: 'settings/hosts/:hostId', name: 'host-detail', component: () => import('@/views/HostDetailView.vue') },
       ],
     },
 

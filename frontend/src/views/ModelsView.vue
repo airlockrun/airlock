@@ -7,12 +7,14 @@ import { useCatalogStore } from '@/stores/catalog'
 import { useModelGrantsStore } from '@/stores/modelGrants'
 import type { ModelInfo, Provider } from '@/gen/airlock/v1/types_pb'
 import { modelMatchesProvider } from '@/composables/useModelCapabilities'
+import { useAirlockI18n } from '@/i18n'
 
 const providers = useProvidersStore()
 const catalog = useCatalogStore()
 const grants = useModelGrantsStore()
 const toast = useToast()
 const confirm = useConfirm()
+const { t, locale, formatNumber } = useAirlockI18n()
 
 const search = ref('')
 
@@ -31,14 +33,37 @@ onMounted(async () => {
 function modelHaystack(m: ModelInfo): string {
   const caps = [m.kind, ...m.caps]
   if (m.toolCall) caps.push('tools')
-  return [m.name, m.id, ...caps].join(' ').toLowerCase()
+  if (m.reasoning) caps.push('reasoning')
+  return [m.name, m.id, ...caps, ...caps.map(capabilityLabel)].join(' ').toLocaleLowerCase(locale.value)
+}
+
+function capabilityLabel(capability: string): string {
+  const label = (() => {
+    switch (capability) {
+      case 'text': return t('administration.capability.text')
+      case 'vision': return t('administration.capability.vision')
+      case 'transcription': return t('administration.capability.transcription')
+      case 'speech': return t('administration.capability.speech')
+      case 'image': return t('administration.capability.image')
+      case 'image_gen': return t('administration.capability.imageGeneration')
+      case 'embedding': return t('administration.capability.embedding')
+      case 'reranking': return t('administration.capability.reranking')
+      case 'search': return t('administration.capability.search')
+      case 'video': return t('administration.capability.video')
+      case 'file': return t('administration.capability.file')
+      case 'tools': return t('administration.capability.tools')
+      case 'reasoning': return t('administration.capability.reasoning')
+      default: return capability
+    }
+  })()
+  return label.toLocaleLowerCase(locale.value)
 }
 
 // One group per configured (enabled) provider row, with the catalog models that
 // provider supplies. Allowance is keyed on the provider row, so two rows for the
 // same catalog provider are listed (and toggled) independently.
 const groups = computed(() => {
-  const q = search.value.trim().toLowerCase()
+  const q = search.value.trim().toLocaleLowerCase(locale.value)
   return providers.providers
     .filter((p) => p.isEnabled)
     .map((p) => ({
@@ -65,7 +90,12 @@ const allowedCount = computed(() => {
 // Catalog costs are USD per 1M tokens. Trim trailing zeros so $3.00 reads
 // "$3" but $0.15 stays "$0.15"; 0 (unknown) renders as a dash by the caller.
 function fmtPrice(v: number): string {
-  return '$' + +v.toFixed(2)
+  return formatNumber(v, {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2,
+  })
 }
 
 async function toggle(provider: Provider, model: ModelInfo, on: boolean) {
@@ -73,7 +103,7 @@ async function toggle(provider: Provider, model: ModelInfo, on: boolean) {
     try {
       await grants.grant(provider.id, model.id)
     } catch (err: any) {
-      toast.add({ severity: 'error', summary: err.response?.data?.error || 'Update failed', life: 5000 })
+      toast.add({ severity: 'error', summary: err.response?.data?.error || t('administration.models.updateFailed'), life: 5000 })
       await grants.fetchGrants()
     }
     return
@@ -97,7 +127,7 @@ async function toggle(provider: Provider, model: ModelInfo, on: boolean) {
     try {
       await grants.revoke(id)
     } catch (err: any) {
-      toast.add({ severity: 'error', summary: err.response?.data?.error || 'Update failed', life: 5000 })
+      toast.add({ severity: 'error', summary: err.response?.data?.error || t('administration.models.updateFailed'), life: 5000 })
     } finally {
       await grants.fetchGrants()
     }
@@ -105,11 +135,11 @@ async function toggle(provider: Provider, model: ModelInfo, on: boolean) {
 
   if (agentCount > 0) {
     confirm.require({
-      header: 'Disable model',
-      message: `${agentCount} app${agentCount === 1 ? '' : 's'} use this model as a configured override. Disabling it will reset ${agentCount === 1 ? 'it' : 'them'} to the workspace default. Continue?`,
+      header: t('administration.models.disableTitle'),
+      message: t('administration.models.disableConfirm', { count: agentCount, formattedCount: formatNumber(agentCount) }),
       icon: 'pi pi-exclamation-triangle',
-      acceptLabel: 'Disable',
-      rejectLabel: 'Cancel',
+      acceptLabel: t('administration.action.disable'),
+      rejectLabel: t('administration.action.cancel'),
       accept: doRevoke,
       reject: () => grants.fetchGrants(), // re-sync the switch back on
     })
@@ -122,19 +152,17 @@ async function toggle(provider: Provider, model: ModelInfo, on: boolean) {
 <template>
   <div>
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem">
-      <h1 style="margin: 0; font-size: 1.5rem">Allowed models</h1>
-      <Tag :value="`${allowedCount} allowed`" severity="success" />
+      <h1 style="margin: 0; font-size: 1.5rem">{{ t('administration.models.title') }}</h1>
+      <Tag :value="t('administration.models.allowedCount', { count: allowedCount, formattedCount: formatNumber(allowedCount) })" severity="success" />
     </div>
     <p style="margin: 0 0 1.5rem; color: var(--p-text-muted-color); max-width: 48rem">
-      Models are deny-by-default: an app can only be assigned a model you allow here.
-      Your configured <b>default</b> models are always usable regardless of this list.
-      Allowing a model makes it available to everyone in this workspace.
+      {{ t('administration.models.description') }}
     </p>
 
     <div style="margin-bottom: 1rem; max-width: 24rem">
       <IconField>
         <InputIcon class="pi pi-search" />
-        <InputText v-model="search" placeholder="Filter by name or capability (e.g. transcription, vision)" style="width: 100%" />
+        <InputText v-model="search" :placeholder="t('administration.models.searchPlaceholder')" style="width: 100%" />
       </IconField>
     </div>
 
@@ -143,8 +171,7 @@ async function toggle(provider: Provider, model: ModelInfo, on: boolean) {
     </div>
 
     <Message v-else-if="groups.length === 0" severity="info" :closable="false">
-      No configured providers with models. Add a provider on the
-      <router-link to="/providers">Providers</router-link> page first.
+      {{ t('administration.models.emptyBeforeLink') }} <router-link to="/providers">{{ t('administration.models.emptyLink') }}</router-link>{{ t('administration.models.emptyAfterLink') }}
     </Message>
 
     <Card v-for="g in groups" v-else :key="g.provider.id" style="margin-bottom: 1.25rem">
@@ -157,7 +184,7 @@ async function toggle(provider: Provider, model: ModelInfo, on: boolean) {
       </template>
       <template #content>
         <DataTable :value="g.models" stripedRows size="small">
-          <Column header="Model">
+          <Column :header="t('administration.models.modelHeader')">
             <template #body="{ data }">
               <div style="display: flex; flex-direction: column">
                 <span style="font-weight: 500">{{ data.name }}</span>
@@ -165,40 +192,40 @@ async function toggle(provider: Provider, model: ModelInfo, on: boolean) {
               </div>
             </template>
           </Column>
-          <Column header="Capabilities">
+          <Column :header="t('administration.models.capabilitiesHeader')">
             <template #body="{ data }">
               <div style="display: flex; flex-wrap: wrap; gap: 0.25rem">
-                <Tag v-if="data.toolCall" value="tools" severity="info" style="font-size: 0.7rem" />
-                <Tag v-if="data.reasoning" value="reasoning" severity="info" style="font-size: 0.7rem" />
+                <Tag v-if="data.toolCall" :value="t('administration.capability.tools')" severity="info" style="font-size: 0.7rem" />
+                <Tag v-if="data.reasoning" :value="t('administration.capability.reasoning')" severity="info" style="font-size: 0.7rem" />
                 <Tag
                   v-for="c in data.caps"
                   :key="c"
-                  :value="c"
+                  :value="capabilityLabel(c)"
                   severity="secondary"
                   style="font-size: 0.7rem"
                 />
               </div>
             </template>
           </Column>
-          <Column header="Price /1M" style="width: 8rem">
+          <Column :header="t('administration.models.priceHeader')" style="width: 8rem">
             <template #body="{ data }">
               <div
                 v-if="data.costInput || data.costOutput"
                 style="font-size: 0.75rem; line-height: 1.35"
               >
                 <div>
-                  <span style="color: var(--p-text-muted-color)">in</span>
+                   <span style="color: var(--p-text-muted-color)">{{ t('administration.models.inputPrice') }}</span>
                   {{ fmtPrice(data.costInput) }}
                 </div>
                 <div>
-                  <span style="color: var(--p-text-muted-color)">out</span>
+                   <span style="color: var(--p-text-muted-color)">{{ t('administration.models.outputPrice') }}</span>
                   {{ fmtPrice(data.costOutput) }}
                 </div>
               </div>
               <span v-else style="color: var(--p-text-muted-color)">-</span>
             </template>
           </Column>
-          <Column header="Allowed" style="width: 8rem">
+          <Column :header="t('administration.models.allowedHeader')" style="width: 8rem">
             <template #body="{ data }">
               <ToggleSwitch
                 :modelValue="grants.isAllowed(g.provider.id, data.id)"

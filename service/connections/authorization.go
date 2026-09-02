@@ -317,6 +317,9 @@ func (s *Service) StartAuthorizationForNeed(ctx context.Context, p authz.Princip
 	if err := authz.AuthorizeResource(ctx, q, p, authz.ResourceBind, typ, uuid.UUID(resource.id.Bytes)); err != nil {
 		return AuthorizationStart{}, err
 	}
+	if err := authz.LockResource(ctx, q, typ, uuid.UUID(resource.id.Bytes)); err != nil {
+		return AuthorizationStart{}, err
+	}
 	if err := authz.AuthorizeResource(ctx, q, p, authz.ResourceManage, typ, uuid.UUID(resource.id.Bytes)); err != nil {
 		return AuthorizationStart{}, err
 	}
@@ -502,6 +505,9 @@ func (s *Service) validateCallback(ctx context.Context, q *dbq.Queries, state db
 		return resource, need, err
 	}
 	if err := authz.AuthorizeResource(ctx, q, principal, authz.ResourceBind, typ, uuid.UUID(resource.id.Bytes)); err != nil {
+		return resource, need, err
+	}
+	if err := authz.LockResource(ctx, q, typ, uuid.UUID(resource.id.Bytes)); err != nil {
 		return resource, need, err
 	}
 	if err := authz.AuthorizeResource(ctx, q, principal, authz.ResourceManage, typ, uuid.UUID(resource.id.Bytes)); err != nil {

@@ -12,6 +12,7 @@ import {
 } from '@/gen/airlock/v1/api_pb'
 import { enrichMessages as enrichMessagesShared, formatToolArgs, toolDescription, toolLabel, type MsgBlock, type ToolBlock } from '@/utils/messageGroup'
 import { useConversationFeedStore } from '@/stores/conversationFeed'
+import { useAirlockI18n } from '@/i18n'
 
 // Sliding-window pagination keeps the browser's in-memory message list
 // bounded. Scrolling up past the top fetches an older page; if the window
@@ -61,6 +62,7 @@ export interface Confirmation {
 }
 
 export const useChatStore = defineStore('chat', () => {
+  const { t } = useAirlockI18n()
   const conversationId = ref<string | null>(null)
   // Web conversations for this agent, newest first — the switcher list.
   // Bridge/a2a threads are excluded server-side (ListConversationsByAgent).
@@ -348,7 +350,7 @@ export const useChatStore = defineStore('chat', () => {
           compactRun.value = null
         }
         finalizeMessage()
-        const errText = ev.error || 'Run failed.'
+        const errText = ev.error || t('chat.error.runFailed')
         messages.value.push({
           $typeName: 'airlock.v1.AgentMessageInfo',
           id: `error-${ev.runId}`,
@@ -533,7 +535,7 @@ export const useChatStore = defineStore('chat', () => {
         kind: 'tool',
         toolCallId: b.toolCallId,
         toolName: tc?.toolName || 'tool',
-        label: toolLabel(tc?.toolName || 'tool', rawArgs),
+        label: toolLabel(tc?.toolName || 'tool', rawArgs, t),
         input: formatToolArgs(rawArgs),
         description: toolDescription(rawArgs),
         output: tc?.output || '',
@@ -584,7 +586,7 @@ export const useChatStore = defineStore('chat', () => {
   // Enrich messages with tool call/result info, then layer on the chat-store-
   // specific notification enrichment that the run views don't need.
   function enrichMessages(msgs: AgentMessageInfo[]): AgentMessageInfo[] {
-    enrichMessagesShared(msgs)
+    enrichMessagesShared(msgs, t)
     for (const msg of msgs) {
       if (msg.source === 'notification' || msg.source === 'upload') enrichNotification(msg)
     }

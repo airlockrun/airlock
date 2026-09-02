@@ -328,6 +328,8 @@ func matchRoute(routes []dbq.AgentRoute, req *http.Request) (selected dbq.AgentR
 // handleRelayCallback exchanges a relay code for a session cookie.
 // GET /__air/callback?code=xxx&return=/path
 func handleRelayCallback(w http.ResponseWriter, r *http.Request, database *db.DB, jwtSecret string, targetAgentID uuid.UUID, log *zap.Logger) {
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Pragma", "no-cache")
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
@@ -344,9 +346,16 @@ func handleRelayCallback(w http.ResponseWriter, r *http.Request, database *db.DB
 	}
 	clearRelayNonceCookie(w, r)
 
+	q := dbq.New(database.Pool())
 	// airlockvet:allow-dbq reason: callback authentication is an opaque, one-time DB exchange; DELETE RETURNING is the authorization gate
-	row, err := dbq.New(database.Pool()).ConsumeRelayCode(r.Context(), hashToken(code))
+	row, err := q.ConsumeRelayCode(r.Context(), hashToken(code))
 	if err != nil {
+		// Browser history can restore a callback after its one-time code was
+		// consumed. A live session for this agent makes that replay harmless.
+		if _, ok, cookieAuthenticated := validateSubdomainAuth(r, q, jwtSecret, targetAgentID); ok && cookieAuthenticated {
+			http.Redirect(w, r, returnPath, http.StatusFound)
+			return
+		}
 		log.Warn("relay code consumption failed", zap.Error(err))
 		writeError(w, http.StatusUnauthorized, "invalid or expired relay code")
 		return

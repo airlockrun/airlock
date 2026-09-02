@@ -61,7 +61,10 @@ func (h *settingsHandler) Update(w http.ResponseWriter, r *http.Request) {
 		{Name: "default_embedding", Model: in.DefaultEmbeddingModel, ProviderIDRaw: in.DefaultEmbeddingProviderId, ModelRequired: true},
 		{Name: "default_search", Model: in.DefaultSearchModel, ProviderIDRaw: in.DefaultSearchProviderId, ModelRequired: false},
 	}
-	row, err := h.svc.Update(r.Context(), principalFromRequest(r), settingssvc.UpdateRequest{Slots: slots})
+	row, err := h.svc.Update(r.Context(), principalFromRequest(r), settingssvc.UpdateRequest{
+		Slots:    slots,
+		UILocale: in.UiLocale,
+	})
 	if err != nil {
 		writeServiceError(w, err, "failed to update system settings")
 		return

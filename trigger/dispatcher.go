@@ -23,6 +23,7 @@ import (
 	"github.com/airlockrun/airlock/container"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
+	localepkg "github.com/airlockrun/airlock/locale"
 	"github.com/airlockrun/airlock/secrets"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -508,6 +509,13 @@ func (d *Dispatcher) ForwardPrompt(ctx context.Context, agentID uuid.UUID, input
 	if err != nil {
 		return nil, uuid.Nil, err
 	}
+	if !input.ForceCompact {
+		settings, err := dbq.New(d.db.Pool()).GetSystemSettings(ctx)
+		if err != nil {
+			return nil, uuid.Nil, fmt.Errorf("load prompt locale: %w", err)
+		}
+		appendRuntimeLocale(&input, settings.UiLocale)
+	}
 
 	// Populate VisibleSiblings: every sibling the user could call directly
 	// via MCP. The LLM's prompt and the VM bindings render against the
@@ -550,6 +558,13 @@ func (d *Dispatcher) ForwardPrompt(ctx context.Context, agentID uuid.UUID, input
 		return nil, uuid.Nil, err
 	}
 	return &runBodyCloser{ReadCloser: rc, dispatcher: d, runID: runID, cancel: cancel}, runID, nil
+}
+
+func appendRuntimeLocale(input *wire.PromptInput, uiLocale string) {
+	if input.ForceCompact {
+		return
+	}
+	input.Instructions = localepkg.AppendReplyInstruction(input.Instructions, uiLocale)
 }
 
 // ForwardA2APrompt is ForwardPrompt for the sibling-agent code path:

@@ -3,8 +3,10 @@ package storage
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"net/url"
 	"os"
@@ -19,6 +21,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/aws/smithy-go"
 	"github.com/google/uuid"
 )
 
@@ -36,6 +39,38 @@ type ObjectInfo struct {
 	Size         int64
 	LastModified time.Time
 	Metadata     map[string]string // user-defined S3 metadata (X-Amz-Meta-*)
+	ETag         string
+}
+
+// CompletedPart identifies one uploaded multipart segment.
+type CompletedPart struct {
+	Number int
+	ETag   string
+}
+
+// MultipartPart is authoritative metadata reported by S3 for an uploaded part.
+type MultipartPart struct {
+	Number int
+	ETag   string
+	Size   int64
+}
+
+// IsNoSuchUpload reports whether S3 no longer has the multipart upload.
+func IsNoSuchUpload(err error) bool {
+	var apiError smithy.APIError
+	return errors.As(err, &apiError) && apiError.ErrorCode() == "NoSuchUpload"
+}
+
+// IsNotFound reports whether an exact S3 object does not exist.
+func IsNotFound(err error) bool {
+	var apiError smithy.APIError
+	return errors.As(err, &apiError) && (apiError.ErrorCode() == "NoSuchKey" || apiError.ErrorCode() == "NotFound")
+}
+
+// IsPreconditionFailed reports a failed conditional object mutation.
+func IsPreconditionFailed(err error) bool {
+	var apiError smithy.APIError
+	return errors.As(err, &apiError) && (apiError.ErrorCode() == "PreconditionFailed" || apiError.ErrorCode() == "ConditionalRequestConflict")
 }
 
 // NewS3Client creates an S3Client from config. Panics if S3URL is empty.
@@ -134,6 +169,23 @@ func (c *S3Client) PutObject(ctx context.Context, key string, reader io.Reader, 
 	return c.PutObjectWithMetadata(ctx, key, reader, size, nil)
 }
 
+// PutObjectStream uploads a seekable body without buffering it in memory. It is
+// intended for build artifacts, whose size can be much larger than ordinary
+// API uploads and whose content type is already known by the caller.
+func (c *S3Client) PutObjectStream(ctx context.Context, key string, body io.ReadSeeker, size int64, contentType string) error {
+	if body == nil || size < 0 || contentType == "" {
+		return fmt.Errorf("streaming object body, size, and content type are required")
+	}
+	_, err := c.client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket:        &c.bucket,
+		Key:           &key,
+		Body:          body,
+		ContentLength: &size,
+		ContentType:   &contentType,
+	})
+	return err
+}
+
 // PutObjectWithMetadata is the same as PutObject but persists user-defined
 // metadata (X-Amz-Meta-*) on the stored object. The "filename" key carries
 // the original upload filename — surfaced via HeadObject.Metadata. The
@@ -230,6 +282,7 @@ func (c *S3Client) HeadObject(ctx context.Context, key string) (ObjectInfo, stri
 		Size:         *out.ContentLength,
 		LastModified: lastMod,
 		Metadata:     out.Metadata,
+		ETag:         aws.ToString(out.ETag),
 	}, contentType, nil
 }
 
@@ -249,6 +302,74 @@ func (c *S3Client) CopyObject(ctx context.Context, srcKey, dstKey string) error 
 		CopySource: &copySource,
 		Key:        &dstKey,
 	})
+	return err
+}
+
+// ConditionalCopyObject publishes a verified staging object only if both the
+// staging ETag and destination version still match the prepared transfer. The
+// destination condition rides on multipart completion because common
+// S3-compatible stores ignore destination conditions on CopyObject.
+func (c *S3Client) ConditionalCopyObject(ctx context.Context, srcKey, dstKey, sourceETag, destinationETag string, destinationExisted bool) error {
+	copySource := c.bucket + "/" + escapeS3Key(srcKey)
+	source, err := c.client.HeadObject(ctx, &s3.HeadObjectInput{Bucket: &c.bucket, Key: &srcKey, IfMatch: &sourceETag})
+	if err != nil {
+		return err
+	}
+	if aws.ToInt64(source.ContentLength) == 0 {
+		input := &s3.PutObjectInput{
+			Bucket: &c.bucket, Key: &dstKey, Body: bytes.NewReader(nil), ContentLength: aws.Int64(0),
+			ContentType: source.ContentType, Metadata: source.Metadata,
+		}
+		if destinationExisted {
+			input.IfMatch = &destinationETag
+		} else {
+			input.IfNoneMatch = aws.String("*")
+		}
+		_, err := c.client.PutObject(ctx, input)
+		return err
+	}
+	upload, err := c.client.CreateMultipartUpload(ctx, &s3.CreateMultipartUploadInput{
+		Bucket: &c.bucket, Key: &dstKey, ContentType: source.ContentType, Metadata: source.Metadata,
+	})
+	if err != nil {
+		return err
+	}
+	uploadID := aws.ToString(upload.UploadId)
+	completed := false
+	defer func() {
+		if !completed {
+			_, _ = c.client.AbortMultipartUpload(context.WithoutCancel(ctx), &s3.AbortMultipartUploadInput{Bucket: &c.bucket, Key: &dstKey, UploadId: &uploadID})
+		}
+	}()
+	const copyPartSize = int64(64 << 20)
+	size := aws.ToInt64(source.ContentLength)
+	parts := make([]types.CompletedPart, 0, (size+copyPartSize-1)/copyPartSize)
+	for start, number := int64(0), int32(1); start < size; start, number = start+copyPartSize, number+1 {
+		end := min(start+copyPartSize, size) - 1
+		copyRange := fmt.Sprintf("bytes=%d-%d", start, end)
+		part, err := c.client.UploadPartCopy(ctx, &s3.UploadPartCopyInput{
+			Bucket: &c.bucket, Key: &dstKey, UploadId: &uploadID, PartNumber: &number,
+			CopySource: &copySource, CopySourceIfMatch: &sourceETag, CopySourceRange: &copyRange,
+		})
+		if err != nil {
+			return err
+		}
+		etag := aws.ToString(part.CopyPartResult.ETag)
+		parts = append(parts, types.CompletedPart{PartNumber: &number, ETag: &etag})
+	}
+	finish := &s3.CompleteMultipartUploadInput{
+		Bucket: &c.bucket, Key: &dstKey, UploadId: &uploadID,
+		MultipartUpload: &types.CompletedMultipartUpload{Parts: parts},
+	}
+	if destinationExisted {
+		finish.IfMatch = &destinationETag
+	} else {
+		finish.IfNoneMatch = aws.String("*")
+	}
+	_, err = c.client.CompleteMultipartUpload(ctx, finish)
+	if err == nil {
+		completed = true
+	}
 	return err
 }
 
@@ -365,6 +486,106 @@ func (c *S3Client) PublicPresignGetURL(ctx context.Context, key string, expiry t
 		return "", err
 	}
 	return req.URL, nil
+}
+
+// PublicPresignDownloadURL returns a public GET URL whose signed response
+// headers force one safe client-visible filename.
+func (c *S3Client) PublicPresignDownloadURL(ctx context.Context, key, filename string, expiry time.Duration) (string, error) {
+	disposition, err := downloadContentDisposition(filename)
+	if err != nil {
+		return "", err
+	}
+	presigner := c.presigner
+	if c.publicPresigner != nil {
+		presigner = c.publicPresigner
+	}
+	req, err := presigner.PresignGetObject(ctx, &s3.GetObjectInput{
+		Bucket: &c.bucket, Key: &key, ResponseContentDisposition: &disposition,
+	}, s3.WithPresignExpires(expiry))
+	if err != nil {
+		return "", err
+	}
+	return req.URL, nil
+}
+
+func downloadContentDisposition(filename string) (string, error) {
+	if filename == "" || filename == "." || filename == ".." || strings.ContainsAny(filename, "/\\\r\n\x00") {
+		return "", errors.New("download filename must be a safe base name")
+	}
+	disposition := mime.FormatMediaType("attachment", map[string]string{"filename": filename})
+	if disposition == "" {
+		return "", errors.New("download filename cannot be encoded")
+	}
+	return disposition, nil
+}
+
+// CreateMultipartUpload starts an upload scoped to one exact object key.
+func (c *S3Client) CreateMultipartUpload(ctx context.Context, key, contentType string, metadata map[string]string) (string, error) {
+	out, err := c.client.CreateMultipartUpload(ctx, &s3.CreateMultipartUploadInput{
+		Bucket: &c.bucket, Key: &key, ContentType: &contentType, Metadata: metadata,
+	})
+	if err != nil {
+		return "", err
+	}
+	if out.UploadId == nil || *out.UploadId == "" {
+		return "", fmt.Errorf("s3 returned an empty multipart upload ID")
+	}
+	return *out.UploadId, nil
+}
+
+// PublicPresignUploadPart grants a PUT for one part of one exact multipart upload.
+func (c *S3Client) PublicPresignUploadPart(ctx context.Context, key, uploadID string, number int, expiry time.Duration) (string, error) {
+	presigner := c.presigner
+	if c.publicPresigner != nil {
+		presigner = c.publicPresigner
+	}
+	partNumber := int32(number)
+	req, err := presigner.PresignUploadPart(ctx, &s3.UploadPartInput{
+		Bucket: &c.bucket, Key: &key, UploadId: &uploadID, PartNumber: &partNumber,
+	}, s3.WithPresignExpires(expiry))
+	if err != nil {
+		return "", err
+	}
+	return req.URL, nil
+}
+
+// ListMultipartParts returns S3-authoritative ETags and sizes for an upload.
+func (c *S3Client) ListMultipartParts(ctx context.Context, key, uploadID string) ([]MultipartPart, error) {
+	paginator := s3.NewListPartsPaginator(c.client, &s3.ListPartsInput{Bucket: &c.bucket, Key: &key, UploadId: &uploadID})
+	var result []MultipartPart
+	for paginator.HasMorePages() {
+		page, err := paginator.NextPage(ctx)
+		if err != nil {
+			return nil, err
+		}
+		for _, part := range page.Parts {
+			result = append(result, MultipartPart{Number: int(aws.ToInt32(part.PartNumber)), ETag: aws.ToString(part.ETag), Size: aws.ToInt64(part.Size)})
+		}
+	}
+	return result, nil
+}
+
+// CompleteMultipartUpload atomically publishes uploaded parts at the exact key.
+func (c *S3Client) CompleteMultipartUpload(ctx context.Context, key, uploadID string, parts []CompletedPart) error {
+	completed := make([]types.CompletedPart, len(parts))
+	for i, part := range parts {
+		number := int32(part.Number)
+		etag := part.ETag
+		completed[i] = types.CompletedPart{PartNumber: &number, ETag: &etag}
+	}
+	_, err := c.client.CompleteMultipartUpload(ctx, &s3.CompleteMultipartUploadInput{
+		Bucket: &c.bucket, Key: &key, UploadId: &uploadID,
+		MultipartUpload: &types.CompletedMultipartUpload{Parts: completed},
+	})
+	return err
+}
+
+// AbortMultipartUpload removes all unpublished parts for an exact upload.
+func (c *S3Client) AbortMultipartUpload(ctx context.Context, key, uploadID string) error {
+	_, err := c.client.AbortMultipartUpload(ctx, &s3.AbortMultipartUploadInput{
+		Bucket: &c.bucket, Key: &key, UploadId: &uploadID,
+	})
+	return err
 }
 
 // PresignPutURL returns a presigned PUT URL for uploading a file.

@@ -13,6 +13,7 @@ func SetupCountsToProto(c connsvc.SetupCounts) *airlockv1.SetupCountsInfo {
 		Connections: c.Connections,
 		McpServers:  c.MCPServers,
 		EnvVars:     c.EnvVars,
+		Connectors:  c.Connectors,
 	}
 }
 

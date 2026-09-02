@@ -2,6 +2,7 @@ import { computed, type ComputedRef } from 'vue'
 import { useCatalogStore } from '@/stores/catalog'
 import { useProvidersStore } from '@/stores/providers'
 import { useModelsAllowedStore } from '@/stores/modelsAllowed'
+import { useAirlockI18n } from '@/i18n'
 
 // CatalogModel mirrors the airlock ModelInfo proto fields the pickers
 // need. `kind` is sol's derived classification (models.dev + OpenRouter);
@@ -96,6 +97,7 @@ export function useModelCapabilities(opts: ModelCapabilitiesOptions = {}) {
   const catalog = useCatalogStore()
   const providers = useProvidersStore()
   const allowed = useModelsAllowedStore()
+  const { t, locale } = useAirlockI18n()
 
   // Static catalog models fan out to enabled rows sharing their provider_id.
   // Endpoint-specific models carry providerConfigId and bind only to that row.
@@ -117,9 +119,9 @@ export function useModelCapabilities(opts: ModelCapabilitiesOptions = {}) {
       }
     }
     for (const items of Object.values(groups)) {
-      items.sort((a, b) => a.label.localeCompare(b.label))
+      items.sort((a, b) => a.label.localeCompare(b.label, locale.value))
     }
-    return Object.keys(groups).sort().map(label => ({
+    return Object.keys(groups).sort((a, b) => a.localeCompare(b, locale.value)).map(label => ({
       label,
       items: groups[label],
     }))
@@ -140,7 +142,10 @@ export function useModelCapabilities(opts: ModelCapabilitiesOptions = {}) {
     for (const row of providers.providers) {
       if (!row.isEnabled) continue
       if (!searchCapable.has(row.providerId)) continue
-      const items: FlatOption[] = [{ label: 'Provider default', value: packModelValue(row.id, '') }]
+      const items: FlatOption[] = [{
+        label: t('administration.providers.providerDefault'),
+        value: packModelValue(row.id, ''),
+      }]
       for (const m of catalog.models) {
         // A search model must be tool-capable and text-in/text-out — the
         // backend runs web search by calling it with a search tool.
@@ -150,7 +155,7 @@ export function useModelCapabilities(opts: ModelCapabilitiesOptions = {}) {
       }
       groups.push({ label: providerModelGroupLabel(row), items })
     }
-    return groups.sort((a, b) => a.label.localeCompare(b.label))
+    return groups.sort((a, b) => a.label.localeCompare(b.label, locale.value))
   })
 
   return { groupModels, searchModelOptions }

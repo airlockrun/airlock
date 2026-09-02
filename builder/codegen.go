@@ -13,6 +13,7 @@ import (
 
 	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/db/dbq"
+	localepkg "github.com/airlockrun/airlock/locale"
 	"github.com/airlockrun/goai/tool"
 	sol "github.com/airlockrun/sol"
 	"github.com/google/uuid"
@@ -79,6 +80,10 @@ func (b *BuildService) runCodegen(
 		return "", "", "", fmt.Errorf("generate integration token: %w", err)
 	}
 	q := dbq.New(b.db.Pool())
+	settings, err := q.GetSystemSettings(ctx)
+	if err != nil {
+		return "", "", "", fmt.Errorf("load build locale: %w", err)
+	}
 	rows, err := q.SetAgentBuildIntegrationToken(ctx, dbq.SetAgentBuildIntegrationTokenParams{
 		IntegrationTokenHash: tokenHash,
 		IntegrationTokenExpiresAt: pgtype.Timestamptz{
@@ -121,7 +126,7 @@ func (b *BuildService) runCodegen(
 		BuildType:          string(plan.Kind),
 		BuildProviderID:    agent.BuildProviderID,
 		BuildModel:         agent.BuildModel,
-		Prompt:             codegenPrompt(plan, agent),
+		Prompt:             codegenPrompt(plan, agent, settings.UiLocale),
 		LocalTools:         tool.Set{},
 		IntegrationToken:   token,
 		TestDBURL:          testDBURL,
@@ -395,16 +400,16 @@ func codegenBranchName(plan BuildPlan) string {
 // + presence of diagnostics. The build template frames the work as
 // from-scratch; upgrade frames it as an incremental change against a
 // working tree; auto-fix layers in DIAGNOSTICS.md context.
-func codegenPrompt(plan BuildPlan, agent dbq.Agent) string {
+func codegenPrompt(plan BuildPlan, agent dbq.Agent, uiLocale string) string {
 	switch plan.Kind {
 	case BuildKindBuild:
-		return buildCodegenPrompt(agent, plan.Instruction)
+		return buildCodegenPrompt(agent, plan.Instruction) + "\n\n" + localepkg.BuildInstruction(uiLocale, false)
 	default:
 		input := UpgradeInput{
 			Description: plan.Instruction,
 			RunID:       plan.RunID,
 		}
-		return buildUpgradePrompt(agent, input, plan.Diagnostics != nil)
+		return buildUpgradePrompt(agent, input, plan.Diagnostics != nil) + "\n\n" + localepkg.BuildInstruction(uiLocale, true)
 	}
 }
 

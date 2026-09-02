@@ -7,10 +7,12 @@ import { useConversationFeedStore } from '@/stores/conversationFeed'
 import ToolBadge from '@/components/chat/ToolBadge.vue'
 import { renderMarkdown } from '@/composables/useMarkdown'
 import { toolDescription } from '@/utils/messageGroup'
+import { useAirlockI18n } from '@/i18n'
 
 const route = useRoute()
 const router = useRouter()
 const toast = useToast()
+const { t } = useAirlockI18n()
 const sys = useSystemChatStore()
 const feed = useConversationFeedStore()
 
@@ -71,7 +73,7 @@ async function load() {
     await sys.loadConversation(conversationId.value)
     scrollToBottom()
   } catch (err: any) {
-    toast.add({ severity: 'error', summary: 'Failed to load chat', detail: err?.message, life: 5000 })
+    toast.add({ severity: 'error', summary: t('chat.error.loadChatFailed'), detail: err?.message, life: 5000 })
   }
 }
 
@@ -120,7 +122,7 @@ async function send() {
     }
   } catch (err: any) {
     composer.value = composer.value ? `${text}\n${composer.value}` : text
-    toast.add({ severity: 'error', summary: 'Send failed', detail: err?.message, life: 5000 })
+    toast.add({ severity: 'error', summary: t('chat.error.sendFailed'), detail: err?.message, life: 5000 })
   }
 }
 
@@ -128,7 +130,7 @@ async function approve() {
   try {
     await sys.sendPrompt('', true)
   } catch (err: any) {
-    toast.add({ severity: 'error', summary: 'Approve failed', detail: err.response?.data?.error || err?.message, life: 5000 })
+    toast.add({ severity: 'error', summary: t('chat.error.approveFailed'), detail: err.response?.data?.error || err?.message, life: 5000 })
   }
 }
 
@@ -138,7 +140,7 @@ async function reject() {
   try {
     await sys.sendPrompt('Rejected by user.', false)
   } catch (err: any) {
-    toast.add({ severity: 'error', summary: 'Reject failed', detail: err.response?.data?.error || err?.message, life: 5000 })
+    toast.add({ severity: 'error', summary: t('chat.error.rejectFailed'), detail: err.response?.data?.error || err?.message, life: 5000 })
   }
 }
 
@@ -185,10 +187,11 @@ function msgClassForSource(source: string): string {
       >
         <i class="pi pi-cog" />
         <p class="chat-empty-title">
-          {{ isNew ? 'New conversation' : 'Conversation' }} with <strong>the Airlock Assistant</strong>
+          {{ t(isNew ? 'chat.systemChat.emptyNewPrefix' : 'chat.systemChat.emptyExistingPrefix') }}
+          <strong>{{ t('chat.systemChat.assistantName') }}</strong>
         </p>
         <p class="chat-empty-sub">
-          Ask me anything - list your apps, trigger an upgrade, manage bridges, inspect runs. It's saved as a new conversation once you send.
+          {{ t('chat.systemChat.emptyHint') }}
         </p>
       </div>
 
@@ -232,7 +235,7 @@ function msgClassForSource(source: string): string {
                 v-html="renderMarkdown(msg.content)"
                 class="chat-bubble"
               />
-              <div v-if="msg._cancelled" class="msg-cancelled">(cancelled)</div>
+              <div v-if="msg._cancelled" class="msg-cancelled">{{ t('chat.message.cancelled') }}</div>
             </div>
           </div>
         </template>
@@ -272,15 +275,15 @@ function msgClassForSource(source: string): string {
           <div class="confirmation-title">
             <i class="pi pi-exclamation-triangle" style="margin-right: 0.25rem" />
             <template v-if="sys.pendingConfirmation.description">{{ sys.pendingConfirmation.description }}</template>
-            <template v-else>Confirmation required: <code>{{ sys.pendingConfirmation.toolName }}</code></template>
+            <template v-else>{{ t('chat.confirmation.requiredPrefix') }} <code>{{ sys.pendingConfirmation.toolName }}</code></template>
           </div>
           <pre
             v-if="sys.pendingConfirmation.argsJson"
             class="confirmation-args code-chip"
           >{{ sys.pendingConfirmation.argsJson }}</pre>
           <div class="confirmation-actions">
-            <Button label="Approve" severity="success" size="small" :loading="sys.sending" @click="approve" />
-            <Button label="Reject" severity="danger" size="small" outlined :loading="sys.sending" @click="reject" />
+            <Button :label="t('chat.action.approve')" severity="success" size="small" :loading="sys.sending" @click="approve" />
+            <Button :label="t('chat.action.reject')" severity="danger" size="small" outlined :loading="sys.sending" @click="reject" />
           </div>
         </div>
       </template>
@@ -295,7 +298,7 @@ function msgClassForSource(source: string): string {
           ref="composerRef"
           v-model="composer"
           :disabled="!!sys.pendingConfirmation"
-          :placeholder="sys.pendingConfirmation ? 'Approve or reject the pending tool call above first.' : 'Ask me anything…'"
+          :placeholder="sys.pendingConfirmation ? t('chat.systemChat.pendingPlaceholder') : t('chat.systemChat.placeholder')"
           autoResize
           rows="1"
           @keydown="onKeydown"

@@ -192,6 +192,35 @@ func (q *Queries) FinalizeAgentDeployment(ctx context.Context, arg FinalizeAgent
 	return result.RowsAffected(), nil
 }
 
+const getAgentArtifactDeletionBlockers = `-- name: GetAgentArtifactDeletionBlockers :one
+SELECT
+    (SELECT count(DISTINCT connector.id)
+     FROM connector_resources connector
+     JOIN connector_artifact_sets artifact_set
+       ON artifact_set.agent_id = $1
+      AND (
+          (connector.active_observation_state = 'known' AND artifact_set.id = connector.artifact_set_id)
+          OR (connector.rollback_observation_state = 'known' AND artifact_set.id = connector.rollback_artifact_set_id)
+      )) AS connector_count,
+    (SELECT count(*)
+     FROM host_management_jobs management_job
+     JOIN connector_artifact_files artifact_file ON artifact_file.id = management_job.artifact_file_id
+     JOIN connector_artifact_sets artifact_set ON artifact_set.id = artifact_file.artifact_set_id
+     WHERE artifact_set.agent_id = $1) AS management_job_count
+`
+
+type GetAgentArtifactDeletionBlockersRow struct {
+	ConnectorCount     int64 `json:"connector_count"`
+	ManagementJobCount int64 `json:"management_job_count"`
+}
+
+func (q *Queries) GetAgentArtifactDeletionBlockers(ctx context.Context, agentID pgtype.UUID) (GetAgentArtifactDeletionBlockersRow, error) {
+	row := q.db.QueryRow(ctx, getAgentArtifactDeletionBlockers, agentID)
+	var i GetAgentArtifactDeletionBlockersRow
+	err := row.Scan(&i.ConnectorCount, &i.ManagementJobCount)
+	return i, err
+}
+
 const getAgentByID = `-- name: GetAgentByID :one
 SELECT id, owner_principal_id, slug, name, description, status, upgrade_status, auto_fix, build_provider_id, build_model, exec_provider_id, exec_model, stt_provider_id, stt_model, vision_provider_id, vision_model, tts_provider_id, tts_model, image_gen_provider_id, image_gen_model, embedding_provider_id, embedding_model, search_provider_id, search_model, source_ref, image_ref, db_schema, db_password, sdk_version, config, instructions, error_message, created_at, updated_at, mcp_enabled, allow_public_mcp, allow_public_routes, tools_hash, emoji, allow_oauth_mcp_prompt, allow_public_mcp_prompt, git_remote_url, git_mode, git_credential_id, git_default_branch, git_webhook_secret, git_last_synced_ref, agent_token_version, job_dispatch_paused_build_id, job_dispatch_paused_at, job_dispatch_pause_deadline FROM agents WHERE id = $1
 `

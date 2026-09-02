@@ -4,11 +4,13 @@ import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { useToast } from 'primevue/usetoast'
 import api from '@/api/client'
+import { useAirlockI18n } from '@/i18n'
 
 const router = useRouter()
 const route = useRoute()
 const auth = useAuthStore()
 const toast = useToast()
+const { t } = useAirlockI18n()
 
 const email = ref('')
 const password = ref('')
@@ -28,7 +30,7 @@ onMounted(async () => {
 })
 
 function done() {
-  toast.add({ severity: 'success', summary: 'Welcome back', life: 3000 })
+  toast.add({ severity: 'success', summary: t('auth.login.welcomeBack'), life: 3000 })
   router.push(safeRedirect(route.query.redirect))
 }
 
@@ -59,7 +61,7 @@ async function onPasskey() {
     done()
   } catch (err: any) {
     if (!isCeremonyAbort(err)) {
-      error.value = err.response?.data?.error || 'Passkey sign-in failed.'
+      error.value = err.response?.data?.error || t('auth.login.passkeyFailed')
     }
   } finally {
     passkeyLoading.value = false
@@ -69,7 +71,7 @@ async function onPasskey() {
 async function onSubmit() {
   error.value = ''
   if (!email.value || !password.value) {
-    error.value = 'Email and password are required.'
+    error.value = t('auth.login.credentialsRequired')
     return
   }
   loading.value = true
@@ -77,7 +79,7 @@ async function onSubmit() {
     await auth.login(email.value, password.value)
     done()
   } catch (err: any) {
-    error.value = err.response?.data?.error || 'Login failed.'
+    error.value = err.response?.data?.error || t('auth.login.failed')
   } finally {
     loading.value = false
   }
@@ -87,7 +89,7 @@ async function onSubmit() {
 <template>
   <Card style="width: 24rem">
     <template #title>
-      <div style="text-align: center; font-size: 1.5rem">Airlock</div>
+      <div style="text-align: center; font-size: 1.5rem">{{ t('auth.product.airlock') }}</div>
     </template>
     <template #content>
       <div style="display: flex; flex-direction: column; gap: 1.25rem">
@@ -96,7 +98,7 @@ async function onSubmit() {
         <!-- Passkeys are the primary sign-in. Usernameless when the email is
              blank; scoped to the typed email otherwise. -->
         <Button
-          label="Sign in with a passkey"
+          :label="t('auth.login.withPasskey')"
           icon="pi pi-key"
           :loading="passkeyLoading"
           style="width: 100%"
@@ -104,31 +106,31 @@ async function onSubmit() {
         />
 
         <button type="button" class="pw-toggle" @click="showPassword = !showPassword">
-          {{ showPassword ? 'Hide password sign-in' : 'Use a password instead' }}
+          {{ showPassword ? t('auth.login.hidePassword') : t('auth.login.usePassword') }}
         </button>
 
         <form v-if="showPassword" @submit.prevent="onSubmit" style="display: flex; flex-direction: column; gap: 1.25rem">
           <FloatLabel variant="on">
             <InputText id="email" v-model="email" type="email" autocomplete="username webauthn" style="width: 100%" />
-            <label for="email">Email</label>
+            <label for="email">{{ t('auth.login.email') }}</label>
           </FloatLabel>
           <FloatLabel variant="on">
             <Password id="password" v-model="password" :feedback="false" toggle-mask :input-props="{ autocomplete: 'current-password' }" style="width: 100%" :input-style="{ width: '100%' }" />
-            <label for="password">Password</label>
+            <label for="password">{{ t('auth.login.password') }}</label>
           </FloatLabel>
-          <Button type="submit" label="Sign In" :loading="loading" severity="secondary" style="width: 100%" />
+          <Button type="submit" :label="t('auth.login.signIn')" :loading="loading" severity="secondary" style="width: 100%" />
         </form>
         <!-- Email field is also useful for email-first passkey login. -->
         <FloatLabel variant="on" v-else>
           <InputText id="email-passkey" v-model="email" type="email" autocomplete="username webauthn" style="width: 100%" />
-          <label for="email-passkey">Email (optional)</label>
+          <label for="email-passkey">{{ t('auth.login.optionalEmail') }}</label>
         </FloatLabel>
       </div>
     </template>
     <template #footer>
       <div v-if="!activated" style="text-align: center">
         <router-link to="/activate" style="color: var(--p-primary-color); text-decoration: none; font-size: 0.875rem">
-          First time? Set up Airlock
+          {{ t('auth.login.firstTimeSetup') }}
         </router-link>
       </div>
     </template>

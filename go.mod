@@ -21,6 +21,7 @@ require (
 	github.com/trustelem/zxcvbn v1.0.1
 	golang.org/x/crypto v0.52.0
 	golang.org/x/mod v0.36.0
+	golang.org/x/text v0.37.0
 	golang.org/x/tools v0.45.0
 	google.golang.org/protobuf v1.36.11
 )
@@ -76,7 +77,7 @@ require (
 
 require (
 	github.com/Microsoft/go-winio v0.6.2 // indirect
-	github.com/airlockrun/agentsdk v0.5.0
+	github.com/airlockrun/agentsdk v0.6.0
 	github.com/airlockrun/goai v0.1.6
 	github.com/airlockrun/sol v0.1.9
 	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.8 // indirect
@@ -129,5 +130,4 @@ require (
 	golang.org/x/sync v0.20.0
 	golang.org/x/sys v0.45.0 // indirect
 	golang.org/x/term v0.43.0
-	golang.org/x/text v0.37.0 // indirect
 )

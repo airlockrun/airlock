@@ -89,6 +89,11 @@ SELECT * FROM runs WHERE id = $1;
 -- name: GetRunByIDAndAgent :one
 SELECT * FROM runs WHERE id = @id AND agent_id = @agent_id;
 
+-- name: LockRunningRunForConnectorTransfer :one
+SELECT id FROM runs
+WHERE id = @id AND agent_id = @agent_id AND status = 'running'
+FOR UPDATE;
+
 -- name: ClaimMCPTaskResume :execrows
 -- A suspended MCP task is single-use. The conversation reference is part of
 -- the CAS so a stale or inconsistent context/task pair cannot consume it.

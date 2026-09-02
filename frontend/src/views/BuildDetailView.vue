@@ -12,11 +12,14 @@ import { ws } from '@/api/ws'
 import { useConfirm } from 'primevue/useconfirm'
 import { useToast } from 'primevue/usetoast'
 import api from '@/api/client'
+import { useAirlockI18n } from '@/i18n'
+import { jobStatusLabel } from '@/utils/jobs'
 
 const route = useRoute()
 const toast = useToast()
 const confirm = useConfirm()
 const buildsStore = useBuildsStore()
+const { t, formatDate, formatNumber } = useAirlockI18n()
 const agentId = route.params.id as string
 const buildId = route.params.buildId as string
 const agentName = ref(agentId.slice(0, 8))
@@ -40,26 +43,27 @@ async function cancelBuild() {
   canceling.value = true
   try {
     await api.post(`/api/v1/agents/${agentId}/builds/cancel`)
-    toast.add({ severity: 'info', summary: 'Build cancelled', life: 3000 })
+    toast.add({ severity: 'info', summary: t('operations.build.cancelled'), life: 3000 })
   } catch (err: any) {
-    toast.add({ severity: 'error', summary: err.response?.data?.error || 'Cancel failed', life: 5000 })
+    toast.add({ severity: 'error', summary: err.response?.data?.error || t('operations.build.cancelFailed'), life: 5000 })
   } finally {
     canceling.value = false
   }
 }
 const phaseLabel = computed(() => {
   switch (build.value?.deploymentPhase) {
-    case AgentBuildDeploymentPhase.BLOCKED: return 'Deployment blocked by incompatible jobs'
-    case AgentBuildDeploymentPhase.PAUSED: return 'Draining active jobs…'
-    case AgentBuildDeploymentPhase.STARTING: return 'Starting candidate runtime…'
-    case AgentBuildDeploymentPhase.ROLLBACK: return 'Rolling back deployment…'
-    case AgentBuildDeploymentPhase.MANIFEST: return 'Checking job compatibility…'
+    case AgentBuildDeploymentPhase.BLOCKED: return t('operations.build.phase.deploymentBlocked')
+    case AgentBuildDeploymentPhase.PAUSED: return t('operations.build.phase.draining')
+    case AgentBuildDeploymentPhase.STARTING: return t('operations.build.phase.starting')
+    case AgentBuildDeploymentPhase.ROLLBACK: return t('operations.build.phase.rollback')
+    case AgentBuildDeploymentPhase.MANIFEST: return t('operations.build.phase.manifest')
   }
   switch (phase.value) {
-    case 'image': return 'Building image…'
-    case 'migrations': return 'Running migrations…'
-    case 'deploy': return 'Deploying…'
-    case 'codegen': return 'Generating code…'
+    case 'image': return t('operations.build.phase.image')
+    case 'connectors': return t('operations.build.phase.connectors')
+    case 'migrations': return t('operations.build.phase.migrations')
+    case 'deploy': return t('operations.build.phase.deploy')
+    case 'codegen': return t('operations.build.phase.codegen')
     default: return ''
   }
 })
@@ -76,7 +80,27 @@ const blockerCount = computed(() => (build.value?.jobBlockers ?? []).reduce((tot
 
 function countdown(seconds: number): string {
   const minutes = Math.floor(seconds / 60)
-  return `${minutes}:${String(seconds % 60).padStart(2, '0')}`
+  return `${formatNumber(minutes, { useGrouping: false })}:${formatNumber(seconds % 60, { minimumIntegerDigits: 2, useGrouping: false })}`
+}
+
+function buildTypeLabel(type: string): string {
+  switch (type) {
+    case 'build': return t('operations.build.type.build')
+    case 'upgrade': return t('operations.build.type.upgrade')
+    case 'rollback': return t('operations.build.type.rollback')
+    default: return type
+  }
+}
+
+function buildStatusLabel(status: string): string {
+  switch (status) {
+    case 'building': return t('operations.build.status.building')
+    case 'complete': return t('operations.build.status.complete')
+    case 'failed': return t('operations.build.status.failed')
+    case 'refused': return t('operations.build.status.refused')
+    case 'cancelled': return t('operations.build.status.cancelled')
+    default: return status
+  }
 }
 
 async function fetchBlockers(reset = true) {
@@ -110,20 +134,30 @@ async function refreshAuthoritative() {
 
 function confirmCancelJob(job: JobInfo) {
   confirm.require({
-    header: 'Cancel blocking job?',
-    message: `Cancel ${job.handlerName}@v${job.handlerVersion}? This explicitly cancels only job ${job.id.slice(0, 8)}.`,
+    header: t('operations.build.blockers.cancelTitle'),
+    message: t('operations.build.blockers.cancelMessage', {
+      handler: job.handlerName,
+      version: job.handlerVersion,
+      id: job.id.slice(0, 8),
+    }),
     icon: 'pi pi-exclamation-triangle',
-    acceptLabel: 'Cancel job',
-    rejectLabel: 'Keep job',
+    acceptLabel: t('operations.build.blockers.cancelJob'),
+    rejectLabel: t('operations.build.blockers.keepJob'),
     acceptClass: 'p-button-danger',
     accept: async () => {
       cancelingJobId.value = job.id
       try {
         await buildsStore.cancelJobBlocker(job.id)
         await Promise.all([refreshSnapshot(), fetchBlockers()])
-        toast.add({ severity: 'info', summary: job.status === 'running' ? 'Cancellation requested' : 'Job cancelled', life: 3000 })
+        toast.add({
+          severity: 'info',
+          summary: job.status === 'running'
+            ? t('operations.build.blockers.cancellationRequested')
+            : t('operations.build.blockers.jobCancelled'),
+          life: 3000,
+        })
       } catch (err: any) {
-        toast.add({ severity: 'error', summary: err.response?.data?.error || 'Cancel failed', life: 5000 })
+        toast.add({ severity: 'error', summary: err.response?.data?.error || t('operations.build.cancelFailed'), life: 5000 })
       } finally {
         cancelingJobId.value = ''
       }
@@ -150,7 +184,12 @@ const statusSeverity = computed(() => {
   }
 })
 
-const costFormatted = computed(() => `$${(build.value?.llmCostEstimate ?? 0).toFixed(4)}`)
+const costFormatted = computed(() => formatNumber(build.value?.llmCostEstimate ?? 0, {
+  style: 'currency',
+  currency: 'USD',
+  minimumFractionDigits: 4,
+  maximumFractionDigits: 4,
+}))
 const cachedTokens = computed(() => build.value?.llmTokensCached ?? 0)
 const nonCachedIn = computed(() => Math.max(0, (build.value?.llmTokensIn ?? 0) - cachedTokens.value))
 
@@ -208,18 +247,18 @@ onUnmounted(() => {
   </div>
 
   <div v-else-if="build">
-    <h1 style="margin: 0 0 1rem; font-size: 1.25rem">{{ agentName }} · Build {{ build.id.slice(0, 8) }}</h1>
+    <h1 style="margin: 0 0 1rem; font-size: 1.25rem">{{ t('operations.build.title', { agent: agentName, id: build.id.slice(0, 8) }) }}</h1>
 
     <!-- Metadata bar -->
     <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 1rem; margin-bottom: 1.5rem">
-      <Tag :value="build.type" severity="secondary" />
-      <Tag :value="build.status" :severity="statusSeverity" />
+      <Tag :value="buildTypeLabel(build.type)" severity="secondary" />
+      <Tag :value="buildStatusLabel(build.status)" :severity="statusSeverity" />
       <span v-if="isBuilding && phaseLabel" style="display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.875rem; color: var(--p-primary-color); font-weight: 500">
         <i class="pi pi-spin pi-spinner" style="font-size: 0.75rem" /> {{ phaseLabel }}
       </span>
       <Button
         v-if="isBuilding"
-        label="Cancel build"
+        :label="t('operations.build.cancel')"
         icon="pi pi-times"
         severity="danger"
         outlined
@@ -228,16 +267,36 @@ onUnmounted(() => {
         @click="cancelBuild"
       />
       <span v-if="todos.length" style="font-size: 0.875rem; color: var(--p-text-muted-color)">
-        {{ tasksDone }}/{{ todos.length }} tasks
+        {{ t('operations.build.tasksProgress', {
+          doneFormatted: formatNumber(tasksDone),
+          countFormatted: formatNumber(todos.length),
+          count: todos.length,
+        }) }}
       </span>
       <span v-if="build.startedAt" style="font-size: 0.875rem; color: var(--p-text-muted-color)">
-        {{ timestampDate(build.startedAt).toLocaleString() }}
+        {{ formatDate(timestampDate(build.startedAt), {
+          year: 'numeric',
+          month: 'numeric',
+          day: 'numeric',
+          hour: 'numeric',
+          minute: '2-digit',
+          second: '2-digit',
+        }) }}
       </span>
       <span v-if="build.sourceRef" style="font-size: 0.875rem; color: var(--p-text-muted-color)">
         {{ build.sourceRef.slice(0, 12) }}
       </span>
       <span v-if="build.llmCalls" style="font-size: 0.875rem; color: var(--p-text-muted-color)">
-        {{ nonCachedIn.toLocaleString() }} in<template v-if="cachedTokens > 0"> + {{ cachedTokens.toLocaleString() }} cached</template> / {{ (build.llmTokensOut ?? 0).toLocaleString() }} out tokens
+        {{ cachedTokens > 0
+          ? t('operations.build.tokensCached', {
+              input: formatNumber(nonCachedIn),
+              cached: formatNumber(cachedTokens),
+              output: formatNumber(build.llmTokensOut ?? 0),
+            })
+          : t('operations.build.tokens', {
+              input: formatNumber(nonCachedIn),
+              output: formatNumber(build.llmTokensOut ?? 0),
+            }) }}
       </span>
       <span v-if="build.llmCalls" style="font-size: 0.875rem; color: var(--p-text-muted-color)">
         {{ costFormatted }}
@@ -249,53 +308,56 @@ onUnmounted(() => {
         <div>
           <h3>{{ phaseLabel }}</h3>
           <p v-if="build.deploymentPhase === AgentBuildDeploymentPhase.BLOCKED">
-            The candidate cannot accept {{ blockerCount.toString() }} queued or running job{{ blockerCount === 1n ? '' : 's' }}. Cancel jobs individually or wait for them to finish.
+            {{ t('operations.build.deployment.blocked', {
+              formattedCount: formatNumber(blockerCount),
+              count: Number(blockerCount),
+            }) }}
           </p>
           <p v-else-if="build.deploymentPhase === AgentBuildDeploymentPhase.PAUSED">
-            New dispatch is paused while active attempts drain. The drain window is fixed at two minutes.
+            {{ t('operations.build.deployment.paused') }}
           </p>
           <p v-else-if="build.deploymentPhase === AgentBuildDeploymentPhase.STARTING">
-            The drain completed and Airlock is switching to the candidate runtime.
+            {{ t('operations.build.deployment.starting') }}
           </p>
           <p v-else-if="build.deploymentPhase === AgentBuildDeploymentPhase.ROLLBACK">
-            The candidate did not start successfully. Airlock is restoring the previous runtime.
+            {{ t('operations.build.deployment.rollback') }}
           </p>
         </div>
         <Tag
-          :value="build.deploymentPhase === AgentBuildDeploymentPhase.PAUSED ? 'draining' : phase"
+          :value="build.deploymentPhase === AgentBuildDeploymentPhase.PAUSED ? t('operations.build.deployment.drainingStatus') : phaseLabel"
           :severity="build.deploymentPhase === AgentBuildDeploymentPhase.ROLLBACK ? 'danger' : 'warn'"
         />
       </div>
 
       <div v-if="build.deploymentPausedAt && drainDeadline" class="drain-window">
-        <span>Paused {{ timestampDate(build.deploymentPausedAt).toLocaleTimeString() }}</span>
-        <span>Deadline {{ drainDeadline.toLocaleTimeString() }}</span>
-        <strong v-if="drainSecondsRemaining !== null">{{ countdown(drainSecondsRemaining) }} remaining</strong>
+        <span>{{ t('operations.build.deployment.pausedAt', { time: formatDate(timestampDate(build.deploymentPausedAt), { timeStyle: 'medium' }) }) }}</span>
+        <span>{{ t('operations.build.deployment.deadline', { time: formatDate(drainDeadline, { timeStyle: 'medium' }) }) }}</span>
+        <strong v-if="drainSecondsRemaining !== null">{{ t('operations.build.deployment.remaining', { time: countdown(drainSecondsRemaining) }) }}</strong>
       </div>
 
       <div v-if="build.jobBlockers.length" class="blocker-summaries">
         <div v-for="summary in build.jobBlockers" :key="`${summary.handlerName}:${summary.handlerVersion}:${summary.inputSchemaHash}:${summary.outputSchemaHash}`" class="blocker-contract">
           <div>
             <code>{{ summary.handlerName }}@v{{ summary.handlerVersion }}</code>
-            <span>{{ summary.queuedCount.toString() }} queued · {{ summary.runningCount.toString() }} running</span>
+            <span>{{ t('operations.build.blockers.queued', { count: formatNumber(summary.queuedCount) }) }} · {{ t('operations.build.blockers.running', { count: formatNumber(summary.runningCount) }) }}</span>
           </div>
           <dl>
-            <dt>Input schema</dt><dd><code>{{ summary.inputSchemaHash }}</code></dd>
-            <dt>Output schema</dt><dd><code>{{ summary.outputSchemaHash }}</code></dd>
+            <dt>{{ t('operations.build.blockers.inputSchema') }}</dt><dd><code>{{ summary.inputSchemaHash }}</code></dd>
+            <dt>{{ t('operations.build.blockers.outputSchema') }}</dt><dd><code>{{ summary.outputSchemaHash }}</code></dd>
           </dl>
         </div>
       </div>
 
       <div v-if="blockerJobs.length" class="blocker-jobs">
-        <h4>Blocking jobs</h4>
+        <h4>{{ t('operations.build.blockers.heading') }}</h4>
         <div v-for="job in blockerJobs" :key="job.id" class="blocker-job">
           <RouterLink :to="{ name: 'job-detail', params: { id: agentId, jobId: job.id } }">
             {{ job.handlerName }}@v{{ job.handlerVersion }} · {{ job.id.slice(0, 8) }}
           </RouterLink>
-          <Tag :value="job.cancelRequestedAt ? 'cancelling' : job.status" :severity="job.status === 'running' ? 'warn' : 'secondary'" />
+          <Tag :value="jobStatusLabel(job, t)" :severity="job.status === 'running' ? 'warn' : 'secondary'" />
           <Button
             v-if="!job.cancelRequestedAt && (job.status === 'queued' || job.status === 'running')"
-            label="Cancel"
+            :label="t('operations.job.cancel.action')"
             icon="pi pi-times"
             severity="danger"
             text
@@ -306,7 +368,7 @@ onUnmounted(() => {
         </div>
         <Button
           v-if="blockerNextCursor"
-          label="Load more blocking jobs"
+          :label="t('operations.build.blockers.loadMore')"
           icon="pi pi-angle-down"
           severity="secondary"
           outlined
@@ -319,7 +381,7 @@ onUnmounted(() => {
 
     <!-- Result: exit outcome + any infra error -->
     <Message v-if="build.status === 'failed' && build.failureKind === 'infra'" severity="warn" :closable="false" icon="pi pi-server" style="margin-bottom: 0.75rem">
-      Platform error - a build infrastructure failure (toolserver / docker / deploy), not a problem in your app's code. Retry the build; if it persists, check the Airlock logs.
+      {{ t('operations.build.platformErrorDetail') }}
     </Message>
     <Message v-if="build.exitStatus === 'success' && build.exitMessage" severity="success" :closable="false" style="margin-bottom: 0.75rem">
       {{ build.exitMessage }}
@@ -333,13 +395,16 @@ onUnmounted(() => {
 
     <!-- Instructions -->
     <div v-if="build.instructions" style="margin-bottom: 1.5rem">
-      <h3 style="margin-bottom: 0.75rem">Instructions</h3>
+      <h3 style="margin-bottom: 0.75rem">{{ t('operations.build.instructions') }}</h3>
       <pre class="log-panel">{{ build.instructions }}</pre>
     </div>
 
     <!-- Tasks checklist -->
     <div v-if="todos.length" style="margin-bottom: 1.5rem">
-      <h3 style="margin-bottom: 0.75rem">Tasks ({{ tasksDone }}/{{ todos.length }})</h3>
+      <h3 style="margin-bottom: 0.75rem">{{ t('operations.build.tasks', {
+        doneFormatted: formatNumber(tasksDone),
+        countFormatted: formatNumber(todos.length),
+      }) }}</h3>
       <ul class="todo-list">
         <li v-for="(t, i) in todos" :key="t.id || i" :class="todoClass(t.status)">
           <i :class="todoIcon(t.status)" /> <span>{{ t.content }}</span>
@@ -349,16 +414,16 @@ onUnmounted(() => {
 
     <!-- Codegen log -->
     <div style="margin-bottom: 1.5rem">
-      <h3 style="margin-bottom: 0.75rem">Codegen log</h3>
+      <h3 style="margin-bottom: 0.75rem">{{ t('operations.build.codegenLog') }}</h3>
       <div ref="solScroll" class="stream-panel stream-sol">
         <div v-for="(line, i) in solLines" :key="i">{{ line }}</div>
-        <div v-if="solLines.length === 0" style="opacity: 0.5">Waiting for build output…</div>
+        <div v-if="solLines.length === 0" style="opacity: 0.5">{{ t('operations.build.waitingForOutput') }}</div>
       </div>
     </div>
 
     <!-- Docker build log -->
     <div v-if="dockerLines.length > 0" style="margin-bottom: 1.5rem">
-      <h3 style="margin-bottom: 0.75rem">Docker build log</h3>
+      <h3 style="margin-bottom: 0.75rem">{{ t('operations.build.dockerLog') }}</h3>
       <div ref="dockerScroll" class="stream-panel stream-docker">
         <div v-for="(line, i) in dockerLines" :key="i">{{ line }}</div>
       </div>

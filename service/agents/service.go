@@ -403,12 +403,8 @@ func (s *Service) Create(ctx context.Context, p authz.Principal, req CreateReque
 		if err != nil {
 			return dbq.Agent{}, service.Detail(service.ErrInvalidInput, "invalid git_credential_id")
 		}
-		cred, err := q.GetGitCredential(ctx, pgtype.UUID{Bytes: credID, Valid: true})
-		if err != nil {
-			return dbq.Agent{}, service.Detail(service.ErrNotFound, "git credential not found")
-		}
-		if uuid.UUID(cred.UserID.Bytes) != p.UserID {
-			return dbq.Agent{}, service.Detail(service.ErrForbidden, "git credential does not belong to you")
+		if err := authz.AuthorizeResource(ctx, q, p, authz.ResourceBind, "git_credential", credID); err != nil {
+			return dbq.Agent{}, err
 		}
 		gitCredFK = pgtype.UUID{Bytes: credID, Valid: true}
 		// Validate reachability up front (bad URL/token fails create, not the
@@ -1225,8 +1221,9 @@ func authorizeGovernance(ctx context.Context, q *dbq.Queries, p authz.Principal,
 
 // Delete cancels in-flight builds, stops bridge pollers, stops the
 // container, removes the image, drops the per-agent schema/role,
-// removes the local repo, deletes the row (CASCADE handles the rest),
-// and broadcasts the sibling change.
+// removes the local repo, deletes the row, and broadcasts the sibling change.
+// Connector deletion triggers fence active transfers and detach their parent
+// references so storage cleanup retains its durable job ownership chain.
 func (s *Service) Delete(ctx context.Context, p authz.Principal, agentID uuid.UUID) error {
 	q := dbq.New(s.db.Pool())
 	agent, err := q.GetAgentByID(ctx, pgtype.UUID{Bytes: agentID, Valid: true})
@@ -1235,6 +1232,20 @@ func (s *Service) Delete(ctx context.Context, p authz.Principal, agentID uuid.UU
 	}
 	if err := authorizeGovernance(ctx, q, p, authz.AgentDelete, authz.TenantAgentDeleteAny, agentID); err != nil {
 		return err
+	}
+	artifactLock, err := s.db.AcquireAdvisoryLock(ctx, "connector-artifact-gc")
+	if err != nil {
+		return fmt.Errorf("lock connector artifacts before delete: %w", err)
+	}
+	defer artifactLock.Unlock()
+	artifactBlockers, err := q.GetAgentArtifactDeletionBlockers(ctx, agent.ID)
+	if err != nil {
+		return fmt.Errorf("check connector artifact references before delete: %w", err)
+	}
+	if artifactBlockers.ConnectorCount != 0 || artifactBlockers.ManagementJobCount != 0 {
+		return service.Detail(service.ErrConflict,
+			"agent artifacts are installed on %d connector(s) and referenced by %d retained host management job(s); remove or replace connector provenance and wait for management history retention before deleting the agent",
+			artifactBlockers.ConnectorCount, artifactBlockers.ManagementJobCount)
 	}
 	if _, err := q.RequestCurrentAgentBuildCancellation(ctx, agent.ID); err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return fmt.Errorf("request build cancellation before delete: %w", err)
@@ -1339,6 +1350,13 @@ func (s *Service) TransferOwnership(ctx context.Context, p authz.Principal, agen
 	}
 	if _, err := qtx.LockResourceNeedsByAgent(ctx, agent.ID); err != nil {
 		return dbq.Agent{}, err
+	}
+	nonterminalConnectorJobs, err := qtx.CountNonterminalConnectorJobsForAgent(ctx, agent.ID)
+	if err != nil {
+		return dbq.Agent{}, err
+	}
+	if nonterminalConnectorJobs != 0 {
+		return dbq.Agent{}, service.Detail(service.ErrConflict, "agent has nonterminal connector work; cancel or complete it before transferring ownership")
 	}
 	newOwnerPG := pgtype.UUID{Bytes: newOwnerID, Valid: true}
 	if err := qtx.UpdateAgentOwner(ctx, dbq.UpdateAgentOwnerParams{ID: agent.ID, OwnerPrincipalID: newOwnerPG}); err != nil {
@@ -1918,24 +1936,12 @@ func (s *Service) ConnectGit(ctx context.Context, p authz.Principal, agentID uui
 	if err := authz.Authorize(ctx, q, p, authz.AgentGit, agentID); err != nil {
 		return GitConfig{}, err
 	}
-	cred, err := q.GetGitCredential(ctx, pgtype.UUID{Bytes: credID, Valid: true})
-	if err != nil {
-		return GitConfig{}, service.Detail(service.ErrNotFound, "credential not found")
-	}
-	// A git credential is a shareable resource: the caller may bind it if they
-	// own it OR hold a bind grant on it (so a credential shared to a group is
-	// bindable by its members), not only when they are the owner.
-	gitGrants, err := q.ListGitCredentialGrants(ctx, cred.ID)
-	if err != nil {
-		s.logger.Error("list git credential grants", zap.Error(err))
+	if err := authz.AuthorizeResource(ctx, q, p, authz.ResourceBind, "git_credential", credID); err != nil {
 		return GitConfig{}, err
 	}
-	grants := make([]authz.Grant, len(gitGrants))
-	for i, g := range gitGrants {
-		grants[i] = authz.Grant{GranteeID: uuid.UUID(g.GranteeID.Bytes), Capabilities: g.Capabilities}
-	}
-	if !p.HasResourceCapability(uuid.UUID(cred.UserID.Bytes), grants, authz.CapBind) {
-		return GitConfig{}, service.Detail(service.ErrForbidden, "you do not have bind access to this credential")
+	cred, err := q.GetGitCredential(ctx, pgtype.UUID{Bytes: credID, Valid: true})
+	if err != nil {
+		return GitConfig{}, service.ErrNotFound
 	}
 	// Validate the remote is reachable with the chosen credential before
 	// recording it — otherwise a wrong URL or bad/expired token is accepted

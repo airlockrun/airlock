@@ -76,6 +76,15 @@ SELECT kind, row_key, field, ref::text AS ref, stored FROM (
     SELECT 'env_var', id::text, 'value_ref',
            'agent/env-var/' || id::text || '/' || slug, value_ref
     FROM agent_env_vars
+    UNION ALL
+    SELECT 'host_management', id::text, 'secret_input',
+           'host-management/' || id::text || '/input', secret_input
+    FROM host_management_jobs
+    UNION ALL
+    SELECT 'host_management', id::text, 'secret_output',
+           'host-management/' || id::text || '/output', secret_output
+    FROM host_management_jobs
+    WHERE secret_output IS NOT NULL
 ) secrets
 WHERE stored <> ''
 ORDER BY kind, row_key, field
@@ -234,6 +243,38 @@ type RewrapGitCredentialSecretParams struct {
 
 func (q *Queries) RewrapGitCredentialSecret(ctx context.Context, arg RewrapGitCredentialSecretParams) (int64, error) {
 	result, err := q.db.Exec(ctx, rewrapGitCredentialSecret, arg.NewStored, arg.RowKey, arg.OldStored)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const rewrapHostManagementSecret = `-- name: RewrapHostManagementSecret :execrows
+UPDATE host_management_jobs SET
+    secret_input = CASE WHEN $1::text = 'secret_input' THEN $2 ELSE secret_input END,
+    secret_output = CASE WHEN $1::text = 'secret_output' THEN $2 ELSE secret_output END
+WHERE id::text = $3
+  AND CASE $1::text
+      WHEN 'secret_input' THEN secret_input
+      WHEN 'secret_output' THEN secret_output
+      ELSE NULL
+  END = $4
+`
+
+type RewrapHostManagementSecretParams struct {
+	Field     string      `json:"field"`
+	NewStored string      `json:"new_stored"`
+	RowKey    pgtype.UUID `json:"row_key"`
+	OldStored string      `json:"old_stored"`
+}
+
+func (q *Queries) RewrapHostManagementSecret(ctx context.Context, arg RewrapHostManagementSecretParams) (int64, error) {
+	result, err := q.db.Exec(ctx, rewrapHostManagementSecret,
+		arg.Field,
+		arg.NewStored,
+		arg.RowKey,
+		arg.OldStored,
+	)
 	if err != nil {
 		return 0, err
 	}

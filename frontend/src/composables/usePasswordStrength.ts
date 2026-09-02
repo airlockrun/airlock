@@ -4,6 +4,7 @@
 // the backend will accept.
 import { ZxcvbnFactory } from '@zxcvbn-ts/core'
 import * as zxcvbnCommon from '@zxcvbn-ts/language-common'
+import type { MessageId } from '@/i18n/messages'
 
 const zxcvbnFactory = new ZxcvbnFactory({
   dictionary: { ...zxcvbnCommon.dictionary },
@@ -16,12 +17,18 @@ export const MIN_PASSWORD_SCORE = 3
 export interface Strength {
   score: number // 0..4
   ok: boolean // score >= MIN_PASSWORD_SCORE
-  label: string
+  label: MessageId | ''
   warning: string
   suggestions: string[]
 }
 
-const LABELS = ['Very weak', 'Weak', 'Fair', 'Strong', 'Very strong']
+const LABELS = [
+  'auth.passwordStrength.veryWeak',
+  'auth.passwordStrength.weak',
+  'auth.passwordStrength.fair',
+  'auth.passwordStrength.strong',
+  'auth.passwordStrength.veryStrong',
+] as const satisfies readonly MessageId[]
 
 // scorePassword returns a strength summary. userInputs (email, display name)
 // count against the score when the password contains them.

@@ -11,6 +11,33 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const deleteResourceGrant = `-- name: DeleteResourceGrant :execrows
+DELETE FROM resource_grants
+WHERE grantee_id = $1 AND CASE $2::text
+    WHEN 'connection' THEN connection_id = $3
+    WHEN 'mcp_server' THEN mcp_server_id = $3
+    WHEN 'git_credential' THEN git_credential_id = $3
+    WHEN 'connector' THEN connector_id = $3
+    WHEN 'host' THEN host_id = $3
+    WHEN 'connector_target_group' THEN connector_target_group_id = $3
+    ELSE false
+END
+`
+
+type DeleteResourceGrantParams struct {
+	GranteeID    pgtype.UUID `json:"grantee_id"`
+	ResourceType string      `json:"resource_type"`
+	ResourceID   pgtype.UUID `json:"resource_id"`
+}
+
+func (q *Queries) DeleteResourceGrant(ctx context.Context, arg DeleteResourceGrantParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteResourceGrant, arg.GranteeID, arg.ResourceType, arg.ResourceID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const getConnectionOwner = `-- name: GetConnectionOwner :one
 
 SELECT owner_principal_id FROM connections WHERE id = $1
@@ -19,6 +46,28 @@ SELECT owner_principal_id FROM connections WHERE id = $1
 // Resource owner lookups for the capability check (owner holds all caps).
 func (q *Queries) GetConnectionOwner(ctx context.Context, id pgtype.UUID) (pgtype.UUID, error) {
 	row := q.db.QueryRow(ctx, getConnectionOwner, id)
+	var owner_principal_id pgtype.UUID
+	err := row.Scan(&owner_principal_id)
+	return owner_principal_id, err
+}
+
+const getConnectorOwner = `-- name: GetConnectorOwner :one
+SELECT owner_principal_id FROM connector_resources WHERE id = $1
+`
+
+func (q *Queries) GetConnectorOwner(ctx context.Context, id pgtype.UUID) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, getConnectorOwner, id)
+	var owner_principal_id pgtype.UUID
+	err := row.Scan(&owner_principal_id)
+	return owner_principal_id, err
+}
+
+const getConnectorTargetGroupOwner = `-- name: GetConnectorTargetGroupOwner :one
+SELECT owner_principal_id FROM connector_target_groups WHERE id = $1
+`
+
+func (q *Queries) GetConnectorTargetGroupOwner(ctx context.Context, id pgtype.UUID) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, getConnectorTargetGroupOwner, id)
 	var owner_principal_id pgtype.UUID
 	err := row.Scan(&owner_principal_id)
 	return owner_principal_id, err
@@ -35,6 +84,17 @@ func (q *Queries) GetGitCredentialOwner(ctx context.Context, id pgtype.UUID) (pg
 	return user_id, err
 }
 
+const getHostOwner = `-- name: GetHostOwner :one
+SELECT owner_principal_id FROM hosts WHERE id = $1
+`
+
+func (q *Queries) GetHostOwner(ctx context.Context, id pgtype.UUID) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, getHostOwner, id)
+	var owner_principal_id pgtype.UUID
+	err := row.Scan(&owner_principal_id)
+	return owner_principal_id, err
+}
+
 const getMCPServerOwner = `-- name: GetMCPServerOwner :one
 SELECT owner_principal_id FROM agent_mcp_servers WHERE id = $1
 `
@@ -44,6 +104,42 @@ func (q *Queries) GetMCPServerOwner(ctx context.Context, id pgtype.UUID) (pgtype
 	var owner_principal_id pgtype.UUID
 	err := row.Scan(&owner_principal_id)
 	return owner_principal_id, err
+}
+
+const getPrincipalKind = `-- name: GetPrincipalKind :one
+SELECT kind FROM principals WHERE id = $1
+`
+
+func (q *Queries) GetPrincipalKind(ctx context.Context, id pgtype.UUID) (string, error) {
+	row := q.db.QueryRow(ctx, getPrincipalKind, id)
+	var kind string
+	err := row.Scan(&kind)
+	return kind, err
+}
+
+const insertResourceOwnershipTransfer = `-- name: InsertResourceOwnershipTransfer :exec
+INSERT INTO resource_ownership_transfers (
+    resource_type, resource_id, actor_user_id, previous_owner_principal_id, new_owner_user_id
+) VALUES ($1, $2, $3, $4, $5)
+`
+
+type InsertResourceOwnershipTransferParams struct {
+	ResourceType             string      `json:"resource_type"`
+	ResourceID               pgtype.UUID `json:"resource_id"`
+	ActorUserID              pgtype.UUID `json:"actor_user_id"`
+	PreviousOwnerPrincipalID pgtype.UUID `json:"previous_owner_principal_id"`
+	NewOwnerUserID           pgtype.UUID `json:"new_owner_user_id"`
+}
+
+func (q *Queries) InsertResourceOwnershipTransfer(ctx context.Context, arg InsertResourceOwnershipTransferParams) error {
+	_, err := q.db.Exec(ctx, insertResourceOwnershipTransfer,
+		arg.ResourceType,
+		arg.ResourceID,
+		arg.ActorUserID,
+		arg.PreviousOwnerPrincipalID,
+		arg.NewOwnerUserID,
+	)
+	return err
 }
 
 const listConnectionGrants = `-- name: ListConnectionGrants :many
@@ -68,6 +164,112 @@ func (q *Queries) ListConnectionGrants(ctx context.Context, connectionID pgtype.
 	items := []ListConnectionGrantsRow{}
 	for rows.Next() {
 		var i ListConnectionGrantsRow
+		if err := rows.Scan(&i.ID, &i.GranteeID, &i.Capabilities); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listConnectorGrantDetails = `-- name: ListConnectorGrantDetails :many
+SELECT grant_row.id, grant_row.grantee_id,
+       coalesce(grantee_user.display_name, grantee_group.name, '')::text AS grantee_name,
+       principal.kind AS grantee_kind, grant_row.capabilities
+FROM resource_grants grant_row
+JOIN principals principal ON principal.id = grant_row.grantee_id
+LEFT JOIN users grantee_user ON grantee_user.id = principal.id
+LEFT JOIN groups grantee_group ON grantee_group.id = principal.id
+WHERE grant_row.connector_id = $1
+ORDER BY grantee_name, grant_row.grantee_id
+`
+
+type ListConnectorGrantDetailsRow struct {
+	ID           pgtype.UUID `json:"id"`
+	GranteeID    pgtype.UUID `json:"grantee_id"`
+	GranteeName  string      `json:"grantee_name"`
+	GranteeKind  string      `json:"grantee_kind"`
+	Capabilities []string    `json:"capabilities"`
+}
+
+func (q *Queries) ListConnectorGrantDetails(ctx context.Context, connectorID pgtype.UUID) ([]ListConnectorGrantDetailsRow, error) {
+	rows, err := q.db.Query(ctx, listConnectorGrantDetails, connectorID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListConnectorGrantDetailsRow{}
+	for rows.Next() {
+		var i ListConnectorGrantDetailsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.GranteeID,
+			&i.GranteeName,
+			&i.GranteeKind,
+			&i.Capabilities,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listConnectorGrants = `-- name: ListConnectorGrants :many
+SELECT id, grantee_id, capabilities FROM resource_grants WHERE connector_id = $1
+`
+
+type ListConnectorGrantsRow struct {
+	ID           pgtype.UUID `json:"id"`
+	GranteeID    pgtype.UUID `json:"grantee_id"`
+	Capabilities []string    `json:"capabilities"`
+}
+
+func (q *Queries) ListConnectorGrants(ctx context.Context, connectorID pgtype.UUID) ([]ListConnectorGrantsRow, error) {
+	rows, err := q.db.Query(ctx, listConnectorGrants, connectorID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListConnectorGrantsRow{}
+	for rows.Next() {
+		var i ListConnectorGrantsRow
+		if err := rows.Scan(&i.ID, &i.GranteeID, &i.Capabilities); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listConnectorTargetGroupGrants = `-- name: ListConnectorTargetGroupGrants :many
+SELECT id, grantee_id, capabilities FROM resource_grants WHERE connector_target_group_id = $1
+`
+
+type ListConnectorTargetGroupGrantsRow struct {
+	ID           pgtype.UUID `json:"id"`
+	GranteeID    pgtype.UUID `json:"grantee_id"`
+	Capabilities []string    `json:"capabilities"`
+}
+
+func (q *Queries) ListConnectorTargetGroupGrants(ctx context.Context, connectorTargetGroupID pgtype.UUID) ([]ListConnectorTargetGroupGrantsRow, error) {
+	rows, err := q.db.Query(ctx, listConnectorTargetGroupGrants, connectorTargetGroupID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListConnectorTargetGroupGrantsRow{}
+	for rows.Next() {
+		var i ListConnectorTargetGroupGrantsRow
 		if err := rows.Scan(&i.ID, &i.GranteeID, &i.Capabilities); err != nil {
 			return nil, err
 		}
@@ -109,6 +311,36 @@ func (q *Queries) ListGitCredentialGrants(ctx context.Context, gitCredentialID p
 	return items, nil
 }
 
+const listHostGrants = `-- name: ListHostGrants :many
+SELECT id, grantee_id, capabilities FROM resource_grants WHERE host_id = $1
+`
+
+type ListHostGrantsRow struct {
+	ID           pgtype.UUID `json:"id"`
+	GranteeID    pgtype.UUID `json:"grantee_id"`
+	Capabilities []string    `json:"capabilities"`
+}
+
+func (q *Queries) ListHostGrants(ctx context.Context, hostID pgtype.UUID) ([]ListHostGrantsRow, error) {
+	rows, err := q.db.Query(ctx, listHostGrants, hostID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListHostGrantsRow{}
+	for rows.Next() {
+		var i ListHostGrantsRow
+		if err := rows.Scan(&i.ID, &i.GranteeID, &i.Capabilities); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listMCPServerGrants = `-- name: ListMCPServerGrants :many
 SELECT id, grantee_id, capabilities FROM resource_grants WHERE mcp_server_id = $1
 `
@@ -139,12 +371,81 @@ func (q *Queries) ListMCPServerGrants(ctx context.Context, mcpServerID pgtype.UU
 	return items, nil
 }
 
+const listResourceGrantDetails = `-- name: ListResourceGrantDetails :many
+SELECT grant_row.id, grant_row.grantee_id, grantee_user.email,
+       grantee_user.display_name AS grantee_name, grant_row.capabilities,
+       grant_row.created_at
+FROM resource_grants grant_row
+JOIN principals principal ON principal.id = grant_row.grantee_id AND principal.kind = 'user'
+JOIN users grantee_user ON grantee_user.id = principal.id
+WHERE CASE $1::text
+    WHEN 'connection' THEN grant_row.connection_id = $2
+    WHEN 'mcp_server' THEN grant_row.mcp_server_id = $2
+    WHEN 'git_credential' THEN grant_row.git_credential_id = $2
+    WHEN 'connector' THEN grant_row.connector_id = $2
+    WHEN 'host' THEN grant_row.host_id = $2
+    WHEN 'connector_target_group' THEN grant_row.connector_target_group_id = $2
+    ELSE false
+END
+ORDER BY grantee_user.display_name, grantee_user.email, grant_row.grantee_id
+`
+
+type ListResourceGrantDetailsParams struct {
+	ResourceType string      `json:"resource_type"`
+	ResourceID   pgtype.UUID `json:"resource_id"`
+}
+
+type ListResourceGrantDetailsRow struct {
+	ID           pgtype.UUID        `json:"id"`
+	GranteeID    pgtype.UUID        `json:"grantee_id"`
+	Email        string             `json:"email"`
+	GranteeName  string             `json:"grantee_name"`
+	Capabilities []string           `json:"capabilities"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+}
+
+func (q *Queries) ListResourceGrantDetails(ctx context.Context, arg ListResourceGrantDetailsParams) ([]ListResourceGrantDetailsRow, error) {
+	rows, err := q.db.Query(ctx, listResourceGrantDetails, arg.ResourceType, arg.ResourceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListResourceGrantDetailsRow{}
+	for rows.Next() {
+		var i ListResourceGrantDetailsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.GranteeID,
+			&i.Email,
+			&i.GranteeName,
+			&i.Capabilities,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const lockConnectionResource = `-- name: LockConnectionResource :exec
 SELECT id FROM connections WHERE id = $1 FOR UPDATE
 `
 
 func (q *Queries) LockConnectionResource(ctx context.Context, id pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, lockConnectionResource, id)
+	return err
+}
+
+const lockConnectorResource = `-- name: LockConnectorResource :exec
+SELECT id FROM connector_resources WHERE id = $1 FOR UPDATE
+`
+
+func (q *Queries) LockConnectorResource(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, lockConnectorResource, id)
 	return err
 }
 
@@ -157,6 +458,15 @@ func (q *Queries) LockGitCredentialResource(ctx context.Context, id pgtype.UUID)
 	return err
 }
 
+const lockHostResource = `-- name: LockHostResource :exec
+SELECT id FROM hosts WHERE id = $1 FOR UPDATE
+`
+
+func (q *Queries) LockHostResource(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, lockHostResource, id)
+	return err
+}
+
 const lockMCPServerResource = `-- name: LockMCPServerResource :exec
 SELECT id FROM agent_mcp_servers WHERE id = $1 FOR UPDATE
 `
@@ -164,4 +474,298 @@ SELECT id FROM agent_mcp_servers WHERE id = $1 FOR UPDATE
 func (q *Queries) LockMCPServerResource(ctx context.Context, id pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, lockMCPServerResource, id)
 	return err
+}
+
+const transferConnectionResourceOwnership = `-- name: TransferConnectionResourceOwnership :execrows
+UPDATE connections SET owner_principal_id = $1, updated_at = now() WHERE id = $2
+`
+
+type TransferConnectionResourceOwnershipParams struct {
+	NewOwnerUserID pgtype.UUID `json:"new_owner_user_id"`
+	ResourceID     pgtype.UUID `json:"resource_id"`
+}
+
+func (q *Queries) TransferConnectionResourceOwnership(ctx context.Context, arg TransferConnectionResourceOwnershipParams) (int64, error) {
+	result, err := q.db.Exec(ctx, transferConnectionResourceOwnership, arg.NewOwnerUserID, arg.ResourceID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const transferConnectorResourceOwnership = `-- name: TransferConnectorResourceOwnership :execrows
+UPDATE connector_resources SET owner_principal_id = $1, updated_at = now() WHERE id = $2
+`
+
+type TransferConnectorResourceOwnershipParams struct {
+	NewOwnerUserID pgtype.UUID `json:"new_owner_user_id"`
+	ResourceID     pgtype.UUID `json:"resource_id"`
+}
+
+func (q *Queries) TransferConnectorResourceOwnership(ctx context.Context, arg TransferConnectorResourceOwnershipParams) (int64, error) {
+	result, err := q.db.Exec(ctx, transferConnectorResourceOwnership, arg.NewOwnerUserID, arg.ResourceID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const transferConnectorTargetGroupResourceOwnership = `-- name: TransferConnectorTargetGroupResourceOwnership :execrows
+UPDATE connector_target_groups SET owner_principal_id = $1, updated_at = now() WHERE id = $2
+`
+
+type TransferConnectorTargetGroupResourceOwnershipParams struct {
+	NewOwnerUserID pgtype.UUID `json:"new_owner_user_id"`
+	ResourceID     pgtype.UUID `json:"resource_id"`
+}
+
+func (q *Queries) TransferConnectorTargetGroupResourceOwnership(ctx context.Context, arg TransferConnectorTargetGroupResourceOwnershipParams) (int64, error) {
+	result, err := q.db.Exec(ctx, transferConnectorTargetGroupResourceOwnership, arg.NewOwnerUserID, arg.ResourceID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const transferGitCredentialResourceOwnership = `-- name: TransferGitCredentialResourceOwnership :execrows
+UPDATE git_credentials SET user_id = $1 WHERE id = $2
+`
+
+type TransferGitCredentialResourceOwnershipParams struct {
+	NewOwnerUserID pgtype.UUID `json:"new_owner_user_id"`
+	ResourceID     pgtype.UUID `json:"resource_id"`
+}
+
+func (q *Queries) TransferGitCredentialResourceOwnership(ctx context.Context, arg TransferGitCredentialResourceOwnershipParams) (int64, error) {
+	result, err := q.db.Exec(ctx, transferGitCredentialResourceOwnership, arg.NewOwnerUserID, arg.ResourceID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const transferHostResourceOwnership = `-- name: TransferHostResourceOwnership :execrows
+UPDATE hosts SET owner_principal_id = $1, updated_at = now() WHERE id = $2
+`
+
+type TransferHostResourceOwnershipParams struct {
+	NewOwnerUserID pgtype.UUID `json:"new_owner_user_id"`
+	ResourceID     pgtype.UUID `json:"resource_id"`
+}
+
+func (q *Queries) TransferHostResourceOwnership(ctx context.Context, arg TransferHostResourceOwnershipParams) (int64, error) {
+	result, err := q.db.Exec(ctx, transferHostResourceOwnership, arg.NewOwnerUserID, arg.ResourceID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const transferMCPServerResourceOwnership = `-- name: TransferMCPServerResourceOwnership :execrows
+UPDATE agent_mcp_servers SET owner_principal_id = $1, updated_at = now() WHERE id = $2
+`
+
+type TransferMCPServerResourceOwnershipParams struct {
+	NewOwnerUserID pgtype.UUID `json:"new_owner_user_id"`
+	ResourceID     pgtype.UUID `json:"resource_id"`
+}
+
+func (q *Queries) TransferMCPServerResourceOwnership(ctx context.Context, arg TransferMCPServerResourceOwnershipParams) (int64, error) {
+	result, err := q.db.Exec(ctx, transferMCPServerResourceOwnership, arg.NewOwnerUserID, arg.ResourceID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const upsertConnectionResourceGrant = `-- name: UpsertConnectionResourceGrant :one
+INSERT INTO resource_grants (connection_id, grantee_id, capabilities)
+VALUES ($1, $2, $3)
+ON CONFLICT (connection_id, grantee_id) WHERE connection_id IS NOT NULL
+DO UPDATE SET capabilities = EXCLUDED.capabilities
+RETURNING id, connection_id, mcp_server_id, git_credential_id, grantee_id, capabilities, created_at, connector_id, host_id, connector_target_group_id
+`
+
+type UpsertConnectionResourceGrantParams struct {
+	ResourceID   pgtype.UUID `json:"resource_id"`
+	GranteeID    pgtype.UUID `json:"grantee_id"`
+	Capabilities []string    `json:"capabilities"`
+}
+
+func (q *Queries) UpsertConnectionResourceGrant(ctx context.Context, arg UpsertConnectionResourceGrantParams) (ResourceGrant, error) {
+	row := q.db.QueryRow(ctx, upsertConnectionResourceGrant, arg.ResourceID, arg.GranteeID, arg.Capabilities)
+	var i ResourceGrant
+	err := row.Scan(
+		&i.ID,
+		&i.ConnectionID,
+		&i.McpServerID,
+		&i.GitCredentialID,
+		&i.GranteeID,
+		&i.Capabilities,
+		&i.CreatedAt,
+		&i.ConnectorID,
+		&i.HostID,
+		&i.ConnectorTargetGroupID,
+	)
+	return i, err
+}
+
+const upsertConnectorResourceGrant = `-- name: UpsertConnectorResourceGrant :one
+INSERT INTO resource_grants (connector_id, grantee_id, capabilities)
+VALUES ($1, $2, $3)
+ON CONFLICT (connector_id, grantee_id) WHERE connector_id IS NOT NULL
+DO UPDATE SET capabilities = EXCLUDED.capabilities
+RETURNING id, connection_id, mcp_server_id, git_credential_id, grantee_id, capabilities, created_at, connector_id, host_id, connector_target_group_id
+`
+
+type UpsertConnectorResourceGrantParams struct {
+	ResourceID   pgtype.UUID `json:"resource_id"`
+	GranteeID    pgtype.UUID `json:"grantee_id"`
+	Capabilities []string    `json:"capabilities"`
+}
+
+func (q *Queries) UpsertConnectorResourceGrant(ctx context.Context, arg UpsertConnectorResourceGrantParams) (ResourceGrant, error) {
+	row := q.db.QueryRow(ctx, upsertConnectorResourceGrant, arg.ResourceID, arg.GranteeID, arg.Capabilities)
+	var i ResourceGrant
+	err := row.Scan(
+		&i.ID,
+		&i.ConnectionID,
+		&i.McpServerID,
+		&i.GitCredentialID,
+		&i.GranteeID,
+		&i.Capabilities,
+		&i.CreatedAt,
+		&i.ConnectorID,
+		&i.HostID,
+		&i.ConnectorTargetGroupID,
+	)
+	return i, err
+}
+
+const upsertConnectorTargetGroupResourceGrant = `-- name: UpsertConnectorTargetGroupResourceGrant :one
+INSERT INTO resource_grants (connector_target_group_id, grantee_id, capabilities)
+VALUES ($1, $2, $3)
+ON CONFLICT (connector_target_group_id, grantee_id) WHERE connector_target_group_id IS NOT NULL
+DO UPDATE SET capabilities = EXCLUDED.capabilities
+RETURNING id, connection_id, mcp_server_id, git_credential_id, grantee_id, capabilities, created_at, connector_id, host_id, connector_target_group_id
+`
+
+type UpsertConnectorTargetGroupResourceGrantParams struct {
+	ResourceID   pgtype.UUID `json:"resource_id"`
+	GranteeID    pgtype.UUID `json:"grantee_id"`
+	Capabilities []string    `json:"capabilities"`
+}
+
+func (q *Queries) UpsertConnectorTargetGroupResourceGrant(ctx context.Context, arg UpsertConnectorTargetGroupResourceGrantParams) (ResourceGrant, error) {
+	row := q.db.QueryRow(ctx, upsertConnectorTargetGroupResourceGrant, arg.ResourceID, arg.GranteeID, arg.Capabilities)
+	var i ResourceGrant
+	err := row.Scan(
+		&i.ID,
+		&i.ConnectionID,
+		&i.McpServerID,
+		&i.GitCredentialID,
+		&i.GranteeID,
+		&i.Capabilities,
+		&i.CreatedAt,
+		&i.ConnectorID,
+		&i.HostID,
+		&i.ConnectorTargetGroupID,
+	)
+	return i, err
+}
+
+const upsertGitCredentialResourceGrant = `-- name: UpsertGitCredentialResourceGrant :one
+INSERT INTO resource_grants (git_credential_id, grantee_id, capabilities)
+VALUES ($1, $2, $3)
+ON CONFLICT (git_credential_id, grantee_id) WHERE git_credential_id IS NOT NULL
+DO UPDATE SET capabilities = EXCLUDED.capabilities
+RETURNING id, connection_id, mcp_server_id, git_credential_id, grantee_id, capabilities, created_at, connector_id, host_id, connector_target_group_id
+`
+
+type UpsertGitCredentialResourceGrantParams struct {
+	ResourceID   pgtype.UUID `json:"resource_id"`
+	GranteeID    pgtype.UUID `json:"grantee_id"`
+	Capabilities []string    `json:"capabilities"`
+}
+
+func (q *Queries) UpsertGitCredentialResourceGrant(ctx context.Context, arg UpsertGitCredentialResourceGrantParams) (ResourceGrant, error) {
+	row := q.db.QueryRow(ctx, upsertGitCredentialResourceGrant, arg.ResourceID, arg.GranteeID, arg.Capabilities)
+	var i ResourceGrant
+	err := row.Scan(
+		&i.ID,
+		&i.ConnectionID,
+		&i.McpServerID,
+		&i.GitCredentialID,
+		&i.GranteeID,
+		&i.Capabilities,
+		&i.CreatedAt,
+		&i.ConnectorID,
+		&i.HostID,
+		&i.ConnectorTargetGroupID,
+	)
+	return i, err
+}
+
+const upsertHostResourceGrant = `-- name: UpsertHostResourceGrant :one
+INSERT INTO resource_grants (host_id, grantee_id, capabilities)
+VALUES ($1, $2, $3)
+ON CONFLICT (host_id, grantee_id) WHERE host_id IS NOT NULL
+DO UPDATE SET capabilities = EXCLUDED.capabilities
+RETURNING id, connection_id, mcp_server_id, git_credential_id, grantee_id, capabilities, created_at, connector_id, host_id, connector_target_group_id
+`
+
+type UpsertHostResourceGrantParams struct {
+	ResourceID   pgtype.UUID `json:"resource_id"`
+	GranteeID    pgtype.UUID `json:"grantee_id"`
+	Capabilities []string    `json:"capabilities"`
+}
+
+func (q *Queries) UpsertHostResourceGrant(ctx context.Context, arg UpsertHostResourceGrantParams) (ResourceGrant, error) {
+	row := q.db.QueryRow(ctx, upsertHostResourceGrant, arg.ResourceID, arg.GranteeID, arg.Capabilities)
+	var i ResourceGrant
+	err := row.Scan(
+		&i.ID,
+		&i.ConnectionID,
+		&i.McpServerID,
+		&i.GitCredentialID,
+		&i.GranteeID,
+		&i.Capabilities,
+		&i.CreatedAt,
+		&i.ConnectorID,
+		&i.HostID,
+		&i.ConnectorTargetGroupID,
+	)
+	return i, err
+}
+
+const upsertMCPServerResourceGrant = `-- name: UpsertMCPServerResourceGrant :one
+INSERT INTO resource_grants (mcp_server_id, grantee_id, capabilities)
+VALUES ($1, $2, $3)
+ON CONFLICT (mcp_server_id, grantee_id) WHERE mcp_server_id IS NOT NULL
+DO UPDATE SET capabilities = EXCLUDED.capabilities
+RETURNING id, connection_id, mcp_server_id, git_credential_id, grantee_id, capabilities, created_at, connector_id, host_id, connector_target_group_id
+`
+
+type UpsertMCPServerResourceGrantParams struct {
+	ResourceID   pgtype.UUID `json:"resource_id"`
+	GranteeID    pgtype.UUID `json:"grantee_id"`
+	Capabilities []string    `json:"capabilities"`
+}
+
+func (q *Queries) UpsertMCPServerResourceGrant(ctx context.Context, arg UpsertMCPServerResourceGrantParams) (ResourceGrant, error) {
+	row := q.db.QueryRow(ctx, upsertMCPServerResourceGrant, arg.ResourceID, arg.GranteeID, arg.Capabilities)
+	var i ResourceGrant
+	err := row.Scan(
+		&i.ID,
+		&i.ConnectionID,
+		&i.McpServerID,
+		&i.GitCredentialID,
+		&i.GranteeID,
+		&i.Capabilities,
+		&i.CreatedAt,
+		&i.ConnectorID,
+		&i.HostID,
+		&i.ConnectorTargetGroupID,
+	)
+	return i, err
 }

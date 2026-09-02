@@ -2,6 +2,7 @@ import { ref } from 'vue'
 import { defineStore } from 'pinia'
 import { fromJson, toJson } from '@bufbuild/protobuf'
 import api from '@/api/client'
+import { useAirlockI18n } from '@/i18n'
 import type { GitCredential } from '@/gen/airlock/v1/types_pb'
 import {
   CreateGitCredentialRequestSchema,
@@ -11,6 +12,7 @@ import {
 import { create } from '@bufbuild/protobuf'
 
 export const useGitCredentialsStore = defineStore('gitCredentials', () => {
+  const { t } = useAirlockI18n()
   const credentials = ref<GitCredential[]>([])
   const loading = ref(true)
   const error = ref('')
@@ -22,7 +24,7 @@ export const useGitCredentialsStore = defineStore('gitCredentials', () => {
       const { data } = await api.get('/api/v1/me/git/credentials')
       credentials.value = fromJson(ListGitCredentialsResponseSchema, data).credentials
     } catch (cause: any) {
-      error.value = cause?.response?.data?.error || cause?.message || 'Failed to load git credentials'
+      error.value = cause?.response?.data?.error || cause?.message || t('resources.errors.loadGitCredentials')
       throw cause
     } finally {
       loading.value = false

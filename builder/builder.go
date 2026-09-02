@@ -20,6 +20,7 @@ import (
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/airlockrun/airlock/secrets"
+	"github.com/airlockrun/airlock/storage"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -50,6 +51,7 @@ type BuildService struct {
 	containers            container.ContainerManager
 	encryptor             secrets.Store
 	providerHTTPClient    *http.Client
+	artifacts             *storage.S3Client
 	events                EventPublisher
 	upgradeNotifier       PostUpgradeNotifier
 	upgradeSystemNotifier PostUpgradeSystemNotifier
@@ -77,7 +79,7 @@ type buildHandle struct {
 }
 
 // New creates a BuildService. Panics if any dependency is nil.
-func New(cfg *config.Config, database *db.DB, containers container.ContainerManager, encryptor secrets.Store, providerHTTPClient *http.Client, logger *zap.Logger) *BuildService {
+func New(cfg *config.Config, database *db.DB, containers container.ContainerManager, encryptor secrets.Store, providerHTTPClient *http.Client, artifacts *storage.S3Client, logger *zap.Logger) *BuildService {
 	if cfg == nil {
 		panic("builder: cfg is nil")
 	}
@@ -93,6 +95,9 @@ func New(cfg *config.Config, database *db.DB, containers container.ContainerMana
 	if providerHTTPClient == nil {
 		panic("builder: provider HTTP client is nil")
 	}
+	if artifacts == nil {
+		panic("builder: artifact storage is nil")
+	}
 	if logger == nil {
 		panic("builder: logger is nil")
 	}
@@ -104,6 +109,7 @@ func New(cfg *config.Config, database *db.DB, containers container.ContainerMana
 		containers:         containers,
 		encryptor:          encryptor,
 		providerHTTPClient: providerHTTPClient,
+		artifacts:          artifacts,
 		events:             noopPublisher{},
 		logger:             logger,
 		inFlight:           make(map[string]*buildHandle),

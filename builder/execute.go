@@ -11,6 +11,7 @@ import (
 	"github.com/airlockrun/agentsdk"
 	"github.com/airlockrun/agentsdk/scaffold"
 	"github.com/airlockrun/agentsdk/wire"
+	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
 	jobssvc "github.com/airlockrun/airlock/service/jobs"
 	"github.com/google/uuid"
@@ -198,12 +199,22 @@ func (b *BuildService) Execute(ctx context.Context, plan BuildPlan) (string, err
 	if plan.Message != "" {
 		buildInstructions = plan.Message
 	}
+	var artifactPinLock *db.AdvisoryLock
+	if plan.RollbackTargetID.Valid {
+		artifactPinLock, err = b.db.AcquireAdvisoryLock(ctx, "connector-artifact-gc")
+		if err != nil {
+			return "", fmt.Errorf("lock rollback artifact retention: %w", err)
+		}
+	}
 	build, err := q.CreateAgentBuild(ctx, dbq.CreateAgentBuildParams{
 		AgentID:          agent.ID,
 		Type:             string(plan.Kind),
 		Instructions:     buildInstructions,
 		RollbackTargetID: plan.RollbackTargetID,
 	})
+	if artifactPinLock != nil {
+		artifactPinLock.Unlock()
+	}
 	if err != nil {
 		return "", fmt.Errorf("create build record: %w", err)
 	}
@@ -522,6 +533,16 @@ func (b *BuildService) Execute(ctx context.Context, plan BuildPlan) (string, err
 		return "", fmt.Errorf("build image: %w", err)
 	}
 	b.logger.Info("image built", zap.String("image", imageTag))
+
+	// Connector binaries are built from the exact committed candidate source.
+	// Every declared target must compile and its manifest must validate before
+	// any deployment state changes. Metadata is persisted against this build;
+	// operator queries expose it only after the build reaches complete.
+	publishPhase("connectors")
+	if err := b.buildConnectorArtifacts(ctx, agentID, commitHash, build.ID, repoPath, goProxyDir, logLine); err != nil {
+		failCode(err.Error(), commitHash, imageTag)
+		return "", fmt.Errorf("build connector artifacts: %w", err)
+	}
 
 	// ── Phase E: validate migrations on the clone ──────────────────────
 	publishPhase("migrations")

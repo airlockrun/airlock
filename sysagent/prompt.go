@@ -7,6 +7,7 @@ import (
 	"strings"
 	"text/template"
 
+	localepkg "github.com/airlockrun/airlock/locale"
 	"github.com/airlockrun/goai/tool"
 )
 
@@ -63,4 +64,8 @@ func SystemPrompt(env promptEnv, availableTools tool.Set) string {
 		panic("sysagent: render system prompt: " + err.Error())
 	}
 	return buf.String()
+}
+
+func humanFacingSystemPrompt(env promptEnv, availableTools tool.Set, uiLocale string) string {
+	return localepkg.AppendReplyInstruction(SystemPrompt(env, availableTools), uiLocale)
 }

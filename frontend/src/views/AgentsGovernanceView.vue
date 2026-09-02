@@ -7,12 +7,15 @@ import { useAgentGovernanceStore } from '@/stores/agentGovernance'
 import { useAuthStore } from '@/stores/auth'
 import { useAgentStatus } from '@/composables/useAgentStatus'
 import type { AgentInfo } from '@/gen/airlock/v1/types_pb'
+import { useAirlockI18n } from '@/i18n'
 
 const store = useAgentGovernanceStore()
 const auth = useAuthStore()
 const router = useRouter()
 const toast = useToast()
 const confirm = useConfirm()
+const { t, formatNumber } = useAirlockI18n()
+const agentStatus = useAgentStatus()
 
 const search = ref('')
 
@@ -48,18 +51,21 @@ function claim(a: AgentInfo) {
   if (!uid) return
   act(async () => {
     await store.claim(a.id, uid)
-    toast.add({ severity: 'success', summary: `Claimed ${a.name} - you're now an admin`, life: 4000 })
-  }, 'Claim failed')
+    toast.add({ severity: 'success', summary: t('agents.governance.claimed', { name: a.name }), life: 4000 })
+  }, t('agents.governance.claimFailed'))
 }
 
 function confirmDelete(a: AgentInfo) {
   confirm.require({
-    header: 'Delete app',
-    message: `Permanently delete "${a.name}" (owned by ${a.ownerName || 'unknown'})? This removes its container, image, data, and history. This cannot be undone.`,
+    header: t('agents.governance.deleteTitle'),
+    message: t('agents.governance.deleteConfirm', {
+      name: a.name,
+      owner: a.ownerName || t('agents.governance.unknownOwner'),
+    }),
     icon: 'pi pi-exclamation-triangle',
-    acceptProps: { severity: 'danger', label: 'Delete' },
-    rejectLabel: 'Cancel',
-    accept: () => act(() => store.remove(a.id), 'Delete failed'),
+    acceptProps: { severity: 'danger', label: t('agents.action.delete') },
+    rejectLabel: t('agents.action.cancel'),
+    accept: () => act(() => store.remove(a.id), t('agents.detail.deleteFailed')),
   })
 }
 </script>
@@ -67,20 +73,19 @@ function confirmDelete(a: AgentInfo) {
 <template>
   <div>
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem">
-      <h1 style="margin: 0; font-size: 1.5rem">Manage apps</h1>
-      <Tag :value="`${store.agents.length} total`" severity="secondary" />
+      <h1 style="margin: 0; font-size: 1.5rem">{{ t('agents.governance.title') }}</h1>
+      <Tag :value="t('agents.governance.total', { count: store.agents.length, formattedCount: formatNumber(store.agents.length) })" severity="secondary" />
     </div>
     <p style="margin: 0 0 1.5rem; color: var(--p-text-muted-color); max-width: 48rem">
-      Every app in this workspace, including ones you're not a member of. As an
-      admin you can stop, start, or delete any app here for governance. Reading
-      an app's conversations or configuration still requires access - use
-      <b>Claim</b> to add yourself as an admin first.
+      {{ t('agents.governance.descriptionBeforeClaim') }}
+      <b>{{ t('agents.action.claim') }}</b>
+      {{ t('agents.governance.descriptionAfterClaim') }}
     </p>
 
     <div style="margin-bottom: 1rem; max-width: 24rem">
       <IconField>
         <InputIcon class="pi pi-search" />
-        <InputText v-model="search" placeholder="Filter by name, slug, or owner" style="width: 100%" />
+        <InputText v-model="search" :placeholder="t('agents.governance.filterPlaceholder')" style="width: 100%" />
       </IconField>
     </div>
 
@@ -89,11 +94,11 @@ function confirmDelete(a: AgentInfo) {
     </div>
 
     <Message v-else-if="store.agents.length === 0" severity="info" :closable="false">
-      No apps in this workspace yet.
+      {{ t('agents.governance.empty') }}
     </Message>
 
     <DataTable v-else :value="rows" stripedRows size="small">
-      <Column header="App">
+      <Column :header="t('agents.governance.column.app')">
         <template #body="{ data }">
           <div style="display: flex; align-items: center; gap: 0.5rem">
             <span v-if="data.emoji" style="font-size: 1.1rem; line-height: 1">{{ data.emoji }}</span>
@@ -105,55 +110,55 @@ function confirmDelete(a: AgentInfo) {
           </div>
         </template>
       </Column>
-      <Column header="Owner">
+      <Column :header="t('agents.governance.column.owner')">
         <template #body="{ data }">
-          <span v-if="data.isOwner"><i class="pi pi-user" style="font-size: 0.7rem" /> You</span>
+          <span v-if="data.isOwner"><i class="pi pi-user" style="font-size: 0.7rem" /> {{ t('agents.governance.you') }}</span>
           <span v-else style="color: var(--p-text-muted-color)">{{ data.ownerName || '-' }}</span>
         </template>
       </Column>
-      <Column header="Status">
+      <Column :header="t('agents.governance.column.status')">
         <template #body="{ data }">
           <Tag
-            :value="useAgentStatus(data.status, data.running).label"
-            :severity="useAgentStatus(data.status, data.running).severity"
+            :value="agentStatus(data.status, data.running).label"
+            :severity="agentStatus(data.status, data.running).severity"
           />
         </template>
       </Column>
-      <Column header="Your access">
+      <Column :header="t('agents.governance.column.yourAccess')">
         <template #body="{ data }">
-          <Tag v-if="data.isOwner" value="owner" severity="success" style="font-size: 0.7rem" />
-          <Tag v-else-if="data.yourAccess === 'admin'" value="admin" severity="info" style="font-size: 0.7rem" />
-          <Tag v-else-if="data.yourAccess === 'user'" value="member" severity="info" style="font-size: 0.7rem" />
-          <span v-else style="color: var(--p-text-muted-color); font-size: 0.8rem">not a member</span>
+          <Tag v-if="data.isOwner" :value="t('agents.governance.access.owner')" severity="success" style="font-size: 0.7rem" />
+          <Tag v-else-if="data.yourAccess === 'admin'" :value="t('agents.governance.access.admin')" severity="info" style="font-size: 0.7rem" />
+          <Tag v-else-if="data.yourAccess === 'user'" :value="t('agents.governance.access.member')" severity="info" style="font-size: 0.7rem" />
+          <span v-else style="color: var(--p-text-muted-color); font-size: 0.8rem">{{ t('agents.governance.access.notMember') }}</span>
         </template>
       </Column>
-      <Column header="Actions" style="width: 1%; white-space: nowrap">
+      <Column :header="t('agents.detail.actions')" style="width: 1%; white-space: nowrap">
         <template #body="{ data }">
           <div style="display: flex; gap: 0.4rem; justify-content: flex-end">
             <Button
               v-if="isMember(data)"
-              label="Open" icon="pi pi-arrow-up-right" size="small" text
+              :label="t('agents.action.open')" icon="pi pi-arrow-up-right" size="small" text
               @click="router.push(`/agents/${data.id}`)"
             />
             <Button
               v-else
-              label="Claim" icon="pi pi-sign-in" size="small" outlined
+              :label="t('agents.action.claim')" icon="pi pi-sign-in" size="small" outlined
               @click="claim(data)"
             />
             <Button
               v-if="canLifecycle && data.status === 'active'"
-              label="Stop" icon="pi pi-stop" size="small" severity="secondary" outlined
-              @click="act(() => store.stop(data.id), 'Stop failed')"
+              :label="t('agents.action.stop')" icon="pi pi-stop" size="small" severity="secondary" outlined
+              @click="act(() => store.stop(data.id), t('agents.detail.stopFailed'))"
             />
             <Button
               v-else-if="canLifecycle && data.status === 'stopped'"
-              label="Start" icon="pi pi-play" size="small" severity="secondary" outlined
-              @click="act(() => store.start(data.id), 'Start failed')"
+              :label="t('agents.action.start')" icon="pi pi-play" size="small" severity="secondary" outlined
+              @click="act(() => store.start(data.id), t('agents.detail.startFailed'))"
             />
             <Button
               v-if="canDelete"
               icon="pi pi-trash" size="small" severity="danger" text
-              aria-label="Delete app" @click="confirmDelete(data)"
+              :aria-label="t('agents.governance.deleteAria')" @click="confirmDelete(data)"
             />
           </div>
         </template>

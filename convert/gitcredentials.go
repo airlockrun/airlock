@@ -17,5 +17,6 @@ func GitCredToProto(c gitcredssvc.Credential) *airlockv1.GitCredential {
 		GithubInstallId: c.GithubInstallID,
 		CreatedAt:       PgTimestampToProto(c.CreatedAt),
 		LastUsedAt:      PgTimestampToProto(c.LastUsedAt),
+		Capabilities:    c.Capabilities,
 	}
 }

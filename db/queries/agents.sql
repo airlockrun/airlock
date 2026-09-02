@@ -140,6 +140,22 @@ SELECT DISTINCT a.* FROM agents a
 JOIN agent_grants g ON g.agent_id = a.id AND g.grantee_id = ANY (@grantee_ids::uuid[])
 ORDER BY a.created_at DESC;
 
+-- name: GetAgentArtifactDeletionBlockers :one
+SELECT
+    (SELECT count(DISTINCT connector.id)
+     FROM connector_resources connector
+     JOIN connector_artifact_sets artifact_set
+       ON artifact_set.agent_id = @agent_id
+      AND (
+          (connector.active_observation_state = 'known' AND artifact_set.id = connector.artifact_set_id)
+          OR (connector.rollback_observation_state = 'known' AND artifact_set.id = connector.rollback_artifact_set_id)
+      )) AS connector_count,
+    (SELECT count(*)
+     FROM host_management_jobs management_job
+     JOIN connector_artifact_files artifact_file ON artifact_file.id = management_job.artifact_file_id
+     JOIN connector_artifact_sets artifact_set ON artifact_set.id = artifact_file.artifact_set_id
+     WHERE artifact_set.agent_id = @agent_id) AS management_job_count;
+
 -- name: DeleteAgent :exec
 -- Delete through the principal: ON DELETE CASCADE removes the agents row and,
 -- via the agent's own FKs, all of its agent-scoped rows.

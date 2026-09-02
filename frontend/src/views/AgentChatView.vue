@@ -10,12 +10,13 @@ import { toolLabel, toolDescription } from '@/utils/messageGroup'
 import api from '@/api/client'
 import MessageParts from '@/components/chat/MessageParts.vue'
 import ToolBadge from '@/components/chat/ToolBadge.vue'
-import { buildBadgeText } from '@/utils/buildBadge'
 import { matchingWebSlashCommands, type WebSlashCommand } from '@/utils/slashCommands'
+import { useAirlockI18n } from '@/i18n'
 
 const route = useRoute()
 const router = useRouter()
 const toast = useToast()
+const { t, formatNumber } = useAirlockI18n()
 const chat = useChatStore()
 const agentsStore = useAgentsStore()
 
@@ -43,7 +44,22 @@ const activeBuildId = ref<string | undefined>(undefined)
 const buildTasksDone = ref(0)
 const buildTasksTotal = ref(0)
 const buildPhase = ref('')
-const buildBadgeLabel = computed(() => buildBadgeText(buildPhase.value, buildTasksDone.value, buildTasksTotal.value))
+const buildBadgeLabel = computed(() => {
+  switch (buildPhase.value) {
+    case 'image': return t('chat.build.image')
+    case 'connectors': return t('chat.build.connectors')
+    case 'migrations': return t('chat.build.migrations')
+    case 'deploy': return t('chat.build.deploying')
+    default:
+      return buildTasksTotal.value > 0
+        ? t('chat.build.tasks', {
+          count: buildTasksTotal.value,
+          done: formatNumber(buildTasksDone.value),
+          total: formatNumber(buildTasksTotal.value),
+        })
+        : t('chat.build.building')
+  }
+})
 let unsubBuild: (() => void) | null = null
 
 const starting = ref(false)
@@ -52,7 +68,7 @@ async function startAgent() {
   try {
     await agentsStore.startAgent(agentId.value)
   } catch (err: any) {
-    toast.add({ severity: 'error', summary: err.response?.data?.error || 'Start failed', life: 5000 })
+    toast.add({ severity: 'error', summary: err.response?.data?.error || t('chat.error.startFailed'), life: 5000 })
   } finally {
     starting.value = false
   }
@@ -300,7 +316,7 @@ async function send() {
     // on a rejected send (e.g. 409 when the agent is stopped).
     messageInput.value = messageInput.value ? `${text}\n${messageInput.value}` : text
     attachedFiles.value = sentFiles
-    toast.add({ severity: 'error', summary: err.response?.data?.error || 'Send failed', life: 5000 })
+    toast.add({ severity: 'error', summary: err.response?.data?.error || t('chat.error.sendFailed'), life: 5000 })
   }
 }
 
@@ -319,7 +335,7 @@ async function onFileSelect(e: Event) {
       attachedFiles.value.push({ path: data.path, filename: data.filename || file.name })
     }
   } catch (err: any) {
-    toast.add({ severity: 'error', summary: err.response?.data?.error || 'Upload failed', life: 5000 })
+    toast.add({ severity: 'error', summary: err.response?.data?.error || t('chat.error.uploadFailed'), life: 5000 })
   } finally {
     uploading.value = false
     input.value = ''
@@ -334,7 +350,7 @@ async function approve() {
   try {
     await chat.sendMessage(agentId.value, '', true)
   } catch (err: any) {
-    toast.add({ severity: 'error', summary: 'Approval failed', detail: err.response?.data?.error, life: 5000 })
+    toast.add({ severity: 'error', summary: t('chat.error.approvalFailed'), detail: err.response?.data?.error, life: 5000 })
   }
 }
 
@@ -344,7 +360,7 @@ async function reject() {
   try {
     await chat.sendMessage(agentId.value, 'Rejected by user.', false)
   } catch (err: any) {
-    toast.add({ severity: 'error', summary: 'Rejection failed', detail: err.response?.data?.error, life: 5000 })
+    toast.add({ severity: 'error', summary: t('chat.error.rejectionFailed'), detail: err.response?.data?.error, life: 5000 })
   }
 }
 
@@ -427,7 +443,7 @@ const streamingRender = computed(() =>
     return {
       kind: 'tool' as const,
       tc,
-      label: tc ? toolLabel(tc.toolName, tc.input) : 'tool',
+      label: tc ? toolLabel(tc.toolName, tc.input, t) : 'tool',
     }
   }),
 )
@@ -455,11 +471,14 @@ function checkpointInfo(msg: any): CheckpointInfo | null {
 }
 
 function checkpointLabel(kind: string): string {
-  return kind === 'compact' ? 'compacted' : 'context cleared'
+  return kind === 'compact' ? t('chat.checkpoint.compacted') : t('chat.checkpoint.contextCleared')
 }
 
 function formatTokens(n: number): string {
-  return n.toLocaleString()
+  return t('chat.checkpoint.tokensFreed', {
+    count: n,
+    formattedCount: formatNumber(n),
+  })
 }
 </script>
 
@@ -487,7 +506,7 @@ function formatTokens(n: number): string {
          user was scrolled into history. Clicking resets the window. -->
     <div v-if="chat.newMessagesPending" class="chat-jump-banner" @click="jumpToLatest">
       <i class="pi pi-arrow-down" />
-      <span>New messages - click to jump to latest</span>
+      <span>{{ t('chat.agent.newMessages') }}</span>
     </div>
 
     <!-- Message area -->
@@ -498,11 +517,11 @@ function formatTokens(n: number): string {
         <div v-if="chat.messages.length === 0 && !chat.streamingText" class="chat-empty">
           <i class="pi pi-comments" />
           <p class="chat-empty-title">
-            {{ isNewConversation ? 'New conversation' : 'Conversation' }}
-            with <strong>{{ agentName || 'this app' }}</strong>
+            {{ t(isNewConversation ? 'chat.agent.emptyNewPrefix' : 'chat.agent.emptyExistingPrefix') }}
+            <strong>{{ agentName || t('chat.agent.thisApp') }}</strong>
           </p>
           <p class="chat-empty-sub">
-            Send a message to begin - it's saved as a new conversation once you do.
+            {{ t('chat.agent.emptyHint') }}
           </p>
         </div>
 
@@ -510,7 +529,7 @@ function formatTokens(n: number): string {
         <div ref="topSentinel" class="chat-sentinel">
           <div v-if="chat.loadingOlder" class="chat-sentinel-loading">
             <i class="pi pi-spin pi-spinner" />
-            <span>Loading earlier messages…</span>
+            <span>{{ t('chat.agent.loadingEarlier') }}</span>
           </div>
         </div>
 
@@ -523,7 +542,7 @@ function formatTokens(n: number): string {
           >
             <span class="chat-checkpoint-line" />
             <span class="chat-checkpoint-label">
-              {{ checkpointLabel(checkpointInfo(msg)!.kind) }} · {{ formatTokens(checkpointInfo(msg)!.tokensFreed) }} tokens freed
+              {{ checkpointLabel(checkpointInfo(msg)!.kind) }} · {{ formatTokens(checkpointInfo(msg)!.tokensFreed) }}
             </span>
             <span class="chat-checkpoint-line" />
           </div>
@@ -535,7 +554,7 @@ function formatTokens(n: number): string {
             class="msg-response"
           >
             <ToolBadge
-              :label="toolLabel((msg as any).toolName || 'tool')"
+              :label="toolLabel((msg as any).toolName || 'tool', undefined, t)"
               :tool-name="(msg as any).toolName"
               :input="(msg as any).toolInput"
               :output="msg.content"
@@ -549,7 +568,7 @@ function formatTokens(n: number): string {
             <div class="msg-bubble msg-system">
               <div style="display: flex; align-items: center; gap: 0.5rem">
                 <i class="pi pi-sync" style="font-size: 0.7rem; opacity: 0.6" />
-                <span style="font-size: 0.7rem; text-transform: uppercase; opacity: 0.6">System</span>
+                <span style="font-size: 0.7rem; text-transform: uppercase; opacity: 0.6">{{ t('chat.message.systemLabel') }}</span>
               </div>
               <div style="margin-top: 0.25rem; font-size: 0.85rem">{{ msg.content }}</div>
             </div>
@@ -564,7 +583,7 @@ function formatTokens(n: number): string {
             <div class="msg-bubble msg-system">
               <div style="display: flex; align-items: center; gap: 0.5rem">
                 <i class="pi pi-arrow-circle-up" style="font-size: 0.7rem; opacity: 0.7" />
-                <span style="font-size: 0.7rem; text-transform: uppercase; opacity: 0.6">Upgrade</span>
+                <span style="font-size: 0.7rem; text-transform: uppercase; opacity: 0.6">{{ t('chat.message.upgradeLabel') }}</span>
               </div>
               <div style="margin-top: 0.25rem; font-size: 0.85rem; white-space: pre-wrap; word-break: break-word">{{ msg.content }}</div>
             </div>
@@ -579,7 +598,7 @@ function formatTokens(n: number): string {
             <div class="msg-bubble msg-error">
               <div style="display: flex; align-items: center; gap: 0.5rem">
                 <i class="pi pi-exclamation-triangle" style="font-size: 0.7rem" />
-                <span style="font-size: 0.7rem; text-transform: uppercase">Error</span>
+                <span style="font-size: 0.7rem; text-transform: uppercase">{{ t('chat.message.errorLabel') }}</span>
               </div>
               <div style="margin-top: 0.25rem; font-size: 0.85rem; white-space: pre-wrap; word-break: break-word">{{ msg.content }}</div>
             </div>
@@ -651,10 +670,10 @@ function formatTokens(n: number): string {
                     />
                     <div v-if="chat.pendingConfirmation?.toolCallId === b.toolCallId" class="confirmation-box">
                       <div style="display: flex; align-items: center; justify-content: space-between">
-                        <span style="font-size: 0.8rem; font-weight: 500">Allow this action?</span>
+                        <span style="font-size: 0.8rem; font-weight: 500">{{ t('chat.confirmation.allowAction') }}</span>
                         <div style="display: flex; gap: 0.5rem">
-                          <Button label="Reject" severity="secondary" size="small" @click="reject" />
-                          <Button label="Approve" severity="success" size="small" @click="approve" />
+                          <Button :label="t('chat.action.reject')" severity="secondary" size="small" @click="reject" />
+                          <Button :label="t('chat.action.approve')" severity="success" size="small" @click="approve" />
                         </div>
                       </div>
                     </div>
@@ -670,7 +689,7 @@ function formatTokens(n: number): string {
                 v-if="(msg as any)._cancelled"
                 style="font-size: 0.7rem; text-transform: uppercase; opacity: 0.5; margin-top: 0.5rem; font-style: italic"
               >
-                (cancelled)
+                {{ t('chat.message.cancelled') }}
               </div>
             </div>
           </div>
@@ -681,7 +700,7 @@ function formatTokens(n: number): string {
         <div ref="bottomSentinel" class="chat-sentinel">
           <div v-if="chat.loadingNewer" class="chat-sentinel-loading">
             <i class="pi pi-spin pi-spinner" />
-            <span>Loading newer messages…</span>
+            <span>{{ t('chat.agent.loadingNewer') }}</span>
           </div>
         </div>
 
@@ -713,10 +732,10 @@ function formatTokens(n: number): string {
                        approve THIS tool call; keep it always visible. -->
                   <div v-if="chat.pendingConfirmation && chat.pendingConfirmation.toolCallId === entry.tc.toolCallId" class="confirmation-box">
                     <div style="display: flex; align-items: center; justify-content: space-between">
-                      <span style="font-size: 0.8rem; font-weight: 500">Allow this action?</span>
+                      <span style="font-size: 0.8rem; font-weight: 500">{{ t('chat.confirmation.allowAction') }}</span>
                       <div style="display: flex; gap: 0.5rem">
-                        <Button label="Reject" severity="secondary" size="small" @click="reject" />
-                        <Button label="Approve" severity="success" size="small" @click="approve" />
+                        <Button :label="t('chat.action.reject')" severity="secondary" size="small" @click="reject" />
+                        <Button :label="t('chat.action.approve')" severity="success" size="small" @click="approve" />
                       </div>
                     </div>
                   </div>
@@ -732,7 +751,7 @@ function formatTokens(n: number): string {
               :style="{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: '0.5rem', marginTop: '0.5rem' }"
             >
               <Button
-                label="Cancel"
+                :label="t('chat.action.cancel')"
                 severity="secondary"
                 size="small"
                 :loading="chat.cancelling"
@@ -746,14 +765,14 @@ function formatTokens(n: number): string {
         <div v-if="chat.pendingConfirmation && !chat.pendingConfirmation.toolCallId" style="padding: 0.5rem">
           <Message severity="warn" :closable="false">
             <div style="margin-bottom: 0.75rem">
-              <strong>Confirmation required</strong>
+              <strong>{{ t('chat.confirmation.required') }}</strong>
               <div v-if="chat.pendingConfirmation.description" style="margin-top: 0.25rem">{{ chat.pendingConfirmation.description }}</div>
               <span v-else>: {{ chat.pendingConfirmation.permission }}</span>
             </div>
             <pre v-if="chat.pendingConfirmation.code" class="code-chip" style="white-space: pre-wrap; font-size: 0.8rem; padding: 0.5rem; margin-bottom: 0.75rem">{{ chat.pendingConfirmation.code }}</pre>
             <div style="display: flex; gap: 0.5rem; justify-content: flex-end">
-              <Button label="Reject" severity="secondary" size="small" @click="reject" />
-              <Button label="Approve" severity="success" size="small" @click="approve" />
+              <Button :label="t('chat.action.reject')" severity="secondary" size="small" @click="reject" />
+              <Button :label="t('chat.action.approve')" severity="success" size="small" @click="approve" />
             </div>
           </Message>
         </div>
@@ -777,9 +796,9 @@ function formatTokens(n: number): string {
 
       <!-- Stopped-agent banner: chatting is blocked until an admin starts it -->
       <div v-if="agentStopped" class="composer-stopped">
-        <span style="font-size: 0.875rem">This app is stopped. Start it to chat.</span>
+        <span style="font-size: 0.875rem">{{ t('chat.agent.stoppedMessage') }}</span>
         <Button
-          label="Start"
+          :label="t('chat.action.start')"
           icon="pi pi-play"
           size="small"
           :loading="starting"
@@ -788,7 +807,7 @@ function formatTokens(n: number): string {
       </div>
 
       <div class="composer-input">
-        <div v-if="slashCommandMatches.length" class="slash-command-menu" role="listbox" aria-label="Chat commands">
+        <div v-if="slashCommandMatches.length" class="slash-command-menu" role="listbox" :aria-label="t('chat.agent.commandsAriaLabel')">
           <button
             v-for="(command, index) in slashCommandMatches"
             :key="command.name"
@@ -800,7 +819,7 @@ function formatTokens(n: number): string {
             @pointerdown.prevent="selectSlashCommand(command)"
           >
             <code>/{{ command.name }}</code>
-            <span>{{ command.description }}</span>
+            <span>{{ t(command.descriptionId) }}</span>
           </button>
         </div>
 
@@ -820,7 +839,7 @@ function formatTokens(n: number): string {
           <Textarea
             ref="messageInputRef"
             v-model="messageInput"
-            :placeholder="agentStopped ? 'App is stopped' : 'Type a message...'"
+            :placeholder="agentStopped ? t('chat.agent.stoppedPlaceholder') : t('chat.agent.messagePlaceholder')"
             :auto-resize="true"
             rows="1"
             :disabled="agentStopped"

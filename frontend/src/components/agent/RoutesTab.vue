@@ -2,6 +2,7 @@
 import { ref, onMounted, watch } from 'vue'
 import { fromJson } from '@bufbuild/protobuf'
 import api from '@/api/client'
+import { useAirlockI18n } from '@/i18n'
 import { GetAgentDetailResponseSchema } from '@/gen/airlock/v1/api_pb'
 
 interface Route {
@@ -13,6 +14,7 @@ interface Route {
 
 const props = defineProps<{ agentId: string }>()
 const emit = defineEmits<{ populated: [count: number] }>()
+const { t } = useAirlockI18n()
 
 const routes = ref<Route[]>([])
 watch(routes, (v) => emit('populated', v.length), { immediate: true })
@@ -55,6 +57,13 @@ function accessSeverity(access: string): string {
     default: return 'info'
   }
 }
+
+function accessLabel(access: string): string {
+  if (access === 'public') return t('agentConfig.accessLevel.public')
+  if (access === 'user') return t('agentConfig.accessLevel.user')
+  if (access === 'admin') return t('agentConfig.accessLevel.admin')
+  return access
+}
 </script>
 
 <template>
@@ -62,11 +71,11 @@ function accessSeverity(access: string): string {
     <DataTable v-if="!loading" :value="routes" stripedRows>
       <template #empty>
         <div style="text-align: center; padding: 2rem; color: var(--p-text-muted-color)">
-          No routes registered.
+          {{ t('agentConfig.routes.empty') }}
         </div>
       </template>
-      <Column field="method" header="Method" style="width: 5rem" />
-      <Column field="path" header="Path">
+      <Column field="method" :header="t('agentConfig.routes.method')" style="width: 5rem" />
+      <Column field="path" :header="t('agentConfig.routes.path')">
         <template #body="{ data }">
           <a
             v-if="routeHref(data)"
@@ -77,19 +86,19 @@ function accessSeverity(access: string): string {
           <span v-else>{{ data.path }}</span>
         </template>
       </Column>
-      <Column field="description" header="Description" />
-      <Column field="access" header="Access" style="width: 6rem">
+      <Column field="description" :header="t('agentConfig.common.description')" />
+      <Column field="access" :header="t('agentConfig.common.access')" style="width: 6rem">
         <template #body="{ data }">
-          <Tag :value="data.access" :severity="accessSeverity(data.access)" />
+          <Tag :value="accessLabel(data.access)" :severity="accessSeverity(data.access)" />
         </template>
       </Column>
     </DataTable>
 
     <DataTable v-else :value="[{}, {}, {}]">
-      <Column header="Method"><template #body><Skeleton width="3rem" /></template></Column>
-      <Column header="Path"><template #body><Skeleton /></template></Column>
-      <Column header="Description"><template #body><Skeleton /></template></Column>
-      <Column header="Access"><template #body><Skeleton width="4rem" /></template></Column>
+      <Column :header="t('agentConfig.routes.method')"><template #body><Skeleton width="3rem" /></template></Column>
+      <Column :header="t('agentConfig.routes.path')"><template #body><Skeleton /></template></Column>
+      <Column :header="t('agentConfig.common.description')"><template #body><Skeleton /></template></Column>
+      <Column :header="t('agentConfig.common.access')"><template #body><Skeleton width="4rem" /></template></Column>
     </DataTable>
   </div>
 </template>

@@ -90,6 +90,8 @@ func persistRewrapped(ctx context.Context, q *dbq.Queries, row dbq.ListStoredSec
 		return q.RewrapOAuthStateSecret(ctx, dbq.RewrapOAuthStateSecretParams{NewStored: next, RowKey: row.RowKey, OldStored: row.Stored})
 	case "env_var":
 		return q.RewrapEnvVarSecret(ctx, dbq.RewrapEnvVarSecretParams{NewStored: next, RowKey: pgID, OldStored: row.Stored})
+	case "host_management":
+		return q.RewrapHostManagementSecret(ctx, dbq.RewrapHostManagementSecretParams{NewStored: next, Field: row.Field, RowKey: pgID, OldStored: row.Stored})
 	default:
 		return 0, fmt.Errorf("unknown secret kind %q", row.Kind)
 	}

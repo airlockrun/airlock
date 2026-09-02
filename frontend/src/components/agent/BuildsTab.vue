@@ -5,6 +5,7 @@ import { useConfirm } from 'primevue/useconfirm'
 import { useToast } from 'primevue/usetoast'
 import { useBuildsStore } from '@/stores/builds'
 import type { AgentBuildInfo } from '@/gen/airlock/v1/types_pb'
+import { useAirlockI18n } from '@/i18n'
 
 const props = defineProps<{ agentId: string; currentSourceRef: string; readOnlyGit?: boolean }>()
 const emit = defineEmits<{ populated: [count: number] }>()
@@ -12,6 +13,7 @@ const router = useRouter()
 const confirm = useConfirm()
 const toast = useToast()
 const store = useBuildsStore()
+const { t, formatDate, formatNumber } = useAirlockI18n()
 watch(() => store.builds.length, (n) => emit('populated', n), { immediate: true })
 
 const rollingBack = ref<string | null>(null)
@@ -35,17 +37,35 @@ function typeSeverity(type: string): string {
 
 function formatCost(cost: number): string {
   if (!cost) return '-'
-  if (cost < 1) return `$${cost.toFixed(4)}`
-  return `$${cost.toFixed(2)}`
+  return formatNumber(cost, {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: cost < 1 ? 4 : 2,
+    maximumFractionDigits: cost < 1 ? 4 : 2,
+  })
 }
 
 function formatTimestamp(ts: any): string {
   if (!ts) return '-'
   if (ts.seconds !== undefined) {
-    return new Date(Number(ts.seconds) * 1000).toLocaleString()
+    return formatDate(new Date(Number(ts.seconds) * 1000), {
+      year: 'numeric',
+      month: 'numeric',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      second: '2-digit',
+    })
   }
   const d = new Date(ts)
-  return isNaN(d.getTime()) ? '-' : d.toLocaleString()
+  return isNaN(d.getTime()) ? '-' : formatDate(d, {
+    year: 'numeric',
+    month: 'numeric',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    second: '2-digit',
+  })
 }
 
 function shortHash(ref: string): string {
@@ -55,9 +75,31 @@ function shortHash(ref: string): string {
 function buildLabel(b: AgentBuildInfo): string {
   if (b.type === 'rollback') {
     const target = b.rollbackTargetSourceRef || b.rollbackTargetId
-    return target ? `Rolled back to ${shortHash(target)}` : 'Rolled back (target deleted)'
+    return target
+      ? t('operations.build.list.rolledBackTo', { target: shortHash(target) })
+      : t('operations.build.list.rolledBackDeleted')
   }
   return b.instructions || '-'
+}
+
+function buildTypeLabel(type: string): string {
+  switch (type) {
+    case 'build': return t('operations.build.type.build')
+    case 'upgrade': return t('operations.build.type.upgrade')
+    case 'rollback': return t('operations.build.type.rollback')
+    default: return type
+  }
+}
+
+function buildStatusLabel(status: string): string {
+  switch (status) {
+    case 'building': return t('operations.build.status.building')
+    case 'complete': return t('operations.build.status.complete')
+    case 'failed': return t('operations.build.status.failed')
+    case 'refused': return t('operations.build.status.refused')
+    case 'cancelled': return t('operations.build.status.cancelled')
+    default: return status
+  }
 }
 
 function canRollback(b: AgentBuildInfo): boolean {
@@ -76,14 +118,11 @@ function navigateToBuild(event: { data: AgentBuildInfo }) {
 
 function onRollback(b: AgentBuildInfo) {
   confirm.require({
-    header: `Roll back to ${shortHash(b.sourceRef)}?`,
-    message:
-      'This reverses the app to a previous build. Migrations will be ' +
-      'down-applied - data added by newer migrations may be lost. ' +
-      'Forward commits stay reachable via a pre-rollback branch. Continue?',
+    header: t('operations.build.rollback.title', { target: shortHash(b.sourceRef) }),
+    message: t('operations.build.rollback.message'),
     icon: 'pi pi-exclamation-triangle',
-    acceptLabel: 'Roll back',
-    rejectLabel: 'Cancel',
+    acceptLabel: t('operations.build.rollback.accept'),
+    rejectLabel: t('operations.common.cancel'),
     acceptClass: 'p-button-warning',
     accept: async () => {
       rollingBack.value = b.id
@@ -91,16 +130,16 @@ function onRollback(b: AgentBuildInfo) {
         await store.rollback(props.agentId, b.id)
         toast.add({
           severity: 'info',
-          summary: 'Rollback started',
-          detail: 'Watch the builds list for progress.',
+          summary: t('operations.build.rollback.started'),
+          detail: t('operations.build.rollback.watchProgress'),
           life: 4000,
         })
         await store.fetchBuilds(props.agentId)
       } catch (err: any) {
         toast.add({
           severity: 'error',
-          summary: 'Rollback failed to start',
-          detail: err?.response?.data?.error ?? err?.message ?? 'unknown error',
+          summary: t('operations.build.rollback.failed'),
+          detail: err?.response?.data?.error ?? err?.message ?? t('operations.common.unknownError'),
           life: 6000,
         })
       } finally {
@@ -127,32 +166,32 @@ onMounted(() => {
     >
       <template #empty>
         <div style="text-align: center; padding: 2rem; color: var(--p-text-muted-color)">
-          No builds yet.
+          {{ t('operations.build.list.empty') }}
         </div>
       </template>
-      <Column header="Type">
+      <Column :header="t('operations.build.list.type')">
         <template #body="{ data: b }">
-          <Tag :value="b.type" :severity="typeSeverity(b.type)" />
+          <Tag :value="buildTypeLabel(b.type)" :severity="typeSeverity(b.type)" />
         </template>
       </Column>
-      <Column header="Description">
+      <Column :header="t('operations.build.list.description')">
         <template #body="{ data: b }">
           <span class="build-label">{{ buildLabel(b) }}</span>
         </template>
       </Column>
-      <Column header="Status">
+      <Column :header="t('operations.build.list.status')">
         <template #body="{ data: b }">
-          <Tag :value="b.status" :severity="statusSeverity(b.status)" />
+          <Tag :value="buildStatusLabel(b.status)" :severity="statusSeverity(b.status)" />
         </template>
       </Column>
-      <Column header="Result">
+      <Column :header="t('operations.build.list.result')">
         <template #body="{ data: b }">
           <div class="result-cell">
             <Tag
               v-if="b.status === 'failed' && b.failureKind === 'infra'"
-              value="Platform error"
+              :value="t('operations.build.platformError')"
               severity="warn"
-              v-tooltip.top="'A build infrastructure failure (toolserver/docker/deploy), not your app\'s code.'"
+              v-tooltip.top="t('operations.build.platformErrorTooltip')"
             />
             <div v-if="b.exitMessage" :class="b.exitStatus === 'success' ? 'result-ok' : 'result-bad'">
               <i :class="b.exitStatus === 'success' ? 'pi pi-check' : 'pi pi-times'" />
@@ -165,22 +204,22 @@ onMounted(() => {
           </div>
         </template>
       </Column>
-      <Column header="Started">
+      <Column :header="t('operations.build.list.started')">
         <template #body="{ data: b }">
           {{ formatTimestamp(b.startedAt) }}
         </template>
       </Column>
-      <Column header="Model">
+      <Column :header="t('operations.build.list.model')">
         <template #body="{ data: b }">
           <span class="build-model">{{ b.buildModel || '-' }}</span>
         </template>
       </Column>
-      <Column header="Cost">
+      <Column :header="t('operations.build.list.cost')">
         <template #body="{ data: b }">
           {{ formatCost(b.llmCostEstimate) }}
         </template>
       </Column>
-      <Column header="Finished">
+      <Column :header="t('operations.build.list.finished')">
         <template #body="{ data: b }">
           {{ formatTimestamp(b.finishedAt) }}
         </template>
@@ -190,7 +229,7 @@ onMounted(() => {
           <Button
             v-if="canRollback(b)"
             icon="pi pi-history"
-            label="Rollback"
+            :label="t('operations.build.rollback.button')"
             severity="secondary"
             size="small"
             text
@@ -202,14 +241,14 @@ onMounted(() => {
     </DataTable>
 
     <DataTable v-else :value="[{}, {}, {}]">
-      <Column header="Type"><template #body><Skeleton width="4rem" /></template></Column>
-      <Column header="Description"><template #body><Skeleton /></template></Column>
-      <Column header="Status"><template #body><Skeleton width="5rem" /></template></Column>
-      <Column header="Result"><template #body><Skeleton /></template></Column>
-      <Column header="Started"><template #body><Skeleton /></template></Column>
-      <Column header="Model"><template #body><Skeleton width="5rem" /></template></Column>
-      <Column header="Cost"><template #body><Skeleton width="4rem" /></template></Column>
-      <Column header="Finished"><template #body><Skeleton /></template></Column>
+      <Column :header="t('operations.build.list.type')"><template #body><Skeleton width="4rem" /></template></Column>
+      <Column :header="t('operations.build.list.description')"><template #body><Skeleton /></template></Column>
+      <Column :header="t('operations.build.list.status')"><template #body><Skeleton width="5rem" /></template></Column>
+      <Column :header="t('operations.build.list.result')"><template #body><Skeleton /></template></Column>
+      <Column :header="t('operations.build.list.started')"><template #body><Skeleton /></template></Column>
+      <Column :header="t('operations.build.list.model')"><template #body><Skeleton width="5rem" /></template></Column>
+      <Column :header="t('operations.build.list.cost')"><template #body><Skeleton width="4rem" /></template></Column>
+      <Column :header="t('operations.build.list.finished')"><template #body><Skeleton /></template></Column>
       <Column header=""><template #body><Skeleton width="5rem" /></template></Column>
     </DataTable>
   </div>

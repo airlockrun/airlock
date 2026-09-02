@@ -11,9 +11,11 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import api from '@/api/client'
+import { useAirlockI18n } from '@/i18n'
 
 const route = useRoute()
 const router = useRouter()
+const { t } = useAirlockI18n()
 
 const submitting = ref(false)
 const error = ref('')
@@ -39,10 +41,15 @@ const agentIdentifier = computed(() => {
   const m = resource.value.match(/\/api\/agent\/([^/]+)\/mcp$/)
   return m ? m[1] : ''
 })
+const consentApp = computed(() => {
+  const name = agentInfo.value?.name || agentIdentifier.value
+  const slug = agentInfo.value?.slug
+  return slug && slug !== name ? t('auth.consent.appWithSlug', { name, slug }) : name
+})
 
 async function fetchContext() {
   if (!agentIdentifier.value || !clientId.value) {
-    error.value = 'Missing OAuth parameters. Cannot continue.'
+    error.value = t('auth.consent.missingParameters')
     return
   }
   try {
@@ -81,9 +88,9 @@ async function decide(decision: 'approve' | 'deny') {
       window.location.href = data.redirect_to
       return
     }
-    error.value = 'Server did not return a redirect URL.'
+    error.value = t('auth.consent.missingRedirect')
   } catch (err: any) {
-    error.value = err?.response?.data?.error || err?.message || 'Consent failed'
+    error.value = err?.response?.data?.error || err?.message || t('auth.consent.failed')
   } finally {
     submitting.value = false
     decisionInFlight.value = null
@@ -96,43 +103,36 @@ onMounted(fetchContext)
 <template>
   <div class="consent-page">
     <Card class="consent-card">
-      <template #title>Authorize external app</template>
+      <template #title>{{ t('auth.consent.title') }}</template>
       <template #content>
         <Message v-if="error" severity="error" :closable="false">{{ error }}</Message>
 
         <div v-if="!error">
-          <p>
-            <strong>{{ clientInfo?.name || clientId }}</strong>
-            is requesting access to your app
-            <strong>{{ agentInfo?.name || agentIdentifier }}</strong>
-            <span v-if="agentInfo?.slug && agentInfo.slug !== agentInfo.name">
-              (<code>{{ agentInfo.slug }}</code>)
-            </span>.
-          </p>
+          <p>{{ t('auth.consent.request', { client: clientInfo?.name || clientId, app: consentApp }) }}</p>
 
-          <p style="margin-top: 1rem">It will be able to:</p>
+          <p style="margin-top: 1rem">{{ t('auth.consent.abilities') }}</p>
           <ul>
-            <li>Send prompts and call the tools this app exposes (scope <code>{{ scope }}</code>).</li>
-            <li>Read your conversations with this app.</li>
+            <li>{{ t('auth.consent.sendAndCall', { scope }) }}</li>
+            <li>{{ t('auth.consent.readConversations') }}</li>
           </ul>
 
           <Message severity="info" :closable="false" style="margin-top: 1rem">
-            Access is granted for 90 days. You can revoke it any time in
-            <RouterLink to="/settings">Settings &rarr; Connected apps</RouterLink>.
+            {{ t('auth.consent.duration') }}
+            <RouterLink to="/settings">{{ t('auth.consent.connectedAppsLink') }}</RouterLink>.
           </Message>
         </div>
       </template>
       <template #footer>
         <div class="footer-actions">
           <Button
-            label="Deny"
+            :label="t('auth.action.deny')"
             severity="secondary"
             :disabled="submitting"
             :loading="decisionInFlight === 'deny'"
             @click="decide('deny')"
           />
           <Button
-            label="Approve"
+            :label="t('auth.action.approve')"
             :disabled="submitting || !!error"
             :loading="decisionInFlight === 'approve'"
             @click="decide('approve')"

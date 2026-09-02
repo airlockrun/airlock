@@ -34,26 +34,29 @@ SELECT * FROM agent_mcp_servers WHERE id = @id;
 -- the caller's grantee set. Owners implicitly hold every capability.
 
 -- name: ListAvailableConnections :many
-SELECT c.id, c.slug, c.name, c.display_name, c.auth_mode,
+SELECT c.id, c.owner_principal_id, c.slug, c.name, c.display_name, c.auth_mode,
        (c.auth_mode = 'none' OR (c.access_token_ref != '' AND (c.auth_mode <> 'oauth' OR c.scopes_verified)))::boolean AS authorized,
        c.created_at,
        (SELECT count(*) FROM agent_resource_needs n WHERE n.bound_connection_id = c.id)::int AS agent_count,
        (CASE WHEN c.owner_principal_id = ANY (@principal_ids::uuid[])
-           THEN ARRAY['view', 'bind', 'manage']::text[]
-           ELSE ARRAY(
-               SELECT DISTINCT capability
-               FROM resource_grants g, unnest(g.capabilities) AS capability
-               WHERE g.connection_id = c.id AND g.grantee_id = ANY (@principal_ids::uuid[])
-               ORDER BY capability
-           )
+            THEN ARRAY['view', 'bind', 'manage']::text[]
+            ELSE ARRAY(
+                SELECT DISTINCT capability
+                FROM (
+                    SELECT unnest(g.capabilities) AS capability FROM resource_grants g
+                    WHERE g.connection_id = c.id AND g.grantee_id = ANY (@principal_ids::uuid[])
+                    UNION ALL SELECT 'view' WHERE @governance_view::boolean
+                ) available
+                ORDER BY capability
+            )
        END)::text[] AS capabilities
 FROM connections c
-WHERE c.lifecycle = 'active' AND (c.owner_principal_id = ANY (@principal_ids::uuid[])
+WHERE c.lifecycle = 'active' AND (@governance_view::boolean OR c.owner_principal_id = ANY (@principal_ids::uuid[])
    OR EXISTS (SELECT 1 FROM resource_grants g WHERE g.connection_id = c.id AND g.grantee_id = ANY (@principal_ids::uuid[])))
 ORDER BY c.display_name, c.slug;
 
 -- name: ListAvailableMCPServers :many
-SELECT m.id, m.slug, m.name, m.display_name, m.auth_mode,
+SELECT m.id, m.owner_principal_id, m.slug, m.name, m.display_name, m.auth_mode,
        (m.auth_mode = 'none' OR (m.access_token_ref != '' AND (m.auth_mode NOT IN ('oauth', 'oauth_discovery') OR m.scopes_verified)))::boolean AS authorized,
        m.created_at,
        (SELECT count(*) FROM agent_resource_needs n WHERE n.bound_mcp_id = m.id)::int AS agent_count,
@@ -61,15 +64,70 @@ SELECT m.id, m.slug, m.name, m.display_name, m.auth_mode,
            THEN ARRAY['view', 'bind', 'manage']::text[]
            ELSE ARRAY(
                SELECT DISTINCT capability
-               FROM resource_grants g, unnest(g.capabilities) AS capability
-               WHERE g.mcp_server_id = m.id AND g.grantee_id = ANY (@principal_ids::uuid[])
+                FROM (
+                    SELECT unnest(g.capabilities) AS capability FROM resource_grants g
+                    WHERE g.mcp_server_id = m.id AND g.grantee_id = ANY (@principal_ids::uuid[])
+                    UNION ALL SELECT 'view' WHERE @governance_view::boolean
+                ) available
                ORDER BY capability
            )
        END)::text[] AS capabilities
 FROM agent_mcp_servers m
-WHERE m.lifecycle = 'active' AND (m.owner_principal_id = ANY (@principal_ids::uuid[])
+WHERE m.lifecycle = 'active' AND (@governance_view::boolean OR m.owner_principal_id = ANY (@principal_ids::uuid[])
    OR EXISTS (SELECT 1 FROM resource_grants g WHERE g.mcp_server_id = m.id AND g.grantee_id = ANY (@principal_ids::uuid[])))
 ORDER BY m.display_name, m.slug;
+
+-- name: ListAvailableGitCredentials :many
+SELECT credential.id, credential.user_id AS owner_principal_id, credential.type,
+       credential.name, credential.github_install_id, credential.created_at, credential.last_used_at,
+       CASE WHEN credential.user_id = ANY (@principal_ids::uuid[])
+           THEN ARRAY['view', 'bind', 'manage']::text[]
+           ELSE ARRAY(
+               SELECT DISTINCT capability FROM (
+                   SELECT unnest(grant_row.capabilities) AS capability
+                   FROM resource_grants grant_row
+                   WHERE grant_row.git_credential_id = credential.id
+                     AND grant_row.grantee_id = ANY (@principal_ids::uuid[])
+                   UNION ALL SELECT 'view' WHERE @governance_view::boolean
+               ) available ORDER BY capability
+           )
+       END::text[] AS capabilities
+FROM git_credentials credential
+WHERE @governance_view::boolean
+   OR credential.user_id = ANY (@principal_ids::uuid[])
+   OR EXISTS (
+       SELECT 1 FROM resource_grants grant_row
+       WHERE grant_row.git_credential_id = credential.id
+         AND grant_row.grantee_id = ANY (@principal_ids::uuid[])
+   )
+ORDER BY credential.name, credential.id;
+
+-- name: ListAvailableConnectorTargetGroups :many
+SELECT target_group.*,
+       count(member.connector_id)::int AS member_count,
+       CASE WHEN target_group.owner_principal_id = ANY (@principal_ids::uuid[])
+           THEN ARRAY['view', 'bind', 'manage']::text[]
+           ELSE ARRAY(
+               SELECT DISTINCT capability FROM (
+                   SELECT unnest(grant_row.capabilities) AS capability
+                   FROM resource_grants grant_row
+                   WHERE grant_row.connector_target_group_id = target_group.id
+                     AND grant_row.grantee_id = ANY (@principal_ids::uuid[])
+                   UNION ALL SELECT 'view' WHERE @governance_view::boolean
+               ) available ORDER BY capability
+           )
+       END::text[] AS capabilities
+FROM connector_target_groups target_group
+LEFT JOIN connector_target_group_members member ON member.group_id = target_group.id
+WHERE @governance_view::boolean
+   OR target_group.owner_principal_id = ANY (@principal_ids::uuid[])
+   OR EXISTS (
+       SELECT 1 FROM resource_grants grant_row
+       WHERE grant_row.connector_target_group_id = target_group.id
+         AND grant_row.grantee_id = ANY (@principal_ids::uuid[])
+   )
+GROUP BY target_group.id
+ORDER BY target_group.name, target_group.id;
 
 -- name: ListConnectionConsumers :many
 SELECT a.id AS agent_id, a.name AS agent_name, a.slug AS agent_slug,

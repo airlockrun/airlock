@@ -30,6 +30,9 @@ import {
   type NotificationEvent,
 } from '@/gen/airlock/v1/realtime_pb'
 import { formatToolArgs, toolDescription, toolLabel, toolOutputInfo, type MsgBlock, type ToolBlock } from '@/utils/messageGroup'
+import { useAirlockI18n, type AirlockI18nComposable } from '@/i18n'
+
+type Translate = AirlockI18nComposable['t']
 
 // Trimmed sysagent equivalent of stores/chat.ts. Sysagent conversations stay
 // short (operator chats), so this store skips the agent-chat machinery
@@ -87,7 +90,7 @@ export interface DisplayMessage {
 // Tool results from sol's MessageToGoAI expansion land on their own
 // role=tool row; we fold each into the matching tool-call block from
 // a prior row, then hide the tool row from the bubble list.
-function enrichMessages(rows: SystemMessageInfo[]): DisplayMessage[] {
+function enrichMessages(rows: SystemMessageInfo[], t: Translate): DisplayMessage[] {
   const out: DisplayMessage[] = rows.map((m) => ({
     id: m.id,
     role: m.role,
@@ -125,7 +128,7 @@ function enrichMessages(rows: SystemMessageInfo[]): DisplayMessage[] {
           kind: 'tool',
           toolCallId: p.toolCallId,
           toolName: p.toolName || 'tool',
-          label: toolLabel(p.toolName || 'tool', rawArgs),
+          label: toolLabel(p.toolName || 'tool', rawArgs, t),
           input: formatToolArgs(rawArgs),
           description: toolDescription(rawArgs),
           output: '',
@@ -155,7 +158,7 @@ function enrichMessages(rows: SystemMessageInfo[]): DisplayMessage[] {
       const entry = callEntries.get(p.toolCallId)
       if (!entry) continue
       if (p.output && typeof p.output === 'object') {
-        const info = toolOutputInfo(p.output)
+        const info = toolOutputInfo(p.output, t)
         entry.outcome = info.outcome
         if (info.outcome === 'error') entry.error = info.text
         else entry.output = info.text
@@ -183,6 +186,7 @@ function parseParts(parts: unknown): any[] | null {
 }
 
 export const useSystemChatStore = defineStore('systemChat', () => {
+  const { t } = useAirlockI18n()
   const conversationId = ref<string | null>(null)
   const conversation = ref<SystemConversationInfo | null>(null)
   const messages = ref<DisplayMessage[]>([])
@@ -334,7 +338,7 @@ export const useSystemChatStore = defineStore('systemChat', () => {
           role: 'assistant',
           source: 'error',
           parts: '',
-          content: ev.error || 'Run failed.',
+          content: ev.error || t('chat.error.runFailed'),
           costEstimate: 0,
         })
       }),
@@ -383,7 +387,7 @@ export const useSystemChatStore = defineStore('systemChat', () => {
         kind: 'tool',
         toolCallId: b.toolCallId,
         toolName: tc?.toolName || 'tool',
-        label: toolLabel(tc?.toolName || 'tool', rawArgs),
+        label: toolLabel(tc?.toolName || 'tool', rawArgs, t),
         input: formatToolArgs(rawArgs),
         description: toolDescription(rawArgs),
         output: tc?.output || '',
@@ -471,7 +475,7 @@ export const useSystemChatStore = defineStore('systemChat', () => {
       const { data } = await api.get(`/api/v1/system/conversations/${id}`)
       const resp = fromJson(GetSystemConversationResponseSchema, data)
       conversation.value = resp.conversation || null
-      messages.value = enrichMessages(resp.messages)
+      messages.value = enrichMessages(resp.messages, t)
       if (conversation.value) restorePendingConfirmation(conversation.value)
       // No explicit WS subscribe — the user's UUID topic is auto-subscribed
       // on WS connect (api/ws.go), so every sysagent event for any of this
@@ -504,7 +508,7 @@ export const useSystemChatStore = defineStore('systemChat', () => {
     const confirmationToRestore = isResume ? pendingConfirmation.value : null
     const runIdToRestore = isResume ? currentRunId.value : null
     const wasNew = !conversationId.value
-    if (wasNew && isResume) throw new Error('cannot resume without an active conversation')
+    if (wasNew && isResume) throw new Error(t('chat.error.cannotResumeWithoutConversation'))
     if (wasNew) {
       // Mint the conversation server-side now that there's a first
       // message to anchor it. Title defaults to "New chat" on the
@@ -515,7 +519,7 @@ export const useSystemChatStore = defineStore('systemChat', () => {
       conversationId.value = created.id
       conversation.value = created
     }
-    if (!conversationId.value) throw new Error('no active conversation')
+    if (!conversationId.value) throw new Error(t('chat.error.noActiveConversation'))
     // The run this confirmation belongs to (from the run.confirmation_required
     // event). Sent so the backend waits for THIS run to suspend rather than
     // racing the conversation's awaiting_confirmation flip. Empty on the

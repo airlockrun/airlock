@@ -24,12 +24,26 @@ import {
   UpdateSystemSettingsResponseSchema,
 } from '@/gen/airlock/v1/api_pb'
 import type { SystemSettingsInfo } from '@/gen/airlock/v1/types_pb'
+import { useAirlockI18n } from '@/i18n'
 
 const auth = useAuthStore()
 const catalog = useCatalogStore()
 const providers = useProvidersStore()
 const toast = useToast()
 const { groupModels, searchModelOptions } = useModelCapabilities()
+const { t, locale, availableLocales, setLocale } = useAirlockI18n()
+const uiLocale = computed({
+  get: () => locale.value,
+  set: (value: string) => setLocale(value),
+})
+const localeOptions = computed(() => availableLocales.map(value => ({
+  label: value === 'en'
+    ? t('administration.locale.english')
+    : value === 'ru'
+      ? t('administration.locale.russian')
+      : value,
+  value,
+})))
 
 // Default models (admin only). Keyed by the SystemSettingsInfo field key
 // (camelCase) so assignment back to the proto payload is trivial.
@@ -60,6 +74,7 @@ const slotProviderField: Record<keyof typeof defaults.value, keyof SystemSetting
 }
 
 function applySettings(info: SystemSettingsInfo) {
+  if (availableLocales.includes(info.uiLocale)) setLocale(info.uiLocale)
   for (const k of Object.keys(defaults.value) as (keyof typeof defaults.value)[]) {
     const modelName = (info as any)[k] || ''
     const providerKey = slotProviderField[k]
@@ -75,11 +90,13 @@ onMounted(async () => {
     // Pickers depend on configured providers — fetch first so the
     // applySettings packed values match an option in the dropdown.
     await providers.fetchProviders()
+    let info: SystemSettingsInfo | undefined
     try {
       const { data } = await api.get('/api/v1/settings')
       const resp = fromJson(GetSystemSettingsResponseSchema, data)
-      if (resp.settings) applySettings(resp.settings)
+      info = resp.settings
     } catch { /* ignore */ }
+    if (info) applySettings(info)
     catalog.fetchConfiguredModels()
     catalog.fetchCapabilities()
   }
@@ -100,67 +117,67 @@ interface DefaultRow {
 const defaultRows = computed<DefaultRow[]>(() => [
   {
     key: 'defaultBuildModel',
-    label: 'Build Model',
+    label: t('administration.settings.buildLabel'),
     icon: 'pi pi-hammer',
-    help: 'Used by Sol for app code generation and upgrades.',
+    help: t('administration.settings.buildHelp'),
     options: groupModels(isLanguage),
-    placeholder: 'Select default build model',
+    placeholder: t('administration.settings.buildPlaceholder'),
   },
   {
     key: 'defaultExecModel',
-    label: 'Execution Model (Text)',
+    label: t('administration.settings.executionLabel'),
     icon: 'pi pi-align-left',
-    help: 'Runtime default when apps make language-model calls.',
+    help: t('administration.settings.executionHelp'),
     options: groupModels(isLanguage),
-    placeholder: 'Select default execution model',
+    placeholder: t('administration.settings.executionPlaceholder'),
   },
   {
     key: 'defaultVisionModel',
-    label: 'Vision',
+    label: t('administration.capability.vision'),
     icon: 'pi pi-image',
-    help: 'Default model for image → text tasks.',
+    help: t('administration.settings.visionHelp'),
     options: groupModels((m: CatalogModel) => isLanguage(m) && hasCap(m, 'vision')),
-    placeholder: 'Select vision model',
+    placeholder: t('administration.settings.visionPlaceholder'),
   },
   {
     key: 'defaultSttModel',
-    label: 'STT',
+    label: t('administration.settings.transcriptionLabel'),
     icon: 'pi pi-microphone',
-    help: 'Telegram voice notes are auto-transcribed with this model before being sent to apps. Leave empty to disable.',
+    help: t('administration.settings.transcriptionHelp'),
     options: groupModels(isTranscription),
-    placeholder: 'Select speech-to-text model',
+    placeholder: t('administration.settings.transcriptionPlaceholder'),
   },
   {
     key: 'defaultTtsModel',
-    label: 'TTS',
+    label: t('administration.settings.speechLabel'),
     icon: 'pi pi-volume-up',
-    help: 'Default model for text → speech synthesis.',
+    help: t('administration.settings.speechHelp'),
     options: groupModels(isSpeech),
-    placeholder: 'Select text-to-speech model',
+    placeholder: t('administration.settings.speechPlaceholder'),
   },
   {
     key: 'defaultImageGenModel',
-    label: 'Image Gen',
+    label: t('administration.settings.imageGenerationLabel'),
     icon: 'pi pi-palette',
-    help: 'Default model for text → image generation.',
+    help: t('administration.settings.imageGenerationHelp'),
     options: groupModels(isImageGen),
-    placeholder: 'Select image-generation model',
+    placeholder: t('administration.settings.imageGenerationPlaceholder'),
   },
   {
     key: 'defaultEmbeddingModel',
-    label: 'Embedding',
+    label: t('administration.capability.embedding'),
     icon: 'pi pi-database',
-    help: 'Default model for text → vector embeddings (e.g. OpenAI text-embedding-3-small).',
+    help: t('administration.settings.embeddingHelp'),
     options: groupModels(isEmbedding),
-    placeholder: 'Select embedding model',
+    placeholder: t('administration.settings.embeddingPlaceholder'),
   },
   {
     key: 'defaultSearchModel',
-    label: 'Web Search',
+    label: t('administration.settings.searchLabel'),
     icon: 'pi pi-search',
-    help: 'Default web search backend + model. Only tool-capable text models are listed (the backend runs search by calling the model with a search tool). Pick "Provider default" to let the backend choose its model.',
+    help: t('administration.settings.searchHelp'),
     options: searchModelOptions.value,
-    placeholder: 'Select search backend',
+    placeholder: t('administration.settings.searchPlaceholder'),
   },
 ])
 
@@ -173,6 +190,7 @@ function isGrouped(opts: DefaultRow['options']): boolean {
 
 async function saveDefaults() {
   defaultsLoading.value = true
+  let savedSettings: SystemSettingsInfo | undefined
   try {
     const split = (k: keyof typeof defaults.value) => splitModelValue(defaults.value[k])
     const build = split('defaultBuildModel')
@@ -201,6 +219,7 @@ async function saveDefaults() {
       defaultEmbeddingProviderId: embedding.providerRowID,
       defaultSearchModel:         search.modelName,
       defaultSearchProviderId:    search.providerRowID,
+      uiLocale:                   uiLocale.value,
     }
     const req = toJson(UpdateSystemSettingsRequestSchema, {
       $typeName: 'airlock.v1.UpdateSystemSettingsRequest',
@@ -208,29 +227,43 @@ async function saveDefaults() {
     })
     const { data } = await api.put('/api/v1/settings', req)
     const resp = fromJson(UpdateSystemSettingsResponseSchema, data)
-    if (resp.settings) applySettings(resp.settings)
-    toast.add({ severity: 'success', summary: 'Defaults saved', life: 3000 })
+    savedSettings = resp.settings
   } catch (err: any) {
-    toast.add({ severity: 'error', summary: err.response?.data?.error || 'Failed', life: 5000 })
+    toast.add({ severity: 'error', summary: err.response?.data?.error || t('administration.settings.failed'), life: 5000 })
+    return
   } finally {
     defaultsLoading.value = false
   }
+  if (savedSettings) applySettings(savedSettings)
+  toast.add({ severity: 'success', summary: t('administration.settings.saved'), life: 3000 })
 }
 
 </script>
 
 <template>
   <div style="max-width: 36rem">
-    <h1 style="margin: 0 0 1.5rem; font-size: 1.5rem">System defaults</h1>
+    <h1 style="margin: 0 0 1.5rem; font-size: 1.5rem">{{ t('administration.settings.title') }}</h1>
 
     <!-- Default Models (admin only) -->
     <Card v-if="auth.can('tenant.settings.update')" style="margin-bottom: 1.5rem">
-      <template #title>Default Models</template>
+      <template #title>{{ t('administration.settings.systemSettings') }}</template>
       <template #subtitle>
-        Per-capability defaults. Used wherever the system needs a model for a capability and no app-specific override is set.
+        {{ t('administration.settings.subtitle') }}
       </template>
       <template #content>
         <div style="display: flex; flex-direction: column; gap: 1.25rem">
+          <div style="display: flex; flex-direction: column; gap: 0.5rem">
+            <label for="system-ui-locale" style="font-weight: 500">{{ t('administration.settings.interfaceLanguage') }}</label>
+            <Select
+              id="system-ui-locale"
+              v-model="uiLocale"
+              :options="localeOptions"
+              optionLabel="label"
+              optionValue="value"
+              style="width: 100%"
+            />
+            <small style="color: var(--p-text-muted-color)">{{ t('administration.settings.interfaceLanguageHelp') }}</small>
+          </div>
           <div
             v-for="row in defaultRows"
             :key="row.key"
@@ -272,7 +305,7 @@ async function saveDefaults() {
             />
             <small style="color: var(--p-text-muted-color)">{{ row.help }}</small>
           </div>
-          <Button label="Save" :loading="defaultsLoading" @click="saveDefaults" style="align-self: flex-start" />
+          <Button :label="t('administration.action.save')" :loading="defaultsLoading" @click="saveDefaults" style="align-self: flex-start" />
         </div>
       </template>
     </Card>

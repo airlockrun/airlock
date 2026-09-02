@@ -3,6 +3,7 @@ import { ref, computed } from 'vue'
 import { fromJson } from '@bufbuild/protobuf'
 import api from '@/api/client'
 import { ListConversationFeedResponseSchema } from '@/gen/airlock/v1/api_pb'
+import { useAirlockI18n } from '@/i18n'
 
 // FeedItem is one sidebar row — an agent web conversation or a system
 // conversation — flattened from the merged backend feed.
@@ -29,6 +30,7 @@ interface Page {
 // + ordering; each page carries the cursor to resume from, so dropping a page is
 // just a pop (re-fetched on the way back down).
 export const useConversationFeedStore = defineStore('conversationFeed', () => {
+  const { t } = useAirlockI18n()
   const pages = ref<Page[]>([])
   const loading = ref(false)
   const loadingMore = ref(false)
@@ -41,7 +43,7 @@ export const useConversationFeedStore = defineStore('conversationFeed', () => {
       kind: c.kind === 'system' ? 'system' : 'agent',
       id: c.id,
       agentId: c.agentId,
-      title: c.title || (c.kind === 'system' ? 'New chat' : 'Untitled conversation'),
+      title: c.title || (c.kind === 'system' ? t('chat.feed.newChat') : t('chat.feed.untitledConversation')),
       updatedAtSec: Number(c.updatedAt?.seconds ?? 0n),
       status: c.status,
     }))

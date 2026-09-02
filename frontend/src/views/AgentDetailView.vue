@@ -18,6 +18,7 @@ import WebhooksTab from '@/components/agent/WebhooksTab.vue'
 import SchedulesTab from '@/components/agent/SchedulesTab.vue'
 import RoutesTab from '@/components/agent/RoutesTab.vue'
 import MCPServersTab from '@/components/agent/MCPServersTab.vue'
+import ConnectorsTab from '@/components/agent/ConnectorsTab.vue'
 import EnvVarsTab from '@/components/agent/EnvVarsTab.vue'
 import ToolsTab from '@/components/agent/ToolsTab.vue'
 import MembersTab from '@/components/agent/MembersTab.vue'
@@ -34,11 +35,15 @@ import { buildBadgeText } from '@/utils/buildBadge'
 import { applyAgentBuildEvent } from '@/utils/agentBuildLifecycle'
 import { markRaw } from 'vue'
 import { oauthCallbackNotice, setupSummary } from '@/utils/resources'
+import { useAirlockI18n } from '@/i18n'
 
 const route = useRoute()
 const router = useRouter()
 const toast = useToast()
 const confirm = useConfirm()
+const i18n = useAirlockI18n()
+const { t, formatNumber } = i18n
+const agentStatus = useAgentStatus()
 
 const catalog = useCatalogStore()
 const buildsStore = useBuildsStore()
@@ -67,14 +72,14 @@ async function saveRename() {
   const name = renameName.value.trim()
   const slug = renameSlug.value.trim()
   if (!name) {
-    toast.add({ severity: 'warn', summary: 'Name is required', life: 3000 })
+    toast.add({ severity: 'warn', summary: t('agents.detail.nameRequired'), life: 3000 })
     return
   }
   if (slug.length < 2 || slug.length > 63 || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) {
     toast.add({
       severity: 'warn',
-      summary: 'Invalid slug',
-      detail: '2–63 chars: lowercase letters/digits, single dashes between.',
+      summary: t('agents.detail.invalidSlug'),
+      detail: t('agents.detail.invalidSlugDetailRename'),
       life: 4000,
     })
     return
@@ -84,7 +89,7 @@ async function saveRename() {
     const updated = await agentsStore.renameAgent(agent.value.id, name, slug)
     agent.value = updated
     renameOpen.value = false
-    toast.add({ severity: 'success', summary: 'App renamed', life: 2500 })
+    toast.add({ severity: 'success', summary: t('agents.detail.renamed'), life: 2500 })
     // Repaint the address bar to the new slug (same cosmetic mechanism
     // as the router's vanity-URL afterEach; route.params.id stays UUID).
     const parts = window.location.pathname.split('/')
@@ -100,7 +105,7 @@ async function saveRename() {
     const status = e?.response?.status
     toast.add({
       severity: 'error',
-      summary: status === 409 ? 'Slug already taken' : 'Rename failed',
+      summary: status === 409 ? t('agents.detail.slugTaken') : t('agents.detail.renameFailed'),
       detail: e?.response?.data?.error,
       life: 5000,
     })
@@ -120,7 +125,7 @@ const cloning = ref(false)
 
 function openClone() {
   if (!agent.value) return
-  cloneName.value = `${agent.value.name} copy`
+  cloneName.value = t('agents.detail.copyName', { name: agent.value.name })
   cloneSlug.value = `${agent.value.slug}-copy`
   cloneOpen.value = true
 }
@@ -130,22 +135,22 @@ async function saveClone() {
   const name = cloneName.value.trim()
   const slug = cloneSlug.value.trim()
   if (!name) {
-    toast.add({ severity: 'warn', summary: 'Name is required', life: 3000 })
+    toast.add({ severity: 'warn', summary: t('agents.detail.nameRequired'), life: 3000 })
     return
   }
   if (slug.length < 2 || slug.length > 63 || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) {
-    toast.add({ severity: 'warn', summary: 'Invalid slug', detail: '2–63 chars: lowercase letters/digits, single dashes.', life: 4000 })
+    toast.add({ severity: 'warn', summary: t('agents.detail.invalidSlug'), detail: t('agents.detail.invalidSlugDetailClone'), life: 4000 })
     return
   }
   cloning.value = true
   try {
     const clone = await agentsStore.cloneAgent(agent.value.id, name, slug)
     cloneOpen.value = false
-    toast.add({ severity: 'success', summary: 'App cloned', detail: 'Building your copy…', life: 3000 })
+    toast.add({ severity: 'success', summary: t('agents.detail.cloned'), detail: t('agents.detail.buildingCopy'), life: 3000 })
     router.push(`/agents/${clone.slug}`)
   } catch (e: any) {
     const status = e?.response?.status
-    toast.add({ severity: 'error', summary: status === 409 ? 'Slug already taken' : 'Clone failed', detail: e?.response?.data?.error, life: 5000 })
+    toast.add({ severity: 'error', summary: status === 409 ? t('agents.detail.slugTaken') : t('agents.detail.cloneFailed'), detail: e?.response?.data?.error, life: 5000 })
   } finally {
     cloning.value = false
   }
@@ -173,13 +178,16 @@ function openTransfer() {
 
 function saveTransfer() {
   if (!agent.value || !transferTarget.value) {
-    toast.add({ severity: 'warn', summary: 'Pick a user to transfer to', life: 3000 })
+    toast.add({ severity: 'warn', summary: t('agents.detail.pickTransferUser'), life: 3000 })
     return
   }
   const target = transferUsers.value.find((u) => u.id === transferTarget.value)
   confirm.require({
-    message: `Transfer "${agent.value.name}" to ${target?.label ?? 'this user'}? You will lose access, and its connections, git credential, and bridges will be unbound.`,
-    header: 'Transfer ownership',
+    message: t('agents.detail.transferConfirm', {
+      name: agent.value.name,
+      user: target?.label ?? t('agents.detail.thisUser'),
+    }),
+    header: t('agents.detail.transferOwnership'),
     icon: 'pi pi-exclamation-triangle',
     acceptClass: 'p-button-danger',
     accept: async () => {
@@ -188,10 +196,10 @@ function saveTransfer() {
       try {
         await agentsStore.transferOwnership(agent.value.id, transferTarget.value)
         transferOpen.value = false
-        toast.add({ severity: 'success', summary: 'Ownership transferred', life: 3000 })
+        toast.add({ severity: 'success', summary: t('agents.detail.ownershipTransferred'), life: 3000 })
         router.push('/agents')
       } catch (e: any) {
-        toast.add({ severity: 'error', summary: 'Transfer failed', detail: e?.response?.data?.error, life: 5000 })
+        toast.add({ severity: 'error', summary: t('agents.detail.transferFailed'), detail: e?.response?.data?.error, life: 5000 })
       } finally {
         transferring.value = false
       }
@@ -209,7 +217,7 @@ const webUrl = ref<string | null>(null)
 const buildTasksDone = ref(0)
 const buildTasksTotal = ref(0)
 const buildPhase = ref('')
-const buildBadgeLabel = computed(() => buildBadgeText(buildPhase.value, buildTasksDone.value, buildTasksTotal.value))
+const buildBadgeLabel = computed(() => buildBadgeText(buildPhase.value, buildTasksDone.value, buildTasksTotal.value, t))
 
 // Per-section item counts emitted by each *Tab component via @populated.
 // Sections (and their right-rail entries) only render when count > 0, so the
@@ -255,21 +263,22 @@ watch(activeSectionId, (id) => {
 // sharing → source → registered surfaces. needsSetupKey ties a section to the
 // field on setupStatus that flags an unconfigured slot (see badgeFor below).
 // markRaw skips deep reactivity on the component refs — they're constants.
-const configSections = [
-  { id: 'members',        label: 'Members',        component: markRaw(MembersTab) },
-  { id: 'connections',    label: 'Connections',    component: markRaw(ConnectionsTab),   needsSetupKey: 'connections' as const },
-  { id: 'mcp-servers',    label: 'MCP Servers',    component: markRaw(MCPServersTab),    needsSetupKey: 'mcpServers' as const },
-  { id: 'env-vars',       label: 'Environment',    component: markRaw(EnvVarsTab),       needsSetupKey: 'envVars' as const },
-  { id: 'webhooks',       label: 'Webhooks',       component: markRaw(WebhooksTab) },
-  { id: 'schedules',      label: 'Schedules',      component: markRaw(SchedulesTab) },
-  { id: 'siblings',       label: 'Siblings',       component: markRaw(SiblingsTab), alwaysShow: true },
-  { id: 'access',         label: 'Access',         component: markRaw(AccessTab), alwaysShow: true },
-  { id: 'source',         label: 'Source',         component: markRaw(SourceTab), alwaysShow: true, adminOnly: true },
-  { id: 'routes',         label: 'Routes',         component: markRaw(RoutesTab) },
-  { id: 'tools',          label: 'Tools',          component: markRaw(ToolsTab) },
-  { id: 'models',         label: 'Models',         component: markRaw(ModelsTab) },
-] as const
-type ConfigSection = (typeof configSections)[number]
+const configSections = computed(() => [
+  { id: 'members',        label: t('agents.detail.section.members'),        component: markRaw(MembersTab) },
+  { id: 'connections',    label: t('agents.detail.section.connections'),    component: markRaw(ConnectionsTab),   needsSetupKey: 'connections' as const },
+  { id: 'mcp-servers',    label: t('agents.detail.section.mcpServers'),    component: markRaw(MCPServersTab),    needsSetupKey: 'mcpServers' as const },
+  { id: 'connectors',     label: t('agents.detail.section.connectors'),     component: markRaw(ConnectorsTab),     needsSetupKey: 'connectors' as const },
+  { id: 'env-vars',       label: t('agents.detail.section.environment'),    component: markRaw(EnvVarsTab),       needsSetupKey: 'envVars' as const },
+  { id: 'webhooks',       label: t('agents.detail.section.webhooks'),       component: markRaw(WebhooksTab) },
+  { id: 'schedules',      label: t('agents.detail.section.schedules'),      component: markRaw(SchedulesTab) },
+  { id: 'siblings',       label: t('agents.detail.section.siblings'),       component: markRaw(SiblingsTab), alwaysShow: true },
+  { id: 'access',         label: t('agents.detail.section.access'),         component: markRaw(AccessTab), alwaysShow: true },
+  { id: 'source',         label: t('agents.detail.section.source'),         component: markRaw(SourceTab), alwaysShow: true, adminOnly: true },
+  { id: 'routes',         label: t('agents.detail.section.routes'),         component: markRaw(RoutesTab) },
+  { id: 'tools',          label: t('agents.detail.section.tools'),          component: markRaw(ToolsTab) },
+  { id: 'models',         label: t('agents.detail.section.models'),         component: markRaw(ModelsTab) },
+] as const)
+type ConfigSection = (typeof configSections.value)[number]
 
 // Activity (Runs + Builds + Jobs) renders as the final section, but uses the same
 // counts machinery — visible when at least one of its inner lists has items.
@@ -289,7 +298,7 @@ const activityVisible = computed(() => isAgentAdmin.value && (
 // hidden entirely from non-admins rather than showing an action that 403s.
 const isAgentAdmin = computed(() => agent.value?.yourAccess === 'admin')
 const visibleSections = computed(() =>
-  configSections.filter((s) => {
+  configSections.value.filter((s) => {
     if ((s as any).adminOnly && !isAgentAdmin.value) return false
     return (s as any).alwaysShow || (counts.value[s.id] ?? 0) > 0
   }),
@@ -306,7 +315,7 @@ function badgeFor(section: ConfigSection): string | undefined {
   if (!key) return undefined
   const n = s[key]
   if (typeof n !== 'number' || n <= 0) return undefined
-  return `${n} need${n === 1 ? 's' : ''} setup`
+  return t('agents.detail.needsSetupCount', { count: n, formattedCount: formatNumber(n) })
 }
 
 // Bumped on every event that should refresh the data tabs (build
@@ -329,29 +338,29 @@ const actionItems = computed(() => {
     const running = !!agent.value?.running
     if (status === 'active') {
       if (running) {
-        items.push({ label: 'Suspend', icon: 'pi pi-pause', command: () => doSuspend() })
-        items.push({ label: 'Stop', icon: 'pi pi-stop', command: () => confirmStop() })
+        items.push({ label: t('agents.action.suspend'), icon: 'pi pi-pause', command: () => doSuspend() })
+        items.push({ label: t('agents.action.stop'), icon: 'pi pi-stop', command: () => confirmStop() })
       } else {
-        items.push({ label: 'Start', icon: 'pi pi-play', command: () => doStart() })
-        items.push({ label: 'Stop', icon: 'pi pi-stop', command: () => confirmStop() })
+        items.push({ label: t('agents.action.start'), icon: 'pi pi-play', command: () => doStart() })
+        items.push({ label: t('agents.action.stop'), icon: 'pi pi-stop', command: () => confirmStop() })
       }
     } else if (status === 'stopped' || status === 'failed') {
-      items.push({ label: 'Start', icon: 'pi pi-play', command: () => doStart() })
+      items.push({ label: t('agents.action.start'), icon: 'pi pi-play', command: () => doStart() })
     }
     items.push({
-      label: isReadOnlyGit.value ? 'Rebuild' : 'Upgrade',
+      label: isReadOnlyGit.value ? t('agents.action.rebuild') : t('agents.action.upgrade'),
       icon: isReadOnlyGit.value ? 'pi pi-refresh' : 'pi pi-arrow-up',
       command: () => doUpgrade(),
     })
   }
   if (canClone.value) {
-    items.push({ label: 'Clone', icon: 'pi pi-copy', command: () => openClone() })
+    items.push({ label: t('agents.action.clone'), icon: 'pi pi-copy', command: () => openClone() })
   }
   if (canTransfer.value) {
-    items.push({ label: 'Transfer ownership', icon: 'pi pi-user-edit', command: () => openTransfer() })
+    items.push({ label: t('agents.detail.transferOwnership'), icon: 'pi pi-user-edit', command: () => openTransfer() })
   }
   if (isAgentAdmin.value) {
-    items.push({ label: 'Delete', icon: 'pi pi-trash', command: () => confirmDelete() })
+    items.push({ label: t('agents.action.delete'), icon: 'pi pi-trash', command: () => confirmDelete() })
   }
   return items
 })
@@ -359,9 +368,9 @@ const actionItems = computed(() => {
 const statusTooltip = computed(() => {
   const status = agent.value?.status ?? ''
   const running = !!agent.value?.running
-  if (status === 'active' && running) return 'A container is live'
-  if (status === 'active' && !running) return 'No container running - starts automatically on next use'
-  if (status === 'stopped') return 'Stopped - will not auto-resume; click Start'
+  if (status === 'active' && running) return t('agents.detail.statusTooltip.running')
+  if (status === 'active' && !running) return t('agents.detail.statusTooltip.suspended')
+  if (status === 'stopped') return t('agents.detail.statusTooltip.stopped')
   return ''
 })
 
@@ -382,7 +391,7 @@ function handleOAuthCallback() {
   if (!status) return
   const message = typeof route.query.message === 'string' ? route.query.message : ''
   const resourceID = typeof route.query.resource_id === 'string' ? route.query.resource_id : ''
-  const notice = oauthCallbackNotice(status, message, resourceID)
+  const notice = oauthCallbackNotice(status, message, resourceID, i18n)
   toast.add({
     severity: notice.severity,
     summary: notice.summary,
@@ -434,7 +443,7 @@ function setupScrollSpy() {
     },
     { rootMargin: '-15% 0px -70% 0px', threshold: 0 },
   )
-  const ids = [...configSections.map((s) => s.id), 'activity']
+  const ids = [...configSections.value.map((s) => s.id), 'activity']
   for (const id of ids) {
     const el = document.getElementById(id)
     if (el) scrollObserver.observe(el)
@@ -533,11 +542,11 @@ function scrollToSection(id: string, e: Event) {
 }
 
 const setupTotal = computed(() => {
-  return setupSummary(setupStatus.value).total
+  return setupSummary(setupStatus.value, i18n).total
 })
 
 const setupTooltip = computed(() => {
-  return setupSummary(setupStatus.value).tooltip
+  return setupSummary(setupStatus.value, i18n).tooltip
 })
 
 let unsubBuild: (() => void) | null = null
@@ -560,7 +569,7 @@ onMounted(async () => {
     )
     webUrl.value = base && hasHome ? base + '/' : null
   } catch {
-    toast.add({ severity: 'error', summary: 'App not found', life: 3000 })
+    toast.add({ severity: 'error', summary: t('agents.detail.notFound'), life: 3000 })
     router.push('/agents')
     return
   } finally {
@@ -597,19 +606,19 @@ onMounted(async () => {
       return
     }
     if (payload.status === 'complete') {
-      toast.add({ severity: 'success', summary: 'Build complete', life: 3000 })
+      toast.add({ severity: 'success', summary: t('agents.detail.buildComplete'), life: 3000 })
       tabsKey.value++
     } else if (payload.status === 'failed') {
-      toast.add({ severity: 'error', summary: payload.error || 'Build failed', life: 10000 })
+      toast.add({ severity: 'error', summary: payload.error || t('agents.detail.buildFailed'), life: 10000 })
       tabsKey.value++
     } else if (payload.status === 'cancelled') {
-      toast.add({ severity: 'warn', summary: 'Build cancelled', life: 3000 })
+      toast.add({ severity: 'warn', summary: t('agents.detail.buildCancelled'), life: 3000 })
       tabsKey.value++
     } else if (payload.status === 'refused') {
       toast.add({
         severity: 'warn',
-        summary: 'Request declined',
-        detail: payload.error || "Outside the app builder's scope",
+        summary: t('agents.detail.requestDeclined'),
+        detail: payload.error || t('agents.detail.outsideBuilderScope'),
         life: 8000,
       })
       tabsKey.value++
@@ -626,8 +635,8 @@ onMounted(async () => {
     loadSetupStatus()
     toast.add({
       severity: 'success',
-      summary: 'Synced',
-      detail: `${agent.value?.slug ?? 'App'} synced`,
+      summary: t('agents.detail.synced'),
+      detail: t('agents.detail.appSynced', { name: agent.value?.slug ?? t('agents.detail.appFallback') }),
       life: 2500,
     })
   })
@@ -658,10 +667,8 @@ watch(() => route.hash, () => scheduleHashScroll(true))
 
 function confirmStop() {
   confirm.require({
-    message:
-      `Stop app "${agent.value?.name}"? It will not auto-resume on the ` +
-      'next trigger - you\'ll have to click Start to bring it back.',
-    header: 'Confirm Stop',
+    message: t('agents.detail.stopConfirm', { name: agent.value?.name ?? '' }),
+    header: t('agents.detail.stopTitle'),
     icon: 'pi pi-exclamation-triangle',
     acceptClass: 'p-button-warning',
     accept: async () => {
@@ -671,9 +678,9 @@ function confirmStop() {
           agent.value.status = 'stopped'
           agent.value.running = false
         }
-        toast.add({ severity: 'success', summary: 'App stopped', life: 3000 })
+        toast.add({ severity: 'success', summary: t('agents.detail.stopped'), life: 3000 })
       } catch (err: any) {
-        toast.add({ severity: 'error', summary: err.response?.data?.error || 'Stop failed', life: 5000 })
+        toast.add({ severity: 'error', summary: err.response?.data?.error || t('agents.detail.stopFailed'), life: 5000 })
       }
     },
   })
@@ -685,12 +692,12 @@ async function doSuspend() {
     if (agent.value) agent.value.running = false
     toast.add({
       severity: 'info',
-      summary: 'App suspended',
-      detail: 'Auto-resumes on the next trigger.',
+      summary: t('agents.detail.suspended'),
+      detail: t('agents.detail.suspendedDetail'),
       life: 3000,
     })
   } catch (err: any) {
-    toast.add({ severity: 'error', summary: err.response?.data?.error || 'Suspend failed', life: 5000 })
+    toast.add({ severity: 'error', summary: err.response?.data?.error || t('agents.detail.suspendFailed'), life: 5000 })
   }
 }
 
@@ -698,25 +705,25 @@ async function doStart() {
   try {
     await api.post(`/api/v1/agents/${agentId}/start`, {})
     if (agent.value) agent.value.status = 'active'
-    toast.add({ severity: 'success', summary: 'App started', life: 3000 })
+    toast.add({ severity: 'success', summary: t('agents.detail.started'), life: 3000 })
   } catch (err: any) {
-    toast.add({ severity: 'error', summary: err.response?.data?.error || 'Start failed', life: 5000 })
+    toast.add({ severity: 'error', summary: err.response?.data?.error || t('agents.detail.startFailed'), life: 5000 })
   }
 }
 
 function confirmDelete() {
   confirm.require({
-    message: `Delete app "${agent.value?.name}"? This cannot be undone.`,
-    header: 'Confirm Delete',
+    message: t('agents.detail.deleteConfirm', { name: agent.value?.name ?? '' }),
+    header: t('agents.detail.deleteTitle'),
     icon: 'pi pi-exclamation-triangle',
     acceptClass: 'p-button-danger',
     accept: async () => {
       try {
         await api.delete(`/api/v1/agents/${agentId}`)
-        toast.add({ severity: 'success', summary: 'App deleted', life: 3000 })
+        toast.add({ severity: 'success', summary: t('agents.detail.deleted'), life: 3000 })
         router.push('/agents')
       } catch (err: any) {
-        toast.add({ severity: 'error', summary: err.response?.data?.error || 'Delete failed', life: 5000 })
+        toast.add({ severity: 'error', summary: err.response?.data?.error || t('agents.detail.deleteFailed'), life: 5000 })
       }
     },
   })
@@ -741,18 +748,18 @@ async function submitUpgrade() {
       description: isReadOnlyGit.value ? '' : upgradeDescription.value,
     })
     if (agent.value) agent.value.upgradeStatus = 'queued'
-    toast.add({ severity: 'info', summary: wasRebuild ? 'Rebuild queued' : 'Upgrade queued', life: 3000 })
+    toast.add({ severity: 'info', summary: wasRebuild ? t('agents.detail.rebuildQueued') : t('agents.detail.upgradeQueued'), life: 3000 })
   } catch (err: any) {
-    toast.add({ severity: 'error', summary: err.response?.data?.error || (isReadOnlyGit.value ? 'Rebuild failed' : 'Upgrade failed'), life: 5000 })
+    toast.add({ severity: 'error', summary: err.response?.data?.error || (isReadOnlyGit.value ? t('agents.detail.rebuildFailed') : t('agents.detail.upgradeFailed')), life: 5000 })
   }
 }
 
 async function cancelBuild() {
   try {
     await api.post(`/api/v1/agents/${agentId}/builds/cancel`)
-    toast.add({ severity: 'info', summary: 'Build cancelled', life: 3000 })
+    toast.add({ severity: 'info', summary: t('agents.detail.buildCancelled'), life: 3000 })
   } catch (err: any) {
-    toast.add({ severity: 'error', summary: err.response?.data?.error || 'Cancel failed', life: 5000 })
+    toast.add({ severity: 'error', summary: err.response?.data?.error || t('agents.detail.cancelFailed'), life: 5000 })
   }
 }
 
@@ -791,21 +798,21 @@ function openWeb() {
             rounded
             size="small"
             severity="secondary"
-            aria-label="Rename app"
-            v-tooltip.bottom="'Rename'"
+            :aria-label="t('agents.detail.renameAria')"
+            v-tooltip.bottom="t('agents.action.rename')"
             @click="openRename"
           />
           <!-- Single badge that folds container state into the lifecycle:
                Running/Suspended/Stopped/Building/Error/Draft. See
                useAgentStatus for the (status, running) → label map. -->
           <Tag
-            :value="useAgentStatus(agent.status, agent.running).label"
-            :severity="useAgentStatus(agent.status, agent.running).severity"
+            :value="agentStatus(agent.status, agent.running).label"
+            :severity="agentStatus(agent.status, agent.running).severity"
             v-tooltip.bottom="statusTooltip"
           />
           <Tag
             v-if="setupTotal > 0"
-            :value="`Needs setup (${setupTotal})`"
+            :value="t('agents.detail.needsSetupBadge', { count: setupTotal, formattedCount: formatNumber(setupTotal) })"
             severity="warn"
             v-tooltip.bottom="setupTooltip"
           />
@@ -813,9 +820,9 @@ function openWeb() {
         <p v-if="agent.description" style="margin: 0.5rem 0 0; color: var(--p-text-muted-color); font-size: 0.9rem">{{ agent.description }}</p>
       </div>
       <div style="display: flex; gap: 0.5rem">
-        <Button label="Chat" icon="pi pi-comments" @click="goToChat" />
-        <Button v-if="webUrl" label="Web" icon="pi pi-external-link" severity="secondary" outlined @click="openWeb" />
-        <SplitButton v-if="actionItems.length" label="Actions" :model="actionItems" severity="secondary" />
+        <Button :label="t('agents.detail.chat')" icon="pi pi-comments" @click="goToChat" />
+        <Button v-if="webUrl" :label="t('agents.detail.web')" icon="pi pi-external-link" severity="secondary" outlined @click="openWeb" />
+        <SplitButton v-if="actionItems.length" :label="t('agents.detail.actions')" :model="actionItems" severity="secondary" />
       </div>
     </div>
 
@@ -834,7 +841,7 @@ function openWeb() {
         <span>{{ buildBadgeLabel }}</span>
         <i class="pi pi-arrow-right" style="font-size: 0.75rem" />
       </RouterLink>
-      <Button label="Cancel Build" icon="pi pi-times" severity="danger" size="small" text @click="cancelBuild" />
+      <Button :label="t('agents.detail.cancelBuild')" icon="pi pi-times" severity="danger" size="small" text @click="cancelBuild" />
     </div>
 
     <!-- Error message -->
@@ -846,7 +853,7 @@ function openWeb() {
          sits above the sections and stays visible as the user scrolls
          through them. Only populated sections appear; the section currently
          in view (per scrollspy) gets the underline. -->
-    <nav ref="navRef" class="agent-page-nav" aria-label="Section navigation">
+    <nav ref="navRef" class="agent-page-nav" :aria-label="t('agents.detail.sectionNavigation')">
       <ul>
         <li
           v-for="s in visibleSections"
@@ -857,14 +864,14 @@ function openWeb() {
             <span class="nav-label">{{ s.label }}</span>
             <Tag
               v-if="badgeFor(s)"
-              :value="String(setupStatus?.[(s as any).needsSetupKey] ?? '')"
+              :value="formatNumber(setupStatus?.[(s as any).needsSetupKey] ?? 0)"
               severity="warn"
             />
           </a>
         </li>
         <li v-if="activityVisible" :class="{ active: activeSectionId === 'activity' }">
           <a href="#activity" @click="scrollToSection('activity', $event)">
-            <span class="nav-label">Activity</span>
+            <span class="nav-label">{{ t('agents.detail.activity') }}</span>
           </a>
         </li>
       </ul>
@@ -885,7 +892,7 @@ function openWeb() {
         <component
           :is="s.component"
           :agent-id="agentId"
-          :your-access="['members', 'connections', 'mcp-servers', 'models'].includes(s.id) ? (agent?.yourAccess ?? '') : undefined"
+          :your-access="['members', 'connections', 'mcp-servers', 'connectors', 'models'].includes(s.id) ? (agent?.yourAccess ?? '') : undefined"
           v-bind="s.id === 'source' ? { agentSlug: agent?.slug ?? '' } : {}"
           @populated="onPopulated(s.id, $event)"
           @mutated="onResourceMutation"
@@ -896,13 +903,13 @@ function openWeb() {
         v-if="isAgentAdmin"
         v-show="activityVisible"
         id="activity"
-        title="Activity"
+        :title="t('agents.detail.activity')"
       >
         <Tabs v-model:value="activityTab">
           <TabList>
-            <Tab :value="0">Runs</Tab>
-            <Tab :value="1">Builds</Tab>
-            <Tab :value="2">Jobs</Tab>
+            <Tab :value="0">{{ t('agents.detail.runs') }}</Tab>
+            <Tab :value="1">{{ t('agents.detail.builds') }}</Tab>
+            <Tab :value="2">{{ t('agents.detail.jobs') }}</Tab>
           </TabList>
           <TabPanels>
             <TabPanel :value="0">
@@ -925,101 +932,95 @@ function openWeb() {
     </div>
 
     <!-- Upgrade dialog -->
-    <Dialog v-model:visible="showUpgradeDialog" :header="rebuildMode ? 'Rebuild App' : 'Upgrade App'" modal style="width: 30rem">
+    <Dialog v-model:visible="showUpgradeDialog" :header="rebuildMode ? t('agents.detail.rebuildApp') : t('agents.detail.upgradeApp')" modal style="width: 30rem">
       <template v-if="isReadOnlyGit">
         <p style="margin-top: 0">
-          Pull the latest commit from the configured Git branch and rebuild it against the current agentsdk.
+          {{ t('agents.detail.rebuildDescription') }}
         </p>
         <small style="display: block; color: var(--p-text-muted-color)">
-          Git remains authoritative. Airlock will not change or push source code.
+          {{ t('agents.detail.gitAuthoritative') }}
         </small>
       </template>
       <template v-else>
-        <p style="margin-top: 0">Describe what to change or fix:</p>
-        <Textarea v-model="upgradeDescription" rows="4" style="width: 100%" placeholder="e.g. Add a /history page that shows past voting rounds" autofocus />
+        <p style="margin-top: 0">{{ t('agents.detail.upgradePrompt') }}</p>
+        <Textarea v-model="upgradeDescription" rows="4" style="width: 100%" :placeholder="t('agents.detail.upgradePlaceholder')" autofocus />
         <small style="display: block; margin-top: 0.5rem; color: var(--p-text-muted-color)">
-          Leave empty to <strong>rebuild</strong> against the latest agentsdk - no code changes. If the SDK API changed and the code no longer compiles, the rebuild fails; add a description so the builder can adapt it.
+          {{ t('agents.detail.emptyUpgradeBeforeRebuild') }} <strong>{{ t('agents.action.rebuildLowercase') }}</strong> {{ t('agents.detail.emptyUpgradeAfterRebuild') }}
         </small>
       </template>
       <template #footer>
-        <Button label="Cancel" severity="secondary" text @click="showUpgradeDialog = false" />
-        <Button :label="rebuildMode ? 'Rebuild' : 'Upgrade'" :icon="rebuildMode ? 'pi pi-refresh' : 'pi pi-arrow-up'" @click="submitUpgrade" />
+        <Button :label="t('agents.action.cancel')" severity="secondary" text @click="showUpgradeDialog = false" />
+        <Button :label="rebuildMode ? t('agents.action.rebuild') : t('agents.action.upgrade')" :icon="rebuildMode ? 'pi pi-refresh' : 'pi pi-arrow-up'" @click="submitUpgrade" />
       </template>
     </Dialog>
 
-    <Dialog v-model:visible="renameOpen" header="Rename app" modal style="width: 28rem">
+    <Dialog v-model:visible="renameOpen" :header="t('agents.detail.renameTitle')" modal style="width: 28rem">
       <div style="display: flex; flex-direction: column; gap: 1rem; margin-top: 0.25rem">
         <div>
-          <label style="display: block; margin-bottom: 0.35rem; font-size: 0.85rem">Name</label>
+          <label style="display: block; margin-bottom: 0.35rem; font-size: 0.85rem">{{ t('agents.detail.name') }}</label>
           <InputText v-model="renameName" style="width: 100%" autofocus />
         </div>
         <div>
-          <label style="display: block; margin-bottom: 0.35rem; font-size: 0.85rem">Slug</label>
+          <label style="display: block; margin-bottom: 0.35rem; font-size: 0.85rem">{{ t('agents.create.slug') }}</label>
           <InputText v-model="renameSlug" style="width: 100%" />
           <small style="display: block; margin-top: 0.35rem; color: var(--p-text-muted-color)">
-            Lowercase letters, digits and single dashes (2–63 chars).
+            {{ t('agents.detail.slugHelp') }}
           </small>
         </div>
         <Message v-if="slugChanged" severity="warn" :closable="false">
-          Changing the slug re-points sibling <code>agent_&lt;slug&gt;</code> bindings and
-          breaks any externally-configured MCP URL using the old slug. In-app
-          links keep working.
+          {{ t('agents.detail.slugWarningBeforeBinding') }} <code>agent_&lt;slug&gt;</code> {{ t('agents.detail.slugWarningAfterBinding') }}
         </Message>
       </div>
       <template #footer>
-        <Button label="Cancel" severity="secondary" text :disabled="renaming" @click="renameOpen = false" />
-        <Button label="Save" icon="pi pi-check" :loading="renaming" @click="saveRename" />
+        <Button :label="t('agents.action.cancel')" severity="secondary" text :disabled="renaming" @click="renameOpen = false" />
+        <Button :label="t('agents.action.save')" icon="pi pi-check" :loading="renaming" @click="saveRename" />
       </template>
     </Dialog>
 
-    <Dialog v-model:visible="cloneOpen" header="Clone app" modal style="width: 28rem">
+    <Dialog v-model:visible="cloneOpen" :header="t('agents.detail.cloneTitle')" modal style="width: 28rem">
       <div style="display: flex; flex-direction: column; gap: 1rem; margin-top: 0.25rem">
         <Message severity="info" :closable="false">
-          Copies this app's code and settings into a new app you own. Its data,
-          secrets, connections and bridges are <strong>not</strong> copied - the clone
-          starts clean and builds fresh.
+          {{ t('agents.detail.cloneDescriptionBeforeNot') }} <strong>{{ t('agents.detail.not') }}</strong> {{ t('agents.detail.cloneDescriptionAfterNot') }}
         </Message>
         <div>
-          <label style="display: block; margin-bottom: 0.35rem; font-size: 0.85rem">Name</label>
+          <label style="display: block; margin-bottom: 0.35rem; font-size: 0.85rem">{{ t('agents.detail.name') }}</label>
           <InputText v-model="cloneName" style="width: 100%" autofocus />
         </div>
         <div>
-          <label style="display: block; margin-bottom: 0.35rem; font-size: 0.85rem">Slug</label>
+          <label style="display: block; margin-bottom: 0.35rem; font-size: 0.85rem">{{ t('agents.create.slug') }}</label>
           <InputText v-model="cloneSlug" style="width: 100%" />
           <small style="display: block; margin-top: 0.35rem; color: var(--p-text-muted-color)">
-            Lowercase letters, digits and single dashes (2–63 chars).
+            {{ t('agents.detail.slugHelp') }}
           </small>
         </div>
       </div>
       <template #footer>
-        <Button label="Cancel" severity="secondary" text :disabled="cloning" @click="cloneOpen = false" />
-        <Button label="Clone" icon="pi pi-copy" :loading="cloning" @click="saveClone" />
+        <Button :label="t('agents.action.cancel')" severity="secondary" text :disabled="cloning" @click="cloneOpen = false" />
+        <Button :label="t('agents.action.clone')" icon="pi pi-copy" :loading="cloning" @click="saveClone" />
       </template>
     </Dialog>
 
-    <Dialog v-model:visible="transferOpen" header="Transfer ownership" modal style="width: 28rem">
+    <Dialog v-model:visible="transferOpen" :header="t('agents.detail.transferOwnership')" modal style="width: 28rem">
       <div style="display: flex; flex-direction: column; gap: 1rem; margin-top: 0.25rem">
         <Message severity="warn" :closable="false">
-          The new owner becomes admin and you lose access. Owner-scoped bindings
-          (connections, MCP server credentials, git credential, bridges) are unbound -
-          the new owner reconnects their own.
+          {{ t('agents.detail.transferDescription') }}
         </Message>
         <div>
-          <label style="display: block; margin-bottom: 0.35rem; font-size: 0.85rem">Transfer to</label>
+          <label style="display: block; margin-bottom: 0.35rem; font-size: 0.85rem">{{ t('agents.detail.transferTo') }}</label>
           <Select
             v-model="transferTarget"
             :options="transferUsers"
             option-label="label"
             option-value="id"
-            placeholder="Select a user"
+            :placeholder="t('agents.detail.selectUser')"
             filter
             style="width: 100%"
           />
         </div>
       </div>
       <template #footer>
-        <Button label="Cancel" severity="secondary" text :disabled="transferring" @click="transferOpen = false" />
-        <Button label="Transfer" icon="pi pi-user-edit" severity="danger" :loading="transferring" :disabled="!transferTarget" @click="saveTransfer" />
+        <Button :label="t('agents.action.cancel')" severity="secondary" text :disabled="transferring" @click="transferOpen = false" />
+        <Button :label="t('agents.action.transfer')" icon="pi pi-user-edit" severity="danger" :loading="transferring" :disabled="!transferTarget" @click="saveTransfer" />
       </template>
     </Dialog>
   </div>
