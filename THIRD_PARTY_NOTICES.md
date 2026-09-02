@@ -7,7 +7,7 @@ This lists the open-source software bundled in the distributed binary
 and reproduces each component's license (and NOTICE, where required).
 
 ================================================================================
-github.com/airlockrun/agentsdk v0.5.0
+github.com/airlockrun/agentsdk v0.6.0
 ================================================================================
 Copyright 2026 Oleg Karpov
 

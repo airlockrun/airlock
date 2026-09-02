@@ -13,6 +13,7 @@ import {
   GetAgentGitConfigResponseSchema,
 } from '@/gen/airlock/v1/api_pb'
 import type { AgentGitConfig } from '@/gen/airlock/v1/types_pb'
+import { useAirlockI18n } from '@/i18n'
 
 const props = defineProps<{ agentId: string; agentSlug: string }>()
 const emit = defineEmits<{ populated: [count: number]; mutated: [gitMode: string] }>()
@@ -20,6 +21,7 @@ const emit = defineEmits<{ populated: [count: number]; mutated: [gitMode: string
 const credsStore = useGitCredentialsStore()
 const confirm = useConfirm()
 const toast = useToast()
+const { t } = useAirlockI18n()
 
 const cfg = ref<AgentGitConfig | null>(null)
 // Source counts as populated only when a remote is actually connected;
@@ -35,10 +37,10 @@ const remoteUrl = ref('')
 const credentialId = ref('')
 const branch = ref('main')
 const gitMode = ref<'read_write' | 'read_only'>('read_write')
-const gitModeOptions = [
-  { label: 'Read/write - Airlock may push code changes', value: 'read_write' },
-  { label: 'Read-only - Git is authoritative', value: 'read_only' },
-]
+const gitModeOptions = computed(() => [
+  { label: t('agents.source.mode.readWriteDescription'), value: 'read_write' },
+  { label: t('agents.source.mode.readOnlyDescription'), value: 'read_only' },
+])
 
 const isConnected = computed(() => !!cfg.value?.gitRemoteUrl)
 
@@ -76,12 +78,12 @@ async function connect() {
     )
     cfg.value = fromJson(ConnectAgentGitResponseSchema, data).config ?? null
     emit('mutated', cfg.value?.gitMode ?? '')
-    toast.add({ severity: 'success', summary: 'Remote connected', life: 4000 })
+    toast.add({ severity: 'success', summary: t('agents.source.connected'), life: 4000 })
     dialogVisible.value = false
   } catch (err: any) {
     toast.add({
       severity: 'error',
-      summary: err.response?.data?.error || 'Failed to connect remote',
+      summary: err.response?.data?.error || t('agents.source.connectFailed'),
       life: 6000,
     })
   } finally {
@@ -91,24 +93,22 @@ async function connect() {
 
 function disconnect() {
   confirm.require({
-    header: 'Disconnect remote?',
-    message:
-      'The app returns to internal-only mode. Future codegen commits stay local; ' +
-      'webhook pushes from your remote are ignored. The local repo + image are untouched.',
+    header: t('agents.source.disconnectTitle'),
+    message: t('agents.source.disconnectConfirm'),
     icon: 'pi pi-exclamation-triangle',
-    acceptLabel: 'Disconnect',
-    rejectLabel: 'Cancel',
+    acceptLabel: t('agents.source.disconnectAction'),
+    rejectLabel: t('agents.action.cancel'),
     acceptClass: 'p-button-warning',
     accept: async () => {
       try {
         await api.post(`/api/v1/agents/${props.agentId}/git/disconnect`)
         await reload()
         emit('mutated', '')
-        toast.add({ severity: 'info', summary: 'Remote disconnected', life: 3000 })
+        toast.add({ severity: 'info', summary: t('agents.source.disconnected'), life: 3000 })
       } catch (err: any) {
         toast.add({
           severity: 'error',
-          summary: err.response?.data?.error || 'Failed to disconnect',
+          summary: err.response?.data?.error || t('agents.source.disconnectFailed'),
           life: 5000,
         })
       }
@@ -119,9 +119,9 @@ function disconnect() {
 async function copyToClipboard(text: string, label: string) {
   try {
     await navigator.clipboard.writeText(text)
-    toast.add({ severity: 'success', summary: `${label} copied`, life: 2000 })
+    toast.add({ severity: 'success', summary: t('agents.copy.copied', { label }), life: 2000 })
   } catch {
-    toast.add({ severity: 'warn', summary: `Copy failed - select and copy ${label} manually`, life: 4000 })
+    toast.add({ severity: 'warn', summary: t('agents.copy.failed', { label }), life: 4000 })
   }
 }
 
@@ -153,121 +153,121 @@ onMounted(async () => {
     <!-- Internal mode -->
     <div v-if="!isConnected" style="display: flex; flex-direction: column; gap: 1rem">
       <Message severity="info" :closable="false">
-        This app has no git remote. Connect one for a Git-based workflow, or use the Air CLI to work with Airlock's source directly.
+        {{ t('agents.source.internalDescription') }}
       </Message>
       <div v-if="agentSlug && airlockURL && sdkVersion && launcherImport" style="display: flex; flex-direction: column; gap: 0.5rem">
-        <strong>Air CLI</strong>
+        <strong>{{ t('agents.source.airCli') }}</strong>
         <p style="margin: 0; color: var(--p-text-muted-color)">
-          Install the launcher once, then clone the app. The launcher selects this Airlock's CLI version and opens login when needed. Inside the cloned repository, use <code>go tool air</code> to deploy changes.
+          {{ t('agents.source.airCliDescriptionBeforeCommand') }} <code>go tool air</code> {{ t('agents.source.airCliDescriptionAfterCommand') }}
         </p>
         <div style="display: flex; align-items: center; gap: 0.5rem">
           <code class="code-chip">{{ airInstallCmd }}</code>
-          <Button icon="pi pi-copy" text size="small" @click="copyToClipboard(airInstallCmd, 'Install command')" />
+          <Button icon="pi pi-copy" text size="small" @click="copyToClipboard(airInstallCmd, t('agents.source.installCommand'))" />
         </div>
         <div style="display: flex; align-items: center; gap: 0.5rem">
           <code class="code-chip">{{ airCloneCmd }}</code>
-          <Button icon="pi pi-copy" text size="small" @click="copyToClipboard(airCloneCmd, 'Clone command')" />
+          <Button icon="pi pi-copy" text size="small" @click="copyToClipboard(airCloneCmd, t('agents.source.cloneCommand'))" />
         </div>
         <div style="display: flex; align-items: center; gap: 0.5rem">
           <code class="code-chip" style="white-space: pre-wrap">{{ airDeployCmd }}</code>
-          <Button icon="pi pi-copy" text size="small" @click="copyToClipboard(airDeployCmd, 'Deploy command')" />
+          <Button icon="pi pi-copy" text size="small" @click="copyToClipboard(airDeployCmd, t('agents.source.deployCommand'))" />
         </div>
       </div>
       <Skeleton v-if="credsStore.loading" height="2.5rem" />
       <Message v-else-if="credsStore.error" severity="error" :closable="false">
         <div class="load-error">
           <span>{{ credsStore.error }}</span>
-          <Button label="Retry" icon="pi pi-refresh" size="small" outlined @click="credsStore.fetchCredentials().catch(() => {})" />
+          <Button :label="t('agents.action.retry')" icon="pi pi-refresh" size="small" outlined @click="credsStore.fetchCredentials().catch(() => {})" />
         </div>
       </Message>
       <div v-else-if="credsStore.credentials.length === 0">
-        <p style="margin: 0 0 0.5rem">You don't have any git credentials yet.</p>
+        <p style="margin: 0 0 0.5rem">{{ t('agents.source.noCredentials') }}</p>
         <router-link to="/settings/git-credentials">
-          <Button label="Add a PAT in Settings" icon="pi pi-plus" outlined size="small" />
+          <Button :label="t('agents.source.addPat')" icon="pi pi-plus" outlined size="small" />
         </router-link>
       </div>
       <div v-else>
-        <Button label="Connect a repo" icon="pi pi-link" @click="openConnect" />
+        <Button :label="t('agents.source.connectRepo')" icon="pi pi-link" @click="openConnect" />
       </div>
     </div>
 
     <!-- External mode -->
     <div v-else style="display: flex; flex-direction: column; gap: 1rem">
       <div>
-        <label style="display: block; font-size: 0.75rem; text-transform: uppercase; color: var(--p-text-muted-color); margin-bottom: 0.25rem">Remote</label>
+        <label style="display: block; font-size: 0.75rem; text-transform: uppercase; color: var(--p-text-muted-color); margin-bottom: 0.25rem">{{ t('agents.source.remote') }}</label>
         <div style="display: flex; align-items: center; gap: 0.5rem">
           <code class="code-chip">{{ cfg!.gitRemoteUrl }}</code>
-          <Button icon="pi pi-copy" text size="small" @click="copyToClipboard(cfg!.gitRemoteUrl, 'URL')" />
+          <Button icon="pi pi-copy" text size="small" @click="copyToClipboard(cfg!.gitRemoteUrl, t('agents.source.url'))" />
         </div>
       </div>
 
       <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem">
         <div>
-          <label style="display: block; font-size: 0.75rem; text-transform: uppercase; color: var(--p-text-muted-color); margin-bottom: 0.25rem">Branch</label>
+          <label style="display: block; font-size: 0.75rem; text-transform: uppercase; color: var(--p-text-muted-color); margin-bottom: 0.25rem">{{ t('agents.source.branch') }}</label>
           <div>{{ cfg!.defaultBranch }}</div>
         </div>
         <div>
-          <label style="display: block; font-size: 0.75rem; text-transform: uppercase; color: var(--p-text-muted-color); margin-bottom: 0.25rem">Credential</label>
+          <label style="display: block; font-size: 0.75rem; text-transform: uppercase; color: var(--p-text-muted-color); margin-bottom: 0.25rem">{{ t('agents.source.credential') }}</label>
           <div>{{ cfg!.gitCredentialName || '-' }}</div>
         </div>
       </div>
 
       <div v-if="cfg!.lastSyncedRef">
-        <label style="display: block; font-size: 0.75rem; text-transform: uppercase; color: var(--p-text-muted-color); margin-bottom: 0.25rem">Last synced ref</label>
+        <label style="display: block; font-size: 0.75rem; text-transform: uppercase; color: var(--p-text-muted-color); margin-bottom: 0.25rem">{{ t('agents.source.lastSyncedRef') }}</label>
         <code style="font-size: 0.8rem">{{ cfg!.lastSyncedRef }}</code>
       </div>
 
       <div>
-        <label style="display: block; font-size: 0.75rem; text-transform: uppercase; color: var(--p-text-muted-color); margin-bottom: 0.25rem">Mode</label>
-        <div>{{ cfg!.gitMode === 'read_only' ? 'Read-only' : 'Read/write' }}</div>
+        <label style="display: block; font-size: 0.75rem; text-transform: uppercase; color: var(--p-text-muted-color); margin-bottom: 0.25rem">{{ t('agents.source.mode.label') }}</label>
+        <div>{{ cfg!.gitMode === 'read_only' ? t('agents.source.mode.readOnly') : t('agents.source.mode.readWrite') }}</div>
       </div>
 
       <div>
-        <label style="display: block; font-size: 0.75rem; text-transform: uppercase; color: var(--p-text-muted-color); margin-bottom: 0.25rem">Clone command</label>
+        <label style="display: block; font-size: 0.75rem; text-transform: uppercase; color: var(--p-text-muted-color); margin-bottom: 0.25rem">{{ t('agents.source.cloneCommand') }}</label>
         <div style="display: flex; align-items: center; gap: 0.5rem">
           <code class="code-chip">{{ cloneCmd }}</code>
-          <Button icon="pi pi-copy" text size="small" @click="copyToClipboard(cloneCmd, 'Command')" />
+          <Button icon="pi pi-copy" text size="small" @click="copyToClipboard(cloneCmd, t('agents.source.command'))" />
         </div>
       </div>
 
       <details>
-        <summary style="cursor: pointer; font-size: 0.85rem; color: var(--p-text-muted-color)">Webhook setup (paste these into your git provider's webhook settings)</summary>
+        <summary style="cursor: pointer; font-size: 0.85rem; color: var(--p-text-muted-color)">{{ t('agents.source.webhookSetup') }}</summary>
         <div style="display: flex; flex-direction: column; gap: 0.75rem; margin-top: 0.75rem">
           <div>
-            <label style="display: block; font-size: 0.75rem; text-transform: uppercase; color: var(--p-text-muted-color); margin-bottom: 0.25rem">Payload URL</label>
+            <label style="display: block; font-size: 0.75rem; text-transform: uppercase; color: var(--p-text-muted-color); margin-bottom: 0.25rem">{{ t('agents.source.payloadUrl') }}</label>
             <div style="display: flex; align-items: center; gap: 0.5rem">
               <code class="code-chip">{{ cfg!.webhookUrl }}</code>
-              <Button icon="pi pi-copy" text size="small" @click="copyToClipboard(cfg!.webhookUrl, 'Webhook URL')" />
+              <Button icon="pi pi-copy" text size="small" @click="copyToClipboard(cfg!.webhookUrl, t('agents.source.webhookUrl'))" />
             </div>
           </div>
           <div>
-            <label style="display: block; font-size: 0.75rem; text-transform: uppercase; color: var(--p-text-muted-color); margin-bottom: 0.25rem">Secret</label>
+            <label style="display: block; font-size: 0.75rem; text-transform: uppercase; color: var(--p-text-muted-color); margin-bottom: 0.25rem">{{ t('agents.source.secret') }}</label>
             <div style="display: flex; align-items: center; gap: 0.5rem">
               <code class="code-chip">{{ cfg!.webhookSecret }}</code>
-              <Button icon="pi pi-copy" text size="small" @click="copyToClipboard(cfg!.webhookSecret, 'Secret')" />
+              <Button icon="pi pi-copy" text size="small" @click="copyToClipboard(cfg!.webhookSecret, t('agents.source.secret'))" />
             </div>
           </div>
           <small style="color: var(--p-text-muted-color)">
-            Content type: <code>application/json</code>. Event: just the <strong>push</strong> event (GitHub/GitLab/etc).
-            Other providers (Bitbucket, Gitea) aren't wired for signature verification yet - the polling fallback picks up pushes every 5 minutes.
+            {{ t('agents.source.webhookContentType') }} <code>application/json</code>. {{ t('agents.source.webhookEventBeforePush') }} <strong>push</strong> {{ t('agents.source.webhookEventAfterPush') }}
+            {{ t('agents.source.webhookProviderFallback') }}
           </small>
         </div>
       </details>
 
       <div>
-        <Button label="Disconnect remote" icon="pi pi-times" severity="warn" outlined @click="disconnect" />
+        <Button :label="t('agents.source.disconnectRemote')" icon="pi pi-times" severity="warn" outlined @click="disconnect" />
       </div>
     </div>
 
     <!-- Connect dialog -->
-    <Dialog v-model:visible="dialogVisible" header="Connect a git remote" modal style="width: 32rem">
+    <Dialog v-model:visible="dialogVisible" :header="t('agents.source.connectTitle')" modal style="width: 32rem">
       <div style="display: flex; flex-direction: column; gap: 1.25rem; padding-top: 0.5rem">
         <Message severity="info" :closable="false" style="font-size: 0.8rem">
-          Create an empty repo on your git provider, paste its HTTPS clone URL below, and pick a credential. Airlock will push the app's current state to it and use that repo as the source of truth.
+          {{ t('agents.source.connectDescription') }}
         </Message>
         <FloatLabel variant="on">
-          <InputText id="remote-url" v-model="remoteUrl" style="width: 100%" placeholder="https://github.com/your-org/your-app.git" autocomplete="off" />
-          <label for="remote-url">Remote URL</label>
+          <InputText id="remote-url" v-model="remoteUrl" style="width: 100%" :placeholder="t('agents.source.remoteUrlPlaceholder')" autocomplete="off" />
+          <label for="remote-url">{{ t('agents.source.remoteUrl') }}</label>
         </FloatLabel>
         <FloatLabel variant="on">
           <Select
@@ -278,11 +278,11 @@ onMounted(async () => {
             option-value="id"
             style="width: 100%"
           />
-          <label for="cred-select">Credential</label>
+          <label for="cred-select">{{ t('agents.source.credential') }}</label>
         </FloatLabel>
         <FloatLabel variant="on">
           <InputText id="branch" v-model="branch" style="width: 100%" />
-          <label for="branch">Default branch</label>
+          <label for="branch">{{ t('agents.source.defaultBranch') }}</label>
         </FloatLabel>
         <FloatLabel variant="on">
           <Select
@@ -293,15 +293,15 @@ onMounted(async () => {
             option-value="value"
             style="width: 100%"
           />
-          <label for="git-mode">Source mode</label>
+          <label for="git-mode">{{ t('agents.source.sourceMode') }}</label>
         </FloatLabel>
         <Message v-if="gitMode === 'read_only'" severity="warn" :closable="false" style="font-size: 0.8rem">
-          Git is authoritative. Connecting replaces the app's source with this branch and disables Airlock codegen, local deploys, and source rollbacks.
+          {{ t('agents.source.readOnlyWarning') }}
         </Message>
         <div style="display: flex; justify-content: flex-end; gap: 0.5rem">
-          <Button label="Cancel" severity="secondary" text @click="dialogVisible = false" />
+          <Button :label="t('agents.action.cancel')" severity="secondary" text @click="dialogVisible = false" />
           <Button
-            label="Connect"
+            :label="t('agents.source.connectAction')"
             :loading="connecting"
             :disabled="!remoteUrl.trim() || !credentialId"
             @click="connect"

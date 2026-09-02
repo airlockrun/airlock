@@ -57,6 +57,7 @@ const (
 	AgentSchedulesView     Action = "agent.schedules.view"
 	AgentScheduleFire      Action = "agent.schedule.fire"
 	AgentConnections       Action = "agent.connections" // credentials / MCP / env-vars
+	AgentConnectors        Action = "agent.connectors"
 	AgentSiblings          Action = "agent.siblings"
 	AgentModelsUpdate      Action = "agent.models.update"
 	AgentRoutesView        Action = "agent.routes.view"
@@ -64,6 +65,10 @@ const (
 	AgentIntegrationInvoke Action = "agent.integration.invoke"
 	AgentJobCancel         Action = "agent.job.cancel"
 	AgentJobRetry          Action = "agent.job.retry"
+	ConnectorJobView       Action = "connector.job.view"
+	ConnectorJobCancel     Action = "connector.job.cancel"
+	ConnectorOrchestration Action = "connector.orchestration.manage"
+	ConnectorArtifactView  Action = "connector.artifact.view"
 
 	// Tenant axis.
 	TenantCatalogView         Action = "tenant.catalog.view"           // read providers/models/capabilities catalog: user+
@@ -96,9 +101,14 @@ const (
 	ResourceView              Action = "resource.view"              // authenticated precondition; resource capability checked by AuthorizeResource
 	ResourceBind              Action = "resource.bind"              // authenticated precondition; resource capability checked by AuthorizeResource
 	ResourceManage            Action = "resource.manage"            // authenticated precondition; resource capability checked by AuthorizeResource
-	TenantGroupView           Action = "tenant.group.view"          // list groups + their grants: admin
-	TenantModelGrantManage    Action = "tenant.model_grant.manage"  // grant/revoke which (provider, model) a group may use: admin
-	TenantUsageView           Action = "tenant.usage.view"          // read the LLM spend ledger rollups (billing/usage): admin
+	ResourceTransfer          Action = "resource.transfer"          // authenticated precondition; owner-or-admin checked by AuthorizeResourceTransfer
+	ConnectorGroupManage      Action = "connector.group.manage"
+	TenantGroupView           Action = "tenant.group.view"         // list groups + their grants: admin
+	TenantModelGrantManage    Action = "tenant.model_grant.manage" // grant/revoke which (provider, model) a group may use: admin
+	TenantUsageView           Action = "tenant.usage.view"         // read the LLM spend ledger rollups (billing/usage): admin
+	TenantHostView            Action = "tenant.host.view"
+	TenantHostManage          Action = "tenant.host.manage"
+	HostEnrollmentApprove     Action = "host.enrollment.approve"
 )
 
 // policy is the whole permission matrix. Authorize panics on a missing
@@ -125,6 +135,7 @@ var policy = map[Action]Requirement{
 	AgentSchedulesView:     {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
 	AgentScheduleFire:      {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
 	AgentConnections:       {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
+	AgentConnectors:        {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
 	AgentSiblings:          {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
 	AgentModelsUpdate:      {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
 	AgentRoutesView:        {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
@@ -132,6 +143,10 @@ var policy = map[Action]Requirement{
 	AgentIntegrationInvoke: {Axis: AxisIntegration, Agent: agentsdk.AccessAdmin},
 	AgentJobCancel:         {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
 	AgentJobRetry:          {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
+	ConnectorJobView:       {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
+	ConnectorJobCancel:     {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
+	ConnectorOrchestration: {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
+	ConnectorArtifactView:  {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
 
 	TenantCatalogView:         {Axis: AxisTenant, Tenant: auth.RoleUser},
 	TenantUserView:            {Axis: AxisTenant, Tenant: auth.RoleUser},
@@ -163,9 +178,14 @@ var policy = map[Action]Requirement{
 	ResourceView:              {Axis: AxisAuthenticated},
 	ResourceBind:              {Axis: AxisAuthenticated},
 	ResourceManage:            {Axis: AxisAuthenticated},
+	ResourceTransfer:          {Axis: AxisAuthenticated},
+	ConnectorGroupManage:      {Axis: AxisAuthenticated},
 	TenantGroupView:           {Axis: AxisTenant, Tenant: auth.RoleAdmin},
 	TenantModelGrantManage:    {Axis: AxisTenant, Tenant: auth.RoleAdmin},
 	TenantUsageView:           {Axis: AxisTenant, Tenant: auth.RoleAdmin},
+	TenantHostView:            {Axis: AxisTenant, Tenant: auth.RoleUser},
+	TenantHostManage:          {Axis: AxisTenant, Tenant: auth.RoleAdmin},
+	HostEnrollmentApprove:     {Axis: AxisAuthenticated},
 }
 
 // RequiredTenantRole returns the minimum tenant role for a tenant-axis

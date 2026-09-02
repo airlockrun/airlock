@@ -12,23 +12,28 @@
  * (Error) bypass the running flag — they describe the agent's
  * lifecycle, not its container.
  */
-export function useAgentStatus(status: string, running?: boolean) {
-  switch (status) {
-    case 'active':
-      if (running) return { severity: 'success' as const, label: 'Running' }
-      return { severity: 'secondary' as const, label: 'Suspended' }
-    case 'building':
-      return { severity: 'warn' as const, label: 'Building' }
-    case 'error':
-    case 'failed':
-      return { severity: 'danger' as const, label: 'Error' }
-    case 'stopped':
-      return { severity: 'secondary' as const, label: 'Stopped' }
-    case 'draft':
-      return { severity: 'secondary' as const, label: 'Draft' }
-    case 'inactive':
-      return { severity: 'secondary' as const, label: 'Inactive' }
-    default:
-      return { severity: 'info' as const, label: status }
+export function useAgentStatus() {
+  const { t } = useAirlockI18n()
+
+  return (status: string, running?: boolean) => {
+    switch (status) {
+      case 'active':
+        if (running) return { severity: 'success' as const, label: t('agents.status.running') }
+        return { severity: 'secondary' as const, label: t('agents.status.suspended') }
+      case 'building':
+        return { severity: 'warn' as const, label: t('agents.status.building') }
+      case 'error':
+      case 'failed':
+        return { severity: 'danger' as const, label: t('agents.status.error') }
+      case 'stopped':
+        return { severity: 'secondary' as const, label: t('agents.status.stopped') }
+      case 'draft':
+        return { severity: 'secondary' as const, label: t('agents.status.draft') }
+      case 'inactive':
+        return { severity: 'secondary' as const, label: t('agents.status.inactive') }
+      default:
+        return { severity: 'info' as const, label: status }
+    }
   }
 }
+import { useAirlockI18n } from '@/i18n'

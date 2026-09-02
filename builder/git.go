@@ -83,16 +83,25 @@ func InitAgentRepo(basePath, agentID string) error {
 
 // CommitScaffold creates branch build/init in the agent's repo,
 // materializes scaffold files at the repo root, and commits. Returns the
-// commit hash. Safe to call on retry — deletes a stale branch first.
+// commit hash. A merged build/init marks completed scaffolding, so initial-build
+// retries preserve source generated after that commit.
 func CommitScaffold(repoPath string, data scaffold.ScaffoldData) (string, error) {
 	const branch = "build/init"
 	if err := EnsureGitIdentity(repoPath); err != nil {
 		return "", err
 	}
 
-	// Clean up stale branch from a previous failed build attempt.
-	// Must switch away from it first — can't delete the checked-out branch.
+	// A failed build can be retried after codegen has committed substantial
+	// changes to main. Once the scaffold branch is merged, re-materializing it
+	// would overwrite those changes with template files.
 	_ = git(repoPath, "checkout", "main")
+	if hash, err := gitOutput(repoPath, "rev-parse", "--verify", "refs/heads/"+branch); err == nil {
+		if err := git(repoPath, "merge-base", "--is-ancestor", branch, "HEAD"); err == nil {
+			return hash, nil
+		}
+	}
+
+	// An unmerged branch belongs to an attempt that failed while scaffolding.
 	_ = git(repoPath, "branch", "-D", branch)
 
 	if err := git(repoPath, "checkout", "-b", branch); err != nil {

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { renderMarkdown } from '@/composables/useMarkdown'
+import { useAirlockI18n } from '@/i18n'
 import ImageAlbum from './ImageAlbum.vue'
 
 export interface DisplayPart {
@@ -22,6 +23,7 @@ type Block =
   | { kind: 'video'; part: DisplayPart }
 
 const props = defineProps<{ parts: DisplayPart[] }>()
+const { t } = useAirlockI18n()
 
 // kindOf decides how to render a part from its mimeType first (so a unified
 // file part with an image/* type renders as an image), falling back to the
@@ -61,7 +63,7 @@ const blocks = computed<Block[]>(() => {
 })
 
 function fileSizeLabel(p: DisplayPart): string {
-  return p.filename || 'file'
+  return p.filename || t('chat.file.fallbackName')
 }
 </script>
 

@@ -2,6 +2,7 @@
 import { ref } from 'vue'
 import { useToast } from 'primevue/usetoast'
 import api from '@/api/client'
+import { useAirlockI18n } from '@/i18n'
 import { serializeAPIKeyRequest } from '@/utils/resourceRequests'
 
 const props = withDefaults(defineProps<{
@@ -18,6 +19,7 @@ const emit = defineEmits<{ saved: [] }>()
 
 const visible = defineModel<boolean>('visible', { default: false })
 const toast = useToast()
+const { t } = useAirlockI18n()
 const apiKey = ref('')
 const loading = ref(false)
 const testing = ref(false)
@@ -30,12 +32,12 @@ async function save() {
       ? `/api/v1/agents/${props.agentId}/credentials/${props.slug}`
       : `/api/v1/agents/${props.agentId}/${props.basePath}/${props.slug}/credentials`
     await api.post(path, serializeAPIKeyRequest(apiKey.value, '', false))
-    toast.add({ severity: 'success', summary: `${props.name} configured`, life: 3000 })
+    toast.add({ severity: 'success', summary: t('resources.auth.configuredNamed', { name: props.name }), life: 3000 })
     visible.value = false
     apiKey.value = ''
     emit('saved')
   } catch (err: any) {
-    toast.add({ severity: 'error', summary: err.response?.data?.error || 'Failed to save credential', life: 5000 })
+    toast.add({ severity: 'error', summary: err.response?.data?.error || t('resources.errors.saveCredential'), life: 5000 })
   } finally {
     loading.value = false
   }
@@ -52,12 +54,12 @@ async function test() {
     const body = apiKey.value ? serializeAPIKeyRequest(apiKey.value, '', false) : undefined
     const resp = await api.post(testPath, body)
     if (resp.data?.success === false) {
-      toast.add({ severity: 'error', summary: resp.data.message || 'Connection test failed', life: 5000 })
+      toast.add({ severity: 'error', summary: resp.data.message || t('resources.errors.testFailed'), life: 5000 })
     } else {
-      toast.add({ severity: 'success', summary: 'Connection test passed', life: 3000 })
+      toast.add({ severity: 'success', summary: t('resources.auth.testPassed'), life: 3000 })
     }
   } catch (err: any) {
-    toast.add({ severity: 'error', summary: err.response?.data?.error || 'Connection test failed', life: 5000 })
+    toast.add({ severity: 'error', summary: err.response?.data?.error || t('resources.errors.testFailed'), life: 5000 })
   } finally {
     testing.value = false
   }
@@ -65,16 +67,16 @@ async function test() {
 </script>
 
 <template>
-  <Dialog v-model:visible="visible" :header="`Configure ${name}`" modal :style="{ width: 'min(28rem, calc(100vw - 2rem))' }">
+  <Dialog v-model:visible="visible" :header="t('resources.auth.configureNamed', { name })" modal :style="{ width: 'min(28rem, calc(100vw - 2rem))' }">
     <div style="display: flex; flex-direction: column; gap: 1.25rem; padding-top: 0.5rem">
       <Message v-if="warning" severity="warn" :closable="false">{{ warning }}</Message>
       <FloatLabel variant="on">
         <Password id="cred-key" v-model="apiKey" :feedback="false" toggle-mask style="width: 100%" :input-style="{ width: '100%' }" />
-        <label for="cred-key">API Key</label>
+        <label for="cred-key">{{ t('resources.auth.apiKeyTitle') }}</label>
       </FloatLabel>
       <div style="display: flex; justify-content: space-between">
-        <Button label="Test Connection" severity="secondary" size="small" :loading="testing" @click="test" />
-        <Button label="Save" :loading="loading" @click="save" :disabled="!apiKey" />
+        <Button :label="t('resources.actions.testConnection')" severity="secondary" size="small" :loading="testing" @click="test" />
+        <Button :label="t('resources.actions.save')" :loading="loading" @click="save" :disabled="!apiKey" />
       </div>
     </div>
   </Dialog>

@@ -3368,6 +3368,7 @@ type SystemSettingsInfo struct {
 	DefaultImageGenProviderId  string                 `protobuf:"bytes,14,opt,name=default_image_gen_provider_id,json=defaultImageGenProviderId,proto3" json:"default_image_gen_provider_id,omitempty"`
 	DefaultSearchProviderId    string                 `protobuf:"bytes,15,opt,name=default_search_provider_id,json=defaultSearchProviderId,proto3" json:"default_search_provider_id,omitempty"`
 	DefaultEmbeddingProviderId string                 `protobuf:"bytes,16,opt,name=default_embedding_provider_id,json=defaultEmbeddingProviderId,proto3" json:"default_embedding_provider_id,omitempty"`
+	UiLocale                   string                 `protobuf:"bytes,20,opt,name=ui_locale,json=uiLocale,proto3" json:"ui_locale,omitempty"`
 	unknownFields              protoimpl.UnknownFields
 	sizeCache                  protoimpl.SizeCache
 }
@@ -3514,6 +3515,13 @@ func (x *SystemSettingsInfo) GetDefaultEmbeddingProviderId() string {
 	return ""
 }
 
+func (x *SystemSettingsInfo) GetUiLocale() string {
+	if x != nil {
+		return x.UiLocale
+	}
+	return ""
+}
+
 // ManagedBotSessionRequest creates a session row that correlates an
 // airlock "Create new Telegram bot" click to the Bot API 9.6
 // ManagedBotCreated callback. Exactly one of agent_id / is_system
@@ -3652,6 +3660,7 @@ type GitCredential struct {
 	GithubInstallId string                 `protobuf:"bytes,5,opt,name=github_install_id,json=githubInstallId,proto3" json:"github_install_id,omitempty"` // empty for type="pat"
 	CreatedAt       *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
 	LastUsedAt      *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=last_used_at,json=lastUsedAt,proto3" json:"last_used_at,omitempty"`
+	Capabilities    []string               `protobuf:"bytes,8,rep,name=capabilities,proto3" json:"capabilities,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -3731,6 +3740,13 @@ func (x *GitCredential) GetCreatedAt() *timestamppb.Timestamp {
 func (x *GitCredential) GetLastUsedAt() *timestamppb.Timestamp {
 	if x != nil {
 		return x.LastUsedAt
+	}
+	return nil
+}
+
+func (x *GitCredential) GetCapabilities() []string {
+	if x != nil {
+		return x.Capabilities
 	}
 	return nil
 }
@@ -4679,6 +4695,7 @@ type SetupCountsInfo struct {
 	Connections   int32                  `protobuf:"varint,1,opt,name=connections,proto3" json:"connections,omitempty"`
 	McpServers    int32                  `protobuf:"varint,2,opt,name=mcp_servers,json=mcpServers,proto3" json:"mcp_servers,omitempty"`
 	EnvVars       int32                  `protobuf:"varint,3,opt,name=env_vars,json=envVars,proto3" json:"env_vars,omitempty"`
+	Connectors    int32                  `protobuf:"varint,5,opt,name=connectors,proto3" json:"connectors,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -4734,6 +4751,2184 @@ func (x *SetupCountsInfo) GetEnvVars() int32 {
 	return 0
 }
 
+func (x *SetupCountsInfo) GetConnectors() int32 {
+	if x != nil {
+		return x.Connectors
+	}
+	return 0
+}
+
+type ConnectorPublishedCommandInfo struct {
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	Name             string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Revision         int32                  `protobuf:"varint,2,opt,name=revision,proto3" json:"revision,omitempty"`
+	Description      string                 `protobuf:"bytes,3,opt,name=description,proto3" json:"description,omitempty"`
+	Mode             string                 `protobuf:"bytes,4,opt,name=mode,proto3" json:"mode,omitempty"`
+	InputSchemaHash  string                 `protobuf:"bytes,5,opt,name=input_schema_hash,json=inputSchemaHash,proto3" json:"input_schema_hash,omitempty"`
+	OutputSchemaHash string                 `protobuf:"bytes,6,opt,name=output_schema_hash,json=outputSchemaHash,proto3" json:"output_schema_hash,omitempty"`
+	InputSchemaJson  string                 `protobuf:"bytes,7,opt,name=input_schema_json,json=inputSchemaJson,proto3" json:"input_schema_json,omitempty"`
+	OutputSchemaJson string                 `protobuf:"bytes,8,opt,name=output_schema_json,json=outputSchemaJson,proto3" json:"output_schema_json,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *ConnectorPublishedCommandInfo) Reset() {
+	*x = ConnectorPublishedCommandInfo{}
+	mi := &file_airlock_v1_types_proto_msgTypes[44]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ConnectorPublishedCommandInfo) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ConnectorPublishedCommandInfo) ProtoMessage() {}
+
+func (x *ConnectorPublishedCommandInfo) ProtoReflect() protoreflect.Message {
+	mi := &file_airlock_v1_types_proto_msgTypes[44]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ConnectorPublishedCommandInfo.ProtoReflect.Descriptor instead.
+func (*ConnectorPublishedCommandInfo) Descriptor() ([]byte, []int) {
+	return file_airlock_v1_types_proto_rawDescGZIP(), []int{44}
+}
+
+func (x *ConnectorPublishedCommandInfo) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *ConnectorPublishedCommandInfo) GetRevision() int32 {
+	if x != nil {
+		return x.Revision
+	}
+	return 0
+}
+
+func (x *ConnectorPublishedCommandInfo) GetDescription() string {
+	if x != nil {
+		return x.Description
+	}
+	return ""
+}
+
+func (x *ConnectorPublishedCommandInfo) GetMode() string {
+	if x != nil {
+		return x.Mode
+	}
+	return ""
+}
+
+func (x *ConnectorPublishedCommandInfo) GetInputSchemaHash() string {
+	if x != nil {
+		return x.InputSchemaHash
+	}
+	return ""
+}
+
+func (x *ConnectorPublishedCommandInfo) GetOutputSchemaHash() string {
+	if x != nil {
+		return x.OutputSchemaHash
+	}
+	return ""
+}
+
+func (x *ConnectorPublishedCommandInfo) GetInputSchemaJson() string {
+	if x != nil {
+		return x.InputSchemaJson
+	}
+	return ""
+}
+
+func (x *ConnectorPublishedCommandInfo) GetOutputSchemaJson() string {
+	if x != nil {
+		return x.OutputSchemaJson
+	}
+	return ""
+}
+
+type ConnectorPublishedDirectoryInfo struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Revision      int32                  `protobuf:"varint,2,opt,name=revision,proto3" json:"revision,omitempty"`
+	Description   string                 `protobuf:"bytes,3,opt,name=description,proto3" json:"description,omitempty"`
+	Read          bool                   `protobuf:"varint,4,opt,name=read,proto3" json:"read,omitempty"`
+	Write         bool                   `protobuf:"varint,5,opt,name=write,proto3" json:"write,omitempty"`
+	List          bool                   `protobuf:"varint,6,opt,name=list,proto3" json:"list,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ConnectorPublishedDirectoryInfo) Reset() {
+	*x = ConnectorPublishedDirectoryInfo{}
+	mi := &file_airlock_v1_types_proto_msgTypes[45]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ConnectorPublishedDirectoryInfo) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ConnectorPublishedDirectoryInfo) ProtoMessage() {}
+
+func (x *ConnectorPublishedDirectoryInfo) ProtoReflect() protoreflect.Message {
+	mi := &file_airlock_v1_types_proto_msgTypes[45]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ConnectorPublishedDirectoryInfo.ProtoReflect.Descriptor instead.
+func (*ConnectorPublishedDirectoryInfo) Descriptor() ([]byte, []int) {
+	return file_airlock_v1_types_proto_rawDescGZIP(), []int{45}
+}
+
+func (x *ConnectorPublishedDirectoryInfo) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *ConnectorPublishedDirectoryInfo) GetRevision() int32 {
+	if x != nil {
+		return x.Revision
+	}
+	return 0
+}
+
+func (x *ConnectorPublishedDirectoryInfo) GetDescription() string {
+	if x != nil {
+		return x.Description
+	}
+	return ""
+}
+
+func (x *ConnectorPublishedDirectoryInfo) GetRead() bool {
+	if x != nil {
+		return x.Read
+	}
+	return false
+}
+
+func (x *ConnectorPublishedDirectoryInfo) GetWrite() bool {
+	if x != nil {
+		return x.Write
+	}
+	return false
+}
+
+func (x *ConnectorPublishedDirectoryInfo) GetList() bool {
+	if x != nil {
+		return x.List
+	}
+	return false
+}
+
+type ConnectorInfo struct {
+	state                        protoimpl.MessageState             `protogen:"open.v1"`
+	Id                           string                             `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	OwnerPrincipalId             string                             `protobuf:"bytes,2,opt,name=owner_principal_id,json=ownerPrincipalId,proto3" json:"owner_principal_id,omitempty"`
+	Slug                         string                             `protobuf:"bytes,3,opt,name=slug,proto3" json:"slug,omitempty"`
+	Kind                         string                             `protobuf:"bytes,4,opt,name=kind,proto3" json:"kind,omitempty"`
+	ContractId                   string                             `protobuf:"bytes,5,opt,name=contract_id,json=contractId,proto3" json:"contract_id,omitempty"`
+	Name                         string                             `protobuf:"bytes,6,opt,name=name,proto3" json:"name,omitempty"`
+	DisplayName                  string                             `protobuf:"bytes,7,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
+	Description                  string                             `protobuf:"bytes,8,opt,name=description,proto3" json:"description,omitempty"`
+	ProtocolMajor                int32                              `protobuf:"varint,9,opt,name=protocol_major,json=protocolMajor,proto3" json:"protocol_major,omitempty"`
+	ProtocolMinor                int32                              `protobuf:"varint,10,opt,name=protocol_minor,json=protocolMinor,proto3" json:"protocol_minor,omitempty"`
+	Features                     []string                           `protobuf:"bytes,11,rep,name=features,proto3" json:"features,omitempty"`
+	ArtifactVersion              string                             `protobuf:"bytes,12,opt,name=artifact_version,json=artifactVersion,proto3" json:"artifact_version,omitempty"`
+	ArtifactDigest               string                             `protobuf:"bytes,13,opt,name=artifact_digest,json=artifactDigest,proto3" json:"artifact_digest,omitempty"`
+	InterfaceJson                string                             `protobuf:"bytes,14,opt,name=interface_json,json=interfaceJson,proto3" json:"interface_json,omitempty"`
+	InterfaceHash                string                             `protobuf:"bytes,15,opt,name=interface_hash,json=interfaceHash,proto3" json:"interface_hash,omitempty"`
+	Readiness                    string                             `protobuf:"bytes,16,opt,name=readiness,proto3" json:"readiness,omitempty"`
+	ReadinessMessage             string                             `protobuf:"bytes,17,opt,name=readiness_message,json=readinessMessage,proto3" json:"readiness_message,omitempty"`
+	Labels                       map[string]string                  `protobuf:"bytes,18,rep,name=labels,proto3" json:"labels,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	Lifecycle                    string                             `protobuf:"bytes,19,opt,name=lifecycle,proto3" json:"lifecycle,omitempty"`
+	AgentCount                   int32                              `protobuf:"varint,20,opt,name=agent_count,json=agentCount,proto3" json:"agent_count,omitempty"`
+	Capabilities                 []string                           `protobuf:"bytes,21,rep,name=capabilities,proto3" json:"capabilities,omitempty"`
+	LastSeenAt                   *timestamppb.Timestamp             `protobuf:"bytes,22,opt,name=last_seen_at,json=lastSeenAt,proto3" json:"last_seen_at,omitempty"`
+	LastReadyAt                  *timestamppb.Timestamp             `protobuf:"bytes,23,opt,name=last_ready_at,json=lastReadyAt,proto3" json:"last_ready_at,omitempty"`
+	CreatedAt                    *timestamppb.Timestamp             `protobuf:"bytes,24,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	UpdatedAt                    *timestamppb.Timestamp             `protobuf:"bytes,25,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
+	OwnerName                    string                             `protobuf:"bytes,26,opt,name=owner_name,json=ownerName,proto3" json:"owner_name,omitempty"`
+	OwnerKind                    string                             `protobuf:"bytes,27,opt,name=owner_kind,json=ownerKind,proto3" json:"owner_kind,omitempty"`
+	Online                       bool                               `protobuf:"varint,28,opt,name=online,proto3" json:"online,omitempty"`
+	Commands                     []*ConnectorPublishedCommandInfo   `protobuf:"bytes,29,rep,name=commands,proto3" json:"commands,omitempty"`
+	Directories                  []*ConnectorPublishedDirectoryInfo `protobuf:"bytes,30,rep,name=directories,proto3" json:"directories,omitempty"`
+	ArtifactFreshness            string                             `protobuf:"bytes,31,opt,name=artifact_freshness,json=artifactFreshness,proto3" json:"artifact_freshness,omitempty"` // current | outdated | unknown | missing
+	UpdateStatus                 string                             `protobuf:"bytes,32,opt,name=update_status,json=updateStatus,proto3" json:"update_status,omitempty"`                // current | update_available | update_recommended | manual_update_required | unsupported_protocol
+	LatestArtifactVersion        string                             `protobuf:"bytes,33,opt,name=latest_artifact_version,json=latestArtifactVersion,proto3" json:"latest_artifact_version,omitempty"`
+	LatestArtifactDigest         string                             `protobuf:"bytes,34,opt,name=latest_artifact_digest,json=latestArtifactDigest,proto3" json:"latest_artifact_digest,omitempty"`
+	LatestInterfaceHash          string                             `protobuf:"bytes,35,opt,name=latest_interface_hash,json=latestInterfaceHash,proto3" json:"latest_interface_hash,omitempty"`
+	LatestArtifactCreatedAt      *timestamppb.Timestamp             `protobuf:"bytes,36,opt,name=latest_artifact_created_at,json=latestArtifactCreatedAt,proto3" json:"latest_artifact_created_at,omitempty"`
+	HostId                       string                             `protobuf:"bytes,37,opt,name=host_id,json=hostId,proto3" json:"host_id,omitempty"`
+	ActiveProvenance             string                             `protobuf:"bytes,38,opt,name=active_provenance,json=activeProvenance,proto3" json:"active_provenance,omitempty"`                           // airlock | manual | none
+	RollbackProvenance           string                             `protobuf:"bytes,39,opt,name=rollback_provenance,json=rollbackProvenance,proto3" json:"rollback_provenance,omitempty"`                     // airlock | manual | none
+	ActiveObservationState       string                             `protobuf:"bytes,40,opt,name=active_observation_state,json=activeObservationState,proto3" json:"active_observation_state,omitempty"`       // pending | known | manual | invalid | removed
+	RollbackObservationState     string                             `protobuf:"bytes,41,opt,name=rollback_observation_state,json=rollbackObservationState,proto3" json:"rollback_observation_state,omitempty"` // none | known | manual | invalid
+	InventoryRevision            uint64                             `protobuf:"varint,42,opt,name=inventory_revision,json=inventoryRevision,proto3" json:"inventory_revision,omitempty"`
+	ObservedActiveDigest         string                             `protobuf:"bytes,43,opt,name=observed_active_digest,json=observedActiveDigest,proto3" json:"observed_active_digest,omitempty"`
+	ObservedActiveManifestJson   string                             `protobuf:"bytes,44,opt,name=observed_active_manifest_json,json=observedActiveManifestJson,proto3" json:"observed_active_manifest_json,omitempty"`
+	ObservedActiveManifestHash   string                             `protobuf:"bytes,45,opt,name=observed_active_manifest_hash,json=observedActiveManifestHash,proto3" json:"observed_active_manifest_hash,omitempty"`
+	ObservedRollbackDigest       string                             `protobuf:"bytes,46,opt,name=observed_rollback_digest,json=observedRollbackDigest,proto3" json:"observed_rollback_digest,omitempty"`
+	ObservedRollbackManifestJson string                             `protobuf:"bytes,47,opt,name=observed_rollback_manifest_json,json=observedRollbackManifestJson,proto3" json:"observed_rollback_manifest_json,omitempty"`
+	ObservedRollbackManifestHash string                             `protobuf:"bytes,48,opt,name=observed_rollback_manifest_hash,json=observedRollbackManifestHash,proto3" json:"observed_rollback_manifest_hash,omitempty"`
+	unknownFields                protoimpl.UnknownFields
+	sizeCache                    protoimpl.SizeCache
+}
+
+func (x *ConnectorInfo) Reset() {
+	*x = ConnectorInfo{}
+	mi := &file_airlock_v1_types_proto_msgTypes[46]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ConnectorInfo) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ConnectorInfo) ProtoMessage() {}
+
+func (x *ConnectorInfo) ProtoReflect() protoreflect.Message {
+	mi := &file_airlock_v1_types_proto_msgTypes[46]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ConnectorInfo.ProtoReflect.Descriptor instead.
+func (*ConnectorInfo) Descriptor() ([]byte, []int) {
+	return file_airlock_v1_types_proto_rawDescGZIP(), []int{46}
+}
+
+func (x *ConnectorInfo) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *ConnectorInfo) GetOwnerPrincipalId() string {
+	if x != nil {
+		return x.OwnerPrincipalId
+	}
+	return ""
+}
+
+func (x *ConnectorInfo) GetSlug() string {
+	if x != nil {
+		return x.Slug
+	}
+	return ""
+}
+
+func (x *ConnectorInfo) GetKind() string {
+	if x != nil {
+		return x.Kind
+	}
+	return ""
+}
+
+func (x *ConnectorInfo) GetContractId() string {
+	if x != nil {
+		return x.ContractId
+	}
+	return ""
+}
+
+func (x *ConnectorInfo) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *ConnectorInfo) GetDisplayName() string {
+	if x != nil {
+		return x.DisplayName
+	}
+	return ""
+}
+
+func (x *ConnectorInfo) GetDescription() string {
+	if x != nil {
+		return x.Description
+	}
+	return ""
+}
+
+func (x *ConnectorInfo) GetProtocolMajor() int32 {
+	if x != nil {
+		return x.ProtocolMajor
+	}
+	return 0
+}
+
+func (x *ConnectorInfo) GetProtocolMinor() int32 {
+	if x != nil {
+		return x.ProtocolMinor
+	}
+	return 0
+}
+
+func (x *ConnectorInfo) GetFeatures() []string {
+	if x != nil {
+		return x.Features
+	}
+	return nil
+}
+
+func (x *ConnectorInfo) GetArtifactVersion() string {
+	if x != nil {
+		return x.ArtifactVersion
+	}
+	return ""
+}
+
+func (x *ConnectorInfo) GetArtifactDigest() string {
+	if x != nil {
+		return x.ArtifactDigest
+	}
+	return ""
+}
+
+func (x *ConnectorInfo) GetInterfaceJson() string {
+	if x != nil {
+		return x.InterfaceJson
+	}
+	return ""
+}
+
+func (x *ConnectorInfo) GetInterfaceHash() string {
+	if x != nil {
+		return x.InterfaceHash
+	}
+	return ""
+}
+
+func (x *ConnectorInfo) GetReadiness() string {
+	if x != nil {
+		return x.Readiness
+	}
+	return ""
+}
+
+func (x *ConnectorInfo) GetReadinessMessage() string {
+	if x != nil {
+		return x.ReadinessMessage
+	}
+	return ""
+}
+
+func (x *ConnectorInfo) GetLabels() map[string]string {
+	if x != nil {
+		return x.Labels
+	}
+	return nil
+}
+
+func (x *ConnectorInfo) GetLifecycle() string {
+	if x != nil {
+		return x.Lifecycle
+	}
+	return ""
+}
+
+func (x *ConnectorInfo) GetAgentCount() int32 {
+	if x != nil {
+		return x.AgentCount
+	}
+	return 0
+}
+
+func (x *ConnectorInfo) GetCapabilities() []string {
+	if x != nil {
+		return x.Capabilities
+	}
+	return nil
+}
+
+func (x *ConnectorInfo) GetLastSeenAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.LastSeenAt
+	}
+	return nil
+}
+
+func (x *ConnectorInfo) GetLastReadyAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.LastReadyAt
+	}
+	return nil
+}
+
+func (x *ConnectorInfo) GetCreatedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.CreatedAt
+	}
+	return nil
+}
+
+func (x *ConnectorInfo) GetUpdatedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.UpdatedAt
+	}
+	return nil
+}
+
+func (x *ConnectorInfo) GetOwnerName() string {
+	if x != nil {
+		return x.OwnerName
+	}
+	return ""
+}
+
+func (x *ConnectorInfo) GetOwnerKind() string {
+	if x != nil {
+		return x.OwnerKind
+	}
+	return ""
+}
+
+func (x *ConnectorInfo) GetOnline() bool {
+	if x != nil {
+		return x.Online
+	}
+	return false
+}
+
+func (x *ConnectorInfo) GetCommands() []*ConnectorPublishedCommandInfo {
+	if x != nil {
+		return x.Commands
+	}
+	return nil
+}
+
+func (x *ConnectorInfo) GetDirectories() []*ConnectorPublishedDirectoryInfo {
+	if x != nil {
+		return x.Directories
+	}
+	return nil
+}
+
+func (x *ConnectorInfo) GetArtifactFreshness() string {
+	if x != nil {
+		return x.ArtifactFreshness
+	}
+	return ""
+}
+
+func (x *ConnectorInfo) GetUpdateStatus() string {
+	if x != nil {
+		return x.UpdateStatus
+	}
+	return ""
+}
+
+func (x *ConnectorInfo) GetLatestArtifactVersion() string {
+	if x != nil {
+		return x.LatestArtifactVersion
+	}
+	return ""
+}
+
+func (x *ConnectorInfo) GetLatestArtifactDigest() string {
+	if x != nil {
+		return x.LatestArtifactDigest
+	}
+	return ""
+}
+
+func (x *ConnectorInfo) GetLatestInterfaceHash() string {
+	if x != nil {
+		return x.LatestInterfaceHash
+	}
+	return ""
+}
+
+func (x *ConnectorInfo) GetLatestArtifactCreatedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.LatestArtifactCreatedAt
+	}
+	return nil
+}
+
+func (x *ConnectorInfo) GetHostId() string {
+	if x != nil {
+		return x.HostId
+	}
+	return ""
+}
+
+func (x *ConnectorInfo) GetActiveProvenance() string {
+	if x != nil {
+		return x.ActiveProvenance
+	}
+	return ""
+}
+
+func (x *ConnectorInfo) GetRollbackProvenance() string {
+	if x != nil {
+		return x.RollbackProvenance
+	}
+	return ""
+}
+
+func (x *ConnectorInfo) GetActiveObservationState() string {
+	if x != nil {
+		return x.ActiveObservationState
+	}
+	return ""
+}
+
+func (x *ConnectorInfo) GetRollbackObservationState() string {
+	if x != nil {
+		return x.RollbackObservationState
+	}
+	return ""
+}
+
+func (x *ConnectorInfo) GetInventoryRevision() uint64 {
+	if x != nil {
+		return x.InventoryRevision
+	}
+	return 0
+}
+
+func (x *ConnectorInfo) GetObservedActiveDigest() string {
+	if x != nil {
+		return x.ObservedActiveDigest
+	}
+	return ""
+}
+
+func (x *ConnectorInfo) GetObservedActiveManifestJson() string {
+	if x != nil {
+		return x.ObservedActiveManifestJson
+	}
+	return ""
+}
+
+func (x *ConnectorInfo) GetObservedActiveManifestHash() string {
+	if x != nil {
+		return x.ObservedActiveManifestHash
+	}
+	return ""
+}
+
+func (x *ConnectorInfo) GetObservedRollbackDigest() string {
+	if x != nil {
+		return x.ObservedRollbackDigest
+	}
+	return ""
+}
+
+func (x *ConnectorInfo) GetObservedRollbackManifestJson() string {
+	if x != nil {
+		return x.ObservedRollbackManifestJson
+	}
+	return ""
+}
+
+func (x *ConnectorInfo) GetObservedRollbackManifestHash() string {
+	if x != nil {
+		return x.ObservedRollbackManifestHash
+	}
+	return ""
+}
+
+type HostInfo struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	Id              string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Name            string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	Platform        string                 `protobuf:"bytes,3,opt,name=platform,proto3" json:"platform,omitempty"`
+	Architecture    string                 `protobuf:"bytes,4,opt,name=architecture,proto3" json:"architecture,omitempty"`
+	AccessMode      string                 `protobuf:"bytes,5,opt,name=access_mode,json=accessMode,proto3" json:"access_mode,omitempty"` // full | update_only | none; reported by the host
+	Version         string                 `protobuf:"bytes,6,opt,name=version,proto3" json:"version,omitempty"`
+	ProtocolVersion int32                  `protobuf:"varint,7,opt,name=protocol_version,json=protocolVersion,proto3" json:"protocol_version,omitempty"`
+	Lifecycle       string                 `protobuf:"bytes,8,opt,name=lifecycle,proto3" json:"lifecycle,omitempty"`
+	LastSeenAt      *timestamppb.Timestamp `protobuf:"bytes,9,opt,name=last_seen_at,json=lastSeenAt,proto3" json:"last_seen_at,omitempty"`
+	CreatedAt       *timestamppb.Timestamp `protobuf:"bytes,10,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	UpdatedAt       *timestamppb.Timestamp `protobuf:"bytes,11,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
+	ConnectorCount  int32                  `protobuf:"varint,12,opt,name=connector_count,json=connectorCount,proto3" json:"connector_count,omitempty"`
+	ActiveJobCount  int32                  `protobuf:"varint,13,opt,name=active_job_count,json=activeJobCount,proto3" json:"active_job_count,omitempty"`
+	OwnerUserId     string                 `protobuf:"bytes,14,opt,name=owner_user_id,json=ownerUserId,proto3" json:"owner_user_id,omitempty"`
+	OwnerName       string                 `protobuf:"bytes,15,opt,name=owner_name,json=ownerName,proto3" json:"owner_name,omitempty"`
+	Capabilities    []string               `protobuf:"bytes,16,rep,name=capabilities,proto3" json:"capabilities,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *HostInfo) Reset() {
+	*x = HostInfo{}
+	mi := &file_airlock_v1_types_proto_msgTypes[47]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *HostInfo) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*HostInfo) ProtoMessage() {}
+
+func (x *HostInfo) ProtoReflect() protoreflect.Message {
+	mi := &file_airlock_v1_types_proto_msgTypes[47]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use HostInfo.ProtoReflect.Descriptor instead.
+func (*HostInfo) Descriptor() ([]byte, []int) {
+	return file_airlock_v1_types_proto_rawDescGZIP(), []int{47}
+}
+
+func (x *HostInfo) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *HostInfo) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *HostInfo) GetPlatform() string {
+	if x != nil {
+		return x.Platform
+	}
+	return ""
+}
+
+func (x *HostInfo) GetArchitecture() string {
+	if x != nil {
+		return x.Architecture
+	}
+	return ""
+}
+
+func (x *HostInfo) GetAccessMode() string {
+	if x != nil {
+		return x.AccessMode
+	}
+	return ""
+}
+
+func (x *HostInfo) GetVersion() string {
+	if x != nil {
+		return x.Version
+	}
+	return ""
+}
+
+func (x *HostInfo) GetProtocolVersion() int32 {
+	if x != nil {
+		return x.ProtocolVersion
+	}
+	return 0
+}
+
+func (x *HostInfo) GetLifecycle() string {
+	if x != nil {
+		return x.Lifecycle
+	}
+	return ""
+}
+
+func (x *HostInfo) GetLastSeenAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.LastSeenAt
+	}
+	return nil
+}
+
+func (x *HostInfo) GetCreatedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.CreatedAt
+	}
+	return nil
+}
+
+func (x *HostInfo) GetUpdatedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.UpdatedAt
+	}
+	return nil
+}
+
+func (x *HostInfo) GetConnectorCount() int32 {
+	if x != nil {
+		return x.ConnectorCount
+	}
+	return 0
+}
+
+func (x *HostInfo) GetActiveJobCount() int32 {
+	if x != nil {
+		return x.ActiveJobCount
+	}
+	return 0
+}
+
+func (x *HostInfo) GetOwnerUserId() string {
+	if x != nil {
+		return x.OwnerUserId
+	}
+	return ""
+}
+
+func (x *HostInfo) GetOwnerName() string {
+	if x != nil {
+		return x.OwnerName
+	}
+	return ""
+}
+
+func (x *HostInfo) GetCapabilities() []string {
+	if x != nil {
+		return x.Capabilities
+	}
+	return nil
+}
+
+type HostManagementEventInfo struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	Sequence        int64                  `protobuf:"varint,1,opt,name=sequence,proto3" json:"sequence,omitempty"`
+	AttemptSequence int64                  `protobuf:"varint,2,opt,name=attempt_sequence,json=attemptSequence,proto3" json:"attempt_sequence,omitempty"`
+	Phase           string                 `protobuf:"bytes,3,opt,name=phase,proto3" json:"phase,omitempty"`
+	Message         string                 `protobuf:"bytes,4,opt,name=message,proto3" json:"message,omitempty"`
+	EventTime       *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=event_time,json=eventTime,proto3" json:"event_time,omitempty"`
+	CreatedAt       *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *HostManagementEventInfo) Reset() {
+	*x = HostManagementEventInfo{}
+	mi := &file_airlock_v1_types_proto_msgTypes[48]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *HostManagementEventInfo) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*HostManagementEventInfo) ProtoMessage() {}
+
+func (x *HostManagementEventInfo) ProtoReflect() protoreflect.Message {
+	mi := &file_airlock_v1_types_proto_msgTypes[48]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use HostManagementEventInfo.ProtoReflect.Descriptor instead.
+func (*HostManagementEventInfo) Descriptor() ([]byte, []int) {
+	return file_airlock_v1_types_proto_rawDescGZIP(), []int{48}
+}
+
+func (x *HostManagementEventInfo) GetSequence() int64 {
+	if x != nil {
+		return x.Sequence
+	}
+	return 0
+}
+
+func (x *HostManagementEventInfo) GetAttemptSequence() int64 {
+	if x != nil {
+		return x.AttemptSequence
+	}
+	return 0
+}
+
+func (x *HostManagementEventInfo) GetPhase() string {
+	if x != nil {
+		return x.Phase
+	}
+	return ""
+}
+
+func (x *HostManagementEventInfo) GetMessage() string {
+	if x != nil {
+		return x.Message
+	}
+	return ""
+}
+
+func (x *HostManagementEventInfo) GetEventTime() *timestamppb.Timestamp {
+	if x != nil {
+		return x.EventTime
+	}
+	return nil
+}
+
+func (x *HostManagementEventInfo) GetCreatedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.CreatedAt
+	}
+	return nil
+}
+
+type HostManagementJobInfo struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	Id                string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	HostId            string                 `protobuf:"bytes,2,opt,name=host_id,json=hostId,proto3" json:"host_id,omitempty"`
+	ConnectorId       string                 `protobuf:"bytes,3,opt,name=connector_id,json=connectorId,proto3" json:"connector_id,omitempty"`
+	RequestedByUserId string                 `protobuf:"bytes,4,opt,name=requested_by_user_id,json=requestedByUserId,proto3" json:"requested_by_user_id,omitempty"`
+	Kind              string                 `protobuf:"bytes,5,opt,name=kind,proto3" json:"kind,omitempty"`
+	ArtifactFileId    string                 `protobuf:"bytes,6,opt,name=artifact_file_id,json=artifactFileId,proto3" json:"artifact_file_id,omitempty"`
+	InputJson         string                 `protobuf:"bytes,7,opt,name=input_json,json=inputJson,proto3" json:"input_json,omitempty"`
+	Status            string                 `protobuf:"bytes,8,opt,name=status,proto3" json:"status,omitempty"`
+	OutputJson        string                 `protobuf:"bytes,9,opt,name=output_json,json=outputJson,proto3" json:"output_json,omitempty"`
+	ErrorMessage      string                 `protobuf:"bytes,10,opt,name=error_message,json=errorMessage,proto3" json:"error_message,omitempty"`
+	DeadlineAt        *timestamppb.Timestamp `protobuf:"bytes,11,opt,name=deadline_at,json=deadlineAt,proto3" json:"deadline_at,omitempty"`
+	StartedAt         *timestamppb.Timestamp `protobuf:"bytes,12,opt,name=started_at,json=startedAt,proto3" json:"started_at,omitempty"`
+	CompletedAt       *timestamppb.Timestamp `protobuf:"bytes,13,opt,name=completed_at,json=completedAt,proto3" json:"completed_at,omitempty"`
+	CreatedAt         *timestamppb.Timestamp `protobuf:"bytes,14,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	UpdatedAt         *timestamppb.Timestamp `protobuf:"bytes,15,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *HostManagementJobInfo) Reset() {
+	*x = HostManagementJobInfo{}
+	mi := &file_airlock_v1_types_proto_msgTypes[49]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *HostManagementJobInfo) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*HostManagementJobInfo) ProtoMessage() {}
+
+func (x *HostManagementJobInfo) ProtoReflect() protoreflect.Message {
+	mi := &file_airlock_v1_types_proto_msgTypes[49]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use HostManagementJobInfo.ProtoReflect.Descriptor instead.
+func (*HostManagementJobInfo) Descriptor() ([]byte, []int) {
+	return file_airlock_v1_types_proto_rawDescGZIP(), []int{49}
+}
+
+func (x *HostManagementJobInfo) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *HostManagementJobInfo) GetHostId() string {
+	if x != nil {
+		return x.HostId
+	}
+	return ""
+}
+
+func (x *HostManagementJobInfo) GetConnectorId() string {
+	if x != nil {
+		return x.ConnectorId
+	}
+	return ""
+}
+
+func (x *HostManagementJobInfo) GetRequestedByUserId() string {
+	if x != nil {
+		return x.RequestedByUserId
+	}
+	return ""
+}
+
+func (x *HostManagementJobInfo) GetKind() string {
+	if x != nil {
+		return x.Kind
+	}
+	return ""
+}
+
+func (x *HostManagementJobInfo) GetArtifactFileId() string {
+	if x != nil {
+		return x.ArtifactFileId
+	}
+	return ""
+}
+
+func (x *HostManagementJobInfo) GetInputJson() string {
+	if x != nil {
+		return x.InputJson
+	}
+	return ""
+}
+
+func (x *HostManagementJobInfo) GetStatus() string {
+	if x != nil {
+		return x.Status
+	}
+	return ""
+}
+
+func (x *HostManagementJobInfo) GetOutputJson() string {
+	if x != nil {
+		return x.OutputJson
+	}
+	return ""
+}
+
+func (x *HostManagementJobInfo) GetErrorMessage() string {
+	if x != nil {
+		return x.ErrorMessage
+	}
+	return ""
+}
+
+func (x *HostManagementJobInfo) GetDeadlineAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.DeadlineAt
+	}
+	return nil
+}
+
+func (x *HostManagementJobInfo) GetStartedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.StartedAt
+	}
+	return nil
+}
+
+func (x *HostManagementJobInfo) GetCompletedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.CompletedAt
+	}
+	return nil
+}
+
+func (x *HostManagementJobInfo) GetCreatedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.CreatedAt
+	}
+	return nil
+}
+
+func (x *HostManagementJobInfo) GetUpdatedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.UpdatedAt
+	}
+	return nil
+}
+
+type ConnectorArtifactFileInfo struct {
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	Id               string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Platform         string                 `protobuf:"bytes,2,opt,name=platform,proto3" json:"platform,omitempty"`
+	Filename         string                 `protobuf:"bytes,3,opt,name=filename,proto3" json:"filename,omitempty"`
+	Sha256           string                 `protobuf:"bytes,4,opt,name=sha256,proto3" json:"sha256,omitempty"`
+	SizeBytes        int64                  `protobuf:"varint,5,opt,name=size_bytes,json=sizeBytes,proto3" json:"size_bytes,omitempty"`
+	NoticesSha256    string                 `protobuf:"bytes,6,opt,name=notices_sha256,json=noticesSha256,proto3" json:"notices_sha256,omitempty"`
+	NoticesSizeBytes int64                  `protobuf:"varint,7,opt,name=notices_size_bytes,json=noticesSizeBytes,proto3" json:"notices_size_bytes,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *ConnectorArtifactFileInfo) Reset() {
+	*x = ConnectorArtifactFileInfo{}
+	mi := &file_airlock_v1_types_proto_msgTypes[50]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ConnectorArtifactFileInfo) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ConnectorArtifactFileInfo) ProtoMessage() {}
+
+func (x *ConnectorArtifactFileInfo) ProtoReflect() protoreflect.Message {
+	mi := &file_airlock_v1_types_proto_msgTypes[50]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ConnectorArtifactFileInfo.ProtoReflect.Descriptor instead.
+func (*ConnectorArtifactFileInfo) Descriptor() ([]byte, []int) {
+	return file_airlock_v1_types_proto_rawDescGZIP(), []int{50}
+}
+
+func (x *ConnectorArtifactFileInfo) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *ConnectorArtifactFileInfo) GetPlatform() string {
+	if x != nil {
+		return x.Platform
+	}
+	return ""
+}
+
+func (x *ConnectorArtifactFileInfo) GetFilename() string {
+	if x != nil {
+		return x.Filename
+	}
+	return ""
+}
+
+func (x *ConnectorArtifactFileInfo) GetSha256() string {
+	if x != nil {
+		return x.Sha256
+	}
+	return ""
+}
+
+func (x *ConnectorArtifactFileInfo) GetSizeBytes() int64 {
+	if x != nil {
+		return x.SizeBytes
+	}
+	return 0
+}
+
+func (x *ConnectorArtifactFileInfo) GetNoticesSha256() string {
+	if x != nil {
+		return x.NoticesSha256
+	}
+	return ""
+}
+
+func (x *ConnectorArtifactFileInfo) GetNoticesSizeBytes() int64 {
+	if x != nil {
+		return x.NoticesSizeBytes
+	}
+	return 0
+}
+
+type ConnectorArtifactSetInfo struct {
+	state           protoimpl.MessageState       `protogen:"open.v1"`
+	Id              string                       `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	BuildId         string                       `protobuf:"bytes,2,opt,name=build_id,json=buildId,proto3" json:"build_id,omitempty"`
+	ConnectorSlug   string                       `protobuf:"bytes,3,opt,name=connector_slug,json=connectorSlug,proto3" json:"connector_slug,omitempty"`
+	SourceRef       string                       `protobuf:"bytes,4,opt,name=source_ref,json=sourceRef,proto3" json:"source_ref,omitempty"`
+	Kind            string                       `protobuf:"bytes,5,opt,name=kind,proto3" json:"kind,omitempty"`
+	ContractId      string                       `protobuf:"bytes,6,opt,name=contract_id,json=contractId,proto3" json:"contract_id,omitempty"`
+	Name            string                       `protobuf:"bytes,7,opt,name=name,proto3" json:"name,omitempty"`
+	Description     string                       `protobuf:"bytes,8,opt,name=description,proto3" json:"description,omitempty"`
+	ArtifactVersion string                       `protobuf:"bytes,9,opt,name=artifact_version,json=artifactVersion,proto3" json:"artifact_version,omitempty"`
+	ProtocolMajor   int32                        `protobuf:"varint,10,opt,name=protocol_major,json=protocolMajor,proto3" json:"protocol_major,omitempty"`
+	ProtocolMinor   int32                        `protobuf:"varint,11,opt,name=protocol_minor,json=protocolMinor,proto3" json:"protocol_minor,omitempty"`
+	Features        []string                     `protobuf:"bytes,12,rep,name=features,proto3" json:"features,omitempty"`
+	InterfaceJson   string                       `protobuf:"bytes,13,opt,name=interface_json,json=interfaceJson,proto3" json:"interface_json,omitempty"`
+	InterfaceHash   string                       `protobuf:"bytes,14,opt,name=interface_hash,json=interfaceHash,proto3" json:"interface_hash,omitempty"`
+	SettingsJson    string                       `protobuf:"bytes,15,opt,name=settings_json,json=settingsJson,proto3" json:"settings_json,omitempty"`
+	Files           []*ConnectorArtifactFileInfo `protobuf:"bytes,16,rep,name=files,proto3" json:"files,omitempty"`
+	CreatedAt       *timestamppb.Timestamp       `protobuf:"bytes,17,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	ArtifactDigest  string                       `protobuf:"bytes,18,opt,name=artifact_digest,json=artifactDigest,proto3" json:"artifact_digest,omitempty"`
+	ServiceMode     string                       `protobuf:"bytes,19,opt,name=service_mode,json=serviceMode,proto3" json:"service_mode,omitempty"` // user | system; empty when authoritative metadata is unavailable
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *ConnectorArtifactSetInfo) Reset() {
+	*x = ConnectorArtifactSetInfo{}
+	mi := &file_airlock_v1_types_proto_msgTypes[51]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ConnectorArtifactSetInfo) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ConnectorArtifactSetInfo) ProtoMessage() {}
+
+func (x *ConnectorArtifactSetInfo) ProtoReflect() protoreflect.Message {
+	mi := &file_airlock_v1_types_proto_msgTypes[51]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ConnectorArtifactSetInfo.ProtoReflect.Descriptor instead.
+func (*ConnectorArtifactSetInfo) Descriptor() ([]byte, []int) {
+	return file_airlock_v1_types_proto_rawDescGZIP(), []int{51}
+}
+
+func (x *ConnectorArtifactSetInfo) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *ConnectorArtifactSetInfo) GetBuildId() string {
+	if x != nil {
+		return x.BuildId
+	}
+	return ""
+}
+
+func (x *ConnectorArtifactSetInfo) GetConnectorSlug() string {
+	if x != nil {
+		return x.ConnectorSlug
+	}
+	return ""
+}
+
+func (x *ConnectorArtifactSetInfo) GetSourceRef() string {
+	if x != nil {
+		return x.SourceRef
+	}
+	return ""
+}
+
+func (x *ConnectorArtifactSetInfo) GetKind() string {
+	if x != nil {
+		return x.Kind
+	}
+	return ""
+}
+
+func (x *ConnectorArtifactSetInfo) GetContractId() string {
+	if x != nil {
+		return x.ContractId
+	}
+	return ""
+}
+
+func (x *ConnectorArtifactSetInfo) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *ConnectorArtifactSetInfo) GetDescription() string {
+	if x != nil {
+		return x.Description
+	}
+	return ""
+}
+
+func (x *ConnectorArtifactSetInfo) GetArtifactVersion() string {
+	if x != nil {
+		return x.ArtifactVersion
+	}
+	return ""
+}
+
+func (x *ConnectorArtifactSetInfo) GetProtocolMajor() int32 {
+	if x != nil {
+		return x.ProtocolMajor
+	}
+	return 0
+}
+
+func (x *ConnectorArtifactSetInfo) GetProtocolMinor() int32 {
+	if x != nil {
+		return x.ProtocolMinor
+	}
+	return 0
+}
+
+func (x *ConnectorArtifactSetInfo) GetFeatures() []string {
+	if x != nil {
+		return x.Features
+	}
+	return nil
+}
+
+func (x *ConnectorArtifactSetInfo) GetInterfaceJson() string {
+	if x != nil {
+		return x.InterfaceJson
+	}
+	return ""
+}
+
+func (x *ConnectorArtifactSetInfo) GetInterfaceHash() string {
+	if x != nil {
+		return x.InterfaceHash
+	}
+	return ""
+}
+
+func (x *ConnectorArtifactSetInfo) GetSettingsJson() string {
+	if x != nil {
+		return x.SettingsJson
+	}
+	return ""
+}
+
+func (x *ConnectorArtifactSetInfo) GetFiles() []*ConnectorArtifactFileInfo {
+	if x != nil {
+		return x.Files
+	}
+	return nil
+}
+
+func (x *ConnectorArtifactSetInfo) GetCreatedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.CreatedAt
+	}
+	return nil
+}
+
+func (x *ConnectorArtifactSetInfo) GetArtifactDigest() string {
+	if x != nil {
+		return x.ArtifactDigest
+	}
+	return ""
+}
+
+func (x *ConnectorArtifactSetInfo) GetServiceMode() string {
+	if x != nil {
+		return x.ServiceMode
+	}
+	return ""
+}
+
+// Deprecated: Marked as deprecated in airlock/v1/types.proto.
+type ConnectorArtifactTargetInfo struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Target        string                 `protobuf:"bytes,1,opt,name=target,proto3" json:"target,omitempty"`
+	Os            string                 `protobuf:"bytes,2,opt,name=os,proto3" json:"os,omitempty"`
+	Arch          string                 `protobuf:"bytes,3,opt,name=arch,proto3" json:"arch,omitempty"`
+	Filename      string                 `protobuf:"bytes,4,opt,name=filename,proto3" json:"filename,omitempty"`
+	SizeBytes     int64                  `protobuf:"varint,5,opt,name=size_bytes,json=sizeBytes,proto3" json:"size_bytes,omitempty"`
+	Sha256        string                 `protobuf:"bytes,6,opt,name=sha256,proto3" json:"sha256,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ConnectorArtifactTargetInfo) Reset() {
+	*x = ConnectorArtifactTargetInfo{}
+	mi := &file_airlock_v1_types_proto_msgTypes[52]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ConnectorArtifactTargetInfo) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ConnectorArtifactTargetInfo) ProtoMessage() {}
+
+func (x *ConnectorArtifactTargetInfo) ProtoReflect() protoreflect.Message {
+	mi := &file_airlock_v1_types_proto_msgTypes[52]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ConnectorArtifactTargetInfo.ProtoReflect.Descriptor instead.
+func (*ConnectorArtifactTargetInfo) Descriptor() ([]byte, []int) {
+	return file_airlock_v1_types_proto_rawDescGZIP(), []int{52}
+}
+
+func (x *ConnectorArtifactTargetInfo) GetTarget() string {
+	if x != nil {
+		return x.Target
+	}
+	return ""
+}
+
+func (x *ConnectorArtifactTargetInfo) GetOs() string {
+	if x != nil {
+		return x.Os
+	}
+	return ""
+}
+
+func (x *ConnectorArtifactTargetInfo) GetArch() string {
+	if x != nil {
+		return x.Arch
+	}
+	return ""
+}
+
+func (x *ConnectorArtifactTargetInfo) GetFilename() string {
+	if x != nil {
+		return x.Filename
+	}
+	return ""
+}
+
+func (x *ConnectorArtifactTargetInfo) GetSizeBytes() int64 {
+	if x != nil {
+		return x.SizeBytes
+	}
+	return 0
+}
+
+func (x *ConnectorArtifactTargetInfo) GetSha256() string {
+	if x != nil {
+		return x.Sha256
+	}
+	return ""
+}
+
+// Deprecated: Marked as deprecated in airlock/v1/types.proto.
+type ConnectorSettingInfo struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Kind          string                 `protobuf:"bytes,2,opt,name=kind,proto3" json:"kind,omitempty"`
+	Description   string                 `protobuf:"bytes,3,opt,name=description,proto3" json:"description,omitempty"`
+	Required      bool                   `protobuf:"varint,4,opt,name=required,proto3" json:"required,omitempty"`
+	DefaultValue  string                 `protobuf:"bytes,5,opt,name=default_value,json=default,proto3" json:"default_value,omitempty"`
+	EnumValues    []string               `protobuf:"bytes,6,rep,name=enum_values,json=enum,proto3" json:"enum_values,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ConnectorSettingInfo) Reset() {
+	*x = ConnectorSettingInfo{}
+	mi := &file_airlock_v1_types_proto_msgTypes[53]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ConnectorSettingInfo) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ConnectorSettingInfo) ProtoMessage() {}
+
+func (x *ConnectorSettingInfo) ProtoReflect() protoreflect.Message {
+	mi := &file_airlock_v1_types_proto_msgTypes[53]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ConnectorSettingInfo.ProtoReflect.Descriptor instead.
+func (*ConnectorSettingInfo) Descriptor() ([]byte, []int) {
+	return file_airlock_v1_types_proto_rawDescGZIP(), []int{53}
+}
+
+func (x *ConnectorSettingInfo) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *ConnectorSettingInfo) GetKind() string {
+	if x != nil {
+		return x.Kind
+	}
+	return ""
+}
+
+func (x *ConnectorSettingInfo) GetDescription() string {
+	if x != nil {
+		return x.Description
+	}
+	return ""
+}
+
+func (x *ConnectorSettingInfo) GetRequired() bool {
+	if x != nil {
+		return x.Required
+	}
+	return false
+}
+
+func (x *ConnectorSettingInfo) GetDefaultValue() string {
+	if x != nil {
+		return x.DefaultValue
+	}
+	return ""
+}
+
+func (x *ConnectorSettingInfo) GetEnumValues() []string {
+	if x != nil {
+		return x.EnumValues
+	}
+	return nil
+}
+
+// Deprecated: Marked as deprecated in airlock/v1/types.proto.
+type ConnectorArtifactVersionInfo struct {
+	state               protoimpl.MessageState         `protogen:"open.v1"`
+	Version             string                         `protobuf:"bytes,1,opt,name=version,proto3" json:"version,omitempty"`
+	SourceCommit        string                         `protobuf:"bytes,2,opt,name=source_commit,json=sourceCommit,proto3" json:"source_commit,omitempty"`
+	BuildId             string                         `protobuf:"bytes,3,opt,name=build_id,json=buildId,proto3" json:"build_id,omitempty"`
+	CreatedAt           *timestamppb.Timestamp         `protobuf:"bytes,4,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	Compatible          bool                           `protobuf:"varint,5,opt,name=compatible,proto3" json:"compatible,omitempty"`
+	LatestCompatible    bool                           `protobuf:"varint,6,opt,name=latest_compatible,json=latestCompatible,proto3" json:"latest_compatible,omitempty"`
+	ArtifactDigest      string                         `protobuf:"bytes,7,opt,name=artifact_digest,json=artifactDigest,proto3" json:"artifact_digest,omitempty"`
+	Interface           *structpb.Struct               `protobuf:"bytes,8,opt,name=interface,proto3" json:"interface,omitempty"`
+	Settings            []*ConnectorSettingInfo        `protobuf:"bytes,9,rep,name=settings,proto3" json:"settings,omitempty"`
+	RuntimeExpectations []string                       `protobuf:"bytes,10,rep,name=runtime_expectations,json=runtimeExpectations,proto3" json:"runtime_expectations,omitempty"`
+	Notices             []string                       `protobuf:"bytes,11,rep,name=notices,proto3" json:"notices,omitempty"`
+	Targets             []*ConnectorArtifactTargetInfo `protobuf:"bytes,12,rep,name=targets,proto3" json:"targets,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
+}
+
+func (x *ConnectorArtifactVersionInfo) Reset() {
+	*x = ConnectorArtifactVersionInfo{}
+	mi := &file_airlock_v1_types_proto_msgTypes[54]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ConnectorArtifactVersionInfo) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ConnectorArtifactVersionInfo) ProtoMessage() {}
+
+func (x *ConnectorArtifactVersionInfo) ProtoReflect() protoreflect.Message {
+	mi := &file_airlock_v1_types_proto_msgTypes[54]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ConnectorArtifactVersionInfo.ProtoReflect.Descriptor instead.
+func (*ConnectorArtifactVersionInfo) Descriptor() ([]byte, []int) {
+	return file_airlock_v1_types_proto_rawDescGZIP(), []int{54}
+}
+
+func (x *ConnectorArtifactVersionInfo) GetVersion() string {
+	if x != nil {
+		return x.Version
+	}
+	return ""
+}
+
+func (x *ConnectorArtifactVersionInfo) GetSourceCommit() string {
+	if x != nil {
+		return x.SourceCommit
+	}
+	return ""
+}
+
+func (x *ConnectorArtifactVersionInfo) GetBuildId() string {
+	if x != nil {
+		return x.BuildId
+	}
+	return ""
+}
+
+func (x *ConnectorArtifactVersionInfo) GetCreatedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.CreatedAt
+	}
+	return nil
+}
+
+func (x *ConnectorArtifactVersionInfo) GetCompatible() bool {
+	if x != nil {
+		return x.Compatible
+	}
+	return false
+}
+
+func (x *ConnectorArtifactVersionInfo) GetLatestCompatible() bool {
+	if x != nil {
+		return x.LatestCompatible
+	}
+	return false
+}
+
+func (x *ConnectorArtifactVersionInfo) GetArtifactDigest() string {
+	if x != nil {
+		return x.ArtifactDigest
+	}
+	return ""
+}
+
+func (x *ConnectorArtifactVersionInfo) GetInterface() *structpb.Struct {
+	if x != nil {
+		return x.Interface
+	}
+	return nil
+}
+
+func (x *ConnectorArtifactVersionInfo) GetSettings() []*ConnectorSettingInfo {
+	if x != nil {
+		return x.Settings
+	}
+	return nil
+}
+
+func (x *ConnectorArtifactVersionInfo) GetRuntimeExpectations() []string {
+	if x != nil {
+		return x.RuntimeExpectations
+	}
+	return nil
+}
+
+func (x *ConnectorArtifactVersionInfo) GetNotices() []string {
+	if x != nil {
+		return x.Notices
+	}
+	return nil
+}
+
+func (x *ConnectorArtifactVersionInfo) GetTargets() []*ConnectorArtifactTargetInfo {
+	if x != nil {
+		return x.Targets
+	}
+	return nil
+}
+
+type ConnectorTargetGroupInfo struct {
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	Id               string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	OwnerPrincipalId string                 `protobuf:"bytes,2,opt,name=owner_principal_id,json=ownerPrincipalId,proto3" json:"owner_principal_id,omitempty"`
+	Name             string                 `protobuf:"bytes,3,opt,name=name,proto3" json:"name,omitempty"`
+	Description      string                 `protobuf:"bytes,4,opt,name=description,proto3" json:"description,omitempty"`
+	ContractId       string                 `protobuf:"bytes,5,opt,name=contract_id,json=contractId,proto3" json:"contract_id,omitempty"`
+	CreatedAt        *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	UpdatedAt        *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
+	MemberCount      int32                  `protobuf:"varint,8,opt,name=member_count,json=memberCount,proto3" json:"member_count,omitempty"`
+	ReadyMemberCount int32                  `protobuf:"varint,9,opt,name=ready_member_count,json=readyMemberCount,proto3" json:"ready_member_count,omitempty"`
+	Capabilities     []string               `protobuf:"bytes,10,rep,name=capabilities,proto3" json:"capabilities,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *ConnectorTargetGroupInfo) Reset() {
+	*x = ConnectorTargetGroupInfo{}
+	mi := &file_airlock_v1_types_proto_msgTypes[55]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ConnectorTargetGroupInfo) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ConnectorTargetGroupInfo) ProtoMessage() {}
+
+func (x *ConnectorTargetGroupInfo) ProtoReflect() protoreflect.Message {
+	mi := &file_airlock_v1_types_proto_msgTypes[55]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ConnectorTargetGroupInfo.ProtoReflect.Descriptor instead.
+func (*ConnectorTargetGroupInfo) Descriptor() ([]byte, []int) {
+	return file_airlock_v1_types_proto_rawDescGZIP(), []int{55}
+}
+
+func (x *ConnectorTargetGroupInfo) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *ConnectorTargetGroupInfo) GetOwnerPrincipalId() string {
+	if x != nil {
+		return x.OwnerPrincipalId
+	}
+	return ""
+}
+
+func (x *ConnectorTargetGroupInfo) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *ConnectorTargetGroupInfo) GetDescription() string {
+	if x != nil {
+		return x.Description
+	}
+	return ""
+}
+
+func (x *ConnectorTargetGroupInfo) GetContractId() string {
+	if x != nil {
+		return x.ContractId
+	}
+	return ""
+}
+
+func (x *ConnectorTargetGroupInfo) GetCreatedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.CreatedAt
+	}
+	return nil
+}
+
+func (x *ConnectorTargetGroupInfo) GetUpdatedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.UpdatedAt
+	}
+	return nil
+}
+
+func (x *ConnectorTargetGroupInfo) GetMemberCount() int32 {
+	if x != nil {
+		return x.MemberCount
+	}
+	return 0
+}
+
+func (x *ConnectorTargetGroupInfo) GetReadyMemberCount() int32 {
+	if x != nil {
+		return x.ReadyMemberCount
+	}
+	return 0
+}
+
+func (x *ConnectorTargetGroupInfo) GetCapabilities() []string {
+	if x != nil {
+		return x.Capabilities
+	}
+	return nil
+}
+
+type ConnectorJobInfo struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	Id                string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	ConnectorId       string                 `protobuf:"bytes,2,opt,name=connector_id,json=connectorId,proto3" json:"connector_id,omitempty"`
+	AgentId           string                 `protobuf:"bytes,3,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"`
+	NeedId            string                 `protobuf:"bytes,4,opt,name=need_id,json=needId,proto3" json:"need_id,omitempty"`
+	OrchestrationId   string                 `protobuf:"bytes,5,opt,name=orchestration_id,json=orchestrationId,proto3" json:"orchestration_id,omitempty"`
+	TargetPosition    int32                  `protobuf:"varint,6,opt,name=target_position,json=targetPosition,proto3" json:"target_position,omitempty"`
+	OperationName     string                 `protobuf:"bytes,7,opt,name=operation_name,json=operationName,proto3" json:"operation_name,omitempty"`
+	OperationRevision int32                  `protobuf:"varint,8,opt,name=operation_revision,json=operationRevision,proto3" json:"operation_revision,omitempty"`
+	Mode              string                 `protobuf:"bytes,9,opt,name=mode,proto3" json:"mode,omitempty"`
+	Status            string                 `protobuf:"bytes,10,opt,name=status,proto3" json:"status,omitempty"`
+	InputJson         string                 `protobuf:"bytes,11,opt,name=input_json,json=inputJson,proto3" json:"input_json,omitempty"`
+	OutputJson        string                 `protobuf:"bytes,12,opt,name=output_json,json=outputJson,proto3" json:"output_json,omitempty"`
+	ErrorCode         string                 `protobuf:"bytes,13,opt,name=error_code,json=errorCode,proto3" json:"error_code,omitempty"`
+	ErrorMessage      string                 `protobuf:"bytes,14,opt,name=error_message,json=errorMessage,proto3" json:"error_message,omitempty"`
+	CancelRequestedAt *timestamppb.Timestamp `protobuf:"bytes,15,opt,name=cancel_requested_at,json=cancelRequestedAt,proto3" json:"cancel_requested_at,omitempty"`
+	DeadlineAt        *timestamppb.Timestamp `protobuf:"bytes,16,opt,name=deadline_at,json=deadlineAt,proto3" json:"deadline_at,omitempty"`
+	StartedAt         *timestamppb.Timestamp `protobuf:"bytes,17,opt,name=started_at,json=startedAt,proto3" json:"started_at,omitempty"`
+	CompletedAt       *timestamppb.Timestamp `protobuf:"bytes,18,opt,name=completed_at,json=completedAt,proto3" json:"completed_at,omitempty"`
+	CreatedAt         *timestamppb.Timestamp `protobuf:"bytes,19,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	UpdatedAt         *timestamppb.Timestamp `protobuf:"bytes,20,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
+	RequestId         string                 `protobuf:"bytes,21,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	InputSchemaHash   string                 `protobuf:"bytes,22,opt,name=input_schema_hash,json=inputSchemaHash,proto3" json:"input_schema_hash,omitempty"`
+	OutputSchemaHash  string                 `protobuf:"bytes,23,opt,name=output_schema_hash,json=outputSchemaHash,proto3" json:"output_schema_hash,omitempty"`
+	CanaryCohort      bool                   `protobuf:"varint,24,opt,name=canary_cohort,json=canaryCohort,proto3" json:"canary_cohort,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *ConnectorJobInfo) Reset() {
+	*x = ConnectorJobInfo{}
+	mi := &file_airlock_v1_types_proto_msgTypes[56]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ConnectorJobInfo) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ConnectorJobInfo) ProtoMessage() {}
+
+func (x *ConnectorJobInfo) ProtoReflect() protoreflect.Message {
+	mi := &file_airlock_v1_types_proto_msgTypes[56]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ConnectorJobInfo.ProtoReflect.Descriptor instead.
+func (*ConnectorJobInfo) Descriptor() ([]byte, []int) {
+	return file_airlock_v1_types_proto_rawDescGZIP(), []int{56}
+}
+
+func (x *ConnectorJobInfo) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *ConnectorJobInfo) GetConnectorId() string {
+	if x != nil {
+		return x.ConnectorId
+	}
+	return ""
+}
+
+func (x *ConnectorJobInfo) GetAgentId() string {
+	if x != nil {
+		return x.AgentId
+	}
+	return ""
+}
+
+func (x *ConnectorJobInfo) GetNeedId() string {
+	if x != nil {
+		return x.NeedId
+	}
+	return ""
+}
+
+func (x *ConnectorJobInfo) GetOrchestrationId() string {
+	if x != nil {
+		return x.OrchestrationId
+	}
+	return ""
+}
+
+func (x *ConnectorJobInfo) GetTargetPosition() int32 {
+	if x != nil {
+		return x.TargetPosition
+	}
+	return 0
+}
+
+func (x *ConnectorJobInfo) GetOperationName() string {
+	if x != nil {
+		return x.OperationName
+	}
+	return ""
+}
+
+func (x *ConnectorJobInfo) GetOperationRevision() int32 {
+	if x != nil {
+		return x.OperationRevision
+	}
+	return 0
+}
+
+func (x *ConnectorJobInfo) GetMode() string {
+	if x != nil {
+		return x.Mode
+	}
+	return ""
+}
+
+func (x *ConnectorJobInfo) GetStatus() string {
+	if x != nil {
+		return x.Status
+	}
+	return ""
+}
+
+func (x *ConnectorJobInfo) GetInputJson() string {
+	if x != nil {
+		return x.InputJson
+	}
+	return ""
+}
+
+func (x *ConnectorJobInfo) GetOutputJson() string {
+	if x != nil {
+		return x.OutputJson
+	}
+	return ""
+}
+
+func (x *ConnectorJobInfo) GetErrorCode() string {
+	if x != nil {
+		return x.ErrorCode
+	}
+	return ""
+}
+
+func (x *ConnectorJobInfo) GetErrorMessage() string {
+	if x != nil {
+		return x.ErrorMessage
+	}
+	return ""
+}
+
+func (x *ConnectorJobInfo) GetCancelRequestedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.CancelRequestedAt
+	}
+	return nil
+}
+
+func (x *ConnectorJobInfo) GetDeadlineAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.DeadlineAt
+	}
+	return nil
+}
+
+func (x *ConnectorJobInfo) GetStartedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.StartedAt
+	}
+	return nil
+}
+
+func (x *ConnectorJobInfo) GetCompletedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.CompletedAt
+	}
+	return nil
+}
+
+func (x *ConnectorJobInfo) GetCreatedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.CreatedAt
+	}
+	return nil
+}
+
+func (x *ConnectorJobInfo) GetUpdatedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.UpdatedAt
+	}
+	return nil
+}
+
+func (x *ConnectorJobInfo) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
+func (x *ConnectorJobInfo) GetInputSchemaHash() string {
+	if x != nil {
+		return x.InputSchemaHash
+	}
+	return ""
+}
+
+func (x *ConnectorJobInfo) GetOutputSchemaHash() string {
+	if x != nil {
+		return x.OutputSchemaHash
+	}
+	return ""
+}
+
+func (x *ConnectorJobInfo) GetCanaryCohort() bool {
+	if x != nil {
+		return x.CanaryCohort
+	}
+	return false
+}
+
+type ConnectorOrchestrationInfo struct {
+	state                protoimpl.MessageState `protogen:"open.v1"`
+	Id                   string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	AgentId              string                 `protobuf:"bytes,2,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"`
+	NeedId               string                 `protobuf:"bytes,3,opt,name=need_id,json=needId,proto3" json:"need_id,omitempty"`
+	TargetGroupId        string                 `protobuf:"bytes,4,opt,name=target_group_id,json=targetGroupId,proto3" json:"target_group_id,omitempty"`
+	CommandName          string                 `protobuf:"bytes,5,opt,name=command_name,json=commandName,proto3" json:"command_name,omitempty"`
+	CommandRevision      int32                  `protobuf:"varint,6,opt,name=command_revision,json=commandRevision,proto3" json:"command_revision,omitempty"`
+	Strategy             string                 `protobuf:"bytes,7,opt,name=strategy,proto3" json:"strategy,omitempty"`
+	OfflinePolicy        string                 `protobuf:"bytes,8,opt,name=offline_policy,json=offlinePolicy,proto3" json:"offline_policy,omitempty"`
+	MaxConcurrency       int32                  `protobuf:"varint,9,opt,name=max_concurrency,json=maxConcurrency,proto3" json:"max_concurrency,omitempty"`
+	BatchSize            int32                  `protobuf:"varint,10,opt,name=batch_size,json=batchSize,proto3" json:"batch_size,omitempty"`
+	CanaryCount          int32                  `protobuf:"varint,11,opt,name=canary_count,json=canaryCount,proto3" json:"canary_count,omitempty"`
+	Quorum               int32                  `protobuf:"varint,12,opt,name=quorum,proto3" json:"quorum,omitempty"`
+	Status               string                 `protobuf:"bytes,13,opt,name=status,proto3" json:"status,omitempty"`
+	CancelRequestedAt    *timestamppb.Timestamp `protobuf:"bytes,14,opt,name=cancel_requested_at,json=cancelRequestedAt,proto3" json:"cancel_requested_at,omitempty"`
+	DeadlineAt           *timestamppb.Timestamp `protobuf:"bytes,15,opt,name=deadline_at,json=deadlineAt,proto3" json:"deadline_at,omitempty"`
+	StartedAt            *timestamppb.Timestamp `protobuf:"bytes,16,opt,name=started_at,json=startedAt,proto3" json:"started_at,omitempty"`
+	CompletedAt          *timestamppb.Timestamp `protobuf:"bytes,17,opt,name=completed_at,json=completedAt,proto3" json:"completed_at,omitempty"`
+	CreatedAt            *timestamppb.Timestamp `protobuf:"bytes,18,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	UpdatedAt            *timestamppb.Timestamp `protobuf:"bytes,19,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
+	RequestId            string                 `protobuf:"bytes,20,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	CommandMode          string                 `protobuf:"bytes,21,opt,name=command_mode,json=commandMode,proto3" json:"command_mode,omitempty"`
+	InputSchemaHash      string                 `protobuf:"bytes,22,opt,name=input_schema_hash,json=inputSchemaHash,proto3" json:"input_schema_hash,omitempty"`
+	OutputSchemaHash     string                 `protobuf:"bytes,23,opt,name=output_schema_hash,json=outputSchemaHash,proto3" json:"output_schema_hash,omitempty"`
+	CanaryPhase          string                 `protobuf:"bytes,24,opt,name=canary_phase,json=canaryPhase,proto3" json:"canary_phase,omitempty"`
+	CanarySucceededCount int32                  `protobuf:"varint,25,opt,name=canary_succeeded_count,json=canarySucceededCount,proto3" json:"canary_succeeded_count,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
+}
+
+func (x *ConnectorOrchestrationInfo) Reset() {
+	*x = ConnectorOrchestrationInfo{}
+	mi := &file_airlock_v1_types_proto_msgTypes[57]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ConnectorOrchestrationInfo) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ConnectorOrchestrationInfo) ProtoMessage() {}
+
+func (x *ConnectorOrchestrationInfo) ProtoReflect() protoreflect.Message {
+	mi := &file_airlock_v1_types_proto_msgTypes[57]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ConnectorOrchestrationInfo.ProtoReflect.Descriptor instead.
+func (*ConnectorOrchestrationInfo) Descriptor() ([]byte, []int) {
+	return file_airlock_v1_types_proto_rawDescGZIP(), []int{57}
+}
+
+func (x *ConnectorOrchestrationInfo) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *ConnectorOrchestrationInfo) GetAgentId() string {
+	if x != nil {
+		return x.AgentId
+	}
+	return ""
+}
+
+func (x *ConnectorOrchestrationInfo) GetNeedId() string {
+	if x != nil {
+		return x.NeedId
+	}
+	return ""
+}
+
+func (x *ConnectorOrchestrationInfo) GetTargetGroupId() string {
+	if x != nil {
+		return x.TargetGroupId
+	}
+	return ""
+}
+
+func (x *ConnectorOrchestrationInfo) GetCommandName() string {
+	if x != nil {
+		return x.CommandName
+	}
+	return ""
+}
+
+func (x *ConnectorOrchestrationInfo) GetCommandRevision() int32 {
+	if x != nil {
+		return x.CommandRevision
+	}
+	return 0
+}
+
+func (x *ConnectorOrchestrationInfo) GetStrategy() string {
+	if x != nil {
+		return x.Strategy
+	}
+	return ""
+}
+
+func (x *ConnectorOrchestrationInfo) GetOfflinePolicy() string {
+	if x != nil {
+		return x.OfflinePolicy
+	}
+	return ""
+}
+
+func (x *ConnectorOrchestrationInfo) GetMaxConcurrency() int32 {
+	if x != nil {
+		return x.MaxConcurrency
+	}
+	return 0
+}
+
+func (x *ConnectorOrchestrationInfo) GetBatchSize() int32 {
+	if x != nil {
+		return x.BatchSize
+	}
+	return 0
+}
+
+func (x *ConnectorOrchestrationInfo) GetCanaryCount() int32 {
+	if x != nil {
+		return x.CanaryCount
+	}
+	return 0
+}
+
+func (x *ConnectorOrchestrationInfo) GetQuorum() int32 {
+	if x != nil {
+		return x.Quorum
+	}
+	return 0
+}
+
+func (x *ConnectorOrchestrationInfo) GetStatus() string {
+	if x != nil {
+		return x.Status
+	}
+	return ""
+}
+
+func (x *ConnectorOrchestrationInfo) GetCancelRequestedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.CancelRequestedAt
+	}
+	return nil
+}
+
+func (x *ConnectorOrchestrationInfo) GetDeadlineAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.DeadlineAt
+	}
+	return nil
+}
+
+func (x *ConnectorOrchestrationInfo) GetStartedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.StartedAt
+	}
+	return nil
+}
+
+func (x *ConnectorOrchestrationInfo) GetCompletedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.CompletedAt
+	}
+	return nil
+}
+
+func (x *ConnectorOrchestrationInfo) GetCreatedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.CreatedAt
+	}
+	return nil
+}
+
+func (x *ConnectorOrchestrationInfo) GetUpdatedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.UpdatedAt
+	}
+	return nil
+}
+
+func (x *ConnectorOrchestrationInfo) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
+func (x *ConnectorOrchestrationInfo) GetCommandMode() string {
+	if x != nil {
+		return x.CommandMode
+	}
+	return ""
+}
+
+func (x *ConnectorOrchestrationInfo) GetInputSchemaHash() string {
+	if x != nil {
+		return x.InputSchemaHash
+	}
+	return ""
+}
+
+func (x *ConnectorOrchestrationInfo) GetOutputSchemaHash() string {
+	if x != nil {
+		return x.OutputSchemaHash
+	}
+	return ""
+}
+
+func (x *ConnectorOrchestrationInfo) GetCanaryPhase() string {
+	if x != nil {
+		return x.CanaryPhase
+	}
+	return ""
+}
+
+func (x *ConnectorOrchestrationInfo) GetCanarySucceededCount() int32 {
+	if x != nil {
+		return x.CanarySucceededCount
+	}
+	return 0
+}
+
 // JobHandlerInfo is one immutable background-job contract version declared by
 // an agent runtime.
 type JobHandlerInfo struct {
@@ -4759,7 +6954,7 @@ type JobHandlerInfo struct {
 
 func (x *JobHandlerInfo) Reset() {
 	*x = JobHandlerInfo{}
-	mi := &file_airlock_v1_types_proto_msgTypes[44]
+	mi := &file_airlock_v1_types_proto_msgTypes[58]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4771,7 +6966,7 @@ func (x *JobHandlerInfo) String() string {
 func (*JobHandlerInfo) ProtoMessage() {}
 
 func (x *JobHandlerInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_airlock_v1_types_proto_msgTypes[44]
+	mi := &file_airlock_v1_types_proto_msgTypes[58]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4784,7 +6979,7 @@ func (x *JobHandlerInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use JobHandlerInfo.ProtoReflect.Descriptor instead.
 func (*JobHandlerInfo) Descriptor() ([]byte, []int) {
-	return file_airlock_v1_types_proto_rawDescGZIP(), []int{44}
+	return file_airlock_v1_types_proto_rawDescGZIP(), []int{58}
 }
 
 func (x *JobHandlerInfo) GetAgentId() string {
@@ -4907,7 +7102,7 @@ type JobProgressInfo struct {
 
 func (x *JobProgressInfo) Reset() {
 	*x = JobProgressInfo{}
-	mi := &file_airlock_v1_types_proto_msgTypes[45]
+	mi := &file_airlock_v1_types_proto_msgTypes[59]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4919,7 +7114,7 @@ func (x *JobProgressInfo) String() string {
 func (*JobProgressInfo) ProtoMessage() {}
 
 func (x *JobProgressInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_airlock_v1_types_proto_msgTypes[45]
+	mi := &file_airlock_v1_types_proto_msgTypes[59]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4932,7 +7127,7 @@ func (x *JobProgressInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use JobProgressInfo.ProtoReflect.Descriptor instead.
 func (*JobProgressInfo) Descriptor() ([]byte, []int) {
-	return file_airlock_v1_types_proto_rawDescGZIP(), []int{45}
+	return file_airlock_v1_types_proto_rawDescGZIP(), []int{59}
 }
 
 func (x *JobProgressInfo) GetPhase() string {
@@ -5012,7 +7207,7 @@ type JobInfo struct {
 
 func (x *JobInfo) Reset() {
 	*x = JobInfo{}
-	mi := &file_airlock_v1_types_proto_msgTypes[46]
+	mi := &file_airlock_v1_types_proto_msgTypes[60]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5024,7 +7219,7 @@ func (x *JobInfo) String() string {
 func (*JobInfo) ProtoMessage() {}
 
 func (x *JobInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_airlock_v1_types_proto_msgTypes[46]
+	mi := &file_airlock_v1_types_proto_msgTypes[60]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5037,7 +7232,7 @@ func (x *JobInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use JobInfo.ProtoReflect.Descriptor instead.
 func (*JobInfo) Descriptor() ([]byte, []int) {
-	return file_airlock_v1_types_proto_rawDescGZIP(), []int{46}
+	return file_airlock_v1_types_proto_rawDescGZIP(), []int{60}
 }
 
 func (x *JobInfo) GetId() string {
@@ -5248,7 +7443,7 @@ type JobAttemptInfo struct {
 
 func (x *JobAttemptInfo) Reset() {
 	*x = JobAttemptInfo{}
-	mi := &file_airlock_v1_types_proto_msgTypes[47]
+	mi := &file_airlock_v1_types_proto_msgTypes[61]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5260,7 +7455,7 @@ func (x *JobAttemptInfo) String() string {
 func (*JobAttemptInfo) ProtoMessage() {}
 
 func (x *JobAttemptInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_airlock_v1_types_proto_msgTypes[47]
+	mi := &file_airlock_v1_types_proto_msgTypes[61]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5273,7 +7468,7 @@ func (x *JobAttemptInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use JobAttemptInfo.ProtoReflect.Descriptor instead.
 func (*JobAttemptInfo) Descriptor() ([]byte, []int) {
-	return file_airlock_v1_types_proto_rawDescGZIP(), []int{47}
+	return file_airlock_v1_types_proto_rawDescGZIP(), []int{61}
 }
 
 func (x *JobAttemptInfo) GetJobId() string {
@@ -5695,7 +7890,7 @@ const file_airlock_v1_types_proto_rawDesc = "" +
 	"\vdescription\x18\x03 \x01(\tR\vdescription\x12\x1e\n" +
 	"\n" +
 	"subscribed\x18\x04 \x01(\bR\n" +
-	"subscribed\"\xec\a\n" +
+	"subscribed\"\x89\b\n" +
 	"\x12SystemSettingsInfo\x12.\n" +
 	"\x13default_build_model\x18\x01 \x01(\tR\x11defaultBuildModel\x12,\n" +
 	"\x12default_exec_model\x18\x02 \x01(\tR\x10defaultExecModel\x12*\n" +
@@ -5713,7 +7908,8 @@ const file_airlock_v1_types_proto_rawDesc = "" +
 	"\x17default_tts_provider_id\x18\r \x01(\tR\x14defaultTtsProviderId\x12@\n" +
 	"\x1ddefault_image_gen_provider_id\x18\x0e \x01(\tR\x19defaultImageGenProviderId\x12;\n" +
 	"\x1adefault_search_provider_id\x18\x0f \x01(\tR\x17defaultSearchProviderId\x12A\n" +
-	"\x1ddefault_embedding_provider_id\x18\x10 \x01(\tR\x1adefaultEmbeddingProviderIdJ\x04\b\x11\x10\x12J\x04\b\x12\x10\x13J\x04\b\x13\x10\x14R\x1ftelegram_manager_bot_configuredR\x1dtelegram_manager_bot_usernameR\x1atelegram_manager_bot_error\"\x7f\n" +
+	"\x1ddefault_embedding_provider_id\x18\x10 \x01(\tR\x1adefaultEmbeddingProviderId\x12\x1b\n" +
+	"\tui_locale\x18\x14 \x01(\tR\buiLocaleJ\x04\b\x11\x10\x12J\x04\b\x12\x10\x13J\x04\b\x13\x10\x14R\x1ftelegram_manager_bot_configuredR\x1dtelegram_manager_bot_usernameR\x1atelegram_manager_bot_error\"\x7f\n" +
 	"\x1eCreateManagedBotSessionRequest\x12\x19\n" +
 	"\bagent_id\x18\x01 \x01(\tR\aagentId\x12\x1b\n" +
 	"\tis_system\x18\x02 \x01(\bR\bisSystem\x12%\n" +
@@ -5722,7 +7918,7 @@ const file_airlock_v1_types_proto_rawDesc = "" +
 	"\x05nonce\x18\x01 \x01(\tR\x05nonce\x12\x1b\n" +
 	"\tdeep_link\x18\x02 \x01(\tR\bdeepLink\x129\n" +
 	"\n" +
-	"expires_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\"\x85\x02\n" +
+	"expires_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\"\xa9\x02\n" +
 	"\rGitCredential\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x17\n" +
 	"\auser_id\x18\x02 \x01(\tR\x06userId\x12\x12\n" +
@@ -5732,7 +7928,8 @@ const file_airlock_v1_types_proto_rawDesc = "" +
 	"\n" +
 	"created_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x12<\n" +
 	"\flast_used_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\n" +
-	"lastUsedAt\"\xe0\x01\n" +
+	"lastUsedAt\x12\"\n" +
+	"\fcapabilities\x18\b \x03(\tR\fcapabilities\"\xe0\x01\n" +
 	"\aPasskey\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12#\n" +
 	"\rfriendly_name\x18\x02 \x01(\tR\ffriendlyName\x129\n" +
@@ -5834,12 +8031,293 @@ const file_airlock_v1_types_proto_rawDesc = "" +
 	"\x10allow_public_mcp\x18\x02 \x01(\bR\x0eallowPublicMcp\x12\x1f\n" +
 	"\vmcp_enabled\x18\x03 \x01(\bR\n" +
 	"mcpEnabled\x12.\n" +
-	"\x13allow_public_routes\x18\x04 \x01(\bR\x11allowPublicRoutesJ\x04\b\x01\x10\x02\"\x85\x01\n" +
+	"\x13allow_public_routes\x18\x04 \x01(\bR\x11allowPublicRoutesJ\x04\b\x01\x10\x02\"\xa5\x01\n" +
 	"\x0fSetupCountsInfo\x12 \n" +
 	"\vconnections\x18\x01 \x01(\x05R\vconnections\x12\x1f\n" +
 	"\vmcp_servers\x18\x02 \x01(\x05R\n" +
 	"mcpServers\x12\x19\n" +
-	"\benv_vars\x18\x03 \x01(\x05R\aenvVarsJ\x04\b\x04\x10\x05R\x0eexec_endpoints\"\xf7\x04\n" +
+	"\benv_vars\x18\x03 \x01(\x05R\aenvVars\x12\x1e\n" +
+	"\n" +
+	"connectors\x18\x05 \x01(\x05R\n" +
+	"connectorsJ\x04\b\x04\x10\x05R\x0eexec_endpoints\"\xb9\x02\n" +
+	"\x1dConnectorPublishedCommandInfo\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1a\n" +
+	"\brevision\x18\x02 \x01(\x05R\brevision\x12 \n" +
+	"\vdescription\x18\x03 \x01(\tR\vdescription\x12\x12\n" +
+	"\x04mode\x18\x04 \x01(\tR\x04mode\x12*\n" +
+	"\x11input_schema_hash\x18\x05 \x01(\tR\x0finputSchemaHash\x12,\n" +
+	"\x12output_schema_hash\x18\x06 \x01(\tR\x10outputSchemaHash\x12*\n" +
+	"\x11input_schema_json\x18\a \x01(\tR\x0finputSchemaJson\x12,\n" +
+	"\x12output_schema_json\x18\b \x01(\tR\x10outputSchemaJson\"\xb1\x01\n" +
+	"\x1fConnectorPublishedDirectoryInfo\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1a\n" +
+	"\brevision\x18\x02 \x01(\x05R\brevision\x12 \n" +
+	"\vdescription\x18\x03 \x01(\tR\vdescription\x12\x12\n" +
+	"\x04read\x18\x04 \x01(\bR\x04read\x12\x14\n" +
+	"\x05write\x18\x05 \x01(\bR\x05write\x12\x12\n" +
+	"\x04list\x18\x06 \x01(\bR\x04list\"\xf4\x11\n" +
+	"\rConnectorInfo\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12,\n" +
+	"\x12owner_principal_id\x18\x02 \x01(\tR\x10ownerPrincipalId\x12\x12\n" +
+	"\x04slug\x18\x03 \x01(\tR\x04slug\x12\x12\n" +
+	"\x04kind\x18\x04 \x01(\tR\x04kind\x12\x1f\n" +
+	"\vcontract_id\x18\x05 \x01(\tR\n" +
+	"contractId\x12\x12\n" +
+	"\x04name\x18\x06 \x01(\tR\x04name\x12!\n" +
+	"\fdisplay_name\x18\a \x01(\tR\vdisplayName\x12 \n" +
+	"\vdescription\x18\b \x01(\tR\vdescription\x12%\n" +
+	"\x0eprotocol_major\x18\t \x01(\x05R\rprotocolMajor\x12%\n" +
+	"\x0eprotocol_minor\x18\n" +
+	" \x01(\x05R\rprotocolMinor\x12\x1a\n" +
+	"\bfeatures\x18\v \x03(\tR\bfeatures\x12)\n" +
+	"\x10artifact_version\x18\f \x01(\tR\x0fartifactVersion\x12'\n" +
+	"\x0fartifact_digest\x18\r \x01(\tR\x0eartifactDigest\x12%\n" +
+	"\x0einterface_json\x18\x0e \x01(\tR\rinterfaceJson\x12%\n" +
+	"\x0einterface_hash\x18\x0f \x01(\tR\rinterfaceHash\x12\x1c\n" +
+	"\treadiness\x18\x10 \x01(\tR\treadiness\x12+\n" +
+	"\x11readiness_message\x18\x11 \x01(\tR\x10readinessMessage\x12=\n" +
+	"\x06labels\x18\x12 \x03(\v2%.airlock.v1.ConnectorInfo.LabelsEntryR\x06labels\x12\x1c\n" +
+	"\tlifecycle\x18\x13 \x01(\tR\tlifecycle\x12\x1f\n" +
+	"\vagent_count\x18\x14 \x01(\x05R\n" +
+	"agentCount\x12\"\n" +
+	"\fcapabilities\x18\x15 \x03(\tR\fcapabilities\x12<\n" +
+	"\flast_seen_at\x18\x16 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
+	"lastSeenAt\x12>\n" +
+	"\rlast_ready_at\x18\x17 \x01(\v2\x1a.google.protobuf.TimestampR\vlastReadyAt\x129\n" +
+	"\n" +
+	"created_at\x18\x18 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x129\n" +
+	"\n" +
+	"updated_at\x18\x19 \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x12\x1d\n" +
+	"\n" +
+	"owner_name\x18\x1a \x01(\tR\townerName\x12\x1d\n" +
+	"\n" +
+	"owner_kind\x18\x1b \x01(\tR\townerKind\x12\x16\n" +
+	"\x06online\x18\x1c \x01(\bR\x06online\x12E\n" +
+	"\bcommands\x18\x1d \x03(\v2).airlock.v1.ConnectorPublishedCommandInfoR\bcommands\x12M\n" +
+	"\vdirectories\x18\x1e \x03(\v2+.airlock.v1.ConnectorPublishedDirectoryInfoR\vdirectories\x12-\n" +
+	"\x12artifact_freshness\x18\x1f \x01(\tR\x11artifactFreshness\x12#\n" +
+	"\rupdate_status\x18  \x01(\tR\fupdateStatus\x126\n" +
+	"\x17latest_artifact_version\x18! \x01(\tR\x15latestArtifactVersion\x124\n" +
+	"\x16latest_artifact_digest\x18\" \x01(\tR\x14latestArtifactDigest\x122\n" +
+	"\x15latest_interface_hash\x18# \x01(\tR\x13latestInterfaceHash\x12W\n" +
+	"\x1alatest_artifact_created_at\x18$ \x01(\v2\x1a.google.protobuf.TimestampR\x17latestArtifactCreatedAt\x12\x17\n" +
+	"\ahost_id\x18% \x01(\tR\x06hostId\x12+\n" +
+	"\x11active_provenance\x18& \x01(\tR\x10activeProvenance\x12/\n" +
+	"\x13rollback_provenance\x18' \x01(\tR\x12rollbackProvenance\x128\n" +
+	"\x18active_observation_state\x18( \x01(\tR\x16activeObservationState\x12<\n" +
+	"\x1arollback_observation_state\x18) \x01(\tR\x18rollbackObservationState\x12-\n" +
+	"\x12inventory_revision\x18* \x01(\x04R\x11inventoryRevision\x124\n" +
+	"\x16observed_active_digest\x18+ \x01(\tR\x14observedActiveDigest\x12A\n" +
+	"\x1dobserved_active_manifest_json\x18, \x01(\tR\x1aobservedActiveManifestJson\x12A\n" +
+	"\x1dobserved_active_manifest_hash\x18- \x01(\tR\x1aobservedActiveManifestHash\x128\n" +
+	"\x18observed_rollback_digest\x18. \x01(\tR\x16observedRollbackDigest\x12E\n" +
+	"\x1fobserved_rollback_manifest_json\x18/ \x01(\tR\x1cobservedRollbackManifestJson\x12E\n" +
+	"\x1fobserved_rollback_manifest_hash\x180 \x01(\tR\x1cobservedRollbackManifestHash\x1a9\n" +
+	"\vLabelsEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xe0\x04\n" +
+	"\bHostInfo\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\x12\x1a\n" +
+	"\bplatform\x18\x03 \x01(\tR\bplatform\x12\"\n" +
+	"\farchitecture\x18\x04 \x01(\tR\farchitecture\x12\x1f\n" +
+	"\vaccess_mode\x18\x05 \x01(\tR\n" +
+	"accessMode\x12\x18\n" +
+	"\aversion\x18\x06 \x01(\tR\aversion\x12)\n" +
+	"\x10protocol_version\x18\a \x01(\x05R\x0fprotocolVersion\x12\x1c\n" +
+	"\tlifecycle\x18\b \x01(\tR\tlifecycle\x12<\n" +
+	"\flast_seen_at\x18\t \x01(\v2\x1a.google.protobuf.TimestampR\n" +
+	"lastSeenAt\x129\n" +
+	"\n" +
+	"created_at\x18\n" +
+	" \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x129\n" +
+	"\n" +
+	"updated_at\x18\v \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x12'\n" +
+	"\x0fconnector_count\x18\f \x01(\x05R\x0econnectorCount\x12(\n" +
+	"\x10active_job_count\x18\r \x01(\x05R\x0eactiveJobCount\x12\"\n" +
+	"\rowner_user_id\x18\x0e \x01(\tR\vownerUserId\x12\x1d\n" +
+	"\n" +
+	"owner_name\x18\x0f \x01(\tR\townerName\x12\"\n" +
+	"\fcapabilities\x18\x10 \x03(\tR\fcapabilities\"\x86\x02\n" +
+	"\x17HostManagementEventInfo\x12\x1a\n" +
+	"\bsequence\x18\x01 \x01(\x03R\bsequence\x12)\n" +
+	"\x10attempt_sequence\x18\x02 \x01(\x03R\x0fattemptSequence\x12\x14\n" +
+	"\x05phase\x18\x03 \x01(\tR\x05phase\x12\x18\n" +
+	"\amessage\x18\x04 \x01(\tR\amessage\x129\n" +
+	"\n" +
+	"event_time\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\teventTime\x129\n" +
+	"\n" +
+	"created_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"\xfc\x04\n" +
+	"\x15HostManagementJobInfo\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x17\n" +
+	"\ahost_id\x18\x02 \x01(\tR\x06hostId\x12!\n" +
+	"\fconnector_id\x18\x03 \x01(\tR\vconnectorId\x12/\n" +
+	"\x14requested_by_user_id\x18\x04 \x01(\tR\x11requestedByUserId\x12\x12\n" +
+	"\x04kind\x18\x05 \x01(\tR\x04kind\x12(\n" +
+	"\x10artifact_file_id\x18\x06 \x01(\tR\x0eartifactFileId\x12\x1d\n" +
+	"\n" +
+	"input_json\x18\a \x01(\tR\tinputJson\x12\x16\n" +
+	"\x06status\x18\b \x01(\tR\x06status\x12\x1f\n" +
+	"\voutput_json\x18\t \x01(\tR\n" +
+	"outputJson\x12#\n" +
+	"\rerror_message\x18\n" +
+	" \x01(\tR\ferrorMessage\x12;\n" +
+	"\vdeadline_at\x18\v \x01(\v2\x1a.google.protobuf.TimestampR\n" +
+	"deadlineAt\x129\n" +
+	"\n" +
+	"started_at\x18\f \x01(\v2\x1a.google.protobuf.TimestampR\tstartedAt\x12=\n" +
+	"\fcompleted_at\x18\r \x01(\v2\x1a.google.protobuf.TimestampR\vcompletedAt\x129\n" +
+	"\n" +
+	"created_at\x18\x0e \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x129\n" +
+	"\n" +
+	"updated_at\x18\x0f \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\"\xef\x01\n" +
+	"\x19ConnectorArtifactFileInfo\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1a\n" +
+	"\bplatform\x18\x02 \x01(\tR\bplatform\x12\x1a\n" +
+	"\bfilename\x18\x03 \x01(\tR\bfilename\x12\x16\n" +
+	"\x06sha256\x18\x04 \x01(\tR\x06sha256\x12\x1d\n" +
+	"\n" +
+	"size_bytes\x18\x05 \x01(\x03R\tsizeBytes\x12%\n" +
+	"\x0enotices_sha256\x18\x06 \x01(\tR\rnoticesSha256\x12,\n" +
+	"\x12notices_size_bytes\x18\a \x01(\x03R\x10noticesSizeBytes\"\xc2\x05\n" +
+	"\x18ConnectorArtifactSetInfo\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x19\n" +
+	"\bbuild_id\x18\x02 \x01(\tR\abuildId\x12%\n" +
+	"\x0econnector_slug\x18\x03 \x01(\tR\rconnectorSlug\x12\x1d\n" +
+	"\n" +
+	"source_ref\x18\x04 \x01(\tR\tsourceRef\x12\x12\n" +
+	"\x04kind\x18\x05 \x01(\tR\x04kind\x12\x1f\n" +
+	"\vcontract_id\x18\x06 \x01(\tR\n" +
+	"contractId\x12\x12\n" +
+	"\x04name\x18\a \x01(\tR\x04name\x12 \n" +
+	"\vdescription\x18\b \x01(\tR\vdescription\x12)\n" +
+	"\x10artifact_version\x18\t \x01(\tR\x0fartifactVersion\x12%\n" +
+	"\x0eprotocol_major\x18\n" +
+	" \x01(\x05R\rprotocolMajor\x12%\n" +
+	"\x0eprotocol_minor\x18\v \x01(\x05R\rprotocolMinor\x12\x1a\n" +
+	"\bfeatures\x18\f \x03(\tR\bfeatures\x12%\n" +
+	"\x0einterface_json\x18\r \x01(\tR\rinterfaceJson\x12%\n" +
+	"\x0einterface_hash\x18\x0e \x01(\tR\rinterfaceHash\x12#\n" +
+	"\rsettings_json\x18\x0f \x01(\tR\fsettingsJson\x12;\n" +
+	"\x05files\x18\x10 \x03(\v2%.airlock.v1.ConnectorArtifactFileInfoR\x05files\x129\n" +
+	"\n" +
+	"created_at\x18\x11 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x12'\n" +
+	"\x0fartifact_digest\x18\x12 \x01(\tR\x0eartifactDigest\x12!\n" +
+	"\fservice_mode\x18\x13 \x01(\tR\vserviceMode\"\xb0\x01\n" +
+	"\x1bConnectorArtifactTargetInfo\x12\x16\n" +
+	"\x06target\x18\x01 \x01(\tR\x06target\x12\x0e\n" +
+	"\x02os\x18\x02 \x01(\tR\x02os\x12\x12\n" +
+	"\x04arch\x18\x03 \x01(\tR\x04arch\x12\x1a\n" +
+	"\bfilename\x18\x04 \x01(\tR\bfilename\x12\x1d\n" +
+	"\n" +
+	"size_bytes\x18\x05 \x01(\x03R\tsizeBytes\x12\x16\n" +
+	"\x06sha256\x18\x06 \x01(\tR\x06sha256:\x02\x18\x01\"\xbb\x01\n" +
+	"\x14ConnectorSettingInfo\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x12\n" +
+	"\x04kind\x18\x02 \x01(\tR\x04kind\x12 \n" +
+	"\vdescription\x18\x03 \x01(\tR\vdescription\x12\x1a\n" +
+	"\brequired\x18\x04 \x01(\bR\brequired\x12\x1e\n" +
+	"\rdefault_value\x18\x05 \x01(\tR\adefault\x12\x19\n" +
+	"\venum_values\x18\x06 \x03(\tR\x04enum:\x02\x18\x01\"\xb2\x04\n" +
+	"\x1cConnectorArtifactVersionInfo\x12\x18\n" +
+	"\aversion\x18\x01 \x01(\tR\aversion\x12#\n" +
+	"\rsource_commit\x18\x02 \x01(\tR\fsourceCommit\x12\x19\n" +
+	"\bbuild_id\x18\x03 \x01(\tR\abuildId\x129\n" +
+	"\n" +
+	"created_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x12\x1e\n" +
+	"\n" +
+	"compatible\x18\x05 \x01(\bR\n" +
+	"compatible\x12+\n" +
+	"\x11latest_compatible\x18\x06 \x01(\bR\x10latestCompatible\x12'\n" +
+	"\x0fartifact_digest\x18\a \x01(\tR\x0eartifactDigest\x125\n" +
+	"\tinterface\x18\b \x01(\v2\x17.google.protobuf.StructR\tinterface\x12<\n" +
+	"\bsettings\x18\t \x03(\v2 .airlock.v1.ConnectorSettingInfoR\bsettings\x121\n" +
+	"\x14runtime_expectations\x18\n" +
+	" \x03(\tR\x13runtimeExpectations\x12\x18\n" +
+	"\anotices\x18\v \x03(\tR\anotices\x12A\n" +
+	"\atargets\x18\f \x03(\v2'.airlock.v1.ConnectorArtifactTargetInfoR\atargets:\x02\x18\x01\"\x9a\x03\n" +
+	"\x18ConnectorTargetGroupInfo\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12,\n" +
+	"\x12owner_principal_id\x18\x02 \x01(\tR\x10ownerPrincipalId\x12\x12\n" +
+	"\x04name\x18\x03 \x01(\tR\x04name\x12 \n" +
+	"\vdescription\x18\x04 \x01(\tR\vdescription\x12\x1f\n" +
+	"\vcontract_id\x18\x05 \x01(\tR\n" +
+	"contractId\x129\n" +
+	"\n" +
+	"created_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x129\n" +
+	"\n" +
+	"updated_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x12!\n" +
+	"\fmember_count\x18\b \x01(\x05R\vmemberCount\x12,\n" +
+	"\x12ready_member_count\x18\t \x01(\x05R\x10readyMemberCount\x12\"\n" +
+	"\fcapabilities\x18\n" +
+	" \x03(\tR\fcapabilities\"\xea\a\n" +
+	"\x10ConnectorJobInfo\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12!\n" +
+	"\fconnector_id\x18\x02 \x01(\tR\vconnectorId\x12\x19\n" +
+	"\bagent_id\x18\x03 \x01(\tR\aagentId\x12\x17\n" +
+	"\aneed_id\x18\x04 \x01(\tR\x06needId\x12)\n" +
+	"\x10orchestration_id\x18\x05 \x01(\tR\x0forchestrationId\x12'\n" +
+	"\x0ftarget_position\x18\x06 \x01(\x05R\x0etargetPosition\x12%\n" +
+	"\x0eoperation_name\x18\a \x01(\tR\roperationName\x12-\n" +
+	"\x12operation_revision\x18\b \x01(\x05R\x11operationRevision\x12\x12\n" +
+	"\x04mode\x18\t \x01(\tR\x04mode\x12\x16\n" +
+	"\x06status\x18\n" +
+	" \x01(\tR\x06status\x12\x1d\n" +
+	"\n" +
+	"input_json\x18\v \x01(\tR\tinputJson\x12\x1f\n" +
+	"\voutput_json\x18\f \x01(\tR\n" +
+	"outputJson\x12\x1d\n" +
+	"\n" +
+	"error_code\x18\r \x01(\tR\terrorCode\x12#\n" +
+	"\rerror_message\x18\x0e \x01(\tR\ferrorMessage\x12J\n" +
+	"\x13cancel_requested_at\x18\x0f \x01(\v2\x1a.google.protobuf.TimestampR\x11cancelRequestedAt\x12;\n" +
+	"\vdeadline_at\x18\x10 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
+	"deadlineAt\x129\n" +
+	"\n" +
+	"started_at\x18\x11 \x01(\v2\x1a.google.protobuf.TimestampR\tstartedAt\x12=\n" +
+	"\fcompleted_at\x18\x12 \x01(\v2\x1a.google.protobuf.TimestampR\vcompletedAt\x129\n" +
+	"\n" +
+	"created_at\x18\x13 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x129\n" +
+	"\n" +
+	"updated_at\x18\x14 \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x15 \x01(\tR\trequestId\x12*\n" +
+	"\x11input_schema_hash\x18\x16 \x01(\tR\x0finputSchemaHash\x12,\n" +
+	"\x12output_schema_hash\x18\x17 \x01(\tR\x10outputSchemaHash\x12#\n" +
+	"\rcanary_cohort\x18\x18 \x01(\bR\fcanaryCohort\"\xa2\b\n" +
+	"\x1aConnectorOrchestrationInfo\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x19\n" +
+	"\bagent_id\x18\x02 \x01(\tR\aagentId\x12\x17\n" +
+	"\aneed_id\x18\x03 \x01(\tR\x06needId\x12&\n" +
+	"\x0ftarget_group_id\x18\x04 \x01(\tR\rtargetGroupId\x12!\n" +
+	"\fcommand_name\x18\x05 \x01(\tR\vcommandName\x12)\n" +
+	"\x10command_revision\x18\x06 \x01(\x05R\x0fcommandRevision\x12\x1a\n" +
+	"\bstrategy\x18\a \x01(\tR\bstrategy\x12%\n" +
+	"\x0eoffline_policy\x18\b \x01(\tR\rofflinePolicy\x12'\n" +
+	"\x0fmax_concurrency\x18\t \x01(\x05R\x0emaxConcurrency\x12\x1d\n" +
+	"\n" +
+	"batch_size\x18\n" +
+	" \x01(\x05R\tbatchSize\x12!\n" +
+	"\fcanary_count\x18\v \x01(\x05R\vcanaryCount\x12\x16\n" +
+	"\x06quorum\x18\f \x01(\x05R\x06quorum\x12\x16\n" +
+	"\x06status\x18\r \x01(\tR\x06status\x12J\n" +
+	"\x13cancel_requested_at\x18\x0e \x01(\v2\x1a.google.protobuf.TimestampR\x11cancelRequestedAt\x12;\n" +
+	"\vdeadline_at\x18\x0f \x01(\v2\x1a.google.protobuf.TimestampR\n" +
+	"deadlineAt\x129\n" +
+	"\n" +
+	"started_at\x18\x10 \x01(\v2\x1a.google.protobuf.TimestampR\tstartedAt\x12=\n" +
+	"\fcompleted_at\x18\x11 \x01(\v2\x1a.google.protobuf.TimestampR\vcompletedAt\x129\n" +
+	"\n" +
+	"created_at\x18\x12 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x129\n" +
+	"\n" +
+	"updated_at\x18\x13 \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x14 \x01(\tR\trequestId\x12!\n" +
+	"\fcommand_mode\x18\x15 \x01(\tR\vcommandMode\x12*\n" +
+	"\x11input_schema_hash\x18\x16 \x01(\tR\x0finputSchemaHash\x12,\n" +
+	"\x12output_schema_hash\x18\x17 \x01(\tR\x10outputSchemaHash\x12!\n" +
+	"\fcanary_phase\x18\x18 \x01(\tR\vcanaryPhase\x124\n" +
+	"\x16canary_succeeded_count\x18\x19 \x01(\x05R\x14canarySucceededCount\"\xf7\x04\n" +
 	"\x0eJobHandlerInfo\x12\x19\n" +
 	"\bagent_id\x18\x01 \x01(\tR\aagentId\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x18\n" +
@@ -5955,7 +8433,7 @@ func file_airlock_v1_types_proto_rawDescGZIP() []byte {
 }
 
 var file_airlock_v1_types_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_airlock_v1_types_proto_msgTypes = make([]protoimpl.MessageInfo, 48)
+var file_airlock_v1_types_proto_msgTypes = make([]protoimpl.MessageInfo, 63)
 var file_airlock_v1_types_proto_goTypes = []any{
 	(TenantRole)(0),                         // 0: airlock.v1.TenantRole
 	(MessageRole)(0),                        // 1: airlock.v1.MessageRole
@@ -6004,87 +8482,140 @@ var file_airlock_v1_types_proto_goTypes = []any{
 	(*AddableSiblingInfo)(nil),              // 44: airlock.v1.AddableSiblingInfo
 	(*A2ASettings)(nil),                     // 45: airlock.v1.A2ASettings
 	(*SetupCountsInfo)(nil),                 // 46: airlock.v1.SetupCountsInfo
-	(*JobHandlerInfo)(nil),                  // 47: airlock.v1.JobHandlerInfo
-	(*JobProgressInfo)(nil),                 // 48: airlock.v1.JobProgressInfo
-	(*JobInfo)(nil),                         // 49: airlock.v1.JobInfo
-	(*JobAttemptInfo)(nil),                  // 50: airlock.v1.JobAttemptInfo
-	(*structpb.Struct)(nil),                 // 51: google.protobuf.Struct
-	(*timestamppb.Timestamp)(nil),           // 52: google.protobuf.Timestamp
-	(*structpb.ListValue)(nil),              // 53: google.protobuf.ListValue
+	(*ConnectorPublishedCommandInfo)(nil),   // 47: airlock.v1.ConnectorPublishedCommandInfo
+	(*ConnectorPublishedDirectoryInfo)(nil), // 48: airlock.v1.ConnectorPublishedDirectoryInfo
+	(*ConnectorInfo)(nil),                   // 49: airlock.v1.ConnectorInfo
+	(*HostInfo)(nil),                        // 50: airlock.v1.HostInfo
+	(*HostManagementEventInfo)(nil),         // 51: airlock.v1.HostManagementEventInfo
+	(*HostManagementJobInfo)(nil),           // 52: airlock.v1.HostManagementJobInfo
+	(*ConnectorArtifactFileInfo)(nil),       // 53: airlock.v1.ConnectorArtifactFileInfo
+	(*ConnectorArtifactSetInfo)(nil),        // 54: airlock.v1.ConnectorArtifactSetInfo
+	(*ConnectorArtifactTargetInfo)(nil),     // 55: airlock.v1.ConnectorArtifactTargetInfo
+	(*ConnectorSettingInfo)(nil),            // 56: airlock.v1.ConnectorSettingInfo
+	(*ConnectorArtifactVersionInfo)(nil),    // 57: airlock.v1.ConnectorArtifactVersionInfo
+	(*ConnectorTargetGroupInfo)(nil),        // 58: airlock.v1.ConnectorTargetGroupInfo
+	(*ConnectorJobInfo)(nil),                // 59: airlock.v1.ConnectorJobInfo
+	(*ConnectorOrchestrationInfo)(nil),      // 60: airlock.v1.ConnectorOrchestrationInfo
+	(*JobHandlerInfo)(nil),                  // 61: airlock.v1.JobHandlerInfo
+	(*JobProgressInfo)(nil),                 // 62: airlock.v1.JobProgressInfo
+	(*JobInfo)(nil),                         // 63: airlock.v1.JobInfo
+	(*JobAttemptInfo)(nil),                  // 64: airlock.v1.JobAttemptInfo
+	nil,                                     // 65: airlock.v1.ConnectorInfo.LabelsEntry
+	(*structpb.Struct)(nil),                 // 66: google.protobuf.Struct
+	(*timestamppb.Timestamp)(nil),           // 67: google.protobuf.Timestamp
+	(*structpb.ListValue)(nil),              // 68: google.protobuf.ListValue
 }
 var file_airlock_v1_types_proto_depIdxs = []int32{
-	51, // 0: airlock.v1.Tenant.settings:type_name -> google.protobuf.Struct
-	52, // 1: airlock.v1.Tenant.created_at:type_name -> google.protobuf.Timestamp
-	52, // 2: airlock.v1.Tenant.updated_at:type_name -> google.protobuf.Timestamp
-	0,  // 3: airlock.v1.User.tenant_role:type_name -> airlock.v1.TenantRole
-	52, // 4: airlock.v1.User.created_at:type_name -> google.protobuf.Timestamp
-	52, // 5: airlock.v1.User.updated_at:type_name -> google.protobuf.Timestamp
-	52, // 6: airlock.v1.Provider.created_at:type_name -> google.protobuf.Timestamp
-	52, // 7: airlock.v1.Provider.updated_at:type_name -> google.protobuf.Timestamp
-	52, // 8: airlock.v1.ProviderModel.created_at:type_name -> google.protobuf.Timestamp
-	52, // 9: airlock.v1.ProviderModel.updated_at:type_name -> google.protobuf.Timestamp
-	52, // 10: airlock.v1.AgentInfo.created_at:type_name -> google.protobuf.Timestamp
-	52, // 11: airlock.v1.AgentInfo.updated_at:type_name -> google.protobuf.Timestamp
-	51, // 12: airlock.v1.RunInfo.input_payload:type_name -> google.protobuf.Struct
-	53, // 13: airlock.v1.RunInfo.actions:type_name -> google.protobuf.ListValue
-	52, // 14: airlock.v1.RunInfo.started_at:type_name -> google.protobuf.Timestamp
-	52, // 15: airlock.v1.RunInfo.finished_at:type_name -> google.protobuf.Timestamp
-	52, // 16: airlock.v1.AgentBuildInfo.started_at:type_name -> google.protobuf.Timestamp
-	52, // 17: airlock.v1.AgentBuildInfo.finished_at:type_name -> google.protobuf.Timestamp
-	27, // 18: airlock.v1.AgentBuildInfo.todos:type_name -> airlock.v1.TodoItem
-	2,  // 19: airlock.v1.AgentBuildInfo.deployment_phase:type_name -> airlock.v1.AgentBuildDeploymentPhase
-	52, // 20: airlock.v1.AgentBuildInfo.deployment_paused_at:type_name -> google.protobuf.Timestamp
-	52, // 21: airlock.v1.AgentBuildInfo.deployment_drain_deadline:type_name -> google.protobuf.Timestamp
-	14, // 22: airlock.v1.AgentBuildInfo.job_blockers:type_name -> airlock.v1.AgentBuildJobBlockerSummary
-	52, // 23: airlock.v1.ConversationInfo.created_at:type_name -> google.protobuf.Timestamp
-	52, // 24: airlock.v1.ConversationInfo.updated_at:type_name -> google.protobuf.Timestamp
-	52, // 25: airlock.v1.AgentMessageInfo.created_at:type_name -> google.protobuf.Timestamp
-	52, // 26: airlock.v1.WebhookInfo.last_received_at:type_name -> google.protobuf.Timestamp
-	52, // 27: airlock.v1.WebhookInfo.created_at:type_name -> google.protobuf.Timestamp
-	52, // 28: airlock.v1.ScheduleInfo.last_fired_at:type_name -> google.protobuf.Timestamp
-	52, // 29: airlock.v1.ScheduleInfo.created_at:type_name -> google.protobuf.Timestamp
-	52, // 30: airlock.v1.ScheduleInfo.next_fire_at:type_name -> google.protobuf.Timestamp
-	52, // 31: airlock.v1.ConnectionInfo.token_expires_at:type_name -> google.protobuf.Timestamp
-	5,  // 32: airlock.v1.BridgeInfo.owner:type_name -> airlock.v1.UserSummary
-	52, // 33: airlock.v1.BridgeInfo.created_at:type_name -> google.protobuf.Timestamp
-	52, // 34: airlock.v1.BridgeInfo.updated_at:type_name -> google.protobuf.Timestamp
-	52, // 35: airlock.v1.PlatformIdentityInfo.created_at:type_name -> google.protobuf.Timestamp
-	27, // 36: airlock.v1.AgentBuildTodoEvent.todos:type_name -> airlock.v1.TodoItem
-	52, // 37: airlock.v1.CreateManagedBotSessionResponse.expires_at:type_name -> google.protobuf.Timestamp
-	52, // 38: airlock.v1.GitCredential.created_at:type_name -> google.protobuf.Timestamp
-	52, // 39: airlock.v1.GitCredential.last_used_at:type_name -> google.protobuf.Timestamp
-	52, // 40: airlock.v1.Passkey.created_at:type_name -> google.protobuf.Timestamp
-	52, // 41: airlock.v1.Passkey.last_used_at:type_name -> google.protobuf.Timestamp
-	52, // 42: airlock.v1.UserSession.created_at:type_name -> google.protobuf.Timestamp
-	52, // 43: airlock.v1.UserSession.last_used_at:type_name -> google.protobuf.Timestamp
-	52, // 44: airlock.v1.UserSession.expires_at:type_name -> google.protobuf.Timestamp
-	52, // 45: airlock.v1.MCPServerInfo.token_expires_at:type_name -> google.protobuf.Timestamp
-	52, // 46: airlock.v1.MCPServerInfo.last_synced_at:type_name -> google.protobuf.Timestamp
-	52, // 47: airlock.v1.EnvVarInfo.updated_at:type_name -> google.protobuf.Timestamp
-	52, // 48: airlock.v1.SiblingInfo.created_at:type_name -> google.protobuf.Timestamp
-	52, // 49: airlock.v1.InboundSiblingInfo.created_at:type_name -> google.protobuf.Timestamp
-	51, // 50: airlock.v1.JobHandlerInfo.input_schema:type_name -> google.protobuf.Struct
-	51, // 51: airlock.v1.JobHandlerInfo.output_schema:type_name -> google.protobuf.Struct
-	52, // 52: airlock.v1.JobHandlerInfo.created_at:type_name -> google.protobuf.Timestamp
-	52, // 53: airlock.v1.JobHandlerInfo.updated_at:type_name -> google.protobuf.Timestamp
-	52, // 54: airlock.v1.JobProgressInfo.updated_at:type_name -> google.protobuf.Timestamp
-	52, // 55: airlock.v1.JobInfo.cancel_requested_at:type_name -> google.protobuf.Timestamp
-	52, // 56: airlock.v1.JobInfo.started_at:type_name -> google.protobuf.Timestamp
-	52, // 57: airlock.v1.JobInfo.completed_at:type_name -> google.protobuf.Timestamp
-	52, // 58: airlock.v1.JobInfo.created_at:type_name -> google.protobuf.Timestamp
-	52, // 59: airlock.v1.JobInfo.updated_at:type_name -> google.protobuf.Timestamp
-	52, // 60: airlock.v1.JobInfo.scheduled_at:type_name -> google.protobuf.Timestamp
-	48, // 61: airlock.v1.JobInfo.progress:type_name -> airlock.v1.JobProgressInfo
-	52, // 62: airlock.v1.JobInfo.next_attempt_at:type_name -> google.protobuf.Timestamp
-	52, // 63: airlock.v1.JobAttemptInfo.leased_at:type_name -> google.protobuf.Timestamp
-	52, // 64: airlock.v1.JobAttemptInfo.started_at:type_name -> google.protobuf.Timestamp
-	52, // 65: airlock.v1.JobAttemptInfo.completed_at:type_name -> google.protobuf.Timestamp
-	52, // 66: airlock.v1.JobAttemptInfo.lease_expires_at:type_name -> google.protobuf.Timestamp
-	67, // [67:67] is the sub-list for method output_type
-	67, // [67:67] is the sub-list for method input_type
-	67, // [67:67] is the sub-list for extension type_name
-	67, // [67:67] is the sub-list for extension extendee
-	0,  // [0:67] is the sub-list for field type_name
+	66,  // 0: airlock.v1.Tenant.settings:type_name -> google.protobuf.Struct
+	67,  // 1: airlock.v1.Tenant.created_at:type_name -> google.protobuf.Timestamp
+	67,  // 2: airlock.v1.Tenant.updated_at:type_name -> google.protobuf.Timestamp
+	0,   // 3: airlock.v1.User.tenant_role:type_name -> airlock.v1.TenantRole
+	67,  // 4: airlock.v1.User.created_at:type_name -> google.protobuf.Timestamp
+	67,  // 5: airlock.v1.User.updated_at:type_name -> google.protobuf.Timestamp
+	67,  // 6: airlock.v1.Provider.created_at:type_name -> google.protobuf.Timestamp
+	67,  // 7: airlock.v1.Provider.updated_at:type_name -> google.protobuf.Timestamp
+	67,  // 8: airlock.v1.ProviderModel.created_at:type_name -> google.protobuf.Timestamp
+	67,  // 9: airlock.v1.ProviderModel.updated_at:type_name -> google.protobuf.Timestamp
+	67,  // 10: airlock.v1.AgentInfo.created_at:type_name -> google.protobuf.Timestamp
+	67,  // 11: airlock.v1.AgentInfo.updated_at:type_name -> google.protobuf.Timestamp
+	66,  // 12: airlock.v1.RunInfo.input_payload:type_name -> google.protobuf.Struct
+	68,  // 13: airlock.v1.RunInfo.actions:type_name -> google.protobuf.ListValue
+	67,  // 14: airlock.v1.RunInfo.started_at:type_name -> google.protobuf.Timestamp
+	67,  // 15: airlock.v1.RunInfo.finished_at:type_name -> google.protobuf.Timestamp
+	67,  // 16: airlock.v1.AgentBuildInfo.started_at:type_name -> google.protobuf.Timestamp
+	67,  // 17: airlock.v1.AgentBuildInfo.finished_at:type_name -> google.protobuf.Timestamp
+	27,  // 18: airlock.v1.AgentBuildInfo.todos:type_name -> airlock.v1.TodoItem
+	2,   // 19: airlock.v1.AgentBuildInfo.deployment_phase:type_name -> airlock.v1.AgentBuildDeploymentPhase
+	67,  // 20: airlock.v1.AgentBuildInfo.deployment_paused_at:type_name -> google.protobuf.Timestamp
+	67,  // 21: airlock.v1.AgentBuildInfo.deployment_drain_deadline:type_name -> google.protobuf.Timestamp
+	14,  // 22: airlock.v1.AgentBuildInfo.job_blockers:type_name -> airlock.v1.AgentBuildJobBlockerSummary
+	67,  // 23: airlock.v1.ConversationInfo.created_at:type_name -> google.protobuf.Timestamp
+	67,  // 24: airlock.v1.ConversationInfo.updated_at:type_name -> google.protobuf.Timestamp
+	67,  // 25: airlock.v1.AgentMessageInfo.created_at:type_name -> google.protobuf.Timestamp
+	67,  // 26: airlock.v1.WebhookInfo.last_received_at:type_name -> google.protobuf.Timestamp
+	67,  // 27: airlock.v1.WebhookInfo.created_at:type_name -> google.protobuf.Timestamp
+	67,  // 28: airlock.v1.ScheduleInfo.last_fired_at:type_name -> google.protobuf.Timestamp
+	67,  // 29: airlock.v1.ScheduleInfo.created_at:type_name -> google.protobuf.Timestamp
+	67,  // 30: airlock.v1.ScheduleInfo.next_fire_at:type_name -> google.protobuf.Timestamp
+	67,  // 31: airlock.v1.ConnectionInfo.token_expires_at:type_name -> google.protobuf.Timestamp
+	5,   // 32: airlock.v1.BridgeInfo.owner:type_name -> airlock.v1.UserSummary
+	67,  // 33: airlock.v1.BridgeInfo.created_at:type_name -> google.protobuf.Timestamp
+	67,  // 34: airlock.v1.BridgeInfo.updated_at:type_name -> google.protobuf.Timestamp
+	67,  // 35: airlock.v1.PlatformIdentityInfo.created_at:type_name -> google.protobuf.Timestamp
+	27,  // 36: airlock.v1.AgentBuildTodoEvent.todos:type_name -> airlock.v1.TodoItem
+	67,  // 37: airlock.v1.CreateManagedBotSessionResponse.expires_at:type_name -> google.protobuf.Timestamp
+	67,  // 38: airlock.v1.GitCredential.created_at:type_name -> google.protobuf.Timestamp
+	67,  // 39: airlock.v1.GitCredential.last_used_at:type_name -> google.protobuf.Timestamp
+	67,  // 40: airlock.v1.Passkey.created_at:type_name -> google.protobuf.Timestamp
+	67,  // 41: airlock.v1.Passkey.last_used_at:type_name -> google.protobuf.Timestamp
+	67,  // 42: airlock.v1.UserSession.created_at:type_name -> google.protobuf.Timestamp
+	67,  // 43: airlock.v1.UserSession.last_used_at:type_name -> google.protobuf.Timestamp
+	67,  // 44: airlock.v1.UserSession.expires_at:type_name -> google.protobuf.Timestamp
+	67,  // 45: airlock.v1.MCPServerInfo.token_expires_at:type_name -> google.protobuf.Timestamp
+	67,  // 46: airlock.v1.MCPServerInfo.last_synced_at:type_name -> google.protobuf.Timestamp
+	67,  // 47: airlock.v1.EnvVarInfo.updated_at:type_name -> google.protobuf.Timestamp
+	67,  // 48: airlock.v1.SiblingInfo.created_at:type_name -> google.protobuf.Timestamp
+	67,  // 49: airlock.v1.InboundSiblingInfo.created_at:type_name -> google.protobuf.Timestamp
+	65,  // 50: airlock.v1.ConnectorInfo.labels:type_name -> airlock.v1.ConnectorInfo.LabelsEntry
+	67,  // 51: airlock.v1.ConnectorInfo.last_seen_at:type_name -> google.protobuf.Timestamp
+	67,  // 52: airlock.v1.ConnectorInfo.last_ready_at:type_name -> google.protobuf.Timestamp
+	67,  // 53: airlock.v1.ConnectorInfo.created_at:type_name -> google.protobuf.Timestamp
+	67,  // 54: airlock.v1.ConnectorInfo.updated_at:type_name -> google.protobuf.Timestamp
+	47,  // 55: airlock.v1.ConnectorInfo.commands:type_name -> airlock.v1.ConnectorPublishedCommandInfo
+	48,  // 56: airlock.v1.ConnectorInfo.directories:type_name -> airlock.v1.ConnectorPublishedDirectoryInfo
+	67,  // 57: airlock.v1.ConnectorInfo.latest_artifact_created_at:type_name -> google.protobuf.Timestamp
+	67,  // 58: airlock.v1.HostInfo.last_seen_at:type_name -> google.protobuf.Timestamp
+	67,  // 59: airlock.v1.HostInfo.created_at:type_name -> google.protobuf.Timestamp
+	67,  // 60: airlock.v1.HostInfo.updated_at:type_name -> google.protobuf.Timestamp
+	67,  // 61: airlock.v1.HostManagementEventInfo.event_time:type_name -> google.protobuf.Timestamp
+	67,  // 62: airlock.v1.HostManagementEventInfo.created_at:type_name -> google.protobuf.Timestamp
+	67,  // 63: airlock.v1.HostManagementJobInfo.deadline_at:type_name -> google.protobuf.Timestamp
+	67,  // 64: airlock.v1.HostManagementJobInfo.started_at:type_name -> google.protobuf.Timestamp
+	67,  // 65: airlock.v1.HostManagementJobInfo.completed_at:type_name -> google.protobuf.Timestamp
+	67,  // 66: airlock.v1.HostManagementJobInfo.created_at:type_name -> google.protobuf.Timestamp
+	67,  // 67: airlock.v1.HostManagementJobInfo.updated_at:type_name -> google.protobuf.Timestamp
+	53,  // 68: airlock.v1.ConnectorArtifactSetInfo.files:type_name -> airlock.v1.ConnectorArtifactFileInfo
+	67,  // 69: airlock.v1.ConnectorArtifactSetInfo.created_at:type_name -> google.protobuf.Timestamp
+	67,  // 70: airlock.v1.ConnectorArtifactVersionInfo.created_at:type_name -> google.protobuf.Timestamp
+	66,  // 71: airlock.v1.ConnectorArtifactVersionInfo.interface:type_name -> google.protobuf.Struct
+	56,  // 72: airlock.v1.ConnectorArtifactVersionInfo.settings:type_name -> airlock.v1.ConnectorSettingInfo
+	55,  // 73: airlock.v1.ConnectorArtifactVersionInfo.targets:type_name -> airlock.v1.ConnectorArtifactTargetInfo
+	67,  // 74: airlock.v1.ConnectorTargetGroupInfo.created_at:type_name -> google.protobuf.Timestamp
+	67,  // 75: airlock.v1.ConnectorTargetGroupInfo.updated_at:type_name -> google.protobuf.Timestamp
+	67,  // 76: airlock.v1.ConnectorJobInfo.cancel_requested_at:type_name -> google.protobuf.Timestamp
+	67,  // 77: airlock.v1.ConnectorJobInfo.deadline_at:type_name -> google.protobuf.Timestamp
+	67,  // 78: airlock.v1.ConnectorJobInfo.started_at:type_name -> google.protobuf.Timestamp
+	67,  // 79: airlock.v1.ConnectorJobInfo.completed_at:type_name -> google.protobuf.Timestamp
+	67,  // 80: airlock.v1.ConnectorJobInfo.created_at:type_name -> google.protobuf.Timestamp
+	67,  // 81: airlock.v1.ConnectorJobInfo.updated_at:type_name -> google.protobuf.Timestamp
+	67,  // 82: airlock.v1.ConnectorOrchestrationInfo.cancel_requested_at:type_name -> google.protobuf.Timestamp
+	67,  // 83: airlock.v1.ConnectorOrchestrationInfo.deadline_at:type_name -> google.protobuf.Timestamp
+	67,  // 84: airlock.v1.ConnectorOrchestrationInfo.started_at:type_name -> google.protobuf.Timestamp
+	67,  // 85: airlock.v1.ConnectorOrchestrationInfo.completed_at:type_name -> google.protobuf.Timestamp
+	67,  // 86: airlock.v1.ConnectorOrchestrationInfo.created_at:type_name -> google.protobuf.Timestamp
+	67,  // 87: airlock.v1.ConnectorOrchestrationInfo.updated_at:type_name -> google.protobuf.Timestamp
+	66,  // 88: airlock.v1.JobHandlerInfo.input_schema:type_name -> google.protobuf.Struct
+	66,  // 89: airlock.v1.JobHandlerInfo.output_schema:type_name -> google.protobuf.Struct
+	67,  // 90: airlock.v1.JobHandlerInfo.created_at:type_name -> google.protobuf.Timestamp
+	67,  // 91: airlock.v1.JobHandlerInfo.updated_at:type_name -> google.protobuf.Timestamp
+	67,  // 92: airlock.v1.JobProgressInfo.updated_at:type_name -> google.protobuf.Timestamp
+	67,  // 93: airlock.v1.JobInfo.cancel_requested_at:type_name -> google.protobuf.Timestamp
+	67,  // 94: airlock.v1.JobInfo.started_at:type_name -> google.protobuf.Timestamp
+	67,  // 95: airlock.v1.JobInfo.completed_at:type_name -> google.protobuf.Timestamp
+	67,  // 96: airlock.v1.JobInfo.created_at:type_name -> google.protobuf.Timestamp
+	67,  // 97: airlock.v1.JobInfo.updated_at:type_name -> google.protobuf.Timestamp
+	67,  // 98: airlock.v1.JobInfo.scheduled_at:type_name -> google.protobuf.Timestamp
+	62,  // 99: airlock.v1.JobInfo.progress:type_name -> airlock.v1.JobProgressInfo
+	67,  // 100: airlock.v1.JobInfo.next_attempt_at:type_name -> google.protobuf.Timestamp
+	67,  // 101: airlock.v1.JobAttemptInfo.leased_at:type_name -> google.protobuf.Timestamp
+	67,  // 102: airlock.v1.JobAttemptInfo.started_at:type_name -> google.protobuf.Timestamp
+	67,  // 103: airlock.v1.JobAttemptInfo.completed_at:type_name -> google.protobuf.Timestamp
+	67,  // 104: airlock.v1.JobAttemptInfo.lease_expires_at:type_name -> google.protobuf.Timestamp
+	105, // [105:105] is the sub-list for method output_type
+	105, // [105:105] is the sub-list for method input_type
+	105, // [105:105] is the sub-list for extension type_name
+	105, // [105:105] is the sub-list for extension extendee
+	0,   // [0:105] is the sub-list for field type_name
 }
 
 func init() { file_airlock_v1_types_proto_init() }
@@ -6098,7 +8629,7 @@ func file_airlock_v1_types_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_airlock_v1_types_proto_rawDesc), len(file_airlock_v1_types_proto_rawDesc)),
 			NumEnums:      3,
-			NumMessages:   48,
+			NumMessages:   63,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

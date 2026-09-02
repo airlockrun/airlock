@@ -127,41 +127,50 @@ func (q *Queries) GetMCPServerByID(ctx context.Context, id pgtype.UUID) (AgentMc
 
 const listAvailableConnections = `-- name: ListAvailableConnections :many
 
-SELECT c.id, c.slug, c.name, c.display_name, c.auth_mode,
+SELECT c.id, c.owner_principal_id, c.slug, c.name, c.display_name, c.auth_mode,
        (c.auth_mode = 'none' OR (c.access_token_ref != '' AND (c.auth_mode <> 'oauth' OR c.scopes_verified)))::boolean AS authorized,
        c.created_at,
        (SELECT count(*) FROM agent_resource_needs n WHERE n.bound_connection_id = c.id)::int AS agent_count,
        (CASE WHEN c.owner_principal_id = ANY ($1::uuid[])
-           THEN ARRAY['view', 'bind', 'manage']::text[]
-           ELSE ARRAY(
-               SELECT DISTINCT capability
-               FROM resource_grants g, unnest(g.capabilities) AS capability
-               WHERE g.connection_id = c.id AND g.grantee_id = ANY ($1::uuid[])
-               ORDER BY capability
-           )
+            THEN ARRAY['view', 'bind', 'manage']::text[]
+            ELSE ARRAY(
+                SELECT DISTINCT capability
+                FROM (
+                    SELECT unnest(g.capabilities) AS capability FROM resource_grants g
+                    WHERE g.connection_id = c.id AND g.grantee_id = ANY ($1::uuid[])
+                    UNION ALL SELECT 'view' WHERE $2::boolean
+                ) available
+                ORDER BY capability
+            )
        END)::text[] AS capabilities
 FROM connections c
-WHERE c.lifecycle = 'active' AND (c.owner_principal_id = ANY ($1::uuid[])
+WHERE c.lifecycle = 'active' AND ($2::boolean OR c.owner_principal_id = ANY ($1::uuid[])
    OR EXISTS (SELECT 1 FROM resource_grants g WHERE g.connection_id = c.id AND g.grantee_id = ANY ($1::uuid[])))
 ORDER BY c.display_name, c.slug
 `
 
+type ListAvailableConnectionsParams struct {
+	PrincipalIds   []pgtype.UUID `json:"principal_ids"`
+	GovernanceView bool          `json:"governance_view"`
+}
+
 type ListAvailableConnectionsRow struct {
-	ID           pgtype.UUID        `json:"id"`
-	Slug         string             `json:"slug"`
-	Name         string             `json:"name"`
-	DisplayName  string             `json:"display_name"`
-	AuthMode     string             `json:"auth_mode"`
-	Authorized   bool               `json:"authorized"`
-	CreatedAt    pgtype.Timestamptz `json:"created_at"`
-	AgentCount   int32              `json:"agent_count"`
-	Capabilities []string           `json:"capabilities"`
+	ID               pgtype.UUID        `json:"id"`
+	OwnerPrincipalID pgtype.UUID        `json:"owner_principal_id"`
+	Slug             string             `json:"slug"`
+	Name             string             `json:"name"`
+	DisplayName      string             `json:"display_name"`
+	AuthMode         string             `json:"auth_mode"`
+	Authorized       bool               `json:"authorized"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	AgentCount       int32              `json:"agent_count"`
+	Capabilities     []string           `json:"capabilities"`
 }
 
 // Inventory includes owned resources and resources shared with any principal in
 // the caller's grantee set. Owners implicitly hold every capability.
-func (q *Queries) ListAvailableConnections(ctx context.Context, principalIds []pgtype.UUID) ([]ListAvailableConnectionsRow, error) {
-	rows, err := q.db.Query(ctx, listAvailableConnections, principalIds)
+func (q *Queries) ListAvailableConnections(ctx context.Context, arg ListAvailableConnectionsParams) ([]ListAvailableConnectionsRow, error) {
+	rows, err := q.db.Query(ctx, listAvailableConnections, arg.PrincipalIds, arg.GovernanceView)
 	if err != nil {
 		return nil, err
 	}
@@ -171,6 +180,7 @@ func (q *Queries) ListAvailableConnections(ctx context.Context, principalIds []p
 		var i ListAvailableConnectionsRow
 		if err := rows.Scan(
 			&i.ID,
+			&i.OwnerPrincipalID,
 			&i.Slug,
 			&i.Name,
 			&i.DisplayName,
@@ -190,8 +200,154 @@ func (q *Queries) ListAvailableConnections(ctx context.Context, principalIds []p
 	return items, nil
 }
 
+const listAvailableConnectorTargetGroups = `-- name: ListAvailableConnectorTargetGroups :many
+SELECT target_group.id, target_group.owner_principal_id, target_group.name, target_group.description, target_group.contract_id, target_group.created_at, target_group.updated_at,
+       count(member.connector_id)::int AS member_count,
+       CASE WHEN target_group.owner_principal_id = ANY ($1::uuid[])
+           THEN ARRAY['view', 'bind', 'manage']::text[]
+           ELSE ARRAY(
+               SELECT DISTINCT capability FROM (
+                   SELECT unnest(grant_row.capabilities) AS capability
+                   FROM resource_grants grant_row
+                   WHERE grant_row.connector_target_group_id = target_group.id
+                     AND grant_row.grantee_id = ANY ($1::uuid[])
+                   UNION ALL SELECT 'view' WHERE $2::boolean
+               ) available ORDER BY capability
+           )
+       END::text[] AS capabilities
+FROM connector_target_groups target_group
+LEFT JOIN connector_target_group_members member ON member.group_id = target_group.id
+WHERE $2::boolean
+   OR target_group.owner_principal_id = ANY ($1::uuid[])
+   OR EXISTS (
+       SELECT 1 FROM resource_grants grant_row
+       WHERE grant_row.connector_target_group_id = target_group.id
+         AND grant_row.grantee_id = ANY ($1::uuid[])
+   )
+GROUP BY target_group.id
+ORDER BY target_group.name, target_group.id
+`
+
+type ListAvailableConnectorTargetGroupsParams struct {
+	PrincipalIds   []pgtype.UUID `json:"principal_ids"`
+	GovernanceView bool          `json:"governance_view"`
+}
+
+type ListAvailableConnectorTargetGroupsRow struct {
+	ID               pgtype.UUID        `json:"id"`
+	OwnerPrincipalID pgtype.UUID        `json:"owner_principal_id"`
+	Name             string             `json:"name"`
+	Description      string             `json:"description"`
+	ContractID       string             `json:"contract_id"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
+	MemberCount      int32              `json:"member_count"`
+	Capabilities     []string           `json:"capabilities"`
+}
+
+func (q *Queries) ListAvailableConnectorTargetGroups(ctx context.Context, arg ListAvailableConnectorTargetGroupsParams) ([]ListAvailableConnectorTargetGroupsRow, error) {
+	rows, err := q.db.Query(ctx, listAvailableConnectorTargetGroups, arg.PrincipalIds, arg.GovernanceView)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListAvailableConnectorTargetGroupsRow{}
+	for rows.Next() {
+		var i ListAvailableConnectorTargetGroupsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.OwnerPrincipalID,
+			&i.Name,
+			&i.Description,
+			&i.ContractID,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.MemberCount,
+			&i.Capabilities,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAvailableGitCredentials = `-- name: ListAvailableGitCredentials :many
+SELECT credential.id, credential.user_id AS owner_principal_id, credential.type,
+       credential.name, credential.github_install_id, credential.created_at, credential.last_used_at,
+       CASE WHEN credential.user_id = ANY ($1::uuid[])
+           THEN ARRAY['view', 'bind', 'manage']::text[]
+           ELSE ARRAY(
+               SELECT DISTINCT capability FROM (
+                   SELECT unnest(grant_row.capabilities) AS capability
+                   FROM resource_grants grant_row
+                   WHERE grant_row.git_credential_id = credential.id
+                     AND grant_row.grantee_id = ANY ($1::uuid[])
+                   UNION ALL SELECT 'view' WHERE $2::boolean
+               ) available ORDER BY capability
+           )
+       END::text[] AS capabilities
+FROM git_credentials credential
+WHERE $2::boolean
+   OR credential.user_id = ANY ($1::uuid[])
+   OR EXISTS (
+       SELECT 1 FROM resource_grants grant_row
+       WHERE grant_row.git_credential_id = credential.id
+         AND grant_row.grantee_id = ANY ($1::uuid[])
+   )
+ORDER BY credential.name, credential.id
+`
+
+type ListAvailableGitCredentialsParams struct {
+	PrincipalIds   []pgtype.UUID `json:"principal_ids"`
+	GovernanceView bool          `json:"governance_view"`
+}
+
+type ListAvailableGitCredentialsRow struct {
+	ID               pgtype.UUID        `json:"id"`
+	OwnerPrincipalID pgtype.UUID        `json:"owner_principal_id"`
+	Type             string             `json:"type"`
+	Name             string             `json:"name"`
+	GithubInstallID  string             `json:"github_install_id"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	LastUsedAt       pgtype.Timestamptz `json:"last_used_at"`
+	Capabilities     []string           `json:"capabilities"`
+}
+
+func (q *Queries) ListAvailableGitCredentials(ctx context.Context, arg ListAvailableGitCredentialsParams) ([]ListAvailableGitCredentialsRow, error) {
+	rows, err := q.db.Query(ctx, listAvailableGitCredentials, arg.PrincipalIds, arg.GovernanceView)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListAvailableGitCredentialsRow{}
+	for rows.Next() {
+		var i ListAvailableGitCredentialsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.OwnerPrincipalID,
+			&i.Type,
+			&i.Name,
+			&i.GithubInstallID,
+			&i.CreatedAt,
+			&i.LastUsedAt,
+			&i.Capabilities,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listAvailableMCPServers = `-- name: ListAvailableMCPServers :many
-SELECT m.id, m.slug, m.name, m.display_name, m.auth_mode,
+SELECT m.id, m.owner_principal_id, m.slug, m.name, m.display_name, m.auth_mode,
        (m.auth_mode = 'none' OR (m.access_token_ref != '' AND (m.auth_mode NOT IN ('oauth', 'oauth_discovery') OR m.scopes_verified)))::boolean AS authorized,
        m.created_at,
        (SELECT count(*) FROM agent_resource_needs n WHERE n.bound_mcp_id = m.id)::int AS agent_count,
@@ -199,31 +355,40 @@ SELECT m.id, m.slug, m.name, m.display_name, m.auth_mode,
            THEN ARRAY['view', 'bind', 'manage']::text[]
            ELSE ARRAY(
                SELECT DISTINCT capability
-               FROM resource_grants g, unnest(g.capabilities) AS capability
-               WHERE g.mcp_server_id = m.id AND g.grantee_id = ANY ($1::uuid[])
+                FROM (
+                    SELECT unnest(g.capabilities) AS capability FROM resource_grants g
+                    WHERE g.mcp_server_id = m.id AND g.grantee_id = ANY ($1::uuid[])
+                    UNION ALL SELECT 'view' WHERE $2::boolean
+                ) available
                ORDER BY capability
            )
        END)::text[] AS capabilities
 FROM agent_mcp_servers m
-WHERE m.lifecycle = 'active' AND (m.owner_principal_id = ANY ($1::uuid[])
+WHERE m.lifecycle = 'active' AND ($2::boolean OR m.owner_principal_id = ANY ($1::uuid[])
    OR EXISTS (SELECT 1 FROM resource_grants g WHERE g.mcp_server_id = m.id AND g.grantee_id = ANY ($1::uuid[])))
 ORDER BY m.display_name, m.slug
 `
 
-type ListAvailableMCPServersRow struct {
-	ID           pgtype.UUID        `json:"id"`
-	Slug         string             `json:"slug"`
-	Name         string             `json:"name"`
-	DisplayName  string             `json:"display_name"`
-	AuthMode     string             `json:"auth_mode"`
-	Authorized   bool               `json:"authorized"`
-	CreatedAt    pgtype.Timestamptz `json:"created_at"`
-	AgentCount   int32              `json:"agent_count"`
-	Capabilities []string           `json:"capabilities"`
+type ListAvailableMCPServersParams struct {
+	PrincipalIds   []pgtype.UUID `json:"principal_ids"`
+	GovernanceView bool          `json:"governance_view"`
 }
 
-func (q *Queries) ListAvailableMCPServers(ctx context.Context, principalIds []pgtype.UUID) ([]ListAvailableMCPServersRow, error) {
-	rows, err := q.db.Query(ctx, listAvailableMCPServers, principalIds)
+type ListAvailableMCPServersRow struct {
+	ID               pgtype.UUID        `json:"id"`
+	OwnerPrincipalID pgtype.UUID        `json:"owner_principal_id"`
+	Slug             string             `json:"slug"`
+	Name             string             `json:"name"`
+	DisplayName      string             `json:"display_name"`
+	AuthMode         string             `json:"auth_mode"`
+	Authorized       bool               `json:"authorized"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	AgentCount       int32              `json:"agent_count"`
+	Capabilities     []string           `json:"capabilities"`
+}
+
+func (q *Queries) ListAvailableMCPServers(ctx context.Context, arg ListAvailableMCPServersParams) ([]ListAvailableMCPServersRow, error) {
+	rows, err := q.db.Query(ctx, listAvailableMCPServers, arg.PrincipalIds, arg.GovernanceView)
 	if err != nil {
 		return nil, err
 	}
@@ -233,6 +398,7 @@ func (q *Queries) ListAvailableMCPServers(ctx context.Context, principalIds []pg
 		var i ListAvailableMCPServersRow
 		if err := rows.Scan(
 			&i.ID,
+			&i.OwnerPrincipalID,
 			&i.Slug,
 			&i.Name,
 			&i.DisplayName,

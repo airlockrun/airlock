@@ -9,9 +9,11 @@ import {
   type SystemRunInfo,
   ListSystemRunsResponseSchema,
 } from '@/gen/airlock/v1/system_agent_pb'
+import { useAirlockI18n } from '@/i18n'
 
 const router = useRouter()
 const toast = useToast()
+const { t, formatDate, formatNumber } = useAirlockI18n()
 const feed = useConversationFeedStore()
 
 const runs = ref<SystemRunInfo[]>([])
@@ -36,7 +38,7 @@ async function load() {
     runs.value = [...resp.runs]
     nextCursor.value = resp.nextCursor
   } catch (err: any) {
-    toast.add({ severity: 'error', summary: 'Failed to load runs', detail: err?.message, life: 5000 })
+    toast.add({ severity: 'error', summary: t('chat.error.loadRunsFailed'), detail: err?.message, life: 5000 })
   } finally {
     loading.value = false
   }
@@ -50,7 +52,7 @@ async function loadMore() {
     runs.value.push(...resp.runs)
     nextCursor.value = resp.nextCursor
   } catch (err: any) {
-    toast.add({ severity: 'error', summary: 'Failed to load more', detail: err?.message, life: 5000 })
+    toast.add({ severity: 'error', summary: t('chat.error.loadMoreFailed'), detail: err?.message, life: 5000 })
   } finally {
     loadingMore.value = false
   }
@@ -64,12 +66,25 @@ function openNewChat() {
 
 function fmtTime(ts?: { seconds?: bigint }): string {
   if (!ts?.seconds) return ''
-  return new Date(Number(ts.seconds) * 1000).toLocaleString()
+  return formatDate(new Date(Number(ts.seconds) * 1000), {
+    year: 'numeric',
+    month: 'numeric',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: 'numeric',
+    second: 'numeric',
+  })
 }
 
 function cost(v: number): string {
   if (!v) return '-'
-  return '$' + v.toFixed(v < 0.01 ? 4 : 2)
+  const fractionDigits = v < 0.01 ? 4 : 2
+  return formatNumber(v, {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: fractionDigits,
+    maximumFractionDigits: fractionDigits,
+  })
 }
 
 function snippet(s: string): string {
@@ -94,6 +109,28 @@ function statusSeverity(status: string): string {
   }
 }
 
+function statusLabel(status: string): string {
+  const labels: Record<string, Parameters<typeof t>[0]> = {
+    running: 'chat.systemAgent.status.running',
+    suspended: 'chat.systemAgent.status.suspended',
+    complete: 'chat.systemAgent.status.complete',
+    error: 'chat.systemAgent.status.error',
+    cancelled: 'chat.systemAgent.status.cancelled',
+  }
+  const id = labels[status]
+  return id ? t(id) : status
+}
+
+function triggerLabel(trigger: string): string {
+  const labels: Record<string, Parameters<typeof t>[0]> = {
+    prompt: 'chat.systemAgent.trigger.prompt',
+    bridge: 'chat.systemAgent.trigger.bridge',
+    event: 'chat.systemAgent.trigger.event',
+  }
+  const id = labels[trigger]
+  return id ? t(id) : trigger
+}
+
 onMounted(load)
 </script>
 
@@ -103,16 +140,16 @@ onMounted(load)
       <div>
         <div style="display: flex; align-items: center; gap: 0.75rem">
           <h1 style="margin: 0; font-size: 1.875rem; font-weight: 700; line-height: 1.2">
-            <span style="margin-right: 0.4rem">⚙️</span>Airlock Assistant
+            <span style="margin-right: 0.4rem">⚙️</span>{{ t('chat.systemAgent.assistantName') }}
           </h1>
-          <Tag value="Operator" severity="info" />
+          <Tag :value="t('chat.systemAgent.operator')" severity="info" />
         </div>
         <p style="margin: 0.25rem 0 0; color: var(--p-text-muted-color); font-size: 0.9rem">
-          In-Airlock chat for managing apps, bridges, connections, members, and runs through your own permissions.
+          {{ t('chat.systemAgent.assistantDescription') }}
         </p>
       </div>
       <div style="display: flex; gap: 0.5rem">
-        <Button label="Chat" icon="pi pi-comments" @click="openNewChat" />
+        <Button :label="t('chat.systemAgent.chat')" icon="pi pi-comments" @click="openNewChat" />
       </div>
     </div>
 
@@ -120,7 +157,7 @@ onMounted(load)
       <template #title>
         <div style="display: flex; align-items: center; gap: 0.5rem">
           <i class="pi pi-history" />
-          <span>Runs</span>
+          <span>{{ t('chat.systemAgent.runs') }}</span>
         </div>
       </template>
       <template #content>
@@ -130,8 +167,8 @@ onMounted(load)
 
         <div v-else-if="runs.length === 0" style="text-align: center; padding: 1.5rem 0">
           <i class="pi pi-history" style="font-size: 2rem; color: var(--p-surface-400); margin-bottom: 0.5rem" />
-          <p style="color: var(--p-text-muted-color); margin: 0.5rem 0 1rem">No runs yet. Start a chat to do something.</p>
-          <Button label="Chat" icon="pi pi-comments" @click="openNewChat" />
+          <p style="color: var(--p-text-muted-color); margin: 0.5rem 0 1rem">{{ t('chat.systemAgent.noRuns') }}</p>
+          <Button :label="t('chat.systemAgent.chat')" icon="pi pi-comments" @click="openNewChat" />
         </div>
 
         <div v-else>
@@ -139,28 +176,28 @@ onMounted(load)
             :value="runs"
             dataKey="id"
           >
-            <Column header="Message">
+            <Column :header="t('chat.systemAgent.column.message')">
               <template #body="{ data }">
                 <span :title="data.messagePreview" style="color: var(--p-text-muted-color); font-size: 0.85rem">{{ snippet(data.messagePreview) }}</span>
                 <div v-if="data.errorMessage" style="font-size: 0.8rem; color: var(--p-red-500)">{{ data.errorMessage }}</div>
               </template>
             </Column>
-            <Column field="status" header="Status" style="width: 8rem">
+            <Column field="status" :header="t('chat.systemAgent.column.status')" style="width: 8rem">
               <template #body="{ data }">
-                <Tag :value="data.status" :severity="statusSeverity(data.status)" />
+                <Tag :value="statusLabel(data.status)" :severity="statusSeverity(data.status)" />
               </template>
             </Column>
-            <Column field="triggerType" header="Trigger" style="width: 7rem">
+            <Column field="triggerType" :header="t('chat.systemAgent.column.trigger')" style="width: 7rem">
               <template #body="{ data }">
-                <Tag :value="data.triggerType" severity="secondary" />
+                <Tag :value="triggerLabel(data.triggerType)" severity="secondary" />
               </template>
             </Column>
-            <Column field="startedAt" header="Started" style="width: 14rem">
+            <Column field="startedAt" :header="t('chat.systemAgent.column.started')" style="width: 14rem">
               <template #body="{ data }">
                 <span style="color: var(--p-text-muted-color); font-size: 0.875rem">{{ fmtTime(data.startedAt) }}</span>
               </template>
             </Column>
-            <Column header="Cost" style="width: 7rem">
+            <Column :header="t('chat.systemAgent.column.cost')" style="width: 7rem">
               <template #body="{ data }">
                 <span style="color: var(--p-text-muted-color); font-size: 0.875rem">{{ cost(data.llmCostEstimate) }}</span>
               </template>
@@ -168,7 +205,7 @@ onMounted(load)
           </DataTable>
 
           <div v-if="nextCursor" style="display: flex; justify-content: center; margin-top: 1rem">
-            <Button label="Load more" :loading="loadingMore" outlined @click="loadMore" />
+            <Button :label="t('chat.systemAgent.loadMore')" :loading="loadingMore" outlined @click="loadMore" />
           </div>
         </div>
       </template>

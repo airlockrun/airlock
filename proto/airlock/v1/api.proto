@@ -101,6 +101,7 @@ message ActivateRequest {
   string password = 2;
   string display_name = 3;
   string activation_code = 4;
+  string ui_locale = 5;
 }
 
 // ActivateResponse reuses RegisterResponse shape (tokens + user + tenant).
@@ -939,7 +940,7 @@ message ListAllowedModelsResponse {
 // the immutable declaration/provider name; display_name is user-controlled.
 message OwnedResourceInfo {
   string id = 1;
-  string type = 2;  // connection | mcp_server
+  string type = 2;  // connection | mcp_server | git_credential | connector | host | connector_target_group
   string slug = 3;
   string name = 4;
   string auth_mode = 5;
@@ -949,6 +950,30 @@ message OwnedResourceInfo {
   google.protobuf.Timestamp last_used_at = 9;
   string display_name = 10;
   repeated string capabilities = 11;  // subset of view | bind | manage
+  ConnectorResourceStatusInfo connector_status = 12;
+  string owner_user_id = 13;
+  string owner_name = 14;
+  string host_id = 15; // set for connector installations
+}
+
+message ConnectorResourceStatusInfo {
+  string readiness = 1;
+  string readiness_detail = 2;
+  bool online = 3;
+  string lifecycle = 4;
+  int32 protocol_major = 5;
+  int32 protocol_minor = 6;
+  string artifact_version = 7;
+  string artifact_digest = 8;
+  string interface_hash = 9;
+  string artifact_freshness = 10;
+  string update_status = 11;
+  string latest_artifact_version = 12;
+  google.protobuf.Timestamp last_heartbeat_at = 13;
+  string active_provenance = 14;
+  string active_observation_state = 15;
+  string observed_active_digest = 16;
+  uint64 inventory_revision = 17;
 }
 
 message ListOwnedResourcesResponse {
@@ -966,10 +991,32 @@ message ResourceConsumerInfo {
   string need_type = 4;
   string need_slug = 5;
   bool can_access_agent = 6;
+  string agent_detail_path = 7;
 }
 
 message ListResourceConsumersResponse {
   repeated ResourceConsumerInfo consumers = 1;
+}
+
+message ResourceGrantInfo {
+  string id = 1;
+  string user_id = 2;
+  string email = 3;
+  string display_name = 4;
+  repeated string capabilities = 5;
+  google.protobuf.Timestamp created_at = 6;
+}
+
+message ListResourceGrantsResponse {
+  repeated ResourceGrantInfo grants = 1;
+}
+
+message UpsertResourceGrantRequest {
+  repeated string capabilities = 1;
+}
+
+message TransferResourceOwnershipRequest {
+  string new_owner_user_id = 1;
 }
 
 // ── LLM spend ledger rollups (admin Usage view) ──
@@ -1029,12 +1076,38 @@ message GetUsageResponse {
 
 // ── Resource needs (agent manifest) + binding ──
 
+message ConnectorNeedCommandInfo {
+  string name = 1;
+  int32 revision = 2;
+  string mode = 3;
+  string input_schema_hash = 4;
+  string output_schema_hash = 5;
+  string description = 6;
+  string input_schema_json = 7;
+  string output_schema_json = 8;
+}
+
+message ConnectorNeedDirectoryInfo {
+  string name = 1;
+  int32 revision = 2;
+  bool read = 3;
+  bool write = 4;
+  bool list = 5;
+}
+
 message NeedInfo {
-  string type = 1;  // connection | mcp_server
+  string type = 1;  // connection | mcp_server | connector
   string slug = 2;
   string description = 3;
   bool bound = 4;
   string bound_resource_id = 5;
+  string connector_contract_id = 6;
+  repeated ConnectorNeedCommandInfo connector_required_commands = 7;
+  repeated ConnectorNeedDirectoryInfo connector_required_directories = 8;
+  bool connector_multiple = 9;
+  string bound_connector_id = 10;
+  string bound_connector_group_id = 11;
+  string bound_connector_group_name = 12;
 }
 
 message ListNeedsResponse {
@@ -1125,6 +1198,10 @@ message BindNeedRequest {
   string resource_id = 1;
 }
 
+message BindConnectorGroupRequest {
+  string target_group_id = 1;
+}
+
 message CreateForNeedRequest {
   string display_name = 1;
 }
@@ -1135,4 +1212,181 @@ message CreateForNeedResponse {
 
 message UpdateMeRequest {
   string display_name = 1;
+}
+
+// --- Connectors ---
+
+message ListConnectorsResponse {
+  repeated ConnectorInfo connectors = 1;
+}
+
+message GetConnectorResponse {
+  ConnectorInfo connector = 1;
+  repeated ConnectorResourceGrantInfo grants = 2;
+  repeated ResourceConsumerInfo consumers = 3;
+}
+
+message ConnectorResourceGrantInfo {
+  string id = 1;
+  string grantee_id = 2;
+  string grantee_name = 3;
+  string grantee_kind = 4;
+  repeated string capabilities = 5;
+}
+
+message SetConnectorLabelsRequest {
+  map<string, string> labels = 1;
+}
+
+// --- Hosts ---
+
+message ListHostsResponse {
+  repeated HostInfo hosts = 1;
+}
+
+message GetHostResponse {
+  HostInfo host = 1;
+  repeated ConnectorInfo connectors = 2;
+  repeated HostManagementJobInfo management_jobs = 3;
+}
+
+message InspectHostEnrollmentRequest {
+  string user_code = 1;
+}
+
+message HostEnrollmentInfo {
+  string status = 1;
+  string user_code = 2;
+  string name = 3;
+  string platform = 4;
+  string architecture = 5;
+  string access_mode = 6;
+  string version = 7;
+  int32 protocol_version = 8;
+  google.protobuf.Timestamp expires_at = 9;
+}
+
+message ApproveHostEnrollmentRequest {
+  string user_code = 1;
+}
+
+message DenyHostEnrollmentRequest {
+  string user_code = 1;
+}
+
+message RequestHostShellRequest {
+  string command = 1;
+  map<string, string> environment = 2;
+  string working_directory = 3;
+  bytes stdin = 4;
+  int32 timeout_seconds = 5;
+  repeated string arguments = 6;
+}
+
+message RequestConnectorInstallRequest {
+  string agent_id = 1;
+  string need_slug = 2;
+  string artifact_file_id = 3;
+  string display_name = 4;
+  string settings_json = 5;
+  int32 timeout_seconds = 6;
+}
+
+message RequestConnectorUpdateRequest {
+  string artifact_file_id = 1;
+  int32 timeout_seconds = 2;
+  string settings_json = 3;
+}
+
+message RequestConnectorRemoveRequest {
+  int32 timeout_seconds = 1;
+}
+
+message RequestConnectorRollbackRequest {
+  int32 timeout_seconds = 1;
+}
+
+message HostManagementJobResponse {
+  HostManagementJobInfo job = 1;
+}
+
+message GetHostManagementJobResponse {
+  HostManagementJobInfo job = 1;
+  repeated HostManagementEventInfo events = 2;
+}
+
+message ListConnectorArtifactsResponse {
+  repeated ConnectorArtifactSetInfo artifact_sets = 1;
+  string connector_slug = 2;
+  string name = 3;
+  string description = 4;
+  repeated ConnectorArtifactVersionInfo versions = 5 [deprecated = true];
+}
+
+message DownloadConnectorArtifactRequest {
+  bool notices = 1;
+}
+
+message DownloadConnectorArtifactResponse {
+  string url = 1 [deprecated = true];
+  string filename = 2;
+  string sha256 = 3;
+  int64 size_bytes = 4;
+  google.protobuf.Timestamp expires_at = 5;
+  string download_url = 6;
+}
+
+message CreateConnectorTargetGroupRequest {
+  string name = 1;
+  string description = 2;
+  reserved 3;
+  reserved "contract_id";
+  string agent_id = 4;
+  string need_slug = 5;
+  repeated string connector_ids = 6;
+}
+
+message ListConnectorTargetGroupsResponse {
+  repeated ConnectorTargetGroupInfo groups = 1;
+}
+
+message ConnectorTargetGroupCandidateInfo {
+  ConnectorTargetGroupInfo group = 1;
+  bool eligible = 2;
+  int32 compatible_ready_member_count = 3;
+  string reason = 4;
+}
+
+message ListConnectorTargetGroupCandidatesResponse {
+  repeated ConnectorTargetGroupCandidateInfo candidates = 1;
+}
+
+message AddConnectorTargetGroupMemberRequest {
+  string connector_id = 1;
+  int32 position = 2;
+}
+
+message CreateConnectorOrchestrationRequest {
+  string agent_id = 1;
+  string need_slug = 2;
+  string target_group_id = 3;
+  string command = 4;
+  string input_json = 5;
+  string strategy = 6;
+  string offline_policy = 7;
+  int32 max_concurrency = 8;
+  int32 batch_size = 9;
+  int32 canary_count = 10;
+  int32 quorum = 11;
+  google.protobuf.Timestamp deadline_at = 12;
+  string request_id = 13;
+  int32 command_revision = 14;
+  string command_mode = 15;
+  string input_schema_hash = 16;
+  string output_schema_hash = 17;
+}
+
+message ConnectorOrchestrationResponse {
+  ConnectorOrchestrationInfo orchestration = 1;
+  repeated ConnectorJobInfo jobs = 2;
 }

@@ -5,10 +5,12 @@ import { useAuthStore } from '@/stores/auth'
 import { useToast } from 'primevue/usetoast'
 import PasswordStrengthMeter from '@/components/PasswordStrengthMeter.vue'
 import { scorePassword } from '@/composables/usePasswordStrength'
+import { useAirlockI18n } from '@/i18n'
 
 const router = useRouter()
 const auth = useAuthStore()
 const toast = useToast()
+const { t } = useAirlockI18n()
 
 const currentPassword = ref('')
 const newPassword = ref('')
@@ -26,12 +28,12 @@ async function onPasskey() {
   error.value = ''
   passkeyLoading.value = true
   try {
-    await auth.registerPasskeyAndSecure('Passkey')
-    toast.add({ severity: 'success', summary: 'Passkey added - account secured', life: 3000 })
+    await auth.registerPasskeyAndSecure(t('auth.passkey.defaultName'))
+    toast.add({ severity: 'success', summary: t('auth.changePassword.passkeyAdded'), life: 3000 })
     router.push('/')
   } catch (err: any) {
     if (!isCeremonyAbort(err)) {
-      error.value = err.response?.data?.error || 'Failed to register passkey.'
+      error.value = err.response?.data?.error || t('auth.changePassword.passkeyRegistrationFailed')
     }
   } finally {
     passkeyLoading.value = false
@@ -41,26 +43,26 @@ async function onPasskey() {
 async function onSubmit() {
   error.value = ''
   if (!currentPassword.value || !newPassword.value || !confirmPassword.value) {
-    error.value = 'All fields are required.'
+    error.value = t('auth.validation.allFieldsRequired')
     return
   }
   if (newPassword.value !== confirmPassword.value) {
-    error.value = 'New passwords do not match.'
+    error.value = t('auth.changePassword.newPasswordsMismatch')
     return
   }
   const email = auth.user?.email ?? ''
   if (!scorePassword(newPassword.value, [email]).ok) {
-    error.value = 'New password is too weak - choose a longer or less predictable one.'
+    error.value = t('auth.changePassword.weak')
     return
   }
 
   loading.value = true
   try {
     await auth.changePassword(currentPassword.value, newPassword.value)
-    toast.add({ severity: 'success', summary: 'Password changed', life: 3000 })
+    toast.add({ severity: 'success', summary: t('auth.changePassword.changed'), life: 3000 })
     router.push('/')
   } catch (err: any) {
-    error.value = err.response?.data?.error || 'Failed to change password.'
+    error.value = err.response?.data?.error || t('auth.changePassword.failed')
   } finally {
     loading.value = false
   }
@@ -70,11 +72,11 @@ async function onSubmit() {
 <template>
   <Card style="width: 26rem">
     <template #title>
-      <div style="text-align: center; font-size: 1.5rem">Secure your account</div>
+      <div style="text-align: center; font-size: 1.5rem">{{ t('auth.changePassword.secureAccount') }}</div>
     </template>
     <template #subtitle>
       <div style="text-align: center">
-        Register a passkey (recommended) or set a new password before continuing.
+        {{ t('auth.changePassword.instructions') }}
       </div>
     </template>
     <template #content>
@@ -82,30 +84,30 @@ async function onSubmit() {
         <Message v-if="error" severity="error" :closable="false">{{ error }}</Message>
 
         <Button
-          label="Register a passkey"
+          :label="t('auth.changePassword.registerPasskey')"
           icon="pi pi-key"
           :loading="passkeyLoading"
           style="width: 100%"
           @click="onPasskey"
         />
 
-        <Divider align="center"><span style="color: var(--p-text-muted-color); font-size: 0.8rem">or set a password</span></Divider>
+        <Divider align="center"><span style="color: var(--p-text-muted-color); font-size: 0.8rem">{{ t('auth.changePassword.orSetPassword') }}</span></Divider>
 
         <form @submit.prevent="onSubmit" style="display: flex; flex-direction: column; gap: 1.25rem">
           <FloatLabel variant="on">
             <Password id="current" v-model="currentPassword" :feedback="false" toggle-mask :input-props="{ autocomplete: 'current-password' }" style="width: 100%" :input-style="{ width: '100%' }" />
-            <label for="current">Current Password</label>
+            <label for="current">{{ t('auth.changePassword.currentPassword') }}</label>
           </FloatLabel>
           <FloatLabel variant="on">
             <Password id="new-pass" v-model="newPassword" :feedback="false" toggle-mask :input-props="{ autocomplete: 'new-password' }" style="width: 100%" :input-style="{ width: '100%' }" />
-            <label for="new-pass">New Password</label>
+            <label for="new-pass">{{ t('auth.changePassword.newPassword') }}</label>
           </FloatLabel>
           <PasswordStrengthMeter :password="newPassword" :user-inputs="[auth.user?.email ?? '']" />
           <FloatLabel variant="on">
             <Password id="confirm-pass" v-model="confirmPassword" :feedback="false" toggle-mask :input-props="{ autocomplete: 'new-password' }" style="width: 100%" :input-style="{ width: '100%' }" />
-            <label for="confirm-pass">Confirm New Password</label>
+            <label for="confirm-pass">{{ t('auth.changePassword.confirmNewPassword') }}</label>
           </FloatLabel>
-          <Button type="submit" label="Change Password" :loading="loading" severity="secondary" style="width: 100%" />
+          <Button type="submit" :label="t('auth.changePassword.action')" :loading="loading" severity="secondary" style="width: 100%" />
         </form>
       </div>
     </template>

@@ -14,6 +14,7 @@ import (
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
+	localepkg "github.com/airlockrun/airlock/locale"
 	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"
 )
@@ -50,7 +51,6 @@ func (h *AuthHandler) Activate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "email is required")
 		return
 	}
-
 	ctx := r.Context()
 
 	// Password is optional: the first admin may activate passkey-only and
@@ -84,6 +84,15 @@ func (h *AuthHandler) Activate(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		logFor(r).Error("lock activation settings failed", zap.Error(err))
 		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	uiLocaleValue := req.UiLocale
+	if uiLocaleValue == "" {
+		uiLocaleValue = settings.UiLocale
+	}
+	uiLocale, err := localepkg.Canonicalize(uiLocaleValue)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	// airlockvet:allow-dbq reason: pre-Principal bootstrap checks whether the singleton tenant has already been created
@@ -134,8 +143,8 @@ func (h *AuthHandler) Activate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// airlockvet:allow-dbq reason: activation code consumption commits atomically with tenant, admin, and first session creation
-	if err := q.ClearActivationCode(ctx); err != nil {
-		logFor(r).Error("consume activation code failed", zap.Error(err))
+	if err := q.CompleteActivation(ctx, uiLocale); err != nil {
+		logFor(r).Error("complete activation settings failed", zap.Error(err))
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
@@ -166,16 +175,15 @@ func (h *AuthHandler) Activate(w http.ResponseWriter, r *http.Request) {
 func (h *AuthHandler) Status(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	q := dbq.New(h.db.Pool())
-
-	// airlockvet:allow-dbq reason: pre-Principal bootstrap (activate/login/refresh) — runs before authz can apply, gated by HMAC / activation token / password
-	exists, err := q.TenantExists(ctx)
+	// airlockvet:allow-dbq reason: public bootstrap status must expose activation state and locale before a Principal exists
+	status, err := q.GetPublicSystemStatus(ctx)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	if exists {
+	if status.Activated {
 		// airlockvet:allow-writejson reason: pre-Principal bootstrap (activate/login/refresh) — runs before authz can apply, gated by HMAC / activation token / password
-		writeJSON(w, http.StatusOK, map[string]any{"activated": true})
+		writeJSON(w, http.StatusOK, map[string]any{"activated": true, "ui_locale": status.UiLocale})
 		return
 	}
 
@@ -183,6 +191,7 @@ func (h *AuthHandler) Status(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"activated":                false,
 		"activation_code_required": true,
+		"ui_locale":                status.UiLocale,
 	})
 }
 

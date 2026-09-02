@@ -24,6 +24,7 @@ import { registerPasskey } from '@/api/passkeys'
 import { usePasskeysStore } from '@/stores/passkeys'
 import { scorePassword } from '@/composables/usePasswordStrength'
 import PasswordStrengthMeter from '@/components/PasswordStrengthMeter.vue'
+import { useAirlockI18n, type AuthLocaleStatus } from '@/i18n'
 import {
   GetSystemSettingsResponseSchema,
   UpdateSystemSettingsRequestSchema,
@@ -45,6 +46,17 @@ const providersStore = useProvidersStore()
 const bridgesStore = useBridgesStore()
 const toast = useToast()
 const { groupModels, searchModelOptions } = useModelCapabilities()
+const { locale, availableLocales, setLocale, t } = useAirlockI18n()
+const uiLocale = computed({
+  get: () => locale.value,
+  set: (value: string) => setLocale(value),
+})
+const localeOptions = computed(() => availableLocales.map(value => ({
+  label: value === 'en'
+    ? t('auth.locale.english')
+    : value === 'ru' ? t('auth.locale.russian') : value,
+  value,
+})))
 
 const activeStep = ref(0)
 const stepperEl = ref<HTMLElement | null>(null)
@@ -77,22 +89,26 @@ onMounted(async () => {
   // Resume a step from the URL (a refresh mid-wizard).
   const wanted = Number(route.query.step)
   const resumeStep = Number.isInteger(wanted) && wanted >= 1 && wanted <= 3 ? wanted : 0
+  let status: (AuthLocaleStatus & { activation_code_required?: boolean }) | undefined
   try {
-    const { data } = await api.get('/auth/status')
-    if (data.activation_code_required) activationCodeRequired.value = true
-    if (data.activated) {
-      // Already activated. A mid-wizard refresh (an authenticated admin landing
-      // with a ?step) resumes the post-account setup; a bare visit or a
-      // non-admin is genuinely done and gets the "already activated" notice.
-      if (resumeStep >= 1 && auth.isAuthenticated && auth.isAdmin) {
-        accountCreated.value = true
-        credentialSet.value = true
-        await resumeSetup(resumeStep)
-      } else {
-        alreadyActivated.value = true
-      }
+    const response = await api.get('/auth/status')
+    status = response.data
+  } catch {
+    return
+  }
+  if (status.activation_code_required) activationCodeRequired.value = true
+  if (status.activated) {
+    // Already activated. A mid-wizard refresh (an authenticated admin landing
+    // with a ?step) resumes the post-account setup; a bare visit or a
+    // non-admin is genuinely done and gets the "already activated" notice.
+    if (resumeStep >= 1 && auth.isAuthenticated && auth.isAdmin) {
+      accountCreated.value = true
+      credentialSet.value = true
+      await resumeSetup(resumeStep)
+    } else {
+      alreadyActivated.value = true
     }
-  } catch { /* show the form anyway */ }
+  }
 })
 
 // resumeSetup loads the data the post-account steps need (normally fetched as
@@ -107,7 +123,7 @@ async function resumeSetup(step: number) {
         loadExistingDefaults(),
       ])
     } catch (err: any) {
-      error.value = err.response?.data?.error || 'Setup data could not be loaded. Retry by returning to Providers and selecting Next.'
+      error.value = err.response?.data?.error || t('auth.activation.setupDataFailed')
       return
     }
   }
@@ -141,24 +157,24 @@ function isCeremonyAbort(err: any): boolean {
 async function nextStep() {
   error.value = ''
   if (activationCodeRequired.value && !activationCode.value) {
-    error.value = 'Activation code is required.'
+    error.value = t('auth.activation.codeRequired')
     return
   }
   if (!email.value) {
-    error.value = 'Email is required.'
+    error.value = t('auth.activation.emailRequired')
     return
   }
   if (!usePasskey.value) {
     if (!password.value || !confirmPassword.value) {
-      error.value = 'Enter and confirm a password.'
+      error.value = t('auth.activation.enterPassword')
       return
     }
     if (password.value !== confirmPassword.value) {
-      error.value = 'Passwords do not match.'
+      error.value = t('auth.activation.passwordsMismatch')
       return
     }
     if (!scorePassword(password.value, [email.value]).ok) {
-      error.value = 'Password is too weak - choose a longer or less predictable one.'
+      error.value = t('auth.activation.passwordWeak')
       return
     }
   }
@@ -169,7 +185,13 @@ async function nextStep() {
     if (!accountCreated.value) {
       // Creates the account AND authenticates the session; a passkey-only
       // account is created with an empty password.
-      await auth.activate(email.value, usePasskey.value ? '' : password.value, displayName.value || email.value, activationCode.value)
+      await auth.activate(
+        email.value,
+        usePasskey.value ? '' : password.value,
+        displayName.value || email.value,
+        uiLocale.value,
+        activationCode.value,
+      )
       accountCreated.value = true
       credentialSet.value = !usePasskey.value
     } else if (!usePasskey.value && !credentialSet.value) {
@@ -184,7 +206,7 @@ async function nextStep() {
     // Security). Gate on credentialSet so a cancelled ceremony can't advance
     // with no usable credential.
     if (!credentialSet.value) {
-      await registerPasskey('Passkey')
+      await registerPasskey(t('auth.passkey.defaultName'))
       credentialSet.value = true
     }
     credentialReady = true
@@ -192,9 +214,9 @@ async function nextStep() {
     if (err.response?.status === 409) {
       alreadyActivated.value = true
     } else if (isCeremonyAbort(err)) {
-      error.value = 'Passkey setup was cancelled. Try again, or uncheck "Use a passkey" to set a password instead.'
+      error.value = t('auth.activation.passkeyCancelled')
     } else {
-      error.value = err.response?.data?.error || 'Activation failed.'
+      error.value = err.response?.data?.error || t('auth.activation.failed')
     }
   } finally {
     loading.value = false
@@ -211,15 +233,15 @@ async function nextStep() {
 type Capability = 'text' | 'vision' | 'transcription' | 'speech' | 'image_gen' | 'embedding' | 'search'
 
 const capabilityOrder: Capability[] = ['text', 'vision', 'transcription', 'speech', 'image_gen', 'embedding', 'search']
-const capabilityMeta: Record<Capability, { label: string; icon: string }> = {
-  text:          { label: 'Text',          icon: 'pi pi-align-left' },
-  vision:        { label: 'Vision',        icon: 'pi pi-image' },
-  transcription: { label: 'Transcription', icon: 'pi pi-microphone' },
-  speech:        { label: 'Speech',        icon: 'pi pi-volume-up' },
-  image_gen:     { label: 'Image gen',     icon: 'pi pi-palette' },
-  embedding:     { label: 'Embedding',     icon: 'pi pi-database' },
-  search:        { label: 'Web search',    icon: 'pi pi-search' },
-}
+const capabilityMeta = computed<Record<Capability, { label: string; icon: string }>>(() => ({
+  text:          { label: t('auth.activation.capability.text'),          icon: 'pi pi-align-left' },
+  vision:        { label: t('auth.activation.capability.vision'),        icon: 'pi pi-image' },
+  transcription: { label: t('auth.activation.capability.transcription'), icon: 'pi pi-microphone' },
+  speech:        { label: t('auth.activation.capability.speech'),        icon: 'pi pi-volume-up' },
+  image_gen:     { label: t('auth.activation.capability.imageGen'),      icon: 'pi pi-palette' },
+  embedding:     { label: t('auth.activation.capability.embedding'),     icon: 'pi pi-database' },
+  search:        { label: t('auth.activation.capability.webSearch'),     icon: 'pi pi-search' },
+}))
 
 const providerID = ref('')
 const providerName = ref('')
@@ -303,10 +325,10 @@ async function refreshProviderSetup(): Promise<boolean> {
   loading.value = true
   try {
     const [capabilitiesLoaded] = await Promise.all([catalog.fetchCapabilities(), providersStore.fetchProviders()])
-    if (!capabilitiesLoaded) throw new Error('Provider catalog could not be loaded.')
+    if (!capabilitiesLoaded) throw new Error(t('auth.activation.providerCatalogFailed'))
     return true
   } catch (err: any) {
-    providerSetupError.value = err.response?.data?.error || err.message || 'Provider options could not be loaded.'
+    providerSetupError.value = err.response?.data?.error || err.message || t('auth.activation.providerOptionsFailed')
     return false
   } finally {
     loading.value = false
@@ -316,7 +338,7 @@ async function refreshProviderSetup(): Promise<boolean> {
 async function addProvider() {
   error.value = ''
   if (!providerFormValid.value) {
-    error.value = 'Enter a display name, valid unique-style slug, valid URL, and any required API key.'
+    error.value = t('auth.activation.providerFormInvalid')
     return
   }
 
@@ -329,13 +351,13 @@ async function addProvider() {
       baseUrl: baseURL.value,
       apiKey: apiKey.value,
     })
-    toast.add({ severity: 'success', summary: `Added ${providerName.value || providerID.value}`, life: 3000 })
+    toast.add({ severity: 'success', summary: t('auth.activation.providerAdded', { provider: providerName.value || providerID.value }), life: 3000 })
     resetProviderForm()
     if (!(await catalog.fetchCapabilities())) {
-      providerSetupError.value = 'Provider catalog could not be refreshed.'
+      providerSetupError.value = t('auth.activation.providerCatalogRefreshFailed')
     }
   } catch (err: any) {
-    error.value = err.response?.data?.error || 'Failed to create provider.'
+    error.value = err.response?.data?.error || t('auth.activation.createProviderFailed')
   } finally {
     loading.value = false
   }
@@ -356,14 +378,14 @@ async function goToDefaults() {
     ])
     activeStep.value = 2
   } catch (err: any) {
-    error.value = err.response?.data?.error || err.message || 'Models and defaults could not be loaded. Try again.'
+    error.value = err.response?.data?.error || err.message || t('auth.activation.modelsDefaultsFailed')
   } finally {
     loading.value = false
   }
 }
 
 function skipToDashboard() {
-  toast.add({ severity: 'info', summary: 'Setup skipped', detail: 'You can configure providers and local endpoints under Providers, defaults under Settings, and Telegram under Bridges.', life: 5000 })
+  toast.add({ severity: 'info', summary: t('auth.activation.setupSkipped'), detail: t('auth.activation.setupSkippedDetail'), life: 5000 })
   router.push('/')
 }
 
@@ -385,28 +407,31 @@ const defaults = ref<Defaults>({
 })
 
 async function loadExistingDefaults() {
+  let info: SystemSettingsInfo | undefined
   try {
     const { data } = await api.get('/api/v1/settings')
     const resp = fromJson(GetSystemSettingsResponseSchema, data)
-    if (resp.settings) {
-      // Pack each (row UUID, model name) pair into the picker-shaped
-      // string so the dropdowns pre-select the right entry. Empty pair
-      // ⇒ empty string, picker shows the placeholder.
-      const pack = (modelKey: keyof SystemSettingsInfo, fkKey: keyof SystemSettingsInfo) => {
-        const modelName = (resp.settings as any)[modelKey] || ''
-        const providerRowID = (resp.settings as any)[fkKey] || ''
-        return providerRowID || modelName ? packModelValue(providerRowID, modelName) : ''
-      }
-      defaults.value.defaultBuildModel     = pack('defaultBuildModel', 'defaultBuildProviderId')
-      defaults.value.defaultExecModel      = pack('defaultExecModel', 'defaultExecProviderId')
-      defaults.value.defaultVisionModel    = pack('defaultVisionModel', 'defaultVisionProviderId')
-      defaults.value.defaultSttModel       = pack('defaultSttModel', 'defaultSttProviderId')
-      defaults.value.defaultTtsModel       = pack('defaultTtsModel', 'defaultTtsProviderId')
-      defaults.value.defaultImageGenModel  = pack('defaultImageGenModel', 'defaultImageGenProviderId')
-      defaults.value.defaultEmbeddingModel = pack('defaultEmbeddingModel', 'defaultEmbeddingProviderId')
-      defaults.value.defaultSearchModel    = pack('defaultSearchModel', 'defaultSearchProviderId')
-    }
+    info = resp.settings
   } catch { /* best-effort */ }
+  if (info) {
+    if (availableLocales.includes(info.uiLocale)) setLocale(info.uiLocale)
+    // Pack each (row UUID, model name) pair into the picker-shaped
+    // string so the dropdowns pre-select the right entry. Empty pair
+    // ⇒ empty string, picker shows the placeholder.
+    const pack = (modelKey: keyof SystemSettingsInfo, fkKey: keyof SystemSettingsInfo) => {
+      const modelName = (info as any)[modelKey] || ''
+      const providerRowID = (info as any)[fkKey] || ''
+      return providerRowID || modelName ? packModelValue(providerRowID, modelName) : ''
+    }
+    defaults.value.defaultBuildModel     = pack('defaultBuildModel', 'defaultBuildProviderId')
+    defaults.value.defaultExecModel      = pack('defaultExecModel', 'defaultExecProviderId')
+    defaults.value.defaultVisionModel    = pack('defaultVisionModel', 'defaultVisionProviderId')
+    defaults.value.defaultSttModel       = pack('defaultSttModel', 'defaultSttProviderId')
+    defaults.value.defaultTtsModel       = pack('defaultTtsModel', 'defaultTtsProviderId')
+    defaults.value.defaultImageGenModel  = pack('defaultImageGenModel', 'defaultImageGenProviderId')
+    defaults.value.defaultEmbeddingModel = pack('defaultEmbeddingModel', 'defaultEmbeddingProviderId')
+    defaults.value.defaultSearchModel    = pack('defaultSearchModel', 'defaultSearchProviderId')
+  }
 }
 
 interface DefaultRow {
@@ -419,14 +444,14 @@ interface DefaultRow {
 }
 
 const defaultRows = computed<DefaultRow[]>(() => [
-  { key: 'defaultBuildModel',     label: 'Build Model',      icon: 'pi pi-hammer',     help: 'Used by Sol to generate app code.', options: groupModels(isLanguage),                                            grouped: true },
-  { key: 'defaultExecModel',      label: 'Execution (Text)', icon: 'pi pi-align-left', help: 'Runtime default for LLM calls.',      options: groupModels(isLanguage),                                            grouped: true },
-  { key: 'defaultVisionModel',    label: 'Vision',           icon: 'pi pi-image',      help: 'Image → text.',                       options: groupModels((m: CatalogModel) => isLanguage(m) && hasCap(m, 'vision')), grouped: true },
-  { key: 'defaultSttModel',       label: 'STT',              icon: 'pi pi-microphone', help: 'Speech-to-text.',                     options: groupModels(isTranscription),                                       grouped: true },
-  { key: 'defaultTtsModel',       label: 'TTS',              icon: 'pi pi-volume-up',  help: 'Text-to-speech.',                     options: groupModels(isSpeech),                                              grouped: true },
-  { key: 'defaultImageGenModel',  label: 'Image Gen',        icon: 'pi pi-palette',    help: 'Text-to-image generation.',           options: groupModels(isImageGen),                                            grouped: true },
-  { key: 'defaultEmbeddingModel', label: 'Embedding',        icon: 'pi pi-database',   help: 'Text → vector embeddings.',           options: groupModels(isEmbedding),                                           grouped: true },
-  { key: 'defaultSearchModel',    label: 'Web Search',       icon: 'pi pi-search',     help: 'Web search backend + model.',          options: searchModelOptions.value,                                        grouped: true },
+  { key: 'defaultBuildModel',     label: t('auth.activation.default.buildModel'),     icon: 'pi pi-hammer',     help: t('auth.activation.default.buildModelHelp'),     options: groupModels(isLanguage),                                              grouped: true },
+  { key: 'defaultExecModel',      label: t('auth.activation.default.executionText'),  icon: 'pi pi-align-left', help: t('auth.activation.default.executionTextHelp'),  options: groupModels(isLanguage),                                              grouped: true },
+  { key: 'defaultVisionModel',    label: t('auth.activation.default.vision'),         icon: 'pi pi-image',      help: t('auth.activation.default.visionHelp'),         options: groupModels((m: CatalogModel) => isLanguage(m) && hasCap(m, 'vision')), grouped: true },
+  { key: 'defaultSttModel',       label: t('auth.activation.default.stt'),            icon: 'pi pi-microphone', help: t('auth.activation.default.sttHelp'),            options: groupModels(isTranscription),                                         grouped: true },
+  { key: 'defaultTtsModel',       label: t('auth.activation.default.tts'),            icon: 'pi pi-volume-up',  help: t('auth.activation.default.ttsHelp'),            options: groupModels(isSpeech),                                                grouped: true },
+  { key: 'defaultImageGenModel',  label: t('auth.activation.default.imageGen'),       icon: 'pi pi-palette',    help: t('auth.activation.default.imageGenHelp'),       options: groupModels(isImageGen),                                              grouped: true },
+  { key: 'defaultEmbeddingModel', label: t('auth.activation.default.embedding'),      icon: 'pi pi-database',   help: t('auth.activation.default.embeddingHelp'),      options: groupModels(isEmbedding),                                             grouped: true },
+  { key: 'defaultSearchModel',    label: t('auth.activation.default.webSearch'),      icon: 'pi pi-search',     help: t('auth.activation.default.webSearchHelp'),      options: searchModelOptions.value,                                             grouped: true },
 ])
 
 // Don't bother showing a capability row the tenant can't satisfy with any
@@ -473,6 +498,7 @@ async function saveDefaults(): Promise<boolean> {
       defaultEmbeddingProviderId: embedding.providerRowID,
       defaultSearchModel:         search.modelName,
       defaultSearchProviderId:    search.providerRowID,
+      uiLocale:                   uiLocale.value,
     }
     const req = toJson(UpdateSystemSettingsRequestSchema, {
       $typeName: 'airlock.v1.UpdateSystemSettingsRequest',
@@ -481,7 +507,7 @@ async function saveDefaults(): Promise<boolean> {
     await api.put('/api/v1/settings', req)
     return true
   } catch (err: any) {
-    error.value = err.response?.data?.error || 'Failed to save defaults.'
+    error.value = err.response?.data?.error || t('auth.activation.saveDefaultsFailed')
     return false
   } finally {
     loading.value = false
@@ -504,7 +530,7 @@ const managerBotConfigured = computed(() => !!managerBot.value)
 async function addManagerBot() {
   error.value = ''
   if (!managerBotToken.value) {
-    error.value = 'Paste the Telegram bot token first.'
+    error.value = t('auth.activation.telegramTokenRequired')
     return
   }
 
@@ -516,17 +542,17 @@ async function addManagerBot() {
       isManager: true,
     })
     managerBotToken.value = ''
-    toast.add({ severity: 'success', summary: 'Telegram manager bot added', life: 3000 })
+    toast.add({ severity: 'success', summary: t('auth.activation.telegramBotAdded'), life: 3000 })
     await bridgesStore.fetchBridges()
   } catch (err: any) {
-    error.value = err.response?.data?.error || 'Failed to add Telegram manager bot.'
+    error.value = err.response?.data?.error || t('auth.activation.telegramBotFailed')
   } finally {
     loading.value = false
   }
 }
 
 function finishActivation() {
-  toast.add({ severity: 'success', summary: 'Airlock activated', life: 3000 })
+  toast.add({ severity: 'success', summary: t('auth.activation.activated'), life: 3000 })
   router.push('/')
 }
 </script>
@@ -534,28 +560,28 @@ function finishActivation() {
 <template>
   <Card v-if="alreadyActivated" style="width: 30rem">
     <template #title>
-      <div style="text-align: center; font-size: 1.5rem">Already Activated</div>
+      <div style="text-align: center; font-size: 1.5rem">{{ t('auth.activation.alreadyActivated') }}</div>
     </template>
     <template #content>
-      <p style="text-align: center; color: var(--p-text-muted-color)">Airlock has already been set up. Please sign in.</p>
+      <p style="text-align: center; color: var(--p-text-muted-color)">{{ t('auth.activation.alreadyActivatedDetail') }}</p>
       <div style="display: flex; justify-content: center; margin-top: 1rem">
-        <Button label="Go to Login" @click="router.push('/login')" />
+        <Button :label="t('auth.activation.goToLogin')" @click="router.push('/login')" />
       </div>
     </template>
   </Card>
 
   <Card v-else style="width: 40rem; max-width: 95vw">
     <template #title>
-      <div style="text-align: center; font-size: 1.5rem">Airlock Setup</div>
+      <div style="text-align: center; font-size: 1.5rem">{{ t('auth.activation.setupTitle') }}</div>
     </template>
     <template #content>
       <div ref="stepperEl">
       <Stepper v-model:value="activeStep" linear>
         <StepList>
-          <Step :value="0">Account</Step>
-          <Step :value="1">Providers</Step>
-          <Step :value="2">Defaults</Step>
-          <Step :value="3">Telegram</Step>
+          <Step :value="0">{{ t('auth.activation.step.account') }}</Step>
+          <Step :value="1">{{ t('auth.activation.step.providers') }}</Step>
+          <Step :value="2">{{ t('auth.activation.step.defaults') }}</Step>
+          <Step :value="3">{{ t('auth.activation.step.telegram') }}</Step>
         </StepList>
         <StepPanels>
           <!-- Step 1: Admin Account -->
@@ -564,35 +590,46 @@ function finishActivation() {
               <Message v-if="error" severity="error" :closable="false">{{ error }}</Message>
               <FloatLabel variant="on" v-if="activationCodeRequired">
                 <InputText id="act-code" v-model="activationCode" autocomplete="one-time-code" style="width: 100%" />
-                <label for="act-code">Activation Code</label>
+                <label for="act-code">{{ t('auth.activation.activationCode') }}</label>
               </FloatLabel>
               <FloatLabel variant="on">
                 <InputText id="act-email" v-model="email" type="email" autocomplete="username" style="width: 100%" />
-                <label for="act-email">Email</label>
+                <label for="act-email">{{ t('auth.login.email') }}</label>
               </FloatLabel>
               <FloatLabel variant="on">
                 <InputText id="act-name" v-model="displayName" autocomplete="name" style="width: 100%" />
-                <label for="act-name">Display Name</label>
+                <label for="act-name">{{ t('auth.activation.displayName') }}</label>
+              </FloatLabel>
+              <FloatLabel variant="on">
+                <Select
+                  id="act-locale"
+                  v-model="uiLocale"
+                  :options="localeOptions"
+                  optionLabel="label"
+                  optionValue="value"
+                  style="width: 100%"
+                />
+                <label for="act-locale">{{ t('auth.activation.language') }}</label>
               </FloatLabel>
               <div style="display: flex; align-items: center; gap: 0.5rem">
                 <Checkbox v-model="usePasskey" :binary="true" inputId="use-passkey" />
                 <label for="use-passkey" style="font-size: 0.9rem; color: var(--p-text-muted-color)">
-                  Use a passkey (uncheck to set a password instead)
+                  {{ t('auth.activation.usePasskey') }}
                 </label>
               </div>
               <template v-if="!usePasskey">
                 <FloatLabel variant="on">
                   <Password id="act-pass" v-model="password" :feedback="false" toggle-mask :input-props="{ autocomplete: 'new-password' }" style="width: 100%" :input-style="{ width: '100%' }" />
-                  <label for="act-pass">Password</label>
+                  <label for="act-pass">{{ t('auth.login.password') }}</label>
                 </FloatLabel>
                 <PasswordStrengthMeter :password="password" :user-inputs="[email]" />
                 <FloatLabel variant="on">
                   <Password id="act-confirm" v-model="confirmPassword" :feedback="false" toggle-mask :input-props="{ autocomplete: 'new-password' }" style="width: 100%" :input-style="{ width: '100%' }" />
-                  <label for="act-confirm">Confirm Password</label>
+                  <label for="act-confirm">{{ t('auth.activation.confirmPassword') }}</label>
                 </FloatLabel>
               </template>
               <div style="display: flex; justify-content: flex-end">
-                <Button type="submit" :label="usePasskey ? 'Create account & passkey' : 'Create account'" :icon="usePasskey ? 'pi pi-key' : 'pi pi-check'" icon-pos="right" :loading="loading" />
+                <Button type="submit" :label="usePasskey ? t('auth.activation.createAccountPasskey') : t('auth.activation.createAccount')" :icon="usePasskey ? 'pi pi-key' : 'pi pi-check'" icon-pos="right" :loading="loading" />
               </div>
             </form>
           </StepPanel>
@@ -603,17 +640,17 @@ function finishActivation() {
               <Message v-if="error" severity="error" :closable="false">{{ error }}</Message>
               <Message v-if="providerSetupError" severity="error" :closable="false">
                 <div class="retry-message">
-                  <span>Account setup is complete, but provider options could not be loaded: {{ providerSetupError }}</span>
-                  <Button label="Retry" icon="pi pi-refresh" size="small" severity="secondary" :loading="loading" @click="refreshProviderSetup" />
+                  <span>{{ t('auth.activation.providerLoadContext', { error: providerSetupError }) }}</span>
+                  <Button :label="t('auth.action.retry')" icon="pi pi-refresh" size="small" severity="secondary" :loading="loading" @click="refreshProviderSetup" />
                 </div>
               </Message>
               <Message severity="info" :closable="false">
-                Local and OpenAI-compatible endpoints require model confirmation. Configure them after activation under <b>Providers</b>.
+                {{ t('auth.activation.localProviderNotice') }}
               </Message>
 
               <!-- Capability coverage -->
               <div class="cap-matrix">
-                <div class="cap-matrix-title">Capabilities</div>
+                <div class="cap-matrix-title">{{ t('auth.activation.capabilities') }}</div>
                 <div v-for="cap in capabilityOrder" :key="cap" class="cap-row">
                   <div class="cap-label">
                     <i :class="capabilityMeta[cap].icon" />
@@ -629,7 +666,7 @@ function finishActivation() {
                         style="font-size: 0.7rem"
                       />
                     </template>
-                    <span v-else class="cap-missing">Not yet configured</span>
+                    <span v-else class="cap-missing">{{ t('auth.activation.notConfigured') }}</span>
                   </div>
                 </div>
               </div>
@@ -654,11 +691,11 @@ function finishActivation() {
                       style="width: 100%"
                       @update:modelValue="onProviderSelect"
                     />
-                    <label for="prov-id">Provider</label>
+                    <label for="prov-id">{{ t('auth.activation.provider') }}</label>
                   </FloatLabel>
                   <!-- Preview what this provider will cover -->
                   <div v-if="selectedProviderCaps.length" class="cap-preview">
-                    Provides:
+                    {{ t('auth.activation.provides') }}
                     <Tag
                       v-for="c in selectedProviderCaps"
                       :key="c"
@@ -671,28 +708,28 @@ function finishActivation() {
                 <div style="display: flex; flex-direction: column; gap: 0.25rem">
                   <FloatLabel variant="on">
                     <InputText id="prov-name" v-model="providerName" autocomplete="off" style="width: 100%" @input="onProviderNameInput" />
-                    <label for="prov-name">Display Name</label>
+                    <label for="prov-name">{{ t('auth.activation.displayName') }}</label>
                   </FloatLabel>
                 </div>
                 <div style="display: flex; flex-direction: column; gap: 0.25rem">
                   <FloatLabel variant="on">
                     <InputText id="prov-slug" v-model="providerSlug" autocomplete="off" style="width: 100%" @input="onSlugInput" />
-                    <label for="prov-slug">Slug</label>
+                    <label for="prov-slug">{{ t('auth.activation.slug') }}</label>
                   </FloatLabel>
                   <small style="color: var(--p-text-muted-color)">
-                    Unique within this provider type. Suggestions skip slugs already in use; manual edits are preserved.
+                    {{ t('auth.activation.slugHelp') }}
                   </small>
                   <small v-if="providerSlug && !isValidProviderSlug(providerSlug)" class="field-error">
-                    Use 1-63 lowercase letters, numbers, and single hyphens.
+                    {{ t('auth.activation.slugInvalid') }}
                   </small>
                 </div>
                 <div style="display: flex; flex-direction: column; gap: 0.25rem">
                   <FloatLabel variant="on">
                     <InputText id="prov-url" v-model="baseURL" autocomplete="off" style="width: 100%" />
-                    <label for="prov-url">Base URL (optional)</label>
+                    <label for="prov-url">{{ t('auth.activation.baseUrl') }}</label>
                   </FloatLabel>
                   <small v-if="!isValidProviderURL(baseURL, false)" class="field-error">
-                    Enter an absolute HTTP(S) URL without credentials, query, or fragment.
+                    {{ t('auth.activation.urlInvalid') }}
                   </small>
                 </div>
                 <div style="display: flex; flex-direction: column; gap: 0.25rem">
@@ -712,14 +749,14 @@ function finishActivation() {
                       data-bwignore="true"
                       style="width: 100%; -webkit-text-security: disc;"
                     />
-                    <label for="prov-key">API Key</label>
+                    <label for="prov-key">{{ t('auth.activation.apiKey') }}</label>
                   </FloatLabel>
-                  <small v-if="!apiKey" class="field-error">Hosted providers require an API key.</small>
+                  <small v-if="!apiKey" class="field-error">{{ t('auth.activation.apiKeyRequired') }}</small>
                 </div>
                 <div style="display: flex; justify-content: flex-end">
                   <Button
                     type="submit"
-                    label="Add provider"
+                    :label="t('auth.activation.addProvider')"
                     icon="pi pi-plus"
                     :loading="loading"
                     :disabled="!providerFormValid"
@@ -730,9 +767,9 @@ function finishActivation() {
 
               <!-- Navigation -->
               <div style="display: flex; justify-content: space-between; align-items: center; border-top: 1px solid var(--p-surface-border); padding-top: 1rem">
-                <Button label="Skip setup" severity="secondary" text @click="skipToDashboard" />
+                <Button :label="t('auth.activation.skipSetup')" severity="secondary" text @click="skipToDashboard" />
                 <Button
-                  label="Next"
+                  :label="t('auth.action.next')"
                   icon="pi pi-arrow-right"
                   icon-pos="right"
                   :disabled="!anyProviderConfigured"
@@ -747,7 +784,7 @@ function finishActivation() {
             <div style="display: flex; flex-direction: column; gap: 1.25rem; padding-top: 1rem">
               <Message v-if="error" severity="error" :closable="false">{{ error }}</Message>
               <p style="color: var(--p-text-muted-color); margin: 0">
-                Pick a default model for each capability. Apps inherit these unless they override. You can change them anytime under Settings.
+                {{ t('auth.activation.defaultsInstructions') }}
               </p>
 
               <div
@@ -793,12 +830,12 @@ function finishActivation() {
               </div>
 
               <p v-if="!visibleDefaultRows.length" style="color: var(--p-text-muted-color); margin: 0">
-                No models yet. Go back and add a provider that offers at least one capability.
+                {{ t('auth.activation.noModels') }}
               </p>
 
               <div style="display: flex; justify-content: space-between; align-items: center; border-top: 1px solid var(--p-surface-border); padding-top: 1rem">
-                <Button label="Back" severity="secondary" text icon="pi pi-arrow-left" @click="activeStep = 1" />
-                <Button label="Next" icon="pi pi-arrow-right" icon-pos="right" :loading="loading" @click="saveDefaultsAndContinue" />
+                <Button :label="t('auth.action.back')" severity="secondary" text icon="pi pi-arrow-left" @click="activeStep = 1" />
+                <Button :label="t('auth.action.next')" icon="pi pi-arrow-right" icon-pos="right" :loading="loading" @click="saveDefaultsAndContinue" />
               </div>
             </div>
           </StepPanel>
@@ -810,46 +847,47 @@ function finishActivation() {
               <div class="manager-setup-intro">
                 <div class="manager-setup-icon"><i class="pi pi-send" /></div>
                 <div style="display: flex; flex-direction: column; gap: 0.35rem">
-                  <h3 style="margin: 0">Add a Telegram manager bot</h3>
+                  <h3 style="margin: 0">{{ t('auth.activation.telegramTitle') }}</h3>
                   <p style="color: var(--p-text-muted-color); margin: 0">
-                    The manager bot lets Airlock create new Telegram bots for apps through Telegram's managed-bots flow. It must be a Telegram bot with bot-management permission enabled.
+                    {{ t('auth.activation.telegramIntro') }}
                   </p>
                 </div>
               </div>
 
               <Message v-if="managerBotConfigured" severity="success" :closable="false">
-                Manager bot configured: <b>{{ managerBot?.botUsername || managerBot?.name }}</b>
-                <span v-if="managerBot?.managerError"> - {{ managerBot.managerError }}</span>
+                {{ managerBot?.managerError
+                  ? t('auth.activation.managerConfiguredError', { name: managerBot?.botUsername || managerBot?.name || '', error: managerBot.managerError })
+                  : t('auth.activation.managerConfigured', { name: managerBot?.botUsername || managerBot?.name || '' }) }}
               </Message>
 
               <div class="manager-guide">
-                <div class="manager-guide-title">Telegram setup checklist</div>
+                <div class="manager-guide-title">{{ t('auth.activation.telegramChecklist') }}</div>
                 <ol>
-                  <li>Open <b>@BotFather</b> in Telegram and create a new bot, or choose an existing bot that should manage bot creation.</li>
-                  <li>Open that bot's settings in BotFather and enable the management permission for creating/managing bots. Telegram exposes this as <code>can_manage_bots</code>.</li>
-                  <li>Copy the bot token from BotFather and paste it below.</li>
-                  <li>Airlock verifies the token and refuses setup if Telegram has not granted <code>can_manage_bots</code>.</li>
+                  <li>{{ t('auth.activation.telegramChecklistCreate') }}</li>
+                  <li>{{ t('auth.activation.telegramChecklistPermission') }}</li>
+                  <li>{{ t('auth.activation.telegramChecklistToken') }}</li>
+                  <li>{{ t('auth.activation.telegramChecklistVerify') }}</li>
                 </ol>
               </div>
 
               <div v-if="!managerBotConfigured" style="display: flex; flex-direction: column; gap: 0.75rem">
                 <FloatLabel variant="on">
                   <Password id="manager-bot-token" v-model="managerBotToken" :feedback="false" toggleMask style="width: 100%" :input-style="{ width: '100%' }" />
-                  <label for="manager-bot-token">Telegram bot token</label>
+                  <label for="manager-bot-token">{{ t('auth.activation.telegramBotToken') }}</label>
                 </FloatLabel>
                 <small style="color: var(--p-text-muted-color)">
-                  The bot is saved as an unbound manager bridge. App bots can be created later from Bridges without pasting tokens manually.
+                  {{ t('auth.activation.telegramBridgeHelp') }}
                 </small>
                 <div style="display: flex; justify-content: flex-end">
-                  <Button label="Add manager bot" icon="pi pi-plus" :loading="loading" :disabled="!managerBotToken" @click="addManagerBot" />
+                  <Button :label="t('auth.activation.addManagerBot')" icon="pi pi-plus" :loading="loading" :disabled="!managerBotToken" @click="addManagerBot" />
                 </div>
               </div>
 
               <div style="display: flex; justify-content: space-between; align-items: center; border-top: 1px solid var(--p-surface-border); padding-top: 1rem">
-                <Button label="Back" severity="secondary" text icon="pi pi-arrow-left" @click="activeStep = 2" />
+                <Button :label="t('auth.action.back')" severity="secondary" text icon="pi pi-arrow-left" @click="activeStep = 2" />
                 <div style="display: flex; gap: 0.5rem">
-                  <Button v-if="!managerBotConfigured" label="Skip for now" severity="secondary" text @click="finishActivation" />
-                  <Button label="Finish" icon="pi pi-check" :disabled="!managerBotConfigured" @click="finishActivation" />
+                  <Button v-if="!managerBotConfigured" :label="t('auth.activation.skipForNow')" severity="secondary" text @click="finishActivation" />
+                  <Button :label="t('auth.action.finish')" icon="pi pi-check" :disabled="!managerBotConfigured" @click="finishActivation" />
                 </div>
               </div>
             </div>
@@ -861,7 +899,7 @@ function finishActivation() {
     <template #footer>
       <div style="text-align: center">
         <router-link to="/login" style="color: var(--p-primary-color); text-decoration: none; font-size: 0.875rem">
-          Already activated? Sign in
+          {{ t('auth.activation.alreadySignIn') }}
         </router-link>
       </div>
     </template>

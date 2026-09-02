@@ -1,8 +1,19 @@
 -- name: GetSystemSettings :one
 SELECT * FROM system_settings WHERE id = true;
 
+-- name: GetPublicSystemStatus :one
+-- Reads activation state and locale from one statement snapshot so concurrent
+-- activation cannot expose a tenant paired with the pre-activation locale.
+SELECT s.ui_locale, EXISTS(SELECT 1 FROM tenants) AS activated
+FROM system_settings s
+WHERE s.id = true;
+
 -- name: GetSystemSettingsForActivation :one
 -- Serializes first-admin activation across replicas.
+SELECT * FROM system_settings WHERE id = true FOR UPDATE;
+
+-- name: GetSystemSettingsForUpdate :one
+-- Serializes whole-row settings updates across replicas.
 SELECT * FROM system_settings WHERE id = true FOR UPDATE;
 
 -- name: SetActivationCode :execrows
@@ -12,9 +23,9 @@ UPDATE system_settings
 SET activation_code = @activation_code, updated_at = now()
 WHERE id = true AND activation_code IS NULL;
 
--- name: ClearActivationCode :exec
+-- name: CompleteActivation :exec
 UPDATE system_settings
-SET activation_code = NULL, updated_at = now()
+SET activation_code = NULL, ui_locale = @ui_locale, updated_at = now()
 WHERE id = true;
 
 -- name: UpdateLastSeenSDKVersion :exec
@@ -45,6 +56,7 @@ SET default_build_provider_id     = @default_build_provider_id,
     default_embedding_model       = @default_embedding_model,
     default_search_provider_id    = @default_search_provider_id,
     default_search_model          = @default_search_model,
+    ui_locale                     = @ui_locale,
     updated_at = now()
 WHERE id = true
 RETURNING *;

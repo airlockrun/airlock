@@ -10,9 +10,11 @@ import {
   nextProviderRequestSession,
   type ProviderRequestSession,
 } from '@/utils/providers'
+import { useAirlockI18n } from '@/i18n'
 
 const props = defineProps<{ provider: Provider | null }>()
 const visible = defineModel<boolean>('visible', { required: true })
+const { t, formatNumber } = useAirlockI18n()
 
 type ModelDraft = {
   modelId: string
@@ -34,13 +36,13 @@ type ProviderModelBooleanField = {
 
 // This exhaustive map makes generated model flags compile-fail until load,
 // discovery, editing, and save support are added for each field.
-const capabilityLabels = {
-  toolCall: 'Tool calls',
-  reasoning: 'Reasoning',
-  vision: 'Vision',
-  structuredOutputs: 'Structured outputs',
-  includeUsage: 'Include usage',
-} satisfies Record<ProviderModelBooleanField, string>
+const capabilityLabels = computed(() => ({
+  toolCall: t('administration.providerModels.capability.toolCalls'),
+  reasoning: t('administration.providerModels.capability.reasoning'),
+  vision: t('administration.providerModels.capability.vision'),
+  structuredOutputs: t('administration.providerModels.capability.structuredOutputs'),
+  includeUsage: t('administration.providerModels.capability.includeUsage'),
+}) satisfies Record<ProviderModelBooleanField, string>)
 
 const DEFAULT_CONTEXT_LIMIT = 8192
 const DEFAULT_OUTPUT_LIMIT = 2048
@@ -116,7 +118,7 @@ async function loadModels(request: ProviderRequestSession) {
     if (!requestIsCurrent(request)) return
     models.value = []
     loaded.value = false
-    error.value = errorMessage(cause, 'Failed to load confirmed models.')
+    error.value = errorMessage(cause, t('administration.providerModels.loadFailed'))
   } finally {
     if (requestIsCurrent(request)) loading.value = false
   }
@@ -162,14 +164,16 @@ async function discoverModels() {
     models.value.sort((a, b) => a.modelId.localeCompare(b.modelId))
     toast.add({
       severity: 'info',
-      summary: 'Discovery complete',
-      detail: added ? `${added} new model${added === 1 ? '' : 's'} available to confirm.` : 'No new model IDs were reported.',
+      summary: t('administration.providerModels.discoveryComplete'),
+      detail: added
+        ? t('administration.providerModels.newModels', { count: added, formattedCount: formatNumber(added) })
+        : t('administration.providerModels.noNewModels'),
       life: 4000,
     })
   } catch (cause: any) {
     if (!requestIsCurrent(request)) return
-    error.value = errorMessage(cause, 'Model discovery failed.')
-    toast.add({ severity: 'error', summary: 'Discovery failed', detail: error.value, life: 5000 })
+    error.value = errorMessage(cause, t('administration.providerModels.discoveryFailedFallback'))
+    toast.add({ severity: 'error', summary: t('administration.providerModels.discoveryFailed'), detail: error.value, life: 5000 })
   } finally {
     if (requestIsCurrent(request)) discovering.value = false
   }
@@ -202,12 +206,12 @@ async function saveModels() {
     if (!requestIsCurrent(request)) return
     await catalog.fetchConfiguredModels()
     if (!requestIsCurrent(request)) return
-    toast.add({ severity: 'success', summary: 'Confirmed models saved', life: 3000 })
+    toast.add({ severity: 'success', summary: t('administration.providerModels.savedToast'), life: 3000 })
     visible.value = false
   } catch (cause: any) {
     if (!requestIsCurrent(request)) return
-    error.value = errorMessage(cause, 'Failed to save confirmed models.')
-    toast.add({ severity: 'error', summary: 'Save failed', detail: error.value, life: 5000 })
+    error.value = errorMessage(cause, t('administration.providerModels.saveFailedFallback'))
+    toast.add({ severity: 'error', summary: t('administration.providerModels.saveFailed'), detail: error.value, life: 5000 })
   } finally {
     if (requestIsCurrent(request)) saving.value = false
   }
@@ -218,7 +222,7 @@ async function saveModels() {
   <Dialog
     v-model:visible="visible"
     modal
-    :header="provider ? `Models for ${provider.displayName || provider.slug}` : 'Models'"
+    :header="provider ? t('administration.providerModels.modelsFor', { provider: provider.displayName || provider.slug }) : t('administration.providerModels.models')"
     style="width: 58rem; max-width: 96vw"
     :breakpoints="{ '700px': '96vw' }"
   >
@@ -229,7 +233,7 @@ async function saveModels() {
           <div class="provider-key">{{ provider.providerId }}/{{ provider.slug }}</div>
         </div>
         <Button
-          label="Discover models"
+          :label="t('administration.providerModels.discover')"
           icon="pi pi-refresh"
           severity="secondary"
           :loading="discovering"
@@ -239,7 +243,7 @@ async function saveModels() {
       </div>
 
       <Message severity="info" :closable="false">
-        Discovery only reads model IDs from the endpoint. Select models and review their conservative defaults, then use Save models to replace the confirmed list.
+        {{ t('administration.providerModels.discoveryHelp') }}
       </Message>
       <Message v-if="error" severity="error" :closable="false">{{ error }}</Message>
 
@@ -256,13 +260,13 @@ async function saveModels() {
           <div class="model-heading">
             <div class="confirm-control">
               <Checkbox v-model="model.selected" :input-id="`confirm-model-${index}`" binary />
-              <label :for="`confirm-model-${index}`">Confirm</label>
-              <Tag v-if="model.persisted" value="Saved" severity="success" />
-              <Tag v-else value="Discovered" severity="info" />
+              <label :for="`confirm-model-${index}`">{{ t('administration.providerModels.confirm') }}</label>
+              <Tag v-if="model.persisted" :value="t('administration.providerModels.saved')" severity="success" />
+              <Tag v-else :value="t('administration.providerModels.discovered')" severity="info" />
             </div>
             <Button
               icon="pi pi-trash"
-              aria-label="Remove model"
+              :aria-label="t('administration.providerModels.removeAria')"
               severity="danger"
               text
               rounded
@@ -279,7 +283,7 @@ async function saveModels() {
                 :disabled="!model.selected"
                 style="width: 100%"
               />
-              <label :for="`model-name-${index}`">Display name</label>
+              <label :for="`model-name-${index}`">{{ t('administration.providerModels.displayName') }}</label>
             </FloatLabel>
             <FloatLabel variant="on">
               <InputNumber
@@ -291,7 +295,7 @@ async function saveModels() {
                 :use-grouping="false"
                 fluid
               />
-              <label :for="`model-context-${index}`">Context limit</label>
+              <label :for="`model-context-${index}`">{{ t('administration.providerModels.contextLimit') }}</label>
             </FloatLabel>
             <FloatLabel variant="on">
               <InputNumber
@@ -303,7 +307,7 @@ async function saveModels() {
                 :use-grouping="false"
                 fluid
               />
-              <label :for="`model-output-${index}`">Output limit</label>
+              <label :for="`model-output-${index}`">{{ t('administration.providerModels.outputLimit') }}</label>
             </FloatLabel>
           </div>
 
@@ -315,16 +319,16 @@ async function saveModels() {
         </section>
       </div>
       <Message v-else severity="secondary" :closable="false">
-        No confirmed models. Discover endpoint models, or save this empty list.
+        {{ t('administration.providerModels.empty') }}
       </Message>
     </div>
 
     <template #footer>
       <div class="dialog-footer">
-        <span>{{ selectedCount }} model{{ selectedCount === 1 ? '' : 's' }} selected</span>
+        <span>{{ t('administration.providerModels.selectedCount', { count: selectedCount, formattedCount: formatNumber(selectedCount) }) }}</span>
         <div class="footer-actions">
-          <Button label="Cancel" severity="secondary" text @click="visible = false" />
-          <Button label="Save models" icon="pi pi-check" :loading="saving" :disabled="saveDisabled" @click="saveModels" />
+          <Button :label="t('administration.action.cancel')" severity="secondary" text @click="visible = false" />
+          <Button :label="t('administration.providerModels.save')" icon="pi pi-check" :loading="saving" :disabled="saveDisabled" @click="saveModels" />
         </div>
       </div>
     </template>

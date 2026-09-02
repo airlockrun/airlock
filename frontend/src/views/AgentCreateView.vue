@@ -29,6 +29,7 @@ import {
   GetAgentSDKInfoResponseSchema,
   AgentModelConfigSchema,
 } from '@/gen/airlock/v1/api_pb'
+import { useAirlockI18n } from '@/i18n'
 
 const router = useRouter()
 const store = useAgentsStore()
@@ -38,6 +39,7 @@ const providers = useProvidersStore()
 const modelsAllowed = useModelsAllowedStore()
 const gitCredsStore = useGitCredentialsStore()
 const toast = useToast()
+const { t, locale } = useAirlockI18n()
 const { groupModels, searchModelOptions } = useModelCapabilities({ restrictToAllowed: true })
 
 const name = ref('')
@@ -52,11 +54,11 @@ const gitRemoteUrl = ref('')
 const gitCredentialId = ref('')
 const gitDefaultBranch = ref('main')
 const gitMode = ref<'read_write' | 'read_only' | 'import_once'>('read_write')
-const gitModeOptions = [
-  { label: 'Read/write - Airlock may push code changes', value: 'read_write' },
-  { label: 'Read-only - Git is authoritative', value: 'read_only' },
-  { label: 'Import once - Airlock owns the copied source', value: 'import_once' },
-]
+const gitModeOptions = computed(() => [
+  { label: t('agents.source.mode.readWriteDescription'), value: 'read_write' },
+  { label: t('agents.source.mode.readOnlyDescription'), value: 'read_only' },
+  { label: t('agents.create.gitMode.importOnce'), value: 'import_once' },
+])
 const loading = ref(false)
 const building = ref(false)
 const buildError = ref('')
@@ -131,7 +133,7 @@ onMounted(async () => {
     launcherImport.value = info.launcherImport
     airlockURL.value = info.airlockUrl
   } catch {
-    sdkInfoError.value = 'Could not load the local setup commands. Refresh the page to try again.'
+    sdkInfoError.value = t('agents.create.localSetupLoadFailed')
   } finally {
     sdkInfoLoading.value = false
   }
@@ -149,17 +151,17 @@ interface OverrideRow {
 const coreRows = computed<OverrideRow[]>(() => [
   {
     key: 'buildModel',
-    label: 'Build Model',
+    label: t('agents.create.model.build'),
     icon: 'pi pi-hammer',
-    help: 'Used by Sol to generate this app\'s code. Leave empty for Default.',
+    help: t('agents.create.model.buildHelp'),
     options: groupModels(isLanguage),
     grouped: true,
   },
   {
     key: 'execModel',
-    label: 'Execution Model',
+    label: t('agents.create.model.execution'),
     icon: 'pi pi-align-left',
-    help: 'Runtime default for LLM calls. Leave empty for Default.',
+    help: t('agents.create.model.executionHelp'),
     options: groupModels(isLanguage),
     grouped: true,
   },
@@ -168,49 +170,49 @@ const coreRows = computed<OverrideRow[]>(() => [
 const advancedRows = computed<OverrideRow[]>(() => [
   {
     key: 'visionModel',
-    label: 'Vision',
+    label: t('agents.create.model.vision'),
     icon: 'pi pi-image',
-    help: 'Image → text tasks.',
+    help: t('agents.create.model.visionHelp'),
     options: groupModels((m: CatalogModel) => isLanguage(m) && hasCap(m, 'vision')),
     grouped: true,
   },
   {
     key: 'sttModel',
-    label: 'STT',
+    label: t('agents.create.model.stt'),
     icon: 'pi pi-microphone',
-    help: 'Speech-to-text transcription.',
+    help: t('agents.create.model.sttHelp'),
     options: groupModels(isTranscription),
     grouped: true,
   },
   {
     key: 'ttsModel',
-    label: 'TTS',
+    label: t('agents.create.model.tts'),
     icon: 'pi pi-volume-up',
-    help: 'Text-to-speech synthesis.',
+    help: t('agents.create.model.ttsHelp'),
     options: groupModels(isSpeech),
     grouped: true,
   },
   {
     key: 'imageGenModel',
-    label: 'Image Gen',
+    label: t('agents.create.model.imageGen'),
     icon: 'pi pi-palette',
-    help: 'Text-to-image generation.',
+    help: t('agents.create.model.imageGenHelp'),
     options: groupModels(isImageGen),
     grouped: true,
   },
   {
     key: 'embeddingModel',
-    label: 'Embedding',
+    label: t('agents.create.model.embedding'),
     icon: 'pi pi-database',
-    help: 'Text → vector embeddings.',
+    help: t('agents.create.model.embeddingHelp'),
     options: groupModels(isEmbedding),
     grouped: true,
   },
   {
     key: 'searchModel',
-    label: 'Web Search',
+    label: t('agents.create.model.webSearch'),
     icon: 'pi pi-search',
-    help: 'Web search backend + model. Pick "Provider default" to let the backend choose its model.',
+    help: t('agents.create.model.webSearchHelp'),
     options: searchModelOptions.value,
     grouped: true,
   },
@@ -218,13 +220,13 @@ const advancedRows = computed<OverrideRow[]>(() => [
 
 function placeholderFor(key: keyof ModelOverrides): string {
   const def = systemDefaults.value[key]
-  return def ? `Default (${def})` : 'Default'
+  return def ? t('agents.create.model.defaultValue', { model: def }) : t('agents.create.model.default')
 }
 
 watch(name, (v) => {
   if (!slugManual.value) {
     slug.value = v
-      .toLowerCase()
+      .toLocaleLowerCase(locale.value)
       .replace(/[^a-z0-9]+/g, '-')
       .replace(/(^-|-$)/g, '')
   }
@@ -289,9 +291,9 @@ const localDeployCommand = computed(() => 'go tool air deploy -m "Describe this 
 async function copyToClipboard(text: string, label: string) {
   try {
     await navigator.clipboard.writeText(text)
-    toast.add({ severity: 'success', summary: `${label} copied`, life: 2000 })
+    toast.add({ severity: 'success', summary: t('agents.copy.copied', { label }), life: 2000 })
   } catch {
-    toast.add({ severity: 'warn', summary: `Copy failed - select and copy ${label.toLowerCase()} manually`, life: 4000 })
+    toast.add({ severity: 'warn', summary: t('agents.copy.failedLowercase', { label: label.toLocaleLowerCase(locale.value) }), life: 4000 })
   }
 }
 
@@ -309,13 +311,13 @@ const hasAdvancedOverrides = computed(() =>
 
 function onBuildDone(agentId: string) {
   stopPolling()
-  toast.add({ severity: 'success', summary: 'App built successfully', life: 3000 })
+  toast.add({ severity: 'success', summary: t('agents.create.builtSuccessfully'), life: 3000 })
   router.push(`/agents/${agentId}`)
 }
 
 function onBuildFailed(error: string) {
   stopPolling()
-  buildError.value = error || 'Build failed.'
+  buildError.value = error || t('agents.create.buildFailedSentence')
   building.value = false
 }
 
@@ -358,7 +360,7 @@ function startPolling(agentId: string) {
 async function onSubmit() {
   buildError.value = ''
   if (!canSubmit.value) {
-    toast.add({ severity: 'error', summary: 'Name and slug are required', life: 3000 })
+    toast.add({ severity: 'error', summary: t('agents.create.nameAndSlugRequired'), life: 3000 })
     return
   }
 
@@ -420,7 +422,7 @@ async function onSubmit() {
         // pair that did go through. Tell the user the rest didn't stick.
         toast.add({
           severity: 'warn',
-          summary: 'App created - advanced model overrides not saved',
+          summary: t('agents.create.advancedOverridesNotSaved'),
           detail: err.response?.data?.error || String(err),
           life: 6000,
         })
@@ -448,7 +450,7 @@ async function onSubmit() {
     startPolling(agent.id)
   } catch (err: any) {
     loading.value = false
-    toast.add({ severity: 'error', summary: err.response?.data?.error || 'Failed to create app', life: 5000 })
+    toast.add({ severity: 'error', summary: err.response?.data?.error || t('agents.create.failed'), life: 5000 })
   }
 }
 
@@ -463,33 +465,32 @@ onUnmounted(() => {
   <div class="create-page">
     <div class="create-header">
       <div>
-        <h1>Create App</h1>
-        <p>Generate from instructions, build from local source, or import an existing Git repository.</p>
+        <h1>{{ t('agents.create.title') }}</h1>
+        <p>{{ t('agents.create.description') }}</p>
       </div>
     </div>
 
     <div class="mode-grid">
       <button type="button" class="mode-card" :class="{ active: mode === 'generate' }" @click="mode = 'generate'">
         <i class="pi pi-sparkles" />
-        <strong>Generate From Instructions</strong>
-        <span>Describe what you need. Airlock generates the source and builds the first version.</span>
+        <strong>{{ t('agents.create.mode.generateTitle') }}</strong>
+        <span>{{ t('agents.create.mode.generateDescription') }}</span>
       </button>
       <button type="button" class="mode-card" :class="{ active: mode === 'local' }" @click="mode = 'local'">
         <i class="pi pi-desktop" />
-        <strong>Deploy From Local Source</strong>
-        <span>Use OpenCode or another coding assistant to build locally and deploy with the Airlock CLI.</span>
+        <strong>{{ t('agents.create.mode.localTitle') }}</strong>
+        <span>{{ t('agents.create.mode.localDescription') }}</span>
       </button>
       <button type="button" class="mode-card" :class="{ active: mode === 'git' }" @click="mode = 'git'">
         <i class="pi pi-github" />
-        <strong>Import From Git</strong>
-        <span>Clone an existing repo, build it as-is, and optionally keep it connected for future sync.</span>
+        <strong>{{ t('agents.create.mode.gitTitle') }}</strong>
+        <span>{{ t('agents.create.mode.gitDescription') }}</span>
       </button>
     </div>
 
     <Message v-if="mode === 'local'" severity="info" :closable="false">
-      <strong>Using a coding assistant?</strong>
-      Copy the entire setup below into OpenCode, Claude Code, Codex, Cursor, or another coding assistant.
-      It will ask what you want to build, help choose a name, and guide you through setup and deployment.
+      <strong>{{ t('agents.create.localAssistantQuestion') }}</strong>
+      {{ t('agents.create.localAssistantDescription') }}
     </Message>
 
     <Message v-if="mode === 'local' && sdkInfoError" severity="error" :closable="false">
@@ -504,20 +505,20 @@ onUnmounted(() => {
       <div class="local-copy">
         <div class="local-copy-header">
           <div>
-            <h2>Create with a coding assistant or terminal</h2>
-            <p>Paste the whole block into your coding assistant, or run it section by section in a terminal.</p>
+            <h2>{{ t('agents.create.localTitle') }}</h2>
+            <p>{{ t('agents.create.localDescription') }}</p>
           </div>
-          <Button label="Copy setup" icon="pi pi-copy" outlined size="small" @click="copyToClipboard(localCreateCommands, 'Setup instructions')" />
+          <Button :label="t('agents.create.copySetup')" icon="pi pi-copy" outlined size="small" @click="copyToClipboard(localCreateCommands, t('agents.create.setupInstructions'))" />
         </div>
         <pre><code>{{ localCreateCommands }}</code></pre>
       </div>
       <div class="local-copy">
         <div class="local-copy-header">
           <div>
-            <h2>Future deploys</h2>
-            <p>After `.airlock/local/agent.toml` contains the Airlock URL and app ID, deploy with no arguments.</p>
+            <h2>{{ t('agents.create.futureDeploys') }}</h2>
+            <p>{{ t('agents.create.futureDeploysDescription') }}</p>
           </div>
-          <Button label="Copy command" icon="pi pi-copy" outlined size="small" @click="copyToClipboard(localDeployCommand, 'Deploy command')" />
+          <Button :label="t('agents.create.copyCommand')" icon="pi pi-copy" outlined size="small" @click="copyToClipboard(localDeployCommand, t('agents.source.deployCommand'))" />
         </div>
         <pre><code>{{ localDeployCommand }}</code></pre>
       </div>
@@ -526,43 +527,43 @@ onUnmounted(() => {
     <form v-else @submit.prevent="onSubmit" class="create-form">
       <FloatLabel variant="on">
         <InputText id="agent-name" v-model="name" style="width: 100%" :disabled="building" />
-        <label for="agent-name">App Name</label>
+        <label for="agent-name">{{ t('agents.create.appName') }}</label>
       </FloatLabel>
 
       <div>
         <FloatLabel variant="on">
           <InputText id="agent-slug" v-model="slug" style="width: 100%" :disabled="building" @input="onSlugInput" />
-          <label for="agent-slug">Slug</label>
+          <label for="agent-slug">{{ t('agents.create.slug') }}</label>
         </FloatLabel>
-        <small style="color: var(--p-text-muted-color)">URL-safe identifier, auto-generated from name.</small>
+        <small style="color: var(--p-text-muted-color)">{{ t('agents.create.slugHelp') }}</small>
       </div>
 
       <Message v-if="mode === 'generate'" severity="secondary" :closable="false">
-        Airlock creates a new repo from your instructions, then opens the build page while it generates and compiles the first version.
+        {{ t('agents.create.generateNotice') }}
       </Message>
 
       <Message v-if="mode === 'git'" severity="secondary" :closable="false">
-        Airlock imports the selected branch and builds it as-is. Choose whether Airlock may push code changes, only follows Git, or copies the source once.
+        {{ t('agents.create.gitNotice') }}
       </Message>
 
       <div v-if="mode === 'git'" class="git-fields">
         <div>
-          <label style="display: block; margin-bottom: 0.35rem; font-size: 0.85rem">Repo URL</label>
+          <label style="display: block; margin-bottom: 0.35rem; font-size: 0.85rem">{{ t('agents.create.repoUrl') }}</label>
           <InputText
             v-model="gitRemoteUrl"
-            placeholder="https://github.com/you/your-app.git"
+            :placeholder="t('agents.create.repoUrlPlaceholder')"
             :disabled="building"
             autocomplete="off"
             style="width: 100%"
           />
         </div>
         <div>
-          <label style="display: block; margin-bottom: 0.35rem; font-size: 0.85rem">Credential</label>
+          <label style="display: block; margin-bottom: 0.35rem; font-size: 0.85rem">{{ t('agents.source.credential') }}</label>
           <Skeleton v-if="gitCredsStore.loading" height="2.5rem" />
           <Message v-else-if="gitCredsStore.error" severity="error" :closable="false">
             <div class="load-error">
               <span>{{ gitCredsStore.error }}</span>
-              <Button label="Retry" icon="pi pi-refresh" size="small" outlined @click="retryGitCredentials" />
+              <Button :label="t('agents.action.retry')" icon="pi pi-refresh" size="small" outlined @click="retryGitCredentials" />
             </div>
           </Message>
           <Select
@@ -571,20 +572,20 @@ onUnmounted(() => {
             :options="gitCredsStore.credentials"
             option-label="name"
             option-value="id"
-            placeholder="Choose a PAT"
+            :placeholder="t('agents.create.choosePat')"
             :disabled="building"
             style="width: 100%"
           />
           <small v-if="!gitCredsStore.loading && !gitCredsStore.error && gitCredsStore.credentials.length === 0" style="color: var(--p-text-muted-color)">
-            No credentials yet - <router-link to="/settings/git-credentials">add a PAT in Settings</router-link>.
+            {{ t('agents.create.noCredentialsBeforeLink') }} <router-link to="/settings/git-credentials">{{ t('agents.create.addPatLink') }}</router-link>.
           </small>
         </div>
         <div>
-          <label style="display: block; margin-bottom: 0.35rem; font-size: 0.85rem">Default branch</label>
+          <label style="display: block; margin-bottom: 0.35rem; font-size: 0.85rem">{{ t('agents.source.defaultBranch') }}</label>
           <InputText v-model="gitDefaultBranch" :disabled="building" style="width: 100%" />
         </div>
         <div>
-          <label style="display: block; margin-bottom: 0.35rem; font-size: 0.85rem">Source mode</label>
+          <label style="display: block; margin-bottom: 0.35rem; font-size: 0.85rem">{{ t('agents.source.sourceMode') }}</label>
           <Select
             v-model="gitMode"
             :options="gitModeOptions"
@@ -594,10 +595,10 @@ onUnmounted(() => {
             style="width: 100%"
           />
           <small v-if="gitMode === 'read_only'" style="color: var(--p-text-muted-color)">
-            Git always wins. Airlock polls and rebuilds this branch, but codegen, local deploys, and source rollbacks are disabled.
+            {{ t('agents.create.readOnlyHelp') }}
           </small>
           <small v-else-if="gitMode === 'import_once'" style="color: var(--p-text-muted-color)">
-            The repository is copied once and then disconnected. Airlock-managed codegen and local deploys remain available.
+            {{ t('agents.create.importOnceHelp') }}
           </small>
         </div>
       </div>
@@ -632,7 +633,7 @@ onUnmounted(() => {
       </div>
 
       <!-- Advanced capability overrides — collapsed by default -->
-      <Fieldset legend="Other capability overrides" :toggleable="true" :collapsed="true">
+      <Fieldset :legend="t('agents.create.otherCapabilityOverrides')" :toggleable="true" :collapsed="true">
         <div style="display: flex; flex-direction: column; gap: 1rem">
           <div
             v-for="row in advancedRows"
@@ -682,26 +683,26 @@ onUnmounted(() => {
 
       <div v-if="mode === 'generate'">
         <label for="instructions" style="display: block; margin-bottom: 0.5rem; font-weight: 500">
-          {{ mode === 'git' ? 'Change request' : 'Instructions' }}
+          {{ mode === 'git' ? t('agents.create.changeRequest') : t('agents.create.instructions') }}
         </label>
         <Textarea
           id="instructions"
           v-model="instructions"
           :auto-resize="true"
           rows="3"
-          :placeholder="mode === 'git' ? 'Example: Add a dashboard page for weekly presentation analytics.' : 'Describe what this app should do and what tools it needs, e.g. &quot;Connect to Gmail and summarize my daily emails&quot;. Leave empty for a default app.'"
+          :placeholder="mode === 'git' ? t('agents.create.changeRequestPlaceholder') : t('agents.create.instructionsPlaceholder')"
           :disabled="building"
           style="width: 100%"
         />
         <small v-if="mode === 'git'" style="color: var(--p-text-muted-color)">
-          Airlock imports the repo first, then applies this request during the build.
+          {{ t('agents.create.changeRequestHelp') }}
         </small>
       </div>
 
       <Button
         v-if="!building"
         type="submit"
-        :label="mode === 'git' ? 'Import App' : 'Generate App'"
+        :label="mode === 'git' ? t('agents.create.importAction') : t('agents.create.generateAction')"
         icon="pi pi-plus"
         :loading="loading"
         :disabled="!canSubmit"
@@ -712,9 +713,9 @@ onUnmounted(() => {
     <!-- Build kicked off — we hand off to the dedicated Build page as soon as
          the build row exists; this is the brief interim state. -->
     <div v-if="building" style="margin-top: 1.5rem">
-      <p style="margin-bottom: 0.75rem; font-weight: 600">Building {{ name }}…</p>
+      <p style="margin-bottom: 0.75rem; font-weight: 600">{{ t('agents.create.buildingName', { name }) }}</p>
       <ProgressBar mode="indeterminate" style="height: 0.375rem; margin-bottom: 0.75rem" />
-      <p style="color: var(--p-text-muted-color); font-size: 0.85rem">Opening the build view…</p>
+      <p style="color: var(--p-text-muted-color); font-size: 0.85rem">{{ t('agents.create.openingBuild') }}</p>
     </div>
 
     <Message v-if="buildError" severity="error" :closable="false" style="margin-top: 1rem">

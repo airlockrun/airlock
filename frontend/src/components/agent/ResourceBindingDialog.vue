@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import { useToast } from 'primevue/usetoast'
 import api from '@/api/client'
+import { useAirlockI18n } from '@/i18n'
 import type { CandidateInfo, NeedInfo } from '@/gen/airlock/v1/api_pb'
 import { useAgentResources } from '@/composables/useAgentResources'
 import {
@@ -29,6 +30,8 @@ const emit = defineEmits<{
 }>()
 const visible = defineModel<boolean>('visible', { default: false })
 const toast = useToast()
+const i18n = useAirlockI18n()
+const { t, formatNumber } = i18n
 const binding = useAgentResources(props.agentId)
 
 const candidates = ref<CandidateInfo[]>([])
@@ -57,7 +60,7 @@ async function loadCandidates() {
   try {
     candidates.value = await binding.candidatesFor(props.need)
   } catch (error: any) {
-    loadError.value = errorMessage(error, 'Failed to load compatible resources')
+    loadError.value = errorMessage(error, t('resources.errors.loadCompatible'))
   } finally {
     loading.value = false
   }
@@ -75,16 +78,35 @@ watch(visible, (open) => {
 
 function readinessLabel(readiness: string): string {
   switch (readiness) {
-    case 'ready': return 'Ready'
-    case 'authorization_required': return 'Authorization required'
-    case 'scope_upgrade_required': return 'More access required'
-    case 'scope_upgrade_requires_manager': return 'Manager action required'
+    case 'ready': return t('resources.status.ready')
+    case 'authorization_required': return t('resources.status.authorizationRequired')
+    case 'scope_upgrade_required': return t('resources.status.moreAccessRequired')
+    case 'scope_upgrade_requires_manager': return t('resources.status.managerActionRequired')
+    case 'needs_configuration': return t('resources.status.needsLocalConfiguration')
+    case 'incompatible_protocol': return t('resources.status.incompatibleProtocol')
+    case 'unhealthy': return t('resources.status.unhealthy')
+    case 'starting': return t('resources.status.starting')
+    case 'offline': return t('resources.status.offline')
     default: return readiness
   }
 }
 
+function capabilityLabel(capability: string): string {
+  if (capability === 'view') return t('resources.details.capabilityView')
+  if (capability === 'bind') return t('resources.details.capabilityBind')
+  if (capability === 'manage') return t('resources.details.capabilityManage')
+  return capability
+}
+
+function action(candidate: CandidateInfo) {
+  return candidateAction(candidate, props.authMode, i18n)
+}
+
 function readinessSeverity(readiness: string): string {
-  return readiness === 'ready' ? 'success' : readiness === 'scope_upgrade_requires_manager' ? 'danger' : 'warn'
+  if (readiness === 'ready') return 'success'
+  if (readiness === 'scope_upgrade_requires_manager' || readiness === 'incompatible_protocol' || readiness === 'unhealthy') return 'danger'
+  if (readiness === 'offline') return 'secondary'
+  return 'warn'
 }
 
 function emitCompletion(completion: BindingDialogCompletion, need: NeedInfo) {
@@ -94,11 +116,11 @@ function emitCompletion(completion: BindingDialogCompletion, need: NeedInfo) {
 
 async function useCandidate(candidate: CandidateInfo) {
   if (!props.need) return
-  const action = candidateAction(candidate, props.authMode)
-  if (action.kind === 'disabled') return
+  const selectedAction = action(candidate)
+  if (selectedAction.kind === 'disabled') return
   busyId.value = candidate.resourceId
   try {
-    if (action.kind === 'authorize') {
+    if (selectedAction.kind === 'authorize') {
       await binding.startAuthorization(props.need, {
         resourceId: candidate.resourceId,
         displayName: '',
@@ -108,11 +130,11 @@ async function useCandidate(candidate: CandidateInfo) {
     }
     await binding.bind(props.need, candidate.resourceId)
     visible.value = false
-    const completion = bindingDialogCompletion(action.kind)
+    const completion = bindingDialogCompletion(selectedAction.kind)
     emitCompletion(completion, props.need)
-    if (completion === 'changed') toast.add({ severity: 'success', summary: 'Resource connected', life: 3000 })
+    if (completion === 'changed') toast.add({ severity: 'success', summary: t('resources.binding.connected'), life: 3000 })
   } catch (error: any) {
-    toast.add({ severity: 'error', summary: errorMessage(error, 'Resource setup failed'), life: 6000 })
+    toast.add({ severity: 'error', summary: errorMessage(error, t('resources.errors.resourceSetupFailed')), life: 6000 })
   } finally {
     busyId.value = ''
   }
@@ -148,9 +170,9 @@ async function createNew() {
     visible.value = false
     const completion = bindingDialogCompletion('create')
     emitCompletion(completion, need)
-    if (completion === 'changed') toast.add({ severity: 'success', summary: 'Resource created and connected', life: 3000 })
+    if (completion === 'changed') toast.add({ severity: 'success', summary: t('resources.binding.createdAndConnected'), life: 3000 })
   } catch (error: any) {
-    toast.add({ severity: 'error', summary: errorMessage(error, 'Failed to create resource'), life: 6000 })
+    toast.add({ severity: 'error', summary: errorMessage(error, t('resources.errors.createResourceFailed')), life: 6000 })
   } finally {
     busyId.value = ''
   }
@@ -167,7 +189,7 @@ const canCreate = computed(() => {
 <template>
   <Dialog
     v-model:visible="visible"
-    :header="`Set up ${need?.slug || 'resource'}`"
+    :header="t('resources.binding.title', { name: need?.slug || t('resources.binding.resourceFallback') })"
     modal
     class="resource-binding-dialog"
     :style="{ width: 'min(46rem, calc(100vw - 2rem))' }"
@@ -175,12 +197,12 @@ const canCreate = computed(() => {
     <div v-if="need" class="binding-body">
       <div>
         <strong>{{ need.description || need.slug }}</strong>
-        <div class="need-slug">App handle: <code>{{ need.slug }}</code></div>
+        <div class="need-slug">{{ t('resources.connections.appHandle', { slug: need.slug }) }}</div>
       </div>
 
       <template v-if="!creating">
         <Message severity="info" :closable="false">
-          {{ canOfferCreate ? 'Reuse a compatible resource, or create a separate one for this app.' : 'Reuse a compatible resource for this app.' }}
+          {{ canOfferCreate ? t('resources.binding.reuseOrCreate') : t('resources.binding.reuseOnly') }}
         </Message>
         <div v-if="loading" class="candidate-list">
           <Skeleton v-for="i in 2" :key="i" height="6rem" />
@@ -188,7 +210,7 @@ const canCreate = computed(() => {
         <Message v-else-if="loadError" severity="error" :closable="false">
           <div class="load-error">
             <span>{{ loadError }}</span>
-            <Button label="Retry" icon="pi pi-refresh" size="small" outlined @click="loadCandidates" />
+            <Button :label="t('resources.actions.retry')" icon="pi pi-refresh" size="small" outlined @click="loadCandidates" />
           </div>
         </Message>
         <div v-else-if="candidates.length" class="candidate-list">
@@ -197,65 +219,65 @@ const canCreate = computed(() => {
               <div class="candidate-title">{{ candidate.displayName || candidate.name }}</div>
               <div class="candidate-meta">
                 <Tag :value="readinessLabel(candidate.readiness)" :severity="readinessSeverity(candidate.readiness)" />
-                <span>{{ candidate.agentCount }} app{{ candidate.agentCount === 1 ? '' : 's' }}</span>
-                <span>Access: {{ candidate.capabilities.join(', ') || 'none' }}</span>
+                <span>{{ t('resources.inventory.appCount', { count: candidate.agentCount, formattedCount: formatNumber(candidate.agentCount) }) }}</span>
+                <span>{{ t('resources.binding.access', { capabilities: candidate.capabilities.map(capabilityLabel).join(', ') || t('resources.binding.none') }) }}</span>
               </div>
               <div v-if="candidate.requiredScopes.length" class="scope-line">
-                Required scopes: {{ candidate.requiredScopes.join(', ') }}
+                {{ t('resources.binding.requiredScopes', { scopes: candidate.requiredScopes.join(', ') }) }}
               </div>
               <div v-if="candidate.missingScopes.length" class="scope-line missing">
-                Missing scopes: {{ candidate.missingScopes.join(', ') }}
+                {{ t('resources.binding.missingScopes', { scopes: candidate.missingScopes.join(', ') }) }}
               </div>
-              <small v-if="candidateAction(candidate, authMode).reason" class="action-reason">
-                {{ candidateAction(candidate, authMode).reason }}
+              <small v-if="action(candidate).reason" class="action-reason">
+                {{ action(candidate).reason }}
               </small>
             </div>
             <Button
-              :label="candidateAction(candidate, authMode).label"
+              :label="action(candidate).label"
               size="small"
-              :disabled="candidateAction(candidate, authMode).kind === 'disabled'"
+              :disabled="action(candidate).kind === 'disabled'"
               :loading="busyId === candidate.resourceId"
               @click="useCandidate(candidate)"
             />
           </div>
         </div>
-        <div v-else class="empty-candidates">No compatible reusable resources are available.</div>
+        <div v-else class="empty-candidates">{{ t('resources.binding.empty') }}</div>
         <template v-if="canOfferCreate">
           <Divider />
-          <Button label="Create new" icon="pi pi-plus" outlined @click="creating = true" />
+          <Button :label="t('resources.actions.createNew')" icon="pi pi-plus" outlined @click="creating = true" />
         </template>
       </template>
 
       <template v-else>
-        <Button label="Back to reusable resources" icon="pi pi-arrow-left" text class="back-button" @click="creating = false" />
+        <Button :label="t('resources.actions.backToReusable')" icon="pi pi-arrow-left" text class="back-button" @click="creating = false" />
         <div class="field">
-          <label for="resource-display-name">Display name</label>
-          <InputText id="resource-display-name" v-model="displayName" autofocus placeholder="e.g. Finance GitHub" />
-          <small>Names do not need to be unique. Airlock assigns the immutable resource ID.</small>
+          <label for="resource-display-name">{{ t('resources.binding.displayName') }}</label>
+          <InputText id="resource-display-name" v-model="displayName" autofocus :placeholder="t('resources.binding.displayNamePlaceholder')" />
+          <small>{{ t('resources.binding.displayNameHelp') }}</small>
         </div>
         <p v-if="setupInstructions" class="instructions">{{ setupInstructions }}</p>
         <div v-if="callbackUrl && isManualOAuth" class="callback-line">
-          Redirect URI: <code>{{ callbackUrl }}</code>
+          {{ t('resources.auth.redirectUri', { uri: callbackUrl }) }}
         </div>
         <div v-if="isManualOAuth" class="field">
-          <label for="resource-client-id">Client ID</label>
+          <label for="resource-client-id">{{ t('resources.auth.clientId') }}</label>
           <InputText id="resource-client-id" v-model="clientId" />
         </div>
         <div v-if="isManualOAuth" class="field">
-          <label for="resource-client-secret">Client secret</label>
+          <label for="resource-client-secret">{{ t('resources.auth.clientSecret') }}</label>
           <Password id="resource-client-secret" v-model="clientSecret" :feedback="false" toggle-mask fluid />
         </div>
         <div v-if="isCredential" class="field">
-          <label for="resource-credential">{{ authMode === 'token' ? 'Token' : 'API key' }}</label>
+          <label for="resource-credential">{{ authMode === 'token' ? t('resources.auth.token') : t('resources.auth.apiKey') }}</label>
           <Password id="resource-credential" v-model="credential" :feedback="false" toggle-mask fluid />
         </div>
         <Message v-if="authMode === 'none'" severity="info" :closable="false">
-          This integration does not require credentials. Creating it connects it immediately.
+          {{ t('resources.auth.noCredentialsRequired') }}
         </Message>
         <div class="dialog-actions">
-          <Button label="Cancel" severity="secondary" text @click="visible = false" />
+          <Button :label="t('resources.actions.cancel')" severity="secondary" text @click="visible = false" />
           <Button
-            :label="isOAuth ? 'Create and authorize' : 'Create resource'"
+            :label="isOAuth ? t('resources.actions.createAndAuthorize') : t('resources.actions.createResource')"
             :loading="busyId === 'new'"
             :disabled="!canCreate"
             @click="createNew"

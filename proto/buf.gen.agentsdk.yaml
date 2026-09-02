@@ -1,0 +1,9 @@
+version: v2
+plugins:
+  - remote: buf.build/protocolbuffers/go
+    out: ../../agentsdk/internal
+    opt:
+      - module=github.com/airlockrun/agentsdk/internal
+      - Mairlock/v1/api.proto=github.com/airlockrun/agentsdk/internal/airlockv1
+      - Mairlock/v1/realtime.proto=github.com/airlockrun/agentsdk/internal/airlockv1
+      - Mairlock/v1/types.proto=github.com/airlockrun/agentsdk/internal/airlockv1

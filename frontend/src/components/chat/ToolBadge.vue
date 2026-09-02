@@ -2,6 +2,7 @@
 import { ref, computed } from 'vue'
 import { promptAgentText } from '@/utils/messageGroup'
 import { renderMarkdown } from '@/composables/useMarkdown'
+import { useAirlockI18n } from '@/i18n'
 
 // A tool run rendered as a compact, expandable badge instead of a chat
 // bubble. Collapsed: a header (caret · label · live status), then the
@@ -27,6 +28,7 @@ const props = defineProps<{
   // user sees exactly what they're approving before deciding.
   forceExpanded?: boolean
 }>()
+const { t, formatNumber } = useAirlockI18n()
 
 const MAX_OUTPUT_LINES = 5
 
@@ -74,6 +76,15 @@ const mdOutput = computed(() => {
 
 const showStatus = computed(() => !!props.status && props.status !== 'done')
 const statusSeverity = computed(() => (props.status === 'running' ? 'warn' : 'info'))
+const statusLabel = computed(() => {
+  switch (props.status) {
+    case 'running': return t('chat.tool.status.running')
+    case 'confirmation': return t('chat.tool.status.confirmation')
+    case 'error': return t('chat.tool.status.error')
+    case 'denied': return t('chat.tool.status.denied')
+    default: return props.status || ''
+  }
+})
 
 // Outcome dot. Driven by the structured tool outcome (persisted from the
 // discriminated tool-result output, and set live from the WS event's
@@ -99,7 +110,7 @@ const dotColor = computed(() => {
       <!-- With a description (run_js), it rides on the header line right after
            the label and is the whole collapsed summary — no code/output. -->
       <span v-if="description" class="tool-badge-headdesc">{{ description }}</span>
-      <Tag v-if="showStatus" :value="status" :severity="statusSeverity" class="tool-badge-tag" />
+      <Tag v-if="showStatus" :value="statusLabel" :severity="statusSeverity" class="tool-badge-tag" />
     </div>
 
     <!-- Collapsed summary (only when there's no description): one-line input +
@@ -112,7 +123,7 @@ const dotColor = computed(() => {
         :class="{ 'tool-pre-err': !!error }"
       >{{ clampedOutput.text }}</pre>
       <div v-if="clampedOutput.more" class="tool-badge-more">
-        … {{ clampedOutput.more }} more line{{ clampedOutput.more === 1 ? '' : 's' }} - click to expand
+        {{ t('chat.tool.moreLines', { count: clampedOutput.more, formattedCount: formatNumber(clampedOutput.more) }) }}
       </div>
     </div>
 

@@ -13,6 +13,7 @@ import (
 	"github.com/airlockrun/airlock/container"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
+	"github.com/airlockrun/airlock/hostapi"
 	"github.com/airlockrun/airlock/networkpolicy"
 	"github.com/airlockrun/airlock/oauth"
 	"github.com/airlockrun/airlock/realtime"
@@ -22,9 +23,15 @@ import (
 	bridgessvc "github.com/airlockrun/airlock/service/bridges"
 	catalogsvc "github.com/airlockrun/airlock/service/catalog"
 	connsvc "github.com/airlockrun/airlock/service/connections"
+	connectorartifactssvc "github.com/airlockrun/airlock/service/connectorartifacts"
+	connectordirectoriessvc "github.com/airlockrun/airlock/service/connectordirectories"
+	connectorjobssvc "github.com/airlockrun/airlock/service/connectorjobs"
+	connectororchestrationsvc "github.com/airlockrun/airlock/service/connectororchestration"
+	connectorssvc "github.com/airlockrun/airlock/service/connectors"
 	convsvc "github.com/airlockrun/airlock/service/conversations"
 	gitcredssvc "github.com/airlockrun/airlock/service/gitcredentials"
 	grantssvc "github.com/airlockrun/airlock/service/grants"
+	hostssvc "github.com/airlockrun/airlock/service/hosts"
 	identitysvc "github.com/airlockrun/airlock/service/identity"
 	integrationssvc "github.com/airlockrun/airlock/service/integrations"
 	jobssvc "github.com/airlockrun/airlock/service/jobs"
@@ -64,7 +71,8 @@ type RouterConfig struct {
 	Secrets secrets.Store
 
 	// S3 storage
-	S3Client *storage.S3Client
+	S3Client                *storage.S3Client
+	ConnectorStorageOrigins []string
 
 	// Build service
 	BuildService *builder.BuildService
@@ -79,10 +87,11 @@ type RouterConfig struct {
 	TelegramDriver *trigger.TelegramDriver
 
 	// Trigger system
-	Dispatcher    *trigger.Dispatcher
-	Scheduler     *trigger.Scheduler
-	BridgeManager *trigger.BridgeManager
-	Jobs          *jobssvc.Service
+	Dispatcher         *trigger.Dispatcher
+	Scheduler          *trigger.Scheduler
+	BridgeManager      *trigger.BridgeManager
+	Jobs               *jobssvc.Service
+	ConnectorArtifacts *connectorartifactssvc.Service
 
 	// Container manager
 	Containers container.ContainerManager
@@ -140,6 +149,9 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	if cfg.Jobs == nil {
 		panic("api: RouterConfig.Jobs is required")
 	}
+	if cfg.ConnectorArtifacts == nil {
+		panic("api: RouterConfig.ConnectorArtifacts is required")
+	}
 
 	r := chi.NewRouter()
 
@@ -161,8 +173,17 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	usersHandler := NewUsersHandler(cfg.DB, userssvc.New(cfg.DB, cfg.BridgeManager, cfg.Logger.Named("users")))
 	grantsHandler := NewGrantsHandler(grantssvc.New(cfg.DB, cfg.Logger.Named("grants")))
 	needsHandler := NewNeedsHandler(needssvc.NewService(cfg.DB, cfg.Dispatcher.RefreshAgent, cfg.Logger.Named("needs")))
-	resourcesHandler := NewResourcesHandler(resourcessvc.New(cfg.DB, cfg.Logger.Named("resources")))
+	connectorsService := connectorssvc.New(cfg.DB, cfg.Logger.Named("connectors"))
+	resourcesHandler := NewResourcesHandler(resourcessvc.New(cfg.DB, connectorsService, cfg.Logger.Named("resources")))
+	connectorJobsService := connectorjobssvc.New(cfg.DB, cfg.Logger.Named("connector-jobs"))
+	connectorOrchestrationService := connectororchestrationsvc.New(cfg.DB, cfg.Logger.Named("connector-orchestration"))
+	hostsService := hostssvc.New(cfg.DB, cfg.PublicURL, cfg.ConnectorStorageOrigins, cfg.S3Client, connectorJobsService, cfg.Secrets, cfg.Logger.Named("hosts"))
+	hostsHandler := newHostsHandler(hostsService)
+	hostProtocol := hostapi.New(hostsService, connectorOrchestrationService, cfg.Logger.Named("host-api"))
 	fileService := agentstoragesvc.New(cfg.DB)
+	connectorDirectoriesService := connectordirectoriessvc.New(cfg.DB, connectorJobsService, fileService, cfg.S3Client)
+	connectorsHandler := newConnectorsHandler(connectorsService, connectorOrchestrationService)
+	connectorArtifactsHandler := newConnectorArtifactsHandler(cfg.ConnectorArtifacts)
 	usageHandler := NewUsageHandler(usagesvc.New(cfg.DB, cfg.Logger.Named("usage")))
 	settingsSvc := settingssvc.New(cfg.DB, catalogsvc.New(cfg.DB, cfg.Logger.Named("settings-catalog")), cfg.Logger.Named("settings"))
 	sysSettingsHandler := newSettingsHandler(settingsHandlerDeps{Svc: settingsSvc})
@@ -256,6 +277,17 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	r.Get("/api/v1/credentials/oauth/callback", credH.OAuthCallback)
 	r.Get("/auth-external", idH.AuthExternal)
 	r.Get("/.well-known/airlock-agent-sdk", getAgentSDKInfo(cfg.PublicURL))
+	r.Route("/api/hosts/v1", func(r chi.Router) {
+		r.Post("/enroll/device-code", hostProtocol.Begin)
+		r.Post("/enroll/complete", hostProtocol.CompleteEnrollment)
+		r.Post("/sync", hostProtocol.Sync)
+		r.Post("/connectors/inventory", hostProtocol.ConnectorInventory)
+		r.Post("/work/poll", hostProtocol.Poll)
+		r.Post("/management/{jobID}/events", hostProtocol.ManagementEvent)
+		r.Post("/management/{jobID}/complete", hostProtocol.ManagementComplete)
+		r.Post("/connectors/{connectorID}/jobs/{jobID}/events", hostProtocol.ConnectorEvent)
+		r.Post("/connectors/{connectorID}/jobs/{jobID}/complete", hostProtocol.ConnectorComplete)
+	})
 
 	// OAuth Authorization Server handler — built once and reused by
 	// both the top-level unauthenticated routes (/.well-known, /oauth/*)
@@ -327,6 +359,29 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		r.Post("/device-login/inspect", deviceLoginH.Inspect)
 		r.Post("/device-login/approve", deviceLoginH.Approve)
 		r.Post("/device-login/deny", deviceLoginH.Deny)
+		r.Post("/host-enrollments/inspect", hostsHandler.InspectEnrollment)
+		r.Post("/host-enrollments/approve", hostsHandler.ApproveEnrollment)
+		r.Post("/host-enrollments/deny", hostsHandler.DenyEnrollment)
+		r.Get("/hosts", hostsHandler.List)
+		r.Get("/hosts/{hostID}", hostsHandler.Get)
+		r.Post("/hosts/{hostID}/shell", hostsHandler.Shell)
+		r.Post("/hosts/{hostID}/connectors", hostsHandler.Install)
+		r.Get("/host-management-jobs/{jobID}", hostsHandler.GetJob)
+		r.Post("/connectors/{connectorID}/update", hostsHandler.UpdateConnector)
+		r.Post("/connectors/{connectorID}/remove", hostsHandler.RemoveConnector)
+		r.Post("/connectors/{connectorID}/rollback", hostsHandler.RollbackConnector)
+
+		r.Get("/connectors", connectorsHandler.List)
+		r.Get("/connectors/{connectorID}", connectorsHandler.Get)
+		r.Put("/connectors/{connectorID}/labels", connectorsHandler.SetLabels)
+		r.Get("/connector-target-groups", connectorsHandler.ListGroups)
+		r.Post("/connector-target-groups", connectorsHandler.CreateGroup)
+		r.Post("/connector-target-groups/{groupID}/members", connectorsHandler.AddGroupMember)
+		r.Delete("/connector-target-groups/{groupID}/members/{connectorID}", connectorsHandler.RemoveGroupMember)
+		r.Post("/connector-orchestrations", connectorsHandler.CreateOrchestration)
+		r.Get("/connector-orchestrations/{orchestrationID}", connectorsHandler.GetOrchestration)
+		r.Post("/connector-orchestrations/{orchestrationID}/advance", connectorsHandler.AdvanceOrchestration)
+		r.Delete("/connector-orchestrations/{orchestrationID}", connectorsHandler.CancelOrchestration)
 
 		// Provider management (admin/owner only)
 		r.Route("/providers", func(r chi.Router) {
@@ -350,7 +405,11 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		// (list = member; candidates/bind/create = agent admin per resource type).
 		r.Get("/agents/{agentID}/needs", needsHandler.ListNeeds)
 		r.Get("/agents/{agentID}/needs/{type}/{slug}/candidates", needsHandler.ListCandidates)
+		r.Get("/agents/{agentID}/needs/connector/{slug}/target-groups", needsHandler.ListConnectorTargetGroupCandidates)
+		r.Get(connectorArtifactsListRoute, connectorArtifactsHandler.List)
+		r.Post(connectorArtifactDownloadRoute, connectorArtifactsHandler.Download)
 		r.Post("/agents/{agentID}/needs/{type}/{slug}/bind", needsHandler.BindNeed)
+		r.Post("/agents/{agentID}/needs/connector/{slug}/bind-group", needsHandler.BindConnectorGroup)
 		r.Delete("/agents/{agentID}/needs/{type}/{slug}/bind", needsHandler.UnbindNeed)
 		r.Post("/agents/{agentID}/needs/{type}/{slug}/create", needsHandler.CreateForNeed)
 
@@ -362,6 +421,10 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		r.Patch("/resources/{type}/{id}", resourcesHandler.Rename)
 		r.Delete("/resources/{type}/{id}", resourcesHandler.Delete)
 		r.Get("/resources/{type}/{id}/consumers", resourcesHandler.Consumers)
+		r.Get("/resources/{type}/{id}/grants", resourcesHandler.ListGrants)
+		r.Put("/resources/{type}/{id}/grants/{userID}", resourcesHandler.UpsertGrant)
+		r.Delete("/resources/{type}/{id}/grants/{userID}", resourcesHandler.DeleteGrant)
+		r.Post("/resources/{type}/{id}/transfer", resourcesHandler.Transfer)
 
 		// Model entitlements (admin only).
 		r.Route("/model-grants", func(r chi.Router) {
@@ -689,6 +752,9 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		S3:                     cfg.S3Client,
 		Files:                  fileService,
 		Jobs:                   cfg.Jobs,
+		ConnectorJobs:          connectorJobsService,
+		ConnectorDirectories:   connectorDirectoriesService,
+		ConnectorOrchestration: connectorOrchestrationService,
 		Builder:                cfg.BuildService,
 		PubSub:                 cfg.PubSub,
 		BridgeMgr:              cfg.BridgeManager,
@@ -776,6 +842,21 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		r.Post("/topic/{slug}/subscribe", ah.TopicSubscribe)
 		r.Delete("/topic/{slug}/subscribe", ah.TopicUnsubscribe)
 		r.Post("/mcp/{slug}/tools/call", ah.MCPToolCall)
+		r.Post("/connectors/{needSlug}/commands/{operation}", ah.ConnectorCommand)
+		r.Get("/connectors/{needSlug}/directories/{directory}/list", ah.ConnectorDirectoryList)
+		r.Get("/connectors/{needSlug}/directories/{directory}/stat", ah.ConnectorDirectoryStat)
+		r.Get("/connectors/{needSlug}/directories/{directory}/read", ah.ConnectorDirectoryRead)
+		r.Post("/connectors/{needSlug}/directories/{directory}/write", ah.ConnectorDirectoryWrite)
+		r.Delete("/connectors/{needSlug}/directories/{directory}/delete", ah.ConnectorDirectoryDelete)
+		r.Post("/connectors/{needSlug}/directories/{directory}/move", ah.ConnectorDirectoryMove)
+		r.Post("/connectors/{needSlug}/directories/{directory}/import", ah.ConnectorDirectoryImport)
+		r.Post("/connectors/{needSlug}/directories/{directory}/export", ah.ConnectorDirectoryExport)
+		r.Post("/connectors/{needSlug}/jobs/{operation}", ah.StartConnectorJob)
+		r.Get("/connectors/{needSlug}/jobs/{jobID}", ah.GetConnectorJob)
+		r.Delete("/connectors/{needSlug}/jobs/{jobID}", ah.CancelConnectorJob)
+		r.Post("/connectors/{needSlug}/orchestrations", ah.CreateConnectorOrchestration)
+		r.Get("/connectors/{needSlug}/orchestrations/{orchestrationID}", ah.GetConnectorOrchestration)
+		r.Delete("/connectors/{needSlug}/orchestrations/{orchestrationID}", ah.CancelConnectorOrchestration)
 		r.Put("/env-vars/{slug}", ah.UpsertEnvVar)
 		r.Get("/env-vars/{slug}", ah.GetEnvVarValue)
 		// Seal/unseal: airlock encrypts/decrypts on the agent's behalf, bound

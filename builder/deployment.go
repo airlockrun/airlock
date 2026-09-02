@@ -94,7 +94,7 @@ func decodeAgentManifest(payload []byte) (wire.AgentManifest, error) {
 func rejectDuplicateManifestFields(payload []byte) error {
 	requiredFields := []string{
 		"version", "description", "emoji", "tools", "webhooks", "jobHandlers", "jobCrons", "routes", "topics",
-		"mcpServers", "connections", "envVars", "directories", "instructions", "modelSlots", "staticAssets", "startupHooks",
+		"mcpServers", "connections", "envVars", "directories", "instructions", "modelSlots", "staticAssets", "startupHooks", "connectors",
 	}
 	allowed := make(map[string]struct{}, len(requiredFields))
 	for _, name := range requiredFields {
@@ -218,6 +218,7 @@ func validateAgentManifest(manifest wire.AgentManifest) error {
 		{"modelSlots", manifest.ModelSlots == nil},
 		{"staticAssets", manifest.StaticAssets == nil},
 		{"startupHooks", manifest.StartupHooks == nil},
+		{"connectors", manifest.Connectors == nil},
 	}
 	for _, field := range required {
 		if field.missing {
@@ -237,6 +238,7 @@ func validateAgentManifest(manifest wire.AgentManifest) error {
 		validateSortedUnique("modelSlots", manifest.ModelSlots, func(v wire.ModelSlotDef) string { return v.Slug }),
 		validateSortedUnique("staticAssets", manifest.StaticAssets, func(v wire.StaticAssetDef) string { return v.Name }),
 		validateUnique("startupHooks", manifest.StartupHooks, func(v wire.StartupHookDef) string { return v.Name }),
+		validateSortedUnique("connectors", manifest.Connectors, func(v wire.ConnectorNeedDef) string { return v.Slug }),
 	}
 	for _, err := range checks {
 		if err != nil {

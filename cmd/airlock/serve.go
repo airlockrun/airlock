@@ -26,6 +26,9 @@ import (
 	"github.com/airlockrun/airlock/oauth"
 	"github.com/airlockrun/airlock/realtime"
 	"github.com/airlockrun/airlock/secrets"
+	connectorartifactssvc "github.com/airlockrun/airlock/service/connectorartifacts"
+	connectormaintenancesvc "github.com/airlockrun/airlock/service/connectormaintenance"
+	connectororchestrationsvc "github.com/airlockrun/airlock/service/connectororchestration"
 	jobssvc "github.com/airlockrun/airlock/service/jobs"
 	"github.com/airlockrun/airlock/storage"
 	"github.com/airlockrun/airlock/trigger"
@@ -104,6 +107,10 @@ func runServe(_ []string) {
 		logger.Fatal("s3: ensure bucket failed", zap.Error(err))
 	}
 	logger.Info("s3 connected")
+	var connectorStorageOrigins []string
+	if cfg.S3URLPublic != "" {
+		connectorStorageOrigins = []string{cfg.S3URLPublic}
+	}
 
 	// Container manager
 	containers := container.NewDockerManager(cfg, database.Pool(), container.DirectRuntimeNetworkPolicy{}, logger.Named("container"))
@@ -151,7 +158,7 @@ func runServe(_ []string) {
 	providerEndpointHTTPClient := httpNetwork.ProviderEndpointClient(0)
 
 	// Build service
-	buildSvc := builder.New(cfg, database, containers, secretStore, providerEndpointHTTPClient, logger.Named("builder"))
+	buildSvc := builder.New(cfg, database, containers, secretStore, providerEndpointHTTPClient, s3Client, logger.Named("builder"))
 
 	// Prune orphaned containers, stale images, and dead monorepo dirs on startup.
 	var recreateAgentRuntimes []uuid.UUID
@@ -221,6 +228,9 @@ func runServe(_ []string) {
 	buildSvc.SetJobWake(jobWorker.Wake)
 	scheduler := trigger.NewScheduler(database, jobWorker.Wake, logger.Named("scheduler"))
 	jobsService := jobssvc.New(database, jobWorker.Wake, logger.Named("jobs"))
+	connectorArtifactsService := connectorartifactssvc.New(database, s3Client, logger.Named("connector-artifacts"))
+	connectorOrchestrationService := connectororchestrationsvc.New(database, logger.Named("connector-orchestration-worker"))
+	connectorMaintenance := connectormaintenancesvc.New(database, connectorOrchestrationService, s3Client, logger.Named("connector-maintenance"))
 
 	// OAuth, MCP, and connection calls share the general outbound policy transport.
 	oauthClient := oauth.NewClient(httpNetwork.Client(30*time.Second), networkpolicy.AllowsLocalhostDevelopment(cfg.PublicURL))
@@ -243,11 +253,13 @@ func runServe(_ []string) {
 		TelegramDriver:             telegramDriver,
 		Secrets:                    secretStore,
 		S3Client:                   s3Client,
+		ConnectorStorageOrigins:    connectorStorageOrigins,
 		BuildService:               buildSvc,
 		Dispatcher:                 dispatcher,
 		Scheduler:                  scheduler,
 		BridgeManager:              bridgeMgr,
 		Jobs:                       jobsService,
+		ConnectorArtifacts:         connectorArtifactsService,
 		Containers:                 containers,
 		PromptProxy:                prompter,
 		Hub:                        hub,
@@ -284,6 +296,12 @@ func runServe(_ []string) {
 	defer listener.Close()
 
 	group, gctx := errgroup.WithContext(ctx)
+	group.Go(func() error {
+		return connectorArtifactsService.Run(gctx)
+	})
+	group.Go(func() error {
+		return connectorMaintenance.Run(gctx)
+	})
 	jobCtx, stopJobWorker := context.WithCancel(context.Background())
 	jobDone := make(chan struct{})
 	group.Go(func() error {

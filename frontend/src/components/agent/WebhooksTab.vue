@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, watch } from 'vue'
 import api from '@/api/client'
+import { useAirlockI18n } from '@/i18n'
 
 interface Webhook {
   path: string
@@ -12,6 +13,7 @@ interface Webhook {
 
 const props = defineProps<{ agentId: string }>()
 const emit = defineEmits<{ populated: [count: number] }>()
+const { t, formatDate } = useAirlockI18n()
 
 const webhooks = ref<Webhook[]>([])
 watch(webhooks, (v) => emit('populated', v.length), { immediate: true })
@@ -28,8 +30,15 @@ function mapWebhook(raw: Record<string, any>): Webhook {
 }
 
 function formatTimestamp(ts: string): string {
-  if (!ts) return 'Never'
-  return new Date(ts).toLocaleString()
+  if (!ts) return t('agentConfig.webhooks.never')
+  return formatDate(new Date(ts), {
+    year: 'numeric',
+    month: 'numeric',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: 'numeric',
+    second: 'numeric',
+  })
 }
 
 onMounted(async () => {
@@ -47,18 +56,18 @@ onMounted(async () => {
     <DataTable v-if="!loading" :value="webhooks" stripedRows>
       <template #empty>
         <div style="text-align: center; padding: 2rem; color: var(--p-text-muted-color)">
-          No webhooks registered.
+          {{ t('agentConfig.webhooks.empty') }}
         </div>
       </template>
-      <Column field="path" header="Path" />
-      <Column field="description" header="Description" />
-      <Column field="verifyMode" header="Verify Mode" />
-      <Column header="Secret">
+      <Column field="path" :header="t('agentConfig.routes.path')" />
+      <Column field="description" :header="t('agentConfig.common.description')" />
+      <Column field="verifyMode" :header="t('agentConfig.webhooks.verifyMode')" />
+      <Column :header="t('agentConfig.webhooks.secret')">
         <template #body="{ data: wh }">
           {{ wh.secret ? '••••••' : '-' }}
         </template>
       </Column>
-      <Column header="Last Received">
+      <Column :header="t('agentConfig.webhooks.lastReceived')">
         <template #body="{ data: wh }">
           {{ formatTimestamp(wh.lastReceivedAt) }}
         </template>
@@ -66,16 +75,16 @@ onMounted(async () => {
     </DataTable>
 
     <DataTable v-else :value="[{}, {}, {}]">
-      <Column header="Path">
+      <Column :header="t('agentConfig.routes.path')">
         <template #body><Skeleton /></template>
       </Column>
-      <Column header="Verify Mode">
+      <Column :header="t('agentConfig.webhooks.verifyMode')">
         <template #body><Skeleton /></template>
       </Column>
-      <Column header="Secret">
+      <Column :header="t('agentConfig.webhooks.secret')">
         <template #body><Skeleton width="5rem" /></template>
       </Column>
-      <Column header="Last Received">
+      <Column :header="t('agentConfig.webhooks.lastReceived')">
         <template #body><Skeleton /></template>
       </Column>
     </DataTable>

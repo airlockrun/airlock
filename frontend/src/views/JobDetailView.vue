@@ -6,7 +6,7 @@ import { useConfirm } from 'primevue/useconfirm'
 import { useToast } from 'primevue/usetoast'
 import api from '@/api/client'
 import { ws } from '@/api/ws'
-import { useJobsStore } from '@/stores/jobs'
+import { JobResponseError, useJobsStore } from '@/stores/jobs'
 import { GetAgentDetailResponseSchema } from '@/gen/airlock/v1/api_pb'
 import {
   JobLifecycleEventSchema,
@@ -16,18 +16,21 @@ import {
 import type { JobInfo } from '@/gen/airlock/v1/types_pb'
 import {
   formatJobJson,
-  formatJobTimestamp,
+  formatJobTimestamp as formatTimestamp,
   isActiveJob,
   jobStatusLabel,
   jobStatusSeverity,
+  jobStatusText,
   progressPercent,
 } from '@/utils/jobs'
+import { useAirlockI18n } from '@/i18n'
 
 const route = useRoute()
 const router = useRouter()
 const confirm = useConfirm()
 const toast = useToast()
 const store = useJobsStore()
+const { t, formatDate, formatNumber } = useAirlockI18n()
 const agentId = route.params.id as string
 const jobId = route.params.jobId as string
 const agentName = ref(agentId.slice(0, 8))
@@ -44,7 +47,12 @@ const isActive = computed(() => !!job.value && isActiveJob(job.value))
 watch(isActive, updatePolling)
 
 function errorDetail(error: any): string {
-  return error?.response?.data?.error ?? error?.message ?? 'unknown error'
+  if (error instanceof JobResponseError) return t(error.messageId)
+  return error?.response?.data?.error ?? error?.message ?? t('operations.common.unknownError')
+}
+
+function formatJobTimestamp(timestamp: Parameters<typeof formatTimestamp>[0]): string {
+  return formatTimestamp(timestamp, formatDate)
 }
 
 async function refresh() {
@@ -74,11 +82,14 @@ function updatePolling() {
 
 function confirmCancel(current: JobInfo) {
   confirm.require({
-    header: 'Cancel background job?',
-    message: `Cancel ${current.handlerName}@v${current.handlerVersion}? A running handler may take a moment to stop.`,
+    header: t('operations.job.cancel.title'),
+    message: t('operations.job.cancel.message', {
+      handler: current.handlerName,
+      version: current.handlerVersion,
+    }),
     icon: 'pi pi-exclamation-triangle',
-    acceptLabel: 'Cancel job',
-    rejectLabel: 'Keep running',
+    acceptLabel: t('operations.job.cancel.button'),
+    rejectLabel: t('operations.job.cancel.keepRunning'),
     acceptClass: 'p-button-danger',
     accept: async () => {
       mutating.value = true
@@ -86,11 +97,13 @@ function confirmCancel(current: JobInfo) {
         await store.cancel(jobId)
         toast.add({
           severity: 'info',
-          summary: current.status === 'running' ? 'Cancellation requested' : 'Job cancelled',
+          summary: current.status === 'running'
+            ? t('operations.build.blockers.cancellationRequested')
+            : t('operations.build.blockers.jobCancelled'),
           life: 3000,
         })
       } catch (error) {
-        toast.add({ severity: 'error', summary: 'Cancel failed', detail: errorDetail(error), life: 5000 })
+        toast.add({ severity: 'error', summary: t('operations.build.cancelFailed'), detail: errorDetail(error), life: 5000 })
       } finally {
         mutating.value = false
       }
@@ -103,17 +116,37 @@ async function retry() {
   try {
     await store.retry(jobId)
     await refresh()
-    toast.add({ severity: 'success', summary: 'Job queued for retry', life: 3000 })
+    toast.add({ severity: 'success', summary: t('operations.job.retry.queued'), life: 3000 })
   } catch (error) {
-    toast.add({ severity: 'error', summary: 'Retry failed', detail: errorDetail(error), life: 5000 })
+    toast.add({ severity: 'error', summary: t('operations.job.retry.failed'), detail: errorDetail(error), life: 5000 })
   } finally {
     mutating.value = false
   }
 }
 
 function sourceDescription(current: JobInfo): string {
-  if (current.cronSlug) return `Cron ${current.cronSlug}`
-  return current.initiatorKind || '-'
+  if (current.cronSlug) return t('operations.job.source.cron', { slug: current.cronSlug })
+  return initiatorKindLabel(current.initiatorKind)
+}
+
+function initiatorKindLabel(kind: string): string {
+  switch (kind) {
+    case 'user': return t('operations.job.initiator.user')
+    case 'anonymous': return t('operations.job.initiator.anonymous')
+    case 'system': return t('operations.job.initiator.system')
+    case '': return t('operations.common.unknown')
+    default: return t('operations.job.initiator.unknown', { value: kind })
+  }
+}
+
+function initiatorAccessLabel(access: string): string {
+  switch (access) {
+    case 'public': return t('operations.job.initiator.access.public')
+    case 'user': return t('operations.job.initiator.access.user')
+    case 'admin': return t('operations.job.initiator.access.admin')
+    case '': return t('operations.common.unknown')
+    default: return t('operations.job.initiator.unknown', { value: access })
+  }
 }
 
 onMounted(async () => {
@@ -155,7 +188,7 @@ onMounted(async () => {
       }).catch(() => {}),
     ])
   } catch (error) {
-    toast.add({ severity: 'error', summary: 'Job not found', detail: errorDetail(error), life: 4000 })
+    toast.add({ severity: 'error', summary: t('operations.job.notFound'), detail: errorDetail(error), life: 4000 })
     router.push(`/agents/${agentId}`)
   } finally {
     loading.value = false
@@ -177,15 +210,19 @@ onUnmounted(() => {
   </div>
 
   <div v-else-if="job">
-    <h1 style="margin: 0 0 1rem; font-size: 1.25rem">{{ agentName }} · Job {{ job.id.slice(0, 8) }}</h1>
+    <h1 style="margin: 0 0 1rem; font-size: 1.25rem">{{ t('operations.job.title', { agent: agentName, id: job.id.slice(0, 8) }) }}</h1>
 
     <div class="job-header">
       <code>{{ job.handlerName }}@v{{ job.handlerVersion }}</code>
-      <Tag :value="jobStatusLabel(job)" :severity="jobStatusSeverity(job)" />
-      <span>{{ job.attemptCount }}/{{ job.attemptLimit }} attempts used</span>
+      <Tag :value="jobStatusLabel(job, t)" :severity="jobStatusSeverity(job)" />
+      <span>{{ t('operations.job.attemptsUsed', {
+        usedFormatted: formatNumber(job.attemptCount),
+        limitFormatted: formatNumber(job.attemptLimit),
+        count: job.attemptCount,
+      }) }}</span>
       <Button
         v-if="isActiveJob(job) && !job.cancelRequestedAt"
-        label="Cancel job"
+        :label="t('operations.job.cancel.button')"
         icon="pi pi-times"
         severity="danger"
         outlined
@@ -195,7 +232,7 @@ onUnmounted(() => {
       />
       <Button
         v-else-if="job.status === 'failed' || job.status === 'cancelled'"
-        label="Retry job"
+        :label="t('operations.job.retry.button')"
         icon="pi pi-refresh"
         severity="secondary"
         outlined
@@ -206,9 +243,9 @@ onUnmounted(() => {
     </div>
 
     <section v-if="job.progress" class="detail-section">
-      <h3>Progress</h3>
+      <h3>{{ t('operations.job.progress') }}</h3>
       <div class="progress-heading">
-        <strong>{{ job.progress.phase || 'Working' }}</strong>
+        <strong>{{ job.progress.phase || t('operations.job.working') }}</strong>
         <span v-if="job.progress.message">{{ job.progress.message }}</span>
       </div>
       <ProgressBar
@@ -218,11 +255,11 @@ onUnmounted(() => {
       />
       <ProgressBar v-else mode="indeterminate" style="height: 0.75rem; max-width: 42rem" />
       <small class="muted">
-        Attempt {{ job.progress.attempt }}
+        {{ t('operations.job.progressAttempt', { formattedAttempt: formatNumber(job.progress.attempt) }) }}
         <template v-if="progressPercent(job.progress) !== null">
-          · {{ job.progress.completed.toString() }}/{{ job.progress.total.toString() }}
+          · {{ formatNumber(job.progress.completed) }}/{{ formatNumber(job.progress.total) }}
         </template>
-        · updated {{ formatJobTimestamp(job.progress.updatedAt) }}
+        · {{ t('operations.job.progressUpdated', { time: formatJobTimestamp(job.progress.updatedAt) }) }}
       </small>
     </section>
 
@@ -231,42 +268,42 @@ onUnmounted(() => {
     </Message>
 
     <section class="detail-section">
-      <h3>Metadata and provenance</h3>
+      <h3>{{ t('operations.job.metadata') }}</h3>
       <dl class="metadata-grid">
-        <div><dt>Job ID</dt><dd>{{ job.id }}</dd></div>
-        <div><dt>Agent ID</dt><dd>{{ job.agentId }}</dd></div>
-        <div><dt>Source</dt><dd>{{ sourceDescription(job) }}</dd></div>
-        <div><dt>Cron ID</dt><dd>{{ job.cronId || '-' }}</dd></div>
-        <div><dt>Source run</dt><dd><RouterLink v-if="job.sourceRunId" :to="{ name: 'run-detail', params: { id: agentId, runId: job.sourceRunId } }">{{ job.sourceRunId }}</RouterLink><span v-else>-</span></dd></div>
-        <div><dt>Initiator access</dt><dd>{{ job.initiatorAccess || '-' }}</dd></div>
-        <div><dt>Initiator user</dt><dd>{{ job.initiatorUserId || '-' }}</dd></div>
-        <div><dt>Configured attempts</dt><dd>{{ job.maxAttempts }}</dd></div>
-        <div><dt>Current attempt limit</dt><dd>{{ job.attemptLimit }}</dd></div>
-        <div><dt>Timeout</dt><dd>{{ job.timeoutMs.toString() }} ms</dd></div>
-        <div><dt>State version</dt><dd>{{ job.stateVersion.toString() }}</dd></div>
-        <div><dt>Scheduled</dt><dd>{{ formatJobTimestamp(job.scheduledAt) }}</dd></div>
-        <div><dt>Next attempt</dt><dd>{{ formatJobTimestamp(job.nextAttemptAt) }}</dd></div>
-        <div><dt>Created</dt><dd>{{ formatJobTimestamp(job.createdAt) }}</dd></div>
-        <div><dt>Updated</dt><dd>{{ formatJobTimestamp(job.updatedAt) }}</dd></div>
-        <div><dt>Started</dt><dd>{{ formatJobTimestamp(job.startedAt) }}</dd></div>
-        <div><dt>Completed</dt><dd>{{ formatJobTimestamp(job.completedAt) }}</dd></div>
-        <div><dt>Cancellation requested</dt><dd>{{ formatJobTimestamp(job.cancelRequestedAt) }}</dd></div>
+        <div><dt>{{ t('operations.job.metadata.jobId') }}</dt><dd>{{ job.id }}</dd></div>
+        <div><dt>{{ t('operations.job.metadata.agentId') }}</dt><dd>{{ job.agentId }}</dd></div>
+        <div><dt>{{ t('operations.job.metadata.source') }}</dt><dd>{{ sourceDescription(job) }}</dd></div>
+        <div><dt>{{ t('operations.job.metadata.cronId') }}</dt><dd>{{ job.cronId || '-' }}</dd></div>
+        <div><dt>{{ t('operations.job.metadata.sourceRun') }}</dt><dd><RouterLink v-if="job.sourceRunId" :to="{ name: 'run-detail', params: { id: agentId, runId: job.sourceRunId } }">{{ job.sourceRunId }}</RouterLink><span v-else>-</span></dd></div>
+        <div><dt>{{ t('operations.job.metadata.initiatorAccess') }}</dt><dd>{{ initiatorAccessLabel(job.initiatorAccess) }}</dd></div>
+        <div><dt>{{ t('operations.job.metadata.initiatorUser') }}</dt><dd>{{ job.initiatorUserId || '-' }}</dd></div>
+        <div><dt>{{ t('operations.job.metadata.configuredAttempts') }}</dt><dd>{{ formatNumber(job.maxAttempts) }}</dd></div>
+        <div><dt>{{ t('operations.job.metadata.attemptLimit') }}</dt><dd>{{ formatNumber(job.attemptLimit) }}</dd></div>
+        <div><dt>{{ t('operations.job.metadata.timeout') }}</dt><dd>{{ t('operations.job.metadata.timeoutMs', { value: formatNumber(job.timeoutMs) }) }}</dd></div>
+        <div><dt>{{ t('operations.job.metadata.stateVersion') }}</dt><dd>{{ formatNumber(job.stateVersion) }}</dd></div>
+        <div><dt>{{ t('operations.job.metadata.scheduled') }}</dt><dd>{{ formatJobTimestamp(job.scheduledAt) }}</dd></div>
+        <div><dt>{{ t('operations.job.metadata.nextAttempt') }}</dt><dd>{{ formatJobTimestamp(job.nextAttemptAt) }}</dd></div>
+        <div><dt>{{ t('operations.job.metadata.created') }}</dt><dd>{{ formatJobTimestamp(job.createdAt) }}</dd></div>
+        <div><dt>{{ t('operations.job.metadata.updated') }}</dt><dd>{{ formatJobTimestamp(job.updatedAt) }}</dd></div>
+        <div><dt>{{ t('operations.job.metadata.started') }}</dt><dd>{{ formatJobTimestamp(job.startedAt) }}</dd></div>
+        <div><dt>{{ t('operations.job.metadata.completed') }}</dt><dd>{{ formatJobTimestamp(job.completedAt) }}</dd></div>
+        <div><dt>{{ t('operations.job.metadata.cancellationRequested') }}</dt><dd>{{ formatJobTimestamp(job.cancelRequestedAt) }}</dd></div>
       </dl>
     </section>
 
     <div class="json-grid detail-section">
       <section>
-        <h3>Input</h3>
+        <h3>{{ t('operations.job.input') }}</h3>
         <pre class="json-panel">{{ formatJobJson(job.inputJson) }}</pre>
       </section>
       <section>
-        <h3>Output</h3>
+        <h3>{{ t('operations.job.output') }}</h3>
         <pre class="json-panel">{{ formatJobJson(job.outputJson) }}</pre>
       </section>
     </div>
 
     <section class="detail-section">
-      <h3>Attempts</h3>
+      <h3>{{ t('operations.job.attempts') }}</h3>
       <DataTable
         :value="store.attempts"
         stripedRows
@@ -274,22 +311,22 @@ onUnmounted(() => {
         :table-style="{ minWidth: '70rem' }"
       >
         <template #empty>
-          <div style="text-align: center; padding: 1.5rem; color: var(--p-text-muted-color)">No attempts yet.</div>
+          <div style="text-align: center; padding: 1.5rem; color: var(--p-text-muted-color)">{{ t('operations.job.attempts.empty') }}</div>
         </template>
         <Column field="attemptNumber" header="#" />
-        <Column header="Status"><template #body="{ data: attempt }"><Tag :value="attempt.status" severity="secondary" /></template></Column>
-        <Column header="Run">
+        <Column :header="t('operations.job.attempts.status')"><template #body="{ data: attempt }"><Tag :value="jobStatusText(attempt.status, t)" severity="secondary" /></template></Column>
+        <Column :header="t('operations.job.attempts.run')">
           <template #body="{ data: attempt }">
             <RouterLink v-if="attempt.runId" :to="{ name: 'run-detail', params: { id: agentId, runId: attempt.runId } }">{{ attempt.runId.slice(0, 8) }}</RouterLink>
             <span v-else>-</span>
           </template>
         </Column>
-        <Column header="Runtime"><template #body="{ data: attempt }">{{ attempt.runtimeGeneration.toString() }}</template></Column>
-        <Column header="Leased"><template #body="{ data: attempt }">{{ formatJobTimestamp(attempt.leasedAt) }}</template></Column>
-        <Column header="Lease Expires"><template #body="{ data: attempt }">{{ formatJobTimestamp(attempt.leaseExpiresAt) }}</template></Column>
-        <Column header="Started"><template #body="{ data: attempt }">{{ formatJobTimestamp(attempt.startedAt) }}</template></Column>
-        <Column header="Completed"><template #body="{ data: attempt }">{{ formatJobTimestamp(attempt.completedAt) }}</template></Column>
-        <Column header="Error">
+        <Column :header="t('operations.job.attempts.runtime')"><template #body="{ data: attempt }">{{ formatNumber(attempt.runtimeGeneration) }}</template></Column>
+        <Column :header="t('operations.job.attempts.leased')"><template #body="{ data: attempt }">{{ formatJobTimestamp(attempt.leasedAt) }}</template></Column>
+        <Column :header="t('operations.job.attempts.leaseExpires')"><template #body="{ data: attempt }">{{ formatJobTimestamp(attempt.leaseExpiresAt) }}</template></Column>
+        <Column :header="t('operations.job.metadata.started')"><template #body="{ data: attempt }">{{ formatJobTimestamp(attempt.startedAt) }}</template></Column>
+        <Column :header="t('operations.job.metadata.completed')"><template #body="{ data: attempt }">{{ formatJobTimestamp(attempt.completedAt) }}</template></Column>
+        <Column :header="t('operations.job.attempts.error')">
           <template #body="{ data: attempt }">
             <div v-if="attempt.errorKind || attempt.errorMessage" class="attempt-error">
               <strong v-if="attempt.errorKind">{{ attempt.errorKind }}</strong>

@@ -58,6 +58,18 @@ type ToolserverOpts struct {
 	LogCallback func(line string)
 }
 
+// ConnectorBuildOpts describes one pure-Go connector compilation in the
+// untrusted build sandbox. Platform is empty for the Linux-native manifest
+// binary, which every connector package must compile regardless of its targets.
+type ConnectorBuildOpts struct {
+	SourceDir  string
+	OutputDir  string
+	Package    string
+	Filename   string
+	Platform   string
+	GoProxyDir string
+}
+
 // ContainerManager manages the lifecycle of agent containers.
 type ContainerManager interface {
 	// StartAgent ensures an agent container is running.
@@ -110,6 +122,14 @@ type ContainerManager interface {
 	// InspectManifest runs a candidate image in manifest mode and returns the
 	// manifest written to stdout.
 	InspectManifest(ctx context.Context, imageRef string) ([]byte, error)
+
+	// BuildConnectorBinary compiles one connector with CGO disabled in a
+	// read-only, capability-free build container.
+	BuildConnectorBinary(ctx context.Context, opts ConnectorBuildOpts) error
+
+	// InspectConnectorManifest runs a native connector binary in the same
+	// no-network manifest envelope used for candidate agent manifests.
+	InspectConnectorManifest(ctx context.Context, binaryPath string) ([]byte, error)
 
 	// RemoveImage removes a Docker image by reference (e.g., "agentID:hash").
 	RemoveImage(ctx context.Context, imageRef string) error

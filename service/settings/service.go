@@ -1,8 +1,7 @@
-// Package settings owns the single-row system_settings table: the
-// tenant-wide default (provider FK, bare model name) pairs the
-// agent-create flow prefills from. Read is open to any authenticated
-// user (the agent-create form needs it); write is admin-only. Both
-// gates run through authz.Authorize.
+// Package settings owns the single-row system_settings table: the tenant-wide
+// locale and default (provider FK, bare model name) pairs. Read is open to any
+// authenticated user; write is admin-only. Both gates run through
+// authz.Authorize.
 package settings
 
 import (
@@ -13,6 +12,7 @@ import (
 	"github.com/airlockrun/airlock/authz"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
+	localepkg "github.com/airlockrun/airlock/locale"
 	"github.com/airlockrun/airlock/service"
 	"github.com/airlockrun/airlock/service/catalog"
 	solprovider "github.com/airlockrun/sol/provider"
@@ -63,7 +63,8 @@ type SlotUpdate struct {
 // from the inbound proto; the service does the empty/FK validation +
 // per-slot model-required rule.
 type UpdateRequest struct {
-	Slots []SlotUpdate
+	Slots    []SlotUpdate
+	UILocale string
 }
 
 func (s *Service) Get(ctx context.Context, p authz.Principal) (dbq.SystemSetting, error) {
@@ -84,7 +85,6 @@ func (s *Service) Update(ctx context.Context, p authz.Principal, req UpdateReque
 	if err := authz.Authorize(ctx, q, p, authz.TenantSettingsUpdate, uuid.Nil); err != nil {
 		return dbq.SystemSetting{}, err
 	}
-
 	parsed := make(map[string]pgtype.UUID, len(req.Slots))
 	models := make(map[string]string, len(req.Slots))
 	for _, slot := range req.Slots {
@@ -110,6 +110,18 @@ func (s *Service) Update(ctx context.Context, p authz.Principal, req UpdateReque
 	}
 	defer tx.Rollback(ctx)
 	qtx := q.WithTx(tx)
+	current, err := qtx.GetSystemSettingsForUpdate(ctx)
+	if err != nil {
+		return dbq.SystemSetting{}, err
+	}
+	uiLocaleValue := req.UILocale
+	if uiLocaleValue == "" {
+		uiLocaleValue = current.UiLocale
+	}
+	uiLocale, err := localepkg.Canonicalize(uiLocaleValue)
+	if err != nil {
+		return dbq.SystemSetting{}, service.Detail(service.ErrInvalidInput, "invalid ui_locale: %v", err)
+	}
 	providerIDs := make([]pgtype.UUID, 0, len(parsed))
 	seen := map[uuid.UUID]struct{}{}
 	for _, fk := range parsed {
@@ -156,6 +168,7 @@ func (s *Service) Update(ctx context.Context, p authz.Principal, req UpdateReque
 		DefaultEmbeddingModel:      models["default_embedding"],
 		DefaultSearchProviderID:    parsed["default_search"],
 		DefaultSearchModel:         models["default_search"],
+		UiLocale:                   uiLocale,
 	})
 	if err != nil {
 		s.logger.Error("update system settings failed", zap.Error(err))

@@ -8,10 +8,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/airlockrun/agentsdk/connector/protocol"
 	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/config"
 	cerrdefs "github.com/containerd/errdefs"
@@ -247,6 +249,8 @@ const (
 	manifestMemoryBytes    = 256 << 20
 	manifestPidsLimit      = int64(256)
 	manifestCleanupTimeout = 10 * time.Second
+	connectorBuildMemory   = 2 << 30
+	connectorBuildPids     = int64(512)
 )
 
 // agentPrefix is the instance-scoped name prefix for agent runtime
@@ -606,6 +610,279 @@ func (m *DockerManager) InspectManifest(ctx context.Context, imageRef string) (m
 		return nil, manifestError(err, stderr)
 	}
 	return stdout.Bytes(), nil
+}
+
+// BuildConnectorBinary compiles untrusted connector source without exposing the
+// Docker socket, runtime credentials, or a writable source tree.
+func (m *DockerManager) BuildConnectorBinary(ctx context.Context, opts ConnectorBuildOpts) error {
+	if m.cfg.AgentBuilderImage == "" {
+		return errors.New("build connector: agent builder image is required")
+	}
+	if opts.SourceDir == "" || opts.OutputDir == "" || opts.Package == "" || opts.Filename == "" {
+		return errors.New("build connector: source, output, package, and filename are required")
+	}
+	if filepath.Base(opts.Filename) != opts.Filename {
+		return errors.New("build connector: filename must be a base name")
+	}
+	sourceMount, err := m.connectorPathMount(opts.SourceDir, "/workspace", true)
+	if err != nil {
+		return err
+	}
+	outputMount, err := m.connectorPathMount(opts.OutputDir, "/output", false)
+	if err != nil {
+		return err
+	}
+	mounts := []dmount.Mount{sourceMount, outputMount,
+		{Type: dmount.TypeVolume, Source: m.cfg.InstanceID + "-go-mod-cache", Target: "/tmp/go-mod"},
+		{Type: dmount.TypeVolume, Source: m.cfg.InstanceID + "-go-build-cache", Target: "/tmp/go-cache"},
+	}
+	env, err := connectorBuildEnvironment(opts.Platform)
+	if err != nil {
+		return err
+	}
+	var moduleArgs []string
+	if opts.GoProxyDir != "" {
+		proxyMount, err := m.connectorPathMount(opts.GoProxyDir, "/goproxy", true)
+		if err != nil {
+			return err
+		}
+		mounts = append(mounts, proxyMount)
+		env = append(env, "GOPROXY=file:///goproxy,https://proxy.golang.org")
+		// Dev pins content-addressed local modules after the source go.sum was
+		// written. Reconcile them through an alternate file without making the
+		// untrusted source mount writable.
+		modFile, cleanup, err := prepareConnectorModuleFiles(opts.SourceDir, opts.OutputDir)
+		if err != nil {
+			return err
+		}
+		defer cleanup()
+		moduleArgs = []string{"-mod=mod", "-modfile=/output/" + filepath.Base(modFile)}
+	}
+	hostCfg := buildConnectorBuildHostConfig(m.cfg, mounts)
+	if opts.Platform == "" {
+		listArgs := append([]string{"list"}, moduleArgs...)
+		listArgs = append(listArgs, "-f={{.Name}}", opts.Package)
+		listCfg := &dcontainer.Config{
+			Image: m.cfg.AgentBuilderImage, User: fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()),
+			WorkingDir: "/workspace", Entrypoint: []string{"/usr/local/go/bin/go"},
+			Cmd: listArgs, Env: env,
+			Labels: map[string]string{labelInstance: m.cfg.InstanceID, labelResource: "connector-build"},
+		}
+		stdout, stderr, err := m.runConnectorContainer(ctx, "list", listCfg, hostCfg)
+		if err != nil {
+			return manifestError(fmt.Errorf("validate connector package: %w", err), stderr)
+		}
+		if strings.TrimSpace(string(stdout.Bytes())) != "main" {
+			return fmt.Errorf("build connector: package %s must be main", opts.Package)
+		}
+	}
+	buildArgs := append([]string{"build"}, moduleArgs...)
+	buildArgs = append(buildArgs, "-trimpath", "-o", "/output/"+opts.Filename, opts.Package)
+	cfg := &dcontainer.Config{
+		Image:      m.cfg.AgentBuilderImage,
+		User:       fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()),
+		WorkingDir: "/workspace",
+		Entrypoint: []string{"/usr/local/go/bin/go"},
+		Cmd:        buildArgs,
+		Env:        env,
+		Labels: map[string]string{
+			labelInstance: m.cfg.InstanceID,
+			labelResource: "connector-build",
+		},
+	}
+	_, stderr, err := m.runConnectorContainer(ctx, "build", cfg, hostCfg)
+	if err != nil {
+		return manifestError(fmt.Errorf("build connector binary: %w", err), stderr)
+	}
+	return nil
+}
+
+func prepareConnectorModuleFiles(sourceDir, outputDir string) (string, func(), error) {
+	goMod, err := os.ReadFile(filepath.Join(sourceDir, "go.mod"))
+	if err != nil {
+		return "", nil, fmt.Errorf("build connector: read go.mod: %w", err)
+	}
+	modFile, err := os.CreateTemp(outputDir, ".airlock-connector-*.mod")
+	if err != nil {
+		return "", nil, fmt.Errorf("build connector: create temporary go.mod: %w", err)
+	}
+	modPath := modFile.Name()
+	sumPath := strings.TrimSuffix(modPath, ".mod") + ".sum"
+	cleanup := func() {
+		_ = os.Remove(modPath)
+		_ = os.Remove(sumPath)
+	}
+	if _, err := modFile.Write(goMod); err != nil {
+		_ = modFile.Close()
+		cleanup()
+		return "", nil, fmt.Errorf("build connector: write temporary go.mod: %w", err)
+	}
+	if err := modFile.Close(); err != nil {
+		cleanup()
+		return "", nil, fmt.Errorf("build connector: close temporary go.mod: %w", err)
+	}
+	goSum, err := os.ReadFile(filepath.Join(sourceDir, "go.sum"))
+	if err == nil {
+		if err := os.WriteFile(sumPath, goSum, 0o600); err != nil {
+			cleanup()
+			return "", nil, fmt.Errorf("build connector: write temporary go.sum: %w", err)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		cleanup()
+		return "", nil, fmt.Errorf("build connector: read go.sum: %w", err)
+	}
+	return modPath, cleanup, nil
+}
+
+func connectorBuildEnvironment(platform string) ([]string, error) {
+	environment := []string{
+		"CGO_ENABLED=0", "GOMODCACHE=/tmp/go-mod", "GOCACHE=/tmp/go-cache",
+		"GOTMPDIR=/tmp/work", "GOFLAGS=-buildvcs=false -mod=readonly", "GOSUMDB=off",
+	}
+	if platform == "" {
+		return environment, nil
+	}
+	target, ok := protocol.LookupTarget(platform)
+	if !ok {
+		return nil, fmt.Errorf("build connector: unsupported platform %q", platform)
+	}
+	return append(environment, target.GoEnv()...), nil
+}
+
+// InspectConnectorManifest executes only the mounted native binary. The
+// read-only root, absent network, and empty environment keep source-controlled
+// code away from build and runtime credentials while it declares its contract.
+func (m *DockerManager) InspectConnectorManifest(ctx context.Context, binaryPath string) ([]byte, error) {
+	if m.cfg.AgentBuilderImage == "" {
+		return nil, errors.New("inspect connector manifest: agent builder image is required")
+	}
+	info, err := os.Lstat(binaryPath)
+	if err != nil {
+		return nil, fmt.Errorf("inspect connector manifest: %w", err)
+	}
+	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+		return nil, errors.New("inspect connector manifest: binary must be a regular file")
+	}
+	mount, err := m.connectorPathMount(filepath.Dir(binaryPath), "/connector", true)
+	if err != nil {
+		return nil, err
+	}
+	cfg := &dcontainer.Config{
+		Image:      m.cfg.AgentBuilderImage,
+		User:       fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()),
+		Entrypoint: []string{"/connector/" + filepath.Base(binaryPath)},
+		Env:        []string{"AIRLOCK_CONNECTOR_MODE=manifest"},
+		Labels: map[string]string{
+			labelInstance: m.cfg.InstanceID,
+			labelResource: "connector-manifest",
+		},
+	}
+	hostCfg := buildConnectorManifestHostConfig(m.cfg, mount)
+	stdout, stderr, err := m.runConnectorContainer(ctx, "manifest", cfg, hostCfg)
+	if err != nil {
+		return nil, manifestError(fmt.Errorf("inspect connector manifest: %w", err), stderr)
+	}
+	if err := validateManifestOutput(stdout.Bytes(), stdout.overflow); err != nil {
+		return nil, manifestError(err, stderr)
+	}
+	return stdout.Bytes(), nil
+}
+
+func buildConnectorBuildHostConfig(cfg *config.Config, mounts []dmount.Mount) *dcontainer.HostConfig {
+	init := true
+	return &dcontainer.HostConfig{
+		Init: &init, ReadonlyRootfs: true, CapDrop: []string{"ALL"},
+		SecurityOpt: []string{"no-new-privileges"}, OomScoreAdj: 500,
+		Runtime: cfg.AgentRuntime, Mounts: mounts,
+		Tmpfs: map[string]string{"/tmp/work": "rw,noexec,nosuid,size=512m"},
+		Resources: dcontainer.Resources{
+			Memory: connectorBuildMemory, MemorySwap: connectorBuildMemory,
+			PidsLimit: ptrInt64(connectorBuildPids), CPUShares: 512,
+		},
+	}
+}
+
+func buildConnectorManifestHostConfig(cfg *config.Config, mount dmount.Mount) *dcontainer.HostConfig {
+	init := true
+	return &dcontainer.HostConfig{
+		Init: &init, NetworkMode: dcontainer.NetworkMode("none"), ReadonlyRootfs: true,
+		CapDrop: []string{"ALL"}, SecurityOpt: []string{"no-new-privileges"},
+		OomScoreAdj: 500, Runtime: cfg.AgentRuntime, Mounts: []dmount.Mount{mount},
+		Resources: dcontainer.Resources{
+			Memory: manifestMemoryBytes, MemorySwap: manifestMemoryBytes,
+			PidsLimit: ptrInt64(manifestPidsLimit), CPUShares: 256,
+		},
+	}
+}
+
+func (m *DockerManager) connectorPathMount(source, target string, readOnly bool) (dmount.Mount, error) {
+	if !filepath.IsAbs(source) {
+		return dmount.Mount{}, fmt.Errorf("connector sandbox path %q is not absolute", source)
+	}
+	if m.cfg.AgentCodegenVolume == "" || m.cfg.AgentCodegenPath == "" {
+		return dmount.Mount{Type: dmount.TypeBind, Source: source, Target: target, ReadOnly: readOnly}, nil
+	}
+	root := filepath.Dir(m.cfg.AgentCodegenPath)
+	rel, err := filepath.Rel(root, source)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return dmount.Mount{}, fmt.Errorf("connector sandbox path %q is outside shared volume root %q", source, root)
+	}
+	return dmount.Mount{
+		Type: dmount.TypeVolume, Source: m.cfg.AgentCodegenVolume, Target: target, ReadOnly: readOnly,
+		VolumeOptions: &dmount.VolumeOptions{Subpath: filepath.ToSlash(rel)},
+	}, nil
+}
+
+func (m *DockerManager) runConnectorContainer(ctx context.Context, purpose string, cfg *dcontainer.Config, hostCfg *dcontainer.HostConfig) (stdout, stderr *boundedBuffer, retErr error) {
+	name := m.builderPrefix() + "connector-" + purpose + "-" + uuid.NewString()
+	defer func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), manifestCleanupTimeout)
+		defer cancel()
+		if err := m.client.ContainerRemove(cleanupCtx, name, dcontainer.RemoveOptions{Force: true}); err != nil && !cerrdefs.IsNotFound(err) {
+			retErr = errors.Join(retErr, fmt.Errorf("remove connector %s container: %w", purpose, err))
+		}
+	}()
+	resp, err := m.client.ContainerCreate(ctx, cfg, hostCfg, nil, nil, name)
+	if err != nil {
+		return nil, nil, fmt.Errorf("create container: %w", err)
+	}
+	if err := m.client.ContainerStart(ctx, resp.ID, dcontainer.StartOptions{}); err != nil {
+		return nil, nil, fmt.Errorf("start container: %w", err)
+	}
+	statusCh, errCh := m.client.ContainerWait(ctx, resp.ID, dcontainer.WaitConditionNotRunning)
+	var status dcontainer.WaitResponse
+	select {
+	case <-ctx.Done():
+		return nil, nil, ctx.Err()
+	case err := <-errCh:
+		if err == nil {
+			err = errors.New("Docker wait ended without a status")
+		}
+		return nil, nil, err
+	case waitStatus, ok := <-statusCh:
+		if !ok {
+			return nil, nil, errors.New("Docker wait ended without a status")
+		}
+		status = waitStatus
+	}
+	stdout = &boundedBuffer{limit: maxManifestStdoutBytes}
+	stderr = &boundedBuffer{limit: maxManifestStderrBytes}
+	logs, err := m.client.ContainerLogs(ctx, resp.ID, dcontainer.LogsOptions{ShowStdout: true, ShowStderr: true})
+	if err != nil {
+		return stdout, stderr, err
+	}
+	_, copyErr := stdcopy.StdCopy(stdout, stderr, logs)
+	closeErr := logs.Close()
+	if copyErr != nil || closeErr != nil {
+		return stdout, stderr, errors.Join(copyErr, closeErr)
+	}
+	if status.Error != nil {
+		return stdout, stderr, errors.New(status.Error.Message)
+	}
+	if status.StatusCode != 0 {
+		return stdout, stderr, fmt.Errorf("container exited with code %d", status.StatusCode)
+	}
+	return stdout, stderr, nil
 }
 
 func buildManifestContainerConfig(instanceID, imageRef string) *dcontainer.Config {

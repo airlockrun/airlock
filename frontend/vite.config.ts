@@ -3,6 +3,12 @@ import vue from '@vitejs/plugin-vue'
 import Components from 'unplugin-vue-components/vite'
 import { PrimeVueResolver } from '@primevue/auto-import-resolver'
 import { fileURLToPath } from 'node:url'
+import { resolve } from 'node:path'
+
+const frontendRoot = fileURLToPath(new URL('.', import.meta.url))
+const i18nDistribution = process.env.AIRLOCK_I18N_DISTRIBUTION
+  ? resolve(frontendRoot, process.env.AIRLOCK_I18N_DISTRIBUTION)
+  : fileURLToPath(new URL('./src/i18n/distributions/community.ts', import.meta.url))
 
 export default defineConfig({
   plugins: [
@@ -14,6 +20,7 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': fileURLToPath(new URL('./src', import.meta.url)),
+      '@airlock/i18n-distribution': i18nDistribution,
     },
   },
   server: {

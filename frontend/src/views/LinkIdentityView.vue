@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { useToast } from 'primevue/usetoast'
 import { fromJson } from '@bufbuild/protobuf'
 import api from '@/api/client'
+import { useAirlockI18n } from '@/i18n'
 import {
   LinkIdentityPreviewResponseSchema,
   type LinkIdentityPreviewResponse,
@@ -12,6 +13,7 @@ import {
 const route = useRoute()
 const router = useRouter()
 const toast = useToast()
+const { t } = useAirlockI18n()
 
 type Status = 'loading' | 'confirm' | 'linking' | 'success' | 'error'
 
@@ -21,7 +23,7 @@ const preview = ref<LinkIdentityPreviewResponse | null>(null)
 
 const platformLabel = computed(() => {
   const p = preview.value?.platform
-  if (!p) return 'External'
+  if (!p) return t('auth.identity.external')
   return p.charAt(0).toUpperCase() + p.slice(1)
 })
 
@@ -40,7 +42,7 @@ function queryString(): string {
 onMounted(async () => {
   if (!query.value) {
     status.value = 'error'
-    errorMsg.value = 'Invalid link - missing parameters.'
+    errorMsg.value = t('auth.identity.invalidLink')
     return
   }
   try {
@@ -49,7 +51,7 @@ onMounted(async () => {
     status.value = 'confirm'
   } catch (err: any) {
     status.value = 'error'
-    errorMsg.value = err.response?.data?.error || 'Failed to verify link.'
+    errorMsg.value = err.response?.data?.error || t('auth.identity.verifyFailed')
   }
 })
 
@@ -61,12 +63,12 @@ async function confirmLink() {
     status.value = 'success'
     toast.add({
       severity: 'success',
-      summary: `${platformLabel.value} account linked`,
+      summary: t('auth.identity.linkedToast', { platform: platformLabel.value }),
       life: 5000,
     })
   } catch (err: any) {
     status.value = 'error'
-    errorMsg.value = err.response?.data?.error || 'Failed to link account.'
+    errorMsg.value = err.response?.data?.error || t('auth.identity.linkFailed')
   }
 }
 
@@ -80,33 +82,33 @@ function cancel() {
     <div class="link-identity-card">
       <template v-if="status === 'loading'">
         <i class="pi pi-spin pi-spinner" style="font-size: 2rem; margin-bottom: 1rem" />
-        <p>Verifying link…</p>
+        <p>{{ t('auth.identity.verifying') }}</p>
       </template>
 
       <template v-else-if="status === 'confirm' && preview">
         <i class="pi pi-link" style="font-size: 2rem; margin-bottom: 1rem; color: var(--p-primary-color)" />
-        <h2 style="margin: 0 0 0.5rem 0">Link {{ platformLabel }} account?</h2>
+        <h2 style="margin: 0 0 0.5rem 0">{{ t('auth.identity.confirmTitle', { platform: platformLabel }) }}</h2>
         <p style="color: var(--p-text-muted-color); margin: 0 0 1.5rem 0">
-          Confirm the details below before linking. You should only proceed if you personally initiated this from the bot.
+          {{ t('auth.identity.confirmInstructions') }}
         </p>
 
         <dl class="preview-list">
           <div class="preview-row">
-            <dt>Platform</dt>
+            <dt>{{ t('auth.identity.platform') }}</dt>
             <dd>{{ platformLabel }}</dd>
           </div>
           <div class="preview-row">
-            <dt>Bot</dt>
+            <dt>{{ t('auth.identity.bot') }}</dt>
             <dd>
               <span v-if="preview.botUsername">@{{ preview.botUsername }}</span>
-              <span v-else>{{ preview.bridgeName || '(unknown)' }}</span>
+              <span v-else>{{ preview.bridgeName || t('auth.identity.unknown') }}</span>
               <span v-if="preview.bridgeName && preview.botUsername" style="color: var(--p-text-muted-color)">
                 · {{ preview.bridgeName }}
               </span>
             </dd>
           </div>
           <div class="preview-row">
-            <dt>{{ platformLabel }} user</dt>
+            <dt>{{ t('auth.identity.platformUser', { platform: platformLabel }) }}</dt>
             <dd class="platform-user">
               <img
                 v-if="preview.platformAvatarUrl"
@@ -120,38 +122,38 @@ function cancel() {
                   @{{ preview.platformUsername }}
                 </div>
                 <div style="color: var(--p-text-muted-color); font-size: 0.85em">
-                  ID: {{ preview.platformUserId }}
+                  {{ t('auth.identity.userId', { id: preview.platformUserId }) }}
                 </div>
               </div>
             </dd>
           </div>
           <div class="preview-row">
-            <dt>Linking to</dt>
+            <dt>{{ t('auth.identity.linkingTo') }}</dt>
             <dd>{{ preview.currentUserEmail }}</dd>
           </div>
         </dl>
 
         <div class="actions">
-          <Button label="Cancel" severity="secondary" @click="cancel" />
-          <Button label="Confirm & link" icon="pi pi-check" @click="confirmLink" />
+          <Button :label="t('auth.action.cancel')" severity="secondary" @click="cancel" />
+          <Button :label="t('auth.identity.confirmAndLink')" icon="pi pi-check" @click="confirmLink" />
         </div>
       </template>
 
       <template v-else-if="status === 'linking'">
         <i class="pi pi-spin pi-spinner" style="font-size: 2rem; margin-bottom: 1rem" />
-        <p>Linking your account…</p>
+        <p>{{ t('auth.identity.linking') }}</p>
       </template>
 
       <template v-else-if="status === 'success'">
         <i class="pi pi-check-circle" style="font-size: 2rem; color: var(--p-green-500); margin-bottom: 1rem" />
-        <p>Account linked successfully! You can close this page and return to {{ platformLabel }}.</p>
-        <Button label="Go to Apps" style="margin-top: 1rem" @click="router.push('/agents')" />
+        <p>{{ t('auth.identity.success', { platform: platformLabel }) }}</p>
+        <Button :label="t('auth.identity.goToApps')" style="margin-top: 1rem" @click="router.push('/agents')" />
       </template>
 
       <template v-else>
         <i class="pi pi-times-circle" style="font-size: 2rem; color: var(--p-red-500); margin-bottom: 1rem" />
         <p>{{ errorMsg }}</p>
-        <Button label="Go to Apps" severity="secondary" style="margin-top: 1rem" @click="router.push('/agents')" />
+        <Button :label="t('auth.identity.goToApps')" severity="secondary" style="margin-top: 1rem" @click="router.push('/agents')" />
       </template>
     </div>
   </div>

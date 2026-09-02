@@ -23,6 +23,10 @@ import (
 	"github.com/airlockrun/airlock/realtime"
 	"github.com/airlockrun/airlock/secrets"
 	agentstoragesvc "github.com/airlockrun/airlock/service/agentstorage"
+	connectordirectoriessvc "github.com/airlockrun/airlock/service/connectordirectories"
+	connectorjobssvc "github.com/airlockrun/airlock/service/connectorjobs"
+	connectororchestrationsvc "github.com/airlockrun/airlock/service/connectororchestration"
+	connectorssvc "github.com/airlockrun/airlock/service/connectors"
 	jobssvc "github.com/airlockrun/airlock/service/jobs"
 	"github.com/airlockrun/airlock/storage"
 	"github.com/airlockrun/airlock/trigger"
@@ -46,6 +50,9 @@ type Handler struct {
 	s3                     *storage.S3Client
 	files                  *agentstoragesvc.Service
 	jobs                   *jobssvc.Service
+	connectorJobs          *connectorjobssvc.Service
+	connectorDirectories   *connectordirectoriessvc.Service
+	connectorOrchestration *connectororchestrationsvc.Service
 	builder                *builder.BuildService
 	pubsub                 *realtime.PubSub
 	bridgeMgr              BridgePartsDeliverer // for output()/topic bridge delivery
@@ -70,6 +77,9 @@ type Config struct {
 	S3                     *storage.S3Client
 	Files                  *agentstoragesvc.Service
 	Jobs                   *jobssvc.Service
+	ConnectorJobs          *connectorjobssvc.Service
+	ConnectorDirectories   *connectordirectoriessvc.Service
+	ConnectorOrchestration *connectororchestrationsvc.Service
 	Builder                *builder.BuildService
 	PubSub                 *realtime.PubSub
 	BridgeMgr              BridgePartsDeliverer
@@ -111,6 +121,15 @@ func New(c Config) *Handler {
 	if c.Jobs == nil {
 		panic("agentapi: jobs service is required")
 	}
+	if c.ConnectorJobs == nil {
+		panic("agentapi: connector jobs service is required")
+	}
+	if c.ConnectorDirectories == nil {
+		panic("agentapi: connector directories service is required")
+	}
+	if c.ConnectorOrchestration == nil {
+		panic("agentapi: connector orchestration service is required")
+	}
 	if c.Scheduler == nil {
 		panic("agentapi: scheduler is required")
 	}
@@ -121,6 +140,9 @@ func New(c Config) *Handler {
 		s3:                     c.S3,
 		files:                  c.Files,
 		jobs:                   c.Jobs,
+		connectorJobs:          c.ConnectorJobs,
+		connectorDirectories:   c.ConnectorDirectories,
+		connectorOrchestration: c.ConnectorOrchestration,
 		builder:                c.Builder,
 		pubsub:                 c.PubSub,
 		bridgeMgr:              c.BridgeMgr,
@@ -588,6 +610,46 @@ func (h *Handler) Sync(w http.ResponseWriter, r *http.Request) {
 	}); err != nil {
 		h.logger.Error("delete stale mcp needs failed", zap.Error(err))
 		writeJSONError(w, http.StatusInternalServerError, "failed to sync MCP servers")
+		return
+	}
+
+	connectorSlugs := make([]string, len(req.Connectors))
+	for i, connector := range req.Connectors {
+		if connector.Slug == "" || connector.Description == "" {
+			writeJSONError(w, http.StatusBadRequest, "invalid connector declaration")
+			return
+		}
+		requirement, err := json.Marshal(connector.Requirement)
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "invalid connector declaration")
+			return
+		}
+		need, err := connectorssvc.ParseNeedSpec(requirement)
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		need.Multiple = connector.Multiple
+		spec, err := json.Marshal(need)
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "invalid connector declaration")
+			return
+		}
+		if err := needsQ.UpsertResourceNeed(ctx, dbq.UpsertResourceNeedParams{
+			AgentID: pgAgentID, Type: "connector", Slug: connector.Slug, Description: connector.Description,
+			SetupInstructions: "", ExpectedUrl: "", ExpectedScopes: "", Spec: spec,
+		}); err != nil {
+			h.logger.Error("record connector need failed", zap.Error(err))
+			writeJSONError(w, http.StatusInternalServerError, "failed to sync connectors")
+			return
+		}
+		connectorSlugs[i] = connector.Slug
+	}
+	if err := needsQ.DeleteResourceNeedsByAgentTypeExcept(ctx, dbq.DeleteResourceNeedsByAgentTypeExceptParams{
+		AgentID: pgAgentID, Type: "connector", Slugs: connectorSlugs,
+	}); err != nil {
+		h.logger.Error("delete stale connector needs failed", zap.Error(err))
+		writeJSONError(w, http.StatusInternalServerError, "failed to sync connectors")
 		return
 	}
 

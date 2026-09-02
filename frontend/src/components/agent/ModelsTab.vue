@@ -19,6 +19,7 @@ import {
 import { useProvidersStore } from '@/stores/providers'
 import { useModelsAllowedStore } from '@/stores/modelsAllowed'
 import { useAuthStore } from '@/stores/auth'
+import { useAirlockI18n } from '@/i18n'
 import type { AgentModelConfig, ModelSlotInfo } from '@/gen/airlock/v1/api_pb'
 import { AgentModelConfigSchema, ModelSlotInfoSchema } from '@/gen/airlock/v1/api_pb'
 
@@ -34,6 +35,7 @@ const providers = useProvidersStore()
 const modelsAllowed = useModelsAllowedStore()
 const auth = useAuthStore()
 const toast = useToast()
+const { t } = useAirlockI18n()
 const { groupModels, searchModelOptions } = useModelCapabilities({ restrictToAllowed: true })
 
 // Editing requires the provider list (manager+, TenantProviderView) AND
@@ -98,7 +100,7 @@ onMounted(async () => {
     config.value = await agents.fetchModelConfig(props.agentId)
     refreshPickerValues()
   } catch (err: any) {
-    toast.add({ severity: 'error', summary: err.response?.data?.error || 'Failed to load model config', life: 5000 })
+    toast.add({ severity: 'error', summary: err.response?.data?.error || t('agentConfig.models.loadFailed'), life: 5000 })
   } finally {
     loading.value = false
   }
@@ -107,16 +109,16 @@ onMounted(async () => {
 // Read-only display metadata (label + icon) for the eight capability slots,
 // keyed by the AgentModelConfig field. Used when canEdit is false to show the
 // current assignment without the catalog-backed picker.
-const readonlyRows: { key: keyof AgentModelConfig; label: string; icon: string }[] = [
-  { key: 'buildModel', label: 'Build Model', icon: 'pi pi-hammer' },
-  { key: 'execModel', label: 'Execution Model (Text)', icon: 'pi pi-align-left' },
-  { key: 'visionModel', label: 'Vision', icon: 'pi pi-image' },
-  { key: 'sttModel', label: 'STT', icon: 'pi pi-microphone' },
-  { key: 'ttsModel', label: 'TTS', icon: 'pi pi-volume-up' },
-  { key: 'imageGenModel', label: 'Image Gen', icon: 'pi pi-palette' },
-  { key: 'embeddingModel', label: 'Embedding', icon: 'pi pi-database' },
-  { key: 'searchModel', label: 'Web Search', icon: 'pi pi-search' },
-]
+const readonlyRows = computed<{ key: keyof AgentModelConfig; label: string; icon: string }[]>(() => [
+  { key: 'buildModel', label: t('agentConfig.models.buildModel'), icon: 'pi pi-hammer' },
+  { key: 'execModel', label: t('agentConfig.models.executionModel'), icon: 'pi pi-align-left' },
+  { key: 'visionModel', label: t('agentConfig.models.vision'), icon: 'pi pi-image' },
+  { key: 'sttModel', label: t('agentConfig.models.stt'), icon: 'pi pi-microphone' },
+  { key: 'ttsModel', label: t('agentConfig.models.tts'), icon: 'pi pi-volume-up' },
+  { key: 'imageGenModel', label: t('agentConfig.models.imageGen'), icon: 'pi pi-palette' },
+  { key: 'embeddingModel', label: t('agentConfig.models.embedding'), icon: 'pi pi-database' },
+  { key: 'searchModel', label: t('agentConfig.models.webSearch'), icon: 'pi pi-search' },
+])
 // defaultLabel renders a ModelRef as just the model name.
 function defaultLabel(ref?: { model: string; providerId: string }): string {
   if (!ref?.model) return ''
@@ -127,21 +129,34 @@ function defaultLabel(ref?: { model: string; providerId: string }): string {
 // names the system Default when one is configured.
 function capabilityPlaceholder(key: keyof AgentModelConfig): string {
   const label = defaultLabel(config.value.systemDefaults?.[key as string])
-  return label ? `Default (${label})` : 'Default'
+  return label
+    ? t('agentConfig.models.defaultWithModel', { model: label })
+    : t('agentConfig.models.default')
 }
 
 // slotPlaceholder is the same, for a RegisterModel slot's picker: its resolved
 // model is the capability default when unbound.
 function slotPlaceholder(slot: ModelSlotInfo): string {
   const label = defaultLabel({ model: slot.resolvedModel, providerId: slot.resolvedProviderId })
-  return label ? `Default (${label})` : 'Default'
+  return label
+    ? t('agentConfig.models.defaultWithModel', { model: label })
+    : t('agentConfig.models.default')
 }
 
 function currentModel(key: keyof AgentModelConfig): string {
   const set = (config.value as any)[key]
   if (set) return set
   const ref = config.value.systemDefaults?.[key as string]
-  return ref?.model ? `Default · ${ref.model}` : 'Default'
+  return ref?.model
+    ? t('agentConfig.models.defaultResolvedModel', { model: ref.model })
+    : t('agentConfig.models.default')
+}
+
+function currentSlotModel(slot: ModelSlotInfo): string {
+  if (slot.assignedModel) return slot.assignedModel
+  return slot.resolvedModel
+    ? t('agentConfig.models.defaultResolvedModel', { model: slot.resolvedModel })
+    : t('agentConfig.models.default')
 }
 
 // --- Rows. Each binds to a capability-override field on `config`.
@@ -157,65 +172,65 @@ interface ConfigRow {
 const overrideRows = computed<ConfigRow[]>(() => [
   {
     key: 'buildModel',
-    label: 'Build Model',
+    label: t('agentConfig.models.buildModel'),
     icon: 'pi pi-hammer',
-    help: 'Override the system default build model for this app.',
+    help: t('agentConfig.models.buildModelHelp'),
     options: groupModels(isLanguage),
     grouped: true,
   },
   {
     key: 'execModel',
-    label: 'Execution Model (Text)',
+    label: t('agentConfig.models.executionModel'),
     icon: 'pi pi-align-left',
-    help: 'Runtime default when the app makes text LLM calls without a specific slug.',
+    help: t('agentConfig.models.executionModelHelp'),
     options: groupModels(isLanguage),
     grouped: true,
   },
   {
     key: 'visionModel',
-    label: 'Vision',
+    label: t('agentConfig.models.vision'),
     icon: 'pi pi-image',
-    help: 'Image → text tasks (VM attachToContext on images, explicit vision capability LLM calls).',
+    help: t('agentConfig.models.visionHelp'),
     options: groupModels((m: CatalogModel) => isLanguage(m) && hasCap(m, 'vision')),
     grouped: true,
   },
   {
     key: 'sttModel',
-    label: 'STT',
+    label: t('agentConfig.models.stt'),
     icon: 'pi pi-microphone',
-    help: 'Speech-to-text - used by agent.TranscriptionModel and the VM transcribeAudio built-in.',
+    help: t('agentConfig.models.sttHelp'),
     options: groupModels(isTranscription),
     grouped: true,
   },
   {
     key: 'ttsModel',
-    label: 'TTS',
+    label: t('agentConfig.models.tts'),
     icon: 'pi pi-volume-up',
-    help: 'Text-to-speech - used by agent.SpeechModel and the VM generateSpeech built-in.',
+    help: t('agentConfig.models.ttsHelp'),
     options: groupModels(isSpeech),
     grouped: true,
   },
   {
     key: 'imageGenModel',
-    label: 'Image Gen',
+    label: t('agentConfig.models.imageGen'),
     icon: 'pi pi-palette',
-    help: 'Text-to-image - used by agent.ImageModel and the VM generateImage built-in.',
+    help: t('agentConfig.models.imageGenHelp'),
     options: groupModels(isImageGen),
     grouped: true,
   },
   {
     key: 'embeddingModel',
-    label: 'Embedding',
+    label: t('agentConfig.models.embedding'),
     icon: 'pi pi-database',
-    help: 'Text embeddings - used by agent.EmbeddingModel and the VM embed built-in.',
+    help: t('agentConfig.models.embeddingHelp'),
     options: groupModels(isEmbedding),
     grouped: true,
   },
   {
     key: 'searchModel',
-    label: 'Web Search',
+    label: t('agentConfig.models.webSearch'),
     icon: 'pi pi-search',
-    help: 'Web search backend + model. Pick "Provider default" to let the backend choose its model.',
+    help: t('agentConfig.models.webSearchHelp'),
     options: searchModelOptions.value,
     grouped: true,
   },
@@ -248,6 +263,19 @@ function capabilitySeverity(capability: string): string {
     case 'search': return 'help'
   }
   return 'info'
+}
+
+function capabilityLabel(capability: string): string {
+  switch (capability) {
+    case 'text': return t('agentConfig.models.capabilityText')
+    case 'vision': return t('agentConfig.models.vision')
+    case 'image': return t('agentConfig.models.imageGen')
+    case 'speech': return t('agentConfig.models.tts')
+    case 'transcription': return t('agentConfig.models.stt')
+    case 'embedding': return t('agentConfig.models.embedding')
+    case 'search': return t('agentConfig.models.webSearch')
+    default: return capability
+  }
 }
 
 async function save() {
@@ -295,9 +323,9 @@ async function save() {
     })
     config.value = await agents.updateModelConfig(props.agentId, next)
     refreshPickerValues()
-    toast.add({ severity: 'success', summary: 'Models saved', life: 3000 })
+    toast.add({ severity: 'success', summary: t('agentConfig.models.saved'), life: 3000 })
   } catch (err: any) {
-    toast.add({ severity: 'error', summary: err.response?.data?.error || 'Save failed', life: 5000 })
+    toast.add({ severity: 'error', summary: err.response?.data?.error || t('agentConfig.common.saveFailed'), life: 5000 })
   } finally {
     saving.value = false
   }
@@ -313,9 +341,9 @@ async function save() {
     <template v-if="canEdit">
     <!-- Per-agent capability overrides -->
     <div>
-      <h3 class="models-subhead">Capability overrides</h3>
+      <h3 class="models-subhead">{{ t('agentConfig.models.capabilityOverrides') }}</h3>
       <p class="models-sub">
-        Override system defaults for this app. Leave empty for Default.
+        {{ t('agentConfig.models.capabilityOverridesDescription') }}
       </p>
       <div class="override-grid">
         <div
@@ -364,9 +392,9 @@ async function save() {
 
     <!-- Declared slots — only renders when the agent declared any -->
     <div v-if="config.slots.length > 0">
-      <h3 class="models-subhead">Model slots</h3>
+      <h3 class="models-subhead">{{ t('agentConfig.models.modelSlots') }}</h3>
       <p class="models-sub">
-        Named slots the app declared via <code>RegisterModel</code>. Assigning a model binds the slot directly; empty falls through to the capability override above, then the system default.
+        {{ t('agentConfig.models.modelSlotsBeforeIdentifier') }} <code>RegisterModel</code>{{ t('agentConfig.models.modelSlotsAfterIdentifier') }}
       </p>
       <div style="display: flex; flex-direction: column; gap: 1rem">
         <div
@@ -376,7 +404,7 @@ async function save() {
         >
           <div style="display: flex; align-items: center; gap: 0.5rem">
             <span style="font-family: var(--p-font-family-monospace, monospace); font-weight: 600">{{ slot.slug }}</span>
-            <Tag :value="slot.capability" :severity="capabilitySeverity(slot.capability)" />
+            <Tag :value="capabilityLabel(slot.capability)" :severity="capabilitySeverity(slot.capability)" />
           </div>
           <small v-if="slot.description" style="color: var(--p-text-muted-color)">{{ slot.description }}</small>
           <Select
@@ -398,7 +426,7 @@ async function save() {
     </div>
 
     <div class="save-row">
-      <Button label="Save" :loading="saving" @click="save" />
+      <Button :label="t('agentConfig.common.save')" :loading="saving" @click="save" />
     </div>
     </template>
 
@@ -406,9 +434,9 @@ async function save() {
          we never query providers for them. Show the current assignments. -->
     <template v-else>
       <div>
-        <h3 class="models-subhead">Models</h3>
+        <h3 class="models-subhead">{{ t('agentConfig.models.title') }}</h3>
         <p class="models-sub">
-          Models configured for this app. Editing requires manager access and app admin.
+          {{ t('agentConfig.models.readonlyDescription') }}
         </p>
         <div style="display: flex; flex-direction: column; gap: 0.75rem">
           <div
@@ -423,7 +451,7 @@ async function save() {
         </div>
       </div>
       <div v-if="config.slots.length > 0">
-        <h3 class="models-subhead">Model slots</h3>
+        <h3 class="models-subhead">{{ t('agentConfig.models.modelSlots') }}</h3>
         <div style="display: flex; flex-direction: column; gap: 0.5rem">
           <div
             v-for="slot in config.slots"
@@ -431,7 +459,7 @@ async function save() {
             style="display: flex; align-items: center; gap: 0.5rem"
           >
             <span style="font-family: var(--p-font-family-monospace, monospace); font-weight: 600; min-width: 11rem">{{ slot.slug }}</span>
-            <span style="color: var(--p-text-muted-color)">{{ slot.assignedModel || (slot.resolvedModel ? `Default · ${slot.resolvedModel}` : 'Default') }}</span>
+            <span style="color: var(--p-text-muted-color)">{{ currentSlotModel(slot) }}</span>
           </div>
         </div>
       </div>

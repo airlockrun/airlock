@@ -14,6 +14,7 @@ import (
 	"errors"
 	"strings"
 
+	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/authz"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
@@ -57,6 +58,7 @@ type Credential struct {
 	GithubInstallID string
 	CreatedAt       pgtype.Timestamptz
 	LastUsedAt      pgtype.Timestamptz
+	Capabilities    []string
 }
 
 // CreateRequest is the input for Create. Type "" defaults to "pat".
@@ -69,11 +71,15 @@ type CreateRequest struct {
 // List returns the caller's own credentials, omitting token_ref bytes.
 // Ordered by name for stable rendering.
 func (s *Service) List(ctx context.Context, p authz.Principal) ([]Credential, error) {
-	if !p.IsAuthenticatedUser() {
-		return nil, service.ErrUnauthorized
-	}
 	q := dbq.New(s.db.Pool())
-	rows, err := q.ListGitCredentialsByUser(ctx, pgtype.UUID{Bytes: p.UserID, Valid: true})
+	if err := authz.Authorize(ctx, q, p, authz.ResourceInventoryView, uuid.Nil); err != nil {
+		return nil, err
+	}
+	principals := make([]pgtype.UUID, len(p.GranteeSet()))
+	for i, id := range p.GranteeSet() {
+		principals[i] = pgtype.UUID{Bytes: id, Valid: true}
+	}
+	rows, err := q.ListAvailableGitCredentials(ctx, dbq.ListAvailableGitCredentialsParams{PrincipalIds: principals, GovernanceView: p.TenantRole == auth.RoleAdmin})
 	if err != nil {
 		s.logger.Error("list git credentials failed", zap.Error(err))
 		return nil, err
@@ -82,12 +88,13 @@ func (s *Service) List(ctx context.Context, p authz.Principal) ([]Credential, er
 	for i, r := range rows {
 		out[i] = Credential{
 			ID:              uuid.UUID(r.ID.Bytes),
-			UserID:          uuid.UUID(r.UserID.Bytes),
+			UserID:          uuid.UUID(r.OwnerPrincipalID.Bytes),
 			Type:            r.Type,
 			Name:            r.Name,
 			GithubInstallID: r.GithubInstallID,
 			CreatedAt:       r.CreatedAt,
 			LastUsedAt:      r.LastUsedAt,
+			Capabilities:    r.Capabilities,
 		}
 	}
 	return out, nil
@@ -97,8 +104,9 @@ func (s *Service) List(ctx context.Context, p authz.Principal) ([]Credential, er
 // Returns ErrInvalidInput (Detail-wrapped) on missing name/token or
 // unsupported type, ErrConflict on a duplicate name for this user.
 func (s *Service) Create(ctx context.Context, p authz.Principal, req CreateRequest) (Credential, error) {
-	if !p.IsAuthenticatedUser() {
-		return Credential{}, service.ErrUnauthorized
+	q := dbq.New(s.db.Pool())
+	if err := authz.Authorize(ctx, q, p, authz.ResourceInventoryView, uuid.Nil); err != nil {
+		return Credential{}, err
 	}
 	name := strings.TrimSpace(req.Name)
 	if name == "" {
@@ -127,7 +135,6 @@ func (s *Service) Create(ctx context.Context, p authz.Principal, req CreateReque
 		return Credential{}, err
 	}
 
-	q := dbq.New(s.db.Pool())
 	row, err := q.CreateGitCredential(ctx, dbq.CreateGitCredentialParams{
 		ID:              pgtype.UUID{Bytes: id, Valid: true},
 		UserID:          pgtype.UUID{Bytes: p.UserID, Valid: true},
@@ -152,6 +159,7 @@ func (s *Service) Create(ctx context.Context, p authz.Principal, req CreateReque
 		GithubInstallID: row.GithubInstallID,
 		CreatedAt:       row.CreatedAt,
 		LastUsedAt:      row.LastUsedAt,
+		Capabilities:    []string{authz.CapView, authz.CapBind, authz.CapManage},
 	}, nil
 }
 
@@ -160,16 +168,28 @@ func (s *Service) Create(ctx context.Context, p authz.Principal, req CreateReque
 // owner yields no-op (we still report success — same idempotence the
 // raw handler had).
 func (s *Service) Delete(ctx context.Context, p authz.Principal, id uuid.UUID) error {
-	if !p.IsAuthenticatedUser() {
-		return service.ErrUnauthorized
+	tx, err := s.db.Pool().Begin(ctx)
+	if err != nil {
+		return err
 	}
-	q := dbq.New(s.db.Pool())
-	if err := q.DeleteGitCredential(ctx, dbq.DeleteGitCredentialParams{
-		ID:     pgtype.UUID{Bytes: id, Valid: true},
-		UserID: pgtype.UUID{Bytes: p.UserID, Valid: true},
-	}); err != nil {
+	defer tx.Rollback(ctx)
+	q := dbq.New(tx)
+	if err := authz.AuthorizeResource(ctx, q, p, authz.ResourceManage, "git_credential", id); err != nil {
+		return err
+	}
+	if err := authz.LockResource(ctx, q, "git_credential", id); err != nil {
+		return err
+	}
+	if err := authz.AuthorizeResource(ctx, q, p, authz.ResourceManage, "git_credential", id); err != nil {
+		return err
+	}
+	affected, err := q.DeleteGitCredentialByID(ctx, pgtype.UUID{Bytes: id, Valid: true})
+	if err != nil {
 		s.logger.Error("delete git credential failed", zap.Error(err))
 		return err
 	}
-	return nil
+	if affected != 1 {
+		return service.ErrNotFound
+	}
+	return tx.Commit(ctx)
 }

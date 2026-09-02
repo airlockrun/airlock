@@ -22,6 +22,9 @@ FROM git_credentials WHERE user_id = $1 ORDER BY name;
 -- Owner-scoped: a user can only delete their own credentials.
 DELETE FROM git_credentials WHERE id = $1 AND user_id = $2;
 
+-- name: DeleteGitCredentialByID :execrows
+DELETE FROM git_credentials WHERE id = @id;
+
 -- name: TouchGitCredentialUsage :exec
 -- Stamped on successful clone/push/refresh — surfaces "is this credential
 -- actually being used?" without needing audit-log scrubbing.

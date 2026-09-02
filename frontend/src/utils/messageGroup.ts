@@ -18,6 +18,16 @@
  */
 
 import type { AgentMessageInfo } from '@/gen/airlock/v1/types_pb'
+import type { AirlockI18nComposable } from '@/i18n'
+import { chatMessages } from '@/i18n/messages/chat'
+
+type Translate = AirlockI18nComposable['t']
+
+const defaultTranslate = ((id: keyof typeof chatMessages, values: Record<string, string | number> = {}) =>
+  Object.entries(values).reduce(
+    (message, [key, value]) => message.replaceAll(`{${key}}`, String(value)),
+    chatMessages[id].defaultMessage,
+  )) as Translate
 
 // Outcome is the structured, persisted tool status derived from the
 // discriminated tool-result output (no text heuristics). '' = unknown
@@ -38,11 +48,11 @@ export interface ToolBlock {
 
 // toolOutputInfo resolves a discriminated ToolResultOutput (the persisted
 // `output` object) to its display text + structured outcome.
-export function toolOutputInfo(out: any): { text: string; outcome: ToolOutcome } {
+export function toolOutputInfo(out: any, t: Translate): { text: string; outcome: ToolOutcome } {
   if (!out || typeof out !== 'object') return { text: '', outcome: 'success' }
   switch (out.type) {
     case 'execution-denied':
-      return { text: out.reason || 'Tool call execution denied.', outcome: 'denied' }
+      return { text: out.reason || t('chat.tool.executionDenied'), outcome: 'denied' }
     case 'error-text':
       return { text: String(out.value ?? ''), outcome: 'error' }
     case 'error-json':
@@ -69,15 +79,15 @@ export function toolOutputInfo(out: any): { text: string; outcome: ToolOutcome }
 // user-registered tools keep their own name. `args` may be the raw args
 // object or a JSON string (live path); a slug is only pulled for
 // promptAgent.
-export function toolLabel(toolName: string, args?: unknown): string {
-  if (toolName === 'run_js') return 'Code'
+export function toolLabel(toolName: string, args: unknown, t: Translate): string {
+  if (toolName === 'run_js') return t('chat.tool.code')
   if (toolName === 'promptAgent') {
     let a = args
     if (typeof a === 'string') {
       try { a = JSON.parse(a) } catch { a = undefined }
     }
     const slug = a && typeof a === 'object' ? (a as any).agent : undefined
-    return slug ? `A2A Call (${slug})` : 'A2A Call'
+    return slug ? t('chat.tool.a2aCallWithAgent', { agent: slug }) : t('chat.tool.a2aCall')
   }
   return toolName
 }
@@ -150,7 +160,7 @@ function parseParts(parts: unknown): any[] | null {
   }
 }
 
-export function enrichMessages(msgs: AgentMessageInfo[]): AgentMessageInfo[] {
+export function enrichMessages(msgs: AgentMessageInfo[], t: Translate = defaultTranslate): AgentMessageInfo[] {
   // Model-only context and compaction internals are persisted into the
   // conversation but never meant for the human. Hide them everywhere a
   // transcript renders using the same _hidden affordance as folded rows.
@@ -187,7 +197,7 @@ export function enrichMessages(msgs: AgentMessageInfo[]): AgentMessageInfo[] {
             kind: 'tool',
             toolCallId: p.toolCallId,
             toolName: p.toolName || 'tool',
-            label: toolLabel(p.toolName || 'tool', p.args),
+            label: toolLabel(p.toolName || 'tool', p.args, t),
             input: formatToolArgs(p.args),
             description: toolDescription(p.args),
             output: '',
@@ -263,7 +273,7 @@ export function enrichMessages(msgs: AgentMessageInfo[]): AgentMessageInfo[] {
       // and the structured outcome (no text sniffing). Fall back to the
       // row content only when a part carries no output object.
       if (resultOut && typeof resultOut === 'object') {
-        const info = toolOutputInfo(resultOut)
+        const info = toolOutputInfo(resultOut, t)
         entry.outcome = info.outcome
         if (info.outcome === 'error') entry.error = info.text
         else entry.output = info.text

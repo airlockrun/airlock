@@ -63,6 +63,15 @@ SELECT kind, row_key, field, ref::text AS ref, stored FROM (
     SELECT 'env_var', id::text, 'value_ref',
            'agent/env-var/' || id::text || '/' || slug, value_ref
     FROM agent_env_vars
+    UNION ALL
+    SELECT 'host_management', id::text, 'secret_input',
+           'host-management/' || id::text || '/input', secret_input
+    FROM host_management_jobs
+    UNION ALL
+    SELECT 'host_management', id::text, 'secret_output',
+           'host-management/' || id::text || '/output', secret_output
+    FROM host_management_jobs
+    WHERE secret_output IS NOT NULL
 ) secrets
 WHERE stored <> ''
 ORDER BY kind, row_key, field;
@@ -131,3 +140,14 @@ WHERE state = @row_key AND code_verifier = @old_stored;
 -- name: RewrapEnvVarSecret :execrows
 UPDATE agent_env_vars SET value_ref = @new_stored
 WHERE id::text = @row_key AND value_ref = @old_stored;
+
+-- name: RewrapHostManagementSecret :execrows
+UPDATE host_management_jobs SET
+    secret_input = CASE WHEN @field::text = 'secret_input' THEN @new_stored ELSE secret_input END,
+    secret_output = CASE WHEN @field::text = 'secret_output' THEN @new_stored ELSE secret_output END
+WHERE id::text = @row_key
+  AND CASE @field::text
+      WHEN 'secret_input' THEN secret_input
+      WHEN 'secret_output' THEN secret_output
+      ELSE NULL
+  END = @old_stored;

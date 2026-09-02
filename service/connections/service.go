@@ -235,6 +235,7 @@ type SetupCounts struct {
 	Connections int32
 	MCPServers  int32
 	EnvVars     int32
+	Connectors  int32
 }
 
 // --- connections ---
@@ -265,11 +266,21 @@ func (s *Service) SetOAuthApp(ctx context.Context, p authz.Principal, agentID uu
 	if err != nil {
 		return Status{}, err
 	}
-	conn, err := q.GetConnectionByIDForUpdate(ctx, toPg(resourceID))
+	conn, err := q.GetConnectionByID(ctx, toPg(resourceID))
 	if err != nil {
 		return Status{}, err
 	}
 	if err := authz.AuthorizeResource(ctx, q, p, authz.ResourceManage, "connection", resourceID); err != nil {
+		return Status{}, err
+	}
+	if err := authz.LockResource(ctx, q, "connection", resourceID); err != nil {
+		return Status{}, err
+	}
+	if err := authz.AuthorizeResource(ctx, q, p, authz.ResourceManage, "connection", resourceID); err != nil {
+		return Status{}, err
+	}
+	conn, err = q.GetConnectionByID(ctx, toPg(resourceID))
+	if err != nil {
 		return Status{}, err
 	}
 	if err := authz.AuthorizeResource(ctx, q, p, authz.ResourceBind, "connection", resourceID); err != nil {
@@ -391,6 +402,16 @@ func (s *Service) SetAPIKey(ctx context.Context, p authz.Principal, agentID uuid
 	if err := authz.AuthorizeResource(ctx, q, p, authz.ResourceManage, "connection", resourceID); err != nil {
 		return Status{}, err
 	}
+	if err := authz.LockResource(ctx, q, "connection", resourceID); err != nil {
+		return Status{}, err
+	}
+	if err := authz.AuthorizeResource(ctx, q, p, authz.ResourceManage, "connection", resourceID); err != nil {
+		return Status{}, err
+	}
+	conn, err = q.GetConnectionByID(ctx, toPg(resourceID))
+	if err != nil {
+		return Status{}, err
+	}
 	if conn.AuthMode == "oauth" {
 		return Status{}, service.Detail(service.ErrInvalidInput, "use OAuth flow for OAuth connections")
 	}
@@ -470,7 +491,15 @@ func (s *Service) CredentialStatus(ctx context.Context, p authz.Principal, agent
 
 // RevokeCredential clears the access token + refresh token for a slug.
 func (s *Service) RevokeCredential(ctx context.Context, p authz.Principal, agentID uuid.UUID, slug string) error {
-	q := dbq.New(s.db.Pool())
+	tx, err := s.db.Pool().Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	q := dbq.New(tx)
+	if _, err := q.GetAgentByIDForUpdate(ctx, toPg(agentID)); err != nil {
+		return service.ErrNotFound
+	}
 	if err := authz.Authorize(ctx, q, p, authz.AgentConnections, agentID); err != nil {
 		return err
 	}
@@ -485,6 +514,17 @@ func (s *Service) RevokeCredential(ctx context.Context, p authz.Principal, agent
 	if err := authz.AuthorizeResource(ctx, q, p, authz.ResourceManage, "connection", uuid.UUID(conn.ID.Bytes)); err != nil {
 		return err
 	}
+	resourceID := uuid.UUID(conn.ID.Bytes)
+	if err := authz.LockResource(ctx, q, "connection", resourceID); err != nil {
+		return err
+	}
+	if err := authz.AuthorizeResource(ctx, q, p, authz.ResourceManage, "connection", resourceID); err != nil {
+		return err
+	}
+	conn, err = s.resolveConn(ctx, q, agentID, slug)
+	if err != nil || uuid.UUID(conn.ID.Bytes) != resourceID {
+		return service.Detail(service.ErrConflict, "connection binding changed; retry revoke")
+	}
 	affected, err := q.ClearConnectionCredentialsByID(ctx, conn.ID)
 	if err != nil {
 		s.logger.Error("revoke credential failed", zap.Error(err))
@@ -493,7 +533,7 @@ func (s *Service) RevokeCredential(ctx context.Context, p authz.Principal, agent
 	if affected != 1 {
 		return service.ErrNotFound
 	}
-	return nil
+	return tx.Commit(ctx)
 }
 
 // TestCredential probes the connection's test_path with stored or
@@ -652,6 +692,16 @@ func (s *Service) SetMCPToken(ctx context.Context, p authz.Principal, agentID uu
 	if err := authz.AuthorizeResource(ctx, q, p, authz.ResourceManage, "mcp_server", resourceID); err != nil {
 		return MCPStatus{}, err
 	}
+	if err := authz.LockResource(ctx, q, "mcp_server", resourceID); err != nil {
+		return MCPStatus{}, err
+	}
+	if err := authz.AuthorizeResource(ctx, q, p, authz.ResourceManage, "mcp_server", resourceID); err != nil {
+		return MCPStatus{}, err
+	}
+	srv, err = q.GetMCPServerByID(ctx, toPg(resourceID))
+	if err != nil {
+		return MCPStatus{}, err
+	}
 	if srv.AuthMode == "oauth" || srv.AuthMode == "oauth_discovery" {
 		return MCPStatus{}, service.Detail(service.ErrInvalidInput, "use OAuth flow for OAuth MCP servers")
 	}
@@ -675,7 +725,15 @@ func (s *Service) SetMCPToken(ctx context.Context, p authz.Principal, agentID uu
 
 // RevokeMCPCredential clears the access token for an MCP server.
 func (s *Service) RevokeMCPCredential(ctx context.Context, p authz.Principal, agentID uuid.UUID, slug string) error {
-	q := dbq.New(s.db.Pool())
+	tx, err := s.db.Pool().Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	q := dbq.New(tx)
+	if _, err := q.GetAgentByIDForUpdate(ctx, toPg(agentID)); err != nil {
+		return service.ErrNotFound
+	}
 	if err := authz.Authorize(ctx, q, p, authz.AgentConnections, agentID); err != nil {
 		return err
 	}
@@ -690,6 +748,17 @@ func (s *Service) RevokeMCPCredential(ctx context.Context, p authz.Principal, ag
 	if err := authz.AuthorizeResource(ctx, q, p, authz.ResourceManage, "mcp_server", uuid.UUID(srv.ID.Bytes)); err != nil {
 		return err
 	}
+	resourceID := uuid.UUID(srv.ID.Bytes)
+	if err := authz.LockResource(ctx, q, "mcp_server", resourceID); err != nil {
+		return err
+	}
+	if err := authz.AuthorizeResource(ctx, q, p, authz.ResourceManage, "mcp_server", resourceID); err != nil {
+		return err
+	}
+	srv, err = s.resolveMCP(ctx, q, agentID, slug)
+	if err != nil || uuid.UUID(srv.ID.Bytes) != resourceID {
+		return service.Detail(service.ErrConflict, "MCP server binding changed; retry revoke")
+	}
 	affected, err := q.ClearMCPServerCredentialsByID(ctx, srv.ID)
 	if err != nil {
 		s.logger.Error("revoke MCP credential failed", zap.Error(err))
@@ -698,7 +767,7 @@ func (s *Service) RevokeMCPCredential(ctx context.Context, p authz.Principal, ag
 	if affected != 1 {
 		return service.ErrNotFound
 	}
-	return nil
+	return tx.Commit(ctx)
 }
 
 // TestMCPCredential probes the MCP server with tools/list.
@@ -733,7 +802,15 @@ func (s *Service) TestMCPCredential(ctx context.Context, p authz.Principal, agen
 
 // RevokeMCPOAuthApp clears OAuth app config and any credentials tied to it.
 func (s *Service) RevokeMCPOAuthApp(ctx context.Context, p authz.Principal, agentID uuid.UUID, slug string) error {
-	q := dbq.New(s.db.Pool())
+	tx, err := s.db.Pool().Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	q := dbq.New(tx)
+	if _, err := q.GetAgentByIDForUpdate(ctx, toPg(agentID)); err != nil {
+		return service.ErrNotFound
+	}
 	if err := authz.Authorize(ctx, q, p, authz.AgentConnections, agentID); err != nil {
 		return err
 	}
@@ -748,11 +825,22 @@ func (s *Service) RevokeMCPOAuthApp(ctx context.Context, p authz.Principal, agen
 	if err := authz.AuthorizeResource(ctx, q, p, authz.ResourceManage, "mcp_server", uuid.UUID(srv.ID.Bytes)); err != nil {
 		return err
 	}
+	resourceID := uuid.UUID(srv.ID.Bytes)
+	if err := authz.LockResource(ctx, q, "mcp_server", resourceID); err != nil {
+		return err
+	}
+	if err := authz.AuthorizeResource(ctx, q, p, authz.ResourceManage, "mcp_server", resourceID); err != nil {
+		return err
+	}
+	srv, err = s.resolveMCP(ctx, q, agentID, slug)
+	if err != nil || uuid.UUID(srv.ID.Bytes) != resourceID {
+		return service.Detail(service.ErrConflict, "MCP server binding changed; retry revoke")
+	}
 	if err := q.ClearMCPServerOAuthAppByID(ctx, srv.ID); err != nil {
 		s.logger.Error("revoke MCP OAuth app failed", zap.Error(err))
 		return err
 	}
-	return nil
+	return tx.Commit(ctx)
 }
 
 // SetMCPOAuthApp stores encrypted client_id/client_secret for an MCP server.
@@ -773,11 +861,21 @@ func (s *Service) SetMCPOAuthApp(ctx context.Context, p authz.Principal, agentID
 	if err != nil {
 		return MCPStatus{}, err
 	}
-	srv, err := q.GetMCPServerByIDForUpdate(ctx, toPg(resourceID))
+	srv, err := q.GetMCPServerByID(ctx, toPg(resourceID))
 	if err != nil {
 		return MCPStatus{}, err
 	}
 	if err := authz.AuthorizeResource(ctx, q, p, authz.ResourceManage, "mcp_server", resourceID); err != nil {
+		return MCPStatus{}, err
+	}
+	if err := authz.LockResource(ctx, q, "mcp_server", resourceID); err != nil {
+		return MCPStatus{}, err
+	}
+	if err := authz.AuthorizeResource(ctx, q, p, authz.ResourceManage, "mcp_server", resourceID); err != nil {
+		return MCPStatus{}, err
+	}
+	srv, err = q.GetMCPServerByID(ctx, toPg(resourceID))
+	if err != nil {
 		return MCPStatus{}, err
 	}
 	if err := authz.AuthorizeResource(ctx, q, p, authz.ResourceBind, "mcp_server", resourceID); err != nil {
@@ -919,5 +1017,6 @@ func (s *Service) SetupStatus(ctx context.Context, p authz.Principal, agentID uu
 		Connections: row.Connections,
 		MCPServers:  row.McpServers,
 		EnvVars:     row.EnvVars,
+		Connectors:  row.Connectors,
 	}, nil
 }

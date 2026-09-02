@@ -1,4 +1,5 @@
 import api from '@/api/client'
+import type { AirlockI18nComposable } from '@/i18n'
 
 /**
  * Start an OAuth flow: redirect the browser to the provider's
@@ -13,7 +14,7 @@ import api from '@/api/client'
  * page). The OAuth token itself is bound to the UUID via the state
  * row's `agent_id` — only the redirect target is rename-vulnerable.
  */
-export async function startOAuth(agentId: string, slug: string) {
+export async function startOAuth(agentId: string, slug: string, t: AirlockI18nComposable['t']) {
   const { data } = await api.post('/api/v1/credentials/oauth/start', {
     agentId,
     slug,
@@ -22,7 +23,7 @@ export async function startOAuth(agentId: string, slug: string) {
   if (data.authorizeUrl) {
     window.location.href = data.authorizeUrl
   } else {
-    throw new Error('No authorization URL returned')
+    throw new Error(t('resources.errors.noAuthorizationUrl'))
   }
 }
 

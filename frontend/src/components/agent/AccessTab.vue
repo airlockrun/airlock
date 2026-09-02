@@ -4,6 +4,7 @@
 // (MCP) and anonymous access.
 import { ref, computed, onMounted } from 'vue'
 import api from '@/api/client'
+import { useAirlockI18n } from '@/i18n'
 import { useToast } from 'primevue/usetoast'
 
 interface A2ASettings {
@@ -14,6 +15,7 @@ interface A2ASettings {
 
 const props = defineProps<{ agentId: string }>()
 const toast = useToast()
+const { t } = useAirlockI18n()
 
 const loading = ref(true)
 const settings = ref<A2ASettings>({ mcpEnabled: true, allowPublicMcp: false, allowPublicRoutes: true })
@@ -45,18 +47,18 @@ async function saveSettings() {
   }
   try {
     await api.put(`/api/v1/agents/${props.agentId}/a2a-settings`, { settings: settings.value })
-    toast.add({ severity: 'success', summary: 'Saved', life: 2000 })
+    toast.add({ severity: 'success', summary: t('agentConfig.access.saved'), life: 2000 })
   } catch (err: any) {
-    toast.add({ severity: 'error', summary: err.response?.data?.error || 'Save failed', life: 5000 })
+    toast.add({ severity: 'error', summary: err.response?.data?.error || t('agentConfig.common.saveFailed'), life: 5000 })
   }
 }
 
 async function copyUrl(url: string) {
   try {
     await navigator.clipboard.writeText(url)
-    toast.add({ severity: 'success', summary: 'URL copied', life: 2000 })
+    toast.add({ severity: 'success', summary: t('agentConfig.access.urlCopied'), life: 2000 })
   } catch {
-    toast.add({ severity: 'warn', summary: 'Copy failed - select the URL and copy manually', life: 4000 })
+    toast.add({ severity: 'warn', summary: t('agentConfig.access.copyFailed'), life: 4000 })
   }
 }
 
@@ -65,21 +67,21 @@ onMounted(loadSettings)
 
 <template>
   <div>
-    <h3 style="margin-top: 0">Access</h3>
+    <h3 style="margin-top: 0">{{ t('agentConfig.access.title') }}</h3>
     <p style="color: var(--p-text-muted-color); margin-top: 0">
-      How this app can be reached from outside. Who can use it is set under <strong>Members</strong>.
+      {{ t('agentConfig.access.description') }}
     </p>
 
     <div style="display: flex; flex-direction: column; gap: 1.25rem">
       <div>
         <label style="display: flex; align-items: center; gap: 0.75rem">
           <ToggleSwitch v-model="settings.mcpEnabled" :disabled="loading" />
-          <span>Let other apps connect to this app (MCP)</span>
+          <span>{{ t('agentConfig.access.mcpEnabled') }}</span>
         </label>
-        <small class="hint">For tools like Claude Desktop and other apps.</small>
+        <small class="hint">{{ t('agentConfig.access.mcpEnabledHint') }}</small>
         <div v-if="settings.mcpEnabled" class="url-line">
-          <div class="url-label">Connection URL</div>
-          <span class="copy-uri" role="button" tabindex="0" v-tooltip.bottom="'Click to copy'"
+          <div class="url-label">{{ t('agentConfig.access.connectionUrl') }}</div>
+          <span class="copy-uri" role="button" tabindex="0" v-tooltip.bottom="t('agentConfig.access.clickToCopy')"
                 @click="copyUrl(mcpUrl)" @keydown.enter="copyUrl(mcpUrl)">
             <code>{{ mcpUrl }}</code>
             <i class="pi pi-copy" />
@@ -90,12 +92,12 @@ onMounted(loadSettings)
       <div>
         <label style="display: flex; align-items: center; gap: 0.75rem">
           <ToggleSwitch v-model="settings.allowPublicMcp" :disabled="loading || !settings.mcpEnabled" />
-          <span>Allow connecting without signing in</span>
+          <span>{{ t('agentConfig.access.allowPublicMcp') }}</span>
         </label>
-        <small class="hint">Anyone can connect; only public tools are exposed.</small>
+        <small class="hint">{{ t('agentConfig.access.allowPublicMcpHint') }}</small>
         <div v-if="settings.mcpEnabled && settings.allowPublicMcp" class="url-line">
-          <div class="url-label">Public URL (no sign-in)</div>
-          <span class="copy-uri" role="button" tabindex="0" v-tooltip.bottom="'Click to copy'"
+          <div class="url-label">{{ t('agentConfig.access.publicUrl') }}</div>
+          <span class="copy-uri" role="button" tabindex="0" v-tooltip.bottom="t('agentConfig.access.clickToCopy')"
                 @click="copyUrl(publicMcpUrl)" @keydown.enter="copyUrl(publicMcpUrl)">
             <code>{{ publicMcpUrl }}</code>
             <i class="pi pi-copy" />
@@ -106,13 +108,13 @@ onMounted(loadSettings)
       <div>
         <label style="display: flex; align-items: center; gap: 0.75rem">
           <ToggleSwitch v-model="settings.allowPublicRoutes" :disabled="loading" />
-          <span>Allow public web pages without signing in</span>
+          <span>{{ t('agentConfig.access.allowPublicRoutes') }}</span>
         </label>
-        <small class="hint">Lets anyone open this app's pages marked public.</small>
+        <small class="hint">{{ t('agentConfig.access.allowPublicRoutesHint') }}</small>
       </div>
 
       <div>
-        <Button label="Save" size="small" :disabled="loading" @click="saveSettings" />
+        <Button :label="t('agentConfig.common.save')" size="small" :disabled="loading" @click="saveSettings" />
       </div>
     </div>
   </div>

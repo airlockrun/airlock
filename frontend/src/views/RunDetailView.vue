@@ -13,11 +13,13 @@ import api from '@/api/client'
 import { useMarkdown } from '@/composables/useMarkdown'
 import { enrichMessages } from '@/utils/messageGroup'
 import ToolBadge from '@/components/chat/ToolBadge.vue'
+import { useAirlockI18n } from '@/i18n'
 
 const route = useRoute()
 const router = useRouter()
 const runsStore = useRunsStore()
 const toast = useToast()
+const { t, formatDate, formatNumber } = useAirlockI18n()
 
 const agentId = route.params.id as string
 const runId = route.params.runId as string
@@ -37,11 +39,11 @@ async function submitFix() {
       runId,
       description: fixInstructions.value || undefined,
     })
-    toast.add({ severity: 'success', summary: 'Fix started', life: 3000 })
+    toast.add({ severity: 'success', summary: t('operations.run.fix.started'), life: 3000 })
     fixDialogVisible.value = false
     router.push(`/agents/${agentId}`)
   } catch (err: any) {
-    toast.add({ severity: 'error', summary: err.response?.data?.error || 'Fix failed', life: 5000 })
+    toast.add({ severity: 'error', summary: err.response?.data?.error || t('operations.run.fix.failed'), life: 5000 })
   } finally {
     fixLoading.value = false
   }
@@ -58,16 +60,39 @@ const statusSeverity = computed(() => {
   }
 })
 
+function runStatusLabel(status: string): string {
+  switch (status) {
+    case 'done': return t('operations.run.status.done')
+    case 'success': return t('operations.run.status.success')
+    case 'completed': return t('operations.run.status.completed')
+    case 'running': return t('operations.run.status.running')
+    case 'tool_errors': return t('operations.run.status.toolErrors')
+    case 'timeout': return t('operations.run.status.timeout')
+    case 'error': return t('operations.run.status.error')
+    case 'failed': return t('operations.run.status.failed')
+    case 'suspended': return t('operations.run.status.suspended')
+    case 'cancelled': return t('operations.run.status.cancelled')
+    default: return status
+  }
+}
+
 const durationFormatted = computed(() => {
   if (!run.value?.durationMs) return '-'
   const ms = run.value.durationMs
-  if (ms < 1000) return `${ms}ms`
-  return `${(ms / 1000).toFixed(1)}s`
+  if (ms < 1000) return t('operations.duration.milliseconds', { value: formatNumber(ms) })
+  return t('operations.duration.seconds', {
+    value: formatNumber(ms / 1000, { minimumFractionDigits: 1, maximumFractionDigits: 1 }),
+  })
 })
 
 const costFormatted = computed(() => {
   const cost = run.value?.llmCostEstimate ?? 0
-  return `$${cost.toFixed(4)}`
+  return formatNumber(cost, {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: 4,
+    maximumFractionDigits: 4,
+  })
 })
 
 const cachedTokens = computed(() => run.value?.llmTokensCached ?? 0)
@@ -77,11 +102,11 @@ const nonCachedIn = computed(() => Math.max(0, (run.value?.llmTokensIn ?? 0) - c
 const tokenTotal = computed(() => (run.value?.llmTokensIn ?? 0) + (run.value?.llmTokensOut ?? 0))
 const meterValues = computed(() => {
   if (!tokenTotal.value) return []
-  const vals = [{ label: 'Input', value: nonCachedIn.value, color: 'var(--p-blue-500)' }]
+  const vals = [{ label: t('operations.run.meter.input'), value: nonCachedIn.value, color: 'var(--p-blue-500)' }]
   if (cachedTokens.value > 0) {
-    vals.push({ label: 'Cached', value: cachedTokens.value, color: 'var(--p-cyan-400)' })
+    vals.push({ label: t('operations.run.meter.cached'), value: cachedTokens.value, color: 'var(--p-cyan-400)' })
   }
-  vals.push({ label: 'Output', value: run.value?.llmTokensOut ?? 0, color: 'var(--p-green-500)' })
+  vals.push({ label: t('operations.run.meter.output'), value: run.value?.llmTokensOut ?? 0, color: 'var(--p-green-500)' })
   return vals
 })
 
@@ -110,9 +135,11 @@ function formatActionInput(action: Record<string, any>): string {
 }
 
 function formatDurationMs(ms: number): string {
-  if (!ms) return '<1ms'
-  if (ms < 1000) return `${ms}ms`
-  return `${(ms / 1000).toFixed(1)}s`
+  if (!ms) return t('operations.duration.lessThanMillisecond')
+  if (ms < 1000) return t('operations.duration.milliseconds', { value: formatNumber(ms) })
+  return t('operations.duration.seconds', {
+    value: formatNumber(ms / 1000, { minimumFractionDigits: 1, maximumFractionDigits: 1 }),
+  })
 }
 
 onMounted(async () => {
@@ -128,9 +155,9 @@ onMounted(async () => {
       }).catch(() => {}),
     ])
     run.value = result.run
-    runMessages.value = enrichMessages(result.messages)
+    runMessages.value = enrichMessages(result.messages, t)
   } catch {
-    toast.add({ severity: 'error', summary: 'Run not found', life: 3000 })
+    toast.add({ severity: 'error', summary: t('operations.run.notFound'), life: 3000 })
     router.push(`/agents/${agentId}`)
   } finally {
     loading.value = false
@@ -145,19 +172,35 @@ onMounted(async () => {
   </div>
 
   <div v-else-if="run">
-    <h1 style="margin: 0 0 1rem; font-size: 1.25rem">{{ agentName }} · Run {{ run.id.slice(0, 8) }}</h1>
+    <h1 style="margin: 0 0 1rem; font-size: 1.25rem">{{ t('operations.run.title', { agent: agentName, id: run.id.slice(0, 8) }) }}</h1>
 
     <!-- Metadata bar -->
     <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 1rem; margin-bottom: 1.5rem">
-      <Tag :value="run.status" :severity="statusSeverity" />
+      <Tag :value="runStatusLabel(run.status)" :severity="statusSeverity" />
       <span v-if="run.startedAt" style="font-size: 0.875rem; color: var(--p-text-muted-color)">
-        {{ timestampDate(run.startedAt).toLocaleString() }}
+        {{ formatDate(timestampDate(run.startedAt), {
+          year: 'numeric',
+          month: 'numeric',
+          day: 'numeric',
+          hour: 'numeric',
+          minute: '2-digit',
+          second: '2-digit',
+        }) }}
       </span>
       <span style="font-size: 0.875rem; color: var(--p-text-muted-color)">
         {{ durationFormatted }}
       </span>
       <span v-if="tokenTotal" style="font-size: 0.875rem; color: var(--p-text-muted-color)">
-        {{ nonCachedIn.toLocaleString() }} in<template v-if="cachedTokens > 0"> + {{ cachedTokens.toLocaleString() }} cached</template> / {{ (run.llmTokensOut ?? 0).toLocaleString() }} out tokens
+        {{ cachedTokens > 0
+          ? t('operations.build.tokensCached', {
+              input: formatNumber(nonCachedIn),
+              cached: formatNumber(cachedTokens),
+              output: formatNumber(run.llmTokensOut ?? 0),
+            })
+          : t('operations.build.tokens', {
+              input: formatNumber(nonCachedIn),
+              output: formatNumber(run.llmTokensOut ?? 0),
+            }) }}
       </span>
       <span style="font-size: 0.875rem; color: var(--p-text-muted-color)">
         {{ costFormatted }}
@@ -166,7 +209,7 @@ onMounted(async () => {
 
     <!-- Conversation -->
     <div v-if="runMessages.length" style="margin-bottom: 1.5rem">
-      <h3 style="margin-bottom: 0.75rem">Conversation</h3>
+      <h3 style="margin-bottom: 0.75rem">{{ t('operations.run.conversation') }}</h3>
       <div style="display: flex; flex-direction: column; gap: 0.5rem">
         <template v-for="msg in runMessages" :key="msg.id">
           <!-- Orphan tool result (no parent assistant we could fold into).
@@ -216,18 +259,18 @@ onMounted(async () => {
     <Message v-if="run.errorMessage" severity="error" :closable="false" style="margin-bottom: 1rem">
       <div>{{ run.errorMessage }}</div>
       <div v-if="isPlatformError" style="font-size: 0.8rem; margin-top: 0.5rem; opacity: 0.85">
-        Platform error - provider, network, or auth failure upstream of the app. Retrying may help; fixing the app code won't.
+        {{ t('operations.run.platformError') }}
       </div>
       <pre v-if="run.panicTrace" style="white-space: pre-wrap; font-size: 0.8rem; margin-top: 0.5rem">{{ run.panicTrace }}</pre>
     </Message>
 
     <!-- Actions -->
     <div v-if="actions.length" style="margin-bottom: 1.5rem">
-      <h3 style="margin-bottom: 0.75rem">Actions</h3>
+      <h3 style="margin-bottom: 0.75rem">{{ t('operations.run.actions') }}</h3>
       <div style="display: flex; flex-direction: column; gap: 0.5rem">
         <div v-for="(action, i) in actions" :key="i" class="action-card">
           <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.25rem">
-            <span style="font-weight: 600; font-size: 0.85rem; text-transform: uppercase">{{ action.type || 'action' }}</span>
+            <span style="font-weight: 600; font-size: 0.85rem; text-transform: uppercase">{{ action.type || t('operations.run.actionFallback') }}</span>
             <span v-if="action.durationMs !== undefined" style="font-size: 0.75rem; color: var(--p-text-muted-color)">{{ formatDurationMs(action.durationMs) }}</span>
           </div>
           <pre v-if="formatActionInput(action)" style="white-space: pre-wrap; word-break: break-all; font-size: 0.8rem; margin: 0.25rem 0; opacity: 0.7">{{ formatActionInput(action) }}</pre>
@@ -240,33 +283,33 @@ onMounted(async () => {
     <!-- Fix button — only for agent-code errors. Platform errors get the
          message panel above explaining why this workflow doesn't help. -->
     <div v-if="hasErrors && !isPlatformError && !readOnlyGit" style="margin-bottom: 1.5rem">
-      <Button label="Fix this error" icon="pi pi-wrench" severity="warn" @click="fixDialogVisible = true" />
+      <Button :label="t('operations.run.fix.button')" icon="pi pi-wrench" severity="warn" @click="fixDialogVisible = true" />
     </div>
     <Message v-else-if="hasErrors && !isPlatformError && readOnlyGit" severity="info" :closable="false" style="margin-bottom: 1.5rem">
-      Push the fix to the connected Git repository, then rebuild the app.
+      {{ t('operations.run.fix.readOnly') }}
     </Message>
 
-    <Dialog v-model:visible="fixDialogVisible" header="Fix App Error" modal style="width: 32rem">
+    <Dialog v-model:visible="fixDialogVisible" :header="t('operations.run.fix.dialogTitle')" modal style="width: 32rem">
       <div style="display: flex; flex-direction: column; gap: 1rem; padding-top: 0.5rem">
         <p style="font-size: 0.85rem; color: var(--p-text-muted-color); margin: 0">
-          The full run context (messages, actions, errors) will be passed to the app builder.
+          {{ t('operations.run.fix.contextNotice') }}
         </p>
         <Textarea
           v-model="fixInstructions"
           :auto-resize="true"
           rows="3"
-          placeholder="Additional instructions (optional)"
+          :placeholder="t('operations.run.fix.instructionsPlaceholder')"
           style="width: 100%"
         />
         <div style="display: flex; justify-content: flex-end">
-          <Button label="Start Fix" icon="pi pi-wrench" :loading="fixLoading" @click="submitFix" />
+          <Button :label="t('operations.run.fix.start')" icon="pi pi-wrench" :loading="fixLoading" @click="submitFix" />
         </div>
       </div>
     </Dialog>
 
     <!-- Logs -->
     <div v-if="run.stdoutLog">
-      <h3 style="margin-bottom: 0.75rem">Logs</h3>
+      <h3 style="margin-bottom: 0.75rem">{{ t('operations.run.logs') }}</h3>
       <pre class="log-panel">{{ run.stdoutLog }}</pre>
     </div>
   </div>

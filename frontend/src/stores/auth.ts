@@ -89,8 +89,8 @@ export const useAuthStore = defineStore('auth', () => {
     await fetchMe()
   }
 
-  async function activate(email: string, password: string, displayName: string, activationCode?: string) {
-    const { data } = await api.post('/auth/activate', { email, password, displayName, activationCode })
+  async function activate(email: string, password: string, displayName: string, uiLocale: string, activationCode?: string) {
+    const { data } = await api.post('/auth/activate', { email, password, displayName, activationCode, uiLocale })
     const response = fromJson(RegisterResponseSchema, data)
     setAccessToken(response.accessToken)
     user.value = response.user ?? null

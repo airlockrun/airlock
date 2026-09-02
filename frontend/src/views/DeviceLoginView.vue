@@ -4,8 +4,10 @@ import { fromJson } from '@bufbuild/protobuf'
 import api from '@/api/client'
 import { useAuthStore } from '@/stores/auth'
 import { DeviceLoginInspectResponseSchema } from '@/gen/airlock/v1/api_pb'
+import { useAirlockI18n } from '@/i18n'
 
 const auth = useAuthStore()
+const { t } = useAirlockI18n()
 
 const rawCode = ref('')
 const inspecting = ref(false)
@@ -20,6 +22,16 @@ const displayCode = computed(() => {
 })
 const canInspect = computed(() => normalizedCode.value.length === 8 && !inspecting.value)
 const pending = computed(() => result.value?.status === 'pending')
+
+function statusLabel(status: string): string {
+  switch (status) {
+    case 'pending': return t('auth.device.status.pending')
+    case 'approved': return t('auth.device.status.approved')
+    case 'denied': return t('auth.device.status.denied')
+    case 'expired': return t('auth.device.status.expired')
+    default: return status
+  }
+}
 
 function inputCode(value: string) {
   rawCode.value = value.replace(/[^a-zA-Z0-9]/g, '').toUpperCase().slice(0, 8)
@@ -36,7 +48,7 @@ async function inspect() {
     const { data } = await api.post('/api/v1/device-login/inspect', { userCode: displayCode.value })
     result.value = fromJson(DeviceLoginInspectResponseSchema, data)
   } catch (err: any) {
-    error.value = err?.response?.data?.error || err?.message || 'Code lookup failed'
+    error.value = err?.response?.data?.error || err?.message || t('auth.device.lookupFailed')
   } finally {
     inspecting.value = false
   }
@@ -51,7 +63,7 @@ async function decide(decision: 'approve' | 'deny') {
     const { data } = await api.post(path, { userCode: result.value?.userCode || displayCode.value })
     result.value = fromJson(DeviceLoginInspectResponseSchema, data)
   } catch (err: any) {
-    error.value = err?.response?.data?.error || err?.message || 'Device login update failed'
+    error.value = err?.response?.data?.error || err?.message || t('auth.device.updateFailed')
   } finally {
     deciding.value = null
   }
@@ -61,19 +73,19 @@ async function decide(decision: 'approve' | 'deny') {
 <template>
   <div class="device-login-page">
     <Card class="device-login-card">
-      <template #title>Sign in to Airlock CLI</template>
+      <template #title>{{ t('auth.device.title') }}</template>
       <template #content>
         <Message severity="info" :closable="false" class="device-login-info">
-          Enter the code shown in your terminal. For security, Airlock does not accept login codes from links.
+          {{ t('auth.device.instructions') }}
         </Message>
 
         <Message v-if="error" severity="error" :closable="false" class="mb-4">{{ error }}</Message>
 
-        <label class="code-label" for="device-code">Device code</label>
+        <label class="code-label" for="device-code">{{ t('auth.device.code') }}</label>
         <InputText
           id="device-code"
           :model-value="displayCode"
-          placeholder="ABCD-EFGH"
+          :placeholder="t('auth.device.codePlaceholder')"
           class="code-input"
           autocomplete="one-time-code"
           inputmode="text"
@@ -81,35 +93,35 @@ async function decide(decision: 'approve' | 'deny') {
           @keyup.enter="inspect"
         />
 
-        <Button label="Check code" class="check-code-button" :disabled="!canInspect" :loading="inspecting" @click="inspect" />
+        <Button :label="t('auth.device.checkCode')" class="check-code-button" :disabled="!canInspect" :loading="inspecting" @click="inspect" />
 
         <div v-if="result" class="request-box">
           <div class="request-row">
-            <span>Code</span>
+            <span>{{ t('auth.device.codeSummary') }}</span>
             <strong>{{ result.userCode }}</strong>
           </div>
           <div class="request-row">
-            <span>Requested by</span>
-            <strong>{{ result.clientName || 'air CLI' }}</strong>
+            <span>{{ t('auth.device.requestedBy') }}</span>
+            <strong>{{ result.clientName || t('auth.product.airCli') }}</strong>
           </div>
           <div v-if="result.deviceName" class="request-row">
-            <span>Device</span>
+            <span>{{ t('auth.device.device') }}</span>
             <strong>{{ result.deviceName }}</strong>
           </div>
           <div class="request-row">
-            <span>Account</span>
+            <span>{{ t('auth.device.account') }}</span>
             <strong>{{ auth.user?.email }}</strong>
           </div>
           <div class="request-row">
-            <span>Status</span>
-            <Tag :severity="pending ? 'info' : result.status === 'approved' ? 'success' : 'warn'" :value="result.status" />
+            <span>{{ t('auth.device.status') }}</span>
+            <Tag :severity="pending ? 'info' : result.status === 'approved' ? 'success' : 'warn'" :value="statusLabel(result.status)" />
           </div>
         </div>
       </template>
       <template #footer>
         <div class="footer-actions">
-          <Button label="Deny" severity="secondary" :disabled="!pending || !!deciding" :loading="deciding === 'deny'" @click="decide('deny')" />
-          <Button label="Approve" :disabled="!pending || !!deciding" :loading="deciding === 'approve'" @click="decide('approve')" />
+          <Button :label="t('auth.action.deny')" severity="secondary" :disabled="!pending || !!deciding" :loading="deciding === 'deny'" @click="decide('deny')" />
+          <Button :label="t('auth.action.approve')" :disabled="!pending || !!deciding" :loading="deciding === 'approve'" @click="decide('approve')" />
         </div>
       </template>
     </Card>

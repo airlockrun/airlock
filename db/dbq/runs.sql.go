@@ -670,6 +670,24 @@ func (q *Queries) ListStuckRuns(ctx context.Context, cutoff pgtype.Timestamptz) 
 	return items, nil
 }
 
+const lockRunningRunForConnectorTransfer = `-- name: LockRunningRunForConnectorTransfer :one
+SELECT id FROM runs
+WHERE id = $1 AND agent_id = $2 AND status = 'running'
+FOR UPDATE
+`
+
+type LockRunningRunForConnectorTransferParams struct {
+	ID      pgtype.UUID `json:"id"`
+	AgentID pgtype.UUID `json:"agent_id"`
+}
+
+func (q *Queries) LockRunningRunForConnectorTransfer(ctx context.Context, arg LockRunningRunForConnectorTransferParams) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, lockRunningRunForConnectorTransfer, arg.ID, arg.AgentID)
+	var id pgtype.UUID
+	err := row.Scan(&id)
+	return id, err
+}
+
 const resolveSuspendedRun = `-- name: ResolveSuspendedRun :execrows
 UPDATE runs SET status = 'success', finished_at = now()
 WHERE id = $1 AND status = 'suspended'

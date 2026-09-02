@@ -353,6 +353,12 @@ func (s *Service) runChat(ctx context.Context, p authz.Principal, conversation d
 		s.publishRunError(conversationID, runID, p.UserID, "no system-default LLM configured: "+err.Error())
 		return
 	}
+	settings, err := dbq.New(s.db.Pool()).GetSystemSettings(ctx)
+	if err != nil {
+		s.finishRun(ctx, runID, "error", "load system locale: "+err.Error())
+		s.publishRunError(conversationID, runID, p.UserID, "load system locale: "+err.Error())
+		return
+	}
 
 	// Build the tool set filtered to this caller's tenant role, then
 	// wrap in the gated executor so destructive tools route through
@@ -367,7 +373,7 @@ func (s *Service) runChat(ctx context.Context, p authz.Principal, conversation d
 	solAgent := &agent.Agent{
 		Name:         "sysagent",
 		Model:        resolved.ProviderCatalogID + "/" + resolved.ModelName,
-		SystemPrompt: SystemPrompt(s.envFor(ctx, p.UserID, input.Platform, conversationID), tools),
+		SystemPrompt: humanFacingSystemPrompt(s.envFor(ctx, p.UserID, input.Platform, conversationID), tools, settings.UiLocale),
 		Tools:        tools,
 		MaxSteps:     25,
 	}

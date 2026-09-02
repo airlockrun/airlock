@@ -11,6 +11,7 @@ import { useSystemChatStore } from '@/stores/systemChat'
 import { useConfirm } from 'primevue/useconfirm'
 import { useTheme } from '@/composables/useTheme'
 import type { ConversationInfo } from '@/gen/airlock/v1/types_pb'
+import { useAirlockI18n } from '@/i18n'
 
 const router = useRouter()
 const route = useRoute()
@@ -23,6 +24,7 @@ const chat = useChatStore()
 const systemChat = useSystemChatStore()
 const confirm = useConfirm()
 const toast = useToast()
+const { t } = useAirlockI18n()
 
 // The vanity-URL router layer bounces a stale (renamed) agent slug here
 // with ?staleAgent=<slug>. Surface it once, then strip the query so a
@@ -33,8 +35,8 @@ watch(
     if (!slug) return
     toast.add({
       severity: 'warn',
-      summary: 'Link out of date',
-      detail: `No app “${slug}” - it may have been renamed. Pick it from the list.`,
+      summary: t('auth.shell.linkOutOfDate'),
+      detail: t('auth.shell.staleAppLink', { slug: String(slug) }),
       life: 6000,
     })
     const q = { ...route.query }
@@ -51,25 +53,25 @@ const drawerVisible = ref(false)
 // are universal; the rest are admin.
 const settingsSections = computed(() => {
   const items: { label: string; icon: string; route: string }[] = [
-    { label: 'Security', icon: 'pi pi-shield', route: '/settings/security' },
-    { label: 'Resources', icon: 'pi pi-key', route: '/settings/resources' },
-    { label: 'Bridges', icon: 'pi pi-link', route: '/bridges' },
+    { label: t('auth.shell.security'), icon: 'pi pi-shield', route: '/settings/security' },
+    { label: t('auth.shell.resources'), icon: 'pi pi-key', route: '/settings/resources' },
+    { label: t('auth.shell.bridges'), icon: 'pi pi-link', route: '/bridges' },
   ]
   if (auth.can('tenant.provider.manage')) {
     items.push(
-      { label: 'Providers', icon: 'pi pi-server', route: '/providers' },
-      { label: 'Models', icon: 'pi pi-sparkles', route: '/models' },
-      { label: 'System defaults', icon: 'pi pi-cog', route: '/settings' },
+      { label: t('auth.shell.providers'), icon: 'pi pi-server', route: '/providers' },
+      { label: t('auth.shell.models'), icon: 'pi pi-sparkles', route: '/models' },
+      { label: t('auth.shell.systemDefaults'), icon: 'pi pi-cog', route: '/settings' },
     )
   }
   if (auth.can('tenant.usage.view')) {
-    items.push({ label: 'Usage', icon: 'pi pi-chart-bar', route: '/usage' })
+    items.push({ label: t('auth.shell.usage'), icon: 'pi pi-chart-bar', route: '/usage' })
   }
   if (auth.can('tenant.user.manage')) {
-    items.push({ label: 'Users', icon: 'pi pi-users', route: '/users' })
+    items.push({ label: t('auth.shell.users'), icon: 'pi pi-users', route: '/users' })
   }
   if (auth.can('tenant.agent.list_all')) {
-    items.push({ label: 'Manage apps', icon: 'pi pi-th-large', route: '/settings/agents' })
+    items.push({ label: t('auth.shell.manageApps'), icon: 'pi pi-th-large', route: '/settings/agents' })
   }
   return items
 })
@@ -100,7 +102,7 @@ async function logout() {
   } catch (err: any) {
     toast.add({
       severity: 'error',
-      summary: err.response?.data?.error || 'Logout failed',
+      summary: err.response?.data?.error || t('auth.shell.logoutFailed'),
       life: 5000,
     })
     return
@@ -112,17 +114,17 @@ async function logout() {
 // entry lands on Security — the first universal Settings section.
 const userMenuItems = computed(() => [
   {
-    label: 'Settings',
+    label: t('auth.shell.settings'),
     icon: 'pi pi-cog',
     command: () => navigateTo('/settings/security'),
   },
   {
-    label: isDark.value ? 'Light mode' : 'Dark mode',
+    label: isDark.value ? t('auth.shell.lightMode') : t('auth.shell.darkMode'),
     icon: isDark.value ? 'pi pi-sun' : 'pi pi-moon',
     command: () => { isDark.value = !isDark.value },
   },
   {
-    label: 'Logout',
+    label: t('auth.shell.logout'),
     icon: 'pi pi-sign-out',
     command: logout,
   },
@@ -132,7 +134,7 @@ function toggleUserMenu(event: Event) {
   userMenuRef.value.toggle(event)
 }
 
-const userLabel = computed(() => auth.user?.displayName || auth.user?.email || 'Account')
+const userLabel = computed(() => auth.user?.displayName || auth.user?.email || t('auth.shell.account'))
 
 function isActive(path: string) {
   return route.path.startsWith(path)
@@ -162,13 +164,13 @@ const agentLastUsedSec = computed(() => {
 const agentMenuItems = computed(() => {
   const items: any[] = [
     {
-      label: 'Airlock Assistant',
+      label: t('auth.product.assistant'),
       icon: 'pi pi-cog',
       command: startSystemChat,
     },
   ]
   if (agentsStore.agents.length === 0) {
-    items.push({ label: 'No apps yet', disabled: true })
+    items.push({ label: t('auth.shell.noApps'), disabled: true })
     return items
   }
   const ranked = [...agentsStore.agents].sort(
@@ -186,7 +188,7 @@ const agentMenuItems = computed(() => {
   }
   // Shortcut to the full agents page (and any agents past what's handy to
   // scroll here).
-  items.push({ label: 'All apps', icon: 'pi pi-th-large', command: () => navigateTo('/agents') })
+  items.push({ label: t('auth.shell.allApps'), icon: 'pi pi-th-large', command: () => navigateTo('/agents') })
   return items
 })
 function openNewMenu(event: Event) {
@@ -224,7 +226,7 @@ const agentNameById = computed(() => {
   return m
 })
 function agentName(agentId: string): string {
-  return agentNameById.value.get(agentId) || 'App'
+  return agentNameById.value.get(agentId) || t('auth.shell.appFallback')
 }
 const agentEmojiById = computed(() => {
   const m = new Map<string, string>()
@@ -242,10 +244,12 @@ function isActiveConv(c: ConversationInfo): boolean {
 function deleteConversation(c: ConversationInfo, event: Event) {
   event.stopPropagation()
   confirm.require({
-    message: `Delete "${c.title?.trim() || 'Untitled conversation'}"? This removes its history permanently.`,
-    header: 'Delete conversation',
+    message: t('auth.shell.deleteConversationMessage', {
+      title: c.title?.trim() || t('auth.shell.untitledConversation'),
+    }),
+    header: t('auth.shell.deleteConversation'),
     icon: 'pi pi-exclamation-triangle',
-    acceptProps: { severity: 'danger', label: 'Delete' },
+    acceptProps: { severity: 'danger', label: t('auth.action.delete') },
     accept: async () => {
       const wasActive = isActiveConv(c)
       try {
@@ -302,10 +306,10 @@ function deleteSidebarItem(item: SidebarItem, event: Event) {
     return
   }
   confirm.require({
-    message: `Delete "${item.title}"? This removes its history permanently.`,
-    header: 'Delete conversation',
+    message: t('auth.shell.deleteConversationMessage', { title: item.title }),
+    header: t('auth.shell.deleteConversation'),
     icon: 'pi pi-exclamation-triangle',
-    acceptProps: { severity: 'danger', label: 'Delete' },
+    acceptProps: { severity: 'danger', label: t('auth.action.delete') },
     accept: async () => {
       const wasActive = isActiveItem(item)
       try {
@@ -363,13 +367,14 @@ const headerTitle = computed<string>(() => {
   if (agentChat) {
     const name = agentName(agentChat[1])
     const title = activeTitle()
-    return title ? `${name}: ${title}` : name
+    return title ? t('auth.shell.chatTitle', { name, title }) : name
   }
   if (/^\/system\/chat(?:\/[^/]+)?$/.test(route.path)) {
     const title = activeTitle()
-    return title ? `Airlock Assistant: ${title}` : 'Airlock Assistant'
+    const name = t('auth.product.assistant')
+    return title ? t('auth.shell.chatTitle', { name, title }) : name
   }
-  return inSettings.value ? 'Settings' : 'Airlock'
+  return inSettings.value ? t('auth.shell.settings') : t('auth.product.airlock')
 })
 
 function navigateTo(path: string) {
@@ -408,10 +413,10 @@ onMounted(() => {
               icon="pi pi-arrow-left"
               text
               severity="secondary"
-              aria-label="Back"
+              :aria-label="t('auth.action.back')"
               @click="router.push(back)"
             />
-            <RouterLink v-if="!inSettings" class="bar-brand bar-brand-link" to="/agents">Airlock</RouterLink>
+            <RouterLink v-if="!inSettings" class="bar-brand bar-brand-link" to="/agents">{{ t('auth.product.airlock') }}</RouterLink>
             <span v-else class="bar-brand">{{ headerTitle }}</span>
           </div>
           <!-- Chat title, aligned with the message column on desktop. -->
@@ -445,7 +450,7 @@ onMounted(() => {
           <div class="sidebar-conv">
             <button class="sidebar-new" @click="openNewMenu">
               <span class="pi pi-plus" />
-              <span>New chat</span>
+               <span>{{ t('auth.shell.newChat') }}</span>
             </button>
             <Menu
               ref="newMenuRef"
@@ -468,7 +473,7 @@ onMounted(() => {
                       <span v-if="agentEmoji(item.agentId!)">{{ agentEmoji(item.agentId!) }} </span>{{ agentName(item.agentId!) }}
                     </template>
                     <template v-else>
-                      <span>⚙️ Airlock Assistant</span>
+                       <span>⚙️ {{ t('auth.product.assistant') }}</span>
                       <i v-if="item.status === 'awaiting_confirmation'" class="pi pi-exclamation-circle" style="color: var(--p-yellow-500); margin-left: 0.25rem" />
                     </template>
                   </span>
@@ -476,14 +481,14 @@ onMounted(() => {
                 </div>
                 <button
                   class="conv-del"
-                  aria-label="Delete conversation"
+                   :aria-label="t('auth.shell.deleteConversation')"
                   @click="deleteSidebarItem(item, $event)"
                 >
                   <span class="pi pi-trash" />
                 </button>
               </div>
               <p v-if="sidebarItems.length === 0" class="conv-empty">
-                No conversations yet
+                 {{ t('auth.shell.noConversations') }}
               </p>
             </div>
           </div>
@@ -494,7 +499,7 @@ onMounted(() => {
               @click.prevent="navigateTo('/agents')"
             >
               <span class="pi pi-box" />
-              <span>Cyborg Apps</span>
+               <span>{{ t('auth.shell.cyborgApps') }}</span>
             </a>
             <a class="sidebar-item" @click="toggleUserMenu">
               <span class="pi pi-user" />
@@ -509,7 +514,7 @@ onMounted(() => {
            section list (with names); otherwise the chat list + app nav. -->
       <Drawer
         v-model:visible="drawerVisible"
-        :header="inSettings ? 'Settings' : 'Airlock'"
+         :header="inSettings ? t('auth.shell.settings') : t('auth.product.airlock')"
         :pt="{
           header: { style: 'padding:0.6rem 1rem' },
           content: { style: 'display:flex;flex-direction:column;min-height:0;padding:0' },
@@ -533,7 +538,7 @@ onMounted(() => {
           <div class="sidebar-conv drawer-conv">
             <button class="sidebar-new" @click="openNewMenu">
               <span class="pi pi-plus" />
-              <span>New chat</span>
+               <span>{{ t('auth.shell.newChat') }}</span>
             </button>
             <div class="conv-list" @scroll="onListScroll">
               <div
@@ -548,7 +553,7 @@ onMounted(() => {
                       <span v-if="agentEmoji(item.agentId!)">{{ agentEmoji(item.agentId!) }} </span>{{ agentName(item.agentId!) }}
                     </template>
                     <template v-else>
-                      <span>⚙️ Airlock Assistant</span>
+                       <span>⚙️ {{ t('auth.product.assistant') }}</span>
                       <i v-if="item.status === 'awaiting_confirmation'" class="pi pi-exclamation-circle" style="color: var(--p-yellow-500); margin-left: 0.25rem" />
                     </template>
                   </span>
@@ -556,7 +561,7 @@ onMounted(() => {
                 </div>
                 <button
                   class="conv-del"
-                  aria-label="Delete conversation"
+                   :aria-label="t('auth.shell.deleteConversation')"
                   @click="deleteSidebarItem(item, $event)"
                 >
                   <span class="pi pi-trash" />
@@ -570,7 +575,7 @@ onMounted(() => {
               @click.prevent="navigateTo('/agents')"
             >
               <span class="pi pi-box" />
-              <span>Cyborg Apps</span>
+               <span>{{ t('auth.shell.cyborgApps') }}</span>
             </a>
             <a class="sidebar-item" @click="toggleUserMenu">
               <span class="pi pi-user" />

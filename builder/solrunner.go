@@ -324,7 +324,10 @@ func (b *BuildService) runSolInProcess(ctx context.Context, opts solRunOpts) (*s
 	})
 
 	codegenStart := time.Now()
-	exitedResult, err := runner.RunUntilExit(ctx, opts.Prompt, sol.RunUntilExitOptions{MaxNudges: 2})
+	exitedResult, err := runner.RunUntilExit(ctx, opts.Prompt, sol.RunUntilExitOptions{
+		MaxNudges:    2,
+		NudgeMessage: builderNudgeMessage,
+	})
 	if executor.IsTransportError(err) {
 		b.captureToolRuntimeDiagnostics(ctx, tc.Name, "disconnected")
 	}

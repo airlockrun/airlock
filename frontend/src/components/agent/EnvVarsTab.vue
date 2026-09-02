@@ -3,6 +3,7 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { useToast } from 'primevue/usetoast'
 import { useConfirm } from 'primevue/useconfirm'
 import api from '@/api/client'
+import { useAirlockI18n } from '@/i18n'
 
 interface EnvVar {
   slug: string
@@ -20,6 +21,7 @@ const emit = defineEmits<{ populated: [count: number] }>()
 
 const toast = useToast()
 const confirm = useConfirm()
+const { t } = useAirlockI18n()
 const envVars = ref<EnvVar[]>([])
 watch(envVars, (v) => emit('populated', v.length), { immediate: true })
 const loading = ref(true)
@@ -62,7 +64,7 @@ function patternMatches(): boolean {
 
 const patternError = computed(() => {
   if (!selected.value?.pattern) return ''
-  return patternMatches() ? '' : `Value must match pattern: ${selected.value.pattern}`
+  return patternMatches() ? '' : t('agentConfig.envVars.patternError', { pattern: selected.value.pattern })
 })
 
 async function save() {
@@ -77,12 +79,12 @@ async function save() {
       `/api/v1/agents/${props.agentId}/env-vars/${selected.value.slug}`,
       { value: formValue.value },
     )
-    toast.add({ severity: 'success', summary: `${selected.value.slug} updated`, life: 3000 })
+    toast.add({ severity: 'success', summary: t('agentConfig.envVars.updated', { slug: selected.value.slug }), life: 3000 })
     dialogVisible.value = false
     formValue.value = ''
     await load()
   } catch (err: any) {
-    toast.add({ severity: 'error', summary: err.response?.data?.error || 'Save failed', life: 5000 })
+    toast.add({ severity: 'error', summary: err.response?.data?.error || t('agentConfig.common.saveFailed'), life: 5000 })
   } finally {
     saving.value = false
   }
@@ -91,19 +93,19 @@ async function save() {
 async function clearValue(ev: EnvVar) {
   confirm.require({
     message: ev.isSecret
-      ? `Clear the configured value for ${ev.slug}? The app will fail to read this until you set a new value.`
-      : `Clear the configured value for ${ev.slug}? The app will fall back to the default ("${ev.defaultValue ?? ''}").`,
-    header: 'Clear value',
+      ? t('agentConfig.envVars.clearSecretConfirmation', { slug: ev.slug })
+      : t('agentConfig.envVars.clearValueConfirmation', { slug: ev.slug, defaultValue: ev.defaultValue ?? '' }),
+    header: t('agentConfig.envVars.clearValue'),
     icon: 'pi pi-exclamation-triangle',
-    rejectProps: { label: 'Cancel', severity: 'secondary', outlined: true },
-    acceptProps: { label: 'Clear', severity: 'danger' },
+    rejectProps: { label: t('agentConfig.common.cancel'), severity: 'secondary', outlined: true },
+    acceptProps: { label: t('agentConfig.envVars.clear'), severity: 'danger' },
     accept: async () => {
       try {
         await api.delete(`/api/v1/agents/${props.agentId}/env-vars/${ev.slug}`)
-        toast.add({ severity: 'success', summary: `${ev.slug} cleared`, life: 3000 })
+        toast.add({ severity: 'success', summary: t('agentConfig.envVars.cleared', { slug: ev.slug }), life: 3000 })
         await load()
       } catch (err: any) {
-        toast.add({ severity: 'error', summary: err.response?.data?.error || 'Clear failed', life: 5000 })
+        toast.add({ severity: 'error', summary: err.response?.data?.error || t('agentConfig.envVars.clearFailed'), life: 5000 })
       }
     },
   })
@@ -117,44 +119,44 @@ onMounted(load)
     <DataTable v-if="!loading" :value="envVars" stripedRows>
       <template #empty>
         <div style="text-align: center; padding: 2rem; color: var(--p-text-muted-color)">
-          No environment variables registered. Builders declare them via <code>agent.RegisterEnvVar</code>.
+          {{ t('agentConfig.envVars.emptyBeforeIdentifier') }} <code>agent.RegisterEnvVar</code>{{ t('agentConfig.envVars.emptyAfterIdentifier') }}
         </div>
       </template>
 
-      <Column field="slug" header="Slug">
+      <Column field="slug" :header="t('agentConfig.envVars.slug')">
         <template #body="{ data: ev }">
           <strong>{{ ev.slug }}</strong>
           <Tag
             v-if="ev.isSecret"
-            value="secret"
+            :value="t('agentConfig.envVars.secret')"
             severity="danger"
             style="margin-left: 0.5rem; vertical-align: middle"
           />
         </template>
       </Column>
 
-      <Column field="description" header="Description">
+      <Column field="description" :header="t('agentConfig.common.description')">
         <template #body="{ data: ev }">
           <span v-if="ev.description">{{ ev.description }}</span>
           <span v-else style="color: var(--p-text-muted-color)">-</span>
         </template>
       </Column>
 
-      <Column header="Value">
+      <Column :header="t('agentConfig.envVars.value')">
         <template #body="{ data: ev }">
           <code v-if="ev.isSecret && ev.configured" style="color: var(--p-text-muted-color)">••••••••</code>
-          <span v-else-if="ev.isSecret" style="color: var(--p-text-muted-color)">not set</span>
+          <span v-else-if="ev.isSecret" style="color: var(--p-text-muted-color)">{{ t('agentConfig.envVars.notSet') }}</span>
           <code v-else-if="ev.value" style="word-break: break-all">{{ ev.value }}</code>
-          <code v-else-if="ev.defaultValue" style="color: var(--p-text-muted-color); font-style: italic">{{ ev.defaultValue }} (default)</code>
-          <span v-else style="color: var(--p-text-muted-color)">not set</span>
+          <code v-else-if="ev.defaultValue" style="color: var(--p-text-muted-color); font-style: italic">{{ t('agentConfig.envVars.defaultValue', { value: ev.defaultValue }) }}</code>
+          <span v-else style="color: var(--p-text-muted-color)">{{ t('agentConfig.envVars.notSet') }}</span>
         </template>
       </Column>
 
-      <Column header="Actions">
+      <Column :header="t('agentConfig.common.actions')">
         <template #body="{ data: ev }">
           <div style="display: flex; gap: 0.25rem">
             <Button
-              :label="ev.configured ? (ev.isSecret ? 'Rotate' : 'Edit') : 'Set'"
+              :label="ev.configured ? (ev.isSecret ? t('agentConfig.envVars.rotate') : t('agentConfig.common.edit')) : t('agentConfig.envVars.set')"
               size="small"
               outlined
               @click="openEdit(ev)"
@@ -165,7 +167,7 @@ onMounted(load)
               size="small"
               text
               severity="danger"
-              aria-label="Clear value"
+              :aria-label="t('agentConfig.envVars.clearValue')"
               @click="clearValue(ev)"
             />
           </div>
@@ -174,15 +176,15 @@ onMounted(load)
     </DataTable>
 
     <DataTable v-else :value="[{}, {}, {}]">
-      <Column header="Slug"><template #body><Skeleton width="10rem" /></template></Column>
-      <Column header="Description"><template #body><Skeleton /></template></Column>
-      <Column header="Value"><template #body><Skeleton /></template></Column>
-      <Column header="Actions"><template #body><Skeleton width="6rem" /></template></Column>
+      <Column :header="t('agentConfig.envVars.slug')"><template #body><Skeleton width="10rem" /></template></Column>
+      <Column :header="t('agentConfig.common.description')"><template #body><Skeleton /></template></Column>
+      <Column :header="t('agentConfig.envVars.value')"><template #body><Skeleton /></template></Column>
+      <Column :header="t('agentConfig.common.actions')"><template #body><Skeleton width="6rem" /></template></Column>
     </DataTable>
 
     <Dialog
       v-model:visible="dialogVisible"
-      :header="selected ? `${selected.configured ? 'Update' : 'Set'} ${selected.slug}` : ''"
+      :header="selected ? t(selected.configured ? 'agentConfig.envVars.updateDialogTitle' : 'agentConfig.envVars.setDialogTitle', { slug: selected.slug }) : ''"
       modal
       style="width: 32rem"
     >
@@ -192,32 +194,32 @@ onMounted(load)
         </p>
 
         <div v-if="selected.isSecret" class="code-chip" style="font-size: 0.8rem; color: var(--p-text-muted-color); padding: 0.5rem 0.75rem">
-          This value is treated as a secret. It will be redacted from LLM input, and you won't be able to read it back from this UI - only rotate.
+          {{ t('agentConfig.envVars.secretExplanation') }}
         </div>
 
         <FloatLabel variant="on" v-if="selected.isSecret">
           <Password id="env-value" v-model="formValue" :feedback="false" toggle-mask style="width: 100%" :input-style="{ width: '100%' }" />
-          <label for="env-value">Value</label>
+          <label for="env-value">{{ t('agentConfig.envVars.value') }}</label>
         </FloatLabel>
         <FloatLabel variant="on" v-else>
           <InputText id="env-value" v-model="formValue" :pattern="selected.pattern" style="width: 100%" />
-          <label for="env-value">Value</label>
+          <label for="env-value">{{ t('agentConfig.envVars.value') }}</label>
         </FloatLabel>
 
         <div v-if="selected.pattern" style="font-size: 0.8rem">
-          <span style="color: var(--p-text-muted-color)">Pattern: </span>
+          <span style="color: var(--p-text-muted-color)">{{ t('agentConfig.envVars.patternLabel') }} </span>
           <code>{{ selected.pattern }}</code>
         </div>
 
         <Message v-if="patternError" severity="error" :closable="false" style="font-size: 0.8rem">{{ patternError }}</Message>
 
         <div v-if="!selected.isSecret && selected.defaultValue" style="font-size: 0.8rem">
-          <span style="color: var(--p-text-muted-color)">Default: </span>
+          <span style="color: var(--p-text-muted-color)">{{ t('agentConfig.envVars.defaultLabel') }} </span>
           <code>{{ selected.defaultValue }}</code>
         </div>
 
         <div style="display: flex; justify-content: flex-end; gap: 0.5rem">
-          <Button label="Save" :loading="saving" :disabled="!!patternError" @click="save" />
+          <Button :label="t('agentConfig.common.save')" :loading="saving" :disabled="!!patternError" @click="save" />
         </div>
       </div>
     </Dialog>

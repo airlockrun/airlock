@@ -5,12 +5,14 @@ import { useConfirm } from 'primevue/useconfirm'
 import { useBridgesStore } from '@/stores/bridges'
 import { useAgentsStore } from '@/stores/agents'
 import { useAuthStore } from '@/stores/auth'
+import { useAirlockI18n } from '@/i18n'
 
 const store = useBridgesStore()
 const agentsStore = useAgentsStore()
 const auth = useAuthStore()
 const toast = useToast()
 const confirm = useConfirm()
+const { t, locale } = useAirlockI18n()
 
 // True iff the current user owns the bridge — only the owner can change
 // what agent it's bound to. Admin can still delete (escape hatch).
@@ -23,6 +25,12 @@ function canReassign(bridge: { owner?: { id?: string } | null }): boolean {
 function canDelete(bridge: { owner?: { id?: string } | null }): boolean {
   if (auth.isAdmin) return true
   return canReassign(bridge)
+}
+
+function statusLabel(status: string): string {
+  if (status === 'active') return t('resources.bridges.statusActive')
+  if (status === 'error') return t('resources.bridges.statusError')
+  return t('resources.bridges.unknownStatus')
 }
 
 const dialogVisible = ref(false)
@@ -56,7 +64,7 @@ const managerBotConfigured = computed(() =>
 const agentOptions = computed(() =>
   [...agentsStore.agents].sort((a, b) => {
     if (a.isOwner !== b.isOwner) return a.isOwner ? -1 : 1
-    return a.name.localeCompare(b.name)
+    return a.name.localeCompare(b.name, locale.value)
   }),
 )
 // Edit dialog — covers both reassignment and per-bridge settings.
@@ -108,10 +116,10 @@ async function onSubmit() {
       isSystem: createIsSystem.value,
       isManager: form.value.type === 'telegram' ? form.value.isManager : false,
     })
-    toast.add({ severity: 'success', summary: 'Bridge created', life: 3000 })
+    toast.add({ severity: 'success', summary: t('resources.bridges.created'), life: 3000 })
     dialogVisible.value = false
   } catch (err: any) {
-    toast.add({ severity: 'error', summary: err.response?.data?.error || 'Create failed', life: 5000 })
+    toast.add({ severity: 'error', summary: err.response?.data?.error || t('resources.errors.createFailed'), life: 5000 })
   }
 }
 
@@ -122,7 +130,7 @@ async function copyDeepLink() {
     deepLinkCopied.value = true
     setTimeout(() => { deepLinkCopied.value = false }, 2000)
   } catch {
-    toast.add({ severity: 'error', summary: 'Copy failed - long-press the link to copy manually', life: 4000 })
+    toast.add({ severity: 'error', summary: t('resources.bridges.copyFailed'), life: 4000 })
   }
 }
 
@@ -152,7 +160,7 @@ async function onEdit() {
   const isManagerEdit = editType.value === 'telegram' && auth.can('tenant.manager_bot.config') && editIsManager.value
   // A manager or system bridge isn't agent-bound; otherwise an agent is required.
   if (!editIsSystem.value && !isManagerEdit && !editAgentID.value) {
-    toast.add({ severity: 'error', summary: 'Pick an app, or enable System / Manager bridge', life: 4000 })
+    toast.add({ severity: 'error', summary: t('resources.bridges.pickApp'), life: 4000 })
     return
   }
   try {
@@ -166,25 +174,25 @@ async function onEdit() {
       payload.isManager = editIsManager.value
     }
     await store.updateBridge(editing.value.id, payload)
-    toast.add({ severity: 'success', summary: 'Bridge updated', life: 3000 })
+    toast.add({ severity: 'success', summary: t('resources.bridges.updated'), life: 3000 })
     editVisible.value = false
   } catch (err: any) {
-    toast.add({ severity: 'error', summary: err.response?.data?.error || 'Update failed', life: 5000 })
+    toast.add({ severity: 'error', summary: err.response?.data?.error || t('resources.errors.updateFailed'), life: 5000 })
   }
 }
 
 function confirmDelete(bridge: { id: string; name: string }) {
   confirm.require({
-    message: `Delete bridge "${bridge.name}"? This cannot be undone.`,
-    header: 'Confirm Delete',
+    message: t('resources.bridges.confirmDelete', { name: bridge.name }),
+    header: t('resources.bridges.confirmDeleteHeader'),
     icon: 'pi pi-exclamation-triangle',
     acceptClass: 'p-button-danger',
     accept: async () => {
       try {
         await store.deleteBridge(bridge.id)
-        toast.add({ severity: 'success', summary: 'Bridge deleted', life: 3000 })
+        toast.add({ severity: 'success', summary: t('resources.bridges.deleted'), life: 3000 })
       } catch (err: any) {
-        toast.add({ severity: 'error', summary: err.response?.data?.error || 'Delete failed', life: 5000 })
+        toast.add({ severity: 'error', summary: err.response?.data?.error || t('resources.errors.deleteFailed'), life: 5000 })
       }
     },
   })
@@ -194,66 +202,66 @@ function confirmDelete(bridge: { id: string; name: string }) {
 <template>
   <div>
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem">
-      <h1 style="margin: 0; font-size: 1.5rem">Bridges</h1>
-      <Button v-if="auth.can('tenant.bridge.create')" label="Add Bridge" icon="pi pi-plus" @click="openCreate" />
+      <h1 style="margin: 0; font-size: 1.5rem">{{ t('resources.bridges.title') }}</h1>
+      <Button v-if="auth.can('tenant.bridge.create')" :label="t('resources.actions.addBridge')" icon="pi pi-plus" @click="openCreate" />
     </div>
 
     <!-- Loading skeletons -->
     <DataTable v-if="store.loading" :value="Array(5)">
-      <Column header="Name"><template #body><Skeleton width="60%" /></template></Column>
-      <Column header="Bot Username"><template #body><Skeleton width="40%" /></template></Column>
-      <Column header="Role"><template #body><Skeleton width="4rem" /></template></Column>
-      <Column header="App"><template #body><Skeleton width="40%" /></template></Column>
-      <Column header="Owner"><template #body><Skeleton width="40%" /></template></Column>
-      <Column header="Status"><template #body><Skeleton width="4rem" /></template></Column>
-      <Column header="Actions"><template #body><Skeleton width="3rem" /></template></Column>
+      <Column :header="t('resources.bridges.name')"><template #body><Skeleton width="60%" /></template></Column>
+      <Column :header="t('resources.bridges.botUsername')"><template #body><Skeleton width="40%" /></template></Column>
+      <Column :header="t('resources.bridges.role')"><template #body><Skeleton width="4rem" /></template></Column>
+      <Column :header="t('resources.bridges.app')"><template #body><Skeleton width="40%" /></template></Column>
+      <Column :header="t('resources.bridges.owner')"><template #body><Skeleton width="40%" /></template></Column>
+      <Column :header="t('resources.bridges.status')"><template #body><Skeleton width="4rem" /></template></Column>
+      <Column :header="t('resources.bridges.actions')"><template #body><Skeleton width="3rem" /></template></Column>
     </DataTable>
 
     <!-- Data table -->
     <DataTable v-else :value="store.bridges" stripedRows>
       <template #empty>
         <div style="text-align: center; padding: 2rem; color: var(--p-text-muted-color)">
-          No bridges configured yet.
+          {{ t('resources.bridges.empty') }}
         </div>
       </template>
-      <Column field="name" header="Name" />
-      <Column field="botUsername" header="Bot Username" />
-      <Column header="Role">
+      <Column field="name" :header="t('resources.bridges.name')" />
+      <Column field="botUsername" :header="t('resources.bridges.botUsername')" />
+      <Column :header="t('resources.bridges.role')">
         <template #body="{ data }">
           <Tag
             v-if="data.isManager"
-            value="Manager"
+            :value="t('resources.bridges.manager')"
             :severity="data.managerError ? 'warn' : 'success'"
-            v-tooltip.top="data.managerError || 'Creates new bots via the deep-link flow'"
+            v-tooltip.top="data.managerError || t('resources.bridges.managerTooltip')"
           />
-          <span v-else style="color: var(--p-text-muted-color)">App bot</span>
+          <span v-else style="color: var(--p-text-muted-color)">{{ t('resources.bridges.appBot') }}</span>
         </template>
       </Column>
-      <Column header="App">
+      <Column :header="t('resources.bridges.app')">
         <template #body="{ data }">
-          <span v-if="data.isSystem" style="font-style: italic">Airlock Assistant</span>
+          <span v-if="data.isSystem" style="font-style: italic">{{ t('resources.bridges.airlockAssistant') }}</span>
           <template v-else>
             {{ agentsStore.agents.find(a => a.id === data.agentId)?.name || data.agentId || '-' }}
           </template>
         </template>
       </Column>
-      <Column header="Owner">
+      <Column :header="t('resources.bridges.owner')">
         <template #body="{ data }">
           <span v-if="data.owner" v-tooltip.top="data.owner.email">
             {{ data.owner.displayName || data.owner.email }}
           </span>
-          <span v-else style="color: var(--p-text-muted-color)">System</span>
+          <span v-else style="color: var(--p-text-muted-color)">{{ t('resources.bridges.systemOwner') }}</span>
         </template>
       </Column>
-      <Column header="Status">
+      <Column :header="t('resources.bridges.status')">
         <template #body="{ data }">
-          <Tag :value="data.status || 'unknown'" :severity="data.status === 'active' ? 'success' : 'secondary'" />
+          <Tag :value="statusLabel(data.status)" :severity="data.status === 'active' ? 'success' : 'secondary'" />
         </template>
       </Column>
-      <Column header="Actions">
+      <Column :header="t('resources.bridges.actions')">
         <template #body="{ data }">
           <div style="display: flex; gap: 0.25rem">
-            <Button v-if="canReassign(data)" icon="pi pi-pencil" severity="secondary" text rounded v-tooltip.top="'Edit bridge'" @click="openEdit(data)" />
+            <Button v-if="canReassign(data)" icon="pi pi-pencil" severity="secondary" text rounded v-tooltip.top="t('resources.actions.editBridge')" @click="openEdit(data)" />
             <Button v-if="canDelete(data)" icon="pi pi-trash" severity="danger" text rounded @click="confirmDelete(data)" />
           </div>
         </template>
@@ -261,20 +269,20 @@ function confirmDelete(bridge: { id: string; name: string }) {
     </DataTable>
 
     <!-- Create dialog -->
-    <Dialog v-model:visible="dialogVisible" header="Add Bridge" modal style="width: 30rem">
+    <Dialog v-model:visible="dialogVisible" :header="t('resources.actions.addBridge')" modal style="width: 30rem">
       <!-- Deep-link panel: shown after the Managed Bots session is
            created. Big tappable link is the iOS browser fallback for
            window.open being blocked. -->
       <div v-if="pendingDeepLink" style="display: flex; flex-direction: column; gap: 1rem; padding-top: 0.5rem">
         <div style="display: flex; align-items: center; gap: 0.5rem">
           <i class="pi pi-info-circle" style="color: var(--p-blue-500)" />
-          <span style="font-weight: 600">Open Telegram to finish creating your bot</span>
+          <span style="font-weight: 600">{{ t('resources.bridges.openTelegramTitle') }}</span>
         </div>
         <small style="color: var(--p-text-muted-color)">
-          We tried to open Telegram in a new tab. If that didn't work, tap the link below. The new bridge will appear in the list once the bot is created.
+          {{ t('resources.bridges.openTelegramHelp') }}
         </small>
         <Message severity="warn" :closable="false">
-          Keep the suggested bot <b>username</b> exactly as Telegram pre-fills it - airlock binds the new bot back to this workspace by that username, so changing it leaves the bot orphaned. You can freely edit the bot's display name.
+          {{ t('resources.bridges.keepUsername') }}
         </Message>
         <a
           :href="pendingDeepLink"
@@ -283,13 +291,13 @@ function confirmDelete(bridge: { id: string; name: string }) {
           style="display: flex; align-items: center; justify-content: center; gap: 0.5rem; padding: 0.75rem 1rem; background: var(--p-primary-color); color: var(--p-primary-contrast-color); border-radius: 6px; text-decoration: none; font-weight: 600"
         >
           <i class="pi pi-send" />
-          <span>Open in Telegram</span>
+          <span>{{ t('resources.actions.openTelegram') }}</span>
         </a>
         <div style="display: flex; gap: 0.5rem; align-items: center">
           <InputText :value="pendingDeepLink" readonly style="flex: 1; font-size: 0.8rem" />
           <Button
             :icon="deepLinkCopied ? 'pi pi-check' : 'pi pi-copy'"
-            :label="deepLinkCopied ? 'Copied' : 'Copy'"
+            :label="deepLinkCopied ? t('resources.actions.copied') : t('resources.actions.copy')"
             severity="secondary"
             @click="copyDeepLink"
           />
@@ -309,7 +317,7 @@ function confirmDelete(bridge: { id: string; name: string }) {
               @click="createTokenSource = 'create_new'"
             >
               <i class="pi pi-send" />
-              <span>Create in Telegram</span>
+              <span>{{ t('resources.bridges.createInTelegram') }}</span>
             </button>
             <button
               type="button"
@@ -318,14 +326,14 @@ function confirmDelete(bridge: { id: string; name: string }) {
               @click="createTokenSource = 'paste'"
             >
               <i class="pi pi-key" />
-              <span>Paste token</span>
+              <span>{{ t('resources.bridges.pasteToken') }}</span>
             </button>
           </div>
           <small v-if="createTokenSource === 'create_new'" style="color: var(--p-text-muted-color)">
-            Create-new opens Telegram with the airlock manager bot to walk through bot creation. Keep the suggested username unchanged - airlock uses it to bind the bot back.
+            {{ t('resources.bridges.createInTelegramHelp') }}
           </small>
           <small v-else style="color: var(--p-text-muted-color)">
-            Paste a token from BotFather for a bot you already created.
+            {{ t('resources.bridges.pasteTokenHelp') }}
           </small>
         </div>
         <!-- System bridge: admin-only. A system bridge isn't bound to
@@ -333,9 +341,9 @@ function confirmDelete(bridge: { id: string; name: string }) {
              (operator chat surface). -->
         <div v-if="auth.can('tenant.bridge.system')" style="display: flex; align-items: center; justify-content: space-between; gap: 1rem">
           <div>
-            <div style="font-weight: 600">System bridge</div>
+            <div style="font-weight: 600">{{ t('resources.bridges.systemBridge') }}</div>
             <small style="color: var(--p-text-muted-color)">
-              Routes inbound DMs to the Airlock Assistant instead of an app. Admin-only.
+              {{ t('resources.bridges.systemBridgeHelp') }}
             </small>
           </div>
           <ToggleSwitch v-model="createIsSystem" />
@@ -344,42 +352,42 @@ function confirmDelete(bridge: { id: string; name: string }) {
              other bots): hide the agent picker when manager is on. Keep this
              near the top so mobile keyboards don't obscure it. -->
         <div v-if="!createIsSystem && !form.isManager" style="display: flex; flex-direction: column; gap: 0.25rem">
-          <label for="bridgeAgentId">App</label>
+          <label for="bridgeAgentId">{{ t('resources.bridges.app') }}</label>
           <Select
             id="bridgeAgentId"
             v-model="form.agentId"
             :options="agentOptions"
             optionLabel="name"
             optionValue="id"
-            placeholder="Select an app"
+            :placeholder="t('resources.bridges.selectApp')"
             style="width: 100%"
           >
             <template #option="{ option }">
               <div style="display: flex; flex-direction: column">
                 <span><span style="font-weight: 600">{{ option.name }}</span> <span style="color: var(--p-text-muted-color); font-size: 0.85em">{{ option.slug }}</span></span>
-                <small style="color: var(--p-text-muted-color)">{{ option.ownerName || 'unknown owner' }}{{ option.isOwner ? ' · you' : '' }}</small>
+                <small style="color: var(--p-text-muted-color)">{{ option.ownerName || t('resources.bridges.unknownOwner') }}{{ option.isOwner ? t('resources.bridges.you') : '' }}</small>
               </div>
             </template>
           </Select>
         </div>
         <div v-if="createTokenSource === 'paste'" style="display: flex; flex-direction: column; gap: 0.25rem">
-          <label for="bridgeToken">Token</label>
+          <label for="bridgeToken">{{ t('resources.bridges.token') }}</label>
           <Password id="bridgeToken" v-model="form.token" :feedback="false" toggleMask />
-          <small style="color: var(--p-text-muted-color)">The bridge name is taken from the bot's display name and kept in sync automatically.</small>
+          <small style="color: var(--p-text-muted-color)">{{ t('resources.bridges.syncedNameHelp') }}</small>
         </div>
         <div v-if="createTokenSource === 'create_new'" style="display: flex; flex-direction: column; gap: 0.25rem">
-          <label for="bridgeBotName">Bot name</label>
-          <InputText id="bridgeBotName" v-model="form.name" placeholder="My Telegram Bot" />
-          <small style="color: var(--p-text-muted-color)">Suggested name for the new bot. The bridge then mirrors the bot's display name.</small>
+          <label for="bridgeBotName">{{ t('resources.bridges.botName') }}</label>
+          <InputText id="bridgeBotName" v-model="form.name" :placeholder="t('resources.bridges.botNamePlaceholder')" />
+          <small style="color: var(--p-text-muted-color)">{{ t('resources.bridges.botNameHelp') }}</small>
         </div>
         <!-- Manager capability: Telegram-only, admin-only. Lets this bot
              create new bots for users via the deep-link flow. The pasted
              token's bot must have can_manage_bots enabled in BotFather. -->
         <div v-if="form.type === 'telegram' && createTokenSource === 'paste' && auth.can('tenant.manager_bot.config')" style="display: flex; align-items: center; justify-content: space-between; gap: 1rem">
           <div>
-            <div style="font-weight: 600">Manager bot</div>
+            <div style="font-weight: 600">{{ t('resources.bridges.managerBot') }}</div>
             <small style="color: var(--p-text-muted-color)">
-              Enables the "Create new bot via Telegram" flow. Requires <code>can_manage_bots</code> in BotFather. At most one across the instance.
+              {{ t('resources.bridges.managerBotHelp') }}
             </small>
           </div>
           <ToggleSwitch v-model="form.isManager" />
@@ -387,17 +395,17 @@ function confirmDelete(bridge: { id: string; name: string }) {
       </div>
       <template #footer>
         <template v-if="pendingDeepLink">
-          <Button label="Done" @click="dialogVisible = false" />
+          <Button :label="t('resources.actions.done')" @click="dialogVisible = false" />
         </template>
         <template v-else>
-          <Button label="Cancel" severity="secondary" text @click="dialogVisible = false" />
-          <Button label="Create" @click="onSubmit" />
+          <Button :label="t('resources.actions.cancel')" severity="secondary" text @click="dialogVisible = false" />
+          <Button :label="t('resources.actions.create')" @click="onSubmit" />
         </template>
       </template>
     </Dialog>
 
     <!-- Edit dialog (agent reassignment + per-bridge settings) -->
-    <Dialog v-model:visible="editVisible" :header="`Edit ${editing?.name ?? 'bridge'}`" modal style="width: 30rem">
+    <Dialog v-model:visible="editVisible" :header="t('resources.bridges.editNamed', { name: editing?.name ?? t('resources.bridges.bridgeFallback') })" modal style="width: 30rem">
       <div style="display: flex; flex-direction: column; gap: 1.25rem; padding-top: 0.5rem">
 
         <!-- System bridge toggle (admin-only). Flipping it switches the
@@ -407,9 +415,9 @@ function confirmDelete(bridge: { id: string; name: string }) {
              admin to cross the boundary in either direction. -->
         <div v-if="auth.can('tenant.bridge.system')" style="display: flex; align-items: center; justify-content: space-between; gap: 1rem">
           <div>
-            <div style="font-weight: 600">System bridge</div>
+            <div style="font-weight: 600">{{ t('resources.bridges.systemBridge') }}</div>
             <small style="color: var(--p-text-muted-color)">
-              Routes inbound DMs to the Airlock Assistant instead of an app. Admin-only.
+              {{ t('resources.bridges.systemBridgeHelp') }}
             </small>
           </div>
           <ToggleSwitch v-model="editIsSystem" />
@@ -420,9 +428,9 @@ function confirmDelete(bridge: { id: string; name: string }) {
              token must have can_manage_bots enabled in BotFather. -->
         <div v-if="editType === 'telegram' && auth.can('tenant.manager_bot.config')" style="display: flex; align-items: center; justify-content: space-between; gap: 1rem">
           <div>
-            <div style="font-weight: 600">Manager bot</div>
+            <div style="font-weight: 600">{{ t('resources.bridges.managerBot') }}</div>
             <small style="color: var(--p-text-muted-color)">
-              Enables the "Create new bot via Telegram" flow. Requires <code>can_manage_bots</code> in BotFather. At most one across the instance.
+              {{ t('resources.bridges.managerBotHelp') }}
             </small>
           </div>
           <ToggleSwitch v-model="editIsManager" />
@@ -433,14 +441,14 @@ function confirmDelete(bridge: { id: string; name: string }) {
         <template v-if="!editIsSystem && !editIsManager">
         <!-- Agent binding -->
         <div style="display: flex; flex-direction: column; gap: 0.25rem">
-          <label for="editAgent">App</label>
+          <label for="editAgent">{{ t('resources.bridges.app') }}</label>
           <Select
             id="editAgent"
             v-model="editAgentID"
             :options="agentOptions"
             optionLabel="name"
             optionValue="id"
-            placeholder="Select an app"
+            :placeholder="t('resources.bridges.selectApp')"
             filter
             :filterFields="['name', 'slug', 'ownerName']"
             autoFilterFocus
@@ -449,7 +457,7 @@ function confirmDelete(bridge: { id: string; name: string }) {
             <template #option="{ option }">
               <div style="display: flex; flex-direction: column">
                 <span><span style="font-weight: 600">{{ option.name }}</span> <span style="color: var(--p-text-muted-color); font-size: 0.85em">{{ option.slug }}</span></span>
-                <small style="color: var(--p-text-muted-color)">{{ option.ownerName || 'unknown owner' }}{{ option.isOwner ? ' · you' : '' }}</small>
+                <small style="color: var(--p-text-muted-color)">{{ option.ownerName || t('resources.bridges.unknownOwner') }}{{ option.isOwner ? t('resources.bridges.you') : '' }}</small>
               </div>
             </template>
           </Select>
@@ -458,8 +466,8 @@ function confirmDelete(bridge: { id: string; name: string }) {
 
       </div>
       <template #footer>
-        <Button label="Cancel" severity="secondary" text @click="editVisible = false" />
-        <Button label="Save" @click="onEdit" />
+        <Button :label="t('resources.actions.cancel')" severity="secondary" text @click="editVisible = false" />
+        <Button :label="t('resources.actions.save')" @click="onEdit" />
       </template>
     </Dialog>
   </div>

@@ -26,5 +26,6 @@ func SystemSettingsToProto(s dbq.SystemSetting) *airlockv1.SystemSettingsInfo {
 		DefaultImageGenProviderId:  PgUUIDToString(s.DefaultImageGenProviderID),
 		DefaultEmbeddingProviderId: PgUUIDToString(s.DefaultEmbeddingProviderID),
 		DefaultSearchProviderId:    PgUUIDToString(s.DefaultSearchProviderID),
+		UiLocale:                   s.UiLocale,
 	}
 }
