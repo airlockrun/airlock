@@ -3,9 +3,9 @@
 // resource from a need's declared shape, binding an existing resource to a
 // need, and listing the resources that could satisfy a need.
 //
-// A resource is always born from a need — the need's spec is the only source of
-// the integration shape; a user supplies only credentials and ownership. So
-// every create is "instantiate THIS need", never a freeform resource.
+// Need-driven creation copies the declared integration shape and binds the new
+// resource atomically. Standalone HTTP connections can also be created through
+// service/connections and become candidates for structurally compatible needs.
 package needs
 
 import (

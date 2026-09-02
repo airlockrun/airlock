@@ -67,6 +67,7 @@ type Service struct {
 	discoverAuth AuthDiscoveryFunc
 	injectAuth   AuthInjector
 	mcpHTTP      *http.Client
+	httpNetwork  *networkpolicy.Policy
 }
 
 func New(
@@ -80,6 +81,7 @@ func New(
 	discoverAuth AuthDiscoveryFunc,
 	injectAuth AuthInjector,
 	mcpHTTP *http.Client,
+	httpNetwork *networkpolicy.Policy,
 ) *Service {
 	if d == nil {
 		panic("connections: db is required")
@@ -108,15 +110,132 @@ func New(
 	if mcpHTTP == nil {
 		panic("connections: mcpHTTP client is required")
 	}
+	if httpNetwork == nil {
+		panic("connections: HTTP network policy is required")
+	}
 	return &Service{
 		db: d, encryptor: enc, oauthClient: oc, publicURL: publicURL,
 		refresh: refresh, logger: logger,
 		discover: discover, discoverAuth: discoverAuth, injectAuth: injectAuth,
-		mcpHTTP: mcpHTTP,
+		mcpHTTP: mcpHTTP, httpNetwork: httpNetwork,
 	}
 }
 
 func toPg(id uuid.UUID) pgtype.UUID { return pgtype.UUID{Bytes: id, Valid: true} }
+
+type CreateResourceInput struct {
+	DisplayName       string
+	BaseURL           string
+	AuthMode          string
+	Token             string
+	AuthInjectionType string
+	AuthInjectionName string
+}
+
+type CreatedResource struct {
+	ID   uuid.UUID
+	Slug string
+}
+
+// CreateResource creates an active reusable HTTP connection owned by the caller.
+// Agent needs may bind it only when their declared connection shape is compatible.
+func (s *Service) CreateResource(ctx context.Context, p authz.Principal, input CreateResourceInput) (CreatedResource, error) {
+	tx, err := s.db.Pool().Begin(ctx)
+	if err != nil {
+		return CreatedResource{}, err
+	}
+	defer tx.Rollback(ctx)
+	q := dbq.New(tx)
+	if err := authz.Authorize(ctx, q, p, authz.ResourceCreate, uuid.Nil); err != nil {
+		return CreatedResource{}, err
+	}
+
+	displayName := strings.TrimSpace(input.DisplayName)
+	if displayName == "" {
+		return CreatedResource{}, service.Detail(service.ErrInvalidInput, "display name is required")
+	}
+	baseURL := strings.TrimSpace(input.BaseURL)
+	parsed, err := s.httpNetwork.ParseURL(baseURL)
+	if err != nil {
+		return CreatedResource{}, service.Detail(service.ErrInvalidInput, "invalid base URL: %v", err)
+	}
+	if parsed.RawQuery != "" || parsed.Fragment != "" {
+		return CreatedResource{}, service.Detail(service.ErrInvalidInput, "base URL cannot contain a query or fragment")
+	}
+	baseURL = parsed.String()
+
+	authInjection := []byte(`{}`)
+	switch input.AuthMode {
+	case "none":
+		if input.Token != "" || input.AuthInjectionType != "" || input.AuthInjectionName != "" {
+			return CreatedResource{}, service.Detail(service.ErrInvalidInput, "no-auth connections cannot include credentials or auth injection")
+		}
+	case "token":
+		if strings.TrimSpace(input.Token) == "" {
+			return CreatedResource{}, service.Detail(service.ErrInvalidInput, "token is required")
+		}
+		injectionName := strings.TrimSpace(input.AuthInjectionName)
+		switch input.AuthInjectionType {
+		case "bearer", "path_prefix":
+			if injectionName != "" {
+				return CreatedResource{}, service.Detail(service.ErrInvalidInput, "auth injection name is not allowed for %s", input.AuthInjectionType)
+			}
+		case "api_key_header":
+			if !validHTTPName(injectionName) {
+				return CreatedResource{}, service.Detail(service.ErrInvalidInput, "valid API key header name is required")
+			}
+		case "query_param":
+			if !validURLParameterName(injectionName) {
+				return CreatedResource{}, service.Detail(service.ErrInvalidInput, "valid query parameter name is required")
+			}
+		default:
+			return CreatedResource{}, service.Detail(service.ErrInvalidInput, "unknown auth injection type %q", input.AuthInjectionType)
+		}
+		authInjection, err = json.Marshal(map[string]string{"type": input.AuthInjectionType, "name": injectionName})
+		if err != nil {
+			return CreatedResource{}, err
+		}
+	default:
+		return CreatedResource{}, service.Detail(service.ErrInvalidInput, "unknown auth mode %q", input.AuthMode)
+	}
+
+	id := uuid.New()
+	slug := "res-" + strings.ReplaceAll(id.String(), "-", "")
+	connection, err := q.CreateConnection(ctx, dbq.CreateConnectionParams{
+		ID: toPg(id), OwnerPrincipalID: toPg(p.UserID), Slug: slug,
+		Name: displayName, DisplayName: displayName, AuthMode: input.AuthMode,
+		BaseUrl: baseURL, AuthInjection: authInjection, Config: []byte(`{}`),
+		AuthParams: []byte(`{}`), Headers: []byte(`{}`), Access: "private", Lifecycle: "active",
+	})
+	if err != nil {
+		return CreatedResource{}, err
+	}
+	if input.AuthMode == "token" {
+		accessRef, err := s.encryptor.Put(ctx, "connection/"+id.String()+"/access_token", input.Token)
+		if err != nil {
+			return CreatedResource{}, err
+		}
+		if err := q.UpdateConnectionCredentialsByID(ctx, dbq.UpdateConnectionCredentialsByIDParams{
+			ID: connection.ID, AccessTokenRef: accessRef, GrantedScopes: "", ScopesVerified: false,
+		}); err != nil {
+			return CreatedResource{}, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return CreatedResource{}, err
+	}
+	return CreatedResource{ID: id, Slug: slug}, nil
+}
+
+func validHTTPName(name string) bool {
+	matched, _ := regexp.MatchString("^[!#$%&'*+.^_`|~0-9A-Za-z-]+$", name)
+	return matched
+}
+
+func validURLParameterName(name string) bool {
+	matched, _ := regexp.MatchString(`^[0-9A-Za-z._~-]+$`, name)
+	return matched
+}
 
 // resolveConn / resolveMCP map (agentID, need slug) to the bound resource row —
 // the resource an agent reaches through its need's binding. Credential ops then

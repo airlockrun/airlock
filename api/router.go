@@ -256,6 +256,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		},
 		agentapi.InjectAuth,
 		cfg.HTTPNetwork.Client(30*time.Second),
+		cfg.HTTPNetwork,
 	))
 	brH := newBridgeHandler(bridgessvc.New(
 		cfg.DB, cfg.Secrets, cfg.TelegramDriver,
@@ -416,6 +417,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		// Reusable resource inventory and lifecycle. Each service method checks
 		// the caller's effective resource capabilities.
 		r.Get("/resources", resourcesHandler.List)
+		r.Post("/resources/connections", credH.CreateConnectionResource)
 		r.Get("/usage", usageHandler.Get)
 		r.Post("/resources/{type}/{id}/revoke", resourcesHandler.Revoke)
 		r.Patch("/resources/{type}/{id}", resourcesHandler.Rename)
@@ -533,7 +535,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 				func(ctx context.Context, serverURL string) (*oauth.DiscoveryResult, error) {
 					return agentapi.DiscoverMCPAuth(ctx, cfg.HTTPNetwork.Client(30*time.Second), serverURL)
 				},
-				agentapi.InjectAuth, cfg.HTTPNetwork.Client(30*time.Second),
+				agentapi.InjectAuth, cfg.HTTPNetwork.Client(30*time.Second), cfg.HTTPNetwork,
 			),
 			GitCreds:    gitcredssvc.New(cfg.DB, cfg.Secrets, cfg.Logger.Named("sysagent-gitcreds")),
 			ManagedBots: managedBotsSvc,
