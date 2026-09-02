@@ -93,6 +93,15 @@ const transferDialogOpen = ref(false)
 const transferUserId = ref('')
 const transferSaving = ref(false)
 const hostsById = ref(new Map<string, HostInfo>())
+const addResourceMenu = ref()
+const connectionDialogOpen = ref(false)
+const connectionName = ref('')
+const connectionBaseUrl = ref('')
+const connectionAuthMode = ref('none')
+const connectionToken = ref('')
+const connectionInjectionType = ref('bearer')
+const connectionInjectionName = ref('')
+const connectionSaving = ref(false)
 let connectorDetailSequence = 0
 
 const canManageSelected = computed(() => !!selected.value && hasCapability(selected.value.capabilities, 'manage'))
@@ -124,10 +133,80 @@ const availableTransferUsers = computed(() => selectableUsers.value
     label: principal.displayName
       ? principal.email ? `${principal.displayName} (${principal.email})` : principal.displayName
       : principal.email || principal.id,
-  })))
+    })))
+const addResourceItems = computed(() => [
+  {
+    label: t('resources.types.host'),
+    icon: 'pi pi-server',
+    command: () => void router.push('/hosts/connect'),
+  },
+  {
+    label: t('resources.types.connection'),
+    icon: 'pi pi-link',
+    command: openConnectionDialog,
+  },
+])
+const connectionAuthOptions = computed(() => [
+  { label: t('resources.auth.none'), value: 'none' },
+  { label: t('resources.auth.token'), value: 'token' },
+])
+const connectionInjectionOptions = computed(() => [
+  { label: t('resources.connection.bearer'), value: 'bearer' },
+  { label: t('resources.connection.apiKeyHeader'), value: 'api_key_header' },
+  { label: t('resources.connection.queryParameter'), value: 'query_param' },
+  { label: t('resources.connection.pathPrefix'), value: 'path_prefix' },
+])
+const connectionNeedsInjectionName = computed(() => connectionInjectionType.value === 'api_key_header' || connectionInjectionType.value === 'query_param')
+const connectionCanSave = computed(() => {
+  if (!connectionName.value.trim() || !connectionBaseUrl.value.trim()) return false
+  if (connectionAuthMode.value === 'none') return true
+  return !!connectionToken.value.trim() && (!connectionNeedsInjectionName.value || !!connectionInjectionName.value.trim())
+})
 
 function errorMessage(error: any, fallback: string): string {
   return error?.response?.data?.error || error?.message || fallback
+}
+function openAddResourceMenu(event: Event) {
+  addResourceMenu.value.toggle(event)
+}
+function openConnectionDialog() {
+  connectionName.value = ''
+  connectionBaseUrl.value = ''
+  connectionAuthMode.value = 'none'
+  connectionToken.value = ''
+  connectionInjectionType.value = 'bearer'
+  connectionInjectionName.value = ''
+  connectionDialogOpen.value = true
+}
+function clearConnectionToken() {
+  connectionToken.value = ''
+}
+function selectConnectionInjection(type: string) {
+  connectionInjectionType.value = type
+  if (type === 'api_key_header') connectionInjectionName.value = 'X-API-Key'
+  else if (type === 'query_param') connectionInjectionName.value = 'token'
+  else connectionInjectionName.value = ''
+}
+async function saveConnection() {
+  if (!connectionCanSave.value) return
+  connectionSaving.value = true
+  try {
+    await resources.createConnection({
+      displayName: connectionName.value.trim(),
+      baseUrl: connectionBaseUrl.value.trim(),
+      authMode: connectionAuthMode.value,
+      token: connectionAuthMode.value === 'token' ? connectionToken.value : '',
+      authInjectionType: connectionAuthMode.value === 'token' ? connectionInjectionType.value : '',
+      authInjectionName: connectionAuthMode.value === 'token' ? connectionInjectionName.value.trim() : '',
+    })
+    connectionDialogOpen.value = false
+    connectionToken.value = ''
+    toast.add({ severity: 'success', summary: t('resources.connection.created'), detail: t('resources.connection.createdHelp'), life: 4000 })
+  } catch (error: any) {
+    toast.add({ severity: 'error', summary: errorMessage(error, t('resources.errors.createConnection')), life: 5000 })
+  } finally {
+    connectionSaving.value = false
+  }
 }
 function capabilityLabel(capability: string): string {
   if (capability === 'view') return t('resources.details.capabilityView')
@@ -511,7 +590,8 @@ onMounted(() => {
   <div class="resources-page">
     <div class="page-heading">
       <h1>{{ t('resources.inventory.title') }}</h1>
-      <Button :label="t('resources.actions.enrollHost')" icon="pi pi-plus" outlined @click="router.push('/hosts/connect')" />
+      <Button :label="t('resources.actions.addResource')" icon="pi pi-plus" outlined @click="openAddResourceMenu" />
+      <Menu ref="addResourceMenu" :model="addResourceItems" :popup="true" />
     </div>
     <p class="intro">{{ t('resources.inventory.intro') }}</p>
 
@@ -567,6 +647,44 @@ onMounted(() => {
         <div v-else class="skeletons"><Skeleton v-for="i in 3" :key="i" height="3rem" /></div>
       </template>
     </Card>
+
+    <Dialog v-model:visible="connectionDialogOpen" :header="t('resources.connection.addTitle')" modal :style="{ width: 'min(32rem, calc(100vw - 2rem))' }" @hide="clearConnectionToken">
+      <div class="connection-form">
+        <Message severity="info" :closable="false">{{ t('resources.connection.compatibilityHelp') }}</Message>
+        <div class="field">
+          <label for="connection-name">{{ t('resources.connection.name') }}</label>
+          <InputText id="connection-name" v-model="connectionName" :placeholder="t('resources.connection.namePlaceholder')" fluid />
+        </div>
+        <div class="field">
+          <label for="connection-base-url">{{ t('resources.connection.baseUrl') }}</label>
+          <InputText id="connection-base-url" v-model="connectionBaseUrl" :placeholder="t('resources.connection.baseUrlPlaceholder')" fluid />
+          <small>{{ t('resources.connection.baseUrlHelp') }}</small>
+        </div>
+        <div class="field">
+          <label for="connection-auth-mode">{{ t('resources.connection.authentication') }}</label>
+          <Select id="connection-auth-mode" v-model="connectionAuthMode" :options="connectionAuthOptions" option-label="label" option-value="value" fluid />
+        </div>
+        <template v-if="connectionAuthMode === 'token'">
+          <div class="field">
+            <label for="connection-injection">{{ t('resources.connection.injection') }}</label>
+            <Select id="connection-injection" :model-value="connectionInjectionType" :options="connectionInjectionOptions" option-label="label" option-value="value" fluid @update:model-value="selectConnectionInjection" />
+          </div>
+          <div v-if="connectionNeedsInjectionName" class="field">
+            <label for="connection-injection-name">{{ connectionInjectionType === 'api_key_header' ? t('resources.connection.headerName') : t('resources.connection.parameterName') }}</label>
+            <InputText id="connection-injection-name" v-model="connectionInjectionName" fluid />
+          </div>
+          <div class="field">
+            <label for="connection-token">{{ t('resources.auth.token') }}</label>
+            <Password id="connection-token" v-model="connectionToken" :feedback="false" toggle-mask fluid />
+            <small>{{ t('resources.connection.tokenHelp') }}</small>
+          </div>
+        </template>
+        <div class="dialog-actions">
+          <Button :label="t('resources.actions.cancel')" text severity="secondary" @click="connectionDialogOpen = false" />
+          <Button :label="t('resources.actions.createResource')" :loading="connectionSaving" :disabled="!connectionCanSave" @click="saveConnection" />
+        </div>
+      </div>
+    </Dialog>
 
     <Card>
       <template #title><div class="card-title"><span>{{ t('resources.git.title') }}</span><Button :label="t('resources.actions.addPat')" icon="pi pi-plus" size="small" @click="gitDialogOpen = true" /></div></template>
@@ -785,7 +903,9 @@ h1 { margin: 0; font-size: 1.5rem; }
 .row-actions { justify-content: flex-end; }
 .card-title, .detail-heading, .section-title { justify-content: space-between; }
 .rename-row { display: flex; align-items: center; gap: 0.2rem; }
-.skeletons, .detail-body, .git-form, .grant-form, .interface-list, .grant-list { display: flex; flex-direction: column; gap: 1rem; }
+.skeletons, .detail-body, .git-form, .grant-form, .connection-form, .interface-list, .grant-list { display: flex; flex-direction: column; gap: 1rem; }
+.connection-form .field { display: flex; flex-direction: column; gap: 0.35rem; }
+.connection-form small { color: var(--p-text-muted-color); }
 .detail-body section { padding-top: 1rem; border-top: 1px solid var(--p-content-border-color); }
 .owner-summary { display: flex; align-items: baseline; gap: 0.5rem; }
 .detail-body h3 { margin: 0 0 0.6rem; font-size: 1rem; }

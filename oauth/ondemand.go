@@ -38,6 +38,18 @@ type tokenRow struct {
 	requiredScopes string
 }
 
+func resolveOpaqueToken(ctx context.Context, enc secrets.Store, refPrefix string, id pgtype.UUID, accessRef string) (string, error) {
+	if accessRef == "" {
+		return "", ErrNeedsReauth
+	}
+	ref := refPrefix + "/" + uuid.UUID(id.Bytes).String() + "/access_token"
+	token, err := enc.Get(ctx, ref, accessRef)
+	if err != nil {
+		return "", fmt.Errorf("decrypt access token: %w", err)
+	}
+	return token, nil
+}
+
 // resolveToken returns a valid plaintext access token for row, refreshing it
 // when its expiry is at/before refreshIfBefore. update/clear persist the
 // outcome through the caller's transaction-bound queries. The persist return
@@ -182,8 +194,7 @@ func ensureConnectionToken(ctx context.Context, database *db.DB, enc secrets.Sto
 	if err != nil {
 		return "", false, err
 	}
-
-	token, persist, rerr := resolveToken(ctx, enc, client, logger, tokenRow{
+	row := tokenRow{
 		id:             conn.ID,
 		refPrefix:      "connection",
 		accessRef:      conn.AccessTokenRef,
@@ -195,7 +206,16 @@ func ensureConnectionToken(ctx context.Context, database *db.DB, enc secrets.Sto
 		grantedScopes:  conn.GrantedScopes,
 		scopesVerified: conn.ScopesVerified,
 		requiredScopes: requiredScopes,
-	}, refreshIfBefore,
+	}
+	if conn.AuthMode == "token" {
+		token, err := resolveOpaqueToken(ctx, enc, "connection", conn.ID, conn.AccessTokenRef)
+		return token, true, err
+	}
+	if conn.AuthMode != "oauth" {
+		return "", false, fmt.Errorf("oauth: unsupported connection auth mode %q", conn.AuthMode)
+	}
+
+	token, persist, rerr := resolveToken(ctx, enc, client, logger, row, refreshIfBefore,
 		func(ctx context.Context, accessRef string, expiresAt pgtype.Timestamptz, refreshRef, grantedScopes string, scopesVerified bool) error {
 			return q.UpdateConnectionCredentialsByID(ctx, dbq.UpdateConnectionCredentialsByIDParams{
 				ID: connectionID, AccessTokenRef: accessRef, TokenExpiresAt: expiresAt, RefreshToken: refreshRef, GrantedScopes: grantedScopes, ScopesVerified: scopesVerified,
@@ -275,8 +295,7 @@ func ensureMCPServerToken(ctx context.Context, database *db.DB, enc secrets.Stor
 	if err != nil {
 		return "", false, err
 	}
-
-	token, persist, rerr := resolveToken(ctx, enc, client, logger, tokenRow{
+	row := tokenRow{
 		id:             srv.ID,
 		refPrefix:      "mcp",
 		accessRef:      srv.AccessTokenRef,
@@ -288,7 +307,16 @@ func ensureMCPServerToken(ctx context.Context, database *db.DB, enc secrets.Stor
 		grantedScopes:  srv.GrantedScopes,
 		scopesVerified: srv.ScopesVerified,
 		requiredScopes: requiredScopes,
-	}, refreshIfBefore,
+	}
+	if srv.AuthMode == "token" {
+		token, err := resolveOpaqueToken(ctx, enc, "mcp", srv.ID, srv.AccessTokenRef)
+		return token, true, err
+	}
+	if srv.AuthMode != "oauth" && srv.AuthMode != "oauth_discovery" {
+		return "", false, fmt.Errorf("oauth: unsupported MCP auth mode %q", srv.AuthMode)
+	}
+
+	token, persist, rerr := resolveToken(ctx, enc, client, logger, row, refreshIfBefore,
 		func(ctx context.Context, accessRef string, expiresAt pgtype.Timestamptz, refreshRef, grantedScopes string, scopesVerified bool) error {
 			return q.UpdateMCPServerCredentialsByID(ctx, dbq.UpdateMCPServerCredentialsByIDParams{
 				ID: serverID, AccessTokenRef: accessRef, TokenExpiresAt: expiresAt, RefreshToken: refreshRef, GrantedScopes: grantedScopes, ScopesVerified: scopesVerified,

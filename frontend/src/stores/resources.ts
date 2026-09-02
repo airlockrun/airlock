@@ -5,6 +5,8 @@ import api from '@/api/client'
 import type { GetConnectorResponse, OwnedResourceInfo, ResourceConsumerInfo, ResourceGrantInfo } from '@/gen/airlock/v1/api_pb'
 import { useAirlockI18n } from '@/i18n'
 import {
+  CreateConnectionResourceRequestSchema,
+  CreateConnectionResourceResponseSchema,
   ListOwnedResourcesResponseSchema,
   ListResourceConsumersResponseSchema,
   ListResourceGrantsResponseSchema,
@@ -41,6 +43,21 @@ export const useResourcesStore = defineStore('resources', () => {
   async function fetchConsumers(type: string, id: string): Promise<ResourceConsumerInfo[]> {
     const { data } = await api.get(`${path(type, id)}/consumers`)
     return fromJson(ListResourceConsumersResponseSchema, data).consumers
+  }
+
+  async function createConnection(input: {
+    displayName: string
+    baseUrl: string
+    authMode: string
+    token: string
+    authInjectionType: string
+    authInjectionName: string
+  }) {
+    const request = create(CreateConnectionResourceRequestSchema, input)
+    const { data } = await api.post('/api/v1/resources/connections', toJson(CreateConnectionResourceRequestSchema, request))
+    const created = fromJson(CreateConnectionResourceResponseSchema, data)
+    await fetchResources()
+    return created
   }
 
   async function rename(type: string, id: string, displayName: string) {
@@ -91,6 +108,7 @@ export const useResourcesStore = defineStore('resources', () => {
     error,
     fetchResources,
     fetchConsumers,
+    createConnection,
     rename,
     revoke,
     remove,

@@ -62,6 +62,24 @@ func (h *credentialHandler) resolveAgentSlug(r *http.Request) (uuid.UUID, string
 	return id, slug, nil
 }
 
+// CreateConnectionResource handles POST /api/v1/resources/connections.
+func (h *credentialHandler) CreateConnectionResource(w http.ResponseWriter, r *http.Request) {
+	req := &airlockv1.CreateConnectionResourceRequest{}
+	if err := decodeProto(r, req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	created, err := h.svc.CreateResource(r.Context(), principalFromRequest(r), connsvc.CreateResourceInput{
+		DisplayName: req.DisplayName, BaseURL: req.BaseUrl, AuthMode: req.AuthMode,
+		Token: req.Token, AuthInjectionType: req.AuthInjectionType, AuthInjectionName: req.AuthInjectionName,
+	})
+	if err != nil {
+		writeConnError(w, err, "failed to create connection")
+		return
+	}
+	writeProto(w, http.StatusCreated, &airlockv1.CreateConnectionResourceResponse{Id: created.ID.String(), Slug: created.Slug})
+}
+
 // SetOAuthApp handles PUT /api/v1/agents/{agentID}/credentials/{slug}/oauth-app.
 func (h *credentialHandler) SetOAuthApp(w http.ResponseWriter, r *http.Request) {
 	agentID, slug, err := h.resolveAgentSlug(r)
