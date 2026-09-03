@@ -28,19 +28,18 @@ func (q *Queries) ClearAgentEnvVarValue(ctx context.Context, arg ClearAgentEnvVa
 	return err
 }
 
-const deleteAgentEnvVar = `-- name: DeleteAgentEnvVar :exec
-DELETE FROM agent_env_vars WHERE agent_id = $1 AND slug = $2
+const deleteStaleAgentEnvVars = `-- name: DeleteStaleAgentEnvVars :exec
+DELETE FROM agent_env_vars
+WHERE agent_id = $1 AND slug != ALL($2::text[])
 `
 
-type DeleteAgentEnvVarParams struct {
+type DeleteStaleAgentEnvVarsParams struct {
 	AgentID pgtype.UUID `json:"agent_id"`
-	Slug    string      `json:"slug"`
+	Slugs   []string    `json:"slugs"`
 }
 
-// Removes the slot entirely. Used when the operator deletes a stale
-// registration that the agent no longer declares.
-func (q *Queries) DeleteAgentEnvVar(ctx context.Context, arg DeleteAgentEnvVarParams) error {
-	_, err := q.db.Exec(ctx, deleteAgentEnvVar, arg.AgentID, arg.Slug)
+func (q *Queries) DeleteStaleAgentEnvVars(ctx context.Context, arg DeleteStaleAgentEnvVarsParams) error {
+	_, err := q.db.Exec(ctx, deleteStaleAgentEnvVars, arg.AgentID, arg.Slugs)
 	return err
 }
 

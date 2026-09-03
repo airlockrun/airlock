@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strings"
 
 	"github.com/airlockrun/agentsdk"
@@ -387,6 +388,43 @@ func (h *Handler) Sync(w http.ResponseWriter, r *http.Request) {
 		ID:           pgAgentID,
 		Instructions: extrasJSON,
 	})
+
+	// Upsert environment declarations, then delete stale rows. The configured
+	// value belongs to the operator and survives while its slug stays declared.
+	envVarSlugs := make([]string, len(req.EnvVars))
+	for i, envVar := range req.EnvVars {
+		if envVar.Slug == "" {
+			writeJSONError(w, http.StatusBadRequest, "invalid environment variable declaration: slug is required")
+			return
+		}
+		if envVar.Pattern != "" {
+			if _, err := regexp.Compile(envVar.Pattern); err != nil {
+				writeJSONError(w, http.StatusBadRequest, "invalid environment variable pattern: "+err.Error())
+				return
+			}
+		}
+		if _, err := q.UpsertAgentEnvVar(ctx, dbq.UpsertAgentEnvVarParams{
+			AgentID:      pgAgentID,
+			Slug:         envVar.Slug,
+			Description:  envVar.Description,
+			IsSecret:     envVar.Secret,
+			DefaultValue: envVar.Default,
+			Pattern:      envVar.Pattern,
+		}); err != nil {
+			h.logger.Error("upsert environment variable failed", zap.Error(err))
+			writeJSONError(w, http.StatusInternalServerError, "failed to sync environment variables")
+			return
+		}
+		envVarSlugs[i] = envVar.Slug
+	}
+	if err := q.DeleteStaleAgentEnvVars(ctx, dbq.DeleteStaleAgentEnvVarsParams{
+		AgentID: pgAgentID,
+		Slugs:   envVarSlugs,
+	}); err != nil {
+		h.logger.Error("delete stale environment variables failed", zap.Error(err))
+		writeJSONError(w, http.StatusInternalServerError, "failed to sync environment variables")
+		return
+	}
 
 	// Upsert tools, then delete stale.
 	toolNames := make([]string, len(req.Tools))
