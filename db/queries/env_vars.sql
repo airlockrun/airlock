@@ -42,7 +42,6 @@ UPDATE agent_env_vars SET
     updated_at = now()
 WHERE agent_id = @agent_id AND slug = @slug;
 
--- name: DeleteAgentEnvVar :exec
--- Removes the slot entirely. Used when the operator deletes a stale
--- registration that the agent no longer declares.
-DELETE FROM agent_env_vars WHERE agent_id = @agent_id AND slug = @slug;
+-- name: DeleteStaleAgentEnvVars :exec
+DELETE FROM agent_env_vars
+WHERE agent_id = @agent_id AND slug != ALL(@slugs::text[]);
