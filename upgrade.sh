@@ -11,7 +11,7 @@
 # + endpoints) lives entirely in .env, which docker compose reads automatically
 # — so the upgrade is mode-agnostic, no -f overlay mapping. Migrations run
 # automatically on airlock startup. Once healthy on the new tag, the previous
-# tag's four stack images are removed to reclaim disk.
+# tag's stack images are removed to reclaim disk.
 #
 # Self-update: after checking out the target, upgrade.sh re-execs the TARGET's
 # copy of itself to run the pull/up phase — so a fix to those steps in a new
@@ -196,7 +196,7 @@ upgrade_apply() {
 	# (rebuilt above), neither of which can be `pull`ed as a release image.
 	# postgres/rustfs are external pinned images `up` fetches on demand.
 	log "pulling $target images"
-	docker compose pull airlock frontend agent-builder-image agent-base-image \
+	docker compose pull airlock frontend agent-builder-image agent-base-image js-executor-image \
 		|| die "image pull failed (are $target's images published to ghcr?)"
 
 	log "restarting the stack"
@@ -213,7 +213,7 @@ upgrade_apply() {
 	if [[ "$prev" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$ ]] && [ "$prev" != "$target" ]; then
 		log "removing previous version's images ($prev)"
 		local img
-		for img in airlock airlock-frontend airlock-agent-builder airlock-agent-base; do
+		for img in airlock airlock-frontend airlock-agent-builder airlock-agent-base airlock-js-executor; do
 			docker rmi "ghcr.io/airlockrun/$img:$prev" >/dev/null 2>&1 || true
 		done
 	fi

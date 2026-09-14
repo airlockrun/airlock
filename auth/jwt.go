@@ -39,10 +39,12 @@ var ErrInvalidAudience = errors.New("invalid token audience")
 // the token profile; validators require all three.
 type Claims struct {
 	jwt.RegisteredClaims
-	Email string `json:"email"`
-	// DisplayName is the user's display name, carried so proxied agent
-	// requests can forward it (X-User-Name) without a DB lookup. Display
-	// claim only — never used for authorization. Empty for OAuth/MCP tokens.
+	verified   bool
+	identity   *Identity
+	credential *Identity
+	Email      string `json:"email"`
+	// DisplayName is presentation metadata, never authorization. Admission
+	// refreshes it from the live account. Empty for OAuth/MCP tokens.
 	DisplayName string           `json:"name,omitempty"`
 	TenantRole  string           `json:"tenant_role"`
 	ClientID    string           `json:"client_id,omitempty"`
@@ -165,12 +167,14 @@ func ValidateUserAccessToken(secret, tokenString string) (*Claims, error) {
 	if claims.TokenUse != tokenUseUserAccess || claims.ClientID != "" || claims.Scope != "" || claims.AgentID != "" {
 		return nil, errors.New("invalid user access token profile")
 	}
-	if _, err := uuid.Parse(claims.Subject); err != nil {
+	if id, err := uuid.Parse(claims.Subject); err != nil || id == uuid.Nil {
 		return nil, errors.New("invalid user access token subject")
 	}
-	if _, err := uuid.Parse(claims.SessionID); err != nil || claims.AuthTime == nil || claims.AuthEpoch < 0 {
+	if id, err := uuid.Parse(claims.SessionID); err != nil || id == uuid.Nil || claims.AuthTime == nil || claims.AuthEpoch < 0 || claims.AuthTime.Time.After(time.Now().Add(time.Minute)) {
 		return nil, errors.New("invalid user access token session claims")
 	}
+	claims.verified = true
+	claims.credential = sealIdentity(claims)
 	return claims, nil
 }
 
@@ -198,12 +202,17 @@ func ValidateOAuthAccessToken(secret, tokenString, audience string) (*Claims, er
 	if claims.TokenUse != tokenUseOAuthMCP || claims.ClientID == "" || claims.Scope == "" || claims.AgentID != "" || claims.MustChangePassword {
 		return nil, errors.New("invalid OAuth access token profile")
 	}
-	if _, err := uuid.Parse(claims.Subject); err != nil {
+	if id, err := uuid.Parse(claims.Subject); err != nil || id == uuid.Nil {
 		return nil, errors.New("invalid OAuth access token subject")
+	}
+	if claims.AuthEpoch < 0 || claims.SessionID != "" || claims.AuthTime != nil {
+		return nil, errors.New("invalid OAuth access token session claims")
 	}
 	if err := requireExactAudience(claims, audience); err != nil {
 		return nil, fmt.Errorf("invalid OAuth access token: %w", err)
 	}
+	claims.verified = true
+	claims.credential = sealIdentity(claims)
 	return claims, nil
 }
 
@@ -216,13 +225,15 @@ func ValidateSubdomainToken(secret, tokenString string, targetAgentID uuid.UUID)
 	if claims.TokenUse != tokenUseSubdomain || claims.AgentID != targetAgentID.String() || claims.ClientID != "" || claims.Scope != "" || claims.MustChangePassword {
 		return nil, errors.New("invalid subdomain token profile")
 	}
-	if _, err := uuid.Parse(claims.Subject); err != nil {
+	if id, err := uuid.Parse(claims.Subject); err != nil || id == uuid.Nil || targetAgentID == uuid.Nil {
 		return nil, errors.New("invalid subdomain token subject")
 	}
 	sessionID, err := uuid.Parse(claims.SessionID)
 	if err != nil || sessionID == uuid.Nil || claims.AuthEpoch < 0 {
 		return nil, errors.New("invalid subdomain token session claims")
 	}
+	claims.verified = true
+	claims.credential = sealIdentity(claims)
 	return claims, nil
 }
 

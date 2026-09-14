@@ -16,7 +16,7 @@ interface EnvVar {
   updatedAt?: string
 }
 
-const props = defineProps<{ agentId: string }>()
+const props = defineProps<{ agentId: string; running: boolean }>()
 const emit = defineEmits<{ populated: [count: number] }>()
 
 const toast = useToast()
@@ -30,6 +30,8 @@ const dialogVisible = ref(false)
 const selected = ref<EnvVar | null>(null)
 const formValue = ref('')
 const saving = ref(false)
+const restartRequired = ref(false)
+const restarting = ref(false)
 
 async function load() {
   loading.value = true
@@ -82,6 +84,7 @@ async function save() {
     toast.add({ severity: 'success', summary: t('agentConfig.envVars.updated', { slug: selected.value.slug }), life: 3000 })
     dialogVisible.value = false
     formValue.value = ''
+    restartRequired.value = props.running
     await load()
   } catch (err: any) {
     toast.add({ severity: 'error', summary: err.response?.data?.error || t('agentConfig.common.saveFailed'), life: 5000 })
@@ -103,6 +106,7 @@ async function clearValue(ev: EnvVar) {
       try {
         await api.delete(`/api/v1/agents/${props.agentId}/env-vars/${ev.slug}`)
         toast.add({ severity: 'success', summary: t('agentConfig.envVars.cleared', { slug: ev.slug }), life: 3000 })
+        restartRequired.value = props.running
         await load()
       } catch (err: any) {
         toast.add({ severity: 'error', summary: err.response?.data?.error || t('agentConfig.envVars.clearFailed'), life: 5000 })
@@ -111,11 +115,47 @@ async function clearValue(ev: EnvVar) {
   })
 }
 
+async function restartAgent() {
+  restarting.value = true
+  try {
+    await api.post(`/api/v1/agents/${props.agentId}/suspend`, {})
+    await api.post(`/api/v1/agents/${props.agentId}/start`, {})
+    restartRequired.value = false
+    toast.add({ severity: 'success', summary: t('agentConfig.envVars.restarted'), life: 3000 })
+  } catch (err: any) {
+    toast.add({ severity: 'error', summary: err.response?.data?.error || t('agentConfig.envVars.restartFailed'), life: 5000 })
+  } finally {
+    restarting.value = false
+  }
+}
+
+function confirmRestartAgent() {
+  confirm.require({
+    message: t('agentConfig.envVars.restartConfirmation'),
+    header: t('agentConfig.envVars.restartNow'),
+    icon: 'pi pi-exclamation-triangle',
+    acceptClass: 'p-button-warning',
+    accept: restartAgent,
+  })
+}
+
 onMounted(load)
 </script>
 
 <template>
   <div>
+    <Message v-if="restartRequired" severity="warn" :closable="false" style="margin-bottom: 1rem">
+      <div style="display: flex; align-items: center; justify-content: space-between; gap: 1rem; width: 100%; flex-wrap: wrap">
+        <span>{{ t('agentConfig.envVars.restartRequired') }}</span>
+        <Button
+          :label="t('agentConfig.envVars.restartNow')"
+          icon="pi pi-refresh"
+          size="small"
+          :loading="restarting"
+          @click="confirmRestartAgent"
+        />
+      </div>
+    </Message>
     <DataTable v-if="!loading" :value="envVars" stripedRows>
       <template #empty>
         <div style="text-align: center; padding: 2rem; color: var(--p-text-muted-color)">

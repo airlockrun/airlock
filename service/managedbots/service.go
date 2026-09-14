@@ -25,6 +25,7 @@ import (
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/airlockrun/airlock/service"
+	"github.com/airlockrun/airlock/service/systemchat"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"
@@ -107,9 +108,6 @@ type SessionCreated struct {
 // TenantBridgeSystem if IsSystem; agent-bound sessions also require
 // agent-admin on the target.
 func (s *Service) CreateSession(ctx context.Context, p authz.Principal, req CreateSessionRequest) (SessionCreated, error) {
-	if !p.IsAuthenticatedUser() {
-		return SessionCreated{}, service.ErrUnauthorized
-	}
 	if req.IsSystem == (req.AgentID != uuid.Nil) {
 		return SessionCreated{}, service.Detail(service.ErrInvalidInput,
 			"exactly one of agent_id or is_system must be set")
@@ -162,11 +160,30 @@ func (s *Service) CreateSession(ctx context.Context, p authz.Principal, req Crea
 		name = "Airlock bot"
 	}
 
-	var sysConvPg pgtype.UUID
+	tx, err := s.db.Pool().Begin(ctx)
+	if err != nil {
+		return SessionCreated{}, err
+	}
+	defer tx.Rollback(ctx)
+	q = q.WithTx(tx)
+	conversation := ""
 	if req.SystemConversationID != uuid.Nil {
-		sysConvPg = pgtype.UUID{Bytes: req.SystemConversationID, Valid: true}
+		conversation = req.SystemConversationID.String()
+	}
+	chatOrigin, err := systemchat.CaptureAsyncOrigin(ctx, q, p, req.AgentID, conversation)
+	if err != nil {
+		return SessionCreated{}, err
+	}
+	var sysConvPg pgtype.UUID
+	if chatOrigin.Valid {
+		origin, err := q.GetAsyncChatOrigin(ctx, chatOrigin)
+		if err != nil {
+			return SessionCreated{}, err
+		}
+		sysConvPg = origin.SystemConversationID
 	}
 	if _, err := q.CreateManagedBotSession(ctx, dbq.CreateManagedBotSessionParams{
+		ChatOriginID:         chatOrigin,
 		OwnerID:              pgtype.UUID{Bytes: p.UserID, Valid: true},
 		AgentID:              agentPg,
 		IsSystem:             req.IsSystem,
@@ -176,6 +193,9 @@ func (s *Service) CreateSession(ctx context.Context, p authz.Principal, req Crea
 		SystemConversationID: sysConvPg,
 	}); err != nil {
 		s.logger.Error("create managed bot session failed", zap.Error(err))
+		return SessionCreated{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
 		return SessionCreated{}, err
 	}
 

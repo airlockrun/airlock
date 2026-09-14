@@ -3,7 +3,10 @@ package authz
 import (
 	"context"
 
+	"github.com/airlockrun/agentsdk"
+
 	"github.com/airlockrun/airlock/apperr"
+	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -26,7 +29,26 @@ func Authorize(ctx context.Context, q *dbq.Queries, p Principal, a Action, agent
 	if !ok {
 		panic("authz: unknown action " + string(a))
 	}
+	validateRequirement(a, req)
+	if p.Kind == KindRegisteredUser && p.UserID == uuid.Nil {
+		return apperr.ErrUnauthorized
+	}
+	if !p.Valid() {
+		return apperr.ErrForbidden
+	}
+	if p.Identity != nil {
+		live, err := p.Identity.Resolve(ctx, q)
+		if err != nil || live.Subject != p.UserID.String() {
+			return apperr.ErrUnauthorized
+		}
+		p.TenantRole = auth.Role(live.TenantRole)
+		if a != TenantSelfPasskeyManage && a != AccountSelfView && live.MustChangePassword {
+			return apperr.ErrForbidden
+		}
+	}
 	switch req.Axis {
+	case AxisApp:
+		return authorizeAppRuntime(ctx, q, p, agentID)
 	case AxisAuthenticated:
 		if !p.IsAuthenticatedUser() {
 			return unauthenticatedOrForbidden(p)
@@ -43,6 +65,9 @@ func Authorize(ctx context.Context, q *dbq.Queries, p Principal, a Action, agent
 		}
 		return nil
 	case AxisIntegration:
+		if a == AgentTestExecutor && p.Kind != KindCodegen {
+			return apperr.ErrForbidden
+		}
 		if p.Kind == KindCodegen {
 			if p.BuildID == uuid.Nil || p.CodegenAgentID == uuid.Nil || p.CodegenAgentID != agentID {
 				return apperr.ErrForbidden
@@ -51,34 +76,74 @@ func Authorize(ctx context.Context, q *dbq.Queries, p Principal, a Action, agent
 				ID:      dbqUUID(p.BuildID),
 				AgentID: dbqUUID(agentID),
 			})
-			if err != nil || !active {
+			if err != nil {
+				return err
+			}
+			if !active {
 				return apperr.ErrForbidden
 			}
 			return nil
 		}
-		if p.Kind == KindRegisteredUser && p.UserID == uuid.Nil {
-			return apperr.ErrUnauthorized
+		access, _, err := p.EffectiveAgentAccessChecked(ctx, q, agentID)
+		if err != nil {
+			return err
 		}
-		if !AccessAtLeast(p.EffectiveAgentAccess(ctx, q, agentID), req.Agent) {
+		if !AccessAtLeast(access, req.Agent) {
 			return apperr.ErrForbidden
 		}
 		return nil
-	default: // AxisAgent
-		// Preserve the "no JWT" 401 for a registered-user principal that
-		// somehow carries no UserID; anonymous/trigger resolve to public
-		// and simply fall below any member/admin requirement (403).
-		if p.Kind == KindRegisteredUser && p.UserID == uuid.Nil {
-			return apperr.ErrUnauthorized
+	case AxisAgent:
+		access, _, err := p.EffectiveAgentAccessChecked(ctx, q, agentID)
+		if err != nil {
+			return err
 		}
-		if !AccessAtLeast(p.EffectiveAgentAccess(ctx, q, agentID), req.Agent) {
+		if !AccessAtLeast(access, req.Agent) {
 			return apperr.ErrForbidden
 		}
 		return nil
+	default:
+		panic("authz: invalid policy axis")
 	}
+}
+
+func validateRequirement(a Action, req Requirement) {
+	switch req.Axis {
+	case AxisTenant:
+		if req.Tenant.Valid() && req.Agent == "" {
+			return
+		}
+	case AxisAgent, AxisIntegration:
+		if accessRank(req.Agent) >= 0 && req.Tenant == "" {
+			return
+		}
+	case AxisAuthenticated, AxisApp:
+		if req.Agent == "" && req.Tenant == "" {
+			return
+		}
+	}
+	panic("authz: invalid requirement for " + string(a))
 }
 
 func dbqUUID(id uuid.UUID) pgtype.UUID {
 	return pgtype.UUID{Bytes: id, Valid: true}
+}
+
+// AuthorizeResolvedAccess applies an agent-axis policy to a service-resolved
+// access ceiling. It does not authenticate a caller or establish object ownership.
+// Scoped conversation capabilities remain responsible for their object binding.
+func AuthorizeResolvedAccess(a Action, access agentsdk.Access) error {
+	req, ok := policy[a]
+	if !ok {
+		panic("authz: unknown action " + string(a))
+	}
+	validateRequirement(a, req)
+	if req.Axis != AxisAgent {
+		panic("authz: not an agent-axis action: " + string(a))
+	}
+	if !AccessAtLeast(access, req.Agent) {
+		return apperr.ErrForbidden
+	}
+	return nil
 }
 
 // unauthenticatedOrForbidden distinguishes "no credentials at all" (401)
@@ -103,7 +168,14 @@ func unauthenticatedOrForbidden(p Principal) error {
 // Anonymous / trigger principals fall through to Authorize, which
 // rejects them with 401/403 as appropriate.
 func AuthorizeOwnedResource(ctx context.Context, q *dbq.Queries, p Principal, ownerID uuid.UUID, adminAction Action) error {
-	if p.Kind == KindRegisteredUser && p.UserID != uuid.Nil && p.UserID == ownerID {
+	// Validate the action even for owners: ownership must not bypass a malformed contract.
+	RequiredTenantRole(adminAction)
+	if p.Identity != nil {
+		if err := Authorize(ctx, q, p, ResourceView, uuid.Nil); err != nil {
+			return err
+		}
+	}
+	if p.IsAuthenticatedUser() && p.UserID == ownerID {
 		return nil
 	}
 	return Authorize(ctx, q, p, adminAction, uuid.Nil)

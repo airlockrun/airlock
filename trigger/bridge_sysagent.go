@@ -153,8 +153,16 @@ func (m *BridgeManager) handleSystemBridgeEvent(ctx context.Context, br dbq.Brid
 	// Cancel button tap on a sysagent run.
 	if isCancelTap(event) {
 		runIDStr := strings.TrimPrefix(event.Callback.Data, "cancel:")
-		if runID, err := uuid.Parse(runIDStr); err == nil {
-			m.sysagent.CancelRun(runID)
+		runID, err := uuid.Parse(runIDStr)
+		if err != nil {
+			return err
+		}
+		claims, err := auth.AdmitBridge(ctx, q, event.BridgeID, event.SenderID, event.ExternalID)
+		if err != nil {
+			return err
+		}
+		if _, err := m.sysagent.CancelRun(ctx, authz.PrincipalFromClaims(claims), runID); err != nil {
+			return err
 		}
 		if tg, ok := driver.(*TelegramDriver); ok && event.Callback.AckID != "" {
 			_ = tg.AnswerCallbackQuery(ctx, br.BotTokenRef, event.Callback.AckID, "Cancelled")
@@ -167,22 +175,11 @@ func (m *BridgeManager) handleSystemBridgeEvent(ctx context.Context, br dbq.Brid
 	// user's first message (typically /start from the deep link) becomes
 	// a one-tap path to linking, rather than a passive "go to airlock"
 	// hint.
-	identity, err := q.GetPlatformIdentity(ctx, dbq.GetPlatformIdentityParams{
-		Platform:       br.Type,
-		PlatformUserID: event.SenderID,
-	})
+	claims, err := auth.AdmitBridge(ctx, q, event.BridgeID, event.SenderID, event.ExternalID)
 	if err != nil {
 		return m.handleAuthCommand(ctx, br, driver, event)
 	}
-	userID := pgUUID(identity.UserID)
-	// Resolve the tenant role so the sysagent tool filter (buildToolSet)
-	// admits tenant-axis tools (create_agent, …) for managers/admins. The
-	// identity FK guarantees the user row exists — a miss is a real error.
-	user, err := q.GetUserByID(ctx, identity.UserID)
-	if err != nil {
-		return fmt.Errorf("system bridge: resolve user tenant role: %w", err)
-	}
-	p := authz.UserPrincipal(userID, auth.Role(user.TenantRole))
+	p := authz.PrincipalFromClaims(claims)
 
 	// Files handling. System bridges only accept voice messages — any
 	// non-voice attachment is rejected with a clear message; voice
@@ -212,16 +209,7 @@ func (m *BridgeManager) handleSystemBridgeEvent(ctx context.Context, br dbq.Brid
 	// Per-bridge sticky sysagent thread for this user. The partial
 	// unique index on (user_id, bridge_id) WHERE bridge_id IS NOT NULL
 	// guarantees one row per (user, bridge); the upsert is idempotent.
-	title := truncate(event.Text, 100)
-	if title == "" {
-		title = br.Name
-	}
-	conv, err := q.EnsureSystemConversationForBridge(ctx, dbq.EnsureSystemConversationForBridgeParams{
-		UserID:     toPgUUID(userID),
-		BridgeID:   toPgUUID(uuid.UUID(br.ID.Bytes)),
-		Title:      title,
-		ExternalID: pgtype.Text{String: event.ExternalID, Valid: event.ExternalID != ""},
-	})
+	conv, err := m.sysagent.EnsureBridgeConversation(ctx, p)
 	if err != nil {
 		return err
 	}
@@ -288,7 +276,7 @@ func (m *BridgeManager) handleSystemBridgeEvent(ctx context.Context, br dbq.Brid
 	// correct floor here.
 	access := agentsdk.AccessUser
 
-	slashConv := NewSysagentSlashConv(m.sysagent, q, p, m.logger)
+	slashConv := NewSysagentSlashConv(m.sysagent, p, m.logger)
 	if cmd, scerr := TrySlashCommand(ctx, slashConv, convPg, access, event.Text); scerr != nil {
 		m.logger.Error("system bridge slash command failed",
 			zap.String("bridge", br.Name),
@@ -351,28 +339,22 @@ func (m *BridgeManager) handleSystemBridgeEvent(ctx context.Context, br dbq.Brid
 // inbound turn). Invoked by sysagent's build/upgrade notifier via the
 // BridgeResumer interface; it runs synchronously and the caller drives it from
 // a goroutine.
-func (m *BridgeManager) ResumeSystemConversation(ctx context.Context, conversationID uuid.UUID) error {
+func (m *BridgeManager) ResumeSystemConversation(ctx context.Context, conversationID, originRunID uuid.UUID) error {
 	if m.sysagent == nil {
 		return fmt.Errorf("sysagent runtime not attached")
 	}
-	q := dbq.New(m.db.Pool())
-	conv, err := q.GetSystemConversationByID(ctx, toPgUUID(conversationID))
+	p, err := m.sysagent.ResumePrincipal(ctx, conversationID, originRunID)
+	if err != nil {
+		return err
+	}
+	detail, err := m.sysagent.GetConversation(ctx, p, conversationID)
 	if err != nil {
 		return fmt.Errorf("load system conversation: %w", err)
 	}
+	conv := detail.Conversation
 	if conv.Source != "bridge" || !conv.BridgeID.Valid || !conv.ExternalID.Valid || conv.ExternalID.String == "" {
 		return fmt.Errorf("conversation %s is not a deliverable bridge thread", conversationID)
 	}
-
-	br, err := q.GetBridgeByID(ctx, conv.BridgeID)
-	if err != nil {
-		return fmt.Errorf("load bridge: %w", err)
-	}
-	user, err := q.GetUserByID(ctx, conv.UserID)
-	if err != nil {
-		return fmt.Errorf("load user: %w", err)
-	}
-	p := authz.UserPrincipal(pgUUID(conv.UserID), auth.Role(user.TenantRole))
 
 	// Producer: the in-process run feeds the bridge sink. Consumer: the
 	// shared StreamToBridge primitive renders to the chat. The sink does not
@@ -387,7 +369,7 @@ func (m *BridgeManager) ResumeSystemConversation(ctx context.Context, conversati
 	}()
 
 	// text="" + approved=nil → the auto-resume branch in runChat.
-	_, runErr := m.sysagent.RunPromptInline(ctx, p, conversationID, "", br.Type, nil, "", sink, sink.setRunID)
+	_, runErr := m.sysagent.RunPromptInline(ctx, p, conversationID, "", "telegram", nil, "", sink, sink.setRunID)
 	close(respEvents)
 	<-deliverDone
 	if deliverErr != nil {

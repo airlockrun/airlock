@@ -156,6 +156,9 @@ func (b *BuildService) runCodegen(
 	// Anything else wraps the underlying error with %w so the outer
 	// cancellation check still fires via errors.Is.
 	if solResult.Status != sol.RunExited {
+		if solResult.Status == sol.RunStepLimitReached {
+			return "", "", "", errors.New("sol codegen failed: step limit reached before completion")
+		}
 		if solResult.Status == sol.RunCompleted {
 			logLine("[exit] agent did not call the exit tool after 2 reminders — treating as failure")
 			return "", "", "", errors.New("sol codegen failed: agent did not call the exit tool")

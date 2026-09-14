@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/airlockrun/airlock/db/dbq"
@@ -85,13 +84,12 @@ func AgentMiddleware(jwtSecret string, q agentTokenQuerier) func(http.Handler) h
 	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			header := r.Header.Get("Authorization")
-			if header == "" {
+			token, supplied, err := RequestBearerToken(r)
+			if !supplied {
 				http.Error(w, `{"error":"missing authorization header"}`, http.StatusUnauthorized)
 				return
 			}
-			token, ok := strings.CutPrefix(header, "Bearer ")
-			if !ok || token == "" {
+			if err != nil {
 				http.Error(w, `{"error":"invalid authorization header"}`, http.StatusUnauthorized)
 				return
 			}

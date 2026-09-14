@@ -36,8 +36,8 @@ type Translate = AirlockI18nComposable['t']
 
 // Trimmed sysagent equivalent of stores/chat.ts. Sysagent conversations stay
 // short (operator chats), so this store skips the agent-chat machinery
-// for sliding-window pagination, file uploads, slash commands, /compact,
-// and A2A subagent gating. WS event shapes are reused verbatim — backend
+// for sliding-window pagination, file uploads, slash commands, and /compact.
+// WS event shapes are reused verbatim — backend
 // emits the same TextDelta/ToolCall/ToolResult/ConfirmationRequired/
 // RunComplete/RunError envelopes on the conversation topic.
 
@@ -128,7 +128,7 @@ function enrichMessages(rows: SystemMessageInfo[], t: Translate): DisplayMessage
           kind: 'tool',
           toolCallId: p.toolCallId,
           toolName: p.toolName || 'tool',
-          label: toolLabel(p.toolName || 'tool', rawArgs, t),
+          label: toolLabel(p.toolName || 'tool', t),
           input: formatToolArgs(rawArgs),
           description: toolDescription(rawArgs),
           output: '',
@@ -224,10 +224,10 @@ export const useSystemChatStore = defineStore('systemChat', () => {
   // Address gate — sysagent events publish on the user's UUID topic
   // with the conversation id on envelope.conversationId. Both must match for
   // the event to belong to the active conversation. Subagent envelopes don't
-  // apply (no A2A surface in sysagent).
+  // apply.
   function onConversationMessage(type: string, handler: (payload: unknown) => void) {
     return ws.onMessage(type, (payload, env) => {
-      if (!env || env.subagent) return
+      if (!env) return
       const auth = useAuthStore()
       if (!auth.user?.id || env.topicId !== auth.user.id) return
       if (!conversationId.value || env.conversationId !== conversationId.value) return
@@ -387,7 +387,7 @@ export const useSystemChatStore = defineStore('systemChat', () => {
         kind: 'tool',
         toolCallId: b.toolCallId,
         toolName: tc?.toolName || 'tool',
-        label: toolLabel(tc?.toolName || 'tool', rawArgs, t),
+        label: toolLabel(tc?.toolName || 'tool', t),
         input: formatToolArgs(rawArgs),
         description: toolDescription(rawArgs),
         output: tc?.output || '',

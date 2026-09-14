@@ -21,7 +21,7 @@
 #                     independently, so bundled DB + external S3 works)
 # See .env.example for every section. install.sh writes a correct .env for you.
 #
-# First launch pulls airlock, frontend, agent-builder, and agent-base images
+# First launch pulls airlock, frontend, agent-builder, agent-base, and executor images
 # from ghcr.io — no local builds. The `build:` blocks are a dev fallback for
 # working against this repo. (TLS_MODE=wildcard is the one mode that needs a
 # local build: caddy with DNS provider plugins — see caddy/Dockerfile +
@@ -222,7 +222,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.agent-builder
-    image: ghcr.io/airlockrun/airlock-agent-builder:v0.6.3
+    image: ghcr.io/airlockrun/airlock-agent-builder:v0.7.0-rc.1
     command: ["true"]
     restart: "no"
 
@@ -230,8 +230,26 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.agent-base
-    image: ghcr.io/airlockrun/airlock-agent-base:v0.6.3
+    image: ghcr.io/airlockrun/airlock-agent-base:v0.7.0-rc.1
     command: ["true"]
+    restart: "no"
+
+  js-executor-image:
+    build:
+      context: .
+      dockerfile: Dockerfile.js-executor
+    image: ${JS_EXECUTOR_IMAGE:-ghcr.io/airlockrun/airlock-js-executor:v0.7.0-rc.1}
+    entrypoint: ["/usr/local/bin/js-executor-check"]
+    command: []
+    network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 256m
+    memswap_limit: 256m
+    cpus: 1
+    pids_limit: 128
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=32m"]
     restart: "no"
 
   # Rootless BuildKit daemon. airlock builds agent images through this (via
@@ -273,7 +291,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.airlock
-    image: ghcr.io/airlockrun/airlock:v0.6.3
+    image: ghcr.io/airlockrun/airlock:v0.7.0-rc.1
     depends_on:
       # required:false — when a service's profile is inactive (external Postgres
       # via bundled-db off, external S3 via bundled-s3 off) it doesn't start and
@@ -292,6 +310,8 @@ services:
       agent-builder-image:
         condition: service_completed_successfully
       agent-base-image:
+        condition: service_completed_successfully
+      js-executor-image:
         condition: service_completed_successfully
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -387,6 +407,7 @@ services:
       # matched to this release). Set in .env to point at a custom build.
       AGENT_BUILDER_IMAGE: ${AGENT_BUILDER_IMAGE:-}
       AGENT_BASE_IMAGE: ${AGENT_BASE_IMAGE:-}
+      JS_EXECUTOR_IMAGE: ${JS_EXECUTOR_IMAGE:-}
 
       # Codegen workspace lives inside the airlock-data named volume so
       # that scratch dirs airlock writes are visible to sibling
@@ -433,7 +454,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.frontend
-    image: ghcr.io/airlockrun/airlock-frontend:v0.6.3
+    image: ghcr.io/airlockrun/airlock-frontend:v0.7.0-rc.1
     restart: unless-stopped
 
   caddy:

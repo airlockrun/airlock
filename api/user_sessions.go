@@ -12,6 +12,7 @@ import (
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
+	"github.com/airlockrun/airlock/service/accounts"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -46,7 +47,6 @@ func issueUserSessionTokensWithQueries(ctx context.Context, q *dbq.Queries, jwtS
 	if strings.TrimSpace(deviceName) == "" {
 		deviceName = "Unknown device"
 	}
-	// airlockvet:allow-dbq reason: pre-Principal login/device-login creates a first-party session after credentials or browser approval prove identity
 	now := time.Now()
 	// airlockvet:allow-dbq reason: credential proof precedes creation of the Principal's revocable first-party session
 	session, err := q.CreateUserSession(ctx, dbq.CreateUserSessionParams{
@@ -235,7 +235,7 @@ func clearWebSessionCookies(w http.ResponseWriter, publicURL string) {
 }
 
 func (h *AuthHandler) browserRefreshToken(r *http.Request, bodyToken string) (string, error) {
-	cookie, err := r.Cookie(refreshCookieName)
+	cookie, err := auth.UniqueCookie(r, refreshCookieName)
 	if err == nil {
 		if r.Header.Get("Origin") != configuredOrigin(h.publicURL) {
 			return "", errors.New("origin mismatch")
@@ -265,15 +265,9 @@ func configuredOriginURL(publicURL string) *url.URL {
 }
 
 func (h *AuthHandler) ListSessions(w http.ResponseWriter, r *http.Request) {
-	userID := auth.UserIDFromContext(r.Context())
-	if userID == uuid.Nil {
-		writeError(w, http.StatusUnauthorized, "not authenticated")
-		return
-	}
-	// airlockvet:allow-dbq reason: owner-scoped session list for current authenticated user
-	rows, err := dbq.New(h.db.Pool()).ListUserSessionsByUser(r.Context(), toPgUUID(userID))
+	rows, err := accounts.ListSessions(r.Context(), dbq.New(h.db.Pool()), principalFromRequest(r))
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal error")
+		writeServiceError(w, err, "failed to list sessions")
 		return
 	}
 	out := make([]*airlockv1.UserSession, len(rows))
@@ -284,20 +278,14 @@ func (h *AuthHandler) ListSessions(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *AuthHandler) RevokeSession(w http.ResponseWriter, r *http.Request) {
-	userID := auth.UserIDFromContext(r.Context())
-	if userID == uuid.Nil {
-		writeError(w, http.StatusUnauthorized, "not authenticated")
-		return
-	}
 	sessionID, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid session id")
 		return
 	}
-	// airlockvet:allow-dbq reason: owner-scoped session revocation for current authenticated user
-	_, err = dbq.New(h.db.Pool()).RevokeUserSessionByID(r.Context(), dbq.RevokeUserSessionByIDParams{ID: toPgUUID(sessionID), UserID: toPgUUID(userID)})
+	err = accounts.RevokeSession(r.Context(), dbq.New(h.db.Pool()), principalFromRequest(r), sessionID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal error")
+		writeServiceError(w, err, "failed to revoke session")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

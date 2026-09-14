@@ -16,9 +16,12 @@ import (
 	"strconv"
 
 	"github.com/airlockrun/agentsdk/wire"
+	"github.com/airlockrun/airlock/auth"
+	"github.com/airlockrun/airlock/authz"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/airlockrun/airlock/secrets"
+	"github.com/airlockrun/airlock/service/bridgeevents"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"
@@ -257,7 +260,7 @@ type BridgeManager struct {
 	// bridges service already holds *BridgeManager, so a direct reference
 	// would be a cycle. Nil until wired; a managed_bot_created before then is
 	// dropped (managed bridges only start polling after wiring).
-	managedBotIngest func(ctx context.Context, managerToken string, botUserID int64, botUsername string) (string, error)
+	managedBotIngest func(ctx context.Context, managerToken string, botUserID int64, botUsername string) (uuid.UUID, uuid.UUID, error)
 }
 
 // AttachSysagent wires the sysagent runtime after the router has built
@@ -268,7 +271,7 @@ func (m *BridgeManager) AttachSysagent(s SysagentRuntime) {
 
 // AttachManagedBotIngest wires the managed-bot ingest callback (see the
 // field doc). Idempotent; the last set wins.
-func (m *BridgeManager) AttachManagedBotIngest(fn func(ctx context.Context, managerToken string, botUserID int64, botUsername string) (string, error)) {
+func (m *BridgeManager) AttachManagedBotIngest(fn func(ctx context.Context, managerToken string, botUserID int64, botUsername string) (uuid.UUID, uuid.UUID, error)) {
 	m.managedBotIngest = fn
 }
 
@@ -653,9 +656,14 @@ func (m *BridgeManager) HandleEvent(ctx context.Context, event BridgeEvent) erro
 	// those resolve a *suspended* run, this aborts a *running* one.
 	if isCancelTap(event) {
 		runIDStr := strings.TrimPrefix(event.Callback.Data, "cancel:")
-		if runID, err := uuid.Parse(runIDStr); err == nil {
-			m.prompter.dispatcher.CancelRun(runID)
+		runID, err := uuid.Parse(runIDStr)
+		if err != nil {
+			return err
 		}
+		if err := bridgeevents.Cancel(ctx, m.db, event.BridgeID, runID, event.SenderID, event.ExternalID); err != nil {
+			return err
+		}
+		m.prompter.dispatcher.CancelRun(runID)
 		// Telegram needs an explicit ack to clear the spinner.
 		if tg, ok := driver.(*TelegramDriver); ok && event.Callback.AckID != "" {
 			_ = tg.AnswerCallbackQuery(ctx, br.BotTokenRef, event.Callback.AckID, "Cancelled")
@@ -675,10 +683,7 @@ func (m *BridgeManager) HandleEvent(ctx context.Context, event BridgeEvent) erro
 	// Resolve user_id from platform identity. Lookup failure means the
 	// sender hasn't run /auth — bridge chat requires a linked identity, so
 	// we silently drop. (/auth itself ran above, before this gate.)
-	identity, idErr := q.GetPlatformIdentity(ctx, dbq.GetPlatformIdentityParams{
-		Platform:       br.Type,
-		PlatformUserID: event.SenderID,
-	})
+	claims, idErr := auth.AdmitBridge(ctx, q, event.BridgeID, event.SenderID, event.ExternalID)
 	if idErr != nil {
 		if isStartCommand(event.Text) {
 			return m.handleAuthCommand(ctx, br, driver, event)
@@ -689,15 +694,16 @@ func (m *BridgeManager) HandleEvent(ctx context.Context, event BridgeEvent) erro
 		)
 		return nil
 	}
-	userID := pgUUID(identity.UserID)
+	userID := authz.PrincipalFromClaims(claims).UserID
 
 	// Resolve effective echo for this conversation from the user's
 	// per-channel override, falling back to the driver default.
 	echo := driver.DefaultEcho()
-	if conv, err := q.GetConversationBySource(ctx, dbq.GetConversationBySourceParams{
-		AgentID: toPgUUID(agentID),
-		UserID:  toPgUUID(userID),
-		Source:  "bridge",
+	if conv, err := q.GetBridgeConversation(ctx, dbq.GetBridgeConversationParams{
+		AgentID:    toPgUUID(agentID),
+		UserID:     toPgUUID(userID),
+		BridgeID:   toPgUUID(event.BridgeID),
+		ExternalID: pgtype.Text{String: event.ExternalID, Valid: true},
 	}); err == nil {
 		echo = ResolveEcho(conv.Settings, driver.DefaultEcho())
 	}

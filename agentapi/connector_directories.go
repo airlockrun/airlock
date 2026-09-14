@@ -90,6 +90,10 @@ func (h *Handler) ConnectorDirectoryImport(w http.ResponseWriter, r *http.Reques
 	if !ok {
 		return
 	}
+	if _, err := h.appService().ResolveRun(callbackContext(r), runID); err != nil {
+		h.appError(w, err)
+		return
+	}
 	result, err := h.connectorDirectories.Import(r.Context(), auth.AgentIDFromContext(r.Context()), runID, chi.URLParam(r, "needSlug"), chi.URLParam(r, "directory"), request)
 	writeDirectoryResult(w, result, err)
 }
@@ -101,6 +105,10 @@ func (h *Handler) ConnectorDirectoryExport(w http.ResponseWriter, r *http.Reques
 	}
 	runID, ok := connectorRunID(w, r)
 	if !ok {
+		return
+	}
+	if _, err := h.appService().ResolveRun(callbackContext(r), runID); err != nil {
+		h.appError(w, err)
 		return
 	}
 	result, err := h.connectorDirectories.Export(r.Context(), auth.AgentIDFromContext(r.Context()), runID, chi.URLParam(r, "needSlug"), chi.URLParam(r, "directory"), request)

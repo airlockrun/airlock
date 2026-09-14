@@ -34,8 +34,9 @@ const (
 //   - Diagnostics: upgrade auto_fix only — writes DIAGNOSTICS.md into
 //     the codegen workspace before Sol sees it.
 type BuildPlan struct {
-	Agent dbq.Agent
-	Kind  BuildKind
+	ChatOriginID pgtype.UUID
+	Agent        dbq.Agent
+	Kind         BuildKind
 
 	StartCommit    string
 	PreserveBranch string

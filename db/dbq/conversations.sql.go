@@ -11,83 +11,6 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const createA2AConversation = `-- name: CreateA2AConversation :one
-INSERT INTO agent_conversations (agent_id, user_id, source, title, metadata, settings)
-VALUES ($1, $2, 'a2a', $3, '{}'::jsonb, '{}'::jsonb)
-RETURNING id, agent_id, bridge_id, user_id, source, external_id, title, metadata, settings, context_checkpoint_message_id, created_at, updated_at
-`
-
-type CreateA2AConversationParams struct {
-	AgentID pgtype.UUID `json:"agent_id"`
-	UserID  pgtype.UUID `json:"user_id"`
-	Title   string      `json:"title"`
-}
-
-// A2A: each new context (caller passed no contextId) is its own
-// conversation on the *called* agent, owned by the original user
-// (user_id may be NULL for anonymous external-MCP callers). source is
-// always 'a2a' so the partial DM index never collapses these. Plain
-// INSERT — no upsert, every call without a contextId is a fresh thread.
-func (q *Queries) CreateA2AConversation(ctx context.Context, arg CreateA2AConversationParams) (AgentConversation, error) {
-	row := q.db.QueryRow(ctx, createA2AConversation, arg.AgentID, arg.UserID, arg.Title)
-	var i AgentConversation
-	err := row.Scan(
-		&i.ID,
-		&i.AgentID,
-		&i.BridgeID,
-		&i.UserID,
-		&i.Source,
-		&i.ExternalID,
-		&i.Title,
-		&i.Metadata,
-		&i.Settings,
-		&i.ContextCheckpointMessageID,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-	)
-	return i, err
-}
-
-const createMCPA2AConversation = `-- name: CreateMCPA2AConversation :one
-INSERT INTO agent_conversations (agent_id, user_id, source, title, metadata, settings)
-VALUES ($1, $2, 'a2a', $3, $4, '{}'::jsonb)
-RETURNING id, agent_id, bridge_id, user_id, source, external_id, title, metadata, settings, context_checkpoint_message_id, created_at, updated_at
-`
-
-type CreateMCPA2AConversationParams struct {
-	AgentID  pgtype.UUID `json:"agent_id"`
-	UserID   pgtype.UUID `json:"user_id"`
-	Title    string      `json:"title"`
-	Metadata []byte      `json:"metadata"`
-}
-
-// MCP continuations carry a server-generated principal binding in metadata.
-// Callers cannot choose this value; subsequent context/task access must match it.
-func (q *Queries) CreateMCPA2AConversation(ctx context.Context, arg CreateMCPA2AConversationParams) (AgentConversation, error) {
-	row := q.db.QueryRow(ctx, createMCPA2AConversation,
-		arg.AgentID,
-		arg.UserID,
-		arg.Title,
-		arg.Metadata,
-	)
-	var i AgentConversation
-	err := row.Scan(
-		&i.ID,
-		&i.AgentID,
-		&i.BridgeID,
-		&i.UserID,
-		&i.Source,
-		&i.ExternalID,
-		&i.Title,
-		&i.Metadata,
-		&i.Settings,
-		&i.ContextCheckpointMessageID,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-	)
-	return i, err
-}
-
 const createWebConversation = `-- name: CreateWebConversation :one
 INSERT INTO agent_conversations (agent_id, user_id, source, title, metadata, settings)
 VALUES ($1, $2, 'web', $3, '{}'::jsonb, '{}'::jsonb)
@@ -130,27 +53,6 @@ DELETE FROM agent_conversations WHERE id = $1
 func (q *Queries) DeleteConversation(ctx context.Context, id pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, deleteConversation, id)
 	return err
-}
-
-const deleteExpiredAnonA2AConversations = `-- name: DeleteExpiredAnonA2AConversations :execrows
-DELETE FROM agent_conversations
-WHERE user_id IS NULL
-  AND source = 'a2a'
-  AND updated_at < NOW() - make_interval(secs => $1::int)
-`
-
-// Sweeper: anonymous A2A conversations (no owning user, minted for
-// unauthenticated external-MCP callers) have no UI to resume them and
-// would otherwise grow unbounded. Drop any idle past the TTL; the row
-// delete cascades to agent_messages via FK. (user_id IS NULL AND
-// source='a2a') is the precise anon-A2A key — authed A2A convs and
-// bridge convs are untouched.
-func (q *Queries) DeleteExpiredAnonA2AConversations(ctx context.Context, ttlSeconds int32) (int64, error) {
-	result, err := q.db.Exec(ctx, deleteExpiredAnonA2AConversations, ttlSeconds)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
 }
 
 const getConversationByID = `-- name: GetConversationByID :one
@@ -329,8 +231,7 @@ ORDER BY updated_at DESC
 `
 
 // Every web conversation the user owns, across all agents — backs the
-// global sidebar list. Only source='web' (bridge is delivered over the
-// bridge, a2a is sibling transport); the row carries agent_id so the UI
+// global sidebar list. Only source='web'; the row carries agent_id so the UI
 // can label each entry with its agent's name.
 func (q *Queries) ListAllWebConversationsByUser(ctx context.Context, userID pgtype.UUID) ([]AgentConversation, error) {
 	rows, err := q.db.Query(ctx, listAllWebConversationsByUser, userID)
@@ -435,7 +336,7 @@ func (q *Queries) ListConversationFeed(ctx context.Context, arg ListConversation
 
 const listConversationsByAgent = `-- name: ListConversationsByAgent :many
 SELECT id, agent_id, bridge_id, user_id, source, external_id, title, metadata, settings, context_checkpoint_message_id, created_at, updated_at FROM agent_conversations
-WHERE agent_id = $1 AND user_id = $2 AND source <> 'a2a'
+WHERE agent_id = $1 AND user_id = $2 AND source IN ('web','bridge')
 ORDER BY updated_at DESC
 `
 
@@ -445,9 +346,7 @@ type ListConversationsByAgentParams struct {
 }
 
 // Returns conversations for the given agent visible to the given user in
-// the web UI. source='a2a' rows are a sibling-call transport detail (the
-// called agent never "chats" them) and are excluded — surfacing them
-// would also expose a delegated suspension as an actionable card here.
+// the web UI. Only interactive web and bridge threads are exposed.
 func (q *Queries) ListConversationsByAgent(ctx context.Context, arg ListConversationsByAgentParams) ([]AgentConversation, error) {
 	rows, err := q.db.Query(ctx, listConversationsByAgent, arg.AgentID, arg.UserID)
 	if err != nil {

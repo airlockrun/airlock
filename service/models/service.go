@@ -31,8 +31,7 @@ type ModelCatalog interface {
 // re-syncs its cached PromptData after a model-slot change. A model change
 // alters the agent's Capabilities/SupportedModalities, which the prompt and
 // the attach-modality guard render from — without a refresh those stay stale
-// until the next restart. A dispatch-time hash check self-heals as a backstop
-// (see trigger.AgentConfigHash), but this makes the correction immediate.
+// until the next restart.
 type RefreshAgentFunc func(ctx context.Context, agentID uuid.UUID) error
 
 type Service struct {

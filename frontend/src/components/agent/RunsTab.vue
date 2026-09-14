@@ -45,7 +45,6 @@ function runTriggerLabel(trigger: string): string {
     case 'code': return t('operations.run.trigger.code')
     case 'webhook': return t('operations.run.trigger.webhook')
     case 'cron': return t('operations.run.trigger.cron')
-    case 'a2a': return t('operations.run.trigger.a2a')
     case 'job': return t('operations.run.trigger.job')
     case 'background': return t('operations.run.trigger.background')
     case 'route': return t('operations.run.trigger.route')

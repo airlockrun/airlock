@@ -2,7 +2,7 @@
 // need-aware OAuth lifecycle, agent env vars, and aggregate setup status.
 //
 // Authorization uses the standard agent-admin gate (agent_members.role
-// = 'admin'), the same ladder used by members, siblings, and agent
+// = 'admin'), the same ladder used by members and agent
 // configuration ops.
 package connections
 

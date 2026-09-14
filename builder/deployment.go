@@ -93,13 +93,14 @@ func decodeAgentManifest(payload []byte) (wire.AgentManifest, error) {
 
 func rejectDuplicateManifestFields(payload []byte) error {
 	requiredFields := []string{
-		"version", "description", "emoji", "tools", "webhooks", "jobHandlers", "jobCrons", "routes", "topics",
+		"runtimeProtocol", "version", "description", "emoji", "tools", "webhooks", "jobHandlers", "jobCrons", "routes", "topics",
 		"mcpServers", "connections", "envVars", "directories", "instructions", "modelSlots", "staticAssets", "startupHooks", "connectors",
 	}
-	allowed := make(map[string]struct{}, len(requiredFields))
+	allowed := make(map[string]struct{}, len(requiredFields)+1)
 	for _, name := range requiredFields {
 		allowed[name] = struct{}{}
 	}
+	allowed["agentDefinitions"] = struct{}{}
 	decoder := json.NewDecoder(bytes.NewReader(payload))
 	if _, err := decoder.Token(); err != nil {
 		return err
@@ -194,6 +195,12 @@ func consumeUniqueJSONValue(decoder *json.Decoder) error {
 }
 
 func validateAgentManifest(manifest wire.AgentManifest) error {
+	if err := wire.ValidateAgentDefinitions(manifest); err != nil {
+		return err
+	}
+	if err := wire.CheckAppRuntimeProtocol(manifest.RuntimeProtocol); err != nil {
+		return err
+	}
 	if strings.TrimSpace(manifest.Description) == "" {
 		return errors.New("candidate manifest description is required")
 	}
@@ -226,6 +233,7 @@ func validateAgentManifest(manifest wire.AgentManifest) error {
 		}
 	}
 	checks := []error{
+		validateSortedUnique("agentDefinitions", manifest.AgentDefinitions, func(v wire.AgentDefinition) string { return v.Slug }),
 		validateSortedUnique("tools", manifest.Tools, func(v wire.ToolDef) string { return v.Name }),
 		validateSortedUnique("webhooks", manifest.Webhooks, func(v wire.WebhookDef) string { return v.Path }),
 		validateSortedUnique("jobCrons", manifest.JobCrons, func(v wire.JobCronDef) string { return v.Slug }),
@@ -312,23 +320,8 @@ func (b *BuildService) persistCandidateJobManifest(ctx context.Context, buildID,
 	if build.JobManifestExtractedAt.Valid {
 		return errors.New("candidate job manifest was already extracted")
 	}
-	existing, err := q.ListJobHandlersByAgent(ctx, agentID)
-	if err != nil {
-		return fmt.Errorf("list historical job handlers: %w", err)
-	}
-	contracts := make(map[string]wire.JobHandlerDef, len(existing))
-	for _, handler := range existing {
-		contracts[jobssvc.HandlerKey(handler.Name, handler.Version)] = wire.JobHandlerDef{
-			Name: handler.Name, Version: handler.Version, TimeoutMs: handler.TimeoutMs,
-			MaxAttempts: handler.MaxAttempts, InputSchemaHash: handler.InputSchemaHash,
-			OutputSchemaHash: handler.OutputSchemaHash,
-		}
-	}
-	for _, handler := range manifest.JobHandlers {
-		key := jobssvc.HandlerKey(handler.Name, handler.Version)
-		if historical, ok := contracts[key]; ok && !jobssvc.ImmutableContractMatches(historical, handler) {
-			return fmt.Errorf("%w: %s changed its immutable contract", jobssvc.ErrContractConflict, key)
-		}
+	if err := preflightHistoricalJobContracts(ctx, q, agentID, manifest.JobHandlers); err != nil {
+		return err
 	}
 	if err := q.DeleteAgentBuildJobHandlers(ctx, buildID); err != nil {
 		return fmt.Errorf("clear candidate job handlers: %w", err)
@@ -359,6 +352,29 @@ func (b *BuildService) persistCandidateJobManifest(ctx context.Context, buildID,
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("commit candidate job manifest: %w", err)
+	}
+	return nil
+}
+
+func preflightHistoricalJobContracts(ctx context.Context, q *dbq.Queries, agentID pgtype.UUID, handlers []wire.JobHandlerDef) error {
+	existing, err := q.ListJobHandlersByAgent(ctx, agentID)
+	if err != nil {
+		return fmt.Errorf("list historical job handlers: %w", err)
+	}
+	contracts := make(map[string]wire.JobHandlerDef, len(existing))
+	for _, handler := range existing {
+		contracts[jobssvc.HandlerKey(handler.Name, handler.Version)] = wire.JobHandlerDef{
+			Name: handler.Name, Version: handler.Version, TimeoutMs: handler.TimeoutMs,
+			MaxAttempts: handler.MaxAttempts, InputSchemaHash: handler.InputSchemaHash,
+			OutputSchemaHash: handler.OutputSchemaHash,
+		}
+	}
+	for _, handler := range handlers {
+		if historical, ok := contracts[jobssvc.HandlerKey(handler.Name, handler.Version)]; ok {
+			if err := jobssvc.CheckImmutableContract(historical, handler); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }

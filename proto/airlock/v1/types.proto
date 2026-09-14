@@ -253,7 +253,7 @@ message RunInfo {
   // the cheaper cache-read rate (priced per-row in the llm_usage ledger).
   int32 llm_tokens_cached = 18;
   // trigger_type is what fired the run: "prompt" (web chat), "bridge",
-  // "code" (agent HTTP route), "webhook", "cron", or "a2a".
+  // "code" (agent HTTP route), "webhook", "cron", or "mcp".
   string trigger_type = 19;
 }
 
@@ -705,64 +705,11 @@ message EnvVarInfo {
   google.protobuf.Timestamp updated_at = 8;
 }
 
-// SiblingInfo is one entry in an agent's A2A address book.
-message SiblingInfo {
-  reserved 5, 6;  // removed allow_non_member_mcp / allow_public_mcp
-  string id = 1;
-  string slug = 2;
-  string name = 3;
-  string description = 4;
-  google.protobuf.Timestamp created_at = 7;
-  // Per-edge access ceiling ("public" | "user" | "admin") the operator
-  // picked when adding the sibling — caps what this agent can do when it
-  // calls the sibling (operator intent).
-  string max_access = 8;
-  // The live effective ceiling = min(max_access, current role of the grant
-  // that authorizes this edge). Auto-downgrades when the target lowers the
-  // grant; this is the value the UI shows.
-  string effective_max_access = 9;
-}
-
-// InboundSiblingInfo is one agent that has added THIS agent to its
-// address book (the reverse of SiblingInfo): who can call this agent via
-// A2A, with the access ceiling they configured.
-message InboundSiblingInfo {
-  string id = 1;
-  string slug = 2;
-  string name = 3;
-  string description = 4;
-  // Per-edge ceiling the parent agent picked (operator intent).
-  string max_access = 5;
-  // Display name of the parent agent's owner (user or group).
-  string owner_name = 6;
-  google.protobuf.Timestamp created_at = 7;
-  // Live effective ceiling = min(max_access, current authorizing-grant role).
-  string effective_max_access = 8;
-}
-
-// AddableSiblingInfo is a candidate agent the parent may add to its A2A
-// address book — any agent the parent's owner holds a grant on.
-message AddableSiblingInfo {
-  reserved 5, 6;  // removed allow_non_member_mcp / is_member
-  string id = 1;
-  string slug = 2;
-  string name = 3;
-  string description = 4;
-  // Display name of the candidate's owner (user or group).
-  string owner_name = 7;
-}
-
-// A2ASettings is the per-agent protocol-surface toggles, orthogonal to the
-// grant ladder that governs authed MCP access. Wire shape for
-// get_agent_sharing / set_agent_sharing.
-message A2ASettings {
-  reserved 1;  // removed allow_non_member_mcp (now an All-Users grant)
-  // Anonymous (no-JWT) MCP requests may reach public-tier tools.
+// AgentAccessSettings controls external MCP and anonymous HTTP exposure.
+message AgentAccessSettings {
+  bool mcp_enabled = 1;
   bool allow_public_mcp = 2;
-  // The agent serves an MCP endpoint to grant-authorized callers at all.
-  bool mcp_enabled = 3;
-  // Anonymous requests may reach the agent's AccessPublic web routes.
-  bool allow_public_routes = 4;
+  bool allow_public_routes = 3;
 }
 
 // SetupCountsInfo aggregates the setup-completeness counters

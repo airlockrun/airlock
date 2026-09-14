@@ -28,31 +28,6 @@ func (q *Queries) CancelRun(ctx context.Context, id pgtype.UUID) (int64, error) 
 	return result.RowsAffected(), nil
 }
 
-const claimMCPTaskResume = `-- name: ClaimMCPTaskResume :execrows
-UPDATE runs SET status = 'success'
-WHERE id = $1
-  AND agent_id = $2
-  AND status = 'suspended'
-  AND trigger_type = 'a2a'
-  AND trigger_ref = $3
-`
-
-type ClaimMCPTaskResumeParams struct {
-	ID         pgtype.UUID `json:"id"`
-	AgentID    pgtype.UUID `json:"agent_id"`
-	TriggerRef string      `json:"trigger_ref"`
-}
-
-// A suspended MCP task is single-use. The conversation reference is part of
-// the CAS so a stale or inconsistent context/task pair cannot consume it.
-func (q *Queries) ClaimMCPTaskResume(ctx context.Context, arg ClaimMCPTaskResumeParams) (int64, error) {
-	result, err := q.db.Exec(ctx, claimMCPTaskResume, arg.ID, arg.AgentID, arg.TriggerRef)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
 const compactOldRuns = `-- name: CompactOldRuns :execrows
 WITH candidates AS (
     SELECT candidate_run.id
@@ -103,26 +78,28 @@ func (q *Queries) CountRunsByAgent(ctx context.Context, agentID pgtype.UUID) (in
 
 const createRun = `-- name: CreateRun :one
 INSERT INTO runs (
-    agent_id, bridge_id, parent_run_id, status, error_kind,
+    agent_id, bridge_id, origin_id, execution_kind, resume_run_id, status, error_kind,
     input_payload, source_ref, trigger_type, trigger_ref,
     caller_user_id, caller_conversation_id, caller_access,
     actions, llm_calls, llm_tokens_in, llm_tokens_out, llm_tokens_cached, llm_cost_estimate,
     stdout_log, error_message, panic_trace, compacted
 )
 VALUES (
-    $1, $2, $3, 'running', '',
-    $4, $5, $6, $7,
-    $8, $9, $10,
+    $1, $2, $3, $4, $5, 'running', '',
+    $6, $7, $8, $9,
+    $10, $11, $12,
     '[]'::jsonb, 0, 0, 0, 0, 0,
     '', '', '', false
 )
-RETURNING id, agent_id, bridge_id, status, trigger_type, trigger_ref, source_ref, input_payload, actions, llm_calls, llm_tokens_in, llm_tokens_out, llm_cost_estimate, duration_ms, stdout_log, error_message, error_kind, exit_code, panic_trace, checkpoint, compacted, started_at, finished_at, parent_run_id, llm_tokens_cached, caller_user_id, caller_conversation_id, caller_access
+RETURNING id, agent_id, bridge_id, status, trigger_type, trigger_ref, source_ref, input_payload, actions, llm_calls, llm_tokens_in, llm_tokens_out, llm_cost_estimate, duration_ms, stdout_log, error_message, error_kind, exit_code, panic_trace, checkpoint, compacted, started_at, finished_at, parent_run_id, llm_tokens_cached, caller_user_id, caller_conversation_id, caller_access, runtime_owner_token, origin_id, execution_kind, resume_run_id
 `
 
 type CreateRunParams struct {
 	AgentID              pgtype.UUID `json:"agent_id"`
 	BridgeID             pgtype.UUID `json:"bridge_id"`
-	ParentRunID          pgtype.UUID `json:"parent_run_id"`
+	OriginID             pgtype.UUID `json:"origin_id"`
+	ExecutionKind        string      `json:"execution_kind"`
+	ResumeRunID          pgtype.UUID `json:"resume_run_id"`
 	InputPayload         []byte      `json:"input_payload"`
 	SourceRef            string      `json:"source_ref"`
 	TriggerType          string      `json:"trigger_type"`
@@ -135,13 +112,14 @@ type CreateRunParams struct {
 // All "starts at zero/empty" run fields passed explicitly per AGENTS.md
 // "no fake defaults" rule. Counter fields start at 0 (no LLM calls /
 // tokens / cost yet); buffered text fields start ”; actions starts [].
-// parent_run_id is NULL for top-level (web/bridge/cron/webhook) runs
-// and the caller's run id for A2A child runs.
+// Origin and execution kind are supplied by host admission, never the payload.
 func (q *Queries) CreateRun(ctx context.Context, arg CreateRunParams) (Run, error) {
 	row := q.db.QueryRow(ctx, createRun,
 		arg.AgentID,
 		arg.BridgeID,
-		arg.ParentRunID,
+		arg.OriginID,
+		arg.ExecutionKind,
+		arg.ResumeRunID,
 		arg.InputPayload,
 		arg.SourceRef,
 		arg.TriggerType,
@@ -180,6 +158,10 @@ func (q *Queries) CreateRun(ctx context.Context, arg CreateRunParams) (Run, erro
 		&i.CallerUserID,
 		&i.CallerConversationID,
 		&i.CallerAccess,
+		&i.RuntimeOwnerToken,
+		&i.OriginID,
+		&i.ExecutionKind,
+		&i.ResumeRunID,
 	)
 	return i, err
 }
@@ -215,7 +197,7 @@ SET status = 'error',
     error_message = 'agent disconnected',
     finished_at = now(),
     duration_ms = (EXTRACT(EPOCH FROM (now() - started_at)) * 1000)::integer
-WHERE id = $1 AND status = 'running' AND trigger_type <> 'job'
+WHERE id = $1 AND status = 'running' AND trigger_type <> 'job' AND execution_kind <> 'agent' AND runtime_owner_token IS NULL
 `
 
 func (q *Queries) FailStuckRun(ctx context.Context, id pgtype.UUID) (int64, error) {
@@ -224,49 +206,6 @@ func (q *Queries) FailStuckRun(ctx context.Context, id pgtype.UUID) (int64, erro
 		return 0, err
 	}
 	return result.RowsAffected(), nil
-}
-
-const getDescendantRuns = `-- name: GetDescendantRuns :many
-WITH RECURSIVE descendants AS (
-    SELECT id, agent_id, parent_run_id, status
-    FROM runs
-    WHERE runs.parent_run_id = $1
-    UNION ALL
-    SELECT r.id, r.agent_id, r.parent_run_id, r.status
-    FROM runs r
-    JOIN descendants d ON r.parent_run_id = d.id
-)
-SELECT id, agent_id, status FROM descendants
-`
-
-type GetDescendantRunsRow struct {
-	ID      pgtype.UUID `json:"id"`
-	AgentID pgtype.UUID `json:"agent_id"`
-	Status  string      `json:"status"`
-}
-
-// Recursive descent through parent_run_id for cancel cascade. Returns
-// every run reachable from @root_run_id via parent_run_id (excluding
-// the root itself). Order is unspecified; callers fire cancel funcs
-// independently per row.
-func (q *Queries) GetDescendantRuns(ctx context.Context, rootRunID pgtype.UUID) ([]GetDescendantRunsRow, error) {
-	rows, err := q.db.Query(ctx, getDescendantRuns, rootRunID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []GetDescendantRunsRow{}
-	for rows.Next() {
-		var i GetDescendantRunsRow
-		if err := rows.Scan(&i.ID, &i.AgentID, &i.Status); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
 }
 
 const getLatestRunningPromptRun = `-- name: GetLatestRunningPromptRun :one
@@ -287,7 +226,7 @@ func (q *Queries) GetLatestRunningPromptRun(ctx context.Context, triggerRef stri
 }
 
 const getLatestSuspendedRun = `-- name: GetLatestSuspendedRun :one
-SELECT id, agent_id, bridge_id, status, trigger_type, trigger_ref, source_ref, input_payload, actions, llm_calls, llm_tokens_in, llm_tokens_out, llm_cost_estimate, duration_ms, stdout_log, error_message, error_kind, exit_code, panic_trace, checkpoint, compacted, started_at, finished_at, parent_run_id, llm_tokens_cached, caller_user_id, caller_conversation_id, caller_access FROM runs
+SELECT id, agent_id, bridge_id, status, trigger_type, trigger_ref, source_ref, input_payload, actions, llm_calls, llm_tokens_in, llm_tokens_out, llm_cost_estimate, duration_ms, stdout_log, error_message, error_kind, exit_code, panic_trace, checkpoint, compacted, started_at, finished_at, parent_run_id, llm_tokens_cached, caller_user_id, caller_conversation_id, caller_access, runtime_owner_token, origin_id, execution_kind, resume_run_id FROM runs
 WHERE agent_id = $1 AND status = 'suspended'
 ORDER BY started_at DESC
 LIMIT 1
@@ -325,24 +264,22 @@ func (q *Queries) GetLatestSuspendedRun(ctx context.Context, agentID pgtype.UUID
 		&i.CallerUserID,
 		&i.CallerConversationID,
 		&i.CallerAccess,
+		&i.RuntimeOwnerToken,
+		&i.OriginID,
+		&i.ExecutionKind,
+		&i.ResumeRunID,
 	)
 	return i, err
 }
 
 const getLatestSuspendedRunByConversation = `-- name: GetLatestSuspendedRunByConversation :one
-SELECT id, agent_id, bridge_id, status, trigger_type, trigger_ref, source_ref, input_payload, actions, llm_calls, llm_tokens_in, llm_tokens_out, llm_cost_estimate, duration_ms, stdout_log, error_message, error_kind, exit_code, panic_trace, checkpoint, compacted, started_at, finished_at, parent_run_id, llm_tokens_cached, caller_user_id, caller_conversation_id, caller_access FROM runs
+SELECT id, agent_id, bridge_id, status, trigger_type, trigger_ref, source_ref, input_payload, actions, llm_calls, llm_tokens_in, llm_tokens_out, llm_cost_estimate, duration_ms, stdout_log, error_message, error_kind, exit_code, panic_trace, checkpoint, compacted, started_at, finished_at, parent_run_id, llm_tokens_cached, caller_user_id, caller_conversation_id, caller_access, runtime_owner_token, origin_id, execution_kind, resume_run_id FROM runs
 WHERE trigger_ref = $1 AND status = 'suspended'
 ORDER BY started_at DESC
 LIMIT 1
 `
 
-// Conversation-scoped suspended-run lookup. trigger_ref holds the
-// conversation id for both web (trigger_type='prompt') and sibling
-// (trigger_type='a2a') runs, and those live on distinct conversation
-// rows — so scoping by trigger_ref keeps a web/bridge resume, the
-// conversation view, and /clear from ever picking up an A2A
-// delegated suspension that belongs to a different surface (the
-// agent-wide GetLatestSuspendedRun cannot distinguish them).
+// Conversation-scoped display lookup for the web and bridge surfaces.
 func (q *Queries) GetLatestSuspendedRunByConversation(ctx context.Context, conversationID string) (Run, error) {
 	row := q.db.QueryRow(ctx, getLatestSuspendedRunByConversation, conversationID)
 	var i Run
@@ -375,12 +312,16 @@ func (q *Queries) GetLatestSuspendedRunByConversation(ctx context.Context, conve
 		&i.CallerUserID,
 		&i.CallerConversationID,
 		&i.CallerAccess,
+		&i.RuntimeOwnerToken,
+		&i.OriginID,
+		&i.ExecutionKind,
+		&i.ResumeRunID,
 	)
 	return i, err
 }
 
 const getRunByID = `-- name: GetRunByID :one
-SELECT id, agent_id, bridge_id, status, trigger_type, trigger_ref, source_ref, input_payload, actions, llm_calls, llm_tokens_in, llm_tokens_out, llm_cost_estimate, duration_ms, stdout_log, error_message, error_kind, exit_code, panic_trace, checkpoint, compacted, started_at, finished_at, parent_run_id, llm_tokens_cached, caller_user_id, caller_conversation_id, caller_access FROM runs WHERE id = $1
+SELECT id, agent_id, bridge_id, status, trigger_type, trigger_ref, source_ref, input_payload, actions, llm_calls, llm_tokens_in, llm_tokens_out, llm_cost_estimate, duration_ms, stdout_log, error_message, error_kind, exit_code, panic_trace, checkpoint, compacted, started_at, finished_at, parent_run_id, llm_tokens_cached, caller_user_id, caller_conversation_id, caller_access, runtime_owner_token, origin_id, execution_kind, resume_run_id FROM runs WHERE id = $1
 `
 
 func (q *Queries) GetRunByID(ctx context.Context, id pgtype.UUID) (Run, error) {
@@ -415,12 +356,16 @@ func (q *Queries) GetRunByID(ctx context.Context, id pgtype.UUID) (Run, error) {
 		&i.CallerUserID,
 		&i.CallerConversationID,
 		&i.CallerAccess,
+		&i.RuntimeOwnerToken,
+		&i.OriginID,
+		&i.ExecutionKind,
+		&i.ResumeRunID,
 	)
 	return i, err
 }
 
 const getRunByIDAndAgent = `-- name: GetRunByIDAndAgent :one
-SELECT id, agent_id, bridge_id, status, trigger_type, trigger_ref, source_ref, input_payload, actions, llm_calls, llm_tokens_in, llm_tokens_out, llm_cost_estimate, duration_ms, stdout_log, error_message, error_kind, exit_code, panic_trace, checkpoint, compacted, started_at, finished_at, parent_run_id, llm_tokens_cached, caller_user_id, caller_conversation_id, caller_access FROM runs WHERE id = $1 AND agent_id = $2
+SELECT id, agent_id, bridge_id, status, trigger_type, trigger_ref, source_ref, input_payload, actions, llm_calls, llm_tokens_in, llm_tokens_out, llm_cost_estimate, duration_ms, stdout_log, error_message, error_kind, exit_code, panic_trace, checkpoint, compacted, started_at, finished_at, parent_run_id, llm_tokens_cached, caller_user_id, caller_conversation_id, caller_access, runtime_owner_token, origin_id, execution_kind, resume_run_id FROM runs WHERE id = $1 AND agent_id = $2
 `
 
 type GetRunByIDAndAgentParams struct {
@@ -460,6 +405,10 @@ func (q *Queries) GetRunByIDAndAgent(ctx context.Context, arg GetRunByIDAndAgent
 		&i.CallerUserID,
 		&i.CallerConversationID,
 		&i.CallerAccess,
+		&i.RuntimeOwnerToken,
+		&i.OriginID,
+		&i.ExecutionKind,
+		&i.ResumeRunID,
 	)
 	return i, err
 }
@@ -481,7 +430,7 @@ func (q *Queries) GetRunCheckpoint(ctx context.Context, arg GetRunCheckpointPara
 }
 
 const getSuspendedRunByID = `-- name: GetSuspendedRunByID :one
-SELECT id, agent_id, bridge_id, status, trigger_type, trigger_ref, source_ref, input_payload, actions, llm_calls, llm_tokens_in, llm_tokens_out, llm_cost_estimate, duration_ms, stdout_log, error_message, error_kind, exit_code, panic_trace, checkpoint, compacted, started_at, finished_at, parent_run_id, llm_tokens_cached, caller_user_id, caller_conversation_id, caller_access FROM runs WHERE id = $1 AND status = 'suspended'
+SELECT id, agent_id, bridge_id, status, trigger_type, trigger_ref, source_ref, input_payload, actions, llm_calls, llm_tokens_in, llm_tokens_out, llm_cost_estimate, duration_ms, stdout_log, error_message, error_kind, exit_code, panic_trace, checkpoint, compacted, started_at, finished_at, parent_run_id, llm_tokens_cached, caller_user_id, caller_conversation_id, caller_access, runtime_owner_token, origin_id, execution_kind, resume_run_id FROM runs WHERE id = $1 AND status = 'suspended'
 `
 
 func (q *Queries) GetSuspendedRunByID(ctx context.Context, id pgtype.UUID) (Run, error) {
@@ -516,12 +465,16 @@ func (q *Queries) GetSuspendedRunByID(ctx context.Context, id pgtype.UUID) (Run,
 		&i.CallerUserID,
 		&i.CallerConversationID,
 		&i.CallerAccess,
+		&i.RuntimeOwnerToken,
+		&i.OriginID,
+		&i.ExecutionKind,
+		&i.ResumeRunID,
 	)
 	return i, err
 }
 
 const listRunningByAgent = `-- name: ListRunningByAgent :many
-SELECT id, agent_id, bridge_id, status, trigger_type, trigger_ref, source_ref, input_payload, actions, llm_calls, llm_tokens_in, llm_tokens_out, llm_cost_estimate, duration_ms, stdout_log, error_message, error_kind, exit_code, panic_trace, checkpoint, compacted, started_at, finished_at, parent_run_id, llm_tokens_cached, caller_user_id, caller_conversation_id, caller_access FROM runs WHERE agent_id = $1 AND status = 'running'
+SELECT id, agent_id, bridge_id, status, trigger_type, trigger_ref, source_ref, input_payload, actions, llm_calls, llm_tokens_in, llm_tokens_out, llm_cost_estimate, duration_ms, stdout_log, error_message, error_kind, exit_code, panic_trace, checkpoint, compacted, started_at, finished_at, parent_run_id, llm_tokens_cached, caller_user_id, caller_conversation_id, caller_access, runtime_owner_token, origin_id, execution_kind, resume_run_id FROM runs WHERE agent_id = $1 AND status = 'running'
 `
 
 func (q *Queries) ListRunningByAgent(ctx context.Context, agentID pgtype.UUID) ([]Run, error) {
@@ -562,6 +515,10 @@ func (q *Queries) ListRunningByAgent(ctx context.Context, agentID pgtype.UUID) (
 			&i.CallerUserID,
 			&i.CallerConversationID,
 			&i.CallerAccess,
+			&i.RuntimeOwnerToken,
+			&i.OriginID,
+			&i.ExecutionKind,
+			&i.ResumeRunID,
 		); err != nil {
 			return nil, err
 		}
@@ -574,7 +531,7 @@ func (q *Queries) ListRunningByAgent(ctx context.Context, agentID pgtype.UUID) (
 }
 
 const listRunsByAgent = `-- name: ListRunsByAgent :many
-SELECT id, agent_id, bridge_id, status, trigger_type, trigger_ref, source_ref, input_payload, actions, llm_calls, llm_tokens_in, llm_tokens_out, llm_cost_estimate, duration_ms, stdout_log, error_message, error_kind, exit_code, panic_trace, checkpoint, compacted, started_at, finished_at, parent_run_id, llm_tokens_cached, caller_user_id, caller_conversation_id, caller_access FROM runs
+SELECT id, agent_id, bridge_id, status, trigger_type, trigger_ref, source_ref, input_payload, actions, llm_calls, llm_tokens_in, llm_tokens_out, llm_cost_estimate, duration_ms, stdout_log, error_message, error_kind, exit_code, panic_trace, checkpoint, compacted, started_at, finished_at, parent_run_id, llm_tokens_cached, caller_user_id, caller_conversation_id, caller_access, runtime_owner_token, origin_id, execution_kind, resume_run_id FROM runs
 WHERE agent_id = $1
     AND ($2::timestamptz IS NULL OR started_at < $2)
 ORDER BY started_at DESC
@@ -625,6 +582,10 @@ func (q *Queries) ListRunsByAgent(ctx context.Context, arg ListRunsByAgentParams
 			&i.CallerUserID,
 			&i.CallerConversationID,
 			&i.CallerAccess,
+			&i.RuntimeOwnerToken,
+			&i.OriginID,
+			&i.ExecutionKind,
+			&i.ResumeRunID,
 		); err != nil {
 			return nil, err
 		}
@@ -638,7 +599,7 @@ func (q *Queries) ListRunsByAgent(ctx context.Context, arg ListRunsByAgentParams
 
 const listStuckRuns = `-- name: ListStuckRuns :many
 SELECT id, agent_id FROM runs
-WHERE status = 'running' AND trigger_type <> 'job' AND started_at < $1
+WHERE status = 'running' AND trigger_type <> 'job' AND execution_kind <> 'agent' AND runtime_owner_token IS NULL AND started_at < $1
 `
 
 type ListStuckRunsRow struct {
@@ -695,72 +656,6 @@ WHERE id = $1 AND status = 'suspended'
 
 func (q *Queries) ResolveSuspendedRun(ctx context.Context, id pgtype.UUID) (int64, error) {
 	result, err := q.db.Exec(ctx, resolveSuspendedRun, id)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
-const rollbackMCPTaskResume = `-- name: RollbackMCPTaskResume :execrows
-UPDATE runs AS resumed SET status = 'suspended'
-WHERE resumed.id = $1
-  AND resumed.agent_id = $2
-  AND resumed.status = 'success'
-  AND resumed.trigger_type = 'a2a'
-  AND resumed.trigger_ref = $3
-  AND NOT EXISTS (
-      SELECT 1 FROM runs AS successor
-      WHERE successor.agent_id = resumed.agent_id
-        AND successor.trigger_type = 'a2a'
-        AND successor.trigger_ref = resumed.trigger_ref
-        AND successor.input_payload->>'resumeRunId' = resumed.id::text
-  )
-`
-
-type RollbackMCPTaskResumeParams struct {
-	ID         pgtype.UUID `json:"id"`
-	AgentID    pgtype.UUID `json:"agent_id"`
-	TriggerRef string      `json:"trigger_ref"`
-}
-
-// Restore a claimed task only when dispatch did not create a successor. Once a
-// successor row exists, that run owns the resume attempt even if forwarding it
-// to the agent later fails.
-func (q *Queries) RollbackMCPTaskResume(ctx context.Context, arg RollbackMCPTaskResumeParams) (int64, error) {
-	result, err := q.db.Exec(ctx, rollbackMCPTaskResume, arg.ID, arg.AgentID, arg.TriggerRef)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
-const rollbackPromptRunResume = `-- name: RollbackPromptRunResume :execrows
-UPDATE runs AS resumed SET status = 'suspended', finished_at = NULL
-WHERE resumed.id = $1
-  AND resumed.agent_id = $2
-  AND resumed.status = 'success'
-  AND resumed.trigger_type = 'prompt'
-  AND resumed.trigger_ref = $3
-  AND NOT EXISTS (
-      SELECT 1 FROM runs AS successor
-      WHERE successor.agent_id = resumed.agent_id
-        AND successor.trigger_type = 'prompt'
-        AND successor.trigger_ref = resumed.trigger_ref
-        AND successor.input_payload->>'resumeRunId' = resumed.id::text
-  )
-`
-
-type RollbackPromptRunResumeParams struct {
-	ID         pgtype.UUID `json:"id"`
-	AgentID    pgtype.UUID `json:"agent_id"`
-	TriggerRef string      `json:"trigger_ref"`
-}
-
-// Restore a claimed prompt suspension only when dispatch did not create a
-// successor. A successor carrying resumeRunId owns the attempt even if its
-// subsequent container request fails.
-func (q *Queries) RollbackPromptRunResume(ctx context.Context, arg RollbackPromptRunResumeParams) (int64, error) {
-	result, err := q.db.Exec(ctx, rollbackPromptRunResume, arg.ID, arg.AgentID, arg.TriggerRef)
 	if err != nil {
 		return 0, err
 	}
@@ -853,7 +748,7 @@ UPDATE runs SET
     status = $1,
     finished_at = COALESCE(finished_at, now()),
     duration_ms = COALESCE(NULLIF(duration_ms, 0), (EXTRACT(EPOCH FROM (now() - started_at)) * 1000)::integer)
-WHERE id = $2 AND status = 'running'
+WHERE id = $2 AND status = 'running' AND runtime_owner_token IS NULL
 `
 
 type UpdateRunStatusParams struct {
@@ -867,39 +762,22 @@ func (q *Queries) UpdateRunStatus(ctx context.Context, arg UpdateRunStatusParams
 }
 
 const upsertRunComplete = `-- name: UpsertRunComplete :execrows
-INSERT INTO runs (
-    id, agent_id, status, error_message, error_kind, actions,
-    stdout_log, panic_trace, checkpoint, input_payload, source_ref,
-    trigger_type, trigger_ref, finished_at, duration_ms,
-    caller_user_id, caller_conversation_id, caller_access,
-    llm_calls, llm_tokens_in, llm_tokens_out, llm_tokens_cached, llm_cost_estimate,
-    compacted
-)
-VALUES (
-    $1, $2, $3, $4, $5, $6,
-    $7, $8, $9, '{}'::jsonb, '',
-    'prompt', '', now(), 0,
-    NULL, NULL, 'public',
-    0, 0, 0, 0, 0,
-    false
-)
-ON CONFLICT (id) DO UPDATE SET
-    status = EXCLUDED.status,
-    error_message = EXCLUDED.error_message,
-    error_kind = EXCLUDED.error_kind,
-    actions = EXCLUDED.actions,
-    stdout_log = EXCLUDED.stdout_log,
-    panic_trace = EXCLUDED.panic_trace,
-    checkpoint = EXCLUDED.checkpoint,
+UPDATE runs SET
+    status = $1,
+    error_message = $2,
+    error_kind = $3,
+    actions = $4,
+    stdout_log = $5,
+    panic_trace = $6,
+    checkpoint = $7,
     finished_at = now(),
     duration_ms = (EXTRACT(EPOCH FROM (now() - runs.started_at)) * 1000)::integer
-WHERE runs.agent_id = EXCLUDED.agent_id
+WHERE runs.id = $8 AND runs.agent_id = $9
   AND runs.status = 'running'
+  AND runs.runtime_owner_token IS NULL
 `
 
 type UpsertRunCompleteParams struct {
-	ID           pgtype.UUID `json:"id"`
-	AgentID      pgtype.UUID `json:"agent_id"`
 	Status       string      `json:"status"`
 	ErrorMessage string      `json:"error_message"`
 	ErrorKind    string      `json:"error_kind"`
@@ -907,17 +785,13 @@ type UpsertRunCompleteParams struct {
 	StdoutLog    string      `json:"stdout_log"`
 	PanicTrace   string      `json:"panic_trace"`
 	Checkpoint   []byte      `json:"checkpoint"`
+	ID           pgtype.UUID `json:"id"`
+	AgentID      pgtype.UUID `json:"agent_id"`
 }
 
-// Recovery path: row may not exist if CreateRun never landed. All
-// "starts empty" fields (llm counters, compacted) passed explicitly.
-// trigger_type/trigger_ref/source_ref placeholders apply only when the
-// row is brand-new — the agent's r.Complete arrives without trigger
-// context; the dispatcher's CreateRun would have set the real values.
+// Completion cannot manufacture an unadmitted run or overwrite host origin.
 func (q *Queries) UpsertRunComplete(ctx context.Context, arg UpsertRunCompleteParams) (int64, error) {
 	result, err := q.db.Exec(ctx, upsertRunComplete,
-		arg.ID,
-		arg.AgentID,
 		arg.Status,
 		arg.ErrorMessage,
 		arg.ErrorKind,
@@ -925,6 +799,8 @@ func (q *Queries) UpsertRunComplete(ctx context.Context, arg UpsertRunCompletePa
 		arg.StdoutLog,
 		arg.PanicTrace,
 		arg.Checkpoint,
+		arg.ID,
+		arg.AgentID,
 	)
 	if err != nil {
 		return 0, err

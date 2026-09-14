@@ -785,10 +785,6 @@ export const operationMessages = defineMessages({
     defaultMessage: 'cron',
     description: 'Run trigger label for a cron schedule.',
   },
-  'operations.run.trigger.a2a': {
-    defaultMessage: 'a2a',
-    description: 'Run trigger label for an agent-to-agent request.',
-  },
   'operations.run.trigger.job': {
     defaultMessage: 'job',
     description: 'Run trigger label for a background job attempt.',

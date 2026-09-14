@@ -14,7 +14,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/airlockrun/airlock/agentapi"
 	"github.com/airlockrun/airlock/api"
 	"github.com/airlockrun/airlock/builder"
 	"github.com/airlockrun/airlock/config"
@@ -26,10 +25,12 @@ import (
 	"github.com/airlockrun/airlock/oauth"
 	"github.com/airlockrun/airlock/realtime"
 	"github.com/airlockrun/airlock/secrets"
+	"github.com/airlockrun/airlock/service/agentruns"
 	connectorartifactssvc "github.com/airlockrun/airlock/service/connectorartifacts"
 	connectormaintenancesvc "github.com/airlockrun/airlock/service/connectormaintenance"
 	connectororchestrationsvc "github.com/airlockrun/airlock/service/connectororchestration"
 	jobssvc "github.com/airlockrun/airlock/service/jobs"
+	runtimesvc "github.com/airlockrun/airlock/service/runtime"
 	"github.com/airlockrun/airlock/storage"
 	"github.com/airlockrun/airlock/trigger"
 	solprovider "github.com/airlockrun/sol/provider"
@@ -181,12 +182,6 @@ func runServe(_ []string) {
 		pruneAgentRepos(buildSvc.ReposPath(), validAgentImages, logger.Named("prune"))
 	}
 
-	// Warm Docker build cache in background — first agent build will be faster.
-	go buildSvc.WarmBuildCache(ctx)
-	// Warm the runtime go-mod / go-build volumes the build-prompt loop's
-	// direct `go build` invocations consume (distinct cache from the one
-	// above, which only seeds BuildKit's cache mount for `docker build`).
-	go buildSvc.WarmRuntimeCaches(ctx)
 	// If the bundled agentsdk version moved since the last airlock boot,
 	// re-image every agent against the new SDK. Failures park the agent
 	// (status=stopped + error_message) so the operator sees the breakage
@@ -194,7 +189,7 @@ func runServe(_ []string) {
 
 	// Create Hub and PubSub
 	hub := realtime.NewHub(logger.Named("hub"))
-	pubsub := realtime.NewPubSub(hub, logger.Named("pubsub"))
+	pubsub := realtime.NewSharedPubSub(database.Pool(), hub, logger.Named("pubsub"))
 	jobEventRelay := realtime.NewJobEventRelay(database.Pool(), hub, logger.Named("job-events"))
 	defer pubsub.Close()
 
@@ -202,7 +197,7 @@ func runServe(_ []string) {
 	buildSvc.SetEventPublisher(realtime.NewBuildEventPublisher(pubsub, hub))
 
 	// Create WS handler
-	wsHandler := realtime.NewHandler(database, hub, pubsub, logger.Named("handler"))
+	wsHandler := api.NewRealtimeHandler(database, hub)
 
 	// Trigger system
 	dispatcher := trigger.NewDispatcher(cfg, database, containers, secretStore, logger.Named("dispatcher"))
@@ -246,9 +241,11 @@ func runServe(_ []string) {
 
 	// Build router
 	router := api.NewRouter(api.RouterConfig{
+		AgentRuns:                  agentruns.Config{GlobalConcurrency: cfg.AgentTaskGlobalConcurrency, LocalConcurrency: cfg.AgentTaskLocalConcurrency, DefaultWait: time.Duration(cfg.AgentTaskDefaultWaitSeconds) * time.Second, MaxWait: time.Duration(cfg.AgentTaskMaxWaitSeconds) * time.Second},
 		DB:                         database,
 		JWTSecret:                  cfg.JWTSecret,
 		PublicURL:                  cfg.PublicURL,
+		AgentBaseImage:             cfg.AgentBaseImage,
 		OAuthClient:                oauthClient,
 		TelegramDriver:             telegramDriver,
 		Secrets:                    secretStore,
@@ -296,6 +293,8 @@ func runServe(_ []string) {
 	defer listener.Close()
 
 	group, gctx := errgroup.WithContext(ctx)
+	group.Go(func() error { buildSvc.WarmBuildCache(gctx); return nil })
+	group.Go(func() error { buildSvc.WarmRuntimeCaches(gctx); return nil })
 	group.Go(func() error {
 		return connectorArtifactsService.Run(gctx)
 	})
@@ -303,9 +302,7 @@ func runServe(_ []string) {
 		return connectorMaintenance.Run(gctx)
 	})
 	jobCtx, stopJobWorker := context.WithCancel(context.Background())
-	jobDone := make(chan struct{})
 	group.Go(func() error {
-		defer close(jobDone)
 		return jobWorker.Run(jobCtx)
 	})
 	group.Go(func() error {
@@ -313,6 +310,9 @@ func runServe(_ []string) {
 	})
 	group.Go(func() error {
 		return jobEventRelay.Run(gctx)
+	})
+	group.Go(func() error {
+		return pubsub.Run(gctx)
 	})
 
 	group.Go(func() error {
@@ -331,28 +331,32 @@ func runServe(_ []string) {
 		logger.Fatal("build service recovery failed", zap.Error(err))
 	}
 	logger.Info("build service ready")
-	go buildSvc.RebuildAllOnSDKChange(context.Background())
+	group.Go(func() error { buildSvc.RebuildAllOnSDKChange(gctx); return nil })
 
 	// Start background trigger services
 	if err := bridgeMgr.Start(gctx); err != nil {
 		logger.Fatal("bridge manager start failed", zap.Error(err))
 	}
-	defer bridgeMgr.Stop()
+	group.Go(func() error {
+		<-gctx.Done()
+		bridgeMgr.Stop()
+		return nil
+	})
 
 	// Token refresh job
 	refreshJob := oauth.NewRefreshJob(database, secretStore, oauthClient, logger.Named("oauth-refresh"))
-	go refreshJob.Run(gctx)
+	group.Go(func() error { refreshJob.Run(gctx); return nil })
 
 	// External-git polling fallback (5-min ls-remote per connected
 	// agent). Catches pushes from providers without webhook support
 	// configured (Bitbucket/Gitea in v1) and from users behind
 	// firewalls that block inbound webhooks.
-	go buildSvc.RunGitPoll(gctx)
+	group.Go(func() error { buildSvc.RunGitPoll(gctx); return nil })
 
 	// Inbound-OAuth GC: sweeps expired authz codes, long-consumed
 	// refresh tokens, and ancient grants every 5 minutes.
 	inboundOAuthGC := api.NewInboundOAuthGC(database, logger.Named("oauth-inbound-gc"))
-	go inboundOAuthGC.Run(gctx)
+	group.Go(func() error { inboundOAuthGC.Run(gctx); return nil })
 
 	queries := dbq.New(database.Pool())
 
@@ -379,12 +383,6 @@ func runServe(_ []string) {
 	})
 
 	group.Go(func() error {
-		const period = time.Hour
-
-		return anonConvPruner(gctx, logger, queries, period)
-	})
-
-	group.Go(func() error {
 		const period = time.Minute
 
 		return sweeper(
@@ -403,30 +401,30 @@ func runServe(_ []string) {
 		return cachePruner(gctx, logger, queries, period)
 	})
 
-	group.Go(func() error {
-		select {
-		case <-ctx.Done():
-		case <-gctx.Done():
+	<-gctx.Done()
+	stopJobWorker() // Attempt interruption/recovery, not user cancellation.
+	sctx, scancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer scancel()
+	var shutdown errgroup.Group
+	shutdown.Go(func() error { return srv.Shutdown(sctx) })
+	shutdown.Go(func() error { return router.Shutdown(sctx) })
+	shutdown.Go(func() error {
+		if err := group.Wait(); err != nil && !errors.Is(err, context.Canceled) {
+			return err
 		}
-		stopJobWorker()
-		select {
-		case <-jobDone:
-		case <-time.After(15 * time.Second):
-			logger.Warn("job worker graceful shutdown timed out")
-		}
-
-		sctx, scancel := context.WithTimeout(context.Background(), time.Second*10)
-		defer scancel()
-
-		if err := srv.Shutdown(sctx); err != nil {
-			logger.Warn("server graceful shutdown failed", zap.Error(err))
-		}
-
 		return nil
 	})
-
-	if err := group.Wait(); err != nil {
-		logger.Fatal("failed to run service", zap.Error(err))
+	shutdownDone := make(chan error, 1)
+	go func() { shutdownDone <- shutdown.Wait() }()
+	select {
+	case err := <-shutdownDone:
+		if err != nil {
+			logger.Fatal("service shutdown failed", zap.Error(err))
+		}
+	case <-sctx.Done():
+		// Do not close pools underneath live workers. Process exit leaves exact
+		// attempt and conversation leases for another replica's recovery.
+		logger.Fatal("service drain timed out; owners require lease recovery", zap.Error(sctx.Err()))
 	}
 
 	logger.Info("stopping server")
@@ -804,49 +802,6 @@ func authPruner(
 	}
 }
 
-// anonA2AConversationTTL bounds how long an anonymous A2A conversation
-// (user_id NULL, source='a2a' — minted for an unauthenticated
-// external-MCP caller) survives idle. These have no resume UI and no
-// owning user, so without a sweep they accumulate forever.
-const anonA2AConversationTTL = 12 * time.Hour
-
-// anonConvPruner deletes anonymous A2A conversations idle past
-// anonA2AConversationTTL every period. The row delete cascades to
-// agent_messages via FK. Authed-A2A and bridge conversations are
-// untouched (the query keys on user_id IS NULL AND source='a2a').
-func anonConvPruner(
-	ctx context.Context,
-	lgr *zap.Logger,
-	queries *dbq.Queries,
-	period time.Duration,
-) error {
-	ticker := time.NewTicker(period)
-	defer ticker.Stop()
-
-	if queries == nil {
-		return errors.New("expected *dbq.Queries but got nil")
-	}
-
-	lgr = lgr.Named("anon-a2a-conv-prune")
-
-	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		case <-ticker.C:
-		}
-
-		n, err := queries.DeleteExpiredAnonA2AConversations(ctx, int32(anonA2AConversationTTL.Seconds()))
-		if err != nil {
-			lgr.Error("delete expired anon a2a conversations failed", zap.Error(err))
-		}
-
-		if n > 0 {
-			lgr.Info("pruned anon a2a conversations", zap.Int64("rows.count", n))
-		}
-	}
-}
-
 // Stuck-run sweeper — runs in 'running' status older than the absolute HTTP
 // ceiling are presumed orphaned (airlock restart, agent crash mid- stream,
 // network partition). Skip runs the dispatcher still tracks in memory: those
@@ -881,6 +836,9 @@ func sweeper(
 	}
 
 	lgr = lgr.Named("stuck-run-sweeper")
+	if err := dispatcher.RecoverChat(ctx); err != nil {
+		lgr.Error("recover hosted chat", zap.Error(err))
+	}
 
 	for {
 		select {
@@ -889,6 +847,9 @@ func sweeper(
 		case <-ticker.C:
 		}
 
+		if err := dispatcher.RecoverChat(ctx); err != nil {
+			lgr.Error("recover hosted chat", zap.Error(err))
+		}
 		cutoff := pgtype.Timestamptz{
 			Time:  time.Now().Add(-stuckCutoff),
 			Valid: true,
@@ -932,10 +893,10 @@ func sweeper(
 			if updated == 0 {
 				continue
 			}
-
-			agentapi.SynthesizeOrphanToolResults(ctx, queries, runUUID, "timeout", lgr)
-
-			agentapi.PublishRunTerminal(ctx, pubsub, agentUUID, runUUID, "error", "agent disconnected")
+			runtimesvc.
+				SynthesizeOrphanToolResults(ctx, queries, runUUID, "timeout", lgr)
+			runtimesvc.
+				PublishRunTerminal(ctx, queries, pubsub, agentUUID, runUUID, "error", "agent disconnected")
 
 			lgr.Warn(
 				"stuck run reaped",

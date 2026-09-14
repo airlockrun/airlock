@@ -689,7 +689,7 @@ onUnmounted(() => {
           id="instructions"
           v-model="instructions"
           :auto-resize="true"
-          rows="3"
+          rows="6"
           :placeholder="mode === 'git' ? t('agents.create.changeRequestPlaceholder') : t('agents.create.instructionsPlaceholder')"
           :disabled="building"
           style="width: 100%"
@@ -757,6 +757,7 @@ onUnmounted(() => {
   color: var(--p-text-color);
   padding: 1rem;
   text-align: left;
+  font: inherit;
   display: flex;
   flex-direction: column;
   gap: 0.55rem;

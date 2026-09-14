@@ -1,7 +1,5 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
-import { promptAgentText } from '@/utils/messageGroup'
-import { renderMarkdown } from '@/composables/useMarkdown'
 import { useAirlockI18n } from '@/i18n'
 
 // A tool run rendered as a compact, expandable badge instead of a chat
@@ -47,13 +45,7 @@ const inputLine = computed(() =>
     .replace(/\s*([{}()[\];,:])\s*/g, '$1'),
 )
 
-// Human-facing output text: a promptAgent envelope is unwrapped to its
-// text; everything else is the raw output. Error takes precedence.
-const outputText = computed(() => {
-  if (props.error) return props.error
-  if (!props.output) return ''
-  return promptAgentText(props.toolName || '', props.output) ?? props.output
-})
+const outputText = computed(() => props.error || props.output || '')
 
 // Output clamped to the first MAX_OUTPUT_LINES non-trailing-blank lines,
 // keeping its own formatting (newlines preserved).
@@ -65,13 +57,6 @@ const clampedOutput = computed(() => {
     text: lines.slice(0, MAX_OUTPUT_LINES).join('\n'),
     more: Math.max(0, lines.length - MAX_OUTPUT_LINES),
   }
-})
-
-// Full markdown render of a promptAgent reply (expanded view only).
-const mdOutput = computed(() => {
-  if (!props.output) return null
-  const t = promptAgentText(props.toolName || '', props.output)
-  return t === null ? null : renderMarkdown(t)
 })
 
 const showStatus = computed(() => !!props.status && props.status !== 'done')
@@ -131,8 +116,7 @@ const dotColor = computed(() => {
          the header line, so it isn't repeated here. -->
     <div v-else-if="isOpen" class="tool-badge-body">
       <pre v-if="input" class="tool-pre tool-pre-in">{{ input }}</pre>
-      <div v-if="mdOutput" v-html="mdOutput" class="tool-badge-md" />
-      <pre v-else-if="output" class="tool-pre">{{ output }}</pre>
+      <pre v-if="output" class="tool-pre">{{ output }}</pre>
       <pre v-if="error" class="tool-pre tool-pre-err">{{ error }}</pre>
     </div>
   </div>
@@ -258,26 +242,5 @@ const dotColor = computed(() => {
 
 .tool-pre-err {
   color: var(--p-red-500);
-}
-</style>
-
-<!-- promptAgent output renders as markdown; keep a tiny self-contained
-     rule set so it reads well without depending on a parent's scoped CSS. -->
-<style>
-.tool-badge-md p {
-  margin: 0;
-}
-.tool-badge-md p + p {
-  margin-top: 0.5em;
-}
-.tool-badge-md pre {
-  white-space: pre-wrap;
-  word-break: break-all;
-  margin: 0.25rem 0;
-}
-.tool-badge-md ul,
-.tool-badge-md ol {
-  margin: 0.25rem 0;
-  padding-left: 1.25rem;
 }
 </style>

@@ -408,10 +408,8 @@ func (s *Service) discoverableHandler(ctx context.Context, q *dbq.Queries) webau
 // discoverable we resolve via the credential's stored owner.
 func (s *Service) userByCredentialOwner(ctx context.Context, q *dbq.Queries, row dbq.WebauthnCeremony, cred *webauthn.Credential) (dbq.User, error) {
 	if row.UserID.Valid {
-		// airlockvet:allow-dbq reason: pre-Principal passkey login — runs before authz can apply, identity proven by the verified assertion
 		return q.GetUserByID(ctx, row.UserID)
 	}
-	// airlockvet:allow-dbq reason: pre-Principal passkey login — runs before authz can apply, identity proven by the verified assertion
 	return q.GetUserByCredentialID(ctx, cred.ID)
 }
 

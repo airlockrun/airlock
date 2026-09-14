@@ -9,6 +9,7 @@ import (
 	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/airlockrun/airlock/service"
+	"github.com/airlockrun/airlock/service/execution"
 	jobssvc "github.com/airlockrun/airlock/service/jobs"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -42,6 +43,7 @@ func (h *Handler) EnqueueJob(w http.ResponseWriter, r *http.Request) {
 		AgentID:           agentID,
 		RuntimeGeneration: auth.AgentTokenVersionFromContext(r.Context()),
 		SourceRunID:       sourceRunID,
+		InvocationProof:   execution.InvocationProofFromContext(callbackContext(r)),
 		HandlerName:       request.Name,
 		HandlerVersion:    request.Version,
 		InputSchemaHash:   request.InputSchemaHash,

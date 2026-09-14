@@ -23,6 +23,7 @@ import (
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/airlockrun/airlock/service"
+	"github.com/airlockrun/airlock/service/inboundoauth"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -465,7 +466,7 @@ func (h *oauthServerHandler) Authorize(w http.ResponseWriter, r *http.Request) {
 		renderOAuthError(w, "access_denied", "invalid user session")
 		return
 	}
-	if !h.userEntitledToAgent(r.Context(), userID, auth.Role(claims.TenantRole), agentID) {
+	if err := inboundoauth.Entitle(r.Context(), dbq.New(h.db.Pool()), authz.PrincipalFromClaims(claims), agentID); err != nil {
 		redirectWithError(w, r, redirectURI, state, "access_denied", "user is not entitled to this agent")
 		return
 	}
@@ -669,7 +670,7 @@ func (h *oauthServerHandler) Consent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	claims := auth.ClaimsFromContext(r.Context())
-	if claims == nil || !h.userEntitledToAgent(r.Context(), userID, auth.Role(claims.TenantRole), agentID) {
+	if err := inboundoauth.Entitle(r.Context(), q, authz.PrincipalFromClaims(claims), agentID); err != nil {
 		// airlockvet:allow-writejson reason: OAuth consent uses JSON between the authenticated SPA and protocol endpoint
 		writeJSONError(w, http.StatusForbidden, "user is not entitled to this agent")
 		return
@@ -698,6 +699,11 @@ func (h *oauthServerHandler) Consent(w http.ResponseWriter, r *http.Request) {
 		h.logger.Error("oauth consent: lock grant lifecycle", zap.Error(err))
 		// airlockvet:allow-writejson reason: OAuth consent uses JSON between the authenticated SPA and protocol endpoint
 		writeJSONError(w, http.StatusInternalServerError, "server error")
+		return
+	}
+	if err := inboundoauth.Entitle(r.Context(), txq, authz.PrincipalFromClaims(claims), agentID); err != nil {
+		// airlockvet:allow-writejson reason: OAuth consent returns a protocol JSON denial when live entitlement changes
+		writeJSONError(w, http.StatusForbidden, "user is not entitled to this agent")
 		return
 	}
 	// airlockvet:allow-dbq reason: OAuth 2.0 consent transaction is bound to the authenticated user and validated client/agent
@@ -852,8 +858,7 @@ func (h *oauthServerHandler) tokenAuthorizationCode(w http.ResponseWriter, r *ht
 		writeJSON(w, http.StatusBadRequest, tokenError{Error: "unauthorized_client"})
 		return
 	}
-	// airlockvet:allow-dbq reason: OAuth 2.0 / RFC 6749 endpoint — wire is JSON by spec; client_id + grant flow drives authz, not user Principal
-	row, err := q.ConsumeAuthzCode(r.Context(), code)
+	row, user, err := inboundoauth.ConsumeCode(r.Context(), q, code, clientID, redirectURI, codeVerifier)
 	if err != nil {
 		// airlockvet:allow-writejson reason: OAuth 2.0 / RFC 6749 endpoint — wire is JSON by spec; client_id + grant flow drives authz, not user Principal
 		writeJSON(w, http.StatusBadRequest, tokenError{Error: "invalid_grant", ErrorDescription: "code invalid or expired"})
@@ -885,20 +890,6 @@ func (h *oauthServerHandler) tokenAuthorizationCode(w http.ResponseWriter, r *ht
 
 	// Mint access JWT + opaque refresh.
 	userID := uuid.UUID(row.UserID.Bytes)
-	// airlockvet:allow-dbq reason: OAuth code exchange revalidates the code owner's live account inside the transaction
-	user, err := q.GetUserByID(r.Context(), row.UserID)
-	if err != nil || !h.userEntitledToAgentWithQueries(r.Context(), q, userID, auth.Role(user.TenantRole), uuid.UUID(row.AgentID.Bytes)) {
-		// airlockvet:allow-writejson reason: RFC 6749 token endpoint responses use standardized JSON errors
-		writeJSON(w, http.StatusBadRequest, tokenError{Error: "invalid_grant", ErrorDescription: "user is no longer entitled to this agent"})
-		return
-	}
-	// airlockvet:allow-dbq reason: OAuth code exchange revalidates the exact user/client/agent grant inside the transaction
-	if _, err := q.GetActiveGrant(r.Context(), dbq.GetActiveGrantParams{UserID: row.UserID, ClientID: clientID, AgentID: row.AgentID}); err != nil {
-		// airlockvet:allow-writejson reason: RFC 6749 token endpoint responses use standardized JSON errors
-		writeJSON(w, http.StatusBadRequest, tokenError{Error: "invalid_grant", ErrorDescription: "grant revoked or expired"})
-		return
-	}
-
 	accessToken, err := auth.IssueOAuthAccessToken(h.jwtSecret, userID, user.Email, user.TenantRole, clientID, row.Scope, row.Resource, user.AuthEpoch)
 	if err != nil {
 		h.logger.Error("oauth token: issue access", zap.Error(err))
@@ -1026,21 +1017,9 @@ func (h *oauthServerHandler) tokenRefresh(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Grant must still be active.
-	// airlockvet:allow-dbq reason: OAuth 2.0 / RFC 6749 endpoint — wire is JSON by spec; client_id + grant flow drives authz, not user Principal
-	if _, gErr := q.GetActiveGrant(r.Context(), dbq.GetActiveGrantParams{
-		UserID:   row.UserID,
-		ClientID: clientID,
-		AgentID:  row.AgentID,
-	}); gErr != nil {
-		// airlockvet:allow-writejson reason: OAuth 2.0 / RFC 6749 endpoint — wire is JSON by spec; client_id + grant flow drives authz, not user Principal
-		writeJSON(w, http.StatusBadRequest, tokenError{Error: "invalid_grant", ErrorDescription: "grant revoked or expired"})
-		return
-	}
 	userID := uuid.UUID(row.UserID.Bytes)
-	// airlockvet:allow-dbq reason: OAuth refresh revalidates the token owner's live account inside the transaction
-	user, err := q.GetUserByID(r.Context(), row.UserID)
-	if err != nil || !h.userEntitledToAgentWithQueries(r.Context(), q, userID, auth.Role(user.TenantRole), uuid.UUID(row.AgentID.Bytes)) {
+	user, err := inboundoauth.RefreshOwner(r.Context(), q, refresh, clientID)
+	if err != nil {
 		// airlockvet:allow-writejson reason: RFC 6749 token endpoint responses use standardized JSON errors
 		writeJSON(w, http.StatusBadRequest, tokenError{Error: "invalid_grant", ErrorDescription: "user is no longer entitled to this agent"})
 		return
@@ -1130,8 +1109,7 @@ func (h *oauthServerHandler) ListGrants(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	q := dbq.New(h.db.Pool())
-	// airlockvet:allow-dbq reason: OAuth 2.0 / RFC 6749 endpoint — wire is JSON by spec; client_id + grant flow drives authz, not user Principal
-	rows, err := q.ListGrantsForUser(r.Context(), toPgUUID(userID))
+	rows, err := inboundoauth.ListGrants(r.Context(), q, principalFromRequest(r))
 	if err != nil {
 		// airlockvet:allow-writejson reason: OAuth 2.0 / RFC 6749 endpoint — wire is JSON by spec; client_id + grant flow drives authz, not user Principal
 		writeJSONError(w, http.StatusInternalServerError, "list grants")
@@ -1168,58 +1146,8 @@ func (h *oauthServerHandler) RevokeGrant(w http.ResponseWriter, r *http.Request)
 		writeJSONError(w, http.StatusBadRequest, "invalid agent ID")
 		return
 	}
-	tx, err := h.db.Pool().Begin(r.Context())
-	if err != nil {
-		// airlockvet:allow-writejson reason: OAuth grant management is a JSON SPA endpoint
-		writeJSONError(w, http.StatusInternalServerError, "revoke")
-		return
-	}
-	defer tx.Rollback(r.Context())
-	q := dbq.New(tx)
-	// airlockvet:allow-dbq reason: OAuth grant lifecycle serialization is keyed by the authenticated user and validated client/agent
-	if err := q.LockOAuthGrantLifecycle(r.Context(), dbq.LockOAuthGrantLifecycleParams{
-		UserID: userID.String(), ClientID: clientID, AgentID: agentID.String(),
-	}); err != nil {
-		// airlockvet:allow-writejson reason: OAuth grant management is a JSON SPA endpoint
-		writeJSONError(w, http.StatusInternalServerError, "revoke")
-		return
-	}
-	// Invalidate consent screens issued before this revocation. Consent handling
-	// and revocation hold the same lifecycle lock across all row mutations.
-	// airlockvet:allow-dbq reason: grant revocation invalidates pending OAuth consent transactions for the same user/client/agent
-	if _, err := q.DeleteOAuthConsentTransactionsForGrant(r.Context(), dbq.DeleteOAuthConsentTransactionsForGrantParams{
-		UserID:   toPgUUID(userID),
-		ClientID: clientID,
-		AgentID:  toPgUUID(agentID),
-	}); err != nil {
-		// airlockvet:allow-writejson reason: OAuth grant management is a JSON SPA endpoint
-		writeJSONError(w, http.StatusInternalServerError, "revoke")
-		return
-	}
-	// airlockvet:allow-dbq reason: OAuth 2.0 / RFC 6749 endpoint — wire is JSON by spec; client_id + grant flow drives authz, not user Principal
-	if _, err := q.RevokeGrant(r.Context(), dbq.RevokeGrantParams{
-		UserID:   toPgUUID(userID),
-		ClientID: clientID,
-		AgentID:  toPgUUID(agentID),
-	}); err != nil {
-		// airlockvet:allow-writejson reason: OAuth 2.0 / RFC 6749 endpoint — wire is JSON by spec; client_id + grant flow drives authz, not user Principal
-		writeJSONError(w, http.StatusInternalServerError, "revoke")
-		return
-	}
-	// Also invalidate refresh tokens so the next refresh fails fast.
-	// airlockvet:allow-dbq reason: OAuth 2.0 / RFC 6749 endpoint — wire is JSON by spec; client_id + grant flow drives authz, not user Principal
-	if _, err := q.RevokeRefreshForGrant(r.Context(), dbq.RevokeRefreshForGrantParams{
-		UserID:   toPgUUID(userID),
-		ClientID: clientID,
-		AgentID:  toPgUUID(agentID),
-	}); err != nil {
-		// airlockvet:allow-writejson reason: OAuth grant management is a JSON SPA endpoint
-		writeJSONError(w, http.StatusInternalServerError, "revoke")
-		return
-	}
-	if err := tx.Commit(r.Context()); err != nil {
-		// airlockvet:allow-writejson reason: OAuth grant management is a JSON SPA endpoint
-		writeJSONError(w, http.StatusInternalServerError, "revoke")
+	if err := inboundoauth.RevokeGrant(r.Context(), h.db, principalFromRequest(r), clientID, agentID); err != nil {
+		writeServiceError(w, err, "failed to revoke OAuth grant")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -1282,7 +1210,7 @@ func (h *oauthServerHandler) mintAuthzCodeWithQueries(ctx context.Context, q *db
 }
 
 func (h *oauthServerHandler) userFromSessionCookie(r *http.Request) (*auth.Claims, error) {
-	c, err := r.Cookie(accessCookieName)
+	c, err := auth.UniqueCookie(r, accessCookieName)
 	if err != nil {
 		return nil, err
 	}
@@ -1298,20 +1226,6 @@ func (h *oauthServerHandler) userFromSessionCookie(r *http.Request) (*auth.Claim
 		return nil, err
 	}
 	return claims, nil
-}
-
-func (h *oauthServerHandler) userEntitledToAgent(ctx context.Context, userID uuid.UUID, role auth.Role, agentID uuid.UUID) bool {
-	return h.userEntitledToAgentWithQueries(ctx, dbq.New(h.db.Pool()), userID, role, agentID)
-}
-
-func (h *oauthServerHandler) userEntitledToAgentWithQueries(ctx context.Context, q *dbq.Queries, userID uuid.UUID, role auth.Role, agentID uuid.UUID) bool {
-	// airlockvet:allow-dbq reason: OAuth entitlement checks read the target agent's live MCP availability before policy resolution
-	agent, err := q.GetAgentByID(ctx, toPgUUID(agentID))
-	if err != nil || !agent.McpEnabled {
-		return false
-	}
-	_, granted := authz.UserPrincipal(userID, role).EffectiveAgentAccessGranted(ctx, q, agentID)
-	return granted
 }
 
 // lookupAgentByIdentifier is a thin alias for service.ResolveAgent at

@@ -16,7 +16,7 @@ import (
 	managedbotssvc "github.com/airlockrun/airlock/service/managedbots"
 	memberssvc "github.com/airlockrun/airlock/service/members"
 	runssvc "github.com/airlockrun/airlock/service/runs"
-	siblingssvc "github.com/airlockrun/airlock/service/siblings"
+	"github.com/airlockrun/airlock/service/systemchat"
 	userssvc "github.com/airlockrun/airlock/service/users"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -30,6 +30,7 @@ import (
 // across HTTP requests. Per-request state (Principal, conversation, message
 // history) lives on the chat loop, not here.
 type Service struct {
+	domain             *systemchat.Service
 	db                 *db.DB
 	encryptor          secrets.Store
 	pubsub             *realtime.PubSub
@@ -47,14 +48,10 @@ type Service struct {
 	managedbots *managedbotssvc.Service
 	members     *memberssvc.Service
 	runs        *runssvc.Service
-	siblings    *siblingssvc.Service
 	users       *userssvc.Service
 
-	// activeRuns is the in-process registry of cancellable chat
-	// goroutines, keyed by run id. /cancel and operator-initiated
-	// shutdowns look up the cancel func here. The map only carries
-	// in-process state — a multi-replica deployment would need a DB
-	// signal too, but airlock is single-instance today.
+	// activeRuns accelerates local delivery of durable cancellations.
+	// Every runtime also observes the database across replicas.
 	activeMu   sync.Mutex
 	activeRuns map[uuid.UUID]context.CancelFunc
 
@@ -70,7 +67,7 @@ type Service struct {
 // conversation and delivers it (text + confirmation buttons) to the chat.
 // Implemented by trigger.BridgeManager, which owns the driver + bridge sink.
 type bridgeResumer interface {
-	ResumeSystemConversation(ctx context.Context, conversationID uuid.UUID) error
+	ResumeSystemConversation(ctx context.Context, conversationID, originRunID uuid.UUID) error
 }
 
 // SetBridgeResumer wires the bridge resume path. Called once at startup; nil
@@ -95,7 +92,6 @@ type Deps struct {
 	ManagedBots *managedbotssvc.Service
 	Members     *memberssvc.Service
 	Runs        *runssvc.Service
-	Siblings    *siblingssvc.Service
 	Users       *userssvc.Service
 }
 
@@ -122,10 +118,11 @@ func New(d Deps) *Service {
 	}
 	if d.Agents == nil || d.Bridges == nil || d.Catalog == nil || d.Conns == nil ||
 		d.GitCreds == nil || d.ManagedBots == nil || d.Members == nil ||
-		d.Runs == nil || d.Siblings == nil || d.Users == nil {
+		d.Runs == nil || d.Users == nil {
 		panic("sysagent: every per-domain service is required")
 	}
 	return &Service{
+		domain:             systemchat.New(d.DB, d.Logger),
 		db:                 d.DB,
 		encryptor:          d.Encryptor,
 		pubsub:             d.PubSub,
@@ -140,7 +137,6 @@ func New(d Deps) *Service {
 		managedbots:        d.ManagedBots,
 		members:            d.Members,
 		runs:               d.Runs,
-		siblings:           d.Siblings,
 		users:              d.Users,
 		activeRuns:         make(map[uuid.UUID]context.CancelFunc),
 	}

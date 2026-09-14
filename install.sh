@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Airlock turnkey installer.
 #
-#   curl -fsSL https://raw.githubusercontent.com/airlockrun/airlock/v0.6.3/install.sh | bash
+#   ./install.sh --pre-release
 #
 # Or inspect first (recommended):
-#   curl -fsSL https://raw.githubusercontent.com/airlockrun/airlock/v0.6.3/install.sh -o install.sh
-#   less install.sh && bash install.sh
+#   less install.sh
+#   bash install.sh --pre-release
 #
 # Takes a Linux VPS (or macOS for local/tunnel) with Docker already running to a
 # hardened airlock: generates secrets, verifies the domain,
@@ -36,7 +36,7 @@
 # mutating commands are guarded with explicit `|| die`.
 set -uo pipefail
 
-RELEASE_TAG="${AIRLOCK_TAG:-v0.6.3}"
+RELEASE_TAG="${AIRLOCK_TAG:-v0.7.0-rc.1}"
 REPO_URL="https://github.com/airlockrun/airlock.git"
 INSTALL_DIR=""
 TLS_MODE=""        # local|wildcard|tunnel|manual|proxy — decided interactively
@@ -666,6 +666,7 @@ bring_up() {
 	if [ "$DRY_RUN" = 1 ]; then
 		hr; log "DRY RUN — would run:"
 		[ "$BUILD_CADDY" = 1 ] && printf '  %s\n' "docker build -f caddy/Dockerfile -t airlock-caddy-local ."
+		printf '  %s\n' "docker compose pull airlock frontend agent-builder-image agent-base-image js-executor-image"
 		printf '  %s\n' "${cmd[*]}"
 		return
 	fi
@@ -674,6 +675,8 @@ bring_up() {
 		docker build -f caddy/Dockerfile -t airlock-caddy-local . || die "caddy image build failed"
 	fi
 	log "starting the stack (profiles: $(IFS=,; printf '%s' "${PROFILES[*]:-none}"))"
+	docker compose pull airlock frontend agent-builder-image agent-base-image js-executor-image \
+		|| die "release image pull failed (including the JavaScript executor)"
 	if ! "${cmd[@]}"; then
 		warn "Could not pull an image for tag $RELEASE_TAG — make sure this release's images are published to ghcr (or pass --tag <published-tag>)."
 		die "stack failed to start (see 'docker compose logs')"

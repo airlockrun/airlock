@@ -61,8 +61,7 @@ func (a *AgentSlashConv) Cancel(ctx context.Context, convID pgtype.UUID) bool {
 
 // Clear writes a checkpoint marker row and advances the conversation's
 // context_checkpoint_message_id. Also best-effort resolves any
-// suspended run for THIS conversation (not a sibling-delegated
-// suspension that happens to be the agent's latest).
+// suspended run for this conversation.
 func (a *AgentSlashConv) Clear(ctx context.Context, convID pgtype.UUID) (bool, error) {
 	if !convID.Valid {
 		return false, nil

@@ -70,20 +70,26 @@ LIMIT @batch_size
 FOR UPDATE OF a, c SKIP LOCKED;
 
 -- name: InsertAgentJobFromCron :one
+WITH origin AS (
+    INSERT INTO execution_origins(id,agent_id,ingress,actor,credential_profile,runtime_generation,created_at)
+    SELECT gen_random_uuid(),agent_id,'cron','app','none',agent_token_version,now() FROM agent_job_crons WHERE id = @cron_id
+    RETURNING id,agent_id
+)
 INSERT INTO agent_jobs (
-    id, agent_id, handler_name, handler_version, input_schema_hash,
+    id, agent_id, origin_id, handler_name, handler_version, input_schema_hash,
     output_schema_hash, source_run_id, cron_id, cron_slug, scheduled_at,
     initiator_kind, initiator_user_id, initiator_conversation_id,
     initiator_access, status, timeout_ms, max_attempts, attempt_limit, attempt_count,
     next_attempt_at, input_payload, state_version
 )
 SELECT
-    @job_id, c.agent_id, c.handler_name, c.handler_version,
+    @job_id, c.agent_id, origin.id, c.handler_name, c.handler_version,
     c.input_schema_hash, c.output_schema_hash, NULL, c.id, c.slug,
-    @scheduled_at, @initiator_kind, @initiator_user_id,
-    @initiator_conversation_id, @initiator_access, 'queued', h.timeout_ms,
+    @scheduled_at, 'system', NULL,
+    NULL, 'admin', 'queued', h.timeout_ms,
     h.max_attempts, h.max_attempts, 0, @scheduled_at, c.input_payload, 1
 FROM agent_job_crons c
+JOIN origin ON origin.agent_id = c.agent_id
 JOIN agents a ON a.id = c.agent_id
 JOIN agent_job_handlers h
   ON h.agent_id = c.agent_id
@@ -103,18 +109,19 @@ RETURNING agent_jobs.*;
 
 -- name: InsertManualAgentJobFromCron :one
 INSERT INTO agent_jobs (
-    id, agent_id, handler_name, handler_version, input_schema_hash,
+    id, agent_id, origin_id, handler_name, handler_version, input_schema_hash,
     output_schema_hash, source_run_id, cron_id, cron_slug, scheduled_at,
     initiator_kind, initiator_user_id, initiator_conversation_id,
     initiator_access, status, timeout_ms, max_attempts, attempt_limit, attempt_count,
     next_attempt_at, input_payload, state_version
 )
 SELECT
-    @job_id, c.agent_id, c.handler_name, c.handler_version,
+    @job_id, c.agent_id, o.id, c.handler_name, c.handler_version,
     c.input_schema_hash, c.output_schema_hash, NULL, c.id, c.slug,
-    @scheduled_at, 'user', @initiator_user_id, NULL, 'admin', 'queued',
+    @scheduled_at, 'user', o.user_id, o.conversation_id, 'admin', 'queued',
     h.timeout_ms, h.max_attempts, h.max_attempts, 0, @scheduled_at, c.input_payload, 1
 FROM agent_job_crons c
+JOIN execution_origins o ON o.id = @origin_id AND o.agent_id = c.agent_id AND o.actor = 'user'
 JOIN agents a ON a.id = c.agent_id
 JOIN agent_job_handlers h
   ON h.agent_id = c.agent_id

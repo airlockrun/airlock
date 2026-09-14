@@ -1,5 +1,5 @@
 // Package sysagent is the in-airlock chat agent that lets operators
-// manage agents, bridges, connections, members, A2A, runs, and (later)
+// manage agents, bridges, connections, members, runs, and
 // other tenant resources through tool calls.
 //
 // No JS VM, no per-agent connections, no Sol — sysagent runs inside
@@ -9,15 +9,15 @@
 // action.
 //
 // One sysagent per Airlock instance, per-user multi-conversation chat
-// history. Schema lives in migrations/002_a2a.sql (system_conversations,
-// system_messages, system_audit).
+// history in system_conversations, system_messages, and system_audit.
 package sysagent
 
 import (
 	"context"
 
-	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/authz"
+	"github.com/airlockrun/airlock/db/dbq"
+	"github.com/airlockrun/airlock/service/systemchat"
 	"github.com/google/uuid"
 )
 
@@ -27,10 +27,19 @@ import (
 // means nothing else in the codebase can fabricate a Principal here.
 type principalKey struct{}
 
+type turnPrincipal struct {
+	p     authz.Principal
+	q     *dbq.Queries
+	check func(context.Context) error
+}
+
 // withPrincipal returns a new context carrying p. Called once per
 // HTTP request, at the sysagent boundary, before goai.StreamText.
-func withPrincipal(ctx context.Context, p authz.Principal) context.Context {
-	return context.WithValue(ctx, principalKey{}, p)
+func withPrincipal(ctx context.Context, p authz.Principal, q *dbq.Queries, check func(context.Context) error) context.Context {
+	if q == nil || check == nil {
+		panic("sysagent: principal queries and run check are required")
+	}
+	return context.WithValue(ctx, principalKey{}, turnPrincipal{p: p, q: q, check: check})
 }
 
 // principalFromCtx returns the Principal stashed by withPrincipal, or
@@ -38,19 +47,16 @@ func withPrincipal(ctx context.Context, p authz.Principal) context.Context {
 // with ErrUnauthorized on every gated action, so the absence case
 // fails closed (never silently runs as something).
 func principalFromCtx(ctx context.Context) authz.Principal {
-	if p, ok := ctx.Value(principalKey{}).(authz.Principal); ok {
-		return p
+	if turn, ok := ctx.Value(principalKey{}).(turnPrincipal); ok {
+		if err := turn.check(ctx); err != nil {
+			return authz.Principal{}
+		}
+		p, err := systemchat.FreshPrincipal(ctx, turn.q, turn.p)
+		if err == nil {
+			return p
+		}
 	}
 	return authz.Principal{}
-}
-
-// principalForUser builds a registered-user principal from the
-// authenticated user's id + tenant role. Used by the auto-resume path
-// (handler.resumeConversation) where there's no live HTTP request to pull
-// claims off of — the conversation carries who owns it and we look up the
-// current tenant role from the users table fresh.
-func principalForUser(userID uuid.UUID, tenantRole string) authz.Principal {
-	return authz.UserPrincipal(userID, auth.Role(tenantRole))
 }
 
 // conversationIDKey is the unexported context key under which the chat loop

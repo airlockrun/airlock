@@ -2,23 +2,28 @@ package authz
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/airlockrun/agentsdk"
+	"github.com/airlockrun/airlock/apperr"
+	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // accessRank totally orders the three access levels. AccessAdmin >
-// AccessUser > AccessPublic; anything unknown ranks at the floor.
+// AccessUser > AccessPublic; unknown values are invalid.
 func accessRank(a agentsdk.Access) int {
 	switch a {
 	case agentsdk.AccessAdmin:
 		return 2
 	case agentsdk.AccessUser:
 		return 1
-	default:
+	case agentsdk.AccessPublic:
 		return 0
+	default:
+		return -1
 	}
 }
 
@@ -27,45 +32,33 @@ func accessRank(a agentsdk.Access) int {
 // gates, the service-layer Authorize gate, and the MCP path all rank
 // through here so the ordering can't drift between surfaces.
 func AccessAtLeast(a, min agentsdk.Access) bool {
-	return accessRank(a) >= accessRank(min)
+	return accessRank(a) >= 0 && accessRank(min) >= 0 && accessRank(a) >= accessRank(min)
 }
 
-// MinAccess returns the lower of two access levels on the agent ladder. It
-// composes the A2A delegation caps: a sibling agent acting on a user's behalf
-// can never exceed the access its own owner holds on the target, nor the
-// per-edge max_access the operator set on the address-book entry. The
-// effective access is the minimum across (driving user, acting-agent owner,
-// edge max_access).
-func MinAccess(a, b agentsdk.Access) agentsdk.Access {
-	if accessRank(a) <= accessRank(b) {
-		return a
+// EffectiveAgentAccessChecked resolves grants and propagates lookup/admission
+// failures. An absent grant is public; an unavailable lookup is an error.
+// The access is the maximum across matching user and role-group grants. The
+// boolean distinguishes an explicit public grant from the non-member floor.
+func (p Principal) EffectiveAgentAccessChecked(ctx context.Context, q *dbq.Queries, agentID uuid.UUID) (agentsdk.Access, bool, error) {
+	if !p.Valid() || agentID == uuid.Nil || p.Kind == KindTrigger || p.Kind == KindCodegen || p.Kind == KindRegisteredUser && p.UserID == uuid.Nil {
+		return "", false, apperr.ErrForbidden
 	}
-	return b
-}
-
-// EffectiveAgentAccess resolves the principal's access on agentID off
-// agent_grants. A grant may target the principal's own user id (per-user
-// member) or a role-group in its grantee-set (e.g. the built-in `user` group =
-// every registered user, "shared with everyone"); the effective access is the
-// max role across all matching grants. Everyone with no matching grant
-// (anonymous, trigger, non-member registered user) maps to AccessPublic.
-// Surface-specific "is public allowed here" policy (e.g. the agent's
-// allow_public_mcp flag) lives at the surface, not in this ladder.
-func (p Principal) EffectiveAgentAccess(ctx context.Context, q *dbq.Queries, agentID uuid.UUID) agentsdk.Access {
-	access, _ := p.EffectiveAgentAccessGranted(ctx, q, agentID)
-	return access
-}
-
-// EffectiveAgentAccessGranted is EffectiveAgentAccess plus whether an actual
-// grant matched. The access value alone can't distinguish "AccessPublic
-// because an explicit `public` grant matched" from "AccessPublic because the
-// caller is a non-member at the floor" — both read as AccessPublic. The A2A
-// entitlement gate needs that distinction (an explicit All-Users `public`
-// grant admits the caller; the bare floor does not), so it reads granted.
-func (p Principal) EffectiveAgentAccessGranted(ctx context.Context, q *dbq.Queries, agentID uuid.UUID) (access agentsdk.Access, granted bool) {
+	if p.Identity != nil {
+		live, err := p.Identity.Resolve(ctx, q)
+		if err != nil {
+			return "", false, err
+		}
+		if live.Subject != p.UserID.String() {
+			return "", false, apperr.ErrUnauthorized
+		}
+		if err := auth.RequireSecuredAccount(live); err != nil {
+			return "", false, err
+		}
+		p.TenantRole = auth.Role(live.TenantRole)
+	}
 	set := p.GranteeSet()
 	if len(set) == 0 {
-		return agentsdk.AccessPublic, false
+		return agentsdk.AccessPublic, false, nil
 	}
 	grantees := make([]pgtype.UUID, len(set))
 	for i, id := range set {
@@ -75,17 +68,22 @@ func (p Principal) EffectiveAgentAccessGranted(ctx context.Context, q *dbq.Queri
 		AgentID:    pgtype.UUID{Bytes: agentID, Valid: true},
 		GranteeIds: grantees,
 	})
-	if err != nil || len(roles) == 0 {
-		return agentsdk.AccessPublic, false
+	if err != nil {
+		return "", false, err
+	}
+	if len(roles) == 0 {
+		return agentsdk.AccessPublic, false, nil
 	}
 	best := agentsdk.AccessPublic
 	for _, role := range roles {
 		switch role {
-		case "admin":
-			return agentsdk.AccessAdmin, true
-		case "user":
-			best = agentsdk.AccessUser
+		case "admin", "user", "public":
+			if AccessAtLeast(agentsdk.Access(role), best) {
+				best = agentsdk.Access(role)
+			}
+		default:
+			return "", false, fmt.Errorf("invalid persisted agent access %q", role)
 		}
 	}
-	return best, true
+	return best, true, nil
 }

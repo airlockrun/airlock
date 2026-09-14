@@ -38,10 +38,11 @@ var bannedJSONFuncs = map[string]struct{}{
 }
 
 func runWriteProto(pass *analysis.Pass) (any, error) {
+	allow := collectAllowMarkers(pass, "allow-writejson")
+	defer allow.reportUnused()
 	if pass.Pkg.Path() != apiPkgPath {
 		return nil, nil
 	}
-	allow := collectAllowMarkers(pass, "allow-writejson")
 	insp := pass.ResultOf[inspect.Analyzer].(*inspector.Inspector)
 	filter := []ast.Node{(*ast.CallExpr)(nil)}
 

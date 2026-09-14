@@ -16,17 +16,13 @@ import (
 // want to move backwards, and the agent_builds row that defines the
 // target (its source_ref becomes main; its image_ref is rebuilt).
 //
-// ConversationID and SystemConversationID are mutually exclusive: a rollback
-// triggered from a web/bridge/A2A agent conversation sets the former;
-// one triggered from a system-agent conversation sets the latter. The
-// post-build outcome routes to whichever was set — see
-// BuildService.notifyUpgradeOutcome.
+// ChatOriginID routes the outcome to the exact initiating run and conversation.
 type RollbackInput struct {
-	AgentID              string
-	InitiatorUserID      pgtype.UUID // user who triggered the rollback; attributes codegen spend (falls back to owner)
-	BuildID              string
-	ConversationID       string
-	SystemConversationID string
+	ChatOriginID    pgtype.UUID
+	AgentID         string
+	InitiatorUserID pgtype.UUID // user who triggered the rollback; attributes codegen spend (falls back to owner)
+	BuildID         string
+	ConversationID  string
 }
 
 // Rollback reverses an agent to a previous build's source_ref. Wraps
@@ -68,30 +64,30 @@ func (b *BuildService) Rollback(_ context.Context, in RollbackInput) {
 		return
 	}
 	if agent.GitMode == "read_only" {
-		b.failRollback(dbCtx, agentPgUUID, agentUUID, in.ConversationID, in.SystemConversationID, errors.New("agent uses read-only Git; rollbacks must be pushed to the connected repository"))
+		b.failRollback(dbCtx, agentPgUUID, agentUUID, in.ChatOriginID, errors.New("agent uses read-only Git; rollbacks must be pushed to the connected repository"))
 		return
 	}
 
 	targetID := mustParseUUID(in.BuildID)
 	target, err := q.GetAgentBuild(ctx, targetID)
 	if err != nil {
-		b.failRollback(dbCtx, agentPgUUID, agentUUID, in.ConversationID, in.SystemConversationID, fmt.Errorf("load target build: %w", err))
+		b.failRollback(dbCtx, agentPgUUID, agentUUID, in.ChatOriginID, fmt.Errorf("load target build: %w", err))
 		return
 	}
 	if uuid.UUID(target.AgentID.Bytes) != agentUUID {
-		b.failRollback(dbCtx, agentPgUUID, agentUUID, in.ConversationID, in.SystemConversationID, errors.New("target build does not belong to this agent"))
+		b.failRollback(dbCtx, agentPgUUID, agentUUID, in.ChatOriginID, errors.New("target build does not belong to this agent"))
 		return
 	}
 	if target.Status != "complete" {
-		b.failRollback(dbCtx, agentPgUUID, agentUUID, in.ConversationID, in.SystemConversationID, errors.New("can only roll back to a completed build"))
+		b.failRollback(dbCtx, agentPgUUID, agentUUID, in.ChatOriginID, errors.New("can only roll back to a completed build"))
 		return
 	}
 	if target.SourceRef == "" {
-		b.failRollback(dbCtx, agentPgUUID, agentUUID, in.ConversationID, in.SystemConversationID, errors.New("target build has no source_ref"))
+		b.failRollback(dbCtx, agentPgUUID, agentUUID, in.ChatOriginID, errors.New("target build has no source_ref"))
 		return
 	}
 	if target.SourceRef == agent.SourceRef {
-		b.failRollback(dbCtx, agentPgUUID, agentUUID, in.ConversationID, in.SystemConversationID, errors.New("target build is the current build"))
+		b.failRollback(dbCtx, agentPgUUID, agentUUID, in.ChatOriginID, errors.New("target build is the current build"))
 		return
 	}
 
@@ -107,6 +103,7 @@ func (b *BuildService) Rollback(_ context.Context, in RollbackInput) {
 	}
 
 	plan := BuildPlan{
+		ChatOriginID:     in.ChatOriginID,
 		Agent:            agent,
 		Kind:             BuildKindRollback,
 		StartCommit:      target.SourceRef,
@@ -121,7 +118,7 @@ func (b *BuildService) Rollback(_ context.Context, in RollbackInput) {
 
 	successMsg, runErr := b.Execute(ctx, plan)
 	if runErr != nil {
-		b.failRollback(dbCtx, agentPgUUID, agentUUID, in.ConversationID, in.SystemConversationID, runErr)
+		b.failRollback(dbCtx, agentPgUUID, agentUUID, in.ChatOriginID, runErr)
 		return
 	}
 
@@ -136,10 +133,10 @@ func (b *BuildService) Rollback(_ context.Context, in RollbackInput) {
 	if msg == "" {
 		msg = fmt.Sprintf("Rolled back to build %s.", target.SourceRef[:min(12, len(target.SourceRef))])
 	}
-	b.notifyUpgradeOutcome(dbCtx, agentUUID, in.ConversationID, in.SystemConversationID, "success", msg)
+	b.notifyUpgradeOutcome(dbCtx, agentUUID, in.ChatOriginID, "success", msg)
 }
 
-func (b *BuildService) failRollback(dbCtx context.Context, agentPgUUID pgtype.UUID, agentUUID uuid.UUID, conversationID, systemConversationID string, runErr error) {
+func (b *BuildService) failRollback(dbCtx context.Context, agentPgUUID pgtype.UUID, agentUUID uuid.UUID, originID pgtype.UUID, runErr error) {
 	q := dbq.New(b.db.Pool())
 	// A refused request is not a rollback failure — the agent is
 	// untouched. Release the lock back to idle and report it declined.
@@ -151,7 +148,7 @@ func (b *BuildService) failRollback(dbCtx context.Context, agentPgUUID pgtype.UU
 			UpgradeStatus: "idle",
 			ErrorMessage:  "",
 		})
-		b.notifyUpgradeOutcome(dbCtx, agentUUID, conversationID, systemConversationID, "refused", refErr.Message)
+		b.notifyUpgradeOutcome(dbCtx, agentUUID, originID, "refused", refErr.Message)
 		return
 	}
 	errMsg := runErr.Error()
@@ -167,6 +164,6 @@ func (b *BuildService) failRollback(dbCtx context.Context, agentPgUUID pgtype.UU
 		ErrorMessage:  errMsg,
 	})
 	if !errors.Is(runErr, context.Canceled) {
-		b.notifyUpgradeOutcome(dbCtx, agentUUID, conversationID, systemConversationID, "error", errMsg)
+		b.notifyUpgradeOutcome(dbCtx, agentUUID, originID, "error", errMsg)
 	}
 }

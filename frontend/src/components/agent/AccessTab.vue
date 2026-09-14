@@ -3,24 +3,20 @@
 // member is set under Members; these switches control external connections
 // (MCP) and anonymous access.
 import { ref, computed, onMounted } from 'vue'
+import { create, fromJson, toJson } from '@bufbuild/protobuf'
 import api from '@/api/client'
+import { AgentAccessSettingsSchema } from '@/gen/airlock/v1/types_pb'
 import { useAirlockI18n } from '@/i18n'
 import { useToast } from 'primevue/usetoast'
-
-interface A2ASettings {
-  mcpEnabled: boolean
-  allowPublicMcp: boolean
-  allowPublicRoutes: boolean
-}
 
 const props = defineProps<{ agentId: string }>()
 const toast = useToast()
 const { t } = useAirlockI18n()
 
 const loading = ref(true)
-const settings = ref<A2ASettings>({ mcpEnabled: true, allowPublicMcp: false, allowPublicRoutes: true })
+const settings = ref(create(AgentAccessSettingsSchema))
 
-// Endpoints other apps connect to. Same origin as the web app.
+// External MCP endpoints. Same origin as the web app.
 const base = computed(() => `${window.location.origin}/api/agent/${props.agentId}`)
 const mcpUrl = computed(() => `${base.value}/mcp`)
 const publicMcpUrl = computed(() => `${base.value}/public-mcp`)
@@ -28,12 +24,8 @@ const publicMcpUrl = computed(() => `${base.value}/public-mcp`)
 async function loadSettings() {
   loading.value = true
   try {
-    const { data } = await api.get(`/api/v1/agents/${props.agentId}/a2a-settings`)
-    settings.value = {
-      mcpEnabled: !!data?.settings?.mcpEnabled,
-      allowPublicMcp: !!data?.settings?.allowPublicMcp,
-      allowPublicRoutes: !!data?.settings?.allowPublicRoutes,
-    }
+    const { data } = await api.get(`/api/v1/agents/${props.agentId}/access-settings`)
+    settings.value = fromJson(AgentAccessSettingsSchema, data)
   } finally {
     loading.value = false
   }
@@ -46,7 +38,8 @@ async function saveSettings() {
     settings.value.allowPublicMcp = false
   }
   try {
-    await api.put(`/api/v1/agents/${props.agentId}/a2a-settings`, { settings: settings.value })
+    const { data } = await api.put(`/api/v1/agents/${props.agentId}/access-settings`, toJson(AgentAccessSettingsSchema, settings.value))
+    settings.value = fromJson(AgentAccessSettingsSchema, data)
     toast.add({ severity: 'success', summary: t('agentConfig.access.saved'), life: 2000 })
   } catch (err: any) {
     toast.add({ severity: 'error', summary: err.response?.data?.error || t('agentConfig.common.saveFailed'), life: 5000 })

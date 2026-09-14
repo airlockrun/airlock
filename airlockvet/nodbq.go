@@ -11,17 +11,13 @@ import (
 	"golang.org/x/tools/go/ast/inspector"
 )
 
-// apiPkgPath is the only package the analyzers fire inside. Other
-// packages (service/, sysagent/, agentapi/, …) call dbq and emit JSON
-// by design — the rule is that the HTTP edge in api/ must route through
-// service/{domain} so authz.Authorize runs and must speak proto on the
-// wire. Declared as a var so tests can point it at a fixture package.
+// Declared as a var so wire-check tests can select a fixture package.
 var apiPkgPath = "github.com/airlockrun/airlock/api"
 
 // dbqPkgPath identifies the receiver type the NoDBQ analyzer flags.
 const dbqPkgPath = "github.com/airlockrun/airlock/db/dbq"
 
-// NoDBQ flags method calls on *dbq.Queries from inside airlock/api.
+// NoDBQ flags dbq query method references at transport boundaries.
 // Handler code that needs database access must go through a
 // service/{domain} method so authz.Authorize gates the call.
 //
@@ -29,53 +25,42 @@ const dbqPkgPath = "github.com/airlockrun/airlock/db/dbq"
 // the same line or the line above the offending expression.
 var NoDBQ = &analysis.Analyzer{
 	Name:     "nodbq",
-	Doc:      "report direct *dbq.Queries method calls in airlock/api/; handlers must call service/{domain} instead",
+	Doc:      "report direct dbq query method references in transport packages; call services instead",
 	Requires: []*analysis.Analyzer{inspect.Analyzer},
 	Run:      runNoDBQ,
 }
 
 func runNoDBQ(pass *analysis.Pass) (any, error) {
-	if pass.Pkg.Path() != apiPkgPath {
+	allow := collectAllowMarkers(pass, "allow-dbq")
+	defer allow.reportUnused()
+	if !transportPackage(pass.Pkg.Path()) {
 		return nil, nil
 	}
-	allow := collectAllowMarkers(pass, "allow-dbq")
 	insp := pass.ResultOf[inspect.Analyzer].(*inspector.Inspector)
-	filter := []ast.Node{(*ast.CallExpr)(nil)}
+	filter := []ast.Node{(*ast.Ident)(nil)}
 
 	insp.Preorder(filter, func(n ast.Node) {
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
+		id := n.(*ast.Ident)
+		fn, ok := pass.TypesInfo.Uses[id].(*types.Func)
+		if !ok || fn.Pkg() == nil || fn.Pkg().Path() != dbqPkgPath {
 			return
 		}
-		sel, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok {
+		sig := fn.Type().(*types.Signature)
+		if sig.Recv() == nil || (!isNamedType(sig.Recv().Type(), dbqPkgPath, "Queries") && !isNamedType(sig.Recv().Type(), dbqPkgPath, "Querier")) {
 			return
 		}
-		// Type of the receiver expression. If it's *dbq.Queries — flag.
-		recvType := pass.TypesInfo.TypeOf(sel.X)
-		if recvType == nil {
+		if isTestFile(pass, id.Pos()) || allow.allowed(id.Pos()) {
 			return
 		}
-		if !isDBQQueries(recvType) {
-			return
-		}
-		if isTestFile(pass, call.Pos()) {
-			return
-		}
-		if allow.allowed(call.Pos()) {
-			return
-		}
-		pass.Reportf(call.Pos(),
-			"direct dbq.Queries.%s call in api/: route through service/{domain} so authz.Authorize gates the call (or annotate with `// airlockvet:allow-dbq reason: …`)",
-			sel.Sel.Name)
+		pass.Reportf(id.Pos(), "direct dbq.Queries.%s reference in transport: route through service/{domain} (or annotate narrow plumbing with // airlockvet:allow-dbq reason: <why>)", id.Name)
 	})
 	return nil, nil
 }
 
-// isDBQQueries reports whether t is *dbq.Queries or dbq.Queries.
-func isDBQQueries(t types.Type) bool {
+func isNamedType(t types.Type, pkg, name string) bool {
+	t = types.Unalias(t)
 	if ptr, ok := t.(*types.Pointer); ok {
-		t = ptr.Elem()
+		t = types.Unalias(ptr.Elem())
 	}
 	named, ok := t.(*types.Named)
 	if !ok {
@@ -85,7 +70,16 @@ func isDBQQueries(t types.Type) bool {
 	if obj == nil || obj.Pkg() == nil {
 		return false
 	}
-	return obj.Pkg().Path() == dbqPkgPath && obj.Name() == "Queries"
+	return obj.Pkg().Path() == pkg && obj.Name() == name
+}
+
+func transportPackage(pkg string) bool {
+	for _, root := range []string{apiPkgPath, agentapiPkgPath, corePkgPath + "/hostapi", corePkgPath + "/sysagent", enterprisePkgPath + "/api", enterprisePkgPath + "/agentapi", enterprisePkgPath + "/hostapi"} {
+		if withinPackage(pkg, root) {
+			return true
+		}
+	}
+	return false
 }
 
 // isTestFile reports whether pos lives in a _test.go file. Tests

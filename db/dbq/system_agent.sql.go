@@ -120,8 +120,7 @@ type CreateSystemConversationParams struct {
 }
 
 // system_agent: per-user chat conversations + messages + lightweight
-// runs + audit log for the in-airlock system agent. Schema lives in
-// migrations/002_a2a.sql.
+// runs + audit log for the in-airlock system agent.
 func (q *Queries) CreateSystemConversation(ctx context.Context, arg CreateSystemConversationParams) (SystemConversation, error) {
 	row := q.db.QueryRow(ctx, createSystemConversation, arg.UserID, arg.Title)
 	var i SystemConversation
@@ -830,7 +829,7 @@ UPDATE system_runs
 SET status = $1,
     error_message = $2,
     finished_at = CASE WHEN $1 IN ('complete', 'error', 'cancelled') THEN now() ELSE finished_at END
-WHERE id = $3
+WHERE id = $3 AND status = 'running'
 `
 
 type UpdateSystemRunStatusParams struct {

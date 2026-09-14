@@ -8,12 +8,6 @@
 
 import { isAuthRejection, refreshAccessToken } from '@/api/client'
 
-export interface SubagentInfo {
-  agentId: string
-  runId: string
-  slug?: string
-}
-
 export interface RawEnvelope {
   type: string
   requestId?: string
@@ -23,15 +17,9 @@ export interface RawEnvelope {
   // gating is observable here (the server already filtered; this is
   // for client-side card routing).
   userId?: string
-  // Hub-global monotonic publish sequence. We keep the max seen and
-  // present it as ?since= on reconnect so the server replays only the
-  // delta (or sends `resync`) instead of the whole per-topic buffer.
+  // Commit-ordered shared publish sequence; zero/absent for state-versioned events.
   seq?: number
   conversationId?: string
-  // subagent tags the envelope as a sub-run event mirrored from an
-  // A2A child run; chat store routes these into the parent's active
-  // tool-call card instead of the main message stream.
-  subagent?: SubagentInfo
   payload?: unknown
 }
 
@@ -43,10 +31,10 @@ export class AirlockWS {
   private reconnectDelay = 1000
   private maxReconnectDelay = 30000
   private shouldReconnect = false
-  // Max Envelope.seq processed; sent as ?since= on (re)connect for
-  // delta replay. Resets to 0 on full page reload (new instance) — a
-  // fresh load DB-loads anyway, so no replay is correct there.
-  private lastSeq = 0
+  // Topic replays can interleave during subscription. Reconnect from the lowest
+  // topic watermark and dedupe per topic, never skip a tail behind another topic.
+  private topicSeq = new Map<string, number>()
+  private generation = 0
   // Per-build topics the client has dynamically subscribed to (Build page
   // open). Re-sent on every (re)connect so a drop mid-build resubscribes.
   private buildSubs = new Set<string>()
@@ -55,11 +43,13 @@ export class AirlockWS {
   /** Open the socket using the same-origin HttpOnly access cookie. */
   connect() {
     this.shouldReconnect = true
-    void this.doConnect(false)
+    this.reconnect()
   }
 
   disconnect() {
     this.shouldReconnect = false
+    this.generation++
+    this.topicSeq.clear()
     if (this.socket) {
       this.detach(this.socket)
       this.socket.close()
@@ -142,11 +132,13 @@ export class AirlockWS {
     this.send('unsubscribe.jobs', { agentId })
   }
 
-  private async doConnect(refreshFirst: boolean) {
+  private async doConnect(refreshFirst: boolean, generation = ++this.generation) {
+    if (!this.shouldReconnect || generation !== this.generation) return
     if (refreshFirst) {
       try {
         await refreshAccessToken()
       } catch (err) {
+        if (!this.shouldReconnect || generation !== this.generation) return
         // Only treat a 401/403 from the server as "refresh token is
         // dead." A transport error or 5xx (Caddy 502/503 while airlock
         // is restarting) is transient — keep the reconnect loop alive
@@ -159,15 +151,18 @@ export class AirlockWS {
         // Transient: fall through into the reconnect-with-backoff path
         // below by faking an onclose-style retry.
         if (this.shouldReconnect) {
-          setTimeout(() => void this.doConnect(true), this.reconnectDelay)
+          setTimeout(() => void this.doConnect(true, generation), this.reconnectDelay)
           this.reconnectDelay = Math.min(this.reconnectDelay * 2, this.maxReconnectDelay)
         }
         return
       }
     }
 
+    if (!this.shouldReconnect || generation !== this.generation) return
+
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const since = this.lastSeq > 0 ? `?since=${this.lastSeq}` : ''
+    const cursor = this.topicSeq.size ? Math.min(...this.topicSeq.values()) : 0
+    const since = cursor > 0 ? `?since=${cursor}` : ''
     const url = `${protocol}//${window.location.host}/ws${since}`
     this.socket = new WebSocket(url)
 
@@ -183,8 +178,13 @@ export class AirlockWS {
     this.socket.onmessage = (event) => {
       try {
         const envelope: RawEnvelope = JSON.parse(event.data)
-        if (typeof envelope.seq === 'number' && envelope.seq > this.lastSeq) {
-          this.lastSeq = envelope.seq
+        const topic = envelope.topicId
+        if (envelope.type === 'resync') {
+          if (!topic) this.topicSeq.clear()
+          else this.topicSeq.set(topic, envelope.seq ?? 0)
+        } else if (topic && typeof envelope.seq === 'number' && envelope.seq > 0) {
+          if (envelope.seq <= (this.topicSeq.get(topic) ?? 0)) return
+          this.topicSeq.set(topic, envelope.seq)
         }
         this.emit(envelope.type, envelope.payload, envelope)
       } catch {
@@ -198,7 +198,7 @@ export class AirlockWS {
       this.emit('_disconnected', null)
       if (this.shouldReconnect) {
         console.log('[ws] reconnecting in', this.reconnectDelay, 'ms')
-        setTimeout(() => void this.doConnect(true), this.reconnectDelay)
+        setTimeout(() => void this.doConnect(true, generation), this.reconnectDelay)
         this.reconnectDelay = Math.min(this.reconnectDelay * 2, this.maxReconnectDelay)
       }
     }

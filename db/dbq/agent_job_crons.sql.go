@@ -89,26 +89,32 @@ func (q *Queries) GetAgentJobCron(ctx context.Context, arg GetAgentJobCronParams
 }
 
 const insertAgentJobFromCron = `-- name: InsertAgentJobFromCron :one
+WITH origin AS (
+    INSERT INTO execution_origins(id,agent_id,ingress,actor,credential_profile,runtime_generation,created_at)
+    SELECT gen_random_uuid(),agent_id,'cron','app','none',agent_token_version,now() FROM agent_job_crons WHERE id = $3
+    RETURNING id,agent_id
+)
 INSERT INTO agent_jobs (
-    id, agent_id, handler_name, handler_version, input_schema_hash,
+    id, agent_id, origin_id, handler_name, handler_version, input_schema_hash,
     output_schema_hash, source_run_id, cron_id, cron_slug, scheduled_at,
     initiator_kind, initiator_user_id, initiator_conversation_id,
     initiator_access, status, timeout_ms, max_attempts, attempt_limit, attempt_count,
     next_attempt_at, input_payload, state_version
 )
 SELECT
-    $1, c.agent_id, c.handler_name, c.handler_version,
+    $1, c.agent_id, origin.id, c.handler_name, c.handler_version,
     c.input_schema_hash, c.output_schema_hash, NULL, c.id, c.slug,
-    $2, $3, $4,
-    $5, $6, 'queued', h.timeout_ms,
+    $2, 'system', NULL,
+    NULL, 'admin', 'queued', h.timeout_ms,
     h.max_attempts, h.max_attempts, 0, $2, c.input_payload, 1
 FROM agent_job_crons c
+JOIN origin ON origin.agent_id = c.agent_id
 JOIN agents a ON a.id = c.agent_id
 JOIN agent_job_handlers h
   ON h.agent_id = c.agent_id
  AND h.name = c.handler_name
  AND h.version = c.handler_version
-WHERE c.id = $7
+WHERE c.id = $3
   AND c.next_fire_at = $2
   AND c.enabled
   AND a.status = 'active'
@@ -118,29 +124,17 @@ WHERE c.id = $7
   AND h.agent_token_version = c.agent_token_version
   AND h.input_schema_hash = c.input_schema_hash
   AND h.output_schema_hash = c.output_schema_hash
-RETURNING agent_jobs.id, agent_jobs.agent_id, agent_jobs.handler_name, agent_jobs.handler_version, agent_jobs.input_schema_hash, agent_jobs.output_schema_hash, agent_jobs.source_run_id, agent_jobs.cron_id, agent_jobs.cron_slug, agent_jobs.initiator_kind, agent_jobs.initiator_user_id, agent_jobs.initiator_conversation_id, agent_jobs.initiator_access, agent_jobs.status, agent_jobs.timeout_ms, agent_jobs.max_attempts, agent_jobs.attempt_limit, agent_jobs.attempt_count, agent_jobs.next_attempt_at, agent_jobs.scheduled_at, agent_jobs.input_payload, agent_jobs.output_payload, agent_jobs.progress_phase, agent_jobs.progress_message, agent_jobs.progress_completed, agent_jobs.progress_total, agent_jobs.progress_attempt, agent_jobs.progress_updated_at, agent_jobs.last_error, agent_jobs.cancel_requested_at, agent_jobs.cancelled_by_user_id, agent_jobs.started_at, agent_jobs.completed_at, agent_jobs.state_version, agent_jobs.created_at, agent_jobs.updated_at
+RETURNING agent_jobs.id, agent_jobs.agent_id, agent_jobs.handler_name, agent_jobs.handler_version, agent_jobs.input_schema_hash, agent_jobs.output_schema_hash, agent_jobs.source_run_id, agent_jobs.cron_id, agent_jobs.cron_slug, agent_jobs.initiator_kind, agent_jobs.initiator_user_id, agent_jobs.initiator_conversation_id, agent_jobs.initiator_access, agent_jobs.status, agent_jobs.timeout_ms, agent_jobs.max_attempts, agent_jobs.attempt_limit, agent_jobs.attempt_count, agent_jobs.next_attempt_at, agent_jobs.scheduled_at, agent_jobs.input_payload, agent_jobs.output_payload, agent_jobs.progress_phase, agent_jobs.progress_message, agent_jobs.progress_completed, agent_jobs.progress_total, agent_jobs.progress_attempt, agent_jobs.progress_updated_at, agent_jobs.last_error, agent_jobs.cancel_requested_at, agent_jobs.cancelled_by_user_id, agent_jobs.started_at, agent_jobs.completed_at, agent_jobs.state_version, agent_jobs.created_at, agent_jobs.updated_at, agent_jobs.origin_id
 `
 
 type InsertAgentJobFromCronParams struct {
-	JobID                   pgtype.UUID        `json:"job_id"`
-	ScheduledAt             pgtype.Timestamptz `json:"scheduled_at"`
-	InitiatorKind           string             `json:"initiator_kind"`
-	InitiatorUserID         pgtype.UUID        `json:"initiator_user_id"`
-	InitiatorConversationID pgtype.UUID        `json:"initiator_conversation_id"`
-	InitiatorAccess         string             `json:"initiator_access"`
-	CronID                  pgtype.UUID        `json:"cron_id"`
+	JobID       pgtype.UUID        `json:"job_id"`
+	ScheduledAt pgtype.Timestamptz `json:"scheduled_at"`
+	CronID      pgtype.UUID        `json:"cron_id"`
 }
 
 func (q *Queries) InsertAgentJobFromCron(ctx context.Context, arg InsertAgentJobFromCronParams) (AgentJob, error) {
-	row := q.db.QueryRow(ctx, insertAgentJobFromCron,
-		arg.JobID,
-		arg.ScheduledAt,
-		arg.InitiatorKind,
-		arg.InitiatorUserID,
-		arg.InitiatorConversationID,
-		arg.InitiatorAccess,
-		arg.CronID,
-	)
+	row := q.db.QueryRow(ctx, insertAgentJobFromCron, arg.JobID, arg.ScheduledAt, arg.CronID)
 	var i AgentJob
 	err := row.Scan(
 		&i.ID,
@@ -179,24 +173,26 @@ func (q *Queries) InsertAgentJobFromCron(ctx context.Context, arg InsertAgentJob
 		&i.StateVersion,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.OriginID,
 	)
 	return i, err
 }
 
 const insertManualAgentJobFromCron = `-- name: InsertManualAgentJobFromCron :one
 INSERT INTO agent_jobs (
-    id, agent_id, handler_name, handler_version, input_schema_hash,
+    id, agent_id, origin_id, handler_name, handler_version, input_schema_hash,
     output_schema_hash, source_run_id, cron_id, cron_slug, scheduled_at,
     initiator_kind, initiator_user_id, initiator_conversation_id,
     initiator_access, status, timeout_ms, max_attempts, attempt_limit, attempt_count,
     next_attempt_at, input_payload, state_version
 )
 SELECT
-    $1, c.agent_id, c.handler_name, c.handler_version,
+    $1, c.agent_id, o.id, c.handler_name, c.handler_version,
     c.input_schema_hash, c.output_schema_hash, NULL, c.id, c.slug,
-    $2, 'user', $3, NULL, 'admin', 'queued',
+    $2, 'user', o.user_id, o.conversation_id, 'admin', 'queued',
     h.timeout_ms, h.max_attempts, h.max_attempts, 0, $2, c.input_payload, 1
 FROM agent_job_crons c
+JOIN execution_origins o ON o.id = $3 AND o.agent_id = c.agent_id AND o.actor = 'user'
 JOIN agents a ON a.id = c.agent_id
 JOIN agent_job_handlers h
   ON h.agent_id = c.agent_id
@@ -211,21 +207,21 @@ WHERE c.id = $4
   AND h.agent_token_version = c.agent_token_version
   AND h.input_schema_hash = c.input_schema_hash
   AND h.output_schema_hash = c.output_schema_hash
-RETURNING agent_jobs.id, agent_jobs.agent_id, agent_jobs.handler_name, agent_jobs.handler_version, agent_jobs.input_schema_hash, agent_jobs.output_schema_hash, agent_jobs.source_run_id, agent_jobs.cron_id, agent_jobs.cron_slug, agent_jobs.initiator_kind, agent_jobs.initiator_user_id, agent_jobs.initiator_conversation_id, agent_jobs.initiator_access, agent_jobs.status, agent_jobs.timeout_ms, agent_jobs.max_attempts, agent_jobs.attempt_limit, agent_jobs.attempt_count, agent_jobs.next_attempt_at, agent_jobs.scheduled_at, agent_jobs.input_payload, agent_jobs.output_payload, agent_jobs.progress_phase, agent_jobs.progress_message, agent_jobs.progress_completed, agent_jobs.progress_total, agent_jobs.progress_attempt, agent_jobs.progress_updated_at, agent_jobs.last_error, agent_jobs.cancel_requested_at, agent_jobs.cancelled_by_user_id, agent_jobs.started_at, agent_jobs.completed_at, agent_jobs.state_version, agent_jobs.created_at, agent_jobs.updated_at
+RETURNING agent_jobs.id, agent_jobs.agent_id, agent_jobs.handler_name, agent_jobs.handler_version, agent_jobs.input_schema_hash, agent_jobs.output_schema_hash, agent_jobs.source_run_id, agent_jobs.cron_id, agent_jobs.cron_slug, agent_jobs.initiator_kind, agent_jobs.initiator_user_id, agent_jobs.initiator_conversation_id, agent_jobs.initiator_access, agent_jobs.status, agent_jobs.timeout_ms, agent_jobs.max_attempts, agent_jobs.attempt_limit, agent_jobs.attempt_count, agent_jobs.next_attempt_at, agent_jobs.scheduled_at, agent_jobs.input_payload, agent_jobs.output_payload, agent_jobs.progress_phase, agent_jobs.progress_message, agent_jobs.progress_completed, agent_jobs.progress_total, agent_jobs.progress_attempt, agent_jobs.progress_updated_at, agent_jobs.last_error, agent_jobs.cancel_requested_at, agent_jobs.cancelled_by_user_id, agent_jobs.started_at, agent_jobs.completed_at, agent_jobs.state_version, agent_jobs.created_at, agent_jobs.updated_at, agent_jobs.origin_id
 `
 
 type InsertManualAgentJobFromCronParams struct {
-	JobID           pgtype.UUID        `json:"job_id"`
-	ScheduledAt     pgtype.Timestamptz `json:"scheduled_at"`
-	InitiatorUserID pgtype.UUID        `json:"initiator_user_id"`
-	CronID          pgtype.UUID        `json:"cron_id"`
+	JobID       pgtype.UUID        `json:"job_id"`
+	ScheduledAt pgtype.Timestamptz `json:"scheduled_at"`
+	OriginID    pgtype.UUID        `json:"origin_id"`
+	CronID      pgtype.UUID        `json:"cron_id"`
 }
 
 func (q *Queries) InsertManualAgentJobFromCron(ctx context.Context, arg InsertManualAgentJobFromCronParams) (AgentJob, error) {
 	row := q.db.QueryRow(ctx, insertManualAgentJobFromCron,
 		arg.JobID,
 		arg.ScheduledAt,
-		arg.InitiatorUserID,
+		arg.OriginID,
 		arg.CronID,
 	)
 	var i AgentJob
@@ -266,6 +262,7 @@ func (q *Queries) InsertManualAgentJobFromCron(ctx context.Context, arg InsertMa
 		&i.StateVersion,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.OriginID,
 	)
 	return i, err
 }

@@ -14,7 +14,6 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/authz"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
@@ -72,14 +71,11 @@ type CreateRequest struct {
 // Ordered by name for stable rendering.
 func (s *Service) List(ctx context.Context, p authz.Principal) ([]Credential, error) {
 	q := dbq.New(s.db.Pool())
-	if err := authz.Authorize(ctx, q, p, authz.ResourceInventoryView, uuid.Nil); err != nil {
+	principals, governanceView, err := authz.AuthorizeResourceInventory(ctx, q, p)
+	if err != nil {
 		return nil, err
 	}
-	principals := make([]pgtype.UUID, len(p.GranteeSet()))
-	for i, id := range p.GranteeSet() {
-		principals[i] = pgtype.UUID{Bytes: id, Valid: true}
-	}
-	rows, err := q.ListAvailableGitCredentials(ctx, dbq.ListAvailableGitCredentialsParams{PrincipalIds: principals, GovernanceView: p.TenantRole == auth.RoleAdmin})
+	rows, err := q.ListAvailableGitCredentials(ctx, dbq.ListAvailableGitCredentialsParams{PrincipalIds: principals, GovernanceView: governanceView})
 	if err != nil {
 		s.logger.Error("list git credentials failed", zap.Error(err))
 		return nil, err

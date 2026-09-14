@@ -18,7 +18,6 @@ import (
 	"regexp"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/airlockrun/agentsdk"
@@ -30,7 +29,9 @@ import (
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/airlockrun/airlock/secrets"
 	"github.com/airlockrun/airlock/service"
+	"github.com/airlockrun/airlock/service/execution"
 	modelssvc "github.com/airlockrun/airlock/service/models"
+	"github.com/airlockrun/airlock/service/systemchat"
 	"github.com/airlockrun/airlock/trigger"
 	solprovider "github.com/airlockrun/sol/provider"
 	"github.com/google/uuid"
@@ -123,7 +124,7 @@ type UpdateRequest struct {
 //
 // YourAccess is "admin" / "user" / "public" (see agentsdk.Access),
 // resolved from agent_grants at list time. It exists so any caller —
-// web UI, A2A, the in-airlock system agent — can decide locally which
+// web UI and the in-airlock system agent — can decide locally which
 // per-agent actions to offer without re-authorizing each one.
 type ListItem struct {
 	Agent      dbq.Agent       `json:"agent"`
@@ -306,36 +307,6 @@ func randomHex(n int) (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
-// broadcastSiblingChange triggers a /refresh on every active agent
-// except changedAgentID — used after create/update/delete so peer agents
-// pick up the new agent_<slug> binding without restarting.
-func (s *Service) broadcastSiblingChange(ctx context.Context, changedAgentID uuid.UUID) {
-	q := dbq.New(s.db.Pool())
-	rows, err := q.ListActiveAgentIDs(ctx)
-	if err != nil {
-		s.logger.Error("broadcast: list active agents", zap.Error(err))
-		return
-	}
-	var wg sync.WaitGroup
-	for _, r := range rows {
-		id := uuid.UUID(r.Bytes)
-		if id == changedAgentID {
-			continue
-		}
-		wg.Add(1)
-		go func(target uuid.UUID) {
-			defer wg.Done()
-			rctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cancel()
-			if err := s.dispatcher.RefreshAgent(rctx, target); err != nil {
-				s.logger.Warn("broadcast: refresh failed",
-					zap.String("agent_id", target.String()), zap.Error(err))
-			}
-		}(id)
-	}
-	wg.Wait()
-}
-
 // --- methods ---
 
 // Create creates an agent row (status=draft), records explicit per-agent
@@ -489,6 +460,10 @@ func (s *Service) Create(ctx context.Context, p authz.Principal, req CreateReque
 	}); err != nil {
 		return dbq.Agent{}, err
 	}
+	chatOrigin, err := systemchat.CaptureAsyncOrigin(ctx, qtx, p, uuid.UUID(agent.ID.Bytes), req.SystemConversationID)
+	if err != nil {
+		return dbq.Agent{}, err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return dbq.Agent{}, err
 	}
@@ -541,14 +516,14 @@ func (s *Service) Create(ctx context.Context, p authz.Principal, req CreateReque
 
 	go func() {
 		in := builder.BuildInput{
-			AgentID:              agentIDStr,
-			Name:                 req.Name,
-			Slug:                 req.Slug,
-			OwnerPrincipalID:     p.UserID.String(),
-			InitiatorUserID:      pgUserID(p),
-			BuildProviderID:      buildProviderFK,
-			BuildModel:           req.BuildModel,
-			SystemConversationID: req.SystemConversationID,
+			ChatOriginID:     chatOrigin,
+			AgentID:          agentIDStr,
+			Name:             req.Name,
+			Slug:             req.Slug,
+			OwnerPrincipalID: p.UserID.String(),
+			InitiatorUserID:  pgUserID(p),
+			BuildProviderID:  buildProviderFK,
+			BuildModel:       req.BuildModel,
 		}
 		if importFromRemote {
 			// Build the cloned HEAD as-is: no scaffold over it, no codegen.
@@ -954,7 +929,7 @@ func (s *Service) Clone(ctx context.Context, p authz.Principal, sourceID uuid.UU
 	if err := qtx.UpdateAgentEmoji(ctx, dbq.UpdateAgentEmojiParams{ID: agent.ID, Emoji: src.Emoji}); err != nil {
 		return dbq.Agent{}, err
 	}
-	if err := qtx.UpdateAgentA2ASettings(ctx, dbq.UpdateAgentA2ASettingsParams{
+	if err := qtx.UpdateAgentAccessSettings(ctx, dbq.UpdateAgentAccessSettingsParams{
 		ID: agent.ID, McpEnabled: src.McpEnabled, AllowPublicMcp: src.AllowPublicMcp, AllowPublicRoutes: src.AllowPublicRoutes,
 	}); err != nil {
 		return dbq.Agent{}, err
@@ -1010,7 +985,7 @@ func (s *Service) List(ctx context.Context, p authz.Principal) ([]ListItem, erro
 		s.logger.Error("list agents", zap.Error(err))
 		return nil, err
 	}
-	return s.buildListItems(ctx, q, p, agents), nil
+	return s.buildListItems(ctx, q, p, agents)
 }
 
 // ListAll returns every agent in the tenant — the admin governance surface
@@ -1026,13 +1001,13 @@ func (s *Service) ListAll(ctx context.Context, p authz.Principal) ([]ListItem, e
 		s.logger.Error("list all agents", zap.Error(err))
 		return nil, err
 	}
-	return s.buildListItems(ctx, q, p, agents), nil
+	return s.buildListItems(ctx, q, p, agents)
 }
 
 // buildListItems decorates raw agent rows with the owner's display name, the
 // caller's effective access, the ownership flag, and live running state,
 // sorting owner-owned agents first.
-func (s *Service) buildListItems(ctx context.Context, q *dbq.Queries, p authz.Principal, agents []dbq.Agent) []ListItem {
+func (s *Service) buildListItems(ctx context.Context, q *dbq.Queries, p authz.Principal, agents []dbq.Agent) ([]ListItem, error) {
 	// Owner principal in the caller's grantee set ⇒ they own the agent
 	// (directly or via a group). Resolve owner display names in one batch.
 	ownsSet := make(map[uuid.UUID]struct{})
@@ -1063,11 +1038,15 @@ func (s *Service) buildListItems(ctx context.Context, q *dbq.Queries, p authz.Pr
 	out := make([]ListItem, len(agents))
 	ids := make([]uuid.UUID, len(agents))
 	for i, a := range agents {
+		access, _, err := p.EffectiveAgentAccessChecked(ctx, q, uuid.UUID(a.ID.Bytes))
+		if err != nil {
+			return nil, err
+		}
 		oid := uuid.UUID(a.OwnerPrincipalID.Bytes)
 		_, isOwner := ownsSet[oid]
 		out[i] = ListItem{
 			Agent:      a,
-			YourAccess: p.EffectiveAgentAccess(ctx, q, uuid.UUID(a.ID.Bytes)),
+			YourAccess: access,
 			OwnerName:  ownerNames[oid],
 			IsOwner:    a.OwnerPrincipalID.Valid && isOwner,
 		}
@@ -1087,7 +1066,7 @@ func (s *Service) buildListItems(ctx context.Context, q *dbq.Queries, p authz.Pr
 	sort.SliceStable(out, func(i, j int) bool {
 		return out[i].IsOwner && !out[j].IsOwner
 	})
-	return out
+	return out, nil
 }
 
 // Get returns the member-readable agent detail. Agent-admin collections are
@@ -1134,10 +1113,14 @@ func (s *Service) Get(ctx context.Context, p authz.Principal, agentID uuid.UUID)
 			}
 		}
 	}
+	access, _, err := p.EffectiveAgentAccessChecked(ctx, q, agentID)
+	if err != nil {
+		return Detail{}, err
+	}
 	d := Detail{
 		Agent:       agent,
 		IsOwner:     isOwner,
-		YourAccess:  p.EffectiveAgentAccess(ctx, q, agentID),
+		YourAccess:  access,
 		Connections: conns,
 		Webhooks:    webhooks,
 		Schedules:   schedules,
@@ -1150,8 +1133,7 @@ func (s *Service) Get(ctx context.Context, p authz.Principal, agentID uuid.UUID)
 }
 
 // Update applies a partial update; each nil field on the request keeps
-// the existing value. Name/slug changes trigger an async sibling
-// refresh fan-out.
+// the existing value.
 func (s *Service) Update(ctx context.Context, p authz.Principal, agentID uuid.UUID, req UpdateRequest) (dbq.Agent, error) {
 	q := dbq.New(s.db.Pool())
 	agent, err := q.GetAgentByID(ctx, pgtype.UUID{Bytes: agentID, Valid: true})
@@ -1182,8 +1164,6 @@ func (s *Service) Update(ctx context.Context, p authz.Principal, agentID uuid.UU
 			return dbq.Agent{}, service.Detail(service.ErrInvalidInput, "slug must be 2–63 chars, lowercase letters/digits separated by single dashes")
 		}
 	}
-	nameChanged := name != agent.Name
-	slugChanged := slug != agent.Slug
 	updated, err := q.UpdateAgentFields(ctx, dbq.UpdateAgentFieldsParams{
 		ID:      pgtype.UUID{Bytes: agentID, Valid: true},
 		Name:    name,
@@ -1196,9 +1176,6 @@ func (s *Service) Update(ctx context.Context, p authz.Principal, agentID uuid.UU
 		}
 		s.logger.Error("update agent", zap.Error(err))
 		return dbq.Agent{}, err
-	}
-	if nameChanged || slugChanged {
-		go s.broadcastSiblingChange(context.Background(), agentID)
 	}
 	return updated, nil
 }
@@ -1221,7 +1198,7 @@ func authorizeGovernance(ctx context.Context, q *dbq.Queries, p authz.Principal,
 
 // Delete cancels in-flight builds, stops bridge pollers, stops the
 // container, removes the image, drops the per-agent schema/role,
-// removes the local repo, deletes the row, and broadcasts the sibling change.
+// removes the local repo, and deletes the row.
 // Connector deletion triggers fence active transfers and detach their parent
 // references so storage cleanup retains its durable job ownership chain.
 func (s *Service) Delete(ctx context.Context, p authz.Principal, agentID uuid.UUID) error {
@@ -1300,7 +1277,6 @@ func (s *Service) Delete(ctx context.Context, p authz.Principal, agentID uuid.UU
 		s.logger.Error("delete agent", zap.Error(err))
 		return err
 	}
-	go s.broadcastSiblingChange(context.Background(), agentID)
 	return nil
 }
 
@@ -1562,6 +1538,20 @@ func (s *Service) Upgrade(ctx context.Context, p authz.Principal, agentID uuid.U
 	if agent.GitMode == GitModeReadOnly && (strings.TrimSpace(req.Description) != "" || req.RunID != "") {
 		return service.Detail(service.ErrConflict, "agent uses read-only Git; push source changes to the connected repository, then rebuild")
 	}
+	if req.RunID != "" {
+		id, err := uuid.Parse(req.RunID)
+		if err != nil {
+			return service.ErrInvalidInput
+		}
+		run, err := q.GetRunByID(ctx, pgtype.UUID{Bytes: id, Valid: true})
+		if err != nil || uuid.UUID(run.AgentID.Bytes) != agentID {
+			return service.ErrNotFound
+		}
+	}
+	chatOrigin, err := systemchat.CaptureAsyncOrigin(ctx, q, p, agentID, req.SystemConversationID)
+	if err != nil {
+		return err
+	}
 	if agent.ImageRef == "" {
 		// The agent never built a working image (initial build failed), so
 		// there's nothing to upgrade against — route to a fresh build. Carry
@@ -1570,6 +1560,7 @@ func (s *Service) Upgrade(ctx context.Context, p authz.Principal, agentID uuid.U
 		// entirely, and just rebuilds the (stale/empty) tree.
 		go func() {
 			_ = s.builder.Build(context.Background(), builder.BuildInput{
+				ChatOriginID:     chatOrigin,
 				AgentID:          agentID.String(),
 				Name:             agent.Name,
 				Slug:             agent.Slug,
@@ -1588,12 +1579,12 @@ func (s *Service) Upgrade(ctx context.Context, p authz.Principal, agentID uuid.U
 			runID = uuid.New().String()
 		}
 		input := builder.UpgradeInput{
-			AgentID:              agentID.String(),
-			InitiatorUserID:      pgUserID(p),
-			RunID:                runID,
-			Reason:               "manual",
-			Description:          req.Description,
-			SystemConversationID: req.SystemConversationID,
+			ChatOriginID:    chatOrigin,
+			AgentID:         agentID.String(),
+			InitiatorUserID: pgUserID(p),
+			RunID:           runID,
+			Reason:          "manual",
+			Description:     req.Description,
 		}
 		if req.RunID != "" {
 			if runUUID, perr := uuid.Parse(req.RunID); perr != nil {
@@ -1683,6 +1674,10 @@ func (s *Service) Rollback(ctx context.Context, p authz.Principal, agentID uuid.
 	if target.SourceRef == agent.SourceRef {
 		return service.Detail(service.ErrConflict, "target build is the current build")
 	}
+	chatOrigin, err := systemchat.CaptureAsyncOrigin(ctx, q, p, agentID, req.SystemConversationID)
+	if err != nil {
+		return err
+	}
 	go func() {
 		if err := s.builder.AcquireUpgradeLock(context.Background(), agentID.String()); err != nil {
 			if !errors.Is(err, builder.ErrUpgradeInProgress) {
@@ -1691,11 +1686,11 @@ func (s *Service) Rollback(ctx context.Context, p authz.Principal, agentID uuid.
 			return
 		}
 		s.builder.Rollback(context.Background(), builder.RollbackInput{
-			AgentID:              agentID.String(),
-			InitiatorUserID:      pgUserID(p),
-			BuildID:              buildID.String(),
-			ConversationID:       req.ConversationID,
-			SystemConversationID: req.SystemConversationID,
+			ChatOriginID:    chatOrigin,
+			AgentID:         agentID.String(),
+			InitiatorUserID: pgUserID(p),
+			BuildID:         buildID.String(),
+			ConversationID:  req.ConversationID,
 		})
 	}()
 	return nil
@@ -1797,10 +1792,14 @@ func (s *Service) FireSchedule(ctx context.Context, p authz.Principal, agentID u
 	}
 	jobID := uuid.New()
 	fireAt := time.Now().UTC().Truncate(time.Microsecond)
+	origin, err := execution.UserJobOrigin(ctx, q, p, agentID)
+	if err != nil {
+		return FireScheduleResult{}, err
+	}
 	if _, err = q.InsertManualAgentJobFromCron(ctx, dbq.InsertManualAgentJobFromCronParams{
 		JobID: pgtype.UUID{Bytes: jobID, Valid: true}, CronID: cron.ID,
-		ScheduledAt:     pgtype.Timestamptz{Time: fireAt, Valid: true},
-		InitiatorUserID: pgtype.UUID{Bytes: p.UserID, Valid: true},
+		ScheduledAt: pgtype.Timestamptz{Time: fireAt, Valid: true},
+		OriginID:    origin.ID,
 	}); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return FireScheduleResult{}, service.ErrConflict

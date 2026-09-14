@@ -37,7 +37,7 @@ type Grant struct {
 // also consult a stored-membership table. Returns nil for a non-registered
 // principal (anonymous / trigger have no role standing).
 func (p Principal) GranteeSet() []uuid.UUID {
-	if p.Kind != KindRegisteredUser || p.UserID == uuid.Nil {
+	if !p.IsAuthenticatedUser() {
 		return nil
 	}
 	set := []uuid.UUID{p.UserID}
@@ -46,7 +46,7 @@ func (p Principal) GranteeSet() []uuid.UUID {
 		set = append(set, GroupAdmin, GroupManager, GroupUser)
 	case auth.RoleManager:
 		set = append(set, GroupManager, GroupUser)
-	default:
+	case auth.RoleUser:
 		set = append(set, GroupUser)
 	}
 	return set
@@ -57,6 +57,9 @@ func (p Principal) GranteeSet() []uuid.UUID {
 // grantee-set) owns the resource — owners hold view/bind/manage implicitly —
 // or holds a grant carrying capability.
 func (p Principal) HasResourceCapability(ownerPrincipalID uuid.UUID, grants []Grant, capability string) bool {
+	if capability != CapView && capability != CapBind && capability != CapManage {
+		return false
+	}
 	set := p.GranteeSet()
 	inSet := func(id uuid.UUID) bool {
 		for _, g := range set {

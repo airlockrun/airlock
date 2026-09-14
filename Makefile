@@ -9,7 +9,7 @@
 SHELL := bash
 DEV_COMPOSE := docker compose -f docker-compose.yml -f docker-compose.dev.yml
 
-.PHONY: dev dev-up dev-down watch
+.PHONY: dev dev-up dev-down dev-prepare watch
 
 # Bundled infra + ingress only (containers). airlock + frontend stay off because
 # they aren't in this service list — they run natively via `make dev` below.
@@ -32,9 +32,21 @@ dev: dev-up
 	@mkdir -p $${HOME}/.local/share/airlock/{libs,agents}
 	@echo "==> pnpm watch (background) + airlock serve (foreground) — Ctrl-C stops both"
 	@set -a; . ./.env; set +a; \
+	if [ -n "$${JS_EXECUTOR_IMAGE:-}" ]; then :; \
+	elif [ -n "$${AGENT_LIBS_PATH:-}" ]; then \
+	  JS_EXECUTOR_IMAGE="$$(bash scripts/build-js-executor.sh "$$AGENT_LIBS_PATH/agentsdk")" || exit; \
+	else \
+	  JS_EXECUTOR_IMAGE="$$(bash scripts/build-js-executor.sh)" || exit; \
+	fi; export JS_EXECUTOR_IMAGE; \
 	( cd frontend && pnpm watch ) & watch_pid=$$!; \
 	trap 'kill $$watch_pid 2>/dev/null' EXIT INT TERM; \
 	go run ./cmd/airlock serve
+
+dev-prepare:
+	@set -a; . ./.env; set +a; \
+	if [ -n "$${AGENT_LIBS_PATH:-}" ]; then \
+	  bash scripts/build-js-executor.sh "$$AGENT_LIBS_PATH/agentsdk"; \
+	else bash scripts/build-js-executor.sh; fi
 
 # Frontend watcher alone (e.g. a second terminal).
 watch:

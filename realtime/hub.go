@@ -1,6 +1,7 @@
 package realtime
 
 import (
+	"context"
 	"encoding/json"
 	"sync"
 
@@ -52,9 +53,11 @@ type Hub struct {
 
 	mu sync.RWMutex
 
-	logger *zap.Logger
+	logger        *zap.Logger
+	shared        *sharedPubSub
+	sharedCursors map[string]map[uuid.UUID]uint64
 
-	// Callbacks for topic subscription changes (used by PubSub)
+	// Observers for local topic subscription changes.
 	onFirstSubscribe  func(topicID uuid.UUID)
 	onLastUnsubscribe func(topicID uuid.UUID)
 }
@@ -69,12 +72,13 @@ func NewHub(logger *zap.Logger) *Hub {
 		topicHighSeq:     make(map[uuid.UUID]uint64),
 		topicDroppedUpTo: make(map[uuid.UUID]uint64),
 		logger:           logger,
+		sharedCursors:    make(map[string]map[uuid.UUID]uint64),
 	}
 }
 
 // OnTopicSubscriptionChange sets callbacks for when the first local connection
-// subscribes to a topic and when the last unsubscribes. Used by PubSub to
-// manage Redis subscriptions.
+// subscribes to a topic and when the last unsubscribes. Callbacks are observers;
+// shared delivery does not install transport subscriptions through them.
 func (h *Hub) OnTopicSubscriptionChange(onFirst func(uuid.UUID), onLast func(uuid.UUID)) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -88,6 +92,7 @@ func (h *Hub) Register(conn *Conn) {
 	defer h.mu.Unlock()
 	h.conns[conn.ID] = conn
 	h.connTopics[conn.ID] = make(map[uuid.UUID]struct{})
+	h.sharedCursors[conn.ID] = make(map[uuid.UUID]uint64)
 }
 
 // Unregister removes a connection and all its topic subscriptions, firing
@@ -106,6 +111,7 @@ func (h *Hub) Unregister(conn *Conn) {
 		}
 	}
 	delete(h.connTopics, conn.ID)
+	delete(h.sharedCursors, conn.ID)
 	delete(h.conns, conn.ID)
 
 	onLast := h.onLastUnsubscribe
@@ -143,9 +149,18 @@ func (h *Hub) Subscribe(conn *Conn, topicID uuid.UUID) {
 		h.connTopics[conn.ID] = make(map[uuid.UUID]struct{})
 	}
 	h.connTopics[conn.ID][topicID] = struct{}{}
+	if h.shared != nil {
+		h.sharedCursors[conn.ID][topicID] = h.shared.replay(conn, topicID)
+		onFirst := h.onFirstSubscribe
+		h.mu.Unlock()
+		if isFirst && onFirst != nil {
+			onFirst(topicID)
+		}
+		return
+	}
 
-	// Cursor replay. since == conn.SinceSeq is the max seq the client
-	// has already processed (0 on a fresh connect / page reload).
+	// Cursor replay. conn.SinceSeq is the client's conservative replay
+	// watermark (0 on a fresh connect / page reload).
 	//   - fresh, or topic silent, or client caught up → nothing (the
 	//     client's normal initial DB load is the source of truth).
 	//   - cursor below what's still replayable (ring evicted it, or
@@ -172,7 +187,6 @@ func (h *Hub) Subscribe(conn *Conn, topicID uuid.UUID) {
 	}
 
 	onFirst := h.onFirstSubscribe
-	h.mu.Unlock()
 
 	if resync {
 		conn.SendEnvelope(Envelope{Type: "resync", TopicID: topicID.String()})
@@ -186,6 +200,7 @@ func (h *Hub) Subscribe(conn *Conn, topicID uuid.UUID) {
 			conn.Send(ev.data)
 		}
 	}
+	h.mu.Unlock()
 
 	if isFirst && onFirst != nil {
 		onFirst(topicID)
@@ -209,6 +224,7 @@ func (h *Hub) Unsubscribe(conn *Conn, topicID uuid.UUID) {
 		}
 	}
 	delete(h.connTopics[conn.ID], topicID)
+	delete(h.sharedCursors[conn.ID], topicID)
 	onLast := h.onLastUnsubscribe
 	h.mu.Unlock()
 
@@ -231,6 +247,18 @@ func (h *Hub) Unsubscribe(conn *Conn, topicID uuid.UUID) {
 // happened before the join.
 func (h *Hub) BroadcastToTopic(topicID uuid.UUID, env Envelope) {
 	h.mu.Lock()
+	// Direct broadcasters (the DB-backed job relay) carry authoritative state
+	// versions, not the shared envelope cursor. Never mix local and shared seqs.
+	if h.shared != nil {
+		defer h.mu.Unlock()
+		env.Seq = 0
+		for _, conn := range h.topics[topicID] {
+			if env.UserID == "" || env.UserID == conn.UserID.String() {
+				conn.SendEnvelope(env)
+			}
+		}
+		return
+	}
 	// Stamp the hub-global seq and marshal under the same lock as the
 	// buffer append, so buffer order == seq order with no torn races.
 	h.seq++
@@ -254,24 +282,27 @@ func (h *Hub) BroadcastToTopic(topicID uuid.UUID, env Envelope) {
 	}
 	h.topicBuffers[topicID] = append(buf, bufferedEvent{seq: s, data: data, userID: env.UserID})
 
-	conns := h.topics[topicID]
-	targets := make([]*Conn, 0, len(conns))
-	for _, c := range conns {
-		targets = append(targets, c)
-	}
-	h.mu.Unlock()
-
-	for _, c := range targets {
+	for _, c := range h.topics[topicID] {
 		if env.UserID != "" && env.UserID != c.UserID.String() {
 			continue
 		}
 		c.Send(data)
 	}
+	h.mu.Unlock()
 }
 
 // ClearTopicBuffer removes the replay buffer for a topic.
 // Called after a terminal event (build complete/failed) since replay is no longer needed.
 func (h *Hub) ClearTopicBuffer(topicID uuid.UUID) {
+	if h.shared != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), sharedQueryTimeout)
+		defer cancel()
+		if err := h.shared.publish(ctx, topicID, Envelope{Type: clearEventType}); err != nil {
+			h.logger.Error("clear shared replay buffer", zap.Error(err))
+			h.ResyncAll()
+		}
+		return
+	}
 	h.mu.Lock()
 	// Everything up to the current high-water is no longer replayable;
 	// a client behind it resyncs, a caught-up client (since>=hi) still

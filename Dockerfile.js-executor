@@ -1,0 +1,34 @@
+# syntax=docker/dockerfile:1
+# Release source is the public SDK version pinned in go.mod. Local builds may
+# explicitly replace the sdk-source context; no sibling checkout is implicit.
+FROM golang:1.26 AS download
+WORKDIR /resolve
+COPY go.mod go.sum ./
+RUN pin=$(awk '$1 == "github.com/airlockrun/agentsdk" {print $2}' go.mod) && test -n "$pin" && \
+    GOWORK=off go mod download "github.com/airlockrun/agentsdk@$pin" && \
+    sdk=$(GOWORK=off go list -m -f '{{.Dir}}' "github.com/airlockrun/agentsdk@$pin") && \
+    mkdir /sdk && cp -a "$sdk"/. /sdk/
+
+FROM scratch AS sdk-source
+COPY --from=download /sdk/ /
+
+FROM golang:1.26 AS build
+WORKDIR /sdk
+COPY --from=sdk-source / /sdk/
+COPY scripts/js-executor-check/main.go /check/main.go
+RUN GOWORK=off CGO_ENABLED=0 go build -trimpath -o /out/jsexecutor ./cmd/jsexecutor && \
+    GOWORK=off CGO_ENABLED=0 go build -trimpath -o /out/js-executor-check /check/main.go && \
+    cp jsexec/runtime/controller.mjs jsexec/runtime/worker.mjs /out/ && \
+    sha256sum jsexec/protocol.go > /out/protocol.sha256 && \
+    GOWORK=off CGO_ENABLED=0 go run /check/main.go notices > /out/THIRD_PARTY_NOTICES.md
+
+# Runtime layout matches agentsdk/jsexec/runtime/Dockerfile.
+FROM denoland/deno@sha256:2014dc167ece617ef7e7ba40631ac2234c59e75ce693e7cc2dc2602b3c87859d
+COPY --from=build /out/jsexecutor /usr/local/bin/jsexecutor
+COPY --from=build /out/controller.mjs /out/worker.mjs /opt/jsexec/
+COPY --from=build /out/js-executor-check /usr/local/bin/js-executor-check
+COPY --from=build /out/protocol.sha256 /out/THIRD_PARTY_NOTICES.md /usr/local/share/jsexec/
+COPY scripts/js-executor-check/DENO_LICENSE /usr/local/share/jsexec/DENO_LICENSE
+USER 65532:65532
+ENTRYPOINT ["/usr/local/bin/jsexecutor"]
+CMD []

@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/airlockrun/agentsdk"
 	"github.com/airlockrun/agentsdk/wire"
 	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/authz"
@@ -358,26 +357,19 @@ func ServeStoragePath(w http.ResponseWriter, r *http.Request, database *db.DB, s
 		return
 	}
 	q := dbq.New(database.Pool())
-	caller := agentstoragesvc.Caller{Principal: authz.AnonymousPrincipal(), Access: agentsdk.AccessPublic}
-	resolved, err := files.Resolve(r.Context(), caller, agentID, path, agentstoragesvc.OperationRead)
-	if errors.Is(err, service.ErrNotFound) {
-		claims, ok := validateSubdomainAuth(r, q, jwtSecret, agentID)
-		if !ok {
-			rejectOrRedirect(w, r, publicURL)
-			return
-		}
-		uid, parseErr := uuid.Parse(claims.Subject)
-		if parseErr != nil {
-			rejectOrRedirect(w, r, publicURL)
-			return
-		}
-		principal := authz.UserPrincipal(uid, auth.Role(claims.TenantRole))
-		caller = agentstoragesvc.Caller{
-			Principal: principal,
-			Access:    principal.EffectiveAgentAccess(r.Context(), q, agentID),
-			UserID:    uid,
-		}
-		resolved, err = files.Resolve(r.Context(), caller, agentID, path, agentstoragesvc.OperationRead)
+	principal := authz.AnonymousPrincipal()
+	claims, _, supplied, admissionErr := auth.AdmitSubdomain(r, q, jwtSecret, agentID)
+	if supplied && admissionErr != nil {
+		writeError(w, http.StatusUnauthorized, "invalid credentials")
+		return
+	}
+	if claims != nil {
+		principal = authz.PrincipalFromClaims(claims)
+	}
+	resolved, err := files.ResolveSubdomain(r.Context(), principal, agentID, path)
+	if errors.Is(err, service.ErrNotFound) && !supplied {
+		rejectOrRedirect(w, r, publicURL)
+		return
 	}
 	if err != nil {
 		http.NotFound(w, r)

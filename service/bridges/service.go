@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/airlockrun/agentsdk"
 	"github.com/airlockrun/airlock/authz"
@@ -14,6 +15,7 @@ import (
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/airlockrun/airlock/secrets"
 	"github.com/airlockrun/airlock/service"
+	"github.com/airlockrun/airlock/service/systemchat"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -172,7 +174,11 @@ func (s *Service) Create(ctx context.Context, p authz.Principal, req CreateReque
 		if err != nil {
 			return Result{}, service.Detail(service.ErrInvalidInput, "invalid agent_id")
 		}
-		if !authz.AccessAtLeast(p.EffectiveAgentAccess(ctx, q, agentID), agentsdk.AccessAdmin) {
+		access, _, err := p.EffectiveAgentAccessChecked(ctx, q, agentID)
+		if err != nil {
+			return Result{}, err
+		}
+		if !authz.AccessAtLeast(access, agentsdk.AccessAdmin) {
 			return Result{}, service.ErrForbidden
 		}
 		agentPgID = pgtype.UUID{Bytes: agentID, Valid: true}
@@ -315,6 +321,33 @@ func (s *Service) CreateFromManagedSession(ctx context.Context, in ManagedSessio
 		return Result{}, service.Detail(service.ErrInvalidInput, "session owner_id is required")
 	}
 	q := dbq.New(s.db.Pool())
+	stored, err := q.GetManagedBotSessionByNonce(ctx, in.Session.Nonce)
+	if err != nil || !stored.ExpiresAt.Time.After(time.Now()) || stored.ID != in.Session.ID {
+		return Result{}, service.ErrUnauthorized
+	}
+	in.Session = stored
+	if stored.ChatOriginID.Valid {
+		origin, err := q.GetAsyncChatOrigin(ctx, stored.ChatOriginID)
+		if err != nil || !origin.SystemRunID.Valid || origin.UserID != stored.OwnerID || origin.AgentID != stored.AgentID || origin.SystemConversationID != stored.SystemConversationID {
+			return Result{}, service.ErrUnauthorized
+		}
+		p, err := systemchat.AsyncPrincipal(ctx, q, stored.ChatOriginID)
+		if err != nil {
+			return Result{}, err
+		}
+		if err := authz.Authorize(ctx, q, p, authz.TenantBridgeCreate, uuid.Nil); err != nil {
+			return Result{}, err
+		}
+		if stored.IsSystem {
+			if err := authz.Authorize(ctx, q, p, authz.TenantBridgeSystem, uuid.Nil); err != nil {
+				return Result{}, err
+			}
+		} else if err := authz.Authorize(ctx, q, p, authz.AgentManagedBotCreate, uuid.UUID(stored.AgentID.Bytes)); err != nil {
+			return Result{}, err
+		}
+	} else if stored.SystemConversationID.Valid {
+		return Result{}, service.ErrUnauthorized
+	}
 
 	// Sanity-check the token against getMe so a corrupted/replaced
 	// token from the manager-bot callback can't poison a fresh bridge
@@ -434,14 +467,14 @@ func (s *Service) ManagerBridgeUsername(ctx context.Context) (string, error) {
 // Returns the originating sysagent conversation id (empty for the web-UI path
 // or any no-op) so the caller can resume that conversation with a "bot ready"
 // follow-up.
-func (s *Service) IngestManagedBotCreated(ctx context.Context, managerToken string, botUserID int64, botUsername string) (string, error) {
+func (s *Service) IngestManagedBotCreated(ctx context.Context, managerToken string, botUserID int64, botUsername string) (uuid.UUID, uuid.UUID, error) {
 	if botUserID == 0 || botUsername == "" {
-		return "", nil
+		return uuid.Nil, uuid.Nil, nil
 	}
 	q := dbq.New(s.db.Pool())
 	// Already have a bridge for this bot — nothing to do.
 	if _, err := q.GetBridgeByTelegramBotUserID(ctx, pgtype.Int8{Int64: botUserID, Valid: true}); err == nil {
-		return "", nil
+		return uuid.Nil, uuid.Nil, nil
 	}
 	// Correlate the deep-link session: the suggested username we embedded in
 	// the link is the session nonce, and Telegram preserves it as the new
@@ -450,15 +483,15 @@ func (s *Service) IngestManagedBotCreated(ctx context.Context, managerToken stri
 	if err != nil {
 		s.logger.Warn("managed_bot_created: no session matches bot username",
 			zap.String("bot_username", botUsername))
-		return "", nil
+		return uuid.Nil, uuid.Nil, nil
 	}
 	caps, ok := s.telegramCaps()
 	if !ok {
-		return "", service.Detail(service.ErrInvalidInput, "telegram driver lacks capability lookup")
+		return uuid.Nil, uuid.Nil, service.Detail(service.ErrInvalidInput, "telegram driver lacks capability lookup")
 	}
 	rawToken, err := caps.GetManagedBotToken(ctx, managerToken, botUserID)
 	if err != nil {
-		return "", fmt.Errorf("get managed bot token: %w", err)
+		return uuid.Nil, uuid.Nil, fmt.Errorf("get managed bot token: %w", err)
 	}
 	if _, err := s.CreateFromManagedSession(ctx, ManagedSessionCreate{
 		Session:           session,
@@ -466,16 +499,19 @@ func (s *Service) IngestManagedBotCreated(ctx context.Context, managerToken stri
 		TelegramBotUserID: botUserID,
 		RawToken:          rawToken,
 	}); err != nil {
-		return "", fmt.Errorf("create bridge from managed session: %w", err)
+		return uuid.Nil, uuid.Nil, fmt.Errorf("create bridge from managed session: %w", err)
 	}
 	if derr := q.DeleteManagedBotSessionByNonce(ctx, session.Nonce); derr != nil {
 		s.logger.Warn("delete consumed managed bot session failed", zap.Error(derr))
 	}
-	sysConvID := ""
-	if session.SystemConversationID.Valid {
-		sysConvID = uuid.UUID(session.SystemConversationID.Bytes).String()
+	if !session.ChatOriginID.Valid {
+		return uuid.Nil, uuid.Nil, nil
 	}
-	return sysConvID, nil
+	origin, err := q.GetAsyncChatOrigin(ctx, session.ChatOriginID)
+	if err != nil {
+		return uuid.Nil, uuid.Nil, err
+	}
+	return uuid.UUID(origin.SystemConversationID.Bytes), uuid.UUID(origin.SystemRunID.Bytes), nil
 }
 
 // List returns all bridges visible to the caller. Admins see every
@@ -587,7 +623,11 @@ func (s *Service) Update(ctx context.Context, p authz.Principal, bridgeID uuid.U
 			return Result{}, service.Detail(service.ErrInvalidInput, "invalid agent_id")
 		}
 		if !canBindAnyAgent {
-			if !authz.AccessAtLeast(p.EffectiveAgentAccess(ctx, q, agentID), agentsdk.AccessAdmin) {
+			access, _, err := p.EffectiveAgentAccessChecked(ctx, q, agentID)
+			if err != nil {
+				return Result{}, err
+			}
+			if !authz.AccessAtLeast(access, agentsdk.AccessAdmin) {
 				return Result{}, service.ErrForbidden
 			}
 		}

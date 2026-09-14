@@ -11,11 +11,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/convert"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
+	"github.com/airlockrun/airlock/service/accounts"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -111,7 +111,6 @@ func (h *deviceLoginHandler) Poll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q := dbq.New(h.db.Pool())
-	// airlockvet:allow-dbq reason: pre-Principal polling uses a high-entropy device code hash and only releases tokens after authenticated approval
 	codeHash := hashDeviceLoginCode(req.DeviceCode)
 	// airlockvet:allow-dbq reason: device-code polling atomically enforces cadence before any Principal exists
 	sess, err := q.ClaimDeviceLoginPoll(r.Context(), codeHash)
@@ -216,23 +215,18 @@ func (h *deviceLoginHandler) Approve(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	userID, ok := currentUserID(w, r)
-	if !ok {
-		return
-	}
 	codeHash, ok := validateUserCode(w, req.UserCode)
 	if !ok {
 		return
 	}
-	// airlockvet:allow-dbq reason: authenticated self-service approval binds current user to a short-lived pending device login
-	sess, err := dbq.New(h.db.Pool()).ApproveDeviceLogin(r.Context(), dbq.ApproveDeviceLoginParams{UserID: toPgUUID(userID), UserCodeHash: codeHash})
+	sess, err := accounts.ApproveDeviceLogin(r.Context(), dbq.New(h.db.Pool()), principalFromRequest(r), codeHash)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			writeError(w, http.StatusConflict, "device login is not pending")
 			return
 		}
 		logFor(r).Error("approve device login", zap.Error(err))
-		writeError(w, http.StatusInternalServerError, "internal error")
+		writeServiceError(w, err, "failed to approve device login")
 		return
 	}
 	writeProto(w, http.StatusOK, deviceLoginInspectResponse(sess, time.Now()))
@@ -249,15 +243,14 @@ func (h *deviceLoginHandler) Deny(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	// airlockvet:allow-dbq reason: authenticated self-service denial closes a short-lived pending device login
-	sess, err := dbq.New(h.db.Pool()).DenyDeviceLogin(r.Context(), codeHash)
+	sess, err := accounts.DenyDeviceLogin(r.Context(), dbq.New(h.db.Pool()), principalFromRequest(r), codeHash)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			writeError(w, http.StatusConflict, "device login is not pending")
 			return
 		}
 		logFor(r).Error("deny device login", zap.Error(err))
-		writeError(w, http.StatusInternalServerError, "internal error")
+		writeServiceError(w, err, "failed to deny device login")
 		return
 	}
 	writeProto(w, http.StatusOK, deviceLoginInspectResponse(sess, time.Now()))
@@ -268,15 +261,14 @@ func (h *deviceLoginHandler) lookupUserCodeSession(w http.ResponseWriter, r *htt
 	if !ok {
 		return dbq.DeviceLoginSession{}, false
 	}
-	// airlockvet:allow-dbq reason: authenticated self-service inspect reads a short-lived pending device login by manually entered code
-	sess, err := dbq.New(h.db.Pool()).GetDeviceLoginByUserCodeHash(r.Context(), codeHash)
+	sess, err := accounts.InspectDeviceLogin(r.Context(), dbq.New(h.db.Pool()), principalFromRequest(r), codeHash)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			writeError(w, http.StatusNotFound, "device login code not found")
 			return dbq.DeviceLoginSession{}, false
 		}
 		logFor(r).Error("inspect device login", zap.Error(err))
-		writeError(w, http.StatusInternalServerError, "internal error")
+		writeServiceError(w, err, "failed to inspect device login")
 		return dbq.DeviceLoginSession{}, false
 	}
 	return sess, true
@@ -309,14 +301,9 @@ func deviceLoginInspectResponse(sess dbq.DeviceLoginSession, now time.Time) *air
 }
 
 func currentUserID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
-	claims := auth.ClaimsFromContext(r.Context())
-	if claims == nil {
+	uid := principalFromRequest(r).UserID
+	if uid == uuid.Nil {
 		writeError(w, http.StatusUnauthorized, "not authenticated")
-		return uuid.Nil, false
-	}
-	uid, err := parseUUID(claims.Subject)
-	if err != nil {
-		writeError(w, http.StatusUnauthorized, "invalid token")
 		return uuid.Nil, false
 	}
 	return uid, true

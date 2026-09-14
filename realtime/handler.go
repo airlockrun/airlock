@@ -3,12 +3,8 @@ package realtime
 import (
 	"context"
 
-	"github.com/airlockrun/airlock/authz"
-	"github.com/airlockrun/airlock/db"
-	"github.com/airlockrun/airlock/db/dbq"
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"
 	"google.golang.org/protobuf/encoding/protojson"
 )
@@ -16,19 +12,22 @@ import (
 // Handler routes dynamic WebSocket subscriptions that require narrower access
 // than the agent topics installed by the WS upgrade handler.
 type Handler struct {
-	db     *db.DB
-	hub    *Hub
-	pubsub *PubSub
-	logger *zap.Logger
+	authorizeBuild func(context.Context, *Conn, uuid.UUID) error
+	authorizeJobs  func(context.Context, *Conn, uuid.UUID) error
+	hub            *Hub
 }
 
 // NewHandler creates a new inbound message handler.
-func NewHandler(database *db.DB, hub *Hub, pubsub *PubSub, logger *zap.Logger) *Handler {
+// Authorization callbacks delegate to the build/job domain services with the
+// connection's verified identity, not a principal reconstructed from its user ID.
+func NewHandler(hub *Hub, authorizeBuild, authorizeJobs func(context.Context, *Conn, uuid.UUID) error) *Handler {
+	if hub == nil || authorizeBuild == nil || authorizeJobs == nil {
+		panic("realtime: handler dependencies are required")
+	}
 	return &Handler{
-		db:     database,
-		hub:    hub,
-		pubsub: pubsub,
-		logger: logger,
+		authorizeBuild: authorizeBuild,
+		authorizeJobs:  authorizeJobs,
+		hub:            hub,
 	}
 }
 
@@ -65,22 +64,7 @@ func (h *Handler) handleSubscribeBuild(conn *Conn, env Envelope) {
 	}
 
 	ctx := context.Background()
-	q := dbq.New(h.db.Pool())
-	// Plumbing lookup to resolve build→agent; the actual gate is the
-	// authz.Authorize(AgentBuildsView) call below.
-	build, err := q.GetAgentBuild(ctx, pgtype.UUID{Bytes: buildID, Valid: true})
-	if err != nil {
-		conn.SendEnvelope(errorEnvelope(env.RequestID, "build not found"))
-		return
-	}
-	agentID, err := uuid.FromBytes(build.AgentID.Bytes[:])
-	if err != nil {
-		conn.SendEnvelope(errorEnvelope(env.RequestID, "build not found"))
-		return
-	}
-
-	p := authz.UserPrincipal(conn.UserID, conn.TenantRole)
-	if err := authz.Authorize(ctx, q, p, authz.AgentBuildsView, agentID); err != nil {
+	if err := h.authorizeBuild(ctx, conn, buildID); err != nil {
 		conn.SendEnvelope(errorEnvelope(env.RequestID, "forbidden"))
 		return
 	}
@@ -115,9 +99,7 @@ func (h *Handler) handleSubscribeJobs(conn *Conn, env Envelope) {
 	}
 
 	ctx := context.Background()
-	q := dbq.New(h.db.Pool())
-	p := authz.UserPrincipal(conn.UserID, conn.TenantRole)
-	if err := authz.Authorize(ctx, q, p, authz.AgentJobView, agentID); err != nil {
+	if err := h.authorizeJobs(ctx, conn, agentID); err != nil {
 		conn.SendEnvelope(errorEnvelope(env.RequestID, "forbidden"))
 		return
 	}

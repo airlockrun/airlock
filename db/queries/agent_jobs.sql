@@ -18,13 +18,13 @@ FOR SHARE;
 
 -- name: InsertAgentJob :one
 INSERT INTO agent_jobs (
-    id, agent_id, handler_name, handler_version, input_schema_hash,
+    id, agent_id, origin_id, handler_name, handler_version, input_schema_hash,
     output_schema_hash, source_run_id, cron_id, cron_slug,
     initiator_kind, initiator_user_id, initiator_conversation_id, initiator_access, status, timeout_ms,
     max_attempts, attempt_limit, attempt_count, next_attempt_at, scheduled_at, input_payload, state_version
 )
 VALUES (
-    @id, @agent_id, @handler_name, @handler_version, @input_schema_hash,
+    @id, @agent_id, (SELECT origin_id FROM runs WHERE id = @source_run_id AND agent_id = @agent_id AND status = 'running'), @handler_name, @handler_version, @input_schema_hash,
     @output_schema_hash, @source_run_id, NULL, NULL, @initiator_kind, @initiator_user_id,
     @initiator_conversation_id, @initiator_access, 'queued', @timeout_ms,
     @max_attempts, @max_attempts, 0, coalesce(@scheduled_at, now()), @scheduled_at, @input_payload, 1

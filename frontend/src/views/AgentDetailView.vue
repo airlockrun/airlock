@@ -22,7 +22,6 @@ import ConnectorsTab from '@/components/agent/ConnectorsTab.vue'
 import EnvVarsTab from '@/components/agent/EnvVarsTab.vue'
 import ToolsTab from '@/components/agent/ToolsTab.vue'
 import MembersTab from '@/components/agent/MembersTab.vue'
-import SiblingsTab from '@/components/agent/SiblingsTab.vue'
 import AccessTab from '@/components/agent/AccessTab.vue'
 import ModelsTab from '@/components/agent/ModelsTab.vue'
 import RunsTab from '@/components/agent/RunsTab.vue'
@@ -271,7 +270,6 @@ const configSections = computed(() => [
   { id: 'env-vars',       label: t('agents.detail.section.environment'),    component: markRaw(EnvVarsTab),       needsSetupKey: 'envVars' as const },
   { id: 'webhooks',       label: t('agents.detail.section.webhooks'),       component: markRaw(WebhooksTab) },
   { id: 'schedules',      label: t('agents.detail.section.schedules'),      component: markRaw(SchedulesTab) },
-  { id: 'siblings',       label: t('agents.detail.section.siblings'),       component: markRaw(SiblingsTab), alwaysShow: true },
   { id: 'access',         label: t('agents.detail.section.access'),         component: markRaw(AccessTab), alwaysShow: true },
   { id: 'source',         label: t('agents.detail.section.source'),         component: markRaw(SourceTab), alwaysShow: true, adminOnly: true },
   { id: 'routes',         label: t('agents.detail.section.routes'),         component: markRaw(RoutesTab) },
@@ -292,8 +290,7 @@ const activityVisible = computed(() => isAgentAdmin.value && (
 
 // Right-rail entries — only sections with content. Hides empty-but-mounted
 // sections from the rail (which itself still mounts so it can emit a count).
-// Sections marked alwaysShow stay visible even at count 0 (e.g. Siblings,
-// where the "add your first sibling" affordance is a meaningful entry point).
+// Sections marked alwaysShow stay visible even at count 0.
 // adminOnly sections (Source: its only action, connect, is agent-admin) are
 // hidden entirely from non-admins rather than showing an action that 403s.
 const isAgentAdmin = computed(() => agent.value?.yourAccess === 'admin')
@@ -819,7 +816,7 @@ function openWeb() {
         </div>
         <p v-if="agent.description" style="margin: 0.5rem 0 0; color: var(--p-text-muted-color); font-size: 0.9rem">{{ agent.description }}</p>
       </div>
-      <div style="display: flex; gap: 0.5rem">
+      <div style="display: flex; flex-wrap: wrap; gap: 0.5rem">
         <Button :label="t('agents.detail.chat')" icon="pi pi-comments" @click="goToChat" />
         <Button v-if="webUrl" :label="t('agents.detail.web')" icon="pi pi-external-link" severity="secondary" outlined @click="openWeb" />
         <SplitButton v-if="actionItems.length" :label="t('agents.detail.actions')" :model="actionItems" severity="secondary" />
@@ -893,7 +890,7 @@ function openWeb() {
           :is="s.component"
           :agent-id="agentId"
           :your-access="['members', 'connections', 'mcp-servers', 'connectors', 'models'].includes(s.id) ? (agent?.yourAccess ?? '') : undefined"
-          v-bind="s.id === 'source' ? { agentSlug: agent?.slug ?? '' } : {}"
+          v-bind="s.id === 'source' ? { agentSlug: agent?.slug ?? '' } : s.id === 'env-vars' ? { running: agent?.running ?? false } : {}"
           @populated="onPopulated(s.id, $event)"
           @mutated="onResourceMutation"
         />
@@ -968,7 +965,7 @@ function openWeb() {
           </small>
         </div>
         <Message v-if="slugChanged" severity="warn" :closable="false">
-          {{ t('agents.detail.slugWarningBeforeBinding') }} <code>agent_&lt;slug&gt;</code> {{ t('agents.detail.slugWarningAfterBinding') }}
+          {{ t('agents.detail.slugWarning') }}
         </Message>
       </div>
       <template #footer>
@@ -1114,8 +1111,7 @@ function openWeb() {
   min-width: 0;
 }
 
-/* Tabs use their own <h3> for inner subheadings (e.g. SiblingsTab's
- * "Who can call this agent"). Browser/PrimeVue h3 defaults can rival or
+/* Tabs use their own <h3> for inner subheadings. Browser/PrimeVue h3 defaults can rival or
  * exceed the section title — normalize so subheadings stay clearly
  * smaller and the colored section title remains the dominant heading. */
 .agent-page-main :deep(h3) {

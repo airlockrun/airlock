@@ -220,7 +220,7 @@ UPDATE agents SET sdk_version = @sdk_version, updated_at = now() WHERE id = @id;
 -- name: UpdateAgentErrorMessage :exec
 UPDATE agents SET error_message = @error_message, updated_at = now() WHERE id = @id;
 
--- name: UpdateAgentA2ASettings :exec
+-- name: UpdateAgentAccessSettings :exec
 -- Updates the three protocol-surface toggles. The grant ladder governs who
 -- may make an authed MCP call; these are orthogonal (anonymous MCP, the
 -- MCP master switch, anonymous public web routes).
@@ -230,16 +230,6 @@ UPDATE agents SET
     allow_public_routes = @allow_public_routes,
     updated_at          = now()
 WHERE id = @id;
-
--- name: ListActiveAgentIDs :many
--- All agents in 'active' status. Used by the sibling-update broadcaster
--- to fan a /refresh out to every running agent (cold containers no-op).
-SELECT id FROM agents WHERE status = 'active';
-
--- name: UpdateAgentToolsHash :exec
--- Stamp the synced tool-set hash on the agent. Sync handler compares
--- before/after to decide whether to broadcast a sibling-update refresh.
-UPDATE agents SET tools_hash = @tools_hash WHERE id = @id;
 
 -- name: ResolvePrincipalNames :many
 -- Resolve principal ids to a display name: a user's display_name or a group's

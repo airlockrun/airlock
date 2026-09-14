@@ -17,12 +17,14 @@ import (
 // per-BUILD topic, which the Build page subscribes to only while open.
 type BuildEventPublisher struct {
 	pubsub *PubSub
-	hub    *Hub
 }
 
 // NewBuildEventPublisher creates a BuildEventPublisher.
 func NewBuildEventPublisher(ps *PubSub, hub *Hub) *BuildEventPublisher {
-	return &BuildEventPublisher{pubsub: ps, hub: hub}
+	if ps == nil || hub == nil || ps.hub != hub {
+		panic("realtime: build publisher requires its pubsub hub")
+	}
+	return &BuildEventPublisher{pubsub: ps}
 }
 
 // PublishBuildEvent publishes an agent build lifecycle event on the agent
@@ -42,8 +44,8 @@ func (p *BuildEventPublisher) PublishBuildEvent(ctx context.Context, agentID, bu
 	// Clear replay buffers on terminal events — no need to replay a finished
 	// build to a late subscriber (the REST snapshot is authoritative).
 	if status == "complete" || status == "failed" || status == "cancelled" {
-		p.hub.ClearTopicBuffer(agentID)
-		p.hub.ClearTopicBuffer(buildID)
+		p.pubsub.ClearTopicBuffer(agentID)
+		p.pubsub.ClearTopicBuffer(buildID)
 	}
 }
 

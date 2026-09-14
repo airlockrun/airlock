@@ -6,7 +6,6 @@ import (
 	"errors"
 	"reflect"
 
-	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/authz"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
@@ -197,15 +196,6 @@ func MCPCompatible(needSpec []byte, server dbq.AgentMcpServer) bool {
 	return matchesMCP(needSpec, server)
 }
 
-func (s *Service) granteeOwners(p authz.Principal) []pgtype.UUID {
-	set := p.GranteeSet()
-	out := make([]pgtype.UUID, len(set))
-	for i, id := range set {
-		out[i] = pg(id)
-	}
-	return out
-}
-
 // CreateResourceForNeed instantiates a new resource for the need, owned by the
 // caller, and binds it. Agent-admin gated.
 func (s *Service) CreateResourceForNeed(ctx context.Context, p authz.Principal, agentID uuid.UUID, typ, slug, displayName string) (uuid.UUID, error) {
@@ -264,7 +254,10 @@ func (s *Service) ListCandidates(ctx context.Context, p authz.Principal, agentID
 	if err != nil {
 		return nil, service.Detail(service.ErrNotFound, "resource %q not declared by the agent", slug)
 	}
-	principals := s.granteeOwners(p)
+	principals, _, err := authz.AuthorizeResourceInventory(ctx, q, p)
+	if err != nil {
+		return nil, err
+	}
 	var out []Candidate
 	build := func(id uuid.UUID, name, displayName, resourceSlug, authMode, granted string, scopesVerified, hasCredentials bool, count int32) (Candidate, error) {
 		capabilities, err := authz.ResourceCapabilities(ctx, q, p, typ, id)
@@ -385,7 +378,11 @@ func (s *Service) ListConnectorTargetGroupCandidates(ctx context.Context, p auth
 	if !spec.Multiple {
 		return nil, service.Detail(service.ErrInvalidInput, "connector need is not multi-target")
 	}
-	rows, err := q.ListConnectorTargetGroups(ctx, dbq.ListConnectorTargetGroupsParams{PrincipalIds: s.granteeOwners(p), GovernanceView: p.TenantRole == auth.RoleAdmin})
+	principals, governanceView, err := authz.AuthorizeResourceInventory(ctx, q, p)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := q.ListConnectorTargetGroups(ctx, dbq.ListConnectorTargetGroupsParams{PrincipalIds: principals, GovernanceView: governanceView})
 	if err != nil {
 		return nil, err
 	}

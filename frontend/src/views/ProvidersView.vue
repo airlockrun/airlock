@@ -294,9 +294,8 @@ function confirmDelete(provider: { id: string; displayName: string }) {
               </template>
               <span v-else class="cap-missing">{{ t('administration.providers.notAvailable') }}</span>
             </div>
-            <div class="cap-action">
+            <div v-if="coverageByCapability[cap].length === 0" class="cap-action">
               <Button
-                v-if="coverageByCapability[cap].length === 0"
                 :label="t('administration.providers.action.addCapability', { capability: capabilityMeta[cap].label })"
                 icon="pi pi-plus"
                 size="small"
@@ -559,11 +558,15 @@ function confirmDelete(provider: { id: string; displayName: string }) {
   min-width: 52rem;
 }
 @media (max-width: 600px) {
-  .cap-row {
-    grid-template-columns: 6.5rem 1fr;
+  .cap-matrix {
+    gap: 1.25rem;
   }
-  .cap-action {
-    grid-column: 2;
+  .cap-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.375rem;
+  }
+  .cap-coverage {
+    overflow-wrap: anywhere;
   }
   :deep(.p-selectbutton) {
     display: grid;
